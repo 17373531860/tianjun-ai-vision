@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 工业风全局背景 */
+body {
+  @apply bg-ind-bg text-white overflow-hidden;
+  margin: 0;
+  font-family: 'Inter', -apple-system, sans-serif;
+}

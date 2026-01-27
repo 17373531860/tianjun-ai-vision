@@ -1,0 +1,335 @@
+<template>
+  <header class="h-16 bg-[#0f172a] border-b border-cyan-900 flex items-center justify-between px-4 text-white shadow-lg shadow-cyan-900/20">
+    <!-- Left: Logo & Menu -->
+    <div class="flex items-center gap-4">
+      <div class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
+        {{ $t('navbar.title') }}
+      </div>
+      <div class="h-8 w-px bg-gray-700 mx-2"></div>
+      
+      <!-- Project Info Block -->
+      <div v-if="store.display.navbar.projectSelector" class="flex items-center gap-6 text-sm">
+        <div class="flex items-center gap-2 bg-slate-800/50 px-3 py-1.5 rounded border border-slate-700">
+          <span class="text-cyan-400 font-bold">{{ $t('navbar.project') }}:</span>
+          <el-select 
+            v-model="selectedProjectId" 
+            placeholder="选择项目" 
+            size="small" 
+            class="w-40"
+            @change="handleProjectChange"
+          >
+            <el-option 
+              v-for="project in projectList" 
+              :key="project.id" 
+              :label="project.name" 
+              :value="project.id"
+            />
+          </el-select>
+          <button 
+            @click="router.push('/project')"
+            class="text-xs bg-cyan-700 hover:bg-cyan-600 px-2 py-0.5 rounded ml-2 cursor-pointer"
+          >
+            {{ $t('navbar.select') }}
+          </button>
+        </div>
+        
+        <div class="hidden md:flex items-center gap-4 text-gray-300">
+          <span v-if="store.display.navbar.inspector">{{ $t('navbar.inspector') }}: <span class="text-white">张三</span></span>
+          <span v-if="store.display.navbar.deviceId">{{ $t('navbar.deviceId') }}: <span class="text-white">251011</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Status & System -->
+    <div class="flex items-center gap-6">
+      <!-- Status Indicators -->
+      <div class="flex items-center gap-4 text-sm font-mono">
+        <div v-if="store.display.navbar.mode" class="flex gap-2">
+          <span class="text-cyan-400">{{ $t('navbar.mode') }}:</span> 
+          <span>{{ modeLabel }}</span>
+        </div>
+        <div v-if="store.display.navbar.status" class="flex gap-2">
+          <span class="text-cyan-400">{{ $t('navbar.status') }}:</span> 
+          <span :class="projectStore.isRunning ? 'text-status-ok' : 'text-gray-400'" class="font-bold">
+            {{ projectStore.isRunning ? $t('navbar.running') : '待机' }}
+          </span>
+        </div>
+        <div v-if="store.display.navbar.runtime" class="flex gap-2">
+          <span class="text-cyan-400">{{ $t('navbar.runTime') }}:</span> 
+          <span>{{ runTimeStr }}</span>
+        </div>
+      </div>
+
+      <div class="h-8 w-px bg-gray-700"></div>
+
+      <!-- Icon Actions -->
+      <div class="flex items-center gap-3">
+         <el-badge :value="store.unreadAlarms" :hidden="store.unreadAlarms === 0" type="danger">
+          <el-icon class="cursor-pointer text-gray-300 hover:text-cyan-400 transition-colors" :size="20">
+            <Bell />
+          </el-icon>
+        </el-badge>
+        
+        <!-- Settings Dropdown -->
+        <el-dropdown trigger="click" @command="handleCommand">
+          <el-icon class="cursor-pointer text-gray-300 hover:text-cyan-400 transition-colors" :size="20"><Setting /></el-icon>
+          <template #dropdown>
+            <el-dropdown-menu class="bg-slate-800 border-slate-700">
+              <el-dropdown-item command="auto_save">
+                <div class="flex items-center justify-between w-full min-w-[140px]">
+                  <span>自动保存</span>
+                  <el-icon v-if="autoSaveEnabled" class="text-green-400 ml-2"><Check /></el-icon>
+                </div>
+              </el-dropdown-item>
+              <el-dropdown-item divided command="lang_zh">简体中文</el-dropdown-item>
+              <el-dropdown-item command="lang_zh_tw">繁體中文</el-dropdown-item>
+              <el-dropdown-item command="lang_en">English</el-dropdown-item>
+              <el-dropdown-item command="lang_jp">日本語</el-dropdown-item>
+              <el-dropdown-item command="lang_kr">한국어</el-dropdown-item>
+              <el-dropdown-item divided command="logout" class="text-red-400 hover:text-red-300">{{ $t('navbar.logout') }}</el-dropdown-item>
+              <el-dropdown-item command="cancel">{{ $t('navbar.cancel') }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+
+        <el-avatar :size="32" class="bg-cyan-900 text-cyan-200">User</el-avatar>
+      </div>
+    </div>
+  </header>
+</template>
+
+<script setup>
+import { useSystemStore } from '@/store/useSystemStore';
+import { useProjectStore } from '@/store/useProjectStore';
+import { useRouter } from 'vue-router';
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
+import { Bell, Setting, UserFilled, Check } from '@element-plus/icons-vue';
+import { useI18n } from 'vue-i18n';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { getProjects, getProjectDetail } from '@/api/project';
+
+const store = useSystemStore();
+const projectStore = useProjectStore();
+const router = useRouter();
+const { locale, t } = useI18n();
+
+// 项目列表和选择
+const projectList = ref([]);
+const selectedProjectId = ref(null);
+
+// 自动保存功能
+const autoSaveEnabled = ref(false);
+const AUTO_SAVE_KEY = 'auto_save_settings';
+
+// 加载自动保存设置
+const loadAutoSaveSettings = () => {
+  const saved = localStorage.getItem(AUTO_SAVE_KEY);
+  if (saved) {
+    const settings = JSON.parse(saved);
+    autoSaveEnabled.value = settings.enabled || false;
+    return settings;
+  }
+  return null;
+};
+
+// 保存当前选择
+const saveCurrentSelection = () => {
+  if (autoSaveEnabled.value) {
+    const settings = {
+      enabled: true,
+      projectId: projectStore.currentProjectId,
+      sourceType: store.lastSourceType || null,
+      sourceValue: store.lastSourceValue || null
+    };
+    localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(settings));
+  }
+};
+
+// 切换自动保存
+const toggleAutoSave = () => {
+  autoSaveEnabled.value = !autoSaveEnabled.value;
+  if (autoSaveEnabled.value) {
+    saveCurrentSelection();
+    ElMessage.success('已开启自动保存，下次将自动恢复当前选择');
+  } else {
+    localStorage.removeItem(AUTO_SAVE_KEY);
+    ElMessage.info('已关闭自动保存');
+  }
+};
+
+// 恢复上次选择
+const restoreLastSelection = async (settings) => {
+  if (settings.projectId && projectList.value.length > 0) {
+    // 检查项目是否存在
+    const projectExists = projectList.value.some(p => p.id === settings.projectId);
+    if (projectExists) {
+      await handleProjectChange(settings.projectId);
+      
+      // 保存输入源信息到 store，让输入源设置页面恢复
+      if (settings.sourceType && settings.sourceValue) {
+        store.setLastSource(settings.sourceType, settings.sourceValue);
+      }
+    }
+  }
+};
+
+// 加载项目列表
+const loadProjects = async () => {
+  try {
+    const res = await getProjects();
+    projectList.value = res.data.items || [];
+    
+    // 如果有当前项目，设置选中状态
+    if (projectStore.currentProjectId) {
+      selectedProjectId.value = projectStore.currentProjectId;
+    }
+    
+    // 检查是否需要恢复上次选择
+    const savedSettings = loadAutoSaveSettings();
+    if (savedSettings && savedSettings.enabled && !projectStore.currentProjectId) {
+      await restoreLastSelection(savedSettings);
+    }
+  } catch (err) {
+    console.error('加载项目列表失败:', err);
+  }
+};
+
+// 处理项目切换
+const handleProjectChange = async (projectId) => {
+  if (!projectId) {
+    projectStore.setCurrentProject(null);
+    saveCurrentSelection();
+    return;
+  }
+  
+  try {
+    const res = await getProjectDetail(projectId);
+    const project = res.data;
+    
+    // 初始化默认值
+    if (!project.counters_config) {
+      project.counters_config = [
+        { name: '合格总数', value: 0 },
+        { name: '不良总数', value: 0 },
+        { name: '总产量', value: 0 }
+      ];
+    }
+    if (!project.steps_config) project.steps_config = [];
+    if (!project.events_config) project.events_config = [];
+    if (!project.pipeline_config) project.pipeline_config = {};
+    
+    // 从 pipeline_config 中提取配置到顶层（保持前端数据结构一致）
+    const pipelineConfig = project.pipeline_config || {};
+    if (project.sequence_order === undefined) {
+      project.sequence_order = pipelineConfig.sequence_order || [];
+    }
+    if (project.detection_steps === undefined) {
+      project.detection_steps = pipelineConfig.detection_steps || [];
+    }
+    if (project.custom_conditions === undefined) {
+      project.custom_conditions = pipelineConfig.custom_conditions || [];
+    }
+    if (project.custom_based_on === undefined) {
+      project.custom_based_on = pipelineConfig.custom_based_on || 'sequential';
+    }
+    
+    projectStore.setCurrentProject(project);
+    
+    // 自动保存当前选择
+    saveCurrentSelection();
+    
+    ElMessage.success(`已切换到项目: ${project.name}`);
+  } catch (err) {
+    console.error('加载项目详情失败:', err);
+    ElMessage.error('切换项目失败');
+  }
+};
+
+// 监听 store 中项目变化
+watch(() => projectStore.currentProjectId, (newId) => {
+  if (newId !== selectedProjectId.value) {
+    selectedProjectId.value = newId;
+  }
+});
+
+const handleCommand = (command) => {
+  switch (command) {
+    case 'auto_save':
+      toggleAutoSave();
+      break;
+    case 'lang_zh':
+      setLang('zh-CN', '语言已切换为简体中文');
+      break;
+    case 'lang_zh_tw':
+      setLang('zh-TW', '語言已切換為繁體中文');
+      break;
+    case 'lang_en':
+      setLang('en-US', 'Language switched to English');
+      break;
+    case 'lang_jp':
+      setLang('ja-JP', '言語が日本語に切り替わりました');
+      break;
+    case 'lang_kr':
+      setLang('ko-KR', '언어가 한국어로 변경되었습니다');
+      break;
+    case 'logout':
+      ElMessageBox.confirm(t('navbar.exitConfirm'), t('navbar.exitTitle'), {
+        confirmButtonText: t('navbar.logout'),
+        cancelButtonText: t('navbar.cancel'),
+        type: 'warning'
+      }).then(() => {
+        ElMessage.success(t('navbar.safeExit'));
+        router.push('/login');
+      }).catch(() => {});
+      break;
+    case 'cancel':
+      break;
+  }
+};
+
+const setLang = (lang, msg) => {
+  locale.value = lang;
+  store.setLanguage(lang);
+  ElMessage.success(msg);
+};
+
+const modeLabel = computed(() => {
+  const mode = projectStore.currentProject?.logic_mode;
+  const map = {
+    'sequential': t('mode.sequential'),
+    'detection': t('mode.detection'),
+    'custom': t('mode.custom')
+  };
+  return map[mode] || t('mode.undefined');
+});
+
+// Timer Logic
+const runTimeSeconds = ref(0);
+const runTimeStr = computed(() => {
+  const h = Math.floor(runTimeSeconds.value / 3600);
+  const m = Math.floor((runTimeSeconds.value % 3600) / 60);
+  const s = runTimeSeconds.value % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+});
+
+let timerInterval;
+onMounted(() => {
+  // 加载项目列表
+  loadProjects();
+  
+  // 启动计时器
+  timerInterval = setInterval(() => {
+    runTimeSeconds.value++;
+  }, 1000);
+  
+  // 加载显示设置
+  const saved = localStorage.getItem('display_settings');
+  if (saved) {
+    store.display = JSON.parse(saved);
+  }
+});
+
+onUnmounted(() => {
+  if (timerInterval) clearInterval(timerInterval);
+});
+</script>

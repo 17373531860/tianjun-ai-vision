@@ -1,0 +1,59 @@
+export default {
+  navbar: {
+    title: '톈쥔 기술 AI',
+    project: '프로젝트',
+    select: '선택',
+    inspector: '검사관',
+    deviceId: '장치 ID',
+    mode: '모드',
+    status: '상태',
+    running: '실행 중',
+    runTime: '가동 시간',
+    profile: '프로필',
+    settings: '설정',
+    logout: '로그아웃',
+    cancel: '취소',
+    exitConfirm: '시스템을 종료하시겠습니까?',
+    exitTitle: '종료 확인',
+    safeExit: '안전하게 종료되었습니다'
+  },
+  menu: {
+    monitor: '실시간 모니터링',
+    project: '프로젝트 관리',
+    model: '모델 창고',
+    data: '데이터 관리',
+    settings: '화면 설정'
+  },
+  mode: {
+    sequential: '순차 모드',
+    detection: '감지 모드',
+    custom: '사용자 정의',
+    undefined: '미정의'
+  },
+  monitor: {
+    working: '작업 중...',
+    camera_online: '카메라: 온라인',
+    fps: 'FPS',
+    latency: '지연',
+    resolution: '해상도',
+    step: '단계',
+    waiting: '대기 중',
+    result: '결과'
+  },
+  data: {
+    title: '데이터 관리',
+    overview: '데이터 개요',
+    total_records: '총 기록',
+    disk_usage: '디스크 사용량',
+    today_new: '오늘 신규',
+    free_space: '여유 공간',
+    policy: '유지 관리 정책',
+    retention_days: '데이터 보존 기간 (일)',
+    auto_cleanup: '자동 정리',
+    auto_backup: '자동 백업',
+    backup_path: '백업 경로',
+    export: '데이터 내보내기',
+    export_btn: 'Excel 내보내기',
+    date_range: '날짜 범위'
+  }
+}

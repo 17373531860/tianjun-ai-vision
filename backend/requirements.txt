@@ -1,0 +1,30 @@
+# Tianjun Machine Vision Backend Dependencies
+
+# Web Framework
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+
+# Database
+sqlalchemy>=2.0.0
+
+# Data Validation
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# File Upload
+python-multipart>=0.0.6
+aiofiles>=23.0.0
+
+# Computer Vision & AI
+opencv-python-headless>=4.8.0
+ultralytics>=8.0.0
+# Note: torch is installed separately with CUDA support
+
+# Communication
+websockets>=11.0.0
+
+# Utilities
+reportlab>=4.0.0
+pillow>=10.0.0
+numpy>=1.24.0
+psutil>=5.9.0
