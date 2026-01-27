@@ -1,8 +1,12 @@
-const { defineConfig } = require('vite');
-const vue = require('@vitejs/plugin-vue');
-const path = require('path');
+import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-module.exports = defineConfig({
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export default defineConfig({
   plugins: [vue()],
   // 生产环境使用相对路径，支持 Electron file:// 协议
   base: './',
