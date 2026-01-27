@@ -16,7 +16,7 @@ class BackendManager extends EventEmitter {
     this.options = {
       port: options.port || 8001,
       host: options.host || 'localhost',
-      startupTimeout: options.startupTimeout || 60000,
+      startupTimeout: options.startupTimeout || 120000,  // 增加到 120 秒
       healthCheckInterval: options.healthCheckInterval || 5000,
       isDev: options.isDev || false,
       resourcesPath: options.resourcesPath || '',
@@ -94,11 +94,17 @@ class BackendManager extends EventEmitter {
         env.PATH = path.join(pythonDir, 'bin') + path.delimiter + env.PATH;
       }
       
-      env.PYTHONHOME = pythonDir;
+      // 注意：不要设置 PYTHONHOME，会干扰 conda-pack 打包的环境
+      // env.PYTHONHOME = pythonDir;
+      
+      // 设置 PYTHONPATH 以便找到 backend 模块
       env.PYTHONPATH = path.dirname(backendPath);
       
       // 禁用 Python 字节码缓存（避免权限问题）
       env.PYTHONDONTWRITEBYTECODE = '1';
+      
+      // 禁用 Python 用户 site-packages（避免冲突）
+      env.PYTHONNOUSERSITE = '1';
     }
     
     return env;
