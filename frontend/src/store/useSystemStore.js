@@ -1,4 +1,44 @@
 import { defineStore } from 'pinia';
+import { updateProject } from '@/api/project';
+
+// 默认检测框设置
+const defaultDetection = {
+  // 检测框
+  boxColor: '#00FF00',          // 默认绿色
+  boxColorNG: '#FF0000',        // NG 红色
+  boxLineWidth: 2,              // 线宽
+  labelFontSize: 14,            // 标签字体大小
+  showConfidence: true,         // 显示置信度
+  
+  // 系统预设提示框（合格/NG）
+  toasts: {
+    ok: {
+      id: 'ok',
+      name: '合格提示框',
+      color: '#10b981',
+      duration: 3,
+      fontSize: 18,
+      position: 'top-right',
+      text: '合格',
+      subText: '',
+      isSystem: true
+    },
+    ng: {
+      id: 'ng',
+      name: 'NG提示框',
+      color: '#ef4444',
+      duration: 3,
+      fontSize: 18,
+      position: 'top-right',
+      text: '不合格',
+      subText: '',
+      isSystem: true
+    }
+  },
+  
+  // 自定义提示框列表
+  customToasts: []
+};
 
 export const useSystemStore = defineStore('system', {
   state: () => ({
@@ -6,8 +46,15 @@ export const useSystemStore = defineStore('system', {
     theme: 'light',
     plcStatus: 'online', // 模拟初始状态
     unreadAlarms: 2,     // 模拟初始状态
-    // 显示设置 (Display Settings)
+    // 当前项目 ID（用于保存设置）
+    currentProjectId: null,
+    // 显示设置 (Display Settings) - 全局设置，不绑定项目
     display: {
+      // 基本信息
+      brandName: '天军科技AI',      // 品牌/系统名称
+      inspectorName: '张三',        // 检测员姓名
+      deviceNumber: '251011',       // 设备编号
+      // 导航栏显示开关
       navbar: {
         projectSelector: true,
         inspector: true,
@@ -24,44 +71,8 @@ export const useSystemStore = defineStore('system', {
         stepTable: true
       }
     },
-    // 检测框设置 (Detection Box Settings)
-    detection: {
-      // 检测框
-      boxColor: '#00FF00',          // 默认绿色
-      boxColorNG: '#FF0000',        // NG 红色
-      boxLineWidth: 2,              // 线宽
-      labelFontSize: 14,            // 标签字体大小
-      showConfidence: true,         // 显示置信度
-      
-      // 系统预设提示框（合格/NG）
-      toasts: {
-        ok: {
-          id: 'ok',
-          name: '合格提示框',
-          color: '#10b981',
-          duration: 3,
-          fontSize: 18,
-          position: 'top-right',
-          text: '合格',
-          subText: '',
-          isSystem: true
-        },
-        ng: {
-          id: 'ng',
-          name: 'NG提示框',
-          color: '#ef4444',
-          duration: 3,
-          fontSize: 18,
-          position: 'top-right',
-          text: '不合格',
-          subText: '',
-          isSystem: true
-        }
-      },
-      
-      // 自定义提示框列表
-      customToasts: []
-    },
+    // 检测框设置 (Detection Box Settings) - 绑定项目
+    detection: { ...defaultDetection },
     // 数据管理设置 (Data Settings)
     data: {
       retentionDays: 30,
@@ -80,7 +91,11 @@ export const useSystemStore = defineStore('system', {
     setTheme(theme) {
       this.theme = theme;
     },
-    // 加载保存的设置
+    // 设置当前项目 ID
+    setCurrentProjectId(projectId) {
+      this.currentProjectId = projectId;
+    },
+    // 加载保存的设置（全局显示设置）
     loadSettings() {
       const displaySaved = localStorage.getItem('display_settings');
       if (displaySaved) {
@@ -88,15 +103,37 @@ export const useSystemStore = defineStore('system', {
           this.display = JSON.parse(displaySaved);
         } catch (e) {}
       }
-      const detectionSaved = localStorage.getItem('detection_settings');
-      if (detectionSaved) {
-        try {
-          this.detection = { ...this.detection, ...JSON.parse(detectionSaved) };
-        } catch (e) {}
+    },
+    // 从项目加载检测框设置
+    loadDetectionFromProject(detectionConfig) {
+      if (detectionConfig) {
+        // 深度合并，确保缺失的字段使用默认值
+        this.detection = {
+          ...defaultDetection,
+          ...detectionConfig,
+          toasts: {
+            ok: { ...defaultDetection.toasts.ok, ...(detectionConfig.toasts?.ok || {}) },
+            ng: { ...defaultDetection.toasts.ng, ...(detectionConfig.toasts?.ng || {}) }
+          },
+          customToasts: detectionConfig.customToasts || []
+        };
+      } else {
+        // 没有项目配置，使用默认值
+        this.detection = { ...defaultDetection };
       }
     },
-    // 保存检测框设置
-    saveDetectionSettings() {
+    // 保存检测框设置到项目
+    async saveDetectionSettings() {
+      if (this.currentProjectId) {
+        try {
+          await updateProject(this.currentProjectId, {
+            detection_config: this.detection
+          });
+        } catch (e) {
+          console.error('保存检测框设置到项目失败:', e);
+        }
+      }
+      // 同时保存到 localStorage 作为备份/默认值
       localStorage.setItem('detection_settings', JSON.stringify(this.detection));
     },
     // 设置上次输入源

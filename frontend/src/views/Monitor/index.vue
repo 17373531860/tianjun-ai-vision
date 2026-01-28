@@ -1,7 +1,7 @@
 <template>
   <div class="grid grid-cols-12 gap-3 h-[calc(100vh-8rem)] p-2 relative">
     <!-- LEFT COLUMN: VIDEO & STEPS -->
-    <div class="col-span-8 flex flex-col gap-3">
+    <div class="col-span-7 flex flex-col gap-3">
       
       <!-- Video Region -->
       <div class="flex-1 bg-black border-2 border-slate-700 rounded-lg relative overflow-hidden group">
@@ -11,6 +11,7 @@
           :src="streamUrl"
           class="w-full h-full object-contain"
           @load="handleVideoLoad"
+          @error="handleStreamError"
         />
         
         <!-- 检测框覆盖层 -->
@@ -143,18 +144,18 @@
     </div>
 
     <!-- RIGHT COLUMN: DASHBOARD Stats -->
-    <div class="col-span-4 flex flex-col gap-3">
+    <div class="col-span-5 flex flex-col gap-3">
       
       <!-- Top Row: Stats Counters (Dynamic) -->
-      <div v-if="systemStore.display.monitor.statsPanel" class="h-48 bg-slate-900 border border-slate-700 rounded-lg p-3 flex flex-col">
+      <div v-if="systemStore.display.monitor.statsPanel" class="h-56 bg-slate-900 border border-slate-700 rounded-lg p-4 flex flex-col">
         <template v-if="currentProject && counters.length > 0">
           <!-- Main Stats (First 2 items) -->
-          <div class="grid grid-cols-2 gap-3 mb-2">
+          <div class="grid grid-cols-2 gap-4 mb-3">
             <div v-for="(counter, idx) in counters.slice(0, 2)" :key="idx"
-              class="flex flex-col items-center justify-center bg-slate-800/50 p-2 rounded"
+              class="flex flex-col items-center justify-center bg-slate-800/50 p-3 rounded-lg"
             >
-               <div class="text-xs text-gray-400">{{ counter.name }}</div>
-               <div class="text-xl font-mono font-bold" 
+               <div class="text-sm text-gray-400 mb-1">{{ counter.name }}</div>
+               <div class="text-3xl font-mono font-bold" 
                     :class="idx === 0 ? 'text-green-500' : 'text-red-500'">
                  {{ counter.value }}
                </div>
@@ -162,12 +163,12 @@
           </div>
           
           <!-- Secondary Stats (Remaining items) -->
-          <div class="flex-1 grid grid-cols-3 gap-2 mt-1 border-t border-slate-800 pt-2 overflow-y-auto">
+          <div class="flex-1 grid grid-cols-2 gap-3 mt-1 border-t border-slate-800 pt-3 overflow-y-auto">
              <div v-for="(counter, idx) in counters.slice(2)" :key="idx"
-               class="flex flex-col items-center justify-center border-r last:border-r-0 border-slate-800 shrink-0"
+               class="flex flex-col items-center justify-center bg-slate-800/30 p-2 rounded"
              >
-                <span class="text-[10px] text-gray-500 truncate w-full text-center">{{ counter.name }}</span>
-                <span class="font-bold text-white">{{ counter.value }}</span>
+                <span class="text-xs text-gray-500 truncate w-full text-center">{{ counter.name }}</span>
+                <span class="font-bold text-lg text-white">{{ counter.value }}</span>
              </div>
           </div>
         </template>
@@ -178,15 +179,15 @@
       </div>
 
       <!-- Middle: Charts -->
-      <div class="h-48 grid grid-cols-2 gap-2">
+      <div class="h-52 grid grid-cols-2 gap-3">
          <!-- Pie Chart -->
          <div v-if="systemStore.display.monitor.defectChart" class="bg-slate-900 border border-slate-700 rounded-lg p-3 relative">
-            <h3 class="text-cyan-400 text-xs font-bold absolute top-2 left-3">良品/不良统计</h3>
+            <h3 class="text-cyan-400 text-sm font-bold absolute top-2 left-3">良品/不良统计</h3>
             <div ref="defectChartRef" class="w-full h-full"></div>
          </div>
          <!-- Yield Rate Gauge -->
          <div v-if="systemStore.display.monitor.capacityChart" class="bg-slate-900 border border-slate-700 rounded-lg p-3 relative">
-            <h3 class="text-cyan-400 text-xs font-bold absolute top-2 left-3">良率</h3>
+            <h3 class="text-cyan-400 text-sm font-bold absolute top-2 left-3">良率</h3>
             <div ref="capacityGaugeRef" class="w-full h-full"></div>
          </div>
       </div>
@@ -194,7 +195,7 @@
       <!-- Bottom: Detail Table & Controls -->
       <div v-if="systemStore.display.monitor.stepTable" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
          <div class="bg-slate-800 px-3 py-2 flex justify-between items-center border-b border-slate-700">
-            <span class="text-cyan-400 text-xs font-bold">步骤统计</span>
+            <span class="text-cyan-400 text-sm font-bold">步骤统计</span>
             <span class="text-[10px] bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ cycleTime }}s</span>
          </div>
          <div class="flex-1 overflow-auto">
@@ -297,7 +298,7 @@ import { Check, Folder, Picture, CircleCheck, CircleClose, Warning } from '@elem
 import { ElMessage } from 'element-plus';
 import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resetDetection, resetDetectionStats, getDetectionResults, getSourceStatus, setProjectConfig } from '@/api/detection';
 import { getModelDetail } from '@/api/model';
-import { getBackendHost } from '@/api/index';
+import api, { getBackendHost } from '@/api/index';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
@@ -334,6 +335,7 @@ const videoInfo = ref({
 });
 const isVideoSource = computed(() => sourceStore.sourceType === 'video');
 const isDraggingProgress = ref(false);  // 是否正在拖动进度条
+const isChangingSpeed = ref(false);  // 是否正在改变倍速（防止轮询覆盖）
 
 // 视频流 URL（使用响应式变量强制刷新）
 const streamTimestamp = ref(Date.now());
@@ -514,30 +516,71 @@ const formatVideoTime = (seconds) => {
 
 // 处理视频进度条变化
 const handleProgressChange = async () => {
-  isDraggingProgress.value = false;
   try {
     await api.post('/source/video/progress', { progress: videoInfo.value.progress });
+    
+    // 立即获取最新的视频信息（更新时间显示）
+    const videoRes = await api.get('/source/video/info');
+    if (videoRes.data.status === 'success') {
+      videoInfo.value.currentTime = videoRes.data.current_time || 0;
+      videoInfo.value.duration = videoRes.data.duration || 0;
+    }
+    
+    // 刷新视频流，重新连接
+    setTimeout(() => {
+      refreshStream();
+      // 确保 sourceType 保持为 video
+      sourceStore.setSourceType('video');
+    }, 100);
   } catch (err) {
     console.error('设置视频进度失败:', err);
     ElMessage.error('设置进度失败');
+  } finally {
+    // 确保拖动状态被重置
+    isDraggingProgress.value = false;
   }
 };
 
 // 处理视频倍速变化
 const handleSpeedChange = async (speed) => {
   try {
+    isChangingSpeed.value = true;  // 防止轮询覆盖
     await api.post('/source/video/speed', { speed });
     ElMessage.success(`播放倍速已设为 ${speed}x`);
+    // 延迟解除保护，确保后端已更新
+    setTimeout(() => {
+      isChangingSpeed.value = false;
+    }, 500);
   } catch (err) {
     console.error('设置视频倍速失败:', err);
     ElMessage.error('设置倍速失败');
+    isChangingSpeed.value = false;
   }
 };
 
 // 处理视频加载
+let streamErrorCount = 0;
 const handleVideoLoad = () => {
   isStreaming.value = true;
+  streamErrorCount = 0;  // 重置错误计数
   resizeCanvas();
+};
+
+// 处理视频流错误（自动重连）
+const handleStreamError = () => {
+  streamErrorCount++;
+  console.warn(`视频流错误 (第${streamErrorCount}次)，尝试重连...`);
+  
+  // 防止无限重连
+  if (streamErrorCount > 10) {
+    console.error('视频流重连失败次数过多，停止重连');
+    return;
+  }
+  
+  // 延迟重连
+  setTimeout(() => {
+    refreshStream();
+  }, 500 * Math.min(streamErrorCount, 5));
 };
 
 // 调整 canvas 大小
@@ -678,7 +721,6 @@ watch(() => currentProject.value, (newProject) => {
     stepsToShow = stepsConfig.filter(s => s.enabled);
   }
   
-  console.log('Monitor 步骤更新:', { logicMode, detectionSteps, stepsToShow: stepsToShow.map(s => s?.label) });
 
   // 更新步骤条 - 同时保存 label 用于后端匹配
   steps.value = stepsToShow.map((s, idx) => ({
@@ -846,12 +888,6 @@ const startDetection = async () => {
       custom_based_on: currentProject.value.custom_based_on || currentProject.value.pipeline_config?.custom_based_on || 'sequential'
     };
     
-    console.log('发送项目配置:', {
-      logic_mode: currentProject.value.logic_mode,
-      detection_steps: pipelineConfig.detection_steps,
-      steps_config: currentProject.value.steps_config
-    });
-    
     // 发送项目配置到后端
     await setProjectConfig({
       project_id: currentProject.value.id,
@@ -906,15 +942,31 @@ const stepDurations = ref({});
 // 步骤间隔时间
 const stepIntervals = ref({});
 
+// 定期刷新视频流（防止浏览器缓存/卡死）
+let streamRefreshCounter = 0;
+const STREAM_REFRESH_INTERVAL = 150; // 每150次轮询（约30秒）刷新一次流
+
 // 开始轮询
 const startPolling = () => {
   stopPolling();
   shownEventIds.value.clear(); // 清除已显示事件记录
+  streamRefreshCounter = 0;
   
   pollingTimer = setInterval(async () => {
+    // 定期刷新视频流
+    streamRefreshCounter++;
+    if (streamRefreshCounter >= STREAM_REFRESH_INTERVAL) {
+      streamRefreshCounter = 0;
+      refreshStream();
+    }
     try {
       const res = await getDetectionResults();
       const data = res.data;
+      
+      // 同步输入源类型到 store
+      if (data.source_type) {
+        sourceStore.setSourceType(data.source_type);
+      }
       
       fps.value = data.fps || 0;
       latency.value = data.latency || 0;
@@ -971,7 +1023,10 @@ const startPolling = () => {
             videoInfo.value.progress = videoRes.data.progress || 0;
             videoInfo.value.currentTime = videoRes.data.current_time || 0;
             videoInfo.value.duration = videoRes.data.duration || 0;
-            videoInfo.value.speed = videoRes.data.speed || 1;
+            // 只有在不改变倍速时才更新（防止用户选择的倍速被覆盖）
+            if (!isChangingSpeed.value) {
+              videoInfo.value.speed = videoRes.data.speed || 1;
+            }
             videoInfo.value.ended = videoRes.data.ended || false;
             
             // 如果视频结束，停止轮询
@@ -1075,6 +1130,10 @@ const standby = async () => {
       const ctx = detectionCanvas.value.getContext('2d');
       ctx.clearRect(0, 0, detectionCanvas.value.width, detectionCanvas.value.height);
     }
+    // 确保轮询继续运行（更新视频进度等）
+    if (!pollingTimer) {
+      startPolling();
+    }
     ElMessage.info('已待机：检测停止，画面继续');
   } catch (err) {
     console.error('待机失败:', err);
@@ -1168,6 +1227,55 @@ const triggerEvent = (eventId) => {
   updateCharts();
 };
 
+// 自动恢复输入源
+const autoRestoreSource = async () => {
+  // 检查是否开启了自动保存
+  const autoSaveSettings = localStorage.getItem('auto_save_settings');
+  if (!autoSaveSettings) return;
+  
+  const settings = JSON.parse(autoSaveSettings);
+  if (!settings.enabled) return;
+  
+  // 从 sourceStore 加载保存的配置
+  sourceStore.loadConfig();
+  
+  const savedType = sourceStore.sourceType;
+  if (!savedType || savedType === 'camera') {
+    // 摄像头：尝试启动上次使用的摄像头
+    try {
+      const cameraSettings = sourceStore.cameraSettings;
+      const [w, h] = (cameraSettings.resolution || '1280x720').split('x').map(Number);
+      await api.post('/source/camera/start', {
+        device_index: cameraSettings.deviceIndex || 0,
+        width: w,
+        height: h,
+        fps: cameraSettings.fps || 30
+      });
+      sourceStore.setSourceType('camera');
+      sourceStore.setStreaming(true);
+      isStreaming.value = true;
+      console.log('[AutoRestore] 已自动恢复摄像头');
+    } catch (err) {
+      console.warn('[AutoRestore] 自动恢复摄像头失败:', err);
+    }
+  } else if (savedType === 'video' && sourceStore.videoPath) {
+    // 视频：尝试启动上次使用的视频
+    try {
+      await api.post('/source/video/start', {
+        file_path: sourceStore.videoPath,
+        speed: sourceStore.videoSpeed || 1
+      });
+      sourceStore.setSourceType('video');
+      sourceStore.setStreaming(true);
+      isStreaming.value = true;
+      startPolling();
+      console.log('[AutoRestore] 已自动恢复视频');
+    } catch (err) {
+      console.warn('[AutoRestore] 自动恢复视频失败:', err);
+    }
+  }
+};
+
 onMounted(() => {
   // 加载系统设置
   systemStore.loadSettings();
@@ -1180,11 +1288,24 @@ onMounted(() => {
   // 监听窗口大小变化
   window.addEventListener('resize', handleResize);
   
-  // 检查是否有正在进行的检测
-  getSourceStatus().then(res => {
+  // 检查是否有正在进行的检测，并同步输入源类型
+  getSourceStatus().then(async res => {
+    // 同步输入源类型到 store
+    if (res.data.source_type) {
+      sourceStore.setSourceType(res.data.source_type);
+    }
     if (res.data.is_detecting) {
       isRunning.value = true;
       startPolling();
+    }
+    // 即使没有检测，如果有输入源也开始轮询（以便更新视频进度）
+    if (res.data.is_running && res.data.source_type === 'video') {
+      startPolling();
+    }
+    
+    // 如果当前没有输入源在运行，尝试自动恢复
+    if (!res.data.is_running && !res.data.source_type) {
+      await autoRestoreSource();
     }
   }).catch(() => {});
 });

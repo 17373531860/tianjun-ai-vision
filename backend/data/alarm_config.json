@@ -1,0 +1,38 @@
+{
+  "enabled": true,
+  "port": "/dev/ttyUSB0",
+  "baudrate": 9600,
+  "protocol": "modbus_4color",
+  "custom_commands": {
+    "light_on": "",
+    "light_off": "",
+    "buzzer_on": "",
+    "buzzer_off": ""
+  },
+  "triggers": {
+    "event1": {
+      "enabled": true,
+      "light": true,
+      "buzzer": false,
+      "duration": 3,
+      "color": "green",
+      "effect": "slow"
+    },
+    "event2": {
+      "enabled": true,
+      "light": true,
+      "buzzer": false,
+      "duration": 3,
+      "color": "red",
+      "effect": "slow"
+    },
+    "event1769276916503": {
+      "enabled": true,
+      "color": "yellow",
+      "effect": "on",
+      "buzzer": false,
+      "duration": 3
+    }
+  },
+  "test_mode": true
+}

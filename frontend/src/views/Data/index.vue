@@ -533,6 +533,7 @@ import {
   getVideoUrl
 } from '@/api/data';
 import { clearTasks } from '@/api/task';
+import { getProjectDetail, updateProject } from '@/api/project';
 
 const router = useRouter();
 const store = useSystemStore();
@@ -976,20 +977,62 @@ const handleExport = async () => {
   }
 };
 
-// 加载导出设置
+// 默认导出设置
+const defaultExportSettings = {
+  record_step_duration: true,
+  record_step_interval: true,
+  record_cycle_duration: true,
+  record_cycle_interval: true,
+  record_counters: true,
+  record_step_video: false,
+  record_cycle_video: false,
+  record_session_video: false,
+  video_quality: 'medium',
+  video_fps: 30,
+  export_session_info: true,
+  export_counters: true,
+  export_cycle_result: true,
+  export_cycle_duration: true,
+  export_cycle_interval: true,
+  export_step_duration: true,
+  export_step_interval: true,
+  export_step_event: true
+};
+
+// 加载导出设置（从项目）
 const loadExportSettings = async () => {
+  if (!projectStore.currentProjectId) {
+    // 没有项目时使用默认设置
+    Object.assign(exportSettings, defaultExportSettings);
+    return;
+  }
   try {
-    const res = await getExportSettings();
-    Object.assign(exportSettings, res.data);
+    const res = await getProjectDetail(projectStore.currentProjectId);
+    const dataConfig = res.data.data_config;
+    if (dataConfig) {
+      Object.assign(exportSettings, { ...defaultExportSettings, ...dataConfig });
+    } else {
+      Object.assign(exportSettings, defaultExportSettings);
+    }
+    // 同步到后端全局设置（用于检测时的录制）
+    await updateExportSettings(exportSettings);
   } catch (e) {
     console.error('加载导出设置失败:', e);
+    Object.assign(exportSettings, defaultExportSettings);
   }
 };
 
-// 保存导出设置
+// 保存导出设置（到项目）
 const saveExportSettings = async () => {
   try {
+    // 保存到后端全局设置（用于检测时的录制）
     await updateExportSettings(exportSettings);
+    // 保存到项目数据库
+    if (projectStore.currentProjectId) {
+      await updateProject(projectStore.currentProjectId, {
+        data_config: { ...exportSettings }
+      });
+    }
     ElMessage.success('设置已保存');
   } catch (e) {
     ElMessage.error('保存失败');
@@ -1056,6 +1099,11 @@ watch(() => projectStore.currentProject?.counters_config, (newCounters) => {
     }));
   }
 }, { deep: true });
+
+// 监听项目变化，重新加载设置
+watch(() => projectStore.currentProjectId, () => {
+  loadExportSettings();
+});
 
 onMounted(() => {
   loadExportSettings();

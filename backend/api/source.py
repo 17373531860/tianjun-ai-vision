@@ -31,6 +31,7 @@ class VideoSourceManager:
         self.is_running = False
         self.current_frame = None
         self.frame_lock = threading.Lock()
+        self.capture_lock = threading.Lock()  # 保护 capture 对象的并发访问
         self.camera_index = 0
         self.video_path = None
         self.image_path = None
@@ -71,6 +72,14 @@ class VideoSourceManager:
         # 项目配置
         self.project_config = None
         self.step_conf_thresholds = {}  # {step_name: threshold}
+        self.step_min_frames = {}  # {step_name: min_frames} 每个步骤的最少帧数配置
+        self.step_consecutive_frames = {}  # {step_name: count} 跟踪每个标签连续出现的帧数
+        self.step_frame_confirmed = {}  # {step_name: bool} 标记标签是否已确认（达到最少帧数）
+        
+        # 静态步骤配置
+        self.step_detection_type = {}  # {step_name: 'dynamic'|'static'} 检测类型
+        self.step_static_config = {}  # {step_name: {trigger_frames, join_cycle, trigger_event}}
+        self.step_static_triggered = {}  # {step_name: bool} 静态步骤是否已触发（防止重复触发）
         
         # 事件与计数器
         self.counters = {}  # {counter_name: value}
@@ -409,6 +418,13 @@ class VideoSourceManager:
         # 解析步骤置信度阈值和时间配置
         self.step_conf_thresholds = {}
         self.step_time_config = {}
+        self.step_min_frames = {}  # 最少帧数配置
+        self.step_consecutive_frames = {}  # 重置连续帧计数
+        self.step_frame_confirmed = {}  # 重置确认状态
+        self.step_detection_type = {}  # 检测类型
+        self.step_static_config = {}  # 静态步骤配置
+        self.step_static_triggered = {}  # 静态步骤触发状态
+        
         steps_config = config.get('steps_config', [])
         for step in steps_config:
             if step.get('enabled', True):
@@ -425,6 +441,23 @@ class VideoSourceManager:
                     'max_duration': step.get('max_duration'),  # 最大持续时间
                     'max_interval': step.get('max_interval', 1.0)  # 去重间隔，默认1秒
                 }
+                
+                # 最少帧数配置（默认1帧）
+                min_frames = step.get('min_frames')
+                self.step_min_frames[label] = min_frames if min_frames and min_frames > 0 else 1
+                
+                # 检测类型配置
+                detection_type = step.get('detection_type', 'dynamic')
+                self.step_detection_type[label] = detection_type
+                
+                # 静态步骤配置
+                if detection_type == 'static':
+                    self.step_static_config[label] = {
+                        'trigger_frames': step.get('static_trigger_frames', 30),
+                        'join_cycle': step.get('join_cycle', True),
+                        'trigger_event': step.get('triggerEvent')  # 触发的事件
+                    }
+                    self.step_static_triggered[label] = False
         
         # 初始化计数器
         self.counters = {}
@@ -441,6 +474,9 @@ class VideoSourceManager:
         print(f"项目配置已加载: {config.get('name', 'Unknown')}")
         print(f"步骤阈值: {self.step_conf_thresholds}")
         print(f"步骤时间配置: {self.step_time_config}")
+        print(f"步骤最少帧数: {self.step_min_frames}")
+        print(f"步骤检测类型: {self.step_detection_type}")
+        print(f"静态步骤配置: {self.step_static_config}")
         print(f"计数器: {self.counters}")
     
     def load_model(self, model_path: str) -> bool:
@@ -460,8 +496,25 @@ class VideoSourceManager:
     
     def _capture_loop(self):
         """摄像头/视频捕获循环"""
+        frame_start_time = time.time()
+        
         while self.is_running and self.capture is not None:
-            ret, frame = self.capture.read()
+            speed = getattr(self, 'video_speed', 1.0)
+            
+            # 对于视频输入源，如果倍速大于1，通过跳帧实现
+            if self.source_type == 'video' and speed > 1:
+                # 跳过一些帧来实现倍速
+                frames_to_skip = int(speed) - 1
+                for _ in range(frames_to_skip):
+                    ret = self.capture.grab()  # 只抓取不解码，更快
+                    if not ret:
+                        break
+            
+            try:
+                ret, frame = self.capture.read()
+            except Exception as e:
+                ret = False
+            
             if ret:
                 original_frame = frame.copy()
                 
@@ -471,16 +524,21 @@ class VideoSourceManager:
                 
                 # 如果正在检测，执行推理
                 if self.is_detecting and self.model is not None:
-                    start_time = time.time()
-                    # 只获取检测结果，不在帧上绘制（让前端绘制）
-                    detections = self._detect_only(frame)
-                    self.latency = int((time.time() - start_time) * 1000)
-                    
-                    # 更新步骤统计和截图
-                    self._update_step_stats(detections, original_frame)
-                    
-                    with self.detection_lock:
-                        self.current_detections = detections
+                    try:
+                        start_time = time.time()
+                        # 只获取检测结果，不在帧上绘制（让前端绘制）
+                        detections = self._detect_only(frame)
+                        
+                        # 更新步骤统计和截图
+                        self._update_step_stats(detections, original_frame)
+                        
+                        # 计算延迟
+                        self.latency = int((time.time() - start_time) * 1000)
+                        
+                        with self.detection_lock:
+                            self.current_detections = detections
+                    except Exception as e:
+                        pass  # 静默处理检测异常
                 
                 # 发送原始帧（不带检测框）
                 with self.frame_lock:
@@ -488,7 +546,11 @@ class VideoSourceManager:
                 
                 # 写入视频录制器
                 if self.is_detecting and self.recording_enabled:
+                    write_start = time.time()
                     self.write_frame_to_recorders(original_frame)
+                    write_time = int((time.time() - write_start) * 1000)
+                    if write_time > 50:
+                        print(f"[慢写入警告] 写入帧耗时={write_time}ms")
                 
                 # FPS 计算
                 self._fps_counter += 1
@@ -509,9 +571,13 @@ class VideoSourceManager:
                 else:
                     time.sleep(0.01)
             
-            # 根据倍速调整帧间隔
-            speed = getattr(self, 'video_speed', 1.0)
-            time.sleep(1.0 / max(self.fps * speed, 1))
+            # 计算帧处理耗时，动态调整 sleep 时间
+            frame_elapsed = time.time() - frame_start_time
+            target_interval = 1.0 / max(self.fps * speed, 1)
+            sleep_time = max(0, target_interval - frame_elapsed)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            frame_start_time = time.time()
     
     def _get_first_sequence_step_label(self):
         """获取顺序模式下配置的第一个步骤标签"""
@@ -796,6 +862,7 @@ class VideoSourceManager:
         import base64
         current_time = time.time()
         detected_labels = set()  # 用于统计的标签（通过阈值的）
+        frame_detected_labels = set()  # 本帧通过置信度阈值的标签（用于帧数过滤）
         
         for det in detections:
             label = det.get('label', '')
@@ -811,7 +878,62 @@ class VideoSourceManager:
                     # 低于该步骤的阈值，不计入统计（但检测框仍会显示）
                     continue
             
-            detected_labels.add(label)
+            frame_detected_labels.add(label)
+        
+        # 帧数过滤：更新连续帧计数
+        # 对于本帧检测到的标签，增加连续帧计数
+        for label in frame_detected_labels:
+            if label not in self.step_consecutive_frames:
+                self.step_consecutive_frames[label] = 0
+            self.step_consecutive_frames[label] += 1
+            
+            # 检查是否达到最少帧数要求
+            min_frames = self.step_min_frames.get(label, 1)
+            if self.step_consecutive_frames[label] >= min_frames:
+                detected_labels.add(label)
+                if not self.step_frame_confirmed.get(label):
+                    self.step_frame_confirmed[label] = True
+        
+        # 对于本帧没有检测到的标签，重置连续帧计数
+        all_configured_labels = set(self.step_conf_thresholds.keys()) if self.step_conf_thresholds else set()
+        for label in all_configured_labels:
+            if label not in frame_detected_labels:
+                self.step_consecutive_frames[label] = 0
+                self.step_frame_confirmed[label] = False
+                # 重置静态步骤的触发状态（标签消失后可以再次触发）
+                if label in self.step_static_triggered:
+                    self.step_static_triggered[label] = False
+        
+        # 检查静态步骤是否达到触发条件
+        for label in frame_detected_labels:
+            if self.step_detection_type.get(label) == 'static':
+                static_config = self.step_static_config.get(label, {})
+                trigger_frames = static_config.get('trigger_frames', 30)
+                trigger_event = static_config.get('trigger_event')
+                
+                # 检查是否达到静态触发帧数且未触发过
+                if (self.step_consecutive_frames.get(label, 0) >= trigger_frames 
+                    and not self.step_static_triggered.get(label, False)):
+                    
+                    self.step_static_triggered[label] = True
+                    print(f"静态步骤 [{label}] 达到触发条件（{trigger_frames}帧），触发事件: {trigger_event}")
+                    
+                    # 触发事件
+                    if trigger_event:
+                        self._trigger_event(trigger_event, f'静态步骤触发: {label}')
+        
+        # 获取启用的步骤标签
+        enabled_labels = set()
+        if self.project_config:
+            steps_config = self.project_config.get('steps_config', [])
+            for step in steps_config:
+                if step.get('enabled', True):
+                    step_label = step.get('label', '')
+                    if step_label:
+                        enabled_labels.add(step_label)
+        
+        # 继续处理通过帧数过滤的标签
+        for label in detected_labels:
             
             # 获取步骤时间配置
             time_config = self.step_time_config.get(label, {})
@@ -876,14 +998,21 @@ class VideoSourceManager:
             
             self.step_last_seen[label] = current_time
             
-            # 记录当前周期的步骤顺序
-            if is_new_appearance:
-                # 自定义模式：记录完整序列（包括重复步骤）
-                # 其他模式：只记录首次出现
-                if logic_mode == 'custom':
-                    self.current_cycle_steps.append(label)
-                elif label not in self.current_cycle_steps:
-                    self.current_cycle_steps.append(label)
+            # 记录当前周期的步骤顺序（只记录启用的步骤）
+            if is_new_appearance and label in enabled_labels:
+                # 检查静态步骤是否参与周期
+                should_join_cycle = True
+                if self.step_detection_type.get(label) == 'static':
+                    static_config = self.step_static_config.get(label, {})
+                    should_join_cycle = static_config.get('join_cycle', True)
+                
+                if should_join_cycle:
+                    # 自定义模式：记录完整序列（包括重复步骤）
+                    # 其他模式：只记录首次出现
+                    if logic_mode == 'custom':
+                        self.current_cycle_steps.append(label)
+                    elif label not in self.current_cycle_steps:
+                        self.current_cycle_steps.append(label)
             
             # 保存/更新截图（每个步骤只保存最新的）
             x, y, w, h = det['x'], det['y'], det['w'], det['h']
@@ -1278,6 +1407,14 @@ class VideoSourceManager:
             'show_notification': event.get('show_notification', False),
             'toast_id': event.get('toast_id', 'ok' if event.get('id') == 1 else 'ng' if event.get('id') == 2 else 'ok')
         })
+        
+        # 触发报警器（如果已配置）
+        try:
+            from backend.api.alarm import alarm_manager
+            event_type = f'event{current_event_id}'
+            alarm_manager.trigger_alarm(event_type)
+        except Exception as e:
+            print(f"触发报警失败: {e}")
     
     def _detect_only(self, frame: np.ndarray) -> list:
         """只执行检测，返回检测结果（不绘制检测框）"""
@@ -1450,9 +1587,28 @@ class VideoSourceManager:
         """启动摄像头"""
         self.stop()
         
-        self.capture = cv2.VideoCapture(device_index)
+        # 等待一小段时间确保之前的资源已释放
+        time.sleep(0.2)
+        
+        # 尝试打开摄像头（支持重试）
+        max_retries = 3
+        for attempt in range(max_retries):
+            # Windows 上使用 DirectShow，Linux 上使用 V4L2
+            import platform
+            if platform.system() == "Windows":
+                self.capture = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
+            else:
+                self.capture = cv2.VideoCapture(device_index)
+            
+            if self.capture.isOpened():
+                break
+            
+            if attempt < max_retries - 1:
+                print(f"[Camera] 打开摄像头失败，重试 {attempt + 2}/{max_retries}...")
+                time.sleep(0.5)
+        
         if not self.capture.isOpened():
-            raise Exception(f"无法打开摄像头 {device_index}")
+            raise Exception(f"无法打开摄像头 {device_index}，请检查设备是否被其他程序占用")
         
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -1470,8 +1626,11 @@ class VideoSourceManager:
         
         return True
     
-    def start_video(self, video_path: str, speed: float = 1.0):
+    def start_video(self, video_path: str, speed: float = None):
         """启动视频文件播放"""
+        # 保存当前倍速设置（如果有的话）
+        current_speed = self.video_speed if self.video_speed else 1.0
+        
         self.stop()
         
         if not os.path.exists(video_path):
@@ -1491,8 +1650,9 @@ class VideoSourceManager:
         self.video_total_frames = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
         self.video_current_frame = 0
         self.video_ended = False
-        self.video_speed = speed
-        print(f"视频总帧数: {self.video_total_frames}, 倍速: {speed}x")
+        # 使用传入的倍速，如果没有传入则保持之前的倍速
+        self.video_speed = speed if speed is not None else current_speed
+        print(f"视频总帧数: {self.video_total_frames}, 倍速: {self.video_speed}x")
         
         self.is_running = True
         
@@ -1510,16 +1670,40 @@ class VideoSourceManager:
     
     def set_video_progress(self, progress: float):
         """设置视频播放进度 (0-1)"""
-        if self.source_type != 'video' or self.capture is None:
+        if self.source_type != 'video':
             raise Exception("当前不是视频输入源")
         
         if progress < 0 or progress > 1:
             raise ValueError("进度必须在 0 到 1 之间")
         
-        target_frame = int(self.video_total_frames * progress)
-        self.capture.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-        self.video_current_frame = target_frame
-        self.video_ended = False
+        # 使用锁保护 capture 对象的访问
+        with self.capture_lock:
+            # 先停止播放线程
+            was_running = self.is_running
+            if self.is_running:
+                self.is_running = False
+                # 等待线程结束（最多等待1秒）
+                if self._thread and self._thread.is_alive():
+                    self._thread.join(timeout=1.0)
+            
+            # 如果 capture 不存在或已关闭，重新打开视频
+            if self.capture is None or not self.capture.isOpened():
+                if self.video_path and os.path.exists(self.video_path):
+                    self.capture = cv2.VideoCapture(self.video_path)
+                    if not self.capture.isOpened():
+                        raise Exception("无法重新打开视频文件")
+                else:
+                    raise Exception("视频文件不存在")
+            
+            target_frame = int(self.video_total_frames * progress)
+            self.capture.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+            self.video_current_frame = target_frame
+            self.video_ended = False
+        
+        # 重新启动播放线程（在锁外启动，避免死锁）
+        self.is_running = True
+        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._thread.start()
         print(f"[Video] 进度已设置为: {progress*100:.1f}% (帧 {target_frame}/{self.video_total_frames})")
     
     def get_video_info(self):
@@ -1849,15 +2033,24 @@ class VideoSourceManager:
         self.is_running = False
         self.is_detecting = False
         
+        # 等待线程结束
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=1.0)
+            self._thread.join(timeout=2.0)
         
+        # 释放摄像头/视频资源
         if self.capture:
-            self.capture.release()
+            try:
+                self.capture.release()
+            except:
+                pass
             self.capture = None
+        
+        # 等待一小段时间确保资源被系统释放
+        time.sleep(0.1)
         
         self.source_type = None
         self.current_frame = None
+        self._thread = None
         with self.detection_lock:
             self.current_detections = []
     
@@ -1914,24 +2107,111 @@ class DetectionStartRequest(BaseModel):
     iou: float = 0.45
 
 
-# API 端点
-@router.get("/cameras")
-def list_cameras():
-    """列出可用摄像头"""
+# 摄像头列表缓存
+_cameras_cache = {
+    "cameras": [],
+    "last_update": 0,
+    "cache_duration": 60  # 缓存60秒
+}
+
+def _get_camera_name_linux(index):
+    """Linux: 尝试获取摄像头真实名称"""
+    try:
+        name_path = f"/sys/class/video4linux/video{index}/name"
+        if os.path.exists(name_path):
+            with open(name_path, 'r') as f:
+                return f.read().strip()
+    except:
+        pass
+    return None
+
+def _detect_cameras_linux():
+    """Linux: 快速检测摄像头（通过读取 /dev/video* 设备）"""
+    import glob
     cameras = []
-    for i in range(10):
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
+    video_devices = sorted(glob.glob("/dev/video*"))
+    
+    for device in video_devices:
+        try:
+            index = int(device.replace("/dev/video", ""))
+            # 只检测偶数索引（Linux 上奇数通常是元数据设备）
+            if index % 2 != 0:
+                continue
+            
+            # 获取设备名称
+            name = _get_camera_name_linux(index)
+            if name:
+                cameras.append({"index": index, "name": f"{name} (索引 {index})"})
+            else:
+                cameras.append({"index": index, "name": f"摄像头 {index}"})
+        except:
+            continue
+    
+    return cameras
+
+def _detect_cameras_windows():
+    """Windows: 检测摄像头（减少尝试次数）"""
+    cameras = []
+    # 获取当前正在使用的摄像头索引
+    current_camera_index = None
+    if video_manager.source_type == 'camera' and video_manager.is_running:
+        current_camera_index = video_manager.camera_index
+    
+    # 只尝试前5个索引，减少等待时间
+    for i in range(5):
+        # 如果这个摄像头正在被使用，直接添加到列表（不尝试打开）
+        if current_camera_index is not None and i == current_camera_index:
             cameras.append({
                 "index": i,
-                "name": f"摄像头 {i}" if i > 0 else "默认摄像头 (索引 0)"
+                "name": f"摄像头 {i} (使用中)" if i > 0 else "默认摄像头 (索引 0, 使用中)"
             })
-            cap.release()
+            continue
+        
+        try:
+            # 设置较短的超时（Windows 上可能不生效，但尝试一下）
+            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)  # Windows 上用 DirectShow 更快
+            if cap.isOpened():
+                cameras.append({
+                    "index": i,
+                    "name": f"摄像头 {i}" if i > 0 else "默认摄像头 (索引 0)"
+                })
+                cap.release()
+        except:
+            continue
     
+    return cameras
+
+# API 端点
+@router.get("/cameras")
+def list_cameras(refresh: bool = False):
+    """列出可用摄像头
+    
+    Args:
+        refresh: 是否强制刷新缓存，默认使用缓存
+    """
+    import platform
+    current_time = time.time()
+    
+    # 检查缓存是否有效
+    if not refresh and _cameras_cache["cameras"] and \
+       (current_time - _cameras_cache["last_update"]) < _cameras_cache["cache_duration"]:
+        return {"cameras": _cameras_cache["cameras"], "cached": True}
+    
+    # 根据操作系统选择检测方法
+    if platform.system() == "Linux":
+        cameras = _detect_cameras_linux()
+    else:
+        cameras = _detect_cameras_windows()
+    
+    # 如果没有检测到任何摄像头，返回默认项
     if not cameras:
         cameras = [{"index": 0, "name": "默认摄像头 (索引 0)"}]
     
-    return {"cameras": cameras}
+    # 更新缓存
+    _cameras_cache["cameras"] = cameras
+    _cameras_cache["last_update"] = current_time
+    
+    return {"cameras": cameras, "cached": False}
 
 @router.post("/camera/start")
 def start_camera(req: CameraStartRequest):
@@ -2125,6 +2405,8 @@ def get_detection_results():
         "fps": video_manager.fps_actual,
         "latency": video_manager.latency,
         "is_detecting": video_manager.is_detecting,
+        "source_type": video_manager.source_type,
+        "is_running": video_manager.is_running,
         "step_counts": video_manager.step_counts.copy(),
         "step_screenshots": video_manager.step_screenshots.copy(),
         "step_detection_times": video_manager.step_detection_times.copy(),

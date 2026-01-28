@@ -3,7 +3,7 @@
     <!-- Left: Logo & Menu -->
     <div class="flex items-center gap-4">
       <div class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
-        {{ $t('navbar.title') }}
+        {{ store.display.brandName || $t('navbar.title') }}
       </div>
       <div class="h-8 w-px bg-gray-700 mx-2"></div>
       
@@ -34,8 +34,8 @@
         </div>
         
         <div class="hidden md:flex items-center gap-4 text-gray-300">
-          <span v-if="store.display.navbar.inspector">{{ $t('navbar.inspector') }}: <span class="text-white">张三</span></span>
-          <span v-if="store.display.navbar.deviceId">{{ $t('navbar.deviceId') }}: <span class="text-white">251011</span></span>
+          <span v-if="store.display.navbar.inspector">{{ $t('navbar.inspector') }}: <span class="text-white">{{ store.display.inspectorName || '未设置' }}</span></span>
+          <span v-if="store.display.navbar.deviceId">{{ $t('navbar.deviceId') }}: <span class="text-white">{{ store.display.deviceNumber || '未设置' }}</span></span>
         </div>
       </div>
     </div>
@@ -168,6 +168,41 @@ const restoreLastSelection = async (settings) => {
       // 保存输入源信息到 store，让输入源设置页面恢复
       if (settings.sourceType && settings.sourceValue) {
         store.setLastSource(settings.sourceType, settings.sourceValue);
+        
+        // 自动启动输入源
+        try {
+          const api = (await import('@/api/index')).default;
+          
+          if (settings.sourceType === 'camera') {
+            // 摄像头类型：sourceValue 是 deviceIndex
+            const sourceStore = (await import('@/store/useSourceStore')).useSourceStore();
+            sourceStore.loadConfig();
+            
+            await api.post('/source/start', {
+              type: 'camera',
+              device_index: settings.sourceValue,
+              resolution: sourceStore.cameraSettings?.resolution || '1280x720',
+              fps: sourceStore.cameraSettings?.fps || 30
+            });
+            sourceStore.setStreaming(true);
+            console.log('摄像头自动启动成功');
+          } else if (settings.sourceType === 'video') {
+            // 视频类型：sourceValue 是视频路径
+            const sourceStore = (await import('@/store/useSourceStore')).useSourceStore();
+            sourceStore.loadConfig();
+            
+            await api.post('/source/start', {
+              type: 'video',
+              path: settings.sourceValue,
+              speed: sourceStore.videoSpeed || 1
+            });
+            sourceStore.setStreaming(true);
+            console.log('视频自动启动成功');
+          }
+          // 图片类型通常不需要自动启动
+        } catch (e) {
+          console.warn('自动启动输入源失败:', e.message);
+        }
       }
     }
   }
@@ -198,6 +233,8 @@ const loadProjects = async () => {
 const handleProjectChange = async (projectId) => {
   if (!projectId) {
     projectStore.setCurrentProject(null);
+    store.setCurrentProjectId(null);
+    store.loadDetectionFromProject(null);
     saveCurrentSelection();
     return;
   }
@@ -234,6 +271,33 @@ const handleProjectChange = async (projectId) => {
     }
     
     projectStore.setCurrentProject(project);
+    
+    // 加载项目的检测框设置
+    store.setCurrentProjectId(projectId);
+    store.loadDetectionFromProject(project.detection_config);
+    
+    // 自动连接报警设备（如果有保存的配置）
+    if (project.alarm_config?.port) {
+      try {
+        const api = (await import('@/api/index')).default;
+        // 先同步报警配置
+        await api.post('/alarm/config', {
+          enabled: project.alarm_config.enabled ?? false,
+          protocol: project.alarm_config.protocol ?? 'modbus_4color',
+          test_mode: project.alarm_config.test_mode ?? false,
+          custom_commands: project.alarm_config.custom_commands ?? {},
+          triggers: project.alarm_config.triggers ?? {},
+        });
+        // 尝试连接设备
+        await api.post('/alarm/connect', {
+          port: project.alarm_config.port,
+          baudrate: project.alarm_config.baudrate || 9600
+        });
+        console.log('报警设备自动连接成功');
+      } catch (e) {
+        console.warn('报警设备自动连接失败:', e.message);
+      }
+    }
     
     // 自动保存当前选择
     saveCurrentSelection();

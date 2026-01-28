@@ -15,6 +15,9 @@ class Project(Base):
     steps_config = Column(JSON, nullable=True)  # 步骤配置
     events_config = Column(JSON, nullable=True)  # 事件配置
     counters_config = Column(JSON, nullable=True)  # 计数器配置
+    alarm_config = Column(JSON, nullable=True)  # 报警设置
+    detection_config = Column(JSON, nullable=True)  # 检测框设置
+    data_config = Column(JSON, nullable=True)  # 数据导出设置
     is_active = Column(Boolean, default=False)  # 是否激活
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -35,6 +35,9 @@ def migrate_database():
         ("data_export_settings", "export_cycle_result", "BOOLEAN DEFAULT 1"),
         ("data_export_settings", "export_counters", "BOOLEAN DEFAULT 1"),
         ("data_export_settings", "export_session_info", "BOOLEAN DEFAULT 1"),
+        ("projects", "alarm_config", "JSON"),
+        ("projects", "detection_config", "JSON"),
+        ("projects", "data_config", "JSON"),
     ]
     
     try:

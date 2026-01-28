@@ -201,6 +201,26 @@
                           <span class="cursor-help border-b border-dashed border-gray-500">去重间隔(秒)</span>
                         </el-tooltip>
                       </th>
+                      <th class="p-2 w-24">
+                        <el-tooltip content="连续检测到多少帧才算真正检测到该步骤（用于过滤误检，默认1帧即触发）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">最少帧数</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="动态：步骤消失后计入周期；静态：持续检测到指定帧数后立即触发事件" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">检测类型</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-24">
+                        <el-tooltip content="静态步骤连续检测到多少帧后触发事件（仅静态类型有效）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">静态触发帧</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="静态步骤是否参与周期序列记录（仅静态类型有效）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">参与周期</span>
+                        </el-tooltip>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -253,6 +273,44 @@
                           :controls="false"
                           placeholder="默认1秒"
                           class="w-full"
+                        />
+                      </td>
+                      <td class="p-2">
+                        <el-input-number 
+                          v-model="step.min_frames" 
+                          size="small" 
+                          :min="1" 
+                          :max="30" 
+                          :step="1"
+                          :controls="false"
+                          placeholder="默认1"
+                          class="w-full"
+                        />
+                      </td>
+                      <td class="p-2">
+                        <el-select v-model="step.detection_type" size="small" class="w-full">
+                          <el-option value="dynamic" label="动态" />
+                          <el-option value="static" label="静态" />
+                        </el-select>
+                      </td>
+                      <td class="p-2">
+                        <el-input-number 
+                          v-model="step.static_trigger_frames" 
+                          size="small" 
+                          :min="1" 
+                          :max="300" 
+                          :step="1"
+                          :controls="false"
+                          placeholder="30"
+                          class="w-full"
+                          :disabled="step.detection_type !== 'static'"
+                        />
+                      </td>
+                      <td class="p-2">
+                        <el-switch 
+                          v-model="step.join_cycle" 
+                          size="small"
+                          :disabled="step.detection_type !== 'static'"
                         />
                       </td>
                     </tr>
@@ -888,7 +946,11 @@ const selectModel = (model) => {
       displayLabel: label,
       enabled: true,
       threshold: 50,
-      triggerEvent: null
+      triggerEvent: null,
+      min_frames: null,  // 最少帧数，null 表示使用默认值1
+      detection_type: 'dynamic',  // 检测类型：dynamic（动态）或 static（静态）
+      static_trigger_frames: 30,  // 静态触发帧数，默认30帧
+      join_cycle: true  // 静态步骤是否参与周期，默认参与
     }));
     
     // 自动初始化顺序

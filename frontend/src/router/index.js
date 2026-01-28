@@ -36,6 +36,11 @@ const routes = [
         path: 'settings',
         name: 'Settings',
         component: () => import('@/views/Settings/index.vue'),
+      },
+      {
+        path: 'alarm',
+        name: 'Alarm',
+        component: () => import('@/views/Alarm/index.vue'),
       }
     ]
   }

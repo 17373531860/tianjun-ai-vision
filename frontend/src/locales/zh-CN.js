@@ -18,7 +18,7 @@ export default {
     safeExit: '已安全退出'
   },
   menu: {
-    monitor: '实时监控',
+    monitor: '检测中心',
     project: '项目管理',
     model: '模型仓库',
     data: '数据管理',

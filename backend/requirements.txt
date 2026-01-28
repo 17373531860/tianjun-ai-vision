@@ -22,6 +22,7 @@ ultralytics>=8.0.0
 
 # Communication
 websockets>=11.0.0
+pyserial>=3.5
 
 # Utilities
 reportlab>=4.0.0

@@ -10,6 +10,9 @@ class ProjectBase(BaseModel):
     steps_config: Optional[List[dict]] = None
     events_config: Optional[List[dict]] = None
     counters_config: Optional[List[dict]] = None
+    alarm_config: Optional[dict] = None
+    detection_config: Optional[dict] = None
+    data_config: Optional[dict] = None
 
 class ProjectCreate(ProjectBase):
     default_model_id: Optional[int] = None
@@ -23,6 +26,9 @@ class ProjectUpdate(BaseModel):
     steps_config: Optional[List[dict]] = None
     events_config: Optional[List[dict]] = None
     counters_config: Optional[List[dict]] = None
+    alarm_config: Optional[dict] = None
+    detection_config: Optional[dict] = None
+    data_config: Optional[dict] = None
     is_active: Optional[bool] = None
 
 class ProjectResponse(ProjectBase):

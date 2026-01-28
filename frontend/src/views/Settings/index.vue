@@ -7,12 +7,36 @@
       <!-- Display Settings Tab -->
       <el-tab-pane label="显示设置">
         <div class="space-y-6 p-4">
+          <!-- 基本信息设置 -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-tech-blue"><Edit /></el-icon>
+                <span class="font-bold text-white">基本信息设置</span>
+              </div>
+            </template>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="text-gray-300 mb-2">品牌/系统名称</div>
+                <el-input v-model="store.display.brandName" placeholder="天军科技AI" @change="saveDisplaySettings" />
+              </div>
+              <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="text-gray-300 mb-2">检测员姓名</div>
+                <el-input v-model="store.display.inspectorName" placeholder="张三" @change="saveDisplaySettings" />
+              </div>
+              <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="text-gray-300 mb-2">设备编号</div>
+                <el-input v-model="store.display.deviceNumber" placeholder="251011" @change="saveDisplaySettings" />
+              </div>
+            </div>
+          </el-card>
+          
           <!-- Navbar Settings -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
               <div class="flex items-center gap-2">
                 <el-icon class="text-tech-blue"><Top /></el-icon>
-                <span class="font-bold text-white">顶部导航栏 (Navbar)</span>
+                <span class="font-bold text-white">顶部导航栏显示</span>
               </div>
             </template>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -48,7 +72,7 @@
             <template #header>
               <div class="flex items-center gap-2">
                 <el-icon class="text-tech-blue"><Monitor /></el-icon>
-                <span class="font-bold text-white">实时监控 (Monitor)</span>
+                <span class="font-bold text-white">检测中心显示</span>
               </div>
             </template>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -327,7 +351,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useSystemStore } from '@/store/useSystemStore';
-import { Top, Monitor, Box, Bell } from '@element-plus/icons-vue';
+import { Top, Monitor, Box, Bell, Edit } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 
 const store = useSystemStore();

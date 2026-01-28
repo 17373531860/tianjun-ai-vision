@@ -214,7 +214,7 @@
               <li>1. 选择输入源类型（摄像头/视频/图片）</li>
               <li>2. 配置相关参数或上传文件</li>
               <li>3. 点击"保存并启动检测"开始使用</li>
-              <li>4. 系统将自动跳转到实时监控页面</li>
+              <li>4. 系统将自动跳转到检测中心页面</li>
             </ul>
           </template>
         </el-alert>
@@ -280,12 +280,16 @@ const sourceTypeLabel = computed(() => {
 });
 
 // 刷新摄像头列表
-const refreshCameras = async () => {
+const refreshCameras = async (forceRefresh = true) => {
   loadingCameras.value = true;
   try {
-    const res = await api.get('/source/cameras');
+    // forceRefresh=true 时强制刷新，false 时使用缓存
+    const res = await api.get('/source/cameras', { params: { refresh: forceRefresh } });
     availableCameras.value = res.data.cameras || [{ index: 0, name: '默认摄像头 (索引 0)' }];
-    ElMessage.success(`检测到 ${availableCameras.value.length} 个摄像头`);
+    if (forceRefresh) {
+      const cached = res.data.cached ? ' (缓存)' : '';
+      ElMessage.success(`检测到 ${availableCameras.value.length} 个摄像头${cached}`);
+    }
   } catch (err) {
     console.error('获取摄像头列表失败:', err);
     availableCameras.value = [
@@ -329,7 +333,7 @@ const useLastVideo = async () => {
     sourceStore.setStreaming(true);
     sourceStore.saveConfig();
     
-    ElMessage.success('已使用上次的视频文件，正在跳转到实时监控...');
+    ElMessage.success('已使用上次的视频文件，正在跳转到检测中心...');
     
     setTimeout(() => {
       router.push('/monitor');
@@ -369,7 +373,7 @@ const useLastImage = async () => {
     sourceStore.setStreaming(true);
     sourceStore.saveConfig();
     
-    ElMessage.success('已使用上次的图片文件，正在跳转到实时监控...');
+    ElMessage.success('已使用上次的图片文件，正在跳转到检测中心...');
     
     setTimeout(() => {
       router.push('/monitor');
@@ -488,9 +492,9 @@ const saveAndStart = async () => {
       }
     }
     
-    ElMessage.success('输入源已配置，正在跳转到实时监控...');
+    ElMessage.success('输入源已配置，正在跳转到检测中心...');
     
-    // 跳转到实时监控页面
+    // 跳转到检测中心页面
     setTimeout(() => {
       router.push('/monitor');
     }, 500);
@@ -541,6 +545,7 @@ const lastImageFileName = ref(null);
 onMounted(() => {
   loadConfig();
   restoreAutoSavedSource();
-  refreshCameras();
+  // 页面加载时使用缓存，不强制刷新（更快）
+  refreshCameras(false);
 });
 </script>

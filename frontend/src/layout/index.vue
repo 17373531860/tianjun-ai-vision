@@ -21,6 +21,9 @@
         <router-link to="/data" class="nav-item">
           <el-icon class="mr-2"><DataLine /></el-icon> {{ $t('menu.data') }}
         </router-link>
+        <router-link to="/alarm" class="nav-item">
+          <el-icon class="mr-2"><Bell /></el-icon> 报警设置
+        </router-link>
         <router-link to="/settings" class="nav-item">
           <el-icon class="mr-2"><Setting /></el-icon> {{ $t('menu.settings') }}
         </router-link>
@@ -46,7 +49,7 @@
 <script setup>
 import Navbar from './Navbar.vue';
 import { ref } from 'vue';
-import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera } from '@element-plus/icons-vue';
+import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell } from '@element-plus/icons-vue';
 </script>
 
 <style scoped>
