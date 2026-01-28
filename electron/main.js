@@ -83,6 +83,7 @@ function createWindow() {
     title: CONFIG.appName,
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
+      webSecurity: false,  // 允许加载本地文件
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),

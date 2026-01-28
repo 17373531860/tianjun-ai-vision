@@ -1,18 +1,41 @@
 import axios from 'axios';
 
-// 检测是否在 Electron 环境中运行
-const isElectron = typeof window !== 'undefined' && window.electronAPI?.isElectron;
+// 后端地址常量
+const BACKEND_URL = 'http://localhost:8001';
 
-// 动态获取 API 基础 URL
+// 检测是否在桌面应用环境中运行（每次调用时检测）
+function isDesktopApp() {
+  if (typeof window === 'undefined') return false;
+  
+  // 最可靠的方式：检查 URL 协议
+  const href = window.location.href;
+  if (href.startsWith('file://') || href.startsWith('file:///')) {
+    return true;
+  }
+  
+  // 备用检测：userAgent
+  if (navigator.userAgent.toLowerCase().includes('electron')) {
+    return true;
+  }
+  
+  return false;
+}
+
+// 获取 API 基础 URL（每次创建请求时动态获取）
 function getBaseURL() {
+  const isDesktop = isDesktopApp();
+  console.log('[API] isDesktop:', isDesktop, 'href:', window.location.href);
+  
   // 优先使用环境变量
   if (import.meta.env.VITE_API_BASE_URL) {
     return import.meta.env.VITE_API_BASE_URL;
   }
   
-  // Electron 生产环境：直接连接本地后端
-  if (isElectron) {
-    return 'http://localhost:8001/api/v1';
+  // 桌面应用：直接连接本地后端（使用完整 URL）
+  if (isDesktop) {
+    const url = BACKEND_URL + '/api/v1';
+    console.log('[API] Using desktop URL:', url);
+    return url;
   }
   
   // Web 开发环境：使用代理
@@ -21,12 +44,11 @@ function getBaseURL() {
 
 // 获取后端主机地址（用于视频流等非 API 请求）
 export function getBackendHost() {
-  if (isElectron) {
-    return 'http://localhost:8001';
-  }
-  // Web 开发环境：使用相对路径（通过代理）
-  return '';
+  return isDesktopApp() ? BACKEND_URL : '';
 }
+
+const baseURL = getBaseURL();
+console.log('[API] Final baseURL:', baseURL);
 
 const api = axios.create({
   baseURL: getBaseURL(),
@@ -39,7 +61,17 @@ const api = axios.create({
 // 请求拦截器
 api.interceptors.request.use(
   (config) => {
-    // 可以在这里添加 token 等认证信息
+    // 在桌面应用中，确保使用完整 URL
+    if (typeof window !== 'undefined') {
+      const isFileProtocol = window.location.protocol === 'file:' || 
+                             window.location.href.startsWith('file:');
+      
+      if (isFileProtocol && config.baseURL && !config.baseURL.startsWith('http')) {
+        // 如果是 file:// 协议且 baseURL 不是完整 URL，修正它
+        config.baseURL = BACKEND_URL + '/api/v1';
+        console.log('[API Interceptor] Fixed baseURL to:', config.baseURL);
+      }
+    }
     return config;
   },
   (error) => {

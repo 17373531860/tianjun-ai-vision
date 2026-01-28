@@ -16,7 +16,7 @@ class BackendManager extends EventEmitter {
     this.options = {
       port: options.port || 8001,
       host: options.host || 'localhost',
-      startupTimeout: options.startupTimeout || 120000,  // 增加到 120 秒
+      startupTimeout: options.startupTimeout || 300000,  // 增加到 300 秒
       healthCheckInterval: options.healthCheckInterval || 5000,
       isDev: options.isDev || false,
       resourcesPath: options.resourcesPath || '',
@@ -116,11 +116,11 @@ class BackendManager extends EventEmitter {
   checkHealth() {
     return new Promise((resolve) => {
       const req = http.request({
-        hostname: this.options.host,
+        hostname: '127.0.0.1',  // 强制使用 IPv4，避免 localhost 解析为 IPv6
         port: this.options.port,
         path: '/api/v1/source/status',
         method: 'GET',
-        timeout: 2000,
+        timeout: 10000,  // 增加到 10 秒
       }, (res) => {
         resolve(res.statusCode === 200);
       });
@@ -145,7 +145,7 @@ class BackendManager extends EventEmitter {
       if (await this.checkHealth()) {
         return true;
       }
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 2000));  // 增加检查间隔到 2 秒
     }
     
     return false;
