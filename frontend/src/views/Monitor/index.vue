@@ -35,11 +35,50 @@
         </div>
         
         <!-- Video Footer Stats -->
-        <div class="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-2 flex gap-6 text-xs text-gray-300 border-t border-white/10">
-          <span class="flex items-center gap-2"><span class="w-2 h-2 rounded-full" :class="isStreaming ? 'bg-green-500' : 'bg-gray-500'"></span> {{ isStreaming ? '摄像头在线' : '摄像头离线' }}</span>
-          <span>FPS: <span class="text-cyan-400 font-mono">{{ fps }}</span></span>
-          <span>延迟: <span class="text-cyan-400 font-mono">{{ latency }} ms</span></span>
-          <span>检测数: <span class="text-cyan-400 font-mono">{{ detectionCount }}</span></span>
+        <div class="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm border-t border-white/10">
+          <!-- 视频进度条（仅视频输入源时显示） -->
+          <div v-if="isVideoSource" class="px-3 pt-2 pb-1">
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-400 font-mono w-16">{{ formatVideoTime(videoInfo.currentTime) }}</span>
+              <el-slider
+                v-model="videoInfo.progress"
+                :min="0"
+                :max="1"
+                :step="0.001"
+                :show-tooltip="false"
+                class="flex-1 video-progress-slider"
+                @mousedown="isDraggingProgress = true"
+                @mouseup="handleProgressChange"
+                @change="handleProgressChange"
+              />
+              <span class="text-xs text-gray-400 font-mono w-16 text-right">{{ formatVideoTime(videoInfo.duration) }}</span>
+              <el-select 
+                v-model="videoInfo.speed" 
+                size="small" 
+                class="w-20 video-speed-select"
+                @change="handleSpeedChange"
+              >
+                <el-option label="0.5x" :value="0.5" />
+                <el-option label="1x" :value="1" />
+                <el-option label="2x" :value="2" />
+                <el-option label="4x" :value="4" />
+                <el-option label="8x" :value="8" />
+              </el-select>
+            </div>
+            <div v-if="videoInfo.ended" class="text-center text-yellow-400 text-xs mt-1">
+              视频播放完毕
+            </div>
+          </div>
+          <!-- 状态信息 -->
+          <div class="p-2 flex gap-6 text-xs text-gray-300">
+            <span class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full" :class="isStreaming ? 'bg-green-500' : 'bg-gray-500'"></span> 
+              {{ isVideoSource ? (videoInfo.ended ? '视频已结束' : '视频播放中') : (isStreaming ? '摄像头在线' : '摄像头离线') }}
+            </span>
+            <span>FPS: <span class="text-cyan-400 font-mono">{{ fps }}</span></span>
+            <span>延迟: <span class="text-cyan-400 font-mono">{{ latency }} ms</span></span>
+            <span>检测数: <span class="text-cyan-400 font-mono">{{ detectionCount }}</span></span>
+          </div>
         </div>
       </div>
 
@@ -285,6 +324,17 @@ const cycleTime = ref(0);
 const detectionCount = ref(0);
 const currentDetections = ref([]);
 
+// 视频播放信息（仅视频输入源时有效）
+const videoInfo = ref({
+  progress: 0,
+  currentTime: 0,
+  duration: 0,
+  speed: 1,
+  ended: false
+});
+const isVideoSource = computed(() => sourceStore.sourceType === 'video');
+const isDraggingProgress = ref(false);  // 是否正在拖动进度条
+
 // 视频流 URL（使用响应式变量强制刷新）
 const streamTimestamp = ref(Date.now());
 const streamUrl = computed(() => `${getBackendHost()}/video_feed?t=${streamTimestamp.value}`);
@@ -451,6 +501,36 @@ const getStepClass = (step) => {
     return 'border-green-500 bg-green-900/20';
   } else {
     return 'border-slate-700 opacity-60';
+  }
+};
+
+// 格式化视频时间（秒转 mm:ss）
+const formatVideoTime = (seconds) => {
+  if (!seconds || isNaN(seconds)) return '00:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+};
+
+// 处理视频进度条变化
+const handleProgressChange = async () => {
+  isDraggingProgress.value = false;
+  try {
+    await api.post('/source/video/progress', { progress: videoInfo.value.progress });
+  } catch (err) {
+    console.error('设置视频进度失败:', err);
+    ElMessage.error('设置进度失败');
+  }
+};
+
+// 处理视频倍速变化
+const handleSpeedChange = async (speed) => {
+  try {
+    await api.post('/source/video/speed', { speed });
+    ElMessage.success(`播放倍速已设为 ${speed}x`);
+  } catch (err) {
+    console.error('设置视频倍速失败:', err);
+    ElMessage.error('设置倍速失败');
   }
 };
 
@@ -882,6 +962,29 @@ const startPolling = () => {
       if (data.detections && data.detections.length > 0 && isRunning.value) {
         processDetections(data.detections);
       }
+      
+      // 如果是视频输入源，获取视频信息
+      if (isVideoSource.value && !isDraggingProgress.value) {
+        try {
+          const videoRes = await api.get('/source/video/info');
+          if (videoRes.data.status === 'success') {
+            videoInfo.value.progress = videoRes.data.progress || 0;
+            videoInfo.value.currentTime = videoRes.data.current_time || 0;
+            videoInfo.value.duration = videoRes.data.duration || 0;
+            videoInfo.value.speed = videoRes.data.speed || 1;
+            videoInfo.value.ended = videoRes.data.ended || false;
+            
+            // 如果视频结束，停止轮询
+            if (videoRes.data.ended) {
+              isRunning.value = false;
+              isStreaming.value = false;
+              projectStore.setRunningStatus(false);
+            }
+          }
+        } catch (e) {
+          // 静默处理
+        }
+      }
     } catch (err) {
       // 静默处理轮询错误
     }
@@ -1133,5 +1236,39 @@ defineExpose({ triggerEvent, showToast });
 .toast-leave-to {
   opacity: 0;
   transform: translateX(50px);
+}
+
+/* 视频进度条样式 */
+.video-progress-slider :deep(.el-slider__runway) {
+  height: 4px;
+  background-color: rgba(100, 116, 139, 0.5);
+}
+
+.video-progress-slider :deep(.el-slider__bar) {
+  height: 4px;
+  background-color: #06b6d4;
+}
+
+.video-progress-slider :deep(.el-slider__button) {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #06b6d4;
+  background-color: #0f172a;
+}
+
+.video-progress-slider :deep(.el-slider__button):hover {
+  transform: scale(1.2);
+}
+
+/* 视频倍速选择器样式 */
+.video-speed-select :deep(.el-input__wrapper) {
+  background-color: rgba(15, 23, 42, 0.8);
+  border-color: rgba(100, 116, 139, 0.3);
+  box-shadow: none;
+}
+
+.video-speed-select :deep(.el-input__inner) {
+  color: #06b6d4;
+  font-size: 12px;
 }
 </style>

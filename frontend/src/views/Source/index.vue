@@ -103,6 +103,32 @@
             <p class="text-sm text-gray-300">已选择: {{ videoFile.name }}</p>
             <p class="text-xs text-gray-500">大小: {{ (videoFile.size / 1024 / 1024).toFixed(2) }} MB</p>
           </div>
+          
+          <!-- 显示上次使用的视频文件 -->
+          <div v-else-if="lastVideoFileName && sourceStore.videoPath" class="mt-4 p-3 bg-slate-900 rounded border border-cyan-800">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-sm text-cyan-400">上次使用: {{ lastVideoFileName }}</p>
+                <p class="text-xs text-gray-500">可直接使用上次的视频文件</p>
+              </div>
+              <el-button type="primary" size="small" @click="useLastVideo">
+                使用此视频
+              </el-button>
+            </div>
+          </div>
+          
+          <el-form label-position="top" class="mt-4">
+            <el-form-item label="播放倍速">
+              <el-select v-model="videoSettings.speed" class="w-full">
+                <el-option label="0.5x (慢速)" :value="0.5" />
+                <el-option label="1x (正常)" :value="1" />
+                <el-option label="2x" :value="2" />
+                <el-option label="4x" :value="4" />
+                <el-option label="8x" :value="8" />
+              </el-select>
+              <div class="text-xs text-gray-500 mt-1">倍速越高，检测速度越快，但可能影响检测精度</div>
+            </el-form-item>
+          </el-form>
         </el-card>
 
         <!-- 图片文件设置 -->
@@ -133,6 +159,19 @@
             <p class="text-sm text-gray-300">已选择: {{ imageFile.name }}</p>
             <p class="text-xs text-gray-500">大小: {{ (imageFile.size / 1024).toFixed(2) }} KB</p>
           </div>
+          
+          <!-- 显示上次使用的图片文件 -->
+          <div v-else-if="lastImageFileName && sourceStore.imagePath" class="mt-4 p-3 bg-slate-900 rounded border border-cyan-800">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-sm text-cyan-400">上次使用: {{ lastImageFileName }}</p>
+                <p class="text-xs text-gray-500">可直接使用上次的图片文件</p>
+              </div>
+              <el-button type="primary" size="small" @click="useLastImage">
+                使用此图片
+              </el-button>
+            </div>
+          </div>
         </el-card>
         
         <!-- 操作按钮 -->
@@ -159,6 +198,7 @@
             <el-descriptions-item v-if="sourceType === 'camera'" label="分辨率">{{ cameraSettings.resolution }}</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'camera'" label="帧率">{{ cameraSettings.fps }} FPS</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'video'" label="视频文件">{{ videoFile?.name || '未选择' }}</el-descriptions-item>
+            <el-descriptions-item v-if="sourceType === 'video'" label="播放倍速">{{ videoSettings.speed }}x</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'image'" label="图片文件">{{ imageFile?.name || '未选择' }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -220,6 +260,11 @@ const imageFile = ref(null);
 const videoUploadRef = ref(null);
 const imageUploadRef = ref(null);
 
+// 视频设置
+const videoSettings = ref({
+  speed: 1  // 默认 1 倍速
+});
+
 // 状态
 const loadingCameras = ref(false);
 const saving = ref(false);
@@ -256,11 +301,85 @@ const refreshCameras = async () => {
 // 处理视频文件选择
 const handleVideoChange = (file) => {
   videoFile.value = file.raw;
+  lastVideoFileName.value = null;  // 选择新文件后清除上次记录
+};
+
+// 使用上次的视频文件
+const useLastVideo = async () => {
+  if (!sourceStore.videoPath) {
+    ElMessage.warning('没有上次使用的视频文件');
+    return;
+  }
+  
+  saving.value = true;
+  try {
+    // 先停止现有流
+    try {
+      await api.post('/source/camera/stop');
+    } catch (e) {}
+    
+    // 启动视频（使用上次的路径和倍速）
+    await api.post('/source/video/start', { 
+      file_path: sourceStore.videoPath,
+      speed: videoSettings.value.speed
+    });
+    
+    sourceStore.setSourceType('video');
+    sourceStore.setVideoSpeed(videoSettings.value.speed);
+    sourceStore.setStreaming(true);
+    sourceStore.saveConfig();
+    
+    ElMessage.success('已使用上次的视频文件，正在跳转到实时监控...');
+    
+    setTimeout(() => {
+      router.push('/monitor');
+    }, 500);
+  } catch (err) {
+    console.error('启动视频失败:', err);
+    ElMessage.error('启动失败: ' + (err.response?.data?.detail || err.message));
+  } finally {
+    saving.value = false;
+  }
 };
 
 // 处理图片文件选择
 const handleImageChange = (file) => {
   imageFile.value = file.raw;
+  lastImageFileName.value = null;  // 选择新文件后清除上次记录
+};
+
+// 使用上次的图片文件
+const useLastImage = async () => {
+  if (!sourceStore.imagePath) {
+    ElMessage.warning('没有上次使用的图片文件');
+    return;
+  }
+  
+  saving.value = true;
+  try {
+    // 先停止现有流
+    try {
+      await api.post('/source/camera/stop');
+    } catch (e) {}
+    
+    // 设置图片
+    await api.post('/source/image/set', { file_path: sourceStore.imagePath });
+    
+    sourceStore.setSourceType('image');
+    sourceStore.setStreaming(true);
+    sourceStore.saveConfig();
+    
+    ElMessage.success('已使用上次的图片文件，正在跳转到实时监控...');
+    
+    setTimeout(() => {
+      router.push('/monitor');
+    }, 500);
+  } catch (err) {
+    console.error('设置图片失败:', err);
+    ElMessage.error('设置失败: ' + (err.response?.data?.detail || err.message));
+  } finally {
+    saving.value = false;
+  }
 };
 
 // 处理源类型变化
@@ -309,11 +428,16 @@ const saveAndStart = async () => {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       
-      // 启动视频
-      await api.post('/source/video/start', { file_path: uploadRes.data.file_path });
+      // 启动视频（带倍速）
+      await api.post('/source/video/start', { 
+        file_path: uploadRes.data.file_path,
+        speed: videoSettings.value.speed
+      });
       
       sourceStore.setSourceType('video');
       sourceStore.setVideoPath(uploadRes.data.file_path);
+      sourceStore.setVideoSpeed(videoSettings.value.speed);
+      sourceStore.setVideoFileName(videoFile.value.name);
       sourceStore.setStreaming(true);
       
     } else if (sourceType.value === 'image') {
@@ -335,6 +459,7 @@ const saveAndStart = async () => {
       
       sourceStore.setSourceType('image');
       sourceStore.setImagePath(uploadRes.data.file_path);
+      sourceStore.setImageFileName(imageFile.value.name);
       sourceStore.setStreaming(true);
     }
     
@@ -378,27 +503,40 @@ const saveAndStart = async () => {
   }
 };
 
-// 加载配置
+// 加载配置（已合并到 restoreAutoSavedSource）
 const loadConfig = () => {
-  sourceStore.loadConfig();
-  sourceType.value = sourceStore.sourceType;
-  cameraSettings.value = { ...cameraSettings.value, ...sourceStore.cameraSettings };
+  // 配置加载已由 restoreAutoSavedSource 处理
 };
 
 // 恢复自动保存的输入源设置
 const restoreAutoSavedSource = () => {
-  const autoSaveSettings = localStorage.getItem('auto_save_settings');
-  if (autoSaveSettings) {
-    const settings = JSON.parse(autoSaveSettings);
-    if (settings.enabled && settings.sourceType) {
-      sourceType.value = settings.sourceType;
-      if (settings.sourceType === 'camera' && settings.sourceValue !== null) {
-        cameraSettings.value.deviceIndex = settings.sourceValue;
-      }
-      // 视频和图片文件无法自动恢复（需要用户重新选择文件）
-    }
+  // 从 sourceStore 加载保存的配置
+  sourceStore.loadConfig();
+  
+  // 恢复输入源类型
+  sourceType.value = sourceStore.sourceType;
+  
+  // 恢复摄像头设置
+  if (sourceStore.cameraSettings) {
+    cameraSettings.value = { ...cameraSettings.value, ...sourceStore.cameraSettings };
+  }
+  
+  // 恢复视频设置
+  videoSettings.value.speed = sourceStore.videoSpeed || 1;
+  
+  // 显示上次选择的视频/图片文件名（如果有）
+  if (sourceStore.videoFileName) {
+    // 创建一个虚拟的文件对象用于显示
+    lastVideoFileName.value = sourceStore.videoFileName;
+  }
+  if (sourceStore.imageFileName) {
+    lastImageFileName.value = sourceStore.imageFileName;
   }
 };
+
+// 上次保存的文件名（用于显示）
+const lastVideoFileName = ref(null);
+const lastImageFileName = ref(null);
 
 onMounted(() => {
   loadConfig();

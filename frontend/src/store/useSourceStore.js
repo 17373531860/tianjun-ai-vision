@@ -10,10 +10,13 @@ export const useSourceStore = defineStore('source', {
       resolution: '1280x720',
       fps: 30
     },
-    // 视频文件路径
+    // 视频设置
     videoPath: null,
+    videoSpeed: 1,  // 视频倍速
+    videoFileName: null,  // 视频文件名（用于显示）
     // 图片文件路径
     imagePath: null,
+    imageFileName: null,  // 图片文件名
     // 是否正在运行
     isStreaming: false,
     // 流 URL
@@ -29,8 +32,17 @@ export const useSourceStore = defineStore('source', {
     setVideoPath(path) {
       this.videoPath = path;
     },
+    setVideoSpeed(speed) {
+      this.videoSpeed = speed;
+    },
+    setVideoFileName(name) {
+      this.videoFileName = name;
+    },
     setImagePath(path) {
       this.imagePath = path;
+    },
+    setImageFileName(name) {
+      this.imageFileName = name;
     },
     setStreaming(status) {
       this.isStreaming = status;
@@ -42,7 +54,12 @@ export const useSourceStore = defineStore('source', {
     saveConfig() {
       const config = {
         sourceType: this.sourceType,
-        cameraSettings: this.cameraSettings
+        cameraSettings: this.cameraSettings,
+        videoPath: this.videoPath,
+        videoSpeed: this.videoSpeed,
+        videoFileName: this.videoFileName,
+        imagePath: this.imagePath,
+        imageFileName: this.imageFileName
       };
       localStorage.setItem('source_config', JSON.stringify(config));
     },
@@ -56,6 +73,11 @@ export const useSourceStore = defineStore('source', {
           if (config.cameraSettings) {
             this.cameraSettings = { ...this.cameraSettings, ...config.cameraSettings };
           }
+          this.videoPath = config.videoPath || null;
+          this.videoSpeed = config.videoSpeed || 1;
+          this.videoFileName = config.videoFileName || null;
+          this.imagePath = config.imagePath || null;
+          this.imageFileName = config.imageFileName || null;
         } catch (e) {
           console.error('加载输入源配置失败:', e);
         }

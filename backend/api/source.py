@@ -39,6 +39,12 @@ class VideoSourceManager:
         self.fps = 30
         self._thread = None
         
+        # 视频播放控制
+        self.video_speed = 1.0  # 视频倍速
+        self.video_ended = False  # 视频是否已结束
+        self.video_total_frames = 0  # 视频总帧数
+        self.video_current_frame = 0  # 当前帧位置
+        
         # YOLO 模型
         self.model = None
         self.model_path = None
@@ -459,6 +465,10 @@ class VideoSourceManager:
             if ret:
                 original_frame = frame.copy()
                 
+                # 更新视频当前帧位置
+                if self.source_type == 'video' and self.capture is not None:
+                    self.video_current_frame = int(self.capture.get(cv2.CAP_PROP_POS_FRAMES))
+                
                 # 如果正在检测，执行推理
                 if self.is_detecting and self.model is not None:
                     start_time = time.time()
@@ -487,13 +497,21 @@ class VideoSourceManager:
                     self._fps_counter = 0
                     self._fps_time = time.time()
             else:
-                # 视频结束，循环播放
+                # 视频结束，停止播放（不循环）
                 if self.source_type == 'video' and self.video_path:
-                    self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    print("[Video] 视频播放完毕，已停止")
+                    self.video_ended = True
+                    self.is_running = False
+                    # 如果正在检测，自动停止检测
+                    if self.is_detecting:
+                        self.stop_detection()
+                    break  # 退出循环
                 else:
                     time.sleep(0.01)
             
-            time.sleep(1.0 / max(self.fps, 1))
+            # 根据倍速调整帧间隔
+            speed = getattr(self, 'video_speed', 1.0)
+            time.sleep(1.0 / max(self.fps * speed, 1))
     
     def _get_first_sequence_step_label(self):
         """获取顺序模式下配置的第一个步骤标签"""
@@ -1452,7 +1470,7 @@ class VideoSourceManager:
         
         return True
     
-    def start_video(self, video_path: str):
+    def start_video(self, video_path: str, speed: float = 1.0):
         """启动视频文件播放"""
         self.stop()
         
@@ -1469,9 +1487,12 @@ class VideoSourceManager:
         self.width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # 从视频开头开始播放
-        total_frames = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
-        print(f"视频总帧数: {total_frames}")
+        # 视频帧信息
+        self.video_total_frames = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        self.video_current_frame = 0
+        self.video_ended = False
+        self.video_speed = speed
+        print(f"视频总帧数: {self.video_total_frames}, 倍速: {speed}x")
         
         self.is_running = True
         
@@ -1479,6 +1500,43 @@ class VideoSourceManager:
         self._thread.start()
         
         return True
+    
+    def set_video_speed(self, speed: float):
+        """设置视频播放倍速"""
+        if speed < 0.25 or speed > 16:
+            raise ValueError("倍速必须在 0.25 到 16 之间")
+        self.video_speed = speed
+        print(f"[Video] 倍速已设置为: {speed}x")
+    
+    def set_video_progress(self, progress: float):
+        """设置视频播放进度 (0-1)"""
+        if self.source_type != 'video' or self.capture is None:
+            raise Exception("当前不是视频输入源")
+        
+        if progress < 0 or progress > 1:
+            raise ValueError("进度必须在 0 到 1 之间")
+        
+        target_frame = int(self.video_total_frames * progress)
+        self.capture.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+        self.video_current_frame = target_frame
+        self.video_ended = False
+        print(f"[Video] 进度已设置为: {progress*100:.1f}% (帧 {target_frame}/{self.video_total_frames})")
+    
+    def get_video_info(self):
+        """获取视频播放信息"""
+        if self.source_type != 'video':
+            return None
+        
+        return {
+            "total_frames": self.video_total_frames,
+            "current_frame": self.video_current_frame,
+            "progress": self.video_current_frame / max(self.video_total_frames, 1),
+            "speed": self.video_speed,
+            "ended": self.video_ended,
+            "fps": self.fps,
+            "duration": self.video_total_frames / max(self.fps, 1),
+            "current_time": self.video_current_frame / max(self.fps, 1)
+        }
     
     def set_image(self, image_path: str):
         """设置图片为输入源"""
@@ -1839,6 +1897,13 @@ class CameraStartRequest(BaseModel):
 
 class VideoStartRequest(BaseModel):
     file_path: str
+    speed: float = 1.0  # 视频倍速
+
+class VideoSpeedRequest(BaseModel):
+    speed: float  # 视频倍速
+
+class VideoProgressRequest(BaseModel):
+    progress: float  # 视频进度 (0-1)
 
 class ImageSetRequest(BaseModel):
     file_path: str
@@ -1912,8 +1977,8 @@ async def upload_video(file: UploadFile = File(...)):
 def start_video(req: VideoStartRequest):
     """启动视频播放"""
     try:
-        video_manager.start_video(req.file_path)
-        return {"status": "success", "message": "视频已开始播放"}
+        video_manager.start_video(req.file_path, req.speed)
+        return {"status": "success", "message": "视频已开始播放", "speed": req.speed}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1922,6 +1987,32 @@ def stop_video():
     """停止视频"""
     video_manager.stop()
     return {"status": "success", "message": "视频已停止"}
+
+@router.post("/video/speed")
+def set_video_speed(req: VideoSpeedRequest):
+    """设置视频播放倍速"""
+    try:
+        video_manager.set_video_speed(req.speed)
+        return {"status": "success", "message": f"倍速已设置为 {req.speed}x", "speed": req.speed}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/video/progress")
+def set_video_progress(req: VideoProgressRequest):
+    """设置视频播放进度"""
+    try:
+        video_manager.set_video_progress(req.progress)
+        return {"status": "success", "message": f"进度已设置为 {req.progress*100:.1f}%", "progress": req.progress}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/video/info")
+def get_video_info():
+    """获取视频播放信息"""
+    info = video_manager.get_video_info()
+    if info is None:
+        return {"status": "not_video", "message": "当前不是视频输入源"}
+    return {"status": "success", **info}
 
 @router.post("/image/upload")
 async def upload_image(file: UploadFile = File(...)):
