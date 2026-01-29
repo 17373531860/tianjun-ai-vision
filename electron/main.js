@@ -168,8 +168,11 @@ app.whenReady().then(async () => {
 });
 
 // 所有窗口关闭时退出（Windows & Linux）
-app.on('window-all-closed', () => {
+app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
+    // 先停止后端，再退出应用
+    console.log('[App] All windows closed, stopping backend...');
+    await stopBackend();
     app.quit();
   }
 });
