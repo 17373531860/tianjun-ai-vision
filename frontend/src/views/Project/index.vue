@@ -682,10 +682,22 @@ const loadModels = async () => {
   }
 };
 
-onMounted(() => {
+onMounted(async () => {
   loadProjects();
   loadModels();
-  systemStore.loadSettings();  // 加载系统设置（包括自定义提示框）
+  systemStore.loadSettings();
+  
+  // 从当前项目加载检测配置（包括自定义提示框）
+  if (projectStore.currentProjectId) {
+    try {
+      const res = await getProjectDetail(projectStore.currentProjectId);
+      if (res.data?.detection_config) {
+        systemStore.loadDetectionFromProject(res.data.detection_config);
+      }
+    } catch (e) {
+      console.error('加载项目检测配置失败:', e);
+    }
+  }
 });
 
 const filteredProjects = computed(() => {

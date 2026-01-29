@@ -351,10 +351,13 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useSystemStore } from '@/store/useSystemStore';
+import { useProjectStore } from '@/store/useProjectStore';
 import { Top, Monitor, Box, Bell, Edit } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
+import { getProjectDetail } from '@/api/project';
 
 const store = useSystemStore();
+const projectStore = useProjectStore();
 
 const saveDisplaySettings = () => {
   localStorage.setItem('display_settings', JSON.stringify(store.display));
@@ -388,7 +391,27 @@ const removeCustomToast = (idx) => {
   ElMessage.info('已删除提示框');
 };
 
-onMounted(() => {
+onMounted(async () => {
   store.loadSettings();
+  
+  // 从当前项目加载检测配置（包括自定义提示框）
+  if (projectStore.currentProjectId) {
+    try {
+      const res = await getProjectDetail(projectStore.currentProjectId);
+      if (res.data?.detection_config) {
+        store.loadDetectionFromProject(res.data.detection_config);
+      }
+    } catch (e) {
+      console.error('加载项目检测配置失败:', e);
+    }
+  } else {
+    // 没有选择项目时，尝试从 localStorage 恢复
+    const saved = localStorage.getItem('detection_settings');
+    if (saved) {
+      try {
+        store.loadDetectionFromProject(JSON.parse(saved));
+      } catch (e) {}
+    }
+  }
 });
 </script>
