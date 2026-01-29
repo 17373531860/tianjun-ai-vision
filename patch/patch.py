@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Tianjun AI Vision System - Startup Fix Patch v4
+Tianjun AI Vision System - Patch v5
+- 修复关闭窗口时后端进程未正确清理
+- 修复自定义提示框设置丢失
 """
 
 import os
@@ -142,7 +144,7 @@ def apply_patch(resources_dir):
                     f.write(content)
                 print("[INFO] backend-manager.js: {} mods".format(len(mods)))
         
-        # Modify main.js - fix file loading
+        # Modify main.js - fix file loading and backend cleanup
         main_js_path = os.path.join(app_dir, 'main.js')
         if os.path.exists(main_js_path):
             print("[STEP] Modifying main.js...")
@@ -167,6 +169,20 @@ def apply_patch(resources_dir):
                     content = content.replace(old_load, new_load)
                     mods.append("Added index path logging")
             
+            # Fix backend cleanup on window close
+            old_window_closed = "app.on('window-all-closed', () => {\n  if (process.platform !== 'darwin') {\n    app.quit();\n  }\n});"
+            new_window_closed = """app.on('window-all-closed', async () => {
+  if (process.platform !== 'darwin') {
+    // 先停止后端，再退出应用
+    console.log('[App] All windows closed, stopping backend...');
+    await stopBackend();
+    app.quit();
+  }
+});"""
+            if old_window_closed in content:
+                content = content.replace(old_window_closed, new_window_closed)
+                mods.append("Fixed backend cleanup on window close")
+            
             if mods:
                 with open(main_js_path, 'w', encoding='utf-8') as f:
                     f.write(content)
@@ -183,7 +199,7 @@ def apply_patch(resources_dir):
 
 def main():
     print("=" * 50)
-    print("Tianjun AI Vision System - Patch v4")
+    print("Tianjun AI Vision System - Patch v5")
     print("=" * 50)
     print()
     
@@ -201,7 +217,7 @@ def main():
     if success:
         print()
         print("=" * 50)
-        print("Patch v4 applied!")
+        print("Patch v5 applied!")
         print("=" * 50)
         sys.exit(0)
     else:
