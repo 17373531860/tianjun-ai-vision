@@ -124,18 +124,18 @@ jobs:
           echo "--- Looking for .exe anywhere ---"
           Get-ChildItem -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object FullName
       
-      - name: Upload Installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: TianjunAI-Windows-Installer
-          path: electron/dist/*.exe
-          retention-days: 7
-      
-      - name: Create Release (on tag)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: v1.1.0
+          name: v1.1.0 - 修复视频录制和数据清理
           files: electron/dist/*.exe
+          body: |
+            ## 更新内容
+            - 视频录制：使用 FFmpeg 进程替代 OpenCV，解决卡死问题
+            - 数据备份：一键数据库下载
+            - 数据清理：完善为全量清理
+            - 代码清理：删除无用组件和硬编码
           draft: false
           prerelease: false
         env:
