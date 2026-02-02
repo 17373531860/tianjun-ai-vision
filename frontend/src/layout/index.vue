@@ -28,11 +28,6 @@
           <el-icon class="mr-2"><Setting /></el-icon> {{ $t('menu.settings') }}
         </router-link>
       </nav>
-
-      <div class="p-4 bg-black/20 text-xs text-gray-400">
-        <div>PLC: <span class="text-status-ok">CONNECTED</span></div>
-        <div>GPU: <span class="text-status-ok">42°C</span></div>
-      </div>
     </aside>
 
     <main class="flex-1 flex flex-col overflow-hidden">

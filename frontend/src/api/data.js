@@ -2,7 +2,7 @@
  * 数据管理 API
  * 包含会话、周期、步骤记录和导出功能
  */
-import api from './index';
+import api, { getBackendHost } from './index';
 
 // ============ 会话管理 ============
 
@@ -53,12 +53,7 @@ export const getVideos = (params = {}) => {
 
 // 获取视频播放URL
 export const getVideoUrl = (videoId) => {
-  // 检测是否是桌面应用（file:// 协议）
-  const isDesktop = typeof window !== 'undefined' && window.location.protocol === 'file:';
-  if (isDesktop) {
-    return `http://localhost:8001/api/v1/data/videos/${videoId}`;
-  }
-  return `/api/v1/data/videos/${videoId}`;
+  return `${getBackendHost()}/api/v1/data/videos/${videoId}`;
 };
 
 // ============ 统计 API ============
@@ -133,6 +128,20 @@ export const exportMonthCsv = (month) => {
     params: { export_type: 'all', month },
     responseType: 'blob'
   });
+};
+
+// ============ 数据库备份 ============
+
+// 备份数据库（触发下载）
+export const backupDatabase = () => {
+  window.open(`${getBackendHost()}/api/v1/data/backup/database`, '_blank');
+};
+
+// ============ 数据清理 ============
+
+// 清空所有历史数据（会话、周期、步骤、视频）
+export const clearAllData = () => {
+  return api.delete('/data/clear/all');
 };
 
 // ============ 辅助函数 ============

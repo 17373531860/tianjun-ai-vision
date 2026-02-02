@@ -64,12 +64,6 @@
 
       <!-- Icon Actions -->
       <div class="flex items-center gap-3">
-         <el-badge :value="store.unreadAlarms" :hidden="store.unreadAlarms === 0" type="danger">
-          <el-icon class="cursor-pointer text-gray-300 hover:text-cyan-400 transition-colors" :size="20">
-            <Bell />
-          </el-icon>
-        </el-badge>
-        
         <!-- Settings Dropdown -->
         <el-dropdown trigger="click" @command="handleCommand">
           <el-icon class="cursor-pointer text-gray-300 hover:text-cyan-400 transition-colors" :size="20"><Setting /></el-icon>
@@ -103,7 +97,7 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useRouter } from 'vue-router';
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
-import { Bell, Setting, UserFilled, Check } from '@element-plus/icons-vue';
+import { Setting, UserFilled, Check } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjects, getProjectDetail } from '@/api/project';

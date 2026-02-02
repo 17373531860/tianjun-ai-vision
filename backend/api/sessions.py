@@ -1080,3 +1080,80 @@ def get_cycle_averages(
         "max_duration": round(max(durations), 2) if durations else 0,
         "yield_rate": round(good_count / len(cycles) * 100, 2) if cycles else 0
     }
+
+
+# ============ 数据库备份 ============
+
+@router.get("/backup/database")
+def backup_database():
+    """
+    备份数据库文件
+    返回数据库文件供下载
+    """
+    db_path = os.path.join(settings.UPLOAD_DIR, "..", "sql_app.db")
+    db_path = os.path.abspath(db_path)
+    
+    if not os.path.exists(db_path):
+        raise HTTPException(status_code=404, detail="数据库文件不存在")
+    
+    # 生成备份文件名
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_filename = f"sql_app_backup_{timestamp}.db"
+    
+    # 返回文件下载响应
+    return FileResponse(
+        path=db_path,
+        filename=backup_filename,
+        media_type="application/octet-stream"
+    )
+
+
+# ============ 数据清理 ============
+
+@router.delete("/clear/all")
+def clear_all_data(db: Session = Depends(get_db)):
+    """
+    清空所有历史数据
+    包括：会话、周期、步骤、视频记录，以及视频文件
+    """
+    try:
+        # 1. 删除视频文件
+        video_dirs = [
+            settings.SESSION_VIDEO_DIR,
+            settings.CYCLE_VIDEO_DIR,
+            settings.STEP_VIDEO_DIR
+        ]
+        deleted_files = 0
+        for video_dir in video_dirs:
+            if os.path.exists(video_dir):
+                for filename in os.listdir(video_dir):
+                    filepath = os.path.join(video_dir, filename)
+                    try:
+                        if os.path.isfile(filepath):
+                            os.remove(filepath)
+                            deleted_files += 1
+                    except Exception as e:
+                        print(f"删除视频文件失败: {filepath}, {e}")
+        
+        # 2. 删除数据库记录（按依赖顺序）
+        step_count = db.query(StepRecord).delete(synchronize_session=False)
+        video_count = db.query(VideoClip).delete(synchronize_session=False)
+        cycle_count = db.query(DetectionCycle).delete(synchronize_session=False)
+        session_count = db.query(DetectionSession).delete(synchronize_session=False)
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": "数据清理完成",
+            "deleted": {
+                "sessions": session_count,
+                "cycles": cycle_count,
+                "steps": step_count,
+                "videos": video_count,
+                "files": deleted_files
+            }
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")

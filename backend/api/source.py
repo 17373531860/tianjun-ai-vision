@@ -15,6 +15,7 @@ import uuid
 import threading
 import time
 import numpy as np
+import subprocess
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 from backend.core.config import settings
@@ -22,6 +23,108 @@ from backend.db.database import SessionLocal
 from backend.models.models import DetectionSession, DetectionCycle, StepRecord, VideoClip, DataExportSetting
 
 router = APIRouter()
+
+
+# ========== FFmpeg 录制器类（替代 OpenCV VideoWriter，更稳定） ==========
+class FFmpegRecorder:
+    """
+    使用 FFmpeg 进程进行视频录制
+    通过管道发送帧数据，完全独立于 Python/CUDA，避免卡死
+    """
+    def __init__(self, filepath: str, width: int, height: int, fps: int = 25):
+        self.filepath = filepath
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.process = None
+        self._lock = threading.Lock()
+        self._is_open = False
+        self._frame_count = 0
+    
+    def open(self) -> bool:
+        """启动 FFmpeg 进程"""
+        try:
+            # FFmpeg 命令：从管道读取原始视频帧，编码为 H.264
+            cmd = [
+                'ffmpeg',
+                '-y',  # 覆盖输出文件
+                '-f', 'rawvideo',  # 输入格式：原始视频
+                '-vcodec', 'rawvideo',
+                '-pix_fmt', 'bgr24',  # OpenCV 默认 BGR 格式
+                '-s', f'{self.width}x{self.height}',  # 分辨率
+                '-r', str(self.fps),  # 帧率
+                '-i', 'pipe:0',  # 从标准输入读取
+                '-c:v', 'libx264',  # H.264 编码
+                '-preset', 'ultrafast',  # 最快编码（牺牲压缩率）
+                '-crf', '23',  # 质量（越小越好，18-28 合理）
+                '-pix_fmt', 'yuv420p',  # 输出像素格式（兼容性好）
+                '-movflags', '+faststart',  # MP4 优化
+                self.filepath
+            ]
+            
+            self.process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                bufsize=10**8  # 大缓冲区
+            )
+            self._is_open = True
+            self._frame_count = 0
+            print(f"[FFmpeg录制] 已启动: {os.path.basename(self.filepath)}")
+            return True
+        except Exception as e:
+            print(f"[FFmpeg录制] 启动失败: {e}")
+            self._is_open = False
+            return False
+    
+    def write(self, frame) -> bool:
+        """写入一帧（非阻塞，失败时静默）"""
+        if not self._is_open or self.process is None:
+            return False
+        
+        try:
+            with self._lock:
+                if self.process.poll() is not None:
+                    # 进程已退出
+                    self._is_open = False
+                    return False
+                
+                # 确保帧尺寸正确
+                if frame.shape[1] != self.width or frame.shape[0] != self.height:
+                    frame = cv2.resize(frame, (self.width, self.height))
+                
+                # 写入管道
+                self.process.stdin.write(frame.tobytes())
+                self._frame_count += 1
+                return True
+        except (BrokenPipeError, OSError) as e:
+            # 管道断开，FFmpeg 可能已退出
+            self._is_open = False
+            return False
+        except Exception as e:
+            return False
+    
+    def release(self):
+        """关闭录制器"""
+        with self._lock:
+            if self.process is not None:
+                try:
+                    if self.process.stdin:
+                        self.process.stdin.close()
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                except Exception as e:
+                    print(f"[FFmpeg录制] 关闭时出错: {e}")
+                finally:
+                    self.process = None
+            self._is_open = False
+            print(f"[FFmpeg录制] 已停止: {os.path.basename(self.filepath)}, 共 {self._frame_count} 帧")
+    
+    def isOpened(self) -> bool:
+        """检查是否正在录制"""
+        return self._is_open and self.process is not None and self.process.poll() is None
 
 
 # ========== 卡尔曼滤波器类 ==========
@@ -271,6 +374,14 @@ class VideoSourceManager:
         self.video_writer = None  # 视频录制器
         self.cycle_video_writer = None  # 周期视频录制器
         self.step_video_writers = {}  # 步骤视频录制器 {step_label: writer}
+        self._step_writers_lock = threading.Lock()  # 保护 step_video_writers 的并发访问
+        
+        # ========== 录制队列（独立线程，避免与 CUDA 冲突） ==========
+        import queue
+        self._recording_queue = queue.Queue(maxsize=300)  # 约10秒缓冲 @30fps
+        self._recording_thread = None
+        self._recording_running = False
+        self._recording_drop_count = 0  # 统计丢帧数
         
     def _get_db_session(self):
         """获取数据库会话"""
@@ -337,6 +448,10 @@ class VideoSourceManager:
             
             db.close()
             print(f"检测会话已创建: {session_uuid}")
+            
+            # 启动录制线程（独立于 CUDA）
+            if self.is_detecting:
+                self._start_recording_thread()
             
             # 开始会话视频录制
             self.start_session_recording()
@@ -782,13 +897,9 @@ class VideoSourceManager:
                 with self.frame_lock:
                     self.current_frame = original_frame
                 
-                # 写入视频录制器 - 临时禁用以排查段错误问题
-                # if self.is_detecting and self.recording_enabled:
-                #     write_start = time.time()
-                #     self.write_frame_to_recorders(original_frame)
-                #     write_time = int((time.time() - write_start) * 1000)
-                #     if write_time > 50:
-                #         print(f"[慢写入警告] 写入帧耗时={write_time}ms")
+                # 写入视频录制队列（使用 FFmpeg 进程，不会卡死）
+                if self.is_detecting and self.recording_enabled:
+                    self._enqueue_frame_for_recording(original_frame)
                 
                 # FPS 计算
                 self._fps_counter += 1
@@ -819,6 +930,8 @@ class VideoSourceManager:
         
         # 停止推理线程
         self._stop_inference_thread()
+        # 停止录制线程
+        self._stop_recording_thread()
     
     def _get_first_sequence_step_label(self):
         """获取顺序模式下配置的第一个步骤标签"""
@@ -1249,8 +1362,8 @@ class VideoSourceManager:
                     # 开始新的检测周期记录
                     self.start_cycle()
                 
-                # 开始步骤视频录制 - 临时禁用
-                # self.start_step_recording(label)
+                # 开始步骤视频录制（使用 FFmpeg 进程）
+                self.start_step_recording(label)
             
             self.step_last_seen[label] = current_time
             
@@ -1830,6 +1943,187 @@ class VideoSourceManager:
         
         print("[推理线程] 已停止")
     
+    # ========== 录制线程相关方法（独立于 CUDA，避免段错误） ==========
+    
+    def _start_recording_thread(self):
+        """启动独立录制线程"""
+        if self._recording_thread is not None and self._recording_thread.is_alive():
+            return  # 已在运行
+        
+        self._recording_running = True
+        self._recording_drop_count = 0
+        self._recording_thread = threading.Thread(target=self._recording_loop, daemon=True)
+        self._recording_thread.start()
+        print("[录制线程] 已启动")
+    
+    def _stop_recording_thread(self):
+        """停止录制线程"""
+        self._recording_running = False
+        
+        if self._recording_thread is not None:
+            # 等待线程结束（给足够时间处理剩余帧）
+            self._recording_thread.join(timeout=5.0)
+            if self._recording_thread.is_alive():
+                print("[警告] 录制线程未能在超时内结束")
+            self._recording_thread = None
+        
+        # 清空队列中残留的帧
+        dropped = 0
+        while not self._recording_queue.empty():
+            try:
+                self._recording_queue.get_nowait()
+                dropped += 1
+            except:
+                break
+        
+        if dropped > 0:
+            print(f"[录制线程] 清理了队列中 {dropped} 帧残留数据")
+        
+        if self._recording_drop_count > 0:
+            print(f"[录制线程] 本次录制共丢弃 {self._recording_drop_count} 帧（队列满）")
+        
+        print("[录制线程] 已停止")
+    
+    def _recording_loop(self):
+        """
+        独立录制线程 - 从队列取帧写入 VideoWriter
+        与 CUDA/推理完全隔离，避免段错误
+        """
+        print("[录制线程] 开始运行")
+        frame_count = 0
+        last_log_time = time.time()
+        last_heartbeat_time = time.time()
+        
+        while self._recording_running or not self._recording_queue.empty():
+            try:
+                current_time = time.time()
+                
+                # 每10秒打印心跳（调试用）
+                if current_time - last_heartbeat_time > 10:
+                    queue_size = self._recording_queue.qsize()
+                    with self._step_writers_lock:
+                        step_count = len(self.step_video_writers)
+                    print(f"[录制线程心跳] 帧={frame_count}, 队列={queue_size}, 步骤录制={step_count}, 丢帧={self._recording_drop_count}")
+                    last_heartbeat_time = current_time
+                
+                # 从队列取帧（带超时，避免阻塞）
+                try:
+                    frame = self._recording_queue.get(timeout=0.1)
+                except:
+                    # 队列空，继续等待
+                    continue
+                
+                if frame is None:
+                    continue
+                
+                # 实际写入 VideoWriter
+                self._write_frame_to_writers(frame)
+                frame_count += 1
+                
+                # 每30秒打印一次详细状态
+                if current_time - last_log_time > 30:
+                    queue_size = self._recording_queue.qsize()
+                    print(f"[录制线程] 已写入 {frame_count} 帧, 队列积压: {queue_size}, 丢帧: {self._recording_drop_count}")
+                    last_log_time = current_time
+                    
+            except Exception as e:
+                print(f"[录制线程] 写入错误: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(0.01)
+        
+        print(f"[录制线程] 结束运行, 共写入 {frame_count} 帧")
+    
+    def _enqueue_frame_for_recording(self, frame):
+        """
+        将帧放入录制队列（非阻塞）
+        队列满时丢弃最旧的帧，保证不阻塞捕获线程
+        """
+        if frame is None or not self._recording_running:
+            return
+        
+        try:
+            # 尝试非阻塞放入
+            self._recording_queue.put_nowait(frame.copy())
+        except:
+            # 队列满，丢弃最旧帧后重试
+            try:
+                self._recording_queue.get_nowait()  # 丢弃最旧帧
+                self._recording_queue.put_nowait(frame.copy())
+                self._recording_drop_count += 1
+            except:
+                # 极端情况，放弃本帧
+                self._recording_drop_count += 1
+    
+    def _write_frame_to_writers(self, frame):
+        """
+        实际写入帧到所有 VideoWriter（在录制线程中调用）
+        """
+        if frame is None:
+            return
+        
+        try:
+            # 获取帧尺寸
+            h, w = frame.shape[:2]
+            
+            # 如果帧尺寸与预期不匹配，调整帧尺寸
+            if w != self.width or h != self.height:
+                frame = cv2.resize(frame, (self.width, self.height))
+            
+            # 确保帧是 BGR 格式（3通道）
+            if len(frame.shape) == 2:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            elif frame.shape[2] == 4:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+            
+            # 写入会话视频
+            try:
+                if self.video_writer and self.video_writer.isOpened():
+                    self.video_writer.write(frame)
+            except Exception as e:
+                print(f"[录制警告] 写入会话视频失败: {e}")
+                try:
+                    self.video_writer.release()
+                except:
+                    pass
+                self.video_writer = None
+            
+            # 写入周期视频
+            try:
+                if self.cycle_video_writer and self.cycle_video_writer.isOpened():
+                    self.cycle_video_writer.write(frame)
+            except Exception as e:
+                print(f"[录制警告] 写入周期视频失败: {e}")
+                try:
+                    self.cycle_video_writer.release()
+                except:
+                    pass
+                self.cycle_video_writer = None
+            
+            # 写入所有活动的步骤视频（需要加锁保护）
+            failed_steps = []
+            with self._step_writers_lock:
+                for step_label, step_info in list(self.step_video_writers.items()):
+                    try:
+                        writer = step_info.get('writer')
+                        if writer and writer.isOpened():
+                            writer.write(frame)
+                    except Exception as e:
+                        print(f"[录制警告] 写入步骤视频 {step_label} 失败: {e}")
+                        failed_steps.append(step_label)
+                
+                # 清理失败的步骤录制器
+                for step_label in failed_steps:
+                    try:
+                        step_info = self.step_video_writers.pop(step_label, None)
+                        if step_info and step_info.get('writer'):
+                            step_info['writer'].release()
+                    except:
+                        pass
+                    
+        except Exception as e:
+            print(f"[录制线程] 写入帧异常: {e}")
+    
     def _inference_loop(self):
         """
         独立推理线程 - 持续对最新帧进行推理
@@ -2336,6 +2630,10 @@ class VideoSourceManager:
         if self.is_running and self.model is not None:
             self._start_inference_thread()
         
+        # 启动录制线程（独立于 CUDA，避免段错误）
+        if self.recording_enabled:
+            self._start_recording_thread()
+        
         print("检测已启动")
         return True
     
@@ -2345,6 +2643,9 @@ class VideoSourceManager:
         
         # 停止推理线程
         self._stop_inference_thread()
+        
+        # 停止录制线程
+        self._stop_recording_thread()
         
         with self.detection_lock:
             self.current_detections = []
@@ -2435,24 +2736,24 @@ class VideoSourceManager:
     # ========== 视频录制功能 ==========
     
     def start_session_recording(self):
-        """开始会话视频录制"""
+        """开始会话视频录制（使用 FFmpeg 进程）"""
         if not self.export_settings or not self.export_settings.get('record_session_video'):
             return
         
         try:
-            filename = f"session_{self.current_session_uuid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.avi"
+            # 使用 .mp4 格式
+            filename = f"session_{self.current_session_uuid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
             filepath = os.path.join(settings.SESSION_VIDEO_DIR, filename)
             
-            # 使用 XVID 编码器，比 mp4v 更稳定
-            fourcc = cv2.VideoWriter_fourcc(*'XVID')
             fps = min(self.export_settings.get('video_fps', 30), 25)  # 限制FPS
             
             # 确保宽高有效
             width = self.width if self.width > 0 else 1280
             height = self.height if self.height > 0 else 720
             
-            self.video_writer = cv2.VideoWriter(filepath, fourcc, fps, (width, height))
-            if not self.video_writer.isOpened():
+            # 使用 FFmpegRecorder
+            self.video_writer = FFmpegRecorder(filepath, width, height, fps)
+            if not self.video_writer.open():
                 print(f"[录制警告] 无法创建会话视频录制器")
                 self.video_writer = None
                 return
@@ -2507,24 +2808,24 @@ class VideoSourceManager:
                 self.video_writer = None
     
     def start_cycle_recording(self):
-        """开始周期视频录制"""
+        """开始周期视频录制（使用 FFmpeg 进程）"""
         if not self.export_settings or not self.export_settings.get('record_cycle_video'):
             return
         
         try:
-            filename = f"cycle_{self.current_cycle_uuid}_{datetime.now().strftime('%H%M%S')}.avi"
+            # 使用 .mp4 格式（FFmpeg H.264 编码）
+            filename = f"cycle_{self.current_cycle_uuid}_{datetime.now().strftime('%H%M%S')}.mp4"
             filepath = os.path.join(settings.CYCLE_VIDEO_DIR, filename)
             
-            # 使用 XVID 编码器，比 mp4v 更稳定
-            fourcc = cv2.VideoWriter_fourcc(*'XVID')
             fps = min(self.export_settings.get('video_fps', 30), 25)  # 限制FPS
             
             # 确保宽高有效
             width = self.width if self.width > 0 else 1280
             height = self.height if self.height > 0 else 720
             
-            self.cycle_video_writer = cv2.VideoWriter(filepath, fourcc, fps, (width, height))
-            if not self.cycle_video_writer.isOpened():
+            # 使用 FFmpegRecorder 替代 cv2.VideoWriter
+            self.cycle_video_writer = FFmpegRecorder(filepath, width, height, fps)
+            if not self.cycle_video_writer.open():
                 print(f"[录制警告] 无法创建周期视频录制器")
                 self.cycle_video_writer = None
                 return
@@ -2567,54 +2868,62 @@ class VideoSourceManager:
                 self.cycle_video_writer = None
     
     def start_step_recording(self, step_label: str):
-        """开始步骤视频录制"""
+        """开始步骤视频录制（使用 FFmpeg 进程）"""
         if not self.export_settings or not self.export_settings.get('record_step_video'):
             return None
         
         try:
-            # 限制同时录制的步骤视频数量，避免资源竞争
-            if len(self.step_video_writers) >= 3:
-                print(f"[录制警告] 步骤视频录制已达上限(3)，跳过: {step_label}")
-                return None
-            
-            video_uuid = str(uuid.uuid4())[:8]
-            filename = f"step_{step_label}_{video_uuid}_{datetime.now().strftime('%H%M%S')}.avi"
-            filepath = os.path.join(settings.STEP_VIDEO_DIR, filename)
-            
-            # 使用 XVID 编码器替代 mp4v，更稳定
-            fourcc = cv2.VideoWriter_fourcc(*'XVID')
-            fps = min(self.export_settings.get('video_fps', 30), 25)  # 限制FPS
-            
-            # 确保宽高有效
-            width = self.width if self.width > 0 else 1280
-            height = self.height if self.height > 0 else 720
-            
-            writer = cv2.VideoWriter(filepath, fourcc, fps, (width, height))
-            if not writer.isOpened():
-                print(f"[录制警告] 无法创建步骤视频录制器: {step_label}")
-                return None
+            with self._step_writers_lock:
+                # 限制同时录制的步骤视频数量，避免资源竞争
+                if len(self.step_video_writers) >= 3:
+                    print(f"[录制警告] 步骤视频录制已达上限(3)，跳过: {step_label}")
+                    return None
                 
-            self.step_video_writers[step_label] = {
-                'writer': writer,
-                'filepath': filepath,
-                'filename': filename,
-                'video_uuid': video_uuid,
-                'start_time': datetime.now(),
-                'frame_size': (width, height)  # 记录创建时的尺寸
-            }
-            print(f"开始录制步骤视频: {step_label} -> {filename}")
-            return video_uuid
+                video_uuid = str(uuid.uuid4())[:8]
+                # 使用 .mp4 格式
+                filename = f"step_{step_label}_{video_uuid}_{datetime.now().strftime('%H%M%S')}.mp4"
+                filepath = os.path.join(settings.STEP_VIDEO_DIR, filename)
+                
+                fps = min(self.export_settings.get('video_fps', 30), 25)  # 限制FPS
+                
+                # 确保宽高有效
+                width = self.width if self.width > 0 else 1280
+                height = self.height if self.height > 0 else 720
+                
+                # 使用 FFmpegRecorder
+                writer = FFmpegRecorder(filepath, width, height, fps)
+                if not writer.open():
+                    print(f"[录制警告] 无法创建步骤视频录制器: {step_label}")
+                    return None
+                    
+                self.step_video_writers[step_label] = {
+                    'writer': writer,
+                    'filepath': filepath,
+                    'filename': filename,
+                    'video_uuid': video_uuid,
+                    'start_time': datetime.now(),
+                    'frame_size': (width, height)
+                }
+                print(f"[调试] 开始录制步骤视频: {step_label} -> {filename}")
+                return video_uuid
         except Exception as e:
             print(f"开始步骤录制失败: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def stop_step_recording(self, step_label: str) -> dict:
         """停止步骤视频录制，返回视频信息"""
-        if step_label not in self.step_video_writers:
-            return None
+        step_video = None
         
-        try:
+        # 在锁内获取并移除 writer
+        with self._step_writers_lock:
+            if step_label not in self.step_video_writers:
+                return None
             step_video = self.step_video_writers.pop(step_label)
+        
+        # 在锁外释放 writer 和写数据库（避免长时间持锁）
+        try:
             writer = step_video.get('writer')
             if writer:
                 writer.release()
@@ -2634,81 +2943,23 @@ class VideoSourceManager:
             db.commit()
             db.close()
             
-            print(f"步骤视频录制已停止: {step_label}")
+            print(f"[调试] 步骤视频录制已停止: {step_label}")
             return {
                 'video_uuid': step_video['video_uuid'],
                 'filepath': step_video['filepath']
             }
         except Exception as e:
             print(f"停止步骤录制失败: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def write_frame_to_recorders(self, frame):
-        """将帧写入所有活动的录制器 - 带帧尺寸检查和异常保护"""
-        if frame is None:
-            return
-        
-        try:
-            # 获取帧尺寸
-            h, w = frame.shape[:2]
-            
-            # 如果帧尺寸与预期不匹配，调整帧尺寸
-            if w != self.width or h != self.height:
-                frame = cv2.resize(frame, (self.width, self.height))
-            
-            # 确保帧是 BGR 格式（3通道）
-            if len(frame.shape) == 2:
-                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-            elif frame.shape[2] == 4:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-            
-            # 写入会话视频
-            try:
-                if self.video_writer and self.video_writer.isOpened():
-                    self.video_writer.write(frame)
-            except Exception as e:
-                print(f"[录制警告] 写入会话视频失败: {e}")
-                # 释放并置空，避免后续继续写入导致崩溃
-                try:
-                    self.video_writer.release()
-                except:
-                    pass
-                self.video_writer = None
-            
-            # 写入周期视频
-            try:
-                if self.cycle_video_writer and self.cycle_video_writer.isOpened():
-                    self.cycle_video_writer.write(frame)
-            except Exception as e:
-                print(f"[录制警告] 写入周期视频失败: {e}")
-                try:
-                    self.cycle_video_writer.release()
-                except:
-                    pass
-                self.cycle_video_writer = None
-            
-            # 写入所有活动的步骤视频 - 逐个写入，出错即停止该步骤录制
-            failed_steps = []
-            for step_label, step_info in list(self.step_video_writers.items()):
-                try:
-                    writer = step_info.get('writer')
-                    if writer and writer.isOpened():
-                        writer.write(frame)
-                except Exception as e:
-                    print(f"[录制警告] 写入步骤视频 {step_label} 失败: {e}")
-                    failed_steps.append(step_label)
-            
-            # 清理失败的步骤录制器
-            for step_label in failed_steps:
-                try:
-                    step_info = self.step_video_writers.pop(step_label, None)
-                    if step_info and step_info.get('writer'):
-                        step_info['writer'].release()
-                except:
-                    pass
-                    
-        except Exception as e:
-            print(f"写入录制帧失败: {e}")
+        """
+        将帧写入录制队列（向后兼容方法）
+        实际写入由独立的录制线程处理，避免与 CUDA 冲突
+        """
+        self._enqueue_frame_for_recording(frame)
     
     def pause(self):
         """暂停：停止画面更新和检测，但保持当前帧"""
@@ -2750,6 +3001,9 @@ class VideoSourceManager:
         
         # 停止推理线程
         self._stop_inference_thread()
+        
+        # 停止录制线程
+        self._stop_recording_thread()
         
         # 等待捕获线程结束（多次尝试）
         if self._thread and self._thread.is_alive():

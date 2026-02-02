@@ -530,9 +530,10 @@ import {
   exportMonthCsv,
   exportDateRangeCsv,
   downloadBlob,
-  getVideoUrl
+  getVideoUrl,
+  backupDatabase,
+  clearAllData
 } from '@/api/data';
-import { clearTasks } from '@/api/task';
 import { getProjectDetail, updateProject } from '@/api/project';
 
 const router = useRouter();
@@ -1039,16 +1040,22 @@ const saveExportSettings = async () => {
   }
 };
 
-// 备份
+// 备份数据库
 const handleBackup = () => {
-  ElMessage.info('数据库备份功能开发中...');
+  try {
+    backupDatabase();
+    ElMessage.success('数据库备份文件已开始下载');
+  } catch (e) {
+    console.error('备份失败:', e);
+    ElMessage.error('备份失败: ' + (e.message || '未知错误'));
+  }
 };
 
 // 清空数据
 const handleClearData = async () => {
   try {
     await ElMessageBox.confirm(
-      '此操作将永久删除所有历史检测记录，是否继续?',
+      '此操作将永久删除所有历史检测数据（包括会话、周期、步骤记录和视频文件），是否继续?',
       '警告',
       {
         confirmButtonText: '确定删除',
@@ -1058,15 +1065,16 @@ const handleClearData = async () => {
     );
     
     clearing.value = true;
-    await clearTasks({});
-    ElMessage.success('数据清理完成');
+    const res = await clearAllData();
+    const deleted = res.data.deleted;
+    ElMessage.success(`清理完成：${deleted.sessions}个会话, ${deleted.cycles}个周期, ${deleted.steps}条步骤, ${deleted.files}个视频文件`);
     loadAvailableDates();
     resetOverviewData();
     sessions.value = [];
     cycles.value = [];
   } catch (err) {
     if (err !== 'cancel') {
-      ElMessage.error('清理失败');
+      ElMessage.error('清理失败: ' + (err.response?.data?.detail || err.message));
     }
   } finally {
     clearing.value = false;
