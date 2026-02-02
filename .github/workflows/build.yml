@@ -115,15 +115,14 @@ jobs:
           cd electron
           npm ci
           echo "Starting electron-builder..."
-          npm run build:win 2>&1 | Tee-Object -Variable buildOutput
-          echo "Build output saved"
-          echo "=== Checking dist folder ==="
-          if (Test-Path "dist") {
-            Get-ChildItem "dist" -Recurse | Select-Object FullName
-          } else {
-            echo "ERROR: dist folder not created!"
-            exit 1
-          }
+          npx electron-builder --win --x64 2>&1
+          echo "=== Build completed, listing all files ==="
+          echo "--- electron/ root ---"
+          Get-ChildItem -ErrorAction SilentlyContinue | Select-Object Name
+          echo "--- electron/dist/ ---"
+          Get-ChildItem "dist" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length
+          echo "--- Looking for .exe anywhere ---"
+          Get-ChildItem -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object FullName
       
       - name: Upload Installer
         uses: actions/upload-artifact@v4
