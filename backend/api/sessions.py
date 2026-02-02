@@ -27,6 +27,38 @@ from backend.core.config import settings
 router = APIRouter()
 
 
+# ========== FFmpeg 路径查找 ==========
+def get_ffmpeg_path():
+    """获取 FFmpeg 可执行文件路径"""
+    import sys
+    
+    possible_paths = []
+    
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+        possible_paths.append(os.path.join(base_dir, 'resources', 'ffmpeg', 'ffmpeg.exe'))
+        possible_paths.append(os.path.join(base_dir, 'resources', 'ffmpeg', 'ffmpeg'))
+        possible_paths.append(os.path.join(base_dir, '..', 'resources', 'ffmpeg', 'ffmpeg.exe'))
+    
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    possible_paths.append(os.path.join(project_root, 'ffmpeg', 'ffmpeg.exe'))
+    possible_paths.append(os.path.join(project_root, 'ffmpeg', 'ffmpeg'))
+    
+    for path in possible_paths:
+        if os.path.isfile(path):
+            return path
+    
+    return 'ffmpeg'
+
+_FFMPEG_PATH = None
+
+def get_cached_ffmpeg_path():
+    global _FFMPEG_PATH
+    if _FFMPEG_PATH is None:
+        _FFMPEG_PATH = get_ffmpeg_path()
+    return _FFMPEG_PATH
+
+
 # ============ Pydantic 模型 ============
 
 class SessionCreate(BaseModel):
@@ -466,8 +498,9 @@ def convert_video_for_browser(input_path: str) -> str:
     
     try:
         # 使用 ffmpeg 转换为 H.264 格式
+        ffmpeg_path = get_cached_ffmpeg_path()
         cmd = [
-            "ffmpeg", "-y",
+            ffmpeg_path, "-y",
             "-i", input_path,
             "-c:v", "libx264",
             "-preset", "fast",

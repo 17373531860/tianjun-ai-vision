@@ -64,6 +64,11 @@
       {
         "from": "../best.pt",
         "to": "models/best.pt"
+      },
+      {
+        "from": "../ffmpeg",
+        "to": "ffmpeg",
+        "filter": ["ffmpeg.exe", "ffprobe.exe"]
       }
     ],
     "win": {

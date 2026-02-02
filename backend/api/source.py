@@ -25,6 +25,51 @@ from backend.models.models import DetectionSession, DetectionCycle, StepRecord, 
 router = APIRouter()
 
 
+# ========== FFmpeg 路径查找 ==========
+def get_ffmpeg_path():
+    """
+    获取 FFmpeg 可执行文件路径
+    优先查找打包的 FFmpeg，然后查找系统 FFmpeg
+    """
+    import sys
+    
+    # 可能的打包路径（Electron 打包后）
+    possible_paths = []
+    
+    # 获取当前脚本所在目录
+    if getattr(sys, 'frozen', False):
+        # 打包环境
+        base_dir = os.path.dirname(sys.executable)
+        possible_paths.append(os.path.join(base_dir, 'resources', 'ffmpeg', 'ffmpeg.exe'))
+        possible_paths.append(os.path.join(base_dir, 'resources', 'ffmpeg', 'ffmpeg'))
+        possible_paths.append(os.path.join(base_dir, '..', 'resources', 'ffmpeg', 'ffmpeg.exe'))
+        possible_paths.append(os.path.join(base_dir, '..', 'resources', 'ffmpeg', 'ffmpeg'))
+    
+    # 开发环境 - 项目根目录
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    possible_paths.append(os.path.join(project_root, 'ffmpeg', 'ffmpeg.exe'))
+    possible_paths.append(os.path.join(project_root, 'ffmpeg', 'ffmpeg'))
+    
+    # 检查打包路径
+    for path in possible_paths:
+        if os.path.isfile(path):
+            print(f"[FFmpeg] 使用打包的 FFmpeg: {path}")
+            return path
+    
+    # 回退到系统 PATH
+    print("[FFmpeg] 使用系统 FFmpeg")
+    return 'ffmpeg'
+
+# 缓存 FFmpeg 路径
+_FFMPEG_PATH = None
+
+def get_cached_ffmpeg_path():
+    global _FFMPEG_PATH
+    if _FFMPEG_PATH is None:
+        _FFMPEG_PATH = get_ffmpeg_path()
+    return _FFMPEG_PATH
+
+
 # ========== FFmpeg 录制器类（替代 OpenCV VideoWriter，更稳定） ==========
 class FFmpegRecorder:
     """
@@ -44,9 +89,12 @@ class FFmpegRecorder:
     def open(self) -> bool:
         """启动 FFmpeg 进程"""
         try:
+            # 获取 FFmpeg 路径（优先使用打包的）
+            ffmpeg_path = get_cached_ffmpeg_path()
+            
             # FFmpeg 命令：从管道读取原始视频帧，编码为 H.264
             cmd = [
-                'ffmpeg',
+                ffmpeg_path,
                 '-y',  # 覆盖输出文件
                 '-f', 'rawvideo',  # 输入格式：原始视频
                 '-vcodec', 'rawvideo',
