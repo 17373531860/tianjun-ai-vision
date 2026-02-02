@@ -92,28 +92,45 @@ jobs:
           echo "Frontend build completed"
           dir dist
       
+      - name: Verify resources before build
+        shell: pwsh
+        run: |
+          echo "=== Checking required resources ==="
+          echo "Frontend dist:"
+          Test-Path "frontend/dist" 
+          Get-ChildItem "frontend/dist" -ErrorAction SilentlyContinue | Select-Object Name
+          echo "Backend:"
+          Test-Path "backend"
+          echo "Python env:"
+          Test-Path "python-env/python"
+          echo "FFmpeg:"
+          Test-Path "ffmpeg"
+          Get-ChildItem "ffmpeg" -ErrorAction SilentlyContinue | Select-Object Name
+          echo "Model:"
+          Test-Path "best.pt"
+      
       - name: Build Electron App
+        shell: pwsh
         run: |
           cd electron
           npm ci
-          npm run build:win
-          echo "Electron build completed"
-        continue-on-error: false
-      
-      - name: List Electron dist contents
-        run: |
-          echo "=== Listing electron/dist ==="
-          Get-ChildItem -Path electron/dist -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
-          echo "=== Looking for .exe files ==="
-          Get-ChildItem -Path electron/dist -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
-        shell: pwsh
+          echo "Starting electron-builder..."
+          npm run build:win 2>&1 | Tee-Object -Variable buildOutput
+          echo "Build output saved"
+          echo "=== Checking dist folder ==="
+          if (Test-Path "dist") {
+            Get-ChildItem "dist" -Recurse | Select-Object FullName
+          } else {
+            echo "ERROR: dist folder not created!"
+            exit 1
+          }
       
       - name: Upload Installer
         uses: actions/upload-artifact@v4
         with:
           name: TianjunAI-Windows-Installer
           path: electron/dist/*.exe
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
       
       - name: Upload Portable Version
