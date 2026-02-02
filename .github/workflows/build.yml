@@ -98,22 +98,30 @@ jobs:
           npm ci
           npm run build:win
           echo "Electron build completed"
-          dir dist
+        continue-on-error: false
+      
+      - name: List Electron dist contents
+        run: |
+          echo "=== Listing electron/dist ==="
+          Get-ChildItem -Path electron/dist -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+          echo "=== Looking for .exe files ==="
+          Get-ChildItem -Path electron/dist -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+        shell: pwsh
       
       - name: Upload Installer
         uses: actions/upload-artifact@v4
         with:
           name: TianjunAI-Windows-Installer
-          path: |
-            electron/dist/*.exe
+          path: electron/dist/*.exe
+          if-no-files-found: error
           retention-days: 30
       
       - name: Upload Portable Version
         uses: actions/upload-artifact@v4
         with:
           name: TianjunAI-Windows-Portable
-          path: |
-            electron/dist/win-unpacked
+          path: electron/dist/win-unpacked
+          if-no-files-found: warn
           retention-days: 30
       
       - name: Create Release (on tag)
