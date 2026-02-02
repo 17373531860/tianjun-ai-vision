@@ -13,6 +13,7 @@ export const useSourceStore = defineStore('source', {
     // 视频设置
     videoPath: null,
     videoSpeed: 1,  // 视频倍速
+    videoSyncMode: false,  // 同步模式：按检测速度播放，确保每帧都被检测
     videoFileName: null,  // 视频文件名（用于显示）
     // 图片文件路径
     imagePath: null,
@@ -34,6 +35,9 @@ export const useSourceStore = defineStore('source', {
     },
     setVideoSpeed(speed) {
       this.videoSpeed = speed;
+    },
+    setVideoSyncMode(enabled) {
+      this.videoSyncMode = enabled;
     },
     setVideoFileName(name) {
       this.videoFileName = name;
@@ -57,6 +61,7 @@ export const useSourceStore = defineStore('source', {
         cameraSettings: this.cameraSettings,
         videoPath: this.videoPath,
         videoSpeed: this.videoSpeed,
+        videoSyncMode: this.videoSyncMode,
         videoFileName: this.videoFileName,
         imagePath: this.imagePath,
         imageFileName: this.imageFileName
@@ -75,6 +80,7 @@ export const useSourceStore = defineStore('source', {
           }
           this.videoPath = config.videoPath || null;
           this.videoSpeed = config.videoSpeed || 1;
+          this.videoSyncMode = config.videoSyncMode || false;
           this.videoFileName = config.videoFileName || null;
           this.imagePath = config.imagePath || null;
           this.imageFileName = config.imageFileName || null;

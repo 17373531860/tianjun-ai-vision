@@ -37,8 +37,8 @@
         
         <!-- Video Footer Stats -->
         <div class="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm border-t border-white/10">
-          <!-- 视频进度条（仅视频输入源时显示） -->
-          <div v-if="isVideoSource" class="px-3 pt-2 pb-1">
+          <!-- 视频进度条（仅视频输入源时显示，鼠标悬停时出现） -->
+          <div v-if="isVideoSource" class="px-3 pt-2 pb-1 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
             <div class="flex items-center gap-3">
               <span class="text-xs text-gray-400 font-mono w-16">{{ formatVideoTime(videoInfo.currentTime) }}</span>
               <el-slider
@@ -57,6 +57,7 @@
                 v-model="videoInfo.speed" 
                 size="small" 
                 class="w-20 video-speed-select"
+                :disabled="videoInfo.syncMode"
                 @change="handleSpeedChange"
               >
                 <el-option label="0.5x" :value="0.5" />
@@ -65,9 +66,22 @@
                 <el-option label="4x" :value="4" />
                 <el-option label="8x" :value="8" />
               </el-select>
+              <el-tooltip content="同步模式：逐帧检测，确保每一帧都被处理（适合分析快速动作）" placement="top">
+                <el-switch
+                  v-model="videoInfo.syncMode"
+                  size="small"
+                  active-text="逐帧"
+                  inactive-text=""
+                  class="video-sync-switch"
+                  @change="handleSyncModeChange"
+                />
+              </el-tooltip>
             </div>
             <div v-if="videoInfo.ended" class="text-center text-yellow-400 text-xs mt-1">
               视频播放完毕
+            </div>
+            <div v-if="videoInfo.syncMode && !videoInfo.ended" class="text-center text-cyan-400 text-xs mt-1">
+              逐帧检测模式：按检测速度播放，确保每帧都被检测
             </div>
           </div>
           <!-- 状态信息 -->
@@ -331,6 +345,7 @@ const videoInfo = ref({
   currentTime: 0,
   duration: 0,
   speed: 1,
+  syncMode: false,  // 同步模式：逐帧检测
   ended: false
 });
 const isVideoSource = computed(() => sourceStore.sourceType === 'video');
@@ -555,6 +570,21 @@ const handleSpeedChange = async (speed) => {
     console.error('设置视频倍速失败:', err);
     ElMessage.error('设置倍速失败');
     isChangingSpeed.value = false;
+  }
+};
+
+// 处理同步模式变化
+const handleSyncModeChange = async (enabled) => {
+  try {
+    await api.post('/source/video/sync-mode', { enabled });
+    const modeName = enabled ? '逐帧检测模式' : '正常播放模式';
+    ElMessage.success(`已切换到${modeName}`);
+    sourceStore.setVideoSyncMode(enabled);
+  } catch (err) {
+    console.error('设置同步模式失败:', err);
+    ElMessage.error('设置同步模式失败');
+    // 恢复原状态
+    videoInfo.value.syncMode = !enabled;
   }
 };
 
@@ -1027,6 +1057,7 @@ const startPolling = () => {
             if (!isChangingSpeed.value) {
               videoInfo.value.speed = videoRes.data.speed || 1;
             }
+            videoInfo.value.syncMode = videoRes.data.sync_mode || false;
             videoInfo.value.ended = videoRes.data.ended || false;
             
             // 如果视频结束，停止轮询
@@ -1391,5 +1422,25 @@ defineExpose({ triggerEvent, showToast });
 .video-speed-select :deep(.el-input__inner) {
   color: #06b6d4;
   font-size: 12px;
+}
+
+/* 同步模式开关样式 */
+.video-sync-switch :deep(.el-switch__core) {
+  background-color: rgba(100, 116, 139, 0.3);
+  border-color: rgba(100, 116, 139, 0.3);
+}
+
+.video-sync-switch :deep(.is-checked .el-switch__core) {
+  background-color: #06b6d4;
+  border-color: #06b6d4;
+}
+
+.video-sync-switch :deep(.el-switch__label) {
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+.video-sync-switch :deep(.el-switch__label.is-active) {
+  color: #06b6d4;
 }
 </style>

@@ -23,8 +23,93 @@ from backend.models.models import DetectionSession, DetectionCycle, StepRecord, 
 
 router = APIRouter()
 
+
+# ========== 卡尔曼滤波器类 ==========
+class KalmanFilter2D:
+    """
+    2D 卡尔曼滤波器，用于平滑检测框位置
+    状态向量: [x, y, w, h, vx, vy, vw, vh] (位置 + 速度)
+    """
+    def __init__(self, initial_state, process_noise=0.03, measurement_noise=0.1):
+        """
+        初始化卡尔曼滤波器
+        
+        Args:
+            initial_state: [x, y, w, h] 初始位置
+            process_noise: 过程噪声 Q (越小越平滑，越大响应越快)
+            measurement_noise: 观测噪声 R (越大越平滑，对突变不敏感)
+        """
+        # 状态向量 [x, y, w, h, vx, vy, vw, vh]
+        self.state = np.array([
+            initial_state[0], initial_state[1], initial_state[2], initial_state[3],
+            0, 0, 0, 0  # 初始速度为0
+        ], dtype=np.float64)
+        
+        # 状态转移矩阵 (假设匀速运动)
+        self.F = np.array([
+            [1, 0, 0, 0, 1, 0, 0, 0],  # x = x + vx
+            [0, 1, 0, 0, 0, 1, 0, 0],  # y = y + vy
+            [0, 0, 1, 0, 0, 0, 1, 0],  # w = w + vw
+            [0, 0, 0, 1, 0, 0, 0, 1],  # h = h + vh
+            [0, 0, 0, 0, 1, 0, 0, 0],  # vx = vx
+            [0, 0, 0, 0, 0, 1, 0, 0],  # vy = vy
+            [0, 0, 0, 0, 0, 0, 1, 0],  # vw = vw
+            [0, 0, 0, 0, 0, 0, 0, 1],  # vh = vh
+        ], dtype=np.float64)
+        
+        # 观测矩阵 (只能观测位置，不能直接观测速度)
+        self.H = np.array([
+            [1, 0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0, 0, 0],
+        ], dtype=np.float64)
+        
+        # 过程噪声协方差矩阵
+        self.Q = np.eye(8, dtype=np.float64) * process_noise
+        
+        # 观测噪声协方差矩阵
+        self.R = np.eye(4, dtype=np.float64) * measurement_noise
+        
+        # 估计误差协方差矩阵
+        self.P = np.eye(8, dtype=np.float64)
+        
+    def predict(self):
+        """预测步骤"""
+        # 状态预测
+        self.state = self.F @ self.state
+        # 协方差预测
+        self.P = self.F @ self.P @ self.F.T + self.Q
+        return self.state[:4]  # 返回 [x, y, w, h]
+    
+    def update(self, measurement):
+        """更新步骤"""
+        z = np.array(measurement, dtype=np.float64)
+        
+        # 卡尔曼增益
+        S = self.H @ self.P @ self.H.T + self.R
+        K = self.P @ self.H.T @ np.linalg.inv(S)
+        
+        # 状态更新
+        y = z - self.H @ self.state  # 测量残差
+        self.state = self.state + K @ y
+        
+        # 协方差更新
+        I = np.eye(8)
+        self.P = (I - K @ self.H) @ self.P
+        
+        return self.state[:4]  # 返回 [x, y, w, h]
+    
+    def get_position(self):
+        """获取当前位置估计"""
+        return self.state[:4]
+
+
 # 全局变量管理视频源状态
 class VideoSourceManager:
+    # 配置文件路径
+    CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'device_config.json')
+    
     def __init__(self):
         self.source_type = None  # 'camera', 'video', 'image'
         self.capture = None
@@ -40,6 +125,10 @@ class VideoSourceManager:
         self.fps = 30
         self._thread = None
         
+        # 帧率限制配置（用于MJPEG流）
+        self.frame_limit_enabled = False  # 默认禁用节流（本地应用）
+        self.target_stream_fps = 30  # 目标流帧率
+        
         # 视频播放控制
         self.video_speed = 1.0  # 视频倍速
         self.video_ended = False  # 视频是否已结束
@@ -49,11 +138,81 @@ class VideoSourceManager:
         # YOLO 模型
         self.model = None
         self.model_path = None
+        self.device = 'auto'  # 推理设备: 'auto', 'cpu', 'cuda:0', 'cuda:1' 等
+        self.current_device_info = None  # 当前使用的设备信息
         self.is_detecting = False
         self.current_detections = []
         self.detection_lock = threading.Lock()
+        
+        # 加载保存的设备配置
+        self._load_device_config()
+        
+        # 初始化推理相关变量（必须在_load_device_config之后）
+        self._init_inference_vars()
+    
+    def _load_device_config(self):
+        """从文件加载设备配置"""
+        try:
+            if os.path.exists(self.CONFIG_FILE):
+                import json
+                with open(self.CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    self.device = config.get('device', 'auto')
+                    self.frame_limit_enabled = config.get('frame_limit_enabled', False)
+                    self.target_stream_fps = config.get('target_stream_fps', 30)
+                    print(f"已加载设备配置: 设备={self.device}, 帧率限制={self.frame_limit_enabled}")
+        except Exception as e:
+            print(f"加载设备配置失败: {e}")
+    
+    def _save_device_config(self):
+        """保存设备配置到文件"""
+        try:
+            import json
+            os.makedirs(os.path.dirname(self.CONFIG_FILE), exist_ok=True)
+            config = {
+                'device': self.device,
+                'frame_limit_enabled': self.frame_limit_enabled,
+                'target_stream_fps': self.target_stream_fps
+            }
+            with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            print(f"设备配置已保存: {config}")
+        except Exception as e:
+            print(f"保存设备配置失败: {e}")
+    
+    def _init_inference_vars(self):
+        """初始化推理相关变量（在__init__的_load_device_config之后调用）"""
         self.conf_threshold = 0.25
         self.iou_threshold = 0.45
+        
+        # ========== 双线程架构相关 ==========
+        self._inference_thread = None  # 推理线程
+        self._inference_running = False  # 推理线程运行标志
+        self._latest_frame_for_inference = None  # 供推理线程使用的最新帧
+        self._inference_frame_lock = threading.Lock()  # 保护推理帧的锁
+        self._confirmed_detections = []  # 经过帧计数确认的检测结果
+        self._confirmed_detections_lock = threading.Lock()  # 保护确认结果的锁
+        
+        # ========== 健康检查相关 ==========
+        self._last_inference_heartbeat = time.time()  # 推理线程心跳时间
+        self._last_capture_heartbeat = time.time()  # 捕获线程心跳时间
+        self._health_check_interval = 5.0  # 健康检查间隔（秒）
+        self._thread_timeout_threshold = 10.0  # 线程无响应阈值（秒）
+        
+        # ========== 推理超时保护 ==========
+        self._inference_timeout = 5.0  # 单次推理超时时间（秒）
+        self._inference_timeout_count = 0  # 推理超时计数
+        self._max_consecutive_timeouts = 3  # 最大连续超时次数，超过后重置模型
+        self._last_successful_inference = time.time()  # 最后一次成功推理的时间
+        
+        # ========== 卡尔曼滤波相关 ==========
+        self._kalman_filters = {}  # {label: KalmanFilter} 每个目标一个滤波器
+        self._kalman_enabled = True  # 是否启用卡尔曼滤波
+        self._kalman_process_noise = 0.03  # 过程噪声 Q (越小越平滑，越大响应越快)
+        self._kalman_measurement_noise = 0.1  # 观测噪声 R (越大越平滑)
+        self._detection_history = {}  # 检测框历史 {label: last_detection}
+        self._detection_missing_frames = {}  # 目标消失帧数统计 {label: count}
+        self._max_missing_frames = 5  # 目标消失多少帧后移除滤波器
         
         # 统计
         self.fps_actual = 0
@@ -85,6 +244,7 @@ class VideoSourceManager:
         self.counters = {}  # {counter_name: value}
         self.events_log = []  # 事件日志
         self.current_cycle_steps = []  # 当前周期检测到的步骤顺序
+        self.last_added_step = None  # 上一个添加到周期的步骤（用于去重判断）
         self.cycle_complete = False
         
         # Cycle Time 统计
@@ -467,6 +627,7 @@ class VideoSourceManager:
         
         # 重置周期状态
         self.current_cycle_steps = []
+        self.last_added_step = None  # 重置上一个添加的步骤
         self.cycle_complete = False
         self.events_log = []
         self.step_start_time = {}  # 重置步骤开始时间
@@ -479,26 +640,104 @@ class VideoSourceManager:
         print(f"静态步骤配置: {self.step_static_config}")
         print(f"计数器: {self.counters}")
     
+    def _release_model(self):
+        """释放模型和 GPU 资源"""
+        try:
+            import torch
+            import gc
+            
+            if self.model is not None:
+                print("[资源释放] 开始释放模型资源...")
+                
+                # 1. 等待 CUDA 操作完成
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                
+                # 2. 删除模型引用
+                del self.model
+                self.model = None
+                
+                # 3. Python 垃圾回收
+                gc.collect()
+                
+                # 4. 清理 CUDA 缓存
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    # 获取显存使用情况
+                    allocated = torch.cuda.memory_allocated() / 1024**2
+                    cached = torch.cuda.memory_reserved() / 1024**2
+                    print(f"[资源释放] 显存状态: 已分配={allocated:.1f}MB, 缓存={cached:.1f}MB")
+                
+                print("[资源释放] 模型资源已释放")
+        except Exception as e:
+            print(f"[资源释放] 释放模型时出错: {e}")
+    
     def load_model(self, model_path: str) -> bool:
         """加载 YOLO 模型"""
         try:
             from ultralytics import YOLO
+            import torch
+            
+            # 先释放旧模型
+            if self.model is not None:
+                print(f"[模型加载] 释放旧模型: {self.model_path}")
+                self._release_model()
+            
             self.model = YOLO(model_path)
             self.model_path = model_path
-            print(f"模型加载成功: {model_path}")
+            
+            # 设置推理设备
+            if self.device == 'auto':
+                # 自动选择：优先GPU
+                if torch.cuda.is_available():
+                    device = 'cuda:0'
+                else:
+                    device = 'cpu'
+            else:
+                device = self.device
+            
+            # 将模型移动到指定设备
+            self.model.to(device)
+            
+            # 记录当前设备信息
+            if device.startswith('cuda'):
+                gpu_idx = int(device.split(':')[1]) if ':' in device else 0
+                gpu_name = torch.cuda.get_device_name(gpu_idx)
+                self.current_device_info = {'type': 'GPU', 'name': gpu_name, 'device': device}
+                print(f"模型加载成功: {model_path} -> GPU: {gpu_name}")
+            else:
+                self.current_device_info = {'type': 'CPU', 'name': 'CPU', 'device': 'cpu'}
+                print(f"模型加载成功: {model_path} -> CPU")
+            
             if hasattr(self.model, 'names'):
                 print(f"类别: {list(self.model.names.values())}")
             return True
         except Exception as e:
             print(f"模型加载失败: {e}")
+            import traceback
+            traceback.print_exc()
             self.model = None
+            self.current_device_info = None
             return False
     
     def _capture_loop(self):
-        """摄像头/视频捕获循环"""
+        """
+        摄像头/视频捕获循环（主线程）
+        
+        双线程架构：
+        - 主线程：读帧 → 取结果 → 滤波 → 显示（不阻塞）
+        - 推理线程：推理 → 帧计数 → 步骤判断 → 事件触发（独立运行）
+        """
         frame_start_time = time.time()
         
+        # 如果正在检测且模型已加载，启动推理线程
+        if self.is_detecting and self.model is not None:
+            self._start_inference_thread()
+        
         while self.is_running and self.capture is not None:
+            # 更新捕获线程心跳
+            self._last_capture_heartbeat = time.time()
+            
             speed = getattr(self, 'video_speed', 1.0)
             
             # 对于视频输入源，如果倍速大于1，通过跳帧实现
@@ -522,35 +761,34 @@ class VideoSourceManager:
                 if self.source_type == 'video' and self.capture is not None:
                     self.video_current_frame = int(self.capture.get(cv2.CAP_PROP_POS_FRAMES))
                 
-                # 如果正在检测，执行推理
+                # ========== 双线程架构：异步推理 ==========
                 if self.is_detecting and self.model is not None:
-                    try:
-                        start_time = time.time()
-                        # 只获取检测结果，不在帧上绘制（让前端绘制）
-                        detections = self._detect_only(frame)
-                        
-                        # 更新步骤统计和截图
-                        self._update_step_stats(detections, original_frame)
-                        
-                        # 计算延迟
-                        self.latency = int((time.time() - start_time) * 1000)
-                        
-                        with self.detection_lock:
-                            self.current_detections = detections
-                    except Exception as e:
-                        pass  # 静默处理检测异常
+                    # 更新供推理线程使用的帧（非阻塞）
+                    with self._inference_frame_lock:
+                        self._latest_frame_for_inference = original_frame.copy()
+                    
+                    # 获取已确认的检测结果并应用滤波（非阻塞）
+                    with self._confirmed_detections_lock:
+                        confirmed_detections = self._confirmed_detections.copy()
+                    
+                    # 应用卡尔曼滤波平滑
+                    smoothed_detections = self._apply_kalman_filter(confirmed_detections)
+                    
+                    # 更新当前检测结果（供前端获取）
+                    with self.detection_lock:
+                        self.current_detections = smoothed_detections
                 
                 # 发送原始帧（不带检测框）
                 with self.frame_lock:
                     self.current_frame = original_frame
                 
-                # 写入视频录制器
-                if self.is_detecting and self.recording_enabled:
-                    write_start = time.time()
-                    self.write_frame_to_recorders(original_frame)
-                    write_time = int((time.time() - write_start) * 1000)
-                    if write_time > 50:
-                        print(f"[慢写入警告] 写入帧耗时={write_time}ms")
+                # 写入视频录制器 - 临时禁用以排查段错误问题
+                # if self.is_detecting and self.recording_enabled:
+                #     write_start = time.time()
+                #     self.write_frame_to_recorders(original_frame)
+                #     write_time = int((time.time() - write_start) * 1000)
+                #     if write_time > 50:
+                #         print(f"[慢写入警告] 写入帧耗时={write_time}ms")
                 
                 # FPS 计算
                 self._fps_counter += 1
@@ -578,6 +816,9 @@ class VideoSourceManager:
             if sleep_time > 0:
                 time.sleep(sleep_time)
             frame_start_time = time.time()
+        
+        # 停止推理线程
+        self._stop_inference_thread()
     
     def _get_first_sequence_step_label(self):
         """获取顺序模式下配置的第一个步骤标签"""
@@ -730,6 +971,7 @@ class VideoSourceManager:
                     print(f"  → 条件匹配！触发事件 {cond_event_id}")
                     self._trigger_event(cond_event_id, f'自定义条件匹配: {cond_labels}')
                     self.current_cycle_steps = []
+                    self.last_added_step = None
                     return
         
         # 没有条件匹配，回退到基础模式判定
@@ -739,12 +981,14 @@ class VideoSourceManager:
             
             if not sequence_order:
                 self.current_cycle_steps = []
+                self.last_added_step = None
                 return
             
             expected_labels = [id_to_label.get(item.get('step_id')) for item in sequence_order if item.get('step_id') in id_to_label]
             
             if not expected_labels:
                 self.current_cycle_steps = []
+                self.last_added_step = None
                 return
             
             # 检查序列长度是否超过预期（有重复步骤）
@@ -787,6 +1031,7 @@ class VideoSourceManager:
         
         # 重置周期
         self.current_cycle_steps = []
+        self.last_added_step = None
     
     def _settle_sequential_cycle(self):
         """结算纯顺序模式的当前周期（在新周期开始前调用）
@@ -812,6 +1057,7 @@ class VideoSourceManager:
         
         if not sequence_order or not steps_config:
             self.current_cycle_steps = []
+            self.last_added_step = None
             return
         
         # 获取期望的步骤标签顺序
@@ -823,6 +1069,7 @@ class VideoSourceManager:
         
         if not expected_labels:
             self.current_cycle_steps = []
+            self.last_added_step = None
             return
         
         print(f"顺序模式结算: 期望={expected_labels}, 实际={self.current_cycle_steps}")
@@ -853,6 +1100,7 @@ class VideoSourceManager:
         
         # 重置周期
         self.current_cycle_steps = []
+        self.last_added_step = None
     
     def _update_step_stats(self, detections: list, original_frame: np.ndarray):
         """更新步骤统计和截图
@@ -940,10 +1188,18 @@ class VideoSourceManager:
             max_interval = time_config.get('max_interval') or 1.0  # 去重间隔，默认1秒
             
             # 判断步骤是否"刚出现"（考虑去重间隔）
-            # 如果上次检测到该步骤的时间距离现在超过 max_interval，则认为是"新的一次"
+            # 去重间隔只应用于"连续重复"的同名步骤
+            # 如果中间有其他步骤（last_added_step 不同），则不应用去重，视为新出现
+            # 这样可以正确处理 "测硬度 → 扫码 → 测硬度" 的复检场景
             if label in self.step_last_seen:
                 time_since_last = current_time - self.step_last_seen[label]
-                is_new_appearance = time_since_last > max_interval
+                # 检查上一个添加到周期的步骤是否是当前步骤
+                if self.last_added_step is not None and self.last_added_step != label:
+                    # 上一个步骤是其他步骤，不应用去重，视为新出现
+                    is_new_appearance = True
+                else:
+                    # 上一个步骤是同一个步骤（或没有上一个步骤），应用去重间隔
+                    is_new_appearance = time_since_last > max_interval
             else:
                 is_new_appearance = True
             
@@ -993,8 +1249,8 @@ class VideoSourceManager:
                     # 开始新的检测周期记录
                     self.start_cycle()
                 
-                # 开始步骤视频录制
-                self.start_step_recording(label)
+                # 开始步骤视频录制 - 临时禁用
+                # self.start_step_recording(label)
             
             self.step_last_seen[label] = current_time
             
@@ -1011,8 +1267,10 @@ class VideoSourceManager:
                     # 其他模式：只记录首次出现
                     if logic_mode == 'custom':
                         self.current_cycle_steps.append(label)
+                        self.last_added_step = label  # 更新上一个添加的步骤（用于去重判断）
                     elif label not in self.current_cycle_steps:
                         self.current_cycle_steps.append(label)
+                        self.last_added_step = label  # 更新上一个添加的步骤（用于去重判断）
             
             # 保存/更新截图（每个步骤只保存最新的）
             x, y, w, h = det['x'], det['y'], det['w'], det['h']
@@ -1161,17 +1419,28 @@ class VideoSourceManager:
                         print(f"  → 条件匹配！触发事件 {cond_event_id}")
                         self._trigger_event(cond_event_id, f'自定义条件匹配: {cond_labels}')
                         self.current_cycle_steps = []
+                        self.last_added_step = None
                         return  # 匹配后不再检查其他条件和基础模式
             
             # 没有自定义条件匹配，回退到基础模式
             # 只在"最后一步"消失时才触发基础模式判定
+            # 重要：必须检查消失的步骤是否属于当前周期，避免上一周期的步骤消失时错误触发判定
             if custom_based_on == 'sequential':
                 last_step_label = self._get_last_sequence_step_label()
                 if last_step_label and completed_step == last_step_label:
-                    # 最后一步消失，触发判定
-                    self._check_custom_sequential_mode(pipeline_config, id_to_label)
+                    # 检查消失的步骤是否在当前周期中
+                    # 如果不在，说明这是上一个周期的步骤消失（已经在 _settle_custom_cycle 中处理过了）
+                    if completed_step in self.current_cycle_steps:
+                        # 最后一步消失，触发判定
+                        self._check_custom_sequential_mode(pipeline_config, id_to_label)
+                    else:
+                        print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
             elif custom_based_on == 'detection':
-                self._check_custom_detection_mode(pipeline_config, id_to_label, enabled_step_labels)
+                # 同样检查消失的步骤是否属于当前周期
+                if completed_step in self.current_cycle_steps:
+                    self._check_custom_detection_mode(pipeline_config, id_to_label, enabled_step_labels)
+                else:
+                    print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
             # 如果 custom_based_on 为空，则只依赖自定义条件，不做额外处理
         
         # 顺序模式
@@ -1227,6 +1496,7 @@ class VideoSourceManager:
             
             # 重置周期
             self.current_cycle_steps = []
+            self.last_added_step = None
     
     def _check_custom_sequential_mode(self, pipeline_config: dict, id_to_label: dict):
         """检查自定义模式（基于顺序模式）的判定
@@ -1240,6 +1510,7 @@ class VideoSourceManager:
         sequence_order = pipeline_config.get('custom_sequence_order', [])
         if not sequence_order:
             self.current_cycle_steps = []
+            self.last_added_step = None
             return
         
         # 将步骤ID转换为标签名
@@ -1251,6 +1522,7 @@ class VideoSourceManager:
         
         if not expected_labels:
             self.current_cycle_steps = []
+            self.last_added_step = None
             return
         
         print(f"自定义模式（基于顺序）检查: 期望={expected_labels}, 当前周期={self.current_cycle_steps}")
@@ -1261,6 +1533,7 @@ class VideoSourceManager:
             print(f"  → 序列长度({len(self.current_cycle_steps)})超过预期({len(expected_labels)})，有重复步骤 → NG")
             self._trigger_event(2, f'序列包含重复步骤: {self.current_cycle_steps}')
             self.current_cycle_steps = []
+            self.last_added_step = None
             return
         
         # 检查是否包含所有预期步骤
@@ -1270,6 +1543,7 @@ class VideoSourceManager:
             print(f"  → 周期不完整，缺少: {missing} → NG")
             self._trigger_event(2, f'周期不完整，缺少: {missing}')
             self.current_cycle_steps = []
+            self.last_added_step = None
             return
         
         # 检查顺序是否正确
@@ -1291,6 +1565,7 @@ class VideoSourceManager:
             self._trigger_event(2, '顺序错误')
         
         self.current_cycle_steps = []
+        self.last_added_step = None
     
     def _check_detection_mode(self, pipeline_config: dict, id_to_label: dict, enabled_step_labels: list):
         """检查检测模式"""
@@ -1310,6 +1585,7 @@ class VideoSourceManager:
         if all(label in self.current_cycle_steps for label in detection_labels):
             self._trigger_event(1, '检测完成')  # 事件1: 合格
             self.current_cycle_steps = []
+            self.last_added_step = None
     
     def _check_custom_detection_mode(self, pipeline_config: dict, id_to_label: dict, enabled_step_labels: list):
         """检查自定义模式（基于检测模式）
@@ -1332,6 +1608,7 @@ class VideoSourceManager:
         if all(label in self.current_cycle_steps for label in detection_labels):
             self._trigger_event(1, '检测完成')  # 事件1: 合格
             self.current_cycle_steps = []
+            self.last_added_step = None
     
     def _trigger_event(self, event_id, reason: str):
         """触发事件"""
@@ -1417,12 +1694,45 @@ class VideoSourceManager:
             print(f"触发报警失败: {e}")
     
     def _detect_only(self, frame: np.ndarray) -> list:
-        """只执行检测，返回检测结果（不绘制检测框）"""
+        """只执行检测，返回检测结果（不绘制检测框）- 带超时保护"""
         detections = []
         
         try:
-            # 直接使用配置的置信度阈值，不做额外过滤
-            results = self.model.predict(frame, conf=self.conf_threshold, iou=self.iou_threshold, imgsz=640, verbose=False)
+            # 获取推理设备
+            device = self.current_device_info.get('device', 'cpu') if self.current_device_info else 'cpu'
+            
+            # 使用超时包装器执行推理
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+            
+            def run_inference():
+                return self.model.predict(
+                    frame, 
+                    conf=self.conf_threshold, 
+                    iou=self.iou_threshold, 
+                    imgsz=640, 
+                    verbose=False, 
+                    device=device
+                )
+            
+            # 使用线程池执行带超时的推理
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(run_inference)
+                try:
+                    results = future.result(timeout=self._inference_timeout)
+                    # 推理成功，重置超时计数
+                    self._inference_timeout_count = 0
+                    self._last_successful_inference = time.time()
+                except FuturesTimeoutError:
+                    self._inference_timeout_count += 1
+                    print(f"[警告] 推理超时 ({self._inference_timeout}秒)，连续超时次数: {self._inference_timeout_count}")
+                    
+                    # 如果连续超时太多次，尝试重置 CUDA
+                    if self._inference_timeout_count >= self._max_consecutive_timeouts:
+                        print(f"[错误] 连续 {self._max_consecutive_timeouts} 次推理超时，尝试重置 GPU...")
+                        self._emergency_gpu_reset()
+                        self._inference_timeout_count = 0
+                    
+                    return []  # 超时返回空结果
             
             h, w = frame.shape[:2]
             
@@ -1458,6 +1768,269 @@ class VideoSourceManager:
             traceback.print_exc()
         
         return detections
+    
+    def _emergency_gpu_reset(self):
+        """紧急 GPU 重置 - 当推理持续超时时调用"""
+        try:
+            import torch
+            import gc
+            
+            print("[GPU重置] 开始紧急 GPU 重置...")
+            
+            # 1. 同步 CUDA
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            
+            # 2. 清理缓存
+            gc.collect()
+            
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
+            # 3. 重置 CUDA 设备（谨慎使用）
+            if torch.cuda.is_available():
+                # 获取当前设备
+                current_device = torch.cuda.current_device()
+                # 重置设备
+                torch.cuda.reset_peak_memory_stats(current_device)
+                
+            print("[GPU重置] 紧急 GPU 重置完成")
+            
+        except Exception as e:
+            print(f"[GPU重置] 重置失败: {e}")
+    
+    # ========== 推理线程相关方法 ==========
+    
+    def _start_inference_thread(self):
+        """启动独立推理线程"""
+        if self._inference_thread is not None and self._inference_thread.is_alive():
+            return  # 已在运行
+        
+        self._inference_running = True
+        self._inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
+        self._inference_thread.start()
+        print("[推理线程] 已启动")
+    
+    def _stop_inference_thread(self):
+        """停止推理线程"""
+        self._inference_running = False
+        if self._inference_thread is not None:
+            self._inference_thread.join(timeout=2.0)
+            if self._inference_thread.is_alive():
+                print("[警告] 推理线程未能在超时内结束，可能存在死锁")
+            self._inference_thread = None
+        
+        # CUDA 同步确保所有 GPU 操作完成
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+        except Exception as e:
+            print(f"[警告] CUDA 同步失败: {e}")
+        
+        print("[推理线程] 已停止")
+    
+    def _inference_loop(self):
+        """
+        独立推理线程 - 持续对最新帧进行推理
+        包含：推理 → 帧计数验证 → 步骤判断 → 事件触发
+        """
+        print("[推理线程] 开始运行")
+        last_frame_id = None
+        frame_count = 0  # 帧计数器，用于周期性缓存清理
+        last_cleanup_time = time.time()  # 上次清理时间
+        cleanup_interval = 60.0  # 每60秒执行一次缓存清理
+        last_log_time = time.time()  # 上次日志时间
+        log_interval = 10.0  # 每10秒打印一次状态
+        
+        while self._inference_running and self.is_detecting:
+            try:
+                loop_start = time.time()
+                
+                # 更新心跳时间
+                self._last_inference_heartbeat = time.time()
+                
+                # 定期打印状态（诊断用）
+                if loop_start - last_log_time > log_interval:
+                    print(f"[推理线程诊断] 帧数={frame_count}, 延迟={self.latency}ms, 运行中...")
+                    last_log_time = loop_start
+                
+                # 周期性缓存清理（每60秒执行一次）
+                current_time = time.time()
+                if current_time - last_cleanup_time > cleanup_interval:
+                    self._periodic_cache_cleanup()
+                    last_cleanup_time = current_time
+                
+                # 获取最新帧
+                t1 = time.time()
+                with self._inference_frame_lock:
+                    frame = self._latest_frame_for_inference
+                    frame_id = id(frame) if frame is not None else None
+                t2 = time.time()
+                
+                # 如果获取帧耗时超过100ms，记录警告
+                if (t2 - t1) > 0.1:
+                    print(f"[警告] 获取帧锁耗时: {(t2-t1)*1000:.1f}ms")
+                
+                # 如果没有新帧，短暂等待
+                if frame is None or frame_id == last_frame_id:
+                    time.sleep(0.001)  # 1ms
+                    continue
+                
+                last_frame_id = frame_id
+                original_frame = frame.copy()
+                frame_count += 1
+                
+                # 执行推理 - 关键诊断点
+                t3 = time.time()
+                detections = self._detect_only(frame)
+                t4 = time.time()
+                detect_time = (t4 - t3) * 1000
+                
+                # 如果推理耗时超过500ms，记录警告
+                if detect_time > 500:
+                    print(f"[警告] 推理耗时过长: {detect_time:.1f}ms")
+                
+                # 更新步骤统计 - 关键诊断点
+                t5 = time.time()
+                self._update_step_stats(detections, original_frame)
+                t6 = time.time()
+                update_time = (t6 - t5) * 1000
+                
+                # 如果步骤统计耗时超过100ms，记录警告
+                if update_time > 100:
+                    print(f"[警告] 步骤统计耗时过长: {update_time:.1f}ms")
+                
+                # 计算延迟
+                self.latency = int((time.time() - t3) * 1000)
+                
+                # 更新检测结果（供主线程使用）
+                t7 = time.time()
+                with self.detection_lock:
+                    self.current_detections = detections
+                t8 = time.time()
+                
+                # 如果获取检测锁耗时超过100ms，记录警告
+                if (t8 - t7) > 0.1:
+                    print(f"[警告] 检测结果锁耗时: {(t8-t7)*1000:.1f}ms")
+                
+                # 更新已确认的检测结果（只包含通过帧计数验证的）
+                confirmed = self._get_confirmed_detections(detections)
+                with self._confirmed_detections_lock:
+                    self._confirmed_detections = confirmed
+                    
+            except Exception as e:
+                print(f"[推理线程] 错误: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(0.01)
+        
+        print("[推理线程] 结束运行")
+    
+    def _get_confirmed_detections(self, detections):
+        """
+        获取已确认的检测结果（通过帧计数验证的）
+        """
+        confirmed = []
+        for det in detections:
+            label = det['label']
+            # 只有已确认的标签才加入
+            if self.step_frame_confirmed.get(label, False):
+                confirmed.append(det)
+        return confirmed
+    
+    def _apply_kalman_filter(self, detections):
+        """
+        对检测结果应用卡尔曼滤波
+        
+        Args:
+            detections: 原始检测结果列表
+            
+        Returns:
+            滤波后的检测结果列表
+        """
+        if not self._kalman_enabled:
+            return detections
+        
+        current_labels = set()
+        smoothed = []
+        
+        for det in detections:
+            label = det['label']
+            current_labels.add(label)
+            
+            x, y, w, h = det['x'], det['y'], det['w'], det['h']
+            measurement = [x, y, w, h]
+            
+            if label not in self._kalman_filters:
+                # 新目标，创建滤波器
+                self._kalman_filters[label] = KalmanFilter2D(
+                    measurement,
+                    process_noise=self._kalman_process_noise,
+                    measurement_noise=self._kalman_measurement_noise
+                )
+                smoothed_pos = measurement
+            else:
+                # 已有目标，更新滤波器
+                kf = self._kalman_filters[label]
+                kf.predict()
+                smoothed_pos = kf.update(measurement)
+            
+            # 重置消失计数
+            self._detection_missing_frames[label] = 0
+            
+            # 创建平滑后的检测结果
+            smoothed_det = det.copy()
+            smoothed_det['x'] = float(smoothed_pos[0])
+            smoothed_det['y'] = float(smoothed_pos[1])
+            smoothed_det['w'] = float(smoothed_pos[2])
+            smoothed_det['h'] = float(smoothed_pos[3])
+            smoothed.append(smoothed_det)
+        
+        # 处理消失的目标
+        labels_to_remove = []
+        for label in list(self._kalman_filters.keys()):
+            if label not in current_labels:
+                self._detection_missing_frames[label] = self._detection_missing_frames.get(label, 0) + 1
+                if self._detection_missing_frames[label] >= self._max_missing_frames:
+                    labels_to_remove.append(label)
+        
+        # 移除长时间消失的目标的滤波器
+        for label in labels_to_remove:
+            del self._kalman_filters[label]
+            if label in self._detection_missing_frames:
+                del self._detection_missing_frames[label]
+        
+        return smoothed
+    
+    def update_kalman_params(self, process_noise=None, measurement_noise=None, enabled=None, max_missing_frames=None):
+        """
+        更新卡尔曼滤波参数
+        
+        Args:
+            process_noise: 过程噪声 Q (0.001-0.5, 默认0.03)
+                          越小 → 预测更平滑，对快速变化响应慢
+                          越大 → 对快速变化响应快，但更抖动
+            measurement_noise: 观测噪声 R (0.01-1.0, 默认0.1)
+                              越小 → 更信任观测值，更抖动
+                              越大 → 更平滑，但对快速变化响应慢
+            enabled: 是否启用滤波
+            max_missing_frames: 目标消失多少帧后移除滤波器
+        """
+        if process_noise is not None:
+            self._kalman_process_noise = max(0.001, min(0.5, process_noise))
+        if measurement_noise is not None:
+            self._kalman_measurement_noise = max(0.01, min(1.0, measurement_noise))
+        if enabled is not None:
+            self._kalman_enabled = enabled
+        if max_missing_frames is not None:
+            self._max_missing_frames = max(1, min(30, max_missing_frames))
+        
+        # 清除现有滤波器，使用新参数重建
+        self._kalman_filters.clear()
+        self._detection_missing_frames.clear()
+        
+        print(f"[卡尔曼滤波] 参数更新: enabled={self._kalman_enabled}, Q={self._kalman_process_noise}, R={self._kalman_measurement_noise}, max_missing={self._max_missing_frames}")
     
     def _draw_box_simple(self, img, x1, y1, x2, y2, label, conf):
         """检测框绘制（使用 PIL 支持中文）"""
@@ -1758,21 +2331,71 @@ class VideoSourceManager:
             raise Exception("未加载模型")
         
         self.is_detecting = True
+        
+        # 启动推理线程（如果视频已在运行，需要在这里启动）
+        if self.is_running and self.model is not None:
+            self._start_inference_thread()
+        
         print("检测已启动")
         return True
     
     def stop_detection(self):
         """停止检测"""
         self.is_detecting = False
+        
+        # 停止推理线程
+        self._stop_inference_thread()
+        
         with self.detection_lock:
             self.current_detections = []
+        
+        # 清理推理相关缓存
+        self._clear_inference_caches()
+        
         print("检测已停止")
+    
+    def _clear_inference_caches(self):
+        """清理推理相关缓存 - 停止检测时调用"""
+        import gc
+        
+        # 清理卡尔曼滤波器
+        self._kalman_filters.clear()
+        self._detection_missing_frames.clear()
+        
+        # 清理推理帧缓存
+        with self._inference_frame_lock:
+            self._latest_frame_for_inference = None
+        with self._confirmed_detections_lock:
+            self._confirmed_detections = []
+        
+        # 清理帧计数状态
+        self.step_consecutive_frames.clear()
+        self.step_frame_confirmed.clear()
+        
+        # 限制事件日志大小
+        if len(self.events_log) > 500:
+            self.events_log = self.events_log[-500:]
+        
+        # 轻量级垃圾回收
+        gc.collect(generation=0)
+        
+        # 清理 CUDA 缓存
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except:
+            pass
+        
+        print("[缓存清理] 推理缓存已清理")
     
     def reset_stats(self):
         """重置统计数据（计数器、步骤计数、截图等）"""
+        import gc
+        
         # 重置步骤统计
         self.step_counts = {}
-        self.step_screenshots = {}
+        self.step_screenshots = {}  # 清空截图缓存（释放内存）
         self.step_last_seen = {}
         self.step_start_time = {}  # 重置步骤开始时间
         self.step_detection_times = {}  # 重置步骤检测时间
@@ -1786,14 +2409,28 @@ class VideoSourceManager:
         
         # 重置周期状态
         self.current_cycle_steps = []
+        self.last_added_step = None
         self.cycle_complete = False
-        self.events_log = []
+        self.events_log = []  # 清空事件日志
         
         # 重置周期时间统计
         self.cycle_times = []
         self.cycle_start_time = None
         
-        print("统计数据已重置")
+        # 重置卡尔曼滤波器
+        self._kalman_filters.clear()
+        self._detection_missing_frames.clear()
+        self._detection_history.clear()
+        
+        # 重置帧计数状态
+        self.step_consecutive_frames.clear()
+        self.step_frame_confirmed.clear()
+        self.step_static_triggered.clear()
+        
+        # 强制垃圾回收
+        gc.collect()
+        
+        print("统计数据已重置（含缓存清理）")
     
     # ========== 视频录制功能 ==========
     
@@ -1803,13 +2440,22 @@ class VideoSourceManager:
             return
         
         try:
-            filename = f"session_{self.current_session_uuid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+            filename = f"session_{self.current_session_uuid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.avi"
             filepath = os.path.join(settings.SESSION_VIDEO_DIR, filename)
             
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            fps = self.export_settings.get('video_fps', 30)
+            # 使用 XVID 编码器，比 mp4v 更稳定
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            fps = min(self.export_settings.get('video_fps', 30), 25)  # 限制FPS
             
-            self.video_writer = cv2.VideoWriter(filepath, fourcc, fps, (self.width, self.height))
+            # 确保宽高有效
+            width = self.width if self.width > 0 else 1280
+            height = self.height if self.height > 0 else 720
+            
+            self.video_writer = cv2.VideoWriter(filepath, fourcc, fps, (width, height))
+            if not self.video_writer.isOpened():
+                print(f"[录制警告] 无法创建会话视频录制器")
+                self.video_writer = None
+                return
             print(f"开始录制会话视频: {filepath}")
             
             # 记录到数据库
@@ -1866,13 +2512,22 @@ class VideoSourceManager:
             return
         
         try:
-            filename = f"cycle_{self.current_cycle_uuid}_{datetime.now().strftime('%H%M%S')}.mp4"
+            filename = f"cycle_{self.current_cycle_uuid}_{datetime.now().strftime('%H%M%S')}.avi"
             filepath = os.path.join(settings.CYCLE_VIDEO_DIR, filename)
             
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            fps = self.export_settings.get('video_fps', 30)
+            # 使用 XVID 编码器，比 mp4v 更稳定
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            fps = min(self.export_settings.get('video_fps', 30), 25)  # 限制FPS
             
-            self.cycle_video_writer = cv2.VideoWriter(filepath, fourcc, fps, (self.width, self.height))
+            # 确保宽高有效
+            width = self.width if self.width > 0 else 1280
+            height = self.height if self.height > 0 else 720
+            
+            self.cycle_video_writer = cv2.VideoWriter(filepath, fourcc, fps, (width, height))
+            if not self.cycle_video_writer.isOpened():
+                print(f"[录制警告] 无法创建周期视频录制器")
+                self.cycle_video_writer = None
+                return
             print(f"开始录制周期视频: {filename}")
             
             # 记录到数据库
@@ -1917,20 +2572,35 @@ class VideoSourceManager:
             return None
         
         try:
+            # 限制同时录制的步骤视频数量，避免资源竞争
+            if len(self.step_video_writers) >= 3:
+                print(f"[录制警告] 步骤视频录制已达上限(3)，跳过: {step_label}")
+                return None
+            
             video_uuid = str(uuid.uuid4())[:8]
-            filename = f"step_{step_label}_{video_uuid}_{datetime.now().strftime('%H%M%S')}.mp4"
+            filename = f"step_{step_label}_{video_uuid}_{datetime.now().strftime('%H%M%S')}.avi"
             filepath = os.path.join(settings.STEP_VIDEO_DIR, filename)
             
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            fps = self.export_settings.get('video_fps', 30)
+            # 使用 XVID 编码器替代 mp4v，更稳定
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            fps = min(self.export_settings.get('video_fps', 30), 25)  # 限制FPS
             
-            writer = cv2.VideoWriter(filepath, fourcc, fps, (self.width, self.height))
+            # 确保宽高有效
+            width = self.width if self.width > 0 else 1280
+            height = self.height if self.height > 0 else 720
+            
+            writer = cv2.VideoWriter(filepath, fourcc, fps, (width, height))
+            if not writer.isOpened():
+                print(f"[录制警告] 无法创建步骤视频录制器: {step_label}")
+                return None
+                
             self.step_video_writers[step_label] = {
                 'writer': writer,
                 'filepath': filepath,
                 'filename': filename,
                 'video_uuid': video_uuid,
-                'start_time': datetime.now()
+                'start_time': datetime.now(),
+                'frame_size': (width, height)  # 记录创建时的尺寸
             }
             print(f"开始录制步骤视频: {step_label} -> {filename}")
             return video_uuid
@@ -1974,24 +2644,69 @@ class VideoSourceManager:
             return None
     
     def write_frame_to_recorders(self, frame):
-        """将帧写入所有活动的录制器"""
+        """将帧写入所有活动的录制器 - 带帧尺寸检查和异常保护"""
         if frame is None:
             return
         
         try:
+            # 获取帧尺寸
+            h, w = frame.shape[:2]
+            
+            # 如果帧尺寸与预期不匹配，调整帧尺寸
+            if w != self.width or h != self.height:
+                frame = cv2.resize(frame, (self.width, self.height))
+            
+            # 确保帧是 BGR 格式（3通道）
+            if len(frame.shape) == 2:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            elif frame.shape[2] == 4:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+            
             # 写入会话视频
-            if self.video_writer and self.video_writer.isOpened():
-                self.video_writer.write(frame)
+            try:
+                if self.video_writer and self.video_writer.isOpened():
+                    self.video_writer.write(frame)
+            except Exception as e:
+                print(f"[录制警告] 写入会话视频失败: {e}")
+                # 释放并置空，避免后续继续写入导致崩溃
+                try:
+                    self.video_writer.release()
+                except:
+                    pass
+                self.video_writer = None
             
             # 写入周期视频
-            if self.cycle_video_writer and self.cycle_video_writer.isOpened():
-                self.cycle_video_writer.write(frame)
+            try:
+                if self.cycle_video_writer and self.cycle_video_writer.isOpened():
+                    self.cycle_video_writer.write(frame)
+            except Exception as e:
+                print(f"[录制警告] 写入周期视频失败: {e}")
+                try:
+                    self.cycle_video_writer.release()
+                except:
+                    pass
+                self.cycle_video_writer = None
             
-            # 写入所有活动的步骤视频
+            # 写入所有活动的步骤视频 - 逐个写入，出错即停止该步骤录制
+            failed_steps = []
             for step_label, step_info in list(self.step_video_writers.items()):
-                writer = step_info.get('writer')
-                if writer and writer.isOpened():
-                    writer.write(frame)
+                try:
+                    writer = step_info.get('writer')
+                    if writer and writer.isOpened():
+                        writer.write(frame)
+                except Exception as e:
+                    print(f"[录制警告] 写入步骤视频 {step_label} 失败: {e}")
+                    failed_steps.append(step_label)
+            
+            # 清理失败的步骤录制器
+            for step_label in failed_steps:
+                try:
+                    step_info = self.step_video_writers.pop(step_label, None)
+                    if step_info and step_info.get('writer'):
+                        step_info['writer'].release()
+                except:
+                    pass
+                    
         except Exception as e:
             print(f"写入录制帧失败: {e}")
     
@@ -2033,26 +2748,123 @@ class VideoSourceManager:
         self.is_running = False
         self.is_detecting = False
         
-        # 等待线程结束
+        # 停止推理线程
+        self._stop_inference_thread()
+        
+        # 等待捕获线程结束（多次尝试）
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
+            # 如果线程还在运行，再等待一次
+            if self._thread.is_alive():
+                print("[警告] 捕获线程第一次超时，再次等待...")
+                self._thread.join(timeout=2.0)
+            # 如果还是没有结束，记录警告
+            if self._thread.is_alive():
+                print("[错误] 捕获线程未能结束，可能存在死锁，强制继续")
         
         # 释放摄像头/视频资源
         if self.capture:
             try:
                 self.capture.release()
-            except:
-                pass
+            except Exception as e:
+                print(f"[警告] 释放摄像头时出错: {e}")
             self.capture = None
         
+        # 释放模型和 GPU 资源
+        self._release_model()
+        
         # 等待一小段时间确保资源被系统释放
-        time.sleep(0.1)
+        time.sleep(0.3)
         
         self.source_type = None
         self.current_frame = None
         self._thread = None
         with self.detection_lock:
             self.current_detections = []
+        
+        # 清理所有内存缓存
+        self._clear_all_caches()
+        
+        print("[VideoManager] 已完全停止并释放资源")
+    
+    def _clear_all_caches(self):
+        """清理所有内存缓存 - 防止内存泄漏"""
+        import gc
+        
+        print("[缓存清理] 开始清理内存缓存...")
+        
+        # 1. 清理卡尔曼滤波器缓存
+        self._kalman_filters.clear()
+        self._detection_missing_frames.clear()
+        self._detection_history.clear()
+        
+        # 2. 清理步骤截图缓存（这个可能很大！）
+        screenshot_count = len(self.step_screenshots)
+        self.step_screenshots.clear()
+        
+        # 3. 限制事件日志大小（保留最近500条）
+        if len(self.events_log) > 500:
+            self.events_log = self.events_log[-500:]
+        
+        # 4. 清理推理相关缓存
+        with self._inference_frame_lock:
+            self._latest_frame_for_inference = None
+        with self._confirmed_detections_lock:
+            self._confirmed_detections = []
+        
+        # 5. 清理帧计数缓存
+        self.step_consecutive_frames.clear()
+        self.step_frame_confirmed.clear()
+        self.step_static_triggered.clear()
+        
+        # 6. 限制周期时间记录（保留最近50条）
+        if len(self.cycle_times) > 50:
+            self.cycle_times = self.cycle_times[-50:]
+        
+        # 7. 强制垃圾回收
+        gc.collect()
+        
+        # 8. 清理 CUDA 缓存
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                allocated = torch.cuda.memory_allocated() / 1024**2
+                cached = torch.cuda.memory_reserved() / 1024**2
+                print(f"[缓存清理] GPU显存: 已分配={allocated:.1f}MB, 缓存={cached:.1f}MB")
+        except Exception as e:
+            print(f"[缓存清理] 清理 CUDA 缓存时出错: {e}")
+        
+        print(f"[缓存清理] 完成 - 清理了 {screenshot_count} 张截图缓存")
+    
+    def _periodic_cache_cleanup(self):
+        """周期性缓存清理 - 在检测循环中定期调用"""
+        import gc
+        
+        # 1. 限制事件日志大小
+        if len(self.events_log) > 1000:
+            self.events_log = self.events_log[-500:]
+            print("[缓存清理] 事件日志已裁剪至500条")
+        
+        # 2. 限制截图缓存（每个步骤只保留最新截图，这里额外检查总数）
+        if len(self.step_screenshots) > 100:
+            # 保留最后添加的50个
+            keys = list(self.step_screenshots.keys())[-50:]
+            self.step_screenshots = {k: self.step_screenshots[k] for k in keys}
+            print("[缓存清理] 截图缓存已裁剪至50张")
+        
+        # 3. 清理长时间未更新的卡尔曼滤波器
+        current_time = time.time()
+        stale_filters = [k for k, v in self._detection_missing_frames.items() 
+                        if v > self._max_missing_frames * 2]
+        for k in stale_filters:
+            if k in self._kalman_filters:
+                del self._kalman_filters[k]
+            if k in self._detection_missing_frames:
+                del self._detection_missing_frames[k]
+        
+        # 4. 轻量级垃圾回收
+        gc.collect(generation=0)  # 只清理最年轻的一代，速度快
     
     def get_frame(self):
         """获取当前帧"""
@@ -2068,14 +2880,29 @@ class VideoSourceManager:
     
     def generate_mjpeg(self):
         """生成 MJPEG 流"""
+        target_interval = 1.0 / max(self.target_stream_fps, 1)
+        
         while self.is_running:
+            frame_start = time.time()
+            
             frame = self.get_frame()
             if frame is not None:
                 ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 if ret:
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            time.sleep(1.0 / max(self.fps, 1))
+            
+            # 根据配置决定是否节流
+            if self.frame_limit_enabled:
+                # 启用节流：动态计算sleep时间
+                elapsed = time.time() - frame_start
+                sleep_time = max(0, target_interval - elapsed)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+            else:
+                # 禁用节流：仅在无帧时短暂休眠避免CPU空转
+                if frame is None:
+                    time.sleep(0.001)
 
 # 全局视频源管理器
 video_manager = VideoSourceManager()
@@ -2106,6 +2933,13 @@ class DetectionStartRequest(BaseModel):
     conf: float = 0.25
     iou: float = 0.45
 
+class StreamConfigRequest(BaseModel):
+    frame_limit_enabled: bool = False  # 是否启用帧率限制
+    target_stream_fps: int = 30  # 目标流帧率
+
+class DeviceConfigRequest(BaseModel):
+    device: str = 'auto'  # 推理设备: 'auto', 'cpu', 'cuda:0', 'cuda:1' 等
+
 
 # 摄像头列表缓存
 _cameras_cache = {
@@ -2129,21 +2963,38 @@ def _detect_cameras_linux():
     """Linux: 快速检测摄像头（通过读取 /dev/video* 设备）"""
     import glob
     cameras = []
-    video_devices = sorted(glob.glob("/dev/video*"))
+    video_devices = glob.glob("/dev/video*")
+    
+    # 按数字排序（video10 应该在 video2 之后）
+    def extract_index(path):
+        try:
+            return int(path.replace("/dev/video", ""))
+        except:
+            return 999
+    video_devices = sorted(video_devices, key=extract_index)
     
     for device in video_devices:
         try:
             index = int(device.replace("/dev/video", ""))
-            # 只检测偶数索引（Linux 上奇数通常是元数据设备）
-            if index % 2 != 0:
-                continue
             
-            # 获取设备名称
+            # 检查设备是否可用（尝试打开）
+            # 对于虚拟摄像头和物理摄像头都尝试
             name = _get_camera_name_linux(index)
-            if name:
+            
+            # 如果是 v4l2loopback 虚拟摄像头
+            if name and "Virtual" in name:
+                cameras.append({"index": index, "name": f"{name} (索引 {index})"})
+            elif name:
+                # 物理摄像头：跳过奇数索引（通常是元数据设备）
+                if index % 2 != 0:
+                    continue
                 cameras.append({"index": index, "name": f"{name} (索引 {index})"})
             else:
-                cameras.append({"index": index, "name": f"摄像头 {index}"})
+                # 没有名称的设备，尝试打开验证
+                cap = cv2.VideoCapture(index)
+                if cap.isOpened():
+                    cap.release()
+                    cameras.append({"index": index, "name": f"摄像头 {index}"})
         except:
             continue
     
@@ -2212,6 +3063,136 @@ def list_cameras(refresh: bool = False):
     _cameras_cache["last_update"] = current_time
     
     return {"cameras": cameras, "cached": False}
+
+@router.get("/gpu/list")
+def get_gpu_list():
+    """获取可用的GPU设备列表"""
+    import torch
+    
+    devices = [{"id": "cpu", "name": "CPU (中央处理器)", "type": "CPU"}]
+    
+    if torch.cuda.is_available():
+        # 添加自动选择选项
+        devices.insert(0, {"id": "auto", "name": "自动选择 (优先GPU)", "type": "AUTO"})
+        
+        # 添加所有可用的CUDA设备
+        for i in range(torch.cuda.device_count()):
+            gpu_name = torch.cuda.get_device_name(i)
+            memory_total = torch.cuda.get_device_properties(i).total_memory / (1024**3)  # GB
+            devices.append({
+                "id": f"cuda:{i}",
+                "name": f"GPU {i}: {gpu_name} ({memory_total:.1f}GB)",
+                "type": "GPU",
+                "index": i,
+                "memory_gb": round(memory_total, 1)
+            })
+    
+    return {
+        "devices": devices,
+        "cuda_available": torch.cuda.is_available(),
+        "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
+        "gpu_count": torch.cuda.device_count() if torch.cuda.is_available() else 0
+    }
+
+@router.get("/gpu/current")
+def get_current_device():
+    """获取当前使用的推理设备"""
+    return {
+        "device": video_manager.device,
+        "current_device_info": video_manager.current_device_info,
+        "model_loaded": video_manager.model is not None
+    }
+
+@router.post("/gpu/set")
+def set_device(req: DeviceConfigRequest):
+    """设置推理设备（需要重新加载模型生效）"""
+    video_manager.device = req.device
+    
+    # 保存设备配置到文件
+    video_manager._save_device_config()
+    
+    # 如果模型已加载，重新加载以应用新设备
+    if video_manager.model is not None and video_manager.model_path:
+        success = video_manager.load_model(video_manager.model_path)
+        if success:
+            return {
+                "status": "success",
+                "message": f"已切换到 {video_manager.current_device_info['name']}",
+                "device": video_manager.device,
+                "current_device_info": video_manager.current_device_info
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "切换设备失败，模型重新加载出错"
+            }
+    
+    return {
+        "status": "success",
+        "message": f"设备已设置为 {req.device}，将在下次加载模型时生效",
+        "device": video_manager.device,
+        "current_device_info": video_manager.current_device_info
+    }
+
+@router.get("/stream/config")
+def get_stream_config():
+    """获取视频流配置"""
+    return {
+        "frame_limit_enabled": video_manager.frame_limit_enabled,
+        "target_stream_fps": video_manager.target_stream_fps
+    }
+
+@router.post("/stream/config")
+def set_stream_config(req: StreamConfigRequest):
+    """设置视频流配置（帧率限制）"""
+    video_manager.frame_limit_enabled = req.frame_limit_enabled
+    video_manager.target_stream_fps = max(1, min(120, req.target_stream_fps))  # 限制1-120fps
+    
+    # 保存配置到文件
+    video_manager._save_device_config()
+    
+    return {
+        "status": "success",
+        "frame_limit_enabled": video_manager.frame_limit_enabled,
+        "target_stream_fps": video_manager.target_stream_fps
+    }
+
+
+# ========== 卡尔曼滤波配置 API ==========
+
+class KalmanConfigRequest(BaseModel):
+    enabled: Optional[bool] = None
+    process_noise: Optional[float] = None  # Q: 0.001-0.5
+    measurement_noise: Optional[float] = None  # R: 0.01-1.0
+    max_missing_frames: Optional[int] = None  # 1-30
+
+@router.get("/kalman/config")
+def get_kalman_config():
+    """获取卡尔曼滤波配置"""
+    return {
+        "enabled": video_manager._kalman_enabled,
+        "process_noise": video_manager._kalman_process_noise,
+        "measurement_noise": video_manager._kalman_measurement_noise,
+        "max_missing_frames": video_manager._max_missing_frames
+    }
+
+@router.post("/kalman/config")
+def set_kalman_config(req: KalmanConfigRequest):
+    """设置卡尔曼滤波参数"""
+    video_manager.update_kalman_params(
+        process_noise=req.process_noise,
+        measurement_noise=req.measurement_noise,
+        enabled=req.enabled,
+        max_missing_frames=req.max_missing_frames
+    )
+    return {
+        "status": "success",
+        "enabled": video_manager._kalman_enabled,
+        "process_noise": video_manager._kalman_process_noise,
+        "measurement_noise": video_manager._kalman_measurement_noise,
+        "max_missing_frames": video_manager._max_missing_frames
+    }
+
 
 @router.post("/camera/start")
 def start_camera(req: CameraStartRequest):
@@ -2453,6 +3434,75 @@ def get_source_status():
         "fps_actual": video_manager.fps_actual,
         "latency": video_manager.latency,
         "model_loaded": video_manager.model is not None
+    }
+
+
+@router.get("/health")
+def get_health_status():
+    """
+    获取系统健康状态
+    用于监控线程运行状态和 GPU 资源使用情况
+    """
+    import torch
+    
+    current_time = time.time()
+    
+    # 检查线程健康状态
+    inference_thread_alive = (
+        video_manager._inference_thread is not None and 
+        video_manager._inference_thread.is_alive()
+    )
+    capture_thread_alive = (
+        video_manager._thread is not None and 
+        video_manager._thread.is_alive()
+    )
+    
+    # 计算线程无响应时间
+    inference_idle_time = current_time - video_manager._last_inference_heartbeat
+    capture_idle_time = current_time - video_manager._last_capture_heartbeat
+    
+    # 判断线程是否健康
+    inference_healthy = not inference_thread_alive or inference_idle_time < video_manager._thread_timeout_threshold
+    capture_healthy = not capture_thread_alive or capture_idle_time < video_manager._thread_timeout_threshold
+    
+    # GPU 信息
+    gpu_info = None
+    if torch.cuda.is_available():
+        try:
+            gpu_info = {
+                "device_name": torch.cuda.get_device_name(0),
+                "memory_allocated_mb": round(torch.cuda.memory_allocated() / 1024**2, 1),
+                "memory_reserved_mb": round(torch.cuda.memory_reserved() / 1024**2, 1),
+                "memory_total_mb": round(torch.cuda.get_device_properties(0).total_memory / 1024**2, 1)
+            }
+        except Exception as e:
+            gpu_info = {"error": str(e)}
+    
+    overall_healthy = inference_healthy and capture_healthy
+    
+    return {
+        "healthy": overall_healthy,
+        "timestamp": current_time,
+        "threads": {
+            "inference": {
+                "alive": inference_thread_alive,
+                "healthy": inference_healthy,
+                "idle_seconds": round(inference_idle_time, 2) if inference_thread_alive else None
+            },
+            "capture": {
+                "alive": capture_thread_alive,
+                "healthy": capture_healthy,
+                "idle_seconds": round(capture_idle_time, 2) if capture_thread_alive else None
+            }
+        },
+        "detection": {
+            "is_running": video_manager.is_running,
+            "is_detecting": video_manager.is_detecting,
+            "model_loaded": video_manager.model is not None,
+            "fps_actual": video_manager.fps_actual,
+            "latency_ms": video_manager.latency
+        },
+        "gpu": gpu_info
     }
 
 

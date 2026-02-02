@@ -82,7 +82,12 @@ export const useSystemStore = defineStore('system', {
     },
     // 上次输入源设置（用于自动保存功能）
     lastSourceType: null,
-    lastSourceValue: null
+    lastSourceValue: null,
+    // 性能设置
+    performance: {
+      frameLimitEnabled: false,  // 帧率限制开关（默认禁用，本地应用无需节流）
+      targetStreamFps: 30        // 目标流帧率
+    }
   }),
   actions: {
     setLanguage(lang) {
@@ -140,6 +145,19 @@ export const useSystemStore = defineStore('system', {
     setLastSource(type, value) {
       this.lastSourceType = type;
       this.lastSourceValue = value;
+    },
+    // 加载性能设置
+    loadPerformanceSettings() {
+      const saved = localStorage.getItem('performance_settings');
+      if (saved) {
+        try {
+          this.performance = { ...this.performance, ...JSON.parse(saved) };
+        } catch (e) {}
+      }
+    },
+    // 保存性能设置
+    savePerformanceSettings() {
+      localStorage.setItem('performance_settings', JSON.stringify(this.performance));
     }
   },
 });

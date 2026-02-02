@@ -52,7 +52,7 @@
                   :value="cam.index" 
                 />
               </el-select>
-              <el-button type="primary" link class="mt-2" @click="refreshCameras" :loading="loadingCameras">
+              <el-button type="primary" link class="mt-2" @click="() => refreshCameras(true)" :loading="loadingCameras">
                 <el-icon class="mr-1"><Refresh /></el-icon> 刷新设备列表
               </el-button>
             </el-form-item>
@@ -67,10 +67,15 @@
             
             <el-form-item label="帧率 (FPS)">
               <el-select v-model="cameraSettings.fps" class="w-full">
+                <el-option label="5 FPS (省性能)" :value="5" />
+                <el-option label="10 FPS (推荐：匹配检测速度)" :value="10" />
                 <el-option label="15 FPS" :value="15" />
                 <el-option label="30 FPS" :value="30" />
                 <el-option label="60 FPS" :value="60" />
               </el-select>
+              <div class="text-xs text-gray-400 mt-1">
+                提示：如果检测速度跟不上，降低帧率可以避免丢帧
+              </div>
             </el-form-item>
           </el-form>
         </el-card>

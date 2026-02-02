@@ -53,6 +53,11 @@ export const getVideos = (params = {}) => {
 
 // 获取视频播放URL
 export const getVideoUrl = (videoId) => {
+  // 检测是否是桌面应用（file:// 协议）
+  const isDesktop = typeof window !== 'undefined' && window.location.protocol === 'file:';
+  if (isDesktop) {
+    return `http://localhost:8001/api/v1/data/videos/${videoId}`;
+  }
   return `/api/v1/data/videos/${videoId}`;
 };
 

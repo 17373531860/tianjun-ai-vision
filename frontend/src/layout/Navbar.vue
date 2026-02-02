@@ -127,6 +127,10 @@ const loadAutoSaveSettings = () => {
   if (saved) {
     const settings = JSON.parse(saved);
     autoSaveEnabled.value = settings.enabled || false;
+    // 恢复 store 中的输入源信息（防止被覆盖）
+    if (settings.sourceType && settings.sourceValue) {
+      store.setLastSource(settings.sourceType, settings.sourceValue);
+    }
     return settings;
   }
   return null;
@@ -135,11 +139,15 @@ const loadAutoSaveSettings = () => {
 // 保存当前选择
 const saveCurrentSelection = () => {
   if (autoSaveEnabled.value) {
+    // 优先使用已保存的值，避免被空值覆盖
+    const existingSaved = localStorage.getItem(AUTO_SAVE_KEY);
+    const existing = existingSaved ? JSON.parse(existingSaved) : {};
+    
     const settings = {
       enabled: true,
-      projectId: projectStore.currentProjectId,
-      sourceType: store.lastSourceType || null,
-      sourceValue: store.lastSourceValue || null
+      projectId: projectStore.currentProjectId || existing.projectId,
+      sourceType: store.lastSourceType || existing.sourceType || null,
+      sourceValue: store.lastSourceValue || existing.sourceValue || null
     };
     localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(settings));
   }
@@ -159,14 +167,23 @@ const toggleAutoSave = () => {
 
 // 恢复上次选择
 const restoreLastSelection = async (settings) => {
+  console.log('[AutoRestore] 开始恢复设置:', settings);
+  
   if (settings.projectId && projectList.value.length > 0) {
     // 检查项目是否存在
     const projectExists = projectList.value.some(p => p.id === settings.projectId);
+    console.log('[AutoRestore] 项目存在:', projectExists, '项目ID:', settings.projectId);
+    
     if (projectExists) {
       await handleProjectChange(settings.projectId);
       
+      // 等待一下让后端准备好
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
       // 保存输入源信息到 store，让输入源设置页面恢复
-      if (settings.sourceType && settings.sourceValue) {
+      console.log('[AutoRestore] 输入源信息:', settings.sourceType, settings.sourceValue);
+      
+      if (settings.sourceType && settings.sourceValue !== null && settings.sourceValue !== undefined) {
         store.setLastSource(settings.sourceType, settings.sourceValue);
         
         // 自动启动输入源
@@ -178,6 +195,7 @@ const restoreLastSelection = async (settings) => {
             const sourceStore = (await import('@/store/useSourceStore')).useSourceStore();
             sourceStore.loadConfig();
             
+            console.log('[AutoRestore] 正在启动摄像头:', settings.sourceValue);
             await api.post('/source/start', {
               type: 'camera',
               device_index: settings.sourceValue,
@@ -185,26 +203,31 @@ const restoreLastSelection = async (settings) => {
               fps: sourceStore.cameraSettings?.fps || 30
             });
             sourceStore.setStreaming(true);
-            console.log('摄像头自动启动成功');
+            console.log('[AutoRestore] 摄像头自动启动成功');
           } else if (settings.sourceType === 'video') {
             // 视频类型：sourceValue 是视频路径
             const sourceStore = (await import('@/store/useSourceStore')).useSourceStore();
             sourceStore.loadConfig();
             
+            console.log('[AutoRestore] 正在启动视频:', settings.sourceValue);
             await api.post('/source/start', {
               type: 'video',
               path: settings.sourceValue,
               speed: sourceStore.videoSpeed || 1
             });
             sourceStore.setStreaming(true);
-            console.log('视频自动启动成功');
+            console.log('[AutoRestore] 视频自动启动成功');
           }
           // 图片类型通常不需要自动启动
         } catch (e) {
-          console.warn('自动启动输入源失败:', e.message);
+          console.error('[AutoRestore] 自动启动输入源失败:', e);
         }
+      } else {
+        console.log('[AutoRestore] 没有保存的输入源信息');
       }
     }
+  } else {
+    console.log('[AutoRestore] 条件不满足 - projectId:', settings.projectId, '项目数:', projectList.value.length);
   }
 };
 
