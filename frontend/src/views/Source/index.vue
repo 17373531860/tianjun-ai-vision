@@ -18,7 +18,8 @@
             <el-radio value="camera" class="!mr-0">
               <div class="flex items-center gap-2">
                 <el-icon><Camera /></el-icon>
-                <span>USB 摄像头</span>
+                <span>摄像头</span>
+                <el-tag type="info" size="small">USB / 海康工业相机</el-tag>
               </div>
             </el-radio>
             <el-radio value="video" class="!mr-0">
@@ -36,7 +37,7 @@
           </el-radio-group>
         </el-card>
 
-        <!-- 摄像头设置 -->
+        <!-- 摄像头设置（统一 USB 和海康工业相机） -->
         <el-card v-if="sourceType === 'camera'" shadow="never" class="bg-slate-800 border-slate-700">
           <template #header>
             <span class="font-bold text-white">摄像头设置</span>
@@ -44,17 +45,33 @@
           
           <el-form label-position="top">
             <el-form-item label="选择摄像头">
-              <el-select v-model="cameraSettings.deviceIndex" class="w-full" placeholder="选择摄像头设备">
-                <el-option 
-                  v-for="cam in availableCameras" 
-                  :key="cam.index" 
-                  :label="cam.name" 
-                  :value="cam.index" 
-                />
+              <el-select v-model="selectedCameraId" class="w-full" placeholder="选择摄像头设备" value-key="id">
+                <el-option-group v-if="usbCameras.length > 0" label="USB 摄像头">
+                  <el-option 
+                    v-for="cam in usbCameras" 
+                    :key="cam.id" 
+                    :label="cam.name" 
+                    :value="cam.id"
+                  />
+                </el-option-group>
+                <el-option-group v-if="hikvisionCameras.length > 0" label="海康工业相机">
+                  <el-option 
+                    v-for="cam in hikvisionCameras" 
+                    :key="cam.id" 
+                    :label="cam.name" 
+                    :value="cam.id"
+                  />
+                </el-option-group>
+                <el-option v-if="allCameras.length === 0" disabled value="" label="未检测到摄像头设备" />
               </el-select>
-              <el-button type="primary" link class="mt-2" @click="() => refreshCameras(true)" :loading="loadingCameras">
-                <el-icon class="mr-1"><Refresh /></el-icon> 刷新设备列表
-              </el-button>
+              <div class="flex items-center gap-2 mt-2">
+                <el-button type="primary" link @click="refreshAllCameras" :loading="loadingCameras">
+                  <el-icon class="mr-1"><Refresh /></el-icon> 刷新设备列表
+                </el-button>
+                <span class="text-xs text-gray-500">
+                  已检测: USB {{ usbCameras.length }} 个, 海康 {{ hikvisionCameras.length }} 个
+                </span>
+              </div>
             </el-form-item>
             
             <el-form-item label="分辨率">
@@ -198,7 +215,10 @@
           <el-descriptions :column="1" border size="small">
             <el-descriptions-item label="输入源类型">{{ sourceTypeLabel }}</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'camera'" label="摄像头设备">
-              {{ availableCameras.find(c => c.index === cameraSettings.deviceIndex)?.name || '未选择' }}
+              {{ selectedCamera?.name || '未选择' }}
+            </el-descriptions-item>
+            <el-descriptions-item v-if="sourceType === 'camera'" label="设备类型">
+              {{ selectedCamera?.type === 'hikvision' ? '海康工业相机' : 'USB 摄像头' }}
             </el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'camera'" label="分辨率">{{ cameraSettings.resolution }}</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'camera'" label="帧率">{{ cameraSettings.fps }} FPS</el-descriptions-item>
@@ -233,7 +253,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { 
   VideoCamera, Camera, VideoPlay, Picture, 
-  UploadFilled, Refresh, Check 
+  UploadFilled, Refresh, Check
 } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import api from '@/api/index';
@@ -254,10 +274,19 @@ const cameraSettings = ref({
   fps: 30
 });
 
-// 可用摄像头列表
-const availableCameras = ref([
-  { index: 0, name: '默认摄像头 (索引 0)' }
-]);
+// 统一摄像头列表（USB + 海康）
+const usbCameras = ref([]);       // USB 摄像头列表
+const hikvisionCameras = ref([]); // 海康工业相机列表
+const selectedCameraId = ref(''); // 选中的摄像头 ID（格式：usb_0 或 hik_0）
+
+// 所有摄像头的计算属性
+const allCameras = computed(() => [...usbCameras.value, ...hikvisionCameras.value]);
+
+// 获取选中的摄像头信息
+const selectedCamera = computed(() => {
+  if (!selectedCameraId.value) return null;
+  return allCameras.value.find(c => c.id === selectedCameraId.value);
+});
 
 // 文件
 const videoFile = ref(null);
@@ -277,33 +306,61 @@ const saving = ref(false);
 // 计算属性
 const sourceTypeLabel = computed(() => {
   const labels = {
-    camera: 'USB 摄像头',
+    camera: '摄像头',
     video: '本地视频',
     image: '本地图片'
   };
   return labels[sourceType.value] || '未知';
 });
 
-// 刷新摄像头列表
-const refreshCameras = async (forceRefresh = true) => {
+// 刷新所有摄像头列表（USB + 海康）
+const refreshAllCameras = async () => {
   loadingCameras.value = true;
-  try {
-    // forceRefresh=true 时强制刷新，false 时使用缓存
-    const res = await api.get('/source/cameras', { params: { refresh: forceRefresh } });
-    availableCameras.value = res.data.cameras || [{ index: 0, name: '默认摄像头 (索引 0)' }];
-    if (forceRefresh) {
-      const cached = res.data.cached ? ' (缓存)' : '';
-      ElMessage.success(`检测到 ${availableCameras.value.length} 个摄像头${cached}`);
+  
+  // 并行获取 USB 和海康摄像头
+  const [usbResult, hikResult] = await Promise.allSettled([
+    api.get('/source/cameras', { params: { refresh: true } }),
+    api.get('/source/hikvision/cameras')
+  ]);
+  
+  // 处理 USB 摄像头结果
+  if (usbResult.status === 'fulfilled') {
+    const cameras = usbResult.value.data.cameras || [];
+    usbCameras.value = cameras.map(cam => ({
+      id: `usb_${cam.index}`,
+      type: 'usb',
+      index: cam.index,
+      name: cam.name
+    }));
+  } else {
+    console.error('获取 USB 摄像头列表失败:', usbResult.reason);
+    usbCameras.value = [];
+  }
+  
+  // 处理海康摄像头结果
+  if (hikResult.status === 'fulfilled' && hikResult.value.data.available) {
+    const cameras = hikResult.value.data.cameras || [];
+    hikvisionCameras.value = cameras.map(cam => ({
+      id: `hik_${cam.index}`,
+      type: 'hikvision',
+      index: cam.index,
+      name: cam.name
+    }));
+  } else {
+    hikvisionCameras.value = [];
+  }
+  
+  loadingCameras.value = false;
+  
+  const totalCount = usbCameras.value.length + hikvisionCameras.value.length;
+  if (totalCount > 0) {
+    ElMessage.success(`检测到 ${totalCount} 个摄像头设备`);
+    // 如果没有选中的摄像头，自动选择第一个
+    if (!selectedCameraId.value && allCameras.value.length > 0) {
+      selectedCameraId.value = allCameras.value[0].id;
     }
-  } catch (err) {
-    console.error('获取摄像头列表失败:', err);
-    availableCameras.value = [
-      { index: 0, name: '默认摄像头 (索引 0)' },
-      { index: 1, name: '摄像头 1' },
-      { index: 2, name: '摄像头 2' }
-    ];
-  } finally {
-    loadingCameras.value = false;
+  } else {
+    ElMessage.warning('未检测到任何摄像头设备');
   }
 };
 
@@ -409,18 +466,51 @@ const saveAndStart = async () => {
     } catch (e) {}
     
     if (sourceType.value === 'camera') {
-      // 启动摄像头
-      const [width, height] = cameraSettings.value.resolution.split('x').map(Number);
-      await api.post('/source/camera/start', {
-        device_index: cameraSettings.value.deviceIndex,
-        width,
-        height,
-        fps: cameraSettings.value.fps
-      });
+      // 检查是否选择了摄像头
+      if (!selectedCamera.value) {
+        ElMessage.warning('请先选择摄像头设备');
+        saving.value = false;
+        return;
+      }
       
-      // 更新 store
-      sourceStore.setSourceType('camera');
-      sourceStore.setCameraSettings(cameraSettings.value);
+      const [width, height] = cameraSettings.value.resolution.split('x').map(Number);
+      const cam = selectedCamera.value;
+      
+      if (cam.type === 'usb') {
+        // 启动 USB 摄像头
+        await api.post('/source/camera/start', {
+          device_index: cam.index,
+          width,
+          height,
+          fps: cameraSettings.value.fps
+        });
+        
+        // 更新 store
+        sourceStore.setSourceType('camera');
+        sourceStore.setCameraSettings({
+          ...cameraSettings.value,
+          deviceIndex: cam.index,
+          cameraId: cam.id
+        });
+        
+      } else if (cam.type === 'hikvision') {
+        // 启动海康工业相机
+        await api.post('/source/hikvision/start', {
+          device_index: cam.index,
+          width,
+          height,
+          fps: cameraSettings.value.fps
+        });
+        
+        // 更新 store（内部使用 hikvision 类型）
+        sourceStore.setSourceType('hikvision');
+        sourceStore.setHikvisionSettings({
+          ...cameraSettings.value,
+          deviceIndex: cam.index,
+          cameraId: cam.id
+        });
+      }
+      
       sourceStore.setStreaming(true);
       
     } else if (sourceType.value === 'video') {
@@ -522,12 +612,21 @@ const restoreAutoSavedSource = () => {
   // 从 sourceStore 加载保存的配置
   sourceStore.loadConfig();
   
-  // 恢复输入源类型
-  sourceType.value = sourceStore.sourceType;
+  // 恢复输入源类型（hikvision 也映射到 camera）
+  const savedType = sourceStore.sourceType;
+  sourceType.value = (savedType === 'hikvision') ? 'camera' : savedType;
   
   // 恢复摄像头设置
   if (sourceStore.cameraSettings) {
     cameraSettings.value = { ...cameraSettings.value, ...sourceStore.cameraSettings };
+    // 恢复选中的摄像头 ID
+    if (sourceStore.cameraSettings.cameraId) {
+      selectedCameraId.value = sourceStore.cameraSettings.cameraId;
+    }
+  }
+  // 如果是海康相机，也恢复
+  if (savedType === 'hikvision' && sourceStore.hikvisionSettings?.cameraId) {
+    selectedCameraId.value = sourceStore.hikvisionSettings.cameraId;
   }
   
   // 恢复视频设置
@@ -535,7 +634,6 @@ const restoreAutoSavedSource = () => {
   
   // 显示上次选择的视频/图片文件名（如果有）
   if (sourceStore.videoFileName) {
-    // 创建一个虚拟的文件对象用于显示
     lastVideoFileName.value = sourceStore.videoFileName;
   }
   if (sourceStore.imageFileName) {
@@ -547,10 +645,10 @@ const restoreAutoSavedSource = () => {
 const lastVideoFileName = ref(null);
 const lastImageFileName = ref(null);
 
-onMounted(() => {
+onMounted(async () => {
   loadConfig();
   restoreAutoSavedSource();
-  // 页面加载时使用缓存，不强制刷新（更快）
-  refreshCameras(false);
+  // 页面加载时自动刷新所有摄像头列表
+  await refreshAllCameras();
 });
 </script>

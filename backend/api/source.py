@@ -1,6 +1,6 @@
 """
 输入源管理 API
-支持 USB 摄像头、本地视频文件、本地图片
+支持 USB 摄像头、本地视频文件、本地图片、海康工业相机
 集成 YOLO 模型推理
 集成会话和周期记录
 """
@@ -17,12 +17,87 @@ import time
 import numpy as np
 import subprocess
 from datetime import datetime
+from ctypes import *
 from PIL import Image, ImageDraw, ImageFont
 from backend.core.config import settings
 from backend.db.database import SessionLocal
 from backend.models.models import DetectionSession, DetectionCycle, StepRecord, VideoClip, DataExportSetting
 
 router = APIRouter()
+
+
+# ========== 海康工业相机 SDK 导入 ==========
+HIK_SDK_AVAILABLE = False
+try:
+    # 设置 MvImport 目录路径
+    _mv_import_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MvImport")
+    if _mv_import_dir not in os.sys.path:
+        os.sys.path.insert(0, _mv_import_dir)
+    
+    from backend.api.MvImport import *
+    HIK_SDK_AVAILABLE = True
+    print("[海康SDK] 加载成功")
+except Exception as e:
+    print(f"[海康SDK] 加载失败（海康相机功能不可用）: {e}")
+
+
+def _decode_hik_string(ctypes_char_array):
+    """从 ctypes 字符数组解码为字符串，用于海康设备名称/序列号"""
+    if ctypes_char_array is None:
+        return ""
+    try:
+        byte_str = memoryview(ctypes_char_array).tobytes()
+        null_index = byte_str.find(b'\x00')
+        if null_index != -1:
+            byte_str = byte_str[:null_index]
+        for enc in ('utf-8', 'gbk', 'latin-1'):
+            try:
+                return byte_str.decode(enc).strip()
+            except UnicodeDecodeError:
+                continue
+        return byte_str.decode('latin-1', errors='replace').strip()
+    except Exception:
+        return ""
+
+
+def get_hikvision_device_list():
+    """
+    枚举当前可用的海康工业相机（USB + GigE），返回 [{"index": 设备索引, "name": 显示名称}, ...]
+    未安装 SDK 或枚举失败时返回空列表
+    """
+    if not HIK_SDK_AVAILABLE:
+        return []
+    try:
+        device_list = MV_CC_DEVICE_INFO_LIST()
+        # 同时枚举 USB 和 GigE 设备
+        tlayer_type = MV_USB_DEVICE | MV_GIGE_DEVICE
+        ret = MvCamera.MV_CC_EnumDevices(tlayer_type, device_list)
+        if ret != 0 or device_list.nDeviceNum == 0:
+            return []
+        
+        result = []
+        for i in range(device_list.nDeviceNum):
+            st_dev = cast(device_list.pDeviceInfo[i], POINTER(MV_CC_DEVICE_INFO)).contents
+            name = ""
+            if st_dev.nTLayerType == MV_USB_DEVICE:
+                model = _decode_hik_string(st_dev.SpecialInfo.stUsb3VInfo.chModelName)
+                serial = _decode_hik_string(st_dev.SpecialInfo.stUsb3VInfo.chSerialNumber)
+                name = f"USB [{model}] {serial}" if serial else f"USB [{model}]"
+            elif st_dev.nTLayerType == MV_GIGE_DEVICE:
+                model = _decode_hik_string(st_dev.SpecialInfo.stGigEInfo.chModelName)
+                ip = st_dev.SpecialInfo.stGigEInfo.nCurrentIp
+                ip_str = "%d.%d.%d.%d" % (
+                    (ip >> 24) & 0xff, (ip >> 16) & 0xff,
+                    (ip >> 8) & 0xff, ip & 0xff
+                )
+                name = f"GigE [{model}] {ip_str}"
+            if not name.strip():
+                name = f"海康相机 {i}"
+            result.append({"index": i, "name": name})
+        return result
+    except Exception as e:
+        print(f"[海康SDK] 枚举设备失败: {e}")
+        return []
 
 
 # ========== FFmpeg 路径查找 ==========
@@ -262,7 +337,7 @@ class VideoSourceManager:
     CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'device_config.json')
     
     def __init__(self):
-        self.source_type = None  # 'camera', 'video', 'image'
+        self.source_type = None  # 'camera', 'video', 'image', 'hikvision'
         self.capture = None
         self.is_running = False
         self.current_frame = None
@@ -275,6 +350,13 @@ class VideoSourceManager:
         self.height = 720
         self.fps = 30
         self._thread = None
+        
+        # 海康工业相机相关
+        self.hik_camera = None  # MvCamera 实例
+        self.hik_device_index = 0  # 海康相机设备索引
+        self.hik_payload_size = 0  # 海康相机帧数据大小
+        self.hik_data_buf = None  # 海康相机数据缓冲区
+        self.hik_frame_info = None  # 海康相机帧信息
         
         # 帧率限制配置（用于MJPEG流）
         self.frame_limit_enabled = False  # 默认禁用节流（本地应用）
@@ -782,11 +864,22 @@ class VideoSourceManager:
                     }
                     self.step_static_triggered[label] = False
         
-        # 初始化计数器
+        # 初始化计数器（确保默认计数器始终存在）
         self.counters = {}
         counters_config = config.get('counters_config', [])
+        
+        # 默认计数器名称列表
+        DEFAULT_COUNTERS = ['总产量', '合格总数', '不良总数', 'NG步骤']
+        
+        # 先添加配置中的计数器
         for counter in counters_config:
             self.counters[counter.get('name', '')] = counter.get('value', 0)
+        
+        # 确保默认计数器存在（NG步骤 始终从0开始，不能设置默认值）
+        for default_name in DEFAULT_COUNTERS:
+            if default_name not in self.counters:
+                # NG步骤 计数器特殊处理：始终从 0 开始
+                self.counters[default_name] = 0
         
         # 重置周期状态
         self.current_cycle_steps = []
@@ -891,91 +984,166 @@ class VideoSourceManager:
         - 主线程：读帧 → 取结果 → 滤波 → 显示（不阻塞）
         - 推理线程：推理 → 帧计数 → 步骤判断 → 事件触发（独立运行）
         """
+        print("[捕获线程] 开始运行")
         frame_start_time = time.time()
+        consecutive_errors = 0  # 连续错误计数
+        max_consecutive_errors = 10  # 最大连续错误次数
+        last_heartbeat_log = time.time()
         
         # 如果正在检测且模型已加载，启动推理线程
         if self.is_detecting and self.model is not None:
             self._start_inference_thread()
         
-        while self.is_running and self.capture is not None:
-            # 更新捕获线程心跳
-            self._last_capture_heartbeat = time.time()
-            
-            speed = getattr(self, 'video_speed', 1.0)
-            
-            # 对于视频输入源，如果倍速大于1，通过跳帧实现
-            if self.source_type == 'video' and speed > 1:
-                # 跳过一些帧来实现倍速
-                frames_to_skip = int(speed) - 1
-                for _ in range(frames_to_skip):
-                    ret = self.capture.grab()  # 只抓取不解码，更快
-                    if not ret:
-                        break
-            
+        while self.is_running and (self.capture is not None or self.source_type == 'hikvision'):
             try:
-                ret, frame = self.capture.read()
-            except Exception as e:
+                # 更新捕获线程心跳
+                self._last_capture_heartbeat = time.time()
+                
+                speed = getattr(self, 'video_speed', 1.0)
+                
+                # 根据输入源类型读取帧
+                frame = None
                 ret = False
-            
-            if ret:
-                original_frame = frame.copy()
                 
-                # 更新视频当前帧位置
-                if self.source_type == 'video' and self.capture is not None:
-                    self.video_current_frame = int(self.capture.get(cv2.CAP_PROP_POS_FRAMES))
-                
-                # ========== 双线程架构：异步推理 ==========
-                if self.is_detecting and self.model is not None:
-                    # 更新供推理线程使用的帧（非阻塞）
-                    with self._inference_frame_lock:
-                        self._latest_frame_for_inference = original_frame.copy()
-                    
-                    # 获取已确认的检测结果并应用滤波（非阻塞）
-                    with self._confirmed_detections_lock:
-                        confirmed_detections = self._confirmed_detections.copy()
-                    
-                    # 应用卡尔曼滤波平滑
-                    smoothed_detections = self._apply_kalman_filter(confirmed_detections)
-                    
-                    # 更新当前检测结果（供前端获取）
-                    with self.detection_lock:
-                        self.current_detections = smoothed_detections
-                
-                # 发送原始帧（不带检测框）
-                with self.frame_lock:
-                    self.current_frame = original_frame
-                
-                # 写入视频录制队列（使用 FFmpeg 进程，不会卡死）
-                if self.is_detecting and self.recording_enabled:
-                    self._enqueue_frame_for_recording(original_frame)
-                
-                # FPS 计算
-                self._fps_counter += 1
-                if time.time() - self._fps_time >= 1.0:
-                    self.fps_actual = self._fps_counter
-                    self._fps_counter = 0
-                    self._fps_time = time.time()
-            else:
-                # 视频结束，停止播放（不循环）
-                if self.source_type == 'video' and self.video_path:
-                    print("[Video] 视频播放完毕，已停止")
-                    self.video_ended = True
-                    self.is_running = False
-                    # 如果正在检测，自动停止检测
-                    if self.is_detecting:
-                        self.stop_detection()
-                    break  # 退出循环
+                if self.source_type == 'hikvision':
+                    # 海康工业相机
+                    frame = self._get_hikvision_frame()
+                    ret = frame is not None
                 else:
-                    time.sleep(0.01)
-            
-            # 计算帧处理耗时，动态调整 sleep 时间
-            frame_elapsed = time.time() - frame_start_time
-            target_interval = 1.0 / max(self.fps * speed, 1)
-            sleep_time = max(0, target_interval - frame_elapsed)
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-            frame_start_time = time.time()
+                    # 普通摄像头或视频文件
+                    # 对于视频输入源，如果倍速大于1，通过跳帧实现
+                    if self.source_type == 'video' and speed > 1:
+                        # 跳过一些帧来实现倍速
+                        frames_to_skip = int(speed) - 1
+                        for _ in range(frames_to_skip):
+                            ret = self.capture.grab()  # 只抓取不解码，更快
+                            if not ret:
+                                break
+                    
+                    try:
+                        ret, frame = self.capture.read()
+                    except Exception as e:
+                        ret = False
+                
+                if ret and frame is not None:
+                    original_frame = frame.copy()
+                    
+                    # 更新视频当前帧位置
+                    if self.source_type == 'video' and self.capture is not None:
+                        self.video_current_frame = int(self.capture.get(cv2.CAP_PROP_POS_FRAMES))
+                    
+                    # ========== 双线程架构：异步推理 ==========
+                    if self.is_detecting and self.model is not None:
+                        # 更新供推理线程使用的帧（非阻塞）
+                        with self._inference_frame_lock:
+                            self._latest_frame_for_inference = original_frame.copy()
+                        
+                        # 获取已确认的检测结果并应用滤波（非阻塞）
+                        with self._confirmed_detections_lock:
+                            confirmed_detections = self._confirmed_detections.copy()
+                        
+                        # 应用卡尔曼滤波平滑
+                        smoothed_detections = self._apply_kalman_filter(confirmed_detections)
+                        
+                        # 更新当前检测结果（供前端获取）
+                        with self.detection_lock:
+                            self.current_detections = smoothed_detections
+                    
+                    # 发送原始帧（不带检测框）
+                    with self.frame_lock:
+                        self.current_frame = original_frame
+                    
+                    # 写入视频录制队列（使用 FFmpeg 进程，不会卡死）
+                    if self.is_detecting and self.recording_enabled:
+                        self._enqueue_frame_for_recording(original_frame)
+                    
+                    # FPS 计算
+                    self._fps_counter += 1
+                    if time.time() - self._fps_time >= 1.0:
+                        self.fps_actual = self._fps_counter
+                        self._fps_counter = 0
+                        self._fps_time = time.time()
+                else:
+                    # 视频结束，停止播放（不循环）
+                    if self.source_type == 'video' and self.video_path:
+                        print("[Video] 视频播放完毕，已停止")
+                        self.video_ended = True
+                        self.is_running = False
+                        # 如果正在检测，自动停止检测
+                        if self.is_detecting:
+                            self.stop_detection()
+                        break  # 退出循环
+                    else:
+                        time.sleep(0.01)
+                
+                # 计算帧处理耗时，动态调整 sleep 时间
+                frame_elapsed = time.time() - frame_start_time
+                target_interval = 1.0 / max(self.fps * speed, 1)
+                sleep_time = max(0, target_interval - frame_elapsed)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                frame_start_time = time.time()
+                
+                # 重置连续错误计数（成功处理一帧）
+                consecutive_errors = 0
+                
+                # 定期打印心跳日志（每30秒）
+                if time.time() - last_heartbeat_log > 30:
+                    print(f"[捕获线程心跳] 运行中, FPS={self.fps_actual}, 源={self.source_type}")
+                    last_heartbeat_log = time.time()
+                    
+            except Exception as e:
+                consecutive_errors += 1
+                print(f"[捕获线程] 错误 ({consecutive_errors}/{max_consecutive_errors}): {e}")
+                import traceback
+                traceback.print_exc()
+                
+                # 如果连续错误太多，尝试恢复
+                if consecutive_errors >= max_consecutive_errors:
+                    print(f"[捕获线程] 连续 {max_consecutive_errors} 次错误，尝试恢复...")
+                    try:
+                        if self.source_type == 'hikvision':
+                            # 海康相机：尝试重新连接
+                            self._release_hik_camera()
+                            time.sleep(0.5)
+                            # 重新初始化海康相机
+                            try:
+                                self.start_hikvision_camera(
+                                    device_index=self.hik_device_index,
+                                    width=self.width,
+                                    height=self.height,
+                                    fps=self.fps
+                                )
+                                print("[捕获线程] 海康相机重新连接成功")
+                                consecutive_errors = 0
+                            except:
+                                print("[捕获线程] 海康相机重新连接失败")
+                        else:
+                            # 普通摄像头/视频：尝试重新打开
+                            if self.capture is not None:
+                                self.capture.release()
+                            if self.source_type == 'camera':
+                                self.capture = cv2.VideoCapture(self.camera_index)
+                                if self.capture.isOpened():
+                                    print("[捕获线程] 摄像头重新打开成功")
+                                    consecutive_errors = 0
+                                else:
+                                    print("[捕获线程] 摄像头重新打开失败")
+                            elif self.source_type == 'video' and self.video_path:
+                                self.capture = cv2.VideoCapture(self.video_path)
+                                if self.capture.isOpened():
+                                    print("[捕获线程] 视频重新打开成功")
+                                    consecutive_errors = 0
+                                else:
+                                    print("[捕获线程] 视频重新打开失败，停止运行")
+                                    self.is_running = False
+                    except Exception as recover_error:
+                        print(f"[捕获线程] 恢复失败: {recover_error}")
+                        self.is_running = False
+                
+                time.sleep(0.1)  # 错误后短暂等待
         
+        print("[捕获线程] 结束运行")
         # 停止推理线程
         self._stop_inference_thread()
         # 停止录制线程
@@ -1826,6 +1994,34 @@ class VideoSourceManager:
         # 重置周期开始时间（无论是合格还是NG，都重置）
         self.cycle_start_time = None
         
+        # NG步骤 计数逻辑（仅在顺序模式或基于顺序的自定义模式中）
+        # 只在检测到漏做（缺少步骤）时计数，跳步本质上也是缺少步骤导致的
+        if current_event_id == 2 and 'NG步骤' in self.counters:
+            logic_mode = self.project_config.get('logic_mode', 'detection') if self.project_config else 'detection'
+            pipeline_config = self.project_config.get('pipeline_config', {}) if self.project_config else {}
+            custom_based_on = pipeline_config.get('custom_based_on')
+            
+            # 仅在顺序模式或基于顺序的自定义模式中计数
+            is_sequential_mode = (logic_mode == 'sequential' or 
+                                  (logic_mode == 'custom' and custom_based_on == 'sequential'))
+            
+            if is_sequential_mode:
+                # 只在缺少步骤时计数
+                is_missing_step = '缺少' in reason or '周期不完整' in reason
+                
+                if is_missing_step:
+                    import re
+                    # 尝试从原因中提取缺少的步骤列表，按数量计入
+                    match = re.search(r"缺少[：:]\s*\[([^\]]+)\]", reason)
+                    if match:
+                        missing_steps = match.group(1).split(',')
+                        ng_step_count = len([s.strip() for s in missing_steps if s.strip()])
+                    else:
+                        ng_step_count = 1  # 默认 +1
+                    
+                    self.counters['NG步骤'] += ng_step_count
+                    print(f"  NG步骤计数 += {ng_step_count} => {self.counters['NG步骤']} (原因: {reason})")
+        
         # 执行计数器动作（支持 delta 和 value 两种字段名）
         actions = event.get('actions', [])
         for action in actions:
@@ -2201,6 +2397,8 @@ class VideoSourceManager:
                 current_time = time.time()
                 if current_time - last_cleanup_time > cleanup_interval:
                     self._periodic_cache_cleanup()
+                    # 定期保存计数器到数据库（防止闪退丢失数据）
+                    self._save_counters_snapshot()
                     last_cleanup_time = current_time
                 
                 # 获取最新帧
@@ -2540,6 +2738,176 @@ class VideoSourceManager:
         self._thread.start()
         
         return True
+    
+    def start_hikvision_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 30):
+        """启动海康工业相机"""
+        if not HIK_SDK_AVAILABLE:
+            raise Exception("海康 SDK 未加载，无法使用海康相机")
+        
+        self.stop()
+        
+        # 等待一小段时间确保之前的资源已释放
+        time.sleep(0.2)
+        
+        try:
+            # 创建相机实例
+            self.hik_camera = MvCamera()
+            
+            # 枚举设备
+            device_list = MV_CC_DEVICE_INFO_LIST()
+            tlayer_type = MV_USB_DEVICE | MV_GIGE_DEVICE
+            ret = MvCamera.MV_CC_EnumDevices(tlayer_type, device_list)
+            if ret != 0 or device_list.nDeviceNum == 0:
+                raise Exception("未发现海康相机设备")
+            
+            if device_index < 0 or device_index >= device_list.nDeviceNum:
+                raise Exception(f"无效的设备索引 {device_index}，当前共 {device_list.nDeviceNum} 个设备")
+            
+            # 获取选定设备信息
+            st_device_info = cast(device_list.pDeviceInfo[device_index], POINTER(MV_CC_DEVICE_INFO)).contents
+            
+            # 创建句柄
+            ret = self.hik_camera.MV_CC_CreateHandle(st_device_info)
+            if ret != 0:
+                raise Exception(f"创建相机句柄失败，错误码: {hex(ret)}")
+            
+            # 打开设备（独占模式）
+            ret = self.hik_camera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
+            if ret != 0:
+                self.hik_camera.MV_CC_DestroyHandle()
+                raise Exception(f"打开相机失败，错误码: {hex(ret)}")
+            
+            # 设置为连续采集模式
+            ret = self.hik_camera.MV_CC_SetEnumValue("TriggerMode", MV_TRIGGER_MODE_OFF)
+            if ret != 0:
+                print(f"[海康相机] 设置触发模式失败: {hex(ret)}，继续运行")
+            
+            # 获取 PayloadSize（帧数据大小）
+            st_param = MVCC_INTVALUE()
+            memset(byref(st_param), 0, sizeof(MVCC_INTVALUE))
+            ret = self.hik_camera.MV_CC_GetIntValue("PayloadSize", st_param)
+            if ret != 0:
+                self._release_hik_camera()
+                raise Exception(f"获取 PayloadSize 失败，错误码: {hex(ret)}")
+            self.hik_payload_size = st_param.nCurValue
+            
+            # 开始取流
+            ret = self.hik_camera.MV_CC_StartGrabbing()
+            if ret != 0:
+                self._release_hik_camera()
+                raise Exception(f"开始取流失败，错误码: {hex(ret)}")
+            
+            # 预分配缓冲区
+            self.hik_data_buf = (c_ubyte * self.hik_payload_size)()
+            self.hik_frame_info = MV_FRAME_OUT_INFO_EX()
+            memset(byref(self.hik_frame_info), 0, sizeof(MV_FRAME_OUT_INFO_EX))
+            
+            # 设置属性
+            self.source_type = 'hikvision'
+            self.hik_device_index = device_index
+            self.width = width
+            self.height = height
+            self.fps = fps
+            self.is_running = True
+            
+            print(f"[海康相机] 连接成功，设备索引: {device_index}")
+            
+            # 启动捕获线程
+            self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self._thread.start()
+            
+            return True
+            
+        except Exception as e:
+            self._release_hik_camera()
+            raise Exception(f"启动海康相机失败: {str(e)}")
+    
+    def _release_hik_camera(self):
+        """释放海康相机资源"""
+        if self.hik_camera:
+            try:
+                self.hik_camera.MV_CC_StopGrabbing()
+            except:
+                pass
+            try:
+                self.hik_camera.MV_CC_CloseDevice()
+            except:
+                pass
+            try:
+                self.hik_camera.MV_CC_DestroyHandle()
+            except:
+                pass
+            self.hik_camera = None
+            self.hik_data_buf = None
+            self.hik_frame_info = None
+            print("[海康相机] 已释放")
+    
+    def _get_hikvision_frame(self):
+        """从海康相机获取一帧图像"""
+        if not self.hik_camera or not HIK_SDK_AVAILABLE:
+            return None
+        
+        try:
+            ret = self.hik_camera.MV_CC_GetOneFrameTimeout(
+                self.hik_data_buf, 
+                self.hik_payload_size, 
+                self.hik_frame_info, 
+                1000  # 超时时间 1000ms
+            )
+            
+            if ret != 0:
+                return None
+            
+            # 获取图像数据
+            p_data = (c_ubyte * self.hik_frame_info.nFrameLen).from_address(addressof(self.hik_data_buf))
+            image_data = np.frombuffer(p_data, dtype=np.uint8)
+            
+            # 根据像素格式转换
+            pixel_type = self.hik_frame_info.enPixelType
+            frame_height = self.hik_frame_info.nHeight
+            frame_width = self.hik_frame_info.nWidth
+            
+            frame = None
+            
+            if pixel_type == PixelType_Gvsp_Mono8:
+                # 灰度图像
+                temp_img = image_data.reshape((frame_height, frame_width))
+                frame = cv2.cvtColor(temp_img, cv2.COLOR_GRAY2BGR)
+            elif pixel_type == PixelType_Gvsp_BayerRG8:
+                # Bayer RG8 格式
+                temp_img = image_data.reshape((frame_height, frame_width))
+                frame = cv2.cvtColor(temp_img, cv2.COLOR_BayerRG2RGB)
+            elif pixel_type == PixelType_Gvsp_RGB8_Packed:
+                # RGB8 格式
+                frame = image_data.reshape((frame_height, frame_width, 3))
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            elif pixel_type == PixelType_Gvsp_BGR8_Packed:
+                # BGR8 格式（直接可用）
+                frame = image_data.reshape((frame_height, frame_width, 3))
+            elif pixel_type == PixelType_Gvsp_YUV422_Packed or pixel_type == PixelType_Gvsp_YUV422_YUYV_Packed:
+                # YUV422 格式
+                temp_img = image_data.reshape((frame_height, frame_width, 2))
+                frame = cv2.cvtColor(temp_img, cv2.COLOR_YUV2BGR_YUYV)
+            else:
+                # 尝试默认处理
+                try:
+                    if len(image_data) == frame_height * frame_width * 3:
+                        frame = image_data.reshape((frame_height, frame_width, 3))
+                    elif len(image_data) == frame_height * frame_width:
+                        temp_img = image_data.reshape((frame_height, frame_width))
+                        frame = cv2.cvtColor(temp_img, cv2.COLOR_GRAY2BGR)
+                    else:
+                        print(f"[海康相机] 未知像素格式: {hex(pixel_type)}")
+                        return None
+                except Exception as e:
+                    print(f"[海康相机] 图像格式转换失败: {e}")
+                    return None
+            
+            return frame
+            
+        except Exception as e:
+            print(f"[海康相机] 获取帧失败: {e}")
+            return None
     
     def start_video(self, video_path: str, speed: float = None):
         """启动视频文件播放"""
@@ -3064,6 +3432,10 @@ class VideoSourceManager:
             if self._thread.is_alive():
                 print("[错误] 捕获线程未能结束，可能存在死锁，强制继续")
         
+        # 释放海康相机资源
+        if self.source_type == 'hikvision':
+            self._release_hik_camera()
+        
         # 释放摄像头/视频资源
         if self.capture:
             try:
@@ -3138,6 +3510,26 @@ class VideoSourceManager:
             print(f"[缓存清理] 清理 CUDA 缓存时出错: {e}")
         
         print(f"[缓存清理] 完成 - 清理了 {screenshot_count} 张截图缓存")
+    
+    def _save_counters_snapshot(self):
+        """定期保存计数器快照到会话（防止闪退丢失数据）"""
+        if not self.current_session_id or not self.counters:
+            return
+        
+        try:
+            db = self._get_db_session()
+            session = db.query(DetectionSession).filter(
+                DetectionSession.id == self.current_session_id
+            ).first()
+            
+            if session:
+                session.counters_snapshot = self.counters.copy()
+                db.commit()
+                print(f"[数据持久化] 计数器已保存: {self.counters}")
+            
+            db.close()
+        except Exception as e:
+            print(f"[数据持久化] 保存计数器失败: {e}")
     
     def _periodic_cache_cleanup(self):
         """周期性缓存清理 - 在检测循环中定期调用"""
@@ -3515,6 +3907,61 @@ def stop_camera():
     """停止摄像头"""
     video_manager.stop()
     return {"status": "success", "message": "摄像头已停止"}
+
+
+# ========== 海康工业相机 API 端点 ==========
+class HikvisionStartRequest(BaseModel):
+    device_index: int = 0
+    width: int = 1280
+    height: int = 720
+    fps: int = 30
+
+@router.get("/hikvision/cameras")
+def list_hikvision_cameras():
+    """列出可用的海康工业相机"""
+    if not HIK_SDK_AVAILABLE:
+        return {
+            "cameras": [],
+            "available": False,
+            "message": "海康 SDK 未加载，无法使用海康相机功能"
+        }
+    
+    cameras = get_hikvision_device_list()
+    return {
+        "cameras": cameras,
+        "available": True,
+        "count": len(cameras)
+    }
+
+@router.post("/hikvision/start")
+def start_hikvision_camera(req: HikvisionStartRequest):
+    """启动海康工业相机"""
+    try:
+        video_manager.start_hikvision_camera(
+            device_index=req.device_index,
+            width=req.width,
+            height=req.height,
+            fps=req.fps
+        )
+        return {"status": "success", "message": "海康相机已启动"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/hikvision/stop")
+def stop_hikvision_camera():
+    """停止海康工业相机"""
+    video_manager.stop()
+    return {"status": "success", "message": "海康相机已停止"}
+
+@router.get("/hikvision/status")
+def get_hikvision_status():
+    """获取海康相机状态"""
+    return {
+        "sdk_available": HIK_SDK_AVAILABLE,
+        "is_connected": video_manager.source_type == 'hikvision' and video_manager.is_running,
+        "device_index": video_manager.hik_device_index if video_manager.source_type == 'hikvision' else None
+    }
+
 
 @router.post("/video/upload")
 async def upload_video(file: UploadFile = File(...)):

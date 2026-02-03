@@ -88,7 +88,7 @@
           <div class="p-2 flex gap-6 text-xs text-gray-300">
             <span class="flex items-center gap-2">
               <span class="w-2 h-2 rounded-full" :class="isStreaming ? 'bg-green-500' : 'bg-gray-500'"></span> 
-              {{ isVideoSource ? (videoInfo.ended ? '视频已结束' : '视频播放中') : (isStreaming ? '摄像头在线' : '摄像头离线') }}
+              {{ sourceStatusText }}
             </span>
             <span>FPS: <span class="text-cyan-400 font-mono">{{ fps }}</span></span>
             <span>延迟: <span class="text-cyan-400 font-mono">{{ latency }} ms</span></span>
@@ -163,26 +163,26 @@
       <!-- Top Row: Stats Counters (Dynamic) -->
       <div v-if="systemStore.display.monitor.statsPanel" class="h-56 bg-slate-900 border border-slate-700 rounded-lg p-4 flex flex-col">
         <template v-if="currentProject && counters.length > 0">
-          <!-- Main Stats (First 2 items) -->
+          <!-- Main Stats: 总产量 和 合格总数（上面两个大的） -->
           <div class="grid grid-cols-2 gap-4 mb-3">
-            <div v-for="(counter, idx) in counters.slice(0, 2)" :key="idx"
+            <div v-for="(counter, idx) in mainCounters" :key="counter.name"
               class="flex flex-col items-center justify-center bg-slate-800/50 p-3 rounded-lg"
             >
                <div class="text-sm text-gray-400 mb-1">{{ counter.name }}</div>
                <div class="text-3xl font-mono font-bold" 
-                    :class="idx === 0 ? 'text-green-500' : 'text-red-500'">
+                    :class="getCounterColor(counter.name)">
                  {{ counter.value }}
                </div>
             </div>
           </div>
           
-          <!-- Secondary Stats (Remaining items) -->
+          <!-- Secondary Stats: 不良总数、NG步骤 和自定义计数器 -->
           <div class="flex-1 grid grid-cols-2 gap-3 mt-1 border-t border-slate-800 pt-3 overflow-y-auto">
-             <div v-for="(counter, idx) in counters.slice(2)" :key="idx"
+             <div v-for="(counter, idx) in secondaryCounters" :key="counter.name"
                class="flex flex-col items-center justify-center bg-slate-800/30 p-2 rounded"
              >
                 <span class="text-xs text-gray-500 truncate w-full text-center">{{ counter.name }}</span>
-                <span class="font-bold text-lg text-white">{{ counter.value }}</span>
+                <span class="font-bold text-lg" :class="getCounterColor(counter.name)">{{ counter.value }}</span>
              </div>
           </div>
         </template>
@@ -349,6 +349,16 @@ const videoInfo = ref({
   ended: false
 });
 const isVideoSource = computed(() => sourceStore.sourceType === 'video');
+const isHikvisionSource = computed(() => sourceStore.sourceType === 'hikvision');
+const sourceStatusText = computed(() => {
+  if (isVideoSource.value) {
+    return videoInfo.value.ended ? '视频已结束' : '视频播放中';
+  } else if (isHikvisionSource.value) {
+    return isStreaming.value ? '海康相机在线' : '海康相机离线';
+  } else {
+    return isStreaming.value ? '摄像头在线' : '摄像头离线';
+  }
+});
 const isDraggingProgress = ref(false);  // 是否正在拖动进度条
 const isChangingSpeed = ref(false);  // 是否正在改变倍速（防止轮询覆盖）
 
@@ -364,11 +374,65 @@ const refreshStream = () => {
 // 当前项目
 const currentProject = computed(() => projectStore.currentProject);
 
-// 计数器数据
+// 默认计数器定义（系统内置，不可删除）
+const DEFAULT_COUNTERS = ['总产量', '合格总数', '不良总数', 'NG步骤'];
+
+// 计数器数据 - 按固定顺序排列：总产量、合格总数在上，不良总数、NG步骤在下，然后是自定义计数器
 const counters = computed(() => {
   if (!currentProject.value?.counters_config) return [];
-  return currentProject.value.counters_config;
+  
+  const allCounters = currentProject.value.counters_config;
+  const displaySettings = systemStore.display.monitor.defaultCounters || {};
+  
+  // 分离默认计数器和自定义计数器
+  const defaultCounters = [];
+  const customCounters = [];
+  
+  // 按固定顺序添加默认计数器（如果启用显示）
+  DEFAULT_COUNTERS.forEach(name => {
+    const counter = allCounters.find(c => c.name === name);
+    if (counter) {
+      // 检查是否启用显示（默认显示）
+      const showKey = name === '总产量' ? 'showTotal' : 
+                      name === '合格总数' ? 'showGood' : 
+                      name === '不良总数' ? 'showBad' : 
+                      name === 'NG步骤' ? 'showNgSteps' : 'show';
+      if (displaySettings[showKey] !== false) {
+        defaultCounters.push(counter);
+      }
+    }
+  });
+  
+  // 添加自定义计数器（排除默认计数器）
+  allCounters.forEach(counter => {
+    if (!DEFAULT_COUNTERS.includes(counter.name)) {
+      customCounters.push(counter);
+    }
+  });
+  
+  return [...defaultCounters, ...customCounters];
 });
+
+// 主计数器（上面两个大的）：总产量、合格总数
+const mainCounters = computed(() => {
+  return counters.value.filter(c => c.name === '总产量' || c.name === '合格总数');
+});
+
+// 次级计数器（下面的）：不良总数、NG步骤、自定义计数器
+const secondaryCounters = computed(() => {
+  return counters.value.filter(c => c.name !== '总产量' && c.name !== '合格总数');
+});
+
+// 根据计数器名称返回颜色类
+const getCounterColor = (name) => {
+  switch (name) {
+    case '总产量': return 'text-cyan-400';      // 青色 - 中性
+    case '合格总数': return 'text-green-500';   // 绿色 - 好
+    case '不良总数': return 'text-red-500';     // 红色 - 坏
+    case 'NG步骤': return 'text-orange-500';    // 橙色 - 警告
+    default: return 'text-white';               // 白色 - 自定义
+  }
+};
 
 // 逻辑模式文本
 const logicModeText = computed(() => {
@@ -1288,6 +1352,24 @@ const autoRestoreSource = async () => {
       console.log('[AutoRestore] 已自动恢复摄像头');
     } catch (err) {
       console.warn('[AutoRestore] 自动恢复摄像头失败:', err);
+    }
+  } else if (savedType === 'hikvision') {
+    // 海康工业相机：尝试启动上次使用的相机
+    try {
+      const hikSettings = sourceStore.hikvisionSettings;
+      const [w, h] = (hikSettings.resolution || '1280x720').split('x').map(Number);
+      await api.post('/source/hikvision/start', {
+        device_index: hikSettings.deviceIndex || 0,
+        width: w,
+        height: h,
+        fps: hikSettings.fps || 30
+      });
+      sourceStore.setSourceType('hikvision');
+      sourceStore.setStreaming(true);
+      isStreaming.value = true;
+      console.log('[AutoRestore] 已自动恢复海康相机');
+    } catch (err) {
+      console.warn('[AutoRestore] 自动恢复海康相机失败:', err);
     }
   } else if (savedType === 'video' && sourceStore.videoPath) {
     // 视频：尝试启动上次使用的视频

@@ -66,7 +66,14 @@ export const useSystemStore = defineStore('system', {
         statsPanel: true,
         defectChart: true,
         capacityChart: true,
-        stepTable: true
+        stepTable: true,
+        // 默认计数器显示开关（这些是系统内置的，无法删除，但可以隐藏）
+        defaultCounters: {
+          showTotal: true,      // 总产量
+          showGood: true,       // 合格总数
+          showBad: true,        // 不良总数
+          showNgSteps: true     // NG步骤
+        }
       }
     },
     // 检测框设置 (Detection Box Settings) - 绑定项目
@@ -103,7 +110,25 @@ export const useSystemStore = defineStore('system', {
       const displaySaved = localStorage.getItem('display_settings');
       if (displaySaved) {
         try {
-          this.display = JSON.parse(displaySaved);
+          const saved = JSON.parse(displaySaved);
+          // 深度合并，确保新增的设置项有默认值
+          this.display = {
+            ...this.display,
+            ...saved,
+            navbar: { ...this.display.navbar, ...(saved.navbar || {}) },
+            monitor: { 
+              ...this.display.monitor, 
+              ...(saved.monitor || {}),
+              // 确保 defaultCounters 有默认值
+              defaultCounters: {
+                showTotal: true,
+                showGood: true,
+                showBad: true,
+                showNgSteps: true,
+                ...(saved.monitor?.defaultCounters || {})
+              }
+            }
+          };
         } catch (e) {}
       }
     },

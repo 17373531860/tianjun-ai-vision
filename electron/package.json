@@ -49,6 +49,13 @@
         "to": "backend",
         "filter": [
           "**/*.py",
+          "**/*.dll",
+          "**/*.cti",
+          "**/*.ax",
+          "**/*.ini",
+          "**/*.manifest",
+          "**/*.so",
+          "**/*.so.*",
           "!**/__pycache__/**",
           "!**/*.pyc",
           "!**/uploads/**",

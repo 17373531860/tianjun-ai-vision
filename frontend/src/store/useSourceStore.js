@@ -2,10 +2,16 @@ import { defineStore } from 'pinia';
 
 export const useSourceStore = defineStore('source', {
   state: () => ({
-    // 输入源类型: 'camera' | 'video' | 'image'
+    // 输入源类型: 'camera' | 'video' | 'image' | 'hikvision'
     sourceType: 'camera',
     // 摄像头设置
     cameraSettings: {
+      deviceIndex: 0,
+      resolution: '1280x720',
+      fps: 30
+    },
+    // 海康工业相机设置
+    hikvisionSettings: {
       deviceIndex: 0,
       resolution: '1280x720',
       fps: 30
@@ -29,6 +35,9 @@ export const useSourceStore = defineStore('source', {
     },
     setCameraSettings(settings) {
       this.cameraSettings = { ...this.cameraSettings, ...settings };
+    },
+    setHikvisionSettings(settings) {
+      this.hikvisionSettings = { ...this.hikvisionSettings, ...settings };
     },
     setVideoPath(path) {
       this.videoPath = path;
@@ -59,6 +68,7 @@ export const useSourceStore = defineStore('source', {
       const config = {
         sourceType: this.sourceType,
         cameraSettings: this.cameraSettings,
+        hikvisionSettings: this.hikvisionSettings,
         videoPath: this.videoPath,
         videoSpeed: this.videoSpeed,
         videoSyncMode: this.videoSyncMode,
@@ -77,6 +87,9 @@ export const useSourceStore = defineStore('source', {
           this.sourceType = config.sourceType || 'camera';
           if (config.cameraSettings) {
             this.cameraSettings = { ...this.cameraSettings, ...config.cameraSettings };
+          }
+          if (config.hikvisionSettings) {
+            this.hikvisionSettings = { ...this.hikvisionSettings, ...config.hikvisionSettings };
           }
           this.videoPath = config.videoPath || null;
           this.videoSpeed = config.videoSpeed || 1;

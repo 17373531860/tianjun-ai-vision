@@ -98,6 +98,65 @@
               </div>
             </div>
           </el-card>
+
+          <!-- 默认计数器显示设置 -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-cyan-400"><DataLine /></el-icon>
+                <span class="font-bold text-white">默认计数器显示</span>
+                <el-tag size="small" type="info">系统内置</el-tag>
+              </div>
+            </template>
+            <div class="mb-3 text-xs text-gray-500">
+              以下是系统内置的默认计数器，可以选择在检测中心是否显示。自定义计数器需要在项目管理中配置，且与事件绑定后才会显示。
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+                  <span class="text-gray-300">总产量</span>
+                </div>
+                <el-switch v-model="store.display.monitor.defaultCounters.showTotal" @change="saveDisplaySettings" />
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                  <span class="text-gray-300">合格总数</span>
+                </div>
+                <el-switch v-model="store.display.monitor.defaultCounters.showGood" @change="saveDisplaySettings" />
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-red-500"></span>
+                  <span class="text-gray-300">不良总数</span>
+                </div>
+                <el-switch v-model="store.display.monitor.defaultCounters.showBad" @change="saveDisplaySettings" />
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                  <span class="text-gray-300">NG步骤</span>
+                </div>
+                <el-switch v-model="store.display.monitor.defaultCounters.showNgSteps" @change="saveDisplaySettings" />
+              </div>
+            </div>
+            <el-alert
+              title="NG步骤说明"
+              type="warning"
+              :closable="false"
+              show-icon
+              class="mt-4"
+            >
+              <template #default>
+                <div class="text-xs text-gray-300">
+                  <p>• <strong>NG步骤</strong>：在顺序检测模式或基于顺序的自定义模式中自动计数</p>
+                  <p>• 只统计<strong>漏做的步骤</strong>（缺少步骤），按缺少数量计入</p>
+                  <p>• 此计数器<strong>不能设置默认数量</strong>，但可以在事件中 +1、-1 等操作</p>
+                </div>
+              </template>
+            </el-alert>
+          </el-card>
         </div>
       </el-tab-pane>
 
@@ -598,7 +657,7 @@
 import { ref, reactive, onMounted } from 'vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
-import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh } from '@element-plus/icons-vue';
+import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { getProjectDetail } from '@/api/project';
 import api from '@/api/index';

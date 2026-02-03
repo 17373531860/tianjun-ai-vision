@@ -14,6 +14,8 @@ from backend.services.detector import get_detection_service
 from backend.models import models
 import os
 import cv2
+import atexit
+import signal
 from sqlalchemy import text
 
 # Create database tables
@@ -109,6 +111,52 @@ def fix_orphan_sessions():
 
 migrate_database()
 fix_orphan_sessions()
+
+# 程序退出时保存数据
+def cleanup_on_exit():
+    """程序退出时的清理和数据保存"""
+    print("[退出钩子] 正在保存数据...")
+    try:
+        video_manager = get_video_manager()
+        
+        # 保存计数器到当前会话
+        if video_manager.current_session_id and video_manager.counters:
+            video_manager._save_counters_snapshot()
+            print(f"[退出钩子] 计数器已保存: {video_manager.counters}")
+        
+        # 结束当前会话（如果有）
+        if video_manager.current_session_id:
+            video_manager.end_session()
+            print("[退出钩子] 会话已结束")
+        
+        # 停止检测
+        if video_manager.is_detecting:
+            video_manager.stop_detection()
+            print("[退出钩子] 检测已停止")
+        
+        # 停止视频流
+        if video_manager.is_running:
+            video_manager.stop()
+            print("[退出钩子] 视频流已停止")
+            
+    except Exception as e:
+        print(f"[退出钩子] 清理时出错: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    print("[退出钩子] 清理完成")
+
+# 注册退出钩子
+atexit.register(cleanup_on_exit)
+
+# 处理 SIGTERM 信号（Docker/系统关闭）
+def signal_handler(signum, frame):
+    print(f"[信号处理] 收到信号 {signum}，正在退出...")
+    cleanup_on_exit()
+    exit(0)
+
+signal.signal(signal.SIGTERM, signal_handler)
+# 注意：SIGINT (Ctrl+C) 由 uvicorn 处理
 
 app = FastAPI(
     title=settings.PROJECT_NAME, 
