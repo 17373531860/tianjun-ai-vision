@@ -16,6 +16,7 @@ import os
 import cv2
 import atexit
 import signal
+import threading
 from sqlalchemy import text
 
 # Create database tables
@@ -112,9 +113,21 @@ def fix_orphan_sessions():
 migrate_database()
 fix_orphan_sessions()
 
+# 清理状态标志（防止重复清理）
+_cleanup_done = False
+_cleanup_lock = threading.Lock()
+
 # 程序退出时保存数据
 def cleanup_on_exit():
     """程序退出时的清理和数据保存"""
+    global _cleanup_done
+    
+    with _cleanup_lock:
+        if _cleanup_done:
+            print("[退出钩子] 清理已完成，跳过")
+            return
+        _cleanup_done = True
+    
     print("[退出钩子] 正在保存数据...")
     try:
         video_manager = get_video_manager()
@@ -153,7 +166,7 @@ atexit.register(cleanup_on_exit)
 def signal_handler(signum, frame):
     print(f"[信号处理] 收到信号 {signum}，正在退出...")
     cleanup_on_exit()
-    exit(0)
+    os._exit(0)
 
 signal.signal(signal.SIGTERM, signal_handler)
 # 注意：SIGINT (Ctrl+C) 由 uvicorn 处理
@@ -211,7 +224,86 @@ def health_check():
     """健康检查端点"""
     return {"status": "healthy"}
 
-# 视频流端点
+# ========== 优雅关闭 API ==========
+
+@app.post("/api/v1/source/shutdown/step/{step}")
+def shutdown_step(step: str):
+    """执行单个关闭步骤"""
+    video_manager = get_video_manager()
+    
+    try:
+        if step == "stop_detection":
+            if video_manager.is_detecting:
+                video_manager.is_detecting = False
+                video_manager._stop_inference_thread()
+            return {"status": "success", "step": step}
+        
+        elif step == "save_counters":
+            if video_manager.current_session_id and video_manager.counters:
+                video_manager._save_counters_snapshot()
+            return {"status": "success", "step": step}
+        
+        elif step == "end_cycle":
+            # 如果有进行中的周期，结束它
+            if video_manager.current_cycle_id:
+                try:
+                    video_manager.end_cycle(is_good=False, reason="程序关闭")
+                except:
+                    pass
+            return {"status": "success", "step": step}
+        
+        elif step == "end_session":
+            if video_manager.current_session_id:
+                video_manager.end_session()
+            return {"status": "success", "step": step}
+        
+        elif step == "stop_recording":
+            video_manager.stop_session_recording()
+            video_manager.stop_cycle_recording()
+            video_manager._stop_recording_thread()
+            return {"status": "success", "step": step}
+        
+        elif step == "release_camera":
+            if video_manager.source_type == 'hikvision':
+                video_manager._release_hik_camera()
+            if video_manager.capture:
+                try:
+                    video_manager.capture.release()
+                except:
+                    pass
+                video_manager.capture = None
+            return {"status": "success", "step": step}
+        
+        elif step == "release_model":
+            video_manager._release_model()
+            return {"status": "success", "step": step}
+        
+        elif step == "cleanup":
+            video_manager.is_running = False
+            video_manager._clear_all_caches()
+            return {"status": "success", "step": step}
+        
+        else:
+            return {"status": "skipped", "step": step, "reason": "Unknown step"}
+    
+    except Exception as e:
+        print(f"[关闭步骤] {step} 出错: {e}")
+        return {"status": "error", "step": step, "error": str(e)}
+
+@app.post("/api/v1/source/shutdown/complete")
+def shutdown_complete():
+    """完整关闭（被 backend-manager 调用）"""
+    def delayed_exit():
+        import time
+        time.sleep(0.5)  # 给响应时间返回
+        cleanup_on_exit()
+        os._exit(0)
+    
+    threading.Thread(target=delayed_exit, daemon=True).start()
+    return {"status": "shutting_down"}
+
+# ========== 视频流端点 ==========
+
 @app.get("/video_feed")
 def video_feed():
     """视频流端点 - 使用输入源管理器"""

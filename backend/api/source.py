@@ -27,18 +27,97 @@ router = APIRouter()
 
 
 # ========== 海康工业相机 SDK 导入 ==========
+import sys
 HIK_SDK_AVAILABLE = False
+MvCamera = None
+MV_CC_DEVICE_INFO_LIST = None
+MV_CC_DEVICE_INFO = None
+MV_USB_DEVICE = None
+MV_GIGE_DEVICE = None
+
+# 海康调试日志开关
+HIK_DEBUG = True
+
+# ========== 卡死调试日志开关 ==========
+FREEZE_DEBUG = True  # 开启卡死调试日志
+
+def debug_log(msg, category="MAIN"):
+    """卡死调试日志 - 用于定位卡死原因"""
+    if FREEZE_DEBUG:
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        print(f"[{timestamp}] [DEBUG/{category}] {msg}", flush=True)
+
+def hik_log(msg, level="INFO"):
+    """海康相机调试日志"""
+    if HIK_DEBUG or level in ("ERROR", "WARN", "SUCCESS"):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        print(f"[{timestamp}] [海康SDK/{level}] {msg}", flush=True)
+
 try:
     # 设置 MvImport 目录路径
     _mv_import_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MvImport")
-    if _mv_import_dir not in os.sys.path:
-        os.sys.path.insert(0, _mv_import_dir)
+    _mv_lib_dir = os.path.join(_mv_import_dir, "lib")
     
-    from backend.api.MvImport import *
+    hik_log(f"__file__ = {__file__}")
+    hik_log(f"MvImport目录 = {_mv_import_dir}")
+    hik_log(f"MvImport目录存在 = {os.path.isdir(_mv_import_dir)}")
+    hik_log(f"lib目录 = {_mv_lib_dir}")
+    hik_log(f"lib目录存在 = {os.path.isdir(_mv_lib_dir)}")
+    
+    if os.path.isdir(_mv_lib_dir):
+        dll_files = [f for f in os.listdir(_mv_lib_dir) if f.endswith('.dll')]
+        hik_log(f"lib目录中的DLL数量 = {len(dll_files)}")
+        if dll_files:
+            hik_log(f"关键DLL: MvCameraControl.dll存在={os.path.exists(os.path.join(_mv_lib_dir, 'MvCameraControl.dll'))}")
+    
+    if _mv_import_dir not in sys.path:
+        sys.path.insert(0, _mv_import_dir)
+        hik_log(f"已添加到sys.path: {_mv_import_dir}")
+    
+    # 直接导入具体的类和常量
+    hik_log("开始导入 MvCameraControl_class...")
+    from backend.api.MvImport.MvCameraControl_class import MvCamera
+    hik_log(f"MvCamera 导入成功: {MvCamera}")
+    
+    hik_log("开始导入 CameraParams_header...")
+    from backend.api.MvImport.CameraParams_header import (
+        MV_CC_DEVICE_INFO_LIST, 
+        MV_CC_DEVICE_INFO,
+        MV_FRAME_OUT_INFO_EX,
+        MVCC_INTVALUE,
+        MV_TRIGGER_MODE_OFF,
+        MV_CC_PIXEL_CONVERT_PARAM
+    )
+    hik_log("CameraParams_header 导入成功")
+    
+    hik_log("开始导入 CameraParams_const...")
+    from backend.api.MvImport.CameraParams_const import (
+        MV_USB_DEVICE, 
+        MV_GIGE_DEVICE,
+        MV_ACCESS_Exclusive
+    )
+    hik_log(f"CameraParams_const 导入成功: MV_USB_DEVICE={MV_USB_DEVICE}, MV_GIGE_DEVICE={MV_GIGE_DEVICE}")
+    
+    hik_log("开始导入 PixelType_header...")
+    from backend.api.MvImport.PixelType_header import (
+        PixelType_Gvsp_Mono8,
+        PixelType_Gvsp_BayerRG8,
+        PixelType_Gvsp_RGB8_Packed,
+        PixelType_Gvsp_BGR8_Packed,
+        PixelType_Gvsp_YUV422_Packed,
+        PixelType_Gvsp_YUV422_YUYV_Packed
+    )
+    hik_log("PixelType_header 导入成功")
+    hik_log(f"  PixelType_Gvsp_Mono8 = {hex(PixelType_Gvsp_Mono8)}")
+    hik_log(f"  PixelType_Gvsp_RGB8_Packed = {hex(PixelType_Gvsp_RGB8_Packed)}")
+    
     HIK_SDK_AVAILABLE = True
-    print("[海康SDK] 加载成功")
+    hik_log("海康SDK 全部加载成功!", "SUCCESS")
+    
 except Exception as e:
-    print(f"[海康SDK] 加载失败（海康相机功能不可用）: {e}")
+    import traceback
+    hik_log(f"加载失败: {e}", "ERROR")
+    hik_log(f"详细错误:\n{traceback.format_exc()}", "ERROR")
 
 
 def _decode_hik_string(ctypes_char_array):
@@ -65,14 +144,19 @@ def get_hikvision_device_list():
     枚举当前可用的海康工业相机（USB + GigE），返回 [{"index": 设备索引, "name": 显示名称}, ...]
     未安装 SDK 或枚举失败时返回空列表
     """
+    print(f"[海康SDK] get_hikvision_device_list 调用, SDK可用={HIK_SDK_AVAILABLE}")
     if not HIK_SDK_AVAILABLE:
+        print("[海康SDK] SDK不可用，返回空列表")
         return []
     try:
         device_list = MV_CC_DEVICE_INFO_LIST()
         # 同时枚举 USB 和 GigE 设备
         tlayer_type = MV_USB_DEVICE | MV_GIGE_DEVICE
+        print(f"[海康SDK] 开始枚举设备, tlayer_type={tlayer_type}")
         ret = MvCamera.MV_CC_EnumDevices(tlayer_type, device_list)
+        print(f"[海康SDK] 枚举结果: ret={ret}, 设备数={device_list.nDeviceNum}")
         if ret != 0 or device_list.nDeviceNum == 0:
+            print(f"[海康SDK] 未检测到设备 (ret={ret})")
             return []
         
         result = []
@@ -367,6 +451,9 @@ class VideoSourceManager:
         self.video_ended = False  # 视频是否已结束
         self.video_total_frames = 0  # 视频总帧数
         self.video_current_frame = 0  # 当前帧位置
+        self._progress_lock = threading.Lock()  # 防止进度设置并发调用
+        self._setting_progress = False  # 正在设置进度的标志
+        self._pending_progress = None  # 待处理的进度请求（记住最新值）
         
         # YOLO 模型
         self.model = None
@@ -984,18 +1071,31 @@ class VideoSourceManager:
         - 主线程：读帧 → 取结果 → 滤波 → 显示（不阻塞）
         - 推理线程：推理 → 帧计数 → 步骤判断 → 事件触发（独立运行）
         """
+        debug_log("========== 捕获线程开始 ==========", "CAPTURE")
         print("[捕获线程] 开始运行")
         frame_start_time = time.time()
         consecutive_errors = 0  # 连续错误计数
         max_consecutive_errors = 10  # 最大连续错误次数
         last_heartbeat_log = time.time()
+        loop_count = 0  # 循环计数
+        last_debug_time = time.time()  # 上次调试日志时间
         
         # 如果正在检测且模型已加载，启动推理线程
         if self.is_detecting and self.model is not None:
+            debug_log("启动推理线程...", "CAPTURE")
             self._start_inference_thread()
+            debug_log("推理线程已启动", "CAPTURE")
         
         while self.is_running and (self.capture is not None or self.source_type == 'hikvision'):
             try:
+                loop_count += 1
+                loop_start = time.time()
+                
+                # 每5秒打印一次详细状态
+                if loop_start - last_debug_time > 5.0:
+                    debug_log(f"循环#{loop_count}, 源={self.source_type}, 检测={self.is_detecting}, 运行={self.is_running}", "CAPTURE")
+                    last_debug_time = loop_start
+                
                 # 更新捕获线程心跳
                 self._last_capture_heartbeat = time.time()
                 
@@ -1007,8 +1107,15 @@ class VideoSourceManager:
                 
                 if self.source_type == 'hikvision':
                     # 海康工业相机
+                    t_hik_start = time.time()
                     frame = self._get_hikvision_frame()
+                    t_hik_end = time.time()
                     ret = frame is not None
+                    
+                    # 如果帧获取耗时超过200ms，记录警告
+                    hik_time = (t_hik_end - t_hik_start) * 1000
+                    if hik_time > 200:
+                        debug_log(f"!!! 海康帧获取慢: {hik_time:.1f}ms, ret={ret}", "CAPTURE")
                 else:
                     # 普通摄像头或视频文件
                     # 对于视频输入源，如果倍速大于1，通过跳帧实现
@@ -1021,8 +1128,14 @@ class VideoSourceManager:
                                 break
                     
                     try:
+                        t_read_start = time.time()
                         ret, frame = self.capture.read()
+                        t_read_end = time.time()
+                        read_time = (t_read_end - t_read_start) * 1000
+                        if read_time > 200:
+                            debug_log(f"!!! 帧读取慢: {read_time:.1f}ms", "CAPTURE")
                     except Exception as e:
+                        debug_log(f"帧读取异常: {e}", "CAPTURE")
                         ret = False
                 
                 if ret and frame is not None:
@@ -1035,23 +1148,43 @@ class VideoSourceManager:
                     # ========== 双线程架构：异步推理 ==========
                     if self.is_detecting and self.model is not None:
                         # 更新供推理线程使用的帧（非阻塞）
+                        t_lock1_start = time.time()
                         with self._inference_frame_lock:
                             self._latest_frame_for_inference = original_frame.copy()
+                        t_lock1_end = time.time()
+                        if (t_lock1_end - t_lock1_start) > 0.1:
+                            debug_log(f"!!! inference_frame_lock 耗时: {(t_lock1_end-t_lock1_start)*1000:.1f}ms", "CAPTURE")
                         
                         # 获取已确认的检测结果并应用滤波（非阻塞）
+                        t_lock2_start = time.time()
                         with self._confirmed_detections_lock:
                             confirmed_detections = self._confirmed_detections.copy()
+                        t_lock2_end = time.time()
+                        if (t_lock2_end - t_lock2_start) > 0.1:
+                            debug_log(f"!!! confirmed_detections_lock 耗时: {(t_lock2_end-t_lock2_start)*1000:.1f}ms", "CAPTURE")
                         
                         # 应用卡尔曼滤波平滑
+                        t_kalman_start = time.time()
                         smoothed_detections = self._apply_kalman_filter(confirmed_detections)
+                        t_kalman_end = time.time()
+                        if (t_kalman_end - t_kalman_start) > 0.1:
+                            debug_log(f"!!! 卡尔曼滤波耗时: {(t_kalman_end-t_kalman_start)*1000:.1f}ms", "CAPTURE")
                         
                         # 更新当前检测结果（供前端获取）
+                        t_lock3_start = time.time()
                         with self.detection_lock:
                             self.current_detections = smoothed_detections
+                        t_lock3_end = time.time()
+                        if (t_lock3_end - t_lock3_start) > 0.1:
+                            debug_log(f"!!! detection_lock 耗时: {(t_lock3_end-t_lock3_start)*1000:.1f}ms", "CAPTURE")
                     
                     # 发送原始帧（不带检测框）
+                    t_lock4_start = time.time()
                     with self.frame_lock:
                         self.current_frame = original_frame
+                    t_lock4_end = time.time()
+                    if (t_lock4_end - t_lock4_start) > 0.1:
+                        debug_log(f"!!! frame_lock 耗时: {(t_lock4_end-t_lock4_start)*1000:.1f}ms", "CAPTURE")
                     
                     # 写入视频录制队列（使用 FFmpeg 进程，不会卡死）
                     if self.is_detecting and self.recording_enabled:
@@ -1150,13 +1283,19 @@ class VideoSourceManager:
         self._stop_recording_thread()
     
     def _get_first_sequence_step_label(self):
-        """获取顺序模式下配置的第一个步骤标签"""
+        """获取顺序模式下配置的第一个步骤标签（自定义模式使用custom_sequence_order）"""
         if not self.project_config:
             return None
         
+        logic_mode = self.project_config.get('logic_mode', 'sequential')
         pipeline_config = self.project_config.get('pipeline_config', {})
-        sequence_order = pipeline_config.get('sequence_order', [])
         steps_config = self.project_config.get('steps_config', [])
+        
+        # 根据模式选择配置
+        if logic_mode == 'custom':
+            sequence_order = pipeline_config.get('custom_sequence_order', [])
+        else:
+            sequence_order = pipeline_config.get('sequence_order', [])
         
         if not sequence_order or not steps_config:
             return None
@@ -1313,36 +1452,46 @@ class VideoSourceManager:
                 self.last_added_step = None
                 return
             
-            expected_labels = [id_to_label.get(item.get('step_id')) for item in sequence_order if item.get('step_id') in id_to_label]
+            # 构建期望的标签序列（保留重复标签）
+            expected_labels = []
+            for item in sequence_order:
+                step_id = item.get('step_id')
+                if step_id in id_to_label:
+                    expected_labels.append(id_to_label[step_id])
             
             if not expected_labels:
                 self.current_cycle_steps = []
                 self.last_added_step = None
                 return
             
-            # 检查序列长度是否超过预期（有重复步骤）
-            if len(self.current_cycle_steps) > len(expected_labels):
-                print(f"  → 序列长度超过预期，有重复步骤 → NG")
-                self._trigger_event(2, f'序列包含重复步骤: {self.current_cycle_steps}')
-            elif not all(label in self.current_cycle_steps for label in expected_labels):
-                missing = [l for l in expected_labels if l not in self.current_cycle_steps]
-                print(f"  → 周期不完整，缺少: {missing} → NG")
-                self._trigger_event(2, f'周期不完整，缺少: {missing}')
+            print(f"  期望序列({len(expected_labels)}步): {expected_labels}")
+            print(f"  实际序列({len(self.current_cycle_steps)}步): {self.current_cycle_steps}")
+            
+            # 直接比较完整序列（支持重复标签）
+            if self.current_cycle_steps == expected_labels:
+                # 完全匹配
+                print(f"  → 序列完全匹配 → OK")
+                self._trigger_event(1, '顺序正确完成')
+            elif len(self.current_cycle_steps) < len(expected_labels):
+                # 序列不完整
+                missing_count = len(expected_labels) - len(self.current_cycle_steps)
+                print(f"  → 周期不完整，还差{missing_count}步 → NG")
+                self._trigger_event(2, f'周期不完整，完成{len(self.current_cycle_steps)}/{len(expected_labels)}步')
+            elif len(self.current_cycle_steps) > len(expected_labels):
+                # 序列超长
+                print(f"  → 序列超长 → NG")
+                self._trigger_event(2, f'序列超长: {len(self.current_cycle_steps)}步 > 期望{len(expected_labels)}步')
             else:
-                # 检查顺序
-                cycle_order_correct = True
-                last_idx = -1
-                for label in expected_labels:
-                    if label in self.current_cycle_steps:
-                        idx = self.current_cycle_steps.index(label)
-                        if idx < last_idx:
-                            cycle_order_correct = False
-                            break
-                        last_idx = idx
-                
-                if cycle_order_correct:
-                    print(f"  → 顺序正确 → OK")
-                    self._trigger_event(1, '顺序正确完成')
+                # 长度相同但内容不同（顺序错误）
+                # 找出第一个不匹配的位置
+                mismatch_idx = -1
+                for i, (actual, expected) in enumerate(zip(self.current_cycle_steps, expected_labels)):
+                    if actual != expected:
+                        mismatch_idx = i
+                        break
+                if mismatch_idx >= 0:
+                    print(f"  → 第{mismatch_idx+1}步顺序错误: 期望[{expected_labels[mismatch_idx]}], 实际[{self.current_cycle_steps[mismatch_idx]}] → NG")
+                    self._trigger_event(2, f'第{mismatch_idx+1}步顺序错误')
                 else:
                     print(f"  → 顺序错误 → NG")
                     self._trigger_event(2, '顺序错误')
@@ -2053,6 +2202,7 @@ class VideoSourceManager:
     def _detect_only(self, frame: np.ndarray) -> list:
         """只执行检测，返回检测结果（不绘制检测框）- 带超时保护"""
         detections = []
+        t_func_start = time.time()
         
         try:
             # 获取推理设备
@@ -2062,7 +2212,8 @@ class VideoSourceManager:
             from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
             
             def run_inference():
-                return self.model.predict(
+                t_predict_start = time.time()
+                result = self.model.predict(
                     frame, 
                     conf=self.conf_threshold, 
                     iou=self.iou_threshold, 
@@ -2070,26 +2221,43 @@ class VideoSourceManager:
                     verbose=False, 
                     device=device
                 )
+                t_predict_end = time.time()
+                predict_time = (t_predict_end - t_predict_start) * 1000
+                if predict_time > 150:
+                    debug_log(f"model.predict内部耗时: {predict_time:.1f}ms", "DETECT")
+                return result
             
             # 使用线程池执行带超时的推理
+            t_pool_start = time.time()
             with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(run_inference)
                 try:
+                    t_wait_start = time.time()
                     results = future.result(timeout=self._inference_timeout)
+                    t_wait_end = time.time()
+                    wait_time = (t_wait_end - t_wait_start) * 1000
+                    if wait_time > 200:
+                        debug_log(f"future.result等待耗时: {wait_time:.1f}ms", "DETECT")
                     # 推理成功，重置超时计数
                     self._inference_timeout_count = 0
                     self._last_successful_inference = time.time()
                 except FuturesTimeoutError:
                     self._inference_timeout_count += 1
+                    debug_log(f"!!! 推理超时 ({self._inference_timeout}秒)，连续超时次数: {self._inference_timeout_count}", "DETECT")
                     print(f"[警告] 推理超时 ({self._inference_timeout}秒)，连续超时次数: {self._inference_timeout_count}")
                     
                     # 如果连续超时太多次，尝试重置 CUDA
                     if self._inference_timeout_count >= self._max_consecutive_timeouts:
+                        debug_log(f"!!! 连续 {self._max_consecutive_timeouts} 次推理超时，尝试重置 GPU...", "DETECT")
                         print(f"[错误] 连续 {self._max_consecutive_timeouts} 次推理超时，尝试重置 GPU...")
                         self._emergency_gpu_reset()
                         self._inference_timeout_count = 0
                     
                     return []  # 超时返回空结果
+            t_pool_end = time.time()
+            pool_time = (t_pool_end - t_pool_start) * 1000
+            if pool_time > 300:
+                debug_log(f"ThreadPoolExecutor总耗时: {pool_time:.1f}ms", "DETECT")
             
             h, w = frame.shape[:2]
             
@@ -2373,6 +2541,7 @@ class VideoSourceManager:
         独立推理线程 - 持续对最新帧进行推理
         包含：推理 → 帧计数验证 → 步骤判断 → 事件触发
         """
+        debug_log("========== 推理线程开始 ==========", "INFERENCE")
         print("[推理线程] 开始运行")
         last_frame_id = None
         frame_count = 0  # 帧计数器，用于周期性缓存清理
@@ -2380,6 +2549,7 @@ class VideoSourceManager:
         cleanup_interval = 60.0  # 每60秒执行一次缓存清理
         last_log_time = time.time()  # 上次日志时间
         log_interval = 10.0  # 每10秒打印一次状态
+        last_debug_time = time.time()  # 上次调试日志时间
         
         while self._inference_running and self.is_detecting:
             try:
@@ -2387,6 +2557,11 @@ class VideoSourceManager:
                 
                 # 更新心跳时间
                 self._last_inference_heartbeat = time.time()
+                
+                # 每5秒打印一次详细调试状态
+                if loop_start - last_debug_time > 5.0:
+                    debug_log(f"帧数={frame_count}, 延迟={self.latency}ms, running={self._inference_running}, detecting={self.is_detecting}", "INFERENCE")
+                    last_debug_time = loop_start
                 
                 # 定期打印状态（诊断用）
                 if loop_start - last_log_time > log_interval:
@@ -2396,10 +2571,13 @@ class VideoSourceManager:
                 # 周期性缓存清理（每60秒执行一次）
                 current_time = time.time()
                 if current_time - last_cleanup_time > cleanup_interval:
+                    debug_log("开始周期性缓存清理...", "INFERENCE")
                     self._periodic_cache_cleanup()
                     # 定期保存计数器到数据库（防止闪退丢失数据）
+                    debug_log("保存计数器快照...", "INFERENCE")
                     self._save_counters_snapshot()
                     last_cleanup_time = current_time
+                    debug_log("缓存清理完成", "INFERENCE")
                 
                 # 获取最新帧
                 t1 = time.time()
@@ -2410,7 +2588,7 @@ class VideoSourceManager:
                 
                 # 如果获取帧耗时超过100ms，记录警告
                 if (t2 - t1) > 0.1:
-                    print(f"[警告] 获取帧锁耗时: {(t2-t1)*1000:.1f}ms")
+                    debug_log(f"!!! 获取帧锁耗时: {(t2-t1)*1000:.1f}ms", "INFERENCE")
                 
                 # 如果没有新帧，短暂等待
                 if frame is None or frame_id == last_frame_id:
@@ -2427,9 +2605,9 @@ class VideoSourceManager:
                 t4 = time.time()
                 detect_time = (t4 - t3) * 1000
                 
-                # 如果推理耗时超过500ms，记录警告
-                if detect_time > 500:
-                    print(f"[警告] 推理耗时过长: {detect_time:.1f}ms")
+                # 如果推理耗时超过200ms，记录警告（降低阈值以便更早发现问题）
+                if detect_time > 200:
+                    debug_log(f"!!! 推理耗时: {detect_time:.1f}ms, 检测数={len(detections) if detections else 0}", "INFERENCE")
                 
                 # 更新步骤统计 - 关键诊断点
                 t5 = time.time()
@@ -2439,7 +2617,7 @@ class VideoSourceManager:
                 
                 # 如果步骤统计耗时超过100ms，记录警告
                 if update_time > 100:
-                    print(f"[警告] 步骤统计耗时过长: {update_time:.1f}ms")
+                    debug_log(f"!!! 步骤统计耗时: {update_time:.1f}ms", "INFERENCE")
                 
                 # 计算延迟
                 self.latency = int((time.time() - t3) * 1000)
@@ -2452,7 +2630,7 @@ class VideoSourceManager:
                 
                 # 如果获取检测锁耗时超过100ms，记录警告
                 if (t8 - t7) > 0.1:
-                    print(f"[警告] 检测结果锁耗时: {(t8-t7)*1000:.1f}ms")
+                    debug_log(f"!!! 检测结果锁耗时: {(t8-t7)*1000:.1f}ms", "INFERENCE")
                 
                 # 更新已确认的检测结果（只包含通过帧计数验证的）
                 confirmed = self._get_confirmed_detections(detections)
@@ -2460,11 +2638,13 @@ class VideoSourceManager:
                     self._confirmed_detections = confirmed
                     
             except Exception as e:
+                debug_log(f"!!! 推理线程错误: {e}", "INFERENCE")
                 print(f"[推理线程] 错误: {e}")
                 import traceback
                 traceback.print_exc()
                 time.sleep(0.01)
         
+        debug_log("========== 推理线程结束 ==========", "INFERENCE")
         print("[推理线程] 结束运行")
     
     def _get_confirmed_detections(self, detections):
@@ -2740,8 +2920,11 @@ class VideoSourceManager:
         return True
     
     def start_hikvision_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 30):
-        """启动海康工业相机"""
+        """启动海康工业相机（带增强调试）"""
+        hik_log(f"start_hikvision_camera 调用: device_index={device_index}, {width}x{height}@{fps}fps")
+        
         if not HIK_SDK_AVAILABLE:
+            hik_log("SDK 不可用", "ERROR")
             raise Exception("海康 SDK 未加载，无法使用海康相机")
         
         self.stop()
@@ -2751,38 +2934,51 @@ class VideoSourceManager:
         
         try:
             # 创建相机实例
+            hik_log("创建 MvCamera 实例...")
             self.hik_camera = MvCamera()
             
             # 枚举设备
+            hik_log("枚举设备...")
             device_list = MV_CC_DEVICE_INFO_LIST()
             tlayer_type = MV_USB_DEVICE | MV_GIGE_DEVICE
             ret = MvCamera.MV_CC_EnumDevices(tlayer_type, device_list)
+            hik_log(f"枚举结果: ret={hex(ret)}, 设备数={device_list.nDeviceNum}")
+            
             if ret != 0 or device_list.nDeviceNum == 0:
-                raise Exception("未发现海康相机设备")
+                raise Exception(f"未发现海康相机设备 (ret={hex(ret)})")
             
             if device_index < 0 or device_index >= device_list.nDeviceNum:
                 raise Exception(f"无效的设备索引 {device_index}，当前共 {device_list.nDeviceNum} 个设备")
             
             # 获取选定设备信息
             st_device_info = cast(device_list.pDeviceInfo[device_index], POINTER(MV_CC_DEVICE_INFO)).contents
+            hik_log(f"选择设备 {device_index}, 类型={st_device_info.nTLayerType}")
             
             # 创建句柄
+            hik_log("创建句柄...")
             ret = self.hik_camera.MV_CC_CreateHandle(st_device_info)
             if ret != 0:
                 raise Exception(f"创建相机句柄失败，错误码: {hex(ret)}")
+            hik_log("句柄创建成功")
             
             # 打开设备（独占模式）
+            hik_log("打开设备...")
             ret = self.hik_camera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
             if ret != 0:
                 self.hik_camera.MV_CC_DestroyHandle()
                 raise Exception(f"打开相机失败，错误码: {hex(ret)}")
+            hik_log("设备打开成功")
             
             # 设置为连续采集模式
+            hik_log("设置触发模式...")
             ret = self.hik_camera.MV_CC_SetEnumValue("TriggerMode", MV_TRIGGER_MODE_OFF)
             if ret != 0:
-                print(f"[海康相机] 设置触发模式失败: {hex(ret)}，继续运行")
+                hik_log(f"设置触发模式失败: {hex(ret)}，继续运行", "WARN")
+            else:
+                hik_log("触发模式设置成功 (连续采集)")
             
             # 获取 PayloadSize（帧数据大小）
+            hik_log("获取 PayloadSize...")
             st_param = MVCC_INTVALUE()
             memset(byref(st_param), 0, sizeof(MVCC_INTVALUE))
             ret = self.hik_camera.MV_CC_GetIntValue("PayloadSize", st_param)
@@ -2790,17 +2986,28 @@ class VideoSourceManager:
                 self._release_hik_camera()
                 raise Exception(f"获取 PayloadSize 失败，错误码: {hex(ret)}")
             self.hik_payload_size = st_param.nCurValue
+            hik_log(f"PayloadSize = {self.hik_payload_size} bytes")
             
             # 开始取流
+            hik_log("开始取流...")
             ret = self.hik_camera.MV_CC_StartGrabbing()
             if ret != 0:
                 self._release_hik_camera()
                 raise Exception(f"开始取流失败，错误码: {hex(ret)}")
+            hik_log("取流开始成功")
             
             # 预分配缓冲区
+            hik_log("分配缓冲区...")
             self.hik_data_buf = (c_ubyte * self.hik_payload_size)()
             self.hik_frame_info = MV_FRAME_OUT_INFO_EX()
             memset(byref(self.hik_frame_info), 0, sizeof(MV_FRAME_OUT_INFO_EX))
+            hik_log("缓冲区分配成功")
+            
+            # 重置帧计数相关标志
+            if hasattr(self, '_hik_first_frame_logged'):
+                delattr(self, '_hik_first_frame_logged')
+            if hasattr(self, '_hik_frame_error_count'):
+                self._hik_frame_error_count = 0
             
             # 设置属性
             self.source_type = 'hikvision'
@@ -2810,15 +3017,19 @@ class VideoSourceManager:
             self.fps = fps
             self.is_running = True
             
-            print(f"[海康相机] 连接成功，设备索引: {device_index}")
+            hik_log(f"海康相机初始化完成: 设备{device_index}", "SUCCESS")
             
             # 启动捕获线程
             self._thread = threading.Thread(target=self._capture_loop, daemon=True)
             self._thread.start()
+            hik_log("捕获线程已启动")
             
             return True
             
         except Exception as e:
+            hik_log(f"启动失败: {e}", "ERROR")
+            import traceback
+            hik_log(traceback.format_exc(), "ERROR")
             self._release_hik_camera()
             raise Exception(f"启动海康相机失败: {str(e)}")
     
@@ -2843,70 +3054,93 @@ class VideoSourceManager:
             print("[海康相机] 已释放")
     
     def _get_hikvision_frame(self):
-        """从海康相机获取一帧图像"""
+        """从海康相机获取一帧图像 - 带调试日志"""
         if not self.hik_camera or not HIK_SDK_AVAILABLE:
             return None
         
         try:
-            ret = self.hik_camera.MV_CC_GetOneFrameTimeout(
-                self.hik_data_buf, 
-                self.hik_payload_size, 
-                self.hik_frame_info, 
-                1000  # 超时时间 1000ms
-            )
+            # 与参考代码完全一致的帧获取方式
+            stFrameInfo = MV_FRAME_OUT_INFO_EX()
+            memset(byref(stFrameInfo), 0, sizeof(stFrameInfo))
+            pData = (c_ubyte * (2048 * 2048 * 3))()
+            
+            t_grab_start = time.time()
+            ret = self.hik_camera.MV_CC_GetOneFrameTimeout(byref(pData), sizeof(pData), stFrameInfo, 1000)
+            t_grab_end = time.time()
+            grab_time = (t_grab_end - t_grab_start) * 1000
             
             if ret != 0:
+                if grab_time > 800:  # 接近超时
+                    debug_log(f"!!! 帧获取超时: ret={hex(ret)}, 耗时={grab_time:.1f}ms", "HIK")
                 return None
             
-            # 获取图像数据
-            p_data = (c_ubyte * self.hik_frame_info.nFrameLen).from_address(addressof(self.hik_data_buf))
-            image_data = np.frombuffer(p_data, dtype=np.uint8)
+            if grab_time > 100:
+                debug_log(f"帧获取耗时: {grab_time:.1f}ms", "HIK")
             
-            # 根据像素格式转换
-            pixel_type = self.hik_frame_info.enPixelType
-            frame_height = self.hik_frame_info.nHeight
-            frame_width = self.hik_frame_info.nWidth
+            frame_width = stFrameInfo.nWidth
+            frame_height = stFrameInfo.nHeight
+            pixel_type = stFrameInfo.enPixelType
             
-            frame = None
+            # 首帧详细信息
+            if not hasattr(self, '_hik_first_frame_logged'):
+                hik_log(f"首帧: {frame_width}x{frame_height}, 像素={hex(pixel_type)}, 长度={stFrameInfo.nFrameLen}", "SUCCESS")
+                self._hik_first_frame_logged = True
             
-            if pixel_type == PixelType_Gvsp_Mono8:
-                # 灰度图像
-                temp_img = image_data.reshape((frame_height, frame_width))
-                frame = cv2.cvtColor(temp_img, cv2.COLOR_GRAY2BGR)
-            elif pixel_type == PixelType_Gvsp_BayerRG8:
-                # Bayer RG8 格式
-                temp_img = image_data.reshape((frame_height, frame_width))
-                frame = cv2.cvtColor(temp_img, cv2.COLOR_BayerRG2RGB)
-            elif pixel_type == PixelType_Gvsp_RGB8_Packed:
-                # RGB8 格式
-                frame = image_data.reshape((frame_height, frame_width, 3))
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            elif pixel_type == PixelType_Gvsp_BGR8_Packed:
-                # BGR8 格式（直接可用）
-                frame = image_data.reshape((frame_height, frame_width, 3))
-            elif pixel_type == PixelType_Gvsp_YUV422_Packed or pixel_type == PixelType_Gvsp_YUV422_YUYV_Packed:
-                # YUV422 格式
-                temp_img = image_data.reshape((frame_height, frame_width, 2))
-                frame = cv2.cvtColor(temp_img, cv2.COLOR_YUV2BGR_YUYV)
+            # 与参考代码 LG.PY 第941-961行完全一致的转换逻辑
+            t_convert_start = time.time()
+            if pixel_type == PixelType_Gvsp_RGB8_Packed:
+                frame = np.frombuffer(pData, dtype=np.uint8, count=frame_width * frame_height * 3)
+                frame = frame.reshape((frame_height, frame_width, 3))
             else:
-                # 尝试默认处理
-                try:
-                    if len(image_data) == frame_height * frame_width * 3:
-                        frame = image_data.reshape((frame_height, frame_width, 3))
-                    elif len(image_data) == frame_height * frame_width:
-                        temp_img = image_data.reshape((frame_height, frame_width))
-                        frame = cv2.cvtColor(temp_img, cv2.COLOR_GRAY2BGR)
-                    else:
-                        print(f"[海康相机] 未知像素格式: {hex(pixel_type)}")
-                        return None
-                except Exception as e:
-                    print(f"[海康相机] 图像格式转换失败: {e}")
+                # SDK 像素转换
+                stConvertParam = MV_CC_PIXEL_CONVERT_PARAM()
+                memset(byref(stConvertParam), 0, sizeof(stConvertParam))
+                stConvertParam.nWidth = stFrameInfo.nWidth
+                stConvertParam.nHeight = stFrameInfo.nHeight
+                stConvertParam.pSrcData = cast(pData, POINTER(c_ubyte))
+                stConvertParam.nSrcDataLen = stFrameInfo.nFrameLen
+                stConvertParam.enSrcPixelType = stFrameInfo.enPixelType
+                stConvertParam.enDstPixelType = PixelType_Gvsp_RGB8_Packed
+                nConvertSize = stFrameInfo.nWidth * stFrameInfo.nHeight * 3
+                pConvertData = (c_ubyte * nConvertSize)()
+                stConvertParam.pDstBuffer = cast(pConvertData, POINTER(c_ubyte))
+                stConvertParam.nDstBufferSize = nConvertSize
+                
+                t_sdk_convert_start = time.time()
+                ret = self.hik_camera.MV_CC_ConvertPixelType(stConvertParam)
+                t_sdk_convert_end = time.time()
+                sdk_convert_time = (t_sdk_convert_end - t_sdk_convert_start) * 1000
+                
+                if ret != 0:
+                    if not hasattr(self, '_convert_err_logged'):
+                        hik_log(f"SDK转换失败: {hex(ret)}", "ERROR")
+                        self._convert_err_logged = True
                     return None
+                
+                if sdk_convert_time > 50:
+                    debug_log(f"SDK像素转换耗时: {sdk_convert_time:.1f}ms", "HIK")
+                
+                frame = np.frombuffer(pConvertData, dtype=np.uint8, count=nConvertSize)
+                frame = frame.reshape((frame_height, frame_width, 3))
+                
+                # 首次转换成功时记录详细信息
+                if not hasattr(self, '_hik_convert_logged'):
+                    hik_log(f"SDK转换成功", "SUCCESS")
+                    self._hik_convert_logged = True
             
+            t_convert_end = time.time()
+            total_convert_time = (t_convert_end - t_convert_start) * 1000
+            if total_convert_time > 100:
+                debug_log(f"!!! 整体转换耗时: {total_convert_time:.1f}ms", "HIK")
+            
+            # 与参考代码 LG.PY 第1576-1578行一致: RGB -> BGR
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             return frame
             
         except Exception as e:
-            print(f"[海康相机] 获取帧失败: {e}")
+            if not hasattr(self, '_hik_err_logged'):
+                hik_log(f"获取帧异常: {e}", "ERROR")
+                self._hik_err_logged = True
             return None
     
     def start_video(self, video_path: str, speed: float = None):
@@ -2952,42 +3186,70 @@ class VideoSourceManager:
         print(f"[Video] 倍速已设置为: {speed}x")
     
     def set_video_progress(self, progress: float):
-        """设置视频播放进度 (0-1)"""
+        """设置视频播放进度 (0-1) - 修复版：记住最新请求"""
         if self.source_type != 'video':
             raise Exception("当前不是视频输入源")
         
         if progress < 0 or progress > 1:
             raise ValueError("进度必须在 0 到 1 之间")
         
-        # 使用锁保护 capture 对象的访问
-        with self.capture_lock:
-            # 先停止播放线程
-            was_running = self.is_running
-            if self.is_running:
-                self.is_running = False
-                # 等待线程结束（最多等待1秒）
-                if self._thread and self._thread.is_alive():
-                    self._thread.join(timeout=1.0)
+        # 使用锁防止并发调用（拖动进度条可能触发多次请求）
+        if not self._progress_lock.acquire(blocking=False):
+            # 记住最新的进度请求，等当前处理完后执行
+            self._pending_progress = progress
+            debug_log(f"记住待处理进度: {progress*100:.1f}%", "PROGRESS")
+            return
+        
+        try:
+            self._setting_progress = True
+            self._pending_progress = None  # 清除待处理请求
+            self._do_set_video_progress(progress)
             
-            # 如果 capture 不存在或已关闭，重新打开视频
+            # 检查是否有待处理的进度请求
+            while self._pending_progress is not None:
+                pending = self._pending_progress
+                self._pending_progress = None
+                debug_log(f"处理待处理进度: {pending*100:.1f}%", "PROGRESS")
+                self._do_set_video_progress(pending)
+        
+        finally:
+            self._setting_progress = False
+            self._progress_lock.release()
+    
+    def _do_set_video_progress(self, progress: float):
+        """实际执行进度设置（简化版：减少等待时间）"""
+        # 1. 停止线程
+        was_detecting = self.is_detecting
+        self.is_running = False
+        self._inference_running = False
+        
+        # 短暂等待线程响应停止信号
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=0.5)
+        if self._inference_thread and self._inference_thread.is_alive():
+            self._inference_thread.join(timeout=0.3)
+        
+        # 2. 设置视频位置
+        with self.capture_lock:
             if self.capture is None or not self.capture.isOpened():
                 if self.video_path and os.path.exists(self.video_path):
                     self.capture = cv2.VideoCapture(self.video_path)
-                    if not self.capture.isOpened():
-                        raise Exception("无法重新打开视频文件")
-                else:
-                    raise Exception("视频文件不存在")
             
-            target_frame = int(self.video_total_frames * progress)
-            self.capture.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-            self.video_current_frame = target_frame
-            self.video_ended = False
+            if self.capture and self.capture.isOpened():
+                target_frame = int(self.video_total_frames * progress)
+                self.capture.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                self.video_current_frame = target_frame
+                self.video_ended = False
         
-        # 重新启动播放线程（在锁外启动，避免死锁）
+        # 3. 重新启动线程
         self.is_running = True
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
-        print(f"[Video] 进度已设置为: {progress*100:.1f}% (帧 {target_frame}/{self.video_total_frames})")
+        
+        if was_detecting and self.model is not None:
+            self._start_inference_thread()
+        
+        print(f"[Video] 进度: {progress*100:.1f}%")
     
     def get_video_info(self):
         """获取视频播放信息"""
@@ -3735,11 +3997,13 @@ def list_cameras(refresh: bool = False):
         refresh: 是否强制刷新缓存，默认使用缓存
     """
     import platform
+    print(f"[API] /cameras 被调用, refresh={refresh}, platform={platform.system()}")
     current_time = time.time()
     
     # 检查缓存是否有效
     if not refresh and _cameras_cache["cameras"] and \
        (current_time - _cameras_cache["last_update"]) < _cameras_cache["cache_duration"]:
+        print(f"[API] 使用缓存, cameras={_cameras_cache['cameras']}")
         return {"cameras": _cameras_cache["cameras"], "cached": True}
     
     # 根据操作系统选择检测方法
@@ -3747,6 +4011,8 @@ def list_cameras(refresh: bool = False):
         cameras = _detect_cameras_linux()
     else:
         cameras = _detect_cameras_windows()
+    
+    print(f"[API] 检测到USB摄像头: {cameras}")
     
     # 如果没有检测到任何摄像头，返回默认项
     if not cameras:
@@ -3919,23 +4185,37 @@ class HikvisionStartRequest(BaseModel):
 @router.get("/hikvision/cameras")
 def list_hikvision_cameras():
     """列出可用的海康工业相机"""
+    hik_log(f"API /hikvision/cameras 被调用, HIK_SDK_AVAILABLE={HIK_SDK_AVAILABLE}")
     if not HIK_SDK_AVAILABLE:
+        hik_log("SDK不可用，返回空列表", "WARN")
         return {
             "cameras": [],
             "available": False,
             "message": "海康 SDK 未加载，无法使用海康相机功能"
         }
     
-    cameras = get_hikvision_device_list()
-    return {
-        "cameras": cameras,
-        "available": True,
-        "count": len(cameras)
-    }
+    try:
+        cameras = get_hikvision_device_list()
+        hik_log(f"检测到海康相机: {cameras}", "SUCCESS" if cameras else "WARN")
+        return {
+            "cameras": cameras,
+            "available": True,
+            "count": len(cameras)
+        }
+    except Exception as e:
+        hik_log(f"枚举海康相机失败: {e}", "ERROR")
+        import traceback
+        hik_log(traceback.format_exc(), "ERROR")
+        return {
+            "cameras": [],
+            "available": False,
+            "message": str(e)
+        }
 
 @router.post("/hikvision/start")
 def start_hikvision_camera(req: HikvisionStartRequest):
     """启动海康工业相机"""
+    hik_log(f"API /hikvision/start 收到请求: device_index={req.device_index}, {req.width}x{req.height}@{req.fps}fps")
     try:
         video_manager.start_hikvision_camera(
             device_index=req.device_index,
@@ -3943,8 +4223,10 @@ def start_hikvision_camera(req: HikvisionStartRequest):
             height=req.height,
             fps=req.fps
         )
+        hik_log("API /hikvision/start 成功", "SUCCESS")
         return {"status": "success", "message": "海康相机已启动"}
     except Exception as e:
+        hik_log(f"API /hikvision/start 失败: {e}", "ERROR")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/hikvision/stop")

@@ -252,7 +252,7 @@ class BackendManager extends EventEmitter {
   }
   
   /**
-   * 停止后端服务
+   * 停止后端服务 - 优雅关闭
    */
   async stop() {
     this.stopHealthCheck();
@@ -261,13 +261,39 @@ class BackendManager extends EventEmitter {
       return;
     }
     
-    console.log('[BackendManager] Stopping backend...');
+    console.log('[BackendManager] Stopping backend gracefully...');
+    
+    // 首先尝试通过 API 请求后端自行关闭
+    try {
+      await this.requestGracefulShutdown();
+      console.log('[BackendManager] Graceful shutdown request sent');
+      
+      // 等待后端自行关闭（最多等待 3 秒）
+      const exitedGracefully = await this.waitForExit(3000);
+      if (exitedGracefully) {
+        console.log('[BackendManager] Backend exited gracefully');
+        return;
+      }
+    } catch (e) {
+      console.log('[BackendManager] Graceful shutdown request failed:', e.message);
+    }
+    
+    // 如果优雅关闭失败，使用进程信号
+    console.log('[BackendManager] Falling back to process termination...');
     
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         if (this.process) {
           console.log('[BackendManager] Force killing process...');
-          this.process.kill('SIGKILL');
+          try {
+            if (process.platform === 'win32') {
+              execSync(`taskkill /pid ${this.process.pid} /f /t`, { stdio: 'ignore' });
+            } else {
+              this.process.kill('SIGKILL');
+            }
+          } catch (e) {
+            // 忽略错误
+          }
         }
         resolve();
       }, 5000);
@@ -279,20 +305,70 @@ class BackendManager extends EventEmitter {
       
       // 发送终止信号
       if (process.platform === 'win32') {
-        // Windows: 使用 taskkill 终止进程树
+        // Windows: 先尝试不带 /f 的 taskkill
         try {
-          execSync(`taskkill /pid ${this.process.pid} /f /t`, { stdio: 'ignore' });
+          execSync(`taskkill /pid ${this.process.pid} /t`, { stdio: 'ignore' });
         } catch (e) {
-          // 忽略错误（进程可能已经退出）
+          // 如果失败（进程可能已经在关闭中），忽略
         }
       } else {
         // Unix: 发送 SIGTERM 到进程组
         try {
           process.kill(-this.process.pid, 'SIGTERM');
         } catch (e) {
-          this.process.kill('SIGTERM');
+          try {
+            this.process.kill('SIGTERM');
+          } catch (e2) {
+            // 忽略
+          }
         }
       }
+    });
+  }
+  
+  /**
+   * 请求后端优雅关闭
+   */
+  requestGracefulShutdown() {
+    return new Promise((resolve, reject) => {
+      const req = http.request({
+        hostname: '127.0.0.1',
+        port: this.options.port,
+        path: '/api/v1/source/shutdown/complete',
+        method: 'POST',
+        timeout: 3000,
+      }, (res) => {
+        resolve(res.statusCode === 200);
+      });
+      
+      req.on('error', (e) => reject(e));
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
+      
+      req.end();
+    });
+  }
+  
+  /**
+   * 等待进程退出
+   */
+  waitForExit(timeout) {
+    return new Promise((resolve) => {
+      if (!this.process) {
+        resolve(true);
+        return;
+      }
+      
+      const timer = setTimeout(() => {
+        resolve(false);
+      }, timeout);
+      
+      this.process.once('exit', () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
     });
   }
   

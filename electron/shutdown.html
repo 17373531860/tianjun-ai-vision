@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>正在关闭...</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      width: 420px;
+      height: 320px;
+      display: flex;
+      flex-direction: column;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      border-radius: 12px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+      color: #e0e0e0;
+      overflow: hidden;
+      padding: 24px;
+    }
+    
+    .header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 20px;
+      -webkit-app-region: drag;
+    }
+    
+    .logo {
+      width: 40px;
+      height: 40px;
+      margin-right: 12px;
+      border-radius: 8px;
+    }
+    
+    .title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #00c8ff;
+    }
+    
+    .progress-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .progress-bar-container {
+      width: 100%;
+      height: 8px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+    
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #00c8ff, #0080ff);
+      border-radius: 4px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+    
+    .progress-text {
+      font-size: 14px;
+      color: #aaa;
+      margin-bottom: 16px;
+    }
+    
+    .steps-list {
+      flex: 1;
+      overflow-y: auto;
+      margin-bottom: 16px;
+    }
+    
+    .step-item {
+      display: flex;
+      align-items: center;
+      padding: 6px 0;
+      font-size: 13px;
+      color: #888;
+    }
+    
+    .step-item.completed {
+      color: #4ade80;
+    }
+    
+    .step-item.current {
+      color: #00c8ff;
+    }
+    
+    .step-item.pending {
+      color: #555;
+    }
+    
+    .step-icon {
+      width: 18px;
+      margin-right: 8px;
+      text-align: center;
+    }
+    
+    .buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      -webkit-app-region: no-drag;
+    }
+    
+    .btn {
+      padding: 8px 20px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .btn-cancel {
+      background: rgba(255, 255, 255, 0.1);
+      color: #aaa;
+    }
+    
+    .btn-cancel:hover {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fff;
+    }
+    
+    .btn-force {
+      background: rgba(239, 68, 68, 0.2);
+      color: #ef4444;
+    }
+    
+    .btn-force:hover {
+      background: rgba(239, 68, 68, 0.3);
+    }
+    
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    /* 警告对话框样式 */
+    .warning-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+    }
+    
+    .warning-dialog {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 320px;
+      text-align: center;
+    }
+    
+    .warning-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    
+    .warning-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #f59e0b;
+      margin-bottom: 12px;
+    }
+    
+    .warning-text {
+      font-size: 13px;
+      color: #94a3b8;
+      margin-bottom: 20px;
+      line-height: 1.5;
+    }
+    
+    .warning-buttons {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img class="logo" src="build/icon.png" alt="Logo" onerror="this.style.display='none'">
+    <div class="title">正在关闭程序...</div>
+  </div>
+  
+  <div class="progress-section">
+    <div class="progress-bar-container">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+    <div class="progress-text" id="progressText">准备关闭...</div>
+    
+    <div class="steps-list" id="stepsList">
+      <div class="step-item pending" data-step="stop_detection">
+        <span class="step-icon">○</span>
+        <span>停止检测</span>
+      </div>
+      <div class="step-item pending" data-step="save_counters">
+        <span class="step-icon">○</span>
+        <span>保存计数器数据</span>
+      </div>
+      <div class="step-item pending" data-step="end_cycle">
+        <span class="step-icon">○</span>
+        <span>结束当前周期</span>
+      </div>
+      <div class="step-item pending" data-step="end_session">
+        <span class="step-icon">○</span>
+        <span>结束检测会话</span>
+      </div>
+      <div class="step-item pending" data-step="stop_recording">
+        <span class="step-icon">○</span>
+        <span>停止视频录制</span>
+      </div>
+      <div class="step-item pending" data-step="release_camera">
+        <span class="step-icon">○</span>
+        <span>释放相机资源</span>
+      </div>
+      <div class="step-item pending" data-step="release_model">
+        <span class="step-icon">○</span>
+        <span>释放模型资源</span>
+      </div>
+      <div class="step-item pending" data-step="cleanup">
+        <span class="step-icon">○</span>
+        <span>清理缓存</span>
+      </div>
+    </div>
+  </div>
+  
+  <div class="buttons">
+    <button class="btn btn-cancel" id="btnCancel">取消关闭</button>
+    <button class="btn btn-force" id="btnForce">强制关闭</button>
+  </div>
+  
+  <!-- 警告对话框 -->
+  <div class="warning-overlay" id="warningOverlay">
+    <div class="warning-dialog">
+      <div class="warning-icon">⚠️</div>
+      <div class="warning-title">确定要强制关闭吗？</div>
+      <div class="warning-text">
+        强制关闭可能导致：<br>
+        • 当前检测数据丢失<br>
+        • 录制视频文件损坏<br>
+        • 数据库记录不完整
+      </div>
+      <div class="warning-buttons">
+        <button class="btn btn-cancel" id="btnWarningCancel">取消</button>
+        <button class="btn btn-force" id="btnWarningConfirm">确定强制关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const stepsList = document.getElementById('stepsList');
+    const btnCancel = document.getElementById('btnCancel');
+    const btnForce = document.getElementById('btnForce');
+    const warningOverlay = document.getElementById('warningOverlay');
+    const btnWarningCancel = document.getElementById('btnWarningCancel');
+    const btnWarningConfirm = document.getElementById('btnWarningConfirm');
+    
+    const stepNames = {
+      'stop_detection': '停止检测',
+      'save_counters': '保存计数器数据',
+      'end_cycle': '结束当前周期',
+      'end_session': '结束检测会话',
+      'stop_recording': '停止视频录制',
+      'release_camera': '释放相机资源',
+      'release_model': '释放模型资源',
+      'cleanup': '清理缓存'
+    };
+    
+    // 更新进度
+    function updateProgress(data) {
+      const { progress, currentStep, completedSteps, message } = data;
+      
+      // 更新进度条
+      progressBar.style.width = `${progress}%`;
+      progressText.textContent = message || `正在${stepNames[currentStep] || '处理'}...`;
+      
+      // 更新步骤列表
+      const stepItems = stepsList.querySelectorAll('.step-item');
+      stepItems.forEach(item => {
+        const step = item.dataset.step;
+        const icon = item.querySelector('.step-icon');
+        
+        if (completedSteps && completedSteps.includes(step)) {
+          item.className = 'step-item completed';
+          icon.textContent = '✓';
+        } else if (step === currentStep) {
+          item.className = 'step-item current';
+          icon.textContent = '◐';
+        } else {
+          item.className = 'step-item pending';
+          icon.textContent = '○';
+        }
+      });
+    }
+    
+    // 关闭完成
+    function shutdownComplete() {
+      progressBar.style.width = '100%';
+      progressText.textContent = '关闭完成';
+      btnCancel.disabled = true;
+      btnForce.disabled = true;
+    }
+    
+    // 监听来自主进程的消息
+    ipcRenderer.on('shutdown-progress', (event, data) => {
+      updateProgress(data);
+    });
+    
+    ipcRenderer.on('shutdown-complete', () => {
+      shutdownComplete();
+    });
+    
+    ipcRenderer.on('shutdown-error', (event, error) => {
+      progressText.textContent = `关闭出错: ${error}`;
+      progressText.style.color = '#ef4444';
+    });
+    
+    // 取消关闭
+    btnCancel.addEventListener('click', () => {
+      ipcRenderer.send('shutdown-cancel');
+    });
+    
+    // 强制关闭 - 显示警告
+    btnForce.addEventListener('click', () => {
+      warningOverlay.style.display = 'flex';
+    });
+    
+    // 警告对话框 - 取消
+    btnWarningCancel.addEventListener('click', () => {
+      warningOverlay.style.display = 'none';
+    });
+    
+    // 警告对话框 - 确认强制关闭
+    btnWarningConfirm.addEventListener('click', () => {
+      ipcRenderer.send('shutdown-force');
+    });
+    
+    // 通知主进程窗口已准备好
+    ipcRenderer.send('shutdown-window-ready');
+  </script>
+</body>
+</html>
