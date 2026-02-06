@@ -44,6 +44,8 @@ export const useSystemStore = defineStore('system', {
   state: () => ({
     language: 'zh-CN',
     theme: 'light',
+    // 检测运行状态（用于全局禁用控件）
+    isDetecting: false,
     // 当前项目 ID（用于保存设置）
     currentProjectId: null,
     // 显示设置 (Display Settings) - 全局设置，不绑定项目
@@ -100,6 +102,10 @@ export const useSystemStore = defineStore('system', {
     },
     setTheme(theme) {
       this.theme = theme;
+    },
+    // 设置检测运行状态
+    setDetecting(value) {
+      this.isDetecting = value;
     },
     // 设置当前项目 ID
     setCurrentProjectId(projectId) {

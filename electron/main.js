@@ -3,6 +3,10 @@ const path = require('path');
 const http = require('http');
 const BackendManager = require('./backend-manager');
 
+// 解决 GPU 缓存权限问题
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+app.commandLine.appendSwitch('disk-cache-size', '0');
+
 // 保持对窗口对象的全局引用
 let mainWindow = null;
 let shutdownWindow = null;

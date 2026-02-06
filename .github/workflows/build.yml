@@ -40,7 +40,8 @@ jobs:
           auto-update-conda: true
           python-version: ${{ env.PYTHON_VERSION }}
           activate-environment: tianjun
-          auto-activate-base: false
+          auto-activate: false
+          conda-remove-defaults: true
       
       - name: Install Python dependencies
         shell: bash -l {0}
@@ -135,16 +136,18 @@ jobs:
           files: |
             electron/dist/*.exe
           body: |
-            ## v1.3.0 更新内容
+            ## v1.3.4 更新内容
             
             ### 修复
-            - 视频进度条拖动导致崩溃问题
-            - 自定义模式序列匹配逻辑（支持重复标签）
-            - 程序关闭时数据丢失问题
+            - 静态步骤自定义条件触发：静态步骤（如"工件堆积"）达到触发帧数后正确触发自定义条件
+            - 置信度阈值全局生效：低于阈值的检测不再显示检测框
+            - 最少帧数全局生效：未达到帧数的检测不再显示检测框
+            - 持续时间过滤：超出时间范围的步骤从周期中移除
             
             ### 新增
-            - 优雅关闭功能：显示关闭进度，支持取消/强制关闭
-            - 后端退出保护：确保数据正确保存
+            - 检测运行时锁定控件：开始检测后禁用导航、进度条、倍速等操作，防止误操作导致崩溃
+            - 启动时自动清理残留进程：异常退出后再次启动自动清理后台进程
+            - "良率"改名为"合格率"
             
             ### 安装说明
             1. 下载 .exe 安装程序

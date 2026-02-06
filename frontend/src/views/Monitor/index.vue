@@ -47,6 +47,7 @@
                 :max="1"
                 :step="0.001"
                 :show-tooltip="false"
+                :disabled="isRunning"
                 class="flex-1 video-progress-slider"
                 @mousedown="isDraggingProgress = true"
                 @mouseup="handleProgressChange"
@@ -57,7 +58,7 @@
                 v-model="videoInfo.speed" 
                 size="small" 
                 class="w-20 video-speed-select"
-                :disabled="videoInfo.syncMode"
+                :disabled="isRunning || videoInfo.syncMode"
                 @change="handleSpeedChange"
               >
                 <el-option label="0.5x" :value="0.5" />
@@ -70,6 +71,7 @@
                 <el-switch
                   v-model="videoInfo.syncMode"
                   size="small"
+                  :disabled="isRunning"
                   active-text="逐帧"
                   inactive-text=""
                   class="video-sync-switch"
@@ -201,7 +203,7 @@
          </div>
          <!-- Yield Rate Gauge -->
          <div v-if="systemStore.display.monitor.capacityChart" class="bg-slate-900 border border-slate-700 rounded-lg p-3 relative">
-            <h3 class="text-cyan-400 text-sm font-bold absolute top-2 left-3">良率</h3>
+            <h3 class="text-cyan-400 text-sm font-bold absolute top-2 left-3">合格率</h3>
             <div ref="capacityGaugeRef" class="w-full h-full"></div>
          </div>
       </div>
@@ -255,13 +257,15 @@
             </button>
             <button 
               @click="standby"
-              class="flex-1 bg-yellow-600 hover:bg-yellow-500 text-white py-2 rounded text-sm font-bold shadow transition-colors"
+              :disabled="isRunning"
+              class="flex-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2 rounded text-sm font-bold shadow transition-colors"
             >
               待机
             </button>
             <button 
               @click="resetCounters"
-              class="flex-1 bg-cyan-700 hover:bg-cyan-600 text-white py-2 rounded text-sm font-bold shadow transition-colors"
+              :disabled="isRunning"
+              class="flex-1 bg-cyan-700 hover:bg-cyan-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2 rounded text-sm font-bold shadow transition-colors"
             >
               清零
             </button>
@@ -332,6 +336,11 @@ const steps = ref([]);
 const tableData = ref([]);
 const isRunning = ref(false);
 const isPaused = ref(false);  // 是否处于暂停状态
+
+// 同步 isRunning 状态到全局 store（用于禁用导航等）
+watch(isRunning, (newVal) => {
+  systemStore.setDetecting(newVal);
+});
 const isStreaming = ref(false);
 const fps = ref(0);
 const latency = ref(0);
@@ -699,6 +708,14 @@ const drawDetections = (detections) => {
   
   if (!detections || detections.length === 0) return;
   
+  // 获取启用的步骤标签列表
+  const stepsConfig = currentProject.value?.steps_config || [];
+  const enabledLabels = new Set(
+    stepsConfig
+      .filter(s => s.enabled !== false)  // 默认启用
+      .map(s => s.label)
+  );
+  
   const boxColor = systemStore.detection.boxColor;
   const ngColor = systemStore.detection.boxColorNG;
   const lineWidth = systemStore.detection.boxLineWidth;
@@ -706,6 +723,8 @@ const drawDetections = (detections) => {
   const showConf = systemStore.detection.showConfidence;
   
   detections.forEach(det => {
+    // 跳过禁用步骤的检测框
+    if (!enabledLabels.has(det.label)) return;
     // 归一化坐标转换为实际坐标
     const x = det.x * canvas.width;
     const y = det.y * canvas.height;
@@ -1436,6 +1455,9 @@ const handleResize = () => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize);
   stopPolling();
+  
+  // 重置全局检测状态（确保导航可用）
+  systemStore.setDetecting(false);
   
   if (pieChartInstance) {
     pieChartInstance.dispose();

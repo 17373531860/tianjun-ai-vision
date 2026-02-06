@@ -16,6 +16,7 @@
             placeholder="选择项目" 
             size="small" 
             class="w-40"
+            :disabled="store.isDetecting"
             @change="handleProjectChange"
           >
             <el-option 
@@ -26,8 +27,9 @@
             />
           </el-select>
           <button 
-            @click="router.push('/project')"
-            class="text-xs bg-cyan-700 hover:bg-cyan-600 px-2 py-0.5 rounded ml-2 cursor-pointer"
+            @click="handleNavToProject"
+            :disabled="store.isDetecting"
+            class="text-xs bg-cyan-700 hover:bg-cyan-600 disabled:bg-gray-600 disabled:cursor-not-allowed px-2 py-0.5 rounded ml-2 cursor-pointer"
           >
             {{ $t('navbar.select') }}
           </button>
@@ -65,8 +67,12 @@
       <!-- Icon Actions -->
       <div class="flex items-center gap-3">
         <!-- Settings Dropdown -->
-        <el-dropdown trigger="click" @command="handleCommand">
-          <el-icon class="cursor-pointer text-gray-300 hover:text-cyan-400 transition-colors" :size="20"><Setting /></el-icon>
+        <el-dropdown trigger="click" @command="handleCommand" :disabled="store.isDetecting">
+          <el-icon 
+            class="transition-colors" 
+            :class="store.isDetecting ? 'cursor-not-allowed text-gray-600' : 'cursor-pointer text-gray-300 hover:text-cyan-400'" 
+            :size="20"
+          ><Setting /></el-icon>
           <template #dropdown>
             <el-dropdown-menu class="bg-slate-800 border-slate-700">
               <el-dropdown-item command="auto_save">
@@ -244,6 +250,15 @@ const loadProjects = async () => {
   } catch (err) {
     console.error('加载项目列表失败:', err);
   }
+};
+
+// 导航到项目管理页面
+const handleNavToProject = () => {
+  if (store.isDetecting) {
+    ElMessage.warning('检测运行中，请先停止检测再切换页面');
+    return;
+  }
+  router.push('/project');
 };
 
 // 处理项目切换

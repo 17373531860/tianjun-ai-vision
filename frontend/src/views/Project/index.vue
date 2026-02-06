@@ -172,13 +172,13 @@
 
           <!-- Tab 2: Step Settings -->
           <el-tab-pane label="步骤设置" name="steps">
-            <div class="h-full flex flex-col overflow-hidden p-4">
-              <div class="mb-3 text-sm text-gray-400 flex items-center">
+            <div class="h-full flex flex-col p-4">
+              <div class="mb-3 text-sm text-gray-400 flex items-center flex-shrink-0">
                 <el-icon class="mr-1"><InfoFilled /></el-icon>
                 配置各步骤的启用状态、置信度、显示标签。启用的步骤将参与逻辑判断。
               </div>
 
-              <div class="flex-1 overflow-y-auto custom-scrollbar">
+              <div class="flex-1 overflow-y-auto custom-scrollbar min-h-0 pb-20">
                 <table class="w-full text-left text-xs text-gray-300 border-collapse">
                   <thead class="bg-slate-800 text-gray-400 sticky top-0 z-10">
                     <tr class="border-b border-slate-700">
@@ -226,7 +226,7 @@
                   <tbody>
                     <tr v-for="step in (activeProject.steps_config || [])" :key="step.id" class="border-b border-slate-700 hover:bg-slate-700/30">
                       <td class="p-2 font-mono text-cyan-400">{{ step.label }}</td>
-                      <td class="p-2"><el-switch v-model="step.enabled" size="small" /></td>
+                      <td class="p-2"><el-switch v-model="step.enabled" size="small" @change="(val) => onStepEnabledChange(step, val)" /></td>
                       <td class="p-2">
                         <div class="flex items-center gap-1">
                           <el-slider v-model="step.threshold" :min="10" :max="100" size="small" class="flex-1" />
@@ -1040,6 +1040,52 @@ const addCustomSequenceStep = () => {
 
 const removeCustomSequenceStep = (idx) => {
   activeProject.value.custom_sequence_order.splice(idx, 1);
+};
+
+// 步骤启用状态变化时的清理逻辑
+const onStepEnabledChange = (step, enabled) => {
+  if (enabled) return; // 启用时不需要清理
+  
+  const stepId = step.id;
+  
+  // 1. 从顺序模式配置中移除
+  if (activeProject.value.sequence_order) {
+    activeProject.value.sequence_order = activeProject.value.sequence_order.filter(
+      item => item.step_id !== stepId
+    );
+  }
+  
+  // 2. 从检测模式配置中移除
+  if (activeProject.value.detection_steps) {
+    activeProject.value.detection_steps = activeProject.value.detection_steps.filter(
+      id => id !== stepId
+    );
+  }
+  
+  // 3. 从自定义模式的顺序配置中移除
+  if (activeProject.value.custom_sequence_order) {
+    activeProject.value.custom_sequence_order = activeProject.value.custom_sequence_order.filter(
+      item => item.step_id !== stepId
+    );
+  }
+  
+  // 4. 从自定义模式的检测配置中移除
+  if (activeProject.value.custom_detection_steps) {
+    activeProject.value.custom_detection_steps = activeProject.value.custom_detection_steps.filter(
+      id => id !== stepId
+    );
+  }
+  
+  // 5. 从自定义条件中移除
+  if (activeProject.value.custom_conditions) {
+    activeProject.value.custom_conditions.forEach(cond => {
+      if (cond.sequence) {
+        cond.sequence = cond.sequence.filter(id => id !== stepId);
+      }
+    });
+  }
+  
+  console.log(`步骤 [${step.label}] 已禁用，已从所有配置中移除`);
 };
 
 // 计数器操作

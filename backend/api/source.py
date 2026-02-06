@@ -1283,7 +1283,7 @@ class VideoSourceManager:
         self._stop_recording_thread()
     
     def _get_first_sequence_step_label(self):
-        """获取顺序模式下配置的第一个步骤标签（自定义模式使用custom_sequence_order）"""
+        """获取顺序模式下配置的第一个启用步骤的标签（自定义模式使用custom_sequence_order）"""
         if not self.project_config:
             return None
         
@@ -1300,21 +1300,27 @@ class VideoSourceManager:
         if not sequence_order or not steps_config:
             return None
         
-        # 创建步骤ID到标签的映射
+        # 创建步骤ID到标签的映射（只包含启用的步骤）
         id_to_label = {}
+        enabled_step_ids = set()
         for step in steps_config:
             step_id = step.get('id')
             label = step.get('label', '')
             if step_id and label:
                 id_to_label[step_id] = label
+                if step.get('enabled', True):
+                    enabled_step_ids.add(step_id)
         
-        # 获取第一个步骤的标签
-        first_item = sequence_order[0]
-        first_step_id = first_item.get('step_id')
-        return id_to_label.get(first_step_id)
+        # 获取第一个启用步骤的标签
+        for item in sequence_order:
+            step_id = item.get('step_id')
+            if step_id in enabled_step_ids:
+                return id_to_label.get(step_id)
+        
+        return None
     
     def _get_last_sequence_step_label(self):
-        """获取顺序模式下配置的最后一个步骤标签
+        """获取顺序模式下配置的最后一个启用步骤的标签
         
         对于自定义模式，使用独立的 custom_sequence_order 配置
         """
@@ -1334,18 +1340,24 @@ class VideoSourceManager:
         if not sequence_order or not steps_config:
             return None
         
-        # 创建步骤ID到标签的映射
+        # 创建步骤ID到标签的映射（只包含启用的步骤）
         id_to_label = {}
+        enabled_step_ids = set()
         for step in steps_config:
             step_id = step.get('id')
             label = step.get('label', '')
             if step_id and label:
                 id_to_label[step_id] = label
+                if step.get('enabled', True):
+                    enabled_step_ids.add(step_id)
         
-        # 获取最后一个步骤的标签
-        last_item = sequence_order[-1]
-        last_step_id = last_item.get('step_id')
-        return id_to_label.get(last_step_id)
+        # 从后向前找第一个启用的步骤
+        for item in reversed(sequence_order):
+            step_id = item.get('step_id')
+            if step_id in enabled_step_ids:
+                return id_to_label.get(step_id)
+        
+        return None
     
     def _is_condition_prefix(self, sequence_to_check: list) -> bool:
         """检查给定序列是否是任何自定义条件的前缀
@@ -1366,13 +1378,16 @@ class VideoSourceManager:
         if not custom_conditions:
             return False
         
-        # 创建步骤ID到标签的映射
+        # 创建步骤ID到标签的映射，并获取启用的步骤ID集合
         id_to_label = {}
+        enabled_step_ids = set()
         for step in steps_config:
             step_id = step.get('id')
             label = step.get('label', '')
             if step_id and label:
                 id_to_label[step_id] = label
+                if step.get('enabled', True):
+                    enabled_step_ids.add(step_id)
         
         # 检查每个条件
         for cond in custom_conditions:
@@ -1380,8 +1395,8 @@ class VideoSourceManager:
             if not cond_sequence:
                 continue
             
-            # 将条件中的步骤ID转换为标签
-            cond_labels = [id_to_label.get(sid) for sid in cond_sequence if sid in id_to_label]
+            # 将条件中的步骤ID转换为标签（只包含启用的步骤）
+            cond_labels = [id_to_label.get(sid) for sid in cond_sequence if sid in id_to_label and sid in enabled_step_ids]
             
             if not cond_labels:
                 continue
@@ -1408,20 +1423,23 @@ class VideoSourceManager:
         steps_config = self.project_config.get('steps_config', [])
         custom_based_on = pipeline_config.get('custom_based_on')
         
-        # 创建步骤ID到标签的映射
+        # 创建步骤ID到标签的映射，并获取启用的步骤ID集合
         id_to_label = {}
+        enabled_step_ids = set()
         for step in steps_config:
             step_id = step.get('id')
             label = step.get('label', '')
             if step_id and label:
                 id_to_label[step_id] = label
+                if step.get('enabled', True):
+                    enabled_step_ids.add(step_id)
         
         # 获取启用的步骤标签
         enabled_step_labels = [s.get('label') for s in steps_config if s.get('enabled', True)]
         
         print(f"自定义模式结算: 当前序列={self.current_cycle_steps}")
         
-        # 先检查自定义条件
+        # 先检查自定义条件（只包含启用步骤的条件）
         custom_conditions = pipeline_config.get('custom_conditions', [])
         if custom_conditions:
             sorted_conditions = sorted(custom_conditions, key=lambda c: c.get('priority', 999))
@@ -1433,7 +1451,8 @@ class VideoSourceManager:
                 if not cond_sequence or not cond_event_id:
                     continue
                 
-                cond_labels = [id_to_label.get(sid) for sid in cond_sequence if sid in id_to_label]
+                # 只包含启用的步骤
+                cond_labels = [id_to_label.get(sid) for sid in cond_sequence if sid in id_to_label and sid in enabled_step_ids]
                 
                 if self.current_cycle_steps == cond_labels:
                     print(f"  → 条件匹配！触发事件 {cond_event_id}")
@@ -1452,11 +1471,11 @@ class VideoSourceManager:
                 self.last_added_step = None
                 return
             
-            # 构建期望的标签序列（保留重复标签）
+            # 构建期望的标签序列（只包含启用的步骤）
             expected_labels = []
             for item in sequence_order:
                 step_id = item.get('step_id')
-                if step_id in id_to_label:
+                if step_id in id_to_label and step_id in enabled_step_ids:
                     expected_labels.append(id_to_label[step_id])
             
             if not expected_labels:
@@ -1514,7 +1533,10 @@ class VideoSourceManager:
     def _settle_sequential_cycle(self):
         """结算纯顺序模式的当前周期（在新周期开始前调用）
         
-        注意：自定义模式不使用此方法，而是在"最后一步消失"时通过 _check_custom_sequential_mode 判定
+        与自定义模式（基于顺序）的判定逻辑一致：
+        1. 检查序列长度是否超过预期（有重复步骤）
+        2. 检查是否包含所有预期步骤
+        3. 检查顺序是否正确
         """
         if not self.project_config:
             return
@@ -1522,13 +1544,16 @@ class VideoSourceManager:
         pipeline_config = self.project_config.get('pipeline_config', {})
         steps_config = self.project_config.get('steps_config', [])
         
-        # 创建步骤ID到标签的映射
+        # 创建步骤ID到标签的映射，并获取启用的步骤ID集合
         id_to_label = {}
+        enabled_step_ids = set()
         for step in steps_config:
             step_id = step.get('id')
             label = step.get('label', '')
             if step_id and label:
                 id_to_label[step_id] = label
+                if step.get('enabled', True):
+                    enabled_step_ids.add(step_id)
         
         # 顺序模式的结算逻辑
         sequence_order = pipeline_config.get('sequence_order', [])
@@ -1538,11 +1563,11 @@ class VideoSourceManager:
             self.last_added_step = None
             return
         
-        # 获取期望的步骤标签顺序
+        # 获取期望的步骤标签顺序（只包含启用的步骤）
         expected_labels = []
         for item in sequence_order:
             step_id = item.get('step_id')
-            if step_id in id_to_label:
+            if step_id in id_to_label and step_id in enabled_step_ids:
                 expected_labels.append(id_to_label[step_id])
         
         if not expected_labels:
@@ -1552,29 +1577,40 @@ class VideoSourceManager:
         
         print(f"顺序模式结算: 期望={expected_labels}, 实际={self.current_cycle_steps}")
         
+        # 检查序列长度是否超过预期（有重复步骤）
+        if len(self.current_cycle_steps) > len(expected_labels):
+            print(f"  → 序列长度({len(self.current_cycle_steps)})超过预期({len(expected_labels)})，有重复步骤 → NG")
+            self._trigger_event(2, f'序列包含重复步骤: {self.current_cycle_steps}')
+            self.current_cycle_steps = []
+            self.last_added_step = None
+            return
+        
         # 检查是否完整（包含所有预期步骤）
         if not all(label in self.current_cycle_steps for label in expected_labels):
             # 不完整，触发 NG
             missing = [l for l in expected_labels if l not in self.current_cycle_steps]
             print(f"  → 周期不完整，缺少: {missing} → NG")
             self._trigger_event(2, f'周期不完整，缺少: {missing}')
+            self.current_cycle_steps = []
+            self.last_added_step = None
+            return
+        
+        # 检查顺序是否正确
+        cycle_order_correct = True
+        last_idx = -1
+        for label in expected_labels:
+            idx = self.current_cycle_steps.index(label)
+            if idx < last_idx:
+                cycle_order_correct = False
+                break
+            last_idx = idx
+        
+        if cycle_order_correct:
+            print(f"  → 顺序正确 → OK")
+            self._trigger_event(1, '顺序正确完成')
         else:
-            # 完整，检查顺序
-            cycle_order_correct = True
-            last_idx = -1
-            for label in expected_labels:
-                idx = self.current_cycle_steps.index(label)
-                if idx < last_idx:
-                    cycle_order_correct = False
-                    break
-                last_idx = idx
-            
-            if cycle_order_correct:
-                print(f"  → 顺序正确 → OK")
-                self._trigger_event(1, '顺序正确完成')
-            else:
-                print(f"  → 顺序错误 → NG")
-                self._trigger_event(2, '顺序错误')
+            print(f"  → 顺序错误 → NG")
+            self._trigger_event(2, '顺序错误')
         
         # 重置周期
         self.current_cycle_steps = []
@@ -1583,7 +1619,8 @@ class VideoSourceManager:
     def _update_step_stats(self, detections: list, original_frame: np.ndarray):
         """更新步骤统计和截图
         
-        注意：检测结果全部传给前端显示，但只有通过步骤置信度阈值的才计入统计
+        注意：置信度阈值过滤已在 _detect_only 方法中完成，
+        此处收到的 detections 都是通过阈值的有效检测
         """
         import base64
         current_time = time.time()
@@ -1596,12 +1633,10 @@ class VideoSourceManager:
             if not label:
                 continue
             
-            # 应用步骤特定的置信度阈值（来自项目配置）
-            # 只有通过阈值的检测才计入统计，但所有检测都会返回给前端显示
+            # 置信度阈值双重检查（主要过滤已在 _detect_only 完成，这里作为保险）
             if self.step_conf_thresholds:
                 threshold = self.step_conf_thresholds.get(label)
                 if threshold is not None and confidence < threshold:
-                    # 低于该步骤的阈值，不计入统计（但检测框仍会显示）
                     continue
             
             frame_detected_labels.add(label)
@@ -1642,11 +1677,14 @@ class VideoSourceManager:
                     and not self.step_static_triggered.get(label, False)):
                     
                     self.step_static_triggered[label] = True
-                    print(f"静态步骤 [{label}] 达到触发条件（{trigger_frames}帧），触发事件: {trigger_event}")
+                    print(f"静态步骤 [{label}] 达到触发条件（{trigger_frames}帧）")
                     
-                    # 触发事件
+                    # 触发配置的事件（如果有）
                     if trigger_event:
                         self._trigger_event(trigger_event, f'静态步骤触发: {label}')
+                    
+                    # 检查自定义条件中是否有匹配这个静态步骤的条件
+                    self._check_static_step_conditions(label)
         
         # 获取启用的步骤标签
         enabled_labels = set()
@@ -1660,6 +1698,10 @@ class VideoSourceManager:
         
         # 继续处理通过帧数过滤的标签
         for label in detected_labels:
+            
+            # 跳过禁用的步骤（重要：避免禁用步骤消耗资源导致系统卡死）
+            if label not in enabled_labels:
+                continue
             
             # 获取步骤时间配置
             time_config = self.step_time_config.get(label, {})
@@ -1741,9 +1783,9 @@ class VideoSourceManager:
                     should_join_cycle = static_config.get('join_cycle', True)
                 
                 if should_join_cycle:
-                    # 自定义模式：记录完整序列（包括重复步骤）
-                    # 其他模式：只记录首次出现
-                    if logic_mode == 'custom':
+                    # 自定义模式和顺序模式：记录完整序列（包括重复步骤）
+                    # 其他模式（检测模式）：只记录首次出现
+                    if logic_mode == 'custom' or logic_mode == 'sequential':
                         self.current_cycle_steps.append(label)
                         self.last_added_step = label  # 更新上一个添加的步骤（用于去重判断）
                     elif label not in self.current_cycle_steps:
@@ -1767,6 +1809,10 @@ class VideoSourceManager:
                 self.step_screenshots[label] = base64.b64encode(buffer).decode('utf-8')
         
         # 检查消失的步骤（完成计数）
+        # 使用延迟判定机制：先记录所有消失的步骤，再统一进行事件判定
+        # 这样可以确保所有步骤都被正确记录到当前周期，避免因判定触发 end_cycle 导致后续步骤记录失败
+        pending_event_checks = []  # 收集需要检查事件的步骤
+        
         for label, last_time in list(self.step_last_seen.items()):
             if label not in detected_labels:
                 # 获取步骤时间配置
@@ -1789,6 +1835,13 @@ class VideoSourceManager:
                     if max_duration is not None and duration > max_duration:
                         is_valid = False
                         print(f"步骤 {label} 持续时间 {duration:.2f}s 超过最大时间 {max_duration}s，忽略")
+                    
+                    # 如果持续时间无效，从周期中移除该步骤（影响周期判定）
+                    if not is_valid:
+                        # 从 current_cycle_steps 中移除所有该步骤的出现
+                        # 使用列表推导式过滤，因为可能出现多次
+                        self.current_cycle_steps = [s for s in self.current_cycle_steps if s != label]
+                        print(f"  → 已从当前周期中移除步骤 {label}")
                     
                     # 清理状态
                     del self.step_last_seen[label]
@@ -1840,8 +1893,92 @@ class VideoSourceManager:
                             video_info=step_video_info
                         )
                         
-                        # 检查是否触发事件
-                        self._check_events(label)
+                        # 收集需要检查事件的步骤（延迟判定）
+                        pending_event_checks.append(label)
+        
+        # ========== 延迟判定阶段 ==========
+        # 所有步骤记录完成后，再统一进行事件判定
+        # 这样即使判定触发 end_cycle，也不会影响其他步骤的记录
+        for completed_label in pending_event_checks:
+            self._check_events(completed_label)
+    
+    def _check_static_step_conditions(self, static_label: str):
+        """静态步骤达到触发帧数后，检查自定义条件
+        
+        当静态步骤（如"工件堆积"）达到配置的触发帧数时，
+        直接检查自定义条件中是否有匹配这个步骤的条件并触发对应事件。
+        这样即使静态步骤设置为不参与周期（join_cycle=False），
+        也能正确触发自定义条件中配置的事件（如NG）。
+        
+        Args:
+            static_label: 触发的静态步骤标签
+        """
+        if not self.project_config:
+            return
+        
+        logic_mode = self.project_config.get('logic_mode', 'detection')
+        if logic_mode != 'custom':
+            return  # 只在自定义模式下生效
+        
+        pipeline_config = self.project_config.get('pipeline_config', {})
+        custom_conditions = pipeline_config.get('custom_conditions', [])
+        steps_config = self.project_config.get('steps_config', [])
+        events_config = self.project_config.get('events_config', [])
+        
+        if not custom_conditions:
+            return
+        
+        # 创建步骤ID到标签的映射
+        id_to_label = {}
+        label_to_id = {}
+        enabled_step_ids = set()
+        for step in steps_config:
+            step_id = step.get('id')
+            label = step.get('label', '')
+            if step_id and label:
+                id_to_label[step_id] = label
+                label_to_id[label] = step_id
+                if step.get('enabled', True):
+                    enabled_step_ids.add(step_id)
+        
+        static_step_id = label_to_id.get(static_label)
+        if not static_step_id:
+            return
+        
+        print(f"检查静态步骤 [{static_label}] 的自定义条件...")
+        
+        # 按优先级排序自定义条件
+        sorted_conditions = sorted(custom_conditions, key=lambda c: c.get('priority', 999))
+        
+        for cond in sorted_conditions:
+            cond_sequence = cond.get('sequence', [])
+            cond_event_id = cond.get('event_id')
+            
+            if not cond_sequence or not cond_event_id:
+                continue
+            
+            # 将条件中的步骤ID转换为标签（只包含启用的步骤）
+            cond_labels = [id_to_label.get(sid) for sid in cond_sequence 
+                          if sid in id_to_label and sid in enabled_step_ids]
+            
+            # 检查条件是否只包含这个静态步骤
+            # 支持两种情况：
+            # 1. 条件只有一个步骤，且就是这个静态步骤
+            # 2. 条件的最后一个步骤是这个静态步骤（用于组合条件）
+            if len(cond_labels) == 1 and cond_labels[0] == static_label:
+                # 单步骤条件，直接触发
+                print(f"  → 匹配单步骤自定义条件: [{static_label}]，触发事件 ID: {cond_event_id}")
+                self._trigger_event(cond_event_id, f'静态步骤自定义条件触发: {static_label}')
+                return  # 匹配后不再检查其他条件
+            elif cond_labels and cond_labels[-1] == static_label:
+                # 组合条件，检查前面的步骤是否都在当前周期中
+                prefix_labels = cond_labels[:-1]
+                if all(pl in self.current_cycle_steps for pl in prefix_labels):
+                    print(f"  → 匹配组合自定义条件: {cond_labels}，触发事件 ID: {cond_event_id}")
+                    self._trigger_event(cond_event_id, f'静态步骤自定义条件触发: {static_label}')
+                    return  # 匹配后不再检查其他条件
+        
+        print(f"  → 未找到匹配的自定义条件")
     
     def _check_events(self, completed_step: str):
         """检查是否触发事件"""
@@ -1863,8 +2000,9 @@ class VideoSourceManager:
                 id_to_label[step_id] = label
                 label_to_id[label] = step_id
         
-        # 获取启用的步骤标签
+        # 获取启用的步骤标签和ID集合
         enabled_step_labels = [s.get('label') for s in steps_config if s.get('enabled', True)]
+        enabled_step_ids = {s.get('id') for s in steps_config if s.get('enabled', True)}
         
         # 自定义模式
         if logic_mode == 'custom':
@@ -1884,8 +2022,8 @@ class VideoSourceManager:
                     if not cond_sequence or not cond_event_id:
                         continue
                     
-                    # 将条件中的步骤ID转换为标签
-                    cond_labels = [id_to_label.get(sid) for sid in cond_sequence if sid in id_to_label]
+                    # 将条件中的步骤ID转换为标签（只包含启用的步骤）
+                    cond_labels = [id_to_label.get(sid) for sid in cond_sequence if sid in id_to_label and sid in enabled_step_ids]
                     
                     if not cond_labels:
                         continue
@@ -1921,9 +2059,15 @@ class VideoSourceManager:
                     print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
             # 如果 custom_based_on 为空，则只依赖自定义条件，不做额外处理
         
-        # 顺序模式
+        # 顺序模式：只在最后一步消失时判定（与自定义模式逻辑一致）
         elif logic_mode == 'sequential':
-            self._check_sequential_mode(pipeline_config, id_to_label)
+            last_step_label = self._get_last_sequence_step_label()
+            if last_step_label and completed_step == last_step_label:
+                # 检查消失的步骤是否在当前周期中
+                if completed_step in self.current_cycle_steps:
+                    self._check_sequential_mode(pipeline_config, id_to_label)
+                else:
+                    print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
         
         # 检测模式
         elif logic_mode == 'detection':
@@ -1937,44 +2081,76 @@ class VideoSourceManager:
                     self._trigger_event(trigger_event, f'步骤 {completed_step} 触发')
     
     def _check_sequential_mode(self, pipeline_config: dict, id_to_label: dict):
-        """检查顺序模式"""
+        """检查顺序模式
+        
+        与自定义模式（基于顺序）的判定逻辑一致：
+        1. 检查序列长度是否超过预期（有重复步骤）
+        2. 检查是否包含所有预期步骤
+        3. 检查顺序是否正确
+        4. 无论什么情况都会触发事件并重置周期
+        """
         sequence_order = pipeline_config.get('sequence_order', [])
         if not sequence_order:
+            self.current_cycle_steps = []
+            self.last_added_step = None
             return
         
-        # 将步骤ID转换为标签名
+        # 获取启用的步骤ID集合
+        steps_config = self.project_config.get('steps_config', []) if self.project_config else []
+        enabled_step_ids = {s.get('id') for s in steps_config if s.get('enabled', True)}
+        
+        # 将步骤ID转换为标签名（只包含启用的步骤）
         expected_labels = []
         for item in sequence_order:
             step_id = item.get('step_id')
-            if step_id in id_to_label:
+            if step_id in id_to_label and step_id in enabled_step_ids:
                 expected_labels.append(id_to_label[step_id])
         
         if not expected_labels:
+            self.current_cycle_steps = []
+            self.last_added_step = None
             return
         
         print(f"顺序模式检查: 期望={expected_labels}, 当前周期={self.current_cycle_steps}")
         
-        # 检查是否包含所有预期步骤
-        if all(label in self.current_cycle_steps for label in expected_labels):
-            # 检查顺序是否正确
-            cycle_order_correct = True
-            last_idx = -1
-            for label in expected_labels:
-                if label in self.current_cycle_steps:
-                    idx = self.current_cycle_steps.index(label)
-                    if idx < last_idx:
-                        cycle_order_correct = False
-                        break
-                    last_idx = idx
-            
-            if cycle_order_correct:
-                self._trigger_event(1, '顺序正确完成')  # 事件1: 合格
-            else:
-                self._trigger_event(2, '顺序错误')  # 事件2: 不良
-            
-            # 重置周期
+        # 检查序列长度是否超过预期（有重复步骤）
+        if len(self.current_cycle_steps) > len(expected_labels):
+            print(f"  → 序列长度({len(self.current_cycle_steps)})超过预期({len(expected_labels)})，有重复步骤 → NG")
+            self._trigger_event(2, f'序列包含重复步骤: {self.current_cycle_steps}')
             self.current_cycle_steps = []
             self.last_added_step = None
+            return
+        
+        # 检查是否包含所有预期步骤
+        if not all(label in self.current_cycle_steps for label in expected_labels):
+            missing = [l for l in expected_labels if l not in self.current_cycle_steps]
+            print(f"  → 周期不完整，缺少: {missing} → NG")
+            self._trigger_event(2, f'周期不完整，缺少: {missing}')
+            self.current_cycle_steps = []
+            self.last_added_step = None
+            return
+        
+        # 检查顺序是否正确
+        cycle_order_correct = True
+        last_idx = -1
+        for label in expected_labels:
+            if label in self.current_cycle_steps:
+                idx = self.current_cycle_steps.index(label)
+                if idx < last_idx:
+                    cycle_order_correct = False
+                    break
+                last_idx = idx
+        
+        if cycle_order_correct:
+            print(f"  → 顺序正确 → OK")
+            self._trigger_event(1, '顺序正确完成')  # 事件1: 合格
+        else:
+            print(f"  → 顺序错误 → NG")
+            self._trigger_event(2, '顺序错误')  # 事件2: 不良
+        
+        # 重置周期
+        self.current_cycle_steps = []
+        self.last_added_step = None
     
     def _check_custom_sequential_mode(self, pipeline_config: dict, id_to_label: dict):
         """检查自定义模式（基于顺序模式）的判定
@@ -1991,11 +2167,15 @@ class VideoSourceManager:
             self.last_added_step = None
             return
         
-        # 将步骤ID转换为标签名
+        # 获取启用的步骤ID集合
+        steps_config = self.project_config.get('steps_config', []) if self.project_config else []
+        enabled_step_ids = {s.get('id') for s in steps_config if s.get('enabled', True)}
+        
+        # 将步骤ID转换为标签名（只包含启用的步骤）
         expected_labels = []
         for item in sequence_order:
             step_id = item.get('step_id')
-            if step_id in id_to_label:
+            if step_id in id_to_label and step_id in enabled_step_ids:
                 expected_labels.append(id_to_label[step_id])
         
         if not expected_labels:
@@ -2266,6 +2446,15 @@ class VideoSourceManager:
                 if boxes is None:
                     continue
                 
+                # 获取启用的步骤标签（用于过滤禁用的步骤）
+                enabled_labels = set()
+                if self.project_config:
+                    for step in self.project_config.get('steps_config', []):
+                        if step.get('enabled', True):
+                            step_label = step.get('label', '')
+                            if step_label:
+                                enabled_labels.add(step_label)
+                
                 for box in boxes:
                     x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
                     confidence = float(box.conf[0].cpu().numpy())
@@ -2276,6 +2465,16 @@ class VideoSourceManager:
                         class_name = self.model.names[class_id]
                     else:
                         class_name = f"class_{class_id}"
+                    
+                    # 跳过禁用的步骤（从推理层面就忽略，不参与任何逻辑）
+                    if enabled_labels and class_name not in enabled_labels:
+                        continue
+                    
+                    # 应用步骤特定的置信度阈值（低于阈值的检测不显示也不参与任何逻辑）
+                    if self.step_conf_thresholds:
+                        step_threshold = self.step_conf_thresholds.get(class_name)
+                        if step_threshold is not None and confidence < step_threshold:
+                            continue
                     
                     # 记录检测结果（归一化坐标）
                     detections.append({
@@ -2622,18 +2821,22 @@ class VideoSourceManager:
                 # 计算延迟
                 self.latency = int((time.time() - t3) * 1000)
                 
-                # 更新检测结果（供主线程使用）
+                # 获取已确认的检测结果（只包含通过帧计数验证的）
+                # 必须先获取 confirmed，然后用它更新 current_detections
+                # 这样前端显示的检测框也会经过帧数过滤
+                confirmed = self._get_confirmed_detections(detections)
+                
+                # 更新检测结果（供前端获取，使用过滤后的结果）
                 t7 = time.time()
                 with self.detection_lock:
-                    self.current_detections = detections
+                    self.current_detections = confirmed  # 使用 confirmed 而不是 detections
                 t8 = time.time()
                 
                 # 如果获取检测锁耗时超过100ms，记录警告
                 if (t8 - t7) > 0.1:
                     debug_log(f"!!! 检测结果锁耗时: {(t8-t7)*1000:.1f}ms", "INFERENCE")
                 
-                # 更新已确认的检测结果（只包含通过帧计数验证的）
-                confirmed = self._get_confirmed_detections(detections)
+                # 同时更新 _confirmed_detections（供捕获线程使用）
                 with self._confirmed_detections_lock:
                     self._confirmed_detections = confirmed
                     
