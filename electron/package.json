@@ -36,6 +36,7 @@
       "preload.js",
       "backend-manager.js",
       "splash.html",
+      "shutdown.html",
       "build/**/*"
     ],
     "extraResources": [

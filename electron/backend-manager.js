@@ -156,84 +156,129 @@ class BackendManager extends EventEmitter {
   }
   
   /**
+   * 检查端口是否被占用
+   */
+  isPortInUse() {
+    try {
+      if (process.platform === 'win32') {
+        const result = execSync(`netstat -ano | findstr :${this.options.port} | findstr LISTENING`, {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+        return result.trim().length > 0;
+      } else {
+        const result = execSync(`lsof -ti :${this.options.port}`, {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+        return result.trim().length > 0;
+      }
+    } catch (e) {
+      return false;
+    }
+  }
+  
+  /**
    * 清理残留的后端进程（启动前调用）
    */
   async cleanupStaleProcesses() {
     console.log('[BackendManager] Checking for stale backend processes...');
     
+    let cleaned = false;
+    
     try {
       if (process.platform === 'win32') {
-        // Windows: 查找占用端口的进程并杀掉
+        // Windows: 第一步 - 查找占用端口 8001 的进程并杀掉
         try {
-          // 查找占用端口的进程
           const result = execSync(`netstat -ano | findstr :${this.options.port}`, { 
             encoding: 'utf-8',
             stdio: ['pipe', 'pipe', 'pipe']
           });
           
-          // 解析 PID
           const lines = result.trim().split('\n');
           const pids = new Set();
           
           for (const line of lines) {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length >= 5) {
-              const pid = parseInt(parts[parts.length - 1]);
-              if (pid && pid > 0) {
-                pids.add(pid);
-              }
-            }
-          }
-          
-          // 杀掉这些进程
-          for (const pid of pids) {
-            console.log(`[BackendManager] Killing stale process PID: ${pid}`);
-            try {
-              execSync(`taskkill /pid ${pid} /f /t`, { stdio: 'ignore' });
-            } catch (e) {
-              // 进程可能已经退出
-            }
-          }
-          
-          if (pids.size > 0) {
-            console.log(`[BackendManager] Cleaned up ${pids.size} stale process(es)`);
-            // 等待端口释放
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-        } catch (e) {
-          // netstat 没有找到任何结果，说明端口未被占用
-          console.log('[BackendManager] No stale processes found on port');
-        }
-        
-        // 额外清理：查找残留的 Python 进程（使用 tasklist，系统自带）
-        try {
-          // tasklist 列出所有 python 进程
-          const result = execSync('tasklist /fi "imagename eq python.exe" /fo csv /nh', {
-            encoding: 'utf-8',
-            stdio: ['pipe', 'pipe', 'pipe']
-          });
-          
-          // 解析 CSV 格式输出: "python.exe","1234","Console","1","12,345 K"
-          const lines = result.trim().split('\n');
-          for (const line of lines) {
-            if (line.includes('python.exe')) {
-              const match = line.match(/"python\.exe","(\d+)"/i);
-              if (match) {
-                const pid = parseInt(match[1]);
-                if (pid && pid > 0) {
-                  console.log(`[BackendManager] Found Python process PID: ${pid}, attempting to kill...`);
-                  try {
-                    execSync(`taskkill /pid ${pid} /f /t`, { stdio: 'ignore' });
-                  } catch (e) {
-                    // 进程可能已经退出或权限不足
-                  }
+            // 匹配 LISTENING 或 ESTABLISHED 状态的连接
+            if (line.includes(':' + this.options.port)) {
+              const parts = line.trim().split(/\s+/);
+              if (parts.length >= 5) {
+                const pid = parseInt(parts[parts.length - 1]);
+                if (pid && pid > 0 && pid !== process.pid) {
+                  pids.add(pid);
                 }
               }
             }
           }
+          
+          if (pids.size > 0) {
+            console.log(`[BackendManager] Found ${pids.size} process(es) using port ${this.options.port}`);
+            for (const pid of pids) {
+              console.log(`[BackendManager] Killing process PID: ${pid}`);
+              try {
+                // 使用 /f 强制终止，/t 终止子进程树
+                execSync(`taskkill /pid ${pid} /f /t`, { 
+                  encoding: 'utf-8',
+                  stdio: ['pipe', 'pipe', 'pipe']
+                });
+                cleaned = true;
+              } catch (e) {
+                console.log(`[BackendManager] Failed to kill PID ${pid}: ${e.message}`);
+              }
+            }
+          }
         } catch (e) {
-          // tasklist 失败或没有 python 进程
-          console.log('[BackendManager] No Python processes found or tasklist failed');
+          // netstat 没有找到任何结果
+          console.log('[BackendManager] No processes found on port ' + this.options.port);
+        }
+        
+        // Windows: 第二步 - 如果端口还被占用，尝试查找 uvicorn 相关进程
+        if (this.isPortInUse()) {
+          console.log('[BackendManager] Port still in use, trying to find uvicorn processes...');
+          try {
+            // 查找命令行包含 uvicorn 的进程
+            const result = execSync('tasklist /v /fo csv', {
+              encoding: 'utf-8',
+              stdio: ['pipe', 'pipe', 'pipe'],
+              maxBuffer: 10 * 1024 * 1024 // 10MB buffer
+            });
+            
+            const lines = result.trim().split('\n');
+            for (const line of lines) {
+              // 查找 python.exe 进程
+              if (line.toLowerCase().includes('python.exe')) {
+                const match = line.match(/"[^"]*","(\d+)"/);
+                if (match) {
+                  const pid = parseInt(match[1]);
+                  if (pid && pid > 0) {
+                    console.log(`[BackendManager] Killing Python process PID: ${pid}`);
+                    try {
+                      execSync(`taskkill /pid ${pid} /f /t`, { stdio: 'ignore' });
+                      cleaned = true;
+                    } catch (e) {
+                      // 忽略
+                    }
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.log('[BackendManager] tasklist failed:', e.message);
+          }
+        }
+        
+        // 等待端口释放
+        if (cleaned) {
+          console.log('[BackendManager] Waiting for port to be released...');
+          // 最多等待 5 秒
+          for (let i = 0; i < 10; i++) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            if (!this.isPortInUse()) {
+              console.log('[BackendManager] Port released successfully');
+              break;
+            }
+            console.log(`[BackendManager] Port still in use, waiting... (${i + 1}/10)`);
+          }
         }
         
       } else {
