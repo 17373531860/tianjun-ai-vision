@@ -40,8 +40,18 @@ jobs:
           auto-update-conda: false
           python-version: ${{ env.PYTHON_VERSION }}
           activate-environment: tianjun
-          channels: conda-forge,defaults
+          channels: defaults
           channel-priority: flexible
+        env:
+          CONDA_SOLVER: classic
+      
+      - name: Configure conda for stability
+        shell: bash -l {0}
+        run: |
+          conda config --set remote_connect_timeout_secs 60
+          conda config --set remote_read_timeout_secs 120
+          conda config --set remote_max_retries 5
+          conda config --show
       
       - name: Install Python dependencies
         shell: bash -l {0}
@@ -52,13 +62,13 @@ jobs:
           python --version
           
           echo "Installing PyTorch with CUDA 12.1..."
-          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+          pip install --retries 5 --timeout 60 torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
           
           echo "Installing backend dependencies..."
-          pip install -r backend/requirements.txt
+          pip install --retries 5 --timeout 60 -r backend/requirements.txt
           
           echo "Installing conda-pack..."
-          pip install conda-pack
+          pip install --retries 5 --timeout 60 conda-pack
           
           echo "Verifying installations..."
           python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.version.cuda}')"
