@@ -19,7 +19,7 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     
     steps:
       - name: Checkout code
@@ -73,6 +73,57 @@ jobs:
           echo "Verifying installations..."
           python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.version.cuda}')"
           python -c "from ultralytics import YOLO; print('ultralytics OK')"
+      
+      - name: Compile Python backend with Nuitka
+        shell: bash -l {0}
+        run: |
+          conda activate tianjun
+          
+          echo "Installing Nuitka..."
+          pip install --retries 5 --timeout 60 nuitka ordered-set
+          
+          echo "=== Compiling core backend files to .pyd ==="
+          
+          # Core business logic files
+          CORE_FILES=(
+            "backend/api/source.py"
+            "backend/api/detection.py"
+            "backend/api/sessions.py"
+            "backend/api/projects.py"
+            "backend/api/cameras.py"
+            "backend/api/alarm.py"
+            "backend/api/reports.py"
+            "backend/api/tasks.py"
+            "backend/api/websocket.py"
+            "backend/services/detector.py"
+          )
+          
+          for pyfile in "${CORE_FILES[@]}"; do
+            if [ -f "$pyfile" ]; then
+              dir=$(dirname "$pyfile")
+              filename=$(basename "$pyfile" .py)
+              echo "Compiling $pyfile ..."
+              python -m nuitka --module "$pyfile" --output-dir="$dir" --remove-output 2>&1 || echo "WARNING: Failed to compile $pyfile, keeping source"
+              
+              # If .pyd was generated, remove the .py source
+              if ls "$dir"/${filename}*.pyd 1>/dev/null 2>&1; then
+                echo "  -> Compiled successfully, removing source: $pyfile"
+                rm -f "$pyfile"
+              else
+                echo "  -> Compilation failed, keeping source: $pyfile"
+              fi
+            fi
+          done
+          
+          echo "=== Compilation complete ==="
+          echo "Remaining .py files in backend/api/:"
+          ls -la backend/api/*.py 2>/dev/null || echo "  (none)"
+          echo "Generated .pyd files in backend/api/:"
+          ls -la backend/api/*.pyd 2>/dev/null || echo "  (none)"
+          echo "Remaining .py files in backend/services/:"
+          ls -la backend/services/*.py 2>/dev/null || echo "  (none)"
+          echo "Generated .pyd files in backend/services/:"
+          ls -la backend/services/*.pyd 2>/dev/null || echo "  (none)"
       
       - name: Pack Python environment
         shell: bash -l {0}
@@ -153,7 +204,10 @@ jobs:
           files: |
             electron/dist/TianJun-AI-Vision-*-Setup.exe
           body: |
-            ## v1.3.7 更新内容
+            ## v1.3.8 更新内容
+            
+            ### 安全
+            - 后端核心代码使用 Nuitka 编译为机器码（.pyd），源码不再可见
             
             ### 修复
             - 修复 shutdown.html 未打包导致关闭窗口无法显示
@@ -172,6 +226,7 @@ jobs:
             1. 下载 .exe 安装程序
             2. 双击运行安装
             3. 按提示完成安装
+            4. 首次运行需安装 VC++ 运行时库（如未安装）
           draft: false
           prerelease: false
         env:
