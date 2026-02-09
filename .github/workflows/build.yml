@@ -151,9 +151,9 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }} - 天钧AI视觉检测系统
           files: |
-            electron/dist/*.exe
+            electron/dist/TianJun-AI-Vision-*-Setup.exe
           body: |
-            ## v1.3.6 更新内容
+            ## v1.3.7 更新内容
             
             ### 修复
             - 修复 shutdown.html 未打包导致关闭窗口无法显示

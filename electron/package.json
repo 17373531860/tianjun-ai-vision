@@ -1,6 +1,6 @@
 {
   "name": "tianjun-ai-vision",
-  "version": "1.3.6",
+  "version": "1.3.7",
   "description": "天军科技AI视觉检测系统 - AI-powered machine vision detection system",
   "main": "main.js",
   "author": {
@@ -87,7 +87,7 @@
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "${productName}-${version}-Setup.${ext}"
+      "artifactName": "TianJun-AI-Vision-${version}-Setup.${ext}"
     },
     "nsis": {
       "oneClick": false,
