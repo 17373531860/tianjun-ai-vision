@@ -95,6 +95,7 @@ jobs:
             "backend/api/reports.py"
             "backend/api/tasks.py"
             "backend/api/websocket.py"
+            "backend/api/models.py"
             "backend/services/detector.py"
           )
           
