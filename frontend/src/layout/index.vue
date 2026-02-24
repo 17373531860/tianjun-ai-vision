@@ -1,43 +1,58 @@
 <template>
-  <div class="flex h-screen w-screen bg-ind-bg">
-    <aside class="w-64 bg-ind-panel border-r border-gray-800 flex flex-col">
-      <div class="p-6 text-xl font-bold text-tech-blue border-b border-gray-800">
-        VISION SYSTEM
-      </div>
-      
-      <nav class="flex-1 mt-4">
-        <router-link to="/monitor" class="nav-item">
-          <el-icon class="mr-2"><Monitor /></el-icon> {{ $t('menu.monitor') }}
-        </router-link>
-        <router-link to="/project" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="preventNavIfDetecting">
-          <el-icon class="mr-2"><Folder /></el-icon> {{ $t('menu.project') }}
-        </router-link>
-        <router-link to="/model" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="preventNavIfDetecting">
-          <el-icon class="mr-2"><Cpu /></el-icon> {{ $t('menu.model') }}
-        </router-link>
-        <router-link to="/source" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="preventNavIfDetecting">
-          <el-icon class="mr-2"><VideoCamera /></el-icon> 输入源设置
-        </router-link>
-        <router-link to="/data" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="preventNavIfDetecting">
-          <el-icon class="mr-2"><DataLine /></el-icon> {{ $t('menu.data') }}
-        </router-link>
-        <router-link to="/alarm" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="preventNavIfDetecting">
-          <el-icon class="mr-2"><Bell /></el-icon> 报警设置
-        </router-link>
-        <router-link to="/settings" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="preventNavIfDetecting">
-          <el-icon class="mr-2"><Setting /></el-icon> {{ $t('menu.settings') }}
-        </router-link>
-      </nav>
-      
-      <!-- 检测运行提示 -->
-      <div v-if="systemStore.isDetecting" class="px-4 py-3 bg-red-900/30 border-t border-red-800 text-red-400 text-xs text-center">
-        检测运行中，请先停止检测
-      </div>
-    </aside>
+  <div class="flex h-screen w-screen bg-ind-bg relative">
+    <!-- 侧边栏遮罩 -->
+    <Transition name="fade">
+      <div v-if="sidebarOpen" class="fixed inset-0 bg-black/40 z-30" @click="sidebarOpen = false"></div>
+    </Transition>
+
+    <!-- 侧边栏（默认隐藏，点击按钮滑出） -->
+    <Transition name="slide">
+      <aside v-if="sidebarOpen" class="fixed left-0 top-0 h-full w-64 bg-ind-panel border-r border-gray-800 flex flex-col z-40 shadow-2xl">
+        <div class="p-6 text-xl font-bold text-tech-blue border-b border-gray-800 flex justify-between items-center">
+          <span>VISION SYSTEM</span>
+          <button @click="sidebarOpen = false" class="text-gray-500 hover:text-white transition p-1">
+            <el-icon :size="18"><Close /></el-icon>
+          </button>
+        </div>
+        
+        <nav class="flex-1 mt-4">
+          <router-link to="/monitor" class="nav-item" @click="sidebarOpen = false">
+            <el-icon class="mr-2"><Monitor /></el-icon> {{ $t('menu.monitor') }}
+          </router-link>
+          <router-link to="/project" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+            <el-icon class="mr-2"><Folder /></el-icon> {{ $t('menu.project') }}
+          </router-link>
+          <router-link to="/model" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+            <el-icon class="mr-2"><Cpu /></el-icon> {{ $t('menu.model') }}
+          </router-link>
+          <router-link to="/source" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+            <el-icon class="mr-2"><VideoCamera /></el-icon> 输入源设置
+          </router-link>
+          <router-link to="/data" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+            <el-icon class="mr-2"><DataLine /></el-icon> {{ $t('menu.data') }}
+          </router-link>
+          <router-link to="/alarm" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+            <el-icon class="mr-2"><Bell /></el-icon> 报警设置
+          </router-link>
+          <router-link to="/settings" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+            <el-icon class="mr-2"><Setting /></el-icon> {{ $t('menu.settings') }}
+          </router-link>
+        </nav>
+        
+        <div v-if="systemStore.isDetecting" class="px-4 py-3 bg-red-900/30 border-t border-red-800 text-red-400 text-xs text-center">
+          检测运行中，请先停止检测
+        </div>
+      </aside>
+    </Transition>
 
     <main class="flex-1 flex flex-col overflow-hidden">
-      <!-- Replaced internal header with Navbar component -->
-      <Navbar />
+      <Navbar>
+        <template #left>
+          <button @click="sidebarOpen = true" class="p-2 rounded hover:bg-slate-700 transition text-gray-400 hover:text-white mr-2" title="导航菜单">
+            <el-icon :size="20"><Menu /></el-icon>
+          </button>
+        </template>
+      </Navbar>
 
       <section class="flex-1 overflow-auto p-4 bg-[#0f172a]">
         <router-view />
@@ -49,18 +64,20 @@
 <script setup>
 import Navbar from './Navbar.vue';
 import { ref } from 'vue';
-import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell } from '@element-plus/icons-vue';
+import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { ElMessage } from 'element-plus';
 
 const systemStore = useSystemStore();
+const sidebarOpen = ref(false);
 
-// 检测运行时阻止导航
-const preventNavIfDetecting = (e) => {
+const handleNav = (e) => {
   if (systemStore.isDetecting) {
     e.preventDefault();
     e.stopPropagation();
     ElMessage.warning('检测运行中，请先停止检测再切换页面');
+  } else {
+    sidebarOpen.value = false;
   }
 };
 </script>
@@ -77,5 +94,19 @@ const preventNavIfDetecting = (e) => {
 }
 .nav-disabled:hover {
   @apply bg-transparent text-gray-400;
+}
+
+.slide-enter-active, .slide-leave-active {
+  transition: transform 0.25s ease;
+}
+.slide-enter-from, .slide-leave-to {
+  transform: translateX(-100%);
+}
+
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
 }
 </style>

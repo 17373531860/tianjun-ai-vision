@@ -35,51 +35,30 @@ MV_CC_DEVICE_INFO = None
 MV_USB_DEVICE = None
 MV_GIGE_DEVICE = None
 
-# 海康调试日志开关
-HIK_DEBUG = True
-
-# ========== 卡死调试日志开关 ==========
-FREEZE_DEBUG = True  # 开启卡死调试日志
+# ========== 调试日志开关 ==========
+HIK_DEBUG = False  # 海康SDK详细日志（仅调试时开启）
+FREEZE_DEBUG = True  # 卡死调试日志
 
 def debug_log(msg, category="MAIN"):
-    """卡死调试日志 - 用于定位卡死原因"""
+    """调试日志 - 默认关闭，需要时手动开启 FREEZE_DEBUG"""
     if FREEZE_DEBUG:
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         print(f"[{timestamp}] [DEBUG/{category}] {msg}", flush=True)
 
 def hik_log(msg, level="INFO"):
-    """海康相机调试日志"""
+    """海康相机调试日志 - 默认关闭，需要时手动开启 HIK_DEBUG"""
     if HIK_DEBUG or level in ("ERROR", "WARN", "SUCCESS"):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         print(f"[{timestamp}] [海康SDK/{level}] {msg}", flush=True)
 
 try:
-    # 设置 MvImport 目录路径
     _mv_import_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MvImport")
     _mv_lib_dir = os.path.join(_mv_import_dir, "lib")
     
-    hik_log(f"__file__ = {__file__}")
-    hik_log(f"MvImport目录 = {_mv_import_dir}")
-    hik_log(f"MvImport目录存在 = {os.path.isdir(_mv_import_dir)}")
-    hik_log(f"lib目录 = {_mv_lib_dir}")
-    hik_log(f"lib目录存在 = {os.path.isdir(_mv_lib_dir)}")
-    
-    if os.path.isdir(_mv_lib_dir):
-        dll_files = [f for f in os.listdir(_mv_lib_dir) if f.endswith('.dll')]
-        hik_log(f"lib目录中的DLL数量 = {len(dll_files)}")
-        if dll_files:
-            hik_log(f"关键DLL: MvCameraControl.dll存在={os.path.exists(os.path.join(_mv_lib_dir, 'MvCameraControl.dll'))}")
-    
     if _mv_import_dir not in sys.path:
         sys.path.insert(0, _mv_import_dir)
-        hik_log(f"已添加到sys.path: {_mv_import_dir}")
     
-    # 直接导入具体的类和常量
-    hik_log("开始导入 MvCameraControl_class...")
     from backend.api.MvImport.MvCameraControl_class import MvCamera
-    hik_log(f"MvCamera 导入成功: {MvCamera}")
-    
-    hik_log("开始导入 CameraParams_header...")
     from backend.api.MvImport.CameraParams_header import (
         MV_CC_DEVICE_INFO_LIST, 
         MV_CC_DEVICE_INFO,
@@ -88,17 +67,11 @@ try:
         MV_TRIGGER_MODE_OFF,
         MV_CC_PIXEL_CONVERT_PARAM
     )
-    hik_log("CameraParams_header 导入成功")
-    
-    hik_log("开始导入 CameraParams_const...")
     from backend.api.MvImport.CameraParams_const import (
         MV_USB_DEVICE, 
         MV_GIGE_DEVICE,
         MV_ACCESS_Exclusive
     )
-    hik_log(f"CameraParams_const 导入成功: MV_USB_DEVICE={MV_USB_DEVICE}, MV_GIGE_DEVICE={MV_GIGE_DEVICE}")
-    
-    hik_log("开始导入 PixelType_header...")
     from backend.api.MvImport.PixelType_header import (
         PixelType_Gvsp_Mono8,
         PixelType_Gvsp_BayerRG8,
@@ -107,17 +80,11 @@ try:
         PixelType_Gvsp_YUV422_Packed,
         PixelType_Gvsp_YUV422_YUYV_Packed
     )
-    hik_log("PixelType_header 导入成功")
-    hik_log(f"  PixelType_Gvsp_Mono8 = {hex(PixelType_Gvsp_Mono8)}")
-    hik_log(f"  PixelType_Gvsp_RGB8_Packed = {hex(PixelType_Gvsp_RGB8_Packed)}")
     
     HIK_SDK_AVAILABLE = True
-    hik_log("海康SDK 全部加载成功!", "SUCCESS")
     
-except Exception as e:
-    import traceback
-    hik_log(f"加载失败: {e}", "ERROR")
-    hik_log(f"详细错误:\n{traceback.format_exc()}", "ERROR")
+except Exception:
+    pass
 
 
 def _decode_hik_string(ctypes_char_array):
@@ -144,19 +111,13 @@ def get_hikvision_device_list():
     枚举当前可用的海康工业相机（USB + GigE），返回 [{"index": 设备索引, "name": 显示名称}, ...]
     未安装 SDK 或枚举失败时返回空列表
     """
-    print(f"[海康SDK] get_hikvision_device_list 调用, SDK可用={HIK_SDK_AVAILABLE}")
     if not HIK_SDK_AVAILABLE:
-        print("[海康SDK] SDK不可用，返回空列表")
         return []
     try:
         device_list = MV_CC_DEVICE_INFO_LIST()
-        # 同时枚举 USB 和 GigE 设备
         tlayer_type = MV_USB_DEVICE | MV_GIGE_DEVICE
-        print(f"[海康SDK] 开始枚举设备, tlayer_type={tlayer_type}")
         ret = MvCamera.MV_CC_EnumDevices(tlayer_type, device_list)
-        print(f"[海康SDK] 枚举结果: ret={ret}, 设备数={device_list.nDeviceNum}")
         if ret != 0 or device_list.nDeviceNum == 0:
-            print(f"[海康SDK] 未检测到设备 (ret={ret})")
             return []
         
         result = []
@@ -180,7 +141,7 @@ def get_hikvision_device_list():
             result.append({"index": i, "name": name})
         return result
     except Exception as e:
-        print(f"[海康SDK] 枚举设备失败: {e}")
+        hik_log(f"枚举设备失败: {e}", "ERROR")
         return []
 
 
@@ -559,6 +520,10 @@ class VideoSourceManager:
         self.step_detection_type = {}  # {step_name: 'dynamic'|'static'} 检测类型
         self.step_static_config = {}  # {step_name: {trigger_frames, join_cycle, trigger_event}}
         self.step_static_triggered = {}  # {step_name: bool} 静态步骤是否已触发（防止重复触发）
+        
+        # 同时出现组配置
+        self._simultaneous_groups = []  # 配置列表
+        self._sim_group_state = {}  # 运行时状态 {group_key: {phase, watch_start, appeared, recorded}}
         
         # 事件与计数器
         self.counters = {}  # {counter_name: value}
@@ -951,6 +916,13 @@ class VideoSourceManager:
                     }
                     self.step_static_triggered[label] = False
         
+        # 解析同时出现组配置
+        pipeline_config = config.get('pipeline_config', {})
+        self._simultaneous_groups = pipeline_config.get('simultaneous_groups', [])
+        self._sim_group_state = {}
+        if self._simultaneous_groups:
+            print(f"同时出现组: {self._simultaneous_groups}")
+        
         # 初始化计数器（确保默认计数器始终存在）
         self.counters = {}
         counters_config = config.get('counters_config', [])
@@ -1196,6 +1168,7 @@ class VideoSourceManager:
                         self.fps_actual = self._fps_counter
                         self._fps_counter = 0
                         self._fps_time = time.time()
+                    
                 else:
                     # 视频结束，停止播放（不循环）
                     if self.source_type == 'video' and self.video_path:
@@ -1616,6 +1589,113 @@ class VideoSourceManager:
         self.current_cycle_steps = []
         self.last_added_step = None
     
+    def _process_simultaneous_groups(self, detected_labels: set, current_time: float) -> set:
+        """
+        处理同时出现组逻辑。
+        返回被锁定的标签集合（这些标签不应被 _update_step_stats 当作"新出现"处理）。
+        
+        状态机：
+        - idle: 组内没有任何成员在场
+        - watching: 组内第一个成员出现了，等待其余成员在 time_window 内出现
+        - activated: 所有成员都在 time_window 内出现了，锁定整组防止重复识别
+        """
+        locked_labels = set()
+        
+        if not self._simultaneous_groups:
+            return locked_labels
+        
+        for idx, group in enumerate(self._simultaneous_groups):
+            if not group.get('enabled', True):
+                continue
+            
+            group_labels = set(group.get('labels', []))
+            if len(group_labels) < 2:
+                continue
+            
+            time_window = group.get('time_window', 2.0)
+            priority_order = group.get('priority_order', list(group_labels))
+            group_key = idx
+            
+            present_members = group_labels & detected_labels
+            
+            state = self._sim_group_state.get(group_key, {
+                'phase': 'idle',
+                'watch_start': None,
+                'appeared_labels': set(),
+                'recorded': False,
+            })
+            
+            if state['phase'] == 'idle':
+                if present_members:
+                    state['phase'] = 'watching'
+                    state['watch_start'] = current_time
+                    state['appeared_labels'] = set(present_members)
+                    state['recorded'] = False
+                    
+                    if present_members == group_labels:
+                        state['phase'] = 'activated'
+                        locked_labels.update(group_labels)
+                        print(f"[同时出现组 {idx}] 全部成员同帧出现 {group_labels}，立即激活")
+            
+            elif state['phase'] == 'watching':
+                state['appeared_labels'].update(present_members)
+                elapsed = current_time - state['watch_start']
+                
+                if state['appeared_labels'] >= group_labels:
+                    state['phase'] = 'activated'
+                    locked_labels.update(group_labels)
+                    print(f"[同时出现组 {idx}] 全部成员在 {elapsed:.2f}s 内出现，激活")
+                elif elapsed > time_window:
+                    state['phase'] = 'idle'
+                    state['watch_start'] = None
+                    state['appeared_labels'] = set()
+                else:
+                    pass
+            
+            elif state['phase'] == 'activated':
+                locked_labels.update(group_labels & detected_labels)
+                
+                if not state['recorded']:
+                    self.current_cycle_steps = [
+                        s for s in self.current_cycle_steps if s not in group_labels
+                    ]
+                    
+                    if len(self.current_cycle_steps) == 0:
+                        self.cycle_start_time = current_time
+                        self.start_cycle()
+                    
+                    for pl in priority_order:
+                        if pl in group_labels:
+                            self.current_cycle_steps.append(pl)
+                            self.last_added_step = pl
+                    
+                    for pl in group_labels:
+                        if pl not in self.step_start_time:
+                            self.step_start_time[pl] = current_time
+                        self.step_last_seen[pl] = current_time
+                        self.step_detection_times[pl] = current_time
+                    
+                    state['recorded'] = True
+                    print(f"[同时出现组 {idx}] 按优先级 {priority_order} 记录到周期")
+                
+                all_gone = all(
+                    label not in detected_labels and
+                    (current_time - self.step_last_seen.get(label, 0)) > 
+                    (self.step_time_config.get(label, {}).get('max_interval') or 1.0)
+                    for label in group_labels
+                )
+                
+                if all_gone:
+                    state['phase'] = 'idle'
+                    state['watch_start'] = None
+                    state['appeared_labels'] = set()
+                    state['recorded'] = False
+                    print(f"[同时出现组 {idx}] 全部成员已消失，解锁")
+            
+            self._sim_group_state[group_key] = state
+        
+        return locked_labels
+    
     def _update_step_stats(self, detections: list, original_frame: np.ndarray):
         """更新步骤统计和截图
         
@@ -1696,8 +1776,33 @@ class VideoSourceManager:
                     if step_label:
                         enabled_labels.add(step_label)
         
+        # 处理同时出现组：获取被锁定的标签（这些标签由同时出现组统一管理）
+        sim_locked_labels = self._process_simultaneous_groups(detected_labels, current_time)
+        
+        # 对被锁定的标签，仍然更新 step_last_seen 和截图，但不做周期记录
+        for det in detections:
+            label = det.get('label', '')
+            if label in sim_locked_labels and label in detected_labels:
+                self.step_last_seen[label] = current_time
+                # 更新截图
+                x, y, w, h = det['x'], det['y'], det['w'], det['h']
+                img_h, img_w = original_frame.shape[:2]
+                pad = 20
+                cx1 = max(0, int(x * img_w) - pad)
+                cy1 = max(0, int(y * img_h) - pad)
+                cx2 = min(img_w, int((x + w) * img_w) + pad)
+                cy2 = min(img_h, int((y + h) * img_h) + pad)
+                if cx2 > cx1 and cy2 > cy1:
+                    crop = original_frame[cy1:cy2, cx1:cx2]
+                    _, buffer = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    self.step_screenshots[label] = base64.b64encode(buffer).decode('utf-8')
+        
         # 继续处理通过帧数过滤的标签
         for label in detected_labels:
+            
+            # 跳过被同时出现组锁定的标签（已由 _process_simultaneous_groups 统一处理）
+            if label in sim_locked_labels:
+                continue
             
             # 跳过禁用的步骤（重要：避免禁用步骤消耗资源导致系统卡死）
             if label not in enabled_labels:
@@ -2839,6 +2944,7 @@ class VideoSourceManager:
                 # 同时更新 _confirmed_detections（供捕获线程使用）
                 with self._confirmed_detections_lock:
                     self._confirmed_detections = confirmed
+                
                     
             except Exception as e:
                 debug_log(f"!!! 推理线程错误: {e}", "INFERENCE")
@@ -3553,6 +3659,9 @@ class VideoSourceManager:
         # 清理帧计数状态
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        
+        # 重置同时出现组状态
+        self._sim_group_state = {}
         
         # 限制事件日志大小
         if len(self.events_log) > 500:

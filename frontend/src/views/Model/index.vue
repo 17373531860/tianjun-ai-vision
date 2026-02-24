@@ -68,6 +68,7 @@
           action="#"
           :auto-upload="false"
           :on-change="handleFileChange"
+          :on-exceed="handleExceed"
           :limit="1"
           accept=".pt,.pth,.onnx,.engine,.pkl"
         >
@@ -98,32 +99,46 @@
       </template>
     </el-dialog>
 
-    <!-- Detail Dialog -->
+    <!-- Detail / Edit Dialog -->
     <el-dialog v-model="detailDialogVisible" title="模型详情" width="500px">
       <div v-if="currentModel" class="space-y-4">
         <div class="flex items-center gap-4">
           <div class="w-16 h-16 bg-tech-blue/10 rounded-lg flex items-center justify-center">
             <el-icon :size="32" class="text-tech-blue"><Cpu /></el-icon>
           </div>
-          <div>
-            <h3 class="text-xl font-bold">{{ currentModel.name }}</h3>
+          <div class="flex-1">
             <p class="text-gray-400 text-sm">{{ currentModel.file_name }}</p>
           </div>
         </div>
         
-        <el-descriptions :column="1" border>
-          <el-descriptions-item label="版本">{{ currentModel.version || 'N/A' }}</el-descriptions-item>
+        <el-form label-position="top" class="mt-4">
+          <el-form-item label="模型名称">
+            <el-input v-model="editForm.name" placeholder="输入模型名称" />
+          </el-form-item>
+          <el-form-item label="版本号">
+            <el-input v-model="editForm.version" placeholder="例如: V1.0.0" />
+          </el-form-item>
+          <el-form-item label="描述">
+            <el-input v-model="editForm.description" type="textarea" :rows="2" placeholder="模型用途描述" />
+          </el-form-item>
+        </el-form>
+
+        <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="框架">{{ currentModel.framework }}</el-descriptions-item>
           <el-descriptions-item label="文件大小">{{ formatFileSize(currentModel.file_size) }}</el-descriptions-item>
           <el-descriptions-item label="上传时间">{{ formatDateTime(currentModel.upload_time) }}</el-descriptions-item>
           <el-descriptions-item label="状态">
-            <el-tag :type="currentModel.status === 'active' ? 'success' : 'info'">
+            <el-tag :type="currentModel.status === 'active' ? 'success' : 'info'" size="small">
               {{ currentModel.status === 'active' ? '使用中' : '闲置' }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="描述">{{ currentModel.description || '无' }}</el-descriptions-item>
+          <el-descriptions-item label="类别数">{{ getLabelsCount(currentModel.labels) }} 个</el-descriptions-item>
         </el-descriptions>
       </div>
+      <template #footer>
+        <el-button @click="detailDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="isSaving" @click="saveModel">保存</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -132,7 +147,7 @@
 import { ref, onMounted } from 'vue';
 import { ElMessageBox, ElMessage } from 'element-plus';
 import { UploadFilled, Cpu, Upload } from '@element-plus/icons-vue';
-import { getModels, uploadModel, deleteModel } from '@/api/model';
+import { getModels, uploadModel, updateModel, deleteModel } from '@/api/model';
 
 const modelList = ref([]);
 const loading = ref(false);
@@ -143,6 +158,8 @@ const isUploading = ref(false);
 const selectedFile = ref(null);
 const currentModel = ref(null);
 const uploadRef = ref(null);
+const isSaving = ref(false);
+const editForm = ref({ name: '', version: '', description: '' });
 
 const uploadForm = ref({
   name: '',
@@ -204,6 +221,23 @@ const handleFileChange = (file) => {
   }
 };
 
+// 超出文件数量限制时，用新文件替换旧文件
+const handleExceed = (files) => {
+  if (uploadRef.value) {
+    uploadRef.value.clearFiles();
+  }
+  const newFile = files[0];
+  if (newFile) {
+    selectedFile.value = newFile;
+    // 更新模型名称为新文件名
+    uploadForm.value.name = newFile.name.replace(/\.(pt|pth|onnx|engine|pkl)$/i, '');
+    // 手动将新文件添加到 el-upload 的文件列表中显示
+    if (uploadRef.value) {
+      uploadRef.value.handleStart(newFile);
+    }
+  }
+};
+
 const startUpload = async () => {
   if (!selectedFile.value) {
     ElMessage.warning('请先选择文件');
@@ -250,7 +284,35 @@ const startUpload = async () => {
 
 const handleEdit = (model) => {
   currentModel.value = model;
+  editForm.value = {
+    name: model.name || '',
+    version: model.version || '',
+    description: model.description || ''
+  };
   detailDialogVisible.value = true;
+};
+
+const saveModel = async () => {
+  if (!currentModel.value) return;
+  if (!editForm.value.name) {
+    ElMessage.warning('模型名称不能为空');
+    return;
+  }
+  isSaving.value = true;
+  try {
+    await updateModel(currentModel.value.id, {
+      name: editForm.value.name,
+      version: editForm.value.version || null,
+      description: editForm.value.description || null
+    });
+    ElMessage.success('模型信息已更新');
+    detailDialogVisible.value = false;
+    loadModels();
+  } catch (err) {
+    ElMessage.error('更新失败: ' + (err.response?.data?.detail || err.message));
+  } finally {
+    isSaving.value = false;
+  }
 };
 
 const confirmDelete = async (model) => {

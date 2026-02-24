@@ -2,6 +2,7 @@
   <header class="h-16 bg-[#0f172a] border-b border-cyan-900 flex items-center justify-between px-4 text-white shadow-lg shadow-cyan-900/20">
     <!-- Left: Logo & Menu -->
     <div class="flex items-center gap-4">
+      <slot name="left"></slot>
       <div class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
         {{ store.display.brandName || $t('navbar.title') }}
       </div>
@@ -106,7 +107,7 @@ import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
 import { Setting, UserFilled, Check } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { getProjects, getProjectDetail } from '@/api/project';
+import { getProjects, getProjectDetail, activateProject } from '@/api/project';
 
 const store = useSystemStore();
 const projectStore = useProjectStore();
@@ -237,15 +238,22 @@ const loadProjects = async () => {
     const res = await getProjects();
     projectList.value = res.data.items || [];
     
-    // 如果有当前项目，设置选中状态
-    if (projectStore.currentProjectId) {
-      selectedProjectId.value = projectStore.currentProjectId;
-    }
+    // 优先使用后端 is_active 状态来同步当前项目
+    const activeInBackend = projectList.value.find(p => p.is_active);
     
-    // 检查是否需要恢复上次选择
-    const savedSettings = loadAutoSaveSettings();
-    if (savedSettings && savedSettings.enabled && !projectStore.currentProjectId) {
-      await restoreLastSelection(savedSettings);
+    if (activeInBackend) {
+      if (projectStore.currentProjectId !== activeInBackend.id) {
+        await handleProjectChange(activeInBackend.id);
+      } else {
+        selectedProjectId.value = activeInBackend.id;
+      }
+    } else if (projectStore.currentProjectId) {
+      selectedProjectId.value = projectStore.currentProjectId;
+    } else {
+      const savedSettings = loadAutoSaveSettings();
+      if (savedSettings && savedSettings.enabled) {
+        await restoreLastSelection(savedSettings);
+      }
     }
   } catch (err) {
     console.error('加载项目列表失败:', err);
@@ -272,6 +280,9 @@ const handleProjectChange = async (projectId) => {
   }
   
   try {
+    // 同步后端激活状态
+    await activateProject(projectId).catch(() => {});
+    
     const res = await getProjectDetail(projectId);
     const project = res.data;
     

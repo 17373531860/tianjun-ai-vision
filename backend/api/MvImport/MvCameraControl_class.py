@@ -77,7 +77,7 @@ def check_sys_and_update_dll():
                     MvCamCtrldll = WinDLL(MvCamCtrldllPath, winmode=0)
                 else:
                     MvCamCtrldll = WinDLL(MvCamCtrldllPath)
-                print(f"[海康SDK] 已加载内嵌 DLL: {embedded_dll}")
+                pass
             finally:
                 os.chdir(_old_cwd)
         else:
@@ -87,7 +87,7 @@ def check_sys_and_update_dll():
                 MvCamCtrldll = WinDLL(MvCamCtrldllPath, winmode=0)
             else:
                 MvCamCtrldll = WinDLL(MvCamCtrldllPath)
-            print(f"[海康SDK] 使用系统 DLL: {MvCamCtrldllPath}")
+            pass
     else:
         # Linux: 优先使用内嵌的 SO，然后尝试系统路径
         embedded_so = os.path.join(_embedded_lib_dir, "libMvCameraControl.so")
@@ -117,11 +117,11 @@ def check_sys_and_update_dll():
             if os.path.isfile(so_path):
                 try:
                     MvCamCtrldll = ctypes.cdll.LoadLibrary(so_path)
-                    print(f"[海康SDK] 已加载内嵌 SO: {so_path}")
+                    pass
                     loaded = True
                     break
                 except Exception as e:
-                    print(f"[海康SDK] 加载内嵌 SO 失败 ({so_path}): {e}")
+                    pass
         
         if not loaded:
             # 回退到系统路径
@@ -141,18 +141,15 @@ def check_sys_and_update_dll():
                 elif architecture in ('i386', 'i686'):
                     MvCamCtrldllPath = env_path + "/32/libMvCameraControl.so"
                 else:
-                    print(f"[海康SDK] 不支持的架构: {architecture}")
                     raise Exception(f"Unsupported architecture: {architecture}")
                 
                 MvCamCtrldll = ctypes.cdll.LoadLibrary(MvCamCtrldllPath)
-                print(f"[海康SDK] 使用系统 SO: {MvCamCtrldllPath}")
+                pass
             else:
                 # 最后尝试直接加载（可能在 LD_LIBRARY_PATH 中）
                 try:
                     MvCamCtrldll = ctypes.cdll.LoadLibrary("libMvCameraControl.so")
-                    print("[海康SDK] 从系统库路径加载 libMvCameraControl.so")
-                except Exception as e:
-                    print(f"[海康SDK] 加载失败，请设置 MVCAM_COMMON_RUNENV 环境变量或安装海康 MVS SDK: {e}")
+                except Exception:
                     raise
         
         

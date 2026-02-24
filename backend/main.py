@@ -316,44 +316,20 @@ def video_feed():
             media_type="multipart/x-mixed-replace; boundary=frame"
         )
     
-    # 否则使用默认摄像头
+    # 没有活动的输入源时，返回黑色占位帧（不尝试打开摄像头）
     def generate_frames():
-        cap = cv2.VideoCapture(settings.DEFAULT_CAMERA_INDEX)
-        if not cap.isOpened():
-            # 返回一个黑色帧作为占位
-            import numpy as np
-            black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            # 在黑色帧上添加文字
-            cv2.putText(black_frame, "No Camera", (200, 240), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-            ret, buffer = cv2.imencode('.jpg', black_frame)
-            if ret:
-                while True:
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                    import time
-                    time.sleep(0.1)
-            return
-        
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, settings.DEFAULT_FRAME_WIDTH)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.DEFAULT_FRAME_HEIGHT)
-        cap.set(cv2.CAP_PROP_FPS, settings.DEFAULT_FPS)
-        
-        try:
+        import numpy as np
+        black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.putText(black_frame, "No Source", (220, 240), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        ret, buffer = cv2.imencode('.jpg', black_frame)
+        if ret:
+            frame_data = buffer.tobytes()
             while True:
-                success, frame = cap.read()
-                if not success:
-                    break
-                
-                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                if not ret:
-                    continue
-                
-                frame_bytes = buffer.tobytes()
                 yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        finally:
-            cap.release()
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
+                import time
+                time.sleep(0.1)
     
     return StreamingResponse(
         generate_frames(),

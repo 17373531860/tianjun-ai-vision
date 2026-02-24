@@ -479,6 +479,54 @@
                   </div>
                 </div>
               </el-card>
+
+              <!-- Simultaneous Groups Config (适用于所有模式) -->
+              <el-card shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header>
+                  <div class="flex justify-between items-center">
+                    <span class="font-bold text-white">同时出现组</span>
+                    <el-button type="primary" size="small" link @click="addSimultaneousGroup">+ 新增组</el-button>
+                  </div>
+                </template>
+                <div class="space-y-4 text-sm text-gray-300">
+                  <p class="text-xs text-gray-400">当多个步骤可能同时出现在画面中时，配置为一组可防止重复识别。系统会按设定的优先顺序记录到周期中。</p>
+                  <div class="space-y-3">
+                    <div v-for="(group, gIdx) in (activeProject.simultaneous_groups || [])" :key="gIdx" class="bg-slate-900 p-3 rounded border border-slate-700">
+                      <div class="flex justify-between items-center mb-3">
+                        <div class="flex items-center gap-3">
+                          <el-switch v-model="group.enabled" size="small" />
+                          <span class="text-cyan-400 font-bold">组 {{ gIdx + 1 }}</span>
+                        </div>
+                        <el-button type="danger" size="small" link @click="removeSimultaneousGroup(gIdx)">删除</el-button>
+                      </div>
+                      <div class="space-y-3">
+                        <div>
+                          <p class="text-xs text-gray-500 mb-1">时间窗口（秒）：在此时间内先后出现视为"同时"</p>
+                          <el-input-number v-model="group.time_window" size="small" :min="0.5" :max="10" :step="0.5" :precision="1" />
+                        </div>
+                        <div>
+                          <p class="text-xs text-gray-500 mb-2">选择可能同时出现的步骤，并按优先顺序排列（拖拽或使用箭头调整）：</p>
+                          <div class="space-y-2">
+                            <div v-for="(label, sIdx) in (group.priority_order || [])" :key="sIdx" class="flex items-center gap-2">
+                              <span class="text-gray-400 text-xs w-6">{{ sIdx + 1 }}.</span>
+                              <el-select v-model="group.priority_order[sIdx]" size="small" class="flex-1" placeholder="选择步骤">
+                                <el-option v-for="step in enabledSteps" :key="step.id" :label="step.displayLabel || step.label" :value="step.label" />
+                              </el-select>
+                              <el-button size="small" :disabled="sIdx === 0" link @click="moveSimGroupStep(gIdx, sIdx, -1)">↑</el-button>
+                              <el-button size="small" :disabled="sIdx === group.priority_order.length - 1" link @click="moveSimGroupStep(gIdx, sIdx, 1)">↓</el-button>
+                              <el-button type="danger" size="small" link @click="removeSimGroupStep(gIdx, sIdx)">删除</el-button>
+                            </div>
+                            <el-button type="primary" size="small" link @click="addSimGroupStep(gIdx)">+ 添加步骤</el-button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-if="!activeProject.simultaneous_groups || activeProject.simultaneous_groups.length === 0" class="text-gray-500 text-center py-4 border border-dashed border-slate-700 rounded">
+                      暂无同时出现组，点击上方按钮添加
+                    </div>
+                  </div>
+                </div>
+              </el-card>
             </div>
           </el-tab-pane>
 
@@ -784,6 +832,10 @@ const initProjectDefaults = (project) => {
   if (project.accumulate_repeats === undefined) {
     project.accumulate_repeats = pipelineConfig.accumulate_repeats || false;
   }
+  // 同时出现组
+  if (project.simultaneous_groups === undefined) {
+    project.simultaneous_groups = pipelineConfig.simultaneous_groups || [];
+  }
   
   // 同步到 pipeline_config，供UI使用
   project.pipeline_config.sequence_order = project.sequence_order;
@@ -793,6 +845,7 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_sequence_order = project.custom_sequence_order;
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
+  project.pipeline_config.simultaneous_groups = project.simultaneous_groups;
   
   return project;
 };
@@ -885,7 +938,11 @@ const handleSaveProject = async () => {
         custom_based_on: activeProject.value.custom_based_on,
         custom_sequence_order: activeProject.value.custom_sequence_order,
         custom_detection_steps: activeProject.value.custom_detection_steps,
-        accumulate_repeats: activeProject.value.accumulate_repeats
+        accumulate_repeats: activeProject.value.accumulate_repeats,
+        simultaneous_groups: (activeProject.value.simultaneous_groups || []).map(g => ({
+          ...g,
+          labels: (g.priority_order || []).filter(l => l)
+        }))
       }
     };
     await updateProject(activeProject.value.id, data);
@@ -1032,6 +1089,43 @@ const removeConditionStep = (condIdx, stepIdx) => {
   activeProject.value.custom_conditions[condIdx].sequence.splice(stepIdx, 1);
 };
 
+// 同时出现组操作
+const addSimultaneousGroup = () => {
+  if (!activeProject.value.simultaneous_groups) activeProject.value.simultaneous_groups = [];
+  activeProject.value.simultaneous_groups.push({
+    enabled: true,
+    labels: [],
+    time_window: 2.0,
+    priority_order: []
+  });
+};
+
+const removeSimultaneousGroup = (idx) => {
+  activeProject.value.simultaneous_groups.splice(idx, 1);
+};
+
+const addSimGroupStep = (gIdx) => {
+  const group = activeProject.value.simultaneous_groups[gIdx];
+  if (!group.priority_order) group.priority_order = [];
+  group.priority_order.push('');
+};
+
+const removeSimGroupStep = (gIdx, sIdx) => {
+  const group = activeProject.value.simultaneous_groups[gIdx];
+  group.priority_order.splice(sIdx, 1);
+  group.labels = group.priority_order.filter(l => l);
+};
+
+const moveSimGroupStep = (gIdx, sIdx, direction) => {
+  const group = activeProject.value.simultaneous_groups[gIdx];
+  const newIdx = sIdx + direction;
+  if (newIdx < 0 || newIdx >= group.priority_order.length) return;
+  const temp = group.priority_order[sIdx];
+  group.priority_order[sIdx] = group.priority_order[newIdx];
+  group.priority_order[newIdx] = temp;
+  group.labels = group.priority_order.filter(l => l);
+};
+
 // 自定义模式 - 独立的顺序配置操作
 const addCustomSequenceStep = () => {
   if (!activeProject.value.custom_sequence_order) activeProject.value.custom_sequence_order = [];
@@ -1042,50 +1136,66 @@ const removeCustomSequenceStep = (idx) => {
   activeProject.value.custom_sequence_order.splice(idx, 1);
 };
 
-// 步骤启用状态变化时的清理逻辑
+// 步骤启用状态变化时的清理/恢复逻辑
 const onStepEnabledChange = (step, enabled) => {
-  if (enabled) return; // 启用时不需要清理
-  
   const stepId = step.id;
   
-  // 1. 从顺序模式配置中移除
-  if (activeProject.value.sequence_order) {
-    activeProject.value.sequence_order = activeProject.value.sequence_order.filter(
-      item => item.step_id !== stepId
-    );
+  if (!enabled) {
+    // === 禁用：从所有配置中移除 ===
+    if (activeProject.value.sequence_order) {
+      activeProject.value.sequence_order = activeProject.value.sequence_order.filter(
+        item => item.step_id !== stepId
+      );
+    }
+    if (activeProject.value.detection_steps) {
+      activeProject.value.detection_steps = activeProject.value.detection_steps.filter(
+        id => id !== stepId
+      );
+    }
+    if (activeProject.value.custom_sequence_order) {
+      activeProject.value.custom_sequence_order = activeProject.value.custom_sequence_order.filter(
+        item => item.step_id !== stepId
+      );
+    }
+    if (activeProject.value.custom_detection_steps) {
+      activeProject.value.custom_detection_steps = activeProject.value.custom_detection_steps.filter(
+        id => id !== stepId
+      );
+    }
+    if (activeProject.value.custom_conditions) {
+      activeProject.value.custom_conditions.forEach(cond => {
+        if (cond.sequence) {
+          cond.sequence = cond.sequence.filter(id => id !== stepId);
+        }
+      });
+    }
+    console.log(`步骤 [${step.label}] 已禁用，已从所有配置中移除`);
+  } else {
+    // === 启用：加回到相关配置中 ===
+    if (!activeProject.value.sequence_order) activeProject.value.sequence_order = [];
+    const alreadyInSeq = activeProject.value.sequence_order.some(item => item.step_id === stepId);
+    if (!alreadyInSeq) {
+      activeProject.value.sequence_order.push({ step_id: stepId });
+    }
+    
+    if (!activeProject.value.detection_steps) activeProject.value.detection_steps = [];
+    if (!activeProject.value.detection_steps.includes(stepId)) {
+      activeProject.value.detection_steps.push(stepId);
+    }
+    
+    if (!activeProject.value.custom_sequence_order) activeProject.value.custom_sequence_order = [];
+    const alreadyInCustomSeq = activeProject.value.custom_sequence_order.some(item => item.step_id === stepId);
+    if (!alreadyInCustomSeq) {
+      activeProject.value.custom_sequence_order.push({ step_id: stepId });
+    }
+    
+    if (!activeProject.value.custom_detection_steps) activeProject.value.custom_detection_steps = [];
+    if (!activeProject.value.custom_detection_steps.includes(stepId)) {
+      activeProject.value.custom_detection_steps.push(stepId);
+    }
+    
+    console.log(`步骤 [${step.label}] 已启用，已加回到配置中`);
   }
-  
-  // 2. 从检测模式配置中移除
-  if (activeProject.value.detection_steps) {
-    activeProject.value.detection_steps = activeProject.value.detection_steps.filter(
-      id => id !== stepId
-    );
-  }
-  
-  // 3. 从自定义模式的顺序配置中移除
-  if (activeProject.value.custom_sequence_order) {
-    activeProject.value.custom_sequence_order = activeProject.value.custom_sequence_order.filter(
-      item => item.step_id !== stepId
-    );
-  }
-  
-  // 4. 从自定义模式的检测配置中移除
-  if (activeProject.value.custom_detection_steps) {
-    activeProject.value.custom_detection_steps = activeProject.value.custom_detection_steps.filter(
-      id => id !== stepId
-    );
-  }
-  
-  // 5. 从自定义条件中移除
-  if (activeProject.value.custom_conditions) {
-    activeProject.value.custom_conditions.forEach(cond => {
-      if (cond.sequence) {
-        cond.sequence = cond.sequence.filter(id => id !== stepId);
-      }
-    });
-  }
-  
-  console.log(`步骤 [${step.label}] 已禁用，已从所有配置中移除`);
 };
 
 // 计数器操作

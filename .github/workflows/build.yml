@@ -179,8 +179,6 @@ jobs:
           echo "FFmpeg:"
           Test-Path "ffmpeg"
           Get-ChildItem "ffmpeg" -ErrorAction SilentlyContinue | Select-Object Name
-          echo "Model:"
-          Test-Path "best.pt"
       
       - name: Build Electron App
         shell: pwsh
@@ -205,29 +203,38 @@ jobs:
           files: |
             electron/dist/TianJun-AI-Vision-*-Setup.exe
           body: |
-            ## v1.3.8 更新内容
+            ## v1.4.0 更新内容
             
             ### 安全
             - 后端核心代码使用 Nuitka 编译为机器码（.pyd），源码不再可见
             
+            ### 界面优化
+            - 全局 Element Plus 暗色主题统一（消除所有白色背景板）
+            - 左侧导航栏改为可收起式抽屉（默认隐藏，点击菜单按钮展开）
+            - 全局滚动条暗色美化
+            
+            ### 新功能
+            - 同时出现步骤组：可配置多个步骤同时出现的检测逻辑（时间窗口、优先级排序）
+            - 模型仓库支持重命名/编辑已上传模型
+            - 模型上传支持连续多次上传替换
+            - 步骤启用/禁用后可正确恢复参与检测
+            - 项目运行状态同步：顶部导航栏与项目管理页激活状态一致
+            - 前端启动脚本自动清理端口冲突
+            
             ### 修复
-            - 修复 shutdown.html 未打包导致关闭窗口无法显示
-            - 修复 app 文件夹缺少 package.json 导致补丁无法使用
-            - 改进启动时清理残留进程逻辑，增加端口检测和等待机制
+            - 修复检测中心布局在步骤过多时拉伸问题
+            - 移除无用的海康 SDK 调试日志
+            - 移除 OpenCV 默认摄像头探测（消除 /dev/video0 警告）
+            - 修复 shutdown.html 未打包问题
             - 静态步骤自定义条件触发修复
             - 置信度阈值、最少帧数全局生效
-            - 持续时间过滤
-            
-            ### 新增
-            - 检测运行时锁定控件
-            - 启动时自动清理残留进程
-            - "良率"改名为"合格率"
             
             ### 安装说明
             1. 下载 .exe 安装程序
             2. 双击运行安装
             3. 按提示完成安装
             4. 首次运行需安装 VC++ 运行时库（如未安装）
+            5. 模型文件需在项目管理中上传
           draft: false
           prerelease: false
         env:

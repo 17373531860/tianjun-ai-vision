@@ -1,10 +1,10 @@
 <template>
   <div class="grid grid-cols-12 gap-3 h-[calc(100vh-8rem)] p-2 relative">
     <!-- LEFT COLUMN: VIDEO & STEPS -->
-    <div class="col-span-7 flex flex-col gap-3">
+    <div class="col-span-7 flex flex-col gap-3 min-h-0">
       
       <!-- Video Region -->
-      <div class="flex-1 bg-black border-2 border-slate-700 rounded-lg relative overflow-hidden group">
+      <div class="flex-1 min-h-0 bg-black border-2 border-slate-700 rounded-lg relative overflow-hidden group">
         <!-- 视频流 -->
         <img 
           ref="videoElement"
@@ -160,7 +160,7 @@
     </div>
 
     <!-- RIGHT COLUMN: DASHBOARD Stats -->
-    <div class="col-span-5 flex flex-col gap-3">
+    <div class="col-span-5 flex flex-col gap-3 min-h-0">
       
       <!-- Top Row: Stats Counters (Dynamic) -->
       <div v-if="systemStore.display.monitor.statsPanel" class="h-56 bg-slate-900 border border-slate-700 rounded-lg p-4 flex flex-col">

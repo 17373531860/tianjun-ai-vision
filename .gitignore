@@ -63,3 +63,22 @@ logs/
 tmp/
 temp/
 *.tmp
+
+# Model weights & test data
+*.pt
+*.avi
+*.mp4
+
+# Patch / dist archives
+patch*/
+patch*.zip
+frontend/dist.zip
+
+# Old version folder
+tianjun/
+
+# Test folders
+test*/
+
+# Doc files
+*.docx
