@@ -430,8 +430,120 @@
                 备份数据库
               </el-button>
               <el-button type="danger" plain class="w-full" @click="handleClearData" :loading="clearing">
-                清空历史数据
+                清空所有历史数据
               </el-button>
+            </div>
+          </section>
+
+          <!-- 数据清理设置 -->
+          <section class="bg-ind-panel p-4 rounded-xl border border-gray-800">
+            <h3 class="text-lg font-bold mb-4 flex items-center text-orange-400">
+              <el-icon class="mr-2"><Delete /></el-icon> 数据清理
+            </h3>
+            <div class="space-y-4">
+              <!-- 存储信息 -->
+              <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
+                <div class="text-xs text-gray-400 mb-2">存储空间</div>
+                <div class="flex justify-between text-sm mb-1">
+                  <span class="text-gray-300">应用数据</span>
+                  <span class="text-cyan-400 font-mono">{{ formatSize(storageInfo.data_size_mb) }}</span>
+                </div>
+                <div class="flex justify-between text-xs text-gray-500 mb-1 ml-3">
+                  <span>数据库</span>
+                  <span>{{ formatSize(storageInfo.breakdown?.database || 0) }}</span>
+                </div>
+                <div class="flex justify-between text-xs text-gray-500 mb-1 ml-3">
+                  <span>录制视频</span>
+                  <span>{{ formatSize(storageInfo.breakdown?.recordings || 0) }}</span>
+                </div>
+                <div class="flex justify-between text-xs text-gray-500 mb-1 ml-3">
+                  <span>上传视频</span>
+                  <span>{{ formatSize(storageInfo.breakdown?.upload_videos || 0) }}</span>
+                </div>
+                <div class="flex justify-between text-xs text-gray-500 mb-2 ml-3">
+                  <span>模型文件</span>
+                  <span>{{ formatSize(storageInfo.breakdown?.upload_models || 0) }}</span>
+                </div>
+                <el-divider class="my-2" />
+                <div class="flex justify-between text-sm mb-1">
+                  <span class="text-gray-300">磁盘使用</span>
+                  <span 
+                    class="font-mono"
+                    :class="storageInfo.disk_usage_percent >= 90 ? 'text-red-400' : storageInfo.disk_usage_percent >= 80 ? 'text-yellow-400' : 'text-green-400'"
+                  >{{ storageInfo.disk_usage_percent }}%</span>
+                </div>
+                <el-progress 
+                  :percentage="storageInfo.disk_usage_percent" 
+                  :stroke-width="6"
+                  :color="storageInfo.disk_usage_percent >= 90 ? '#f87171' : storageInfo.disk_usage_percent >= 80 ? '#facc15' : '#4ade80'"
+                  :show-text="false"
+                />
+                <div class="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>已用 {{ storageInfo.disk_used_gb }} GB</span>
+                  <span>剩余 {{ storageInfo.disk_free_gb }} GB</span>
+                </div>
+              </div>
+
+              <!-- 自动清理设置 -->
+              <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
+                <div class="flex justify-between items-center mb-3">
+                  <span class="text-sm text-gray-300">自动清理</span>
+                  <el-switch v-model="cleanupSettings.auto_cleanup" @change="saveCleanupSettings" size="small" />
+                </div>
+                <div class="flex items-center gap-2 mb-3">
+                  <span class="text-sm text-gray-300 whitespace-nowrap">保留天数</span>
+                  <el-input-number 
+                    v-model="cleanupSettings.retention_days" 
+                    :min="1" 
+                    :max="365" 
+                    size="small"
+                    controls-position="right"
+                    class="flex-1"
+                    @change="saveCleanupSettings"
+                  />
+                </div>
+                <div class="text-xs text-gray-500 mb-3">
+                  超过 {{ cleanupSettings.retention_days }} 天的数据将在每天自动清理
+                </div>
+                <el-button 
+                  type="warning" 
+                  plain 
+                  size="small"
+                  class="w-full" 
+                  @click="handleRunCleanup" 
+                  :loading="runningCleanup"
+                >
+                  立即执行清理
+                </el-button>
+              </div>
+
+              <!-- 按日期范围删除 -->
+              <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
+                <div class="text-sm text-gray-300 mb-2">按日期范围删除</div>
+                <el-date-picker
+                  v-model="clearDateRange"
+                  type="daterange"
+                  range-separator="至"
+                  start-placeholder="开始日期"
+                  end-placeholder="结束日期"
+                  format="YYYY-MM-DD"
+                  value-format="YYYY-MM-DD"
+                  class="w-full mb-2"
+                  size="small"
+                  :disabled-date="disabledDate"
+                />
+                <el-button 
+                  type="danger" 
+                  plain 
+                  size="small"
+                  class="w-full" 
+                  @click="handleClearRange" 
+                  :loading="clearingRange"
+                  :disabled="!clearDateRange || clearDateRange.length !== 2"
+                >
+                  删除选定范围数据
+                </el-button>
+              </div>
             </div>
           </section>
         </div>
@@ -514,7 +626,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
-import { Calendar, Clock, DataLine, Setting, Download, Folder, TrendCharts, VideoPlay } from '@element-plus/icons-vue';
+import { Calendar, Clock, DataLine, Setting, Download, Folder, TrendCharts, VideoPlay, Delete, Warning } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getDetectionResults } from '@/api/detection';
 import { 
@@ -532,7 +644,12 @@ import {
   downloadBlob,
   getVideoUrl,
   backupDatabase,
-  clearAllData
+  clearAllData,
+  clearDataByRange,
+  getCleanupSettings,
+  updateCleanupSettings,
+  runCleanupNow,
+  getStorageInfo
 } from '@/api/data';
 import { getProjectDetail, updateProject } from '@/api/project';
 
@@ -635,6 +752,26 @@ const handleWeekChange = (date) => {
 const videoDialogVisible = ref(false);
 const currentVideoUrl = ref('');
 
+// 清理设置
+const cleanupSettings = reactive({
+  retention_days: 30,
+  auto_cleanup: true
+});
+const savingCleanupSettings = ref(false);
+const runningCleanup = ref(false);
+const clearingRange = ref(false);
+const clearDateRange = ref([]);
+
+// 存储信息
+const storageInfo = reactive({
+  data_size_mb: 0,
+  breakdown: { database: 0, recordings: 0, uploads: 0 },
+  disk_total_gb: 0,
+  disk_used_gb: 0,
+  disk_free_gb: 0,
+  disk_usage_percent: 0
+});
+
 // 轮询定时器
 let pollingTimer = null;
 
@@ -694,6 +831,13 @@ const formatDuration = (seconds) => {
   const mins = Math.floor(seconds / 60);
   const secs = (seconds % 60).toFixed(1);
   return `${mins}m ${secs}s`;
+};
+
+// 格式化存储大小（MB → 自动转换为合适单位）
+const formatSize = (mb) => {
+  if (!mb && mb !== 0) return '0 MB';
+  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
+  return `${mb.toFixed(2)} MB`;
 };
 
 // 跳转到项目选择
@@ -1069,6 +1213,7 @@ const handleClearData = async () => {
     const deleted = res.data.deleted;
     ElMessage.success(`清理完成：${deleted.sessions}个会话, ${deleted.cycles}个周期, ${deleted.steps}条步骤, ${deleted.files}个视频文件`);
     loadAvailableDates();
+    loadStorageInfo();
     resetOverviewData();
     sessions.value = [];
     cycles.value = [];
@@ -1078,6 +1223,103 @@ const handleClearData = async () => {
     }
   } finally {
     clearing.value = false;
+  }
+};
+
+// ========== 清理设置相关 ==========
+
+const loadCleanupSettings = async () => {
+  try {
+    const res = await getCleanupSettings();
+    cleanupSettings.retention_days = res.data.retention_days;
+    cleanupSettings.auto_cleanup = res.data.auto_cleanup;
+  } catch (e) {
+    console.error('加载清理设置失败:', e);
+  }
+};
+
+const saveCleanupSettings = async () => {
+  savingCleanupSettings.value = true;
+  try {
+    await updateCleanupSettings({
+      retention_days: cleanupSettings.retention_days,
+      auto_cleanup: cleanupSettings.auto_cleanup
+    });
+    ElMessage.success('清理设置已保存');
+  } catch (e) {
+    ElMessage.error('保存清理设置失败');
+  } finally {
+    savingCleanupSettings.value = false;
+  }
+};
+
+const handleRunCleanup = async () => {
+  try {
+    await ElMessageBox.confirm(
+      `将删除 ${cleanupSettings.retention_days} 天前的所有历史数据（会话、周期、步骤、视频文件），是否继续？`,
+      '手动触发清理',
+      { confirmButtonText: '确定清理', cancelButtonText: '取消', type: 'warning' }
+    );
+    runningCleanup.value = true;
+    await runCleanupNow();
+    ElMessage.success('清理已完成');
+    loadAvailableDates();
+    loadStorageInfo();
+  } catch (err) {
+    if (err !== 'cancel') ElMessage.error('清理失败: ' + (err.response?.data?.detail || err.message));
+  } finally {
+    runningCleanup.value = false;
+  }
+};
+
+const handleClearRange = async () => {
+  if (!clearDateRange.value || clearDateRange.value.length !== 2) {
+    ElMessage.warning('请先选择日期范围');
+    return;
+  }
+  const [start, end] = clearDateRange.value;
+  try {
+    await ElMessageBox.confirm(
+      `将删除 ${start} 至 ${end} 之间的所有历史数据，是否继续？`,
+      '按范围删除',
+      { confirmButtonText: '确定删除', cancelButtonText: '取消', type: 'warning' }
+    );
+    clearingRange.value = true;
+    const res = await clearDataByRange(start, end);
+    const d = res.data.deleted;
+    ElMessage.success(`清理完成：${d.sessions}个会话, ${d.cycles}个周期, ${d.steps}条步骤, ${d.files}个文件`);
+    clearDateRange.value = [];
+    loadAvailableDates();
+    loadStorageInfo();
+    resetOverviewData();
+    sessions.value = [];
+    cycles.value = [];
+  } catch (err) {
+    if (err !== 'cancel') ElMessage.error('清理失败: ' + (err.response?.data?.detail || err.message));
+  } finally {
+    clearingRange.value = false;
+  }
+};
+
+const loadStorageInfo = async () => {
+  try {
+    const res = await getStorageInfo();
+    Object.assign(storageInfo, res.data);
+    if (storageInfo.disk_usage_percent >= 90) {
+      ElMessage.warning({
+        message: `磁盘空间不足！已使用 ${storageInfo.disk_usage_percent}%，剩余 ${storageInfo.disk_free_gb} GB，请及时清理数据。`,
+        duration: 8000,
+        showClose: true
+      });
+    } else if (storageInfo.disk_usage_percent >= 80) {
+      ElMessage.warning({
+        message: `磁盘空间较紧张，已使用 ${storageInfo.disk_usage_percent}%，剩余 ${storageInfo.disk_free_gb} GB。`,
+        duration: 5000,
+        showClose: true
+      });
+    }
+  } catch (e) {
+    console.error('获取存储信息失败:', e);
   }
 };
 
@@ -1115,6 +1357,8 @@ watch(() => projectStore.currentProjectId, () => {
 
 onMounted(() => {
   loadExportSettings();
+  loadCleanupSettings();
+  loadStorageInfo();
 });
 
 onUnmounted(() => {

@@ -16,15 +16,211 @@ import io
 import subprocess
 import tempfile
 import shutil
+import threading
+import json
 
 from backend.db.database import get_db
 from backend.models.models import (
     DetectionSession, DetectionCycle, StepRecord, 
-    VideoClip, DataExportSetting, Project
+    VideoClip, DataExportSetting, Project, SystemConfig
 )
 from backend.core.config import settings
 
 router = APIRouter()
+
+
+# ========== 自动清理后台线程 ==========
+_cleanup_thread = None
+_cleanup_stop_event = threading.Event()
+
+
+def _get_cleanup_settings_from_db():
+    """从数据库读取清理设置"""
+    from backend.db.database import SessionLocal
+    db = SessionLocal()
+    try:
+        retention_row = db.query(SystemConfig).filter(SystemConfig.key == "retention_days").first()
+        auto_row = db.query(SystemConfig).filter(SystemConfig.key == "auto_cleanup").first()
+        retention_days = int(retention_row.value) if retention_row and retention_row.value else 30
+        auto_cleanup = (auto_row.value == "true") if auto_row else True
+        return retention_days, auto_cleanup
+    except Exception:
+        return 30, True
+    finally:
+        db.close()
+
+
+def _perform_auto_cleanup():
+    """执行按保留天数的自动清理（数据库记录 + 录制文件 + 孤儿文件 + 缓存 + 过期上传视频）"""
+    retention_days, auto_cleanup = _get_cleanup_settings_from_db()
+    if not auto_cleanup or retention_days <= 0:
+        return
+
+    cutoff = datetime.now() - timedelta(days=retention_days)
+    cutoff_ts = cutoff.timestamp()
+    print(f"[自动清理] 开始清理 {retention_days} 天前的数据 (截止: {cutoff.strftime('%Y-%m-%d %H:%M:%S')})")
+
+    from backend.db.database import SessionLocal
+    db = SessionLocal()
+    try:
+        # ---- 1. 清理数据库记录和关联的录制文件 ----
+        old_sessions = db.query(DetectionSession).filter(
+            DetectionSession.start_time < cutoff
+        ).all()
+
+        session_count = 0
+        cycle_count = 0
+        step_count = 0
+        video_count = 0
+        deleted_files = 0
+
+        if old_sessions:
+            old_session_ids = [s.id for s in old_sessions]
+            old_cycles = db.query(DetectionCycle).filter(
+                DetectionCycle.session_id.in_(old_session_ids)
+            ).all()
+            old_cycle_ids = [c.id for c in old_cycles]
+
+            old_videos = db.query(VideoClip).filter(
+                VideoClip.created_at < cutoff
+            ).all()
+
+            for v in old_videos:
+                if v.file_path and os.path.isfile(v.file_path):
+                    try:
+                        os.remove(v.file_path)
+                        deleted_files += 1
+                    except Exception as e:
+                        print(f"[自动清理] 删除文件失败: {v.file_path}, {e}")
+
+            if old_cycle_ids:
+                step_count = db.query(StepRecord).filter(
+                    StepRecord.cycle_id.in_(old_cycle_ids)
+                ).delete(synchronize_session=False)
+
+            video_count = db.query(VideoClip).filter(
+                VideoClip.created_at < cutoff
+            ).delete(synchronize_session=False)
+
+            cycle_count = db.query(DetectionCycle).filter(
+                DetectionCycle.session_id.in_(old_session_ids)
+            ).delete(synchronize_session=False)
+
+            session_count = db.query(DetectionSession).filter(
+                DetectionSession.id.in_(old_session_ids)
+            ).delete(synchronize_session=False)
+
+            db.commit()
+
+        print(f"[自动清理] 数据库: {session_count}个会话, {cycle_count}个周期, {step_count}条步骤, {video_count}个视频记录, {deleted_files}个关联文件")
+
+        # ---- 2. 清理录制目录中的孤儿文件（不在数据库中 + 超过保留期的） ----
+        known_paths = set()
+        all_clips = db.query(VideoClip.file_path).all()
+        for (fp,) in all_clips:
+            if fp:
+                known_paths.add(os.path.abspath(fp))
+
+        orphan_deleted = 0
+        for rec_dir in [settings.SESSION_VIDEO_DIR, settings.CYCLE_VIDEO_DIR, settings.STEP_VIDEO_DIR]:
+            if not os.path.isdir(rec_dir):
+                continue
+            for fname in os.listdir(rec_dir):
+                fpath = os.path.join(rec_dir, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                abs_path = os.path.abspath(fpath)
+                if abs_path in known_paths:
+                    continue
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if mtime < cutoff_ts:
+                        os.remove(fpath)
+                        orphan_deleted += 1
+                except Exception as e:
+                    print(f"[自动清理] 删除孤儿文件失败: {fpath}, {e}")
+
+        if orphan_deleted:
+            print(f"[自动清理] 孤儿录制文件: 删除 {orphan_deleted} 个")
+
+        # ---- 3. 清理视频转换缓存 ----
+        cache_dir = os.path.join(settings.RECORDING_DIR, "cache")
+        cache_deleted = 0
+        if os.path.isdir(cache_dir):
+            for fname in os.listdir(cache_dir):
+                fpath = os.path.join(cache_dir, fname)
+                if os.path.isfile(fpath):
+                    try:
+                        mtime = os.path.getmtime(fpath)
+                        if mtime < cutoff_ts:
+                            os.remove(fpath)
+                            cache_deleted += 1
+                    except Exception:
+                        pass
+        if cache_deleted:
+            print(f"[自动清理] 缓存文件: 删除 {cache_deleted} 个")
+
+        # ---- 4. 清理上传的视频（用户上传的检测用视频源，超过保留期的） ----
+        upload_video_dir = settings.VIDEO_UPLOAD_DIR
+        upload_deleted = 0
+        if os.path.isdir(upload_video_dir):
+            for fname in os.listdir(upload_video_dir):
+                fpath = os.path.join(upload_video_dir, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if mtime < cutoff_ts:
+                        os.remove(fpath)
+                        upload_deleted += 1
+                except Exception as e:
+                    print(f"[自动清理] 删除上传视频失败: {fpath}, {e}")
+        if upload_deleted:
+            print(f"[自动清理] 上传视频: 删除 {upload_deleted} 个")
+
+        total_files = deleted_files + orphan_deleted + cache_deleted + upload_deleted
+        if total_files == 0 and session_count == 0:
+            print("[自动清理] 没有过期数据需要清理")
+        else:
+            print(f"[自动清理] 总计删除文件: {total_files}")
+
+    except Exception as e:
+        db.rollback()
+        print(f"[自动清理] 出错: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        db.close()
+
+
+def _cleanup_worker():
+    """后台清理线程：每24小时执行一次"""
+    import time
+    _perform_auto_cleanup()
+    while not _cleanup_stop_event.is_set():
+        _cleanup_stop_event.wait(86400)
+        if not _cleanup_stop_event.is_set():
+            _perform_auto_cleanup()
+
+
+def start_auto_cleanup():
+    """启动自动清理后台线程"""
+    global _cleanup_thread
+    if _cleanup_thread and _cleanup_thread.is_alive():
+        return
+    _cleanup_stop_event.clear()
+    _cleanup_thread = threading.Thread(target=_cleanup_worker, daemon=True, name="auto-cleanup")
+    _cleanup_thread.start()
+    print("[自动清理] 后台清理线程已启动")
+
+
+def stop_auto_cleanup():
+    """停止自动清理后台线程"""
+    global _cleanup_thread
+    _cleanup_stop_event.set()
+    if _cleanup_thread:
+        _cleanup_thread.join(timeout=2)
+        _cleanup_thread = None
 
 
 # ========== FFmpeg 路径查找 ==========
@@ -292,32 +488,26 @@ def list_sessions(
     return result
 
 
-@router.get("/sessions/{session_id}", response_model=SessionResponse)
-def get_session(session_id: int, db: Session = Depends(get_db)):
-    """获取单个会话详情"""
-    session = db.query(DetectionSession).filter(DetectionSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+@router.get("/sessions/dates")
+def get_session_dates(
+    project_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """获取有会话记录的日期列表"""
+    query = db.query(func.date(DetectionSession.start_time).label('date'))
     
-    project = db.query(Project).filter(Project.id == session.project_id).first()
+    if project_id:
+        query = query.filter(DetectionSession.project_id == project_id)
+    if start_date:
+        query = query.filter(DetectionSession.start_time >= start_date)
+    if end_date:
+        query = query.filter(DetectionSession.start_time <= end_date + " 23:59:59")
     
-    return SessionResponse(
-        id=session.id,
-        session_uuid=session.session_uuid,
-        project_id=session.project_id,
-        project_name=project.name if project else "Unknown",
-        start_time=session.start_time.strftime("%Y-%m-%d %H:%M:%S"),
-        end_time=session.end_time.strftime("%Y-%m-%d %H:%M:%S") if session.end_time else None,
-        total_cycles=session.total_cycles or 0,
-        good_cycles=session.good_cycles or 0,
-        ng_cycles=session.ng_cycles or 0,
-        counters_snapshot=session.counters_snapshot,
-        avg_cycle_time=session.avg_cycle_time or 0,
-        min_cycle_time=session.min_cycle_time,
-        max_cycle_time=session.max_cycle_time,
-        video_id=session.video_id,
-        status=session.status
-    )
+    dates = query.distinct().order_by(desc(func.date(DetectionSession.start_time))).all()
+    
+    return {"dates": [str(d.date) for d in dates]}
 
 
 @router.get("/sessions/by-date/{date}", response_model=SessionOverview)
@@ -380,26 +570,32 @@ def get_sessions_by_date(date: str, project_id: Optional[int] = None, db: Sessio
     )
 
 
-@router.get("/sessions/dates")
-def get_session_dates(
-    project_id: Optional[int] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
-    """获取有会话记录的日期列表"""
-    query = db.query(func.date(DetectionSession.start_time).label('date'))
+@router.get("/sessions/{session_id}", response_model=SessionResponse)
+def get_session(session_id: int, db: Session = Depends(get_db)):
+    """获取单个会话详情"""
+    session = db.query(DetectionSession).filter(DetectionSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
     
-    if project_id:
-        query = query.filter(DetectionSession.project_id == project_id)
-    if start_date:
-        query = query.filter(DetectionSession.start_time >= start_date)
-    if end_date:
-        query = query.filter(DetectionSession.start_time <= end_date + " 23:59:59")
+    project = db.query(Project).filter(Project.id == session.project_id).first()
     
-    dates = query.distinct().order_by(desc(func.date(DetectionSession.start_time))).all()
-    
-    return {"dates": [str(d.date) for d in dates]}
+    return SessionResponse(
+        id=session.id,
+        session_uuid=session.session_uuid,
+        project_id=session.project_id,
+        project_name=project.name if project else "Unknown",
+        start_time=session.start_time.strftime("%Y-%m-%d %H:%M:%S"),
+        end_time=session.end_time.strftime("%Y-%m-%d %H:%M:%S") if session.end_time else None,
+        total_cycles=session.total_cycles or 0,
+        good_cycles=session.good_cycles or 0,
+        ng_cycles=session.ng_cycles or 0,
+        counters_snapshot=session.counters_snapshot,
+        avg_cycle_time=session.avg_cycle_time or 0,
+        min_cycle_time=session.min_cycle_time,
+        max_cycle_time=session.max_cycle_time,
+        video_id=session.video_id,
+        status=session.status
+    )
 
 
 # ============ 周期管理 API ============
@@ -1147,18 +1343,18 @@ def backup_database():
 def clear_all_data(db: Session = Depends(get_db)):
     """
     清空所有历史数据
-    包括：会话、周期、步骤、视频记录，以及视频文件
+    包括：会话、周期、步骤、视频记录、录制文件、缓存、上传视频
     """
     try:
-        # 1. 删除视频文件
+        deleted_files = 0
+        # 1. 删除录制视频文件
         video_dirs = [
             settings.SESSION_VIDEO_DIR,
             settings.CYCLE_VIDEO_DIR,
             settings.STEP_VIDEO_DIR
         ]
-        deleted_files = 0
         for video_dir in video_dirs:
-            if os.path.exists(video_dir):
+            if os.path.isdir(video_dir):
                 for filename in os.listdir(video_dir):
                     filepath = os.path.join(video_dir, filename)
                     try:
@@ -1167,8 +1363,32 @@ def clear_all_data(db: Session = Depends(get_db)):
                             deleted_files += 1
                     except Exception as e:
                         print(f"删除视频文件失败: {filepath}, {e}")
-        
-        # 2. 删除数据库记录（按依赖顺序）
+
+        # 2. 删除视频转换缓存
+        cache_dir = os.path.join(settings.RECORDING_DIR, "cache")
+        if os.path.isdir(cache_dir):
+            for filename in os.listdir(cache_dir):
+                filepath = os.path.join(cache_dir, filename)
+                try:
+                    if os.path.isfile(filepath):
+                        os.remove(filepath)
+                        deleted_files += 1
+                except Exception:
+                    pass
+
+        # 3. 删除上传的视频文件
+        upload_deleted = 0
+        if os.path.isdir(settings.VIDEO_UPLOAD_DIR):
+            for filename in os.listdir(settings.VIDEO_UPLOAD_DIR):
+                filepath = os.path.join(settings.VIDEO_UPLOAD_DIR, filename)
+                try:
+                    if os.path.isfile(filepath):
+                        os.remove(filepath)
+                        upload_deleted += 1
+                except Exception as e:
+                    print(f"删除上传视频失败: {filepath}, {e}")
+
+        # 4. 删除数据库记录（按依赖顺序）
         step_count = db.query(StepRecord).delete(synchronize_session=False)
         video_count = db.query(VideoClip).delete(synchronize_session=False)
         cycle_count = db.query(DetectionCycle).delete(synchronize_session=False)
@@ -1184,9 +1404,210 @@ def clear_all_data(db: Session = Depends(get_db)):
                 "cycles": cycle_count,
                 "steps": step_count,
                 "videos": video_count,
-                "files": deleted_files
+                "files": deleted_files,
+                "upload_videos": upload_deleted
             }
         }
     except Exception as e:
         db.rollback()
+        raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")
+
+
+# ============ 按日期范围清理 ============
+
+class DateRangeCleanup(BaseModel):
+    start_date: str
+    end_date: str
+
+
+@router.delete("/clear/range")
+def clear_data_by_range(req: DateRangeCleanup, db: Session = Depends(get_db)):
+    """
+    删除指定日期范围内的历史数据
+    日期格式: YYYY-MM-DD
+    """
+    try:
+        start_dt = datetime.strptime(req.start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(req.end_date, "%Y-%m-%d") + timedelta(days=1) - timedelta(seconds=1)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式无效，请使用 YYYY-MM-DD")
+
+    try:
+        target_sessions = db.query(DetectionSession).filter(
+            and_(
+                DetectionSession.start_time >= start_dt,
+                DetectionSession.start_time <= end_dt
+            )
+        ).all()
+
+        if not target_sessions:
+            return {"success": True, "message": "该日期范围内没有数据", "deleted": {"sessions": 0, "cycles": 0, "steps": 0, "videos": 0, "files": 0}}
+
+        session_ids = [s.id for s in target_sessions]
+        target_cycles = db.query(DetectionCycle).filter(
+            DetectionCycle.session_id.in_(session_ids)
+        ).all()
+        cycle_ids = [c.id for c in target_cycles]
+
+        target_videos = db.query(VideoClip).filter(
+            and_(
+                VideoClip.created_at >= start_dt,
+                VideoClip.created_at <= end_dt
+            )
+        ).all()
+
+        deleted_files = 0
+        for v in target_videos:
+            if v.file_path and os.path.isfile(v.file_path):
+                try:
+                    os.remove(v.file_path)
+                    deleted_files += 1
+                except Exception as e:
+                    print(f"删除视频文件失败: {v.file_path}, {e}")
+
+        step_count = 0
+        if cycle_ids:
+            step_count = db.query(StepRecord).filter(
+                StepRecord.cycle_id.in_(cycle_ids)
+            ).delete(synchronize_session=False)
+
+        video_count = db.query(VideoClip).filter(
+            and_(
+                VideoClip.created_at >= start_dt,
+                VideoClip.created_at <= end_dt
+            )
+        ).delete(synchronize_session=False)
+
+        cycle_count = db.query(DetectionCycle).filter(
+            DetectionCycle.session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+
+        session_count = db.query(DetectionSession).filter(
+            DetectionSession.id.in_(session_ids)
+        ).delete(synchronize_session=False)
+
+        db.commit()
+
+        return {
+            "success": True,
+            "message": f"已清理 {req.start_date} 至 {req.end_date} 的数据",
+            "deleted": {
+                "sessions": session_count,
+                "cycles": cycle_count,
+                "steps": step_count,
+                "videos": video_count,
+                "files": deleted_files
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")
+
+
+# ============ 清理设置 API ============
+
+class CleanupSettingsUpdate(BaseModel):
+    retention_days: Optional[int] = None
+    auto_cleanup: Optional[bool] = None
+
+
+@router.get("/cleanup-settings")
+def get_cleanup_settings(db: Session = Depends(get_db)):
+    """获取数据清理设置"""
+    retention_row = db.query(SystemConfig).filter(SystemConfig.key == "retention_days").first()
+    auto_row = db.query(SystemConfig).filter(SystemConfig.key == "auto_cleanup").first()
+
+    return {
+        "retention_days": int(retention_row.value) if retention_row and retention_row.value else 30,
+        "auto_cleanup": (auto_row.value == "true") if auto_row else True
+    }
+
+
+@router.put("/cleanup-settings")
+def update_cleanup_settings(req: CleanupSettingsUpdate, db: Session = Depends(get_db)):
+    """更新数据清理设置"""
+    if req.retention_days is not None:
+        row = db.query(SystemConfig).filter(SystemConfig.key == "retention_days").first()
+        if row:
+            row.value = str(req.retention_days)
+        else:
+            db.add(SystemConfig(key="retention_days", value=str(req.retention_days), description="数据保留天数"))
+
+    if req.auto_cleanup is not None:
+        row = db.query(SystemConfig).filter(SystemConfig.key == "auto_cleanup").first()
+        if row:
+            row.value = "true" if req.auto_cleanup else "false"
+        else:
+            db.add(SystemConfig(key="auto_cleanup", value="true" if req.auto_cleanup else "false", description="是否启用自动清理"))
+
+    db.commit()
+
+    retention_row = db.query(SystemConfig).filter(SystemConfig.key == "retention_days").first()
+    auto_row = db.query(SystemConfig).filter(SystemConfig.key == "auto_cleanup").first()
+
+    return {
+        "retention_days": int(retention_row.value) if retention_row and retention_row.value else 30,
+        "auto_cleanup": (auto_row.value == "true") if auto_row else True
+    }
+
+
+# ============ 磁盘空间查询 ============
+
+@router.get("/storage-info")
+def get_storage_info():
+    """获取存储空间信息"""
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _dir_size(path):
+        size = 0
+        if os.path.isdir(path):
+            for dirpath, _, filenames in os.walk(path):
+                for f in filenames:
+                    try:
+                        size += os.path.getsize(os.path.join(dirpath, f))
+                    except OSError:
+                        pass
+        return size
+
+    dir_sizes = {}
+    total_size = 0
+
+    db_path = os.path.join(base_dir, "sql_app.db")
+    if os.path.isfile(db_path):
+        dir_sizes["database"] = os.path.getsize(db_path)
+    else:
+        dir_sizes["database"] = 0
+
+    dir_sizes["recordings"] = _dir_size(settings.RECORDING_DIR)
+    dir_sizes["upload_videos"] = _dir_size(settings.VIDEO_UPLOAD_DIR)
+    dir_sizes["upload_models"] = _dir_size(settings.MODEL_UPLOAD_DIR)
+
+    total_size = sum(dir_sizes.values())
+    disk = shutil.disk_usage(base_dir)
+
+    return {
+        "data_size": total_size,
+        "data_size_mb": round(total_size / 1024 / 1024, 2),
+        "breakdown": {k: round(v / 1024 / 1024, 2) for k, v in dir_sizes.items()},
+        "disk_total": disk.total,
+        "disk_used": disk.used,
+        "disk_free": disk.free,
+        "disk_total_gb": round(disk.total / 1024 / 1024 / 1024, 2),
+        "disk_used_gb": round(disk.used / 1024 / 1024 / 1024, 2),
+        "disk_free_gb": round(disk.free / 1024 / 1024 / 1024, 2),
+        "disk_usage_percent": round(disk.used / disk.total * 100, 1)
+    }
+
+
+# ============ 手动触发清理 ============
+
+@router.post("/cleanup/run")
+def run_cleanup_now():
+    """立即执行一次自动清理（按保留天数）"""
+    try:
+        _perform_auto_cleanup()
+        return {"success": True, "message": "清理已执行"}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")

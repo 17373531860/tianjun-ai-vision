@@ -144,6 +144,35 @@ export const clearAllData = () => {
   return api.delete('/data/clear/all');
 };
 
+// 按日期范围删除数据
+export const clearDataByRange = (startDate, endDate) => {
+  return api.delete('/data/clear/range', { data: { start_date: startDate, end_date: endDate } });
+};
+
+// ============ 清理设置 ============
+
+// 获取清理设置
+export const getCleanupSettings = () => {
+  return api.get('/data/cleanup-settings');
+};
+
+// 更新清理设置
+export const updateCleanupSettings = (settings) => {
+  return api.put('/data/cleanup-settings', settings);
+};
+
+// 手动触发清理
+export const runCleanupNow = () => {
+  return api.post('/data/cleanup/run');
+};
+
+// ============ 存储信息 ============
+
+// 获取存储空间信息
+export const getStorageInfo = () => {
+  return api.get('/data/storage-info');
+};
+
 // ============ 辅助函数 ============
 
 // 下载Blob文件

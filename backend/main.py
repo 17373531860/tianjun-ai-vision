@@ -8,7 +8,7 @@ from backend.api import api_router
 from backend.api.websocket import router as ws_router
 from backend.api.source import router as source_router, get_video_feed, get_video_manager
 from backend.api.detection import router as detection_router
-from backend.api.sessions import router as sessions_router
+from backend.api.sessions import router as sessions_router, start_auto_cleanup
 from backend.services.detector import get_detection_service
 # Import models to ensure they are registered
 from backend.models import models
@@ -112,6 +112,7 @@ def fix_orphan_sessions():
 
 migrate_database()
 fix_orphan_sessions()
+start_auto_cleanup()
 
 # 清理状态标志（防止重复清理）
 _cleanup_done = False

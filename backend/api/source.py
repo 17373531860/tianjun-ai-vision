@@ -531,6 +531,8 @@ class VideoSourceManager:
         self.current_cycle_steps = []  # 当前周期检测到的步骤顺序
         self.last_added_step = None  # 上一个添加到周期的步骤（用于去重判断）
         self.cycle_complete = False
+        # 标记当前周期是否已经出现“最后一步”（顺序/自定义顺序模式用来防止 7 之后继续往同一轮追加 1、2、3）
+        self._cycle_locked_by_last_step = False
         
         # Cycle Time 统计
         self.cycle_start_time = None  # 当前周期开始时间
@@ -790,11 +792,12 @@ class VideoSourceManager:
     
     def record_step(self, step_label: str, step_name: str, start_time: float, end_time: float, 
                     duration: float, interval: float = None, confidence: float = None, is_valid: bool = True,
-                    video_info: dict = None):
+                    video_info: dict = None, step_order: int = None):
         """记录步骤信息
         
         注意：interval 现在表示"到下一步骤的间隔"，在下一步骤开始时计算并更新
         video_info: 视频信息字典，包含 video_uuid 和 filepath
+        step_order: 可选，指定步骤在本周期内的顺序号（用于结算时补写缺失步骤）
         """
         if not self.current_cycle_id or not self.recording_enabled:
             return
@@ -804,7 +807,11 @@ class VideoSourceManager:
         
         try:
             db = self._get_db_session()
-            self.step_order_counter += 1
+            if step_order is not None:
+                self.step_order_counter = max(self.step_order_counter, step_order)
+            else:
+                self.step_order_counter += 1
+            order_to_use = step_order if step_order is not None else self.step_order_counter
             
             # 更新上一个步骤的"到下一步间隔"
             if self.cycle_step_records:
@@ -843,7 +850,7 @@ class VideoSourceManager:
                 step_id=step_id,
                 step_label=step_label,
                 step_name=step_name or step_label,
-                step_order=self.step_order_counter,
+                step_order=order_to_use,
                 start_time=datetime.fromtimestamp(start_time),
                 end_time=datetime.fromtimestamp(end_time),
                 duration=duration,
@@ -1534,6 +1541,11 @@ class VideoSourceManager:
         if not sequence_order or not steps_config:
             self.current_cycle_steps = []
             self.last_added_step = None
+            # 周期结算后重置步骤时序状态，确保下一轮的相同步骤可被视为“新出现”
+            self.step_last_seen.clear()
+            self.step_start_time.clear()
+            self.last_step_completed_time = None
+            self._cycle_locked_by_last_step = False
             return
         
         # 获取期望的步骤标签顺序（只包含启用的步骤）
@@ -1546,6 +1558,11 @@ class VideoSourceManager:
         if not expected_labels:
             self.current_cycle_steps = []
             self.last_added_step = None
+            # 周期结算后重置步骤时序状态，确保下一轮的相同步骤可被视为“新出现”
+            self.step_last_seen.clear()
+            self.step_start_time.clear()
+            self.last_step_completed_time = None
+            self._cycle_locked_by_last_step = False
             return
         
         print(f"顺序模式结算: 期望={expected_labels}, 实际={self.current_cycle_steps}")
@@ -1588,14 +1605,20 @@ class VideoSourceManager:
         # 重置周期
         self.current_cycle_steps = []
         self.last_added_step = None
+        # 不清理 step_last_seen，配合纯时间 is_new_appearance 判定
+        self.last_step_completed_time = None
+        self._cycle_locked_by_last_step = False
     
-    def _process_simultaneous_groups(self, detected_labels: set, current_time: float) -> set:
+    def _process_simultaneous_groups(self, frame_detected_labels: set, detected_labels: set, current_time: float) -> set:
         """
         处理同时出现组逻辑。
         返回被锁定的标签集合（这些标签不应被 _update_step_stats 当作"新出现"处理）。
         
+        frame_detected_labels: 本帧通过置信度的标签（未做帧数过滤），用于判断「同时出现」
+        detected_labels: 通过帧数过滤的标签，用于统计与消失判定
+        
         状态机：
-        - idle: 组内没有任何成员在场
+        - idle: 组内没有任何成员在场（按本帧检测结果）
         - watching: 组内第一个成员出现了，等待其余成员在 time_window 内出现
         - activated: 所有成员都在 time_window 内出现了，锁定整组防止重复识别
         """
@@ -1603,6 +1626,12 @@ class VideoSourceManager:
         
         if not self._simultaneous_groups:
             return locked_labels
+        
+        logic_mode = self.project_config.get('logic_mode') if self.project_config else 'detection'
+        pipeline_config = self.project_config.get('pipeline_config', {}) if self.project_config else {}
+        # 顺序相关：第一步 / 最后一步标签（如果配置了顺序）
+        first_step_label_global = self._get_first_sequence_step_label() if self.project_config else None
+        last_step_label_global = self._get_last_sequence_step_label() if self.project_config else None
         
         for idx, group in enumerate(self._simultaneous_groups):
             if not group.get('enabled', True):
@@ -1613,10 +1642,31 @@ class VideoSourceManager:
                 continue
             
             time_window = group.get('time_window', 2.0)
-            priority_order = group.get('priority_order', list(group_labels))
+            # 优先使用 priority_order（用户配置顺序），否则用 labels 顺序
+            priority_order = group.get('priority_order') or list(group.get('labels', [])) or list(group_labels)
             group_key = idx
             
-            present_members = group_labels & detected_labels
+            # 如果这个组同时包含“第一步”和“最后一步”，视为跨周期组。
+            # 跨周期边界交由顺序模式自身处理，这里不再做额外合并或锁定，
+            # 避免产生只包含“最后一步”的短周期，保持逻辑的通用性。
+            is_cross_cycle_group = (
+                first_step_label_global is not None
+                and last_step_label_global is not None
+                and first_step_label_global in group_labels
+                and last_step_label_global in group_labels
+            )
+            if is_cross_cycle_group:
+                # 略过该组，由顺序模式的“第一步重新出现 / 最后一步消失”规则处理跨周期
+                self._sim_group_state[group_key] = {
+                    'phase': 'idle',
+                    'watch_start': None,
+                    'appeared_labels': set(),
+                    'recorded': False,
+                }
+                continue
+            
+            # 用本帧检测到的标签判断「同时出现」，避免因帧数过滤导致同帧两个步骤不同时进入 detected_labels 而永远不激活
+            present_members = group_labels & frame_detected_labels
             
             state = self._sim_group_state.get(group_key, {
                 'phase': 'idle',
@@ -1634,7 +1684,11 @@ class VideoSourceManager:
                     
                     if present_members == group_labels:
                         state['phase'] = 'activated'
-                        locked_labels.update(group_labels)
+                        # 普通组：锁定整组；跨周期组：只锁定除第一步之外的成员
+                        if is_cross_cycle_group:
+                            locked_labels.update(group_labels - {first_step_label_global})
+                        else:
+                            locked_labels.update(group_labels)
                         print(f"[同时出现组 {idx}] 全部成员同帧出现 {group_labels}，立即激活")
             
             elif state['phase'] == 'watching':
@@ -1643,7 +1697,10 @@ class VideoSourceManager:
                 
                 if state['appeared_labels'] >= group_labels:
                     state['phase'] = 'activated'
-                    locked_labels.update(group_labels)
+                    if is_cross_cycle_group:
+                        locked_labels.update(group_labels - {first_step_label_global})
+                    else:
+                        locked_labels.update(group_labels)
                     print(f"[同时出现组 {idx}] 全部成员在 {elapsed:.2f}s 内出现，激活")
                 elif elapsed > time_window:
                     state['phase'] = 'idle'
@@ -1653,34 +1710,59 @@ class VideoSourceManager:
                     pass
             
             elif state['phase'] == 'activated':
-                locked_labels.update(group_labels & detected_labels)
+                # 激活后继续锁定：普通组锁定整组，跨周期组只锁定除第一步之外的成员，
+                # 让“第一步”仍然走主循环，用于触发上一轮结算并作为下一轮的起点
+                if is_cross_cycle_group:
+                    locked_labels.update(group_labels - {first_step_label_global})
+                else:
+                    locked_labels.update(group_labels)
                 
                 if not state['recorded']:
                     self.current_cycle_steps = [
                         s for s in self.current_cycle_steps if s not in group_labels
                     ]
                     
-                    if len(self.current_cycle_steps) == 0:
+                    # 对普通组，如果当前周期还没开始，则在这里开启新周期；
+                    # 对跨周期组，则由主循环在处理“第一步”时开启新周期，避免生成只包含最后一步的短周期
+                    if len(self.current_cycle_steps) == 0 and not is_cross_cycle_group:
                         self.cycle_start_time = current_time
                         self.start_cycle()
                     
-                    for pl in priority_order:
-                        if pl in group_labels:
-                            self.current_cycle_steps.append(pl)
-                            self.last_added_step = pl
+                    # 记录到周期中的顺序完全遵循用户在「同时出现组」里配置的 priority_order
+                    # 跨周期组时，只把“最后一步”等非第一步写入当前周期，
+                    # 让“第一步”由主循环按正常逻辑触发上一轮结算并作为下一轮的第一步
+                    order_to_append = list(priority_order)
+                    labels_to_append = set(group_labels)
+                    if is_cross_cycle_group:
+                        labels_to_append = group_labels - {first_step_label_global}
+                    
+                    for pl in order_to_append:
+                        if pl not in labels_to_append:
+                            continue
+                        self.current_cycle_steps.append(pl)
+                        self.last_added_step = pl
                     
                     for pl in group_labels:
+                        # 对“第一步”标签，避免在这里更新 step_last_seen，
+                        # 让主循环能够把它视为真正的“新出现”，用于结算上一轮并开启下一轮
+                        if pl == first_step_label_global and is_cross_cycle_group:
+                            if pl not in self.step_start_time:
+                                self.step_start_time[pl] = current_time
+                            self.step_detection_times[pl] = current_time
+                            continue
+                        
                         if pl not in self.step_start_time:
                             self.step_start_time[pl] = current_time
                         self.step_last_seen[pl] = current_time
                         self.step_detection_times[pl] = current_time
                     
                     state['recorded'] = True
-                    print(f"[同时出现组 {idx}] 按优先级 {priority_order} 记录到周期")
+                    print(f"[同时出现组 {idx}] 按顺序 {order_to_append} 记录到周期")
                 
+                # 用本帧是否仍检测到判断「全部消失」，与用 frame_detected_labels 判断激活一致
                 all_gone = all(
-                    label not in detected_labels and
-                    (current_time - self.step_last_seen.get(label, 0)) > 
+                    label not in frame_detected_labels and
+                    (current_time - self.step_last_seen.get(label, 0)) >
                     (self.step_time_config.get(label, {}).get('max_interval') or 1.0)
                     for label in group_labels
                 )
@@ -1776,8 +1858,8 @@ class VideoSourceManager:
                     if step_label:
                         enabled_labels.add(step_label)
         
-        # 处理同时出现组：获取被锁定的标签（这些标签由同时出现组统一管理）
-        sim_locked_labels = self._process_simultaneous_groups(detected_labels, current_time)
+        # 处理同时出现组：用本帧检测标签判断「同时出现」，返回被锁定的标签（由同时出现组统一管理）
+        sim_locked_labels = self._process_simultaneous_groups(frame_detected_labels, detected_labels, current_time)
         
         # 对被锁定的标签，仍然更新 step_last_seen 和截图，但不做周期记录
         for det in detections:
@@ -1797,8 +1879,22 @@ class VideoSourceManager:
                     _, buffer = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     self.step_screenshots[label] = base64.b64encode(buffer).decode('utf-8')
         
-        # 继续处理通过帧数过滤的标签
-        for label in detected_labels:
+        # 排序 detected_labels：如果处于顺序/自定义顺序模式，把 last_step 排在最前
+        # 确保在同一帧中 last_step 先被添加到周期，再由 first_step 触发结算
+        _logic_mode_for_sort = self.project_config.get('logic_mode') if self.project_config else 'detection'
+        _pipeline_for_sort = self.project_config.get('pipeline_config', {}) if self.project_config else {}
+        _is_seq_like = (_logic_mode_for_sort == 'sequential' or
+                        (_logic_mode_for_sort == 'custom' and _pipeline_for_sort.get('custom_based_on') == 'sequential'))
+        if _is_seq_like:
+            _last_step_for_sort = self._get_last_sequence_step_label()
+            if _last_step_for_sort and _last_step_for_sort in detected_labels:
+                sorted_detected = sorted(detected_labels, key=lambda l: (0 if l == _last_step_for_sort else 1))
+            else:
+                sorted_detected = list(detected_labels)
+        else:
+            sorted_detected = list(detected_labels)
+
+        for label in sorted_detected:
             
             # 跳过被同时出现组锁定的标签（已由 _process_simultaneous_groups 统一处理）
             if label in sim_locked_labels:
@@ -1813,17 +1909,16 @@ class VideoSourceManager:
             max_interval = time_config.get('max_interval') or 1.0  # 去重间隔，默认1秒
             
             # 判断步骤是否"刚出现"（考虑去重间隔）
-            # 去重间隔只应用于"连续重复"的同名步骤
-            # 如果中间有其他步骤（last_added_step 不同），则不应用去重，视为新出现
-            # 这样可以正确处理 "测硬度 → 扫码 → 测硬度" 的复检场景
             if label in self.step_last_seen:
                 time_since_last = current_time - self.step_last_seen[label]
-                # 检查上一个添加到周期的步骤是否是当前步骤
-                if self.last_added_step is not None and self.last_added_step != label:
-                    # 上一个步骤是其他步骤，不应用去重，视为新出现
+                if _is_seq_like:
+                    # 顺序/自定义顺序模式：纯时间判定
+                    # 不使用 last_added_step 捷径，防止周期边界重叠时
+                    # 上一周期的 last_step 被误判为"新出现"反复触发结算
+                    is_new_appearance = time_since_last > max_interval
+                elif self.last_added_step is not None and self.last_added_step != label:
                     is_new_appearance = True
                 else:
-                    # 上一个步骤是同一个步骤（或没有上一个步骤），应用去重间隔
                     is_new_appearance = time_since_last > max_interval
             else:
                 is_new_appearance = True
@@ -1833,15 +1928,8 @@ class VideoSourceManager:
             pipeline_config = self.project_config.get('pipeline_config', {}) if self.project_config else {}
             custom_based_on = pipeline_config.get('custom_based_on')
             
-            # 纯顺序模式下：检测到第一个步骤"重新出现"时，结算上一轮并开始新周期
-            if logic_mode == 'sequential':
-                first_step_label = self._get_first_sequence_step_label()
-                if first_step_label and label == first_step_label:
-                    if is_new_appearance and len(self.current_cycle_steps) > 0:
-                        self._settle_sequential_cycle()
-            
             # 自定义模式（基于顺序模式）：使用前缀匹配判断是否结算
-            elif logic_mode == 'custom' and custom_based_on == 'sequential':
+            if logic_mode == 'custom' and custom_based_on == 'sequential':
                 first_step_label = self._get_first_sequence_step_label()
                 if first_step_label and label == first_step_label:
                     if is_new_appearance and len(self.current_cycle_steps) > 0:
@@ -1863,12 +1951,22 @@ class VideoSourceManager:
                             print(f"  → 不匹配任何条件前缀，结算当前序列")
                             self._settle_custom_cycle()
             
+            # 纯顺序模式：第一步重新出现时，立即结算上一周期
+            # 由于 detected_labels 已按 last_step 优先排序，
+            # 同帧中 last_step 一定先于 first_step 被处理并加入当前周期
+            elif logic_mode == 'sequential':
+                first_step_label = self._get_first_sequence_step_label()
+                if first_step_label and label == first_step_label:
+                    if is_new_appearance and len(self.current_cycle_steps) > 0:
+                        print(f"顺序模式: 第一步 [{label}] 重新出现，结算上一周期")
+                        self._settle_sequential_cycle()
+            
             # 如果是新出现，记录开始时间
             if is_new_appearance:
                 self.step_start_time[label] = current_time
                 self.step_detection_times[label] = current_time  # 记录步骤检测时间（用于工艺卡片显示）
                 
-                # 如果是周期的第一个步骤，记录周期开始时间并创建新周期
+                # 如果是当前周期的第一个记录步骤，记录周期开始时间并创建新周期
                 if len(self.current_cycle_steps) == 0:
                     self.cycle_start_time = current_time
                     # 开始新的检测周期记录
@@ -1997,6 +2095,11 @@ class VideoSourceManager:
                             is_valid=True,
                             video_info=step_video_info
                         )
+                        
+                        # 记录该步骤消失时的结束时间，供顺序模式结算时补写未“消失”的步骤记录
+                        if not hasattr(self, '_last_disappeared_step_times'):
+                            self._last_disappeared_step_times = {}
+                        self._last_disappeared_step_times[label] = last_time
                         
                         # 收集需要检查事件的步骤（延迟判定）
                         pending_event_checks.append(label)
@@ -2149,6 +2252,8 @@ class VideoSourceManager:
             if custom_based_on == 'sequential':
                 last_step_label = self._get_last_sequence_step_label()
                 if last_step_label and completed_step == last_step_label:
+                    # 本轮的“最后一步”完成，解除锁定，准备开启下一轮
+                    self._cycle_locked_by_last_step = False
                     # 检查消失的步骤是否在当前周期中
                     # 如果不在，说明这是上一个周期的步骤消失（已经在 _settle_custom_cycle 中处理过了）
                     if completed_step in self.current_cycle_steps:
@@ -2168,6 +2273,8 @@ class VideoSourceManager:
         elif logic_mode == 'sequential':
             last_step_label = self._get_last_sequence_step_label()
             if last_step_label and completed_step == last_step_label:
+                # 本轮的“最后一步”完成，解除锁定，准备开启下一轮
+                self._cycle_locked_by_last_step = False
                 # 检查消失的步骤是否在当前周期中
                 if completed_step in self.current_cycle_steps:
                     self._check_sequential_mode(pipeline_config, id_to_label)
@@ -2186,18 +2293,20 @@ class VideoSourceManager:
                     self._trigger_event(trigger_event, f'步骤 {completed_step} 触发')
     
     def _check_sequential_mode(self, pipeline_config: dict, id_to_label: dict):
-        """检查顺序模式
+        """检查顺序模式（由 last_step 消失触发）
         
-        与自定义模式（基于顺序）的判定逻辑一致：
-        1. 检查序列长度是否超过预期（有重复步骤）
-        2. 检查是否包含所有预期步骤
-        3. 检查顺序是否正确
-        4. 无论什么情况都会触发事件并重置周期
+        关键设计：在 current_cycle_steps 中以 last_step 首次出现为界拆分，
+        拆分后的前半部分为本周期判定依据，后半部分保留给下一周期。
         """
         sequence_order = pipeline_config.get('sequence_order', [])
         if not sequence_order:
             self.current_cycle_steps = []
             self.last_added_step = None
+            # 周期结算后重置步骤时序状态，确保下一轮的相同步骤可被视为“新出现”
+            self.step_last_seen.clear()
+            self.step_start_time.clear()
+            self.last_step_completed_time = None
+            self._cycle_locked_by_last_step = False
             return
         
         # 获取启用的步骤ID集合
@@ -2214,48 +2323,93 @@ class VideoSourceManager:
         if not expected_labels:
             self.current_cycle_steps = []
             self.last_added_step = None
+            # 周期结算后重置步骤时序状态，确保下一轮的相同步骤可被视为“新出现”
+            self.step_last_seen.clear()
+            self.step_start_time.clear()
+            self.last_step_completed_time = None
+            self._cycle_locked_by_last_step = False
             return
         
-        print(f"顺序模式检查: 期望={expected_labels}, 当前周期={self.current_cycle_steps}")
+        last_step_label = expected_labels[-1]
         
-        # 检查序列长度是否超过预期（有重复步骤）
-        if len(self.current_cycle_steps) > len(expected_labels):
-            print(f"  → 序列长度({len(self.current_cycle_steps)})超过预期({len(expected_labels)})，有重复步骤 → NG")
-            self._trigger_event(2, f'序列包含重复步骤: {self.current_cycle_steps}')
-            self.current_cycle_steps = []
-            self.last_added_step = None
-            return
+        # ── 拆分：以 last_step 首次出现为界 ──
+        if last_step_label in self.current_cycle_steps:
+            split_idx = self.current_cycle_steps.index(last_step_label)
+            this_cycle = self.current_cycle_steps[:split_idx + 1]
+            next_carry = self.current_cycle_steps[split_idx + 1:]
+        else:
+            this_cycle = list(self.current_cycle_steps)
+            next_carry = []
         
-        # 检查是否包含所有预期步骤
-        if not all(label in self.current_cycle_steps for label in expected_labels):
-            missing = [l for l in expected_labels if l not in self.current_cycle_steps]
+        self.current_cycle_steps = this_cycle
+        
+        # ── 补写尚未有 StepRecord 的步骤 ──
+        cycle_end_time = time.time()
+        if getattr(self, '_last_disappeared_step_times', None) and last_step_label in self._last_disappeared_step_times:
+            cycle_end_time = self._last_disappeared_step_times[last_step_label]
+        try:
+            db = self._get_db_session()
+            existing = db.query(StepRecord.step_label).filter(StepRecord.cycle_id == self.current_cycle_id).all()
+            recorded_labels = {r.step_label for r in existing}
+            max_order = db.query(StepRecord.step_order).filter(StepRecord.cycle_id == self.current_cycle_id).all()
+            next_order = (max(o[0] for o in max_order) + 1) if max_order else 1
+            db.close()
+            for label in this_cycle:
+                if label in recorded_labels:
+                    continue
+                start_t = self.step_start_time.get(label, cycle_end_time)
+                duration = max(0, cycle_end_time - start_t)
+                step_name = label
+                for step in (steps_config or []):
+                    if step.get('label') == label:
+                        step_name = step.get('display_name') or step.get('name') or label
+                        break
+                self.record_step(
+                    step_label=label, step_name=step_name,
+                    start_time=start_t, end_time=cycle_end_time,
+                    duration=duration, interval=None, step_order=next_order)
+                next_order += 1
+        except Exception as e:
+            print(f"补写周期内缺失步骤记录失败: {e}")
+        
+        print(f"顺序模式检查: 期望={expected_labels}, 本周期={this_cycle}, 下周期残留={next_carry}")
+        
+        # ── 判定 ──
+        if len(this_cycle) > len(expected_labels):
+            print(f"  → 序列长度({len(this_cycle)})超过预期({len(expected_labels)}) → NG")
+            self._trigger_event(2, f'序列包含重复步骤: {this_cycle}')
+        elif not all(lbl in this_cycle for lbl in expected_labels):
+            missing = [l for l in expected_labels if l not in this_cycle]
             print(f"  → 周期不完整，缺少: {missing} → NG")
             self._trigger_event(2, f'周期不完整，缺少: {missing}')
-            self.current_cycle_steps = []
-            self.last_added_step = None
-            return
-        
-        # 检查顺序是否正确
-        cycle_order_correct = True
-        last_idx = -1
-        for label in expected_labels:
-            if label in self.current_cycle_steps:
-                idx = self.current_cycle_steps.index(label)
-                if idx < last_idx:
+        else:
+            cycle_order_correct = True
+            last_pos = -1
+            for lbl in expected_labels:
+                pos = this_cycle.index(lbl)
+                if pos < last_pos:
                     cycle_order_correct = False
                     break
-                last_idx = idx
+                last_pos = pos
+            if cycle_order_correct:
+                print(f"  → 顺序正确 → OK")
+                self._trigger_event(1, '顺序正确完成')
+            else:
+                print(f"  → 顺序错误 → NG")
+                self._trigger_event(2, '顺序错误')
         
-        if cycle_order_correct:
-            print(f"  → 顺序正确 → OK")
-            self._trigger_event(1, '顺序正确完成')  # 事件1: 合格
+        # ── 重置 / 承接下一周期 ──
+        if next_carry:
+            self.current_cycle_steps = next_carry
+            self.last_added_step = next_carry[-1]
+            self.cycle_start_time = self.step_start_time.get(next_carry[0], time.time())
+            self.start_cycle()
+            self._cycle_locked_by_last_step = False
         else:
-            print(f"  → 顺序错误 → NG")
-            self._trigger_event(2, '顺序错误')  # 事件2: 不良
-        
-        # 重置周期
-        self.current_cycle_steps = []
-        self.last_added_step = None
+            self.current_cycle_steps = []
+            self.last_added_step = None
+            self.last_step_completed_time = None
+            self._cycle_locked_by_last_step = False
     
     def _check_custom_sequential_mode(self, pipeline_config: dict, id_to_label: dict):
         """检查自定义模式（基于顺序模式）的判定
@@ -2288,48 +2442,87 @@ class VideoSourceManager:
             self.last_added_step = None
             return
         
-        print(f"自定义模式（基于顺序）检查: 期望={expected_labels}, 当前周期={self.current_cycle_steps}")
+        last_step_label = expected_labels[-1]
         
-        # 检查序列长度是否超过预期（有重复步骤）
-        if len(self.current_cycle_steps) > len(expected_labels):
-            # 序列包含重复步骤，且不匹配任何自定义条件（因为自定义条件检查已经在前面完成）
-            print(f"  → 序列长度({len(self.current_cycle_steps)})超过预期({len(expected_labels)})，有重复步骤 → NG")
-            self._trigger_event(2, f'序列包含重复步骤: {self.current_cycle_steps}')
-            self.current_cycle_steps = []
-            self.last_added_step = None
-            return
+        # ── 拆分：以 last_step 首次出现为界 ──
+        if last_step_label in self.current_cycle_steps:
+            split_idx = self.current_cycle_steps.index(last_step_label)
+            this_cycle = self.current_cycle_steps[:split_idx + 1]
+            next_carry = self.current_cycle_steps[split_idx + 1:]
+        else:
+            this_cycle = list(self.current_cycle_steps)
+            next_carry = []
         
-        # 检查是否包含所有预期步骤
-        if not all(label in self.current_cycle_steps for label in expected_labels):
-            # 不完整
-            missing = [l for l in expected_labels if l not in self.current_cycle_steps]
+        self.current_cycle_steps = this_cycle
+        
+        # ── 补写尚未有 StepRecord 的步骤 ──
+        cycle_end_time = time.time()
+        if getattr(self, '_last_disappeared_step_times', None) and last_step_label in self._last_disappeared_step_times:
+            cycle_end_time = self._last_disappeared_step_times[last_step_label]
+        try:
+            db = self._get_db_session()
+            existing = db.query(StepRecord.step_label).filter(StepRecord.cycle_id == self.current_cycle_id).all()
+            recorded_labels = {r.step_label for r in existing}
+            max_order = db.query(StepRecord.step_order).filter(StepRecord.cycle_id == self.current_cycle_id).all()
+            next_order = (max(o[0] for o in max_order) + 1) if max_order else 1
+            db.close()
+            for label in this_cycle:
+                if label in recorded_labels:
+                    continue
+                start_t = self.step_start_time.get(label, cycle_end_time)
+                duration = max(0, cycle_end_time - start_t)
+                step_name = label
+                for step in (steps_config or []):
+                    if step.get('label') == label:
+                        step_name = step.get('display_name') or step.get('name') or label
+                        break
+                self.record_step(
+                    step_label=label, step_name=step_name,
+                    start_time=start_t, end_time=cycle_end_time,
+                    duration=duration, interval=None, step_order=next_order)
+                next_order += 1
+        except Exception as e:
+            print(f"补写周期内缺失步骤记录失败: {e}")
+        
+        print(f"自定义模式（基于顺序）检查: 期望={expected_labels}, 本周期={this_cycle}, 下周期残留={next_carry}")
+        
+        # ── 判定 ──
+        if len(this_cycle) > len(expected_labels):
+            print(f"  → 序列长度({len(this_cycle)})超过预期({len(expected_labels)}) → NG")
+            self._trigger_event(2, f'序列包含重复步骤: {this_cycle}')
+        elif not all(lbl in this_cycle for lbl in expected_labels):
+            missing = [l for l in expected_labels if l not in this_cycle]
             print(f"  → 周期不完整，缺少: {missing} → NG")
             self._trigger_event(2, f'周期不完整，缺少: {missing}')
-            self.current_cycle_steps = []
-            self.last_added_step = None
-            return
-        
-        # 检查顺序是否正确
-        cycle_order_correct = True
-        last_idx = -1
-        for label in expected_labels:
-            if label in self.current_cycle_steps:
-                idx = self.current_cycle_steps.index(label)
-                if idx < last_idx:
+        else:
+            cycle_order_correct = True
+            last_pos = -1
+            for lbl in expected_labels:
+                pos = this_cycle.index(lbl)
+                if pos < last_pos:
                     cycle_order_correct = False
                     break
-                last_idx = idx
+                last_pos = pos
+            if cycle_order_correct:
+                print(f"  → 顺序正确 → OK")
+                self._trigger_event(1, '顺序正确完成')
+            else:
+                print(f"  → 顺序错误 → NG")
+                self._trigger_event(2, '顺序错误')
         
-        if cycle_order_correct:
-            print(f"  → 顺序正确 → OK")
-            self._trigger_event(1, '顺序正确完成')
+        # ── 重置 / 承接下一周期 ──
+        if next_carry:
+            self.current_cycle_steps = next_carry
+            self.last_added_step = next_carry[-1]
+            self.cycle_start_time = self.step_start_time.get(next_carry[0], time.time())
+            self.start_cycle()
+            self._cycle_locked_by_last_step = False
         else:
-            print(f"  → 顺序错误 → NG")
-            self._trigger_event(2, '顺序错误')
-        
-        self.current_cycle_steps = []
-        self.last_added_step = None
-    
+            self.current_cycle_steps = []
+            self.last_added_step = None
+            self.last_step_completed_time = None
+            self._cycle_locked_by_last_step = False
+
     def _check_detection_mode(self, pipeline_config: dict, id_to_label: dict, enabled_step_labels: list):
         """检查检测模式"""
         detection_step_ids = pipeline_config.get('detection_steps', [])
@@ -3526,39 +3719,52 @@ class VideoSourceManager:
             self._progress_lock.release()
     
     def _do_set_video_progress(self, progress: float):
-        """实际执行进度设置（简化版：减少等待时间）"""
-        # 1. 停止线程
+        """实际执行进度设置"""
+        # 1. 记住当前状态
+        was_running = self.is_running
         was_detecting = self.is_detecting
+
+        # 2. 停止线程
         self.is_running = False
         self._inference_running = False
-        
-        # 短暂等待线程响应停止信号
+
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=0.5)
         if self._inference_thread and self._inference_thread.is_alive():
             self._inference_thread.join(timeout=0.3)
-        
-        # 2. 设置视频位置
+            self._inference_thread = None
+
+        # 3. 设置视频位置
         with self.capture_lock:
             if self.capture is None or not self.capture.isOpened():
                 if self.video_path and os.path.exists(self.video_path):
                     self.capture = cv2.VideoCapture(self.video_path)
-            
+
             if self.capture and self.capture.isOpened():
                 target_frame = int(self.video_total_frames * progress)
                 self.capture.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
                 self.video_current_frame = target_frame
                 self.video_ended = False
-        
-        # 3. 重新启动线程
-        self.is_running = True
-        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self._thread.start()
-        
-        if was_detecting and self.model is not None:
-            self._start_inference_thread()
-        
-        print(f"[Video] 进度: {progress*100:.1f}%")
+
+                # 暂停状态下读一帧用于预览，让用户看到拖动后的画面
+                if not was_running:
+                    ret, frame = self.capture.read()
+                    if ret:
+                        with self.frame_lock:
+                            self.current_frame = frame
+                        self.capture.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+
+        # 4. 只有之前在运行状态时才重新启动线程
+        if was_running:
+            self.is_running = True
+            self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self._thread.start()
+
+            if was_detecting and self.model is not None:
+                self.is_detecting = True
+                self._start_inference_thread()
+
+        print(f"[Video] 进度: {progress*100:.1f}%, was_running={was_running}, was_detecting={was_detecting}")
     
     def get_video_info(self):
         """获取视频播放信息"""
@@ -3702,6 +3908,7 @@ class VideoSourceManager:
         self.current_cycle_steps = []
         self.last_added_step = None
         self.cycle_complete = False
+        self._cycle_locked_by_last_step = False
         self.events_log = []  # 清空事件日志
         
         # 重置周期时间统计
@@ -3955,7 +4162,9 @@ class VideoSourceManager:
         """暂停：停止画面更新和检测，但保持当前帧"""
         self.is_running = False
         self.is_detecting = False
-        # 等待线程退出
+        # 先停止推理线程，避免残留
+        self._stop_inference_thread()
+        # 等待捕获线程退出
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1.0)
         # 不清除 current_frame，保持画面停在当前帧
@@ -3965,16 +4174,26 @@ class VideoSourceManager:
         print("已暂停：画面和检测都停止")
     
     def resume(self):
-        """恢复：从暂停状态恢复，重新启动视频流"""
+        """恢复：从暂停状态恢复，重新启动视频流和推理"""
         if self.capture is None:
             print("无法恢复：没有可用的视频源")
             return False
-        
+
+        # 确保旧捕获线程已完全停止，避免双重线程
+        if self._thread and self._thread.is_alive():
+            self.is_running = False
+            self._thread.join(timeout=1.0)
+
         self.is_running = True
-        # 重新启动视频处理线程
+        self.is_detecting = True
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
-        print("已恢复：视频流重新启动")
+
+        # 显式启动推理线程（capture_loop 启动时也会检查，这里双重保证）
+        if self.model is not None:
+            self._start_inference_thread()
+
+        print("已恢复：视频流和推理重新启动")
         return True
     
     def standby(self):
@@ -4162,15 +4381,21 @@ class VideoSourceManager:
             
             # 根据配置决定是否节流
             if self.frame_limit_enabled:
-                # 启用节流：动态计算sleep时间
                 elapsed = time.time() - frame_start
                 sleep_time = max(0, target_interval - elapsed)
                 if sleep_time > 0:
                     time.sleep(sleep_time)
             else:
-                # 禁用节流：仅在无帧时短暂休眠避免CPU空转
                 if frame is None:
                     time.sleep(0.001)
+
+        # 退出循环后发送当前帧（暂停状态下拖动进度条后的预览）
+        frame = self.get_frame()
+        if frame is not None:
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if ret:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
 # 全局视频源管理器
 video_manager = VideoSourceManager()
@@ -4559,22 +4784,33 @@ def get_hikvision_status():
 
 @router.post("/video/upload")
 async def upload_video(file: UploadFile = File(...)):
-    """上传视频文件"""
+    """上传视频文件（同名文件自动覆盖，清理旧的重复副本）"""
     allowed_ext = {'.mp4', '.avi', '.mov', '.mkv'}
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in allowed_ext:
         raise HTTPException(status_code=400, detail="不支持的视频格式")
-    
-    unique_name = f"{uuid.uuid4().hex}_{file.filename}"
-    file_path = os.path.join(settings.VIDEO_UPLOAD_DIR, unique_name)
-    
+
+    original_name = file.filename
+    file_path = os.path.join(settings.VIDEO_UPLOAD_DIR, original_name)
+
+    # 清理同名旧副本（之前用 uuid_原名 格式保存的）
+    if os.path.isdir(settings.VIDEO_UPLOAD_DIR):
+        for existing in os.listdir(settings.VIDEO_UPLOAD_DIR):
+            if existing.endswith(f"_{original_name}") or existing == original_name:
+                old_path = os.path.join(settings.VIDEO_UPLOAD_DIR, existing)
+                if old_path != file_path:
+                    try:
+                        os.remove(old_path)
+                    except Exception:
+                        pass
+
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    
+
     return {
         "status": "success",
         "file_path": file_path,
-        "file_name": file.filename
+        "file_name": original_name
     }
 
 @router.post("/video/start")
@@ -4689,7 +4925,6 @@ def pause_detection():
 def resume_detection():
     """恢复：从暂停状态恢复，重新启动视频流和检测"""
     if video_manager.resume():
-        video_manager.is_detecting = True
         return {"status": "success", "message": "已恢复"}
     else:
         raise HTTPException(status_code=400, detail="无法恢复：没有可用的视频源")
