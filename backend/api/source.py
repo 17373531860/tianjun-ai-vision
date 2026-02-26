@@ -1789,6 +1789,11 @@ class VideoSourceManager:
         detected_labels = set()  # 用于统计的标签（通过阈值的）
         frame_detected_labels = set()  # 本帧通过置信度阈值的标签（用于帧数过滤）
         
+        # 截图节流：最多每秒更新一次截图，避免 imencode+base64 吃满 CPU
+        if not hasattr(self, '_last_screenshot_time'):
+            self._last_screenshot_time = 0
+        should_update_screenshot = (current_time - self._last_screenshot_time) >= 1.0
+        
         for det in detections:
             label = det.get('label', '')
             confidence = det.get('confidence', 0)
@@ -1866,18 +1871,18 @@ class VideoSourceManager:
             label = det.get('label', '')
             if label in sim_locked_labels and label in detected_labels:
                 self.step_last_seen[label] = current_time
-                # 更新截图
-                x, y, w, h = det['x'], det['y'], det['w'], det['h']
-                img_h, img_w = original_frame.shape[:2]
-                pad = 20
-                cx1 = max(0, int(x * img_w) - pad)
-                cy1 = max(0, int(y * img_h) - pad)
-                cx2 = min(img_w, int((x + w) * img_w) + pad)
-                cy2 = min(img_h, int((y + h) * img_h) + pad)
-                if cx2 > cx1 and cy2 > cy1:
-                    crop = original_frame[cy1:cy2, cx1:cx2]
-                    _, buffer = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    self.step_screenshots[label] = base64.b64encode(buffer).decode('utf-8')
+                if should_update_screenshot:
+                    x, y, w, h = det['x'], det['y'], det['w'], det['h']
+                    img_h, img_w = original_frame.shape[:2]
+                    pad = 20
+                    cx1 = max(0, int(x * img_w) - pad)
+                    cy1 = max(0, int(y * img_h) - pad)
+                    cx2 = min(img_w, int((x + w) * img_w) + pad)
+                    cy2 = min(img_h, int((y + h) * img_h) + pad)
+                    if cx2 > cx1 and cy2 > cy1:
+                        crop = original_frame[cy1:cy2, cx1:cx2]
+                        _, buffer = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                        self.step_screenshots[label] = base64.b64encode(buffer).decode('utf-8')
         
         # 排序 detected_labels：如果处于顺序/自定义顺序模式，把 last_step 排在最前
         # 确保在同一帧中 last_step 先被添加到周期，再由 first_step 触发结算
@@ -1995,21 +2000,22 @@ class VideoSourceManager:
                         self.current_cycle_steps.append(label)
                         self.last_added_step = label  # 更新上一个添加的步骤（用于去重判断）
             
-            # 保存/更新截图（每个步骤只保存最新的）
-            x, y, w, h = det['x'], det['y'], det['w'], det['h']
-            img_h, img_w = original_frame.shape[:2]
-            
-            # 计算裁剪区域（扩大一点范围）
-            pad = 20
-            cx1 = max(0, int(x * img_w) - pad)
-            cy1 = max(0, int(y * img_h) - pad)
-            cx2 = min(img_w, int((x + w) * img_w) + pad)
-            cy2 = min(img_h, int((y + h) * img_h) + pad)
-            
-            if cx2 > cx1 and cy2 > cy1:
-                crop = original_frame[cy1:cy2, cx1:cx2]
-                _, buffer = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                self.step_screenshots[label] = base64.b64encode(buffer).decode('utf-8')
+            # 保存/更新截图（节流：每秒最多更新一次）
+            if should_update_screenshot:
+                x, y, w, h = det['x'], det['y'], det['w'], det['h']
+                img_h, img_w = original_frame.shape[:2]
+                pad = 20
+                cx1 = max(0, int(x * img_w) - pad)
+                cy1 = max(0, int(y * img_h) - pad)
+                cx2 = min(img_w, int((x + w) * img_w) + pad)
+                cy2 = min(img_h, int((y + h) * img_h) + pad)
+                if cx2 > cx1 and cy2 > cy1:
+                    crop = original_frame[cy1:cy2, cx1:cx2]
+                    _, buffer = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    self.step_screenshots[label] = base64.b64encode(buffer).decode('utf-8')
+        
+        if should_update_screenshot:
+            self._last_screenshot_time = current_time
         
         # 检查消失的步骤（完成计数）
         # 使用延迟判定机制：先记录所有消失的步骤，再统一进行事件判定
@@ -3138,6 +3144,11 @@ class VideoSourceManager:
                 with self._confirmed_detections_lock:
                     self._confirmed_detections = confirmed
                 
+                # 推理节流：每帧至少 5ms 间隔，防止推理线程吃满 CPU
+                loop_elapsed = time.time() - loop_start
+                min_inference_interval = 0.005
+                if loop_elapsed < min_inference_interval:
+                    time.sleep(min_inference_interval - loop_elapsed)
                     
             except Exception as e:
                 debug_log(f"!!! 推理线程错误: {e}", "INFERENCE")
@@ -3817,6 +3828,21 @@ class VideoSourceManager:
         if self.model is None:
             raise Exception("未加载模型")
         
+        # 如果视频源暂停（有 capture 但 is_running=False），自动恢复
+        if not self.is_running and self.capture is not None and self.capture.isOpened():
+            print("[自动恢复] 检测到暂停的视频源，自动恢复播放")
+            # 确保旧线程已停止
+            if self._thread and self._thread.is_alive():
+                self._thread.join(timeout=1.0)
+            # 视频从头开始
+            if self.source_type == 'video':
+                self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                self.video_current_frame = 0
+                self.video_ended = False
+            self.is_running = True
+            self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self._thread.start()
+        
         self.is_detecting = True
         
         # 启动推理线程（如果视频已在运行，需要在这里启动）
@@ -4158,12 +4184,40 @@ class VideoSourceManager:
         """
         self._enqueue_frame_for_recording(frame)
     
+    def _close_all_writers(self):
+        """关闭所有 FFmpeg 录制进程，防止资源泄漏"""
+        if self.video_writer:
+            try:
+                self.video_writer.release()
+            except:
+                pass
+            self.video_writer = None
+        if self.cycle_video_writer:
+            try:
+                self.cycle_video_writer.release()
+            except:
+                pass
+            self.cycle_video_writer = None
+        with self._step_writers_lock:
+            for step_label, step_info in list(self.step_video_writers.items()):
+                try:
+                    writer = step_info.get('writer')
+                    if writer:
+                        writer.release()
+                except:
+                    pass
+            self.step_video_writers.clear()
+        print("[资源清理] 所有录制器已关闭")
+    
     def pause(self):
         """暂停：停止画面更新和检测，但保持当前帧"""
         self.is_running = False
         self.is_detecting = False
         # 先停止推理线程，避免残留
         self._stop_inference_thread()
+        # 停止录制线程和 FFmpeg 进程，防止资源泄漏
+        self._stop_recording_thread()
+        self._close_all_writers()
         # 等待捕获线程退出
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1.0)
@@ -4171,6 +4225,8 @@ class VideoSourceManager:
         # 不释放 capture，方便后续恢复
         with self.detection_lock:
             self.current_detections = []
+        # 清理推理缓存
+        self._clear_inference_caches()
         print("已暂停：画面和检测都停止")
     
     def resume(self):
@@ -4368,6 +4424,7 @@ class VideoSourceManager:
     def generate_mjpeg(self):
         """生成 MJPEG 流"""
         target_interval = 1.0 / max(self.target_stream_fps, 1)
+        min_interval = 1.0 / 30  # 无论是否启用帧率限制，最高 30fps
         
         while self.is_running:
             frame_start = time.time()
@@ -4379,15 +4436,11 @@ class VideoSourceManager:
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
             
-            # 根据配置决定是否节流
-            if self.frame_limit_enabled:
-                elapsed = time.time() - frame_start
-                sleep_time = max(0, target_interval - elapsed)
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-            else:
-                if frame is None:
-                    time.sleep(0.001)
+            # 始终节流，防止 busy loop 吃满 CPU
+            elapsed = time.time() - frame_start
+            interval = target_interval if self.frame_limit_enabled else min_interval
+            sleep_time = max(0.001, interval - elapsed)
+            time.sleep(sleep_time)
 
         # 退出循环后发送当前帧（暂停状态下拖动进度条后的预览）
         frame = self.get_frame()

@@ -16,8 +16,6 @@ import io
 import subprocess
 import tempfile
 import shutil
-import threading
-import json
 
 from backend.db.database import get_db
 from backend.models.models import (
@@ -29,10 +27,7 @@ from backend.core.config import settings
 router = APIRouter()
 
 
-# ========== 自动清理后台线程 ==========
-_cleanup_thread = None
-_cleanup_stop_event = threading.Event()
-
+# ========== 自动清理 ==========
 
 def _get_cleanup_settings_from_db():
     """从数据库读取清理设置"""
@@ -191,36 +186,6 @@ def _perform_auto_cleanup():
         traceback.print_exc()
     finally:
         db.close()
-
-
-def _cleanup_worker():
-    """后台清理线程：每24小时执行一次"""
-    import time
-    _perform_auto_cleanup()
-    while not _cleanup_stop_event.is_set():
-        _cleanup_stop_event.wait(86400)
-        if not _cleanup_stop_event.is_set():
-            _perform_auto_cleanup()
-
-
-def start_auto_cleanup():
-    """启动自动清理后台线程"""
-    global _cleanup_thread
-    if _cleanup_thread and _cleanup_thread.is_alive():
-        return
-    _cleanup_stop_event.clear()
-    _cleanup_thread = threading.Thread(target=_cleanup_worker, daemon=True, name="auto-cleanup")
-    _cleanup_thread.start()
-    print("[自动清理] 后台清理线程已启动")
-
-
-def stop_auto_cleanup():
-    """停止自动清理后台线程"""
-    global _cleanup_thread
-    _cleanup_stop_event.set()
-    if _cleanup_thread:
-        _cleanup_thread.join(timeout=2)
-        _cleanup_thread = None
 
 
 # ========== FFmpeg 路径查找 ==========
