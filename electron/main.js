@@ -49,6 +49,7 @@ function initBackendManager() {
     isDev: CONFIG.isDev,
     resourcesPath: CONFIG.isDev ? path.join(__dirname, '..') : process.resourcesPath,
     appPath: path.join(__dirname, '..'),
+    userDataPath: app.getPath('userData'),
   });
   
   // 监听后端事件

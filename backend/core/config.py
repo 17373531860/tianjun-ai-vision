@@ -4,24 +4,28 @@ import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# 数据目录：生产模式通过 TIANJUN_DATA_DIR 环境变量指向用户数据目录（%APPDATA%），
+# 开发模式不设置该变量，回退到 BASE_DIR（与代码同目录，兼容旧行为）
+DATA_DIR = os.environ.get('TIANJUN_DATA_DIR', BASE_DIR)
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Tianjun Machine Vision"
     API_V1_STR: str = "/api/v1"
     
     # Database
-    SQLALCHEMY_DATABASE_URI: str = f"sqlite:///{os.path.join(BASE_DIR, 'sql_app.db')}"
+    SQLALCHEMY_DATABASE_URI: str = f"sqlite:///{os.path.join(DATA_DIR, 'sql_app.db')}"
     
     # File Upload Paths
-    UPLOAD_DIR: str = os.path.join(BASE_DIR, "uploads")
-    MODEL_UPLOAD_DIR: str = os.path.join(BASE_DIR, "uploads", "models")
-    IMAGE_UPLOAD_DIR: str = os.path.join(BASE_DIR, "uploads", "images")
-    VIDEO_UPLOAD_DIR: str = os.path.join(BASE_DIR, "uploads", "videos")
+    UPLOAD_DIR: str = os.path.join(DATA_DIR, "uploads")
+    MODEL_UPLOAD_DIR: str = os.path.join(DATA_DIR, "uploads", "models")
+    IMAGE_UPLOAD_DIR: str = os.path.join(DATA_DIR, "uploads", "images")
+    VIDEO_UPLOAD_DIR: str = os.path.join(DATA_DIR, "uploads", "videos")
     
     # 录制视频存储路径
-    RECORDING_DIR: str = os.path.join(BASE_DIR, "recordings")
-    SESSION_VIDEO_DIR: str = os.path.join(BASE_DIR, "recordings", "sessions")  # 检测周期视频
-    STEP_VIDEO_DIR: str = os.path.join(BASE_DIR, "recordings", "steps")  # 步骤视频
-    CYCLE_VIDEO_DIR: str = os.path.join(BASE_DIR, "recordings", "cycles")  # 周期视频
+    RECORDING_DIR: str = os.path.join(DATA_DIR, "recordings")
+    SESSION_VIDEO_DIR: str = os.path.join(DATA_DIR, "recordings", "sessions")
+    STEP_VIDEO_DIR: str = os.path.join(DATA_DIR, "recordings", "steps")
+    CYCLE_VIDEO_DIR: str = os.path.join(DATA_DIR, "recordings", "cycles")
     
     # Camera Settings
     DEFAULT_CAMERA_INDEX: int = 0

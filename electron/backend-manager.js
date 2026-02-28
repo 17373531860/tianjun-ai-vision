@@ -107,6 +107,11 @@ class BackendManager extends EventEmitter {
       env.PYTHONNOUSERSITE = '1';
     }
     
+    // 生产模式：将用户数据目录传给 Python 后端，使数据存在安装目录之外
+    if (!this.options.isDev && this.options.userDataPath) {
+      env.TIANJUN_DATA_DIR = this.options.userDataPath;
+    }
+    
     // 强制 Python 使用 UTF-8 编码（解决 Windows 中文乱码）
     env.PYTHONIOENCODING = 'utf-8';
     env.PYTHONLEGACYWINDOWSSTDIO = '0';
