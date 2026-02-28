@@ -37,7 +37,7 @@
         </div>
         
         <div class="hidden md:flex items-center gap-4 text-gray-300">
-          <span v-if="store.display.navbar.inspector">{{ $t('navbar.inspector') }}: <span class="text-white">{{ store.display.inspectorName || '未设置' }}</span></span>
+          <span v-if="store.display.navbar.inspector">作业员: <span class="text-white">{{ store.display.inspectorName || '未设置' }}</span></span>
           <span v-if="store.display.navbar.deviceId">{{ $t('navbar.deviceId') }}: <span class="text-white">{{ store.display.deviceNumber || '未设置' }}</span></span>
         </div>
       </div>
@@ -47,6 +47,11 @@
     <div class="flex items-center gap-6">
       <!-- Status Indicators -->
       <div class="flex items-center gap-4 text-sm font-mono">
+        <!-- 实时时间 -->
+        <div v-if="store.display.navbar.realtime !== false" class="flex gap-2">
+          <span class="text-cyan-400">时间:</span>
+          <span class="text-white">{{ realTimeStr }}</span>
+        </div>
         <div v-if="store.display.navbar.mode" class="flex gap-2">
           <span class="text-cyan-400">{{ $t('navbar.mode') }}:</span> 
           <span>{{ modeLabel }}</span>
@@ -93,7 +98,7 @@
           </template>
         </el-dropdown>
 
-        <el-avatar :size="32" class="bg-cyan-900 text-cyan-200">User</el-avatar>
+        <img src="/app-icon.png" alt="logo" class="w-8 h-8 rounded-full object-cover" />
       </div>
     </div>
   </header>
@@ -419,17 +424,29 @@ const runTimeStr = computed(() => {
   return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 });
 
+// 实时时间
+const realTimeStr = ref('');
+const updateRealTime = () => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const mo = (now.getMonth() + 1).toString().padStart(2, '0');
+  const d = now.getDate().toString().padStart(2, '0');
+  const h = now.getHours().toString().padStart(2, '0');
+  const mi = now.getMinutes().toString().padStart(2, '0');
+  const s = now.getSeconds().toString().padStart(2, '0');
+  realTimeStr.value = `${y}-${mo}-${d} ${h}:${mi}:${s}`;
+};
+
 let timerInterval;
 onMounted(() => {
-  // 加载项目列表
   loadProjects();
   
-  // 启动计时器
+  updateRealTime();
   timerInterval = setInterval(() => {
     runTimeSeconds.value++;
+    updateRealTime();
   }, 1000);
   
-  // 加载显示设置
   const saved = localStorage.getItem('display_settings');
   if (saved) {
     store.display = JSON.parse(saved);

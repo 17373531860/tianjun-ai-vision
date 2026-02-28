@@ -7,6 +7,14 @@ const BackendManager = require('./backend-manager');
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 app.commandLine.appendSwitch('disk-cache-size', '0');
 
+// 限制渲染进程内存，防止 Chromium MJPEG 解码器无限积累帧缓存
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=512');
+app.commandLine.appendSwitch('max-old-space-size', '512');
+// 限制 Chromium 图片解码缓存（每张解码图最大 128MB，总缓存 256MB）
+app.commandLine.appendSwitch('max-decoded-image-bytes', '268435456');
+// 减少 GPU 进程内存使用
+app.commandLine.appendSwitch('force-gpu-mem-available-mb', '256');
+
 // 保持对窗口对象的全局引用
 let mainWindow = null;
 let shutdownWindow = null;

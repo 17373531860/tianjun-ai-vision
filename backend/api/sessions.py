@@ -27,6 +27,27 @@ from backend.core.config import settings
 router = APIRouter()
 
 
+# ========== 步骤配置顺序辅助函数 ==========
+
+def _get_step_order_map(db, project_id: int = None, session_id: int = None, cycle_id: int = None) -> dict:
+    """获取步骤配置顺序映射 {step_label: config_index}"""
+    pid = project_id
+    if not pid and session_id:
+        sess = db.query(DetectionSession).filter(DetectionSession.id == session_id).first()
+        pid = sess.project_id if sess else None
+    if not pid and cycle_id:
+        cyc = db.query(DetectionCycle).filter(DetectionCycle.id == cycle_id).first()
+        if cyc:
+            sess = db.query(DetectionSession).filter(DetectionSession.id == cyc.session_id).first()
+            pid = sess.project_id if sess else None
+    if not pid:
+        return {}
+    proj = db.query(Project).filter(Project.id == pid).first()
+    if proj and proj.steps_config:
+        return {step.get('label'): idx for idx, step in enumerate(proj.steps_config)}
+    return {}
+
+
 # ========== 自动清理 ==========
 
 def _get_cleanup_settings_from_db():
@@ -615,19 +636,23 @@ def get_cycle(cycle_id: int, db: Session = Depends(get_db)):
 
 @router.get("/cycles/{cycle_id}/steps", response_model=List[StepRecordResponse])
 def get_cycle_steps(cycle_id: int, db: Session = Depends(get_db)):
-    """获取周期的所有步骤记录"""
+    """获取周期的所有步骤记录（按配置顺序排列）"""
     steps = db.query(StepRecord).filter(
         StepRecord.cycle_id == cycle_id
-    ).order_by(StepRecord.step_order).all()
+    ).all()
+    
+    order_map = _get_step_order_map(db, cycle_id=cycle_id)
+    steps.sort(key=lambda s: order_map.get(s.step_label, 999))
     
     result = []
     for step in steps:
+        config_order = order_map.get(step.step_label, step.step_order - 1) + 1
         result.append(StepRecordResponse(
             id=step.id,
             record_uuid=step.record_uuid,
             step_label=step.step_label,
             step_name=step.step_name,
-            step_order=step.step_order,
+            step_order=config_order,
             start_time=step.start_time.strftime("%Y-%m-%d %H:%M:%S"),
             end_time=step.end_time.strftime("%Y-%m-%d %H:%M:%S") if step.end_time else None,
             duration=step.duration,
@@ -936,12 +961,15 @@ def export_csv(
                         step_headers.append("到下步间隔(秒)")
                     writer.writerow(step_headers)
                     
+                    order_map = _get_step_order_map(db, session_id=session_id)
                     for cycle in cycles:
-                        steps = db.query(StepRecord).filter(StepRecord.cycle_id == cycle.id).order_by(StepRecord.step_order).all()
+                        steps = db.query(StepRecord).filter(StepRecord.cycle_id == cycle.id).all()
+                        steps.sort(key=lambda s: order_map.get(s.step_label, 999))
                         for step in steps:
+                            config_order = order_map.get(step.step_label, step.step_order - 1) + 1
                             row = [
                                 cycle.cycle_number,
-                                step.step_order,
+                                config_order,
                                 step.step_name or step.step_label,
                                 step.start_time.strftime("%H:%M:%S")
                             ]
@@ -982,7 +1010,9 @@ def export_csv(
             writer.writerow(row)
             writer.writerow([])
             
-            steps = db.query(StepRecord).filter(StepRecord.cycle_id == cycle_id).order_by(StepRecord.step_order).all()
+            steps = db.query(StepRecord).filter(StepRecord.cycle_id == cycle_id).all()
+            order_map = _get_step_order_map(db, cycle_id=cycle_id)
+            steps.sort(key=lambda s: order_map.get(s.step_label, 999))
             if steps:
                 writer.writerow(["步骤详情"])
                 step_headers = ["序号", "步骤名称", "开始时间", "结束时间"]
@@ -993,8 +1023,9 @@ def export_csv(
                 writer.writerow(step_headers)
                 
                 for step in steps:
+                    config_order = order_map.get(step.step_label, step.step_order - 1) + 1
                     row = [
-                        step.step_order,
+                        config_order,
                         step.step_name or step.step_label,
                         step.start_time.strftime("%H:%M:%S"),
                         step.end_time.strftime("%H:%M:%S") if step.end_time else ""
@@ -1087,14 +1118,17 @@ def export_csv(
                             step_headers.append("是否有效")
                         writer.writerow(step_headers)
                         
+                        order_map = _get_step_order_map(db, session_id=session.id)
                         for cycle in cycles:
                             steps = db.query(StepRecord).filter(
                                 StepRecord.cycle_id == cycle.id
-                            ).order_by(StepRecord.step_order).all()
+                            ).all()
+                            steps.sort(key=lambda s: order_map.get(s.step_label, 999))
                             for step in steps:
+                                config_order = order_map.get(step.step_label, step.step_order - 1) + 1
                                 row = [
                                     cycle.cycle_number,
-                                    step.step_order,
+                                    config_order,
                                     step.step_name or step.step_label,
                                     step.start_time.strftime("%H:%M:%S") if step.start_time else ""
                                 ]
@@ -1213,6 +1247,22 @@ def get_step_averages(
             if interval is not None:
                 step_stats[label]["intervals"].append(interval)
     
+    # 获取配置顺序
+    order_map = {}
+    if session_id:
+        order_map = _get_step_order_map(db, session_id=session_id)
+    elif date or start_date or end_date:
+        sess_query = db.query(DetectionSession)
+        if date:
+            sess_query = sess_query.filter(func.date(DetectionSession.start_time) == date)
+        if start_date:
+            sess_query = sess_query.filter(DetectionSession.start_time >= start_date)
+        if end_date:
+            sess_query = sess_query.filter(DetectionSession.start_time <= end_date + " 23:59:59")
+        first_sess = sess_query.first()
+        if first_sess:
+            order_map = _get_step_order_map(db, project_id=first_sess.project_id)
+
     # 计算平均值
     result = []
     for label, stats in step_stats.items():
@@ -1230,6 +1280,8 @@ def get_step_averages(
             "min_interval": round(min(stats["intervals"]), 2) if stats["intervals"] else 0,
             "max_interval": round(max(stats["intervals"]), 2) if stats["intervals"] else 0
         })
+    
+    result.sort(key=lambda r: order_map.get(r["label"], 999))
     
     return {"steps": result}
 

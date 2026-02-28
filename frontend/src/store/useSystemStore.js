@@ -61,7 +61,8 @@ export const useSystemStore = defineStore('system', {
         deviceId: true,
         mode: true,
         status: true,
-        runtime: true
+        runtime: true,
+        realtime: true
       },
       monitor: {
         stepStrip: true,

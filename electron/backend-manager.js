@@ -107,9 +107,15 @@ class BackendManager extends EventEmitter {
       env.PYTHONNOUSERSITE = '1';
     }
     
-    // 强制 Python 使用 UTF-8 编码输出（解决 Windows 中文乱码）
+    // 强制 Python 使用 UTF-8 编码（解决 Windows 中文乱码）
     env.PYTHONIOENCODING = 'utf-8';
     env.PYTHONLEGACYWINDOWSSTDIO = '0';
+    env.PYTHONUTF8 = '1';
+    
+    // Windows 控制台设为 UTF-8 代码页
+    if (process.platform === 'win32') {
+      env.CHCP = '65001';
+    }
     
     return env;
   }
@@ -370,6 +376,15 @@ class BackendManager extends EventEmitter {
     return new Promise((resolve, reject) => {
       console.log(`[BackendManager] Starting: ${pythonPath} ${args.join(' ')}`);
       
+      // Windows 下先设置控制台代码页为 UTF-8
+      if (process.platform === 'win32') {
+        try {
+          execSync('chcp 65001', { stdio: 'ignore' });
+        } catch (e) {
+          // 忽略
+        }
+      }
+      
       this.process = spawn(pythonPath, args, {
         cwd: workingDir,
         env: env,
@@ -379,6 +394,10 @@ class BackendManager extends EventEmitter {
       });
       
       this.startTime = Date.now();
+      
+      // 强制以 UTF-8 读取子进程输出
+      this.process.stdout.setEncoding('utf-8');
+      this.process.stderr.setEncoding('utf-8');
       
       // 处理输出
       this.process.stdout.on('data', (data) => {

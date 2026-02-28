@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from backend.core.config import settings
 from backend.db.database import engine, Base
 from backend.api import api_router
@@ -112,6 +112,28 @@ def fix_orphan_sessions():
 
 migrate_database()
 fix_orphan_sessions()
+
+# ========== 后台自动清理定时任务 ==========
+_cleanup_timer = None
+
+def _schedule_auto_cleanup():
+    """后台定时执行数据清理（每24小时一次）"""
+    global _cleanup_timer
+    try:
+        from backend.api.sessions import _perform_auto_cleanup
+        _perform_auto_cleanup()
+    except Exception as e:
+        print(f"[定时清理] 执行失败: {e}")
+    _cleanup_timer = threading.Timer(86400, _schedule_auto_cleanup)
+    _cleanup_timer.daemon = True
+    _cleanup_timer.start()
+
+def _start_auto_cleanup():
+    """启动时执行一次清理，然后每24小时重复"""
+    print("[定时清理] 启动时执行首次自动清理...")
+    _schedule_auto_cleanup()
+
+threading.Thread(target=_start_auto_cleanup, daemon=True).start()
 
 # 清理状态标志（防止重复清理）
 _cleanup_done = False
@@ -309,14 +331,14 @@ def video_feed():
     """视频流端点 - 使用输入源管理器"""
     video_manager = get_video_manager()
     
-    # 如果有活动的输入源，使用它
-    if video_manager.is_running:
+    # 运行中或已暂停但仍有输入源时，使用 generate_mjpeg（暂停时低帧率输出当前帧）
+    if video_manager.is_running or video_manager.source_type:
         return StreamingResponse(
             video_manager.generate_mjpeg(),
             media_type="multipart/x-mixed-replace; boundary=frame"
         )
     
-    # 没有活动的输入源时，返回黑色占位帧（不尝试打开摄像头）
+    # 没有任何输入源时，返回黑色占位帧
     def generate_frames():
         import numpy as np
         black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -335,6 +357,23 @@ def video_feed():
         generate_frames(),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
+
+@app.get("/snapshot")
+def snapshot():
+    """单帧快照端点 - 返回当前帧的 JPEG（用于前端 canvas 渲染，避免 MJPEG 内存泄漏）"""
+    video_manager = get_video_manager()
+    data = video_manager.get_snapshot()
+    if data:
+        return Response(content=data, media_type="image/jpeg",
+                        headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    
+    import numpy as np
+    black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.putText(black_frame, "No Source", (220, 240),
+               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    _, buffer = cv2.imencode('.jpg', black_frame)
+    return Response(content=buffer.tobytes(), media_type="image/jpeg",
+                    headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 if __name__ == "__main__":
     import uvicorn

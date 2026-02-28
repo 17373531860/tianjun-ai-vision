@@ -21,7 +21,7 @@
                 <el-input v-model="store.display.brandName" placeholder="天军科技AI" @change="saveDisplaySettings" />
               </div>
               <div class="p-3 bg-slate-900 rounded border border-slate-800">
-                <div class="text-gray-300 mb-2">检测员姓名</div>
+                <div class="text-gray-300 mb-2">作业员姓名</div>
                 <el-input v-model="store.display.inspectorName" placeholder="张三" @change="saveDisplaySettings" />
               </div>
               <div class="p-3 bg-slate-900 rounded border border-slate-800">
@@ -45,7 +45,7 @@
                 <el-switch v-model="store.display.navbar.projectSelector" @change="saveDisplaySettings" />
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
-                <span class="text-gray-300">检测员姓名</span>
+                <span class="text-gray-300">作业员姓名</span>
                 <el-switch v-model="store.display.navbar.inspector" @change="saveDisplaySettings" />
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
@@ -64,6 +64,10 @@
                 <span class="text-gray-300">运行时间</span>
                 <el-switch v-model="store.display.navbar.runtime" @change="saveDisplaySettings" />
               </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-300">实时时间</span>
+                <el-switch v-model="store.display.navbar.realtime" @change="saveDisplaySettings" />
+              </div>
             </div>
           </el-card>
 
@@ -77,7 +81,7 @@
             </template>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
-                <span class="text-gray-300">底部步骤抓拍/条</span>
+                <span class="text-gray-300">SOP流程条</span>
                 <el-switch v-model="store.display.monitor.stepStrip" @change="saveDisplaySettings" />
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
@@ -115,21 +119,21 @@
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="flex items-center gap-2">
                   <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
-                  <span class="text-gray-300">总产量</span>
+                  <span class="text-gray-300">检测次数（总产量）</span>
                 </div>
                 <el-switch v-model="store.display.monitor.defaultCounters.showTotal" @change="saveDisplaySettings" />
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="flex items-center gap-2">
                   <span class="w-2 h-2 rounded-full bg-green-500"></span>
-                  <span class="text-gray-300">合格总数</span>
+                  <span class="text-gray-300">OK次数（合格总数）</span>
                 </div>
                 <el-switch v-model="store.display.monitor.defaultCounters.showGood" @change="saveDisplaySettings" />
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="flex items-center gap-2">
                   <span class="w-2 h-2 rounded-full bg-red-500"></span>
-                  <span class="text-gray-300">不良总数</span>
+                  <span class="text-gray-300">NG次数（不良总数）</span>
                 </div>
                 <el-switch v-model="store.display.monitor.defaultCounters.showBad" @change="saveDisplaySettings" />
               </div>
@@ -227,7 +231,7 @@
                     <el-option label="左上角" value="top-left" />
                     <el-option label="右下角" value="bottom-right" />
                     <el-option label="左下角" value="bottom-left" />
-                    <el-option label="画面正中间" value="center" />
+                    <el-option label="视频顶部居中" value="center" />
                   </el-select>
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
@@ -264,7 +268,7 @@
                     <el-option label="左上角" value="top-left" />
                     <el-option label="右下角" value="bottom-right" />
                     <el-option label="左下角" value="bottom-left" />
-                    <el-option label="画面正中间" value="center" />
+                    <el-option label="视频顶部居中" value="center" />
                   </el-select>
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
@@ -321,7 +325,7 @@
                       <el-option label="左上角" value="top-left" />
                       <el-option label="右下角" value="bottom-right" />
                       <el-option label="左下角" value="bottom-left" />
-                      <el-option label="画面正中间" value="center" />
+                      <el-option label="视频顶部居中" value="center" />
                     </el-select>
                   </div>
                   <div class="p-3 bg-slate-800 rounded">

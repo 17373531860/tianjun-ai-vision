@@ -99,15 +99,15 @@
         </div>
       </div>
 
-      <!-- 工艺卡片 (Step Indicators) -->
+      <!-- SOP流程 (Step Indicators) -->
       <div v-if="systemStore.display.monitor.stepStrip && steps.length > 0" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
         <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0">
-          <span class="text-cyan-400 text-xs font-bold">工艺卡片</span>
+          <span class="text-cyan-400 text-xs font-bold">SOP流程</span>
         </div>
         <div class="flex-1 p-2 overflow-x-auto">
           <div class="flex items-center h-full">
             <template v-for="(step, idx) in steps" :key="idx">
-              <!-- 间隔时间显示（第一个步骤前不显示） -->
+              <!-- 间隔时间显示 -->
               <div v-if="idx > 0" class="flex flex-col items-center justify-center px-1 flex-shrink-0">
                 <div class="w-6 h-[2px] bg-slate-600"></div>
                 <div class="text-[9px] text-yellow-400 font-mono mt-0.5 whitespace-nowrap">
@@ -118,15 +118,18 @@
               
               <!-- 步骤卡片 -->
               <div
-                class="w-32 flex-shrink-0 flex flex-col bg-slate-800 rounded border transition-all duration-300"
-                :class="getStepClass(step)"
+                class="w-32 flex-shrink-0 flex flex-col rounded border transition-all duration-300"
+                :class="getSopCardClass(step)"
               >
-                <div class="h-6 bg-slate-950 px-2 flex items-center justify-between text-[10px] text-gray-400">
-                  <span>Step {{ idx + 1 }}</span>
-                  <span v-if="tableData[idx]?.count" class="text-cyan-400">x{{ tableData[idx].count }}</span>
+                <div class="h-6 px-2 flex items-center justify-between text-[10px]"
+                  :class="getSopHeaderClass(step)"
+                >
+                  <span class="font-bold truncate">{{ step.name }}</span>
+                  <span v-if="tableData[idx]?.count" class="ml-1 flex-shrink-0">x{{ tableData[idx].count }}</span>
                 </div>
-                <div class="h-16 p-1 flex items-center justify-center bg-black/20 relative overflow-hidden">
-                   <!-- 截图显示 -->
+                <div class="h-16 p-1 flex items-center justify-center relative overflow-hidden"
+                  :class="getSopBodyClass(step)"
+                >
                    <img 
                      v-if="step.screenshot" 
                      :src="step.screenshot" 
@@ -134,15 +137,12 @@
                    />
                    <el-icon v-else :size="24" class="text-slate-600"><Picture /></el-icon>
                    
-                   <!-- 状态覆盖层 -->
                    <div v-if="step.status === 'active'" class="absolute inset-0 border-2 border-cyan-500 animate-pulse"></div>
-                   <div v-if="step.status === 'completed'" class="absolute bottom-1 right-1">
-                     <el-icon :size="16" class="text-green-500 bg-green-900/80 rounded-full p-0.5"><Check /></el-icon>
-                   </div>
                 </div>
-                <div class="h-10 px-1 flex flex-col items-center justify-center bg-slate-800">
-                  <div class="text-xs font-bold text-center truncate w-full">{{ step.name }}</div>
-                  <div class="text-[10px] text-cyan-400 font-mono">耗时: {{ formatDuration(step.label) }}</div>
+                <div class="h-8 px-1 flex items-center justify-center">
+                  <div class="text-[10px] font-mono"
+                    :class="step.cycleResult === 'ok' ? 'text-green-300' : step.cycleResult === 'ng' ? 'text-red-300' : 'text-cyan-400'"
+                  >耗时: {{ formatDuration(step.label) }}</div>
                 </div>
               </div>
             </template>
@@ -163,75 +163,95 @@
     <div class="col-span-5 flex flex-col gap-3 min-h-0">
       
       <!-- Top Row: Stats Counters (Dynamic) -->
-      <div v-if="systemStore.display.monitor.statsPanel" class="h-56 bg-slate-900 border border-slate-700 rounded-lg p-4 flex flex-col">
+      <div v-if="systemStore.display.monitor.statsPanel" class="bg-slate-900 border border-slate-700 rounded-lg p-3 flex flex-col">
         <template v-if="currentProject && counters.length > 0">
-          <!-- Main Stats: 总产量 和 合格总数（上面两个大的） -->
-          <div class="grid grid-cols-2 gap-4 mb-3">
-            <div v-for="(counter, idx) in mainCounters" :key="counter.name"
-              class="flex flex-col items-center justify-center bg-slate-800/50 p-3 rounded-lg"
+          <!-- 三个系统内置计数器并排 -->
+          <div class="grid grid-cols-3 gap-2 mb-2">
+            <div v-for="counter in builtinCounters" :key="counter.name"
+              class="flex flex-col items-center justify-center bg-slate-800/50 p-2 rounded-lg"
             >
-               <div class="text-sm text-gray-400 mb-1">{{ counter.name }}</div>
-               <div class="text-3xl font-mono font-bold" 
-                    :class="getCounterColor(counter.name)">
+               <div class="text-lg font-bold text-gray-300 mb-0.5">{{ getCounterDisplayName(counter.name) }}</div>
+               <div class="font-mono font-bold"
+                 :class="counter.name === '合格总数' ? 'text-5xl text-green-400' : counter.name === '不良总数' ? 'text-5xl text-red-500' : 'text-4xl text-white'"
+               >
                  {{ counter.value }}
                </div>
             </div>
           </div>
           
-          <!-- Secondary Stats: 不良总数、NG步骤 和自定义计数器 -->
-          <div class="flex-1 grid grid-cols-2 gap-3 mt-1 border-t border-slate-800 pt-3 overflow-y-auto">
-             <div v-for="(counter, idx) in secondaryCounters" :key="counter.name"
-               class="flex flex-col items-center justify-center bg-slate-800/30 p-2 rounded"
+          <!-- 其他计数器（NG步骤+自定义），可滚动 -->
+          <div v-if="extraCounters.length > 0" class="grid grid-cols-3 gap-2 border-t border-slate-800 pt-2 overflow-y-auto max-h-24">
+             <div v-for="counter in extraCounters" :key="counter.name"
+               class="flex flex-col items-center justify-center bg-slate-800/30 p-1.5 rounded"
              >
-                <span class="text-xs text-gray-500 truncate w-full text-center">{{ counter.name }}</span>
-                <span class="font-bold text-lg" :class="getCounterColor(counter.name)">{{ counter.value }}</span>
+                <span class="text-sm text-gray-500 truncate w-full text-center">{{ counter.name }}</span>
+                <span class="font-bold text-xl" :class="getCounterColor(counter.name)">{{ counter.value }}</span>
              </div>
           </div>
         </template>
-        <div v-else class="flex flex-col items-center justify-center h-full text-gray-500">
+        <div v-else class="flex flex-col items-center justify-center h-full text-gray-500 py-4">
           <el-icon :size="32" class="mb-2"><Folder /></el-icon>
           <span class="text-xs">请先选择项目以查看统计数据</span>
         </div>
       </div>
 
-      <!-- Middle: Charts -->
-      <div class="h-52 grid grid-cols-2 gap-3">
+      <!-- Middle: Charts + NG Ranking -->
+      <div class="h-52 grid grid-cols-3 gap-2">
          <!-- Pie Chart -->
-         <div v-if="systemStore.display.monitor.defectChart" class="bg-slate-900 border border-slate-700 rounded-lg p-3 relative">
-            <h3 class="text-cyan-400 text-sm font-bold absolute top-2 left-3">良品/不良统计</h3>
+         <div v-if="systemStore.display.monitor.defectChart" class="bg-slate-900 border border-slate-700 rounded-lg p-2 relative">
+            <h3 class="text-cyan-400 text-base font-bold absolute top-1.5 left-2">良品/不良统计</h3>
             <div ref="defectChartRef" class="w-full h-full"></div>
          </div>
          <!-- Yield Rate Gauge -->
-         <div v-if="systemStore.display.monitor.capacityChart" class="bg-slate-900 border border-slate-700 rounded-lg p-3 relative">
-            <h3 class="text-cyan-400 text-sm font-bold absolute top-2 left-3">合格率</h3>
+         <div v-if="systemStore.display.monitor.capacityChart" class="bg-slate-900 border border-slate-700 rounded-lg p-2 relative">
+            <h3 class="text-cyan-400 text-base font-bold absolute top-1.5 left-2">合格率</h3>
             <div ref="capacityGaugeRef" class="w-full h-full"></div>
+         </div>
+         <!-- NG Step Ranking -->
+         <div class="bg-slate-900 border border-slate-700 rounded-lg p-2 flex flex-col">
+            <h3 class="text-red-400 text-base font-bold mb-1.5">不良步骤排名</h3>
+            <div class="flex-1 overflow-y-auto space-y-1">
+              <div v-if="ngStepRanking.length === 0" class="flex items-center justify-center h-full text-gray-600 text-base">
+                暂无数据
+              </div>
+              <div v-for="(item, idx) in ngStepRanking.slice(0, 3)" :key="item.step"
+                class="flex items-center gap-2 bg-slate-800/50 px-2 py-1.5 rounded"
+              >
+                <span class="text-lg font-bold w-6 text-center" :class="idx === 0 ? 'text-red-400' : idx === 1 ? 'text-orange-400' : 'text-yellow-400'">{{ idx + 1 }}</span>
+                <span class="flex-1 text-base text-gray-300 truncate">{{ item.step }}</span>
+                <span class="text-lg font-bold text-red-400">{{ item.count }}次</span>
+              </div>
+            </div>
          </div>
       </div>
 
       <!-- Bottom: Detail Table & Controls -->
       <div v-if="systemStore.display.monitor.stepTable" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
          <div class="bg-slate-800 px-3 py-2 flex justify-between items-center border-b border-slate-700">
-            <span class="text-cyan-400 text-sm font-bold">步骤统计</span>
-            <span class="text-[10px] bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ cycleTime }}s</span>
+            <span class="text-cyan-400 text-lg font-bold">步骤统计</span>
+            <span class="text-sm bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ cycleTime }}s</span>
          </div>
          <div class="flex-1 overflow-auto">
-            <table class="w-full text-left text-[11px]">
+            <table class="w-full text-left text-lg">
                <thead class="bg-slate-800 text-gray-400 top-0 sticky">
                   <tr>
-                     <th class="p-2">No</th>
-                     <th class="p-2">步骤</th>
-                     <th class="p-2">检测次数</th>
-                     <th class="p-2">状态</th>
+                     <th class="px-2 py-1.5">No</th>
+                     <th class="px-2 py-1.5">步骤</th>
+                     <th class="px-2 py-1.5">检测次数</th>
+                     <th class="px-2 py-1.5">状态</th>
                   </tr>
                </thead>
                <tbody class="divide-y divide-slate-800 text-gray-300">
-                  <tr v-for="(row, i) in tableData" :key="i" class="hover:bg-slate-800/50">
-                     <td class="p-2">{{ i + 1 }}</td>
-                     <td class="p-2">{{ row.step }}</td>
-                     <td class="p-2 text-cyan-400">{{ row.count }}</td>
-                     <td class="p-2">
-                       <span :class="row.status === 'completed' ? 'text-green-500' : 'text-gray-500'">
-                         {{ row.status === 'completed' ? '已完成' : '待检测' }}
+                  <tr v-for="(row, i) in tableData" :key="i" 
+                    class="hover:bg-slate-800/50"
+                    :class="row.status === 'completed' ? 'bg-green-900/10' : ''"
+                  >
+                     <td class="px-2 py-1.5">{{ i + 1 }}</td>
+                     <td class="px-2 py-1.5 font-medium">{{ row.step }}</td>
+                     <td class="px-2 py-1.5 text-cyan-400 font-bold">{{ row.count }}</td>
+                     <td class="px-2 py-1.5">
+                       <span class="font-medium" :class="row.status === 'completed' ? 'text-green-400' : 'text-gray-500'">
+                         {{ row.status === 'completed' ? '✓ 已完成' : '待检测' }}
                        </span>
                      </td>
                   </tr>
@@ -244,28 +264,28 @@
             <button 
               @click="startDetection" 
               :disabled="!currentProject || isRunning"
-              class="flex-1 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2 rounded text-sm font-bold shadow transition-colors"
+              class="flex-1 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
               开始
             </button>
             <button 
               @click="stopDetectionHandler"
               :disabled="!isRunning"
-              class="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2 rounded text-sm font-bold shadow transition-colors"
+              class="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
               停止
             </button>
             <button 
               @click="standby"
               :disabled="isRunning"
-              class="flex-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2 rounded text-sm font-bold shadow transition-colors"
+              class="flex-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
               待机
             </button>
             <button 
               @click="resetCounters"
               :disabled="isRunning"
-              class="flex-1 bg-cyan-700 hover:bg-cyan-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2 rounded text-sm font-bold shadow transition-colors"
+              class="flex-1 bg-cyan-700 hover:bg-cyan-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
               清零
             </button>
@@ -422,26 +442,41 @@ const counters = computed(() => {
   return [...defaultCounters, ...customCounters];
 });
 
-// 主计数器（上面两个大的）：总产量、合格总数
-const mainCounters = computed(() => {
-  return counters.value.filter(c => c.name === '总产量' || c.name === '合格总数');
+// 三个内置计数器（检测次数、OK次数、NG次数）并排
+const BUILTIN_THREE = ['总产量', '合格总数', '不良总数'];
+const builtinCounters = computed(() => {
+  return counters.value.filter(c => BUILTIN_THREE.includes(c.name));
 });
 
-// 次级计数器（下面的）：不良总数、NG步骤、自定义计数器
-const secondaryCounters = computed(() => {
-  return counters.value.filter(c => c.name !== '总产量' && c.name !== '合格总数');
+// 其余计数器（NG步骤 + 自定义）
+const extraCounters = computed(() => {
+  return counters.value.filter(c => !BUILTIN_THREE.includes(c.name));
 });
+
+// 显示名称映射
+const getCounterDisplayName = (name) => {
+  switch (name) {
+    case '总产量': return '检测次数';
+    case '合格总数': return 'OK次数';
+    case '不良总数': return 'NG次数';
+    default: return name;
+  }
+};
 
 // 根据计数器名称返回颜色类
 const getCounterColor = (name) => {
   switch (name) {
-    case '总产量': return 'text-cyan-400';      // 青色 - 中性
-    case '合格总数': return 'text-green-500';   // 绿色 - 好
-    case '不良总数': return 'text-red-500';     // 红色 - 坏
-    case 'NG步骤': return 'text-orange-500';    // 橙色 - 警告
-    default: return 'text-white';               // 白色 - 自定义
+    case '总产量': return 'text-white';
+    case '合格总数': return 'text-green-400';
+    case '不良总数': return 'text-red-400';
+    case 'NG步骤': return 'text-orange-500';
+    default: return 'text-white';
   }
 };
+
+// NG 步骤排名数据
+const ngStepRanking = ref([]);
+const ngStepCountMap = ref({});
 
 // 逻辑模式文本
 const logicModeText = computed(() => {
@@ -476,10 +511,10 @@ const getToastConfig = (toastId) => {
 const getPositionClass = (position) => {
   switch (position) {
     case 'top-right': return 'top-24 right-8';
-    case 'top-left': return 'top-24 left-72';
+    case 'top-left': return 'top-24 left-4';
     case 'bottom-right': return 'bottom-8 right-8';
-    case 'bottom-left': return 'bottom-8 left-72';
-    case 'center': return 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2';
+    case 'bottom-left': return 'bottom-8 left-4';
+    case 'center': return 'top-24 left-[29%] -translate-x-1/2';
     default: return 'top-24 right-8';
   }
 };
@@ -499,8 +534,7 @@ const showToastById = (toastId, eventName, reason = '') => {
     custom: Warning
   };
   
-  // NG提示框优先显示reason（NG原因），其他提示框使用配置的subText或reason
-  const subtitle = (toastId === 'ng' && reason) ? reason : (config.subText || reason);
+  const subtitle = config.subText || '';
   
   const toast = {
     id: ++toastIdCounter,
@@ -539,7 +573,7 @@ const showToast = (type, title, subtitle = '') => {
     id: ++toastIdCounter,
     toastId,
     title: title || config.text,
-    subtitle: subtitle || config.subText,
+    subtitle: config.subText || '',
     color: config.color,
     fontSize: config.fontSize,
     position: config.position,
@@ -583,7 +617,7 @@ const formatInterval = (stepLabel) => {
   return `${interval.toFixed(1)}s`;
 };
 
-// 获取步骤样式
+// 获取步骤样式（步骤设置区域用）
 const getStepClass = (step) => {
   if (step.status === 'active') {
     return 'border-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.3)]';
@@ -591,6 +625,39 @@ const getStepClass = (step) => {
     return 'border-green-500 bg-green-900/20';
   } else {
     return 'border-slate-700 opacity-60';
+  }
+};
+
+// SOP卡片整体样式：完成=绿色，漏检/重复=红色
+const getSopCardClass = (step) => {
+  if (step.cycleResult === 'ng') {
+    return 'border-red-500 bg-red-900/30';
+  } else if (step.status === 'completed' || step.cycleResult === 'ok') {
+    return 'border-green-500 bg-green-900/20';
+  } else if (step.status === 'active') {
+    return 'border-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.3)] bg-slate-800';
+  } else {
+    return 'border-slate-700 bg-slate-800 opacity-60';
+  }
+};
+
+const getSopHeaderClass = (step) => {
+  if (step.cycleResult === 'ng') {
+    return 'bg-red-900/60 text-red-200';
+  } else if (step.status === 'completed' || step.cycleResult === 'ok') {
+    return 'bg-green-900/60 text-green-200';
+  } else {
+    return 'bg-slate-950 text-gray-300';
+  }
+};
+
+const getSopBodyClass = (step) => {
+  if (step.cycleResult === 'ng') {
+    return 'bg-red-950/30';
+  } else if (step.status === 'completed' || step.cycleResult === 'ok') {
+    return 'bg-green-950/20';
+  } else {
+    return 'bg-black/20';
   }
 };
 
@@ -839,9 +906,10 @@ watch(() => currentProject.value, (newProject) => {
   steps.value = stepsToShow.map((s, idx) => ({
     id: s.id,
     name: s.displayLabel || s.label,
-    label: s.label,  // 添加 label 字段用于后端匹配
+    label: s.label,
     status: 'pending',
     result: null,
+    cycleResult: null,
     screenshot: null
   }));
 
@@ -1057,15 +1125,24 @@ const stepIntervals = ref({});
 
 // 定期刷新视频流（防止浏览器缓存/卡死）
 let streamRefreshCounter = 0;
-const STREAM_REFRESH_INTERVAL = 150; // 每150次轮询（约30秒）刷新一次流
+const STREAM_REFRESH_INTERVAL = 10; // 每10次轮询（约5秒）刷新一次流，强制释放 Chromium MJPEG 帧缓存
+let lastChartUpdate = 0;
+const CHART_UPDATE_INTERVAL = 2000; // 图表最多每2秒更新一次
+let lastScreenshotUpdate = 0;
+const SCREENSHOT_UPDATE_INTERVAL = 2000; // 截图最多每2秒更新一次
+let pollingInProgress = false; // 防止轮询重叠
 
 // 开始轮询
 const startPolling = () => {
   stopPolling();
-  shownEventIds.value.clear(); // 清除已显示事件记录
+  shownEventIds.value.clear();
   streamRefreshCounter = 0;
+  pollingInProgress = false;
   
   pollingTimer = setInterval(async () => {
+    if (pollingInProgress) return;
+    pollingInProgress = true;
+    
     // 定期刷新视频流
     streamRefreshCounter++;
     if (streamRefreshCounter >= STREAM_REFRESH_INTERVAL) {
@@ -1076,7 +1153,6 @@ const startPolling = () => {
       const res = await getDetectionResults();
       const data = res.data;
       
-      // 同步输入源类型到 store
       if (data.source_type) {
         sourceStore.setSourceType(data.source_type);
       }
@@ -1084,51 +1160,46 @@ const startPolling = () => {
       fps.value = data.fps || 0;
       latency.value = data.latency || 0;
       detectionCount.value = (data.detections || []).length;
-      
-      // 更新平均周期时间 (CT)
       cycleTime.value = data.average_cycle_time || 0;
       
-      // 更新步骤截图
-      if (data.step_screenshots) {
+      const now = Date.now();
+      
+      // 节流截图更新（避免频繁创建 base64 data URL）
+      if (data.step_screenshots && (now - lastScreenshotUpdate >= SCREENSHOT_UPDATE_INTERVAL)) {
         stepScreenshots.value = data.step_screenshots;
+        lastScreenshotUpdate = now;
       }
       
-      // 更新步骤检测时间
       if (data.step_detection_times) {
         stepDetectionTimes.value = data.step_detection_times;
       }
-      
-      // 更新步骤耗时
       if (data.step_durations) {
         stepDurations.value = data.step_durations;
       }
-      
-      // 更新步骤间隔时间
       if (data.step_intervals) {
         stepIntervals.value = data.step_intervals;
       }
       
-      // 更新步骤计数、计数器和事件
       if (isRunning.value) {
+        const shouldUpdateCharts = (now - lastChartUpdate >= CHART_UPDATE_INTERVAL);
+        const countersWithCycle = data.counters || {};
+        countersWithCycle._currentCycleSteps = data.current_cycle_steps || [];
         updateStepsFromBackend(
           data.step_counts || {}, 
           data.detections || [],
-          data.counters || {},
-          data.recent_events || []
+          countersWithCycle,
+          data.recent_events || [],
+          shouldUpdateCharts
         );
+        if (shouldUpdateCharts) {
+          lastChartUpdate = now;
+        }
       }
       
-      // 绘制检测框（前端绘制，支持中文和自定义样式）
       if (data.detections) {
         drawDetections(data.detections);
       }
       
-      // 处理检测结果逻辑
-      if (data.detections && data.detections.length > 0 && isRunning.value) {
-        processDetections(data.detections);
-      }
-      
-      // 如果是视频输入源，获取视频信息
       if (isVideoSource.value && !isDraggingProgress.value) {
         try {
           const videoRes = await api.get('/source/video/info');
@@ -1136,14 +1207,12 @@ const startPolling = () => {
             videoInfo.value.progress = videoRes.data.progress || 0;
             videoInfo.value.currentTime = videoRes.data.current_time || 0;
             videoInfo.value.duration = videoRes.data.duration || 0;
-            // 只有在不改变倍速时才更新（防止用户选择的倍速被覆盖）
             if (!isChangingSpeed.value) {
               videoInfo.value.speed = videoRes.data.speed || 1;
             }
             videoInfo.value.syncMode = videoRes.data.sync_mode || false;
             videoInfo.value.ended = videoRes.data.ended || false;
             
-            // 如果视频结束，停止轮询
             if (videoRes.data.ended) {
               isRunning.value = false;
               isStreaming.value = false;
@@ -1156,44 +1225,196 @@ const startPolling = () => {
       }
     } catch (err) {
       // 静默处理轮询错误
+    } finally {
+      pollingInProgress = false;
     }
-  }, 200); // 每 200ms 轮询一次
+  }, 500); // 每 500ms 轮询一次（降低频率减少内存压力）
 };
 
 // 已显示的事件ID（避免重复显示提示框）
 const shownEventIds = ref(new Set());
 
+// 缓存上一次截图 base64，避免重复创建 data URL
+const cachedScreenshotUrls = {};
+
+// 上一次的总产量，用于检测周期变化
+let lastTotalCount = -1;
+// 已处理的事件ID（防止NG排名重复计数）
+const processedEventIds = new Set();
+
 // 从后端数据更新步骤状态
-const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, recentEvents) => {
-  // 获取当前检测到的标签
+const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, recentEvents, shouldUpdateCharts = true) => {
   const detectingLabels = new Set(currentDetections.map(d => d.label));
   
-  // 更新步骤状态
-  steps.value.forEach((step, idx) => {
-    // 使用 label 字段匹配后端数据（后端使用模型标签名）
+  // 获取后端的当前周期步骤列表
+  const currentCycleSteps = backendCounters?._currentCycleSteps || [];
+  
+  // 检测周期是否刚结束（总产量变化时表示新周期产生）
+  const currentTotal = backendCounters?.['总产量'] ?? -1;
+  if (lastTotalCount >= 0 && currentTotal > lastTotalCount) {
+    // 新周期产生，延迟后重置视觉状态，让用户看到上一轮的颜色反馈
+    setTimeout(() => {
+      steps.value.forEach(s => {
+        s.status = 'pending';
+        s.cycleResult = null;
+      });
+      tableData.value.forEach(t => {
+        t.status = 'pending';
+      });
+    }, 1200);
+  }
+  lastTotalCount = currentTotal;
+  
+  // ── 实时周期反馈算法 ──
+  // 在周期进行中，实时对比 currentCycleSteps 和预期顺序，动态标记每个步骤颜色
+  const expectedLabels = steps.value.map(s => s.label || s.name);
+  
+  if (currentCycleSteps.length > 0 && expectedLabels.length > 0) {
+    // 统计每个步骤在本周期中出现的次数
+    const countInCycle = {};
+    currentCycleSteps.forEach(l => { countInCycle[l] = (countInCycle[l] || 0) + 1; });
+    
+    // 每个步骤在 currentCycleSteps 中的首次出现位置
+    const firstPos = {};
+    currentCycleSteps.forEach((l, i) => { if (!(l in firstPos)) firstPos[l] = i; });
+    
+    // 已检测到的步骤中，最大的预期位置索引
+    let maxDetectedExpectedIdx = -1;
+    expectedLabels.forEach((label, idx) => {
+      if (label in firstPos) {
+        maxDetectedExpectedIdx = Math.max(maxDetectedExpectedIdx, idx);
+      }
+    });
+    
+    // 检测乱序：按预期顺序遍历，若某步骤的实际位置 < 前面某步骤的实际位置 → 乱序
+    const outOfOrder = new Set();
+    let maxActualPos = -1;
+    for (const label of expectedLabels) {
+      if (label in firstPos) {
+        if (firstPos[label] < maxActualPos) {
+          outOfOrder.add(label);
+        }
+        maxActualPos = Math.max(maxActualPos, firstPos[label]);
+      }
+    }
+    
+    // 设置每个步骤的 cycleResult
+    steps.value.forEach((step, idx) => {
+      const label = step.label || step.name;
+      const cycleCount = countInCycle[label] || 0;
+      
+      if (cycleCount > 1) {
+        step.cycleResult = 'ng';  // 重复
+      } else if (label in firstPos) {
+        step.cycleResult = outOfOrder.has(label) ? 'ng' : 'ok';  // 检测到：看是否乱序
+      } else if (idx <= maxDetectedExpectedIdx) {
+        step.cycleResult = 'ng';  // 漏做（后面的步骤已出现但此步骤未出现）
+      } else {
+        step.cycleResult = null;  // 还没轮到
+      }
+      
+      // 设置 status
+      if (detectingLabels.has(label)) {
+        step.status = 'active';
+      } else if (cycleCount > 0) {
+        step.status = 'completed';
+      } else {
+        step.status = 'pending';
+      }
+      
+      // 同步表格状态
+      if (tableData.value[idx]) {
+        tableData.value[idx].count = stepCounts[label] || 0;
+        tableData.value[idx].status = cycleCount > 0 ? 'completed' : 'pending';
+      }
+    });
+  } else {
+    // 周期未开始或已结束：不改变 cycleResult（保留上一轮的视觉反馈直到 reset）
+    steps.value.forEach((step, idx) => {
+      const label = step.label || step.name;
+      const count = stepCounts[label] || 0;
+      
+      if (detectingLabels.has(label)) {
+        step.status = 'active';
+      } else if (!step.cycleResult && count > 0 && currentCycleSteps.length === 0) {
+        step.status = 'completed';
+      }
+      
+      if (tableData.value[idx]) {
+        tableData.value[idx].count = count;
+      }
+    });
+  }
+  
+  // 更新截图
+  steps.value.forEach((step) => {
     const stepLabel = step.label || step.name;
-    const count = stepCounts[stepLabel] || 0;
-    
-    // 更新表格数据
-    if (tableData.value[idx]) {
-      tableData.value[idx].count = count;
-      tableData.value[idx].status = count > 0 ? 'completed' : 'pending';
-    }
-    
-    // 更新步骤状态
-    if (detectingLabels.has(stepLabel)) {
-      step.status = 'active';
-    } else if (count > 0) {
-      step.status = 'completed';
-    }
-    
-    // 更新截图
-    if (stepScreenshots.value[stepLabel]) {
-      step.screenshot = `data:image/jpeg;base64,${stepScreenshots.value[stepLabel]}`;
+    const rawB64 = stepScreenshots.value[stepLabel];
+    if (rawB64 && cachedScreenshotUrls[stepLabel] !== rawB64) {
+      cachedScreenshotUrls[stepLabel] = rawB64;
+      step.screenshot = `data:image/jpeg;base64,${rawB64}`;
     }
   });
   
-  // 使用后端返回的计数器数据
+  // 解析事件 — 仅用于 NG 排名累计（cycleResult 已由实时算法处理）
+  if (recentEvents && recentEvents.length > 0) {
+    recentEvents.forEach(event => {
+      const eventKey = `${event.event_id}_${Math.floor(event.timestamp)}`;
+      if (processedEventIds.has(eventKey)) return;
+      processedEventIds.add(eventKey);
+      
+      const eid = Number(event.event_id);
+      
+      // NG 事件：解析原因，累计不良步骤排名
+      if (eid === 2 && event.reason) {
+        // 缺少步骤
+        const missingMatch = event.reason.match(/缺少[:：]\s*\[?([^\]]+)\]?/);
+        if (missingMatch) {
+          missingMatch[1].split(/[,，]/).forEach(s => {
+            const name = s.trim().replace(/['\s]/g, '');
+            if (name) {
+              ngStepCountMap.value[name] = (ngStepCountMap.value[name] || 0) + 1;
+            }
+          });
+        }
+        // 重复步骤
+        if (event.reason.includes('重复')) {
+          const dupMatch = event.reason.match(/重复步骤[:：]\s*\[?([^\]]+)\]?/);
+          if (dupMatch) {
+            dupMatch[1].split(/[,，]/).forEach(s => {
+              const name = s.trim().replace(/['\s]/g, '');
+              if (name) {
+                ngStepCountMap.value[name] = (ngStepCountMap.value[name] || 0) + 1;
+              }
+            });
+          }
+        }
+        // 顺序错误
+        if (event.reason.includes('顺序错误')) {
+          const orderMatch = event.reason.match(/期望\[(.+?)\].*实际\[(.+?)\]/);
+          if (orderMatch) {
+            const expected = orderMatch[1].trim();
+            const actual = orderMatch[2].trim();
+            if (expected) ngStepCountMap.value[expected] = (ngStepCountMap.value[expected] || 0) + 1;
+            if (actual) ngStepCountMap.value[actual] = (ngStepCountMap.value[actual] || 0) + 1;
+          }
+        }
+      }
+    });
+    
+    // 防止 processedEventIds 无限增长
+    if (processedEventIds.size > 500) {
+      const arr = [...processedEventIds];
+      processedEventIds.clear();
+      arr.slice(-200).forEach(k => processedEventIds.add(k));
+    }
+    
+    // 更新排名
+    ngStepRanking.value = Object.entries(ngStepCountMap.value)
+      .map(([step, count]) => ({ step, count }))
+      .sort((a, b) => b.count - a.count);
+  }
+  
   if (backendCounters && currentProject.value?.counters_config) {
     currentProject.value.counters_config.forEach(counter => {
       if (backendCounters[counter.name] !== undefined) {
@@ -1202,22 +1423,26 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
     });
   }
   
-  // 处理事件提示框
   if (recentEvents && recentEvents.length > 0) {
     recentEvents.forEach(event => {
       const eventKey = `${event.event_id}_${Math.floor(event.timestamp)}`;
       if (!shownEventIds.value.has(eventKey) && event.show_notification) {
         shownEventIds.value.add(eventKey);
-        
-        // 使用事件配置的 toast_id 来显示提示框
         const toastId = event.toast_id || (event.event_id === 1 ? 'ok' : event.event_id === 2 ? 'ng' : 'ok');
         showToastById(toastId, event.event_name, event.reason);
       }
     });
+    
+    // 防止 shownEventIds 无限增长
+    if (shownEventIds.value.size > 500) {
+      const arr = [...shownEventIds.value];
+      shownEventIds.value = new Set(arr.slice(-200));
+    }
   }
   
-  // 更新图表
-  updateCharts();
+  if (shouldUpdateCharts) {
+    updateCharts();
+  }
 };
 
 // 停止轮询
@@ -1273,6 +1498,7 @@ const resetCounters = async () => {
   steps.value.forEach(s => {
     s.status = 'pending';
     s.result = null;
+    s.cycleResult = null;
     s.screenshot = null;
   });
   
@@ -1281,37 +1507,20 @@ const resetCounters = async () => {
     t.status = 'pending';
   });
   
-  // 清空步骤截图缓存
+  // 清空步骤截图缓存和NG排名
   stepScreenshots.value = {};
+  ngStepRanking.value = [];
+  ngStepCountMap.value = {};
+  lastTotalCount = -1;
+  processedEventIds.clear();
   
   updateCharts();
   ElMessage.success('计数器已清零');
 };
 
 
-// 处理检测结果逻辑
-const processDetections = (detections) => {
-  if (!currentProject.value) return;
-  
-  const stepsConfig = currentProject.value.steps_config || [];
-  const eventsConfig = currentProject.value.events_config || [];
-  
-  // 更新步骤状态
-  detections.forEach(det => {
-    const stepIdx = steps.value.findIndex(s => s.name === det.label || s.id === det.label);
-    if (stepIdx > -1) {
-      steps.value[stepIdx].status = 'active';
-      
-      // 更新表格计数
-      if (tableData.value[stepIdx]) {
-        tableData.value[stepIdx].count++;
-      }
-    }
-  });
-  
-  // 检查事件触发（简化版）
-  // 实际逻辑应该根据 logic_mode 和 pipeline_config 来判断
-};
+// processDetections 已移除：步骤计数完全由后端 step_counts 驱动，
+// 前端不再重复累加，避免数据不一致和内存浪费
 
 // 触发事件
 const triggerEvent = (eventId) => {
@@ -1456,7 +1665,11 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleResize);
   stopPolling();
   
-  // 重置全局检测状态（确保导航可用）
+  if (counterWatchTimer) {
+    clearTimeout(counterWatchTimer);
+    counterWatchTimer = null;
+  }
+  
   systemStore.setDetecting(false);
   
   if (pieChartInstance) {
@@ -1469,9 +1682,15 @@ onUnmounted(() => {
   }
 });
 
-// 监听计数器变化更新图表
+// 监听计数器变化更新图表（节流：最多每2秒更新一次）
+let counterWatchTimer = null;
 watch(counters, () => {
-  updateCharts();
+  if (!counterWatchTimer) {
+    counterWatchTimer = setTimeout(() => {
+      updateCharts();
+      counterWatchTimer = null;
+    }, 2000);
+  }
 }, { deep: true });
 
 // 暴露触发事件方法供测试
