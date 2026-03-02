@@ -1,10 +1,10 @@
 <template>
-  <div class="grid grid-cols-12 gap-3 h-[calc(100vh-8rem)] p-2 relative">
+  <div class="grid grid-cols-12 gap-3 h-[calc(100vh-7.25rem)] p-2 relative">
     <!-- LEFT COLUMN: VIDEO & STEPS -->
     <div class="col-span-7 flex flex-col gap-3 min-h-0">
       
       <!-- Video Region -->
-      <div class="flex-1 min-h-0 bg-black border-2 border-slate-700 rounded-lg relative overflow-hidden group">
+      <div class="min-h-0 bg-black border-2 border-slate-700 rounded-lg relative overflow-hidden group" style="aspect-ratio: 16/9; max-height: 100%;">
         <!-- 视频流 -->
         <img 
           ref="videoElement"
@@ -92,9 +92,9 @@
               <span class="w-2 h-2 rounded-full" :class="isStreaming ? 'bg-green-500' : 'bg-gray-500'"></span> 
               {{ sourceStatusText }}
             </span>
-            <span>FPS: <span class="text-cyan-400 font-mono">{{ fps }}</span></span>
-            <span>延迟: <span class="text-cyan-400 font-mono">{{ latency }} ms</span></span>
-            <span>检测数: <span class="text-cyan-400 font-mono">{{ detectionCount }}</span></span>
+            <span v-if="systemStore.display.monitor.showFps !== false">FPS: <span class="text-cyan-400 font-mono">{{ fps }}</span></span>
+            <span v-if="systemStore.display.monitor.showLatency !== false">延迟: <span class="text-cyan-400 font-mono">{{ latency }} ms</span></span>
+            <span v-if="systemStore.display.monitor.showDetectionCount !== false">检测数: <span class="text-cyan-400 font-mono">{{ detectionCount }}</span></span>
           </div>
         </div>
       </div>
@@ -102,9 +102,9 @@
       <!-- SOP流程 (Step Indicators) -->
       <div v-if="systemStore.display.monitor.stepStrip && steps.length > 0" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
         <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0">
-          <span class="text-cyan-400 text-xs font-bold">SOP流程</span>
+          <span class="text-cyan-400 text-lg font-bold">SOP流程卡片</span>
         </div>
-        <div class="flex-1 p-2 overflow-x-auto">
+        <div ref="sopScrollContainer" class="flex-1 p-2 overflow-x-auto scroll-smooth">
           <div class="flex items-center h-full">
             <template v-for="(step, idx) in steps" :key="idx">
               <!-- 间隔时间显示 -->
@@ -118,10 +118,11 @@
               
               <!-- 步骤卡片 -->
               <div
+                :ref="el => { if (el) sopCardRefs[idx] = el }"
                 class="w-32 flex-shrink-0 flex flex-col rounded border transition-all duration-300"
                 :class="getSopCardClass(step)"
               >
-                <div class="h-6 px-2 flex items-center justify-between text-[10px]"
+                <div class="h-7 px-2 flex items-center justify-between text-xs"
                   :class="getSopHeaderClass(step)"
                 >
                   <span class="font-bold truncate">{{ step.name }}</span>
@@ -138,11 +139,6 @@
                    <el-icon v-else :size="24" class="text-slate-600"><Picture /></el-icon>
                    
                    <div v-if="step.status === 'active'" class="absolute inset-0 border-2 border-cyan-500 animate-pulse"></div>
-                </div>
-                <div class="h-8 px-1 flex items-center justify-center">
-                  <div class="text-[10px] font-mono"
-                    :class="step.cycleResult === 'ok' ? 'text-green-300' : step.cycleResult === 'ng' ? 'text-red-300' : 'text-cyan-400'"
-                  >耗时: {{ formatDuration(step.label) }}</div>
                 </div>
               </div>
             </template>
@@ -170,9 +166,9 @@
             <div v-for="counter in builtinCounters" :key="counter.name"
               class="flex flex-col items-center justify-center bg-slate-800/50 p-2 rounded-lg"
             >
-               <div class="text-lg font-bold text-gray-300 mb-0.5">{{ getCounterDisplayName(counter.name) }}</div>
-               <div class="font-mono font-bold"
-                 :class="counter.name === '合格总数' ? 'text-5xl text-green-400' : counter.name === '不良总数' ? 'text-5xl text-red-500' : 'text-4xl text-white'"
+               <div class="text-sm text-gray-300 mb-0.5">{{ getCounterDisplayName(counter.name) }}</div>
+               <div class="font-mono"
+                 :class="counter.name === '合格总数' ? 'text-2xl text-green-400' : counter.name === '不良总数' ? 'text-2xl text-red-500' : 'text-2xl text-white'"
                >
                  {{ counter.value }}
                </div>
@@ -209,7 +205,7 @@
          </div>
          <!-- NG Step Ranking -->
          <div class="bg-slate-900 border border-slate-700 rounded-lg p-2 flex flex-col">
-            <h3 class="text-red-400 text-base font-bold mb-1.5">不良步骤排名</h3>
+            <h3 class="text-cyan-400 text-base font-bold mb-1.5">NG步骤TOP3</h3>
             <div class="flex-1 overflow-y-auto space-y-1">
               <div v-if="ngStepRanking.length === 0" class="flex items-center justify-center h-full text-gray-600 text-base">
                 暂无数据
@@ -217,9 +213,9 @@
               <div v-for="(item, idx) in ngStepRanking.slice(0, 3)" :key="item.step"
                 class="flex items-center gap-2 bg-slate-800/50 px-2 py-1.5 rounded"
               >
-                <span class="text-lg font-bold w-6 text-center" :class="idx === 0 ? 'text-red-400' : idx === 1 ? 'text-orange-400' : 'text-yellow-400'">{{ idx + 1 }}</span>
+                <span class="text-lg font-bold w-6 text-center text-white">{{ idx + 1 }}</span>
                 <span class="flex-1 text-base text-gray-300 truncate">{{ item.step }}</span>
-                <span class="text-lg font-bold text-red-400">{{ item.count }}次</span>
+                <span class="text-lg font-bold text-white">{{ item.rate.toFixed(1) }}%</span>
               </div>
             </div>
          </div>
@@ -232,26 +228,32 @@
             <span class="text-sm bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ cycleTime }}s</span>
          </div>
          <div class="flex-1 overflow-auto">
-            <table class="w-full text-left text-lg">
+            <table class="w-full text-left text-sm">
                <thead class="bg-slate-800 text-gray-400 top-0 sticky">
                   <tr>
                      <th class="px-2 py-1.5">No</th>
                      <th class="px-2 py-1.5">步骤</th>
-                     <th class="px-2 py-1.5">检测次数</th>
+                     <th class="px-2 py-1.5">结果</th>
+                     <th class="px-2 py-1.5">PT/s</th>
                      <th class="px-2 py-1.5">状态</th>
                   </tr>
                </thead>
                <tbody class="divide-y divide-slate-800 text-gray-300">
                   <tr v-for="(row, i) in tableData" :key="i" 
                     class="hover:bg-slate-800/50"
-                    :class="row.status === 'completed' ? 'bg-green-900/10' : ''"
+                    :class="row.status === 'completed' ? 'bg-green-800/30' : ''"
                   >
                      <td class="px-2 py-1.5">{{ i + 1 }}</td>
-                     <td class="px-2 py-1.5 font-medium">{{ row.step }}</td>
-                     <td class="px-2 py-1.5 text-cyan-400 font-bold">{{ row.count }}</td>
+                     <td class="px-2 py-1.5">{{ row.step }}</td>
                      <td class="px-2 py-1.5">
-                       <span class="font-medium" :class="row.status === 'completed' ? 'text-green-400' : 'text-gray-500'">
-                         {{ row.status === 'completed' ? '✓ 已完成' : '待检测' }}
+                       <span v-if="row.cycleResult === 'ok'" class="text-green-400">OK</span>
+                       <span v-else-if="row.cycleResult === 'ng'" class="text-red-500">NG</span>
+                       <span v-else class="text-gray-500">--</span>
+                     </td>
+                     <td class="px-2 py-1.5 text-white font-mono">{{ formatStepPT(row.label) }}</td>
+                     <td class="px-2 py-1.5">
+                       <span :class="row.status === 'completed' ? 'text-white' : 'text-gray-500'">
+                         {{ row.status === 'completed' ? '已检测' : '待检测' }}
                        </span>
                      </td>
                   </tr>
@@ -264,14 +266,14 @@
             <button 
               @click="startDetection" 
               :disabled="!currentProject || isRunning"
-              class="flex-1 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
+              class="flex-1 bg-emerald-500 hover:bg-emerald-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
               开始
             </button>
             <button 
               @click="stopDetectionHandler"
               :disabled="!isRunning"
-              class="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
+              class="flex-1 bg-red-500 hover:bg-red-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
               停止
             </button>
@@ -285,7 +287,7 @@
             <button 
               @click="resetCounters"
               :disabled="isRunning"
-              class="flex-1 bg-cyan-700 hover:bg-cyan-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
+              class="flex-1 bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
               清零
             </button>
@@ -344,6 +346,11 @@ const sourceStore = useSourceStore();
 
 const videoElement = ref(null);
 const detectionCanvas = ref(null);
+
+// SOP 滚动相关
+const sopScrollContainer = ref(null);
+const sopCardRefs = {};
+let lastScrolledIdx = -1;
 
 // Chart Refs
 const defectChartRef = ref(null);
@@ -610,6 +617,13 @@ const formatDuration = (stepLabel) => {
   return `${duration.toFixed(1)}s`;
 };
 
+// 格式化当前周期内步骤检测时间（PT）
+const formatStepPT = (stepLabel) => {
+  const duration = stepDurations.value[stepLabel];
+  if (duration === undefined || duration === null) return '--';
+  return `${duration.toFixed(1)}s`;
+};
+
 // 格式化步骤间隔时间
 const formatInterval = (stepLabel) => {
   const interval = stepIntervals.value[stepLabel];
@@ -659,6 +673,22 @@ const getSopBodyClass = (step) => {
   } else {
     return 'bg-black/20';
   }
+};
+
+// SOP 卡片自动滚动：将正在变化的卡片滚动到可视区域中间
+const scrollToSopCard = (idx) => {
+  if (idx === lastScrolledIdx || idx < 0) return;
+  const container = sopScrollContainer.value;
+  const card = sopCardRefs[idx];
+  if (!container || !card) return;
+  
+  const containerWidth = container.clientWidth;
+  const cardLeft = card.offsetLeft;
+  const cardWidth = card.offsetWidth;
+  const targetScroll = cardLeft - (containerWidth / 2) + (cardWidth / 2);
+  
+  container.scrollTo({ left: Math.max(0, targetScroll), behavior: 'smooth' });
+  lastScrolledIdx = idx;
 };
 
 // 格式化视频时间（秒转 mm:ss）
@@ -790,8 +820,8 @@ const drawDetections = (detections) => {
   const showConf = systemStore.detection.showConfidence;
   
   detections.forEach(det => {
-    // 跳过禁用步骤的检测框
     if (!enabledLabels.has(det.label)) return;
+    if (det.hidden) return;
     // 归一化坐标转换为实际坐标
     const x = det.x * canvas.width;
     const y = det.y * canvas.height;
@@ -806,8 +836,8 @@ const drawDetections = (detections) => {
     ctx.lineWidth = lineWidth;
     ctx.strokeRect(x, y, w, h);
     
-    // 准备标签
-    let label = det.label || 'Unknown';
+    // 准备标签（优先使用自定义显示名称）
+    let label = det.display_name || det.label || 'Unknown';
     if (showConf && det.confidence) {
       label += ` ${(det.confidence * 100).toFixed(0)}%`;
     }
@@ -901,6 +931,7 @@ watch(() => currentProject.value, (newProject) => {
     stepsToShow = stepsConfig.filter(s => s.enabled);
   }
   
+  stepsToShow = stepsToShow.filter(s => !s.backup_for);
 
   // 更新步骤条 - 同时保存 label 用于后端匹配
   steps.value = stepsToShow.map((s, idx) => ({
@@ -916,9 +947,10 @@ watch(() => currentProject.value, (newProject) => {
   // 更新表格数据
   tableData.value = stepsToShow.map(s => ({
     step: s.displayLabel || s.label,
-    label: s.label,  // 添加 label 字段
+    label: s.label,
     count: 0,
-    status: 'pending'
+    status: 'pending',
+    cycleResult: null
   }));
   
   nextTick(() => {
@@ -1000,7 +1032,8 @@ const updateGaugeChart = () => {
       detail: { 
         valueAnimation: true, 
         offsetCenter: [0, '20%'],
-        fontSize: 16,
+        fontSize: 24,
+        fontWeight: 'bold',
         color: '#fff',
         formatter: '{value}%'
       },
@@ -1184,6 +1217,7 @@ const startPolling = () => {
         const shouldUpdateCharts = (now - lastChartUpdate >= CHART_UPDATE_INTERVAL);
         const countersWithCycle = data.counters || {};
         countersWithCycle._currentCycleSteps = data.current_cycle_steps || [];
+        countersWithCycle._backupCoveredLabels = data.backup_covered_labels || [];
         updateStepsFromBackend(
           data.step_counts || {}, 
           data.detections || [],
@@ -1248,6 +1282,20 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
   
   // 获取后端的当前周期步骤列表
   const currentCycleSteps = backendCounters?._currentCycleSteps || [];
+  const backupCoveredLabels = new Set(backendCounters?._backupCoveredLabels || []);
+  
+  // Inject default_pt for backup-covered steps that have no real duration
+  if (backupCoveredLabels.size > 0) {
+    const stepsConfig = currentProject.value?.steps_config || [];
+    backupCoveredLabels.forEach(label => {
+      if (stepDurations.value[label] === undefined || stepDurations.value[label] === null) {
+        const cfg = stepsConfig.find(s => s.label === label);
+        if (cfg?.default_pt) {
+          stepDurations.value[label] = cfg.default_pt;
+        }
+      }
+    });
+  }
   
   // 检测周期是否刚结束（总产量变化时表示新周期产生）
   const currentTotal = backendCounters?.['总产量'] ?? -1;
@@ -1260,7 +1308,9 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       });
       tableData.value.forEach(t => {
         t.status = 'pending';
+        t.cycleResult = null;
       });
+      lastScrolledIdx = -1;
     }, 1200);
   }
   lastTotalCount = currentTotal;
@@ -1303,10 +1353,14 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       const label = step.label || step.name;
       const cycleCount = countInCycle[label] || 0;
       
+      const isCoveredByBackup = backupCoveredLabels.has(label);
+      
       if (cycleCount > 1) {
         step.cycleResult = 'ng';  // 重复
       } else if (label in firstPos) {
         step.cycleResult = outOfOrder.has(label) ? 'ng' : 'ok';  // 检测到：看是否乱序
+      } else if (isCoveredByBackup) {
+        step.cycleResult = 'ok';  // 替补覆盖：视为已完成
       } else if (idx <= maxDetectedExpectedIdx) {
         step.cycleResult = 'ng';  // 漏做（后面的步骤已出现但此步骤未出现）
       } else {
@@ -1316,7 +1370,7 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       // 设置 status
       if (detectingLabels.has(label)) {
         step.status = 'active';
-      } else if (cycleCount > 0) {
+      } else if (cycleCount > 0 || isCoveredByBackup) {
         step.status = 'completed';
       } else {
         step.status = 'pending';
@@ -1325,9 +1379,22 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       // 同步表格状态
       if (tableData.value[idx]) {
         tableData.value[idx].count = stepCounts[label] || 0;
-        tableData.value[idx].status = cycleCount > 0 ? 'completed' : 'pending';
+        tableData.value[idx].status = (cycleCount > 0 || isCoveredByBackup) ? 'completed' : 'pending';
+        tableData.value[idx].cycleResult = step.cycleResult;
       }
     });
+    
+    // 自动滚动到最新变化的卡片
+    let latestChangedIdx = -1;
+    for (let i = steps.value.length - 1; i >= 0; i--) {
+      if (steps.value[i].cycleResult === 'ok' || steps.value[i].cycleResult === 'ng') {
+        latestChangedIdx = i;
+        break;
+      }
+    }
+    if (latestChangedIdx >= 0) {
+      scrollToSopCard(latestChangedIdx);
+    }
   } else {
     // 周期未开始或已结束：不改变 cycleResult（保留上一轮的视觉反馈直到 reset）
     steps.value.forEach((step, idx) => {
@@ -1359,7 +1426,7 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
   // 解析事件 — 仅用于 NG 排名累计（cycleResult 已由实时算法处理）
   if (recentEvents && recentEvents.length > 0) {
     recentEvents.forEach(event => {
-      const eventKey = `${event.event_id}_${Math.floor(event.timestamp)}`;
+      const eventKey = event.seq ? `seq_${event.seq}` : `${event.event_id}_${event.timestamp}`;
       if (processedEventIds.has(eventKey)) return;
       processedEventIds.add(eventKey);
       
@@ -1409,10 +1476,14 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       arr.slice(-200).forEach(k => processedEventIds.add(k));
     }
     
-    // 更新排名
+    // 更新排名（百分比 = NG次数 / 总执行次数）
     ngStepRanking.value = Object.entries(ngStepCountMap.value)
-      .map(([step, count]) => ({ step, count }))
-      .sort((a, b) => b.count - a.count);
+      .map(([step, ngCount]) => {
+        const total = stepCounts[step] || 0;
+        const rate = total > 0 ? (ngCount / total * 100) : 0;
+        return { step, count: ngCount, total, rate };
+      })
+      .sort((a, b) => b.rate - a.rate);
   }
   
   if (backendCounters && currentProject.value?.counters_config) {
@@ -1505,7 +1576,9 @@ const resetCounters = async () => {
   tableData.value.forEach(t => {
     t.count = 0;
     t.status = 'pending';
+    t.cycleResult = null;
   });
+  lastScrolledIdx = -1;
   
   // 清空步骤截图缓存和NG排名
   stepScreenshots.value = {};

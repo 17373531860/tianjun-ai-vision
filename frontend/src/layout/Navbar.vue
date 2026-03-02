@@ -1,12 +1,12 @@
 <template>
-  <header class="h-16 bg-[#0f172a] border-b border-cyan-900 flex items-center justify-between px-4 text-white shadow-lg shadow-cyan-900/20">
-    <!-- Left: Logo & Menu -->
-    <div class="flex items-center gap-4">
+  <header class="h-16 bg-[#0f172a] border-b border-cyan-900 flex items-center px-4 text-white shadow-lg shadow-cyan-900/20">
+    <!-- Left: Logo & Menu & Project -->
+    <div class="flex items-center gap-4 flex-shrink-0">
       <slot name="left"></slot>
       <div class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
         {{ store.display.brandName || $t('navbar.title') }}
       </div>
-      <div class="h-8 w-px bg-gray-700 mx-2"></div>
+      <div class="h-8 w-px bg-gray-700 mx-1"></div>
       
       <!-- Project Info Block -->
       <div v-if="store.display.navbar.projectSelector" class="flex items-center gap-6 text-sm">
@@ -35,36 +35,25 @@
             {{ $t('navbar.select') }}
           </button>
         </div>
-        
-        <div class="hidden md:flex items-center gap-4 text-gray-300">
-          <span v-if="store.display.navbar.inspector">作业员: <span class="text-white">{{ store.display.inspectorName || '未设置' }}</span></span>
-          <span v-if="store.display.navbar.deviceId">{{ $t('navbar.deviceId') }}: <span class="text-white">{{ store.display.deviceNumber || '未设置' }}</span></span>
+      </div>
+    </div>
+
+    <!-- Center: App Name (slightly left) -->
+    <div class="flex-1 flex items-center justify-center -ml-24">
+      <div class="app-name-wrapper">
+        <div class="app-name-tech text-2xl font-semibold tracking-[0.25em]">
+          {{ store.display.appName || '视觉AI行为引导系统' }}
+          <span class="underline-bar"></span>
         </div>
       </div>
     </div>
 
     <!-- Right: Status & System -->
-    <div class="flex items-center gap-6">
-      <!-- Status Indicators -->
+    <div class="flex items-center gap-6 flex-shrink-0">
+      <!-- 实时时间保留在顶部 -->
       <div class="flex items-center gap-4 text-sm font-mono">
-        <!-- 实时时间 -->
-        <div v-if="store.display.navbar.realtime !== false" class="flex gap-2">
-          <span class="text-cyan-400">时间:</span>
-          <span class="text-white">{{ realTimeStr }}</span>
-        </div>
-        <div v-if="store.display.navbar.mode" class="flex gap-2">
-          <span class="text-cyan-400">{{ $t('navbar.mode') }}:</span> 
-          <span>{{ modeLabel }}</span>
-        </div>
-        <div v-if="store.display.navbar.status" class="flex gap-2">
-          <span class="text-cyan-400">{{ $t('navbar.status') }}:</span> 
-          <span :class="projectStore.isRunning ? 'text-status-ok' : 'text-gray-400'" class="font-bold">
-            {{ projectStore.isRunning ? $t('navbar.running') : '待机' }}
-          </span>
-        </div>
-        <div v-if="store.display.navbar.runtime" class="flex gap-2">
-          <span class="text-cyan-400">{{ $t('navbar.runTime') }}:</span> 
-          <span>{{ runTimeStr }}</span>
+        <div v-if="store.display.navbar.realtime !== false">
+          <span class="text-white text-lg font-bold">{{ realTimeStr }}</span>
         </div>
       </div>
 
@@ -77,7 +66,7 @@
           <el-icon 
             class="transition-colors" 
             :class="store.isDetecting ? 'cursor-not-allowed text-gray-600' : 'cursor-pointer text-gray-300 hover:text-cyan-400'" 
-            :size="20"
+            :size="28"
           ><Setting /></el-icon>
           <template #dropdown>
             <el-dropdown-menu class="bg-slate-800 border-slate-700">
@@ -98,7 +87,7 @@
           </template>
         </el-dropdown>
 
-        <img src="/app-icon.png" alt="logo" class="w-8 h-8 rounded-full object-cover" />
+        <img src="/app-icon.png" alt="logo" class="w-10 h-10 rounded-full object-cover" />
       </div>
     </div>
   </header>
@@ -457,3 +446,43 @@ onUnmounted(() => {
   if (timerInterval) clearInterval(timerInterval);
 });
 </script>
+
+<style scoped>
+.app-name-wrapper {
+  display: flex;
+  align-items: center;
+}
+
+.app-name-tech {
+  position: relative;
+  background: linear-gradient(90deg, #c084fc, #818cf8, #38bdf8, #818cf8, #c084fc);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 6s ease-in-out infinite;
+  padding-bottom: 6px;
+}
+
+.underline-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, transparent 0%, #7c3aed 20%, #818cf8 50%, #7c3aed 80%, transparent 100%);
+  animation: bar-breathe 3s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 200% 50%; }
+}
+
+@keyframes bar-breathe {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.8; }
+}
+
+</style>

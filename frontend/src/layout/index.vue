@@ -54,15 +54,18 @@
         </template>
       </Navbar>
 
-      <section class="flex-1 overflow-auto p-4 bg-[#0f172a]">
+      <section class="flex-1 overflow-auto px-4 pt-4 pb-0 bg-[#0f172a]">
         <router-view />
       </section>
+
+      <BottomBar />
     </main>
   </div>
 </template>
 
 <script setup>
 import Navbar from './Navbar.vue';
+import BottomBar from './BottomBar.vue';
 import { ref } from 'vue';
 import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/store/useSystemStore';

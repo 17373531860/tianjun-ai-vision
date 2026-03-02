@@ -221,6 +221,16 @@
                           <span class="cursor-help border-b border-dashed border-gray-500">参与周期</span>
                         </el-tooltip>
                       </th>
+                      <th class="p-2 w-28">
+                        <el-tooltip content="设为其他步骤的替补：当主步骤未检测到但替补被检测到时，自动补全主步骤" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">替补目标</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="当此步骤被替补覆盖时显示的默认PT值（秒），不填则显示'--'" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">默认PT</span>
+                        </el-tooltip>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -313,6 +323,35 @@
                           :disabled="step.detection_type !== 'static'"
                         />
                       </td>
+                      <td class="p-2">
+                        <el-select 
+                          v-model="step.backup_for" 
+                          size="small" 
+                          clearable 
+                          placeholder="无"
+                          class="w-full"
+                        >
+                          <el-option 
+                            v-for="s in (activeProject.steps_config || []).filter(s => s.enabled && s.id !== step.id && !s.backup_for)" 
+                            :key="s.id" 
+                            :label="s.displayLabel || s.label" 
+                            :value="s.id" 
+                          />
+                        </el-select>
+                      </td>
+                      <td class="p-2">
+                        <el-input-number 
+                          v-model="step.default_pt" 
+                          size="small" 
+                          :min="0.1" 
+                          :max="60" 
+                          :step="0.1"
+                          :precision="1"
+                          :controls="false"
+                          placeholder="--"
+                          class="w-full"
+                        />
+                      </td>
                     </tr>
                   </tbody>
                 </table>
@@ -337,7 +376,7 @@
                       <span class="text-cyan-400 font-bold w-8">{{ idx + 1 }}.</span>
                       <el-select v-model="seqStep.step_id" size="small" class="flex-1" placeholder="选择步骤">
                         <el-option 
-                          v-for="s in enabledSteps" 
+                          v-for="s in nonBackupSteps" 
                           :key="s.id" 
                           :label="s.displayLabel || s.label" 
                           :value="s.id" 
@@ -360,7 +399,7 @@
                   <div class="bg-slate-900 rounded p-3">
                     <el-checkbox-group v-model="activeProject.detection_steps" class="flex flex-col gap-2">
                       <el-checkbox 
-                        v-for="step in enabledSteps" 
+                        v-for="step in nonBackupSteps" 
                         :key="step.id" 
                         :label="step.id"
                         class="!mr-0"
@@ -368,7 +407,7 @@
                         <span class="text-gray-300">{{ step.displayLabel || step.label }}</span>
                       </el-checkbox>
                     </el-checkbox-group>
-                    <div v-if="enabledSteps.length === 0" class="text-gray-500 text-center py-4">
+                    <div v-if="nonBackupSteps.length === 0" class="text-gray-500 text-center py-4">
                       请先在"步骤设置"中启用步骤
                     </div>
                   </div>
@@ -396,7 +435,7 @@
                       <div v-for="(item, idx) in (activeProject.custom_sequence_order || [])" :key="idx" class="flex items-center gap-2">
                         <span class="text-gray-400 text-xs w-6">{{ idx + 1 }}.</span>
                         <el-select v-model="item.step_id" size="small" class="flex-1" placeholder="选择步骤">
-                          <el-option v-for="step in enabledSteps" :key="step.id" :label="step.displayLabel || step.label" :value="step.id" />
+                          <el-option v-for="step in nonBackupSteps" :key="step.id" :label="step.displayLabel || step.label" :value="step.id" />
                         </el-select>
                         <el-button type="danger" size="small" link @click="removeCustomSequenceStep(idx)">删除</el-button>
                       </div>
@@ -419,7 +458,7 @@
                     <p class="text-xs text-cyan-400 mb-2 font-bold">检测配置（自定义模式独立，勾选要检测的步骤）：</p>
                     <el-checkbox-group v-model="activeProject.custom_detection_steps" class="flex flex-wrap gap-2">
                       <el-checkbox 
-                        v-for="step in enabledSteps" 
+                        v-for="step in nonBackupSteps" 
                         :key="step.id" 
                         :label="step.id"
                         class="!mr-0"
@@ -689,6 +728,10 @@ const newProjectForm = ref({
 const enabledSteps = computed(() => {
   if (!activeProject.value?.steps_config) return [];
   return activeProject.value.steps_config.filter(s => s.enabled);
+});
+
+const nonBackupSteps = computed(() => {
+  return enabledSteps.value.filter(s => !s.backup_for);
 });
 
 // 默认计数器（前3个）
@@ -1019,7 +1062,9 @@ const selectModel = (model) => {
       min_frames: null,  // 最少帧数，null 表示使用默认值1
       detection_type: 'dynamic',  // 检测类型：dynamic（动态）或 static（静态）
       static_trigger_frames: 30,  // 静态触发帧数，默认30帧
-      join_cycle: true  // 静态步骤是否参与周期，默认参与
+      join_cycle: true,
+      backup_for: null,
+      default_pt: null
     }));
     
     // 自动初始化顺序

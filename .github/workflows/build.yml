@@ -195,42 +195,54 @@ jobs:
           echo "--- Looking for .exe anywhere ---"
           Get-ChildItem -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object FullName
       
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }} - 天钧AI视觉检测系统
-          files: |
-            electron/dist/TianJun-AI-Vision-*-Setup.exe
-          body: |
-            ## v1.4.2 更新内容
-            
-            ### 新功能
-            - 数据自动清理：支持设置保留天数（默认30天）、手动触发清理
-            - 清理设置面板：支持按日期范围删除、存储空间监控
-            - 磁盘使用率提醒：磁盘使用超过80%/90%时自动弹出警告
-            - 视频上传覆盖：同名视频上传自动覆盖旧文件
-            
-            ### 重要修复 - 系统死机问题
-            - 修复 MJPEG 流无节流导致 CPU 100% 占满的严重问题
-            - 修复截图编码每帧执行导致 CPU 过载（每秒280次→1次）
-            - 修复推理线程无间隔限制导致 CPU 累积过高
-            - 修复 pause() 不释放录制线程和 FFmpeg 进程导致资源泄漏
-            - 修复暂停后重新开始检测时视频源不自动恢复的问题
-            
-            ### 其他修复
-            - 修复 /data/sessions/dates 路由被拦截导致 422 错误
-            - 修复数据管理页面无法加载历史日期列表
-            - 清空所有数据时同时清理上传视频和转换缓存
-            - 自动清理覆盖孤儿录制文件（不在数据库中的过期文件）
-            
-            ### 安装说明
-            1. 下载 .exe 安装程序
-            2. 双击运行安装
-            3. 按提示完成安装
-            4. 首次运行需安装 VC++ 运行时库（如未安装）
-            5. 模型文件需在项目管理中上传
-          draft: false
-          prerelease: false
+      - name: Upload Release to tianjun-releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          echo "Creating release ${VERSION} on tianjun-releases..."
+
+          SETUP_FILE=$(find electron/dist -name "TianJun-AI-Vision-*-Setup.exe" -type f | head -1)
+
+          if [ -z "$SETUP_FILE" ]; then
+            echo "ERROR: Setup exe not found!"
+            ls -la electron/dist/
+            exit 1
+          fi
+
+          echo "Found installer: $SETUP_FILE"
+
+          cat > /tmp/release-notes.md << EOF
+          ## ${VERSION} 更新内容
+
+          ### 新功能 - 替补步骤（Backup Steps）
+          - 支持为步骤配置替补目标：当主步骤未被检测到时，替补步骤可作为替代
+          - 替补步骤在 SOP 卡片和工艺流程中自动隐藏
+          - 替补步骤检测框在视频画面中不显示
+          - 结算时自动注入替补覆盖的主步骤到正确位置
+          - 支持配置默认 PT（Processing Time）用于替补覆盖场景
+
+          ### UI 优化
+          - 底部状态栏新增：显示 GPU 状态和系统信息
+          - 设置页面新增底部状态栏开关
+          - 导航栏布局优化
+
+          ### 安装说明
+          1. 下载 .exe 安装程序
+          2. 双击运行安装
+          3. 按提示完成安装
+          4. 首次运行需安装 VC++ 运行时库（如未安装）
+          5. **升级安装会自动保留原有项目配置和模型数据**
+          EOF
+
+          gh release delete "${VERSION}" --repo 17373531860/tianjun-releases --yes 2>/dev/null || true
+
+          gh release create "${VERSION}" \
+            --repo 17373531860/tianjun-releases \
+            --title "${VERSION} - 天军科技AI视觉检测系统" \
+            --notes-file /tmp/release-notes.md \
+            "$SETUP_FILE"
+
+          echo "Release created successfully!"

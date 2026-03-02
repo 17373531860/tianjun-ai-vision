@@ -21,6 +21,10 @@
                 <el-input v-model="store.display.brandName" placeholder="天军科技AI" @change="saveDisplaySettings" />
               </div>
               <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="text-gray-300 mb-2">软件名称</div>
+                <el-input v-model="store.display.appName" placeholder="视觉AI行为引导系统" @change="saveDisplaySettings" />
+              </div>
+              <div class="p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="text-gray-300 mb-2">作业员姓名</div>
                 <el-input v-model="store.display.inspectorName" placeholder="张三" @change="saveDisplaySettings" />
               </div>
@@ -99,6 +103,18 @@
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <span class="text-gray-300">步骤统计表格</span>
                 <el-switch v-model="store.display.monitor.stepTable" @change="saveDisplaySettings" />
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-300">FPS</span>
+                <el-switch v-model="store.display.monitor.showFps" @change="saveDisplaySettings" />
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-300">延迟</span>
+                <el-switch v-model="store.display.monitor.showLatency" @change="saveDisplaySettings" />
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-300">检测数</span>
+                <el-switch v-model="store.display.monitor.showDetectionCount" @change="saveDisplaySettings" />
               </div>
             </div>
           </el-card>

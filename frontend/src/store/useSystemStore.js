@@ -52,6 +52,7 @@ export const useSystemStore = defineStore('system', {
     display: {
       // 基本信息
       brandName: '天军科技AI',      // 品牌/系统名称
+      appName: '视觉AI行为引导系统',  // 软件名称
       inspectorName: '张三',        // 检测员姓名
       deviceNumber: '251011',       // 设备编号
       // 导航栏显示开关
@@ -70,6 +71,9 @@ export const useSystemStore = defineStore('system', {
         defectChart: true,
         capacityChart: true,
         stepTable: true,
+        showFps: true,
+        showLatency: true,
+        showDetectionCount: true,
         // 默认计数器显示开关（这些是系统内置的，无法删除，但可以隐藏）
         defaultCounters: {
           showTotal: true,      // 总产量

@@ -548,11 +548,17 @@ class VideoSourceManager:
         # 事件与计数器
         self.counters = {}  # {counter_name: value}
         self.events_log = []  # 事件日志
+        self._event_seq = 0  # 事件唯一递增序号
         self.current_cycle_steps = []  # 当前周期检测到的步骤顺序
         self.last_added_step = None  # 上一个添加到周期的步骤（用于去重判断）
         self.cycle_complete = False
         # 标记当前周期是否已经出现“最后一步”（顺序/自定义顺序模式用来防止 7 之后继续往同一轮追加 1、2、3）
         self._cycle_locked_by_last_step = False
+        
+        # Backup steps (替补步骤)
+        self.step_backup_map = {}            # {backup_label: primary_label}
+        self.step_primary_to_backup = {}     # {primary_label: backup_label}
+        self.backup_steps_seen_in_cycle = set()
         
         # Cycle Time 统计
         self.cycle_start_time = None  # 当前周期开始时间
@@ -765,6 +771,7 @@ class VideoSourceManager:
             self.current_cycle_uuid = cycle_uuid
             self.cycle_step_records = []
             self.step_order_counter = 0
+            self.backup_steps_seen_in_cycle = set()
             
             db.close()
             print(f"新周期开始: #{self.current_cycle_number} ({cycle_uuid})")
@@ -908,6 +915,10 @@ class VideoSourceManager:
         self.step_detection_type = {}  # 检测类型
         self.step_static_config = {}  # 静态步骤配置
         self.step_static_triggered = {}  # 静态步骤触发状态
+        self.step_display_names = {}  # label -> displayLabel mapping
+        self.step_backup_map = {}        # {backup_label: primary_label}
+        self.step_primary_to_backup = {} # {primary_label: backup_label}
+        self.backup_steps_seen_in_cycle = set()
         
         steps_config = config.get('steps_config', [])
         for step in steps_config:
@@ -918,6 +929,10 @@ class VideoSourceManager:
                 if threshold > 1:
                     threshold = threshold / 100.0  # 转换百分比为小数
                 self.step_conf_thresholds[label] = threshold
+                
+                display_label = step.get('displayLabel') or step.get('display_name') or label
+                if display_label != label:
+                    self.step_display_names[label] = display_label
                 
                 # 步骤时间配置
                 self.step_time_config[label] = {
@@ -942,6 +957,23 @@ class VideoSourceManager:
                         'trigger_event': step.get('triggerEvent')  # 触发的事件
                     }
                     self.step_static_triggered[label] = False
+        
+        # Second pass: build backup step mapping (needs all labels resolved first)
+        for step in steps_config:
+            if step.get('enabled', True):
+                label = step.get('label', '')
+                backup_for_id = step.get('backup_for')
+                if backup_for_id:
+                    for s in steps_config:
+                        if s.get('id') == backup_for_id:
+                            primary_label = s.get('label', '')
+                            if primary_label:
+                                self.step_backup_map[label] = primary_label
+                                self.step_primary_to_backup[primary_label] = label
+                            break
+        
+        if self.step_backup_map:
+            print(f"替补步骤映射: {self.step_backup_map}")
         
         # 解析同时出现组配置
         pipeline_config = config.get('pipeline_config', {})
@@ -970,6 +1002,7 @@ class VideoSourceManager:
         # 重置周期状态
         self.current_cycle_steps = []
         self.last_added_step = None  # 重置上一个添加的步骤
+        self.backup_steps_seen_in_cycle = set()
         self.cycle_complete = False
         self.events_log = []
         self.step_start_time = {}  # 重置步骤开始时间
@@ -1495,6 +1528,7 @@ class VideoSourceManager:
                     print(f"  → 条件匹配！触发事件 {cond_event_id}")
                     self._trigger_event(cond_event_id, f'自定义条件匹配: {cond_labels}')
                     self.current_cycle_steps = []
+                    self.backup_steps_seen_in_cycle = set()
                     self.last_added_step = None
                     return
         
@@ -1505,6 +1539,7 @@ class VideoSourceManager:
             
             if not sequence_order:
                 self.current_cycle_steps = []
+                self.backup_steps_seen_in_cycle = set()
                 self.last_added_step = None
                 return
             
@@ -1517,8 +1552,12 @@ class VideoSourceManager:
             
             if not expected_labels:
                 self.current_cycle_steps = []
+                self.backup_steps_seen_in_cycle = set()
                 self.last_added_step = None
                 return
+            
+            self.current_cycle_steps = self._inject_backup_steps(
+                self.current_cycle_steps, expected_labels)
             
             print(f"  期望序列({len(expected_labels)}步): {expected_labels}")
             print(f"  实际序列({len(self.current_cycle_steps)}步): {self.current_cycle_steps}")
@@ -1565,6 +1604,7 @@ class VideoSourceManager:
         
         # 重置周期
         self.current_cycle_steps = []
+        self.backup_steps_seen_in_cycle = set()
         self.last_added_step = None
         
         # 清理 step_last_seen 中已消失的标签，防止跨周期污染
@@ -1627,6 +1667,7 @@ class VideoSourceManager:
         
         if not sequence_order or not steps_config:
             self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
             # 周期结算后重置步骤时序状态，确保下一轮的相同步骤可被视为“新出现”
             self.step_last_seen.clear()
@@ -1644,6 +1685,7 @@ class VideoSourceManager:
         
         if not expected_labels:
             self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
             # 周期结算后重置步骤时序状态，确保下一轮的相同步骤可被视为“新出现”
             self.step_last_seen.clear()
@@ -1651,6 +1693,9 @@ class VideoSourceManager:
             self.last_step_completed_time = None
             self._cycle_locked_by_last_step = False
             return
+        
+        self.current_cycle_steps = self._inject_backup_steps(
+            self.current_cycle_steps, expected_labels)
         
         print(f"顺序模式结算: 期望={expected_labels}, 实际={self.current_cycle_steps}")
         
@@ -1662,6 +1707,7 @@ class VideoSourceManager:
             print(f"  → 序列长度({len(self.current_cycle_steps)})超过预期({len(expected_labels)})，有重复步骤 → NG")
             self._trigger_event(2, f'重复步骤: {duplicated}')
             self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
             return
         
@@ -1671,6 +1717,7 @@ class VideoSourceManager:
             print(f"  → 周期不完整，缺少: {missing} → NG")
             self._trigger_event(2, f'周期不完整，缺少: {missing}')
             self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
             return
         
@@ -1697,6 +1744,7 @@ class VideoSourceManager:
         
         # 重置周期
         self.current_cycle_steps = []
+        self.backup_steps_seen_in_cycle = set()
         self.last_added_step = None
         self.last_step_completed_time = None
         self._cycle_locked_by_last_step = False
@@ -1977,6 +2025,13 @@ class VideoSourceManager:
                 if not self.step_frame_confirmed.get(label):
                     self.step_frame_confirmed[label] = True
         
+        # Backup step processing: mark seen, then remove from detected_labels
+        if self.step_backup_map:
+            backup_in_detected = detected_labels & set(self.step_backup_map.keys())
+            for b_label in backup_in_detected:
+                self.backup_steps_seen_in_cycle.add(b_label)
+            detected_labels -= backup_in_detected
+        
         # 对于本帧没有检测到的标签，重置连续帧计数
         all_configured_labels = set(self.step_conf_thresholds.keys()) if self.step_conf_thresholds else set()
         for label in all_configured_labels:
@@ -2150,12 +2205,7 @@ class VideoSourceManager:
                         
                         # ========== 记录步骤到数据库 ==========
                         # 获取步骤显示名称
-                        step_name = label
-                        if self.project_config:
-                            for step in self.project_config.get('steps_config', []):
-                                if step.get('label') == label:
-                                    step_name = step.get('display_name') or step.get('name') or label
-                                    break
+                        step_name = self.step_display_names.get(label, label)
                         
                         # 停止步骤视频录制并获取视频信息
                         step_video_info = self.stop_step_recording(label)
@@ -2185,6 +2235,26 @@ class VideoSourceManager:
         # 这样即使判定触发 end_cycle，也不会影响其他步骤的记录
         for completed_label in pending_event_checks:
             self._check_events(completed_label)
+    
+    def _inject_backup_steps(self, this_cycle: list, expected_labels: list) -> list:
+        """Inject primary step labels into this_cycle when their backup was seen but
+        the primary itself is missing. Returns a new list with injections applied."""
+        if not self.step_backup_map or not self.backup_steps_seen_in_cycle:
+            return this_cycle
+        
+        for backup_label, primary_label in self.step_backup_map.items():
+            if (backup_label in self.backup_steps_seen_in_cycle
+                    and primary_label not in this_cycle
+                    and primary_label in expected_labels):
+                expected_idx = expected_labels.index(primary_label)
+                insert_pos = 0
+                for i, lbl in enumerate(this_cycle):
+                    if lbl in expected_labels and expected_labels.index(lbl) < expected_idx:
+                        insert_pos = i + 1
+                this_cycle.insert(insert_pos, primary_label)
+                print(f"替补注入: {backup_label} -> {primary_label} at position {insert_pos}")
+        
+        return this_cycle
     
     def _check_static_step_conditions(self, static_label: str):
         """静态步骤达到触发帧数后，检查自定义条件
@@ -2319,6 +2389,7 @@ class VideoSourceManager:
                         print(f"  → 条件匹配！触发事件 {cond_event_id}")
                         self._trigger_event(cond_event_id, f'自定义条件匹配: {cond_labels}')
                         self.current_cycle_steps = []
+                        self.backup_steps_seen_in_cycle = set()
                         self.last_added_step = None
                         return  # 匹配后不再检查其他条件和基础模式
             
@@ -2377,6 +2448,7 @@ class VideoSourceManager:
         sequence_order = pipeline_config.get('sequence_order', [])
         if not sequence_order:
             self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
             # 周期结算后重置步骤时序状态，确保下一轮的相同步骤可被视为“新出现”
             self.step_last_seen.clear()
@@ -2398,6 +2470,7 @@ class VideoSourceManager:
         
         if not expected_labels:
             self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
             # 周期结算后重置步骤时序状态，确保下一轮的相同步骤可被视为“新出现”
             self.step_last_seen.clear()
@@ -2417,6 +2490,7 @@ class VideoSourceManager:
             this_cycle = list(self.current_cycle_steps)
             next_carry = []
         
+        this_cycle = self._inject_backup_steps(this_cycle, expected_labels)
         self.current_cycle_steps = this_cycle
         
         # ── 补写尚未有 StepRecord 的步骤 ──
@@ -2435,11 +2509,7 @@ class VideoSourceManager:
                     continue
                 start_t = self.step_start_time.get(label, cycle_end_time)
                 duration = max(0, cycle_end_time - start_t)
-                step_name = label
-                for step in (steps_config or []):
-                    if step.get('label') == label:
-                        step_name = step.get('display_name') or step.get('name') or label
-                        break
+                step_name = self.step_display_names.get(label, label)
                 self.record_step(
                     step_label=label, step_name=step_name,
                     start_time=start_t, end_time=cycle_end_time,
@@ -2521,6 +2591,7 @@ class VideoSourceManager:
             self._cycle_locked_by_last_step = False
         else:
             self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
             self.last_step_completed_time = None
             self._cycle_locked_by_last_step = False
@@ -2537,6 +2608,7 @@ class VideoSourceManager:
         sequence_order = pipeline_config.get('custom_sequence_order', [])
         if not sequence_order:
             self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
             return
         
@@ -2553,6 +2625,7 @@ class VideoSourceManager:
         
         if not expected_labels:
             self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
             return
         
@@ -2567,6 +2640,7 @@ class VideoSourceManager:
             this_cycle = list(self.current_cycle_steps)
             next_carry = []
         
+        this_cycle = self._inject_backup_steps(this_cycle, expected_labels)
         self.current_cycle_steps = this_cycle
         
         # ── 补写尚未有 StepRecord 的步骤 ──
@@ -2585,11 +2659,7 @@ class VideoSourceManager:
                     continue
                 start_t = self.step_start_time.get(label, cycle_end_time)
                 duration = max(0, cycle_end_time - start_t)
-                step_name = label
-                for step in (steps_config or []):
-                    if step.get('label') == label:
-                        step_name = step.get('display_name') or step.get('name') or label
-                        break
+                step_name = self.step_display_names.get(label, label)
                 self.record_step(
                     step_label=label, step_name=step_name,
                     start_time=start_t, end_time=cycle_end_time,
@@ -2668,6 +2738,7 @@ class VideoSourceManager:
             self._cycle_locked_by_last_step = False
         else:
             self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
             self.last_step_completed_time = None
             self._cycle_locked_by_last_step = False
@@ -2690,6 +2761,7 @@ class VideoSourceManager:
         if all(label in self.current_cycle_steps for label in detection_labels):
             self._trigger_event(1, '检测完成')  # 事件1: 合格
             self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
     
     def _check_custom_detection_mode(self, pipeline_config: dict, id_to_label: dict, enabled_step_labels: list):
@@ -2713,6 +2785,7 @@ class VideoSourceManager:
         if all(label in self.current_cycle_steps for label in detection_labels):
             self._trigger_event(1, '检测完成')  # 事件1: 合格
             self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
     
     def _trigger_event(self, event_id, reason: str):
@@ -2809,7 +2882,9 @@ class VideoSourceManager:
                 print(f"  计数器 {counter_name} += {value} => {self.counters[counter_name]}")
         
         # 记录事件
+        self._event_seq += 1
         self.events_log.append({
+            'seq': self._event_seq,
             'event_id': str(event.get('id', event_id)),
             'event_name': event.get('name', ''),
             'reason': reason,
@@ -2940,7 +3015,7 @@ class VideoSourceManager:
                             continue
                     
                     # 记录检测结果（归一化坐标）
-                    detections.append({
+                    det = {
                         'x': float(x1 / w),
                         'y': float(y1 / h),
                         'w': float((x2 - x1) / w),
@@ -2948,7 +3023,13 @@ class VideoSourceManager:
                         'confidence': confidence,
                         'class_id': class_id,
                         'label': class_name
-                    })
+                    }
+                    if class_name in self.step_display_names:
+                        det['display_name'] = self.step_display_names[class_name]
+                    if class_name in self.step_backup_map:
+                        det['hidden'] = True
+                        det['backup_for'] = self.step_backup_map[class_name]
+                    detections.append(det)
         except Exception as e:
             print(f"检测错误: {e}")
             import traceback
@@ -4110,6 +4191,7 @@ class VideoSourceManager:
         
         # 重置周期状态
         self.current_cycle_steps = []
+        self.backup_steps_seen_in_cycle = set()
         self.last_added_step = None
         self.cycle_complete = False
         self._cycle_locked_by_last_step = False
@@ -5251,11 +5333,11 @@ def get_detection_results():
     # 获取最新事件（用于显示提示框）
     recent_events = []
     if video_manager.events_log:
-        # 只返回最近5秒内的事件
+        # 返回最近30秒内的事件（前端用 seq 去重，不会重复计数）
         current_time = time.time()
         recent_events = [
             e for e in video_manager.events_log 
-            if current_time - e.get('timestamp', 0) < 5
+            if current_time - e.get('timestamp', 0) < 30
         ]
     
     # 计算平均周期时间
@@ -5278,7 +5360,12 @@ def get_detection_results():
         "counters": video_manager.counters.copy(),
         "recent_events": recent_events,
         "average_cycle_time": avg_cycle_time,
-        "current_cycle_steps": list(video_manager.current_cycle_steps)
+        "current_cycle_steps": list(video_manager.current_cycle_steps),
+        "backup_covered_labels": [
+            video_manager.step_backup_map[b]
+            for b in video_manager.backup_steps_seen_in_cycle
+            if b in video_manager.step_backup_map
+        ]
     }
 
 class ProjectConfigRequest(BaseModel):
