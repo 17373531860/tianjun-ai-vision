@@ -10,6 +10,13 @@ const defaultDetection = {
   labelFontSize: 14,            // 标签字体大小
   showConfidence: true,         // 显示置信度
   
+  // NG reason display
+  showNgReason: false,
+  
+  // Voice announcement
+  voiceEnabled: false,
+  voiceVolume: 1.0,
+  
   // 系统预设提示框（合格/NG）
   toasts: {
     ok: {

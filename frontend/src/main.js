@@ -27,6 +27,14 @@ const i18n = createI18n({
 
 const app = createApp(App);
 
+app.config.errorHandler = (err, vm, info) => {
+  console.error('[Vue Error]', err, info);
+};
+
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('[Unhandled Promise]', event.reason);
+});
+
 app.use(createPinia());
 app.use(router);
 app.use(ElementPlus);

@@ -16,11 +16,12 @@ class BackendManager extends EventEmitter {
     this.options = {
       port: options.port || 8001,
       host: options.host || 'localhost',
-      startupTimeout: options.startupTimeout || 300000,  // 增加到 300 秒
+      startupTimeout: options.startupTimeout || 300000,
       healthCheckInterval: options.healthCheckInterval || 5000,
       isDev: options.isDev || false,
       resourcesPath: options.resourcesPath || '',
       appPath: options.appPath || '',
+      userDataPath: options.userDataPath || '',
     };
     
     this.process = null;

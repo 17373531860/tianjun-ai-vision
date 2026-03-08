@@ -21,6 +21,9 @@ export const resumeDetection = () => api.post('/source/detection/resume');
 // 待机：只停止检测推理，画面继续播放
 export const standbyDetection = () => api.post('/source/detection/standby');
 
+// 从待机恢复推理（画面已在播放）
+export const resumeInference = () => api.post('/source/detection/resume-inference');
+
 // 获取检测结果
 export const getDetectionResults = () => api.get('/source/detection/results');
 

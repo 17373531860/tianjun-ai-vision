@@ -36,4 +36,4 @@ echo "API 文档地址: http://localhost:8001/docs"
 echo "按 Ctrl+C 停止服务"
 echo ""
 
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8001 --reload
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8001 --reload --log-level warning

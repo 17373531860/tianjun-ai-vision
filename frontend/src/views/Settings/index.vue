@@ -212,6 +212,10 @@
                 <span class="text-gray-300">显示置信度</span>
                 <el-switch v-model="store.detection.showConfidence" @change="saveDetectionSettings" />
               </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-300">NG弹窗显示原因</span>
+                <el-switch v-model="store.detection.showNgReason" @change="saveDetectionSettings" />
+              </div>
             </div>
           </el-card>
 

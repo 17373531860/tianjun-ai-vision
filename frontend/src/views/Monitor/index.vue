@@ -5,13 +5,22 @@
       
       <!-- Video Region -->
       <div class="min-h-0 bg-black border-2 border-slate-700 rounded-lg relative overflow-hidden group" style="aspect-ratio: 16/9; max-height: 100%;">
-        <!-- 视频流 -->
+        <!-- 视频流：双缓冲 img，交替使用以释放 Chromium 原生解码内存 -->
         <img 
-          ref="videoElement"
-          :src="streamUrl"
+          v-show="activeStream === 0"
+          ref="streamImg0"
+          :src="streamSrc0"
           class="w-full h-full object-contain"
-          @load="handleVideoLoad"
-          @error="handleStreamError"
+          @load="onStreamReady(0)"
+          @error="onStreamError(0)"
+        />
+        <img 
+          v-show="activeStream === 1"
+          ref="streamImg1"
+          :src="streamSrc1"
+          class="w-full h-full object-contain"
+          @load="onStreamReady(1)"
+          @error="onStreamError(1)"
         />
         
         <!-- 检测框覆盖层 -->
@@ -21,11 +30,14 @@
         ></canvas>
         
         <!-- 运行状态指示 -->
-        <div v-if="isRunning" class="absolute top-4 right-4 bg-green-600/90 text-white px-6 py-2 rounded shadow-lg text-lg font-bold animate-pulse">
+        <div v-if="isDetecting" class="absolute top-4 right-4 bg-green-600/90 text-white px-6 py-2 rounded shadow-lg text-lg font-bold animate-pulse">
           检测中
         </div>
-        <div v-else class="absolute top-4 right-4 bg-gray-600/90 text-white px-6 py-2 rounded shadow-lg text-lg font-bold">
+        <div v-else-if="isRunning && !isDetecting" class="absolute top-4 right-4 bg-yellow-600/90 text-white px-6 py-2 rounded shadow-lg text-lg font-bold">
           待机中
+        </div>
+        <div v-else class="absolute top-4 right-4 bg-gray-600/90 text-white px-6 py-2 rounded shadow-lg text-lg font-bold">
+          已停止
         </div>
         
         <!-- Current Project Info -->
@@ -265,28 +277,28 @@
          <div class="p-2 bg-slate-950 border-t border-slate-800 flex gap-2">
             <button 
               @click="startDetection" 
-              :disabled="!currentProject || isRunning"
+              :disabled="!currentProject || isDetecting || isOperating"
               class="flex-1 bg-emerald-500 hover:bg-emerald-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
-              开始
+              {{ isOperating && !isDetecting ? '启动中...' : '开始' }}
             </button>
             <button 
               @click="stopDetectionHandler"
-              :disabled="!isRunning"
+              :disabled="!isRunning || isOperating"
               class="flex-1 bg-red-500 hover:bg-red-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
-              停止
+              {{ isOperating && isRunning ? '停止中...' : '停止' }}
             </button>
             <button 
-              @click="standby"
-              :disabled="isRunning"
+              @click="standbyHandler"
+              :disabled="!isDetecting || isOperating"
               class="flex-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
               待机
             </button>
             <button 
               @click="resetCounters"
-              :disabled="isRunning"
+              :disabled="isDetecting || isOperating"
               class="flex-1 bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
               清零
@@ -336,7 +348,7 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { useSourceStore } from '@/store/useSourceStore';
 import { Check, Folder, Picture, CircleCheck, CircleClose, Warning } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resetDetection, resetDetectionStats, getDetectionResults, getSourceStatus, setProjectConfig } from '@/api/detection';
+import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, getDetectionResults, getSourceStatus, setProjectConfig } from '@/api/detection';
 import { getModelDetail } from '@/api/model';
 import api, { getBackendHost } from '@/api/index';
 
@@ -344,7 +356,8 @@ const projectStore = useProjectStore();
 const systemStore = useSystemStore();
 const sourceStore = useSourceStore();
 
-const videoElement = ref(null);
+const streamImg0 = ref(null);
+const streamImg1 = ref(null);
 const detectionCanvas = ref(null);
 
 // SOP 滚动相关
@@ -361,11 +374,12 @@ let gaugeChartInstance = null;
 // State
 const steps = ref([]);
 const tableData = ref([]);
-const isRunning = ref(false);
-const isPaused = ref(false);  // 是否处于暂停状态
+const isRunning = ref(false);   // video capture thread active
+const isDetecting = ref(false); // inference active (subset of isRunning)
+const isPaused = ref(false);    // fully paused (camera released, model kept)
+const isOperating = ref(false); // async guard for start/stop/standby buttons
 
-// 同步 isRunning 状态到全局 store（用于禁用导航等）
-watch(isRunning, (newVal) => {
+watch(isDetecting, (newVal) => {
   systemStore.setDetecting(newVal);
 });
 const isStreaming = ref(false);
@@ -398,13 +412,57 @@ const sourceStatusText = computed(() => {
 const isDraggingProgress = ref(false);  // 是否正在拖动进度条
 const isChangingSpeed = ref(false);  // 是否正在改变倍速（防止轮询覆盖）
 
-// 视频流 URL（使用响应式变量强制刷新）
-const streamTimestamp = ref(Date.now());
-const streamUrl = computed(() => `${getBackendHost()}/video_feed?t=${streamTimestamp.value}`);
+// Double-buffered MJPEG stream: two <img> elements alternate to release
+// Chromium's native decoder memory without any visible flicker.
+const activeStream = ref(0);           // which img is currently visible (0 or 1)
+const streamSrc0 = ref('');
+const streamSrc1 = ref('');
+let streamErrorCount = 0;
 
-// 刷新视频流
-const refreshStream = () => {
-  streamTimestamp.value = Date.now();
+const videoElement = computed(() => activeStream.value === 0 ? streamImg0.value : streamImg1.value);
+
+const buildStreamUrl = () => `${getBackendHost()}/video_feed?t=${Date.now()}`;
+
+const connectStream = () => {
+  streamSrc0.value = buildStreamUrl();
+  activeStream.value = 0;
+  streamSrc1.value = '';
+  streamErrorCount = 0;
+};
+
+const disconnectStream = () => {
+  streamSrc0.value = '';
+  streamSrc1.value = '';
+};
+
+const swapStream = () => {
+  const bg = activeStream.value === 0 ? 1 : 0;
+  const bgSrcRef = bg === 0 ? streamSrc0 : streamSrc1;
+  bgSrcRef.value = buildStreamUrl();
+  // onStreamReady(bg) will do the actual swap when the first frame arrives
+};
+
+// Kept as alias so existing call-sites (start/stop/resume) still work
+const forceReconnectStream = () => connectStream();
+
+const onStreamReady = (idx) => {
+  streamErrorCount = 0;
+  isStreaming.value = true;
+  resizeCanvas();
+  if (idx !== activeStream.value) {
+    const oldIdx = activeStream.value;
+    activeStream.value = idx;
+    // Release the old img's decoder memory
+    if (oldIdx === 0) streamSrc0.value = '';
+    else streamSrc1.value = '';
+  }
+};
+
+const onStreamError = (idx) => {
+  if (idx !== activeStream.value) return; // ignore errors on background img
+  streamErrorCount++;
+  if (streamErrorCount > 10) return;
+  setTimeout(() => connectStream(), 500 * Math.min(streamErrorCount, 5));
 };
 
 // 当前项目
@@ -531,6 +589,23 @@ const toastPositionClass = computed(() => {
   return getPositionClass(systemStore.detection.toasts.ok.position);
 });
 
+// TTS voice announcement
+// Chromium bug: cancel() immediately followed by speak() silently drops the utterance.
+// Workaround: delay speak() by ~100ms after cancel().
+let speakTimer = null;
+const speak = (text) => {
+  if (!systemStore.detection.voiceEnabled || !window.speechSynthesis) return;
+  if (speakTimer) clearTimeout(speakTimer);
+  window.speechSynthesis.cancel();
+  speakTimer = setTimeout(() => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'zh-CN';
+    utterance.volume = systemStore.detection.voiceVolume ?? 1.0;
+    utterance.rate = 1.1;
+    window.speechSynthesis.speak(utterance);
+  }, 100);
+};
+
 // 显示提示框（新版：根据 toast_id 获取配置）
 const showToastById = (toastId, eventName, reason = '') => {
   const config = getToastConfig(toastId);
@@ -541,7 +616,10 @@ const showToastById = (toastId, eventName, reason = '') => {
     custom: Warning
   };
   
-  const subtitle = config.subText || '';
+  let subtitle = config.subText || '';
+  if (toastId === 'ng' && reason && systemStore.detection.showNgReason) {
+    subtitle = reason;
+  }
   
   const toast = {
     id: ++toastIdCounter,
@@ -555,6 +633,16 @@ const showToastById = (toastId, eventName, reason = '') => {
   };
   
   activeToasts.value.push(toast);
+  
+  // Voice announcement
+  if (toastId === 'ok') {
+    speak('合格');
+  } else if (toastId === 'ng') {
+    const showReason = systemStore.detection.showNgReason && reason;
+    speak(showReason ? `不合格，${reason}` : '不合格');
+  } else {
+    speak(config.text || eventName || '事件触发');
+  }
   
   // 自动移除
   setTimeout(() => {
@@ -711,10 +799,9 @@ const handleProgressChange = async () => {
       videoInfo.value.duration = videoRes.data.duration || 0;
     }
     
-    // 刷新视频流，重新连接
+    // 强制重连视频流
     setTimeout(() => {
-      refreshStream();
-      // 确保 sourceType 保持为 video
+      forceReconnectStream();
       sourceStore.setSourceType('video');
     }, 100);
   } catch (err) {
@@ -758,30 +845,6 @@ const handleSyncModeChange = async (enabled) => {
   }
 };
 
-// 处理视频加载
-let streamErrorCount = 0;
-const handleVideoLoad = () => {
-  isStreaming.value = true;
-  streamErrorCount = 0;  // 重置错误计数
-  resizeCanvas();
-};
-
-// 处理视频流错误（自动重连）
-const handleStreamError = () => {
-  streamErrorCount++;
-  console.warn(`视频流错误 (第${streamErrorCount}次)，尝试重连...`);
-  
-  // 防止无限重连
-  if (streamErrorCount > 10) {
-    console.error('视频流重连失败次数过多，停止重连');
-    return;
-  }
-  
-  // 延迟重连
-  setTimeout(() => {
-    refreshStream();
-  }, 500 * Math.min(streamErrorCount, 5));
-};
 
 // 调整 canvas 大小
 const resizeCanvas = () => {
@@ -819,14 +882,30 @@ const drawDetections = (detections) => {
   const fontSize = systemStore.detection.labelFontSize;
   const showConf = systemStore.detection.showConfidence;
   
+  // object-contain offset: compute actual rendered image area within canvas
+  const img = videoElement.value;
+  let offsetX = 0, offsetY = 0, renderW = canvas.width, renderH = canvas.height;
+  if (img && img.naturalWidth && img.naturalHeight) {
+    const imgAspect = img.naturalWidth / img.naturalHeight;
+    const canvasAspect = canvas.width / canvas.height;
+    if (imgAspect > canvasAspect) {
+      renderW = canvas.width;
+      renderH = canvas.width / imgAspect;
+      offsetY = (canvas.height - renderH) / 2;
+    } else {
+      renderH = canvas.height;
+      renderW = canvas.height * imgAspect;
+      offsetX = (canvas.width - renderW) / 2;
+    }
+  }
+
   detections.forEach(det => {
     if (!enabledLabels.has(det.label)) return;
     if (det.hidden) return;
-    // 归一化坐标转换为实际坐标
-    const x = det.x * canvas.width;
-    const y = det.y * canvas.height;
-    const w = det.w * canvas.width;
-    const h = det.h * canvas.height;
+    const x = offsetX + det.x * renderW;
+    const y = offsetY + det.y * renderH;
+    const w = det.w * renderW;
+    const h = det.h * renderH;
     
     // 判断颜色
     const color = det.is_ng ? ngColor : boxColor;
@@ -1051,96 +1130,119 @@ const updateCharts = () => {
 // 检测结果轮询定时器
 let pollingTimer = null;
 
-// 控制按钮
+// Helper: build and send latest project config to backend
+const syncProjectConfig = async () => {
+  const proj = currentProject.value;
+  const pipelineCfg = {
+    ...(proj.pipeline_config || {}),
+    sequence_order: proj.sequence_order || proj.pipeline_config?.sequence_order || [],
+    detection_steps: proj.detection_steps || proj.pipeline_config?.detection_steps || [],
+    custom_conditions: proj.custom_conditions || proj.pipeline_config?.custom_conditions || [],
+    custom_based_on: proj.custom_based_on || proj.pipeline_config?.custom_based_on || 'sequential'
+  };
+  await setProjectConfig({
+    project_id: proj.id,
+    name: proj.name,
+    logic_mode: proj.logic_mode || 'detection',
+    steps_config: proj.steps_config || [],
+    pipeline_config: pipelineCfg,
+    events_config: proj.events_config || [],
+    counters_config: proj.counters_config || []
+  });
+};
+
 const startDetection = async () => {
   if (!currentProject.value) {
     ElMessage.warning('请先选择项目');
     return;
   }
-  
-  // 如果是从暂停状态恢复
-  if (isPaused.value) {
-    try {
-      await resumeDetection();
-      isPaused.value = false;
-      isRunning.value = true;
-      projectStore.setRunningStatus(true);
-      refreshStream();  // 刷新视频流，重新连接
-      ElMessage.success('检测已恢复');
-      startPolling();
-      return;
-    } catch (err) {
-      console.error('恢复失败，尝试重新启动:', err);
-      isPaused.value = false;
-      // 继续执行下面的完整启动流程
-    }
-  }
-  
-  // 获取模型路径
-  const modelId = currentProject.value.default_model_id;
-  if (!modelId) {
-    ElMessage.warning('请先在项目管理中配置模型');
-    return;
-  }
+  if (isOperating.value) return;
+  isOperating.value = true;
   
   try {
-    // 获取模型详情
+    await syncProjectConfig();
+
+    // From standby: video stream still running + model loaded → just resume inference
+    if (isRunning.value && !isDetecting.value) {
+      try {
+        await resumeInference();
+        isDetecting.value = true;
+        projectStore.setRunningStatus(true);
+        ElMessage.success('已从待机恢复检测');
+        startPolling();
+        return;
+      } catch (err) {
+        console.warn('待机恢复失败，回退到完整启动:', err);
+        // Model not loaded or other issue — fall through to full start
+      }
+    }
+
+    // From paused: camera released, need full resume
+    if (isPaused.value) {
+      try {
+        await resumeDetection();
+        isPaused.value = false;
+        isRunning.value = true;
+        isDetecting.value = true;
+        projectStore.setRunningStatus(true);
+        forceReconnectStream();
+        ElMessage.success('检测已恢复');
+        startPolling();
+        return;
+      } catch (err) {
+        console.warn('恢复失败，回退到完整启动:', err);
+        isPaused.value = false;
+      }
+    }
+    
+    // Full start: load model, start capture + inference
+    const modelId = currentProject.value.default_model_id;
+    if (!modelId) {
+      ElMessage.warning('请先在项目管理中配置模型');
+      return;
+    }
+    
     const modelRes = await getModelDetail(modelId);
     const modelPath = modelRes.data.file_path;
-    
     if (!modelPath) {
       ElMessage.error('模型文件路径无效');
       return;
     }
     
-    // 构建完整的 pipeline_config（合并顶层配置和 pipeline_config）
-    const pipelineConfig = {
-      ...(currentProject.value.pipeline_config || {}),
-      sequence_order: currentProject.value.sequence_order || currentProject.value.pipeline_config?.sequence_order || [],
-      detection_steps: currentProject.value.detection_steps || currentProject.value.pipeline_config?.detection_steps || [],
-      custom_conditions: currentProject.value.custom_conditions || currentProject.value.pipeline_config?.custom_conditions || [],
-      custom_based_on: currentProject.value.custom_based_on || currentProject.value.pipeline_config?.custom_based_on || 'sequential'
-    };
-    
-    // 发送项目配置到后端
-    await setProjectConfig({
-      project_id: currentProject.value.id,
-      name: currentProject.value.name,
-      logic_mode: currentProject.value.logic_mode || 'detection',
-      steps_config: currentProject.value.steps_config || [],
-      pipeline_config: pipelineConfig,
-      events_config: currentProject.value.events_config || [],
-      counters_config: currentProject.value.counters_config || []
-    });
-    
-    // 启动检测
     await apiStartDetection(modelPath, 0.25, 0.45);
     isRunning.value = true;
+    isDetecting.value = true;
     isPaused.value = false;
     projectStore.setRunningStatus(true);
-    refreshStream();  // 刷新视频流
+    forceReconnectStream();
     ElMessage.success('检测已开始');
-    
-    // 开始轮询检测结果
     startPolling();
     
   } catch (err) {
     console.error('启动检测失败:', err);
     ElMessage.error('启动检测失败: ' + (err.response?.data?.detail || err.message));
+  } finally {
+    isOperating.value = false;
   }
 };
 
 const stopDetectionHandler = async () => {
+  if (isOperating.value) return;
+  isOperating.value = true;
   try {
-    // 暂停：停止画面和检测，画面停在当前帧
     await pauseDetection();
     isRunning.value = false;
-    isPaused.value = true;  // 标记为暂停状态，方便后续恢复
+    isDetecting.value = false;
+    isPaused.value = true;
     projectStore.setRunningStatus(false);
     stopPolling();
+    disconnectStream();
     ElMessage.info('已停止：画面和检测都已暂停');
   } catch (err) {
     console.error('停止检测失败:', err);
+    ElMessage.error('停止失败: ' + (err.response?.data?.detail || err.message));
+  } finally {
+    isOperating.value = false;
   }
 };
 
@@ -1156,31 +1258,31 @@ const stepDurations = ref({});
 // 步骤间隔时间
 const stepIntervals = ref({});
 
-// 定期刷新视频流（防止浏览器缓存/卡死）
-let streamRefreshCounter = 0;
-const STREAM_REFRESH_INTERVAL = 10; // 每10次轮询（约5秒）刷新一次流，强制释放 Chromium MJPEG 帧缓存
+// Periodic double-buffer swap to release Chromium native decoder memory
+let streamSwapCounter = 0;
+const STREAM_SWAP_INTERVAL = 600; // every ~5 min (600 x 500ms polling)
 let lastChartUpdate = 0;
 const CHART_UPDATE_INTERVAL = 2000; // 图表最多每2秒更新一次
 let lastScreenshotUpdate = 0;
-const SCREENSHOT_UPDATE_INTERVAL = 2000; // 截图最多每2秒更新一次
+const SCREENSHOT_UPDATE_INTERVAL = 1000;
 let pollingInProgress = false; // 防止轮询重叠
 
 // 开始轮询
 const startPolling = () => {
   stopPolling();
   shownEventIds.value.clear();
-  streamRefreshCounter = 0;
+  streamSwapCounter = 0;
   pollingInProgress = false;
   
   pollingTimer = setInterval(async () => {
     if (pollingInProgress) return;
     pollingInProgress = true;
     
-    // 定期刷新视频流
-    streamRefreshCounter++;
-    if (streamRefreshCounter >= STREAM_REFRESH_INTERVAL) {
-      streamRefreshCounter = 0;
-      refreshStream();
+    // Periodic double-buffer swap (memory release)
+    streamSwapCounter++;
+    if (streamSwapCounter >= STREAM_SWAP_INTERVAL) {
+      streamSwapCounter = 0;
+      swapStream();
     }
     try {
       const res = await getDetectionResults();
@@ -1524,29 +1626,30 @@ const stopPolling = () => {
   }
 };
 
-const standby = async () => {
+const standbyHandler = async () => {
+  if (isOperating.value) return;
+  isOperating.value = true;
   try {
-    // 待机：只停止模型推理，画面继续播放
     await standbyDetection();
-    isRunning.value = false;
-    projectStore.setRunningStatus(false);
-    // 重置步骤状态
+    isDetecting.value = false;
+    // isRunning stays true — video stream keeps playing
     steps.value.forEach(s => {
       s.status = 'pending';
       s.result = null;
     });
-    // 清除检测框
     if (detectionCanvas.value) {
       const ctx = detectionCanvas.value.getContext('2d');
       ctx.clearRect(0, 0, detectionCanvas.value.width, detectionCanvas.value.height);
     }
-    // 确保轮询继续运行（更新视频进度等）
     if (!pollingTimer) {
       startPolling();
     }
     ElMessage.info('已待机：检测停止，画面继续');
   } catch (err) {
     console.error('待机失败:', err);
+    ElMessage.error('待机失败: ' + (err.response?.data?.detail || err.message));
+  } finally {
+    isOperating.value = false;
   }
 };
 
@@ -1708,20 +1811,27 @@ onMounted(() => {
     if (res.data.source_type) {
       sourceStore.setSourceType(res.data.source_type);
     }
-    if (res.data.is_detecting) {
-      isRunning.value = true;
+    isRunning.value = !!res.data.is_running;
+    isDetecting.value = !!res.data.is_detecting;
+
+    if (res.data.is_running) {
       startPolling();
     }
-    // 即使没有检测，如果有输入源也开始轮询（以便更新视频进度）
-    if (res.data.is_running && res.data.source_type === 'video') {
-      startPolling();
+
+    if (!res.data.is_running && !res.data.is_detecting && res.data.source_type && res.data.model_loaded) {
+      isPaused.value = true;
     }
     
-    // 如果当前没有输入源在运行，尝试自动恢复
     if (!res.data.is_running && !res.data.source_type) {
       await autoRestoreSource();
     }
-  }).catch(() => {});
+    
+    // Only connect MJPEG stream if backend has an active video source
+    if (res.data.is_running) {
+      forceReconnectStream();
+    }
+  }).catch(() => {
+  });
 });
 
 const handleResize = () => {
@@ -1737,6 +1847,8 @@ const handleResize = () => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize);
   stopPolling();
+  
+  disconnectStream();
   
   if (counterWatchTimer) {
     clearTimeout(counterWatchTimer);

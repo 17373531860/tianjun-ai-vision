@@ -231,6 +231,16 @@
                           <span class="cursor-help border-b border-dashed border-gray-500">默认PT</span>
                         </el-tooltip>
                       </th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="开启后，该步骤仅在其之前的所有步骤都已完成时才被接受，可过滤环境误检" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">严格顺序</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="开启后，该步骤在一个周期内只接受一次，后续重复出现会被忽略" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">单次接受</span>
+                        </el-tooltip>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -351,6 +361,12 @@
                           placeholder="--"
                           class="w-full"
                         />
+                      </td>
+                      <td class="p-2">
+                        <el-switch v-model="step.strict_order" size="small" />
+                      </td>
+                      <td class="p-2">
+                        <el-switch v-model="step.accept_once" size="small" />
                       </td>
                     </tr>
                   </tbody>
@@ -1064,7 +1080,9 @@ const selectModel = (model) => {
       static_trigger_frames: 30,  // 静态触发帧数，默认30帧
       join_cycle: true,
       backup_for: null,
-      default_pt: null
+      default_pt: null,
+      strict_order: false,
+      accept_once: false
     }));
     
     // 自动初始化顺序

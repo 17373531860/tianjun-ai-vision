@@ -3,17 +3,23 @@ const path = require('path');
 const http = require('http');
 const BackendManager = require('./backend-manager');
 
-// 解决 GPU 缓存权限问题
+// GPU stability: disable shader disk cache, enable GPU restart on crash
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 app.commandLine.appendSwitch('disk-cache-size', '0');
+app.commandLine.appendSwitch('enable-features', 'VizDisplayCompositor');
+app.commandLine.appendSwitch('disable-features', 'GpuProcessHighPriorityWin');
 
-// 限制渲染进程内存，防止 Chromium MJPEG 解码器无限积累帧缓存
+// Memory limits to prevent renderer OOM from long-running MJPEG decode
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=512');
 app.commandLine.appendSwitch('max-old-space-size', '512');
-// 限制 Chromium 图片解码缓存（每张解码图最大 128MB，总缓存 256MB）
 app.commandLine.appendSwitch('max-decoded-image-bytes', '268435456');
-// 减少 GPU 进程内存使用
 app.commandLine.appendSwitch('force-gpu-mem-available-mb', '256');
+
+// Single instance lock: prevent multiple app instances
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+}
 
 // 保持对窗口对象的全局引用
 let mainWindow = null;
@@ -132,6 +138,35 @@ function createWindow() {
   // 窗口准备好后显示
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+  });
+
+  // Renderer crash recovery: auto-reload when the Chromium renderer dies
+  // (e.g. OOM from long-running MJPEG decode, GPU process crash, etc.)
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    console.error(`[App] Renderer crashed! reason=${details.reason}, exitCode=${details.exitCode}`);
+    if (!isQuitting && mainWindow && !mainWindow.isDestroyed()) {
+      setTimeout(() => {
+        console.log('[App] Reloading after renderer crash...');
+        mainWindow.webContents.reload();
+      }, 1000);
+    }
+  });
+
+  mainWindow.webContents.on('unresponsive', () => {
+    console.warn('[App] Renderer unresponsive, will reload in 5s if still stuck...');
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed() && !isQuitting) {
+        try {
+          mainWindow.webContents.reload();
+        } catch (e) {
+          console.error('[App] Failed to reload unresponsive renderer:', e);
+        }
+      }
+    }, 5000);
+  });
+
+  mainWindow.webContents.on('responsive', () => {
+    console.log('[App] Renderer became responsive again');
   });
   
   // 拦截窗口关闭事件
@@ -363,6 +398,23 @@ function cancelShutdown() {
     mainWindow.show();
   }
 }
+
+// When a second instance is launched, focus the existing window instead
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
+
+// GPU / utility process crash handler
+app.on('child-process-gone', (event, details) => {
+  console.error(`[App] Child process gone: type=${details.type}, reason=${details.reason}`);
+  if (details.type === 'GPU' && mainWindow && !mainWindow.isDestroyed() && !isQuitting) {
+    console.log('[App] GPU process crashed, reloading renderer...');
+    setTimeout(() => mainWindow.webContents.reload(), 1500);
+  }
+});
 
 // 应用启动
 app.whenReady().then(async () => {

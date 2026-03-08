@@ -21,28 +21,17 @@ function isDesktopApp() {
   return false;
 }
 
-// 获取 API 基础 URL（每次创建请求时动态获取）
+// API requests always go directly to backend, bypassing Vite proxy.
+// The MJPEG long-lived stream stalls proxied API calls, so we must
+// connect to the backend directly for all API requests.
 function getBaseURL() {
-  const isDesktop = isDesktopApp();
-  console.log('[API] isDesktop:', isDesktop, 'href:', window.location.href);
-  
-  // 优先使用环境变量
-  if (import.meta.env.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL;
-  }
-  
-  // 桌面应用：直接连接本地后端（使用完整 URL）
-  if (isDesktop) {
-    const url = BACKEND_URL + '/api/v1';
-    console.log('[API] Using desktop URL:', url);
-    return url;
-  }
-  
-  // Web 开发环境：使用代理
-  return '/api/v1';
+  return BACKEND_URL + '/api/v1';
 }
 
-// 获取后端主机地址（用于视频流等非 API 请求）
+// MJPEG video stream uses Vite proxy in dev mode (same-origin, reliable
+// browser rendering) and direct backend connection in Electron/desktop.
+// This is safe because API calls already bypass the proxy, so the MJPEG
+// long-lived stream no longer blocks API requests.
 export function getBackendHost() {
   return isDesktopApp() ? BACKEND_URL : '';
 }
@@ -60,23 +49,8 @@ const api = axios.create({
 
 // 请求拦截器
 api.interceptors.request.use(
-  (config) => {
-    // 在桌面应用中，确保使用完整 URL
-    if (typeof window !== 'undefined') {
-      const isFileProtocol = window.location.protocol === 'file:' || 
-                             window.location.href.startsWith('file:');
-      
-      if (isFileProtocol && config.baseURL && !config.baseURL.startsWith('http')) {
-        // 如果是 file:// 协议且 baseURL 不是完整 URL，修正它
-        config.baseURL = BACKEND_URL + '/api/v1';
-        console.log('[API Interceptor] Fixed baseURL to:', config.baseURL);
-      }
-    }
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
-  }
+  (config) => config,
+  (error) => Promise.reject(error)
 );
 
 // 响应拦截器
