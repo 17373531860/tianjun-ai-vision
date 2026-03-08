@@ -3,6 +3,11 @@ import Layout from '@/layout/index.vue';
 
 const routes = [
   {
+    path: '/activation',
+    name: 'Activation',
+    component: () => import('@/views/Activation/index.vue'),
+  },
+  {
     path: '/',
     component: Layout,
     redirect: '/monitor',
@@ -46,7 +51,24 @@ const routes = [
   }
 ];
 
-export default createRouter({
+const router = createRouter({
   history: createWebHashHistory(),
   routes
 });
+
+let licenseChecked = false;
+
+router.beforeEach(async (to) => {
+  if (licenseChecked || to.name === 'Activation') return;
+  if (!window.electronAPI?.isElectron) { licenseChecked = true; return; }
+
+  try {
+    const status = await window.electronAPI.getLicenseStatus();
+    licenseChecked = true;
+    if (!status.valid) return { name: 'Activation' };
+  } catch {
+    licenseChecked = true;
+  }
+});
+
+export default router;

@@ -2,6 +2,10 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const http = require('http');
 const BackendManager = require('./backend-manager');
+const LicenseManager = require('./license-manager');
+
+let licenseManager = null;
+let isLicensed = false;
 
 // GPU stability: disable shader disk cache, enable GPU restart on crash
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
@@ -422,17 +426,31 @@ app.whenReady().then(async () => {
   console.log(`[App] Is packaged: ${app.isPackaged}`);
   console.log(`[App] Resources path: ${process.resourcesPath}`);
   
-  // 显示启动画面
+  const resPath = CONFIG.isDev ? path.join(__dirname, '..') : process.resourcesPath;
+  licenseManager = new LicenseManager(app.getPath('userData'), resPath);
+
+  if (CONFIG.isDev) {
+    console.log('[App] Dev mode — skipping license check');
+    console.log(`[App] Machine ID: ${licenseManager.getMachineId()}`);
+    isLicensed = true;
+  } else {
+    licenseManager.tryAutoInstall();
+    const result = licenseManager.verify();
+    console.log(`[App] License check: ${result.message}`);
+    isLicensed = result.valid;
+  }
+
+  if (!isLicensed) {
+    createWindow();
+    return;
+  }
+
   const splash = createSplashWindow();
   
   try {
-    // 启动后端服务
     await startBackend();
-    
-    // 创建主窗口
     createWindow();
     
-    // 关闭启动画面
     setTimeout(() => {
       splash.close();
     }, 500);
@@ -488,6 +506,34 @@ ipcMain.handle('get-app-info', () => {
 
 ipcMain.handle('get-backend-url', () => {
   return `http://${CONFIG.backendHost}:${CONFIG.backendPort}`;
+});
+
+ipcMain.handle('get-license-status', () => {
+  if (!licenseManager) return { valid: false, reason: 'not_initialized' };
+  return { valid: isLicensed, machineId: licenseManager.getMachineId(), info: licenseManager.getLicenseInfo() };
+});
+
+ipcMain.handle('import-license', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '导入授权文件',
+    filters: [{ name: '授权文件', extensions: ['lic'] }],
+    properties: ['openFile']
+  });
+  if (result.canceled || !result.filePaths.length) {
+    return { valid: false, reason: 'cancelled', message: '已取消' };
+  }
+  const verifyResult = licenseManager.importLicense(result.filePaths[0]);
+  if (verifyResult.valid) {
+    isLicensed = true;
+    console.log('[App] License activated, starting backend...');
+    try {
+      await startBackend();
+      mainWindow.webContents.send('license-activated');
+    } catch (err) {
+      console.error('[App] Failed to start backend after activation:', err.message);
+    }
+  }
+  return verifyResult;
 });
 
 // 关闭进度窗口的 IPC 处理
