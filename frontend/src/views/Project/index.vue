@@ -535,6 +535,18 @@
                 </div>
               </el-card>
 
+              <!-- NG Cycle Protection -->
+              <el-card v-if="activeProject.logic_mode === 'sequential' || activeProject.logic_mode === 'custom'" shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header><span class="font-bold text-white">NG 周期保护</span></template>
+                <div class="space-y-3 text-sm text-gray-300">
+                  <p class="text-xs text-gray-400">当连续两次 NG 之间的间隔小于设定时间时，后续 NG 会被抑制，避免因短暂误检导致重复报错。设为 0 则不启用。</p>
+                  <div class="flex items-center gap-3">
+                    <span>保护间隔 (秒)</span>
+                    <el-input-number v-model="activeProject.ng_cycle_protect_seconds" size="small" :min="0" :max="60" :step="1" :precision="0" />
+                  </div>
+                </div>
+              </el-card>
+
               <!-- Simultaneous Groups Config (适用于所有模式) -->
               <el-card shadow="never" class="bg-slate-800 border-slate-700">
                 <template #header>
@@ -891,6 +903,10 @@ const initProjectDefaults = (project) => {
   if (project.accumulate_repeats === undefined) {
     project.accumulate_repeats = pipelineConfig.accumulate_repeats || false;
   }
+  // NG 周期保护
+  if (project.ng_cycle_protect_seconds === undefined) {
+    project.ng_cycle_protect_seconds = pipelineConfig.ng_cycle_protect_seconds || 0;
+  }
   // 同时出现组
   if (project.simultaneous_groups === undefined) {
     project.simultaneous_groups = pipelineConfig.simultaneous_groups || [];
@@ -904,6 +920,7 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_sequence_order = project.custom_sequence_order;
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
+  project.pipeline_config.ng_cycle_protect_seconds = project.ng_cycle_protect_seconds || 0;
   project.pipeline_config.simultaneous_groups = project.simultaneous_groups;
   
   return project;
@@ -998,6 +1015,7 @@ const handleSaveProject = async () => {
         custom_sequence_order: activeProject.value.custom_sequence_order,
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,
+        ng_cycle_protect_seconds: activeProject.value.ng_cycle_protect_seconds || 0,
         simultaneous_groups: (activeProject.value.simultaneous_groups || []).map(g => ({
           ...g,
           labels: (g.priority_order || []).filter(l => l)

@@ -59,7 +59,7 @@
                 :max="1"
                 :step="0.001"
                 :show-tooltip="false"
-                :disabled="isRunning"
+                :disabled="isDetecting"
                 class="flex-1 video-progress-slider"
                 @mousedown="isDraggingProgress = true"
                 @mouseup="handleProgressChange"
@@ -70,7 +70,7 @@
                 v-model="videoInfo.speed" 
                 size="small" 
                 class="w-20 video-speed-select"
-                :disabled="isRunning || videoInfo.syncMode"
+                :disabled="isDetecting || videoInfo.syncMode"
                 @change="handleSpeedChange"
               >
                 <el-option label="0.5x" :value="0.5" />
@@ -138,7 +138,6 @@
                   :class="getSopHeaderClass(step)"
                 >
                   <span class="font-bold truncate">{{ step.name }}</span>
-                  <span v-if="tableData[idx]?.count" class="ml-1 flex-shrink-0">x{{ tableData[idx].count }}</span>
                 </div>
                 <div class="h-16 p-1 flex items-center justify-center relative overflow-hidden"
                   :class="getSopBodyClass(step)"
@@ -1299,20 +1298,20 @@ const startPolling = () => {
       
       const now = Date.now();
       
-      // 节流截图更新（避免频繁创建 base64 data URL）
+      // 节流截图更新（合并而非替换，保留旧截图）
       if (data.step_screenshots && (now - lastScreenshotUpdate >= SCREENSHOT_UPDATE_INTERVAL)) {
-        stepScreenshots.value = data.step_screenshots;
+        Object.assign(stepScreenshots.value, data.step_screenshots);
         lastScreenshotUpdate = now;
       }
       
       if (data.step_detection_times) {
-        stepDetectionTimes.value = data.step_detection_times;
+        Object.assign(stepDetectionTimes.value, data.step_detection_times);
       }
       if (data.step_durations) {
-        stepDurations.value = data.step_durations;
+        Object.assign(stepDurations.value, data.step_durations);
       }
       if (data.step_intervals) {
-        stepIntervals.value = data.step_intervals;
+        Object.assign(stepIntervals.value, data.step_intervals);
       }
       
       if (isRunning.value) {
@@ -1683,8 +1682,12 @@ const resetCounters = async () => {
   });
   lastScrolledIdx = -1;
   
-  // 清空步骤截图缓存和NG排名
+  // 清空步骤截图缓存、PT/间隔缓存和NG排名
   stepScreenshots.value = {};
+  stepDurations.value = {};
+  stepIntervals.value = {};
+  stepDetectionTimes.value = {};
+  Object.keys(cachedScreenshotUrls).forEach(k => delete cachedScreenshotUrls[k]);
   ngStepRanking.value = [];
   ngStepCountMap.value = {};
   lastTotalCount = -1;
