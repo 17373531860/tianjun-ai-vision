@@ -19,8 +19,18 @@ import signal
 import threading
 from sqlalchemy import text
 
+# ===== Startup diagnostics =====
+from backend.core.config import BASE_DIR, DATA_DIR
+print(f"[DIAG] main.py: DB URI = {settings.SQLALCHEMY_DATABASE_URI}")
+print(f"[DIAG] main.py: MODEL_UPLOAD_DIR = {settings.MODEL_UPLOAD_DIR}")
+_db_path = os.path.join(DATA_DIR, 'sql_app.db')
+print(f"[DIAG] main.py: DB file exists before create_all: {os.path.exists(_db_path)}")
+if os.path.exists(_db_path):
+    print(f"[DIAG] main.py: DB file size: {os.path.getsize(_db_path)} bytes")
+
 # Create database tables
 Base.metadata.create_all(bind=engine)
+print(f"[DIAG] main.py: create_all done, DB file size: {os.path.getsize(_db_path) if os.path.exists(_db_path) else 'N/A'}")
 
 # 简单的数据库迁移：添加缺失的列
 def migrate_database():
@@ -166,20 +176,49 @@ def migrate_data_to_external_dir():
     
     print("[数据迁移] 迁移完成")
 
+print(f"[DIAG] main.py: running migrate_data_to_external_dir()")
 migrate_data_to_external_dir()
 
-# Always fix stale absolute paths that reference the install directory.
-# This catches the case where NSIS backed up the DB to AppData but the
-# file_path column still points to the old install location.
 def _fixup_stale_paths():
     from backend.core.config import BASE_DIR, DATA_DIR, _fix_db_paths
     if os.path.abspath(DATA_DIR) == os.path.abspath(BASE_DIR):
         return
     db_path = os.path.join(DATA_DIR, 'sql_app.db')
     if os.path.exists(db_path):
+        print(f"[DIAG] main.py: running _fixup_stale_paths on {db_path}")
         _fix_db_paths(db_path, BASE_DIR, DATA_DIR)
 
 _fixup_stale_paths()
+
+# Post-migration DB health check
+def _diag_db_health():
+    """Log counts from key tables so we can verify data survived migration."""
+    import sqlite3
+    db_path = os.path.join(DATA_DIR, 'sql_app.db')
+    if not os.path.exists(db_path):
+        print(f"[DIAG] DB health: file not found at {db_path}")
+        return
+    try:
+        conn = sqlite3.connect(db_path)
+        for table in ('projects', 'ml_models', 'detection_sessions', 'detection_cycles', 'step_records', 'video_clips'):
+            try:
+                count = conn.execute(f"SELECT COUNT(*) FROM [{table}]").fetchone()[0]
+                print(f"[DIAG] DB health: {table} = {count} rows")
+            except Exception:
+                print(f"[DIAG] DB health: {table} = <table not found>")
+        # Check model file_path validity
+        try:
+            rows = conn.execute("SELECT id, name, file_path FROM ml_models").fetchall()
+            for mid, mname, mpath in rows:
+                exists = os.path.isfile(mpath) if mpath else False
+                print(f"[DIAG] Model #{mid} '{mname}': path={mpath}, file_exists={exists}")
+        except Exception:
+            pass
+        conn.close()
+    except Exception as e:
+        print(f"[DIAG] DB health check failed: {e}")
+
+_diag_db_health()
 
 migrate_database()
 fix_orphan_sessions()

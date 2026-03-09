@@ -12,6 +12,13 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 开发模式不设置该变量，回退到 BASE_DIR（与代码同目录，兼容旧行为）
 DATA_DIR = os.environ.get('TIANJUN_DATA_DIR', BASE_DIR)
 
+# ===== Startup diagnostics =====
+print(f"[DIAG] config.py loaded")
+print(f"[DIAG] BASE_DIR = {BASE_DIR}")
+print(f"[DIAG] DATA_DIR = {DATA_DIR}")
+print(f"[DIAG] TIANJUN_DATA_DIR env = {os.environ.get('TIANJUN_DATA_DIR', '<not set>')}")
+print(f"[DIAG] BASE_DIR == DATA_DIR: {os.path.abspath(BASE_DIR) == os.path.abspath(DATA_DIR)}")
+
 
 def _is_empty_db(db_path):
     """Check if a SQLite database has no user data (only empty auto-created tables)."""
@@ -85,7 +92,9 @@ def _migrate_old_data():
     Handles the edge case where create_all already created an empty DB
     in DATA_DIR — we overwrite it with the real data from the old location.
     """
+    print(f"[DIAG] _migrate_old_data() called")
     if DATA_DIR == BASE_DIR:
+        print(f"[DIAG] DATA_DIR == BASE_DIR, skipping migration")
         return
 
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -94,36 +103,49 @@ def _migrate_old_data():
     new_db = os.path.join(DATA_DIR, 'sql_app.db')
     need_path_fix = False
 
+    print(f"[DIAG] old_db exists: {os.path.exists(old_db)}  path: {old_db}")
+    print(f"[DIAG] new_db exists: {os.path.exists(new_db)}  path: {new_db}")
+    if os.path.exists(new_db):
+        empty = _is_empty_db(new_db)
+        sz = os.path.getsize(new_db)
+        print(f"[DIAG] new_db size: {sz} bytes, is_empty: {empty}")
+
     if os.path.exists(old_db):
         should_copy = not os.path.exists(new_db) or _is_empty_db(new_db)
+        print(f"[DIAG] should_copy DB: {should_copy}")
         if should_copy:
             try:
                 shutil.copy2(old_db, new_db)
                 need_path_fix = True
-                logger.info(f"Migrated database: {old_db} -> {new_db}")
+                print(f"[DIAG] DB migrated: {old_db} -> {new_db}")
             except Exception as e:
-                logger.error(f"Failed to migrate database: {e}")
+                print(f"[DIAG] DB migration FAILED: {e}")
 
     for folder_name in ('uploads', 'recordings'):
         old_dir = os.path.join(BASE_DIR, folder_name)
         new_dir = os.path.join(DATA_DIR, folder_name)
-        if os.path.isdir(old_dir):
+        old_exists = os.path.isdir(old_dir)
+        old_contents = os.listdir(old_dir) if old_exists else []
+        print(f"[DIAG] {folder_name}: old_dir exists={old_exists}, items={len(old_contents)}")
+        if old_exists:
             os.makedirs(new_dir, exist_ok=True)
             try:
-                for item in os.listdir(old_dir):
+                for item in old_contents:
                     src = os.path.join(old_dir, item)
                     dst = os.path.join(new_dir, item)
                     if os.path.exists(dst):
                         continue
                     if os.path.isdir(src):
                         shutil.copytree(src, dst)
+                        print(f"[DIAG]   copied dir: {item}")
                     else:
                         shutil.copy2(src, dst)
-                logger.info(f"Migrated {folder_name}: {old_dir} -> {new_dir}")
+                        print(f"[DIAG]   copied file: {item}")
             except Exception as e:
-                logger.error(f"Failed to migrate {folder_name}: {e}")
+                print(f"[DIAG] {folder_name} migration FAILED: {e}")
 
     if need_path_fix and os.path.exists(new_db):
+        print(f"[DIAG] fixing DB paths: {BASE_DIR} -> {DATA_DIR}")
         _fix_db_paths(new_db, BASE_DIR, DATA_DIR)
 
 
