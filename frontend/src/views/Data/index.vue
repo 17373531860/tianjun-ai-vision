@@ -1,587 +1,542 @@
 <template>
-  <div class="p-6 h-full overflow-y-auto">
-    <!-- 标题和项目同步显示 -->
-    <div class="flex justify-between items-center mb-6">
-      <h2 class="text-2xl font-bold border-l-4 border-tech-blue pl-3 text-white">数据管理</h2>
-      <div class="flex items-center gap-4">
-        <span class="text-gray-400 text-sm">当前项目:</span>
-        <span class="text-cyan-400 font-bold">{{ currentProjectName || '未选择' }}</span>
-        <el-button v-if="!projectStore.currentProjectId" type="primary" size="small" @click="goToProjectSelect">
-          去选择项目
+  <div class="data-page p-5 h-full overflow-y-auto">
+    <!-- 页面头部 -->
+    <div class="flex justify-between items-center mb-5">
+      <div class="flex items-center gap-3">
+        <div class="w-1 h-7 rounded-full bg-gradient-to-b from-cyan-400 to-blue-500"></div>
+        <h2 class="text-xl font-bold text-white tracking-wide">数据中心</h2>
+      </div>
+      <div class="flex items-center gap-3 bg-slate-800/60 px-4 py-2 rounded-lg border border-slate-700/50">
+        <span class="text-gray-500 text-xs">当前项目</span>
+        <span class="text-cyan-400 font-semibold text-sm">{{ currentProjectName || '未选择' }}</span>
+        <el-button v-if="!projectStore.currentProjectId" type="primary" size="small" round @click="goToProjectSelect">
+          选择项目
         </el-button>
       </div>
     </div>
 
     <!-- 未选择项目提示 -->
-    <div v-if="!projectStore.currentProjectId" class="text-center py-20">
-      <el-icon :size="64" class="text-gray-600 mb-4"><Folder /></el-icon>
-      <p class="text-gray-400 text-lg mb-4">请先从顶部导航栏选择一个项目</p>
-      <el-button type="primary" @click="goToProjectSelect">前往项目管理</el-button>
+    <div v-if="!projectStore.currentProjectId" class="flex flex-col items-center justify-center py-24">
+      <div class="w-20 h-20 rounded-2xl bg-slate-800 flex items-center justify-center mb-5 border border-slate-700">
+        <el-icon :size="36" class="text-gray-600"><Folder /></el-icon>
+      </div>
+      <p class="text-gray-400 text-base mb-5">请先选择一个项目以查看数据</p>
+      <el-button type="primary" round @click="goToProjectSelect">前往项目管理</el-button>
     </div>
 
-    <div v-else class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <!-- 左侧：实时数据 + 日期选择 + 启动记录 -->
-      <div class="lg:col-span-1 space-y-6">
-        <!-- 实时数据概览（与Monitor同步） -->
-        <section class="bg-ind-panel p-4 rounded-xl border border-gray-800">
-          <h3 class="text-lg font-bold mb-4 flex items-center text-tech-blue">
-            <el-icon class="mr-2"><DataLine /></el-icon> 实时数据概览
-          </h3>
+    <div v-else class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+      <!-- ========== 左侧边栏：查询 + 会话列表 ========== -->
+      <div class="lg:col-span-3 space-y-4">
+        <!-- 日期与时间段查询 -->
+        <div class="panel-card">
+          <div class="panel-header">
+            <el-icon class="text-cyan-400"><Calendar /></el-icon>
+            <span>数据查询</span>
+          </div>
           <div class="space-y-3">
-            <div 
-              v-for="counter in currentCounters" 
-              :key="counter.name"
-              class="flex justify-between items-center p-3 bg-slate-900 rounded-lg border border-slate-700"
-            >
-              <span class="text-gray-300 text-sm">{{ counter.name }}</span>
-              <span 
-                class="text-xl font-mono font-bold"
-                :class="getCounterColor(counter.name)"
-              >
-                {{ counter.value.toLocaleString() }}
-              </span>
+            <el-date-picker
+              v-model="selectedDate"
+              type="date"
+              placeholder="选择日期"
+              format="YYYY-MM-DD"
+              value-format="YYYY-MM-DD"
+              class="w-full"
+              :disabled-date="disabledDate"
+              @change="handleDateChange"
+            />
+            <div>
+              <div class="text-xs text-gray-500 mb-1.5">时间段</div>
+              <el-select v-model="shiftType" size="small" class="w-full" @change="handleShiftChange">
+                <el-option label="全天" value="all" />
+                <el-option label="白班 (08:00-20:00)" value="day" />
+                <el-option label="晚班 (20:00-08:00)" value="night" />
+                <el-option label="自定义" value="custom" />
+              </el-select>
+              <div v-if="shiftType === 'custom'" class="flex items-center gap-2 mt-2">
+                <el-time-picker v-model="customStartHour" size="small" placeholder="开始" format="HH:mm" value-format="HH:mm" class="flex-1" @change="handleShiftChange" />
+                <span class="text-gray-600 text-xs">至</span>
+                <el-time-picker v-model="customEndHour" size="small" placeholder="结束" format="HH:mm" value-format="HH:mm" class="flex-1" @change="handleShiftChange" />
+              </div>
             </div>
-            <div v-if="currentCounters.length === 0" class="text-center text-gray-500 py-4">
-              暂无计数器数据
+            <div v-if="availableDates.length > 0" class="flex items-center justify-between text-xs pt-1 border-t border-slate-800">
+              <span class="text-gray-500">有数据的日期</span>
+              <span class="text-cyan-400 font-mono">{{ availableDates.length }} 天</span>
             </div>
           </div>
-        </section>
+        </div>
 
-        <!-- 历史数据查询 -->
-        <section class="bg-ind-panel p-4 rounded-xl border border-gray-800">
-          <h3 class="text-lg font-bold mb-4 flex items-center text-cyan-400">
-            <el-icon class="mr-2"><Calendar /></el-icon> 历史数据查询
-          </h3>
-          <el-date-picker
-            v-model="selectedDate"
-            type="date"
-            placeholder="选择日期查看历史"
-            format="YYYY-MM-DD"
-            value-format="YYYY-MM-DD"
-            class="w-full"
-            :disabled-date="disabledDate"
-            @change="handleDateChange"
-          />
-          <div v-if="availableDates.length > 0" class="mt-3 text-xs text-gray-400">
-            <span>有数据的日期: </span>
-            <span class="text-cyan-400">{{ availableDates.length }} 天</span>
+        <!-- 会话列表 -->
+        <div class="panel-card">
+          <div class="panel-header">
+            <el-icon class="text-emerald-400"><Clock /></el-icon>
+            <span>启动记录</span>
           </div>
-        </section>
-
-        <!-- 启动记录 -->
-        <section class="bg-ind-panel p-4 rounded-xl border border-gray-800">
-          <h3 class="text-lg font-bold mb-4 flex items-center text-green-400">
-            <el-icon class="mr-2"><Clock /></el-icon> 启动记录
-          </h3>
-          <div v-loading="loadingSessions" class="space-y-2 max-h-[300px] overflow-y-auto">
-            <div v-if="sessions.length === 0" class="text-center text-gray-500 py-6">
+          <div v-loading="loadingSessions" class="space-y-2 max-h-[340px] overflow-y-auto pr-1 custom-scrollbar">
+            <div v-if="sessions.length === 0" class="text-center text-gray-600 py-8 text-sm">
               {{ selectedDate ? '当日无检测记录' : '请选择日期' }}
             </div>
             <div
               v-for="session in sessions"
               :key="session.id"
-              class="p-3 bg-slate-800 rounded-lg border cursor-pointer transition-all"
-              :class="selectedSession?.id === session.id 
-                ? 'border-cyan-500 bg-slate-700' 
-                : 'border-slate-700 hover:border-slate-500'"
+              class="session-card"
+              :class="{ 'session-card--active': selectedSession?.id === session.id }"
               @click="selectSession(session)"
             >
-              <div class="flex justify-between items-center">
-                <div class="flex-1">
-                  <div class="text-white font-mono text-sm">
+              <div class="flex items-center justify-between">
+                <div class="flex-1 min-w-0">
+                  <div class="text-white font-mono text-xs leading-5">
                     {{ formatTime(session.start_time) }}
-                    <span v-if="session.end_time" class="text-gray-400"> - {{ formatTime(session.end_time) }}</span>
+                    <span v-if="session.end_time" class="text-gray-500"> → {{ formatTime(session.end_time) }}</span>
                   </div>
-                  <div class="text-xs mt-1">
-                    <el-tag 
-                      :type="getStatusType(session.status)" 
-                      size="small"
-                    >
+                  <div class="flex items-center gap-2 mt-1">
+                    <el-tag :type="getStatusType(session.status)" size="small" effect="dark" round>
                       {{ getStatusText(session.status) }}
                     </el-tag>
+                    <span class="text-cyan-400 font-mono text-xs">{{ session.total_cycles || 0 }}轮</span>
+                    <span class="text-xs">
+                      <span class="text-green-400">{{ session.good_cycles || 0 }}</span>
+                      <span class="text-gray-600">/</span>
+                      <span class="text-red-400">{{ session.ng_cycles || 0 }}</span>
+                    </span>
                   </div>
                 </div>
-                <div class="text-right mr-2">
-                  <div class="text-cyan-400 font-mono text-sm">{{ session.total_cycles || 0 }} 轮</div>
-                  <div class="text-xs">
-                    <span class="text-green-400">{{ session.good_cycles || 0 }}</span> /
-                    <span class="text-red-400">{{ session.ng_cycles || 0 }}</span>
-                  </div>
-                </div>
-                <!-- 会话视频播放按钮 -->
                 <el-button
                   v-if="session.video_id"
                   type="primary"
                   size="small"
                   circle
+                  class="ml-2 flex-shrink-0"
                   @click.stop="playSessionVideo(session)"
                 >
-                  <el-icon><VideoPlay /></el-icon>
+                  <el-icon :size="12"><VideoPlay /></el-icon>
                 </el-button>
                 <el-tooltip v-else content="无会话视频" placement="top">
-                  <el-button type="info" size="small" circle disabled>
-                    <el-icon><VideoPlay /></el-icon>
+                  <el-button type="info" size="small" circle disabled class="ml-2 flex-shrink-0">
+                    <el-icon :size="12"><VideoPlay /></el-icon>
                   </el-button>
                 </el-tooltip>
               </div>
             </div>
           </div>
-        </section>
+        </div>
       </div>
 
-      <!-- 右侧：历史数据详情 -->
-      <div class="lg:col-span-2 space-y-6">
-        <!-- 历史统计概览 -->
-        <section class="bg-ind-panel p-6 rounded-xl border border-gray-800">
-          <div class="flex justify-between items-center mb-4">
-            <h3 class="text-lg font-bold flex items-center text-purple-400">
-              <el-icon class="mr-2"><TrendCharts /></el-icon> 
-              {{ selectedSession ? '会话统计' : (selectedDate ? '当日统计' : '历史统计') }}
-            </h3>
-            <div v-if="selectedSession" class="text-sm text-gray-400">
-              会话: {{ selectedSession.session_uuid }}
+      <!-- ========== 右侧主区域 ========== -->
+      <div class="lg:col-span-9 space-y-5">
+        <!-- 统计概览卡片 -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="stat-card stat-card--cyan">
+            <div class="stat-card__label">总周期数</div>
+            <div class="stat-card__value text-cyan-400">{{ overviewData.total_cycles }}</div>
+          </div>
+          <div class="stat-card stat-card--blue">
+            <div class="stat-card__label">平均周期时间</div>
+            <div class="stat-card__value text-blue-400">{{ formatDuration(overviewData.avg_cycle_time) }}</div>
+          </div>
+          <div class="stat-card" :class="overviewData.yield_rate >= 95 ? 'stat-card--green' : 'stat-card--yellow'">
+            <div class="stat-card__label">良率</div>
+            <div class="stat-card__value" :class="overviewData.yield_rate >= 95 ? 'text-emerald-400' : 'text-amber-400'">
+              {{ overviewData.yield_rate.toFixed(1) }}%
+            </div>
+          </div>
+          <div class="stat-card stat-card--mixed">
+            <div class="stat-card__label">合格 / 不良</div>
+            <div class="stat-card__value">
+              <span class="text-emerald-400">{{ overviewData.good_cycles }}</span>
+              <span class="text-gray-600 mx-1">/</span>
+              <span class="text-red-400">{{ overviewData.ng_cycles }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 计数器快照 -->
+        <div v-if="Object.keys(historyCounters).length > 0" class="panel-card">
+          <div class="panel-header">
+            <el-icon class="text-violet-400"><DataLine /></el-icon>
+            <span>计数器快照</span>
+          </div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div 
+              v-for="(value, name) in historyCounters" 
+              :key="name"
+              class="bg-slate-800/60 px-3 py-2 rounded-lg text-center"
+            >
+              <div class="text-gray-500 text-xs truncate" :title="name">{{ name }}</div>
+              <div class="text-lg font-mono text-white mt-0.5">{{ value.toLocaleString() }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 步骤耗时统计 + 周期详情 -->
+        <div class="panel-card" v-loading="loadingOverview">
+          <div class="flex justify-between items-center mb-3">
+            <div class="panel-header mb-0">
+              <el-icon class="text-violet-400"><TrendCharts /></el-icon>
+              <span>{{ selectedSession ? '会话详情' : (selectedDate ? '当日统计' : '数据详情') }}</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span v-if="selectedSession" class="text-xs text-gray-500 font-mono">{{ selectedSession.session_uuid }}</span>
+              <el-button v-if="selectedSession && cycles.length > 0" size="small" type="primary" plain round @click="exportSessionData">
+                <el-icon class="mr-1" :size="12"><Download /></el-icon>导出会话
+              </el-button>
             </div>
           </div>
 
-          <div v-loading="loadingOverview">
-            <!-- 历史计数器数据 -->
-            <div v-if="Object.keys(historyCounters).length > 0" class="mb-6">
-              <h4 class="text-sm font-bold text-gray-300 mb-3">计数器快照</h4>
-              <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div 
-                  v-for="(value, name) in historyCounters" 
-                  :key="name"
-                  class="bg-slate-900 p-3 rounded-lg text-center border border-slate-700"
-                >
-                  <div class="text-gray-400 text-xs mb-1 truncate" :title="name">{{ name }}</div>
-                  <div class="text-xl font-mono text-white">{{ value.toLocaleString() }}</div>
-                </div>
-              </div>
-            </div>
-
-            <!-- 时间统计 -->
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-              <div class="bg-slate-900 p-4 rounded-lg text-center border border-slate-700">
-                <div class="text-gray-400 text-xs mb-1">总周期数</div>
-                <div class="text-2xl font-mono text-cyan-400">{{ overviewData.total_cycles }}</div>
-              </div>
-              <div class="bg-slate-900 p-4 rounded-lg text-center border border-slate-700">
-                <div class="text-gray-400 text-xs mb-1">平均周期时间</div>
-                <div class="text-2xl font-mono text-blue-400">{{ formatDuration(overviewData.avg_cycle_time) }}</div>
-              </div>
-              <div class="bg-slate-900 p-4 rounded-lg text-center border border-slate-700">
-                <div class="text-gray-400 text-xs mb-1">良率</div>
-                <div class="text-2xl font-mono" :class="overviewData.yield_rate >= 95 ? 'text-green-400' : 'text-yellow-400'">
-                  {{ overviewData.yield_rate.toFixed(1) }}%
-                </div>
-              </div>
-              <div class="bg-slate-900 p-4 rounded-lg text-center border border-slate-700">
-                <div class="text-gray-400 text-xs mb-1">合格 / 不良</div>
-                <div class="text-2xl font-mono">
-                  <span class="text-green-400">{{ overviewData.good_cycles }}</span>
-                  <span class="text-gray-500"> / </span>
-                  <span class="text-red-400">{{ overviewData.ng_cycles }}</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- 步骤耗时统计 -->
-            <div v-if="stepStats.length > 0" class="mb-6">
-              <h4 class="text-sm font-bold text-gray-300 mb-3">步骤耗时统计（仅正常轮次）</h4>
-              <el-table :data="stepStats" size="small" class="dark-table">
-                <el-table-column prop="name" label="步骤名称" />
-                <el-table-column prop="count" label="次数" width="80" align="center" />
-                <el-table-column label="耗时 (秒)" width="150" align="center">
-                  <template #default="{ row }">
-                    <span class="text-cyan-400">{{ row.avg_duration.toFixed(2) }}</span>
-                    <span class="text-gray-500 text-xs ml-1">({{ row.min_duration.toFixed(1) }}-{{ row.max_duration.toFixed(1) }})</span>
+          <!-- 步骤耗时统计 -->
+          <div v-if="stepStats.length > 0" class="mb-4">
+            <div class="text-xs text-gray-500 mb-2 font-medium">步骤耗时统计（仅正常轮次）</div>
+            <el-table :data="stepStats" size="small" class="dark-table">
+              <el-table-column prop="name" label="步骤名称" />
+              <el-table-column prop="count" label="次数" width="70" align="center" />
+              <el-table-column label="耗时 (秒)" width="150" align="center">
+                <template #default="{ row }">
+                  <span class="text-cyan-400 font-mono">{{ row.avg_duration.toFixed(2) }}</span>
+                  <span class="text-gray-600 text-xs ml-1">({{ row.min_duration.toFixed(1) }}~{{ row.max_duration.toFixed(1) }})</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="到下步间隔 (秒)" width="160" align="center">
+                <template #default="{ row, $index }">
+                  <template v-if="$index < stepStats.length - 1">
+                    <span class="text-blue-400 font-mono">{{ row.avg_interval.toFixed(2) }}</span>
+                    <span class="text-gray-600 text-xs ml-1">({{ row.min_interval.toFixed(1) }}~{{ row.max_interval.toFixed(1) }})</span>
                   </template>
-                </el-table-column>
-                <el-table-column label="到下步间隔 (秒)" width="160" align="center">
-                  <template #default="{ row, $index }">
-                    <template v-if="$index < stepStats.length - 1">
-                      <span class="text-blue-400">{{ row.avg_interval.toFixed(2) }}</span>
-                      <span class="text-gray-500 text-xs ml-1">({{ row.min_interval.toFixed(1) }}-{{ row.max_interval.toFixed(1) }})</span>
-                    </template>
-                    <span v-else class="text-gray-500">-</span>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </div>
+                  <span v-else class="text-gray-700">-</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
 
-            <!-- 周期详情（可展开显示步骤） -->
-            <div v-if="selectedSession && cycles.length > 0">
-              <div class="flex justify-between items-center mb-3">
-                <h4 class="text-sm font-bold text-gray-300">周期详情</h4>
-                <el-button size="small" type="primary" plain @click="exportSessionData">
-                  <el-icon class="mr-1"><Download /></el-icon> 导出此会话
-                </el-button>
-              </div>
-              <el-table 
-                :data="cycles" 
-                size="small" 
-                class="dark-table" 
-                max-height="400"
-                row-key="id"
-                :expand-row-keys="expandedRows"
-                @expand-change="handleExpandChange"
-              >
-                <el-table-column type="expand">
-                  <template #default="{ row }">
-                    <div class="p-4 bg-slate-800">
-                      <div v-if="cycleStepsMap[row.id]" class="space-y-2">
-                        <div 
-                          v-for="step in cycleStepsMap[row.id]" 
-                          :key="step.id"
-                          class="flex items-center justify-between p-2 bg-slate-700 rounded cursor-pointer hover:bg-slate-600"
-                          @click="playStepVideo(step)"
-                        >
-                          <div class="flex items-center gap-3">
-                            <span class="text-gray-400 text-xs w-8">#{{ step.step_order }}</span>
-                            <span class="text-white">{{ step.step_name || step.step_label }}</span>
-                          </div>
-                          <div class="flex items-center gap-4 text-sm">
-                            <span class="text-gray-400">{{ formatTime(step.start_time) }}</span>
-                            <span class="text-cyan-400">{{ step.duration ? step.duration.toFixed(2) + 's' : '-' }}</span>
-                            <span v-if="step.interval_to_next" class="text-blue-400">
-                              → {{ step.interval_to_next.toFixed(2) }}s
-                            </span>
-                            <el-icon v-if="step.video_id" class="text-purple-400"><VideoPlay /></el-icon>
-                          </div>
+          <!-- 周期详情 -->
+          <div v-if="selectedSession && cycles.length > 0">
+            <div class="text-xs text-gray-500 mb-2 font-medium">周期详情</div>
+            <el-table 
+              :data="cycles" 
+              size="small" 
+              class="dark-table" 
+              max-height="360"
+              row-key="id"
+              :expand-row-keys="expandedRows"
+              @expand-change="handleExpandChange"
+            >
+              <el-table-column type="expand">
+                <template #default="{ row }">
+                  <div class="px-4 py-3">
+                    <div v-if="cycleStepsMap[row.id]" class="space-y-1.5">
+                      <div 
+                        v-for="step in cycleStepsMap[row.id]" 
+                        :key="step.id"
+                        class="flex items-center justify-between px-3 py-2 bg-slate-800/80 rounded-lg cursor-pointer hover:bg-slate-700/80 transition-colors"
+                        @click="playStepVideo(step)"
+                      >
+                        <div class="flex items-center gap-3">
+                          <span class="text-gray-600 text-xs font-mono w-6">#{{ step.step_order }}</span>
+                          <span class="text-gray-200 text-sm">{{ step.step_name || step.step_label }}</span>
+                        </div>
+                        <div class="flex items-center gap-4 text-xs">
+                          <span class="text-gray-500 font-mono">{{ formatTime(step.start_time) }}</span>
+                          <span class="text-cyan-400 font-mono">{{ step.duration ? step.duration.toFixed(2) + 's' : '-' }}</span>
+                          <span v-if="step.interval_to_next" class="text-blue-400 font-mono">
+                            → {{ step.interval_to_next.toFixed(2) }}s
+                          </span>
+                          <el-icon v-if="step.video_id" class="text-violet-400" :size="14"><VideoPlay /></el-icon>
                         </div>
                       </div>
-                      <div v-else class="text-center text-gray-500 py-2">
-                        加载中...
-                      </div>
                     </div>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="cycle_number" label="#" width="50" align="center" />
-                <el-table-column label="开始时间" width="90">
-                  <template #default="{ row }">{{ formatTime(row.start_time) }}</template>
-                </el-table-column>
-                <el-table-column label="耗时" width="70" align="center">
-                  <template #default="{ row }">
-                    <span class="text-cyan-400">{{ row.duration ? row.duration.toFixed(2) + 's' : '-' }}</span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="结果" width="70" align="center">
-                  <template #default="{ row }">
-                    <el-tag :type="row.is_good ? 'success' : 'danger'" size="small">
-                      {{ row.is_good ? 'OK' : 'NG' }}
-                    </el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="event_name" label="事件" min-width="80" />
-                <el-table-column label="操作" width="80" align="center">
-                  <template #default="{ row }">
-                    <el-button 
-                      v-if="row.video_id" 
-                      type="primary" 
-                      link 
-                      size="small"
-                      @click="playCycleVideo(row)"
-                    >
-                      <el-icon><VideoPlay /></el-icon>
-                    </el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </div>
-
-            <!-- 无数据提示 -->
-            <div v-if="!selectedDate && !selectedSession" class="text-center text-gray-500 py-8">
-              选择左侧日期查看历史数据
-            </div>
+                    <div v-else class="text-center text-gray-600 py-3 text-sm">加载中...</div>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="cycle_number" label="#" width="50" align="center" />
+              <el-table-column label="开始时间" width="90">
+                <template #default="{ row }">
+                  <span class="font-mono">{{ formatTime(row.start_time) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="耗时" width="80" align="center">
+                <template #default="{ row }">
+                  <span class="text-cyan-400 font-mono">{{ row.duration ? row.duration.toFixed(2) + 's' : '-' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="结果" width="70" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.is_good ? 'success' : 'danger'" size="small" effect="dark" round>
+                    {{ row.is_good ? 'OK' : 'NG' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="event_name" label="事件" min-width="80" />
+              <el-table-column label="操作" width="70" align="center">
+                <template #default="{ row }">
+                  <el-button v-if="row.video_id" type="primary" link size="small" @click="playCycleVideo(row)">
+                    <el-icon><VideoPlay /></el-icon>
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
           </div>
-        </section>
 
-        <!-- 记录设置和数据导出 -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <!-- 记录设置 -->
-          <section class="bg-ind-panel p-6 rounded-xl border border-gray-800">
-            <h3 class="text-lg font-bold mb-4 flex items-center text-purple-400">
-              <el-icon class="mr-2"><Setting /></el-icon> 记录设置
-            </h3>
-            <div class="space-y-3">
-              <div class="text-sm text-gray-400 mb-2">数据记录</div>
-              <div class="flex justify-between items-center py-1">
-                <span class="text-sm text-gray-300">记录步骤耗时</span>
-                <el-switch v-model="exportSettings.record_step_duration" @change="saveExportSettings" />
-              </div>
-              <div class="flex justify-between items-center py-1">
-                <span class="text-sm text-gray-300">记录步骤间隔</span>
-                <el-switch v-model="exportSettings.record_step_interval" @change="saveExportSettings" />
-              </div>
-              <div class="flex justify-between items-center py-1">
-                <span class="text-sm text-gray-300">记录周期耗时</span>
-                <el-switch v-model="exportSettings.record_cycle_duration" @change="saveExportSettings" />
-              </div>
-              <div class="flex justify-between items-center py-1">
-                <span class="text-sm text-gray-300">记录周期间隔</span>
-                <el-switch v-model="exportSettings.record_cycle_interval" @change="saveExportSettings" />
-              </div>
-              <div class="flex justify-between items-center py-1">
-                <span class="text-sm text-gray-300">记录计数器</span>
-                <el-switch v-model="exportSettings.record_counters" @change="saveExportSettings" />
-              </div>
-              
-              <el-divider class="my-3" />
-              
-              <div class="text-sm text-gray-400 mb-2">视频录制</div>
-              <div class="flex justify-between items-center py-1">
-                <span class="text-sm text-gray-300">录制步骤视频</span>
-                <el-switch v-model="exportSettings.record_step_video" @change="saveExportSettings" />
-              </div>
-              <div class="flex justify-between items-center py-1">
-                <span class="text-sm text-gray-300">录制周期视频</span>
-                <el-switch v-model="exportSettings.record_cycle_video" @change="saveExportSettings" />
-              </div>
-              <div class="flex justify-between items-center py-1">
-                <span class="text-sm text-gray-300">录制会话视频</span>
-                <el-switch v-model="exportSettings.record_session_video" @change="saveExportSettings" />
-              </div>
-              
-              <div v-if="exportSettings.record_step_video || exportSettings.record_cycle_video || exportSettings.record_session_video" class="mt-3">
-                <div class="flex justify-between items-center py-1">
-                  <span class="text-sm text-gray-300">视频质量</span>
-                  <el-select v-model="exportSettings.video_quality" size="small" style="width: 100px" @change="saveExportSettings">
-                    <el-option label="低" value="low" />
-                    <el-option label="中" value="medium" />
-                    <el-option label="高" value="high" />
-                  </el-select>
-                </div>
-                <div class="flex justify-between items-center py-1">
-                  <span class="text-sm text-gray-300">帧率</span>
-                  <el-input-number v-model="exportSettings.video_fps" :min="10" :max="60" size="small" style="width: 100px" @change="saveExportSettings" />
-                </div>
-              </div>
-            </div>
-          </section>
+          <!-- 无数据 -->
+          <div v-if="!selectedDate && !selectedSession && stepStats.length === 0" class="text-center py-12">
+            <el-icon :size="40" class="text-gray-700 mb-3"><Calendar /></el-icon>
+            <div class="text-gray-600 text-sm">选择左侧日期查看历史数据</div>
+          </div>
+        </div>
 
-          <!-- 数据导出 -->
-          <section class="bg-ind-panel p-6 rounded-xl border border-gray-800">
-            <h3 class="text-lg font-bold mb-4 flex items-center text-white">
-              <el-icon class="mr-2"><Download /></el-icon> 数据导出
-            </h3>
-            <div class="space-y-3">
-              <!-- 导出设置 -->
-              <el-collapse>
-                <el-collapse-item title="导出设置（选择导出项）" name="exportConfig">
-                  <div class="space-y-2 px-2">
-                    <div class="flex justify-between items-center py-1">
-                      <span class="text-sm text-gray-300">导出会话信息</span>
-                      <el-switch v-model="exportSettings.export_session_info" @change="saveExportSettings" size="small" />
+        <!-- ========== 底部功能区：Tabs ========== -->
+        <div class="panel-card">
+          <el-tabs v-model="activeSettingsTab" class="settings-tabs">
+            <!-- Tab 1: 记录设置 -->
+            <el-tab-pane label="记录设置" name="record">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                <div>
+                  <div class="text-xs text-gray-500 font-medium mb-3 uppercase tracking-wider">数据记录</div>
+                  <div class="space-y-2">
+                    <div class="setting-row">
+                      <span>记录步骤耗时</span>
+                      <el-switch v-model="exportSettings.record_step_duration" @change="saveExportSettings" size="small" />
                     </div>
-                    <div class="flex justify-between items-center py-1">
-                      <span class="text-sm text-gray-300">导出计数器</span>
-                      <el-switch v-model="exportSettings.export_counters" @change="saveExportSettings" size="small" />
+                    <div class="setting-row">
+                      <span>记录步骤间隔</span>
+                      <el-switch v-model="exportSettings.record_step_interval" @change="saveExportSettings" size="small" />
                     </div>
-                    <div class="flex justify-between items-center py-1">
-                      <span class="text-sm text-gray-300">导出周期结果</span>
-                      <el-switch v-model="exportSettings.export_cycle_result" @change="saveExportSettings" size="small" />
+                    <div class="setting-row">
+                      <span>记录周期耗时</span>
+                      <el-switch v-model="exportSettings.record_cycle_duration" @change="saveExportSettings" size="small" />
                     </div>
-                    <div class="flex justify-between items-center py-1">
-                      <span class="text-sm text-gray-300">导出周期耗时</span>
-                      <el-switch v-model="exportSettings.export_cycle_duration" @change="saveExportSettings" size="small" />
+                    <div class="setting-row">
+                      <span>记录周期间隔</span>
+                      <el-switch v-model="exportSettings.record_cycle_interval" @change="saveExportSettings" size="small" />
                     </div>
-                    <div class="flex justify-between items-center py-1">
-                      <span class="text-sm text-gray-300">导出周期间隔</span>
-                      <el-switch v-model="exportSettings.export_cycle_interval" @change="saveExportSettings" size="small" />
-                    </div>
-                    <div class="flex justify-between items-center py-1">
-                      <span class="text-sm text-gray-300">导出步骤耗时</span>
-                      <el-switch v-model="exportSettings.export_step_duration" @change="saveExportSettings" size="small" />
-                    </div>
-                    <div class="flex justify-between items-center py-1">
-                      <span class="text-sm text-gray-300">导出步骤间隔</span>
-                      <el-switch v-model="exportSettings.export_step_interval" @change="saveExportSettings" size="small" />
-                    </div>
-                    <div class="flex justify-between items-center py-1">
-                      <span class="text-sm text-gray-300">导出步骤事件</span>
-                      <el-switch v-model="exportSettings.export_step_event" @change="saveExportSettings" size="small" />
+                    <div class="setting-row">
+                      <span>记录计数器</span>
+                      <el-switch v-model="exportSettings.record_counters" @change="saveExportSettings" size="small" />
                     </div>
                   </div>
-                </el-collapse-item>
-              </el-collapse>
-              
-              <el-button 
-                type="primary" 
-                class="w-full" 
-                @click="exportByDate" 
-                :loading="exporting" 
-                :disabled="!selectedDate"
-              >
-                导出当日数据
-              </el-button>
-              <el-button type="primary" plain class="w-full" @click="showExportDialog('week')">
-                导出某周数据
-              </el-button>
-              <el-button type="primary" plain class="w-full" @click="showExportDialog('month')">
-                导出某月数据
-              </el-button>
-              <el-button type="primary" plain class="w-full" @click="showExportDialog('range')">
-                导出日期范围
-              </el-button>
-              
-              <el-divider class="my-3" />
-              
-              <el-button type="warning" plain class="w-full" @click="handleBackup">
-                备份数据库
-              </el-button>
-              <el-button type="danger" plain class="w-full" @click="handleClearData" :loading="clearing">
-                清空所有历史数据
-              </el-button>
-            </div>
-          </section>
-
-          <!-- 数据清理设置 -->
-          <section class="bg-ind-panel p-4 rounded-xl border border-gray-800">
-            <h3 class="text-lg font-bold mb-4 flex items-center text-orange-400">
-              <el-icon class="mr-2"><Delete /></el-icon> 数据清理
-            </h3>
-            <div class="space-y-4">
-              <!-- 存储信息 -->
-              <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
-                <div class="text-xs text-gray-400 mb-2">存储空间</div>
-                <div class="flex justify-between text-sm mb-1">
-                  <span class="text-gray-300">应用数据</span>
-                  <span class="text-cyan-400 font-mono">{{ formatSize(storageInfo.data_size_mb) }}</span>
                 </div>
-                <div class="flex justify-between text-xs text-gray-500 mb-1 ml-3">
-                  <span>数据库</span>
-                  <span>{{ formatSize(storageInfo.breakdown?.database || 0) }}</span>
-                </div>
-                <div class="flex justify-between text-xs text-gray-500 mb-1 ml-3">
-                  <span>录制视频</span>
-                  <span>{{ formatSize(storageInfo.breakdown?.recordings || 0) }}</span>
-                </div>
-                <div class="flex justify-between text-xs text-gray-500 mb-1 ml-3">
-                  <span>上传视频</span>
-                  <span>{{ formatSize(storageInfo.breakdown?.upload_videos || 0) }}</span>
-                </div>
-                <div class="flex justify-between text-xs text-gray-500 mb-2 ml-3">
-                  <span>模型文件</span>
-                  <span>{{ formatSize(storageInfo.breakdown?.upload_models || 0) }}</span>
-                </div>
-                <el-divider class="my-2" />
-                <div class="flex justify-between text-sm mb-1">
-                  <span class="text-gray-300">磁盘使用</span>
-                  <span 
-                    class="font-mono"
-                    :class="storageInfo.disk_usage_percent >= 90 ? 'text-red-400' : storageInfo.disk_usage_percent >= 80 ? 'text-yellow-400' : 'text-green-400'"
-                  >{{ storageInfo.disk_usage_percent }}%</span>
-                </div>
-                <el-progress 
-                  :percentage="storageInfo.disk_usage_percent" 
-                  :stroke-width="6"
-                  :color="storageInfo.disk_usage_percent >= 90 ? '#f87171' : storageInfo.disk_usage_percent >= 80 ? '#facc15' : '#4ade80'"
-                  :show-text="false"
-                />
-                <div class="flex justify-between text-xs text-gray-500 mt-1">
-                  <span>已用 {{ storageInfo.disk_used_gb }} GB</span>
-                  <span>剩余 {{ storageInfo.disk_free_gb }} GB</span>
+                <div>
+                  <div class="text-xs text-gray-500 font-medium mb-3 uppercase tracking-wider">视频录制</div>
+                  <div class="space-y-2">
+                    <div class="setting-row">
+                      <span>录制步骤视频</span>
+                      <el-switch v-model="exportSettings.record_step_video" @change="saveExportSettings" size="small" />
+                    </div>
+                    <div class="setting-row">
+                      <span>录制周期视频</span>
+                      <el-switch v-model="exportSettings.record_cycle_video" @change="saveExportSettings" size="small" />
+                    </div>
+                    <div class="setting-row">
+                      <span>录制会话视频</span>
+                      <el-switch v-model="exportSettings.record_session_video" @change="saveExportSettings" size="small" />
+                    </div>
+                    <div v-if="exportSettings.record_step_video || exportSettings.record_cycle_video || exportSettings.record_session_video" class="mt-3 space-y-2">
+                      <div class="setting-row">
+                        <span>视频质量</span>
+                        <el-select v-model="exportSettings.video_quality" size="small" style="width: 90px" @change="saveExportSettings">
+                          <el-option label="低" value="low" />
+                          <el-option label="中" value="medium" />
+                          <el-option label="高" value="high" />
+                        </el-select>
+                      </div>
+                      <div class="setting-row">
+                        <span>帧率</span>
+                        <el-input-number v-model="exportSettings.video_fps" :min="10" :max="60" size="small" style="width: 90px" @change="saveExportSettings" />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
+            </el-tab-pane>
 
-              <!-- 自动清理设置 -->
-              <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
-                <div class="flex justify-between items-center mb-3">
-                  <span class="text-sm text-gray-300">自动清理</span>
-                  <el-switch v-model="cleanupSettings.auto_cleanup" @change="saveCleanupSettings" size="small" />
+            <!-- Tab 2: 数据导出 -->
+            <el-tab-pane label="数据导出" name="export">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                <!-- 左列：导出选项 + 时间段 -->
+                <div class="space-y-4">
+                  <div>
+                    <div class="text-xs text-gray-500 font-medium mb-3 uppercase tracking-wider">导出字段</div>
+                    <div class="space-y-2">
+                      <div class="setting-row">
+                        <span>会话信息</span>
+                        <el-switch v-model="exportSettings.export_session_info" @change="saveExportSettings" size="small" />
+                      </div>
+                      <div class="setting-row">
+                        <span>计数器</span>
+                        <el-switch v-model="exportSettings.export_counters" @change="saveExportSettings" size="small" />
+                      </div>
+                      <div class="setting-row">
+                        <span>周期结果</span>
+                        <el-switch v-model="exportSettings.export_cycle_result" @change="saveExportSettings" size="small" />
+                      </div>
+                      <div class="setting-row">
+                        <span>周期耗时</span>
+                        <el-switch v-model="exportSettings.export_cycle_duration" @change="saveExportSettings" size="small" />
+                      </div>
+                      <div class="setting-row">
+                        <span>周期间隔</span>
+                        <el-switch v-model="exportSettings.export_cycle_interval" @change="saveExportSettings" size="small" />
+                      </div>
+                      <div class="setting-row">
+                        <span>步骤耗时</span>
+                        <el-switch v-model="exportSettings.export_step_duration" @change="saveExportSettings" size="small" />
+                      </div>
+                      <div class="setting-row">
+                        <span>步骤间隔</span>
+                        <el-switch v-model="exportSettings.export_step_interval" @change="saveExportSettings" size="small" />
+                      </div>
+                      <div class="setting-row">
+                        <span>步骤事件</span>
+                        <el-switch v-model="exportSettings.export_step_event" @change="saveExportSettings" size="small" />
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <div class="text-xs text-gray-500 font-medium mb-2 uppercase tracking-wider">导出时间段</div>
+                    <el-select v-model="exportShiftType" size="small" class="w-full">
+                      <el-option label="全天" value="all" />
+                      <el-option label="白班 (08:00-20:00)" value="day" />
+                      <el-option label="夜班 (20:00-08:00)" value="night" />
+                      <el-option label="自定义" value="custom" />
+                    </el-select>
+                    <div v-if="exportShiftType === 'custom'" class="flex items-center gap-2 mt-2">
+                      <el-time-picker v-model="exportCustomStart" size="small" placeholder="开始" format="HH:mm" value-format="HH:mm" class="flex-1" @change="() => {}" />
+                      <span class="text-gray-600 text-xs">至</span>
+                      <el-time-picker v-model="exportCustomEnd" size="small" placeholder="结束" format="HH:mm" value-format="HH:mm" class="flex-1" @change="() => {}" />
+                    </div>
+                  </div>
                 </div>
-                <div class="flex items-center gap-2 mb-3">
-                  <span class="text-sm text-gray-300 whitespace-nowrap">保留天数</span>
-                  <el-input-number 
-                    v-model="cleanupSettings.retention_days" 
-                    :min="1" 
-                    :max="365" 
-                    size="small"
-                    controls-position="right"
-                    class="flex-1"
-                    @change="saveCleanupSettings"
-                  />
+                <!-- 右列：导出按钮 -->
+                <div class="space-y-3">
+                  <div class="text-xs text-gray-500 font-medium mb-3 uppercase tracking-wider">导出操作</div>
+                  <el-button type="primary" class="w-full" @click="exportByDate" :loading="exporting" :disabled="!selectedDate">
+                    <el-icon class="mr-1"><Download /></el-icon> 导出当日数据
+                  </el-button>
+                  <el-button type="primary" plain class="w-full" @click="showExportDialog('week')">
+                    <el-icon class="mr-1"><Download /></el-icon> 导出某周数据
+                  </el-button>
+                  <el-button type="primary" plain class="w-full" @click="showExportDialog('month')">
+                    <el-icon class="mr-1"><Download /></el-icon> 导出某月数据
+                  </el-button>
+                  <el-button type="primary" plain class="w-full" @click="showExportDialog('range')">
+                    <el-icon class="mr-1"><Download /></el-icon> 导出日期范围
+                  </el-button>
+                  <div class="border-t border-slate-800 pt-3 mt-1 space-y-2">
+                    <el-button type="warning" plain class="w-full" @click="handleBackup">
+                      备份数据库
+                    </el-button>
+                    <el-button type="danger" plain class="w-full" @click="handleClearData" :loading="clearing">
+                      清空所有历史数据
+                    </el-button>
+                  </div>
                 </div>
-                <div class="text-xs text-gray-500 mb-3">
-                  超过 {{ cleanupSettings.retention_days }} 天的数据将在每天自动清理
-                </div>
-                <el-button 
-                  type="warning" 
-                  plain 
-                  size="small"
-                  class="w-full" 
-                  @click="handleRunCleanup" 
-                  :loading="runningCleanup"
-                >
-                  立即执行清理
-                </el-button>
               </div>
+            </el-tab-pane>
 
-              <!-- 按日期范围删除 -->
-              <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
-                <div class="text-sm text-gray-300 mb-2">按日期范围删除</div>
-                <el-date-picker
-                  v-model="clearDateRange"
-                  type="daterange"
-                  range-separator="至"
-                  start-placeholder="开始日期"
-                  end-placeholder="结束日期"
-                  format="YYYY-MM-DD"
-                  value-format="YYYY-MM-DD"
-                  class="w-full mb-2"
-                  size="small"
-                  :disabled-date="disabledDate"
-                />
-                <el-button 
-                  type="danger" 
-                  plain 
-                  size="small"
-                  class="w-full" 
-                  @click="handleClearRange" 
-                  :loading="clearingRange"
-                  :disabled="!clearDateRange || clearDateRange.length !== 2"
-                >
-                  删除选定范围数据
-                </el-button>
+            <!-- Tab 3: 数据清理 -->
+            <el-tab-pane label="存储与清理" name="cleanup">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                <!-- 存储信息 -->
+                <div>
+                  <div class="text-xs text-gray-500 font-medium mb-3 uppercase tracking-wider">存储空间</div>
+                  <div class="space-y-2">
+                    <div class="setting-row">
+                      <span>应用数据</span>
+                      <span class="text-cyan-400 font-mono text-xs">{{ formatSize(storageInfo.data_size_mb) }}</span>
+                    </div>
+                    <div class="setting-row pl-4">
+                      <span class="text-gray-600">数据库</span>
+                      <span class="text-gray-400 font-mono text-xs">{{ formatSize(storageInfo.breakdown?.database || 0) }}</span>
+                    </div>
+                    <div class="setting-row pl-4">
+                      <span class="text-gray-600">录制视频</span>
+                      <span class="text-gray-400 font-mono text-xs">{{ formatSize(storageInfo.breakdown?.recordings || 0) }}</span>
+                    </div>
+                    <div class="setting-row pl-4">
+                      <span class="text-gray-600">上传视频</span>
+                      <span class="text-gray-400 font-mono text-xs">{{ formatSize(storageInfo.breakdown?.upload_videos || 0) }}</span>
+                    </div>
+                    <div class="setting-row pl-4">
+                      <span class="text-gray-600">模型文件</span>
+                      <span class="text-gray-400 font-mono text-xs">{{ formatSize(storageInfo.breakdown?.upload_models || 0) }}</span>
+                    </div>
+                    <div class="mt-3 pt-3 border-t border-slate-800">
+                      <div class="flex justify-between text-sm mb-1.5">
+                        <span class="text-gray-400">磁盘使用</span>
+                        <span 
+                          class="font-mono text-xs"
+                          :class="storageInfo.disk_usage_percent >= 90 ? 'text-red-400' : storageInfo.disk_usage_percent >= 80 ? 'text-yellow-400' : 'text-green-400'"
+                        >{{ storageInfo.disk_usage_percent }}%</span>
+                      </div>
+                      <el-progress 
+                        :percentage="storageInfo.disk_usage_percent" 
+                        :stroke-width="4"
+                        :color="storageInfo.disk_usage_percent >= 90 ? '#f87171' : storageInfo.disk_usage_percent >= 80 ? '#facc15' : '#4ade80'"
+                        :show-text="false"
+                      />
+                      <div class="flex justify-between text-xs text-gray-600 mt-1">
+                        <span>已用 {{ storageInfo.disk_used_gb }} GB</span>
+                        <span>剩余 {{ storageInfo.disk_free_gb }} GB</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <!-- 清理操作 -->
+                <div class="space-y-4">
+                  <div>
+                    <div class="text-xs text-gray-500 font-medium mb-3 uppercase tracking-wider">自动清理</div>
+                    <div class="space-y-2">
+                      <div class="setting-row">
+                        <span>启用自动清理</span>
+                        <el-switch v-model="cleanupSettings.auto_cleanup" @change="saveCleanupSettings" size="small" />
+                      </div>
+                      <div class="setting-row">
+                        <span>保留天数</span>
+                        <el-input-number v-model="cleanupSettings.retention_days" :min="1" :max="365" size="small" controls-position="right" style="width: 100px" @change="saveCleanupSettings" />
+                      </div>
+                      <div class="text-xs text-gray-600 pl-1">
+                        超过 {{ cleanupSettings.retention_days }} 天的数据将被自动清理
+                      </div>
+                    </div>
+                    <el-button type="warning" plain size="small" class="w-full mt-3" @click="handleRunCleanup" :loading="runningCleanup">
+                      立即执行清理
+                    </el-button>
+                  </div>
+                  <div class="border-t border-slate-800 pt-4">
+                    <div class="text-xs text-gray-500 font-medium mb-3 uppercase tracking-wider">按日期删除</div>
+                    <el-date-picker
+                      v-model="clearDateRange"
+                      type="daterange"
+                      range-separator="至"
+                      start-placeholder="开始"
+                      end-placeholder="结束"
+                      format="YYYY-MM-DD"
+                      value-format="YYYY-MM-DD"
+                      class="w-full mb-2"
+                      size="small"
+                      :disabled-date="disabledDate"
+                    />
+                    <el-button type="danger" plain size="small" class="w-full" @click="handleClearRange" :loading="clearingRange" :disabled="!clearDateRange || clearDateRange.length !== 2">
+                      删除选定范围数据
+                    </el-button>
+                  </div>
+                </div>
               </div>
-            </div>
-          </section>
+            </el-tab-pane>
+          </el-tabs>
         </div>
       </div>
     </div>
 
     <!-- 导出选择弹窗 -->
-    <el-dialog v-model="exportDialogVisible" :title="exportDialogTitle" width="400px">
+    <el-dialog v-model="exportDialogVisible" :title="exportDialogTitle" width="420px" class="dark-dialog">
       <el-form label-position="top">
         <el-form-item v-if="exportDialogType === 'week'" label="选择周">
-          <el-date-picker
-            v-model="exportWeekDate"
-            type="week"
-            format="YYYY 年 第 ww 周"
-            placeholder="选择周"
-            class="w-full"
-            @change="handleWeekChange"
-          />
+          <el-date-picker v-model="exportWeekDate" type="week" format="YYYY 年 第 ww 周" placeholder="选择周" class="w-full" @change="handleWeekChange" />
         </el-form-item>
         <el-form-item v-if="exportDialogType === 'month'" label="选择月份">
-          <el-date-picker
-            v-model="exportMonth"
-            type="month"
-            format="YYYY年MM月"
-            value-format="YYYY-MM"
-            placeholder="选择月份"
-            class="w-full"
-          />
+          <el-date-picker v-model="exportMonth" type="month" format="YYYY年MM月" value-format="YYYY-MM" placeholder="选择月份" class="w-full" />
         </el-form-item>
         <el-form-item v-if="exportDialogType === 'range'" label="选择日期范围">
-          <el-date-picker
-            v-model="exportDateRange"
-            type="daterange"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-            value-format="YYYY-MM-DD"
-            class="w-full"
-          />
+          <el-date-picker v-model="exportDateRange" type="daterange" start-placeholder="开始日期" end-placeholder="结束日期" value-format="YYYY-MM-DD" class="w-full" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -591,31 +546,15 @@
     </el-dialog>
 
     <!-- 视频播放弹窗 -->
-    <el-dialog 
-      v-model="videoDialogVisible" 
-      title="视频播放" 
-      width="70%" 
-      destroy-on-close
-      :close-on-click-modal="false"
-    >
+    <el-dialog v-model="videoDialogVisible" title="视频播放" width="70%" destroy-on-close :close-on-click-modal="false" class="dark-dialog">
       <div class="video-container">
-        <video 
-          v-if="currentVideoUrl" 
-          :src="currentVideoUrl" 
-          controls 
-          autoplay 
-          class="w-full"
-          style="max-height: 70vh; background: #000;"
-          @error="handleVideoError"
-        >
+        <video v-if="currentVideoUrl" :src="currentVideoUrl" controls autoplay class="w-full" style="max-height: 70vh; background: #000; border-radius: 8px;" @error="handleVideoError">
           您的浏览器不支持视频播放
         </video>
-        <div v-else class="text-center text-gray-500 py-10">
-          视频加载中...
-        </div>
+        <div v-else class="text-center text-gray-500 py-10">视频加载中...</div>
       </div>
       <template #footer>
-        <span class="text-gray-400 text-sm">提示：视频首次加载可能需要几秒钟进行格式转换</span>
+        <span class="text-gray-500 text-xs">提示：视频首次加载可能需要几秒钟进行格式转换</span>
       </template>
     </el-dialog>
   </div>
@@ -670,6 +609,18 @@ const selectedDate = ref('');
 const availableDates = ref([]);
 const sessions = ref([]);
 const selectedSession = ref(null);
+
+// 时间段筛选
+const shiftType = ref('all');
+const customStartHour = ref('08:00');
+const customEndHour = ref('20:00');
+
+const getShiftHours = () => {
+  if (shiftType.value === 'all') return { start: null, end: null };
+  if (shiftType.value === 'day') return { start: '08:00', end: '20:00' };
+  if (shiftType.value === 'night') return { start: '20:00', end: '08:00' };
+  return { start: customStartHour.value, end: customEndHour.value };
+};
 const cycles = ref([]);
 const stepStats = ref([]);
 const loadingSessions = ref(false);
@@ -717,13 +668,28 @@ const exportSettings = reactive({
   export_step_event: true
 });
 
+// 底部功能区Tab
+const activeSettingsTab = ref('export');
+
 // 导出弹窗
 const exportDialogVisible = ref(false);
 const exportDialogType = ref('');
 const exportWeek = ref('');
-const exportWeekDate = ref(null);  // 周选择器绑定的日期对象
+const exportWeekDate = ref(null);
 const exportMonth = ref('');
 const exportDateRange = ref([]);
+
+// 导出专用时间段（独立于左侧查询时间段）
+const exportShiftType = ref('all');
+const exportCustomStart = ref('08:00');
+const exportCustomEnd = ref('20:00');
+
+const getExportShiftHours = () => {
+  if (exportShiftType.value === 'all') return { start: null, end: null };
+  if (exportShiftType.value === 'day') return { start: '08:00', end: '20:00' };
+  if (exportShiftType.value === 'night') return { start: '20:00', end: '08:00' };
+  return { start: exportCustomStart.value, end: exportCustomEnd.value };
+};
 
 // 处理周选择变化 - 计算ISO周
 const handleWeekChange = (date) => {
@@ -907,10 +873,10 @@ const handleDateChange = async (date) => {
   
   loadingSessions.value = true;
   try {
-    const res = await getSessionsByDate(date, projectStore.currentProjectId);
+    const { start, end } = getShiftHours();
+    const res = await getSessionsByDate(date, projectStore.currentProjectId, start, end);
     sessions.value = res.data?.sessions || [];
     
-    // 更新历史概览数据
     overviewData.total_cycles = res.data?.total_cycles || 0;
     overviewData.good_cycles = res.data?.total_good || 0;
     overviewData.ng_cycles = res.data?.total_ng || 0;
@@ -921,10 +887,8 @@ const handleDateChange = async (date) => {
     
     historyCounters.value = res.data?.counters_summary || {};
     
-    // 加载步骤统计
     await loadStepStats({ date, project_id: projectStore.currentProjectId });
     
-    // 清除之前选择的会话
     selectedSession.value = null;
     cycles.value = [];
     expandedRows.value = [];
@@ -933,6 +897,13 @@ const handleDateChange = async (date) => {
     console.error('加载会话失败:', e);
   } finally {
     loadingSessions.value = false;
+  }
+};
+
+// 时间段切换 - 重新加载当前日期的数据
+const handleShiftChange = () => {
+  if (selectedDate.value) {
+    handleDateChange(selectedDate.value);
   }
 };
 
@@ -1067,7 +1038,8 @@ const exportByDate = async () => {
   
   exporting.value = true;
   try {
-    const res = await exportDateRangeCsv(selectedDate.value, selectedDate.value);
+    const { start: sh, end: eh } = getExportShiftHours();
+    const res = await exportDateRangeCsv(selectedDate.value, selectedDate.value, sh, eh);
     const filename = `data_${selectedDate.value}.csv`;
     downloadBlob(res.data, filename);
     ElMessage.success(`已导出到下载文件夹: ${filename}`);
@@ -1096,14 +1068,15 @@ const handleExport = async () => {
   try {
     let res, filename;
     
+    const { start: sh, end: eh } = getExportShiftHours();
     if (exportDialogType.value === 'week' && exportWeek.value) {
-      res = await exportWeekCsv(exportWeek.value);
+      res = await exportWeekCsv(exportWeek.value, sh, eh);
       filename = `data_${exportWeek.value}.csv`;
     } else if (exportDialogType.value === 'month' && exportMonth.value) {
-      res = await exportMonthCsv(exportMonth.value);
+      res = await exportMonthCsv(exportMonth.value, sh, eh);
       filename = `data_${exportMonth.value}.csv`;
     } else if (exportDialogType.value === 'range' && exportDateRange.value?.length === 2) {
-      res = await exportDateRangeCsv(exportDateRange.value[0], exportDateRange.value[1]);
+      res = await exportDateRangeCsv(exportDateRange.value[0], exportDateRange.value[1], sh, eh);
       filename = `data_${exportDateRange.value[0]}_to_${exportDateRange.value[1]}.csv`;
     } else {
       ElMessage.warning('请选择导出范围');
@@ -1359,6 +1332,10 @@ onMounted(() => {
   loadExportSettings();
   loadCleanupSettings();
   loadStorageInfo();
+  
+  if (projectStore.currentProjectId) {
+    loadAvailableDates();
+  }
 });
 
 onUnmounted(() => {
@@ -1367,74 +1344,225 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* 表格深色主题 */
-.dark-table :deep(.el-table) {
-  --el-table-bg-color: transparent;
-  --el-table-tr-bg-color: transparent;
-  --el-table-header-bg-color: #1e293b;
-  --el-table-row-hover-bg-color: #334155;
-  --el-table-border-color: #475569;
-  --el-table-text-color: #e2e8f0;
-  --el-table-header-text-color: #94a3b8;
+/* =================== Panel & Card Components =================== */
+.panel-card {
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.6));
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  border-radius: 12px;
+  padding: 16px;
+  backdrop-filter: blur(8px);
 }
 
-.dark-table :deep(.el-table__expand-icon) {
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 12px;
+}
+
+/* =================== Stat Cards =================== */
+.stat-card {
+  position: relative;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(51, 65, 85, 0.4);
+  border-radius: 10px;
+  padding: 14px 16px;
+  text-align: center;
+  overflow: hidden;
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 10px 10px 0 0;
+}
+
+.stat-card--cyan::before { background: linear-gradient(90deg, #06b6d4, #22d3ee); }
+.stat-card--blue::before { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+.stat-card--green::before { background: linear-gradient(90deg, #10b981, #34d399); }
+.stat-card--yellow::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+.stat-card--mixed::before { background: linear-gradient(90deg, #10b981, #ef4444); }
+
+.stat-card__label {
+  font-size: 11px;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.stat-card__value {
+  font-size: 22px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  line-height: 1.2;
+}
+
+/* =================== Session Cards =================== */
+.session-card {
+  padding: 10px 12px;
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 8px;
+  border: 1px solid rgba(51, 65, 85, 0.4);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.session-card:hover {
+  border-color: rgba(71, 85, 105, 0.8);
+  background: rgba(30, 41, 59, 0.8);
+}
+
+.session-card--active {
+  border-color: rgba(6, 182, 212, 0.5) !important;
+  background: rgba(6, 182, 212, 0.08) !important;
+  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.15);
+}
+
+/* =================== Setting Rows =================== */
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #cbd5e1;
+  transition: background 0.15s;
+}
+
+.setting-row:hover {
+  background: rgba(51, 65, 85, 0.3);
+}
+
+/* =================== Custom Scrollbar =================== */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* =================== Settings Tabs =================== */
+.settings-tabs :deep(.el-tabs__header) {
+  margin-bottom: 0;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+.settings-tabs :deep(.el-tabs__nav-wrap::after) {
+  display: none;
+}
+
+.settings-tabs :deep(.el-tabs__item) {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0 20px;
+  height: 38px;
+  line-height: 38px;
+}
+
+.settings-tabs :deep(.el-tabs__item:hover) {
   color: #94a3b8;
 }
 
-.dark-table :deep(.el-table__expand-icon--expanded) {
+.settings-tabs :deep(.el-tabs__item.is-active) {
   color: #22d3ee;
 }
 
-/* 所有表格深色主题 */
+.settings-tabs :deep(.el-tabs__active-bar) {
+  background: linear-gradient(90deg, #06b6d4, #3b82f6);
+  height: 2px;
+  border-radius: 1px;
+}
+
+.settings-tabs :deep(.el-tabs__content) {
+  padding: 0;
+}
+
+.settings-tabs :deep(.el-tab-pane) {
+  padding: 12px 0 4px 0;
+}
+
+/* =================== Table Dark Theme =================== */
+.dark-table :deep(.el-table),
 :deep(.el-table) {
-  --el-table-bg-color: #0f172a;
-  --el-table-tr-bg-color: #0f172a;
-  --el-table-header-bg-color: #1e293b;
-  --el-table-row-hover-bg-color: #334155;
-  --el-table-border-color: #334155;
-  --el-table-text-color: #e2e8f0;
-  --el-table-header-text-color: #94a3b8;
-  background-color: #0f172a;
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: rgba(30, 41, 59, 0.6);
+  --el-table-row-hover-bg-color: rgba(51, 65, 85, 0.4);
+  --el-table-border-color: rgba(51, 65, 85, 0.4);
+  --el-table-text-color: #cbd5e1;
+  --el-table-header-text-color: #64748b;
+  background-color: transparent;
+  font-size: 12px;
 }
 
 :deep(.el-table th.el-table__cell) {
-  background-color: #1e293b;
+  background-color: rgba(30, 41, 59, 0.6);
+  font-weight: 500;
 }
 
 :deep(.el-table td.el-table__cell) {
-  border-bottom: 1px solid #334155;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.3);
 }
 
 :deep(.el-table--border .el-table__cell) {
-  border-right: 1px solid #334155;
+  border-right: 1px solid rgba(51, 65, 85, 0.3);
 }
 
 :deep(.el-table__body tr:hover > td.el-table__cell) {
-  background-color: #334155 !important;
+  background-color: rgba(51, 65, 85, 0.3) !important;
 }
 
-/* 日期选择器深色主题 */
+:deep(.el-table__expand-icon) {
+  color: #64748b;
+}
+
+:deep(.el-table__expand-icon--expanded) {
+  color: #22d3ee;
+}
+
+:deep(.el-table__empty-text) {
+  color: #475569;
+}
+
+/* =================== Input / Date Picker Dark Theme =================== */
 :deep(.el-date-editor) {
-  --el-input-bg-color: #1e293b;
-  --el-input-border-color: #334155;
+  --el-input-bg-color: rgba(30, 41, 59, 0.8);
+  --el-input-border-color: rgba(51, 65, 85, 0.5);
   --el-input-text-color: #e2e8f0;
-  --el-input-placeholder-color: #64748b;
-  --el-input-hover-border-color: #0ea5e9;
+  --el-input-placeholder-color: #475569;
+  --el-input-hover-border-color: #475569;
   --el-input-focus-border-color: #0ea5e9;
 }
 
 :deep(.el-date-editor .el-input__wrapper) {
-  background-color: #1e293b;
-  box-shadow: 0 0 0 1px #334155 inset;
+  background-color: rgba(30, 41, 59, 0.8);
+  box-shadow: 0 0 0 1px rgba(51, 65, 85, 0.5) inset;
 }
 
 :deep(.el-date-editor .el-input__wrapper:hover) {
-  box-shadow: 0 0 0 1px #475569 inset;
+  box-shadow: 0 0 0 1px rgba(71, 85, 105, 0.7) inset;
 }
 
 :deep(.el-date-editor .el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 1px #0ea5e9 inset;
+  box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.6) inset;
 }
 
 :deep(.el-date-editor .el-input__inner) {
@@ -1442,78 +1570,21 @@ onUnmounted(() => {
 }
 
 :deep(.el-date-editor .el-input__prefix-inner .el-icon) {
-  color: #64748b;
+  color: #475569;
 }
 
-/* 折叠面板深色主题 */
-:deep(.el-collapse) {
-  --el-collapse-border-color: #334155;
-  --el-collapse-header-bg-color: #1e293b;
-  --el-collapse-header-text-color: #e2e8f0;
-  --el-collapse-header-font-size: 14px;
-  --el-collapse-content-bg-color: #0f172a;
-  --el-collapse-content-text-color: #cbd5e1;
-  border: none;
-}
-
-:deep(.el-collapse-item__header) {
-  background-color: #1e293b;
-  color: #e2e8f0;
-  border-bottom: 1px solid #334155;
-  padding: 12px 16px;
-  font-size: 14px;
-}
-
-:deep(.el-collapse-item__header:hover) {
-  background-color: #334155;
-}
-
-:deep(.el-collapse-item__header.is-active) {
-  border-bottom-color: #0ea5e9;
-  color: #22d3ee;
-}
-
-:deep(.el-collapse-item__wrap) {
-  background-color: #0f172a;
-  border-bottom: 1px solid #334155;
-}
-
-:deep(.el-collapse-item__content) {
-  background-color: #0f172a;
-  color: #cbd5e1;
-  padding: 12px 16px;
-}
-
-:deep(.el-collapse-item__arrow) {
-  color: #94a3b8;
-}
-
-:deep(.el-collapse-item__header.is-active .el-collapse-item__arrow) {
-  color: #22d3ee;
-}
-
-/* 分割线深色主题 */
+/* =================== Divider =================== */
 :deep(.el-divider) {
-  border-color: #334155;
+  border-color: rgba(51, 65, 85, 0.4);
 }
 
-:deep(.el-divider__text) {
-  background-color: #0f172a;
-  color: #94a3b8;
-}
-
-/* 按钮样式调整 */
+/* =================== Button Tweaks =================== */
 :deep(.el-button--default) {
-  --el-button-bg-color: #1e293b;
-  --el-button-border-color: #334155;
+  --el-button-bg-color: rgba(30, 41, 59, 0.8);
+  --el-button-border-color: rgba(51, 65, 85, 0.5);
   --el-button-text-color: #e2e8f0;
-  --el-button-hover-bg-color: #334155;
-  --el-button-hover-border-color: #475569;
+  --el-button-hover-bg-color: rgba(51, 65, 85, 0.6);
+  --el-button-hover-border-color: rgba(71, 85, 105, 0.7);
   --el-button-hover-text-color: #f1f5f9;
-}
-
-/* 空状态文字颜色 */
-:deep(.el-table__empty-text) {
-  color: #64748b;
 }
 </style>

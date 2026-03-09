@@ -1729,21 +1729,16 @@ const triggerEvent = (eventId) => {
   updateCharts();
 };
 
-// 自动恢复输入源
+// 自动恢复输入源（返回是否成功恢复）
 const autoRestoreSource = async () => {
-  // 检查是否开启了自动保存
-  const autoSaveSettings = localStorage.getItem('auto_save_settings');
-  if (!autoSaveSettings) return;
-  
-  const settings = JSON.parse(autoSaveSettings);
-  if (!settings.enabled) return;
-  
-  // 从 sourceStore 加载保存的配置
   sourceStore.loadConfig();
   
+  if (!localStorage.getItem('source_config')) return false;
+  
   const savedType = sourceStore.sourceType;
+  let restored = false;
+
   if (!savedType || savedType === 'camera') {
-    // 摄像头：尝试启动上次使用的摄像头
     try {
       const cameraSettings = sourceStore.cameraSettings;
       const [w, h] = (cameraSettings.resolution || '1280x720').split('x').map(Number);
@@ -1754,14 +1749,12 @@ const autoRestoreSource = async () => {
         fps: cameraSettings.fps || 30
       });
       sourceStore.setSourceType('camera');
-      sourceStore.setStreaming(true);
-      isStreaming.value = true;
+      restored = true;
       console.log('[AutoRestore] 已自动恢复摄像头');
     } catch (err) {
       console.warn('[AutoRestore] 自动恢复摄像头失败:', err);
     }
   } else if (savedType === 'hikvision') {
-    // 海康工业相机：尝试启动上次使用的相机
     try {
       const hikSettings = sourceStore.hikvisionSettings;
       const [w, h] = (hikSettings.resolution || '1280x720').split('x').map(Number);
@@ -1772,66 +1765,72 @@ const autoRestoreSource = async () => {
         fps: hikSettings.fps || 30
       });
       sourceStore.setSourceType('hikvision');
-      sourceStore.setStreaming(true);
-      isStreaming.value = true;
+      restored = true;
       console.log('[AutoRestore] 已自动恢复海康相机');
     } catch (err) {
       console.warn('[AutoRestore] 自动恢复海康相机失败:', err);
     }
   } else if (savedType === 'video' && sourceStore.videoPath) {
-    // 视频：尝试启动上次使用的视频
     try {
       await api.post('/source/video/start', {
         file_path: sourceStore.videoPath,
         speed: sourceStore.videoSpeed || 1
       });
       sourceStore.setSourceType('video');
-      sourceStore.setStreaming(true);
-      isStreaming.value = true;
-      startPolling();
+      restored = true;
       console.log('[AutoRestore] 已自动恢复视频');
     } catch (err) {
       console.warn('[AutoRestore] 自动恢复视频失败:', err);
     }
   }
+
+  if (restored) {
+    sourceStore.setStreaming(true);
+    isStreaming.value = true;
+    isRunning.value = true;
+    projectStore.setRunningStatus(true);
+    forceReconnectStream();
+    startPolling();
+  }
+
+  return restored;
 };
 
 onMounted(() => {
-  // 加载系统设置
   systemStore.loadSettings();
+  
+  // Reset error count so reconnection works after page navigation
+  streamErrorCount = 0;
   
   nextTick(() => {
     initCharts();
     resizeCanvas();
   });
   
-  // 监听窗口大小变化
   window.addEventListener('resize', handleResize);
   
-  // 检查是否有正在进行的检测，并同步输入源类型
   getSourceStatus().then(async res => {
-    // 同步输入源类型到 store
     if (res.data.source_type) {
       sourceStore.setSourceType(res.data.source_type);
     }
     isRunning.value = !!res.data.is_running;
     isDetecting.value = !!res.data.is_detecting;
+    
+    projectStore.setRunningStatus(!!res.data.is_running);
+    systemStore.setDetecting(!!res.data.is_detecting);
 
     if (res.data.is_running) {
       startPolling();
+      forceReconnectStream();
+      return;
     }
 
-    if (!res.data.is_running && !res.data.is_detecting && res.data.source_type && res.data.model_loaded) {
+    if (!res.data.is_detecting && res.data.source_type && res.data.model_loaded) {
       isPaused.value = true;
     }
     
-    if (!res.data.is_running && !res.data.source_type) {
+    if (!res.data.source_type) {
       await autoRestoreSource();
-    }
-    
-    // Only connect MJPEG stream if backend has an active video source
-    if (res.data.is_running) {
-      forceReconnectStream();
     }
   }).catch(() => {
   });
@@ -1859,6 +1858,7 @@ onUnmounted(() => {
   }
   
   systemStore.setDetecting(false);
+  projectStore.setRunningStatus(false);
   
   if (pieChartInstance) {
     pieChartInstance.dispose();

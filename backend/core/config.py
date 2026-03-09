@@ -14,51 +14,45 @@ DATA_DIR = os.environ.get('TIANJUN_DATA_DIR', BASE_DIR)
 
 
 def _migrate_old_data():
-    """Migrate data from old install directory to new user data directory (one-time)."""
+    """Migrate data from old install directory to user data directory.
+    
+    Runs every startup (no one-time marker) so that any data left behind
+    in the installation directory is always rescued to the safe DATA_DIR.
+    The NSIS installer.nsh customInit macro also backs up data BEFORE
+    the old uninstaller runs, but this serves as a secondary safety net.
+    """
     if DATA_DIR == BASE_DIR:
         return
-    marker = os.path.join(DATA_DIR, '.migrated')
-    if os.path.exists(marker):
-        return
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+
     old_db = os.path.join(BASE_DIR, 'sql_app.db')
     new_db = os.path.join(DATA_DIR, 'sql_app.db')
-    migrated_anything = False
     if os.path.exists(old_db) and not os.path.exists(new_db):
         try:
-            os.makedirs(DATA_DIR, exist_ok=True)
             shutil.copy2(old_db, new_db)
             logger.info(f"Migrated database: {old_db} -> {new_db}")
-            migrated_anything = True
         except Exception as e:
             logger.error(f"Failed to migrate database: {e}")
-    old_uploads = os.path.join(BASE_DIR, 'uploads')
-    new_uploads = os.path.join(DATA_DIR, 'uploads')
-    if os.path.isdir(old_uploads) and not os.path.isdir(new_uploads):
-        try:
-            shutil.copytree(old_uploads, new_uploads)
-            logger.info(f"Migrated uploads: {old_uploads} -> {new_uploads}")
-            migrated_anything = True
-        except Exception as e:
-            logger.error(f"Failed to migrate uploads: {e}")
-    old_recordings = os.path.join(BASE_DIR, 'recordings')
-    new_recordings = os.path.join(DATA_DIR, 'recordings')
-    if os.path.isdir(old_recordings) and not os.path.isdir(new_recordings):
-        try:
-            shutil.copytree(old_recordings, new_recordings)
-            logger.info(f"Migrated recordings: {old_recordings} -> {new_recordings}")
-            migrated_anything = True
-        except Exception as e:
-            logger.error(f"Failed to migrate recordings: {e}")
-    try:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(marker, 'w') as f:
-            f.write('1')
-        if migrated_anything:
-            logger.info("Data migration completed successfully")
-        else:
-            logger.info("No old data found to migrate")
-    except Exception as e:
-        logger.error(f"Failed to write migration marker: {e}")
+
+    for folder_name in ('uploads', 'recordings'):
+        old_dir = os.path.join(BASE_DIR, folder_name)
+        new_dir = os.path.join(DATA_DIR, folder_name)
+        if os.path.isdir(old_dir):
+            os.makedirs(new_dir, exist_ok=True)
+            try:
+                for item in os.listdir(old_dir):
+                    src = os.path.join(old_dir, item)
+                    dst = os.path.join(new_dir, item)
+                    if os.path.exists(dst):
+                        continue
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst)
+                    else:
+                        shutil.copy2(src, dst)
+                logger.info(f"Migrated {folder_name}: {old_dir} -> {new_dir}")
+            except Exception as e:
+                logger.error(f"Failed to migrate {folder_name}: {e}")
 
 
 _migrate_old_data()

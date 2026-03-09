@@ -17,8 +17,11 @@ export const getSession = (sessionId) => {
 };
 
 // 获取指定日期的会话概览
-export const getSessionsByDate = (date, projectId = null) => {
-  const params = projectId ? { project_id: projectId } : {};
+export const getSessionsByDate = (date, projectId = null, startHour = null, endHour = null) => {
+  const params = {};
+  if (projectId) params.project_id = projectId;
+  if (startHour) params.start_hour = startHour;
+  if (endHour) params.end_hour = endHour;
   return api.get(`/data/sessions/by-date/${date}`, { params });
 };
 
@@ -107,25 +110,34 @@ export const exportCycleCsv = (cycleId) => {
 };
 
 // 导出日期范围的CSV
-export const exportDateRangeCsv = (startDate, endDate) => {
+export const exportDateRangeCsv = (startDate, endDate, startHour = null, endHour = null) => {
+  const params = { export_type: 'all', start_date: startDate, end_date: endDate };
+  if (startHour) params.start_hour = startHour;
+  if (endHour) params.end_hour = endHour;
   return api.get('/data/export/csv', {
-    params: { export_type: 'all', start_date: startDate, end_date: endDate },
+    params,
     responseType: 'blob'
   });
 };
 
 // 导出某周的CSV
-export const exportWeekCsv = (week) => {
+export const exportWeekCsv = (week, startHour = null, endHour = null) => {
+  const params = { export_type: 'all', week };
+  if (startHour) params.start_hour = startHour;
+  if (endHour) params.end_hour = endHour;
   return api.get('/data/export/csv', {
-    params: { export_type: 'all', week },
+    params,
     responseType: 'blob'
   });
 };
 
 // 导出某月的CSV
-export const exportMonthCsv = (month) => {
+export const exportMonthCsv = (month, startHour = null, endHour = null) => {
+  const params = { export_type: 'all', month };
+  if (startHour) params.start_hour = startHour;
+  if (endHour) params.end_hour = endHour;
   return api.get('/data/export/csv', {
-    params: { export_type: 'all', month },
+    params,
     responseType: 'blob'
   });
 };

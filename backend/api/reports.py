@@ -11,11 +11,26 @@ from backend.schemas.report import ReportSummary, DailyStatResponse, TrendData
 
 router = APIRouter()
 
+def _apply_hour_filter(query, start_hour: Optional[str], end_hour: Optional[str]):
+    """Apply hour-of-day filter for shift queries (e.g. day shift 08:00-20:00)."""
+    if not start_hour or not end_hour:
+        return query
+    time_col = func.strftime('%H:%M', Task.timestamp)
+    if start_hour <= end_hour:
+        query = query.filter(and_(time_col >= start_hour, time_col < end_hour))
+    else:
+        from sqlalchemy import or_
+        query = query.filter(or_(time_col >= start_hour, time_col < end_hour))
+    return query
+
+
 @router.get("/summary", response_model=ReportSummary)
 def get_summary(
     project_id: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    start_hour: Optional[str] = None,
+    end_hour: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """获取统计摘要"""
@@ -27,6 +42,7 @@ def get_summary(
         query = query.filter(Task.timestamp >= start_date)
     if end_date:
         query = query.filter(Task.timestamp <= end_date + " 23:59:59")
+    query = _apply_hour_filter(query, start_hour, end_hour)
     
     total_count = query.count()
     good_count = query.filter(Task.is_good == True).count()
@@ -50,6 +66,8 @@ def get_records(
     project_id: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    start_hour: Optional[str] = None,
+    end_hour: Optional[str] = None,
     is_good: Optional[bool] = None,
     skip: int = 0,
     limit: int = 100,
@@ -64,6 +82,7 @@ def get_records(
         query = query.filter(Task.timestamp >= start_date)
     if end_date:
         query = query.filter(Task.timestamp <= end_date + " 23:59:59")
+    query = _apply_hour_filter(query, start_hour, end_hour)
     if is_good is not None:
         query = query.filter(Task.is_good == is_good)
     
@@ -131,6 +150,8 @@ def get_daily_stats(
     project_id: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    start_hour: Optional[str] = None,
+    end_hour: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """获取每日统计数据"""
@@ -146,8 +167,9 @@ def get_daily_stats(
         query = query.filter(Task.timestamp >= start_date)
     if end_date:
         query = query.filter(Task.timestamp <= end_date + " 23:59:59")
+    query = _apply_hour_filter(query, start_hour, end_hour)
     
-    results = query.group_by(func.date(Task.timestamp)).all()
+    results = query.group_by(func.date(Task.timestamp)).order_by(func.date(Task.timestamp)).all()
     
     stats = []
     for row in results:
@@ -172,13 +194,14 @@ def export_report(
     project_id: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    start_hour: Optional[str] = None,
+    end_hour: Optional[str] = None,
     format: str = "pdf",
     db: Session = Depends(get_db)
 ):
     """导出报表（PDF/Excel）"""
-    # 获取统计数据
-    summary = get_summary(project_id, start_date, end_date, db)
-    records = get_records(project_id, start_date, end_date, None, 0, 1000, db)
+    summary = get_summary(project_id, start_date, end_date, start_hour, end_hour, db)
+    records = get_records(project_id, start_date, end_date, start_hour, end_hour, None, 0, 1000, db)
     
     if format == "pdf":
         # 生成PDF

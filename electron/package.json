@@ -1,6 +1,6 @@
 {
   "name": "tianjun-ai-vision",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "天军科技AI视觉检测系统 - AI-powered machine vision detection system",
   "main": "main.js",
   "author": {
@@ -86,6 +86,11 @@
           "ffmpeg.exe",
           "ffprobe.exe"
         ]
+      },
+      {
+        "from": "drivers/CH341SER",
+        "to": "drivers/CH341SER",
+        "filter": ["**/*"]
       }
     ],
     "win": {
@@ -112,7 +117,9 @@
       "license": "build/license.txt",
       "runAfterFinish": true,
       "perMachine": true,
-      "allowElevation": true
+      "allowElevation": true,
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh"
     },
     "linux": {
       "target": [

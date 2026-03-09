@@ -260,7 +260,7 @@
                         <el-input-number 
                           v-model="step.min_duration" 
                           size="small" 
-                          :min="0.01" 
+                          :min="0" 
                           :max="3600" 
                           :step="0.1"
                           :precision="2"

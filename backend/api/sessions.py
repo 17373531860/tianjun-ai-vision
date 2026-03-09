@@ -48,6 +48,14 @@ def _get_step_order_map(db, project_id: int = None, session_id: int = None, cycl
     return {}
 
 
+MIN_VALID_STEP_DURATION = 0.1
+
+def _filter_valid_steps(steps: list) -> list:
+    """Filter out phantom steps caused by very brief false detections.
+    Steps with duration < 0.1s or None are excluded."""
+    return [s for s in steps if s.duration is not None and s.duration >= MIN_VALID_STEP_DURATION]
+
+
 # ========== 自动清理 ==========
 
 def _get_cleanup_settings_from_db():
@@ -497,12 +505,26 @@ def get_session_dates(
 
 
 @router.get("/sessions/by-date/{date}", response_model=SessionOverview)
-def get_sessions_by_date(date: str, project_id: Optional[int] = None, db: Session = Depends(get_db)):
+def get_sessions_by_date(
+    date: str,
+    project_id: Optional[int] = None,
+    start_hour: Optional[str] = None,
+    end_hour: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     """获取指定日期的会话概览"""
     query = db.query(DetectionSession).filter(func.date(DetectionSession.start_time) == date)
     
     if project_id:
         query = query.filter(DetectionSession.project_id == project_id)
+    
+    if start_hour and end_hour:
+        time_col = func.strftime('%H:%M', DetectionSession.start_time)
+        if start_hour <= end_hour:
+            query = query.filter(and_(time_col >= start_hour, time_col < end_hour))
+        else:
+            from sqlalchemy import or_
+            query = query.filter(or_(time_col >= start_hour, time_col < end_hour))
     
     sessions = query.order_by(DetectionSession.start_time).all()
     
@@ -636,10 +658,13 @@ def get_cycle(cycle_id: int, db: Session = Depends(get_db)):
 
 @router.get("/cycles/{cycle_id}/steps", response_model=List[StepRecordResponse])
 def get_cycle_steps(cycle_id: int, db: Session = Depends(get_db)):
-    """获取周期的所有步骤记录（按配置顺序排列）"""
+    """获取周期的所有步骤记录（按配置顺序排列，过滤误检步骤）"""
     steps = db.query(StepRecord).filter(
         StepRecord.cycle_id == cycle_id
     ).all()
+    
+    # Filter out phantom steps (very brief false detections)
+    steps = _filter_valid_steps(steps)
     
     order_map = _get_step_order_map(db, cycle_id=cycle_id)
     steps.sort(key=lambda s: order_map.get(s.step_label, 999))
@@ -835,6 +860,8 @@ def export_csv(
     end_date: Optional[str] = None,
     week: Optional[str] = None,  # 格式: 2024-W01
     month: Optional[str] = None,  # 格式: 2024-01
+    start_hour: Optional[str] = None,
+    end_hour: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """
@@ -963,7 +990,9 @@ def export_csv(
                     
                     order_map = _get_step_order_map(db, session_id=session_id)
                     for cycle in cycles:
-                        steps = db.query(StepRecord).filter(StepRecord.cycle_id == cycle.id).all()
+                        steps = _filter_valid_steps(
+                            db.query(StepRecord).filter(StepRecord.cycle_id == cycle.id).all()
+                        )
                         steps.sort(key=lambda s: order_map.get(s.step_label, 999))
                         for step in steps:
                             config_order = order_map.get(step.step_label, step.step_order - 1) + 1
@@ -1010,7 +1039,9 @@ def export_csv(
             writer.writerow(row)
             writer.writerow([])
             
-            steps = db.query(StepRecord).filter(StepRecord.cycle_id == cycle_id).all()
+            steps = _filter_valid_steps(
+                db.query(StepRecord).filter(StepRecord.cycle_id == cycle_id).all()
+            )
             order_map = _get_step_order_map(db, cycle_id=cycle_id)
             steps.sort(key=lambda s: order_map.get(s.step_label, 999))
             if steps:
@@ -1046,6 +1077,14 @@ def export_csv(
             elif start_date and end_date:
                 query = query.filter(DetectionSession.start_time >= start_date)
                 query = query.filter(DetectionSession.start_time <= end_date + " 23:59:59")
+            
+            if start_hour and end_hour:
+                time_col = func.strftime('%H:%M', DetectionSession.start_time)
+                if start_hour <= end_hour:
+                    query = query.filter(and_(time_col >= start_hour, time_col < end_hour))
+                else:
+                    from sqlalchemy import or_
+                    query = query.filter(or_(time_col >= start_hour, time_col < end_hour))
             
             sessions = query.order_by(DetectionSession.start_time).all()
             
@@ -1120,9 +1159,11 @@ def export_csv(
                         
                         order_map = _get_step_order_map(db, session_id=session.id)
                         for cycle in cycles:
-                            steps = db.query(StepRecord).filter(
-                                StepRecord.cycle_id == cycle.id
-                            ).all()
+                            steps = _filter_valid_steps(
+                                db.query(StepRecord).filter(
+                                    StepRecord.cycle_id == cycle.id
+                                ).all()
+                            )
                             steps.sort(key=lambda s: order_map.get(s.step_label, 999))
                             for step in steps:
                                 config_order = order_map.get(step.step_label, step.step_order - 1) + 1

@@ -46,7 +46,7 @@ const routes = [
         path: 'alarm',
         name: 'Alarm',
         component: () => import('@/views/Alarm/index.vue'),
-      }
+      },
     ]
   }
 ];
