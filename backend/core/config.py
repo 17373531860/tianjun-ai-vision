@@ -13,13 +13,77 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.environ.get('TIANJUN_DATA_DIR', BASE_DIR)
 
 
+def _is_empty_db(db_path):
+    """Check if a SQLite database has no user data (only empty auto-created tables)."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [row[0] for row in cursor.fetchall()]
+        if not tables:
+            conn.close()
+            return True
+        for table in tables:
+            count = conn.execute(f"SELECT COUNT(*) FROM [{table}]").fetchone()[0]
+            if count > 0:
+                conn.close()
+                return False
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def _fix_db_paths(db_path, old_base, new_base):
+    """Rewrite absolute file_path values in the database after data migration.
+
+    Models and VideoClips store absolute paths.  When data moves from the
+    install directory to AppData, those paths must be updated to match.
+    """
+    import sqlite3
+    old_prefix = os.path.join(old_base, '').replace('\\', '/')
+    new_prefix = os.path.join(new_base, '').replace('\\', '/')
+    if old_prefix == new_prefix:
+        return
+
+    try:
+        conn = sqlite3.connect(db_path)
+        for table in ('ml_models', 'video_clips'):
+            try:
+                conn.execute(f"SELECT file_path FROM [{table}] LIMIT 1")
+            except Exception:
+                continue
+            updated = conn.execute(
+                f"UPDATE [{table}] SET file_path = REPLACE(file_path, ?, ?) "
+                f"WHERE file_path LIKE ?",
+                (old_prefix, new_prefix, old_prefix + '%')
+            ).rowcount
+            # Also handle backslash paths on Windows
+            old_bs = old_prefix.replace('/', '\\')
+            new_bs = new_prefix.replace('/', '\\')
+            updated += conn.execute(
+                f"UPDATE [{table}] SET file_path = REPLACE(file_path, ?, ?) "
+                f"WHERE file_path LIKE ?",
+                (old_bs, new_bs, old_bs + '%')
+            ).rowcount
+            if updated:
+                logger.info(f"Fixed {updated} path(s) in {table}")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to fix DB paths: {e}")
+
+
 def _migrate_old_data():
     """Migrate data from old install directory to user data directory.
-    
-    Runs every startup (no one-time marker) so that any data left behind
-    in the installation directory is always rescued to the safe DATA_DIR.
-    The NSIS installer.nsh customInit macro also backs up data BEFORE
-    the old uninstaller runs, but this serves as a secondary safety net.
+
+    Runs every startup so that any data left behind in the installation
+    directory is always rescued to the safe DATA_DIR.  The NSIS
+    installer.nsh customInit macro also backs up data BEFORE the old
+    uninstaller runs, but this serves as a secondary safety net.
+
+    Handles the edge case where create_all already created an empty DB
+    in DATA_DIR — we overwrite it with the real data from the old location.
     """
     if DATA_DIR == BASE_DIR:
         return
@@ -28,12 +92,17 @@ def _migrate_old_data():
 
     old_db = os.path.join(BASE_DIR, 'sql_app.db')
     new_db = os.path.join(DATA_DIR, 'sql_app.db')
-    if os.path.exists(old_db) and not os.path.exists(new_db):
-        try:
-            shutil.copy2(old_db, new_db)
-            logger.info(f"Migrated database: {old_db} -> {new_db}")
-        except Exception as e:
-            logger.error(f"Failed to migrate database: {e}")
+    need_path_fix = False
+
+    if os.path.exists(old_db):
+        should_copy = not os.path.exists(new_db) or _is_empty_db(new_db)
+        if should_copy:
+            try:
+                shutil.copy2(old_db, new_db)
+                need_path_fix = True
+                logger.info(f"Migrated database: {old_db} -> {new_db}")
+            except Exception as e:
+                logger.error(f"Failed to migrate database: {e}")
 
     for folder_name in ('uploads', 'recordings'):
         old_dir = os.path.join(BASE_DIR, folder_name)
@@ -53,6 +122,9 @@ def _migrate_old_data():
                 logger.info(f"Migrated {folder_name}: {old_dir} -> {new_dir}")
             except Exception as e:
                 logger.error(f"Failed to migrate {folder_name}: {e}")
+
+    if need_path_fix and os.path.exists(new_db):
+        _fix_db_paths(new_db, BASE_DIR, DATA_DIR)
 
 
 _migrate_old_data()

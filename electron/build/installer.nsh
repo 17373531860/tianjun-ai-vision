@@ -3,6 +3,10 @@
   ; Pre-install: backup user data BEFORE old uninstaller runs
   ; This prevents data loss when updating from an older version
   ; that stored data inside the installation directory.
+  ;
+  ; Uses * (not *.*) so that subdirectories like models/, sessions/
+  ; are also copied.  Merges into existing AppData (does NOT skip
+  ; when the destination already has some files).
   ; ============================================================
 
   ; Read the old installation path from the registry
@@ -11,7 +15,7 @@
     StrCpy $1 "$APPDATA\tianjun-ai-vision"
     CreateDirectory "$1"
 
-    ; Backup database
+    ; Backup database (only if source exists and dest does not)
     ${If} ${FileExists} "$0\resources\backend\sql_app.db"
       ${IfNot} ${FileExists} "$1\sql_app.db"
         CopyFiles /SILENT "$0\resources\backend\sql_app.db" "$1\sql_app.db"
@@ -19,27 +23,19 @@
       ${EndIf}
     ${EndIf}
 
-    ; Backup uploads folder (models, images, videos)
-    ${If} ${FileExists} "$0\resources\backend\uploads\*.*"
-      ${IfNot} ${FileExists} "$1\uploads\*.*"
-        CreateDirectory "$1\uploads"
-        CopyFiles /SILENT "$0\resources\backend\uploads\*.*" "$1\uploads"
-        DetailPrint "Backed up uploads to $1\uploads"
-      ${EndIf}
+    ; Backup uploads folder (models, images, videos) — merge into dest
+    ${If} ${FileExists} "$0\resources\backend\uploads\*"
+      CreateDirectory "$1\uploads"
+      CopyFiles /SILENT "$0\resources\backend\uploads\*" "$1\uploads"
+      DetailPrint "Backed up uploads to $1\uploads"
     ${EndIf}
 
-    ; Backup recordings folder
-    ${If} ${FileExists} "$0\resources\backend\recordings\*.*"
-      ${IfNot} ${FileExists} "$1\recordings\*.*"
-        CreateDirectory "$1\recordings"
-        CopyFiles /SILENT "$0\resources\backend\recordings\*.*" "$1\recordings"
-        DetailPrint "Backed up recordings to $1\recordings"
-      ${EndIf}
+    ; Backup recordings folder — merge into dest
+    ${If} ${FileExists} "$0\resources\backend\recordings\*"
+      CreateDirectory "$1\recordings"
+      CopyFiles /SILENT "$0\resources\backend\recordings\*" "$1\recordings"
+      DetailPrint "Backed up recordings to $1\recordings"
     ${EndIf}
-
-    ; Also check if data is already in AppData from a newer version
-    ; (e.g. upgrading from a version that already used TIANJUN_DATA_DIR)
-    ; In that case, data is already safe - do nothing.
   ${EndIf}
 
   ; Also check installation directory passed by the user (for custom paths)
@@ -51,20 +47,16 @@
     ${EndIf}
   ${EndIf}
 
-  ${If} ${FileExists} "$INSTDIR\resources\backend\uploads\*.*"
+  ${If} ${FileExists} "$INSTDIR\resources\backend\uploads\*"
     StrCpy $1 "$APPDATA\tianjun-ai-vision"
     CreateDirectory "$1\uploads"
-    ${IfNot} ${FileExists} "$1\uploads\*.*"
-      CopyFiles /SILENT "$INSTDIR\resources\backend\uploads\*.*" "$1\uploads"
-    ${EndIf}
+    CopyFiles /SILENT "$INSTDIR\resources\backend\uploads\*" "$1\uploads"
   ${EndIf}
 
-  ${If} ${FileExists} "$INSTDIR\resources\backend\recordings\*.*"
+  ${If} ${FileExists} "$INSTDIR\resources\backend\recordings\*"
     StrCpy $1 "$APPDATA\tianjun-ai-vision"
     CreateDirectory "$1\recordings"
-    ${IfNot} ${FileExists} "$1\recordings\*.*"
-      CopyFiles /SILENT "$INSTDIR\resources\backend\recordings\*.*" "$1\recordings"
-    ${EndIf}
+    CopyFiles /SILENT "$INSTDIR\resources\backend\recordings\*" "$1\recordings"
   ${EndIf}
 !macroend
 

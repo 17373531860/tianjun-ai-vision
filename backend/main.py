@@ -111,36 +111,76 @@ def fix_orphan_sessions():
         traceback.print_exc()
 
 def migrate_data_to_external_dir():
-    """首次升级时，将旧安装目录中的数据迁移到外部数据目录"""
-    from backend.core.config import BASE_DIR, DATA_DIR
+    """Migrate data from old install directory to external data directory.
+
+    Handles the case where create_all already made an empty DB in DATA_DIR
+    by checking whether the existing DB is empty before skipping.
+    After copying files, rewrites absolute paths stored in the database.
+    """
+    from backend.core.config import BASE_DIR, DATA_DIR, _is_empty_db, _fix_db_paths
     if os.path.abspath(DATA_DIR) == os.path.abspath(BASE_DIR):
         return
     
     old_db = os.path.join(BASE_DIR, 'sql_app.db')
     new_db = os.path.join(DATA_DIR, 'sql_app.db')
+    need_path_fix = False
     
-    if os.path.exists(old_db) and not os.path.exists(new_db):
-        print(f"[数据迁移] 检测到旧数据，开始迁移: {BASE_DIR} -> {DATA_DIR}")
-        import shutil
-        try:
-            os.makedirs(DATA_DIR, exist_ok=True)
-            shutil.copy2(old_db, new_db)
-            print(f"[数据迁移] 数据库已迁移")
-            
-            for subdir in ['uploads', 'recordings']:
-                old_path = os.path.join(BASE_DIR, subdir)
-                new_path = os.path.join(DATA_DIR, subdir)
-                if os.path.isdir(old_path) and not os.path.exists(new_path):
-                    shutil.copytree(old_path, new_path)
-                    print(f"[数据迁移] {subdir}/ 已迁移")
-            
-            print("[数据迁移] 迁移完成")
-        except Exception as e:
-            print(f"[数据迁移] 迁移失败: {e}")
-            import traceback
-            traceback.print_exc()
+    if os.path.exists(old_db):
+        should_copy = not os.path.exists(new_db) or _is_empty_db(new_db)
+        if should_copy:
+            print(f"[数据迁移] 检测到旧数据，开始迁移: {BASE_DIR} -> {DATA_DIR}")
+            import shutil
+            try:
+                os.makedirs(DATA_DIR, exist_ok=True)
+                shutil.copy2(old_db, new_db)
+                need_path_fix = True
+                print(f"[数据迁移] 数据库已迁移")
+            except Exception as e:
+                print(f"[数据迁移] 数据库迁移失败: {e}")
+                import traceback
+                traceback.print_exc()
+
+    import shutil
+    for subdir in ['uploads', 'recordings']:
+        old_path = os.path.join(BASE_DIR, subdir)
+        new_path = os.path.join(DATA_DIR, subdir)
+        if os.path.isdir(old_path):
+            os.makedirs(new_path, exist_ok=True)
+            try:
+                for item in os.listdir(old_path):
+                    src = os.path.join(old_path, item)
+                    dst = os.path.join(new_path, item)
+                    if os.path.exists(dst):
+                        continue
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst)
+                    else:
+                        shutil.copy2(src, dst)
+                print(f"[数据迁移] {subdir}/ 已迁移")
+            except Exception as e:
+                print(f"[数据迁移] {subdir}/ 迁移失败: {e}")
+
+    if need_path_fix and os.path.exists(new_db):
+        _fix_db_paths(new_db, BASE_DIR, DATA_DIR)
+        print("[数据迁移] 数据库路径已修复")
+    
+    print("[数据迁移] 迁移完成")
 
 migrate_data_to_external_dir()
+
+# Always fix stale absolute paths that reference the install directory.
+# This catches the case where NSIS backed up the DB to AppData but the
+# file_path column still points to the old install location.
+def _fixup_stale_paths():
+    from backend.core.config import BASE_DIR, DATA_DIR, _fix_db_paths
+    if os.path.abspath(DATA_DIR) == os.path.abspath(BASE_DIR):
+        return
+    db_path = os.path.join(DATA_DIR, 'sql_app.db')
+    if os.path.exists(db_path):
+        _fix_db_paths(db_path, BASE_DIR, DATA_DIR)
+
+_fixup_stale_paths()
+
 migrate_database()
 fix_orphan_sessions()
 
