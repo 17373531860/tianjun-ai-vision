@@ -271,6 +271,7 @@ class SessionResponse(BaseModel):
     max_cycle_time: Optional[float] = None
     video_id: Optional[str] = None
     status: str = "running"
+    channel_id: int = 0
 
     class Config:
         from_attributes = True
@@ -437,6 +438,7 @@ def list_sessions(
     date: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    channel_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db)
@@ -446,6 +448,9 @@ def list_sessions(
     
     if project_id:
         query = query.filter(DetectionSession.project_id == project_id)
+    
+    if channel_id is not None:
+        query = query.filter(DetectionSession.channel_id == channel_id)
     
     if date:
         # 单日查询
@@ -476,7 +481,8 @@ def list_sessions(
             min_cycle_time=session.min_cycle_time,
             max_cycle_time=session.max_cycle_time,
             video_id=session.video_id,
-            status=session.status
+            status=session.status,
+            channel_id=getattr(session, 'channel_id', 0) or 0
         ))
     
     return result
@@ -487,6 +493,7 @@ def get_session_dates(
     project_id: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    channel_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     """获取有会话记录的日期列表"""
@@ -494,6 +501,8 @@ def get_session_dates(
     
     if project_id:
         query = query.filter(DetectionSession.project_id == project_id)
+    if channel_id is not None:
+        query = query.filter(DetectionSession.channel_id == channel_id)
     if start_date:
         query = query.filter(DetectionSession.start_time >= start_date)
     if end_date:
@@ -510,6 +519,7 @@ def get_sessions_by_date(
     project_id: Optional[int] = None,
     start_hour: Optional[str] = None,
     end_hour: Optional[str] = None,
+    channel_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     """获取指定日期的会话概览"""
@@ -517,6 +527,9 @@ def get_sessions_by_date(
     
     if project_id:
         query = query.filter(DetectionSession.project_id == project_id)
+    
+    if channel_id is not None:
+        query = query.filter(DetectionSession.channel_id == channel_id)
     
     if start_hour and end_hour:
         time_col = func.strftime('%H:%M', DetectionSession.start_time)

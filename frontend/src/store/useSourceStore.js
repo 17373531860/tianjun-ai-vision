@@ -8,13 +8,13 @@ export const useSourceStore = defineStore('source', {
     cameraSettings: {
       deviceIndex: 0,
       resolution: '1280x720',
-      fps: 30
+      fps: 60
     },
     // 海康工业相机设置
     hikvisionSettings: {
       deviceIndex: 0,
       resolution: '1280x720',
-      fps: 30
+      fps: 60
     },
     // 视频设置
     videoPath: null,

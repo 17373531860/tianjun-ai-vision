@@ -51,8 +51,26 @@
 
         <!-- Logic Mode Context (Shows when Logic Tab is active) -->
         <div v-if="activeProject && activeTab === 'logic'" class="h-1/2 bg-slate-900 rounded-lg border border-slate-700 flex flex-col overflow-hidden">
-          <div class="p-3 border-b border-slate-800 bg-slate-950/50 font-bold text-white">检测逻辑模式</div>
+          <div class="p-3 border-b border-slate-800 bg-slate-950/50 font-bold text-white">任务类型与逻辑模式</div>
           <div class="flex-1 overflow-y-auto p-4 custom-scrollbar">
+            <!-- Task Type Selector -->
+            <div class="mb-4 p-3 bg-slate-800 rounded border border-slate-700">
+              <span class="text-sm font-bold text-cyan-400 block mb-2">任务类型</span>
+              <div class="flex gap-3">
+                <label class="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded transition-colors" :class="activeProject.task_type === 'detection' ? 'bg-cyan-600/20 border border-cyan-500' : 'bg-slate-700 border border-slate-600 hover:border-cyan-500/50'">
+                  <input type="radio" v-model="activeProject.task_type" value="detection" class="accent-cyan-500">
+                  <span class="text-sm text-white">目标检测</span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded transition-colors" :class="activeProject.task_type === 'segmentation' ? 'bg-cyan-600/20 border border-cyan-500' : 'bg-slate-700 border border-slate-600 hover:border-cyan-500/50'">
+                  <input type="radio" v-model="activeProject.task_type" value="segmentation" class="accent-cyan-500">
+                  <span class="text-sm text-white">图像分割</span>
+                </label>
+              </div>
+              <p class="text-[11px] text-gray-500 mt-1">{{ activeProject.task_type === 'segmentation' ? '使用实例分割模型，提供像素级轮廓' : '使用目标检测模型，提供边界框' }}。跟踪模式下自动适配。</p>
+            </div>
+
+            <!-- Logic Mode Options -->
+            <span class="text-sm font-bold text-cyan-400 block mb-2">逻辑模式</span>
             <div class="space-y-3">
               <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
                 <input type="radio" v-model="activeProject.logic_mode" value="sequential" class="mt-1 accent-cyan-500">
@@ -75,6 +93,14 @@
                 <div class="ml-3 flex-1">
                   <span class="font-bold text-white block">自定义模式</span>
                   <span class="text-xs text-gray-400 block mt-1">基于顺序/检测模式，可添加自定义条件触发特定事件</span>
+                </div>
+              </label>
+
+              <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
+                <input type="radio" v-model="activeProject.logic_mode" value="tracking" class="mt-1 accent-cyan-500">
+                <div class="ml-3 flex-1">
+                  <span class="font-bold text-white block">跟踪模式</span>
+                  <span class="text-xs text-gray-400 block mt-1">{{ activeProject.task_type === 'segmentation' ? '分割+跟踪' : '检测+跟踪' }}：为每个物品分配ID(A1,A2,B1...)，支持装箱清点与数量校验</span>
                 </div>
               </label>
             </div>
@@ -138,7 +164,7 @@
                     <el-form-item label="任务类型">
                       <el-select v-model="activeProject.task_type" class="w-full">
                         <el-option label="目标检测 (Object Detection)" value="detection" />
-                        <el-option label="语义分割" value="segmentation" disabled />
+                        <el-option label="图像分割 (Instance Segmentation)" value="segmentation" />
                       </el-select>
                     </el-form-item>
                   </el-form>
@@ -535,6 +561,94 @@
                 </div>
               </el-card>
 
+              <!-- Tracking Mode Config -->
+              <el-card v-if="activeProject.logic_mode === 'tracking'" shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header><span class="font-bold text-white">跟踪模式 - 物品清点配置</span></template>
+                <div class="space-y-4 text-sm text-gray-300">
+                  <p class="text-xs text-gray-400">
+                    使用{{ activeProject.task_type === 'segmentation' ? '分割+跟踪' : '检测+跟踪' }}为每个物品分配唯一ID，配合周期结束策略进行数量校验。
+                  </p>
+
+                  <el-form label-position="top">
+                    <!-- Cycle End Strategy -->
+                    <el-form-item label="周期结束策略">
+                      <el-select v-model="activeProject.tracking_cycle_strategy" class="w-full">
+                        <el-option label="全部消失 — 物品全部离开画面后结算" value="all_gone" />
+                        <el-option label="触发标签 — 检测到指定动作后结算" value="trigger" />
+                        <el-option label="ROI离开 — 物品离开检测区域后结算" value="roi_exit" />
+                      </el-select>
+                    </el-form-item>
+
+                    <!-- Trigger label (only when strategy=trigger) -->
+                    <el-form-item v-if="activeProject.tracking_cycle_strategy === 'trigger'" label="触发标签">
+                      <el-select v-model="activeProject.tracking_trigger_label" class="w-full" placeholder="选择触发清点的标签">
+                        <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
+                      </el-select>
+                      <p class="text-xs text-gray-500 mt-1">检测到此标签持续出现时触发结算</p>
+                    </el-form-item>
+
+                    <el-form-item v-if="activeProject.tracking_cycle_strategy === 'trigger'" label="触发确认帧数">
+                      <el-input-number v-model="activeProject.tracking_trigger_min_frames" :min="1" :max="300" :step="5" />
+                      <p class="text-xs text-gray-500 mt-1">触发标签需连续检测到的帧数</p>
+                    </el-form-item>
+
+                    <!-- Gone confirm frames (for all_gone / roi_exit) -->
+                    <el-form-item v-if="activeProject.tracking_cycle_strategy !== 'trigger'" label="消失确认帧数">
+                      <el-input-number v-model="activeProject.tracking_gone_confirm_frames" :min="5" :max="300" :step="5" />
+                      <p class="text-xs text-gray-500 mt-1">物品消失后需连续确认的帧数（避免短暂遮挡误判）</p>
+                    </el-form-item>
+
+                    <!-- Max lost seconds -->
+                    <el-form-item label="遮挡容忍(秒)">
+                      <el-input-number v-model="activeProject.tracking_max_lost_seconds" :min="0.5" :max="30" :step="0.5" :precision="1" />
+                      <p class="text-xs text-gray-500 mt-1">物品被短暂遮挡后保持跟踪的最长时间</p>
+                    </el-form-item>
+
+                    <!-- Order check -->
+                    <el-form-item label="顺序检查">
+                      <el-switch v-model="activeProject.tracking_check_order" active-text="启用" inactive-text="关闭" />
+                      <p class="text-xs text-gray-500 mt-1">启用后将按放入顺序与期望清单对比</p>
+                    </el-form-item>
+
+                    <!-- Expected items list -->
+                    <el-form-item label="期望物品清单">
+                      <div class="bg-slate-900 rounded p-3 space-y-2">
+                        <div v-for="(item, idx) in activeProject.counting_expected_list" :key="idx" class="flex items-center gap-2 bg-slate-800 p-2 rounded">
+                          <el-select v-model="item.label" size="small" class="flex-1" placeholder="选择物品标签">
+                            <el-option v-for="s in countableSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
+                          </el-select>
+                          <span class="text-gray-400">×</span>
+                          <el-input-number v-model="item.count" size="small" :min="1" :max="99" :step="1" />
+                          <el-button type="danger" size="small" link @click="activeProject.counting_expected_list.splice(idx, 1)">删除</el-button>
+                        </div>
+                        <el-button type="primary" size="small" @click="activeProject.counting_expected_list.push({label: '', count: 1})">+ 添加物品</el-button>
+                      </div>
+                    </el-form-item>
+
+                    <!-- ROI config — polygon drawing -->
+                    <el-form-item label="检测区域 (ROI)">
+                      <div class="bg-slate-900 rounded p-3 space-y-3">
+                        <div class="flex items-center gap-3">
+                          <el-button type="primary" size="small" @click="openRoiEditor">
+                            {{ activeProject.tracking_roi_polygon?.length > 2 ? '重新绘制 ROI' : '设置 ROI 区域' }}
+                          </el-button>
+                          <el-button v-if="activeProject.tracking_roi_polygon?.length > 2" type="danger" size="small" plain @click="activeProject.tracking_roi_polygon = []">清除</el-button>
+                          <span v-if="activeProject.tracking_roi_polygon?.length > 2" class="text-xs text-green-400">
+                            已设置 {{ activeProject.tracking_roi_polygon.length }} 个顶点
+                          </span>
+                          <span v-else class="text-xs text-gray-500">未设置（全画面有效）</span>
+                        </div>
+                        <!-- Mini preview of current ROI -->
+                        <div v-if="activeProject.tracking_roi_polygon?.length > 2" class="relative w-full h-32 bg-slate-800 rounded border border-slate-700 overflow-hidden">
+                          <canvas ref="roiPreviewCanvas" class="w-full h-full"></canvas>
+                        </div>
+                        <p class="text-xs text-gray-500">在摄像头画面上绘制多边形区域，仅区域内的物品参与跟踪计数</p>
+                      </div>
+                    </el-form-item>
+                  </el-form>
+                </div>
+              </el-card>
+
               <!-- NG Cycle Protection -->
               <el-card v-if="activeProject.logic_mode === 'sequential' || activeProject.logic_mode === 'custom'" shadow="never" class="bg-slate-800 border-slate-700">
                 <template #header><span class="font-bold text-white">NG 周期保护</span></template>
@@ -547,8 +661,8 @@
                 </div>
               </el-card>
 
-              <!-- Simultaneous Groups Config (适用于所有模式) -->
-              <el-card shadow="never" class="bg-slate-800 border-slate-700">
+              <!-- Simultaneous Groups Config (不适用于跟踪模式) -->
+              <el-card v-if="activeProject.logic_mode !== 'tracking'" shadow="never" class="bg-slate-800 border-slate-700">
                 <template #header>
                   <div class="flex justify-between items-center">
                     <span class="font-bold text-white">同时出现组</span>
@@ -692,6 +806,7 @@
             <el-option label="顺序模式" value="sequential" />
             <el-option label="检测模式" value="detection" />
             <el-option label="自定义模式" value="custom" />
+            <el-option label="跟踪模式" value="tracking" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -719,17 +834,43 @@
       </div>
     </el-dialog>
 
+    <!-- ROI Polygon Editor Dialog -->
+    <el-dialog v-model="roiEditorVisible" title="绘制 ROI 检测区域" width="80%" :close-on-click-modal="false" destroy-on-close class="roi-editor-dialog">
+      <div class="space-y-3">
+        <div class="flex items-center gap-3 text-sm">
+          <span class="text-gray-400">单击添加顶点，点击<b class="text-amber-400">第一个点</b>闭合多边形（靠近时会变绿）。闭合后再次单击可重新绘制</span>
+          <div class="flex-1"></div>
+          <el-button size="small" @click="roiUndoPoint" :disabled="roiPoints.length === 0">撤销上一点</el-button>
+          <el-button size="small" type="warning" @click="roiClearPoints" :disabled="roiPoints.length === 0">清除全部</el-button>
+          <el-button size="small" type="success" @click="roiFinishPolygon" :disabled="roiPoints.length < 3">完成绘制</el-button>
+        </div>
+        <div class="relative bg-black rounded overflow-hidden flex justify-center" style="max-height: 70vh;">
+          <canvas ref="roiEditorCanvas" class="cursor-crosshair" style="max-width: 100%; max-height: 70vh; object-fit: contain;"
+            @click="roiCanvasClick" @dblclick="roiCanvasDblClick" @mousemove="roiCanvasMouseMove"></canvas>
+        </div>
+        <div class="flex items-center gap-2 text-xs text-gray-500">
+          <span>顶点数: {{ roiPoints.length }}</span>
+          <span v-if="roiPolygonClosed" class="text-green-400 font-bold">多边形已闭合</span>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="roiEditorVisible = false">取消</el-button>
+        <el-button type="primary" @click="roiSave" :disabled="roiPoints.length < 3">保存 ROI</el-button>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu } from '@element-plus/icons-vue';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjects, getProjectDetail, createProject, updateProject, deleteProject, activateProject } from '@/api/project';
 import { getModels } from '@/api/model';
+import { getBackendHost } from '@/api/index';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
@@ -760,6 +901,11 @@ const enabledSteps = computed(() => {
 
 const nonBackupSteps = computed(() => {
   return enabledSteps.value.filter(s => !s.backup_for);
+});
+
+const countableSteps = computed(() => {
+  const trigger = activeProject.value?.tracking_trigger_label || '';
+  return nonBackupSteps.value.filter(s => s.label !== trigger);
 });
 
 // 默认计数器（前3个）
@@ -839,6 +985,237 @@ const getLabelsCount = (labels) => {
   }
 };
 
+// ======================== ROI Polygon Editor ========================
+const roiEditorVisible = ref(false);
+const roiEditorCanvas = ref(null);
+const roiPreviewCanvas = ref(null);
+const roiPoints = ref([]);
+const roiPolygonClosed = ref(false);
+let roiImage = null;
+let roiMousePos = null;
+
+const openRoiEditor = async () => {
+  roiPoints.value = [];
+  roiPolygonClosed.value = false;
+  roiMousePos = null;
+  roiEditorVisible.value = true;
+  await nextTick();
+  setTimeout(() => loadRoiSnapshot(), 200);
+};
+
+const loadRoiSnapshot = () => {
+  const canvas = roiEditorCanvas.value;
+  if (!canvas) return;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  const host = getBackendHost();
+  img.src = `${host}/snapshot?channel=0&t=${Date.now()}`;
+  img.onload = () => {
+    roiImage = img;
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    roiRedraw();
+  };
+  img.onerror = () => {
+    const ctx = canvas.getContext('2d');
+    canvas.width = 640;
+    canvas.height = 480;
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(0, 0, 640, 480);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '16px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('无法获取摄像头画面，请确保摄像头已连接', 320, 240);
+    roiImage = null;
+  };
+};
+
+const roiGetCanvasXY = (e) => {
+  const canvas = roiEditorCanvas.value;
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY
+  };
+};
+
+const ROI_CLOSE_RADIUS = 15;
+
+const roiCanvasClick = (e) => {
+  if (roiPolygonClosed.value) {
+    roiPoints.value = [];
+    roiPolygonClosed.value = false;
+    roiRedraw();
+    return;
+  }
+  const pt = roiGetCanvasXY(e);
+  if (!pt) return;
+
+  if (roiPoints.value.length >= 3) {
+    const first = roiPoints.value[0];
+    const canvas = roiEditorCanvas.value;
+    const rect = canvas.getBoundingClientRect();
+    const scale = canvas.width / rect.width;
+    const dist = Math.sqrt((pt.x - first.x) ** 2 + (pt.y - first.y) ** 2);
+    if (dist < ROI_CLOSE_RADIUS * scale) {
+      roiPolygonClosed.value = true;
+      roiRedraw();
+      return;
+    }
+  }
+
+  roiPoints.value.push(pt);
+  roiRedraw();
+};
+
+const roiCanvasDblClick = (e) => {
+  e.preventDefault();
+  if (roiPoints.value.length >= 3 && !roiPolygonClosed.value) {
+    roiPolygonClosed.value = true;
+    roiRedraw();
+  }
+};
+
+const roiCanvasMouseMove = (e) => {
+  if (roiPolygonClosed.value) return;
+  roiMousePos = roiGetCanvasXY(e);
+  roiRedraw();
+};
+
+const roiUndoPoint = () => {
+  if (roiPolygonClosed.value) {
+    roiPolygonClosed.value = false;
+  } else {
+    roiPoints.value.pop();
+  }
+  roiRedraw();
+};
+
+const roiClearPoints = () => {
+  roiPoints.value = [];
+  roiPolygonClosed.value = false;
+  roiMousePos = null;
+  roiRedraw();
+};
+
+const roiFinishPolygon = () => {
+  if (roiPoints.value.length >= 3) {
+    roiPolygonClosed.value = true;
+    roiRedraw();
+  }
+};
+
+const roiRedraw = () => {
+  const canvas = roiEditorCanvas.value;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (roiImage) {
+    ctx.drawImage(roiImage, 0, 0);
+  }
+
+  const pts = roiPoints.value;
+  if (pts.length === 0) return;
+
+  if (roiPolygonClosed.value && pts.length >= 3) {
+    ctx.fillStyle = 'rgba(0, 200, 255, 0.15)';
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.strokeStyle = '#00c8ff';
+  ctx.lineWidth = 2;
+  ctx.setLineDash(roiPolygonClosed.value ? [] : [6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  if (roiPolygonClosed.value) ctx.closePath();
+  else if (roiMousePos) ctx.lineTo(roiMousePos.x, roiMousePos.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const nearFirst = !roiPolygonClosed.value && pts.length >= 3 && roiMousePos &&
+    Math.sqrt((roiMousePos.x - pts[0].x) ** 2 + (roiMousePos.y - pts[0].y) ** 2) < ROI_CLOSE_RADIUS * (canvas.width / (canvas.getBoundingClientRect().width || 1));
+
+  pts.forEach((pt, i) => {
+    const isFirst = i === 0;
+    const radius = isFirst && nearFirst ? 10 : 5;
+    ctx.fillStyle = isFirst ? (nearFirst ? '#22c55e' : '#f59e0b') : '#00c8ff';
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    if (isFirst && nearFirst) {
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 11px Arial';
+    ctx.fillText(isFirst && nearFirst ? '点击闭合' : `${i + 1}`, pt.x + 8, pt.y - 4);
+  });
+};
+
+const roiSave = () => {
+  if (!activeProject.value || roiPoints.value.length < 3) return;
+  const canvas = roiEditorCanvas.value;
+  const w = canvas?.width || 1;
+  const h = canvas?.height || 1;
+  activeProject.value.tracking_roi_polygon = roiPoints.value.map(pt => [
+    Math.round((pt.x / w) * 10000) / 10000,
+    Math.round((pt.y / h) * 10000) / 10000
+  ]);
+  roiEditorVisible.value = false;
+  ElMessage.success('ROI 区域已保存');
+  nextTick(() => drawRoiPreview());
+};
+
+const drawRoiPreview = () => {
+  const canvas = roiPreviewCanvas.value;
+  if (!canvas || !activeProject.value?.tracking_roi_polygon?.length) return;
+  const parent = canvas.parentElement;
+  if (parent) { canvas.width = parent.offsetWidth; canvas.height = parent.offsetHeight; }
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const poly = activeProject.value.tracking_roi_polygon;
+  if (poly.length < 3) return;
+
+  ctx.fillStyle = 'rgba(0, 200, 255, 0.2)';
+  ctx.strokeStyle = '#00c8ff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(poly[0][0] * canvas.width, poly[0][1] * canvas.height);
+  for (let i = 1; i < poly.length; i++) {
+    ctx.lineTo(poly[i][0] * canvas.width, poly[i][1] * canvas.height);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  poly.forEach((pt, i) => {
+    ctx.fillStyle = i === 0 ? '#f59e0b' : '#00c8ff';
+    ctx.beginPath();
+    ctx.arc(pt[0] * canvas.width, pt[1] * canvas.height, 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+};
+
+// Redraw preview when polygon changes or when the card becomes visible
+watch(() => activeProject.value?.tracking_roi_polygon, () => {
+  nextTick(() => drawRoiPreview());
+}, { deep: true });
+
+// ======================== End ROI Editor ========================
+
 // 初始化项目默认配置
 const initProjectDefaults = (project) => {
   if (!project.steps_config) project.steps_config = [];
@@ -910,6 +1287,33 @@ const initProjectDefaults = (project) => {
   // 同时出现组
   if (project.simultaneous_groups === undefined) {
     project.simultaneous_groups = pipelineConfig.simultaneous_groups || [];
+  }
+  // Tracking mode
+  if (project.tracking_cycle_strategy === undefined) {
+    project.tracking_cycle_strategy = pipelineConfig.tracking_cycle_strategy || 'all_gone';
+  }
+  if (project.tracking_trigger_label === undefined) {
+    project.tracking_trigger_label = pipelineConfig.tracking_trigger_label || '';
+  }
+  if (project.tracking_trigger_min_frames === undefined) {
+    project.tracking_trigger_min_frames = pipelineConfig.tracking_trigger_min_frames || 15;
+  }
+  if (project.tracking_gone_confirm_frames === undefined) {
+    project.tracking_gone_confirm_frames = pipelineConfig.tracking_gone_confirm_frames || 30;
+  }
+  if (project.tracking_max_lost_seconds === undefined) {
+    project.tracking_max_lost_seconds = pipelineConfig.tracking_max_lost_seconds || 5.0;
+  }
+  if (project.tracking_check_order === undefined) {
+    project.tracking_check_order = pipelineConfig.tracking_check_order || false;
+  }
+  if (project.counting_expected_list === undefined) {
+    const items = pipelineConfig.counting_expected_items || {};
+    project.counting_expected_list = Object.entries(items).map(([label, count]) => ({ label, count }));
+  }
+  if (project.tracking_roi_polygon === undefined) {
+    const roi = pipelineConfig.tracking_roi || {};
+    project.tracking_roi_polygon = roi.polygon || [];
   }
   
   // 同步到 pipeline_config，供UI使用
@@ -1019,7 +1423,25 @@ const handleSaveProject = async () => {
         simultaneous_groups: (activeProject.value.simultaneous_groups || []).map(g => ({
           ...g,
           labels: (g.priority_order || []).filter(l => l)
-        }))
+        })),
+        tracking_cycle_strategy: activeProject.value.tracking_cycle_strategy || 'all_gone',
+        tracking_trigger_label: activeProject.value.tracking_trigger_label || '',
+        tracking_trigger_min_frames: activeProject.value.tracking_trigger_min_frames || 15,
+        tracking_gone_confirm_frames: activeProject.value.tracking_gone_confirm_frames || 30,
+        tracking_max_lost_seconds: activeProject.value.tracking_max_lost_seconds || 5.0,
+        tracking_gone_threshold: 0,
+        tracking_check_order: activeProject.value.tracking_check_order || false,
+        tracking_expected_order: activeProject.value.tracking_check_order
+          ? (activeProject.value.counting_expected_list || []).flatMap(item => Array(item.count || 1).fill(item.label)).filter(Boolean)
+          : [],
+        counting_expected_items: (activeProject.value.counting_expected_list || []).reduce((acc, item) => {
+          if (item.label) acc[item.label] = item.count || 1;
+          return acc;
+        }, {}),
+        tracking_roi: {
+          enabled: (activeProject.value.tracking_roi_polygon || []).length >= 3,
+          polygon: activeProject.value.tracking_roi_polygon || []
+        }
       }
     };
     await updateProject(activeProject.value.id, data);

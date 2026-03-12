@@ -22,39 +22,21 @@ function execSafe(cmd) {
   try { return execSync(cmd, { timeout: 5000, encoding: 'utf-8' }).trim(); } catch { return ''; }
 }
 
-function getPhysicalMac() {
-  if (process.platform === 'win32') {
-    const raw = execSafe('wmic nic where "NetConnectionStatus=2" get MACAddress /value');
-    const match = raw.match(/MACAddress=([0-9A-Fa-f:]+)/);
-    if (match) return match[1].toLowerCase();
-  }
-  const nets = os.networkInterfaces();
-  for (const [name, addrs] of Object.entries(nets)) {
-    if (/^(docker|br-|veth|vmnet|vbox|lo)/.test(name)) continue;
-    for (const a of addrs) {
-      if (!a.internal && a.mac && a.mac !== '00:00:00:00:00:00') return a.mac;
-    }
-  }
-  return '';
-}
-
-function getHardwareFingerprint() {
+function getStableFingerprint() {
   const parts = [];
 
   if (process.platform === 'win32') {
-    parts.push(execSafe('wmic baseboard get product /value').replace('Product=', ''));
-    parts.push(execSafe('wmic baseboard get serialnumber /value').replace('SerialNumber=', ''));
-    parts.push(execSafe('wmic bios get smbiosbiosversion /value').replace('SMBIOSBIOSVersion=', ''));
-    parts.push(execSafe('wmic csproduct get uuid /value').replace('UUID=', ''));
+    parts.push(execSafe('wmic baseboard get product /value').replace(/Product=/i, '').trim());
+    parts.push(execSafe('wmic csproduct get uuid /value').replace(/UUID=/i, '').trim());
   } else {
     parts.push(readFileSafe('/sys/class/dmi/id/board_name'));
     parts.push(readFileSafe('/sys/class/dmi/id/board_vendor'));
-    parts.push(readFileSafe('/sys/class/dmi/id/bios_version'));
-    parts.push(execSafe('sudo cat /sys/class/dmi/id/board_serial 2>/dev/null'));
-    parts.push(execSafe('sudo cat /sys/class/dmi/id/product_uuid 2>/dev/null'));
+    let uuid = readFileSafe('/sys/class/dmi/id/product_uuid');
+    if (!uuid) uuid = execSafe('cat /sys/class/dmi/id/product_uuid 2>/dev/null');
+    if (!uuid) uuid = execSafe('sudo cat /sys/class/dmi/id/product_uuid 2>/dev/null');
+    parts.push(uuid);
   }
 
-  parts.push(getPhysicalMac());
   parts.push(os.cpus()[0]?.model || '');
 
   return parts.filter(Boolean).join('|');
@@ -91,12 +73,49 @@ class LicenseManager {
   getMachineId() {
     if (this._machineId) return this._machineId;
 
-    const fp = getHardwareFingerprint();
-    const hash = crypto.createHash('sha256').update(fp).digest('hex');
+    const cacheFile = path.join(this.userDataPath, 'machine_id.txt');
+    const verifyFile = path.join(this.userDataPath, 'hw_verify.txt');
+
+    const stableFp = getStableFingerprint();
+    const verifyHash = crypto.createHash('sha256').update(stableFp).digest('hex').substring(0, 16);
+
+    try {
+      if (fs.existsSync(cacheFile)) {
+        const cached = fs.readFileSync(cacheFile, 'utf-8').trim();
+        if (cached && cached.startsWith('TJ-') && cached.length >= 10) {
+          if (fs.existsSync(verifyFile)) {
+            const storedVerify = fs.readFileSync(verifyFile, 'utf-8').trim();
+            if (storedVerify !== verifyHash) {
+              console.log('[License] Hardware verification mismatch — cache from different machine, regenerating');
+            } else {
+              this._machineId = cached;
+              console.log(`[License] Machine ID (cached, verified): ${this._machineId}`);
+              return this._machineId;
+            }
+          } else {
+            try { fs.writeFileSync(verifyFile, verifyHash, 'utf-8'); } catch {}
+            this._machineId = cached;
+            console.log(`[License] Machine ID (cached, verify file created): ${this._machineId}`);
+            return this._machineId;
+          }
+        }
+      }
+    } catch {}
+
+    const hash = crypto.createHash('sha256').update(stableFp).digest('hex');
     this._machineId = 'TJ-' + hash.substring(0, 12).toUpperCase();
 
-    console.log(`[License] Hardware fingerprint components: ${fp.substring(0, 80)}...`);
-    console.log(`[License] Machine ID: ${this._machineId}`);
+    console.log(`[License] Stable fingerprint: ${stableFp.substring(0, 80)}...`);
+    console.log(`[License] Machine ID (new): ${this._machineId}`);
+
+    try {
+      fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+      fs.writeFileSync(cacheFile, this._machineId, 'utf-8');
+      fs.writeFileSync(verifyFile, verifyHash, 'utf-8');
+      console.log(`[License] Machine ID + verify hash cached`);
+    } catch (err) {
+      console.warn(`[License] Failed to cache: ${err.message}`);
+    }
 
     return this._machineId;
   }

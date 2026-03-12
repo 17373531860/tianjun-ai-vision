@@ -58,6 +58,14 @@
                 <el-time-picker v-model="customEndHour" size="small" placeholder="结束" format="HH:mm" value-format="HH:mm" class="flex-1" @change="handleShiftChange" />
               </div>
             </div>
+            <!-- Workstation / Channel filter -->
+            <div v-if="totalChannelCount > 1">
+              <div class="text-xs text-gray-500 mb-1.5">工位筛选</div>
+              <el-select v-model="channelFilter" size="small" class="w-full" clearable placeholder="全部工位" @change="handleChannelFilterChange">
+                <el-option label="全部工位" :value="null" />
+                <el-option v-for="ch in totalChannelCount" :key="ch - 1" :label="`工位 ${ch}`" :value="ch - 1" />
+              </el-select>
+            </div>
             <div v-if="availableDates.length > 0" class="flex items-center justify-between text-xs pt-1 border-t border-slate-800">
               <span class="text-gray-500">有数据的日期</span>
               <span class="text-cyan-400 font-mono">{{ availableDates.length }} 天</span>
@@ -89,6 +97,9 @@
                     <span v-if="session.end_time" class="text-gray-500"> → {{ formatTime(session.end_time) }}</span>
                   </div>
                   <div class="flex items-center gap-2 mt-1">
+                    <el-tag v-if="totalChannelCount > 1" type="" size="small" effect="plain" round class="!text-cyan-400 !border-cyan-800">
+                      工位{{ (session.channel_id || 0) + 1 }}
+                    </el-tag>
                     <el-tag :type="getStatusType(session.status)" size="small" effect="dark" round>
                       {{ getStatusText(session.status) }}
                     </el-tag>
@@ -567,7 +578,7 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
 import { Calendar, Clock, DataLine, Setting, Download, Folder, TrendCharts, VideoPlay, Delete, Warning } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { getDetectionResults } from '@/api/detection';
+import { getDetectionResults, getWorkstations } from '@/api/detection';
 import { 
   getSessionsByDate, 
   getSessionDates,
@@ -621,6 +632,24 @@ const getShiftHours = () => {
   if (shiftType.value === 'night') return { start: '20:00', end: '08:00' };
   return { start: customStartHour.value, end: customEndHour.value };
 };
+
+// Multi-channel filter
+const totalChannelCount = ref(1);
+const channelFilter = ref(null); // null = all channels
+
+const handleChannelFilterChange = () => {
+  if (selectedDate.value) {
+    handleDateChange(selectedDate.value);
+  }
+};
+
+const loadChannelCount = async () => {
+  try {
+    const res = await getWorkstations();
+    totalChannelCount.value = res.data.channel_count || 1;
+  } catch (e) { /* keep default */ }
+};
+
 const cycles = ref([]);
 const stepStats = ref([]);
 const loadingSessions = ref(false);
@@ -855,7 +884,9 @@ const loadAvailableDates = async () => {
   if (!projectStore.currentProjectId) return;
   
   try {
-    const res = await getSessionDates({ project_id: projectStore.currentProjectId });
+    const params = { project_id: projectStore.currentProjectId };
+    if (channelFilter.value !== null) params.channel_id = channelFilter.value;
+    const res = await getSessionDates(params);
     availableDates.value = res.data?.dates || [];
   } catch (e) {
     console.error('加载日期失败:', e);
@@ -874,7 +905,7 @@ const handleDateChange = async (date) => {
   loadingSessions.value = true;
   try {
     const { start, end } = getShiftHours();
-    const res = await getSessionsByDate(date, projectStore.currentProjectId, start, end);
+    const res = await getSessionsByDate(date, projectStore.currentProjectId, start, end, channelFilter.value);
     sessions.value = res.data?.sessions || [];
     
     overviewData.total_cycles = res.data?.total_cycles || 0;
@@ -1332,6 +1363,7 @@ onMounted(() => {
   loadExportSettings();
   loadCleanupSettings();
   loadStorageInfo();
+  loadChannelCount();
   
   if (projectStore.currentProjectId) {
     loadAvailableDates();

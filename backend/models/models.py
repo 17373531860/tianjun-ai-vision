@@ -132,6 +132,9 @@ class DetectionSession(Base):
     # 状态
     status = Column(String(20), default="running")  # running, completed, interrupted
     
+    # Multi-channel (workstation) support
+    channel_id = Column(Integer, default=0, index=True)  # 0-based workstation index
+    
     # 关系
     project = relationship("Project", back_populates="detection_sessions")
     cycles = relationship("DetectionCycle", back_populates="session", cascade="all, delete-orphan")

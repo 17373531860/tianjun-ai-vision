@@ -1,5 +1,248 @@
 <template>
-  <div class="grid grid-cols-12 gap-3 h-[calc(100vh-7.25rem)] p-2 relative">
+  <!-- ===== DUAL WORKSTATION MODE (2 channels) ===== -->
+  <div v-if="channelCount === 2" class="grid grid-cols-2 gap-2 h-[calc(100vh-7.25rem)] p-2 relative">
+    <div v-for="ch in 2" :key="ch - 1" class="flex flex-col gap-1.5 min-h-0 overflow-hidden">
+      <!-- Video panel -->
+      <div class="relative bg-black border-2 rounded-lg overflow-hidden flex-1 min-h-0"
+        :class="selectedChannel === (ch - 1) ? 'border-cyan-500' : 'border-slate-700'"
+        @click="selectedChannel = ch - 1">
+        <canvas :ref="el => { if (el) multiVideoCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full"></canvas>
+        <canvas :ref="el => { if (el) multiCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
+        <div class="absolute top-1.5 left-1.5 bg-slate-900/80 text-white px-2 py-0.5 rounded text-xs font-bold">
+          工位 {{ ch }}
+          <span v-if="multiChannelData[ch - 1]?.projectName" class="text-cyan-400 ml-1">{{ multiChannelData[ch - 1].projectName }}</span>
+        </div>
+        <div class="absolute top-1.5 right-1.5 px-2 py-0.5 rounded text-[10px] font-bold"
+          :class="multiChannelData[ch - 1]?.isDetecting ? 'bg-green-600/90 text-white animate-pulse' : multiChannelData[ch - 1]?.isRunning ? 'bg-yellow-600/90 text-white' : 'bg-gray-600/90 text-white'">
+          {{ multiChannelData[ch - 1]?.isDetecting ? '检测中' : multiChannelData[ch - 1]?.isRunning ? '待机' : '停止' }}
+        </div>
+        <div class="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm px-2 py-1 flex gap-3 text-xs">
+          <span class="text-white font-mono">总: <span class="text-cyan-400 font-bold">{{ multiChannelData[ch - 1]?.total ?? 0 }}</span></span>
+          <span class="text-white font-mono">OK: <span class="text-green-400 font-bold">{{ multiChannelData[ch - 1]?.ok ?? 0 }}</span></span>
+          <span class="text-white font-mono">NG: <span class="text-red-400 font-bold">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</span></span>
+          <span class="ml-auto text-gray-400">FPS: {{ multiChannelData[ch - 1]?.fps ?? 0 }}</span>
+        </div>
+      </div>
+      <!-- SOP mini strip -->
+      <div class="h-20 bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col flex-shrink-0">
+        <div class="bg-slate-800 px-2 py-0.5 text-cyan-400 text-xs font-bold border-b border-slate-700 flex items-center justify-between">
+          <span>SOP</span>
+          <span class="text-[10px] text-gray-400">CT: {{ multiChannelData[ch - 1]?.avgCycleTime ? multiChannelData[ch - 1].avgCycleTime.toFixed(1) + 's' : '--' }}</span>
+        </div>
+        <div class="flex-1 flex items-center gap-1 px-1.5 overflow-x-auto">
+          <div v-for="(step, idx) in (multiChannelData[ch - 1]?.steps || [])" :key="idx"
+            class="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold border"
+            :class="step.status === 'completed' ? 'border-green-500 bg-green-900/30 text-green-300' : step.status === 'active' ? 'border-cyan-500 bg-cyan-900/30 text-cyan-300 animate-pulse' : 'border-slate-600 bg-slate-800 text-gray-500'">
+            {{ step.name }}
+          </div>
+          <div v-if="!multiChannelData[ch - 1]?.steps?.length" class="text-gray-600 text-[10px] w-full text-center">等待检测</div>
+        </div>
+      </div>
+      <!-- Data panel: counters + charts + table -->
+      <div class="h-48 grid grid-cols-2 gap-1.5 flex-shrink-0">
+        <!-- Left: counters + step table -->
+        <div class="flex flex-col gap-1.5 min-h-0">
+          <div class="grid grid-cols-3 gap-1 flex-shrink-0">
+            <div class="bg-slate-900 border border-slate-700 rounded p-1 text-center">
+              <div class="text-[10px] text-gray-400">总产量</div>
+              <div class="text-lg font-bold font-mono text-white">{{ multiChannelData[ch - 1]?.total ?? 0 }}</div>
+            </div>
+            <div class="bg-slate-900 border border-slate-700 rounded p-1 text-center">
+              <div class="text-[10px] text-gray-400">合格</div>
+              <div class="text-lg font-bold font-mono text-green-400">{{ multiChannelData[ch - 1]?.ok ?? 0 }}</div>
+            </div>
+            <div class="bg-slate-900 border border-slate-700 rounded p-1 text-center">
+              <div class="text-[10px] text-gray-400">不良</div>
+              <div class="text-lg font-bold font-mono text-red-400">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</div>
+            </div>
+          </div>
+          <div class="flex-1 bg-slate-900 border border-slate-700 rounded overflow-auto min-h-0">
+            <table class="w-full text-[10px]">
+              <thead class="bg-slate-800 text-gray-400 sticky top-0"><tr><th class="px-1 py-0.5">步骤</th><th class="px-1 py-0.5">状态</th></tr></thead>
+              <tbody class="text-gray-300 divide-y divide-slate-800">
+                <tr v-for="(row, i) in (multiChannelData[ch - 1]?.tableData || []).slice(0, 6)" :key="i" :class="row.status === 'completed' ? 'bg-green-900/20' : ''">
+                  <td class="px-1 py-0.5 truncate max-w-[80px]">{{ row.step }}</td>
+                  <td class="px-1 py-0.5"><span :class="row.status === 'completed' ? 'text-green-400' : 'text-gray-500'">{{ row.status === 'completed' ? 'OK' : '--' }}</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <!-- Right: charts area -->
+        <div class="flex flex-col gap-1.5 min-h-0">
+          <!-- Yield rate + pie -->
+          <div class="flex-1 bg-slate-900 border border-slate-700 rounded p-1 flex items-center justify-center min-h-0">
+            <div class="text-center">
+              <div class="text-[10px] text-gray-400 mb-0.5">合格率</div>
+              <div class="text-2xl font-bold font-mono" :class="(multiChannelData[ch - 1]?.yieldRate ?? 0) >= 90 ? 'text-green-400' : (multiChannelData[ch - 1]?.yieldRate ?? 0) >= 70 ? 'text-yellow-400' : 'text-red-400'">
+                {{ multiChannelData[ch - 1]?.yieldRate ?? 0 }}%
+              </div>
+              <div class="w-full bg-slate-700 rounded-full h-1.5 mt-1">
+                <div class="h-1.5 rounded-full transition-all" :class="(multiChannelData[ch - 1]?.yieldRate ?? 0) >= 90 ? 'bg-green-500' : (multiChannelData[ch - 1]?.yieldRate ?? 0) >= 70 ? 'bg-yellow-500' : 'bg-red-500'"
+                  :style="{ width: (multiChannelData[ch - 1]?.yieldRate ?? 0) + '%' }"></div>
+              </div>
+            </div>
+          </div>
+          <!-- NG top 3 -->
+          <div class="flex-1 bg-slate-900 border border-slate-700 rounded p-1 flex flex-col min-h-0">
+            <div class="text-[10px] text-cyan-400 font-bold mb-0.5">NG TOP3</div>
+            <div class="flex-1 overflow-auto space-y-0.5">
+              <div v-for="(item, idx) in (multiChannelData[ch - 1]?.ngStepRanking || [])" :key="item.step"
+                class="flex items-center gap-1 text-[10px] bg-slate-800/50 px-1 py-0.5 rounded">
+                <span class="text-white font-bold w-3">{{ idx + 1 }}</span>
+                <span class="flex-1 text-gray-300 truncate">{{ item.step }}</span>
+                <span class="text-white font-bold">{{ item.rate.toFixed(0) }}%</span>
+              </div>
+              <div v-if="!multiChannelData[ch - 1]?.ngStepRanking?.length" class="text-gray-600 text-[10px] text-center">暂无</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Controls -->
+      <div class="flex gap-1.5 flex-shrink-0">
+        <button @click="startDetectionForChannel(ch - 1)" :disabled="!currentProject || multiChannelData[ch - 1]?.isDetecting"
+          class="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">开始</button>
+        <button @click="stopDetectionForChannel(ch - 1)" :disabled="!multiChannelData[ch - 1]?.isRunning"
+          class="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">停止</button>
+        <button @click="standbyForChannel(ch - 1)" :disabled="!multiChannelData[ch - 1]?.isDetecting"
+          class="flex-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">待机</button>
+      </div>
+    </div>
+    <!-- Event toasts -->
+    <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
+      <div class="fixed z-50 pointer-events-none flex flex-col gap-2" :class="getPositionClass(position)">
+        <transition-group name="toast">
+          <div v-for="toast in activeToasts.filter(t => t.position === position)" :key="toast.id"
+            class="px-6 py-4 rounded-xl shadow-2xl text-white font-bold pointer-events-auto transform transition-all duration-300 text-center"
+            :style="{ backgroundColor: toast.color, fontSize: toast.fontSize + 'px' }">
+            <div class="flex items-center gap-3 justify-center">
+              <el-icon :size="24"><component :is="toast.icon" /></el-icon>
+              <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
+            </div>
+          </div>
+        </transition-group>
+      </div>
+    </template>
+  </div>
+
+  <!-- ===== QUAD WORKSTATION MODE (4 channels) ===== -->
+  <div v-else-if="channelCount > 2" class="flex flex-col h-[calc(100vh-7.25rem)] p-2 gap-2 relative">
+    <!-- 2x2 video grid -->
+    <div class="flex-1 grid grid-cols-2 grid-rows-2 gap-2 min-h-0">
+      <div v-for="ch in channelCount" :key="ch - 1"
+        class="relative bg-black border-2 rounded-lg overflow-hidden cursor-pointer transition-all min-h-0"
+        :class="selectedChannel === (ch - 1) ? 'border-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.4)]' : 'border-slate-700 hover:border-slate-500'"
+        @click="selectedChannel = ch - 1">
+        <canvas :ref="el => { if (el) multiVideoCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full"></canvas>
+        <canvas :ref="el => { if (el) multiCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
+        <div class="absolute top-1 left-1 bg-slate-900/80 text-white px-2 py-0.5 rounded text-[10px] font-bold">
+          工位{{ ch }}
+          <span v-if="multiChannelData[ch - 1]?.projectName" class="text-cyan-400 ml-0.5">{{ multiChannelData[ch - 1].projectName }}</span>
+        </div>
+        <div class="absolute top-1 right-1 px-1.5 py-0.5 rounded text-[10px] font-bold"
+          :class="multiChannelData[ch - 1]?.isDetecting ? 'bg-green-600/90 text-white animate-pulse' : multiChannelData[ch - 1]?.isRunning ? 'bg-yellow-600/90 text-white' : 'bg-gray-600/90 text-white'">
+          {{ multiChannelData[ch - 1]?.isDetecting ? '检测中' : multiChannelData[ch - 1]?.isRunning ? '待机' : '停止' }}
+        </div>
+        <div class="absolute bottom-0 left-0 right-0 bg-black/70 px-2 py-1 flex gap-3 text-[10px]">
+          <span class="text-white font-mono">总:<span class="text-cyan-400 font-bold">{{ multiChannelData[ch - 1]?.total ?? 0 }}</span></span>
+          <span class="text-white font-mono">OK:<span class="text-green-400 font-bold">{{ multiChannelData[ch - 1]?.ok ?? 0 }}</span></span>
+          <span class="text-white font-mono">NG:<span class="text-red-400 font-bold">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</span></span>
+          <span class="ml-auto text-gray-400">FPS:{{ multiChannelData[ch - 1]?.fps ?? 0 }}</span>
+        </div>
+      </div>
+    </div>
+    <!-- Selected channel detail panel -->
+    <div class="h-64 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col flex-shrink-0">
+      <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex items-center gap-3">
+        <span class="text-cyan-400 font-bold text-sm">工位 {{ selectedChannel + 1 }} 详情</span>
+        <span class="text-[10px] bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ multiChannelData[selectedChannel]?.avgCycleTime ? multiChannelData[selectedChannel].avgCycleTime.toFixed(1) + 's' : '--' }}</span>
+        <div class="ml-auto flex gap-1.5">
+          <button @click="startDetectionForChannel(selectedChannel)" :disabled="!currentProject || multiChannelData[selectedChannel]?.isDetecting"
+            class="bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[10px] font-bold">开始</button>
+          <button @click="stopDetectionForChannel(selectedChannel)" :disabled="!multiChannelData[selectedChannel]?.isRunning"
+            class="bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[10px] font-bold">停止</button>
+          <button @click="standbyForChannel(selectedChannel)" :disabled="!multiChannelData[selectedChannel]?.isDetecting"
+            class="bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[10px] font-bold">待机</button>
+        </div>
+      </div>
+      <div class="flex-1 grid grid-cols-4 gap-2 p-2 min-h-0 overflow-hidden">
+        <!-- Col 1: SOP steps -->
+        <div class="flex flex-col gap-1 overflow-auto">
+          <div class="text-[10px] text-cyan-400 font-bold mb-0.5">SOP 流程</div>
+          <div v-for="(step, idx) in (multiChannelData[selectedChannel]?.steps || [])" :key="idx"
+            class="px-1.5 py-0.5 rounded text-[10px] font-bold border"
+            :class="step.status === 'completed' ? 'border-green-500 bg-green-900/30 text-green-300' : step.status === 'active' ? 'border-cyan-500 bg-cyan-900/30 text-cyan-300 animate-pulse' : 'border-slate-600 bg-slate-800 text-gray-500'">
+            {{ step.name }}
+          </div>
+          <div v-if="!multiChannelData[selectedChannel]?.steps?.length" class="text-gray-600 text-[10px] text-center mt-2">等待检测</div>
+        </div>
+        <!-- Col 2: Counters + step table -->
+        <div class="flex flex-col gap-1 min-h-0">
+          <div class="grid grid-cols-3 gap-1 flex-shrink-0">
+            <div class="bg-slate-800 rounded p-0.5 text-center"><div class="text-[9px] text-gray-400">总</div><div class="text-base font-bold font-mono text-white">{{ multiChannelData[selectedChannel]?.total ?? 0 }}</div></div>
+            <div class="bg-slate-800 rounded p-0.5 text-center"><div class="text-[9px] text-gray-400">OK</div><div class="text-base font-bold font-mono text-green-400">{{ multiChannelData[selectedChannel]?.ok ?? 0 }}</div></div>
+            <div class="bg-slate-800 rounded p-0.5 text-center"><div class="text-[9px] text-gray-400">NG</div><div class="text-base font-bold font-mono text-red-400">{{ multiChannelData[selectedChannel]?.ng ?? 0 }}</div></div>
+          </div>
+          <div class="flex-1 overflow-auto min-h-0">
+            <table class="w-full text-[10px]">
+              <thead class="bg-slate-800 text-gray-400 sticky top-0"><tr><th class="px-1 py-0.5">步骤</th><th class="px-1 py-0.5">状态</th></tr></thead>
+              <tbody class="text-gray-300 divide-y divide-slate-800">
+                <tr v-for="(row, i) in (multiChannelData[selectedChannel]?.tableData || [])" :key="i" :class="row.status === 'completed' ? 'bg-green-900/20' : ''">
+                  <td class="px-1 py-0.5 truncate max-w-[100px]">{{ row.step }}</td>
+                  <td class="px-1 py-0.5"><span :class="row.status === 'completed' ? 'text-green-400' : 'text-gray-500'">{{ row.status === 'completed' ? 'OK' : '--' }}</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <!-- Col 3: Yield rate -->
+        <div class="flex flex-col items-center justify-center bg-slate-800 rounded p-2">
+          <div class="text-[10px] text-gray-400 mb-1">合格率</div>
+          <div class="text-3xl font-bold font-mono" :class="(multiChannelData[selectedChannel]?.yieldRate ?? 0) >= 90 ? 'text-green-400' : (multiChannelData[selectedChannel]?.yieldRate ?? 0) >= 70 ? 'text-yellow-400' : 'text-red-400'">
+            {{ multiChannelData[selectedChannel]?.yieldRate ?? 0 }}%
+          </div>
+          <div class="w-full bg-slate-700 rounded-full h-2 mt-2">
+            <div class="h-2 rounded-full transition-all" :class="(multiChannelData[selectedChannel]?.yieldRate ?? 0) >= 90 ? 'bg-green-500' : (multiChannelData[selectedChannel]?.yieldRate ?? 0) >= 70 ? 'bg-yellow-500' : 'bg-red-500'"
+              :style="{ width: (multiChannelData[selectedChannel]?.yieldRate ?? 0) + '%' }"></div>
+          </div>
+          <div class="mt-2 text-[10px] text-gray-400">
+            <span class="text-green-400">{{ multiChannelData[selectedChannel]?.ok ?? 0 }}</span> / <span class="text-white">{{ multiChannelData[selectedChannel]?.total ?? 0 }}</span>
+          </div>
+        </div>
+        <!-- Col 4: NG ranking -->
+        <div class="flex flex-col min-h-0">
+          <div class="text-[10px] text-cyan-400 font-bold mb-1">NG 步骤 TOP3</div>
+          <div class="flex-1 overflow-auto space-y-1">
+            <div v-for="(item, idx) in (multiChannelData[selectedChannel]?.ngStepRanking || [])" :key="item.step"
+              class="flex items-center gap-1.5 bg-slate-800/50 px-1.5 py-1 rounded text-xs">
+              <span class="text-sm font-bold w-4 text-white text-center">{{ idx + 1 }}</span>
+              <span class="flex-1 text-gray-300 truncate">{{ item.step }}</span>
+              <span class="text-sm font-bold text-white">{{ item.rate.toFixed(0) }}%</span>
+            </div>
+            <div v-if="!multiChannelData[selectedChannel]?.ngStepRanking?.length" class="flex items-center justify-center h-full text-gray-600 text-xs">暂无数据</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Event toasts -->
+    <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
+      <div class="fixed z-50 pointer-events-none flex flex-col gap-2" :class="getPositionClass(position)">
+        <transition-group name="toast">
+          <div v-for="toast in activeToasts.filter(t => t.position === position)" :key="toast.id"
+            class="px-6 py-4 rounded-xl shadow-2xl text-white font-bold pointer-events-auto transform transition-all duration-300 text-center"
+            :style="{ backgroundColor: toast.color, fontSize: toast.fontSize + 'px' }">
+            <div class="flex items-center gap-3 justify-center">
+              <el-icon :size="24"><component :is="toast.icon" /></el-icon>
+              <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
+            </div>
+          </div>
+        </transition-group>
+      </div>
+    </template>
+  </div>
+
+  <!-- ===== SINGLE-VIEW MODE (original layout) ===== -->
+  <div v-else class="grid grid-cols-12 gap-3 h-[calc(100vh-7.25rem)] p-2 relative">
     <!-- LEFT COLUMN: VIDEO & STEPS -->
     <div class="col-span-7 flex flex-col gap-3 min-h-0">
       
@@ -111,8 +354,8 @@
         </div>
       </div>
 
-      <!-- SOP流程 (Step Indicators) -->
-      <div v-if="systemStore.display.monitor.stepStrip && steps.length > 0" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
+      <!-- SOP流程 (Step Indicators) — non-tracking modes -->
+      <div v-if="systemStore.display.monitor.stepStrip && steps.length > 0 && !isTrackingMode" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
         <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0">
           <span class="text-cyan-400 text-lg font-bold">SOP流程卡片</span>
         </div>
@@ -153,6 +396,37 @@
                 </div>
               </div>
             </template>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tracking Mode Checklist Panel -->
+      <div v-else-if="isTrackingMode" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
+        <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0 flex justify-between items-center">
+          <span class="text-cyan-400 text-lg font-bold">物品清点</span>
+          <span v-if="trackingCycleActive" class="text-xs text-green-400 animate-pulse">跟踪中...</span>
+          <span v-else class="text-xs text-gray-500">等待</span>
+        </div>
+        <div class="flex-1 p-2 overflow-x-auto">
+          <div class="flex items-stretch h-full gap-3">
+            <div v-for="(info, cls) in trackingChecklist" :key="cls"
+              class="flex-shrink-0 w-36 bg-slate-800 rounded-lg border p-2 flex flex-col justify-between transition-all"
+              :class="info.counted >= info.expected && info.expected > 0 ? 'border-green-500/70' : info.counted > info.expected && info.expected > 0 ? 'border-red-500/70' : 'border-slate-700'"
+            >
+              <div class="text-xs text-gray-400 truncate">{{ cls }}</div>
+              <div class="text-center my-1">
+                <span class="text-3xl font-bold font-mono"
+                  :class="info.counted >= info.expected && info.expected > 0 ? 'text-green-400' : 'text-white'"
+                >{{ info.counted }}</span>
+                <span v-if="info.expected > 0" class="text-sm text-gray-500"> / {{ info.expected }}</span>
+              </div>
+              <div class="text-[10px] text-gray-500 text-center">{{ info.prefix }}1 ~ {{ info.prefix }}{{ info.counted || '?' }}</div>
+            </div>
+            <div v-if="Object.keys(trackingChecklist).length === 0"
+              class="flex items-center justify-center text-gray-500 text-sm w-full"
+            >
+              等待物品出现...
+            </div>
           </div>
         </div>
       </div>
@@ -347,7 +621,7 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { useSourceStore } from '@/store/useSourceStore';
 import { Check, Folder, Picture, CircleCheck, CircleClose, Warning } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, getDetectionResults, getSourceStatus, setProjectConfig } from '@/api/detection';
+import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations } from '@/api/detection';
 import { getModelDetail } from '@/api/model';
 import api, { getBackendHost } from '@/api/index';
 
@@ -420,6 +694,348 @@ let streamErrorCount = 0;
 
 const videoElement = computed(() => activeStream.value === 0 ? streamImg0.value : streamImg1.value);
 
+// ==================== Multi-Channel State ====================
+const channelCount = ref(1);
+const selectedChannel = ref(0);
+const multiCanvasRefs = {};
+const multiChannelData = ref({});
+let multiPollingTimer = null;
+
+const initMultiChannelData = (count) => {
+  for (let i = 0; i < count; i++) {
+    if (!multiChannelData.value[i]) {
+      multiChannelData.value[i] = {
+        isRunning: false, isDetecting: false, fps: 0, latency: 0,
+        total: 0, ok: 0, ng: 0, avgCycleTime: 0, projectName: '',
+        steps: [], detections: [], tracking: null,
+        counters: {}, allCounters: [],
+        stepCounts: {}, recentEvents: [],
+        currentCycleSteps: [], backupCoveredLabels: [],
+        ngStepRanking: [], yieldRate: 0,
+        tableData: [],
+      };
+    }
+  }
+};
+
+const multiVideoCanvasRefs = {};
+let multiStreamRunning = false;
+const multiStreamAborts = {};
+
+const STREAM_HOST = 'http://localhost:8001';
+const BOUNDARY = '--frame';
+const HEADER_END = '\r\n\r\n';
+
+const startMultiStreams = (count) => {
+  stopMultiStreams();
+  multiStreamRunning = true;
+  for (let ch = 0; ch < count; ch++) {
+    connectMjpegStream(ch);
+  }
+};
+
+const connectMjpegStream = async (ch) => {
+  if (!multiStreamRunning) return;
+  const abort = new AbortController();
+  multiStreamAborts[ch] = abort;
+  try {
+    const res = await fetch(`${STREAM_HOST}/video_feed?channel=${ch}`, { signal: abort.signal });
+    const reader = res.body.getReader();
+    let buf = new Uint8Array(0);
+
+    while (multiStreamRunning) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const merged = new Uint8Array(buf.length + value.length);
+      merged.set(buf);
+      merged.set(value, buf.length);
+      buf = merged;
+
+      let startIdx = 0;
+      while (true) {
+        const boundaryIdx = findBytes(buf, BOUNDARY, startIdx);
+        if (boundaryIdx === -1) break;
+        const headerEndIdx = findBytes(buf, HEADER_END, boundaryIdx);
+        if (headerEndIdx === -1) break;
+        const jpegStart = headerEndIdx + HEADER_END.length;
+        const nextBoundary = findBytes(buf, BOUNDARY, jpegStart);
+        if (nextBoundary === -1) break;
+
+        const jpegEnd = nextBoundary - 2;
+        if (jpegEnd > jpegStart) {
+          const jpegData = buf.slice(jpegStart, jpegEnd);
+          drawFrameToCanvas(ch, jpegData);
+        }
+        startIdx = nextBoundary;
+      }
+      if (startIdx > 0) {
+        buf = buf.slice(startIdx);
+      }
+      if (buf.length > 2 * 1024 * 1024) {
+        buf = buf.slice(buf.length - 512 * 1024);
+      }
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError' && multiStreamRunning) {
+      console.warn(`[MJPEGStream] ch${ch} disconnected, reconnecting...`);
+      setTimeout(() => connectMjpegStream(ch), 2000);
+    }
+  }
+};
+
+const findBytes = (buf, str, offset = 0) => {
+  const target = typeof str === 'string' ? new TextEncoder().encode(str) : str;
+  outer: for (let i = offset; i <= buf.length - target.length; i++) {
+    for (let j = 0; j < target.length; j++) {
+      if (buf[i + j] !== target[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
+};
+
+const drawFrameToCanvas = (ch, jpegData) => {
+  const canvas = multiVideoCanvasRefs[ch];
+  if (!canvas) return;
+  const blob = new Blob([jpegData], { type: 'image/jpeg' });
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    const parent = canvas.parentElement;
+    if (parent) {
+      canvas.width = parent.clientWidth;
+      canvas.height = parent.clientHeight;
+    }
+    const ctx = canvas.getContext('2d');
+    const cw = canvas.width, ch2 = canvas.height;
+    const scale = Math.min(cw / img.naturalWidth, ch2 / img.naturalHeight);
+    const dw = img.naturalWidth * scale;
+    const dh = img.naturalHeight * scale;
+    const dx = (cw - dw) / 2;
+    const dy = (ch2 - dh) / 2;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, cw, ch2);
+    ctx.drawImage(img, dx, dy, dw, dh);
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
+};
+
+const stopMultiStreams = () => {
+  multiStreamRunning = false;
+  Object.values(multiStreamAborts).forEach(a => { try { a.abort(); } catch {} });
+  Object.keys(multiStreamAborts).forEach(k => delete multiStreamAborts[k]);
+};
+
+const startMultiPolling = () => {
+  stopMultiPolling();
+  multiPollingTimer = setInterval(async () => {
+    for (let ch = 0; ch < channelCount.value; ch++) {
+      try {
+        const res = await getDetectionResults(ch);
+        const d = res.data;
+        const chData = multiChannelData.value[ch] || {};
+        chData.isRunning = d.is_running;
+        chData.isDetecting = d.is_detecting;
+        chData.fps = d.fps || 0;
+        chData.latency = d.latency || 0;
+        const ctrs = d.counters || {};
+        chData.total = ctrs['总产量'] ?? 0;
+        chData.ok = ctrs['合格总数'] ?? 0;
+        chData.ng = ctrs['不良总数'] ?? 0;
+        chData.counters = ctrs;
+        chData.avgCycleTime = d.average_cycle_time || 0;
+        chData.detections = d.detections || [];
+        chData.currentCycleSteps = d.current_cycle_steps || [];
+        chData.backupCoveredLabels = d.backup_covered_labels || [];
+        chData.stepCounts = d.step_counts || {};
+        chData.recentEvents = d.recent_events || [];
+        if (d.tracking) chData.tracking = d.tracking;
+
+        const total = chData.total || 0;
+        const ok = chData.ok || 0;
+        chData.yieldRate = total > 0 ? Math.round((ok / total) * 100) : 0;
+
+        const ngStep = ctrs['NG步骤'] || 0;
+        if (ngStep > 0 && d.step_counts) {
+          const ranking = [];
+          for (const [step, count] of Object.entries(d.step_counts)) {
+            if (count > 0) ranking.push({ step, count, rate: (count / ngStep) * 100 });
+          }
+          ranking.sort((a, b) => b.count - a.count);
+          chData.ngStepRanking = ranking.slice(0, 3);
+        } else {
+          chData.ngStepRanking = [];
+        }
+
+        const allC = [];
+        for (const [name, value] of Object.entries(ctrs)) {
+          if (!name.startsWith('_')) allC.push({ name, value });
+        }
+        chData.allCounters = allC;
+
+        if (d.detections) {
+          const stepsConf = currentProject.value?.steps_config || [];
+          const stMap = {};
+          stepsConf.forEach(s => { stMap[s.label] = s; });
+          const td = stepsConf.filter(s => s.enabled !== false && !s.is_backup).map((s, i) => {
+            const inCycle = chData.currentCycleSteps.includes(s.label);
+            const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
+            return {
+              step: s.displayLabel || s.label,
+              label: s.label,
+              status: inCycle || coveredByBackup ? 'completed' : 'pending',
+              cycleResult: null,
+            };
+          });
+          chData.tableData = td;
+        }
+
+        if (d.detections) {
+          const stepsConf = currentProject.value?.steps_config || [];
+          const sopSteps = stepsConf.filter(s => s.enabled !== false && !s.is_backup).map(s => {
+            const inCycle = chData.currentCycleSteps.includes(s.label);
+            const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
+            return {
+              name: s.displayLabel || s.label,
+              label: s.label,
+              status: inCycle || coveredByBackup ? 'completed' : 'pending',
+            };
+          });
+          chData.steps = sopSteps;
+        }
+
+        multiChannelData.value[ch] = { ...chData };
+
+        const canvas = multiCanvasRefs[ch];
+        if (canvas && d.detections?.length) {
+          drawMultiDetections(canvas, d.detections);
+        } else if (canvas) {
+          const ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+      } catch (e) { /* silent */ }
+    }
+    updateGlobalDetectingState();
+    updateMultiCharts();
+  }, 200);
+};
+
+const stopMultiPolling = () => {
+  if (multiPollingTimer) { clearInterval(multiPollingTimer); multiPollingTimer = null; }
+};
+
+const updateMultiCharts = () => {
+  // Data-driven rendering via template — no separate ECharts needed for multi-view
+};
+
+const drawMultiDetections = (canvas, detections) => {
+  if (!canvas) return;
+  const parent = canvas.parentElement;
+  if (parent) { canvas.width = parent.offsetWidth; canvas.height = parent.offsetHeight; }
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const cw = canvas.width, ch2 = canvas.height;
+  detections.forEach(det => {
+    if (det.hidden) return;
+    const x = det.x * cw, y = det.y * ch2;
+    const w = det.w * cw, h = det.h * ch2;
+    const color = det.is_ng ? '#ef4444' : '#10b981';
+    if (det.mask && Array.isArray(det.mask) && det.mask.length > 2) {
+      ctx.beginPath();
+      det.mask.forEach((pt, i) => {
+        const mx = pt[0] * cw, my = pt[1] * ch2;
+        if (i === 0) ctx.moveTo(mx, my); else ctx.lineTo(mx, my);
+      });
+      ctx.closePath();
+      ctx.fillStyle = color + '40';
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, w, h);
+    }
+    ctx.font = 'bold 11px Arial';
+    const label = det.display_id || det.display_name || det.label || '';
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y - 14, ctx.measureText(label).width + 6, 14);
+    ctx.fillStyle = 'white';
+    ctx.fillText(label, x + 3, y - 2);
+  });
+};
+
+const startDetectionForChannel = async (ch) => {
+  if (!currentProject.value) return;
+  try {
+    await syncProjectConfig();
+    await setProjectConfig({
+      project_id: currentProject.value.id,
+      name: currentProject.value.name,
+      task_type: currentProject.value.task_type || 'detection',
+      logic_mode: currentProject.value.logic_mode || 'detection',
+      steps_config: currentProject.value.steps_config || [],
+      pipeline_config: currentProject.value.pipeline_config || {},
+      events_config: currentProject.value.events_config || [],
+      counters_config: currentProject.value.counters_config || []
+    }, ch);
+    const modelId = currentProject.value.default_model_id;
+    if (!modelId) { ElMessage.warning('请先配置模型'); return; }
+    const modelRes = await getModelDetail(modelId);
+    await apiStartDetection(modelRes.data.file_path, 0.25, 0.45, ch);
+    ElMessage.success(`工位 ${ch + 1} 检测已启动`);
+  } catch (e) {
+    ElMessage.error(`工位 ${ch + 1} 启动失败: ${e.message}`);
+  }
+};
+
+const updateGlobalDetectingState = () => {
+  const anyDetecting = Object.values(multiChannelData.value).some(d => d?.isDetecting);
+  systemStore.setDetecting(anyDetecting);
+  projectStore.setRunningStatus(anyDetecting);
+};
+
+const stopDetectionForChannel = async (ch) => {
+  try {
+    await pauseDetection(ch);
+    if (multiChannelData.value[ch]) multiChannelData.value[ch].isDetecting = false;
+    updateGlobalDetectingState();
+    ElMessage.info(`工位 ${ch + 1} 已停止`);
+  } catch (e) {
+    ElMessage.error(`工位 ${ch + 1} 停止失败`);
+  }
+};
+
+const standbyForChannel = async (ch) => {
+  try {
+    await standbyDetection(ch);
+    if (multiChannelData.value[ch]) multiChannelData.value[ch].isDetecting = false;
+    updateGlobalDetectingState();
+    ElMessage.info(`工位 ${ch + 1} 已待机`);
+  } catch (e) {
+    ElMessage.error(`工位 ${ch + 1} 待机失败`);
+  }
+};
+
+const fetchChannelCount = async () => {
+  try {
+    const res = await getWorkstations();
+    const count = res.data.channel_count || 1;
+    channelCount.value = count;
+    if (count > 1) {
+      initMultiChannelData(count);
+      startMultiStreams(count);
+      startMultiPolling();
+    }
+  } catch (e) {
+    channelCount.value = 1;
+  }
+};
+// ==================== End Multi-Channel ====================
+
 const buildStreamUrl = () => `${getBackendHost()}/video_feed?t=${Date.now()}`;
 
 const connectStream = () => {
@@ -466,6 +1082,11 @@ const onStreamError = (idx) => {
 
 // 当前项目
 const currentProject = computed(() => projectStore.currentProject);
+
+const isTrackingMode = computed(() => currentProject.value?.logic_mode === 'tracking');
+const trackingChecklist = ref({});
+const trackingCycleActive = ref(false);
+const serverModelTask = ref('detect');
 
 // 默认计数器定义（系统内置，不可删除）
 const DEFAULT_COUNTERS = ['总产量', '合格总数', '不良总数', 'NG步骤'];
@@ -906,16 +1527,31 @@ const drawDetections = (detections) => {
     const w = det.w * renderW;
     const h = det.h * renderH;
     
-    // 判断颜色
     const color = det.is_ng ? ngColor : boxColor;
     
-    // 绘制边界框
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lineWidth;
-    ctx.strokeRect(x, y, w, h);
+    // Render polygon mask if available (segmentation model)
+    if (det.mask && Array.isArray(det.mask) && det.mask.length > 2) {
+      ctx.beginPath();
+      det.mask.forEach((pt, i) => {
+        const mx = offsetX + pt[0] * renderW;
+        const my = offsetY + pt[1] * renderH;
+        if (i === 0) ctx.moveTo(mx, my);
+        else ctx.lineTo(mx, my);
+      });
+      ctx.closePath();
+      ctx.fillStyle = color.replace(')', ', 0.25)').replace('rgb(', 'rgba(');
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.strokeRect(x, y, w, h);
+    }
     
-    // 准备标签（优先使用自定义显示名称）
-    let label = det.display_name || det.label || 'Unknown';
+    // In tracking mode, show display_id (A1, B2, etc.) as the label
+    let label = det.display_id || det.display_name || det.label || 'Unknown';
     if (showConf && det.confidence) {
       label += ` ${(det.confidence * 100).toFixed(0)}%`;
     }
@@ -932,6 +1568,26 @@ const drawDetections = (detections) => {
     ctx.fillStyle = 'white';
     ctx.fillText(label, x + 4, y - 4);
   });
+
+  // Draw ROI polygon overlay if configured (tracking mode)
+  const roiPoly = currentProject.value?.pipeline_config?.tracking_roi?.polygon;
+  if (roiPoly && roiPoly.length >= 3) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0, 200, 255, 0.6)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 4]);
+    ctx.beginPath();
+    ctx.moveTo(offsetX + roiPoly[0][0] * renderW, offsetY + roiPoly[0][1] * renderH);
+    for (let i = 1; i < roiPoly.length; i++) {
+      ctx.lineTo(offsetX + roiPoly[i][0] * renderW, offsetY + roiPoly[i][1] * renderH);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(0, 200, 255, 0.05)';
+    ctx.fill();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
 };
 
 // Watch for project changes to sync UI
@@ -1142,6 +1798,7 @@ const syncProjectConfig = async () => {
   await setProjectConfig({
     project_id: proj.id,
     name: proj.name,
+    task_type: proj.task_type || 'detection',
     logic_mode: proj.logic_mode || 'detection',
     steps_config: proj.steps_config || [],
     pipeline_config: pipelineCfg,
@@ -1335,6 +1992,14 @@ const startPolling = () => {
         drawDetections(data.detections);
       }
       
+      if (data.model_task) {
+        serverModelTask.value = data.model_task;
+      }
+      if (data.tracking) {
+        trackingChecklist.value = data.tracking.item_checklist || {};
+        trackingCycleActive.value = data.tracking.cycle_active || false;
+      }
+      
       if (isVideoSource.value && !isDraggingProgress.value) {
         try {
           const videoRes = await api.get('/source/video/info');
@@ -1363,7 +2028,7 @@ const startPolling = () => {
     } finally {
       pollingInProgress = false;
     }
-  }, 500); // 每 500ms 轮询一次（降低频率减少内存压力）
+  }, 150); // ~6.7Hz polling for responsive detection box overlay
 };
 
 // 已显示的事件ID（避免重复显示提示框）
@@ -1746,7 +2411,7 @@ const autoRestoreSource = async () => {
         device_index: cameraSettings.deviceIndex || 0,
         width: w,
         height: h,
-        fps: cameraSettings.fps || 30
+        fps: cameraSettings.fps || 60
       });
       sourceStore.setSourceType('camera');
       restored = true;
@@ -1762,7 +2427,7 @@ const autoRestoreSource = async () => {
         device_index: hikSettings.deviceIndex || 0,
         width: w,
         height: h,
-        fps: hikSettings.fps || 30
+        fps: hikSettings.fps || 60
       });
       sourceStore.setSourceType('hikvision');
       restored = true;
@@ -1798,6 +2463,7 @@ const autoRestoreSource = async () => {
 
 onMounted(() => {
   systemStore.loadSettings();
+  fetchChannelCount();
   
   // Reset error count so reconnection works after page navigation
   streamErrorCount = 0;
@@ -1816,8 +2482,10 @@ onMounted(() => {
     isRunning.value = !!res.data.is_running;
     isDetecting.value = !!res.data.is_detecting;
     
-    projectStore.setRunningStatus(!!res.data.is_running);
-    systemStore.setDetecting(!!res.data.is_detecting);
+    if (channelCount.value <= 1) {
+      projectStore.setRunningStatus(!!res.data.is_running);
+      systemStore.setDetecting(!!res.data.is_detecting);
+    }
 
     if (res.data.is_running) {
       startPolling();
@@ -1849,6 +2517,8 @@ const handleResize = () => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize);
   stopPolling();
+  stopMultiPolling();
+  stopMultiStreams();
   
   disconnectStream();
   

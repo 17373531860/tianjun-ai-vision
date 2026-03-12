@@ -195,7 +195,7 @@ const restoreLastSelection = async (settings) => {
               type: 'camera',
               device_index: settings.sourceValue,
               resolution: sourceStore.cameraSettings?.resolution || '1280x720',
-              fps: sourceStore.cameraSettings?.fps || 30
+              fps: sourceStore.cameraSettings?.fps || 60
             });
             sourceStore.setStreaming(true);
             console.log('[AutoRestore] 摄像头自动启动成功');

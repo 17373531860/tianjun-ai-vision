@@ -7,6 +7,7 @@ from backend.db.database import engine, Base
 from backend.api import api_router
 from backend.api.websocket import router as ws_router
 from backend.api.source import router as source_router, get_video_feed, get_video_manager
+from backend.api.channel_manager import router as workstation_router
 from backend.api.detection import router as detection_router
 from backend.api.sessions import router as sessions_router
 from backend.services.detector import get_detection_service
@@ -51,6 +52,7 @@ def migrate_database():
         ("projects", "alarm_config", "JSON"),
         ("projects", "detection_config", "JSON"),
         ("projects", "data_config", "JSON"),
+        ("detection_sessions", "channel_id", "INTEGER DEFAULT 0"),
     ]
     
     try:
@@ -334,6 +336,9 @@ app.include_router(detection_router, prefix=f"{settings.API_V1_STR}/detection", 
 # Include Sessions router (数据管理)
 app.include_router(sessions_router, prefix=f"{settings.API_V1_STR}/data", tags=["data"])
 
+# Include Workstation/Channel router (多工位管理)
+app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["workstations"])
+
 # Mount static files for uploads (images, etc.)
 if os.path.exists(settings.UPLOAD_DIR):
     app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
@@ -437,23 +442,22 @@ def shutdown_complete():
 # ========== 视频流端点 ==========
 
 @app.get("/video_feed")
-def video_feed():
-    """视频流端点 - 使用输入源管理器"""
-    video_manager = get_video_manager()
+def video_feed(channel: int = 0):
+    """视频流端点 - 支持多通道。?channel=0 (default), ?channel=1, etc."""
+    vm = get_video_manager(channel)
     
-    # 运行中或已暂停但仍有输入源时，使用 generate_mjpeg（暂停时低帧率输出当前帧）
-    if video_manager.is_running or video_manager.source_type:
+    if vm.is_running or vm.source_type:
         return StreamingResponse(
-            video_manager.generate_mjpeg(),
+            vm.generate_mjpeg(),
             media_type="multipart/x-mixed-replace; boundary=frame"
         )
     
-    # 没有任何输入源时，返回黑色占位帧
     def generate_frames():
         import numpy as np
         black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        cv2.putText(black_frame, "No Source", (220, 240), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        label = f"Ch{channel} - No Source"
+        cv2.putText(black_frame, label, (180, 240), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         ret, buffer = cv2.imencode('.jpg', black_frame)
         if ret:
             frame_data = buffer.tobytes()
@@ -469,18 +473,18 @@ def video_feed():
     )
 
 @app.get("/snapshot")
-def snapshot():
-    """单帧快照端点 - 返回当前帧的 JPEG（用于前端 canvas 渲染，避免 MJPEG 内存泄漏）"""
-    video_manager = get_video_manager()
-    data = video_manager.get_snapshot()
+def snapshot(channel: int = 0):
+    """单帧快照端点 - 支持多通道 ?channel=0"""
+    vm = get_video_manager(channel)
+    data = vm.get_snapshot()
     if data:
         return Response(content=data, media_type="image/jpeg",
                         headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     
     import numpy as np
     black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.putText(black_frame, "No Source", (220, 240),
-               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    cv2.putText(black_frame, f"Ch{channel} - No Source", (180, 240),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
     _, buffer = cv2.imencode('.jpg', black_frame)
     return Response(content=buffer.tobytes(), media_type="image/jpeg",
                     headers={"Cache-Control": "no-cache, no-store, must-revalidate"})

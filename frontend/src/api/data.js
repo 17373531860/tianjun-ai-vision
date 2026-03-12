@@ -17,11 +17,12 @@ export const getSession = (sessionId) => {
 };
 
 // 获取指定日期的会话概览
-export const getSessionsByDate = (date, projectId = null, startHour = null, endHour = null) => {
+export const getSessionsByDate = (date, projectId = null, startHour = null, endHour = null, channelId = null) => {
   const params = {};
   if (projectId) params.project_id = projectId;
   if (startHour) params.start_hour = startHour;
   if (endHour) params.end_hour = endHour;
+  if (channelId !== null && channelId !== undefined) params.channel_id = channelId;
   return api.get(`/data/sessions/by-date/${date}`, { params });
 };
 

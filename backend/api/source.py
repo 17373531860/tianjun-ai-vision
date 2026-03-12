@@ -4,7 +4,7 @@
 集成 YOLO 模型推理
 集成会话和周期记录
 """
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -400,7 +400,8 @@ class VideoSourceManager:
     # 配置文件路径
     CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'device_config.json')
     
-    def __init__(self):
+    def __init__(self, channel_id: int = 0):
+        self.channel_id = channel_id  # workstation/channel index (0-based)
         self.source_type = None  # 'camera', 'video', 'image', 'hikvision'
         self.capture = None
         self.is_running = False
@@ -412,7 +413,7 @@ class VideoSourceManager:
         self.image_path = None
         self.width = 1280
         self.height = 720
-        self.fps = 30
+        self.fps = 60
         self._thread = None
         
         # 海康工业相机相关
@@ -438,6 +439,7 @@ class VideoSourceManager:
         # YOLO 模型
         self.model = None
         self.model_path = None
+        self.model_task = 'detect'  # 'detect' or 'segment', updated on load_model
         self.device = 'auto'  # 推理设备: 'auto', 'cpu', 'cuda:0', 'cuda:1' 等
         self.current_device_info = None  # 当前使用的设备信息
         self.is_detecting = False
@@ -520,6 +522,7 @@ class VideoSourceManager:
         self.latency = 0
         self._fps_counter = 0
         self._fps_time = time.time()
+        self._frame_seq = 0
         
         # 步骤截图 {step_name: base64_image}
         self.step_screenshots = {}
@@ -562,6 +565,20 @@ class VideoSourceManager:
         self._just_settled = False
         self._step_raw_start = {}
         self._last_ng_time = 0
+        
+        # ========== Tracking Mode (跟踪模式 — 物品清点) ==========
+        self._tracking_objects = {}     # {track_id: {class_name, display_id, first_seen, last_seen, bbox, order_idx}}
+        self._tracking_class_counters = {}  # {class_name: int} auto-increment per class
+        self._tracking_display_map = {}  # {track_id: display_id}
+        self._tracking_item_checklist = {}  # {class_name: {expected, counted, prefix}}
+        self._tracking_lost_frames = {}  # {track_id: frames_missing}
+        self._tracking_letter_map = {}  # {class_name: letter_prefix}
+        self._tracking_letter_idx = 0
+        self._tracking_order_seq = 0    # placement order counter
+        self._tracking_prev_count = 0   # previous frame's tracked object count (for all_gone detection)
+        self._tracking_gone_frames = 0  # consecutive frames where count <= threshold
+        self._tracking_cycle_active = False  # whether a counting cycle is in progress
+        self._tracking_trigger_frames = 0   # frames the trigger label has been visible
         
         # Cycle Time 统计
         self.cycle_start_time = None  # 当前周期开始时间
@@ -646,7 +663,8 @@ class VideoSourceManager:
                 session_uuid=session_uuid,
                 project_id=project_id,
                 start_time=datetime.now(),
-                status="running"
+                status="running",
+                channel_id=self.channel_id
             )
             db.add(session)
             db.commit()
@@ -1019,13 +1037,18 @@ class VideoSourceManager:
         self.events_log = []
         self.step_start_time = {}  # 重置步骤开始时间
         
-        print(f"项目配置已加载: {config.get('name', 'Unknown')}")
+        if config.get('logic_mode') == 'tracking':
+            self._reset_counting_cycle()
+        
+        print(f"项目配置已加载: {config.get('name', 'Unknown')}, task_type={config.get('task_type')}, logic_mode={config.get('logic_mode')}")
         print(f"步骤阈值: {self.step_conf_thresholds}")
         print(f"步骤时间配置: {self.step_time_config}")
         print(f"步骤最少帧数: {self.step_min_frames}")
         print(f"步骤检测类型: {self.step_detection_type}")
         print(f"静态步骤配置: {self.step_static_config}")
         print(f"计数器: {self.counters}")
+        if config.get('logic_mode') == 'tracking':
+            print(f"跟踪模式配置: strategy={pipeline_config.get('tracking_cycle_strategy')}, expected={pipeline_config.get('counting_expected_items')}")
     
     def _release_model(self):
         """释放模型和 GPU 资源"""
@@ -1043,9 +1066,9 @@ class VideoSourceManager:
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 
-                # 2. 删除模型引用
                 del self.model
                 self.model = None
+                self.model_task = 'detect'
                 
                 # 3. Python 垃圾回收
                 gc.collect()
@@ -1075,6 +1098,7 @@ class VideoSourceManager:
             
             self.model = YOLO(model_path)
             self.model_path = model_path
+            self.model_task = getattr(self.model, 'task', 'detect')  # 'detect' or 'segment'
             
             # 设置推理设备
             if self.device == 'auto':
@@ -1101,6 +1125,7 @@ class VideoSourceManager:
             
             if hasattr(self.model, 'names'):
                 print(f"类别: {list(self.model.names.values())}")
+            print(f"模型任务类型: {self.model_task}")
             return True
         except Exception as e:
             print(f"模型加载失败: {e}")
@@ -1186,6 +1211,10 @@ class VideoSourceManager:
                         ret = False
                 
                 if ret and frame is not None:
+                    # Single copy from OpenCV's internal buffer (which may be
+                    # reused on the next capture.read()).  This copy is then
+                    # shared read-only across inference, streaming, and recording
+                    # threads — no further copies are needed in the capture loop.
                     original_frame = frame.copy()
                     
                     # 更新视频当前帧位置
@@ -1194,10 +1223,11 @@ class VideoSourceManager:
                     
                     # ========== 双线程架构：异步推理 ==========
                     if self.is_detecting and self.model is not None:
-                        # 更新供推理线程使用的帧（非阻塞）
+                        # Pass the frame reference — safe because original_frame
+                        # is a fresh copy each iteration and never mutated.
                         t_lock1_start = time.time()
                         with self._inference_frame_lock:
-                            self._latest_frame_for_inference = original_frame.copy()
+                            self._latest_frame_for_inference = original_frame
                         t_lock1_end = time.time()
                         if (t_lock1_end - t_lock1_start) > 0.1:
                             debug_log(f"!!! inference_frame_lock 耗时: {(t_lock1_end-t_lock1_start)*1000:.1f}ms", "CAPTURE")
@@ -1229,6 +1259,7 @@ class VideoSourceManager:
                     t_lock4_start = time.time()
                     with self.frame_lock:
                         self.current_frame = original_frame
+                        self._frame_seq += 1
                     t_lock4_end = time.time()
                     if (t_lock4_end - t_lock4_start) > 0.1:
                         debug_log(f"!!! frame_lock 耗时: {(t_lock4_end-t_lock4_start)*1000:.1f}ms", "CAPTURE")
@@ -1306,7 +1337,11 @@ class VideoSourceManager:
                             if self.source_type == 'camera':
                                 self.capture = cv2.VideoCapture(self.camera_index)
                                 if self.capture.isOpened():
-                                    print("[捕获线程] 摄像头重新打开成功")
+                                    self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
+                                    self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                                    self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                                    self.capture.set(cv2.CAP_PROP_FPS, self.fps)
+                                    print("[捕获线程] 摄像头重新打开成功 (MJPG)")
                                     consecutive_errors = 0
                                 else:
                                     print("[捕获线程] 摄像头重新打开失败")
@@ -2483,6 +2518,238 @@ class VideoSourceManager:
         
         print(f"  → 未找到匹配的自定义条件")
     
+    # ================================================================
+    # Counting Mode (物品清点模式) — stats / cycle logic
+    # ================================================================
+    
+    def _get_letter_prefix(self, class_name: str) -> str:
+        """Get or assign a stable letter prefix for a class name (A, B, C, ...)."""
+        if class_name not in self._tracking_letter_map:
+            letter = chr(ord('A') + self._tracking_letter_idx % 26)
+            self._tracking_letter_map[class_name] = letter
+            self._tracking_letter_idx += 1
+        return self._tracking_letter_map[class_name]
+    
+    def _reset_counting_cycle(self):
+        """Clear all tracking-mode state for the next cycle."""
+        self._tracking_objects.clear()
+        self._tracking_class_counters.clear()
+        self._tracking_display_map.clear()
+        self._tracking_lost_frames.clear()
+        self._tracking_letter_map.clear()
+        self._tracking_letter_idx = 0
+        self._tracking_item_checklist.clear()
+        self._tracking_order_seq = 0
+        self._tracking_prev_count = 0
+        self._tracking_gone_frames = 0
+        self._tracking_cycle_active = False
+        self._tracking_trigger_frames = 0
+        self.current_cycle_steps = []
+        self.last_added_step = None
+        self.step_last_seen.clear()
+        self.step_start_time.clear()
+        self.step_consecutive_frames.clear()
+        self.step_frame_confirmed.clear()
+        self.last_step_completed_time = None
+    
+    def _is_in_roi(self, det: dict) -> bool:
+        """Check if detection center falls within the configured ROI polygon (ray-casting)."""
+        if not self.project_config:
+            return True
+        roi = self.project_config.get('pipeline_config', {}).get('tracking_roi')
+        if not roi or not roi.get('enabled'):
+            return True
+        polygon = roi.get('polygon', [])
+        if len(polygon) < 3:
+            return True
+        cx = det['x'] + det['w'] / 2
+        cy = det['y'] + det['h'] / 2
+        return self._point_in_polygon(cx, cy, polygon)
+    
+    @staticmethod
+    def _point_in_polygon(px: float, py: float, polygon: list) -> bool:
+        """Ray-casting algorithm for point-in-polygon test. polygon = [[x,y], ...]"""
+        n = len(polygon)
+        inside = False
+        j = n - 1
+        for i in range(n):
+            xi, yi = polygon[i]
+            xj, yj = polygon[j]
+            if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi) + xi):
+                inside = not inside
+            j = i
+        return inside
+    
+    def _update_tracking_stats(self, detections: list, original_frame: np.ndarray):
+        """Process detections in tracking mode (物品清点).
+        
+        Supports 3 cycle-end strategies: all_gone, trigger, roi_exit.
+        Supports optional order enforcement and ROI filtering.
+        """
+        current_time = time.time()
+        if not self.project_config:
+            return
+        
+        pcfg = self.project_config.get('pipeline_config', {})
+        expected_items = pcfg.get('counting_expected_items', {})
+        cycle_strategy = pcfg.get('tracking_cycle_strategy', 'all_gone')
+        trigger_label = pcfg.get('tracking_trigger_label', '')
+        trigger_min_frames = pcfg.get('tracking_trigger_min_frames', 15)
+        max_lost_sec = pcfg.get('tracking_max_lost_seconds', 5.0)
+        gone_threshold = pcfg.get('tracking_gone_threshold', 0)
+        gone_confirm_frames = pcfg.get('tracking_gone_confirm_frames', 30)
+        check_order = pcfg.get('tracking_check_order', False)
+        expected_order = pcfg.get('tracking_expected_order', [])
+        
+        max_lost_frames = int(max_lost_sec * max(self.fps_actual, 10))
+        
+        seen_track_ids = set()
+        trigger_visible = False
+        
+        for det in detections:
+            label = det.get('label', '')
+            track_id = det.get('track_id', -1)
+            if not label:
+                continue
+            
+            if label == trigger_label and cycle_strategy == 'trigger':
+                trigger_visible = True
+                continue
+            
+            if track_id < 0:
+                continue
+            
+            if not self._is_in_roi(det):
+                continue
+            
+            seen_track_ids.add(track_id)
+            
+            if track_id in self._tracking_objects:
+                obj = self._tracking_objects[track_id]
+                obj['last_seen'] = current_time
+                obj['bbox'] = {'x': det['x'], 'y': det['y'], 'w': det['w'], 'h': det['h']}
+                self._tracking_lost_frames[track_id] = 0
+            else:
+                prefix = self._get_letter_prefix(label)
+                count = self._tracking_class_counters.get(label, 0) + 1
+                self._tracking_class_counters[label] = count
+                display_id = f"{prefix}{count}"
+                self._tracking_order_seq += 1
+                
+                self._tracking_objects[track_id] = {
+                    'class_name': label, 'display_id': display_id,
+                    'first_seen': current_time, 'last_seen': current_time,
+                    'bbox': {'x': det['x'], 'y': det['y'], 'w': det['w'], 'h': det['h']},
+                    'order_idx': self._tracking_order_seq
+                }
+                self._tracking_display_map[track_id] = display_id
+                self._tracking_lost_frames[track_id] = 0
+                
+                print(f"[Tracking] New item: {display_id} (class={label}, track={track_id}, order={self._tracking_order_seq})")
+                
+                if not self._tracking_cycle_active:
+                    self._tracking_cycle_active = True
+                    self.cycle_start_time = current_time
+                    self.start_cycle()
+        
+        for tid in list(self._tracking_lost_frames.keys()):
+            if tid not in seen_track_ids and tid in self._tracking_objects:
+                self._tracking_lost_frames[tid] = self._tracking_lost_frames.get(tid, 0) + 1
+        
+        self._rebuild_checklist(expected_items)
+        
+        if not self._tracking_cycle_active:
+            return
+        
+        active_count = sum(1 for tid in self._tracking_objects
+                          if self._tracking_lost_frames.get(tid, 0) < max_lost_frames)
+        
+        should_settle = False
+        
+        if cycle_strategy == 'all_gone':
+            if self._tracking_prev_count > 0 and active_count <= gone_threshold:
+                self._tracking_gone_frames += 1
+                if self._tracking_gone_frames >= gone_confirm_frames:
+                    should_settle = True
+            else:
+                self._tracking_gone_frames = 0
+        
+        elif cycle_strategy == 'trigger':
+            if trigger_visible:
+                self._tracking_trigger_frames += 1
+                if self._tracking_trigger_frames >= trigger_min_frames:
+                    should_settle = True
+            else:
+                self._tracking_trigger_frames = 0
+        
+        elif cycle_strategy == 'roi_exit':
+            if self._tracking_prev_count > 0 and active_count <= gone_threshold:
+                self._tracking_gone_frames += 1
+                if self._tracking_gone_frames >= gone_confirm_frames:
+                    should_settle = True
+            else:
+                self._tracking_gone_frames = 0
+        
+        self._tracking_prev_count = active_count
+        
+        if should_settle:
+            self._settle_counting_cycle(expected_items, check_order, expected_order)
+    
+    def _rebuild_checklist(self, expected_items: dict):
+        """Rebuild the item checklist from current tracking state."""
+        self._tracking_item_checklist = {}
+        for cls_name, expected_count in expected_items.items():
+            actual = self._tracking_class_counters.get(cls_name, 0)
+            self._tracking_item_checklist[cls_name] = {
+                'expected': expected_count, 'counted': actual,
+                'prefix': self._tracking_letter_map.get(cls_name, '?')
+            }
+        for cls_name, count in self._tracking_class_counters.items():
+            if cls_name not in self._tracking_item_checklist:
+                self._tracking_item_checklist[cls_name] = {
+                    'expected': 0, 'counted': count,
+                    'prefix': self._tracking_letter_map.get(cls_name, '?')
+                }
+    
+    def _settle_counting_cycle(self, expected_items: dict, check_order: bool = False, expected_order: list = None):
+        """Validate tracking-mode cycle and trigger OK or NG event."""
+        print(f"[Tracking] Settling cycle: counters={self._tracking_class_counters}, expected={expected_items}")
+        
+        missing = []
+        extra = []
+        for cls_name, exp in expected_items.items():
+            actual = self._tracking_class_counters.get(cls_name, 0)
+            if actual < exp:
+                missing.append(f"{cls_name}: {actual}/{exp}")
+            elif actual > exp:
+                extra.append(f"{cls_name}: {actual}/{exp}")
+        for cls_name, cnt in self._tracking_class_counters.items():
+            if cls_name not in expected_items:
+                extra.append(f"{cls_name}: {cnt}/0")
+        
+        order_ok = True
+        if check_order and expected_order:
+            placed = sorted(self._tracking_objects.values(), key=lambda o: o['order_idx'])
+            placed_classes = [o['class_name'] for o in placed]
+            if placed_classes != expected_order:
+                order_ok = False
+        
+        if not expected_items:
+            self._trigger_event(1, f'Counting complete: {dict(self._tracking_class_counters)}')
+        elif missing or extra:
+            reasons = []
+            if missing: reasons.append(f'缺件: {missing}')
+            if extra: reasons.append(f'多件: {extra}')
+            self._trigger_event(2, ', '.join(reasons))
+        elif not order_ok:
+            placed = sorted(self._tracking_objects.values(), key=lambda o: o['order_idx'])
+            actual_seq = [o['class_name'] for o in placed]
+            self._trigger_event(2, f'放入顺序错误: 期望{expected_order}, 实际{actual_seq}')
+        else:
+            self._trigger_event(1, f'装箱完整: {dict(self._tracking_class_counters)}')
+        
+        self._reset_counting_cycle()
+    
     def _check_events(self, completed_step: str):
         """检查是否触发事件"""
         if not self.project_config:
@@ -3207,6 +3474,165 @@ class VideoSourceManager:
         
         return detections
     
+    def _detect_and_track(self, frame: np.ndarray) -> list:
+        """Execute model.track() — works for both detect and segment models.
+        Returns detections with track_id.  Segment models also get 'mask' (polygon)."""
+        detections = []
+        try:
+            device = self.current_device_info.get('device', 'cpu') if self.current_device_info else 'cpu'
+            from concurrent.futures import TimeoutError as FuturesTimeoutError
+            
+            def run_tracking():
+                return list(self.model.track(
+                    frame, conf=self.conf_threshold, iou=self.iou_threshold,
+                    imgsz=640, verbose=False, device=device,
+                    stream=True, persist=True, tracker="bytetrack.yaml"
+                ))
+            
+            executor = self._get_inference_executor()
+            future = executor.submit(run_tracking)
+            try:
+                results = future.result(timeout=self._inference_timeout)
+                self._inference_timeout_count = 0
+                self._last_successful_inference = time.time()
+            except FuturesTimeoutError:
+                self._inference_timeout_count += 1
+                if self._inference_timeout_count >= self._max_consecutive_timeouts:
+                    self._shutdown_inference_executor()
+                    self._emergency_gpu_reset()
+                    self._inference_timeout_count = 0
+                return []
+            finally:
+                del future
+            
+            enabled_labels = self._get_enabled_labels()
+            is_seg = (getattr(self, 'model_task', 'detect') == 'segment')
+            h, w = frame.shape[:2]
+            
+            for result in results:
+                boxes = result.boxes
+                if boxes is None:
+                    continue
+                has_track_ids = boxes.id is not None
+                has_masks = is_seg and result.masks is not None
+                
+                for i, box in enumerate(boxes):
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                    confidence = float(box.conf[0].cpu().numpy())
+                    class_id = int(box.cls[0].cpu().numpy())
+                    track_id = int(boxes.id[i].cpu().numpy()) if has_track_ids else -1
+                    class_name = self.model.names[class_id] if hasattr(self.model, 'names') and class_id in self.model.names else f"class_{class_id}"
+                    
+                    if enabled_labels and class_name not in enabled_labels:
+                        continue
+                    if self.step_conf_thresholds:
+                        thr = self.step_conf_thresholds.get(class_name)
+                        if thr is not None and confidence < thr:
+                            continue
+                    
+                    det = {
+                        'x': float(x1 / w), 'y': float(y1 / h),
+                        'w': float((x2 - x1) / w), 'h': float((y2 - y1) / h),
+                        'confidence': confidence, 'class_id': class_id,
+                        'label': class_name, 'track_id': track_id
+                    }
+                    if has_masks:
+                        try:
+                            mask_xy = result.masks.xyn[i]
+                            det['mask'] = mask_xy.tolist()
+                        except Exception:
+                            pass
+                    if class_name in self.step_display_names:
+                        det['display_name'] = self.step_display_names[class_name]
+                    detections.append(det)
+        except Exception as e:
+            print(f"tracking error: {e}")
+            import traceback; traceback.print_exc()
+        return detections
+    
+    def _detect_segment(self, frame: np.ndarray) -> list:
+        """Segmentation predict (no tracking) — for seg models in non-tracking logic modes."""
+        detections = []
+        try:
+            device = self.current_device_info.get('device', 'cpu') if self.current_device_info else 'cpu'
+            from concurrent.futures import TimeoutError as FuturesTimeoutError
+            
+            def run_inference():
+                return list(self.model.predict(
+                    frame, conf=self.conf_threshold, iou=self.iou_threshold,
+                    imgsz=640, verbose=False, device=device, stream=True
+                ))
+            
+            executor = self._get_inference_executor()
+            future = executor.submit(run_inference)
+            try:
+                results = future.result(timeout=self._inference_timeout)
+                self._inference_timeout_count = 0
+                self._last_successful_inference = time.time()
+            except FuturesTimeoutError:
+                self._inference_timeout_count += 1
+                if self._inference_timeout_count >= self._max_consecutive_timeouts:
+                    self._shutdown_inference_executor()
+                    self._emergency_gpu_reset()
+                    self._inference_timeout_count = 0
+                return []
+            finally:
+                del future
+            
+            enabled_labels = self._get_enabled_labels()
+            h, w = frame.shape[:2]
+            
+            for result in results:
+                boxes = result.boxes
+                if boxes is None:
+                    continue
+                has_masks = result.masks is not None
+                
+                for i, box in enumerate(boxes):
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                    confidence = float(box.conf[0].cpu().numpy())
+                    class_id = int(box.cls[0].cpu().numpy())
+                    class_name = self.model.names[class_id] if hasattr(self.model, 'names') and class_id in self.model.names else f"class_{class_id}"
+                    
+                    if enabled_labels and class_name not in enabled_labels:
+                        continue
+                    if self.step_conf_thresholds:
+                        thr = self.step_conf_thresholds.get(class_name)
+                        if thr is not None and confidence < thr:
+                            continue
+                    
+                    det = {
+                        'x': float(x1 / w), 'y': float(y1 / h),
+                        'w': float((x2 - x1) / w), 'h': float((y2 - y1) / h),
+                        'confidence': confidence, 'class_id': class_id, 'label': class_name
+                    }
+                    if has_masks:
+                        try:
+                            det['mask'] = result.masks.xyn[i].tolist()
+                        except Exception:
+                            pass
+                    if class_name in self.step_display_names:
+                        det['display_name'] = self.step_display_names[class_name]
+                    if class_name in self.step_backup_map:
+                        det['hidden'] = True
+                        det['backup_for'] = self.step_backup_map[class_name]
+                    detections.append(det)
+        except Exception as e:
+            print(f"segment error: {e}")
+            import traceback; traceback.print_exc()
+        return detections
+    
+    def _get_enabled_labels(self) -> set:
+        """Helper: collect enabled step labels from project config."""
+        labels = set()
+        if self.project_config:
+            for step in self.project_config.get('steps_config', []):
+                if step.get('enabled', True):
+                    lbl = step.get('label', '')
+                    if lbl:
+                        labels.add(lbl)
+        return labels
+    
     def _emergency_gpu_reset(self):
         """紧急 GPU 重置 - 当推理持续超时时调用"""
         try:
@@ -3533,36 +3959,53 @@ class VideoSourceManager:
                     continue
                 
                 last_frame_id = frame_id
-                original_frame = frame.copy()
+                # No copy needed — capture thread creates a new array each
+                # iteration and never mutates the old one after publishing.
+                original_frame = frame
                 frame_count += 1
                 
-                # 执行推理 - 关键诊断点
+                # Determine task_type + logic_mode for this frame
+                _task_type = self.project_config.get('task_type', 'detection') if self.project_config else 'detection'
+                _logic_mode = self.project_config.get('logic_mode', 'sequential') if self.project_config else 'sequential'
+                _is_tracking = (_logic_mode == 'tracking')
+                _is_seg = (_task_type == 'segmentation')
+                
+                # 执行推理 — 4 combinations
                 t3 = time.time()
-                detections = self._detect_only(frame)
+                if _is_tracking:
+                    detections = self._detect_and_track(frame)
+                elif _is_seg:
+                    detections = self._detect_segment(frame)
+                else:
+                    detections = self._detect_only(frame)
                 t4 = time.time()
                 detect_time = (t4 - t3) * 1000
                 
-                # 如果推理耗时超过200ms，记录警告（降低阈值以便更早发现问题）
                 if detect_time > 200:
                     debug_log(f"!!! 推理耗时: {detect_time:.1f}ms, 检测数={len(detections) if detections else 0}", "INFERENCE")
                 
-                # 更新步骤统计 - 关键诊断点
+                # 更新统计
                 t5 = time.time()
-                self._update_step_stats(detections, original_frame)
+                if _is_tracking:
+                    self._update_tracking_stats(detections, original_frame)
+                else:
+                    self._update_step_stats(detections, original_frame)
                 t6 = time.time()
                 update_time = (t6 - t5) * 1000
                 
-                # 如果步骤统计耗时超过100ms，记录警告
                 if update_time > 100:
                     debug_log(f"!!! 步骤统计耗时: {update_time:.1f}ms", "INFERENCE")
                 
-                # 计算延迟
                 self.latency = int((time.time() - t3) * 1000)
                 
-                # 获取已确认的检测结果（只包含通过帧计数验证的）
-                # 必须先获取 confirmed，然后用它更新 current_detections
-                # 这样前端显示的检测框也会经过帧数过滤
-                confirmed = self._get_confirmed_detections(detections)
+                if _is_tracking:
+                    confirmed = detections
+                    for det in confirmed:
+                        tid = det.get('track_id', -1)
+                        if tid in self._tracking_display_map:
+                            det['display_id'] = self._tracking_display_map[tid]
+                else:
+                    confirmed = self._get_confirmed_detections(detections)
                 
                 # 更新检测结果（供前端获取，使用过滤后的结果）
                 t7 = time.time()
@@ -3823,7 +4266,7 @@ class VideoSourceManager:
         
         return img
     
-    def start_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 30):
+    def start_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60):
         """启动摄像头"""
         self.stop()
         
@@ -3850,9 +4293,18 @@ class VideoSourceManager:
         if not self.capture.isOpened():
             raise Exception(f"无法打开摄像头 {device_index}，请检查设备是否被其他程序占用")
         
+        # Prefer MJPEG capture format — YUYV at high resolutions is bandwidth-limited
+        # (e.g. 1280x720 YUYV = 10 fps max on USB 2.0, MJPG = 30 fps)
+        fourcc_mjpg = cv2.VideoWriter_fourcc('M', 'J', 'P', 'G')
+        self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.capture.set(cv2.CAP_PROP_FPS, fps)
+        
+        actual_fourcc = int(self.capture.get(cv2.CAP_PROP_FOURCC))
+        actual_fps = self.capture.get(cv2.CAP_PROP_FPS)
+        cc_str = "".join([chr((actual_fourcc >> (8 * i)) & 0xFF) for i in range(4)])
+        print(f"[Camera] Capture format: {cc_str}, FPS: {actual_fps}, {width}x{height}")
         
         self.source_type = 'camera'
         self.camera_index = device_index
@@ -3866,7 +4318,7 @@ class VideoSourceManager:
         
         return True
     
-    def start_hikvision_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 30):
+    def start_hikvision_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60):
         """启动海康工业相机（带增强调试）"""
         hik_log(f"start_hikvision_camera 调用: device_index={device_index}, {width}x{height}@{fps}fps")
         
@@ -4241,17 +4693,49 @@ class VideoSourceManager:
         self.source_type = 'image'
         self.image_path = image_path
         
-        # 如果正在检测，对图片进行推理
-        if self.is_detecting and self.model is not None:
-            frame, detections = self._detect_and_draw(frame)
-            with self.detection_lock:
-                self.current_detections = detections
-        
         with self.frame_lock:
             self.current_frame = frame
+            self._frame_seq += 1
         self.is_running = True
         
+        if self.is_detecting and self.model is not None:
+            self._run_image_inference(frame)
+        
         return True
+    
+    def _run_image_inference(self, frame: np.ndarray):
+        """Run inference on a single image frame and update detection results."""
+        try:
+            _task_type = self.project_config.get('task_type', 'detection') if self.project_config else 'detection'
+            _logic_mode = self.project_config.get('logic_mode', 'sequential') if self.project_config else 'sequential'
+            _is_tracking = (_logic_mode == 'tracking')
+            _is_seg = (_task_type == 'segmentation')
+            
+            if _is_tracking:
+                detections = self._detect_and_track(frame)
+            elif _is_seg:
+                detections = self._detect_segment(frame)
+            else:
+                detections = self._detect_only(frame)
+            
+            if _is_tracking:
+                for det in detections:
+                    tid = det.get('track_id', -1)
+                    if tid in self._tracking_display_map:
+                        det['display_id'] = self._tracking_display_map[tid]
+                confirmed = detections
+            else:
+                confirmed = detections
+            
+            with self.detection_lock:
+                self.current_detections = confirmed
+            with self._confirmed_detections_lock:
+                self._confirmed_detections = confirmed
+            
+            print(f"[Image] 图片推理完成, 检测到 {len(confirmed)} 个目标")
+        except Exception as e:
+            print(f"[Image] 图片推理失败: {e}")
+            import traceback; traceback.print_exc()
     
     def start_detection(self, model_path: str = None):
         """开始检测"""
@@ -4289,11 +4773,16 @@ class VideoSourceManager:
         
         self.is_detecting = True
         
-        # 启动推理线程（如果视频已在运行，需要在这里启动）
+        if self.source_type == 'image':
+            frame = self.get_frame()
+            if frame is not None and self.model is not None:
+                self._run_image_inference(frame)
+            print("图片检测已启动")
+            return True
+        
         if self.is_running and self.model is not None:
             self._start_inference_thread()
         
-        # 启动录制线程（独立于 CUDA，避免段错误）
         if self.recording_enabled:
             self._start_recording_thread()
         
@@ -4724,10 +5213,11 @@ class VideoSourceManager:
                 print(f"[resume] 摄像头 {self.camera_index} 打开失败")
                 self.capture = None
                 return False
+            self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
             self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
             self.capture.set(cv2.CAP_PROP_FPS, self.fps)
-            print(f"[resume] 摄像头已重新打开: index={self.camera_index}")
+            print(f"[resume] 摄像头已重新打开 (MJPG): index={self.camera_index}")
             return True
         except Exception as e:
             print(f"[resume] 重新打开摄像头失败: {e}")
@@ -5040,30 +5530,36 @@ class VideoSourceManager:
         return black
 
     def generate_mjpeg(self):
-        """Generate MJPEG stream. Sends placeholder frames when no real frame is available."""
+        """Generate MJPEG stream.  Only encodes and sends when a genuinely new
+        frame is available from the capture thread, so CPU is never wasted on
+        duplicate JPEG encodes."""
         target_interval = 1.0 / max(self.target_stream_fps, 1)
-        min_interval = 1.0 / 15
         idle_interval = 1.0
         idle_count = 0
         max_idle = 300
-        
+        last_seq = -1
+
         while True:
-            frame_start = time.time()
-            
             if self.is_running:
                 idle_count = 0
-                frame = self.get_frame()
+                frame = None
+                with self.frame_lock:
+                    seq = self._frame_seq
+                    if seq != last_seq and self.current_frame is not None:
+                        frame = self.current_frame.copy()
+                        last_seq = seq
+
                 if frame is None:
-                    frame = self._get_placeholder_frame()
+                    time.sleep(0.002)
+                    continue
+
                 chunk = self._encode_and_yield(frame)
                 del frame
                 if chunk:
                     yield chunk
-                
-                elapsed = time.time() - frame_start
-                interval = target_interval if self.frame_limit_enabled else min_interval
-                sleep_time = max(0.001, interval - elapsed)
-                time.sleep(sleep_time)
+
+                if self.frame_limit_enabled:
+                    time.sleep(max(0.001, target_interval))
             else:
                 frame = self.get_frame()
                 if frame is None:
@@ -5072,7 +5568,7 @@ class VideoSourceManager:
                 del frame
                 if chunk:
                     yield chunk
-                
+
                 idle_count += 1
                 if idle_count > max_idle:
                     break
@@ -5087,8 +5583,29 @@ class VideoSourceManager:
                 return buffer.tobytes()
         return None
 
-# 全局视频源管理器
-video_manager = VideoSourceManager()
+# Global video_manager is now a property of the ChannelManager singleton.
+# Kept here for backward compatibility — always points to channel 0.
+def _get_default_manager():
+    from backend.api.channel_manager import channel_manager
+    return channel_manager.get_default()
+
+class _VideoManagerProxy:
+    """Lazy proxy so existing code using module-level `video_manager` keeps working."""
+    def __getattr__(self, name):
+        return getattr(_get_default_manager(), name)
+    def __setattr__(self, name, value):
+        setattr(_get_default_manager(), name, value)
+
+video_manager = _VideoManagerProxy()
+
+
+def _get_mgr(channel: int = 0):
+    """Resolve a VideoSourceManager by channel id. Used by API endpoints."""
+    from backend.api.channel_manager import channel_manager
+    try:
+        return channel_manager.get(channel)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # Pydantic 模型
@@ -5096,7 +5613,7 @@ class CameraStartRequest(BaseModel):
     device_index: int = 0
     width: int = 1280
     height: int = 720
-    fps: int = 30
+    fps: int = 60
 
 class VideoStartRequest(BaseModel):
     file_path: str
@@ -5385,24 +5902,26 @@ def set_kalman_config(req: KalmanConfigRequest):
 
 
 @router.post("/camera/start")
-def start_camera(req: CameraStartRequest):
+def start_camera(req: CameraStartRequest, channel: int = Query(0)):
     """启动摄像头"""
     try:
-        video_manager.start_camera(
+        mgr = _get_mgr(channel)
+        mgr.start_camera(
             device_index=req.device_index,
             width=req.width,
             height=req.height,
             fps=req.fps
         )
-        return {"status": "success", "message": "摄像头已启动"}
+        return {"status": "success", "message": f"摄像头已启动 (ch{channel})"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/camera/stop")
-def stop_camera():
+def stop_camera(channel: int = Query(0)):
     """停止摄像头"""
-    video_manager.stop()
-    return {"status": "success", "message": "摄像头已停止"}
+    mgr = _get_mgr(channel)
+    mgr.stop()
+    return {"status": "success", "message": f"摄像头已停止 (ch{channel})"}
 
 
 # ========== 海康工业相机 API 端点 ==========
@@ -5443,11 +5962,12 @@ def list_hikvision_cameras():
         }
 
 @router.post("/hikvision/start")
-def start_hikvision_camera(req: HikvisionStartRequest):
+def start_hikvision_camera(req: HikvisionStartRequest, channel: int = Query(0)):
     """启动海康工业相机"""
-    hik_log(f"API /hikvision/start 收到请求: device_index={req.device_index}, {req.width}x{req.height}@{req.fps}fps")
+    hik_log(f"API /hikvision/start 收到请求: device_index={req.device_index}, {req.width}x{req.height}@{req.fps}fps, ch={channel}")
+    mgr = _get_mgr(channel)
     try:
-        video_manager.start_hikvision_camera(
+        mgr.start_hikvision_camera(
             device_index=req.device_index,
             width=req.width,
             height=req.height,
@@ -5460,9 +5980,9 @@ def start_hikvision_camera(req: HikvisionStartRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/hikvision/stop")
-def stop_hikvision_camera():
+def stop_hikvision_camera(channel: int = Query(0)):
     """停止海康工业相机"""
-    video_manager.stop()
+    _get_mgr(channel).stop()
     return {"status": "success", "message": "海康相机已停止"}
 
 @router.get("/hikvision/status")
@@ -5507,42 +6027,42 @@ async def upload_video(file: UploadFile = File(...)):
     }
 
 @router.post("/video/start")
-def start_video(req: VideoStartRequest):
+def start_video(req: VideoStartRequest, channel: int = Query(0)):
     """启动视频播放"""
     try:
-        video_manager.start_video(req.file_path, req.speed)
-        return {"status": "success", "message": "视频已开始播放", "speed": req.speed}
+        _get_mgr(channel).start_video(req.file_path, req.speed)
+        return {"status": "success", "message": f"视频已开始播放 (ch{channel})", "speed": req.speed}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/video/stop")
-def stop_video():
+def stop_video(channel: int = Query(0)):
     """停止视频"""
-    video_manager.stop()
-    return {"status": "success", "message": "视频已停止"}
+    _get_mgr(channel).stop()
+    return {"status": "success", "message": f"视频已停止 (ch{channel})"}
 
 @router.post("/video/speed")
-def set_video_speed(req: VideoSpeedRequest):
+def set_video_speed(req: VideoSpeedRequest, channel: int = Query(0)):
     """设置视频播放倍速"""
     try:
-        video_manager.set_video_speed(req.speed)
+        _get_mgr(channel).set_video_speed(req.speed)
         return {"status": "success", "message": f"倍速已设置为 {req.speed}x", "speed": req.speed}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/video/progress")
-def set_video_progress(req: VideoProgressRequest):
+def set_video_progress(req: VideoProgressRequest, channel: int = Query(0)):
     """设置视频播放进度"""
     try:
-        video_manager.set_video_progress(req.progress)
+        _get_mgr(channel).set_video_progress(req.progress)
         return {"status": "success", "message": f"进度已设置为 {req.progress*100:.1f}%", "progress": req.progress}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/video/info")
-def get_video_info():
+def get_video_info(channel: int = Query(0)):
     """获取视频播放信息"""
-    info = video_manager.get_video_info()
+    info = _get_mgr(channel).get_video_info()
     if info is None:
         return {"status": "not_video", "message": "当前不是视频输入源"}
     return {"status": "success", **info}
@@ -5569,123 +6089,152 @@ async def upload_image(file: UploadFile = File(...)):
     }
 
 @router.post("/image/set")
-def set_image(req: ImageSetRequest):
+def set_image(req: ImageSetRequest, channel: int = Query(0)):
     """设置图片为输入源"""
     try:
-        video_manager.set_image(req.file_path)
-        return {"status": "success", "message": "图片已设置为输入源"}
+        _get_mgr(channel).set_image(req.file_path)
+        return {"status": "success", "message": f"图片已设置为输入源 (ch{channel})"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/detection/start")
-def start_detection(req: DetectionStartRequest):
+def start_detection(req: DetectionStartRequest, channel: int = Query(0)):
     """开始检测"""
     try:
-        video_manager.conf_threshold = req.conf
-        video_manager.iou_threshold = req.iou
-        video_manager.start_detection(req.model_path)
+        mgr = _get_mgr(channel)
+        mgr.conf_threshold = req.conf
+        mgr.iou_threshold = req.iou
+
+        from backend.api.channel_manager import channel_manager
+        device = getattr(mgr, 'device', 'auto') or 'auto'
+        if req.model_path:
+            channel_manager.load_model_for_channel(channel, req.model_path, device)
+        elif mgr.model is None:
+            channel_manager._propagate_model(channel)
+
+        mgr.start_detection(req.model_path)
         
-        # 如果有项目配置，自动创建会话
-        if video_manager.project_config and video_manager.project_config.get('id'):
-            session_info = video_manager.start_session(video_manager.project_config['id'])
+        if mgr.project_config and mgr.project_config.get('id'):
+            session_info = mgr.start_session(mgr.project_config['id'])
             if session_info:
                 return {
                     "status": "success", 
-                    "message": "检测已启动",
+                    "message": f"检测已启动 (ch{channel})",
                     "session_id": session_info.get('session_id'),
                     "session_uuid": session_info.get('session_uuid')
                 }
         
-        return {"status": "success", "message": "检测已启动"}
+        return {"status": "success", "message": f"检测已启动 (ch{channel})"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/detection/stop")
-def stop_detection():
+def stop_detection(channel: int = Query(0)):
     """停止检测（只停止推理）并结束会话"""
-    # 结束当前会话
-    video_manager.end_session()
-    video_manager.stop_detection()
-    return {"status": "success", "message": "检测已停止"}
+    mgr = _get_mgr(channel)
+    mgr.end_session()
+    mgr.stop_detection()
+    return {"status": "success", "message": f"检测已停止 (ch{channel})"}
 
 @router.post("/detection/pause")
-def pause_detection():
+def pause_detection(channel: int = Query(0)):
     """暂停：停止画面更新和检测，画面停在当前帧"""
-    video_manager.pause()
+    _get_mgr(channel).pause()
     return {"status": "success", "message": "已暂停"}
 
 @router.post("/detection/resume")
-def resume_detection():
+def resume_detection(channel: int = Query(0)):
     """恢复：从暂停状态恢复，重新启动视频流和检测"""
-    if video_manager.resume():
+    if _get_mgr(channel).resume():
         return {"status": "success", "message": "已恢复"}
     else:
         raise HTTPException(status_code=400, detail="无法恢复：没有可用的视频源")
 
 @router.post("/detection/standby")
-def standby_detection():
+def standby_detection(channel: int = Query(0)):
     """待机：只停止检测推理，画面继续播放"""
-    video_manager.standby()
+    _get_mgr(channel).standby()
     return {"status": "success", "message": "已待机"}
 
 @router.post("/detection/resume-inference")
-def resume_inference():
+def resume_inference(channel: int = Query(0)):
     """从待机恢复推理（画面已在播放）"""
-    result = video_manager.resume_inference()
+    result = _get_mgr(channel).resume_inference()
     if result is False:
         raise HTTPException(status_code=400, detail="无法恢复推理")
     return {"status": "success", "message": "已恢复推理"}
 
 @router.post("/detection/reset-stats")
-def reset_detection_stats():
+def reset_detection_stats(channel: int = Query(0)):
     """重置统计数据（计数器、步骤计数等）"""
-    video_manager.reset_stats()
+    _get_mgr(channel).reset_stats()
     return {"status": "success", "message": "统计数据已重置"}
 
 @router.get("/detection/results")
-def get_detection_results():
+def get_detection_results(channel: int = Query(0)):
     """获取检测结果"""
-    # 获取最新事件（用于显示提示框）
+    mgr = _get_mgr(channel)
     recent_events = []
-    if video_manager.events_log:
-        # 返回最近30秒内的事件（前端用 seq 去重，不会重复计数）
+    if mgr.events_log:
         current_time = time.time()
         recent_events = [
-            e for e in video_manager.events_log 
+            e for e in mgr.events_log 
             if current_time - e.get('timestamp', 0) < 30
         ]
     
-    # 计算平均周期时间
     avg_cycle_time = 0
-    if video_manager.cycle_times:
-        avg_cycle_time = round(sum(video_manager.cycle_times) / len(video_manager.cycle_times), 2)
+    if mgr.cycle_times:
+        avg_cycle_time = round(sum(mgr.cycle_times) / len(mgr.cycle_times), 2)
     
-    return {
-        "detections": video_manager.get_detections(),
-        "fps": video_manager.fps_actual,
-        "latency": video_manager.latency,
-        "is_detecting": video_manager.is_detecting,
-        "source_type": video_manager.source_type,
-        "is_running": video_manager.is_running,
-        "step_counts": video_manager.step_counts.copy(),
-        "step_screenshots": video_manager.step_screenshots.copy(),
-        "step_detection_times": video_manager.step_detection_times.copy(),
-        "step_durations": video_manager.step_durations.copy(),
-        "step_intervals": video_manager.step_intervals.copy(),
-        "counters": video_manager.counters.copy(),
+    result = {
+        "channel_id": channel,
+        "detections": mgr.get_detections(),
+        "fps": mgr.fps_actual,
+        "latency": mgr.latency,
+        "is_detecting": mgr.is_detecting,
+        "source_type": mgr.source_type,
+        "is_running": mgr.is_running,
+        "step_counts": mgr.step_counts.copy(),
+        "step_screenshots": mgr.step_screenshots.copy(),
+        "step_detection_times": mgr.step_detection_times.copy(),
+        "step_durations": mgr.step_durations.copy(),
+        "step_intervals": mgr.step_intervals.copy(),
+        "counters": mgr.counters.copy(),
         "recent_events": recent_events,
         "average_cycle_time": avg_cycle_time,
-        "current_cycle_steps": list(video_manager.current_cycle_steps),
+        "current_cycle_steps": list(mgr.current_cycle_steps),
         "backup_covered_labels": [
-            video_manager.step_backup_map[b]
-            for b in video_manager.backup_steps_seen_in_cycle
-            if b in video_manager.step_backup_map
+            mgr.step_backup_map[b]
+            for b in mgr.backup_steps_seen_in_cycle
+            if b in mgr.step_backup_map
         ]
     }
+    
+    result['model_task'] = getattr(mgr, 'model_task', 'detect')
+    
+    logic_mode = mgr.project_config.get('logic_mode') if mgr.project_config else None
+    if logic_mode == 'tracking':
+        tracked_objs = {}
+        for tid, obj in mgr._tracking_objects.items():
+            tracked_objs[str(tid)] = {
+                'class_name': obj['class_name'],
+                'display_id': obj['display_id'],
+                'bbox': obj.get('bbox'),
+                'order_idx': obj.get('order_idx', 0),
+            }
+        result['tracking'] = {
+            'tracked_objects': tracked_objs,
+            'class_counters': dict(mgr._tracking_class_counters),
+            'item_checklist': dict(mgr._tracking_item_checklist),
+            'cycle_active': mgr._tracking_cycle_active,
+        }
+    
+    return result
 
 class ProjectConfigRequest(BaseModel):
     project_id: int
     name: str
+    task_type: str = 'detection'
     logic_mode: str = 'detection'
     steps_config: list = []
     pipeline_config: dict = {}
@@ -5693,64 +6242,66 @@ class ProjectConfigRequest(BaseModel):
     counters_config: list = []
 
 @router.post("/detection/set-project")
-def set_project_config(req: ProjectConfigRequest):
+def set_project_config(req: ProjectConfigRequest, channel: int = Query(0)):
     """设置项目配置"""
-    video_manager.set_project_config({
+    _get_mgr(channel).set_project_config({
         'id': req.project_id,
         'name': req.name,
+        'task_type': req.task_type,
         'logic_mode': req.logic_mode,
         'steps_config': req.steps_config,
         'pipeline_config': req.pipeline_config,
         'events_config': req.events_config,
         'counters_config': req.counters_config
     })
-    return {"status": "success", "message": "项目配置已设置"}
+    return {"status": "success", "message": f"项目配置已设置 (ch{channel})"}
 
 @router.get("/status")
-def get_source_status():
+def get_source_status(channel: int = Query(0)):
     """获取当前输入源状态"""
+    mgr = _get_mgr(channel)
+    from backend.api.channel_manager import channel_manager
     return {
-        "is_running": video_manager.is_running,
-        "is_detecting": video_manager.is_detecting,
-        "source_type": video_manager.source_type,
-        "width": video_manager.width,
-        "height": video_manager.height,
-        "fps": video_manager.fps,
-        "fps_actual": video_manager.fps_actual,
-        "latency": video_manager.latency,
-        "model_loaded": video_manager.model is not None
+        "channel_id": channel,
+        "channel_count": channel_manager.channel_count,
+        "is_running": mgr.is_running,
+        "is_detecting": mgr.is_detecting,
+        "source_type": mgr.source_type,
+        "width": mgr.width,
+        "height": mgr.height,
+        "fps": mgr.fps,
+        "fps_actual": mgr.fps_actual,
+        "latency": mgr.latency,
+        "model_loaded": mgr.model is not None
     }
 
 
 @router.get("/health")
-def get_health_status():
+def get_health_status(channel: int = Query(0)):
     """
     获取系统健康状态
     用于监控线程运行状态和 GPU 资源使用情况
     """
     import torch
+    mgr = _get_mgr(channel)
     
     current_time = time.time()
     
-    # 检查线程健康状态
     inference_thread_alive = (
-        video_manager._inference_thread is not None and 
-        video_manager._inference_thread.is_alive()
+        mgr._inference_thread is not None and 
+        mgr._inference_thread.is_alive()
     )
     capture_thread_alive = (
-        video_manager._thread is not None and 
-        video_manager._thread.is_alive()
+        mgr._thread is not None and 
+        mgr._thread.is_alive()
     )
     
-    # 计算线程无响应时间
-    inference_idle_time = current_time - video_manager._last_inference_heartbeat
-    capture_idle_time = current_time - video_manager._last_capture_heartbeat
+    inference_idle_time = current_time - mgr._last_inference_heartbeat
+    capture_idle_time = current_time - mgr._last_capture_heartbeat
     
-    # 判断线程是否健康
-    inference_healthy = not inference_thread_alive or inference_idle_time < video_manager._thread_timeout_threshold
-    capture_healthy = not capture_thread_alive or capture_idle_time < video_manager._thread_timeout_threshold
+    inference_healthy = not inference_thread_alive or inference_idle_time < mgr._thread_timeout_threshold
+    capture_healthy = not capture_thread_alive or capture_idle_time < mgr._thread_timeout_threshold
     
-    # GPU 信息
     gpu_info = None
     if torch.cuda.is_available():
         try:
@@ -5765,9 +6316,12 @@ def get_health_status():
     
     overall_healthy = inference_healthy and capture_healthy
     
+    from backend.api.channel_manager import channel_manager
     return {
         "healthy": overall_healthy,
         "timestamp": current_time,
+        "channel_id": channel,
+        "channel_count": channel_manager.channel_count,
         "threads": {
             "inference": {
                 "alive": inference_thread_alive,
@@ -5781,20 +6335,23 @@ def get_health_status():
             }
         },
         "detection": {
-            "is_running": video_manager.is_running,
-            "is_detecting": video_manager.is_detecting,
-            "model_loaded": video_manager.model is not None,
-            "fps_actual": video_manager.fps_actual,
-            "latency_ms": video_manager.latency
+            "is_running": mgr.is_running,
+            "is_detecting": mgr.is_detecting,
+            "model_loaded": mgr.model is not None,
+            "fps_actual": mgr.fps_actual,
+            "latency_ms": mgr.latency
         },
         "gpu": gpu_info
     }
 
 
-def get_video_feed():
+def get_video_feed(channel: int = 0):
     """获取视频流（供 main.py 使用）"""
-    return video_manager.generate_mjpeg()
+    from backend.api.channel_manager import channel_manager
+    mgr = channel_manager.get(channel)
+    return mgr.generate_mjpeg()
 
-def get_video_manager():
+def get_video_manager(channel: int = 0):
     """获取视频管理器实例"""
-    return video_manager
+    from backend.api.channel_manager import channel_manager
+    return channel_manager.get(channel)

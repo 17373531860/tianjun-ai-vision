@@ -1,45 +1,42 @@
 import api from './index';
 
-// 启动检测 (新版 - 直接传模型路径)
-export const startDetection = (modelPath, conf = 0.25, iou = 0.45) => {
-  return api.post('/source/detection/start', {
+export const startDetection = (modelPath, conf = 0.25, iou = 0.45, channel = 0) => {
+  return api.post(`/source/detection/start?channel=${channel}`, {
     model_path: modelPath,
     conf,
     iou
   });
 };
 
-// 停止检测（只停止推理）
-export const stopDetection = () => api.post('/source/detection/stop');
+export const stopDetection = (channel = 0) => api.post(`/source/detection/stop?channel=${channel}`);
 
-// 暂停：停止画面更新和检测，画面停在当前帧
-export const pauseDetection = () => api.post('/source/detection/pause');
+export const pauseDetection = (channel = 0) => api.post(`/source/detection/pause?channel=${channel}`);
 
-// 恢复：从暂停状态恢复
-export const resumeDetection = () => api.post('/source/detection/resume');
+export const resumeDetection = (channel = 0) => api.post(`/source/detection/resume?channel=${channel}`);
 
-// 待机：只停止检测推理，画面继续播放
-export const standbyDetection = () => api.post('/source/detection/standby');
+export const standbyDetection = (channel = 0) => api.post(`/source/detection/standby?channel=${channel}`);
 
-// 从待机恢复推理（画面已在播放）
-export const resumeInference = () => api.post('/source/detection/resume-inference');
+export const resumeInference = (channel = 0) => api.post(`/source/detection/resume-inference?channel=${channel}`);
 
-// 获取检测结果
-export const getDetectionResults = () => api.get('/source/detection/results');
+export const getDetectionResults = (channel = 0) => api.get(`/source/detection/results?channel=${channel}`);
 
-// 获取输入源状态
-export const getSourceStatus = () => api.get('/source/status');
+export const getSourceStatus = (channel = 0) => api.get(`/source/status?channel=${channel}`);
 
-// 设置项目配置
-export const setProjectConfig = (projectConfig) => {
-  return api.post('/source/detection/set-project', projectConfig);
+export const setProjectConfig = (projectConfig, channel = 0) => {
+  return api.post(`/source/detection/set-project?channel=${channel}`, projectConfig);
 };
 
-// 重置检测（保留兼容）
-export const resetDetection = () => api.post('/detection/reset');
+export const resetDetection = (channel = 0) => api.post(`/detection/reset?channel=${channel}`);
 
-// 重置统计数据（计数器、步骤计数等）
-export const resetDetectionStats = () => api.post('/source/detection/reset-stats');
+export const resetDetectionStats = (channel = 0) => api.post(`/source/detection/reset-stats?channel=${channel}`);
 
-// 获取检测状态（保留兼容）
-export const getDetectionStatus = () => api.get('/source/status');
+export const getDetectionStatus = (channel = 0) => api.get(`/source/status?channel=${channel}`);
+
+// Multi-channel / workstation APIs
+export const getWorkstations = () => api.get('/workstations/');
+
+export const setWorkstationMode = (channelCount) => api.post('/workstations/mode', { channel_count: channelCount });
+
+export const setChannelGpu = (channelId, device) => api.post(`/workstations/${channelId}/gpu`, { device });
+
+export const getGpuAllocation = () => api.get('/workstations/gpu-allocation');

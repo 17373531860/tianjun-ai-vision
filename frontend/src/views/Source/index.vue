@@ -2,7 +2,118 @@
   <div class="p-6 h-full overflow-y-auto">
     <h2 class="text-2xl font-bold mb-6 border-l-4 border-tech-blue pl-3 text-white">输入源设置</h2>
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- ===== Workstation Mode Selector ===== -->
+    <el-card shadow="never" class="bg-slate-800 border-slate-700 mb-6">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <el-icon class="text-tech-blue"><Monitor /></el-icon>
+          <span class="font-bold text-white">工位模式</span>
+        </div>
+      </template>
+      <div class="flex items-center gap-4">
+        <el-radio-group v-model="workstationMode" @change="handleWorkstationModeChange" size="large">
+          <el-radio-button :value="1">单工位</el-radio-button>
+          <el-radio-button :value="2">双工位 (一拖二)</el-radio-button>
+          <el-radio-button :value="4">四工位 (一拖四)</el-radio-button>
+        </el-radio-group>
+        <span class="text-xs text-gray-400">{{ workstationMode > 1 ? `同时运行 ${workstationMode} 个独立检测通道` : '单摄像头标准模式' }}</span>
+      </div>
+    </el-card>
+
+    <!-- ===== Multi-Workstation Configuration (2 or 4) ===== -->
+    <div v-if="workstationMode > 1" class="mb-6">
+      <div :class="workstationMode <= 2 ? 'grid grid-cols-2 gap-4' : 'grid grid-cols-2 gap-4'">
+        <el-card v-for="ch in workstationMode" :key="ch" shadow="never" class="bg-slate-800 border-slate-700">
+          <template #header>
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-white">工位 {{ ch }}</span>
+              <el-tag :type="wsConfigured(ch - 1) ? 'success' : 'info'" size="small">
+                {{ wsConfigured(ch - 1) ? '已配置' : '未配置' }}
+              </el-tag>
+            </div>
+          </template>
+          <el-form label-position="top" size="small">
+            <!-- Source type selector per workstation -->
+            <el-form-item label="输入源">
+              <el-radio-group v-model="wsConfigs[ch - 1].sourceType" size="small">
+                <el-radio-button value="camera">摄像头</el-radio-button>
+                <el-radio-button value="video">视频</el-radio-button>
+                <el-radio-button value="image">图片</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+
+            <!-- Camera selector -->
+            <el-form-item v-if="wsConfigs[ch - 1].sourceType === 'camera'" label="摄像头">
+              <el-select v-model="wsConfigs[ch - 1].cameraId" class="w-full" placeholder="选择设备" clearable>
+                <el-option-group v-if="usbCameras.length > 0" label="USB">
+                  <el-option v-for="cam in usbCameras" :key="cam.id" :label="cam.name" :value="cam.id" />
+                </el-option-group>
+                <el-option-group v-if="hikvisionCameras.length > 0" label="海康">
+                  <el-option v-for="cam in hikvisionCameras" :key="cam.id" :label="cam.name" :value="cam.id" />
+                </el-option-group>
+              </el-select>
+            </el-form-item>
+
+            <!-- Video file selector -->
+            <el-form-item v-if="wsConfigs[ch - 1].sourceType === 'video'" label="视频文件">
+              <el-upload drag action="#" :auto-upload="false" :limit="1" accept=".mp4,.avi,.mov,.mkv"
+                :on-change="(f) => wsConfigs[ch - 1].videoFile = f.raw" class="w-full">
+                <div class="text-xs text-gray-400 py-2">拖拽或点击选择视频</div>
+              </el-upload>
+              <p v-if="wsConfigs[ch - 1].videoFile" class="text-xs text-green-400 mt-1">{{ wsConfigs[ch - 1].videoFile.name }}</p>
+            </el-form-item>
+
+            <!-- Image file selector -->
+            <el-form-item v-if="wsConfigs[ch - 1].sourceType === 'image'" label="图片文件">
+              <el-upload drag action="#" :auto-upload="false" :limit="1" accept=".jpg,.jpeg,.png,.bmp"
+                :on-change="(f) => wsConfigs[ch - 1].imageFile = f.raw" class="w-full">
+                <div class="text-xs text-gray-400 py-2">拖拽或点击选择图片</div>
+              </el-upload>
+              <p v-if="wsConfigs[ch - 1].imageFile" class="text-xs text-green-400 mt-1">{{ wsConfigs[ch - 1].imageFile.name }}</p>
+            </el-form-item>
+
+            <el-form-item label="绑定项目">
+              <el-select v-model="wsConfigs[ch - 1].projectId" class="w-full" placeholder="选择项目" clearable>
+                <el-option v-for="p in projectList" :key="p.id" :label="p.name" :value="p.id" />
+              </el-select>
+            </el-form-item>
+            <div class="grid grid-cols-3 gap-2">
+              <el-form-item v-if="wsConfigs[ch - 1].sourceType === 'camera'" label="分辨率">
+                <el-select v-model="wsConfigs[ch - 1].resolution" class="w-full">
+                  <el-option label="640x480" value="640x480" />
+                  <el-option label="1280x720" value="1280x720" />
+                  <el-option label="1920x1080" value="1920x1080" />
+                </el-select>
+              </el-form-item>
+              <el-form-item v-if="wsConfigs[ch - 1].sourceType === 'camera'" label="FPS">
+                <el-select v-model="wsConfigs[ch - 1].fps" class="w-full">
+                  <el-option label="10" :value="10" />
+                  <el-option label="15" :value="15" />
+                  <el-option label="30" :value="30" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="GPU">
+                <el-select v-model="wsConfigs[ch - 1].gpuDevice" class="w-full">
+                  <el-option label="自动" value="auto" />
+                  <el-option label="GPU 0" value="cuda:0" />
+                  <el-option label="GPU 1" value="cuda:1" />
+                  <el-option label="CPU" value="cpu" />
+                </el-select>
+              </el-form-item>
+            </div>
+          </el-form>
+        </el-card>
+      </div>
+      <div class="mt-4 flex gap-4">
+        <el-button type="primary" size="large" class="flex-1" @click="saveAndStartMulti" :loading="saving">
+          <el-icon class="mr-2"><Check /></el-icon>
+          保存并启动所有工位
+        </el-button>
+      </div>
+    </div>
+
+    <!-- ===== Single Workstation Configuration (original) ===== -->
+    <div v-if="workstationMode <= 1" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <!-- 左侧：输入源选择 -->
       <div class="space-y-6">
         <!-- 输入源类型选择 -->
@@ -249,20 +360,138 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { 
   VideoCamera, Camera, VideoPlay, Picture, 
-  UploadFilled, Refresh, Check
+  UploadFilled, Refresh, Check, Monitor
 } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import api from '@/api/index';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useSystemStore } from '@/store/useSystemStore';
+import { setWorkstationMode, getWorkstations, setProjectConfig as apiSetProjectConfig, startDetection as apiStartDetection, setChannelGpu } from '@/api/detection';
+import { getModelDetail } from '@/api/model';
+import { getProjects } from '@/api/project';
 
 const router = useRouter();
 const sourceStore = useSourceStore();
 const systemStore = useSystemStore();
+
+// ===== Workstation Mode =====
+const workstationMode = ref(1);
+const makeDefaultWsConfig = () => ({ sourceType: 'camera', cameraId: '', projectId: null, resolution: '1280x720', fps: 60, gpuDevice: 'auto', videoFile: null, imageFile: null });
+const wsConfigured = (idx) => {
+  const c = wsConfigs[idx];
+  if (!c) return false;
+  if (c.sourceType === 'camera') return !!c.cameraId;
+  if (c.sourceType === 'video') return !!c.videoFile;
+  if (c.sourceType === 'image') return !!c.imageFile;
+  return false;
+};
+const wsConfigs = reactive([makeDefaultWsConfig(), makeDefaultWsConfig(), makeDefaultWsConfig(), makeDefaultWsConfig()]);
+
+const projectList = ref([]);
+const fetchProjectList = async () => {
+  try {
+    const res = await getProjects();
+    projectList.value = res.data?.items || res.data || [];
+  } catch (e) { /* silent */ }
+};
+
+const handleWorkstationModeChange = async (count) => {
+  try {
+    await setWorkstationMode(count);
+    ElMessage.success(`已切换到 ${count === 1 ? '单工位' : count === 2 ? '双工位' : '四工位'} 模式`);
+  } catch (e) {
+    ElMessage.error('切换模式失败: ' + (e.message || ''));
+    workstationMode.value = 1;
+  }
+};
+
+const saveAndStartMulti = async () => {
+  saving.value = true;
+  try {
+    for (let ch = 0; ch < workstationMode.value; ch++) {
+      const cfg = wsConfigs[ch];
+      if (!wsConfigured(ch)) continue;
+
+      if (cfg.sourceType === 'camera') {
+        const cam = allCameras.value.find(c => c.id === cfg.cameraId);
+        if (!cam) continue;
+        const [w, h] = cfg.resolution.split('x').map(Number);
+        if (cam.type === 'usb') {
+          await api.post(`/source/camera/start?channel=${ch}`, { device_index: cam.index, width: w, height: h, fps: cfg.fps });
+        } else if (cam.type === 'hikvision') {
+          await api.post(`/source/hikvision/start?channel=${ch}`, { device_index: cam.index, width: w, height: h, fps: cfg.fps });
+        }
+      } else if (cfg.sourceType === 'video' && cfg.videoFile) {
+        const formData = new FormData();
+        formData.append('file', cfg.videoFile);
+        const uploadRes = await api.post('/source/video/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+        await api.post(`/source/video/start?channel=${ch}`, { file_path: uploadRes.data.file_path, speed: 1 });
+      } else if (cfg.sourceType === 'image' && cfg.imageFile) {
+        const formData = new FormData();
+        formData.append('file', cfg.imageFile);
+        const uploadRes = await api.post('/source/image/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+        await api.post(`/source/image/set?channel=${ch}`, { file_path: uploadRes.data.file_path });
+      }
+
+      if (cfg.gpuDevice && cfg.gpuDevice !== 'auto') {
+        try {
+          await setChannelGpu(ch, cfg.gpuDevice);
+        } catch (ge) {
+          console.warn(`Ch${ch} GPU assignment failed:`, ge);
+        }
+      }
+
+      if (cfg.projectId) {
+        const proj = projectList.value.find(p => p.id === cfg.projectId);
+        if (proj) {
+          await apiSetProjectConfig({
+            project_id: proj.id,
+            name: proj.name,
+            task_type: proj.task_type || 'detection',
+            logic_mode: proj.logic_mode || 'detection',
+            steps_config: proj.steps_config || [],
+            pipeline_config: proj.pipeline_config || {},
+            events_config: proj.events_config || [],
+            counters_config: proj.counters_config || []
+          }, ch);
+
+          if (proj.default_model_id) {
+            try {
+              const modelRes = await getModelDetail(proj.default_model_id);
+              await apiStartDetection(modelRes.data.file_path, 0.25, 0.45, ch);
+            } catch (me) {
+              console.warn(`Ch${ch} model start failed:`, me);
+            }
+          }
+        }
+      }
+    }
+    ElMessage.success('所有工位已启动，正在跳转...');
+    setTimeout(() => router.push('/monitor'), 500);
+  } catch (e) {
+    ElMessage.error('启动失败: ' + (e.message || ''));
+  } finally {
+    saving.value = false;
+  }
+};
+
+const loadWorkstationMode = async () => {
+  try {
+    const res = await getWorkstations();
+    workstationMode.value = res.data.channel_count || 1;
+    if (workstationMode.value > 1 && res.data.channels) {
+      res.data.channels.forEach(ch => {
+        if (wsConfigs[ch.channel_id]) {
+          wsConfigs[ch.channel_id].gpuDevice = ch.gpu_device || 'auto';
+        }
+      });
+    }
+  } catch (e) { /* keep default */ }
+};
 
 // 输入源类型
 const sourceType = ref('camera');
@@ -271,7 +500,7 @@ const sourceType = ref('camera');
 const cameraSettings = ref({
   deviceIndex: 0,
   resolution: '1280x720',
-  fps: 30
+  fps: 60
 });
 
 // 统一摄像头列表（USB + 海康）
@@ -648,7 +877,8 @@ const lastImageFileName = ref(null);
 onMounted(async () => {
   loadConfig();
   restoreAutoSavedSource();
-  // 页面加载时自动刷新所有摄像头列表
+  loadWorkstationMode();
+  fetchProjectList();
   await refreshAllCameras();
 });
 </script>
