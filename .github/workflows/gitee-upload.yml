@@ -1,0 +1,241 @@
+name: Upload to Gitee
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v2.0.1)'
+        required: true
+        type: string
+
+env:
+  GITEE_OWNER: xu-yanzhi32
+  GITEE_REPO1: tianjun-releases
+  GITEE_REPO2: tianjun-releases-2
+  GH_RELEASE_REPO: 17373531860/tianjun-releases
+
+jobs:
+  upload-to-gitee:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Download installer from GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          echo "Downloading installer for ${VERSION}..."
+
+          ASSET_URL=$(gh release view "${VERSION}" \
+            --repo "${GH_RELEASE_REPO}" \
+            --json assets \
+            --jq '.assets[] | select(.name | endswith(".exe")) | .url')
+
+          ASSET_NAME=$(gh release view "${VERSION}" \
+            --repo "${GH_RELEASE_REPO}" \
+            --json assets \
+            --jq '.assets[] | select(.name | endswith(".exe")) | .name')
+
+          echo "Downloading: ${ASSET_NAME}"
+          gh release download "${VERSION}" \
+            --repo "${GH_RELEASE_REPO}" \
+            --pattern "*.exe" \
+            --dir .
+
+          ls -lh *.exe
+          echo "EXE_NAME=${ASSET_NAME}" >> $GITHUB_ENV
+
+      - name: Split installer into chunks
+        run: |
+          EXE="${EXE_NAME}"
+          FILE_SIZE=$(stat -c%s "$EXE")
+          echo "Installer: $EXE ($FILE_SIZE bytes, $(( FILE_SIZE / 1048576 )) MB)"
+
+          CHUNK_SIZE=$((48 * 1024 * 1024))  # 48MB per chunk
+          mkdir -p parts
+
+          split -b ${CHUNK_SIZE} -d -a 2 --additional-suffix=.part "$EXE" "parts/${EXE}.part"
+
+          TOTAL=$(ls parts/*.part | wc -l)
+          echo "Split into $TOTAL parts:"
+          ls -lh parts/
+          echo "TOTAL_PARTS=${TOTAL}" >> $GITHUB_ENV
+
+          # Generate merge script
+          VERSION="${{ inputs.version }}"
+          cat > "parts/合并安装包.bat" << EOFBAT
+          @echo off
+          chcp 65001 >nul
+          setlocal enabledelayedexpansion
+          echo ============================================
+          echo   天军科技AI视觉检测系统 - 安装包合并工具
+          echo   版本: ${VERSION}
+          echo ============================================
+          echo.
+          echo 正在合并安装包文件，请稍候...
+          echo.
+
+          set "output=${EXE}"
+          if exist "%output%" del /f "%output%"
+
+          set "count=0"
+          set "cmd=copy /b"
+          set "first=1"
+
+          for /f "delims=" %%%%f in ('dir /b /o:n *.part 2^^^>nul') do (
+              set /a count+=1
+              if !first!==1 (
+                  set "cmd=!cmd! "%%%%f""
+                  set "first=0"
+              ) else (
+                  set "cmd=!cmd!+"%%%%f""
+              )
+          )
+
+          if !count!==0 (
+              echo [错误] 当前目录下没有找到 .part 文件！
+              echo 请确保从两个仓库下载的所有 .part 文件都放在同一个文件夹中。
+              echo.
+              echo 下载地址：
+              echo   第一部分: https://gitee.com/${GITEE_OWNER}/${GITEE_REPO1}/releases
+              echo   第二部分: https://gitee.com/${GITEE_OWNER}/${GITEE_REPO2}/releases
+              pause
+              exit /b 1
+          )
+
+          set "cmd=!cmd! "%output%""
+          echo 找到 !count! 个分块文件，正在合并...
+          !cmd! >nul
+
+          if exist "%output%" (
+              echo.
+              echo ============================================
+              echo   合并成功！
+              echo   安装程序: %output%
+              echo ============================================
+              echo.
+              echo 请双击运行安装程序进行安装。
+          ) else (
+              echo.
+              echo [错误] 合并失败，请检查文件是否完整。
+          )
+
+          pause
+          EOFBAT
+
+          echo "Merge script created"
+
+      - name: Upload to Gitee repo 1
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          TOTAL="${TOTAL_PARTS}"
+          HALF=$(( (TOTAL + 1) / 2 ))
+
+          echo "Total: $TOTAL parts. Repo 1 gets first $HALF parts + merge script."
+
+          # Delete existing release if present
+          EXISTING_ID=$(curl -s "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO1}/releases/tags/${VERSION}?access_token=${GITEE_TOKEN}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+          if [ -n "$EXISTING_ID" ]; then
+            curl -s -X DELETE "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO1}/releases/${EXISTING_ID}?access_token=${GITEE_TOKEN}"
+          fi
+
+          BODY="## ${VERSION} 天军科技AI视觉检测系统 (第一部分)\n\n请同时下载第二部分: https://gitee.com/${GITEE_OWNER}/${GITEE_REPO2}/releases/tag/${VERSION}-part2\n\n### 使用方法\n1. 从本页面下载所有 .part 文件和 合并安装包.bat\n2. 从第二部分页面下载所有 .part 文件\n3. 将所有文件放到同一个文件夹\n4. 双击运行 合并安装包.bat\n5. 合并完成后双击运行安装程序"
+
+          RELEASE_ID=$(curl -s -X POST "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO1}/releases" \
+            -H "Content-Type: application/json" \
+            -d "{\"access_token\":\"${GITEE_TOKEN}\",\"tag_name\":\"${VERSION}\",\"name\":\"${VERSION} 天军科技AI视觉检测系统 (第一部分)\",\"body\":\"${BODY}\",\"target_commitish\":\"master\"}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+          echo "Release created: ID=$RELEASE_ID"
+
+          # Upload merge script
+          echo "Uploading merge script..."
+          RESP=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X POST \
+            "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO1}/releases/${RELEASE_ID}/attach_files" \
+            -F "access_token=${GITEE_TOKEN}" \
+            -F "file=@parts/合并安装包.bat")
+          HTTP_CODE=$(echo "$RESP" | grep "HTTP_CODE:" | cut -d: -f2)
+          echo "  HTTP $HTTP_CODE"
+
+          # Upload first batch of parts
+          FILES=($(ls parts/*.part | sort))
+          for i in $(seq 0 $((HALF - 1))); do
+            FILE="${FILES[$i]}"
+            if [ -n "$FILE" ]; then
+              BASENAME=$(basename "$FILE")
+              echo "Uploading $BASENAME ($(( $(stat -c%s "$FILE") / 1048576 )) MB)..."
+              RESP=$(curl -s -w "\nHTTP_CODE:%{http_code}" --max-time 300 -X POST \
+                "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO1}/releases/${RELEASE_ID}/attach_files" \
+                -F "access_token=${GITEE_TOKEN}" \
+                -F "file=@${FILE}")
+              HTTP_CODE=$(echo "$RESP" | grep "HTTP_CODE:" | cut -d: -f2)
+              echo "  HTTP $HTTP_CODE"
+              if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
+                echo "  WARNING: Upload may have failed. Response:"
+                echo "$RESP" | head -5
+              fi
+            fi
+          done
+
+          echo "Repo 1 upload complete!"
+
+      - name: Upload to Gitee repo 2
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          TOTAL="${TOTAL_PARTS}"
+          HALF=$(( (TOTAL + 1) / 2 ))
+
+          REMAINING=$((TOTAL - HALF))
+          if [ "$REMAINING" -le 0 ]; then
+            echo "All parts fit in repo 1, skipping."
+            exit 0
+          fi
+
+          echo "Repo 2 gets remaining $REMAINING parts."
+          TAG="${VERSION}-part2"
+
+          # Delete existing release if present
+          EXISTING_ID=$(curl -s "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO2}/releases/tags/${TAG}?access_token=${GITEE_TOKEN}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+          if [ -n "$EXISTING_ID" ]; then
+            curl -s -X DELETE "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO2}/releases/${EXISTING_ID}?access_token=${GITEE_TOKEN}"
+          fi
+
+          BODY="## ${VERSION} 天军科技AI视觉检测系统 (第二部分)\n\n请同时下载第一部分: https://gitee.com/${GITEE_OWNER}/${GITEE_REPO1}/releases/tag/${VERSION}\n\n将所有 .part 文件与第一部分的文件放在同一文件夹，然后运行第一部分中的 合并安装包.bat"
+
+          RELEASE_ID=$(curl -s -X POST "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO2}/releases" \
+            -H "Content-Type: application/json" \
+            -d "{\"access_token\":\"${GITEE_TOKEN}\",\"tag_name\":\"${TAG}\",\"name\":\"${VERSION} 天军科技AI视觉检测系统 (第二部分)\",\"body\":\"${BODY}\",\"target_commitish\":\"master\"}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+          echo "Release created: ID=$RELEASE_ID"
+
+          FILES=($(ls parts/*.part | sort))
+          for i in $(seq $HALF $((TOTAL - 1))); do
+            FILE="${FILES[$i]}"
+            if [ -n "$FILE" ]; then
+              BASENAME=$(basename "$FILE")
+              echo "Uploading $BASENAME ($(( $(stat -c%s "$FILE") / 1048576 )) MB)..."
+              RESP=$(curl -s -w "\nHTTP_CODE:%{http_code}" --max-time 300 -X POST \
+                "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO2}/releases/${RELEASE_ID}/attach_files" \
+                -F "access_token=${GITEE_TOKEN}" \
+                -F "file=@${FILE}")
+              HTTP_CODE=$(echo "$RESP" | grep "HTTP_CODE:" | cut -d: -f2)
+              echo "  HTTP $HTTP_CODE"
+              if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
+                echo "  WARNING: Upload may have failed. Response:"
+                echo "$RESP" | head -5
+              fi
+            fi
+          done
+
+          echo ""
+          echo "=== Gitee Release Complete ==="
+          echo "Part 1: https://gitee.com/${GITEE_OWNER}/${GITEE_REPO1}/releases/tag/${VERSION}"
+          echo "Part 2: https://gitee.com/${GITEE_OWNER}/${GITEE_REPO2}/releases/tag/${TAG}"
