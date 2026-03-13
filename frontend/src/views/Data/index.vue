@@ -284,6 +284,17 @@
                 </template>
               </el-table-column>
             </el-table>
+            <div v-if="cycleTotal > cyclePageSize" class="flex justify-end mt-2">
+              <el-pagination
+                small
+                background
+                layout="prev, pager, next"
+                :total="cycleTotal"
+                :page-size="cyclePageSize"
+                :current-page="cyclePage"
+                @current-change="handleCyclePageChange"
+              />
+            </div>
           </div>
 
           <!-- 无数据 -->
@@ -651,6 +662,9 @@ const loadChannelCount = async () => {
 };
 
 const cycles = ref([]);
+const cycleTotal = ref(0);
+const cyclePage = ref(1);
+const cyclePageSize = ref(50);
 const stepStats = ref([]);
 const loadingSessions = ref(false);
 const loadingOverview = ref(false);
@@ -968,9 +982,9 @@ const selectSession = async (session) => {
     
     historyCounters.value = session.counters_snapshot || {};
     
-    // 加载周期列表
-    const res = await getSessionCycles(session.id);
-    cycles.value = res.data || [];
+    // 加载周期列表（分页）
+    cyclePage.value = 1;
+    await loadCycles(session.id);
     
     // 加载步骤统计
     await loadStepStats({ session_id: session.id });
@@ -978,6 +992,28 @@ const selectSession = async (session) => {
     console.error('加载会话详情失败:', e);
   } finally {
     loadingOverview.value = false;
+  }
+};
+
+const loadCycles = async (sessionId) => {
+  try {
+    const skip = (cyclePage.value - 1) * cyclePageSize.value;
+    const res = await getSessionCycles(sessionId, skip, cyclePageSize.value);
+    cycles.value = res.data?.items || [];
+    cycleTotal.value = res.data?.total || 0;
+  } catch (e) {
+    console.error('加载周期列表失败:', e);
+    cycles.value = [];
+    cycleTotal.value = 0;
+  }
+};
+
+const handleCyclePageChange = (page) => {
+  cyclePage.value = page;
+  if (selectedSession.value) {
+    expandedRows.value = [];
+    cycleStepsMap.value = {};
+    loadCycles(selectedSession.value.id);
   }
 };
 

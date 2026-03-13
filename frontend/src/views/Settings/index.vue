@@ -116,6 +116,10 @@
                 <span class="text-gray-300">检测数</span>
                 <el-switch v-model="store.display.monitor.showDetectionCount" @change="saveDisplaySettings" />
               </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-300">CT包含NG周期</span>
+                <el-switch v-model="store.display.monitor.ctIncludeNg" @change="saveDisplaySettings" />
+              </div>
             </div>
           </el-card>
 

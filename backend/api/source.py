@@ -552,6 +552,7 @@ class VideoSourceManager:
         self.counters = {}  # {counter_name: value}
         self.events_log = []  # 事件日志
         self._event_seq = 0  # 事件唯一递增序号
+        self.ng_step_cycle_counts = {}  # {step_label: count_of_ng_cycles} for NG TOP3
         self.current_cycle_steps = []  # 当前周期检测到的步骤顺序
         self.last_added_step = None  # 上一个添加到周期的步骤（用于去重判断）
         self.cycle_complete = False
@@ -563,6 +564,10 @@ class VideoSourceManager:
         self.step_strict_order = {}          # {label: True} only accept when predecessors done
         self.step_accept_once = {}           # {label: True} only accept once per cycle
         self._just_settled = False
+        self._first_step_had_gap = False
+        self._first_step_reconfirmed = False
+        self._first_step_disappeared_at = None
+        self._last_step_added_time = None
         self._step_raw_start = {}
         self._last_ng_time = 0
         
@@ -583,8 +588,10 @@ class VideoSourceManager:
         # Cycle Time 统计
         self.cycle_start_time = None  # 当前周期开始时间
         self.cycle_times = []  # 记录最近的周期时间（最多保留100个）
+        self.ng_cycle_times = []  # NG cycle durations (up to 100)
         self.step_detection_times = {}  # 步骤检测时间 {step_name: timestamp}
         self.step_durations = {}  # 步骤耗时 {step_name: duration_seconds}
+        self.step_durations_history = {}  # {step_name: [d1, d2, ...]} for average PT
         self.step_intervals = {}  # 步骤间隔时间 {step_name: interval_from_previous}
         self.last_step_completed_time = None  # 上一个步骤完成的时间
         
@@ -599,6 +606,7 @@ class VideoSourceManager:
         self.recording_enabled = False  # 是否启用录制
         self.export_settings = None  # 导出设置缓存
         self.last_cycle_end_time = None  # 上一周期结束时间（用于计算周期间隔）
+        self._session_start_date = None  # 当前会话的开始日期（用于跨日自动拆分）
         
         # 视频录制
         self.video_writer = None  # 视频录制器
@@ -674,6 +682,7 @@ class VideoSourceManager:
             self.current_session_uuid = session_uuid
             self.current_cycle_number = 0
             self.recording_enabled = True
+            self._session_start_date = datetime.now().date()
             
             # 加载导出设置
             self._load_export_settings()
@@ -703,6 +712,11 @@ class VideoSourceManager:
         session_uuid = self.current_session_uuid
         print(f"end_session: 正在结束会话 {session_uuid} (ID: {session_id})")
         
+        # Discard any open (unsettled) cycle before closing the session
+        if self.current_cycle_id:
+            print(f"end_session: discarding unsettled cycle #{self.current_cycle_number} (id={self.current_cycle_id})")
+            self._discard_empty_cycle()
+        
         try:
             db = self._get_db_session()
             session = db.query(DetectionSession).filter(
@@ -713,12 +727,13 @@ class VideoSourceManager:
                 session.end_time = datetime.now()
                 session.status = "completed"
                 
-                # 计算统计
+                # 计算统计 — only count properly settled cycles (end_time is not None)
                 cycles = db.query(DetectionCycle).filter(
-                    DetectionCycle.session_id == session_id
+                    DetectionCycle.session_id == session_id,
+                    DetectionCycle.end_time != None
                 ).all()
                 
-                print(f"end_session: 找到 {len(cycles)} 个周期")
+                print(f"end_session: 找到 {len(cycles)} 个已结算周期")
                 
                 if cycles:
                     session.total_cycles = len(cycles)
@@ -730,6 +745,17 @@ class VideoSourceManager:
                         session.avg_cycle_time = sum(durations) / len(durations)
                         session.min_cycle_time = min(durations)
                         session.max_cycle_time = max(durations)
+                
+                # Clean up any remaining orphan cycles (end_time is NULL)
+                orphans = db.query(DetectionCycle).filter(
+                    DetectionCycle.session_id == session_id,
+                    DetectionCycle.end_time == None
+                ).all()
+                if orphans:
+                    orphan_ids = [o.id for o in orphans]
+                    print(f"end_session: removing {len(orphans)} orphan cycle(s): {orphan_ids}")
+                    db.query(StepRecord).filter(StepRecord.cycle_id.in_(orphan_ids)).delete(synchronize_session=False)
+                    db.query(DetectionCycle).filter(DetectionCycle.id.in_(orphan_ids)).delete(synchronize_session=False)
                 
                 # 保存计数器快照
                 session.counters_snapshot = self.counters.copy() if self.counters else {}
@@ -754,11 +780,28 @@ class VideoSourceManager:
             self.current_session_id = None
             self.current_session_uuid = None
             self.recording_enabled = False
+            self._session_start_date = None
+    
+    def _auto_split_session(self):
+        """跨日自动拆分：结束旧会话，开启新会话，保持计数器不清零"""
+        project_id = self.project_config.get('id') if self.project_config else None
+        if not project_id:
+            return
+        print(f"[跨日拆分] 日期变更，自动结束旧会话 {self.current_session_uuid}")
+        self.end_session()
+        new_info = self.start_session(project_id)
+        if new_info:
+            print(f"[跨日拆分] 新会话已创建: {new_info.get('session_uuid')}")
     
     def start_cycle(self):
         """开始新的检测周期"""
         if not self.current_session_id or not self.recording_enabled:
             return
+        
+        if self._session_start_date and datetime.now().date() != self._session_start_date:
+            self._auto_split_session()
+            if not self.current_session_id:
+                return
         
         try:
             db = self._get_db_session()
@@ -839,6 +882,134 @@ class VideoSourceManager:
             self.current_cycle_id = None
             self.current_cycle_uuid = None
     
+    def _discard_empty_cycle(self):
+        """Discard the current cycle when step_sequence is empty after filtering."""
+        if not self.current_cycle_id:
+            return
+        self.stop_cycle_recording()
+        try:
+            db = self._get_db_session()
+            db.query(StepRecord).filter(
+                StepRecord.cycle_id == self.current_cycle_id).delete()
+            db.query(DetectionCycle).filter(
+                DetectionCycle.id == self.current_cycle_id).delete()
+            db.commit()
+            db.close()
+            print(f"Discarded empty cycle #{self.current_cycle_number}")
+        except Exception as e:
+            print(f"Failed to discard empty cycle: {e}")
+        finally:
+            self.current_cycle_id = None
+            self.current_cycle_uuid = None
+            if self.current_cycle_number > 0:
+                self.current_cycle_number -= 1
+    
+    def _reconcile_step_records(self):
+        """Align StepRecords with self.current_cycle_steps using a
+        keep-and-fix strategy: keep existing records that match, delete
+        excess ones, and create missing ones.  This avoids losing timing
+        data from records already written by the disappearance handler.
+        """
+        if not self.current_cycle_id or not self.recording_enabled:
+            return
+        if not self.current_cycle_steps:
+            return
+
+        try:
+            db = self._get_db_session()
+            existing = db.query(StepRecord).filter(
+                StepRecord.cycle_id == self.current_cycle_id
+            ).order_by(StepRecord.step_order).all()
+
+            avail = {}
+            for rec in existing:
+                avail.setdefault(rec.step_label, []).append(rec)
+
+            keep_ids = set()
+            missing_indices = []
+            dur_fixed = 0
+
+            for i, label in enumerate(self.current_cycle_steps):
+                candidates = avail.get(label, [])
+                # Prefer the candidate with the longest duration
+                candidates.sort(key=lambda r: (r.duration or 0), reverse=True)
+                matched = None
+                for rec in candidates:
+                    if rec.id not in keep_ids:
+                        matched = rec
+                        keep_ids.add(rec.id)
+                        break
+                if matched:
+                    matched.step_order = i + 1
+                    # Fix kept records that have very short / zero duration
+                    if (matched.duration or 0) < 0.1:
+                        better_dur = self.step_durations.get(label)
+                        if better_dur and better_dur >= 0.1:
+                            matched.duration = better_dur
+                            dur_fixed += 1
+                        else:
+                            st = self.step_start_time.get(label)
+                            et = self.step_last_seen.get(label)
+                            if st and et and (et - st) >= 0.1:
+                                matched.duration = round(et - st, 2)
+                                dur_fixed += 1
+                else:
+                    missing_indices.append(i)
+
+            for rec in existing:
+                if rec.id not in keep_ids:
+                    db.delete(rec)
+
+            now = time.time()
+
+            for idx in missing_indices:
+                label = self.current_cycle_steps[idx]
+                start_t = self.step_start_time.get(label)
+                end_t = self.step_last_seen.get(label)
+                if start_t and end_t:
+                    dur = max(0, round(end_t - start_t, 2))
+                else:
+                    start_t = start_t or now
+                    end_t = end_t or now
+                    dur = max(0, round(end_t - start_t, 2))
+
+                # Use step_durations fallback when computed duration is too small
+                if dur < 0.1:
+                    better = self.step_durations.get(label)
+                    if better and better >= 0.1:
+                        dur = better
+
+                step_id = None
+                if self.project_config:
+                    for step in self.project_config.get('steps_config', []):
+                        if step.get('label') == label:
+                            step_id = step.get('id')
+                            break
+
+                new_rec = StepRecord(
+                    record_uuid=str(uuid.uuid4())[:8],
+                    cycle_id=self.current_cycle_id,
+                    step_id=step_id,
+                    step_label=label,
+                    step_name=self.step_display_names.get(label, label),
+                    step_order=idx + 1,
+                    start_time=datetime.fromtimestamp(start_t),
+                    end_time=datetime.fromtimestamp(end_t),
+                    duration=dur,
+                    is_valid=True,
+                )
+                db.add(new_rec)
+
+            db.commit()
+            db.close()
+            print(f"[reconcile] cycle {self.current_cycle_id}: kept {len(keep_ids)}, "
+                  f"deleted {len(existing) - len(keep_ids)}, created {len(missing_indices)}"
+                  f"{f', dur_fixed {dur_fixed}' if dur_fixed else ''}")
+        except Exception as e:
+            print(f"Failed to reconcile StepRecords: {e}")
+            import traceback
+            traceback.print_exc()
+
     def record_step(self, step_label: str, step_name: str, start_time: float, end_time: float, 
                     duration: float, interval: float = None, confidence: float = None, is_valid: bool = True,
                     video_info: dict = None, step_order: int = None):
@@ -944,6 +1115,10 @@ class VideoSourceManager:
         self.step_strict_order = {}
         self.step_accept_once = {}
         self._just_settled = False
+        self._first_step_had_gap = False
+        self._first_step_reconfirmed = False
+        self._first_step_disappeared_at = None
+        self._last_step_added_time = None
         self._step_raw_start = {}
         
         steps_config = config.get('steps_config', [])
@@ -1035,6 +1210,7 @@ class VideoSourceManager:
         self.backup_steps_seen_in_cycle = set()
         self.cycle_complete = False
         self.events_log = []
+        self.ng_step_cycle_counts = {}
         self.step_start_time = {}  # 重置步骤开始时间
         
         if config.get('logic_mode') == 'tracking':
@@ -1547,7 +1723,9 @@ class VideoSourceManager:
                 if max_dur is not None and duration > max_dur:
                     is_valid = False
                 if is_valid:
-                    self.step_durations[label] = round(duration, 2)
+                    rounded_dur = round(duration, 2)
+                    self.step_durations[label] = rounded_dur
+                    self.step_durations_history.setdefault(label, []).append(rounded_dur)
                     if label not in self.step_counts:
                         self.step_counts[label] = 0
                     self.step_counts[label] += 1
@@ -1641,9 +1819,20 @@ class VideoSourceManager:
         
         self.current_cycle_steps = self._filter_cycle_by_duration(self.current_cycle_steps)
         
-        self._backfill_step_records()
-        
         print(f"自定义模式结算: 当前序列={self.current_cycle_steps}")
+        
+        if not self.current_cycle_steps:
+            self._discard_empty_cycle()
+            self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
+            self.last_added_step = None
+            self.step_last_seen.clear()
+            self.step_start_time.clear()
+            self.step_consecutive_frames.clear()
+            self.step_frame_confirmed.clear()
+            
+            self.last_step_completed_time = None
+            return
         
         # 先检查自定义条件（只包含启用步骤的条件）
         custom_conditions = pipeline_config.get('custom_conditions', [])
@@ -1662,6 +1851,7 @@ class VideoSourceManager:
                 
                 if self.current_cycle_steps == cond_labels:
                     print(f"  → 条件匹配！触发事件 {cond_event_id}")
+                    self._reconcile_step_records()
                     self._trigger_event(cond_event_id, f'自定义条件匹配: {cond_labels}')
                     self.current_cycle_steps = []
                     self.backup_steps_seen_in_cycle = set()
@@ -1670,6 +1860,8 @@ class VideoSourceManager:
                     self.step_start_time.clear()
                     self.step_consecutive_frames.clear()
                     self.step_frame_confirmed.clear()
+                    if hasattr(self, '_step_raw_start'):
+                        self._step_raw_start.clear()
                     self.last_step_completed_time = None
                     return
         
@@ -1686,6 +1878,8 @@ class VideoSourceManager:
                 self.step_start_time.clear()
                 self.step_consecutive_frames.clear()
                 self.step_frame_confirmed.clear()
+                if hasattr(self, '_step_raw_start'):
+                    self._step_raw_start.clear()
                 self.last_step_completed_time = None
                 return
             
@@ -1703,12 +1897,30 @@ class VideoSourceManager:
                 self.step_start_time.clear()
                 self.step_consecutive_frames.clear()
                 self.step_frame_confirmed.clear()
+                if hasattr(self, '_step_raw_start'):
+                    self._step_raw_start.clear()
                 self.last_step_completed_time = None
                 return
             
             self.current_cycle_steps = self._inject_backup_steps(
                 self.current_cycle_steps, expected_labels)
             self.current_cycle_steps = self._filter_cycle_by_duration(self.current_cycle_steps)
+            
+            if not self.current_cycle_steps:
+                self._discard_empty_cycle()
+                self.current_cycle_steps = []
+                self.backup_steps_seen_in_cycle = set()
+                self.last_added_step = None
+                self.step_last_seen.clear()
+                self.step_start_time.clear()
+                self.step_consecutive_frames.clear()
+                self.step_frame_confirmed.clear()
+                if hasattr(self, '_step_raw_start'):
+                    self._step_raw_start.clear()
+                self.last_step_completed_time = None
+                return
+            
+            self._reconcile_step_records()
             
             print(f"  期望序列({len(expected_labels)}步): {expected_labels}")
             print(f"  实际序列({len(self.current_cycle_steps)}步): {self.current_cycle_steps}")
@@ -1755,6 +1967,7 @@ class VideoSourceManager:
             else:
                 detection_labels = enabled_step_labels
             
+            self._reconcile_step_records()
             if detection_labels and all(label in self.current_cycle_steps for label in detection_labels):
                 print(f"  → 检测完成 → OK")
                 self._trigger_event(1, '检测完成')
@@ -1767,6 +1980,7 @@ class VideoSourceManager:
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        
         self.last_step_completed_time = None
     
     def _settle_sequential_cycle(self):
@@ -1806,6 +2020,7 @@ class VideoSourceManager:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
+            
             self.last_step_completed_time = None
             return
         
@@ -1823,6 +2038,7 @@ class VideoSourceManager:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
+            
             self.last_step_completed_time = None
             return
         
@@ -1832,7 +2048,20 @@ class VideoSourceManager:
             self.current_cycle_steps, expected_labels)
         self.current_cycle_steps = self._filter_cycle_by_duration(self.current_cycle_steps)
         
-        self._backfill_step_records()
+        if not self.current_cycle_steps:
+            self._discard_empty_cycle()
+            self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
+            self.last_added_step = None
+            self.step_last_seen.clear()
+            self.step_start_time.clear()
+            self.step_consecutive_frames.clear()
+            self.step_frame_confirmed.clear()
+            
+            self.last_step_completed_time = None
+            return
+        
+        self._reconcile_step_records()
         
         print(f"顺序模式结算: 期望={expected_labels}, 实际={self.current_cycle_steps}")
         
@@ -1860,6 +2089,7 @@ class VideoSourceManager:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
+            
             self.last_step_completed_time = None
             return
 
@@ -1873,6 +2103,7 @@ class VideoSourceManager:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
+            
             self.last_step_completed_time = None
             return
         
@@ -1905,6 +2136,7 @@ class VideoSourceManager:
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        
         self.last_step_completed_time = None
     
     def _process_simultaneous_groups(self, frame_detected_labels: set, detected_labels: set, current_time: float):
@@ -2048,13 +2280,15 @@ class VideoSourceManager:
                 _, buffer = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 self.step_screenshots[label] = base64.b64encode(buffer).decode('utf-8')
         
-        # ── 核心逻辑：第一步已经在周期里，再次检测到 → 直接结算 ──
-        # Only settle when the first step has been present long enough (>= min_duration)
-        # to avoid false-positive brief detections triggering premature settlements.
+        # ── 核心逻辑：第一步已经在周期里，再次检测到且有效 → 直接结算 ──
+        # "有效"条件：
+        #   1. min_frames  — 已隐含满足（只有 step_consecutive_frames >= min_frames 才会进入 detected_labels）
+        #   2. min_duration — 重新出现后的持续时间 >= 配置的最短持续时间
+        # 注意：step_start_time 可能在步骤消失后被清除，此时用 _step_raw_start（重新出现的起始时间）
         if is_seq_like and label in self.current_cycle_steps and len(self.current_cycle_steps) > 1:
             first_step_label = self._get_first_sequence_step_label()
             if first_step_label and label == first_step_label:
-                first_start = self.step_start_time.get(label)
+                first_start = self.step_start_time.get(label) or getattr(self, '_step_raw_start', {}).get(label)
                 first_min_dur = (self.step_time_config.get(label, {}).get('min_duration')) or 0
                 first_duration = (current_time - first_start) if first_start else 0
                 if first_duration >= first_min_dur:
@@ -2116,11 +2350,17 @@ class VideoSourceManager:
             if should_join_cycle:
                 logic_mode = self.project_config.get('logic_mode') if self.project_config else 'detection'
                 if logic_mode == 'custom' or logic_mode == 'sequential':
+                    if len(self.current_cycle_steps) == 0:
+                        self._first_step_had_gap = False
+                        self._first_step_reconfirmed = False
+                        self._first_step_disappeared_at = None
                     self.current_cycle_steps.append(label)
                     self.last_added_step = label
+                    self._last_step_added_time = current_time
                 elif label not in self.current_cycle_steps:
                     self.current_cycle_steps.append(label)
                     self.last_added_step = label
+                    self._last_step_added_time = current_time
     
     def _update_step_stats(self, detections: list, original_frame: np.ndarray):
         """更新步骤统计和截图
@@ -2168,6 +2408,9 @@ class VideoSourceManager:
                 if not self.step_frame_confirmed.get(label):
                     self.step_frame_confirmed[label] = True
                     just_confirmed_labels.add(label)
+                    first_seq_lbl = self._get_first_sequence_step_label() if self.current_cycle_steps else None
+                    if label == first_seq_lbl and label in self.current_cycle_steps:
+                        self._first_step_reconfirmed = True
         
         # Backup step processing: mark seen, then remove from detected_labels
         if self.step_backup_map:
@@ -2178,6 +2421,7 @@ class VideoSourceManager:
         
         # 对于本帧没有检测到的标签，重置连续帧计数
         all_configured_labels = set(self.step_conf_thresholds.keys()) if self.step_conf_thresholds else set()
+        first_seq_label = self._get_first_sequence_step_label() if self.current_cycle_steps else None
         for label in all_configured_labels:
             if label not in frame_detected_labels:
                 was_tracking = self.step_consecutive_frames.get(label, 0) > 0
@@ -2186,6 +2430,8 @@ class VideoSourceManager:
                 self.step_frame_confirmed[label] = False
                 if was_tracking and not was_confirmed:
                     self.stop_step_recording(label)
+                if was_confirmed and label == first_seq_label and label in self.current_cycle_steps:
+                    self._first_step_disappeared_at = time.time()
                 # 重置静态步骤的触发状态（标签消失后可以再次触发）
                 if label in self.step_static_triggered:
                     self.step_static_triggered[label] = False
@@ -2258,7 +2504,22 @@ class VideoSourceManager:
         _pipeline_for_sort = self.project_config.get('pipeline_config', {}) if self.project_config else {}
         _is_seq_like = (_logic_mode_for_sort == 'sequential' or
                         (_logic_mode_for_sort == 'custom' and _pipeline_for_sort.get('custom_based_on') == 'sequential'))
-        
+
+        for label in list(detected_labels):
+            if label not in self.step_start_time:
+                continue
+            time_cfg = self.step_time_config.get(label, {})
+            _max_dur = time_cfg.get('max_duration')
+            if _max_dur and (current_time - self.step_start_time[label]) > _max_dur:
+                print(f"[超时重置] 步骤 [{label}] 持续 {current_time - self.step_start_time[label]:.1f}s > max_duration {_max_dur}s，模拟再次出现")
+                if label in self.step_last_seen:
+                    del self.step_last_seen[label]
+                del self.step_start_time[label]
+                self.step_consecutive_frames[label] = 0
+                self.step_frame_confirmed[label] = False
+                if label in getattr(self, '_step_raw_start', {}):
+                    del self._step_raw_start[label]
+
         for label in ready_ordered:
             self._process_single_step(label, current_time, enabled_labels, _is_seq_like,
                                       should_update_screenshot, original_frame,
@@ -2328,8 +2589,9 @@ class VideoSourceManager:
                             self.step_counts[label] = 0
                         self.step_counts[label] += 1
                         
-                        # 记录步骤耗时
-                        self.step_durations[label] = round(duration, 2)
+                        rounded_dur = round(duration, 2)
+                        self.step_durations[label] = rounded_dur
+                        self.step_durations_history.setdefault(label, []).append(rounded_dur)
                         
                         # 计算与上一步骤的间隔时间
                         if self.last_step_completed_time is not None:
@@ -2375,6 +2637,8 @@ class VideoSourceManager:
         # 这样即使判定触发 end_cycle，也不会影响其他步骤的记录
         for completed_label in pending_event_checks:
             self._check_events(completed_label)
+        
+        
     
     def _inject_backup_steps(self, this_cycle: list, expected_labels: list) -> list:
         """Inject primary step labels into this_cycle when their backup was seen but
@@ -2550,6 +2814,7 @@ class VideoSourceManager:
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        
         self.last_step_completed_time = None
     
     def _is_in_roi(self, det: dict) -> bool:
@@ -2893,7 +3158,7 @@ class VideoSourceManager:
         
         last_step_label = expected_labels[-1]
         
-        # ── 拆分：以 last_step 首次出现为界 ──
+        # Split at last_step's first occurrence: before = this cycle, after = carry to next
         if last_step_label in self.current_cycle_steps:
             split_idx = self.current_cycle_steps.index(last_step_label)
             this_cycle = self.current_cycle_steps[:split_idx + 1]
@@ -2906,30 +3171,17 @@ class VideoSourceManager:
         this_cycle = self._filter_cycle_by_duration(this_cycle)
         self.current_cycle_steps = this_cycle
         
-        # ── 补写尚未有 StepRecord 的步骤 ──
-        cycle_end_time = time.time()
-        if getattr(self, '_last_disappeared_step_times', None) and last_step_label in self._last_disappeared_step_times:
-            cycle_end_time = self._last_disappeared_step_times[last_step_label]
-        try:
-            db = self._get_db_session()
-            existing = db.query(StepRecord.step_label).filter(StepRecord.cycle_id == self.current_cycle_id).all()
-            recorded_labels = {r.step_label for r in existing}
-            max_order = db.query(StepRecord.step_order).filter(StepRecord.cycle_id == self.current_cycle_id).all()
-            next_order = (max(o[0] for o in max_order) + 1) if max_order else 1
-            db.close()
-            for label in this_cycle:
-                if label in recorded_labels:
-                    continue
-                start_t = self.step_start_time.get(label, cycle_end_time)
-                duration = max(0, cycle_end_time - start_t)
-                step_name = self.step_display_names.get(label, label)
-                self.record_step(
-                    step_label=label, step_name=step_name,
-                    start_time=start_t, end_time=cycle_end_time,
-                    duration=duration, interval=None, step_order=next_order)
-                next_order += 1
-        except Exception as e:
-            print(f"补写周期内缺失步骤记录失败: {e}")
+        if not this_cycle:
+            self._discard_empty_cycle()
+            self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
+            self.last_added_step = None
+            self.step_last_seen.clear()
+            self.step_start_time.clear()
+            self.last_step_completed_time = None
+            return
+        
+        self._reconcile_step_records()
         
         print(f"顺序模式检查: 期望={expected_labels}, 本周期={this_cycle}, 下周期残留={next_carry}")
         
@@ -2965,8 +3217,6 @@ class VideoSourceManager:
                 self._trigger_event(2, f'顺序错误，期望[{order_error_labels[0]}]在前 实际[{order_error_labels[1]}]在前')
         
         # ── 补计：对本周期中尚未被计数的步骤进行补计 ──
-        # 已通过正常消失流程计数的步骤不在 step_last_seen 中
-        # 仍在 step_last_seen 中的步骤→补计后移除，下一帧重新识别为"新出现"
         for label in this_cycle:
             if label in self.step_last_seen:
                 start_time = self.step_start_time.get(label, self.step_last_seen[label])
@@ -2987,24 +3237,28 @@ class VideoSourceManager:
                     if label not in self.step_counts:
                         self.step_counts[label] = 0
                     self.step_counts[label] += 1
-                    self.step_durations[label] = round(duration, 2)
+                    rounded_dur = round(duration, 2)
+                    self.step_durations[label] = rounded_dur
+                    self.step_durations_history.setdefault(label, []).append(rounded_dur)
                     print(f"  顺序判定补计: {label}, 耗时 {duration:.2f}s, 累计: {self.step_counts[label]}")
                 
-                # 移除跟踪，让下一帧重新识别为"新出现"，避免双重计数
                 del self.step_last_seen[label]
                 if label in self.step_start_time:
                     del self.step_start_time[label]
         
         # ── 重置 / 承接下一周期 ──
+        self._just_settled = True
         if next_carry:
             self.current_cycle_steps = next_carry
             self.last_added_step = next_carry[-1]
             self.cycle_start_time = self.step_start_time.get(next_carry[0], time.time())
+            self._last_step_added_time = time.time()
             self.start_cycle()
         else:
             self.current_cycle_steps = []
             self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
+            self._last_step_added_time = None
             self.step_last_seen.clear()
             self.step_start_time.clear()
             self.last_step_completed_time = None
@@ -3012,10 +3266,8 @@ class VideoSourceManager:
     def _check_custom_sequential_mode(self, pipeline_config: dict, id_to_label: dict):
         """检查自定义模式（基于顺序模式）的判定
         
-        与普通顺序模式的区别：
-        1. 当前周期可能包含重复步骤
-        2. 如果序列长度超过预期（有重复步骤）且不匹配任何自定义条件，判定为 NG
-        3. 使用独立的 custom_sequence_order 配置
+        关键设计：在 current_cycle_steps 中以 last_step 首次出现为界拆分。
+        使用独立的 custom_sequence_order 配置进行判定。
         """
         # 使用自定义模式独立的顺序配置
         sequence_order = pipeline_config.get('custom_sequence_order', [])
@@ -3050,7 +3302,7 @@ class VideoSourceManager:
         
         last_step_label = expected_labels[-1]
         
-        # ── 拆分：以 last_step 首次出现为界 ──
+        # Split at last_step's first occurrence: before = this cycle, after = carry to next
         if last_step_label in self.current_cycle_steps:
             split_idx = self.current_cycle_steps.index(last_step_label)
             this_cycle = self.current_cycle_steps[:split_idx + 1]
@@ -3063,30 +3315,17 @@ class VideoSourceManager:
         this_cycle = self._filter_cycle_by_duration(this_cycle)
         self.current_cycle_steps = this_cycle
         
-        # ── 补写尚未有 StepRecord 的步骤 ──
-        cycle_end_time = time.time()
-        if getattr(self, '_last_disappeared_step_times', None) and last_step_label in self._last_disappeared_step_times:
-            cycle_end_time = self._last_disappeared_step_times[last_step_label]
-        try:
-            db = self._get_db_session()
-            existing = db.query(StepRecord.step_label).filter(StepRecord.cycle_id == self.current_cycle_id).all()
-            recorded_labels = {r.step_label for r in existing}
-            max_order = db.query(StepRecord.step_order).filter(StepRecord.cycle_id == self.current_cycle_id).all()
-            next_order = (max(o[0] for o in max_order) + 1) if max_order else 1
-            db.close()
-            for label in this_cycle:
-                if label in recorded_labels:
-                    continue
-                start_t = self.step_start_time.get(label, cycle_end_time)
-                duration = max(0, cycle_end_time - start_t)
-                step_name = self.step_display_names.get(label, label)
-                self.record_step(
-                    step_label=label, step_name=step_name,
-                    start_time=start_t, end_time=cycle_end_time,
-                    duration=duration, interval=None, step_order=next_order)
-                next_order += 1
-        except Exception as e:
-            print(f"补写周期内缺失步骤记录失败: {e}")
+        if not this_cycle:
+            self._discard_empty_cycle()
+            self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
+            self.last_added_step = None
+            self.step_last_seen.clear()
+            self.step_start_time.clear()
+            self.last_step_completed_time = None
+            return
+        
+        self._reconcile_step_records()
         
         print(f"自定义模式（基于顺序）检查: 期望={expected_labels}, 本周期={this_cycle}, 下周期残留={next_carry}")
         
@@ -3142,7 +3381,9 @@ class VideoSourceManager:
                     if label not in self.step_counts:
                         self.step_counts[label] = 0
                     self.step_counts[label] += 1
-                    self.step_durations[label] = round(duration, 2)
+                    rounded_dur = round(duration, 2)
+                    self.step_durations[label] = rounded_dur
+                    self.step_durations_history.setdefault(label, []).append(rounded_dur)
                     print(f"  自定义顺序判定补计: {label}, 耗时 {duration:.2f}s, 累计: {self.step_counts[label]}")
                 
                 del self.step_last_seen[label]
@@ -3150,15 +3391,18 @@ class VideoSourceManager:
                     del self.step_start_time[label]
         
         # ── 重置 / 承接下一周期 ──
+        self._just_settled = True
         if next_carry:
             self.current_cycle_steps = next_carry
             self.last_added_step = next_carry[-1]
             self.cycle_start_time = self.step_start_time.get(next_carry[0], time.time())
+            self._last_step_added_time = time.time()
             self.start_cycle()
         else:
             self.current_cycle_steps = []
             self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
+            self._last_step_added_time = None
             self.step_last_seen.clear()
             self.step_start_time.clear()
             self.last_step_completed_time = None
@@ -3260,14 +3504,19 @@ class VideoSourceManager:
         current_event_id = event.get('id')
         is_good = current_event_id == 1
         
-        # 如果是事件1（合格），计算并记录周期时间
-        if current_event_id == 1 and self.cycle_start_time is not None:
+        # Record cycle time for both OK and NG cycles
+        if self.cycle_start_time is not None:
             cycle_time = time.time() - self.cycle_start_time
-            self.cycle_times.append(cycle_time)
-            # 只保留最近100个周期时间
-            if len(self.cycle_times) > 100:
-                self.cycle_times = self.cycle_times[-100:]
-            print(f"  周期时间: {cycle_time:.2f}s, 平均: {sum(self.cycle_times)/len(self.cycle_times):.2f}s")
+            if current_event_id == 1:
+                self.cycle_times.append(cycle_time)
+                if len(self.cycle_times) > 100:
+                    self.cycle_times = self.cycle_times[-100:]
+                print(f"  周期时间(OK): {cycle_time:.2f}s, 平均: {sum(self.cycle_times)/len(self.cycle_times):.2f}s")
+            else:
+                self.ng_cycle_times.append(cycle_time)
+                if len(self.ng_cycle_times) > 100:
+                    self.ng_cycle_times = self.ng_cycle_times[-100:]
+                print(f"  周期时间(NG): {cycle_time:.2f}s")
         
         # 结束当前周期并记录到数据库
         self.end_cycle(
@@ -3307,6 +3556,49 @@ class VideoSourceManager:
                     
                     self.counters['NG步骤'] += ng_step_count
                     print(f"  NG步骤计数 += {ng_step_count} => {self.counters['NG步骤']} (原因: {reason})")
+        
+        # NG TOP3: count unique cycles per step (each step counted at most once per NG cycle)
+        if current_event_id == 2 and reason:
+            import re
+            involved = set()
+            m_miss = re.search(r'缺少[：:]\s*\[?([^\]]+)\]?', reason)
+            if m_miss:
+                for s in re.split(r'[,，]', m_miss.group(1)):
+                    n = s.strip().strip("'\" ")
+                    if n:
+                        involved.add(n)
+            if '重复' in reason:
+                m_dup = re.search(r'重复步骤[：:]\s*\[?([^\]]+)\]?', reason)
+                if m_dup:
+                    for s in re.split(r'[,，]', m_dup.group(1)):
+                        n = s.strip().strip("'\" ")
+                        if n:
+                            involved.add(n)
+            if '顺序错误' in reason:
+                m_ord = re.search(r'期望\[(.+?)\].*实际\[(.+?)\]', reason)
+                if m_ord:
+                    if m_ord.group(1).strip():
+                        involved.add(m_ord.group(1).strip())
+                    if m_ord.group(2).strip():
+                        involved.add(m_ord.group(2).strip())
+            if '缺件' in reason:
+                m_lack = re.search(r'缺件[：:]\s*\{?([^}]+)\}?', reason)
+                if m_lack:
+                    for s in re.split(r'[,，]', m_lack.group(1)):
+                        n = s.strip().strip("'\" ")
+                        if n:
+                            involved.add(n)
+            if not involved:
+                steps_config = self.project_config.get('steps_config', []) if self.project_config else []
+                expected = set(s.get('label') for s in steps_config if s.get('label') and not s.get('is_backup'))
+                actual = set(self.current_cycle_steps)
+                missing = expected - actual
+                if missing:
+                    involved = missing
+                elif '顺序' in reason and self.current_cycle_steps:
+                    involved = set(self.current_cycle_steps)
+            for step_name in involved:
+                self.ng_step_cycle_counts[step_name] = self.ng_step_cycle_counts.get(step_name, 0) + 1
         
         # 执行计数器动作（支持 delta 和 value 两种字段名）
         actions = event.get('actions', [])
@@ -3840,6 +4132,8 @@ class VideoSourceManager:
             with self._writer_lock:
                 session_w = self.video_writer
                 cycle_w = self.cycle_video_writer
+                draining_session_w = getattr(self, '_draining_session_writer', None)
+                draining_cycle_w = getattr(self, '_draining_cycle_writer', None)
             
             if session_w:
                 try:
@@ -3868,6 +4162,20 @@ class VideoSourceManager:
                         cycle_w.release()
                     except Exception:
                         pass
+
+            if draining_cycle_w and draining_cycle_w is not cycle_w:
+                try:
+                    if draining_cycle_w.isOpened():
+                        draining_cycle_w.write(frame)
+                except Exception:
+                    pass
+
+            if draining_session_w and draining_session_w is not session_w:
+                try:
+                    if draining_session_w.isOpened():
+                        draining_session_w.write(frame)
+                except Exception:
+                    pass
             
             # 写入所有活动的步骤视频（需要加锁保护）
             failed_steps = []
@@ -4828,6 +5136,7 @@ class VideoSourceManager:
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
         
+        
         # 重置同时出现组状态
         self._sim_group_buffers = {}
         
@@ -4872,10 +5181,13 @@ class VideoSourceManager:
         self.last_added_step = None
         self.cycle_complete = False
         self.events_log = []  # 清空事件日志
+        self.ng_step_cycle_counts = {}
         
         # 重置周期时间统计
         self.cycle_times = []
+        self.ng_cycle_times = []
         self.cycle_start_time = None
+        self.step_durations_history = {}
         
         # 重置卡尔曼滤波器
         self._kalman_filters.clear()
@@ -4885,6 +5197,7 @@ class VideoSourceManager:
         # 重置帧计数状态
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        
         self.step_static_triggered.clear()
         
         # 强制垃圾回收
@@ -4950,28 +5263,39 @@ class VideoSourceManager:
             print(f"开始会话录制失败: {e}")
     
     def stop_session_recording(self):
-        """停止会话视频录制"""
+        """停止会话视频录制 - delayed release to flush queued frames"""
+        session_id = self.current_session_id
+
         with self._writer_lock:
             writer = self.video_writer
             self.video_writer = None
-        
+            if writer:
+                self._draining_session_writer = writer
+
         if writer:
-            try:
-                writer.release()
-                print("会话视频录制已停止")
-                
-                db = self._get_db_session()
-                session = db.query(DetectionSession).filter(DetectionSession.id == self.current_session_id).first()
-                if session and session.video_path:
-                    video = db.query(VideoClip).filter(VideoClip.file_path == session.video_path).first()
-                    if video:
-                        video.end_time = datetime.now()
-                        if os.path.exists(session.video_path):
-                            video.file_size = os.path.getsize(session.video_path)
-                        db.commit()
-                db.close()
-            except Exception as e:
-                print(f"停止会话录制失败: {e}")
+            def _delayed_release(w, sid):
+                time.sleep(1.5)
+                with self._writer_lock:
+                    if getattr(self, '_draining_session_writer', None) is w:
+                        self._draining_session_writer = None
+                try:
+                    w.release()
+                    print("会话视频录制已停止(排空释放)")
+                    db = self._get_db_session()
+                    session = db.query(DetectionSession).filter(DetectionSession.id == sid).first()
+                    if session and session.video_path:
+                        video = db.query(VideoClip).filter(VideoClip.file_path == session.video_path).first()
+                        if video:
+                            video.end_time = datetime.now()
+                            if os.path.exists(session.video_path):
+                                video.file_size = os.path.getsize(session.video_path)
+                            db.commit()
+                    db.close()
+                except Exception as e:
+                    print(f"停止会话录制失败: {e}")
+
+            import threading
+            threading.Thread(target=_delayed_release, args=(writer, session_id), daemon=True).start()
     
     def start_cycle_recording(self):
         """开始周期视频录制（使用 FFmpeg 进程）"""
@@ -5029,17 +5353,27 @@ class VideoSourceManager:
             print(f"开始周期录制失败: {e}")
     
     def stop_cycle_recording(self):
-        """停止周期视频录制"""
+        """停止周期视频录制 - delayed release to flush queued frames"""
         with self._writer_lock:
             writer = self.cycle_video_writer
             self.cycle_video_writer = None
-        
+            if writer:
+                self._draining_cycle_writer = writer
+
         if writer:
-            try:
-                writer.release()
-                print("周期视频录制已停止")
-            except Exception as e:
-                print(f"停止周期录制失败: {e}")
+            def _delayed_release(w):
+                time.sleep(1.5)
+                with self._writer_lock:
+                    if getattr(self, '_draining_cycle_writer', None) is w:
+                        self._draining_cycle_writer = None
+                try:
+                    w.release()
+                    print("周期视频录制已停止(排空释放)")
+                except Exception as e:
+                    print(f"停止周期录制失败: {e}")
+
+            import threading
+            threading.Thread(target=_delayed_release, args=(writer,), daemon=True).start()
     
     def start_step_recording(self, step_label: str):
         """开始步骤视频录制（使用 FFmpeg 进程）"""
@@ -5406,11 +5740,17 @@ class VideoSourceManager:
         # 5. 清理帧计数缓存
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        
         self.step_static_triggered.clear()
         
         # 6. 限制周期时间记录（保留最近50条）
         if len(self.cycle_times) > 50:
             self.cycle_times = self.cycle_times[-50:]
+        if len(self.ng_cycle_times) > 50:
+            self.ng_cycle_times = self.ng_cycle_times[-50:]
+        for _lbl in list(self.step_durations_history.keys()):
+            if len(self.step_durations_history[_lbl]) > 100:
+                self.step_durations_history[_lbl] = self.step_durations_history[_lbl][-100:]
         
         # 7. 强制垃圾回收
         gc.collect()
@@ -6166,8 +6506,10 @@ def resume_inference(channel: int = Query(0)):
 
 @router.post("/detection/reset-stats")
 def reset_detection_stats(channel: int = Query(0)):
-    """重置统计数据（计数器、步骤计数等）"""
-    _get_mgr(channel).reset_stats()
+    """重置统计数据（计数器、步骤计数等），同时结束当前会话"""
+    mgr = _get_mgr(channel)
+    mgr.end_session()
+    mgr.reset_stats()
     return {"status": "success", "message": "统计数据已重置"}
 
 @router.get("/detection/results")
@@ -6185,7 +6527,17 @@ def get_detection_results(channel: int = Query(0)):
     avg_cycle_time = 0
     if mgr.cycle_times:
         avg_cycle_time = round(sum(mgr.cycle_times) / len(mgr.cycle_times), 2)
-    
+
+    avg_cycle_time_with_ng = 0
+    all_ct = mgr.cycle_times + mgr.ng_cycle_times
+    if all_ct:
+        avg_cycle_time_with_ng = round(sum(all_ct) / len(all_ct), 2)
+
+    avg_step_durations = {}
+    for lbl, hist in mgr.step_durations_history.items():
+        if hist:
+            avg_step_durations[lbl] = round(sum(hist) / len(hist), 2)
+
     result = {
         "channel_id": channel,
         "detections": mgr.get_detections(),
@@ -6198,10 +6550,13 @@ def get_detection_results(channel: int = Query(0)):
         "step_screenshots": mgr.step_screenshots.copy(),
         "step_detection_times": mgr.step_detection_times.copy(),
         "step_durations": mgr.step_durations.copy(),
+        "avg_step_durations": avg_step_durations,
         "step_intervals": mgr.step_intervals.copy(),
         "counters": mgr.counters.copy(),
         "recent_events": recent_events,
+        "ng_step_cycle_counts": mgr.ng_step_cycle_counts.copy(),
         "average_cycle_time": avg_cycle_time,
+        "average_cycle_time_with_ng": avg_cycle_time_with_ng,
         "current_cycle_steps": list(mgr.current_cycle_steps),
         "backup_covered_labels": [
             mgr.step_backup_map[b]

@@ -213,33 +213,31 @@ jobs:
           fi
 
           echo "Found installer: $SETUP_FILE"
+          echo "SETUP_FILE=$SETUP_FILE" >> $GITHUB_ENV
 
-          cat > /tmp/release-notes.md << EOF
-          ## ${VERSION} 更新内容
+          cat > /tmp/release-notes.md << 'EOF'
+          ## v2.0.1 更新内容
 
           ### 新功能
-          - **软件授权系统**：基于硬件指纹 + RSA 签名的离线授权，首次启动显示激活页面，支持导入 .lic 文件或预装自动激活
-          - 严格顺序模式：逐步骤配置，仅在前置步骤全部完成后才接受该步骤，过滤环境误检
-          - 单次接受模式：逐步骤配置，同一周期内只接受一次，防止重复记录
-          - 语音播报支持自定义事件：除 OK/NG 外，自定义事件也会语音播报事件名称
-          - 双缓冲 MJPEG 视频流：定期无缝切换，释放 Chromium 原生解码内存，防止长时间运行黑屏
-          - 步骤参数上限扩展：min/max_duration、max_interval、default_pt 上限提升至 3600 秒，min_frames 上限提升至 300 帧
+          - **平均 CT 显示**：CT 改为所有 OK 周期的平均值，支持在显示设置中选择是否包含 NG 周期
+          - **平均 PT 显示**：每个步骤的 PT 改为历史所有轮次中该步骤的平均耗时
+          - **动作超时自动 NG**：步骤超过最大时长后自动重置检测状态（模拟 A-A 重现），间接触发 NG 判定
+          - **后端自动加载项目**：启动后自动加载已激活的项目配置，无需手动重新启用
 
           ### Bug 修复
-          - 修复数据持久化失败：用户数据目录(userDataPath)未正确传递给后端，导致更新后数据丢失
-          - 修复 SOP 卡片截图不更新：步骤首次确认时强制截图，绕过节流限制
-          - 前端截图轮询节流从 2 秒优化为 1 秒
-
-          ### 稳定性
-          - Electron 崩溃自动恢复：渲染进程崩溃/无响应/GPU 进程异常时自动 reload
-          - 全局 Vue 错误捕获和 Promise 异常兜底
+          - 修复视频录制时间短于实际耗时（延迟释放写入器，确保队列帧全部写入）
+          - 修复 NG TOP3 不显示（增强正则匹配 + 缺失步骤回退逻辑）
+          - 修复班次边界数据错误（周期按 start_time 归属班次，计数从筛选周期重新计算）
+          - 修复停止检测后计数器未停止（正确停止轮询）
+          - 修复第一步重现结算失败（step_start_time 回退到 _step_raw_start）
+          - 修复部分数据从第三步开始周期（_just_settled 守卫确保结算后仅接受第一步）
 
           ### 安装说明
           1. 下载 .exe 安装程序
           2. 双击运行安装
           3. 按提示完成安装
           4. 首次运行需安装 VC++ 运行时库（如未安装）
-          5. **从旧版本升级前建议备份 %APPDATA%/天军科技AI视觉检测系统/ 下的 sql_app.db 和 uploads/**
+          5. **从旧版本升级会自动备份数据库和历史数据**
           EOF
 
           gh release delete "${VERSION}" --repo 17373531860/tianjun-releases --yes 2>/dev/null || true
@@ -251,3 +249,227 @@ jobs:
             "$SETUP_FILE"
 
           echo "Release created successfully!"
+
+      - name: Split installer for Gitee
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $setupFile = Get-ChildItem "electron/dist" -Filter "TianJun-AI-Vision-*-Setup.exe" | Select-Object -First 1
+          if (-not $setupFile) {
+            Write-Error "Setup exe not found!"
+            exit 1
+          }
+
+          Write-Host "Splitting $($setupFile.Name) ($([math]::Round($setupFile.Length / 1MB, 1)) MB)..."
+
+          $partsDir = "gitee-parts"
+          New-Item -ItemType Directory -Path $partsDir -Force | Out-Null
+
+          $chunkSize = 95 * 1024 * 1024  # 95MB per chunk
+          $stream = [System.IO.File]::OpenRead($setupFile.FullName)
+          $buffer = New-Object byte[] $chunkSize
+          $partNum = 0
+
+          while ($stream.Position -lt $stream.Length) {
+              $bytesRead = $stream.Read($buffer, 0, $chunkSize)
+              $partName = "{0}.part{1:D2}.part" -f $setupFile.Name, $partNum
+              $partPath = Join-Path $partsDir $partName
+
+              $fs = [System.IO.File]::OpenWrite($partPath)
+              $fs.Write($buffer, 0, $bytesRead)
+              $fs.Close()
+
+              Write-Host "  Created: $partName ($([math]::Round($bytesRead / 1MB, 1)) MB)"
+              $partNum++
+          }
+          $stream.Close()
+
+          Write-Host "Total parts: $partNum"
+          echo "TOTAL_PARTS=$partNum" >> $env:GITHUB_ENV
+
+          # Generate merge script
+          $version = "${{ github.ref_name }}"
+          $exeName = $setupFile.Name
+          $batContent = @"
+          @echo off
+          chcp 65001 >nul
+          setlocal enabledelayedexpansion
+          echo ============================================
+          echo   天军科技AI视觉检测系统 - 安装包合并工具
+          echo   版本: $version
+          echo ============================================
+          echo.
+          echo 正在合并安装包文件，请稍候...
+          echo.
+
+          set "output=$exeName"
+          if exist "%output%" del /f "%output%"
+
+          set "count=0"
+          set "cmd=copy /b"
+          set "first=1"
+
+          for /f "delims=" %%f in ('dir /b /o:n *.part 2^>nul') do (
+              set /a count+=1
+              if !first!==1 (
+                  set "cmd=!cmd! "%%f""
+                  set "first=0"
+              ) else (
+                  set "cmd=!cmd!+"%%f""
+              )
+          )
+
+          if !count!==0 (
+              echo [错误] 当前目录下没有找到 .part 文件！
+              echo 请确保从两个仓库下载的所有 .part 文件都放在同一个文件夹中。
+              echo.
+              echo 下载地址：
+              echo   第一部分: https://gitee.com/xu-yanzhi32/tianjun-releases/releases
+              echo   第二部分: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases
+              pause
+              exit /b 1
+          )
+
+          set "cmd=!cmd! "%output%""
+          echo 找到 !count! 个分块文件，正在合并...
+          !cmd! >nul
+
+          if exist "%output%" (
+              echo.
+              echo ============================================
+              echo   合并成功！
+              echo   安装程序: %output%
+              echo ============================================
+              echo.
+              echo 请双击运行安装程序进行安装。
+          ) else (
+              echo.
+              echo [错误] 合并失败，请检查文件是否完整。
+          )
+
+          pause
+          "@
+
+          $batContent | Out-File -FilePath "$partsDir/合并安装包.bat" -Encoding Default
+          Write-Host "Merge script created: 合并安装包.bat"
+
+          # List all files
+          Write-Host "`nFiles in $partsDir :"
+          Get-ChildItem $partsDir | ForEach-Object { Write-Host "  $($_.Name) - $([math]::Round($_.Length / 1MB, 1)) MB" }
+
+      - name: Upload to Gitee (repo 1 - first batch)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          TOTAL_PARTS="${TOTAL_PARTS}"
+          HALF=$(( (TOTAL_PARTS + 1) / 2 ))
+
+          echo "Total parts: $TOTAL_PARTS, Repo 1 gets: parts 00 to $(printf '%02d' $((HALF - 1)))"
+
+          # Delete existing release if any
+          echo "Checking for existing release on tianjun-releases..."
+          EXISTING=$(curl -s "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases/releases/tags/${VERSION}?access_token=${GITEE_TOKEN}" 2>/dev/null)
+          EXISTING_ID=$(echo "$EXISTING" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+          if [ -n "$EXISTING_ID" ] && [ "$EXISTING_ID" != "" ]; then
+            echo "Deleting existing release ID $EXISTING_ID..."
+            curl -s -X DELETE "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases/releases/${EXISTING_ID}?access_token=${GITEE_TOKEN}"
+          fi
+
+          # Create release
+          echo "Creating release ${VERSION} on tianjun-releases..."
+          RELEASE_BODY="## ${VERSION} 天军科技AI视觉检测系统 (第一部分)\n\n请同时下载第二部分: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases/tag/${VERSION}-part2\n\n### 使用方法\n1. 从本页面下载所有 .part 文件和 合并安装包.bat\n2. 从第二部分页面下载所有 .part 文件\n3. 将所有文件放到同一个文件夹\n4. 双击运行 合并安装包.bat\n5. 合并完成后双击运行安装程序"
+
+          RESPONSE=$(curl -s -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases/releases" \
+            -H "Content-Type: application/json" \
+            -d "{\"access_token\":\"${GITEE_TOKEN}\",\"tag_name\":\"${VERSION}\",\"name\":\"${VERSION} 天军科技AI视觉检测系统 (第一部分)\",\"body\":\"${RELEASE_BODY}\",\"target_commitish\":\"master\"}")
+
+          RELEASE_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+          if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "" ]; then
+            echo "ERROR: Failed to create release!"
+            echo "$RESPONSE"
+            exit 1
+          fi
+          echo "Release created with ID: $RELEASE_ID"
+
+          # Upload merge script
+          echo "Uploading merge script..."
+          curl -s -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases/releases/${RELEASE_ID}/attach_files" \
+            -F "access_token=${GITEE_TOKEN}" \
+            -F "file=@gitee-parts/合并安装包.bat" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Uploaded: {d.get(\"name\",\"?\")}' )" || echo "  Warning: merge script upload may have failed"
+
+          # Upload first batch of parts
+          for i in $(seq 0 $((HALF - 1))); do
+            PART_NAME=$(printf "*.part%02d.part" $i)
+            PART_FILE=$(ls gitee-parts/$PART_NAME 2>/dev/null | head -1)
+            if [ -n "$PART_FILE" ]; then
+              echo "Uploading $(basename $PART_FILE)..."
+              curl -s -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases/releases/${RELEASE_ID}/attach_files" \
+                -F "access_token=${GITEE_TOKEN}" \
+                -F "file=@${PART_FILE}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Uploaded: {d.get(\"name\",\"?\")}' )" || echo "  Warning: upload may have failed for part $i"
+            fi
+          done
+
+          echo "Repo 1 upload complete!"
+
+      - name: Upload to Gitee (repo 2 - second batch)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          TOTAL_PARTS="${TOTAL_PARTS}"
+          HALF=$(( (TOTAL_PARTS + 1) / 2 ))
+
+          if [ "$HALF" -ge "$TOTAL_PARTS" ]; then
+            echo "All parts fit in repo 1, skipping repo 2."
+            exit 0
+          fi
+
+          echo "Repo 2 gets: parts $(printf '%02d' $HALF) to $(printf '%02d' $((TOTAL_PARTS - 1)))"
+
+          # Delete existing release if any
+          TAG2="${VERSION}-part2"
+          EXISTING=$(curl -s "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases-2/releases/tags/${TAG2}?access_token=${GITEE_TOKEN}" 2>/dev/null)
+          EXISTING_ID=$(echo "$EXISTING" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+          if [ -n "$EXISTING_ID" ] && [ "$EXISTING_ID" != "" ]; then
+            echo "Deleting existing release ID $EXISTING_ID..."
+            curl -s -X DELETE "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases-2/releases/${EXISTING_ID}?access_token=${GITEE_TOKEN}"
+          fi
+
+          # Create release
+          echo "Creating release ${TAG2} on tianjun-releases-2..."
+          RELEASE_BODY="## ${VERSION} 天军科技AI视觉检测系统 (第二部分)\n\n请同时下载第一部分: https://gitee.com/xu-yanzhi32/tianjun-releases/releases/tag/${VERSION}\n\n将所有 .part 文件与第一部分的文件放在同一文件夹，然后运行第一部分中的 合并安装包.bat"
+
+          RESPONSE=$(curl -s -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases-2/releases" \
+            -H "Content-Type: application/json" \
+            -d "{\"access_token\":\"${GITEE_TOKEN}\",\"tag_name\":\"${TAG2}\",\"name\":\"${VERSION} 天军科技AI视觉检测系统 (第二部分)\",\"body\":\"${RELEASE_BODY}\",\"target_commitish\":\"master\"}")
+
+          RELEASE_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+          if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "" ]; then
+            echo "ERROR: Failed to create release on repo 2!"
+            echo "$RESPONSE"
+            exit 1
+          fi
+          echo "Release created with ID: $RELEASE_ID"
+
+          # Upload second batch of parts
+          for i in $(seq $HALF $((TOTAL_PARTS - 1))); do
+            PART_NAME=$(printf "*.part%02d.part" $i)
+            PART_FILE=$(ls gitee-parts/$PART_NAME 2>/dev/null | head -1)
+            if [ -n "$PART_FILE" ]; then
+              echo "Uploading $(basename $PART_FILE)..."
+              curl -s -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases-2/releases/${RELEASE_ID}/attach_files" \
+                -F "access_token=${GITEE_TOKEN}" \
+                -F "file=@${PART_FILE}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Uploaded: {d.get(\"name\",\"?\")}' )" || echo "  Warning: upload may have failed for part $i"
+            fi
+          done
+
+          echo "Repo 2 upload complete!"
+          echo ""
+          echo "=== Gitee Release URLs ==="
+          echo "Part 1: https://gitee.com/xu-yanzhi32/tianjun-releases/releases/tag/${VERSION}"
+          echo "Part 2: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases/tag/${VERSION}-part2"

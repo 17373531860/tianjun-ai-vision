@@ -33,9 +33,9 @@ export const getSessionDates = (params = {}) => {
 
 // ============ 周期管理 ============
 
-// 获取会话的所有周期
-export const getSessionCycles = (sessionId) => {
-  return api.get(`/data/sessions/${sessionId}/cycles`);
+// 获取会话的周期（分页）
+export const getSessionCycles = (sessionId, skip = 0, limit = 50) => {
+  return api.get(`/data/sessions/${sessionId}/cycles`, { params: { skip, limit } });
 };
 
 // 获取单个周期详情

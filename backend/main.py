@@ -225,6 +225,34 @@ _diag_db_health()
 migrate_database()
 fix_orphan_sessions()
 
+def auto_load_active_project():
+    """Backend startup: auto-load the active project into VideoSourceManager."""
+    from backend.models.models import Project
+    from sqlalchemy.orm import Session as DBSession
+    try:
+        with DBSession(engine) as db:
+            project = db.query(Project).filter(Project.is_active == True).first()
+            if not project:
+                print("[启动] 没有激活的项目，跳过自动加载")
+                return
+            config = {
+                'id': project.id,
+                'name': project.name,
+                'task_type': getattr(project, 'task_type', 'detection'),
+                'logic_mode': project.logic_mode,
+                'steps_config': project.steps_config or [],
+                'pipeline_config': project.pipeline_config or {},
+                'events_config': project.events_config or [],
+                'counters_config': project.counters_config or [],
+            }
+            vm = get_video_manager()
+            vm.set_project_config(config)
+            print(f"[启动] 自动加载激活项目: {project.name}")
+    except Exception as e:
+        print(f"[启动] 自动加载项目失败: {e}")
+
+auto_load_active_project()
+
 # ========== 后台自动清理定时任务 ==========
 _cleanup_timer = None
 

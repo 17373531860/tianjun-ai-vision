@@ -27,7 +27,7 @@
       <div class="h-20 bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col flex-shrink-0">
         <div class="bg-slate-800 px-2 py-0.5 text-cyan-400 text-xs font-bold border-b border-slate-700 flex items-center justify-between">
           <span>SOP</span>
-          <span class="text-[10px] text-gray-400">CT: {{ multiChannelData[ch - 1]?.avgCycleTime ? multiChannelData[ch - 1].avgCycleTime.toFixed(1) + 's' : '--' }}</span>
+          <span class="text-[10px] text-gray-400">CT: {{ getDisplayCT(multiChannelData[ch - 1]) }}</span>
         </div>
         <div class="flex-1 flex items-center gap-1 px-1.5 overflow-x-auto">
           <div v-for="(step, idx) in (multiChannelData[ch - 1]?.steps || [])" :key="idx"
@@ -155,7 +155,7 @@
     <div class="h-64 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col flex-shrink-0">
       <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex items-center gap-3">
         <span class="text-cyan-400 font-bold text-sm">工位 {{ selectedChannel + 1 }} 详情</span>
-        <span class="text-[10px] bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ multiChannelData[selectedChannel]?.avgCycleTime ? multiChannelData[selectedChannel].avgCycleTime.toFixed(1) + 's' : '--' }}</span>
+        <span class="text-[10px] bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ getDisplayCT(multiChannelData[selectedChannel]) }}</span>
         <div class="ml-auto flex gap-1.5">
           <button @click="startDetectionForChannel(selectedChannel)" :disabled="!currentProject || multiChannelData[selectedChannel]?.isDetecting"
             class="bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[10px] font-bold">开始</button>
@@ -510,7 +510,7 @@
       <div v-if="systemStore.display.monitor.stepTable" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
          <div class="bg-slate-800 px-3 py-2 flex justify-between items-center border-b border-slate-700">
             <span class="text-cyan-400 text-lg font-bold">步骤统计</span>
-            <span class="text-sm bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ cycleTime }}s</span>
+            <span class="text-sm bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ displayCT }}s</span>
          </div>
          <div class="flex-1 overflow-auto">
             <table class="w-full text-left text-sm">
@@ -659,6 +659,7 @@ const isStreaming = ref(false);
 const fps = ref(0);
 const latency = ref(0);
 const cycleTime = ref(0);
+const cycleTimeWithNg = ref(0);
 const detectionCount = ref(0);
 const currentDetections = ref([]);
 
@@ -706,13 +707,15 @@ const initMultiChannelData = (count) => {
     if (!multiChannelData.value[i]) {
       multiChannelData.value[i] = {
         isRunning: false, isDetecting: false, fps: 0, latency: 0,
-        total: 0, ok: 0, ng: 0, avgCycleTime: 0, projectName: '',
+        total: 0, ok: 0, ng: 0, avgCycleTime: 0, avgCycleTimeWithNg: 0, projectName: '',
         steps: [], detections: [], tracking: null,
         counters: {}, allCounters: [],
         stepCounts: {}, recentEvents: [],
         currentCycleSteps: [], backupCoveredLabels: [],
         ngStepRanking: [], yieldRate: 0,
         tableData: [],
+        _ngStepCountMap: {},
+        _processedEventIds: new Set(),
       };
     }
   }
@@ -846,6 +849,7 @@ const startMultiPolling = () => {
         chData.ng = ctrs['不良总数'] ?? 0;
         chData.counters = ctrs;
         chData.avgCycleTime = d.average_cycle_time || 0;
+        chData.avgCycleTimeWithNg = d.average_cycle_time_with_ng || 0;
         chData.detections = d.detections || [];
         chData.currentCycleSteps = d.current_cycle_steps || [];
         chData.backupCoveredLabels = d.backup_covered_labels || [];
@@ -857,13 +861,13 @@ const startMultiPolling = () => {
         const ok = chData.ok || 0;
         chData.yieldRate = total > 0 ? Math.round((ok / total) * 100) : 0;
 
-        const ngStep = ctrs['NG步骤'] || 0;
-        if (ngStep > 0 && d.step_counts) {
-          const ranking = [];
-          for (const [step, count] of Object.entries(d.step_counts)) {
-            if (count > 0) ranking.push({ step, count, rate: (count / ngStep) * 100 });
-          }
-          ranking.sort((a, b) => b.count - a.count);
+        const chTotalCycles = ctrs['总产量'] || ctrs['total'] || 0;
+        const backendNgMap = d.ng_step_cycle_counts || {};
+        if (Object.keys(backendNgMap).length > 0) {
+          const ranking = Object.entries(backendNgMap)
+            .filter(([, c]) => c > 0)
+            .map(([step, ngCount]) => ({ step, count: ngCount, rate: chTotalCycles > 0 ? (ngCount / chTotalCycles * 100) : 0 }))
+            .sort((a, b) => b.rate - a.rate);
           chData.ngStepRanking = ranking.slice(0, 3);
         } else {
           chData.ngStepRanking = [];
@@ -1318,16 +1322,16 @@ const formatStepTime = (stepLabel) => {
   return `${hours}:${minutes}:${seconds}`;
 };
 
-// 格式化步骤耗时
+// 格式化步骤耗时 (average PT)
 const formatDuration = (stepLabel) => {
-  const duration = stepDurations.value[stepLabel];
+  const duration = avgStepDurations.value[stepLabel];
   if (duration === undefined || duration === null) return '--';
   return `${duration.toFixed(1)}s`;
 };
 
-// 格式化当前周期内步骤检测时间（PT）
+// 格式化当前周期内步骤检测时间（PT） - uses average
 const formatStepPT = (stepLabel) => {
-  const duration = stepDurations.value[stepLabel];
+  const duration = avgStepDurations.value[stepLabel];
   if (duration === undefined || duration === null) return '--';
   return `${duration.toFixed(1)}s`;
 };
@@ -1338,6 +1342,19 @@ const formatInterval = (stepLabel) => {
   if (interval === undefined || interval === null || interval === 0) return '--';
   return `${interval.toFixed(1)}s`;
 };
+
+const getDisplayCT = (chData) => {
+  if (!chData) return '--';
+  const includeNg = systemStore.display?.monitor?.ctIncludeNg;
+  const val = includeNg ? chData.avgCycleTimeWithNg : chData.avgCycleTime;
+  return val ? val.toFixed(1) + 's' : '--';
+};
+
+const displayCT = computed(() => {
+  const includeNg = systemStore.display?.monitor?.ctIncludeNg;
+  const val = includeNg ? cycleTimeWithNg.value : cycleTime.value;
+  return val || 0;
+});
 
 // 获取步骤样式（步骤设置区域用）
 const getStepClass = (step) => {
@@ -1911,6 +1928,9 @@ const stepDetectionTimes = ref({});
 // 步骤耗时
 const stepDurations = ref({});
 
+// 步骤平均耗时 (average PT)
+const avgStepDurations = ref({});
+
 // 步骤间隔时间
 const stepIntervals = ref({});
 
@@ -1952,6 +1972,7 @@ const startPolling = () => {
       latency.value = data.latency || 0;
       detectionCount.value = (data.detections || []).length;
       cycleTime.value = data.average_cycle_time || 0;
+      cycleTimeWithNg.value = data.average_cycle_time_with_ng || 0;
       
       const now = Date.now();
       
@@ -1967,6 +1988,9 @@ const startPolling = () => {
       if (data.step_durations) {
         Object.assign(stepDurations.value, data.step_durations);
       }
+      if (data.avg_step_durations) {
+        Object.assign(avgStepDurations.value, data.avg_step_durations);
+      }
       if (data.step_intervals) {
         Object.assign(stepIntervals.value, data.step_intervals);
       }
@@ -1976,6 +2000,7 @@ const startPolling = () => {
         const countersWithCycle = data.counters || {};
         countersWithCycle._currentCycleSteps = data.current_cycle_steps || [];
         countersWithCycle._backupCoveredLabels = data.backup_covered_labels || [];
+        countersWithCycle._ngStepCycleCounts = data.ng_step_cycle_counts || {};
         updateStepsFromBackend(
           data.step_counts || {}, 
           data.detections || [],
@@ -2058,6 +2083,9 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
         const cfg = stepsConfig.find(s => s.label === label);
         if (cfg?.default_pt) {
           stepDurations.value[label] = cfg.default_pt;
+          if (avgStepDurations.value[label] === undefined) {
+            avgStepDurations.value[label] = cfg.default_pt;
+          }
         }
       }
     });
@@ -2189,65 +2217,15 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
     }
   });
   
-  // 解析事件 — 仅用于 NG 排名累计（cycleResult 已由实时算法处理）
-  if (recentEvents && recentEvents.length > 0) {
-    recentEvents.forEach(event => {
-      const eventKey = event.seq ? `seq_${event.seq}` : `${event.event_id}_${event.timestamp}`;
-      if (processedEventIds.has(eventKey)) return;
-      processedEventIds.add(eventKey);
-      
-      const eid = Number(event.event_id);
-      
-      // NG 事件：解析原因，累计不良步骤排名
-      if (eid === 2 && event.reason) {
-        // 缺少步骤
-        const missingMatch = event.reason.match(/缺少[:：]\s*\[?([^\]]+)\]?/);
-        if (missingMatch) {
-          missingMatch[1].split(/[,，]/).forEach(s => {
-            const name = s.trim().replace(/['\s]/g, '');
-            if (name) {
-              ngStepCountMap.value[name] = (ngStepCountMap.value[name] || 0) + 1;
-            }
-          });
-        }
-        // 重复步骤
-        if (event.reason.includes('重复')) {
-          const dupMatch = event.reason.match(/重复步骤[:：]\s*\[?([^\]]+)\]?/);
-          if (dupMatch) {
-            dupMatch[1].split(/[,，]/).forEach(s => {
-              const name = s.trim().replace(/['\s]/g, '');
-              if (name) {
-                ngStepCountMap.value[name] = (ngStepCountMap.value[name] || 0) + 1;
-              }
-            });
-          }
-        }
-        // 顺序错误
-        if (event.reason.includes('顺序错误')) {
-          const orderMatch = event.reason.match(/期望\[(.+?)\].*实际\[(.+?)\]/);
-          if (orderMatch) {
-            const expected = orderMatch[1].trim();
-            const actual = orderMatch[2].trim();
-            if (expected) ngStepCountMap.value[expected] = (ngStepCountMap.value[expected] || 0) + 1;
-            if (actual) ngStepCountMap.value[actual] = (ngStepCountMap.value[actual] || 0) + 1;
-          }
-        }
-      }
-    });
-    
-    // 防止 processedEventIds 无限增长
-    if (processedEventIds.size > 500) {
-      const arr = [...processedEventIds];
-      processedEventIds.clear();
-      arr.slice(-200).forEach(k => processedEventIds.add(k));
-    }
-    
-    // 更新排名（百分比 = NG次数 / 总执行次数）
-    ngStepRanking.value = Object.entries(ngStepCountMap.value)
+  // NG TOP3: use authoritative counts from backend (survives page reload)
+  {
+    const totalCycles = backendCounters?.['总产量'] || backendCounters?.['total'] || 0;
+    const backendNgMap = backendCounters?._ngStepCycleCounts || {};
+    ngStepRanking.value = Object.entries(backendNgMap)
+      .filter(([, ngCount]) => ngCount > 0)
       .map(([step, ngCount]) => {
-        const total = stepCounts[step] || 0;
-        const rate = total > 0 ? (ngCount / total * 100) : 0;
-        return { step, count: ngCount, total, rate };
+        const rate = totalCycles > 0 ? (ngCount / totalCycles * 100) : 0;
+        return { step, count: ngCount, total: totalCycles, rate };
       })
       .sort((a, b) => b.rate - a.rate);
   }
@@ -2350,6 +2328,7 @@ const resetCounters = async () => {
   // 清空步骤截图缓存、PT/间隔缓存和NG排名
   stepScreenshots.value = {};
   stepDurations.value = {};
+  avgStepDurations.value = {};
   stepIntervals.value = {};
   stepDetectionTimes.value = {};
   Object.keys(cachedScreenshotUrls).forEach(k => delete cachedScreenshotUrls[k]);

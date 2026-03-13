@@ -522,45 +522,128 @@ def get_sessions_by_date(
     channel_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
-    """获取指定日期的会话概览"""
-    query = db.query(DetectionSession).filter(func.date(DetectionSession.start_time) == date)
-    
+    """获取指定日期的会话概览（班次过滤基于 cycle 级别）"""
+    from sqlalchemy import or_
+
+    use_shift = bool(start_hour and end_hour)
+
+    # ---------- 查询会话（日期级别，不做小时过滤） ----------
+    sess_query = db.query(DetectionSession).filter(
+        func.date(DetectionSession.start_time) == date
+    )
+    if use_shift and start_hour > end_hour:
+        next_date = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        sess_query = db.query(DetectionSession).filter(
+            or_(
+                func.date(DetectionSession.start_time) == date,
+                func.date(DetectionSession.start_time) == next_date,
+            )
+        )
     if project_id:
-        query = query.filter(DetectionSession.project_id == project_id)
-    
+        sess_query = sess_query.filter(DetectionSession.project_id == project_id)
     if channel_id is not None:
-        query = query.filter(DetectionSession.channel_id == channel_id)
-    
-    if start_hour and end_hour:
-        time_col = func.strftime('%H:%M', DetectionSession.start_time)
+        sess_query = sess_query.filter(DetectionSession.channel_id == channel_id)
+    sessions = sess_query.order_by(DetectionSession.start_time).all()
+
+    if not use_shift:
+        # --- 无班次过滤：使用 session 预聚合（原有逻辑） ---
+        total_sessions = len(sessions)
+        total_cycles = sum(s.total_cycles or 0 for s in sessions)
+        total_good = sum(s.good_cycles or 0 for s in sessions)
+        total_ng = sum(s.ng_cycles or 0 for s in sessions)
+        ct = [s.avg_cycle_time for s in sessions if s.avg_cycle_time]
+        avg_cycle_time = sum(ct) / len(ct) if ct else 0
+        counters_summary = {}
+        for s in sessions:
+            if s.counters_snapshot:
+                for k, v in s.counters_snapshot.items():
+                    counters_summary[k] = counters_summary.get(k, 0) + v
+    else:
+        # --- 班次过滤：按 cycle.start_time 归属（谁在哪个班次开始操作就算哪个班次） ---
+        session_ids = [s.id for s in sessions]
+        if not session_ids:
+            return SessionOverview(
+                date=date, sessions=[], total_sessions=0,
+                total_cycles=0, total_good=0, total_ng=0,
+                avg_cycle_time=0, counters_summary={},
+            )
+        cycle_query = db.query(DetectionCycle).filter(
+            DetectionCycle.session_id.in_(session_ids)
+        )
+        cycle_time_col = func.strftime('%H:%M', DetectionCycle.start_time)
         if start_hour <= end_hour:
-            query = query.filter(and_(time_col >= start_hour, time_col < end_hour))
+            cycle_query = cycle_query.filter(
+                and_(
+                    func.date(DetectionCycle.start_time) == date,
+                    cycle_time_col >= start_hour,
+                    cycle_time_col < end_hour,
+                )
+            )
         else:
-            from sqlalchemy import or_
-            query = query.filter(or_(time_col >= start_hour, time_col < end_hour))
-    
-    sessions = query.order_by(DetectionSession.start_time).all()
-    
-    # 统计
-    total_sessions = len(sessions)
-    total_cycles = sum(s.total_cycles or 0 for s in sessions)
-    total_good = sum(s.good_cycles or 0 for s in sessions)
-    total_ng = sum(s.ng_cycles or 0 for s in sessions)
-    
-    # 平均周期时间
-    cycle_times = [s.avg_cycle_time for s in sessions if s.avg_cycle_time]
-    avg_cycle_time = sum(cycle_times) / len(cycle_times) if cycle_times else 0
-    
-    # 汇总计数器
-    counters_summary = {}
-    for session in sessions:
-        if session.counters_snapshot:
-            for key, value in session.counters_snapshot.items():
-                counters_summary[key] = counters_summary.get(key, 0) + value
-    
+            next_date = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+            cycle_query = cycle_query.filter(
+                or_(
+                    and_(func.date(DetectionCycle.start_time) == date, cycle_time_col >= start_hour),
+                    and_(func.date(DetectionCycle.start_time) == next_date, cycle_time_col < end_hour),
+                )
+            )
+        filtered_cycles = cycle_query.all()
+
+        total_cycles = len(filtered_cycles)
+        total_good = sum(1 for c in filtered_cycles if c.is_good)
+        total_ng = total_cycles - total_good
+        durations = [c.duration for c in filtered_cycles if c.duration]
+        avg_cycle_time = sum(durations) / len(durations) if durations else 0
+
+        involved_session_ids = set(c.session_id for c in filtered_cycles)
+        sessions = [s for s in sessions if s.id in involved_session_ids]
+        total_sessions = len(sessions)
+
+        counters_summary = {
+            '总产量': total_cycles,
+            '合格总数': total_good,
+            '不良总数': total_ng,
+        }
+        ng_step_counts = {}
+        for c in filtered_cycles:
+            if not c.is_good and c.step_sequence:
+                steps_config = None
+                if project_id:
+                    proj = db.query(Project).filter(Project.id == project_id).first()
+                    if proj:
+                        steps_config = proj.steps_config
+                if steps_config:
+                    expected = set(s.get('label') for s in steps_config if s.get('label') and not s.get('is_backup'))
+                    actual = set(c.step_sequence) if isinstance(c.step_sequence, list) else set()
+                    for missing_step in (expected - actual):
+                        ng_step_counts[missing_step] = ng_step_counts.get(missing_step, 0) + 1
+        if ng_step_counts:
+            total_ng_steps = sum(ng_step_counts.values())
+            counters_summary['NG步骤'] = total_ng_steps
+
+    # ---------- 构造 session 列表响应 ----------
+    if use_shift:
+        session_cycle_map = {}
+        for c in filtered_cycles:
+            session_cycle_map.setdefault(c.session_id, []).append(c)
+
     session_responses = []
     for session in sessions:
         project = db.query(Project).filter(Project.id == session.project_id).first()
+        if use_shift:
+            s_cycles = session_cycle_map.get(session.id, [])
+            s_total = len(s_cycles)
+            s_good = sum(1 for c in s_cycles if c.is_good)
+            s_ng = s_total - s_good
+            s_durs = [c.duration for c in s_cycles if c.duration]
+            s_avg_ct = round(sum(s_durs) / len(s_durs), 2) if s_durs else 0
+            s_counters = {'总产量': s_total, '合格总数': s_good, '不良总数': s_ng}
+        else:
+            s_total = session.total_cycles or 0
+            s_good = session.good_cycles or 0
+            s_ng = s_total - s_good
+            s_avg_ct = session.avg_cycle_time or 0
+            s_counters = session.counters_snapshot
         session_responses.append(SessionResponse(
             id=session.id,
             session_uuid=session.session_uuid,
@@ -568,17 +651,17 @@ def get_sessions_by_date(
             project_name=project.name if project else "Unknown",
             start_time=session.start_time.strftime("%Y-%m-%d %H:%M:%S"),
             end_time=session.end_time.strftime("%Y-%m-%d %H:%M:%S") if session.end_time else None,
-            total_cycles=session.total_cycles or 0,
-            good_cycles=session.good_cycles or 0,
-            ng_cycles=session.ng_cycles or 0,
-            counters_snapshot=session.counters_snapshot,
-            avg_cycle_time=session.avg_cycle_time or 0,
+            total_cycles=s_total,
+            good_cycles=s_good,
+            ng_cycles=s_ng,
+            counters_snapshot=s_counters,
+            avg_cycle_time=s_avg_ct,
             min_cycle_time=session.min_cycle_time,
             max_cycle_time=session.max_cycle_time,
             video_id=session.video_id,
             status=session.status
         ))
-    
+
     return SessionOverview(
         date=date,
         sessions=session_responses,
@@ -621,16 +704,24 @@ def get_session(session_id: int, db: Session = Depends(get_db)):
 
 # ============ 周期管理 API ============
 
-@router.get("/sessions/{session_id}/cycles", response_model=List[CycleResponse])
-def get_session_cycles(session_id: int, db: Session = Depends(get_db)):
-    """获取会话的所有周期"""
-    cycles = db.query(DetectionCycle).filter(
+@router.get("/sessions/{session_id}/cycles")
+def get_session_cycles(
+    session_id: int,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    """获取会话的周期（分页）"""
+    base = db.query(DetectionCycle).filter(
         DetectionCycle.session_id == session_id
-    ).order_by(DetectionCycle.cycle_number).all()
-    
-    result = []
+    )
+    total = base.count()
+
+    cycles = base.order_by(DetectionCycle.cycle_number).offset(skip).limit(limit).all()
+
+    items = []
     for cycle in cycles:
-        result.append(CycleResponse(
+        items.append(CycleResponse(
             id=cycle.id,
             cycle_uuid=cycle.cycle_uuid,
             cycle_number=cycle.cycle_number,
@@ -643,8 +734,8 @@ def get_session_cycles(session_id: int, db: Session = Depends(get_db)):
             step_sequence=cycle.step_sequence,
             video_id=cycle.video_id
         ))
-    
-    return result
+
+    return {"items": items, "total": total}
 
 
 @router.get("/cycles/{cycle_id}", response_model=CycleResponse)
@@ -671,13 +762,15 @@ def get_cycle(cycle_id: int, db: Session = Depends(get_db)):
 
 @router.get("/cycles/{cycle_id}/steps", response_model=List[StepRecordResponse])
 def get_cycle_steps(cycle_id: int, db: Session = Depends(get_db)):
-    """获取周期的所有步骤记录（按配置顺序排列，过滤误检步骤）"""
+    """获取周期的所有步骤记录（按配置顺序排列）
+    
+    Note: _filter_valid_steps is NOT applied here because _reconcile_step_records
+    already ensures StepRecords match the cycle's step_sequence exactly.
+    Filtering by duration would break this alignment.
+    """
     steps = db.query(StepRecord).filter(
         StepRecord.cycle_id == cycle_id
     ).all()
-    
-    # Filter out phantom steps (very brief false detections)
-    steps = _filter_valid_steps(steps)
     
     order_map = _get_step_order_map(db, cycle_id=cycle_id)
     steps.sort(key=lambda s: order_map.get(s.step_label, 999))
@@ -1003,9 +1096,7 @@ def export_csv(
                     
                     order_map = _get_step_order_map(db, session_id=session_id)
                     for cycle in cycles:
-                        steps = _filter_valid_steps(
-                            db.query(StepRecord).filter(StepRecord.cycle_id == cycle.id).all()
-                        )
+                        steps = db.query(StepRecord).filter(StepRecord.cycle_id == cycle.id).all()
                         steps.sort(key=lambda s: order_map.get(s.step_label, 999))
                         for step in steps:
                             config_order = order_map.get(step.step_label, step.step_order - 1) + 1
@@ -1052,9 +1143,7 @@ def export_csv(
             writer.writerow(row)
             writer.writerow([])
             
-            steps = _filter_valid_steps(
-                db.query(StepRecord).filter(StepRecord.cycle_id == cycle_id).all()
-            )
+            steps = db.query(StepRecord).filter(StepRecord.cycle_id == cycle_id).all()
             order_map = _get_step_order_map(db, cycle_id=cycle_id)
             steps.sort(key=lambda s: order_map.get(s.step_label, 999))
             if steps:
@@ -1092,14 +1181,40 @@ def export_csv(
                 query = query.filter(DetectionSession.start_time <= end_date + " 23:59:59")
             
             if start_hour and end_hour:
-                time_col = func.strftime('%H:%M', DetectionSession.start_time)
+                # 夜班跨日时，也需要查次日的会话
+                if start_hour > end_hour and date:
+                    from sqlalchemy import or_
+                    next_d = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                    query = query.filter(
+                        or_(
+                            func.date(DetectionSession.start_time) == date,
+                            func.date(DetectionSession.start_time) == next_d,
+                        )
+                    )
+
+            sessions = query.order_by(DetectionSession.start_time).all()
+            shift_cycle_ids = set()
+
+            if start_hour and end_hour and sessions:
+                sess_ids = [s.id for s in sessions]
+                cq = db.query(DetectionCycle).filter(DetectionCycle.session_id.in_(sess_ids))
+                ct_col = func.strftime('%H:%M', DetectionCycle.start_time)
                 if start_hour <= end_hour:
-                    query = query.filter(and_(time_col >= start_hour, time_col < end_hour))
+                    cq = cq.filter(and_(
+                        func.date(DetectionCycle.start_time) == (date or start_date),
+                        ct_col >= start_hour, ct_col < end_hour,
+                    ))
                 else:
                     from sqlalchemy import or_
-                    query = query.filter(or_(time_col >= start_hour, time_col < end_hour))
-            
-            sessions = query.order_by(DetectionSession.start_time).all()
+                    base_d = date or start_date
+                    next_d = (datetime.strptime(base_d, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                    cq = cq.filter(or_(
+                        and_(func.date(DetectionCycle.start_time) == base_d, ct_col >= start_hour),
+                        and_(func.date(DetectionCycle.start_time) == next_d, ct_col < end_hour),
+                    ))
+                shift_cycle_ids = set(c.id for c in cq.all())
+                involved = set(c.session_id for c in cq.all()) if shift_cycle_ids else set()
+                sessions = [s for s in sessions if s.id in involved]
             
             writer.writerow(["数据导出报表"])
             writer.writerow(["导出时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
@@ -1126,7 +1241,10 @@ def export_csv(
                 writer.writerow([])
             
             for session in sessions:
-                cycles = db.query(DetectionCycle).filter(DetectionCycle.session_id == session.id).all()
+                c_q = db.query(DetectionCycle).filter(DetectionCycle.session_id == session.id)
+                if shift_cycle_ids:
+                    c_q = c_q.filter(DetectionCycle.id.in_(shift_cycle_ids))
+                cycles = c_q.all()
                 if cycles:
                     writer.writerow([f"会话 {session.session_uuid} 的周期详情"])
                     headers = ["周期序号", "开始时间"]
@@ -1172,11 +1290,9 @@ def export_csv(
                         
                         order_map = _get_step_order_map(db, session_id=session.id)
                         for cycle in cycles:
-                            steps = _filter_valid_steps(
-                                db.query(StepRecord).filter(
-                                    StepRecord.cycle_id == cycle.id
-                                ).all()
-                            )
+                            steps = db.query(StepRecord).filter(
+                                StepRecord.cycle_id == cycle.id
+                            ).all()
                             steps.sort(key=lambda s: order_map.get(s.step_label, 999))
                             for step in steps:
                                 config_order = order_map.get(step.step_label, step.step_order - 1) + 1

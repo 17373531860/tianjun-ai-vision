@@ -81,7 +81,7 @@ export const useSystemStore = defineStore('system', {
         showFps: true,
         showLatency: true,
         showDetectionCount: true,
-        // 默认计数器显示开关（这些是系统内置的，无法删除，但可以隐藏）
+        ctIncludeNg: false,
         defaultCounters: {
           showTotal: true,      // 总产量
           showGood: true,       // 合格总数
