@@ -17,7 +17,7 @@ env:
 jobs:
   upload-to-gitee:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     steps:
       - name: Download installer from GitHub Release
@@ -161,27 +161,42 @@ jobs:
           HTTP_CODE=$(echo "$RESP" | grep "HTTP_CODE:" | cut -d: -f2)
           echo "  HTTP $HTTP_CODE"
 
-          # Upload first batch of parts
-          FILES=($(ls parts/*.part | sort))
-          for i in $(seq 0 $((HALF - 1))); do
-            FILE="${FILES[$i]}"
-            if [ -n "$FILE" ]; then
-              BASENAME=$(basename "$FILE")
-              echo "Uploading $BASENAME ($(( $(stat -c%s "$FILE") / 1048576 )) MB)..."
-              RESP=$(curl -s -w "\nHTTP_CODE:%{http_code}" --max-time 300 -X POST \
-                "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO1}/releases/${RELEASE_ID}/attach_files" \
+          # Upload first batch of parts (with retry)
+          upload_file() {
+            local FILE="$1" REPO="$2" RID="$3"
+            local BASENAME=$(basename "$FILE")
+            local ATTEMPT=0 MAX_RETRIES=3
+            while [ $ATTEMPT -lt $MAX_RETRIES ]; do
+              ATTEMPT=$((ATTEMPT + 1))
+              echo "  Attempt $ATTEMPT/$MAX_RETRIES..."
+              RESP=$(curl -s -w "\nHTTP_CODE:%{http_code}" --max-time 900 --connect-timeout 30 -X POST \
+                "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${REPO}/releases/${RID}/attach_files" \
                 -F "access_token=${GITEE_TOKEN}" \
                 -F "file=@${FILE}")
               HTTP_CODE=$(echo "$RESP" | grep "HTTP_CODE:" | cut -d: -f2)
-              echo "  HTTP $HTTP_CODE"
-              if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
-                echo "  WARNING: Upload may have failed. Response:"
-                echo "$RESP" | head -5
+              if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "200" ]; then
+                echo "  OK (HTTP $HTTP_CODE)"
+                return 0
               fi
+              echo "  HTTP $HTTP_CODE - retrying in 10s..."
+              sleep 10
+            done
+            echo "  FAILED after $MAX_RETRIES attempts"
+            return 1
+          }
+
+          FILES=($(ls parts/*.part | sort))
+          FAILED=0
+          for i in $(seq 0 $((HALF - 1))); do
+            FILE="${FILES[$i]}"
+            if [ -n "$FILE" ]; then
+              echo "Uploading $(basename $FILE) ($(( $(stat -c%s "$FILE") / 1048576 )) MB)..."
+              upload_file "$FILE" "${GITEE_REPO1}" "$RELEASE_ID" || FAILED=$((FAILED + 1))
             fi
           done
 
-          echo "Repo 1 upload complete!"
+          echo "Repo 1 upload complete! (failed: $FAILED)"
+          [ $FAILED -gt 0 ] && echo "WARNING: $FAILED files failed to upload"
 
       - name: Upload to Gitee repo 2
         env:
@@ -216,22 +231,36 @@ jobs:
 
           echo "Release created: ID=$RELEASE_ID"
 
-          FILES=($(ls parts/*.part | sort))
-          for i in $(seq $HALF $((TOTAL - 1))); do
-            FILE="${FILES[$i]}"
-            if [ -n "$FILE" ]; then
-              BASENAME=$(basename "$FILE")
-              echo "Uploading $BASENAME ($(( $(stat -c%s "$FILE") / 1048576 )) MB)..."
-              RESP=$(curl -s -w "\nHTTP_CODE:%{http_code}" --max-time 300 -X POST \
-                "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO2}/releases/${RELEASE_ID}/attach_files" \
+          # Reuse upload_file function
+          upload_file() {
+            local FILE="$1" REPO="$2" RID="$3"
+            local ATTEMPT=0 MAX_RETRIES=3
+            while [ $ATTEMPT -lt $MAX_RETRIES ]; do
+              ATTEMPT=$((ATTEMPT + 1))
+              echo "  Attempt $ATTEMPT/$MAX_RETRIES..."
+              RESP=$(curl -s -w "\nHTTP_CODE:%{http_code}" --max-time 900 --connect-timeout 30 -X POST \
+                "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${REPO}/releases/${RID}/attach_files" \
                 -F "access_token=${GITEE_TOKEN}" \
                 -F "file=@${FILE}")
               HTTP_CODE=$(echo "$RESP" | grep "HTTP_CODE:" | cut -d: -f2)
-              echo "  HTTP $HTTP_CODE"
-              if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
-                echo "  WARNING: Upload may have failed. Response:"
-                echo "$RESP" | head -5
+              if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "200" ]; then
+                echo "  OK (HTTP $HTTP_CODE)"
+                return 0
               fi
+              echo "  HTTP $HTTP_CODE - retrying in 10s..."
+              sleep 10
+            done
+            echo "  FAILED after $MAX_RETRIES attempts"
+            return 1
+          }
+
+          FILES=($(ls parts/*.part | sort))
+          FAILED=0
+          for i in $(seq $HALF $((TOTAL - 1))); do
+            FILE="${FILES[$i]}"
+            if [ -n "$FILE" ]; then
+              echo "Uploading $(basename $FILE) ($(( $(stat -c%s "$FILE") / 1048576 )) MB)..."
+              upload_file "$FILE" "${GITEE_REPO2}" "$RELEASE_ID" || FAILED=$((FAILED + 1))
             fi
           done
 
