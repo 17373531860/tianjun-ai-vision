@@ -52,7 +52,7 @@ jobs:
           FILE_SIZE=$(stat -c%s "$EXE")
           echo "Installer: $EXE ($FILE_SIZE bytes, $(( FILE_SIZE / 1048576 )) MB)"
 
-          CHUNK_SIZE=$((48 * 1024 * 1024))  # 48MB per chunk
+          CHUNK_SIZE=$((97 * 1024 * 1024))  # 97MB per chunk (Gitee: 100MB/file, 1GB/repo)
           mkdir -p parts
 
           split -b ${CHUNK_SIZE} -d -a 2 --additional-suffix=.part "$EXE" "parts/${EXE}.part"
