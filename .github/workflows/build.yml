@@ -265,7 +265,7 @@ jobs:
           $partsDir = "gitee-parts"
           New-Item -ItemType Directory -Path $partsDir -Force | Out-Null
 
-          $chunkSize = 97 * 1024 * 1024  # 97MB per chunk (Gitee: 100MB/file, 1GB/repo)
+          $chunkSize = 80 * 1024 * 1024  # 80MB per chunk (Gitee practical limit ~80-100MB)
           $stream = [System.IO.File]::OpenRead($setupFile.FullName)
           $buffer = New-Object byte[] $chunkSize
           $partNum = 0
