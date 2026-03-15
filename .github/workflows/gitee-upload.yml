@@ -223,7 +223,7 @@ jobs:
           done
 
           echo "Repo 1 upload complete! (failures: $FAILED)"
-          [ $FAILED -gt 0 ] && echo "WARNING: $FAILED files failed"
+          if [ $FAILED -gt 0 ]; then echo "WARNING: $FAILED files failed"; fi
 
       - name: Upload to Gitee repo 2
         env:
