@@ -265,7 +265,7 @@ jobs:
           $partsDir = "gitee-parts"
           New-Item -ItemType Directory -Path $partsDir -Force | Out-Null
 
-          $chunkSize = 80 * 1024 * 1024  # 80MB per chunk (Gitee practical limit ~80-100MB)
+          $chunkSize = 50 * 1024 * 1024  # 50MB per chunk (Gitee API enforces ~100MB but often fails above 50MB)
           $stream = [System.IO.File]::OpenRead($setupFile.FullName)
           $buffer = New-Object byte[] $chunkSize
           $partNum = 0
@@ -325,7 +325,7 @@ jobs:
               echo.
               echo 下载地址：
               echo   第一部分: https://gitee.com/xu-yanzhi32/tianjun-releases/releases
-              echo   第二部分: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases
+              echo   Part 2: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases
               pause
               exit /b 1
           )
@@ -350,8 +350,8 @@ jobs:
           pause
           "@
 
-          $batContent | Out-File -FilePath "$partsDir/合并安装包.bat" -Encoding Default
-          Write-Host "Merge script created: 合并安装包.bat"
+          $batContent | Out-File -FilePath "$partsDir/merge_installer.bat" -Encoding Default
+          Write-Host "Merge script created: merge_installer.bat"
 
           # List all files
           Write-Host "`nFiles in $partsDir :"
@@ -369,6 +369,30 @@ jobs:
 
           echo "Total parts: $TOTAL_PARTS, Repo 1 gets: parts 00 to $(printf '%02d' $((HALF - 1)))"
 
+          upload_file() {
+            local REPO="$1" RELEASE_ID="$2" FILE_PATH="$3"
+            local FNAME=$(basename "$FILE_PATH")
+            local MAX_RETRIES=3
+            for attempt in $(seq 1 $MAX_RETRIES); do
+              echo "  Attempt $attempt/$MAX_RETRIES for $FNAME ..."
+              HTTP_CODE=$(curl -s -o /tmp/gitee_resp.json -w "%{http_code}" --max-time 600 \
+                -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/${REPO}/releases/${RELEASE_ID}/attach_files" \
+                -F "access_token=${GITEE_TOKEN}" \
+                -F "file=@${FILE_PATH}")
+              RESP_NAME=$(python3 -c "import sys,json; d=json.load(open('/tmp/gitee_resp.json')); print(d.get('name',''))" 2>/dev/null || echo "")
+              if [ "$HTTP_CODE" = "201" ] && [ -n "$RESP_NAME" ]; then
+                echo "  OK: $RESP_NAME (HTTP $HTTP_CODE)"
+                return 0
+              fi
+              echo "  FAILED: HTTP $HTTP_CODE, name='$RESP_NAME'"
+              cat /tmp/gitee_resp.json 2>/dev/null | head -c 500
+              echo ""
+              sleep 5
+            done
+            echo "  GIVE UP after $MAX_RETRIES attempts for $FNAME"
+            return 1
+          }
+
           # Delete existing release if any
           echo "Checking for existing release on tianjun-releases..."
           EXISTING=$(curl -s "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases/releases/tags/${VERSION}?access_token=${GITEE_TOKEN}" 2>/dev/null)
@@ -378,13 +402,23 @@ jobs:
             curl -s -X DELETE "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases/releases/${EXISTING_ID}?access_token=${GITEE_TOKEN}"
           fi
 
-          # Create release
+          # Create release with proper UTF-8 encoding via python
           echo "Creating release ${VERSION} on tianjun-releases..."
-          RELEASE_BODY="## ${VERSION} 天军科技AI视觉检测系统 (第一部分)\n\n请同时下载第二部分: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases/tag/${VERSION}-part2\n\n### 使用方法\n1. 从本页面下载所有 .part 文件和 合并安装包.bat\n2. 从第二部分页面下载所有 .part 文件\n3. 将所有文件放到同一个文件夹\n4. 双击运行 合并安装包.bat\n5. 合并完成后双击运行安装程序"
+          python3 -c "
+          import json, sys
+          body = {
+            'access_token': '${GITEE_TOKEN}',
+            'tag_name': '${VERSION}',
+            'name': '${VERSION} TianJun AI Vision (Part 1)',
+            'body': '## ${VERSION} TianJun AI Vision (Part 1)\n\nDownload Part 2: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases/tag/${VERSION}-part2\n\n### How to use\n1. Download all .part files and merge_installer.bat from this page\n2. Download all .part files from Part 2\n3. Put all files in the same folder\n4. Run merge_installer.bat\n5. Run the merged installer',
+            'target_commitish': 'master'
+          }
+          sys.stdout.write(json.dumps(body, ensure_ascii=False))
+          " > /tmp/gitee_release_body.json
 
           RESPONSE=$(curl -s -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases/releases" \
-            -H "Content-Type: application/json" \
-            -d "{\"access_token\":\"${GITEE_TOKEN}\",\"tag_name\":\"${VERSION}\",\"name\":\"${VERSION} 天军科技AI视觉检测系统 (第一部分)\",\"body\":\"${RELEASE_BODY}\",\"target_commitish\":\"master\"}")
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d @/tmp/gitee_release_body.json)
 
           RELEASE_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
           if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "" ]; then
@@ -396,23 +430,20 @@ jobs:
 
           # Upload merge script
           echo "Uploading merge script..."
-          curl -s -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases/releases/${RELEASE_ID}/attach_files" \
-            -F "access_token=${GITEE_TOKEN}" \
-            -F "file=@gitee-parts/合并安装包.bat" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Uploaded: {d.get(\"name\",\"?\")}' )" || echo "  Warning: merge script upload may have failed"
+          upload_file "tianjun-releases" "$RELEASE_ID" "gitee-parts/merge_installer.bat"
 
           # Upload first batch of parts
+          FAIL_COUNT=0
           for i in $(seq 0 $((HALF - 1))); do
             PART_NAME=$(printf "*.part%02d.part" $i)
             PART_FILE=$(ls gitee-parts/$PART_NAME 2>/dev/null | head -1)
             if [ -n "$PART_FILE" ]; then
               echo "Uploading $(basename $PART_FILE)..."
-              curl -s -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases/releases/${RELEASE_ID}/attach_files" \
-                -F "access_token=${GITEE_TOKEN}" \
-                -F "file=@${PART_FILE}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Uploaded: {d.get(\"name\",\"?\")}' )" || echo "  Warning: upload may have failed for part $i"
+              upload_file "tianjun-releases" "$RELEASE_ID" "$PART_FILE" || FAIL_COUNT=$((FAIL_COUNT + 1))
             fi
           done
 
-          echo "Repo 1 upload complete!"
+          echo "Repo 1 upload complete! (failures: $FAIL_COUNT)"
 
       - name: Upload to Gitee (repo 2 - second batch)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -431,6 +462,30 @@ jobs:
 
           echo "Repo 2 gets: parts $(printf '%02d' $HALF) to $(printf '%02d' $((TOTAL_PARTS - 1)))"
 
+          upload_file() {
+            local REPO="$1" RELEASE_ID="$2" FILE_PATH="$3"
+            local FNAME=$(basename "$FILE_PATH")
+            local MAX_RETRIES=3
+            for attempt in $(seq 1 $MAX_RETRIES); do
+              echo "  Attempt $attempt/$MAX_RETRIES for $FNAME ..."
+              HTTP_CODE=$(curl -s -o /tmp/gitee_resp.json -w "%{http_code}" --max-time 600 \
+                -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/${REPO}/releases/${RELEASE_ID}/attach_files" \
+                -F "access_token=${GITEE_TOKEN}" \
+                -F "file=@${FILE_PATH}")
+              RESP_NAME=$(python3 -c "import sys,json; d=json.load(open('/tmp/gitee_resp.json')); print(d.get('name',''))" 2>/dev/null || echo "")
+              if [ "$HTTP_CODE" = "201" ] && [ -n "$RESP_NAME" ]; then
+                echo "  OK: $RESP_NAME (HTTP $HTTP_CODE)"
+                return 0
+              fi
+              echo "  FAILED: HTTP $HTTP_CODE, name='$RESP_NAME'"
+              cat /tmp/gitee_resp.json 2>/dev/null | head -c 500
+              echo ""
+              sleep 5
+            done
+            echo "  GIVE UP after $MAX_RETRIES attempts for $FNAME"
+            return 1
+          }
+
           # Delete existing release if any
           TAG2="${VERSION}-part2"
           EXISTING=$(curl -s "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases-2/releases/tags/${TAG2}?access_token=${GITEE_TOKEN}" 2>/dev/null)
@@ -442,11 +497,21 @@ jobs:
 
           # Create release
           echo "Creating release ${TAG2} on tianjun-releases-2..."
-          RELEASE_BODY="## ${VERSION} 天军科技AI视觉检测系统 (第二部分)\n\n请同时下载第一部分: https://gitee.com/xu-yanzhi32/tianjun-releases/releases/tag/${VERSION}\n\n将所有 .part 文件与第一部分的文件放在同一文件夹，然后运行第一部分中的 合并安装包.bat"
+          python3 -c "
+          import json, sys
+          body = {
+            'access_token': '${GITEE_TOKEN}',
+            'tag_name': '${TAG2}',
+            'name': '${VERSION} TianJun AI Vision (Part 2)',
+            'body': '## ${VERSION} TianJun AI Vision (Part 2)\n\nDownload Part 1: https://gitee.com/xu-yanzhi32/tianjun-releases/releases/tag/${VERSION}\n\nPut all .part files together with Part 1 files, then run merge_installer.bat from Part 1.',
+            'target_commitish': 'master'
+          }
+          sys.stdout.write(json.dumps(body, ensure_ascii=False))
+          " > /tmp/gitee_release_body2.json
 
           RESPONSE=$(curl -s -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases-2/releases" \
-            -H "Content-Type: application/json" \
-            -d "{\"access_token\":\"${GITEE_TOKEN}\",\"tag_name\":\"${TAG2}\",\"name\":\"${VERSION} 天军科技AI视觉检测系统 (第二部分)\",\"body\":\"${RELEASE_BODY}\",\"target_commitish\":\"master\"}")
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d @/tmp/gitee_release_body2.json)
 
           RELEASE_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
           if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "" ]; then
@@ -457,18 +522,17 @@ jobs:
           echo "Release created with ID: $RELEASE_ID"
 
           # Upload second batch of parts
+          FAIL_COUNT=0
           for i in $(seq $HALF $((TOTAL_PARTS - 1))); do
             PART_NAME=$(printf "*.part%02d.part" $i)
             PART_FILE=$(ls gitee-parts/$PART_NAME 2>/dev/null | head -1)
             if [ -n "$PART_FILE" ]; then
               echo "Uploading $(basename $PART_FILE)..."
-              curl -s -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases-2/releases/${RELEASE_ID}/attach_files" \
-                -F "access_token=${GITEE_TOKEN}" \
-                -F "file=@${PART_FILE}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Uploaded: {d.get(\"name\",\"?\")}' )" || echo "  Warning: upload may have failed for part $i"
+              upload_file "tianjun-releases-2" "$RELEASE_ID" "$PART_FILE" || FAIL_COUNT=$((FAIL_COUNT + 1))
             fi
           done
 
-          echo "Repo 2 upload complete!"
+          echo "Repo 2 upload complete! (failures: $FAIL_COUNT)"
           echo ""
           echo "=== Gitee Release URLs ==="
           echo "Part 1: https://gitee.com/xu-yanzhi32/tianjun-releases/releases/tag/${VERSION}"
