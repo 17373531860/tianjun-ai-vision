@@ -379,14 +379,13 @@ jobs:
                 -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/${REPO}/releases/${RELEASE_ID}/attach_files" \
                 -F "access_token=${GITEE_TOKEN}" \
                 -F "file=@${FILE_PATH}")
-              RESP_NAME=$(python3 -c "import sys,json; d=json.load(open('/tmp/gitee_resp.json')); print(d.get('name',''))" 2>/dev/null || echo "")
-              if [ "$HTTP_CODE" = "201" ] && [ -n "$RESP_NAME" ]; then
-                echo "  OK: $RESP_NAME (HTTP $HTTP_CODE)"
+              if [ "$HTTP_CODE" = "201" ]; then
+                RESP_NAME=$(python3 -c "import json; d=json.load(open('/tmp/gitee_resp.json',encoding='utf-8')); print(d.get('name',''))" 2>/dev/null || echo "$FNAME")
+                echo "  OK: $RESP_NAME (HTTP 201)"
                 return 0
               fi
-              echo "  FAILED: HTTP $HTTP_CODE, name='$RESP_NAME'"
-              cat /tmp/gitee_resp.json 2>/dev/null | head -c 500
-              echo ""
+              echo "  FAILED: HTTP $HTTP_CODE"
+              python3 -c "import json; d=json.load(open('/tmp/gitee_resp.json',encoding='utf-8')); print(d.get('message','unknown error'))" 2>/dev/null || true
               sleep 5
             done
             echo "  GIVE UP after $MAX_RETRIES attempts for $FNAME"
@@ -402,7 +401,7 @@ jobs:
             curl -s -X DELETE "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases/releases/${EXISTING_ID}?access_token=${GITEE_TOKEN}"
           fi
 
-          # Create release with proper UTF-8 encoding via python
+          # Create release
           echo "Creating release ${VERSION} on tianjun-releases..."
           python3 -c "
           import json, sys
@@ -430,7 +429,7 @@ jobs:
 
           # Upload merge script
           echo "Uploading merge script..."
-          upload_file "tianjun-releases" "$RELEASE_ID" "gitee-parts/merge_installer.bat"
+          upload_file "tianjun-releases" "$RELEASE_ID" "gitee-parts/merge_installer.bat" || echo "Warning: merge script upload failed, continuing..."
 
           # Upload first batch of parts
           FAIL_COUNT=0
@@ -472,14 +471,13 @@ jobs:
                 -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/${REPO}/releases/${RELEASE_ID}/attach_files" \
                 -F "access_token=${GITEE_TOKEN}" \
                 -F "file=@${FILE_PATH}")
-              RESP_NAME=$(python3 -c "import sys,json; d=json.load(open('/tmp/gitee_resp.json')); print(d.get('name',''))" 2>/dev/null || echo "")
-              if [ "$HTTP_CODE" = "201" ] && [ -n "$RESP_NAME" ]; then
-                echo "  OK: $RESP_NAME (HTTP $HTTP_CODE)"
+              if [ "$HTTP_CODE" = "201" ]; then
+                RESP_NAME=$(python3 -c "import json; d=json.load(open('/tmp/gitee_resp.json',encoding='utf-8')); print(d.get('name',''))" 2>/dev/null || echo "$FNAME")
+                echo "  OK: $RESP_NAME (HTTP 201)"
                 return 0
               fi
-              echo "  FAILED: HTTP $HTTP_CODE, name='$RESP_NAME'"
-              cat /tmp/gitee_resp.json 2>/dev/null | head -c 500
-              echo ""
+              echo "  FAILED: HTTP $HTTP_CODE"
+              python3 -c "import json; d=json.load(open('/tmp/gitee_resp.json',encoding='utf-8')); print(d.get('message','unknown error'))" 2>/dev/null || true
               sleep 5
             done
             echo "  GIVE UP after $MAX_RETRIES attempts for $FNAME"
