@@ -413,7 +413,7 @@
               class="flex-shrink-0 w-36 bg-slate-800 rounded-lg border p-2 flex flex-col justify-between transition-all"
               :class="info.counted >= info.expected && info.expected > 0 ? 'border-green-500/70' : info.counted > info.expected && info.expected > 0 ? 'border-red-500/70' : 'border-slate-700'"
             >
-              <div class="text-xs text-gray-400 truncate">{{ cls }}</div>
+              <div class="text-xs text-gray-400 truncate">{{ info.display_name || cls }}</div>
               <div class="text-center my-1">
                 <span class="text-3xl font-bold font-mono"
                   :class="info.counted >= info.expected && info.expected > 0 ? 'text-green-400' : 'text-white'"
@@ -2336,6 +2336,9 @@ const resetCounters = async () => {
   ngStepCountMap.value = {};
   lastTotalCount = -1;
   processedEventIds.clear();
+  
+  trackingChecklist.value = {};
+  trackingCycleActive.value = false;
   
   updateCharts();
   ElMessage.success('计数器已清零');

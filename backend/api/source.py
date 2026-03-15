@@ -534,6 +534,8 @@ class VideoSourceManager:
         
         # 项目配置
         self.project_config = None
+        self.settlement_mode = 'first_step'  # 'first_step' or 'last_step'
+        self.idle_timeout_seconds = 0         # 0 = disabled
         self.step_conf_thresholds = {}  # {step_name: threshold}
         self.step_min_frames = {}  # {step_name: min_frames} 每个步骤的最少帧数配置
         self.step_consecutive_frames = {}  # {step_name: count} 跟踪每个标签连续出现的帧数
@@ -583,7 +585,16 @@ class VideoSourceManager:
         self._tracking_prev_count = 0   # previous frame's tracked object count (for all_gone detection)
         self._tracking_gone_frames = 0  # consecutive frames where count <= threshold
         self._tracking_cycle_active = False  # whether a counting cycle is in progress
+        self._tracking_had_roi_objects = False  # has any object been in ROI during this cycle
         self._tracking_trigger_frames = 0   # frames the trigger label has been visible
+        self._tracking_recently_lost = {}   # {old_track_id: {class_name, display_id, bbox, lost_time, order_idx}}
+        self._tracking_transferred_ids = {}  # {old_track_id: transfer_time} - IDs migrated to new tracks
+        self._tracking_prev_positions = {}   # {display_id: (cx, cy, class_name)} for swap detection
+        self._tracking_appearance = {}       # {display_id: histogram} for appearance matching
+        self._tracking_stable_frames = {}    # {track_id: consecutive_seen_frames} for ID lock
+        self._tracking_locked_ids = {}       # {display_id: (cx, cy)} locked IDs won't be re-matched
+        self._tracking_registered_positions = {}  # {display_id: {class_name, cx, cy, stable_frames}}
+        self._custom_tracker_yaml = None    # path to dynamic bytetrack config
         
         # Cycle Time 统计
         self.cycle_start_time = None  # 当前周期开始时间
@@ -1187,6 +1198,11 @@ class VideoSourceManager:
         if self._simultaneous_groups:
             print(f"同时出现组: {self._simultaneous_groups}")
         
+        # Settlement mode: 'first_step' or 'last_step'
+        self.settlement_mode = pipeline_config.get('settlement_mode', 'first_step')
+        self.idle_timeout_seconds = pipeline_config.get('idle_timeout_seconds', 0)
+        print(f"结算模式: {self.settlement_mode}, 空闲超时: {self.idle_timeout_seconds}s")
+        
         # 初始化计数器（确保默认计数器始终存在）
         self.counters = {}
         counters_config = config.get('counters_config', [])
@@ -1215,6 +1231,7 @@ class VideoSourceManager:
         
         if config.get('logic_mode') == 'tracking':
             self._reset_counting_cycle()
+            self._generate_custom_tracker_yaml(pipeline_config)
         
         print(f"项目配置已加载: {config.get('name', 'Unknown')}, task_type={config.get('task_type')}, logic_mode={config.get('logic_mode')}")
         print(f"步骤阈值: {self.step_conf_thresholds}")
@@ -2280,36 +2297,46 @@ class VideoSourceManager:
                 _, buffer = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 self.step_screenshots[label] = base64.b64encode(buffer).decode('utf-8')
         
-        # ── 核心逻辑：第一步已经在周期里，再次检测到且有效 → 直接结算 ──
-        # "有效"条件：
-        #   1. min_frames  — 已隐含满足（只有 step_consecutive_frames >= min_frames 才会进入 detected_labels）
-        #   2. min_duration — 重新出现后的持续时间 >= 配置的最短持续时间
-        # 注意：step_start_time 可能在步骤消失后被清除，此时用 _step_raw_start（重新出现的起始时间）
-        if is_seq_like and label in self.current_cycle_steps and len(self.current_cycle_steps) > 1:
+        # Save previous step_last_seen BEFORE any logic, needed by both accept_once
+        # and is_new_appearance calculations below.
+        old_last_seen = self.step_last_seen.get(label)
+
+        # ── accept_once 拦截 ──
+        # 在 first_step 结算模式下，第一步即使设了 accept_once，真正消失后重现
+        # 也必须放行以触发结算；只有连续检测（未消失）才拦截。
+        if self.step_accept_once.get(label) and label in self.current_cycle_steps:
+            allow_through = False
+            if self.settlement_mode == 'first_step' and is_seq_like and len(self.current_cycle_steps) > 1:
+                first_step_label = self._get_first_sequence_step_label()
+                if first_step_label and label == first_step_label and old_last_seen is not None:
+                    gap = current_time - old_last_seen
+                    dedup_interval = (self.step_time_config.get(label, {}).get('max_interval')) or 1.0
+                    if gap > dedup_interval:
+                        allow_through = True
+            if not allow_through:
+                self.step_last_seen[label] = current_time
+                if label not in self.step_start_time:
+                    raw_start = getattr(self, '_step_raw_start', {}).get(label, current_time)
+                    self.step_start_time[label] = raw_start
+                return
+        
+        # ── 第一步重现结算（仅 first_step 结算模式） ──
+        if self.settlement_mode == 'first_step' and is_seq_like \
+                and label in self.current_cycle_steps and len(self.current_cycle_steps) > 1:
             first_step_label = self._get_first_sequence_step_label()
             if first_step_label and label == first_step_label:
                 first_start = self.step_start_time.get(label) or getattr(self, '_step_raw_start', {}).get(label)
                 first_min_dur = (self.step_time_config.get(label, {}).get('min_duration')) or 0
                 first_duration = (current_time - first_start) if first_start else 0
                 if first_duration >= first_min_dur:
-                    print(f"第一步 [{label}] 再次检测到 (持续{first_duration:.2f}s >= {first_min_dur}s)，直接结算当前周期 (步骤数={len(self.current_cycle_steps)})")
+                    print(f"[第一步结算] [{label}] 再次检测到 (持续{first_duration:.2f}s >= {first_min_dur}s)，结算当前周期 (步骤数={len(self.current_cycle_steps)})")
                     if logic_mode == 'custom' and custom_based_on == 'sequential':
                         self._settle_custom_cycle()
                     elif logic_mode == 'sequential':
                         self._settle_sequential_cycle()
         
-        # Save previous step_last_seen BEFORE updating, for is_new_appearance calculation
-        old_last_seen = self.step_last_seen.get(label)
-        # Always update step_last_seen (even for accept_once steps) so duration
-        # calculations in _filter_cycle_by_duration and _supplement_step_durations
-        # reflect the actual last detection time, not the confirmation-frame time.
+        # Always update step_last_seen so duration calculations reflect actual last detection time
         self.step_last_seen[label] = current_time
-        
-        if self.step_accept_once.get(label) and label in self.current_cycle_steps:
-            if label not in self.step_start_time:
-                raw_start = getattr(self, '_step_raw_start', {}).get(label, current_time)
-                self.step_start_time[label] = raw_start
-            return
         
         time_config = self.step_time_config.get(label, {})
         max_interval = time_config.get('max_interval') or 1.0
@@ -2521,6 +2548,13 @@ class VideoSourceManager:
                     del self._step_raw_start[label]
 
         for label in ready_ordered:
+            # min_duration gate: step must be continuously present for min_duration
+            # before it can enter any cycle logic. Detection box still shows.
+            _min_dur_cfg = self.step_time_config.get(label, {}).get('min_duration')
+            if _min_dur_cfg and _min_dur_cfg > 0:
+                _raw_st = self._step_raw_start.get(label)
+                if _raw_st and (current_time - _raw_st) < _min_dur_cfg:
+                    continue
             self._process_single_step(label, current_time, enabled_labels, _is_seq_like,
                                       should_update_screenshot, original_frame,
                                       det_by_label.get(label), just_confirmed_labels)
@@ -2638,6 +2672,20 @@ class VideoSourceManager:
         for completed_label in pending_event_checks:
             self._check_events(completed_label)
         
+        # ========== 空闲超时结算 ==========
+        if (self.idle_timeout_seconds > 0
+                and self.current_cycle_steps
+                and self._last_step_added_time is not None):
+            idle_elapsed = current_time - self._last_step_added_time
+            if idle_elapsed > self.idle_timeout_seconds:
+                print(f"[空闲超时] {idle_elapsed:.1f}s > {self.idle_timeout_seconds}s，强制结算当前周期 (步骤={self.current_cycle_steps})")
+                _lm = self.project_config.get('logic_mode') if self.project_config else 'detection'
+                _pc = self.project_config.get('pipeline_config', {}) if self.project_config else {}
+                _cbo = _pc.get('custom_based_on')
+                if _lm == 'custom' and _cbo == 'sequential':
+                    self._settle_custom_cycle()
+                elif _lm == 'sequential':
+                    self._settle_sequential_cycle()
         
     
     def _inject_backup_steps(self, this_cycle: list, expected_labels: list) -> list:
@@ -2786,11 +2834,96 @@ class VideoSourceManager:
     # Counting Mode (物品清点模式) — stats / cycle logic
     # ================================================================
     
-    def _get_letter_prefix(self, class_name: str) -> str:
-        """Get or assign a stable letter prefix for a class name (A, B, C, ...)."""
+    def _generate_custom_tracker_yaml(self, pipeline_config: dict):
+        """Generate a custom bytetrack.yaml with track_buffer synced to max_lost_seconds."""
+        import tempfile, os
+        max_lost_sec = 5.0
+        for step in self.project_config.get('steps_config', []):
+            if step.get('enabled', True) and step.get('tracking_max_lost_seconds') is not None:
+                max_lost_sec = max(max_lost_sec, step['tracking_max_lost_seconds'])
+        fps = max(self.fps_actual, 10)
+        track_buffer = max(30, int(max_lost_sec * fps))
+        yaml_content = (
+            f"tracker_type: bytetrack\n"
+            f"track_high_thresh: 0.25\n"
+            f"track_low_thresh: 0.1\n"
+            f"new_track_thresh: 0.25\n"
+            f"track_buffer: {track_buffer}\n"
+            f"match_thresh: 0.8\n"
+            f"fuse_score: true\n"
+        )
+        yaml_path = os.path.join(tempfile.gettempdir(), 'bytetrack_custom.yaml')
+        with open(yaml_path, 'w') as f:
+            f.write(yaml_content)
+        self._custom_tracker_yaml = yaml_path
+        print(f"[Tracking] Custom tracker config: track_buffer={track_buffer} (max_lost={max_lost_sec}s, fps={fps:.0f})")
+
+    @staticmethod
+    def _bbox_iou(a: dict, b: dict) -> float:
+        """Compute IoU between two {x,y,w,h} bounding boxes (normalized coords)."""
+        ax1, ay1, ax2, ay2 = a['x'], a['y'], a['x'] + a['w'], a['y'] + a['h']
+        bx1, by1, bx2, by2 = b['x'], b['y'], b['x'] + b['w'], b['y'] + b['h']
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        area_a = a['w'] * a['h']
+        area_b = b['w'] * b['h']
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
+
+    @staticmethod
+    def _bbox_center_dist(a: dict, b: dict) -> float:
+        """Euclidean distance between bbox centers (normalized coords)."""
+        acx, acy = a['x'] + a['w'] / 2, a['y'] + a['h'] / 2
+        bcx, bcy = b['x'] + b['w'] / 2, b['y'] + b['h'] / 2
+        return ((acx - bcx) ** 2 + (acy - bcy) ** 2) ** 0.5
+
+    def _try_reid_match(self, label: str, new_bbox: dict, candidate_bbox: dict,
+                        max_size_ratio: float = 3.0) -> bool:
+        """Check if new_bbox likely matches candidate_bbox for re-ID.
+        Uses IoU > 0.2 OR center distance < max(w,h) of the larger bbox."""
+        iou = self._bbox_iou(candidate_bbox, new_bbox)
+        if iou > 0.2:
+            return True
+        dist = self._bbox_center_dist(candidate_bbox, new_bbox)
+        ref_size = max(candidate_bbox['w'], candidate_bbox['h'],
+                       new_bbox['w'], new_bbox['h'])
+        if ref_size > 0 and dist < ref_size * 1.5:
+            w_ratio = max(candidate_bbox['w'], new_bbox['w']) / max(min(candidate_bbox['w'], new_bbox['w']), 1e-6)
+            h_ratio = max(candidate_bbox['h'], new_bbox['h']) / max(min(candidate_bbox['h'], new_bbox['h']), 1e-6)
+            if w_ratio < max_size_ratio and h_ratio < max_size_ratio:
+                return True
+        return False
+
+    def _boost_score_with_appearance(self, iou_score: float, display_id: str,
+                                       new_bbox: dict, frame) -> float:
+        """Boost matching score using stored appearance histogram."""
+        if frame is None or display_id not in self._tracking_appearance:
+            return iou_score
+        try:
+            import cv2
+            h_img, w_img = frame.shape[:2]
+            x1 = max(0, int(new_bbox['x'] * w_img))
+            y1 = max(0, int(new_bbox['y'] * h_img))
+            x2 = min(w_img, int((new_bbox['x'] + new_bbox['w']) * w_img))
+            y2 = min(h_img, int((new_bbox['y'] + new_bbox['h']) * h_img))
+            if x2 - x1 < 5 or y2 - y1 < 5:
+                return iou_score
+            crop = frame[y1:y2, x1:x2]
+            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+            hist = cv2.calcHist([hsv], [0, 1], None, [16, 16], [0, 180, 0, 256])
+            cv2.normalize(hist, hist)
+            stored = self._tracking_appearance[display_id]
+            similarity = cv2.compareHist(stored, hist, cv2.HISTCMP_CORREL)
+            return iou_score * 0.5 + max(0, similarity) * 0.5
+        except Exception:
+            return iou_score
+
+    def _get_display_prefix(self, class_name: str) -> str:
+        """Get display name prefix for tracking IDs (e.g. '立柱' instead of 'A')."""
         if class_name not in self._tracking_letter_map:
-            letter = chr(ord('A') + self._tracking_letter_idx % 26)
-            self._tracking_letter_map[class_name] = letter
+            display_name = self.step_display_names.get(class_name, class_name)
+            self._tracking_letter_map[class_name] = display_name
             self._tracking_letter_idx += 1
         return self._tracking_letter_map[class_name]
     
@@ -2807,7 +2940,15 @@ class VideoSourceManager:
         self._tracking_prev_count = 0
         self._tracking_gone_frames = 0
         self._tracking_cycle_active = False
+        self._tracking_had_roi_objects = False
         self._tracking_trigger_frames = 0
+        self._tracking_recently_lost.clear()
+        self._tracking_transferred_ids.clear()
+        self._tracking_prev_positions.clear()
+        self._tracking_appearance.clear()
+        self._tracking_stable_frames.clear()
+        self._tracking_locked_ids.clear()
+        self._tracking_registered_positions.clear()
         self.current_cycle_steps = []
         self.last_added_step = None
         self.step_last_seen.clear()
@@ -2850,6 +2991,7 @@ class VideoSourceManager:
         
         Supports 3 cycle-end strategies: all_gone, trigger, roi_exit.
         Supports optional order enforcement and ROI filtering.
+        Includes application-level re-ID to handle ByteTrack ID reassignment.
         """
         current_time = time.time()
         if not self.project_config:
@@ -2860,74 +3002,459 @@ class VideoSourceManager:
         cycle_strategy = pcfg.get('tracking_cycle_strategy', 'all_gone')
         trigger_label = pcfg.get('tracking_trigger_label', '')
         trigger_min_frames = pcfg.get('tracking_trigger_min_frames', 15)
-        max_lost_sec = pcfg.get('tracking_max_lost_seconds', 5.0)
+        max_lost_sec = 5.0
         gone_threshold = pcfg.get('tracking_gone_threshold', 0)
         gone_confirm_frames = pcfg.get('tracking_gone_confirm_frames', 30)
         check_order = pcfg.get('tracking_check_order', False)
         expected_order = pcfg.get('tracking_expected_order', [])
+        swap_detection = pcfg.get('tracking_swap_detection', False)
+        appearance_match = pcfg.get('tracking_appearance_match', False)
+        id_lock = pcfg.get('tracking_id_lock', False)
+        id_lock_frames = pcfg.get('tracking_id_lock_frames', 15)
+        
+        per_class_lost_sec = {}
+        per_class_position_lock = {}
+        for step in self.project_config.get('steps_config', []):
+            if step.get('enabled', True):
+                lbl = step.get('label', '')
+                if step.get('tracking_max_lost_seconds') is not None:
+                    per_class_lost_sec[lbl] = step['tracking_max_lost_seconds']
+                if step.get('tracking_position_lock'):
+                    per_class_position_lock[lbl] = True
         
         max_lost_frames = int(max_lost_sec * max(self.fps_actual, 10))
         
         seen_track_ids = set()
         trigger_visible = False
+        pos_lock_assigned_dids = set()
         
+        frame_detections = []
         for det in detections:
             label = det.get('label', '')
             track_id = det.get('track_id', -1)
             if not label:
                 continue
-            
             if label == trigger_label and cycle_strategy == 'trigger':
                 trigger_visible = True
                 continue
-            
             if track_id < 0:
                 continue
-            
-            if not self._is_in_roi(det):
+            new_bbox = {'x': det['x'], 'y': det['y'], 'w': det['w'], 'h': det['h']}
+            in_roi = self._is_in_roi(det)
+            frame_detections.append({
+                'label': label, 'track_id': track_id,
+                'bbox': new_bbox, 'in_roi': in_roi
+            })
+        
+        # ===== Phase 1: Position-lock matching (per-class opt-in) =====
+        pos_lock_handled_tids = set()
+        for fd in frame_detections:
+            label, track_id, new_bbox, in_roi = fd['label'], fd['track_id'], fd['bbox'], fd['in_roi']
+            if not per_class_position_lock.get(label, False):
                 continue
             
-            seen_track_ids.add(track_id)
+            bbox_cx = new_bbox['x'] + new_bbox['w'] / 2
+            bbox_cy = new_bbox['y'] + new_bbox['h'] / 2
             
             if track_id in self._tracking_objects:
                 obj = self._tracking_objects[track_id]
-                obj['last_seen'] = current_time
-                obj['bbox'] = {'x': det['x'], 'y': det['y'], 'w': det['w'], 'h': det['h']}
-                self._tracking_lost_frames[track_id] = 0
-            else:
-                prefix = self._get_letter_prefix(label)
-                count = self._tracking_class_counters.get(label, 0) + 1
-                self._tracking_class_counters[label] = count
-                display_id = f"{prefix}{count}"
-                self._tracking_order_seq += 1
+                did = obj['display_id']
+                if did in self._tracking_registered_positions:
+                    reg = self._tracking_registered_positions[did]
+                    reg['cx'] = 0.8 * reg['cx'] + 0.2 * bbox_cx
+                    reg['cy'] = 0.8 * reg['cy'] + 0.2 * bbox_cy
+                    reg['stable_frames'] = reg.get('stable_frames', 0) + 1
+                obj['bbox'] = new_bbox
+                if in_roi or cycle_strategy != 'roi_exit':
+                    obj['last_seen'] = current_time
+                    self._tracking_lost_frames[track_id] = 0
+                    seen_track_ids.add(track_id)
+                pos_lock_handled_tids.add(track_id)
+                pos_lock_assigned_dids.add(did)
+                continue
+            
+            if not in_roi:
+                pos_lock_handled_tids.add(track_id)
+                continue
+            
+            best_reg_did = None
+            best_reg_dist = float('inf')
+            for reg_did, reg in self._tracking_registered_positions.items():
+                if reg['class_name'] != label or reg_did in pos_lock_assigned_dids:
+                    continue
+                already_active = any(
+                    o['display_id'] == reg_did and tid in seen_track_ids
+                    for tid, o in self._tracking_objects.items()
+                )
+                if already_active:
+                    continue
+                dist = ((bbox_cx - reg['cx'])**2 + (bbox_cy - reg['cy'])**2)**0.5
+                ref_size = max(new_bbox['w'], new_bbox['h'], 0.01)
+                if dist < ref_size * 2.0 and dist < best_reg_dist:
+                    best_reg_dist = dist
+                    best_reg_did = reg_did
+            
+            if best_reg_did:
+                for old_tid, old_obj in list(self._tracking_objects.items()):
+                    if old_obj.get('display_id') == best_reg_did:
+                        self._tracking_transferred_ids[old_tid] = current_time
+                        del self._tracking_objects[old_tid]
+                        self._tracking_display_map.pop(old_tid, None)
+                        self._tracking_lost_frames.pop(old_tid, None)
+                        break
+                for old_lost_tid in list(self._tracking_recently_lost.keys()):
+                    if self._tracking_recently_lost[old_lost_tid].get('display_id') == best_reg_did:
+                        del self._tracking_recently_lost[old_lost_tid]
+                        break
                 
+                self._tracking_objects[track_id] = {
+                    'class_name': label, 'display_id': best_reg_did,
+                    'first_seen': current_time, 'last_seen': current_time,
+                    'bbox': new_bbox, 'order_idx': self._tracking_registered_positions[best_reg_did].get('order_idx', 0)
+                }
+                self._tracking_display_map[track_id] = best_reg_did
+                self._tracking_lost_frames[track_id] = 0
+                seen_track_ids.add(track_id)
+                pos_lock_handled_tids.add(track_id)
+                pos_lock_assigned_dids.add(best_reg_did)
+                reg = self._tracking_registered_positions[best_reg_did]
+                reg['cx'] = 0.8 * reg['cx'] + 0.2 * bbox_cx
+                reg['cy'] = 0.8 * reg['cy'] + 0.2 * bbox_cy
+                continue
+            
+            pos_lock_handled_tids.add(track_id)
+            fd['_pos_lock_new'] = True
+        
+        # ===== Phase 2: Original track_id based matching (for non-position-lock items + new position-lock items) =====
+        for fd in frame_detections:
+            label, track_id, new_bbox, in_roi = fd['label'], fd['track_id'], fd['bbox'], fd['in_roi']
+            
+            if track_id in pos_lock_handled_tids and not fd.get('_pos_lock_new'):
+                continue
+            
+            if track_id in self._tracking_transferred_ids:
+                if current_time - self._tracking_transferred_ids[track_id] < max_lost_sec:
+                    continue
+                else:
+                    del self._tracking_transferred_ids[track_id]
+            
+            if track_id in self._tracking_objects:
+                obj = self._tracking_objects[track_id]
+                obj['bbox'] = new_bbox
+                if in_roi or cycle_strategy != 'roi_exit':
+                    obj['last_seen'] = current_time
+                    self._tracking_lost_frames[track_id] = 0
+                    seen_track_ids.add(track_id)
+                continue
+            
+            if not in_roi:
+                continue
+            
+            seen_track_ids.add(track_id)
+            merged = False
+            
+            if id_lock and not merged and not per_class_position_lock.get(label, False):
+                bbox_cx = new_bbox['x'] + new_bbox['w'] / 2
+                bbox_cy = new_bbox['y'] + new_bbox['h'] / 2
+                best_lock_dist = float('inf')
+                best_lock_did = None
+                for locked_did, (lcx, lcy, locked_tid) in self._tracking_locked_ids.items():
+                    if locked_tid in self._tracking_objects and self._tracking_objects[locked_tid].get('class_name') == label:
+                        if locked_tid in seen_track_ids:
+                            continue
+                        dist = ((bbox_cx - lcx)**2 + (bbox_cy - lcy)**2)**0.5
+                        ref_size = max(new_bbox['w'], new_bbox['h'], 0.01)
+                        if dist < ref_size * 1.5 and dist < best_lock_dist:
+                            best_lock_dist = dist
+                            best_lock_did = locked_did
+                if best_lock_did:
+                    for ltid_check, lobj in list(self._tracking_objects.items()):
+                        if lobj.get('display_id') == best_lock_did:
+                            old_display = lobj['display_id']
+                            self._tracking_transferred_ids[ltid_check] = current_time
+                            del self._tracking_objects[ltid_check]
+                            self._tracking_display_map.pop(ltid_check, None)
+                            self._tracking_lost_frames.pop(ltid_check, None)
+                            self._tracking_objects[track_id] = {
+                                'class_name': label, 'display_id': old_display,
+                                'first_seen': lobj.get('first_seen', current_time),
+                                'last_seen': current_time, 'bbox': new_bbox,
+                                'order_idx': lobj.get('order_idx', 0)
+                            }
+                            self._tracking_display_map[track_id] = old_display
+                            self._tracking_lost_frames[track_id] = 0
+                            merged = True
+                            bbox_cx_new = new_bbox['x'] + new_bbox['w'] / 2
+                            bbox_cy_new = new_bbox['y'] + new_bbox['h'] / 2
+                            self._tracking_locked_ids[old_display] = (bbox_cx_new, bbox_cy_new, track_id)
+                            break
+            
+            if not merged:
+                best_lost_tid, best_lost_obj = None, None
+                best_lost_score = -1
+                for lost_tid, lost_obj in list(self._tracking_recently_lost.items()):
+                    if (lost_obj['class_name'] == label
+                            and lost_obj['display_id'] not in pos_lock_assigned_dids
+                            and current_time - lost_obj['lost_time'] < max_lost_sec
+                            and self._try_reid_match(label, new_bbox, lost_obj['bbox'])):
+                        score = self._bbox_iou(lost_obj['bbox'], new_bbox)
+                        if appearance_match and lost_obj['display_id'] in self._tracking_appearance:
+                            score = self._boost_score_with_appearance(score, lost_obj['display_id'], new_bbox, original_frame)
+                        if score > best_lost_score:
+                            best_lost_score = score
+                            best_lost_tid = lost_tid
+                            best_lost_obj = lost_obj
+                if best_lost_obj:
+                    self._tracking_objects[track_id] = {
+                        'class_name': label,
+                        'display_id': best_lost_obj['display_id'],
+                        'first_seen': best_lost_obj.get('first_seen', current_time),
+                        'last_seen': current_time, 'bbox': new_bbox,
+                        'order_idx': best_lost_obj['order_idx']
+                    }
+                    self._tracking_display_map[track_id] = best_lost_obj['display_id']
+                    self._tracking_lost_frames[track_id] = 0
+                    del self._tracking_recently_lost[best_lost_tid]
+                    merged = True
+            
+            if not merged:
+                best_active_tid, best_active_obj = None, None
+                best_active_score = -1
+                for active_tid, active_obj in list(self._tracking_objects.items()):
+                    lost_f = self._tracking_lost_frames.get(active_tid, 0)
+                    if (lost_f > 0
+                            and active_obj['class_name'] == label
+                            and active_obj['display_id'] not in pos_lock_assigned_dids
+                            and self._try_reid_match(label, new_bbox, active_obj['bbox'])):
+                        score = self._bbox_iou(active_obj['bbox'], new_bbox)
+                        if appearance_match and active_obj['display_id'] in self._tracking_appearance:
+                            score = self._boost_score_with_appearance(score, active_obj['display_id'], new_bbox, original_frame)
+                        if score > best_active_score:
+                            best_active_score = score
+                            best_active_tid = active_tid
+                            best_active_obj = active_obj
+                if best_active_obj:
+                    old_display = best_active_obj['display_id']
+                    self._tracking_transferred_ids[best_active_tid] = current_time
+                    del self._tracking_objects[best_active_tid]
+                    if best_active_tid in self._tracking_display_map:
+                        del self._tracking_display_map[best_active_tid]
+                    if best_active_tid in self._tracking_lost_frames:
+                        del self._tracking_lost_frames[best_active_tid]
+                    self._tracking_objects[track_id] = {
+                        'class_name': label, 'display_id': old_display,
+                        'first_seen': best_active_obj['first_seen'],
+                        'last_seen': current_time, 'bbox': new_bbox,
+                        'order_idx': best_active_obj['order_idx']
+                    }
+                    self._tracking_display_map[track_id] = old_display
+                    self._tracking_lost_frames[track_id] = 0
+                    merged = True
+            
+            if not merged:
+                prefix = self._get_display_prefix(label)
+                current_count = self._tracking_class_counters.get(label, 0)
+                expected_count = expected_items.get(label, 0)
+                
+                reuse_display = None
+                if expected_count > 0 and current_count >= expected_count:
+                    for lost_obj in self._tracking_recently_lost.values():
+                        if lost_obj['class_name'] == label:
+                            reuse_display = lost_obj['display_id']
+                            break
+                    if not reuse_display:
+                        active_ids = {o['display_id'] for o in self._tracking_objects.values() if o['class_name'] == label}
+                        for i in range(1, current_count + 1):
+                            cand = f"{prefix}{i}"
+                            if cand not in active_ids:
+                                reuse_display = cand
+                                break
+                
+                if expected_count > 0 and current_count >= expected_count and not reuse_display:
+                    reuse_display = f"{prefix}{current_count}"
+                
+                if reuse_display:
+                    display_id = reuse_display
+                else:
+                    current_count += 1
+                    self._tracking_class_counters[label] = current_count
+                    display_id = f"{prefix}{current_count}"
+                
+                self._tracking_order_seq += 1
                 self._tracking_objects[track_id] = {
                     'class_name': label, 'display_id': display_id,
                     'first_seen': current_time, 'last_seen': current_time,
-                    'bbox': {'x': det['x'], 'y': det['y'], 'w': det['w'], 'h': det['h']},
+                    'bbox': new_bbox,
                     'order_idx': self._tracking_order_seq
                 }
                 self._tracking_display_map[track_id] = display_id
                 self._tracking_lost_frames[track_id] = 0
                 
-                print(f"[Tracking] New item: {display_id} (class={label}, track={track_id}, order={self._tracking_order_seq})")
+                if per_class_position_lock.get(label, False):
+                    bbox_cx = new_bbox['x'] + new_bbox['w'] / 2
+                    bbox_cy = new_bbox['y'] + new_bbox['h'] / 2
+                    self._tracking_registered_positions[display_id] = {
+                        'class_name': label, 'cx': bbox_cx, 'cy': bbox_cy,
+                        'stable_frames': 1, 'order_idx': self._tracking_order_seq
+                    }
                 
                 if not self._tracking_cycle_active:
                     self._tracking_cycle_active = True
                     self.cycle_start_time = current_time
                     self.start_cycle()
         
+        # ===== Anti-flicker: ID Lock (only for non-position-lock classes) =====
+        if id_lock:
+            for tid in seen_track_ids:
+                if tid in self._tracking_objects:
+                    obj_cls = self._tracking_objects[tid].get('class_name', '')
+                    if per_class_position_lock.get(obj_cls, False):
+                        continue
+                    self._tracking_stable_frames[tid] = self._tracking_stable_frames.get(tid, 0) + 1
+                    if self._tracking_stable_frames[tid] >= id_lock_frames:
+                        obj = self._tracking_objects[tid]
+                        bbox = obj['bbox']
+                        cx = bbox['x'] + bbox['w'] / 2
+                        cy = bbox['y'] + bbox['h'] / 2
+                        self._tracking_locked_ids[obj['display_id']] = (cx, cy, tid)
+            for tid in list(self._tracking_stable_frames.keys()):
+                if tid not in seen_track_ids:
+                    self._tracking_stable_frames[tid] = 0
+        
+        # ===== Anti-flicker: Swap Detection (only for non-position-lock classes) =====
+        if swap_detection:
+            cur_positions = {}
+            for tid, obj in self._tracking_objects.items():
+                if tid in seen_track_ids and not per_class_position_lock.get(obj.get('class_name', ''), False):
+                    bbox = obj['bbox']
+                    cx = bbox['x'] + bbox['w'] / 2
+                    cy = bbox['y'] + bbox['h'] / 2
+                    cur_positions[obj['display_id']] = (cx, cy, obj['class_name'], tid)
+            
+            swapped = set()
+            for did_a, (cx_a, cy_a, cls_a, tid_a) in cur_positions.items():
+                if did_a in swapped:
+                    continue
+                prev_a = self._tracking_prev_positions.get(did_a)
+                if not prev_a:
+                    continue
+                for did_b, (cx_b, cy_b, cls_b, tid_b) in cur_positions.items():
+                    if did_b in swapped or did_b == did_a or cls_b != cls_a:
+                        continue
+                    prev_b = self._tracking_prev_positions.get(did_b)
+                    if not prev_b:
+                        continue
+                    dist_a_to_prev_a = ((cx_a - prev_a[0])**2 + (cy_a - prev_a[1])**2)**0.5
+                    dist_a_to_prev_b = ((cx_a - prev_b[0])**2 + (cy_a - prev_b[1])**2)**0.5
+                    dist_b_to_prev_a = ((cx_b - prev_a[0])**2 + (cy_b - prev_a[1])**2)**0.5
+                    dist_b_to_prev_b = ((cx_b - prev_b[0])**2 + (cy_b - prev_b[1])**2)**0.5
+                    if dist_a_to_prev_b < dist_a_to_prev_a and dist_b_to_prev_a < dist_b_to_prev_b:
+                        self._tracking_objects[tid_a]['display_id'] = did_b
+                        self._tracking_objects[tid_b]['display_id'] = did_a
+                        self._tracking_display_map[tid_a] = did_b
+                        self._tracking_display_map[tid_b] = did_a
+                        swapped.add(did_a)
+                        swapped.add(did_b)
+                        break
+            
+            self._tracking_prev_positions = {}
+            for tid, obj in self._tracking_objects.items():
+                if tid in seen_track_ids:
+                    bbox = obj['bbox']
+                    cx = bbox['x'] + bbox['w'] / 2
+                    cy = bbox['y'] + bbox['h'] / 2
+                    self._tracking_prev_positions[obj['display_id']] = (cx, cy, obj['class_name'])
+        
+        # ===== Anti-flicker: Appearance Match (only for non-position-lock classes) =====
+        if appearance_match and original_frame is not None:
+            h_img, w_img = original_frame.shape[:2]
+            for tid in seen_track_ids:
+                if tid not in self._tracking_objects:
+                    continue
+                obj = self._tracking_objects[tid]
+                if per_class_position_lock.get(obj.get('class_name', ''), False):
+                    continue
+                bbox = obj['bbox']
+                x1 = max(0, int(bbox['x'] * w_img))
+                y1 = max(0, int(bbox['y'] * h_img))
+                x2 = min(w_img, int((bbox['x'] + bbox['w']) * w_img))
+                y2 = min(h_img, int((bbox['y'] + bbox['h']) * h_img))
+                if x2 - x1 > 5 and y2 - y1 > 5:
+                    crop = original_frame[y1:y2, x1:x2]
+                    try:
+                        import cv2
+                        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+                        hist = cv2.calcHist([hsv], [0, 1], None, [16, 16], [0, 180, 0, 256])
+                        cv2.normalize(hist, hist)
+                        did = obj['display_id']
+                        if did not in self._tracking_appearance:
+                            self._tracking_appearance[did] = hist
+                        else:
+                            self._tracking_appearance[did] = 0.7 * self._tracking_appearance[did] + 0.3 * hist
+                    except Exception:
+                        pass
+        
+        # ===== Clean up registered positions for items moved to recently_lost =====
+        active_dids = {o['display_id'] for o in self._tracking_objects.values()}
+        lost_dids = {o['display_id'] for o in self._tracking_recently_lost.values()}
+        for reg_did in list(self._tracking_registered_positions.keys()):
+            if reg_did not in active_dids and reg_did not in lost_dids:
+                del self._tracking_registered_positions[reg_did]
+        
+        # Increment lost frames for unseen tracks; move to recently_lost if exceeded
         for tid in list(self._tracking_lost_frames.keys()):
             if tid not in seen_track_ids and tid in self._tracking_objects:
                 self._tracking_lost_frames[tid] = self._tracking_lost_frames.get(tid, 0) + 1
+                obj_label = self._tracking_objects[tid].get('class_name', '')
+                item_lost_sec = per_class_lost_sec.get(obj_label, max_lost_sec)
+                item_lost_frames = int(item_lost_sec * max(self.fps_actual, 10))
+                if self._tracking_lost_frames[tid] >= item_lost_frames:
+                    obj = self._tracking_objects[tid]
+                    self._tracking_recently_lost[tid] = {
+                        'class_name': obj['class_name'],
+                        'display_id': obj['display_id'],
+                        'bbox': obj['bbox'],
+                        'lost_time': current_time,
+                        'first_seen': obj.get('first_seen', current_time),
+                        'order_idx': obj.get('order_idx', 0)
+                    }
+                    del self._tracking_objects[tid]
+                    del self._tracking_lost_frames[tid]
+                    if tid in self._tracking_display_map:
+                        del self._tracking_display_map[tid]
+        
+        # Expire entries in recently_lost and transferred_ids
+        expire_cutoff = current_time - max_lost_sec * 2
+        for tid in list(self._tracking_recently_lost.keys()):
+            if self._tracking_recently_lost[tid]['lost_time'] < expire_cutoff:
+                del self._tracking_recently_lost[tid]
+        for tid in list(self._tracking_transferred_ids.keys()):
+            if current_time - self._tracking_transferred_ids[tid] > max_lost_sec * 2:
+                del self._tracking_transferred_ids[tid]
         
         self._rebuild_checklist(expected_items)
         
         if not self._tracking_cycle_active:
             return
         
-        active_count = sum(1 for tid in self._tracking_objects
-                          if self._tracking_lost_frames.get(tid, 0) < max_lost_frames)
+        active_count = 0
+        fps = max(self.fps_actual, 10)
+        for tid in self._tracking_objects:
+            obj_label = self._tracking_objects[tid].get('class_name', '')
+            item_sec = per_class_lost_sec.get(obj_label, max_lost_sec)
+            item_tolerance_frames = int(item_sec * fps)
+            lost_f = self._tracking_lost_frames.get(tid, 0)
+            if cycle_strategy == 'roi_exit':
+                if tid in seen_track_ids:
+                    active_count += 1
+                elif lost_f < item_tolerance_frames:
+                    active_count += 1
+            else:
+                if lost_f < item_tolerance_frames:
+                    active_count += 1
+        
+        if active_count > 0:
+            self._tracking_had_roi_objects = True
         
         should_settle = False
         
@@ -2948,7 +3475,7 @@ class VideoSourceManager:
                 self._tracking_trigger_frames = 0
         
         elif cycle_strategy == 'roi_exit':
-            if self._tracking_prev_count > 0 and active_count <= gone_threshold:
+            if self._tracking_had_roi_objects and active_count <= gone_threshold:
                 self._tracking_gone_frames += 1
                 if self._tracking_gone_frames >= gone_confirm_frames:
                     should_settle = True
@@ -2958,6 +3485,11 @@ class VideoSourceManager:
         self._tracking_prev_count = active_count
         
         if should_settle:
+            cycle_age = current_time - (self.cycle_start_time or current_time)
+            if cycle_age < max_lost_sec:
+                should_settle = False
+        
+        if should_settle:
             self._settle_counting_cycle(expected_items, check_order, expected_order)
     
     def _rebuild_checklist(self, expected_items: dict):
@@ -2965,21 +3497,73 @@ class VideoSourceManager:
         self._tracking_item_checklist = {}
         for cls_name, expected_count in expected_items.items():
             actual = self._tracking_class_counters.get(cls_name, 0)
+            display_name = self.step_display_names.get(cls_name, cls_name)
+            prefix = self._tracking_letter_map.get(cls_name, display_name)
             self._tracking_item_checklist[cls_name] = {
                 'expected': expected_count, 'counted': actual,
-                'prefix': self._tracking_letter_map.get(cls_name, '?')
+                'prefix': prefix, 'display_name': display_name
             }
         for cls_name, count in self._tracking_class_counters.items():
             if cls_name not in self._tracking_item_checklist:
+                display_name = self.step_display_names.get(cls_name, cls_name)
+                prefix = self._tracking_letter_map.get(cls_name, display_name)
                 self._tracking_item_checklist[cls_name] = {
                     'expected': 0, 'counted': count,
-                    'prefix': self._tracking_letter_map.get(cls_name, '?')
+                    'prefix': prefix, 'display_name': display_name
                 }
     
     def _settle_counting_cycle(self, expected_items: dict, check_order: bool = False, expected_order: list = None):
         """Validate tracking-mode cycle and trigger OK or NG event."""
         print(f"[Tracking] Settling cycle: counters={self._tracking_class_counters}, expected={expected_items}")
         
+        # ===== Collect all item instances from active + recently_lost =====
+        all_items = []
+        for tid, obj in self._tracking_objects.items():
+            all_items.append({
+                'class_name': obj['class_name'],
+                'display_id': obj['display_id'],
+                'first_seen': obj.get('first_seen', 0),
+                'last_seen': obj.get('last_seen', 0),
+                'order_idx': obj.get('order_idx', 0),
+            })
+        for tid, obj in self._tracking_recently_lost.items():
+            all_items.append({
+                'class_name': obj['class_name'],
+                'display_id': obj['display_id'],
+                'first_seen': obj.get('first_seen', 0),
+                'last_seen': obj.get('lost_time', obj.get('first_seen', 0)),
+                'order_idx': obj.get('order_idx', 0),
+            })
+        
+        all_items.sort(key=lambda o: o['order_idx'])
+        
+        seen_display_ids = set()
+        unique_items = []
+        for item in all_items:
+            if item['display_id'] not in seen_display_ids:
+                seen_display_ids.add(item['display_id'])
+                unique_items.append(item)
+        
+        self.current_cycle_steps = [item['display_id'] for item in unique_items]
+        
+        for idx, item in enumerate(unique_items):
+            start_t = item['first_seen']
+            end_t = item['last_seen']
+            duration = max(0, end_t - start_t) if start_t and end_t else 0
+            step_name = item['display_id']
+            step_label = item['class_name']
+            display_name = self.step_display_names.get(step_label, step_label)
+            self.record_step(
+                step_label=step_label,
+                step_name=step_name,
+                start_time=start_t,
+                end_time=end_t,
+                duration=round(duration, 2),
+                step_order=idx + 1,
+                is_valid=True,
+            )
+        
+        # ===== Validate counts =====
         missing = []
         extra = []
         for cls_name, exp in expected_items.items():
@@ -2994,8 +3578,7 @@ class VideoSourceManager:
         
         order_ok = True
         if check_order and expected_order:
-            placed = sorted(self._tracking_objects.values(), key=lambda o: o['order_idx'])
-            placed_classes = [o['class_name'] for o in placed]
+            placed_classes = [item['class_name'] for item in unique_items]
             if placed_classes != expected_order:
                 order_ok = False
         
@@ -3007,8 +3590,7 @@ class VideoSourceManager:
             if extra: reasons.append(f'多件: {extra}')
             self._trigger_event(2, ', '.join(reasons))
         elif not order_ok:
-            placed = sorted(self._tracking_objects.values(), key=lambda o: o['order_idx'])
-            actual_seq = [o['class_name'] for o in placed]
+            actual_seq = [item['class_name'] for item in unique_items]
             self._trigger_event(2, f'放入顺序错误: 期望{expected_order}, 实际{actual_seq}')
         else:
             self._trigger_event(1, f'装箱完整: {dict(self._tracking_class_counters)}')
@@ -3774,11 +4356,12 @@ class VideoSourceManager:
             device = self.current_device_info.get('device', 'cpu') if self.current_device_info else 'cpu'
             from concurrent.futures import TimeoutError as FuturesTimeoutError
             
+            _tracker_cfg = self._custom_tracker_yaml or "bytetrack.yaml"
             def run_tracking():
                 return list(self.model.track(
                     frame, conf=self.conf_threshold, iou=self.iou_threshold,
                     imgsz=640, verbose=False, device=device,
-                    stream=True, persist=True, tracker="bytetrack.yaml"
+                    stream=True, persist=True, tracker=_tracker_cfg
                 ))
             
             executor = self._get_inference_executor()
@@ -4576,7 +5159,7 @@ class VideoSourceManager:
     
     def start_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60):
         """启动摄像头"""
-        self.stop()
+        self.stop(release_model=False)
         
         # 等待一小段时间确保之前的资源已释放
         time.sleep(0.2)
@@ -4634,7 +5217,7 @@ class VideoSourceManager:
             hik_log("SDK 不可用", "ERROR")
             raise Exception("海康 SDK 未加载，无法使用海康相机")
         
-        self.stop()
+        self.stop(release_model=False)
         
         # 等待一小段时间确保之前的资源已释放
         time.sleep(0.2)
@@ -4855,7 +5438,7 @@ class VideoSourceManager:
         # 保存当前倍速设置（如果有的话）
         current_speed = self.video_speed if self.video_speed else 1.0
         
-        self.stop()
+        self.stop(release_model=False)
         
         if not os.path.exists(video_path):
             raise Exception(f"视频文件不存在: {video_path}")
@@ -4989,7 +5572,7 @@ class VideoSourceManager:
     
     def set_image(self, image_path: str):
         """设置图片为输入源"""
-        self.stop()
+        self.stop(release_model=False)
         
         if not os.path.exists(image_path):
             raise Exception(f"图片文件不存在: {image_path}")
@@ -5158,52 +5741,70 @@ class VideoSourceManager:
         print("[缓存清理] 推理缓存已清理")
     
     def reset_stats(self):
-        """重置统计数据（计数器、步骤计数、截图等）"""
+        """Full detection state reset (everything except video source, model and project config)."""
         import gc
         
-        # 重置步骤统计
+        # Step statistics
         self.step_counts = {}
-        self.step_screenshots = {}  # 清空截图缓存（释放内存）
+        self.step_screenshots = {}
         self.step_last_seen = {}
-        self.step_start_time = {}  # 重置步骤开始时间
-        self.step_detection_times = {}  # 重置步骤检测时间
-        self.step_durations = {}  # 重置步骤耗时
-        self.step_intervals = {}  # 重置步骤间隔时间
-        self.last_step_completed_time = None  # 重置上一步骤完成时间
+        self.step_start_time = {}
+        self.step_detection_times = {}
+        self.step_durations = {}
+        self.step_intervals = {}
+        self.last_step_completed_time = None
         
-        # 重置计数器（保留计数器名称，值清零）
+        # Counters (preserve names, zero values)
         for key in self.counters:
             self.counters[key] = 0
         
-        # 重置周期状态
+        # Cycle state
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
         self.last_added_step = None
         self.cycle_complete = False
-        self.events_log = []  # 清空事件日志
+        self.events_log = []
+        self._event_seq = 0
         self.ng_step_cycle_counts = {}
         
-        # 重置周期时间统计
+        # Cycle timing
         self.cycle_times = []
         self.ng_cycle_times = []
         self.cycle_start_time = None
         self.step_durations_history = {}
         
-        # 重置卡尔曼滤波器
+        # Settlement / first-step tracking flags
+        self._just_settled = False
+        self._first_step_had_gap = False
+        self._first_step_reconfirmed = False
+        self._first_step_disappeared_at = None
+        self._last_step_added_time = None
+        self._step_raw_start = {}
+        self._last_ng_time = 0
+        if hasattr(self, '_last_disappeared_step_times'):
+            self._last_disappeared_step_times = {}
+        
+        # Simultaneous-group buffer layer
+        self._sim_group_buffers = {}
+        self._currently_pending_labels = set()
+        
+        # Kalman tracking filters
         self._kalman_filters.clear()
         self._detection_missing_frames.clear()
         self._detection_history.clear()
         
-        # 重置帧计数状态
+        # Frame-counting state
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
-        
         self.step_static_triggered.clear()
         
-        # 强制垃圾回收
+        # Tracking-mode (counting) state
+        if hasattr(self, '_tracking_objects'):
+            self._reset_counting_cycle()
+        
         gc.collect()
         
-        print("统计数据已重置（含缓存清理）")
+        print("统计数据已完全重置（含所有检测状态）")
     
     # ========== 视频录制功能 ==========
     
@@ -5658,8 +6259,13 @@ class VideoSourceManager:
         self.start_session_recording()
         print("已从待机恢复推理")
     
-    def stop(self):
-        """停止当前输入源（完全停止并释放资源）"""
+    def stop(self, release_model: bool = True):
+        """停止当前输入源（完全停止并释放资源）
+        
+        Args:
+            release_model: If False, keep the YOLO model in memory for reuse
+                           after switching input sources.
+        """
         self.is_running = False
         self.is_detecting = False
         
@@ -5695,8 +6301,11 @@ class VideoSourceManager:
                 print(f"[警告] 释放摄像头时出错: {e}")
             self.capture = None
         
-        # 释放模型和 GPU 资源
-        self._release_model()
+        if release_model:
+            self._release_model()
+        else:
+            self._shutdown_inference_executor()
+            print("[VideoManager] 保留模型，仅停止输入源")
         
         # 等待一小段时间确保资源被系统释放
         time.sleep(0.3)

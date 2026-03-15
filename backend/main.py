@@ -226,8 +226,8 @@ migrate_database()
 fix_orphan_sessions()
 
 def auto_load_active_project():
-    """Backend startup: auto-load the active project into VideoSourceManager."""
-    from backend.models.models import Project
+    """Backend startup: auto-load the active project (config + model) into VideoSourceManager."""
+    from backend.models.models import Project, Model
     from sqlalchemy.orm import Session as DBSession
     try:
         with DBSession(engine) as db:
@@ -248,6 +248,19 @@ def auto_load_active_project():
             vm = get_video_manager()
             vm.set_project_config(config)
             print(f"[启动] 自动加载激活项目: {project.name}")
+
+            if project.default_model_id:
+                model = db.query(Model).filter(Model.id == project.default_model_id).first()
+                if model and model.file_path:
+                    import os
+                    if os.path.exists(model.file_path):
+                        success = vm.load_model(model.file_path)
+                        if success:
+                            print(f"[启动] 自动加载模型: {model.name} ({model.file_path})")
+                        else:
+                            print(f"[启动] 模型加载失败: {model.file_path}")
+                    else:
+                        print(f"[启动] 模型文件不存在: {model.file_path}")
     except Exception as e:
         print(f"[启动] 自动加载项目失败: {e}")
 

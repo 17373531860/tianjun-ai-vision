@@ -197,11 +197,16 @@
           </el-tab-pane>
 
           <!-- Tab 2: Step Settings -->
-          <el-tab-pane label="步骤设置" name="steps">
+          <el-tab-pane :label="activeProject.logic_mode === 'tracking' ? '物品设置' : '步骤设置'" name="steps">
             <div class="h-full flex flex-col p-4">
               <div class="mb-3 text-sm text-gray-400 flex items-center flex-shrink-0">
                 <el-icon class="mr-1"><InfoFilled /></el-icon>
-                配置各步骤的启用状态、置信度、显示标签。启用的步骤将参与逻辑判断。
+                <template v-if="activeProject.logic_mode === 'tracking'">
+                  配置各物品的启用状态与置信度。跟踪参数请在"逻辑设置"中配置。
+                </template>
+                <template v-else>
+                  配置各步骤的启用状态、置信度、显示标签。启用的步骤将参与逻辑判断。
+                </template>
               </div>
 
               <div class="flex-1 overflow-y-auto custom-scrollbar min-h-0 pb-20">
@@ -212,6 +217,19 @@
                       <th class="p-2 w-16">启用</th>
                       <th class="p-2 w-28">置信度阈值</th>
                       <th class="p-2 w-28">显示名称</th>
+                      <template v-if="activeProject.logic_mode === 'tracking'">
+                      <th class="p-2 w-28">
+                        <el-tooltip content="物品被短暂遮挡后仍算在场的最长时间，在此时间内不会被判定为消失（留空使用全局值）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">遮挡容忍(秒)</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="开启后，物品放下后按位置锁定ID，不受ByteTrack的ID交换影响，适用于静止物品" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">位置注册</span>
+                        </el-tooltip>
+                      </th>
+                      </template>
+                      <template v-if="activeProject.logic_mode !== 'tracking'">
                       <th class="p-2 w-28">
                         <el-tooltip content="检测持续时间低于此值将被忽略（0.01-60秒，留空不限制）" placement="top">
                           <span class="cursor-help border-b border-dashed border-gray-500">最短持续(秒)</span>
@@ -267,6 +285,7 @@
                           <span class="cursor-help border-b border-dashed border-gray-500">单次接受</span>
                         </el-tooltip>
                       </th>
+                      </template>
                     </tr>
                   </thead>
                   <tbody>
@@ -282,6 +301,25 @@
                       <td class="p-2">
                         <el-input v-model="step.displayLabel" size="small" placeholder="显示名称" />
                       </td>
+                      <template v-if="activeProject.logic_mode === 'tracking'">
+                      <td class="p-2">
+                        <el-input-number
+                          v-model="step.tracking_max_lost_seconds"
+                          size="small"
+                          :min="0.1"
+                          :max="30"
+                          :step="0.5"
+                          :precision="1"
+                          :controls="false"
+                          placeholder="5.0"
+                          class="w-full"
+                        />
+                      </td>
+                      <td class="p-2 text-center">
+                        <el-switch v-model="step.tracking_position_lock" size="small" />
+                      </td>
+                      </template>
+                      <template v-if="activeProject.logic_mode !== 'tracking'">
                       <td class="p-2">
                         <el-input-number 
                           v-model="step.min_duration" 
@@ -392,8 +430,19 @@
                         <el-switch v-model="step.strict_order" size="small" />
                       </td>
                       <td class="p-2">
-                        <el-switch v-model="step.accept_once" size="small" />
+                        <el-tooltip
+                          :disabled="!isSettlementStep(step)"
+                          content="结算步骤不可设置单次接受"
+                          placement="top"
+                        >
+                          <el-switch
+                            v-model="step.accept_once"
+                            size="small"
+                            :disabled="isSettlementStep(step)"
+                          />
+                        </el-tooltip>
                       </td>
+                      </template>
                     </tr>
                   </tbody>
                 </table>
@@ -408,6 +457,28 @@
           <el-tab-pane label="逻辑设置" name="logic">
             <div class="h-full overflow-y-auto p-4 pb-32 custom-scrollbar space-y-6">
               
+              <!-- Settlement Mode (sequential / custom-sequential) -->
+              <el-card v-if="activeProject.logic_mode === 'sequential' || (activeProject.logic_mode === 'custom' && activeProject.custom_based_on === 'sequential')" shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header><span class="font-bold text-white">结算方式</span></template>
+                <div class="space-y-4 text-sm text-gray-300">
+                  <el-radio-group v-model="activeProject.settlement_mode">
+                    <el-radio value="first_step">
+                      <span class="text-gray-300">第一步结算</span>
+                      <span class="text-xs text-gray-500 ml-1">— 新周期的第一步出现时结算上一周期</span>
+                    </el-radio>
+                    <el-radio value="last_step">
+                      <span class="text-gray-300">最后一步结算</span>
+                      <span class="text-xs text-gray-500 ml-1">— 最后一步消失后结算当前周期</span>
+                    </el-radio>
+                  </el-radio-group>
+                  <div class="flex items-center gap-3 pt-2 border-t border-slate-700">
+                    <span class="text-gray-400 text-xs whitespace-nowrap">空闲超时(秒)</span>
+                    <el-input-number v-model="activeProject.idle_timeout_seconds" size="small" :min="0" :max="600" :step="5" :precision="0" />
+                    <span class="text-xs text-gray-500">超过此时间无新步骤加入，强制结算当前周期（0=不启用）</span>
+                  </div>
+                </div>
+              </el-card>
+
               <!-- Sequential Mode Config -->
               <el-card v-if="activeProject.logic_mode === 'sequential'" shadow="never" class="bg-slate-800 border-slate-700">
                 <template #header><span class="font-bold text-white">顺序模式 - 步骤排序</span></template>
@@ -569,83 +640,118 @@
                     使用{{ activeProject.task_type === 'segmentation' ? '分割+跟踪' : '检测+跟踪' }}为每个物品分配唯一ID，配合周期结束策略进行数量校验。
                   </p>
 
-                  <el-form label-position="top">
-                    <!-- Cycle End Strategy -->
-                    <el-form-item label="周期结束策略">
-                      <el-select v-model="activeProject.tracking_cycle_strategy" class="w-full">
-                        <el-option label="全部消失 — 物品全部离开画面后结算" value="all_gone" />
-                        <el-option label="触发标签 — 检测到指定动作后结算" value="trigger" />
-                        <el-option label="ROI离开 — 物品离开检测区域后结算" value="roi_exit" />
-                      </el-select>
-                    </el-form-item>
+                  <div class="space-y-4 text-sm text-gray-300">
 
-                    <!-- Trigger label (only when strategy=trigger) -->
-                    <el-form-item v-if="activeProject.tracking_cycle_strategy === 'trigger'" label="触发标签">
-                      <el-select v-model="activeProject.tracking_trigger_label" class="w-full" placeholder="选择触发清点的标签">
+                    <!-- Row 1: 周期结束策略 -->
+                    <div>
+                      <div class="text-xs text-gray-400 mb-1.5">周期结束策略</div>
+                      <div class="grid grid-cols-3 gap-2">
+                        <label class="flex items-start gap-2 p-2.5 bg-slate-800 rounded border cursor-pointer transition-colors"
+                          :class="activeProject.tracking_cycle_strategy === 'all_gone' ? 'border-cyan-500 bg-cyan-500/10' : 'border-slate-700 hover:border-slate-500'"
+                          @click="activeProject.tracking_cycle_strategy = 'all_gone'">
+                          <input type="radio" v-model="activeProject.tracking_cycle_strategy" value="all_gone" class="mt-0.5 accent-cyan-500">
+                          <div>
+                            <div class="text-white text-xs font-bold">全部消失</div>
+                            <div class="text-[10px] text-gray-500 mt-0.5">所有物品离开画面后结算</div>
+                          </div>
+                        </label>
+                        <label class="flex items-start gap-2 p-2.5 bg-slate-800 rounded border cursor-pointer transition-colors"
+                          :class="activeProject.tracking_cycle_strategy === 'roi_exit' ? 'border-cyan-500 bg-cyan-500/10' : 'border-slate-700 hover:border-slate-500'"
+                          @click="activeProject.tracking_cycle_strategy = 'roi_exit'">
+                          <input type="radio" v-model="activeProject.tracking_cycle_strategy" value="roi_exit" class="mt-0.5 accent-cyan-500">
+                          <div>
+                            <div class="text-white text-xs font-bold">ROI离开</div>
+                            <div class="text-[10px] text-gray-500 mt-0.5">物品离开指定检测区域后结算</div>
+                          </div>
+                        </label>
+                        <label class="flex items-start gap-2 p-2.5 bg-slate-800 rounded border cursor-pointer transition-colors"
+                          :class="activeProject.tracking_cycle_strategy === 'trigger' ? 'border-cyan-500 bg-cyan-500/10' : 'border-slate-700 hover:border-slate-500'"
+                          @click="activeProject.tracking_cycle_strategy = 'trigger'">
+                          <input type="radio" v-model="activeProject.tracking_cycle_strategy" value="trigger" class="mt-0.5 accent-cyan-500">
+                          <div>
+                            <div class="text-white text-xs font-bold">触发标签</div>
+                            <div class="text-[10px] text-gray-500 mt-0.5">检测到指定标签后结算</div>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+
+                    <!-- Row 2: trigger extras OR 消失确认帧数 -->
+                    <div v-if="activeProject.tracking_cycle_strategy === 'trigger'" class="flex items-center gap-4 text-xs">
+                      <span class="text-gray-400 shrink-0">触发标签</span>
+                      <el-select v-model="activeProject.tracking_trigger_label" size="small" class="!w-40" placeholder="选择标签">
                         <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
                       </el-select>
-                      <p class="text-xs text-gray-500 mt-1">检测到此标签持续出现时触发结算</p>
-                    </el-form-item>
+                      <span class="text-gray-400 shrink-0">确认帧数</span>
+                      <el-input-number v-model="activeProject.tracking_trigger_min_frames" :min="1" :max="300" :step="5" size="small" class="!w-28" />
+                    </div>
+                    <div v-else class="flex items-center gap-4 text-xs">
+                      <span class="text-gray-400 shrink-0">消失确认帧数</span>
+                      <el-input-number v-model="activeProject.tracking_gone_confirm_frames" :min="1" :max="300" :step="5" size="small" class="!w-28" />
+                    </div>
 
-                    <el-form-item v-if="activeProject.tracking_cycle_strategy === 'trigger'" label="触发确认帧数">
-                      <el-input-number v-model="activeProject.tracking_trigger_min_frames" :min="1" :max="300" :step="5" />
-                      <p class="text-xs text-gray-500 mt-1">触发标签需连续检测到的帧数</p>
-                    </el-form-item>
-
-                    <!-- Gone confirm frames (for all_gone / roi_exit) -->
-                    <el-form-item v-if="activeProject.tracking_cycle_strategy !== 'trigger'" label="消失确认帧数">
-                      <el-input-number v-model="activeProject.tracking_gone_confirm_frames" :min="5" :max="300" :step="5" />
-                      <p class="text-xs text-gray-500 mt-1">物品消失后需连续确认的帧数（避免短暂遮挡误判）</p>
-                    </el-form-item>
-
-                    <!-- Max lost seconds -->
-                    <el-form-item label="遮挡容忍(秒)">
-                      <el-input-number v-model="activeProject.tracking_max_lost_seconds" :min="0.5" :max="30" :step="0.5" :precision="1" />
-                      <p class="text-xs text-gray-500 mt-1">物品被短暂遮挡后保持跟踪的最长时间</p>
-                    </el-form-item>
-
-                    <!-- Order check -->
-                    <el-form-item label="顺序检查">
-                      <el-switch v-model="activeProject.tracking_check_order" active-text="启用" inactive-text="关闭" />
-                      <p class="text-xs text-gray-500 mt-1">启用后将按放入顺序与期望清单对比</p>
-                    </el-form-item>
-
-                    <!-- Expected items list -->
-                    <el-form-item label="期望物品清单">
-                      <div class="bg-slate-900 rounded p-3 space-y-2">
-                        <div v-for="(item, idx) in activeProject.counting_expected_list" :key="idx" class="flex items-center gap-2 bg-slate-800 p-2 rounded">
-                          <el-select v-model="item.label" size="small" class="flex-1" placeholder="选择物品标签">
-                            <el-option v-for="s in countableSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
-                          </el-select>
-                          <span class="text-gray-400">×</span>
-                          <el-input-number v-model="item.count" size="small" :min="1" :max="99" :step="1" />
-                          <el-button type="danger" size="small" link @click="activeProject.counting_expected_list.splice(idx, 1)">删除</el-button>
-                        </div>
-                        <el-button type="primary" size="small" @click="activeProject.counting_expected_list.push({label: '', count: 1})">+ 添加物品</el-button>
+                    <!-- Row 3: switches in one line -->
+                    <div class="flex items-center gap-5 text-xs flex-wrap">
+                      <div class="flex items-center gap-1.5">
+                        <span class="text-gray-400">ID交换检测</span>
+                        <el-switch v-model="activeProject.tracking_swap_detection" size="small" />
                       </div>
-                    </el-form-item>
-
-                    <!-- ROI config — polygon drawing -->
-                    <el-form-item label="检测区域 (ROI)">
-                      <div class="bg-slate-900 rounded p-3 space-y-3">
-                        <div class="flex items-center gap-3">
-                          <el-button type="primary" size="small" @click="openRoiEditor">
-                            {{ activeProject.tracking_roi_polygon?.length > 2 ? '重新绘制 ROI' : '设置 ROI 区域' }}
-                          </el-button>
-                          <el-button v-if="activeProject.tracking_roi_polygon?.length > 2" type="danger" size="small" plain @click="activeProject.tracking_roi_polygon = []">清除</el-button>
-                          <span v-if="activeProject.tracking_roi_polygon?.length > 2" class="text-xs text-green-400">
-                            已设置 {{ activeProject.tracking_roi_polygon.length }} 个顶点
-                          </span>
-                          <span v-else class="text-xs text-gray-500">未设置（全画面有效）</span>
-                        </div>
-                        <!-- Mini preview of current ROI -->
-                        <div v-if="activeProject.tracking_roi_polygon?.length > 2" class="relative w-full h-32 bg-slate-800 rounded border border-slate-700 overflow-hidden">
-                          <canvas ref="roiPreviewCanvas" class="w-full h-full"></canvas>
-                        </div>
-                        <p class="text-xs text-gray-500">在摄像头画面上绘制多边形区域，仅区域内的物品参与跟踪计数</p>
+                      <div class="flex items-center gap-1.5">
+                        <span class="text-gray-400">外观特征辅助</span>
+                        <el-switch v-model="activeProject.tracking_appearance_match" size="small" />
                       </div>
-                    </el-form-item>
-                  </el-form>
+                      <div class="flex items-center gap-1.5">
+                        <span class="text-gray-400">ID锁定</span>
+                        <el-switch v-model="activeProject.tracking_id_lock" size="small" />
+                      </div>
+                      <div v-if="activeProject.tracking_id_lock" class="flex items-center gap-1.5">
+                        <span class="text-gray-400">锁定帧数</span>
+                        <el-input-number v-model="activeProject.tracking_id_lock_frames" :min="3" :max="120" :step="5" size="small" class="!w-24" />
+                      </div>
+                      <div class="flex items-center gap-1.5">
+                        <span class="text-gray-400">顺序检查</span>
+                        <el-switch v-model="activeProject.tracking_check_order" size="small" />
+                      </div>
+                    </div>
+
+                    <!-- Row 4: Expected items + ROI side by side -->
+                    <div class="grid grid-cols-2 gap-4">
+                      <div>
+                        <div class="text-xs text-gray-400 mb-1.5">期望物品清单</div>
+                        <div class="bg-slate-900 rounded p-2.5 space-y-1.5">
+                          <div v-for="(item, idx) in activeProject.counting_expected_list" :key="idx" class="flex items-center gap-1.5 bg-slate-800 p-1.5 rounded">
+                            <el-select v-model="item.label" size="small" class="flex-1 min-w-0" placeholder="选择物品">
+                              <el-option v-for="s in countableSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
+                            </el-select>
+                            <span class="text-gray-500 text-xs shrink-0">×</span>
+                            <el-input-number v-model="item.count" size="small" :min="1" :max="99" :step="1" class="!w-20 shrink-0" />
+                            <el-button type="danger" size="small" link class="shrink-0" @click="activeProject.counting_expected_list.splice(idx, 1)">
+                              <el-icon><Delete /></el-icon>
+                            </el-button>
+                          </div>
+                          <el-button type="primary" size="small" text @click="activeProject.counting_expected_list.push({label: '', count: 1})">+ 添加物品</el-button>
+                        </div>
+                      </div>
+                      <div>
+                        <div class="text-xs text-gray-400 mb-1.5">检测区域 (ROI)</div>
+                        <div class="bg-slate-900 rounded p-2.5 space-y-2">
+                          <div class="flex items-center gap-2">
+                            <el-button type="primary" size="small" @click="openRoiEditor">
+                              {{ activeProject.tracking_roi_polygon?.length > 2 ? '重新绘制' : '设置区域' }}
+                            </el-button>
+                            <el-button v-if="activeProject.tracking_roi_polygon?.length > 2" type="danger" size="small" plain @click="activeProject.tracking_roi_polygon = []">清除</el-button>
+                            <span v-if="activeProject.tracking_roi_polygon?.length > 2" class="text-xs text-green-400">
+                              已设置 {{ activeProject.tracking_roi_polygon.length }} 个顶点
+                            </span>
+                            <span v-else class="text-xs text-gray-500">未设置（全画面）</span>
+                          </div>
+                          <div v-if="activeProject.tracking_roi_polygon?.length > 2" class="relative w-full h-28 bg-slate-800 rounded border border-slate-700 overflow-hidden">
+                            <canvas ref="roiPreviewCanvas" class="w-full h-full"></canvas>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </el-card>
 
@@ -864,7 +970,7 @@
 
 <script setup>
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
-import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu } from '@element-plus/icons-vue';
+import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete } from '@element-plus/icons-vue';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -1162,7 +1268,7 @@ const roiRedraw = () => {
   });
 };
 
-const roiSave = () => {
+const roiSave = async () => {
   if (!activeProject.value || roiPoints.value.length < 3) return;
   const canvas = roiEditorCanvas.value;
   const w = canvas?.width || 1;
@@ -1172,8 +1278,8 @@ const roiSave = () => {
     Math.round((pt.y / h) * 10000) / 10000
   ]);
   roiEditorVisible.value = false;
-  ElMessage.success('ROI 区域已保存');
   nextTick(() => drawRoiPreview());
+  await handleSaveProject();
 };
 
 const drawRoiPreview = () => {
@@ -1288,6 +1394,13 @@ const initProjectDefaults = (project) => {
   if (project.simultaneous_groups === undefined) {
     project.simultaneous_groups = pipelineConfig.simultaneous_groups || [];
   }
+  // Settlement mode
+  if (project.settlement_mode === undefined) {
+    project.settlement_mode = pipelineConfig.settlement_mode || 'first_step';
+  }
+  if (project.idle_timeout_seconds === undefined) {
+    project.idle_timeout_seconds = pipelineConfig.idle_timeout_seconds || 0;
+  }
   // Tracking mode
   if (project.tracking_cycle_strategy === undefined) {
     project.tracking_cycle_strategy = pipelineConfig.tracking_cycle_strategy || 'all_gone';
@@ -1302,10 +1415,22 @@ const initProjectDefaults = (project) => {
     project.tracking_gone_confirm_frames = pipelineConfig.tracking_gone_confirm_frames || 30;
   }
   if (project.tracking_max_lost_seconds === undefined) {
-    project.tracking_max_lost_seconds = pipelineConfig.tracking_max_lost_seconds || 5.0;
+    project.tracking_max_lost_seconds = 5.0;
   }
   if (project.tracking_check_order === undefined) {
     project.tracking_check_order = pipelineConfig.tracking_check_order || false;
+  }
+  if (project.tracking_swap_detection === undefined) {
+    project.tracking_swap_detection = pipelineConfig.tracking_swap_detection || false;
+  }
+  if (project.tracking_appearance_match === undefined) {
+    project.tracking_appearance_match = pipelineConfig.tracking_appearance_match || false;
+  }
+  if (project.tracking_id_lock === undefined) {
+    project.tracking_id_lock = pipelineConfig.tracking_id_lock || false;
+  }
+  if (project.tracking_id_lock_frames === undefined) {
+    project.tracking_id_lock_frames = pipelineConfig.tracking_id_lock_frames || 15;
   }
   if (project.counting_expected_list === undefined) {
     const items = pipelineConfig.counting_expected_items || {};
@@ -1326,6 +1451,8 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
   project.pipeline_config.ng_cycle_protect_seconds = project.ng_cycle_protect_seconds || 0;
   project.pipeline_config.simultaneous_groups = project.simultaneous_groups;
+  project.pipeline_config.settlement_mode = project.settlement_mode || 'first_step';
+  project.pipeline_config.idle_timeout_seconds = project.idle_timeout_seconds || 0;
   
   return project;
 };
@@ -1428,9 +1555,13 @@ const handleSaveProject = async () => {
         tracking_trigger_label: activeProject.value.tracking_trigger_label || '',
         tracking_trigger_min_frames: activeProject.value.tracking_trigger_min_frames || 15,
         tracking_gone_confirm_frames: activeProject.value.tracking_gone_confirm_frames || 30,
-        tracking_max_lost_seconds: activeProject.value.tracking_max_lost_seconds || 5.0,
+        tracking_max_lost_seconds: Math.max(5, ...(activeProject.value.steps_config || []).filter(s => s.enabled && s.tracking_max_lost_seconds).map(s => s.tracking_max_lost_seconds)),
         tracking_gone_threshold: 0,
         tracking_check_order: activeProject.value.tracking_check_order || false,
+        tracking_swap_detection: activeProject.value.tracking_swap_detection || false,
+        tracking_appearance_match: activeProject.value.tracking_appearance_match || false,
+        tracking_id_lock: activeProject.value.tracking_id_lock || false,
+        tracking_id_lock_frames: activeProject.value.tracking_id_lock_frames || 15,
         tracking_expected_order: activeProject.value.tracking_check_order
           ? (activeProject.value.counting_expected_list || []).flatMap(item => Array(item.count || 1).fill(item.label)).filter(Boolean)
           : [],
@@ -1441,7 +1572,9 @@ const handleSaveProject = async () => {
         tracking_roi: {
           enabled: (activeProject.value.tracking_roi_polygon || []).length >= 3,
           polygon: activeProject.value.tracking_roi_polygon || []
-        }
+        },
+        settlement_mode: activeProject.value.settlement_mode || 'first_step',
+        idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0
       }
     };
     await updateProject(activeProject.value.id, data);
@@ -1515,14 +1648,17 @@ const selectModel = (model) => {
       enabled: true,
       threshold: 50,
       triggerEvent: null,
-      min_frames: null,  // 最少帧数，null 表示使用默认值1
-      detection_type: 'dynamic',  // 检测类型：dynamic（动态）或 static（静态）
-      static_trigger_frames: 30,  // 静态触发帧数，默认30帧
+      min_frames: null,
+      detection_type: 'dynamic',
+      static_trigger_frames: 30,
       join_cycle: true,
       backup_for: null,
       default_pt: null,
       strict_order: false,
-      accept_once: false
+      accept_once: false,
+      tracking_gone_confirm_frames: null,
+      tracking_max_lost_seconds: 5.0,
+      tracking_position_lock: false
     }));
     
     // 自动初始化顺序
@@ -1545,6 +1681,22 @@ const addSequenceStep = () => {
 
 const removeSequenceStep = (idx) => {
   activeProject.value.sequence_order.splice(idx, 1);
+};
+
+const isSettlementStep = (step) => {
+  const mode = activeProject.value?.settlement_mode || 'first_step';
+  const logicMode = activeProject.value?.logic_mode;
+  if (logicMode !== 'sequential' && !(logicMode === 'custom' && activeProject.value?.custom_based_on === 'sequential')) {
+    return false;
+  }
+  const seqOrder = activeProject.value?.sequence_order || [];
+  if (seqOrder.length === 0) return false;
+  if (mode === 'first_step') {
+    return step.id === seqOrder[0]?.step_id;
+  } else if (mode === 'last_step') {
+    return step.id === seqOrder[seqOrder.length - 1]?.step_id;
+  }
+  return false;
 };
 
 const moveStepUp = (idx) => {

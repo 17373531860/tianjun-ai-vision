@@ -71,10 +71,12 @@
     DetailPrint "CH340 driver installed successfully via pnputil."
   ${Else}
     DetailPrint "pnputil returned $0, trying SETUP.EXE as fallback..."
-    ; Fallback: run the WCH SETUP.EXE installer (may show a small dialog)
+    ; Fallback: run WCH SETUP.EXE — must set working directory so it can find .SYS files
+    SetOutPath "$INSTDIR\resources\drivers\CH341SER"
     nsExec::ExecToLog '"$INSTDIR\resources\drivers\CH341SER\SETUP.EXE" /S'
     Pop $0
     DetailPrint "CH340 SETUP.EXE returned $0"
+    SetOutPath "$INSTDIR"
   ${EndIf}
 !macroend
 

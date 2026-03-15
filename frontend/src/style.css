@@ -76,6 +76,30 @@ body {
 .el-select .el-input__wrapper {
   background-color: #0f172a !important;
 }
+.el-select__wrapper {
+  background-color: #0f172a !important;
+  box-shadow: 0 0 0 1px #334155 inset !important;
+  color: #e2e8f0 !important;
+}
+.el-select__wrapper:hover {
+  box-shadow: 0 0 0 1px #475569 inset !important;
+}
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px #06b6d4 inset !important;
+}
+.el-select__selected-item {
+  color: #e2e8f0 !important;
+}
+.el-select__placeholder {
+  color: #e2e8f0 !important;
+  z-index: 0 !important;
+  position: relative !important;
+  top: auto !important;
+  transform: none !important;
+}
+.el-select__placeholder.is-transparent {
+  color: #64748b !important;
+}
 .el-select-dropdown {
   background-color: #1e293b !important;
   border-color: #334155 !important;
