@@ -18,6 +18,7 @@ aiofiles>=23.0.0
 # Computer Vision & AI
 opencv-python-headless>=4.8.0
 ultralytics>=8.0.0
+lap>=0.5.12
 # Note: torch is installed separately with CUDA support
 
 # Communication

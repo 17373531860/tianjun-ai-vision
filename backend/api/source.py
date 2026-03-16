@@ -502,9 +502,9 @@ class VideoSourceManager:
         self._thread_timeout_threshold = 10.0  # 线程无响应阈值（秒）
         
         # ========== 推理超时保护 ==========
-        self._inference_timeout = 5.0  # 单次推理超时时间（秒）
+        self._inference_timeout = 10.0  # 单次推理超时时间（秒）
         self._inference_timeout_count = 0  # 推理超时计数
-        self._max_consecutive_timeouts = 3  # 最大连续超时次数，超过后重置模型
+        self._max_consecutive_timeouts = 5  # 最大连续超时次数，超过后重置模型
         self._inference_executor = None  # 持久线程池（避免每帧创建新线程池导致内存泄漏）
         self._last_successful_inference = time.time()  # 最后一次成功推理的时间
         
@@ -1319,6 +1319,19 @@ class VideoSourceManager:
             if hasattr(self.model, 'names'):
                 print(f"类别: {list(self.model.names.values())}")
             print(f"模型任务类型: {self.model_task}")
+            
+            if device.startswith('cuda'):
+                try:
+                    import numpy as np
+                    print("[模型预热] CUDA warm-up...")
+                    self.model.predict(
+                        np.zeros((640, 640, 3), dtype=np.uint8),
+                        conf=0.5, imgsz=640, verbose=False, device=device
+                    )
+                    print("[模型预热] warm-up done")
+                except Exception as e:
+                    print(f"[模型预热] warm-up failed: {e}")
+            
             return True
         except Exception as e:
             print(f"模型加载失败: {e}")
