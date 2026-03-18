@@ -410,6 +410,7 @@ class VideoSourceManager:
         self.capture_lock = threading.Lock()  # 保护 capture 对象的并发访问
         self.camera_index = 0
         self.video_path = None
+        self.rtsp_url = None
         self.image_path = None
         self.width = 1280
         self.height = 720
@@ -673,6 +674,16 @@ class VideoSourceManager:
                 'video_fps': 30
             }
     
+    def _ensure_session_active(self):
+        """If a project is loaded but no session is recording, auto-create one."""
+        if self.recording_enabled and self.current_session_id:
+            return
+        project_id = self.project_config.get('id') if self.project_config else None
+        if not project_id:
+            return
+        print(f"[自动会话] 检测到项目已加载但无活跃会话，自动创建会话 (project_id={project_id})")
+        self.start_session(project_id)
+
     def start_session(self, project_id: int) -> dict:
         """开始新的检测会话"""
         try:
@@ -1036,6 +1047,7 @@ class VideoSourceManager:
         if not self.export_settings or not self.export_settings.get('record_step_duration', True):
             return
         
+        db = None
         try:
             db = self._get_db_session()
             if step_order is not None:
@@ -1099,12 +1111,13 @@ class VideoSourceManager:
                 'end_time': end_time,
                 'record_uuid': record_uuid
             })
-            
-            db.close()
         except Exception as e:
             print(f"记录步骤失败: {e}")
             import traceback
             traceback.print_exc()
+        finally:
+            if db:
+                db.close()
         
     def set_project_config(self, config: dict):
         """设置项目配置"""
@@ -1482,15 +1495,34 @@ class VideoSourceManager:
                         self._fps_time = time.time()
                     
                 else:
-                    # 视频结束，停止播放（不循环）
-                    if self.source_type == 'video' and self.video_path:
+                    if self.source_type == 'rtsp':
+                        consecutive_errors += 1
+                        if consecutive_errors >= 5:
+                            print(f"[RTSP] 连续 {consecutive_errors} 帧失败，尝试重连...")
+                            try:
+                                if self.capture is not None:
+                                    self.capture.release()
+                                time.sleep(2.0)
+                                self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+                                self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                                if self.capture.isOpened():
+                                    print("[RTSP] 重连成功")
+                                    consecutive_errors = 0
+                                else:
+                                    print("[RTSP] 重连失败，等待后再试...")
+                                    time.sleep(3.0)
+                            except Exception as e:
+                                print(f"[RTSP] 重连异常: {e}")
+                                time.sleep(3.0)
+                        else:
+                            time.sleep(0.05)
+                    elif self.source_type == 'video' and self.video_path:
                         print("[Video] 视频播放完毕，已停止")
                         self.video_ended = True
                         self.is_running = False
-                        # 如果正在检测，自动停止检测
                         if self.is_detecting:
                             self.stop_detection()
-                        break  # 退出循环
+                        break
                     else:
                         time.sleep(0.01)
                 
@@ -1537,10 +1569,19 @@ class VideoSourceManager:
                             except:
                                 print("[捕获线程] 海康相机重新连接失败")
                         else:
-                            # 普通摄像头/视频：尝试重新打开
                             if self.capture is not None:
                                 self.capture.release()
-                            if self.source_type == 'camera':
+                            if self.source_type == 'rtsp':
+                                print("[RTSP] 尝试重连...")
+                                time.sleep(2.0)
+                                self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+                                self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                                if self.capture.isOpened():
+                                    print("[RTSP] 重连成功")
+                                    consecutive_errors = 0
+                                else:
+                                    print("[RTSP] 重连失败")
+                            elif self.source_type == 'camera':
                                 self.capture = cv2.VideoCapture(self.camera_index)
                                 if self.capture.isOpened():
                                     self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
@@ -2865,7 +2906,7 @@ class VideoSourceManager:
             f"match_thresh: 0.8\n"
             f"fuse_score: true\n"
         )
-        yaml_path = os.path.join(tempfile.gettempdir(), 'bytetrack_custom.yaml')
+        yaml_path = os.path.join(tempfile.gettempdir(), f'bytetrack_custom_{id(self)}.yaml')
         with open(yaml_path, 'w') as f:
             f.write(yaml_content)
         self._custom_tracker_yaml = yaml_path
@@ -3015,7 +3056,6 @@ class VideoSourceManager:
         cycle_strategy = pcfg.get('tracking_cycle_strategy', 'all_gone')
         trigger_label = pcfg.get('tracking_trigger_label', '')
         trigger_min_frames = pcfg.get('tracking_trigger_min_frames', 15)
-        max_lost_sec = 5.0
         gone_threshold = pcfg.get('tracking_gone_threshold', 0)
         gone_confirm_frames = pcfg.get('tracking_gone_confirm_frames', 30)
         check_order = pcfg.get('tracking_check_order', False)
@@ -3035,7 +3075,7 @@ class VideoSourceManager:
                 if step.get('tracking_position_lock'):
                     per_class_position_lock[lbl] = True
         
-        max_lost_frames = int(max_lost_sec * max(self.fps_actual, 10))
+        max_lost_sec = max(5.0, *per_class_lost_sec.values()) if per_class_lost_sec else 5.0
         
         seen_track_ids = set()
         trigger_visible = False
@@ -3423,6 +3463,7 @@ class VideoSourceManager:
                 item_lost_frames = int(item_lost_sec * max(self.fps_actual, 10))
                 if self._tracking_lost_frames[tid] >= item_lost_frames:
                     obj = self._tracking_objects[tid]
+                    print(f"[Tracking] 遮挡容忍超时: {obj['display_id']}({obj_label}) 消失 {item_lost_sec:.1f}s ({item_lost_frames} 帧)，移除")
                     self._tracking_recently_lost[tid] = {
                         'class_name': obj['class_name'],
                         'display_id': obj['display_id'],
@@ -3472,11 +3513,15 @@ class VideoSourceManager:
         should_settle = False
         
         if cycle_strategy == 'all_gone':
-            if self._tracking_prev_count > 0 and active_count <= gone_threshold:
+            if active_count <= gone_threshold:
                 self._tracking_gone_frames += 1
+                if self._tracking_gone_frames == 1:
+                    print(f"[Tracking] 物体全部消失，开始消失确认倒计时: {gone_confirm_frames} 帧")
                 if self._tracking_gone_frames >= gone_confirm_frames:
                     should_settle = True
             else:
+                if self._tracking_gone_frames > 0:
+                    print(f"[Tracking] 物体重新出现，消失确认重置 (已计 {self._tracking_gone_frames}/{gone_confirm_frames} 帧)")
                 self._tracking_gone_frames = 0
         
         elif cycle_strategy == 'trigger':
@@ -3490,9 +3535,13 @@ class VideoSourceManager:
         elif cycle_strategy == 'roi_exit':
             if self._tracking_had_roi_objects and active_count <= gone_threshold:
                 self._tracking_gone_frames += 1
+                if self._tracking_gone_frames == 1:
+                    print(f"[Tracking] ROI内物体消失，开始消失确认倒计时: {gone_confirm_frames} 帧")
                 if self._tracking_gone_frames >= gone_confirm_frames:
                     should_settle = True
             else:
+                if self._tracking_gone_frames > 0:
+                    print(f"[Tracking] ROI内物体重新出现，消失确认重置 (已计 {self._tracking_gone_frames}/{gone_confirm_frames} 帧)")
                 self._tracking_gone_frames = 0
         
         self._tracking_prev_count = active_count
@@ -3503,6 +3552,7 @@ class VideoSourceManager:
                 should_settle = False
         
         if should_settle:
+            print(f"[Tracking] 消失确认完成 ({self._tracking_gone_frames}/{gone_confirm_frames} 帧)，触发结算")
             self._settle_counting_cycle(expected_items, check_order, expected_order)
     
     def _rebuild_checklist(self, expected_items: dict):
@@ -5222,6 +5272,68 @@ class VideoSourceManager:
         
         return True
     
+    def start_rtsp(self, url: str, fps: int = 25):
+        """启动 RTSP 网络视频流（NVR / IP Camera）"""
+        self.stop(release_model=False)
+        time.sleep(0.2)
+
+        import os
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+
+        safe_url = url.split("@")[-1] if "@" in url else url
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            self.capture = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+            if self.capture.isOpened():
+                break
+            if attempt < max_retries - 1:
+                print(f"[RTSP] 连接失败，重试 {attempt + 2}/{max_retries}... ({safe_url})")
+                time.sleep(2.0)
+
+        if not self.capture.isOpened():
+            raise Exception(f"无法连接 RTSP 流: {safe_url}，请检查地址/用户名/密码/网络连通性")
+
+        self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        actual_w = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        actual_fps = self.capture.get(cv2.CAP_PROP_FPS) or fps
+        fourcc = int(self.capture.get(cv2.CAP_PROP_FOURCC))
+        codec = ''.join([chr((fourcc >> 8 * i) & 0xFF) for i in range(4)]) if fourcc else "未知"
+
+        print(f"[RTSP] 已连接: {actual_w}x{actual_h}, FPS: {actual_fps}, 编码: {codec}, URL: {safe_url}")
+
+        # 验证能否实际读取帧（RTSP 首帧可能需要等待 I 帧）
+        frame_ok = False
+        for i in range(30):
+            ret, frame = self.capture.read()
+            if ret:
+                print(f"[RTSP] 验证读帧成功 (第{i+1}次尝试), 帧尺寸: {frame.shape}")
+                frame_ok = True
+                break
+            time.sleep(0.3)
+
+        if not frame_ok:
+            self.capture.release()
+            self.capture = None
+            raise Exception(
+                f"RTSP 已连接但无法读取视频帧 ({safe_url})。"
+                f"当前编码: {codec}。"
+                f"建议在 NVR 管理页面将该通道的视频编码改为 H.264"
+            )
+
+        self.source_type = 'rtsp'
+        self.rtsp_url = url
+        self.width = actual_w
+        self.height = actual_h
+        self.fps = fps
+        self.is_running = True
+
+        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._thread.start()
+        return True
+
     def start_hikvision_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60):
         """启动海康工业相机（带增强调试）"""
         hik_log(f"start_hikvision_camera 调用: device_index={device_index}, {width}x{height}@{fps}fps")
@@ -5686,6 +5798,8 @@ class VideoSourceManager:
         
         if self.is_running and self.model is not None:
             self._start_inference_thread()
+        
+        self._ensure_session_active()
         
         if self.recording_enabled:
             self._start_recording_thread()
@@ -6239,9 +6353,10 @@ class VideoSourceManager:
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
 
-        # 显式启动推理线程（capture_loop 启动时也会检查，这里双重保证）
         if self.model is not None:
             self._start_inference_thread()
+
+        self._ensure_session_active()
 
         print("已恢复：视频流和推理重新启动")
         return True
@@ -6267,6 +6382,9 @@ class VideoSourceManager:
             return False
         self.is_detecting = True
         self._start_inference_thread()
+        
+        self._ensure_session_active()
+        
         if self.recording_enabled:
             self._start_recording_thread()
         self.start_session_recording()
@@ -6884,6 +7002,22 @@ def stop_camera(channel: int = Query(0)):
     mgr = _get_mgr(channel)
     mgr.stop()
     return {"status": "success", "message": f"摄像头已停止 (ch{channel})"}
+
+
+# ========== RTSP 网络视频流 API 端点 ==========
+class RtspStartRequest(BaseModel):
+    url: str
+    fps: int = 25
+
+@router.post("/rtsp/start")
+def start_rtsp(req: RtspStartRequest, channel: int = Query(0)):
+    """启动 RTSP 网络视频流"""
+    try:
+        mgr = _get_mgr(channel)
+        mgr.start_rtsp(url=req.url, fps=req.fps)
+        return {"status": "success", "message": f"RTSP 流已启动 (ch{channel})"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ========== 海康工业相机 API 端点 ==========

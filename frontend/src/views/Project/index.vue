@@ -1579,6 +1579,8 @@ const handleSaveProject = async () => {
     };
     await updateProject(activeProject.value.id, data);
     
+    activeProject.value.pipeline_config = data.pipeline_config;
+    
     const idx = projects.value.findIndex(p => p.id === activeProject.value.id);
     if (idx !== -1) {
       projects.value[idx] = { ...projects.value[idx], ...data };

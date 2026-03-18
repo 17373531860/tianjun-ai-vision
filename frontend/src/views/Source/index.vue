@@ -37,6 +37,7 @@
             <el-form-item label="输入源">
               <el-radio-group v-model="wsConfigs[ch - 1].sourceType" size="small">
                 <el-radio-button value="camera">摄像头</el-radio-button>
+                <el-radio-button value="rtsp">RTSP</el-radio-button>
                 <el-radio-button value="video">视频</el-radio-button>
                 <el-radio-button value="image">图片</el-radio-button>
               </el-radio-group>
@@ -51,6 +52,19 @@
                 <el-option-group v-if="hikvisionCameras.length > 0" label="海康">
                   <el-option v-for="cam in hikvisionCameras" :key="cam.id" :label="cam.name" :value="cam.id" />
                 </el-option-group>
+              </el-select>
+            </el-form-item>
+
+            <!-- RTSP URL input -->
+            <el-form-item v-if="wsConfigs[ch - 1].sourceType === 'rtsp'" label="RTSP 地址">
+              <el-input v-model="wsConfigs[ch - 1].rtspUrl" placeholder="rtsp://admin:密码@IP:554/Streaming/Channels/通道号02 (子码流)" size="small" />
+            </el-form-item>
+            <el-form-item v-if="wsConfigs[ch - 1].sourceType === 'rtsp'" label="FPS">
+              <el-select v-model="wsConfigs[ch - 1].rtspFps" class="w-full" size="small">
+                <el-option label="10" :value="10" />
+                <el-option label="15" :value="15" />
+                <el-option label="25" :value="25" />
+                <el-option label="30" :value="30" />
               </el-select>
             </el-form-item>
 
@@ -133,6 +147,13 @@
                 <el-tag type="info" size="small">USB / 海康工业相机</el-tag>
               </div>
             </el-radio>
+            <el-radio value="rtsp" class="!mr-0">
+              <div class="flex items-center gap-2">
+                <el-icon><Monitor /></el-icon>
+                <span>网络摄像头 (RTSP)</span>
+                <el-tag type="warning" size="small">NVR / IP Camera</el-tag>
+              </div>
+            </el-radio>
             <el-radio value="video" class="!mr-0">
               <div class="flex items-center gap-2">
                 <el-icon><VideoPlay /></el-icon>
@@ -204,6 +225,38 @@
               <div class="text-xs text-gray-400 mt-1">
                 提示：如果检测速度跟不上，降低帧率可以避免丢帧
               </div>
+            </el-form-item>
+          </el-form>
+        </el-card>
+
+        <!-- RTSP 网络视频流设置 -->
+        <el-card v-if="sourceType === 'rtsp'" shadow="never" class="bg-slate-800 border-slate-700">
+          <template #header>
+            <span class="font-bold text-white">RTSP 网络视频流设置</span>
+          </template>
+          
+          <el-form label-position="top">
+            <el-form-item label="RTSP 地址">
+              <el-input 
+                v-model="rtspSettings.url" 
+                placeholder="rtsp://用户名:密码@IP地址:554/Streaming/Channels/101"
+                clearable
+              >
+                <template #prepend>URL</template>
+              </el-input>
+              <div class="text-xs text-gray-400 mt-1 space-y-1">
+                <div>海康 NVR 主码流: rtsp://admin:密码@IP:554/Streaming/Channels/通道号<b>01</b></div>
+                <div>海康 NVR 子码流: rtsp://admin:密码@IP:554/Streaming/Channels/通道号<b>02</b> <span class="text-green-400">(推荐，720p H.264，性能更好)</span></div>
+              </div>
+            </el-form-item>
+            
+            <el-form-item label="目标帧率 (FPS)">
+              <el-select v-model="rtspSettings.fps" class="w-full">
+                <el-option label="10 FPS (省性能)" :value="10" />
+                <el-option label="15 FPS" :value="15" />
+                <el-option label="25 FPS (推荐)" :value="25" />
+                <el-option label="30 FPS" :value="30" />
+              </el-select>
             </el-form-item>
           </el-form>
         </el-card>
@@ -333,6 +386,8 @@
             </el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'camera'" label="分辨率">{{ cameraSettings.resolution }}</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'camera'" label="帧率">{{ cameraSettings.fps }} FPS</el-descriptions-item>
+            <el-descriptions-item v-if="sourceType === 'rtsp'" label="RTSP 地址">{{ rtspSettings.url || '未输入' }}</el-descriptions-item>
+            <el-descriptions-item v-if="sourceType === 'rtsp'" label="帧率">{{ rtspSettings.fps }} FPS</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'video'" label="视频文件">{{ videoFile?.name || '未选择' }}</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'video'" label="播放倍速">{{ videoSettings.speed }}x</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'image'" label="图片文件">{{ imageFile?.name || '未选择' }}</el-descriptions-item>
@@ -380,11 +435,12 @@ const systemStore = useSystemStore();
 
 // ===== Workstation Mode =====
 const workstationMode = ref(1);
-const makeDefaultWsConfig = () => ({ sourceType: 'camera', cameraId: '', projectId: null, resolution: '1280x720', fps: 60, gpuDevice: 'auto', videoFile: null, imageFile: null });
+const makeDefaultWsConfig = () => ({ sourceType: 'camera', cameraId: '', projectId: null, resolution: '1280x720', fps: 60, gpuDevice: 'auto', videoFile: null, imageFile: null, rtspUrl: '', rtspFps: 25 });
 const wsConfigured = (idx) => {
   const c = wsConfigs[idx];
   if (!c) return false;
   if (c.sourceType === 'camera') return !!c.cameraId;
+  if (c.sourceType === 'rtsp') return !!c.rtspUrl;
   if (c.sourceType === 'video') return !!c.videoFile;
   if (c.sourceType === 'image') return !!c.imageFile;
   return false;
@@ -425,6 +481,8 @@ const saveAndStartMulti = async () => {
         } else if (cam.type === 'hikvision') {
           await api.post(`/source/hikvision/start?channel=${ch}`, { device_index: cam.index, width: w, height: h, fps: cfg.fps });
         }
+      } else if (cfg.sourceType === 'rtsp' && cfg.rtspUrl) {
+        await api.post(`/source/rtsp/start?channel=${ch}`, { url: cfg.rtspUrl, fps: cfg.rtspFps || 25 });
       } else if (cfg.sourceType === 'video' && cfg.videoFile) {
         const formData = new FormData();
         formData.append('file', cfg.videoFile);
@@ -503,6 +561,12 @@ const cameraSettings = ref({
   fps: 60
 });
 
+// RTSP 设置
+const rtspSettings = ref({
+  url: '',
+  fps: 25
+});
+
 // 统一摄像头列表（USB + 海康）
 const usbCameras = ref([]);       // USB 摄像头列表
 const hikvisionCameras = ref([]); // 海康工业相机列表
@@ -536,6 +600,7 @@ const saving = ref(false);
 const sourceTypeLabel = computed(() => {
   const labels = {
     camera: '摄像头',
+    rtsp: '网络摄像头 (RTSP)',
     video: '本地视频',
     image: '本地图片'
   };
@@ -742,6 +807,22 @@ const saveAndStart = async () => {
       
       sourceStore.setStreaming(true);
       
+    } else if (sourceType.value === 'rtsp') {
+      if (!rtspSettings.value.url) {
+        ElMessage.warning('请输入 RTSP 地址');
+        saving.value = false;
+        return;
+      }
+      
+      await api.post('/source/rtsp/start', {
+        url: rtspSettings.value.url,
+        fps: rtspSettings.value.fps
+      });
+      
+      sourceStore.setSourceType('rtsp');
+      sourceStore.setRtspSettings(rtspSettings.value);
+      sourceStore.setStreaming(true);
+      
     } else if (sourceType.value === 'video') {
       if (!videoFile.value) {
         ElMessage.warning('请先选择视频文件');
@@ -798,6 +879,8 @@ const saveAndStart = async () => {
     let sourceValue = null;
     if (sourceType.value === 'camera') {
       sourceValue = cameraSettings.value.deviceIndex;
+    } else if (sourceType.value === 'rtsp') {
+      sourceValue = rtspSettings.value.url;
     } else if (sourceType.value === 'video') {
       sourceValue = sourceStore.videoPath;
     } else if (sourceType.value === 'image') {
@@ -841,9 +924,14 @@ const restoreAutoSavedSource = () => {
   // 从 sourceStore 加载保存的配置
   sourceStore.loadConfig();
   
-  // 恢复输入源类型（hikvision 也映射到 camera）
+  // 恢复输入源类型（hikvision 映射到 camera）
   const savedType = sourceStore.sourceType;
   sourceType.value = (savedType === 'hikvision') ? 'camera' : savedType;
+  
+  // 恢复 RTSP 设置
+  if (sourceStore.rtspSettings) {
+    rtspSettings.value = { ...rtspSettings.value, ...sourceStore.rtspSettings };
+  }
   
   // 恢复摄像头设置
   if (sourceStore.cameraSettings) {

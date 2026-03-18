@@ -1810,7 +1810,9 @@ const syncProjectConfig = async () => {
     sequence_order: proj.sequence_order || proj.pipeline_config?.sequence_order || [],
     detection_steps: proj.detection_steps || proj.pipeline_config?.detection_steps || [],
     custom_conditions: proj.custom_conditions || proj.pipeline_config?.custom_conditions || [],
-    custom_based_on: proj.custom_based_on || proj.pipeline_config?.custom_based_on || 'sequential'
+    custom_based_on: proj.custom_based_on || proj.pipeline_config?.custom_based_on || 'sequential',
+    settlement_mode: proj.settlement_mode || proj.pipeline_config?.settlement_mode || 'first_step',
+    idle_timeout_seconds: proj.idle_timeout_seconds ?? proj.pipeline_config?.idle_timeout_seconds ?? 0
   };
   await setProjectConfig({
     project_id: proj.id,

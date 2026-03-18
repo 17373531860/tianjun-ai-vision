@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 
 export const useSourceStore = defineStore('source', {
   state: () => ({
-    // 输入源类型: 'camera' | 'video' | 'image' | 'hikvision'
+    // 输入源类型: 'camera' | 'video' | 'image' | 'hikvision' | 'rtsp'
     sourceType: 'camera',
     // 摄像头设置
     cameraSettings: {
@@ -16,14 +16,19 @@ export const useSourceStore = defineStore('source', {
       resolution: '1280x720',
       fps: 60
     },
+    // RTSP 网络视频流设置
+    rtspSettings: {
+      url: '',
+      fps: 25
+    },
     // 视频设置
     videoPath: null,
-    videoSpeed: 1,  // 视频倍速
-    videoSyncMode: false,  // 同步模式：按检测速度播放，确保每帧都被检测
-    videoFileName: null,  // 视频文件名（用于显示）
+    videoSpeed: 1,
+    videoSyncMode: false,
+    videoFileName: null,
     // 图片文件路径
     imagePath: null,
-    imageFileName: null,  // 图片文件名
+    imageFileName: null,
     // 是否正在运行
     isStreaming: false,
     // 流 URL
@@ -38,6 +43,9 @@ export const useSourceStore = defineStore('source', {
     },
     setHikvisionSettings(settings) {
       this.hikvisionSettings = { ...this.hikvisionSettings, ...settings };
+    },
+    setRtspSettings(settings) {
+      this.rtspSettings = { ...this.rtspSettings, ...settings };
     },
     setVideoPath(path) {
       this.videoPath = path;
@@ -69,6 +77,7 @@ export const useSourceStore = defineStore('source', {
         sourceType: this.sourceType,
         cameraSettings: this.cameraSettings,
         hikvisionSettings: this.hikvisionSettings,
+        rtspSettings: this.rtspSettings,
         videoPath: this.videoPath,
         videoSpeed: this.videoSpeed,
         videoSyncMode: this.videoSyncMode,
@@ -90,6 +99,9 @@ export const useSourceStore = defineStore('source', {
           }
           if (config.hikvisionSettings) {
             this.hikvisionSettings = { ...this.hikvisionSettings, ...config.hikvisionSettings };
+          }
+          if (config.rtspSettings) {
+            this.rtspSettings = { ...this.rtspSettings, ...config.rtspSettings };
           }
           this.videoPath = config.videoPath || null;
           this.videoSpeed = config.videoSpeed || 1;

@@ -1104,7 +1104,7 @@ def export_csv(
                                 cycle.cycle_number,
                                 config_order,
                                 step.step_name or step.step_label,
-                                step.start_time.strftime("%H:%M:%S")
+                                step.start_time.strftime("%Y-%m-%d %H:%M:%S")
                             ]
                             if export_opts['step_duration']:
                                 row.append(f"{step.duration:.2f}" if step.duration else "")
@@ -1160,8 +1160,8 @@ def export_csv(
                     row = [
                         config_order,
                         step.step_name or step.step_label,
-                        step.start_time.strftime("%H:%M:%S"),
-                        step.end_time.strftime("%H:%M:%S") if step.end_time else ""
+                        step.start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                        step.end_time.strftime("%Y-%m-%d %H:%M:%S") if step.end_time else ""
                     ]
                     if export_opts['step_duration']:
                         row.append(f"{step.duration:.2f}" if step.duration else "")
@@ -1260,7 +1260,7 @@ def export_csv(
                     for cycle in cycles:
                         row = [
                             cycle.cycle_number,
-                            cycle.start_time.strftime("%H:%M:%S")
+                            cycle.start_time.strftime("%Y-%m-%d %H:%M:%S")
                         ]
                         if export_opts['cycle_duration']:
                             row.append(f"{cycle.duration:.2f}" if cycle.duration else "")
@@ -1300,7 +1300,7 @@ def export_csv(
                                     cycle.cycle_number,
                                     config_order,
                                     step.step_name or step.step_label,
-                                    step.start_time.strftime("%H:%M:%S") if step.start_time else ""
+                                    step.start_time.strftime("%Y-%m-%d %H:%M:%S") if step.start_time else ""
                                 ]
                                 if export_opts['step_duration']:
                                     row.append(f"{step.duration:.2f}" if step.duration else "")
