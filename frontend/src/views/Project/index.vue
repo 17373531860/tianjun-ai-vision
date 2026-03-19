@@ -183,7 +183,7 @@
                       <el-icon :size="24"><Cpu /></el-icon>
                     </div>
                     <div>
-                      <p class="text-white font-bold">{{ activeProject.model_name || '未配置模型' }}</p>
+                      <p class="text-white font-bold">{{ activeProject.model_name || '未配置模型' }}<span v-if="activeProject.model_version" class="text-gray-400 font-normal ml-2">v{{ activeProject.model_version }}</span></p>
                       <p class="text-xs text-gray-500">Labels: {{ (activeProject.steps_config || []).length }} 个类别已识别</p>
                       <div class="mt-2 flex gap-2 flex-wrap">
                         <el-tag v-for="tag in (activeProject.steps_config || []).slice(0, 5)" :key="tag.label" size="small" type="info">{{ tag.displayLabel || tag.label }}</el-tag>
@@ -929,7 +929,7 @@
           @click="selectModel(model)"
           class="p-3 bg-slate-800 rounded cursor-pointer hover:bg-slate-700 flex justify-between items-center">
           <div>
-            <p class="font-bold">{{ model.name }}</p>
+            <p class="font-bold">{{ model.name }}<span v-if="model.version" class="text-gray-400 font-normal ml-2">v{{ model.version }}</span></p>
             <p class="text-xs text-gray-400">{{ model.framework }} - {{ (model.file_size / 1024 / 1024).toFixed(2) }} MB - {{ getLabelsCount(model.labels) }} 个类别</p>
           </div>
           <el-tag v-if="activeProject?.default_model_id === model.id" type="success">当前</el-tag>
@@ -1632,6 +1632,7 @@ const handleDeleteProject = async () => {
 const selectModel = (model) => {
   activeProject.value.default_model_id = model.id;
   activeProject.value.model_name = model.name;
+  activeProject.value.model_version = model.version || '';
   
   let labels = [];
   if (model.labels) {

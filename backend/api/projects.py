@@ -20,10 +20,12 @@ def get_projects(
     items = []
     for p in projects:
         model_name = None
+        model_version = None
         if p.default_model_id:
             model = db.query(Model).filter(Model.id == p.default_model_id).first()
             if model:
                 model_name = model.name
+                model_version = model.version
         
         items.append(ProjectResponse(
             id=p.id,
@@ -41,7 +43,8 @@ def get_projects(
             is_active=p.is_active,
             created_at=p.created_at,
             updated_at=p.updated_at,
-            model_name=model_name
+            model_name=model_name,
+            model_version=model_version
         ))
     
     return ProjectListResponse(total=total, items=items)
@@ -54,10 +57,12 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Project not found")
     
     model_name = None
+    model_version = None
     if project.default_model_id:
         model = db.query(Model).filter(Model.id == project.default_model_id).first()
         if model:
             model_name = model.name
+            model_version = model.version
     
     return ProjectResponse(
         id=project.id,
@@ -75,12 +80,17 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
         is_active=project.is_active,
         created_at=project.created_at,
         updated_at=project.updated_at,
-        model_name=model_name
+        model_name=model_name,
+        model_version=model_version
     )
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
     """创建新项目"""
+    existing = db.query(Project).filter(Project.name == project.name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"项目名称 '{project.name}' 已存在")
+
     db_project = Project(
         name=project.name,
         task_type=project.task_type,
@@ -124,6 +134,13 @@ def update_project(project_id: int, project: ProjectUpdate, db: Session = Depend
         raise HTTPException(status_code=404, detail="Project not found")
     
     update_data = project.model_dump(exclude_unset=True)
+    if 'name' in update_data:
+        existing = db.query(Project).filter(
+            Project.name == update_data['name'],
+            Project.id != project_id
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail=f"项目名称 '{update_data['name']}' 已存在")
     for key, value in update_data.items():
         setattr(db_project, key, value)
     
@@ -131,10 +148,12 @@ def update_project(project_id: int, project: ProjectUpdate, db: Session = Depend
     db.refresh(db_project)
     
     model_name = None
+    model_version = None
     if db_project.default_model_id:
         model = db.query(Model).filter(Model.id == db_project.default_model_id).first()
         if model:
             model_name = model.name
+            model_version = model.version
     
     return ProjectResponse(
         id=db_project.id,
@@ -150,7 +169,8 @@ def update_project(project_id: int, project: ProjectUpdate, db: Session = Depend
         is_active=db_project.is_active,
         created_at=db_project.created_at,
         updated_at=db_project.updated_at,
-        model_name=model_name
+        model_name=model_name,
+        model_version=model_version
     )
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -205,10 +225,12 @@ def get_active_project(db: Session = Depends(get_db)):
         return None
     
     model_name = None
+    model_version = None
     if project.default_model_id:
         model = db.query(Model).filter(Model.id == project.default_model_id).first()
         if model:
             model_name = model.name
+            model_version = model.version
     
     return ProjectResponse(
         id=project.id,
@@ -226,5 +248,6 @@ def get_active_project(db: Session = Depends(get_db)):
         is_active=project.is_active,
         created_at=project.created_at,
         updated_at=project.updated_at,
-        model_name=model_name
+        model_name=model_name,
+        model_version=model_version
     )

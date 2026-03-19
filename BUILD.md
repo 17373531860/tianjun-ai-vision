@@ -10,11 +10,11 @@
 - **操作系统**: Windows 10/11 64位
 - **Node.js**: 18.x 或更高版本
 - **Python**: Anaconda/Miniconda (conda 环境名: `tianjun`)
-- **NVIDIA 驱动**: 525 或更高版本（用于 GPU 测试）
+- **NVIDIA 驱动**: 560 或更高版本（用于 GPU 测试）
 
 ### 用户环境（安装后）
 - **操作系统**: Windows 10/11 64位
-- **NVIDIA 驱动**: 525 或更高版本
+- **NVIDIA 驱动**: 560 或更高版本（RTX 5050 等 Blackwell 架构需要 570+）
 - **存储空间**: 约 6GB
 
 ## 构建步骤
@@ -96,7 +96,7 @@ A: 请先运行 `scripts\pack-python-env.bat` 打包 Python 环境。
 
 ### Q: 安装后无法启动 GPU
 
-A: 请确保已安装 NVIDIA 驱动 525 或更高版本。可以在 NVIDIA 官网下载最新驱动。
+A: 请确保已安装 NVIDIA 驱动 560 或更高版本（RTX 5050 需要 570+）。可以在 NVIDIA 官网下载最新驱动。
 
 ### Q: 应用启动很慢
 
@@ -128,5 +128,5 @@ npm start
 
 - **前端**: Vue.js 3 + Vite + Element Plus
 - **后端**: FastAPI + SQLAlchemy + OpenCV
-- **AI**: YOLO (ultralytics) + PyTorch + CUDA 12.1
+- **AI**: YOLO (ultralytics 8.4+) + PyTorch 2.10+ + CUDA 12.6
 - **桌面**: Electron 28 + electron-builder

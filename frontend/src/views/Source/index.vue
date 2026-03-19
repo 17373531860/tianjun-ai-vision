@@ -13,8 +13,8 @@
       <div class="flex items-center gap-4">
         <el-radio-group v-model="workstationMode" @change="handleWorkstationModeChange" size="large">
           <el-radio-button :value="1">单工位</el-radio-button>
-          <el-radio-button :value="2">双工位 (一拖二)</el-radio-button>
-          <el-radio-button :value="4">四工位 (一拖四)</el-radio-button>
+          <el-radio-button :value="2">双工位</el-radio-button>
+          <el-radio-button :value="4">四工位</el-radio-button>
         </el-radio-group>
         <span class="text-xs text-gray-400">{{ workstationMode > 1 ? `同时运行 ${workstationMode} 个独立检测通道` : '单摄像头标准模式' }}</span>
       </div>
@@ -468,6 +468,8 @@ const handleWorkstationModeChange = async (count) => {
 const saveAndStartMulti = async () => {
   saving.value = true;
   try {
+    await setWorkstationMode(workstationMode.value);
+
     for (let ch = 0; ch < workstationMode.value; ch++) {
       const cfg = wsConfigs[ch];
       if (!wsConfigured(ch)) continue;
@@ -531,7 +533,9 @@ const saveAndStartMulti = async () => {
     ElMessage.success('所有工位已启动，正在跳转...');
     setTimeout(() => router.push('/monitor'), 500);
   } catch (e) {
-    ElMessage.error('启动失败: ' + (e.message || ''));
+    const detail = e.response?.data?.detail || e.message || '未知错误';
+    ElMessage.error('启动失败: ' + detail);
+    console.error('[saveAndStartMulti] 错误详情:', detail, e);
   } finally {
     saving.value = false;
   }

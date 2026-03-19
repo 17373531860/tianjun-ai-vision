@@ -1,9 +1,10 @@
 <template>
   <!-- ===== DUAL WORKSTATION MODE (2 channels) ===== -->
   <div v-if="channelCount === 2" class="grid grid-cols-2 gap-2 h-[calc(100vh-7.25rem)] p-2 relative">
-    <div v-for="ch in 2" :key="ch - 1" class="flex flex-col gap-1.5 min-h-0 overflow-hidden">
-      <!-- Video panel -->
-      <div class="relative bg-black border-2 rounded-lg overflow-hidden flex-1 min-h-0"
+    <div v-for="ch in 2" :key="ch - 1" class="flex flex-col gap-1.5 min-h-0 overflow-hidden relative">
+      <!-- Video panel (70% height) -->
+      <div class="relative bg-black border-2 rounded-lg overflow-hidden min-h-0"
+        style="flex: 7 1 0%;"
         :class="selectedChannel === (ch - 1) ? 'border-cyan-500' : 'border-slate-700'"
         @click="selectedChannel = ch - 1">
         <canvas :ref="el => { if (el) multiVideoCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full"></canvas>
@@ -23,79 +24,63 @@
           <span class="ml-auto text-gray-400">FPS: {{ multiChannelData[ch - 1]?.fps ?? 0 }}</span>
         </div>
       </div>
-      <!-- SOP mini strip -->
-      <div class="h-20 bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col flex-shrink-0">
-        <div class="bg-slate-800 px-2 py-0.5 text-cyan-400 text-xs font-bold border-b border-slate-700 flex items-center justify-between">
-          <span>SOP</span>
-          <span class="text-[10px] text-gray-400">CT: {{ getDisplayCT(multiChannelData[ch - 1]) }}</span>
-        </div>
-        <div class="flex-1 flex items-center gap-1 px-1.5 overflow-x-auto">
-          <div v-for="(step, idx) in (multiChannelData[ch - 1]?.steps || [])" :key="idx"
-            class="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold border"
-            :class="step.status === 'completed' ? 'border-green-500 bg-green-900/30 text-green-300' : step.status === 'active' ? 'border-cyan-500 bg-cyan-900/30 text-cyan-300 animate-pulse' : 'border-slate-600 bg-slate-800 text-gray-500'">
-            {{ step.name }}
+      <!-- Row 1: Counters (scrollable) + Yield Rate -->
+      <div class="flex gap-2 flex-shrink-0">
+        <div class="flex-1 flex gap-2 overflow-x-auto min-w-0">
+          <div class="flex-shrink-0 bg-slate-900 border border-slate-700 rounded px-4 py-2 text-center min-w-[90px]">
+            <div class="text-xs text-gray-400">总产量</div>
+            <div class="text-2xl font-bold font-mono text-white">{{ multiChannelData[ch - 1]?.total ?? 0 }}</div>
           </div>
-          <div v-if="!multiChannelData[ch - 1]?.steps?.length" class="text-gray-600 text-[10px] w-full text-center">等待检测</div>
+          <div class="flex-shrink-0 bg-slate-900 border border-slate-700 rounded px-4 py-2 text-center min-w-[90px]">
+            <div class="text-xs text-gray-400">合格</div>
+            <div class="text-2xl font-bold font-mono text-green-400">{{ multiChannelData[ch - 1]?.ok ?? 0 }}</div>
+          </div>
+          <div class="flex-shrink-0 bg-slate-900 border border-slate-700 rounded px-4 py-2 text-center min-w-[90px]">
+            <div class="text-xs text-gray-400">不良</div>
+            <div class="text-2xl font-bold font-mono text-red-400">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</div>
+          </div>
+        </div>
+        <div class="flex-shrink-0 w-32 bg-slate-900 border border-slate-700 rounded px-3 py-2 flex flex-col items-center justify-center">
+          <div class="text-xs text-gray-400">合格率</div>
+          <div class="text-2xl font-bold font-mono" :class="(multiChannelData[ch - 1]?.yieldRate ?? 0) >= 90 ? 'text-green-400' : (multiChannelData[ch - 1]?.yieldRate ?? 0) >= 70 ? 'text-yellow-400' : 'text-red-400'">
+            {{ multiChannelData[ch - 1]?.yieldRate ?? 0 }}%
+          </div>
         </div>
       </div>
-      <!-- Data panel: counters + charts + table -->
-      <div class="h-48 grid grid-cols-2 gap-1.5 flex-shrink-0">
-        <!-- Left: counters + step table -->
-        <div class="flex flex-col gap-1.5 min-h-0">
-          <div class="grid grid-cols-3 gap-1 flex-shrink-0">
-            <div class="bg-slate-900 border border-slate-700 rounded p-1 text-center">
-              <div class="text-[10px] text-gray-400">总产量</div>
-              <div class="text-lg font-bold font-mono text-white">{{ multiChannelData[ch - 1]?.total ?? 0 }}</div>
-            </div>
-            <div class="bg-slate-900 border border-slate-700 rounded p-1 text-center">
-              <div class="text-[10px] text-gray-400">合格</div>
-              <div class="text-lg font-bold font-mono text-green-400">{{ multiChannelData[ch - 1]?.ok ?? 0 }}</div>
-            </div>
-            <div class="bg-slate-900 border border-slate-700 rounded p-1 text-center">
-              <div class="text-[10px] text-gray-400">不良</div>
-              <div class="text-lg font-bold font-mono text-red-400">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</div>
-            </div>
+      <!-- Row 2: SOP (left, with image cards, scrollable) + Step Stats (right) -->
+      <div class="flex gap-2 min-h-0" style="flex: 3 1 0%;">
+        <div class="w-[60%] bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col min-w-0">
+          <div class="bg-slate-800 px-3 py-1 text-cyan-400 text-sm font-bold border-b border-slate-700 flex items-center justify-between flex-shrink-0">
+            <span>SOP</span>
+            <span class="text-xs text-gray-400">CT: {{ getDisplayCT(multiChannelData[ch - 1]) }}</span>
           </div>
-          <div class="flex-1 bg-slate-900 border border-slate-700 rounded overflow-auto min-h-0">
-            <table class="w-full text-[10px]">
-              <thead class="bg-slate-800 text-gray-400 sticky top-0"><tr><th class="px-1 py-0.5">步骤</th><th class="px-1 py-0.5">状态</th></tr></thead>
-              <tbody class="text-gray-300 divide-y divide-slate-800">
-                <tr v-for="(row, i) in (multiChannelData[ch - 1]?.tableData || []).slice(0, 6)" :key="i" :class="row.status === 'completed' ? 'bg-green-900/20' : ''">
-                  <td class="px-1 py-0.5 truncate max-w-[80px]">{{ row.step }}</td>
-                  <td class="px-1 py-0.5"><span :class="row.status === 'completed' ? 'text-green-400' : 'text-gray-500'">{{ row.status === 'completed' ? 'OK' : '--' }}</span></td>
-                </tr>
-              </tbody>
-            </table>
+          <div class="flex-1 flex items-stretch gap-2 px-2 py-1 overflow-x-auto min-h-0">
+            <div v-for="(step, idx) in (multiChannelData[ch - 1]?.steps || [])" :key="idx"
+              class="flex-shrink-0 w-28 flex flex-col rounded border overflow-hidden"
+              :class="step.status === 'completed' ? 'border-green-500 bg-green-900/30' : step.status === 'active' ? 'border-cyan-500 bg-cyan-900/30' : 'border-slate-600 bg-slate-800'">
+              <div class="px-1.5 py-0.5 text-xs font-bold truncate text-center flex-shrink-0"
+                :class="step.status === 'completed' ? 'text-green-300 bg-green-900/50' : step.status === 'active' ? 'text-cyan-300 bg-cyan-900/50 animate-pulse' : 'text-gray-500 bg-slate-700/50'">
+                {{ step.name }}
+              </div>
+              <div class="flex-1 flex items-center justify-center relative overflow-hidden bg-slate-950/50">
+                <img v-if="step.screenshot" :src="step.screenshot" class="w-full h-full object-cover" />
+                <el-icon v-else :size="24" class="text-slate-600"><Picture /></el-icon>
+                <div v-if="step.status === 'active'" class="absolute inset-0 border-2 border-cyan-500 animate-pulse"></div>
+              </div>
+            </div>
+            <div v-if="!multiChannelData[ch - 1]?.steps?.length" class="text-gray-600 text-sm w-full text-center self-center">等待检测</div>
           </div>
         </div>
-        <!-- Right: charts area -->
-        <div class="flex flex-col gap-1.5 min-h-0">
-          <!-- Yield rate + pie -->
-          <div class="flex-1 bg-slate-900 border border-slate-700 rounded p-1 flex items-center justify-center min-h-0">
-            <div class="text-center">
-              <div class="text-[10px] text-gray-400 mb-0.5">合格率</div>
-              <div class="text-2xl font-bold font-mono" :class="(multiChannelData[ch - 1]?.yieldRate ?? 0) >= 90 ? 'text-green-400' : (multiChannelData[ch - 1]?.yieldRate ?? 0) >= 70 ? 'text-yellow-400' : 'text-red-400'">
-                {{ multiChannelData[ch - 1]?.yieldRate ?? 0 }}%
-              </div>
-              <div class="w-full bg-slate-700 rounded-full h-1.5 mt-1">
-                <div class="h-1.5 rounded-full transition-all" :class="(multiChannelData[ch - 1]?.yieldRate ?? 0) >= 90 ? 'bg-green-500' : (multiChannelData[ch - 1]?.yieldRate ?? 0) >= 70 ? 'bg-yellow-500' : 'bg-red-500'"
-                  :style="{ width: (multiChannelData[ch - 1]?.yieldRate ?? 0) + '%' }"></div>
-              </div>
-            </div>
-          </div>
-          <!-- NG top 3 -->
-          <div class="flex-1 bg-slate-900 border border-slate-700 rounded p-1 flex flex-col min-h-0">
-            <div class="text-[10px] text-cyan-400 font-bold mb-0.5">NG TOP3</div>
-            <div class="flex-1 overflow-auto space-y-0.5">
-              <div v-for="(item, idx) in (multiChannelData[ch - 1]?.ngStepRanking || [])" :key="item.step"
-                class="flex items-center gap-1 text-[10px] bg-slate-800/50 px-1 py-0.5 rounded">
-                <span class="text-white font-bold w-3">{{ idx + 1 }}</span>
-                <span class="flex-1 text-gray-300 truncate">{{ item.step }}</span>
-                <span class="text-white font-bold">{{ item.rate.toFixed(0) }}%</span>
-              </div>
-              <div v-if="!multiChannelData[ch - 1]?.ngStepRanking?.length" class="text-gray-600 text-[10px] text-center">暂无</div>
-            </div>
-          </div>
+        <div class="w-[40%] bg-slate-900 border border-slate-700 rounded overflow-auto min-w-0">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-800 text-gray-400 sticky top-0"><tr><th class="px-1.5 py-1 text-left">步骤</th><th class="px-1.5 py-1 text-left">状态</th></tr></thead>
+            <tbody class="text-gray-300 divide-y divide-slate-800">
+              <tr v-for="(row, i) in (multiChannelData[ch - 1]?.tableData || []).slice(0, 8)" :key="i" :class="row.status === 'completed' ? 'bg-green-900/20' : ''">
+                <td class="px-1.5 py-0.5 truncate max-w-[100px]">{{ row.step }}</td>
+                <td class="px-1.5 py-0.5"><span :class="row.status === 'completed' ? 'text-green-400' : 'text-gray-500'">{{ row.status === 'completed' ? 'OK' : '--' }}</span></td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
       <!-- Controls -->
@@ -107,22 +92,22 @@
         <button @click="standbyForChannel(ch - 1)" :disabled="!multiChannelData[ch - 1]?.isDetecting"
           class="flex-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">待机</button>
       </div>
-    </div>
-    <!-- Event toasts -->
-    <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
-      <div class="fixed z-50 pointer-events-none flex flex-col gap-2" :class="getPositionClass(position)">
-        <transition-group name="toast">
-          <div v-for="toast in activeToasts.filter(t => t.position === position)" :key="toast.id"
-            class="px-6 py-4 rounded-xl shadow-2xl text-white font-bold pointer-events-auto transform transition-all duration-300 text-center"
-            :style="{ backgroundColor: toast.color, fontSize: toast.fontSize + 'px' }">
-            <div class="flex items-center gap-3 justify-center">
-              <el-icon :size="24"><component :is="toast.icon" /></el-icon>
-              <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
+      <!-- Per-workstation event toasts -->
+      <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
+        <div class="absolute z-50 pointer-events-none flex flex-col gap-2" :class="getMultiPositionClass(position)">
+          <transition-group name="toast">
+            <div v-for="toast in (multiActiveToasts[ch - 1] || []).filter(t => t.position === position)" :key="toast.id"
+              class="px-4 py-3 rounded-xl shadow-2xl text-white font-bold pointer-events-auto transform transition-all duration-300 text-center"
+              :style="{ backgroundColor: toast.color, fontSize: toast.fontSize + 'px' }">
+              <div class="flex items-center gap-2 justify-center">
+                <el-icon :size="20"><component :is="toast.icon" /></el-icon>
+                <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
+              </div>
             </div>
-          </div>
-        </transition-group>
-      </div>
-    </template>
+          </transition-group>
+        </div>
+      </template>
+    </div>
   </div>
 
   <!-- ===== QUAD WORKSTATION MODE (4 channels) ===== -->
@@ -149,6 +134,20 @@
           <span class="text-white font-mono">NG:<span class="text-red-400 font-bold">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</span></span>
           <span class="ml-auto text-gray-400">FPS:{{ multiChannelData[ch - 1]?.fps ?? 0 }}</span>
         </div>
+        <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
+          <div class="absolute z-50 pointer-events-none flex flex-col gap-1" :class="getMultiPositionClass(position)">
+            <transition-group name="toast">
+              <div v-for="toast in (multiActiveToasts[ch - 1] || []).filter(t => t.position === position)" :key="toast.id"
+                class="px-3 py-2 rounded-lg shadow-2xl text-white font-bold pointer-events-auto text-center text-xs"
+                :style="{ backgroundColor: toast.color }">
+                <div class="flex items-center gap-1 justify-center">
+                  <el-icon :size="14"><component :is="toast.icon" /></el-icon>
+                  <span>{{ toast.title }}</span>
+                </div>
+              </div>
+            </transition-group>
+          </div>
+        </template>
       </div>
     </div>
     <!-- Selected channel detail panel -->
@@ -224,21 +223,6 @@
         </div>
       </div>
     </div>
-    <!-- Event toasts -->
-    <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
-      <div class="fixed z-50 pointer-events-none flex flex-col gap-2" :class="getPositionClass(position)">
-        <transition-group name="toast">
-          <div v-for="toast in activeToasts.filter(t => t.position === position)" :key="toast.id"
-            class="px-6 py-4 rounded-xl shadow-2xl text-white font-bold pointer-events-auto transform transition-all duration-300 text-center"
-            :style="{ backgroundColor: toast.color, fontSize: toast.fontSize + 'px' }">
-            <div class="flex items-center gap-3 justify-center">
-              <el-icon :size="24"><component :is="toast.icon" /></el-icon>
-              <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
-            </div>
-          </div>
-        </transition-group>
-      </div>
-    </template>
   </div>
 
   <!-- ===== SINGLE-VIEW MODE (original layout) ===== -->
@@ -701,6 +685,8 @@ const selectedChannel = ref(0);
 const multiCanvasRefs = {};
 const multiChannelData = ref({});
 let multiPollingTimer = null;
+const multiActiveToasts = ref({});
+const multiShownEventIds = ref({});
 
 const initMultiChannelData = (count) => {
   for (let i = 0; i < count; i++) {
@@ -898,16 +884,37 @@ const startMultiPolling = () => {
 
         if (d.detections) {
           const stepsConf = currentProject.value?.steps_config || [];
+          const screenshots = d.step_screenshots || {};
           const sopSteps = stepsConf.filter(s => s.enabled !== false && !s.is_backup).map(s => {
             const inCycle = chData.currentCycleSteps.includes(s.label);
             const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
+            const rawB64 = screenshots[s.label];
             return {
               name: s.displayLabel || s.label,
               label: s.label,
               status: inCycle || coveredByBackup ? 'completed' : 'pending',
+              screenshot: rawB64 ? `data:image/jpeg;base64,${rawB64}` : null,
             };
           });
           chData.steps = sopSteps;
+        }
+
+        const events = d.recent_events || [];
+        if (events.length > 0) {
+          if (!multiShownEventIds.value[ch]) multiShownEventIds.value[ch] = new Set();
+          const shown = multiShownEventIds.value[ch];
+          events.forEach(event => {
+            const eventKey = `${event.event_id}_${Math.floor(event.timestamp)}`;
+            if (!shown.has(eventKey) && event.show_notification) {
+              shown.add(eventKey);
+              const toastId = event.toast_id || (event.event_id === 1 ? 'ok' : event.event_id === 2 ? 'ng' : 'ok');
+              showMultiToast(ch, toastId, event.event_name, event.reason);
+            }
+          });
+          if (shown.size > 500) {
+            const arr = [...shown];
+            multiShownEventIds.value[ch] = new Set(arr.slice(-200));
+          }
         }
 
         multiChannelData.value[ch] = { ...chData };
@@ -1306,6 +1313,58 @@ const showToast = (type, title, subtitle = '') => {
     const idx = activeToasts.value.findIndex(t => t.id === toast.id);
     if (idx > -1) {
       activeToasts.value.splice(idx, 1);
+    }
+  }, config.duration * 1000);
+};
+
+const getMultiPositionClass = (position) => {
+  switch (position) {
+    case 'top-right': return 'top-2 right-2';
+    case 'top-left': return 'top-2 left-2';
+    case 'bottom-right': return 'bottom-2 right-2';
+    case 'bottom-left': return 'bottom-2 left-2';
+    case 'center': return 'top-2 left-1/2 -translate-x-1/2';
+    default: return 'top-2 right-2';
+  }
+};
+
+const showMultiToast = (ch, toastId, eventName, reason = '') => {
+  const config = getToastConfig(toastId);
+  const icons = { ok: CircleCheck, ng: CircleClose, custom: Warning };
+
+  let subtitle = config.subText || '';
+  if (toastId === 'ng' && reason && systemStore.detection.showNgReason) {
+    subtitle = reason;
+  }
+
+  const toast = {
+    id: ++toastIdCounter,
+    toastId,
+    title: config.text || eventName,
+    subtitle,
+    color: config.color,
+    fontSize: config.fontSize,
+    position: config.position,
+    icon: toastId === 'ok' ? icons.ok : (toastId === 'ng' ? icons.ng : icons.custom)
+  };
+
+  if (!multiActiveToasts.value[ch]) multiActiveToasts.value[ch] = [];
+  multiActiveToasts.value[ch].push(toast);
+
+  if (toastId === 'ok') {
+    speak('合格');
+  } else if (toastId === 'ng') {
+    const showReason = systemStore.detection.showNgReason && reason;
+    speak(showReason ? `不合格，${reason}` : '不合格');
+  } else {
+    speak(config.text || eventName || '事件触发');
+  }
+
+  setTimeout(() => {
+    const arr = multiActiveToasts.value[ch];
+    if (arr) {
+      const idx = arr.findIndex(t => t.id === toast.id);
+      if (idx > -1) arr.splice(idx, 1);
     }
   }, config.duration * 1000);
 };
@@ -2472,8 +2531,10 @@ onMounted(() => {
     }
 
     if (res.data.is_running) {
-      startPolling();
-      forceReconnectStream();
+      if (channelCount.value <= 1) {
+        startPolling();
+        forceReconnectStream();
+      }
       return;
     }
 

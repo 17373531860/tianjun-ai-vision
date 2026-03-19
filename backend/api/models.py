@@ -113,7 +113,14 @@ async def upload_model(
     db: Session = Depends(get_db)
 ):
     """上传模型文件"""
-    # 验证文件扩展名
+    existing = db.query(Model).filter(
+        Model.name == name,
+        Model.version == (version or None)
+    ).first()
+    if existing:
+        v = version or '未填写'
+        raise HTTPException(status_code=400, detail=f"模型 '{name}' 版本 '{v}' 已存在，请使用不同的版本号")
+
     ext = get_file_extension(file.filename)
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -193,6 +200,18 @@ def update_model(model_id: int, model: ModelUpdate, db: Session = Depends(get_db
         raise HTTPException(status_code=404, detail="Model not found")
     
     update_data = model.model_dump(exclude_unset=True)
+    new_name = update_data.get('name', db_model.name)
+    new_version = update_data.get('version', db_model.version)
+    if 'name' in update_data or 'version' in update_data:
+        existing = db.query(Model).filter(
+            Model.name == new_name,
+            Model.version == new_version,
+            Model.id != model_id
+        ).first()
+        if existing:
+            v = new_version or '未填写'
+            raise HTTPException(status_code=400, detail=f"模型 '{new_name}' 版本 '{v}' 已存在")
+
     for key, value in update_data.items():
         setattr(db_model, key, value)
     

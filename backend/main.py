@@ -388,6 +388,15 @@ if os.path.exists(settings.UPLOAD_DIR):
 if os.path.exists(settings.RECORDING_DIR):
     app.mount("/recordings", StaticFiles(directory=settings.RECORDING_DIR), name="recordings")
 
+# ========== 应用热补丁 (如果存在) ==========
+try:
+    from backend import hotfix
+    hotfix.apply(app)
+except ImportError:
+    pass
+except Exception as _hf_err:
+    print(f"[Hotfix] 加载失败: {_hf_err}")
+
 @app.get("/")
 def root():
     return {

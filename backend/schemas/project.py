@@ -38,6 +38,7 @@ class ProjectResponse(ProjectBase):
     created_at: datetime
     updated_at: datetime
     model_name: Optional[str] = None
+    model_version: Optional[str] = None
 
     class Config:
         from_attributes = True

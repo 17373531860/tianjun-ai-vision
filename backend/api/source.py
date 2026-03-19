@@ -2891,10 +2891,12 @@ class VideoSourceManager:
     def _generate_custom_tracker_yaml(self, pipeline_config: dict):
         """Generate a custom bytetrack.yaml with track_buffer synced to max_lost_seconds."""
         import tempfile, os
-        max_lost_sec = 5.0
+        max_lost_sec = 0.0
         for step in self.project_config.get('steps_config', []):
             if step.get('enabled', True) and step.get('tracking_max_lost_seconds') is not None:
                 max_lost_sec = max(max_lost_sec, step['tracking_max_lost_seconds'])
+        if max_lost_sec <= 0:
+            max_lost_sec = 5.0
         fps = max(self.fps_actual, 10)
         track_buffer = max(30, int(max_lost_sec * fps))
         yaml_content = (
@@ -3075,7 +3077,7 @@ class VideoSourceManager:
                 if step.get('tracking_position_lock'):
                     per_class_position_lock[lbl] = True
         
-        max_lost_sec = max(5.0, *per_class_lost_sec.values()) if per_class_lost_sec else 5.0
+        max_lost_sec = max(per_class_lost_sec.values()) if per_class_lost_sec else 5.0
         
         seen_track_ids = set()
         trigger_visible = False
@@ -3548,7 +3550,8 @@ class VideoSourceManager:
         
         if should_settle:
             cycle_age = current_time - (self.cycle_start_time or current_time)
-            if cycle_age < max_lost_sec:
+            min_cycle_age = max(max_lost_sec, 1.0)
+            if cycle_age < min_cycle_age:
                 should_settle = False
         
         if should_settle:
@@ -5278,20 +5281,27 @@ class VideoSourceManager:
         time.sleep(0.2)
 
         import os
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+            "rtsp_transport;tcp|analyzeduration;5000000|probesize;5000000"
+        )
 
         safe_url = url.split("@")[-1] if "@" in url else url
+        print(f"[RTSP] 正在连接: {safe_url} ...")
 
         max_retries = 3
         for attempt in range(max_retries):
+            print(f"[RTSP] 尝试 {attempt + 1}/{max_retries} ...")
             self.capture = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
             if self.capture.isOpened():
                 break
+            if self.capture:
+                self.capture.release()
+                self.capture = None
             if attempt < max_retries - 1:
-                print(f"[RTSP] 连接失败，重试 {attempt + 2}/{max_retries}... ({safe_url})")
-                time.sleep(2.0)
+                print(f"[RTSP] 连接失败，{3}秒后重试 ...")
+                time.sleep(3.0)
 
-        if not self.capture.isOpened():
+        if self.capture is None or not self.capture.isOpened():
             raise Exception(f"无法连接 RTSP 流: {safe_url}，请检查地址/用户名/密码/网络连通性")
 
         self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -6685,6 +6695,7 @@ def _get_mgr(channel: int = 0):
     try:
         return channel_manager.get(channel)
     except ValueError as e:
+        print(f"[API] _get_mgr 失败: {e}")
         raise HTTPException(status_code=404, detail=str(e))
 
 
@@ -6993,7 +7004,12 @@ def start_camera(req: CameraStartRequest, channel: int = Query(0)):
             fps=req.fps
         )
         return {"status": "success", "message": f"摄像头已启动 (ch{channel})"}
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback
+        print(f"[API] /camera/start 失败 (ch{channel}): {e}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/camera/stop")
@@ -7016,7 +7032,12 @@ def start_rtsp(req: RtspStartRequest, channel: int = Query(0)):
         mgr = _get_mgr(channel)
         mgr.start_rtsp(url=req.url, fps=req.fps)
         return {"status": "success", "message": f"RTSP 流已启动 (ch{channel})"}
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback
+        print(f"[API] /rtsp/start 失败 (ch{channel}): {e}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -7128,7 +7149,12 @@ def start_video(req: VideoStartRequest, channel: int = Query(0)):
     try:
         _get_mgr(channel).start_video(req.file_path, req.speed)
         return {"status": "success", "message": f"视频已开始播放 (ch{channel})", "speed": req.speed}
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback
+        print(f"[API] /video/start 失败 (ch{channel}): {e}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/video/stop")
@@ -7143,7 +7169,10 @@ def set_video_speed(req: VideoSpeedRequest, channel: int = Query(0)):
     try:
         _get_mgr(channel).set_video_speed(req.speed)
         return {"status": "success", "message": f"倍速已设置为 {req.speed}x", "speed": req.speed}
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"[API] /video/speed 失败 (ch{channel}): {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/video/progress")
@@ -7152,7 +7181,10 @@ def set_video_progress(req: VideoProgressRequest, channel: int = Query(0)):
     try:
         _get_mgr(channel).set_video_progress(req.progress)
         return {"status": "success", "message": f"进度已设置为 {req.progress*100:.1f}%", "progress": req.progress}
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"[API] /video/progress 失败 (ch{channel}): {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/video/info")
@@ -7190,7 +7222,12 @@ def set_image(req: ImageSetRequest, channel: int = Query(0)):
     try:
         _get_mgr(channel).set_image(req.file_path)
         return {"status": "success", "message": f"图片已设置为输入源 (ch{channel})"}
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback
+        print(f"[API] /image/set 失败 (ch{channel}): {e}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/detection/start")
@@ -7221,7 +7258,12 @@ def start_detection(req: DetectionStartRequest, channel: int = Query(0)):
                 }
         
         return {"status": "success", "message": f"检测已启动 (ch{channel})"}
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback
+        print(f"[API] /detection/start 失败 (ch{channel}): {e}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/detection/stop")
@@ -7355,17 +7397,25 @@ class ProjectConfigRequest(BaseModel):
 @router.post("/detection/set-project")
 def set_project_config(req: ProjectConfigRequest, channel: int = Query(0)):
     """设置项目配置"""
-    _get_mgr(channel).set_project_config({
-        'id': req.project_id,
-        'name': req.name,
-        'task_type': req.task_type,
-        'logic_mode': req.logic_mode,
-        'steps_config': req.steps_config,
-        'pipeline_config': req.pipeline_config,
-        'events_config': req.events_config,
-        'counters_config': req.counters_config
-    })
-    return {"status": "success", "message": f"项目配置已设置 (ch{channel})"}
+    try:
+        _get_mgr(channel).set_project_config({
+            'id': req.project_id,
+            'name': req.name,
+            'task_type': req.task_type,
+            'logic_mode': req.logic_mode,
+            'steps_config': req.steps_config,
+            'pipeline_config': req.pipeline_config,
+            'events_config': req.events_config,
+            'counters_config': req.counters_config
+        })
+        return {"status": "success", "message": f"项目配置已设置 (ch{channel})"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"[API] /detection/set-project 失败 (ch{channel}): {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/status")
 def get_source_status(channel: int = Query(0)):

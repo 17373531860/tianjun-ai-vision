@@ -199,12 +199,16 @@ class ChannelManager:
 
     def _load_config(self):
         try:
+            print(f"[ChannelManager] 配置文件路径: {_CONFIG_FILE}, 存在: {os.path.exists(_CONFIG_FILE)}")
             if os.path.exists(_CONFIG_FILE):
                 with open(_CONFIG_FILE, 'r') as f:
                     data = json.load(f)
                 count = data.get("channel_count", 1)
+                print(f"[ChannelManager] 加载配置: channel_count={count}")
                 if count in (1, 2, 4) and count != self.channel_count:
                     self.set_channel_count(count)
+            else:
+                print(f"[ChannelManager] 配置文件不存在，使用默认 channel_count=1")
         except Exception as e:
             print(f"[ChannelManager] Failed to load config: {e}")
 
