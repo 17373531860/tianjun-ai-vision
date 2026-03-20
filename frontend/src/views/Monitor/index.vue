@@ -91,6 +91,8 @@
           class="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">停止</button>
         <button @click="standbyForChannel(ch - 1)" :disabled="!multiChannelData[ch - 1]?.isDetecting"
           class="flex-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">待机</button>
+        <button @click="resetCountersForChannel(ch - 1)" :disabled="multiChannelData[ch - 1]?.isDetecting"
+          class="flex-1 bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">清零</button>
       </div>
       <!-- Per-workstation event toasts -->
       <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
@@ -162,6 +164,8 @@
             class="bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[10px] font-bold">停止</button>
           <button @click="standbyForChannel(selectedChannel)" :disabled="!multiChannelData[selectedChannel]?.isDetecting"
             class="bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[10px] font-bold">待机</button>
+          <button @click="resetCountersForChannel(selectedChannel)" :disabled="multiChannelData[selectedChannel]?.isDetecting"
+            class="bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[10px] font-bold">清零</button>
         </div>
       </div>
       <div class="flex-1 grid grid-cols-4 gap-2 p-2 min-h-0 overflow-hidden">
@@ -2403,6 +2407,27 @@ const resetCounters = async () => {
   
   updateCharts();
   ElMessage.success('计数器已清零');
+};
+
+const resetCountersForChannel = async (ch) => {
+  try {
+    await resetDetectionStats(ch);
+  } catch (e) {
+    console.error(`Ch${ch} 重置后端统计失败:`, e);
+  }
+  if (multiChannelData[ch]) {
+    multiChannelData[ch].total = 0;
+    multiChannelData[ch].ok = 0;
+    multiChannelData[ch].ng = 0;
+    multiChannelData[ch].yieldRate = 0;
+    if (multiChannelData[ch].steps) {
+      multiChannelData[ch].steps.forEach(s => { s.status = 'pending'; s.screenshot = null; });
+    }
+    if (multiChannelData[ch].tableData) {
+      multiChannelData[ch].tableData.forEach(t => { t.count = 0; t.status = 'pending'; });
+    }
+  }
+  ElMessage.success(`工位 ${ch + 1} 计数器已清零`);
 };
 
 

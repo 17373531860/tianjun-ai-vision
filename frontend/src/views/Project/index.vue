@@ -427,7 +427,17 @@
                         />
                       </td>
                       <td class="p-2">
-                        <el-switch v-model="step.strict_order" size="small" />
+                        <el-tooltip
+                          :disabled="!isSettlementStep(step)"
+                          content="结算步骤不可设置严格顺序"
+                          placement="top"
+                        >
+                          <el-switch
+                            v-model="step.strict_order"
+                            size="small"
+                            :disabled="isSettlementStep(step)"
+                          />
+                        </el-tooltip>
                       </td>
                       <td class="p-2">
                         <el-tooltip
@@ -1701,6 +1711,19 @@ const isSettlementStep = (step) => {
   }
   return false;
 };
+
+watch(() => activeProject.value?.settlement_mode, (mode) => {
+  if (!activeProject.value?.steps_config) return;
+  const seqOrder = activeProject.value?.sequence_order || [];
+  if (seqOrder.length === 0) return;
+  const settlementStepId = mode === 'last_step'
+    ? seqOrder[seqOrder.length - 1]?.step_id
+    : seqOrder[0]?.step_id;
+  const step = activeProject.value.steps_config.find(s => s.id === settlementStepId);
+  if (step && step.strict_order) {
+    step.strict_order = false;
+  }
+});
 
 const moveStepUp = (idx) => {
   if (idx <= 0) return;

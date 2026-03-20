@@ -1216,6 +1216,15 @@ class VideoSourceManager:
         self.idle_timeout_seconds = pipeline_config.get('idle_timeout_seconds', 0)
         print(f"结算模式: {self.settlement_mode}, 空闲超时: {self.idle_timeout_seconds}s")
         
+        # 结算步骤不允许有 strict_order，确保结算步骤始终能进入周期
+        if self.settlement_mode == 'last_step':
+            settle_label = self._get_last_sequence_step_label()
+        else:
+            settle_label = self._get_first_sequence_step_label()
+        if settle_label and self.step_strict_order.get(settle_label):
+            del self.step_strict_order[settle_label]
+            print(f"[{self.settlement_mode}模式] 自动移除结算步骤 [{settle_label}] 的严格顺序")
+        
         # 初始化计数器（确保默认计数器始终存在）
         self.counters = {}
         counters_config = config.get('counters_config', [])
@@ -2408,7 +2417,7 @@ class VideoSourceManager:
         
         if is_new_appearance:
             if len(self.current_cycle_steps) == 0 and is_seq_like:
-                if getattr(self, '_just_settled', False):
+                if self.settlement_mode == 'first_step' and getattr(self, '_just_settled', False):
                     first_step_label = self._get_first_sequence_step_label()
                     if first_step_label and label != first_step_label:
                         return
@@ -3895,7 +3904,8 @@ class VideoSourceManager:
                     del self.step_start_time[label]
         
         # ── 重置 / 承接下一周期 ──
-        self._just_settled = True
+        if self.settlement_mode == 'first_step':
+            self._just_settled = True
         if next_carry:
             self.current_cycle_steps = next_carry
             self.last_added_step = next_carry[-1]
@@ -4039,7 +4049,8 @@ class VideoSourceManager:
                     del self.step_start_time[label]
         
         # ── 重置 / 承接下一周期 ──
-        self._just_settled = True
+        if self.settlement_mode == 'first_step':
+            self._just_settled = True
         if next_carry:
             self.current_cycle_steps = next_carry
             self.last_added_step = next_carry[-1]
