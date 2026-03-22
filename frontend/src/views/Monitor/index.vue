@@ -391,12 +391,47 @@
       <!-- Tracking Mode Checklist Panel -->
       <div v-else-if="isTrackingMode" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
         <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0 flex justify-between items-center">
-          <span class="text-cyan-400 text-lg font-bold">物品清点</span>
-          <span v-if="trackingCycleActive" class="text-xs text-green-400 animate-pulse">跟踪中...</span>
-          <span v-else class="text-xs text-gray-500">等待</span>
+          <span class="text-cyan-400 text-lg font-bold">{{ trackingContainerMode ? '容器清点' : '物品清点' }}</span>
+          <div class="flex items-center gap-2">
+            <span v-if="trackingContainerMode && trackingSettledCount > 0" class="text-[10px] px-1.5 py-0.5 rounded"
+              :class="trackingSettledNg > 0 ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'">
+              已结算 {{ trackingSettledCount }} (OK:{{ trackingSettledOk }} NG:{{ trackingSettledNg }})
+            </span>
+            <span v-if="trackingCycleActive" class="text-xs text-green-400 animate-pulse">跟踪中...</span>
+            <span v-else class="text-xs text-gray-500">等待</span>
+          </div>
         </div>
         <div class="flex-1 p-2 overflow-x-auto">
-          <div class="flex items-stretch h-full gap-3">
+          <!-- Container mode: per-box cards -->
+          <div v-if="trackingContainerMode" class="flex items-stretch h-full gap-3">
+            <div v-for="(box, boxDid) in trackingBoxes" :key="boxDid"
+              class="flex-shrink-0 w-44 bg-slate-800 rounded-lg border p-2 flex flex-col transition-all"
+              :class="box.is_complete ? 'border-green-500/70' : 'border-amber-500/70'">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs font-bold text-white">{{ boxDid }}</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded"
+                  :class="box.is_complete ? 'bg-green-500/20 text-green-400' : 'bg-amber-500/20 text-amber-400'">
+                  {{ box.is_complete ? 'OK' : '...' }}
+                </span>
+              </div>
+              <div class="flex-1 space-y-0.5 overflow-y-auto">
+                <template v-if="trackingChecklist._boxes && trackingChecklist._boxes[boxDid]">
+                  <div v-for="(info, cls) in trackingChecklist._boxes[boxDid].items" :key="cls"
+                    class="flex items-center justify-between text-[10px] px-1 py-0.5 rounded"
+                    :class="info.counted >= info.expected && info.expected > 0 ? 'bg-green-500/10 text-green-400' : 'bg-slate-700/50 text-gray-400'">
+                    <span class="truncate">{{ info.display_name || cls }}</span>
+                    <span class="font-mono font-bold">{{ info.counted }}<span v-if="info.expected > 0" class="text-gray-500">/{{ info.expected }}</span></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <div v-if="Object.keys(trackingBoxes).length === 0"
+              class="flex items-center justify-center text-gray-500 text-sm w-full">
+              等待容器出现...
+            </div>
+          </div>
+          <!-- Normal mode: flat checklist -->
+          <div v-else class="flex items-stretch h-full gap-3">
             <div v-for="(info, cls) in trackingChecklist" :key="cls"
               class="flex-shrink-0 w-36 bg-slate-800 rounded-lg border p-2 flex flex-col justify-between transition-all"
               :class="info.counted >= info.expected && info.expected > 0 ? 'border-green-500/70' : info.counted > info.expected && info.expected > 0 ? 'border-red-500/70' : 'border-slate-700'"
@@ -411,8 +446,7 @@
               <div class="text-[10px] text-gray-500 text-center">{{ info.prefix }}1 ~ {{ info.prefix }}{{ info.counted || '?' }}</div>
             </div>
             <div v-if="Object.keys(trackingChecklist).length === 0"
-              class="flex items-center justify-center text-gray-500 text-sm w-full"
-            >
+              class="flex items-center justify-center text-gray-500 text-sm w-full">
               等待物品出现...
             </div>
           </div>
@@ -1101,6 +1135,11 @@ const currentProject = computed(() => projectStore.currentProject);
 const isTrackingMode = computed(() => currentProject.value?.logic_mode === 'tracking');
 const trackingChecklist = ref({});
 const trackingCycleActive = ref(false);
+const trackingContainerMode = ref(false);
+const trackingBoxes = ref({});
+const trackingSettledCount = ref(0);
+const trackingSettledOk = ref(0);
+const trackingSettledNg = ref(0);
 const serverModelTask = ref('detect');
 
 // 默认计数器定义（系统内置，不可删除）
@@ -2088,6 +2127,18 @@ const startPolling = () => {
       if (data.tracking) {
         trackingChecklist.value = data.tracking.item_checklist || {};
         trackingCycleActive.value = data.tracking.cycle_active || false;
+        trackingContainerMode.value = data.tracking.container_mode || false;
+        if (data.tracking.container_mode) {
+          trackingBoxes.value = data.tracking.boxes || {};
+          trackingSettledCount.value = data.tracking.settled_boxes || 0;
+          trackingSettledOk.value = data.tracking.settled_ok || 0;
+          trackingSettledNg.value = data.tracking.settled_ng || 0;
+        } else {
+          trackingBoxes.value = {};
+          trackingSettledCount.value = 0;
+          trackingSettledOk.value = 0;
+          trackingSettledNg.value = 0;
+        }
       }
       
       if (isVideoSource.value && !isDraggingProgress.value) {
@@ -2404,6 +2455,11 @@ const resetCounters = async () => {
   
   trackingChecklist.value = {};
   trackingCycleActive.value = false;
+  trackingContainerMode.value = false;
+  trackingBoxes.value = {};
+  trackingSettledCount.value = 0;
+  trackingSettledOk.value = 0;
+  trackingSettledNg.value = 0;
   
   updateCharts();
   ElMessage.success('计数器已清零');

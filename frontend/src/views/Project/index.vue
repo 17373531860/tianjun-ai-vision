@@ -655,7 +655,7 @@
                     <!-- Row 1: 周期结束策略 -->
                     <div>
                       <div class="text-xs text-gray-400 mb-1.5">周期结束策略</div>
-                      <div class="grid grid-cols-3 gap-2">
+                      <div class="grid grid-cols-4 gap-2">
                         <label class="flex items-start gap-2 p-2.5 bg-slate-800 rounded border cursor-pointer transition-colors"
                           :class="activeProject.tracking_cycle_strategy === 'all_gone' ? 'border-cyan-500 bg-cyan-500/10' : 'border-slate-700 hover:border-slate-500'"
                           @click="activeProject.tracking_cycle_strategy = 'all_gone'">
@@ -683,10 +683,19 @@
                             <div class="text-[10px] text-gray-500 mt-0.5">检测到指定标签后结算</div>
                           </div>
                         </label>
+                        <label class="flex items-start gap-2 p-2.5 bg-slate-800 rounded border cursor-pointer transition-colors"
+                          :class="activeProject.tracking_cycle_strategy === 'container' ? 'border-cyan-500 bg-cyan-500/10' : 'border-slate-700 hover:border-slate-500'"
+                          @click="activeProject.tracking_cycle_strategy = 'container'">
+                          <input type="radio" v-model="activeProject.tracking_cycle_strategy" value="container" class="mt-0.5 accent-cyan-500">
+                          <div>
+                            <div class="text-white text-xs font-bold">容器模式</div>
+                            <div class="text-[10px] text-gray-500 mt-0.5">每个箱子独立结算</div>
+                          </div>
+                        </label>
                       </div>
                     </div>
 
-                    <!-- Row 2: trigger extras OR 消失确认帧数 -->
+                    <!-- Row 2: strategy-specific options -->
                     <div v-if="activeProject.tracking_cycle_strategy === 'trigger'" class="flex items-center gap-4 text-xs">
                       <span class="text-gray-400 shrink-0">触发标签</span>
                       <el-select v-model="activeProject.tracking_trigger_label" size="small" class="!w-40" placeholder="选择标签">
@@ -694,6 +703,14 @@
                       </el-select>
                       <span class="text-gray-400 shrink-0">确认帧数</span>
                       <el-input-number v-model="activeProject.tracking_trigger_min_frames" :min="1" :max="300" :step="5" size="small" class="!w-28" />
+                    </div>
+                    <div v-else-if="activeProject.tracking_cycle_strategy === 'container'" class="flex items-center gap-4 text-xs">
+                      <span class="text-gray-400 shrink-0">容器类别</span>
+                      <el-select v-model="activeProject.tracking_container_label" size="small" class="!w-40" placeholder="选择容器标签">
+                        <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
+                      </el-select>
+                      <span class="text-gray-400 shrink-0">消失确认帧数</span>
+                      <el-input-number v-model="activeProject.tracking_gone_confirm_frames" :min="1" :max="300" :step="5" size="small" class="!w-28" />
                     </div>
                     <div v-else class="flex items-center gap-4 text-xs">
                       <span class="text-gray-400 shrink-0">消失确认帧数</span>
@@ -727,7 +744,7 @@
                     <!-- Row 4: Expected items + ROI side by side -->
                     <div class="grid grid-cols-2 gap-4">
                       <div>
-                        <div class="text-xs text-gray-400 mb-1.5">期望物品清单</div>
+                        <div class="text-xs text-gray-400 mb-1.5">{{ activeProject.tracking_cycle_strategy === 'container' ? '每箱期望物品' : '期望物品清单' }}</div>
                         <div class="bg-slate-900 rounded p-2.5 space-y-1.5">
                           <div v-for="(item, idx) in activeProject.counting_expected_list" :key="idx" class="flex items-center gap-1.5 bg-slate-800 p-1.5 rounded">
                             <el-select v-model="item.label" size="small" class="flex-1 min-w-0" placeholder="选择物品">
@@ -1021,7 +1038,9 @@ const nonBackupSteps = computed(() => {
 
 const countableSteps = computed(() => {
   const trigger = activeProject.value?.tracking_trigger_label || '';
-  return nonBackupSteps.value.filter(s => s.label !== trigger);
+  const container = activeProject.value?.tracking_cycle_strategy === 'container'
+    ? (activeProject.value?.tracking_container_label || '') : '';
+  return nonBackupSteps.value.filter(s => s.label !== trigger && s.label !== container);
 });
 
 // 默认计数器（前3个）
@@ -1446,6 +1465,9 @@ const initProjectDefaults = (project) => {
     const items = pipelineConfig.counting_expected_items || {};
     project.counting_expected_list = Object.entries(items).map(([label, count]) => ({ label, count }));
   }
+  if (project.tracking_container_label === undefined) {
+    project.tracking_container_label = pipelineConfig.tracking_container_label || '';
+  }
   if (project.tracking_roi_polygon === undefined) {
     const roi = pipelineConfig.tracking_roi || {};
     project.tracking_roi_polygon = roi.polygon || [];
@@ -1583,6 +1605,7 @@ const handleSaveProject = async () => {
           enabled: (activeProject.value.tracking_roi_polygon || []).length >= 3,
           polygon: activeProject.value.tracking_roi_polygon || []
         },
+        tracking_container_label: activeProject.value.tracking_cycle_strategy === 'container' ? (activeProject.value.tracking_container_label || '') : '',
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0
       }

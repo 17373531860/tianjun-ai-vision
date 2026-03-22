@@ -26,6 +26,20 @@ from backend.models.models import DetectionSession, DetectionCycle, StepRecord, 
 router = APIRouter()
 
 
+# ========== HCNetSDK import ==========
+HCNET_SDK_AVAILABLE = False
+HCNetSession = None
+try:
+    from backend.hcnetsdk.wrapper import HCNetSession as _HCNetSession
+    if _HCNetSession.sdk_available():
+        HCNetSession = _HCNetSession
+        HCNET_SDK_AVAILABLE = True
+        print("[HCNetSDK] DLL available")
+    else:
+        print("[HCNetSDK] DLL not found (Windows deploy only)")
+except Exception as _e:
+    print(f"[HCNetSDK] load failed: {_e}")
+
 # ========== 海康工业相机 SDK 导入 ==========
 import sys
 HIK_SDK_AVAILABLE = False
@@ -402,7 +416,7 @@ class VideoSourceManager:
     
     def __init__(self, channel_id: int = 0):
         self.channel_id = channel_id  # workstation/channel index (0-based)
-        self.source_type = None  # 'camera', 'video', 'image', 'hikvision'
+        self.source_type = None  # 'camera', 'video', 'image', 'hikvision', 'rtsp', 'hcnetsdk'
         self.capture = None
         self.is_running = False
         self.current_frame = None
@@ -423,6 +437,14 @@ class VideoSourceManager:
         self.hik_payload_size = 0  # 海康相机帧数据大小
         self.hik_data_buf = None  # 海康相机数据缓冲区
         self.hik_frame_info = None  # 海康相机帧信息
+        
+        # HCNetSDK state
+        self.hcnet_session = None  # HCNetSession 实例
+        self.hcnet_ip = None
+        self.hcnet_port = 8000
+        self.hcnet_username = None
+        self.hcnet_password = None
+        self.hcnet_channel = 1
         
         # 帧率限制配置（用于MJPEG流）
         self.frame_limit_enabled = False  # 默认禁用节流（本地应用）
@@ -596,6 +618,13 @@ class VideoSourceManager:
         self._tracking_locked_ids = {}       # {display_id: (cx, cy)} locked IDs won't be re-matched
         self._tracking_registered_positions = {}  # {display_id: {class_name, cx, cy, stable_frames}}
         self._custom_tracker_yaml = None    # path to dynamic bytetrack config
+        
+        # Container mode (box + items hierarchy)
+        self._container_mode = False
+        self._container_label = ''
+        self._box_objects = {}       # {box_track_id: BoxState}
+        self._box_counter = 0
+        self._box_settled_results = []
         
         # Cycle Time 统计
         self.cycle_start_time = None  # 当前周期开始时间
@@ -1254,6 +1283,11 @@ class VideoSourceManager:
         if config.get('logic_mode') == 'tracking':
             self._reset_counting_cycle()
             self._generate_custom_tracker_yaml(pipeline_config)
+            # Container mode: activated when strategy is 'container' and label is set
+            clabel = pipeline_config.get('tracking_container_label', '')
+            is_container_strategy = pipeline_config.get('tracking_cycle_strategy') == 'container'
+            self._container_label = clabel if is_container_strategy else ''
+            self._container_mode = is_container_strategy and bool(clabel)
         
         print(f"项目配置已加载: {config.get('name', 'Unknown')}, task_type={config.get('task_type')}, logic_mode={config.get('logic_mode')}")
         print(f"步骤阈值: {self.step_conf_thresholds}")
@@ -1386,7 +1420,7 @@ class VideoSourceManager:
             self._start_inference_thread()
             debug_log("推理线程已启动", "CAPTURE")
         
-        while self.is_running and (self.capture is not None or self.source_type == 'hikvision'):
+        while self.is_running and (self.capture is not None or self.source_type in ('hikvision', 'hcnetsdk')):
             try:
                 loop_count += 1
                 loop_start = time.time()
@@ -1405,7 +1439,11 @@ class VideoSourceManager:
                 frame = None
                 ret = False
                 
-                if self.source_type == 'hikvision':
+                if self.source_type == 'hcnetsdk':
+                    # 海康设备网络SDK
+                    frame = self._get_hcnetsdk_frame()
+                    ret = frame is not None
+                elif self.source_type == 'hikvision':
                     # 海康工业相机
                     t_hik_start = time.time()
                     frame = self._get_hikvision_frame()
@@ -1561,7 +1599,17 @@ class VideoSourceManager:
                 if consecutive_errors >= max_consecutive_errors:
                     print(f"[捕获线程] 连续 {max_consecutive_errors} 次错误，尝试恢复...")
                     try:
-                        if self.source_type == 'hikvision':
+                        if self.source_type == 'hcnetsdk':
+                            print("[HCNetSDK] reconnecting...")
+                            try:
+                                self._release_hcnet_session()
+                                time.sleep(2.0)
+                                self._reconnect_hcnetsdk()
+                                print("[HCNetSDK] reconnect OK")
+                                consecutive_errors = 0
+                            except Exception as re_err:
+                                print(f"[HCNetSDK] reconnect failed: {re_err}")
+                        elif self.source_type == 'hikvision':
                             # 海康相机：尝试重新连接
                             self._release_hik_camera()
                             time.sleep(0.5)
@@ -3022,6 +3070,11 @@ class VideoSourceManager:
         self.step_frame_confirmed.clear()
         
         self.last_step_completed_time = None
+        
+        # Container mode reset
+        self._box_objects.clear()
+        self._box_counter = 0
+        self._box_settled_results = []
     
     def _is_in_roi(self, det: dict) -> bool:
         """Check if detection center falls within the configured ROI polygon (ray-casting)."""
@@ -3497,6 +3550,14 @@ class VideoSourceManager:
             if current_time - self._tracking_transferred_ids[tid] > max_lost_sec * 2:
                 del self._tracking_transferred_ids[tid]
         
+        # ===== Container mode: group items into boxes =====
+        if self._container_mode and self._container_label:
+            self._update_container_grouping(
+                expected_items, current_time,
+                gone_confirm_frames=gone_confirm_frames,
+                cycle_strategy=cycle_strategy,
+            )
+        
         self._rebuild_checklist(expected_items)
         
         if not self._tracking_cycle_active:
@@ -3506,6 +3567,8 @@ class VideoSourceManager:
         fps = max(self.fps_actual, 10)
         for tid in self._tracking_objects:
             obj_label = self._tracking_objects[tid].get('class_name', '')
+            if self._container_mode and obj_label == self._container_label:
+                continue
             item_sec = per_class_lost_sec.get(obj_label, max_lost_sec)
             item_tolerance_frames = int(item_sec * fps)
             lost_f = self._tracking_lost_frames.get(tid, 0)
@@ -3523,16 +3586,16 @@ class VideoSourceManager:
         
         should_settle = False
         
-        if cycle_strategy == 'all_gone':
+        if cycle_strategy in ('all_gone', 'container'):
             if active_count <= gone_threshold:
                 self._tracking_gone_frames += 1
                 if self._tracking_gone_frames == 1:
-                    print(f"[Tracking] 物体全部消失，开始消失确认倒计时: {gone_confirm_frames} 帧")
+                    print(f"[Tracking] all gone, confirming: {gone_confirm_frames} frames")
                 if self._tracking_gone_frames >= gone_confirm_frames:
                     should_settle = True
             else:
                 if self._tracking_gone_frames > 0:
-                    print(f"[Tracking] 物体重新出现，消失确认重置 (已计 {self._tracking_gone_frames}/{gone_confirm_frames} 帧)")
+                    print(f"[Tracking] objects reappeared, reset ({self._tracking_gone_frames}/{gone_confirm_frames})")
                 self._tracking_gone_frames = 0
         
         elif cycle_strategy == 'trigger':
@@ -3547,12 +3610,12 @@ class VideoSourceManager:
             if self._tracking_had_roi_objects and active_count <= gone_threshold:
                 self._tracking_gone_frames += 1
                 if self._tracking_gone_frames == 1:
-                    print(f"[Tracking] ROI内物体消失，开始消失确认倒计时: {gone_confirm_frames} 帧")
+                    print(f"[Tracking] ROI objects gone, confirming: {gone_confirm_frames} frames")
                 if self._tracking_gone_frames >= gone_confirm_frames:
                     should_settle = True
             else:
                 if self._tracking_gone_frames > 0:
-                    print(f"[Tracking] ROI内物体重新出现，消失确认重置 (已计 {self._tracking_gone_frames}/{gone_confirm_frames} 帧)")
+                    print(f"[Tracking] ROI objects reappeared, reset ({self._tracking_gone_frames}/{gone_confirm_frames})")
                 self._tracking_gone_frames = 0
         
         self._tracking_prev_count = active_count
@@ -3564,11 +3627,187 @@ class VideoSourceManager:
                 should_settle = False
         
         if should_settle:
-            print(f"[Tracking] 消失确认完成 ({self._tracking_gone_frames}/{gone_confirm_frames} 帧)，触发结算")
+            print(f"[Tracking] settle confirmed ({self._tracking_gone_frames}/{gone_confirm_frames} frames)")
             self._settle_counting_cycle(expected_items, check_order, expected_order)
+    
+    def _update_container_grouping(self, expected_items: dict, current_time: float,
+                                    gone_confirm_frames: int = 30,
+                                    cycle_strategy: str = 'all_gone'):
+        """Group tracked items into their parent boxes by spatial containment.
+        Per-box settlement uses the same gone-confirm logic as the cycle level."""
+        container_label = self._container_label
+        expected_no_container = {k: v for k, v in expected_items.items() if k != container_label}
+        
+        # Collect active boxes and items from _tracking_objects
+        active_box_dids = set()
+        box_bboxes = {}  # {display_id: bbox}
+        item_entries = []  # [(track_id, label, display_id, bbox)]
+        
+        for tid, obj in self._tracking_objects.items():
+            if obj['class_name'] == container_label:
+                did = obj['display_id']
+                active_box_dids.add(did)
+                box_bboxes[did] = obj['bbox']
+                if did not in self._box_objects:
+                    self._box_counter += 1
+                    self._box_objects[did] = {
+                        'display_id': did,
+                        'bbox': obj['bbox'],
+                        'first_seen': obj.get('first_seen', current_time),
+                        'last_seen': current_time,
+                        'gone_frames': 0,
+                        'had_roi': False,
+                        'items_ever_seen': {},
+                        'item_class_counts': {},
+                        'is_complete': False,
+                    }
+                else:
+                    self._box_objects[did]['bbox'] = obj['bbox']
+                    self._box_objects[did]['last_seen'] = current_time
+            else:
+                item_entries.append((
+                    tid, obj['class_name'],
+                    obj.get('display_id', ''), obj['bbox']
+                ))
+        
+        # Also consider boxes in recently_lost as "still present" (within tolerance)
+        for tid, obj in self._tracking_recently_lost.items():
+            if obj['class_name'] == container_label:
+                did = obj['display_id']
+                if did in self._box_objects and did not in active_box_dids:
+                    active_box_dids.add(did)
+                    box_bboxes[did] = obj['bbox']
+        
+        # Assign items to boxes: item center inside box bbox, pick smallest box
+        for item_tid, item_label, item_did, item_bbox in item_entries:
+            item_cx = item_bbox['x'] + item_bbox['w'] / 2
+            item_cy = item_bbox['y'] + item_bbox['h'] / 2
+            
+            best_box_did = None
+            best_box_area = float('inf')
+            for box_did, bb in box_bboxes.items():
+                bx1, by1 = bb['x'], bb['y']
+                bx2, by2 = bx1 + bb['w'], by1 + bb['h']
+                if bx1 <= item_cx <= bx2 and by1 <= item_cy <= by2:
+                    area = bb['w'] * bb['h']
+                    if area < best_box_area:
+                        best_box_area = area
+                        best_box_did = box_did
+            
+            if best_box_did is not None:
+                box_state = self._box_objects[best_box_did]
+                if item_tid not in box_state['items_ever_seen']:
+                    box_state['items_ever_seen'][item_tid] = {
+                        'label': item_label,
+                        'display_id': item_did,
+                        'first_seen': current_time,
+                        'last_seen': current_time,
+                    }
+                    box_state['item_class_counts'][item_label] = \
+                        box_state['item_class_counts'].get(item_label, 0) + 1
+                else:
+                    box_state['items_ever_seen'][item_tid]['last_seen'] = current_time
+        
+        # Recalculate completeness for all active boxes
+        for box_did in active_box_dids:
+            if box_did in self._box_objects:
+                bs = self._box_objects[box_did]
+                bs['is_complete'] = (not expected_no_container) or all(
+                    bs['item_class_counts'].get(cls, 0) >= exp
+                    for cls, exp in expected_no_container.items()
+                )
+                if cycle_strategy == 'roi_exit':
+                    det = {'x': bs['bbox']['x'], 'y': bs['bbox']['y'],
+                           'w': bs['bbox']['w'], 'h': bs['bbox']['h']}
+                    if self._is_in_roi(det):
+                        bs['had_roi'] = True
+        
+        # Per-box gone confirmation (same pattern as cycle-level settlement)
+        for box_did in list(self._box_objects.keys()):
+            bs = self._box_objects[box_did]
+            box_visible = box_did in active_box_dids
+            
+            should_count_gone = False
+            if cycle_strategy == 'roi_exit':
+                should_count_gone = bs['had_roi'] and not box_visible
+            else:
+                should_count_gone = not box_visible
+            
+            if should_count_gone:
+                bs['gone_frames'] = bs.get('gone_frames', 0) + 1
+                if bs['gone_frames'] == 1:
+                    print(f"[Container] {box_did} gone, confirming: {gone_confirm_frames} frames")
+                if bs['gone_frames'] >= gone_confirm_frames:
+                    print(f"[Container] {box_did} confirmed gone ({bs['gone_frames']}/{gone_confirm_frames})")
+                    self._settle_box(box_did, expected_items)
+            else:
+                if bs.get('gone_frames', 0) > 0:
+                    print(f"[Container] {box_did} reappeared, reset ({bs['gone_frames']}/{gone_confirm_frames})")
+                bs['gone_frames'] = 0
+    
+    def _settle_box(self, box_display_id: str, expected_items: dict):
+        """Settle a single box: record its items and completeness."""
+        box_state = self._box_objects.pop(box_display_id, None)
+        if box_state is None:
+            return
+        
+        container_label = self._container_label
+        expected_no_container = {k: v for k, v in expected_items.items() if k != container_label}
+        
+        item_counts = box_state['item_class_counts']
+        missing = []
+        extra = []
+        for cls, exp in expected_no_container.items():
+            actual = item_counts.get(cls, 0)
+            if actual < exp:
+                display = self.step_display_names.get(cls, cls)
+                missing.append(f"{display}: {actual}/{exp}")
+            elif actual > exp:
+                display = self.step_display_names.get(cls, cls)
+                extra.append(f"{display}: {actual}/{exp}")
+        for cls, cnt in item_counts.items():
+            if cls not in expected_no_container:
+                display = self.step_display_names.get(cls, cls)
+                extra.append(f"{display}: {cnt}/0")
+        
+        is_ok = not missing and not extra
+        
+        result = {
+            'display_id': box_display_id,
+            'first_seen': box_state['first_seen'],
+            'last_seen': box_state['last_seen'],
+            'item_counts': dict(item_counts),
+            'expected': dict(expected_no_container),
+            'is_complete': is_ok,
+            'missing': missing,
+            'extra': extra,
+            'items_detail': [
+                {'label': v['label'], 'display_id': v['display_id']}
+                for v in box_state['items_ever_seen'].values()
+            ],
+        }
+        self._box_settled_results.append(result)
+        
+        status = "OK" if is_ok else "NG"
+        print(f"[Container] {box_display_id} settled: {status}, "
+              f"items={item_counts}, expected={expected_no_container}")
+        
+        if is_ok:
+            self._trigger_event(1, f'{box_display_id} OK: {item_counts}')
+        else:
+            reasons = []
+            if missing:
+                reasons.append(f'missing: {missing}')
+            if extra:
+                reasons.append(f'extra: {extra}')
+            self._trigger_event(2, f'{box_display_id} NG: {", ".join(reasons) if reasons else "no items"}')
     
     def _rebuild_checklist(self, expected_items: dict):
         """Rebuild the item checklist from current tracking state."""
+        if self._container_mode and self._container_label:
+            self._rebuild_container_checklist(expected_items)
+            return
+        
         self._tracking_item_checklist = {}
         for cls_name, expected_count in expected_items.items():
             actual = self._tracking_class_counters.get(cls_name, 0)
@@ -3587,9 +3826,57 @@ class VideoSourceManager:
                     'prefix': prefix, 'display_name': display_name
                 }
     
+    def _rebuild_container_checklist(self, expected_items: dict):
+        """Build per-box checklist for container mode."""
+        container_label = self._container_label
+        expected_no_container = {k: v for k, v in expected_items.items() if k != container_label}
+        
+        boxes_info = {}
+        for box_did, bs in self._box_objects.items():
+            items_info = {}
+            for cls, exp in expected_no_container.items():
+                display_name = self.step_display_names.get(cls, cls)
+                actual = bs['item_class_counts'].get(cls, 0)
+                items_info[cls] = {
+                    'expected': exp,
+                    'counted': actual,
+                    'display_name': display_name,
+                }
+            for cls, cnt in bs['item_class_counts'].items():
+                if cls not in items_info:
+                    display_name = self.step_display_names.get(cls, cls)
+                    items_info[cls] = {
+                        'expected': 0,
+                        'counted': cnt,
+                        'display_name': display_name,
+                    }
+            boxes_info[box_did] = {
+                'items': items_info,
+                'complete': bs['is_complete'],
+            }
+        
+        self._tracking_item_checklist = {
+            '_container_mode': True,
+            '_boxes': boxes_info,
+            '_settled_count': len(self._box_settled_results),
+            '_settled_ok': sum(1 for r in self._box_settled_results if r['is_complete']),
+            '_settled_ng': sum(1 for r in self._box_settled_results if not r['is_complete']),
+        }
+    
     def _settle_counting_cycle(self, expected_items: dict, check_order: bool = False, expected_order: list = None):
         """Validate tracking-mode cycle and trigger OK or NG event."""
         print(f"[Tracking] Settling cycle: counters={self._tracking_class_counters}, expected={expected_items}")
+        
+        # In container mode, settle remaining boxes then reset (skip cycle-level count validation)
+        if self._container_mode:
+            for box_did in list(self._box_objects.keys()):
+                self._settle_box(box_did, expected_items)
+            total_ok = sum(1 for r in self._box_settled_results if r['is_complete'])
+            total_ng = sum(1 for r in self._box_settled_results if not r['is_complete'])
+            total = len(self._box_settled_results)
+            print(f"[Container] Cycle end: {total} boxes settled (OK={total_ok}, NG={total_ng})")
+            self._reset_counting_cycle()
+            return
         
         # ===== Collect all item instances from active + recently_lost =====
         all_items = []
@@ -3627,7 +3914,6 @@ class VideoSourceManager:
             duration = max(0, end_t - start_t) if start_t and end_t else 0
             step_name = item['display_id']
             step_label = item['class_name']
-            display_name = self.step_display_names.get(step_label, step_label)
             self.record_step(
                 step_label=step_label,
                 step_name=step_name,
@@ -3661,14 +3947,14 @@ class VideoSourceManager:
             self._trigger_event(1, f'Counting complete: {dict(self._tracking_class_counters)}')
         elif missing or extra:
             reasons = []
-            if missing: reasons.append(f'缺件: {missing}')
-            if extra: reasons.append(f'多件: {extra}')
+            if missing: reasons.append(f'missing: {missing}')
+            if extra: reasons.append(f'extra: {extra}')
             self._trigger_event(2, ', '.join(reasons))
         elif not order_ok:
             actual_seq = [item['class_name'] for item in unique_items]
-            self._trigger_event(2, f'放入顺序错误: 期望{expected_order}, 实际{actual_seq}')
+            self._trigger_event(2, f'Order wrong: expected={expected_order}, actual={actual_seq}')
         else:
-            self._trigger_event(1, f'装箱完整: {dict(self._tracking_class_counters)}')
+            self._trigger_event(1, f'All complete: {dict(self._tracking_class_counters)}')
         
         self._reset_counting_cycle()
     
@@ -5355,6 +5641,132 @@ class VideoSourceManager:
         self._thread.start()
         return True
 
+    # ========== 海康设备网络SDK (HCNetSDK) ==========
+
+    def start_hcnetsdk(self, ip: str, port: int = 8000,
+                       username: str = "admin", password: str = "",
+                       channel: int = 1, stream_type: int = 1,
+                       fps: int = 25):
+        """
+        通过海康设备网络SDK连接NVR/IP摄像头。
+        使用海康私有协议，比RTSP更稳定。
+
+        Parameters
+        ----------
+        ip : str          设备IP地址
+        port : int        SDK端口 (默认 8000)
+        username : str    用户名
+        password : str    密码
+        channel : int     通道号 (1-based, NVR 数字通道从 startDChan 开始)
+        stream_type : int 0=主码流, 1=子码流 (子码流性能更好)
+        fps : int         目标帧率
+        """
+        if not HCNET_SDK_AVAILABLE:
+            raise Exception(
+                "HCNetSDK not available. "
+                "Place SDK DLLs in backend/hcnetsdk/lib/"
+            )
+
+        self.stop(release_model=False)
+        time.sleep(0.2)
+
+        print(f"[HCNetSDK] connecting {ip}:{port} ch={channel} "
+              f"stream={'sub' if stream_type else 'main'} ...")
+
+        try:
+            session = HCNetSession()
+            session.login(ip, port, username, password)
+
+            ch_info = session.get_channel_info()
+            actual_channel = channel
+            if ch_info and ch_info['ip_channels'] > 0 and channel <= ch_info['ip_channels']:
+                actual_channel = ch_info['start_digital_channel'] + (channel - 1)
+                print(f"[HCNetSDK] channel map: {channel} -> {actual_channel}")
+
+            session.start_preview(
+                channel=actual_channel,
+                stream_type=stream_type,
+                link_mode=0,  # TCP
+            )
+
+            # 等待第一帧解码
+            first_frame = None
+            for i in range(50):
+                first_frame = session.get_frame(timeout=0.5)
+                if first_frame is not None:
+                    h, w = first_frame.shape[:2]
+                    print(f"[HCNetSDK] first frame OK ({w}x{h}), attempt {i+1}")
+                    break
+
+            if first_frame is None:
+                session.cleanup()
+                raise Exception(
+                    f"HCNetSDK connected but no frames. "
+                    f"Check channel={channel} or switch main/sub stream."
+                )
+
+            h, w = first_frame.shape[:2]
+            self.hcnet_session = session
+            self.hcnet_ip = ip
+            self.hcnet_port = port
+            self.hcnet_username = username
+            self.hcnet_password = password
+            self.hcnet_channel = channel
+            self.source_type = 'hcnetsdk'
+            self.width = w
+            self.height = h
+            self.fps = fps
+            self.is_running = True
+
+            self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self._thread.start()
+            print(f"[HCNetSDK] connected: {w}x{h} fps={fps}")
+            return True
+
+        except ConnectionError as e:
+            raise Exception(str(e))
+        except Exception as e:
+            print(f"[HCNetSDK] start failed: {e}")
+            import traceback; traceback.print_exc()
+            raise
+
+    def _get_hcnetsdk_frame(self):
+        """Get latest decoded frame from HCNetSDK session."""
+        if self.hcnet_session is None:
+            return None
+        try:
+            return self.hcnet_session.get_frame(timeout=1.0)
+        except Exception as e:
+            print(f"[HCNetSDK] frame error: {e}")
+            return None
+
+    def _release_hcnet_session(self):
+        """Release HCNetSDK session resources."""
+        if self.hcnet_session is not None:
+            try:
+                self.hcnet_session.cleanup()
+            except Exception as e:
+                print(f"[HCNetSDK] cleanup error: {e}")
+            self.hcnet_session = None
+
+    def _reconnect_hcnetsdk(self):
+        """Reconnect HCNetSDK using saved connection params."""
+        if not HCNET_SDK_AVAILABLE or not self.hcnet_ip:
+            raise Exception("Cannot reconnect: SDK unavailable or no params")
+        session = HCNetSession()
+        session.login(self.hcnet_ip, self.hcnet_port,
+                      self.hcnet_username, self.hcnet_password)
+        ch_info = session.get_channel_info()
+        actual_channel = self.hcnet_channel
+        if ch_info and ch_info['ip_channels'] > 0:
+            actual_channel = ch_info['start_digital_channel'] + (self.hcnet_channel - 1)
+        session.start_preview(channel=actual_channel, stream_type=1, link_mode=0)
+        frame = session.get_frame(timeout=5.0)
+        if frame is None:
+            session.cleanup()
+            raise Exception("Reconnect OK but no frames")
+        self.hcnet_session = session
+
     def start_hikvision_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60):
         """启动海康工业相机（带增强调试）"""
         hik_log(f"start_hikvision_camera 调用: device_index={device_index}, {width}x{height}@{fps}fps")
@@ -5792,10 +6204,17 @@ class VideoSourceManager:
             if not self._reopen_hik_camera():
                 raise Exception("海康相机打开失败，请检查设备")
         
+        if not self.is_running and self.source_type == 'hcnetsdk' and self.hcnet_session is None:
+            try:
+                self._reconnect_hcnetsdk()
+            except Exception as e:
+                raise Exception(f"HCNetSDK reconnect failed: {e}")
+        
         # 如果视频源暂停（有 capture 但 is_running=False），自动恢复
         if not self.is_running and (
             (self.capture is not None and self.capture.isOpened()) or
-            (self.source_type == 'hikvision' and self.hik_camera is not None)
+            (self.source_type == 'hikvision' and self.hik_camera is not None) or
+            (self.source_type == 'hcnetsdk' and self.hcnet_session is not None)
         ):
             print("[自动恢复] 检测到暂停的视频源，自动恢复播放")
             if self._thread and self._thread.is_alive():
@@ -6281,6 +6700,9 @@ class VideoSourceManager:
         elif self.source_type == 'hikvision':
             self._release_hik_camera()
             print("已暂停：海康相机已释放，保留模型和画面")
+        elif self.source_type == 'hcnetsdk':
+            self._release_hcnet_session()
+            print("[pause] HCNetSDK released, model kept")
         else:
             print("已暂停：画面和检测都停止")
     
@@ -6440,6 +6862,10 @@ class VideoSourceManager:
             # 如果还是没有结束，记录警告
             if self._thread.is_alive():
                 print("[错误] 捕获线程未能结束，可能存在死锁，强制继续")
+        
+        # Release HCNetSDK
+        if self.source_type == 'hcnetsdk':
+            self._release_hcnet_session()
         
         # 释放海康相机资源
         if self.source_type == 'hikvision':
@@ -7123,6 +7549,61 @@ def get_hikvision_status():
     }
 
 
+# ========== HCNetSDK API endpoints ==========
+
+class HCNetSDKStartRequest(BaseModel):
+    ip: str
+    port: int = 8000
+    username: str = "admin"
+    password: str = ""
+    channel: int = 1
+    stream_type: int = 1  # 0=main, 1=sub
+    fps: int = 25
+
+@router.post("/hcnetsdk/start")
+def start_hcnetsdk(req: HCNetSDKStartRequest, channel: int = Query(0)):
+    """Connect to NVR/IP camera via HCNetSDK."""
+    try:
+        mgr = _get_mgr(channel)
+        mgr.start_hcnetsdk(
+            ip=req.ip,
+            port=req.port,
+            username=req.username,
+            password=req.password,
+            channel=req.channel,
+            stream_type=req.stream_type,
+            fps=req.fps,
+        )
+        return {
+            "status": "success",
+            "message": f"HCNetSDK connected {req.ip}:{req.port} ch{req.channel} (ws{channel})",
+            "resolution": f"{mgr.width}x{mgr.height}",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"[API] /hcnetsdk/start failed (ch{channel}): {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/hcnetsdk/stop")
+def stop_hcnetsdk(channel: int = Query(0)):
+    """Stop HCNetSDK connection."""
+    _get_mgr(channel).stop()
+    return {"status": "success", "message": "HCNetSDK stopped"}
+
+@router.get("/hcnetsdk/status")
+def get_hcnetsdk_status():
+    """Get HCNetSDK connection status."""
+    return {
+        "sdk_available": HCNET_SDK_AVAILABLE,
+        "is_connected": video_manager.source_type == 'hcnetsdk' and video_manager.is_running,
+        "ip": video_manager.hcnet_ip if video_manager.source_type == 'hcnetsdk' else None,
+        "channel": video_manager.hcnet_channel if video_manager.source_type == 'hcnetsdk' else None,
+    }
+
+
 @router.post("/video/upload")
 async def upload_video(file: UploadFile = File(...)):
     """上传视频文件（同名文件自动覆盖，清理旧的重复副本）"""
@@ -7386,12 +7867,26 @@ def get_detection_results(channel: int = Query(0)):
                 'bbox': obj.get('bbox'),
                 'order_idx': obj.get('order_idx', 0),
             }
-        result['tracking'] = {
+        tracking_data = {
             'tracked_objects': tracked_objs,
             'class_counters': dict(mgr._tracking_class_counters),
             'item_checklist': dict(mgr._tracking_item_checklist),
             'cycle_active': mgr._tracking_cycle_active,
+            'container_mode': mgr._container_mode,
         }
+        if mgr._container_mode:
+            box_status = {}
+            for box_did, bs in mgr._box_objects.items():
+                box_status[box_did] = {
+                    'bbox': bs.get('bbox'),
+                    'is_complete': bs['is_complete'],
+                    'item_counts': dict(bs['item_class_counts']),
+                }
+            tracking_data['boxes'] = box_status
+            tracking_data['settled_boxes'] = len(mgr._box_settled_results)
+            tracking_data['settled_ok'] = sum(1 for r in mgr._box_settled_results if r['is_complete'])
+            tracking_data['settled_ng'] = sum(1 for r in mgr._box_settled_results if not r['is_complete'])
+        result['tracking'] = tracking_data
     
     return result
 

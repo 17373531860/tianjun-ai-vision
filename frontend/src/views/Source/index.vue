@@ -37,6 +37,7 @@
             <el-form-item label="输入源">
               <el-radio-group v-model="wsConfigs[ch - 1].sourceType" size="small">
                 <el-radio-button value="camera">摄像头</el-radio-button>
+                <el-radio-button value="hcnetsdk">海康SDK</el-radio-button>
                 <el-radio-button value="rtsp">RTSP</el-radio-button>
                 <el-radio-button value="video">视频</el-radio-button>
                 <el-radio-button value="image">图片</el-radio-button>
@@ -54,6 +55,37 @@
                 </el-option-group>
               </el-select>
             </el-form-item>
+
+            <!-- HCNetSDK input -->
+            <template v-if="wsConfigs[ch - 1].sourceType === 'hcnetsdk'">
+              <div class="grid grid-cols-2 gap-2">
+                <el-form-item label="设备IP">
+                  <el-input v-model="wsConfigs[ch - 1].hcnetIp" placeholder="192.168.1.64" size="small" />
+                </el-form-item>
+                <el-form-item label="端口">
+                  <el-input-number v-model="wsConfigs[ch - 1].hcnetPort" :min="1" :max="65535" size="small" class="w-full" />
+                </el-form-item>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <el-form-item label="用户名">
+                  <el-input v-model="wsConfigs[ch - 1].hcnetUsername" placeholder="admin" size="small" />
+                </el-form-item>
+                <el-form-item label="密码">
+                  <el-input v-model="wsConfigs[ch - 1].hcnetPassword" type="password" show-password size="small" />
+                </el-form-item>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <el-form-item label="通道号">
+                  <el-input-number v-model="wsConfigs[ch - 1].hcnetChannel" :min="1" :max="64" size="small" class="w-full" />
+                </el-form-item>
+                <el-form-item label="码流">
+                  <el-select v-model="wsConfigs[ch - 1].hcnetStreamType" class="w-full" size="small">
+                    <el-option label="子码流" :value="1" />
+                    <el-option label="主码流" :value="0" />
+                  </el-select>
+                </el-form-item>
+              </div>
+            </template>
 
             <!-- RTSP URL input -->
             <el-form-item v-if="wsConfigs[ch - 1].sourceType === 'rtsp'" label="RTSP 地址">
@@ -147,6 +179,13 @@
                 <el-tag type="info" size="small">USB / 海康工业相机</el-tag>
               </div>
             </el-radio>
+            <el-radio value="hcnetsdk" class="!mr-0">
+              <div class="flex items-center gap-2">
+                <el-icon><Monitor /></el-icon>
+                <span>海康SDK直连</span>
+                <el-tag type="success" size="small">NVR / IP Camera (稳定)</el-tag>
+              </div>
+            </el-radio>
             <el-radio value="rtsp" class="!mr-0">
               <div class="flex items-center gap-2">
                 <el-icon><Monitor /></el-icon>
@@ -226,6 +265,56 @@
                 提示：如果检测速度跟不上，降低帧率可以避免丢帧
               </div>
             </el-form-item>
+          </el-form>
+        </el-card>
+
+        <!-- 海康SDK直连设置 (HCNetSDK) -->
+        <el-card v-if="sourceType === 'hcnetsdk'" shadow="never" class="bg-slate-800 border-slate-700">
+          <template #header>
+            <span class="font-bold text-white">海康SDK直连设置</span>
+          </template>
+          
+          <el-form label-position="top">
+            <div class="grid grid-cols-2 gap-4">
+              <el-form-item label="设备 IP 地址">
+                <el-input v-model="hcnetsdkSettings.ip" placeholder="192.168.1.64" clearable />
+              </el-form-item>
+              <el-form-item label="SDK 端口">
+                <el-input-number v-model="hcnetsdkSettings.port" :min="1" :max="65535" class="w-full" />
+              </el-form-item>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+              <el-form-item label="用户名">
+                <el-input v-model="hcnetsdkSettings.username" placeholder="admin" />
+              </el-form-item>
+              <el-form-item label="密码">
+                <el-input v-model="hcnetsdkSettings.password" type="password" show-password placeholder="输入密码" />
+              </el-form-item>
+            </div>
+            <div class="grid grid-cols-3 gap-4">
+              <el-form-item label="通道号">
+                <el-input-number v-model="hcnetsdkSettings.channel" :min="1" :max="64" class="w-full" />
+              </el-form-item>
+              <el-form-item label="码流类型">
+                <el-select v-model="hcnetsdkSettings.streamType" class="w-full">
+                  <el-option label="子码流 (推荐)" :value="1" />
+                  <el-option label="主码流" :value="0" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="目标帧率">
+                <el-select v-model="hcnetsdkSettings.fps" class="w-full">
+                  <el-option label="10 FPS" :value="10" />
+                  <el-option label="15 FPS" :value="15" />
+                  <el-option label="25 FPS (推荐)" :value="25" />
+                  <el-option label="30 FPS" :value="30" />
+                </el-select>
+              </el-form-item>
+            </div>
+            <el-alert type="success" :closable="false" class="mt-2">
+              <template #title>
+                <span class="text-xs">使用海康私有协议直连NVR/摄像头，比RTSP更稳定，自动断线重连。端口默认8000，通道号对应NVR上的摄像头编号。</span>
+              </template>
+            </el-alert>
           </el-form>
         </el-card>
 
@@ -386,6 +475,9 @@
             </el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'camera'" label="分辨率">{{ cameraSettings.resolution }}</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'camera'" label="帧率">{{ cameraSettings.fps }} FPS</el-descriptions-item>
+            <el-descriptions-item v-if="sourceType === 'hcnetsdk'" label="设备地址">{{ hcnetsdkSettings.ip || '未输入' }}:{{ hcnetsdkSettings.port }}</el-descriptions-item>
+            <el-descriptions-item v-if="sourceType === 'hcnetsdk'" label="通道号">{{ hcnetsdkSettings.channel }}</el-descriptions-item>
+            <el-descriptions-item v-if="sourceType === 'hcnetsdk'" label="码流">{{ hcnetsdkSettings.streamType === 0 ? '主码流' : '子码流' }}</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'rtsp'" label="RTSP 地址">{{ rtspSettings.url || '未输入' }}</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'rtsp'" label="帧率">{{ rtspSettings.fps }} FPS</el-descriptions-item>
             <el-descriptions-item v-if="sourceType === 'video'" label="视频文件">{{ videoFile?.name || '未选择' }}</el-descriptions-item>
@@ -435,11 +527,12 @@ const systemStore = useSystemStore();
 
 // ===== Workstation Mode =====
 const workstationMode = ref(1);
-const makeDefaultWsConfig = () => ({ sourceType: 'camera', cameraId: '', projectId: null, resolution: '1280x720', fps: 60, gpuDevice: 'auto', videoFile: null, imageFile: null, rtspUrl: '', rtspFps: 25 });
+const makeDefaultWsConfig = () => ({ sourceType: 'camera', cameraId: '', projectId: null, resolution: '1280x720', fps: 60, gpuDevice: 'auto', videoFile: null, imageFile: null, rtspUrl: '', rtspFps: 25, hcnetIp: '', hcnetPort: 8000, hcnetUsername: 'admin', hcnetPassword: '', hcnetChannel: 1, hcnetStreamType: 1 });
 const wsConfigured = (idx) => {
   const c = wsConfigs[idx];
   if (!c) return false;
   if (c.sourceType === 'camera') return !!c.cameraId;
+  if (c.sourceType === 'hcnetsdk') return !!c.hcnetIp && !!c.hcnetPassword;
   if (c.sourceType === 'rtsp') return !!c.rtspUrl;
   if (c.sourceType === 'video') return !!c.videoFile;
   if (c.sourceType === 'image') return !!c.imageFile;
@@ -483,6 +576,16 @@ const saveAndStartMulti = async () => {
         } else if (cam.type === 'hikvision') {
           await api.post(`/source/hikvision/start?channel=${ch}`, { device_index: cam.index, width: w, height: h, fps: cfg.fps });
         }
+      } else if (cfg.sourceType === 'hcnetsdk' && cfg.hcnetIp) {
+        await api.post(`/source/hcnetsdk/start?channel=${ch}`, {
+          ip: cfg.hcnetIp,
+          port: cfg.hcnetPort || 8000,
+          username: cfg.hcnetUsername || 'admin',
+          password: cfg.hcnetPassword || '',
+          channel: cfg.hcnetChannel || 1,
+          stream_type: cfg.hcnetStreamType ?? 1,
+          fps: 25
+        });
       } else if (cfg.sourceType === 'rtsp' && cfg.rtspUrl) {
         await api.post(`/source/rtsp/start?channel=${ch}`, { url: cfg.rtspUrl, fps: cfg.rtspFps || 25 });
       } else if (cfg.sourceType === 'video' && cfg.videoFile) {
@@ -571,6 +674,17 @@ const rtspSettings = ref({
   fps: 25
 });
 
+// HCNetSDK 设置
+const hcnetsdkSettings = ref({
+  ip: '',
+  port: 8000,
+  username: 'admin',
+  password: '',
+  channel: 1,
+  streamType: 1,
+  fps: 25
+});
+
 // 统一摄像头列表（USB + 海康）
 const usbCameras = ref([]);       // USB 摄像头列表
 const hikvisionCameras = ref([]); // 海康工业相机列表
@@ -604,6 +718,7 @@ const saving = ref(false);
 const sourceTypeLabel = computed(() => {
   const labels = {
     camera: '摄像头',
+    hcnetsdk: '海康SDK直连',
     rtsp: '网络摄像头 (RTSP)',
     video: '本地视频',
     image: '本地图片'
@@ -811,6 +926,32 @@ const saveAndStart = async () => {
       
       sourceStore.setStreaming(true);
       
+    } else if (sourceType.value === 'hcnetsdk') {
+      if (!hcnetsdkSettings.value.ip) {
+        ElMessage.warning('请输入设备 IP 地址');
+        saving.value = false;
+        return;
+      }
+      if (!hcnetsdkSettings.value.password) {
+        ElMessage.warning('请输入密码');
+        saving.value = false;
+        return;
+      }
+      
+      await api.post('/source/hcnetsdk/start', {
+        ip: hcnetsdkSettings.value.ip,
+        port: hcnetsdkSettings.value.port,
+        username: hcnetsdkSettings.value.username,
+        password: hcnetsdkSettings.value.password,
+        channel: hcnetsdkSettings.value.channel,
+        stream_type: hcnetsdkSettings.value.streamType,
+        fps: hcnetsdkSettings.value.fps
+      });
+      
+      sourceStore.setSourceType('hcnetsdk');
+      sourceStore.setHcnetsdkSettings(hcnetsdkSettings.value);
+      sourceStore.setStreaming(true);
+      
     } else if (sourceType.value === 'rtsp') {
       if (!rtspSettings.value.url) {
         ElMessage.warning('请输入 RTSP 地址');
@@ -935,6 +1076,11 @@ const restoreAutoSavedSource = () => {
   // 恢复 RTSP 设置
   if (sourceStore.rtspSettings) {
     rtspSettings.value = { ...rtspSettings.value, ...sourceStore.rtspSettings };
+  }
+  
+  // 恢复 HCNetSDK 设置
+  if (sourceStore.hcnetsdkSettings) {
+    hcnetsdkSettings.value = { ...hcnetsdkSettings.value, ...sourceStore.hcnetsdkSettings };
   }
   
   // 恢复摄像头设置

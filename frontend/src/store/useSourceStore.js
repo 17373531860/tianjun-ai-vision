@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 
 export const useSourceStore = defineStore('source', {
   state: () => ({
-    // 输入源类型: 'camera' | 'video' | 'image' | 'hikvision' | 'rtsp'
+    // 输入源类型: 'camera' | 'video' | 'image' | 'hikvision' | 'rtsp' | 'hcnetsdk'
     sourceType: 'camera',
     // 摄像头设置
     cameraSettings: {
@@ -19,6 +19,16 @@ export const useSourceStore = defineStore('source', {
     // RTSP 网络视频流设置
     rtspSettings: {
       url: '',
+      fps: 25
+    },
+    // 海康设备网络SDK (HCNetSDK) 设置
+    hcnetsdkSettings: {
+      ip: '',
+      port: 8000,
+      username: 'admin',
+      password: '',
+      channel: 1,
+      streamType: 1,
       fps: 25
     },
     // 视频设置
@@ -46,6 +56,9 @@ export const useSourceStore = defineStore('source', {
     },
     setRtspSettings(settings) {
       this.rtspSettings = { ...this.rtspSettings, ...settings };
+    },
+    setHcnetsdkSettings(settings) {
+      this.hcnetsdkSettings = { ...this.hcnetsdkSettings, ...settings };
     },
     setVideoPath(path) {
       this.videoPath = path;
@@ -78,6 +91,7 @@ export const useSourceStore = defineStore('source', {
         cameraSettings: this.cameraSettings,
         hikvisionSettings: this.hikvisionSettings,
         rtspSettings: this.rtspSettings,
+        hcnetsdkSettings: this.hcnetsdkSettings,
         videoPath: this.videoPath,
         videoSpeed: this.videoSpeed,
         videoSyncMode: this.videoSyncMode,
@@ -102,6 +116,9 @@ export const useSourceStore = defineStore('source', {
           }
           if (config.rtspSettings) {
             this.rtspSettings = { ...this.rtspSettings, ...config.rtspSettings };
+          }
+          if (config.hcnetsdkSettings) {
+            this.hcnetsdkSettings = { ...this.hcnetsdkSettings, ...config.hcnetsdkSettings };
           }
           this.videoPath = config.videoPath || null;
           this.videoSpeed = config.videoSpeed || 1;
