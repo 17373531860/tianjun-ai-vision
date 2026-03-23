@@ -156,22 +156,54 @@ jobs:
           tar -xzf tianjun-env.tar.gz -C python
           rm tianjun-env.tar.gz
           
-          echo "=== Stripping unnecessary files to stay under NSIS 2GB limit ==="
+          echo "=== AGGRESSIVE cleanup to stay under NSIS 2GB limit ==="
+          echo "Before cleanup:" && du -sh python
+          
+          # Static/import libraries (huge, only for C++ dev, not runtime)
+          find python -name "*.lib" -delete 2>/dev/null || true
+          find python -name "*.a" -delete 2>/dev/null || true
+          find python -name "*.pdb" -delete 2>/dev/null || true
+          find python -name "*.debug" -delete 2>/dev/null || true
+          
+          # Header files (C/C++ dev only)
+          find python -path "*/include/*" -type f -delete 2>/dev/null || true
+          find python -path "*/Include/*" -type f -delete 2>/dev/null || true
+          
+          # Test directories
           find python -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
           find python -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           find python -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-          find python -name "*.pdb" -delete 2>/dev/null || true
-          find python -name "*.debug" -delete 2>/dev/null || true
-          find python -name "*.a" -delete 2>/dev/null || true
-          find python -name "*.lib" ! -path "*/torch/lib/*" -delete 2>/dev/null || true
-          find python -path "*/torch/test/*" -delete 2>/dev/null || true
-          find python -path "*/torch/include/*" -type f -delete 2>/dev/null || true
-          find python -path "*/caffe2/python/serialized_test/*" -delete 2>/dev/null || true
+          
+          # PyTorch-specific bloat
+          find python -path "*/torch/test/*" -exec rm -rf {} + 2>/dev/null || true
+          find python -path "*/torch/include/*" -exec rm -rf {} + 2>/dev/null || true
+          find python -path "*/torch/_C/*.pyi" -delete 2>/dev/null || true
+          find python -path "*/caffe2/python/serialized_test/*" -exec rm -rf {} + 2>/dev/null || true
+          
+          # Package metadata
           find python -name "*.dist-info" -type d -exec rm -rf {} + 2>/dev/null || true
           find python -name "*.egg-info" -type d -exec rm -rf {} + 2>/dev/null || true
           
-          echo "Environment size after cleanup:"
-          du -sh python
+          # Conda infrastructure not needed at runtime
+          rm -rf python/conda-meta 2>/dev/null || true
+          rm -rf python/share/doc 2>/dev/null || true
+          rm -rf python/share/man 2>/dev/null || true
+          rm -rf python/man 2>/dev/null || true
+          rm -rf python/Library/share/doc 2>/dev/null || true
+          rm -rf python/Library/share/man 2>/dev/null || true
+          rm -rf python/Library/cmake 2>/dev/null || true
+          
+          # CUDA dev tools not needed for inference
+          rm -rf python/Library/bin/nsight* 2>/dev/null || true
+          rm -rf python/Library/bin/cuda-gdb* 2>/dev/null || true
+          rm -rf python/Library/bin/compute-sanitizer* 2>/dev/null || true
+          find python -name "nvcc*" -delete 2>/dev/null || true
+          
+          # Numpy/scipy test data
+          find python -path "*/numpy/core/tests/*" -exec rm -rf {} + 2>/dev/null || true
+          find python -path "*/numpy/tests/*" -exec rm -rf {} + 2>/dev/null || true
+          
+          echo "After cleanup:" && du -sh python
       
       - name: Download FFmpeg
         shell: pwsh
