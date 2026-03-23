@@ -75,11 +75,6 @@
         ]
       },
       {
-        "from": "../licenses",
-        "to": "licenses",
-        "filter": ["*.lic"]
-      },
-      {
         "from": "../ffmpeg",
         "to": "ffmpeg",
         "filter": [

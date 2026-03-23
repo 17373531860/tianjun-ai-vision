@@ -259,7 +259,7 @@ jobs:
           $partsDir = "gitee-parts"
           New-Item -ItemType Directory -Path $partsDir -Force | Out-Null
 
-          $chunkSize = 50 * 1024 * 1024  # 50MB per chunk (Gitee API enforces ~100MB but often fails above 50MB)
+          $chunkSize = 105 * 1024 * 1024  # ~100MB per chunk → ~20 parts for a 2GB installer
           $stream = [System.IO.File]::OpenRead($setupFile.FullName)
           $buffer = New-Object byte[] $chunkSize
           $partNum = 0
@@ -281,70 +281,133 @@ jobs:
           Write-Host "Total parts: $partNum"
           echo "TOTAL_PARTS=$partNum" >> $env:GITHUB_ENV
 
-          # Generate merge script
+          # Compute SHA256 of original installer and each part
+          $sha256 = (Get-FileHash $setupFile.FullName -Algorithm SHA256).Hash
+          Write-Host "Installer SHA256: $sha256"
+          $expectedSize = $setupFile.Length
+
+          $partHashes = @{}
+          $checksumLines = @()
+          Get-ChildItem "$partsDir/*.part" | Sort-Object Name | ForEach-Object {
+              $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+              $partHashes[$_.Name] = $h
+              $checksumLines += "$h  $($_.Name)"
+              Write-Host "  $($_.Name) SHA256: $h"
+          }
+          $checksumLines | Out-File -FilePath "$partsDir/checksums.txt" -Encoding UTF8
+          Write-Host "Checksums file created"
+
+          # Generate merge script (PowerShell-based for reliable hash verification)
           $version = "${{ github.ref_name }}"
           $exeName = $setupFile.Name
           $batContent = @"
           @echo off
           chcp 65001 >nul
-          setlocal enabledelayedexpansion
           echo ============================================
           echo   天军科技AI视觉检测系统 - 安装包合并工具
           echo   版本: $version
           echo ============================================
           echo.
-          echo 正在合并安装包文件，请稍候...
+          powershell -ExecutionPolicy Bypass -Command "& {
+            `$ErrorActionPreference='Stop'
+            `$output='$exeName'
+            `$expectedParts=$partNum
+            `$expectedHash='$sha256'
+            `$expectedSize=$expectedSize
+
+            `$parts = Get-ChildItem -Filter '*.part' | Sort-Object Name
+            if (`$parts.Count -eq 0) {
+              Write-Host '[错误] 没有找到 .part 文件！' -ForegroundColor Red
+              Write-Host '请确保从两个仓库下载所有 .part 文件放在同一文件夹。'
+              Write-Host '  第一部分: https://gitee.com/xu-yanzhi32/tianjun-releases/releases'
+              Write-Host '  第二部分: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases'
+              exit 1
+            }
+            if (`$parts.Count -ne `$expectedParts) {
+              Write-Host `"[错误] 分块数量不对！找到 `$(`$parts.Count)，期望 `$expectedParts`" -ForegroundColor Red
+              exit 1
+            }
+            Write-Host `"找到 `$(`$parts.Count) 个分块文件，正在逐个校验...`" -ForegroundColor Cyan
+            Write-Host ''
+
+            `$bad = 0
+            `$checksums = @{}
+            if (Test-Path 'checksums.txt') {
+              Get-Content 'checksums.txt' | ForEach-Object {
+                `$line = `$_.Trim()
+                if (`$line -and `$line.Length -gt 64) {
+                  `$h = `$line.Substring(0,64)
+                  `$f = `$line.Substring(66).Trim()
+                  `$checksums[`$f] = `$h
+                }
+              }
+            }
+
+            foreach (`$p in `$parts) {
+              `$hash = (Get-FileHash `$p.FullName -Algorithm SHA256).Hash
+              if (`$checksums.ContainsKey(`$p.Name)) {
+                if (`$hash -eq `$checksums[`$p.Name]) {
+                  Write-Host `"  [OK] `$(`$p.Name)`" -ForegroundColor Green
+                } else {
+                  Write-Host `"  [损坏] `$(`$p.Name)`" -ForegroundColor Red
+                  Write-Host `"         期望: `$(`$checksums[`$p.Name])`"
+                  Write-Host `"         实际: `$hash`"
+                  `$bad++
+                }
+              } else {
+                Write-Host `"  [?] `$(`$p.Name) (无校验记录)`" -ForegroundColor Yellow
+              }
+            }
+            Write-Host ''
+
+            if (`$bad -gt 0) {
+              Write-Host `"[错误] 发现 `$bad 个损坏文件！请重新下载标记为 [损坏] 的文件。`" -ForegroundColor Red
+              exit 1
+            }
+
+            Write-Host '所有分块验证通过，正在合并...' -ForegroundColor Cyan
+            if (Test-Path `$output) { Remove-Item `$output -Force }
+            `$outStream = [System.IO.File]::Create(`$output)
+            `$i = 0
+            foreach (`$p in `$parts) {
+              `$i++
+              `$bytes = [System.IO.File]::ReadAllBytes(`$p.FullName)
+              `$outStream.Write(`$bytes, 0, `$bytes.Length)
+              Write-Host `"  [`$i/`$(`$parts.Count)] `$(`$p.Name) OK`"
+            }
+            `$outStream.Close()
+
+            `$actualSize = (Get-Item `$output).Length
+            if (`$actualSize -ne `$expectedSize) {
+              Write-Host `"[错误] 文件大小不匹配！实际: `$actualSize, 期望: `$expectedSize`" -ForegroundColor Red
+              Remove-Item `$output -Force
+              exit 1
+            }
+
+            Write-Host '' 
+            Write-Host '正在做最终 SHA256 校验...' -ForegroundColor Cyan
+            `$finalHash = (Get-FileHash `$output -Algorithm SHA256).Hash
+            if (`$finalHash -eq `$expectedHash) {
+              Write-Host ''
+              Write-Host '============================================' -ForegroundColor Green
+              Write-Host `"  [成功] 合并并验证通过！`" -ForegroundColor Green
+              Write-Host `"  安装程序: `$output`" -ForegroundColor Green
+              Write-Host `"  SHA256: `$finalHash`" -ForegroundColor Green
+              Write-Host '============================================' -ForegroundColor Green
+              Write-Host ''
+              Write-Host '请双击运行安装程序进行安装。'
+            } else {
+              Write-Host `"[错误] SHA256 校验失败！`" -ForegroundColor Red
+              Write-Host `"  实际: `$finalHash`"
+              Write-Host `"  期望: `$expectedHash`"
+              Remove-Item `$output -Force
+            }
+          }"
           echo.
-
-          set "output=$exeName"
-          if exist "%output%" del /f "%output%"
-
-          set "count=0"
-          set "cmd=copy /b"
-          set "first=1"
-
-          for /f "delims=" %%f in ('dir /b /o:n *.part 2^>nul') do (
-              set /a count+=1
-              if !first!==1 (
-                  set "cmd=!cmd! "%%f""
-                  set "first=0"
-              ) else (
-                  set "cmd=!cmd!+"%%f""
-              )
-          )
-
-          if !count!==0 (
-              echo [错误] 当前目录下没有找到 .part 文件！
-              echo 请确保从两个仓库下载的所有 .part 文件都放在同一个文件夹中。
-              echo.
-              echo 下载地址：
-              echo   第一部分: https://gitee.com/xu-yanzhi32/tianjun-releases/releases
-              echo   Part 2: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases
-              pause
-              exit /b 1
-          )
-
-          set "cmd=!cmd! "%output%""
-          echo 找到 !count! 个分块文件，正在合并...
-          !cmd! >nul
-
-          if exist "%output%" (
-              echo.
-              echo ============================================
-              echo   合并成功！
-              echo   安装程序: %output%
-              echo ============================================
-              echo.
-              echo 请双击运行安装程序进行安装。
-          ) else (
-              echo.
-              echo [错误] 合并失败，请检查文件是否完整。
-          )
-
           pause
           "@
 
-          $batContent | Out-File -FilePath "$partsDir/merge_installer.bat" -Encoding Default
+          $batContent | Out-File -FilePath "$partsDir/merge_installer.bat" -Encoding UTF8
           Write-Host "Merge script created: merge_installer.bat"
 
           # List all files
@@ -392,7 +455,7 @@ jobs:
             local MAX_RETRIES=3
             for attempt in $(seq 1 $MAX_RETRIES); do
               echo "  Attempt $attempt/$MAX_RETRIES for $FNAME ..."
-              HTTP_CODE=$(curl -s -o /tmp/gitee_resp.json -w "%{http_code}" --max-time 600 \
+              HTTP_CODE=$(curl -s -o /tmp/gitee_resp.json -w "%{http_code}" --max-time 1200 \
                 -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/${REPO}/releases/${RELEASE_ID}/attach_files" \
                 -F "access_token=${GITEE_TOKEN}" \
                 -F "file=@${FILE_PATH}")
@@ -435,9 +498,11 @@ jobs:
           fi
           echo "Release created with ID: $RELEASE_ID"
 
-          # Upload merge script
+          # Upload merge script and checksums
           echo "Uploading merge script..."
           upload_file "tianjun-releases" "$RELEASE_ID" "gitee-parts/merge_installer.bat" || echo "Warning: merge script upload failed, continuing..."
+          echo "Uploading checksums..."
+          upload_file "tianjun-releases" "$RELEASE_ID" "gitee-parts/checksums.txt" || echo "Warning: checksums upload failed, continuing..."
 
           # Upload first batch of parts
           FAIL_COUNT=0
@@ -475,7 +540,7 @@ jobs:
             local MAX_RETRIES=3
             for attempt in $(seq 1 $MAX_RETRIES); do
               echo "  Attempt $attempt/$MAX_RETRIES for $FNAME ..."
-              HTTP_CODE=$(curl -s -o /tmp/gitee_resp.json -w "%{http_code}" --max-time 600 \
+              HTTP_CODE=$(curl -s -o /tmp/gitee_resp.json -w "%{http_code}" --max-time 1200 \
                 -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/${REPO}/releases/${RELEASE_ID}/attach_files" \
                 -F "access_token=${GITEE_TOKEN}" \
                 -F "file=@${FILE_PATH}")
