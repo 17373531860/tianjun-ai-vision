@@ -1,15 +1,16 @@
-#define MyAppName "天军科技AI视觉检测系统"
-#define MyAppPublisher "天军科技"
+; Inno Setup script - UTF-8 BOM will be added by CI before compilation
+; Version is passed via /DMyAppVersion="x.y.z" on the command line
+
 #define MyAppExeName "tianjun-ai-vision.exe"
 
 [Setup]
 AppId={{com.tianjun.ai-vision}
-AppName={#MyAppName}
+AppName=TianJun AI Vision
 AppVersion={#MyAppVersion}
-AppPublisher={#MyAppPublisher}
-AppCopyright=Copyright (C) 2024 天军科技
+AppPublisher=TianJun Tech
+AppCopyright=Copyright (C) 2024 TianJun Tech
 DefaultDirName={autopf}\tianjun-ai-vision
-DefaultGroupName={#MyAppName}
+DefaultGroupName=TianJun AI Vision
 LicenseFile=license.txt
 OutputDir=..\dist
 OutputBaseFilename=TianJun-AI-Vision-{#MyAppVersion}-Setup
@@ -21,27 +22,27 @@ LZMAUseSeparateProcess=yes
 LZMANumBlockThreads=4
 DiskSpanning=no
 PrivilegesRequired=admin
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesInstallIn64BitMode=x64
 WizardStyle=modern
 ShowLanguageDialog=no
 DisableWelcomePage=no
 DisableProgramGroupPage=yes
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 Source: "..\dist\win-unpacked\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\TianJun AI Vision"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\TianJun AI Vision"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Tasks]
-Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项:"; Flags: checked
+Name: "desktopicon"; Description: "Create desktop shortcut"; Flags: checked
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch application"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "pnputil"; Parameters: "/delete-driver ""{app}\resources\drivers\CH341SER\CH341SER.INF"" /uninstall"; Flags: runhidden; RunOnceId: "RemoveCH341"
