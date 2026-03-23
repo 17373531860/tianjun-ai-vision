@@ -274,6 +274,12 @@ jobs:
           if (-not $version -or $version -eq "${{ github.ref_name }}") { $version = "2.0.8" }
           echo "Building installer for version $version..."
           
+          $issFile = "electron\build\installer.iss"
+          $content = Get-Content $issFile -Raw
+          $content = $content -replace "`r?`n", "`r`n"
+          [System.IO.File]::WriteAllText($issFile, $content, [System.Text.Encoding]::UTF8)
+          echo "Converted ISS to CRLF + UTF-8"
+          
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           & $iscc /DMyAppVersion="$version" "electron\build\installer.iss"
           

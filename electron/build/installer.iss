@@ -36,10 +36,7 @@ Source: "..\dist\win-unpacked\*"; DestDir: "{app}"; Flags: ignoreversion recurse
 
 [Icons]
 Name: "{group}\TianJun AI Vision"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\TianJun AI Vision"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-
-[Tasks]
-Name: "desktopicon"; Description: "Create desktop shortcut"; Flags: checked
+Name: "{autodesktop}\TianJun AI Vision"; Filename: "{app}\{#MyAppExeName}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch application"; Flags: nowait postinstall skipifsilent
