@@ -242,51 +242,43 @@ jobs:
           Test-Path "ffmpeg"
           Get-ChildItem "ffmpeg" -ErrorAction SilentlyContinue | Select-Object Name
       
-      - name: Patch NSIS for large file support
-        shell: pwsh
-        run: |
-          $cacheDir = "$env:LOCALAPPDATA\electron-builder\Cache\nsis\nsis-3.0.4.1"
-          if (-not (Test-Path "$cacheDir\Bin\makensis.exe")) {
-            echo "Pre-downloading NSIS to cache..."
-            $url = "https://github.com/electron-userland/electron-builder-binaries/releases/download/nsis-3.0.4.1/nsis-3.0.4.1.7z"
-            $tmp = "$env:TEMP\nsis.7z"
-            Invoke-WebRequest -Uri $url -OutFile $tmp
-            New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
-            & 7z x $tmp -o"$cacheDir" -y
-            Remove-Item $tmp
-          }
-          $exe = "$cacheDir\Bin\makensis.exe"
-          echo "Patching makensis.exe with LARGEADDRESSAWARE flag..."
-          $bytes = [System.IO.File]::ReadAllBytes($exe)
-          $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
-          $charOff = $peOff + 4 + 18
-          $chars = [BitConverter]::ToUInt16($bytes, $charOff)
-          echo "Current Characteristics: 0x$($chars.ToString('X4'))"
-          if (($chars -band 0x20) -eq 0) {
-            $chars = $chars -bor 0x20
-            $newChars = [BitConverter]::GetBytes([UInt16]$chars)
-            $bytes[$charOff] = $newChars[0]
-            $bytes[$charOff + 1] = $newChars[1]
-            [System.IO.File]::WriteAllBytes($exe, $bytes)
-            echo "LARGEADDRESSAWARE flag set: 0x$($chars.ToString('X4'))"
-          } else {
-            echo "LARGEADDRESSAWARE already set"
-          }
-
-      - name: Build Electron App
+      - name: Build Electron App (dir)
         shell: pwsh
         run: |
           cd electron
           npm ci
-          echo "Starting electron-builder..."
-          npx electron-builder --win --x64 2>&1
-          echo "=== Build completed, listing all files ==="
-          echo "--- electron/ root ---"
-          Get-ChildItem -ErrorAction SilentlyContinue | Select-Object Name
-          echo "--- electron/dist/ ---"
-          Get-ChildItem "dist" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length
-          echo "--- Looking for .exe anywhere ---"
-          Get-ChildItem -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object FullName
+          echo "Building unpacked app directory..."
+          npx electron-builder --dir --x64 2>&1
+          echo "=== Unpacked directory ==="
+          Test-Path "dist\win-unpacked" 
+          Get-ChildItem "dist\win-unpacked" -ErrorAction SilentlyContinue | Select-Object Name
+          $size = (Get-ChildItem "dist\win-unpacked" -Recurse | Measure-Object -Property Length -Sum).Sum
+          echo "Total unpacked size: $([math]::Round($size/1GB, 2)) GB"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          echo "Installing Inno Setup 6..."
+          choco install innosetup -y --no-progress
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (Test-Path $iscc) { echo "Inno Setup installed: $iscc" }
+          else { echo "ERROR: ISCC.exe not found"; exit 1 }
+
+      - name: Build Installer with Inno Setup
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          if (-not $version -or $version -eq "${{ github.ref_name }}") { $version = "2.0.8" }
+          echo "Building installer for version $version..."
+          
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc /DMyAppVersion="$version" "electron\build\installer.iss"
+          
+          echo "=== Installer output ==="
+          Get-ChildItem "electron\dist" -Filter "*.exe" | Select-Object Name, Length
+          $setup = Get-ChildItem "electron\dist" -Filter "TianJun-AI-Vision-*-Setup.exe" | Select-Object -First 1
+          if (-not $setup) { echo "ERROR: Setup exe not found!"; exit 1 }
+          echo "Installer: $($setup.Name) ($([math]::Round($setup.Length/1GB, 2)) GB)"
       
       - name: Upload Release to tianjun-releases
         if: startsWith(github.ref, 'refs/tags/v')

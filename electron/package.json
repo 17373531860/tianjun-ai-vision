@@ -91,30 +91,13 @@
     "win": {
       "target": [
         {
-          "target": "nsis",
+          "target": "dir",
           "arch": [
             "x64"
           ]
         }
       ],
-      "icon": "build/icon.ico",
-      "artifactName": "TianJun-AI-Vision-${version}-Setup.${ext}"
-    },
-    "nsis": {
-      "oneClick": false,
-      "unicode": true,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "天军科技AI视觉检测系统",
-      "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico",
-      "license": "build/license.txt",
-      "runAfterFinish": true,
-      "perMachine": true,
-      "allowElevation": true,
-      "deleteAppDataOnUninstall": false,
-      "include": "build/installer.nsh"
+      "icon": "build/icon.ico"
     },
     "linux": {
       "target": [

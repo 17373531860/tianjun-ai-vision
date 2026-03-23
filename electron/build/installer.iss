@@ -1,0 +1,146 @@
+#define MyAppName "天军科技AI视觉检测系统"
+#define MyAppPublisher "天军科技"
+#define MyAppExeName "tianjun-ai-vision.exe"
+
+[Setup]
+AppId={{com.tianjun.ai-vision}
+AppName={#MyAppName}
+AppVersion={#MyAppVersion}
+AppPublisher={#MyAppPublisher}
+AppCopyright=Copyright (C) 2024 天军科技
+DefaultDirName={autopf}\tianjun-ai-vision
+DefaultGroupName={#MyAppName}
+LicenseFile=license.txt
+OutputDir=..\dist
+OutputBaseFilename=TianJun-AI-Vision-{#MyAppVersion}-Setup
+SetupIconFile=icon.ico
+UninstallDisplayIcon={app}\{#MyAppExeName}
+Compression=lzma2/ultra64
+SolidCompression=yes
+LZMAUseSeparateProcess=yes
+LZMANumBlockThreads=4
+DiskSpanning=no
+PrivilegesRequired=admin
+ArchitecturesInstallIn64BitMode=x64compatible
+WizardStyle=modern
+ShowLanguageDialog=no
+DisableWelcomePage=no
+DisableProgramGroupPage=yes
+
+[Languages]
+Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+
+[Files]
+Source: "..\dist\win-unpacked\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Icons]
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+
+[Tasks]
+Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项:"; Flags: checked
+
+[Run]
+Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "pnputil"; Parameters: "/delete-driver ""{app}\resources\drivers\CH341SER\CH341SER.INF"" /uninstall"; Flags: runhidden; RunOnceId: "RemoveCH341"
+
+[Code]
+var
+  LicenseBackupDir: String;
+  AppDataDir: String;
+
+procedure BackupLicenseFiles;
+begin
+  AppDataDir := ExpandConstant('{userappdata}\tianjun-ai-vision');
+  LicenseBackupDir := ExpandConstant('{tmp}\tianjun-license-backup');
+
+  if FileExists(AppDataDir + '\license.lic') then
+  begin
+    ForceDirectories(LicenseBackupDir);
+    FileCopy(AppDataDir + '\license.lic', LicenseBackupDir + '\license.lic', False);
+    if FileExists(AppDataDir + '\machine_id.txt') then
+      FileCopy(AppDataDir + '\machine_id.txt', LicenseBackupDir + '\machine_id.txt', False);
+    if FileExists(AppDataDir + '\hw_verify.txt') then
+      FileCopy(AppDataDir + '\hw_verify.txt', LicenseBackupDir + '\hw_verify.txt', False);
+    Log('License files backed up');
+  end;
+end;
+
+procedure BackupUserData;
+var
+  OldInstDir: String;
+begin
+  AppDataDir := ExpandConstant('{userappdata}\tianjun-ai-vision');
+  OldInstDir := ExpandConstant('{app}');
+
+  if FileExists(OldInstDir + '\resources\backend\sql_app.db') then
+  begin
+    ForceDirectories(AppDataDir);
+    if not FileExists(AppDataDir + '\sql_app.db') then
+      FileCopy(OldInstDir + '\resources\backend\sql_app.db', AppDataDir + '\sql_app.db', False);
+  end;
+end;
+
+procedure RestoreLicenseFiles;
+begin
+  AppDataDir := ExpandConstant('{userappdata}\tianjun-ai-vision');
+  LicenseBackupDir := ExpandConstant('{tmp}\tianjun-license-backup');
+
+  if FileExists(LicenseBackupDir + '\license.lic') then
+  begin
+    ForceDirectories(AppDataDir);
+    if not FileExists(AppDataDir + '\license.lic') then
+      FileCopy(LicenseBackupDir + '\license.lic', AppDataDir + '\license.lic', False);
+    if FileExists(LicenseBackupDir + '\machine_id.txt') and not FileExists(AppDataDir + '\machine_id.txt') then
+      FileCopy(LicenseBackupDir + '\machine_id.txt', AppDataDir + '\machine_id.txt', False);
+    if FileExists(LicenseBackupDir + '\hw_verify.txt') and not FileExists(AppDataDir + '\hw_verify.txt') then
+      FileCopy(LicenseBackupDir + '\hw_verify.txt', AppDataDir + '\hw_verify.txt', False);
+    DelTree(LicenseBackupDir, True, True, True);
+    Log('License files restored');
+  end;
+end;
+
+procedure InstallCH341Driver;
+var
+  ResultCode: Integer;
+  DriverInf: String;
+  DriverSetup: String;
+begin
+  DriverInf := ExpandConstant('{app}\resources\drivers\CH341SER\CH341SER.INF');
+  DriverSetup := ExpandConstant('{app}\resources\drivers\CH341SER\SETUP.EXE');
+
+  if Exec('pnputil', '/add-driver "' + DriverInf + '" /install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    if ResultCode = 0 then
+      Log('CH341 driver installed via pnputil')
+    else
+    begin
+      Log('pnputil returned ' + IntToStr(ResultCode) + ', trying SETUP.EXE');
+      if FileExists(DriverSetup) then
+        Exec(DriverSetup, '/S', ExtractFilePath(DriverSetup), SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    end;
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  BackupLicenseFiles;
+  BackupUserData;
+  Result := '';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    RestoreLicenseFiles;
+    InstallCH341Driver;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  { Keep AppData on uninstall - user data should be preserved }
+end;
