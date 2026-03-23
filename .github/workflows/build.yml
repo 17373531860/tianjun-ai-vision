@@ -261,8 +261,22 @@ jobs:
           echo "Installing Inno Setup 6..."
           choco install innosetup -y --no-progress
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          if (Test-Path $iscc) { echo "Inno Setup installed: $iscc" }
-          else { echo "ERROR: ISCC.exe not found"; exit 1 }
+          if (-not (Test-Path $iscc)) { echo "ERROR: ISCC.exe not found"; exit 1 }
+          echo "Inno Setup installed: $iscc"
+          
+          $langDir = "C:\Program Files (x86)\Inno Setup 6\Languages"
+          $cnFile = "$langDir\ChineseSimplified.isl"
+          if (-not (Test-Path $cnFile)) {
+            echo "Chinese Simplified ISL not found, downloading..."
+            $url = "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl"
+            Invoke-WebRequest -Uri $url -OutFile $cnFile
+            if (Test-Path $cnFile) { echo "Downloaded ChineseSimplified.isl" }
+            else { echo "WARNING: Could not download Chinese language file" }
+          } else {
+            echo "ChineseSimplified.isl found"
+          }
+          echo "Available languages:"
+          Get-ChildItem $langDir -Filter "*.isl" | Select-Object Name
 
       - name: Build Installer with Inno Setup
         shell: pwsh
