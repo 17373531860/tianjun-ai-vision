@@ -22,6 +22,18 @@ jobs:
     timeout-minutes: 120
     
     steps:
+      - name: Free disk space
+        shell: pwsh
+        run: |
+          echo "Disk space before cleanup:"
+          Get-PSDrive C | Select-Object Used,Free
+          Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files (x86)\Microsoft Visual Studio\2019" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\hostedtoolcache\CodeQL" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\hostedtoolcache\Java_Temurin-Hotspot_jdk" -ErrorAction SilentlyContinue
+          echo "Disk space after cleanup:"
+          Get-PSDrive C | Select-Object Used,Free
+      
       - name: Checkout code
         uses: actions/checkout@v4
       
@@ -131,6 +143,10 @@ jobs:
         run: |
           conda activate tianjun
           
+          echo "=== Cleaning conda environment to reduce size ==="
+          pip cache purge 2>/dev/null || true
+          conda clean -a -y 2>/dev/null || true
+          
           echo "Packing conda environment..."
           mkdir -p python-env/python
           conda-pack -n tianjun -o python-env/tianjun-env.tar.gz --force
@@ -140,7 +156,21 @@ jobs:
           tar -xzf tianjun-env.tar.gz -C python
           rm tianjun-env.tar.gz
           
-          echo "Environment size:"
+          echo "=== Stripping unnecessary files to stay under NSIS 2GB limit ==="
+          find python -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+          find python -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find python -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find python -name "*.pdb" -delete 2>/dev/null || true
+          find python -name "*.debug" -delete 2>/dev/null || true
+          find python -name "*.a" -delete 2>/dev/null || true
+          find python -name "*.lib" ! -path "*/torch/lib/*" -delete 2>/dev/null || true
+          find python -path "*/torch/test/*" -delete 2>/dev/null || true
+          find python -path "*/torch/include/*" -type f -delete 2>/dev/null || true
+          find python -path "*/caffe2/python/serialized_test/*" -delete 2>/dev/null || true
+          find python -name "*.dist-info" -type d -exec rm -rf {} + 2>/dev/null || true
+          find python -name "*.egg-info" -type d -exec rm -rf {} + 2>/dev/null || true
+          
+          echo "Environment size after cleanup:"
           du -sh python
       
       - name: Download FFmpeg
