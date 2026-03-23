@@ -520,6 +520,7 @@ def get_sessions_by_date(
     start_hour: Optional[str] = None,
     end_hour: Optional[str] = None,
     channel_id: Optional[int] = None,
+    shift: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """获取指定日期的会话概览（班次过滤基于 cycle 级别）"""
@@ -543,6 +544,8 @@ def get_sessions_by_date(
         sess_query = sess_query.filter(DetectionSession.project_id == project_id)
     if channel_id is not None:
         sess_query = sess_query.filter(DetectionSession.channel_id == channel_id)
+    if shift and shift in ('day', 'night'):
+        sess_query = sess_query.filter(DetectionSession.shift_label == shift)
     sessions = sess_query.order_by(DetectionSession.start_time).all()
 
     if not use_shift:

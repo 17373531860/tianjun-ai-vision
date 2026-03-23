@@ -639,8 +639,11 @@ const customEndHour = ref('20:00');
 
 const getShiftHours = () => {
   if (shiftType.value === 'all') return { start: null, end: null };
-  if (shiftType.value === 'day') return { start: '08:00', end: '20:00' };
-  if (shiftType.value === 'night') return { start: '20:00', end: '08:00' };
+  const dc = projectStore.currentProject?.data_config || {};
+  const dayStart = dc.day_shift_start || '08:00';
+  const nightStart = dc.night_shift_start || '20:00';
+  if (shiftType.value === 'day') return { start: dayStart, end: nightStart };
+  if (shiftType.value === 'night') return { start: nightStart, end: dayStart };
   return { start: customStartHour.value, end: customEndHour.value };
 };
 
@@ -919,7 +922,10 @@ const handleDateChange = async (date) => {
   loadingSessions.value = true;
   try {
     const { start, end } = getShiftHours();
-    const res = await getSessionsByDate(date, projectStore.currentProjectId, start, end, channelFilter.value);
+    const dc = projectStore.currentProject?.data_config || {};
+    const shiftParam = dc.shift_split_enabled && shiftType.value !== 'all' && shiftType.value !== 'custom'
+      ? shiftType.value : null;
+    const res = await getSessionsByDate(date, projectStore.currentProjectId, start, end, channelFilter.value, shiftParam);
     sessions.value = res.data?.sessions || [];
     
     overviewData.total_cycles = res.data?.total_cycles || 0;

@@ -214,13 +214,18 @@
         </div>
         <!-- Col 4: NG ranking -->
         <div class="flex flex-col min-h-0">
-          <div class="text-[10px] text-cyan-400 font-bold mb-1">NG 步骤 TOP3</div>
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[10px] text-cyan-400 font-bold">NG 步骤 TOP3</span>
+            <span class="text-[9px] text-gray-500 cursor-pointer hover:text-cyan-400 select-none" @click="toggleNgTopMode()">
+              {{ systemStore.display.monitor.ngTopDisplayMode === 'percentage' ? '百分比' : '次数' }}
+            </span>
+          </div>
           <div class="flex-1 overflow-auto space-y-1">
             <div v-for="(item, idx) in (multiChannelData[selectedChannel]?.ngStepRanking || [])" :key="item.step"
               class="flex items-center gap-1.5 bg-slate-800/50 px-1.5 py-1 rounded text-xs">
               <span class="text-sm font-bold w-4 text-white text-center">{{ idx + 1 }}</span>
               <span class="flex-1 text-gray-300 truncate">{{ item.step }}</span>
-              <span class="text-sm font-bold text-white">{{ item.rate.toFixed(0) }}%</span>
+              <span class="text-sm font-bold text-white">{{ systemStore.display.monitor.ngTopDisplayMode === 'count' ? item.count : item.rate.toFixed(0) + '%' }}</span>
             </div>
             <div v-if="!multiChannelData[selectedChannel]?.ngStepRanking?.length" class="flex items-center justify-center h-full text-gray-600 text-xs">暂无数据</div>
           </div>
@@ -512,7 +517,12 @@
          </div>
          <!-- NG Step Ranking -->
          <div class="bg-slate-900 border border-slate-700 rounded-lg p-2 flex flex-col">
-            <h3 class="text-cyan-400 text-base font-bold mb-1.5">NG步骤TOP3</h3>
+            <div class="flex items-center justify-between mb-1.5">
+              <h3 class="text-cyan-400 text-base font-bold">NG步骤TOP3</h3>
+              <span class="text-xs text-gray-500 cursor-pointer hover:text-cyan-400 select-none"
+                @click="toggleNgTopMode()"
+              >{{ systemStore.display.monitor.ngTopDisplayMode === 'percentage' ? '百分比' : '次数' }}</span>
+            </div>
             <div class="flex-1 overflow-y-auto space-y-1">
               <div v-if="ngStepRanking.length === 0" class="flex items-center justify-center h-full text-gray-600 text-base">
                 暂无数据
@@ -522,7 +532,7 @@
               >
                 <span class="text-lg font-bold w-6 text-center text-white">{{ idx + 1 }}</span>
                 <span class="flex-1 text-base text-gray-300 truncate">{{ item.step }}</span>
-                <span class="text-lg font-bold text-white">{{ item.rate.toFixed(1) }}%</span>
+                <span class="text-lg font-bold text-white">{{ systemStore.display.monitor.ngTopDisplayMode === 'count' ? item.count : item.rate.toFixed(1) + '%' }}</span>
               </div>
             </div>
          </div>
@@ -1029,7 +1039,8 @@ const startDetectionForChannel = async (ch) => {
       steps_config: currentProject.value.steps_config || [],
       pipeline_config: currentProject.value.pipeline_config || {},
       events_config: currentProject.value.events_config || [],
-      counters_config: currentProject.value.counters_config || []
+      counters_config: currentProject.value.counters_config || [],
+      data_config: currentProject.value.data_config || {}
     }, ch);
     const modelId = currentProject.value.default_model_id;
     if (!modelId) { ElMessage.warning('请先配置模型'); return; }
@@ -1216,6 +1227,12 @@ const getCounterColor = (name) => {
 // NG 步骤排名数据
 const ngStepRanking = ref([]);
 const ngStepCountMap = ref({});
+
+const toggleNgTopMode = () => {
+  systemStore.display.monitor.ngTopDisplayMode =
+    systemStore.display.monitor.ngTopDisplayMode === 'percentage' ? 'count' : 'percentage';
+  localStorage.setItem('display_settings', JSON.stringify(systemStore.display));
+};
 
 // 逻辑模式文本
 const logicModeText = computed(() => {
@@ -1924,7 +1941,8 @@ const syncProjectConfig = async () => {
     steps_config: proj.steps_config || [],
     pipeline_config: pipelineCfg,
     events_config: proj.events_config || [],
-    counters_config: proj.counters_config || []
+    counters_config: proj.counters_config || [],
+    data_config: proj.data_config || {}
   });
 };
 

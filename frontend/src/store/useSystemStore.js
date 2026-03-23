@@ -82,6 +82,7 @@ export const useSystemStore = defineStore('system', {
         showLatency: true,
         showDetectionCount: true,
         ctIncludeNg: false,
+        ngTopDisplayMode: 'percentage',  // 'percentage' | 'count'
         defaultCounters: {
           showTotal: true,      // 总产量
           showGood: true,       // 合格总数
@@ -105,7 +106,12 @@ export const useSystemStore = defineStore('system', {
     // 性能设置
     performance: {
       frameLimitEnabled: false,  // 帧率限制开关（默认禁用，本地应用无需节流）
-      targetStreamFps: 30        // 目标流帧率
+      targetStreamFps: 30,       // 目标流帧率
+      halfPrecision: false,      // FP16 半精度推理（默认关闭）
+      mediapipeEnabled: false,   // MediaPipe 骨架叠加（默认关闭）
+      mediapipePose: true,       // 显示姿态骨架
+      mediapipeHands: true,      // 显示手部关键点
+      mediapipeInterval: 2       // MediaPipe 处理间隔（帧）
     }
   }),
   actions: {

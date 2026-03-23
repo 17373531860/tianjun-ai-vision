@@ -53,6 +53,7 @@ def migrate_database():
         ("projects", "detection_config", "JSON"),
         ("projects", "data_config", "JSON"),
         ("detection_sessions", "channel_id", "INTEGER DEFAULT 0"),
+        ("detection_sessions", "shift_label", "VARCHAR(20)"),
     ]
     
     try:
@@ -244,6 +245,7 @@ def auto_load_active_project():
                 'pipeline_config': project.pipeline_config or {},
                 'events_config': project.events_config or [],
                 'counters_config': project.counters_config or [],
+                'data_config': project.data_config or {},
             }
             vm = get_video_manager()
             vm.set_project_config(config)

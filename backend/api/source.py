@@ -449,6 +449,20 @@ class VideoSourceManager:
         # 帧率限制配置（用于MJPEG流）
         self.frame_limit_enabled = False  # 默认禁用节流（本地应用）
         self.target_stream_fps = 30  # 目标流帧率
+        self.use_half = False  # FP16 半精度推理（默认关闭，用户可在设置中开启）
+        
+        # MediaPipe overlay (纯视觉叠加，默认关闭)
+        self.mediapipe_enabled = False
+        self.mediapipe_pose = True       # 显示姿态骨架
+        self.mediapipe_hands = True      # 显示手部关键点
+        self._mp_pose = None             # lazy-loaded mediapipe Pose instance
+        self._mp_hands = None            # lazy-loaded mediapipe Hands instance
+        self._mp_draw = None             # mediapipe drawing utils
+        self._mp_draw_styles = None
+        self._mp_last_pose_results = None
+        self._mp_last_hands_results = None
+        self._mp_frame_counter = 0
+        self._mp_process_interval = 2    # 每隔 N 帧跑一次 MediaPipe（节省性能）
         
         # 视频播放控制
         self.video_speed = 1.0  # 视频倍速
@@ -485,7 +499,12 @@ class VideoSourceManager:
                     self.device = config.get('device', 'auto')
                     self.frame_limit_enabled = config.get('frame_limit_enabled', False)
                     self.target_stream_fps = config.get('target_stream_fps', 30)
-                    print(f"已加载设备配置: 设备={self.device}, 帧率限制={self.frame_limit_enabled}")
+                    self.use_half = config.get('use_half', False)
+                    self.mediapipe_enabled = config.get('mediapipe_enabled', False)
+                    self.mediapipe_pose = config.get('mediapipe_pose', True)
+                    self.mediapipe_hands = config.get('mediapipe_hands', True)
+                    self._mp_process_interval = config.get('mediapipe_interval', 2)
+                    print(f"已加载设备配置: 设备={self.device}, 帧率限制={self.frame_limit_enabled}, FP16={self.use_half}, MediaPipe={self.mediapipe_enabled}")
         except Exception as e:
             print(f"加载设备配置失败: {e}")
     
@@ -497,7 +516,12 @@ class VideoSourceManager:
             config = {
                 'device': self.device,
                 'frame_limit_enabled': self.frame_limit_enabled,
-                'target_stream_fps': self.target_stream_fps
+                'target_stream_fps': self.target_stream_fps,
+                'use_half': self.use_half,
+                'mediapipe_enabled': self.mediapipe_enabled,
+                'mediapipe_pose': self.mediapipe_pose,
+                'mediapipe_hands': self.mediapipe_hands,
+                'mediapipe_interval': self._mp_process_interval
             }
             with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
@@ -505,6 +529,109 @@ class VideoSourceManager:
         except Exception as e:
             print(f"保存设备配置失败: {e}")
     
+    def _init_mediapipe(self):
+        """Lazy-load MediaPipe models on first use."""
+        try:
+            import mediapipe as mp
+            self._mp_draw = mp.solutions.drawing_utils
+            self._mp_draw_styles = mp.solutions.drawing_styles
+            if self.mediapipe_pose and self._mp_pose is None:
+                self._mp_pose = mp.solutions.pose.Pose(
+                    static_image_mode=False,
+                    model_complexity=0,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5,
+                )
+                print("[MediaPipe] Pose 模型已加载")
+            if self.mediapipe_hands and self._mp_hands is None:
+                self._mp_hands = mp.solutions.hands.Hands(
+                    static_image_mode=False,
+                    max_num_hands=2,
+                    model_complexity=0,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5,
+                )
+                print("[MediaPipe] Hands 模型已加载")
+        except ImportError:
+            print("[MediaPipe] 警告: mediapipe 未安装，pip install mediapipe")
+            self.mediapipe_enabled = False
+        except Exception as e:
+            print(f"[MediaPipe] 初始化失败: {e}")
+            self.mediapipe_enabled = False
+
+    def _release_mediapipe(self):
+        """Release MediaPipe resources."""
+        if self._mp_pose is not None:
+            try:
+                self._mp_pose.close()
+            except Exception:
+                pass
+            self._mp_pose = None
+        if self._mp_hands is not None:
+            try:
+                self._mp_hands.close()
+            except Exception:
+                pass
+            self._mp_hands = None
+        self._mp_last_pose_results = None
+        self._mp_last_hands_results = None
+        self._mp_frame_counter = 0
+        print("[MediaPipe] 资源已释放")
+
+    def _apply_mediapipe_overlay(self, frame):
+        """Run MediaPipe on the frame (or reuse cached results) and draw landmarks.
+        
+        Returns the annotated frame (modified in-place for performance).
+        """
+        if not self.mediapipe_enabled:
+            return frame
+        
+        if self._mp_draw is None:
+            self._init_mediapipe()
+            if not self.mediapipe_enabled:
+                return frame
+        
+        import mediapipe as mp
+        
+        self._mp_frame_counter += 1
+        should_process = (self._mp_frame_counter % max(self._mp_process_interval, 1)) == 0
+        
+        if should_process:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb.flags.writeable = False
+            
+            if self._mp_pose is not None and self.mediapipe_pose:
+                try:
+                    self._mp_last_pose_results = self._mp_pose.process(rgb)
+                except Exception:
+                    self._mp_last_pose_results = None
+            
+            if self._mp_hands is not None and self.mediapipe_hands:
+                try:
+                    self._mp_last_hands_results = self._mp_hands.process(rgb)
+                except Exception:
+                    self._mp_last_hands_results = None
+        
+        if self._mp_last_pose_results and self._mp_last_pose_results.pose_landmarks:
+            self._mp_draw.draw_landmarks(
+                frame,
+                self._mp_last_pose_results.pose_landmarks,
+                mp.solutions.pose.POSE_CONNECTIONS,
+                landmark_drawing_spec=self._mp_draw_styles.get_default_pose_landmarks_style(),
+            )
+        
+        if self._mp_last_hands_results and self._mp_last_hands_results.multi_hand_landmarks:
+            for hand_landmarks in self._mp_last_hands_results.multi_hand_landmarks:
+                self._mp_draw.draw_landmarks(
+                    frame,
+                    hand_landmarks,
+                    mp.solutions.hands.HAND_CONNECTIONS,
+                    self._mp_draw_styles.get_default_hand_landmarks_style(),
+                    self._mp_draw_styles.get_default_hand_connections_style(),
+                )
+        
+        return frame
+
     def _init_inference_vars(self):
         """初始化推理相关变量（在__init__的_load_device_config之后调用）"""
         self.conf_threshold = 0.25
@@ -559,6 +686,7 @@ class VideoSourceManager:
         self.project_config = None
         self.settlement_mode = 'first_step'  # 'first_step' or 'last_step'
         self.idle_timeout_seconds = 0         # 0 = disabled
+        self.cycle_max_duration = 0           # 0 = disabled, >0 = 周期总时长超时NG
         self.step_conf_thresholds = {}  # {step_name: threshold}
         self.step_min_frames = {}  # {step_name: min_frames} 每个步骤的最少帧数配置
         self.step_consecutive_frames = {}  # {step_name: count} 跟踪每个标签连续出现的帧数
@@ -619,6 +747,14 @@ class VideoSourceManager:
         self._tracking_registered_positions = {}  # {display_id: {class_name, cx, cy, stable_frames}}
         self._custom_tracker_yaml = None    # path to dynamic bytetrack config
         
+        # Event counting mode (动作计数)
+        self._event_counters = {}           # {class_name: completed_event_count}
+        self._event_state = {}              # {class_name: 'idle'|'visible'|'gone'}
+        self._event_visible_frames = {}     # {class_name: consecutive_visible_frames}
+        self._event_gone_frames_count = {}  # {class_name: consecutive_gone_frames}
+        self._event_first_seen = {}         # {class_name: timestamp of first event start}
+        self._event_last_seen = {}          # {class_name: timestamp of last event end}
+        
         # Container mode (box + items hierarchy)
         self._container_mode = False
         self._container_label = ''
@@ -648,6 +784,7 @@ class VideoSourceManager:
         self.export_settings = None  # 导出设置缓存
         self.last_cycle_end_time = None  # 上一周期结束时间（用于计算周期间隔）
         self._session_start_date = None  # 当前会话的开始日期（用于跨日自动拆分）
+        self._session_start_shift = None  # "day" / "night" / None — 班次实时拆分
         
         # 视频录制
         self.video_writer = None  # 视频录制器
@@ -718,12 +855,14 @@ class VideoSourceManager:
         try:
             db = self._get_db_session()
             session_uuid = str(uuid.uuid4())[:8]
+            current_shift = self._get_current_shift()
             session = DetectionSession(
                 session_uuid=session_uuid,
                 project_id=project_id,
                 start_time=datetime.now(),
                 status="running",
-                channel_id=self.channel_id
+                channel_id=self.channel_id,
+                shift_label=current_shift
             )
             db.add(session)
             db.commit()
@@ -734,6 +873,7 @@ class VideoSourceManager:
             self.current_cycle_number = 0
             self.recording_enabled = True
             self._session_start_date = datetime.now().date()
+            self._session_start_shift = current_shift
             
             # 加载导出设置
             self._load_export_settings()
@@ -832,25 +972,63 @@ class VideoSourceManager:
             self.current_session_uuid = None
             self.recording_enabled = False
             self._session_start_date = None
+            self._session_start_shift = None
     
-    def _auto_split_session(self):
-        """跨日自动拆分：结束旧会话，开启新会话，保持计数器不清零"""
+    def _get_current_shift(self) -> Optional[str]:
+        """Return 'day' or 'night' based on current time and project data_config.
+        Returns None when shift splitting is disabled."""
+        if not self.project_config:
+            return None
+        data_cfg = self.project_config.get('data_config') or {}
+        if not data_cfg.get('shift_split_enabled'):
+            return None
+        day_start = data_cfg.get('day_shift_start', '08:00')
+        night_start = data_cfg.get('night_shift_start', '20:00')
+        now_str = datetime.now().strftime('%H:%M')
+        if day_start <= night_start:
+            return 'day' if day_start <= now_str < night_start else 'night'
+        else:
+            return 'night' if night_start <= now_str < day_start else 'day'
+
+    def _auto_split_session(self, reason: str = "date_change"):
+        """自动拆分：结束旧会话，开启新会话，保持计数器不清零"""
         project_id = self.project_config.get('id') if self.project_config else None
         if not project_id:
             return
-        print(f"[跨日拆分] 日期变更，自动结束旧会话 {self.current_session_uuid}")
+        print(f"[自动拆分] {reason}，自动结束旧会话 {self.current_session_uuid}")
         self.end_session()
         new_info = self.start_session(project_id)
         if new_info:
-            print(f"[跨日拆分] 新会话已创建: {new_info.get('session_uuid')}")
+            print(f"[自动拆分] 新会话已创建: {new_info.get('session_uuid')}")
     
+    def _force_timeout_ng(self, reason: str):
+        """超时强制NG：触发NG事件并清理当前周期状态"""
+        self._trigger_event(2, reason)
+        self.current_cycle_steps = []
+        self.backup_steps_seen_in_cycle = set()
+        self.last_added_step = None
+        self.step_last_seen.clear()
+        self.step_start_time.clear()
+        self.step_consecutive_frames.clear()
+        self.step_frame_confirmed.clear()
+        if hasattr(self, '_step_raw_start'):
+            self._step_raw_start.clear()
+        self._last_step_added_time = None
+        self.last_step_completed_time = None
+
     def start_cycle(self):
         """开始新的检测周期"""
         if not self.current_session_id or not self.recording_enabled:
             return
         
         if self._session_start_date and datetime.now().date() != self._session_start_date:
-            self._auto_split_session()
+            self._auto_split_session(reason="日期变更")
+            if not self.current_session_id:
+                return
+        
+        current_shift = self._get_current_shift()
+        if self._session_start_shift and current_shift and current_shift != self._session_start_shift:
+            self._auto_split_session(reason=f"班次变更 {self._session_start_shift}->{current_shift}")
             if not self.current_session_id:
                 return
         
@@ -1192,7 +1370,8 @@ class VideoSourceManager:
                 self.step_time_config[label] = {
                     'min_duration': step.get('min_duration'),  # 最短持续时间
                     'max_duration': step.get('max_duration'),  # 最大持续时间
-                    'max_interval': step.get('max_interval', 1.0)  # 去重间隔，默认1秒
+                    'max_interval': step.get('max_interval', 1.0),  # 去重间隔，默认1秒
+                    'timeout_ng': step.get('timeout_ng', False),  # 超时自动判NG
                 }
                 
                 # 最少帧数配置（默认1帧）
@@ -1243,7 +1422,8 @@ class VideoSourceManager:
         # Settlement mode: 'first_step' or 'last_step'
         self.settlement_mode = pipeline_config.get('settlement_mode', 'first_step')
         self.idle_timeout_seconds = pipeline_config.get('idle_timeout_seconds', 0)
-        print(f"结算模式: {self.settlement_mode}, 空闲超时: {self.idle_timeout_seconds}s")
+        self.cycle_max_duration = pipeline_config.get('cycle_max_duration', 0)
+        print(f"结算模式: {self.settlement_mode}, 空闲超时: {self.idle_timeout_seconds}s, 周期超时: {self.cycle_max_duration}s")
         
         # 结算步骤不允许有 strict_order，确保结算步骤始终能进入周期
         if self.settlement_mode == 'last_step':
@@ -1297,7 +1477,10 @@ class VideoSourceManager:
         print(f"静态步骤配置: {self.step_static_config}")
         print(f"计数器: {self.counters}")
         if config.get('logic_mode') == 'tracking':
+            event_labels = [s.get('label') for s in steps_config if s.get('enabled', True) and s.get('count_mode') == 'event']
             print(f"跟踪模式配置: strategy={pipeline_config.get('tracking_cycle_strategy')}, expected={pipeline_config.get('counting_expected_items')}")
+            if event_labels:
+                print(f"动作计数标签: {event_labels}")
     
     def _release_model(self):
         """释放模型和 GPU 资源"""
@@ -1379,10 +1562,12 @@ class VideoSourceManager:
             if device.startswith('cuda'):
                 try:
                     import numpy as np
-                    print("[模型预热] CUDA warm-up...")
+                    _half = self.use_half
+                    print(f"[模型预热] CUDA warm-up (half={_half})...")
                     self.model.predict(
                         np.zeros((640, 640, 3), dtype=np.uint8),
-                        conf=0.5, imgsz=640, verbose=False, device=device
+                        conf=0.5, imgsz=640, verbose=False, device=device,
+                        half=_half
                     )
                     print("[模型预热] warm-up done")
                 except Exception as e:
@@ -1521,18 +1706,23 @@ class VideoSourceManager:
                         if (t_lock3_end - t_lock3_start) > 0.1:
                             debug_log(f"!!! detection_lock 耗时: {(t_lock3_end-t_lock3_start)*1000:.1f}ms", "CAPTURE")
                     
-                    # 发送原始帧（不带检测框）
+                    # 写入视频录制队列（使用 FFmpeg 进程，不会卡死）— 录制原始帧（不带 MediaPipe 叠加）
+                    if self.is_detecting and self.recording_enabled:
+                        self._enqueue_frame_for_recording(original_frame)
+                    
+                    # MediaPipe 骨架叠加（仅影响显示帧，不影响录制和推理）
+                    display_frame = original_frame
+                    if self.mediapipe_enabled:
+                        display_frame = original_frame.copy()
+                        self._apply_mediapipe_overlay(display_frame)
+                    
                     t_lock4_start = time.time()
                     with self.frame_lock:
-                        self.current_frame = original_frame
+                        self.current_frame = display_frame
                         self._frame_seq += 1
                     t_lock4_end = time.time()
                     if (t_lock4_end - t_lock4_start) > 0.1:
                         debug_log(f"!!! frame_lock 耗时: {(t_lock4_end-t_lock4_start)*1000:.1f}ms", "CAPTURE")
-                    
-                    # 写入视频录制队列（使用 FFmpeg 进程，不会卡死）
-                    if self.is_detecting and self.recording_enabled:
-                        self._enqueue_frame_for_recording(original_frame)
                     
                     # FPS 计算
                     self._fps_counter += 1
@@ -2649,6 +2839,12 @@ class VideoSourceManager:
             time_cfg = self.step_time_config.get(label, {})
             _max_dur = time_cfg.get('max_duration')
             if _max_dur and (current_time - self.step_start_time[label]) > _max_dur:
+                if time_cfg.get('timeout_ng') and self.current_cycle_steps:
+                    elapsed = current_time - self.step_start_time[label]
+                    display = self.step_display_names.get(label, label)
+                    print(f"[步骤超时NG] 步骤 [{display}] 持续 {elapsed:.1f}s > {_max_dur}s，触发NG")
+                    self._force_timeout_ng(f'步骤 [{display}] 超时 ({elapsed:.1f}s > {_max_dur}s)')
+                    return
                 print(f"[超时重置] 步骤 [{label}] 持续 {current_time - self.step_start_time[label]:.1f}s > max_duration {_max_dur}s，模拟再次出现")
                 if label in self.step_last_seen:
                     del self.step_last_seen[label]
@@ -2783,6 +2979,16 @@ class VideoSourceManager:
         for completed_label in pending_event_checks:
             self._check_events(completed_label)
         
+        # ========== 周期总时长超时NG ==========
+        if (self.cycle_max_duration > 0
+                and self.cycle_start_time is not None
+                and self.current_cycle_steps):
+            cycle_elapsed = current_time - self.cycle_start_time
+            if cycle_elapsed > self.cycle_max_duration:
+                print(f"[周期超时NG] 周期总时长 {cycle_elapsed:.1f}s > {self.cycle_max_duration}s，强制NG")
+                self._force_timeout_ng(f'周期总时长超时 ({cycle_elapsed:.1f}s > {self.cycle_max_duration}s)')
+                return
+
         # ========== 空闲超时结算 ==========
         if (self.idle_timeout_seconds > 0
                 and self.current_cycle_steps
@@ -3071,6 +3277,14 @@ class VideoSourceManager:
         
         self.last_step_completed_time = None
         
+        # Event counting mode reset
+        self._event_counters.clear()
+        self._event_state.clear()
+        self._event_visible_frames.clear()
+        self._event_gone_frames_count.clear()
+        self._event_first_seen.clear()
+        self._event_last_seen.clear()
+        
         # Container mode reset
         self._box_objects.clear()
         self._box_counter = 0
@@ -3131,6 +3345,7 @@ class VideoSourceManager:
         
         per_class_lost_sec = {}
         per_class_position_lock = {}
+        event_steps = {}
         for step in self.project_config.get('steps_config', []):
             if step.get('enabled', True):
                 lbl = step.get('label', '')
@@ -3138,12 +3353,22 @@ class VideoSourceManager:
                     per_class_lost_sec[lbl] = step['tracking_max_lost_seconds']
                 if step.get('tracking_position_lock'):
                     per_class_position_lock[lbl] = True
+                if step.get('count_mode') == 'event':
+                    event_steps[lbl] = {
+                        'required_count': step.get('event_required_count', 1),
+                        'min_visible_frames': step.get('event_min_visible_frames', 3),
+                        'gone_frames': step.get('event_gone_frames', 8),
+                    }
+        
+        for lbl, cfg in event_steps.items():
+            expected_items[lbl] = cfg['required_count']
         
         max_lost_sec = max(per_class_lost_sec.values()) if per_class_lost_sec else 5.0
         
         seen_track_ids = set()
         trigger_visible = False
         pos_lock_assigned_dids = set()
+        event_labels_seen = set()
         
         frame_detections = []
         for det in detections:
@@ -3153,6 +3378,10 @@ class VideoSourceManager:
                 continue
             if label == trigger_label and cycle_strategy == 'trigger':
                 trigger_visible = True
+                continue
+            if label in event_steps:
+                if self._is_in_roi(det):
+                    event_labels_seen.add(label)
                 continue
             if track_id < 0:
                 continue
@@ -3550,6 +3779,53 @@ class VideoSourceManager:
             if current_time - self._tracking_transferred_ids[tid] > max_lost_sec * 2:
                 del self._tracking_transferred_ids[tid]
         
+        # ===== Event counting FSM (动作计数) =====
+        if event_steps:
+            for label, cfg in event_steps.items():
+                if label not in self._event_state:
+                    self._event_state[label] = 'idle'
+                    self._event_counters[label] = 0
+                    self._event_visible_frames[label] = 0
+                    self._event_gone_frames_count[label] = 0
+                
+                state = self._event_state[label]
+                is_visible = label in event_labels_seen
+                
+                if state == 'idle':
+                    if is_visible:
+                        self._event_state[label] = 'visible'
+                        self._event_visible_frames[label] = 1
+                        if label not in self._event_first_seen:
+                            self._event_first_seen[label] = current_time
+                        if not self._tracking_cycle_active:
+                            self._tracking_cycle_active = True
+                            self.cycle_start_time = current_time
+                            self.start_cycle()
+                elif state == 'visible':
+                    if is_visible:
+                        self._event_visible_frames[label] += 1
+                    else:
+                        if self._event_visible_frames[label] >= cfg['min_visible_frames']:
+                            self._event_state[label] = 'gone'
+                            self._event_gone_frames_count[label] = 1
+                        else:
+                            self._event_state[label] = 'idle'
+                            self._event_visible_frames[label] = 0
+                elif state == 'gone':
+                    if is_visible:
+                        self._event_state[label] = 'visible'
+                        self._event_visible_frames[label] += 1
+                        self._event_gone_frames_count[label] = 0
+                    else:
+                        self._event_gone_frames_count[label] += 1
+                        if self._event_gone_frames_count[label] >= cfg['gone_frames']:
+                            self._event_counters[label] = self._event_counters.get(label, 0) + 1
+                            self._event_last_seen[label] = current_time
+                            self._event_state[label] = 'idle'
+                            self._event_visible_frames[label] = 0
+                            self._event_gone_frames_count[label] = 0
+                            print(f"[Tracking-Event] {label} event #{self._event_counters[label]}/{cfg['required_count']} confirmed")
+        
         # ===== Container mode: group items into boxes =====
         if self._container_mode and self._container_label:
             self._update_container_grouping(
@@ -3810,7 +4086,7 @@ class VideoSourceManager:
         
         self._tracking_item_checklist = {}
         for cls_name, expected_count in expected_items.items():
-            actual = self._tracking_class_counters.get(cls_name, 0)
+            actual = self._tracking_class_counters.get(cls_name, 0) + self._event_counters.get(cls_name, 0)
             display_name = self.step_display_names.get(cls_name, cls_name)
             prefix = self._tracking_letter_map.get(cls_name, display_name)
             self._tracking_item_checklist[cls_name] = {
@@ -3824,6 +4100,13 @@ class VideoSourceManager:
                 self._tracking_item_checklist[cls_name] = {
                     'expected': 0, 'counted': count,
                     'prefix': prefix, 'display_name': display_name
+                }
+        for cls_name, count in self._event_counters.items():
+            if cls_name not in self._tracking_item_checklist:
+                display_name = self.step_display_names.get(cls_name, cls_name)
+                self._tracking_item_checklist[cls_name] = {
+                    'expected': 0, 'counted': count,
+                    'prefix': display_name, 'display_name': display_name
                 }
     
     def _rebuild_container_checklist(self, expected_items: dict):
@@ -3865,7 +4148,7 @@ class VideoSourceManager:
     
     def _settle_counting_cycle(self, expected_items: dict, check_order: bool = False, expected_order: list = None):
         """Validate tracking-mode cycle and trigger OK or NG event."""
-        print(f"[Tracking] Settling cycle: counters={self._tracking_class_counters}, expected={expected_items}")
+        print(f"[Tracking] Settling cycle: counters={self._tracking_class_counters}, events={self._event_counters}, expected={expected_items}")
         
         # In container mode, settle remaining boxes then reset (skip cycle-level count validation)
         if self._container_mode:
@@ -3877,6 +4160,8 @@ class VideoSourceManager:
             print(f"[Container] Cycle end: {total} boxes settled (OK={total_ok}, NG={total_ng})")
             self._reset_counting_cycle()
             return
+        
+        current_time = time.time()
         
         # ===== Collect all item instances from active + recently_lost =====
         all_items = []
@@ -3908,32 +4193,56 @@ class VideoSourceManager:
         
         self.current_cycle_steps = [item['display_id'] for item in unique_items]
         
-        for idx, item in enumerate(unique_items):
+        step_order = 0
+        for item in unique_items:
             start_t = item['first_seen']
             end_t = item['last_seen']
             duration = max(0, end_t - start_t) if start_t and end_t else 0
             step_name = item['display_id']
             step_label = item['class_name']
+            step_order += 1
             self.record_step(
                 step_label=step_label,
                 step_name=step_name,
                 start_time=start_t,
                 end_time=end_t,
                 duration=round(duration, 2),
-                step_order=idx + 1,
+                step_order=step_order,
                 is_valid=True,
             )
         
-        # ===== Validate counts =====
+        for cls_name, count in self._event_counters.items():
+            if count > 0:
+                display_name = self.step_display_names.get(cls_name, cls_name)
+                step_order += 1
+                start_t = self._event_first_seen.get(cls_name, self.cycle_start_time or current_time)
+                end_t = self._event_last_seen.get(cls_name, current_time)
+                duration = max(0, end_t - start_t) if start_t and end_t else 0
+                self.current_cycle_steps.append(f"{display_name}\u00d7{count}")
+                self.record_step(
+                    step_label=cls_name,
+                    step_name=f"{display_name}\u00d7{count}",
+                    start_time=start_t,
+                    end_time=end_t,
+                    duration=round(duration, 2),
+                    step_order=step_order,
+                    is_valid=True,
+                )
+        
+        # ===== Validate counts (merge track counters + event counters) =====
+        merged_counters = dict(self._tracking_class_counters)
+        for cls_name, cnt in self._event_counters.items():
+            merged_counters[cls_name] = merged_counters.get(cls_name, 0) + cnt
+        
         missing = []
         extra = []
         for cls_name, exp in expected_items.items():
-            actual = self._tracking_class_counters.get(cls_name, 0)
+            actual = merged_counters.get(cls_name, 0)
             if actual < exp:
                 missing.append(f"{cls_name}: {actual}/{exp}")
             elif actual > exp:
                 extra.append(f"{cls_name}: {actual}/{exp}")
-        for cls_name, cnt in self._tracking_class_counters.items():
+        for cls_name, cnt in merged_counters.items():
             if cls_name not in expected_items:
                 extra.append(f"{cls_name}: {cnt}/0")
         
@@ -3944,7 +4253,7 @@ class VideoSourceManager:
                 order_ok = False
         
         if not expected_items:
-            self._trigger_event(1, f'Counting complete: {dict(self._tracking_class_counters)}')
+            self._trigger_event(1, f'Counting complete: {dict(merged_counters)}')
         elif missing or extra:
             reasons = []
             if missing: reasons.append(f'missing: {missing}')
@@ -3954,7 +4263,7 @@ class VideoSourceManager:
             actual_seq = [item['class_name'] for item in unique_items]
             self._trigger_event(2, f'Order wrong: expected={expected_order}, actual={actual_seq}')
         else:
-            self._trigger_event(1, f'All complete: {dict(self._tracking_class_counters)}')
+            self._trigger_event(1, f'All complete: {dict(merged_counters)}')
         
         self._reset_counting_cycle()
     
@@ -4601,6 +4910,8 @@ class VideoSourceManager:
             
             from concurrent.futures import TimeoutError as FuturesTimeoutError
             
+            _half = self.use_half and device.startswith('cuda')
+            
             def run_inference():
                 t_predict_start = time.time()
                 # 使用 stream=True 避免 ultralytics 内部累积所有历史结果
@@ -4611,7 +4922,8 @@ class VideoSourceManager:
                     imgsz=640, 
                     verbose=False, 
                     device=device,
-                    stream=True
+                    stream=True,
+                    half=_half
                 ))
                 t_predict_end = time.time()
                 predict_time = (t_predict_end - t_predict_start) * 1000
@@ -4720,11 +5032,13 @@ class VideoSourceManager:
             from concurrent.futures import TimeoutError as FuturesTimeoutError
             
             _tracker_cfg = self._custom_tracker_yaml or "bytetrack.yaml"
+            _half = self.use_half and device.startswith('cuda')
             def run_tracking():
                 return list(self.model.track(
                     frame, conf=self.conf_threshold, iou=self.iou_threshold,
                     imgsz=640, verbose=False, device=device,
-                    stream=True, persist=True, tracker=_tracker_cfg
+                    stream=True, persist=True, tracker=_tracker_cfg,
+                    half=_half
                 ))
             
             executor = self._get_inference_executor()
@@ -4794,11 +5108,13 @@ class VideoSourceManager:
         try:
             device = self.current_device_info.get('device', 'cpu') if self.current_device_info else 'cpu'
             from concurrent.futures import TimeoutError as FuturesTimeoutError
+            _half = self.use_half and device.startswith('cuda')
             
             def run_inference():
                 return list(self.model.predict(
                     frame, conf=self.conf_threshold, iou=self.iou_threshold,
-                    imgsz=640, verbose=False, device=device, stream=True
+                    imgsz=640, verbose=False, device=device, stream=True,
+                    half=_half
                 ))
             
             executor = self._get_inference_executor()
@@ -5559,6 +5875,8 @@ class VideoSourceManager:
         actual_fps = self.capture.get(cv2.CAP_PROP_FPS)
         cc_str = "".join([chr((actual_fourcc >> (8 * i)) & 0xFF) for i in range(4)])
         print(f"[Camera] Capture format: {cc_str}, FPS: {actual_fps}, {width}x{height}")
+        if cc_str != 'MJPG':
+            print(f"[Camera] 警告: 请求 MJPG 但实际格式为 {cc_str}，USB 捕获帧率可能受限（YUY2 @ 1280x720 USB2.0 约 10fps）")
         
         self.source_type = 'camera'
         self.camera_index = device_index
@@ -7164,6 +7482,11 @@ class DetectionStartRequest(BaseModel):
 class StreamConfigRequest(BaseModel):
     frame_limit_enabled: bool = False  # 是否启用帧率限制
     target_stream_fps: int = 30  # 目标流帧率
+    use_half: bool = False  # FP16 半精度推理
+    mediapipe_enabled: bool = False  # MediaPipe 骨架叠加
+    mediapipe_pose: bool = True  # 显示姿态骨架
+    mediapipe_hands: bool = True  # 显示手部关键点
+    mediapipe_interval: int = 2  # MediaPipe 处理间隔（帧）
 
 class DeviceConfigRequest(BaseModel):
     device: str = 'auto'  # 推理设备: 'auto', 'cpu', 'cuda:0', 'cuda:1' 等
@@ -7374,14 +7697,29 @@ def get_stream_config():
     """获取视频流配置"""
     return {
         "frame_limit_enabled": video_manager.frame_limit_enabled,
-        "target_stream_fps": video_manager.target_stream_fps
+        "target_stream_fps": video_manager.target_stream_fps,
+        "use_half": video_manager.use_half,
+        "mediapipe_enabled": video_manager.mediapipe_enabled,
+        "mediapipe_pose": video_manager.mediapipe_pose,
+        "mediapipe_hands": video_manager.mediapipe_hands,
+        "mediapipe_interval": video_manager._mp_process_interval
     }
 
 @router.post("/stream/config")
 def set_stream_config(req: StreamConfigRequest):
-    """设置视频流配置（帧率限制）"""
+    """设置视频流配置（帧率限制 + FP16 + MediaPipe）"""
     video_manager.frame_limit_enabled = req.frame_limit_enabled
-    video_manager.target_stream_fps = max(1, min(120, req.target_stream_fps))  # 限制1-120fps
+    video_manager.target_stream_fps = max(1, min(120, req.target_stream_fps))
+    video_manager.use_half = req.use_half
+    
+    mp_was_enabled = video_manager.mediapipe_enabled
+    video_manager.mediapipe_enabled = req.mediapipe_enabled
+    video_manager.mediapipe_pose = req.mediapipe_pose
+    video_manager.mediapipe_hands = req.mediapipe_hands
+    video_manager._mp_process_interval = max(1, min(10, req.mediapipe_interval))
+    
+    if not req.mediapipe_enabled and mp_was_enabled:
+        video_manager._release_mediapipe()
     
     # 保存配置到文件
     video_manager._save_device_config()
@@ -7389,7 +7727,12 @@ def set_stream_config(req: StreamConfigRequest):
     return {
         "status": "success",
         "frame_limit_enabled": video_manager.frame_limit_enabled,
-        "target_stream_fps": video_manager.target_stream_fps
+        "target_stream_fps": video_manager.target_stream_fps,
+        "use_half": video_manager.use_half,
+        "mediapipe_enabled": video_manager.mediapipe_enabled,
+        "mediapipe_pose": video_manager.mediapipe_pose,
+        "mediapipe_hands": video_manager.mediapipe_hands,
+        "mediapipe_interval": video_manager._mp_process_interval
     }
 
 
@@ -7899,6 +8242,7 @@ class ProjectConfigRequest(BaseModel):
     pipeline_config: dict = {}
     events_config: list = []
     counters_config: list = []
+    data_config: dict = {}
 
 @router.post("/detection/set-project")
 def set_project_config(req: ProjectConfigRequest, channel: int = Query(0)):
@@ -7912,7 +8256,8 @@ def set_project_config(req: ProjectConfigRequest, channel: int = Query(0)):
             'steps_config': req.steps_config,
             'pipeline_config': req.pipeline_config,
             'events_config': req.events_config,
-            'counters_config': req.counters_config
+            'counters_config': req.counters_config,
+            'data_config': req.data_config,
         })
         return {"status": "success", "message": f"项目配置已设置 (ch{channel})"}
     except HTTPException:

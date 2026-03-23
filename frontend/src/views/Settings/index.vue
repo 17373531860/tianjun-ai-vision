@@ -120,6 +120,13 @@
                 <span class="text-gray-300">CT包含NG周期</span>
                 <el-switch v-model="store.display.monitor.ctIncludeNg" @change="saveDisplaySettings" />
               </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-300">NG TOP3 显示模式</span>
+                <el-select v-model="store.display.monitor.ngTopDisplayMode" size="small" style="width: 100px" @change="saveDisplaySettings">
+                  <el-option label="百分比" value="percentage" />
+                  <el-option label="次数" value="count" />
+                </el-select>
+              </div>
             </div>
           </el-card>
 
@@ -480,6 +487,102 @@
             </div>
           </el-card>
 
+          <!-- 推理加速设置 -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-yellow-400"><Lightning /></el-icon>
+                <span class="font-bold text-white">推理加速</span>
+              </div>
+            </template>
+            <div class="space-y-4">
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div>
+                  <span class="text-gray-300">FP16 半精度推理</span>
+                  <div class="text-xs text-gray-500 mt-1">开启后推理速度约提升 50%-100%，适用于 NVIDIA RTX 20/30/40/50 系列 GPU</div>
+                </div>
+                <el-switch v-model="store.performance.halfPrecision" @change="savePerformanceSettings" />
+              </div>
+              <el-alert
+                title="说明"
+                type="warning"
+                :closable="false"
+                show-icon
+              >
+                <template #default>
+                  <div class="text-xs text-gray-300 mt-1">
+                    <p>• 开启后使用 16 位浮点精度推理，大幅降低单帧推理耗时</p>
+                    <p>• 检测精度几乎无损（差异 &lt; 0.1%），Ultralytics 官方推荐</p>
+                    <p>• 仅在 GPU (CUDA) 设备上生效，CPU 推理不受影响</p>
+                    <p>• 修改后<strong>下次加载模型时生效</strong>（重新开始检测即可）</p>
+                  </div>
+                </template>
+              </el-alert>
+            </div>
+          </el-card>
+
+          <!-- MediaPipe 骨架叠加 -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-purple-400"><Aim /></el-icon>
+                <span class="font-bold text-white">MediaPipe 骨架叠加</span>
+                <el-tag size="small" type="info">视觉增强</el-tag>
+              </div>
+            </template>
+            <div class="space-y-4">
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div>
+                  <span class="text-gray-300">启用 MediaPipe 叠加</span>
+                  <div class="text-xs text-gray-500 mt-1">在画面上实时显示人体骨架和手部关键点，纯视觉效果，不影响检测逻辑</div>
+                </div>
+                <el-switch v-model="store.performance.mediapipeEnabled" @change="savePerformanceSettings" />
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                  <span class="text-gray-300">姿态骨架</span>
+                  <el-switch v-model="store.performance.mediapipePose" :disabled="!store.performance.mediapipeEnabled" @change="savePerformanceSettings" />
+                </div>
+                <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                  <span class="text-gray-300">手部关键点</span>
+                  <el-switch v-model="store.performance.mediapipeHands" :disabled="!store.performance.mediapipeEnabled" @change="savePerformanceSettings" />
+                </div>
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div>
+                  <span class="text-gray-300">处理间隔</span>
+                  <div class="text-xs text-gray-500 mt-1">每隔 N 帧处理一次（值越大性能越好但骨架更新越慢）</div>
+                </div>
+                <el-input-number
+                  v-model="store.performance.mediapipeInterval"
+                  size="small"
+                  :min="1"
+                  :max="10"
+                  :step="1"
+                  :controls="true"
+                  :disabled="!store.performance.mediapipeEnabled"
+                  @change="savePerformanceSettings"
+                  style="width: 120px"
+                />
+              </div>
+              <el-alert
+                title="说明"
+                type="info"
+                :closable="false"
+                show-icon
+              >
+                <template #default>
+                  <div class="text-xs text-gray-300 mt-1">
+                    <p>• MediaPipe 由 Google 开发，提供轻量级人体姿态和手部关键点检测</p>
+                    <p>• 仅在画面显示中叠加骨架效果，<strong>不参与检测判定、不影响录制</strong></p>
+                    <p>• 关闭时完全无性能开销；开启后约增加 15-25ms/帧（CPU 处理）</p>
+                    <p>• 需要安装 mediapipe 包：<code>pip install mediapipe</code></p>
+                  </div>
+                </template>
+              </el-alert>
+            </div>
+          </el-card>
+
           <!-- GPU/推理设备设置 -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
@@ -685,7 +788,7 @@
 import { ref, reactive, onMounted } from 'vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
-import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine } from '@element-plus/icons-vue';
+import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { getProjectDetail } from '@/api/project';
 import api from '@/api/index';
@@ -750,10 +853,14 @@ const removeCustomToast = (idx) => {
 const savePerformanceSettings = async () => {
   store.savePerformanceSettings();
   try {
-    // 同步到后端
     await api.post('/source/stream/config', {
       frame_limit_enabled: store.performance.frameLimitEnabled,
-      target_stream_fps: store.performance.targetStreamFps
+      target_stream_fps: store.performance.targetStreamFps,
+      use_half: store.performance.halfPrecision,
+      mediapipe_enabled: store.performance.mediapipeEnabled,
+      mediapipe_pose: store.performance.mediapipePose,
+      mediapipe_hands: store.performance.mediapipeHands,
+      mediapipe_interval: store.performance.mediapipeInterval
     });
     ElMessage.success('性能设置已保存');
   } catch (e) {
@@ -765,11 +872,25 @@ const savePerformanceSettings = async () => {
 const loadPerformanceSettings = async () => {
   store.loadPerformanceSettings();
   try {
-    // 从后端同步配置
     const res = await api.get('/source/stream/config');
     if (res.data) {
       store.performance.frameLimitEnabled = res.data.frame_limit_enabled;
       store.performance.targetStreamFps = res.data.target_stream_fps;
+      if (res.data.use_half !== undefined) {
+        store.performance.halfPrecision = res.data.use_half;
+      }
+      if (res.data.mediapipe_enabled !== undefined) {
+        store.performance.mediapipeEnabled = res.data.mediapipe_enabled;
+      }
+      if (res.data.mediapipe_pose !== undefined) {
+        store.performance.mediapipePose = res.data.mediapipe_pose;
+      }
+      if (res.data.mediapipe_hands !== undefined) {
+        store.performance.mediapipeHands = res.data.mediapipe_hands;
+      }
+      if (res.data.mediapipe_interval !== undefined) {
+        store.performance.mediapipeInterval = res.data.mediapipe_interval;
+      }
     }
   } catch (e) {
     console.error('加载后端性能设置失败:', e);

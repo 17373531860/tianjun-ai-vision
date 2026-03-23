@@ -619,7 +619,8 @@ const saveAndStartMulti = async () => {
             steps_config: proj.steps_config || [],
             pipeline_config: proj.pipeline_config || {},
             events_config: proj.events_config || [],
-            counters_config: proj.counters_config || []
+            counters_config: proj.counters_config || [],
+            data_config: proj.data_config || {}
           }, ch);
 
           if (proj.default_model_id) {

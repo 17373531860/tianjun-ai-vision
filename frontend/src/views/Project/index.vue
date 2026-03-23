@@ -192,6 +192,40 @@
                     </div>
                   </div>
                 </el-card>
+
+                <!-- Shift Split Config -->
+                <el-card shadow="never" class="bg-slate-800 border-slate-700 text-gray-300">
+                  <template #header><span class="font-bold text-white">班次拆分</span></template>
+                  <el-form label-position="top">
+                    <el-form-item>
+                      <div class="flex items-center gap-3">
+                        <el-switch v-model="activeProject.shift_split_enabled" />
+                        <span class="text-sm text-gray-300">启用跨班次自动拆分会话</span>
+                      </div>
+                      <div class="text-xs text-gray-500 mt-1">开启后，检测会话在班次切换时自动结束并创建新会话（类似跨日拆分）。</div>
+                    </el-form-item>
+                    <div v-if="activeProject.shift_split_enabled" class="flex gap-6">
+                      <el-form-item label="白班开始时间" class="flex-1">
+                        <el-time-picker
+                          v-model="activeProject.day_shift_start"
+                          format="HH:mm"
+                          value-format="HH:mm"
+                          placeholder="08:00"
+                          class="w-full"
+                        />
+                      </el-form-item>
+                      <el-form-item label="晚班开始时间" class="flex-1">
+                        <el-time-picker
+                          v-model="activeProject.night_shift_start"
+                          format="HH:mm"
+                          value-format="HH:mm"
+                          placeholder="20:00"
+                          class="w-full"
+                        />
+                      </el-form-item>
+                    </div>
+                  </el-form>
+                </el-card>
               </div>
             </div>
           </el-tab-pane>
@@ -228,6 +262,21 @@
                           <span class="cursor-help border-b border-dashed border-gray-500">位置注册</span>
                         </el-tooltip>
                       </th>
+                      <th class="p-2 w-28">
+                        <el-tooltip content="跟踪计数：按唯一物品ID计数；动作计数：按物品出现-消失次数计数（适用于堆叠遮挡场景）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">计数模式</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-24">
+                        <el-tooltip content="动作计数模式下，需要检测到多少次放入动作才算完成（仅动作计数模式有效）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">需要次数</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-24">
+                        <el-tooltip content="动作计数模式下，物品消失多少帧后确认为一次完成的动作（默认8帧）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">消失确认帧</span>
+                        </el-tooltip>
+                      </th>
                       </template>
                       <template v-if="activeProject.logic_mode !== 'tracking'">
                       <th class="p-2 w-28">
@@ -236,8 +285,13 @@
                         </el-tooltip>
                       </th>
                       <th class="p-2 w-28">
-                        <el-tooltip content="检测持续时间超过此值将被忽略（0.01-60秒，留空不限制）" placement="top">
+                        <el-tooltip content="检测持续时间超过此值将被忽略（0.01-3600秒，留空不限制）" placement="top">
                           <span class="cursor-help border-b border-dashed border-gray-500">最大持续(秒)</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="开启后，步骤持续时间超过「最大持续」时自动判定当前周期为NG（需先设置最大持续时间）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">超时NG</span>
                         </el-tooltip>
                       </th>
                       <th class="p-2 w-28">
@@ -318,6 +372,38 @@
                       <td class="p-2 text-center">
                         <el-switch v-model="step.tracking_position_lock" size="small" />
                       </td>
+                      <td class="p-2">
+                        <el-select v-model="step.count_mode" size="small" class="w-full">
+                          <el-option label="跟踪计数" value="track" />
+                          <el-option label="动作计数" value="event" />
+                        </el-select>
+                      </td>
+                      <td class="p-2">
+                        <el-input-number
+                          v-model="step.event_required_count"
+                          size="small"
+                          :min="1"
+                          :max="999"
+                          :step="1"
+                          :controls="false"
+                          :disabled="step.count_mode !== 'event'"
+                          placeholder="1"
+                          class="w-full"
+                        />
+                      </td>
+                      <td class="p-2">
+                        <el-input-number
+                          v-model="step.event_gone_frames"
+                          size="small"
+                          :min="1"
+                          :max="120"
+                          :step="1"
+                          :controls="false"
+                          :disabled="step.count_mode !== 'event'"
+                          placeholder="8"
+                          class="w-full"
+                        />
+                      </td>
                       </template>
                       <template v-if="activeProject.logic_mode !== 'tracking'">
                       <td class="p-2">
@@ -345,6 +431,9 @@
                           placeholder="不限"
                           class="w-full"
                         />
+                      </td>
+                      <td class="p-2 text-center">
+                        <el-switch v-model="step.timeout_ng" size="small" :disabled="!step.max_duration" />
                       </td>
                       <td class="p-2">
                         <el-input-number 
@@ -485,6 +574,11 @@
                     <span class="text-gray-400 text-xs whitespace-nowrap">空闲超时(秒)</span>
                     <el-input-number v-model="activeProject.idle_timeout_seconds" size="small" :min="0" :max="600" :step="5" :precision="0" />
                     <span class="text-xs text-gray-500">超过此时间无新步骤加入，强制结算当前周期（0=不启用）</span>
+                  </div>
+                  <div class="flex items-center gap-3 pt-2 border-t border-slate-700">
+                    <span class="text-gray-400 text-xs whitespace-nowrap">周期超时(秒)</span>
+                    <el-input-number v-model="activeProject.cycle_max_duration" size="small" :min="0" :max="3600" :step="5" :precision="0" />
+                    <span class="text-xs text-gray-500">周期总时长超过此值直接判定NG（0=不启用）</span>
                   </div>
                 </div>
               </el-card>
@@ -1354,6 +1448,11 @@ watch(() => activeProject.value?.tracking_roi_polygon, () => {
 // 初始化项目默认配置
 const initProjectDefaults = (project) => {
   if (!project.steps_config) project.steps_config = [];
+  (project.steps_config || []).forEach(step => {
+    if (step.count_mode === undefined) step.count_mode = 'track';
+    if (step.event_required_count === undefined) step.event_required_count = 1;
+    if (step.event_gone_frames === undefined) step.event_gone_frames = 8;
+  });
   if (!project.events_config) {
     project.events_config = [
       { id: 1, name: '合格(OK)', color: '#10b981', actions: [{ counter_name: '合格总数', delta: 1 }, { counter_name: '总产量', delta: 1 }], show_notification: true, toast_id: 'ok' },
@@ -1430,6 +1529,9 @@ const initProjectDefaults = (project) => {
   if (project.idle_timeout_seconds === undefined) {
     project.idle_timeout_seconds = pipelineConfig.idle_timeout_seconds || 0;
   }
+  if (project.cycle_max_duration === undefined) {
+    project.cycle_max_duration = pipelineConfig.cycle_max_duration || 0;
+  }
   // Tracking mode
   if (project.tracking_cycle_strategy === undefined) {
     project.tracking_cycle_strategy = pipelineConfig.tracking_cycle_strategy || 'all_gone';
@@ -1473,6 +1575,18 @@ const initProjectDefaults = (project) => {
     project.tracking_roi_polygon = roi.polygon || [];
   }
   
+  // 班次拆分配置（从 data_config 中读取）
+  const dataConfig = project.data_config || {};
+  if (project.shift_split_enabled === undefined) {
+    project.shift_split_enabled = dataConfig.shift_split_enabled || false;
+  }
+  if (project.day_shift_start === undefined) {
+    project.day_shift_start = dataConfig.day_shift_start || '08:00';
+  }
+  if (project.night_shift_start === undefined) {
+    project.night_shift_start = dataConfig.night_shift_start || '20:00';
+  }
+  
   // 同步到 pipeline_config，供UI使用
   project.pipeline_config.sequence_order = project.sequence_order;
   project.pipeline_config.detection_steps = project.detection_steps;
@@ -1485,6 +1599,7 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.simultaneous_groups = project.simultaneous_groups;
   project.pipeline_config.settlement_mode = project.settlement_mode || 'first_step';
   project.pipeline_config.idle_timeout_seconds = project.idle_timeout_seconds || 0;
+  project.pipeline_config.cycle_max_duration = project.cycle_max_duration || 0;
   
   return project;
 };
@@ -1607,11 +1722,19 @@ const handleSaveProject = async () => {
         },
         tracking_container_label: activeProject.value.tracking_cycle_strategy === 'container' ? (activeProject.value.tracking_container_label || '') : '',
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
-        idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0
+        idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
+        cycle_max_duration: activeProject.value.cycle_max_duration || 0
       }
+    };
+    data.data_config = {
+      ...(activeProject.value.data_config || {}),
+      shift_split_enabled: activeProject.value.shift_split_enabled || false,
+      day_shift_start: activeProject.value.day_shift_start || '08:00',
+      night_shift_start: activeProject.value.night_shift_start || '20:00',
     };
     await updateProject(activeProject.value.id, data);
     
+    activeProject.value.data_config = data.data_config;
     activeProject.value.pipeline_config = data.pipeline_config;
     
     const idx = projects.value.findIndex(p => p.id === activeProject.value.id);
@@ -1694,7 +1817,10 @@ const selectModel = (model) => {
       accept_once: false,
       tracking_gone_confirm_frames: null,
       tracking_max_lost_seconds: 5.0,
-      tracking_position_lock: false
+      tracking_position_lock: false,
+      count_mode: 'track',
+      event_required_count: 1,
+      event_gone_frames: 8
     }));
     
     // 自动初始化顺序
