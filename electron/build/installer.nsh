@@ -9,10 +9,24 @@
   ; when the destination already has some files).
   ; ============================================================
 
+  ; Preserve license files in AppData before anything else
+  StrCpy $1 "$APPDATA\tianjun-ai-vision"
+  StrCpy $2 "$TEMP\tianjun-license-backup"
+  ${If} ${FileExists} "$1\license.lic"
+    CreateDirectory "$2"
+    CopyFiles /SILENT "$1\license.lic" "$2\license.lic"
+    ${If} ${FileExists} "$1\machine_id.txt"
+      CopyFiles /SILENT "$1\machine_id.txt" "$2\machine_id.txt"
+    ${EndIf}
+    ${If} ${FileExists} "$1\hw_verify.txt"
+      CopyFiles /SILENT "$1\hw_verify.txt" "$2\hw_verify.txt"
+    ${EndIf}
+    DetailPrint "License files backed up to $2"
+  ${EndIf}
+
   ; Read the old installation path from the registry
   ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\{${APP_ID}}" "InstallLocation"
   ${If} $0 != ""
-    StrCpy $1 "$APPDATA\tianjun-ai-vision"
     CreateDirectory "$1"
 
     ; Backup database (only if source exists and dest does not)
@@ -61,6 +75,29 @@
 !macroend
 
 !macro customInstall
+  ; Restore license files from backup (in case AppData was cleared during upgrade)
+  StrCpy $1 "$APPDATA\tianjun-ai-vision"
+  StrCpy $2 "$TEMP\tianjun-license-backup"
+  ${If} ${FileExists} "$2\license.lic"
+    CreateDirectory "$1"
+    ${IfNot} ${FileExists} "$1\license.lic"
+      CopyFiles /SILENT "$2\license.lic" "$1\license.lic"
+      DetailPrint "Restored license.lic from backup"
+    ${EndIf}
+    ${IfNot} ${FileExists} "$1\machine_id.txt"
+      ${If} ${FileExists} "$2\machine_id.txt"
+        CopyFiles /SILENT "$2\machine_id.txt" "$1\machine_id.txt"
+      ${EndIf}
+    ${EndIf}
+    ${IfNot} ${FileExists} "$1\hw_verify.txt"
+      ${If} ${FileExists} "$2\hw_verify.txt"
+        CopyFiles /SILENT "$2\hw_verify.txt" "$1\hw_verify.txt"
+      ${EndIf}
+    ${EndIf}
+    RMDir /r "$2"
+    DetailPrint "License files restored"
+  ${EndIf}
+
   ; Install CH340/CH341 USB-to-Serial driver silently
   DetailPrint "Installing CH340 USB-to-Serial driver..."
 
