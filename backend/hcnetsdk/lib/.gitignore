@@ -1,9 +1,9 @@
-# HCNetSDK DLLs - proprietary, not committed to git
-# Run copy_sdk_dlls.bat to populate this directory
-*.dll
-*.so
-*.so.*
+# Keep DLLs in git so they get bundled into installer
+!*.dll
+!HCNetSDKCom/
+
+# Ignore build artifacts and docs
 *.lib
-HCNetSDKCom/
-!.gitkeep
-!.gitignore
+*.exp
+*.pdb
+*.exe

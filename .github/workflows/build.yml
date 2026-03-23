@@ -61,8 +61,8 @@ jobs:
           echo "Python version:"
           python --version
           
-          echo "Installing PyTorch with CUDA 12.1..."
-          pip install --retries 5 --timeout 60 torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+          echo "Installing PyTorch with CUDA 12.8 (Blackwell sm_120 support)..."
+          pip install --retries 5 --timeout 60 torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
           
           echo "Installing backend dependencies..."
           pip install --retries 5 --timeout 60 -r backend/requirements.txt
@@ -216,15 +216,15 @@ jobs:
           echo "SETUP_FILE=$SETUP_FILE" >> $GITHUB_ENV
 
           cat > /tmp/release-notes.md << 'EOF'
-          ## v2.0.6 更新内容
+          ## 更新内容
 
-          ### Bug 修复
-          - **修复顺序模式 last_step 结算后系统卡死**：当结算步骤漏检时，_just_settled 标志和 strict_order 双重拦截导致系统永远无法开启新周期，现在 last_step 模式下结算步骤可正常进入周期并触发 NG 判定
-          - **结算步骤不再允许设置严格顺序**：前端禁用 + 后端自动剥离，防止结算步骤因前置步骤缺失而无法入场
+          ### 新功能
+          - **海康SDK直连 (HCNetSDK)**：支持通过海康私有协议直连NVR/IP摄像头，比RTSP更稳定
+          - **容器跟踪模式**：跟踪模式新增"容器模式"策略，支持箱子+物品层级跟踪，每箱独立结算
 
-          ### 功能改进
-          - **多工位清零按钮**：双工位和四工位监控界面新增每工位独立清零按钮
-          - **API 超时增加**：全局请求超时从 30s 增至 60s，避免双工位启动时误报超时
+          ### 改进
+          - **PyTorch CUDA 12.8**：支持 RTX 50 系列 (Blackwell) 显卡 GPU 加速
+          - **HCNetSDK DLL 内置**：安装包自带海康SDK，无需手动复制
 
           ### 安装说明
           1. 下载 .exe 安装程序
