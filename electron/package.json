@@ -89,6 +89,7 @@
       }
     ],
     "win": {
+      "executableName": "tianjun-ai-vision",
       "target": [
         {
           "target": "dir",
