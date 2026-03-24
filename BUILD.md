@@ -45,11 +45,11 @@
 gh repo edit 17373531860/tianjun-ai-vision --visibility public --accept-visibility-change-consequences
 
 # 2. 确保代码已提交并推送
-git add -A && git commit -m "v2.0.x: 更新说明" && git push origin main
+git add -A && git commit -m "vX.Y.Z: 更新说明" && git push origin main
 
-# 3. 创建并推送 tag
-git tag v2.0.8
-git push origin v2.0.8
+# 3. 创建并推送 tag（版本号按实际修改）
+git tag vX.Y.Z
+git push origin vX.Y.Z
 
 # 4. 等待构建完成后，改回 private
 gh repo edit 17373531860/tianjun-ai-vision --visibility private --accept-visibility-change-consequences
@@ -136,22 +136,36 @@ scripts\build-app.bat
 cd frontend
 npm install
 npm run build
+cd ..
 
-# 2. 打包 Python 环境
+# 2. 安装 PyTorch cu128（必须！否则 RTX 50 系列无法推理）
 conda activate tianjun
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# 3. 验证 PyTorch（必须看到 cu128 和 sm_120）
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_arch_list())"
+# 期望输出: 2.11.0+cu128 12.8 ['sm_70', ..., 'sm_120']
+# 如果没有 sm_120，RTX 5050 等 Blackwell 显卡将无法使用 GPU 推理
+
+# 4. 打包 Python 环境
 pip install conda-pack
 conda-pack -n tianjun -o python-env\tianjun-env.tar.gz --force
 mkdir python-env\python
 cd python-env && tar -xzf tianjun-env.tar.gz -C python && del tianjun-env.tar.gz && cd ..
 
-# 3. 构建 Electron 解压版
+# 5. 验证打包后的环境（二次确认）
+python-env\python\python.exe -c "import torch; print(torch.__version__, torch.version.cuda)"
+# 必须仍然显示 cu128
+
+# 6. 构建 Electron 解压版
 cd electron
 npm install
 npx electron-builder --dir --x64
+cd ..
 
-# 4. 用 Inno Setup 编译安装包
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion="2.0.8" electron\build\installer.iss
-# 产物: electron\dist\TianJun-AI-Vision-2.0.8-Setup.exe
+# 7. 用 Inno Setup 编译安装包（版本号按实际修改）
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion="2.0.9" electron\build\installer.iss
+# 产物: electron\dist\TianJun-AI-Vision-2.0.9-Setup.exe
 ```
 
 ---
@@ -190,11 +204,12 @@ npx electron-builder --dir --x64
 
 每次发布新版本前，确认以下事项：
 
-- [ ] `electron/package.json` 中的 `version` 字段已更新（如 `"2.0.8"`）
+- [ ] `electron/package.json` 中的 `version` 字段已更新
 - [ ] 代码已全部提交并推送到 main 分支
 - [ ] GitHub Secrets 中的 `RELEASE_TOKEN` 和 `GITEE_TOKEN` 未过期
 - [ ] 仓库已改为 public（或有足够的 Actions 余额）
-- [ ] Tag 名称与 package.json 版本一致（如 `v2.0.8`）
+- [ ] Tag 名称与 package.json 版本一致（如 `v2.1.0`）
+- [ ] **手动打包时**：确认 `python -c "import torch; print(torch.__version__)"` 输出含 `cu128`
 
 ---
 
@@ -205,6 +220,11 @@ A: 请先运行 `scripts\pack-python-env.bat` 打包 Python 环境。
 
 ### Q: 安装后无法启动 GPU
 A: 请确保已安装 NVIDIA 驱动 560 或更高版本（RTX 5050 需要 570+）。
+
+### Q: RTX 5050/5070 等 50 系列显卡报 "no kernel image"
+A: 安装包中的 PyTorch 必须是 cu128 版本。诊断方法：在安装目录执行 `resources\python\python.exe -c "import torch; print(torch.__version__)"` — 如果显示的不是 `cu128`，说明打包时用了旧版 PyTorch。解决方法：
+- 临时修复：在安装目录执行 `resources\python\python.exe -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 --force-reinstall`
+- 永久修复：在打包机器上 `conda activate tianjun && pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128` 后重新打包
 
 ### Q: GitHub Release 上传失败 (422 / size limit)
 A: GitHub Release 单文件限制 2GB。安装包超过此限制时上传会失败，但不影响 Gitee 分块上传。Gitee 上的分块文件可以正常合并使用。
@@ -229,7 +249,7 @@ A: 首次启动需要初始化 Python 环境，可能需要 30-60 秒。后续�
 |------|------|------|
 | 前端 | Vue.js 3 + Vite + Element Plus | — |
 | 后端 | FastAPI + SQLAlchemy + OpenCV | — |
-| AI 推理 | YOLO (ultralytics) + PyTorch + CUDA 12.8 | PyTorch 2.10+ |
+| AI 推理 | YOLO (ultralytics) + PyTorch + CUDA 12.8 | PyTorch 2.11+ cu128 |
 | 桌面框架 | Electron | 28.x |
 | 安装包打包 | Inno Setup 6 | 6.7+ |
 | CI/CD | GitHub Actions | — |

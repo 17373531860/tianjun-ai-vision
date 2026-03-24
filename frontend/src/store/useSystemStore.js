@@ -111,6 +111,7 @@ export const useSystemStore = defineStore('system', {
       mediapipeEnabled: false,   // MediaPipe 骨架叠加（默认关闭）
       mediapipePose: true,       // 显示姿态骨架
       mediapipeHands: true,      // 显示手部关键点
+      mediapipeConfidence: 0.7,  // MediaPipe 检测置信度
       mediapipeInterval: 2       // MediaPipe 处理间隔（帧）
     }
   }),

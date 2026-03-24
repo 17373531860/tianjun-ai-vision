@@ -19,7 +19,7 @@ aiofiles>=23.0.0
 opencv-python-headless>=4.8.0
 ultralytics>=8.0.0
 lap>=0.5.12
-mediapipe>=0.10.0
+mediapipe>=0.10.0,<0.10.21
 # Note: torch is installed separately with CUDA support
 
 # Communication

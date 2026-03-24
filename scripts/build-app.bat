@@ -58,15 +58,28 @@ echo 步骤 2: 打包 Python 环境
 echo ==========================================
 echo.
 
+REM 如果已有旧环境，检查 PyTorch 版本是否正确
+set NEED_REPACK=0
 if not exist "python-env\python\python.exe" (
+    set NEED_REPACK=1
+) else (
+    echo 检查已有环境的 PyTorch 版本...
+    "python-env\python\python.exe" -c "import torch; assert 'sm_120' in torch.cuda.get_arch_list(), 'sm_120 missing'" >nul 2>nul
+    if errorlevel 1 (
+        echo 已有环境缺少 sm_120 (Blackwell) 支持，需要重新打包
+        rmdir /s /q "python-env\python"
+        set NEED_REPACK=1
+    ) else (
+        echo 已有环境 PyTorch cu128 验证通过，跳过打包
+    )
+)
+if !NEED_REPACK!==1 (
     call scripts\pack-python-env.bat
     if errorlevel 1 (
         echo 错误: Python 环境打包失败
         pause
         exit /b 1
     )
-) else (
-    echo Python 环境已存在，跳过打包
 )
 echo.
 

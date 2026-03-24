@@ -550,6 +550,26 @@
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <div>
+                  <span class="text-gray-300">检测置信度</span>
+                  <div class="text-xs text-gray-500 mt-1">值越高误检越少但可能漏检（俯视角度建议 0.7-0.9）</div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <el-slider
+                    v-model="store.performance.mediapipeConfidence"
+                    :min="0.1"
+                    :max="1.0"
+                    :step="0.05"
+                    :disabled="!store.performance.mediapipeEnabled"
+                    @change="savePerformanceSettings"
+                    style="width: 140px"
+                    :show-tooltip="true"
+                    :format-tooltip="v => v.toFixed(2)"
+                  />
+                  <span class="text-gray-400 text-xs w-8 text-right">{{ store.performance.mediapipeConfidence.toFixed(2) }}</span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div>
                   <span class="text-gray-300">处理间隔</span>
                   <div class="text-xs text-gray-500 mt-1">每隔 N 帧处理一次（值越大性能越好但骨架更新越慢）</div>
                 </div>
@@ -860,6 +880,7 @@ const savePerformanceSettings = async () => {
       mediapipe_enabled: store.performance.mediapipeEnabled,
       mediapipe_pose: store.performance.mediapipePose,
       mediapipe_hands: store.performance.mediapipeHands,
+      mediapipe_confidence: store.performance.mediapipeConfidence,
       mediapipe_interval: store.performance.mediapipeInterval
     });
     ElMessage.success('性能设置已保存');
@@ -887,6 +908,9 @@ const loadPerformanceSettings = async () => {
       }
       if (res.data.mediapipe_hands !== undefined) {
         store.performance.mediapipeHands = res.data.mediapipe_hands;
+      }
+      if (res.data.mediapipe_confidence !== undefined) {
+        store.performance.mediapipeConfidence = res.data.mediapipe_confidence;
       }
       if (res.data.mediapipe_interval !== undefined) {
         store.performance.mediapipeInterval = res.data.mediapipe_interval;

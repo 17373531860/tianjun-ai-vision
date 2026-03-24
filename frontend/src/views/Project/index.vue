@@ -295,8 +295,13 @@
                         </el-tooltip>
                       </th>
                       <th class="p-2 w-28">
-                        <el-tooltip content="同一步骤重复出现时，在此时间内认为是同一次检测，不重复计数（0.01-60秒，留空使用默认1秒）" placement="top">
+                        <el-tooltip content="同一步骤消失后再次出现，若间隔小于此值则视为同一次检测（0.01-3600秒，留空使用默认1秒）" placement="top">
                           <span class="cursor-help border-b border-dashed border-gray-500">去重间隔(秒)</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-28">
+                        <el-tooltip content="步骤从画面消失后，等待多久确认其真正消失（默认0秒=立即确认，适当增大可容忍短暂检测中断）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">消失确认(秒)</span>
                         </el-tooltip>
                       </th>
                       <th class="p-2 w-24">
@@ -445,6 +450,19 @@
                           :precision="2"
                           :controls="false"
                           placeholder="默认1秒"
+                          class="w-full"
+                        />
+                      </td>
+                      <td class="p-2">
+                        <el-input-number 
+                          v-model="step.disappear_delay" 
+                          size="small" 
+                          :min="0" 
+                          :max="60" 
+                          :step="0.1"
+                          :precision="2"
+                          :controls="false"
+                          placeholder="默认0秒"
                           class="w-full"
                         />
                       </td>

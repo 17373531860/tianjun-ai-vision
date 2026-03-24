@@ -34,12 +34,42 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo 1. 正在激活环境并安装 conda-pack...
+echo 1. 正在激活环境...
 call conda activate tianjun
+
+echo.
+echo 2. 正在安装/升级 PyTorch CUDA 12.8 (支持 RTX 50 系列 Blackwell 显卡)...
+echo    这可能需要几分钟时间...
+echo.
+pip install --retries 5 --timeout 60 torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+if errorlevel 1 (
+    echo 错误: PyTorch cu128 安装失败
+    pause
+    exit /b 1
+)
+
+echo.
+echo 3. 验证 PyTorch CUDA 版本...
+python -c "import torch; v=torch.__version__; c=torch.version.cuda; a=torch.cuda.get_arch_list(); print(f'PyTorch: {v}'); print(f'CUDA: {c}'); print(f'Arch: {a}'); assert 'cu128' in v or c.startswith('12.8'), f'错误: 需要 cu128, 当前为 {v}'; assert 'sm_120' in a, f'错误: 缺少 sm_120 (Blackwell) 支持'"
+if errorlevel 1 (
+    echo.
+    echo !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    echo   错误: PyTorch 版本不正确！
+    echo   需要 cu128 以支持 RTX 50 系列显卡
+    echo   请手动运行:
+    echo   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+    echo !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    pause
+    exit /b 1
+)
+echo PyTorch cu128 验证通过！
+
+echo.
+echo 4. 安装 conda-pack...
 pip install conda-pack
 
 echo.
-echo 2. 正在打包 conda 环境 'tianjun'...
+echo 5. 正在打包 conda 环境 'tianjun'...
 echo    这可能需要几分钟时间...
 echo.
 
@@ -55,7 +85,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo 3. 正在解压环境...
+echo 5-2. 正在解压环境...
 if exist "%OUTPUT_DIR%\python" rmdir /s /q "%OUTPUT_DIR%\python"
 mkdir "%OUTPUT_DIR%\python"
 
@@ -68,15 +98,26 @@ if errorlevel 1 (
 )
 
 echo.
-echo 4. 正在修复路径...
+echo 6. 正在修复路径...
 cd /d "%OUTPUT_DIR%\python"
 call Scripts\activate.bat
 conda-unpack
 call Scripts\deactivate.bat
 
 echo.
+echo 7. 最终验证打包后的 PyTorch...
+cd /d "%OUTPUT_DIR%\python"
+.\python.exe -c "import torch; v=torch.__version__; c=torch.version.cuda; a=torch.cuda.get_arch_list(); print(f'[打包验证] PyTorch: {v}, CUDA: {c}'); print(f'[打包验证] Arch: {a}'); ok='sm_120' in a; print(f'[打包验证] sm_120 (Blackwell): {\"OK\" if ok else \"缺失!!!\"}'); exit(0 if ok else 1)"
+if errorlevel 1 (
+    echo.
+    echo 错误: 打包后的环境缺少 sm_120 支持！打包可能有问题。
+    pause
+    exit /b 1
+)
+
+echo.
 echo ==========================================
-echo   打包完成！
+echo   打包完成！PyTorch cu128 + sm_120 已验证
 echo ==========================================
 echo.
 echo 打包文件: %OUTPUT_DIR%\tianjun-env.tar.gz

@@ -455,6 +455,7 @@ class VideoSourceManager:
         self.mediapipe_enabled = False
         self.mediapipe_pose = True       # 显示姿态骨架
         self.mediapipe_hands = True      # 显示手部关键点
+        self.mediapipe_confidence = 0.7  # 检测置信度阈值 (0.1-1.0)
         self._mp_pose = None             # lazy-loaded mediapipe Pose instance
         self._mp_hands = None            # lazy-loaded mediapipe Hands instance
         self._mp_draw = None             # mediapipe drawing utils
@@ -503,6 +504,7 @@ class VideoSourceManager:
                     self.mediapipe_enabled = config.get('mediapipe_enabled', False)
                     self.mediapipe_pose = config.get('mediapipe_pose', True)
                     self.mediapipe_hands = config.get('mediapipe_hands', True)
+                    self.mediapipe_confidence = config.get('mediapipe_confidence', 0.7)
                     self._mp_process_interval = config.get('mediapipe_interval', 2)
                     print(f"已加载设备配置: 设备={self.device}, 帧率限制={self.frame_limit_enabled}, FP16={self.use_half}, MediaPipe={self.mediapipe_enabled}")
         except Exception as e:
@@ -521,6 +523,7 @@ class VideoSourceManager:
                 'mediapipe_enabled': self.mediapipe_enabled,
                 'mediapipe_pose': self.mediapipe_pose,
                 'mediapipe_hands': self.mediapipe_hands,
+                'mediapipe_confidence': self.mediapipe_confidence,
                 'mediapipe_interval': self._mp_process_interval
             }
             with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -535,20 +538,21 @@ class VideoSourceManager:
             import mediapipe as mp
             self._mp_draw = mp.solutions.drawing_utils
             self._mp_draw_styles = mp.solutions.drawing_styles
+            conf = max(0.1, min(1.0, self.mediapipe_confidence))
             if self.mediapipe_pose and self._mp_pose is None:
                 self._mp_pose = mp.solutions.pose.Pose(
                     static_image_mode=False,
                     model_complexity=0,
-                    min_detection_confidence=0.5,
+                    min_detection_confidence=conf,
                     min_tracking_confidence=0.5,
                 )
-                print("[MediaPipe] Pose 模型已加载")
+                print(f"[MediaPipe] Pose 模型已加载 (confidence={conf})")
             if self.mediapipe_hands and self._mp_hands is None:
                 self._mp_hands = mp.solutions.hands.Hands(
                     static_image_mode=False,
                     max_num_hands=2,
                     model_complexity=0,
-                    min_detection_confidence=0.5,
+                    min_detection_confidence=conf,
                     min_tracking_confidence=0.5,
                 )
                 print("[MediaPipe] Hands 模型已加载")
@@ -605,12 +609,16 @@ class VideoSourceManager:
                     self._mp_last_pose_results = self._mp_pose.process(rgb)
                 except Exception:
                     self._mp_last_pose_results = None
+            else:
+                self._mp_last_pose_results = None
             
             if self._mp_hands is not None and self.mediapipe_hands:
                 try:
                     self._mp_last_hands_results = self._mp_hands.process(rgb)
                 except Exception:
                     self._mp_last_hands_results = None
+            else:
+                self._mp_last_hands_results = None
         
         if self._mp_last_pose_results and self._mp_last_pose_results.pose_landmarks:
             self._mp_draw.draw_landmarks(
@@ -679,8 +687,7 @@ class VideoSourceManager:
         self.step_counts = {}  # {step_name: count}
         self.step_last_seen = {}  # {step_name: timestamp} 最后一次检测到的时间
         self.step_start_time = {}  # {step_name: timestamp} 步骤开始检测的时间
-        self.step_time_config = {}  # {step_name: {min_duration, max_duration, max_interval}}
-        self.disappear_threshold = 1.0  # 默认消失阈值秒
+        self.step_time_config = {}  # {step_name: {min_duration, max_duration, max_interval, disappear_delay}}
         
         # 项目配置
         self.project_config = None
@@ -1371,6 +1378,7 @@ class VideoSourceManager:
                     'min_duration': step.get('min_duration'),  # 最短持续时间
                     'max_duration': step.get('max_duration'),  # 最大持续时间
                     'max_interval': step.get('max_interval', 1.0),  # 去重间隔，默认1秒
+                    'disappear_delay': step.get('disappear_delay', 0),  # 消失确认延迟，默认0秒（立即确认）
                     'timeout_ng': step.get('timeout_ng', False),  # 超时自动判NG
                 }
                 
@@ -1710,9 +1718,9 @@ class VideoSourceManager:
                     if self.is_detecting and self.recording_enabled:
                         self._enqueue_frame_for_recording(original_frame)
                     
-                    # MediaPipe 骨架叠加（仅影响显示帧，不影响录制和推理）
+                    # MediaPipe 骨架叠加（仅在推理时显示，不影响录制）
                     display_frame = original_frame
-                    if self.mediapipe_enabled:
+                    if self.mediapipe_enabled and self.is_detecting:
                         display_frame = original_frame.copy()
                         self._apply_mediapipe_overlay(display_frame)
                     
@@ -2871,6 +2879,11 @@ class VideoSourceManager:
                 continue
             if label in ready_ordered_set:
                 continue
+            _min_dur_cfg2 = self.step_time_config.get(label, {}).get('min_duration')
+            if _min_dur_cfg2 and _min_dur_cfg2 > 0:
+                _raw_st2 = self._step_raw_start.get(label)
+                if _raw_st2 and (current_time - _raw_st2) < _min_dur_cfg2:
+                    continue
             self._process_single_step(label, current_time, enabled_labels, _is_seq_like,
                                       should_update_screenshot, original_frame,
                                       det_by_label.get(label), just_confirmed_labels)
@@ -2890,9 +2903,9 @@ class VideoSourceManager:
             if label not in detected_labels:
                 # 获取步骤时间配置
                 time_config = self.step_time_config.get(label, {})
-                max_interval = time_config.get('max_interval') or 1.0  # 使用去重间隔作为消失阈值
+                disappear_delay = time_config.get('disappear_delay') or 0
                 
-                if current_time - last_time > max_interval:
+                if current_time - last_time > disappear_delay:
                     # 计算持续时间
                     start_time = self.step_start_time.get(label, last_time)
                     duration = last_time - start_time
@@ -7535,6 +7548,7 @@ class StreamConfigRequest(BaseModel):
     mediapipe_enabled: bool = False  # MediaPipe 骨架叠加
     mediapipe_pose: bool = True  # 显示姿态骨架
     mediapipe_hands: bool = True  # 显示手部关键点
+    mediapipe_confidence: float = 0.7  # 检测置信度 (0.1-1.0)
     mediapipe_interval: int = 2  # MediaPipe 处理间隔（帧）
 
 class DeviceConfigRequest(BaseModel):
@@ -7751,6 +7765,7 @@ def get_stream_config():
         "mediapipe_enabled": video_manager.mediapipe_enabled,
         "mediapipe_pose": video_manager.mediapipe_pose,
         "mediapipe_hands": video_manager.mediapipe_hands,
+        "mediapipe_confidence": video_manager.mediapipe_confidence,
         "mediapipe_interval": video_manager._mp_process_interval
     }
 
@@ -7762,12 +7777,17 @@ def set_stream_config(req: StreamConfigRequest):
     video_manager.use_half = req.use_half
     
     mp_was_enabled = video_manager.mediapipe_enabled
+    old_conf = video_manager.mediapipe_confidence
     video_manager.mediapipe_enabled = req.mediapipe_enabled
     video_manager.mediapipe_pose = req.mediapipe_pose
     video_manager.mediapipe_hands = req.mediapipe_hands
+    video_manager.mediapipe_confidence = max(0.1, min(1.0, req.mediapipe_confidence))
     video_manager._mp_process_interval = max(1, min(10, req.mediapipe_interval))
     
+    conf_changed = abs(video_manager.mediapipe_confidence - old_conf) > 0.01
     if not req.mediapipe_enabled and mp_was_enabled:
+        video_manager._release_mediapipe()
+    elif conf_changed and req.mediapipe_enabled:
         video_manager._release_mediapipe()
     
     # 保存配置到文件
@@ -7781,6 +7801,7 @@ def set_stream_config(req: StreamConfigRequest):
         "mediapipe_enabled": video_manager.mediapipe_enabled,
         "mediapipe_pose": video_manager.mediapipe_pose,
         "mediapipe_hands": video_manager.mediapipe_hands,
+        "mediapipe_confidence": video_manager.mediapipe_confidence,
         "mediapipe_interval": video_manager._mp_process_interval
     }
 
