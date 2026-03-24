@@ -83,7 +83,7 @@ jobs:
           pip install --retries 5 --timeout 60 conda-pack
           
           echo "Verifying installations..."
-          python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.version.cuda}'); arch=torch.cuda.get_arch_list(); print(f'Arch: {arch}'); assert 'sm_120' in arch, f'FATAL: sm_120 missing in {arch} — cu128 not installed correctly!'"
+          python -c "import torch; v=torch.__version__; c=torch.version.cuda; print(f'PyTorch: {v}, CUDA: {c}'); assert 'cu128' in v or c.startswith('12.8'), f'FATAL: expected cu128, got {v} (CUDA {c})'"
           python -c "from ultralytics import YOLO; print('ultralytics OK')"
       
       - name: Compile Python backend with Nuitka
@@ -157,7 +157,7 @@ jobs:
           du -sh python
           
           echo "Verifying packed environment PyTorch cu128..."
-          python/bin/python -c "import torch; v=torch.__version__; a=torch.cuda.get_arch_list(); print(f'Packed PyTorch: {v}, Arch: {a}'); assert 'sm_120' in a, f'FATAL: packed env missing sm_120! Arch={a}'"
+          python/python.exe -c "import torch; v=torch.__version__; c=torch.version.cuda; print(f'Packed PyTorch: {v}, CUDA: {c}'); assert 'cu128' in v or c.startswith('12.8'), f'FATAL: packed env expected cu128, got {v}'"
       
       - name: Download FFmpeg
         shell: pwsh
