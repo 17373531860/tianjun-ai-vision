@@ -5863,20 +5863,69 @@ class VideoSourceManager:
         if not self.capture.isOpened():
             raise Exception(f"无法打开摄像头 {device_index}，请检查设备是否被其他程序占用")
         
-        # Prefer MJPEG capture format — YUYV at high resolutions is bandwidth-limited
-        # (e.g. 1280x720 YUYV = 10 fps max on USB 2.0, MJPG = 30 fps)
         fourcc_mjpg = cv2.VideoWriter_fourcc('M', 'J', 'P', 'G')
+        
+        def _get_fourcc_str(cap):
+            fc = int(cap.get(cv2.CAP_PROP_FOURCC))
+            return "".join([chr((fc >> (8 * i)) & 0xFF) for i in range(4)])
+        
+        # Strategy 1: Set FOURCC before resolution (standard approach)
         self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.capture.set(cv2.CAP_PROP_FPS, fps)
         
-        actual_fourcc = int(self.capture.get(cv2.CAP_PROP_FOURCC))
+        cc_str = _get_fourcc_str(self.capture)
+        
+        # Strategy 2: If MJPG failed with DirectShow, try MSMF backend (Windows)
+        if cc_str != 'MJPG' and platform.system() == "Windows":
+            print(f"[Camera] DirectShow 返回 {cc_str}，尝试 MSMF 后端...")
+            self.capture.release()
+            self.capture = cv2.VideoCapture(device_index, cv2.CAP_MSMF)
+            if self.capture.isOpened():
+                self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
+                self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                self.capture.set(cv2.CAP_PROP_FPS, fps)
+                cc_str = _get_fourcc_str(self.capture)
+                if cc_str == 'MJPG':
+                    print(f"[Camera] MSMF 后端成功切换到 MJPG")
+                else:
+                    print(f"[Camera] MSMF 后端也返回 {cc_str}，回退到 DirectShow")
+                    self.capture.release()
+                    self.capture = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
+                    self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
+                    self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                    self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                    self.capture.set(cv2.CAP_PROP_FPS, fps)
+                    cc_str = _get_fourcc_str(self.capture)
+            else:
+                print(f"[Camera] MSMF 打开失败，回退到 DirectShow")
+                self.capture = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
+                self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
+                self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                self.capture.set(cv2.CAP_PROP_FPS, fps)
+                cc_str = _get_fourcc_str(self.capture)
+        
+        # Strategy 3: If still not MJPG on Linux, try without explicit backend
+        if cc_str != 'MJPG' and platform.system() != "Windows":
+            print(f"[Camera] V4L2 返回 {cc_str}，尝试重新打开...")
+            self.capture.release()
+            self.capture = cv2.VideoCapture(device_index, cv2.CAP_V4L2)
+            if self.capture.isOpened():
+                self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
+                self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                self.capture.set(cv2.CAP_PROP_FPS, fps)
+                cc_str = _get_fourcc_str(self.capture)
+        
         actual_fps = self.capture.get(cv2.CAP_PROP_FPS)
-        cc_str = "".join([chr((actual_fourcc >> (8 * i)) & 0xFF) for i in range(4)])
         print(f"[Camera] Capture format: {cc_str}, FPS: {actual_fps}, {width}x{height}")
         if cc_str != 'MJPG':
-            print(f"[Camera] 警告: 请求 MJPG 但实际格式为 {cc_str}，USB 捕获帧率可能受限（YUY2 @ 1280x720 USB2.0 约 10fps）")
+            print(f"[Camera] 警告: 摄像头不支持 MJPG，当前 {cc_str}。USB 2.0 下帧率约 10fps，建议：")
+            print(f"[Camera]   1. 将摄像头插到 USB 3.0 接口（蓝色接口）")
+            print(f"[Camera]   2. 或在输入源设置中降低分辨率到 640x480")
         
         self.source_type = 'camera'
         self.camera_index = device_index
