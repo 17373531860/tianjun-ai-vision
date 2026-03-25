@@ -81,10 +81,11 @@ jobs:
           
           echo "Installing mediapipe (with --no-deps to avoid opencv conflicts)..."
           pip install --retries 5 --timeout 60 --no-deps "mediapipe>=0.10.0,<0.10.21"
-          pip install --retries 5 --timeout 60 absl-py attrs flatbuffers jax jaxlib matplotlib protobuf sounddevice
+          pip install --retries 5 --timeout 60 absl-py attrs flatbuffers jax jaxlib matplotlib "protobuf>=4.25.3,<5" sounddevice sentencepiece
           
-          echo "Removing conflicting opencv packages (keep only opencv-contrib-python)..."
-          pip uninstall opencv-python opencv-python-headless -y 2>/dev/null || true
+          echo "Removing conflicting opencv packages and reinstalling opencv-contrib-python..."
+          pip uninstall opencv-python opencv-python-headless opencv-contrib-python -y 2>/dev/null || true
+          pip install --retries 5 --timeout 60 "opencv-contrib-python>=4.8.0,<4.12"
           
           echo "Installing conda-pack..."
           pip install --retries 5 --timeout 60 conda-pack
