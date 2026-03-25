@@ -4924,12 +4924,13 @@ class VideoSourceManager:
             from concurrent.futures import TimeoutError as FuturesTimeoutError
             
             _half = self.use_half and device.startswith('cuda')
+            _frame = np.ascontiguousarray(frame)
             
             def run_inference():
                 t_predict_start = time.time()
                 # 使用 stream=True 避免 ultralytics 内部累积所有历史结果
                 result = list(self.model.predict(
-                    frame, 
+                    _frame, 
                     conf=self.conf_threshold, 
                     iou=self.iou_threshold, 
                     imgsz=640, 
@@ -5046,9 +5047,10 @@ class VideoSourceManager:
             
             _tracker_cfg = self._custom_tracker_yaml or "bytetrack.yaml"
             _half = self.use_half and device.startswith('cuda')
+            _frame = np.ascontiguousarray(frame)
             def run_tracking():
                 return list(self.model.track(
-                    frame, conf=self.conf_threshold, iou=self.iou_threshold,
+                    _frame, conf=self.conf_threshold, iou=self.iou_threshold,
                     imgsz=640, verbose=False, device=device,
                     stream=True, persist=True, tracker=_tracker_cfg,
                     half=_half
@@ -5122,10 +5124,11 @@ class VideoSourceManager:
             device = self.current_device_info.get('device', 'cpu') if self.current_device_info else 'cpu'
             from concurrent.futures import TimeoutError as FuturesTimeoutError
             _half = self.use_half and device.startswith('cuda')
+            _frame = np.ascontiguousarray(frame)
             
             def run_inference():
                 return list(self.model.predict(
-                    frame, conf=self.conf_threshold, iou=self.iou_threshold,
+                    _frame, conf=self.conf_threshold, iou=self.iou_threshold,
                     imgsz=640, verbose=False, device=device, stream=True,
                     half=_half
                 ))

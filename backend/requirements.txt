@@ -17,10 +17,12 @@ aiofiles>=23.0.0
 
 # Computer Vision & AI
 opencv-python-headless>=4.8.0
-ultralytics>=8.0.0
+ultralytics>=8.4.0,<=8.4.16
 lap>=0.5.12
 mediapipe>=0.10.0,<0.10.21
+numpy>=1.24.0,<2.0
 # Note: torch is installed separately with CUDA support
+# Note: mediapipe requires numpy<2.0; ultralytics>8.4.16 has ndarray type check bug with numpy<2
 
 # Communication
 websockets>=11.0.0
@@ -29,5 +31,4 @@ pyserial>=3.5
 # Utilities
 reportlab>=4.0.0
 pillow>=10.0.0
-numpy>=1.24.0
 psutil>=5.9.0
