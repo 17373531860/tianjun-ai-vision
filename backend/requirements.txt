@@ -16,13 +16,13 @@ python-multipart>=0.0.6
 aiofiles>=23.0.0
 
 # Computer Vision & AI
-opencv-python-headless>=4.8.0
+opencv-contrib-python>=4.8.0,<4.12
 ultralytics>=8.4.0,<=8.4.16
 lap>=0.5.12
-mediapipe>=0.10.0,<0.10.21
 numpy>=1.24.0,<2.0
 # Note: torch is installed separately with CUDA support
-# Note: mediapipe requires numpy<2.0; ultralytics>8.4.16 has ndarray type check bug with numpy<2
+# Note: mediapipe is installed separately to avoid opencv conflicts
+# Note: opencv-contrib-python<4.12 because 4.13+ requires numpy>=2 which conflicts with mediapipe
 
 # Communication
 websockets>=11.0.0
