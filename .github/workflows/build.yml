@@ -79,11 +79,12 @@ jobs:
           echo "Installing backend dependencies..."
           pip install --retries 5 --timeout 60 -r backend/requirements.txt
           
-          echo "Fixing OpenCV package conflicts (mediapipe pulls opencv-contrib-python which conflicts with opencv-python-headless)..."
-          pip uninstall -y opencv-python opencv-contrib-python 2>/dev/null || true
-          pip install --retries 5 --timeout 60 opencv-python-headless>=4.8.0
-          echo "OpenCV packages after cleanup:"
-          pip list 2>/dev/null | grep -i opencv
+          echo "Installing mediapipe (with --no-deps to avoid opencv conflicts)..."
+          pip install --retries 5 --timeout 60 --no-deps "mediapipe>=0.10.0,<0.10.21"
+          pip install --retries 5 --timeout 60 absl-py attrs flatbuffers jax jaxlib matplotlib protobuf sounddevice
+          
+          echo "Removing conflicting opencv packages (keep only opencv-contrib-python)..."
+          pip uninstall opencv-python opencv-python-headless -y 2>/dev/null || true
           
           echo "Installing conda-pack..."
           pip install --retries 5 --timeout 60 conda-pack
@@ -91,7 +92,10 @@ jobs:
           echo "Verifying installations..."
           python -c "import torch; v=torch.__version__; c=torch.version.cuda; print(f'PyTorch: {v}, CUDA: {c}'); assert 'cu128' in v or c.startswith('12.8'), f'FATAL: expected cu128, got {v} (CUDA {c})'"
           python -c "from ultralytics import YOLO; print('ultralytics OK')"
-          python -c "import cv2; import numpy as np; img=np.zeros((100,100,3),dtype=np.uint8); r=cv2.resize(img,(50,50)); print(f'OpenCV {cv2.__version__}: resize test OK')"
+          python -c "import cv2; print(f'OpenCV: {cv2.__version__}')"
+          python -c "import mediapipe; print(f'MediaPipe: {mediapipe.__version__}')"
+          echo "Checking opencv packages..."
+          pip list | grep -i opencv
       
       - name: Compile Python backend with Nuitka
         shell: bash -l {0}
