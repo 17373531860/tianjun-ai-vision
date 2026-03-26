@@ -175,7 +175,10 @@
                   <template #header>
                     <div class="flex justify-between items-center">
                       <span class="font-bold text-white">模型配置</span>
-                      <el-button type="primary" size="small" plain @click="showModelSelect = true">选择模型</el-button>
+                      <div class="flex gap-2">
+                        <el-button v-if="activeProject.default_model_id" size="small" plain @click="openFormatSelect">切换格式</el-button>
+                        <el-button type="primary" size="small" plain @click="showModelSelect = true">选择模型</el-button>
+                      </div>
                     </div>
                   </template>
                   <div class="flex items-center gap-4">
@@ -184,7 +187,9 @@
                     </div>
                     <div>
                       <p class="text-white font-bold">{{ activeProject.model_name || '未配置模型' }}<span v-if="activeProject.model_version" class="text-gray-400 font-normal ml-2">v{{ activeProject.model_version }}</span></p>
-                      <p class="text-xs text-gray-500">Labels: {{ (activeProject.steps_config || []).length }} 个类别已识别</p>
+                      <p class="text-xs text-gray-500">Labels: {{ (activeProject.steps_config || []).length }} 个类别已识别
+                        <el-tag v-if="activeProject.default_model_id" size="small" class="ml-2" :type="activeProject.model_format === 'pytorch_fp32' ? 'info' : 'success'">{{ getFormatDisplayName(activeProject.model_format || 'pytorch_fp32') }}</el-tag>
+                      </p>
                       <div class="mt-2 flex gap-2 flex-wrap">
                         <el-tag v-for="tag in (activeProject.steps_config || []).slice(0, 5)" :key="tag.label" size="small" type="info">{{ tag.displayLabel || tag.label }}</el-tag>
                         <span v-if="(activeProject.steps_config || []).length > 5" class="text-xs text-gray-500">+{{ activeProject.steps_config.length - 5 }}</span>
@@ -630,7 +635,7 @@
               <el-card v-if="activeProject.logic_mode === 'detection'" shadow="never" class="bg-slate-800 border-slate-700">
                 <template #header><span class="font-bold text-white">检测模式 - 需检测的步骤</span></template>
                 <div class="space-y-4 text-sm text-gray-300">
-                  <p class="text-xs text-gray-400">选择需要检测的步骤（无需顺序）。全部检测到 → 事件1(合格)</p>
+                  <p class="text-xs text-gray-400">选择需要检测的步骤。第一个步骤开启周期，最后一个步骤结束周期，中间步骤无需顺序。全部检测到 → 合格(事件1)，缺少步骤 → NG(事件2)</p>
                   <div class="bg-slate-900 rounded p-3">
                     <el-checkbox-group v-model="activeProject.detection_steps" class="flex flex-col gap-2">
                       <el-checkbox 
@@ -1079,6 +1084,45 @@
       </div>
     </el-dialog>
 
+    <!-- Format Select Dialog -->
+    <el-dialog v-model="showFormatSelect" title="选择推理格式" width="640px" :close-on-click-modal="!convertingFormat" @close="cancelFormatSelect">
+      <div v-if="convertingFormat" class="text-center py-12">
+        <el-icon class="is-loading text-4xl text-blue-400 mb-4"><Loading /></el-icon>
+        <p class="text-white text-lg mb-2">正在转换为 {{ getFormatDisplayName(convertingFormat) }}...</p>
+        <p class="text-gray-400 text-sm">预计需要 2-10 分钟，请勿关闭此窗口</p>
+        <el-button class="mt-6" @click="cancelFormatSelect">取消并使用原始格式</el-button>
+      </div>
+      <div v-else class="space-y-2 max-h-[28rem] overflow-y-auto pr-1">
+        <p v-if="gpuName" class="text-xs text-gray-400 mb-3">当前显卡: {{ gpuName }}</p>
+        <div v-for="fmt in formatList" :key="fmt.key"
+          @click="selectFormat(fmt)"
+          :class="[
+            'p-3 rounded border transition-all',
+            fmt.available
+              ? 'cursor-pointer hover:border-blue-500 bg-slate-800 border-slate-700'
+              : 'cursor-not-allowed opacity-50 bg-slate-900 border-slate-800',
+            (activeProject.model_format || 'pytorch_fp32') === fmt.key
+              ? 'border-blue-500 bg-slate-700'
+              : ''
+          ]">
+          <div class="flex justify-between items-start">
+            <div>
+              <span class="text-white font-bold">{{ fmt.name }}</span>
+              <span class="text-gray-500 text-xs ml-2">({{ fmt.extension }})</span>
+            </div>
+            <div class="flex gap-1.5">
+              <el-tag v-if="fmt.tag" size="small" :type="fmt.tag === '最快' ? 'success' : fmt.tag === '实验性' ? 'warning' : 'info'">{{ fmt.tag }}</el-tag>
+              <el-tag v-if="recommendedFormat === fmt.key" size="small" type="success">推荐</el-tag>
+              <el-tag v-if="(activeProject.model_format || 'pytorch_fp32') === fmt.key" size="small">当前</el-tag>
+            </div>
+          </div>
+          <p class="text-xs text-gray-400 mt-1">{{ fmt.description }}</p>
+          <p v-if="!fmt.available" class="text-xs text-red-400 mt-1">{{ fmt.unavailable_reason }}</p>
+          <p v-if="fmt.key.startsWith('tensorrt') && fmt.available" class="text-xs text-amber-400 mt-1">此格式仅在当前显卡上有效，更换显卡后需重新转换</p>
+        </div>
+      </div>
+    </el-dialog>
+
     <!-- ROI Polygon Editor Dialog -->
     <el-dialog v-model="roiEditorVisible" title="绘制 ROI 检测区域" width="80%" :close-on-click-modal="false" destroy-on-close class="roi-editor-dialog">
       <div class="space-y-3">
@@ -1109,12 +1153,12 @@
 
 <script setup>
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
-import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete } from '@element-plus/icons-vue';
+import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, Loading } from '@element-plus/icons-vue';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjects, getProjectDetail, createProject, updateProject, deleteProject, activateProject } from '@/api/project';
-import { getModels } from '@/api/model';
+import { getModels, getAvailableFormats, convertModel, getConversionStatus } from '@/api/model';
 import { getBackendHost } from '@/api/index';
 
 const projectStore = useProjectStore();
@@ -1124,6 +1168,13 @@ const activeProject = ref(null);
 const activeTab = ref('basic');
 const createDialogVisible = ref(false);
 const showModelSelect = ref(false);
+const showFormatSelect = ref(false);
+const formatList = ref([]);
+const recommendedFormat = ref('pytorch_fp32');
+const gpuName = ref('');
+const convertingFormat = ref(null);
+const conversionId = ref(null);
+const conversionPolling = ref(null);
 
 const projects = ref([]);
 const modelList = ref([]);
@@ -1465,6 +1516,7 @@ watch(() => activeProject.value?.tracking_roi_polygon, () => {
 
 // 初始化项目默认配置
 const initProjectDefaults = (project) => {
+  if (!project.model_format) project.model_format = 'pytorch_fp32';
   if (!project.steps_config) project.steps_config = [];
   (project.steps_config || []).forEach(step => {
     if (step.count_mode === undefined) step.count_mode = 'track';
@@ -1703,6 +1755,7 @@ const handleSaveProject = async () => {
       events_config: activeProject.value.events_config,
       counters_config: activeProject.value.counters_config,
       default_model_id: activeProject.value.default_model_id,
+      model_format: activeProject.value.model_format || 'pytorch_fp32',
       pipeline_config: {
         sequence_order: activeProject.value.sequence_order,
         detection_steps: activeProject.value.detection_steps,
@@ -1851,6 +1904,101 @@ const selectModel = (model) => {
   }
   
   showModelSelect.value = false;
+  openFormatSelect();
+};
+
+const FORMAT_DISPLAY_NAMES = {
+  'pytorch_fp32': 'PyTorch FP32',
+  'pytorch_fp16': 'PyTorch FP16',
+  'onnx': 'ONNX',
+  'torchscript': 'TorchScript',
+  'tensorrt_fp32': 'TensorRT FP32',
+  'tensorrt_fp16': 'TensorRT FP16',
+  'tensorrt_int8': 'TensorRT INT8',
+};
+
+const getFormatDisplayName = (key) => FORMAT_DISPLAY_NAMES[key] || key;
+
+const openFormatSelect = async () => {
+  try {
+    const res = await getAvailableFormats();
+    formatList.value = res.data.formats || [];
+    recommendedFormat.value = res.data.recommended || 'pytorch_fp32';
+    gpuName.value = res.data.gpu_name || '';
+    convertingFormat.value = null;
+    conversionId.value = null;
+    showFormatSelect.value = true;
+  } catch (e) {
+    ElMessage.error('获取可用格式失败');
+    console.error(e);
+  }
+};
+
+const selectFormat = async (fmt) => {
+  if (!fmt.available) return;
+  const key = fmt.key;
+
+  if (key === 'pytorch_fp32') {
+    activeProject.value.model_format = key;
+    showFormatSelect.value = false;
+    ElMessage.success('已选择 PyTorch FP32（原始模型）');
+    return;
+  }
+
+  convertingFormat.value = key;
+  try {
+    const res = await convertModel(activeProject.value.default_model_id, {
+      format: key,
+      project_id: activeProject.value.id,
+    });
+    const conv = res.data;
+
+    if (conv.status === 'ready') {
+      activeProject.value.model_format = key;
+      showFormatSelect.value = false;
+      convertingFormat.value = null;
+      ElMessage.success(`已选择 ${getFormatDisplayName(key)}`);
+      return;
+    }
+
+    conversionId.value = conv.id;
+    startConversionPolling(key);
+  } catch (e) {
+    convertingFormat.value = null;
+    ElMessage.error('转换请求失败: ' + (e.response?.data?.detail || e.message));
+  }
+};
+
+const startConversionPolling = (fmtKey) => {
+  if (conversionPolling.value) clearInterval(conversionPolling.value);
+  conversionPolling.value = setInterval(async () => {
+    try {
+      const res = await getConversionStatus(conversionId.value);
+      const s = res.data;
+      if (s.status === 'ready') {
+        clearInterval(conversionPolling.value);
+        conversionPolling.value = null;
+        convertingFormat.value = null;
+        activeProject.value.model_format = fmtKey;
+        showFormatSelect.value = false;
+        ElMessage.success(`${getFormatDisplayName(fmtKey)} 转换完成`);
+      } else if (s.status === 'failed') {
+        clearInterval(conversionPolling.value);
+        conversionPolling.value = null;
+        convertingFormat.value = null;
+        ElMessage.error('转换失败: ' + (s.error_msg || '未知错误'));
+      }
+    } catch (e) {
+      console.error('轮询转换状态失败:', e);
+    }
+  }, 3000);
+};
+
+const cancelFormatSelect = () => {
+  if (conversionPolling.value) clearInterval(conversionPolling.value);
+  conversionPolling.value = null;
+  convertingFormat.value = null;
+  showFormatSelect.value = false;
 };
 
 // 顺序模式 - 步骤操作

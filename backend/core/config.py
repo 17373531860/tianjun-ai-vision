@@ -162,6 +162,7 @@ class Settings(BaseSettings):
     # File Upload Paths
     UPLOAD_DIR: str = os.path.join(DATA_DIR, "uploads")
     MODEL_UPLOAD_DIR: str = os.path.join(DATA_DIR, "uploads", "models")
+    MODEL_CONVERTED_DIR: str = os.path.join(DATA_DIR, "uploads", "models", "converted")
     IMAGE_UPLOAD_DIR: str = os.path.join(DATA_DIR, "uploads", "images")
     VIDEO_UPLOAD_DIR: str = os.path.join(DATA_DIR, "uploads", "videos")
     
@@ -184,7 +185,8 @@ settings = Settings()
 
 # Ensure upload directories exist
 all_dirs = [
-    settings.MODEL_UPLOAD_DIR, 
+    settings.MODEL_UPLOAD_DIR,
+    settings.MODEL_CONVERTED_DIR,
     settings.IMAGE_UPLOAD_DIR, 
     settings.VIDEO_UPLOAD_DIR,
     settings.RECORDING_DIR,

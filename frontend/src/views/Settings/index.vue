@@ -831,7 +831,7 @@ const gpuInfo = reactive({
 
 // 卡尔曼滤波配置
 const kalmanConfig = reactive({
-  enabled: true,
+  enabled: false,
   processNoise: 0.03,
   measurementNoise: 0.1,
   maxMissingFrames: 5

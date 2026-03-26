@@ -518,7 +518,7 @@ import api from '@/api/index';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { setWorkstationMode, getWorkstations, setProjectConfig as apiSetProjectConfig, startDetection as apiStartDetection, setChannelGpu } from '@/api/detection';
-import { getModelDetail } from '@/api/model';
+import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import { getProjects } from '@/api/project';
 
 const router = useRouter();
@@ -625,8 +625,13 @@ const saveAndStartMulti = async () => {
 
           if (proj.default_model_id) {
             try {
-              const modelRes = await getModelDetail(proj.default_model_id);
-              await apiStartDetection(modelRes.data.file_path, 0.25, 0.45, ch);
+              const modelFormat = proj.model_format || 'pytorch_fp32';
+              let mPath;
+              try {
+                const rr = await apiResolveModelPath(proj.default_model_id, modelFormat);
+                mPath = rr.data.path;
+              } catch { const mr = await getModelDetail(proj.default_model_id); mPath = mr.data.file_path; }
+              await apiStartDetection(mPath, 0.25, 0.45, ch);
             } catch (me) {
               console.warn(`Ch${ch} model start failed:`, me);
             }

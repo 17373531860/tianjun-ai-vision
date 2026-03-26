@@ -16,12 +16,14 @@ class ProjectBase(BaseModel):
 
 class ProjectCreate(ProjectBase):
     default_model_id: Optional[int] = None
+    model_format: str = "pytorch_fp32"
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     task_type: Optional[str] = None
     pipeline_config: Optional[dict] = None
     default_model_id: Optional[int] = None
+    model_format: Optional[str] = None
     logic_mode: Optional[str] = None
     steps_config: Optional[List[dict]] = None
     events_config: Optional[List[dict]] = None
@@ -34,6 +36,7 @@ class ProjectUpdate(BaseModel):
 class ProjectResponse(ProjectBase):
     id: int
     default_model_id: Optional[int] = None
+    model_format: str = "pytorch_fp32"
     is_active: bool = False
     created_at: datetime
     updated_at: datetime

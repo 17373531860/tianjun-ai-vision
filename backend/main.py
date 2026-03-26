@@ -54,6 +54,7 @@ def migrate_database():
         ("projects", "data_config", "JSON"),
         ("detection_sessions", "channel_id", "INTEGER DEFAULT 0"),
         ("detection_sessions", "shift_label", "VARCHAR(20)"),
+        ("projects", "model_format", "VARCHAR(50) DEFAULT 'pytorch_fp32'"),
     ]
     
     try:

@@ -654,7 +654,7 @@ import { useSourceStore } from '@/store/useSourceStore';
 import { Check, Folder, Picture, CircleCheck, CircleClose, Warning } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations } from '@/api/detection';
-import { getModelDetail } from '@/api/model';
+import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import api, { getBackendHost } from '@/api/index';
 
 const projectStore = useProjectStore();
@@ -1044,8 +1044,19 @@ const startDetectionForChannel = async (ch) => {
     }, ch);
     const modelId = currentProject.value.default_model_id;
     if (!modelId) { ElMessage.warning('请先配置模型'); return; }
-    const modelRes = await getModelDetail(modelId);
-    await apiStartDetection(modelRes.data.file_path, 0.25, 0.45, ch);
+    const modelFormat = currentProject.value.model_format || 'pytorch_fp32';
+    let modelPath;
+    try {
+      const resolveRes = await apiResolveModelPath(modelId, modelFormat);
+      modelPath = resolveRes.data.path;
+      if (resolveRes.data.fallback && modelFormat !== 'pytorch_fp32') {
+        ElMessage.warning(resolveRes.data.reason || '转换模型不可用，已回退到原始模型');
+      }
+    } catch {
+      const modelRes = await getModelDetail(modelId);
+      modelPath = modelRes.data.file_path;
+    }
+    await apiStartDetection(modelPath, 0.25, 0.45, ch);
     ElMessage.success(`工位 ${ch + 1} 检测已启动`);
   } catch (e) {
     ElMessage.error(`工位 ${ch + 1} 启动失败: ${e.message}`);
@@ -1997,8 +2008,18 @@ const startDetection = async () => {
       return;
     }
     
-    const modelRes = await getModelDetail(modelId);
-    const modelPath = modelRes.data.file_path;
+    const modelFormat = currentProject.value.model_format || 'pytorch_fp32';
+    let modelPath;
+    try {
+      const resolveRes = await apiResolveModelPath(modelId, modelFormat);
+      modelPath = resolveRes.data.path;
+      if (resolveRes.data.fallback && modelFormat !== 'pytorch_fp32') {
+        ElMessage.warning(resolveRes.data.reason || '转换模型不可用，已回退到原始模型');
+      }
+    } catch {
+      const modelRes = await getModelDetail(modelId);
+      modelPath = modelRes.data.file_path;
+    }
     if (!modelPath) {
       ElMessage.error('模型文件路径无效');
       return;

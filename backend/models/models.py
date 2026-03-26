@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, JSON, Float, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, JSON, Float, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from backend.db.database import Base
@@ -18,6 +18,7 @@ class Project(Base):
     alarm_config = Column(JSON, nullable=True)  # 报警设置
     detection_config = Column(JSON, nullable=True)  # 检测框设置
     data_config = Column(JSON, nullable=True)  # 数据导出设置
+    model_format = Column(String(50), default="pytorch_fp32")  # 该项目使用的推理格式
     is_active = Column(Boolean, default=False)  # 是否激活
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -45,6 +46,29 @@ class Model(Base):
 
     project = relationship("Project", back_populates="project_models", foreign_keys=[project_id])
     tasks = relationship("Task", back_populates="model")
+    conversions = relationship("ModelConversion", back_populates="model", cascade="all, delete-orphan")
+
+
+class ModelConversion(Base):
+    """模型格式转换记录 — 按 model_id+format+gpu_arch 唯一索引，跨项目共享"""
+    __tablename__ = "model_conversions"
+    __table_args__ = (
+        UniqueConstraint("model_id", "format", "gpu_arch", name="uq_model_format_gpu"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
+    format = Column(String(50), nullable=False)
+    file_path = Column(String(500), nullable=False)
+    file_size = Column(Integer, default=0)
+    gpu_name = Column(String(200), nullable=True)
+    gpu_arch = Column(String(50), nullable=True)
+    status = Column(String(20), default="queued")  # queued, converting, ready, failed
+    error_msg = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    model = relationship("Model", back_populates="conversions")
+
 
 class Task(Base):
     __tablename__ = "tasks"

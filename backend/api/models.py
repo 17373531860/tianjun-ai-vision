@@ -5,15 +5,202 @@ import os
 import shutil
 import uuid
 import json
+import threading
+import queue
+import traceback
 from datetime import datetime
-from backend.db.database import get_db
-from backend.models.models import Model, Project
-from backend.schemas.model import ModelCreate, ModelUpdate, ModelResponse, ModelListResponse
+from backend.db.database import get_db, SessionLocal
+from backend.models.models import Model, ModelConversion, Project
+from backend.schemas.model import (
+    ModelCreate, ModelUpdate, ModelResponse, ModelListResponse,
+    ConversionRequest, ConversionResponse, ConversionStatusResponse,
+    FormatInfo, FormatsAvailableResponse,
+)
 from backend.core.config import settings
 
 router = APIRouter()
 
 ALLOWED_EXTENSIONS = {'.pt', '.pth', '.onnx', '.engine', '.pkl', '.h5', '.pb'}
+
+# ---------------------------------------------------------------------------
+# Model format definitions
+# ---------------------------------------------------------------------------
+FORMAT_DEFINITIONS = [
+    {
+        "key": "pytorch_fp32",
+        "name": "PyTorch FP32",
+        "extension": ".pt",
+        "description": "原始模型，兼容性最强，无需转换。速度较慢。",
+        "tag": "默认",
+        "requires_gpu": False,
+    },
+    {
+        "key": "pytorch_fp16",
+        "name": "PyTorch FP16",
+        "extension": ".pt",
+        "description": "半精度推理，速度约提升50%。极少数情况精度微降。",
+        "tag": None,
+        "requires_gpu": True,
+    },
+    {
+        "key": "onnx",
+        "name": "ONNX Runtime + CUDA",
+        "extension": ".onnx",
+        "description": "跨平台通用格式，速度约提升1.5-2倍。",
+        "tag": None,
+        "requires_gpu": False,
+    },
+    {
+        "key": "torchscript",
+        "name": "TorchScript + CUDA",
+        "extension": ".torchscript",
+        "description": "PyTorch 编译格式，速度约提升1.5-2倍。",
+        "tag": None,
+        "requires_gpu": False,
+    },
+    {
+        "key": "tensorrt_fp32",
+        "name": "TensorRT FP32",
+        "extension": ".engine",
+        "description": "NVIDIA 深度优化，速度约3倍。仅限当前显卡。",
+        "tag": None,
+        "requires_gpu": True,
+    },
+    {
+        "key": "tensorrt_fp16",
+        "name": "TensorRT FP16",
+        "extension": ".engine",
+        "description": "最佳性价比，速度约4-5倍。仅限当前显卡。",
+        "tag": "最快",
+        "requires_gpu": True,
+    },
+    {
+        "key": "tensorrt_int8",
+        "name": "TensorRT INT8",
+        "extension": ".engine",
+        "description": "极速模式，速度最快但精度可能明显下降。仅限当前显卡。",
+        "tag": "实验性",
+        "requires_gpu": True,
+    },
+]
+
+FORMAT_EXPORT_ARGS = {
+    "pytorch_fp32": None,
+    "pytorch_fp16": {"format": "torchscript", "half": True},
+    "onnx": {"format": "onnx", "simplify": True},
+    "torchscript": {"format": "torchscript"},
+    "tensorrt_fp32": {"format": "engine"},
+    "tensorrt_fp16": {"format": "engine", "half": True},
+    "tensorrt_int8": {"format": "engine", "int8": True},
+}
+
+# ---------------------------------------------------------------------------
+# GPU helper
+# ---------------------------------------------------------------------------
+def _get_gpu_info():
+    """Return (available, name, arch) for the first CUDA device."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return False, None, None
+        name = torch.cuda.get_device_name(0)
+        cap = torch.cuda.get_device_capability(0)
+        arch = f"sm_{cap[0]}{cap[1]}"
+        return True, name, arch
+    except Exception:
+        return False, None, None
+
+
+def _has_tensorrt():
+    try:
+        import tensorrt  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _has_onnx():
+    try:
+        import onnx  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Conversion queue (serial execution)
+# ---------------------------------------------------------------------------
+_convert_queue: queue.Queue = queue.Queue()
+_convert_lock = threading.Lock()
+_convert_thread: Optional[threading.Thread] = None
+
+
+def _conversion_worker():
+    """Background thread that processes conversions one at a time."""
+    while True:
+        item = _convert_queue.get()
+        if item is None:
+            break
+        conv_id, model_file_path, fmt_key = item
+        db = SessionLocal()
+        try:
+            conv = db.query(ModelConversion).filter(ModelConversion.id == conv_id).first()
+            if not conv or conv.status != "queued":
+                continue
+            conv.status = "converting"
+            db.commit()
+
+            from ultralytics import YOLO
+            import numpy as np
+
+            model = YOLO(model_file_path)
+            export_args = FORMAT_EXPORT_ARGS.get(fmt_key)
+            if export_args is None:
+                conv.status = "ready"
+                conv.file_path = model_file_path
+                conv.file_size = os.path.getsize(model_file_path)
+                db.commit()
+                continue
+
+            exported_path = model.export(**export_args)
+
+            dest_dir = settings.MODEL_CONVERTED_DIR
+            os.makedirs(dest_dir, exist_ok=True)
+            ext = os.path.splitext(exported_path)[1]
+            gpu_suffix = f"_{conv.gpu_arch}" if conv.gpu_arch else ""
+            dest_name = f"{conv.model_id}_{fmt_key}{gpu_suffix}{ext}"
+            dest_path = os.path.join(dest_dir, dest_name)
+            if os.path.abspath(exported_path) != os.path.abspath(dest_path):
+                shutil.move(exported_path, dest_path)
+
+            conv.file_path = dest_path
+            conv.file_size = os.path.getsize(dest_path)
+            conv.status = "ready"
+            db.commit()
+            print(f"[ModelConvert] {fmt_key} 转换完成: {dest_path}")
+
+        except Exception as e:
+            print(f"[ModelConvert] 转换失败: {e}")
+            traceback.print_exc()
+            try:
+                conv = db.query(ModelConversion).filter(ModelConversion.id == conv_id).first()
+                if conv:
+                    conv.status = "failed"
+                    conv.error_msg = str(e)[:500]
+                    db.commit()
+            except Exception:
+                pass
+        finally:
+            db.close()
+            _convert_queue.task_done()
+
+
+def _ensure_worker():
+    global _convert_thread
+    with _convert_lock:
+        if _convert_thread is None or not _convert_thread.is_alive():
+            _convert_thread = threading.Thread(target=_conversion_worker, daemon=True)
+            _convert_thread.start()
 
 def get_file_extension(filename: str) -> str:
     return os.path.splitext(filename)[1].lower()
@@ -93,6 +280,82 @@ def get_models(
     models = query.offset(skip).limit(limit).all()
     
     return ModelListResponse(total=total, items=models)
+
+
+# Static-path routes MUST be registered before /{model_id} to avoid
+# FastAPI matching "formats" or "conversions" as a model_id parameter.
+
+@router.get("/formats/available", response_model=FormatsAvailableResponse)
+def get_available_formats():
+    """返回所有模型格式及当前环境可用性，附带智能推荐"""
+    gpu_avail, gpu_name, gpu_arch = _get_gpu_info()
+    has_trt = _has_tensorrt()
+    has_onnx = _has_onnx()
+
+    formats = []
+    for fd in FORMAT_DEFINITIONS:
+        available = True
+        reason = None
+        if fd["requires_gpu"] and not gpu_avail:
+            available = False
+            reason = "需要 NVIDIA GPU"
+        if fd["key"].startswith("tensorrt") and not has_trt:
+            available = False
+            reason = "TensorRT 未安装"
+        if fd["key"] == "onnx" and not has_onnx:
+            available = False
+            reason = "onnx 模块未安装"
+        formats.append(FormatInfo(
+            key=fd["key"],
+            name=fd["name"],
+            extension=fd["extension"],
+            description=fd["description"],
+            tag=fd.get("tag"),
+            available=available,
+            unavailable_reason=reason,
+        ))
+
+    recommended = "pytorch_fp32"
+    if gpu_avail:
+        if has_trt:
+            recommended = "tensorrt_fp16"
+        else:
+            recommended = "pytorch_fp16"
+    elif has_onnx:
+        recommended = "onnx"
+
+    return FormatsAvailableResponse(
+        formats=formats,
+        recommended=recommended,
+        gpu_name=gpu_name,
+        gpu_available=gpu_avail,
+    )
+
+
+@router.get("/conversions/{conv_id}/status", response_model=ConversionStatusResponse)
+def get_conversion_status(conv_id: int, db: Session = Depends(get_db)):
+    """查询单个转换任务的状态"""
+    conv = db.query(ModelConversion).filter(ModelConversion.id == conv_id).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversion not found")
+    return conv
+
+
+@router.delete("/conversions/{conv_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_conversion(conv_id: int, db: Session = Depends(get_db)):
+    """删除一个转换记录及其文件"""
+    conv = db.query(ModelConversion).filter(ModelConversion.id == conv_id).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversion not found")
+    if conv.file_path and os.path.exists(conv.file_path):
+        try:
+            os.remove(conv.file_path)
+        except Exception as e:
+            print(f"[ModelConvert] 删除文件失败: {e}")
+    db.delete(conv)
+    db.commit()
+    return None
+
 
 @router.get("/{model_id}", response_model=ModelResponse)
 def get_model(model_id: int, db: Session = Depends(get_db)):
@@ -234,6 +497,14 @@ def delete_model(model_id: int, db: Session = Depends(get_db)):
         except Exception as e:
             print(f"Failed to delete file: {e}")
     
+    # 删除所有转换文件
+    for conv in db.query(ModelConversion).filter(ModelConversion.model_id == model_id).all():
+        if conv.file_path and os.path.exists(conv.file_path):
+            try:
+                os.remove(conv.file_path)
+            except Exception:
+                pass
+
     # 清除关联项目的默认模型
     db.query(Project).filter(Project.default_model_id == model_id).update(
         {Project.default_model_id: None}
@@ -262,3 +533,115 @@ def set_model_active(model_id: int, db: Session = Depends(get_db)):
     db.refresh(db_model)
     
     return db_model
+
+
+@router.post("/{model_id}/convert", response_model=ConversionResponse)
+def convert_model(model_id: int, req: ConversionRequest, db: Session = Depends(get_db)):
+    """发起模型格式转换。已有相同转换时直接复用。"""
+    db_model = db.query(Model).filter(Model.id == model_id).first()
+    if not db_model:
+        raise HTTPException(status_code=404, detail="Model not found")
+    if not os.path.exists(db_model.file_path):
+        raise HTTPException(status_code=404, detail="Model file not found on disk")
+
+    fmt_key = req.format
+    if fmt_key not in FORMAT_EXPORT_ARGS:
+        raise HTTPException(status_code=400, detail=f"Unknown format: {fmt_key}")
+
+    if fmt_key == "pytorch_fp32":
+        raise HTTPException(status_code=400, detail="pytorch_fp32 无需转换")
+
+    gpu_avail, gpu_name, gpu_arch = _get_gpu_info()
+    is_tensorrt = fmt_key.startswith("tensorrt")
+
+    if is_tensorrt:
+        if not gpu_avail:
+            raise HTTPException(status_code=400, detail="TensorRT 需要 NVIDIA GPU")
+        if not _has_tensorrt():
+            raise HTTPException(status_code=400, detail="TensorRT 未安装")
+
+    lookup_arch = gpu_arch if is_tensorrt else None
+
+    existing = db.query(ModelConversion).filter(
+        ModelConversion.model_id == model_id,
+        ModelConversion.format == fmt_key,
+        ModelConversion.gpu_arch == lookup_arch,
+    ).first()
+    if existing:
+        if existing.status == "ready":
+            if existing.file_path and os.path.exists(existing.file_path):
+                return existing
+            existing.status = "queued"
+            db.commit()
+        elif existing.status in ("queued", "converting"):
+            return existing
+        elif existing.status == "failed":
+            existing.status = "queued"
+            existing.error_msg = None
+            db.commit()
+
+        _ensure_worker()
+        _convert_queue.put((existing.id, db_model.file_path, fmt_key))
+        return existing
+
+    conv = ModelConversion(
+        model_id=model_id,
+        format=fmt_key,
+        file_path="",
+        gpu_name=gpu_name if is_tensorrt else None,
+        gpu_arch=lookup_arch,
+        status="queued",
+    )
+    db.add(conv)
+    db.commit()
+    db.refresh(conv)
+
+    _ensure_worker()
+    _convert_queue.put((conv.id, db_model.file_path, fmt_key))
+
+    return conv
+
+
+@router.get("/{model_id}/conversions", response_model=List[ConversionResponse])
+def get_model_conversions(model_id: int, db: Session = Depends(get_db)):
+    """列出该模型的所有已有转换版本"""
+    return db.query(ModelConversion).filter(
+        ModelConversion.model_id == model_id
+    ).order_by(ModelConversion.created_at.desc()).all()
+
+
+@router.post("/{model_id}/resolve-path")
+def resolve_model_path(
+    model_id: int,
+    format: str = "pytorch_fp32",
+    db: Session = Depends(get_db),
+):
+    """根据格式返回实际应加载的模型文件路径。用于检测启动时。
+
+    - pytorch_fp32: 直接返回原始 .pt 路径
+    - 其他格式: 查找转换记录, TensorRT 额外校验 GPU
+    """
+    db_model = db.query(Model).filter(Model.id == model_id).first()
+    if not db_model:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    original_path = db_model.file_path
+
+    if format == "pytorch_fp32":
+        return {"path": original_path, "original_path": original_path, "fallback": False}
+
+    is_tensorrt = format.startswith("tensorrt")
+    gpu_avail, gpu_name, gpu_arch = _get_gpu_info()
+    lookup_arch = gpu_arch if is_tensorrt else None
+
+    conv = db.query(ModelConversion).filter(
+        ModelConversion.model_id == model_id,
+        ModelConversion.format == format,
+        ModelConversion.gpu_arch == lookup_arch,
+    ).first()
+
+    if conv and conv.status == "ready" and conv.file_path and os.path.exists(conv.file_path):
+        return {"path": conv.file_path, "original_path": original_path, "fallback": False}
+
+    return {"path": original_path, "original_path": original_path, "fallback": True,
+            "reason": "转换模型不可用，已回退到原始模型"}

@@ -34,3 +34,48 @@ class ModelResponse(ModelBase):
 class ModelListResponse(BaseModel):
     total: int
     items: List[ModelResponse]
+
+
+class ConversionRequest(BaseModel):
+    format: str
+    project_id: Optional[int] = None
+
+class ConversionResponse(BaseModel):
+    id: int
+    model_id: int
+    format: str
+    file_path: str
+    file_size: int = 0
+    gpu_name: Optional[str] = None
+    gpu_arch: Optional[str] = None
+    status: str
+    error_msg: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class ConversionStatusResponse(BaseModel):
+    id: int
+    status: str
+    error_msg: Optional[str] = None
+    file_path: Optional[str] = None
+    file_size: int = 0
+
+    class Config:
+        from_attributes = True
+
+class FormatInfo(BaseModel):
+    key: str
+    name: str
+    extension: str
+    description: str
+    tag: Optional[str] = None
+    available: bool = True
+    unavailable_reason: Optional[str] = None
+
+class FormatsAvailableResponse(BaseModel):
+    formats: List[FormatInfo]
+    recommended: Optional[str] = None
+    gpu_name: Optional[str] = None
+    gpu_available: bool = False

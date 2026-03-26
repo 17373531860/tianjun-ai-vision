@@ -477,6 +477,8 @@ class VideoSourceManager:
         # YOLO 模型
         self.model = None
         self.model_path = None
+        self._original_pt_path = None  # 原始 .pt 路径，用于转换模型加载失败时回退
+        self._is_native_pytorch = True  # 是否为原生 .pt 模型（导出格式不支持 .to() 和 half）
         self.model_task = 'detect'  # 'detect' or 'segment', updated on load_model
         self.device = 'auto'  # 推理设备: 'auto', 'cpu', 'cuda:0', 'cuda:1' 等
         self.current_device_info = None  # 当前使用的设备信息
@@ -668,7 +670,7 @@ class VideoSourceManager:
         
         # ========== 卡尔曼滤波相关 ==========
         self._kalman_filters = {}  # {label: KalmanFilter} 每个目标一个滤波器
-        self._kalman_enabled = True  # 是否启用卡尔曼滤波
+        self._kalman_enabled = False  # 是否启用卡尔曼滤波（默认关闭）
         self._kalman_process_noise = 0.03  # 过程噪声 Q (越小越平滑，越大响应越快)
         self._kalman_measurement_noise = 0.1  # 观测噪声 R (越大越平滑)
         self._detection_history = {}  # 检测框历史 {label: last_detection}
@@ -1525,24 +1527,39 @@ class VideoSourceManager:
         except Exception as e:
             print(f"[资源释放] 释放模型时出错: {e}")
     
-    def load_model(self, model_path: str) -> bool:
-        """加载 YOLO 模型"""
+    def load_model(self, model_path: str, original_pt_path: str = None) -> bool:
+        """加载 YOLO 模型。转换模型加载失败时自动回退到原始 .pt。"""
         try:
             from ultralytics import YOLO
             import torch
+            
+            if original_pt_path:
+                self._original_pt_path = original_pt_path
+            elif model_path.endswith('.pt') or model_path.endswith('.pth'):
+                self._original_pt_path = model_path
             
             # 先释放旧模型
             if self.model is not None:
                 print(f"[模型加载] 释放旧模型: {self.model_path}")
                 self._release_model()
             
-            self.model = YOLO(model_path)
+            try:
+                self.model = YOLO(model_path)
+            except Exception as e:
+                if self._original_pt_path and model_path != self._original_pt_path:
+                    print(f"[模型加载] 转换模型加载失败 ({e})，回退到原始模型: {self._original_pt_path}")
+                    self.model = YOLO(self._original_pt_path)
+                    model_path = self._original_pt_path
+                else:
+                    raise
             self.model_path = model_path
             self.model_task = getattr(self.model, 'task', 'detect')  # 'detect' or 'segment'
             
+            is_native_pytorch = model_path.endswith('.pt') or model_path.endswith('.pth')
+            self._is_native_pytorch = is_native_pytorch
+            
             # 设置推理设备
             if self.device == 'auto':
-                # 自动选择：优先GPU
                 if torch.cuda.is_available():
                     device = 'cuda:0'
                 else:
@@ -1550,8 +1567,9 @@ class VideoSourceManager:
             else:
                 device = self.device
             
-            # 将模型移动到指定设备
-            self.model.to(device)
+            # .to(device) 仅对原生 PyTorch 模型有效；导出格式在 predict 时通过 device 参数指定
+            if is_native_pytorch:
+                self.model.to(device)
             
             # 记录当前设备信息
             if device.startswith('cuda'):
@@ -1570,7 +1588,7 @@ class VideoSourceManager:
             if device.startswith('cuda'):
                 try:
                     import numpy as np
-                    _half = self.use_half
+                    _half = self.use_half if is_native_pytorch else False
                     print(f"[模型预热] CUDA warm-up (half={_half})...")
                     self.model.predict(
                         np.zeros((640, 640, 3), dtype=np.uint8),
@@ -1837,13 +1855,19 @@ class VideoSourceManager:
                                 else:
                                     print("[RTSP] 重连失败")
                             elif self.source_type == 'camera':
-                                self.capture = cv2.VideoCapture(self.camera_index)
+                                backend = getattr(self, '_camera_backend', None)
+                                if backend is not None:
+                                    self.capture = cv2.VideoCapture(self.camera_index, backend)
+                                elif platform.system() == "Windows":
+                                    self.capture = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+                                else:
+                                    self.capture = cv2.VideoCapture(self.camera_index)
                                 if self.capture.isOpened():
                                     self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
                                     self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                                     self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                                     self.capture.set(cv2.CAP_PROP_FPS, self.fps)
-                                    print("[捕获线程] 摄像头重新打开成功 (MJPG)")
+                                    print(f"[捕获线程] 摄像头重新打开成功 (backend={backend})")
                                     consecutive_errors = 0
                                 else:
                                     print("[捕获线程] 摄像头重新打开失败")
@@ -1977,6 +2001,40 @@ class VideoSourceManager:
             if step_id in id_to_label and step_id in enabled_step_ids:
                 expected.append(id_to_label[step_id])
         return expected
+    
+    def _get_detection_step_labels(self):
+        """获取检测模式下需要检测的步骤标签列表（按 steps_config 配置顺序）"""
+        if not self.project_config:
+            return []
+        
+        pipeline_config = self.project_config.get('pipeline_config', {})
+        steps_config = self.project_config.get('steps_config', [])
+        detection_step_ids = pipeline_config.get('detection_steps', [])
+        
+        id_to_label = {}
+        ordered_enabled = []
+        for step in steps_config:
+            step_id = step.get('id')
+            label = step.get('label', '')
+            if step_id and label and step.get('enabled', True):
+                id_to_label[step_id] = label
+                ordered_enabled.append((step_id, label))
+        
+        if detection_step_ids:
+            det_set = set(detection_step_ids)
+            return [label for sid, label in ordered_enabled if sid in det_set]
+        else:
+            return [label for _, label in ordered_enabled]
+    
+    def _get_first_detection_step_label(self):
+        """获取检测模式下第一个步骤的标签"""
+        labels = self._get_detection_step_labels()
+        return labels[0] if labels else None
+    
+    def _get_last_detection_step_label(self):
+        """获取检测模式下最后一个步骤的标签"""
+        labels = self._get_detection_step_labels()
+        return labels[-1] if labels else None
     
     def _is_condition_prefix(self, sequence_to_check: list) -> bool:
         """检查给定序列是否是任何自定义条件的前缀
@@ -2307,6 +2365,47 @@ class VideoSourceManager:
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
         
+        self.last_step_completed_time = None
+    
+    def _settle_detection_cycle(self):
+        """结算检测模式的当前周期
+        
+        判定逻辑（无序）：
+        - 第一步和最后一步固定，中间步骤不要求顺序
+        - 所有需检测步骤都出现过 → OK (事件1)
+        - 缺少步骤 → NG (事件2)，报告缺少的步骤列表
+        """
+        self._just_settled = True
+        if not self.project_config:
+            return
+        
+        detection_labels = self._get_detection_step_labels()
+        if not detection_labels:
+            return
+        
+        self.current_cycle_steps = self._filter_cycle_by_duration(self.current_cycle_steps)
+        self._reconcile_step_records()
+        
+        present = set(self.current_cycle_steps)
+        missing = [l for l in detection_labels if l not in present]
+        
+        print(f"检测模式结算: 需要={detection_labels}, 本周期={list(present)}, 缺少={missing}")
+        
+        if not missing:
+            print(f"  → 全部检测到 → OK")
+            self._trigger_event(1, '检测完成')
+        else:
+            print(f"  → 缺少步骤: {missing} → NG")
+            self._trigger_event(2, f'缺少步骤: {missing}')
+        
+        self.current_cycle_steps = []
+        self.backup_steps_seen_in_cycle = set()
+        self.last_added_step = None
+        self._last_step_added_time = None
+        self.step_last_seen.clear()
+        self.step_start_time.clear()
+        self.step_consecutive_frames.clear()
+        self.step_frame_confirmed.clear()
         self.last_step_completed_time = None
     
     def _settle_sequential_cycle(self):
@@ -2644,6 +2743,17 @@ class VideoSourceManager:
                     elif logic_mode == 'sequential':
                         self._settle_sequential_cycle()
         
+        # ── 检测模式：第一步重现结算 ──
+        if logic_mode == 'detection' and len(self.current_cycle_steps) > 1:
+            first_det_label = self._get_first_detection_step_label()
+            if first_det_label and label == first_det_label and label in self.current_cycle_steps:
+                first_start = self.step_start_time.get(label) or getattr(self, '_step_raw_start', {}).get(label)
+                first_min_dur = (self.step_time_config.get(label, {}).get('min_duration')) or 0
+                first_duration = (current_time - first_start) if first_start else 0
+                if first_duration >= first_min_dur:
+                    print(f"[检测模式结算] [{label}] 第一步再次出现 (持续{first_duration:.2f}s >= {first_min_dur}s)，结算当前周期 (步骤={self.current_cycle_steps})")
+                    self._settle_detection_cycle()
+        
         # Always update step_last_seen so duration calculations reflect actual last detection time
         self.step_last_seen[label] = current_time
         
@@ -2667,6 +2777,14 @@ class VideoSourceManager:
                     first_step_label = self._get_first_sequence_step_label()
                     if first_step_label and label != first_step_label:
                         return
+                    self._just_settled = False
+            
+            # 检测模式：只有第一步能开启新周期
+            if len(self.current_cycle_steps) == 0 and logic_mode == 'detection':
+                first_det_label = self._get_first_detection_step_label()
+                if first_det_label and label != first_det_label:
+                    return
+                if getattr(self, '_just_settled', False):
                     self._just_settled = False
             
             raw_start = getattr(self, '_step_raw_start', {}).get(label, current_time)
@@ -3016,6 +3134,8 @@ class VideoSourceManager:
                     self._settle_custom_cycle()
                 elif _lm == 'sequential':
                     self._settle_sequential_cycle()
+                elif _lm == 'detection':
+                    self._settle_detection_cycle()
         
     
     def _inject_backup_steps(self, this_cycle: list, expected_labels: list) -> list:
@@ -4372,9 +4492,14 @@ class VideoSourceManager:
                 else:
                     print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
         
-        # 检测模式
+        # 检测模式：只在最后一步消失时结算
         elif logic_mode == 'detection':
-            self._check_detection_mode(pipeline_config, id_to_label, enabled_step_labels)
+            last_det_label = self._get_last_detection_step_label()
+            if last_det_label and completed_step == last_det_label:
+                if completed_step in self.current_cycle_steps:
+                    self._settle_detection_cycle()
+                else:
+                    print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
         
         # 检查步骤特定事件
         for step in steps_config:
@@ -4674,29 +4799,6 @@ class VideoSourceManager:
             self.step_start_time.clear()
             self.last_step_completed_time = None
 
-    def _check_detection_mode(self, pipeline_config: dict, id_to_label: dict, enabled_step_labels: list):
-        """检查检测模式"""
-        detection_step_ids = pipeline_config.get('detection_steps', [])
-        
-        # 将步骤ID转换为标签名
-        if detection_step_ids:
-            detection_labels = [id_to_label.get(sid) for sid in detection_step_ids if sid in id_to_label]
-        else:
-            detection_labels = enabled_step_labels
-        
-        if not detection_labels:
-            return
-        
-        self.current_cycle_steps = self._filter_cycle_by_duration(self.current_cycle_steps)
-        
-        print(f"检测模式检查: 需要={detection_labels}, 当前周期={self.current_cycle_steps}")
-        
-        if all(label in self.current_cycle_steps for label in detection_labels):
-            self._trigger_event(1, '检测完成')  # 事件1: 合格
-            self.current_cycle_steps = []
-            self.backup_steps_seen_in_cycle = set()
-            self.last_added_step = None
-    
     def _check_custom_detection_mode(self, pipeline_config: dict, id_to_label: dict, enabled_step_labels: list):
         """检查自定义模式（基于检测模式）
         
@@ -4923,7 +5025,7 @@ class VideoSourceManager:
             
             from concurrent.futures import TimeoutError as FuturesTimeoutError
             
-            _half = self.use_half and device.startswith('cuda')
+            _half = self.use_half and device.startswith('cuda') and self._is_native_pytorch
             _frame = np.ascontiguousarray(frame)
             
             def run_inference():
@@ -5046,7 +5148,7 @@ class VideoSourceManager:
             from concurrent.futures import TimeoutError as FuturesTimeoutError
             
             _tracker_cfg = self._custom_tracker_yaml or "bytetrack.yaml"
-            _half = self.use_half and device.startswith('cuda')
+            _half = self.use_half and device.startswith('cuda') and self._is_native_pytorch
             _frame = np.ascontiguousarray(frame)
             def run_tracking():
                 return list(self.model.track(
@@ -5123,7 +5225,7 @@ class VideoSourceManager:
         try:
             device = self.current_device_info.get('device', 'cpu') if self.current_device_info else 'cpu'
             from concurrent.futures import TimeoutError as FuturesTimeoutError
-            _half = self.use_half and device.startswith('cuda')
+            _half = self.use_half and device.startswith('cuda') and self._is_native_pytorch
             _frame = np.ascontiguousarray(frame)
             
             def run_inference():
@@ -5893,36 +5995,42 @@ class VideoSourceManager:
         
         cc_str = _get_fourcc_str(self.capture)
         
-        # Strategy 2: If MJPG failed with DirectShow, try MSMF backend (Windows)
+        # Strategy 2: DirectShow 未能设为 MJPG 时，实测 DirectShow 和 MSMF 的帧率，选快的
         if cc_str != 'MJPG' and platform.system() == "Windows":
-            print(f"[Camera] DirectShow 返回 {cc_str}，尝试 MSMF 后端...")
-            self.capture.release()
-            self.capture = cv2.VideoCapture(device_index, cv2.CAP_MSMF)
-            if self.capture.isOpened():
-                self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-                self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                self.capture.set(cv2.CAP_PROP_FPS, fps)
+            def _bench_fps(cap, n=10):
+                """快速实测 n 帧的帧率"""
+                try:
+                    for _ in range(3):
+                        cap.read()
+                    t0 = time.time()
+                    ok = sum(1 for _ in range(n) if cap.read()[0])
+                    return ok / max(time.time() - t0, 0.001)
+                except Exception:
+                    return 0
+
+            dshow_fps = _bench_fps(self.capture)
+            print(f"[Camera] DirectShow({cc_str}) 实测 {dshow_fps:.0f}fps")
+
+            msmf_cap = cv2.VideoCapture(device_index, cv2.CAP_MSMF)
+            msmf_fps = 0
+            if msmf_cap.isOpened():
+                msmf_cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
+                msmf_cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                msmf_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                msmf_cap.set(cv2.CAP_PROP_FPS, fps)
+                msmf_cc = _get_fourcc_str(msmf_cap)
+                msmf_fps = _bench_fps(msmf_cap)
+                print(f"[Camera] MSMF({msmf_cc}) 实测 {msmf_fps:.0f}fps")
+
+            if msmf_fps > dshow_fps and msmf_cap.isOpened():
+                self.capture.release()
+                self.capture = msmf_cap
                 cc_str = _get_fourcc_str(self.capture)
-                if cc_str == 'MJPG':
-                    print(f"[Camera] MSMF 后端成功切换到 MJPG")
-                else:
-                    print(f"[Camera] MSMF 后端也返回 {cc_str}，回退到 DirectShow")
-                    self.capture.release()
-                    self.capture = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
-                    self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-                    self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                    self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                    self.capture.set(cv2.CAP_PROP_FPS, fps)
-                    cc_str = _get_fourcc_str(self.capture)
+                print(f"[Camera] 选择 MSMF 后端 ({msmf_fps:.0f}fps > DirectShow {dshow_fps:.0f}fps)")
             else:
-                print(f"[Camera] MSMF 打开失败，回退到 DirectShow")
-                self.capture = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
-                self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-                self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                self.capture.set(cv2.CAP_PROP_FPS, fps)
-                cc_str = _get_fourcc_str(self.capture)
+                if msmf_cap.isOpened():
+                    msmf_cap.release()
+                print(f"[Camera] 保留 DirectShow 后端 ({dshow_fps:.0f}fps >= MSMF {msmf_fps:.0f}fps)")
         
         # Strategy 3: If still not MJPG on Linux, try without explicit backend
         if cc_str != 'MJPG' and platform.system() != "Windows":
@@ -5937,13 +6045,16 @@ class VideoSourceManager:
                 cc_str = _get_fourcc_str(self.capture)
         
         actual_fps = self.capture.get(cv2.CAP_PROP_FPS)
-        print(f"[Camera] Capture format: {cc_str}, FPS: {actual_fps}, {width}x{height}")
+        actual_w = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(f"[Camera] Capture format: {cc_str}, FPS: {actual_fps}, requested: {width}x{height}, actual: {actual_w}x{actual_h}")
         if cc_str != 'MJPG':
-            print(f"[Camera] 警告: 摄像头不支持 MJPG，当前 {cc_str}。USB 2.0 下帧率约 10fps，建议：")
-            print(f"[Camera]   1. 将摄像头插到 USB 3.0 接口（蓝色接口）")
-            print(f"[Camera]   2. 或在输入源设置中降低分辨率到 640x480")
+            print(f"[Camera] ⚠ 当前格式 {cc_str} (未压缩)，高分辨率下帧率通常只有 5-10fps")
+            print(f"[Camera]   原因: 大多数 USB 摄像头在 {cc_str} 模式下硬件吞吐率有限")
+            print(f"[Camera]   建议: 1) 确认摄像头支持 MJPG  2) 降低分辨率  3) 更换支持 MJPG 的摄像头")
         
         self.source_type = 'camera'
+        self._camera_backend = int(self.capture.get(cv2.CAP_PROP_BACKEND)) if hasattr(cv2, 'CAP_PROP_BACKEND') else None
         self.camera_index = device_index
         self.width = width
         self.height = height
