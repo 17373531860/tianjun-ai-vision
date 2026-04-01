@@ -700,6 +700,8 @@ class VideoSourceManager:
         self.step_min_frames = {}  # {step_name: min_frames} 每个步骤的最少帧数配置
         self.step_consecutive_frames = {}  # {step_name: count} 跟踪每个标签连续出现的帧数
         self.step_frame_confirmed = {}  # {step_name: bool} 标记标签是否已确认（达到最少帧数）
+        self.step_gap_tolerance = {}  # {step_name: int} 允许的连续丢帧数，默认0
+        self._step_gap_count = {}  # {step_name: int} 当前连续丢帧计数
         
         # 静态步骤配置
         self.step_detection_type = {}  # {step_name: 'dynamic'|'static'} 检测类型
@@ -725,7 +727,6 @@ class VideoSourceManager:
         self.backup_steps_seen_in_cycle = set()
         self.step_strict_order = {}          # {label: True} only accept when predecessors done
         self.step_accept_once = {}           # {label: True} only accept once per cycle
-        self._just_settled = False
         self._first_step_had_gap = False
         self._first_step_reconfirmed = False
         self._first_step_disappeared_at = None
@@ -1020,6 +1021,7 @@ class VideoSourceManager:
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        self._step_gap_count.clear()
         if hasattr(self, '_step_raw_start'):
             self._step_raw_start.clear()
         self._last_step_added_time = None
@@ -1074,7 +1076,6 @@ class VideoSourceManager:
             self.current_cycle_uuid = cycle_uuid
             self.cycle_step_records = []
             self.step_order_counter = 0
-            self.backup_steps_seen_in_cycle = set()
             
             db.close()
             print(f"新周期开始: #{self.current_cycle_number} ({cycle_uuid})")
@@ -1345,6 +1346,8 @@ class VideoSourceManager:
         self.step_min_frames = {}  # 最少帧数配置
         self.step_consecutive_frames = {}  # 重置连续帧计数
         self.step_frame_confirmed = {}  # 重置确认状态
+        self.step_gap_tolerance = {}  # 重置丢帧容忍
+        self._step_gap_count = {}  # 重置丢帧计数
         self.step_detection_type = {}  # 检测类型
         self.step_static_config = {}  # 静态步骤配置
         self.step_static_triggered = {}  # 静态步骤触发状态
@@ -1354,7 +1357,6 @@ class VideoSourceManager:
         self.backup_steps_seen_in_cycle = set()
         self.step_strict_order = {}
         self.step_accept_once = {}
-        self._just_settled = False
         self._first_step_had_gap = False
         self._first_step_reconfirmed = False
         self._first_step_disappeared_at = None
@@ -1387,6 +1389,9 @@ class VideoSourceManager:
                 # 最少帧数配置（默认1帧）
                 min_frames = step.get('min_frames')
                 self.step_min_frames[label] = min_frames if min_frames and min_frames > 0 else 1
+                
+                gap_tolerance = step.get('gap_tolerance')
+                self.step_gap_tolerance[label] = gap_tolerance if gap_tolerance and gap_tolerance > 0 else 0
                 
                 if step.get('strict_order'):
                     self.step_strict_order[label] = True
@@ -1483,6 +1488,7 @@ class VideoSourceManager:
         print(f"步骤阈值: {self.step_conf_thresholds}")
         print(f"步骤时间配置: {self.step_time_config}")
         print(f"步骤最少帧数: {self.step_min_frames}")
+        print(f"步骤丢帧容忍: {self.step_gap_tolerance}")
         print(f"步骤检测类型: {self.step_detection_type}")
         print(f"静态步骤配置: {self.step_static_config}")
         print(f"计数器: {self.counters}")
@@ -2177,7 +2183,6 @@ class VideoSourceManager:
     
     def _settle_custom_cycle(self):
         """结算自定义模式的当前周期（在第一步重新出现且不匹配任何条件前缀时调用）"""
-        self._just_settled = True
         if not self.project_config:
             return
         
@@ -2214,6 +2219,7 @@ class VideoSourceManager:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
             
             self.last_step_completed_time = None
             return
@@ -2244,6 +2250,7 @@ class VideoSourceManager:
                     self.step_start_time.clear()
                     self.step_consecutive_frames.clear()
                     self.step_frame_confirmed.clear()
+                    self._step_gap_count.clear()
                     if hasattr(self, '_step_raw_start'):
                         self._step_raw_start.clear()
                     self.last_step_completed_time = None
@@ -2262,6 +2269,7 @@ class VideoSourceManager:
                 self.step_start_time.clear()
                 self.step_consecutive_frames.clear()
                 self.step_frame_confirmed.clear()
+                self._step_gap_count.clear()
                 if hasattr(self, '_step_raw_start'):
                     self._step_raw_start.clear()
                 self.last_step_completed_time = None
@@ -2281,6 +2289,7 @@ class VideoSourceManager:
                 self.step_start_time.clear()
                 self.step_consecutive_frames.clear()
                 self.step_frame_confirmed.clear()
+                self._step_gap_count.clear()
                 if hasattr(self, '_step_raw_start'):
                     self._step_raw_start.clear()
                 self.last_step_completed_time = None
@@ -2299,6 +2308,7 @@ class VideoSourceManager:
                 self.step_start_time.clear()
                 self.step_consecutive_frames.clear()
                 self.step_frame_confirmed.clear()
+                self._step_gap_count.clear()
                 if hasattr(self, '_step_raw_start'):
                     self._step_raw_start.clear()
                 self.last_step_completed_time = None
@@ -2364,6 +2374,7 @@ class VideoSourceManager:
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        self._step_gap_count.clear()
         
         self.last_step_completed_time = None
     
@@ -2375,7 +2386,6 @@ class VideoSourceManager:
         - 所有需检测步骤都出现过 → OK (事件1)
         - 缺少步骤 → NG (事件2)，报告缺少的步骤列表
         """
-        self._just_settled = True
         if not self.project_config:
             return
         
@@ -2406,6 +2416,7 @@ class VideoSourceManager:
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        self._step_gap_count.clear()
         self.last_step_completed_time = None
     
     def _settle_sequential_cycle(self):
@@ -2416,7 +2427,6 @@ class VideoSourceManager:
         2. 检查是否包含所有预期步骤
         3. 检查顺序是否正确
         """
-        self._just_settled = True
         if not self.project_config:
             return
         
@@ -2445,6 +2455,7 @@ class VideoSourceManager:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
             
             self.last_step_completed_time = None
             return
@@ -2463,6 +2474,7 @@ class VideoSourceManager:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
             
             self.last_step_completed_time = None
             return
@@ -2482,6 +2494,7 @@ class VideoSourceManager:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
             
             self.last_step_completed_time = None
             return
@@ -2514,6 +2527,7 @@ class VideoSourceManager:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
             
             self.last_step_completed_time = None
             return
@@ -2528,6 +2542,7 @@ class VideoSourceManager:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
             
             self.last_step_completed_time = None
             return
@@ -2561,6 +2576,7 @@ class VideoSourceManager:
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        self._step_gap_count.clear()
         
         self.last_step_completed_time = None
     
@@ -2772,20 +2788,11 @@ class VideoSourceManager:
             is_new_appearance = True
         
         if is_new_appearance:
-            if len(self.current_cycle_steps) == 0 and is_seq_like:
-                if self.settlement_mode == 'first_step' and getattr(self, '_just_settled', False):
-                    first_step_label = self._get_first_sequence_step_label()
-                    if first_step_label and label != first_step_label:
-                        return
-                    self._just_settled = False
-            
             # 检测模式：只有第一步能开启新周期
             if len(self.current_cycle_steps) == 0 and logic_mode == 'detection':
                 first_det_label = self._get_first_detection_step_label()
                 if first_det_label and label != first_det_label:
                     return
-                if getattr(self, '_just_settled', False):
-                    self._just_settled = False
             
             raw_start = getattr(self, '_step_raw_start', {}).get(label, current_time)
             self.step_start_time[label] = raw_start
@@ -2808,9 +2815,10 @@ class VideoSourceManager:
                         self._first_step_had_gap = False
                         self._first_step_reconfirmed = False
                         self._first_step_disappeared_at = None
-                    self.current_cycle_steps.append(label)
-                    self.last_added_step = label
-                    self._last_step_added_time = current_time
+                    if label not in self.current_cycle_steps:
+                        self.current_cycle_steps.append(label)
+                        self.last_added_step = label
+                        self._last_step_added_time = current_time
                 elif label not in self.current_cycle_steps:
                     self.current_cycle_steps.append(label)
                     self.last_added_step = label
@@ -2850,6 +2858,7 @@ class VideoSourceManager:
             self._step_raw_start = {}
         
         for label in frame_detected_labels:
+            self._step_gap_count[label] = 0
             prev_count = self.step_consecutive_frames.get(label, 0)
             if prev_count == 0:
                 self._step_raw_start[label] = current_time
@@ -2873,19 +2882,25 @@ class VideoSourceManager:
                 self.backup_steps_seen_in_cycle.add(b_label)
             detected_labels -= backup_in_detected
         
-        # 对于本帧没有检测到的标签，重置连续帧计数
+        # 对于本帧没有检测到的标签，根据 gap_tolerance 决定是否重置连续帧计数
         all_configured_labels = set(self.step_conf_thresholds.keys()) if self.step_conf_thresholds else set()
         first_seq_label = self._get_first_sequence_step_label() if self.current_cycle_steps else None
         for label in all_configured_labels:
             if label not in frame_detected_labels:
-                was_tracking = self.step_consecutive_frames.get(label, 0) > 0
-                was_confirmed = self.step_frame_confirmed.get(label, False)
-                self.step_consecutive_frames[label] = 0
-                self.step_frame_confirmed[label] = False
-                if was_tracking and not was_confirmed:
-                    self.stop_step_recording(label)
-                if was_confirmed and label == first_seq_label and label in self.current_cycle_steps:
-                    self._first_step_disappeared_at = time.time()
+                gap_tolerance = self.step_gap_tolerance.get(label, 0)
+                current_gap = self._step_gap_count.get(label, 0) + 1
+                self._step_gap_count[label] = current_gap
+
+                if current_gap > gap_tolerance:
+                    was_tracking = self.step_consecutive_frames.get(label, 0) > 0
+                    was_confirmed = self.step_frame_confirmed.get(label, False)
+                    self.step_consecutive_frames[label] = 0
+                    self.step_frame_confirmed[label] = False
+                    self._step_gap_count[label] = 0
+                    if was_tracking and not was_confirmed:
+                        self.stop_step_recording(label)
+                    if was_confirmed and label == first_seq_label and label in self.current_cycle_steps:
+                        self._first_step_disappeared_at = time.time()
                 # 重置静态步骤的触发状态（标签消失后可以再次触发）
                 if label in self.step_static_triggered:
                     self.step_static_triggered[label] = False
@@ -2977,6 +2992,7 @@ class VideoSourceManager:
                 del self.step_start_time[label]
                 self.step_consecutive_frames[label] = 0
                 self.step_frame_confirmed[label] = False
+                self._step_gap_count[label] = 0
                 if label in getattr(self, '_step_raw_start', {}):
                     del self._step_raw_start[label]
 
@@ -3407,6 +3423,7 @@ class VideoSourceManager:
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        self._step_gap_count.clear()
         
         self.last_step_completed_time = None
         
@@ -4522,6 +4539,9 @@ class VideoSourceManager:
             # 周期结算后重置步骤时序状态，确保下一轮的相同步骤可被视为“新出现”
             self.step_last_seen.clear()
             self.step_start_time.clear()
+            self.step_consecutive_frames.clear()
+            self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
             self.last_step_completed_time = None
             return
         
@@ -4543,6 +4563,9 @@ class VideoSourceManager:
             # 周期结算后重置步骤时序状态，确保下一轮的相同步骤可被视为“新出现”
             self.step_last_seen.clear()
             self.step_start_time.clear()
+            self.step_consecutive_frames.clear()
+            self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
             self.last_step_completed_time = None
             return
         
@@ -4568,6 +4591,9 @@ class VideoSourceManager:
             self.last_added_step = None
             self.step_last_seen.clear()
             self.step_start_time.clear()
+            self.step_consecutive_frames.clear()
+            self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
             self.last_step_completed_time = None
             return
         
@@ -4637,8 +4663,9 @@ class VideoSourceManager:
                     del self.step_start_time[label]
         
         # ── 重置 / 承接下一周期 ──
-        if self.settlement_mode == 'first_step':
-            self._just_settled = True
+        self.step_consecutive_frames.clear()
+        self.step_frame_confirmed.clear()
+        self._step_gap_count.clear()
         if next_carry:
             self.current_cycle_steps = next_carry
             self.last_added_step = next_carry[-1]
@@ -4653,7 +4680,7 @@ class VideoSourceManager:
             self.step_last_seen.clear()
             self.step_start_time.clear()
             self.last_step_completed_time = None
-    
+
     def _check_custom_sequential_mode(self, pipeline_config: dict, id_to_label: dict):
         """检查自定义模式（基于顺序模式）的判定
         
@@ -4668,6 +4695,9 @@ class VideoSourceManager:
             self.last_added_step = None
             self.step_last_seen.clear()
             self.step_start_time.clear()
+            self.step_consecutive_frames.clear()
+            self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
             self.last_step_completed_time = None
             return
         
@@ -4688,6 +4718,9 @@ class VideoSourceManager:
             self.last_added_step = None
             self.step_last_seen.clear()
             self.step_start_time.clear()
+            self.step_consecutive_frames.clear()
+            self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
             self.last_step_completed_time = None
             return
         
@@ -4713,6 +4746,9 @@ class VideoSourceManager:
             self.last_added_step = None
             self.step_last_seen.clear()
             self.step_start_time.clear()
+            self.step_consecutive_frames.clear()
+            self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
             self.last_step_completed_time = None
             return
         
@@ -4782,8 +4818,9 @@ class VideoSourceManager:
                     del self.step_start_time[label]
         
         # ── 重置 / 承接下一周期 ──
-        if self.settlement_mode == 'first_step':
-            self._just_settled = True
+        self.step_consecutive_frames.clear()
+        self.step_frame_confirmed.clear()
+        self._step_gap_count.clear()
         if next_carry:
             self.current_cycle_steps = next_carry
             self.last_added_step = next_carry[-1]
@@ -4825,10 +4862,10 @@ class VideoSourceManager:
             self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
     
-    def _trigger_event(self, event_id, reason: str):
-        """触发事件"""
+    def _trigger_event(self, event_id, reason: str) -> bool:
+        """触发事件。返回 True 表示事件已触发，False 表示被抑制或失败。"""
         if not self.project_config:
-            return
+            return False
         
         # NG cycle protection: suppress rapid consecutive NG reports
         current_time = time.time()
@@ -4840,7 +4877,8 @@ class VideoSourceManager:
                 last_ng = getattr(self, '_last_ng_time', 0)
                 if last_ng and (current_time - last_ng) < ng_protect_sec:
                     print(f"NG保护: 距上次NG仅{current_time - last_ng:.1f}s < {ng_protect_sec}s，抑制本次NG ({reason})")
-                    return
+                    self._discard_empty_cycle()
+                    return False
             self._last_ng_time = current_time
         
         events_config = self.project_config.get('events_config', [])
@@ -4865,7 +4903,7 @@ class VideoSourceManager:
         
         if not event:
             print(f"事件未找到: {event_id}")
-            return
+            return False
         
         print(f"触发事件: {event.get('name', event_id)} - {reason}")
         
@@ -4998,6 +5036,8 @@ class VideoSourceManager:
             alarm_manager.trigger_alarm(event_type)
         except Exception as e:
             print(f"触发报警失败: {e}")
+        
+        return True
     
     def _get_inference_executor(self):
         """获取持久推理线程池（懒初始化，避免每帧创建新线程池）"""
@@ -6779,6 +6819,7 @@ class VideoSourceManager:
         # 清理帧计数状态
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        self._step_gap_count.clear()
         
         
         # 重置同时出现组状态
@@ -6835,7 +6876,6 @@ class VideoSourceManager:
         self.step_durations_history = {}
         
         # Settlement / first-step tracking flags
-        self._just_settled = False
         self._first_step_had_gap = False
         self._first_step_reconfirmed = False
         self._first_step_disappeared_at = None
@@ -6857,6 +6897,7 @@ class VideoSourceManager:
         # Frame-counting state
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        self._step_gap_count.clear()
         self.step_static_triggered.clear()
         
         # Tracking-mode (counting) state
@@ -7421,6 +7462,7 @@ class VideoSourceManager:
         # 5. 清理帧计数缓存
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        self._step_gap_count.clear()
         
         self.step_static_triggered.clear()
         
@@ -8383,7 +8425,14 @@ def get_detection_results(channel: int = Query(0)):
     }
     
     result['model_task'] = getattr(mgr, 'model_task', 'detect')
-    
+
+    result['project_config'] = {
+        'project_id': mgr.project_config.get('id') if mgr.project_config else None,
+        'project_name': mgr.project_config.get('name', '') if mgr.project_config else '',
+        'logic_mode': mgr.project_config.get('logic_mode', 'detection') if mgr.project_config else 'detection',
+        'steps_config': mgr.project_config.get('steps_config', []) if mgr.project_config else [],
+    }
+
     logic_mode = mgr.project_config.get('logic_mode') if mgr.project_config else None
     if logic_mode == 'tracking':
         tracked_objs = {}

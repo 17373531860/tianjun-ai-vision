@@ -1,0 +1,120 @@
+{
+  "version": "2.2.1",
+  "date": "2026-04-02",
+  "previous_version": "2.2.0",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "_just_settled 机制导致 NG 后所有后续周期无法计数",
+      "symptom": "QG-SOP1 项目中，首次 NG 后，后续检测帧虽然出现检测框但步骤不做数、周期不结算",
+      "root_cause": "_just_settled = True 在周期结算后被设置，只允许第一步清除该标志，其他步骤被永久拒绝且 step_consecutive_frames 被重置",
+      "fix": "完全移除 _just_settled 机制（共10处），依靠 min_duration 和 min_frames 过滤误检",
+      "files": ["backend/api/source.py"],
+      "keywords": ["_just_settled", "NG", "周期", "步骤拒绝", "永久阻塞", "min_duration", "min_frames", "QG-SOP1"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "替补步骤在新周期开始时被清空导致 NG",
+      "symptom": "oppo_sop1 项目中，撕膜作为顶卡拖的替补，工人先做撕膜再做点亮屏幕，结算时报缺少顶卡拖",
+      "root_cause": "start_cycle() 中 self.backup_steps_seen_in_cycle = set() 清空了在周期开始前检测到的替补步骤记录",
+      "fix": "移除 start_cycle() 中的 backup_steps_seen_in_cycle 清空操作，结算函数中已有清空逻辑",
+      "files": ["backend/api/source.py"],
+      "keywords": ["backup_steps_seen_in_cycle", "start_cycle", "替补步骤", "_inject_backup_steps", "backup_for", "撕膜", "顶卡拖", "oppo_sop1"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "切换项目后点开始不加载新模型导致无检测结果",
+      "symptom": "从 oppo_sop1 切换到 QG-SOP1 后点开始，视频正常但检测框为0，后端使用旧模型推理",
+      "root_cause": "前端 startDetection() 的 resume 快捷路径不传模型路径，切换项目后 isPaused/isRunning 仍为旧状态导致走了恢复路径",
+      "fix": "在 watch(currentProject) 中检测项目 ID 变化时重置 isRunning/isPaused/isDetecting 为 false",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["项目切换", "模型加载", "startDetection", "resumeInference", "resumeDetection", "isRunning", "isPaused", "模型不匹配"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "页面导航离开 Monitor 再返回后视频黑屏",
+      "symptom": "从 Monitor 进入 Project 页面修改参数后返回，视频画面不显示",
+      "root_cause": "Monitor 组件无 keep-alive，remount 时 getSourceStatus() 返回 is_running:false 不调用 forceReconnectStream()",
+      "fix": "在 onMounted 的 getSourceStatus() 回调中，暂停状态和有源但未运行状态也调用 forceReconnectStream()",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["黑屏", "视频流", "forceReconnectStream", "onMounted", "getSourceStatus", "keep-alive", "页面导航"],
+      "breaking": false
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-001",
+      "title": "更新 debug-source: 替补步骤生命周期和 _just_settled 移除",
+      "fix": "新增 backup_steps 生命周期文档、start_cycle 不能清空 backup 的陷阱、_just_settled 已移除说明",
+      "files": [".claude/skills/debug-source/SKILL.md"],
+      "keywords": ["skill", "debug-source", "backup_steps", "_just_settled"]
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-002",
+      "title": "更新 debug-video: USB 摄像头帧率诊断",
+      "fix": "新增 DirectShow vs MSMF 3层回退策略、YUY2/MJPG 帧率诊断步骤、远程诊断方法",
+      "files": [".claude/skills/debug-video/SKILL.md"],
+      "keywords": ["skill", "debug-video", "DirectShow", "MSMF", "YUY2", "MJPG", "帧率"]
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-003",
+      "title": "更新 debug-frontend: Monitor 状态管理和流重连",
+      "fix": "新增项目切换状态重置、startDetection 三条路径、onMounted 流重连、HMR 陷阱",
+      "files": [".claude/skills/debug-frontend/SKILL.md"],
+      "keywords": ["skill", "debug-frontend", "项目切换", "流重连", "HMR"]
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-004",
+      "title": "更新 modify-source: start_cycle 高危操作和已移除机制",
+      "fix": "补充 start_cycle/backup 高危操作、新增已移除的机制节",
+      "files": [".claude/skills/modify-source/SKILL.md"],
+      "keywords": ["skill", "modify-source", "start_cycle", "_just_settled"]
+    },
+    {
+      "type": "feature",
+      "id": "SKILL-005",
+      "title": "新增 update-release skill: 更新发版全流程",
+      "fix": "创建更新发版 skill，包含变更提取、changelog 生成（MD+JSON）、git commit、打包流程",
+      "files": [".claude/skills/update-release/SKILL.md"],
+      "keywords": ["skill", "update-release", "changelog", "发版"]
+    },
+    {
+      "type": "feature",
+      "id": "SKILL-006",
+      "title": "新增 tune-params skill: 检测参数调优全流程",
+      "fix": "创建调参 skill，包含分析、逐轮调参、验证、文档生成（MD+JSON）",
+      "files": [".claude/skills/tune-params/SKILL.md"],
+      "keywords": ["skill", "tune-params", "调参", "参数调优"]
+    },
+    {
+      "type": "feature",
+      "id": "TOOL-001",
+      "title": "USB 摄像头后端测试脚本",
+      "fix": "创建 test_camera_backend.py，分别测试 DirectShow 和 MSMF 后端的实际帧率，用于远程诊断",
+      "files": ["test_camera_backend.py"],
+      "keywords": ["摄像头", "DirectShow", "MSMF", "帧率测试", "远程诊断"]
+    }
+  ],
+  "skills_updated": ["debug-source", "debug-video", "debug-frontend", "modify-source"],
+  "skills_created": ["update-release", "tune-params"],
+  "files_changed": [
+    "backend/api/source.py",
+    "frontend/src/views/Monitor/index.vue",
+    ".claude/skills/debug-source/SKILL.md",
+    ".claude/skills/debug-video/SKILL.md",
+    ".claude/skills/debug-frontend/SKILL.md",
+    ".claude/skills/modify-source/SKILL.md",
+    ".claude/skills/update-release/SKILL.md",
+    ".claude/skills/tune-params/SKILL.md",
+    "test_camera_backend.py"
+  ]
+}

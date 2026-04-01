@@ -1,0 +1,121 @@
+---
+name: modify-model
+description: "安全修改数据模型(ORM)：字段变更、SQLite migration、序列化影响、前端字段映射。修改models.py或数据库结构前先分析影响。"
+argument-hint: "[要修改的模型或字段]"
+model: opus
+effort: high
+allowed-tools: "Read, Grep, Glob, Bash, Agent"
+---
+
+# modify-model: 数据模型安全修改分析
+
+你正在帮用户安全修改 ORM 数据模型。
+
+计划修改: $ARGUMENTS
+
+## 10个ORM模型 (backend/models/models.py)
+
+| 模型 | 主要写入者 | 主要读取者 | 前端对应 |
+|------|-----------|-----------|----------|
+| `Project` | projects.py | projects.py, source.py, Navbar | project.js, Project/index.vue |
+| `Model` | models.py (API) | models.py, source.py | model.js, Model/index.vue |
+| `ModelConversion` | models.py (转换队列) | models.py | model.js |
+| `Task` | tasks.py | tasks.py, reports.py | task.js (废弃) |
+| `Camera` | cameras.py | cameras.py | camera.js |
+| `DailyStat` | (无写入 - 废弃) | (无读取) | 无 |
+| `SystemConfig` | main.py | main.py | 无直接对应 |
+| `DetectionSession` | source.py | sessions.py | data.js, Data/index.vue |
+| `DetectionCycle` | source.py | sessions.py | data.js, Data/index.vue |
+| `StepRecord` | source.py | sessions.py | data.js, Data/index.vue |
+| `VideoClip` | source.py | sessions.py | data.js, Data/index.vue |
+| `DataExportSetting` | sessions.py | sessions.py, source.py | data.js, Data/index.vue |
+
+## Project 模型的 JSON 字段（特殊处理）
+
+Project 模型有多个 JSON 类型字段，存储复杂配置:
+```python
+class Project:
+    steps_config = Column(Text)      # JSON: 步骤定义列表
+    events_config = Column(Text)     # JSON: 事件配置
+    counters_config = Column(Text)   # JSON: 计数器配置
+    alarm_config = Column(Text)      # JSON: 报警配置
+    detection_config = Column(Text)  # JSON: 检测参数(conf/iou/max_det)
+    data_config = Column(Text)       # JSON: 数据记录配置
+    pipeline_config = Column(Text)   # JSON: 检测管线配置(模式/条件/追踪)
+```
+
+这些字段被 `json.loads/dumps` 序列化，**不经过 Schema 验证**。
+修改这些 JSON 结构时，需要同步:
+1. `source.py: set_project_config()` — 解析器
+2. `frontend/src/views/Project/index.vue` — 配置编辑器
+3. `frontend/src/views/Monitor/index.vue` — 使用配置
+4. `frontend/src/layout/Navbar.vue` — `handleProjectChange()` 中的默认值初始化
+
+## SQLite Migration 机制
+
+**没有 Alembic！使用手动 migration** (backend/main.py:migrate_database):
+```python
+def migrate_database():
+    # 直接执行 ALTER TABLE ADD COLUMN
+    # 如果列已存在则 catch OperationalError 忽略
+    migrations = [
+        "ALTER TABLE projects ADD COLUMN pipeline_config TEXT",
+        "ALTER TABLE detection_cycles ADD COLUMN ng_reason TEXT",
+        ...
+    ]
+```
+
+**添加新列的步骤:**
+1. 在 `models/models.py` 中添加字段定义
+2. 在 `main.py:migrate_database()` 中添加 ALTER TABLE 语句
+3. 设置合理的默认值（SQLite 不支持 ALTER COLUMN）
+4. **SQLite 限制:** 不能删列、不能改列类型、不能加 NOT NULL 无默认值
+
+## 强制分析流程
+
+### 第1步: 确认修改的模型和字段
+
+1. 读取 `backend/models/models.py`
+2. 确认字段类型、约束、默认值
+3. 检查是否是 JSON 字段（Text 类型存 JSON）
+
+### 第2步: 追踪所有读写点
+
+用 Grep 搜索模型类名和字段名:
+```
+搜索范围: backend/api/*.py, backend/services/*.py, backend/main.py
+搜索关键词: 模型类名, 字段名
+```
+
+### 第3步: 检查前端映射
+
+1. 搜索 API 响应中对应的字段名
+2. 确认前端视图中的字段使用
+3. 特别关注 JSON 字段的解析和构造
+
+### 第4步: 确认 Migration
+
+1. 新增字段 → 添加 ALTER TABLE 到 migrate_database()
+2. 默认值 → 必须在 ALTER TABLE 和模型定义中都设置
+3. **不要删除列** → SQLite 不支持 DROP COLUMN（3.35.0+ 支持但我们的版本可能不支持）
+
+### 第5步: 生成影响报告
+
+```
+修改的模型: [模型名]
+修改的字段: [字段名, 类型, 新增/修改/删除]
+写入者: [所有写入该字段的代码位置]
+读取者: [所有读取该字段的代码位置]
+Migration: [需要的ALTER TABLE语句]
+前端影响: [需要更新的API/视图文件]
+JSON字段影响: [如果是JSON字段，列出所有解析点]
+风险等级: [低/中/高]
+```
+
+## 修改原则
+
+1. **只加不删:** SQLite 不方便删列，保留旧字段不会有副作用
+2. **必须有默认值:** 新增列必须有 DEFAULT 或允许 NULL
+3. **JSON字段向后兼容:** 新增 key 可以，删除/改名 key 需要全链路同步
+4. **Migration 幂等:** ALTER TABLE 失败(列已存在)必须被 catch 忽略
+5. **Schema 同步:** 如果有 Pydantic Schema (backend/schemas/)，需要同步更新
