@@ -17,9 +17,9 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 
 | 文件 | 位置 | 当前 |
 |------|------|------|
-| `electron/package.json` | `"version"` | 2.2.0 |
-| `electron/splash.html` | 硬编码文本 | v1.0.0 (未更新!) |
-| Git tag | `v2.2.0` | 触发CI |
+| `electron/package.json` | `"version"` | 2.2.1 |
+| `electron/splash.html` | 硬编码文本 | v2.2.1 |
+| Git tag | `v2.2.1` | 触发CI |
 
 ## 自动构建流程 (.github/workflows/build.yml)
 
@@ -127,16 +127,42 @@ cd electron && npm install && npm run build:win
 | `RELEASE_TOKEN` | GitHub PAT (repo scope) | 不过期(建议) |
 | `GITEE_TOKEN` | Gitee 个人令牌 | 一年 |
 
+## Git 认证配置
+
+GitHub 使用 `gh` CLI 管理认证，token 存储在系统 keyring 中。
+
+```bash
+# 检查认证状态
+gh auth status
+
+# 如果 token 过期，重新登录（会打开浏览器）
+gh auth login -h github.com -p https -w
+
+# 确保 git credential helper 使用 gh（登录后必须执行）
+gh auth setup-git
+
+# 确认 remote URL 是干净的（不含嵌入 token）
+git remote -v
+# 正确: https://github.com/17373531860/tianjun-ai-vision.git
+# 错误: https://ghp_xxxxx@github.com/... （旧 token 嵌在 URL 里）
+# 修复: git remote set-url origin https://github.com/17373531860/tianjun-ai-vision.git
+```
+
 ## 发版检查清单
 
 - [ ] 更新版本号 (electron/package.json)
 - [ ] 更新 splash.html 版本号
 - [ ] 确认代码已合并到 main
-- [ ] 检查 GitHub Secrets 有效
-- [ ] 如需公开repo: 设为public → push tag → 等构建完 → 设为private
+- [ ] 检查 GitHub 认证: `gh auth status`，过期则 `gh auth login`
+- [ ] 检查 credential helper: `gh auth setup-git`
+- [ ] 确认 remote URL 干净（无嵌入 token）
+- [ ] 检查 GitHub Secrets 有效 (RELEASE_TOKEN, GITEE_TOKEN)
+- [ ] **先设为 public**: `gh repo edit --visibility public --accept-visibility-change-consequences`
+- [ ] Push 代码: `git push origin main`
 - [ ] Push tag: `git tag v2.x.x && git push origin v2.x.x`
-- [ ] 等待 CI 完成 (~45-60分钟)
+- [ ] 等待 CI 完成 (~45-60分钟): `gh run watch <run_id>`
 - [ ] 验证 GitHub Release 和 Gitee 上传
+- [ ] **CI 完成后设回 private**: `gh repo edit --visibility private --accept-visibility-change-consequences`
 - [ ] 下载安装包测试安装
 
 ## 关键文件

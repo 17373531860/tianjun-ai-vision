@@ -127,7 +127,74 @@ git add -A  # 包含所有代码变更
 git commit -m "release: vX.X.X - 简短描述"
 ```
 
-## 第7步: 打包发版
+## 第7步: 认证检查与推送
+
+推送前必须完成以下检查：
+
+```bash
+# 1. 检查 GitHub 认证
+gh auth status
+# 如果过期: gh auth login -h github.com -p https -w
+# 登录后必须: gh auth setup-git
+
+# 2. 确认 remote URL 干净（不含嵌入 token）
+git remote -v
+# 如有旧 token: git remote set-url origin https://github.com/17373531860/tianjun-ai-vision.git
+
+# 3. 先设 public（CI free runners 需要 public repo）
+gh repo edit --visibility public --accept-visibility-change-consequences
+
+# 4. 推送代码和 tag
+git push origin main
+git tag vX.X.X
+git push origin vX.X.X
+
+# 5. 监控 CI
+gh run list --limit 3
+gh run watch <run_id>  # 实时监控
+
+# 6. CI 完成后设回 private
+gh repo edit --visibility private --accept-visibility-change-consequences
+```
+
+**重要顺序**: public → push → tag → 等 CI 完 → private
+
+## 第8步: 监控 CI 并恢复 private
+
+**必须执行，不可跳过。** CI 使用 free runner，仅 public repo 可用，构建完必须立即改回 private。
+
+```bash
+# 获取 tag 触发的 run ID
+RUN_ID=$(gh run list --limit 1 --json databaseId -q '.[0].databaseId')
+
+# 每 5 分钟轮询一次，直到完成
+while true; do
+  STATUS=$(gh run view $RUN_ID --json status -q '.status')
+  CONCLUSION=$(gh run view $RUN_ID --json conclusion -q '.conclusion')
+  echo "$(date '+%H:%M:%S') status=$STATUS conclusion=$CONCLUSION"
+  if [ "$STATUS" = "completed" ]; then
+    break
+  fi
+  sleep 300
+done
+
+# CI 完成后立即改回 private
+gh repo edit --visibility private --accept-visibility-change-consequences
+echo "✅ Repo set back to private"
+
+# 如果 CI 失败，提醒用户
+if [ "$CONCLUSION" != "success" ]; then
+  echo "⚠️ CI failed! Check: gh run view $RUN_ID --log-failed"
+fi
+```
+
+轮询策略：
+- 前 10 分钟每 2 分钟查一次（捕获早期失败）
+- 之后每 5 分钟查一次
+- 上次构建耗时约 4 小时，预期类似
+- 无论成功失败，都必须改回 private
+
+## 第9步: 打包发版（如需本地构建）
 
 读取并执行 `.claude/skills/build-release/SKILL.md` 中的打包流程。
 

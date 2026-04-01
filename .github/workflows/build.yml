@@ -158,7 +158,7 @@ jobs:
           echo "Packing conda environment..."
           conda clean -a -y 2>/dev/null || true
           mkdir -p python-env/python
-          conda-pack -n tianjun -o python-env/tianjun-env.tar.gz --force
+          conda-pack -n tianjun -o python-env/tianjun-env.tar.gz --force --ignore-missing-files
           
           echo "Extracting environment..."
           cd python-env
