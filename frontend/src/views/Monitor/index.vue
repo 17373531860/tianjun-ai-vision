@@ -503,6 +503,27 @@
         </div>
       </div>
 
+      <!-- MES 信息条 -->
+      <div v-if="mesData?.workpiece || mesData?.order" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
+        <div v-if="mesData.workpiece" class="flex items-center gap-2">
+          <span class="text-cyan-400 font-bold">工件:</span>
+          <span class="font-mono text-white">{{ mesData.workpiece.serial_no }}</span>
+          <el-tag :type="mesData.workpiece.status === 'ok' ? 'success' : mesData.workpiece.status === 'ng' ? 'danger' : mesData.workpiece.status === 'inspecting' ? 'warning' : 'info'" size="small">
+            {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[mesData.workpiece.status] || mesData.workpiece.status }}
+          </el-tag>
+          <span class="text-gray-400 text-xs">第{{ mesData.workpiece.inspection_count }}次</span>
+        </div>
+        <div v-if="mesData.order" class="flex items-center gap-2">
+          <span class="text-cyan-400 font-bold">工单:</span>
+          <span class="text-white">{{ mesData.order.order_no }}</span>
+          <span class="text-gray-400 text-xs">{{ mesData.order.completed_qty }}/{{ mesData.order.planned_qty }}</span>
+          <span :class="(mesData.order.yield_rate ?? 0) >= 95 ? 'text-green-400' : 'text-yellow-400'" class="text-xs">
+            良率 {{ mesData.order.yield_rate ?? '-' }}%
+          </span>
+        </div>
+        <div v-if="!mesData.workpiece && !mesData.order" class="text-gray-500 text-xs">等待扫码...</div>
+      </div>
+
       <!-- Middle: Charts + NG Ranking -->
       <div class="h-52 grid grid-cols-3 gap-2">
          <!-- Pie Chart -->
@@ -900,6 +921,9 @@ const processChannelResult = (ch, d) => {
   chData.recentEvents = d.recent_events || [];
   if (d.tracking) chData.tracking = d.tracking;
 
+  // MES 实时数据
+  if (d.mes) chData.mes = d.mes;
+
   const total = chData.total || 0;
   const ok = chData.ok || 0;
   chData.yieldRate = total > 0 ? Math.round((ok / total) * 100) : 0;
@@ -1178,6 +1202,10 @@ const onStreamError = (idx) => {
 const currentProject = computed(() => projectStore.currentProject);
 
 const isTrackingMode = computed(() => currentProject.value?.logic_mode === 'tracking');
+
+// MES 实时数据 (从轮询结果中获取)
+const mesData = computed(() => multiChannelData.value[selectedChannel.value]?.mes || null);
+
 const trackingChecklist = ref({});
 const trackingCycleActive = ref(false);
 const trackingContainerMode = ref(false);

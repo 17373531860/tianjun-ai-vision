@@ -66,6 +66,13 @@
                 <el-option v-for="ch in totalChannelCount" :key="ch - 1" :label="`工位 ${ch}`" :value="ch - 1" />
               </el-select>
             </div>
+            <!-- MES: 工单筛选 -->
+            <div>
+              <div class="text-xs text-gray-500 mb-1.5">MES 工单</div>
+              <el-select v-model="mesOrderFilter" size="small" class="w-full" clearable placeholder="全部工单" @change="loadSessions">
+                <el-option v-for="o in mesOrderOptions" :key="o.id" :label="`${o.order_no} - ${o.product_name}`" :value="o.id" />
+              </el-select>
+            </div>
             <div v-if="availableDates.length > 0" class="flex items-center justify-between text-xs pt-1 border-t border-slate-800">
               <span class="text-gray-500">有数据的日期</span>
               <span class="text-cyan-400 font-mono">{{ availableDates.length }} 天</span>
@@ -650,6 +657,18 @@ const getShiftHours = () => {
 // Multi-channel filter
 const totalChannelCount = ref(1);
 const channelFilter = ref(null); // null = all channels
+
+// MES 工单筛选
+const mesOrderFilter = ref(null);
+const mesOrderOptions = ref([]);
+const loadMesOrders = async () => {
+  try {
+    const { getOrders } = await import('@/api/mes');
+    const res = await getOrders({ status: 'in_progress', limit: 100 });
+    const doneRes = await getOrders({ status: 'completed', limit: 50 });
+    mesOrderOptions.value = [...(res.data.items || []), ...(doneRes.data.items || [])];
+  } catch {}
+};
 
 const handleChannelFilterChange = () => {
   if (selectedDate.value) {
@@ -1406,6 +1425,7 @@ onMounted(() => {
   loadCleanupSettings();
   loadStorageInfo();
   loadChannelCount();
+  loadMesOrders();
   
   if (projectStore.currentProjectId) {
     loadAvailableDates();
@@ -1430,11 +1450,11 @@ onUnmounted(() => {
 .panel-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 14px;
+  gap: 0.5rem;
+  font-size: 0.875rem;
   font-weight: 600;
   color: #e2e8f0;
-  margin-bottom: 12px;
+  margin-bottom: 0.75rem;
 }
 
 /* =================== Stat Cards =================== */
@@ -1465,13 +1485,13 @@ onUnmounted(() => {
 .stat-card--mixed::before { background: linear-gradient(90deg, #10b981, #ef4444); }
 
 .stat-card__label {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: #64748b;
-  margin-bottom: 4px;
+  margin-bottom: 0.25rem;
 }
 
 .stat-card__value {
-  font-size: 22px;
+  font-size: 1.375rem;
   font-weight: 700;
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   line-height: 1.2;
@@ -1503,9 +1523,9 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 6px 8px;
-  border-radius: 6px;
-  font-size: 13px;
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.375rem;
+  font-size: 0.8125rem;
   color: #cbd5e1;
   transition: background 0.15s;
 }
@@ -1516,7 +1536,7 @@ onUnmounted(() => {
 
 /* =================== Custom Scrollbar =================== */
 .custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
+  width: 0.25rem;
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
@@ -1525,7 +1545,7 @@ onUnmounted(() => {
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
   background: #334155;
-  border-radius: 4px;
+  border-radius: 0.25rem;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
@@ -1544,11 +1564,11 @@ onUnmounted(() => {
 
 .settings-tabs :deep(.el-tabs__item) {
   color: #64748b;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
-  padding: 0 20px;
-  height: 38px;
-  line-height: 38px;
+  padding: 0 1.25rem;
+  height: 2.375rem;
+  line-height: 2.375rem;
 }
 
 .settings-tabs :deep(.el-tabs__item:hover) {
@@ -1584,7 +1604,7 @@ onUnmounted(() => {
   --el-table-text-color: #cbd5e1;
   --el-table-header-text-color: #64748b;
   background-color: transparent;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 :deep(.el-table th.el-table__cell) {

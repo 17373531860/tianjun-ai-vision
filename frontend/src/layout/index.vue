@@ -11,7 +11,7 @@
         <div class="p-6 text-xl font-bold text-tech-blue border-b border-gray-800 flex justify-between items-center">
           <span>VISION SYSTEM</span>
           <button @click="sidebarOpen = false" class="text-gray-500 hover:text-white transition p-1">
-            <el-icon :size="18"><Close /></el-icon>
+            <el-icon class="text-[1.125rem]"><Close /></el-icon>
           </button>
         </div>
         
@@ -31,6 +31,9 @@
           <router-link to="/data" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><DataLine /></el-icon> {{ $t('menu.data') }}
           </router-link>
+          <router-link to="/mes" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+            <el-icon class="mr-2"><Tickets /></el-icon> MES 管理
+          </router-link>
           <router-link to="/alarm" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Bell /></el-icon> 报警设置
           </router-link>
@@ -49,7 +52,7 @@
       <Navbar>
         <template #left>
           <button @click="sidebarOpen = true" class="p-2 rounded hover:bg-slate-700 transition text-gray-400 hover:text-white mr-2" title="导航菜单">
-            <el-icon :size="20"><Menu /></el-icon>
+            <el-icon class="text-[1.25rem]"><Menu /></el-icon>
           </button>
         </template>
       </Navbar>
@@ -67,7 +70,7 @@
 import Navbar from './Navbar.vue';
 import BottomBar from './BottomBar.vue';
 import { ref } from 'vue';
-import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu } from '@element-plus/icons-vue';
+import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu, Tickets } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { ElMessage } from 'element-plus';
 

@@ -64,6 +64,8 @@ export const useSystemStore = defineStore('system', {
       deviceNumber: '251011',       // 设备编号
       // 导航栏显示开关
       navbar: {
+        brandName: true,
+        appName: true,
         projectSelector: true,
         inspector: true,
         deviceId: true,
@@ -82,6 +84,7 @@ export const useSystemStore = defineStore('system', {
         showLatency: true,
         showDetectionCount: true,
         ctIncludeNg: false,
+        ngTop3: true,
         ngTopDisplayMode: 'percentage',  // 'percentage' | 'count'
         defaultCounters: {
           showTotal: true,      // 总产量
@@ -103,6 +106,8 @@ export const useSystemStore = defineStore('system', {
     // 上次输入源设置（用于自动保存功能）
     lastSourceType: null,
     lastSourceValue: null,
+    // 开发者模式（默认关闭，需要密码开启）
+    developerMode: false,
     // 性能设置
     performance: {
       frameLimitEnabled: false,  // 帧率限制开关（默认禁用，本地应用无需节流）
@@ -193,6 +198,17 @@ export const useSystemStore = defineStore('system', {
     setLastSource(type, value) {
       this.lastSourceType = type;
       this.lastSourceValue = value;
+    },
+    // 开发者模式
+    setDeveloperMode(enabled) {
+      this.developerMode = enabled;
+      localStorage.setItem('developer_mode', JSON.stringify(enabled));
+    },
+    loadDeveloperMode() {
+      try {
+        const saved = localStorage.getItem('developer_mode');
+        if (saved !== null) this.developerMode = JSON.parse(saved);
+      } catch {}
     },
     // 加载性能设置
     loadPerformanceSettings() {

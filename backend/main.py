@@ -10,9 +10,12 @@ from backend.api.source import router as source_router, get_video_feed, get_vide
 from backend.api.channel_manager import router as workstation_router
 from backend.api.detection import router as detection_router
 from backend.api.sessions import router as sessions_router
+from backend.api.mes import router as mes_router
+from backend.api.scanner import router as scanner_router
 from backend.services.detector import get_detection_service
 # Import models to ensure they are registered
 from backend.models import models
+from backend.models import mes_models
 import os
 import cv2
 import atexit
@@ -55,6 +58,9 @@ def migrate_database():
         ("detection_sessions", "channel_id", "INTEGER DEFAULT 0"),
         ("detection_sessions", "shift_label", "VARCHAR(20)"),
         ("projects", "model_format", "VARCHAR(50) DEFAULT 'pytorch_fp32'"),
+        # MES: 现有表扩展字段 (可空, 安全迁移)
+        ("detection_cycles", "order_id", "INTEGER"),
+        ("detection_sessions", "order_id", "INTEGER"),
     ]
     
     try:
@@ -269,6 +275,32 @@ def auto_load_active_project():
 
 auto_load_active_project()
 
+# ========== MES Hook + Scanner 初始化 ==========
+def _init_mes_services():
+    """初始化 MES Hook 管理器和扫码器服务, 注入到 VideoSourceManager"""
+    try:
+        from backend.services.mes_hooks import get_mes_hook
+        from backend.services.scanner import get_scanner_service
+
+        mes_hook = get_mes_hook()
+        mes_hook.start()
+
+        vm = get_video_manager()
+        vm._mes_hook = mes_hook
+
+        scanner_svc = get_scanner_service()
+        scanner_svc.set_mes_hook(mes_hook)
+        scanner_svc.set_project_id_getter(
+            lambda ch: vm.project_config.get('id') if vm.project_config else None
+        )
+        scanner_svc.start_all()
+
+        print("[MES] 服务初始化完成")
+    except Exception as e:
+        print(f"[MES] 服务初始化失败（非致命）: {e}")
+
+_init_mes_services()
+
 # ========== 后台自动清理定时任务 ==========
 _cleanup_timer = None
 
@@ -329,6 +361,15 @@ def cleanup_on_exit():
         if video_manager.is_running:
             video_manager.stop()
             print("[退出钩子] 视频流已停止")
+        
+        # 停止 MES 服务
+        try:
+            from backend.services.mes_hooks import get_mes_hook
+            from backend.services.scanner import get_scanner_service
+            get_scanner_service().stop_all()
+            get_mes_hook().stop()
+        except Exception:
+            pass
             
     except Exception as e:
         print(f"[退出钩子] 清理时出错: {e}")
@@ -382,6 +423,10 @@ app.include_router(sessions_router, prefix=f"{settings.API_V1_STR}/data", tags=[
 
 # Include Workstation/Channel router (多工位管理)
 app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["workstations"])
+
+# MES & Scanner
+app.include_router(mes_router, prefix=f"{settings.API_V1_STR}", tags=["MES"])
+app.include_router(scanner_router, prefix=f"{settings.API_V1_STR}", tags=["Scanner"])
 
 # Mount static files for uploads (images, etc.)
 if os.path.exists(settings.UPLOAD_DIR):
@@ -507,17 +552,19 @@ def video_feed(channel: int = 0):
     
     def generate_frames():
         import numpy as np
+        import time
         black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        label = f"Ch{channel} - No Source"
-        cv2.putText(black_frame, label, (180, 240), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        try:
+            cv2.putText(black_frame, f"Ch{channel} - No Source", (180, 240), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        except cv2.error:
+            pass
         ret, buffer = cv2.imencode('.jpg', black_frame)
         if ret:
             frame_data = buffer.tobytes()
             while True:
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
-                import time
                 time.sleep(0.1)
     
     return StreamingResponse(
@@ -536,8 +583,11 @@ def snapshot(channel: int = 0):
     
     import numpy as np
     black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.putText(black_frame, f"Ch{channel} - No Source", (180, 240),
-               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    try:
+        cv2.putText(black_frame, f"Ch{channel} - No Source", (180, 240),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    except cv2.error:
+        pass
     _, buffer = cv2.imencode('.jpg', black_frame)
     return Response(content=buffer.tobytes(), media_type="image/jpeg",
                     headers={"Cache-Control": "no-cache, no-store, must-revalidate"})

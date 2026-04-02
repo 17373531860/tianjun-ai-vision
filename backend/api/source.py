@@ -486,6 +486,9 @@ class VideoSourceManager:
         self.current_detections = []
         self.detection_lock = threading.Lock()
         
+        # MES Hook (延迟注入, 由 main.py 启动时设置)
+        self._mes_hook = None
+        
         # 加载保存的设备配置
         self._load_device_config()
         
@@ -891,6 +894,19 @@ class VideoSourceManager:
             db.close()
             print(f"检测会话已创建: {session_uuid}")
             
+            # MES Hook: Session 开始
+            if self._mes_hook:
+                try:
+                    project_id = self.project_config.get('id') if self.project_config else None
+                    if project_id:
+                        self._mes_hook.on_session_start(
+                            channel_id=self.channel_id,
+                            session_id=session.id,
+                            project_id=project_id,
+                        )
+                except Exception as e:
+                    print(f"[MES] session_start hook 异常: {e}")
+            
             # 启动录制线程（独立于 CUDA）
             if self.is_detecting:
                 self._start_recording_thread()
@@ -969,6 +985,16 @@ class VideoSourceManager:
                 print(f"end_session: 未找到会话 ID={session_id}")
             
             db.close()
+            
+            # MES Hook: Session 结束
+            if self._mes_hook:
+                try:
+                    self._mes_hook.on_session_end(
+                        channel_id=self.channel_id,
+                        session_id=session_id,
+                    )
+                except Exception as e:
+                    print(f"[MES] session_end hook 异常: {e}")
         except Exception as e:
             print(f"结束会话失败: {e}")
             import traceback
@@ -1080,6 +1106,20 @@ class VideoSourceManager:
             db.close()
             print(f"新周期开始: #{self.current_cycle_number} ({cycle_uuid})")
             
+            # MES Hook: Cycle 开始
+            if self._mes_hook:
+                try:
+                    project_id = self.project_config.get('id') if self.project_config else None
+                    if project_id:
+                        self._mes_hook.on_cycle_start(
+                            channel_id=self.channel_id,
+                            cycle_id=cycle.id,
+                            session_id=self.current_session_id,
+                            project_id=project_id,
+                        )
+                except Exception as e:
+                    print(f"[MES] cycle_start hook 异常: {e}")
+            
             # 开始周期视频录制
             self.start_cycle_recording()
         except Exception as e:
@@ -1113,6 +1153,23 @@ class VideoSourceManager:
                 
                 db.commit()
                 print(f"周期结束: #{self.current_cycle_number}, 结果: {'OK' if is_good else 'NG'}, 耗时: {cycle.duration:.2f}s")
+                
+                # MES Hook: Cycle 结束
+                if self._mes_hook:
+                    try:
+                        project_id = self.project_config.get('id') if self.project_config else None
+                        self._mes_hook.on_cycle_end(
+                            channel_id=self.channel_id,
+                            cycle_id=cycle.id,
+                            is_good=is_good,
+                            event_name=event_name,
+                            result_reason=reason,
+                            duration=cycle.duration,
+                            step_sequence=cycle.step_sequence,
+                            project_id=project_id,
+                        )
+                    except Exception as e:
+                        print(f"[MES] cycle_end hook 异常: {e}")
             
             db.close()
         except Exception as e:
@@ -6037,19 +6094,29 @@ class VideoSourceManager:
         
         # Strategy 2: DirectShow 未能设为 MJPG 时，实测 DirectShow 和 MSMF 的帧率，选快的
         if cc_str != 'MJPG' and platform.system() == "Windows":
-            def _bench_fps(cap, n=10):
-                """快速实测 n 帧的帧率"""
+            def _bench_fps(cap, n=10, timeout=5.0):
+                """快速实测帧率，带超时防止慢摄像头阻塞过久"""
                 try:
-                    for _ in range(3):
-                        cap.read()
+                    cap.read()
                     t0 = time.time()
-                    ok = sum(1 for _ in range(n) if cap.read()[0])
-                    return ok / max(time.time() - t0, 0.001)
+                    ok = 0
+                    for _ in range(n):
+                        if time.time() - t0 > timeout:
+                            break
+                        if cap.read()[0]:
+                            ok += 1
+                    elapsed = max(time.time() - t0, 0.001)
+                    return ok / elapsed
                 except Exception:
                     return 0
 
             dshow_fps = _bench_fps(self.capture)
             print(f"[Camera] DirectShow({cc_str}) 实测 {dshow_fps:.0f}fps")
+
+            # 先释放 DirectShow 再测 MSMF（某些摄像头不支持同时被两个后端打开）
+            self.capture.release()
+            self.capture = None
+            time.sleep(0.3)
 
             msmf_cap = cv2.VideoCapture(device_index, cv2.CAP_MSMF)
             msmf_fps = 0
@@ -6061,16 +6128,71 @@ class VideoSourceManager:
                 msmf_cc = _get_fourcc_str(msmf_cap)
                 msmf_fps = _bench_fps(msmf_cap)
                 print(f"[Camera] MSMF({msmf_cc}) 实测 {msmf_fps:.0f}fps")
+            else:
+                print(f"[Camera] MSMF 无法打开摄像头 {device_index}")
 
-            if msmf_fps > dshow_fps and msmf_cap.isOpened():
-                self.capture.release()
+            if msmf_fps > dshow_fps:
                 self.capture = msmf_cap
                 cc_str = _get_fourcc_str(self.capture)
                 print(f"[Camera] 选择 MSMF 后端 ({msmf_fps:.0f}fps > DirectShow {dshow_fps:.0f}fps)")
             else:
                 if msmf_cap.isOpened():
                     msmf_cap.release()
+                # 重新打开 DirectShow
+                self.capture = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
+                self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
+                self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                self.capture.set(cv2.CAP_PROP_FPS, fps)
+                cc_str = _get_fourcc_str(self.capture)
                 print(f"[Camera] 保留 DirectShow 后端 ({dshow_fps:.0f}fps >= MSMF {msmf_fps:.0f}fps)")
+
+            # Strategy 4: 帧率极低时尝试 CAP_ANY 和降低缓冲区
+            best_fps = max(dshow_fps, msmf_fps)
+            if best_fps < 5:
+                print(f"[Camera] ⚠ 帧率极低({best_fps:.0f}fps)，尝试 CAP_ANY 后端...")
+                any_cap = cv2.VideoCapture(device_index)
+                if any_cap.isOpened():
+                    any_cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
+                    any_cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                    any_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                    any_cap.set(cv2.CAP_PROP_FPS, fps)
+                    try:
+                        any_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    except Exception:
+                        pass
+                    any_cc = _get_fourcc_str(any_cap)
+                    any_fps = _bench_fps(any_cap)
+                    print(f"[Camera] CAP_ANY({any_cc}) 实测 {any_fps:.0f}fps")
+                    if any_fps > best_fps:
+                        self.capture.release()
+                        self.capture = any_cap
+                        cc_str = any_cc
+                        best_fps = any_fps
+                        print(f"[Camera] 选择 CAP_ANY 后端 ({any_fps:.0f}fps)")
+                    else:
+                        any_cap.release()
+
+                # Strategy 5: 降低分辨率减少带宽需求
+                if best_fps < 5 and (width > 640 or height > 480):
+                    print(f"[Camera] ⚠ 尝试降低分辨率到 640x480...")
+                    self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    lowres_fps = _bench_fps(self.capture)
+                    print(f"[Camera] 640x480 实测 {lowres_fps:.0f}fps")
+                    if lowres_fps > best_fps * 1.5:
+                        print(f"[Camera] 使用低分辨率 ({lowres_fps:.0f}fps > {best_fps:.0f}fps)")
+                        best_fps = lowres_fps
+                    else:
+                        self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                        self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                        print(f"[Camera] 低分辨率无改善，恢复 {width}x{height}")
+
+                # 设置缓冲区大小为1减少延迟
+                try:
+                    self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
         
         # Strategy 3: If still not MJPG on Linux, try without explicit backend
         if cc_str != 'MJPG' and platform.system() != "Windows":
@@ -8463,6 +8585,21 @@ def get_detection_results(channel: int = Query(0)):
             tracking_data['settled_ok'] = sum(1 for r in mgr._box_settled_results if r['is_complete'])
             tracking_data['settled_ng'] = sum(1 for r in mgr._box_settled_results if not r['is_complete'])
         result['tracking'] = tracking_data
+    
+    # MES 实时数据 (扫码状态 + 当前工件 + 工单进度)
+    if mgr._mes_hook and mgr._mes_hook.enabled:
+        try:
+            mes_data = {}
+            wp_info = mgr._mes_hook.get_current_workpiece(mgr.channel_id)
+            if wp_info:
+                mes_data['workpiece'] = wp_info
+            order_info = mgr._mes_hook.get_active_order(mgr.channel_id)
+            if order_info:
+                mes_data['order'] = order_info
+            if mes_data:
+                result['mes'] = mes_data
+        except Exception:
+            pass
     
     return result
 

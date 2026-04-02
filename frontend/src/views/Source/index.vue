@@ -13,9 +13,10 @@
       <div class="flex items-center gap-4">
         <el-radio-group v-model="workstationMode" @change="handleWorkstationModeChange" size="large">
           <el-radio-button :value="1">单工位</el-radio-button>
-          <el-radio-button :value="2">双工位</el-radio-button>
-          <el-radio-button :value="4">四工位</el-radio-button>
+          <el-radio-button :value="2" :disabled="!systemStore.developerMode">双工位</el-radio-button>
+          <el-radio-button :value="4" :disabled="!systemStore.developerMode">四工位</el-radio-button>
         </el-radio-group>
+        <span v-if="!systemStore.developerMode" class="text-xs text-yellow-500">多工位需在设置中开启开发者模式</span>
         <span class="text-xs text-gray-400">{{ workstationMode > 1 ? `同时运行 ${workstationMode} 个独立检测通道` : '单摄像头标准模式' }}</span>
       </div>
     </el-card>
@@ -653,7 +654,12 @@ const saveAndStartMulti = async () => {
 const loadWorkstationMode = async () => {
   try {
     const res = await getWorkstations();
-    workstationMode.value = res.data.channel_count || 1;
+    let mode = res.data.channel_count || 1;
+    if (mode > 1 && !systemStore.developerMode) {
+      mode = 1;
+      await setWorkstationMode(1).catch(() => {});
+    }
+    workstationMode.value = mode;
     if (workstationMode.value > 1 && res.data.channels) {
       res.data.channels.forEach(ch => {
         if (wsConfigs[ch.channel_id]) {

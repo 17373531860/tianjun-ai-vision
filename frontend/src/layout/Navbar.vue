@@ -3,7 +3,7 @@
     <!-- Left: Logo & Menu & Project -->
     <div class="flex items-center gap-4 flex-shrink-0">
       <slot name="left"></slot>
-      <div class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
+      <div v-if="store.display.navbar.brandName !== false" class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
         {{ store.display.brandName || $t('navbar.title') }}
       </div>
       <div class="h-8 w-px bg-gray-700 mx-1"></div>
@@ -40,7 +40,7 @@
 
     <!-- Center: App Name (slightly left) -->
     <div class="flex-1 flex items-center justify-center -ml-24">
-      <div class="app-name-wrapper">
+      <div v-if="store.display.navbar.appName !== false" class="app-name-wrapper">
         <div class="app-name-tech text-2xl font-semibold tracking-[0.25em]">
           {{ store.display.appName || '视觉AI行为引导系统' }}
           <span class="underline-bar"></span>
@@ -64,16 +64,15 @@
         <!-- Settings Dropdown -->
         <el-dropdown trigger="click" @command="handleCommand" :disabled="store.isDetecting">
           <el-icon 
-            class="transition-colors" 
+            class="transition-colors text-[1.75rem]" 
             :class="store.isDetecting ? 'cursor-not-allowed text-gray-600' : 'cursor-pointer text-gray-300 hover:text-cyan-400'" 
-            :size="28"
           ><Setting /></el-icon>
           <template #dropdown>
             <el-dropdown-menu class="bg-slate-800 border-slate-700">
               <el-dropdown-item command="auto_save">
                 <div class="flex items-center justify-between w-full min-w-[140px]">
                   <span>自动保存</span>
-                  <el-icon v-if="autoSaveEnabled" class="text-green-400 ml-2"><Check /></el-icon>
+                  <el-icon v-if="autoSaveEnabled" class="text-green-400 ml-2 text-[1rem]"><Check /></el-icon>
                 </div>
               </el-dropdown-item>
               <el-dropdown-item divided command="lang_zh">简体中文</el-dropdown-item>
@@ -81,6 +80,12 @@
               <el-dropdown-item command="lang_en">English</el-dropdown-item>
               <el-dropdown-item command="lang_jp">日本語</el-dropdown-item>
               <el-dropdown-item command="lang_kr">한국어</el-dropdown-item>
+              <el-dropdown-item divided command="developer_mode">
+                <div class="flex items-center justify-between w-full min-w-[140px]">
+                  <span>开发者模式</span>
+                  <el-icon v-if="store.developerMode" class="text-green-400 ml-2 text-[1rem]"><Check /></el-icon>
+                </div>
+              </el-dropdown-item>
               <el-dropdown-item divided command="logout" class="text-red-400 hover:text-red-300">{{ $t('navbar.logout') }}</el-dropdown-item>
               <el-dropdown-item command="cancel">{{ $t('navbar.cancel') }}</el-dropdown-item>
             </el-dropdown-menu>
@@ -353,10 +358,35 @@ watch(() => projectStore.currentProjectId, (newId) => {
   }
 });
 
+const toggleDeveloperMode = async () => {
+  if (store.developerMode) {
+    store.setDeveloperMode(false);
+    ElMessage.info('开发者模式已关闭');
+    return;
+  }
+  try {
+    const { value } = await ElMessageBox.prompt('请输入开发者密码', '开发者模式', {
+      inputType: 'password',
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      inputPlaceholder: '输入密码...',
+    });
+    if (value === 'tianjunKEJI') {
+      store.setDeveloperMode(true);
+      ElMessage.success('开发者模式已开启');
+    } else {
+      ElMessage.error('密码错误');
+    }
+  } catch {}
+};
+
 const handleCommand = (command) => {
   switch (command) {
     case 'auto_save':
       toggleAutoSave();
+      break;
+    case 'developer_mode':
+      toggleDeveloperMode();
       break;
     case 'lang_zh':
       setLang('zh-CN', '语言已切换为简体中文');
@@ -427,19 +457,38 @@ const updateRealTime = () => {
 };
 
 let timerInterval;
-onMounted(() => {
-  loadProjects();
-  
+onMounted(async () => {
+  console.log(`[⬛ Navbar] onMounted 开始 ${new Date().toLocaleTimeString()}`);
+
+  try {
+    console.log('[⬛ Navbar] 加载 display_settings...');
+    const saved = localStorage.getItem('display_settings');
+    if (saved) {
+      store.display = JSON.parse(saved);
+      console.log('[⬛ Navbar] ✓ display_settings 已恢复');
+    }
+  } catch (e) {
+    console.error('[⬛ Navbar] ✗ display_settings 解析失败:', e);
+  }
+
+  store.loadDeveloperMode();
+
+  try {
+    console.log('[⬛ Navbar] 加载项目列表...');
+    const t0 = Date.now();
+    await loadProjects();
+    console.log(`[⬛ Navbar] ✓ 项目列表加载完成 (${Date.now() - t0}ms), 数量: ${projectList.value.length}`);
+  } catch (e) {
+    console.error('[⬛ Navbar] ✗ 项目列表加载失败:', e);
+  }
+
   updateRealTime();
   timerInterval = setInterval(() => {
     runTimeSeconds.value++;
     updateRealTime();
   }, 1000);
-  
-  const saved = localStorage.getItem('display_settings');
-  if (saved) {
-    store.display = JSON.parse(saved);
-  }
+
+  console.log(`[⬛ Navbar] onMounted 完成 ${new Date().toLocaleTimeString()}`);
 });
 
 onUnmounted(() => {
@@ -461,7 +510,7 @@ onUnmounted(() => {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   animation: shimmer 6s ease-in-out infinite;
-  padding-bottom: 6px;
+  padding-bottom: 0.375rem;
 }
 
 .underline-bar {
@@ -469,7 +518,7 @@ onUnmounted(() => {
   bottom: 0;
   left: 0;
   right: 0;
-  height: 2px;
+  height: 0.125rem;
   border-radius: 1px;
   background: linear-gradient(90deg, transparent 0%, #7c3aed 20%, #818cf8 50%, #7c3aed 80%, transparent 100%);
   animation: bar-breathe 3s ease-in-out infinite;

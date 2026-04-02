@@ -1,0 +1,186 @@
+{
+  "version": "2.3.0",
+  "date": "2026-04-02",
+  "previous_version": "2.2.1",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "内置 MES 系统 — 工单管理",
+      "symptom": "客户需要在检测系统内管理生产工单",
+      "root_cause": null,
+      "fix": "10 张数据表, 完整工单状态机, 原子计数递增, 良率自动刷新",
+      "files": [
+        "backend/models/mes_models.py",
+        "backend/services/work_order.py",
+        "backend/api/mes.py",
+        "backend/main.py"
+      ],
+      "keywords": ["MES", "工单", "work order", "状态机", "良率", "yield"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "内置 MES 系统 — 单件追溯",
+      "symptom": "需要从扫码到检测结果的全链路追溯",
+      "root_cause": null,
+      "fix": "Workpiece + WorkpieceInspection 中间表, 支持返工重检, UniqueConstraint 防重复",
+      "files": [
+        "backend/models/mes_models.py",
+        "backend/services/workpiece.py",
+        "backend/api/mes.py"
+      ],
+      "keywords": ["追溯", "traceability", "工件", "workpiece", "返工", "rework", "serial_no"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "内置 MES 系统 — 缺陷自动分类",
+      "symptom": "NG 工件需自动记录缺陷并分类统计",
+      "root_cause": null,
+      "fix": "DefectCode 字典表映射, 自动从 result_reason 提取标签, Pareto 统计",
+      "files": [
+        "backend/models/mes_models.py",
+        "backend/services/defect.py",
+        "backend/api/mes.py"
+      ],
+      "keywords": ["缺陷", "defect", "Pareto", "自动分类", "NG", "severity"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "MES Hook 异步集成引擎",
+      "symptom": "MES 操作不能影响检测帧率",
+      "root_cause": null,
+      "fix": "MESHookManager 独立线程+队列+独立DB session, 5个Hook锚点, try/except 防护",
+      "files": [
+        "backend/services/mes_hooks.py",
+        "backend/api/source.py"
+      ],
+      "keywords": ["hook", "异步", "async", "队列", "queue", "cycle_start", "cycle_end"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "VS600 扫码器 TCP 通讯服务",
+      "symptom": "威码视 VS600 需通过网口连接扫码",
+      "root_cause": null,
+      "fix": "每台设备独立监听线程, LON指令, 自动重连指数退避, 扫码去重, 三种解析模式",
+      "files": [
+        "backend/services/scanner.py",
+        "backend/services/barcode_parser.py",
+        "backend/api/scanner.py"
+      ],
+      "keywords": ["VS600", "扫码器", "scanner", "barcode", "TCP", "LON", "条码"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "MES REST API (30 条端点)",
+      "symptom": "前端和外部系统需标准化接口",
+      "root_cause": null,
+      "fix": "22条MES端点 + 8条扫码器端点, 完整CRUD+追溯+Pareto",
+      "files": [
+        "backend/api/mes.py",
+        "backend/api/scanner.py",
+        "backend/main.py"
+      ],
+      "keywords": ["REST", "API", "CRUD", "endpoint", "接口"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-007",
+      "title": "MES 前端管理页面",
+      "symptom": "需要工单/工件/缺陷/扫码器的操作界面",
+      "root_cause": null,
+      "fix": "4个标签页: OrderPanel/WorkpiecePanel/DefectPanel/ScannerPanel",
+      "files": [
+        "frontend/src/views/MES/index.vue",
+        "frontend/src/views/MES/OrderPanel.vue",
+        "frontend/src/views/MES/WorkpiecePanel.vue",
+        "frontend/src/views/MES/DefectPanel.vue",
+        "frontend/src/views/MES/ScannerPanel.vue",
+        "frontend/src/api/mes.js",
+        "frontend/src/api/scanner.js",
+        "frontend/src/router/index.js",
+        "frontend/src/layout/index.vue"
+      ],
+      "keywords": ["MES页面", "工单管理", "追溯", "Pareto", "扫码器管理"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-008",
+      "title": "Monitor MES 信息条",
+      "symptom": "检测监控页面需显示当前工件和工单进度",
+      "root_cause": null,
+      "fix": "get_detection_results 注入 MES 实时数据, Monitor 添加信息条",
+      "files": [
+        "backend/api/source.py",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": ["Monitor", "实时", "工件状态", "工单进度"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-009",
+      "title": "Data 页 MES 工单筛选",
+      "symptom": "数据中心需按工单维度筛选",
+      "root_cause": null,
+      "fix": "查询面板添加工单下拉选择器",
+      "files": ["frontend/src/views/Data/index.vue"],
+      "keywords": ["数据中心", "工单筛选", "filter"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-010",
+      "title": "开发者模式（密码保护）",
+      "symptom": "多工位功能仅开发时使用, 避免客户误操作",
+      "root_cause": null,
+      "fix": "Navbar 设置菜单新增开发者模式, 密码保护, 默认关闭, 控制多工位选项可见性",
+      "files": [
+        "frontend/src/store/useSystemStore.js",
+        "frontend/src/layout/Navbar.vue",
+        "frontend/src/views/Source/index.vue"
+      ],
+      "keywords": ["开发者模式", "developer mode", "密码", "多工位", "权限"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/models/mes_models.py",
+    "backend/services/work_order.py",
+    "backend/services/workpiece.py",
+    "backend/services/defect.py",
+    "backend/services/mes_hooks.py",
+    "backend/services/barcode_parser.py",
+    "backend/services/scanner.py",
+    "backend/api/mes.py",
+    "backend/api/scanner.py",
+    "backend/api/source.py",
+    "backend/main.py",
+    "frontend/src/api/mes.js",
+    "frontend/src/api/scanner.js",
+    "frontend/src/views/MES/index.vue",
+    "frontend/src/views/MES/OrderPanel.vue",
+    "frontend/src/views/MES/WorkpiecePanel.vue",
+    "frontend/src/views/MES/DefectPanel.vue",
+    "frontend/src/views/MES/ScannerPanel.vue",
+    "frontend/src/router/index.js",
+    "frontend/src/layout/index.vue",
+    "frontend/src/layout/Navbar.vue",
+    "frontend/src/store/useSystemStore.js",
+    "frontend/src/views/Source/index.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Data/index.vue"
+  ]
+}
