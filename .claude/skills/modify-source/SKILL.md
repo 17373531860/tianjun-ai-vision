@@ -24,7 +24,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
    - 视频采集 (start_xxx, _capture_loop)
    - 推理管线 (load_model, inference相关)
    - 状态机 (步骤判定, cycle管理)
-   - 会话管理 (session/cycle/step CRUD)
+   - 会话管理 (session/cycle/step CRUD；**`start_session()` / `start_cycle()` 会写入当前操作员的 `operator_id`**，与 `operators` 当前操作员状态一致)
    - 录像 (FFmpegRecorder)
    - MediaPipe
    - 设备配置 (device_config)
@@ -38,15 +38,17 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
   backend/api/source.py          -- 内部调用
   backend/api/channel_manager.py -- 多通道管理器调用
   backend/api/detection.py       -- 检测控制端点
-  backend/main.py                -- 启动/关机/video_feed
+  backend/main.py                -- 启动/关机/video_feed/MES初始化
   backend/hotfix.py              -- 运行时猴子补丁！
   patches/session_fix_patch.py   -- 会话修复补丁！
+  backend/services/mes_hooks.py  -- MES Hook 回调（读取 cycle/session 数据）；周期结束/会话结束处会调用 MESGateway.dispatch 推送外部 MES
   
 可能相关:
   backend/api/sessions.py        -- 如果涉及Session/Cycle
   backend/services/detector.py   -- 如果涉及检测
+  backend/services/scanner.py    -- 扫码器（通过 mes_hooks 间接依赖 source）
   frontend/src/api/detection.js  -- 前端检测API
-  frontend/src/views/Monitor/index.vue -- 监控页
+  frontend/src/views/Monitor/index.vue -- 监控页（含 MES 信息条）
 ```
 
 ### 第3步: 检查线程安全
@@ -60,6 +62,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 | API handler | FastAPI async | is_detecting, session_id, cycle_id |
 | 录像线程 | FFmpegRecorder | 录像状态 |
 | 报警线程 | AlarmManager | 报警触发 |
+| MES Hook 线程 | MESHookManager._worker_loop | _pending_workpiece, _inspecting_workpiece, _active_orders |
 
 **规则:** 如果变量跨线程访问且不是简单的 bool/引用替换，需要加锁或使用线程安全的数据结构。
 
@@ -78,7 +81,20 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 如果添加/修改了状态变量，**必须确认** `_init_inference_vars()` 是否需要同步更新。
 遗漏初始化 = 上一次的状态残留 = 难以复现的 bug。
 
-### 第6步: 影响范围评估
+### 第6步: 检查 MES Hook 集成点
+
+source.py 中有 5 个 MES Hook 调用点（v2.3.0+），修改以下方法时必须确认 Hook 不会受影响:
+- `start_session()` 后 → `self._mes_hook.on_session_start()`
+- `end_session()` 后 → `self._mes_hook.on_session_end()`
+- `start_cycle()` 后 → `self._mes_hook.on_cycle_start()`
+- `end_cycle()` 后 → `self._mes_hook.on_cycle_end()`
+- `get_detection_results()` 返回前 → 注入 `result['mes']`，并返回当前周期/会话关联的 **操作员信息**（供 Monitor 等展示）
+
+**外部 MES（Gateway）：** `mes_hooks.py` 在 `_handle_cycle_end`、`_handle_session_end` 处理完内置 MES 逻辑后，会调用 `MESGateway.dispatch()`（若网关已初始化且配置满足），经 `mes_adapters` 向外部系统推送。修改 `end_cycle`/`end_session` 的时序或 Hook 触发条件时，需评估外部推送上下文是否仍完整。
+
+**规则:** MES Hook 全在 try/except 中，不会影响检测流程，但修改函数签名/返回值时需注意。
+
+### 第7步: 影响范围评估
 
 生成影响报告:
 ```
@@ -88,6 +104,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 hotfix/patch 兼容性: [是否需要同步修改]
 _init_inference_vars 影响: [是否需要更新]
 DB 影响: [是否影响 Session/Cycle/Step 写入]
+MES Hook 影响: [是否影响 5 个 Hook 调用点]
 前端影响: [是否影响API返回格式]
 风险等级: [低/中/高/极高]
 建议测试: [具体测试步骤]

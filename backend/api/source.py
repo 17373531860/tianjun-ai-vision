@@ -21,7 +21,7 @@ from ctypes import *
 from PIL import Image, ImageDraw, ImageFont
 from backend.core.config import settings
 from backend.db.database import SessionLocal
-from backend.models.models import DetectionSession, DetectionCycle, StepRecord, VideoClip, DataExportSetting
+from backend.models.models import DetectionSession, DetectionCycle, StepRecord, VideoClip, DataExportSetting, Project
 
 router = APIRouter()
 
@@ -479,6 +479,7 @@ class VideoSourceManager:
         self.model_path = None
         self._original_pt_path = None  # 原始 .pt 路径，用于转换模型加载失败时回退
         self._is_native_pytorch = True  # 是否为原生 .pt 模型（导出格式不支持 .to() 和 half）
+        self._model_imgsz = 640  # 模型推理分辨率，TensorRT 模型会自动检测
         self.model_task = 'detect'  # 'detect' or 'segment', updated on load_model
         self.device = 'auto'  # 推理设备: 'auto', 'cpu', 'cuda:0', 'cuda:1' 等
         self.current_device_info = None  # 当前使用的设备信息
@@ -653,7 +654,8 @@ class VideoSourceManager:
         # ========== 双线程架构相关 ==========
         self._inference_thread = None  # 推理线程
         self._inference_running = False  # 推理线程运行标志
-        self._latest_frame_for_inference = None  # 供推理线程使用的最新帧
+        self._latest_frame_for_inference = None  # 供推理线程使用的最新帧（可能是缩小后的）
+        self._latest_frame_original_size = None  # 原始帧尺寸 (h, w)，用于坐标还原
         self._inference_frame_lock = threading.Lock()  # 保护推理帧的锁
         self._confirmed_detections = []  # 经过帧计数确认的检测结果
         self._confirmed_detections_lock = threading.Lock()  # 保护确认结果的锁
@@ -869,13 +871,16 @@ class VideoSourceManager:
             db = self._get_db_session()
             session_uuid = str(uuid.uuid4())[:8]
             current_shift = self._get_current_shift()
+            from backend.api.operators import get_current_operator_id
+            current_op_id = get_current_operator_id(self.channel_id)
             session = DetectionSession(
                 session_uuid=session_uuid,
                 project_id=project_id,
                 start_time=datetime.now(),
                 status="running",
                 channel_id=self.channel_id,
-                shift_label=current_shift
+                shift_label=current_shift,
+                operator_id=current_op_id,
             )
             db.add(session)
             db.commit()
@@ -1000,6 +1005,7 @@ class VideoSourceManager:
             import traceback
             traceback.print_exc()
         finally:
+            self._persist_counters()
             # 停止视频录制
             self.stop_session_recording()
             self.stop_cycle_recording()
@@ -1010,6 +1016,29 @@ class VideoSourceManager:
             self._session_start_date = None
             self._session_start_shift = None
     
+    def _persist_counters(self):
+        """将当前计数器值写回项目的 counters_config，实现跨重启持久化"""
+        project_id = self.project_config.get('id') if self.project_config else None
+        if not project_id or not self.counters:
+            return
+        try:
+            db = SessionLocal()
+            project = db.query(Project).filter(Project.id == project_id).first()
+            if project and project.counters_config:
+                updated = False
+                for counter in project.counters_config:
+                    name = counter.get('name', '')
+                    if name in self.counters:
+                        counter['value'] = self.counters[name]
+                        updated = True
+                if updated:
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(project, 'counters_config')
+                    db.commit()
+            db.close()
+        except Exception as e:
+            print(f"[计数器持久化] 保存失败: {e}")
+
     def _get_current_shift(self) -> Optional[str]:
         """Return 'day' or 'night' based on current time and project data_config.
         Returns None when shift splitting is disabled."""
@@ -1088,11 +1117,13 @@ class VideoSourceManager:
                     db.commit()
                     print(f"上一周期间隔: {interval_from_last:.2f}s")
             
+            from backend.api.operators import get_current_operator_id
             cycle = DetectionCycle(
                 cycle_uuid=cycle_uuid,
                 session_id=self.current_session_id,
                 cycle_number=self.current_cycle_number,
-                start_time=now
+                start_time=now,
+                operator_id=get_current_operator_id(self.channel_id),
             )
             db.add(cycle)
             db.commit()
@@ -1648,14 +1679,48 @@ class VideoSourceManager:
                 print(f"类别: {list(self.model.names.values())}")
             print(f"模型任务类型: {self.model_task}")
             
+            # 自动检测模型的 imgsz（非 PyTorch 格式优先从引擎本身读取）
+            detected_imgsz = 640
+            engine_imgsz = None
+            try:
+                if not is_native_pytorch and hasattr(self.model, 'model'):
+                    inner = self.model.model
+                    if hasattr(inner, 'bindings') and inner.bindings:
+                        for b in inner.bindings.values() if isinstance(inner.bindings, dict) else inner.bindings:
+                            shape = getattr(b, 'shape', None)
+                            if shape and len(shape) == 4:
+                                engine_imgsz = max(shape[2], shape[3])
+                                print(f"[模型加载] 从引擎 bindings 检测到 imgsz={engine_imgsz}")
+                                break
+                    if engine_imgsz is None and hasattr(inner, 'input_shape'):
+                        s = inner.input_shape
+                        if isinstance(s, (list, tuple)) and len(s) >= 3:
+                            engine_imgsz = max(s[-2], s[-1])
+                            print(f"[模型加载] 从 input_shape 检测到 imgsz={engine_imgsz}")
+                if engine_imgsz and engine_imgsz > 0:
+                    detected_imgsz = engine_imgsz
+                elif hasattr(self.model, 'overrides') and 'imgsz' in self.model.overrides:
+                    raw = self.model.overrides['imgsz']
+                    detected_imgsz = raw if isinstance(raw, int) else max(raw)
+                elif hasattr(self.model, 'model') and hasattr(self.model.model, 'args'):
+                    args = self.model.model.args
+                    if isinstance(args, dict) and 'imgsz' in args:
+                        raw = args['imgsz']
+                        detected_imgsz = raw if isinstance(raw, int) else max(raw)
+            except Exception as e:
+                print(f"[模型加载] 检测 imgsz 失败，使用默认 640: {e}")
+            self._model_imgsz = detected_imgsz
+            print(f"[模型加载] 推理分辨率 imgsz={self._model_imgsz}")
+            
             if device.startswith('cuda'):
                 try:
                     import numpy as np
                     _half = self.use_half if is_native_pytorch else False
-                    print(f"[模型预热] CUDA warm-up (half={_half})...")
+                    sz = self._model_imgsz
+                    print(f"[模型预热] CUDA warm-up (half={_half}, imgsz={sz})...")
                     self.model.predict(
-                        np.zeros((640, 640, 3), dtype=np.uint8),
-                        conf=0.5, imgsz=640, verbose=False, device=device,
+                        np.zeros((sz, sz, 3), dtype=np.uint8),
+                        conf=0.5, imgsz=sz, verbose=False, device=device,
                         half=_half
                     )
                     print("[模型预热] warm-up done")
@@ -1761,13 +1826,25 @@ class VideoSourceManager:
                     if self.source_type == 'video' and self.capture is not None:
                         self.video_current_frame = int(self.capture.get(cv2.CAP_PROP_POS_FRAMES))
                     
+                    # ========== 预缩小帧：供推理和录制使用 ==========
+                    small_frame = None
+                    if self.is_detecting and self.model is not None:
+                        target_sz = getattr(self, '_model_imgsz', 640)
+                        oh, ow = original_frame.shape[:2]
+                        if max(oh, ow) > target_sz * 1.2:
+                            scale = target_sz / max(oh, ow)
+                            nw = int(ow * scale) // 2 * 2
+                            nh = int(oh * scale) // 2 * 2
+                            small_frame = cv2.resize(original_frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
+                        else:
+                            small_frame = original_frame
+                    
                     # ========== 双线程架构：异步推理 ==========
                     if self.is_detecting and self.model is not None:
-                        # Pass the frame reference — safe because original_frame
-                        # is a fresh copy each iteration and never mutated.
                         t_lock1_start = time.time()
                         with self._inference_frame_lock:
-                            self._latest_frame_for_inference = original_frame
+                            self._latest_frame_for_inference = small_frame
+                            self._latest_frame_original_size = original_frame.shape[:2]
                         t_lock1_end = time.time()
                         if (t_lock1_end - t_lock1_start) > 0.1:
                             debug_log(f"!!! inference_frame_lock 耗时: {(t_lock1_end-t_lock1_start)*1000:.1f}ms", "CAPTURE")
@@ -1795,9 +1872,9 @@ class VideoSourceManager:
                         if (t_lock3_end - t_lock3_start) > 0.1:
                             debug_log(f"!!! detection_lock 耗时: {(t_lock3_end-t_lock3_start)*1000:.1f}ms", "CAPTURE")
                     
-                    # 写入视频录制队列（使用 FFmpeg 进程，不会卡死）— 录制原始帧（不带 MediaPipe 叠加）
+                    # 写入视频录制队列 — 用缩小帧（已接近录制分辨率）
                     if self.is_detecting and self.recording_enabled:
-                        self._enqueue_frame_for_recording(original_frame)
+                        self._enqueue_frame_for_recording(small_frame if small_frame is not None else original_frame)
                     
                     # MediaPipe 骨架叠加（仅在推理时显示，不影响录制）
                     display_frame = original_frame
@@ -2802,6 +2879,7 @@ class VideoSourceManager:
                 return
         
         # ── 第一步重现结算（仅 first_step 结算模式） ──
+        _just_settled_by_first_step = False
         if self.settlement_mode == 'first_step' and is_seq_like \
                 and label in self.current_cycle_steps and len(self.current_cycle_steps) > 1:
             first_step_label = self._get_first_sequence_step_label()
@@ -2815,6 +2893,13 @@ class VideoSourceManager:
                         self._settle_custom_cycle()
                     elif logic_mode == 'sequential':
                         self._settle_sequential_cycle()
+                    old_last_seen = None
+                    _just_settled_by_first_step = True
+                    if hasattr(self, '_step_raw_start'):
+                        if first_min_dur and first_min_dur > 0:
+                            self._step_raw_start[label] = current_time - first_min_dur
+                        else:
+                            self._step_raw_start.pop(label, None)
         
         # ── 检测模式：第一步重现结算 ──
         if logic_mode == 'detection' and len(self.current_cycle_steps) > 1:
@@ -2826,6 +2911,13 @@ class VideoSourceManager:
                 if first_duration >= first_min_dur:
                     print(f"[检测模式结算] [{label}] 第一步再次出现 (持续{first_duration:.2f}s >= {first_min_dur}s)，结算当前周期 (步骤={self.current_cycle_steps})")
                     self._settle_detection_cycle()
+                    old_last_seen = None
+                    _just_settled_by_first_step = True
+                    if hasattr(self, '_step_raw_start'):
+                        if first_min_dur and first_min_dur > 0:
+                            self._step_raw_start[label] = current_time - first_min_dur
+                        else:
+                            self._step_raw_start.pop(label, None)
         
         # Always update step_last_seen so duration calculations reflect actual last detection time
         self.step_last_seen[label] = current_time
@@ -4536,44 +4628,41 @@ class VideoSourceManager:
                         return  # 匹配后不再检查其他条件和基础模式
             
             # 没有自定义条件匹配，回退到基础模式
-            # 只在"最后一步"消失时才触发基础模式判定
-            # 重要：必须检查消失的步骤是否属于当前周期，避免上一周期的步骤消失时错误触发判定
-            if custom_based_on == 'sequential':
+            # first_step 模式下跳过"最后一步消失"触发，只由第一步重现触发结算
+            if self.settlement_mode == 'first_step':
+                pass
+            elif custom_based_on == 'sequential':
                 last_step_label = self._get_last_sequence_step_label()
                 if last_step_label and completed_step == last_step_label:
-                    # 检查消失的步骤是否在当前周期中
-                    # 如果不在，说明这是上一个周期的步骤消失（已经在 _settle_custom_cycle 中处理过了）
                     if completed_step in self.current_cycle_steps:
-                        # 最后一步消失，触发判定
                         self._check_custom_sequential_mode(pipeline_config, id_to_label)
                     else:
                         print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
             elif custom_based_on == 'detection':
-                # 同样检查消失的步骤是否属于当前周期
                 if completed_step in self.current_cycle_steps:
                     self._check_custom_detection_mode(pipeline_config, id_to_label, enabled_step_labels)
                 else:
                     print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
-            # 如果 custom_based_on 为空，则只依赖自定义条件，不做额外处理
         
-        # 顺序模式：只在最后一步消失时判定（与自定义模式逻辑一致）
+        # 顺序模式
         elif logic_mode == 'sequential':
-            last_step_label = self._get_last_sequence_step_label()
-            if last_step_label and completed_step == last_step_label:
-                # 检查消失的步骤是否在当前周期中
-                if completed_step in self.current_cycle_steps:
-                    self._check_sequential_mode(pipeline_config, id_to_label)
-                else:
-                    print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
+            if self.settlement_mode != 'first_step':
+                last_step_label = self._get_last_sequence_step_label()
+                if last_step_label and completed_step == last_step_label:
+                    if completed_step in self.current_cycle_steps:
+                        self._check_sequential_mode(pipeline_config, id_to_label)
+                    else:
+                        print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
         
-        # 检测模式：只在最后一步消失时结算
+        # 检测模式
         elif logic_mode == 'detection':
-            last_det_label = self._get_last_detection_step_label()
-            if last_det_label and completed_step == last_det_label:
-                if completed_step in self.current_cycle_steps:
-                    self._settle_detection_cycle()
-                else:
-                    print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
+            if self.settlement_mode != 'first_step':
+                last_det_label = self._get_last_detection_step_label()
+                if last_det_label and completed_step == last_det_label:
+                    if completed_step in self.current_cycle_steps:
+                        self._settle_detection_cycle()
+                    else:
+                        print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
         
         # 检查步骤特定事件
         for step in steps_config:
@@ -5020,6 +5109,7 @@ class VideoSourceManager:
                     
                     self.counters['NG步骤'] += ng_step_count
                     print(f"  NG步骤计数 += {ng_step_count} => {self.counters['NG步骤']} (原因: {reason})")
+                    self._persist_counters()
         
         # NG TOP3: count unique cycles per step (each step counted at most once per NG cycle)
         if current_event_id == 2 and reason:
@@ -5066,13 +5156,16 @@ class VideoSourceManager:
         
         # 执行计数器动作（支持 delta 和 value 两种字段名）
         actions = event.get('actions', [])
+        counters_changed = False
         for action in actions:
             counter_name = action.get('counter_name', '')
-            # 兼容前端的 delta 字段和后端的 value 字段
             value = action.get('delta', action.get('value', 1))
             if counter_name in self.counters:
                 self.counters[counter_name] += value
+                counters_changed = True
                 print(f"  计数器 {counter_name} += {value} => {self.counters[counter_name]}")
+        if counters_changed:
+            self._persist_counters()
         
         # 记录事件
         self._event_seq += 1
@@ -5123,16 +5216,15 @@ class VideoSourceManager:
             from concurrent.futures import TimeoutError as FuturesTimeoutError
             
             _half = self.use_half and device.startswith('cuda') and self._is_native_pytorch
-            _frame = np.ascontiguousarray(frame)
+            _frame = frame if frame.flags['C_CONTIGUOUS'] else np.ascontiguousarray(frame)
             
             def run_inference():
                 t_predict_start = time.time()
-                # 使用 stream=True 避免 ultralytics 内部累积所有历史结果
                 result = list(self.model.predict(
                     _frame, 
                     conf=self.conf_threshold, 
                     iou=self.iou_threshold, 
-                    imgsz=640, 
+                    imgsz=self._model_imgsz, 
                     verbose=False, 
                     device=device,
                     stream=True,
@@ -5246,11 +5338,11 @@ class VideoSourceManager:
             
             _tracker_cfg = self._custom_tracker_yaml or "bytetrack.yaml"
             _half = self.use_half and device.startswith('cuda') and self._is_native_pytorch
-            _frame = np.ascontiguousarray(frame)
+            _frame = frame if frame.flags['C_CONTIGUOUS'] else np.ascontiguousarray(frame)
             def run_tracking():
                 return list(self.model.track(
                     _frame, conf=self.conf_threshold, iou=self.iou_threshold,
-                    imgsz=640, verbose=False, device=device,
+                    imgsz=self._model_imgsz, verbose=False, device=device,
                     stream=True, persist=True, tracker=_tracker_cfg,
                     half=_half
                 ))
@@ -5323,12 +5415,12 @@ class VideoSourceManager:
             device = self.current_device_info.get('device', 'cpu') if self.current_device_info else 'cpu'
             from concurrent.futures import TimeoutError as FuturesTimeoutError
             _half = self.use_half and device.startswith('cuda') and self._is_native_pytorch
-            _frame = np.ascontiguousarray(frame)
+            _frame = frame if frame.flags['C_CONTIGUOUS'] else np.ascontiguousarray(frame)
             
             def run_inference():
                 return list(self.model.predict(
                     _frame, conf=self.conf_threshold, iou=self.iou_threshold,
-                    imgsz=640, verbose=False, device=device, stream=True,
+                    imgsz=self._model_imgsz, verbose=False, device=device, stream=True,
                     half=_half
                 ))
             
@@ -6935,6 +7027,7 @@ class VideoSourceManager:
         # 清理推理帧缓存
         with self._inference_frame_lock:
             self._latest_frame_for_inference = None
+            self._latest_frame_original_size = None
         with self._confirmed_detections_lock:
             self._confirmed_detections = []
         
@@ -6981,6 +7074,7 @@ class VideoSourceManager:
         # Counters (preserve names, zero values)
         for key in self.counters:
             self.counters[key] = 0
+        self._persist_counters()
         
         # Cycle state
         self.current_cycle_steps = []
@@ -7578,6 +7672,7 @@ class VideoSourceManager:
         # 4. 清理推理相关缓存
         with self._inference_frame_lock:
             self._latest_frame_for_inference = None
+            self._latest_frame_original_size = None
         with self._confirmed_detections_lock:
             self._confirmed_detections = []
         
@@ -8600,7 +8695,24 @@ def get_detection_results(channel: int = Query(0)):
                 result['mes'] = mes_data
         except Exception:
             pass
-    
+
+    # 当前操作员
+    try:
+        from backend.api.operators import get_current_operator_id
+        op_id = get_current_operator_id(mgr.channel_id)
+        if op_id:
+            from backend.db.database import SessionLocal
+            from backend.models.models import Operator
+            _db = SessionLocal()
+            try:
+                op = _db.query(Operator).filter(Operator.id == op_id).first()
+                if op:
+                    result['operator'] = {"id": op.id, "name": op.name, "employee_no": op.employee_no}
+            finally:
+                _db.close()
+    except Exception:
+        pass
+
     return result
 
 class ProjectConfigRequest(BaseModel):

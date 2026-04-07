@@ -1,0 +1,11 @@
+{
+  "device": "cuda:0",
+  "frame_limit_enabled": false,
+  "target_stream_fps": 30,
+  "use_half": false,
+  "mediapipe_enabled": false,
+  "mediapipe_pose": false,
+  "mediapipe_hands": true,
+  "mediapipe_confidence": 0.7,
+  "mediapipe_interval": 1
+}

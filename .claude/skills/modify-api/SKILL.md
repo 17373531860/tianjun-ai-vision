@@ -34,6 +34,15 @@ app.include_router(sessions_router,    prefix="/api/v1")
 app.include_router(ws_router,          prefix="")
 app.include_router(workstation_router, prefix="/api/v1")
 
+# MES & Scanner (v2.3.0+)
+app.include_router(mes_router,     prefix="/api/v1")  # → /api/v1/mes/*
+app.include_router(scanner_router, prefix="/api/v1")  # → /api/v1/scanner/*
+# MES Gateway（外部 MES 适配器 / 连接 CRUD / 推送与日志）
+app.include_router(mes_gateway_router, prefix="/api/v1")  # → /api/v1/mes/gateway/*
+
+# 操作员管理（Operator CRUD + 当前操作员）
+app.include_router(operators_router, prefix="/api/v1")  # → /api/v1/operators/*
+
 # 直接在 app 上的端点
 # GET  /                         -- 欢迎页
 # GET  /health                   -- 健康检查
@@ -64,6 +73,23 @@ app.include_router(workstation_router, prefix="/api/v1")
 | alarm.py | 直接axios调用 | Alarm |
 | websocket.py | websocket.js | (未使用，Monitor用轮询) |
 | channel_manager.py | detection.js | Source, Monitor |
+| mes.py (22端点) | mes.js | MES (工单/工件/缺陷/缺陷代码) |
+| scanner.py (8端点) | scanner.js | MES/ScannerPanel |
+| mes_gateway.py (`/mes/gateway/*`) | gateway.js | MES/GatewayPanel（外部对接：连接 CRUD、测试、手动推送、额外字段、通讯日志） |
+| operators.py (`/operators`, `/operators/*`) | operators.js | Settings（操作员管理卡片）、Monitor（操作员选择器）、Navbar（当前作业员/设备编号展示）、Data（按操作员筛选与列展示） |
+
+### Operators API 端点清单 (`backend/api/operators.py`)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/operators` | 操作员列表 |
+| POST | `/api/v1/operators` | 新增操作员 |
+| PUT | `/api/v1/operators/{id}` | 编辑操作员 |
+| DELETE | `/api/v1/operators/{id}` | 软删除 |
+| POST | `/api/v1/operators/set-current` | 设置当前操作员 |
+| GET | `/api/v1/operators/current` | 获取当前操作员 |
+
+**关联修改：** `sessions.py` 的 Session/Cycle 列表与详情响应含 `operator_id` / `operator_name`，列表接口支持 `operator_id` 查询过滤；`source.py` 的 `start_session` / `start_cycle` 写入 `operator_id`，`get_detection_results` 返回操作员信息；`mes_gateway.py` 的 `build_context_from_cycle` 上下文含 `operator.*` 字段。修改 Operators 或 Session 相关 Schema 时需一并核对上述调用链。
 
 ## 强制分析流程
 

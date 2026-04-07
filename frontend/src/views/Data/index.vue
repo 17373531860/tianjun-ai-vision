@@ -73,6 +73,13 @@
                 <el-option v-for="o in mesOrderOptions" :key="o.id" :label="`${o.order_no} - ${o.product_name}`" :value="o.id" />
               </el-select>
             </div>
+            <!-- 操作员筛选 -->
+            <div>
+              <div class="text-xs text-gray-500 mb-1.5">操作员</div>
+              <el-select v-model="operatorFilter" size="small" class="w-full" clearable placeholder="全部操作员" @change="handleOperatorFilterChange">
+                <el-option v-for="op in operatorOptions" :key="op.id" :label="`${op.name} (${op.employee_no})`" :value="op.id" />
+              </el-select>
+            </div>
             <div v-if="availableDates.length > 0" class="flex items-center justify-between text-xs pt-1 border-t border-slate-800">
               <span class="text-gray-500">有数据的日期</span>
               <span class="text-cyan-400 font-mono">{{ availableDates.length }} 天</span>
@@ -116,6 +123,7 @@
                       <span class="text-gray-600">/</span>
                       <span class="text-red-400">{{ session.ng_cycles || 0 }}</span>
                     </span>
+                    <span v-if="session.operator_name" class="text-xs text-yellow-400">{{ session.operator_name }}</span>
                   </div>
                 </div>
                 <el-button
@@ -283,6 +291,12 @@
                 </template>
               </el-table-column>
               <el-table-column prop="event_name" label="事件" min-width="80" />
+              <el-table-column prop="operator_name" label="操作员" width="80">
+                <template #default="{ row }">
+                  <span v-if="row.operator_name" class="text-yellow-400 text-xs">{{ row.operator_name }}</span>
+                  <span v-else class="text-gray-600 text-xs">-</span>
+                </template>
+              </el-table-column>
               <el-table-column label="操作" width="70" align="center">
                 <template #default="{ row }">
                   <el-button v-if="row.video_id" type="primary" link size="small" @click="playCycleVideo(row)">
@@ -670,6 +684,22 @@ const loadMesOrders = async () => {
   } catch {}
 };
 
+// 操作员筛选
+const operatorFilter = ref(null);
+const operatorOptions = ref([]);
+const loadOperatorOptions = async () => {
+  try {
+    const { getOperators } = await import('@/api/operators');
+    const { data } = await getOperators();
+    operatorOptions.value = data || [];
+  } catch {}
+};
+const handleOperatorFilterChange = () => {
+  if (selectedDate.value) {
+    handleDateChange(selectedDate.value);
+  }
+};
+
 const handleChannelFilterChange = () => {
   if (selectedDate.value) {
     handleDateChange(selectedDate.value);
@@ -944,7 +974,7 @@ const handleDateChange = async (date) => {
     const dc = projectStore.currentProject?.data_config || {};
     const shiftParam = dc.shift_split_enabled && shiftType.value !== 'all' && shiftType.value !== 'custom'
       ? shiftType.value : null;
-    const res = await getSessionsByDate(date, projectStore.currentProjectId, start, end, channelFilter.value, shiftParam);
+    const res = await getSessionsByDate(date, projectStore.currentProjectId, start, end, channelFilter.value, shiftParam, operatorFilter.value);
     sessions.value = res.data?.sessions || [];
     
     overviewData.total_cycles = res.data?.total_cycles || 0;
@@ -1426,6 +1456,7 @@ onMounted(() => {
   loadStorageInfo();
   loadChannelCount();
   loadMesOrders();
+  loadOperatorOptions();
   
   if (projectStore.currentProjectId) {
     loadAvailableDates();

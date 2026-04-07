@@ -121,6 +121,19 @@ backend/api/source.py (~8616 行)
 3. `_discard_empty_cycle()` 可能删除有效周期（如果步骤记录延迟写入）
 4. 替补步骤在 `start_cycle()` 前被检测到 → 如果 `start_cycle()` 清空了 `backup_steps_seen_in_cycle` 则替补丢失（已修复）
 
+## MES Hook 集成点 (v2.3.0+)
+
+source.py 中注入了 `self._mes_hook` (MESHookManager)，在以下位置回调:
+```
+start_session() 后 → _mes_hook.on_session_start(channel_id, session_id, project_id)
+end_session()   后 → _mes_hook.on_session_end(channel_id, session_id, ...)
+start_cycle()   后 → _mes_hook.on_cycle_start(channel_id, cycle_id, session_id)
+end_cycle()     后 → _mes_hook.on_cycle_end(channel_id, cycle_id, is_good, ...)
+get_detection_results() → 注入 result['mes'] = {current_workpiece, active_order}
+```
+MES Hook 在独立线程中异步执行，使用独立 DB session，不会阻塞检测。
+**如果看到 MES 数据不对但检测正常 → 问题在 mes_hooks.py 或 MES service 层，不在 source.py。**
+
 ## 诊断步骤
 
 1. **先确定问题属于哪个子系统：**
@@ -129,12 +142,15 @@ backend/api/source.py (~8616 行)
    - 计数器不对 → 检查 `counters` 读写 + `end_cycle()` 中的计数逻辑
    - 录像问题 → 检查 `FFmpegRecorder` + `_capture_loop()` 中的录制分支
    - 视频卡顿 → 检查对应 `start_xxx()` 方法 + `_capture_loop()` 的帧读取
+   - MES 数据异常 → 检查 `backend/services/mes_hooks.py` + MES service 层（不在 source.py 内）
 
 2. **读取关键文件：**
    - `backend/api/source.py` — 主逻辑（先搜索相关函数名，不要一次读全部）
    - `backend/hotfix.py` — 检查是否有运行时补丁覆盖了原方法
    - `backend/api/channel_manager.py` — 如果是多通道问题
    - `backend/models/models.py` — 数据模型定义
+   - `backend/models/mes_models.py` — MES 数据模型（如涉及 MES 问题）
+   - `backend/services/mes_hooks.py` — MES Hook 集成层（如涉及 MES 问题）
 
 3. **检查 hotfix/patch 是否生效：**
    - `hotfix.py` 猴子补丁了 `start_rtsp()` 方法

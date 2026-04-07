@@ -12,6 +12,8 @@ from backend.api.detection import router as detection_router
 from backend.api.sessions import router as sessions_router
 from backend.api.mes import router as mes_router
 from backend.api.scanner import router as scanner_router
+from backend.api.mes_gateway import router as mes_gateway_router
+from backend.api.operators import router as operators_router
 from backend.services.detector import get_detection_service
 # Import models to ensure they are registered
 from backend.models import models
@@ -61,6 +63,9 @@ def migrate_database():
         # MES: 现有表扩展字段 (可空, 安全迁移)
         ("detection_cycles", "order_id", "INTEGER"),
         ("detection_sessions", "order_id", "INTEGER"),
+        ("mes_connections", "extra_fields_schema", "JSON"),
+        ("detection_sessions", "operator_id", "INTEGER"),
+        ("detection_cycles", "operator_id", "INTEGER"),
     ]
     
     try:
@@ -427,6 +432,8 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 # MES & Scanner
 app.include_router(mes_router, prefix=f"{settings.API_V1_STR}", tags=["MES"])
 app.include_router(scanner_router, prefix=f"{settings.API_V1_STR}", tags=["Scanner"])
+app.include_router(mes_gateway_router, prefix=f"{settings.API_V1_STR}", tags=["MES-Gateway"])
+app.include_router(operators_router, prefix=f"{settings.API_V1_STR}", tags=["Operators"])
 
 # Mount static files for uploads (images, etc.)
 if os.path.exists(settings.UPLOAD_DIR):

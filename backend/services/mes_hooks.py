@@ -281,6 +281,25 @@ class MESHookManager:
         print(f"[MES] Cycle#{cycle_id} 结束: {'OK' if is_good else 'NG'} (工件#{wp_id})",
               flush=True)
 
+        # 外部 MES 推送
+        try:
+            from backend.services.mes_gateway import get_mes_gateway
+            gw = get_mes_gateway()
+            ctx = gw.build_context_from_cycle(
+                db, cycle_id,
+                workpiece_id=wp_id,
+                order_id=order_id,
+                is_good=is_good,
+                event_name=event_name,
+                result_reason=result_reason,
+                duration=duration,
+                step_sequence=step_sequence,
+                project_id=project_id,
+            )
+            gw.dispatch("cycle_end", ctx, channel_id)
+        except Exception as e:
+            print(f"[MES] 外部推送(cycle_end)失败: {e}", flush=True)
+
     def _handle_session_start(self, db, channel_id: int, session_id: int,
                               project_id: int):
         """Session 开始: 查找活跃工单"""
@@ -301,6 +320,15 @@ class MESHookManager:
         self._pending_workpiece.pop(channel_id, None)
         self._inspecting_workpiece.pop(channel_id, None)
         print(f"[MES] Session#{session_id} 结束, 清理工位{channel_id}状态", flush=True)
+
+        # 外部 MES 推送
+        try:
+            from backend.services.mes_gateway import get_mes_gateway
+            gw = get_mes_gateway()
+            ctx = gw.build_context_from_session(db, session_id)
+            gw.dispatch("session_end", ctx, channel_id)
+        except Exception as e:
+            print(f"[MES] 外部推送(session_end)失败: {e}", flush=True)
 
 
 # 全局单例

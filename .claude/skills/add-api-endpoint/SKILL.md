@@ -28,6 +28,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write"
 | 报表 | `api/reports.py` | `/api/v1/reports` | `report.js` |
 | 报警 | `api/alarm.py` | `/api/v1/alarm` | Alarm/index.vue (直接axios) |
 | 多工位 | `api/channel_manager.py` | `/api/v1/workstations` | `detection.js` |
+| MES 管理 | `api/mes.py` (22端点) | `/api/v1/mes` | `mes.js` |
+| 扫码器 | `api/scanner.py` (8端点) | `/api/v1/scanner` | `scanner.js` |
 
 ### 第2步: 定义 Schema（如需要）
 

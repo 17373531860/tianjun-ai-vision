@@ -13,7 +13,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 
 计划修改: $ARGUMENTS
 
-## 10个ORM模型 (backend/models/models.py)
+## 核心 ORM 模型 (backend/models/models.py)
 
 | 模型 | 主要写入者 | 主要读取者 | 前端对应 |
 |------|-----------|-----------|----------|
@@ -24,11 +24,30 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 | `Camera` | cameras.py | cameras.py | camera.js |
 | `DailyStat` | (无写入 - 废弃) | (无读取) | 无 |
 | `SystemConfig` | main.py | main.py | 无直接对应 |
-| `DetectionSession` | source.py | sessions.py | data.js, Data/index.vue |
-| `DetectionCycle` | source.py | sessions.py | data.js, Data/index.vue |
+| `DetectionSession` | source.py, mes_hooks.py | sessions.py, mes_hooks.py | data.js, Data/index.vue |
+| `DetectionCycle` | source.py, mes_hooks.py | sessions.py, mes_hooks.py | data.js, Data/index.vue |
 | `StepRecord` | source.py | sessions.py | data.js, Data/index.vue |
 | `VideoClip` | source.py | sessions.py | data.js, Data/index.vue |
 | `DataExportSetting` | sessions.py | sessions.py, source.py | data.js, Data/index.vue |
+
+**注意:** `DetectionSession` 和 `DetectionCycle` 表在 v2.3.0+ 新增了 `order_id` 列，与 MES 工单关联。
+
+## MES ORM 模型 (backend/models/mes_models.py) — v2.3.0+
+
+| 模型 | 主要写入者 | 主要读取者 | 前端对应 |
+|------|-----------|-----------|----------|
+| `WorkOrder` | mes.py API, mes_hooks.py | mes.py, mes_hooks.py | mes.js, MES/OrderPanel.vue |
+| `Batch` | mes.py API | mes.py | mes.js, MES/OrderPanel.vue |
+| `Workpiece` | mes_hooks.py (扫码自动注册), mes.py | mes_hooks.py, mes.py | mes.js, MES/WorkpiecePanel.vue |
+| `WorkpieceInspection` | mes_hooks.py (cycle_end时) | mes.py (追溯) | mes.js, MES/WorkpiecePanel.vue |
+| `DefectRecord` | mes_hooks.py (NG自动分类), mes.py | mes.py (帕累托) | mes.js, MES/DefectPanel.vue |
+| `DefectCode` | mes.py API | mes_hooks.py (标签→缺陷映射) | mes.js, MES/DefectPanel.vue |
+| `ScannerDevice` | scanner.py API | scanner.py, scanner service | scanner.js, MES/ScannerPanel.vue |
+| `ScanLog` | scanner service (扫码时) | scanner.py API | scanner.js, MES/ScannerPanel.vue |
+| `MESConnection` | (预留外部MES配置) | (预留) | (预留) |
+| `MESCommLog` | (预留外部MES通讯日志) | (预留) | (预留) |
+
+**MES 模型使用独立 DB session（WAL模式），不与检测引擎争锁。**
 
 ## Project 模型的 JSON 字段（特殊处理）
 

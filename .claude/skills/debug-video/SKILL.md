@@ -152,6 +152,33 @@ class FFmpegRecorder:
 - `frontend/src/views/Monitor/index.vue` — MJPEG显示和双缓冲逻辑
 - `frontend/src/views/Source/index.vue` — 视频源配置和启动
 
+### OpenCV/NumPy ABI 不兼容
+1. 症状: `cv2.putText` / `cv2.resize` 报 `img is not a numpy array`，推理完全不工作
+2. 原因有两层:
+   - **版本层:** `opencv-contrib-python>=4.11` 与 `numpy<2.0` 的 C API 不兼容
+   - **编译层:** conda-pack 环境中的 numpy 是 conda 编译的（MKL），pip 的 opencv 是 OpenBLAS 编译的，即使版本匹配 ABI 也不兼容
+3. 验证: `python -c "import numpy as np, cv2; img=np.zeros((100,100,3),dtype=np.uint8); cv2.putText(img,'OK',(10,50),cv2.FONT_HERSHEY_SIMPLEX,1,(255,255,255),2); print('OK')"`
+4. **客户端修复流程（关键：必须物理删除 + 重装）:**
+   ```
+   pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python opencv-contrib-python-headless numpy
+   rd /s /q site-packages\cv2
+   rd /s /q site-packages\numpy
+   rd /s /q site-packages\numpy.libs
+   # 清除所有 dist-info 残留
+   pip install numpy==1.26.4 --no-cache-dir
+   pip install opencv-contrib-python==4.10.0.84 --no-cache-dir
+   ```
+   单纯 `pip install --force-reinstall` 可能不够，必须物理删除 numpy 和 cv2 目录
+5. 预防: CI 中 `pip install --force-reinstall numpy`，限制 `opencv-contrib-python<4.11`
+
+### 客户端一键补丁部署
+当客户端出现上述问题时:
+1. 准备 `patch_v2.2.1a.bat` + `hotfix.py` 两个文件
+2. 将两个文件放入同一目录，右键以管理员身份运行
+3. 输入安装路径（脚本会自动检测常见路径）
+4. 脚本自动: 关闭软件 → pip卸载+物理删除numpy/cv2 → 清pycache → pip全新安装 → 验证 → 部署hotfix
+5. **注意: bat 脚本必须纯 ASCII，不能有中文**（cmd.exe 用 GBK 解析会破坏语法）
+
 ## 已知陷阱
 - `get_ffmpeg_path()` 在 source.py 和 sessions.py 重复定义
 - HCNetSDK `_on_decode` 回调可能在 `stop_preview` 后仍被调用（竞态）
@@ -159,3 +186,7 @@ class FFmpegRecorder:
 - `electron/main.js` 开发模式连 localhost:5173，但 vite 实际在 6001（端口不匹配）
 - USB摄像头 DirectShow vs MSMF 后端选择对帧率影响极大（可差 3 倍），部署前用 `test_camera_backend.py` 验证
 - `_reopen_camera()`（捕获线程重连）和 `_reopen_camera()`（resume）也需设置 MJPG fourcc，否则重连后可能退回 YUY2
+- **MSMF 后端竞争**: 测试 MSMF 前必须先 `release()` DirectShow + `sleep(0.3)`，否则两个后端同时抢占摄像头，benchmark 可能侥幸通过但 `_capture_loop` 会 `can't grab frame`
+- **OpenCV 4.11 ABI**: 打包环境中 `opencv-contrib-python>=4.11` 与 `numpy<2.0` 不兼容，必须限制 `<4.11`
+- **conda numpy ABI**: conda-pack 后 numpy 是 conda 编译的，与 pip opencv 不兼容。CI 必须 `--force-reinstall` numpy。客户端修复必须物理删除再重装
+- 实际采集帧率比 benchmark 低 ~30%（benchmark 只做 `cap.read()`，实际还有 MJPEG 编码 + 帧拷贝 + 线程同步 ~15ms/帧）

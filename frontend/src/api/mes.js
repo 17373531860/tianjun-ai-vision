@@ -8,6 +8,7 @@ export const updateOrder = (id, data) => api.put(`/mes/orders/${id}`, data)
 export const changeOrderStatus = (id, data) => api.post(`/mes/orders/${id}/status`, data)
 export const deleteOrder = (id) => api.delete(`/mes/orders/${id}`)
 export const getOrderSummary = (id) => api.get(`/mes/orders/${id}/summary`)
+export const updateOrderExtraData = (id, data) => api.put(`/mes/orders/${id}/extra-data`, data)
 
 // ---- 批次 ----
 export const createBatch = (orderId, data) => api.post(`/mes/orders/${orderId}/batches`, data)

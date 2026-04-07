@@ -77,13 +77,13 @@ jobs:
 
           content = textwrap.dedent(f"""\
           @echo off
-          chcp 65001 >nul
           echo ============================================
-          echo   天军科技AI视觉检测系统 - 安装包合并工具
-          echo   版本: {v}
+          echo   TianJun AI Vision - Merge Tool
+          echo   Version: {v}
           echo ============================================
           echo.
-          powershell -ExecutionPolicy Bypass -Command "& {{
+          powershell -ExecutionPolicy Bypass -NoProfile -Command "& {{
+            [Console]::OutputEncoding=[System.Text.Encoding]::UTF8
             $ErrorActionPreference='Stop'
             $output='{exe}'
             $expectedParts={total}
@@ -92,16 +92,17 @@ jobs:
 
             $parts = Get-ChildItem -Filter '*.part' | Sort-Object Name
             if ($parts.Count -eq 0) {{
-              Write-Host '[错误] 没有找到 .part 文件！' -ForegroundColor Red
-              Write-Host '  第一部分: https://gitee.com/xu-yanzhi32/tianjun-releases/releases'
-              Write-Host '  第二部分: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases'
+              Write-Host '[ERROR] No .part files found!' -ForegroundColor Red
+              Write-Host 'Download all .part files from both repos into the same folder:'
+              Write-Host '  Part 1: https://gitee.com/xu-yanzhi32/tianjun-releases/releases'
+              Write-Host '  Part 2: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases'
               exit 1
             }}
             if ($parts.Count -ne $expectedParts) {{
-              Write-Host ('[错误] 分块数量不对！找到 ' + $parts.Count + '，期望 ' + $expectedParts) -ForegroundColor Red
+              Write-Host ('[ERROR] Expected {total} parts, found ' + $parts.Count) -ForegroundColor Red
               exit 1
             }}
-            Write-Host ('找到 ' + $parts.Count + ' 个分块文件，正在逐个校验...') -ForegroundColor Cyan
+            Write-Host ('Found ' + $parts.Count + ' parts, verifying checksums...') -ForegroundColor Cyan
             Write-Host ''
 
             $bad = 0
@@ -123,23 +124,23 @@ jobs:
                 if ($hash -eq $checksums[$p.Name]) {{
                   Write-Host ('  [OK] ' + $p.Name) -ForegroundColor Green
                 }} else {{
-                  Write-Host ('  [损坏] ' + $p.Name) -ForegroundColor Red
-                  Write-Host ('         期望: ' + $checksums[$p.Name])
-                  Write-Host ('         实际: ' + $hash)
+                  Write-Host ('  [BAD] ' + $p.Name) -ForegroundColor Red
+                  Write-Host ('        Expected: ' + $checksums[$p.Name])
+                  Write-Host ('        Actual:   ' + $hash)
                   $bad++
                 }}
               }} else {{
-                Write-Host ('  [?] ' + $p.Name + ' (无校验记录)') -ForegroundColor Yellow
+                Write-Host ('  [?] ' + $p.Name + ' (no checksum)') -ForegroundColor Yellow
               }}
             }}
             Write-Host ''
 
             if ($bad -gt 0) {{
-              Write-Host ('[错误] 发现 ' + $bad + ' 个损坏文件！请重新下载。') -ForegroundColor Red
+              Write-Host ('' + $bad + ' file(s) corrupted! Please re-download the [BAD] files.') -ForegroundColor Red
               exit 1
             }}
 
-            Write-Host '所有分块验证通过，正在合并...' -ForegroundColor Cyan
+            Write-Host 'All parts verified. Merging...' -ForegroundColor Cyan
             if (Test-Path $output) {{ Remove-Item $output -Force }}
             $outStream = [System.IO.File]::Create($output)
             $i = 0
@@ -153,27 +154,27 @@ jobs:
 
             $actualSize = (Get-Item $output).Length
             if ($actualSize -ne $expectedSize) {{
-              Write-Host ('[错误] 文件大小不匹配！') -ForegroundColor Red
+              Write-Host ('[ERROR] Size mismatch! Actual: ' + $actualSize + ', Expected: {size}') -ForegroundColor Red
               Remove-Item $output -Force
               exit 1
             }}
 
             Write-Host ''
-            Write-Host '正在做最终 SHA256 校验...' -ForegroundColor Cyan
+            Write-Host 'Final SHA256 verification...' -ForegroundColor Cyan
             $finalHash = (Get-FileHash $output -Algorithm SHA256).Hash
             if ($finalHash -eq $expectedHash) {{
               Write-Host ''
               Write-Host '============================================' -ForegroundColor Green
-              Write-Host ('  [成功] 合并并验证通过！') -ForegroundColor Green
-              Write-Host ('  安装程序: ' + $output) -ForegroundColor Green
+              Write-Host '  Merge complete! Verified OK.' -ForegroundColor Green
+              Write-Host ('  File: ' + $output) -ForegroundColor Green
               Write-Host ('  SHA256: ' + $finalHash) -ForegroundColor Green
               Write-Host '============================================' -ForegroundColor Green
               Write-Host ''
-              Write-Host '请双击运行安装程序进行安装。'
+              Write-Host 'Run the installer to install.'
             }} else {{
-              Write-Host '[错误] SHA256 校验失败！' -ForegroundColor Red
-              Write-Host ('  实际: ' + $finalHash)
-              Write-Host ('  期望: ' + $expectedHash)
+              Write-Host '[ERROR] SHA256 mismatch!' -ForegroundColor Red
+              Write-Host ('  Actual:   ' + $finalHash)
+              Write-Host ('  Expected: ' + $expectedHash)
               Remove-Item $output -Force
             }}
           }}"

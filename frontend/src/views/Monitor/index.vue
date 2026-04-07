@@ -503,6 +503,23 @@
         </div>
       </div>
 
+      <!-- 操作员选择 + MES 信息条 -->
+      <div class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-4 text-sm">
+        <div class="flex items-center gap-2">
+          <span class="text-cyan-400 font-bold text-xs">操作员:</span>
+          <el-select
+            v-model="currentOperatorId"
+            placeholder="选择操作员"
+            size="small"
+            class="w-32"
+            clearable
+            @change="onOperatorChange"
+          >
+            <el-option v-for="op in operatorList" :key="op.id" :label="`${op.name} (${op.employee_no})`" :value="op.id" />
+          </el-select>
+        </div>
+      </div>
+
       <!-- MES 信息条 -->
       <div v-if="mesData?.workpiece || mesData?.order" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
         <div v-if="mesData.workpiece" class="flex items-center gap-2">
@@ -522,6 +539,20 @@
           </span>
         </div>
         <div v-if="!mesData.workpiece && !mesData.order" class="text-gray-500 text-xs">等待扫码...</div>
+        <!-- 额外字段输入 (外部 MES 动态字段) -->
+        <div v-if="extraFieldsSchema.length" class="flex items-center gap-2 ml-auto border-l border-cyan-800/50 pl-4">
+          <div v-for="f in extraFieldsSchema" :key="f.key" class="flex items-center gap-1">
+            <span class="text-gray-400 text-xs">{{ f.label || f.key }}:</span>
+            <el-input
+              v-model="extraFieldValues[f.key]"
+              :type="f.type === 'number' ? 'number' : 'text'"
+              :placeholder="f.default || ''"
+              size="small"
+              class="w-24"
+              @change="submitExtraFields"
+            />
+          </div>
+        </div>
       </div>
 
       <!-- Middle: Charts + NG Ranking -->
@@ -677,6 +708,8 @@ import { ElMessage } from 'element-plus';
 import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations } from '@/api/detection';
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import api, { getBackendHost } from '@/api/index';
+import { getExtraFieldsSchema, setExtraFields } from '@/api/gateway';
+import { getOperators, setCurrentOperator, getCurrentOperator } from '@/api/operators';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
@@ -1205,6 +1238,51 @@ const isTrackingMode = computed(() => currentProject.value?.logic_mode === 'trac
 
 // MES 实时数据 (从轮询结果中获取)
 const mesData = computed(() => multiChannelData.value[selectedChannel.value]?.mes || null);
+
+// 操作员选择
+const operatorList = ref([]);
+const currentOperatorId = ref(null);
+async function loadOperatorList() {
+  try {
+    const { data } = await getOperators({ active: true });
+    operatorList.value = data || [];
+    const { data: cur } = await getCurrentOperator(selectedChannel.value);
+    if (cur?.operator) currentOperatorId.value = cur.operator.id;
+  } catch { /* ignore */ }
+}
+async function onOperatorChange(opId) {
+  try {
+    await setCurrentOperator({ channel_id: selectedChannel.value, operator_id: opId || null });
+    if (opId) {
+      const op = operatorList.value.find(o => o.id === opId);
+      if (op) {
+        systemStore.display.inspectorName = op.name;
+        localStorage.setItem('display_settings', JSON.stringify(systemStore.display));
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+// 外部 MES 额外字段
+const extraFieldsSchema = ref([]);
+const extraFieldValues = ref({});
+async function loadExtraFieldsSchema() {
+  try {
+    const { data } = await getExtraFieldsSchema();
+    extraFieldsSchema.value = data || [];
+    for (const f of extraFieldsSchema.value) {
+      if (!(f.key in extraFieldValues.value) && f.default) {
+        extraFieldValues.value[f.key] = f.default;
+      }
+    }
+    if (Object.keys(extraFieldValues.value).length) submitExtraFields();
+  } catch { /* ignore */ }
+}
+async function submitExtraFields() {
+  try {
+    await setExtraFields({ channel_id: selectedChannel.value, fields: { ...extraFieldValues.value } });
+  } catch { /* ignore */ }
+}
 
 const trackingChecklist = ref({});
 const trackingCycleActive = ref(false);
@@ -2687,6 +2765,8 @@ const autoRestoreSource = async () => {
 onMounted(() => {
   systemStore.loadSettings();
   fetchChannelCount();
+  loadExtraFieldsSchema();
+  loadOperatorList();
   
   // Reset error count so reconnection works after page navigation
   streamErrorCount = 0;

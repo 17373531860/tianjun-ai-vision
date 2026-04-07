@@ -119,6 +119,27 @@ electron/package.json → "version" 字段
 - `electron/package.json` → `"version"` 字段
 - `electron/splash.html` → 版本显示文本（如果存在）
 
+## 第5.5步: 强制检查并更新 Skill（不可跳过！）
+
+**为什么这步是强制的：** v2.3.0 发版时漏掉了 skill 更新，导致后续 AI 操作缺乏 MES 上下文。
+
+对本轮对话中的每个变更，检查以下问题：
+1. 是否新增了后端 API 模块/路由？→ 更新 `modify-api`, `api-sync`, `add-api-endpoint`
+2. 是否修改了 source.py 或新增了调用 source.py 的代码？→ 更新 `modify-source`, `debug-source`
+3. 是否新增/修改了 ORM 模型？→ 更新 `modify-model`, `fix-data`
+4. 是否新增了前端页面/Store/API？→ 更新 `modify-frontend`, `debug-frontend`
+5. 是否影响了多通道逻辑？→ 更新 `debug-channel`
+6. 是否影响了 Session/Cycle 数据？→ 更新 `debug-session`
+7. 是否引入了全新子系统？→ **创建新的 debug-xxx skill**
+
+**操作流程：**
+1. 列出本轮变更涉及的所有文件
+2. 对照上述 7 条规则，标出需要更新的 skill
+3. 读取每个需要更新的 skill → 追加新增内容（不删旧内容）
+4. 如果有全新子系统 → 用现有 skill 作为模板创建新 skill
+
+**完成标志：** changelog 的 `skills_updated` 字段包含所有更新/新增的 skill 名称。
+
 ## 第6步: Git Commit
 
 ```bash
@@ -129,13 +150,16 @@ git commit -m "release: vX.X.X - 简短描述"
 
 ## 第7步: 认证检查与推送
 
-推送前必须完成以下检查：
+推送前必须完成以下检查（详见 `build-release` skill 的「Git 认证配置」章节）：
 
 ```bash
 # 1. 检查 GitHub 认证
 gh auth status
-# 如果过期: gh auth login -h github.com -p https -w
-# 登录后必须: gh auth setup-git
+# 如果过期或报错:
+#   gh auth login -h github.com -p https -w -s workflow
+#   ↑ 必须带 -s workflow，否则无法推送 .github/workflows/ 文件
+# 登录后必须执行:
+#   gh auth setup-git
 
 # 2. 确认 remote URL 干净（不含嵌入 token）
 git remote -v

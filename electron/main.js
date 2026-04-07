@@ -145,32 +145,58 @@ function createWindow() {
   });
 
   // Renderer crash recovery: auto-reload when the Chromium renderer dies
-  // (e.g. OOM from long-running MJPEG decode, GPU process crash, etc.)
   mainWindow.webContents.on('render-process-gone', (event, details) => {
-    console.error(`[App] Renderer crashed! reason=${details.reason}, exitCode=${details.exitCode}`);
+    const mem = process.memoryUsage();
+    console.error(`[App] ===== 渲染进程崩溃 =====`);
+    console.error(`[App] 原因: ${details.reason}`);
+    console.error(`[App] 退出码: ${details.exitCode}`);
+    console.error(`[App] 主进程内存: RSS=${(mem.rss/1048576).toFixed(1)}MB, Heap=${(mem.heapUsed/1048576).toFixed(1)}/${(mem.heapTotal/1048576).toFixed(1)}MB`);
+    console.error(`[App] 时间: ${new Date().toLocaleString()}`);
+    console.error(`[App] ===========================`);
     if (!isQuitting && mainWindow && !mainWindow.isDestroyed()) {
       setTimeout(() => {
-        console.log('[App] Reloading after renderer crash...');
+        console.log('[App] 正在重载渲染进程...');
         mainWindow.webContents.reload();
       }, 1000);
     }
   });
 
   mainWindow.webContents.on('unresponsive', () => {
-    console.warn('[App] Renderer unresponsive, will reload in 5s if still stuck...');
+    const mem = process.memoryUsage();
+    console.warn(`[App] ===== 渲染进程无响应 =====`);
+    console.warn(`[App] 主进程内存: RSS=${(mem.rss/1048576).toFixed(1)}MB, Heap=${(mem.heapUsed/1048576).toFixed(1)}/${(mem.heapTotal/1048576).toFixed(1)}MB`);
+    console.warn(`[App] 时间: ${new Date().toLocaleString()}`);
+    console.warn(`[App] 5秒后将自动重载...`);
+    console.warn(`[App] =============================`);
     setTimeout(() => {
       if (mainWindow && !mainWindow.isDestroyed() && !isQuitting) {
         try {
           mainWindow.webContents.reload();
         } catch (e) {
-          console.error('[App] Failed to reload unresponsive renderer:', e);
+          console.error('[App] 重载失败:', e);
         }
       }
     }, 5000);
   });
 
   mainWindow.webContents.on('responsive', () => {
-    console.log('[App] Renderer became responsive again');
+    console.log('[App] 渲染进程恢复响应');
+  });
+
+  // 监控渲染进程页面加载状态
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log(`[App] ✓ 页面加载完成: ${mainWindow.webContents.getURL()}`);
+  });
+
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    console.error(`[App] ✗ 页面加载失败: ${validatedURL}, 错误: ${errorDescription} (${errorCode})`);
+  });
+
+  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    if (message.includes('[⬛')) {
+      const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+      console.log(`[Renderer:${levels[level] || level}] ${message}`);
+    }
   });
   
   // 拦截窗口关闭事件
@@ -413,9 +439,15 @@ app.on('second-instance', () => {
 
 // GPU / utility process crash handler
 app.on('child-process-gone', (event, details) => {
-  console.error(`[App] Child process gone: type=${details.type}, reason=${details.reason}`);
+  const mem = process.memoryUsage();
+  console.error(`[App] ===== 子进程退出 =====`);
+  console.error(`[App] 类型: ${details.type}, 原因: ${details.reason}, 退出码: ${details.exitCode}`);
+  console.error(`[App] 进程名: ${details.name || '未知'}`);
+  console.error(`[App] 主进程内存: RSS=${(mem.rss/1048576).toFixed(1)}MB`);
+  console.error(`[App] 时间: ${new Date().toLocaleString()}`);
+  console.error(`[App] ==========================`);
   if (details.type === 'GPU' && mainWindow && !mainWindow.isDestroyed() && !isQuitting) {
-    console.log('[App] GPU process crashed, reloading renderer...');
+    console.log('[App] GPU进程崩溃, 1.5秒后重载渲染进程...');
     setTimeout(() => mainWindow.webContents.reload(), 1500);
   }
 });

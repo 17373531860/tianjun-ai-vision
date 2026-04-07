@@ -127,6 +127,18 @@ class SystemConfig(Base):
     description = Column(String(500), nullable=True)
 
 
+class Operator(Base):
+    """操作员表"""
+    __tablename__ = "operators"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(64), nullable=False)
+    employee_no = Column(String(32), unique=True, index=True)
+    role = Column(String(20), default="operator")
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class DetectionSession(Base):
     """检测会话表 - 记录设备启动到关闭的一个完整时间段"""
     __tablename__ = "detection_sessions"
@@ -162,9 +174,13 @@ class DetectionSession(Base):
     # 班次标记 ("day" / "night" / null if shift splitting disabled)
     shift_label = Column(String(20), nullable=True, index=True)
     
+    # 操作员
+    operator_id = Column(Integer, ForeignKey("operators.id", ondelete="SET NULL"), nullable=True)
+
     # 关系
     project = relationship("Project", back_populates="detection_sessions")
     cycles = relationship("DetectionCycle", back_populates="session", cascade="all, delete-orphan")
+    operator = relationship("Operator", foreign_keys=[operator_id])
 
 
 class DetectionCycle(Base):
@@ -194,9 +210,13 @@ class DetectionCycle(Base):
     video_path = Column(String(500), nullable=True)  # 周期视频路径
     video_id = Column(String(50), nullable=True)  # 视频ID
     
+    # 操作员
+    operator_id = Column(Integer, ForeignKey("operators.id", ondelete="SET NULL"), nullable=True)
+
     # 关系
     session = relationship("DetectionSession", back_populates="cycles")
     step_records = relationship("StepRecord", back_populates="cycle", cascade="all, delete-orphan")
+    operator = relationship("Operator", foreign_keys=[operator_id])
 
 
 class StepRecord(Base):

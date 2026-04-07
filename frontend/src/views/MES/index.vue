@@ -33,6 +33,11 @@
       <template v-if="activeTab === 'scanner'">
         <ScannerPanel />
       </template>
+
+      <!-- 外部对接 -->
+      <template v-if="activeTab === 'gateway'">
+        <GatewayPanel />
+      </template>
     </div>
   </div>
 </template>
@@ -43,6 +48,7 @@ import OrderPanel from './OrderPanel.vue'
 import WorkpiecePanel from './WorkpiecePanel.vue'
 import DefectPanel from './DefectPanel.vue'
 import ScannerPanel from './ScannerPanel.vue'
+import GatewayPanel from './GatewayPanel.vue'
 
 const activeTab = ref('orders')
 const tabs = [
@@ -50,5 +56,6 @@ const tabs = [
   { key: 'workpieces', label: '工件追溯' },
   { key: 'defects', label: '缺陷分析' },
   { key: 'scanner', label: '扫码器' },
+  { key: 'gateway', label: '外部对接' },
 ]
 </script>

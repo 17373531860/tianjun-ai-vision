@@ -102,6 +102,44 @@
       "fix": "创建 test_camera_backend.py，分别测试 DirectShow 和 MSMF 后端的实际帧率，用于远程诊断",
       "files": ["test_camera_backend.py"],
       "keywords": ["摄像头", "DirectShow", "MSMF", "帧率测试", "远程诊断"]
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-005",
+      "title": "OpenCV/NumPy ABI 不兼容导致推理崩溃",
+      "symptom": "客户机上 cv2.putText 和 cv2.resize 报 img is not a numpy array，推理完全不工作",
+      "root_cause": "CI 打包环境中 opencv-contrib-python 4.11+ 与 numpy 1.26.4 存在 ABI 不兼容",
+      "fix": "降级 opencv-contrib-python 到 4.10.0.84，CI 中限制 <4.11，添加构建验证步骤",
+      "files": ["backend/requirements.txt", ".github/workflows/build.yml"],
+      "keywords": ["OpenCV", "NumPy", "ABI", "putText", "resize", "not a numpy array", "4.11", "降级"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-006",
+      "title": "MSMF 摄像头后端资源竞争导致 can't grab frame",
+      "symptom": "start_camera Strategy 2 实测 MSMF 帧率高(31fps)但实际采集线程 can't grab frame",
+      "root_cause": "未释放 DirectShow 就打开 MSMF 测试，两个后端同时占用摄像头",
+      "fix": "先 release() DirectShow + sleep(0.3) 再打开 MSMF；未选中时重新打开 DirectShow",
+      "files": ["backend/api/source.py", "backend/hotfix.py"],
+      "keywords": ["MSMF", "DirectShow", "can't grab frame", "摄像头", "资源竞争", "release", "start_camera"],
+      "breaking": false
+    },
+    {
+      "type": "hotfix",
+      "id": "HOTFIX-001",
+      "title": "hotfix.py v2.0.5 — 客户端一键补丁",
+      "fix": "RTSP H.265 支持 + 摄像头 MSMF 后端自动切换 + generate_frames 崩溃防护 + 一键补丁脚本",
+      "files": ["backend/hotfix.py", "patch_v2.2.1a.bat"],
+      "keywords": ["hotfix", "补丁", "RTSP", "H265", "MSMF", "摄像头", "generate_frames", "一键修复"]
+    },
+    {
+      "type": "feature",
+      "id": "TOOL-002",
+      "title": "Windows 一键补丁脚本",
+      "fix": "自动检测安装路径、关闭软件、修复 OpenCV、验证、部署 hotfix 的 Windows bat 脚本",
+      "files": ["patch_v2.2.1a.bat"],
+      "keywords": ["补丁", "Windows", "bat", "一键修复", "OpenCV", "hotfix"]
     }
   ],
   "skills_updated": ["debug-source", "debug-video", "debug-frontend", "modify-source"],
@@ -109,12 +147,17 @@
   "files_changed": [
     "backend/api/source.py",
     "frontend/src/views/Monitor/index.vue",
+    "backend/main.py",
+    "backend/hotfix.py",
+    "backend/requirements.txt",
+    ".github/workflows/build.yml",
     ".claude/skills/debug-source/SKILL.md",
     ".claude/skills/debug-video/SKILL.md",
     ".claude/skills/debug-frontend/SKILL.md",
     ".claude/skills/modify-source/SKILL.md",
     ".claude/skills/update-release/SKILL.md",
     ".claude/skills/tune-params/SKILL.md",
-    "test_camera_backend.py"
+    "test_camera_backend.py",
+    "patch_v2.2.1a.bat"
   ]
 }

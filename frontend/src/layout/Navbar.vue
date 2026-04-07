@@ -50,6 +50,18 @@
 
     <!-- Right: Status & System -->
     <div class="flex items-center gap-6 flex-shrink-0">
+      <!-- 作业员 & 设备编号 -->
+      <div class="flex items-center gap-4 text-sm">
+        <div v-if="store.display.navbar.inspector !== false && store.display.inspectorName" class="flex items-center gap-1.5 bg-slate-800/60 px-2.5 py-1 rounded border border-slate-700">
+          <span class="text-gray-400 text-xs">作业员</span>
+          <span class="text-cyan-300 font-medium">{{ store.display.inspectorName }}</span>
+        </div>
+        <div v-if="store.display.navbar.deviceId !== false && store.display.deviceNumber" class="flex items-center gap-1.5 bg-slate-800/60 px-2.5 py-1 rounded border border-slate-700">
+          <span class="text-gray-400 text-xs">设备</span>
+          <span class="text-white font-mono">{{ store.display.deviceNumber }}</span>
+        </div>
+      </div>
+
       <!-- 实时时间保留在顶部 -->
       <div class="flex items-center gap-4 text-sm font-mono">
         <div v-if="store.display.navbar.realtime !== false">

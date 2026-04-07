@@ -198,6 +198,8 @@ class WorkOrderService:
         return {
             "order_no": order.order_no,
             "product_name": order.product_name,
+            "product_code": order.product_code,
+            "product_spec": order.product_spec,
             "status": order.status,
             "planned_qty": order.planned_qty,
             "completed_qty": order.completed_qty,
@@ -208,4 +210,7 @@ class WorkOrderService:
             "yield_rate": order.yield_rate,
             "progress": round(order.completed_qty / order.planned_qty * 100, 1)
                         if order.planned_qty > 0 else 0,
+            "source": order.source,
+            "external_id": order.external_id,
+            "extra_data": order.extra_data or {},
         }

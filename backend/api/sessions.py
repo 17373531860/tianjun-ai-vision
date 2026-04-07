@@ -20,7 +20,7 @@ import shutil
 from backend.db.database import get_db
 from backend.models.models import (
     DetectionSession, DetectionCycle, StepRecord, 
-    VideoClip, DataExportSetting, Project, SystemConfig
+    VideoClip, DataExportSetting, Project, SystemConfig, Operator
 )
 from backend.core.config import settings
 
@@ -272,6 +272,8 @@ class SessionResponse(BaseModel):
     video_id: Optional[str] = None
     status: str = "running"
     channel_id: int = 0
+    operator_id: Optional[int] = None
+    operator_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -289,6 +291,8 @@ class CycleResponse(BaseModel):
     result_reason: Optional[str] = None
     step_sequence: Optional[list] = None
     video_id: Optional[str] = None
+    operator_id: Optional[int] = None
+    operator_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -439,6 +443,7 @@ def list_sessions(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     channel_id: Optional[int] = None,
+    operator_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db)
@@ -451,6 +456,9 @@ def list_sessions(
     
     if channel_id is not None:
         query = query.filter(DetectionSession.channel_id == channel_id)
+
+    if operator_id is not None:
+        query = query.filter(DetectionSession.operator_id == operator_id)
     
     if date:
         # 单日查询
@@ -466,6 +474,11 @@ def list_sessions(
     result = []
     for session in sessions:
         project = db.query(Project).filter(Project.id == session.project_id).first()
+        op_name = None
+        op_id = getattr(session, 'operator_id', None)
+        if op_id:
+            op = db.query(Operator).filter(Operator.id == op_id).first()
+            op_name = op.name if op else None
         result.append(SessionResponse(
             id=session.id,
             session_uuid=session.session_uuid,
@@ -482,7 +495,9 @@ def list_sessions(
             max_cycle_time=session.max_cycle_time,
             video_id=session.video_id,
             status=session.status,
-            channel_id=getattr(session, 'channel_id', 0) or 0
+            channel_id=getattr(session, 'channel_id', 0) or 0,
+            operator_id=op_id,
+            operator_name=op_name,
         ))
     
     return result
@@ -521,6 +536,7 @@ def get_sessions_by_date(
     end_hour: Optional[str] = None,
     channel_id: Optional[int] = None,
     shift: Optional[str] = None,
+    operator_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     """获取指定日期的会话概览（班次过滤基于 cycle 级别）"""
@@ -546,6 +562,8 @@ def get_sessions_by_date(
         sess_query = sess_query.filter(DetectionSession.channel_id == channel_id)
     if shift and shift in ('day', 'night'):
         sess_query = sess_query.filter(DetectionSession.shift_label == shift)
+    if operator_id is not None:
+        sess_query = sess_query.filter(DetectionSession.operator_id == operator_id)
     sessions = sess_query.order_by(DetectionSession.start_time).all()
 
     if not use_shift:
@@ -647,6 +665,11 @@ def get_sessions_by_date(
             s_ng = s_total - s_good
             s_avg_ct = session.avg_cycle_time or 0
             s_counters = session.counters_snapshot
+        s_op_id = getattr(session, 'operator_id', None)
+        s_op_name = None
+        if s_op_id:
+            s_op = db.query(Operator).filter(Operator.id == s_op_id).first()
+            s_op_name = s_op.name if s_op else None
         session_responses.append(SessionResponse(
             id=session.id,
             session_uuid=session.session_uuid,
@@ -662,7 +685,9 @@ def get_sessions_by_date(
             min_cycle_time=session.min_cycle_time,
             max_cycle_time=session.max_cycle_time,
             video_id=session.video_id,
-            status=session.status
+            status=session.status,
+            operator_id=s_op_id,
+            operator_name=s_op_name,
         ))
 
     return SessionOverview(
@@ -685,6 +710,11 @@ def get_session(session_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="会话不存在")
     
     project = db.query(Project).filter(Project.id == session.project_id).first()
+    g_op_id = getattr(session, 'operator_id', None)
+    g_op_name = None
+    if g_op_id:
+        g_op = db.query(Operator).filter(Operator.id == g_op_id).first()
+        g_op_name = g_op.name if g_op else None
     
     return SessionResponse(
         id=session.id,
@@ -701,7 +731,9 @@ def get_session(session_id: int, db: Session = Depends(get_db)):
         min_cycle_time=session.min_cycle_time,
         max_cycle_time=session.max_cycle_time,
         video_id=session.video_id,
-        status=session.status
+        status=session.status,
+        operator_id=g_op_id,
+        operator_name=g_op_name,
     )
 
 
@@ -712,18 +744,26 @@ def get_session_cycles(
     session_id: int,
     skip: int = 0,
     limit: int = 50,
+    operator_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     """获取会话的周期（分页）"""
     base = db.query(DetectionCycle).filter(
         DetectionCycle.session_id == session_id
     )
+    if operator_id is not None:
+        base = base.filter(DetectionCycle.operator_id == operator_id)
     total = base.count()
 
     cycles = base.order_by(DetectionCycle.cycle_number).offset(skip).limit(limit).all()
 
     items = []
     for cycle in cycles:
+        c_op_id = getattr(cycle, 'operator_id', None)
+        c_op_name = None
+        if c_op_id:
+            c_op = db.query(Operator).filter(Operator.id == c_op_id).first()
+            c_op_name = c_op.name if c_op else None
         items.append(CycleResponse(
             id=cycle.id,
             cycle_uuid=cycle.cycle_uuid,
@@ -735,7 +775,9 @@ def get_session_cycles(
             event_name=cycle.event_name,
             result_reason=cycle.result_reason,
             step_sequence=cycle.step_sequence,
-            video_id=cycle.video_id
+            video_id=cycle.video_id,
+            operator_id=c_op_id,
+            operator_name=c_op_name,
         ))
 
     return {"items": items, "total": total}
@@ -748,6 +790,12 @@ def get_cycle(cycle_id: int, db: Session = Depends(get_db)):
     if not cycle:
         raise HTTPException(status_code=404, detail="周期不存在")
     
+    gc_op_id = getattr(cycle, 'operator_id', None)
+    gc_op_name = None
+    if gc_op_id:
+        gc_op = db.query(Operator).filter(Operator.id == gc_op_id).first()
+        gc_op_name = gc_op.name if gc_op else None
+    
     return CycleResponse(
         id=cycle.id,
         cycle_uuid=cycle.cycle_uuid,
@@ -759,7 +807,9 @@ def get_cycle(cycle_id: int, db: Session = Depends(get_db)):
         event_name=cycle.event_name,
         result_reason=cycle.result_reason,
         step_sequence=cycle.step_sequence,
-        video_id=cycle.video_id
+        video_id=cycle.video_id,
+        operator_id=gc_op_id,
+        operator_name=gc_op_name,
     )
 
 

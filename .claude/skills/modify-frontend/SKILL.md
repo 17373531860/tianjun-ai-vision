@@ -19,22 +19,48 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 App.vue
   └── router-view
       └── layout/index.vue (主布局)
-          ├── Navbar.vue ← useProjectStore, useSystemStore, api/project
+          ├── Navbar.vue ← useProjectStore, useSystemStore, api/project, api/operators（当前操作员展示：作业员姓名、设备编号；与 Monitor 选择器同步）
           │   ├── 项目选择器 → handleProjectChange → activateProject + setProjectConfig
           │   ├── 自动恢复 → localStorage + 动态import api/index, store/useSourceStore
           │   └── 报警自动连接 → api (直接axios)
           ├── router-view (页面内容)
-          │   ├── Monitor/index.vue ← useProjectStore, useSystemStore, useSourceStore, api/detection, api/model
+          │   ├── Monitor/index.vue ← useProjectStore, useSystemStore, useSourceStore, api/detection, api/model, api/operators（操作员选择器、与导航栏同步当前作业员）
           │   ├── Project/index.vue ← api/project, api/model, useProjectStore, useSystemStore
           │   ├── Source/index.vue ← api/index, api/detection, api/model, api/project, useSourceStore, useSystemStore
-          │   ├── Data/index.vue ← api/data, api/detection, useProjectStore, useSystemStore
+          │   ├── Data/index.vue ← api/data, api/detection, useProjectStore, useSystemStore（操作员筛选、Session/Cycle 列表展示操作员列）
           │   ├── Report/index.vue ← api/report, api/project
           │   ├── Model/index.vue ← api/model
           │   ├── Alarm/index.vue ← api/index, api/project, useProjectStore, useSystemStore
-          │   ├── Settings/index.vue ← useSystemStore
+          │   ├── Settings/index.vue ← useSystemStore, api/operators（操作员管理卡片：列表、新增、编辑、停用）
+          │   ├── MES/index.vue ← api/mes, api/scanner, api/gateway (Tabs: OrderPanel, WorkpiecePanel, DefectPanel, ScannerPanel, GatewayPanel)
+          │   │   ├── OrderPanel.vue ← api/mes (工单CRUD + 状态机)
+          │   │   ├── WorkpiecePanel.vue ← api/mes (工件追溯)
+          │   │   ├── DefectPanel.vue ← api/mes (缺陷帕累托 + 缺陷代码管理)
+          │   │   ├── ScannerPanel.vue ← api/scanner (VS600设备配置 + 状态)
+          │   │   └── GatewayPanel.vue ← api/gateway (外部 MES：连接 CRUD、字段映射、测试、通讯日志)
           │   └── Activation/index.vue ← window.electronAPI
           └── BottomBar.vue ← useSystemStore, useProjectStore
 ```
+
+### MES / Gateway 相关前端文件（修改对接或 Monitor 额外字段时必查）
+
+| 文件 | 说明 |
+|------|------|
+| `frontend/src/api/gateway.js` | 外部 MES Gateway API（`/mes/gateway/*`）封装 |
+| `frontend/src/views/MES/GatewayPanel.vue` | 「外部对接」Tab：连接 CRUD、字段映射、测试、通讯日志 |
+| `frontend/src/views/MES/index.vue` | MES 主入口，含「外部对接」Tab 挂载 |
+| `frontend/src/views/Monitor/index.vue` | 额外字段输入（`extraFieldsSchema` 等与 Gateway schema 联动） |
+
+### 操作员管理相关前端文件
+
+| 文件 | 说明 |
+|------|------|
+| `frontend/src/api/operators.js` | 操作员 API 封装：`/operators` CRUD、`set-current`、`current` |
+| `frontend/src/views/Settings/index.vue` | 操作员管理卡片：列表、新增、编辑、停用 |
+| `frontend/src/views/Monitor/index.vue` | 操作员选择器；与 Navbar 同步当前作业员 |
+| `frontend/src/layout/Navbar.vue` | 显示作业员姓名、设备编号（与 `display.navbar` 等开关配合） |
+| `frontend/src/views/Data/index.vue` | 操作员筛选；Session/Cycle 表格列展示操作员 |
+| `frontend/src/api/data.js` | `getSessionsByDate`（及同类列表接口）需支持 `operatorId` 参数，与后端 `operator_id` 过滤对齐 |
 
 ## Store 数据流
 
@@ -47,11 +73,12 @@ App.vue
 
 ### useSystemStore → 消费者
 - **Settings/index.vue:** 读写 display, detection, performance
-- **Navbar.vue:** 读写 display (自动恢复时直接覆盖!)
+- **Navbar.vue:** 读写 display (自动恢复时直接覆盖!), 读写 developerMode (密码保护切换)
 - **Monitor/index.vue:** 读取 detection (检测框、Toast、语音配置)
 - **layout/index.vue:** 读取 isDetecting (导航锁)
 - **BottomBar.vue:** 读取各显示设置
 - **Project/index.vue:** loadDetectionFromProject (合并项目检测配置)
+- **Source/index.vue:** 读取 developerMode (控制多工位选项可见性)
 
 ### useSourceStore → 消费者
 - **Source/index.vue:** 读写所有字段
@@ -66,6 +93,7 @@ App.vue
 | `tianjun_display_settings` | useSystemStore | useSystemStore, Navbar | 显示设置 |
 | `tianjun_detection_settings` | useSystemStore | useSystemStore | 检测框设置 |
 | `tianjun_performance_settings` | useSystemStore | useSystemStore | 性能设置 |
+| `tianjun_developer_mode` | useSystemStore | useSystemStore, Navbar, Source | 开发者模式开关 |
 | `tianjun_auto_save` | Navbar | Navbar | 自动保存开关 |
 | `tianjun_last_project` | Navbar | Navbar | 上次项目ID |
 | `tianjun_last_source_*` | Source | Navbar(恢复) | 上次使用的视频源 |

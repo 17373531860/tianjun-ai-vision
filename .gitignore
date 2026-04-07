@@ -86,3 +86,9 @@ test*/
 # License keys and files (NEVER commit)
 keys/
 licenses/
+video_frames/
+HCNetSDK*/
+*.xlsx
+hotfix*/
+*.zip
+*.lic

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-skills-update.sh",
+            "timeout": 10,
+            "statusMessage": "检查 skills 是否需要更新..."
+          }
+        ]
+      }
+    ]
+  }
+}

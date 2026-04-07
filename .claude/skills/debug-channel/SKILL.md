@@ -65,6 +65,7 @@ class ChannelManager:
 
 ### Source 页面 (Source/index.vue)
 - 工位模式选择器: 单机/双工位/四工位
+- **双工位/四工位选项需要开发者模式 (v2.3.0+):** `systemStore.developerMode` 为 true 时才可选，否则禁用
 - 多工位模式: 每通道独立配置视频源、项目、分辨率、FPS
 - `setWorkstationMode(count)` → 后端创建/销毁 VideoSourceManager 实例
 
@@ -94,6 +95,8 @@ class ChannelManager:
 - 同一个 SQLite 数据库
 - 可能共享 YOLO 模型实例（load_shared_model）
 - 同一个 GPU（除非手动分配不同GPU）
+- MESHookManager 实例（v2.3.0+, 按 channel_id 区分数据）
+- ScannerService 实例（v2.3.0+, 每个扫码器绑定一个 channel_id）
 
 ## 常见问题诊断
 

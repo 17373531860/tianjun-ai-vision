@@ -305,6 +305,7 @@ class MESConnection(Base):
     pull_interval_sec = Column(Integer, default=60)
     retry_count = Column(Integer, default=3)
     retry_interval_sec = Column(Integer, default=5)
+    extra_fields_schema = Column(JSON, nullable=True)
 
     last_sync_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

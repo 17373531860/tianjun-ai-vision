@@ -31,6 +31,14 @@ DetectionSession (1)
   ├── (N) DetectionCycle
   │       └── (N) StepRecord
   └── (N) VideoClip
+
+-- MES 表 (v2.3.0+, 同库):
+WorkOrder (1)
+  ├── (N) Batch
+  ├── (N) Workpiece
+  │       └── (N) WorkpieceInspection → DetectionCycle
+  │       └── (N) DefectRecord → DefectCode
+  └── 关联: DetectionSession.order_id, DetectionCycle.order_id
 ```
 
 外键关系:
@@ -38,6 +46,9 @@ DetectionSession (1)
 - StepRecord.cycle_id → DetectionCycle.id
 - VideoClip.session_id → DetectionSession.id
 - VideoClip.cycle_id → DetectionCycle.id (可选)
+- DetectionSession.order_id → WorkOrder.id (v2.3.0+, 可NULL)
+- DetectionCycle.order_id → WorkOrder.id (v2.3.0+, 可NULL)
+- WorkpieceInspection.cycle_id → DetectionCycle.id (v2.3.0+)
 
 ## 常见数据问题及诊断SQL
 

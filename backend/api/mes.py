@@ -54,6 +54,22 @@ class OrderUpdate(BaseModel):
     remark: Optional[str] = None
     extra_data: Optional[dict] = None
 
+class ExternalOrderPush(BaseModel):
+    """客户 MES 推送工单 (外部接收)"""
+    order_no: str
+    product_name: Optional[str] = None
+    product_code: Optional[str] = None
+    product_spec: Optional[str] = None
+    planned_qty: Optional[int] = None
+    priority: Optional[int] = 3
+    status: Optional[str] = "pending"
+    planned_start: Optional[datetime] = None
+    planned_end: Optional[datetime] = None
+    external_id: Optional[str] = None
+    customer_name: Optional[str] = None
+    remark: Optional[str] = None
+    extra_data: Optional[dict] = None
+
 class StatusChange(BaseModel):
     status: str
     reason: Optional[str] = None
@@ -219,6 +235,43 @@ def create_order(body: OrderCreate):
         db.close()
 
 
+@router.post("/orders/receive")
+def receive_external_order(body: ExternalOrderPush):
+    """接收客户 MES 推送的工单 (upsert: 按 order_no 新建或更新)"""
+    db = SessionLocal()
+    try:
+        existing = _wo_svc.get_order_by_no(db, body.order_no)
+        payload = {k: v for k, v in body.model_dump().items() if v is not None}
+        payload["source"] = "external"
+
+        if existing:
+            payload.pop("order_no", None)
+            if body.extra_data:
+                merged = dict(existing.extra_data or {})
+                merged.update(body.extra_data)
+                payload["extra_data"] = merged
+            order = _wo_svc.update_order(db, existing.id, payload)
+            if body.external_id:
+                order.external_id = body.external_id
+            action = "updated"
+        else:
+            if not payload.get("product_name"):
+                payload["product_name"] = body.order_no
+            order = _wo_svc.create_order(db, payload)
+            if body.external_id:
+                order.external_id = body.external_id
+            action = "created"
+
+        db.commit()
+        db.refresh(order)
+        return {"success": True, "action": action, "order": _serialize_order(order)}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+    finally:
+        db.close()
+
+
 @router.get("/orders/{order_id}")
 def get_order(order_id: int):
     db = SessionLocal()
@@ -285,6 +338,28 @@ def get_order_summary(order_id: int):
     db = SessionLocal()
     try:
         return _wo_svc.get_order_summary(db, order_id)
+    finally:
+        db.close()
+
+
+@router.put("/orders/{order_id}/extra-data")
+def update_order_extra_data(order_id: int, body: dict):
+    """单独更新工单的 extra_data (合并模式，不覆盖已有字段)"""
+    db = SessionLocal()
+    try:
+        order = _wo_svc.get_order(db, order_id)
+        if not order:
+            raise HTTPException(404, "工单不存在")
+        merged = dict(order.extra_data or {})
+        merged.update(body)
+        order.extra_data = merged
+        db.flush()
+        db.commit()
+        db.refresh(order)
+        return _serialize_order(order)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
     finally:
         db.close()
 

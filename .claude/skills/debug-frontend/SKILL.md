@@ -23,6 +23,8 @@ frontend/src/
 ├── api/                             -- Axios API 封装层
 │   ├── index.js                     -- Axios实例，baseURL=localhost:8001
 │   ├── camera.js, data.js, detection.js, model.js, project.js, report.js, task.js
+│   ├── mes.js                       -- MES API (工单/工件/缺陷, 22端点)
+│   └── scanner.js                   -- 扫码器 API (8端点)
 ├── store/                           -- Pinia 状态管理
 │   ├── useProjectStore.js           -- 当前项目状态
 │   ├── useSourceStore.js            -- 视频源配置（localStorage持久化）
@@ -40,6 +42,12 @@ frontend/src/
 │   ├── Model/index.vue              -- 模型管理
 │   ├── Alarm/index.vue              -- 报警设置
 │   ├── Settings/index.vue           -- 系统设置
+│   ├── MES/                         -- MES 管理 (v2.3.0+)
+│   │   ├── index.vue                -- MES 主页 (Tab容器)
+│   │   ├── OrderPanel.vue           -- 工单管理
+│   │   ├── WorkpiecePanel.vue       -- 工件追溯
+│   │   ├── DefectPanel.vue          -- 缺陷分析 (帕累托图 + 缺陷代码)
+│   │   └── ScannerPanel.vue         -- VS600 扫码器管理
 │   └── Activation/index.vue         -- 许可证激活
 └── utils/
     ├── format.js                    -- 格式化工具（基本未用）
@@ -66,13 +74,14 @@ actions: 各种setter, saveConfig(), loadConfig()
 ### useSystemStore
 ```javascript
 state: { language, theme, isDetecting, currentProjectId,
+         developerMode,   // v2.3.0+ 密码保护开关 (localStorage: tianjun_developer_mode)
          display: { brandName, appName, inspectorName, deviceNumber, 
                     navbar toggles, monitor panel toggles, defaultCounterVisibility, ngDisplayMode },
          detection: { boxColors, lineWidth, fontSize, confidenceDisplay, 
                       ngReasonDisplay, voice, toasts: { systemPresets, customToasts } },
          performance: { frameLimitEnabled, targetFps, useHalf, mediapipe* } }
 ```
-- display/detection/performance 各自 localStorage 持久化
+- display/detection/performance/developerMode 各自 localStorage 持久化
 - `loadDetectionFromProject(config)` 从项目配置合并检测设置
 - `saveDetectionSettings()` 写回项目DB + localStorage
 
@@ -121,7 +130,11 @@ pollTimer = setInterval(() => {
   "tracking_data": {...},   // 追踪模式数据
   "video_info": {...},      // 视频文件进度
   "fps": 30,
-  "latency_ms": 15
+  "latency_ms": 15,
+  "mes": {                  // v2.3.0+ MES 实时信息
+    "current_workpiece": { "serial": "...", "status": "..." },
+    "active_order": { "order_no": "...", "progress": 0.85, "yield_rate": 0.97 }
+  }
 }
 ```
 

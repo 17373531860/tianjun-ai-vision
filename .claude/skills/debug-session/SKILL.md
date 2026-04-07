@@ -21,11 +21,15 @@ DetectionSession (一次开机运行)
   ├── start_time, end_time, status (running/completed/interrupted)
   ├── total_cycles, good_cycles, ng_cycles
   ├── counters_snapshot (JSON, 结束时保存)
+  ├── operator_id (外键 → Operator, 可为NULL；与当前操作员/设置页管理一致)
+  ├── order_id (v2.3.0+, 关联MES工单, 可为NULL)
   │
   ├── DetectionCycle[] (一个产品周期)
   │   ├── id, session_id, cycle_number
   │   ├── start_time, end_time, duration_seconds
   │   ├── is_good (bool), ng_reason
+  │   ├── operator_id (外键 → Operator, 可为NULL)
+  │   ├── order_id (v2.3.0+, 关联MES工单, 可为NULL)
   │   ├── completed_steps, total_steps
   │   ├── result_summary (JSON)
   │   │
@@ -48,10 +52,10 @@ DetectionSession (一次开机运行)
 ### 写入端 (backend/api/source.py - VideoSourceManager)
 ```
 start_detection()
-  → start_session()    [INSERT DetectionSession, status='running']
+  → start_session()    [INSERT DetectionSession, status='running'；写入 operator_id（当前操作员）]
   
 检测到第一个步骤
-  → start_cycle()      [INSERT DetectionCycle]
+  → start_cycle()      [INSERT DetectionCycle；写入 operator_id]
   → record_step()      [INSERT StepRecord] (每个步骤完成时)
   
 周期结束
@@ -116,13 +120,35 @@ start_detection()
 3. **检查DB数据：** 项目用 SQLite，DB文件在 `DATA_DIR` 下
 4. **追踪前端调用：** `frontend/src/api/data.js` 和 `frontend/src/views/Data/index.vue`
 
+## MES 关联 (v2.3.0+)
+
+Session 和 Cycle 的 `order_id` 字段由 `MESHookManager` 在 `on_session_start` / `on_cycle_start` 时写入。
+如果 MES 有活跃工单，cycle 结束时会自动创建 `WorkpieceInspection` 和 `DefectRecord`（NG时）。
+MES 数据使用独立 DB session，不影响检测数据链路。
+
+**MES 相关诊断:** 如果 `order_id` 为 NULL 但有活跃工单 → 检查 `mes_hooks.py` 是否正常启动。
+
+## 操作员溯源
+
+- **模型：** `Operator` 表（`backend/models/models.py`）；`DetectionSession`、`DetectionCycle` 通过 `operator_id` 关联。
+- **写入：** `source.py` 在 `start_session`、`start_cycle` 时写入当前操作员 ID（来自 `POST /operators/set-current` 所设状态）；若未选择操作员则可能为 NULL。
+- **读取与筛选：** `sessions.py` 列表/按日期/周期接口支持 `operator_id` 过滤；响应中含 `operator_id`、`operator_name`（或项目内字段名），供 Data 页筛选与列展示。
+- **实时展示：** `get_detection_results` 返回操作员信息；Monitor 选择器与 Navbar 显示需与 `operators/current` 一致。
+- **外部 MES：** `mes_gateway.py` 的 `build_context_from_cycle` 在上下文中包含 `operator.*`，推送缺字段时检查周期是否带 `operator_id`、Operator 是否被软删除或停用。
+- **诊断步骤：** 核对 `operators/current` → 新开 session/cycle 的 DB 记录 → Data 筛选与导出是否同一 `operator_id`；NULL 时区分「未选择操作员」与「历史数据无此字段」。
+
 ## 关键依赖
 - `backend/api/source.py` — 数据写入（VideoSourceManager）
 - `backend/api/sessions.py` — 数据读取和导出
 - `backend/models/models.py` — ORM模型定义
+- `backend/models/mes_models.py` — MES 数据模型 (v2.3.0+)
+- `backend/services/mes_hooks.py` — MES Hook（写入 order_id, 创建检验记录）(v2.3.0+)
 - `backend/core/config.py` — DATA_DIR, UPLOAD_DIR 路径
-- `frontend/src/api/data.js` — 前端API封装（20+函数）
-- `frontend/src/views/Data/index.vue` — 数据展示页面
+- `frontend/src/api/data.js` — 前端API封装（含按 `operatorId` 拉取会话列表等）
+- `frontend/src/api/operators.js` — 操作员 CRUD 与当前操作员
+- `backend/api/operators.py` — 操作员 API
+- `backend/services/mes_gateway.py` — 周期上下文中的 `operator.*`（外部推送）
+- `frontend/src/views/Data/index.vue` — 数据展示页面（含 MES 工单筛选、操作员筛选与列）
 
 ## 已知陷阱
 - `get_ffmpeg_path()` 在 source.py 和 sessions.py 各有一份（重复代码）

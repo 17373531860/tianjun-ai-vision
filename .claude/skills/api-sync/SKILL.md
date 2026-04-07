@@ -140,6 +140,71 @@ vite.config.js:     server.port = 6001                // 实际端口
 | `GET /reports/daily-stats` | reports_router `/daily-stats` | OK |
 | `GET /reports/export` | reports_router `/export` | OK |
 
+### MES 模块 (/api/v1/mes) — v2.3.0+
+| 前端调用 (mes.js) | 后端端点 (mes.py) | 状态 |
+|-------------------|-------------------|------|
+| `GET /mes/orders` | mes_router `/orders` | OK |
+| `POST /mes/orders` | mes_router `/orders` | OK |
+| `GET /mes/orders/{id}` | mes_router `/orders/{id}` | OK |
+| `PUT /mes/orders/{id}` | mes_router `/orders/{id}` | OK |
+| `POST /mes/orders/{id}/status` | mes_router `/orders/{id}/status` | OK |
+| `DELETE /mes/orders/{id}` | mes_router `/orders/{id}` | OK |
+| `GET /mes/orders/{id}/summary` | mes_router `/orders/{id}/summary` | OK |
+| `POST /mes/orders/{id}/batches` | mes_router `/orders/{id}/batches` | OK |
+| `GET /mes/orders/{id}/batches` | mes_router `/orders/{id}/batches` | OK |
+| `GET /mes/workpieces` | mes_router `/workpieces` | OK |
+| `POST /mes/workpieces` | mes_router `/workpieces` | OK |
+| `GET /mes/workpieces/{id}` | mes_router `/workpieces/{id}` | OK |
+| `GET /mes/workpieces/{id}/trace` | mes_router `/workpieces/{id}/trace` | OK |
+| `POST /mes/workpieces/{id}/action` | mes_router `/workpieces/{id}/action` | OK |
+| `GET /mes/workpieces/search/{kw}` | mes_router `/workpieces/search/{kw}` | OK |
+| `GET /mes/defects` | mes_router `/defects` | OK |
+| `POST /mes/defects` | mes_router `/defects` | OK |
+| `GET /mes/defects/pareto` | mes_router `/defects/pareto` | OK |
+| `GET /mes/defect-codes` | mes_router `/defect-codes` | OK |
+| `POST /mes/defect-codes` | mes_router `/defect-codes` | OK |
+| `PUT /mes/defect-codes/{id}` | mes_router `/defect-codes/{id}` | OK |
+| `DELETE /mes/defect-codes/{id}` | mes_router `/defect-codes/{id}` | OK |
+
+### Scanner 模块 (/api/v1/scanner) — v2.3.0+
+| 前端调用 (scanner.js) | 后端端点 (scanner.py) | 状态 |
+|-----------------------|-----------------------|------|
+| `GET /scanner/devices` | scanner_router `/devices` | OK |
+| `POST /scanner/devices` | scanner_router `/devices` | OK |
+| `PUT /scanner/devices/{id}` | scanner_router `/devices/{id}` | OK |
+| `DELETE /scanner/devices/{id}` | scanner_router `/devices/{id}` | OK |
+| `POST /scanner/devices/test` | scanner_router `/devices/test` | OK |
+| `GET /scanner/status` | scanner_router `/status` | OK |
+| `GET /scanner/latest/{ch}` | scanner_router `/latest/{ch}` | OK |
+| `GET /scanner/logs` | scanner_router `/logs` | OK |
+
+### MES Gateway 模块 (/api/v1/mes/gateway) — 外部 MES 适配器
+| 前端调用 (gateway.js) | 后端端点 (mes_gateway.py) | 状态 |
+|------------------------|---------------------------|------|
+| `GET /mes/gateway/connections` | `/mes/gateway/connections` | 对齐检查 |
+| `POST /mes/gateway/connections` | `/mes/gateway/connections` | 对齐检查 |
+| `GET /mes/gateway/connections/{id}` | `/mes/gateway/connections/{id}` | 对齐检查 |
+| `PUT /mes/gateway/connections/{id}` | `/mes/gateway/connections/{id}` | 对齐检查 |
+| `DELETE /mes/gateway/connections/{id}` | `/mes/gateway/connections/{id}` | 对齐检查 |
+| `POST /mes/gateway/connections/{id}/test` | `/mes/gateway/connections/{id}/test` | 对齐检查 |
+| `POST /mes/gateway/connections/{id}/push` | `/mes/gateway/connections/{id}/push` | 对齐检查 |
+| `POST /mes/gateway/extra-fields` | `/mes/gateway/extra-fields` | 对齐检查 |
+| `GET /mes/gateway/extra-fields` | `/mes/gateway/extra-fields` | 对齐检查 |
+| `GET /mes/gateway/extra-fields-schema` | `/mes/gateway/extra-fields-schema` | 对齐检查 |
+| `GET /mes/gateway/logs` | `/mes/gateway/logs` | 对齐检查 |
+
+### Operators 模块 (/api/v1/operators) — 操作员管理
+| 前端调用 (operators.js) | 后端端点 (operators.py) | 状态 |
+|-------------------------|-------------------------|------|
+| `GET /operators` | operators_router `/operators` | 对齐检查 |
+| `POST /operators` | operators_router `/operators` | 对齐检查 |
+| `PUT /operators/{id}` | operators_router `/operators/{id}` | 对齐检查 |
+| `DELETE /operators/{id}` | operators_router `/operators/{id}` | 对齐检查 |
+| `POST /operators/set-current` | operators_router `/operators/set-current` | 对齐检查 |
+| `GET /operators/current` | operators_router `/operators/current` | 对齐检查 |
+
+**与 Session/Data 同步：** `sessions.py` 的 `SessionResponse` / `CycleResponse` 含 `operator_id`、`operator_name`；`GET /sessions`、`GET /sessions/by-date/{date}`、`GET /sessions/{id}/cycles` 等支持查询参数 `operator_id`（或项目内等价命名）。前端 `data.js` 的 `getSessionsByDate` 等需传递 `operatorId` 与后端一致。`source.py` 的 `get_detection_results` 返回体中的操作员字段需与 Monitor 展示对齐。
+
 ## 对齐检查流程
 
 ### 快速检查（针对特定API）

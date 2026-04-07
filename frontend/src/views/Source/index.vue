@@ -3,7 +3,7 @@
     <h2 class="text-2xl font-bold mb-6 border-l-4 border-tech-blue pl-3 text-white">输入源设置</h2>
 
     <!-- ===== Workstation Mode Selector ===== -->
-    <el-card shadow="never" class="bg-slate-800 border-slate-700 mb-6">
+    <el-card v-if="systemStore.developerMode" shadow="never" class="bg-slate-800 border-slate-700 mb-6">
       <template #header>
         <div class="flex items-center gap-2">
           <el-icon class="text-tech-blue"><Monitor /></el-icon>

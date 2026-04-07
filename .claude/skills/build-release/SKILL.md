@@ -99,11 +99,25 @@ cd electron && npm install && npm run build:win
 
 ### Python 依赖冲突
 - **OpenCV:** mediapipe 依赖 opencv-python，但我们用 opencv-contrib-python
-  - 解决: 先删 opencv-python，再装 opencv-contrib-python <4.12，mediapipe 用 --no-deps
+  - 解决: 先删 opencv-python，再装 opencv-contrib-python <4.11，mediapipe 用 --no-deps
 - **numpy:** opencv 4.13+ 要求 numpy>=2，与 mediapipe 冲突
-  - 解决: 锁定 opencv-contrib-python <4.12
+  - 解决: 锁定 opencv-contrib-python <4.11
 - **protobuf:** mediapipe 需要 protobuf<5
   - 解决: pip install protobuf<5
+
+### conda numpy ABI 陷阱 (重要!)
+- **症状:** 客户端 `cv2.putText`/`cv2.resize` 报 `img is not a numpy array`
+- **根因:** conda 环境的 numpy 是 MKL 编译的，pip 的 opencv 是 OpenBLAS 编译的，C 层 ABI 不兼容
+- **CI 必须:** `pip install --force-reinstall "numpy>=1.24.0,<2.0"`，不加 `--force-reinstall` pip 会跳过同版本
+- **客户端修复:** 必须物理删除 `site-packages/numpy/` + `numpy.libs/` 目录后重装，单纯 pip uninstall/install 不够
+- **安装顺序:** 先装 numpy（pip），再装 opencv（pip），确保同源
+
+### batch 脚本编码规范
+- **Windows .bat 文件中不能包含任何非 ASCII 字符**（中文、框线字符 ─ 等都不行）
+- `chcp 65001` 只改控制台输出编码，不改 cmd.exe 解析文件的编码
+- UTF-8 中文字节被 GBK 拆解后，含 `)` `|` `"` 等字符会破坏批处理语法
+- 非 ASCII 输出只能放在 `powershell -Command "..."` 块内
+- CI 生成的 merge_installer.bat、客户端补丁脚本都必须遵守此规范
 
 ### Nuitka 编译失败
 - 确认 Nuitka 版本兼容 Python 3.10
@@ -122,31 +136,72 @@ cd electron && npm install && npm run build:win
 
 ## GitHub Secrets 清单
 
-| Secret | 用途 | 有效期 |
-|--------|------|--------|
-| `RELEASE_TOKEN` | GitHub PAT (repo scope) | 不过期(建议) |
-| `GITEE_TOKEN` | Gitee 个人令牌 | 一年 |
+| Secret | 用途 | 有效期 | 上次更新 |
+|--------|------|--------|----------|
+| `RELEASE_TOKEN` | GitHub Fine-grained PAT → `tianjun-releases` repo (Contents: RW) | 90天 | 2026-04-03 |
+| `GITEE_TOKEN` | Gitee 个人令牌 | 一年 | — |
+
+### RELEASE_TOKEN 过期续期流程
+
+CI 上传 Release 到 `17373531860/tianjun-releases` 时报 HTTP 401 = Token 过期。
+
+1. 登录 GitHub 账号 `17373531860`
+2. 打开 https://github.com/settings/tokens?type=beta (Fine-grained tokens)
+3. 点 **Generate new token**:
+   - Name: `release-upload`
+   - Expiration: 90天
+   - Repository access: **Only select repositories** → `tianjun-releases`
+   - Permissions → Contents: **Read and write**
+4. 复制生成的 token（`github_pat_` 开头）
+5. 设置到 CI:
+   ```bash
+   gh secret set RELEASE_TOKEN --body "<新token>" --repo 17373531860/tianjun-ai-vision
+   ```
+   或者用户给 token → 助手执行上述命令
+
+**注意: Token 值绝不能写入代码/skill/任何 git 追踪的文件。只存放在 GitHub Secrets 中。**
 
 ## Git 认证配置
 
 GitHub 使用 `gh` CLI 管理认证，token 存储在系统 keyring 中。
 
+### Token 过期处理流程
+
+当 `git push` 报错 `Invalid username or token` 或 `refusing to allow an OAuth App` 时：
+
 ```bash
-# 检查认证状态
+# 第1步: 检查认证状态，确认是否过期
 gh auth status
 
-# 如果 token 过期，重新登录（会打开浏览器）
-gh auth login -h github.com -p https -w
+# 第2步: 重新登录（会打开浏览器，在 GitHub Mobile app 确认）
+# 重要: 必须加 -s workflow scope，否则无法推送 .github/workflows/ 下的文件
+gh auth login -h github.com -p https -w -s workflow
+# 输出会给出一个 URL 和一次性验证码
+# → 浏览器打开 https://github.com/login/device
+# → 输入验证码
+# → GitHub Mobile app 弹出确认，点确认
 
-# 确保 git credential helper 使用 gh（登录后必须执行）
+# 第3步: 配置 credential helper（每次 login 后必须执行）
 gh auth setup-git
 
-# 确认 remote URL 是干净的（不含嵌入 token）
+# 第4步: 确认 remote URL 是干净的（不含嵌入 token）
 git remote -v
 # 正确: https://github.com/17373531860/tianjun-ai-vision.git
 # 错误: https://ghp_xxxxx@github.com/... （旧 token 嵌在 URL 里）
 # 修复: git remote set-url origin https://github.com/17373531860/tianjun-ai-vision.git
+
+# 第5步: 验证推送
+git push origin main
 ```
+
+### 常见报错对照
+
+| 报错信息 | 原因 | 解决 |
+|----------|------|------|
+| `Invalid username or token` | token 过期 | 重新 `gh auth login` |
+| `refusing to allow an OAuth App to create or update workflow` | token 缺少 `workflow` scope | 重新 `gh auth login -s workflow` |
+| `remote: Repository not found` | repo 是 private 且 token 无权限 | 检查 `gh auth status` 里的 scopes |
+| `fatal: 鉴权失败` | remote URL 嵌了旧 token | `git remote set-url origin` 清理 |
 
 ## 发版检查清单
 
