@@ -1,7 +1,7 @@
 <template>
   <div>
     <!-- 搜索栏 -->
-    <div class="flex items-center gap-3 mb-4">
+    <div class="flex items-center gap-3 mb-4 flex-wrap">
       <el-input v-model="keyword" placeholder="搜索序列号/条码..." size="small" class="w-52" clearable @clear="loadList" @keyup.enter="loadList" />
       <el-select v-model="filterStatus" placeholder="状态" size="small" class="w-28" clearable @change="loadList">
         <el-option label="已登记" value="registered" />
@@ -12,6 +12,18 @@
         <el-option label="返工中" value="rework" />
         <el-option label="已报废" value="scrapped" />
       </el-select>
+      <el-date-picker
+        v-model="dateRange"
+        type="daterange"
+        range-separator="至"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
+        size="small"
+        class="!w-64"
+        value-format="YYYY-MM-DD"
+        @change="loadList"
+        clearable
+      />
       <el-button size="small" type="primary" @click="loadList">查询</el-button>
     </div>
 
@@ -109,6 +121,7 @@ const currentPage = ref(1)
 const pageSize = ref(50)
 const keyword = ref('')
 const filterStatus = ref('')
+const dateRange = ref(null)
 const traceData = ref(null)
 
 const wpStatusLabel = (s) => ({ registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良', rework: '返工中', scrapped: '已报废' }[s] || s)
@@ -117,12 +130,17 @@ const formatTime = (t) => t ? t.replace('T', ' ').substring(0, 19) : '-'
 
 const loadList = async () => {
   try {
-    const res = await getWorkpieces({
+    const params = {
       keyword: keyword.value || undefined,
       status: filterStatus.value || undefined,
       skip: (currentPage.value - 1) * pageSize.value,
       limit: pageSize.value,
-    })
+    }
+    if (dateRange.value && dateRange.value.length === 2) {
+      params.date_from = dateRange.value[0]
+      params.date_to = dateRange.value[1] + ' 23:59:59'
+    }
+    const res = await getWorkpieces(params)
     items.value = res.data.items || []
     total.value = res.data.total || 0
   } catch (e) {

@@ -318,7 +318,7 @@
           </el-card>
 
           <!-- 系统预设提示框设置 -->
-          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+          <el-card v-if="store.detection.toasts?.ok" shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
               <div class="flex items-center gap-2">
                 <el-icon class="text-status-ok"><Bell /></el-icon>
@@ -396,6 +396,86 @@
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">副文字（可选）</div>
                   <el-input v-model="store.detection.toasts.ng.subText" placeholder="" @change="saveDetectionSettings" />
+                </div>
+              </div>
+            </div>
+            
+            <!-- 扫码提示框 -->
+            <div>
+              <div class="flex items-center gap-3 mb-3">
+                <span class="text-cyan-400 font-bold">扫码提示框</span>
+                <el-switch v-model="store.detection.toasts.scan.enabled" @change="saveDetectionSettings" active-text="启用" />
+              </div>
+              <div v-if="store.detection.toasts.scan?.enabled" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="text-gray-300 mb-2">颜色</div>
+                  <el-color-picker v-model="store.detection.toasts.scan.color" @change="saveDetectionSettings" />
+                </div>
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="text-gray-300 mb-2">显示时长 (秒)</div>
+                  <el-slider v-model="store.detection.toasts.scan.duration" :min="1" :max="10" :step="0.5" @change="saveDetectionSettings" />
+                </div>
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="text-gray-300 mb-2">字体大小</div>
+                  <el-slider v-model="store.detection.toasts.scan.fontSize" :min="12" :max="36" :step="1" @change="saveDetectionSettings" />
+                </div>
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="text-gray-300 mb-2">位置</div>
+                  <el-select v-model="store.detection.toasts.scan.position" class="w-full" @change="saveDetectionSettings">
+                    <el-option label="右上角" value="top-right" />
+                    <el-option label="左上角" value="top-left" />
+                    <el-option label="右下角" value="bottom-right" />
+                    <el-option label="左下角" value="bottom-left" />
+                    <el-option label="视频顶部居中" value="center" />
+                  </el-select>
+                </div>
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="text-gray-300 mb-2">主文字</div>
+                  <el-input v-model="store.detection.toasts.scan.text" placeholder="扫码成功" @change="saveDetectionSettings" />
+                </div>
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="text-gray-300 mb-2">副文字（可选，留空则显示条码）</div>
+                  <el-input v-model="store.detection.toasts.scan.subText" placeholder="" @change="saveDetectionSettings" />
+                </div>
+              </div>
+            </div>
+
+            <!-- 未绑码提示框 -->
+            <div>
+              <div class="flex items-center gap-3 mb-3">
+                <span class="text-cyan-400 font-bold">未绑码提示框</span>
+                <el-switch v-model="store.detection.toasts.warn_no_barcode.enabled" @change="saveDetectionSettings" active-text="启用" />
+              </div>
+              <div v-if="store.detection.toasts.warn_no_barcode?.enabled" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="text-gray-300 mb-2">颜色</div>
+                  <el-color-picker v-model="store.detection.toasts.warn_no_barcode.color" @change="saveDetectionSettings" />
+                </div>
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="text-gray-300 mb-2">显示时长 (秒)</div>
+                  <el-slider v-model="store.detection.toasts.warn_no_barcode.duration" :min="1" :max="15" :step="0.5" @change="saveDetectionSettings" />
+                </div>
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="text-gray-300 mb-2">字体大小</div>
+                  <el-slider v-model="store.detection.toasts.warn_no_barcode.fontSize" :min="12" :max="36" :step="1" @change="saveDetectionSettings" />
+                </div>
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="text-gray-300 mb-2">位置</div>
+                  <el-select v-model="store.detection.toasts.warn_no_barcode.position" class="w-full" @change="saveDetectionSettings">
+                    <el-option label="右上角" value="top-right" />
+                    <el-option label="左上角" value="top-left" />
+                    <el-option label="右下角" value="bottom-right" />
+                    <el-option label="左下角" value="bottom-left" />
+                    <el-option label="居中" value="center" />
+                  </el-select>
+                </div>
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="text-gray-300 mb-2">主文字</div>
+                  <el-input v-model="store.detection.toasts.warn_no_barcode.text" placeholder="⚠ 未绑码" @change="saveDetectionSettings" />
+                </div>
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="text-gray-300 mb-2">副文字</div>
+                  <el-input v-model="store.detection.toasts.warn_no_barcode.subText" placeholder="本次结算未绑定工件条码" @change="saveDetectionSettings" />
                 </div>
               </div>
             </div>

@@ -521,7 +521,7 @@
       </div>
 
       <!-- MES 信息条 -->
-      <div v-if="mesData?.workpiece || mesData?.order" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
+      <div v-if="mesData?.workpiece || mesData?.order || mesData?.warn_no_barcode" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
         <div v-if="mesData.workpiece" class="flex items-center gap-2">
           <span class="text-cyan-400 font-bold">工件:</span>
           <span class="font-mono text-white">{{ mesData.workpiece.serial_no }}</span>
@@ -538,7 +538,11 @@
             良率 {{ mesData.order.yield_rate ?? '-' }}%
           </span>
         </div>
-        <div v-if="!mesData.workpiece && !mesData.order" class="text-gray-500 text-xs">等待扫码...</div>
+        <div v-if="mesData.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-2 bg-yellow-600/30 border border-yellow-500 rounded px-3 py-1">
+          <span class="text-yellow-300 font-bold text-base">⚠ 未绑码</span>
+          <span class="text-yellow-200 text-sm">请扫描工件条码</span>
+        </div>
+        <div v-else-if="!mesData.workpiece && !mesData.order" class="text-gray-500 text-xs">等待扫码...</div>
         <!-- 额外字段输入 (外部 MES 动态字段) -->
         <div v-if="extraFieldsSchema.length" class="flex items-center gap-2 ml-auto border-l border-cyan-800/50 pl-4">
           <div v-for="f in extraFieldsSchema" :key="f.key" class="flex items-center gap-1">
@@ -704,7 +708,7 @@ import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useSourceStore } from '@/store/useSourceStore';
 import { Check, Folder, Picture, CircleCheck, CircleClose, Warning } from '@element-plus/icons-vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations } from '@/api/detection';
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import api, { getBackendHost } from '@/api/index';
@@ -955,7 +959,15 @@ const processChannelResult = (ch, d) => {
   if (d.tracking) chData.tracking = d.tracking;
 
   // MES 实时数据
-  if (d.mes) chData.mes = d.mes;
+  if (d.mes) {
+    chData.mes = d.mes;
+    if (d.mes.scan_event && ch === selectedChannel.value) {
+      handleScanToast(d.mes.scan_event);
+    }
+    if (d.mes.rebind_prompt && ch === selectedChannel.value) {
+      handleRebindPrompt(d.mes.rebind_prompt);
+    }
+  }
 
   const total = chData.total || 0;
   const ok = chData.ok || 0;
@@ -1225,10 +1237,11 @@ const onStreamReady = (idx) => {
 };
 
 const onStreamError = (idx) => {
-  if (idx !== activeStream.value) return; // ignore errors on background img
+  if (idx !== activeStream.value) return;
   streamErrorCount++;
-  if (streamErrorCount > 10) return;
-  setTimeout(() => connectStream(), 500 * Math.min(streamErrorCount, 5));
+  if (streamErrorCount > 50) return;
+  const delay = Math.min(streamErrorCount * 300, 3000);
+  setTimeout(() => connectStream(), delay);
 };
 
 // 当前项目
@@ -1394,6 +1407,8 @@ const getToastConfig = (toastId) => {
   // 系统预设提示框
   if (toastId === 'ok') return systemStore.detection.toasts.ok;
   if (toastId === 'ng') return systemStore.detection.toasts.ng;
+  if (toastId === 'scan') return systemStore.detection.toasts.scan;
+  if (toastId === 'warn_no_barcode') return systemStore.detection.toasts.warn_no_barcode;
   
   // 自定义提示框
   const customToast = systemStore.detection.customToasts.find(t => t.id === toastId);
@@ -2318,6 +2333,16 @@ const startPolling = () => {
         }
       }
       
+      // MES 实时数据存入 multiChannelData（单通道模式）
+      if (data.mes) {
+        if (!multiChannelData.value[0]) multiChannelData.value[0] = {};
+        multiChannelData.value[0].mes = data.mes;
+        if (data.mes.scan_event) handleScanToast(data.mes.scan_event);
+        if (data.mes.rebind_prompt) handleRebindPrompt(data.mes.rebind_prompt);
+      } else {
+        if (multiChannelData.value[0]) multiChannelData.value[0].mes = null;
+      }
+      
       if (isVideoSource.value && !isDraggingProgress.value) {
         try {
           const videoRes = await api.get('/source/video/info');
@@ -2341,6 +2366,10 @@ const startPolling = () => {
           // 静默处理
         }
       }
+      // 流断线自动恢复：后端在跑但前端没有流 URL
+      if (isRunning.value && !streamSrc0.value && !streamSrc1.value) {
+        connectStream();
+      }
     } catch (err) {
       // 静默处理轮询错误
     } finally {
@@ -2351,6 +2380,39 @@ const startPolling = () => {
 
 // 已显示的事件ID（避免重复显示提示框）
 const shownEventIds = ref(new Set());
+
+// 扫码提示去重
+let lastScanToastTs = 0;
+const handleScanToast = (scanEvent) => {
+  const scanConfig = systemStore.detection.toasts?.scan;
+  if (!scanConfig?.enabled) return;
+  if (scanEvent.timestamp <= lastScanToastTs) return;
+  lastScanToastTs = scanEvent.timestamp;
+  showToastById('scan', scanConfig.text || '扫码成功', scanEvent.serial_no);
+};
+
+// rebind 弹窗去重
+let rebindPromptShowing = false;
+const handleRebindPrompt = async (rebindData) => {
+  if (rebindPromptShowing) return;
+  rebindPromptShowing = true;
+  try {
+    await ElMessageBox.confirm(
+      `工件 #${rebindData.workpiece_id} 检测 NG，是否继续检测当前工件？`,
+      '误检重绑',
+      {
+        confirmButtonText: '继续当前工件',
+        cancelButtonText: '扫新工件',
+        type: 'warning',
+      }
+    );
+    await api.post('/source/detection/rebind', null, { params: { action: 'continue', channel: selectedChannel.value } });
+  } catch {
+    await api.post('/source/detection/rebind', null, { params: { action: 'new', channel: selectedChannel.value } });
+  } finally {
+    rebindPromptShowing = false;
+  }
+};
 
 // 缓存上一次截图 base64，避免重复创建 data URL
 const cachedScreenshotUrls = {};
@@ -2538,6 +2600,13 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
         shownEventIds.value.add(eventKey);
         const toastId = event.toast_id || (event.event_id === 1 ? 'ok' : event.event_id === 2 ? 'ng' : 'ok');
         showToastById(toastId, event.event_name, event.reason);
+        
+        const warnCfg = systemStore.detection.toasts?.warn_no_barcode;
+        if (warnCfg?.enabled && mesData.value?.warn_no_barcode) {
+          setTimeout(() => {
+            showToastById('warn_no_barcode', warnCfg.text || '⚠ 未绑码', warnCfg.subText || '本次结算未绑定工件条码');
+          }, 300);
+        }
       }
     });
     
@@ -2931,5 +3000,13 @@ defineExpose({ triggerEvent, showToast });
 
 .video-sync-switch :deep(.el-switch__label.is-active) {
   color: #06b6d4;
+}
+
+@keyframes warn-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.warn-no-barcode-blink {
+  animation: warn-blink 1s ease-in-out infinite;
 }
 </style>

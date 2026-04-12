@@ -261,6 +261,11 @@ class ScannerDevice(Base):
     dedup_interval_sec = Column(Integer, default=2)
     auto_create_workpiece = Column(Boolean, default=True)
     auto_link_order = Column(Boolean, default=True)
+    scan_required = Column(Boolean, default=False)
+    duplicate_scan_action = Column(String(20), default="overwrite")
+    warn_no_barcode = Column(Boolean, default=False)
+    rebind_mode = Column(String(20), default="rescan")
+    bind_timing = Column(String(20), default="mid_cycle")
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

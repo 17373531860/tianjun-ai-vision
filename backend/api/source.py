@@ -1087,6 +1087,11 @@ class VideoSourceManager:
         if not self.current_session_id or not self.recording_enabled:
             return
         
+        if self._mes_hook and self._mes_hook.is_scan_required(self.channel_id):
+            if not self._mes_hook.has_pending_workpiece(self.channel_id):
+                print(f"[扫码绑定] 工位{self.channel_id} 要求先扫码，当前无待检工件，跳过开周期")
+                return
+        
         if self._session_start_date and datetime.now().date() != self._session_start_date:
             self._auto_split_session(reason="日期变更")
             if not self.current_session_id:
@@ -2491,14 +2496,38 @@ class VideoSourceManager:
         elif custom_based_on == 'detection':
             detection_step_ids = pipeline_config.get('custom_detection_steps', [])
             if detection_step_ids:
-                detection_labels = [id_to_label.get(sid) for sid in detection_step_ids if sid in id_to_label]
+                detection_labels = [id_to_label.get(sid) for sid in detection_step_ids
+                                    if sid in id_to_label and sid in enabled_step_ids]
             else:
                 detection_labels = enabled_step_labels
             
+            self.current_cycle_steps = self._inject_backup_steps(
+                self.current_cycle_steps, detection_labels)
+            
             self._reconcile_step_records()
-            if detection_labels and all(label in self.current_cycle_steps for label in detection_labels):
-                print(f"  → 检测完成 → OK")
+            
+            present = set(self.current_cycle_steps)
+            missing = [l for l in detection_labels if l not in present]
+            
+            from collections import Counter
+            step_counts = Counter(self.current_cycle_steps)
+            duplicated = [s for s, cnt in step_counts.items() if cnt > 1]
+            
+            ng_reasons = []
+            if missing:
+                ng_reasons.append(f'缺少步骤: {missing}')
+            if duplicated:
+                ng_reasons.append(f'重复步骤: {duplicated}')
+            
+            print(f"  自定义(基于检测)结算: 需要={detection_labels}, 本周期={self.current_cycle_steps}, 缺少={missing}, 重复={duplicated}")
+            
+            if not ng_reasons:
+                print(f"  → 全部检测到，无重复 → OK")
                 self._trigger_event(1, '检测完成')
+            else:
+                reason = '；'.join(ng_reasons)
+                print(f"  → {reason} → NG")
+                self._trigger_event(2, reason)
         
         # 重置周期
         self.current_cycle_steps = []
@@ -2519,6 +2548,7 @@ class VideoSourceManager:
         - 第一步和最后一步固定，中间步骤不要求顺序
         - 所有需检测步骤都出现过 → OK (事件1)
         - 缺少步骤 → NG (事件2)，报告缺少的步骤列表
+        - 重复步骤（accept_once=OFF的步骤） → NG (事件2)
         """
         if not self.project_config:
             return
@@ -2527,20 +2557,52 @@ class VideoSourceManager:
         if not detection_labels:
             return
         
+        self._supplement_step_durations()
+        
+        self.current_cycle_steps = self._inject_backup_steps(
+            self.current_cycle_steps, detection_labels)
         self.current_cycle_steps = self._filter_cycle_by_duration(self.current_cycle_steps)
+        
+        if not self.current_cycle_steps:
+            self._discard_empty_cycle()
+            self.current_cycle_steps = []
+            self.backup_steps_seen_in_cycle = set()
+            self.last_added_step = None
+            self._last_step_added_time = None
+            self.step_last_seen.clear()
+            self.step_start_time.clear()
+            self.step_consecutive_frames.clear()
+            self.step_frame_confirmed.clear()
+            self._step_gap_count.clear()
+            if hasattr(self, '_step_raw_start'):
+                self._step_raw_start.clear()
+            self.last_step_completed_time = None
+            return
+        
         self._reconcile_step_records()
         
         present = set(self.current_cycle_steps)
         missing = [l for l in detection_labels if l not in present]
         
-        print(f"检测模式结算: 需要={detection_labels}, 本周期={list(present)}, 缺少={missing}")
+        from collections import Counter
+        step_counts = Counter(self.current_cycle_steps)
+        duplicated = [s for s, cnt in step_counts.items() if cnt > 1]
         
-        if not missing:
-            print(f"  → 全部检测到 → OK")
+        ng_reasons = []
+        if missing:
+            ng_reasons.append(f'缺少步骤: {missing}')
+        if duplicated:
+            ng_reasons.append(f'重复步骤: {duplicated}')
+        
+        print(f"检测模式结算: 需要={detection_labels}, 本周期={self.current_cycle_steps}, 缺少={missing}, 重复={duplicated}")
+        
+        if not ng_reasons:
+            print(f"  → 全部检测到，无重复 → OK")
             self._trigger_event(1, '检测完成')
         else:
-            print(f"  → 缺少步骤: {missing} → NG")
-            self._trigger_event(2, f'缺少步骤: {missing}')
+            reason = '；'.join(ng_reasons)
+            print(f"  → {reason} → NG")
+            self._trigger_event(2, reason)
         
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
@@ -2551,6 +2613,8 @@ class VideoSourceManager:
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
         self._step_gap_count.clear()
+        if hasattr(self, '_step_raw_start'):
+            self._step_raw_start.clear()
         self.last_step_completed_time = None
     
     def _settle_sequential_cycle(self):
@@ -2968,10 +3032,11 @@ class VideoSourceManager:
                         self.current_cycle_steps.append(label)
                         self.last_added_step = label
                         self._last_step_added_time = current_time
-                elif label not in self.current_cycle_steps:
-                    self.current_cycle_steps.append(label)
-                    self.last_added_step = label
-                    self._last_step_added_time = current_time
+                else:
+                    if not self.step_accept_once.get(label) or label not in self.current_cycle_steps:
+                        self.current_cycle_steps.append(label)
+                        self.last_added_step = label
+                        self._last_step_added_time = current_time
     
     def _update_step_stats(self, detections: list, original_frame: np.ndarray):
         """更新步骤统计和截图
@@ -3943,7 +4008,7 @@ class VideoSourceManager:
                         'stable_frames': 1, 'order_idx': self._tracking_order_seq
                     }
                 
-                if not self._tracking_cycle_active:
+                if not self._tracking_cycle_active and label in expected_items:
                     self._tracking_cycle_active = True
                     self.cycle_start_time = current_time
                     self.start_cycle()
@@ -4144,6 +4209,8 @@ class VideoSourceManager:
             obj_label = self._tracking_objects[tid].get('class_name', '')
             if self._container_mode and obj_label == self._container_label:
                 continue
+            if obj_label not in expected_items:
+                continue
             item_sec = per_class_lost_sec.get(obj_label, max_lost_sec)
             item_tolerance_frames = int(item_sec * fps)
             lost_f = self._tracking_lost_frames.get(tid, 0)
@@ -4340,10 +4407,7 @@ class VideoSourceManager:
             elif actual > exp:
                 display = self.step_display_names.get(cls, cls)
                 extra.append(f"{display}: {actual}/{exp}")
-        for cls, cnt in item_counts.items():
-            if cls not in expected_no_container:
-                display = self.step_display_names.get(cls, cls)
-                extra.append(f"{display}: {cnt}/0")
+        # 不在期望清单中的类别不参与判定（允许画框但不影响 OK/NG）
         
         is_ok = not missing and not extra
         
@@ -4541,9 +4605,7 @@ class VideoSourceManager:
                 missing.append(f"{cls_name}: {actual}/{exp}")
             elif actual > exp:
                 extra.append(f"{cls_name}: {actual}/{exp}")
-        for cls_name, cnt in merged_counters.items():
-            if cls_name not in expected_items:
-                extra.append(f"{cls_name}: {cnt}/0")
+        # 不在期望清单中的类别不参与判定（允许画框但不影响 OK/NG）
         
         order_ok = True
         if check_order and expected_order:
@@ -6977,6 +7039,12 @@ class VideoSourceManager:
         
         self.is_detecting = True
         
+        try:
+            from backend.api.alarm import alarm_manager
+            alarm_manager.start_idle_light()
+        except Exception:
+            pass
+        
         if self.source_type == 'image':
             frame = self.get_frame()
             if frame is not None and self.model is not None:
@@ -6998,6 +7066,12 @@ class VideoSourceManager:
     def stop_detection(self):
         """停止检测"""
         self.is_detecting = False
+        
+        try:
+            from backend.api.alarm import alarm_manager
+            alarm_manager.stop_idle_light()
+        except Exception:
+            pass
         
         # 停止推理线程
         self._stop_inference_thread()
@@ -7814,9 +7888,8 @@ class VideoSourceManager:
         frame is available from the capture thread, so CPU is never wasted on
         duplicate JPEG encodes."""
         target_interval = 1.0 / max(self.target_stream_fps, 1)
-        idle_interval = 1.0
         idle_count = 0
-        max_idle = 300
+        max_idle = 600
         last_seq = -1
 
         while True:
@@ -7852,7 +7925,11 @@ class VideoSourceManager:
                 idle_count += 1
                 if idle_count > max_idle:
                     break
-                time.sleep(idle_interval)
+                # 短间隔检查，以便 is_running 变 True 时快速恢复
+                for _ in range(10):
+                    if self.is_running:
+                        break
+                    time.sleep(0.1)
     
     def get_snapshot(self):
         """获取当前帧的单张 JPEG 快照（用于前端 canvas 渲染）"""
@@ -8691,6 +8768,16 @@ def get_detection_results(channel: int = Query(0)):
             order_info = mgr._mes_hook.get_active_order(mgr.channel_id)
             if order_info:
                 mes_data['order'] = order_info
+            if mgr.is_detecting and mgr._mes_hook.is_warn_no_barcode(mgr.channel_id):
+                if not mgr._mes_hook.has_pending_workpiece(mgr.channel_id) \
+                   and mgr.channel_id not in mgr._mes_hook._inspecting_workpiece:
+                    mes_data['warn_no_barcode'] = True
+            scan_evt = mgr._mes_hook.get_last_scan_event(mgr.channel_id)
+            if scan_evt:
+                mes_data['scan_event'] = scan_evt
+            rebind = mgr._mes_hook.get_rebind_prompt(mgr.channel_id)
+            if rebind:
+                mes_data['rebind_prompt'] = rebind
             if mes_data:
                 result['mes'] = mes_data
         except Exception:
@@ -8837,6 +8924,17 @@ def get_health_status(channel: int = Query(0)):
         },
         "gpu": gpu_info
     }
+
+
+@router.post("/detection/rebind")
+def resolve_rebind(action: str = "new", channel: int = 0):
+    """manual rebind 模式：用户选择继续当前工件(continue)或扫新工件(new)"""
+    from backend.api.channel_manager import channel_manager
+    mgr = channel_manager.get(channel)
+    if mgr._mes_hook:
+        mgr._mes_hook.resolve_rebind(mgr.channel_id, action)
+        return {"status": "ok", "action": action}
+    return {"status": "error", "message": "MES 未启用"}
 
 
 def get_video_feed(channel: int = 0):

@@ -104,6 +104,7 @@ class AlarmManager:
         self.config = self._load_config()
         self._alarm_thread: Optional[threading.Thread] = None
         self._alarm_stop_event = threading.Event()
+        self._idle_light_active = False
         
     def _load_config(self) -> dict:
         """加载报警器配置"""
@@ -121,6 +122,10 @@ class AlarmManager:
             'triggers': {
                 'event1': {'name': '合格', 'enabled': True, 'color': 'green', 'effect': 'on', 'buzzer': False, 'duration': 2},
                 'event2': {'name': 'NG', 'enabled': True, 'color': 'red', 'effect': 'fast', 'buzzer': True, 'duration': 5},
+            },
+            'idle_light': {
+                'enabled': True,
+                'color': 'blue',
             },
             'test_mode': False,  # 测试模式：开启后测试按钮才能使用
         }
@@ -309,11 +314,13 @@ class AlarmManager:
                 if use_buzzer:
                     self.buzzer_on()
             
-            # 后台线程等待后关闭
             def delayed_off():
                 import time
                 time.sleep(duration)
                 self._send_command(self._get_command('all_off'))
+                if self._idle_light_active:
+                    time.sleep(0.05)
+                    self.restore_idle_light()
             
             threading.Thread(target=delayed_off, daemon=True).start()
             
@@ -325,7 +332,42 @@ class AlarmManager:
         self._alarm_stop_event.set()
         if self._alarm_thread and self._alarm_thread.is_alive():
             self._alarm_thread.join(timeout=1)
+        if self._idle_light_active:
+            self.restore_idle_light()
+        else:
+            self.all_off()
+
+    def start_idle_light(self):
+        """开始检测时点亮工作指示灯（常亮）"""
+        idle_cfg = self.config.get('idle_light', {})
+        if not idle_cfg.get('enabled'):
+            return
+        if not self.config.get('enabled'):
+            return
+        color = idle_cfg.get('color', 'blue')
+        cmd = self._get_command(f'{color}_on')
+        if cmd:
+            self._send_command(self._get_command('all_off'))
+            time.sleep(0.05)
+            self._send_command(cmd)
+            self._idle_light_active = True
+            print(f"[报警] 工作指示灯已亮: {color}")
+
+    def stop_idle_light(self):
+        """停止检测时关闭工作指示灯"""
+        self._idle_light_active = False
         self.all_off()
+        print("[报警] 工作指示灯已关")
+
+    def restore_idle_light(self):
+        """事件结束后恢复工作指示灯"""
+        if not self._idle_light_active:
+            return
+        idle_cfg = self.config.get('idle_light', {})
+        color = idle_cfg.get('color', 'blue')
+        cmd = self._get_command(f'{color}_on')
+        if cmd:
+            self._send_command(cmd)
 
 
 # 全局报警管理器实例
@@ -343,6 +385,7 @@ class ConfigRequest(BaseModel):
     protocol: str = 'simple_ascii'
     custom_commands: Optional[dict] = None
     triggers: Optional[dict] = None
+    idle_light: Optional[dict] = None
     test_mode: bool = False
 
 class TestRequest(BaseModel):
@@ -400,6 +443,8 @@ async def save_config(req: ConfigRequest):
         alarm_manager.config['custom_commands'] = req.custom_commands
     if req.triggers:
         alarm_manager.config['triggers'] = req.triggers
+    if req.idle_light:
+        alarm_manager.config['idle_light'] = req.idle_light
     
     alarm_manager._save_config()
     return {"success": True, "message": "配置已保存"}
@@ -441,6 +486,20 @@ async def stop_alarm():
     """停止报警"""
     alarm_manager.stop_alarm()
     return {"success": True, "message": "已停止报警"}
+
+
+@router.post("/idle-light/start")
+async def start_idle_light():
+    """手动开启工作指示灯"""
+    alarm_manager.start_idle_light()
+    return {"success": True, "message": "工作指示灯已开启"}
+
+
+@router.post("/idle-light/stop")
+async def stop_idle_light():
+    """手动关闭工作指示灯"""
+    alarm_manager.stop_idle_light()
+    return {"success": True, "message": "工作指示灯已关闭"}
 
 
 @router.get("/protocols")

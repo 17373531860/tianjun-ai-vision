@@ -273,6 +273,12 @@
                 </template>
               </el-table-column>
               <el-table-column prop="cycle_number" label="#" width="50" align="center" />
+              <el-table-column label="工件码" min-width="130">
+                <template #default="{ row }">
+                  <span v-if="row.serial_no" class="font-mono text-cyan-300 text-xs">{{ row.serial_no }}</span>
+                  <span v-else class="text-gray-600 text-xs">-</span>
+                </template>
+              </el-table-column>
               <el-table-column label="开始时间" width="90">
                 <template #default="{ row }">
                   <span class="font-mono">{{ formatTime(row.start_time) }}</span>

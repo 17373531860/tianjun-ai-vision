@@ -25,6 +25,11 @@ class ScannerCreate(BaseModel):
     dedup_interval_sec: int = 2
     auto_create_workpiece: bool = True
     auto_link_order: bool = True
+    scan_required: bool = False
+    duplicate_scan_action: str = "overwrite"
+    warn_no_barcode: bool = False
+    rebind_mode: str = "rescan"
+    bind_timing: str = "mid_cycle"
 
 
 class ScannerUpdate(BaseModel):
@@ -38,6 +43,11 @@ class ScannerUpdate(BaseModel):
     dedup_interval_sec: Optional[int] = None
     auto_create_workpiece: Optional[bool] = None
     auto_link_order: Optional[bool] = None
+    scan_required: Optional[bool] = None
+    duplicate_scan_action: Optional[str] = None
+    warn_no_barcode: Optional[bool] = None
+    rebind_mode: Optional[str] = None
+    bind_timing: Optional[str] = None
 
 
 def _serialize_device(d):
@@ -48,6 +58,11 @@ def _serialize_device(d):
         "dedup_interval_sec": d.dedup_interval_sec,
         "auto_create_workpiece": d.auto_create_workpiece,
         "auto_link_order": d.auto_link_order,
+        "scan_required": getattr(d, 'scan_required', False),
+        "duplicate_scan_action": getattr(d, 'duplicate_scan_action', 'overwrite'),
+        "warn_no_barcode": getattr(d, 'warn_no_barcode', False),
+        "rebind_mode": getattr(d, 'rebind_mode', 'rescan'),
+        "bind_timing": getattr(d, 'bind_timing', 'mid_cycle'),
     }
 
 
@@ -136,6 +151,18 @@ def test_connection(ip: str, port: int = 55256):
     return svc.test_connection(ip, port)
 
 
+@router.post("/trigger")
+def trigger_scan(device_id: Optional[int] = None, ip: Optional[str] = None):
+    """手动触发一次扫码（向 55256 端口发送 LON）"""
+    svc = get_scanner_service()
+    if device_id is not None:
+        return svc.trigger_scan(device_id)
+    elif ip:
+        return svc.trigger_scan_by_ip(ip)
+    else:
+        raise HTTPException(400, "需要提供 device_id 或 ip")
+
+
 @router.get("/status")
 def get_all_status():
     svc = get_scanner_service()
@@ -185,5 +212,21 @@ def list_scan_logs(
             } for s in items],
             "total": total, "skip": skip, "limit": limit,
         }
+    finally:
+        db.close()
+
+
+@router.delete("/logs")
+def clear_scan_logs():
+    """清空所有扫码记录"""
+    db = SessionLocal()
+    try:
+        count = db.query(ScanLog).count()
+        db.query(ScanLog).delete()
+        db.commit()
+        return {"deleted": count}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
     finally:
         db.close()

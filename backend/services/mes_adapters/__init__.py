@@ -6,10 +6,12 @@
 from backend.services.mes_adapters.base import BaseAdapter
 from backend.services.mes_adapters.rest_adapter import RESTAdapter
 from backend.services.mes_adapters.form_data_adapter import FormDataAdapter
+from backend.services.mes_adapters.modbus_adapter import ModbusRTUAdapter
 
 _REGISTRY: dict[str, type[BaseAdapter]] = {
     "rest": RESTAdapter,
     "form-data": FormDataAdapter,
+    "modbus_rtu": ModbusRTUAdapter,
 }
 
 

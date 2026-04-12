@@ -14,10 +14,10 @@
     <!-- 连接列表 -->
     <el-table :data="connections" stripe size="small" class="mes-table" max-height="calc(100vh - 300px)">
       <el-table-column prop="name" label="连接名称" width="140" />
-      <el-table-column prop="adapter_type" label="类型" width="100">
+      <el-table-column prop="adapter_type" label="类型" width="120">
         <template #default="{ row }">
-          <el-tag size="small" :type="row.adapter_type === 'rest' ? '' : 'warning'">
-            {{ row.adapter_type === 'rest' ? 'REST/JSON' : 'Form-Data' }}
+          <el-tag size="small" :type="adapterTagType(row.adapter_type)">
+            {{ adapterLabel(row.adapter_type) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -77,21 +77,140 @@
           <el-radio-group v-model="form.adapter_type">
             <el-radio value="rest">REST / JSON</el-radio>
             <el-radio value="form-data">Form-Data</el-radio>
+            <el-radio value="modbus_rtu">Modbus RTU</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="接口地址">
-          <el-input v-model="configUrl" placeholder="http://192.168.50.12:11211/api/..." />
-        </el-form-item>
-        <el-form-item label="请求方法">
-          <el-select v-model="configMethod" class="w-28">
-            <el-option label="POST" value="POST" />
-            <el-option label="PUT" value="PUT" />
-            <el-option label="GET" value="GET" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="form.adapter_type === 'form-data'" label="表单字段名">
-          <el-input v-model="configFormKey" placeholder="param" class="w-40" />
-        </el-form-item>
+
+        <!-- REST / Form-Data 配置 -->
+        <template v-if="form.adapter_type !== 'modbus_rtu'">
+          <el-form-item label="接口地址">
+            <el-input v-model="configUrl" placeholder="http://192.168.50.12:11211/api/..." />
+          </el-form-item>
+          <el-form-item label="请求方法">
+            <el-select v-model="configMethod" class="w-28">
+              <el-option label="POST" value="POST" />
+              <el-option label="PUT" value="PUT" />
+              <el-option label="GET" value="GET" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="form.adapter_type === 'form-data'" label="表单字段名">
+            <el-input v-model="configFormKey" placeholder="param" class="w-40" />
+          </el-form-item>
+        </template>
+
+        <!-- Modbus 配置 -->
+        <template v-if="form.adapter_type === 'modbus_rtu'">
+          <el-divider content-position="left">连接方式</el-divider>
+          <el-form-item label="传输方式">
+            <el-radio-group v-model="modbusTransport">
+              <el-radio value="rtu">RTU (串口/RS485)</el-radio>
+              <el-radio value="tcp">TCP (网络)</el-radio>
+            </el-radio-group>
+          </el-form-item>
+
+          <!-- RTU 串口参数 -->
+          <template v-if="modbusTransport === 'rtu'">
+            <el-divider content-position="left">串口参数</el-divider>
+            <el-form-item label="串口路径" required>
+              <el-input v-model="modbusPort" placeholder="/dev/ttyUSB0 或 COM3" />
+            </el-form-item>
+            <div class="flex gap-4">
+              <el-form-item label="波特率" class="flex-1">
+                <el-select v-model="modbusBaudrate">
+                  <el-option v-for="b in [1200,2400,4800,9600,19200,38400,57600,115200]" :key="b" :label="b" :value="b" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="数据位" class="flex-1">
+                <el-select v-model="modbusDataBits" class="w-20">
+                  <el-option :label="7" :value="7" />
+                  <el-option :label="8" :value="8" />
+                </el-select>
+              </el-form-item>
+            </div>
+            <div class="flex gap-4">
+              <el-form-item label="校验方式" class="flex-1">
+                <el-select v-model="modbusParity" class="w-28">
+                  <el-option label="无校验 (N)" value="N" />
+                  <el-option label="偶校验 (E)" value="E" />
+                  <el-option label="奇校验 (O)" value="O" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="停止位" class="flex-1">
+                <el-select v-model="modbusStopBits" class="w-20">
+                  <el-option :label="1" :value="1" />
+                  <el-option :label="2" :value="2" />
+                </el-select>
+              </el-form-item>
+            </div>
+          </template>
+
+          <!-- TCP 网络参数 -->
+          <template v-if="modbusTransport === 'tcp'">
+            <el-divider content-position="left">网络参数</el-divider>
+            <div class="flex gap-4">
+              <el-form-item label="主机地址" class="flex-1" required>
+                <el-input v-model="modbusHost" placeholder="192.168.1.100" />
+              </el-form-item>
+              <el-form-item label="端口" class="w-32">
+                <el-input-number v-model="modbusTcpPort" :min="1" :max="65535" />
+              </el-form-item>
+            </div>
+          </template>
+
+          <!-- 通用 Modbus 参数 -->
+          <el-divider content-position="left">通用参数</el-divider>
+          <div class="flex gap-4">
+            <el-form-item label="从站地址" class="flex-1">
+              <el-input-number v-model="modbusSlaveId" :min="1" :max="247" />
+            </el-form-item>
+            <el-form-item label="超时(秒)" class="flex-1">
+              <el-input-number v-model="modbusTimeout" :min="1" :max="30" />
+            </el-form-item>
+            <el-form-item label="字节序" class="flex-1">
+              <el-select v-model="modbusByteOrder" class="w-24">
+                <el-option label="大端" value="big" />
+                <el-option label="小端" value="little" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <div class="flex gap-4">
+            <el-form-item label="OK 写入值" class="flex-1">
+              <el-input-number v-model="modbusOkValue" :min="0" :max="65535" />
+            </el-form-item>
+            <el-form-item label="NG 写入值" class="flex-1">
+              <el-input-number v-model="modbusNgValue" :min="0" :max="65535" />
+            </el-form-item>
+          </div>
+
+          <el-divider content-position="left">寄存器映射</el-divider>
+          <div class="mb-3 text-xs text-gray-400">
+            Holding Registers: 40001-49999。选"固定值"时在右侧输入常量。
+          </div>
+          <div v-for="(reg, idx) in modbusRegisters" :key="idx" class="flex items-center gap-2 mb-2">
+            <el-input-number v-model="reg.address" :min="0" :max="49999" placeholder="40001" controls-position="right" size="small" class="w-32" />
+            <el-select v-model="reg.source" placeholder="数据来源" size="small" class="w-36">
+              <el-option label="检测结果" value="result_code" />
+              <el-option label="合格计数" value="ok_count" />
+              <el-option label="不良计数" value="ng_count" />
+              <el-option label="总产量" value="total_count" />
+              <el-option label="周期ID" value="cycle_id" />
+              <el-option label="耗时(ms)" value="duration_ms" />
+              <el-option label="检测次数" value="inspection_count" />
+              <el-option label="固定值" value="const" />
+            </el-select>
+            <el-select v-model="reg.data_type" size="small" class="w-24">
+              <el-option label="uint16" value="uint16" />
+              <el-option label="int16" value="int16" />
+              <el-option label="uint32" value="uint32" />
+              <el-option label="int32" value="int32" />
+            </el-select>
+            <el-input-number v-if="reg.source === 'const'" v-model="reg.const_value" :min="0" size="small" placeholder="值" class="w-28" />
+            <el-button size="small" type="danger" circle @click="modbusRegisters.splice(idx, 1)">
+              <el-icon><Close /></el-icon>
+            </el-button>
+          </div>
+          <el-button size="small" @click="modbusRegisters.push({ address: 40001, source: 'result_code', data_type: 'uint16' })">+ 添加寄存器</el-button>
+        </template>
         <el-form-item label="推送时机">
           <el-checkbox-group v-model="form.push_events">
             <el-checkbox value="cycle_end" label="检测周期结束" />
@@ -105,6 +224,8 @@
           <el-input-number v-model="form.retry_interval_sec" :min="1" :max="60" />
         </el-form-item>
 
+        <!-- REST/Form-Data 专属配置 -->
+        <template v-if="form.adapter_type !== 'modbus_rtu'">
         <!-- 静态字段 -->
         <el-divider content-position="left">静态字段</el-divider>
         <div class="mb-3 text-xs text-gray-400">
@@ -168,6 +289,7 @@
             <el-option label="0" :value="0" />
           </el-select>
         </div>
+        </template>
       </el-form>
 
       <template #footer>
@@ -182,11 +304,11 @@
         <el-result
           :icon="testResult.success ? 'success' : 'error'"
           :title="testResult.success ? '连接成功' : '连接失败'"
-          :sub-title="testResult.error || `HTTP ${testResult.status_code} (${testResult.duration_ms}ms)`"
+          :sub-title="testResult.error || `${testResult.duration_ms}ms`"
         />
         <el-divider content-position="left">发送数据预览</el-divider>
         <pre class="text-xs bg-gray-900 p-3 rounded overflow-auto max-h-48">{{ formatJSON(testResult.payload_preview) }}</pre>
-        <el-divider content-position="left">响应体</el-divider>
+        <el-divider content-position="left">响应</el-divider>
         <pre class="text-xs bg-gray-900 p-3 rounded overflow-auto max-h-48">{{ formatJSON(testResult.response_body) }}</pre>
       </div>
     </el-dialog>
@@ -299,6 +421,30 @@ const successExpect = ref(true)
 const staticFields = ref([])
 const extraFieldsDef = ref([])
 
+const modbusTransport = ref('rtu')
+const modbusPort = ref('')
+const modbusBaudrate = ref(9600)
+const modbusDataBits = ref(8)
+const modbusSlaveId = ref(1)
+const modbusParity = ref('N')
+const modbusStopBits = ref(1)
+const modbusByteOrder = ref('big')
+const modbusTimeout = ref(3)
+const modbusOkValue = ref(1)
+const modbusNgValue = ref(2)
+const modbusHost = ref('')
+const modbusTcpPort = ref(502)
+const modbusRegisters = ref([])
+
+function adapterLabel(type) {
+  const map = { rest: 'REST/JSON', 'form-data': 'Form-Data', modbus_rtu: 'Modbus' }
+  return map[type] || type
+}
+function adapterTagType(type) {
+  const map = { rest: '', 'form-data': 'warning', modbus_rtu: 'success' }
+  return map[type] ?? 'info'
+}
+
 const enabledCount = computed(() => connections.value.filter(c => c.enabled).length)
 
 function formatTime(t) {
@@ -339,6 +485,23 @@ function openCreate() {
   successExpect.value = true
   staticFields.value = []
   extraFieldsDef.value = []
+  modbusTransport.value = 'rtu'
+  modbusPort.value = ''
+  modbusBaudrate.value = 9600
+  modbusDataBits.value = 8
+  modbusSlaveId.value = 1
+  modbusParity.value = 'N'
+  modbusStopBits.value = 1
+  modbusByteOrder.value = 'big'
+  modbusTimeout.value = 3
+  modbusOkValue.value = 1
+  modbusNgValue.value = 2
+  modbusHost.value = ''
+  modbusTcpPort.value = 502
+  modbusRegisters.value = [
+    { address: 40001, source: 'result_code', data_type: 'uint16' },
+    { address: 40002, source: 'total_count', data_type: 'uint16' },
+  ]
   showEditor.value = true
 }
 
@@ -365,10 +528,58 @@ function openEdit(row) {
   templateError.value = ''
 
   extraFieldsDef.value = (row.extra_fields_schema || []).map(f => ({ ...f }))
+
+  modbusTransport.value = cfg.transport || 'rtu'
+  modbusPort.value = cfg.port || ''
+  modbusBaudrate.value = cfg.baudrate || 9600
+  modbusDataBits.value = cfg.data_bits || 8
+  modbusSlaveId.value = cfg.slave_id || 1
+  modbusParity.value = cfg.parity || 'N'
+  modbusStopBits.value = cfg.stop_bits || 1
+  modbusByteOrder.value = cfg.byte_order || 'big'
+  modbusTimeout.value = cfg.timeout || 3
+  modbusOkValue.value = cfg.ok_value ?? 1
+  modbusNgValue.value = cfg.ng_value ?? 2
+  modbusHost.value = cfg.host || ''
+  modbusTcpPort.value = cfg.tcp_port || 502
+  modbusRegisters.value = (cfg.registers || []).map(r => ({ ...r }))
+  if (!modbusRegisters.value.length && row.adapter_type === 'modbus_rtu') {
+    modbusRegisters.value = [
+      { address: 40001, source: 'result_code', data_type: 'uint16' },
+    ]
+  }
+
   showEditor.value = true
 }
 
 function buildConfig() {
+  if (form.adapter_type === 'modbus_rtu') {
+    if (modbusTransport.value === 'rtu' && !modbusPort.value.trim()) {
+      ElMessage.warning('请输入串口路径')
+      return null
+    }
+    if (modbusTransport.value === 'tcp' && !modbusHost.value.trim()) {
+      ElMessage.warning('请输入 Modbus TCP 主机地址')
+      return null
+    }
+    return {
+      transport: modbusTransport.value,
+      port: modbusPort.value.trim(),
+      baudrate: modbusBaudrate.value,
+      data_bits: modbusDataBits.value,
+      slave_id: modbusSlaveId.value,
+      parity: modbusParity.value,
+      stop_bits: modbusStopBits.value,
+      byte_order: modbusByteOrder.value,
+      timeout: modbusTimeout.value,
+      ok_value: modbusOkValue.value,
+      ng_value: modbusNgValue.value,
+      host: modbusHost.value.trim(),
+      tcp_port: modbusTcpPort.value,
+      registers: modbusRegisters.value.filter(r => r.address && r.source),
+    }
+  }
+
   let template = {}
   try {
     template = JSON.parse(templateJson.value || '{}')

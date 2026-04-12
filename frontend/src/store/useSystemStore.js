@@ -40,6 +40,30 @@ const defaultDetection = {
       text: '不合格',
       subText: '',
       isSystem: true
+    },
+    scan: {
+      id: 'scan',
+      name: '扫码提示框',
+      enabled: true,
+      color: '#0891b2',
+      duration: 2,
+      fontSize: 18,
+      position: 'top-right',
+      text: '扫码成功',
+      subText: '',
+      isSystem: true
+    },
+    warn_no_barcode: {
+      id: 'warn_no_barcode',
+      name: '未绑码提示框',
+      enabled: true,
+      color: '#f59e0b',
+      duration: 5,
+      fontSize: 16,
+      position: 'top-right',
+      text: '⚠ 未绑码',
+      subText: '本次结算未绑定工件条码',
+      isSystem: true
     }
   },
   
@@ -95,7 +119,7 @@ export const useSystemStore = defineStore('system', {
       }
     },
     // 检测框设置 (Detection Box Settings) - 绑定项目
-    detection: { ...defaultDetection },
+    detection: JSON.parse(JSON.stringify(defaultDetection)),
     // 数据管理设置 (Data Settings)
     data: {
       retentionDays: 30,
@@ -171,13 +195,15 @@ export const useSystemStore = defineStore('system', {
           ...detectionConfig,
           toasts: {
             ok: { ...defaultDetection.toasts.ok, ...(detectionConfig.toasts?.ok || {}) },
-            ng: { ...defaultDetection.toasts.ng, ...(detectionConfig.toasts?.ng || {}) }
+            ng: { ...defaultDetection.toasts.ng, ...(detectionConfig.toasts?.ng || {}) },
+            scan: { ...defaultDetection.toasts.scan, ...(detectionConfig.toasts?.scan || {}) },
+            warn_no_barcode: { ...defaultDetection.toasts.warn_no_barcode, ...(detectionConfig.toasts?.warn_no_barcode || {}) }
           },
           customToasts: detectionConfig.customToasts || []
         };
       } else {
-        // 没有项目配置，使用默认值
-        this.detection = { ...defaultDetection };
+        // 没有项目配置，使用默认值（深拷贝）
+        this.detection = JSON.parse(JSON.stringify(defaultDetection));
       }
     },
     // 保存检测框设置到项目

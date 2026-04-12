@@ -293,6 +293,7 @@ class CycleResponse(BaseModel):
     video_id: Optional[str] = None
     operator_id: Optional[int] = None
     operator_name: Optional[str] = None
+    serial_no: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -757,6 +758,22 @@ def get_session_cycles(
 
     cycles = base.order_by(DetectionCycle.cycle_number).offset(skip).limit(limit).all()
 
+    cycle_ids = [c.id for c in cycles]
+    serial_map = {}
+    if cycle_ids:
+        try:
+            from backend.models.mes_models import WorkpieceInspection, Workpiece
+            rows = (
+                db.query(WorkpieceInspection.cycle_id, Workpiece.serial_no)
+                .join(Workpiece, WorkpieceInspection.workpiece_id == Workpiece.id)
+                .filter(WorkpieceInspection.cycle_id.in_(cycle_ids))
+                .all()
+            )
+            for cid, sn in rows:
+                serial_map[cid] = sn
+        except Exception:
+            pass
+
     items = []
     for cycle in cycles:
         c_op_id = getattr(cycle, 'operator_id', None)
@@ -778,6 +795,7 @@ def get_session_cycles(
             video_id=cycle.video_id,
             operator_id=c_op_id,
             operator_name=c_op_name,
+            serial_no=serial_map.get(cycle.id),
         ))
 
     return {"items": items, "total": total}

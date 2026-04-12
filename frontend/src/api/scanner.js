@@ -8,3 +8,4 @@ export const testScannerConnection = (ip, port = 55256) => api.post(`/scanner/de
 export const getScannerStatus = () => api.get('/scanner/status')
 export const getLatestScan = (channelId) => api.get(`/scanner/latest/${channelId}`)
 export const getScanLogs = (params) => api.get('/scanner/logs', { params })
+export const clearScanLogs = () => api.delete('/scanner/logs')

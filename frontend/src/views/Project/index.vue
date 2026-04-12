@@ -339,13 +339,13 @@
                           <span class="cursor-help border-b border-dashed border-gray-500">默认PT</span>
                         </el-tooltip>
                       </th>
-                      <th class="p-2 w-20">
+                      <th v-if="activeProject.logic_mode !== 'detection'" class="p-2 w-20">
                         <el-tooltip content="开启后，该步骤仅在其之前的所有步骤都已完成时才被接受，可过滤环境误检" placement="top">
                           <span class="cursor-help border-b border-dashed border-gray-500">严格顺序</span>
                         </el-tooltip>
                       </th>
                       <th class="p-2 w-20">
-                        <el-tooltip content="开启后，该步骤在一个周期内只接受一次，后续重复出现会被忽略" placement="top">
+                        <el-tooltip content="开启后，该步骤在一个周期内只接受一次，重复被忽略；关闭后，重复出现将被判为NG" placement="top">
                           <span class="cursor-help border-b border-dashed border-gray-500">单次接受</span>
                         </el-tooltip>
                       </th>
@@ -538,7 +538,7 @@
                           class="w-full"
                         />
                       </td>
-                      <td class="p-2">
+                      <td v-if="activeProject.logic_mode !== 'detection'" class="p-2">
                         <el-tooltip
                           :disabled="!isSettlementStep(step)"
                           content="结算步骤不可设置严格顺序"
@@ -2026,6 +2026,15 @@ const isSettlementStep = (step) => {
   }
   return false;
 };
+
+watch(() => activeProject.value?.logic_mode, (mode) => {
+  if (!activeProject.value?.steps_config) return;
+  if (mode === 'detection') {
+    for (const step of activeProject.value.steps_config) {
+      step.accept_once = true;
+    }
+  }
+});
 
 watch(() => activeProject.value?.settlement_mode, (mode) => {
   if (!activeProject.value?.steps_config) return;

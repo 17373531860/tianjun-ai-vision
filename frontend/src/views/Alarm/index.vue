@@ -259,6 +259,35 @@
             show-icon
           />
           
+          <!-- 工作指示灯 -->
+          <div class="p-4 bg-slate-900 rounded border border-slate-600">
+            <div class="flex items-center justify-between mb-3">
+              <div class="flex items-center gap-2">
+                <el-tag type="primary" size="small">工作指示灯</el-tag>
+                <span class="text-gray-300">检测运行时常亮</span>
+              </div>
+              <el-switch 
+                v-model="config.idle_light.enabled"
+                @change="saveConfig"
+              />
+            </div>
+            <div v-if="config.idle_light.enabled" class="flex items-center gap-3">
+              <span class="text-xs text-gray-400">常亮颜色</span>
+              <el-select 
+                v-model="config.idle_light.color" 
+                size="small" 
+                class="w-32"
+                @change="saveConfig"
+              >
+                <el-option value="red" label="红灯" />
+                <el-option value="green" label="绿灯" />
+                <el-option value="blue" label="蓝灯" />
+                <el-option value="yellow" label="黄灯" />
+              </el-select>
+              <span class="text-xs text-gray-500">开始检测后此灯常亮，事件触发闪灯后自动恢复</span>
+            </div>
+          </div>
+
           <!-- 动态事件列表（基于项目事件） -->
           <div 
             v-for="event in projectEvents" 
@@ -396,6 +425,10 @@ const config = reactive({
   triggers: {
     event1: { name: '合格', enabled: true, color: 'green', effect: 'on', buzzer: false, duration: 2 },
     event2: { name: 'NG', enabled: true, color: 'red', effect: 'fast', buzzer: true, duration: 5 },
+  },
+  idle_light: {
+    enabled: true,
+    color: 'blue',
   }
 });
 
@@ -488,6 +521,7 @@ const saveConfig = async () => {
       test_mode: config.test_mode,
       custom_commands: config.custom_commands,
       triggers: config.triggers,
+      idle_light: config.idle_light,
     });
     
     // 保存到项目数据库（用于持久化和项目切换）
@@ -499,7 +533,7 @@ const saveConfig = async () => {
           test_mode: config.test_mode,
           custom_commands: config.custom_commands,
           triggers: config.triggers,
-          // 保存设备连接信息
+          idle_light: config.idle_light,
           port: selectedPort.value,
           baudrate: baudrate.value,
         }
@@ -607,6 +641,7 @@ const loadProjectEvents = async () => {
       config.test_mode = alarmConfig.test_mode ?? false;
       config.custom_commands = alarmConfig.custom_commands ?? {};
       config.triggers = alarmConfig.triggers ?? {};
+      config.idle_light = alarmConfig.idle_light ?? { enabled: true, color: 'blue' };
       
       // 加载设备连接信息
       if (alarmConfig.port) {
@@ -623,6 +658,7 @@ const loadProjectEvents = async () => {
         test_mode: config.test_mode,
         custom_commands: config.custom_commands,
         triggers: config.triggers,
+        idle_light: config.idle_light,
       });
       
       // 如果有保存的端口且未连接，尝试自动连接

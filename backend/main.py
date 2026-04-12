@@ -12,6 +12,7 @@ from backend.api.detection import router as detection_router
 from backend.api.sessions import router as sessions_router
 from backend.api.mes import router as mes_router
 from backend.api.scanner import router as scanner_router
+from backend.api.wmax import router as wmax_router
 from backend.api.mes_gateway import router as mes_gateway_router
 from backend.api.operators import router as operators_router
 from backend.services.detector import get_detection_service
@@ -66,6 +67,11 @@ def migrate_database():
         ("mes_connections", "extra_fields_schema", "JSON"),
         ("detection_sessions", "operator_id", "INTEGER"),
         ("detection_cycles", "operator_id", "INTEGER"),
+        ("scanner_devices", "scan_required", "BOOLEAN DEFAULT 0"),
+        ("scanner_devices", "duplicate_scan_action", "VARCHAR(20) DEFAULT 'overwrite'"),
+        ("scanner_devices", "warn_no_barcode", "BOOLEAN DEFAULT 0"),
+        ("scanner_devices", "rebind_mode", "VARCHAR(20) DEFAULT 'rescan'"),
+        ("scanner_devices", "bind_timing", "VARCHAR(20) DEFAULT 'mid_cycle'"),
     ]
     
     try:
@@ -432,6 +438,7 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 # MES & Scanner
 app.include_router(mes_router, prefix=f"{settings.API_V1_STR}", tags=["MES"])
 app.include_router(scanner_router, prefix=f"{settings.API_V1_STR}", tags=["Scanner"])
+app.include_router(wmax_router, prefix=f"{settings.API_V1_STR}", tags=["WMax Scanner"])
 app.include_router(mes_gateway_router, prefix=f"{settings.API_V1_STR}", tags=["MES-Gateway"])
 app.include_router(operators_router, prefix=f"{settings.API_V1_STR}", tags=["Operators"])
 
@@ -550,32 +557,8 @@ def shutdown_complete():
 def video_feed(channel: int = 0):
     """视频流端点 - 支持多通道。?channel=0 (default), ?channel=1, etc."""
     vm = get_video_manager(channel)
-    
-    if vm.is_running or vm.source_type:
-        return StreamingResponse(
-            vm.generate_mjpeg(),
-            media_type="multipart/x-mixed-replace; boundary=frame"
-        )
-    
-    def generate_frames():
-        import numpy as np
-        import time
-        black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        try:
-            cv2.putText(black_frame, f"Ch{channel} - No Source", (180, 240), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        except cv2.error:
-            pass
-        ret, buffer = cv2.imencode('.jpg', black_frame)
-        if ret:
-            frame_data = buffer.tobytes()
-            while True:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
-                time.sleep(0.1)
-    
     return StreamingResponse(
-        generate_frames(),
+        vm.generate_mjpeg(),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
