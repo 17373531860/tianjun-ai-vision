@@ -150,8 +150,16 @@ MES 数据使用独立 DB session，不影响检测数据链路。
 - `backend/services/mes_gateway.py` — 周期上下文中的 `operator.*`（外部推送）
 - `frontend/src/views/Data/index.vue` — 数据展示页面（含 MES 工单筛选、操作员筛选与列）
 
+## 工件码关联 (v2.5.0+)
+
+- `CycleResponse` 增加了 `serial_no` 字段
+- `get_session_cycles` API 通过 LEFT JOIN `WorkpieceInspection` + `Workpiece` 获取工件码
+- Data 页面周期表新增「工件码」列
+- 如果工件码为空，说明该周期未绑定条码（可能扫码器未扫或未启用）
+
 ## 已知陷阱
 - `get_ffmpeg_path()` 在 source.py 和 sessions.py 各有一份（重复代码）
 - `_perform_auto_cleanup()` 清理文件时可能与正在录制的文件冲突
 - `backup_database()` 路径拼接相对于 UPLOAD_DIR 的父目录，不是 DATA_DIR（脆弱）
 - `_filter_valid_steps()` 过滤 <0.1秒步骤可能误删合法记录
+- Cycle 的 serial_no 通过 JOIN 查询获取，如果 WorkpieceInspection 记录缺失则为 null

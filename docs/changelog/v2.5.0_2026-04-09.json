@@ -147,7 +147,7 @@
       "breaking": false
     }
   ],
-  "skills_updated": [],
+  "skills_updated": ["debug-alarm", "debug-mes", "debug-source", "debug-frontend", "modify-model", "debug-session", "debug-channel", "api-sync"],
   "files_changed": [
     "backend/api/alarm.py",
     "backend/api/scanner.py",

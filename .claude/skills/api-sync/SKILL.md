@@ -223,3 +223,23 @@ vite.config.js:     server.port = 6001                // 实际端口
 2. **后端不轻易改路由:** Electron 的关机流程也直接调用后端API
 3. **路由顺序:** 具体路径放参数路径前面
 4. **向后兼容:** 新增字段可以，不删旧字段
+
+## v2.5.0 新增/修改 API
+
+### scanner.py
+- `DELETE /scanner/logs` — 清空所有扫码记录
+- `ScannerCreate/ScannerUpdate` 新增 `rebind_mode`, `bind_timing` 字段
+
+### sessions.py
+- `CycleResponse` 新增 `serial_no` 字段（LEFT JOIN 工件表获取）
+
+### source.py
+- `get_detection_results` 返回的 `mes` 字段新增 `scan_event`, `rebind_prompt`, `warn_no_barcode`
+- `POST /detection/rebind` — 手动重绑工件
+
+### mes_gateway.py（已有，适配器扩展）
+- `modbus_rtu` 适配器类型自动通过 `test_connection` 和 `dispatch` 工作
+- 无需新增 API 端点
+
+### wmax.py（新增模块）
+- WMax 扫码器设备管理 API（发现、连接、配置、高级控制）

@@ -211,8 +211,77 @@ registered (扫码注册)
 - `backend/services/mes_gateway.py`、`backend/api/mes_gateway.py` — 外部 MES 网关与 API
 - `backend/services/mes_adapters/` — 外部适配器实现
 
+## Modbus RTU/TCP 适配器 (v2.5.0+)
+
+通过 RS485 串口或 TCP 网络将检测结果写入 Modbus Holding Register，供客户 PLC/MES 仪表读取。
+
+### 架构
+```
+cycle_end → MESHookManager → MESGateway.dispatch()
+  → ModbusRTUAdapter.build_payload() → 解析寄存器映射
+  → ModbusRTUAdapter.send() → pymodbus 写寄存器
+```
+
+### 关键文件
+| 文件 | 职责 |
+|------|------|
+| `backend/services/mes_adapters/modbus_adapter.py` | Modbus 适配器（RTU+TCP） |
+| `backend/services/mes_adapters/__init__.py` | `_REGISTRY` 注册 `modbus_rtu` |
+| `frontend/src/views/MES/GatewayPanel.vue` | Modbus 配置 UI |
+
+### 可配置项
+- `transport`: rtu / tcp
+- `port`/`host`: 串口路径或 TCP 地址
+- `baudrate`, `parity`, `stop_bits`, `data_bits`: 串口参数
+- `slave_id`: 从站地址 (1-247)
+- `ok_value`/`ng_value`: OK/NG 写入值（默认 1/2，可自定义）
+- `byte_order`: 大端/小端
+- `registers[]`: 寄存器映射数组，每项 {address, source, data_type, const_value}
+  - source: result_code, ok_count, ng_count, total_count, cycle_id, duration_ms, inspection_count, const
+
+### 诊断要点
+- 串口连接失败：检查路径、波特率、驱动、权限
+- 写入无响应：检查从站地址、寄存器地址（40001→0-based）
+- pymodbus 版本兼容：`_slave_kwarg()` 自动检测 `slave` vs `device_id`
+- 与报警灯共用串口：`_serial_lock` 互斥锁防止同时访问
+
+## 扫码绑定系统 (v2.5.0+)
+
+### 绑定流程
+```
+扫码器扫到码 → ScannerService.inject_scan_result()
+  → MESHookManager._handle_scan()
+    → WorkpieceService.register() → 创建/查找工件
+    → _pending_workpiece[channel_id] = workpiece_id
+  
+start_cycle() → on_cycle_start()
+  → _inspecting_workpiece = _pending_workpiece.pop()
+
+end_cycle() → on_cycle_end()
+  → WorkpieceInspection 记录绑定
+  → _inspecting_workpiece 清空
+```
+
+### 关键配置
+- `bind_timing`: mid_cycle（默认，中途扫码立即绑定当前周期）
+- `rebind_mode`: rescan（默认）/ auto_rebind / manual
+- `dedup_interval_sec`: 去重间隔
+
+### 诊断：绑定不生效
+1. 检查 `_handle_scan` 是否被调用（看 `[MES]` 日志）
+2. 检查 import 路径：`from services.scanner` 而非 `from backend.services.scanner`
+3. 单通道模式需确认 `data.mes` 赋值到 `multiChannelData[0].mes`
+
+### 诊断：warn_no_barcode 不显示
+1. `is_warn_no_barcode()` 依赖正确 import `services.scanner`
+2. 前端 `Monitor/index.vue` 中 `mesData.warn_no_barcode` 需要 `multiChannelData[0].mes` 有值
+3. `useSystemStore` 的 `detection.toasts.warn_no_barcode.enabled` 需为 true
+4. `detection_config` 不能为 null（需深拷贝初始化）
+
 ## 已知限制
 - MES 数据使用 SQLite 同库不同表，高并发写入时 WAL 模式的锁等待可能增加
 - 外部 MES 通过 Gateway + 适配器推送；对端协议差异大时需正确选择适配器并维护模板与 `extra_fields_schema`
 - 扫码器每次扫码结果有 2 秒去重窗口（`_last_scan_time`），快速连续扫码可能丢弃
 - 缺陷自动分类依赖 DefectCode 表中 `label_mapping` 字段的正确配置
+- Modbus 适配器与报警灯共用 RS485 串口时使用 `_serial_lock` 互斥，但长时间写入可能延迟报警响应
+- `mes_hooks.py` 中 import 错误容易被 `except Exception: pass` 静默吞掉，新增代码务必加 print 输出异常

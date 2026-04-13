@@ -138,8 +138,31 @@ PROTOCOLS = {
 - `frontend/src/views/Alarm/index.vue` — 报警配置页面
 - `frontend/src/layout/Navbar.vue` — 自动连接报警设备逻辑
 
+## 空闲常亮模式 (v2.5.0+)
+
+检测运行期间报警灯保持常亮（颜色可选），OK/NG 事件触发闪烁后自动恢复常亮。
+
+### 配置项
+- `idle_light.enabled`: 是否启用空闲常亮
+- `idle_light.color`: 常亮颜色（如 green/yellow/blue）
+- 前端 Alarm 页面底部「空闲灯」区域配置
+
+### 生命周期
+```
+start_detection() → 开启 idle_light（常亮）
+  → OK/NG 事件 → trigger_alarm() → 闪烁对应颜色
+    → 闪烁结束 → 恢复 idle_light 常亮
+stop_detection() → 关闭 idle_light
+```
+
+### 诊断要点
+- 常亮不亮：检查 `idle_light.enabled` 配置 + `start_detection` 是否调用了开灯
+- 闪烁后不恢复：检查 `trigger_alarm()` 结束后是否调用了恢复常亮逻辑
+- 与报警灯共用串口：确认 Modbus 地址不冲突
+
 ## 已知陷阱
 - `trigger_alarm` 中的 `delayed_off()` 使用 `import time` 内联导入
 - `stop_alarm` 无法真正停止 `trigger_alarm` 启动的线程（见上方bug描述）
 - 前端 Alarm 页面直接用 `api.get/post` 而非封装的API函数
 - 报警配置在项目DB和alarm_config.json两处存储，可能不同步
+- 空闲常亮与 Modbus MES 适配器共用 RS485 串口时需加锁（`_serial_lock`）

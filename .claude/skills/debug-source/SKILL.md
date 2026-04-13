@@ -158,6 +158,19 @@ MES Hook 在独立线程中异步执行，使用独立 DB session，不会阻塞
 
 4. **排查线程问题：** 搜索变量的所有写入点，确认是否在同一线程内
 
+## Tracking 模式物品过滤 (v2.5.0+)
+
+- 只有 `expected_items` 中的物品才参与周期判定（触发新周期、计入 active_count、决定 OK/NG）
+- 不在 `expected_items` 中的物品（如 box）可以启用检测框显示，但不影响任何计数或判定
+- `_settle_counting_cycle` 中 `extra` 仅统计 expected_items 内的多余项
+- 新周期只在检测到 expected_items 中的物品时触发
+
+## MJPEG 流恢复 (v2.5.0+)
+
+- `generate_mjpeg()` 不再因 `is_running=False` 立即退出，始终使用 `vm.generate_mjpeg()`
+- 前端 `onStreamError` 重试阈值增到 50 次，防止改步骤设置后频繁断流导致黑屏
+- 添加 stream health check 机制
+
 ## 已知陷阱
 
 - `_just_settled` 机制已被移除（2026-04）。该标志原本在结算后阻止非首步启动新周期，但会导致 NG 后所有步骤被永久拒绝。现在依靠 `min_duration`/`min_frames` 过滤误检
@@ -167,3 +180,5 @@ MES Hook 在独立线程中异步执行，使用独立 DB session，不会阻塞
 - DB session 通过 `SessionLocal()` 手动创建而非 FastAPI 依赖注入，容易泄露
 - `from ctypes import *` 污染命名空间
 - `os._exit(0)` 绕过正常 Python 清理流程
+- Tracking 模式：非 expected_items 中的物品不参与周期判定（v2.5.0 修复）
+- `mes_hooks.py` 中 import 路径必须用 `from services.xxx` 而非 `from backend.services.xxx`，否则被静默吞掉

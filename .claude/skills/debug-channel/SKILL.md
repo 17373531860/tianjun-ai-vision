@@ -133,8 +133,20 @@ class ChannelManager:
 - `frontend/src/views/Monitor/index.vue` — 多通道显示
 - `frontend/src/api/detection.js` — 带channel参数的API调用
 
+## 单通道模式 MES 数据传递 (v2.5.0 修复)
+
+**问题**: 单通道模式下 `startPolling` 获取的 `data.mes` 没有赋值到 `multiChannelData.value[0].mes`，导致 `mesData` computed 属性为空。
+
+**修复**: 在 `startPolling` 单通道分支中显式赋值：
+```javascript
+multiChannelData.value[0].mes = data.mes
+```
+
+**影响**: 未绑码 banner、scan toast、MES 信息条都依赖 `mesData`。
+
 ## 已知陷阱
 - `_propagate_model` 方法的调用路径不完全清晰
 - 共享模型模式下，一个通道释放模型可能影响其他通道
 - `workstation_config.json` 是简单JSON文件，无并发写保护
 - 前端 `getWorkstations()` 在页面加载时调用一次，后续通道变化不会自动刷新
+- 单通道模式下 `startPolling` 必须手动将 `data.mes` 赋值到 `multiChannelData[0].mes`，否则 MES 相关 UI 全部失效

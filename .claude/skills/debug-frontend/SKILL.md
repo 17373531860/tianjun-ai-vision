@@ -199,6 +199,34 @@ pollTimer = setInterval(() => {
 - `utils/websocket.js` — WebSocket工具，Monitor用HTTP轮询代替
 - `assets/css/main.css` — 可能未被导入
 
+## Toast 系统 (v2.5.0+)
+
+### 预设 Toast 类型
+`useSystemStore.defaultDetection.toasts` 包含 4 个系统预设：
+- `ok`: 合格提示框（绿色）
+- `ng`: NG 提示框（红色）
+- `scan`: 扫码成功提示框（青色，可在扫码器设备设置中开关）
+- `warn_no_barcode`: 未绑码告警（黄色，周期结算无条码时触发）
+
+### 关键注意事项
+- **深拷贝**: `detection` 状态初始化必须用 `JSON.parse(JSON.stringify(defaultDetection))`，浅拷贝会导致嵌套的 `toasts` 对象共享引用
+- **防御性渲染**: 设置页 `<el-card>` 需加 `v-if="store.detection.toasts?.ok"` 防止 toasts 为 null 时崩溃
+- **project detection_config**: 数据库中存的 `detection_config` 可能为 `null` 或 `"null"` 字符串，`loadDetectionFromProject` 需正确处理
+
+### 单通道 MES 数据传递
+Monitor 单通道模式下 `startPolling` 必须显式赋值：
+```javascript
+multiChannelData.value[0].mes = data.mes
+```
+否则 `mesData` computed 属性为空，warn_no_barcode banner 和 scan toast 都不会触发。
+
+## GatewayPanel Modbus 配置 (v2.5.0+)
+
+`GatewayPanel.vue` 新增 `modbus_rtu` 适配器类型：
+- 选中后切换为串口/TCP 配置表单（隐藏 REST 专属字段）
+- `buildConfig()` 根据 `adapter_type` 分支构建不同 config
+- `openEdit()` 需从 `cfg` 加载所有 Modbus 字段（transport/port/host/baudrate 等）
+
 ## 已知陷阱
 - License检查异常时 `licenseChecked` 仍设为 true（静默通过）
 - `@vueuse/core` 和 `sortablejs` 依赖可能未使用
@@ -208,3 +236,5 @@ pollTimer = setInterval(() => {
 - Monitor 组件的 `isRunning`/`isPaused`/`isDetecting` 是组件局部 ref，remount 后全部重置为 false，需通过 `getSourceStatus()` 与后端同步
 - `startDetection()` 的 resume 快捷路径不传模型路径，切换项目后必须确保状态标志被重置（否则用旧模型推理无结果）
 - Vite HMR 编辑 Monitor.vue 会导致组件重载，等同于页面导航离开再回来
+- `detection` 状态的 `toasts` 对象必须深拷贝初始化，浅拷贝会导致多项目间共享引用
+- `detection_config` 为 null 时设置页 Toast 卡片不渲染，需 v-if 防御

@@ -138,3 +138,16 @@ JSON字段影响: [如果是JSON字段，列出所有解析点]
 3. **JSON字段向后兼容:** 新增 key 可以，删除/改名 key 需要全链路同步
 4. **Migration 幂等:** ALTER TABLE 失败(列已存在)必须被 catch 忽略
 5. **Schema 同步:** 如果有 Pydantic Schema (backend/schemas/)，需要同步更新
+
+## v2.5.0 模型变更记录
+
+### ScannerDevice (mes_models.py)
+- 新增 `rebind_mode = Column(String(20), default="rescan")` — 误检重绑策略
+- 新增 `bind_timing = Column(String(20), default="mid_cycle")` — 绑定时机
+- 对应 migration 在 `main.py:migrate_database()`
+- 前端: `ScannerPanel.vue` 编辑对话框、`scanner.py` API Schema
+
+### MESConnection (mes_models.py)
+- `adapter_type` 现在支持 `"modbus_rtu"` 值
+- `config` JSON 字段新增 Modbus 专属配置 (port/baudrate/slave_id/registers 等)
+- 前端: `GatewayPanel.vue` 根据 adapter_type 切换 config 表单
