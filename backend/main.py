@@ -15,6 +15,8 @@ from backend.api.scanner import router as scanner_router
 from backend.api.wmax import router as wmax_router
 from backend.api.mes_gateway import router as mes_gateway_router
 from backend.api.operators import router as operators_router
+from backend.api.cluster import router as cluster_router
+from backend.api.external_device import router as extdev_router
 from backend.services.detector import get_detection_service
 # Import models to ensure they are registered
 from backend.models import models
@@ -72,6 +74,8 @@ def migrate_database():
         ("scanner_devices", "warn_no_barcode", "BOOLEAN DEFAULT 0"),
         ("scanner_devices", "rebind_mode", "VARCHAR(20) DEFAULT 'rescan'"),
         ("scanner_devices", "bind_timing", "VARCHAR(20) DEFAULT 'mid_cycle'"),
+        ("scanner_devices", "broadcast_channels", "JSON"),
+        ("mes_connections", "bound_channels", "JSON"),
     ]
     
     try:
@@ -244,47 +248,167 @@ _diag_db_health()
 migrate_database()
 fix_orphan_sessions()
 
-def auto_load_active_project():
-    """Backend startup: auto-load the active project (config + model) into VideoSourceManager."""
-    from backend.models.models import Project, Model
-    from sqlalchemy.orm import Session as DBSession
-    try:
-        with DBSession(engine) as db:
-            project = db.query(Project).filter(Project.is_active == True).first()
-            if not project:
-                print("[启动] 没有激活的项目，跳过自动加载")
-                return
-            config = {
-                'id': project.id,
-                'name': project.name,
-                'task_type': getattr(project, 'task_type', 'detection'),
-                'logic_mode': project.logic_mode,
-                'steps_config': project.steps_config or [],
-                'pipeline_config': project.pipeline_config or {},
-                'events_config': project.events_config or [],
-                'counters_config': project.counters_config or [],
-                'data_config': project.data_config or {},
-            }
-            vm = get_video_manager()
-            vm.set_project_config(config)
-            print(f"[启动] 自动加载激活项目: {project.name}")
+def _build_project_config(project) -> dict:
+    """从 Project ORM 对象构建 config dict"""
+    return {
+        'id': project.id,
+        'name': project.name,
+        'task_type': getattr(project, 'task_type', 'detection'),
+        'logic_mode': project.logic_mode,
+        'steps_config': project.steps_config or [],
+        'pipeline_config': project.pipeline_config or {},
+        'events_config': project.events_config or [],
+        'counters_config': project.counters_config or [],
+        'data_config': project.data_config or {},
+    }
 
-            if project.default_model_id:
-                model = db.query(Model).filter(Model.id == project.default_model_id).first()
-                if model and model.file_path:
-                    import os
-                    if os.path.exists(model.file_path):
-                        success = vm.load_model(model.file_path)
+
+def auto_load_active_project():
+    """Backend startup: auto-load projects per channel.
+
+    优先级:
+    1. workstation_config.json 里每通道的 project_id（多工位各自绑定不同项目）
+    2. 全局 is_active 项目（作为没有绑定的通道的兜底）
+    """
+    from backend.models.models import Project, Model
+    from backend.api.channel_manager import channel_manager
+    from sqlalchemy.orm import Session as DBSession
+    import os
+    try:
+        sources = channel_manager.get_channel_sources()
+        with DBSession(engine) as db:
+            fallback_project = db.query(Project).filter(Project.is_active == True).first()
+
+            loaded_channels = set()
+            for ch_str, ch_cfg in sources.items():
+                ch_id = int(ch_str)
+                pid = ch_cfg.get("project_id")
+                if not pid:
+                    continue
+                mgr = channel_manager.channels.get(ch_id)
+                if not mgr:
+                    continue
+                proj = db.query(Project).filter(Project.id == pid).first()
+                if not proj:
+                    print(f"[启动] ch{ch_id} 绑定的项目 id={pid} 不存在，跳过")
+                    continue
+                config = _build_project_config(proj)
+                mgr.set_project_config(config)
+                loaded_channels.add(ch_id)
+                print(f"[启动] ch{ch_id} 加载绑定项目: {proj.name} (id={proj.id})")
+
+                if proj.default_model_id:
+                    model = db.query(Model).filter(Model.id == proj.default_model_id).first()
+                    if model and model.file_path and os.path.exists(model.file_path):
+                        success = channel_manager.load_model_for_channel(ch_id, model.file_path,
+                                                                         ch_cfg.get("gpu_device", "auto"))
                         if success:
-                            print(f"[启动] 自动加载模型: {model.name} ({model.file_path})")
+                            print(f"[启动] ch{ch_id} 加载模型: {model.name}")
                         else:
-                            print(f"[启动] 模型加载失败: {model.file_path}")
-                    else:
-                        print(f"[启动] 模型文件不存在: {model.file_path}")
+                            print(f"[启动] ch{ch_id} 模型加载失败: {model.file_path}")
+
+            remaining = [cid for cid in channel_manager.channels if cid not in loaded_channels]
+            if remaining and fallback_project:
+                config = _build_project_config(fallback_project)
+                for ch_id in remaining:
+                    channel_manager.channels[ch_id].set_project_config(config)
+                print(f"[启动] 兜底: 激活项目 '{fallback_project.name}' 加载到通道 {remaining}")
+
+                if fallback_project.default_model_id:
+                    model = db.query(Model).filter(Model.id == fallback_project.default_model_id).first()
+                    if model and model.file_path and os.path.exists(model.file_path):
+                        if len(remaining) == 1:
+                            channel_manager.load_model_for_channel(remaining[0], model.file_path)
+                        else:
+                            channel_manager.load_shared_model(model.file_path)
+                        print(f"[启动] 兜底: 模型 '{model.name}' 加载到通道 {remaining}")
+            elif not fallback_project and not loaded_channels:
+                print("[启动] 没有激活的项目，也没有通道绑定项目，跳过自动加载")
     except Exception as e:
         print(f"[启动] 自动加载项目失败: {e}")
+        import traceback; traceback.print_exc()
 
 auto_load_active_project()
+
+
+def auto_restore_video_sources():
+    """后端启动时根据 workstation_config.json 自动恢复视频流 + GPU分配 + 检测状态"""
+    from backend.api.channel_manager import channel_manager
+    import os
+    try:
+        sources = channel_manager.get_channel_sources()
+        if not sources:
+            return
+        for ch_str, ch_cfg in sources.items():
+            ch_id = int(ch_str)
+            src_type = ch_cfg.get("source_type")
+            if not src_type:
+                continue
+            mgr = channel_manager.channels.get(ch_id)
+            if not mgr:
+                continue
+
+            gpu = ch_cfg.get("gpu_device")
+            if gpu and gpu != "auto":
+                mgr.device = gpu
+                print(f"[启动] ch{ch_id} GPU 恢复: {gpu}")
+
+            if mgr.is_running:
+                continue
+            try:
+                if src_type == "camera":
+                    dev_idx = ch_cfg.get("device_index", 0)
+                    if isinstance(dev_idx, str):
+                        parts = dev_idx.split("_")
+                        dev_idx = int(parts[-1]) if parts[-1].isdigit() else 0
+                    res = ch_cfg.get("resolution", "1280x720")
+                    w, h = (int(x) for x in res.split("x")) if "x" in str(res) else (1280, 720)
+                    fps = ch_cfg.get("fps", 60)
+                    mgr.start_camera(dev_idx, w, h, fps)
+                    print(f"[启动] ch{ch_id} 自动恢复摄像头: device={dev_idx}")
+                elif src_type == "rtsp":
+                    url = ch_cfg.get("url", "")
+                    if url:
+                        fps = ch_cfg.get("rtsp_fps", 25)
+                        mgr.start_rtsp(url, fps)
+                        print(f"[启动] ch{ch_id} 自动恢复RTSP: {url}")
+                elif src_type == "hcnetsdk":
+                    ip = ch_cfg.get("hcnet_ip")
+                    if ip:
+                        port = ch_cfg.get("hcnet_port", 8000)
+                        user = ch_cfg.get("hcnet_username", "admin")
+                        pwd = ch_cfg.get("hcnet_password", "")
+                        ch_no = ch_cfg.get("hcnet_channel", 1)
+                        stream = ch_cfg.get("hcnet_stream_type", 1)
+                        mgr.start_hcnetsdk(ip, port, user, pwd, ch_no, stream, 25)
+                        print(f"[启动] ch{ch_id} 自动恢复海康SDK: {ip}")
+                elif src_type == "video":
+                    vf = ch_cfg.get("video_file", "")
+                    if vf and os.path.isfile(vf):
+                        mgr.start_video(vf)
+                        print(f"[启动] ch{ch_id} 自动恢复视频: {vf}")
+            except Exception as e:
+                print(f"[启动] ch{ch_id} 视频源恢复失败: {e}")
+
+        import time
+        time.sleep(0.5)
+        for ch_str, ch_cfg in sources.items():
+            ch_id = int(ch_str)
+            if not ch_cfg.get("was_detecting"):
+                continue
+            mgr = channel_manager.channels.get(ch_id)
+            if not mgr or not mgr.is_running or mgr.model is None:
+                continue
+            try:
+                mgr.start_detection()
+                print(f"[启动] ch{ch_id} 自动恢复检测状态")
+            except Exception as e:
+                print(f"[启动] ch{ch_id} 恢复检测失败: {e}")
+
+    except Exception as e:
+        print(f"[启动] 视频源自动恢复整体失败: {e}")
+
+auto_restore_video_sources()
 
 # ========== MES Hook + Scanner 初始化 ==========
 def _init_mes_services():
@@ -299,14 +423,33 @@ def _init_mes_services():
         vm = get_video_manager()
         vm._mes_hook = mes_hook
 
+        from backend.api.channel_manager import channel_manager
+        for ch_id, ch_mgr in channel_manager.channels.items():
+            ch_mgr._mes_hook = mes_hook
+
         scanner_svc = get_scanner_service()
         scanner_svc.set_mes_hook(mes_hook)
-        scanner_svc.set_project_id_getter(
-            lambda ch: vm.project_config.get('id') if vm.project_config else None
-        )
+
+        def _get_project_id_for_channel(ch):
+            from backend.api.channel_manager import channel_manager
+            try:
+                mgr = channel_manager.get(ch)
+                return mgr.project_config.get('id') if mgr.project_config else None
+            except (ValueError, AttributeError):
+                return vm.project_config.get('id') if vm.project_config else None
+
+        scanner_svc.set_project_id_getter(_get_project_id_for_channel)
         scanner_svc.start_all()
 
-        print("[MES] 服务初始化完成")
+        from backend.services.cluster_collector import get_cluster_collector
+        cluster = get_cluster_collector()
+        cluster.start()
+
+        from backend.services.external_device import get_external_device_service
+        extdev_svc = get_external_device_service()
+        extdev_svc.start_all()
+
+        print("[MES] 服务初始化完成（含集群汇总、外部设备）")
     except Exception as e:
         print(f"[MES] 服务初始化失败（非致命）: {e}")
 
@@ -351,34 +494,35 @@ def cleanup_on_exit():
     
     print("[退出钩子] 正在保存数据...")
     try:
-        video_manager = get_video_manager()
-        
-        # 保存计数器到当前会话
-        if video_manager.current_session_id and video_manager.counters:
-            video_manager._save_counters_snapshot()
-            print(f"[退出钩子] 计数器已保存: {video_manager.counters}")
-        
-        # 结束当前会话（如果有）
-        if video_manager.current_session_id:
-            video_manager.end_session()
-            print("[退出钩子] 会话已结束")
-        
-        # 停止检测
-        if video_manager.is_detecting:
-            video_manager.stop_detection()
-            print("[退出钩子] 检测已停止")
-        
-        # 停止视频流
-        if video_manager.is_running:
-            video_manager.stop()
-            print("[退出钩子] 视频流已停止")
+        from backend.api.channel_manager import channel_manager
+        for ch_id, mgr in channel_manager.channels.items():
+            try:
+                was_detecting = mgr.is_detecting
+                channel_manager.save_channel_source(ch_id, {"was_detecting": was_detecting})
+                if mgr.current_session_id and mgr.counters:
+                    mgr._save_counters_snapshot()
+                    print(f"[退出钩子] ch{ch_id} 计数器已保存")
+                if mgr.current_session_id:
+                    mgr.end_session()
+                    print(f"[退出钩子] ch{ch_id} 会话已结束")
+                if mgr.is_detecting:
+                    mgr.stop_detection()
+                if mgr.is_running:
+                    mgr.stop()
+            except Exception as ch_e:
+                print(f"[退出钩子] ch{ch_id} 清理出错: {ch_e}")
+        print("[退出钩子] 所有通道已清理")
         
         # 停止 MES 服务
         try:
             from backend.services.mes_hooks import get_mes_hook
             from backend.services.scanner import get_scanner_service
+            from backend.services.cluster_collector import get_cluster_collector
+            from backend.services.external_device import get_external_device_service
             get_scanner_service().stop_all()
             get_mes_hook().stop()
+            get_cluster_collector().stop()
+            get_external_device_service().stop_all()
         except Exception:
             pass
             
@@ -441,6 +585,8 @@ app.include_router(scanner_router, prefix=f"{settings.API_V1_STR}", tags=["Scann
 app.include_router(wmax_router, prefix=f"{settings.API_V1_STR}", tags=["WMax Scanner"])
 app.include_router(mes_gateway_router, prefix=f"{settings.API_V1_STR}", tags=["MES-Gateway"])
 app.include_router(operators_router, prefix=f"{settings.API_V1_STR}", tags=["Operators"])
+app.include_router(cluster_router, prefix=f"{settings.API_V1_STR}", tags=["Cluster"])
+app.include_router(extdev_router, prefix=f"{settings.API_V1_STR}", tags=["External Devices"])
 
 # Mount static files for uploads (images, etc.)
 if os.path.exists(settings.UPLOAD_DIR):

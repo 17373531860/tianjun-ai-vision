@@ -2,6 +2,15 @@
   <div class="p-6 h-full overflow-y-auto">
     <h2 class="text-2xl font-bold mb-6 border-l-4 border-tech-blue pl-3 text-white">报警设置</h2>
 
+    <!-- 工位选择 Tab（多工位时显示） -->
+    <div v-if="channelCount > 1" class="mb-4">
+      <el-radio-group v-model="activeChannel" size="small" @change="onChannelChange">
+        <el-radio-button v-for="ch in channelCount" :key="ch - 1" :value="ch - 1">
+          工位 {{ ch }}
+        </el-radio-button>
+      </el-radio-group>
+    </div>
+
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <!-- 设备连接 -->
       <el-card shadow="never" class="bg-slate-800 border-slate-700">
@@ -10,6 +19,7 @@
             <div class="flex items-center gap-2">
               <el-icon class="text-tech-blue"><Connection /></el-icon>
               <span class="font-bold text-white">设备连接</span>
+              <el-tag v-if="channelCount > 1" size="small" type="info">工位 {{ activeChannel + 1 }}</el-tag>
             </div>
             <el-tag :type="isConnected ? 'success' : 'danger'" size="small">
               {{ isConnected ? '已连接' : '未连接' }}
@@ -18,7 +28,6 @@
         </template>
         
         <div class="space-y-4">
-          <!-- 串口设备列表 -->
           <div>
             <div class="text-gray-300 mb-2">选择串口设备</div>
             <div class="flex gap-2">
@@ -34,7 +43,6 @@
             </div>
           </div>
           
-          <!-- 波特率 -->
           <div>
             <div class="text-gray-300 mb-2">波特率</div>
             <el-select v-model="baudrate" :disabled="isConnected" class="w-full">
@@ -46,7 +54,6 @@
             </el-select>
           </div>
           
-          <!-- 连接按钮 -->
           <div class="flex gap-2">
             <el-button 
               v-if="!isConnected" 
@@ -95,7 +102,6 @@
             </div>
           </div>
           
-          <!-- 自定义命令（仅当选择自定义协议时显示） -->
           <div v-if="config.protocol === 'custom'" class="space-y-3">
             <div class="text-gray-300 text-sm">自定义命令（支持十六进制，如：A0 01 01 A2）</div>
             <div class="grid grid-cols-2 gap-3">
@@ -139,7 +145,6 @@
           />
           
           <div v-else class="space-y-3">
-            <!-- 测试模式开关 -->
             <div class="flex items-center justify-between p-3 bg-slate-900 rounded border" :class="config.test_mode ? 'border-green-500' : 'border-slate-700'">
               <div>
                 <div class="text-gray-300">测试模式</div>
@@ -148,7 +153,6 @@
               <el-switch v-model="config.test_mode" @change="saveConfig" />
             </div>
             
-            <!-- 四色灯测试按钮 -->
             <div class="text-xs text-gray-400 mb-1">灯光测试</div>
             <div class="grid grid-cols-4 gap-2">
               <el-button size="small" style="background:#ef4444;border:none;color:white" @click="testAction('red_on')" :disabled="!config.test_mode">红灯亮</el-button>
@@ -163,7 +167,6 @@
               <el-button size="small" @click="testAction('yellow_off')" :disabled="!config.test_mode">黄灯灭</el-button>
             </div>
             
-            <!-- 蜂鸣器测试 -->
             <div class="text-xs text-gray-400 mb-1 mt-2">蜂鸣器测试</div>
             <div class="grid grid-cols-2 gap-3">
               <el-button 
@@ -230,20 +233,19 @@
             <div class="flex items-center gap-2">
               <el-icon class="text-tech-blue"><Lightning /></el-icon>
               <span class="font-bold text-white">触发条件</span>
+              <el-tag v-if="channelCount > 1" size="small" type="info">工位 {{ activeChannel + 1 }}</el-tag>
             </div>
             <el-switch v-model="config.enabled" active-text="启用报警" @change="saveConfig" />
           </div>
         </template>
         
         <div class="space-y-4">
-          <!-- 当前项目信息 -->
           <div class="flex items-center gap-3 pb-3 border-b border-slate-700">
             <span class="text-gray-400 text-sm">当前项目:</span>
             <span class="text-white font-medium">{{ projectStore.currentProjectName }}</span>
             <el-tag v-if="projectStore.currentProjectId" type="success" size="small">运行中</el-tag>
           </div>
           
-          <!-- 提示信息 -->
           <el-alert 
             v-if="!projectStore.currentProjectId" 
             title="请先在顶部导航栏选择一个项目" 
@@ -288,7 +290,7 @@
             </div>
           </div>
 
-          <!-- 动态事件列表（基于项目事件） -->
+          <!-- 动态事件列表 -->
           <div 
             v-for="event in projectEvents" 
             :key="event.id"
@@ -393,14 +395,19 @@ import {
 } from '@element-plus/icons-vue';
 import api from '@/api/index';
 import { getProjectDetail, updateProject } from '@/api/project';
+import { getWorkstations } from '@/api/detection';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
 
+// 多工位
+const channelCount = ref(1);
+const activeChannel = ref(0);
+
 // 状态
-const projectEvents = ref([]);  // 项目中定义的事件列表
+const projectEvents = ref([]);
 const portList = ref([]);
 const selectedPort = ref('');
 const baudrate = ref(9600);
@@ -409,13 +416,13 @@ const loadingPorts = ref(false);
 const connecting = ref(false);
 const testing = ref('');
 const protocols = ref([]);
-const selectedEvent = ref('event1');  // 当前选中要模拟的事件
+const selectedEvent = ref('event1');
 
 // 配置
 const config = reactive({
   enabled: false,
   protocol: 'simple_ascii',
-  test_mode: true,  // 默认开启测试模式（静音）
+  test_mode: true,
   custom_commands: {
     light_on: '',
     light_off: '',
@@ -432,11 +439,42 @@ const config = reactive({
   }
 });
 
-// 获取串口列表
+const chParam = () => `?channel=${activeChannel.value}`;
+
+const onChannelChange = () => {
+  loadChannelStatus();
+};
+
+const loadChannelCount = async () => {
+  try {
+    const res = await getWorkstations();
+    channelCount.value = res.data.channel_count || 1;
+  } catch {
+    channelCount.value = 1;
+  }
+};
+
+const loadChannelStatus = async () => {
+  try {
+    const res = await api.get(`/alarm/status${chParam()}`);
+    isConnected.value = res.data.is_connected;
+    if (res.data.port) {
+      selectedPort.value = res.data.port;
+    } else {
+      selectedPort.value = '';
+    }
+    if (res.data.config) {
+      Object.assign(config, res.data.config);
+    }
+  } catch (err) {
+    console.error('获取报警状态失败:', err);
+  }
+};
+
 const refreshPorts = async () => {
   loadingPorts.value = true;
   try {
-    const res = await api.get('/alarm/ports');
+    const res = await api.get(`/alarm/ports${chParam()}`);
     portList.value = res.data.ports || [];
     isConnected.value = res.data.is_connected;
     if (res.data.current_port) {
@@ -455,7 +493,6 @@ const refreshPorts = async () => {
   }
 };
 
-// 获取协议列表
 const loadProtocols = async () => {
   try {
     const res = await api.get('/alarm/protocols');
@@ -465,33 +502,19 @@ const loadProtocols = async () => {
   }
 };
 
-// 获取状态和配置
 const loadStatus = async () => {
-  try {
-    const res = await api.get('/alarm/status');
-    isConnected.value = res.data.is_connected;
-    if (res.data.port) {
-      selectedPort.value = res.data.port;
-    }
-    if (res.data.config) {
-      Object.assign(config, res.data.config);
-    }
-  } catch (err) {
-    console.error('获取状态失败:', err);
-  }
+  await loadChannelStatus();
 };
 
-// 连接设备
 const connect = async () => {
   connecting.value = true;
   try {
-    await api.post('/alarm/connect', {
+    await api.post(`/alarm/connect${chParam()}`, {
       port: selectedPort.value,
       baudrate: baudrate.value
     });
     isConnected.value = true;
-    ElMessage.success('连接成功');
-    // 连接成功后保存配置（包含端口信息）
+    ElMessage.success(`工位 ${activeChannel.value + 1} 连接成功`);
     saveConfig();
   } catch (err) {
     ElMessage.error(err.response?.data?.detail || '连接失败');
@@ -500,22 +523,19 @@ const connect = async () => {
   }
 };
 
-// 断开连接
 const disconnect = async () => {
   try {
-    await api.post('/alarm/disconnect');
+    await api.post(`/alarm/disconnect${chParam()}`);
     isConnected.value = false;
-    ElMessage.success('已断开连接');
+    ElMessage.success(`工位 ${activeChannel.value + 1} 已断开连接`);
   } catch (err) {
     ElMessage.error('断开失败');
   }
 };
 
-// 保存配置（同时保存到后端报警服务和项目数据库）
 const saveConfig = async () => {
   try {
-    // 保存到报警服务（用于实时触发）
-    await api.post('/alarm/config', {
+    await api.post(`/alarm/config${chParam()}`, {
       enabled: config.enabled,
       protocol: config.protocol,
       test_mode: config.test_mode,
@@ -524,7 +544,6 @@ const saveConfig = async () => {
       idle_light: config.idle_light,
     });
     
-    // 保存到项目数据库（用于持久化和项目切换）
     if (projectStore.currentProjectId) {
       await updateProject(projectStore.currentProjectId, {
         alarm_config: {
@@ -545,11 +564,10 @@ const saveConfig = async () => {
   }
 };
 
-// 测试功能
 const testAction = async (action) => {
   testing.value = action;
   try {
-    await api.post('/alarm/test', { action });
+    await api.post(`/alarm/test${chParam()}`, { action });
     ElMessage.success(`已发送: ${action}`);
   } catch (err) {
     ElMessage.error(err.response?.data?.detail || '测试失败');
@@ -558,27 +576,24 @@ const testAction = async (action) => {
   }
 };
 
-// 触发报警
 const triggerAlarm = async (eventType) => {
   try {
-    await api.post(`/alarm/trigger/${eventType}`);
-    ElMessage.success(`已触发 ${eventType} 报警`);
+    await api.post(`/alarm/trigger/${eventType}${chParam()}`);
+    ElMessage.success(`工位 ${activeChannel.value + 1} 已触发 ${eventType} 报警`);
   } catch (err) {
     ElMessage.error('触发失败');
   }
 };
 
-// 停止报警
 const stopAlarm = async () => {
   try {
-    await api.post('/alarm/stop');
+    await api.post(`/alarm/stop${chParam()}`);
     ElMessage.success('已停止报警');
   } catch (err) {
     ElMessage.error('停止失败');
   }
 };
 
-// Voice settings
 const saveVoiceSettings = () => {
   systemStore.saveDetectionSettings();
 };
@@ -600,10 +615,8 @@ const testVoice = (text) => {
   window.speechSynthesis.speak(utterance);
 };
 
-// 更新事件配置
 const updateEventConfig = (eventId, field, value) => {
   if (!config.triggers[eventId]) {
-    // 初始化这个事件的配置
     config.triggers[eventId] = {
       enabled: false,
       color: 'red',
@@ -616,14 +629,12 @@ const updateEventConfig = (eventId, field, value) => {
   saveConfig();
 };
 
-// 获取事件标签类型
 const getEventTagType = (eventId) => {
   if (eventId === 'event1' || eventId === '1') return 'success';
   if (eventId === 'event2' || eventId === '2') return 'danger';
   return 'info';
 };
 
-// 加载当前项目的事件和报警配置
 const loadProjectEvents = async () => {
   if (!projectStore.currentProjectId) {
     projectEvents.value = [];
@@ -633,7 +644,6 @@ const loadProjectEvents = async () => {
     const detail = await getProjectDetail(projectStore.currentProjectId);
     projectEvents.value = detail.data.events_config || [];
     
-    // 加载项目的报警配置
     const alarmConfig = detail.data.alarm_config;
     if (alarmConfig) {
       config.enabled = alarmConfig.enabled ?? false;
@@ -643,7 +653,6 @@ const loadProjectEvents = async () => {
       config.triggers = alarmConfig.triggers ?? {};
       config.idle_light = alarmConfig.idle_light ?? { enabled: true, color: 'blue' };
       
-      // 加载设备连接信息
       if (alarmConfig.port) {
         selectedPort.value = alarmConfig.port;
       }
@@ -651,8 +660,7 @@ const loadProjectEvents = async () => {
         baudrate.value = alarmConfig.baudrate;
       }
       
-      // 同步到报警服务
-      await api.post('/alarm/config', {
+      await api.post(`/alarm/config${chParam()}`, {
         enabled: config.enabled,
         protocol: config.protocol,
         test_mode: config.test_mode,
@@ -661,10 +669,9 @@ const loadProjectEvents = async () => {
         idle_light: config.idle_light,
       });
       
-      // 如果有保存的端口且未连接，尝试自动连接
       if (alarmConfig.port && !isConnected.value) {
         try {
-          await api.post('/alarm/connect', {
+          await api.post(`/alarm/connect${chParam()}`, {
             port: alarmConfig.port,
             baudrate: alarmConfig.baudrate || 9600
           });
@@ -676,7 +683,6 @@ const loadProjectEvents = async () => {
       }
     }
     
-    // 设置默认选中的模拟事件
     if (projectEvents.value.length > 0) {
       selectedEvent.value = `event${projectEvents.value[0].id}`;
     }
@@ -685,19 +691,12 @@ const loadProjectEvents = async () => {
   }
 };
 
-// 获取事件名称
-const getEventName = (eventId) => {
-  const event = projectEvents.value.find(e => String(e.id) === String(eventId) || `event${e.id}` === eventId);
-  return event ? event.name : eventId;
-};
-
-// 监听项目变化
 watch(() => projectStore.currentProjectId, () => {
   loadProjectEvents();
 });
 
-// 初始化
-onMounted(() => {
+onMounted(async () => {
+  await loadChannelCount();
   refreshPorts();
   loadProtocols();
   loadStatus();

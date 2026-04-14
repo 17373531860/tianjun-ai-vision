@@ -243,3 +243,38 @@ vite.config.js:     server.port = 6001                // 实际端口
 
 ### wmax.py（新增模块）
 - WMax 扫码器设备管理 API（发现、连接、配置、高级控制）
+
+## v2.6.0 新增/修改 API
+
+### cluster.py（新增模块，挂载 /api/v1/cluster）
+- `GET /cluster/config` — 获取集群配置
+- `PUT /cluster/config` — 更新集群配置
+- `POST /cluster/report` — 从机上报检测数据
+- `GET /cluster/boxes` — 获取待汇总/已完成箱子列表
+- `GET /cluster/health` — 集群健康检查
+- 前端: `frontend/src/api/cluster.js`
+
+### external_device.py（新增模块，挂载 /api/v1/external-devices）
+- CRUD 外部设备 (TCP/Modbus TCP/串口/HTTP 轮询)
+- `POST /external-devices/{id}/connect` — 连接设备
+- `POST /external-devices/{id}/disconnect` — 断开设备
+- `GET /external-devices/{id}/logs` — 获取设备数据日志
+- 前端: `frontend/src/api/external_device.js`
+
+### channel_manager.py（修改）
+- `PUT /workstations/channel-config` — 持久化单通道配置（接受任意字段 dict）
+- `GET /workstations` 响应新增 `source_configs` 字段
+- `save_channel_source(ch_id, cfg, merge=True/False)` 方法
+
+### mes_gateway.py（修改）
+- `ConnectionCreate/ConnectionUpdate` 新增 `bound_channels: Optional[List[int]]`
+- `GET /mes/gateway/connections/by-channel?channel=X` — 按通道查询绑定连接
+- `_serialize_conn()` 响应新增 `bound_channels` 字段
+
+### scanner.py（修改）
+- `ScannerCreate/ScannerUpdate` 新增 `broadcast_channels` 字段
+- 扫码结果可广播到多通道
+
+### alarm.py（修改）
+- `AlarmRouter` 替代单一 `AlarmManager`，管理多通道独立报警设备
+- 所有报警 API 支持 `channel` 查询参数

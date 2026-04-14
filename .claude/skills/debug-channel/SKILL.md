@@ -48,8 +48,26 @@ class ChannelManager:
 
 ```json
 // backend/data/workstation_config.json
-{"channel_count": 2}
+{
+  "channel_count": 4,
+  "channels": {
+    "0": {
+      "source_type": "video",
+      "gpu_device": "cuda:0",
+      "project_id": 12,
+      "video_file": "/path/to/video.avi",
+      "was_detecting": false
+    }
+  }
+}
 ```
+
+### 自动保存/恢复 (v2.6.0)
+- **启动时**: `auto_load_active_project()` 按通道 project_id 加载独立项目+模型
+- **启动时**: `auto_restore_video_sources()` 恢复视频源+GPU+检测状态
+- **关闭时**: `cleanup_on_exit()` 保存 was_detecting 标志
+- **通道配置持久化**: `save_channel_source(ch_id, cfg, merge=True/False)`
+- **channel_count 保护**: `_save_config()` 用 `max(file_count, self.channel_count)` 防止热重载覆盖
 
 ## API 端点 (挂载在 /api/v1/workstations)
 
@@ -144,9 +162,36 @@ multiChannelData.value[0].mes = data.mes
 
 **影响**: 未绑码 banner、scan toast、MES 信息条都依赖 `mesData`。
 
+## 每通道独立项目 (v2.6.0)
+
+**问题**: 前端 `startDetectionForChannel(ch)` 使用全局 `currentProject` 给所有通道设项目，导致模型类别与步骤不匹配、检测结果被丢弃。
+
+**修复**: `startDetectionForChannel` 优先使用 `multiChannelData[ch].project`（从 `workstation_config` 加载的通道绑定项目），`syncProjectConfig(ch, explicitProject)` 支持传入指定项目。
+
+**前端加载流程**:
+1. `fetchChannelCount()` → `loadPerChannelDetectionSettings(sourceConfigs)` 
+2. 每通道根据 `project_id` 从后端获取完整项目数据 → 存入 `multiChannelData[ch].project`
+3. 启动检测时用该通道绑定的项目，非全局 `currentProject`
+
+## 集群汇总 (v2.6.0)
+
+- `backend/api/cluster.py` + `backend/services/cluster_collector.py`
+- Master/Slave 角色，从机通过 `/cluster/report` 上报数据
+- 多通道从机自动用 `station_id-{channel_id}` 后缀区分通道
+- 主机等齐所有工位后触发 MES 推送
+
+## 外部设备 (v2.6.0)
+
+- `backend/api/external_device.py` + `backend/services/external_device.py`
+- 支持 TCP/Modbus TCP/串口/HTTP 轮询
+- 数据可分发到 ClusterCollector 或 MESGateway extra_fields
+
 ## 已知陷阱
 - `_propagate_model` 方法的调用路径不完全清晰
 - 共享模型模式下，一个通道释放模型可能影响其他通道
 - `workstation_config.json` 是简单JSON文件，无并发写保护
 - 前端 `getWorkstations()` 在页面加载时调用一次，后续通道变化不会自动刷新
 - 单通道模式下 `startPolling` 必须手动将 `data.mes` 赋值到 `multiChannelData[0].mes`，否则 MES 相关 UI 全部失效
+- **前端 startDetectionForChannel 必须用通道绑定项目，不能用全局 currentProject，否则所有通道的步骤配置会被覆盖**
+- **channel_count 在 _save_config 中必须用 max(file_count, self.channel_count)，否则热重载时会被覆盖为 1**
+- **MJPEG 四通道必须有 min_interval sleep，否则 CPU 100%**

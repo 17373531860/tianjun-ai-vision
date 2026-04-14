@@ -32,7 +32,7 @@ class MESGateway:
     def get_extra_fields(self, channel_id: int) -> dict:
         return self._extra_fields.get(channel_id, {})
 
-    def dispatch(self, event_type: str, context: dict, channel_id: int = 0):
+    def dispatch(self, event_type: str, context: dict, channel_id: int = None):
         """分发事件到所有匹配的外部 MES 连接"""
         if not self.enabled:
             return
@@ -48,6 +48,9 @@ class MESGateway:
                 events = conn.push_events or []
                 if event_type not in events:
                     continue
+                bound = conn.bound_channels
+                if bound and channel_id is not None and channel_id not in bound:
+                    continue
                 self._send_to_connection(db, conn, event_type, context, channel_id)
             db.commit()
         except Exception as e:
@@ -58,11 +61,11 @@ class MESGateway:
             db.close()
 
     def _send_to_connection(self, db, conn: MESConnection,
-                            event_type: str, context: dict, channel_id: int):
+                            event_type: str, context: dict, channel_id: int = None):
         """向单个连接发送数据, 含重试"""
         config = conn.config or {}
         static = config.get("static_fields", {})
-        extra = self._extra_fields.get(channel_id, {})
+        extra = self._extra_fields.get(channel_id or 0, {})
 
         full_context = {
             **context,

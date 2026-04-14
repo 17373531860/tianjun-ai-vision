@@ -36,6 +36,16 @@
           </div>
         </template>
       </el-table-column>
+      <el-table-column label="绑定工位" width="140">
+        <template #default="{ row }">
+          <div v-if="row.bound_channels && row.bound_channels.length" class="flex gap-1 flex-wrap">
+            <el-tag v-for="ch in row.bound_channels" :key="ch" size="small">
+              工位 {{ ch + 1 }}
+            </el-tag>
+          </div>
+          <span v-else class="text-xs text-gray-500">全部工位</span>
+        </template>
+      </el-table-column>
       <el-table-column label="重试" width="90">
         <template #default="{ row }">
           {{ row.retry_count }}次/{{ row.retry_interval_sec }}s
@@ -211,10 +221,20 @@
           </div>
           <el-button size="small" @click="modbusRegisters.push({ address: 40001, source: 'result_code', data_type: 'uint16' })">+ 添加寄存器</el-button>
         </template>
+        <el-form-item label="绑定工位">
+          <template v-if="channelCount > 1">
+            <el-checkbox-group v-model="form.bound_channels">
+              <el-checkbox v-for="ch in channelCount" :key="ch - 1" :value="ch - 1" :label="`工位 ${ch}`" />
+            </el-checkbox-group>
+            <div class="text-xs text-gray-500 mt-1">不选则接收所有工位的数据</div>
+          </template>
+          <span v-else class="text-xs text-gray-400">单工位模式，无需绑定</span>
+        </el-form-item>
         <el-form-item label="推送时机">
           <el-checkbox-group v-model="form.push_events">
             <el-checkbox value="cycle_end" label="检测周期结束" />
             <el-checkbox value="session_end" label="检测会话结束" />
+            <el-checkbox value="box_complete" label="箱子汇总完成（集群模式）" />
           </el-checkbox-group>
         </el-form-item>
         <el-form-item label="重试次数">
@@ -386,6 +406,7 @@ import {
 const eventLabels = {
   cycle_end: '周期结束',
   session_end: '会话结束',
+  box_complete: '箱子汇总',
 }
 
 const connections = ref([])
@@ -409,7 +430,17 @@ const form = reactive({
   push_events: [],
   retry_count: 3,
   retry_interval_sec: 5,
+  bound_channels: [],
 })
+
+const channelCount = ref(1)
+const loadChannelCount = async () => {
+  try {
+    const { getWorkstations } = await import('@/api/detection')
+    const res = await getWorkstations()
+    channelCount.value = res.data.channel_count || 1
+  } catch { channelCount.value = 1 }
+}
 
 const configUrl = ref('')
 const configMethod = ref('POST')
@@ -476,6 +507,7 @@ function openCreate() {
   form.push_events = []
   form.retry_count = 3
   form.retry_interval_sec = 5
+  form.bound_channels = []
   configUrl.value = ''
   configMethod.value = 'POST'
   configFormKey.value = 'param'
@@ -512,6 +544,7 @@ function openEdit(row) {
   form.push_events = [...(row.push_events || [])]
   form.retry_count = row.retry_count
   form.retry_interval_sec = row.retry_interval_sec
+  form.bound_channels = [...(row.bound_channels || [])]
 
   const cfg = row.config || {}
   configUrl.value = cfg.url || ''
@@ -629,6 +662,7 @@ async function doSave() {
       retry_count: form.retry_count,
       retry_interval_sec: form.retry_interval_sec,
       extra_fields_schema: efSchema.length ? efSchema : null,
+      bound_channels: form.bound_channels.length ? form.bound_channels : null,
     }
     if (editing.value) {
       await updateConnection(editing.value.id, payload)
@@ -710,7 +744,10 @@ function showLogDetail(row) {
   showDetail.value = true
 }
 
-onMounted(loadConnections)
+onMounted(() => {
+  loadConnections()
+  loadChannelCount()
+})
 </script>
 
 <style scoped>

@@ -30,6 +30,7 @@ class ScannerCreate(BaseModel):
     warn_no_barcode: bool = False
     rebind_mode: str = "rescan"
     bind_timing: str = "mid_cycle"
+    broadcast_channels: Optional[list] = None
 
 
 class ScannerUpdate(BaseModel):
@@ -48,6 +49,7 @@ class ScannerUpdate(BaseModel):
     warn_no_barcode: Optional[bool] = None
     rebind_mode: Optional[str] = None
     bind_timing: Optional[str] = None
+    broadcast_channels: Optional[list] = None
 
 
 def _serialize_device(d):
@@ -63,6 +65,7 @@ def _serialize_device(d):
         "warn_no_barcode": getattr(d, 'warn_no_barcode', False),
         "rebind_mode": getattr(d, 'rebind_mode', 'rescan'),
         "bind_timing": getattr(d, 'bind_timing', 'mid_cycle'),
+        "broadcast_channels": getattr(d, 'broadcast_channels', None) or [],
     }
 
 

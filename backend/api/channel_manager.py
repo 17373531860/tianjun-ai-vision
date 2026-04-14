@@ -76,15 +76,18 @@ class ChannelManager:
         """Resize the number of active channels (1, 2 or 4)."""
         from backend.api.source import VideoSourceManager
 
-        if count not in (1, 2, 4):
-            raise ValueError("channel_count must be 1, 2, or 4")
+        if count < 1 or count > MAX_CHANNELS:
+            raise ValueError(f"channel_count must be 1-{MAX_CHANNELS}")
 
         with self._lock:
             # Stop and remove channels that exceed the new count
             to_remove = [cid for cid in self.channels if cid >= count]
             for cid in to_remove:
                 try:
-                    self.channels[cid].stop()
+                    mgr = self.channels[cid]
+                    if hasattr(mgr, 'current_session_id') and mgr.current_session_id:
+                        mgr.end_session()
+                    mgr.stop()
                 except Exception as e:
                     print(f"[ChannelManager] Error stopping channel {cid}: {e}")
                 del self.channels[cid]
@@ -92,7 +95,10 @@ class ChannelManager:
             # Create missing channels
             for cid in range(count):
                 if cid not in self.channels:
-                    self.channels[cid] = VideoSourceManager(channel_id=cid)
+                    new_mgr = VideoSourceManager(channel_id=cid)
+                    if 0 in self.channels and hasattr(self.channels[0], '_mes_hook'):
+                        new_mgr._mes_hook = self.channels[0]._mes_hook
+                    self.channels[cid] = new_mgr
 
             self.channel_count = count
             self._save_config()
@@ -191,11 +197,56 @@ class ChannelManager:
     def _save_config(self):
         try:
             os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
-            data = {"channel_count": self.channel_count}
+            existing = {}
+            if os.path.exists(_CONFIG_FILE):
+                try:
+                    with open(_CONFIG_FILE, 'r') as f:
+                        existing = json.load(f)
+                except Exception:
+                    pass
+            file_count = existing.get("channel_count", 1)
+            data = {"channel_count": max(file_count, self.channel_count)}
+            data["channels"] = existing.get("channels", {})
             with open(_CONFIG_FILE, 'w') as f:
-                json.dump(data, f)
+                json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"[ChannelManager] Failed to save config: {e}")
+
+    def save_channel_source(self, channel_id: int, source_cfg: dict, merge: bool = True):
+        """持久化单个工位的视频源配置。merge=True 时合并到现有配置，False 时替换。"""
+        try:
+            os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
+            data = {"channel_count": self.channel_count, "channels": {}}
+            if os.path.exists(_CONFIG_FILE):
+                try:
+                    with open(_CONFIG_FILE, 'r') as f:
+                        data = json.load(f)
+                except Exception:
+                    pass
+            file_count = data.get("channel_count", 1)
+            data["channel_count"] = max(file_count, self.channel_count)
+            if "channels" not in data:
+                data["channels"] = {}
+            ch_key = str(channel_id)
+            if merge and ch_key in data["channels"]:
+                data["channels"][ch_key].update(source_cfg)
+            else:
+                data["channels"][ch_key] = source_cfg
+            with open(_CONFIG_FILE, 'w') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[ChannelManager] 保存 ch{channel_id} 源配置失败: {e}")
+
+    def get_channel_sources(self) -> dict:
+        """读取所有工位的持久化源配置"""
+        try:
+            if os.path.exists(_CONFIG_FILE):
+                with open(_CONFIG_FILE, 'r') as f:
+                    data = json.load(f)
+                return data.get("channels", {})
+        except Exception as e:
+            print(f"[ChannelManager] 读取源配置失败: {e}")
+        return {}
 
     def _load_config(self):
         try:
@@ -205,7 +256,7 @@ class ChannelManager:
                     data = json.load(f)
                 count = data.get("channel_count", 1)
                 print(f"[ChannelManager] 加载配置: channel_count={count}")
-                if count in (1, 2, 4) and count != self.channel_count:
+                if 1 <= count <= MAX_CHANNELS and count != self.channel_count:
                     self.set_channel_count(count)
             else:
                 print(f"[ChannelManager] 配置文件不存在，使用默认 channel_count=1")
@@ -255,20 +306,40 @@ def get_channel_manager() -> ChannelManager:
 @router.get("/")
 def list_workstations():
     """Return status of all active workstations/channels."""
+    saved = channel_manager.get_channel_sources()
     return {
         "channel_count": channel_manager.channel_count,
         "channels": channel_manager.all_status(),
+        "source_configs": saved,
     }
 
 
 @router.post("/mode")
 def set_workstation_mode(req: WorkstationModeRequest):
-    """Set the number of active workstations (1, 2, or 4)."""
+    """Set the number of active workstations and optionally apply per-channel config."""
     try:
         channel_manager.set_channel_count(req.channel_count)
-        return {"status": "success", "channel_count": req.channel_count}
+        applied = []
+        for ch_cfg in req.channels:
+            try:
+                mgr = channel_manager.get(ch_cfg.channel_id)
+                if ch_cfg.gpu_device and ch_cfg.gpu_device != "auto":
+                    mgr.device = ch_cfg.gpu_device
+                applied.append(ch_cfg.channel_id)
+            except ValueError:
+                pass
+        return {"status": "success", "channel_count": req.channel_count,
+                "applied_configs": applied}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/channel-config")
+def save_channel_config(body: dict):
+    """持久化单个工位的视频源配置（接受任意字段）"""
+    ch_id = body.pop("channel_id", 0)
+    channel_manager.save_channel_source(ch_id, body, merge=False)
+    return {"status": "success", "channel_id": ch_id, "config": body}
 
 
 class GpuAssignRequest(BaseModel):

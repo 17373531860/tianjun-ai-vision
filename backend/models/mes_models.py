@@ -266,6 +266,7 @@ class ScannerDevice(Base):
     warn_no_barcode = Column(Boolean, default=False)
     rebind_mode = Column(String(20), default="rescan")
     bind_timing = Column(String(20), default="mid_cycle")
+    broadcast_channels = Column(JSON, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -311,6 +312,7 @@ class MESConnection(Base):
     retry_count = Column(Integer, default=3)
     retry_interval_sec = Column(Integer, default=5)
     extra_fields_schema = Column(JSON, nullable=True)
+    bound_channels = Column(JSON, nullable=True)
 
     last_sync_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -336,3 +338,129 @@ class MESCommLog(Base):
     duration_ms = Column(Integer, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+# ============================================================
+# 集群模式 (多实例主从汇总)
+# ============================================================
+
+class ClusterConfig(Base):
+    """集群配置表 — 单行配置，id 固定为 1"""
+    __tablename__ = "cluster_config"
+
+    id = Column(Integer, primary_key=True, default=1)
+    role = Column(String(20), nullable=False, default="standalone")
+    master_url = Column(String(256), nullable=True)
+    station_id = Column(String(32), nullable=False, default="A")
+    expected_stations = Column(JSON, nullable=True)
+    sync_mode = Column(String(20), nullable=False, default="wait_all")
+    timeout_sec = Column(Integer, nullable=False, default=300)
+    enabled = Column(Boolean, default=False)
+
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class BoxAggregation(Base):
+    """箱子汇总记录 — 按 box_serial 收集各工位数据"""
+    __tablename__ = "box_aggregations"
+    __table_args__ = (
+        Index("ix_box_serial_station", "box_serial", "station_id", unique=True),
+        Index("ix_box_status", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    box_serial = Column(String(128), nullable=False, index=True)
+    station_id = Column(String(32), nullable=False)
+    source_address = Column(String(128), nullable=True)
+    channel_id = Column(Integer, nullable=True)
+
+    cycle_context = Column(JSON, nullable=True)
+    is_good = Column(Boolean, nullable=True)
+    event_name = Column(String(100), nullable=True)
+
+    status = Column(String(20), nullable=False, default="received")
+    received_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ============================================================
+# 外部设备接入（称重器、PLC、传感器等）
+# ============================================================
+
+class ExternalDevice(Base):
+    """外部数据设备配置表 — 通用接入各类工业设备
+
+    支持协议: tcp, modbus_tcp, serial, http_poll
+    数据角色: weight(称重), sensor(传感器), plc(PLC信号), custom(自定义)
+    """
+    __tablename__ = "external_devices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(64), nullable=False)
+    device_role = Column(String(20), nullable=False, default="weight")
+    protocol = Column(String(20), nullable=False, default="tcp")
+
+    ip = Column(String(45), nullable=True)
+    port = Column(Integer, nullable=True)
+    serial_port = Column(String(32), nullable=True)
+    serial_baud = Column(Integer, nullable=True, default=9600)
+
+    # 协议配置（JSON，各协议不同字段）
+    # tcp: {"delimiter": "\r\n"}
+    # modbus_tcp: {"unit_id": 1, "register": 0, "count": 2, "func": "holding", "poll_interval": 1.0}
+    # serial: {"delimiter": "\r\n", "bytesize": 8, "parity": "N", "stopbits": 1}
+    # http_poll: {"url": "http://...", "method": "GET", "interval": 2.0, "json_path": "data.weight"}
+    protocol_config = Column(JSON, nullable=True)
+
+    # 数据解析
+    # parse_mode: direct(整行就是值), regex(正则提取), json_path(JSON字段), split(分隔符)
+    parse_mode = Column(String(20), nullable=False, default="direct")
+    # parse_config 示例:
+    # regex: {"pattern": "([\\d.]+)\\s*kg", "group": 1, "fields": {"weight": 1}}
+    # split: {"delimiter": ",", "fields": {"barcode": 0, "weight": 1}}
+    # json_path: {"fields": {"weight": "data.weight", "unit": "data.unit"}}
+    parse_config = Column(JSON, nullable=True)
+
+    # 业务配置
+    station_id = Column(String(32), nullable=True)
+    channel_id = Column(Integer, nullable=True)
+    # 数据流向: cluster(注入ClusterCollector), extra_fields(注入MES extra), both(两者)
+    data_target = Column(String(20), nullable=False, default="cluster")
+    # 范围校验（如称重范围）
+    # {"weight": {"min": 10.0, "max": 50.0}}
+    validation_rules = Column(JSON, nullable=True)
+    enabled = Column(Boolean, default=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ExternalDeviceLog(Base):
+    """外部设备数据日志"""
+    __tablename__ = "external_device_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    device_id = Column(Integer, ForeignKey("external_devices.id", ondelete="SET NULL"), nullable=True)
+    raw_data = Column(String(1024), nullable=True)
+    parsed_data = Column(JSON, nullable=True)
+    box_serial = Column(String(128), nullable=True)
+    is_valid = Column(Boolean, default=True)
+    error_msg = Column(String(256), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class BoxSummary(Base):
+    """箱子汇总结果 — 所有工位到齐后生成"""
+    __tablename__ = "box_summaries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    box_serial = Column(String(128), nullable=False, unique=True, index=True)
+    total_stations = Column(Integer, nullable=False, default=0)
+    completed_stations = Column(Integer, nullable=False, default=0)
+    overall_result = Column(String(10), nullable=True)
+    aggregated_context = Column(JSON, nullable=True)
+    status = Column(String(20), nullable=False, default="pending")
+    pushed_at = Column(DateTime(timezone=True), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

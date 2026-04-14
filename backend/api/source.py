@@ -19,7 +19,8 @@ import subprocess
 from datetime import datetime
 from ctypes import *
 from PIL import Image, ImageDraw, ImageFont
-from backend.core.config import settings
+from backend.core.config import settings, DATA_DIR
+import json as _json
 from backend.db.database import SessionLocal
 from backend.models.models import DetectionSession, DetectionCycle, StepRecord, VideoClip, DataExportSetting, Project
 
@@ -1016,28 +1017,23 @@ class VideoSourceManager:
             self._session_start_date = None
             self._session_start_shift = None
     
+    def _get_counter_file(self) -> str:
+        """返回当前通道的计数器持久化文件路径"""
+        project_id = self.project_config.get('id') if self.project_config else None
+        return os.path.join(DATA_DIR, 'counters', f'project_{project_id}_ch{self.channel_id}.json')
+
     def _persist_counters(self):
-        """将当前计数器值写回项目的 counters_config，实现跨重启持久化"""
+        """将当前计数器值写到通道专属文件，避免多通道竞争同一行"""
         project_id = self.project_config.get('id') if self.project_config else None
         if not project_id or not self.counters:
             return
         try:
-            db = SessionLocal()
-            project = db.query(Project).filter(Project.id == project_id).first()
-            if project and project.counters_config:
-                updated = False
-                for counter in project.counters_config:
-                    name = counter.get('name', '')
-                    if name in self.counters:
-                        counter['value'] = self.counters[name]
-                        updated = True
-                if updated:
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(project, 'counters_config')
-                    db.commit()
-            db.close()
+            path = self._get_counter_file()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as f:
+                _json.dump(self.counters, f, ensure_ascii=False)
         except Exception as e:
-            print(f"[计数器持久化] 保存失败: {e}")
+            print(f"[计数器持久化] ch{self.channel_id} 保存失败: {e}")
 
     def _get_current_shift(self) -> Optional[str]:
         """Return 'day' or 'night' based on current time and project data_config.
@@ -1549,15 +1545,29 @@ class VideoSourceManager:
         # 默认计数器名称列表
         DEFAULT_COUNTERS = ['总产量', '合格总数', '不良总数', 'NG步骤']
         
-        # 先添加配置中的计数器
+        # 先从项目配置添加计数器（作为默认值）
         for counter in counters_config:
             self.counters[counter.get('name', '')] = counter.get('value', 0)
         
-        # 确保默认计数器存在（NG步骤 始终从0开始，不能设置默认值）
+        # 确保默认计数器存在
         for default_name in DEFAULT_COUNTERS:
             if default_name not in self.counters:
-                # NG步骤 计数器特殊处理：始终从 0 开始
                 self.counters[default_name] = 0
+
+        # 从通道专属文件恢复持久化的值（覆盖默认值）
+        project_id = config.get('id')
+        if project_id:
+            counter_file = os.path.join(DATA_DIR, 'counters', f'project_{project_id}_ch{self.channel_id}.json')
+            if os.path.exists(counter_file):
+                try:
+                    with open(counter_file, 'r', encoding='utf-8') as f:
+                        saved = _json.load(f)
+                    for name, val in saved.items():
+                        if name in self.counters:
+                            self.counters[name] = val
+                    print(f"[计数器] ch{self.channel_id} 从文件恢复: {self.counters}")
+                except Exception as e:
+                    print(f"[计数器] ch{self.channel_id} 恢复失败: {e}")
         
         # 重置周期状态
         self.current_cycle_steps = []
@@ -1690,6 +1700,7 @@ class VideoSourceManager:
             try:
                 if not is_native_pytorch and hasattr(self.model, 'model'):
                     inner = self.model.model
+                    # 方法1: 从 bindings 读取
                     if hasattr(inner, 'bindings') and inner.bindings:
                         for b in inner.bindings.values() if isinstance(inner.bindings, dict) else inner.bindings:
                             shape = getattr(b, 'shape', None)
@@ -1697,11 +1708,44 @@ class VideoSourceManager:
                                 engine_imgsz = max(shape[2], shape[3])
                                 print(f"[模型加载] 从引擎 bindings 检测到 imgsz={engine_imgsz}")
                                 break
+                    # 方法2: 从 input_shape 读取
                     if engine_imgsz is None and hasattr(inner, 'input_shape'):
                         s = inner.input_shape
                         if isinstance(s, (list, tuple)) and len(s) >= 3:
                             engine_imgsz = max(s[-2], s[-1])
                             print(f"[模型加载] 从 input_shape 检测到 imgsz={engine_imgsz}")
+                    # 方法3: 从 context/engine 读取 TensorRT binding shape
+                    if engine_imgsz is None:
+                        for attr_name in ('context', 'engine', 'runtime'):
+                            ctx = getattr(inner, attr_name, None)
+                            if ctx is None:
+                                continue
+                            if hasattr(ctx, 'get_tensor_shape'):
+                                try:
+                                    for i in range(10):
+                                        name = ctx.get_tensor_name(i) if hasattr(ctx, 'get_tensor_name') else None
+                                        if name is None:
+                                            break
+                                        s = ctx.get_tensor_shape(name)
+                                        if len(s) == 4 and s[1] == 3:
+                                            engine_imgsz = max(s[2], s[3])
+                                            print(f"[模型加载] 从 TRT {attr_name}.get_tensor_shape 检测到 imgsz={engine_imgsz}")
+                                            break
+                                except Exception:
+                                    pass
+                            if engine_imgsz:
+                                break
+                    # 方法4: 遍历 model 属性查找 shape 元组
+                    if engine_imgsz is None:
+                        for attr_name in dir(inner):
+                            if 'shape' in attr_name.lower() or attr_name == 'fp16':
+                                continue
+                            val = getattr(inner, attr_name, None)
+                            if isinstance(val, (list, tuple)) and len(val) == 4:
+                                if val[0] == 1 and val[1] == 3 and val[2] == val[3] and val[2] > 0:
+                                    engine_imgsz = val[2]
+                                    print(f"[模型加载] 从 inner.{attr_name} 检测到 imgsz={engine_imgsz}")
+                                    break
                 if engine_imgsz and engine_imgsz > 0:
                     detected_imgsz = engine_imgsz
                 elif hasattr(self.model, 'overrides') and 'imgsz' in self.model.overrides:
@@ -1729,6 +1773,21 @@ class VideoSourceManager:
                         half=_half
                     )
                     print("[模型预热] warm-up done")
+                except AssertionError as ae:
+                    import re
+                    m = re.search(r'model size \(1, 3, (\d+), (\d+)\)', str(ae))
+                    if m:
+                        correct_sz = max(int(m.group(1)), int(m.group(2)))
+                        print(f"[模型预热] TensorRT 引擎实际需要 imgsz={correct_sz}，自动修正")
+                        self._model_imgsz = correct_sz
+                        self.model.predict(
+                            np.zeros((correct_sz, correct_sz, 3), dtype=np.uint8),
+                            conf=0.5, imgsz=correct_sz, verbose=False, device=device,
+                            half=_half
+                        )
+                        print("[模型预热] warm-up done (修正后)")
+                    else:
+                        print(f"[模型预热] warm-up failed: {ae}")
                 except Exception as e:
                     print(f"[模型预热] warm-up failed: {e}")
             
@@ -4198,6 +4257,30 @@ class VideoSourceManager:
                 cycle_strategy=cycle_strategy,
             )
         
+        # 为当前帧中可见的跟踪对象生成步骤截图（限频：每秒最多1次）
+        import base64, cv2
+        _ss_now = time.time()
+        _ss_interval = 1.0
+        if (original_frame is not None and len(seen_track_ids) > 0
+                and _ss_now - getattr(self, '_last_screenshot_time', 0) >= _ss_interval):
+            self._last_screenshot_time = _ss_now
+            img_h, img_w = original_frame.shape[:2]
+            pad = 20
+            for tid in seen_track_ids:
+                obj = self._tracking_objects.get(tid)
+                if not obj:
+                    continue
+                label = obj['class_name']
+                bbox = obj['bbox']
+                cx1 = max(0, int(bbox['x'] * img_w) - pad)
+                cy1 = max(0, int(bbox['y'] * img_h) - pad)
+                cx2 = min(img_w, int((bbox['x'] + bbox['w']) * img_w) + pad)
+                cy2 = min(img_h, int((bbox['y'] + bbox['h']) * img_h) + pad)
+                if cx2 > cx1 and cy2 > cy1:
+                    crop = original_frame[cy1:cy2, cx1:cx2]
+                    _, buffer = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    self.step_screenshots[label] = base64.b64encode(buffer).decode('utf-8')
+
         self._rebuild_checklist(expected_items)
         
         if not self._tracking_cycle_active:
@@ -5241,11 +5324,11 @@ class VideoSourceManager:
             'toast_id': event.get('toast_id', 'ok' if event.get('id') == 1 else 'ng' if event.get('id') == 2 else 'ok')
         })
         
-        # 触发报警器（如果已配置）
+        # 触发报警器（如果已配置）— 按通道路由到对应工位的指示灯
         try:
-            from backend.api.alarm import alarm_manager
+            from backend.api.alarm import alarm_router
             event_type = f'event{current_event_id}'
-            alarm_manager.trigger_alarm(event_type)
+            alarm_router.trigger_alarm(event_type, channel_id=self.channel_id)
         except Exception as e:
             print(f"触发报警失败: {e}")
         
@@ -5309,6 +5392,7 @@ class VideoSourceManager:
                 if wait_time > 200:
                     debug_log(f"future.result等待耗时: {wait_time:.1f}ms", "DETECT")
                 self._inference_timeout_count = 0
+                self._consecutive_detect_errors = 0
                 self._last_successful_inference = time.time()
             except FuturesTimeoutError:
                 self._inference_timeout_count += 1
@@ -5384,9 +5468,15 @@ class VideoSourceManager:
                         det['backup_for'] = self.step_backup_map[class_name]
                     detections.append(det)
         except Exception as e:
-            print(f"检测错误: {e}")
-            import traceback
-            traceback.print_exc()
+            self._consecutive_detect_errors = getattr(self, '_consecutive_detect_errors', 0) + 1
+            if self._consecutive_detect_errors <= 3:
+                print(f"检测错误: {e}")
+                import traceback
+                traceback.print_exc()
+            elif self._consecutive_detect_errors == 4:
+                print(f"[警告] 检测持续报错，后续相同错误将被抑制 (已连续 {self._consecutive_detect_errors} 次)")
+            if self._consecutive_detect_errors > 2:
+                time.sleep(0.5)
         
         return detections
     
@@ -5414,6 +5504,7 @@ class VideoSourceManager:
             try:
                 results = future.result(timeout=self._inference_timeout)
                 self._inference_timeout_count = 0
+                self._consecutive_detect_errors = 0
                 self._last_successful_inference = time.time()
             except FuturesTimeoutError:
                 self._inference_timeout_count += 1
@@ -5466,8 +5557,14 @@ class VideoSourceManager:
                         det['display_name'] = self.step_display_names[class_name]
                     detections.append(det)
         except Exception as e:
-            print(f"tracking error: {e}")
-            import traceback; traceback.print_exc()
+            self._consecutive_detect_errors = getattr(self, '_consecutive_detect_errors', 0) + 1
+            if self._consecutive_detect_errors <= 3:
+                print(f"tracking error: {e}")
+                import traceback; traceback.print_exc()
+            elif self._consecutive_detect_errors == 4:
+                print(f"[警告] 跟踪持续报错，后续相同错误将被抑制 (已连续 {self._consecutive_detect_errors} 次)")
+            if self._consecutive_detect_errors > 2:
+                time.sleep(0.5)
         return detections
     
     def _detect_segment(self, frame: np.ndarray) -> list:
@@ -7040,8 +7137,8 @@ class VideoSourceManager:
         self.is_detecting = True
         
         try:
-            from backend.api.alarm import alarm_manager
-            alarm_manager.start_idle_light()
+            from backend.api.alarm import alarm_router
+            alarm_router.start_idle_light(channel_id=self.channel_id)
         except Exception:
             pass
         
@@ -7068,8 +7165,8 @@ class VideoSourceManager:
         self.is_detecting = False
         
         try:
-            from backend.api.alarm import alarm_manager
-            alarm_manager.stop_idle_light()
+            from backend.api.alarm import alarm_router
+            alarm_router.stop_idle_light(channel_id=self.channel_id)
         except Exception:
             pass
         
@@ -7887,7 +7984,10 @@ class VideoSourceManager:
         """Generate MJPEG stream.  Only encodes and sends when a genuinely new
         frame is available from the capture thread, so CPU is never wasted on
         duplicate JPEG encodes."""
+        from backend.api.channel_manager import channel_manager
         target_interval = 1.0 / max(self.target_stream_fps, 1)
+        num_ch = max(channel_manager.channel_count, 1)
+        min_interval = max(0.02, 0.015 * num_ch)
         idle_count = 0
         max_idle = 600
         last_seq = -1
@@ -7903,7 +8003,7 @@ class VideoSourceManager:
                         last_seq = seq
 
                 if frame is None:
-                    time.sleep(0.002)
+                    time.sleep(0.005)
                     continue
 
                 chunk = self._encode_and_yield(frame)
@@ -7912,7 +8012,9 @@ class VideoSourceManager:
                     yield chunk
 
                 if self.frame_limit_enabled:
-                    time.sleep(max(0.001, target_interval))
+                    time.sleep(max(min_interval, target_interval))
+                else:
+                    time.sleep(min_interval)
             else:
                 frame = self.get_frame()
                 if frame is None:

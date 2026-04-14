@@ -120,6 +120,8 @@ export const useSystemStore = defineStore('system', {
     },
     // 检测框设置 (Detection Box Settings) - 绑定项目
     detection: JSON.parse(JSON.stringify(defaultDetection)),
+    // 多工位: 每通道独立检测设置 { channelId: detectionConfig }
+    channelDetections: {},
     // 数据管理设置 (Data Settings)
     data: {
       retentionDays: 30,
@@ -205,6 +207,25 @@ export const useSystemStore = defineStore('system', {
         // 没有项目配置，使用默认值（深拷贝）
         this.detection = JSON.parse(JSON.stringify(defaultDetection));
       }
+    },
+    // 为指定通道加载检测设置
+    loadDetectionForChannel(channelId, detectionConfig) {
+      const merged = {
+        ...defaultDetection,
+        ...(detectionConfig || {}),
+        toasts: {
+          ok: { ...defaultDetection.toasts.ok, ...(detectionConfig?.toasts?.ok || {}) },
+          ng: { ...defaultDetection.toasts.ng, ...(detectionConfig?.toasts?.ng || {}) },
+          scan: { ...defaultDetection.toasts.scan, ...(detectionConfig?.toasts?.scan || {}) },
+          warn_no_barcode: { ...defaultDetection.toasts.warn_no_barcode, ...(detectionConfig?.toasts?.warn_no_barcode || {}) }
+        },
+        customToasts: detectionConfig?.customToasts || []
+      };
+      this.channelDetections[channelId] = merged;
+    },
+    // 获取指定通道的检测设置，无则回退到全局
+    getChannelDetection(channelId) {
+      return this.channelDetections[channelId] || this.detection;
     },
     // 保存检测框设置到项目
     async saveDetectionSettings() {

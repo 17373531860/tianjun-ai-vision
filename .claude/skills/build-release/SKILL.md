@@ -97,20 +97,41 @@ cd electron && npm install && npm run build:win
 
 ## 常见构建问题
 
-### Python 依赖冲突
+### Python 依赖冲突 (经客户实测确认的安全版本)
+
+**锁定版本（CI 和客户端修复均验证通过）：**
+```
+numpy==1.26.4
+opencv-contrib-python==4.10.0.84
+mediapipe==0.10.20  (必须 --no-deps)
+protobuf<5
+```
+
 - **OpenCV:** mediapipe 依赖 opencv-python，但我们用 opencv-contrib-python
-  - 解决: 先删 opencv-python，再装 opencv-contrib-python <4.11，mediapipe 用 --no-deps
-- **numpy:** opencv 4.13+ 要求 numpy>=2，与 mediapipe 冲突
-  - 解决: 锁定 opencv-contrib-python <4.11
+  - 解决: 先删 opencv-python，再装 opencv-contrib-python==4.10.0.84，mediapipe 用 --no-deps
+  - **不能有 opencv-python 和 opencv-contrib-python 共存**，否则 import 冲突
+- **numpy:** opencv 4.11+ 编译时使用 numpy 2.x ABI，与 numpy 1.x 运行时不兼容
+  - 症状: `cv2.imencode` 报 `img is not a numpy array`，`ufunc 'isnan' not supported`
+  - 解决: 锁定 numpy==1.26.4 + opencv-contrib-python==4.10.0.84
+- **mediapipe:** 必须 --no-deps 安装，否则会拉入 opencv-python 覆盖 opencv-contrib-python
+  - 安装顺序: numpy → opencv-contrib-python → mediapipe(--no-deps) → protobuf<5
 - **protobuf:** mediapipe 需要 protobuf<5
-  - 解决: pip install protobuf<5
+  - 解决: pip install "protobuf<5"
 
 ### conda numpy ABI 陷阱 (重要!)
-- **症状:** 客户端 `cv2.putText`/`cv2.resize` 报 `img is not a numpy array`
+- **症状:** 客户端 `cv2.putText`/`cv2.resize`/`cv2.imencode` 报 `img is not a numpy array`
 - **根因:** conda 环境的 numpy 是 MKL 编译的，pip 的 opencv 是 OpenBLAS 编译的，C 层 ABI 不兼容
-- **CI 必须:** `pip install --force-reinstall "numpy>=1.24.0,<2.0"`，不加 `--force-reinstall` pip 会跳过同版本
+- **CI 必须:** `pip install --force-reinstall numpy==1.26.4`，不加 `--force-reinstall` pip 会跳过同版本
 - **客户端修复:** 必须物理删除 `site-packages/numpy/` + `numpy.libs/` 目录后重装，单纯 pip uninstall/install 不够
-- **安装顺序:** 先装 numpy（pip），再装 opencv（pip），确保同源
+- **安装顺序:** 先装 numpy==1.26.4（pip），再装 opencv-contrib-python==4.10.0.84（pip），确保同源
+- **已有修复脚本:** `patch_numpy_opencv_fix.bat`（使用清华镜像，支持离线 whl）
+
+### TensorRT 中文路径陷阱
+- **症状:** 模型格式转换报 `[TRT] [E] Input file cannot be found`，但文件实际存在
+- **根因:** TensorRT 的 C 库在 Windows 上使用 ANSI 编码打开文件，无法处理中文字符路径
+- **影响范围:** 模型文件名、模型所在目录名、整个路径中任何包含中文的部分
+- **解决:** 模型文件名只用英文字母、数字、下划线、连字符
+- **TODO:** 可在代码层面加自动检测+临时复制逻辑（检测到非 ASCII 路径时复制到临时英文路径再转换）
 
 ### batch 脚本编码规范
 - **Windows .bat 文件中不能包含任何非 ASCII 字符**（中文、框线字符 ─ 等都不行）
@@ -208,6 +229,8 @@ git push origin main
 - [ ] 更新版本号 (electron/package.json)
 - [ ] 更新 splash.html 版本号
 - [ ] 确认代码已合并到 main
+- [ ] 验证依赖版本: numpy==1.26.4, opencv-contrib-python==4.10.0.84, mediapipe==0.10.20, protobuf<5
+- [ ] 确认无 opencv-python 包（只有 opencv-contrib-python）
 - [ ] 检查 GitHub 认证: `gh auth status`，过期则 `gh auth login`
 - [ ] 检查 credential helper: `gh auth setup-git`
 - [ ] 确认 remote URL 干净（无嵌入 token）

@@ -146,13 +146,18 @@ class MESHookManager:
         """同步检查该工位是否有待检工件（供 start_cycle 阻止无码周期）"""
         return channel_id in self._pending_workpiece
 
+    def _conn_serves_channel(self, conn, channel_id: int) -> bool:
+        """判断一个扫码器连接是否服务于指定通道（含 broadcast）"""
+        channels = conn.broadcast_channels if conn.broadcast_channels else [conn.channel_id]
+        return channel_id in channels
+
     def is_scan_required(self, channel_id: int) -> bool:
         """查询该工位是否要求先扫码才能开始周期"""
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
             for conn in svc._connections.values():
-                if conn.channel_id == channel_id and conn.scan_required:
+                if self._conn_serves_channel(conn, channel_id) and conn.scan_required:
                     return True
         except Exception as e:
             print(f"[MES] is_scan_required 异常: {e}", flush=True)
@@ -164,7 +169,7 @@ class MESHookManager:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
             for conn in svc._connections.values():
-                if conn.channel_id == channel_id and conn.warn_no_barcode:
+                if self._conn_serves_channel(conn, channel_id) and conn.warn_no_barcode:
                     return True
         except Exception as e:
             print(f"[MES] is_warn_no_barcode 异常: {e}", flush=True)
@@ -218,7 +223,7 @@ class MESHookManager:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
             for conn in svc._connections.values():
-                if conn.channel_id == channel_id:
+                if self._conn_serves_channel(conn, channel_id):
                     return conn.duplicate_scan_action or "overwrite"
         except Exception:
             pass
@@ -230,7 +235,7 @@ class MESHookManager:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
             for conn in svc._connections.values():
-                if conn.channel_id == channel_id:
+                if self._conn_serves_channel(conn, channel_id):
                     return conn.bind_timing or "mid_cycle"
         except Exception:
             pass
@@ -260,7 +265,7 @@ class MESHookManager:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
             for conn in svc._connections.values():
-                if conn.channel_id == channel_id:
+                if self._conn_serves_channel(conn, channel_id):
                     return conn.rebind_mode or "rescan"
         except Exception:
             pass
@@ -447,7 +452,7 @@ class MESHookManager:
         print(f"[MES] Cycle#{cycle_id} 结束: {'OK' if is_good else 'NG'} (工件#{wp_id})",
               flush=True)
 
-        # 外部 MES 推送
+        # 外部 MES 推送 + 集群汇总
         try:
             from backend.services.mes_gateway import get_mes_gateway
             gw = get_mes_gateway()
@@ -462,7 +467,13 @@ class MESHookManager:
                 step_sequence=step_sequence,
                 project_id=project_id,
             )
-            gw.dispatch("cycle_end", ctx, channel_id)
+
+            skip_cycle_push = self._cluster_dispatch(
+                db, ctx, channel_id, is_good, event_name,
+            )
+
+            if not skip_cycle_push:
+                gw.dispatch("cycle_end", ctx, channel_id)
         except Exception as e:
             print(f"[MES] 外部推送(cycle_end)失败: {e}", flush=True)
 
@@ -482,6 +493,58 @@ class MESHookManager:
                 "timestamp": time.time(),
             }
             print(f"[MES] 等待手动选择: 工件#{wp_id} (manual)", flush=True)
+
+    def _cluster_dispatch(self, db, cycle_context: dict, channel_id: int,
+                          is_good: bool, event_name: str) -> bool:
+        """集群模式：主机收集本地数据，从机上报给主机。
+        返回 True 表示应跳过本次 cycle_end 的直接 MES 推送（wait_all 模式）。
+        """
+        try:
+            from backend.services.cluster_collector import get_cluster_collector
+            collector = get_cluster_collector()
+            config = collector.get_config(db)
+
+            if not config.get("enabled"):
+                return False
+
+            box_serial = cycle_context.get("workpiece", {}).get("serial_no")
+            if not box_serial:
+                return False
+
+            station_id = config["station_id"]
+            role = config["role"]
+            sync_mode = config.get("sync_mode", "wait_all")
+
+            from backend.api.channel_manager import channel_manager
+            if channel_manager.channel_count > 1:
+                station_id = f"{station_id}-{channel_id}"
+
+            if role == "master":
+                collector.receive_station_report(
+                    station_id=station_id,
+                    box_serial=box_serial,
+                    cycle_context=cycle_context,
+                    source_address=f"local:{channel_id}",
+                    channel_id=channel_id,
+                    is_good=is_good,
+                    event_name=event_name,
+                )
+                return sync_mode == "wait_all"
+            elif role == "slave":
+                master_url = config.get("master_url")
+                if master_url:
+                    collector.report_to_master(
+                        cycle_context=cycle_context,
+                        box_serial=box_serial,
+                        station_id=station_id,
+                        master_url=master_url,
+                        is_good=is_good,
+                        event_name=event_name,
+                    )
+                return sync_mode == "wait_all"
+        except Exception as e:
+            print(f"[MES] 集群分发失败: {e}", flush=True)
+        return False
 
     def _handle_session_start(self, db, channel_id: int, session_id: int,
                               project_id: int):

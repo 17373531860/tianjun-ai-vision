@@ -85,7 +85,7 @@
       </div>
       <!-- Controls -->
       <div class="flex gap-1.5 flex-shrink-0">
-        <button @click="startDetectionForChannel(ch - 1)" :disabled="!currentProject || multiChannelData[ch - 1]?.isDetecting"
+        <button @click="startDetectionForChannel(ch - 1)" :disabled="(!multiChannelData[ch - 1]?.project && !currentProject) || multiChannelData[ch - 1]?.isDetecting"
           class="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">开始</button>
         <button @click="stopDetectionForChannel(ch - 1)" :disabled="!multiChannelData[ch - 1]?.isRunning"
           class="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">停止</button>
@@ -158,7 +158,7 @@
         <span class="text-cyan-400 font-bold text-sm">工位 {{ selectedChannel + 1 }} 详情</span>
         <span class="text-[0.625rem] bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ getDisplayCT(multiChannelData[selectedChannel]) }}</span>
         <div class="ml-auto flex gap-1.5">
-          <button @click="startDetectionForChannel(selectedChannel)" :disabled="!currentProject || multiChannelData[selectedChannel]?.isDetecting"
+          <button @click="startDetectionForChannel(selectedChannel)" :disabled="(!multiChannelData[selectedChannel]?.project && !currentProject) || multiChannelData[selectedChannel]?.isDetecting"
             class="bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[0.625rem] font-bold">开始</button>
           <button @click="stopDetectionForChannel(selectedChannel)" :disabled="!multiChannelData[selectedChannel]?.isRunning"
             class="bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[0.625rem] font-bold">停止</button>
@@ -944,6 +944,9 @@ const processChannelResult = (ch, d) => {
   chData.isDetecting = d.is_detecting;
   chData.fps = d.fps || 0;
   chData.latency = d.latency || 0;
+  if (d.project_config?.project_name) {
+    chData.projectName = d.project_config.project_name;
+  }
   const ctrs = d.counters || {};
   chData.total = ctrs['总产量'] ?? 0;
   chData.ok = ctrs['合格总数'] ?? 0;
@@ -958,14 +961,14 @@ const processChannelResult = (ch, d) => {
   chData.recentEvents = d.recent_events || [];
   if (d.tracking) chData.tracking = d.tracking;
 
-  // MES 实时数据
+  // MES 实时数据 — 每个工位各自显示，不限 selectedChannel
   if (d.mes) {
     chData.mes = d.mes;
-    if (d.mes.scan_event && ch === selectedChannel.value) {
-      handleScanToast(d.mes.scan_event);
+    if (d.mes.scan_event) {
+      handleScanToast(d.mes.scan_event, ch);
     }
-    if (d.mes.rebind_prompt && ch === selectedChannel.value) {
-      handleRebindPrompt(d.mes.rebind_prompt);
+    if (d.mes.rebind_prompt) {
+      handleRebindPrompt(d.mes.rebind_prompt, ch);
     }
   }
 
@@ -1035,6 +1038,13 @@ const processChannelResult = (ch, d) => {
       multiLastSeenSeq[ch] = Math.max(multiLastSeenSeq[ch], event.seq);
       const toastId = event.toast_id || (event.event_id === 1 ? 'ok' : event.event_id === 2 ? 'ng' : 'ok');
       showMultiToast(ch, toastId, event.event_name, event.reason);
+
+      const warnCfg = systemStore.detection.toasts?.warn_no_barcode;
+      if (warnCfg?.enabled && chData.mes?.warn_no_barcode) {
+        setTimeout(() => {
+          showMultiToast(ch, 'warn_no_barcode', warnCfg.text || '⚠ 未绑码', warnCfg.subText || '本次结算未绑定工件条码');
+        }, 300);
+      }
     });
   }
 
@@ -1131,12 +1141,16 @@ const drawMultiDetections = (ch, canvas, detections) => {
 };
 
 const startDetectionForChannel = async (ch) => {
-  if (!currentProject.value) return;
+  const chProj = multiChannelData.value[ch]?.project || currentProject.value;
+  if (!chProj) {
+    ElMessage.warning(`工位 ${ch + 1} 未绑定项目`);
+    return;
+  }
   try {
-    await syncProjectConfig(ch);
-    const modelId = currentProject.value.default_model_id;
-    if (!modelId) { ElMessage.warning('请先配置模型'); return; }
-    const modelFormat = currentProject.value.model_format || 'pytorch_fp32';
+    await syncProjectConfig(ch, chProj);
+    const modelId = chProj.default_model_id;
+    if (!modelId) { ElMessage.warning(`工位 ${ch + 1} 未配置模型`); return; }
+    const modelFormat = chProj.model_format || 'pytorch_fp32';
     let modelPath;
     try {
       const resolveRes = await apiResolveModelPath(modelId, modelFormat);
@@ -1192,9 +1206,33 @@ const fetchChannelCount = async () => {
       initMultiChannelData(count);
       startMultiStreams(count);
       startMultiPolling();
+      loadPerChannelDetectionSettings(res.data.source_configs || {});
     }
   } catch (e) {
     channelCount.value = 1;
+  }
+};
+
+const loadPerChannelDetectionSettings = async (sourceConfigs) => {
+  for (const [chStr, cfg] of Object.entries(sourceConfigs)) {
+    const chId = parseInt(chStr);
+    const pid = cfg?.project_id;
+    if (!pid) continue;
+    try {
+      const { getProjectDetail } = await import('@/api/project');
+      const res = await getProjectDetail(pid);
+      const projData = res.data;
+      const dc = projData?.detection_config;
+      if (dc) {
+        systemStore.loadDetectionForChannel(chId, dc);
+      }
+      if (projData && multiChannelData.value[chId]) {
+        multiChannelData.value[chId].project = projData;
+        multiChannelData.value[chId].projectName = projData.name || '';
+      }
+    } catch (e) {
+      console.warn(`ch${chId} 加载检测设置失败:`, e);
+    }
   }
 };
 // ==================== End Multi-Channel ====================
@@ -1402,20 +1440,16 @@ const logicModeText = computed(() => {
 const activeToasts = ref([]);
 let toastIdCounter = 0;
 
-// 获取提示框配置
-const getToastConfig = (toastId) => {
-  // 系统预设提示框
-  if (toastId === 'ok') return systemStore.detection.toasts.ok;
-  if (toastId === 'ng') return systemStore.detection.toasts.ng;
-  if (toastId === 'scan') return systemStore.detection.toasts.scan;
-  if (toastId === 'warn_no_barcode') return systemStore.detection.toasts.warn_no_barcode;
-  
-  // 自定义提示框
-  const customToast = systemStore.detection.customToasts.find(t => t.id === toastId);
+// 获取提示框配置（ch 不为 null 时使用通道级别设置）
+const getToastConfig = (toastId, ch = null) => {
+  const det = (ch != null && channelCount.value > 1) ? systemStore.getChannelDetection(ch) : systemStore.detection;
+  if (toastId === 'ok') return det.toasts.ok;
+  if (toastId === 'ng') return det.toasts.ng;
+  if (toastId === 'scan') return det.toasts.scan;
+  if (toastId === 'warn_no_barcode') return det.toasts.warn_no_barcode;
+  const customToast = (det.customToasts || []).find(t => t.id === toastId);
   if (customToast) return customToast;
-  
-  // 默认返回 ok 配置
-  return systemStore.detection.toasts.ok;
+  return det.toasts.ok;
 };
 
 // 提示框位置样式
@@ -1435,21 +1469,26 @@ const toastPositionClass = computed(() => {
   return getPositionClass(systemStore.detection.toasts.ok.position);
 });
 
-// TTS voice announcement
-// Chromium bug: cancel() immediately followed by speak() silently drops the utterance.
-// Workaround: delay speak() by ~100ms after cancel().
-let speakTimer = null;
-const speak = (text) => {
-  if (!systemStore.detection.voiceEnabled || !window.speechSynthesis) return;
-  if (speakTimer) clearTimeout(speakTimer);
-  window.speechSynthesis.cancel();
-  speakTimer = setTimeout(() => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'zh-CN';
-    utterance.volume = systemStore.detection.voiceVolume ?? 1.0;
-    utterance.rate = 1.1;
-    window.speechSynthesis.speak(utterance);
-  }, 100);
+// TTS voice announcement — queue mode: voices play sequentially, never cancel each other
+const speechQueue = [];
+let isSpeaking = false;
+const _playNext = () => {
+  if (!speechQueue.length) { isSpeaking = false; return; }
+  isSpeaking = true;
+  const { text, volume } = speechQueue.shift();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = 'zh-CN';
+  utterance.volume = volume;
+  utterance.rate = 1.1;
+  utterance.onend = () => _playNext();
+  utterance.onerror = () => _playNext();
+  window.speechSynthesis.speak(utterance);
+};
+const speak = (text, ch = null) => {
+  const det = (ch != null && channelCount.value > 1) ? systemStore.getChannelDetection(ch) : systemStore.detection;
+  if (!det.voiceEnabled || !window.speechSynthesis) return;
+  speechQueue.push({ text, volume: det.voiceVolume ?? 1.0 });
+  if (!isSpeaking) _playNext();
 };
 
 // 显示提示框（新版：根据 toast_id 获取配置）
@@ -1544,11 +1583,12 @@ const getMultiPositionClass = (position) => {
 };
 
 const showMultiToast = (ch, toastId, eventName, reason = '') => {
-  const config = getToastConfig(toastId);
+  const det = systemStore.getChannelDetection(ch);
+  const config = getToastConfig(toastId, ch);
   const icons = { ok: CircleCheck, ng: CircleClose, custom: Warning };
 
   let subtitle = config.subText || '';
-  if (toastId === 'ng' && reason && systemStore.detection.showNgReason) {
+  if (toastId === 'ng' && reason && det.showNgReason) {
     subtitle = reason;
   }
 
@@ -1570,12 +1610,12 @@ const showMultiToast = (ch, toastId, eventName, reason = '') => {
   }
 
   if (toastId === 'ok') {
-    speak('合格');
+    speak('合格', ch);
   } else if (toastId === 'ng') {
-    const showReason = systemStore.detection.showNgReason && reason;
-    speak(showReason ? `不合格，${reason}` : '不合格');
+    const showReason = det.showNgReason && reason;
+    speak(showReason ? `不合格，${reason}` : '不合格', ch);
   } else {
-    speak(config.text || eventName || '事件触发');
+    speak(config.text || eventName || '事件触发', ch);
   }
 
   setTimeout(() => {
@@ -2086,8 +2126,9 @@ const updateCharts = () => {
 let pollingTimer = null;
 
 // Helper: build and send latest project config to backend
-const syncProjectConfig = async (channel = 0) => {
-  const proj = currentProject.value;
+const syncProjectConfig = async (channel = 0, explicitProject = null) => {
+  const proj = explicitProject || currentProject.value;
+  if (!proj) return;
   const pipelineCfg = {
     ...(proj.pipeline_config || {}),
     sequence_order: proj.sequence_order || proj.pipeline_config?.sequence_order || [],
@@ -2381,24 +2422,29 @@ const startPolling = () => {
 // 已显示的事件ID（避免重复显示提示框）
 const shownEventIds = ref(new Set());
 
-// 扫码提示去重
-let lastScanToastTs = 0;
-const handleScanToast = (scanEvent) => {
+// 扫码提示去重 — 按通道独立记录时间戳
+const lastScanToastTs = {};
+const handleScanToast = (scanEvent, ch = 0) => {
   const scanConfig = systemStore.detection.toasts?.scan;
   if (!scanConfig?.enabled) return;
-  if (scanEvent.timestamp <= lastScanToastTs) return;
-  lastScanToastTs = scanEvent.timestamp;
-  showToastById('scan', scanConfig.text || '扫码成功', scanEvent.serial_no);
+  if (scanEvent.timestamp <= (lastScanToastTs[ch] || 0)) return;
+  lastScanToastTs[ch] = scanEvent.timestamp;
+  if (channelCount.value > 1) {
+    showMultiToast(ch, 'scan', scanConfig.text || '扫码成功', scanEvent.serial_no);
+  } else {
+    showToastById('scan', scanConfig.text || '扫码成功', scanEvent.serial_no);
+  }
 };
 
-// rebind 弹窗去重
+// rebind 弹窗去重 — 传入事件所在通道而非 selectedChannel
 let rebindPromptShowing = false;
-const handleRebindPrompt = async (rebindData) => {
+const handleRebindPrompt = async (rebindData, ch = 0) => {
   if (rebindPromptShowing) return;
   rebindPromptShowing = true;
+  const chLabel = channelCount.value > 1 ? `工位 ${ch + 1} - ` : '';
   try {
     await ElMessageBox.confirm(
-      `工件 #${rebindData.workpiece_id} 检测 NG，是否继续检测当前工件？`,
+      `${chLabel}工件 #${rebindData.workpiece_id} 检测 NG，是否继续检测当前工件？`,
       '误检重绑',
       {
         confirmButtonText: '继续当前工件',
@@ -2406,9 +2452,9 @@ const handleRebindPrompt = async (rebindData) => {
         type: 'warning',
       }
     );
-    await api.post('/source/detection/rebind', null, { params: { action: 'continue', channel: selectedChannel.value } });
+    await api.post('/source/detection/rebind', null, { params: { action: 'continue', channel: ch } });
   } catch {
-    await api.post('/source/detection/rebind', null, { params: { action: 'new', channel: selectedChannel.value } });
+    await api.post('/source/detection/rebind', null, { params: { action: 'new', channel: ch } });
   } finally {
     rebindPromptShowing = false;
   }
@@ -2755,21 +2801,41 @@ const triggerEvent = (eventId) => {
     });
   }
   
-  // 显示提示框
+  // 显示提示框 — 多工位时用 showMultiToast 显示到对应工位
   if (event.show_notification) {
-    const type = event.id === 'event_1' ? 'ok' : event.id === 'event_2' ? 'ng' : 'custom';
-    showToast(type, event.name, event.custom_text);
+    const toastId = event.id === 'event_1' ? 'ok' : event.id === 'event_2' ? 'ng' : 'ok';
+    if (channelCount.value > 1) {
+      showMultiToast(selectedChannel.value, toastId, event.name, event.custom_text);
+    } else {
+      showToast(toastId === 'ok' ? 'ok' : 'ng', event.name, event.custom_text);
+    }
   }
   
   updateCharts();
 };
 
 // 自动恢复输入源（返回是否成功恢复）
+// 优先检查后端是否已自动恢复（auto_restore_video_sources），其次用 localStorage 兜底
 const autoRestoreSource = async () => {
+  try {
+    const status = await getSourceStatus();
+    if (status.data.is_running) {
+      if (status.data.source_type) sourceStore.setSourceType(status.data.source_type);
+      sourceStore.setStreaming(true);
+      isStreaming.value = true;
+      isRunning.value = true;
+      isDetecting.value = !!status.data.is_detecting;
+      projectStore.setRunningStatus(true);
+      forceReconnectStream();
+      startPolling();
+      console.log('[AutoRestore] 后端已自动恢复视频源');
+      return true;
+    }
+  } catch { /* 后端不可达, 继续用 localStorage 兜底 */ }
+
   sourceStore.loadConfig();
-  
   if (!localStorage.getItem('source_config')) return false;
-  
+
   const savedType = sourceStore.sourceType;
   let restored = false;
 
@@ -2785,7 +2851,7 @@ const autoRestoreSource = async () => {
       });
       sourceStore.setSourceType('camera');
       restored = true;
-      console.log('[AutoRestore] 已自动恢复摄像头');
+      console.log('[AutoRestore] localStorage 恢复摄像头');
     } catch (err) {
       console.warn('[AutoRestore] 自动恢复摄像头失败:', err);
     }
@@ -2801,7 +2867,7 @@ const autoRestoreSource = async () => {
       });
       sourceStore.setSourceType('hikvision');
       restored = true;
-      console.log('[AutoRestore] 已自动恢复海康相机');
+      console.log('[AutoRestore] localStorage 恢复海康相机');
     } catch (err) {
       console.warn('[AutoRestore] 自动恢复海康相机失败:', err);
     }
@@ -2813,7 +2879,7 @@ const autoRestoreSource = async () => {
       });
       sourceStore.setSourceType('video');
       restored = true;
-      console.log('[AutoRestore] 已自动恢复视频');
+      console.log('[AutoRestore] localStorage 恢复视频');
     } catch (err) {
       console.warn('[AutoRestore] 自动恢复视频失败:', err);
     }

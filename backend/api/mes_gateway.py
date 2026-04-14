@@ -30,6 +30,7 @@ class ConnectionCreate(BaseModel):
     retry_count: int = 3
     retry_interval_sec: int = 5
     extra_fields_schema: Optional[List[dict]] = None
+    bound_channels: Optional[List[int]] = None
 
 class ConnectionUpdate(BaseModel):
     name: Optional[str] = None
@@ -42,6 +43,7 @@ class ConnectionUpdate(BaseModel):
     retry_count: Optional[int] = None
     retry_interval_sec: Optional[int] = None
     extra_fields_schema: Optional[List[dict]] = None
+    bound_channels: Optional[List[int]] = None
 
 class TestPayload(BaseModel):
     config: Optional[dict] = None
@@ -67,6 +69,7 @@ def _serialize_conn(c):
         "retry_count": c.retry_count,
         "retry_interval_sec": c.retry_interval_sec,
         "extra_fields_schema": c.extra_fields_schema,
+        "bound_channels": c.bound_channels,
         "last_sync_at": c.last_sync_at.isoformat() if c.last_sync_at else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "updated_at": c.updated_at.isoformat() if c.updated_at else None,
@@ -114,6 +117,7 @@ def create_connection(body: ConnectionCreate):
             retry_count=body.retry_count,
             retry_interval_sec=body.retry_interval_sec,
             extra_fields_schema=body.extra_fields_schema,
+            bound_channels=body.bound_channels,
         )
         db.add(conn)
         db.commit()
@@ -122,6 +126,22 @@ def create_connection(body: ConnectionCreate):
     except Exception as e:
         db.rollback()
         raise HTTPException(400, str(e))
+    finally:
+        db.close()
+
+
+@router.get("/connections/by-channel")
+def list_connections_by_channel(channel: int = Query(..., description="工位通道号")):
+    """查询绑定到指定工位的连接列表（反向查看）"""
+    db = SessionLocal()
+    try:
+        items = db.query(MESConnection).filter(MESConnection.enabled == True).all()
+        result = []
+        for c in items:
+            bound = c.bound_channels
+            if not bound or channel in bound:
+                result.append(_serialize_conn(c))
+        return result
     finally:
         db.close()
 

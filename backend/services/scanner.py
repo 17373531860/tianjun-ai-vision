@@ -44,6 +44,7 @@ class ScannerConnection:
     warn_no_barcode: bool = False
     rebind_mode: str = "rescan"
     bind_timing: str = "mid_cycle"
+    broadcast_channels: list = field(default_factory=list)
 
     status: str = "disconnected"
     device_type: str = "auto"  # "auto", "text", "wmax"
@@ -343,6 +344,7 @@ class ScannerService:
             warn_no_barcode=getattr(dev, 'warn_no_barcode', False),
             rebind_mode=getattr(dev, 'rebind_mode', 'rescan'),
             bind_timing=getattr(dev, 'bind_timing', 'mid_cycle'),
+            broadcast_channels=getattr(dev, 'broadcast_channels', None) or [],
         )
         conn.parse_config["parse_mode"] = dev.parse_mode or "direct"
 
@@ -403,8 +405,7 @@ class ScannerService:
                                     conn.name, conn.ip, conn.port)
                         self._wmax_listen_loop(conn, sock)
                     else:
-                        sock.sendall(b"LON\r\n")
-                        logger.info("[Scanner] %s (%s:%d) 已连接 (文本模式)",
+                        logger.info("[Scanner] %s (%s:%d) 已连接 (文本模式，被动监听)",
                                     conn.name, conn.ip, conn.port)
                         self._text_listen_loop(conn, sock, keepalive_interval)
                 elif conn.device_type == "wmax":
@@ -412,8 +413,7 @@ class ScannerService:
                                 conn.name, conn.ip, conn.port)
                     self._wmax_listen_loop(conn, sock)
                 else:
-                    sock.sendall(b"LON\r\n")
-                    logger.info("[Scanner] %s (%s:%d) 已连接 (文本模式)",
+                    logger.info("[Scanner] %s (%s:%d) 已连接 (文本模式，被动监听)",
                                 conn.name, conn.ip, conn.port)
                     self._text_listen_loop(conn, sock, keepalive_interval)
 
@@ -466,7 +466,7 @@ class ScannerService:
             except socket.timeout:
                 if time.time() - last_activity > keepalive_interval:
                     try:
-                        sock.sendall(b"LON\r\n")
+                        sock.getpeername()
                         last_activity = time.time()
                     except OSError:
                         break
@@ -607,23 +607,29 @@ class ScannerService:
                            conn.name, result.error, raw_data)
             return
 
-        project_id = None
-        if self._project_id_getter:
-            try:
-                project_id = self._project_id_getter(conn.channel_id)
-            except Exception:
-                pass
+        channels = conn.broadcast_channels if conn.broadcast_channels else [conn.channel_id]
 
-        if project_id and self._mes_hook and conn.auto_create_workpiece:
-            self._mes_hook.on_scan_received(
-                channel_id=conn.channel_id,
-                serial_no=result.serial_no,
-                raw_data=raw_data,
-                project_id=project_id,
-                device_id=conn.device_id,
-            )
+        for ch_id in channels:
+            project_id = None
+            if self._project_id_getter:
+                try:
+                    project_id = self._project_id_getter(ch_id)
+                except Exception:
+                    pass
 
-        logger.info("[Scanner] %s: 扫码 → %s", conn.name, result.serial_no)
+            if project_id and self._mes_hook and conn.auto_create_workpiece:
+                self._mes_hook.on_scan_received(
+                    channel_id=ch_id,
+                    serial_no=result.serial_no,
+                    raw_data=raw_data,
+                    project_id=project_id,
+                    device_id=conn.device_id,
+                )
+
+        if len(channels) > 1:
+            logger.info("[Scanner] %s: 扫码 → %s (广播到 channels %s)", conn.name, result.serial_no, channels)
+        else:
+            logger.info("[Scanner] %s: 扫码 → %s", conn.name, result.serial_no)
 
     def inject_scan_result(self, ip: str, barcode: str):
         """外部注入扫码结果（WMax RPT 端口转发用）"""
@@ -637,22 +643,25 @@ class ScannerService:
         else:
             logger.info("[Scanner] WMax 注入扫码 (无匹配设备): ip=%s data=%s", ip, barcode)
             if self._mes_hook:
-                project_id = None
-                if self._project_id_getter:
-                    try:
-                        project_id = self._project_id_getter(0)
-                    except Exception:
-                        pass
+                from backend.api.channel_manager import channel_manager
                 result = self._parser.parse(barcode, {})
                 serial_no = result.serial_no if result.success else barcode
-                if project_id:
-                    self._mes_hook.on_scan_received(
-                        channel_id=0,
-                        serial_no=serial_no,
-                        raw_data=barcode,
-                        project_id=project_id,
-                    )
-                    logger.info("[Scanner] WMax 注入扫码: %s", serial_no)
+                for ch_id in channel_manager.active_channels():
+                    project_id = None
+                    if self._project_id_getter:
+                        try:
+                            project_id = self._project_id_getter(ch_id)
+                        except Exception:
+                            pass
+                    if project_id:
+                        self._mes_hook.on_scan_received(
+                            channel_id=ch_id,
+                            serial_no=serial_no,
+                            raw_data=barcode,
+                            project_id=project_id,
+                        )
+                logger.info("[Scanner] WMax 注入扫码 → 广播到 %s: %s",
+                            channel_manager.active_channels(), serial_no)
 
 
 # 全局单例

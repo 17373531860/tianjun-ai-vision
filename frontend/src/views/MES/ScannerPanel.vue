@@ -85,7 +85,11 @@
             </div>
             <div class="text-xs text-gray-400 space-y-1">
               <div>IP: {{ dev.ip }}:{{ dev.port }}</div>
-              <div>工位: {{ dev.channel_id ?? '未绑定' }}</div>
+              <div>工位: {{ dev.channel_id ?? '未绑定' }}
+                <span v-if="dev.broadcast_channels && dev.broadcast_channels.length > 1" class="text-yellow-400 ml-1">
+                  (广播: {{ dev.broadcast_channels.join(', ') }})
+                </span>
+              </div>
               <div>解析: {{ dev.parse_mode }}</div>
               <div v-if="getDevLastScan(dev.id)" class="text-cyan-300">
                 最近: {{ getDevLastScan(dev.id) }}
@@ -177,6 +181,12 @@
             <el-option label="下周期绑定（扫码后等下个周期开始才绑）" value="cycle_start" />
           </el-select>
         </el-form-item>
+        <el-form-item label="广播工位">
+          <el-select v-model="form.broadcast_channels" multiple placeholder="留空则只发给绑定工位" class="w-full">
+            <el-option v-for="ch in [0,1,2,3]" :key="ch" :label="'工位 ' + ch" :value="ch" />
+          </el-select>
+          <div class="text-xs text-gray-500 mt-1">选多个工位时，扫码结果同时发送到所有选中工位（同箱双工位场景）</div>
+        </el-form-item>
 
         <!-- 中部：数字输入框并排 -->
         <div class="grid grid-cols-3 gap-3 my-3">
@@ -265,6 +275,7 @@ const defaultForm = () => ({
   scan_required: false, duplicate_scan_action: 'overwrite', warn_no_barcode: false,
   rebind_mode: 'rescan',
   bind_timing: 'mid_cycle',
+  broadcast_channels: [],
 })
 const form = ref(defaultForm())
 

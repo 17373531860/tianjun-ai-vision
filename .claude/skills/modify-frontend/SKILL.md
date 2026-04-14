@@ -186,3 +186,25 @@ display.monitor.defaultCounters.showTotal/showGood/showBad/showNgSteps → 内�
 5. **i18n:** 新文本如果需要国际化，加到 locales/zh-CN.js（其他语言暂不管）
 6. **Element Plus:** 遵循暗色主题，样式在 style.css 中覆盖
 7. **尺寸单位:** 用 rem 不用 px（见「屏幕自适应」章节）
+
+## v2.6.0 多通道前端要点
+
+### Monitor 多通道数据结构
+- `multiChannelData[ch].project` — 通道绑定的完整项目数据（从后端 workstation_config 加载）
+- `multiChannelData[ch].projectName` — 通道项目名
+- `startDetectionForChannel(ch)` **必须**用 `multiChannelData[ch].project` 而非全局 `currentProject`
+- `syncProjectConfig(channel, explicitProject)` 第二参数可传入通道独立项目
+
+### 每通道检测设置
+- `useSystemStore.channelDetections` — `{ channelId: detectionConfig }` map
+- `systemStore.loadDetectionForChannel(chId, dc)` — 加载通道检测配置
+- `systemStore.getChannelDetection(chId)` — 获取通道检测配置（回退到全局）
+- `speak(text, ch)` 和 `getToastConfig(toastId, ch)` 支持通道参数
+
+### 新增前端 API 模块
+- `frontend/src/api/cluster.js` — 集群汇总 API
+- `frontend/src/api/external_device.js` — 外部设备 API
+
+### 新增页面组件
+- `frontend/src/views/MES/ClusterPanel.vue` — 集群配置 (Master/Slave)
+- `frontend/src/views/MES/ExternalDevicePanel.vue` — 外部设备管理

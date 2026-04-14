@@ -14,6 +14,7 @@
         <el-radio-group v-model="workstationMode" @change="handleWorkstationModeChange" size="large">
           <el-radio-button :value="1">单工位</el-radio-button>
           <el-radio-button :value="2" :disabled="!systemStore.developerMode">双工位</el-radio-button>
+          <el-radio-button :value="3" :disabled="!systemStore.developerMode">三工位</el-radio-button>
           <el-radio-button :value="4" :disabled="!systemStore.developerMode">四工位</el-radio-button>
         </el-radio-group>
         <span v-if="!systemStore.developerMode" class="text-xs text-yellow-500">多工位需在设置中开启开发者模式</span>
@@ -552,7 +553,8 @@ const fetchProjectList = async () => {
 const handleWorkstationModeChange = async (count) => {
   try {
     await setWorkstationMode(count);
-    ElMessage.success(`已切换到 ${count === 1 ? '单工位' : count === 2 ? '双工位' : '四工位'} 模式`);
+    const modeNames = { 1: '单工位', 2: '双工位', 3: '三工位', 4: '四工位' };
+    ElMessage.success(`已切换到 ${modeNames[count] || count + '工位'} 模式`);
   } catch (e) {
     ElMessage.error('切换模式失败: ' + (e.message || ''));
     workstationMode.value = 1;
@@ -594,6 +596,7 @@ const saveAndStartMulti = async () => {
         formData.append('file', cfg.videoFile);
         const uploadRes = await api.post('/source/video/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
         await api.post(`/source/video/start?channel=${ch}`, { file_path: uploadRes.data.file_path, speed: 1 });
+        cfg._videoFilePath = uploadRes.data.file_path;
       } else if (cfg.sourceType === 'image' && cfg.imageFile) {
         const formData = new FormData();
         formData.append('file', cfg.imageFile);
@@ -608,6 +611,26 @@ const saveAndStartMulti = async () => {
           console.warn(`Ch${ch} GPU assignment failed:`, ge);
         }
       }
+
+      const persistCfg = { channel_id: ch, source_type: cfg.sourceType, gpu_device: cfg.gpuDevice || 'auto', project_id: cfg.projectId || null };
+      if (cfg.sourceType === 'camera') {
+        persistCfg.device_index = cfg.cameraId;
+        persistCfg.resolution = cfg.resolution;
+        persistCfg.fps = cfg.fps;
+      } else if (cfg.sourceType === 'rtsp') {
+        persistCfg.url = cfg.rtspUrl;
+        persistCfg.rtsp_fps = cfg.rtspFps;
+      } else if (cfg.sourceType === 'hcnetsdk') {
+        persistCfg.hcnet_ip = cfg.hcnetIp;
+        persistCfg.hcnet_port = cfg.hcnetPort;
+        persistCfg.hcnet_username = cfg.hcnetUsername;
+        persistCfg.hcnet_password = cfg.hcnetPassword;
+        persistCfg.hcnet_channel = cfg.hcnetChannel;
+        persistCfg.hcnet_stream_type = cfg.hcnetStreamType;
+      } else if (cfg.sourceType === 'video' && cfg._videoFilePath) {
+        persistCfg.video_file = cfg._videoFilePath;
+      }
+      api.put('/workstations/channel-config', persistCfg).catch(e => console.warn(`Ch${ch} 配置保存失败:`, e));
 
       if (cfg.projectId) {
         const proj = projectList.value.find(p => p.id === cfg.projectId);
@@ -655,10 +678,6 @@ const loadWorkstationMode = async () => {
   try {
     const res = await getWorkstations();
     let mode = res.data.channel_count || 1;
-    if (mode > 1 && !systemStore.developerMode) {
-      mode = 1;
-      await setWorkstationMode(1).catch(() => {});
-    }
     workstationMode.value = mode;
     if (workstationMode.value > 1 && res.data.channels) {
       res.data.channels.forEach(ch => {
@@ -666,6 +685,26 @@ const loadWorkstationMode = async () => {
           wsConfigs[ch.channel_id].gpuDevice = ch.gpu_device || 'auto';
         }
       });
+    }
+    const saved = res.data.source_configs || {};
+    for (const [chStr, cfg] of Object.entries(saved)) {
+      const idx = parseInt(chStr);
+      if (idx >= 0 && idx < wsConfigs.length && cfg) {
+        if (cfg.source_type) wsConfigs[idx].sourceType = cfg.source_type;
+        if (cfg.device_index != null) wsConfigs[idx].cameraId = cfg.device_index;
+        if (cfg.url) wsConfigs[idx].rtspUrl = cfg.url;
+        if (cfg.resolution) wsConfigs[idx].resolution = cfg.resolution;
+        if (cfg.project_id != null) wsConfigs[idx].projectId = cfg.project_id;
+        if (cfg.gpu_device) wsConfigs[idx].gpuDevice = cfg.gpu_device;
+        if (cfg.fps) wsConfigs[idx].fps = cfg.fps;
+        if (cfg.rtsp_fps) wsConfigs[idx].rtspFps = cfg.rtsp_fps;
+        if (cfg.hcnet_ip) wsConfigs[idx].hcnetIp = cfg.hcnet_ip;
+        if (cfg.hcnet_port) wsConfigs[idx].hcnetPort = cfg.hcnet_port;
+        if (cfg.hcnet_username) wsConfigs[idx].hcnetUsername = cfg.hcnet_username;
+        if (cfg.hcnet_password) wsConfigs[idx].hcnetPassword = cfg.hcnet_password;
+        if (cfg.hcnet_channel) wsConfigs[idx].hcnetChannel = cfg.hcnet_channel;
+        if (cfg.hcnet_stream_type != null) wsConfigs[idx].hcnetStreamType = cfg.hcnet_stream_type;
+      }
     }
   } catch (e) { /* keep default */ }
 };
@@ -1031,7 +1070,27 @@ const saveAndStart = async () => {
     
     // 保存配置
     sourceStore.saveConfig();
-    
+
+    const singlePersist = { channel_id: 0, source_type: sourceType.value, gpu_device: 'auto' };
+    if (sourceType.value === 'camera' && selectedCamera.value) {
+      singlePersist.device_index = selectedCamera.value.id;
+      singlePersist.resolution = cameraSettings.value.resolution;
+      singlePersist.fps = cameraSettings.value.fps;
+    } else if (sourceType.value === 'rtsp') {
+      singlePersist.url = rtspSettings.value.url;
+      singlePersist.rtsp_fps = rtspSettings.value.fps;
+    } else if (sourceType.value === 'hcnetsdk') {
+      singlePersist.hcnet_ip = hcnetsdkSettings.value.ip;
+      singlePersist.hcnet_port = hcnetsdkSettings.value.port;
+      singlePersist.hcnet_username = hcnetsdkSettings.value.username;
+      singlePersist.hcnet_password = hcnetsdkSettings.value.password;
+      singlePersist.hcnet_channel = hcnetsdkSettings.value.channel;
+      singlePersist.hcnet_stream_type = hcnetsdkSettings.value.streamType;
+    } else if (sourceType.value === 'video' && sourceStore.videoPath) {
+      singlePersist.video_file = sourceStore.videoPath;
+    }
+    api.put('/workstations/channel-config', singlePersist).catch(e => console.warn('源配置保存失败:', e));
+
     // 保存输入源信息到 systemStore（用于自动保存功能）
     let sourceValue = null;
     if (sourceType.value === 'camera') {

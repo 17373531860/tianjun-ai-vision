@@ -182,3 +182,8 @@ MES Hook 在独立线程中异步执行，使用独立 DB session，不会阻塞
 - `os._exit(0)` 绕过正常 Python 清理流程
 - Tracking 模式：非 expected_items 中的物品不参与周期判定（v2.5.0 修复）
 - `mes_hooks.py` 中 import 路径必须用 `from services.xxx` 而非 `from backend.services.xxx`，否则被静默吞掉
+- **TensorRT imgsz 检测 (v2.6.0)**: `load_model` 使用4种方式探测 TRT 引擎的 imgsz（bindings、input_shape、get_tensor_shape、模型属性扫描），warm-up 捕获 `AssertionError` 自动修正 imgsz
+- **推理连续错误保护 (v2.6.0)**: `_consecutive_detect_errors` 计数器，超过3次后 sleep(0.5) + 抑制日志，成功推理后重置
+- **MJPEG 多通道节流 (v2.6.0)**: `generate_mjpeg` 即使 frame_limit_enabled=False 也要 min_interval sleep，否则4通道 CPU 100%
+- **截图限频 (v2.6.0)**: `_update_tracking_stats` 截图每秒最多1次（`_last_screenshot_time`），且必须在代码块开头显式 `import cv2`
+- **每通道独立计数器 (v2.6.0)**: 计数器文件保存为 `DATA_DIR/counters/project_{pid}_ch{ch_id}.json`
