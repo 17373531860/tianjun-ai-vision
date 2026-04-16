@@ -267,6 +267,7 @@ class ScannerDevice(Base):
     rebind_mode = Column(String(20), default="rescan")
     bind_timing = Column(String(20), default="mid_cycle")
     broadcast_channels = Column(JSON, nullable=True)
+    device_type = Column(String(20), default="text_lon")
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -355,6 +356,7 @@ class ClusterConfig(Base):
     expected_stations = Column(JSON, nullable=True)
     sync_mode = Column(String(20), nullable=False, default="wait_all")
     timeout_sec = Column(Integer, nullable=False, default=300)
+    timeout_push = Column(Boolean, default=False)
     enabled = Column(Boolean, default=False)
 
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

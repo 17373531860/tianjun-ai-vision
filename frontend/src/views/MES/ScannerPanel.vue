@@ -34,31 +34,23 @@
         <div v-if="discoveredDevices.length > 0" class="mb-4">
           <div class="text-sm text-gray-400 mb-2">
             <span class="text-green-400 mr-1">●</span>
-            自动发现的设备（启动时已自动连接）
+            发现的扫码器
           </div>
           <div class="grid grid-cols-2 gap-3">
             <div v-for="d in discoveredDevices" :key="d.ip"
                  class="bg-slate-800/60 rounded-lg border border-green-700/50 p-4">
               <div class="flex items-center justify-between mb-2">
-                <span class="font-medium text-green-300">{{ d.name || 'WMax 设备' }}</span>
-                <div class="flex items-center gap-1">
-                  <el-tag type="primary" size="small" effect="dark">WMax</el-tag>
-                  <el-tag :type="d.action === 'connected' || d.action === 'already_connected' ? 'success' : 'danger'" size="small">
-                    {{ d.action === 'connected' ? '已连接' : d.action === 'already_connected' ? '已连接' : '失败' }}
-                  </el-tag>
-                </div>
+                <span class="font-medium text-green-300">{{ d.name || '扫码器' }}</span>
+                <el-tag type="success" size="small" effect="dark">在线</el-tag>
               </div>
               <div class="text-xs text-gray-400 space-y-1">
                 <div>IP: <span class="text-cyan-300 font-mono">{{ d.ip }}:{{ d.port }}</span></div>
-                <div v-if="d.sn">SN: <span class="font-mono">{{ d.sn }}</span></div>
-                <div v-if="d.error" class="text-red-400">{{ d.error }}</div>
               </div>
               <div class="flex gap-1 mt-3">
-                <el-button v-if="d.action === 'connected' || d.action === 'already_connected'"
-                           size="small" type="warning" @click="openWmaxForDiscovered(d)">
-                  高级控制
+                <el-button size="small" type="primary" @click="quickAddDiscovered(d)">
+                  添加到设备列表
                 </el-button>
-                <el-button v-if="d.action === 'failed'"
+                <el-button v-if="false"
                            size="small" type="primary" @click="retryConnect(d)">
                   重试连接
                 </el-button>
@@ -119,7 +111,7 @@
           <span>去重间隔:</span>
           <el-input-number
             v-model="quickDedup"
-            :min="0" :max="60" size="small"
+            :min="0" :precision="2" size="small"
             class="!w-20"
             controls-position="right"
             @change="applyQuickDedup"
@@ -185,22 +177,22 @@
           <el-select v-model="form.broadcast_channels" multiple placeholder="留空则只发给绑定工位" class="w-full">
             <el-option v-for="ch in [0,1,2,3]" :key="ch" :label="'工位 ' + ch" :value="ch" />
           </el-select>
-          <div class="text-xs text-gray-500 mt-1">选多个工位时，扫码结果同时发送到所有选中工位（同箱双工位场景）</div>
+          <div class="text-xs text-gray-500 mt-1">选多个工位时，扫码结果同时发送到所有选中工位</div>
         </el-form-item>
 
         <!-- 中部：数字输入框并排 -->
         <div class="grid grid-cols-3 gap-3 my-3">
           <div class="text-center">
             <div class="text-xs text-gray-400 mb-1">端口</div>
-            <el-input-number v-model="form.port" :min="1" :max="65535" size="small" class="!w-full" controls-position="right" />
+            <el-input-number v-model="form.port" :min="0" :precision="0" size="small" class="!w-full" controls-position="right" />
           </div>
           <div class="text-center">
             <div class="text-xs text-gray-400 mb-1">绑定工位</div>
-            <el-input-number v-model="form.channel_id" :min="0" size="small" class="!w-full" controls-position="right" />
+            <el-input-number v-model="form.channel_id" :min="0" :precision="0" size="small" class="!w-full" controls-position="right" />
           </div>
           <div class="text-center">
             <div class="text-xs text-gray-400 mb-1">去重间隔(秒)</div>
-            <el-input-number v-model="form.dedup_interval_sec" :min="0" :max="60" size="small" class="!w-full" controls-position="right" />
+            <el-input-number v-model="form.dedup_interval_sec" :min="0" :precision="2" size="small" class="!w-full" controls-position="right" />
           </div>
         </div>
 
@@ -247,7 +239,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getScannerDevices, createScannerDevice, updateScannerDevice,
   deleteScannerDevice, testScannerConnection, getScannerStatus, getScanLogs,
-  clearScanLogs
+  clearScanLogs, discoverScanners
 } from '@/api/scanner'
 import {
   wmaxCreateVirtual, wmaxDeleteVirtual, wmaxAutoDiscover,
@@ -312,19 +304,38 @@ const openWmaxForDiscovered = (d) => {
 const handleAutoDiscover = async () => {
   discovering.value = true
   try {
-    const res = await wmaxAutoDiscover(3)
+    const res = await discoverScanners()
     const data = res.data
     if (data.results && data.results.length > 0) {
       discoveredDevices.value = data.results
-      ElMessage.success(`发现 ${data.total} 台设备，${data.injected} 台新连接`)
+      ElMessage.success(`发现 ${data.total} 台扫码器`)
     } else {
-      ElMessage.info('未发现 WMax 设备')
+      ElMessage.info('未发现扫码器（192.168.0.x:55256）')
     }
     await refreshStatus()
   } catch (e) {
     ElMessage.error('搜索失败: ' + (e.response?.data?.detail || e.message))
   } finally {
     discovering.value = false
+  }
+}
+
+const quickAddDiscovered = async (d) => {
+  try {
+    const existing = devices.value.find(dev => dev.ip === d.ip && dev.port === d.port)
+    if (existing) {
+      ElMessage.warning(`${d.ip}:${d.port} 已在设备列表中`)
+      return
+    }
+    await createScannerDevice({
+      name: d.name || `扫码器-${d.ip}`, ip: d.ip, port: d.port,
+      channel_id: 0, enabled: true, device_type: 'text_lon'
+    })
+    ElMessage.success(`已添加 ${d.ip}`)
+    await loadDevices()
+    await refreshStatus()
+  } catch (e) {
+    ElMessage.error('添加失败: ' + (e.response?.data?.detail || e.message))
   }
 }
 
@@ -371,7 +382,9 @@ const deleteVirtualWmax = async () => {
     ElMessage.success('虚拟设备已删除')
     activeTab.value = 'basic'
     await refreshStatus()
-  } catch {}
+  } catch (e) {
+    ElMessage.error('删除虚拟设备失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
+  }
 }
 
 const loadDevices = async () => {
@@ -381,16 +394,25 @@ const loadDevices = async () => {
     if (devices.value.length > 0) {
       quickDedup.value = devices.value[0].dedup_interval_sec ?? 2
     }
-  } catch {}
+  } catch (e) {
+    ElMessage.error('加载扫码器列表失败: ' + (e.response?.data?.detail || e.message || '网络错误'))
+  }
 }
 
 const applyQuickDedup = async (val) => {
+  let failCount = 0
   for (const dev of devices.value) {
     try {
       await updateScannerDevice(dev.id, { dedup_interval_sec: val })
-    } catch {}
+    } catch { failCount++ }
   }
-  ElMessage.success(`去重间隔已更新为 ${val} 秒`)
+  if (failCount === 0) {
+    ElMessage.success(`去重间隔已更新为 ${val} 秒`)
+  } else if (failCount < devices.value.length) {
+    ElMessage.warning(`${failCount} 台设备更新失败，其余已更新`)
+  } else {
+    ElMessage.error('所有设备更新失败')
+  }
 }
 
 const refreshStatus = async () => {
@@ -402,7 +424,7 @@ const refreshStatus = async () => {
     }
     statusMap.value = map
     mergeAutoDevices()
-  } catch {}
+  } catch (e) { console.warn('[Scanner] 刷新状态失败:', e.message) }
 }
 
 const mergeAutoDevices = () => {
@@ -427,7 +449,7 @@ const loadLogs = async () => {
   try {
     const res = await getScanLogs({ limit: 30 })
     logs.value = res.data.items || []
-  } catch {}
+  } catch (e) { console.warn('[Scanner] 加载日志失败:', e.message) }
 }
 
 const handleClearLogs = async () => {

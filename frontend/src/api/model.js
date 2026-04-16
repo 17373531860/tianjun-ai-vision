@@ -34,6 +34,9 @@ export const parseModelLabels = (id) => api.post(`/models/${id}/parse-labels`);
 // 获取可用模型格式列表 + 智能推荐
 export const getAvailableFormats = () => api.get('/models/formats/available');
 
+// 获取 GPU / TensorRT 环境诊断
+export const getFormatDiagnosis = () => api.get('/models/formats/diagnosis');
+
 // 发起模型格式转换
 export const convertModel = (id, data) => api.post(`/models/${id}/convert`, data);
 

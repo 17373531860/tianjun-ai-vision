@@ -119,14 +119,14 @@
               <div class="text-xs text-gray-500 mb-1">系统默认：</div>
               <div v-for="(counter, idx) in defaultCounters" :key="'default-'+idx" class="flex items-center gap-2 bg-slate-800/50 p-2 rounded border border-slate-700">
                 <span class="flex-1 text-gray-300 text-sm">{{ counter.name }}</span>
-                <el-input-number v-model="counter.value" size="small" :min="0" class="w-24" controls-position="right" />
+                <el-input-number v-model="counter.value" size="small" :min="0" :precision="2" class="w-24" controls-position="right" />
                 <span class="text-[10px] text-gray-500 bg-slate-700 px-1 rounded">默认</span>
               </div>
               <!-- 用户自定义计数器 -->
               <div v-if="customCounters.length > 0" class="text-xs text-gray-500 mt-3 mb-1">自定义：</div>
               <div v-for="(counter, idx) in customCounters" :key="'custom-'+idx" class="flex items-center gap-2 bg-slate-800 p-2 rounded">
                 <el-input v-model="counter.name" size="small" placeholder="计数器名称" class="flex-1" />
-                <el-input-number v-model="counter.value" size="small" :min="0" class="w-24" controls-position="right" />
+                <el-input-number v-model="counter.value" size="small" :min="0" :precision="2" class="w-24" controls-position="right" />
                 <el-button type="danger" size="small" link @click="removeCounter(idx + 3)">×</el-button>
               </div>
             </div>
@@ -358,7 +358,7 @@
                       <td class="p-2"><el-switch v-model="step.enabled" size="small" @change="(val) => onStepEnabledChange(step, val)" /></td>
                       <td class="p-2">
                         <div class="flex items-center gap-1">
-                          <el-slider v-model="step.threshold" :min="10" :max="100" size="small" class="flex-1" />
+                          <el-slider v-model="step.threshold" :min="0" size="small" class="flex-1" />
                           <span class="text-xs w-8">{{ step.threshold }}%</span>
                         </div>
                       </td>
@@ -370,10 +370,9 @@
                         <el-input-number
                           v-model="step.tracking_max_lost_seconds"
                           size="small"
-                          :min="0.1"
-                          :max="30"
+                          :min="0"
                           :step="0.5"
-                          :precision="1"
+                          :precision="2"
                           :controls="false"
                           placeholder="5.0"
                           class="w-full"
@@ -392,9 +391,9 @@
                         <el-input-number
                           v-model="step.event_required_count"
                           size="small"
-                          :min="1"
-                          :max="999"
+                          :min="0"
                           :step="1"
+                          :precision="2"
                           :controls="false"
                           :disabled="step.count_mode !== 'event'"
                           placeholder="1"
@@ -405,9 +404,9 @@
                         <el-input-number
                           v-model="step.event_gone_frames"
                           size="small"
-                          :min="1"
-                          :max="120"
+                          :min="0"
                           :step="1"
+                          :precision="2"
                           :controls="false"
                           :disabled="step.count_mode !== 'event'"
                           placeholder="8"
@@ -421,7 +420,6 @@
                           v-model="step.min_duration" 
                           size="small" 
                           :min="0" 
-                          :max="3600" 
                           :step="0.1"
                           :precision="2"
                           :controls="false"
@@ -433,8 +431,7 @@
                         <el-input-number 
                           v-model="step.max_duration" 
                           size="small" 
-                          :min="0.01" 
-                          :max="3600" 
+                          :min="0" 
                           :step="0.1"
                           :precision="2"
                           :controls="false"
@@ -449,8 +446,7 @@
                         <el-input-number 
                           v-model="step.max_interval" 
                           size="small" 
-                          :min="0.01" 
-                          :max="3600" 
+                          :min="0" 
                           :step="0.1"
                           :precision="2"
                           :controls="false"
@@ -463,7 +459,6 @@
                           v-model="step.disappear_delay" 
                           size="small" 
                           :min="0" 
-                          :max="60" 
                           :step="0.1"
                           :precision="2"
                           :controls="false"
@@ -475,9 +470,9 @@
                         <el-input-number 
                           v-model="step.min_frames" 
                           size="small" 
-                          :min="1" 
-                          :max="300" 
+                          :min="0" 
                           :step="1"
+                          :precision="2"
                           :controls="false"
                           placeholder="默认1"
                           class="w-full"
@@ -493,9 +488,9 @@
                         <el-input-number 
                           v-model="step.static_trigger_frames" 
                           size="small" 
-                          :min="1" 
-                          :max="300" 
+                          :min="0" 
                           :step="1"
+                          :precision="2"
                           :controls="false"
                           placeholder="30"
                           class="w-full"
@@ -529,10 +524,9 @@
                         <el-input-number 
                           v-model="step.default_pt" 
                           size="small" 
-                          :min="0.1" 
-                          :max="3600" 
+                          :min="0" 
                           :step="0.1"
-                          :precision="1"
+                          :precision="2"
                           :controls="false"
                           placeholder="--"
                           class="w-full"
@@ -595,12 +589,12 @@
                   </el-radio-group>
                   <div class="flex items-center gap-3 pt-2 border-t border-slate-700">
                     <span class="text-gray-400 text-xs whitespace-nowrap">空闲超时(秒)</span>
-                    <el-input-number v-model="activeProject.idle_timeout_seconds" size="small" :min="0" :max="600" :step="5" :precision="0" />
+                    <el-input-number v-model="activeProject.idle_timeout_seconds" size="small" :min="0" :step="5" :precision="2" />
                     <span class="text-xs text-gray-500">超过此时间无新步骤加入，强制结算当前周期（0=不启用）</span>
                   </div>
                   <div class="flex items-center gap-3 pt-2 border-t border-slate-700">
                     <span class="text-gray-400 text-xs whitespace-nowrap">周期超时(秒)</span>
-                    <el-input-number v-model="activeProject.cycle_max_duration" size="small" :min="0" :max="3600" :step="5" :precision="0" />
+                    <el-input-number v-model="activeProject.cycle_max_duration" size="small" :min="0" :step="5" :precision="2" />
                     <span class="text-xs text-gray-500">周期总时长超过此值直接判定NG（0=不启用）</span>
                   </div>
                 </div>
@@ -724,7 +718,7 @@
                             <span class="text-cyan-400 font-bold">条件 {{ idx + 1 }}</span>
                             <div class="flex items-center gap-1">
                               <span class="text-xs text-gray-500">优先级:</span>
-                              <el-input-number v-model="cond.priority" size="small" :min="1" :max="99" class="w-20" controls-position="right" />
+                              <el-input-number v-model="cond.priority" size="small" :min="0" :precision="2" class="w-20" controls-position="right" />
                             </div>
                           </div>
                           <el-button type="danger" size="small" link @click="removeCustomCondition(idx)">删除</el-button>
@@ -819,7 +813,7 @@
                         <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
                       </el-select>
                       <span class="text-gray-400 shrink-0">确认帧数</span>
-                      <el-input-number v-model="activeProject.tracking_trigger_min_frames" :min="1" :max="300" :step="5" size="small" class="!w-28" />
+                      <el-input-number v-model="activeProject.tracking_trigger_min_frames" :min="0" :step="5" :precision="2" size="small" class="!w-28" />
                     </div>
                     <div v-else-if="activeProject.tracking_cycle_strategy === 'container'" class="flex items-center gap-4 text-xs">
                       <span class="text-gray-400 shrink-0">容器类别</span>
@@ -827,11 +821,11 @@
                         <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
                       </el-select>
                       <span class="text-gray-400 shrink-0">消失确认帧数</span>
-                      <el-input-number v-model="activeProject.tracking_gone_confirm_frames" :min="1" :max="300" :step="5" size="small" class="!w-28" />
+                      <el-input-number v-model="activeProject.tracking_gone_confirm_frames" :min="0" :step="5" :precision="2" size="small" class="!w-28" />
                     </div>
                     <div v-else class="flex items-center gap-4 text-xs">
                       <span class="text-gray-400 shrink-0">消失确认帧数</span>
-                      <el-input-number v-model="activeProject.tracking_gone_confirm_frames" :min="1" :max="300" :step="5" size="small" class="!w-28" />
+                      <el-input-number v-model="activeProject.tracking_gone_confirm_frames" :min="0" :step="5" :precision="2" size="small" class="!w-28" />
                     </div>
 
                     <!-- Row 3: switches in one line -->
@@ -850,7 +844,7 @@
                       </div>
                       <div v-if="activeProject.tracking_id_lock" class="flex items-center gap-1.5">
                         <span class="text-gray-400">锁定帧数</span>
-                        <el-input-number v-model="activeProject.tracking_id_lock_frames" :min="3" :max="120" :step="5" size="small" class="!w-24" />
+                        <el-input-number v-model="activeProject.tracking_id_lock_frames" :min="0" :step="5" :precision="2" size="small" class="!w-24" />
                       </div>
                       <div class="flex items-center gap-1.5">
                         <span class="text-gray-400">顺序检查</span>
@@ -868,7 +862,7 @@
                               <el-option v-for="s in countableSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
                             </el-select>
                             <span class="text-gray-500 text-xs shrink-0">×</span>
-                            <el-input-number v-model="item.count" size="small" :min="1" :max="99" :step="1" class="!w-20 shrink-0" />
+                            <el-input-number v-model="item.count" size="small" :min="0" :step="1" :precision="2" class="!w-20 shrink-0" />
                             <el-button type="danger" size="small" link class="shrink-0" @click="activeProject.counting_expected_list.splice(idx, 1)">
                               <el-icon><Delete /></el-icon>
                             </el-button>
@@ -906,7 +900,19 @@
                   <p class="text-xs text-gray-400">当连续两次 NG 之间的间隔小于设定时间时，后续 NG 会被抑制，避免因短暂误检导致重复报错。设为 0 则不启用。</p>
                   <div class="flex items-center gap-3">
                     <span>保护间隔 (秒)</span>
-                    <el-input-number v-model="activeProject.ng_cycle_protect_seconds" size="small" :min="0" :max="60" :step="1" :precision="0" />
+                    <el-input-number v-model="activeProject.ng_cycle_protect_seconds" size="small" :min="0" :step="1" :precision="2" />
+                  </div>
+                </div>
+              </el-card>
+
+              <!-- 防重复结算 -->
+              <el-card shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header><span class="font-bold text-white">防重复结算</span></template>
+                <div class="space-y-3 text-sm text-gray-300">
+                  <p class="text-xs text-gray-400">开启后，同一结算批次中如果已有事件结束了当前周期，后续事件将被抑制，避免一次结算同时产生 OK 和 NG 两个结果。</p>
+                  <div class="flex items-center gap-3">
+                    <span>启用防重复结算</span>
+                    <el-switch v-model="activeProject.settle_dedup" />
                   </div>
                 </div>
               </el-card>
@@ -933,7 +939,7 @@
                       <div class="space-y-3">
                         <div>
                           <p class="text-xs text-gray-500 mb-1">时间窗口（秒）：在此时间内先后出现视为"同时"</p>
-                          <el-input-number v-model="group.time_window" size="small" :min="0.5" :max="10" :step="0.5" :precision="1" />
+                          <el-input-number v-model="group.time_window" size="small" :min="0" :step="0.5" :precision="2" />
                         </div>
                         <div>
                           <p class="text-xs text-gray-500 mb-2">选择可能同时出现的步骤，并按优先顺序排列（拖拽或使用箭头调整）：</p>
@@ -996,7 +1002,7 @@
                             </el-option-group>
                           </el-select>
                           <span class="text-gray-400">增加</span>
-                          <el-input-number v-model="action.delta" size="small" :min="-100" :max="100" class="w-20" controls-position="right" />
+                          <el-input-number v-model="action.delta" size="small" :min="0" :precision="2" class="w-20" controls-position="right" />
                           <el-button type="danger" size="small" link @click="ev.actions.splice(aIdx, 1)">删除</el-button>
                         </div>
                         <el-button type="primary" size="small" link @click="addEventAction(ev)">+ 添加动作</el-button>
@@ -1093,7 +1099,12 @@
         <el-button class="mt-6" @click="cancelFormatSelect">取消并使用原始格式</el-button>
       </div>
       <div v-else class="space-y-2 max-h-[28rem] overflow-y-auto pr-1">
-        <p v-if="gpuName" class="text-xs text-gray-400 mb-3">当前显卡: {{ gpuName }}</p>
+        <div class="flex items-center justify-between mb-3">
+          <p v-if="gpuName" class="text-xs text-gray-400">当前显卡: {{ gpuName }}</p>
+          <el-button size="small" text type="info" @click="showDiagnosis">
+            <el-icon class="mr-1"><Warning /></el-icon>环境诊断
+          </el-button>
+        </div>
         <div v-for="fmt in formatList" :key="fmt.key"
           @click="selectFormat(fmt)"
           :class="[
@@ -1153,12 +1164,12 @@
 
 <script setup>
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
-import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, Loading } from '@element-plus/icons-vue';
+import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, Loading, Warning } from '@element-plus/icons-vue';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjects, getProjectDetail, createProject, updateProject, deleteProject, activateProject } from '@/api/project';
-import { getModels, getAvailableFormats, convertModel, getConversionStatus } from '@/api/model';
+import { getModels, getAvailableFormats, convertModel, getConversionStatus, getFormatDiagnosis } from '@/api/model';
 import { getBackendHost } from '@/api/index';
 
 const projectStore = useProjectStore();
@@ -1588,6 +1599,10 @@ const initProjectDefaults = (project) => {
   if (project.ng_cycle_protect_seconds === undefined) {
     project.ng_cycle_protect_seconds = pipelineConfig.ng_cycle_protect_seconds || 0;
   }
+  // 防重复结算
+  if (project.settle_dedup === undefined) {
+    project.settle_dedup = pipelineConfig.settle_dedup || false;
+  }
   // 同时出现组
   if (project.simultaneous_groups === undefined) {
     project.simultaneous_groups = pipelineConfig.simultaneous_groups || [];
@@ -1666,6 +1681,7 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
   project.pipeline_config.ng_cycle_protect_seconds = project.ng_cycle_protect_seconds || 0;
+  project.pipeline_config.settle_dedup = project.settle_dedup || false;
   project.pipeline_config.simultaneous_groups = project.simultaneous_groups;
   project.pipeline_config.settlement_mode = project.settlement_mode || 'first_step';
   project.pipeline_config.idle_timeout_seconds = project.idle_timeout_seconds || 0;
@@ -1986,7 +2002,32 @@ const startConversionPolling = (fmtKey) => {
         clearInterval(conversionPolling.value);
         conversionPolling.value = null;
         convertingFormat.value = null;
-        ElMessage.error('转换失败: ' + (s.error_msg || '未知错误'));
+        const errMsg = s.error_msg || '未知错误';
+        try {
+          const diagRes = await getFormatDiagnosis();
+          const d = diagRes.data;
+          const lines = [
+            `错误: ${errMsg}`,
+            '',
+            `GPU: ${d.gpu_name || '未知'} (${d.gpu_arch || '?'})`,
+            `显存: ${d.gpu_memory_total_mb ?? '?'}MB 总计 / ${d.gpu_memory_free_mb ?? '?'}MB 空闲`,
+            `CUDA: ${d.cuda_version || '未知'}`,
+            `cuDNN: ${d.cudnn_version || '未知'}`,
+            `TensorRT: ${d.tensorrt_version || '未安装'}`,
+            `兼容性: ${d.tensorrt_compatible ? '正常' : '不兼容'}`,
+          ];
+          if (d.issues && d.issues.length) {
+            lines.push('', '发现问题:');
+            d.issues.forEach(i => lines.push(`  • ${i}`));
+          }
+          lines.push('', '建议: 尝试 PyTorch FP16 格式，或关闭占用 GPU 的程序后重试');
+          ElMessageBox.alert(lines.join('\n'), '转换失败 - 环境诊断', {
+            confirmButtonText: '知道了',
+            customStyle: { whiteSpace: 'pre-wrap', fontFamily: 'monospace' },
+          });
+        } catch {
+          ElMessage.error('转换失败: ' + errMsg);
+        }
       }
     } catch (e) {
       console.error('轮询转换状态失败:', e);
@@ -1999,6 +2040,33 @@ const cancelFormatSelect = () => {
   conversionPolling.value = null;
   convertingFormat.value = null;
   showFormatSelect.value = false;
+};
+
+const showDiagnosis = async () => {
+  try {
+    const res = await getFormatDiagnosis();
+    const d = res.data;
+    const lines = [
+      `GPU: ${d.gpu_name || '未检测到'} (${d.gpu_arch || '?'})`,
+      `显存: ${d.gpu_memory_total_mb ?? '?'}MB 总计 / ${d.gpu_memory_free_mb ?? '?'}MB 空闲`,
+      `CUDA: ${d.cuda_version || '未知'}`,
+      `cuDNN: ${d.cudnn_version || '未知'}`,
+      `TensorRT: ${d.tensorrt_version || '未安装'}`,
+      `兼容性: ${d.tensorrt_compatible === true ? '✓ 正常' : d.tensorrt_compatible === false ? '✗ 不兼容' : '未知'}`,
+    ];
+    if (d.issues && d.issues.length) {
+      lines.push('', '发现问题:');
+      d.issues.forEach(i => lines.push(`  • ${i}`));
+    } else {
+      lines.push('', '✓ 未发现兼容性问题');
+    }
+    ElMessageBox.alert(lines.join('\n'), 'GPU 环境诊断', {
+      confirmButtonText: '关闭',
+      customStyle: { whiteSpace: 'pre-wrap', fontFamily: 'monospace' },
+    });
+  } catch (e) {
+    ElMessage.error('获取诊断信息失败');
+  }
 };
 
 // 顺序模式 - 步骤操作

@@ -106,7 +106,7 @@
           <el-input v-model="form.product_spec" />
         </el-form-item>
         <el-form-item label="计划数量">
-          <el-input-number v-model="form.planned_qty" :min="0" />
+          <el-input-number v-model="form.planned_qty" :min="0" :precision="2" />
         </el-form-item>
         <el-form-item label="优先级">
           <el-select v-model="form.priority" class="w-full">
@@ -313,7 +313,10 @@ const handleDelete = async (row) => {
     await deleteOrder(row.id)
     ElMessage.success('工单已删除')
     loadOrders()
-  } catch {}
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close')
+      ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
+  }
 }
 
 const showExtraData = (row) => {

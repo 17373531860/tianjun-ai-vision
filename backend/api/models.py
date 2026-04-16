@@ -127,6 +127,83 @@ def _has_onnx():
         return False
 
 
+def _get_trt_diagnosis() -> dict:
+    """收集 TensorRT / CUDA / cuDNN 环境诊断信息"""
+    info: dict = {
+        "cuda_available": False,
+        "cuda_version": None,
+        "cudnn_version": None,
+        "gpu_name": None,
+        "gpu_arch": None,
+        "gpu_memory_total_mb": None,
+        "gpu_memory_free_mb": None,
+        "tensorrt_version": None,
+        "tensorrt_compatible": None,
+        "issues": [],
+    }
+    try:
+        import torch
+        info["cuda_available"] = torch.cuda.is_available()
+        if not info["cuda_available"]:
+            info["issues"].append("CUDA 不可用")
+            return info
+        info["cuda_version"] = torch.version.cuda
+        info["gpu_name"] = torch.cuda.get_device_name(0)
+        cap = torch.cuda.get_device_capability(0)
+        info["gpu_arch"] = f"sm_{cap[0]}{cap[1]}"
+        props = torch.cuda.get_device_properties(0)
+        mem_total = getattr(props, 'total_memory', None) or getattr(props, 'total_mem', 0)
+        info["gpu_memory_total_mb"] = round(mem_total / 1024 / 1024) if mem_total else None
+        mem_free = mem_total - torch.cuda.memory_allocated(0) if mem_total else 0
+        try:
+            free, total = torch.cuda.mem_get_info(0)
+            info["gpu_memory_free_mb"] = round(free / 1024 / 1024)
+        except Exception:
+            info["gpu_memory_free_mb"] = round(mem_free / 1024 / 1024)
+    except Exception as e:
+        info["issues"].append(f"PyTorch/CUDA 检测失败: {e}")
+
+    try:
+        if hasattr(torch.backends, "cudnn"):
+            info["cudnn_version"] = str(torch.backends.cudnn.version())
+    except Exception:
+        pass
+
+    try:
+        import tensorrt as trt
+        info["tensorrt_version"] = trt.__version__
+        trt_major = int(trt.__version__.split(".")[0])
+        cuda_major = int(info["cuda_version"].split(".")[0]) if info["cuda_version"] else 0
+
+        if trt_major >= 10 and cuda_major < 12:
+            info["tensorrt_compatible"] = False
+            info["issues"].append(
+                f"TensorRT {trt.__version__} 需要 CUDA 12.x，"
+                f"当前 CUDA {info['cuda_version']}"
+            )
+        elif trt_major == 8 and cuda_major >= 12:
+            info["tensorrt_compatible"] = False
+            info["issues"].append(
+                f"TensorRT 8.x 不兼容 CUDA 12.x，"
+                f"请升级 TensorRT 到 10.x"
+            )
+        else:
+            info["tensorrt_compatible"] = True
+
+        if info["gpu_memory_total_mb"] and info["gpu_memory_total_mb"] < 6000:
+            info["issues"].append(
+                f"显存仅 {info['gpu_memory_total_mb']}MB，"
+                f"TensorRT 编译可能因显存不足而失败或极慢"
+            )
+    except ImportError:
+        info["tensorrt_version"] = None
+        info["issues"].append("TensorRT 未安装")
+    except Exception as e:
+        info["issues"].append(f"TensorRT 检测失败: {e}")
+
+    return info
+
+
 # ---------------------------------------------------------------------------
 # Conversion queue (serial execution)
 # ---------------------------------------------------------------------------
@@ -162,7 +239,71 @@ def _conversion_worker():
                 db.commit()
                 continue
 
-            exported_path = model.export(**export_args)
+            is_trt = fmt_key.startswith("tensorrt")
+            diag = _get_trt_diagnosis() if is_trt else {}
+            diag_str = ""
+            if diag:
+                diag_str = (
+                    f"  GPU: {diag.get('gpu_name')} ({diag.get('gpu_arch')})\n"
+                    f"  显存: {diag.get('gpu_memory_total_mb')}MB 总计, "
+                    f"{diag.get('gpu_memory_free_mb')}MB 空闲\n"
+                    f"  CUDA: {diag.get('cuda_version')}\n"
+                    f"  cuDNN: {diag.get('cudnn_version')}\n"
+                    f"  TensorRT: {diag.get('tensorrt_version')}\n"
+                    f"  兼容性: {'OK' if diag.get('tensorrt_compatible') else 'FAIL'}\n"
+                    f"  问题: {diag.get('issues') or '无'}"
+                )
+
+            if is_trt and diag.get("issues"):
+                issue_text = "; ".join(diag["issues"])
+                conv.status = "failed"
+                conv.error_msg = f"环境不兼容: {issue_text}"
+                db.commit()
+                print(f"[ModelConvert] 环境检查失败:\n{diag_str}", flush=True)
+                continue
+
+            if is_trt:
+                export_args = dict(export_args)
+                export_args["workspace"] = 4
+
+            timeout_sec = 600
+            print(
+                f"[ModelConvert] 开始 {fmt_key} 转换 (超时 {timeout_sec}s)\n"
+                f"{diag_str}" if diag_str else
+                f"[ModelConvert] 开始 {fmt_key} 转换 (超时 {timeout_sec}s)",
+                flush=True,
+            )
+
+            export_result = [None]
+            export_error = [None]
+            _final_args = dict(export_args) if export_args else {}
+
+            def _do_export():
+                try:
+                    export_result[0] = model.export(**_final_args)
+                except Exception as ex:
+                    export_error[0] = ex
+
+            t = threading.Thread(target=_do_export, daemon=True)
+            t.start()
+            t.join(timeout=timeout_sec)
+
+            if t.is_alive():
+                detail = (
+                    f"TensorRT 转换超时 ({timeout_sec}s)。\n"
+                    f"GPU: {diag.get('gpu_name', '?')}, "
+                    f"显存空闲: {diag.get('gpu_memory_free_mb', '?')}MB, "
+                    f"TRT: {diag.get('tensorrt_version', '?')}, "
+                    f"CUDA: {diag.get('cuda_version', '?')}\n"
+                    f"建议: 请尝试 PyTorch FP16 格式，或关闭其他占用 GPU 的程序后重试。"
+                ) if diag else (
+                    f"转换超时 ({timeout_sec}s)，请尝试其他格式。"
+                )
+                raise TimeoutError(detail)
+            if export_error[0]:
+                raise export_error[0]
+
+            exported_path = export_result[0]
 
             dest_dir = settings.MODEL_CONVERTED_DIR
             os.makedirs(dest_dir, exist_ok=True)
@@ -330,6 +471,12 @@ def get_available_formats():
         gpu_name=gpu_name,
         gpu_available=gpu_avail,
     )
+
+
+@router.get("/formats/diagnosis")
+def get_format_diagnosis():
+    """返回 GPU / TensorRT / CUDA 环境诊断信息，帮助排查转换失败"""
+    return _get_trt_diagnosis()
 
 
 @router.get("/conversions/{conv_id}/status", response_model=ConversionStatusResponse)

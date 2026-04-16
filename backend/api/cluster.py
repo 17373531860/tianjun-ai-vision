@@ -1,9 +1,9 @@
 """
 集群模式 REST API
 
-主从配置、数据上报、箱子汇总状态查询。
+主从配置、数据上报、汇总状态查询。
 """
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel
 from typing import Optional
 
@@ -23,6 +23,7 @@ class ClusterConfigUpdate(BaseModel):
     expected_stations: Optional[list] = None
     sync_mode: Optional[str] = None
     timeout_sec: Optional[int] = None
+    timeout_push: Optional[bool] = None
     enabled: Optional[bool] = None
 
 
@@ -92,14 +93,19 @@ def receive_report(body: StationReport, request: Request):
     return result
 
 
-# ---- 箱子状态查询 ----
+# ---- 汇总状态查询 ----
 
 @router.get("/boxes")
-def list_pending_boxes():
+def list_pending_boxes(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=200),
+):
     collector = get_cluster_collector()
+    recent_data = collector.get_recent_summaries(limit=limit, skip=skip)
     return {
         "pending": collector.get_pending_boxes(),
-        "recent": collector.get_recent_summaries(limit=20),
+        "recent": recent_data["items"],
+        "recent_total": recent_data["total"],
     }
 
 

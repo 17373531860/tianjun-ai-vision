@@ -166,7 +166,10 @@ const doAction = async (row, action) => {
     ElMessage.success('操作成功')
     loadList()
     if (traceData.value?.workpiece?.id === row.id) handleSelect(row)
-  } catch {}
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close')
+      ElMessage.error('操作失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
+  }
 }
 
 onMounted(loadList)

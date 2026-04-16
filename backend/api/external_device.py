@@ -55,6 +55,7 @@ class TestRequest(BaseModel):
     ip: Optional[str] = None
     port: Optional[int] = None
     serial_port: Optional[str] = None
+    serial_baud: Optional[int] = 9600
     protocol_config: Optional[dict] = None
 
 
@@ -165,6 +166,7 @@ def test_connection(body: TestRequest):
         ip=body.ip,
         port=body.port,
         serial_port=body.serial_port,
+        serial_baud=body.serial_baud or 9600,
         protocol_config=body.protocol_config,
     )
 
@@ -175,6 +177,8 @@ def inject_barcode(body: BarcodeInject):
     svc = get_external_device_service()
     svc.set_barcode(body.device_id, body.barcode)
     return {"success": True, "device_id": body.device_id, "barcode": body.barcode}
+
+
 
 
 @router.get("/logs")

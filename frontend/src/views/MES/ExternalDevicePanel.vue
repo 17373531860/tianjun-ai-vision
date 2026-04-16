@@ -4,7 +4,19 @@
     <div class="flex-1">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-cyan-300 font-semibold">外部设备</h3>
-        <el-button size="small" type="success" @click="openAdd">添加设备</el-button>
+        <div class="flex gap-2">
+          <el-dropdown @command="applyPreset" size="small">
+            <el-button size="small">预设模板 ▼</el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="weighing_modbus">称重器 - Modbus ASCII</el-dropdown-item>
+                <el-dropdown-item command="weighing_continuous">称重器 - 连续接收</el-dropdown-item>
+                <el-dropdown-item command="tcp_sensor">TCP 传感器</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-button size="small" type="success" @click="openAdd">添加设备</el-button>
+        </div>
       </div>
 
       <div v-if="devices.length === 0" class="text-gray-500 text-sm text-center py-8">
@@ -65,7 +77,7 @@
           <div v-if="log.parsed_data" class="text-gray-400 mt-1 truncate">
             {{ JSON.stringify(log.parsed_data) }}
           </div>
-          <div v-if="log.box_serial" class="text-green-400 mt-0.5">箱码: {{ log.box_serial }}</div>
+          <div v-if="log.box_serial" class="text-green-400 mt-0.5">目标编号: {{ log.box_serial }}</div>
           <div v-if="!log.is_valid" class="text-red-400 mt-0.5">{{ log.error_msg }}</div>
         </div>
       </div>
@@ -89,10 +101,12 @@
             </el-select>
           </el-form-item>
           <el-form-item label="通信协议">
-            <el-select v-model="form.protocol" class="w-full">
+            <el-select v-model="form.protocol" class="w-full" @change="onProtocolChange">
               <el-option label="TCP 直连" value="tcp" />
               <el-option label="Modbus TCP" value="modbus_tcp" />
               <el-option label="串口 (RS232/485)" value="serial" />
+              <el-option label="串口 Modbus ASCII" value="serial_modbus_ascii" />
+              <el-option label="串口连续接收" value="serial_continuous" />
               <el-option label="HTTP 轮询" value="http_poll" />
             </el-select>
           </el-form-item>
@@ -104,12 +118,12 @@
             <el-input v-model="form.ip" placeholder="192.168.0.200" />
           </el-form-item>
           <el-form-item label="端口">
-            <el-input-number v-model="form.port" :min="1" :max="65535" class="!w-full" controls-position="right" />
+            <el-input-number v-model="form.port" :min="0" :precision="0" class="!w-full" controls-position="right" />
           </el-form-item>
         </div>
 
         <!-- 串口 -->
-        <div v-if="form.protocol === 'serial'" class="grid grid-cols-2 gap-4">
+        <div v-if="isSerialProtocol" class="grid grid-cols-2 gap-4">
           <el-form-item label="串口号">
             <el-input v-model="form.serial_port" placeholder="COM3 或 /dev/ttyUSB0" />
           </el-form-item>
@@ -118,6 +132,60 @@
               <el-option v-for="b in [9600,19200,38400,57600,115200]" :key="b" :label="b" :value="b" />
             </el-select>
           </el-form-item>
+        </div>
+
+        <!-- Modbus ASCII 参数 -->
+        <div v-if="form.protocol === 'serial_modbus_ascii'" class="bg-slate-900/50 rounded p-3 mb-3">
+          <div class="text-xs text-gray-400 mb-2">Modbus ASCII 主从参数</div>
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">从站地址</div>
+              <el-input-number v-model="modbusSlaveId" :min="0" :precision="2" size="small" class="!w-full" controls-position="right" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">寄存器地址</div>
+              <el-input-number v-model="modbusRegister" :min="0" :precision="0" size="small" class="!w-full" controls-position="right" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">寄存器数量</div>
+              <el-input-number v-model="modbusCount" :min="0" :precision="0" size="small" class="!w-full" controls-position="right" />
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-2 mt-2">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">字节序</div>
+              <el-select v-model="modbusByteOrder" size="small" class="w-full">
+                <el-option label="大端 (H4H3L2L1)" value="H4H3L2L1" />
+                <el-option label="小端 (L2L1H4H3)" value="L2L1H4H3" />
+              </el-select>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">比例系数</div>
+              <el-input-number v-model="modbusScale" :min="0" :precision="2" size="small" class="!w-full" controls-position="right" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">轮询间隔 (秒)</div>
+              <el-input-number v-model="modbusPollInterval" :min="0" :precision="2" size="small" class="!w-full" controls-position="right" />
+            </div>
+          </div>
+        </div>
+
+        <!-- 连续接收模式参数 -->
+        <div v-if="form.protocol === 'serial_continuous'" class="bg-slate-900/50 rounded p-3 mb-3">
+          <div class="text-xs text-gray-400 mb-2">连续接收模式（设备主动推送数据）</div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">数据格式</div>
+              <el-select v-model="continuousDataFormat" size="small" class="w-full">
+                <el-option label="纯文本 ASCII" value="ascii" />
+                <el-option label="Modbus ASCII 帧" value="modbus_ascii" />
+              </el-select>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">行分隔符</div>
+              <el-input v-model="continuousDelimiter" size="small" placeholder="\r\n" />
+            </div>
+          </div>
         </div>
 
         <!-- HTTP -->
@@ -150,13 +218,15 @@
             <el-input v-model="form.station_id" placeholder="如 C（用于集群汇总）" />
           </el-form-item>
           <el-form-item label="绑定工位">
-            <el-input-number v-model="form.channel_id" :min="0" class="!w-full" controls-position="right" />
+            <el-select v-model="form.channel_id" placeholder="选择工位" class="!w-full">
+              <el-option v-for="ch in [0,1,2,3]" :key="ch" :label="'工位 ' + ch" :value="ch" />
+            </el-select>
           </el-form-item>
         </div>
 
         <!-- 分隔符解析配置 -->
         <div v-if="form.parse_mode === 'split'" class="bg-slate-900/50 rounded p-3 mb-3">
-          <div class="text-xs text-gray-400 mb-2">分隔符配置（如数据格式: BOX-001,25.30）</div>
+          <div class="text-xs text-gray-400 mb-2">分隔符配置（如数据格式: SN-001,25.30）</div>
           <div class="grid grid-cols-3 gap-2">
             <div>
               <div class="text-xs text-gray-500 mb-1">分隔符</div>
@@ -164,11 +234,11 @@
             </div>
             <div>
               <div class="text-xs text-gray-500 mb-1">条码位置</div>
-              <el-input-number v-model="splitBarcodeIdx" :min="0" size="small" class="!w-full" controls-position="right" />
+              <el-input-number v-model="splitBarcodeIdx" :min="0" :precision="0" size="small" class="!w-full" controls-position="right" />
             </div>
             <div>
               <div class="text-xs text-gray-500 mb-1">数值位置</div>
-              <el-input-number v-model="splitValueIdx" :min="0" size="small" class="!w-full" controls-position="right" />
+              <el-input-number v-model="splitValueIdx" :min="0" :precision="0" size="small" class="!w-full" controls-position="right" />
             </div>
           </div>
         </div>
@@ -202,7 +272,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getExternalDevices, createExternalDevice, updateExternalDevice,
@@ -233,6 +303,29 @@ const weightMin = ref(0)
 const weightMax = ref(100)
 const httpUrl = ref('')
 
+const modbusSlaveId = ref(1)
+const modbusRegister = ref(41201)
+const modbusCount = ref(2)
+const modbusByteOrder = ref('H4H3L2L1')
+const modbusScale = ref(1.0)
+const modbusPollInterval = ref(0.5)
+const continuousDataFormat = ref('ascii')
+const continuousDelimiter = ref('\\r\\n')
+
+const isSerialProtocol = computed(() =>
+  ['serial', 'serial_modbus_ascii', 'serial_continuous'].includes(form.value.protocol)
+)
+
+const onProtocolChange = (val) => {
+  if (val === 'serial_modbus_ascii') {
+    form.value.parse_mode = 'direct'
+    form.value.device_role = 'weight'
+  } else if (val === 'serial_continuous') {
+    form.value.parse_mode = 'direct'
+    form.value.device_role = 'weight'
+  }
+}
+
 const formatTime = (t) => t ? t.replace('T', ' ').substring(0, 19) : '-'
 
 const roleLabel = (r) => ({ weight: '称重器', sensor: '传感器', plc: 'PLC', custom: '自定义' }[r] || r)
@@ -248,6 +341,27 @@ const buildFormData = () => {
   const data = { ...form.value }
   if (data.protocol === 'http_poll') {
     data.protocol_config = { ...data.protocol_config, url: httpUrl.value }
+  }
+  if (data.protocol === 'serial_modbus_ascii') {
+    data.protocol_config = {
+      ...data.protocol_config,
+      slave_id: modbusSlaveId.value,
+      register: modbusRegister.value,
+      count: modbusCount.value,
+      byte_order: modbusByteOrder.value,
+      data_scale: modbusScale.value,
+      poll_interval: modbusPollInterval.value,
+    }
+  }
+  if (data.protocol === 'serial_continuous') {
+    data.protocol_config = {
+      ...data.protocol_config,
+      data_format: continuousDataFormat.value,
+      delimiter: continuousDelimiter.value,
+      slave_id: modbusSlaveId.value,
+      byte_order: modbusByteOrder.value,
+      data_scale: modbusScale.value,
+    }
   }
   if (data.parse_mode === 'split') {
     data.parse_config = {
@@ -279,16 +393,62 @@ const editDev = (dev) => {
   editingId.value = dev.id
   form.value = { ...dev }
   const pc = dev.parse_config || {}
+  const pcfg = dev.protocol_config || {}
   if (dev.parse_mode === 'split') {
     splitDelimiter.value = pc.delimiter || ','
     splitBarcodeIdx.value = pc.fields?.barcode ?? 0
     splitValueIdx.value = pc.fields?.weight ?? 1
   }
+  if (dev.protocol === 'serial_modbus_ascii') {
+    modbusSlaveId.value = pcfg.slave_id ?? 1
+    modbusRegister.value = pcfg.register ?? 41201
+    modbusCount.value = pcfg.count ?? 2
+    modbusByteOrder.value = pcfg.byte_order ?? 'H4H3L2L1'
+    modbusScale.value = pcfg.data_scale ?? 1.0
+    modbusPollInterval.value = pcfg.poll_interval ?? 0.5
+  }
+  if (dev.protocol === 'serial_continuous') {
+    continuousDataFormat.value = pcfg.data_format ?? 'ascii'
+    continuousDelimiter.value = pcfg.delimiter ?? '\\r\\n'
+    modbusSlaveId.value = pcfg.slave_id ?? 1
+    modbusByteOrder.value = pcfg.byte_order ?? 'H4H3L2L1'
+    modbusScale.value = pcfg.data_scale ?? 1.0
+  }
   const vr = dev.validation_rules?.weight || {}
   weightMin.value = vr.min || 0
   weightMax.value = vr.max || 100
-  httpUrl.value = dev.protocol_config?.url || ''
+  httpUrl.value = pcfg.url || ''
   showDialog.value = true
+}
+
+const applyPreset = (preset) => {
+  openAdd()
+  if (preset === 'weighing_modbus') {
+    form.value.name = '称重器'
+    form.value.device_role = 'weight'
+    form.value.protocol = 'serial_modbus_ascii'
+    form.value.serial_baud = 9600
+    form.value.parse_mode = 'direct'
+    modbusSlaveId.value = 1
+    modbusRegister.value = 41201
+    modbusCount.value = 2
+    modbusByteOrder.value = 'H4H3L2L1'
+    modbusScale.value = 1.0
+    modbusPollInterval.value = 0.5
+  } else if (preset === 'weighing_continuous') {
+    form.value.name = '称重器 (连续)'
+    form.value.device_role = 'weight'
+    form.value.protocol = 'serial_continuous'
+    form.value.serial_baud = 9600
+    form.value.parse_mode = 'direct'
+    continuousDataFormat.value = 'ascii'
+    continuousDelimiter.value = '\\r\\n'
+  } else if (preset === 'tcp_sensor') {
+    form.value.name = '传感器'
+    form.value.device_role = 'sensor'
+    form.value.protocol = 'tcp'
+    form.value.parse_mode = 'direct'
+  }
 }
 
 const handleSave = async () => {
@@ -326,7 +486,8 @@ const testDev = async (dev) => {
   try {
     const res = await testExternalDevice({
       protocol: dev.protocol, ip: dev.ip, port: dev.port,
-      serial_port: dev.serial_port, protocol_config: dev.protocol_config,
+      serial_port: dev.serial_port, serial_baud: dev.serial_baud || 9600,
+      protocol_config: dev.protocol_config,
     })
     if (res.data.success) ElMessage.success(res.data.message)
     else ElMessage.error(res.data.message)
@@ -334,7 +495,8 @@ const testDev = async (dev) => {
 }
 
 const loadDevices = async () => {
-  try { devices.value = (await getExternalDevices()).data || [] } catch {}
+  try { devices.value = (await getExternalDevices()).data || [] }
+  catch (e) { ElMessage.error('加载设备列表失败: ' + (e.response?.data?.detail || e.message || '网络错误')) }
 }
 const refreshStatus = async () => {
   try {
@@ -342,10 +504,11 @@ const refreshStatus = async () => {
     const map = {}
     for (const s of (res.data || [])) map[s.device_id] = s
     statusMap.value = map
-  } catch {}
+  } catch (e) { console.warn('[ExtDev] 刷新状态失败:', e.message) }
 }
 const loadLogs = async () => {
-  try { logs.value = (await getExternalDeviceLogs({ limit: 30 })).data.items || [] } catch {}
+  try { logs.value = (await getExternalDeviceLogs({ limit: 30 })).data.items || [] }
+  catch (e) { console.warn('[ExtDev] 加载日志失败:', e.message) }
 }
 const handleClearLogs = async () => {
   try {

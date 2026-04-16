@@ -1040,7 +1040,7 @@ const processChannelResult = (ch, d) => {
       showMultiToast(ch, toastId, event.event_name, event.reason);
 
       const warnCfg = systemStore.detection.toasts?.warn_no_barcode;
-      if (warnCfg?.enabled && chData.mes?.warn_no_barcode) {
+      if (warnCfg?.enabled && !event.had_workpiece) {
         setTimeout(() => {
           showMultiToast(ch, 'warn_no_barcode', warnCfg.text || '⚠ 未绑码', warnCfg.subText || '本次结算未绑定工件条码');
         }, 300);
@@ -2648,7 +2648,7 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
         showToastById(toastId, event.event_name, event.reason);
         
         const warnCfg = systemStore.detection.toasts?.warn_no_barcode;
-        if (warnCfg?.enabled && mesData.value?.warn_no_barcode) {
+        if (warnCfg?.enabled && !event.had_workpiece) {
           setTimeout(() => {
             showToastById('warn_no_barcode', warnCfg.text || '⚠ 未绑码', warnCfg.subText || '本次结算未绑定工件条码');
           }, 300);

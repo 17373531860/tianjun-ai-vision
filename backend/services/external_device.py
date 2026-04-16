@@ -5,6 +5,8 @@
 - tcp: TCP 文本流监听（称重器、传感器等主动推送数据）
 - modbus_tcp: Modbus TCP 轮询寄存器
 - serial: 串口监听（RS232/RS485/USB转串口）
+- serial_modbus_ascii: 串口 Modbus ASCII 主从模式（定时发请求读取寄存器）
+- serial_continuous: 串口连续接收模式（设备主动推送数据，被动接收）
 - http_poll: HTTP 轮询外部 API
 
 数据流向:
@@ -117,14 +119,18 @@ class ExternalDeviceService:
         self._barcode_buffer[device_id] = barcode
 
     def test_connection(self, protocol: str, ip: str = None, port: int = None,
-                        serial_port: str = None, protocol_config: dict = None,
+                        serial_port: str = None, serial_baud: int = 9600,
+                        protocol_config: dict = None,
                         timeout: float = 5.0) -> dict:
         if protocol == "tcp":
             return self._test_tcp(ip, port, timeout)
         elif protocol == "modbus_tcp":
             return self._test_modbus(ip, port, protocol_config or {}, timeout)
         elif protocol == "serial":
-            return self._test_serial(serial_port, timeout)
+            return self._test_serial(serial_port, serial_baud, timeout)
+        elif protocol in ("serial_modbus_ascii", "serial_continuous"):
+            return self._test_serial_modbus(serial_port, serial_baud,
+                                            protocol_config or {}, protocol, timeout)
         elif protocol == "http_poll":
             return self._test_http(protocol_config or {}, timeout)
         return {"success": False, "message": f"未知协议: {protocol}"}
@@ -175,6 +181,10 @@ class ExternalDeviceService:
                     self._modbus_loop(conn)
                 elif conn.protocol == "serial":
                     self._serial_loop(conn)
+                elif conn.protocol == "serial_modbus_ascii":
+                    self._serial_modbus_ascii_loop(conn)
+                elif conn.protocol == "serial_continuous":
+                    self._serial_continuous_loop(conn)
                 elif conn.protocol == "http_poll":
                     self._http_poll_loop(conn)
                 else:
@@ -325,6 +335,227 @@ class ExternalDeviceService:
                                 self._on_raw_data(conn, text)
                 except Exception as e:
                     logger.error("[ExtDev] %s 串口错误: %s", conn.name, e)
+                    break
+        finally:
+            ser.close()
+
+    # ---- 串口 Modbus ASCII 主从模式 ----
+
+    @staticmethod
+    def _modbus_ascii_lrc(data: bytes) -> int:
+        """Modbus ASCII LRC 校验"""
+        return (-sum(data)) & 0xFF
+
+    @staticmethod
+    def _build_modbus_ascii_read(slave: int, register: int, count: int) -> bytes:
+        """构建 Modbus ASCII 读保持寄存器请求帧 (功能码 03)
+
+        Modbus 寄存器地址约定: 说明书地址 4xxxx → 实际寄存器地址 = (4xxxx - 40001)
+        例如 41201 → register = 1200 (0x04B0)
+        """
+        func_code = 0x03
+        pdu = bytes([slave, func_code,
+                      (register >> 8) & 0xFF, register & 0xFF,
+                      (count >> 8) & 0xFF, count & 0xFF])
+        lrc = ExternalDeviceService._modbus_ascii_lrc(pdu)
+        hex_str = pdu.hex().upper() + f"{lrc:02X}"
+        return f":{hex_str}\r\n".encode("ascii")
+
+    @staticmethod
+    def _parse_modbus_ascii_response(frame: str, expected_slave: int = 1) -> Optional[list]:
+        """解析 Modbus ASCII 响应帧，返回寄存器值列表"""
+        frame = frame.strip()
+        if not frame.startswith(":"):
+            return None
+        hex_str = frame[1:]
+        try:
+            raw = bytes.fromhex(hex_str)
+        except ValueError:
+            return None
+        if len(raw) < 4:
+            return None
+        payload = raw[:-1]
+        lrc_recv = raw[-1]
+        lrc_calc = (-sum(payload)) & 0xFF
+        if lrc_recv != lrc_calc:
+            return None
+        slave = payload[0]
+        func = payload[1]
+        if slave != expected_slave or func != 0x03:
+            return None
+        byte_count = payload[2]
+        data = payload[3:3 + byte_count]
+        registers = []
+        for i in range(0, len(data), 2):
+            if i + 1 < len(data):
+                registers.append((data[i] << 8) | data[i + 1])
+        return registers
+
+    def _serial_modbus_ascii_loop(self, conn: DeviceConnection):
+        """串口 Modbus ASCII 主从模式 — 定时发读取请求，解析响应"""
+        try:
+            import serial
+        except ImportError:
+            conn.status = "error"
+            conn.last_error = "pyserial 未安装"
+            logger.error("[ExtDev] %s pyserial 未安装", conn.name)
+            return
+
+        cfg = conn.protocol_config
+        slave_id = cfg.get("slave_id", 1)
+        doc_register = cfg.get("register", 41201)
+        count = cfg.get("count", 2)
+        poll_interval = cfg.get("poll_interval", 0.5)
+        byte_order = cfg.get("byte_order", "H4H3L2L1")
+        data_scale = cfg.get("data_scale", 1.0)
+
+        modbus_register = doc_register - 40001 if doc_register >= 40001 else doc_register
+
+        conn.status = "connecting"
+        try:
+            ser = serial.Serial(
+                port=conn.serial_port,
+                baudrate=conn.serial_baud,
+                bytesize=cfg.get("bytesize", 8),
+                parity=cfg.get("parity", "N"),
+                stopbits=cfg.get("stopbits", 1),
+                timeout=1.0,
+            )
+        except Exception as e:
+            conn.status = "error"
+            conn.last_error = str(e)
+            raise
+
+        conn.status = "connected"
+        conn.last_error = ""
+        logger.info("[ExtDev] %s Modbus ASCII 主从模式启动 (slave=%d, reg=%d, count=%d)",
+                    conn.name, slave_id, modbus_register, count)
+
+        try:
+            while not conn._stop_event.is_set():
+                request = self._build_modbus_ascii_read(slave_id, modbus_register, count)
+                try:
+                    ser.reset_input_buffer()
+                    ser.write(request)
+                    time.sleep(0.1)
+                    response = b""
+                    deadline = time.time() + 2.0
+                    while time.time() < deadline:
+                        chunk = ser.read(256)
+                        if chunk:
+                            response += chunk
+                            if b"\r\n" in response:
+                                break
+                        elif response:
+                            break
+
+                    if response:
+                        text = response.decode("ascii", errors="ignore").strip()
+                        registers = self._parse_modbus_ascii_response(text, slave_id)
+                        if registers is not None and len(registers) >= 2:
+                            if byte_order in ("H4H3L2L1", "big"):
+                                raw_val = (registers[0] << 16) | registers[1]
+                            elif byte_order in ("L2L1H4H3", "little"):
+                                raw_val = (registers[1] << 16) | registers[0]
+                            elif byte_order == "H3H4L1L2":
+                                raw_val = (((registers[0] & 0xFF) << 24) |
+                                           ((registers[0] >> 8) << 16) |
+                                           ((registers[1] & 0xFF) << 8) |
+                                           (registers[1] >> 8))
+                            else:
+                                raw_val = (registers[0] << 16) | registers[1]
+
+                            if raw_val >= 0x80000000:
+                                raw_val -= 0x100000000
+                            weight = raw_val * data_scale
+                            self._on_raw_data(conn, f"{weight:.1f}")
+                        else:
+                            logger.debug("[ExtDev] %s Modbus 响应解析失败: %s",
+                                         conn.name, text[:60])
+                    else:
+                        logger.debug("[ExtDev] %s Modbus 无响应", conn.name)
+
+                except Exception as e:
+                    logger.error("[ExtDev] %s Modbus ASCII 通信错误: %s", conn.name, e)
+
+                conn._stop_event.wait(timeout=poll_interval)
+        finally:
+            ser.close()
+
+    # ---- 串口连续接收模式 ----
+
+    def _serial_continuous_loop(self, conn: DeviceConnection):
+        """串口连续接收模式 — 设备主动推送数据（需设备端配置为连续发送模式）"""
+        try:
+            import serial
+        except ImportError:
+            conn.status = "error"
+            conn.last_error = "pyserial 未安装"
+            logger.error("[ExtDev] %s pyserial 未安装", conn.name)
+            return
+
+        cfg = conn.protocol_config
+        conn.status = "connecting"
+        try:
+            ser = serial.Serial(
+                port=conn.serial_port,
+                baudrate=conn.serial_baud,
+                bytesize=cfg.get("bytesize", 8),
+                parity=cfg.get("parity", "N"),
+                stopbits=cfg.get("stopbits", 1),
+                timeout=2.0,
+            )
+        except Exception as e:
+            conn.status = "error"
+            conn.last_error = str(e)
+            raise
+
+        conn.status = "connected"
+        conn.last_error = ""
+        delimiter = (cfg.get("delimiter", "\r\n")
+                     .encode().decode("unicode_escape").encode())
+
+        data_format = cfg.get("data_format", "ascii")
+        logger.info("[ExtDev] %s 连续接收模式启动 (format=%s)", conn.name, data_format)
+
+        buffer = b""
+        try:
+            while not conn._stop_event.is_set():
+                try:
+                    data = ser.read(1024)
+                    if not data:
+                        continue
+                    buffer += data
+
+                    if data_format == "modbus_ascii":
+                        while b"\r\n" in buffer:
+                            line, buffer = buffer.split(b"\r\n", 1)
+                            text = line.decode("ascii", errors="ignore").strip()
+                            if text.startswith(":"):
+                                cfg_slave = cfg.get("slave_id", 1)
+                                registers = self._parse_modbus_ascii_response(
+                                    text, cfg_slave)
+                                if registers is not None and len(registers) >= 2:
+                                    byte_order = cfg.get("byte_order", "H4H3L2L1")
+                                    data_scale = cfg.get("data_scale", 1.0)
+                                    if byte_order in ("H4H3L2L1", "big"):
+                                        raw_val = (registers[0] << 16) | registers[1]
+                                    else:
+                                        raw_val = (registers[1] << 16) | registers[0]
+                                    if raw_val >= 0x80000000:
+                                        raw_val -= 0x100000000
+                                    weight = raw_val * data_scale
+                                    self._on_raw_data(conn, f"{weight:.1f}")
+                            elif text:
+                                self._on_raw_data(conn, text)
+                    else:
+                        while delimiter in buffer:
+                            line, buffer = buffer.split(delimiter, 1)
+                            text = line.decode("utf-8", errors="ignore").strip()
+                            if text:
+                                self._on_raw_data(conn, text)
+                except Exception as e:
+                    logger.error("[ExtDev] %s 串口连续接收错误: %s", conn.name, e)
                     break
         finally:
             ser.close()
@@ -617,16 +848,64 @@ class ExternalDeviceService:
         except Exception as e:
             return {"success": False, "message": str(e)}
 
-    def _test_serial(self, serial_port, timeout):
+    def _test_serial(self, serial_port, baud, timeout):
         try:
             import serial
-            ser = serial.Serial(port=serial_port, baudrate=9600, timeout=timeout)
+            ser = serial.Serial(port=serial_port, baudrate=baud, timeout=timeout)
             ser.close()
-            return {"success": True, "message": f"串口 {serial_port} 打开成功"}
+            return {"success": True, "message": f"串口 {serial_port} 打开成功 (baud={baud})"}
         except ImportError:
             return {"success": False, "message": "pyserial 未安装"}
         except Exception as e:
             return {"success": False, "message": str(e)}
+
+    def _test_serial_modbus(self, serial_port, baud, config, protocol, timeout):
+        """测试串口 Modbus ASCII 连接并尝试读取一次"""
+        try:
+            import serial
+        except ImportError:
+            return {"success": False, "message": "pyserial 未安装"}
+        try:
+            ser = serial.Serial(port=serial_port, baudrate=baud, timeout=timeout)
+        except Exception as e:
+            return {"success": False, "message": f"串口打开失败: {e}"}
+
+        if protocol == "serial_continuous":
+            time.sleep(2.0)
+            data = ser.read(1024)
+            ser.close()
+            if data:
+                text = data.decode("ascii", errors="ignore").strip()
+                return {"success": True,
+                        "message": f"连续接收模式收到数据: {text[:100]}"}
+            return {"success": True,
+                    "message": f"串口 {serial_port} 打开成功，但 2 秒内未收到数据（设备是否配置为连续发送？）"}
+
+        slave_id = config.get("slave_id", 1)
+        doc_reg = config.get("register", 41201)
+        modbus_reg = doc_reg - 40001 if doc_reg >= 40001 else doc_reg
+        count = config.get("count", 2)
+
+        request = self._build_modbus_ascii_read(slave_id, modbus_reg, count)
+        try:
+            ser.reset_input_buffer()
+            ser.write(request)
+            time.sleep(0.3)
+            response = ser.read(256)
+            ser.close()
+            if response:
+                text = response.decode("ascii", errors="ignore").strip()
+                registers = self._parse_modbus_ascii_response(text, slave_id)
+                if registers is not None:
+                    return {"success": True,
+                            "message": f"Modbus ASCII 测试成功，寄存器值: {registers}"}
+                return {"success": True,
+                        "message": f"串口有响应但解析失败: {text[:60]}"}
+            return {"success": True,
+                    "message": f"串口 {serial_port} 打开成功，但 Modbus 无响应（检查从站地址和接线）"}
+        except Exception as e:
+            ser.close()
+            return {"success": False, "message": f"通信失败: {e}"}
 
     def _test_http(self, config, timeout):
         try:

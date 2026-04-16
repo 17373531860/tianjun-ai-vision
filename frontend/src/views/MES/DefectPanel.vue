@@ -157,14 +157,18 @@ const loadPareto = async () => {
   try {
     const res = await getPareto({})
     paretoData.value = res.data || []
-  } catch {}
+  } catch (e) {
+    ElMessage.error('加载 Pareto 数据失败')
+  }
 }
 
 const loadCodes = async () => {
   try {
     const res = await getDefectCodes({})
     codes.value = res.data || []
-  } catch {}
+  } catch (e) {
+    ElMessage.error('加载缺陷代码失败')
+  }
 }
 
 const handleAddCode = async () => {
@@ -190,7 +194,10 @@ const handleDeleteCode = async (row) => {
     await deleteDefectCode(row.id)
     ElMessage.success('已删除')
     loadCodes()
-  } catch {}
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close')
+      ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
+  }
 }
 
 watch(showCodeMgr, (v) => { if (v) loadCodes() })

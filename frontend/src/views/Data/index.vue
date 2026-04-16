@@ -388,7 +388,7 @@
                       </div>
                       <div class="setting-row">
                         <span>帧率</span>
-                        <el-input-number v-model="exportSettings.video_fps" :min="10" :max="60" size="small" style="width: 90px" @change="saveExportSettings" />
+                        <el-input-number v-model="exportSettings.video_fps" :min="0" :precision="0" size="small" style="width: 90px" @change="saveExportSettings" />
                       </div>
                     </div>
                   </div>
@@ -539,7 +539,7 @@
                       </div>
                       <div class="setting-row">
                         <span>保留天数</span>
-                        <el-input-number v-model="cleanupSettings.retention_days" :min="1" :max="365" size="small" controls-position="right" style="width: 100px" @change="saveCleanupSettings" />
+                        <el-input-number v-model="cleanupSettings.retention_days" :min="0" :precision="0" size="small" controls-position="right" style="width: 100px" @change="saveCleanupSettings" />
                       </div>
                       <div class="text-xs text-gray-600 pl-1">
                         超过 {{ cleanupSettings.retention_days }} 天的数据将被自动清理

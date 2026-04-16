@@ -47,7 +47,7 @@ class ScannerConnection:
     broadcast_channels: list = field(default_factory=list)
 
     status: str = "disconnected"
-    device_type: str = "auto"  # "auto", "text", "wmax"
+    device_type: str = "text_lon"  # "text_lon"(默认), "auto", "text", "wmax"
     last_scan: str = ""
     last_scan_time: float = 0
     last_error: str = ""
@@ -55,6 +55,7 @@ class ScannerConnection:
     _thread: Optional[threading.Thread] = field(default=None, repr=False)
     _stop_event: threading.Event = field(default_factory=threading.Event, repr=False)
     _wmax_device: Optional[object] = field(default=None, repr=False)
+    _scanning: bool = False
 
 
 class ScannerService:
@@ -87,7 +88,12 @@ class ScannerService:
         finally:
             db.close()
 
-        self._auto_discover_wmax_bg()
+        has_wmax = any(c.device_type in ("wmax", "wmax_scan", "auto")
+                       for c in self._connections.values())
+        if has_wmax:
+            self._auto_discover_wmax_bg()
+        else:
+            print("[Scanner] 所有设备均为 LON/LOFF 模式，跳过 WMax 自动发现")
 
     def _auto_discover_wmax_bg(self):
         """后台线程: UDP 自动发现 + 数据库已知 IP 直连 WMax 管理端口"""
@@ -230,32 +236,82 @@ class ScannerService:
             })
         return results
 
+    def start_scanning(self, channel_id: int = None):
+        """检测开始时调用：让绑定的扫码器发 LON 进入扫码状态"""
+        targets = []
+        for conn in self._connections.values():
+            if conn.status != "connected":
+                continue
+            if channel_id is not None:
+                bound = conn.broadcast_channels if conn.broadcast_channels else [conn.channel_id]
+                if channel_id not in bound:
+                    continue
+            targets.append(conn)
+
+        for conn in targets:
+            conn._scanning = True
+        if targets:
+            names = [c.name for c in targets]
+            print(f"[Scanner] start_scanning(ch={channel_id}) → {names}")
+
+    def stop_scanning(self, channel_id: int = None):
+        """检测停止时调用：让绑定的扫码器发 LOFF 停止扫码"""
+        targets = []
+        for conn in self._connections.values():
+            if channel_id is not None:
+                bound = conn.broadcast_channels if conn.broadcast_channels else [conn.channel_id]
+                if channel_id not in bound:
+                    continue
+            targets.append(conn)
+
+        for conn in targets:
+            conn._scanning = False
+        if targets:
+            names = [c.name for c in targets]
+            print(f"[Scanner] stop_scanning(ch={channel_id}) → {names}")
+
     def trigger_scan(self, device_id: int) -> dict:
-        """手动触发一次扫码（通过 55256 端口发 LON）"""
+        """手动触发一次扫码：LON → 扫到码或超时后自动 LOFF"""
         conn = self._connections.get(device_id)
         if not conn:
             return {"success": False, "message": f"设备 {device_id} 未连接"}
         if conn.status != "connected" or not conn._socket:
             return {"success": False, "message": f"设备 {conn.name} 未连接 (status={conn.status})"}
-        try:
-            conn._socket.sendall(b"LON\r\n")
-            logger.info("[Scanner] %s 手动触发扫码 (LON)", conn.name)
-            return {"success": True, "message": f"已向 {conn.name} 发送触发指令"}
-        except OSError as e:
-            logger.error("[Scanner] %s 触发扫码失败: %s", conn.name, e)
-            return {"success": False, "message": str(e)}
+        self._do_trigger_once(conn)
+        return {"success": True, "message": f"已向 {conn.name} 发送触发指令"}
 
     def trigger_scan_by_ip(self, ip: str) -> dict:
         """通过 IP 查找并触发扫码"""
         for conn in self._connections.values():
             if conn.ip == ip and conn.status == "connected" and conn._socket:
-                try:
-                    conn._socket.sendall(b"LON\r\n")
-                    logger.info("[Scanner] %s 手动触发扫码 (LON by IP)", conn.name)
-                    return {"success": True, "message": f"已向 {conn.name} 发送触发指令"}
-                except OSError as e:
-                    return {"success": False, "message": str(e)}
+                self._do_trigger_once(conn)
+                return {"success": True, "message": f"已向 {conn.name} 发送触发指令"}
         return {"success": False, "message": f"未找到 IP={ip} 的已连接设备"}
+
+    def _do_trigger_once(self, conn: ScannerConnection):
+        """单次触发：发 LON，扫到码后或 10 秒超时后自动发 LOFF"""
+        def _run():
+            try:
+                conn._socket.sendall(b"LON\r\n")
+                print(f"[Scanner] {conn.name} 手动触发 LON")
+            except OSError as e:
+                print(f"[Scanner] {conn.name} 手动 LON 失败: {e}")
+                return
+            scan_before = conn.last_scan_time
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                if conn.last_scan_time > scan_before:
+                    break
+                time.sleep(0.2)
+            try:
+                conn._socket.sendall(b"LOFF\r\n")
+                if conn.last_scan_time > scan_before:
+                    print(f"[Scanner] {conn.name} 手动触发: 扫到码, LOFF 已发送")
+                else:
+                    print(f"[Scanner] {conn.name} 手动触发: 10秒超时, LOFF 已发送")
+            except OSError:
+                pass
+        threading.Thread(target=_run, daemon=True, name=f"trigger-{conn.device_id}").start()
 
     def get_latest_scan(self, channel_id: int) -> Optional[dict]:
         for conn in self._connections.values():
@@ -268,19 +324,28 @@ class ScannerService:
         return None
 
     def test_connection(self, ip: str, port: int, timeout: float = 3.0) -> dict:
-        """测试 TCP 连接到扫码器，自动探测设备类型"""
+        """测试连接：LON 闪 3 秒后自动 LOFF 关灯"""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(timeout)
             sock.connect((ip, port))
 
-            device_type = self._detect_device_type(sock, timeout)
+            def _flash_and_stop():
+                try:
+                    sock.sendall(b"LON\r\n")
+                    time.sleep(3)
+                    sock.sendall(b"LOFF\r\n")
+                    time.sleep(0.2)
+                except OSError:
+                    pass
+                finally:
+                    sock.close()
 
-            sock.close()
+            threading.Thread(target=_flash_and_stop, daemon=True).start()
             return {
                 "success": True,
-                "message": f"连接 {ip}:{port} 成功",
-                "device_type": device_type,
+                "message": f"连接 {ip}:{port} 成功（闪灯 3 秒）",
+                "device_type": "text_lon",
             }
         except Exception as e:
             return {"success": False, "message": str(e)}
@@ -328,6 +393,8 @@ class ScannerService:
     # ---- 内部方法 ----
 
     def _start_device(self, dev: ScannerDevice):
+        raw_type = getattr(dev, 'device_type', None) or 'text_lon'
+        db_device_type = raw_type if raw_type not in ('auto', '') else 'text_lon'
         conn = ScannerConnection(
             device_id=dev.id,
             name=dev.name,
@@ -346,6 +413,7 @@ class ScannerService:
             bind_timing=getattr(dev, 'bind_timing', 'mid_cycle'),
             broadcast_channels=getattr(dev, 'broadcast_channels', None) or [],
         )
+        conn.device_type = db_device_type
         conn.parse_config["parse_mode"] = dev.parse_mode or "direct"
 
         self._connections[dev.id] = conn
@@ -394,7 +462,10 @@ class ScannerService:
                 conn.last_error = ""
                 conn_start = time.time()
 
-                if conn.device_type == "wmax_scan":
+                if conn.device_type == "text_lon":
+                    print(f"[Scanner] {conn.name} ({conn.ip}:{conn.port}) 已连接 (LON/LOFF 模式)")
+                    self._text_lon_listen_loop(conn, sock)
+                elif conn.device_type == "wmax_scan":
                     logger.info("[Scanner] %s (%s:%d) WMax 扫码数据端口，被动监听",
                                 conn.name, conn.ip, conn.port)
                     self._wmax_scan_listen_loop(conn, sock)
@@ -440,6 +511,58 @@ class ScannerService:
             if not conn._stop_event.is_set():
                 conn._stop_event.wait(timeout=retry_delay)
                 retry_delay = min(retry_delay * 2, max_delay)
+
+    def _text_lon_listen_loop(self, conn: ScannerConnection, sock: socket.socket):
+        """LON/LOFF 模式监听：保持 TCP 连接，检测开始时发 LON，停止时发 LOFF"""
+        sock.settimeout(2.0)
+        buffer = b""
+        last_activity = time.time()
+
+        while not conn._stop_event.is_set():
+            if conn._scanning and not getattr(conn, '_lon_sent', False):
+                try:
+                    sock.sendall(b"LON\r\n")
+                    conn._lon_sent = True
+                    print(f"[Scanner] {conn.name} LON 已发送 (开始扫码)")
+                except OSError as e:
+                    print(f"[Scanner] {conn.name} LON 发送失败: {e}")
+                    break
+
+            if not conn._scanning and getattr(conn, '_lon_sent', False):
+                try:
+                    sock.sendall(b"LOFF\r\n")
+                    conn._lon_sent = False
+                    print(f"[Scanner] {conn.name} LOFF 已发送 (停止扫码)")
+                except OSError as e:
+                    print(f"[Scanner] {conn.name} LOFF 发送失败: {e}")
+                    break
+
+            try:
+                data = sock.recv(4096)
+                if not data:
+                    break
+                buffer += data
+                last_activity = time.time()
+
+                while b"\r\n" in buffer or b"\n" in buffer:
+                    sep = b"\r\n" if b"\r\n" in buffer else b"\n"
+                    line, buffer = buffer.split(sep, 1)
+                    text = line.decode("utf-8", errors="ignore").strip()
+                    if text:
+                        self._on_data_received(conn, text)
+
+            except socket.timeout:
+                if time.time() - last_activity > 30.0:
+                    try:
+                        sock.getpeername()
+                        last_activity = time.time()
+                    except OSError:
+                        break
+                continue
+            except OSError:
+                break
+
+        conn._lon_sent = False
 
     def _text_listen_loop(self, conn: ScannerConnection,
                           sock: socket.socket, keepalive_interval: float):
@@ -626,10 +749,31 @@ class ScannerService:
                     device_id=conn.device_id,
                 )
 
+        self._inject_barcode_to_external_devices(conn, result.serial_no)
+
         if len(channels) > 1:
             logger.info("[Scanner] %s: 扫码 → %s (广播到 channels %s)", conn.name, result.serial_no, channels)
         else:
             logger.info("[Scanner] %s: 扫码 → %s", conn.name, result.serial_no)
+
+    def _inject_barcode_to_external_devices(self, conn: ScannerConnection, serial_no: str):
+        """扫码后自动把条码注入给同绑定工位的外部设备（如称重器）"""
+        try:
+            from backend.services.external_device import get_external_device_service
+            ext_svc = get_external_device_service()
+            if not ext_svc:
+                return
+            target_channel = conn.channel_id
+            injected = []
+            for dev_conn in ext_svc._connections.values():
+                if dev_conn.channel_id == target_channel and dev_conn.enabled:
+                    ext_svc.set_barcode(dev_conn.device_id, serial_no)
+                    injected.append(dev_conn.name)
+            if injected:
+                logger.info("[Scanner] %s: 条码 %s → 注入外部设备: %s",
+                            conn.name, serial_no, injected)
+        except Exception as e:
+            logger.debug("[Scanner] 注入外部设备条码失败: %s", e)
 
     def inject_scan_result(self, ip: str, barcode: str):
         """外部注入扫码结果（WMax RPT 端口转发用）"""

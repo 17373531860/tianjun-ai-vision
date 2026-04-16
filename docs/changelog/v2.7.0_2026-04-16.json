@@ -1,0 +1,143 @@
+{
+  "version": "2.7.0",
+  "date": "2026-04-16",
+  "previous_version": "2.6.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "扫码器 LON/LOFF 模式（TCP 55256）",
+      "symptom": "WMax 逆向协议在部分扫码器上握手失败，且自动发 LON 导致一直闪光",
+      "root_cause": "WMax 二进制协议兼容性差，连接时自动发 LON 和 activate_rpt 导致持续闪光",
+      "fix": "新增 text_lon 设备类型作为默认，检测开始发 LON，停止发 LOFF，搜索/测试不触发 WMax",
+      "files": ["backend/services/scanner.py", "backend/api/scanner.py", "backend/models/mes_models.py", "frontend/src/api/scanner.js", "frontend/src/views/MES/ScannerPanel.vue"],
+      "keywords": ["扫码器", "LON", "LOFF", "TCP", "55256", "text_lon", "闪光", "WMax", "scanner"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "防重复结算开关",
+      "symptom": "跟踪模式结算时同时产生 OK 和 NG，数据库只记录一个",
+      "root_cause": "容器模式多个 box 独立结算时第一个 end_cycle 清除了 cycle_id，后续事件无法持久化但仍更新计数器",
+      "fix": "新增 settle_dedup 开关，开启后无活跃周期时抑制后续事件触发",
+      "files": ["backend/api/source.py", "frontend/src/views/Project/index.vue"],
+      "keywords": ["防重复结算", "settle_dedup", "OK+NG", "跟踪模式", "container", "tracking"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "TensorRT 转换超时保护与环境诊断",
+      "symptom": "TensorRT FP16 转换在桌面 3070 上挂起超过 20 分钟",
+      "root_cause": "ultralytics YOLO.export 无内置超时机制",
+      "fix": "线程化 export 加 600s 超时，新增诊断 API，前端显示详细错误和环境诊断按钮",
+      "files": ["backend/api/models.py", "frontend/src/api/model.js", "frontend/src/views/Project/index.vue"],
+      "keywords": ["TensorRT", "超时", "转换", "FP16", "诊断", "GPU", "CUDA", "显存"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "集群超时推送选项",
+      "symptom": "等齐模式下工位超时不推送MES客户无感知",
+      "root_cause": "超时时仅本地标记不推送",
+      "fix": "新增 timeout_push 选项，超时时推送 TIMEOUT 结果含 missing_stations",
+      "files": ["backend/services/cluster_collector.py", "backend/api/cluster.py", "backend/models/mes_models.py", "backend/main.py", "frontend/src/api/cluster.js", "frontend/src/views/MES/ClusterPanel.vue"],
+      "keywords": ["集群", "超时", "推送", "timeout_push", "cluster", "MES"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "前端数值限制全面放开",
+      "symptom": "长时间场景 360/3600 上限不够用",
+      "root_cause": "el-input-number 硬编码了 :max 限制",
+      "fix": "移除所有 :max，:min 设 0，浮点 precision=2，整数 precision=0",
+      "files": ["frontend/src/views/Project/index.vue", "frontend/src/views/Settings/index.vue", "frontend/src/views/MES/GatewayPanel.vue", "frontend/src/views/MES/ExternalDevicePanel.vue"],
+      "keywords": ["数值限制", "max", "min", "precision", "el-input-number"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "前端术语通用化",
+      "symptom": "包装场景特有词汇不适用于其他项目",
+      "root_cause": "UI 文本硬编码了箱子/箱码等特定词汇",
+      "fix": "替换为目标/目标编号等通用词，后端 API 不变",
+      "files": ["frontend/src/views/MES/ClusterPanel.vue", "frontend/src/views/MES/GatewayPanel.vue", "frontend/src/views/Monitor/index.vue"],
+      "keywords": ["术语", "通用化", "箱子", "目标", "box"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-007",
+      "title": "称重器 Modbus ASCII + 连续发送双模式",
+      "symptom": "自动称重机需要支持两种串口协议",
+      "root_cause": "ExternalDevice 框架仅支持 TCP/Modbus TCP",
+      "fix": "新增 modbus_ascii 和 continuous_serial 协议",
+      "files": ["backend/services/external_device.py", "frontend/src/views/MES/ExternalDevicePanel.vue"],
+      "keywords": ["称重器", "Modbus ASCII", "串口", "RS232", "RS485", "连续发送"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-008",
+      "title": "扫码器条码自动注入外部设备",
+      "symptom": "工位3扫码器B扫到码后称重器无法自动关联",
+      "root_cause": "扫码器和外部设备之间缺少自动联动",
+      "fix": "扫码后自动注入同 channel_id 的外部设备 barcode buffer",
+      "files": ["backend/services/scanner.py"],
+      "keywords": ["条码注入", "外部设备", "称重器", "channel_id", "自动关联"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "未扫码 Toast 在扫码后仍然显示",
+      "symptom": "双工位检测扫码成功后仍显示未扫码",
+      "root_cause": "had_workpiece 在 end_cycle 后才检查，_inspecting_workpiece 已被清除",
+      "fix": "将 had_workpiece 检查移到 end_cycle 之前",
+      "files": ["backend/api/source.py"],
+      "keywords": ["未扫码", "Toast", "had_workpiece", "end_cycle", "warn_no_barcode"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "MES 前端操作无反馈",
+      "symptom": "MES 配置页面 80%+ 按钮无成功/失败提示",
+      "root_cause": "缺少 ElMessage 和 loading 状态",
+      "fix": "全面添加操作反馈",
+      "files": ["frontend/src/views/MES/GatewayPanel.vue", "frontend/src/views/MES/ClusterPanel.vue", "frontend/src/views/MES/OrderPanel.vue", "frontend/src/views/MES/WorkpiecePanel.vue"],
+      "keywords": ["MES", "反馈", "ElMessage", "loading"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "cluster_config.timeout_push 列缺失",
+      "symptom": "后端启动报 no such column",
+      "root_cause": "数据库迁移未包含新字段",
+      "fix": "添加 migration 记录",
+      "files": ["backend/main.py"],
+      "keywords": ["migration", "timeout_push", "sqlite", "cluster_config"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/api/cluster.py", "backend/api/external_device.py", "backend/api/models.py",
+    "backend/api/scanner.py", "backend/api/source.py", "backend/main.py",
+    "backend/models/mes_models.py", "backend/services/cluster_collector.py",
+    "backend/services/external_device.py", "backend/services/scanner.py",
+    "frontend/src/api/cluster.js", "frontend/src/api/model.js", "frontend/src/api/scanner.js",
+    "frontend/src/views/Alarm/index.vue", "frontend/src/views/Data/index.vue",
+    "frontend/src/views/MES/ClusterPanel.vue", "frontend/src/views/MES/DefectPanel.vue",
+    "frontend/src/views/MES/ExternalDevicePanel.vue", "frontend/src/views/MES/GatewayPanel.vue",
+    "frontend/src/views/MES/OrderPanel.vue", "frontend/src/views/MES/ScannerPanel.vue",
+    "frontend/src/views/MES/WMaxPanel.vue", "frontend/src/views/MES/WorkpiecePanel.vue",
+    "frontend/src/views/Monitor/index.vue", "frontend/src/views/Project/index.vue",
+    "frontend/src/views/Settings/index.vue", "frontend/src/views/Source/index.vue"
+  ]
+}

@@ -1,1 +1,33 @@
-{"channel_count": 1}
+{
+  "channel_count": 4,
+  "channels": {
+    "0": {
+      "source_type": "video",
+      "gpu_device": "cuda:0",
+      "project_id": 12,
+      "video_file": "/home/qianqian/桌面/word/tianjun副本/backend/uploads/videos/Video_20260320203958253.avi",
+      "was_detecting": false
+    },
+    "1": {
+      "source_type": "video",
+      "gpu_device": "cpu",
+      "project_id": 12,
+      "video_file": "/home/qianqian/桌面/word/tianjun副本/backend/uploads/videos/Video_20260320203958253.avi",
+      "was_detecting": false
+    },
+    "2": {
+      "source_type": "video",
+      "gpu_device": "cuda:0",
+      "project_id": 8,
+      "video_file": "/home/qianqian/桌面/word/tianjun副本/backend/uploads/videos/0b5783bf99327f11964cef524e115e72.mp4",
+      "was_detecting": false
+    },
+    "3": {
+      "source_type": "video",
+      "gpu_device": "cuda:0",
+      "project_id": 12,
+      "video_file": "/home/qianqian/桌面/word/tianjun副本/backend/uploads/videos/Video_20260320203958253.avi",
+      "was_detecting": false
+    }
+  }
+}

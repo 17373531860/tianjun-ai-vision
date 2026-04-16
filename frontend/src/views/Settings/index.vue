@@ -300,11 +300,11 @@
               </div>
               <div class="p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="text-gray-300 mb-2">检测框线宽</div>
-                <el-slider v-model="store.detection.boxLineWidth" :min="1" :max="10" :step="1" @change="saveDetectionSettings" />
+                <el-slider v-model="store.detection.boxLineWidth" :min="0" :step="1" @change="saveDetectionSettings" />
               </div>
               <div class="p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="text-gray-300 mb-2">标签字体大小</div>
-                <el-slider v-model="store.detection.labelFontSize" :min="10" :max="30" :step="1" @change="saveDetectionSettings" />
+                <el-slider v-model="store.detection.labelFontSize" :min="0" :step="1" @change="saveDetectionSettings" />
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <span class="text-gray-300">显示置信度</span>
@@ -336,11 +336,11 @@
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">显示时长 (秒)</div>
-                  <el-slider v-model="store.detection.toasts.ok.duration" :min="1" :max="10" :step="0.5" @change="saveDetectionSettings" />
+                  <el-slider v-model="store.detection.toasts.ok.duration" :min="0" :step="0.5" @change="saveDetectionSettings" />
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">字体大小</div>
-                  <el-slider v-model="store.detection.toasts.ok.fontSize" :min="12" :max="36" :step="1" @change="saveDetectionSettings" />
+                  <el-slider v-model="store.detection.toasts.ok.fontSize" :min="0" :step="1" @change="saveDetectionSettings" />
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">位置</div>
@@ -373,11 +373,11 @@
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">显示时长 (秒)</div>
-                  <el-slider v-model="store.detection.toasts.ng.duration" :min="1" :max="10" :step="0.5" @change="saveDetectionSettings" />
+                  <el-slider v-model="store.detection.toasts.ng.duration" :min="0" :step="0.5" @change="saveDetectionSettings" />
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">字体大小</div>
-                  <el-slider v-model="store.detection.toasts.ng.fontSize" :min="12" :max="36" :step="1" @change="saveDetectionSettings" />
+                  <el-slider v-model="store.detection.toasts.ng.fontSize" :min="0" :step="1" @change="saveDetectionSettings" />
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">位置</div>
@@ -413,11 +413,11 @@
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">显示时长 (秒)</div>
-                  <el-slider v-model="store.detection.toasts.scan.duration" :min="1" :max="10" :step="0.5" @change="saveDetectionSettings" />
+                  <el-slider v-model="store.detection.toasts.scan.duration" :min="0" :step="0.5" @change="saveDetectionSettings" />
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">字体大小</div>
-                  <el-slider v-model="store.detection.toasts.scan.fontSize" :min="12" :max="36" :step="1" @change="saveDetectionSettings" />
+                  <el-slider v-model="store.detection.toasts.scan.fontSize" :min="0" :step="1" @change="saveDetectionSettings" />
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">位置</div>
@@ -453,11 +453,11 @@
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">显示时长 (秒)</div>
-                  <el-slider v-model="store.detection.toasts.warn_no_barcode.duration" :min="1" :max="15" :step="0.5" @change="saveDetectionSettings" />
+                  <el-slider v-model="store.detection.toasts.warn_no_barcode.duration" :min="0" :step="0.5" @change="saveDetectionSettings" />
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">字体大小</div>
-                  <el-slider v-model="store.detection.toasts.warn_no_barcode.fontSize" :min="12" :max="36" :step="1" @change="saveDetectionSettings" />
+                  <el-slider v-model="store.detection.toasts.warn_no_barcode.fontSize" :min="0" :step="1" @change="saveDetectionSettings" />
                 </div>
                 <div class="p-3 bg-slate-900 rounded border border-slate-800">
                   <div class="text-gray-300 mb-2">位置</div>
@@ -510,11 +510,11 @@
                   </div>
                   <div class="p-3 bg-slate-800 rounded">
                     <div class="text-gray-300 mb-2">显示时长 (秒)</div>
-                    <el-slider v-model="toast.duration" :min="1" :max="10" :step="0.5" @change="saveDetectionSettings" />
+                    <el-slider v-model="toast.duration" :min="0" :step="0.5" @change="saveDetectionSettings" />
                   </div>
                   <div class="p-3 bg-slate-800 rounded">
                     <div class="text-gray-300 mb-2">字体大小</div>
-                    <el-slider v-model="toast.fontSize" :min="12" :max="36" :step="1" @change="saveDetectionSettings" />
+                    <el-slider v-model="toast.fontSize" :min="0" :step="1" @change="saveDetectionSettings" />
                   </div>
                   <div class="p-3 bg-slate-800 rounded">
                     <div class="text-gray-300 mb-2">位置</div>
@@ -629,8 +629,7 @@
                 <div class="text-gray-300 mb-2">目标帧率 (FPS)</div>
                 <el-slider 
                   v-model="store.performance.targetStreamFps" 
-                  :min="10" 
-                  :max="60" 
+                  :min="0" 
                   :step="5" 
                   show-stops
                   :marks="{10: '10', 30: '30', 60: '60'}"
@@ -723,8 +722,7 @@
                 <div class="flex items-center gap-2">
                   <el-slider
                     v-model="store.performance.mediapipeConfidence"
-                    :min="0.1"
-                    :max="1.0"
+                    :min="0"
                     :step="0.05"
                     :disabled="!store.performance.mediapipeEnabled"
                     @change="savePerformanceSettings"
@@ -743,8 +741,8 @@
                 <el-input-number
                   v-model="store.performance.mediapipeInterval"
                   size="small"
-                  :min="1"
-                  :max="10"
+                  :min="0"
+                  :precision="0"
                   :step="1"
                   :controls="true"
                   :disabled="!store.performance.mediapipeEnabled"
@@ -884,8 +882,7 @@
                 </div>
                 <el-slider 
                   v-model="kalmanConfig.processNoise" 
-                  :min="0.001" 
-                  :max="0.5" 
+                  :min="0" 
                   :step="0.005" 
                   @change="saveKalmanConfig" 
                 />
@@ -903,8 +900,7 @@
                 </div>
                 <el-slider 
                   v-model="kalmanConfig.measurementNoise" 
-                  :min="0.01" 
-                  :max="1.0" 
+                  :min="0" 
                   :step="0.01" 
                   @change="saveKalmanConfig" 
                 />
@@ -922,8 +918,7 @@
                 </div>
                 <el-slider 
                   v-model="kalmanConfig.maxMissingFrames" 
-                  :min="1" 
-                  :max="30" 
+                  :min="0" 
                   :step="1" 
                   @change="saveKalmanConfig" 
                 />

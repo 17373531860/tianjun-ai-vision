@@ -60,11 +60,11 @@
         <div class="col-span-3 space-y-3">
           <Card title="照明 & 对焦">
             <Param label="照明亮度">
-              <el-slider v-model="readingParams.illum_value" :min="0" :max="100" size="small" class="flex-1" @change="applyAllConfig" />
+              <el-slider v-model="readingParams.illum_value" :min="0" size="small" class="flex-1" @change="applyAllConfig" />
               <span class="text-xs text-cyan-200 w-10 text-right font-mono">{{ readingParams.illum_value }}%</span>
             </Param>
             <Param label="对焦值">
-              <el-slider v-model="readingParams.focus_value" :min="0" :max="1023" size="small" class="flex-1" @change="applyAllConfig" />
+              <el-slider v-model="readingParams.focus_value" :min="0" size="small" class="flex-1" @change="applyAllConfig" />
               <span class="text-xs text-cyan-200 w-10 text-right font-mono">{{ readingParams.focus_value }}</span>
             </Param>
             <el-button size="small" @click="doAutoFocus" :loading="focusLoading" class="w-full mt-1" plain>自动对焦</el-button>
@@ -79,7 +79,7 @@
               <div class="grid grid-cols-2 gap-1.5">
                 <div v-for="key in ['x', 'y', 'w', 'h']" :key="key" class="space-y-0.5">
                   <span class="text-[10px] text-gray-500 uppercase">{{ key }}</span>
-                  <el-input-number v-model="detectRoi[key]" size="small" :min="0" controls-position="right" class="w-full" @change="applyAllConfig" />
+                  <el-input-number v-model="detectRoi[key]" size="small" :min="0" :precision="2" controls-position="right" class="w-full" @change="applyAllConfig" />
                 </div>
               </div>
             </template>
@@ -94,10 +94,10 @@
 
           <Card title="传感器">
             <Param label="曝光 (μs)">
-              <el-input-number v-model="sensorParams.exposure_us" :min="1" :max="200000" :step="10" size="small" controls-position="right" class="flex-1" @change="applyAllConfig" />
+              <el-input-number v-model="sensorParams.exposure_us" :min="0" :step="10" :precision="2" size="small" controls-position="right" class="flex-1" @change="applyAllConfig" />
             </Param>
             <Param label="增益">
-              <el-input-number v-model="sensorParams.gain" :min="1" :max="64" :step="1" size="small" controls-position="right" class="flex-1" @change="applyAllConfig" />
+              <el-input-number v-model="sensorParams.gain" :min="0" :step="1" :precision="2" size="small" controls-position="right" class="flex-1" @change="applyAllConfig" />
             </Param>
           </Card>
         </div>
@@ -160,14 +160,14 @@
         <div class="grid grid-cols-2 gap-3">
           <Card title="解码参数">
             <Param label="解码超时">
-              <el-input-number v-model="commonParams.decode_timeout" size="small" :min="100" :max="30000" :step="100" controls-position="right" @change="applyAllConfig" />
+              <el-input-number v-model="commonParams.decode_timeout" size="small" :min="0" :step="100" :precision="2" controls-position="right" @change="applyAllConfig" />
               <span class="text-xs text-gray-500 ml-1">ms</span>
             </Param>
             <Param label="尝试次数">
-              <el-input-number v-model="commonParams.try_count" size="small" :min="1" :max="50" controls-position="right" @change="applyAllConfig" />
+              <el-input-number v-model="commonParams.try_count" size="small" :min="0" :precision="0" controls-position="right" @change="applyAllConfig" />
             </Param>
             <Param label="快门延迟">
-              <el-input-number v-model="commonParams.shutter_delay" size="small" :min="0" :max="5000" :step="50" controls-position="right" @change="applyAllConfig" />
+              <el-input-number v-model="commonParams.shutter_delay" size="small" :min="0" :step="50" :precision="2" controls-position="right" @change="applyAllConfig" />
               <span class="text-xs text-gray-500 ml-1">ms</span>
             </Param>
             <Param label="解码器">
@@ -205,11 +205,11 @@
               </div>
             </div>
             <Param label="倾斜角">
-              <el-input-number v-model="commonParams.base_tilt_angle" size="small" :min="0" :max="360" controls-position="right" @change="applyAllConfig" />
+              <el-input-number v-model="commonParams.base_tilt_angle" size="small" :min="0" :precision="2" controls-position="right" @change="applyAllConfig" />
               <span class="text-xs text-gray-500 ml-1">&deg;</span>
             </Param>
             <Param label="范围">
-              <el-input-number v-model="commonParams.tilt_angle_range" size="small" :min="0" :max="180" controls-position="right" @change="applyAllConfig" />
+              <el-input-number v-model="commonParams.tilt_angle_range" size="small" :min="0" :precision="2" controls-position="right" @change="applyAllConfig" />
               <span class="text-xs text-gray-500 ml-1">&deg;</span>
             </Param>
           </Card>
@@ -239,7 +239,7 @@
               <span class="text-xs text-gray-400">启用</span>
             </div>
             <Param v-if="codeConfig.output_len_limit" label="长度">
-              <el-input-number v-model="codeConfig.output_len" size="small" :min="1" :max="256" controls-position="right" @change="applyCodeConfig" />
+              <el-input-number v-model="codeConfig.output_len" size="small" :min="0" :precision="0" controls-position="right" @change="applyCodeConfig" />
             </Param>
           </Card>
           <Card title="读取模式">
@@ -253,7 +253,7 @@
           </Card>
           <Card title="冗余校验">
             <Param label="次数">
-              <el-input-number v-model="codeConfig.redundant" size="small" :min="0" :max="10" controls-position="right" @change="applyCodeConfig" />
+              <el-input-number v-model="codeConfig.redundant" size="small" :min="0" :precision="0" controls-position="right" @change="applyCodeConfig" />
             </Param>
           </Card>
         </div>
@@ -270,7 +270,7 @@
               </el-select>
             </Param>
             <Param label="消抖时间">
-              <el-input-number v-model="inputParams.debounce_time" size="small" :min="0" :max="1000" :step="10" controls-position="right" @change="applyAllConfig" />
+              <el-input-number v-model="inputParams.debounce_time" size="small" :min="0" :step="10" :precision="2" controls-position="right" @change="applyAllConfig" />
               <span class="text-xs text-gray-500 ml-1">ms</span>
             </Param>
           </Card>
@@ -286,7 +286,7 @@
                            :disabled="outputParams.ok_enabled || outputParams.error_enabled" @change="onTriggerBusyChange">触发器忙</el-checkbox>
             </div>
             <Param label="持续时间">
-              <el-input-number v-model="outputParams.duration_ms" size="small" :min="10" :max="5000" :step="10" controls-position="right" @change="applyOutputConfig" />
+              <el-input-number v-model="outputParams.duration_ms" size="small" :min="0" :step="10" :precision="2" controls-position="right" @change="applyOutputConfig" />
               <span class="text-xs text-gray-500 ml-1">ms</span>
             </Param>
             <div class="flex gap-2 mt-2">
@@ -524,7 +524,9 @@ const disconnectDevice = async (ip, port = 55266) => {
     ElMessage.success('已断开')
     if (selectedIp.value === ip) { selectedIp.value = ''; stopImagePolling() }
     refreshWmaxStatus()
-  } catch {}
+  } catch (e) {
+    ElMessage.error('断开失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
+  }
 }
 
 const selectDevice = (dev) => {
@@ -537,7 +539,7 @@ const refreshWmaxStatus = async () => {
   try {
     const res = await getWMaxStatus()
     connectedDevices.value = res.data || []
-  } catch {}
+  } catch (e) { console.warn('[WMax] 刷新状态失败:', e.message) }
 }
 
 const initDevice = async (ip, port) => {
@@ -593,7 +595,10 @@ const saveConfig = async () => {
     const res = await wmaxSaveParams(selectedIp.value, selectedPort.value, _buildFullParams())
     if (res.data.success) ElMessage.success('参数已保存')
     else ElMessage.error('保存失败')
-  } catch {}
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close')
+      ElMessage.error('保存异常: ' + (e.response?.data?.detail || e.message || '未知错误'))
+  }
 }
 
 const _buildFullParams = () => ({
@@ -737,14 +742,16 @@ const startAutoTune = async () => {
 }
 const cancelAutoTune = async () => {
   if (!selectedIp.value) return
-  try { await wmaxCancelTune(selectedIp.value, selectedPort.value); ElMessage.info('已取消') } catch {}
+  try { await wmaxCancelTune(selectedIp.value, selectedPort.value); ElMessage.info('已取消') }
+  catch (e) { ElMessage.error('取消调参失败: ' + (e.response?.data?.error || e.message || '')) }
   tuneLoading.value = false
 }
 
 const startReadRate = async () => {
   if (!selectedIp.value) return
   rrRunning.value = true; rrResult.value = null
-  try { await wmaxStartReadRate(selectedIp.value, selectedPort.value) } catch {}
+  try { await wmaxStartReadRate(selectedIp.value, selectedPort.value) }
+  catch (e) { ElMessage.error('启动读码率测试失败'); rrRunning.value = false; return }
   rrTimer = setInterval(async () => {
     try {
       const res = await wmaxGetReadRate(selectedIp.value, selectedPort.value)
@@ -772,7 +779,10 @@ const doSavePreset = async () => {
     await ElMessageBox.confirm(`保存到预设组 ${selectedPreset.value + 1}？`, '确认')
     await wmaxSavePreset(selectedIp.value, selectedPort.value, selectedPreset.value)
     ElMessage.success('预设已保存')
-  } catch {}
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close')
+      ElMessage.error('保存预设失败: ' + (e.response?.data?.error || e.message || ''))
+  }
 }
 
 // ── 视频 & 触发 ──────────────────────────────────────────
@@ -799,12 +809,29 @@ const stopImagePolling = () => {
   previewSrc.value = ''
 }
 
-const triggerOn = () => { if (selectedIp.value) wmaxTrigger(selectedIp.value, selectedPort.value, true) }
-const triggerOff = () => { if (selectedIp.value) wmaxTrigger(selectedIp.value, selectedPort.value, false) }
+const triggerOn = async () => {
+  if (!selectedIp.value) return
+  try {
+    await wmaxTrigger(selectedIp.value, selectedPort.value, true)
+    ElMessage.success('LON 已发送')
+  } catch (e) { ElMessage.error('LON 发送失败: ' + (e.response?.data?.error || e.message || '')) }
+}
+const triggerOff = async () => {
+  if (!selectedIp.value) return
+  try {
+    await wmaxTrigger(selectedIp.value, selectedPort.value, false)
+    ElMessage.success('LOFF 已发送')
+  } catch (e) { ElMessage.error('LOFF 发送失败: ' + (e.response?.data?.error || e.message || '')) }
+}
 const toggleTriggerImage = async () => {
   if (!selectedIp.value) return
-  triggerImageOn.value = !triggerImageOn.value
-  await wmaxTurnOnTriggerImage(selectedIp.value, selectedPort.value, triggerImageOn.value)
+  try {
+    triggerImageOn.value = !triggerImageOn.value
+    await wmaxTurnOnTriggerImage(selectedIp.value, selectedPort.value, triggerImageOn.value)
+  } catch (e) {
+    triggerImageOn.value = !triggerImageOn.value
+    ElMessage.error('触发图像设置失败')
+  }
 }
 
 // ── 设备控制 ─────────────────────────────────────────────
@@ -814,7 +841,10 @@ const rebootDevice = async () => {
     await ElMessageBox.confirm('确定重启设备？', '确认', { type: 'warning' })
     await wmaxReboot(selectedIp.value, selectedPort.value)
     ElMessage.success('设备正在重启'); selectedIp.value = ''; stopImagePolling(); refreshWmaxStatus()
-  } catch {}
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close')
+      ElMessage.error('重启失败: ' + (e.response?.data?.error || e.message || ''))
+  }
 }
 const resetDevice = async () => {
   if (!selectedIp.value) return
@@ -822,7 +852,10 @@ const resetDevice = async () => {
     await ElMessageBox.confirm('恢复出厂设置将清除所有配置，确定？', '警告', { type: 'error' })
     await wmaxReset(selectedIp.value, selectedPort.value)
     ElMessage.success('已恢复出厂设置'); await loadConfig()
-  } catch {}
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close')
+      ElMessage.error('恢复出厂失败: ' + (e.response?.data?.error || e.message || ''))
+  }
 }
 
 // ── 生命周期 ─────────────────────────────────────────────

@@ -65,7 +65,7 @@
                   <el-input v-model="wsConfigs[ch - 1].hcnetIp" placeholder="192.168.1.64" size="small" />
                 </el-form-item>
                 <el-form-item label="端口">
-                  <el-input-number v-model="wsConfigs[ch - 1].hcnetPort" :min="1" :max="65535" size="small" class="w-full" />
+                  <el-input-number v-model="wsConfigs[ch - 1].hcnetPort" :min="0" :precision="0" size="small" class="w-full" />
                 </el-form-item>
               </div>
               <div class="grid grid-cols-2 gap-2">
@@ -78,7 +78,7 @@
               </div>
               <div class="grid grid-cols-2 gap-2">
                 <el-form-item label="通道号">
-                  <el-input-number v-model="wsConfigs[ch - 1].hcnetChannel" :min="1" :max="64" size="small" class="w-full" />
+                  <el-input-number v-model="wsConfigs[ch - 1].hcnetChannel" :min="0" :precision="0" size="small" class="w-full" />
                 </el-form-item>
                 <el-form-item label="码流">
                   <el-select v-model="wsConfigs[ch - 1].hcnetStreamType" class="w-full" size="small">
@@ -282,7 +282,7 @@
                 <el-input v-model="hcnetsdkSettings.ip" placeholder="192.168.1.64" clearable />
               </el-form-item>
               <el-form-item label="SDK 端口">
-                <el-input-number v-model="hcnetsdkSettings.port" :min="1" :max="65535" class="w-full" />
+                <el-input-number v-model="hcnetsdkSettings.port" :min="0" :precision="0" class="w-full" />
               </el-form-item>
             </div>
             <div class="grid grid-cols-2 gap-4">
@@ -295,7 +295,7 @@
             </div>
             <div class="grid grid-cols-3 gap-4">
               <el-form-item label="通道号">
-                <el-input-number v-model="hcnetsdkSettings.channel" :min="1" :max="64" class="w-full" />
+                <el-input-number v-model="hcnetsdkSettings.channel" :min="0" :precision="0" class="w-full" />
               </el-form-item>
               <el-form-item label="码流类型">
                 <el-select v-model="hcnetsdkSettings.streamType" class="w-full">

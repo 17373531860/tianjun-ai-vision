@@ -31,6 +31,7 @@ class ScannerCreate(BaseModel):
     rebind_mode: str = "rescan"
     bind_timing: str = "mid_cycle"
     broadcast_channels: Optional[list] = None
+    device_type: str = "text_lon"
 
 
 class ScannerUpdate(BaseModel):
@@ -50,6 +51,7 @@ class ScannerUpdate(BaseModel):
     rebind_mode: Optional[str] = None
     bind_timing: Optional[str] = None
     broadcast_channels: Optional[list] = None
+    device_type: Optional[str] = None
 
 
 def _serialize_device(d):
@@ -66,6 +68,7 @@ def _serialize_device(d):
         "rebind_mode": getattr(d, 'rebind_mode', 'rescan'),
         "bind_timing": getattr(d, 'bind_timing', 'mid_cycle'),
         "broadcast_channels": getattr(d, 'broadcast_channels', None) or [],
+        "device_type": getattr(d, 'device_type', 'auto') or 'auto',
     }
 
 
@@ -77,6 +80,35 @@ def list_devices():
         return [_serialize_device(d) for d in devices]
     finally:
         db.close()
+
+
+@router.post("/discover")
+def discover_scanners(subnet: str = Query("192.168.0", description="子网前缀"),
+                      port: int = Query(55256), timeout: float = Query(0.3)):
+    """TCP 端口扫描发现局域网内的扫码器（不走 WMax 协议，不会触发闪光）"""
+    import socket
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _probe(ip):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            s.connect((ip, port))
+            s.close()
+            return ip
+        except (socket.timeout, ConnectionRefusedError, OSError):
+            return None
+
+    found = []
+    ips = [f"{subnet}.{i}" for i in range(1, 255)]
+    with ThreadPoolExecutor(max_workers=50) as pool:
+        futures = {pool.submit(_probe, ip): ip for ip in ips}
+        for f in as_completed(futures):
+            result = f.result()
+            if result:
+                found.append({"ip": result, "port": port, "name": f"扫码器-{result}"})
+
+    return {"results": found, "total": len(found)}
 
 
 @router.post("/devices")

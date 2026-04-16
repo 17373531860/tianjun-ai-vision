@@ -212,7 +212,7 @@
         <div class="space-y-4">
           <div class="p-3 bg-slate-900 rounded border border-slate-800">
             <div class="text-gray-300 mb-2">播报音量</div>
-            <el-slider v-model="systemStore.detection.voiceVolume" :min="0" :max="1" :step="0.1" :disabled="!systemStore.detection.voiceEnabled" @change="saveVoiceSettings" />
+            <el-slider v-model="systemStore.detection.voiceVolume" :min="0" :step="0.1" :disabled="!systemStore.detection.voiceEnabled" @change="saveVoiceSettings" />
           </div>
           <div class="p-3 bg-slate-900 rounded border border-slate-800">
             <div class="text-gray-400 text-xs mb-2">
@@ -350,8 +350,8 @@
                   <span class="text-xs text-gray-400">时长:</span>
                   <el-input-number 
                     :model-value="config.triggers[`event${event.id}`]?.duration || 3" 
-                    :min="1" 
-                    :max="60" 
+                    :min="0" 
+                    :precision="2"
                     size="small"
                     class="w-20"
                     @change="(val) => updateEventConfig(`event${event.id}`, 'duration', val)"

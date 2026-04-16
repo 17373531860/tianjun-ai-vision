@@ -4464,6 +4464,9 @@ class VideoSourceManager:
                     print(f"[Container] {box_did} gone, confirming: {gone_confirm_frames} frames")
                 if bs['gone_frames'] >= gone_confirm_frames:
                     print(f"[Container] {box_did} confirmed gone ({bs['gone_frames']}/{gone_confirm_frames})")
+                    _sd = self.project_config.get('pipeline_config', {}).get('settle_dedup', False) if self.project_config else False
+                    if _sd and not self.current_cycle_id:
+                        self.start_cycle()
                     self._settle_box(box_did, expected_items)
             else:
                 if bs.get('gone_frames', 0) > 0:
@@ -4598,7 +4601,11 @@ class VideoSourceManager:
         
         # In container mode, settle remaining boxes then reset (skip cycle-level count validation)
         if self._container_mode:
-            for box_did in list(self._box_objects.keys()):
+            box_list = list(self._box_objects.keys())
+            _sd = self.project_config.get('pipeline_config', {}).get('settle_dedup', False) if self.project_config else False
+            for i, box_did in enumerate(box_list):
+                if _sd and i > 0 and not self.current_cycle_id:
+                    self.start_cycle()
                 self._settle_box(box_did, expected_items)
             total_ok = sum(1 for r in self._box_settled_results if r['is_complete'])
             total_ng = sum(1 for r in self._box_settled_results if not r['is_complete'])
@@ -4695,6 +4702,9 @@ class VideoSourceManager:
             placed_classes = [item['class_name'] for item in unique_items]
             if placed_classes != expected_order:
                 order_ok = False
+        
+        print(f"[Tracking] 判定: merged={merged_counters}, missing={missing}, extra={extra}, "
+              f"cycle_id={self.current_cycle_id}, cycle_active={self._tracking_cycle_active}")
         
         if not expected_items:
             self._trigger_event(1, f'Counting complete: {dict(merged_counters)}')
@@ -5158,6 +5168,12 @@ class VideoSourceManager:
         if not self.project_config:
             return False
         
+        # 防重复结算（仅在项目配置中开启 settle_dedup 时生效）
+        settle_dedup = self.project_config.get('pipeline_config', {}).get('settle_dedup', False)
+        if settle_dedup and not self.current_cycle_id and self.recording_enabled:
+            print(f"[_trigger_event] 防重复结算: 跳过, 当前无活跃周期 (event={event_id}, reason={reason})")
+            return False
+        
         # NG cycle protection: suppress rapid consecutive NG reports
         current_time = time.time()
         is_ng = (event_id == 2 or str(event_id) == '2')
@@ -5196,7 +5212,14 @@ class VideoSourceManager:
             print(f"事件未找到: {event_id}")
             return False
         
-        print(f"触发事件: {event.get('name', event_id)} - {reason}")
+        if settle_dedup:
+            import traceback as _tb
+            caller = _tb.extract_stack(limit=4)
+            caller_info = ' <- '.join(f"{f.name}:{f.lineno}" for f in caller[:-1])
+            print(f"触发事件: {event.get('name', event_id)} - {reason} "
+                  f"[cycle_id={self.current_cycle_id}, caller={caller_info}]")
+        else:
+            print(f"触发事件: {event.get('name', event_id)} - {reason}")
         
         # 判断是否为合格事件（事件ID为1或者名称包含"合格"）
         current_event_id = event.get('id')
@@ -5216,6 +5239,11 @@ class VideoSourceManager:
                     self.ng_cycle_times = self.ng_cycle_times[-100:]
                 print(f"  周期时间(NG): {cycle_time:.2f}s")
         
+        had_workpiece = False
+        if self._mes_hook:
+            had_workpiece = (self.channel_id in self._mes_hook._inspecting_workpiece
+                             or self.channel_id in self._mes_hook._pending_workpiece)
+
         # 结束当前周期并记录到数据库
         self.end_cycle(
             is_good=is_good,
@@ -5321,7 +5349,8 @@ class VideoSourceManager:
             'reason': reason,
             'timestamp': time.time(),
             'show_notification': event.get('show_notification', False),
-            'toast_id': event.get('toast_id', 'ok' if event.get('id') == 1 else 'ng' if event.get('id') == 2 else 'ok')
+            'toast_id': event.get('toast_id', 'ok' if event.get('id') == 1 else 'ng' if event.get('id') == 2 else 'ok'),
+            'had_workpiece': had_workpiece,
         })
         
         # 触发报警器（如果已配置）— 按通道路由到对应工位的指示灯
@@ -7137,6 +7166,12 @@ class VideoSourceManager:
         self.is_detecting = True
         
         try:
+            from backend.services.scanner import get_scanner_service
+            get_scanner_service().start_scanning(channel_id=self.channel_id)
+        except Exception:
+            pass
+        
+        try:
             from backend.api.alarm import alarm_router
             alarm_router.start_idle_light(channel_id=self.channel_id)
         except Exception:
@@ -7163,6 +7198,12 @@ class VideoSourceManager:
     def stop_detection(self):
         """停止检测"""
         self.is_detecting = False
+        
+        try:
+            from backend.services.scanner import get_scanner_service
+            get_scanner_service().stop_scanning(channel_id=self.channel_id)
+        except Exception:
+            pass
         
         try:
             from backend.api.alarm import alarm_router

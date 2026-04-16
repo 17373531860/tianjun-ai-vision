@@ -1,38 +1,109 @@
 {
-  "enabled": true,
-  "port": "/dev/ttyUSB0",
-  "baudrate": 9600,
-  "protocol": "modbus_4color",
-  "custom_commands": {
-    "light_on": "",
-    "light_off": "",
-    "buzzer_on": "",
-    "buzzer_off": ""
-  },
-  "triggers": {
-    "event1": {
+  "channels": {
+    "0": {
       "enabled": true,
-      "light": true,
-      "buzzer": false,
-      "duration": 3,
-      "color": "green",
-      "effect": "slow"
+      "port": "/dev/ttyUSB0",
+      "baudrate": 9600,
+      "protocol": "modbus_4color",
+      "custom_commands": {
+        "light_on": "",
+        "light_off": "",
+        "buzzer_on": "",
+        "buzzer_off": ""
+      },
+      "triggers": {
+        "event1": {
+          "name": "合格",
+          "enabled": true,
+          "color": "green",
+          "effect": "on",
+          "buzzer": false,
+          "duration": 2
+        },
+        "event2": {
+          "name": "NG",
+          "enabled": true,
+          "color": "red",
+          "effect": "fast",
+          "buzzer": true,
+          "duration": 3
+        }
+      },
+      "idle_light": {
+        "enabled": true,
+        "color": "blue"
+      },
+      "test_mode": true
     },
-    "event2": {
+    "1": {
       "enabled": true,
-      "light": true,
-      "buzzer": false,
-      "duration": 3,
-      "color": "red",
-      "effect": "slow"
+      "port": "",
+      "baudrate": 9600,
+      "protocol": "simple_ascii",
+      "custom_commands": {
+        "light_on": "",
+        "light_off": "",
+        "buzzer_on": "",
+        "buzzer_off": ""
+      },
+      "triggers": {
+        "event1": {
+          "name": "OK",
+          "enabled": true,
+          "color": "green",
+          "effect": "on",
+          "buzzer": false,
+          "duration": 1
+        },
+        "event2": {
+          "name": "NG",
+          "enabled": true,
+          "color": "yellow",
+          "effect": "slow",
+          "buzzer": true,
+          "duration": 5
+        }
+      },
+      "idle_light": {
+        "enabled": false,
+        "color": "green"
+      },
+      "test_mode": false
     },
-    "event1769276916503": {
+    "2": {
       "enabled": true,
-      "color": "yellow",
-      "effect": "on",
-      "buzzer": false,
-      "duration": 3
+      "port": "",
+      "baudrate": 9600,
+      "protocol": "hex_simple",
+      "custom_commands": {
+        "light_on": "",
+        "light_off": "",
+        "buzzer_on": "",
+        "buzzer_off": ""
+      },
+      "triggers": {
+        "event1": {
+          "name": "合格",
+          "enabled": true,
+          "color": "green",
+          "effect": "on",
+          "buzzer": false,
+          "duration": 2
+        },
+        "event2": {
+          "name": "NG",
+          "enabled": true,
+          "color": "red",
+          "effect": "fast",
+          "buzzer": true,
+          "duration": 5
+        }
+      },
+      "idle_light": {
+        "enabled": true,
+        "color": "blue"
+      },
+      "test_mode": true
     }
-  },
-  "test_mode": true
+  }
 }

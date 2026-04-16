@@ -64,6 +64,7 @@ class ClusterCollector:
                     "role": "standalone", "master_url": None,
                     "station_id": "A", "expected_stations": [],
                     "sync_mode": "wait_all", "timeout_sec": 300,
+                    "timeout_push": False,
                     "enabled": False,
                 }
             else:
@@ -74,6 +75,7 @@ class ClusterCollector:
                     "expected_stations": cfg.expected_stations or [],
                     "sync_mode": cfg.sync_mode,
                     "timeout_sec": cfg.timeout_sec,
+                    "timeout_push": getattr(cfg, 'timeout_push', False) or False,
                     "enabled": cfg.enabled,
                 }
             self._config_cache = result
@@ -247,6 +249,75 @@ class ClusterCollector:
             "stations": len(expected),
         }
 
+    def _push_timeout_result(self, db, box_serial: str, records, expected: set, missing: set):
+        """超时后仍推送已收集到的数据给 MES，标注缺失工位"""
+        received_set = {r.station_id for r in records}
+        any_ng = any(not r.is_good for r in records if r.station_id in expected)
+
+        stations_data = []
+        for r in records:
+            if r.station_id in expected:
+                stations_data.append({
+                    "station_id": r.station_id,
+                    "source": r.source_address or "unknown",
+                    "channel_id": r.channel_id,
+                    "is_good": r.is_good,
+                    "event_name": r.event_name,
+                    "received_at": r.received_at.isoformat() if r.received_at else None,
+                    **(r.cycle_context or {}),
+                })
+        for ms in missing:
+            stations_data.append({
+                "station_id": ms,
+                "is_good": False,
+                "event_name": "timeout_missing",
+                "status": "missing",
+            })
+
+        aggregated = {
+            "box_serial": box_serial,
+            "overall_result": "TIMEOUT",
+            "total_stations": len(expected),
+            "completed_stations": len(received_set & expected),
+            "missing_stations": list(missing),
+            "stations": stations_data,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        summary = db.query(BoxSummary).filter(BoxSummary.box_serial == box_serial).first()
+        if not summary:
+            summary = BoxSummary(
+                box_serial=box_serial,
+                total_stations=len(expected),
+                completed_stations=len(received_set & expected),
+                overall_result="TIMEOUT",
+                aggregated_context=aggregated,
+                status="timeout",
+            )
+            db.add(summary)
+        else:
+            summary.total_stations = len(expected)
+            summary.completed_stations = len(received_set & expected)
+            summary.overall_result = "TIMEOUT"
+            summary.aggregated_context = aggregated
+            summary.status = "timeout"
+
+        for r in records:
+            r.status = "timeout"
+
+        db.commit()
+
+        try:
+            from backend.services.mes_gateway import get_mes_gateway
+            gw = get_mes_gateway()
+            gw.dispatch("box_timeout", aggregated, channel_id=None)
+            summary.pushed_at = datetime.now()
+            summary.status = "pushed_timeout"
+            db.commit()
+            logger.info("[Cluster] 目标 %s 超时推送完成 (缺 %s)", box_serial, list(missing))
+        except Exception as e:
+            logger.error("[Cluster] 目标 %s 超时推送失败: %s", box_serial, e)
+
     def get_pending_boxes(self) -> list:
         """获取当前待汇总的箱子状态"""
         db = SessionLocal()
@@ -289,17 +360,14 @@ class ClusterCollector:
         finally:
             db.close()
 
-    def get_recent_summaries(self, limit: int = 20) -> list:
-        """获取最近已完成的箱子汇总"""
+    def get_recent_summaries(self, limit: int = 20, skip: int = 0) -> dict:
+        """获取最近已完成的箱子汇总（支持分页）"""
         db = SessionLocal()
         try:
-            summaries = (
-                db.query(BoxSummary)
-                .order_by(BoxSummary.id.desc())
-                .limit(limit)
-                .all()
-            )
-            return [{
+            q = db.query(BoxSummary).order_by(BoxSummary.id.desc())
+            total = q.count()
+            summaries = q.offset(skip).limit(limit).all()
+            items = [{
                 "id": s.id,
                 "box_serial": s.box_serial,
                 "total_stations": s.total_stations,
@@ -309,6 +377,7 @@ class ClusterCollector:
                 "pushed_at": s.pushed_at.isoformat() if s.pushed_at else None,
                 "created_at": s.created_at.isoformat() if s.created_at else None,
             } for s in summaries]
+            return {"items": items, "total": total}
         finally:
             db.close()
 
@@ -361,9 +430,13 @@ class ClusterCollector:
                             list(received), list(missing)
                         )
 
-                        for r in records:
-                            r.status = "timeout"
-                        db.commit()
+                        timeout_push = config.get("timeout_push", False)
+                        if timeout_push:
+                            self._push_timeout_result(db, box_serial, records, expected, missing)
+                        else:
+                            for r in records:
+                                r.status = "timeout"
+                            db.commit()
                 finally:
                     db.close()
             except Exception as e:

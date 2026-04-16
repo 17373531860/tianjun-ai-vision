@@ -8,7 +8,10 @@
           {{ enabledCount }} 个已启用
         </el-tag>
       </div>
-      <el-button size="small" type="success" @click="openCreate">新建连接</el-button>
+      <div class="flex gap-2">
+        <el-button size="small" type="info" @click="openAllLogs">全部日志</el-button>
+        <el-button size="small" type="success" @click="openCreate">新建连接</el-button>
+      </div>
     </div>
 
     <!-- 连接列表 -->
@@ -162,7 +165,7 @@
                 <el-input v-model="modbusHost" placeholder="192.168.1.100" />
               </el-form-item>
               <el-form-item label="端口" class="w-32">
-                <el-input-number v-model="modbusTcpPort" :min="1" :max="65535" />
+                <el-input-number v-model="modbusTcpPort" :min="0" :precision="0" />
               </el-form-item>
             </div>
           </template>
@@ -171,10 +174,10 @@
           <el-divider content-position="left">通用参数</el-divider>
           <div class="flex gap-4">
             <el-form-item label="从站地址" class="flex-1">
-              <el-input-number v-model="modbusSlaveId" :min="1" :max="247" />
+              <el-input-number v-model="modbusSlaveId" :min="0" :precision="0" />
             </el-form-item>
             <el-form-item label="超时(秒)" class="flex-1">
-              <el-input-number v-model="modbusTimeout" :min="1" :max="30" />
+              <el-input-number v-model="modbusTimeout" :min="0" :precision="2" />
             </el-form-item>
             <el-form-item label="字节序" class="flex-1">
               <el-select v-model="modbusByteOrder" class="w-24">
@@ -185,10 +188,10 @@
           </div>
           <div class="flex gap-4">
             <el-form-item label="OK 写入值" class="flex-1">
-              <el-input-number v-model="modbusOkValue" :min="0" :max="65535" />
+              <el-input-number v-model="modbusOkValue" :min="0" :precision="2" />
             </el-form-item>
             <el-form-item label="NG 写入值" class="flex-1">
-              <el-input-number v-model="modbusNgValue" :min="0" :max="65535" />
+              <el-input-number v-model="modbusNgValue" :min="0" :precision="0" />
             </el-form-item>
           </div>
 
@@ -197,7 +200,7 @@
             Holding Registers: 40001-49999。选"固定值"时在右侧输入常量。
           </div>
           <div v-for="(reg, idx) in modbusRegisters" :key="idx" class="flex items-center gap-2 mb-2">
-            <el-input-number v-model="reg.address" :min="0" :max="49999" placeholder="40001" controls-position="right" size="small" class="w-32" />
+            <el-input-number v-model="reg.address" :min="0" :precision="0" placeholder="40001" controls-position="right" size="small" class="w-32" />
             <el-select v-model="reg.source" placeholder="数据来源" size="small" class="w-36">
               <el-option label="检测结果" value="result_code" />
               <el-option label="合格计数" value="ok_count" />
@@ -214,7 +217,7 @@
               <el-option label="uint32" value="uint32" />
               <el-option label="int32" value="int32" />
             </el-select>
-            <el-input-number v-if="reg.source === 'const'" v-model="reg.const_value" :min="0" size="small" placeholder="值" class="w-28" />
+            <el-input-number v-if="reg.source === 'const'" v-model="reg.const_value" :min="0" :precision="0" size="small" placeholder="值" class="w-28" />
             <el-button size="small" type="danger" circle @click="modbusRegisters.splice(idx, 1)">
               <el-icon><Close /></el-icon>
             </el-button>
@@ -234,14 +237,15 @@
           <el-checkbox-group v-model="form.push_events">
             <el-checkbox value="cycle_end" label="检测周期结束" />
             <el-checkbox value="session_end" label="检测会话结束" />
-            <el-checkbox value="box_complete" label="箱子汇总完成（集群模式）" />
+            <el-checkbox value="box_complete" label="集群汇总完成" />
+            <el-checkbox value="box_timeout" label="集群超时推送" />
           </el-checkbox-group>
         </el-form-item>
         <el-form-item label="重试次数">
-          <el-input-number v-model="form.retry_count" :min="0" :max="10" />
+          <el-input-number v-model="form.retry_count" :min="0" :precision="0" />
         </el-form-item>
         <el-form-item label="重试间隔(秒)">
-          <el-input-number v-model="form.retry_interval_sec" :min="1" :max="60" />
+          <el-input-number v-model="form.retry_interval_sec" :min="0" :precision="2" />
         </el-form-item>
 
         <!-- REST/Form-Data 专属配置 -->
@@ -406,7 +410,8 @@ import {
 const eventLabels = {
   cycle_end: '周期结束',
   session_end: '会话结束',
-  box_complete: '箱子汇总',
+  box_complete: '集群汇总',
+  box_timeout: '集群超时',
 }
 
 const connections = ref([])
@@ -721,13 +726,21 @@ function openLogs(row) {
   loadLogs()
 }
 
+function openAllLogs() {
+  logConnId.value = null
+  logFilter.success = null
+  logPage.value = 1
+  showLogs.value = true
+  loadLogs()
+}
+
 async function loadLogs() {
   try {
     const params = {
-      connection_id: logConnId.value,
       skip: (logPage.value - 1) * 20,
       limit: 20,
     }
+    if (logConnId.value) params.connection_id = logConnId.value
     if (logFilter.success !== null && logFilter.success !== '') {
       params.success = logFilter.success
     }

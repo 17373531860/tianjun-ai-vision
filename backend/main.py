@@ -75,7 +75,9 @@ def migrate_database():
         ("scanner_devices", "rebind_mode", "VARCHAR(20) DEFAULT 'rescan'"),
         ("scanner_devices", "bind_timing", "VARCHAR(20) DEFAULT 'mid_cycle'"),
         ("scanner_devices", "broadcast_channels", "JSON"),
+        ("scanner_devices", "device_type", "VARCHAR(20) DEFAULT 'auto'"),
         ("mes_connections", "bound_channels", "JSON"),
+        ("cluster_config", "timeout_push", "BOOLEAN DEFAULT 0"),
     ]
     
     try:
