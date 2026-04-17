@@ -32,6 +32,8 @@ class ClusterCollector:
         self._stop_event = threading.Event()
         self._config_cache: Optional[dict] = None
         self._config_ts: float = 0
+        self._connected_slaves: dict = {}  # station_id -> {info}
+        self._slave_timeout = 20  # 超过20秒没心跳视为离线
 
     def start(self):
         self._stop_event.clear()
@@ -88,6 +90,44 @@ class ClusterCollector:
     def invalidate_config_cache(self):
         self._config_cache = None
         self._config_ts = 0
+
+    def register_slave(self, station_id: str, ip: str, port: int = 8001,
+                       hostname: str = "", project: str = "",
+                       channel_count: int = 1, detecting: bool = False) -> dict:
+        """副机心跳注册/更新"""
+        now = time.time()
+        with self._lock:
+            self._connected_slaves[station_id] = {
+                "station_id": station_id,
+                "ip": ip,
+                "port": port,
+                "hostname": hostname,
+                "project": project,
+                "channel_count": channel_count,
+                "detecting": detecting,
+                "last_seen": now,
+                "first_seen": self._connected_slaves.get(station_id, {}).get("first_seen", now),
+            }
+        return {"success": True}
+
+    def get_connected_slaves(self) -> list:
+        """获取当前在线副机列表，自动清理超时的"""
+        now = time.time()
+        result = []
+        with self._lock:
+            expired = []
+            for sid, info in self._connected_slaves.items():
+                if now - info["last_seen"] > self._slave_timeout:
+                    expired.append(sid)
+                else:
+                    result.append({
+                        **info,
+                        "online_seconds": int(now - info["first_seen"]),
+                        "last_heartbeat_ago": round(now - info["last_seen"], 1),
+                    })
+            for sid in expired:
+                del self._connected_slaves[sid]
+        return result
 
     def receive_station_report(self, station_id: str, box_serial: str,
                                cycle_context: dict, source_address: str = "local",

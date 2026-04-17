@@ -20,7 +20,7 @@
             <el-button size="small" type="primary" @click="handleAutoDiscover" :loading="discovering">
               搜索设备
             </el-button>
-            <el-button size="small" type="success" @click="showAdd = true">手动添加</el-button>
+            <el-button size="small" type="success" @click="handleManualAdd">手动添加</el-button>
             <el-button v-if="!hasWmaxDevice" size="small" type="warning" @click="createVirtualWmax">
               创建虚拟 WMax
             </el-button>
@@ -272,6 +272,12 @@ const defaultForm = () => ({
 const form = ref(defaultForm())
 
 const quickDedup = ref(2)
+
+const handleManualAdd = () => {
+  editingId.value = null
+  form.value = defaultForm()
+  showAdd.value = true
+}
 
 const formatTime = (t) => t ? t.replace('T', ' ').substring(0, 19) : '-'
 

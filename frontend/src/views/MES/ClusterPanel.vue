@@ -87,6 +87,39 @@
       </div>
     </div>
 
+    <!-- 已连接副机（主机时显示） -->
+    <div v-if="config.role === 'master' && config.enabled"
+         class="bg-slate-800/60 rounded-lg border border-slate-700 p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-cyan-300 font-semibold">已连接副机</h3>
+        <span class="text-xs" :class="connectedSlaves.length > 0 ? 'text-green-400' : 'text-gray-500'">
+          {{ connectedSlaves.length }} 台在线
+        </span>
+      </div>
+      <div v-if="connectedSlaves.length === 0" class="text-gray-500 text-sm text-center py-4">
+        暂无副机连接
+      </div>
+      <div v-else class="grid grid-cols-2 gap-3">
+        <div v-for="s in connectedSlaves" :key="s.station_id"
+             class="bg-slate-700/40 rounded-lg p-3 border border-green-800/40">
+          <div class="flex items-center justify-between mb-1">
+            <span class="font-semibold text-green-300">工位 {{ s.station_id }}</span>
+            <div class="flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+              <el-tag v-if="s.detecting" type="success" size="small" effect="dark">检测中</el-tag>
+              <el-tag v-else type="info" size="small" effect="dark">待机</el-tag>
+            </div>
+          </div>
+          <div class="text-xs text-gray-400 space-y-0.5">
+            <div>IP: <span class="font-mono text-cyan-300">{{ s.ip }}:{{ s.port }}</span></div>
+            <div v-if="s.project">项目: {{ s.project }}</div>
+            <div v-if="s.hostname">主机名: {{ s.hostname }}</div>
+            <div>通道: {{ s.channel_count }} | 在线: {{ formatDuration(s.online_seconds) }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 状态概览（主机时显示） -->
     <div v-if="config.role === 'master' && config.enabled" class="flex gap-4">
       <!-- 待汇总 -->
@@ -229,7 +262,8 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   getClusterConfig, updateClusterConfig,
-  getClusterBoxes, getBoxDetail, clusterHealth
+  getClusterBoxes, getBoxDetail, clusterHealth,
+  sendHeartbeat, getConnectedSlaves,
 } from '@/api/cluster'
 
 const config = ref({
@@ -255,8 +289,17 @@ const presetStations = ['A', 'B', 'C', 'D']
 const showDetail = ref(false)
 const detailData = ref(null)
 const detailLoading = ref(false)
+const connectedSlaves = ref([])
 
 const formatTime = (t) => t ? t.replace('T', ' ').substring(0, 19) : '-'
+
+const formatDuration = (seconds) => {
+  if (!seconds || seconds < 60) return `${seconds || 0}秒`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}分${seconds % 60}秒`
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  return `${h}时${m}分`
+}
 
 const now = () => new Date().toISOString()
 
@@ -405,14 +448,51 @@ const testMaster = async () => {
   }
 }
 
+const loadSlaves = async () => {
+  if (config.value.role !== 'master' || !config.value.enabled) return
+  try {
+    const res = await getConnectedSlaves()
+    connectedSlaves.value = res.data.slaves || []
+  } catch { /* ignore */ }
+}
+
+const doHeartbeat = async () => {
+  if (config.value.role !== 'slave' || !config.value.enabled || !config.value.master_url) return
+  try {
+    const url = config.value.master_url.replace(/\/$/, '') + '/api/v1/cluster/heartbeat'
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        station_id: config.value.station_id || 'unknown',
+        port: 8001,
+        hostname: '',
+        project: '',
+        channel_count: 1,
+        detecting: false,
+      }),
+      signal: AbortSignal.timeout(5000),
+    })
+  } catch { /* ignore */ }
+}
+
 let refreshTimer = null
+let heartbeatTimer = null
+let slaveTimer = null
 onMounted(() => {
-  loadConfig()
+  loadConfig().then(() => {
+    doHeartbeat()
+    loadSlaves()
+  })
   loadBoxes()
   refreshTimer = setInterval(loadBoxes, 5000)
+  heartbeatTimer = setInterval(doHeartbeat, 10000)
+  slaveTimer = setInterval(loadSlaves, 5000)
 })
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
+  if (heartbeatTimer) clearInterval(heartbeatTimer)
+  if (slaveTimer) clearInterval(slaveTimer)
 })
 </script>
 

@@ -1,0 +1,178 @@
+{
+  "project": "oppo_sop1",
+  "date": "2026-04-17",
+  "model": {
+    "name": "oppo1.pt",
+    "task": "detect",
+    "classes": ["顶卡拖", "撕膜", "点亮屏幕"],
+    "class_count": 3
+  },
+  "video": {
+    "path": "Video_20260320203958253.avi",
+    "fps": 30,
+    "resolution": "unknown",
+    "duration_s": null
+  },
+  "initial_config": {
+    "steps": [
+      {
+        "label": "顶卡拖",
+        "conf_threshold": 0.50,
+        "min_duration": null,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 3,
+        "gap_tolerance": 0
+      },
+      {
+        "label": "撕膜",
+        "conf_threshold": 0.50,
+        "min_duration": null,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 3,
+        "gap_tolerance": 0
+      },
+      {
+        "label": "点亮屏幕",
+        "conf_threshold": 0.50,
+        "min_duration": null,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 3,
+        "gap_tolerance": 0
+      }
+    ],
+    "settlement_mode": "last_step",
+    "logic_mode": "sequential"
+  },
+  "tuning_rounds": [
+    {
+      "round": 1,
+      "purpose": "发现步骤回退误判问题",
+      "observation": "A-B-A-B-C 序列被系统判定为 OK",
+      "changes": [],
+      "reasoning": "全局去重逻辑 bug，非参数问题",
+      "result": "引入 _cycle_regression 标志，代码修复",
+      "passed": true
+    },
+    {
+      "round": 2,
+      "purpose": "调整顶卡拖置信度阈值",
+      "observation": "顶卡拖检测不稳定，部分帧置信度偏低",
+      "changes": [
+        {
+          "step": "顶卡拖",
+          "param": "threshold",
+          "from": 0.50,
+          "to": 0.49
+        }
+      ],
+      "reasoning": "模型置信度分布集中在 0.45-0.60，适当降低避免漏检",
+      "result": "检测更稳定",
+      "passed": true
+    },
+    {
+      "round": 3,
+      "purpose": "调整撕膜最大间隔",
+      "observation": "撕膜动作间歇性出现，步骤提前超时清除",
+      "changes": [
+        {
+          "step": "撕膜",
+          "param": "max_interval",
+          "from": 3,
+          "to": 4
+        },
+        {
+          "step": "撕膜",
+          "param": "min_duration",
+          "from": null,
+          "to": 0.2
+        }
+      ],
+      "reasoning": "操作人员撕膜时偶尔停顿，3s 间隔导致步骤提前清除",
+      "result": "撕膜步骤不再被提前清除",
+      "passed": true
+    },
+    {
+      "round": 4,
+      "purpose": "设置各步骤最短持续时间过滤闪烁误检",
+      "observation": "极短误检(1-2帧)偶尔触发步骤",
+      "changes": [
+        {
+          "step": "顶卡拖",
+          "param": "min_duration",
+          "from": null,
+          "to": 0.5
+        },
+        {
+          "step": "点亮屏幕",
+          "param": "min_duration",
+          "from": null,
+          "to": 0.5
+        }
+      ],
+      "reasoning": "给每个步骤设置合理最短持续时间，过滤瞬间误检",
+      "result": "误检消除，三步骤均稳定触发",
+      "passed": true
+    },
+    {
+      "round": 5,
+      "purpose": "最终验证",
+      "observation": "完整视频测试",
+      "changes": [],
+      "reasoning": "验证所有参数组合效果",
+      "result": "正常 A-B-C 判 OK，回退 A-B-A-B-C 判 NG",
+      "passed": true
+    }
+  ],
+  "final_config": {
+    "steps": [
+      {
+        "label": "顶卡拖",
+        "conf_threshold": 0.49,
+        "min_duration": 0.5,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 3,
+        "gap_tolerance": 0
+      },
+      {
+        "label": "撕膜",
+        "conf_threshold": 0.50,
+        "min_duration": 0.2,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 4,
+        "gap_tolerance": 0
+      },
+      {
+        "label": "点亮屏幕",
+        "conf_threshold": 0.50,
+        "min_duration": 0.5,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 3,
+        "gap_tolerance": 0
+      }
+    ]
+  },
+  "summary": {
+    "key_findings": [
+      "顺序检测全局去重逻辑导致 A-B-A-B-C 误判 OK，属于代码 bug 非参数问题",
+      "_cycle_regression 机制修复后回退序列正确判 NG",
+      "模型在该视频上置信度偏低(0.45-0.60区间)，阈值不宜设太高"
+    ],
+    "recommended_ranges": {
+      "conf_threshold": {"min": 0.45, "max": 0.55, "reason": "该模型置信度分布集中在此区间"},
+      "min_duration": {"min": 0.2, "max": 0.5, "reason": "过滤闪烁误检同时不影响快速操作"},
+      "max_interval": {"min": 3, "max": 4, "reason": "根据操作停顿频率调整"}
+    },
+    "notes": [
+      "本次调优同时修复了代码级 bug（步骤去重逻辑），参数调整为辅助",
+      "操作人员回退操作将被正确判 NG",
+      "首次部署建议用这组参数，后续根据实际情况微调"
+    ]
+  },
+  "keywords": ["oppo_sop1", "顶卡拖", "撕膜", "点亮屏幕", "顺序检测", "步骤回退", "cycle_regression", "全局去重", "sequential", "A-B-C", "误判"]
+}

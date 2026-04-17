@@ -739,6 +739,7 @@ class VideoSourceManager:
         self._last_step_added_time = None
         self._step_raw_start = {}
         self._last_ng_time = 0
+        self._cycle_regression = False       # A-B-A 步骤回退标记
         
         # ========== Tracking Mode (跟踪模式 — 物品清点) ==========
         self._tracking_objects = {}     # {track_id: {class_name, display_id, first_seen, last_seen, bbox, order_idx}}
@@ -1065,6 +1066,7 @@ class VideoSourceManager:
     def _force_timeout_ng(self, reason: str):
         """超时强制NG：触发NG事件并清理当前周期状态"""
         self._trigger_event(2, reason)
+        self._cycle_regression = False
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
         self.last_added_step = None
@@ -1451,6 +1453,7 @@ class VideoSourceManager:
         self._first_step_disappeared_at = None
         self._last_step_added_time = None
         self._step_raw_start = {}
+        self._cycle_regression = False
         
         steps_config = config.get('steps_config', [])
         for step in steps_config:
@@ -1828,9 +1831,7 @@ class VideoSourceManager:
                 loop_count += 1
                 loop_start = time.time()
                 
-                # 每5秒打印一次详细状态
                 if loop_start - last_debug_time > 5.0:
-                    debug_log(f"循环#{loop_count}, 源={self.source_type}, 检测={self.is_detecting}, 运行={self.is_running}", "CAPTURE")
                     last_debug_time = loop_start
                 
                 # 更新捕获线程心跳
@@ -2523,30 +2524,36 @@ class VideoSourceManager:
             unexpected = [s for s in self.current_cycle_steps if s not in expected_set]
             duplicated = [s for s, cnt in step_counter.items() if cnt > 1]
 
-            if self.current_cycle_steps == expected_labels:
-                print(f"  → 序列完全匹配 → OK")
-                self._trigger_event(1, '顺序正确完成')
-            elif unexpected or duplicated:
+            if self._cycle_regression or unexpected or duplicated:
                 reasons = []
+                if self._cycle_regression:
+                    reasons.append(f'步骤回退: {[s for s, c in step_counter.items() if c > 1]}')
                 if unexpected:
                     reasons.append(f'多余步骤: {list(dict.fromkeys(unexpected))}')
-                if duplicated:
+                if duplicated and not self._cycle_regression:
                     reasons.append(f'重复步骤: {duplicated}')
                 reason_str = ', '.join(reasons)
                 print(f"  → {reason_str} → NG")
                 self._trigger_event(2, reason_str)
+            elif self.current_cycle_steps == expected_labels:
+                print(f"  → 序列完全匹配 → OK")
+                self._trigger_event(1, '顺序正确完成')
             elif len(self.current_cycle_steps) < len(expected_labels):
                 missing = [l for l in expected_labels if l not in self.current_cycle_steps]
                 print(f"  → 周期不完整，缺少: {missing} → NG")
                 self._trigger_event(2, f'周期不完整，缺少: {missing}')
             else:
+                unique_steps = []
+                for s in self.current_cycle_steps:
+                    if s not in unique_steps:
+                        unique_steps.append(s)
                 mismatch_idx = -1
-                for i, (actual, expected) in enumerate(zip(self.current_cycle_steps, expected_labels)):
+                for i, (actual, expected) in enumerate(zip(unique_steps, expected_labels)):
                     if actual != expected:
                         mismatch_idx = i
                         break
                 if mismatch_idx >= 0:
-                    print(f"  → 第{mismatch_idx+1}步顺序错误: 期望[{expected_labels[mismatch_idx]}], 实际[{self.current_cycle_steps[mismatch_idx]}] → NG")
+                    print(f"  → 第{mismatch_idx+1}步顺序错误: 期望[{expected_labels[mismatch_idx]}], 实际[{unique_steps[mismatch_idx]}] → NG")
                     self._trigger_event(2, f'第{mismatch_idx+1}步顺序错误')
                 else:
                     print(f"  → 顺序错误 → NG")
@@ -2589,6 +2596,7 @@ class VideoSourceManager:
                 self._trigger_event(2, reason)
         
         # 重置周期
+        self._cycle_regression = False
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
         self.last_added_step = None
@@ -2758,7 +2766,7 @@ class VideoSourceManager:
         
         self._reconcile_step_records()
         
-        print(f"顺序模式结算: 期望={expected_labels}, 实际={self.current_cycle_steps}")
+        print(f"顺序模式结算: 期望={expected_labels}, 实际={self.current_cycle_steps}, 回退={self._cycle_regression}")
         
         from collections import Counter
         expected_set = set(expected_labels)
@@ -2768,15 +2776,18 @@ class VideoSourceManager:
         duplicated = [s for s, cnt in step_counter.items() if cnt > 1]
         missing = [l for l in expected_labels if l not in self.current_cycle_steps]
 
-        if unexpected or duplicated:
+        if self._cycle_regression or unexpected or duplicated:
             reasons = []
+            if self._cycle_regression:
+                reasons.append(f'步骤回退: {[s for s, c in step_counter.items() if c > 1]}')
             if unexpected:
                 reasons.append(f'多余步骤: {list(dict.fromkeys(unexpected))}')
-            if duplicated:
+            if duplicated and not self._cycle_regression:
                 reasons.append(f'重复步骤: {duplicated}')
             reason_str = ', '.join(reasons)
             print(f"  → {reason_str} → NG")
             self._trigger_event(2, reason_str)
+            self._cycle_regression = False
             self.current_cycle_steps = []
             self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
@@ -2792,6 +2803,7 @@ class VideoSourceManager:
         if missing:
             print(f"  → 周期不完整，缺少: {missing} → NG")
             self._trigger_event(2, f'周期不完整，缺少: {missing}')
+            self._cycle_regression = False
             self.current_cycle_steps = []
             self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
@@ -2804,18 +2816,23 @@ class VideoSourceManager:
             self.last_step_completed_time = None
             return
         
-        # 检查顺序是否正确
+        # 检查顺序是否正确（去除重复项后）
+        unique_steps = []
+        for s in self.current_cycle_steps:
+            if s not in unique_steps:
+                unique_steps.append(s)
         cycle_order_correct = True
         order_error_labels = []
         last_idx = -1
         prev_label = None
         for label in expected_labels:
-            idx = self.current_cycle_steps.index(label)
-            if idx < last_idx:
-                cycle_order_correct = False
-                order_error_labels = [prev_label, label]
-                break
-            last_idx = idx
+            if label in unique_steps:
+                idx = unique_steps.index(label)
+                if idx < last_idx:
+                    cycle_order_correct = False
+                    order_error_labels = [prev_label, label]
+                    break
+                last_idx = idx
             prev_label = label
         
         if cycle_order_correct:
@@ -2826,6 +2843,7 @@ class VideoSourceManager:
             self._trigger_event(2, f'顺序错误，期望[{order_error_labels[0]}]在前 实际[{order_error_labels[1]}]在前')
         
         # 重置周期
+        self._cycle_regression = False
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
         self.last_added_step = None
@@ -3087,7 +3105,16 @@ class VideoSourceManager:
                         self._first_step_had_gap = False
                         self._first_step_reconfirmed = False
                         self._first_step_disappeared_at = None
-                    if label not in self.current_cycle_steps:
+                        self._cycle_regression = False
+                    if self.last_added_step == label:
+                        pass
+                    elif label in self.current_cycle_steps:
+                        self._cycle_regression = True
+                        self.current_cycle_steps.append(label)
+                        self.last_added_step = label
+                        self._last_step_added_time = current_time
+                        print(f"[步骤回退] {label} 已在周期中出现过，标记回退 (当前序列: {self.current_cycle_steps})")
+                    else:
                         self.current_cycle_steps.append(label)
                         self.last_added_step = label
                         self._last_step_added_time = current_time
@@ -7308,6 +7335,7 @@ class VideoSourceManager:
         self._first_step_reconfirmed = False
         self._first_step_disappeared_at = None
         self._last_step_added_time = None
+        self._cycle_regression = False
         self._step_raw_start = {}
         self._last_ng_time = 0
         if hasattr(self, '_last_disappeared_step_times'):
@@ -8105,7 +8133,6 @@ def _get_mgr(channel: int = 0):
     try:
         return channel_manager.get(channel)
     except ValueError as e:
-        print(f"[API] _get_mgr 失败: {e}")
         raise HTTPException(status_code=404, detail=str(e))
 
 

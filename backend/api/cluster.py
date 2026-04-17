@@ -35,6 +35,15 @@ class StationReport(BaseModel):
     event_name: Optional[str] = None
 
 
+class SlaveHeartbeat(BaseModel):
+    station_id: str
+    port: int = 8001
+    hostname: str = ""
+    project: str = ""
+    channel_count: int = 1
+    detecting: bool = False
+
+
 # ---- 配置 ----
 
 @router.get("/config")
@@ -142,6 +151,28 @@ def get_box_detail(box_serial: str):
         }
     finally:
         db.close()
+
+
+# ---- 副机心跳 ----
+
+@router.post("/heartbeat")
+def slave_heartbeat(body: SlaveHeartbeat, request: Request):
+    """副机定时上报心跳，主机记录在线状态"""
+    collector = get_cluster_collector()
+    ip = request.client.host if request.client else "unknown"
+    return collector.register_slave(
+        station_id=body.station_id, ip=ip, port=body.port,
+        hostname=body.hostname, project=body.project,
+        channel_count=body.channel_count, detecting=body.detecting,
+    )
+
+
+@router.get("/slaves")
+def list_connected_slaves():
+    """查询当前在线的副机"""
+    collector = get_cluster_collector()
+    slaves = collector.get_connected_slaves()
+    return {"slaves": slaves, "count": len(slaves)}
 
 
 # ---- 健康检查 ----

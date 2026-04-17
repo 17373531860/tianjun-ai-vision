@@ -1,0 +1,188 @@
+{
+  "project": "oppo_sop2",
+  "date": "2026-04-07",
+  "model": {
+    "name": "best.pt",
+    "task": "detect",
+    "classes": ["撕璃形纸", "翻电池", "安装电池", "翻手机"],
+    "class_count": 4
+  },
+  "video": {
+    "path": "/home/qianqian/1.py/output/oppo/装电池/video/Video_20260331083930218.avi",
+    "fps": 60.1,
+    "resolution": "2448x2048",
+    "duration_s": 293
+  },
+  "initial_config": {
+    "steps": [
+      {
+        "label": "撕璃形纸",
+        "conf_threshold": 0.90,
+        "min_duration": 1.0,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 5.0,
+        "disappear_delay": 0
+      },
+      {
+        "label": "翻电池",
+        "conf_threshold": 0.65,
+        "min_duration": 0.15,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 3.0,
+        "disappear_delay": 0
+      },
+      {
+        "label": "安装电池",
+        "conf_threshold": 0.65,
+        "min_duration": 0.20,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 3.0,
+        "disappear_delay": 0
+      },
+      {
+        "label": "翻手机",
+        "conf_threshold": 0.71,
+        "min_duration": 0.05,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 2.0,
+        "disappear_delay": 0
+      }
+    ],
+    "settlement_mode": "first_step",
+    "logic_mode": "sequential"
+  },
+  "tuning_rounds": [
+    {
+      "round": 1,
+      "purpose": "粗粒度时序分析（0.5s间隔）",
+      "observation": "46个周期中43个序列错误，翻手机在步骤切换间有0~0.15s闪现误检",
+      "changes": [],
+      "reasoning": "先摸清原始检测质量",
+      "result": "序列匹配率极低，翻手机闪现是表面原因",
+      "passed": false
+    },
+    {
+      "round": 2,
+      "purpose": "错误假设——max_interval跨周期",
+      "observation": "撕璃形纸max_interval=5.0s≥周期间隔5~7s",
+      "changes": [],
+      "reasoning": "初步判断max_interval过长导致步骤不消失",
+      "result": "用户纠正：消失处理器用disappear_delay不用max_interval，假设错误",
+      "passed": false
+    },
+    {
+      "round": 3,
+      "purpose": "代码审计——消失处理器机制",
+      "observation": "审查source.py line 3183-3219，追踪step_last_seen生命周期",
+      "changes": [],
+      "reasoning": "需要理解disappear_delay和max_interval的实际执行顺序",
+      "result": "确认消失处理器只用disappear_delay=0，0.03s后删除step_last_seen，max_interval永远不被检查",
+      "passed": false
+    },
+    {
+      "round": 4,
+      "purpose": "逐帧debug日志分析",
+      "observation": "撕璃形纸11.83~14.53s一次出现被切成5段（0.30/0.95/0.10/0.50/0.30s），全部<1.0s min_dur",
+      "changes": [],
+      "reasoning": "需要看到状态机内部步骤进出过程",
+      "result": "确认帧间抖动+disappear_delay=0导致步骤反复进出周期",
+      "passed": false
+    },
+    {
+      "round": 5,
+      "purpose": "测试min_duration调整（disappear_delay=0下）",
+      "observation": "尝试不改disappear_delay，仅调翻手机min_duration",
+      "changes": [
+        {"step": "翻手机", "param": "min_duration", "from": "0.05", "to": "0.20/0.30/0.40"}
+      ],
+      "reasoning": "翻手机闪现0~0.15s，提高min_duration应能过滤",
+      "result": "合格率从7%降到0%——有效出现也被过滤，且周期数仍只有14~15（应为44），确认根因不是min_duration",
+      "passed": false
+    },
+    {
+      "round": 6,
+      "purpose": "测试disappear_delay梯度",
+      "observation": "确认disappear_delay=0是根因",
+      "changes": [
+        {"step": "全部", "param": "disappear_delay", "from": "0", "to": "0.3/0.5/1.0"}
+      ],
+      "reasoning": "需要远大于帧间抖动(0.03~0.3s)、远小于周期间隔(3~5s)的值",
+      "result": "disappear_delay=1.0s: 周期数15→44，合格率7%→84%",
+      "passed": true
+    },
+    {
+      "round": 7,
+      "purpose": "分析剩余NG原因",
+      "observation": "7个NG周期，4个缺翻电池，翻电池min_duration=0.15s处于边界",
+      "changes": [],
+      "reasoning": "翻电池抖动导致部分有效检测在0.10~0.15s区间",
+      "result": "建议翻电池min_duration降到0.10s或翻手机min_duration提到0.15s，待用户实测",
+      "passed": false
+    }
+  ],
+  "final_config": {
+    "steps": [
+      {
+        "label": "撕璃形纸",
+        "conf_threshold": 0.80,
+        "min_duration": 1.0,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 5.0,
+        "disappear_delay": 1.0
+      },
+      {
+        "label": "翻电池",
+        "conf_threshold": 0.65,
+        "min_duration": 0.15,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 3.0,
+        "disappear_delay": 1.0
+      },
+      {
+        "label": "安装电池",
+        "conf_threshold": 0.65,
+        "min_duration": 0.20,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 3.0,
+        "disappear_delay": 1.0
+      },
+      {
+        "label": "翻手机",
+        "conf_threshold": 0.75,
+        "min_duration": 0.05,
+        "max_duration": null,
+        "min_frames": null,
+        "max_interval": 2.0,
+        "disappear_delay": 1.0
+      }
+    ],
+    "settlement_mode": "first_step",
+    "logic_mode": "sequential"
+  },
+  "summary": {
+    "key_findings": [
+      "disappear_delay=0 使 max_interval 完全失效，是周期判定异常的根本原因",
+      "消失处理器只用 disappear_delay 不用 max_interval，两个参数未协同",
+      "帧间抖动（0.03~0.3s间断）将连续检测切碎，每段不够 min_duration 被移出周期",
+      "disappear_delay=1.0s 合格率从 7% 提升到 84%"
+    ],
+    "recommended_ranges": {
+      "disappear_delay": {"min": 0.5, "max": 1.5, "reason": "远大于帧间抖动(0.03~0.3s)，远小于周期间隔(3~5s)"},
+      "min_duration_翻手机": {"min": 0.05, "max": 0.20, "reason": "0.05s 处于边界，0.15~0.20s 可过滤闪现"},
+      "min_duration_翻电池": {"min": 0.10, "max": 0.15, "reason": "0.15s 偏紧，部分有效检测在0.10~0.15s区间"}
+    },
+    "notes": [
+      "disappear_delay 不能超过周期间最短步骤间隔，否则消失确认延迟到下一步出现后",
+      "后续版本建议将 disappear_delay 默认值从 0 改为 1.0s",
+      "后续版本建议消失处理器也参考 max_interval"
+    ]
+  },
+  "keywords": ["disappear_delay", "max_interval", "去重间隔", "消失确认", "帧间抖动", "oppo_sop2", "撕璃形纸", "翻电池", "安装电池", "翻手机", "sequential", "first_step"]
+}

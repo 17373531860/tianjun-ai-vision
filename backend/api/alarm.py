@@ -118,7 +118,8 @@ class AlarmManager:
         self._alarm_stop_event = threading.Event()
         self._idle_light_active = False
 
-    def connect(self, port: str, baudrate: int = 9600) -> bool:
+    def connect(self, port: str, baudrate: int = 9600) -> dict:
+        """连接串口，返回 {"ok": bool, "msg": str}"""
         try:
             if self.serial_port and self.serial_port.is_open:
                 self.serial_port.close()
@@ -135,10 +136,40 @@ class AlarmManager:
             self.config['port'] = port
             self.config['baudrate'] = baudrate
             print(f"报警器已连接: {port} @ {baudrate}")
-            return True
+            return {"ok": True, "msg": f"已连接 {port}"}
+        except PermissionError:
+            hint = self._try_fix_permission(port)
+            msg = f"串口权限不足: {port}。{hint}"
+            print(f"连接报警器失败(权限): {msg}")
+            return {"ok": False, "msg": msg}
+        except serial.SerialException as e:
+            err = str(e)
+            if "FileNotFoundError" in err or "No such file" in err:
+                msg = f"串口不存在: {port}（请检查USB是否插好、驱动是否安装）"
+            elif "PermissionError" in err or "Access is denied" in err:
+                hint = self._try_fix_permission(port)
+                msg = f"串口权限不足: {port}。{hint}"
+            else:
+                msg = f"串口打开失败: {err}"
+            print(f"连接报警器失败: {msg}")
+            return {"ok": False, "msg": msg}
         except Exception as e:
-            print(f"连接报警器失败: {e}")
-            return False
+            msg = f"连接异常: {e}"
+            print(f"连接报警器失败: {msg}")
+            return {"ok": False, "msg": msg}
+
+    @staticmethod
+    def _try_fix_permission(port: str) -> str:
+        """Linux 上尝试自动修复串口权限"""
+        import platform
+        if platform.system() != "Linux":
+            return "Windows 请检查：1)设备管理器是否有COM口 2)CH340驱动是否安装 3)端口是否被其他程序占用"
+        try:
+            import subprocess
+            subprocess.run(["chmod", "666", port], timeout=3, check=True)
+            return "已自动修复权限，请重试连接"
+        except Exception:
+            return "请执行: sudo usermod -aG dialout $USER 然后重启电脑，或执行 sudo chmod 666 " + port
 
     def disconnect(self):
         if self.serial_port and self.serial_port.is_open:
@@ -313,11 +344,11 @@ class AlarmRouter:
         for ch_id, mgr in self.managers.items():
             if mgr.config.get('enabled') and mgr.config.get('port'):
                 try:
-                    ok = mgr.connect(mgr.config['port'], mgr.config.get('baudrate', 9600))
-                    if ok:
+                    result = mgr.connect(mgr.config['port'], mgr.config.get('baudrate', 9600))
+                    if result["ok"]:
                         print(f"[报警] ch{ch_id} 自动连接成功: {mgr.config['port']}")
                     else:
-                        print(f"[报警] ch{ch_id} 自动连接失败: {mgr.config['port']}")
+                        print(f"[报警] ch{ch_id} 自动连接失败: {result['msg']}")
                 except Exception as e:
                     print(f"[报警] ch{ch_id} 自动连接异常: {e}")
 
@@ -429,12 +460,12 @@ async def list_ports(channel: int = Query(0, description="工位通道")):
 async def connect(req: ConnectRequest, channel: int = Query(0, description="工位通道")):
     """连接到报警器"""
     mgr = alarm_router.get(channel)
-    success = mgr.connect(req.port, req.baudrate)
-    if success:
+    result = mgr.connect(req.port, req.baudrate)
+    if result["ok"]:
         alarm_router._save_all()
         return {"success": True, "message": f"工位 {channel} 已连接到 {req.port}"}
     else:
-        raise HTTPException(status_code=500, detail="连接失败，请检查设备")
+        raise HTTPException(status_code=500, detail=result["msg"])
 
 
 @router.post("/disconnect")

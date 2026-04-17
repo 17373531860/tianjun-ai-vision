@@ -1,0 +1,89 @@
+{
+  "version": "2.7.1",
+  "date": "2026-04-17",
+  "previous_version": "2.7.0",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "扫码器手动添加设备覆盖已有设备",
+      "symptom": "手动添加第二个扫码器后，第一个被覆盖消失",
+      "root_cause": "手动添加按钮未重置 editingId 和 form，编辑后残留的 editingId 导致走更新逻辑",
+      "fix": "新增 handleManualAdd 方法，点击时重置 editingId=null 和 form=defaultForm()",
+      "files": ["frontend/src/views/MES/ScannerPanel.vue"],
+      "keywords": ["扫码器", "手动添加", "覆盖", "editingId", "ScannerPanel", "scanner"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "顺序检测步骤回退误判OK",
+      "symptom": "A-B-C顺序检测下，A-B-A-B-C被判为合格",
+      "root_cause": "步骤入队使用全局去重 if label not in current_cycle_steps，非连续重复被丢弃",
+      "fix": "引入 _cycle_regression 标志；仅连续相同步骤去重；非连续重复标记回退并判NG",
+      "files": ["backend/api/source.py"],
+      "keywords": ["顺序检测", "步骤回退", "去重", "sequential", "cycle_regression", "A-B-A"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "后端日志噪音",
+      "symptom": "后端终端大量 _get_mgr 失败和循环# 调试日志",
+      "root_cause": "_get_mgr 对未配置通道打印错误；_capture_loop 每帧打印调试信息",
+      "fix": "移除 _get_mgr 中的 print 和 _capture_loop 中的 debug_log",
+      "files": ["backend/api/source.py"],
+      "keywords": ["日志", "噪音", "_get_mgr", "循环", "debug_log", "log spam"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "报警灯串口连接失败无详细错误",
+      "symptom": "Linux和Windows均连接失败，无法定位原因",
+      "root_cause": "connect方法只返回bool，未传递具体错误",
+      "fix": "返回详细错误信息；Linux自动尝试chmod；添加udev规则",
+      "files": ["backend/api/alarm.py"],
+      "keywords": ["报警灯", "串口", "权限", "CH340", "dialout", "udev", "alarm"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "集群副机心跳与主机在线副机显示",
+      "symptom": "主机无法看到哪些副机已连接",
+      "root_cause": "集群架构中主机被动等待，无主动感知副机在线状态的机制",
+      "fix": "后端新增心跳注册和查询接口；副机前端每10秒发心跳；主机前端显示已连接副机卡片",
+      "files": ["backend/services/cluster_collector.py", "backend/api/cluster.py", "frontend/src/api/cluster.js", "frontend/src/views/MES/ClusterPanel.vue"],
+      "keywords": ["集群", "心跳", "heartbeat", "副机", "在线", "cluster", "slaves"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "虚拟扫码器/称重器 tkinter 版",
+      "symptom": "现场测试需要虚拟设备但客户电脑无法安装PyQt5",
+      "root_cause": "原 PyQt5 版本需要额外安装库，不符合一键启动要求",
+      "fix": "用tkinter重写；创建bat脚本自动查找软件自带Python运行",
+      "files": ["tools/virtual_scanner.pyw", "tools/virtual_weight.pyw", "tools/启动虚拟扫码器.bat", "tools/启动虚拟称重器.bat"],
+      "keywords": ["虚拟扫码器", "虚拟称重器", "tkinter", "bat", "测试工具"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-source", "modify-source"],
+  "files_changed": [
+    "frontend/src/views/MES/ScannerPanel.vue",
+    "frontend/src/views/MES/ClusterPanel.vue",
+    "frontend/src/api/cluster.js",
+    "backend/api/source.py",
+    "backend/api/alarm.py",
+    "backend/api/cluster.py",
+    "backend/services/cluster_collector.py",
+    ".claude/skills/debug-source/SKILL.md",
+    ".claude/skills/modify-source/SKILL.md",
+    "tools/virtual_scanner.pyw",
+    "tools/virtual_weight.pyw",
+    "tools/启动虚拟扫码器.bat",
+    "tools/启动虚拟称重器.bat"
+  ]
+}

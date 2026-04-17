@@ -252,7 +252,9 @@ vite.config.js:     server.port = 6001                // 实际端口
 - `POST /cluster/report` — 从机上报检测数据
 - `GET /cluster/boxes` — 获取待汇总/已完成箱子列表
 - `GET /cluster/health` — 集群健康检查
-- 前端: `frontend/src/api/cluster.js`
+- `POST /cluster/heartbeat` — 副机心跳注册（v2.7.1+, body: station_id/ip/project/channels/status）
+- `GET /cluster/slaves` — 主机查询已连接副机列表（v2.7.1+, 20秒超时自动清理离线副机）
+- 前端: `frontend/src/api/cluster.js`（含 `sendHeartbeat`, `getConnectedSlaves`）
 
 ### external_device.py（新增模块，挂载 /api/v1/external-devices）
 - CRUD 外部设备 (TCP/Modbus TCP/串口/HTTP 轮询)
