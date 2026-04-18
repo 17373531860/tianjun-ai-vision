@@ -195,3 +195,31 @@ multiChannelData.value[0].mes = data.mes
 - **前端 startDetectionForChannel 必须用通道绑定项目，不能用全局 currentProject，否则所有通道的步骤配置会被覆盖**
 - **channel_count 在 _save_config 中必须用 max(file_count, self.channel_count)，否则热重载时会被覆盖为 1**
 - **MJPEG 四通道必须有 min_interval sleep，否则 CPU 100%**
+- **v2.7.2 起移除 channel_count 的 max() 保护**：之前 `_save_config` 和 `save_channel_source` 都用 `max(file_count, self.channel_count)` 防止热重载覆盖，副作用是工位数永远只能升不能降（从四工位改单工位保存后下次启动仍恢复四工位）。新方案：`_save_config` 直接写 `self.channel_count`（只由 `set_channel_count` 调用一次，值一定正确）；`save_channel_source` 不再写 `channel_count` 字段，由 `set_channel_count` 独占该字段的写入权。
+- **channel_count 降级场景**：从多工位改回单工位时，workstation_config.json 中 channels 字典里 ch1/ch2/ch3 的残留条目不会自动清理，但不影响功能（`get_channel_sources()` 只返回当前激活通道需要的数据）。
+
+## 降工位残留清理（v2.7.2 新增）
+
+**背景**：降工位时若不清理按 `channel_id` 缓存的状态，会导致下次升回工位时新通道被老数据污染（toast 重复弹出、MES 工单错乱、蜂鸣器不停等）。
+
+**已接入清理（`ChannelManager.set_channel_count` 降工位循环自动调用）**：
+
+| 模块 | 清理方法 | 清理内容 |
+|---|---|---|
+| `VideoSourceManager` | `stop_detection()` 里清 `events_log=[]` + `_event_seq=0` | 30 秒事件窗口，防止前端把老事件当新事件 |
+| `MESHookManager` | `on_channel_removed(channel_id)` | 6 个按 channel_id 存的 dict：`_pending_workpiece` / `_pending_queue` / `_active_orders` / `_inspecting_workpiece` / `_last_scan_event` / `_rebind_prompt` |
+| `AlarmRouter` | `on_channel_removed(channel_id)` | `stop_alarm()` + `_idle_light_active=False` + `all_off()` + `disconnect()` + 从 `managers` dict pop |
+
+**前端同步清理**（`frontend/src/views/Monitor/index.vue` 的 `initMultiChannelData(count)`）：
+- 删除 `multiChannelData` / `multiLastSeenSeq` / `multiFrameNaturalSize` 中超出 `count` 的 key
+- 对 0..count-1 每个通道强制重置（避免切工位时 `_processedEventIds` 与 seq 基线残留）
+
+**刻意不接入清理的 3 个模块（严禁按 channel_id 清理，会误伤硬件配置）**：
+
+| 模块 | 为什么不清 |
+|---|---|
+| `ScannerService._connections` | dict 的 key 是 **device_id（扫码器 DB 主键）**，不是 channel_id。扫码器配置是硬件层，跨工位切换应保留 |
+| `ExternalDeviceService._connections` | dict 的 key 是 **device_id**（称重、Modbus PLC）。断开后用户还要重新手动连接 |
+| `ClusterCollector._connected_slaves` | dict 的 key 是 **station_id（机器实例 ID）**。与 channel_id 正交，动它会误触发"副机下线" |
+
+**诊断要点**：如果遇到"切工位后新通道第一周期异常"，先用 `rg on_channel_removed backend/` 确认清理调用路径齐全；再看是否误把设备层清了。

@@ -89,7 +89,7 @@ vite.config.js:     server.port = 6001                // 实际端口
 | `GET /videos` | sessions_router `/videos` | OK |
 | `GET /export-settings` | sessions_router `/export-settings` | OK |
 | `PUT /export-settings` | sessions_router `/export-settings` | OK |
-| `GET /export/csv` | sessions_router `/export/csv` | OK |
+| `GET /export/csv` | sessions_router `/export/csv` | OK (v2.7.2 新增 project_id / channel_id 可选 query) |
 | `GET /stats/step-averages` | sessions_router `/stats/step-averages` | OK |
 | `GET /stats/cycle-averages` | sessions_router `/stats/cycle-averages` | OK |
 | `GET /backup/database` | sessions_router `/backup/database` | OK |
@@ -280,3 +280,22 @@ vite.config.js:     server.port = 6001                // 实际端口
 ### alarm.py（修改）
 - `AlarmRouter` 替代单一 `AlarmManager`，管理多通道独立报警设备
 - 所有报警 API 支持 `channel` 查询参数
+
+## v2.7.2 新增/修改 API
+
+### sessions.py（修改）
+- `GET /export/csv` 新增两个可选 query 参数：
+  - `project_id: Optional[int]` — 当 `export_type=all` 时按项目过滤 DetectionSession；不传或传 `null` 表示全部项目
+  - `channel_id: Optional[int]` — 同上，按工位（0/1/2/3）过滤；不传表示全部工位
+  - `session` 和 `cycle` 两种 `export_type` 不受该参数影响（已按 id 定位）
+- CSV 输出变化（向后兼容，仅追加列/行）：
+  - 元数据新增"项目 / 工位"两行（占位符 `[全部]` 表示未过滤）
+  - "会话列表"表头追加"工位"列，行值格式为 `工位N`
+  - "周期详情"和"步骤详情"分组标题改为 `[项目名 / 工位N] 会话 XXX`
+- 前端对应 API（`frontend/src/api/data.js`）新增 `projectId` / `channelId` 形参，透传到后端
+
+### 降工位清理钩子（新增公共接口）
+- `backend/services/mes_hooks.py::MESHookManager.on_channel_removed(channel_id)` — 清 6 个按 channel_id 存的 dict
+- `backend/api/alarm.py::AlarmRouter.on_channel_removed(channel_id)` — 停报警 + 灯全灭 + 断串口 + 从 managers pop
+- 调用方：`ChannelManager.set_channel_count()` 降工位循环，其他模块可按需调用
+- **注意**：`ScannerService` / `ExternalDeviceService` / `ClusterCollector` 的 key 分别是 `device_id` / `station_id`，不按 channel_id 清理，避免误伤硬件配置

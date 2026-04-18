@@ -1039,15 +1039,19 @@ def export_csv(
     month: Optional[str] = None,  # 格式: 2024-01
     start_hour: Optional[str] = None,
     end_hour: Optional[str] = None,
+    project_id: Optional[int] = Query(None, description="按项目过滤，None=全部项目"),
+    channel_id: Optional[int] = Query(None, description="按工位过滤(0-based)，None=全部工位"),
     db: Session = Depends(get_db)
 ):
     """
     导出CSV报表，根据导出设置过滤数据
-    
+
     export_type:
     - session: 导出单个会话的数据
     - cycle: 导出单个周期的数据
     - all: 导出所有数据（需要指定日期范围）
+
+    v2.7.2: 新增 project_id / channel_id 过滤，避免不同项目/工位的数据混入同一份报表。
     """
     try:
         # 加载导出设置
@@ -1099,12 +1103,19 @@ def export_csv(
             session = db.query(DetectionSession).filter(DetectionSession.id == session_id).first()
             if not session:
                 raise HTTPException(status_code=404, detail="会话不存在")
-            
+
+            # v2.7.2: 会话归档信息里显式写出项目+工位
+            sess_proj = db.query(Project).filter(Project.id == session.project_id).first()
+            sess_proj_name = sess_proj.name if sess_proj else "Unknown"
+            sess_ch_label = f"工位{(session.channel_id or 0) + 1}"
+
             if export_opts['session_info']:
                 writer.writerow(["会话信息"])
-                writer.writerow(["会话ID", "开始时间", "结束时间", "总周期数", "合格数", "不良数", "平均周期时间"])
+                writer.writerow(["会话ID", "项目", "工位", "开始时间", "结束时间", "总周期数", "合格数", "不良数", "平均周期时间"])
                 writer.writerow([
                     session.session_uuid,
+                    sess_proj_name,
+                    sess_ch_label,
                     session.start_time.strftime("%Y-%m-%d %H:%M:%S"),
                     session.end_time.strftime("%Y-%m-%d %H:%M:%S") if session.end_time else "",
                     session.total_cycles or 0,
@@ -1244,13 +1255,19 @@ def export_csv(
         else:
             # 导出日期范围内的所有数据
             query = db.query(DetectionSession)
-            
+
             if date:
                 query = query.filter(func.date(DetectionSession.start_time) == date)
             elif start_date and end_date:
                 query = query.filter(DetectionSession.start_time >= start_date)
                 query = query.filter(DetectionSession.start_time <= end_date + " 23:59:59")
-            
+
+            # v2.7.2: 支持按项目/工位过滤
+            if project_id is not None:
+                query = query.filter(DetectionSession.project_id == project_id)
+            if channel_id is not None:
+                query = query.filter(DetectionSession.channel_id == channel_id)
+
             if start_hour and end_hour:
                 # 夜班跨日时，也需要查次日的会话
                 if start_hour > end_hour and date:
@@ -1287,20 +1304,30 @@ def export_csv(
                 involved = set(c.session_id for c in cq.all()) if shift_cycle_ids else set()
                 sessions = [s for s in sessions if s.id in involved]
             
+            # v2.7.2: 元数据里显式列出项目/工位过滤条件
+            proj_label = "全部项目"
+            if project_id is not None:
+                proj_obj = db.query(Project).filter(Project.id == project_id).first()
+                proj_label = f"{proj_obj.name}(id={project_id})" if proj_obj else f"项目{project_id}"
+            ch_label = "全部工位" if channel_id is None else f"工位{channel_id + 1}"
+
             writer.writerow(["数据导出报表"])
             writer.writerow(["导出时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
             writer.writerow(["日期范围", f"{start_date or date or '全部'} 至 {end_date or date or '全部'}"])
+            writer.writerow(["项目", proj_label])
+            writer.writerow(["工位", ch_label])
             writer.writerow([])
-            
+
             if export_opts['session_info']:
                 writer.writerow(["会话列表"])
-                writer.writerow(["会话ID", "项目", "开始时间", "结束时间", "周期数", "合格", "不良", "平均CT"])
-                
+                writer.writerow(["会话ID", "项目", "工位", "开始时间", "结束时间", "周期数", "合格", "不良", "平均CT"])
+
                 for session in sessions:
                     project = db.query(Project).filter(Project.id == session.project_id).first()
                     writer.writerow([
                         session.session_uuid,
                         project.name if project else "Unknown",
+                        f"工位{(session.channel_id or 0) + 1}",
                         session.start_time.strftime("%Y-%m-%d %H:%M:%S"),
                         session.end_time.strftime("%Y-%m-%d %H:%M:%S") if session.end_time else "",
                         session.total_cycles or 0,
@@ -1308,7 +1335,7 @@ def export_csv(
                         session.ng_cycles or 0,
                         f"{session.avg_cycle_time:.2f}s" if session.avg_cycle_time else ""
                     ])
-                
+
                 writer.writerow([])
             
             for session in sessions:
@@ -1317,7 +1344,11 @@ def export_csv(
                     c_q = c_q.filter(DetectionCycle.id.in_(shift_cycle_ids))
                 cycles = c_q.all()
                 if cycles:
-                    writer.writerow([f"会话 {session.session_uuid} 的周期详情"])
+                    # v2.7.2: 分组标题带项目名+工位号，合并导出时一眼能区分
+                    sess_proj = db.query(Project).filter(Project.id == session.project_id).first()
+                    sess_proj_name = sess_proj.name if sess_proj else "Unknown"
+                    sess_ch = f"工位{(session.channel_id or 0) + 1}"
+                    writer.writerow([f"[{sess_proj_name} / {sess_ch}] 会话 {session.session_uuid} 的周期详情"])
                     headers = ["周期序号", "开始时间"]
                     if export_opts['cycle_duration']:
                         headers.append("耗时(秒)")
@@ -1349,7 +1380,7 @@ def export_csv(
                     
                     # 导出步骤详情（如果启用了步骤相关选项）
                     if export_opts['step_duration'] or export_opts['step_interval'] or export_opts['step_event']:
-                        writer.writerow([f"会话 {session.session_uuid} 的步骤详情"])
+                        writer.writerow([f"[{sess_proj_name} / {sess_ch}] 会话 {session.session_uuid} 的步骤详情"])
                         step_headers = ["周期序号", "步骤序号", "步骤名称", "开始时间"]
                         if export_opts['step_duration']:
                             step_headers.append("耗时(秒)")

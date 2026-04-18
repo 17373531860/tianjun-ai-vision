@@ -112,33 +112,38 @@ export const exportCycleCsv = (cycleId) => {
   });
 };
 
-// 导出日期范围的CSV
-export const exportDateRangeCsv = (startDate, endDate, startHour = null, endHour = null) => {
+// v2.7.2: 三个批量导出 API 支持 projectId/channelId 过滤，避免不同项目/工位数据混入同一份 CSV
+// projectId=null 表示"全部项目"，channelId=null 表示"全部工位"
+export const exportDateRangeCsv = (startDate, endDate, startHour = null, endHour = null, projectId = null, channelId = null) => {
   const params = { export_type: 'all', start_date: startDate, end_date: endDate };
   if (startHour) params.start_hour = startHour;
   if (endHour) params.end_hour = endHour;
+  if (projectId !== null && projectId !== undefined) params.project_id = projectId;
+  if (channelId !== null && channelId !== undefined) params.channel_id = channelId;
   return api.get('/data/export/csv', {
     params,
     responseType: 'blob'
   });
 };
 
-// 导出某周的CSV
-export const exportWeekCsv = (week, startHour = null, endHour = null) => {
+export const exportWeekCsv = (week, startHour = null, endHour = null, projectId = null, channelId = null) => {
   const params = { export_type: 'all', week };
   if (startHour) params.start_hour = startHour;
   if (endHour) params.end_hour = endHour;
+  if (projectId !== null && projectId !== undefined) params.project_id = projectId;
+  if (channelId !== null && channelId !== undefined) params.channel_id = channelId;
   return api.get('/data/export/csv', {
     params,
     responseType: 'blob'
   });
 };
 
-// 导出某月的CSV
-export const exportMonthCsv = (month, startHour = null, endHour = null) => {
+export const exportMonthCsv = (month, startHour = null, endHour = null, projectId = null, channelId = null) => {
   const params = { export_type: 'all', month };
   if (startHour) params.start_hour = startHour;
   if (endHour) params.end_hour = endHour;
+  if (projectId !== null && projectId !== undefined) params.project_id = projectId;
+  if (channelId !== null && channelId !== undefined) params.channel_id = channelId;
   return api.get('/data/export/csv', {
     params,
     responseType: 'blob'

@@ -1,0 +1,192 @@
+{
+  "version": "2.7.2",
+  "date": "2026-04-18",
+  "previous_version": "2.7.1",
+  "summary": "工位切换残留清理 + 数据中心 CSV 导出按项目/工位区分；附 18 个离线测试用例",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "切换工位后 Toast 重复弹出（合格+不合格+两个未扫码同弹）",
+      "symptom": "双工位→单工位（或单→多）切换、重新启动检测后，Monitor 同时弹出'合格/不合格/两个未扫码'Toast；数据中心却只记录一条结果",
+      "root_cause": "1) VideoSourceManager.events_log 与 _event_seq 在 stop_detection 里没清空，旧事件在 30 秒窗口内被 get_detection_results 带回前端；2) 前端 initMultiChannelData 对已存在的通道不重新初始化，multiLastSeenSeq 基线未重置",
+      "fix": "后端 stop_detection() 追加 events_log=[] + _event_seq=0；前端 initMultiChannelData(count) 强制重置激活通道，并删除超出 count 的残留 key",
+      "files": [
+        "backend/api/source.py",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": [
+        "toast", "重复弹出", "events_log", "event_seq", "未扫码",
+        "工位切换", "channel switching", "multiChannelData", "multiLastSeenSeq",
+        "initMultiChannelData", "stop_detection", "get_detection_results"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "降工位时 MESHook 残留工单/扫码状态",
+      "symptom": "从 4 工位降到 1 工位再升回 2 工位，新 ch1 第一周期被老 _pending_workpiece / _last_scan_event 干扰：未扫码告警不弹，或绑定到老工件",
+      "root_cause": "MESHookManager 有 6 个按 channel_id 存的 dict（_pending_workpiece / _pending_queue / _active_orders / _inspecting_workpiece / _last_scan_event / _rebind_prompt），从未在降工位时清理",
+      "fix": "mes_hooks.py 新增 on_channel_removed(channel_id) 方法集中 pop 6 个 dict；channel_manager.py 的 set_channel_count() 降工位循环里调用",
+      "files": [
+        "backend/services/mes_hooks.py",
+        "backend/api/channel_manager.py"
+      ],
+      "keywords": [
+        "MESHook", "降工位", "on_channel_removed", "pending_workpiece",
+        "last_scan_event", "set_channel_count", "工单残留", "扫码残留",
+        "未扫码告警", "channel_manager"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "降工位时 AlarmRouter 串口和蜂鸣器线程残留",
+      "symptom": "降工位前某通道正在 NG 报警，降工位后蜂鸣器/灯塔仍在响，串口被占用导致升回同通道无法重连",
+      "root_cause": "AlarmRouter.managers 按 channel_id 持有 AlarmManager 实例，无清理路径；每个 AlarmManager 自己启后台报警线程 + 持有 serial 串口",
+      "fix": "alarm.py 新增 AlarmRouter.on_channel_removed(channel_id)：stop_alarm + _idle_light_active=False + all_off + disconnect + pop managers；channel_manager.py 的 set_channel_count 降工位循环里调用",
+      "files": [
+        "backend/api/alarm.py",
+        "backend/api/channel_manager.py"
+      ],
+      "keywords": [
+        "AlarmRouter", "降工位", "on_channel_removed", "蜂鸣器残留",
+        "灯塔残留", "串口占用", "stop_alarm", "idle_light_active",
+        "disconnect", "channel_manager"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "数据中心 CSV 导出不区分项目和工位",
+      "symptom": "'项目A + 双工位'下导出当日/某周/某月/日期范围，CSV 混入所有项目所有工位的会话；表头也没有工位列，可能导致交付给客户的报表串项目",
+      "root_cause": "1) /data/export/csv 接口签名缺 project_id/channel_id；2) all 分支 query 只按日期过滤；3) 前端 exportDateRangeCsv/exportWeekCsv/exportMonthCsv 也没传这两个参数；4) CSV 表头缺'工位'列",
+      "fix": "后端 export_csv 加 project_id/channel_id（Query(None) 向后兼容）；all 分支追加 filter；元数据加'项目/工位'两行；'会话列表'表头加'工位'列；周期/步骤分组标题改 [项目名 / 工位N] 会话 XXX；session 分支会话信息表头也加项目+工位列；前端三个 API 加 projectId/channelId；前端 Data 页新增 exportAllProjects 开关+提示条+文件名编码 proj{id|ALL}_ch{N|ALL}_{date}.csv",
+      "files": [
+        "backend/api/sessions.py",
+        "frontend/src/api/data.js",
+        "frontend/src/views/Data/index.vue"
+      ],
+      "keywords": [
+        "CSV 导出", "export_csv", "project_id 过滤", "channel_id 过滤",
+        "导出按项目", "导出按工位", "exportAllProjects", "exportDateRangeCsv",
+        "exportWeekCsv", "exportMonthCsv", "数据中心", "Data 页",
+        "导出范围提示条", "工位列", "分组标题"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "数据中心导出范围可见化",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "Data 页导出操作区顶部新增提示条，实时显示 '项目【X】 · 工位【Y|全部】 · 日期【Z】'；多工位 channelFilter=null 时给出橙色建议；底部 exportAllProjects 开关（默认关）",
+      "files": ["frontend/src/views/Data/index.vue"],
+      "keywords": [
+        "导出范围提示条", "exportScopeText", "exportAllProjects",
+        "channelFilter 默认", "多工位导出提醒"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "降工位清理钩子公共接口",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "MESHook 和 AlarmRouter 单例都暴露 on_channel_removed(channel_id)，ChannelManager 统一调用；为后续 ExternalDevice/Scanner/Cluster 接入同样模式做铺垫",
+      "files": [
+        "backend/services/mes_hooks.py",
+        "backend/api/alarm.py",
+        "backend/api/channel_manager.py"
+      ],
+      "keywords": [
+        "on_channel_removed", "降工位清理接口", "MESHook", "AlarmRouter",
+        "ChannelManager", "set_channel_count"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "降工位清理测试脚本",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "新增 test_mes_hook_cleanup.py（5 用例）：MESHook 6 个 dict 清理、ChannelManager 降工位触发 MESHook 清理、4→1→2 场景不污染新通道、AlarmRouter 清理、ChannelManager 触发 AlarmRouter 清理。脚本内置 workstation_config.json 备份/还原",
+      "files": ["test_mes_hook_cleanup.py"],
+      "keywords": [
+        "test_mes_hook_cleanup", "降工位测试", "on_channel_removed 测试",
+        "单元测试"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-002",
+      "title": "导出 CSV 全路径测试脚本",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "新增 test_export_csv.py（13 用例）：无过滤、按 project、按 channel、组合、跨项目+工位、空结果、shift+多重过滤、week 解析、month 解析、session 单会话、cycle 单周期、向后兼容、前端文件名契约；用临时 sqlite 文件隔离不污染生产 DB",
+      "files": ["test_export_csv.py"],
+      "keywords": [
+        "test_export_csv", "导出测试", "CSV 过滤测试", "week 解析",
+        "month 解析", "filename_scope", "向后兼容测试"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-001",
+      "title": "debug-channel 追加降工位残留清理章节",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "列出已接入清理的两个模块（MESHook、AlarmRouter）；列出不清理的 3 个模块（ExternalDevice/Scanner/ClusterCollector）及其理由：按 device_id / station_id 存而非 channel_id，清理会误伤硬件配置",
+      "files": [".claude/skills/debug-channel/SKILL.md"],
+      "keywords": [
+        "debug-channel skill", "降工位清理", "on_channel_removed 指南"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-002",
+      "title": "api-sync 登记 /data/export/csv 新增参数",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "/data/export/csv 端点新增 project_id / channel_id 两个可选 query 参数，注明 None 语义",
+      "files": [".claude/skills/api-sync/SKILL.md"],
+      "keywords": [
+        "api-sync skill", "export_csv 参数", "/data/export/csv"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-channel", "api-sync"],
+  "files_changed": [
+    "backend/api/source.py",
+    "backend/api/channel_manager.py",
+    "backend/api/alarm.py",
+    "backend/api/sessions.py",
+    "backend/services/mes_hooks.py",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Data/index.vue",
+    "frontend/src/api/data.js",
+    "test_mes_hook_cleanup.py",
+    "test_export_csv.py",
+    ".claude/skills/debug-channel/SKILL.md",
+    ".claude/skills/api-sync/SKILL.md",
+    "docs/CHANGELOG.md",
+    "docs/changelog/v2.7.2_2026-04-18.md",
+    "docs/changelog/v2.7.2_2026-04-18.json",
+    "electron/package.json",
+    "electron/splash.html"
+  ],
+  "known_issues": [
+    "cycle 分支（单周期导出）CSV 未加项目/工位字段（前端无按钮触发，暂不修）",
+    "文件名用 proj{id} 而非项目中文名（规避 Windows 编码问题）"
+  ]
+}

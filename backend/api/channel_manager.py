@@ -91,6 +91,19 @@ class ChannelManager:
                 except Exception as e:
                     print(f"[ChannelManager] Error stopping channel {cid}: {e}")
                 del self.channels[cid]
+                # v2.7.2: 清理 MESHook 按 channel_id 存储的残留状态
+                # 避免降再升工位时新通道误判 had_workpiece=True 或工单状态错乱
+                try:
+                    from backend.services.mes_hooks import get_mes_hook
+                    get_mes_hook().on_channel_removed(cid)
+                except Exception as e:
+                    print(f"[ChannelManager] Error cleaning MESHook for ch{cid}: {e}")
+                # v2.7.2: 停止 AlarmRouter 对应通道，避免蜂鸣器线程残留 / 串口被占
+                try:
+                    from backend.api.alarm import alarm_router
+                    alarm_router.on_channel_removed(cid)
+                except Exception as e:
+                    print(f"[ChannelManager] Error cleaning AlarmRouter for ch{cid}: {e}")
 
             # Create missing channels
             for cid in range(count):
@@ -195,6 +208,7 @@ class ChannelManager:
     # ------------------------------------------------------------------
 
     def _save_config(self):
+        """保存工位数到配置文件。仅在 set_channel_count() 中调用，允许升级也允许降级。"""
         try:
             os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
             existing = {}
@@ -204,8 +218,7 @@ class ChannelManager:
                         existing = json.load(f)
                 except Exception:
                     pass
-            file_count = existing.get("channel_count", 1)
-            data = {"channel_count": max(file_count, self.channel_count)}
+            data = {"channel_count": self.channel_count}
             data["channels"] = existing.get("channels", {})
             with open(_CONFIG_FILE, 'w') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -213,18 +226,20 @@ class ChannelManager:
             print(f"[ChannelManager] Failed to save config: {e}")
 
     def save_channel_source(self, channel_id: int, source_cfg: dict, merge: bool = True):
-        """持久化单个工位的视频源配置。merge=True 时合并到现有配置，False 时替换。"""
+        """持久化单个工位的视频源配置。只写 channels 字段，不修改 channel_count。
+        merge=True 时合并到现有配置，False 时替换。
+        channel_count 的写入权由 set_channel_count() 独占，避免在不同上下文误覆盖。"""
         try:
             os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
-            data = {"channel_count": self.channel_count, "channels": {}}
+            data = {}
             if os.path.exists(_CONFIG_FILE):
                 try:
                     with open(_CONFIG_FILE, 'r') as f:
                         data = json.load(f)
                 except Exception:
-                    pass
-            file_count = data.get("channel_count", 1)
-            data["channel_count"] = max(file_count, self.channel_count)
+                    data = {}
+            if "channel_count" not in data:
+                data["channel_count"] = self.channel_count
             if "channels" not in data:
                 data["channels"] = {}
             ch_key = str(channel_id)

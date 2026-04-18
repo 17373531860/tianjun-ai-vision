@@ -797,21 +797,33 @@ const multiLastSeenSeq = {};
 const multiFrameNaturalSize = {};
 
 const initMultiChannelData = (count) => {
+  // v2.7.2: 每次初始化都强制重置所有状态，避免切换工位时残留旧数据
+  // 1) 清理超出新 count 的通道条目（降工位场景）
+  Object.keys(multiChannelData.value).forEach(k => {
+    if (parseInt(k) >= count) delete multiChannelData.value[k];
+  });
+  Object.keys(multiLastSeenSeq).forEach(k => {
+    if (parseInt(k) >= count) delete multiLastSeenSeq[k];
+  });
+  Object.keys(multiFrameNaturalSize).forEach(k => {
+    if (parseInt(k) >= count) delete multiFrameNaturalSize[k];
+  });
+  // 2) 为当前激活通道强制重置数据（修复 seq 基线残留导致新通道不显示 toast）
   for (let i = 0; i < count; i++) {
-    if (!multiChannelData.value[i]) {
-      multiChannelData.value[i] = {
-        isRunning: false, isDetecting: false, fps: 0, latency: 0,
-        total: 0, ok: 0, ng: 0, avgCycleTime: 0, avgCycleTimeWithNg: 0, projectName: '',
-        steps: [], detections: [], tracking: null,
-        counters: {}, allCounters: [],
-        stepCounts: {}, recentEvents: [],
-        currentCycleSteps: [], backupCoveredLabels: [],
-        ngStepRanking: [], yieldRate: 0,
-        tableData: [],
-        _ngStepCountMap: {},
-        _processedEventIds: new Set(),
-      };
-    }
+    multiChannelData.value[i] = {
+      isRunning: false, isDetecting: false, fps: 0, latency: 0,
+      total: 0, ok: 0, ng: 0, avgCycleTime: 0, avgCycleTimeWithNg: 0, projectName: '',
+      steps: [], detections: [], tracking: null,
+      counters: {}, allCounters: [],
+      stepCounts: {}, recentEvents: [],
+      currentCycleSteps: [], backupCoveredLabels: [],
+      ngStepRanking: [], yieldRate: 0,
+      tableData: [],
+      _ngStepCountMap: {},
+      _processedEventIds: new Set(),
+    };
+    multiLastSeenSeq[i] = 0;
+    multiFrameNaturalSize[i] = null;
   }
 };
 

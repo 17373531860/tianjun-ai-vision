@@ -7253,6 +7253,11 @@ class VideoSourceManager:
         # 清理推理相关缓存
         self._clear_inference_caches()
         
+        # v2.7.2: 清空事件日志与序号，避免下次启动时 30 秒窗口内的旧事件被前端当成新事件推送
+        # 症状：停止→切换工位/模型→重新开始后，Monitor 同时弹出历史 OK+NG+未扫码 toast
+        self.events_log = []
+        self._event_seq = 0
+        
         print("检测已停止")
     
     def _clear_inference_caches(self):

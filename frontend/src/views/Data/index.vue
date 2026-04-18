@@ -456,6 +456,22 @@
                 <!-- 右列：导出按钮 -->
                 <div class="space-y-3">
                   <div class="text-xs text-gray-500 font-medium mb-3 uppercase tracking-wider">导出操作</div>
+
+                  <!-- v2.7.2: 导出范围提示条 + "全部项目"开关 -->
+                  <div class="rounded border border-slate-700 bg-slate-900/50 p-2.5 space-y-2">
+                    <div class="text-xs text-gray-300 leading-relaxed">
+                      <div class="text-gray-400 mb-1">导出范围</div>
+                      <div class="text-yellow-300 font-mono break-all">{{ exportScopeText }}</div>
+                    </div>
+                    <div v-if="channelFilter === null && totalChannelCount > 1" class="text-xs text-orange-300">
+                      ⚠ 多工位模式，建议先在左上角"工位"筛选器选一个工位再导出
+                    </div>
+                    <div class="flex items-center justify-between pt-1 border-t border-slate-700/60">
+                      <span class="text-xs text-gray-400">导出全部项目</span>
+                      <el-switch v-model="exportAllProjects" size="small" />
+                    </div>
+                  </div>
+
                   <el-button type="primary" class="w-full" @click="exportByDate" :loading="exporting" :disabled="!selectedDate">
                     <el-icon class="mr-1"><Download /></el-icon> 导出当日数据
                   </el-button>
@@ -677,6 +693,23 @@ const getShiftHours = () => {
 // Multi-channel filter
 const totalChannelCount = ref(1);
 const channelFilter = ref(null); // null = all channels
+
+// v2.7.2: 导出范围开关 —— 默认按"当前项目"导出，避免混入其他项目数据
+// 打开后将无视 projectStore.currentProjectId，导出所选日期内所有项目的数据
+// （currentProjectName 已在上方声明，这里直接复用）
+const exportAllProjects = ref(false);
+
+// 导出范围摘要文案（用于按钮上方提示条）
+const exportScopeText = computed(() => {
+  const projText = exportAllProjects.value
+    ? '【全部项目】'
+    : (currentProjectName.value ? `【${currentProjectName.value}】` : '【当前项目】');
+  const chText = channelFilter.value === null
+    ? '【全部工位】'
+    : `【工位${channelFilter.value + 1}】`;
+  const dateText = selectedDate.value ? `【${selectedDate.value}】` : '【未选日期】';
+  return `项目 ${projText} · 工位 ${chText} · 日期 ${dateText}`;
+});
 
 // MES 工单筛选
 const mesOrderFilter = ref(null);
@@ -1157,18 +1190,38 @@ const exportSessionData = async () => {
   }
 };
 
+// v2.7.2: 构造导出文件名的项目/工位标识段
+// 文件名格式：data_proj{id or ALL}_ch{N or ALL}_{dateSegment}.csv
+const buildExportFilenameScope = () => {
+  const projSeg = exportAllProjects.value
+    ? 'projALL'
+    : (projectStore.currentProjectId ? `proj${projectStore.currentProjectId}` : 'projNA');
+  const chSeg = channelFilter.value === null ? 'chALL' : `ch${channelFilter.value + 1}`;
+  return `${projSeg}_${chSeg}`;
+};
+
+// v2.7.2: 解析当前导出参数
+const resolveExportScopeParams = () => {
+  const projectId = exportAllProjects.value ? null : (projectStore.currentProjectId || null);
+  const channelId = channelFilter.value; // null 表示全部工位
+  return { projectId, channelId };
+};
+
 // 导出当日数据
 const exportByDate = async () => {
   if (!selectedDate.value) {
     ElMessage.warning('请先选择日期');
     return;
   }
-  
+
   exporting.value = true;
   try {
     const { start: sh, end: eh } = getExportShiftHours();
-    const res = await exportDateRangeCsv(selectedDate.value, selectedDate.value, sh, eh);
-    const filename = `data_${selectedDate.value}.csv`;
+    const { projectId, channelId } = resolveExportScopeParams();
+    const res = await exportDateRangeCsv(
+      selectedDate.value, selectedDate.value, sh, eh, projectId, channelId
+    );
+    const filename = `data_${buildExportFilenameScope()}_${selectedDate.value}.csv`;
     downloadBlob(res.data, filename);
     ElMessage.success(`已导出到下载文件夹: ${filename}`);
   } catch (e) {
@@ -1195,17 +1248,19 @@ const handleExport = async () => {
   exporting.value = true;
   try {
     let res, filename;
-    
+
     const { start: sh, end: eh } = getExportShiftHours();
+    const { projectId, channelId } = resolveExportScopeParams();
+    const scope = buildExportFilenameScope();
     if (exportDialogType.value === 'week' && exportWeek.value) {
-      res = await exportWeekCsv(exportWeek.value, sh, eh);
-      filename = `data_${exportWeek.value}.csv`;
+      res = await exportWeekCsv(exportWeek.value, sh, eh, projectId, channelId);
+      filename = `data_${scope}_${exportWeek.value}.csv`;
     } else if (exportDialogType.value === 'month' && exportMonth.value) {
-      res = await exportMonthCsv(exportMonth.value, sh, eh);
-      filename = `data_${exportMonth.value}.csv`;
+      res = await exportMonthCsv(exportMonth.value, sh, eh, projectId, channelId);
+      filename = `data_${scope}_${exportMonth.value}.csv`;
     } else if (exportDialogType.value === 'range' && exportDateRange.value?.length === 2) {
-      res = await exportDateRangeCsv(exportDateRange.value[0], exportDateRange.value[1], sh, eh);
-      filename = `data_${exportDateRange.value[0]}_to_${exportDateRange.value[1]}.csv`;
+      res = await exportDateRangeCsv(exportDateRange.value[0], exportDateRange.value[1], sh, eh, projectId, channelId);
+      filename = `data_${scope}_${exportDateRange.value[0]}_to_${exportDateRange.value[1]}.csv`;
     } else {
       ElMessage.warning('请选择导出范围');
       exporting.value = false;

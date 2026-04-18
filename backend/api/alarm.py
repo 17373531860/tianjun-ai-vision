@@ -395,6 +395,28 @@ class AlarmRouter:
         for mgr in self.managers.values():
             mgr.disconnect()
 
+    def on_channel_removed(self, channel_id: int):
+        """工位被移除（降工位）时调用：停止报警、熄灭灯塔、释放串口、移除 manager。
+        避免降工位后 ch1 的蜂鸣器/灯塔线程仍在运行，或串口被占用导致升回后无法重连。
+        v2.7.2"""
+        mgr = self.managers.pop(channel_id, None)
+        if mgr is None:
+            return
+        try:
+            mgr.stop_alarm()
+        except Exception as e:
+            print(f"[报警] ch{channel_id} stop_alarm 失败: {e}")
+        try:
+            mgr._idle_light_active = False
+            mgr.all_off()
+        except Exception as e:
+            print(f"[报警] ch{channel_id} all_off 失败: {e}")
+        try:
+            mgr.disconnect()
+        except Exception as e:
+            print(f"[报警] ch{channel_id} disconnect 失败: {e}")
+        print(f"[报警] ch{channel_id} 被移除，已停报警+熄灯+断串口", flush=True)
+
     @staticmethod
     def list_ports() -> List[dict]:
         ports = []

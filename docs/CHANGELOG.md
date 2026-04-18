@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.7.2 (2026-04-18)
+- [BUG-001] 修复: 切换工位后 Toast 重复弹出 (events_log + _event_seq 清理 + 前端 initMultiChannelData 强制重置)
+- [BUG-002] 修复: 降工位时 MESHook 残留工单/扫码状态 (新增 on_channel_removed 清理 6 个 dict)
+- [BUG-003] 修复: 降工位时 AlarmRouter 串口/蜂鸣器残留 (新增 on_channel_removed: stop_alarm + all_off + disconnect + pop)
+- [BUG-004] 修复: 数据中心 CSV 导出不区分项目和工位 (后端加 project_id/channel_id 参数 + CSV 加工位列 + 分组标题带 [项目名/工位N])
+- [FEAT-001] 新增: 数据中心导出范围可见化提示条 + "导出全部项目"开关 + 文件名编码 proj{id}_ch{N}
+- [FEAT-002] 新增: 降工位清理钩子公共接口 (on_channel_removed 统一入口)
+- [TEST-001] 新增: 降工位清理测试 test_mes_hook_cleanup.py (5 用例)
+- [TEST-002] 新增: 导出 CSV 全路径测试 test_export_csv.py (13 用例)
+
 ## v2.7.1 (2026-04-17)
 - [BUG-001] 修复: 扫码器手动添加设备覆盖已有设备 (editingId 未重置)
 - [BUG-002] 修复: 顺序检测步骤回退误判OK (A-B-A-B-C 全局去重→连续去重+回退标记)

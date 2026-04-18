@@ -140,6 +140,25 @@ class MESHookManager:
             self._handle_session_end, channel_id, session_id
         )
 
+    def on_channel_removed(self, channel_id: int):
+        """工位被移除（降工位）时调用，清理该通道在所有 dict 里的残留状态。
+        避免降工位再升工位时，新通道的第一周期被残留数据命中（比如 had_workpiece 误判）。
+        v2.7.2: 修复"切换工位后新通道未绑码告警不弹"。"""
+        removed = []
+        for name, d in (
+            ("_pending_workpiece", self._pending_workpiece),
+            ("_pending_queue", self._pending_queue),
+            ("_active_orders", self._active_orders),
+            ("_inspecting_workpiece", self._inspecting_workpiece),
+            ("_last_scan_event", self._last_scan_event),
+            ("_rebind_prompt", self._rebind_prompt),
+        ):
+            if channel_id in d:
+                d.pop(channel_id, None)
+                removed.append(name)
+        if removed:
+            print(f"[MES] ch{channel_id} 被移除，已清理残留: {removed}", flush=True)
+
     # ====== 获取当前状态 (供 get_detection_results 使用, 需线程安全) ======
 
     def has_pending_workpiece(self, channel_id: int) -> bool:
