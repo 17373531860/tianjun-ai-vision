@@ -1,0 +1,46 @@
+{
+  "_README": [
+    "v2.7.3 共享报警灯示例配置",
+    "适用场景：一个物理报警灯（一个 USB 串口）被多个工位共用。",
+    "",
+    "关键字段（仅写在 owner 通道下）：",
+    "  shared_with: [其他工位号...]   被共享的工位列表（不含自己）",
+    "  priority_order:               事件类别优先级（高 → 低）",
+    "  event_priority_map:           事件名 → 优先级类别",
+    "",
+    "迁移自旧版（每个 ch 都填同一 port）的步骤：",
+    "  1) 把 ch0 之外的所有 ch 配置删掉，或保留但确保 enabled=false 且 port=''",
+    "  2) 在 ch0 加 shared_with: [1, 2, ...]",
+    "  3) 重启后端，看启动日志是否打印 `[报警] 共享组: owner=ch0, 服务=[0,1,...]`",
+    "",
+    "合成规则（priority 模式）：",
+    "  - 任一通道触发 NG → 红灯抢占（不被 OK 打断）",
+    "  - 没有 NG 但有警告 → 黄灯",
+    "  - 都没有但任一通道在检测中 → idle 蓝灯",
+    "  - 全部停止 → 灯灭"
+  ],
+  "channels": {
+    "0": {
+      "enabled": true,
+      "port": "/dev/ttyUSB0",
+      "baudrate": 9600,
+      "protocol": "modbus_4color",
+
+      "shared_with": [1],
+      "priority_order": ["ng", "warn", "ok", "idle"],
+      "event_priority_map": {
+        "event1": "ok",
+        "event2": "ng",
+        "event3": "warn",
+        "event4": "warn"
+      },
+
+      "triggers": {
+        "event1": {"name": "合格", "enabled": true, "color": "green", "effect": "on",   "buzzer": false, "duration": 2},
+        "event2": {"name": "NG",   "enabled": true, "color": "red",   "effect": "fast", "buzzer": true,  "duration": 5}
+      },
+      "idle_light": {"enabled": true, "color": "blue"},
+      "test_mode": false
+    }
+  }
+}

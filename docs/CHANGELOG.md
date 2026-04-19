@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.7.3 (2026-04-19)
+- [BUG-001] 修复: 双工位 TensorRT 推理 imgsz 不传播报 AssertionError (engine 元数据直读 + channel_manager 三处属性传播)
+- [BUG-002] 修复: 报警灯停检测/关软件不熄灭、副机检测时不亮 (pause/standby/resume 联动 stop/start_idle_light + shutdown 遍历所有通道 + start_idle_light 详细日志)
+- [BUG-003] 修复: 扫码器允许同 IP+端口重复保存 (前后端 IP+port 唯一性校验，重复返回 409)
+- [FEAT-001] 新增: 共享报警灯——一个物理报警灯多工位共用 + 优先级合成 (NG>警告>OK>待机，可配置；运行时 reload 无需重启)
+- [FEAT-002] 新增: 共享报警灯示例配置文件 alarm_config.shared.example.json
+- [SKILL-001] 更新: debug-alarm skill 增加共享报警灯模式整章
+
 ## v2.7.2 (2026-04-18)
 - [BUG-001] 修复: 切换工位后 Toast 重复弹出 (events_log + _event_seq 清理 + 前端 initMultiChannelData 强制重置)
 - [BUG-002] 修复: 降工位时 MESHook 残留工单/扫码状态 (新增 on_channel_removed 清理 6 个 dict)

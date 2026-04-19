@@ -527,6 +527,20 @@ def cleanup_on_exit():
             get_external_device_service().stop_all()
         except Exception:
             pass
+
+        # v2.7.3: 兜底熄灭所有通道报警灯并断开串口，避免主进程被 KILL 时灯塔残留
+        try:
+            from backend.api.alarm import alarm_router
+            for ch_id, mgr in list(alarm_router.managers.items()):
+                try:
+                    mgr._idle_light_active = False
+                    mgr.all_off()
+                except Exception:
+                    pass
+            alarm_router.disconnect_all()
+            print("[退出钩子] 所有通道报警器已熄灯并断开串口")
+        except Exception as e:
+            print(f"[退出钩子] 报警清理出错: {e}")
             
     except Exception as e:
         print(f"[退出钩子] 清理时出错: {e}")
@@ -630,9 +644,28 @@ def shutdown_step(step: str):
     
     try:
         if step == "stop_detection":
-            if video_manager.is_detecting:
-                video_manager.is_detecting = False
-                video_manager._stop_inference_thread()
+            # v2.7.3: 必须走每个通道完整的 stop_detection() 流程（包含熄灭工作指示灯、
+            # 停推理、停录像、停扫码、断 MES 等），否则关软件后灯塔常亮、串口残留。
+            try:
+                from backend.api.channel_manager import channel_manager
+                for ch_id, mgr in list(channel_manager.channels.items()):
+                    try:
+                        if mgr.is_detecting:
+                            mgr.stop_detection()
+                        else:
+                            # 即使没在检测，也兜底熄灯（防止 idle_light 残留）
+                            try:
+                                from backend.api.alarm import alarm_router
+                                alarm_router.stop_idle_light(channel_id=ch_id)
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        print(f"[关闭步骤] ch{ch_id} stop_detection 失败: {e}")
+            except Exception as e:
+                # 兜底：旧版兼容路径
+                print(f"[关闭步骤] 多通道清理失败，回退到 ch0: {e}")
+                if video_manager.is_detecting:
+                    video_manager.stop_detection()
             return {"status": "success", "step": step}
         
         elif step == "save_counters":
@@ -678,6 +711,19 @@ def shutdown_step(step: str):
         elif step == "cleanup":
             video_manager.is_running = False
             video_manager._clear_all_caches()
+            # v2.7.3: 关软件最后一步统一断所有通道的报警串口，确保灯塔/蜂鸣器不残留
+            try:
+                from backend.api.alarm import alarm_router
+                for ch_id, mgr in list(alarm_router.managers.items()):
+                    try:
+                        mgr._idle_light_active = False
+                        mgr.all_off()
+                    except Exception:
+                        pass
+                alarm_router.disconnect_all()
+                print("[关闭步骤] 所有通道报警器已熄灯并断开串口")
+            except Exception as e:
+                print(f"[关闭步骤] 报警清理失败: {e}")
             return {"status": "success", "step": step}
         
         else:

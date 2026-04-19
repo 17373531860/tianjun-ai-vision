@@ -1,0 +1,92 @@
+{
+  "version": "2.7.3",
+  "date": "2026-04-19",
+  "previous_version": "2.7.2",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "双工位 TensorRT 推理 imgsz 不传播报 AssertionError",
+      "symptom": "单工位 .engine 模型推理正常，切到双工位/多工位立刻报 input size [1,3,640,640] not equal to max model size (1,3,960,960)，画面卡住无检测结果",
+      "root_cause": "load_model() 从 .engine 读 imgsz 时 AutoBackend 还没起来落到默认 640；channel_manager 的缓存命中和模型共享路径没把 owner 通道的 _model_imgsz / _is_native_pytorch / model_task / _original_pt_path 复制到新通道",
+      "fix": "source.py 新增 _read_engine_metadata_imgsz() 直接解析 .engine 头部 JSON metadata；load_model() 优先调用并增加 warm-up 后从 self.model.predictor.model.imgsz 反向校正兜底；channel_manager.py 三处（load_model_for_channel / load_shared_model / _propagate_model）增加属性传播",
+      "files": ["backend/api/source.py", "backend/api/channel_manager.py"],
+      "keywords": ["TensorRT", "engine", "imgsz", "多工位", "双工位", "channel_manager", "AssertionError", "input size", "model size", "AutoBackend", "_propagate_model"],
+      "breaking": false,
+      "verified": "mock 单元测试 4 用例通过；真机端到端待用户验证"
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "报警灯停检测/关软件后不熄灭、副机检测时不亮",
+      "symptom": "主机双工位设置工作灯常亮，停检测后灯不灭，关软件后仍亮；副机单工位相同设置检测开始后灯不亮但手动测试正常",
+      "root_cause": "前端停止检测调的是 pause() 不是 stop_detection()，但 pause/standby 没调 alarm_router.stop_idle_light；resume/resume_inference 也没调 start_idle_light；Electron shutdown 流程绕过 stop_detection 直改标志且未遍历所有 channel 的 alarm 做 all_off + disconnect；start_idle_light 多个 silent return 现场难排查",
+      "fix": "source.py: pause/standby 加 stop_idle_light，resume/resume_inference 加 start_idle_light；main.py: shutdown_step('stop_detection') 改为遍历 channel_manager.channels 调用每个 mgr.stop_detection()，shutdown_step('cleanup') 与 cleanup_on_exit 改为遍历 alarm_router.managers 调 all_off + disconnect_all；alarm.py: start_idle_light 每个 silent return 都打印具体原因",
+      "files": ["backend/api/source.py", "backend/api/alarm.py", "backend/main.py"],
+      "keywords": ["报警灯", "idle_light", "工作指示灯", "常亮", "stop_detection", "pause", "standby", "shutdown", "Electron", "副机", "slave"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "扫码器允许同 IP+端口重复保存",
+      "symptom": "同一台扫码器在自动发现面板点保存到设备列表后再次点击会再保存一条；手动添加也不去重，UI 出现多条同 IP 设备",
+      "root_cause": "POST /scanner/devices 和 PUT /scanner/devices/{id} 都没做 IP+port 唯一性校验；前端 handleSave / addDiscoveredToDb 也没本地查重",
+      "fix": "scanner.py: create_device 创建前查 IP+port 已存在返回 409 + 中文 detail；update_device 改 IP/port 时检查目标地址是否被其他设备占用；ScannerPanel.vue: handleSave 提交前本地查重，addDiscoveredToDb 打开添加表单前先查重；自动发现的临时 WMax 设备（id<-900，标记 _auto）不参与去重",
+      "files": ["backend/api/scanner.py", "frontend/src/views/MES/ScannerPanel.vue"],
+      "keywords": ["扫码器", "scanner", "去重", "IP", "重复", "deduplication", "409", "WMax", "addDiscoveredToDb"],
+      "breaking": false,
+      "verified": "端到端 7 用例通过"
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "共享报警灯：一个物理报警灯多工位共用 + 优先级合成",
+      "symptom": "现场客户只能装一根灯柱但有多个工位（典型双工位主机），旧方案两个 channel 配同一个 port 会抢串口失败",
+      "root_cause": "AlarmManager 是 per-channel 的，AlarmRouter 用 channel_id 一对一映射，没有共享设备的概念",
+      "fix": "alarm_config.json owner 通道下加 shared_with / priority_order / event_priority_map 三个可选字段；AlarmManager 增加 _shared_channels / _channel_states / _priority_order / _event_priority_map / _current_visual / _state_lock 和 set_shared_mode / is_shared / _recompose_and_apply 等方法，trigger_alarm/start_idle_light/stop_idle_light 拆为 _solo 和 _shared 两路；AlarmRouter._load_all 把多 ch 映射到同一 manager 实例，_save_all 共享 manager 只按 owner 序列化一次，disconnect_all 去重，on_channel_removed 共享时只摘 ch 不断串口；新增 reload_config_from_disk 与 POST /alarm/reload 让前端保存后无需重启即可生效；ConfigRequest 加 3 字段；/alarm/status 返回 is_shared/is_owner/owner_channel/shared_channels；前端 Alarm/index.vue 新增共享报警灯卡片（仅多工位显示），owner 显示完整编辑面板（多选共享工位 + 4 类别优先级 1-4 + 每个事件归属类别下拉 + 立即生效保存按钮），被共享工位显示只读提示并提供跳到 owner 按钮",
+      "files": ["backend/api/alarm.py", "frontend/src/views/Alarm/index.vue", "backend/data/alarm_config.shared.example.json"],
+      "keywords": ["共享报警灯", "shared", "alarm", "优先级", "priority", "多工位", "灯柱", "event_priority_map", "shared_with", "AlarmRouter", "reload"],
+      "breaking": false,
+      "compat_note": "完全向后兼容，配置里没写 shared_with 时所有逻辑走 solo 路径，行为与 v2.7.2 一致"
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "共享报警灯示例配置文件",
+      "symptom": "用户可能想跳过 UI 直接改 JSON 但缺少完整可抄的样板",
+      "fix": "新增 backend/data/alarm_config.shared.example.json，文件头 _README 数组用中文说明字段含义、迁移步骤、合成规则",
+      "files": ["backend/data/alarm_config.shared.example.json"],
+      "keywords": ["示例", "example", "配置", "alarm_config", "JSON"],
+      "breaking": false
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-001",
+      "title": "debug-alarm skill 增加共享报警灯模式整章",
+      "fix": "在 .claude/skills/debug-alarm/SKILL.md 末尾新增「共享报警灯模式 (v2.7.3+)」章节，包含启用方法、合成规则、调试要点（mgr.is_shared() / _shared_channels / 启动日志关键字）、关键代码位置索引、关联示例配置文件路径",
+      "files": [".claude/skills/debug-alarm/SKILL.md"],
+      "keywords": ["debug-alarm", "skill", "共享报警灯", "调试"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-alarm"],
+  "files_changed": [
+    "backend/api/source.py",
+    "backend/api/channel_manager.py",
+    "backend/api/alarm.py",
+    "backend/api/scanner.py",
+    "backend/main.py",
+    "backend/data/alarm_config.json",
+    "backend/data/alarm_config.shared.example.json",
+    "frontend/src/views/Alarm/index.vue",
+    "frontend/src/views/MES/ScannerPanel.vue",
+    ".claude/skills/debug-alarm/SKILL.md",
+    "electron/package.json",
+    "electron/splash.html"
+  ],
+  "known_issues": [
+    "TensorRT 双工位 imgsz 修复仅 mock 测试，真机端到端待验证",
+    "共享报警灯优先级合成只支持 priority 模式，rotate / latest_wins 未实现"
+  ]
+}

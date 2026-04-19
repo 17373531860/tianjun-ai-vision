@@ -226,6 +226,124 @@
         </div>
       </el-card>
 
+      <!-- v2.7.3 共享报警灯（多工位 + 一个物理灯时使用） -->
+      <el-card v-if="channelCount > 1" shadow="never" class="bg-slate-800 border-slate-700 lg:col-span-2">
+        <template #header>
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <el-icon class="text-tech-blue"><Connection /></el-icon>
+              <span class="font-bold text-white">共享报警灯（一个物理灯多工位共用）</span>
+              <el-tag v-if="sharing.enabled && sharing.isOwner" size="small" type="success">
+                共享中：服务工位 {{ sharing.servingChannels.map(c => c + 1).join(', ') }}
+              </el-tag>
+              <el-tag v-else-if="sharing.enabled && !sharing.isOwner" size="small" type="warning">
+                跟随工位 {{ sharing.ownerChannel + 1 }}
+              </el-tag>
+            </div>
+            <el-switch
+              v-if="activeChannel === 0"
+              v-model="sharing.enabled"
+              active-text="启用共享"
+              @change="onSharingToggle"
+            />
+          </div>
+        </template>
+
+        <!-- 仅在 ch0 显示完整编辑面板 -->
+        <div v-if="activeChannel === 0">
+          <div v-if="!sharing.enabled" class="text-sm text-gray-400">
+            未启用：每个工位需各自一个物理报警灯。<br>
+            如果你只有<span class="text-cyan-300 px-1">一个物理报警灯</span>要给所有工位共用，请打开右上角开关。
+          </div>
+
+          <div v-else class="space-y-5">
+            <el-alert type="info" :closable="false" show-icon>
+              <div class="text-xs">
+                启用后，工位 1 配置的串口/协议/事件 → 红绿灯/蜂鸣会按下方<b>优先级合成规则</b>同时反映其他被共享工位的状态。
+                被共享的工位（工位 2/3/...）的串口配置将<b>失效</b>。
+              </div>
+            </el-alert>
+
+            <!-- 1. 选择共享给哪些工位 -->
+            <div>
+              <div class="text-gray-300 mb-2 text-sm">共享给哪些工位（可多选）</div>
+              <el-checkbox-group v-model="sharing.sharedWith">
+                <el-checkbox
+                  v-for="ch in channelCount - 1"
+                  :key="ch"
+                  :value="ch"
+                  border
+                >工位 {{ ch + 1 }}</el-checkbox>
+              </el-checkbox-group>
+            </div>
+
+            <!-- 2. 优先级排序 -->
+            <div>
+              <div class="text-gray-300 mb-2 text-sm">事件类别优先级（数字越小优先级越高）</div>
+              <div class="grid grid-cols-4 gap-3">
+                <div v-for="cat in priorityCategories" :key="cat.key" class="bg-slate-900 rounded p-3 border border-slate-700">
+                  <div class="flex items-center justify-between mb-2">
+                    <el-tag :type="cat.tagType" size="small">{{ cat.label }}</el-tag>
+                  </div>
+                  <el-input-number
+                    v-model="sharing.priorityRank[cat.key]"
+                    :min="1" :max="4" :step="1"
+                    size="small"
+                    class="w-full"
+                  />
+                </div>
+              </div>
+              <div class="text-xs text-gray-500 mt-2">
+                推荐：NG=1（最高）→ 警告=2 → OK=3 → 待机=4。NG 触发期间不会被 OK 抢占。
+              </div>
+            </div>
+
+            <!-- 3. 事件类别映射 -->
+            <div v-if="projectEvents.length > 0">
+              <div class="text-gray-300 mb-2 text-sm">事件归属类别（决定该事件按哪个优先级合成）</div>
+              <div class="space-y-2">
+                <div
+                  v-for="event in projectEvents"
+                  :key="event.id"
+                  class="flex items-center gap-3 bg-slate-900 rounded p-2 border border-slate-700"
+                >
+                  <el-tag :type="getEventTagType(event.id)" size="small">事件{{ event.id }}</el-tag>
+                  <span class="text-gray-300 flex-1">{{ event.name }}</span>
+                  <el-select v-model="sharing.eventCategoryMap[`event${event.id}`]" size="small" class="w-32">
+                    <el-option
+                      v-for="cat in priorityCategories"
+                      :key="cat.key" :value="cat.key" :label="cat.label"
+                    />
+                  </el-select>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex justify-end gap-2 pt-2 border-t border-slate-700">
+              <el-button size="small" @click="loadSharingConfig">重置</el-button>
+              <el-button size="small" type="primary" :loading="savingSharing" @click="saveSharingConfig">
+                保存共享配置（立即生效）
+              </el-button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 在被共享的工位 (ch >= 1) 显示只读提示 -->
+        <div v-else class="text-sm text-gray-400">
+          <template v-if="sharing.enabled && !sharing.isOwner">
+            <el-alert type="warning" :closable="false" show-icon>
+              此工位已被工位 {{ sharing.ownerChannel + 1 }} 共享报警灯。
+              所有报警动作由工位 {{ sharing.ownerChannel + 1 }} 的物理设备统一执行，本工位下方的串口/协议配置将<b>失效</b>。
+              <br>
+              如要修改共享设置，请切换到<el-button text type="primary" @click="activeChannel = 0; onChannelChange()">工位 1</el-button>。
+            </el-alert>
+          </template>
+          <template v-else>
+            未启用共享。如要启用，请到工位 1 配置。
+          </template>
+        </div>
+      </el-card>
+
       <!-- 触发条件配置 -->
       <el-card shadow="never" class="bg-slate-800 border-slate-700">
         <template #header>
@@ -234,6 +352,7 @@
               <el-icon class="text-tech-blue"><Lightning /></el-icon>
               <span class="font-bold text-white">触发条件</span>
               <el-tag v-if="channelCount > 1" size="small" type="info">工位 {{ activeChannel + 1 }}</el-tag>
+              <el-tag v-if="sharing.enabled && !sharing.isOwner" size="small" type="warning">由工位 {{ sharing.ownerChannel + 1 }} 接管</el-tag>
             </div>
             <el-switch v-model="config.enabled" active-text="启用报警" @change="saveConfig" />
           </div>
@@ -439,6 +558,24 @@ const config = reactive({
   }
 });
 
+// v2.7.3 共享报警灯
+const priorityCategories = [
+  { key: 'ng',   label: 'NG',   tagType: 'danger'  },
+  { key: 'warn', label: '警告', tagType: 'warning' },
+  { key: 'ok',   label: 'OK',   tagType: 'success' },
+  { key: 'idle', label: '待机', tagType: 'info'    },
+];
+const sharing = reactive({
+  enabled: false,           // 是否启用共享（基于 ch0 配置里有无 shared_with）
+  isOwner: true,            // 当前 channel 是否是共享 owner
+  ownerChannel: 0,          // 共享 owner 的 channel id
+  servingChannels: [],      // owner 当前服务的所有 channel
+  sharedWith: [],           // ch0 配置的 shared_with 数组（不含自己）
+  priorityRank: { ng: 1, warn: 2, ok: 3, idle: 4 },
+  eventCategoryMap: {},     // {event1: 'ok', event2: 'ng', ...}
+});
+const savingSharing = ref(false);
+
 const chParam = () => `?channel=${activeChannel.value}`;
 
 const onChannelChange = () => {
@@ -466,8 +603,87 @@ const loadChannelStatus = async () => {
     if (res.data.config) {
       Object.assign(config, res.data.config);
     }
+    // v2.7.3 共享状态
+    sharing.isOwner = res.data.is_owner ?? true;
+    sharing.ownerChannel = res.data.owner_channel ?? activeChannel.value;
+    sharing.servingChannels = res.data.shared_channels ?? [];
+    // 始终从 ch0 拉取共享编辑状态（即使当前在别的 ch）
+    await loadSharingConfig();
   } catch (err) {
     console.error('获取报警状态失败:', err);
+  }
+};
+
+const loadSharingConfig = async () => {
+  // 共享配置永远从 ch0 读
+  try {
+    const res = await api.get(`/alarm/status?channel=0`);
+    const cfg = res.data.config || {};
+    sharing.sharedWith = Array.isArray(cfg.shared_with) ? [...cfg.shared_with] : [];
+    sharing.enabled = sharing.sharedWith.length > 0;
+    // 优先级：从 priority_order 数组反推 rank
+    const order = Array.isArray(cfg.priority_order) && cfg.priority_order.length === 4
+      ? cfg.priority_order
+      : ['ng', 'warn', 'ok', 'idle'];
+    const newRank = {};
+    order.forEach((cat, idx) => { newRank[cat] = idx + 1; });
+    Object.assign(sharing.priorityRank, newRank);
+    // 事件类别映射
+    sharing.eventCategoryMap = {};
+    const map = cfg.event_priority_map || {};
+    projectEvents.value.forEach((ev) => {
+      const key = `event${ev.id}`;
+      sharing.eventCategoryMap[key] = map[key] || (ev.id === 1 ? 'ok' : ev.id === 2 ? 'ng' : 'warn');
+    });
+  } catch (err) {
+    console.error('加载共享配置失败:', err);
+  }
+};
+
+const onSharingToggle = async (val) => {
+  // 关闭共享：直接清空 shared_with 并保存
+  if (!val) {
+    sharing.sharedWith = [];
+    await saveSharingConfig();
+  }
+  // 开启共享：等用户勾完工位再点保存
+};
+
+const saveSharingConfig = async () => {
+  // 把优先级 rank 转回 priority_order 数组（按 rank 升序）
+  const orderEntries = Object.entries(sharing.priorityRank)
+    .sort((a, b) => a[1] - b[1])
+    .map((x) => x[0]);
+  // 校验：4 个类别必须 rank 互不相同（1,2,3,4）
+  const ranks = Object.values(sharing.priorityRank).sort();
+  if (JSON.stringify(ranks) !== '[1,2,3,4]') {
+    ElMessage.warning('优先级数字必须是 1,2,3,4 各用一次');
+    return;
+  }
+  savingSharing.value = true;
+  try {
+    // 共享配置永远写到 ch0（owner）
+    await api.post(`/alarm/config?channel=0`, {
+      enabled: config.enabled,
+      protocol: config.protocol,
+      test_mode: config.test_mode,
+      custom_commands: config.custom_commands,
+      triggers: config.triggers,
+      idle_light: config.idle_light,
+      shared_with: sharing.sharedWith,
+      priority_order: orderEntries,
+      event_priority_map: sharing.eventCategoryMap,
+    });
+    ElMessage.success(sharing.sharedWith.length > 0
+      ? `已启用共享：服务工位 ${[0, ...sharing.sharedWith].map(c => c + 1).join(', ')}`
+      : '已关闭共享');
+    // 重新加载所有通道状态，刷新 owner / serving
+    await loadChannelCount();
+    await loadChannelStatus();
+  } catch (err) {
+    ElMessage.error(err.response?.data?.detail || '保存共享配置失败');
+  } finally {
+    savingSharing.value = false;
   }
 };
 

@@ -141,6 +141,11 @@ class ChannelManager:
                     mgr.model = self._shared_model
                     mgr.model_path = self._shared_model_path
                     mgr.current_device_info = ch0.current_device_info
+                    # v2.7.3: 共享模型时同步推理相关属性
+                    mgr._model_imgsz = ch0._model_imgsz
+                    mgr._is_native_pytorch = ch0._is_native_pytorch
+                    mgr.model_task = ch0.model_task
+                    mgr._original_pt_path = ch0._original_pt_path
 
         return True
 
@@ -160,10 +165,27 @@ class ChannelManager:
                 mgr.model = cached
                 mgr.model_path = model_path
                 mgr.device = resolved_device
-                ref_mgr = next((m for m in self.channels.values() if m.current_device_info), None)
-                if ref_mgr:
+                # v2.7.3: cache hit 时必须把 imgsz / task / native 标志一并复制到新通道，
+                # 否则新通道 _model_imgsz 会停留在默认 640，导致 .engine 推理 AssertionError
+                # （input size [1,3,640,640] != max model size [1,3,Nxxx,Nxxx]）
+                ref_mgr = next(
+                    (m for m in self.channels.values()
+                     if m is not mgr and m.model is cached and getattr(m, '_model_imgsz', 640) > 0),
+                    None,
+                )
+                if ref_mgr is not None:
+                    mgr._model_imgsz = ref_mgr._model_imgsz
+                    mgr._is_native_pytorch = ref_mgr._is_native_pytorch
+                    mgr.model_task = ref_mgr.model_task
+                    mgr._original_pt_path = ref_mgr._original_pt_path
                     mgr.current_device_info = ref_mgr.current_device_info
-                print(f"[ChannelManager] ch{channel_id} reusing model on {resolved_device}")
+                else:
+                    # 兜底：用任意带 device_info 的 channel
+                    fallback = next((m for m in self.channels.values() if m.current_device_info), None)
+                    if fallback:
+                        mgr.current_device_info = fallback.current_device_info
+                print(f"[ChannelManager] ch{channel_id} reusing model on {resolved_device} "
+                      f"(imgsz={getattr(mgr, '_model_imgsz', '?')}, task={getattr(mgr, 'model_task', '?')})")
                 return True
 
             mgr.device = resolved_device
@@ -182,9 +204,15 @@ class ChannelManager:
         if self._shared_model is not None:
             mgr = self.channels.get(channel_id)
             if mgr and mgr.model is None:
+                ch0 = self.channels[0]
                 mgr.model = self._shared_model
                 mgr.model_path = self._shared_model_path
-                mgr.current_device_info = self.channels[0].current_device_info
+                mgr.current_device_info = ch0.current_device_info
+                # v2.7.3: 同步推理属性，避免新通道 imgsz 默认 640 与 engine 不匹配
+                mgr._model_imgsz = ch0._model_imgsz
+                mgr._is_native_pytorch = ch0._is_native_pytorch
+                mgr.model_task = ch0.model_task
+                mgr._original_pt_path = ch0._original_pt_path
 
     @staticmethod
     def _resolve_device(device: str) -> str:

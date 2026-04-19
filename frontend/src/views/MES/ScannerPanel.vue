@@ -361,6 +361,14 @@ const retryConnect = async (d) => {
 }
 
 const addDiscoveredToDb = async (d) => {
+  // v2.7.3: 打开"添加表单"前先本地查重，避免用户两次保存同一个 IP 落库
+  const existing = devices.value.find(dev =>
+    dev.ip === d.ip && dev.port === d.port && !dev._auto
+  )
+  if (existing) {
+    ElMessage.warning(`${d.ip}:${d.port} 已存在于设备列表（"${existing.name}"），无需重复添加`)
+    return
+  }
   form.value = {
     ...defaultForm(),
     name: d.name || `WMax-${d.ip}`,
@@ -487,6 +495,17 @@ const testDevice = async (dev) => {
 const handleSave = async () => {
   if (!form.value.name || !form.value.ip) {
     ElMessage.warning('请填写名称和IP地址')
+    return
+  }
+  // v2.7.3: 同 IP+port 去重（前端先校验，提供更快的反馈；后端还有兜底）
+  const conflict = devices.value.find(dev =>
+    dev.ip === form.value.ip &&
+    dev.port === form.value.port &&
+    dev.id !== editingId.value &&
+    !dev._auto
+  )
+  if (conflict) {
+    ElMessage.warning(`地址 ${form.value.ip}:${form.value.port} 已被设备 "${conflict.name}" 占用，请改用其他地址`)
     return
   }
   saving.value = true

@@ -166,3 +166,49 @@ stop_detection() → 关闭 idle_light
 - 前端 Alarm 页面直接用 `api.get/post` 而非封装的API函数
 - 报警配置在项目DB和alarm_config.json两处存储，可能不同步
 - 空闲常亮与 Modbus MES 适配器共用 RS485 串口时需加锁（`_serial_lock`）
+
+## 共享报警灯模式 (v2.7.3+)
+
+一个物理报警灯（一个 USB 串口）被多个工位共用时使用。**典型坑：旧版本两个 ch 填同一个 port，导致串口抢占失败或行为异常 — v2.7.3 用此模式解决。**
+
+### 启用方法
+
+在 `alarm_config.json` 的 owner 通道（如 ch0）配置里加：
+
+```json
+"shared_with": [1],
+"priority_order": ["ng", "warn", "ok", "idle"],
+"event_priority_map": {
+  "event1": "ok",
+  "event2": "ng"
+}
+```
+
+被共享的通道（如 ch1）的配置可以**整段删掉**，或保留但 `enabled: false` + `port: ""`。
+
+### 合成规则
+
+每个共享通道维护自己的"瞬时事件"和"是否 idle 中"。每次状态变化按优先级合成：
+- 任一通道有未过期的 NG 事件 → 红灯
+- 没 NG 但有警告 → 黄灯
+- 都没有但有任一通道处于检测中 → idle 灯
+- 都停了 → 灯灭
+
+事件 expire 后自动重算，不会一直停留在最后一次状态。
+
+### 调试要点
+- 启动日志看 `[报警] 共享组: owner=ch0, 服务=[0,1]` 是否打印
+- 运行时看 `[报警·共享] ch0 触发 event1(ok)` / `[报警·共享] 显示 ch1 的 event2`
+- `mgr.is_shared()` 返回 True 即处于共享模式
+- `mgr._shared_channels` 是当前服务的工位集合
+
+### 完整示例
+见 `backend/data/alarm_config.shared.example.json`
+
+### 代码位置
+- `AlarmManager.set_shared_mode()` — 启用共享
+- `AlarmManager._recompose_and_apply()` — 合成核心
+- `AlarmManager._apply_event_visual()` / `_apply_idle_visual()` — 实际发命令
+- `AlarmRouter._load_all()` — 解析 `shared_with`
+- `AlarmRouter._save_all()` — 共享 manager 去重序列化
+- `AlarmRouter.on_channel_removed()` — 共享时只摘 ch 不断串口

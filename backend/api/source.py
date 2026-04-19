@@ -27,6 +27,51 @@ from backend.models.models import DetectionSession, DetectionCycle, StepRecord, 
 router = APIRouter()
 
 
+def _read_engine_metadata_imgsz(engine_path: str) -> Optional[int]:
+    """直接解析 .engine 文件头部 Ultralytics 嵌入的 JSON metadata，读取 imgsz。
+
+    无需触发 AutoBackend 实例化（YOLO('xxx.engine') 构造时尚未创建 AutoBackend，
+    binding 信息要等 predict 第一次调用），所以这是最早能拿到 engine 真实输入尺寸的途径。
+
+    Ultralytics 写入格式（autobackend.py 第 376~377 行）：
+        meta_len = int.from_bytes(f.read(4), byteorder="little")
+        metadata = json.loads(f.read(meta_len).decode("utf-8"))
+
+    返回 max(imgsz) 或 None（解析失败 / 无 metadata 时）。
+    """
+    try:
+        import json
+        import ast
+        with open(engine_path, 'rb') as f:
+            head = f.read(4)
+            if len(head) != 4:
+                return None
+            meta_len = int.from_bytes(head, byteorder='little')
+            # Ultralytics metadata 一般几百字节，限制 64KB 防止误判普通 engine 文件
+            if meta_len <= 0 or meta_len > 65536:
+                return None
+            try:
+                meta_str = f.read(meta_len).decode('utf-8')
+                metadata = json.loads(meta_str)
+            except Exception:
+                return None
+            if not isinstance(metadata, dict):
+                return None
+            imgsz = metadata.get('imgsz')
+            if isinstance(imgsz, str):
+                try:
+                    imgsz = ast.literal_eval(imgsz)
+                except Exception:
+                    return None
+            if isinstance(imgsz, (list, tuple)) and len(imgsz) >= 1:
+                return int(max(imgsz))
+            if isinstance(imgsz, int):
+                return imgsz
+        return None
+    except Exception:
+        return None
+
+
 # ========== HCNetSDK import ==========
 HCNET_SDK_AVAILABLE = False
 HCNetSession = None
@@ -1697,11 +1742,26 @@ class VideoSourceManager:
                 print(f"类别: {list(self.model.names.values())}")
             print(f"模型任务类型: {self.model_task}")
             
-            # 自动检测模型的 imgsz（非 PyTorch 格式优先从引擎本身读取）
+            # 自动检测模型的 imgsz
+            # 优先级（v2.7.3）：
+            #   1) .engine 文件头部嵌入的 Ultralytics JSON metadata（最权威，无需触发 AutoBackend 实例化）
+            #   2) .pt 模型 ckpt 元数据（model.overrides / model.model.args）
+            #   3) AutoBackend 已实例化时的 bindings / input_shape / context.get_tensor_shape
+            #   4) 默认 640（fallback）
             detected_imgsz = 640
             engine_imgsz = None
+
+            # 方法0（v2.7.3）：直接解析 .engine 文件头部 metadata，最可靠
+            if not is_native_pytorch and model_path.endswith('.engine'):
+                try:
+                    engine_imgsz = _read_engine_metadata_imgsz(model_path)
+                    if engine_imgsz:
+                        print(f"[模型加载] 从 engine 文件头 metadata 检测到 imgsz={engine_imgsz}")
+                except Exception as e:
+                    print(f"[模型加载] engine metadata 解析失败: {e}")
+
             try:
-                if not is_native_pytorch and hasattr(self.model, 'model'):
+                if engine_imgsz is None and not is_native_pytorch and hasattr(self.model, 'model'):
                     inner = self.model.model
                     # 方法1: 从 bindings 读取
                     if hasattr(inner, 'bindings') and inner.bindings:
@@ -1717,7 +1777,16 @@ class VideoSourceManager:
                         if isinstance(s, (list, tuple)) and len(s) >= 3:
                             engine_imgsz = max(s[-2], s[-1])
                             print(f"[模型加载] 从 input_shape 检测到 imgsz={engine_imgsz}")
-                    # 方法3: 从 context/engine 读取 TensorRT binding shape
+                    # 方法3: 从 AutoBackend 已读取的 imgsz 属性（v2.7.3）
+                    if engine_imgsz is None and hasattr(inner, 'imgsz'):
+                        s = inner.imgsz
+                        if isinstance(s, (list, tuple)) and len(s) >= 1:
+                            engine_imgsz = max(s)
+                            print(f"[模型加载] 从 AutoBackend.imgsz 检测到 imgsz={engine_imgsz}")
+                        elif isinstance(s, int):
+                            engine_imgsz = s
+                            print(f"[模型加载] 从 AutoBackend.imgsz 检测到 imgsz={engine_imgsz}")
+                    # 方法4: 从 context/engine 读取 TensorRT binding shape
                     if engine_imgsz is None:
                         for attr_name in ('context', 'engine', 'runtime'):
                             ctx = getattr(inner, attr_name, None)
@@ -1738,17 +1807,6 @@ class VideoSourceManager:
                                     pass
                             if engine_imgsz:
                                 break
-                    # 方法4: 遍历 model 属性查找 shape 元组
-                    if engine_imgsz is None:
-                        for attr_name in dir(inner):
-                            if 'shape' in attr_name.lower() or attr_name == 'fp16':
-                                continue
-                            val = getattr(inner, attr_name, None)
-                            if isinstance(val, (list, tuple)) and len(val) == 4:
-                                if val[0] == 1 and val[1] == 3 and val[2] == val[3] and val[2] > 0:
-                                    engine_imgsz = val[2]
-                                    print(f"[模型加载] 从 inner.{attr_name} 检测到 imgsz={engine_imgsz}")
-                                    break
                 if engine_imgsz and engine_imgsz > 0:
                     detected_imgsz = engine_imgsz
                 elif hasattr(self.model, 'overrides') and 'imgsz' in self.model.overrides:
@@ -1793,7 +1851,32 @@ class VideoSourceManager:
                         print(f"[模型预热] warm-up failed: {ae}")
                 except Exception as e:
                     print(f"[模型预热] warm-up failed: {e}")
-            
+
+            # v2.7.3: warm-up 之后 Ultralytics 才创建 AutoBackend；此时 AutoBackend.imgsz 是从 engine
+            # metadata 读出来的最权威值，用它做最终修正，避免任何上游路径漏检导致 _model_imgsz 停在 640
+            try:
+                predictor = getattr(self.model, 'predictor', None)
+                inner = getattr(predictor, 'model', None) if predictor is not None else None
+                authoritative = None
+                if inner is not None:
+                    if hasattr(inner, 'imgsz'):
+                        s = inner.imgsz
+                        if isinstance(s, (list, tuple)) and len(s) >= 1:
+                            authoritative = max(s)
+                        elif isinstance(s, int):
+                            authoritative = s
+                    if authoritative is None and hasattr(inner, 'bindings') and inner.bindings:
+                        for b in (inner.bindings.values() if isinstance(inner.bindings, dict) else inner.bindings):
+                            shape = getattr(b, 'shape', None)
+                            if shape and len(shape) == 4 and shape[1] == 3:
+                                authoritative = max(shape[2], shape[3])
+                                break
+                if authoritative and authoritative > 0 and authoritative != self._model_imgsz:
+                    print(f"[模型加载] AutoBackend 权威 imgsz={authoritative}（修正 {self._model_imgsz} → {authoritative}）")
+                    self._model_imgsz = authoritative
+            except Exception as e:
+                print(f"[模型加载] 读取 AutoBackend 权威 imgsz 失败: {e}")
+
             return True
         except Exception as e:
             print(f"模型加载失败: {e}")
@@ -7671,6 +7754,13 @@ class VideoSourceManager:
         """暂停：停止画面更新和检测，但保持当前帧"""
         self.is_running = False
         self.is_detecting = False
+        # v2.7.3: 暂停也必须熄灭工作指示灯，前端 Monitor 的"停止"按钮调的是 pause
+        # 之前未调用导致灯保持常亮，关软件后还亮
+        try:
+            from backend.api.alarm import alarm_router
+            alarm_router.stop_idle_light(channel_id=self.channel_id)
+        except Exception:
+            pass
         # 先停止推理线程，避免残留
         self._stop_inference_thread()
         # 停止录制线程和 FFmpeg 进程，防止资源泄漏
@@ -7797,12 +7887,25 @@ class VideoSourceManager:
 
         self._ensure_session_active()
 
+        # v2.7.3: 恢复检测时重新点亮工作指示灯（pause 已熄，否则灯不会再亮）
+        try:
+            from backend.api.alarm import alarm_router
+            alarm_router.start_idle_light(channel_id=self.channel_id)
+        except Exception:
+            pass
+
         print("已恢复：视频流和推理重新启动")
         return True
     
     def standby(self):
         """Standby: stop inference but keep the video capture thread running."""
         self.is_detecting = False
+        # v2.7.3: 待机时也熄灭工作指示灯（语义上"不在检测"就不应该亮工作灯）
+        try:
+            from backend.api.alarm import alarm_router
+            alarm_router.stop_idle_light(channel_id=self.channel_id)
+        except Exception:
+            pass
         self._stop_inference_thread()
         self._stop_recording_thread()
         self._close_all_writers()
@@ -7827,6 +7930,14 @@ class VideoSourceManager:
         if self.recording_enabled:
             self._start_recording_thread()
         self.start_session_recording()
+
+        # v2.7.3: 从待机恢复推理时重新点亮工作指示灯
+        try:
+            from backend.api.alarm import alarm_router
+            alarm_router.start_idle_light(channel_id=self.channel_id)
+        except Exception:
+            pass
+
         print("已从待机恢复推理")
     
     def stop(self, release_model: bool = True):

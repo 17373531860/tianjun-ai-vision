@@ -26,20 +26,33 @@
           "color": "red",
           "effect": "fast",
           "buzzer": true,
-          "duration": 3
+          "duration": 5
         }
       },
       "idle_light": {
         "enabled": true,
-        "color": "blue"
+        "color": "yellow"
       },
-      "test_mode": true
+      "test_mode": true,
+      "shared_with": [
+        1
+      ],
+      "priority_order": [
+        "ng",
+        "warn",
+        "ok",
+        "idle"
+      ],
+      "event_priority_map": {
+        "event1": "ok",
+        "event2": "ng"
+      }
     },
     "1": {
       "enabled": true,
-      "port": "",
+      "port": "/dev/ttyUSB0",
       "baudrate": 9600,
-      "protocol": "simple_ascii",
+      "protocol": "modbus_4color",
       "custom_commands": {
         "light_on": "",
         "light_off": "",
@@ -65,8 +78,8 @@
         }
       },
       "idle_light": {
-        "enabled": false,
-        "color": "green"
+        "enabled": true,
+        "color": "yellow"
       },
       "test_mode": false
     },

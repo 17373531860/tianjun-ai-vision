@@ -115,6 +115,22 @@ def discover_scanners(subnet: str = Query("192.168.0", description="子网前缀
 def create_device(body: ScannerCreate):
     db = SessionLocal()
     try:
+        # v2.7.3: 同 IP+port 去重，避免一个物理扫码器在列表中出现多条
+        # （现场常见：自动发现保存了一次，又点"保存到设备列表"再保存一次）
+        existing = db.query(ScannerDevice).filter(
+            ScannerDevice.ip == body.ip,
+            ScannerDevice.port == body.port,
+        ).first()
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"该地址 {body.ip}:{body.port} 已被设备 "
+                    f"\"{existing.name}\" (ID={existing.id}) 占用，"
+                    f"请改用其他地址，或编辑/删除已有设备"
+                ),
+            )
+
         dev = ScannerDevice(**body.model_dump())
         db.add(dev)
         db.commit()
@@ -125,6 +141,8 @@ def create_device(body: ScannerCreate):
             svc.add_device(dev)
 
         return _serialize_device(dev)
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(400, str(e))
@@ -141,6 +159,25 @@ def update_device(device_id: int, body: ScannerUpdate):
             raise HTTPException(404, "设备不存在")
 
         data = {k: v for k, v in body.model_dump().items() if v is not None}
+
+        # v2.7.3: 改 IP/port 时检查目标地址是否已被其他设备占用
+        new_ip = data.get('ip', dev.ip)
+        new_port = data.get('port', dev.port)
+        if (new_ip, new_port) != (dev.ip, dev.port):
+            conflict = db.query(ScannerDevice).filter(
+                ScannerDevice.ip == new_ip,
+                ScannerDevice.port == new_port,
+                ScannerDevice.id != device_id,
+            ).first()
+            if conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"该地址 {new_ip}:{new_port} 已被设备 "
+                        f"\"{conflict.name}\" (ID={conflict.id}) 占用"
+                    ),
+                )
+
         for k, v in data.items():
             setattr(dev, k, v)
         db.commit()
@@ -152,6 +189,8 @@ def update_device(device_id: int, body: ScannerUpdate):
             svc.add_device(dev)
 
         return _serialize_device(dev)
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(400, str(e))
