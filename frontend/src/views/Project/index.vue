@@ -256,6 +256,11 @@
                       <th class="p-2 w-16">启用</th>
                       <th class="p-2 w-28">置信度阈值</th>
                       <th class="p-2 w-28">显示名称</th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="开启后，此物品在检测画面、SOP流程卡片、步骤详情中均不显示（仅视觉隐藏）；YOLO 检测、OK/NG 判定、报警、数据记录、MES 上报等均不受影响。常用于隐藏箱子/泡沫槽等辅助类别" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">隐藏标注框</span>
+                        </el-tooltip>
+                      </th>
                       <template v-if="activeProject.logic_mode === 'tracking'">
                       <th class="p-2 w-28">
                         <el-tooltip content="物品被短暂遮挡后仍算在场的最长时间，在此时间内不会被判定为消失（留空使用全局值）" placement="top">
@@ -280,6 +285,26 @@
                       <th class="p-2 w-24">
                         <el-tooltip content="动作计数模式下，物品消失多少帧后确认为一次完成的动作（默认8帧）" placement="top">
                           <span class="cursor-help border-b border-dashed border-gray-500">消失确认帧</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="堆叠模式：同一物品已放好但被堆叠/遮挡时，画面消失再次出现算下一个。仅跟踪计数模式生效" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">堆叠模式</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-24">
+                        <el-tooltip content="堆叠模式下，物品消失多少秒后再次出现算作下一个（默认1.0秒；建议大于「遮挡容忍」）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">重现间隔(秒)</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="堆叠模式下期望的堆叠层数，达到此数即认为该步骤完成（默认2）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">堆叠层数</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-24">
+                        <el-tooltip content="同时最多识别几个该物品；填0=无上限。设为1即不论同时检测到多少个都视为同一个ID。仅跟踪计数模式生效" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">最大识别数</span>
                         </el-tooltip>
                       </th>
                       </template>
@@ -365,6 +390,9 @@
                       <td class="p-2">
                         <el-input v-model="step.displayLabel" size="small" placeholder="显示名称" />
                       </td>
+                      <td class="p-2 text-center">
+                        <el-switch v-model="step.hide_in_view" size="small" />
+                      </td>
                       <template v-if="activeProject.logic_mode === 'tracking'">
                       <td class="p-2">
                         <el-input-number
@@ -410,6 +438,52 @@
                           :controls="false"
                           :disabled="step.count_mode !== 'event'"
                           placeholder="8"
+                          class="w-full"
+                        />
+                      </td>
+                      <td class="p-2 text-center">
+                        <el-switch
+                          v-model="step.stack_enabled"
+                          size="small"
+                          :disabled="step.count_mode !== 'track'"
+                        />
+                      </td>
+                      <td class="p-2">
+                        <el-input-number
+                          v-model="step.stack_reappear_seconds"
+                          size="small"
+                          :min="0.1"
+                          :step="0.1"
+                          :precision="2"
+                          :controls="false"
+                          :disabled="!step.stack_enabled || step.count_mode !== 'track'"
+                          placeholder="1.0"
+                          class="w-full"
+                        />
+                      </td>
+                      <td class="p-2">
+                        <el-input-number
+                          v-model="step.stack_required_count"
+                          size="small"
+                          :min="2"
+                          :step="1"
+                          :precision="0"
+                          :controls="false"
+                          :disabled="!step.stack_enabled || step.count_mode !== 'track'"
+                          placeholder="2"
+                          class="w-full"
+                        />
+                      </td>
+                      <td class="p-2">
+                        <el-input-number
+                          v-model="step.max_recognized"
+                          size="small"
+                          :min="0"
+                          :step="1"
+                          :precision="0"
+                          :controls="false"
+                          :disabled="step.count_mode !== 'track'"
+                          placeholder="无上限"
                           class="w-full"
                         />
                       </td>

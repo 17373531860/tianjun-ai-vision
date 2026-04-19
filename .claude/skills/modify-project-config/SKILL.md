@@ -62,12 +62,23 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
     "position_lock": false,
     "count_mode": "total",
     "event_count": 0,
-    "gone_frames": 30
+    "gone_frames": 30,
+    // v2.7.4 新增字段:
+    "hide_in_view": false,            // [前端可视化] 实时画面/SOP/步骤详情都不显示该 label，但后端检测/计数/报警/CSV 全部正常
+    "stack_enabled": false,           // [仅 count_mode=track] 堆叠模式开关
+    "stack_reappear_seconds": 1.0,    // 堆叠模式：消失 ≥N 秒后再现算下一层
+    "stack_required_count": 2,        // 堆叠模式：期望层数（最小 2）
+    "max_recognized": 0               // [仅 count_mode=track] 同时最多识别几个该物品；0=无上限；超出按距离归并到 Top-N(置信度) 的 track_id
   }
 ]
 ```
 
 **解析点:** `source.py: set_project_config()` → 映射到 `self.step_configs`, `self.step_sequence` 等
+
+**v2.7.4 三个新字段的处理位置：**
+- `hide_in_view`: **纯前端**，后端不读，仅在 `frontend/src/views/Monitor/index.vue` 的 `drawDetections / drawMultiDetections / stepsToShow / tableData` 过滤
+- `stack_enabled / stack_reappear_seconds / stack_required_count`: 在 `_update_tracking_stats` 的步骤循环里解析为 `stack_steps[label]`，独立状态机维护 `_stack_state / _stack_counters / _stack_disappeared_at / _stack_visible_frames`；最终通过 `_rebuild_checklist` 用 `max(tracking_class_counters, stack_counters)` 合并
+- `max_recognized`: 在 `_update_tracking_stats` 入口处对 detections 做 ID 合并（按置信度选 keeper + 最近距离归并），不动 ByteTrack 内部状态
 
 ### 2. pipeline_config (检测管线配置)
 ```json

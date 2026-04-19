@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.7.4 (2026-04-20)
+- [FEAT-001] 新增: 物品标注框可视化隐藏 (Project 步骤表加 hide_in_view 开关；Monitor 实时画面/SOP/步骤详情过滤；后端 0 改动)
+- [FEAT-002] 新增: 堆叠模式 (跟踪计数模式下同 label 消失 N 秒后再现算下一层；新增 stack_enabled/stack_reappear_seconds/stack_required_count；独立状态机 + max 合并避免与 ByteTrack 计数双算)
+- [FEAT-003] 新增: 最大识别数 (跟踪计数模式下同 label 同时只保留 Top-N 个 track_id，按置信度选 keeper 其余按距离归并；不动 ByteTrack 内部状态)
+
 ## v2.7.3 (2026-04-19)
 - [BUG-001] 修复: 双工位 TensorRT 推理 imgsz 不传播报 AssertionError (engine 元数据直读 + channel_manager 三处属性传播)
 - [BUG-002] 修复: 报警灯停检测/关软件不熄灭、副机检测时不亮 (pause/standby/resume 联动 stop/start_idle_light + shutdown 遍历所有通道 + start_idle_light 详细日志)

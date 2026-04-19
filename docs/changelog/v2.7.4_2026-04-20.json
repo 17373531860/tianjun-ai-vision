@@ -1,0 +1,106 @@
+{
+  "version": "2.7.4",
+  "date": "2026-04-20",
+  "previous_version": "2.7.3",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "物品标注框可视化隐藏",
+      "symptom": "包装项目里有些物品（箱子、泡沫槽等）不属于检测清单核心目标，但被模型检测出来在 Monitor 实时画面上画框，干扰视觉效果",
+      "root_cause": "之前没有隐藏机制，所有 detection 都会被画框且 SOP/步骤详情都会展示",
+      "fix": "前端新增 step.hide_in_view 配置：Project 页表格加开关；Monitor 多通道/单通道画面 drawDetections 跳过被标记 label；SOP/步骤详情 stepsToShow/tableData 过滤；后端不变，detection_results、计数、报警、CSV 全部不受影响",
+      "files": [
+        "frontend/src/views/Project/index.vue",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": [
+        "隐藏标注框",
+        "hide_in_view",
+        "可视化隐藏",
+        "包装",
+        "箱子",
+        "泡沫槽",
+        "SOP",
+        "步骤详情",
+        "Monitor",
+        "Project",
+        "frontend-only"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "堆叠模式（同物品多次放置计数）",
+      "symptom": "跟踪计数模式下，物品（干燥剂、泡沫片等）堆叠放置时画面只能看到最上面一个，ByteTrack 只算 1，无法反映实际放置数量",
+      "root_cause": "ByteTrack 通过 IoU 跟踪同一物体，被堆下的物体不可见自然没有 track_id；只用 ByteTrack 的 track 数量做计数无法识别堆叠",
+      "fix": "新增独立堆叠状态机：每个开启 stack_enabled 的 label 维护 idle/visible/disappeared 状态；首次出现计 1，消失再出现且消失时长 ≥ stack_reappear_seconds 计 +1；不与 ByteTrack 计数耦合，_rebuild_checklist 用 max(tracking, stack) 合并；新增 _stack_state/_stack_counters/_stack_disappeared_at/_stack_visible_frames 状态变量；_reset_counting_cycle 同步清理；仅 count_mode=track 生效",
+      "files": [
+        "backend/api/source.py",
+        "frontend/src/views/Project/index.vue"
+      ],
+      "keywords": [
+        "堆叠模式",
+        "stack mode",
+        "stack_enabled",
+        "stack_reappear_seconds",
+        "stack_required_count",
+        "干燥剂",
+        "泡沫片",
+        "重复放置",
+        "ByteTrack",
+        "tracking",
+        "状态机",
+        "_stack_counters",
+        "_stack_state",
+        "_rebuild_checklist"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "最大识别数（同物品 ID 合并）",
+      "symptom": "跟踪计数模式下，物品（手套等）概念上是一个但物理上分开放，ByteTrack 给出 2 个 track_id 计数为 2，与实际语义不符",
+      "root_cause": "ByteTrack 按目标几何独立分配 track_id，无 label-level 上限约束",
+      "fix": "在 _update_tracking_stats 入口对 detections 做后处理：按 label 分组，超过 N 个时按置信度降序保留 Top-N 的 track_id，其余 detection 改写为最近 keeper 的 track_id；不动 ByteTrack 内部状态，下一帧仍正常跟踪；仅 count_mode=track 生效；track_id<0 跳过；可与堆叠模式叠加",
+      "files": [
+        "backend/api/source.py",
+        "frontend/src/views/Project/index.vue"
+      ],
+      "keywords": [
+        "最大识别数",
+        "max_recognized",
+        "ID 合并",
+        "track_id 合并",
+        "手套",
+        "成对物品",
+        "ByteTrack",
+        "tracking",
+        "置信度",
+        "confidence",
+        "Top-N"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [
+    "modify-source",
+    "debug-source",
+    "modify-frontend",
+    "modify-project-config"
+  ],
+  "files_changed": [
+    "backend/api/source.py",
+    "frontend/src/views/Project/index.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "electron/package.json",
+    "electron/splash.html",
+    "docs/changelog/v2.7.4_2026-04-20.md",
+    "docs/changelog/v2.7.4_2026-04-20.json",
+    "docs/CHANGELOG.md",
+    "test_v274_hide_in_view.mjs",
+    "test_v274_stack_and_max_recognized.py"
+  ]
+}

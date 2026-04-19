@@ -78,6 +78,30 @@ backend/api/source.py (~8616 行)
 - `container_mode` 支持容器内物品管理
 - `cycle_end_strategy` 控制何时结束周期
 
+#### v2.7.4 新增子模式 — 堆叠模式 + 最大识别数
+都在 `_update_tracking_stats` 内，仅 `count_mode=track` 生效。
+
+**最大识别数 (max_recognized)**
+- 入口处对 `detections` 做后处理：按 label 分组，超过 N 个时按 confidence 降序保留 Top-N 的 track_id，其余 detection 改写 track_id 为最近 keeper 的 ID
+- 不动 ByteTrack 内部状态，只改输出 → 下一帧仍正常跟踪
+- track_id<0 跳过；其他 label 不受影响
+- 排查："手套两只被算成 2" → 检查 `step.max_recognized` 是否设为 1；检查日志里同 label 的 track_id 是否被合并为同一个
+
+**堆叠模式 (stack_enabled)**
+- 状态变量：`_stack_state[label]` ∈ {idle, visible, disappeared}, `_stack_counters[label]`, `_stack_disappeared_at[label]`, `_stack_visible_frames[label]`
+- 状态机（每帧一次）：
+  - idle → visible: 可见时切换，**第一次出现就计第 1 层**
+  - visible → disappeared: 不可见时切换，记录 `_stack_disappeared_at`
+  - disappeared → visible: 重现时若 `now - _stack_disappeared_at >= stack_reappear_seconds` → 计数 +1
+- `_rebuild_checklist` 用 `max(tracking_class_counters[label], stack_counters[label])` 合并到 checklist['counted']，避免与 ByteTrack 计数双算
+- `_reset_counting_cycle` 清理 stack 4 个状态字典
+- 排查："堆叠物品没多算" → ① 确认 `count_mode=track`；② 看日志 `[Stack] xxx layer #N/M`；③ 物品消失时长不够 reappear_seconds → 调大物品大小/降低消失帧；④ stack_required_count 强制最小 2，配 1 会被改成 2
+
+**与现有逻辑的边界：**
+- ByteTrack 给同一物体稳定 ID 时（堆叠场景常见），`tracking_class_counters[label]=1`，stack_counters=N → `max=N` ✅
+- 真有 N 个独立物体时（非堆叠），`tracking_class_counters[label]=N`，stack 状态机也累计 N → `max=N` ✅
+- event 模式 label 不进 stack 状态机；hide_in_view 是纯前端，对后端 stack/max_recognized 无影响
+
 ## 关键状态变量（线程安全风险）
 
 以下变量从多个线程访问，**缺少锁保护**：

@@ -816,6 +816,13 @@ class VideoSourceManager:
         self._event_gone_frames_count = {}  # {class_name: consecutive_gone_frames}
         self._event_first_seen = {}         # {class_name: timestamp of first event start}
         self._event_last_seen = {}          # {class_name: timestamp of last event end}
+
+        # v2.7.4: Stack mode (堆叠模式 — 物品已放好但被堆叠/遮挡，消失再出现算下一层)
+        # 仅 logic_mode=tracking + count_mode=track 时生效
+        self._stack_state = {}              # {class_name: 'idle'|'visible'|'disappeared'}
+        self._stack_counters = {}           # {class_name: 已计入的"层"数}
+        self._stack_disappeared_at = {}     # {class_name: timestamp 进入 disappeared 的时间}
+        self._stack_visible_frames = {}     # {class_name: 当前 visible 状态下连续帧数}
         
         # Container mode (box + items hierarchy)
         self._container_mode = False
@@ -3817,6 +3824,12 @@ class VideoSourceManager:
         self._event_gone_frames_count.clear()
         self._event_first_seen.clear()
         self._event_last_seen.clear()
+
+        # v2.7.4: Stack mode reset
+        self._stack_state.clear()
+        self._stack_counters.clear()
+        self._stack_disappeared_at.clear()
+        self._stack_visible_frames.clear()
         
         # Container mode reset
         self._box_objects.clear()
@@ -3879,6 +3892,9 @@ class VideoSourceManager:
         per_class_lost_sec = {}
         per_class_position_lock = {}
         event_steps = {}
+        # v2.7.4: 堆叠模式 + 最大识别数（仅 count_mode=track 生效）
+        stack_steps = {}              # {label: {'reappear_seconds': float, 'required_count': int}}
+        max_recognized_per_label = {}  # {label: N>0}; 0 或缺失 = 无上限
         for step in self.project_config.get('steps_config', []):
             if step.get('enabled', True):
                 lbl = step.get('label', '')
@@ -3892,11 +3908,66 @@ class VideoSourceManager:
                         'min_visible_frames': step.get('event_min_visible_frames', 3),
                         'gone_frames': step.get('event_gone_frames', 8),
                     }
+                # v2.7.4: 堆叠模式与最大识别数仅在 count_mode=track 下生效
+                if step.get('count_mode', 'track') == 'track':
+                    if step.get('stack_enabled'):
+                        try:
+                            stack_steps[lbl] = {
+                                'reappear_seconds': float(step.get('stack_reappear_seconds', 1.0) or 1.0),
+                                'required_count': max(2, int(step.get('stack_required_count', 2) or 2)),
+                            }
+                        except (TypeError, ValueError):
+                            pass
+                    try:
+                        mr = int(step.get('max_recognized', 0) or 0)
+                        if mr > 0:
+                            max_recognized_per_label[lbl] = mr
+                    except (TypeError, ValueError):
+                        pass
         
         for lbl, cfg in event_steps.items():
             expected_items[lbl] = cfg['required_count']
+        # v2.7.4: 堆叠模式期望数量也注入 expected_items
+        for lbl, cfg in stack_steps.items():
+            expected_items[lbl] = cfg['required_count']
         
         max_lost_sec = max(per_class_lost_sec.values()) if per_class_lost_sec else 5.0
+
+        # ===== v2.7.4: 最大识别数 ID 后处理（仅修改本帧 detections 的 track_id）=====
+        # 同一 label 同时检测到 > N 个时，保留置信度最高的 N 个原始 track_id；
+        # 其余 detection 的 track_id 强制改为最近 keeper 的 track_id。
+        # 注意：这只改输出 track_id，不影响 ByteTrack 内部状态（下一帧仍正常跟踪）
+        if max_recognized_per_label:
+            from collections import defaultdict as _dd
+            _by_label = _dd(list)
+            for _det in detections:
+                _lbl = _det.get('label', '')
+                if _lbl in max_recognized_per_label and _det.get('track_id', -1) >= 0:
+                    _by_label[_lbl].append(_det)
+            for _lbl, _dets in _by_label.items():
+                _N = max_recognized_per_label[_lbl]
+                if len(_dets) <= _N:
+                    continue
+                # 按置信度降序，前 N 个作为 keeper
+                _dets_sorted = sorted(_dets, key=lambda d: -float(d.get('confidence', 0) or 0))
+                _keepers = _dets_sorted[:_N]
+                _keeper_ids = {id(k) for k in _keepers}
+                for _d in _dets:
+                    if id(_d) in _keeper_ids:
+                        continue
+                    _cx = _d.get('x', 0) + _d.get('w', 0) / 2
+                    _cy = _d.get('y', 0) + _d.get('h', 0) / 2
+                    _best_k = None
+                    _best_dist = float('inf')
+                    for _k in _keepers:
+                        _kcx = _k.get('x', 0) + _k.get('w', 0) / 2
+                        _kcy = _k.get('y', 0) + _k.get('h', 0) / 2
+                        _dist = (_cx - _kcx) ** 2 + (_cy - _kcy) ** 2
+                        if _dist < _best_dist:
+                            _best_dist = _dist
+                            _best_k = _k
+                    if _best_k is not None:
+                        _d['track_id'] = _best_k.get('track_id', _d.get('track_id', -1))
         
         seen_track_ids = set()
         trigger_visible = False
@@ -4358,7 +4429,56 @@ class VideoSourceManager:
                             self._event_visible_frames[label] = 0
                             self._event_gone_frames_count[label] = 0
                             print(f"[Tracking-Event] {label} event #{self._event_counters[label]}/{cfg['required_count']} confirmed")
-        
+
+        # ===== v2.7.4: Stack mode FSM (堆叠模式) =====
+        # 同一 label 物品已放好被堆叠/遮挡 → 画面消失 reappear_seconds 后再次出现 = 计数 +1
+        # 第一次 idle→visible 直接计 1 (第一层)
+        # 仅在 logic_mode=tracking + count_mode=track 下生效
+        if stack_steps:
+            stack_label_visible = {lbl: False for lbl in stack_steps}
+            for _det in detections:
+                _lbl = _det.get('label', '')
+                if _lbl in stack_steps and self._is_in_roi(_det):
+                    stack_label_visible[_lbl] = True
+            for label, cfg in stack_steps.items():
+                if label not in self._stack_state:
+                    self._stack_state[label] = 'idle'
+                    self._stack_counters[label] = 0
+                    self._stack_visible_frames[label] = 0
+                state = self._stack_state[label]
+                is_visible = stack_label_visible[label]
+                if state == 'idle':
+                    if is_visible:
+                        self._stack_state[label] = 'visible'
+                        self._stack_visible_frames[label] = 1
+                        # 第一次出现就是第 1 层
+                        self._stack_counters[label] = self._stack_counters.get(label, 0) + 1
+                        if not self._tracking_cycle_active:
+                            self._tracking_cycle_active = True
+                            self.cycle_start_time = current_time
+                            try:
+                                self.start_cycle()
+                            except Exception:
+                                pass
+                        print(f"[Stack] {label} layer #{self._stack_counters[label]}/{cfg['required_count']} (initial)")
+                elif state == 'visible':
+                    if is_visible:
+                        self._stack_visible_frames[label] += 1
+                    else:
+                        self._stack_state[label] = 'disappeared'
+                        self._stack_disappeared_at[label] = current_time
+                elif state == 'disappeared':
+                    if is_visible:
+                        disappeared_for = current_time - self._stack_disappeared_at.get(label, current_time)
+                        if disappeared_for >= cfg['reappear_seconds']:
+                            self._stack_counters[label] = self._stack_counters.get(label, 0) + 1
+                            print(f"[Stack] {label} layer #{self._stack_counters[label]}/{cfg['required_count']} (reappeared after {disappeared_for:.2f}s)")
+                        # 不论是否够秒数，都回到 visible
+                        self._stack_state[label] = 'visible'
+                        self._stack_visible_frames[label] = 1
+                # 注意：stack_counters 不直接覆盖 _tracking_class_counters，
+                # 避免影响 ByteTrack display_id 分配；在 _rebuild_checklist 用 max 策略合并
+
         # ===== Container mode: group items into boxes =====
         if self._container_mode and self._container_label:
             self._update_container_grouping(
@@ -4645,7 +4765,11 @@ class VideoSourceManager:
         
         self._tracking_item_checklist = {}
         for cls_name, expected_count in expected_items.items():
-            actual = self._tracking_class_counters.get(cls_name, 0) + self._event_counters.get(cls_name, 0)
+            tracking_n = self._tracking_class_counters.get(cls_name, 0)
+            event_n = self._event_counters.get(cls_name, 0)
+            stack_n = self._stack_counters.get(cls_name, 0)
+            # v2.7.4: 堆叠模式下取 max(tracking, stack)，避免重复计数
+            actual = max(tracking_n, stack_n) + event_n
             display_name = self.step_display_names.get(cls_name, cls_name)
             prefix = self._tracking_letter_map.get(cls_name, display_name)
             self._tracking_item_checklist[cls_name] = {
@@ -4654,10 +4778,12 @@ class VideoSourceManager:
             }
         for cls_name, count in self._tracking_class_counters.items():
             if cls_name not in self._tracking_item_checklist:
+                stack_n = self._stack_counters.get(cls_name, 0)
+                actual = max(count, stack_n)
                 display_name = self.step_display_names.get(cls_name, cls_name)
                 prefix = self._tracking_letter_map.get(cls_name, display_name)
                 self._tracking_item_checklist[cls_name] = {
-                    'expected': 0, 'counted': count,
+                    'expected': 0, 'counted': actual,
                     'prefix': prefix, 'display_name': display_name
                 }
         for cls_name, count in self._event_counters.items():
@@ -4666,6 +4792,15 @@ class VideoSourceManager:
                 self._tracking_item_checklist[cls_name] = {
                     'expected': 0, 'counted': count,
                     'prefix': display_name, 'display_name': display_name
+                }
+        # v2.7.4: 仅 stack 模式（无 tracking_class_counter 也无 event_counter）的 label
+        for cls_name, count in self._stack_counters.items():
+            if cls_name not in self._tracking_item_checklist:
+                display_name = self.step_display_names.get(cls_name, cls_name)
+                prefix = self._tracking_letter_map.get(cls_name, display_name)
+                self._tracking_item_checklist[cls_name] = {
+                    'expected': 0, 'counted': count,
+                    'prefix': prefix, 'display_name': display_name
                 }
     
     def _rebuild_container_checklist(self, expected_items: dict):

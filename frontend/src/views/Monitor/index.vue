@@ -1010,7 +1010,7 @@ const processChannelResult = (ch, d) => {
     const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
     const stMap = {};
     stepsConf.forEach(s => { stMap[s.label] = s; });
-    const td = stepsConf.filter(s => s.enabled !== false && !s.is_backup).map((s) => {
+    const td = stepsConf.filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view).map((s) => {
       const inCycle = chData.currentCycleSteps.includes(s.label);
       const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
       return {
@@ -1026,7 +1026,7 @@ const processChannelResult = (ch, d) => {
   if (d.detections) {
     const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
     const screenshots = d.step_screenshots || {};
-    const sopSteps = stepsConf.filter(s => s.enabled !== false && !s.is_backup).map(s => {
+    const sopSteps = stepsConf.filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view).map(s => {
       const inCycle = chData.currentCycleSteps.includes(s.label);
       const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
       const rawB64 = screenshots[s.label];
@@ -1038,6 +1038,14 @@ const processChannelResult = (ch, d) => {
       };
     });
     chData.steps = sopSteps;
+  }
+  // v2.7.4: 收集"项目配置中标记隐藏标注框"的 label 集合，drawMultiDetections 据此跳过画框
+  // 仅影响 Monitor 画面 + SOP 卡片 + 步骤详情，不影响检测/数据/报警/MES
+  {
+    const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
+    chData._hiddenLabels = new Set(
+      stepsConf.filter(s => s && s.hide_in_view && s.label).map(s => s.label)
+    );
   }
 
   const events = d.recent_events || [];
@@ -1064,7 +1072,7 @@ const processChannelResult = (ch, d) => {
 
   const canvas = multiCanvasRefs[ch];
   if (canvas && d.detections?.length) {
-    drawMultiDetections(ch, canvas, d.detections);
+    drawMultiDetections(ch, canvas, d.detections, chData._hiddenLabels);
   } else if (canvas) {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1103,7 +1111,7 @@ const updateMultiCharts = () => {
   // Data-driven rendering via template — no separate ECharts needed for multi-view
 };
 
-const drawMultiDetections = (ch, canvas, detections) => {
+const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null) => {
   if (!canvas) return;
   const parent = canvas.parentElement;
   if (parent) { canvas.width = parent.offsetWidth; canvas.height = parent.offsetHeight; }
@@ -1123,6 +1131,7 @@ const drawMultiDetections = (ch, canvas, detections) => {
 
   detections.forEach(det => {
     if (det.hidden) return;
+    if (hiddenLabels && det.label && hiddenLabels.has(det.label)) return;
     const x = det.x * dw + dx, y = det.y * dh + dy;
     const w = det.w * dw, h = det.h * dh;
     const color = det.is_ng ? '#ef4444' : '#10b981';
@@ -1841,6 +1850,10 @@ const drawDetections = (detections) => {
       .filter(s => s.enabled !== false)  // 默认启用
       .map(s => s.label)
   );
+  // v2.7.4: 项目配置中标记 hide_in_view=true 的标签，画面上不画框（仅视觉隐藏）
+  const hiddenLabels = new Set(
+    stepsConfig.filter(s => s && s.hide_in_view && s.label).map(s => s.label)
+  );
   
   const boxColor = systemStore.detection.boxColor;
   const ngColor = systemStore.detection.boxColorNG;
@@ -1868,6 +1881,7 @@ const drawDetections = (detections) => {
   detections.forEach(det => {
     if (!enabledLabels.has(det.label)) return;
     if (det.hidden) return;
+    if (hiddenLabels.has(det.label)) return;
     const x = offsetX + det.x * renderW;
     const y = offsetY + det.y * renderH;
     const w = det.w * renderW;
@@ -2017,7 +2031,8 @@ watch(() => currentProject.value, (newProject, oldProject) => {
     stepsToShow = stepsConfig.filter(s => s.enabled);
   }
   
-  stepsToShow = stepsToShow.filter(s => !s.backup_for);
+  // v2.7.4: 过滤掉 backup_for 和 hide_in_view 步骤（仅视觉隐藏，不影响检测/数据）
+  stepsToShow = stepsToShow.filter(s => !s.backup_for && !s.hide_in_view);
 
   // 更新步骤条 - 同时保存 label 用于后端匹配
   steps.value = stepsToShow.map((s, idx) => ({
