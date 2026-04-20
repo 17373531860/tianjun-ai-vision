@@ -299,3 +299,24 @@ vite.config.js:     server.port = 6001                // 实际端口
 - `backend/api/alarm.py::AlarmRouter.on_channel_removed(channel_id)` — 停报警 + 灯全灭 + 断串口 + 从 managers pop
 - 调用方：`ChannelManager.set_channel_count()` 降工位循环，其他模块可按需调用
 - **注意**：`ScannerService` / `ExternalDeviceService` / `ClusterCollector` 的 key 分别是 `device_id` / `station_id`，不按 channel_id 清理，避免误伤硬件配置
+
+### 画面变换 API（v2.7.5 新增）
+
+| 前端调用 | 后端路由 | 说明 |
+|---|---|---|
+| `GET /source/transform/config?channel=N` | `source.py::get_transform_config` | 读取指定通道的旋转/镜像配置 |
+| `POST /source/transform/config?channel=N` | `source.py::set_transform_config` | 写入 + 立即生效 + 保存到 `device_config.json` 的 `per_channel[str(N)]` |
+
+Body（Pydantic `TransformConfigRequest`）：
+```json
+{ "rotation": 0|90|180|270, "flip_h": false, "flip_v": false }
+```
+
+前端调用点：`frontend/src/views/Settings/index.vue` 的「显示设置 → 画面变换」卡片，用 `transformChannel` 选择通道，`rotation/flip_h/flip_v` 绑定到表单。
+
+**坐标对齐**：变换在 `_capture_loop` 里紧跟 `frame.copy()` 后执行，下游推理、MJPEG、录像拿到的都是变换后帧，检测框坐标直接对齐，前端无需二次换算。
+
+### 外部设备 API 已知坑（v2.7.5 修复）
+- **路由顺序**：`DELETE /external_device/{device_id}` 必须**放在**所有静态路径（`/logs`、`/scan` 等）之后注册，否则 FastAPI 会把 `/logs` 当成 `device_id="logs"` 报 `int_parsing`
+- **错误返回**：`create_device/update_device` 如果设备立即连接失败（串口未插、IP 不通），不再返回 400，而是 200 + `warning` 字段，前端用 `ElMessage.warning` 展示
+- **POST/PUT 入口**：`_sanitize_device_payload(data)` 对 `name/serial_port/ip/station_id` strip，防止前端拷贝粘贴带空格

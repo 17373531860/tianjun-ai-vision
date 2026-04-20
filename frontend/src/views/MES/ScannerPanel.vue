@@ -469,13 +469,27 @@ const loadLogs = async () => {
 const handleClearLogs = async () => {
   try {
     await ElMessageBox.confirm('确定清空所有扫码记录？此操作不可恢复。', '确认清空')
+  } catch (e) {
+    return
+  }
+  try {
     await clearScanLogs()
     logs.value = []
     ElMessage.success('扫码记录已清空')
   } catch (e) {
-    if (e !== 'cancel' && e !== 'close') {
-      ElMessage.error('清空失败')
+    console.error('[Scanner] clearScanLogs failed:', e, e?.response)
+    let detail = ''
+    if (e?.response) {
+      const d = e.response.data?.detail
+      if (typeof d === 'string') detail = d
+      else if (d != null) { try { detail = JSON.stringify(d) } catch { detail = String(d) } }
+      else detail = `HTTP ${e.response.status} ${e.response.statusText || ''}`.trim()
+    } else if (e?.message) {
+      detail = e.message
+    } else {
+      try { detail = JSON.stringify(e) } catch { detail = String(e) }
     }
+    ElMessage.error(`清空失败: ${detail || '未知错误'}`)
   }
 }
 

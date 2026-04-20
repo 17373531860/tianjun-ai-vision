@@ -147,3 +147,15 @@ MES Hook 影响: [是否影响 5 个 Hook 调用点]
 ## 已移除的机制（不要恢复）
 
 - **`_just_settled` 标志**（2026-04移除）: 原本在结算后阻止非首步启动新周期，但会导致 NG 后所有步骤被永久拒绝。现在依靠 `min_duration`/`min_frames` 过滤误检
+
+## 画面变换（v2.7.5 新增）
+
+- `VideoSourceManager` 三个字段：`video_rotation (0/90/180/270)` / `video_flip_h` / `video_flip_v`
+- `_apply_frame_transform(frame)`：`cv2.rotate` + `cv2.flip` 组合，仅支持 90°倍数旋转
+- **应用位置**：`_capture_loop` 里 `original_frame = frame.copy()` **紧跟下一行**。必须在所有消费者（推理 / MJPEG / 录像 / 快照）之前，否则检测框坐标和画面会错位
+- **坐标对齐**：因为变换发生在所有消费者之前，下游拿到的都是变换后帧，检测框直接正确，**严禁**在前端或推理后再对检测框做二次旋转/翻转
+- **per_channel 持久化**：`_save_device_config` 写 `device_config.json` 的 `per_channel[str(channel_id)]` 子键，读写时**必须先读旧配置再合并**，否则会覆盖其它通道
+- **修改规则**：
+  - 添加新的变换（如缩放、任意角度旋转）→ 先评估坐标映射成本，如仍能保持 OpenCV 零拷贝优先
+  - `_apply_frame_transform` 调用频次 = 帧率，必须快；如果要 GPU 加速要走 `cv2.cuda`
+  - 对 None frame 必须安全（返回 None）

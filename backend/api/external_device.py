@@ -3,6 +3,7 @@
 
 设备 CRUD、连接测试、状态查询、数据日志、条码注入。
 """
+import logging
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
@@ -10,6 +11,8 @@ from typing import Optional
 from backend.db.database import SessionLocal
 from backend.models.mes_models import ExternalDevice, ExternalDeviceLog
 from backend.services.external_device import get_external_device_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/external-devices", tags=["External Devices"])
 
@@ -89,67 +92,45 @@ def list_devices():
         db.close()
 
 
+def _sanitize_device_payload(d: dict) -> dict:
+    """去掉字符串字段首尾空格，避免 ' /dev/ttyUSB0' 这种肉眼看不见的坑。"""
+    for k in ("name", "serial_port", "ip", "station_id"):
+        v = d.get(k)
+        if isinstance(v, str):
+            d[k] = v.strip()
+    return d
+
+
 @router.post("/")
 def create_device(body: DeviceCreate):
     db = SessionLocal()
     try:
-        dev = ExternalDevice(**body.model_dump())
+        payload = _sanitize_device_payload(body.model_dump())
+        dev = ExternalDevice(**payload)
         db.add(dev)
         db.commit()
         db.refresh(dev)
-        if dev.enabled:
+    except Exception as e:
+        db.rollback()
+        db.close()
+        raise HTTPException(400, f"保存失败: {type(e).__name__}: {e}")
+
+    warning = None
+    if dev.enabled:
+        try:
             svc = get_external_device_service()
             svc.add_device(dev)
-        return _serialize(dev)
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(400, str(e))
-    finally:
-        db.close()
+        except Exception as e:
+            logger.warning("[ExtDev] 设备已保存但连接失败 id=%s: %s", dev.id, e)
+            warning = f"连接失败（可稍后在设备卡片上重试）: {e}"
 
-
-@router.put("/{device_id}")
-def update_device(device_id: int, body: DeviceUpdate):
-    db = SessionLocal()
     try:
-        dev = db.query(ExternalDevice).filter(ExternalDevice.id == device_id).first()
-        if not dev:
-            raise HTTPException(404, "设备不存在")
-        data = {k: v for k, v in body.model_dump().items() if v is not None}
-        for k, v in data.items():
-            setattr(dev, k, v)
-        db.commit()
-        db.refresh(dev)
-
-        svc = get_external_device_service()
-        svc.remove_device(device_id)
-        if dev.enabled:
-            svc.add_device(dev)
-        return _serialize(dev)
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(400, str(e))
+        payload = _serialize(dev)
     finally:
         db.close()
-
-
-@router.delete("/{device_id}")
-def delete_device(device_id: int):
-    db = SessionLocal()
-    try:
-        dev = db.query(ExternalDevice).filter(ExternalDevice.id == device_id).first()
-        if not dev:
-            raise HTTPException(404, "设备不存在")
-        svc = get_external_device_service()
-        svc.remove_device(device_id)
-        db.delete(dev)
-        db.commit()
-        return {"success": True}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(400, str(e))
-    finally:
-        db.close()
+    if warning:
+        payload["warning"] = warning
+    return payload
 
 
 @router.get("/status")
@@ -211,15 +192,121 @@ def list_logs(
 
 
 @router.delete("/logs")
-def clear_logs():
+def clear_logs(device_id: Optional[int] = None):
+    """清空外部设备数据日志
+
+    - device_id=None: 清空所有设备的日志
+    - device_id=N:    只清空指定设备的日志
+
+    - synchronize_session=False 避免 SQLAlchemy ↔ SQLite 并发写锁冲突
+    - 若 ORM 删除失败，回退到 raw SQL 再试一次（不依赖 ORM session 状态）
+    - OperationalError(database is locked) 做 3 次重试，间隔 0.3s
+    """
+    import time
+    from sqlalchemy.exc import OperationalError
+
+    last_err: Optional[Exception] = None
+    for attempt in range(3):
+        db = SessionLocal()
+        try:
+            q = db.query(ExternalDeviceLog)
+            if device_id is not None:
+                q = q.filter(ExternalDeviceLog.device_id == device_id)
+            count = q.count()
+            q.delete(synchronize_session=False)
+            db.commit()
+            logger.info("[ExtDev] 清空数据日志: deleted=%d, device_id=%s, attempt=%d",
+                        count, device_id, attempt + 1)
+            return {"deleted": count}
+        except OperationalError as e:
+            db.rollback()
+            last_err = e
+            logger.warning("[ExtDev] 清空数据日志遇到锁/IO错误，第 %d 次重试: %s", attempt + 1, e)
+            time.sleep(0.3)
+        except Exception as e:
+            db.rollback()
+            last_err = e
+            logger.exception("[ExtDev] ORM 删除失败，尝试 raw SQL 兜底: %s", e)
+            try:
+                if device_id is None:
+                    db.execute("DELETE FROM external_device_logs")
+                else:
+                    db.execute(
+                        "DELETE FROM external_device_logs WHERE device_id = :did",
+                        {"did": device_id},
+                    )
+                db.commit()
+                return {"deleted": -1, "note": "raw sql fallback"}
+            except Exception as e2:
+                db.rollback()
+                last_err = e2
+                logger.exception("[ExtDev] raw SQL 兜底也失败: %s", e2)
+                break
+        finally:
+            db.close()
+
+    raise HTTPException(500, f"清空失败: {type(last_err).__name__ if last_err else 'Unknown'}: {last_err}")
+
+
+# ============================================================
+# 动态路径必须放在所有静态路径之后，否则会抢先匹配
+# 例如 DELETE /logs 会被 DELETE /{device_id} 误吞（device_id="logs" 解析失败 422）
+# ============================================================
+
+@router.put("/{device_id}")
+def update_device(device_id: int, body: DeviceUpdate):
     db = SessionLocal()
     try:
-        count = db.query(ExternalDeviceLog).count()
-        db.query(ExternalDeviceLog).delete()
+        dev = db.query(ExternalDevice).filter(ExternalDevice.id == device_id).first()
+        if not dev:
+            db.close()
+            raise HTTPException(404, "设备不存在")
+        data = {k: v for k, v in body.model_dump().items() if v is not None}
+        data = _sanitize_device_payload(data)
+        for k, v in data.items():
+            setattr(dev, k, v)
         db.commit()
-        return {"deleted": count}
+        db.refresh(dev)
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(500, str(e))
+        db.close()
+        raise HTTPException(400, f"保存失败: {type(e).__name__}: {e}")
+
+    warning = None
+    try:
+        svc = get_external_device_service()
+        svc.remove_device(device_id)
+        if dev.enabled:
+            svc.add_device(dev)
+    except Exception as e:
+        logger.warning("[ExtDev] 设备已更新但连接失败 id=%s: %s", dev.id, e)
+        warning = f"连接失败（可稍后在设备卡片上重试）: {e}"
+
+    try:
+        payload = _serialize(dev)
+    finally:
+        db.close()
+    if warning:
+        payload["warning"] = warning
+    return payload
+
+
+@router.delete("/{device_id}")
+def delete_device(device_id: int):
+    db = SessionLocal()
+    try:
+        dev = db.query(ExternalDevice).filter(ExternalDevice.id == device_id).first()
+        if not dev:
+            raise HTTPException(404, "设备不存在")
+        svc = get_external_device_service()
+        svc.remove_device(device_id)
+        db.delete(dev)
+        db.commit()
+        return {"success": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
     finally:
         db.close()

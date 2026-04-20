@@ -123,15 +123,43 @@
         </div>
 
         <!-- 串口 -->
-        <div v-if="isSerialProtocol" class="grid grid-cols-2 gap-4">
-          <el-form-item label="串口号">
-            <el-input v-model="form.serial_port" placeholder="COM3 或 /dev/ttyUSB0" />
-          </el-form-item>
-          <el-form-item label="波特率">
-            <el-select v-model="form.serial_baud" class="w-full">
-              <el-option v-for="b in [9600,19200,38400,57600,115200]" :key="b" :label="b" :value="b" />
-            </el-select>
-          </el-form-item>
+        <div v-if="isSerialProtocol">
+          <div class="grid grid-cols-2 gap-4">
+            <el-form-item label="串口号">
+              <el-input v-model="form.serial_port" placeholder="COM3 或 /dev/ttyUSB0" />
+            </el-form-item>
+            <el-form-item label="波特率">
+              <el-select v-model="form.serial_baud" class="w-full">
+                <el-option v-for="b in [1200,2400,4800,9600,19200,38400,57600,115200]" :key="b" :label="b" :value="b" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <div class="grid grid-cols-3 gap-4">
+            <el-form-item label="数据位">
+              <el-select v-model="serialBytesize" class="w-full">
+                <el-option :value="5" label="5" />
+                <el-option :value="6" label="6" />
+                <el-option :value="7" label="7" />
+                <el-option :value="8" label="8" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="校验">
+              <el-select v-model="serialParity" class="w-full">
+                <el-option value="N" label="无 (N)" />
+                <el-option value="E" label="偶 (E)" />
+                <el-option value="O" label="奇 (O)" />
+                <el-option value="M" label="标记 (M)" />
+                <el-option value="S" label="空格 (S)" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="停止位">
+              <el-select v-model="serialStopbits" class="w-full">
+                <el-option :value="1" label="1" />
+                <el-option :value="1.5" label="1.5" />
+                <el-option :value="2" label="2" />
+              </el-select>
+            </el-form-item>
+          </div>
         </div>
 
         <!-- Modbus ASCII 参数 -->
@@ -312,6 +340,11 @@ const modbusPollInterval = ref(0.5)
 const continuousDataFormat = ref('ascii')
 const continuousDelimiter = ref('\\r\\n')
 
+// 串口通用参数（所有 serial_* 协议共用）
+const serialBytesize = ref(8)
+const serialParity = ref('N')
+const serialStopbits = ref(1)
+
 const isSerialProtocol = computed(() =>
   ['serial', 'serial_modbus_ascii', 'serial_continuous'].includes(form.value.protocol)
 )
@@ -339,6 +372,10 @@ const getLastData = (id) => statusMap.value[id]?.last_data || ''
 
 const buildFormData = () => {
   const data = { ...form.value }
+  // 去掉字符串字段的前后空格，避免肉眼看不见的空格导致连接失败（如 " /dev/ttyUSB0"）
+  ;['name', 'serial_port', 'ip', 'station_id'].forEach(k => {
+    if (typeof data[k] === 'string') data[k] = data[k].trim()
+  })
   if (data.protocol === 'http_poll') {
     data.protocol_config = { ...data.protocol_config, url: httpUrl.value }
   }
@@ -361,6 +398,15 @@ const buildFormData = () => {
       slave_id: modbusSlaveId.value,
       byte_order: modbusByteOrder.value,
       data_scale: modbusScale.value,
+    }
+  }
+  // 所有串口协议统一注入 bytesize/parity/stopbits
+  if (isSerialProtocol.value) {
+    data.protocol_config = {
+      ...data.protocol_config,
+      bytesize: serialBytesize.value,
+      parity: serialParity.value,
+      stopbits: serialStopbits.value,
     }
   }
   if (data.parse_mode === 'split') {
@@ -386,6 +432,9 @@ const openAdd = () => {
   weightMin.value = 0
   weightMax.value = 100
   httpUrl.value = ''
+  serialBytesize.value = 8
+  serialParity.value = 'N'
+  serialStopbits.value = 1
   showDialog.value = true
 }
 
@@ -414,6 +463,12 @@ const editDev = (dev) => {
     modbusByteOrder.value = pcfg.byte_order ?? 'H4H3L2L1'
     modbusScale.value = pcfg.data_scale ?? 1.0
   }
+  // 串口通用参数回填（所有 serial_* 协议）
+  if (['serial', 'serial_modbus_ascii', 'serial_continuous'].includes(dev.protocol)) {
+    serialBytesize.value = pcfg.bytesize ?? 8
+    serialParity.value = pcfg.parity ?? 'N'
+    serialStopbits.value = pcfg.stopbits ?? 1
+  }
   const vr = dev.validation_rules?.weight || {}
   weightMin.value = vr.min || 0
   weightMax.value = vr.max || 100
@@ -430,10 +485,10 @@ const applyPreset = (preset) => {
     form.value.serial_baud = 9600
     form.value.parse_mode = 'direct'
     modbusSlaveId.value = 1
-    modbusRegister.value = 41201
+    modbusRegister.value = 41203
     modbusCount.value = 2
     modbusByteOrder.value = 'H4H3L2L1'
-    modbusScale.value = 1.0
+    modbusScale.value = 0.01
     modbusPollInterval.value = 0.5
   } else if (preset === 'weighing_continuous') {
     form.value.name = '称重器 (连续)'
@@ -456,17 +511,36 @@ const handleSave = async () => {
   saving.value = true
   try {
     const data = buildFormData()
+    let resp
     if (editingId.value) {
-      await updateExternalDevice(editingId.value, data)
+      resp = await updateExternalDevice(editingId.value, data)
       ElMessage.success('设备已更新')
     } else {
-      await createExternalDevice(data)
+      resp = await createExternalDevice(data)
       ElMessage.success('设备已添加')
+    }
+    const warning = resp?.data?.warning
+    if (warning) {
+      ElMessage({ type: 'warning', message: warning, duration: 6000 })
     }
     showDialog.value = false
     loadDevices()
     refreshStatus()
-  } catch (e) { ElMessage.error(e.response?.data?.detail || '保存失败') }
+  } catch (e) {
+    console.error('[ExtDev] save failed:', e, e?.response)
+    let detail = ''
+    if (e?.response) {
+      const d = e.response.data?.detail
+      if (typeof d === 'string') detail = d
+      else if (d != null) { try { detail = JSON.stringify(d) } catch { detail = String(d) } }
+      else detail = `HTTP ${e.response.status} ${e.response.statusText || ''}`.trim()
+    } else if (e?.message) {
+      detail = e.message
+    } else {
+      try { detail = JSON.stringify(e) } catch { detail = String(e) }
+    }
+    ElMessage.error(`保存失败: ${detail || '未知错误'}`)
+  }
   finally { saving.value = false }
 }
 
@@ -513,11 +587,27 @@ const loadLogs = async () => {
 const handleClearLogs = async () => {
   try {
     await ElMessageBox.confirm('确定清空所有日志？', '确认')
+  } catch (e) {
+    return
+  }
+  try {
     await clearExternalDeviceLogs()
     logs.value = []
     ElMessage.success('已清空')
   } catch (e) {
-    if (e !== 'cancel' && e !== 'close') ElMessage.error('清空失败')
+    console.error('[ExtDev] clearExternalDeviceLogs failed:', e, e?.response)
+    let detail = ''
+    if (e?.response) {
+      const d = e.response.data?.detail
+      if (typeof d === 'string') detail = d
+      else if (d != null) { try { detail = JSON.stringify(d) } catch { detail = String(d) } }
+      else detail = `HTTP ${e.response.status} ${e.response.statusText || ''}`.trim()
+    } else if (e?.message) {
+      detail = e.message
+    } else {
+      try { detail = JSON.stringify(e) } catch { detail = String(e) }
+    }
+    ElMessage.error(`清空失败: ${detail || '未知错误'}`)
   }
 }
 

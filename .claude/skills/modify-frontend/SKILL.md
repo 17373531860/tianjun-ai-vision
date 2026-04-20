@@ -208,3 +208,37 @@ display.monitor.defaultCounters.showTotal/showGood/showBad/showNgSteps → 内�
 ### 新增页面组件
 - `frontend/src/views/MES/ClusterPanel.vue` — 集群配置 (Master/Slave)
 - `frontend/src/views/MES/ExternalDevicePanel.vue` — 外部设备管理
+
+## v2.7.5 前端要点
+
+### 工单表单模板（`OrderPanel.vue`）
+- localStorage key：`mes_order_form_template_v1`
+- 一项 item 结构：`{ key, label, type, required, preset, optionsText }`
+- `type` 取值：`text | textarea | number | date | time | datetime | select | switch`
+- 预设字段 key 必须与后端 ORM 对齐：`order_no / product_name / product_code / product_spec / planned_qty / priority / remark`
+- `DynamicFieldInput` 组件（本地定义，`h()` 渲染）统一按 type 选控件
+- 保存时：
+  - 预设字段 → payload 顶层
+  - 非预设 → `payload.extra_data`
+  - **必填字段被删**：新建时自动补 `ORD-{Date.now()}` / `未命名`，编辑时信任后端校验
+  - 编辑时保留原 `extra_data` 中模板外的键，不丢失
+- `select` 选项格式：`"紧急=1,高=2,正常=3,低=4"`（label=value）或 `"A,B,C"`（label==value）
+- 自定义字段 key 校验：`^[A-Za-z_][A-Za-z0-9_]*$` 且唯一
+
+### 画面变换 UI（`Settings/index.vue`）
+- 位置：「显示设置」 tab 下的「画面变换」卡片
+- `transformChannel` 选通道；`rotation/flip_h/flip_v` 绑到本地 form
+- 保存调 `POST /source/transform/config?channel=N`，立即对后续帧生效
+- **前端绝对不要对检测框做二次旋转/翻转**——后端已经在采集环节做了，检测框坐标是对齐的
+
+### 外部设备 UI（`ExternalDevicePanel.vue` / `ScannerPanel.vue`）
+- 所有 axios 错误处理统一：`detail` 可能是 string | list | dict，展示前要规范化为 string
+  ```js
+  const d = e.response?.data?.detail
+  const msg = typeof d === 'string' ? d
+            : Array.isArray(d) ? d.map(x => x.msg || JSON.stringify(x)).join('; ')
+            : d ? JSON.stringify(d) : '未知错误'
+  ElMessage.error(msg)
+  ```
+- 串口子参数（data bits / parity / stop bits）存在 `form.protocol_config` 而非顶层
+- 保存返回 200 但有 `warning` 字段 → 用 `ElMessage.warning` 提示（设备暂时不可连通）

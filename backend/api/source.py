@@ -519,6 +519,13 @@ class VideoSourceManager:
         self._progress_lock = threading.Lock()  # 防止进度设置并发调用
         self._setting_progress = False  # 正在设置进度的标志
         self._pending_progress = None  # 待处理的进度请求（记住最新值）
+
+        # 画面几何变换（每通道独立；0°/90°/180°/270° + 水平/垂直镜像）
+        # 在 _capture_loop 帧拷贝后立刻生效，推理/MJPEG/录像拿到的都是变换后图像，
+        # 所以检测框坐标天然对齐，无需二次映射。
+        self.video_rotation = 0  # 0 / 90 / 180 / 270
+        self.video_flip_h = False  # 左右镜像
+        self.video_flip_v = False  # 上下镜像
         
         # YOLO 模型
         self.model = None
@@ -543,7 +550,11 @@ class VideoSourceManager:
         self._init_inference_vars()
     
     def _load_device_config(self):
-        """从文件加载设备配置"""
+        """从文件加载设备配置
+
+        全局字段（device/mediapipe/frame_limit 等）所有通道共用；
+        per_channel[str(channel_id)] 保存每通道独立的画面变换（rotation/flip）。
+        """
         try:
             if os.path.exists(self.CONFIG_FILE):
                 import json
@@ -558,15 +569,41 @@ class VideoSourceManager:
                     self.mediapipe_hands = config.get('mediapipe_hands', True)
                     self.mediapipe_confidence = config.get('mediapipe_confidence', 0.7)
                     self._mp_process_interval = config.get('mediapipe_interval', 2)
-                    print(f"已加载设备配置: 设备={self.device}, 帧率限制={self.frame_limit_enabled}, FP16={self.use_half}, MediaPipe={self.mediapipe_enabled}")
+
+                    per_ch = (config.get('per_channel') or {}).get(str(self.channel_id), {})
+                    rot = per_ch.get('rotation', 0)
+                    self.video_rotation = rot if rot in (0, 90, 180, 270) else 0
+                    self.video_flip_h = bool(per_ch.get('flip_h', False))
+                    self.video_flip_v = bool(per_ch.get('flip_v', False))
+
+                    print(f"已加载设备配置: 设备={self.device}, 帧率限制={self.frame_limit_enabled}, "
+                          f"FP16={self.use_half}, MediaPipe={self.mediapipe_enabled}, "
+                          f"ch{self.channel_id} rot={self.video_rotation} "
+                          f"flip_h={self.video_flip_h} flip_v={self.video_flip_v}")
         except Exception as e:
             print(f"加载设备配置失败: {e}")
-    
+
     def _save_device_config(self):
-        """保存设备配置到文件"""
+        """保存设备配置到文件（保留其它通道的 per_channel 设置不被覆盖）"""
         try:
             import json
             os.makedirs(os.path.dirname(self.CONFIG_FILE), exist_ok=True)
+
+            existing = {}
+            if os.path.exists(self.CONFIG_FILE):
+                try:
+                    with open(self.CONFIG_FILE, 'r', encoding='utf-8') as f:
+                        existing = json.load(f) or {}
+                except Exception:
+                    existing = {}
+
+            per_channel = existing.get('per_channel') or {}
+            per_channel[str(self.channel_id)] = {
+                'rotation': int(self.video_rotation) if self.video_rotation in (0, 90, 180, 270) else 0,
+                'flip_h': bool(self.video_flip_h),
+                'flip_v': bool(self.video_flip_v),
+            }
+
             config = {
                 'device': self.device,
                 'frame_limit_enabled': self.frame_limit_enabled,
@@ -576,14 +613,38 @@ class VideoSourceManager:
                 'mediapipe_pose': self.mediapipe_pose,
                 'mediapipe_hands': self.mediapipe_hands,
                 'mediapipe_confidence': self.mediapipe_confidence,
-                'mediapipe_interval': self._mp_process_interval
+                'mediapipe_interval': self._mp_process_interval,
+                'per_channel': per_channel,
             }
             with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
             print(f"设备配置已保存: {config}")
         except Exception as e:
             print(f"保存设备配置失败: {e}")
-    
+
+    def _apply_frame_transform(self, frame):
+        """按通道配置对帧做旋转 + 镜像。
+
+        顺序：先旋转（90° 倍数），再水平镜像，再垂直镜像。
+        OpenCV 原生实现，零拷贝 90°/180°/270°，极低开销。
+        """
+        if frame is None:
+            return frame
+        rot = self.video_rotation
+        if rot == 90:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        elif rot == 180:
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+        elif rot == 270:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        if self.video_flip_h and self.video_flip_v:
+            frame = cv2.flip(frame, -1)
+        elif self.video_flip_h:
+            frame = cv2.flip(frame, 1)
+        elif self.video_flip_v:
+            frame = cv2.flip(frame, 0)
+        return frame
+
     def _init_mediapipe(self):
         """Lazy-load MediaPipe models on first use."""
         try:
@@ -1976,7 +2037,12 @@ class VideoSourceManager:
                     # shared read-only across inference, streaming, and recording
                     # threads — no further copies are needed in the capture loop.
                     original_frame = frame.copy()
-                    
+
+                    # ========== 画面几何变换（在所有消费者之前）==========
+                    # rotation/flip 在这里完成后，推理、MJPEG、录像、快照
+                    # 拿到的都是变换后帧，检测框坐标自动对齐，无需二次映射。
+                    original_frame = self._apply_frame_transform(original_frame)
+
                     # 更新视频当前帧位置
                     if self.source_type == 'video' and self.capture is not None:
                         self.video_current_frame = int(self.capture.get(cv2.CAP_PROP_POS_FRAMES))
@@ -8674,6 +8740,44 @@ def set_stream_config(req: StreamConfigRequest):
         "mediapipe_hands": video_manager.mediapipe_hands,
         "mediapipe_confidence": video_manager.mediapipe_confidence,
         "mediapipe_interval": video_manager._mp_process_interval
+    }
+
+
+# ========== 画面变换配置 API（按通道独立） ==========
+
+class TransformConfigRequest(BaseModel):
+    rotation: Optional[int] = 0   # 0 / 90 / 180 / 270
+    flip_h: Optional[bool] = False
+    flip_v: Optional[bool] = False
+
+
+@router.get("/transform/config")
+def get_transform_config(channel: int = 0):
+    """获取指定通道的画面旋转/镜像配置"""
+    mgr = _get_mgr(channel)
+    return {
+        "channel": channel,
+        "rotation": int(mgr.video_rotation),
+        "flip_h": bool(mgr.video_flip_h),
+        "flip_v": bool(mgr.video_flip_v),
+    }
+
+
+@router.post("/transform/config")
+def set_transform_config(req: TransformConfigRequest, channel: int = 0):
+    """设置指定通道的画面旋转/镜像配置，立即对后续帧生效"""
+    mgr = _get_mgr(channel)
+    rot = req.rotation if req.rotation in (0, 90, 180, 270) else 0
+    mgr.video_rotation = rot
+    mgr.video_flip_h = bool(req.flip_h)
+    mgr.video_flip_v = bool(req.flip_v)
+    mgr._save_device_config()
+    return {
+        "status": "success",
+        "channel": channel,
+        "rotation": int(mgr.video_rotation),
+        "flip_h": bool(mgr.video_flip_h),
+        "flip_v": bool(mgr.video_flip_v),
     }
 
 

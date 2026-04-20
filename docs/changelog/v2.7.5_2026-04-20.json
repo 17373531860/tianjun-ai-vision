@@ -1,0 +1,108 @@
+{
+  "version": "2.7.5",
+  "date": "2026-04-20",
+  "previous_version": "2.7.4",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "外部设备清空日志 int_parsing / [object Object]",
+      "symptom": "MES→外部设备 点『清空』报 int_parsing 或 [object Object]，日志清不掉",
+      "root_cause": "FastAPI 路由顺序：@router.delete('/{device_id}') 先于 @router.delete('/logs') 注册，/logs 被当成 device_id='logs' 解析失败；SQLite 并发下 OperationalError 无重试；前端直接把 detail 对象喂给 ElMessage 显示 [object Object]",
+      "fix": "把所有 /{device_id} 动态路径端点移到文件末尾；clear_logs 改 synchronize_session=False + 3 次重试 + 原生 SQL DELETE 兜底；前端把 detail 规范化为字符串再展示",
+      "files": [
+        "backend/api/external_device.py",
+        "frontend/src/views/MES/ExternalDevicePanel.vue",
+        "frontend/src/views/MES/ScannerPanel.vue"
+      ],
+      "keywords": ["清空失败", "clear logs", "int_parsing", "[object Object]", "FastAPI 路由顺序", "external device"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "外部设备串口路径前后空格导致保存失败",
+      "symptom": "复制粘贴串口路径时带空格，保存后提示 [Errno 2] No such file or directory: ' /dev/ttyUSB0'",
+      "root_cause": "前端未 trim，后端未 sanitize，用户输入的空格直达 pyserial",
+      "fix": "前端 buildFormData 对 name/serial_port/ip/station_id 统一 trim；后端 _sanitize_device_payload 对同字段 strip；串口暂时打不开时后端改为 200+warning 而非 400",
+      "files": [
+        "backend/api/external_device.py",
+        "frontend/src/views/MES/ExternalDevicePanel.vue"
+      ],
+      "keywords": ["串口路径", "trim", "strip", "sanitize", "warning", "serial port"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "称重器 Modbus ASCII 粘包无法解析",
+      "symptom": "串口 RX 有数据但『测试』按钮报解析失败",
+      "root_cause": "_parse_modbus_ascii_response 按单帧处理，串口缓冲堆积两帧时 LRC 全部失败",
+      "fix": "按 : 分段 + \\r\\n/下一 : 作结束，逐段 LRC 校验，任一段有效即返回",
+      "files": ["backend/services/external_device.py"],
+      "keywords": ["Modbus ASCII", "称重器", "粘包", "LRC", "scale"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "画面旋转 / 镜像（按通道独立）",
+      "symptom": null,
+      "root_cause": null,
+      "fix": "VideoSourceManager 新增 video_rotation/flip_h/flip_v 字段；_apply_frame_transform 方法在 _capture_loop 紧跟 frame.copy() 后应用，后续推理/MJPEG/录像拿到的都是变换后帧，检测框坐标自动对齐；_load/_save_device_config 引入 per_channel 子结构保存；新增 GET/POST /source/transform/config API",
+      "files": ["backend/api/source.py"],
+      "keywords": ["画面旋转", "镜像", "transform", "rotation", "flip", "per_channel", "多通道"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "MES 工单表单模板编辑器",
+      "symptom": null,
+      "root_cause": null,
+      "fix": "完全重写 OrderPanel.vue：新增『字段配置』按钮打开模板编辑器，支持改名/删除/重排预设字段、添加 8 种类型的自定义字段；新建/编辑弹窗按模板动态渲染；预设字段→后端标准字段，其它→extra_data；模板存 localStorage['mes_order_form_template_v1']；必填兜底（order_no 自动 ORD-时间戳，product_name 默认『未命名』）",
+      "files": ["frontend/src/views/MES/OrderPanel.vue"],
+      "keywords": ["工单表单", "字段配置", "模板编辑器", "DynamicFieldInput", "localStorage", "extra_data", "mes order"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "MES 推送上下文新增 ng_steps / missing_step_count",
+      "symptom": null,
+      "root_cause": null,
+      "fix": "MESGateway.build_context_from_cycle 新增 ng_steps=[is_good=False 的步骤] 与 cycle.missing_step_count=max(0, total-completed) 或 len(ng_steps) 兜底",
+      "files": ["backend/services/mes_gateway.py"],
+      "keywords": ["MES 推送", "ng_steps", "missing_step_count", "context", "build_context_from_cycle", "Jinja"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CONFIG-001",
+      "title": "外部设备 UI 暴露串口子参数",
+      "symptom": null,
+      "root_cause": null,
+      "fix": "新增 data bits (5/6/7/8) / parity (N/E/O/M/S) / stop bits (1/1.5/2) UI，写入 protocol_config.bytesize/parity/stopbits",
+      "files": ["frontend/src/views/MES/ExternalDevicePanel.vue"],
+      "keywords": ["串口配置", "bytesize", "parity", "stopbits"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["modify-source", "api-sync", "debug-mes", "modify-frontend"],
+  "files_changed": [
+    "backend/api/source.py",
+    "backend/api/external_device.py",
+    "backend/services/external_device.py",
+    "backend/services/mes_gateway.py",
+    "frontend/src/views/MES/OrderPanel.vue",
+    "frontend/src/views/MES/ExternalDevicePanel.vue",
+    "frontend/src/views/MES/ScannerPanel.vue",
+    "frontend/src/views/Settings/index.vue",
+    "electron/package.json",
+    "electron/splash.html"
+  ],
+  "tests": [
+    "test_video_transform.py (11/11)",
+    "test_mes_ng_steps.py (3/3)"
+  ]
+}

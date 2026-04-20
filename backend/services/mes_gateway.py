@@ -215,6 +215,16 @@ class MESGateway:
                 "end_time": s.end_time.isoformat() if s.end_time else None,
             })
 
+        # 便利字段：让 MES 端不写 Jinja 过滤器即可直接拿到 NG 步骤明细
+        # ng_steps = 所有 is_good=False 的步骤；missing_step_count = 缺失步骤数
+        context["ng_steps"] = [s for s in context["steps"] if s.get("is_good") is False]
+        completed = context["cycle"].get("completed_steps")
+        total = context["cycle"].get("total_steps")
+        if isinstance(completed, int) and isinstance(total, int):
+            context["cycle"]["missing_step_count"] = max(0, total - completed)
+        else:
+            context["cycle"]["missing_step_count"] = len(context["ng_steps"])
+
         if workpiece_id:
             from backend.models.mes_models import Workpiece, DefectRecord
             wp = db.query(Workpiece).filter(Workpiece.id == workpiece_id).first()

@@ -363,33 +363,55 @@ class ExternalDeviceService:
 
     @staticmethod
     def _parse_modbus_ascii_response(frame: str, expected_slave: int = 1) -> Optional[list]:
-        """解析 Modbus ASCII 响应帧，返回寄存器值列表"""
+        """解析 Modbus ASCII 响应帧，返回寄存器值列表
+
+        容错说明：
+        - 支持单帧 ":ADDR FUNC CNT DATA LRC \r\n"
+        - 支持多帧粘包（缓冲区残留 / 轮询+测试并发）：按 ":" 拆，遍历所有候选片段，
+          取第一个 LRC 通过、slave/func 匹配的片段
+        - 忽略片段中的 \r\n 以及末尾非 hex 噪声
+        """
+        if not frame:
+            return None
         frame = frame.strip()
-        if not frame.startswith(":"):
+        if ":" not in frame:
             return None
-        hex_str = frame[1:]
-        try:
-            raw = bytes.fromhex(hex_str)
-        except ValueError:
-            return None
-        if len(raw) < 4:
-            return None
-        payload = raw[:-1]
-        lrc_recv = raw[-1]
-        lrc_calc = (-sum(payload)) & 0xFF
-        if lrc_recv != lrc_calc:
-            return None
-        slave = payload[0]
-        func = payload[1]
-        if slave != expected_slave or func != 0x03:
-            return None
-        byte_count = payload[2]
-        data = payload[3:3 + byte_count]
-        registers = []
-        for i in range(0, len(data), 2):
-            if i + 1 < len(data):
-                registers.append((data[i] << 8) | data[i + 1])
-        return registers
+
+        candidates = []
+        for seg in frame.split(":"):
+            seg = seg.split("\r")[0].split("\n")[0].strip()
+            if not seg:
+                continue
+            if len(seg) < 8 or len(seg) % 2 != 0:
+                continue
+            if not all(c in "0123456789abcdefABCDEF" for c in seg):
+                continue
+            candidates.append(seg)
+
+        for hex_str in candidates:
+            try:
+                raw = bytes.fromhex(hex_str)
+            except ValueError:
+                continue
+            if len(raw) < 4:
+                continue
+            payload = raw[:-1]
+            lrc_recv = raw[-1]
+            lrc_calc = (-sum(payload)) & 0xFF
+            if lrc_recv != lrc_calc:
+                continue
+            slave = payload[0]
+            func = payload[1]
+            if slave != expected_slave or func != 0x03:
+                continue
+            byte_count = payload[2]
+            data = payload[3:3 + byte_count]
+            registers = []
+            for i in range(0, len(data), 2):
+                if i + 1 < len(data):
+                    registers.append((data[i] << 8) | data[i + 1])
+            return registers
+        return None
 
     def _serial_modbus_ascii_loop(self, conn: DeviceConnection):
         """串口 Modbus ASCII 主从模式 — 定时发读取请求，解析响应"""

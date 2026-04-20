@@ -275,6 +275,55 @@
               </template>
             </el-alert>
           </el-card>
+
+          <!-- 画面变换（旋转 + 镜像；检测框随画面一起转，每通道独立） -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-tech-blue"><Refresh /></el-icon>
+                <span class="font-bold text-white">画面变换</span>
+                <el-tag size="small" type="info">每通道独立</el-tag>
+              </div>
+            </template>
+            <div class="space-y-4">
+              <div class="flex items-center gap-3">
+                <span class="text-gray-300 whitespace-nowrap">工位通道</span>
+                <el-select v-model="transformChannel" size="default" style="width: 10rem" @change="loadTransformConfig">
+                  <el-option v-for="n in Math.max(transformTotalChannels, 1)" :key="n - 1" :label="`工位 ${n}`" :value="n - 1" />
+                </el-select>
+                <el-button size="small" @click="loadTransformConfig" :loading="transformLoading">
+                  <el-icon class="mr-1"><Refresh /></el-icon>刷新
+                </el-button>
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                  <div class="flex items-center justify-between mb-2">
+                    <span class="text-gray-300">旋转角度</span>
+                  </div>
+                  <el-select v-model="transformForm.rotation" size="default" class="w-full">
+                    <el-option label="0°（不旋转）" :value="0" />
+                    <el-option label="90°（顺时针）" :value="90" />
+                    <el-option label="180°" :value="180" />
+                    <el-option label="270°（逆时针 90°）" :value="270" />
+                  </el-select>
+                </div>
+                <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                  <span class="text-gray-300">左右镜像</span>
+                  <el-switch v-model="transformForm.flip_h" />
+                </div>
+                <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                  <span class="text-gray-300">上下镜像</span>
+                  <el-switch v-model="transformForm.flip_v" />
+                </div>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-400">变换发生在帧采集之后、推理之前；检测框、录像、MJPEG 流都会跟随一起转/镜像。</span>
+                <el-button type="primary" size="default" @click="saveTransformConfig" :loading="transformSaving">
+                  保存此工位设置
+                </el-button>
+              </div>
+            </div>
+          </el-card>
         </div>
       </el-tab-pane>
 
@@ -1291,6 +1340,52 @@ const applyKalmanPreset = (preset) => {
   saveKalmanConfig();
 };
 
+// ========== 画面变换（按通道） ==========
+const transformChannel = ref(0);
+const transformTotalChannels = ref(1);
+const transformLoading = ref(false);
+const transformSaving = ref(false);
+const transformForm = reactive({ rotation: 0, flip_h: false, flip_v: false });
+
+async function loadTransformTotalChannels() {
+  try {
+    const res = await api.get('/workstations');
+    transformTotalChannels.value = res?.data?.channel_count || 1;
+  } catch {
+    transformTotalChannels.value = 1;
+  }
+}
+
+async function loadTransformConfig() {
+  transformLoading.value = true;
+  try {
+    const res = await api.get(`/source/transform/config?channel=${transformChannel.value}`);
+    transformForm.rotation = res?.data?.rotation || 0;
+    transformForm.flip_h = !!res?.data?.flip_h;
+    transformForm.flip_v = !!res?.data?.flip_v;
+  } catch (e) {
+    ElMessage.error('加载画面变换失败: ' + (e?.response?.data?.detail || e?.message || ''));
+  } finally {
+    transformLoading.value = false;
+  }
+}
+
+async function saveTransformConfig() {
+  transformSaving.value = true;
+  try {
+    await api.post(`/source/transform/config?channel=${transformChannel.value}`, {
+      rotation: transformForm.rotation || 0,
+      flip_h: !!transformForm.flip_h,
+      flip_v: !!transformForm.flip_v,
+    });
+    ElMessage.success(`工位 ${transformChannel.value + 1} 画面变换已保存并生效`);
+  } catch (e) {
+    ElMessage.error('保存失败: ' + (e?.response?.data?.detail || e?.message || ''));
+  } finally {
+    transformSaving.value = false;
+  }
+}
+
 onMounted(async () => {
   store.loadSettings();
   loadPerformanceSettings();
@@ -1298,6 +1393,8 @@ onMounted(async () => {
   loadCurrentDevice();
   loadKalmanConfig();
   loadOperators();  // 加载卡尔曼滤波配置
+  loadTransformTotalChannels();
+  loadTransformConfig();
   
   // 从当前项目加载检测配置（包括自定义提示框）
   if (projectStore.currentProjectId) {

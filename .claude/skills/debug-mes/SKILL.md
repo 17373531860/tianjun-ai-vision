@@ -285,3 +285,48 @@ end_cycle() → on_cycle_end()
 - 缺陷自动分类依赖 DefectCode 表中 `label_mapping` 字段的正确配置
 - Modbus 适配器与报警灯共用 RS485 串口时使用 `_serial_lock` 互斥，但长时间写入可能延迟报警响应
 - `mes_hooks.py` 中 import 错误容易被 `except Exception: pass` 静默吞掉，新增代码务必加 print 输出异常
+
+## MES 推送 Context 字段清单（v2.7.5 更新）
+
+`MESGateway.build_context_from_cycle()` 返回的 context dict：
+
+```text
+cycle.id / cycle.is_good / cycle.result (OK|NG)
+cycle.duration / cycle.event_name / cycle.ng_reason
+cycle.completed_steps / cycle.total_steps / cycle.start_time / cycle.end_time
+cycle.missing_step_count     # v2.7.5 新增
+project.id / project.name
+steps[]                      # 每项: label/index/duration/is_good/confidence/start_time/end_time
+ng_steps[]                   # v2.7.5 新增：steps 中 is_good=False 的子集
+defects[]                    # 每项: defect_code/defect_name/category/severity
+workpiece.{id,serial_no,status,inspection_count}
+order.*
+operator.{name,employee_no,id}
+```
+
+**便利字段的取舍**：
+- `missing_step_count` 优先用 `total - completed`；两者有 None 时回退到 `len(ng_steps)`
+- `ng_steps` 顺序 = `step_record.id`（创建顺序），不是缺失顺序
+- 这两个字段是**追加**，不破坏旧模板，所以现场升级直接重启后端即可
+
+**JSON / 表单模板引用示例**（Jinja2）：
+```json
+{
+  "order_no": "{{ order.order_no }}",
+  "result": "{{ cycle.result }}",
+  "missing_count": {{ cycle.missing_step_count }},
+  "ng_step_names": [{% for s in ng_steps %}"{{ s.label }}"{% if not loop.last %},{% endif %}{% endfor %}]
+}
+```
+
+## 工单表单模板（v2.7.5 新增）
+
+- 存储：`localStorage['mes_order_form_template_v1']`，**仅前端**，不走后端
+- 预设字段 key 必须用：`order_no / product_name / product_code / product_spec / planned_qty / priority / remark`（与 ORM 字段名一致）
+- 非预设字段 → 保存到工单的 `extra_data` JSON 列
+- 必填兜底（新建时）：
+  - `order_no` 被删 → 前端自动补 `ORD-{Date.now()}`
+  - `product_name` 被删 → 前端自动补 `未命名`
+  - 编辑已有工单不做兜底（用户改不了 `order_no`）
+- 编辑时：模板外的原 `extra_data` 字段会保留到 payload 里，避免破坏既有数据
+- 故障诊断：新建工单出现 `order_no 必填` 之类后端 422 → 检查 `PRESET_META` 是否和后端 schema 字段对齐

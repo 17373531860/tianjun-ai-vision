@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.7.5 (2026-04-20)
+- [BUG-001] 修复: 外部设备清空日志 int_parsing / [object Object] (FastAPI 路由顺序调整 + synchronize_session=False + 重试 + 原生 SQL 兜底 + 前端 detail 规范化)
+- [BUG-002] 修复: 外部设备串口路径含前后空格导致保存失败 (前端 trim + 后端 _sanitize_device_payload + 串口打不开时改返回 200+warning)
+- [BUG-003] 修复: 称重器 Modbus ASCII 粘包无法解析 (_parse_modbus_ascii_response 按 : 分段 + 逐段 LRC 校验)
+- [FEAT-001] 新增: 画面旋转 / 镜像按通道独立配置 (VideoSourceManager 新增 video_rotation/flip_h/flip_v + _apply_frame_transform 在 _capture_loop 帧拷贝后应用 + per_channel 持久化 + GET/POST /source/transform/config API)
+- [FEAT-002] 新增: MES 工单表单模板编辑器 (OrderPanel 重写：字段配置弹窗可改名/删除/重排预设字段 + 添加 8 种类型自定义字段 + DynamicFieldInput 动态渲染 + localStorage 持久化 + 必填字段兜底)
+- [FEAT-003] 新增: MES 推送 context 便利字段 ng_steps[] + cycle.missing_step_count (build_context_from_cycle 追加，不破坏旧字段)
+- [CONFIG-001] 配置: 外部设备 UI 暴露串口子参数 (数据位 5/6/7/8 + 校验位 N/E/O/M/S + 停止位 1/1.5/2)
+- [SKILL-001] 更新: modify-source / api-sync / debug-mes / modify-frontend 四个 skill
+
 ## v2.7.4 (2026-04-20)
 - [FEAT-001] 新增: 物品标注框可视化隐藏 (Project 步骤表加 hide_in_view 开关；Monitor 实时画面/SOP/步骤详情过滤；后端 0 改动)
 - [FEAT-002] 新增: 堆叠模式 (跟踪计数模式下同 label 消失 N 秒后再现算下一层；新增 stack_enabled/stack_reappear_seconds/stack_required_count；独立状态机 + max 合并避免与 ByteTrack 计数双算)
