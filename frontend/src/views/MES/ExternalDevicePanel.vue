@@ -41,7 +41,7 @@
           <div class="text-xs text-gray-400 space-y-1">
             <div v-if="dev.ip">地址: {{ dev.ip }}:{{ dev.port }}</div>
             <div v-if="dev.serial_port">串口: {{ dev.serial_port }} @ {{ dev.serial_baud }}</div>
-            <div v-if="dev.station_id">工位: {{ dev.station_id }}</div>
+            <div>{{ channelLabel(dev.channel_id) }}<span v-if="dev.station_id" class="text-yellow-400 ml-2">(集群标识: {{ dev.station_id }})</span></div>
             <div>解析: {{ dev.parse_mode }} | 目标: {{ targetLabel(dev.data_target) }}</div>
             <div v-if="getLastData(dev.id)" class="text-cyan-300 truncate">
               最近: {{ getLastData(dev.id) }}
@@ -247,7 +247,7 @@
           </el-form-item>
           <el-form-item label="绑定工位">
             <el-select v-model="form.channel_id" placeholder="选择工位" class="!w-full">
-              <el-option v-for="ch in [0,1,2,3]" :key="ch" :label="'工位 ' + ch" :value="ch" />
+              <el-option v-for="opt in channelOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
           </el-form-item>
         </div>
@@ -286,6 +286,48 @@
           </div>
         </div>
 
+        <!-- 稳定值判定（仅称重） -->
+        <div v-if="form.device_role === 'weight'" class="bg-slate-900/50 rounded p-3 mb-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400">稳定值判定（抖动、空载数据将被过滤，不上报）</span>
+            <el-switch v-model="form.stable_enabled" size="small" />
+          </div>
+          <div v-if="form.stable_enabled" class="grid grid-cols-3 gap-3">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">稳定波动 ±Δ (kg)</div>
+              <el-input-number v-model="form.stable_delta" :min="0.001" :step="0.01" :precision="3" size="small" class="!w-full" controls-position="right" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">连续稳定次数</div>
+              <el-input-number v-model="form.stable_count" :min="2" :max="30" :precision="0" size="small" class="!w-full" controls-position="right" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">空载阈值 (kg)</div>
+              <el-input-number v-model="form.zero_threshold" :min="0" :step="0.01" :precision="3" size="small" class="!w-full" controls-position="right" />
+            </div>
+          </div>
+          <div class="text-xs text-gray-500 mt-2">
+            连续 <b>{{ form.stable_count }}</b> 次读数的最大差 ≤ <b>{{ form.stable_delta }}</b> kg 才视为稳定，上报该窗口的中位数；|值| < <b>{{ form.zero_threshold }}</b> kg 视为空载并清空条码。
+          </div>
+        </div>
+
+        <!-- 有重无码告警（仅称重） -->
+        <div v-if="form.device_role === 'weight'" class="bg-slate-900/50 rounded p-3 mb-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400">有重无码告警（稳定值非零但未扫码超时触发）</span>
+            <el-switch v-model="form.weight_no_barcode_alarm_enabled" size="small" />
+          </div>
+          <div v-if="form.weight_no_barcode_alarm_enabled" class="grid grid-cols-1 gap-3">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">超时时间 (秒)</div>
+              <el-input-number v-model="form.weight_no_barcode_alarm_delay_sec" :min="1" :max="600" :precision="0" size="small" class="!w-full" controls-position="right" />
+              <div class="text-xs text-gray-500 mt-1">
+                稳定重量 ≥ 空载阈值持续 <b>{{ form.weight_no_barcode_alarm_delay_sec }}</b> 秒仍未收到条码，则派发 weight_no_barcode 事件到 MES 并触发报警灯。默认关闭。
+              </div>
+            </div>
+          </div>
+        </div>
+
         <el-form-item>
           <el-switch v-model="form.enabled" size="small" />
           <span class="text-xs text-gray-300 ml-2">启用</span>
@@ -307,6 +349,7 @@ import {
   deleteExternalDevice, getExternalDeviceStatus, testExternalDevice,
   getExternalDeviceLogs, clearExternalDeviceLogs
 } from '@/api/external_device'
+import { getWorkstations } from '@/api/detection'
 
 const devices = ref([])
 const statusMap = ref({})
@@ -314,6 +357,14 @@ const logs = ref([])
 const showDialog = ref(false)
 const editingId = ref(null)
 const saving = ref(false)
+const channelCount = ref(1)
+const channelOptions = computed(() =>
+  Array.from({ length: channelCount.value }, (_, i) => ({
+    value: i,
+    label: `工位 ${i + 1}`,
+  }))
+)
+const channelLabel = (ch) => (ch == null ? '未绑定' : `工位 ${ch + 1}`)
 
 const defaultForm = () => ({
   name: '', device_role: 'weight', protocol: 'tcp',
@@ -321,6 +372,12 @@ const defaultForm = () => ({
   protocol_config: {}, parse_mode: 'direct', parse_config: {},
   station_id: '', channel_id: 0, data_target: 'cluster',
   validation_rules: {}, enabled: true,
+  stable_enabled: true,
+  stable_delta: 0.05,
+  stable_count: 5,
+  zero_threshold: 0.05,
+  weight_no_barcode_alarm_enabled: false,
+  weight_no_barcode_alarm_delay_sec: 10,
 })
 const form = ref(defaultForm())
 
@@ -612,7 +669,16 @@ const handleClearLogs = async () => {
 }
 
 let timer = null
+const loadChannelCount = async () => {
+  try {
+    const res = await getWorkstations()
+    channelCount.value = res.data.channel_count || 1
+  } catch {
+    channelCount.value = 1
+  }
+}
 onMounted(() => {
+  loadChannelCount()
   loadDevices(); refreshStatus(); loadLogs()
   timer = setInterval(() => { refreshStatus(); loadLogs() }, 5000)
 })

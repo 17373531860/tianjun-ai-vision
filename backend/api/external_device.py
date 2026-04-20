@@ -33,6 +33,14 @@ class DeviceCreate(BaseModel):
     data_target: str = "cluster"
     validation_rules: Optional[dict] = None
     enabled: bool = True
+    # v2.7.5 稳定值判定
+    stable_enabled: Optional[bool] = True
+    stable_delta: Optional[float] = 0.05
+    stable_count: Optional[int] = 5
+    zero_threshold: Optional[float] = 0.05
+    # v2.7.5 有重无码告警
+    weight_no_barcode_alarm_enabled: Optional[bool] = False
+    weight_no_barcode_alarm_delay_sec: Optional[int] = 10
 
 
 class DeviceUpdate(BaseModel):
@@ -51,6 +59,12 @@ class DeviceUpdate(BaseModel):
     data_target: Optional[str] = None
     validation_rules: Optional[dict] = None
     enabled: Optional[bool] = None
+    stable_enabled: Optional[bool] = None
+    stable_delta: Optional[float] = None
+    stable_count: Optional[int] = None
+    zero_threshold: Optional[float] = None
+    weight_no_barcode_alarm_enabled: Optional[bool] = None
+    weight_no_barcode_alarm_delay_sec: Optional[int] = None
 
 
 class TestRequest(BaseModel):
@@ -79,6 +93,12 @@ def _serialize(d):
         "data_target": d.data_target,
         "validation_rules": d.validation_rules,
         "enabled": d.enabled,
+        "stable_enabled": bool(getattr(d, "stable_enabled", True)),
+        "stable_delta": float(getattr(d, "stable_delta", 0.05) or 0.05),
+        "stable_count": int(getattr(d, "stable_count", 5) or 5),
+        "zero_threshold": float(getattr(d, "zero_threshold", 0.05) or 0.05),
+        "weight_no_barcode_alarm_enabled": bool(getattr(d, "weight_no_barcode_alarm_enabled", False)),
+        "weight_no_barcode_alarm_delay_sec": int(getattr(d, "weight_no_barcode_alarm_delay_sec", 10) or 10),
     }
 
 

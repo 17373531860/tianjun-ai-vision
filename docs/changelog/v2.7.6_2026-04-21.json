@@ -1,0 +1,133 @@
+{
+  "version": "2.7.6",
+  "date": "2026-04-21",
+  "previous_version": "2.7.5",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "扫码器连上但开始检测不发 LON 命令（静默失败）",
+      "symptom": "客户现场扫码器 '测试'能扫/闪灯/蜂鸣，但'开始检测'后一轮都不扫；日志显示扫码器已绑定但无 LON 发送",
+      "root_cause": "resume_inference / standby / resume 三个从 standby 恢复/待机的路径都没调 start_scanning / stop_scanning（只有 start_detection 一条路径调），start_scanning 按 conn.broadcast_channels 或 [conn.channel_id] 命中 channel_id，UI 绑定工位=1 但单工位系统只有 ch0 时整条扫码器被 continue 静默跳过；多处 try/except pass 吞异常",
+      "fix": "VideoSourceManager.resume/standby/resume_inference 分别加 start/stop_scanning 调用，异常路径统一 traceback.print_exc 不再静默；新增 ScannerService._known_channel_count / _resolve_bound_channels，超界绑定自动降级到 ch0 并打警告；start_scanning/stop_scanning 把 skip 原因（status/ch_conf/bcast/resolved）全部打印",
+      "files": [
+        "backend/api/source.py",
+        "backend/services/scanner.py"
+      ],
+      "keywords": ["扫码器", "LON", "LOFF", "start_scanning", "stop_scanning", "resume_inference", "standby", "_resolve_bound_channels", "channel 超界降级", "静默失败"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "称重器稳定值判定 + 抖动/空载过滤",
+      "symptom": "每次读数都被派发（含 0.00、抖动中的瞬时值），MES 和集群收到一堆垃圾数据",
+      "root_cause": "_on_raw_data 直接把每条 parsed 送 _dispatch，没有稳定性判定",
+      "fix": "DeviceConnection 新增 stable_enabled/stable_delta/stable_count/zero_threshold 配置和 _stable_samples/_stable_state/_stable_value/_last_reported_value 运行时状态；新增 _handle_weight_stability 状态机：|value|<zero_threshold→idle 清 buffer；积累 stable_count 样本 max-min≤stable_delta 判稳，取窗口中位数上报；稳定后重复值沉默直到漂移超 delta",
+      "files": [
+        "backend/services/external_device.py",
+        "backend/models/mes_models.py",
+        "backend/api/external_device.py",
+        "backend/main.py",
+        "frontend/src/views/MES/ExternalDevicePanel.vue"
+      ],
+      "defaults": {
+        "stable_enabled": true,
+        "stable_delta": 0.05,
+        "stable_count": 5,
+        "zero_threshold": 0.05
+      },
+      "keywords": ["稳定值", "抖动过滤", "空载", "stable_delta", "zero_threshold", "weight", "median", "_handle_weight_stability"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "有重无码告警（默认关闭 + 可配置延迟）",
+      "symptom": null,
+      "root_cause": null,
+      "fix": "_check_weight_no_barcode_alarm：稳定重量≥zero_threshold 且 barcode buffer 空 且 持续 weight_no_barcode_alarm_delay_sec 秒 → MESGateway.dispatch('weight_no_barcode', {...}) + alarm_router.trigger_alarm('weight_no_barcode', channel_id)；扫到条码立即清计时器；单次只报一次",
+      "files": [
+        "backend/services/external_device.py",
+        "backend/models/mes_models.py",
+        "backend/api/external_device.py",
+        "backend/main.py",
+        "frontend/src/views/MES/ExternalDevicePanel.vue"
+      ],
+      "defaults": {
+        "weight_no_barcode_alarm_enabled": false,
+        "weight_no_barcode_alarm_delay_sec": 10
+      },
+      "keywords": ["weight_no_barcode", "有重无码", "报警", "稳定", "delay_sec", "_check_weight_no_barcode_alarm"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "传动杆误判过滤：空间共现 + 软时序 Gate（默认关闭）",
+      "symptom": "best(7).pt 对空箱+泡沫槽黑色横缝稳定误判为'传动杆' conf 0.88~0.92；误判分布 median conf 0.900 比真合法期 median 0.686 还高，per-class conf 阈值方案走不通",
+      "root_cause": "模型将泡沫槽中间横缝的视觉模式学成了'传动杆'（类别学习缺陷），conf 维度两分布反向重叠不可分",
+      "fix": "新增 backend/api/rod_filter.py（filter_rod_by_companion + RodSessionGate + read_rod_filter_config）；source.py 三个推理入口 _detect_only/_detect_and_track/_detect_segment 在 return 前统一走 _apply_rod_filters；__init__ 和 set_project_config 构建 gate；start_cycle 和 stop_detection 里 gate.reset()。两层按 label 字符串判定不硬编码 class_id；默认全关，通过 project_config.rod_companion_filter / rod_session_gate 的 enabled 开关开启",
+      "files": [
+        "backend/api/rod_filter.py",
+        "backend/api/source.py"
+      ],
+      "config_schema": {
+        "rod_companion_filter": {
+          "enabled": false,
+          "iou_threshold": 0.25,
+          "rod_label": "传动杆",
+          "companion_labels": ["大框架", "小框架", "侧板"]
+        },
+        "rod_session_gate": {
+          "enabled": false,
+          "rod_label": "传动杆",
+          "gate_labels": ["大框架", "小框架"]
+        }
+      },
+      "verification": {
+        "video": "d60213e0...mp4 11390 frames 22fps",
+        "baseline_fp": 3532,
+        "baseline_tp": 280,
+        "companion_only_fp": 106,
+        "companion_only_tp": 273,
+        "companion_only_fp_kept_ratio": 0.030,
+        "companion_only_tp_kept_ratio": 0.975
+      },
+      "keywords": ["传动杆", "rod", "误判过滤", "filter_rod_by_companion", "RodSessionGate", "IoU", "center-in-bbox", "per-class conf 走不通", "空间共现", "软时序", "类别学习缺陷"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CONFIG-001",
+      "title": "UI 工位编号统一 1-indexed，消除'工位 0'",
+      "symptom": "ScannerPanel / ExternalDevicePanel 下拉显示'工位 0 / 工位 1 / 工位 2 / 工位 3'，和其他页面'工位 1 / 工位 2'口径不一致",
+      "root_cause": "两个 Panel 的绑定/广播工位下拉硬编码 [0,1,2,3] 作 label，没加 +1 显示层转换，且没按实际 channel_count 动态生成选项",
+      "fix": "后端 channel_id 保持 0-indexed；前端加 channelOptions computed 根据 getWorkstations().channel_count 动态生成 {value:i, label: 工位 ${i+1}}；绑定工位从 el-input-number 换成 el-select；设备卡片 channel_id 显示和 broadcast_channels 标签同步 +1",
+      "files": [
+        "frontend/src/views/MES/ScannerPanel.vue",
+        "frontend/src/views/MES/ExternalDevicePanel.vue"
+      ],
+      "keywords": ["工位编号", "1-indexed", "channel_id", "channelOptions", "getWorkstations"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["modify-source"],
+  "files_changed": [
+    "backend/api/source.py",
+    "backend/api/external_device.py",
+    "backend/api/rod_filter.py",
+    "backend/services/external_device.py",
+    "backend/services/scanner.py",
+    "backend/models/mes_models.py",
+    "backend/main.py",
+    "frontend/src/views/MES/ExternalDevicePanel.vue",
+    "frontend/src/views/MES/ScannerPanel.vue",
+    "electron/package.json",
+    "electron/splash.html"
+  ],
+  "tests": [
+    "test_stable_weight.py (6/6)",
+    "test_rod_filter.py (16/16)"
+  ]
+}

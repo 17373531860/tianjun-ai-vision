@@ -51,6 +51,15 @@ class DeviceConnection:
     validation_rules: dict
     enabled: bool
 
+    # v2.7.5 稳定值判定配置
+    stable_enabled: bool = True
+    stable_delta: float = 0.05
+    stable_count: int = 5
+    zero_threshold: float = 0.05
+    # v2.7.5 有重无码告警配置
+    weight_no_barcode_alarm_enabled: bool = False
+    weight_no_barcode_alarm_delay_sec: int = 10
+
     status: str = "disconnected"
     last_data: Optional[str] = None
     last_data_time: float = 0
@@ -58,6 +67,14 @@ class DeviceConnection:
     last_error: str = ""
     _thread: Optional[threading.Thread] = field(default=None, repr=False)
     _stop_event: threading.Event = field(default_factory=threading.Event, repr=False)
+
+    # v2.7.5 稳定判定运行时状态
+    _stable_samples: list = field(default_factory=list, repr=False)  # 最近 stable_count 个 weight
+    _stable_state: str = "idle"  # idle / stabilizing / stable
+    _stable_value: Optional[float] = None  # 最近一次判定稳定时的上报值（中位数）
+    _last_reported_value: Optional[float] = None
+    _weight_onset_time: float = 0  # 首次稳定+非零+无条码的时间戳，用于有重无码告警
+    _no_barcode_alarm_fired: bool = False
 
 
 class ExternalDeviceService:
@@ -155,6 +172,12 @@ class ExternalDeviceService:
             data_target=dev.data_target or "cluster",
             validation_rules=dev.validation_rules or {},
             enabled=dev.enabled,
+            stable_enabled=bool(getattr(dev, "stable_enabled", True)),
+            stable_delta=float(getattr(dev, "stable_delta", 0.05) or 0.05),
+            stable_count=max(2, int(getattr(dev, "stable_count", 5) or 5)),
+            zero_threshold=float(getattr(dev, "zero_threshold", 0.05) or 0.05),
+            weight_no_barcode_alarm_enabled=bool(getattr(dev, "weight_no_barcode_alarm_enabled", False)),
+            weight_no_barcode_alarm_delay_sec=max(1, int(getattr(dev, "weight_no_barcode_alarm_delay_sec", 10) or 10)),
         )
         self._connections[dev.id] = conn
         conn._stop_event.clear()
@@ -632,12 +655,167 @@ class ExternalDeviceService:
 
         conn.last_parsed = parsed
 
+        # v2.7.5: 称重器稳定值判定 —— 抖动、空载、未稳定的数据不往下传
+        if conn.device_role == "weight" and conn.stable_enabled:
+            handled = self._handle_weight_stability(conn, parsed, raw)
+            if not handled:
+                return
+
         is_valid, error = self._validate(conn, parsed)
         barcode = parsed.get("barcode") or self._barcode_buffer.get(conn.device_id)
+
+        # v2.7.5: 有重无码告警 —— 开启后超时才触发，默认关闭
+        if conn.device_role == "weight" and conn.weight_no_barcode_alarm_enabled:
+            self._check_weight_no_barcode_alarm(conn, parsed, barcode)
+
         self._log_data(conn, raw, parsed, is_valid, error, barcode)
         if not is_valid:
             logger.warning("[ExtDev] %s 校验失败（仍发送）: %s", conn.name, error)
         self._dispatch(conn, parsed, barcode)
+
+    def _extract_weight(self, parsed: dict) -> Optional[float]:
+        """从 parsed 里取出称重值，兼容 direct/regex/split/json_path 各种 parse_mode"""
+        val = parsed.get("weight")
+        if val is None:
+            # 兜底：扫描第一个数值字段
+            for k, v in parsed.items():
+                if k in ("raw", "barcode"):
+                    continue
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    continue
+            return None
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return None
+
+    def _handle_weight_stability(self, conn: DeviceConnection,
+                                  parsed: dict, raw: str) -> bool:
+        """称重稳定值判定：返回 True 表示这条数据应继续走后续派发，False 表示丢弃。
+
+        状态机:
+            idle         → 空载或首次数据 → stabilizing
+            stabilizing  → 连续 stable_count 次 (max-min<=delta) → stable（首次上报）
+            stable       → 值漂移 > delta → 回 stabilizing；< zero_threshold → 回 idle
+        """
+        val = self._extract_weight(parsed)
+        if val is None:
+            return False
+
+        parsed["weight"] = val
+        parsed["_raw_value"] = val  # 保留原始读数，方便日志
+
+        # 空载：清 buffer、清状态
+        if abs(val) < conn.zero_threshold:
+            if conn._stable_state != "idle":
+                logger.info("[ExtDev] %s 空载 (|%.4f|<%.4f)，重置稳定状态", conn.name, val, conn.zero_threshold)
+            conn._stable_samples.clear()
+            conn._stable_state = "idle"
+            conn._stable_value = None
+            conn._last_reported_value = None
+            conn._weight_onset_time = 0
+            conn._no_barcode_alarm_fired = False
+            self._barcode_buffer.pop(conn.device_id, None)
+            self._log_data(conn, raw, parsed, True, "idle_zero", None)
+            return False
+
+        # 进入/维持 stabilizing：累积样本
+        conn._stable_samples.append(val)
+        if len(conn._stable_samples) > max(conn.stable_count * 3, conn.stable_count + 10):
+            conn._stable_samples = conn._stable_samples[-conn.stable_count * 3:]
+
+        # 样本不足，等下一条
+        if len(conn._stable_samples) < conn.stable_count:
+            if conn._stable_state != "stabilizing":
+                conn._stable_state = "stabilizing"
+            self._log_data(conn, raw, parsed, True, f"stabilizing ({len(conn._stable_samples)}/{conn.stable_count})", None)
+            return False
+
+        window = conn._stable_samples[-conn.stable_count:]
+        spread = max(window) - min(window)
+
+        if spread > conn.stable_delta:
+            # 仍在抖动
+            conn._stable_state = "stabilizing"
+            self._log_data(conn, raw, parsed, True, f"stabilizing spread={spread:.4f}", None)
+            return False
+
+        # 稳定 → 取中位数作为"最稳定代表值"
+        sorted_window = sorted(window)
+        median = sorted_window[len(sorted_window) // 2]
+        parsed["weight"] = round(median, 4)  # 上报值以稳定后的中位数为准
+        conn._stable_value = parsed["weight"]
+
+        first_stable = conn._stable_state != "stable"
+        conn._stable_state = "stable"
+
+        # 节流：稳定窗口内只上报一次，除非值变化超过 delta
+        if (conn._last_reported_value is not None
+                and abs(parsed["weight"] - conn._last_reported_value) <= conn.stable_delta
+                and not first_stable):
+            # 维持稳定，已经上报过，沉默
+            return False
+
+        conn._last_reported_value = parsed["weight"]
+        if first_stable:
+            logger.info("[ExtDev] %s 重量稳定 → %.4f (median of %d samples, spread=%.4f)",
+                        conn.name, parsed["weight"], conn.stable_count, spread)
+        return True
+
+    def _check_weight_no_barcode_alarm(self, conn: DeviceConnection,
+                                        parsed: dict, barcode: Optional[str]):
+        """有重无码告警: 稳定非零但无条码持续 N 秒 → 触发一次性告警"""
+        val = self._extract_weight(parsed) or 0.0
+        if abs(val) < conn.zero_threshold or conn._stable_state != "stable":
+            # 无重或还没稳定 → 不计时
+            conn._weight_onset_time = 0
+            conn._no_barcode_alarm_fired = False
+            return
+
+        if barcode:
+            # 已有条码 → 清计时
+            conn._weight_onset_time = 0
+            conn._no_barcode_alarm_fired = False
+            return
+
+        now = time.time()
+        if conn._weight_onset_time <= 0:
+            conn._weight_onset_time = now
+            return
+
+        elapsed = now - conn._weight_onset_time
+        if elapsed < conn.weight_no_barcode_alarm_delay_sec:
+            return
+
+        if conn._no_barcode_alarm_fired:
+            return
+
+        conn._no_barcode_alarm_fired = True
+        logger.warning("[ExtDev] %s 有重无码告警: value=%.4f 持续 %.1fs 未扫码",
+                       conn.name, val, elapsed)
+        try:
+            from backend.services.mes_gateway import get_mes_gateway
+            gw = get_mes_gateway()
+            gw.dispatch("weight_no_barcode", {
+                "device_name": conn.name,
+                "device_id": conn.device_id,
+                "channel_id": conn.channel_id,
+                "station_id": conn.station_id,
+                "value": val,
+                "elapsed_sec": round(elapsed, 1),
+                "timestamp": datetime.now().isoformat(),
+            }, channel_id=conn.channel_id)
+        except Exception as e:
+            logger.error("[ExtDev] weight_no_barcode 事件派发失败: %s", e)
+
+        try:
+            from backend.api.alarm import alarm_router
+            alarm_router.trigger_alarm("weight_no_barcode",
+                                        channel_id=conn.channel_id or 0)
+        except Exception as e:
+            logger.debug("[ExtDev] weight_no_barcode 报警灯触发失败: %s", e)
 
     def _parse_data(self, conn: DeviceConnection, raw: str) -> Optional[dict]:
         mode = conn.parse_mode

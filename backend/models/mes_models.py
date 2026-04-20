@@ -432,6 +432,21 @@ class ExternalDevice(Base):
     validation_rules = Column(JSON, nullable=True)
     enabled = Column(Boolean, default=True)
 
+    # v2.7.5: 稳定值判定（称重抖动过滤）
+    # 连续 stable_count 次读数之间最大差 <= stable_delta (同单位) 才视为稳定；
+    # 空载判断：|value| < zero_threshold 时视为无物品，会清空对应条码 buffer。
+    # stable_enabled=False 时禁用该判定，保持旧行为（每次数据直接上报）。
+    stable_enabled = Column(Boolean, default=True)
+    stable_delta = Column(Float, default=0.05)
+    stable_count = Column(Integer, default=5)
+    zero_threshold = Column(Float, default=0.05)
+
+    # v2.7.5: 有重无码告警
+    # 开启后，当 |value| >= zero_threshold 但 barcode buffer 为空持续
+    # weight_no_barcode_alarm_delay_sec 秒时，触发 "weight_no_barcode" 事件。
+    weight_no_barcode_alarm_enabled = Column(Boolean, default=False)
+    weight_no_barcode_alarm_delay_sec = Column(Integer, default=10)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

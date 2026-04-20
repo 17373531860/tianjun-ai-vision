@@ -77,9 +77,9 @@
             </div>
             <div class="text-xs text-gray-400 space-y-1">
               <div>IP: {{ dev.ip }}:{{ dev.port }}</div>
-              <div>工位: {{ dev.channel_id ?? '未绑定' }}
+              <div>{{ channelLabel(dev.channel_id) }}
                 <span v-if="dev.broadcast_channels && dev.broadcast_channels.length > 1" class="text-yellow-400 ml-1">
-                  (广播: {{ dev.broadcast_channels.join(', ') }})
+                  (广播: {{ dev.broadcast_channels.map(c => '工位 ' + (c + 1)).join(', ') }})
                 </span>
               </div>
               <div>解析: {{ dev.parse_mode }}</div>
@@ -175,7 +175,7 @@
         </el-form-item>
         <el-form-item label="广播工位">
           <el-select v-model="form.broadcast_channels" multiple placeholder="留空则只发给绑定工位" class="w-full">
-            <el-option v-for="ch in [0,1,2,3]" :key="ch" :label="'工位 ' + ch" :value="ch" />
+            <el-option v-for="opt in channelOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
           <div class="text-xs text-gray-500 mt-1">选多个工位时，扫码结果同时发送到所有选中工位</div>
         </el-form-item>
@@ -188,7 +188,9 @@
           </div>
           <div class="text-center">
             <div class="text-xs text-gray-400 mb-1">绑定工位</div>
-            <el-input-number v-model="form.channel_id" :min="0" :precision="0" size="small" class="!w-full" controls-position="right" />
+            <el-select v-model="form.channel_id" size="small" class="!w-full">
+              <el-option v-for="opt in channelOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </el-select>
           </div>
           <div class="text-center">
             <div class="text-xs text-gray-400 mb-1">去重间隔(秒)</div>
@@ -241,6 +243,7 @@ import {
   deleteScannerDevice, testScannerConnection, getScannerStatus, getScanLogs,
   clearScanLogs, discoverScanners
 } from '@/api/scanner'
+import { getWorkstations } from '@/api/detection'
 import {
   wmaxCreateVirtual, wmaxDeleteVirtual, wmaxAutoDiscover,
   connectWMaxDevice
@@ -259,6 +262,15 @@ const logs = ref([])
 const showAdd = ref(false)
 const editingId = ref(null)
 const saving = ref(false)
+const channelCount = ref(1)
+// 后端 channel_id 仍以 0 开始，前端展示统一 +1。工位数按系统实际 channel_count 动态生成。
+const channelOptions = computed(() =>
+  Array.from({ length: channelCount.value }, (_, i) => ({
+    value: i,
+    label: `工位 ${i + 1}`,
+  }))
+)
+const channelLabel = (ch) => (ch == null ? '未绑定' : `工位 ${ch + 1}`)
 
 const defaultForm = () => ({
   name: '', ip: '', port: 55256, channel_id: 0, enabled: true,
@@ -559,8 +571,17 @@ const handleDelete = async (dev) => {
 }
 
 let statusTimer = null
+const loadChannelCount = async () => {
+  try {
+    const res = await getWorkstations()
+    channelCount.value = res.data.channel_count || 1
+  } catch {
+    channelCount.value = 1
+  }
+}
 onMounted(() => {
   form.value = defaultForm()
+  loadChannelCount()
   loadDevices()
   refreshStatus()
   loadLogs()

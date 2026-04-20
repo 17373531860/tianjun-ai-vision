@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.7.6 (2026-04-21)
+- [BUG-001] 修复: 扫码器连上但"开始检测"不发 LON 命令 (resume/standby/resume_inference 补上 start/stop_scanning + _resolve_bound_channels 超界降级 + skip 原因显式日志)
+- [FEAT-001] 新增: 称重器稳定值判定 + 抖动/空载过滤 (stable_delta/stable_count/zero_threshold 状态机 + 中位数上报)
+- [FEAT-002] 新增: "有重无码"告警 (默认关闭 + 可配置延迟；MESGateway.dispatch + alarm_router 双通道)
+- [FEAT-003] 新增: 传动杆误判过滤 (filter_rod_by_companion 空间共现 + RodSessionGate 软时序；默认关；实测砍 97% 误判保留 97.5% 真阳)
+- [CONFIG-001] 配置: UI 工位编号统一 1-indexed (ScannerPanel/ExternalDevicePanel 动态生成选项 + 设备卡片 +1 显示)
+- [SKILL-001] 更新: modify-source（传动杆误判过滤整章）
+
 ## v2.7.5 (2026-04-20)
 - [BUG-001] 修复: 外部设备清空日志 int_parsing / [object Object] (FastAPI 路由顺序调整 + synchronize_session=False + 重试 + 原生 SQL 兜底 + 前端 detail 规范化)
 - [BUG-002] 修复: 外部设备串口路径含前后空格导致保存失败 (前端 trim + 后端 _sanitize_device_payload + 串口打不开时改返回 200+warning)

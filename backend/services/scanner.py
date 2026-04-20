@@ -236,30 +236,74 @@ class ScannerService:
             })
         return results
 
+    @staticmethod
+    def _known_channel_count() -> int:
+        """读取当前系统实际工位数（默认 1）。用于 scanner 绑定 ch 超界时降级。"""
+        try:
+            from backend.api.channel_manager import get_channel_manager
+            return max(1, int(get_channel_manager().channel_count or 1))
+        except Exception:
+            return 1
+
+    @classmethod
+    def _resolve_bound_channels(cls, conn: "ScannerConnection") -> list:
+        """解析扫码器实际绑定的 channel 列表。
+
+        处理规则：
+        - broadcast_channels 非空 → 用它
+        - 否则用 [channel_id]
+        - 任意元素超出系统已知工位数或 <0 → 降级到 0，并打告警
+          （常见场景：UI 里"绑定工位"填成 1 但单工位系统只有 ch0）
+        """
+        bound = list(conn.broadcast_channels) if conn.broadcast_channels else [conn.channel_id]
+        ch_count = cls._known_channel_count()
+        fixed: list = []
+        for b in bound:
+            if b is None:
+                continue
+            if b >= ch_count or b < 0:
+                if 0 not in fixed:
+                    fixed.append(0)
+                print(
+                    f"[Scanner] 扫码器 '{conn.name}' 的 channel={b} 超出系统工位数 {ch_count}, "
+                    f"已自动降级到 ch0。建议在 MES→扫码器面板 把'绑定工位'改为 0"
+                )
+            elif b not in fixed:
+                fixed.append(b)
+        return fixed or [0]
+
     def start_scanning(self, channel_id: int = None):
         """检测开始时调用：让绑定的扫码器发 LON 进入扫码状态"""
         targets = []
+        skipped = []
         for conn in self._connections.values():
             if conn.status != "connected":
+                skipped.append(f"{conn.name}(status={conn.status})")
                 continue
             if channel_id is not None:
-                bound = conn.broadcast_channels if conn.broadcast_channels else [conn.channel_id]
+                bound = self._resolve_bound_channels(conn)
                 if channel_id not in bound:
+                    skipped.append(
+                        f"{conn.name}(ch_conf={conn.channel_id},"
+                        f"bcast={conn.broadcast_channels},resolved={bound})"
+                    )
                     continue
             targets.append(conn)
 
         for conn in targets:
             conn._scanning = True
         if targets:
-            names = [c.name for c in targets]
+            names = [f"{c.name}[type={c.device_type}]" for c in targets]
             print(f"[Scanner] start_scanning(ch={channel_id}) → {names}")
+        else:
+            print(f"[Scanner] start_scanning(ch={channel_id}) 无匹配设备，已跳过: {skipped}")
 
     def stop_scanning(self, channel_id: int = None):
         """检测停止时调用：让绑定的扫码器发 LOFF 停止扫码"""
         targets = []
         for conn in self._connections.values():
             if channel_id is not None:
-                bound = conn.broadcast_channels if conn.broadcast_channels else [conn.channel_id]
+                bound = self._resolve_bound_channels(conn)
                 if channel_id not in bound:
                     continue
             targets.append(conn)

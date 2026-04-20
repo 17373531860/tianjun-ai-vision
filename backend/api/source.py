@@ -23,6 +23,11 @@ from backend.core.config import settings, DATA_DIR
 import json as _json
 from backend.db.database import SessionLocal
 from backend.models.models import DetectionSession, DetectionCycle, StepRecord, VideoClip, DataExportSetting, Project
+from backend.api.rod_filter import (
+    filter_rod_by_companion,
+    RodSessionGate,
+    read_rod_filter_config,
+)
 
 router = APIRouter()
 
@@ -809,6 +814,12 @@ class VideoSourceManager:
         self.idle_timeout_seconds = 0         # 0 = disabled
         self.cycle_max_duration = 0           # 0 = disabled, >0 = 周期总时长超时NG
         self.step_conf_thresholds = {}  # {step_name: threshold}
+        # 传动杆误判过滤（两层，默认全关，从 project_config 读开关）
+        self._rod_filter_cfg = read_rod_filter_config(None)
+        self._rod_gate = RodSessionGate(
+            rod_label=self._rod_filter_cfg["gate_rod_label"],
+            gate_labels=self._rod_filter_cfg["gate_labels"],
+        )
         self.step_min_frames = {}  # {step_name: min_frames} 每个步骤的最少帧数配置
         self.step_consecutive_frames = {}  # {step_name: count} 跟踪每个标签连续出现的帧数
         self.step_frame_confirmed = {}  # {step_name: bool} 标记标签是否已确认（达到最少帧数）
@@ -1250,6 +1261,13 @@ class VideoSourceManager:
             self.cycle_step_records = []
             self.step_order_counter = 0
             
+            # 新周期开始：重置传动杆 SessionGate（上一个周期见过的框架记忆不应跨周期）
+            if getattr(self, "_rod_gate", None) is not None:
+                try:
+                    self._rod_gate.reset()
+                except Exception:
+                    pass
+
             db.close()
             print(f"新周期开始: #{self.current_cycle_number} ({cycle_uuid})")
             
@@ -1544,6 +1562,18 @@ class VideoSourceManager:
         """设置项目配置"""
         self.project_config = config
         
+        # 刷新传动杆过滤参数 + 重建 SessionGate
+        try:
+            self._rod_filter_cfg = read_rod_filter_config(config)
+            self._rod_gate = RodSessionGate(
+                rod_label=self._rod_filter_cfg["gate_rod_label"],
+                gate_labels=self._rod_filter_cfg["gate_labels"],
+            )
+        except Exception as _e:
+            print(f"[rod_filter] read config failed, fallback to defaults: {_e}")
+            self._rod_filter_cfg = read_rod_filter_config(None)
+            self._rod_gate = RodSessionGate()
+
         # 解析步骤置信度阈值和时间配置
         self.step_conf_thresholds = {}
         self.step_time_config = {}
@@ -5818,7 +5848,7 @@ class VideoSourceManager:
             if self._consecutive_detect_errors > 2:
                 time.sleep(0.5)
         
-        return detections
+        return self._apply_rod_filters(detections)
     
     def _detect_and_track(self, frame: np.ndarray) -> list:
         """Execute model.track() — works for both detect and segment models.
@@ -5905,7 +5935,7 @@ class VideoSourceManager:
                 print(f"[警告] 跟踪持续报错，后续相同错误将被抑制 (已连续 {self._consecutive_detect_errors} 次)")
             if self._consecutive_detect_errors > 2:
                 time.sleep(0.5)
-        return detections
+        return self._apply_rod_filters(detections)
     
     def _detect_segment(self, frame: np.ndarray) -> list:
         """Segmentation predict (no tracking) — for seg models in non-tracking logic modes."""
@@ -5980,8 +6010,30 @@ class VideoSourceManager:
         except Exception as e:
             print(f"segment error: {e}")
             import traceback; traceback.print_exc()
-        return detections
+        return self._apply_rod_filters(detections)
     
+    def _apply_rod_filters(self, detections: list) -> list:
+        """统一应用两层传动杆过滤：companion 空间共现 + session gate。
+        两层独立开关，全在 project_config 里配置；默认全关，老项目零影响。
+        """
+        if not detections:
+            return detections
+        cfg = getattr(self, "_rod_filter_cfg", None) or {}
+        try:
+            if cfg.get("companion_enabled"):
+                detections = filter_rod_by_companion(
+                    detections,
+                    iou_thr=cfg.get("companion_iou_thr", 0.25),
+                    rod_label=cfg.get("companion_rod_label", "传动杆"),
+                    companion_labels=cfg.get("companion_labels", ("大框架", "小框架", "侧板")),
+                )
+            if cfg.get("gate_enabled") and getattr(self, "_rod_gate", None) is not None:
+                detections = self._rod_gate.update_and_filter(detections)
+        except Exception as _e:
+            # 过滤失败绝不挡推理主流程
+            print(f"[rod_filter] apply failed: {_e}")
+        return detections
+
     def _get_enabled_labels(self) -> set:
         """Helper: collect enabled step labels from project config."""
         labels = set()
@@ -7478,15 +7530,17 @@ class VideoSourceManager:
         
         try:
             from backend.services.scanner import get_scanner_service
+            print(f"[Scanner/Source] start_detection ch={self.channel_id} → start_scanning")
             get_scanner_service().start_scanning(channel_id=self.channel_id)
-        except Exception:
-            pass
+        except Exception as _e:
+            import traceback as _tb
+            print(f"[Scanner/Source] start_scanning 失败: {_e}\n{_tb.format_exc()}")
         
         try:
             from backend.api.alarm import alarm_router
             alarm_router.start_idle_light(channel_id=self.channel_id)
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"[Alarm/Source] start_idle_light 失败: {_e}")
         
         if self.source_type == 'image':
             frame = self.get_frame()
@@ -7510,17 +7564,26 @@ class VideoSourceManager:
         """停止检测"""
         self.is_detecting = False
         
+        # 停止检测 → 重置 RodSessionGate，避免下次开机复用残留记忆
+        if getattr(self, "_rod_gate", None) is not None:
+            try:
+                self._rod_gate.reset()
+            except Exception:
+                pass
+
         try:
             from backend.services.scanner import get_scanner_service
+            print(f"[Scanner/Source] stop_detection ch={self.channel_id} → stop_scanning")
             get_scanner_service().stop_scanning(channel_id=self.channel_id)
-        except Exception:
-            pass
+        except Exception as _e:
+            import traceback as _tb
+            print(f"[Scanner/Source] stop_scanning 失败: {_e}\n{_tb.format_exc()}")
         
         try:
             from backend.api.alarm import alarm_router
             alarm_router.stop_idle_light(channel_id=self.channel_id)
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"[Alarm/Source] stop_idle_light 失败: {_e}")
         
         # 停止推理线程
         self._stop_inference_thread()
@@ -8092,8 +8155,17 @@ class VideoSourceManager:
         try:
             from backend.api.alarm import alarm_router
             alarm_router.start_idle_light(channel_id=self.channel_id)
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"[Alarm/Source] resume start_idle_light 失败: {_e}")
+
+        # v2.7.5b: 从暂停恢复时同步唤醒扫码器（原代码仅在 start_detection 里调过，导致 resume 漏发 LON）
+        try:
+            from backend.services.scanner import get_scanner_service
+            print(f"[Scanner/Source] resume ch={self.channel_id} → start_scanning")
+            get_scanner_service().start_scanning(channel_id=self.channel_id)
+        except Exception as _e:
+            import traceback as _tb
+            print(f"[Scanner/Source] resume start_scanning 失败: {_e}\n{_tb.format_exc()}")
 
         print("已恢复：视频流和推理重新启动")
         return True
@@ -8105,8 +8177,17 @@ class VideoSourceManager:
         try:
             from backend.api.alarm import alarm_router
             alarm_router.stop_idle_light(channel_id=self.channel_id)
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"[Alarm/Source] standby stop_idle_light 失败: {_e}")
+
+        # v2.7.5b: 待机时关闭扫码器 LON
+        try:
+            from backend.services.scanner import get_scanner_service
+            print(f"[Scanner/Source] standby ch={self.channel_id} → stop_scanning")
+            get_scanner_service().stop_scanning(channel_id=self.channel_id)
+        except Exception as _e:
+            print(f"[Scanner/Source] standby stop_scanning 失败: {_e}")
+
         self._stop_inference_thread()
         self._stop_recording_thread()
         self._close_all_writers()
@@ -8136,8 +8217,17 @@ class VideoSourceManager:
         try:
             from backend.api.alarm import alarm_router
             alarm_router.start_idle_light(channel_id=self.channel_id)
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"[Alarm/Source] resume_inference start_idle_light 失败: {_e}")
+
+        # v2.7.5b: 从待机恢复时同步唤醒扫码器（关键修复——之前走 resume_inference 的路径永远不发 LON）
+        try:
+            from backend.services.scanner import get_scanner_service
+            print(f"[Scanner/Source] resume_inference ch={self.channel_id} → start_scanning")
+            get_scanner_service().start_scanning(channel_id=self.channel_id)
+        except Exception as _e:
+            import traceback as _tb
+            print(f"[Scanner/Source] resume_inference start_scanning 失败: {_e}\n{_tb.format_exc()}")
 
         print("已从待机恢复推理")
     

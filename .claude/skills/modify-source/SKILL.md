@@ -148,6 +148,27 @@ MES Hook 影响: [是否影响 5 个 Hook 调用点]
 
 - **`_just_settled` 标志**（2026-04移除）: 原本在结算后阻止非首步启动新周期，但会导致 NG 后所有步骤被永久拒绝。现在依靠 `min_duration`/`min_frames` 过滤误检
 
+## 传动杆误判过滤（v2.7.6 新增，`backend/api/rod_filter.py` + `source.py` 6 处 hook）
+
+- **背景**：`best(7).pt` 把空箱+泡沫槽中间的黑色横缝稳定识别成"传动杆" conf 0.88~0.92，per-class conf 阈值方案走不通（误判分布比真阳性更高）。推理端两层过滤是主力解，和后续重训模型叠加使用，不撤。
+- **模块**：`backend/api/rod_filter.py`
+  - `filter_rod_by_companion(dets, iou_thr, rod_label, companion_labels)`：同帧 rod 必须和任一 companion (`大/小框架/侧板`) 满足 `center-in-bbox OR IoU≥thr`
+  - `RodSessionGate`：当前周期从未见过 `大/小框架` 时抑制所有 rod；`update_and_filter()` + `reset()`
+  - `read_rod_filter_config(project_config)`：从 `rod_companion_filter` / `rod_session_gate` 读开关，**缺字段全按 OFF**，老项目零影响
+- **在 source.py 的 6 处 hook**：
+  1. `__init__` 里挂 `self._rod_gate` + `self._rod_filter_cfg`
+  2. `set_project_config` 里调用 `read_rod_filter_config` 重新读开关并重建 gate
+  3. `_apply_rod_filters(detections)` helper 统一封装两层调用（企业级过滤异常都捕获，**绝不挡主流程**）
+  4. `_detect_only` / `_detect_and_track` / `_detect_segment` 三个推理入口 `return detections` 前一律 `return self._apply_rod_filters(detections)`
+  5. `start_cycle` 的"真正落地点"（`self.current_cycle_id = cycle.id` 之后）调 `self._rod_gate.reset()`
+  6. `stop_detection` 开头调 `self._rod_gate.reset()`
+- **修改规则**：
+  - 过滤按 **label 字符串** 匹配，不硬编码 class_id。改模型 / 类名重映射时**不会炸**
+  - dets 坐标必须是归一化 (0-1)；`filter_rod_by_companion` 内部用归一化 xyxy 计算 IoU 和中心点
+  - 新增"其他类别也要做类似过滤" → 复用 `filter_rod_by_companion` 的思路做另一层，**不要塞进 rod_filter.py**，防止 label 耦合
+  - 默认全关是强约束；若要改默认值先考虑向后兼容影响
+- **验证产物**：`tune_rod_conf/` 目录（analyze_rod.py / verify_filter.py / out/samples/）
+
 ## 画面变换（v2.7.5 新增）
 
 - `VideoSourceManager` 三个字段：`video_rotation (0/90/180/270)` / `video_flip_h` / `video_flip_v`

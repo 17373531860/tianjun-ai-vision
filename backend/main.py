@@ -78,6 +78,13 @@ def migrate_database():
         ("scanner_devices", "device_type", "VARCHAR(20) DEFAULT 'auto'"),
         ("mes_connections", "bound_channels", "JSON"),
         ("cluster_config", "timeout_push", "BOOLEAN DEFAULT 0"),
+        # v2.7.5: 外部设备稳定值判定与有重无码告警
+        ("external_devices", "stable_enabled", "BOOLEAN DEFAULT 1"),
+        ("external_devices", "stable_delta", "FLOAT DEFAULT 0.05"),
+        ("external_devices", "stable_count", "INTEGER DEFAULT 5"),
+        ("external_devices", "zero_threshold", "FLOAT DEFAULT 0.05"),
+        ("external_devices", "weight_no_barcode_alarm_enabled", "BOOLEAN DEFAULT 0"),
+        ("external_devices", "weight_no_barcode_alarm_delay_sec", "INTEGER DEFAULT 10"),
     ]
     
     try:
