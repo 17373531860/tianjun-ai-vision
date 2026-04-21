@@ -29,11 +29,13 @@ class ClusterCollector:
     def __init__(self):
         self._lock = threading.Lock()
         self._timeout_thread: Optional[threading.Thread] = None
+        self._heartbeat_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._config_cache: Optional[dict] = None
         self._config_ts: float = 0
         self._connected_slaves: dict = {}  # station_id -> {info}
         self._slave_timeout = 20  # 超过20秒没心跳视为离线
+        self._heartbeat_interval = 5  # 副机 5 秒发一次心跳
 
     def start(self):
         self._stop_event.clear()
@@ -42,12 +44,21 @@ class ClusterCollector:
             name="cluster-timeout-checker"
         )
         self._timeout_thread.start()
-        logger.info("[Cluster] 汇总服务已启动")
+
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_sender_loop, daemon=True,
+            name="cluster-heartbeat-sender"
+        )
+        self._heartbeat_thread.start()
+
+        logger.info("[Cluster] 汇总服务已启动 (含副机心跳发送线程)")
 
     def stop(self):
         self._stop_event.set()
         if self._timeout_thread:
             self._timeout_thread.join(timeout=5)
+        if self._heartbeat_thread:
+            self._heartbeat_thread.join(timeout=5)
 
     def get_config(self, db=None) -> dict:
         """读取集群配置，带 5 秒缓存"""
@@ -481,6 +492,73 @@ class ClusterCollector:
                     db.close()
             except Exception as e:
                 logger.error("[Cluster] 超时检查异常: %s", e)
+
+    def _heartbeat_sender_loop(self):
+        """后台线程：副机定时向主机 POST /cluster/heartbeat。
+
+        - 只在 role=='slave' 且 enabled 且 master_url 非空时发送
+        - 失败不抛，仅记日志（避免前端感知后端心跳失败）
+        - 每轮读一次 config，支持运行时切换角色/主机地址
+        - 心跳间隔 = _heartbeat_interval (5s)，主机超时 _slave_timeout (20s) 给足裕量
+        """
+        import socket
+        hostname = ""
+        try:
+            hostname = socket.gethostname()
+        except Exception:
+            pass
+
+        while not self._stop_event.is_set():
+            self._stop_event.wait(timeout=self._heartbeat_interval)
+            if self._stop_event.is_set():
+                break
+            try:
+                config = self.get_config()
+                if config.get("role") != "slave":
+                    continue
+                if not config.get("enabled"):
+                    continue
+                master_url = config.get("master_url")
+                if not master_url:
+                    continue
+
+                station_id = config.get("station_id") or "unknown"
+                channel_count = 1
+                detecting = False
+                project_name = ""
+                try:
+                    from backend.api.channel_manager import channel_manager
+                    channel_count = max(1, int(channel_manager.channel_count or 1))
+                    any_detecting = False
+                    for ch in channel_manager.channels.values():
+                        if getattr(ch, "is_running", False) or getattr(ch, "is_detecting", False):
+                            any_detecting = True
+                            if getattr(ch, "project_config", None):
+                                project_name = ch.project_config.get("name") or project_name
+                    detecting = any_detecting
+                except Exception:
+                    pass
+
+                url = master_url.rstrip("/") + "/api/v1/cluster/heartbeat"
+                payload = {
+                    "station_id": station_id,
+                    "port": 8001,
+                    "hostname": hostname,
+                    "project": project_name,
+                    "channel_count": channel_count,
+                    "detecting": detecting,
+                }
+                try:
+                    resp = requests.post(url, json=payload, timeout=5)
+                    if resp.status_code != 200:
+                        logger.warning(
+                            "[Cluster] 副机心跳 HTTP %d: %s",
+                            resp.status_code, resp.text[:120]
+                        )
+                except requests.exceptions.RequestException as e:
+                    logger.warning("[Cluster] 副机心跳失败: %s", e)
+            except Exception as e:
+                logger.error("[Cluster] 心跳线程异常: %s", e)
 
 
 _collector_instance: Optional[ClusterCollector] = None

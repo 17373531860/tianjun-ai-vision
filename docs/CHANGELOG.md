@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.7.9 (2026-04-21)
+- [BUG-001] 修复: 集群汇总页「已连接副机」切页后消失 (副机心跳原仅由前端 ClusterPanel setInterval 发送，页面 onUnmounted 即停；ClusterCollector.start() 新增后台线程 _heartbeat_sender_loop 每 5s 自主 POST /cluster/heartbeat，脱离前端页面状态)
+- [BUG-002] 修复: Windows 串口 PermissionError 13 拒绝访问 (三个连接 loop 统一用新增的 _open_serial_with_retry 辅助，失败 1s 间隔重试 3 次；解决上次 close 未完全释放和 test_connection 竞争两种残留)
+- [SKILL-001] debug-mes 追加「集群汇总 / 副机心跳」「外部设备串口 PermissionError 13」两章
+
 ## v2.7.8 (2026-04-21)
 - [BUG-001] 修复: v2.7.6 传动杆误判过滤两个开关从未生效 (read_rod_filter_config 只读顶层但 _build_project_config 从不把字段放顶层，改为优先读 pipeline_config 兼容回退)
 - [FEAT-001] 新增: Project 配置页「误判过滤（高级）」卡片，两层通用开关 UI (按 label 字符串匹配、可选或手输入 label、默认全关、老项目零影响)

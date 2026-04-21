@@ -1,0 +1,51 @@
+{
+  "version": "2.7.9",
+  "date": "2026-04-21",
+  "previous_version": "2.7.8",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "集群汇总页「已连接副机」切页后消失",
+      "symptom": "副机打开 ClusterPanel 时主机能看到副机记录，但主机切其他页再回来或副机切页后，副机从列表消失，数据也不来",
+      "root_cause": "副机心跳只在前端 ClusterPanel.vue 的 setInterval(doHeartbeat, 10000) 里发送，页面 onUnmounted 清定时器；主机 _slave_timeout=20s 自动清除离线副机。后端从未主动发心跳。",
+      "fix": "ClusterCollector.start() 新增后台线程 _heartbeat_sender_loop，每 5s 读 config，role=slave && enabled && master_url 齐则 POST /api/v1/cluster/heartbeat；payload 从 channel_manager 实时取 channel_count/detecting，project 从 running 通道的 project_config 取，hostname 用 socket.gethostname()。前端 heartbeatTimer 保留作双保险，register_slave 幂等。",
+      "files": ["backend/services/cluster_collector.py"],
+      "keywords": ["集群", "cluster", "副机", "slave", "heartbeat", "心跳", "已连接副机", "ClusterPanel", "_heartbeat_sender_loop", "register_slave", "_slave_timeout", "汇总"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "Windows 串口 PermissionError 13 拒绝访问",
+      "symptom": "工位 3 称重器接 COM20，界面显示红色「串口打开失败: PermissionError(13, '拒绝访问。')」，设备无法使用",
+      "root_cause": "两条路径：(a) 上次 ser.close() 到 Windows 释放端口有毫秒级延迟；(b) test_connection 和连接线程短时间内先后开同一 port，后者被 OS 拒绝。首次失败直接 raise，没重试，整次连接作废。",
+      "fix": "新增 ExternalDeviceService._open_serial_with_retry(port, baud, ..., timeout, max_retries=3, retry_delay=1.0) 静态辅助，三个连接 loop（_serial_loop / _serial_modbus_ascii_loop / _serial_continuous_loop）的 serial.Serial(...) 统一切到 helper。失败间隔 1s 重试最多 3 次，PermissionError 单独识别打日志。test_connection 短操作路径不改，避免阻塞 UI。",
+      "files": ["backend/services/external_device.py"],
+      "keywords": ["串口", "COM20", "COM", "serial", "PermissionError", "拒绝访问", "称重器", "Modbus ASCII", "_open_serial_with_retry", "retry", "重试", "external_device"],
+      "breaking": false
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-001",
+      "title": "debug-mes 追加集群心跳 + 串口 PermissionError 两章",
+      "symptom": "现有 debug-mes skill 没有覆盖集群心跳架构和串口竞争的排查方法",
+      "root_cause": "v2.7.6 新增集群功能、v2.7.8 修复心跳 bug，历史知识未沉淀",
+      "fix": "追加「集群汇总 / 副机心跳」章节（架构、组件、v2.7.6 坑、v2.7.8 修法、排查步骤、多工位 station_id 命名）和「外部设备串口 PermissionError 13」章节（根因、helper 用法、为何 test_connection 不动）",
+      "files": [".claude/skills/debug-mes/SKILL.md"],
+      "keywords": ["skill", "debug-mes", "cluster", "集群", "心跳", "串口", "PermissionError"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes"],
+  "files_changed": [
+    "backend/services/cluster_collector.py",
+    "backend/services/external_device.py",
+    ".claude/skills/debug-mes/SKILL.md",
+    "docs/changelog/v2.7.9_2026-04-21.md",
+    "docs/changelog/v2.7.9_2026-04-21.json",
+    "docs/CHANGELOG.md",
+    "electron/package.json",
+    "electron/splash.html"
+  ]
+}

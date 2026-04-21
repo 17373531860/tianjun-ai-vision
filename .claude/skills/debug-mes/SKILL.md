@@ -330,3 +330,48 @@ operator.{name,employee_no,id}
   - 编辑已有工单不做兜底（用户改不了 `order_no`）
 - 编辑时：模板外的原 `extra_data` 字段会保留到 payload 里，避免破坏既有数据
 - 故障诊断：新建工单出现 `order_no 必填` 之类后端 422 → 检查 `PRESET_META` 是否和后端 schema 字段对齐
+
+## 集群汇总 / 副机心跳（v2.7.6 引入、v2.7.8 修正）
+
+**架构**：多机协同时一台为 master，其它为 slave；每个工位产出一个 cycle 就 POST `/api/v1/cluster/report` 给 master，master 按 `box_serial` 聚合所有工位后推 MES。副机在线状态靠定时 `POST /api/v1/cluster/heartbeat` 维护，主机超时 `_slave_timeout=20s` 自动清除。
+
+**核心组件**：
+- `backend/api/cluster.py`：`/config`、`/report`、`/heartbeat`、`/slaves`、`/health`、`/boxes`
+- `backend/services/cluster_collector.py::ClusterCollector`：`register_slave`、`receive_station_report`、`report_to_master`、`_check_and_dispatch`、`_heartbeat_sender_loop`（v2.7.8 新增）、`_timeout_checker`
+- `backend/services/mes_hooks.py::_dispatch_to_cluster`：cycle 结束时根据 role 分发（master→本地 receive_station_report，slave→report_to_master）
+- 前端 `frontend/src/views/MES/ClusterPanel.vue`：配置页 + 已连接副机列表 + 待汇总/最近完成 + 明细弹窗
+- 前端 `frontend/src/api/cluster.js`：封装 5 个 cluster API
+
+**v2.7.8 前的坑（已修）**：副机心跳**只由前端 ClusterPanel 的 `setInterval(doHeartbeat, 10000)` 发送**，仅在该页面挂载期间工作。副机切到其它页面 → `onUnmounted` 清 timer → 主机 20 秒后超时把副机清出 `_connected_slaves`。**表现**：主机「已连接副机」一片空白，切页面再回来数据丢失。
+
+**v2.7.8 修法**（`cluster_collector.start()` 里新起 `_heartbeat_sender_loop` 线程）：
+- 每 `_heartbeat_interval=5s` 读一次 config，`role=='slave' & enabled & master_url` 齐则 POST `/cluster/heartbeat`
+- payload 从 `backend.api.channel_manager.channel_manager` 实时取 channel_count / detecting，project 从任一 running 通道的 project_config 取
+- `socket.gethostname()` 作为 hostname
+- HTTP 失败只日志不崩；配置运行时改动通过 `invalidate_config_cache()` + 下轮重读生效
+- 前端的 `heartbeatTimer` 保留作双保险（主机 `register_slave` 是幂等 upsert，不会冲突）
+
+**排查步骤**：
+1. 副机 `GET /cluster/config` 看 `role / enabled / master_url / station_id`——缺一样心跳都发不出
+2. 主机 `GET /cluster/slaves` 看当前在线列表；副机 `GET /cluster/health` 看主机可达性
+3. 后端日志搜 `副机心跳`：失败会打 `副机心跳 HTTP xxx` 或 `副机心跳失败: xxx`
+4. 主机端 `_connected_slaves` 通过 lock 访问是 in-memory，**后端重启丢失**，是刻意设计（副机会重新上报）
+
+**`expected_stations` 配置要匹配 `station_id`**：`cluster_collector._check_and_dispatch` 用集合对齐，少一个工位 box 就永远处于 pending。多工位模式下 station_id 会附加通道号（`mes_hooks.py:539`：`f"{station_id}-{channel_id}"`），配置 expected_stations 时要记得带 `-0/-1`。
+
+## 外部设备串口 PermissionError 13（v2.7.8 修）
+
+**症状**：Windows 上称重器/扫码器串口连接失败，日志 `could not open port 'COMx': PermissionError(13, '拒绝访问。', None, 5)`。
+
+**根因**：两种并发/残留路径
+- a) 上次连接或测试关闭后 Windows 还锁着端口（`ser.close()` 返回到 Windows 实际释放有毫秒级延迟）
+- b) 前端点「测试」按钮的 `test_connection` 和连接线程的 `_serial_loop / _serial_modbus_ascii_loop / _serial_continuous_loop` 短时间内都打开同一 port，后者被拒
+
+**v2.7.8 修法**（`external_device.py::ExternalDeviceService._open_serial_with_retry` 静态辅助）：
+- 三个 loop 的 `serial.Serial(...)` 调用统一换成 `self._open_serial_with_retry(port, baud, ..., timeout=...)`
+- 失败后 `time.sleep(retry_delay=1.0)` 再试，最多 `max_retries=3` 次
+- PermissionError 单独识别打日志 `打开被拒绝(PermissionError) 第 N 次尝试`
+- 任何重试成功都会打 `第 N 次重试打开成功`
+- 3 次全失败才 `raise`，上层 `conn.status='error'` 逻辑不变
+
+**test_connection 没动**：用户点测试按钮是短操作，不加重试避免卡住 UI。如果稳态连接线程已经持有端口，测试按钮会失败——这是**预期行为**，未来若要在「已连接」状态禁用测试按钮需改前端。

@@ -314,6 +314,48 @@ class ExternalDeviceService:
 
     # ---- 串口协议 ----
 
+    @staticmethod
+    def _open_serial_with_retry(port: str, baudrate: int, *,
+                                 bytesize: int = 8, parity: str = "N",
+                                 stopbits: int = 1, timeout: float = 2.0,
+                                 max_retries: int = 3, retry_delay: float = 1.0):
+        """打开串口，失败自动重试。解决 Windows 下 PermissionError(拒绝访问)。
+
+        常见场景：上次连接或测试关闭后 Windows 串口资源未完全释放、
+        或者连接线程与 test_connection 短时间内先后打开同一端口。
+        这种情况下首次 open 失败、间隔 1 秒后再试往往就能成功。
+        """
+        import serial
+        last_err: Optional[Exception] = None
+        for attempt in range(max_retries):
+            try:
+                ser = serial.Serial(
+                    port=port, baudrate=baudrate,
+                    bytesize=bytesize, parity=parity, stopbits=stopbits,
+                    timeout=timeout,
+                )
+                if attempt > 0:
+                    logger.info("[ExtDev] %s 第 %d 次重试打开成功", port, attempt + 1)
+                return ser
+            except PermissionError as e:
+                last_err = e
+                logger.warning(
+                    "[ExtDev] %s 打开被拒绝(PermissionError) 第 %d/%d 次尝试: %s",
+                    port, attempt + 1, max_retries, e
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+            except Exception as e:
+                last_err = e
+                logger.warning(
+                    "[ExtDev] %s 打开失败 第 %d/%d 次尝试: %s",
+                    port, attempt + 1, max_retries, e
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+        assert last_err is not None
+        raise last_err
+
     def _serial_loop(self, conn: DeviceConnection):
         try:
             import serial
@@ -326,7 +368,7 @@ class ExternalDeviceService:
         cfg = conn.protocol_config
         conn.status = "connecting"
         try:
-            ser = serial.Serial(
+            ser = self._open_serial_with_retry(
                 port=conn.serial_port,
                 baudrate=conn.serial_baud,
                 bytesize=cfg.get("bytesize", 8),
@@ -458,7 +500,7 @@ class ExternalDeviceService:
 
         conn.status = "connecting"
         try:
-            ser = serial.Serial(
+            ser = self._open_serial_with_retry(
                 port=conn.serial_port,
                 baudrate=conn.serial_baud,
                 bytesize=cfg.get("bytesize", 8),
@@ -542,7 +584,7 @@ class ExternalDeviceService:
         cfg = conn.protocol_config
         conn.status = "connecting"
         try:
-            ser = serial.Serial(
+            ser = self._open_serial_with_retry(
                 port=conn.serial_port,
                 baudrate=conn.serial_baud,
                 bytesize=cfg.get("bytesize", 8),
