@@ -165,9 +165,15 @@ class RodSessionGate:
 def read_rod_filter_config(project_config: Dict[str, Any] | None) -> Dict[str, Any]:
     """从 project_config 读两层过滤的开关，缺字段全部按 OFF/默认处理。
 
+    兼容两种写法（前者是 v2.7.8 起的推荐写法，后者是 v2.7.6 遗留）:
+      1. project_config["pipeline_config"]["rod_companion_filter"] / ["rod_session_gate"]
+      2. project_config["rod_companion_filter"] / ["rod_session_gate"] (顶层)
+
+    pipeline_config 写法和前端 Project 页的保存结构一致，无需额外链路改动。
+    顶层写法保留只是为了兼容 v2.7.6 之前直接 POST 到 set_project_config 的调用方。
+
     约定结构:
-      project_config = {
-        ...,
+      {
         "rod_companion_filter": {
             "enabled": False,
             "iou_threshold": 0.25,
@@ -182,8 +188,17 @@ def read_rod_filter_config(project_config: Dict[str, Any] | None) -> Dict[str, A
       }
     """
     pc = project_config or {}
-    comp_cfg = pc.get("rod_companion_filter") or {}
-    gate_cfg = pc.get("rod_session_gate") or {}
+    pipeline = pc.get("pipeline_config") or {}
+    comp_cfg = (
+        pipeline.get("rod_companion_filter")
+        or pc.get("rod_companion_filter")
+        or {}
+    )
+    gate_cfg = (
+        pipeline.get("rod_session_gate")
+        or pc.get("rod_session_gate")
+        or {}
+    )
     return {
         "companion_enabled": bool(comp_cfg.get("enabled", False)),
         "companion_iou_thr": float(comp_cfg.get("iou_threshold", DEFAULT_IOU_THR)),

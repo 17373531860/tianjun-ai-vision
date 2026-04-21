@@ -91,9 +91,27 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
   "expected_counts": {...},      // 期望计数
   "container_mode": false,       // 容器模式
   "shift_split_enabled": false,  // 班次分割
-  "shift_split_time": "08:00"
+  "shift_split_time": "08:00",
+  // v2.7.8 新增：通用误判过滤（两层叠加后处理，默认全关）
+  "rod_companion_filter": {
+    "enabled": false,
+    "iou_threshold": 0.25,
+    "rod_label": "<要过滤的 label>",
+    "companion_labels": ["<伴随 label1>", "<伴随 label2>"]
+  },
+  "rod_session_gate": {
+    "enabled": false,
+    "rod_label": "<被门控的 label>",
+    "gate_labels": ["<触发 label1>"]
+  }
 }
 ```
+
+**v2.7.8 rod 过滤两字段的处理位置：**
+- **前端 Project/index.vue**：逻辑设置 Tab 底部「误判过滤（高级）」卡片；`initProjectDefaults` 从 `pipeline_config` 读；`handleSaveProject` 通过 `_sanitizeCompanionFilter / _sanitizeSessionGate` 写回 `pipeline_config`（enabled 若 rod_label 为空或 labels 为空会自动置为 false）
+- **后端 rod_filter.read_rod_filter_config**：优先读 `project_config["pipeline_config"]`，回退到 `project_config` 顶层（兼容 v2.7.6 直接 POST `/detection/set-project`）
+- **source.py**：`__init__` / `set_project_config` 每次重新读开关重建 gate；`_apply_rod_filters` 在三个推理入口前统一调用；新周期 / stop_detection 时 `gate.reset()`
+- **v2.7.6 旧坑**：当时只支持顶层读取，但 `_build_project_config` 不把这俩 key 放顶层，所以手动改 DB 也不会生效。新增类似"基于 label 的后处理过滤"时，**务必确保字段放在 pipeline_config 或在 `_build_project_config` 里显式抬到顶层**
 
 **解析点:** `source.py: set_project_config()` → `self.logic_mode`, `self.custom_conditions` 等
 

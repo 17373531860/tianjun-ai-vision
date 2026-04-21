@@ -1,0 +1,120 @@
+{
+  "version": "2.7.8",
+  "date": "2026-04-21",
+  "previous_version": "2.7.7",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "v2.7.6 传动杆误判过滤两个开关从未生效",
+      "symptom": "客户机上即使手动在 DB 的 project_config JSON 顶层加上 rod_companion_filter / rod_session_gate 字段，日志无 [RodFilter] companion_filter enabled 输出，两层过滤完全不工作",
+      "root_cause": "backend/api/rod_filter.py::read_rod_filter_config 只从 project_config 顶层读这两个 key。但 backend/main.py::_build_project_config 构造 config dict 时只放 pipeline_config/data_config/steps_config/events_config/counters_config，从未把这两个 key 抬到顶层，运行时永远读到 {} 空 dict，开关永远 False",
+      "fix": "改 read_rod_filter_config 兼容两种写法：优先读 project_config['pipeline_config']['rod_companion_filter'] / ['rod_session_gate']（v2.7.8 前端写入路径，与 _build_project_config 数据流一致），回退到 project_config 顶层（兼容 v2.7.6 直接 POST /detection/set-project 的调用方）。新增测试用例覆盖 pipeline_config 读取、优先级、None/{} 兜底",
+      "files": [
+        "backend/api/rod_filter.py",
+        "test_rod_filter.py"
+      ],
+      "keywords": [
+        "rod_filter",
+        "rod_companion_filter",
+        "rod_session_gate",
+        "read_rod_filter_config",
+        "_build_project_config",
+        "pipeline_config",
+        "project_config",
+        "v2.7.6 bug",
+        "silent failure",
+        "静默失效",
+        "传动杆过滤不生效"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "Project 配置页新增「误判过滤（高级）」卡片，两个开关做成通用 UI",
+      "symptom": null,
+      "root_cause": null,
+      "fix": "frontend/src/views/Project/index.vue 逻辑设置 Tab 底部新增『误判过滤（高级）』卡片：第 1 层空间共现过滤（开关+目标 label+伴随 labels 多选+IoU 阈值），第 2 层软时序状态门（开关+目标 label+触发 labels 多选）；label 候选用 availableLabels computed 从 steps_config.label 聚合，支持 allow-create 输入自定义类别名；新增 _cleanLabels/_sanitizeCompanionFilter/_sanitizeSessionGate 三个清洗辅助，label 空时强制回落为 enabled:false 防呆；initProjectDefaults 从 pipeline_config 读默认值到顶层响应式字段，handleSaveProject 反向 sanitize 后写回 pipeline_config；默认全关老项目零影响",
+      "files": [
+        "frontend/src/views/Project/index.vue",
+        "backend/api/rod_filter.py"
+      ],
+      "config_schema": {
+        "pipeline_config": {
+          "rod_companion_filter": {
+            "enabled": false,
+            "iou_threshold": 0.25,
+            "rod_label": "<要过滤的 label>",
+            "companion_labels": ["<伴随 label1>", "<伴随 label2>"]
+          },
+          "rod_session_gate": {
+            "enabled": false,
+            "rod_label": "<被门控的 label>",
+            "gate_labels": ["<触发 label1>"]
+          }
+        }
+      },
+      "keywords": [
+        "误判过滤 UI",
+        "rod_filter UI",
+        "Project 配置页",
+        "空间共现过滤",
+        "软时序状态门",
+        "通用 label 匹配",
+        "availableLabels",
+        "allow-create",
+        "_sanitizeCompanionFilter",
+        "_sanitizeSessionGate",
+        "pipeline_config 前端写入",
+        "高级设置"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-001",
+      "title": "modify-source 更新 rod_filter 章节",
+      "symptom": null,
+      "root_cause": null,
+      "fix": "补充 read_rod_filter_config v2.7.8 读取路径（pipeline_config 优先，顶层回退），明确记录 v2.7.6 顶层读取在 _build_project_config 没抬到顶层导致静默失效的坑",
+      "files": [".claude/skills/modify-source/SKILL.md"],
+      "keywords": ["skill", "modify-source", "rod_filter"],
+      "breaking": false
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-002",
+      "title": "modify-project-config 补充 pipeline_config 两个新子字段",
+      "symptom": null,
+      "root_cause": null,
+      "fix": "pipeline_config 字段说明加上 rod_companion_filter / rod_session_gate 完整结构和数据流；新增章节说明 v2.7.8 rod 过滤在前端/后端/source.py 各处的处理位置；提醒后续新增类似 label 过滤必须放 pipeline_config",
+      "files": [".claude/skills/modify-project-config/SKILL.md"],
+      "keywords": ["skill", "modify-project-config", "pipeline_config", "rod_filter"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [
+    "modify-source",
+    "modify-project-config"
+  ],
+  "files_changed": [
+    "backend/api/rod_filter.py",
+    "frontend/src/views/Project/index.vue",
+    "test_rod_filter.py",
+    ".claude/skills/modify-source/SKILL.md",
+    ".claude/skills/modify-project-config/SKILL.md",
+    "electron/package.json",
+    "docs/changelog/v2.7.8_2026-04-21.md",
+    "docs/changelog/v2.7.8_2026-04-21.json",
+    "docs/CHANGELOG.md"
+  ],
+  "known_issues_pending_next_release": [
+    "[PENDING-001] 工位 3 称重器 COM20 连接失败: PermissionError(13, '拒绝访问。')",
+    "[PENDING-002] 集群汇总页「待汇总」「最近完成」均为空，主副机都有数据但不汇总",
+    "[PENDING-003] 副机 A 只在点击测试数据时才出现数据，切换页面后消失"
+  ],
+  "tests": [
+    "test_rod_filter.py (20/20 passed, 含 4 个 v2.7.8 新增用例)"
+  ]
+}

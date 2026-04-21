@@ -1038,6 +1038,140 @@
                   </div>
                 </div>
               </el-card>
+
+              <!-- 误判过滤（通用两层后处理，默认关） -->
+              <el-card shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header>
+                  <div class="flex justify-between items-center">
+                    <span class="font-bold text-white">误判过滤（高级）</span>
+                    <span class="text-[11px] text-gray-500">推理后处理，默认全关。按模型类别名（label）匹配，通用。</span>
+                  </div>
+                </template>
+                <div class="space-y-4">
+                  <!-- 第 1 层：空间共现 -->
+                  <div class="bg-slate-900 p-4 rounded border border-slate-800">
+                    <div class="flex items-center justify-between mb-3">
+                      <div>
+                        <div class="font-bold text-white text-sm">空间共现过滤</div>
+                        <div class="text-[11px] text-gray-500 mt-0.5">
+                          同一帧里，目标 label 必须和任一伴随 label 满足「中心点落在其 bbox 内 或 IoU ≥ 阈值」，否则丢弃。
+                        </div>
+                      </div>
+                      <el-switch v-model="activeProject.rod_companion_filter.enabled" active-color="#22d3ee" />
+                    </div>
+                    <div v-if="activeProject.rod_companion_filter.enabled" class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                      <div>
+                        <label class="block text-gray-400 mb-1">目标 label（要过滤的易误判类别）</label>
+                        <el-select
+                          v-model="activeProject.rod_companion_filter.rod_label"
+                          size="small"
+                          filterable
+                          allow-create
+                          default-first-option
+                          clearable
+                          placeholder="选择或输入，如 传动杆"
+                          class="w-full"
+                        >
+                          <el-option
+                            v-for="lbl in availableLabels"
+                            :key="lbl"
+                            :label="lbl"
+                            :value="lbl"
+                          />
+                        </el-select>
+                      </div>
+                      <div>
+                        <label class="block text-gray-400 mb-1">伴随 label（至少共现一个才保留）</label>
+                        <el-select
+                          v-model="activeProject.rod_companion_filter.companion_labels"
+                          size="small"
+                          filterable
+                          allow-create
+                          multiple
+                          default-first-option
+                          placeholder="多选或输入，如 大框架/小框架/侧板"
+                          class="w-full"
+                        >
+                          <el-option
+                            v-for="lbl in availableLabels"
+                            :key="lbl"
+                            :label="lbl"
+                            :value="lbl"
+                          />
+                        </el-select>
+                      </div>
+                      <div>
+                        <label class="block text-gray-400 mb-1">IoU 阈值（0~1）</label>
+                        <el-input-number
+                          v-model="activeProject.rod_companion_filter.iou_threshold"
+                          size="small"
+                          :min="0"
+                          :max="1"
+                          :step="0.05"
+                          :precision="2"
+                          controls-position="right"
+                          class="w-full"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 第 2 层：软时序状态门 -->
+                  <div class="bg-slate-900 p-4 rounded border border-slate-800">
+                    <div class="flex items-center justify-between mb-3">
+                      <div>
+                        <div class="font-bold text-white text-sm">软时序状态门</div>
+                        <div class="text-[11px] text-gray-500 mt-0.5">
+                          当前周期从未出现过触发 label 时，抑制所有目标 label；一旦出现过即放行至下一次周期重置。
+                        </div>
+                      </div>
+                      <el-switch v-model="activeProject.rod_session_gate.enabled" active-color="#22d3ee" />
+                    </div>
+                    <div v-if="activeProject.rod_session_gate.enabled" class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <label class="block text-gray-400 mb-1">目标 label（被门控的类别）</label>
+                        <el-select
+                          v-model="activeProject.rod_session_gate.rod_label"
+                          size="small"
+                          filterable
+                          allow-create
+                          default-first-option
+                          clearable
+                          placeholder="选择或输入，如 传动杆"
+                          class="w-full"
+                        >
+                          <el-option
+                            v-for="lbl in availableLabels"
+                            :key="lbl"
+                            :label="lbl"
+                            :value="lbl"
+                          />
+                        </el-select>
+                      </div>
+                      <div>
+                        <label class="block text-gray-400 mb-1">触发 label（周期内首次出现即解除门控）</label>
+                        <el-select
+                          v-model="activeProject.rod_session_gate.gate_labels"
+                          size="small"
+                          filterable
+                          allow-create
+                          multiple
+                          default-first-option
+                          placeholder="多选或输入，如 大框架/小框架"
+                          class="w-full"
+                        >
+                          <el-option
+                            v-for="lbl in availableLabels"
+                            :key="lbl"
+                            :label="lbl"
+                            :value="lbl"
+                          />
+                        </el-select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </el-card>
             </div>
           </el-tab-pane>
 
@@ -1301,6 +1435,16 @@ const defaultCounters = computed(() => {
 const customCounters = computed(() => {
   if (!activeProject.value?.counters_config) return [];
   return activeProject.value.counters_config.slice(3);
+});
+
+// 当前项目已配置过的 label 集合（去重），给误判过滤的下拉当候选项用
+const availableLabels = computed(() => {
+  const set = new Set();
+  const steps = activeProject.value?.steps_config || [];
+  steps.forEach(s => {
+    if (s && s.label) set.add(s.label);
+  });
+  return Array.from(set);
 });
 
 // 加载项目列表
@@ -1599,6 +1743,39 @@ watch(() => activeProject.value?.tracking_roi_polygon, () => {
 
 // ======================== End ROI Editor ========================
 
+// 误判过滤：保存前归一化，避免空 label 造成后端无谓误判
+const _cleanLabels = (arr) => (Array.isArray(arr) ? arr : [])
+  .map(x => (typeof x === 'string' ? x.trim() : ''))
+  .filter(Boolean);
+
+const _sanitizeCompanionFilter = (cf) => {
+  const c = cf || {};
+  const enabled = !!c.enabled;
+  const rod = (c.rod_label || '').trim();
+  const labels = _cleanLabels(c.companion_labels);
+  let iou = Number(c.iou_threshold);
+  if (!Number.isFinite(iou)) iou = 0.25;
+  iou = Math.max(0, Math.min(1, iou));
+  return {
+    enabled: enabled && !!rod && labels.length > 0,
+    iou_threshold: iou,
+    rod_label: rod,
+    companion_labels: labels
+  };
+};
+
+const _sanitizeSessionGate = (gt) => {
+  const g = gt || {};
+  const enabled = !!g.enabled;
+  const rod = (g.rod_label || '').trim();
+  const labels = _cleanLabels(g.gate_labels);
+  return {
+    enabled: enabled && !!rod && labels.length > 0,
+    rod_label: rod,
+    gate_labels: labels
+  };
+};
+
 // 初始化项目默认配置
 const initProjectDefaults = (project) => {
   if (!project.model_format) project.model_format = 'pytorch_fp32';
@@ -1734,6 +1911,25 @@ const initProjectDefaults = (project) => {
     project.tracking_roi_polygon = roi.polygon || [];
   }
   
+  // 误判过滤（通用两层后处理，v2.7.8 起走 pipeline_config；默认全关，老项目兼容）
+  if (project.rod_companion_filter === undefined) {
+    const cf = pipelineConfig.rod_companion_filter || {};
+    project.rod_companion_filter = {
+      enabled: !!cf.enabled,
+      iou_threshold: typeof cf.iou_threshold === 'number' ? cf.iou_threshold : 0.25,
+      rod_label: cf.rod_label || '',
+      companion_labels: Array.isArray(cf.companion_labels) ? [...cf.companion_labels] : []
+    };
+  }
+  if (project.rod_session_gate === undefined) {
+    const gt = pipelineConfig.rod_session_gate || {};
+    project.rod_session_gate = {
+      enabled: !!gt.enabled,
+      rod_label: gt.rod_label || '',
+      gate_labels: Array.isArray(gt.gate_labels) ? [...gt.gate_labels] : []
+    };
+  }
+
   // 班次拆分配置（从 data_config 中读取）
   const dataConfig = project.data_config || {};
   if (project.shift_split_enabled === undefined) {
@@ -1884,7 +2080,9 @@ const handleSaveProject = async () => {
         tracking_container_label: activeProject.value.tracking_cycle_strategy === 'container' ? (activeProject.value.tracking_container_label || '') : '',
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
-        cycle_max_duration: activeProject.value.cycle_max_duration || 0
+        cycle_max_duration: activeProject.value.cycle_max_duration || 0,
+        rod_companion_filter: _sanitizeCompanionFilter(activeProject.value.rod_companion_filter),
+        rod_session_gate: _sanitizeSessionGate(activeProject.value.rod_session_gate)
       }
     };
     data.data_config = {

@@ -179,6 +179,61 @@ def test_config_custom_labels():
     assert set(cfg["gate_labels"]) == {"A", "B"}
 
 
+# ---------- v2.7.8: 支持从 pipeline_config 读 ----------
+
+def test_config_read_from_pipeline_config():
+    """v2.7.8 起：前端把开关写到 project.pipeline_config 里，后端要能读到"""
+    cfg = read_rod_filter_config({
+        "pipeline_config": {
+            "rod_companion_filter": {
+                "enabled": True,
+                "iou_threshold": 0.3,
+                "rod_label": "杆",
+                "companion_labels": ["L1", "L2"],
+            },
+            "rod_session_gate": {
+                "enabled": True,
+                "rod_label": "杆",
+                "gate_labels": ["G1"],
+            },
+        },
+    })
+    assert cfg["companion_enabled"] is True
+    assert cfg["companion_iou_thr"] == 0.3
+    assert cfg["companion_rod_label"] == "杆"
+    assert set(cfg["companion_labels"]) == {"L1", "L2"}
+    assert cfg["gate_enabled"] is True
+    assert cfg["gate_rod_label"] == "杆"
+    assert set(cfg["gate_labels"]) == {"G1"}
+
+
+def test_config_pipeline_overrides_top_level():
+    """pipeline_config 优先于顶层；兼顾 v2.7.6 遗留顶层写法"""
+    cfg = read_rod_filter_config({
+        "pipeline_config": {
+            "rod_companion_filter": {"enabled": True, "iou_threshold": 0.4},
+        },
+        "rod_companion_filter": {"enabled": False, "iou_threshold": 0.9},
+    })
+    assert cfg["companion_enabled"] is True
+    assert cfg["companion_iou_thr"] == 0.4
+
+
+def test_config_top_level_still_works():
+    """v2.7.6 的直接 POST 顶层的调用方不能挂"""
+    cfg = read_rod_filter_config({
+        "rod_companion_filter": {"enabled": True, "iou_threshold": 0.2},
+    })
+    assert cfg["companion_enabled"] is True
+    assert cfg["companion_iou_thr"] == 0.2
+
+
+def test_config_missing_pipeline_config_safe():
+    """pipeline_config 为 None / 空 dict 都不能崩"""
+    assert read_rod_filter_config({"pipeline_config": None})["companion_enabled"] is False
+    assert read_rod_filter_config({"pipeline_config": {}})["gate_enabled"] is False
+
+
 if __name__ == "__main__":
     import inspect
     tests = [

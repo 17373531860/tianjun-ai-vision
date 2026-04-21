@@ -154,7 +154,8 @@ MES Hook 影响: [是否影响 5 个 Hook 调用点]
 - **模块**：`backend/api/rod_filter.py`
   - `filter_rod_by_companion(dets, iou_thr, rod_label, companion_labels)`：同帧 rod 必须和任一 companion (`大/小框架/侧板`) 满足 `center-in-bbox OR IoU≥thr`
   - `RodSessionGate`：当前周期从未见过 `大/小框架` 时抑制所有 rod；`update_and_filter()` + `reset()`
-  - `read_rod_filter_config(project_config)`：从 `rod_companion_filter` / `rod_session_gate` 读开关，**缺字段全按 OFF**，老项目零影响
+  - `read_rod_filter_config(project_config)`：兼容两种写法。**推荐：`project_config["pipeline_config"]["rod_companion_filter"]`**（v2.7.8 起前端 Project 页保存路径）；**兼容：`project_config["rod_companion_filter"]`**（v2.7.6 顶层写法，直接调 `/detection/set-project` 时可用）。优先读 pipeline_config，再回退到顶层。**缺字段全按 OFF**，老项目零影响
+  - ⚠ **v2.7.6 坑**：当时只支持顶层读取，但 `main.py::_build_project_config` 根本不把这俩字段放到顶层（只放 pipeline_config / data_config / ...），所以 v2.7.6 上即使手动改 DB 也读不到开关。v2.7.8 改 `read_rod_filter_config` 同时兼容 pipeline_config 后才真正生效
 - **在 source.py 的 6 处 hook**：
   1. `__init__` 里挂 `self._rod_gate` + `self._rod_filter_cfg`
   2. `set_project_config` 里调用 `read_rod_filter_config` 重新读开关并重建 gate

@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.7.8 (2026-04-21)
+- [BUG-001] 修复: v2.7.6 传动杆误判过滤两个开关从未生效 (read_rod_filter_config 只读顶层但 _build_project_config 从不把字段放顶层，改为优先读 pipeline_config 兼容回退)
+- [FEAT-001] 新增: Project 配置页「误判过滤（高级）」卡片，两层通用开关 UI (按 label 字符串匹配、可选或手输入 label、默认全关、老项目零影响)
+- [SKILL-001] modify-source 更新 rod_filter 章节，记录 v2.7.6 静默失效坑
+- [SKILL-002] modify-project-config 补充 pipeline_config 两个新子字段和数据流
+- 已知遗留（v2.7.9 解）: 工位 3 称重器 COM20 权限拒绝；集群汇总无数据；副机 A 数据切页丢失
+
 ## v2.7.7 (2026-04-21)
 - [BUG-001] 修复: WMax 扫码器三端口协议对齐 (DataLen 默认 4B→3B；encode_get_config_opt config_id<0 省略 field1；删除 HandShake 命令；activate_rpt_reporting 改为 GetConfigOpt+TurnOnOffVideo 序列)
 - [BUG-002] 修复: scanner.py device_type='auto' 被误降级为 text_lon (保留原值，auto/wmax 统一走 WMaxDeviceManager 三端口)
