@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.7.7 (2026-04-21)
+- [BUG-001] 修复: WMax 扫码器三端口协议对齐 (DataLen 默认 4B→3B；encode_get_config_opt config_id<0 省略 field1；删除 HandShake 命令；activate_rpt_reporting 改为 GetConfigOpt+TurnOnOffVideo 序列)
+- [BUG-002] 修复: scanner.py device_type='auto' 被误降级为 text_lon (保留原值，auto/wmax 统一走 WMaxDeviceManager 三端口)
+- [BUG-003] 修复: _listen_loop 为 auto/wmax 建本地 TCP 抢占 WMax CMD 端口 (改为 pending_wmax 等待循环，完全交给 WMaxDeviceManager)
+- [BUG-004] 修复: UDP 自动发现成功后 scanner conn.status 未更新 connected (统一处理 connected_mgmt_ips)
+- [BUG-005] 修复: 测试按钮对 WMax 扫码器无效 (改走 WMaxDevice.flash_and_scan + 同步采集条码)
+- [FEAT-001] 变更: 扫码器改为触发式 (ondemand) 工作模式——启动只建 TCP 不激活 RPT；start_scanning 发 LON，stop_scanning 发 LOFF；trigger_on/off 同时发 TurnOnOffVideo+Trigger+SendTermCmd 三命令兜底
+- [FEAT-002] 新增: 测试按钮闪光 5 秒 + 同步返回扫到的条码 (ElMessage 直接显示"扫到 X 条: XXXXX")
+- [DOC-001] 新增: WMax 协议文档 (docs/wmax_protocol.md) + IDManager 反编译资料 + wmax_known_devices.json 持久化
+- [KNOWN] 已知: 扫码器 LOFF 后灯不熄灭 (三种关灯命令都发了但扫码器固件保持扫描模式，待抓包 IDManager 关灯行为后对齐，不影响扫码功能)
+
 ## v2.7.6 (2026-04-21)
 - [BUG-001] 修复: 扫码器连上但"开始检测"不发 LON 命令 (resume/standby/resume_inference 补上 start/stop_scanning + _resolve_bound_channels 超界降级 + skip 原因显式日志)
 - [FEAT-001] 新增: 称重器稳定值判定 + 抖动/空载过滤 (stable_delta/stable_count/zero_threshold 状态机 + 中位数上报)

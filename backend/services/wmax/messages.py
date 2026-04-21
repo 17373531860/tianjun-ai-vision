@@ -276,9 +276,15 @@ def get_sub_message(fields: dict, fn: int) -> Optional[dict]:
 # ═══════════════════════════════════════════════════════════
 
 def encode_get_config_opt(config_id: int = -1, inc_global: bool = True) -> bytes:
-    """GetConfigOpt { config_id=1(Int32Value), inc_global_opt=2(BoolValue) }"""
+    """GetConfigOpt { config_id=1(Int32Value), inc_global_opt=2(BoolValue) }
+
+    注: IDManager 抓包 (1111.pcapng) 显示 config_id<0 时省略 field 1,
+        只发 field 2 (BoolValue true) = 4B `12 02 08 01`, 设备立即回 28K 配置.
+        之前带 field1 varint=-1 会编码 10 字节大负数, 设备不认.
+    """
     msg = b""
-    msg += encode_wrapper_int32(1, config_id)
+    if config_id >= 0:
+        msg += encode_wrapper_int32(1, config_id)
     msg += encode_wrapper_bool(2, inc_global)
     return msg
 

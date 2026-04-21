@@ -412,13 +412,9 @@ class WMaxDeviceManager:
                     if dev:
                         dev.info.sn = sn
                         dev.info.name = name
-                        try:
-                            hs = await dev.handshake()
-                            logger.warning("[WMaxMgr] %s 握手完成: %s", key, hs)
-                            await dev.activate_rpt_reporting()
-                        except Exception as e:
-                            logger.warning("[WMaxMgr] %s 握手/激活失败: %s", key, e)
-
+                    # 不调 activate_rpt_reporting: 它内部 turn_on_video(on=True) 会让扫码器
+                    # 进入持续扫描+视频推送模式 (灯一直闪). 改成触发式 (ondemand):
+                    # RPT 端口 TCP 建好即可, 扫码器自身是"通信命令触发", 由 trigger_on/off 控制.
                     results.append({
                         "ip": ip, "port": port, "sn": sn, "name": name,
                         "action": "connected",
@@ -451,12 +447,7 @@ class WMaxDeviceManager:
                         dev.info.sn = known["sn"]
                     if known.get("name"):
                         dev.info.name = known["name"]
-                    try:
-                        hs = await dev.handshake()
-                        logger.warning("[WMaxMgr] %s 握手完成", key)
-                        await dev.activate_rpt_reporting()
-                    except Exception as e:
-                        logger.warning("[WMaxMgr] %s 握手/激活失败: %s", key, e)
+                # 同上: 不 activate_rpt_reporting, 只建 TCP 三端口, 等触发
                 results.append({
                     "ip": ip, "port": port,
                     "sn": known.get("sn", ""),

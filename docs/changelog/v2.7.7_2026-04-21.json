@@ -1,0 +1,119 @@
+{
+  "version": "2.7.7",
+  "date": "2026-04-21",
+  "previous_version": "2.7.6",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "WMax 扫码器三端口协议对齐",
+      "symptom": "扫码器显示已连接但扫不到任何条码",
+      "root_cause": "原 LON/LOFF 文本协议完全错误，真机走二进制 Protobuf 三端口(55266/55276/55286)；DataLen 默认 4B 真机是 3B；HandShake 真机不响应只会超时；GetConfigOpt 的 field1 要按厂商工具抓包的格式省略",
+      "fix": "device.py WMaxDevice.__init__ 的 _data_len_size 默认 3；messages.py encode_get_config_opt 当 config_id<0 时省略 field1；device.py activate_rpt_reporting 删 HandShake 改 GetConfigOpt+TurnOnOffVideo；manager.py 同步删 HandShake",
+      "files": ["backend/services/wmax/messages.py", "backend/services/wmax/device.py", "backend/services/wmax/manager.py"],
+      "keywords": ["WMax", "扫码器", "三端口", "55266", "55276", "55286", "Protobuf", "DataLen", "HandShake", "GetConfigOpt", "TurnOnOffVideo", "二进制协议", "IDManager"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "scanner.py device_type='auto' 被误降级为 text_lon",
+      "symptom": "前端选'自动'类型扫码器仍走老 LON 路径，不识别 WMax 设备",
+      "root_cause": "_start_device 用 `raw_type = ... or 'text_lon'`，'auto' 字符串为真但被后续逻辑当文本模式走",
+      "fix": "保留原 device_type，auto/wmax 都交给 WMaxDeviceManager 处理",
+      "files": ["backend/services/scanner.py"],
+      "keywords": ["device_type", "auto", "text_lon", "scanner", "降级 bug"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "_listen_loop 为 auto/wmax 类型建本地 TCP 抢占端口",
+      "symptom": "WMaxDeviceManager 连 55266 时端口被 scanner 自己的 _listen_loop 抢先占了，连不上",
+      "root_cause": "_listen_loop 对所有 device_type 都走统一流程，和后台 _auto_discover_wmax_bg 并发冲突",
+      "fix": "auto/wmax 类型进入 pending_wmax 等待循环，不自建 TCP",
+      "files": ["backend/services/scanner.py"],
+      "keywords": ["listen_loop", "端口抢占", "pending_wmax", "并发冲突"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "UDP 发现成功后 scanner conn.status 未更新",
+      "symptom": "前端扫码器卡片显示'未连接'，后台实际已连上",
+      "root_cause": "_auto_discover_wmax_bg 只在 UDP 未发现→降级直连路径更新 status，UDP 发现成功的路径漏了",
+      "fix": "统一处理 connected_mgmt_ips 集合，对所有匹配 IP 的 scanner conn 标记 connected",
+      "files": ["backend/services/scanner.py"],
+      "keywords": ["UDP 发现", "status", "前端状态不同步", "connected_mgmt_ips"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-005",
+      "title": "测试按钮对 WMax 扫码器无效",
+      "symptom": "点测试按钮扫码器无反应，后端日志显示发了 LON\\r\\n 但设备不认",
+      "root_cause": "test_connection 原本为文本模式写的，socket.sendall(b'LON\\r\\n') 不是 WMax 二进制协议",
+      "fix": "优先走 WMaxDevice.flash_and_scan(5.0)，闪光 5s 同步采集条码并返回；文本模式作为降级分支保留",
+      "files": ["backend/services/scanner.py", "backend/services/wmax/device.py"],
+      "keywords": ["test_connection", "测试按钮", "flash_and_scan", "闪光5秒"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "扫码器切换为触发式 (ondemand) 工作模式",
+      "symptom": "(行为变更) 以前扫码器连上后持续扫描灯一直闪，现改为检测周期内才扫",
+      "root_cause": "原 activate_rpt_reporting 内 turn_on_video(on=True) 让扫码器进入 Burst 模式",
+      "fix": "启动时只建 TCP 三端口不激活 RPT；start_scanning/stop_scanning 发真实 LON/LOFF；trigger_on/off 同时发 TurnOnOffVideo+Trigger+SendTermCmd 三命令兜底兼容不同固件",
+      "files": ["backend/services/scanner.py", "backend/services/wmax/device.py", "backend/services/wmax/manager.py"],
+      "keywords": ["ondemand", "触发式", "LON", "LOFF", "TurnOnOffVideo", "Trigger", "start_scanning", "stop_scanning", "按需扫码"],
+      "breaking": true
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "测试按钮：闪光 5 秒并同步返回扫到的条码",
+      "symptom": "点测试要能看到扫码器闪光并直接显示扫到的条码",
+      "root_cause": "原 test_connection 只闪 3s 且不采集条码",
+      "fix": "WMaxDevice.flash_and_scan(5.0) 临时接管 on_code_received 回调，5s 内去重收集条码后恢复；scanner.test_connection 返回 {success, message, scanned: []}",
+      "files": ["backend/services/scanner.py", "backend/services/wmax/device.py"],
+      "keywords": ["flash_and_scan", "测试按钮", "5秒", "同步采集", "on_code_received"],
+      "breaking": false
+    },
+    {
+      "type": "docs",
+      "id": "DOC-001",
+      "title": "WMax 协议文档 + IDManager 反编译资料",
+      "symptom": "(文档) 无",
+      "root_cause": "之前按错误的 LON/LOFF 协议实现，耗费大量时间排查",
+      "fix": "docs/wmax_protocol.md 记录 CmdType 枚举、Flag 位、校验和、UDP 发现帧结构；backend/data/wmax_known_devices.json 持久化已知设备",
+      "files": ["docs/wmax_protocol.md", "backend/data/wmax_known_devices.json"],
+      "keywords": ["WMax 协议", "文档", "反编译", "IDManager", "pcap"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/services/scanner.py",
+    "backend/services/wmax/device.py",
+    "backend/services/wmax/manager.py",
+    "backend/services/wmax/messages.py",
+    "docs/wmax_protocol.md",
+    "backend/data/wmax_known_devices.json",
+    "electron/package.json",
+    "electron/splash.html"
+  ],
+  "known_issues": [
+    "扫码器 LOFF 后灯不熄灭: trigger_off 已发 TurnOnOffVideo(off)+Trigger(off)+SendTermCmd(LOFF) 三种命令但扫码器固件仍保持扫描状态。待抓包 IDManager 关灯行为后对齐。不影响扫码功能。",
+    "192.168.0.100 需物理网卡在 192.168.0.x 网段; 若被 Clash/Mihomo 等代理劫持会 'connect 成功但无响应', 现场部署前 ping 验证"
+  ],
+  "deployment": {
+    "files_to_copy": [
+      "backend/services/scanner.py",
+      "backend/services/wmax/device.py",
+      "backend/services/wmax/manager.py",
+      "backend/services/wmax/messages.py"
+    ],
+    "config_change": "扫码器 port 字段不变(55256 登记用), device_type=auto 即可; WMax 走硬编码 55266/55276/55286"
+  }
+}

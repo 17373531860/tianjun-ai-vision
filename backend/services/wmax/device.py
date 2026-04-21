@@ -89,7 +89,10 @@ class WMaxDevice:
         # CMD 端口 (55266)
         self._sock: Optional[socket.socket] = None
         self._receiver = DataReceiver()
-        self._data_len_size = 4
+        # 抓包 (1111.pcapng/222.pcapng/333.pcapng) 证实真实 WMax 设备使用 3B DataLen 变体.
+        # 发 4B DataLen 设备头校验通不过会 silent drop 整个命令, 导致所有请求超时.
+        # receiver 会自动探测设备推送方向的格式, 我们主动发送先假定 3B.
+        self._data_len_size = 3
         self._cmd_index = 0
         self._lock = threading.Lock()
         self._recv_thread: Optional[threading.Thread] = None
@@ -634,21 +637,33 @@ class WMaxDevice:
         return {}
 
     async def activate_rpt_reporting(self):
-        """握手后激活 RPT 报告推送 — 发送 TurnOnOffVideo 启动设备数据流"""
+        """激活 RPT 条码推送.
+
+        按抓包时序 (1111.pcapng) 先发 GetConfigOpt, 再发 TurnOnOffVideo:
+        - GetConfigOpt 让设备进入"工作态" + 让 receiver 探测 3/4B DataLen 变体
+        - TurnOnOffVideo on=True 激活图像流和 RPT 条码流
+        省略 IDManager 也没发的 HandShake (设备对 CmdType=3 无响应, 只会超时).
+        """
         try:
+            cfg = await self.load_config()
+            if not cfg:
+                logger.warning("%s GetConfigOpt 无响应, 可能不是 WMax 或设备未就绪", self._tag)
+                # 仍继续尝试 TurnOnOffVideo, 有些设备变体直接就能工作
             ok = await self.turn_on_video(on=True, bank_id=1)
             if ok:
-                logger.warning("%s RPT 报告已激活 (TurnOnOffVideo on)", self._tag)
+                logger.warning("%s RPT 报告已激活 (GetConfigOpt + TurnOnOffVideo on)", self._tag)
             else:
                 logger.warning("%s RPT 激活失败 (TurnOnOffVideo 无响应)", self._tag)
             return ok
         except Exception as e:
-            logger.warning("%s RPT 激活失败: %s", self._tag, e)
+            logger.warning("%s RPT 激活异常: %s", self._tag, e)
             return False
 
     async def load_config(self, config_id: int = -1) -> dict:
         logger.info("%s 读取配置 config_id=%d", self._tag, config_id)
-        resp = await self.send_and_wait(CmdType.GetConfigOpt, timeout=8.0)
+        # 必须带 payload: 抓包证实不带 payload 或带 field1=-1 设备都不响应.
+        data = msg.encode_get_config_opt(config_id, inc_global=True)
+        resp = await self.send_and_wait(CmdType.GetConfigOpt, data, timeout=8.0)
         if resp and resp.data_part:
             try:
                 self._raw_config_data = resp.data_part
@@ -958,14 +973,96 @@ class WMaxDevice:
         return resp is not None
 
     def trigger_on(self):
-        logger.info("%s 触发 LON", self._tag)
-        self.send_command(CmdType.SendTermCmd,
-                          msg.encode_send_term_cmd("LON"))
+        """触发扫码开始 (同步, fire-and-forget). 三种命令兜底:
+        - TurnOnOffVideo(on=True, bankId=1) : 已验证真机能让扫码器持续扫码
+        - Trigger(on=True) : WMax 协议专用触发命令
+        - SendTermCmd("LON") : 文本命令兼容旧固件
+        三个都发, 哪个被扫码器接受就哪个生效."""
+        logger.info("%s 触发 ON (TurnOnOffVideo + Trigger + LON)", self._tag)
+        try:
+            self.send_command(CmdType.TurnOnOffVideo,
+                              msg.encode_turn_on_off_video(True, 1))
+        except Exception as e:
+            logger.warning("%s TurnOnOffVideo(on) 发送失败: %s", self._tag, e)
+        try:
+            self.send_command(CmdType.Trigger, msg.encode_trigger(True))
+        except Exception as e:
+            logger.warning("%s Trigger(on) 发送失败: %s", self._tag, e)
+        try:
+            self.send_command(CmdType.SendTermCmd,
+                              msg.encode_send_term_cmd("LON"))
+        except Exception as e:
+            logger.warning("%s SendTermCmd(LON) 发送失败: %s", self._tag, e)
 
     def trigger_off(self):
-        logger.info("%s 触发 LOFF", self._tag)
-        self.send_command(CmdType.SendTermCmd,
-                          msg.encode_send_term_cmd("LOFF"))
+        """关闭扫码 (同步). 三种命令兜底, 见 trigger_on 注释."""
+        logger.info("%s 触发 OFF (TurnOnOffVideo + Trigger + LOFF)", self._tag)
+        try:
+            self.send_command(CmdType.TurnOnOffVideo,
+                              msg.encode_turn_on_off_video(False, 1))
+        except Exception as e:
+            logger.warning("%s TurnOnOffVideo(off) 发送失败: %s", self._tag, e)
+        try:
+            self.send_command(CmdType.Trigger, msg.encode_trigger(False))
+        except Exception as e:
+            logger.warning("%s Trigger(off) 发送失败: %s", self._tag, e)
+        try:
+            self.send_command(CmdType.SendTermCmd,
+                              msg.encode_send_term_cmd("LOFF"))
+        except Exception as e:
+            logger.warning("%s SendTermCmd(LOFF) 发送失败: %s", self._tag, e)
+
+    async def flash_and_scan(self, duration: float = 5.0) -> list[str]:
+        """测试用: 让扫码器打光 duration 秒, 期间收集扫到的条码, 结束后关灯.
+        打光策略 (多指令兜底, 哪个生效由扫码器固件决定):
+        1. TurnOnOffVideo(on=True) — 进入持续扫描模式, 已验证在真机能让扫码器持续闪
+        2. Trigger(on=True) + SendTermCmd(LON) — 兼容不同固件
+        结束时全部 off.
+        不会丢失原 on_code_received 回调, 测试期间同时触发原回调."""
+        import asyncio as _asyncio
+        collected: list[str] = []
+        seen: set = set()
+
+        orig_cb = self.on_code_received
+        def _tap(code_info: dict):
+            try:
+                for c in code_info.get("codes", []):
+                    raw = (c.get("data") or "").strip()
+                    if raw and raw not in seen:
+                        seen.add(raw)
+                        collected.append(raw)
+            except Exception:
+                pass
+            if orig_cb is not None:
+                try:
+                    orig_cb(code_info)
+                except Exception as e:
+                    logger.warning("%s 原 on_code_received 回调异常: %s", self._tag, e)
+
+        self.on_code_received = _tap
+        try:
+            # 1) 先 turn_on_video (已知能让扫码器进入持续扫描)
+            try:
+                await self.turn_on_video(on=True, bank_id=1)
+            except Exception as e:
+                logger.warning("%s turn_on_video(on) 失败: %s", self._tag, e)
+            # 2) 再发 Trigger + LON 兜底
+            try:
+                self.trigger_on()
+            except Exception as e:
+                logger.warning("%s trigger_on 失败: %s", self._tag, e)
+            await _asyncio.sleep(duration)
+        finally:
+            try:
+                self.trigger_off()
+            except Exception as e:
+                logger.warning("%s trigger_off 失败: %s", self._tag, e)
+            try:
+                await self.turn_on_video(on=False, bank_id=1)
+            except Exception as e:
+                logger.warning("%s turn_on_video(off) 失败: %s", self._tag, e)
+            self.on_code_received = orig_cb
+        return collected
 
     async def reboot(self) -> bool:
         logger.warning("%s 重启设备!", self._tag)

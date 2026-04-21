@@ -127,6 +127,14 @@ class ScannerService:
                 for conn in self._connections.values():
                     db_scanner_ips.add(conn.ip)
 
+                # UDP 发现已连上的 IP: 直接把对应 scanner conn.status 标为 connected
+                # (manager.auto_discover_and_connect 内部已调用 activate_rpt_reporting)
+                for ip in list(connected_mgmt_ips):
+                    for c in self._connections.values():
+                        if c.ip == ip and c.device_type in ("auto", "wmax"):
+                            c.status = "connected"
+                            c.last_error = ""
+
                 for ip in db_scanner_ips:
                     if ip in connected_mgmt_ips:
                         continue
@@ -136,22 +144,24 @@ class ScannerService:
                         if result.get("success"):
                             print(f"[Scanner] {ip}:{WMAX_CMD_PORT} 直连成功")
                             connected_mgmt_ips.add(ip)
-                            dev = mgr.get_device(ip, WMAX_CMD_PORT)
-                            if dev:
-                                loop2 = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop2)
-                                try:
-                                    loop2.run_until_complete(dev.handshake())
-                                    loop2.run_until_complete(dev.activate_rpt_reporting())
-                                    print(f"[Scanner] {ip} 握手+RPT激活成功")
-                                except Exception as e:
-                                    print(f"[Scanner] {ip} 握手/激活失败: {e}")
-                                finally:
-                                    loop2.close()
+                            # 触发式 (ondemand): 不调 activate_rpt_reporting, 只建三端口 TCP.
+                            # 扫码由 trigger_scan/_do_trigger_once_wmax 按需触发.
+                            for c in self._connections.values():
+                                if c.ip == ip and c.device_type in ("auto", "wmax"):
+                                    c.status = "connected"
+                                    c.last_error = ""
                         else:
                             print(f"[Scanner] {ip}:{WMAX_CMD_PORT} 直连失败: {result.get('message', '')}")
+                            for c in self._connections.values():
+                                if c.ip == ip and c.device_type in ("auto", "wmax"):
+                                    c.status = "error"
+                                    c.last_error = result.get("message", "WMax 连接失败")
                     except Exception as e:
                         print(f"[Scanner] {ip}:{WMAX_CMD_PORT} 直连异常: {e}")
+                        for c in self._connections.values():
+                            if c.ip == ip and c.device_type in ("auto", "wmax"):
+                                c.status = "error"
+                                c.last_error = str(e)
 
                 WMAX_SCAN_PORT = 55256
                 auto_id_base = -9000
@@ -272,8 +282,27 @@ class ScannerService:
                 fixed.append(b)
         return fixed or [0]
 
+    def _wmax_trigger(self, conn: ScannerConnection, on: bool):
+        """给 auto/wmax 类型的扫码器发 LON/LOFF (ondemand 模式)."""
+        if conn.device_type not in ("auto", "wmax", "wmax_scan"):
+            return
+        try:
+            from backend.services.wmax.manager import get_wmax_manager
+            from backend.services.wmax.device import DEFAULT_PORT as WMAX_CMD_PORT
+            mgr = get_wmax_manager()
+            dev = mgr.get_device(conn.ip, WMAX_CMD_PORT)
+            if dev is None or not dev.state.connected:
+                return
+            if on:
+                dev.trigger_on()
+            else:
+                dev.trigger_off()
+        except Exception as e:
+            logger.warning("[Scanner] %s WMax trigger_%s 异常: %s",
+                           conn.name, "on" if on else "off", e)
+
     def start_scanning(self, channel_id: int = None):
-        """检测开始时调用：让绑定的扫码器发 LON 进入扫码状态"""
+        """检测开始时调用: 让绑定的扫码器发 LON 进入扫码状态 (ondemand: 灯亮 + 开始扫)"""
         targets = []
         skipped = []
         for conn in self._connections.values():
@@ -292,14 +321,15 @@ class ScannerService:
 
         for conn in targets:
             conn._scanning = True
+            self._wmax_trigger(conn, on=True)
         if targets:
             names = [f"{c.name}[type={c.device_type}]" for c in targets]
             print(f"[Scanner] start_scanning(ch={channel_id}) → {names}")
         else:
-            print(f"[Scanner] start_scanning(ch={channel_id}) 无匹配设备，已跳过: {skipped}")
+            print(f"[Scanner] start_scanning(ch={channel_id}) 无匹配设备, 已跳过: {skipped}")
 
     def stop_scanning(self, channel_id: int = None):
-        """检测停止时调用：让绑定的扫码器发 LOFF 停止扫码"""
+        """检测停止时调用: 让绑定的扫码器发 LOFF 停止扫码 (ondemand: 灯灭 + 停扫)"""
         targets = []
         for conn in self._connections.values():
             if channel_id is not None:
@@ -310,15 +340,20 @@ class ScannerService:
 
         for conn in targets:
             conn._scanning = False
+            self._wmax_trigger(conn, on=False)
         if targets:
             names = [c.name for c in targets]
             print(f"[Scanner] stop_scanning(ch={channel_id}) → {names}")
 
     def trigger_scan(self, device_id: int) -> dict:
-        """手动触发一次扫码：LON → 扫到码或超时后自动 LOFF"""
+        """手动触发一次扫码: LON → 扫到码或超时后自动 LOFF"""
         conn = self._connections.get(device_id)
         if not conn:
             return {"success": False, "message": f"设备 {device_id} 未连接"}
+        # WMax/auto 类型走 WMaxDevice 的 trigger_on/off, 不依赖 conn._socket
+        if conn.device_type in ("auto", "wmax", "wmax_scan"):
+            self._do_trigger_once_wmax(conn)
+            return {"success": True, "message": f"已向 {conn.name} 发送 WMax 触发指令"}
         if conn.status != "connected" or not conn._socket:
             return {"success": False, "message": f"设备 {conn.name} 未连接 (status={conn.status})"}
         self._do_trigger_once(conn)
@@ -327,13 +362,49 @@ class ScannerService:
     def trigger_scan_by_ip(self, ip: str) -> dict:
         """通过 IP 查找并触发扫码"""
         for conn in self._connections.values():
-            if conn.ip == ip and conn.status == "connected" and conn._socket:
+            if conn.ip != ip:
+                continue
+            if conn.device_type in ("auto", "wmax", "wmax_scan"):
+                self._do_trigger_once_wmax(conn)
+                return {"success": True, "message": f"已向 {conn.name} 发送 WMax 触发指令"}
+            if conn.status == "connected" and conn._socket:
                 self._do_trigger_once(conn)
                 return {"success": True, "message": f"已向 {conn.name} 发送触发指令"}
         return {"success": False, "message": f"未找到 IP={ip} 的已连接设备"}
 
+    def _do_trigger_once_wmax(self, conn: ScannerConnection):
+        """WMax 触发式扫码: 发 LON → 等扫到或 10s 超时 → LOFF."""
+        def _run():
+            try:
+                from backend.services.wmax.manager import get_wmax_manager
+                from backend.services.wmax.device import DEFAULT_PORT as WMAX_CMD_PORT
+                mgr = get_wmax_manager()
+                dev = mgr.get_device(conn.ip, WMAX_CMD_PORT)
+                if dev is None or not dev.state.connected:
+                    print(f"[Scanner] {conn.name} WMax 未连接, 无法触发")
+                    return
+                dev.trigger_on()
+                print(f"[Scanner] {conn.name} WMax 触发 LON")
+                scan_before = conn.last_scan_time
+                deadline = time.time() + 10
+                while time.time() < deadline:
+                    if conn.last_scan_time > scan_before:
+                        break
+                    time.sleep(0.1)
+                try:
+                    dev.trigger_off()
+                except Exception as e:
+                    print(f"[Scanner] {conn.name} LOFF 失败: {e}")
+                if conn.last_scan_time > scan_before:
+                    print(f"[Scanner] {conn.name} WMax 触发: 扫到 {conn.last_scan}, LOFF 已发")
+                else:
+                    print(f"[Scanner] {conn.name} WMax 触发: 10秒超时, LOFF 已发")
+            except Exception as e:
+                print(f"[Scanner] {conn.name} WMax 触发异常: {e}")
+        threading.Thread(target=_run, daemon=True, name=f"trigger-wmax-{conn.device_id}").start()
+
     def _do_trigger_once(self, conn: ScannerConnection):
-        """单次触发：发 LON，扫到码后或 10 秒超时后自动发 LOFF"""
+        """文本模式单次触发: 发 LON, 扫到码后或 10 秒超时后自动发 LOFF"""
         def _run():
             try:
                 conn._socket.sendall(b"LON\r\n")
@@ -368,7 +439,45 @@ class ScannerService:
         return None
 
     def test_connection(self, ip: str, port: int, timeout: float = 3.0) -> dict:
-        """测试连接：LON 闪 3 秒后自动 LOFF 关灯"""
+        """测试扫码器: 优先走 WMax 协议 (闪光 5s + 同步采集条码), 失败时降级到文本 LON/LOFF."""
+        # 1) WMax 路径: 如果 WMaxDeviceManager 已连上这台设备, 直接走 flash_and_scan
+        try:
+            from backend.services.wmax.manager import get_wmax_manager
+            from backend.services.wmax.device import DEFAULT_PORT as WMAX_CMD_PORT
+            mgr = get_wmax_manager()
+            dev = mgr.get_device(ip, WMAX_CMD_PORT)
+            if dev is None or not dev.state.connected:
+                # 未连接就先试着连一次, 连上了再 flash
+                conn_result = mgr.connect(ip, WMAX_CMD_PORT)
+                if conn_result.get("success"):
+                    dev = mgr.get_device(ip, WMAX_CMD_PORT)
+            if dev is not None and dev.state.connected:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    # 直接 flash_and_scan: LON 闪 5s + 同步收集 RPT 条码 + LOFF 关灯.
+                    # 不调 activate_rpt_reporting: 那会发 turn_on_video(on=True) 让扫码器
+                    # 进入持续扫描模式, 灯一直闪无法关闭.
+                    codes = loop.run_until_complete(dev.flash_and_scan(duration=5.0))
+                finally:
+                    loop.close()
+                if codes:
+                    return {
+                        "success": True,
+                        "message": f"WMax {ip} 闪光 5 秒, 扫到 {len(codes)} 条: {', '.join(codes[:5])}",
+                        "device_type": "wmax",
+                        "scanned": codes,
+                    }
+                return {
+                    "success": True,
+                    "message": f"WMax {ip} 闪光 5 秒, 未扫到条码 (请靠近条码再试)",
+                    "device_type": "wmax",
+                    "scanned": [],
+                }
+        except Exception as e:
+            logger.warning("[Scanner] WMax test_connection 失败, 降级 text_lon: %s", e)
+
+        # 2) 文本模式降级: 走老 LON/LOFF (仅对真正的 55256 文本模式扫码器有效)
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(timeout)
@@ -377,7 +486,7 @@ class ScannerService:
             def _flash_and_stop():
                 try:
                     sock.sendall(b"LON\r\n")
-                    time.sleep(3)
+                    time.sleep(5)
                     sock.sendall(b"LOFF\r\n")
                     time.sleep(0.2)
                 except OSError:
@@ -388,7 +497,7 @@ class ScannerService:
             threading.Thread(target=_flash_and_stop, daemon=True).start()
             return {
                 "success": True,
-                "message": f"连接 {ip}:{port} 成功（闪灯 3 秒）",
+                "message": f"连接 {ip}:{port} 成功 (闪灯 5 秒, 文本模式)",
                 "device_type": "text_lon",
             }
         except Exception as e:
@@ -437,8 +546,11 @@ class ScannerService:
     # ---- 内部方法 ----
 
     def _start_device(self, dev: ScannerDevice):
-        raw_type = getattr(dev, 'device_type', None) or 'text_lon'
-        db_device_type = raw_type if raw_type not in ('auto', '') else 'text_lon'
+        raw_type = (getattr(dev, 'device_type', None) or 'text_lon').strip() or 'text_lon'
+        # 注: 'auto' / 'wmax' 走 WMaxDeviceManager 三端口协议 (55266 CMD + 55276 IMG + 55286 RPT),
+        #      条码由 _auto_discover_wmax_bg + wmax.manager 的 on_code_received 回调 → inject_scan_result 进来.
+        #      不再降级成 text_lon (那条路径发 ASCII 'LON\r\n' 到 55256, WMax 根本不吃).
+        db_device_type = raw_type
         conn = ScannerConnection(
             device_id=dev.id,
             name=dev.name,
@@ -483,6 +595,17 @@ class ScannerService:
         retry_delay = 1.0
         max_delay = 30.0
         keepalive_interval = 15.0
+
+        # WMax 三端口协议由 WMaxDeviceManager 统一管理 (55266 CMD / 55276 IMG / 55286 RPT).
+        # 条码会通过 wmax.manager._register_scan_callback → scanner.inject_scan_result 进来,
+        # 这里不需要再建一条本地 TCP, 避免占用端口导致 WMax 管理连接失败.
+        if conn.device_type in ("auto", "wmax"):
+            conn.status = "pending_wmax"
+            logger.info("[Scanner] %s (%s) device_type=%s → 交由 WMaxDeviceManager 三端口管理",
+                        conn.name, conn.ip, conn.device_type)
+            while not conn._stop_event.is_set():
+                conn._stop_event.wait(timeout=1.0)
+            return
 
         while not conn._stop_event.is_set():
             conn_start = time.time()
