@@ -288,61 +288,7 @@ jobs:
           retention-days: 30
           compression-level: 0
       
-      - name: Upload Release to tianjun-releases
-        if: startsWith(github.ref, 'refs/tags/v')
-        continue-on-error: true
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: |
-          VERSION="${GITHUB_REF_NAME}"
-          echo "Creating release ${VERSION} on tianjun-releases..."
-
-          SETUP_FILE=$(find electron/dist -name "TianJun-AI-Vision-*-Setup.exe" -type f | head -1)
-
-          if [ -z "$SETUP_FILE" ]; then
-            echo "ERROR: Setup exe not found!"
-            ls -la electron/dist/
-            exit 1
-          fi
-
-          echo "Found installer: $SETUP_FILE"
-          echo "SETUP_FILE=$SETUP_FILE" >> $GITHUB_ENV
-
-          cat > /tmp/release-notes.md << 'EOF'
-          ## 更新内容
-
-          ### 新功能
-          - **模型格式转换**：支持将 .pt 模型转换为 ONNX、TensorRT 等格式，提升推理性能
-          - **检测模式无序逻辑**：检测模式下中间步骤不再要求顺序，只检查是否完成，缺少步骤报NG
-
-          ### 修复
-          - **摄像头帧率优化**：自动对比 DirectShow 和 MSMF 后端帧率，选择更快的，解决部分摄像头 10fps 问题
-          - **卡尔曼滤波默认关闭**：显示设置中检测框滤波默认为关闭状态
-
-          ### 改进
-          - **PyTorch CUDA 12.8**：支持 RTX 50 系列 (Blackwell) 显卡 GPU 加速
-          - **检测模式结算完善**：支持空闲超时结算、第一步重现结算、NG路径报告缺少步骤
-
-          ### 安装说明
-          1. 下载 .exe 安装程序
-          2. 双击运行安装
-          3. 按提示完成安装
-          4. 首次运行需安装 VC++ 运行时库（如未安装）
-          5. **从旧版本升级会自动备份数据库和历史数据**
-          EOF
-
-          gh release delete "${VERSION}" --repo 17373531860/tianjun-releases --yes 2>/dev/null || true
-
-          gh release create "${VERSION}" \
-            --repo 17373531860/tianjun-releases \
-            --title "${VERSION} - 天军科技AI视觉检测系统" \
-            --notes-file /tmp/release-notes.md \
-            "$SETUP_FILE"
-
-          echo "Release created successfully!"
-
-      - name: Split installer for Gitee
+      - name: Split installer into parts for Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
@@ -354,10 +300,10 @@ jobs:
 
           Write-Host "Splitting $($setupFile.Name) ($([math]::Round($setupFile.Length / 1MB, 1)) MB)..."
 
-          $partsDir = "gitee-parts"
+          $partsDir = "release-parts"
           New-Item -ItemType Directory -Path $partsDir -Force | Out-Null
 
-          $chunkSize = 105 * 1024 * 1024  # ~100MB per chunk → ~20 parts for a 2GB installer
+          $chunkSize = 1900 * 1024 * 1024  # 1.9 GB per chunk → 2 parts for a 3.75GB installer, stays under GitHub Release 2GB single-file limit
           $stream = [System.IO.File]::OpenRead($setupFile.FullName)
           $buffer = New-Object byte[] $chunkSize
           $partNum = 0
@@ -416,13 +362,21 @@ jobs:
             `$parts = Get-ChildItem -Filter '*.part' | Sort-Object Name
             if (`$parts.Count -eq 0) {
               Write-Host '[ERROR] No .part files found!' -ForegroundColor Red
-              Write-Host 'Download all .part files from both repos into the same folder:'
-              Write-Host '  Part 1: https://gitee.com/xu-yanzhi32/tianjun-releases/releases'
-              Write-Host '  Part 2: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases'
+              Write-Host 'Please download ALL these files into the SAME folder as this script:'
+              Write-Host '  - TianJun-AI-Vision-*-Setup.exe.part00.part'
+              Write-Host '  - TianJun-AI-Vision-*-Setup.exe.part01.part'
+              Write-Host '  - checksums.txt'
+              Write-Host '  - merge_installer.bat (this script)'
+              Write-Host ''
+              Write-Host 'Download from: https://github.com/17373531860/tianjun-releases/releases'
+              Read-Host 'Press Enter to exit'
               exit 1
             }
             if (`$parts.Count -ne `$expectedParts) {
               Write-Host (`"[ERROR] Expected `$expectedParts parts, found `$(`$parts.Count)`") -ForegroundColor Red
+              Write-Host 'Some .part files are missing. Please re-download all files from:'
+              Write-Host '  https://github.com/17373531860/tianjun-releases/releases'
+              Read-Host 'Press Enter to exit'
               exit 1
             }
             Write-Host (`"Found `$(`$parts.Count) parts, verifying checksums...`") -ForegroundColor Cyan
@@ -459,7 +413,9 @@ jobs:
             Write-Host ''
 
             if (`$bad -gt 0) {
-              Write-Host (`"`$bad file(s) corrupted! Please re-download the [BAD] files.`") -ForegroundColor Red
+              Write-Host (`"`$bad file(s) corrupted! Please re-download the [BAD] files from:`") -ForegroundColor Red
+              Write-Host '  https://github.com/17373531860/tianjun-releases/releases' -ForegroundColor Red
+              Read-Host 'Press Enter to exit'
               exit 1
             }
 
@@ -479,6 +435,7 @@ jobs:
             if (`$actualSize -ne `$expectedSize) {
               Write-Host (`"[ERROR] Size mismatch! Actual: `$actualSize, Expected: `$expectedSize`") -ForegroundColor Red
               Remove-Item `$output -Force
+              Read-Host 'Press Enter to exit'
               exit 1
             }
 
@@ -499,6 +456,7 @@ jobs:
               Write-Host (`"  Actual:   `$finalHash`")
               Write-Host (`"  Expected: `$expectedHash`")
               Remove-Item `$output -Force
+              Read-Host 'Press Enter to exit'
             }
           }"
           echo.
@@ -512,189 +470,89 @@ jobs:
           Write-Host "`nFiles in $partsDir :"
           Get-ChildItem $partsDir | ForEach-Object { Write-Host "  $($_.Name) - $([math]::Round($_.Length / 1MB, 1)) MB" }
 
-      - name: Clean ALL old Gitee releases
+      - name: Upload parts to GitHub Release (tianjun-releases)
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          for REPO in tianjun-releases tianjun-releases-2; do
-            echo "=== Cleaning all releases from $REPO ==="
-            RELEASES=$(curl -s "https://gitee.com/api/v5/repos/xu-yanzhi32/${REPO}/releases?access_token=${GITEE_TOKEN}&per_page=100" 2>/dev/null)
-            IDS=$(echo "$RELEASES" | python3 -c "
-          import sys, json
-          for r in json.load(sys.stdin):
-              print(r['id'])
-          " 2>/dev/null || echo "")
-            for RID in $IDS; do
-              echo "  Deleting release $RID from $REPO..."
-              curl -s -X DELETE "https://gitee.com/api/v5/repos/xu-yanzhi32/${REPO}/releases/${RID}?access_token=${GITEE_TOKEN}"
-              sleep 1
-            done
-          done
-          echo "Waiting 10s for quota to settle..."
-          sleep 10
-
-      - name: Upload to Gitee (repo 1 - first batch)
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        run: |
+          set -e
           VERSION="${GITHUB_REF_NAME}"
-          TOTAL_PARTS="${TOTAL_PARTS}"
-          HALF=$(( (TOTAL_PARTS + 1) / 2 ))
+          TARGET_REPO="17373531860/tianjun-releases"
+          PARTS_DIR="release-parts"
 
-          echo "Total parts: $TOTAL_PARTS, Repo 1 gets: parts 00 to $(printf '%02d' $((HALF - 1)))"
+          echo "=== Uploading v${VERSION} parts to ${TARGET_REPO} ==="
+          echo "Files to upload:"
+          ls -la "${PARTS_DIR}/"
 
-          upload_file() {
-            local REPO="$1" RELEASE_ID="$2" FILE_PATH="$3"
-            local FNAME=$(basename "$FILE_PATH")
-            local MAX_RETRIES=3
-            for attempt in $(seq 1 $MAX_RETRIES); do
-              echo "  Attempt $attempt/$MAX_RETRIES for $FNAME ..."
-              HTTP_CODE=$(curl -s -o /tmp/gitee_resp.json -w "%{http_code}" --max-time 1200 \
-                -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/${REPO}/releases/${RELEASE_ID}/attach_files" \
-                -F "access_token=${GITEE_TOKEN}" \
-                -F "file=@${FILE_PATH}")
-              if [ "$HTTP_CODE" = "201" ]; then
-                RESP_NAME=$(python3 -c "import json; d=json.load(open('/tmp/gitee_resp.json',encoding='utf-8')); print(d.get('name',''))" 2>/dev/null || echo "$FNAME")
-                echo "  OK: $RESP_NAME (HTTP 201)"
-                return 0
-              fi
-              echo "  FAILED: HTTP $HTTP_CODE"
-              python3 -c "import json; d=json.load(open('/tmp/gitee_resp.json',encoding='utf-8')); print(d.get('message','unknown error'))" 2>/dev/null || true
-              sleep 5
-            done
-            echo "  GIVE UP after $MAX_RETRIES attempts for $FNAME"
-            return 1
-          }
+          # Count expected files (parts + merge_installer.bat + checksums.txt)
+          PART_COUNT=$(ls ${PARTS_DIR}/*.part 2>/dev/null | wc -l)
+          EXPECTED_COUNT=$((PART_COUNT + 2))  # parts + merge_installer.bat + checksums.txt
+          echo "Expected total files: ${EXPECTED_COUNT} (${PART_COUNT} parts + merge_installer.bat + checksums.txt)"
 
-          # Create release
-          echo "Creating release ${VERSION} on tianjun-releases..."
-          python3 -c "
-          import json, sys
-          body = {
-            'access_token': '${GITEE_TOKEN}',
-            'tag_name': '${VERSION}',
-            'name': '${VERSION} TianJun AI Vision (Part 1)',
-            'body': '## ${VERSION} TianJun AI Vision (Part 1)\n\nDownload Part 2: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases/tag/${VERSION}-part2\n\n### How to use\n1. Download all .part files and merge_installer.bat from this page\n2. Download all .part files from Part 2\n3. Put all files in the same folder\n4. Run merge_installer.bat\n5. Run the merged installer',
-            'target_commitish': 'master'
-          }
-          sys.stdout.write(json.dumps(body, ensure_ascii=False))
-          " > /tmp/gitee_release_body.json
+          cat > /tmp/release-notes.md << EOF
+          ## ${VERSION} TianJun AI Vision 安装包
 
-          RESPONSE=$(curl -s -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases/releases" \
-            -H "Content-Type: application/json; charset=utf-8" \
-            -d @/tmp/gitee_release_body.json)
+          安装包体积 3.75GB，超过 GitHub Release 单文件 2GB 上限，已拆分为 ${PART_COUNT} 个分卷。
 
-          RELEASE_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
-          if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "" ]; then
-            echo "ERROR: Failed to create release!"
-            echo "$RESPONSE"
-            exit 1
-          fi
-          echo "Release created with ID: $RELEASE_ID"
+          ### 下载步骤（重要：必须下载全部文件）
+          请把以下 **${EXPECTED_COUNT} 个文件** 全部下载到 **同一个文件夹**：
 
-          # Upload merge script and checksums
-          echo "Uploading merge script..."
-          upload_file "tianjun-releases" "$RELEASE_ID" "gitee-parts/merge_installer.bat" || echo "Warning: merge script upload failed, continuing..."
-          echo "Uploading checksums..."
-          upload_file "tianjun-releases" "$RELEASE_ID" "gitee-parts/checksums.txt" || echo "Warning: checksums upload failed, continuing..."
+          1. \`TianJun-AI-Vision-${VERSION#v}-Setup.exe.part00.part\`  （约 1.9 GB）
+          2. \`TianJun-AI-Vision-${VERSION#v}-Setup.exe.part01.part\`  （约 1.9 GB）
+          3. \`merge_installer.bat\`  （合并脚本）
+          4. \`checksums.txt\`  （校验文件）
 
-          # Upload first batch of parts
-          FAIL_COUNT=0
-          for i in $(seq 0 $((HALF - 1))); do
-            PART_NAME=$(printf "*.part%02d.part" $i)
-            PART_FILE=$(ls gitee-parts/$PART_NAME 2>/dev/null | head -1)
-            if [ -n "$PART_FILE" ]; then
-              echo "Uploading $(basename $PART_FILE)..."
-              upload_file "tianjun-releases" "$RELEASE_ID" "$PART_FILE" || FAIL_COUNT=$((FAIL_COUNT + 1))
-            fi
-          done
+          ### 合并步骤
+          1. 把上面 4 个文件都下载到 **同一个文件夹**
+          2. 双击 \`merge_installer.bat\`
+          3. 脚本会自动校验每个分卷的 SHA256，然后合并成 \`TianJun-AI-Vision-${VERSION#v}-Setup.exe\`
+          4. 合并成功后双击 .exe 开始安装
 
-          echo "Repo 1 upload complete! (failures: $FAIL_COUNT)"
+          ### 常见问题
+          - **提示 "No .part files found"**：所有文件必须放在同一文件夹（通常是下载后移到桌面新建文件夹）
+          - **提示 "[BAD]"**：对应分卷下载损坏，重新下载该分卷即可
+          - **提示 "SHA256 mismatch"**：下载过程中断或损坏，重新下载所有分卷
 
-      - name: Upload to Gitee (repo 2 - second batch)
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        run: |
-          VERSION="${GITHUB_REF_NAME}"
-          TOTAL_PARTS="${TOTAL_PARTS}"
-          HALF=$(( (TOTAL_PARTS + 1) / 2 ))
+          ### 更新内容
+          见仓库 \`docs/changelog/${VERSION}_*.md\`
+          EOF
 
-          if [ "$HALF" -ge "$TOTAL_PARTS" ]; then
-            echo "All parts fit in repo 1, skipping repo 2."
-            exit 0
-          fi
+          # Delete old release if exists (use --cleanup-tag so stale tag doesn't linger)
+          echo "Deleting any existing ${VERSION} release on ${TARGET_REPO} ..."
+          gh release delete "${VERSION}" --repo "${TARGET_REPO}" --yes --cleanup-tag 2>/dev/null || true
 
-          echo "Repo 2 gets: parts $(printf '%02d' $HALF) to $(printf '%02d' $((TOTAL_PARTS - 1)))"
+          # Create release and upload all files in release-parts/ at once (up to 2GB per file is fine)
+          echo "Creating release ${VERSION} and uploading ${EXPECTED_COUNT} files..."
+          gh release create "${VERSION}" \
+            --repo "${TARGET_REPO}" \
+            --title "${VERSION} - 天军科技AI视觉检测系统" \
+            --notes-file /tmp/release-notes.md \
+            "${PARTS_DIR}"/*.part \
+            "${PARTS_DIR}/merge_installer.bat" \
+            "${PARTS_DIR}/checksums.txt"
 
-          upload_file() {
-            local REPO="$1" RELEASE_ID="$2" FILE_PATH="$3"
-            local FNAME=$(basename "$FILE_PATH")
-            local MAX_RETRIES=3
-            for attempt in $(seq 1 $MAX_RETRIES); do
-              echo "  Attempt $attempt/$MAX_RETRIES for $FNAME ..."
-              HTTP_CODE=$(curl -s -o /tmp/gitee_resp.json -w "%{http_code}" --max-time 1200 \
-                -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/${REPO}/releases/${RELEASE_ID}/attach_files" \
-                -F "access_token=${GITEE_TOKEN}" \
-                -F "file=@${FILE_PATH}")
-              if [ "$HTTP_CODE" = "201" ]; then
-                RESP_NAME=$(python3 -c "import json; d=json.load(open('/tmp/gitee_resp.json',encoding='utf-8')); print(d.get('name',''))" 2>/dev/null || echo "$FNAME")
-                echo "  OK: $RESP_NAME (HTTP 201)"
-                return 0
-              fi
-              echo "  FAILED: HTTP $HTTP_CODE"
-              python3 -c "import json; d=json.load(open('/tmp/gitee_resp.json',encoding='utf-8')); print(d.get('message','unknown error'))" 2>/dev/null || true
-              sleep 5
-            done
-            echo "  GIVE UP after $MAX_RETRIES attempts for $FNAME"
-            return 1
-          }
-
-          # Create release
-          TAG2="${VERSION}-part2"
-          echo "Creating release ${TAG2} on tianjun-releases-2..."
-          python3 -c "
-          import json, sys
-          body = {
-            'access_token': '${GITEE_TOKEN}',
-            'tag_name': '${TAG2}',
-            'name': '${VERSION} TianJun AI Vision (Part 2)',
-            'body': '## ${VERSION} TianJun AI Vision (Part 2)\n\nDownload Part 1: https://gitee.com/xu-yanzhi32/tianjun-releases/releases/tag/${VERSION}\n\nPut all .part files together with Part 1 files, then run merge_installer.bat from Part 1.',
-            'target_commitish': 'master'
-          }
-          sys.stdout.write(json.dumps(body, ensure_ascii=False))
-          " > /tmp/gitee_release_body2.json
-
-          RESPONSE=$(curl -s -X POST "https://gitee.com/api/v5/repos/xu-yanzhi32/tianjun-releases-2/releases" \
-            -H "Content-Type: application/json; charset=utf-8" \
-            -d @/tmp/gitee_release_body2.json)
-
-          RELEASE_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
-          if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "" ]; then
-            echo "ERROR: Failed to create release on repo 2!"
-            echo "$RESPONSE"
-            exit 1
-          fi
-          echo "Release created with ID: $RELEASE_ID"
-
-          # Upload second batch of parts
-          FAIL_COUNT=0
-          for i in $(seq $HALF $((TOTAL_PARTS - 1))); do
-            PART_NAME=$(printf "*.part%02d.part" $i)
-            PART_FILE=$(ls gitee-parts/$PART_NAME 2>/dev/null | head -1)
-            if [ -n "$PART_FILE" ]; then
-              echo "Uploading $(basename $PART_FILE)..."
-              upload_file "tianjun-releases-2" "$RELEASE_ID" "$PART_FILE" || FAIL_COUNT=$((FAIL_COUNT + 1))
-            fi
-          done
-
-          echo "Repo 2 upload complete! (failures: $FAIL_COUNT)"
           echo ""
-          echo "=== Gitee Release URLs ==="
-          echo "Part 1: https://gitee.com/xu-yanzhi32/tianjun-releases/releases/tag/${VERSION}"
-          echo "Part 2: https://gitee.com/xu-yanzhi32/tianjun-releases-2/releases/tag/${VERSION}-part2"
+          echo "=== Verifying Release contents ==="
+          # Retry up to 5 times because GitHub Release assets can lag briefly after upload
+          for attempt in 1 2 3 4 5; do
+            ACTUAL_COUNT=$(gh release view "${VERSION}" --repo "${TARGET_REPO}" --json assets --jq '.assets | length' 2>/dev/null || echo 0)
+            echo "  Attempt ${attempt}: Release has ${ACTUAL_COUNT} / ${EXPECTED_COUNT} assets"
+            if [ "$ACTUAL_COUNT" -eq "$EXPECTED_COUNT" ]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [ "$ACTUAL_COUNT" -ne "$EXPECTED_COUNT" ]; then
+            echo "ERROR: Release asset count mismatch. Expected $EXPECTED_COUNT, got $ACTUAL_COUNT"
+            echo "Assets found:"
+            gh release view "${VERSION}" --repo "${TARGET_REPO}" --json assets --jq '.assets[].name'
+            exit 1
+          fi
+
+          echo ""
+          echo "=== All ${ACTUAL_COUNT} files uploaded successfully ==="
+          gh release view "${VERSION}" --repo "${TARGET_REPO}" --json assets --jq '.assets[] | "  \(.name)  \((.size/1024/1024*10|floor)/10) MB"'
+          echo ""
+          echo "Release URL: https://github.com/${TARGET_REPO}/releases/tag/${VERSION}"
