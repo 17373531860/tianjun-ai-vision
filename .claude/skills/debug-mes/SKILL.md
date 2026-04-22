@@ -425,3 +425,92 @@ v2.7.9 两层防线：
 - 压测时看后端日志必须**没有** `UNIQUE constraint failed` 和 `database is locked`。
 
 相关文件：`backend/services/cluster_collector.py`、`backend/services/mes_hooks.py`、`backend/services/mes_gateway.py`、`backend/db/database.py`、`backend/hotfix.py`。
+
+
+---
+
+## v2.7.11 外部 MES Gateway 能力增强（2026-04-23）
+
+外部 MES 对接（`MESGateway` → external customer MES）这一轮大改，核心是**所有客户需求在前端点选即可满足，不需要改代码**。
+
+### 1. 统一鉴权：`_apply_auth_to_headers`（静态方法）
+位置：`backend/services/mes_gateway.py::MESGateway._apply_auth_to_headers(config) -> new_config`
+- `auth.type=none` → 不改
+- `auth.type=basic` → 留给 adapter 走 `requests.auth`（不改 headers）
+- `auth.type=bearer` → `Authorization: Bearer <token>`
+- `auth.type=api_key` → `<header|X-API-Key>: <value>`
+- `auth.type=custom_header` → `auth.headers: [{key,value}]` 全部合并
+- 顶层 `config.custom_headers` 列表/字典也会合并进 headers（鉴权之外的额外固定 header）
+
+**调用点**：
+- `_send_to_connection` 走实时推送：一定要用 `effective_config = _apply_auth_to_headers(config)` 给 `adapter.send` / `check_response`
+- `api/mes_gateway.py::test_connection` 走 /test：同样要用
+- 任何直接调 `adapter.send` 的新代码：记得也走一下，否则 bearer/api_key 全丢
+
+### 2. 按结果过滤：`push_on_result`
+- `config.push_on_result = ["OK"]` / `["NG"]` / `["OK","NG"]`（默认等价不设，全推）
+- 在 `_send_to_connection` 里**鉴权之前**过滤，不符合只写一条 skip 日志不调 adapter
+- **⚠ `/test` API 故意绕过这个过滤**：用户点"测试"时必须看到请求能不能发出去，不能因为过滤规则静默丢失
+- 判定字段：`overall_result` 或 `result`（大小写不敏感）
+
+### 3. 物料名称映射：`label_mapping`
+- `config.label_mapping = {"螺丝A": "PART-001", ...}`：影响 `ng_items` 字段
+- 两种模式：
+  - `label_mapping_mode="replace"`（默认）：直接把 `ng_items` 替换成映射后的值
+  - `label_mapping_mode="keep_both"`：原 `ng_items` 保留，新增 `ng_items_mapped`
+- 只处理 `ng_items`（list of str），其他字段（如 `stations[].ng_steps`）不变
+- `/test` API 也走这个映射，保证测试 payload 与真实推送一致
+
+### 4. 集群 `aggregated` 顶层便利字段
+`backend/services/cluster_collector.py::_check_and_dispatch` 和 `_push_timeout_result` 两分支都给 `aggregated` 加：
+- `order_no`（从 `stations[0].order.order_no` 拿）
+- `workpiece_id`（从 `stations[0].workpiece.serial_no` 拿）
+- `ng_items`（所有 `stations[i].ng_steps[j].label` 去重）
+- `result`（与 `overall_result` 同值，别名方便模板写 `{result}`）
+
+超时分支特殊处理：`missing_stations` 里每个工位会作为 `MISSING-<工位名>` 追加到 `ng_items`，让客户 MES 也知道缺哪几站。
+
+**模板写法对比**：
+```json
+// 旧（嵌套取值，运维改不动）
+{"order": "{stations[0].order.order_no}", "result": "{overall_result}"}
+
+// 新（顶层取值，客户文档示例就是这个）
+{"order_no": "{order_no}", "result": "{result}"}
+```
+
+### 5. `/test` API 按 event_type 分路
+`backend/api/mes_gateway.py::TestPayload` 加 `event_type` 字段；`test_connection` 根据它选择 test_context：
+- `cycle_end` (默认) → `_build_test_context_cycle_end()`：单工位周期结束结构
+- `box_complete` → `_build_test_context_box_complete()`：集群汇总结构（含顶层便利字段 + 2 个 NG 步骤便于测映射）
+- `box_timeout` → `_build_test_context_box_timeout()`：超时结构（含 `MISSING-B`）
+
+前端点"测试"按钮时传 event_type。如果没传，根据 `push_events` 里第一个事件自动选。
+
+### 6. 前端 GatewayPanel 全面图形化
+`frontend/src/views/MES/GatewayPanel.vue` 新增 UI：
+- 鉴权方式下拉（none/basic/bearer/api_key/custom_header）+ 对应动态表单
+- 额外请求头编辑表（鉴权之外的固定 header）
+- 按结果过滤 checkbox（OK/NG）
+- 物料名称映射表 + replace/keep_both 模式选择
+- 一键填入预设模板下拉：4 个模板（box_complete·4字段 / box_complete·完整 / cycle_end·简化 / cycle_end·含步骤）
+- 工具栏"测试用事件"下拉（与 push_events 独立，便于临时切换测试）
+
+### 7. 诊断步骤（外部 MES 推送失败时）
+1. **看 MESCommLog**：`/api/v1/mes/gateway/logs?connection_id=X`，有 `status_code` 和 `error_msg`
+2. **点前端"测试"按钮**：会走和真实推送一致的鉴权+映射链路，出错会返回详细 payload_preview + response_body
+3. **端到端自测**：`python3 tools/test_mes_gateway.py` 在本机起 5 个 mock MES，10 个场景全绿才算后端链路没问题；如果 mock 都过但客户那边失败，就是客户端点配置错
+4. **常见坑**：
+   - `bearer token` 改成 headers 后还被 adapter 覆盖 → 检查 adapter 有没有把 `config.headers` 整个替换
+   - `label_mapping` 配了但不生效 → 检查 `ng_items` 字段是不是 list、key 是不是精确匹配（中文空格要一致）
+   - `/test` 返回 HTTP 200 但实际推送到客户 failure → 检查是否 `push_on_result` 误配（test 绕过它，实时推送会用）
+   - 超时分支漏 `MISSING-` → 检查 `_push_timeout_result` 没被手改破坏顶层字段填充
+
+相关文件：
+- `backend/services/mes_gateway.py`（核心：预处理管道 + 鉴权 + 过滤 + 映射）
+- `backend/services/cluster_collector.py`（aggregated 顶层便利字段）
+- `backend/api/mes_gateway.py`（/test API 按 event_type 分路）
+- `backend/services/mes_adapters/{rest,form_data}_adapter.py`（adapter 只负责发请求，不处理 auth headers）
+- `frontend/src/views/MES/GatewayPanel.vue`（全图形化配置）
+- `tools/test_mes_gateway.py`（端到端自测）
+- `docs/客户MES对接数据格式.md`（对外文档 + 10 项贵方确认清单）

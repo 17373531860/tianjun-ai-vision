@@ -7,6 +7,13 @@
         <el-tag size="small" :type="enabledCount > 0 ? 'success' : 'info'">
           {{ enabledCount }} 个已启用
         </el-tag>
+        <el-tooltip content="点击「测试」按钮时使用哪种事件的模拟数据" placement="top">
+          <el-select v-model="testEventType" size="small" class="w-44" clearable placeholder="测试用事件 (默认自动)">
+            <el-option label="cycle_end (周期结束)" value="cycle_end" />
+            <el-option label="box_complete (箱汇总)" value="box_complete" />
+            <el-option label="box_timeout (箱超时)" value="box_timeout" />
+          </el-select>
+        </el-tooltip>
       </div>
       <div class="flex gap-2">
         <el-button size="small" type="info" @click="openAllLogs">全部日志</el-button>
@@ -108,6 +115,74 @@
           </el-form-item>
           <el-form-item v-if="form.adapter_type === 'form-data'" label="表单字段名">
             <el-input v-model="configFormKey" placeholder="param" class="w-40" />
+            <div class="text-xs text-gray-500 ml-2">客户常用: param / data / json / content</div>
+          </el-form-item>
+
+          <!-- 鉴权 -->
+          <el-divider content-position="left">鉴权方式</el-divider>
+          <el-form-item label="鉴权类型">
+            <el-select v-model="authType" class="w-48">
+              <el-option label="无鉴权" value="none" />
+              <el-option label="Basic (用户名/密码)" value="basic" />
+              <el-option label="Bearer Token" value="bearer" />
+              <el-option label="API Key Header" value="api_key" />
+              <el-option label="自定义 Header (多个)" value="custom_header" />
+            </el-select>
+          </el-form-item>
+          <template v-if="authType === 'basic'">
+            <el-form-item label="用户名">
+              <el-input v-model="authUsername" class="w-64" />
+            </el-form-item>
+            <el-form-item label="密码">
+              <el-input v-model="authPassword" type="password" class="w-64" show-password />
+            </el-form-item>
+          </template>
+          <template v-if="authType === 'bearer'">
+            <el-form-item label="Token">
+              <el-input v-model="authToken" type="password" show-password placeholder="eyJhbGciOi..." />
+            </el-form-item>
+          </template>
+          <template v-if="authType === 'api_key'">
+            <el-form-item label="Header 名">
+              <el-input v-model="authApiKeyHeader" placeholder="X-API-Key" class="w-64" />
+            </el-form-item>
+            <el-form-item label="Header 值">
+              <el-input v-model="authApiKeyValue" type="password" show-password />
+            </el-form-item>
+          </template>
+          <template v-if="authType === 'custom_header'">
+            <el-form-item label="自定义 Headers">
+              <div class="w-full">
+                <div v-for="(h, idx) in authCustomHeaders" :key="idx" class="flex items-center gap-2 mb-2">
+                  <el-input v-model="h.key" placeholder="Header 名" class="w-48" size="small" />
+                  <span class="text-gray-400">=</span>
+                  <el-input v-model="h.value" placeholder="Header 值" class="flex-1" size="small" />
+                  <el-button size="small" type="danger" circle @click="authCustomHeaders.splice(idx, 1)">
+                    <el-icon><Close /></el-icon>
+                  </el-button>
+                </div>
+                <el-button size="small" @click="authCustomHeaders.push({ key: '', value: '' })">+ 添加 Header</el-button>
+              </div>
+            </el-form-item>
+          </template>
+
+          <!-- 额外请求头 (鉴权之外) -->
+          <el-divider content-position="left">额外请求头 (可选)</el-divider>
+          <el-form-item label="" label-width="0">
+            <div class="w-full">
+              <div class="text-xs text-gray-400 mb-2">
+                鉴权之外需要附带的固定 header, 如 Accept-Language / X-Client-Id 等
+              </div>
+              <div v-for="(h, idx) in extraHeaders" :key="idx" class="flex items-center gap-2 mb-2">
+                <el-input v-model="h.key" placeholder="Header 名" class="w-48" size="small" />
+                <span class="text-gray-400">=</span>
+                <el-input v-model="h.value" placeholder="Header 值" class="flex-1" size="small" />
+                <el-button size="small" type="danger" circle @click="extraHeaders.splice(idx, 1)">
+                  <el-icon><Close /></el-icon>
+                </el-button>
+              </div>
+              <el-button size="small" @click="extraHeaders.push({ key: '', value: '' })">+ 添加 Header</el-button>
+            </div>
           </el-form-item>
         </template>
 
@@ -241,6 +316,13 @@
             <el-checkbox value="box_timeout" label="集群超时推送" />
           </el-checkbox-group>
         </el-form-item>
+        <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="按结果过滤">
+          <el-checkbox-group v-model="pushOnResult">
+            <el-checkbox value="OK" label="OK (合格)" />
+            <el-checkbox value="NG" label="NG (不合格, 含超时/缺失)" />
+          </el-checkbox-group>
+          <div class="text-xs text-gray-500">两项都选 = 全推; 只选 NG = 仅不合格才推, 适合客户只关心不良的场景</div>
+        </el-form-item>
         <el-form-item label="重试次数">
           <el-input-number v-model="form.retry_count" :min="0" :precision="0" />
         </el-form-item>
@@ -284,17 +366,52 @@
         </div>
         <el-button size="small" @click="extraFieldsDef.push({ key: '', label: '', type: 'text', default: '' })">+ 添加</el-button>
 
+        <!-- 物料名称映射 (box_complete 场景) -->
+        <el-divider content-position="left">物料名称映射 (可选)</el-divider>
+        <div class="mb-3 text-xs text-gray-400">
+          把内部步骤名 (如"螺丝A") 映射成客户 MES 物料代码 (如"PART-001"), 影响 <code>ng_items</code> 字段。
+          未配置时按原样透传。
+        </div>
+        <div v-for="(m, idx) in labelMappings" :key="idx" class="flex items-center gap-2 mb-2">
+          <el-input v-model="m.key" placeholder="内部步骤名 (如 螺丝A)" class="w-48" size="small" />
+          <span class="text-gray-400">→</span>
+          <el-input v-model="m.value" placeholder="客户物料代码 (如 PART-001)" class="flex-1" size="small" />
+          <el-button size="small" type="danger" circle @click="labelMappings.splice(idx, 1)">
+            <el-icon><Close /></el-icon>
+          </el-button>
+        </div>
+        <div class="flex items-center gap-3">
+          <el-button size="small" @click="labelMappings.push({ key: '', value: '' })">+ 添加映射</el-button>
+          <span class="text-xs text-gray-400">映射模式:</span>
+          <el-radio-group v-model="labelMappingMode" size="small">
+            <el-radio value="replace">替换 (ng_items 直接变成代码)</el-radio>
+            <el-radio value="keep_both">保留 (原 ng_items + 新增 ng_items_mapped)</el-radio>
+          </el-radio-group>
+        </div>
+
         <!-- 字段映射模板 -->
         <el-divider content-position="left">字段映射模板 (JSON)</el-divider>
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-xs text-gray-400">一键填入:</span>
+          <el-select v-model="presetTemplateKey" placeholder="选择预设模板" size="small" class="w-96" @change="applyPresetTemplate">
+            <el-option
+              v-for="(p, k) in PRESET_TEMPLATES"
+              :key="k" :label="p.label" :value="k"
+            />
+          </el-select>
+        </div>
         <div class="mb-3 text-xs text-gray-400">
-          用 {context.field} 引用数据。可用: workpiece.*, cycle.*, order.*, project.*, steps[], defects[], extra.*, session.*, device.*, timestamp
+          用 {context.field} 引用数据。可用字段:<br>
+          <b>box_complete 事件</b>: {order_no} {workpiece_id} {overall_result} {ng_items} {box_serial} {total_stations} {completed_stations} {timestamp}<br>
+          <b>cycle_end 事件</b>: {cycle.*} {workpiece.*} {order.*} {project.*} {steps[]} {defects[]} {extra.*} {session.*} {timestamp}<br>
+          <b>数组语法</b>: <code>{"_array_source":"ng_items", "_item_template":"{item}"}</code>
         </div>
         <el-input
           v-model="templateJson"
           type="textarea"
           :rows="12"
           :autosize="{ minRows: 6, maxRows: 20 }"
-          placeholder='{"macno": "{device.device_id}", "data": {...}}'
+          placeholder='{"order_no": "{order_no}", "result": "{overall_result}", ...}'
           spellcheck="false"
           class="template-editor"
         />
@@ -457,6 +574,89 @@ const successExpect = ref(true)
 const staticFields = ref([])
 const extraFieldsDef = ref([])
 
+// 鉴权 / 自定义请求头 / 按结果过滤 / 物料名称映射
+const authType = ref('none')
+const authUsername = ref('')
+const authPassword = ref('')
+const authToken = ref('')
+const authApiKeyHeader = ref('X-API-Key')
+const authApiKeyValue = ref('')
+const authCustomHeaders = ref([])
+const extraHeaders = ref([])
+const pushOnResult = ref(['OK', 'NG'])
+const labelMappings = ref([])
+const labelMappingMode = ref('replace')
+const testEventType = ref('')
+const presetTemplateKey = ref('')
+
+const PRESET_TEMPLATES = {
+  box_complete_4field: {
+    label: 'box_complete · 客户4字段 (form-data 主推荐)',
+    event: 'box_complete',
+    template: {
+      order_no: '{order_no}',
+      workpiece_id: '{workpiece_id}',
+      result: '{overall_result}',
+      missing_items: { _array_source: 'ng_items', _item_template: '{item}' },
+    },
+  },
+  box_complete_full: {
+    label: 'box_complete · 完整数据 (含工位明细)',
+    event: 'box_complete',
+    template: {
+      box_serial: '{box_serial}',
+      order_no: '{order_no}',
+      workpiece_id: '{workpiece_id}',
+      result: '{overall_result}',
+      total_stations: '{total_stations}',
+      completed_stations: '{completed_stations}',
+      missing_items: { _array_source: 'ng_items', _item_template: '{item}' },
+      timestamp: '{timestamp}',
+    },
+  },
+  cycle_end_simple: {
+    label: 'cycle_end · 单工位周期结束 (简化版)',
+    event: 'cycle_end',
+    template: {
+      order_no: '{order.order_no}',
+      workpiece_id: '{workpiece.serial_no}',
+      result: '{cycle.result}',
+      duration: '{cycle.duration}',
+    },
+  },
+  cycle_end_with_steps: {
+    label: 'cycle_end · 含步骤明细',
+    event: 'cycle_end',
+    template: {
+      order_no: '{order.order_no}',
+      workpiece_id: '{workpiece.serial_no}',
+      result: '{cycle.result}',
+      ng_reason: '{cycle.ng_reason}',
+      steps: {
+        _array_source: 'steps',
+        _item_template: {
+          label: '{item.label}',
+          is_good: '{item.is_good}',
+          duration: '{item.duration}',
+        },
+      },
+    },
+  },
+}
+
+function applyPresetTemplate() {
+  const key = presetTemplateKey.value
+  if (!key || !PRESET_TEMPLATES[key]) return
+  const preset = PRESET_TEMPLATES[key]
+  templateJson.value = JSON.stringify(preset.template, null, 2)
+  if (preset.event && !form.push_events.includes(preset.event)) {
+    form.push_events = [...form.push_events, preset.event]
+  }
+  templateError.value = ''
+  ElMessage.success(`已填入模板: ${preset.label}`)
+  presetTemplateKey.value = ''
+}
+
 const modbusTransport = ref('rtu')
 const modbusPort = ref('')
 const modbusBaudrate = ref(9600)
@@ -522,6 +722,17 @@ function openCreate() {
   successExpect.value = true
   staticFields.value = []
   extraFieldsDef.value = []
+  authType.value = 'none'
+  authUsername.value = ''
+  authPassword.value = ''
+  authToken.value = ''
+  authApiKeyHeader.value = 'X-API-Key'
+  authApiKeyValue.value = ''
+  authCustomHeaders.value = []
+  extraHeaders.value = []
+  pushOnResult.value = ['OK', 'NG']
+  labelMappings.value = []
+  labelMappingMode.value = 'replace'
   modbusTransport.value = 'rtu'
   modbusPort.value = ''
   modbusBaudrate.value = 9600
@@ -564,6 +775,30 @@ function openEdit(row) {
   const tpl = cfg.template || {}
   templateJson.value = JSON.stringify(tpl, null, 2)
   templateError.value = ''
+
+  const auth = cfg.auth || { type: 'none' }
+  authType.value = auth.type || 'none'
+  authUsername.value = auth.username || ''
+  authPassword.value = auth.password || ''
+  authToken.value = auth.token || ''
+  authApiKeyHeader.value = auth.header || 'X-API-Key'
+  authApiKeyValue.value = auth.value || ''
+  authCustomHeaders.value = Array.isArray(auth.headers)
+    ? auth.headers.map(h => ({ ...h }))
+    : Object.entries(auth.headers || {}).map(([key, value]) => ({ key, value: String(value) }))
+
+  const ch = cfg.custom_headers
+  extraHeaders.value = Array.isArray(ch)
+    ? ch.map(h => ({ ...h }))
+    : Object.entries(ch || {}).map(([key, value]) => ({ key, value: String(value) }))
+
+  pushOnResult.value = Array.isArray(cfg.push_on_result) && cfg.push_on_result.length
+    ? [...cfg.push_on_result]
+    : ['OK', 'NG']
+
+  const lm = cfg.label_mapping || {}
+  labelMappings.value = Object.entries(lm).map(([key, value]) => ({ key, value: String(value) }))
+  labelMappingMode.value = cfg.label_mapping_mode || 'replace'
 
   extraFieldsDef.value = (row.extra_fields_schema || []).map(f => ({ ...f }))
 
@@ -632,13 +867,48 @@ function buildConfig() {
     if (item.key.trim()) sf[item.key.trim()] = item.value
   }
 
+  const headers = {}
+  for (const item of extraHeaders.value) {
+    if (item.key && item.key.trim()) headers[item.key.trim()] = String(item.value ?? '')
+  }
+
+  let auth = { type: 'none' }
+  if (authType.value === 'basic') {
+    auth = { type: 'basic', username: authUsername.value, password: authPassword.value }
+  } else if (authType.value === 'bearer') {
+    auth = { type: 'bearer', token: authToken.value }
+  } else if (authType.value === 'api_key') {
+    auth = {
+      type: 'api_key',
+      header: authApiKeyHeader.value || 'X-API-Key',
+      value: authApiKeyValue.value,
+    }
+  } else if (authType.value === 'custom_header') {
+    auth = {
+      type: 'custom_header',
+      headers: authCustomHeaders.value
+        .filter(h => h.key && h.key.trim())
+        .map(h => ({ key: h.key.trim(), value: String(h.value ?? '') })),
+    }
+  }
+
+  const label_mapping = {}
+  for (const item of labelMappings.value) {
+    if (item.key && item.key.trim()) label_mapping[item.key.trim()] = String(item.value ?? '')
+  }
+
   return {
     url: configUrl.value,
     method: configMethod.value,
     content_type: form.adapter_type === 'form-data' ? 'form-data' : 'application/json',
     form_key: configFormKey.value,
-    headers: {},
-    auth: { type: 'none' },
+    headers,
+    auth,
+    push_on_result: pushOnResult.value.length && pushOnResult.value.length < 2
+      ? [...pushOnResult.value]
+      : null,
+    label_mapping: Object.keys(label_mapping).length ? label_mapping : null,
+    label_mapping_mode: labelMappingMode.value,
     static_fields: sf,
     template,
     success_check: {
@@ -708,7 +978,11 @@ async function doDelete(row) {
 async function doTest(row) {
   row._testing = true
   try {
-    const { data } = await testConnection(row.id)
+    // 按 push_events 里第一个事件选测试 context, 默认 cycle_end
+    const evt = testEventType.value
+      || (row.push_events && row.push_events[0])
+      || 'cycle_end'
+    const { data } = await testConnection(row.id, { event_type: evt })
     testResult.value = data
     showTestResult.value = true
   } catch (e) {

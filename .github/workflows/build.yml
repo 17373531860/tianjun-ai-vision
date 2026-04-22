@@ -279,17 +279,7 @@ jobs:
           if (-not $setup) { echo "ERROR: Setup exe not found!"; exit 1 }
           echo "Installer: $($setup.Name) ($([math]::Round($setup.Length/1GB, 2)) GB)"
       
-      - name: Upload installer as artifact
-        uses: actions/upload-artifact@v4
-        continue-on-error: true  # artifact 配额满不阻塞后续 Release/Gitee 上传步骤
-        with:
-          name: TianJun-AI-Vision-Installer
-          path: electron/dist/TianJun-AI-Vision-*-Setup.exe
-          retention-days: 30
-          compression-level: 0
-      
-      - name: Split installer into parts for Release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Split installer into parts (Artifact + Release 两条通道都用)
         shell: pwsh
         run: |
           $setupFile = Get-ChildItem "electron/dist" -Filter "TianJun-AI-Vision-*-Setup.exe" | Select-Object -First 1
@@ -469,6 +459,18 @@ jobs:
           # List all files
           Write-Host "`nFiles in $partsDir :"
           Get-ChildItem $partsDir | ForEach-Object { Write-Host "  $($_.Name) - $([math]::Round($_.Length / 1MB, 1)) MB" }
+
+      - name: Upload parts as Action Artifact (双通道: 方便未 tag 构建也能下载)
+        uses: actions/upload-artifact@v4
+        continue-on-error: true  # artifact 配额满时不阻塞 Release 上传
+        with:
+          name: TianJun-AI-Vision-Installer-Parts
+          path: |
+            release-parts/*.part
+            release-parts/checksums.txt
+            release-parts/merge_installer.bat
+          retention-days: 30
+          compression-level: 0
 
       - name: Upload parts to GitHub Release (tianjun-releases)
         if: startsWith(github.ref, 'refs/tags/v')

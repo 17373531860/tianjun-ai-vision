@@ -492,12 +492,40 @@ class ClusterCollector:
                 **(r.cycle_context or {}),
             })
 
+        # 顶层便利字段：从各站点 cycle_context 里提取 order_no / workpiece_id /
+        # ng_items, 让客户 MES 的模板可以直接写 {order_no} {workpiece_id}
+        # {ng_items}, 不用在模板里写复杂的嵌套取值.
+        order_no = ""
+        workpiece_id = ""
+        ng_items: list = []
+        seen_items: set = set()
+        for s in stations_data:
+            if not order_no:
+                order = s.get("order") or {}
+                if isinstance(order, dict):
+                    order_no = order.get("order_no") or order.get("order_number") or ""
+            if not workpiece_id:
+                wp = s.get("workpiece") or {}
+                if isinstance(wp, dict):
+                    workpiece_id = wp.get("serial_no") or wp.get("id") or ""
+            if not s.get("is_good"):
+                for ns in (s.get("ng_steps") or []):
+                    if isinstance(ns, dict):
+                        lbl = ns.get("label")
+                        if lbl and lbl not in seen_items:
+                            seen_items.add(lbl)
+                            ng_items.append(lbl)
+
         aggregated = {
             "box_serial": box_serial,
             "overall_result": "OK" if overall_good else "NG",
+            "result": "OK" if overall_good else "NG",
             "total_stations": len(expected),
             "completed_stations": len(matched_expected),
             "stations": stations_data,
+            "order_no": order_no,
+            "workpiece_id": workpiece_id,
+            "ng_items": ng_items,
             "timestamp": datetime.now().isoformat(),
         }
 
@@ -622,13 +650,44 @@ class ClusterCollector:
                 "status": "missing",
             })
 
+        # 顶层便利字段 (同非超时分支)
+        order_no = ""
+        workpiece_id = ""
+        ng_items: list = []
+        seen_items: set = set()
+        for s in stations_data:
+            if not order_no:
+                order = s.get("order") or {}
+                if isinstance(order, dict):
+                    order_no = order.get("order_no") or order.get("order_number") or ""
+            if not workpiece_id:
+                wp = s.get("workpiece") or {}
+                if isinstance(wp, dict):
+                    workpiece_id = wp.get("serial_no") or wp.get("id") or ""
+            if not s.get("is_good"):
+                for ns in (s.get("ng_steps") or []):
+                    if isinstance(ns, dict):
+                        lbl = ns.get("label")
+                        if lbl and lbl not in seen_items:
+                            seen_items.add(lbl)
+                            ng_items.append(lbl)
+        for ms in missing:
+            tag = f"MISSING-{ms}"
+            if tag not in seen_items:
+                seen_items.add(tag)
+                ng_items.append(tag)
+
         aggregated = {
             "box_serial": box_serial,
             "overall_result": "TIMEOUT",
+            "result": "NG",
             "total_stations": len(expected_list),
             "completed_stations": len(matched_expected),
             "missing_stations": list(missing),
             "stations": stations_data,
+            "order_no": order_no,
+            "workpiece_id": workpiece_id,
+            "ng_items": ng_items,
             "timestamp": datetime.now().isoformat(),
         }
 

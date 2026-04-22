@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.7.11 (2026-04-23)
+- [FEAT-001] 新增: MES Gateway 统一鉴权 (bearer / api_key / custom_header 三种方式合并进 headers)
+- [FEAT-002] 新增: MES Gateway 按结果过滤 (push_on_result 支持只推 OK / 只推 NG / 全推)
+- [FEAT-003] 新增: MES Gateway 物料名称映射 (label_mapping 把中文步骤名转成客户物料代码)
+- [FEAT-004] 新增: 集群 aggregated 顶层便利字段 (order_no / workpiece_id / ng_items / result)，模板不再要嵌套取值
+- [FEAT-005] 新增: 前端 GatewayPanel UI 图形化 (鉴权下拉 + 额外 headers + 过滤 + 映射 + 4 个预设模板)
+- [FEAT-006] 新增: /test API 按 event_type 分路生成真实 context (cycle_end / box_complete / box_timeout)
+- [DOC-001] 新增: docs/客户MES对接数据格式.md + docx + pdf (含 OK/NG/超时 3 个完整示例 + 10 项贵方确认清单)
+- [TOOL-001] 新增: tools/test_mes_gateway.py MES 端到端测试 (5 个 mock 客户 MES, 10/10 场景全绿)
+- [CI-001] 变更: CI 双通道分卷 (Action Artifact 和 GitHub Release 都走 1.9GB 分卷, main push 也跑 Split)
+- [SKILL-001] debug-mes 追加 4 章 (push_on_result / label_mapping / 统一鉴权 / test event_type)
+
 ## v2.7.10 (2026-04-21)
 - [BUG-001] 修复: 扫码器 device_type=text_lon 对现场 WMax 固件完全无效 (连上但永远扫不到码；_start_device 自动升级为 auto + 新增 _trigger_wmax_discover_once 合并触发一次 UDP 发现+激活 RPT)
 - [BUG-002] 修复: WMax 扫码器连接后必须 activate_rpt_reporting 才识别 (v2.7.7 改 ondemand 是误判；现场固件不响应单次 Trigger 只认常开 RPT；wmax/manager.py 两处 auto_discover + scanner.py 三处 _ensure_wmax_connected 统一激活；test_connection 改 activate_rpt+收码5s)

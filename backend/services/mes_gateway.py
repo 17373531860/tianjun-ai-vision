@@ -83,6 +83,34 @@ class MESGateway:
             else:
                 full_context[dotted_key] = val
 
+        # 按结果过滤: push_on_result=["OK","NG"] 默认全推; ["NG"] 只推 NG.
+        # 适用场景: 客户只关心 NG 情况, OK 无需上报.
+        push_on = config.get("push_on_result")
+        if push_on:
+            r = str(full_context.get("overall_result")
+                    or full_context.get("result") or "").upper()
+            allowed = [str(x).upper() for x in push_on]
+            if r and r not in allowed:
+                self._log(db, conn.id, event_type, "push",
+                          url=config.get("url"),
+                          error_msg=f"skipped by push_on_result={allowed}, result={r}",
+                          success=True)
+                return
+
+        # 物料名称映射: 把 ng_items 里的中文步骤名替换成客户 MES 的物料代码.
+        # mode=replace (默认): 直接替换原数组;
+        # mode=keep_both: 原数组保留, 新增 ng_items_mapped 字段.
+        label_mapping = config.get("label_mapping") or {}
+        if label_mapping and isinstance(full_context.get("ng_items"), list):
+            mapped = [label_mapping.get(x, x) for x in full_context["ng_items"]]
+            if config.get("label_mapping_mode", "replace") == "replace":
+                full_context["ng_items"] = mapped
+            else:
+                full_context["ng_items_mapped"] = mapped
+
+        # 鉴权统一处理: bearer/api_key/custom_header 合并进 headers, basic 留给 adapter.
+        effective_config = self._apply_auth_to_headers(config)
+
         try:
             adapter = get_adapter(conn.adapter_type)
         except ValueError as e:
@@ -90,7 +118,7 @@ class MESGateway:
                       error_msg=str(e), success=False)
             return
 
-        payload = adapter.build_payload(full_context, config)
+        payload = adapter.build_payload(full_context, effective_config)
         request_body = json.dumps(payload, ensure_ascii=False, default=str)
 
         retry_count = conn.retry_count or 0
@@ -102,9 +130,9 @@ class MESGateway:
                 time.sleep(retry_interval)
                 print(f"[MES Gateway] 重试 {attempt}/{retry_count}: {conn.name}", flush=True)
 
-            result = adapter.send(payload, config)
+            result = adapter.send(payload, effective_config)
             last_result = result
-            is_ok = adapter.check_response(result, config)
+            is_ok = adapter.check_response(result, effective_config)
 
             if is_ok:
                 self._log(
@@ -139,6 +167,61 @@ class MESGateway:
             error_msg=error_msg,
         )
         print(f"[MES Gateway] 推送失败: {conn.name} ({event_type}) - {error_msg}", flush=True)
+
+    @staticmethod
+    def _apply_auth_to_headers(config: dict) -> dict:
+        """统一鉴权到 headers.
+
+        auth.type 取值:
+          - none          : 不加
+          - basic         : 保持在 auth 里, 给 adapter 走 requests.auth
+          - bearer        : Authorization: Bearer <token>
+          - api_key       : {header|X-API-Key}: <value>
+          - custom_header : 把 auth.headers 合并进 config.headers
+
+        同时把顶层 config.custom_headers (列表 [{key,value}]) 合并进 config.headers,
+        方便前端 UI 提供 "额外请求头" 编辑器.
+        """
+        new_config = dict(config) if isinstance(config, dict) else {}
+        headers = dict(new_config.get("headers") or {})
+
+        custom = new_config.get("custom_headers")
+        if isinstance(custom, list):
+            for item in custom:
+                if isinstance(item, dict):
+                    k = item.get("key") or item.get("name")
+                    v = item.get("value")
+                    if k:
+                        headers[k] = "" if v is None else str(v)
+        elif isinstance(custom, dict):
+            for k, v in custom.items():
+                headers[k] = "" if v is None else str(v)
+
+        auth = new_config.get("auth") or {}
+        atype = auth.get("type") if isinstance(auth, dict) else None
+        if atype == "bearer":
+            token = auth.get("token") or ""
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+        elif atype == "api_key":
+            hdr = auth.get("header") or "X-API-Key"
+            val = auth.get("value") or ""
+            headers[hdr] = val
+        elif atype == "custom_header":
+            extra = auth.get("headers") or []
+            if isinstance(extra, list):
+                for item in extra:
+                    if isinstance(item, dict):
+                        k = item.get("key") or item.get("name")
+                        v = item.get("value")
+                        if k:
+                            headers[k] = "" if v is None else str(v)
+            elif isinstance(extra, dict):
+                for k, v in extra.items():
+                    headers[k] = "" if v is None else str(v)
+
+        new_config["headers"] = headers
+        return new_config
 
     def _log(self, db, connection_id: int, event_type: str, direction: str, **kwargs):
         log = MESCommLog(

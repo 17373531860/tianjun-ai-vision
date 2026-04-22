@@ -1,0 +1,119 @@
+{
+  "version": "2.7.11",
+  "date": "2026-04-23",
+  "previous_version": "2.7.10",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "外部 MES 统一鉴权 (bearer / api_key / custom_header)",
+      "symptom": "不同客户 MES 鉴权方式不同, 过去只支持 Basic/none, 无法对接现代云 MES",
+      "root_cause": "mes_gateway._send_to_connection 直接把 config 传给 adapter, 无统一鉴权装配",
+      "fix": "新增 MESGateway._apply_auth_to_headers 静态方法, 把 bearer/api_key/custom_header 合进 headers; basic 保持给 requests.auth; 顶层 custom_headers 列表也合并",
+      "files": ["backend/services/mes_gateway.py", "frontend/src/views/MES/GatewayPanel.vue"],
+      "keywords": ["MES", "鉴权", "auth", "bearer", "api_key", "custom_header", "Authorization"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "MES 按结果过滤 (push_on_result)",
+      "symptom": "客户只要 NG 箱或只要 OK 箱的通知, 过去只能全推",
+      "root_cause": "_send_to_connection 无过滤分支",
+      "fix": "config.push_on_result=['NG'|'OK'|...] 在鉴权前按 overall_result/result 过滤, 不符合只记 skip 日志",
+      "files": ["backend/services/mes_gateway.py", "frontend/src/views/MES/GatewayPanel.vue"],
+      "keywords": ["MES", "过滤", "push_on_result", "OK", "NG"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "MES 物料名称映射 (label_mapping)",
+      "symptom": "天竣内部步骤名是中文, 客户 MES 要物料代码, 过去只能在模板里一一写死",
+      "root_cause": "模板渲染只做字段取值, 不做值替换",
+      "fix": "config.label_mapping={'螺丝A':'PART-001',...}, 自动替换 ng_items; replace/keep_both 两种模式",
+      "files": ["backend/services/mes_gateway.py", "frontend/src/views/MES/GatewayPanel.vue"],
+      "keywords": ["MES", "物料映射", "label_mapping", "ng_items", "物料代码"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "集群 aggregated 顶层便利字段 (order_no/workpiece_id/ng_items/result)",
+      "symptom": "MES 模板取工单号要写 {stations[0].order.order_no} 嵌套, 客户运维不会改",
+      "root_cause": "cluster_collector 把 order/workpiece/NG 信息埋在 stations[] 子字典里",
+      "fix": "_check_and_dispatch 和 _push_timeout_result 从 stations_data 扫出顶层 order_no/workpiece_id/ng_items; 超时分支 missing_stations 自动转 MISSING-<工位> 合进 ng_items",
+      "files": ["backend/services/cluster_collector.py"],
+      "keywords": ["集群", "cluster", "aggregated", "order_no", "workpiece_id", "ng_items", "便利字段"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "前端 GatewayPanel 全面图形化配置 (零改代码)",
+      "symptom": "客户配置要改 JSON, 运维不会",
+      "root_cause": "原 UI 只暴露 URL/template, 鉴权/过滤/映射都得手写 config JSON",
+      "fix": "新增鉴权下拉+动态表单、额外 headers 编辑、按结果过滤、物料映射表、预设模板下拉(4个)、测试用事件下拉; openCreate/openEdit/buildConfig/doTest 全链路适配",
+      "files": ["frontend/src/views/MES/GatewayPanel.vue"],
+      "keywords": ["前端", "GatewayPanel", "MES", "UI", "预设模板", "鉴权", "物料映射"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "/test API 按 event_type 生成 context + 走一致的预处理链",
+      "symptom": "/test 永远用 cycle_end context, 测 box_complete 模板字段全空",
+      "root_cause": "test_connection 里 test_context 写死 cycle 结构",
+      "fix": "TestPayload 加 event_type; 三个 _build_test_context_* 各生成真实结构; 测试请求走 label_mapping + _apply_auth_to_headers, 但故意不走 push_on_result 保证测试一定能看到请求",
+      "files": ["backend/api/mes_gateway.py"],
+      "keywords": ["MES", "test_connection", "event_type", "box_complete", "cycle_end", "box_timeout"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "DOC-001",
+      "title": "客户 MES 对接数据格式文档 (md + docx + pdf)",
+      "symptom": "新客户对接要反复来回沟通字段",
+      "root_cause": "无标准化对接文档",
+      "fix": "新增 docs/客户MES对接数据格式.md, 含请求格式/3种场景示例/curl调试/10项贵方必须回答的确认清单",
+      "files": ["docs/客户MES对接数据格式.md"],
+      "keywords": ["MES", "文档", "对接", "客户", "formdata", "确认清单"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "TOOL-001",
+      "title": "tools/test_mes_gateway.py MES 端到端测试脚本",
+      "symptom": "MES 改动多但验证手段只有真上客户 MES",
+      "root_cause": "缺少可复现的本地 mock",
+      "fix": "起 5 个 mock 客户 MES (8801-8805) + 7 mock 场景 + 3 个走后端 /test API 真实路径场景, 10/10 覆盖鉴权/过滤/映射/event_type 分路; 端口占用自动检测",
+      "files": ["tools/test_mes_gateway.py"],
+      "keywords": ["测试", "mock", "MES", "端到端", "e2e"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CI-001",
+      "title": "CI Artifact 和 Release 双通道分卷",
+      "symptom": "Artifact 有时失败 (配额/单文件); Release 单文件 >2GB 直接拒绝",
+      "root_cause": "原 Artifact 上传完整 exe, Split 只在 tag 触发跑",
+      "fix": "Split 去掉 if 限制, main push 也跑; Artifact 改成上传 release-parts/*, 两条路径都是分卷+校验+合并脚本",
+      "files": [".github/workflows/build.yml"],
+      "keywords": ["CI", "GitHub Actions", "artifact", "release", "分卷", "merge_installer"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes"],
+  "files_changed": [
+    "backend/services/cluster_collector.py",
+    "backend/services/mes_gateway.py",
+    "backend/api/mes_gateway.py",
+    "frontend/src/views/MES/GatewayPanel.vue",
+    "docs/客户MES对接数据格式.md",
+    "tools/test_mes_gateway.py",
+    ".github/workflows/build.yml",
+    "electron/package.json",
+    "electron/splash.html",
+    ".claude/skills/debug-mes/SKILL.md"
+  ]
+}
