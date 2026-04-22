@@ -281,6 +281,7 @@ jobs:
       
       - name: Upload installer as artifact
         uses: actions/upload-artifact@v4
+        continue-on-error: true  # artifact 配额满不阻塞后续 Release/Gitee 上传步骤
         with:
           name: TianJun-AI-Vision-Installer
           path: electron/dist/TianJun-AI-Vision-*-Setup.exe
