@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.7.10 (2026-04-21)
+- [BUG-001] 修复: 扫码器 device_type=text_lon 对现场 WMax 固件完全无效 (连上但永远扫不到码；_start_device 自动升级为 auto + 新增 _trigger_wmax_discover_once 合并触发一次 UDP 发现+激活 RPT)
+- [BUG-002] 修复: WMax 扫码器连接后必须 activate_rpt_reporting 才识别 (v2.7.7 改 ondemand 是误判；现场固件不响应单次 Trigger 只认常开 RPT；wmax/manager.py 两处 auto_discover + scanner.py 三处 _ensure_wmax_connected 统一激活；test_connection 改 activate_rpt+收码5s)
+- [BUG-003] 修复: 容器模式同一 label 跨帧遮挡重现 track_id 变更导致累积超额 NG (_update_container_grouping 按 steps_config.max_recognized 做 box 内上限检查，到上限只刷 last_seen 不再 +1)
+- [BUG-004] 修复: 称重器稳定后 set_barcode 不立即派发 (SN-0016 汇总丢失；set_barcode 注入时如外部设备已是稳定称重器直接 _dispatch)
+- [CLEAN-001] 清理: hotfix.py::apply() 去掉 v2.7.7c 三块运行时补丁调用 (已并入源码；函数定义保留作回退)
+- [FEAT-001] 新增: 集群聚合 cycle_context.sub_reports (每个通道原始快照) + ClusterPanel.vue 子报告卡片
+- [FEAT-002] 新增: 扫码器/外部设备 pairing_group + external_only (只喂外部设备的扫码器按分组号匹配，UI 隐藏绑定工位)
+
 ## v2.7.9 (2026-04-21)
 - [BUG-001] 修复: 集群汇总页「已连接副机」切页后消失 (副机心跳原仅由前端 ClusterPanel setInterval 发送，页面 onUnmounted 即停；ClusterCollector.start() 新增后台线程 _heartbeat_sender_loop 每 5s 自主 POST /cluster/heartbeat，脱离前端页面状态)
 - [BUG-002] 修复: Windows 串口 PermissionError 13 拒绝访问 (三个连接 loop 统一用新增的 _open_serial_with_retry 辅助，失败 1s 间隔重试 3 次；解决上次 close 未完全释放和 test_connection 竞争两种残留)

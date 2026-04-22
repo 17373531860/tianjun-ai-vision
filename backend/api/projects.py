@@ -191,6 +191,52 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
     db.commit()
     return None
 
+def _reload_model_for_active_project(db: Session, project: Project) -> None:
+    """激活项目后把 default_model 装到未绑定专属项目的通道上。
+
+    逻辑与 backend/main.py::auto_load_active_project 的 fallback 分支保持一致：
+    - 已绑定其它 project_id 的通道不动（多工位各自的项目优先）
+    - 其余通道单通道走 load_model_for_channel，多通道走 load_shared_model
+    - 任何失败只打日志，不影响 activate 本身的成功响应
+    """
+    import os
+    from backend.api.channel_manager import channel_manager
+
+    if not project.default_model_id:
+        print(f"[激活项目] '{project.name}' 未配置默认模型，跳过模型加载")
+        return
+
+    model = db.query(Model).filter(Model.id == project.default_model_id).first()
+    if not model or not model.file_path or not os.path.exists(model.file_path):
+        file_path = getattr(model, 'file_path', None)
+        print(f"[激活项目] '{project.name}' 默认模型文件不存在: {file_path}")
+        return
+
+    sources = channel_manager.get_channel_sources()
+    bound_to_other = set()
+    for ch_str, ch_cfg in sources.items():
+        pid = ch_cfg.get("project_id")
+        if pid and pid != project.id:
+            try:
+                bound_to_other.add(int(ch_str))
+            except (TypeError, ValueError):
+                continue
+
+    remaining = [cid for cid in channel_manager.channels if cid not in bound_to_other]
+    if not remaining:
+        print(f"[激活项目] 所有通道都已绑定其它项目，跳过模型重载")
+        return
+
+    if len(remaining) == 1:
+        ok = channel_manager.load_model_for_channel(remaining[0], model.file_path, "auto")
+        print(f"[激活项目] ch{remaining[0]} 加载模型 '{model.name}': "
+              f"{'成功' if ok else '失败'}")
+    else:
+        ok = channel_manager.load_shared_model(model.file_path, "auto")
+        print(f"[激活项目] 共享模型 '{model.name}' 加载到通道 {remaining}: "
+              f"{'成功' if ok else '失败'}")
+
+
 @router.post("/{project_id}/activate", response_model=ProjectResponse)
 def activate_project(project_id: int, db: Session = Depends(get_db)):
     """激活项目（设为当前运行项目）"""
@@ -205,7 +251,17 @@ def activate_project(project_id: int, db: Session = Depends(get_db)):
     db_project.is_active = True
     db.commit()
     db.refresh(db_project)
-    
+
+    # v2.7.10 修复：activate 此前仅写 DB，ChannelManager 上的模型从不重新加载，
+    # 导致切项目后 ch0 仍挂着旧项目的模型，标签和 project_config 对不上，
+    # 用户感知为"检测什么都识别不出来"。此处补上与 main.py 启动逻辑一致的重载。
+    try:
+        _reload_model_for_active_project(db, db_project)
+    except Exception as e:
+        import traceback
+        print(f"[激活项目] 模型重载异常 (不影响激活状态): {e}")
+        traceback.print_exc()
+
     return ProjectResponse(
         id=db_project.id,
         name=db_project.name,

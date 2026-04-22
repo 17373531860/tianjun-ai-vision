@@ -338,7 +338,7 @@ operator.{name,employee_no,id}
 **核心组件**：
 - `backend/api/cluster.py`：`/config`、`/report`、`/heartbeat`、`/slaves`、`/health`、`/boxes`
 - `backend/services/cluster_collector.py::ClusterCollector`：`register_slave`、`receive_station_report`、`report_to_master`、`_check_and_dispatch`、`_heartbeat_sender_loop`（v2.7.8 新增）、`_timeout_checker`
-- `backend/services/mes_hooks.py::_dispatch_to_cluster`：cycle 结束时根据 role 分发（master→本地 receive_station_report，slave→report_to_master）
+- `backend/services/mes_hooks.py::_cluster_dispatch`：cycle 结束时根据 role 分发（master→本地 receive_station_report，slave→report_to_master）。注意：早期版本/文档里常写作 `_dispatch_to_cluster`，实际函数名是 `_cluster_dispatch`，grep 时别搜错。
 - 前端 `frontend/src/views/MES/ClusterPanel.vue`：配置页 + 已连接副机列表 + 待汇总/最近完成 + 明细弹窗
 - 前端 `frontend/src/api/cluster.js`：封装 5 个 cluster API
 
@@ -375,3 +375,53 @@ operator.{name,employee_no,id}
 - 3 次全失败才 `raise`，上层 `conn.status='error'` 逻辑不变
 
 **test_connection 没动**：用户点测试按钮是短操作，不加重试避免卡住 UI。如果稳态连接线程已经持有端口，测试按钮会失败——这是**预期行为**，未来若要在「已连接」状态禁用测试按钮需改前端。
+
+## 集群 + MES 联调的 7 个坑（v2.7.9 大修）
+
+上一版（v2.7.8）只改了副机心跳和 `expected_stations` 前缀匹配，**真正让集群汇总从头到尾跑通是 v2.7.9 这一轮**。排查时按这 7 点逐条对照：
+
+### 1. `mes_hooks` 的 `cycle_end / session_end` 外层 except 曾静默吞错
+- 旧代码：`except Exception as e: print(f"... {e}")`，丢掉 traceback。
+- 结果：`build_context_from_cycle` 里一个小 `AttributeError`（比如 `DetectionCycle` 没 `completed_steps`、`StepRecord` 没 `step_index`）就能让 cycle_end 外部推送分支**整段静默返回**，前端集群汇总一直空白。
+- v2.7.9：两处 `except` 都加 `import traceback; print(f"{e}\n{traceback.format_exc()}", flush=True)`。**新写 except 也要默认带 traceback**。
+
+### 2. `MESGateway.build_context_from_cycle` 模型字段读法要兜底
+- 历史上 `DetectionCycle` 没有 `completed_steps / total_steps`，`StepRecord` 没有 `step_index / duration_seconds / is_good`，但 context 构建硬读。
+- v2.7.9：所有字段改走 `getattr(x, 'new_name', None) or getattr(x, 'old_name', None)` + 合理 fallback（`total_steps` 从 `step_sequence` 列表长度推算，`is_good` 从 `is_valid` 回退）。
+- 加字段时**优先 getattr**，避免一次改表就把 MES 推送炸掉。
+
+### 3. `resolve_rebind` 错 import：`backend.database` vs `backend.db.database`
+- 实际 SessionLocal 在 `backend.db.database`，`backend.database` 不存在。触发手动重绑那一步（`action == "continue"`）才会崩，隐蔽度高。
+- v2.7.9 修正。新增 import 时一律走 `backend.db.database`。
+
+### 4. SQLite `database is locked` — WAL + busy_timeout + commit 重试三件套
+后台 `_timeout_checker` 批量更新 `status='timeout'` 时会和前台 `receive_station_report` 抢写锁，原始代码直接 500。
+
+- **`backend/db/database.py`**：`connect_args={"timeout": 15}` + `@event.listens_for(engine, "connect")` 设置 `PRAGMA journal_mode=WAL; synchronous=NORMAL; busy_timeout=15000`。老 DB 文件也要一次性 `PRAGMA journal_mode=WAL`，WAL 是持久属性。
+- **`cluster_collector.py`** 顶部统一 `_commit_with_retry(db, ctx, max_retries=6, base_sleep=0.2)`：只对 `OperationalError` 且 msg 含 `locked/busy` 做指数退避（0.2s→1.2s，累计约 4.2s），其他异常直接抛。
+- 所有 cluster 写路径 commit 都必须用它：`receive_station_report`、`_check_and_dispatch`、`_push_timeout_result`、`_timeout_checker` 的 timeout 标记。
+
+### 5. `_timeout_checker` 单 session 长事务 → 改成每箱独立 session
+- 旧写法：一个 session 列出所有箱、循环里写 → 一次 checker 轮询可以把上报线程全顶住。
+- v2.7.9：probe session 只读列箱子后立刻 close；循环里每个 box 新开一个 SessionLocal，单箱处理完 close。占锁时间缩到单箱粒度。
+
+### 6. 并发竞态：BoxAggregation / BoxSummary 的 UNIQUE 冲突
+同一箱号被 4 路（B-0/B-1 + A + C）并发上报时出现两种 500：
+- `UNIQUE(box_serial, station_id)`：两个线程都查 existing=None 都 INSERT。
+- `UNIQUE(box_serial)` on `box_summaries`：两个线程都进"全齐分支"都 INSERT summary。
+
+v2.7.9 两层防线：
+1. **进程内 per-box 锁**（`_acquire_box_lock` / `_release_box_lock` + dict + guard lock）：`receive_station_report` 整段包在 `with self._acquire_box_lock(box_serial):` 里，同箱号完全串行，不同箱号照样并发。推送/超时成功后 `_release_box_lock` 清 dict，避免无界增长。
+2. **`IntegrityError` 捕获 + 回滚 + 重查 UPDATE**：万一有跨进程或极端场景，`receive_station_report` / `_check_and_dispatch` 都能兜底。
+3. `_check_and_dispatch` 里额外加 `if summary.status in ('pushed','pushed_timeout'): return {"reason":"already_pushed_by_peer"}`，防止极端排序下重复推送 MES `box_complete`。
+
+### 7. 调试接口 `/api/v1/debug/test_cluster_flow`
+真正的端到端验证手段：传入一个已落库的 `cycle_id`，服务端按正式路径跑 `build_context_from_cycle → receive_station_report`，返回 `steps` 列表指明哪一步挂了。对应实现写在 `hotfix.py`，客户端不会看到这个接口（仅调试）。排查集群问题时**优先走它**，比改代码加 print 再等扫码快得多。
+
+### 压测脚本（并发 + 竞态）
+真实生产环境最好用类似脚本先自测再发版：
+- 4 路并发同箱上报 → summary 必须恰好 1 条、status=pushed。
+- 同 station_id 重复上报 + 全量工位并发（7+ 请求）→ 所有 HTTP 200，`dispatched:true` 恰好 1 次；后续响应应该出现 `already_pushed_by_peer`。
+- 压测时看后端日志必须**没有** `UNIQUE constraint failed` 和 `database is locked`。
+
+相关文件：`backend/services/cluster_collector.py`、`backend/services/mes_hooks.py`、`backend/services/mes_gateway.py`、`backend/db/database.py`、`backend/hotfix.py`。

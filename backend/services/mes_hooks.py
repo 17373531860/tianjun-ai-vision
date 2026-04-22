@@ -216,7 +216,10 @@ class MESHookManager:
                 "inspection_count": wp.inspection_count,
                 "order_id": wp.order_id,
             }
-        except Exception:
+        except Exception as e:
+            # 轮询路径：若工件真的存在却查失败，说明 DB/ORM 有问题，要能看到
+            print(f"[MES] get_current_workpiece(ch{channel_id}, wp={wp_id}) 失败: {e}",
+                  flush=True)
             return None
         finally:
             db.close()
@@ -229,7 +232,9 @@ class MESHookManager:
         db = SessionLocal()
         try:
             return self._work_order_svc.get_order_summary(db, order_id)
-        except Exception:
+        except Exception as e:
+            print(f"[MES] get_active_order(ch{channel_id}, order={order_id}) 失败: {e}",
+                  flush=True)
             return None
         finally:
             db.close()
@@ -301,7 +306,7 @@ class MESHookManager:
             return
         if action == "continue":
             wp_id = prompt["workpiece_id"]
-            from backend.database import SessionLocal
+            from backend.db.database import SessionLocal
             db = SessionLocal()
             try:
                 from backend.models.mes_models import Workpiece
@@ -428,6 +433,8 @@ class MESHookManager:
         """Cycle 结束: 更新工件状态, 记录缺陷, 更新工单"""
         wp_id = self._inspecting_workpiece.pop(channel_id, None)
         if not wp_id:
+            print(f"[MES] Cycle#{cycle_id} ch{channel_id} 结束但未绑定工件 "
+                  f"(_inspecting_workpiece 为空) → 跳过 MES/集群分发", flush=True)
             return
 
         self._workpiece_svc.set_result(db, wp_id, is_good, cycle_id)
@@ -471,6 +478,17 @@ class MESHookManager:
         print(f"[MES] Cycle#{cycle_id} 结束: {'OK' if is_good else 'NG'} (工件#{wp_id})",
               flush=True)
 
+        # v2.7.9: 在调集群分发之前，先 commit 释放 SQLite 写锁。
+        # 否则这个 session 还持有前面 set_result/auto_record/increment_completed 拿到的写锁，
+        # 紧接着 receive_station_report() 在新 session 里写 box_aggregations 会 locked 30s+ 重试失败。
+        try:
+            db.commit()
+        except Exception as e:
+            import traceback
+            print(f"[MES] Cycle#{cycle_id} 预提交失败（释放写锁）: {e}\n{traceback.format_exc()}",
+                  flush=True)
+            db.rollback()
+
         # 外部 MES 推送 + 集群汇总
         try:
             from backend.services.mes_gateway import get_mes_gateway
@@ -494,7 +512,9 @@ class MESHookManager:
             if not skip_cycle_push:
                 gw.dispatch("cycle_end", ctx, channel_id)
         except Exception as e:
-            print(f"[MES] 外部推送(cycle_end)失败: {e}", flush=True)
+            import traceback
+            print(f"[MES] 外部推送(cycle_end)失败: {e}\n{traceback.format_exc()}",
+                  flush=True)
 
         rebind = self._get_rebind_mode(channel_id)
         if rebind == "auto_rebind" and not is_good:
@@ -524,22 +544,36 @@ class MESHookManager:
             config = collector.get_config(db)
 
             if not config.get("enabled"):
+                print(f"[Cluster/Dispatch] ch{channel_id} 跳过: 集群未启用", flush=True)
                 return False
 
             box_serial = cycle_context.get("workpiece", {}).get("serial_no")
             if not box_serial:
+                wp_preview = cycle_context.get("workpiece", {})
+                print(f"[Cluster/Dispatch] ch{channel_id} 跳过: cycle_context 里没有 workpiece.serial_no "
+                      f"(workpiece={wp_preview})", flush=True)
                 return False
 
             station_id = config["station_id"]
             role = config["role"]
             sync_mode = config.get("sync_mode", "wait_all")
 
-            from backend.api.channel_manager import channel_manager
-            if channel_manager.channel_count > 1:
-                station_id = f"{station_id}-{channel_id}"
+            # 优先使用"通道→站点"映射表；命中则直接采用映射值（不再拼后缀），
+            # 这样多视觉通道可以自由指定各自归属哪个站点（含两路都归到同一站点的场景）。
+            ch_map = config.get("channel_station_map") or {}
+            mapped = ch_map.get(str(channel_id))
+            if mapped:
+                station_id = mapped
+            else:
+                from backend.api.channel_manager import channel_manager
+                if channel_manager.channel_count > 1:
+                    station_id = f"{station_id}-{channel_id}"
+
+            print(f"[Cluster/Dispatch] ch{channel_id} role={role} station={station_id} "
+                  f"serial={box_serial} is_good={is_good} sync={sync_mode}", flush=True)
 
             if role == "master":
-                collector.receive_station_report(
+                result = collector.receive_station_report(
                     station_id=station_id,
                     box_serial=box_serial,
                     cycle_context=cycle_context,
@@ -548,21 +582,29 @@ class MESHookManager:
                     is_good=is_good,
                     event_name=event_name,
                 )
+                print(f"[Cluster/Dispatch] master 本地入库结果: {result}", flush=True)
                 return sync_mode == "wait_all"
             elif role == "slave":
                 master_url = config.get("master_url")
-                if master_url:
-                    collector.report_to_master(
-                        cycle_context=cycle_context,
-                        box_serial=box_serial,
-                        station_id=station_id,
-                        master_url=master_url,
-                        is_good=is_good,
-                        event_name=event_name,
-                    )
+                if not master_url:
+                    print(f"[Cluster/Dispatch] slave 跳过上报: master_url 为空", flush=True)
+                    return False
+                result = collector.report_to_master(
+                    cycle_context=cycle_context,
+                    box_serial=box_serial,
+                    station_id=station_id,
+                    master_url=master_url,
+                    is_good=is_good,
+                    event_name=event_name,
+                )
+                print(f"[Cluster/Dispatch] slave 上报 {master_url} 结果: {result}", flush=True)
                 return sync_mode == "wait_all"
+            else:
+                print(f"[Cluster/Dispatch] ch{channel_id} 未识别 role={role}，跳过", flush=True)
         except Exception as e:
-            print(f"[MES] 集群分发失败: {e}", flush=True)
+            import traceback
+            print(f"[Cluster/Dispatch] ch{channel_id} 集群分发异常: {e}\n{traceback.format_exc()}",
+                  flush=True)
         return False
 
     def _handle_session_start(self, db, channel_id: int, session_id: int,
@@ -594,7 +636,9 @@ class MESHookManager:
             ctx = gw.build_context_from_session(db, session_id)
             gw.dispatch("session_end", ctx, channel_id)
         except Exception as e:
-            print(f"[MES] 外部推送(session_end)失败: {e}", flush=True)
+            import traceback
+            print(f"[MES] 外部推送(session_end)失败: {e}\n{traceback.format_exc()}",
+                  flush=True)
 
 
 # 全局单例

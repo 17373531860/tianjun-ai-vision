@@ -25,6 +25,7 @@ class ClusterConfigUpdate(BaseModel):
     timeout_sec: Optional[int] = None
     timeout_push: Optional[bool] = None
     enabled: Optional[bool] = None
+    channel_station_map: Optional[dict] = None
 
 
 class StationReport(BaseModel):
@@ -142,6 +143,7 @@ def get_box_detail(box_serial: str):
                 "event_name": r.event_name,
                 "status": r.status,
                 "received_at": r.received_at.isoformat() if r.received_at else None,
+                "cycle_context": r.cycle_context or {},
             } for r in records],
             "summary": {
                 "overall_result": summary.overall_result,
@@ -173,6 +175,86 @@ def list_connected_slaves():
     collector = get_cluster_collector()
     slaves = collector.get_connected_slaves()
     return {"slaves": slaves, "count": len(slaves)}
+
+
+# ---- 删除记录 ----
+
+@router.delete("/boxes/{box_serial}")
+def delete_box(box_serial: str):
+    """删除单个箱号的所有 BoxAggregation + BoxSummary 记录。
+    用于前端集群汇总页"删除"按钮，清理测试/异常数据。
+    """
+    db = SessionLocal()
+    try:
+        n_agg = (db.query(BoxAggregation)
+                 .filter(BoxAggregation.box_serial == box_serial)
+                 .delete(synchronize_session=False))
+        n_sum = (db.query(BoxSummary)
+                 .filter(BoxSummary.box_serial == box_serial)
+                 .delete(synchronize_session=False))
+        db.commit()
+        # 顺便释放进程内 box 锁
+        try:
+            get_cluster_collector()._release_box_lock(box_serial)
+        except Exception:
+            pass
+        return {"deleted": True, "box_serial": box_serial,
+                "aggregations": n_agg, "summaries": n_sum}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"删除失败: {e}")
+    finally:
+        db.close()
+
+
+@router.delete("/boxes")
+def clear_boxes(
+    scope: str = Query("all", pattern="^(all|pending|recent)$"),
+):
+    """批量清空集群箱子记录。scope:
+    - all: 清 BoxAggregation + BoxSummary 全表
+    - pending: 只清 status in (received) 的 BoxAggregation（未 dispatch 的待汇总）
+    - recent: 只清已 pushed/timeout 的 BoxSummary 及其对应 aggregation
+    """
+    db = SessionLocal()
+    try:
+        if scope == "all":
+            n_agg = db.query(BoxAggregation).delete(synchronize_session=False)
+            n_sum = db.query(BoxSummary).delete(synchronize_session=False)
+        elif scope == "pending":
+            pending_serials = [
+                row[0] for row in
+                db.query(BoxAggregation.box_serial)
+                .filter(BoxAggregation.status == "received")
+                .distinct().all()
+            ]
+            n_agg = (db.query(BoxAggregation)
+                     .filter(BoxAggregation.box_serial.in_(pending_serials),
+                             BoxAggregation.status == "received")
+                     .delete(synchronize_session=False)) if pending_serials else 0
+            n_sum = 0
+        else:  # recent
+            recent_serials = [
+                row[0] for row in
+                db.query(BoxSummary.box_serial)
+                .filter(BoxSummary.status.in_(
+                    ["pushed", "pushed_timeout", "timeout"]))
+                .all()
+            ]
+            n_sum = (db.query(BoxSummary)
+                     .filter(BoxSummary.box_serial.in_(recent_serials))
+                     .delete(synchronize_session=False)) if recent_serials else 0
+            n_agg = (db.query(BoxAggregation)
+                     .filter(BoxAggregation.box_serial.in_(recent_serials))
+                     .delete(synchronize_session=False)) if recent_serials else 0
+        db.commit()
+        return {"deleted": True, "scope": scope,
+                "aggregations": n_agg, "summaries": n_sum}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"清空失败: {e}")
+    finally:
+        db.close()
 
 
 # ---- 健康检查 ----

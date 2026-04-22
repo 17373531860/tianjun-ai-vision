@@ -39,7 +39,7 @@
         </div>
 
         <div v-if="config.role === 'master'">
-          <div class="text-xs text-gray-400 mb-1">汇总需要的工位 <span class="text-gray-600">（多通道填 B-0, B-1）</span></div>
+          <div class="text-xs text-gray-400 mb-1">汇总需要的工位 <span class="text-gray-600">（需要到齐的站点，例如 A、B、C）</span></div>
           <el-select v-model="config.expected_stations" multiple allow-create filterable
                      size="small" class="w-full" placeholder="输入工位标识后回车"
                      @change="saveConfig">
@@ -77,6 +77,46 @@
               </div>
             </div>
             <el-switch v-model="config.timeout_push" size="small" @change="saveConfig" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 本机通道 → 站点映射 -->
+      <div v-if="config.role !== 'standalone'" class="mt-4 pt-4 border-t border-slate-700">
+        <div class="flex items-center justify-between mb-2">
+          <div>
+            <div class="text-sm text-cyan-300 font-medium">本机通道归属的站点</div>
+            <div class="text-xs text-gray-500 mt-0.5">
+              本机开了多个视觉工位（通道）时，每个通道各自上报成哪个站点。
+              留空则默认：单通道用"本机工位标识"；多通道自动拼成 "{标识}-{通道号}"。
+            </div>
+          </div>
+          <el-button size="small" @click="addChannelMapRow">+ 新增一条</el-button>
+        </div>
+
+        <div v-if="channelMapRows.length === 0"
+             class="text-xs text-gray-500 bg-slate-900/40 rounded p-3 text-center">
+          未配置映射，按默认规则上报。如果本机有多通道且希望都归到同一个站点（例如两路视觉都叫站点 B），请新增映射。
+        </div>
+
+        <div v-for="(row, idx) in channelMapRows" :key="idx"
+             class="grid grid-cols-[1fr_1fr_auto] gap-2 mb-2 items-center">
+          <div>
+            <div v-if="idx === 0" class="text-xs text-gray-400 mb-1">通道号</div>
+            <el-input-number v-model="row.channel" :min="0" :precision="0"
+                             size="small" class="!w-full" controls-position="right"
+                             @change="saveChannelMap" />
+          </div>
+          <div>
+            <div v-if="idx === 0" class="text-xs text-gray-400 mb-1">归属站点</div>
+            <el-input v-model="row.station" size="small" placeholder="如 A / B / C"
+                      @blur="saveChannelMap" />
+          </div>
+          <div>
+            <div v-if="idx === 0" class="text-xs text-gray-400 mb-1">&nbsp;</div>
+            <el-button size="small" type="danger" plain @click="removeChannelMapRow(idx)">
+              删除
+            </el-button>
           </div>
         </div>
       </div>
@@ -129,6 +169,9 @@
           <div class="flex gap-2">
             <el-button size="small" type="warning" @click="loadMockData">测试数据</el-button>
             <el-button size="small" @click="loadBoxes">刷新</el-button>
+            <el-button size="small" type="danger" plain
+                       :disabled="pendingBoxes.length === 0"
+                       @click="confirmClearScope('pending')">清空</el-button>
           </div>
         </div>
         <div v-if="pendingBoxes.length === 0" class="text-gray-500 text-sm text-center py-6">
@@ -140,9 +183,13 @@
                @click="showBoxDetail(box.box_serial)">
             <div class="flex items-center justify-between">
               <span class="font-mono text-cyan-200">{{ box.box_serial }}</span>
-              <el-tag :type="box.is_complete ? 'success' : 'warning'" size="small">
-                {{ box.is_complete ? '已齐' : `缺 ${box.missing_stations.join(', ')}` }}
-              </el-tag>
+              <div class="flex items-center gap-1.5">
+                <el-tag :type="box.is_complete ? 'success' : 'warning'" size="small">
+                  {{ box.is_complete ? '已齐' : `缺 ${box.missing_stations.join(', ')}` }}
+                </el-tag>
+                <el-button size="small" text type="danger" class="!px-1.5 !py-0"
+                           @click.stop="confirmDeleteBox(box.box_serial)">删除</el-button>
+              </div>
             </div>
             <div class="text-xs text-gray-400 mt-1">
               已到: {{ box.received_stations.join(', ') || '无' }}
@@ -158,7 +205,12 @@
       <div class="flex-1 bg-slate-800/60 rounded-lg border border-slate-700 p-4">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-cyan-300 font-semibold">最近完成</h3>
-          <span class="text-xs text-gray-500">共 {{ recentTotal }} 条</span>
+          <div class="flex items-center gap-3">
+            <span class="text-xs text-gray-500">共 {{ recentTotal }} 条</span>
+            <el-button size="small" type="danger" plain
+                       :disabled="recentSummaries.length === 0"
+                       @click="confirmClearScope('recent')">清空</el-button>
+          </div>
         </div>
         <div v-if="recentSummaries.length === 0" class="text-gray-500 text-sm text-center py-6">
           暂无完成记录
@@ -169,13 +221,15 @@
                @click="showBoxDetail(s.box_serial)">
             <div class="flex items-center justify-between">
               <span class="font-mono text-cyan-200">{{ s.box_serial }}</span>
-              <div class="flex gap-1">
+              <div class="flex items-center gap-1.5">
                 <el-tag :type="s.overall_result === 'OK' ? 'success' : s.overall_result === 'TIMEOUT' ? 'warning' : 'danger'" size="small">
                   {{ s.overall_result }}
                 </el-tag>
                 <el-tag :type="s.status === 'pushed' || s.status === 'pushed_timeout' ? 'success' : s.status === 'timeout' ? 'warning' : 'info'" size="small">
                   {{ {pushed: '已推送', pushed_timeout: '超时已推送', timeout: '超时未推送', complete: '已完成'}[s.status] || s.status }}
                 </el-tag>
+                <el-button size="small" text type="danger" class="!px-1.5 !py-0"
+                           @click.stop="confirmDeleteBox(s.box_serial)">删除</el-button>
               </div>
             </div>
             <div class="text-xs text-gray-400 mt-1">
@@ -213,15 +267,19 @@
       <div v-else-if="detailData">
         <div class="flex items-center justify-between mb-4">
           <div class="text-lg font-mono text-cyan-200">{{ detailData.box_serial }}</div>
-          <div class="flex gap-2" v-if="detailData.summary">
-            <el-tag :type="detailData.summary.overall_result === 'OK' ? 'success' : detailData.summary.overall_result === 'TIMEOUT' ? 'warning' : 'danger'" size="default">
-              {{ detailData.summary.overall_result }}
-            </el-tag>
-            <el-tag :type="detailData.summary.status === 'pushed' || detailData.summary.status === 'pushed_timeout' ? 'success' : detailData.summary.status === 'timeout' ? 'warning' : 'info'" size="default">
-              {{ {pushed: '已推送', pushed_timeout: '超时已推送', timeout: '超时未推送', complete: '已完成'}[detailData.summary.status] || detailData.summary.status }}
-            </el-tag>
+          <div class="flex items-center gap-2">
+            <template v-if="detailData.summary">
+              <el-tag :type="detailData.summary.overall_result === 'OK' ? 'success' : detailData.summary.overall_result === 'TIMEOUT' ? 'warning' : 'danger'" size="default">
+                {{ detailData.summary.overall_result }}
+              </el-tag>
+              <el-tag :type="detailData.summary.status === 'pushed' || detailData.summary.status === 'pushed_timeout' ? 'success' : detailData.summary.status === 'timeout' ? 'warning' : 'info'" size="default">
+                {{ {pushed: '已推送', pushed_timeout: '超时已推送', timeout: '超时未推送', complete: '已完成'}[detailData.summary.status] || detailData.summary.status }}
+              </el-tag>
+            </template>
+            <el-tag v-else type="warning" size="default">待汇总</el-tag>
+            <el-button size="small" type="danger" plain
+                       @click="confirmDeleteBox(detailData.box_serial)">删除记录</el-button>
           </div>
-          <el-tag v-else type="warning" size="default">待汇总</el-tag>
         </div>
 
         <div v-if="detailData.summary?.pushed_at" class="text-xs text-gray-400 mb-4">
@@ -237,18 +295,44 @@
             <div class="flex items-center justify-between mb-1">
               <div class="flex items-center gap-2">
                 <span class="font-semibold">工位 {{ st.station_id }}</span>
-                <span v-if="st.channel_id != null" class="text-xs text-gray-500">通道 {{ st.channel_id }}</span>
+                <span v-if="getSubReports(st).length > 1" class="text-xs text-gray-500">
+                  · {{ getSubReports(st).length }} 路汇总
+                </span>
+                <span v-else-if="st.channel_id != null" class="text-xs text-gray-500">通道 {{ st.channel_id }}</span>
+                <span v-if="describeStationKind(st)" class="text-xs text-gray-500">· {{ describeStationKind(st) }}</span>
               </div>
-              <div class="flex items-center gap-2">
-                <el-tag :type="st.is_good ? 'success' : 'danger'" size="small">
-                  {{ st.is_good ? 'OK' : 'NG' }}
-                </el-tag>
-                <el-tag v-if="st.event_name" type="info" size="small">{{ st.event_name }}</el-tag>
-              </div>
+              <el-tag :type="st.is_good ? 'success' : 'danger'" size="small">
+                {{ st.is_good ? 'OK' : 'NG' }}
+              </el-tag>
             </div>
-            <div class="text-xs text-gray-400 space-y-0.5">
+
+            <template v-if="getSubReports(st).length > 1">
+              <div class="text-xs text-gray-500 mb-1">合并规则: 任一路 NG 即整站 NG</div>
+              <div class="space-y-1.5 mt-1.5 pl-2 border-l-2 border-slate-600/60">
+                <div v-for="(sub, i) in getSubReports(st)" :key="i" class="text-sm">
+                  <div class="flex items-center gap-2 mb-0.5">
+                    <span class="text-xs text-gray-400">
+                      通道 {{ sub.channel_id ?? '-' }}
+                    </span>
+                    <el-tag :type="sub.is_good ? 'success' : 'danger'" size="small">
+                      {{ sub.is_good ? 'OK' : 'NG' }}
+                    </el-tag>
+                  </div>
+                  <div :class="sub.is_good ? 'text-gray-300' : 'text-red-300'">
+                    {{ describeSubReport(sub) || (sub.is_good ? '通过' : '未通过') }}
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <div v-else-if="describeStationDetail(st)" class="text-sm mb-1"
+                 :class="st.is_good ? 'text-gray-200' : 'text-red-300'">
+              {{ describeStationDetail(st) }}
+            </div>
+
+            <div class="text-xs text-gray-400 space-y-0.5 mt-1">
               <div v-if="st.source">来源: {{ st.source }}</div>
-              <div>状态: {{ st.status }} | 时间: {{ formatTime(st.received_at) }}</div>
+              <div>最后送达 · {{ formatTime(st.received_at) }}</div>
             </div>
           </div>
         </div>
@@ -259,11 +343,12 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getClusterConfig, updateClusterConfig,
   getClusterBoxes, getBoxDetail, clusterHealth,
   sendHeartbeat, getConnectedSlaves,
+  deleteBox, clearBoxes,
 } from '@/api/cluster'
 
 const config = ref({
@@ -275,7 +360,33 @@ const config = ref({
   timeout_sec: 300,
   timeout_push: false,
   enabled: false,
+  channel_station_map: {},
 })
+
+// 本机多通道场景下，每个视觉通道各自归属哪个站点。
+// 例如机器B的两路视觉都想合并到站点B时：{"0":"B","1":"B"}；
+// 两路视觉分别代表B、C两个站点时：{"0":"B","1":"C"}。
+// 数据本身是字典，为方便编辑，在页面里用数组行形式展开。
+const channelMapRows = ref([])
+
+const addChannelMapRow = () => {
+  channelMapRows.value.push({ channel: '', station: '' })
+}
+const removeChannelMapRow = (idx) => {
+  channelMapRows.value.splice(idx, 1)
+  saveChannelMap()
+}
+const saveChannelMap = () => {
+  const map = {}
+  for (const row of channelMapRows.value) {
+    const ch = String(row.channel ?? '').trim()
+    const st = String(row.station ?? '').trim()
+    if (ch === '' || st === '') continue
+    map[ch] = st
+  }
+  config.value.channel_station_map = map
+  saveConfig()
+}
 
 const pendingBoxes = ref([])
 const recentSummaries = ref([])
@@ -291,7 +402,19 @@ const detailData = ref(null)
 const detailLoading = ref(false)
 const connectedSlaves = ref([])
 
-const formatTime = (t) => t ? t.replace('T', ' ').substring(0, 19) : '-'
+// 后端返回的是 naive UTC ISO（server_default=func.now()）。
+// 直接字符串切片会显示 UTC，比北京时间晚 8 小时。
+// 统一按 UTC 解析 → 浏览器本地时区显示（国内=北京时间）。
+const formatTime = (t) => {
+  if (!t) return '-'
+  const hasTz = /Z$|[+-]\d{2}:?\d{2}$/.test(t)
+  const s = hasTz ? t : (String(t).replace(' ', 'T') + 'Z')
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return t
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} `
+    + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
 
 const formatDuration = (seconds) => {
   if (!seconds || seconds < 60) return `${seconds || 0}秒`
@@ -299,6 +422,78 @@ const formatDuration = (seconds) => {
   const h = Math.floor(seconds / 3600)
   const m = Math.floor((seconds % 3600) / 60)
   return `${h}时${m}分`
+}
+
+// 同站点多路上报时, 后端会把每路快照塞到 cycle_context.sub_reports.
+// 单路上报时此数组不存在, 返回空数组, 由调用方决定回退到旧渲染逻辑.
+const getSubReports = (st) => {
+  const arr = st?.cycle_context?.sub_reports
+  return Array.isArray(arr) ? arr : []
+}
+
+// 把单路 sub_report 渲染成业务可读文字
+const describeSubReport = (sub) => {
+  if (!sub) return ''
+  if (sub.device_role === 'weight' || sub.device_role === 'sensor') {
+    const data = sub.device_data || {}
+    const v = data.weight ?? data._raw_value ?? data.raw
+    if (v != null) {
+      return sub.device_role === 'weight' ? `重量 ${v} kg` : `读数 ${v}`
+    }
+  }
+  if (!sub.is_good) {
+    if (sub.ng_reason) return `缺少: ${sub.ng_reason}`
+    if (sub.event_name && sub.event_name !== 'ng') return `原因: ${sub.event_name}`
+    return '未通过'
+  }
+  if (sub.duration != null) return `耗时 ${Number(sub.duration).toFixed(2)} 秒`
+  return ''
+}
+
+// 根据 cycle_context 判断工位类别，给出一句话标签（"视觉检测" / "称重" 等）
+const describeStationKind = (st) => {
+  const ctx = st?.cycle_context || {}
+  const role = ctx.device_role
+  if (role === 'weight') return '称重'
+  if (role === 'sensor') return '传感器'
+  if (role) return role
+  if (Array.isArray(ctx.steps) || ctx.cycle) return '视觉检测'
+  return ''
+}
+
+// 根据 cycle_context 拼一段业务可读的详情：
+//   - 视觉 NG：列出缺的步骤标签（ng_reason）
+//   - 称重  ：显示重量数值（带单位）、越限时附原因
+//   - 视觉 OK：不啰嗦，空
+const describeStationDetail = (st) => {
+  const ctx = st?.cycle_context || {}
+  const role = ctx.device_role
+
+  if (role === 'weight' || role === 'sensor') {
+    const data = ctx.device_data || {}
+    const weight = data.weight ?? data._raw_value
+    const parts = []
+    if (weight != null) {
+      parts.push(role === 'weight' ? `重量 ${weight} kg` : `读数 ${weight}`)
+    } else if (data.raw) {
+      parts.push(`读数 ${data.raw}`)
+    }
+    if (!st.is_good && st.event_name && st.event_name !== 'ok') {
+      parts.push(`判定: ${st.event_name}`)
+    }
+    return parts.join(' · ')
+  }
+
+  if (!st.is_good) {
+    const reason = ctx.cycle?.ng_reason
+    if (reason) return `缺少: ${reason}`
+    if (st.event_name && st.event_name !== 'ng') return `原因: ${st.event_name}`
+    return '未通过'
+  }
+
+  const dur = ctx.cycle?.duration
+  if (dur != null) return `耗时 ${Number(dur).toFixed(2)} 秒`
+  return ''
 }
 
 const now = () => new Date().toISOString()
@@ -356,10 +551,14 @@ const showMockDetail = (serial) => {
   detailData.value = {
     box_serial: serial,
     stations: [
-      { station_id: 'A', channel_id: null, is_good: true, event_name: 'ok', status: 'dispatched', source: '192.168.0.10:8001', received_at: '2026-04-13T14:30:12' },
-      { station_id: 'B', channel_id: 0, is_good: true, event_name: 'ok', status: 'dispatched', source: '192.168.0.20:8001', received_at: '2026-04-13T14:30:18' },
-      { station_id: 'B', channel_id: 1, is_good: false, event_name: 'missing_part', status: 'dispatched', source: '192.168.0.20:8001', received_at: '2026-04-13T14:30:20' },
-      { station_id: 'C', channel_id: null, is_good: true, event_name: 'weight_ok', status: 'dispatched', source: 'serial:/dev/ttyUSB0:', received_at: '2026-04-13T14:30:25' },
+      { station_id: 'A', channel_id: null, is_good: true, event_name: 'ok', status: 'dispatched', source: '192.168.0.10:8001', received_at: '2026-04-13T14:30:12',
+        cycle_context: { cycle: { result: 'OK', duration: 18.2 } } },
+      { station_id: 'B', channel_id: 0, is_good: true, event_name: 'ok', status: 'dispatched', source: '192.168.0.20:8001', received_at: '2026-04-13T14:30:18',
+        cycle_context: { cycle: { result: 'OK', duration: 22.5 } } },
+      { station_id: 'B', channel_id: 1, is_good: false, event_name: 'missing_part', status: 'dispatched', source: '192.168.0.20:8001', received_at: '2026-04-13T14:30:20',
+        cycle_context: { cycle: { result: 'NG', ng_reason: '线槽: 0/1, 侧板: 1/2' } } },
+      { station_id: 'C', channel_id: null, is_good: true, event_name: 'weight_ok', status: 'dispatched', source: 'tcp:127.0.0.1:9001', received_at: '2026-04-13T14:30:25',
+        cycle_context: { device_role: 'weight', device_name: '1111', device_data: { weight: 70.0 } } },
     ],
     summary: {
       overall_result: serial.includes('088') ? 'NG' : 'OK',
@@ -373,6 +572,10 @@ const loadConfig = async () => {
   try {
     const res = await getClusterConfig()
     config.value = { ...config.value, ...res.data }
+    const map = config.value.channel_station_map || {}
+    channelMapRows.value = Object.keys(map)
+      .sort((a, b) => Number(a) - Number(b))
+      .map(k => ({ channel: k, station: map[k] }))
   } catch (e) {
     ElMessage.error('加载集群配置失败: ' + (e.response?.data?.detail || e.message || '网络错误'))
   }
@@ -403,11 +606,11 @@ const loadBoxes = async () => {
 }
 
 const showBoxDetail = async (boxSerial) => {
-  const isMock = pendingBoxes.value.some(b => b.box_serial === boxSerial && b.box_serial.startsWith('SN-'))
-    && !pendingBoxes.value._fromServer
-  const isMockRecent = recentSummaries.value.some(s => s.box_serial === boxSerial && s.box_serial.startsWith('SN-'))
-    && !recentSummaries.value._fromServer
-  if (isMock || isMockRecent) {
+  // "测试数据"按钮注入的 mock 条目固定用 SN-2026xxxx-xxx 这种日期式长串,
+  // 真实扫码流程里的 box_serial 是用户自定义的业务编号(例如 SN-0017),
+  // 之前用 startsWith('SN-') 判定会把真数据也当成 mock → 弹出假明细.
+  const isMockSerial = (s) => typeof s === 'string' && /^SN-2026\d{4}-\d{3}$/.test(s)
+  if (isMockSerial(boxSerial)) {
     showMockDetail(boxSerial)
     return
   }
@@ -423,6 +626,59 @@ const showBoxDetail = async (boxSerial) => {
     showDetail.value = false
   } finally {
     detailLoading.value = false
+  }
+}
+
+const confirmDeleteBox = async (boxSerial) => {
+  // 前端 Mock 条目（box_serial 以 SN-2026 开头且未来自服务器）直接本地清掉，不发后端
+  const inMockPending = pendingBoxes.value.some(b =>
+    b.box_serial === boxSerial && boxSerial.startsWith('SN-2026'))
+  const inMockRecent = recentSummaries.value.some(s =>
+    s.box_serial === boxSerial && boxSerial.startsWith('SN-2026'))
+  if (inMockPending || inMockRecent) {
+    pendingBoxes.value = pendingBoxes.value.filter(b => b.box_serial !== boxSerial)
+    recentSummaries.value = recentSummaries.value.filter(s => s.box_serial !== boxSerial)
+    recentTotal.value = Math.max(0, recentTotal.value - 1)
+    ElMessage.success(`已移除测试数据 ${boxSerial}`)
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除目标 ${boxSerial} 的所有记录吗？此操作不可恢复。`,
+      '删除确认',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger' }
+    )
+  } catch { return }
+  try {
+    const res = await deleteBox(boxSerial)
+    ElMessage.success(`已删除 ${boxSerial}（工位记录 ${res.data.aggregations}、汇总 ${res.data.summaries}）`)
+    await loadBoxes()
+    if (showDetail.value && detailData.value?.box_serial === boxSerial) {
+      showDetail.value = false
+    }
+  } catch (e) {
+    ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+const confirmClearScope = async (scope) => {
+  const text = scope === 'pending' ? '所有待汇总目标' : '所有已完成记录'
+  try {
+    await ElMessageBox.confirm(
+      `确定要清空${text}吗？此操作不可恢复。`,
+      '批量清空',
+      { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger' }
+    )
+  } catch { return }
+  try {
+    const res = await clearBoxes(scope)
+    ElMessage.success(`已清空${text}（工位记录 ${res.data.aggregations}、汇总 ${res.data.summaries}）`)
+    recentPage.value = 1
+    await loadBoxes()
+  } catch (e) {
+    ElMessage.error('清空失败: ' + (e.response?.data?.detail || e.message))
   }
 }
 

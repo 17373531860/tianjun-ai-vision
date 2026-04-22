@@ -30,6 +30,7 @@ class DeviceCreate(BaseModel):
     parse_config: Optional[dict] = None
     station_id: Optional[str] = None
     channel_id: Optional[int] = None
+    pairing_group: Optional[str] = None
     data_target: str = "cluster"
     validation_rules: Optional[dict] = None
     enabled: bool = True
@@ -56,6 +57,7 @@ class DeviceUpdate(BaseModel):
     parse_config: Optional[dict] = None
     station_id: Optional[str] = None
     channel_id: Optional[int] = None
+    pairing_group: Optional[str] = None
     data_target: Optional[str] = None
     validation_rules: Optional[dict] = None
     enabled: Optional[bool] = None
@@ -90,6 +92,7 @@ def _serialize(d):
         "protocol_config": d.protocol_config,
         "parse_mode": d.parse_mode, "parse_config": d.parse_config,
         "station_id": d.station_id, "channel_id": d.channel_id,
+        "pairing_group": getattr(d, "pairing_group", None),
         "data_target": d.data_target,
         "validation_rules": d.validation_rules,
         "enabled": d.enabled,

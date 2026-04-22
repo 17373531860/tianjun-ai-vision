@@ -15,6 +15,8 @@ import requests
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy.exc import OperationalError, IntegrityError
+
 from backend.db.database import SessionLocal
 from backend.models.mes_models import (
     ClusterConfig, BoxAggregation, BoxSummary,
@@ -22,6 +24,117 @@ from backend.models.mes_models import (
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+def _build_sub_report(ctx: dict, channel_id=None, source_address=None,
+                      is_good=None, event_name=None) -> dict:
+    """从 cycle_context 摘一份"本次上报快照"，用于前端分路展示。
+
+    只保留前端展示需要的关键字段，避免体积膨胀。
+    """
+    if not isinstance(ctx, dict):
+        ctx = {}
+    cycle_block = ctx.get("cycle") if isinstance(ctx.get("cycle"), dict) else {}
+    snap = {
+        "channel_id": channel_id,
+        "source_address": source_address,
+        "is_good": is_good,
+        "event_name": event_name,
+        "ng_reason": cycle_block.get("ng_reason"),
+        "duration": cycle_block.get("duration"),
+        "device_role": ctx.get("device_role"),
+        "device_name": ctx.get("device_name"),
+        "device_data": ctx.get("device_data"),
+    }
+    return {k: v for k, v in snap.items() if v is not None}
+
+
+def _merge_cycle_context(old: dict, new: dict, merged_is_good: bool) -> dict:
+    """合并同一个站点多次上报的 cycle_context。
+
+    适用于一个站点由多路视觉组成的场景（例如机器 B 有两路摄像头都归到站点 B）。
+    合并规则：
+    - 顶层字段：new 覆盖 old（保留最新源地址、时间戳等）
+    - cycle.result / cycle.is_good / 事件等判定：按 merged_is_good 统一覆写
+    - 列表型（defects / images / violations 等）：去重累加
+    - 字典型（extra_fields / device_data 等）：浅合并，new 覆盖 old
+
+    sub_reports 由调用方在外面追加，本函数只做常规深合并。
+    """
+    if not isinstance(old, dict):
+        old = {}
+    if not isinstance(new, dict):
+        new = {}
+    result = dict(old)
+    for k, v in new.items():
+        if isinstance(v, list) and isinstance(result.get(k), list):
+            seen = []
+            for item in list(result[k]) + v:
+                if item not in seen:
+                    seen.append(item)
+            result[k] = seen
+        elif isinstance(v, dict) and isinstance(result.get(k), dict):
+            merged = dict(result[k])
+            for kk, vv in v.items():
+                if isinstance(vv, list) and isinstance(merged.get(kk), list):
+                    seen = []
+                    for item in list(merged[kk]) + vv:
+                        if item not in seen:
+                            seen.append(item)
+                    merged[kk] = seen
+                elif isinstance(vv, dict) and isinstance(merged.get(kk), dict):
+                    sub = dict(merged[kk])
+                    sub.update(vv)
+                    merged[kk] = sub
+                else:
+                    merged[kk] = vv
+            result[k] = merged
+        else:
+            result[k] = v
+
+    cycle_block = result.get("cycle")
+    if isinstance(cycle_block, dict):
+        cycle_block["is_good"] = merged_is_good
+        cycle_block["result"] = "OK" if merged_is_good else "NG"
+    return result
+
+
+def _run_with_retry(db, build_fn, context: str = "write",
+                    max_retries: int = 6, base_sleep: float = 0.2) -> bool:
+    """SQLite 写锁退避重试：每轮重新执行 build_fn(db) 再 commit。
+
+    **关键设计**：SQLite 遇到 locked 时 commit 会抛；如果我们此时 rollback，
+    session 里 add 过的对象也会被清空。之前那版 `_commit_with_retry` 只重试
+    `db.commit()` 就等于 no-op（pending 对象已没了），导致 HTTP 返回 success=True
+    但数据**根本没入库**。所以必须由调用方提供 build_fn，每次重试都重新
+    add/update 对象再 commit。
+
+    - build_fn(db) 负责 add/update 当轮的 ORM 改动（不要在里面 commit）。
+    - 捕获 OperationalError(locked/busy) → rollback + sleep + 重建。
+    - 其他 OperationalError / IntegrityError 直接抛，调用方自己处理。
+    - 成功返回 True，所有重试均 locked 才返回 False。
+    """
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            build_fn(db)
+            db.commit()
+            return True
+        except OperationalError as e:
+            msg = str(e).lower()
+            if "locked" in msg or "busy" in msg:
+                last_err = e
+                db.rollback()
+                logger.warning(
+                    "[Cluster] %s 第 %d 次写锁冲突，回滚重做: %s",
+                    context, attempt + 1, e,
+                )
+                time.sleep(base_sleep * (attempt + 1))
+                continue
+            raise
+    logger.error("[Cluster] %s 重试 %d 次仍失败: %s",
+                 context, max_retries, last_err)
+    return False
 
 
 class ClusterCollector:
@@ -36,6 +149,25 @@ class ClusterCollector:
         self._connected_slaves: dict = {}  # station_id -> {info}
         self._slave_timeout = 20  # 超过20秒没心跳视为离线
         self._heartbeat_interval = 5  # 副机 5 秒发一次心跳
+        # per-box 进程内锁：同箱号的 receive_station_report 串行化，
+        # 避免 MES box_complete 被多线程重复推送、UNIQUE/IntegrityError 冲突。
+        # SQLite 不支持 SELECT FOR UPDATE，这是最稳妥的进程内串行手段。
+        self._box_locks: dict = {}
+        self._box_locks_guard = threading.Lock()
+
+    def _acquire_box_lock(self, box_serial: str) -> threading.Lock:
+        """获取/创建该箱号的串行锁，返回 Lock（未 acquire，由调用方 with 使用）"""
+        with self._box_locks_guard:
+            lk = self._box_locks.get(box_serial)
+            if lk is None:
+                lk = threading.Lock()
+                self._box_locks[box_serial] = lk
+            return lk
+
+    def _release_box_lock(self, box_serial: str):
+        """箱子 pushed/timeout 后清理锁，避免 dict 无界增长"""
+        with self._box_locks_guard:
+            self._box_locks.pop(box_serial, None)
 
     def start(self):
         self._stop_event.clear()
@@ -79,6 +211,7 @@ class ClusterCollector:
                     "sync_mode": "wait_all", "timeout_sec": 300,
                     "timeout_push": False,
                     "enabled": False,
+                    "channel_station_map": {},
                 }
             else:
                 result = {
@@ -90,6 +223,7 @@ class ClusterCollector:
                     "timeout_sec": cfg.timeout_sec,
                     "timeout_push": getattr(cfg, 'timeout_push', False) or False,
                     "enabled": cfg.enabled,
+                    "channel_station_map": getattr(cfg, 'channel_station_map', None) or {},
                 }
             self._config_cache = result
             self._config_ts = now
@@ -144,36 +278,117 @@ class ClusterCollector:
                                cycle_context: dict, source_address: str = "local",
                                channel_id: int = None, is_good: bool = True,
                                event_name: str = None) -> dict:
-        """收到一个工位的数据，存入汇总表并检查是否齐"""
+        """收到一个工位的数据，存入汇总表并检查是否齐。
+
+        并发模型（多个线程同时 POST 同一箱号 / 同一 station_id）：
+        - 用 per-box_serial 进程内锁把整段查+写+_check_and_dispatch 串行化，
+          避免 MES box_complete 被重复推送、BoxSummary/BoxAggregation UNIQUE 冲突、
+          records.status 判定读到脏数据。
+        - 同 station_id 重复 INSERT（跨进程也可能发生，因此保留 IntegrityError 重试）。
+        - SQLite WAL 下仍只允许单写，与 _timeout_checker 会抢锁 → locked，
+          由 _run_with_retry 兜底（每轮回滚后重建 add/update 再 commit）。
+        """
+        with self._acquire_box_lock(box_serial):
+            return self._receive_station_report_locked(
+                station_id, box_serial, cycle_context,
+                source_address, channel_id, is_good, event_name,
+            )
+
+    def _receive_station_report_locked(
+            self, station_id, box_serial, cycle_context,
+            source_address, channel_id, is_good, event_name):
         db = SessionLocal()
         try:
-            existing = (
-                db.query(BoxAggregation)
-                .filter(BoxAggregation.box_serial == box_serial,
-                        BoxAggregation.station_id == station_id)
-                .first()
-            )
-            if existing:
-                existing.cycle_context = cycle_context
-                existing.is_good = is_good
-                existing.event_name = event_name
-                existing.source_address = source_address
-                existing.channel_id = channel_id
-                existing.received_at = datetime.now()
-                existing.status = "received"
-            else:
-                agg = BoxAggregation(
-                    box_serial=box_serial,
-                    station_id=station_id,
-                    source_address=source_address,
-                    channel_id=channel_id,
-                    cycle_context=cycle_context,
-                    is_good=is_good,
-                    event_name=event_name,
-                    status="received",
+            def build_upsert(db):
+                existing = (
+                    db.query(BoxAggregation)
+                    .filter(BoxAggregation.box_serial == box_serial,
+                            BoxAggregation.station_id == station_id)
+                    .first()
                 )
-                db.add(agg)
-            db.commit()
+                if existing:
+                    # v2.8.0 合并语义：同站点多次上报（例如一个站点由多路视觉组成）
+                    # 不再整体覆盖，而是按业务规则合并：
+                    #   - is_good：两路都 OK 才算 OK（有一路 NG 即 NG）
+                    #   - event_name：NG 方优先；都 OK 则保留后到的
+                    #   - cycle_context：深合并，defects / extra_fields 等列表做去重累加
+                    merged_is_good = bool(existing.is_good) and bool(is_good)
+                    if existing.is_good and not is_good:
+                        merged_event = event_name
+                    elif not existing.is_good and is_good:
+                        merged_event = existing.event_name
+                    else:
+                        merged_event = event_name or existing.event_name
+                    merged_context = _merge_cycle_context(
+                        existing.cycle_context, cycle_context, merged_is_good
+                    )
+
+                    # v2.8.1 同站点多路上报时，原来的合并把后到方的 ng_reason 覆盖了先到方,
+                    # 前端只能看到最后那路的 NG 原因 —— 业务上看起来像"另一路凭空消失".
+                    # 这里把每一路的快照都追加到 sub_reports, 前端按 sub_reports 展开显示,
+                    # 既保留原合并字段（兼容老消费方）, 也能让用户看见两路各自的明细.
+                    existing_subs = (merged_context.get("sub_reports")
+                                     if isinstance(merged_context.get("sub_reports"), list)
+                                     else [])
+                    if not existing_subs:
+                        # 首次进入合并 → 把"老的那条"也补成一份 sub_report
+                        old_snap = _build_sub_report(
+                            existing.cycle_context,
+                            channel_id=existing.channel_id,
+                            source_address=existing.source_address,
+                            is_good=existing.is_good,
+                            event_name=existing.event_name,
+                        )
+                        existing_subs = [old_snap]
+                    existing_subs.append(_build_sub_report(
+                        cycle_context,
+                        channel_id=channel_id,
+                        source_address=source_address,
+                        is_good=is_good,
+                        event_name=event_name,
+                    ))
+                    merged_context["sub_reports"] = existing_subs
+
+                    existing.cycle_context = merged_context
+                    existing.is_good = merged_is_good
+                    existing.event_name = merged_event
+                    existing.source_address = source_address
+                    existing.channel_id = channel_id
+                    existing.received_at = datetime.utcnow()
+                    existing.status = "received"
+                else:
+                    db.add(BoxAggregation(
+                        box_serial=box_serial,
+                        station_id=station_id,
+                        source_address=source_address,
+                        channel_id=channel_id,
+                        cycle_context=cycle_context,
+                        is_good=is_good,
+                        event_name=event_name,
+                        status="received",
+                    ))
+
+            # 第一轮：正常 upsert（含 locked 退避重试；重试每轮重建 session 状态）
+            # 若仍遭遇 IntegrityError（跨进程并发下可能出现 UNIQUE(box_serial,
+            # station_id) 冲突），捕获后再跑一轮 → 此时 existing 已可查到 → 走 UPDATE。
+            for uniq_attempt in range(2):
+                try:
+                    if not _run_with_retry(
+                            db, build_upsert,
+                            f"receive_station_report({station_id})"):
+                        return {"success": False,
+                                "error": "database locked after retries"}
+                    break
+                except IntegrityError as ie:
+                    db.rollback()
+                    if uniq_attempt == 0:
+                        logger.warning(
+                            "[Cluster] receive_station_report UNIQUE 竞态，"
+                            "回滚后改走 UPDATE: box=%s station=%s err=%s",
+                            box_serial, station_id, ie,
+                        )
+                        continue
+                    raise
 
             result = self._check_and_dispatch(db, box_serial)
             return {"success": True, "box_serial": box_serial,
@@ -184,7 +399,10 @@ class ClusterCollector:
                          e, traceback.format_exc())
             return {"success": False, "error": str(e)}
         finally:
-            db.close()
+            try:
+                db.close()
+            except Exception:
+                pass
 
     def report_to_master(self, cycle_context: dict, box_serial: str,
                          station_id: str, master_url: str,
@@ -211,6 +429,32 @@ class ClusterCollector:
             logger.error("[Cluster] 上报主机异常: %s", e)
             return {"success": False, "error": str(e)}
 
+    @staticmethod
+    def _match_records_to_expected(expected, records):
+        """把 BoxAggregation 记录按 expected_stations 做前缀匹配分类。
+
+        规则：expected 里的 "B" 视为匹配 received 里 station_id == "B"
+        或以 "B-" 开头的所有条目（主机多通道场景下 mes_hooks 会把
+        station_id 变成 "B-0"/"B-1"，这样 expected 写一个裸 B 就能覆盖）。
+
+        返回 (matched_records, matched_expected_set, missing_expected_list)。
+        matched_records 按匹配顺序去重；未被任何 expected 匹配的 records 不进入结果。
+        """
+        matched_records = []
+        matched_expected = set()
+        seen_ids = set()
+        for e in expected or []:
+            hits = [r for r in records
+                    if r.station_id == e or (r.station_id or "").startswith(f"{e}-")]
+            if hits:
+                matched_expected.add(e)
+                for r in hits:
+                    if id(r) not in seen_ids:
+                        seen_ids.add(id(r))
+                        matched_records.append(r)
+        missing_expected = [e for e in (expected or []) if e not in matched_expected]
+        return matched_records, matched_expected, missing_expected
+
     def _check_and_dispatch(self, db, box_serial: str) -> dict:
         """检查该箱子是否所有工位都到齐，到齐则触发汇总推送"""
         config = self.get_config(db)
@@ -225,8 +469,8 @@ class ClusterCollector:
             .all()
         )
         received_stations = {r.station_id for r in records}
-        expected_set = set(expected)
-        missing = expected_set - received_stations
+        matched_records, matched_expected, missing = \
+            self._match_records_to_expected(expected, records)
 
         if missing:
             return {
@@ -235,64 +479,114 @@ class ClusterCollector:
                 "missing": list(missing),
             }
 
-        overall_good = all(r.is_good for r in records if r.station_id in expected_set)
+        overall_good = all(r.is_good for r in matched_records)
         stations_data = []
-        for r in records:
-            if r.station_id in expected_set:
-                stations_data.append({
-                    "station_id": r.station_id,
-                    "source": r.source_address or "unknown",
-                    "channel_id": r.channel_id,
-                    "is_good": r.is_good,
-                    "event_name": r.event_name,
-                    "received_at": r.received_at.isoformat() if r.received_at else None,
-                    **(r.cycle_context or {}),
-                })
+        for r in matched_records:
+            stations_data.append({
+                "station_id": r.station_id,
+                "source": r.source_address or "unknown",
+                "channel_id": r.channel_id,
+                "is_good": r.is_good,
+                "event_name": r.event_name,
+                "received_at": r.received_at.isoformat() if r.received_at else None,
+                **(r.cycle_context or {}),
+            })
 
         aggregated = {
             "box_serial": box_serial,
             "overall_result": "OK" if overall_good else "NG",
             "total_stations": len(expected),
-            "completed_stations": len(received_stations & expected_set),
+            "completed_stations": len(matched_expected),
             "stations": stations_data,
             "timestamp": datetime.now().isoformat(),
         }
 
-        summary = db.query(BoxSummary).filter(BoxSummary.box_serial == box_serial).first()
-        if not summary:
-            summary = BoxSummary(
-                box_serial=box_serial,
-                total_stations=len(expected),
-                completed_stations=len(received_stations & expected_set),
-                overall_result="OK" if overall_good else "NG",
-                aggregated_context=aggregated,
-                status="complete",
+        # 并发场景：两个上报线程都读到全齐状态，都尝试 INSERT summary；
+        # UNIQUE(box_serial) 会让第二个触发 IntegrityError。
+        # 对应处理：捕获后 rollback，再次查询 summary（此时应已存在）并 UPDATE。
+        early_return = {}
+
+        def build_summary(db):
+            summary_local = (
+                db.query(BoxSummary)
+                .filter(BoxSummary.box_serial == box_serial).first()
             )
-            db.add(summary)
-        else:
-            summary.total_stations = len(expected)
-            summary.completed_stations = len(received_stations & expected_set)
-            summary.overall_result = "OK" if overall_good else "NG"
-            summary.aggregated_context = aggregated
-            summary.status = "complete"
+            if not summary_local:
+                db.add(BoxSummary(
+                    box_serial=box_serial,
+                    total_stations=len(expected),
+                    completed_stations=len(matched_expected),
+                    overall_result="OK" if overall_good else "NG",
+                    aggregated_context=aggregated,
+                    status="complete",
+                ))
+            else:
+                if summary_local.status in ("pushed", "pushed_timeout"):
+                    early_return["payload"] = {
+                        "dispatched": False,
+                        "reason": "already_pushed_by_peer",
+                        "box_serial": box_serial,
+                    }
+                    return
+                summary_local.total_stations = len(expected)
+                summary_local.completed_stations = len(matched_expected)
+                summary_local.overall_result = "OK" if overall_good else "NG"
+                summary_local.aggregated_context = aggregated
+                summary_local.status = "complete"
+            for r in matched_records:
+                # matched_records 是外层查到的 ORM 实例，重试时可能已 expired；
+                # 通过 merge 确保每轮都挂到当前 session 上。
+                db.merge(r).status = "dispatched"
 
-        for r in records:
-            if r.station_id in expected_set:
-                r.status = "dispatched"
+        for attempt in range(2):
+            try:
+                if not _run_with_retry(
+                        db, build_summary,
+                        f"check_and_dispatch({box_serial})"):
+                    return {"dispatched": False, "reason": "commit_locked",
+                            "box_serial": box_serial}
+                break
+            except IntegrityError as ie:
+                db.rollback()
+                if attempt == 0:
+                    logger.warning(
+                        "[Cluster] BoxSummary UNIQUE 竞态，回滚重试: %s err=%s",
+                        box_serial, ie,
+                    )
+                    continue
+                raise
 
-        db.commit()
+        if early_return.get("payload") is not None:
+            return early_return["payload"]
+
+        # summary 现在一定存在且 status='complete'，重新取一下用于后续 push 字段更新
+        summary = (
+            db.query(BoxSummary)
+            .filter(BoxSummary.box_serial == box_serial).first()
+        )
 
         try:
             from backend.services.mes_gateway import get_mes_gateway
             gw = get_mes_gateway()
             gw.dispatch("box_complete", aggregated, channel_id=None)
-            summary.pushed_at = datetime.now()
-            summary.status = "pushed"
-            db.commit()
+
+            def mark_pushed(db):
+                s = (db.query(BoxSummary)
+                     .filter(BoxSummary.box_serial == box_serial).first())
+                if s:
+                    s.pushed_at = datetime.utcnow()
+                    s.status = "pushed"
+
+            _run_with_retry(db, mark_pushed,
+                            f"check_and_dispatch_pushed({box_serial})")
             logger.info("[Cluster] 箱子 %s 汇总推送完成 (%s)", box_serial,
                         "OK" if overall_good else "NG")
         except Exception as e:
-            logger.error("[Cluster] 箱子 %s MES 推送失败: %s", box_serial, e)
+            logger.error("[Cluster] 箱子 %s MES 推送失败: %s\n%s",
+                         box_serial, e, traceback.format_exc())
+
+        # 箱子已推送完成，释放进程内 box 锁，避免 dict 长期累积
+        self._release_box_lock(box_serial)
 
         return {
             "dispatched": True,
@@ -300,23 +594,26 @@ class ClusterCollector:
             "stations": len(expected),
         }
 
-    def _push_timeout_result(self, db, box_serial: str, records, expected: set, missing: set):
-        """超时后仍推送已收集到的数据给 MES，标注缺失工位"""
-        received_set = {r.station_id for r in records}
-        any_ng = any(not r.is_good for r in records if r.station_id in expected)
+    def _push_timeout_result(self, db, box_serial: str, records, expected, missing):
+        """超时后仍推送已收集到的数据给 MES，标注缺失工位
+
+        expected/missing 可为 set 或 list；按前缀匹配规则统计已到工位。
+        """
+        expected_list = list(expected)
+        matched_records, matched_expected, _ = \
+            self._match_records_to_expected(expected_list, records)
 
         stations_data = []
-        for r in records:
-            if r.station_id in expected:
-                stations_data.append({
-                    "station_id": r.station_id,
-                    "source": r.source_address or "unknown",
-                    "channel_id": r.channel_id,
-                    "is_good": r.is_good,
-                    "event_name": r.event_name,
-                    "received_at": r.received_at.isoformat() if r.received_at else None,
-                    **(r.cycle_context or {}),
-                })
+        for r in matched_records:
+            stations_data.append({
+                "station_id": r.station_id,
+                "source": r.source_address or "unknown",
+                "channel_id": r.channel_id,
+                "is_good": r.is_good,
+                "event_name": r.event_name,
+                "received_at": r.received_at.isoformat() if r.received_at else None,
+                **(r.cycle_context or {}),
+            })
         for ms in missing:
             stations_data.append({
                 "station_id": ms,
@@ -328,46 +625,59 @@ class ClusterCollector:
         aggregated = {
             "box_serial": box_serial,
             "overall_result": "TIMEOUT",
-            "total_stations": len(expected),
-            "completed_stations": len(received_set & expected),
+            "total_stations": len(expected_list),
+            "completed_stations": len(matched_expected),
             "missing_stations": list(missing),
             "stations": stations_data,
             "timestamp": datetime.now().isoformat(),
         }
 
-        summary = db.query(BoxSummary).filter(BoxSummary.box_serial == box_serial).first()
-        if not summary:
-            summary = BoxSummary(
-                box_serial=box_serial,
-                total_stations=len(expected),
-                completed_stations=len(received_set & expected),
-                overall_result="TIMEOUT",
-                aggregated_context=aggregated,
-                status="timeout",
+        def build_timeout(db):
+            summary_local = (
+                db.query(BoxSummary)
+                .filter(BoxSummary.box_serial == box_serial).first()
             )
-            db.add(summary)
-        else:
-            summary.total_stations = len(expected)
-            summary.completed_stations = len(received_set & expected)
-            summary.overall_result = "TIMEOUT"
-            summary.aggregated_context = aggregated
-            summary.status = "timeout"
+            if not summary_local:
+                db.add(BoxSummary(
+                    box_serial=box_serial,
+                    total_stations=len(expected_list),
+                    completed_stations=len(matched_expected),
+                    overall_result="TIMEOUT",
+                    aggregated_context=aggregated,
+                    status="timeout",
+                ))
+            else:
+                summary_local.total_stations = len(expected_list)
+                summary_local.completed_stations = len(matched_expected)
+                summary_local.overall_result = "TIMEOUT"
+                summary_local.aggregated_context = aggregated
+                summary_local.status = "timeout"
+            for r in records:
+                db.merge(r).status = "timeout"
 
-        for r in records:
-            r.status = "timeout"
-
-        db.commit()
+        if not _run_with_retry(db, build_timeout,
+                               f"push_timeout_result({box_serial})"):
+            return
 
         try:
             from backend.services.mes_gateway import get_mes_gateway
             gw = get_mes_gateway()
             gw.dispatch("box_timeout", aggregated, channel_id=None)
-            summary.pushed_at = datetime.now()
-            summary.status = "pushed_timeout"
-            db.commit()
+
+            def mark_pushed_timeout(db):
+                s = (db.query(BoxSummary)
+                     .filter(BoxSummary.box_serial == box_serial).first())
+                if s:
+                    s.pushed_at = datetime.utcnow()
+                    s.status = "pushed_timeout"
+
+            _run_with_retry(db, mark_pushed_timeout,
+                            f"push_timeout_pushed({box_serial})")
             logger.info("[Cluster] 目标 %s 超时推送完成 (缺 %s)", box_serial, list(missing))
+            self._release_box_lock(box_serial)
         except Exception as e:
-            logger.error("[Cluster] 目标 %s 超时推送失败: %s", box_serial, e)
+            logger.error("[Cluster] 目标 %s 超时推送失败: %s\n%s",
+                         box_serial, e, traceback.format_exc())
 
     def get_pending_boxes(self) -> list:
         """获取当前待汇总的箱子状态"""
@@ -392,8 +702,11 @@ class ClusterCollector:
                     .all()
                 )
                 received = {r.station_id for r in records}
-                if expected:
-                    missing = expected - received
+                expected_list = list(expected)
+                if expected_list:
+                    _, _, missing_list = self._match_records_to_expected(
+                        expected_list, records)
+                    missing = set(missing_list)
                     is_complete = len(missing) == 0
                 else:
                     missing = set()
@@ -446,19 +759,32 @@ class ClusterCollector:
                 if timeout_sec <= 0:
                     continue
 
-                db = SessionLocal()
+                expected = set(config.get("expected_stations", []))
+                if not expected:
+                    continue
+
+                # 先用一个只读短 session 列箱子，立刻关，避免长事务和上报路径争锁
+                probe = SessionLocal()
                 try:
-                    expected = set(config.get("expected_stations", []))
-                    if not expected:
-                        continue
-                    box_serials = (
-                        db.query(BoxAggregation.box_serial)
+                    box_serials = [
+                        row[0] for row in
+                        probe.query(BoxAggregation.box_serial)
                         .filter(BoxAggregation.status == "received")
                         .group_by(BoxAggregation.box_serial)
                         .all()
-                    )
-                    now = datetime.now()
-                    for (box_serial,) in box_serials:
+                    ]
+                finally:
+                    probe.close()
+
+                now = datetime.utcnow()  # 与 received_at(server_default func.now()) 的 UTC 对齐
+                expected_list = list(expected)
+                timeout_push = config.get("timeout_push", False)
+
+                for box_serial in box_serials:
+                    # 每个箱子独立 session，缩短单次持锁时间，避免
+                    # 一次 checker 循环把 receive_station_report 连续顶掉
+                    db = SessionLocal()
+                    try:
                         records = (
                             db.query(BoxAggregation)
                             .filter(BoxAggregation.box_serial == box_serial,
@@ -474,24 +800,37 @@ class ClusterCollector:
                             continue
 
                         received = {r.station_id for r in records}
-                        missing = expected - received
+                        _, _, missing_list = self._match_records_to_expected(
+                            expected_list, records)
+                        missing = set(missing_list)
                         logger.warning(
                             "[Cluster] 箱子 %s 超时 (%.0fs > %ds), 已收 %s, 缺 %s",
                             box_serial, elapsed, timeout_sec,
                             list(received), list(missing)
                         )
 
-                        timeout_push = config.get("timeout_push", False)
                         if timeout_push:
-                            self._push_timeout_result(db, box_serial, records, expected, missing)
+                            self._push_timeout_result(db, box_serial, records,
+                                                     expected_list, missing)
                         else:
-                            for r in records:
-                                r.status = "timeout"
-                            db.commit()
-                finally:
-                    db.close()
+                            _records = records
+
+                            def build_timeout_mark(db):
+                                for r in _records:
+                                    db.merge(r).status = "timeout"
+
+                            _run_with_retry(
+                                db, build_timeout_mark,
+                                f"timeout_mark({box_serial})"
+                            )
+                    finally:
+                        try:
+                            db.close()
+                        except Exception:
+                            pass
             except Exception as e:
-                logger.error("[Cluster] 超时检查异常: %s", e)
+                logger.error("[Cluster] 超时检查异常: %s\n%s",
+                             e, traceback.format_exc())
 
     def _heartbeat_sender_loop(self):
         """后台线程：副机定时向主机 POST /cluster/heartbeat。

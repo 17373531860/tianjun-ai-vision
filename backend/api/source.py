@@ -4685,10 +4685,36 @@ class VideoSourceManager:
                                     gone_confirm_frames: int = 30,
                                     cycle_strategy: str = 'all_gone'):
         """Group tracked items into their parent boxes by spatial containment.
-        Per-box settlement uses the same gone-confirm logic as the cycle level."""
+        Per-box settlement uses the same gone-confirm logic as the cycle level.
+
+        v2.7.7c 合并: 同一个 box 里同一 label 达到 step 配置的 max_recognized 后,
+        新出现的 track_id 不再计数 (只刷新老条目的 last_seen). 这解决了帧内 top-N
+        之后跨帧出现新 track_id (遮挡/重新出现) 导致的超额误判.
+        """
         container_label = self._container_label
         expected_no_container = {k: v for k, v in expected_items.items() if k != container_label}
-        
+
+        # 从 steps_config 读每个 label 的 max_recognized 上限 (只处理 count_mode='track')
+        max_recognized_per_label: dict = {}
+        try:
+            steps_config = (self.project_config or {}).get('steps_config', []) if self.project_config else []
+            for step in steps_config:
+                if not step.get('enabled', True):
+                    continue
+                if step.get('count_mode', 'track') != 'track':
+                    continue
+                lbl = step.get('label', '')
+                if not lbl:
+                    continue
+                try:
+                    mr = int(step.get('max_recognized', 0) or 0)
+                    if mr > 0:
+                        max_recognized_per_label[lbl] = mr
+                except (TypeError, ValueError):
+                    pass
+        except Exception:
+            pass
+
         # Collect active boxes and items from _tracking_objects
         active_box_dids = set()
         box_bboxes = {}  # {display_id: bbox}
@@ -4747,17 +4773,29 @@ class VideoSourceManager:
             
             if best_box_did is not None:
                 box_state = self._box_objects[best_box_did]
-                if item_tid not in box_state['items_ever_seen']:
-                    box_state['items_ever_seen'][item_tid] = {
-                        'label': item_label,
-                        'display_id': item_did,
-                        'first_seen': current_time,
-                        'last_seen': current_time,
-                    }
-                    box_state['item_class_counts'][item_label] = \
-                        box_state['item_class_counts'].get(item_label, 0) + 1
-                else:
+                if item_tid in box_state['items_ever_seen']:
                     box_state['items_ever_seen'][item_tid]['last_seen'] = current_time
+                    continue
+
+                # v2.7.7c 合并: 本 box 里该 label 已达上限 → 新 track_id 不再计数,
+                # 只把最早进入的那条的 last_seen 刷新 (避免"找不到最新活跃 id"导致误判 gone)
+                limit = max_recognized_per_label.get(item_label, 0)
+                cur_count = box_state['item_class_counts'].get(item_label, 0)
+                if limit > 0 and cur_count >= limit:
+                    for _prev_tid, _info in box_state['items_ever_seen'].items():
+                        if _info.get('label') == item_label:
+                            _info['last_seen'] = current_time
+                            break
+                    continue
+
+                box_state['items_ever_seen'][item_tid] = {
+                    'label': item_label,
+                    'display_id': item_did,
+                    'first_seen': current_time,
+                    'last_seen': current_time,
+                }
+                box_state['item_class_counts'][item_label] = \
+                    box_state['item_class_counts'].get(item_label, 0) + 1
         
         # Recalculate completeness for all active boxes
         for box_did in active_box_dids:

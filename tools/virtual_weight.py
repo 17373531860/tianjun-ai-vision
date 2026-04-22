@@ -66,7 +66,7 @@ QPushButton#presetBtn {
 QPushButton#presetBtn:hover { background: #1a5276; border-color: #ffaa00; }
 QTextEdit {
     background: #0a0a1a; border: 1px solid #0f3460; border-radius: 5px;
-    color: #00ff88; font-family: 'Consolas', 'Courier New', monospace;
+    color: #00ff88; font-family: 'Consolas', 'Courier New', 'Microsoft YaHei', 'Noto Sans Mono CJK SC', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', monospace;
     font-size: 11px; padding: 6px;
 }
 QCheckBox { color: #b0b0b0; font-size: 12px; spacing: 6px; }
@@ -138,7 +138,8 @@ class WeightSimulator(QMainWindow):
         self.weight_display = QLabel("0.0")
         self.weight_display.setStyleSheet(
             "color: #ffaa00; font-size: 42px; font-weight: bold; "
-            "font-family: 'Consolas', monospace; padding: 8px 0;")
+            "font-family: 'Consolas', 'Microsoft YaHei', 'Noto Sans Mono CJK SC', "
+            "'Noto Sans CJK SC', 'WenQuanYi Micro Hei', monospace; padding: 8px 0;")
         self.weight_display.setAlignment(Qt.AlignCenter)
         display_row.addWidget(self.weight_display)
         unit_label = QLabel("g")
@@ -153,7 +154,11 @@ class WeightSimulator(QMainWindow):
         self.weight_spin.setDecimals(1)
         self.weight_spin.setValue(0)
         self.weight_spin.setSingleStep(0.1)
-        self.weight_spin.setFont(QFont("Consolas", 14))
+        _wf = QFont()
+        _wf.setFamilies(["Consolas", "Microsoft YaHei", "Noto Sans Mono CJK SC",
+                         "Noto Sans CJK SC", "WenQuanYi Micro Hei"])
+        _wf.setPointSize(14)
+        self.weight_spin.setFont(_wf)
         self.weight_spin.setMinimumHeight(36)
         self.weight_spin.setFixedWidth(180)
         self.weight_spin.valueChanged.connect(self._on_weight_changed)
@@ -571,10 +576,15 @@ if __name__ == "__main__":
     parser.add_argument("--ip", type=str, default="0.0.0.0", help="TCP 绑定 IP")
     parser.add_argument("--port", type=int, default=9001, help="TCP 端口")
     parser.add_argument("--name", type=str, default="", help="设备名称")
+    parser.add_argument("--auto-start", action="store_true",
+                        help="启动后自动开始 TCP 推流（无需点按钮）")
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
     app.setStyleSheet(DARK_STYLE)
     w = WeightSimulator(default_ip=args.ip, default_port=args.port, name=args.name)
     w.show()
+    if args.auto_start:
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(200, w.start_tcp)
     sys.exit(app.exec_())

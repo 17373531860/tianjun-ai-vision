@@ -50,6 +50,7 @@ class DeviceConnection:
     data_target: str
     validation_rules: dict
     enabled: bool
+    pairing_group: Optional[str] = None
 
     # v2.7.5 稳定值判定配置
     stable_enabled: bool = True
@@ -102,6 +103,62 @@ class ExternalDeviceService:
         self._connections.clear()
         logger.info("[ExtDev] 所有外部设备已断开")
 
+    def cleanup_old_logs(self, keep_bound: bool = True,
+                         older_than_seconds: int = 3600) -> int:
+        """定时清理外设日志。
+
+        v2.7.9: 称重器/传感器在稳定阶段会写 stabilizing 过程日志，长期跑会堆积。
+        只清理"无 box_serial 绑定"的过程日志，有扫码绑定的业务日志保留。
+
+        Args:
+            keep_bound: True=只删 box_serial 为 NULL 的记录（默认）；
+                        False=按 older_than_seconds 无条件清理
+            older_than_seconds: 删除 N 秒之前的记录，默认 1 小时
+
+        Returns:
+            被删除的行数
+        """
+        from sqlalchemy import text
+        from sqlalchemy.exc import OperationalError
+        for attempt in range(3):
+            db = SessionLocal()
+            try:
+                if keep_bound:
+                    sql = text(
+                        "DELETE FROM external_device_logs "
+                        "WHERE box_serial IS NULL "
+                        "AND created_at < datetime('now', :cutoff)"
+                    )
+                else:
+                    sql = text(
+                        "DELETE FROM external_device_logs "
+                        "WHERE created_at < datetime('now', :cutoff)"
+                    )
+                cutoff = f"-{older_than_seconds} seconds"
+                res = db.execute(sql, {"cutoff": cutoff})
+                deleted = res.rowcount or 0
+                db.commit()
+                if deleted > 0:
+                    logger.info("[ExtDev] 定时清理日志: 删除 %d 条 (keep_bound=%s, cutoff=%s)",
+                                deleted, keep_bound, cutoff)
+                return deleted
+            except OperationalError as e:
+                db.rollback()
+                msg = str(e).lower()
+                if ("locked" in msg or "busy" in msg) and attempt < 2:
+                    import time as _t
+                    _t.sleep(0.3)
+                    continue
+                logger.warning("[ExtDev] 清理日志失败: %s", e)
+                return 0
+            except Exception as e:
+                db.rollback()
+                logger.warning("[ExtDev] 清理日志异常: %s", e)
+                return 0
+            finally:
+                db.close()
+        return 0
+
     def add_device(self, dev: ExternalDevice):
         self._start_device(dev)
 
@@ -132,8 +189,39 @@ class ExternalDeviceService:
         return results
 
     def set_barcode(self, device_id: int, barcode: str):
-        """外部设置条码（当设备本身不带扫码器时，由扫码器回调注入）"""
+        """外部设置条码（当设备本身不带扫码器时，由扫码器回调注入）。
+
+        v2.7.10: 若目标设备是已稳定的称重器，立即用缓存的稳定值补发一次 dispatch，
+        否则节流逻辑会把"先上称再扫码"的场景永远卡住（重量不变 → 永远不再派发 →
+        集群和业务链路都收不到配对数据）。
+        """
         self._barcode_buffer[device_id] = barcode
+
+        conn = self._connections.get(device_id)
+        if conn is None:
+            return
+        if conn.device_role != "weight":
+            return
+        if conn._stable_state != "stable":
+            return
+        if conn._last_reported_value is None:
+            return
+
+        parsed = dict(conn.last_parsed or {})
+        parsed["weight"] = conn._last_reported_value
+        parsed["_raw_value"] = conn._last_reported_value
+
+        is_valid, error = self._validate(conn, parsed)
+        raw_repr = str(conn.last_data or conn._last_reported_value)
+
+        try:
+            self._log_data(conn, raw_repr, parsed, is_valid,
+                           error or "barcode_late_bind", barcode)
+            self._dispatch(conn, parsed, barcode)
+            logger.info("[ExtDev] %s 扫码迟到 → 用稳定值补发: weight=%.4f, barcode=%s",
+                        conn.name, conn._last_reported_value, barcode)
+        except Exception as e:
+            logger.error("[ExtDev] %s 扫码迟到补发失败: %s", conn.name, e)
 
     def test_connection(self, protocol: str, ip: str = None, port: int = None,
                         serial_port: str = None, serial_baud: int = 9600,
@@ -172,6 +260,7 @@ class ExternalDeviceService:
             data_target=dev.data_target or "cluster",
             validation_rules=dev.validation_rules or {},
             enabled=dev.enabled,
+            pairing_group=(getattr(dev, "pairing_group", None) or None),
             stable_enabled=bool(getattr(dev, "stable_enabled", True)),
             stable_delta=float(getattr(dev, "stable_delta", 0.05) or 0.05),
             stable_count=max(2, int(getattr(dev, "stable_count", 5) or 5)),
@@ -793,11 +882,13 @@ class ExternalDeviceService:
         first_stable = conn._stable_state != "stable"
         conn._stable_state = "stable"
 
-        # 节流：稳定窗口内只上报一次，除非值变化超过 delta
+        # 节流：稳定窗口内只"对下游"上报一次，除非值变化超过 delta。
+        # v2.7.9: 日志表不做节流——每一条都记录，方便前端实时观察；
+        # 集群/extra_fields 的 dispatch 仍然节流，避免狂刷业务通道。
         if (conn._last_reported_value is not None
                 and abs(parsed["weight"] - conn._last_reported_value) <= conn.stable_delta
                 and not first_stable):
-            # 维持稳定，已经上报过，沉默
+            self._log_data(conn, raw, parsed, True, "stable", None)
             return False
 
         conn._last_reported_value = parsed["weight"]
@@ -1045,21 +1136,56 @@ class ExternalDeviceService:
 
     def _log_data(self, conn: DeviceConnection, raw: str, parsed: dict,
                   is_valid: bool, error: str = None, barcode: str = None):
-        try:
-            db = SessionLocal()
-            log = ExternalDeviceLog(
-                device_id=conn.device_id,
-                raw_data=raw[:1024] if raw else None,
-                parsed_data=parsed,
-                box_serial=barcode,
-                is_valid=is_valid,
-                error_msg=error,
-            )
-            db.add(log)
-            db.commit()
-            db.close()
-        except Exception:
-            pass
+        """写入 external_device_logs。
+
+        v2.7.9: 高频推送（称重器每秒多次）+ 检测引擎并发写 → 容易 locked。
+        原本 except Exception: pass 直接吞错导致前端"数据日志"永远空。
+        现在做 3 次 locked 退避重试，其它异常打印出来方便排障。
+        """
+        import random
+        from sqlalchemy.exc import OperationalError
+        for attempt in range(3):
+            db = None
+            try:
+                db = SessionLocal()
+                log = ExternalDeviceLog(
+                    device_id=conn.device_id,
+                    raw_data=raw[:1024] if raw else None,
+                    parsed_data=parsed,
+                    box_serial=barcode,
+                    is_valid=is_valid,
+                    error_msg=error,
+                )
+                db.add(log)
+                db.commit()
+                return
+            except OperationalError as e:
+                if db is not None:
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                msg = str(e).lower()
+                if ("locked" in msg or "busy" in msg) and attempt < 2:
+                    time.sleep(0.05 + random.random() * 0.1)
+                    continue
+                logger.warning("[ExtDev] %s 日志写入失败 (attempt %d): %s",
+                               conn.name, attempt + 1, e)
+                return
+            except Exception as e:
+                if db is not None:
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                logger.warning("[ExtDev] %s 日志写入异常: %s", conn.name, e)
+                return
+            finally:
+                if db is not None:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
 
     # ---- 连接测试 ----
 

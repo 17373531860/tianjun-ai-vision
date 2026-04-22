@@ -193,8 +193,15 @@ class MESGateway:
         from backend.models.models import DetectionCycle, StepRecord, Operator
         cycle = db.query(DetectionCycle).filter(DetectionCycle.id == cycle_id).first()
         if cycle:
-            context["cycle"]["completed_steps"] = cycle.completed_steps
-            context["cycle"]["total_steps"] = cycle.total_steps
+            # DetectionCycle ORM 模型本身没有 completed_steps/total_steps 字段，
+            # 直接属性访问会 AttributeError 把 cycle_end → MES → 集群分发整条链路冲崩。
+            # 用 getattr 兜底，缺失时从 step_sequence 推算。
+            completed_steps = getattr(cycle, 'completed_steps', None)
+            total_steps = getattr(cycle, 'total_steps', None)
+            if total_steps is None and isinstance(cycle.step_sequence, list):
+                total_steps = len(cycle.step_sequence)
+            context["cycle"]["completed_steps"] = completed_steps
+            context["cycle"]["total_steps"] = total_steps
             context["cycle"]["start_time"] = cycle.start_time.isoformat() if cycle.start_time else None
             context["cycle"]["end_time"] = cycle.end_time.isoformat() if cycle.end_time else None
             op_id = getattr(cycle, 'operator_id', None)
@@ -205,12 +212,25 @@ class MESGateway:
 
         steps = db.query(StepRecord).filter(StepRecord.cycle_id == cycle_id).order_by(StepRecord.id).all()
         for s in steps:
+            # StepRecord 模型字段名：step_order / duration / is_valid
+            # 历史上这里写过 step_index / duration_seconds / is_good，会触发 AttributeError
+            # 并导致整个 cycle_end 构造 context 失败 → 进而 _cluster_dispatch 不被触发。
+            # 用 getattr 防御式访问，兼容模型重命名。
+            idx = getattr(s, 'step_index', None)
+            if idx is None:
+                idx = getattr(s, 'step_order', None)
+            dur = getattr(s, 'duration_seconds', None)
+            if dur is None:
+                dur = getattr(s, 'duration', None)
+            good = getattr(s, 'is_good', None)
+            if good is None:
+                good = bool(getattr(s, 'is_valid', True))
             context["steps"].append({
-                "label": s.step_label,
-                "index": s.step_index,
-                "duration": s.duration_seconds,
-                "is_good": s.is_good,
-                "confidence": s.confidence,
+                "label": getattr(s, 'step_label', None),
+                "index": idx,
+                "duration": dur,
+                "is_good": good,
+                "confidence": getattr(s, 'confidence', None),
                 "start_time": s.start_time.isoformat() if s.start_time else None,
                 "end_time": s.end_time.isoformat() if s.end_time else None,
             })

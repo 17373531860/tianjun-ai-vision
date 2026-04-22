@@ -41,7 +41,7 @@
           <div class="text-xs text-gray-400 space-y-1">
             <div v-if="dev.ip">地址: {{ dev.ip }}:{{ dev.port }}</div>
             <div v-if="dev.serial_port">串口: {{ dev.serial_port }} @ {{ dev.serial_baud }}</div>
-            <div>{{ channelLabel(dev.channel_id) }}<span v-if="dev.station_id" class="text-yellow-400 ml-2">(集群标识: {{ dev.station_id }})</span></div>
+            <div>{{ channelLabel(dev.channel_id) }}<span v-if="dev.station_id" class="text-yellow-400 ml-2">(集群标识: {{ dev.station_id }})</span><span v-if="dev.pairing_group" class="text-purple-300 ml-2">(分组: {{ dev.pairing_group }})</span></div>
             <div>解析: {{ dev.parse_mode }} | 目标: {{ targetLabel(dev.data_target) }}</div>
             <div v-if="getLastData(dev.id)" class="text-cyan-300 truncate">
               最近: {{ getLastData(dev.id) }}
@@ -252,6 +252,24 @@
           </el-form-item>
         </div>
 
+        <el-form-item label="设备分组号">
+          <el-input v-model="form.pairing_group" placeholder="如 scale-c；留空则按绑定工位自动配对" clearable>
+            <template #append>
+              <el-tooltip placement="top" :show-after="300">
+                <template #content>
+                  <div class="max-w-xs text-xs">
+                    与扫码枪之间的<b>配对标识</b>，和"绑定工位"无关。<br>
+                    本设备和对应扫码枪填相同分组号即配成一对，<br>
+                    扫码数据会自动注入本设备（如称重器带上条码）。<br>
+                    <b>留空则沿用老逻辑</b>——按"绑定工位"匹配。
+                  </div>
+                </template>
+                <el-icon class="text-gray-400 cursor-help"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </template>
+          </el-input>
+        </el-form-item>
+
         <!-- 分隔符解析配置 -->
         <div v-if="form.parse_mode === 'split'" class="bg-slate-900/50 rounded p-3 mb-3">
           <div class="text-xs text-gray-400 mb-2">分隔符配置（如数据格式: SN-001,25.30）</div>
@@ -344,6 +362,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { QuestionFilled } from '@element-plus/icons-vue'
 import {
   getExternalDevices, createExternalDevice, updateExternalDevice,
   deleteExternalDevice, getExternalDeviceStatus, testExternalDevice,
@@ -370,7 +389,7 @@ const defaultForm = () => ({
   name: '', device_role: 'weight', protocol: 'tcp',
   ip: '', port: 502, serial_port: '', serial_baud: 9600,
   protocol_config: {}, parse_mode: 'direct', parse_config: {},
-  station_id: '', channel_id: 0, data_target: 'cluster',
+  station_id: '', channel_id: 0, pairing_group: '', data_target: 'cluster',
   validation_rules: {}, enabled: true,
   stable_enabled: true,
   stable_delta: 0.05,
@@ -416,7 +435,18 @@ const onProtocolChange = (val) => {
   }
 }
 
-const formatTime = (t) => t ? t.replace('T', ' ').substring(0, 19) : '-'
+// 后端返回 naive UTC ISO（server_default=func.now()）。
+// 按 UTC 解析 → 浏览器本地时区显示（国内 = 北京时间）。
+const formatTime = (t) => {
+  if (!t) return '-'
+  const hasTz = /Z$|[+-]\d{2}:?\d{2}$/.test(t)
+  const s = hasTz ? t : (String(t).replace(' ', 'T') + 'Z')
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return t
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} `
+    + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
 
 const roleLabel = (r) => ({ weight: '称重器', sensor: '传感器', plc: 'PLC', custom: '自定义' }[r] || r)
 const roleTagType = (r) => ({ weight: 'warning', sensor: 'info', plc: 'success', custom: '' }[r] || '')

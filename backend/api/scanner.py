@@ -32,6 +32,8 @@ class ScannerCreate(BaseModel):
     bind_timing: str = "mid_cycle"
     broadcast_channels: Optional[list] = None
     device_type: str = "text_lon"
+    external_only: bool = False
+    pairing_group: Optional[str] = None
 
 
 class ScannerUpdate(BaseModel):
@@ -52,6 +54,8 @@ class ScannerUpdate(BaseModel):
     bind_timing: Optional[str] = None
     broadcast_channels: Optional[list] = None
     device_type: Optional[str] = None
+    external_only: Optional[bool] = None
+    pairing_group: Optional[str] = None
 
 
 def _serialize_device(d):
@@ -69,6 +73,8 @@ def _serialize_device(d):
         "bind_timing": getattr(d, 'bind_timing', 'mid_cycle'),
         "broadcast_channels": getattr(d, 'broadcast_channels', None) or [],
         "device_type": getattr(d, 'device_type', 'auto') or 'auto',
+        "external_only": bool(getattr(d, 'external_only', False)),
+        "pairing_group": getattr(d, 'pairing_group', None),
     }
 
 

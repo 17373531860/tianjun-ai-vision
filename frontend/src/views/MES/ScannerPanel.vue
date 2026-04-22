@@ -70,6 +70,8 @@
               <span class="font-medium">{{ dev.name }}</span>
               <div class="flex items-center gap-1">
                 <el-tag v-if="getDevType(dev.id) === 'wmax'" type="primary" size="small" effect="dark">WMax</el-tag>
+                <el-tag v-if="dev.external_only" type="warning" size="small" effect="dark">只喂外设</el-tag>
+                <el-tag v-if="dev.pairing_group" type="info" size="small" effect="dark">分组: {{ dev.pairing_group }}</el-tag>
                 <el-tag :type="getDevStatus(dev.id) === 'connected' ? 'success' : getDevStatus(dev.id) === 'connecting' ? 'warning' : 'danger'" size="small">
                   {{ { connected: '已连接', connecting: '连接中', disconnected: '断开', error: '错误' }[getDevStatus(dev.id)] || '未知' }}
                 </el-tag>
@@ -186,9 +188,21 @@
             <div class="text-xs text-gray-400 mb-1">端口</div>
             <el-input-number v-model="form.port" :min="0" :precision="0" size="small" class="!w-full" controls-position="right" />
           </div>
-          <div class="text-center">
-            <div class="text-xs text-gray-400 mb-1">绑定工位</div>
-            <el-select v-model="form.channel_id" size="small" class="!w-full">
+          <div class="text-center" :class="{ 'opacity-40 pointer-events-none': form.external_only }">
+            <div class="text-xs text-gray-400 mb-1">
+              绑定工位
+              <span v-if="form.external_only" class="text-gray-500 ml-1">(已禁用)</span>
+              <el-tooltip v-if="form.external_only" placement="top" :show-after="300">
+                <template #content>
+                  <div class="max-w-xs text-xs">
+                    已勾选"只喂外部设备"，此扫码枪不再和工位关联，<br>
+                    改为通过下方"设备分组号"与外设配对。
+                  </div>
+                </template>
+                <el-icon class="text-gray-400 cursor-help"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </div>
+            <el-select v-model="form.channel_id" size="small" class="!w-full" :disabled="form.external_only">
               <el-option v-for="opt in channelOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
           </div>
@@ -225,7 +239,52 @@
             <el-switch v-model="systemStore.detection.toasts.scan.enabled" size="small" />
             <span class="text-xs text-gray-300">扫码提示框</span>
           </div>
+          <div class="flex items-center gap-1.5 col-span-3">
+            <el-switch v-model="form.external_only" size="small" />
+            <span class="text-xs text-gray-300">只喂外部设备（不触发视觉检测）</span>
+            <el-tooltip placement="top" :show-after="300">
+              <template #content>
+                <div class="max-w-xs text-xs">
+                  用于"扫完放秤"这类扫码枪：<br>
+                  扫码后只把条码喂给配对的外部设备（如称重器），<br>
+                  不会触发任何视觉检测周期，也不会自动建工件。
+                </div>
+              </template>
+              <el-icon class="text-gray-400 cursor-help"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </div>
         </div>
+
+        <!-- 设备分组号：与"绑定工位"解耦的配对键 -->
+        <el-divider class="!my-2" />
+        <el-form-item>
+          <template #label>
+            <span :class="{ 'text-red-400': form.external_only }">
+              <span v-if="form.external_only" class="mr-0.5">*</span>设备分组号
+            </span>
+          </template>
+          <el-input
+            v-model="form.pairing_group"
+            size="small"
+            :placeholder="form.external_only ? '必填：与对应外设填相同分组号（如 scale-c）' : '如 scale-c；留空则按绑定工位自动配对'"
+            clearable
+          >
+            <template #append>
+              <el-tooltip placement="top" :show-after="300">
+                <template #content>
+                  <div class="max-w-xs text-xs">
+                    扫码枪与外部设备（如称重器）之间的<b>配对标识</b>，<br>
+                    和"绑定工位"无关。<br>
+                    两端填相同分组号即配成一对；<br>
+                    勾选"只喂外部设备"时<b>必填</b>，<br>
+                    否则留空则沿用老逻辑——按"绑定工位"匹配。
+                  </div>
+                </template>
+                <el-icon class="text-gray-400 cursor-help"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </template>
+          </el-input>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button size="small" @click="showAdd = false">取消</el-button>
@@ -238,6 +297,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { QuestionFilled } from '@element-plus/icons-vue'
 import {
   getScannerDevices, createScannerDevice, updateScannerDevice,
   deleteScannerDevice, testScannerConnection, getScannerStatus, getScanLogs,
@@ -280,6 +340,8 @@ const defaultForm = () => ({
   rebind_mode: 'rescan',
   bind_timing: 'mid_cycle',
   broadcast_channels: [],
+  external_only: false,
+  pairing_group: '',
 })
 const form = ref(defaultForm())
 
@@ -521,6 +583,10 @@ const testDevice = async (dev) => {
 const handleSave = async () => {
   if (!form.value.name || !form.value.ip) {
     ElMessage.warning('请填写名称和IP地址')
+    return
+  }
+  if (form.value.external_only && !(form.value.pairing_group || '').trim()) {
+    ElMessage.warning('勾选"只喂外部设备"后必须填写"设备分组号"，用于与外部设备配对')
     return
   }
   // v2.7.3: 同 IP+port 去重（前端先校验，提供更快的反馈；后端还有兜底）

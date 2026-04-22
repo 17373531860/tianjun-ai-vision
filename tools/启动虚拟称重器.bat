@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title è™šæ‹Ÿç§°é‡å™¨
+title ÐéÄâ³ÆÖØÆ÷
 
 set "PYTHON="
 if exist "%~dp0..\resources\python\python.exe" (
@@ -16,8 +16,8 @@ if exist "%~dp0..\resources\python\python.exe" (
 )
 
 echo ============================================
-echo   è™šæ‹Ÿç§°é‡å™¨
-echo   ä½¿ç”¨ Python: %PYTHON%
+echo   ÐéÄâ³ÆÖØÆ÷
+echo   Ê¹ÓÃ Python: %PYTHON%
 echo ============================================
 echo.
 
@@ -25,6 +25,6 @@ echo.
 
 if errorlevel 1 (
     echo.
-    echo å¯åŠ¨å¤±è´¥ï¼Œè¯·ç¡®è®¤ Python è·¯å¾„æ˜¯å¦æ­£ç¡®
+    echo Æô¶¯Ê§°Ü£¬ÇëÈ·ÈÏ Python Â·¾¶ÊÇ·ñÕýÈ·
     pause
 )

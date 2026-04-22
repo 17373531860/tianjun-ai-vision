@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title 虚拟扫码器
+title ����ɨ����
 
 set "PYTHON="
 if exist "%~dp0..\resources\python\python.exe" (
@@ -16,8 +16,8 @@ if exist "%~dp0..\resources\python\python.exe" (
 )
 
 echo ============================================
-echo   虚拟扫码器
-echo   使用 Python: %PYTHON%
+echo   ����ɨ����
+echo   ʹ�� Python: %PYTHON%
 echo ============================================
 echo.
 
@@ -25,6 +25,6 @@ echo.
 
 if errorlevel 1 (
     echo.
-    echo 启动失败，请确认 Python 路径是否正确
+    echo ����ʧ�ܣ���ȷ�� Python ·���Ƿ���ȷ
     pause
 )

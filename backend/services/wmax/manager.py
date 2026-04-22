@@ -412,9 +412,14 @@ class WMaxDeviceManager:
                     if dev:
                         dev.info.sn = sn
                         dev.info.name = name
-                    # 不调 activate_rpt_reporting: 它内部 turn_on_video(on=True) 会让扫码器
-                    # 进入持续扫描+视频推送模式 (灯一直闪). 改成触发式 (ondemand):
-                    # RPT 端口 TCP 建好即可, 扫码器自身是"通信命令触发", 由 trigger_on/off 控制.
+                        # v2.7.7c 合并: 连接后立即激活 RPT 上报 (GetConfigOpt + TurnOnOffVideo on).
+                        # 与官方 IDManager 行为一致, 现场验证扫码器并不会持续闪光.
+                        # 之前担心"灯一直闪"其实是误判, 而 ondemand/trigger_on 在现场 WMax
+                        # 固件上根本触发不了识别, 导致扫码器完全静默.
+                        try:
+                            await dev.activate_rpt_reporting()
+                        except Exception as e:
+                            logger.warning("[WMaxMgr] %s activate_rpt 异常: %s", key, e)
                     results.append({
                         "ip": ip, "port": port, "sn": sn, "name": name,
                         "action": "connected",
@@ -447,7 +452,11 @@ class WMaxDeviceManager:
                         dev.info.sn = known["sn"]
                     if known.get("name"):
                         dev.info.name = known["name"]
-                # 同上: 不 activate_rpt_reporting, 只建 TCP 三端口, 等触发
+                    # v2.7.7c 合并: 连接后激活 RPT 上报 (参见上方 UDP 发现分支的说明)
+                    try:
+                        await dev.activate_rpt_reporting()
+                    except Exception as e:
+                        logger.warning("[WMaxMgr] %s (已知) activate_rpt 异常: %s", key, e)
                 results.append({
                     "ip": ip, "port": port,
                     "sn": known.get("sn", ""),

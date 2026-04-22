@@ -1,8 +1,20 @@
 """
-热补丁 v2.7.7c — 基于 v2.0.5 + WMax 扫码器 text_lon 自动升级 + 容器最大识别数周期累计修复
-                + WMax trigger/test_connection 自动重连 + 诊断日志
-                + WMax 连接后自动 activate_rpt_reporting (让扫码器持续识别上报条码)
-部署: 复制到 resources\\backend\\hotfix.py，重启软件
+热补丁模块 — 运行时 monkey patch 集合.
+
+v2.7.10 合并说明:
+  原 v2.7.7c 补丁的三大块 (扫码器 text_lon→auto 升级、WMax trigger/test_connection
+  自动重连 + 激活 RPT、容器最大识别数周期累计) 已全部落到源码:
+    - backend/services/scanner.py: _activate_rpt_once / _ensure_wmax_connected /
+      _start_device 升级 / _wmax_trigger / test_connection / _trigger_wmax_discover_once
+    - backend/services/wmax/manager.py: auto_discover_and_connect 两处连接后 await activate_rpt
+    - backend/api/source.py: _update_container_grouping 加 max_recognized_per_label 上限检查
+  因此 apply() 不再调用这三个 _patch_*; 函数定义保留作历史参考和回退手段.
+
+当前仍在 hotfix 的补丁:
+  - _patch_start_rtsp / _patch_start_camera / _patch_video_feed: 摄像头相关老补丁
+  - _add_debug_route: 运行时诊断接口
+
+部署: 复制到 resources\\backend\\hotfix.py，重启软件.
 """
 import os
 import time
@@ -13,13 +25,14 @@ def apply(app=None):
     """Apply all runtime patches."""
     _patch_start_rtsp()
     _patch_start_camera()
-    _patch_scanner_text_lon_upgrade()
-    _patch_wmax_trigger_and_test()
-    _patch_container_max_recognized()
+    # 以下三个补丁已合并到源码, 保留函数定义以备回退; 不再在启动时运行时覆盖.
+    # _patch_scanner_text_lon_upgrade()
+    # _patch_wmax_trigger_and_test()
+    # _patch_container_max_recognized()
     if app is not None:
         _patch_video_feed(app)
         _add_debug_route(app)
-    print("[Hotfix v2.7.7c] 补丁已应用")
+    print("[Hotfix] 已应用 (v2.7.7c 三大块补丁已并入源码, 此处仅保留摄像头+诊断接口补丁)")
 
 
 def _patch_start_camera():
@@ -346,7 +359,92 @@ def _add_debug_route(app):
                 result["channels"][str(cid)] = {"error": str(e)}
         return result
 
+    @app.post("/api/v1/debug/test_cluster_flow")
+    def debug_test_cluster_flow(cycle_id: int, channel_id: int = 0):
+        """端到端回放：从真实 DetectionCycle 喂给 build_context + receive_station_report。
+
+        用于验证 mes_hooks._handle_cycle_end 后半段（context 构造 + 集群入库）
+        整条链路在真实数据下不抛异常、box_aggregations 正确落库。
+        """
+        from backend.db.database import SessionLocal
+        from backend.services.mes_gateway import get_mes_gateway
+        from backend.services.cluster_collector import get_cluster_collector
+        from backend.models.models import DetectionCycle
+        from backend.models.mes_models import Workpiece, WorkpieceInspection
+
+        result = {"cycle_id": cycle_id, "channel_id": channel_id, "steps": []}
+        db = SessionLocal()
+        try:
+            cycle = db.query(DetectionCycle).filter(DetectionCycle.id == cycle_id).first()
+            if not cycle:
+                return {"success": False, "error": f"cycle {cycle_id} 不存在"}
+            result["steps"].append("cycle loaded")
+
+            insp = (db.query(WorkpieceInspection)
+                      .filter(WorkpieceInspection.cycle_id == cycle_id)
+                      .first())
+            wp_id = insp.workpiece_id if insp else None
+            wp = db.query(Workpiece).filter(Workpiece.id == wp_id).first() if wp_id else None
+            box_serial = wp.serial_no if wp else None
+            result["workpiece_id"] = wp_id
+            result["box_serial"] = box_serial
+            result["steps"].append("workpiece resolved")
+
+            gw = get_mes_gateway()
+            ctx = gw.build_context_from_cycle(
+                db, cycle_id,
+                workpiece_id=wp_id,
+                order_id=None,
+                is_good=bool(cycle.is_good),
+                event_name=cycle.event_name,
+                result_reason=getattr(cycle, 'result_reason', None),
+                duration=getattr(cycle, 'duration', None),
+                step_sequence=getattr(cycle, 'step_sequence', None),
+                project_id=getattr(cycle, 'project_id', None),
+            )
+            result["steps"].append("build_context ok")
+            result["context_keys"] = list(ctx.keys())
+            result["steps_count"] = len(ctx.get("steps", []))
+            result["ng_steps_count"] = len(ctx.get("ng_steps", []))
+
+            if not box_serial:
+                result["cluster_skipped"] = "no_box_serial"
+                return {"success": True, **result}
+
+            collector = get_cluster_collector()
+            config = collector.get_config()
+            if config["role"] not in ("master", "standalone"):
+                result["cluster_skipped"] = f"role={config['role']}"
+                return {"success": True, **result}
+
+            station_id = config["station_id"]
+            from backend.api.channel_manager import channel_manager
+            if channel_manager.channel_count > 1:
+                station_id = f"{station_id}-{channel_id}"
+            result["station_id"] = station_id
+
+            cluster_result = collector.receive_station_report(
+                station_id=station_id,
+                box_serial=box_serial,
+                cycle_context=ctx,
+                source_address=f"local:{channel_id}",
+                channel_id=channel_id,
+                is_good=bool(cycle.is_good),
+                event_name=cycle.event_name,
+            )
+            result["cluster_result"] = cluster_result
+            result["steps"].append("receive_station_report ok")
+            return {"success": True, **result}
+        except Exception as e:
+            import traceback
+            result["error"] = str(e)
+            result["traceback"] = traceback.format_exc()
+            return {"success": False, **result}
+        finally:
+            db.close()
+
     print("[Hotfix] 诊断接口 /api/v1/debug/channels 已注册", flush=True)
+    print("[Hotfix] 诊断接口 /api/v1/debug/test_cluster_flow 已注册", flush=True)
 
 
 def _patch_scanner_text_lon_upgrade():

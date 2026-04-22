@@ -1,0 +1,107 @@
+{
+  "version": "2.7.10",
+  "date": "2026-04-21",
+  "previous_version": "2.7.9",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "扫码器 text_lon 自动升级为 auto",
+      "symptom": "历史数据库里 device_type='text_lon' 的扫码器连上后永远扫不到码（前端显示已连接）",
+      "root_cause": "ScannerPanel.vue 默认值改为 auto 后，老数据没迁移；_start_device 也没做兜底升级。text_lon 发 ASCII LON 到 55256，现场 WMax 固件不响应",
+      "fix": "_start_device 检测到 text_lon 自动改 auto；新增 _trigger_wmax_discover_once 合并 2s 内多次触发 UDP 发现+激活 RPT，升级后前端立刻显示 connected",
+      "files": ["backend/services/scanner.py"],
+      "keywords": ["text_lon", "auto", "WMax", "扫码器", "三端口", "device_type", "升级", "LON", "55256", "55266"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "WMax 扫码器连接后必须 activate_rpt_reporting 才能识别",
+      "symptom": "现场扫码器连上但 trigger_on/off 无效；测试按钮走 flash_and_scan 5 秒也扫不到码",
+      "root_cause": "v2.7.7 正式版为避免'灯一直闪'误判，去掉了 activate_rpt_reporting 改成 ondemand 触发式。但现场 WMax 固件不响应单次 Trigger，只认常开 RPT 上报（官方 IDManager 抓包验证）",
+      "fix": "1) wmax/manager.py::auto_discover_and_connect 两处连接后 await activate_rpt_reporting；2) scanner.py 新增模块级 _rpt_activated_devs + _activate_rpt_once（按 id(dev) 去重，通过 dev.on_disconnected 钩子自动清理缓存）；3) 新增 _ensure_wmax_connected 在 _wmax_trigger/test_connection 入口断线自动重连+重激活；4) test_connection WMax 分支改成 activate_rpt + 收码 5s（tap on_code_received 采集，结束恢复），替换扫不到码的 flash_and_scan",
+      "files": ["backend/services/scanner.py", "backend/services/wmax/manager.py"],
+      "keywords": ["WMax", "activate_rpt_reporting", "TurnOnOffVideo", "GetConfigOpt", "RPT", "trigger_on", "trigger_off", "test_connection", "ondemand", "IDManager", "55286"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "容器模式同一 label 跨帧累积超过 max_recognized 误判 NG",
+      "symptom": "期望 1 根的容器实际现场只有 1 根，但遮挡/重现后 ByteTrack 分配新 track_id，item_class_counts 累加到 2 结账时标 NG",
+      "root_cause": "v2.7.4 帧内 top-N 合并只处理同一帧；帧间遮挡重现时 ByteTrack 给新 track_id，_update_container_grouping 按 unique track_id 累加，跨帧没有上限",
+      "fix": "_update_container_grouping 读 steps_config 生成 max_recognized_per_label；新 track_id 进入 box 前检查本 box 该 label 是否已到上限；到上限则只刷新最早那条的 last_seen 避免误判 gone，不再 +1",
+      "files": ["backend/api/source.py"],
+      "keywords": ["max_recognized", "container", "box", "items_ever_seen", "item_class_counts", "ByteTrack", "track_id", "跨帧累积", "上限", "_update_container_grouping"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CLEAN-001",
+      "title": "hotfix.py::apply() 去掉三块 v2.7.7c 运行时补丁调用",
+      "symptom": "开发机和客户现场都长期靠运行时 monkey patch 维持三大块行为，源码实际早已偏离现场",
+      "root_cause": "补丁包 v2.7.7c 作为紧急修复发给现场但一直没合并回源码",
+      "fix": "apply() 注释掉 _patch_scanner_text_lon_upgrade / _patch_wmax_trigger_and_test / _patch_container_max_recognized 三行调用；函数定义保留作历史参考和回退手段；启动日志改成 '[Hotfix] 已应用 (v2.7.7c 三大块补丁已并入源码)'",
+      "files": ["backend/hotfix.py"],
+      "keywords": ["hotfix", "monkey patch", "v2.7.7c", "apply", "runtime patch", "合并入源码"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "集群聚合子报告 cycle_context.sub_reports",
+      "symptom": "同一工位两路通道合并时，只保留最后一条上报的 NG 原因，前端 ClusterPanel 看不到每个通道各自的 OK/NG 明细",
+      "fix": "ClusterCollector._receive_station_report_locked 把每条上报的原始快照（channel_id、is_good、event_name、missing_steps 等）追加到 box.cycle_context.sub_reports；get_box_detail 返回完整 cycle_context；前端 ClusterPanel.vue 渲染子报告卡片",
+      "files": ["backend/api/cluster.py", "backend/services/cluster_collector.py", "frontend/src/views/MES/ClusterPanel.vue", "frontend/src/api/cluster.js", "frontend/src/utils/format.js"],
+      "keywords": ["cluster", "sub_reports", "集群", "汇总", "cycle_context", "BoxAggregation", "合并"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "扫码器/外部设备配对组 pairing_group + external_only",
+      "symptom": "现场称重器 + 扫码枪 C 需要绑一起汇报，但扫码器"绑定工位"UI 对只喂称重器的扫码枪没意义",
+      "fix": "ScannerDevice / ExternalDevice 加 pairing_group 字段 + _inject_barcode_to_external_devices 按 pairing_group 匹配；external_only=True 时前端隐藏"绑定工位"改成必填"设备分组号"",
+      "files": ["backend/models/mes_models.py", "backend/api/scanner.py", "backend/api/external_device.py", "backend/services/scanner.py", "backend/services/external_device.py", "backend/main.py", "frontend/src/views/MES/ScannerPanel.vue", "frontend/src/views/MES/ExternalDevicePanel.vue"],
+      "keywords": ["pairing_group", "external_only", "设备分组", "扫码器", "称重器", "绑定", "外部设备"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "称重器稳定后注入条码不立即派发",
+      "symptom": "SN-0016 已在站点 C 扫码且称重稳定，但数据没汇总到主机",
+      "root_cause": "_handle_weight_stability 节流稳定重量上报；set_barcode 后要等下一次重量变化才触发 _dispatch，box_serial 时间窗内没装进去",
+      "fix": "ExternalDeviceService.set_barcode 注入条码时，若外部设备是已稳定的称重器则立刻 _dispatch（带最近一次稳定重量+新条码）",
+      "files": ["backend/services/external_device.py"],
+      "keywords": ["称重器", "set_barcode", "dispatch", "稳定", "box_serial", "SN-0016", "节流"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/api/cluster.py",
+    "backend/api/external_device.py",
+    "backend/api/projects.py",
+    "backend/api/scanner.py",
+    "backend/api/source.py",
+    "backend/db/database.py",
+    "backend/hotfix.py",
+    "backend/main.py",
+    "backend/models/mes_models.py",
+    "backend/services/cluster_collector.py",
+    "backend/services/external_device.py",
+    "backend/services/mes_gateway.py",
+    "backend/services/mes_hooks.py",
+    "backend/services/scanner.py",
+    "backend/services/wmax/manager.py",
+    "frontend/src/api/cluster.js",
+    "frontend/src/utils/format.js",
+    "frontend/src/views/MES/ClusterPanel.vue",
+    "frontend/src/views/MES/ExternalDevicePanel.vue",
+    "frontend/src/views/MES/ScannerPanel.vue",
+    "electron/package.json",
+    "electron/splash.html"
+  ]
+}

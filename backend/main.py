@@ -76,6 +76,10 @@ def migrate_database():
         ("scanner_devices", "bind_timing", "VARCHAR(20) DEFAULT 'mid_cycle'"),
         ("scanner_devices", "broadcast_channels", "JSON"),
         ("scanner_devices", "device_type", "VARCHAR(20) DEFAULT 'auto'"),
+        ("scanner_devices", "external_only", "BOOLEAN DEFAULT 0"),
+        ("scanner_devices", "pairing_group", "VARCHAR(32)"),
+        ("external_devices", "pairing_group", "VARCHAR(32)"),
+        ("cluster_config", "channel_station_map", "JSON"),
         ("mes_connections", "bound_channels", "JSON"),
         ("cluster_config", "timeout_push", "BOOLEAN DEFAULT 0"),
         # v2.7.5: 外部设备稳定值判定与有重无码告警
@@ -485,6 +489,30 @@ def _start_auto_cleanup():
     _schedule_auto_cleanup()
 
 threading.Thread(target=_start_auto_cleanup, daemon=True).start()
+
+
+# v2.7.9: 外设日志每小时清理一次（保留已绑定扫码的记录）
+# 称重器/传感器稳定阶段会写 stabilizing 过程日志，长期跑会堆积。
+# 扫码绑定过的日志（box_serial 非空）属于业务数据，不动；其他每小时清 1 次。
+_extdev_cleanup_timer = None
+
+def _schedule_extdev_log_cleanup():
+    global _extdev_cleanup_timer
+    try:
+        from backend.services.external_device import get_external_device_service
+        svc = get_external_device_service()
+        svc.cleanup_old_logs(keep_bound=True, older_than_seconds=3600)
+    except Exception as e:
+        print(f"[ExtDev 定时清理] 执行失败: {e}")
+    _extdev_cleanup_timer = threading.Timer(3600, _schedule_extdev_log_cleanup)
+    _extdev_cleanup_timer.daemon = True
+    _extdev_cleanup_timer.start()
+
+def _start_extdev_log_cleanup():
+    print("[ExtDev 定时清理] 每小时清理未绑定扫码的外设日志...")
+    _schedule_extdev_log_cleanup()
+
+threading.Thread(target=_start_extdev_log_cleanup, daemon=True).start()
 
 # 清理状态标志（防止重复清理）
 _cleanup_done = False

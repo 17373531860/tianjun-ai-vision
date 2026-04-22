@@ -268,6 +268,12 @@ class ScannerDevice(Base):
     bind_timing = Column(String(20), default="mid_cycle")
     broadcast_channels = Column(JSON, nullable=True)
     device_type = Column(String(20), default="text_lon")
+    # 勾上后，扫码只用来把条码喂给"绑定工位"里挂着的外部设备（如称重器），
+    # 不会触发任何视觉检测周期。用于"扫码-放秤"这类只服务外设的扫码枪。
+    external_only = Column(Boolean, default=False)
+    # v2.8.1 设备分组号：扫码枪和外设（如秤）之间的配对键，与"绑定工位"解耦。
+    # 为空时沿用旧逻辑——用 channel_id 做配对。
+    pairing_group = Column(String(32), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -358,6 +364,9 @@ class ClusterConfig(Base):
     timeout_sec = Column(Integer, nullable=False, default=300)
     timeout_push = Column(Boolean, default=False)
     enabled = Column(Boolean, default=False)
+    # 本机"视觉通道 → 站点"映射表，例如 {"0":"B","1":"B"} 表示两路视觉都上报到站点 B。
+    # 为空时沿用旧逻辑：channel_count>1 自动拼 "{station_id}-{channel_id}"。
+    channel_station_map = Column(JSON, nullable=True)
 
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -425,6 +434,9 @@ class ExternalDevice(Base):
     # 业务配置
     station_id = Column(String(32), nullable=True)
     channel_id = Column(Integer, nullable=True)
+    # v2.8.1 设备分组号：和扫码枪的配对键，与"绑定工位"解耦。
+    # 为空时沿用旧逻辑——用 channel_id 做配对。
+    pairing_group = Column(String(32), nullable=True)
     # 数据流向: cluster(注入ClusterCollector), extra_fields(注入MES extra), both(两者)
     data_target = Column(String(20), nullable=False, default="cluster")
     # 范围校验（如称重范围）
