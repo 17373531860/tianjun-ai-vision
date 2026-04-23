@@ -514,3 +514,52 @@ v2.7.9 两层防线：
 - `frontend/src/views/MES/GatewayPanel.vue`（全图形化配置）
 - `tools/test_mes_gateway.py`（端到端自测）
 - `docs/客户MES对接数据格式.md`（对外文档 + 10 项贵方确认清单）
+
+## v2.7.12 MES/集群/扫码器增强（2026-04-23）
+
+### 1. 适配器 4 选 1（新增 form-urlencoded / query-string）
+
+注册表 `backend/services/mes_adapters/__init__.py`:
+
+| `adapter_type` | 发送形式 | Content-Type | 典型客户场景 |
+|---|---|---|---|
+| `rest` | body = JSON | `application/json` | 现代 REST API |
+| `form-data` | body = `param=<JSON 字符串>` | `application/x-www-form-urlencoded` | 客户说"参数叫 param" |
+| `form-urlencoded` | body = `order_no=xxx&result=NG&...`（字段平铺） | `application/x-www-form-urlencoded` | 客户说"字段分开不要打包" |
+| `query-string` | URL 带 query，body 空 | 无 | 客户说"参数放 URL 里" |
+| `modbus_rtu` | Modbus 寄存器 | - | PLC/工控 |
+
+**关键点**：
+- `form-urlencoded` / `query-string` 两个适配器都支持 `array_join` 配置（默认 `,` 拼数组，可设 `"json"` 转 JSON 字符串）
+- 这两种适配器会把 `missing_items: ["螺丝A","垫片B"]` 自动拼成 `"螺丝A,垫片B"` 发出
+- 不需要改代码，客户答哪种前端直接选
+
+**端到端测试**：`python3 tools/test_mes_gateway.py` 现在是 9 场景 + 3 API，全绿才算没问题。
+
+### 2. 扫码器"OK 后同码冷却" (`ok_rescan_cooldown_sec`)
+
+解决的问题：A 扫码 → A 完成 OK → 移走 A 时又扫到 A → 新物品 B 被记成 A 的延续；DB 留"queued 但永不消费"的脏记录。
+
+配置位置：
+- 后端 `ScannerConnection` dataclass 新增字段 `ok_rescan_cooldown_sec: int = 0`
+- 前端 `ScannerPanel.vue` 扫码器编辑对话框"去重/冷却"区
+- `MESHookManager._handle_scan` 在受理前检查：已 OK + 距结算 < 冷却秒数 + 同条码 → 静默忽略（返回不抛错）
+- NG 不受冷却影响（便于现场纠错重扫）
+
+默认 `0` 表示关闭（出厂保持旧行为），现场按扫码频率调：流水线建议 5~10 秒。
+
+### 3. 集群 `sub_reports` 按 `(channel_id, source_address)` 去重
+
+排查"同通道多行 / 同条码 OK+NG 并存" 时直接看：
+- `cluster_collector._receive_station_report_locked`
+- 逻辑：每次收到新 sub_report，先按 `(channel_id, source_address)` 找已有的，有就替换无就追加
+
+被这段代码覆盖掉的旧数据**不会保留历史版本**——如果客户需要"看历史"，要额外写 CycleContext 归档。
+
+### 4. 集群箱数据清理 API
+
+- `DELETE /cluster/box/{barcode}` — 单条码全删（BoxAggregation + BoxSummary）
+- `POST /cluster/boxes/clear` — `scope=all|pending|recent|older`，`older` 带 `before_days=N`
+- 前端 ClusterPanel 有"清理"按钮进对话框
+
+常见误解：删完 `BoxAggregation` 后条码重新扫会视为"新条码"，是预期行为；对应工件 `Workpiece` 表不会被这两个 API 触及，需要时单独调 workpiece 相关接口。

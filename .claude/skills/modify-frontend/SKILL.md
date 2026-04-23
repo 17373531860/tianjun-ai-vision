@@ -242,3 +242,44 @@ display.monitor.defaultCounters.showTotal/showGood/showBad/showNgSteps → 内�
   ```
 - 串口子参数（data bits / parity / stop bits）存在 `form.protocol_config` 而非顶层
 - 保存返回 200 但有 `warning` 字段 → 用 `ElMessage.warning` 提示（设备暂时不可连通）
+
+## v2.7.12 前端坑点（必看，反复翻车）
+
+### 函数式组件用 `h()` 渲染 ElementPlus 控件 → 不能写字符串组件名
+
+`frontend/src/views/MES/OrderPanel.vue` 的 `DynamicFieldInput` 犯过 3 次同一个错：
+
+```js
+// ✗ 错 — 本项目 Vite + ElementPlus auto-import 下渲染成空节点，输入框全部隐形
+return h('el-input', { modelValue, 'onUpdate:modelValue': onInput })
+
+// ✓ 对 — 必须显式 import 组件对象
+import { ElInput, ElInputNumber, ElDatePicker, ElTimePicker, ElSwitch, ElSelect, ElOption } from 'element-plus'
+return h(ElInput, { modelValue, 'onUpdate:modelValue': onInput })
+```
+
+排查路径：对话框打开后 label 在、控件区域是空的、F12 Elements 看到 `<el-input>` 未被解析成真实 DOM → 90% 是这个问题。
+
+适用文件：任何用 `h()` 手写渲染函数的文件（GatewayPanel / OrderPanel / ScannerPanel / 动态表单组件）。
+
+### `ElInputNumber` 默认 precision=2 → 整数字段会显示 `0.00`
+
+- 整数字段（如 `planned_qty` 计划数量）单独判 key 走 `precision: 0 + step: 1`
+- 或给字段 meta 加 `integer: true` 字段后在渲染分支里取用
+
+### 扫码器冷却配置（ScannerPanel.vue）
+
+- 新字段 `ok_rescan_cooldown_sec` (int, 秒, 默认 0 关闭) 在"去重/冷却"区域
+- 语义：OK 工件在该秒数内的同条码重扫静默忽略；NG 不受影响便于纠错重扫
+- 后端 `ScannerConnection` dataclass / `MESHookManager._handle_scan` 对应字段必须同步
+
+### 集群 ClusterPanel 目标明细列表渲染
+
+- `sub_reports` 必须去重：前端显示时相信后端已按 `(channel_id, source_address)` 保留最新一条
+- 若仍看到同通道多行 → 说明 `cluster_collector._receive_station_report_locked` 的去重逻辑被改坏，去查 backend 而不是前端
+
+### MES GatewayPanel 适配器下拉 4 选 1
+
+- 单选值：`rest` / `form-data` / `form-urlencoded` / `query-string` / `modbus_rtu`
+- 每种下面配一句话说明 + 例子，避免用户选错
+- `form-data` 独有"表单字段名 form_key"，其余 3 种 HTTP 形式不用

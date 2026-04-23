@@ -230,7 +230,11 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, h } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  ElMessage, ElMessageBox,
+  ElInput, ElInputNumber, ElDatePicker, ElTimePicker,
+  ElSwitch, ElSelect, ElOption,
+} from 'element-plus'
 import { Close } from '@element-plus/icons-vue'
 import { getOrders, createOrder, updateOrder, changeOrderStatus, deleteOrder, updateOrderExtraData } from '@/api/mes'
 
@@ -287,29 +291,38 @@ const DynamicFieldInput = {
       const common = { size: 'small', style: 'width:100%' }
       const ph = PRESET_META[item.key]?.placeholder
       if (item.type === 'textarea') {
-        return h('el-input', { ...common, type: 'textarea', rows: 2, modelValue, 'onUpdate:modelValue': onInput, placeholder: ph })
+        return h(ElInput, { ...common, type: 'textarea', rows: 2, modelValue, 'onUpdate:modelValue': onInput, placeholder: ph })
       }
       if (item.type === 'number') {
-        return h('el-input-number', { ...common, modelValue, 'onUpdate:modelValue': onInput, min: PRESET_META[item.key]?.min ?? undefined, precision: 2, controlsPosition: 'right' })
+        const isInt = item.key === 'planned_qty'
+        return h(ElInputNumber, {
+          ...common,
+          modelValue,
+          'onUpdate:modelValue': onInput,
+          min: PRESET_META[item.key]?.min ?? undefined,
+          precision: isInt ? 0 : 2,
+          step: isInt ? 1 : 0.01,
+          controlsPosition: 'right',
+        })
       }
       if (item.type === 'date') {
-        return h('el-date-picker', { ...common, type: 'date', valueFormat: 'YYYY-MM-DD', modelValue, 'onUpdate:modelValue': onInput })
+        return h(ElDatePicker, { ...common, type: 'date', valueFormat: 'YYYY-MM-DD', modelValue, 'onUpdate:modelValue': onInput })
       }
       if (item.type === 'time') {
-        return h('el-time-picker', { ...common, valueFormat: 'HH:mm:ss', modelValue, 'onUpdate:modelValue': onInput })
+        return h(ElTimePicker, { ...common, valueFormat: 'HH:mm:ss', modelValue, 'onUpdate:modelValue': onInput })
       }
       if (item.type === 'datetime') {
-        return h('el-date-picker', { ...common, type: 'datetime', valueFormat: 'YYYY-MM-DD HH:mm:ss', modelValue, 'onUpdate:modelValue': onInput })
+        return h(ElDatePicker, { ...common, type: 'datetime', valueFormat: 'YYYY-MM-DD HH:mm:ss', modelValue, 'onUpdate:modelValue': onInput })
       }
       if (item.type === 'switch') {
-        return h('el-switch', { size: 'small', modelValue: !!modelValue, 'onUpdate:modelValue': onInput })
+        return h(ElSwitch, { size: 'small', modelValue: !!modelValue, 'onUpdate:modelValue': onInput })
       }
       if (item.type === 'select') {
         const opts = parseOptions(item.optionsText)
-        return h('el-select', { ...common, modelValue, 'onUpdate:modelValue': onInput, clearable: true },
-          () => opts.map(o => h('el-option', { key: String(o.value), value: o.value, label: o.label })))
+        return h(ElSelect, { ...common, modelValue, 'onUpdate:modelValue': onInput, clearable: true },
+          () => opts.map(o => h(ElOption, { key: String(o.value), value: o.value, label: o.label })))
       }
-      return h('el-input', { ...common, modelValue, 'onUpdate:modelValue': onInput, placeholder: ph })
+      return h(ElInput, { ...common, modelValue, 'onUpdate:modelValue': onInput, placeholder: ph })
     }
   }
 }

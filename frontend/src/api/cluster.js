@@ -15,6 +15,9 @@ export const getConnectedSlaves = () => api.get('/cluster/slaves')
 export const deleteBox = (boxSerial) =>
   api.delete(`/cluster/boxes/${encodeURIComponent(boxSerial)}`)
 
-// 批量清理集群记录。scope: 'all' | 'pending' | 'recent'
-export const clearBoxes = (scope = 'all') =>
-  api.delete('/cluster/boxes', { params: { scope } })
+// 批量清理集群记录。scope: 'all' | 'pending' | 'recent' | 'older'
+// scope=older 时必须传 beforeDays (>0)，清 N 天以前的记录
+export const clearBoxes = (scope = 'all', beforeDays = 0) =>
+  api.delete('/cluster/boxes', {
+    params: scope === 'older' ? { scope, before_days: beforeDays } : { scope },
+  })

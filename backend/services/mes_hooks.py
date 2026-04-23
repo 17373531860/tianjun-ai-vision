@@ -17,6 +17,7 @@ import threading
 import queue
 import time
 import traceback
+from datetime import datetime
 from typing import Optional
 
 from backend.db.database import SessionLocal
@@ -295,6 +296,18 @@ class MESHookManager:
             pass
         return "rescan"
 
+    def _get_ok_rescan_cooldown(self, channel_id: int) -> int:
+        """获取该工位的"OK 后同码冷却秒数"配置。0 表示关闭。"""
+        try:
+            from backend.services.scanner import get_scanner_service
+            svc = get_scanner_service()
+            for conn in svc._connections.values():
+                if self._conn_serves_channel(conn, channel_id):
+                    return int(getattr(conn, "ok_rescan_cooldown_sec", 0) or 0)
+        except Exception:
+            pass
+        return 0
+
     def get_rebind_prompt(self, channel_id: int) -> Optional[dict]:
         """获取 manual rebind 弹窗数据"""
         return self._rebind_prompt.get(channel_id)
@@ -323,6 +336,27 @@ class MESHookManager:
                      raw_data: str, project_id: int, device_id: int = None):
         """处理扫码事件"""
         from backend.models.mes_models import ScanLog
+
+        # 同码二次扫抑制：上次检测合格 & 距完成时间 < 冷却秒数 → 静默丢弃
+        # 用于过滤搬运过程中扫码器误扫到已合格工件的情况，避免脏数据。
+        cooldown = self._get_ok_rescan_cooldown(channel_id)
+        if cooldown > 0:
+            existing = self._workpiece_svc.find_by_serial(db, serial_no, project_id)
+            if (existing and existing.status == "ok"
+                    and existing.last_inspect_at is not None):
+                elapsed = (datetime.now() - existing.last_inspect_at).total_seconds()
+                if 0 <= elapsed < cooldown:
+                    scan_log = ScanLog(
+                        device_id=device_id, channel_id=channel_id,
+                        raw_data=raw_data, parsed_serial=serial_no,
+                        workpiece_id=existing.id, success=False,
+                        error_msg=f"OK冷却期内重复扫码忽略 ({elapsed:.1f}s/{cooldown}s)",
+                    )
+                    db.add(scan_log)
+                    print(f"[MES] 扫码冷却过滤: {serial_no} 工件#{existing.id} "
+                          f"OK后{elapsed:.1f}s (冷却{cooldown}s, 工位{channel_id})",
+                          flush=True)
+                    return
 
         action = self._get_duplicate_scan_action(channel_id)
 

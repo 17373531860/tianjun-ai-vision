@@ -312,26 +312,18 @@ class ClusterCollector:
                     #   - is_good：两路都 OK 才算 OK（有一路 NG 即 NG）
                     #   - event_name：NG 方优先；都 OK 则保留后到的
                     #   - cycle_context：深合并，defects / extra_fields 等列表做去重累加
-                    merged_is_good = bool(existing.is_good) and bool(is_good)
-                    if existing.is_good and not is_good:
-                        merged_event = event_name
-                    elif not existing.is_good and is_good:
-                        merged_event = existing.event_name
-                    else:
-                        merged_event = event_name or existing.event_name
+                    # v2.8.x 增强：同一路重复上报（同 channel_id + source_address）时
+                    # 用最新那次覆盖旧的，不再无限累加；不同路各自保留。
                     merged_context = _merge_cycle_context(
-                        existing.cycle_context, cycle_context, merged_is_good
+                        existing.cycle_context, cycle_context,
+                        bool(existing.is_good) and bool(is_good)
                     )
 
-                    # v2.8.1 同站点多路上报时，原来的合并把后到方的 ng_reason 覆盖了先到方,
-                    # 前端只能看到最后那路的 NG 原因 —— 业务上看起来像"另一路凭空消失".
-                    # 这里把每一路的快照都追加到 sub_reports, 前端按 sub_reports 展开显示,
-                    # 既保留原合并字段（兼容老消费方）, 也能让用户看见两路各自的明细.
+                    # 整理 sub_reports: 按 (channel_id, source_address) 去重，同路最新覆盖
                     existing_subs = (merged_context.get("sub_reports")
                                      if isinstance(merged_context.get("sub_reports"), list)
                                      else [])
                     if not existing_subs:
-                        # 首次进入合并 → 把"老的那条"也补成一份 sub_report
                         old_snap = _build_sub_report(
                             existing.cycle_context,
                             channel_id=existing.channel_id,
@@ -340,14 +332,41 @@ class ClusterCollector:
                             event_name=existing.event_name,
                         )
                         existing_subs = [old_snap]
-                    existing_subs.append(_build_sub_report(
+                    new_snap = _build_sub_report(
                         cycle_context,
                         channel_id=channel_id,
                         source_address=source_address,
                         is_good=is_good,
                         event_name=event_name,
-                    ))
+                    )
+                    dedup_key = (channel_id, source_address)
+                    existing_subs = [
+                        s for s in existing_subs
+                        if (s.get("channel_id"), s.get("source_address")) != dedup_key
+                    ]
+                    existing_subs.append(new_snap)
                     merged_context["sub_reports"] = existing_subs
+
+                    # 基于去重后的 sub_reports 重新推导 is_good / event_name
+                    # 只要任意一路 NG 即整站 NG；都 OK 才算 OK。
+                    sub_goods = [bool(s.get("is_good")) for s in existing_subs
+                                 if s.get("is_good") is not None]
+                    merged_is_good = all(sub_goods) if sub_goods else bool(is_good)
+                    ng_events = [s.get("event_name") for s in existing_subs
+                                 if not s.get("is_good") and s.get("event_name")]
+                    ok_events = [s.get("event_name") for s in existing_subs
+                                 if s.get("is_good") and s.get("event_name")]
+                    if ng_events:
+                        merged_event = ng_events[-1]
+                    elif ok_events:
+                        merged_event = ok_events[-1]
+                    else:
+                        merged_event = event_name or existing.event_name
+
+                    # 同步更新 cycle.is_good / cycle.result 给前端
+                    if isinstance(merged_context.get("cycle"), dict):
+                        merged_context["cycle"]["is_good"] = merged_is_good
+                        merged_context["cycle"]["result"] = "OK" if merged_is_good else "NG"
 
                     existing.cycle_context = merged_context
                     existing.is_good = merged_is_good

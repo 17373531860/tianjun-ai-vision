@@ -274,6 +274,9 @@ class ScannerDevice(Base):
     # v2.8.1 设备分组号：扫码枪和外设（如秤）之间的配对键，与"绑定工位"解耦。
     # 为空时沿用旧逻辑——用 channel_id 做配对。
     pairing_group = Column(String(32), nullable=True)
+    # 同码二次扫抑制：若同条码对应工件上次检测合格、且距完成时间不超过该秒数，本次扫码静默丢弃。
+    # 用于过滤"搬运过程中扫码器误扫到已完成合格工件"的场景。0 = 关闭。
+    ok_rescan_cooldown_sec = Column(Integer, default=0)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

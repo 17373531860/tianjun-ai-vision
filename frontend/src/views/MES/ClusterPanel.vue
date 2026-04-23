@@ -210,6 +210,18 @@
             <el-button size="small" type="danger" plain
                        :disabled="recentSummaries.length === 0"
                        @click="confirmClearScope('recent')">清空</el-button>
+            <el-dropdown trigger="click" @command="handleBatchClearCommand">
+              <el-button size="small" type="danger" plain>批量清理</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="older7">清 7 天前</el-dropdown-item>
+                  <el-dropdown-item command="older30">清 30 天前</el-dropdown-item>
+                  <el-dropdown-item command="older90">清 90 天前</el-dropdown-item>
+                  <el-dropdown-item command="older_custom">清 N 天前…</el-dropdown-item>
+                  <el-dropdown-item divided command="all">清空全部（含待汇总）</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </div>
         <div v-if="recentSummaries.length === 0" class="text-gray-500 text-sm text-center py-6">
@@ -663,10 +675,13 @@ const confirmDeleteBox = async (boxSerial) => {
 }
 
 const confirmClearScope = async (scope) => {
-  const text = scope === 'pending' ? '所有待汇总目标' : '所有已完成记录'
+  const text = scope === 'pending' ? '所有待汇总目标'
+             : scope === 'recent'  ? '所有已完成记录'
+             : scope === 'all'     ? '全部集群汇总记录（待汇总 + 已完成）'
+             : '所选记录'
   try {
     await ElMessageBox.confirm(
-      `确定要清空${text}吗？此操作不可恢复。`,
+      `确定要清空${text}吗？此操作不可恢复。\n原始检测记录（数据页、工件追溯、已推送 MES 的数据）不会被删除。`,
       '批量清空',
       { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消',
         confirmButtonClass: 'el-button--danger' }
@@ -680,6 +695,46 @@ const confirmClearScope = async (scope) => {
   } catch (e) {
     ElMessage.error('清空失败: ' + (e.response?.data?.detail || e.message))
   }
+}
+
+const confirmClearOlder = async (presetDays = null) => {
+  let days = presetDays
+  if (!days) {
+    try {
+      const { value } = await ElMessageBox.prompt(
+        '清除多少天以前的记录？',
+        '清理旧记录',
+        { inputPattern: /^[1-9]\d{0,3}$/, inputErrorMessage: '请输入 1-9999 的整数天数',
+          inputValue: '30', confirmButtonText: '清理', cancelButtonText: '取消' }
+      )
+      days = parseInt(value, 10)
+    } catch { return }
+  }
+  if (!days || days <= 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要清除 ${days} 天以前的所有集群汇总记录吗？此操作不可恢复。\n原始检测记录（数据页、工件追溯、已推送 MES 的数据）不会被删除。`,
+      '清理旧记录',
+      { type: 'warning', confirmButtonText: '清理', cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger' }
+    )
+  } catch { return }
+  try {
+    const res = await clearBoxes('older', days)
+    ElMessage.success(`已清除 ${days} 天前的记录（工位记录 ${res.data.aggregations}、汇总 ${res.data.summaries}）`)
+    recentPage.value = 1
+    await loadBoxes()
+  } catch (e) {
+    ElMessage.error('清理失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+const handleBatchClearCommand = (command) => {
+  if (command === 'all') return confirmClearScope('all')
+  if (command === 'older7') return confirmClearOlder(7)
+  if (command === 'older30') return confirmClearOlder(30)
+  if (command === 'older90') return confirmClearOlder(90)
+  if (command === 'older_custom') return confirmClearOlder()
 }
 
 const testMaster = async () => {

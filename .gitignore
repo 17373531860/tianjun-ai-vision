@@ -21,6 +21,8 @@ python-env/
 # Database
 *.db
 *.sqlite3
+*.db-shm
+*.db-wal
 
 # Uploads and recordings (user data)
 backend/uploads/
@@ -92,3 +94,30 @@ HCNetSDK*/
 hotfix*/
 *.zip
 *.lic
+
+# Local debug & probe scripts (not part of product)
+probe_*.py
+decode_pcap.py
+analyze_pcap*.py
+*.pcapng
+WMax_IDManager_V*/
+releases/
+tune_rod_conf/
+
+# Ad-hoc test scripts at repo root (should live in tests/ if keep)
+/test_cluster.py
+/test_external_device.py
+/test_flash_scan.py
+/test_multi_workstation.py
+/test_ondemand.py
+/test_parse_config*.py
+/test_scanner_*.py
+/test_toast_alarm.py
+/test_video_*.py
+
+# Runtime state that changes on every run (not source of truth for the product)
+backend/counters/*.json
+!backend/counters/.gitkeep
+
+# Internal / reverse-engineering scratch (not for release)
+docs/wmax_decompiled/

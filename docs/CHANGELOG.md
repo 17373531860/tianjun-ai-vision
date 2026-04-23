@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.7.12 (2026-04-23)
+- [BUG-001] 修复: 工单新建对话框 7 个输入框全部隐形 (DynamicFieldInput h('el-input', ...) 字符串名 Vite+ElementPlus auto-import 不解析，改显式 import ElInput 等对象)
+- [BUG-002] 修复: 计划数量显示 0.00 (DynamicFieldInput number 类型固定 precision:2，planned_qty 单独走整数精度)
+- [BUG-003] 修复: 集群目标明细同通道多行、同条码 OK/NG 并存 (sub_reports 按 (channel_id, source_address) 去重保留最新)
+- [BUG-004] 修复: 扫码器重复扫码留脏 queued 记录 (新增 ok_rescan_cooldown_sec 冷却, OK 后冷却窗口内同码静默, NG 不受影响)
+- [BUG-005] 修复: Monitor 结果一闪而过 1.2s 就清 (延长到 3.5s, 新条码到达直接覆盖)
+- [FEAT-001] 新增: MES 适配器支持 4 种参数形式 (新增 form-urlencoded 字段平铺 + query-string URL 参数; GatewayPanel 4 选 1, 每种一句话说明)
+- [FEAT-002] 新增: 集群箱数据按条码删除 + 批量清理 (DELETE /cluster/box/{barcode}, POST /cluster/boxes/clear scope=all/pending/recent/older)
+- [DOC-001] 升级: 客户 MES 对接文档 v1.1 (4 种参数形式并列 + 各自 curl 示例; docx/pdf 重生成)
+- [TEST-001] 扩展: test_mes_gateway.py 到 9 场景+3 API (新增 8806 form-urlencoded / 8807 query-string mock 端口, 9/9+3/3 全绿)
+- [TEST-002] 新增: test_fixes_simulation.py (扫码冷却 / 集群去重 / 批量清理 API 端到端仿真)
+
 ## v2.7.11 (2026-04-23)
 - [FEAT-001] 新增: MES Gateway 统一鉴权 (bearer / api_key / custom_header 三种方式合并进 headers)
 - [FEAT-002] 新增: MES Gateway 按结果过滤 (push_on_result 支持只推 OK / 只推 NG / 全推)

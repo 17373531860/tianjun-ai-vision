@@ -521,14 +521,14 @@
       </div>
 
       <!-- MES 信息条 -->
-      <div v-if="mesData?.workpiece || mesData?.order || mesData?.warn_no_barcode" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
-        <div v-if="mesData.workpiece" class="flex items-center gap-2">
+      <div v-if="displayWorkpiece || mesData?.order || mesData?.warn_no_barcode || workpieceOverride === null" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
+        <div v-if="displayWorkpiece" class="flex items-center gap-2">
           <span class="text-cyan-400 font-bold">工件:</span>
-          <span class="font-mono text-white">{{ mesData.workpiece.serial_no }}</span>
-          <el-tag :type="mesData.workpiece.status === 'ok' ? 'success' : mesData.workpiece.status === 'ng' ? 'danger' : mesData.workpiece.status === 'inspecting' ? 'warning' : 'info'" size="small">
-            {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[mesData.workpiece.status] || mesData.workpiece.status }}
+          <span class="font-mono text-white">{{ displayWorkpiece.serial_no }}</span>
+          <el-tag :type="displayWorkpiece.status === 'ok' ? 'success' : displayWorkpiece.status === 'ng' ? 'danger' : displayWorkpiece.status === 'inspecting' ? 'warning' : 'info'" size="small">
+            {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[displayWorkpiece.status] || displayWorkpiece.status }}
           </el-tag>
-          <span class="text-gray-400 text-xs">第{{ mesData.workpiece.inspection_count }}次</span>
+          <span class="text-gray-400 text-xs">第{{ displayWorkpiece.inspection_count }}次</span>
         </div>
         <div v-if="mesData.order" class="flex items-center gap-2">
           <span class="text-cyan-400 font-bold">工单:</span>
@@ -542,7 +542,7 @@
           <span class="text-yellow-300 font-bold text-base">⚠ 未绑码</span>
           <span class="text-yellow-200 text-sm">请扫描工件条码</span>
         </div>
-        <div v-else-if="!mesData.workpiece && !mesData.order" class="text-gray-500 text-xs">等待扫码...</div>
+        <div v-else-if="!displayWorkpiece && !mesData?.order" class="text-gray-500 text-xs">等待扫码...</div>
         <!-- 额外字段输入 (外部 MES 动态字段) -->
         <div v-if="extraFieldsSchema.length" class="flex items-center gap-2 ml-auto border-l border-cyan-800/50 pl-4">
           <div v-for="f in extraFieldsSchema" :key="f.key" class="flex items-center gap-1">
@@ -1310,6 +1310,31 @@ const isTrackingMode = computed(() => currentProject.value?.logic_mode === 'trac
 
 // MES 实时数据 (从轮询结果中获取)
 const mesData = computed(() => multiChannelData.value[selectedChannel.value]?.mes || null);
+
+// 工件卡片显示覆盖：周期结束时先把最终结果 OK/NG 覆盖上去保留几秒，然后清空让 UI 回到"等待扫码..."
+// undefined = 跟随 mesData.workpiece；object = 强制显示这个快照；null = 强制隐藏（显示等待扫码提示）
+const workpieceOverride = ref(undefined);
+let workpieceOverrideTimer = null;
+let workpieceHideTimer = null;
+const WORKPIECE_RESULT_HOLD_MS = 3500;  // 结果 OK/NG 标签保留时长
+
+const displayWorkpiece = computed(() => {
+  if (workpieceOverride.value === null) return null;
+  if (workpieceOverride.value) return workpieceOverride.value;
+  return mesData.value?.workpiece || null;
+});
+
+// 真实工件变化（新扫码绑了新工件）立即恢复默认显示，清掉残留的 override
+watch(
+  () => mesData.value?.workpiece?.serial_no,
+  (newSn, oldSn) => {
+    if (newSn && newSn !== oldSn) {
+      if (workpieceOverrideTimer) { clearTimeout(workpieceOverrideTimer); workpieceOverrideTimer = null; }
+      if (workpieceHideTimer) { clearTimeout(workpieceHideTimer); workpieceHideTimer = null; }
+      workpieceOverride.value = undefined;
+    }
+  }
+);
 
 // 操作员选择
 const operatorList = ref([]);
@@ -2492,6 +2517,8 @@ const cachedScreenshotUrls = {};
 
 // 上一次的总产量，用于检测周期变化
 let lastTotalCount = -1;
+// 上一次的不良总数，用于推断本轮 OK/NG
+let lastNgCount = -1;
 // 已处理的事件ID（防止NG排名重复计数）
 const processedEventIds = new Set();
 
@@ -2521,6 +2548,7 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
   
   // 检测周期是否刚结束（总产量变化时表示新周期产生）
   const currentTotal = backendCounters?.['总产量'] ?? -1;
+  const currentNg = backendCounters?.['不良总数'] ?? 0;
   if (lastTotalCount >= 0 && currentTotal > lastTotalCount) {
     // 新周期产生，延迟后重置视觉状态，让用户看到上一轮的颜色反馈
     setTimeout(() => {
@@ -2534,8 +2562,25 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       });
       lastScrolledIdx = -1;
     }, 1200);
+
+    // 工件卡片：把"检测中"替换成本轮最终结果(OK/NG)保留一会儿，之后清空回到"等待扫码..."
+    const cycleIsNg = lastNgCount >= 0 && currentNg > lastNgCount;
+    const realWp = mesData.value?.workpiece;
+    if (realWp) {
+      if (workpieceOverrideTimer) { clearTimeout(workpieceOverrideTimer); workpieceOverrideTimer = null; }
+      if (workpieceHideTimer) { clearTimeout(workpieceHideTimer); workpieceHideTimer = null; }
+      workpieceOverride.value = {
+        ...realWp,
+        status: cycleIsNg ? 'ng' : 'ok',
+      };
+      workpieceHideTimer = setTimeout(() => {
+        workpieceOverride.value = null; // 清空 → 模板显示"等待扫码..."
+        workpieceHideTimer = null;
+      }, WORKPIECE_RESULT_HOLD_MS);
+    }
   }
   lastTotalCount = currentTotal;
+  lastNgCount = currentNg;
   
   // ── 实时周期反馈算法 ──
   // 在周期进行中，实时对比 currentCycleSteps 和预期顺序，动态标记每个步骤颜色
@@ -2770,6 +2815,10 @@ const resetCounters = async () => {
   ngStepRanking.value = [];
   ngStepCountMap.value = {};
   lastTotalCount = -1;
+  lastNgCount = -1;
+  if (workpieceOverrideTimer) { clearTimeout(workpieceOverrideTimer); workpieceOverrideTimer = null; }
+  if (workpieceHideTimer) { clearTimeout(workpieceHideTimer); workpieceHideTimer = null; }
+  workpieceOverride.value = undefined;
   processedEventIds.clear();
   
   trackingChecklist.value = {};

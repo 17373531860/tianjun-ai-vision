@@ -34,6 +34,7 @@ class ScannerCreate(BaseModel):
     device_type: str = "text_lon"
     external_only: bool = False
     pairing_group: Optional[str] = None
+    ok_rescan_cooldown_sec: int = 0
 
 
 class ScannerUpdate(BaseModel):
@@ -56,6 +57,7 @@ class ScannerUpdate(BaseModel):
     device_type: Optional[str] = None
     external_only: Optional[bool] = None
     pairing_group: Optional[str] = None
+    ok_rescan_cooldown_sec: Optional[int] = None
 
 
 def _serialize_device(d):
@@ -75,6 +77,7 @@ def _serialize_device(d):
         "device_type": getattr(d, 'device_type', 'auto') or 'auto',
         "external_only": bool(getattr(d, 'external_only', False)),
         "pairing_group": getattr(d, 'pairing_group', None),
+        "ok_rescan_cooldown_sec": int(getattr(d, 'ok_rescan_cooldown_sec', 0) or 0),
     }
 
 

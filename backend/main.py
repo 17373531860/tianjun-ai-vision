@@ -89,6 +89,7 @@ def migrate_database():
         ("external_devices", "zero_threshold", "FLOAT DEFAULT 0.05"),
         ("external_devices", "weight_no_barcode_alarm_enabled", "BOOLEAN DEFAULT 0"),
         ("external_devices", "weight_no_barcode_alarm_delay_sec", "INTEGER DEFAULT 10"),
+        ("scanner_devices", "ok_rescan_cooldown_sec", "INTEGER DEFAULT 0"),
     ]
     
     try:

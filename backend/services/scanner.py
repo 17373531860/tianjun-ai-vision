@@ -145,6 +145,7 @@ class ScannerConnection:
     broadcast_channels: list = field(default_factory=list)
     external_only: bool = False
     pairing_group: Optional[str] = None
+    ok_rescan_cooldown_sec: int = 0
 
     status: str = "disconnected"
     device_type: str = "text_lon"  # "text_lon"(默认), "auto", "text", "wmax"
@@ -762,6 +763,7 @@ class ScannerService:
             broadcast_channels=getattr(dev, 'broadcast_channels', None) or [],
             external_only=bool(getattr(dev, 'external_only', False)),
             pairing_group=(getattr(dev, 'pairing_group', None) or None),
+            ok_rescan_cooldown_sec=int(getattr(dev, 'ok_rescan_cooldown_sec', 0) or 0),
         )
         conn.device_type = db_device_type
         conn.parse_config["parse_mode"] = dev.parse_mode or "direct"

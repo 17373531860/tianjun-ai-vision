@@ -175,6 +175,16 @@
             <el-option label="下周期绑定（扫码后等下个周期开始才绑）" value="cycle_start" />
           </el-select>
         </el-form-item>
+        <el-form-item label="OK 后同码冷却">
+          <el-input-number v-model="form.ok_rescan_cooldown_sec" :min="0" :max="600" :precision="0" class="w-full" controls-position="right">
+            <template #append>秒</template>
+          </el-input-number>
+          <div class="text-xs text-gray-500 mt-1">
+            同条码对应的工件上次检测<span class="text-green-400">合格</span>后、
+            这么多秒内再次扫到将被静默忽略（避免搬运抖动产生脏数据）。
+            设 <b>0</b> 关闭；NG 工件不受此限制，可立即重扫复检。建议填满一个节拍时间。
+          </div>
+        </el-form-item>
         <el-form-item label="广播工位">
           <el-select v-model="form.broadcast_channels" multiple placeholder="留空则只发给绑定工位" class="w-full">
             <el-option v-for="opt in channelOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
@@ -342,6 +352,7 @@ const defaultForm = () => ({
   broadcast_channels: [],
   external_only: false,
   pairing_group: '',
+  ok_rescan_cooldown_sec: 0,
 })
 const form = ref(defaultForm())
 
@@ -618,7 +629,7 @@ const handleSave = async () => {
 
 const editDevice = (dev) => {
   editingId.value = dev.id
-  form.value = { ...dev }
+  form.value = { ...defaultForm(), ...dev }
   showAdd.value = true
 }
 

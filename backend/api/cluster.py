@@ -209,13 +209,17 @@ def delete_box(box_serial: str):
 
 @router.delete("/boxes")
 def clear_boxes(
-    scope: str = Query("all", pattern="^(all|pending|recent)$"),
+    scope: str = Query("all", pattern="^(all|pending|recent|older)$"),
+    before_days: int = Query(0, ge=0, le=3650,
+                             description="仅在 scope=older 时生效，清除 N 天以前的记录"),
 ):
     """批量清空集群箱子记录。scope:
     - all: 清 BoxAggregation + BoxSummary 全表
     - pending: 只清 status in (received) 的 BoxAggregation（未 dispatch 的待汇总）
     - recent: 只清已 pushed/timeout 的 BoxSummary 及其对应 aggregation
+    - older: 清 received_at 早于 before_days 天的记录（同时清两张表）
     """
+    from datetime import datetime, timedelta
     db = SessionLocal()
     try:
         if scope == "all":
@@ -233,6 +237,23 @@ def clear_boxes(
                              BoxAggregation.status == "received")
                      .delete(synchronize_session=False)) if pending_serials else 0
             n_sum = 0
+        elif scope == "older":
+            if before_days <= 0:
+                raise HTTPException(400, "scope=older 必须指定 before_days > 0")
+            cutoff = datetime.utcnow() - timedelta(days=before_days)
+            # 找出要清的 box_serial 集合：received_at 早于 cutoff 的
+            old_serials = [
+                row[0] for row in
+                db.query(BoxAggregation.box_serial)
+                .filter(BoxAggregation.received_at < cutoff)
+                .distinct().all()
+            ]
+            n_agg = (db.query(BoxAggregation)
+                     .filter(BoxAggregation.box_serial.in_(old_serials))
+                     .delete(synchronize_session=False)) if old_serials else 0
+            n_sum = (db.query(BoxSummary)
+                     .filter(BoxSummary.box_serial.in_(old_serials))
+                     .delete(synchronize_session=False)) if old_serials else 0
         else:  # recent
             recent_serials = [
                 row[0] for row in
@@ -250,6 +271,8 @@ def clear_boxes(
         db.commit()
         return {"deleted": True, "scope": scope,
                 "aggregations": n_agg, "summaries": n_sum}
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"清空失败: {e}")

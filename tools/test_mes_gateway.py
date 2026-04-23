@@ -31,7 +31,7 @@ import threading
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 # 让 python 找到 backend 包
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -57,6 +57,12 @@ class MockMESHandler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        self._handle_request()
+
+    def do_GET(self):
+        self._handle_request()
+
+    def _handle_request(self):
         port = self.server.server_address[1]
         cfg = self.PORT_CONFIG.get(port, {})
         length = int(self.headers.get("Content-Length", 0))
@@ -69,8 +75,15 @@ class MockMESHandler(BaseHTTPRequestHandler):
             self._respond(401, {"code": 401, "msg": auth_result["msg"]})
             return
 
-        # ---- body 解析 ----
-        parsed = self._parse_body(raw, content_type)
+        # ---- body / URL query 解析 ----
+        parsed_url = urlparse(self.path)
+        query_params = parse_qs(parsed_url.query) if parsed_url.query else {}
+        if query_params and not raw:
+            # query-string 模式：body 为空, 参数全在 URL 里
+            flat = {k: v[0] if len(v) == 1 else v for k, v in query_params.items()}
+            parsed = {"payload": flat, "mode": "query"}
+        else:
+            parsed = self._parse_body(raw, content_type)
 
         # ---- 记录到 RECEIVED ----
         entry = {
@@ -98,8 +111,10 @@ class MockMESHandler(BaseHTTPRequestHandler):
         print(f"  X-API-Key     : {entry['api_key_header'] or '(none)'}")
         if entry["custom_headers"]:
             print(f"  自定义 headers: {entry['custom_headers']}")
-        print(f"  Content-Type  : {content_type}")
-        print(f"  业务数据 (已解出 param):")
+        print(f"  Content-Type  : {content_type or '(无)'}")
+        print(f"  请求路径      : {self.path}")
+        print(f"  解析模式      : {parsed.get('mode', 'raw')}")
+        print(f"  业务数据      :")
         print(json.dumps(parsed.get("payload"), indent=4, ensure_ascii=False))
 
         # ---- 响应 ----
@@ -133,23 +148,28 @@ class MockMESHandler(BaseHTTPRequestHandler):
         return {"ok": True}
 
     def _parse_body(self, raw: bytes, content_type: str) -> dict:
-        """解析 body, 取出 param JSON 或原始 JSON"""
+        """解析 body, 取出 param JSON / 原始 JSON / 平铺字段"""
         if "application/json" in content_type:
             try:
                 return {"payload": json.loads(raw.decode("utf-8"))}
             except Exception as e:
                 return {"error": f"JSON 解析失败: {e}", "raw": raw.decode("utf-8", errors="replace")}
         if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
-            # form-urlencoded: param={...}
             try:
                 form = parse_qs(raw.decode("utf-8"))
+                # 优先当成"打包模式"(form-data param=JSON)解析
                 param = (form.get("param") or form.get("data") or form.get("json") or [""])[0]
                 if param:
                     try:
-                        return {"payload": json.loads(param), "form_key": _detect_key(form)}
+                        return {"payload": json.loads(param),
+                                "form_key": _detect_key(form),
+                                "mode": "packed"}
                     except Exception:
-                        return {"payload": param, "form_key": _detect_key(form)}
-                return {"raw_form": form}
+                        # param 不是 JSON, 退回平铺
+                        pass
+                # 平铺模式：每个 key 是独立字段
+                flat = {k: v[0] if len(v) == 1 else v for k, v in form.items()}
+                return {"payload": flat, "mode": "flat"}
             except Exception as e:
                 return {"error": f"form 解析失败: {e}"}
         return {"raw": raw.decode("utf-8", errors="replace")}
@@ -195,6 +215,8 @@ def start_mock_servers():
         8804: {"scenario": "form-data · API Key Header", "auth_type": "api_key",
                "expected_header": "X-API-Key", "expected_value": "mes-api-key-xyz"},
         8805: {"scenario": "REST JSON · 无鉴权", "auth_type": "none"},
+        8806: {"scenario": "form-urlencoded (字段平铺) · 无鉴权", "auth_type": "none"},
+        8807: {"scenario": "query-string (URL 参数) · 无鉴权", "auth_type": "none"},
     }
 
     occupied = [p for p in scenarios if not _probe_port(p)]
@@ -407,10 +429,50 @@ def run_tests():
             },
             "expect_http": 401,
         },
+        {
+            "name": "场景8  form-urlencoded (字段平铺) 4字段 + 列表逗号拼",
+            "adapter": "form-urlencoded",
+            "aggregated": ng,
+            "config": {
+                "url": f"{base_url}:8806/api/inspection",
+                "method": "POST",
+                "auth": {"type": "none"},
+                "template": {
+                    "order_no": "{order_no}",
+                    "workpiece_id": "{workpiece_id}",
+                    "result": "{overall_result}",
+                    "missing_items": {"_array_source": "ng_items", "_item_template": "{item}"},
+                },
+            },
+            "expect_port": 8806,
+            "expect_http": 200,
+            "expect_mode": "flat",
+            "expect_missing_items_csv": "螺丝A,垫片B",
+        },
+        {
+            "name": "场景9  query-string (URL 参数) 4字段 POST",
+            "adapter": "query-string",
+            "aggregated": ng,
+            "config": {
+                "url": f"{base_url}:8807/api/inspection",
+                "method": "POST",
+                "auth": {"type": "none"},
+                "template": {
+                    "order_no": "{order_no}",
+                    "workpiece_id": "{workpiece_id}",
+                    "result": "{overall_result}",
+                    "missing_items": {"_array_source": "ng_items", "_item_template": "{item}"},
+                },
+            },
+            "expect_port": 8807,
+            "expect_http": 200,
+            "expect_mode": "query",
+            "expect_missing_items_csv": "螺丝A,垫片B",
+        },
     ]
 
     print("\n" + "="*70)
-    print(" " * 18 + "开始端到端测试 (7 场景)")
+    print(" " * 18 + "开始端到端测试 (9 场景)")
     print("="*70)
 
     results = []
@@ -489,6 +551,18 @@ def _verify(scenario: dict, out: dict) -> tuple[bool, str]:
     if "expect_form_key" in scenario:
         if parsed.get("form_key") != scenario["expect_form_key"]:
             return False, f"form_key={parsed.get('form_key')} ≠ 期望 {scenario['expect_form_key']}"
+
+    # 解析模式 (packed / flat / query)
+    if "expect_mode" in scenario:
+        if parsed.get("mode") != scenario["expect_mode"]:
+            return False, f"mode={parsed.get('mode')} ≠ 期望 {scenario['expect_mode']}"
+
+    # 平铺模式下列表被拼成 CSV 字符串
+    if "expect_missing_items_csv" in scenario:
+        got = payload.get("missing_items")
+        if got != scenario["expect_missing_items_csv"]:
+            return False, (f"missing_items (CSV) = {got!r} "
+                           f"≠ 期望 {scenario['expect_missing_items_csv']!r}")
 
     return True, f"HTTP 200, payload OK: {list(payload.keys())}"
 
@@ -625,7 +699,7 @@ def run_api_tests():
 def main():
     servers, scenarios = start_mock_servers()
     print("\n" + "="*70)
-    print(" " * 18 + "模拟客户 MES 已启动 (5 个端口)")
+    print(" " * 18 + "模拟客户 MES 已启动 (7 个端口)")
     print("="*70)
     for port, cfg in scenarios.items():
         print(f"  127.0.0.1:{port}  →  {cfg['scenario']}  [auth={cfg['auth_type']}]")

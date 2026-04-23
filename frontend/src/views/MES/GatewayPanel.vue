@@ -96,9 +96,17 @@
         <el-form-item label="适配器类型">
           <el-radio-group v-model="form.adapter_type">
             <el-radio value="rest">REST / JSON</el-radio>
-            <el-radio value="form-data">Form-Data</el-radio>
+            <el-radio value="form-data">Form-Data (param=JSON)</el-radio>
+            <el-radio value="form-urlencoded">Form 平铺</el-radio>
+            <el-radio value="query-string">URL 参数</el-radio>
             <el-radio value="modbus_rtu">Modbus RTU</el-radio>
           </el-radio-group>
+          <div class="text-xs text-gray-500 mt-1 ml-2">
+            <div>• <b>REST/JSON</b>：body 发 JSON（<code>{"order_no":"..."}</code>）</div>
+            <div>• <b>Form-Data</b>：表单里塞一个字段 <code>param={"order_no":"..."}</code>（整个 JSON 串）</div>
+            <div>• <b>Form 平铺</b>：表单字段分开传 <code>order_no=xxx&amp;result=NG</code>（x-www-form-urlencoded）</div>
+            <div>• <b>URL 参数</b>：字段全塞 URL 里 <code>?order_no=xxx&amp;result=NG</code>，body 为空</div>
+          </div>
         </el-form-item>
 
         <!-- REST / Form-Data 配置 -->
@@ -673,11 +681,23 @@ const modbusTcpPort = ref(502)
 const modbusRegisters = ref([])
 
 function adapterLabel(type) {
-  const map = { rest: 'REST/JSON', 'form-data': 'Form-Data', modbus_rtu: 'Modbus' }
+  const map = {
+    rest: 'REST/JSON',
+    'form-data': 'Form-Data',
+    'form-urlencoded': 'Form 平铺',
+    'query-string': 'URL 参数',
+    modbus_rtu: 'Modbus',
+  }
   return map[type] || type
 }
 function adapterTagType(type) {
-  const map = { rest: '', 'form-data': 'warning', modbus_rtu: 'success' }
+  const map = {
+    rest: '',
+    'form-data': 'warning',
+    'form-urlencoded': 'warning',
+    'query-string': 'info',
+    modbus_rtu: 'success',
+  }
   return map[type] ?? 'info'
 }
 
@@ -900,7 +920,12 @@ function buildConfig() {
   return {
     url: configUrl.value,
     method: configMethod.value,
-    content_type: form.adapter_type === 'form-data' ? 'form-data' : 'application/json',
+    content_type: ({
+      'rest': 'application/json',
+      'form-data': 'multipart/form-data',
+      'form-urlencoded': 'application/x-www-form-urlencoded',
+      'query-string': 'url-query',
+    })[form.adapter_type] || 'application/json',
     form_key: configFormKey.value,
     headers,
     auth,

@@ -1,0 +1,163 @@
+{
+  "version": "2.7.12",
+  "date": "2026-04-23",
+  "previous_version": "2.7.11",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "工单新建对话框输入框全部隐形",
+      "symptom": "打开 MES → 工单管理 → 新建工单, 7 个字段输入框完全消失, 只剩标签",
+      "root_cause": "DynamicFieldInput 函数式组件用 h('el-input', ...) 字符串组件名, Vite + ElementPlus auto-import 下无法解析",
+      "fix": "显式 import ElInput/ElInputNumber/ElDatePicker/ElTimePicker/ElSwitch/ElSelect/ElOption, h() 传对象引用",
+      "files": ["frontend/src/views/MES/OrderPanel.vue"],
+      "keywords": ["DynamicFieldInput", "新建工单", "输入框隐形", "h render function", "el-input 字符串", "ElementPlus auto-import", "functional component", "OrderPanel"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "计划数量显示 0.00 两位小数",
+      "symptom": "新建工单的计划数量默认显示 0.00, 整数字段被强制带小数位",
+      "root_cause": "DynamicFieldInput 对 type=number 固定 precision: 2",
+      "fix": "planned_qty 单独走 precision: 0 + step: 1",
+      "files": ["frontend/src/views/MES/OrderPanel.vue"],
+      "keywords": ["planned_qty", "计划数量", "precision", "小数", "ElInputNumber"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "集群目标明细同通道多条记录、OK/NG 并存",
+      "symptom": "目标明细弹窗同工位下出现多行'通道 3', 同条码既'缺东西'又'已完成'",
+      "root_cause": "_receive_station_report_locked 把新 sub_reports 直接 append, 没按 (channel_id, source_address) 去重",
+      "fix": "按 (channel_id, source_address) 去重, 保留最新一条覆盖旧条目",
+      "files": ["backend/services/cluster_collector.py"],
+      "keywords": ["集群汇总", "目标明细", "sub_reports", "BoxAggregation", "去重", "cluster_collector", "串扰"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "扫码器重复扫码导致脏记录",
+      "symptom": "A 扫码完成 OK 后移走途中再次扫到 A, 新物品 B 进来被记到 A 名下, DB 留垃圾 queued",
+      "root_cause": "_handle_scan 无冷却窗口, 已 OK 的工件被重扫时重新置 queued, 占位被 B 的结果填入",
+      "fix": "ScannerConnection 新增 ok_rescan_cooldown_sec (int, 默认 0 关闭); 冷却窗口内同条码静默忽略; NG 不受影响",
+      "files": ["backend/services/scanner.py", "backend/services/mes_hooks.py", "backend/api/scanner.py", "backend/models/mes_models.py", "frontend/src/views/MES/ScannerPanel.vue"],
+      "keywords": ["扫码器", "重复扫码", "冷却时间", "ok_rescan_cooldown_sec", "脏记录", "queued workpiece", "MESHookManager"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-005",
+      "title": "Monitor 页结果一闪而过",
+      "symptom": "工件完成后步骤结果与'动作合格'图标 1.2s 就清空, 看不清",
+      "root_cause": "cycle 完成后 1200ms 清理 workpieceOverride",
+      "fix": "延长到 3500ms; 新条码到达直接覆盖不卡顿",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["Monitor", "结果显示时长", "3.5s", "workpieceOverride"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "外部 MES 适配器新增 2 种参数形式 (4 选 1)",
+      "symptom": "不同客户 MES 对参数形式要求不同, 原只支持 REST/JSON 和 Form-Data 打包",
+      "root_cause": "—",
+      "fix": "新增 FormUrlencodedAdapter (字段平铺 urlencoded) 和 QueryStringAdapter (字段全放 URL query), 在 mes_adapters 注册表登记为 form-urlencoded / query-string; GatewayPanel 适配器选项扩到 5 个, 每种带一句话说明和例子",
+      "files": [
+        "backend/services/mes_adapters/form_urlencoded_adapter.py",
+        "backend/services/mes_adapters/query_string_adapter.py",
+        "backend/services/mes_adapters/__init__.py",
+        "frontend/src/views/MES/GatewayPanel.vue",
+        "tools/test_mes_gateway.py"
+      ],
+      "keywords": ["MES", "适配器", "form-urlencoded", "query-string", "4 种参数形式", "适配器注册表", "POST body param", "GatewayPanel"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "集群箱数据按条码删除 + 批量清理",
+      "symptom": "条码一旦入集群就无法重来, 长期积累大量历史数据无批量清理入口",
+      "root_cause": "—",
+      "fix": "DELETE /cluster/box/{barcode} 按条码清; POST /cluster/boxes/clear 支持 scope=all/pending/recent/older (older 带 before_days); ClusterPanel 加清理按钮 + 批量清理对话框",
+      "files": [
+        "backend/api/cluster.py",
+        "frontend/src/api/cluster.js",
+        "frontend/src/views/MES/ClusterPanel.vue"
+      ],
+      "keywords": ["集群汇总", "BoxAggregation", "BoxSummary", "批量清理", "按条码删除", "scope"],
+      "breaking": false
+    },
+    {
+      "type": "docs",
+      "id": "DOC-001",
+      "title": "客户 MES 对接文档升级 v1.1",
+      "symptom": "v1.0 只描述 form-data 和 JSON 两种形式, 不覆盖 Form 平铺和 URL 参数",
+      "root_cause": "—",
+      "fix": "4 种参数形式并列, 每种给 HTTP 原样请求 + curl 示例; 问客户的清单 #3 改成'参数形式 4 选 1', 新增 #11 curl/Postman; 重生成 docx/pdf",
+      "files": [
+        "docs/客户MES对接数据格式.md",
+        "docs/客户MES对接数据格式.docx",
+        "docs/客户MES对接数据格式.pdf"
+      ],
+      "keywords": ["MES 对接文档", "v1.1", "4 种参数形式", "curl 示例"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "test_mes_gateway.py 扩到 9 场景 + 3 API",
+      "symptom": "—",
+      "root_cause": "—",
+      "fix": "新增 mock 端口 8806/8807, 新增场景 8 (form-urlencoded) + 场景 9 (query-string); mock handler 支持 URL query 解析; 9/9 + 3/3 通过",
+      "files": ["tools/test_mes_gateway.py"],
+      "keywords": ["测试", "mes_gateway", "mock server", "form-urlencoded 测试", "query-string 测试"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-002",
+      "title": "新增 test_fixes_simulation.py",
+      "symptom": "—",
+      "root_cause": "—",
+      "fix": "临时 SQLite 端到端仿真扫码冷却 / 集群去重 / 批量清理 API, 每个用例独立 _run_case 包裹避免互相影响",
+      "files": ["tools/test_fixes_simulation.py"],
+      "keywords": ["测试", "simulation", "端到端", "扫码冷却", "集群去重"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes", "modify-frontend"],
+  "files_changed": [
+    "backend/api/cluster.py",
+    "backend/api/scanner.py",
+    "backend/models/mes_models.py",
+    "backend/services/cluster_collector.py",
+    "backend/services/mes_adapters/__init__.py",
+    "backend/services/mes_adapters/form_urlencoded_adapter.py",
+    "backend/services/mes_adapters/query_string_adapter.py",
+    "backend/services/mes_hooks.py",
+    "backend/services/scanner.py",
+    "docs/客户MES对接数据格式.md",
+    "docs/客户MES对接数据格式.docx",
+    "docs/客户MES对接数据格式.pdf",
+    "docs/changelog/v2.7.12_2026-04-23.md",
+    "docs/changelog/v2.7.12_2026-04-23.json",
+    "docs/CHANGELOG.md",
+    "electron/package.json",
+    "electron/splash.html",
+    "frontend/src/api/cluster.js",
+    "frontend/src/views/MES/ClusterPanel.vue",
+    "frontend/src/views/MES/GatewayPanel.vue",
+    "frontend/src/views/MES/OrderPanel.vue",
+    "frontend/src/views/MES/ScannerPanel.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "tools/test_fixes_simulation.py",
+    "tools/test_mes_gateway.py"
+  ],
+  "deferred": [
+    "跟踪模式时间/帧数阈值 5× 放大 (方案 A: fps_inference + 去掉 min_cycle_age 硬下限) → v2.7.13",
+    "MES 推送 OK 工件开关 / timestamp / channel_id 附加字段 → 等客户业务方确认"
+  ]
+}
