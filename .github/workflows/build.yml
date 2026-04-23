@@ -260,9 +260,24 @@ jobs:
       - name: Build Installer with Inno Setup
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
-          if (-not $version -or $version -eq "${{ github.ref_name }}") { $version = "2.0.8" }
-          echo "Building installer for version $version..."
+          # 版本号单一数据源: electron/package.json
+          # push tag 只做触发, 不作为版本来源 (历史 bug: ref_name=main 时 fallback 写死 2.0.8)
+          $pkg = Get-Content "electron/package.json" -Raw | ConvertFrom-Json
+          $version = $pkg.version
+          if (-not $version) { echo "ERROR: electron/package.json 缺少 version 字段"; exit 1 }
+          echo "Building installer for version $version (source: electron/package.json)"
+          
+          # 如果是 tag 触发, 额外校验 tag 与 package.json 一致, 防止漏改版本号发车
+          $refName = "${{ github.ref_name }}"
+          if ($refName -like "v*") {
+            $tagVersion = $refName.TrimStart("v")
+            if ($tagVersion -ne $version) {
+              echo "ERROR: tag $refName (=$tagVersion) 与 electron/package.json ($version) 不一致"
+              echo "       请先同步 package.json / splash.html 再打 tag"
+              exit 1
+            }
+            echo "Tag $refName matches package.json, OK."
+          }
           
           $issFile = "electron\build\installer.iss"
           $content = Get-Content $issFile -Raw
@@ -279,7 +294,17 @@ jobs:
           if (-not $setup) { echo "ERROR: Setup exe not found!"; exit 1 }
           echo "Installer: $($setup.Name) ($([math]::Round($setup.Length/1GB, 2)) GB)"
       
-      - name: "Split installer into parts (Artifact + Release 两条通道都用)"
+      - name: Upload installer as Action Artifact (不分包, 内部/团队下载用)
+        uses: actions/upload-artifact@v4
+        continue-on-error: true  # artifact 配额满不阻塞后续 Release 上传
+        with:
+          name: TianJun-AI-Vision-Installer
+          path: electron/dist/TianJun-AI-Vision-*-Setup.exe
+          retention-days: 30
+          compression-level: 0
+
+      - name: Split installer into parts (仅 tag 触发, 给 Release 用)
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
           $setupFile = Get-ChildItem "electron/dist" -Filter "TianJun-AI-Vision-*-Setup.exe" | Select-Object -First 1
@@ -331,146 +356,149 @@ jobs:
           $checksumLines | Out-File -FilePath "$partsDir/checksums.txt" -Encoding UTF8
           Write-Host "Checksums file created"
 
-          # Generate merge script (PowerShell-based for reliable hash verification)
-          $version = "${{ github.ref_name }}"
-          $exeName = $setupFile.Name
-          $batContent = @"
-          @echo off
-          echo ============================================
-          echo   TianJun AI Vision - Merge Tool
-          echo   Version: $version
-          echo ============================================
-          echo.
-          powershell -ExecutionPolicy Bypass -NoProfile -Command "& {
-            [Console]::OutputEncoding=[System.Text.Encoding]::UTF8
-            `$ErrorActionPreference='Stop'
-            `$output='$exeName'
-            `$expectedParts=$partNum
-            `$expectedHash='$sha256'
-            `$expectedSize=$expectedSize
-
-            `$parts = Get-ChildItem -Filter '*.part' | Sort-Object Name
-            if (`$parts.Count -eq 0) {
-              Write-Host '[ERROR] No .part files found!' -ForegroundColor Red
-              Write-Host 'Please download ALL these files into the SAME folder as this script:'
-              Write-Host '  - TianJun-AI-Vision-*-Setup.exe.part00.part'
-              Write-Host '  - TianJun-AI-Vision-*-Setup.exe.part01.part'
-              Write-Host '  - checksums.txt'
-              Write-Host '  - merge_installer.bat (this script)'
-              Write-Host ''
-              Write-Host 'Download from: https://github.com/17373531860/tianjun-releases/releases'
-              Read-Host 'Press Enter to exit'
-              exit 1
-            }
-            if (`$parts.Count -ne `$expectedParts) {
-              Write-Host (`"[ERROR] Expected `$expectedParts parts, found `$(`$parts.Count)`") -ForegroundColor Red
-              Write-Host 'Some .part files are missing. Please re-download all files from:'
-              Write-Host '  https://github.com/17373531860/tianjun-releases/releases'
-              Read-Host 'Press Enter to exit'
-              exit 1
-            }
-            Write-Host (`"Found `$(`$parts.Count) parts, verifying checksums...`") -ForegroundColor Cyan
-            Write-Host ''
-
-            `$bad = 0
-            `$checksums = @{}
-            if (Test-Path 'checksums.txt') {
-              Get-Content 'checksums.txt' | ForEach-Object {
-                `$line = `$_.Trim()
-                if (`$line -and `$line.Length -gt 64) {
-                  `$h = `$line.Substring(0,64)
-                  `$f = `$line.Substring(66).Trim()
-                  `$checksums[`$f] = `$h
-                }
-              }
-            }
-
-            foreach (`$p in `$parts) {
-              `$hash = (Get-FileHash `$p.FullName -Algorithm SHA256).Hash
-              if (`$checksums.ContainsKey(`$p.Name)) {
-                if (`$hash -eq `$checksums[`$p.Name]) {
-                  Write-Host (`"  [OK] `$(`$p.Name)`") -ForegroundColor Green
-                } else {
-                  Write-Host (`"  [BAD] `$(`$p.Name)`") -ForegroundColor Red
-                  Write-Host (`"        Expected: `$(`$checksums[`$p.Name])`")
-                  Write-Host (`"        Actual:   `$hash`")
-                  `$bad++
-                }
-              } else {
-                Write-Host (`"  [?] `$(`$p.Name) (no checksum)`") -ForegroundColor Yellow
-              }
-            }
-            Write-Host ''
-
-            if (`$bad -gt 0) {
-              Write-Host (`"`$bad file(s) corrupted! Please re-download the [BAD] files from:`") -ForegroundColor Red
-              Write-Host '  https://github.com/17373531860/tianjun-releases/releases' -ForegroundColor Red
-              Read-Host 'Press Enter to exit'
-              exit 1
-            }
-
-            Write-Host 'All parts verified. Merging...' -ForegroundColor Cyan
-            if (Test-Path `$output) { Remove-Item `$output -Force }
-            `$outStream = [System.IO.File]::Create(`$output)
-            `$i = 0
-            foreach (`$p in `$parts) {
-              `$i++
-              `$bytes = [System.IO.File]::ReadAllBytes(`$p.FullName)
-              `$outStream.Write(`$bytes, 0, `$bytes.Length)
-              Write-Host (`"  [`$i/`$(`$parts.Count)] `$(`$p.Name) OK`")
-            }
-            `$outStream.Close()
-
-            `$actualSize = (Get-Item `$output).Length
-            if (`$actualSize -ne `$expectedSize) {
-              Write-Host (`"[ERROR] Size mismatch! Actual: `$actualSize, Expected: `$expectedSize`") -ForegroundColor Red
-              Remove-Item `$output -Force
-              Read-Host 'Press Enter to exit'
-              exit 1
-            }
-
-            Write-Host ''
-            Write-Host 'Final SHA256 verification...' -ForegroundColor Cyan
-            `$finalHash = (Get-FileHash `$output -Algorithm SHA256).Hash
-            if (`$finalHash -eq `$expectedHash) {
-              Write-Host ''
-              Write-Host '============================================' -ForegroundColor Green
-              Write-Host '  Merge complete! Verified OK.' -ForegroundColor Green
-              Write-Host (`"  File: `$output`") -ForegroundColor Green
-              Write-Host (`"  SHA256: `$finalHash`") -ForegroundColor Green
-              Write-Host '============================================' -ForegroundColor Green
-              Write-Host ''
-              Write-Host 'Run the installer to install.'
-            } else {
-              Write-Host '[ERROR] SHA256 mismatch!' -ForegroundColor Red
-              Write-Host (`"  Actual:   `$finalHash`")
-              Write-Host (`"  Expected: `$expectedHash`")
-              Remove-Item `$output -Force
-              Read-Host 'Press Enter to exit'
-            }
-          }"
-          echo.
-          pause
-          "@
-
-          $batContent | Out-File -FilePath "$partsDir/merge_installer.bat" -Encoding UTF8
-          Write-Host "Merge script created: merge_installer.bat"
+          # 生成通用合并脚本 merge_installer.bat
+          # 历史踩坑 (每条都经过客户现场翻车):
+          #   1. 不能嵌 powershell -Command "& {...}" 单行. BOM/引号/encoding 三连爆.
+          #   2. 不能用 Out-File -Encoding UTF8 (PS 5.1 默认带 BOM, cmd 读第一行 @echo off 就炸).
+          #   3. 不能硬编码版本号/文件名 (ref_name=main 时 fallback 2.0.8 会让 Action 路径也打错名).
+          #   4. 不能 setlocal EnableDelayedExpansion + call :Label 联用 (参数展开诡异).
+          #   5. echo 文本不能含 ( ) ! | & (if block 内会被 cmd 提前闭合, 报 "此时不应有 xxx").
+          # 新版策略: 纯 cmd 内置命令 (copy /b + certutil + findstr), ASCII+CRLF+无 BOM.
+          $batLines = @(
+            '@echo off',
+            'cd /d "%~dp0"',
+            'title TianJun AI Vision - Merge Tool',
+            '',
+            'echo ============================================',
+            'echo   TianJun AI Vision - Merge Tool',
+            'echo ============================================',
+            'echo.',
+            'echo Working folder: %cd%',
+            '',
+            'rem --- 探测输出 exe 文件名 (不硬编码版本号, bat 通用) ---',
+            'set "P0="',
+            'for /f "delims=" %%f in (''dir /b *.part00.part 2^>nul'') do if not defined P0 set "P0=%%f"',
+            'if not defined P0 goto NOFILES',
+            'set "OUT=%P0:.part00.part=%"',
+            '',
+            'set PARTCOUNT=0',
+            'for %%f in (*.part) do set /a PARTCOUNT+=1',
+            '',
+            'echo Output file:     %OUT%',
+            'echo Parts found:     %PARTCOUNT%',
+            'echo.',
+            '',
+            'if %PARTCOUNT% LSS 2 goto TOOFEW',
+            '',
+            'rem --- SHA256 校验 (best-effort, checksums 对不上只警告) ---',
+            'set BAD=0',
+            'set MISSING=0',
+            'if not exist "checksums.txt" goto SKIPVERIFY',
+            'echo Verifying SHA256 against checksums.txt ...',
+            'echo.',
+            'for /f "usebackq tokens=1,2" %%a in ("checksums.txt") do call :VERIFY "%%a" "%%b"',
+            'if not "%MISSING%"=="0" (',
+            '  echo.',
+            '  echo [ERROR] %MISSING% part file missing on disk.',
+            '  echo Re-download and put all parts in this folder.',
+            '  goto FAILPAUSE',
+            ')',
+            'if not "%BAD%"=="0" (',
+            '  echo.',
+            '  echo [WARN] %BAD% part file failed SHA256 check.',
+            '  echo Continuing merge anyway. If installer fails to run later,',
+            '  echo re-download the [BAD] parts from the release page.',
+            ')',
+            'echo.',
+            'goto DOMERGE',
+            '',
+            ':SKIPVERIFY',
+            'echo [WARN] checksums.txt not found, skipping SHA256 verification.',
+            'echo.',
+            '',
+            ':DOMERGE',
+            'echo Merging %PARTCOUNT% parts into "%OUT%" ...',
+            'if exist "%OUT%" del /f /q "%OUT%"',
+            'set "ARGS="',
+            'for /f "delims=" %%p in (''dir /b /o:n *.part'') do call :APPEND "%%p"',
+            'if not defined ARGS goto NOFILES',
+            'copy /b %ARGS% "%OUT%" >nul',
+            'set "COPYERR=%errorlevel%"',
+            'if not "%COPYERR%"=="0" goto MERGEFAIL',
+            '',
+            'echo.',
+            'echo ============================================',
+            'echo   Merge complete',
+            'echo   File: %OUT%',
+            'echo ============================================',
+            'for %%i in ("%OUT%") do echo   Size: %%~zi bytes',
+            'echo.',
+            'echo Double-click the output file to install.',
+            'echo.',
+            'pause',
+            'exit /b 0',
+            '',
+            ':APPEND',
+            'if defined ARGS (',
+            '  set "ARGS=%ARGS% + %~1"',
+            ') else (',
+            '  set "ARGS=%~1"',
+            ')',
+            'goto :eof',
+            '',
+            ':VERIFY',
+            'if not exist %2 (',
+            '  echo   [MISSING] %~2',
+            '  set /a MISSING+=1',
+            '  goto :eof',
+            ')',
+            'certutil -hashfile %2 SHA256 | findstr /i /c:%1 >nul',
+            'if errorlevel 1 (',
+            '  echo   [BAD]  %~2',
+            '  set /a BAD+=1',
+            '  goto :eof',
+            ')',
+            'echo   [OK]   %~2',
+            'goto :eof',
+            '',
+            ':NOFILES',
+            'echo [ERROR] No *.part00.part file in this folder.',
+            'echo.',
+            'echo Put ALL these files in the SAME folder as this script:',
+            'echo   - every *.part file from the release page',
+            'echo   - checksums.txt',
+            'echo   - merge_installer.bat   ^<-- this script',
+            'echo.',
+            'echo Download page:',
+            'echo   https://github.com/17373531860/tianjun-releases/releases',
+            'goto FAILPAUSE',
+            '',
+            ':TOOFEW',
+            'echo [ERROR] Only %PARTCOUNT% .part file found, at least 2 required.',
+            'goto FAILPAUSE',
+            '',
+            ':MERGEFAIL',
+            'echo.',
+            'echo [ERROR] copy /b failed, exit code %COPYERR%.',
+            'echo Possible causes: disk full, access denied, file in use.',
+            'goto FAILPAUSE',
+            '',
+            ':FAILPAUSE',
+            'echo.',
+            'pause',
+            'exit /b 1'
+          )
+          $batText = ($batLines -join "`r`n") + "`r`n"
+          # 必须 ASCII + 无 BOM, 不要用 Out-File -Encoding UTF8
+          [System.IO.File]::WriteAllBytes(
+            (Join-Path $partsDir "merge_installer.bat"),
+            [System.Text.Encoding]::ASCII.GetBytes($batText)
+          )
+          Write-Host "Merge script created (ASCII/CRLF/no-BOM, universal cross-version): merge_installer.bat"
 
           # List all files
           Write-Host "`nFiles in $partsDir :"
           Get-ChildItem $partsDir | ForEach-Object { Write-Host "  $($_.Name) - $([math]::Round($_.Length / 1MB, 1)) MB" }
-
-      - name: "Upload parts as Action Artifact (双通道-方便未 tag 构建也能下载)"
-        uses: actions/upload-artifact@v4
-        continue-on-error: true  # artifact 配额满时不阻塞 Release 上传
-        with:
-          name: TianJun-AI-Vision-Installer-Parts
-          path: |
-            release-parts/*.part
-            release-parts/checksums.txt
-            release-parts/merge_installer.bat
-          retention-days: 30
-          compression-level: 0
 
       - name: Upload parts to GitHub Release (tianjun-releases)
         if: startsWith(github.ref, 'refs/tags/v')
