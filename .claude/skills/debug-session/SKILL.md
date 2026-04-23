@@ -163,3 +163,38 @@ MES 数据使用独立 DB session，不影响检测数据链路。
 - `backup_database()` 路径拼接相对于 UPLOAD_DIR 的父目录，不是 DATA_DIR（脆弱）
 - `_filter_valid_steps()` 过滤 <0.1秒步骤可能误删合法记录
 - Cycle 的 serial_no 通过 JOIN 查询获取，如果 WorkpieceInspection 记录缺失则为 null
+
+## 集群 BoxAggregation 与 BoxSummary 一致性 (v2.7.13)
+
+**两张表的分工**：
+- `BoxAggregation` — 每工位一条记录，每次上报都 upsert；`status` 从 `received`（刚到）→ `dispatched`（已纳入一次齐发推送）
+- `BoxSummary` — 整箱一条记录，聚合级别；`status` 从 `complete`（齐全待推）→ `pushed`（已推 MES）
+
+**v2.7.13 前的问题**：
+- `_check_and_dispatch` 只查 `status='received'` 的 BoxAggregation；首次齐发后全部工位变 `dispatched`
+- 工人重扫某一工位 → 这工位状态回到 `received`，其它工位还是 `dispatched`
+- 再调 `_check_and_dispatch`，只能看到 1 条 received 记录 → 误判整箱缺齐 → BoxSummary 完全不更新
+- 结果：**前端"最近完成"读 BoxSummary (NG 旧值)，"目标明细"读 BoxAggregation (OK 新值)**，显示互相矛盾
+- `get_pending_boxes` 同样只看 received → 齐全的箱被算作"还缺几个工位"，"待汇总"假未齐
+
+**v2.7.13 方案 B 修复**：
+- `_check_and_dispatch`：用 `all_records`（含 dispatched）判齐全；但需至少 1 条 `received` 才触发逻辑，防止定时器空转
+- 二次齐发按 `_key_fields = (overall_result, sorted(ng_items))` 比对：
+  - 变化 → BoxSummary.status 回退 `complete` 并重推 MES（`is_recovery=True`）
+  - 无变化 → 只刷 summary 字段不骚扰 MES（`needs_repush=False`）
+- `get_pending_boxes` 的 missing/received 全部换 `all_records`；齐全的箱直接从"待汇总"列表剔除
+
+**排查思路**：
+- 看到"待汇总 vs 最近完成"同条码结果不一致？先看 `BoxAggregation` 表里这条 box_serial 的所有记录 status：
+  - 全 `dispatched`、没有 `received` → 本次上报根本没进去，看 `cluster_collector.upsert_aggregation` 日志
+  - 有 `received` → 本次理论上会触发，看 `_check_and_dispatch` 返回的 `reason`
+    - `reason=no_new_data` → 所有新数据都已经 dispatched（不应该到这里）
+    - `reason=missing` → 真的缺工位
+    - `reason=no_change_after_recovery` → 已 pushed 且结果无变化（正常跳过）
+    - 正常分发 → 看 `is_recovery` 字段确认是首发还是二次校正
+- MES 客户端必须对 `box_serial` 幂等，因为二次校正时会再推一次（这是特性，不是 bug）
+
+**相关代码**：
+- `backend/services/cluster_collector.py::_check_and_dispatch` (~L475-700)
+- `backend/services/cluster_collector.py::get_pending_boxes` (处理"待汇总" API)
+- `tools/test_cluster_recovery.py` — 三轮场景端到端验证脚本

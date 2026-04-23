@@ -228,3 +228,27 @@ MES Hook 在独立线程中异步执行，使用独立 DB session，不会阻塞
 - **MJPEG 多通道节流 (v2.6.0)**: `generate_mjpeg` 即使 frame_limit_enabled=False 也要 min_interval sleep，否则4通道 CPU 100%
 - **截图限频 (v2.6.0)**: `_update_tracking_stats` 截图每秒最多1次（`_last_screenshot_time`），且必须在代码块开头显式 `import cv2`
 - **每通道独立计数器 (v2.6.0)**: 计数器文件保存为 `DATA_DIR/counters/project_{pid}_ch{ch_id}.json`
+
+## 跟踪模式 秒→帧 换算陷阱 (v2.7.13)
+
+**症状**：用户设"遮挡容忍 1 秒"/"消失确认 0.2 秒"等秒数类阈值，实际生效时间是设定值的 5 倍甚至更多，所有"秒"类参数都表现得像被放大了。
+
+**根因**：
+- 秒→帧 换算历史上用 `int(sec * max(self.fps_actual, 10))`，`fps_actual` 是**采集线程** FPS（25~37）
+- 但帧数累加 `_tracking_lost_frames[tid] += 1` / `_tracking_gone_frames` 等**全部发生在 `_inference_loop` 里**
+- 推理 FPS 受 GPU/模型大小限制，常只有 5~8；采集 30 / 推理 6 ≈ **5 倍延迟**
+- 另外 `min_cycle_age = max(max_lost_sec, 1.0)` 的 1 秒兜底会把 < 1 秒的阈值额外卡住
+
+**修复 (v2.7.13 方案 A)**：
+- 新增 `self.fps_inference` + `_fps_inference_counter/_time`
+- 在 `_inference_loop` 开头 `_fps_inference_counter += 1`，每秒更新一次 `self.fps_inference`
+- 所有"秒 → 帧"换算全部改为 `max(self.fps_inference, 10)`（三处：`_generate_custom_tracker_yaml` 的 `track_buffer`、`_update_tracking_stats` 的 `item_lost_frames`、`_update_step_stats` 的 tolerance frames）
+- 去掉 `min_cycle_age` 的 1 秒兜底，只保留 `max_lost_sec > 0` 时按秒卡
+- `get_detection_results` / `get_source_status` / `get_manager_config` 透出 `fps_inference` 字段
+
+**验证脚本**：`tools/test_tracking_fps.py` 独立仿真双线程，`--throttle-ms` 模拟弱 GPU，打印旧新公式对照。实测：采集 37 / 推理 7 时 1 秒阈值旧 5.29s → 新 1.43s。
+
+**排查检查项**：
+- 感觉"秒"类参数延迟不对？先看 API 返回的 `fps` vs `fps_inference` 比值，>2 就是旧代码被放大的典型场景
+- `fps_inference = 0` 通常是刚启动未开始推理，`max(fps, 10)` 兜底不会崩
+- **规则：以后新加任何"秒→帧"换算，一律用 `max(self.fps_inference, 10)`，绝不能用 `fps_actual`**

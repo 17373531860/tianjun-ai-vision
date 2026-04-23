@@ -795,10 +795,18 @@ class VideoSourceManager:
         self._max_missing_frames = 5  # 目标消失多少帧后移除滤波器
         
         # 统计
-        self.fps_actual = 0
+        self.fps_actual = 0  # 采集线程的 FPS (摄像头实际读帧速度)
+        self.fps_inference = 0  # 推理线程的 FPS (实际跑模型的速度)
+        # v2.7.13: 跟踪/事件 帧数阈值必须按 "推理 FPS" 换算, 因为:
+        #   - _update_tracking_stats / _update_step_stats 都在推理线程里累加帧数
+        #   - 采集 FPS 通常 25~30, 推理 FPS 往往只有 5~8 (GPU/模型大小决定)
+        #   - 如果用 fps_actual 当基准, 1 秒 = 30 帧阈值, 但推理线程 1 秒只加 5~8,
+        #     实际要等 3~6 秒才到阈值, 用户感知就是 "延迟 5 倍"
         self.latency = 0
         self._fps_counter = 0
         self._fps_time = time.time()
+        self._fps_inference_counter = 0
+        self._fps_inference_time = time.time()
         self._frame_seq = 0
         
         # 步骤截图 {step_name: base64_image}
@@ -3795,7 +3803,9 @@ class VideoSourceManager:
                 max_lost_sec = max(max_lost_sec, step['tracking_max_lost_seconds'])
         if max_lost_sec <= 0:
             max_lost_sec = 5.0
-        fps = max(self.fps_actual, 10)
+        # v2.7.13: ByteTrack 每次推理 step 一次, 所以 track_buffer 要按 推理 FPS 算
+        # 生成时机比推理线程先启动, fps_inference 可能还是 0, 用 10 作为默认估算
+        fps = max(self.fps_inference, 10)
         track_buffer = max(30, int(max_lost_sec * fps))
         yaml_content = (
             f"tracker_type: bytetrack\n"
@@ -4453,7 +4463,9 @@ class VideoSourceManager:
                 self._tracking_lost_frames[tid] = self._tracking_lost_frames.get(tid, 0) + 1
                 obj_label = self._tracking_objects[tid].get('class_name', '')
                 item_lost_sec = per_class_lost_sec.get(obj_label, max_lost_sec)
-                item_lost_frames = int(item_lost_sec * max(self.fps_actual, 10))
+                # v2.7.13: 遮挡容忍 "秒 → 帧" 换算必须用推理 FPS
+                # 因为 _tracking_lost_frames[tid] += 1 发生在推理线程每次调用时
+                item_lost_frames = int(item_lost_sec * max(self.fps_inference, 10))
                 if self._tracking_lost_frames[tid] >= item_lost_frames:
                     obj = self._tracking_objects[tid]
                     print(f"[Tracking] 遮挡容忍超时: {obj['display_id']}({obj_label}) 消失 {item_lost_sec:.1f}s ({item_lost_frames} 帧)，移除")
@@ -4613,7 +4625,8 @@ class VideoSourceManager:
             return
         
         active_count = 0
-        fps = max(self.fps_actual, 10)
+        # v2.7.13: 同上, tolerance 帧数换算基于推理 FPS
+        fps = max(self.fps_inference, 10)
         for tid in self._tracking_objects:
             obj_label = self._tracking_objects[tid].get('class_name', '')
             if self._container_mode and obj_label == self._container_label:
@@ -4672,10 +4685,13 @@ class VideoSourceManager:
         self._tracking_prev_count = active_count
         
         if should_settle:
-            cycle_age = current_time - (self.cycle_start_time or current_time)
-            min_cycle_age = max(max_lost_sec, 1.0)
-            if cycle_age < min_cycle_age:
-                should_settle = False
+            # v2.7.13: 去掉 1 秒最低等待兜底 (之前 min_cycle_age = max(max_lost_sec, 1.0))
+            # 原因: 用户把 "消失确认" 设成 0.2 秒时, 这个 1 秒兜底反而把它卡住, 感觉"延迟多了 5 倍"
+            # 现在只保留 max_lost_sec 这个业务门槛; 如果 max_lost_sec=0 则完全靠帧数阈值
+            if max_lost_sec > 0:
+                cycle_age = current_time - (self.cycle_start_time or current_time)
+                if cycle_age < max_lost_sec:
+                    should_settle = False
         
         if should_settle:
             print(f"[Tracking] settle confirmed ({self._tracking_gone_frames}/{gone_confirm_frames} frames)")
@@ -6429,6 +6445,14 @@ class VideoSourceManager:
                 # iteration and never mutates the old one after publishing.
                 original_frame = frame
                 frame_count += 1
+
+                # v2.7.13: 推理 FPS 统计 (每秒更新一次)
+                # 跟踪/事件帧数阈值要按这个 FPS 换算, 不能用 fps_actual
+                self._fps_inference_counter += 1
+                if loop_start - self._fps_inference_time >= 1.0:
+                    self.fps_inference = self._fps_inference_counter
+                    self._fps_inference_counter = 0
+                    self._fps_inference_time = loop_start
                 
                 # Determine task_type + logic_mode for this frame
                 _task_type = self.project_config.get('task_type', 'detection') if self.project_config else 'detection'
@@ -9348,6 +9372,7 @@ def get_detection_results(channel: int = Query(0)):
         "channel_id": channel,
         "detections": mgr.get_detections(),
         "fps": mgr.fps_actual,
+        "fps_inference": mgr.fps_inference,
         "latency": mgr.latency,
         "is_detecting": mgr.is_detecting,
         "source_type": mgr.source_type,
@@ -9505,6 +9530,7 @@ def get_source_status(channel: int = Query(0)):
         "height": mgr.height,
         "fps": mgr.fps,
         "fps_actual": mgr.fps_actual,
+        "fps_inference": mgr.fps_inference,
         "latency": mgr.latency,
         "model_loaded": mgr.model is not None
     }
@@ -9573,6 +9599,7 @@ def get_health_status(channel: int = Query(0)):
             "is_detecting": mgr.is_detecting,
             "model_loaded": mgr.model is not None,
             "fps_actual": mgr.fps_actual,
+            "fps_inference": mgr.fps_inference,
             "latency_ms": mgr.latency
         },
         "gpu": gpu_info

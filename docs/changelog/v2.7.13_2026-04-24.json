@@ -1,0 +1,70 @@
+{
+  "version": "2.7.13",
+  "date": "2026-04-24",
+  "previous_version": "2.7.12",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "跟踪模式秒/帧阈值延迟 5 倍修复 (方案 A)",
+      "symptom": "跟踪模式下所有'秒'类阈值 (遮挡容忍 / 消失确认 / tolerance) 实际生效时间都约为设定值的 5 倍, 用户需要手动缩小 5 倍才能凑出想要的延迟",
+      "root_cause": "秒→帧 换算公式 int(sec * max(fps_actual, 10)) 用的是采集线程 FPS, 但帧数累加发生在 _inference_loop 里, 推理 FPS 常远低于采集 FPS (30 vs 6 的常见比值正好是 5 倍). 另外 min_cycle_age = max(max_lost_sec, 1.0) 的 1 秒兜底会额外卡住 < 1 秒的阈值",
+      "fix": "新增 self.fps_inference 每秒统计, 把 track_buffer / item_lost_frames / tolerance 三处换算改用 max(fps_inference, 10); 去掉 min_cycle_age 的 1 秒硬兜底, 只保留 max_lost_sec 业务门槛; API 输出增加 fps_inference 字段方便前端/排查",
+      "files": ["backend/api/source.py"],
+      "keywords": ["fps_inference", "fps_actual", "tracking", "跟踪模式", "遮挡容忍", "消失确认", "tolerance", "秒转帧", "5倍延迟", "min_cycle_age", "ByteTrack", "track_buffer", "item_lost_frames"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "集群同条码二次校正结果不一致 (方案 B)",
+      "symptom": "同一箱条码的'待汇总'和'最近完成'两栏显示不一致: 工位重扫纠正后 BoxAggregation 已更新但 BoxSummary 还停留在旧结果, 或者齐全的箱仍误显示在'待汇总'里",
+      "root_cause": "_check_and_dispatch 只查 status='received' 的 BoxAggregation, 首发后所有工位 status 变成 dispatched, 再扫某一工位时判齐全只能看到这 1 条记录, 整箱误判为缺齐, 不会更新 BoxSummary. get_pending_boxes 的 missing 判定同理只看 received, 让已 dispatched 的工位被误算作'缺失'显示在'待汇总'",
+      "fix": "_check_and_dispatch 改用 all_records 判齐全 (但需至少 1 条 received 才触发, 防空转); 二次齐发对比 _key_fields(overall_result, ng_items) 决定是否重推 MES (有变化则回退 status=complete 并重推, 无变化只刷 summary 不骚扰 MES). get_pending_boxes 的 missing/received 也改 all_records, 齐全则直接从'待汇总'剔除, 消除假未齐显示",
+      "files": ["backend/services/cluster_collector.py"],
+      "keywords": ["cluster_collector", "BoxAggregation", "BoxSummary", "box_complete", "集群", "待汇总", "最近完成", "二次齐发", "校正重扫", "方案B", "_check_and_dispatch", "get_pending_boxes", "_key_fields", "is_recovery", "needs_repush"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "API / 前端可见 推理 FPS",
+      "symptom": "无法在不同 GPU / 模型上直观看到推理速度, 难以排查秒→帧 换算是否符合预期",
+      "root_cause": "VideoSourceManager 之前只统计采集 FPS",
+      "fix": "新增 self.fps_inference 每秒更新; get_detection_results / get_source_status / get_manager_config 透出 fps_inference 字段供前端展示",
+      "files": ["backend/api/source.py"],
+      "keywords": ["fps_inference", "API", "监控页", "推理速度"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "新增跟踪 FPS 换算验证脚本",
+      "fix": "tools/test_tracking_fps.py 独立仿真采集+推理双线程, 每秒打印比值 / 旧新公式帧数 / 旧新实际延迟, 支持 --throttle-ms 模拟弱 GPU. 实测验证: 采集 37 / 推理 7 (比值 5.3x) 时, 1 秒阈值旧代码生效 5.29s 新代码 1.43s; 0.2 秒阈值旧代码 1.00s 新代码 0.29s",
+      "files": ["tools/test_tracking_fps.py"],
+      "keywords": ["测试", "仿真", "fps", "跟踪模式验证"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-002",
+      "title": "新增集群方案 B 回归验证脚本",
+      "fix": "tools/test_cluster_recovery.py 用 TIANJUN_DATA_DIR + drop_all/create_all 起独立数据库, 覆盖首发 NG → 重扫纠正 OK → 再次齐发无变化三轮, 断言 BoxSummary 字段同步, MES 仅在实质变化时重推, pending 列表在齐全后消失",
+      "files": ["tools/test_cluster_recovery.py"],
+      "keywords": ["测试", "集群", "BoxAggregation", "BoxSummary", "回归"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-source", "modify-source", "debug-session"],
+  "files_changed": [
+    "backend/api/source.py",
+    "backend/services/cluster_collector.py",
+    "tools/test_tracking_fps.py",
+    "tools/test_cluster_recovery.py",
+    "docs/changelog/v2.7.13_2026-04-24.md",
+    "docs/changelog/v2.7.13_2026-04-24.json",
+    "docs/CHANGELOG.md",
+    "electron/package.json",
+    "electron/splash.html"
+  ]
+}

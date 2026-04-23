@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.7.13 (2026-04-24)
+- [BUG-001] 修复: 跟踪模式"秒→帧"阈值按 fps_actual 换算导致实际延迟约设定值的 5 倍 (改用 fps_inference 新统计量, 去掉 min_cycle_age 的 1 秒兜底)
+- [BUG-002] 修复: 集群同条码二次校正后"待汇总/最近完成"两栏不一致 (方案 B: 判齐全用 all_records, 二次齐发按 overall_result+ng_items 决定是否重推 MES; 假未齐箱从 pending 列表剔除)
+- [FEAT-001] 新增: get_detection_results / get_source_status / get_manager_config 暴露 fps_inference 字段
+- [TEST-001] 新增: tools/test_tracking_fps.py 跟踪模式 FPS 换算验证, 实测 1 秒阈值旧 5.29s → 新 1.43s
+- [TEST-002] 新增: tools/test_cluster_recovery.py 集群方案 B 端到端回归 (独立 tempdir 数据库)
+
 ## v2.7.12 (2026-04-23)
 - [BUG-001] 修复: 工单新建对话框 7 个输入框全部隐形 (DynamicFieldInput h('el-input', ...) 字符串名 Vite+ElementPlus auto-import 不解析，改显式 import ElInput 等对象)
 - [BUG-002] 修复: 计划数量显示 0.00 (DynamicFieldInput number 类型固定 precision:2，planned_qty 单独走整数精度)

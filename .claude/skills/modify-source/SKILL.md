@@ -181,3 +181,16 @@ MES Hook 影响: [是否影响 5 个 Hook 调用点]
   - 添加新的变换（如缩放、任意角度旋转）→ 先评估坐标映射成本，如仍能保持 OpenCV 零拷贝优先
   - `_apply_frame_transform` 调用频次 = 帧率，必须快；如果要 GPU 加速要走 `cv2.cuda`
   - 对 None frame 必须安全（返回 None）
+
+## fps_inference 与"秒→帧"换算 (v2.7.13 新增)
+
+- `self.fps_actual` = **采集线程**的 FPS（`_capture_loop` 每读一帧 +1），典型 25~37
+- `self.fps_inference` = **推理线程**的 FPS（`_inference_loop` 每跑一次模型 +1），受 GPU/模型限制常 5~8
+- 两者**独立统计**，不要混用
+- **强制规则**：任何在 `_inference_loop` 里累加的帧计数（tracking lost/gone、event tolerance、step dedup 等）所对应的"秒→帧"换算，**必须**用 `max(self.fps_inference, 10)`
+  - 用 `fps_actual` 会放大 `fps_actual / fps_inference` 倍，典型 3~6 倍延迟
+  - 必须加 `max(..., 10)` 兜底，`fps_inference` 启动瞬间为 0
+- 历史错误：`item_lost_frames` / `tolerance_frames` / `track_buffer` 曾全部用 `fps_actual`，v2.7.13 全部改为 `fps_inference`
+- **不要**为 tracking 模式加类似 `min_cycle_age = max(max_lost_sec, 1.0)` 的秒级硬兜底，这等于把用户小于 1 秒的配置强行拉到 1 秒
+- API 层已在 `get_detection_results` / `get_source_status` / `get_manager_config` 透出 `fps_inference`，前端可展示
+- 新增"秒"类参数时，在 UI 文案里可以标注"按推理速度换算"，让用户理解慢 GPU 下的表现

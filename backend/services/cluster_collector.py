@@ -475,21 +475,37 @@ class ClusterCollector:
         return matched_records, matched_expected, missing_expected
 
     def _check_and_dispatch(self, db, box_serial: str) -> dict:
-        """检查该箱子是否所有工位都到齐，到齐则触发汇总推送"""
+        """检查该箱子是否所有工位都到齐，到齐则触发汇总推送
+
+        v2.7.13: 同条码二次校正场景（方案 B）
+        - 原先只拿 status='received' 的记录, 导致首轮已 dispatched 的工位不再参与齐检
+        - 现拉全部该 box_serial 的记录, 已 dispatched 的工位也算"在场"
+        - 这样现场校正后重扫某一工位时, 整箱能重新算一次 overall_result
+        - 首次齐发 → 正常推送; 已 pushed 再次齐发 → 只有 overall_result 或 ng_items
+          有变化才重推 MES, 避免无差异数据的重复骚扰
+        """
         config = self.get_config(db)
         expected = config.get("expected_stations", [])
         if not expected:
             return {"dispatched": False, "reason": "no_expected_stations"}
 
-        records = (
+        all_records = (
             db.query(BoxAggregation)
-            .filter(BoxAggregation.box_serial == box_serial,
-                    BoxAggregation.status == "received")
+            .filter(BoxAggregation.box_serial == box_serial)
             .all()
         )
+        # 有"刚收到但未 dispatch"的记录才算本次 upsert 触发了齐检;
+        # 纯定时器扫过来但没新数据的, 不进入这里
+        records = [r for r in all_records if r.status == "received"]
+        if not records:
+            # 全部是 dispatched 状态: 说明本次没有新数据, 不需要再动 summary
+            return {"dispatched": False, "reason": "no_new_data"}
+
         received_stations = {r.station_id for r in records}
+        # 匹配 expected 时用 all_records (包含 dispatched 的), 这样已派发过的工位
+        # 仍算"已到齐"; 否则二次校正时其他工位会被误判为 missing
         matched_records, matched_expected, missing = \
-            self._match_records_to_expected(expected, records)
+            self._match_records_to_expected(expected, all_records)
 
         if missing:
             return {
@@ -552,34 +568,60 @@ class ClusterCollector:
         # UNIQUE(box_serial) 会让第二个触发 IntegrityError。
         # 对应处理：捕获后 rollback，再次查询 summary（此时应已存在）并 UPDATE。
         early_return = {}
+        # v2.7.13 方案 B: 是否是"二次齐发"(上一轮已 pushed, 本轮有新数据校正)
+        # 用于外层决定是否重推 MES 以及是否打日志标识
+        state = {"is_recovery": False, "needs_repush": False}
+
+        def _key_fields(ctx: dict) -> tuple:
+            """归纳对外关键字段, 用于判断是否有实质变化.
+            只有 overall_result 或 ng_items 变化才算需要重推 MES."""
+            if not isinstance(ctx, dict):
+                return ("", ())
+            return (
+                ctx.get("overall_result") or "",
+                tuple(sorted(ctx.get("ng_items") or [])),
+            )
 
         def build_summary(db):
             summary_local = (
                 db.query(BoxSummary)
                 .filter(BoxSummary.box_serial == box_serial).first()
             )
+            new_result = "OK" if overall_good else "NG"
             if not summary_local:
                 db.add(BoxSummary(
                     box_serial=box_serial,
                     total_stations=len(expected),
                     completed_stations=len(matched_expected),
-                    overall_result="OK" if overall_good else "NG",
+                    overall_result=new_result,
                     aggregated_context=aggregated,
                     status="complete",
                 ))
+                state["needs_repush"] = True  # 首发必推
             else:
-                if summary_local.status in ("pushed", "pushed_timeout"):
-                    early_return["payload"] = {
-                        "dispatched": False,
-                        "reason": "already_pushed_by_peer",
-                        "box_serial": box_serial,
-                    }
-                    return
+                was_pushed = summary_local.status in ("pushed", "pushed_timeout")
+                old_key = _key_fields(summary_local.aggregated_context or {})
+                new_key = _key_fields(aggregated)
+                changed = (old_key != new_key)
+
+                # 不论是否 pushed, 都把 summary 字段刷到最新 (前端显示一致)
                 summary_local.total_stations = len(expected)
                 summary_local.completed_stations = len(matched_expected)
-                summary_local.overall_result = "OK" if overall_good else "NG"
+                summary_local.overall_result = new_result
                 summary_local.aggregated_context = aggregated
-                summary_local.status = "complete"
+                if was_pushed:
+                    state["is_recovery"] = True
+                    if changed:
+                        # 关键字段有变化, 需要重推 MES 并把 status 回退为 complete
+                        summary_local.status = "complete"
+                        state["needs_repush"] = True
+                    else:
+                        # 没变化: summary 字段已刷新但不重推 MES, 保持 pushed
+                        state["needs_repush"] = False
+                else:
+                    # 之前从未 push 成功 (可能 status=complete 或异常态), 首次推
+                    summary_local.status = "complete"
+                    state["needs_repush"] = True
             for r in matched_records:
                 # matched_records 是外层查到的 ORM 实例，重试时可能已 expired；
                 # 通过 merge 确保每轮都挂到当前 session 上。
@@ -606,11 +648,25 @@ class ClusterCollector:
         if early_return.get("payload") is not None:
             return early_return["payload"]
 
-        # summary 现在一定存在且 status='complete'，重新取一下用于后续 push 字段更新
+        # summary 现在一定存在, 重新取一下用于后续 push 字段更新
         summary = (
             db.query(BoxSummary)
             .filter(BoxSummary.box_serial == box_serial).first()
         )
+
+        # v2.7.13: 二次校正且无关键字段变化, summary 已刷新但不重推 MES
+        if not state.get("needs_repush"):
+            logger.info(
+                "[Cluster] 箱子 %s 二次齐发但结果无变化 (%s), 已更新 summary, 跳过 MES",
+                box_serial, "OK" if overall_good else "NG",
+            )
+            self._release_box_lock(box_serial)
+            return {
+                "dispatched": False,
+                "reason": "no_change_after_recovery",
+                "overall_result": "OK" if overall_good else "NG",
+                "box_serial": box_serial,
+            }
 
         try:
             from backend.services.mes_gateway import get_mes_gateway
@@ -626,8 +682,14 @@ class ClusterCollector:
 
             _run_with_retry(db, mark_pushed,
                             f"check_and_dispatch_pushed({box_serial})")
-            logger.info("[Cluster] 箱子 %s 汇总推送完成 (%s)", box_serial,
-                        "OK" if overall_good else "NG")
+            if state.get("is_recovery"):
+                logger.info(
+                    "[Cluster] 箱子 %s 校正后重推 MES 完成 (%s)",
+                    box_serial, "OK" if overall_good else "NG",
+                )
+            else:
+                logger.info("[Cluster] 箱子 %s 汇总推送完成 (%s)", box_serial,
+                            "OK" if overall_good else "NG")
         except Exception as e:
             logger.error("[Cluster] 箱子 %s MES 推送失败: %s\n%s",
                          box_serial, e, traceback.format_exc())
@@ -639,6 +701,7 @@ class ClusterCollector:
             "dispatched": True,
             "overall_result": "OK" if overall_good else "NG",
             "stations": len(expected),
+            "is_recovery": state.get("is_recovery", False),
         }
 
     def _push_timeout_result(self, db, box_serial: str, records, expected, missing):
@@ -758,12 +821,21 @@ class ClusterCollector:
                          box_serial, e, traceback.format_exc())
 
     def get_pending_boxes(self) -> list:
-        """获取当前待汇总的箱子状态"""
+        """获取当前待汇总的箱子状态
+
+        v2.7.13: 只显示"真正还没齐"的箱
+        - 之前按 status=received 过滤, 同码重扫场景下: 已 dispatched 的工位被漏掉,
+          左下角显示"缺 A/C/D" 但详情里 A/C/D 是有数据的, 误导用户
+        - 现在按全部 status 的记录算齐不齐; 齐了的直接不进待汇总列表
+          (齐了的已经有 BoxSummary 展示在右下角了, 不应该同时出现在左下角)
+        """
         db = SessionLocal()
         try:
             config = self.get_config(db)
             expected = set(config.get("expected_stations", []))
-
+            expected_list = list(expected)
+            # 触发"待汇总"的判据仍是 "最近有新数据进来" (status=received);
+            # 齐不齐/缺谁 则基于全部 status 的记录算, 避免把 dispatched 的工位漏掉
             box_serials = (
                 db.query(BoxAggregation.box_serial)
                 .filter(BoxAggregation.status == "received")
@@ -773,30 +845,30 @@ class ClusterCollector:
 
             result = []
             for (box_serial,) in box_serials:
-                records = (
+                all_records = (
                     db.query(BoxAggregation)
-                    .filter(BoxAggregation.box_serial == box_serial,
-                            BoxAggregation.status == "received")
+                    .filter(BoxAggregation.box_serial == box_serial)
                     .all()
                 )
-                received = {r.station_id for r in records}
-                expected_list = list(expected)
+                received = {r.station_id for r in all_records}
                 if expected_list:
                     _, _, missing_list = self._match_records_to_expected(
-                        expected_list, records)
+                        expected_list, all_records)
                     missing = set(missing_list)
-                    is_complete = len(missing) == 0
                 else:
                     missing = set()
-                    is_complete = False
-                oldest = min((r.received_at for r in records if r.received_at),
+                # 真齐了(且有 expected 配置): 不进待汇总列表
+                # -- 方案 B 会把 summary 覆盖到最新, 右下角直接显示
+                if expected_list and not missing:
+                    continue
+                oldest = min((r.received_at for r in all_records if r.received_at),
                              default=None)
                 result.append({
                     "box_serial": box_serial,
                     "received_stations": list(received),
                     "missing_stations": list(missing),
                     "first_received_at": oldest.isoformat() if oldest else None,
-                    "is_complete": is_complete,
+                    "is_complete": False,
                 })
             return result
         finally:
