@@ -526,8 +526,11 @@ class VideoSourceManager:
         self._pending_progress = None  # 待处理的进度请求（记住最新值）
 
         # 画面几何变换（每通道独立；0°/90°/180°/270° + 水平/垂直镜像）
-        # 在 _capture_loop 帧拷贝后立刻生效，推理/MJPEG/录像拿到的都是变换后图像，
-        # 所以检测框坐标天然对齐，无需二次映射。
+        # v2.7.14: "只翻显示, 不翻推理" —— 模型推理使用原图（raw_frame）保持训练时的视角，
+        # MJPEG/录像/快照/step_screenshot 使用 display_frame（翻转后）保证显示观感。
+        # 推理输出的 bbox（原图归一化坐标）在 _inference_loop 里立即通过
+        # _map_detections_original_to_display 映射到显示坐标系, 下游 ROI/容器/步骤/前端画框
+        # 全部基于显示坐标系运行, 无需二次适配。
         self.video_rotation = 0  # 0 / 90 / 180 / 270
         self.video_flip_h = False  # 左右镜像
         self.video_flip_v = False  # 上下镜像
@@ -650,6 +653,53 @@ class VideoSourceManager:
             frame = cv2.flip(frame, 0)
         return frame
 
+    def _has_display_transform(self) -> bool:
+        """是否配置了任何画面变换（旋转/镜像）。无变换时走快路径跳过坐标映射。"""
+        return bool(
+            (self.video_rotation or 0) % 360 != 0
+            or self.video_flip_h
+            or self.video_flip_v
+        )
+
+    def _map_bbox_original_to_display(self, x: float, y: float, w: float, h: float):
+        """把单个归一化 bbox 从原图坐标系映射到显示坐标系。
+
+        变换顺序与 _apply_frame_transform 完全一致：先旋转, 再水平镜像, 再垂直镜像。
+        坐标均为归一化值 (相对各自坐标系的宽高), 无需知道像素尺寸。
+        """
+        rot = (self.video_rotation or 0) % 360
+        if rot == 90:
+            # 顺时针 90°: 左上角 (x, y) -> (1 - y - h, x), 宽高交换
+            nx, ny, nw, nh = 1.0 - y - h, x, h, w
+        elif rot == 180:
+            nx, ny, nw, nh = 1.0 - x - w, 1.0 - y - h, w, h
+        elif rot == 270:
+            # 逆时针 90°: 左上角 (x, y) -> (y, 1 - x - w), 宽高交换
+            nx, ny, nw, nh = y, 1.0 - x - w, h, w
+        else:
+            nx, ny, nw, nh = x, y, w, h
+        if self.video_flip_h:
+            nx = 1.0 - nx - nw
+        if self.video_flip_v:
+            ny = 1.0 - ny - nh
+        return nx, ny, nw, nh
+
+    def _map_detections_original_to_display(self, detections):
+        """就地把 detections 列表里每个 det 的 x/y/w/h 从原图坐标系映射到显示坐标系。
+
+        无变换时直接返回, 零开销。归一化坐标下只做少量加减, 对上千目标也 < 1ms。
+        """
+        if not self._has_display_transform() or not detections:
+            return detections
+        for det in detections:
+            if 'x' in det and 'y' in det and 'w' in det and 'h' in det:
+                nx, ny, nw, nh = self._map_bbox_original_to_display(
+                    float(det['x']), float(det['y']),
+                    float(det['w']), float(det['h']),
+                )
+                det['x'], det['y'], det['w'], det['h'] = nx, ny, nw, nh
+        return detections
+
     def _init_mediapipe(self):
         """Lazy-load MediaPipe models on first use."""
         try:
@@ -766,8 +816,10 @@ class VideoSourceManager:
         # ========== 双线程架构相关 ==========
         self._inference_thread = None  # 推理线程
         self._inference_running = False  # 推理线程运行标志
-        self._latest_frame_for_inference = None  # 供推理线程使用的最新帧（可能是缩小后的）
+        self._latest_frame_for_inference = None  # 供推理线程使用的最新帧（可能是缩小后的, 原图视角）
         self._latest_frame_original_size = None  # 原始帧尺寸 (h, w)，用于坐标还原
+        # v2.7.14: 推理用原图, stats/screenshot 用显示帧 → 两份分开存
+        self._latest_display_small_for_stats = None  # 推理线程做 stats 截图用的显示帧(缩小版)
         self._inference_frame_lock = threading.Lock()  # 保护推理帧的锁
         self._confirmed_detections = []  # 经过帧计数确认的检测结果
         self._confirmed_detections_lock = threading.Lock()  # 保护确认结果的锁
@@ -2074,21 +2126,32 @@ class VideoSourceManager:
                     # reused on the next capture.read()).  This copy is then
                     # shared read-only across inference, streaming, and recording
                     # threads — no further copies are needed in the capture loop.
-                    original_frame = frame.copy()
+                    raw_frame = frame.copy()
 
-                    # ========== 画面几何变换（在所有消费者之前）==========
-                    # rotation/flip 在这里完成后，推理、MJPEG、录像、快照
-                    # 拿到的都是变换后帧，检测框坐标自动对齐，无需二次映射。
-                    original_frame = self._apply_frame_transform(original_frame)
+                    # ========== v2.7.14: "只翻显示, 不翻推理" ==========
+                    # raw_frame 保留原始摄像头视角, 仅给模型推理使用 → 检测精度不受翻转影响;
+                    # display_frame 是变换后的帧, 给 MJPEG / 录像 / 快照 / stats_screenshot;
+                    # 推理输出的 bbox 会在 _inference_loop 里通过
+                    # _map_detections_original_to_display 映射到显示坐标系, 下游 ROI/容器/前端
+                    # 画框等全部基于显示坐标系, 完全对齐。
+                    if self._has_display_transform():
+                        display_frame = self._apply_frame_transform(raw_frame.copy())
+                    else:
+                        display_frame = raw_frame
+                    # original_frame 作为历史命名保留, 一律指向 display_frame
+                    # (下游大量代码用 original_frame 做 MJPEG/录像/screenshot)
+                    original_frame = display_frame
 
                     # 更新视频当前帧位置
                     if self.source_type == 'video' and self.capture is not None:
                         self.video_current_frame = int(self.capture.get(cv2.CAP_PROP_POS_FRAMES))
                     
-                    # ========== 预缩小帧：供推理和录制使用 ==========
-                    small_frame = None
+                    # ========== 预缩小帧：推理基于 raw_frame, 录制/stats 基于 display_frame ==========
+                    small_frame = None          # 显示坐标系的缩小帧 (给录制 / stats 截图)
+                    raw_small_frame = None      # 原图坐标系的缩小帧 (给模型推理)
                     if self.is_detecting and self.model is not None:
                         target_sz = getattr(self, '_model_imgsz', 640)
+                        # 显示帧缩小
                         oh, ow = original_frame.shape[:2]
                         if max(oh, ow) > target_sz * 1.2:
                             scale = target_sz / max(oh, ow)
@@ -2097,13 +2160,27 @@ class VideoSourceManager:
                             small_frame = cv2.resize(original_frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
                         else:
                             small_frame = original_frame
+                        # 原图帧缩小 (喂模型)
+                        if self._has_display_transform():
+                            rh, rw = raw_frame.shape[:2]
+                            if max(rh, rw) > target_sz * 1.2:
+                                scale_r = target_sz / max(rh, rw)
+                                rnw = int(rw * scale_r) // 2 * 2
+                                rnh = int(rh * scale_r) // 2 * 2
+                                raw_small_frame = cv2.resize(raw_frame, (rnw, rnh), interpolation=cv2.INTER_LINEAR)
+                            else:
+                                raw_small_frame = raw_frame
+                        else:
+                            # 无变换时两者指向同一个缓冲, 零额外开销
+                            raw_small_frame = small_frame
                     
                     # ========== 双线程架构：异步推理 ==========
                     if self.is_detecting and self.model is not None:
                         t_lock1_start = time.time()
                         with self._inference_frame_lock:
-                            self._latest_frame_for_inference = small_frame
-                            self._latest_frame_original_size = original_frame.shape[:2]
+                            self._latest_frame_for_inference = raw_small_frame
+                            self._latest_display_small_for_stats = small_frame
+                            self._latest_frame_original_size = raw_frame.shape[:2]
                         t_lock1_end = time.time()
                         if (t_lock1_end - t_lock1_start) > 0.1:
                             debug_log(f"!!! inference_frame_lock 耗时: {(t_lock1_end-t_lock1_start)*1000:.1f}ms", "CAPTURE")
@@ -4896,7 +4973,78 @@ class VideoSourceManager:
         status = "OK" if is_ok else "NG"
         print(f"[Container] {box_display_id} settled: {status}, "
               f"items={item_counts}, expected={expected_no_container}")
-        
+
+        # v2.7.14: 容器模式下也往 StepRecord 写一条一条物品, 让数据中心展开 cycle 能看到
+        # ——之前只触发 _trigger_event, 没 record_step, 前端数据中心永远是空的。
+        # 严格过滤: 只写在"物品清单"(expected_no_container) 里的类别。
+        # 容器类(箱子)不算 item, 本身不进 StepRecord。
+        current_time = time.time()
+
+        def _in_item_checklist(cls_name: str) -> bool:
+            if cls_name == container_label:
+                return False
+            if not expected_no_container:
+                return True
+            return cls_name in expected_no_container
+
+        items_to_record = []
+        for info in box_state.get('items_ever_seen', {}).values():
+            if not _in_item_checklist(info.get('label', '')):
+                continue
+            items_to_record.append({
+                'label': info.get('label', ''),
+                'display_id': info.get('display_id', ''),
+                'first_seen': info.get('first_seen', current_time),
+                'last_seen': info.get('last_seen', current_time),
+            })
+        # 按 display_id 去重, 保留最早/最晚时间
+        dedup = {}
+        for it in items_to_record:
+            did = it['display_id']
+            if did not in dedup:
+                dedup[did] = it
+            else:
+                dedup[did]['first_seen'] = min(dedup[did]['first_seen'], it['first_seen'])
+                dedup[did]['last_seen'] = max(dedup[did]['last_seen'], it['last_seen'])
+        items_to_record = list(dedup.values())
+
+        # 兜底: items_ever_seen 已被清 / 丢失, 但 item_class_counts 有累计 → 虚拟补齐
+        if not items_to_record and item_counts:
+            virtual = []
+            for cls_name, cnt in sorted(item_counts.items(), key=lambda kv: kv[0]):
+                if cnt <= 0 or not _in_item_checklist(cls_name):
+                    continue
+                prefix = self._get_display_prefix(cls_name)
+                for i in range(1, int(cnt) + 1):
+                    virtual.append({
+                        'label': cls_name,
+                        'display_id': f"{prefix}{i}",
+                        'first_seen': box_state.get('first_seen', current_time),
+                        'last_seen': box_state.get('last_seen', current_time),
+                    })
+            if virtual:
+                print(f"[Container] {box_display_id} items_ever_seen 空, "
+                      f"按计数器虚拟补齐 {len(virtual)} 条")
+                items_to_record = virtual
+
+        # 维护 current_cycle_steps 供 end_cycle 写入 cycle.step_sequence
+        if items_to_record:
+            self.current_cycle_steps = [it['display_id'] for it in items_to_record]
+            step_order = 0
+            for it in items_to_record:
+                step_order += 1
+                dur = max(0.0, (it['last_seen'] or current_time) - (it['first_seen'] or current_time))
+                step_name = it['display_id']
+                self.record_step(
+                    step_label=it['label'],
+                    step_name=step_name,
+                    start_time=it['first_seen'] or current_time,
+                    end_time=it['last_seen'] or current_time,
+                    duration=round(dur, 2),
+                    step_order=step_order,
+                    is_valid=True,
+                )
+
         if is_ok:
             self._trigger_event(1, f'{box_display_id} OK: {item_counts}')
         else:
@@ -5012,8 +5160,18 @@ class VideoSourceManager:
         current_time = time.time()
         
         # ===== Collect all item instances from active + recently_lost =====
+        # v2.7.14: 只保留"物品清单"(expected_items) 里的类别。
+        # 启用但未入清单的类(比如"箱子"、"泡沫槽") 允许模型识别/画框/跟踪, 但不写 StepRecord。
+        # 仅当 expected_items 非空时过滤; 为空视为"任意类都算", 保留原行为。
+        def _in_checklist(cls_name: str) -> bool:
+            if not expected_items:
+                return True
+            return cls_name in expected_items
+
         all_items = []
         for tid, obj in self._tracking_objects.items():
+            if not _in_checklist(obj['class_name']):
+                continue
             all_items.append({
                 'class_name': obj['class_name'],
                 'display_id': obj['display_id'],
@@ -5022,6 +5180,8 @@ class VideoSourceManager:
                 'order_idx': obj.get('order_idx', 0),
             })
         for tid, obj in self._tracking_recently_lost.items():
+            if not _in_checklist(obj['class_name']):
+                continue
             all_items.append({
                 'class_name': obj['class_name'],
                 'display_id': obj['display_id'],
@@ -5038,7 +5198,34 @@ class VideoSourceManager:
             if item['display_id'] not in seen_display_ids:
                 seen_display_ids.add(item['display_id'])
                 unique_items.append(item)
-        
+
+        # v2.7.14: 兜底——settle 触发时 _tracking_objects / _tracking_recently_lost 可能
+        # 都已被清空(物品全离开 + 遮挡容忍短, 导致 recently_lost 过期)。此时 StepRecord
+        # 会一条不写, 前端数据中心展开 cycle 全空。用 _tracking_class_counters / _event_counters
+        # 里累计的数量虚拟补齐, 至少让用户看到本周期识别到了几个 A / 几个 B(没有精确时间戳)。
+        if not unique_items:
+            virtual_items = []
+            virtual_order = 0
+            for cls_name, cnt in sorted(
+                self._tracking_class_counters.items(), key=lambda kv: kv[0]
+            ):
+                if cnt <= 0 or not _in_checklist(cls_name):
+                    continue
+                prefix = self._get_display_prefix(cls_name)
+                for i in range(1, int(cnt) + 1):
+                    virtual_order += 1
+                    virtual_items.append({
+                        'class_name': cls_name,
+                        'display_id': f"{prefix}{i}",
+                        'first_seen': self.cycle_start_time or current_time,
+                        'last_seen': current_time,
+                        'order_idx': virtual_order,
+                    })
+            if virtual_items:
+                print(f"[Tracking] settle 时活动/丢失表均空, 用计数器虚拟补齐 "
+                      f"{len(virtual_items)} 条: {[v['display_id'] for v in virtual_items]}")
+                unique_items = virtual_items
+
         self.current_cycle_steps = [item['display_id'] for item in unique_items]
         
         step_order = 0
@@ -5060,7 +5247,7 @@ class VideoSourceManager:
             )
         
         for cls_name, count in self._event_counters.items():
-            if count > 0:
+            if count > 0 and _in_checklist(cls_name):
                 display_name = self.step_display_names.get(cls_name, cls_name)
                 step_order += 1
                 start_t = self._event_first_seen.get(cls_name, self.cycle_start_time or current_time)
@@ -6425,9 +6612,11 @@ class VideoSourceManager:
                     last_gpu_cleanup_time = current_time
                 
                 # 获取最新帧
+                # v2.7.14: frame = 原图小帧 (喂模型), display_small = 显示小帧 (stats 截图/画框)
                 t1 = time.time()
                 with self._inference_frame_lock:
                     frame = self._latest_frame_for_inference
+                    display_small = self._latest_display_small_for_stats
                     frame_id = id(frame) if frame is not None else None
                 t2 = time.time()
                 
@@ -6443,7 +6632,9 @@ class VideoSourceManager:
                 last_frame_id = frame_id
                 # No copy needed — capture thread creates a new array each
                 # iteration and never mutates the old one after publishing.
-                original_frame = frame
+                # original_frame 沿用历史命名, 这里指向 "显示坐标系下的缩小帧"
+                # —— 下游 _update_*_stats 会用它生成步骤截图, 和前端看到的画面一致
+                original_frame = display_small if display_small is not None else frame
                 frame_count += 1
 
                 # v2.7.13: 推理 FPS 统计 (每秒更新一次)
@@ -6460,7 +6651,7 @@ class VideoSourceManager:
                 _is_tracking = (_logic_mode == 'tracking')
                 _is_seg = (_task_type == 'segmentation')
                 
-                # 执行推理 — 4 combinations
+                # 执行推理 — 4 combinations (输入 frame = 原图小帧, 输出坐标在原图坐标系)
                 t3 = time.time()
                 if _is_tracking:
                     detections = self._detect_and_track(frame)
@@ -6474,7 +6665,12 @@ class VideoSourceManager:
                 if detect_time > 200:
                     debug_log(f"!!! 推理耗时: {detect_time:.1f}ms, 检测数={len(detections) if detections else 0}", "INFERENCE")
                 
-                # 更新统计
+                # v2.7.14: 把 detections 从 "原图坐标系" 映射到 "显示坐标系"
+                # 让下游 ROI / 容器 / stats / 前端画框全部工作在显示坐标系, 零改动
+                if detections:
+                    detections = self._map_detections_original_to_display(detections)
+                
+                # 更新统计 (original_frame 已是 display_small, 与 detections 坐标系一致)
                 t5 = time.time()
                 if _is_tracking:
                     self._update_tracking_stats(detections, original_frame)
@@ -6788,35 +6984,49 @@ class VideoSourceManager:
         def _get_fourcc_str(cap):
             fc = int(cap.get(cv2.CAP_PROP_FOURCC))
             return "".join([chr((fc >> (8 * i)) & 0xFF) for i in range(4)])
-        
+
+        # v2.7.15 (A+B): _bench_fps 提到外层, 所有路径共享, 且打开后立即 bench 一次,
+        # 避免"DirectShow 谎报 MJPG 但实际走 YUYV 10fps"的坑
+        def _bench_fps(cap, n=10, timeout=5.0):
+            """快速实测帧率，带超时防止慢摄像头阻塞过久"""
+            try:
+                cap.read()
+                t0 = time.time()
+                ok = 0
+                for _ in range(n):
+                    if time.time() - t0 > timeout:
+                        break
+                    if cap.read()[0]:
+                        ok += 1
+                elapsed = max(time.time() - t0, 0.001)
+                return ok / elapsed
+            except Exception:
+                return 0
+
         # Strategy 1: Set FOURCC before resolution (standard approach)
         self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.capture.set(cv2.CAP_PROP_FPS, fps)
-        
-        cc_str = _get_fourcc_str(self.capture)
-        
-        # Strategy 2: DirectShow 未能设为 MJPG 时，实测 DirectShow 和 MSMF 的帧率，选快的
-        if cc_str != 'MJPG' and platform.system() == "Windows":
-            def _bench_fps(cap, n=10, timeout=5.0):
-                """快速实测帧率，带超时防止慢摄像头阻塞过久"""
-                try:
-                    cap.read()
-                    t0 = time.time()
-                    ok = 0
-                    for _ in range(n):
-                        if time.time() - t0 > timeout:
-                            break
-                        if cap.read()[0]:
-                            ok += 1
-                    elapsed = max(time.time() - t0, 0.001)
-                    return ok / elapsed
-                except Exception:
-                    return 0
+        # v2.7.15 (B): 默认关小缓冲区, 减少 bench 偏差 + 降采集延迟
+        try:
+            self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
 
-            dshow_fps = _bench_fps(self.capture)
-            print(f"[Camera] DirectShow({cc_str}) 实测 {dshow_fps:.0f}fps")
+        cc_str = _get_fourcc_str(self.capture)
+
+        # v2.7.15 (A): 无论 FOURCC 报告如何, 都实测一次真实帧率
+        # 阈值 = max(5, fps*0.6), 低于阈值就强制进入后端选优
+        bench_fps_threshold = max(5.0, fps * 0.6)
+        initial_bench_fps = _bench_fps(self.capture)
+        print(f"[Camera] 首次实测: {cc_str} @ {initial_bench_fps:.0f}fps (阈值 {bench_fps_threshold:.0f}fps)")
+
+        # Strategy 2: 格式非 MJPG 或 实测 FPS 低于阈值, 实测对比各后端选最快
+        need_backend_probe = (cc_str != 'MJPG') or (initial_bench_fps < bench_fps_threshold)
+        if need_backend_probe and platform.system() == "Windows":
+            dshow_fps = initial_bench_fps
+            print(f"[Camera] DirectShow({cc_str}) 采用首次实测 {dshow_fps:.0f}fps")
 
             # 先释放 DirectShow 再测 MSMF（某些摄像头不支持同时被两个后端打开）
             self.capture.release()
@@ -6830,6 +7040,10 @@ class VideoSourceManager:
                 msmf_cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                 msmf_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                 msmf_cap.set(cv2.CAP_PROP_FPS, fps)
+                try:
+                    msmf_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
                 msmf_cc = _get_fourcc_str(msmf_cap)
                 msmf_fps = _bench_fps(msmf_cap)
                 print(f"[Camera] MSMF({msmf_cc}) 实测 {msmf_fps:.0f}fps")
@@ -6849,6 +7063,10 @@ class VideoSourceManager:
                 self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                 self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                 self.capture.set(cv2.CAP_PROP_FPS, fps)
+                try:
+                    self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
                 cc_str = _get_fourcc_str(self.capture)
                 print(f"[Camera] 保留 DirectShow 后端 ({dshow_fps:.0f}fps >= MSMF {msmf_fps:.0f}fps)")
 
@@ -7681,6 +7899,7 @@ class VideoSourceManager:
         with self._inference_frame_lock:
             self._latest_frame_for_inference = None
             self._latest_frame_original_size = None
+            self._latest_display_small_for_stats = None
         with self._confirmed_detections_lock:
             self._confirmed_detections = []
         
@@ -8382,6 +8601,7 @@ class VideoSourceManager:
         with self._inference_frame_lock:
             self._latest_frame_for_inference = None
             self._latest_frame_original_size = None
+            self._latest_display_small_for_stats = None
         with self._confirmed_detections_lock:
             self._confirmed_detections = []
         
@@ -8521,7 +8741,11 @@ class VideoSourceManager:
     def generate_mjpeg(self):
         """Generate MJPEG stream.  Only encodes and sends when a genuinely new
         frame is available from the capture thread, so CPU is never wasted on
-        duplicate JPEG encodes."""
+        duplicate JPEG encodes.
+
+        v2.7.15 (C): try/finally + 异常捕获, 客户端断开时立即释放资源,
+        并维护 _mjpeg_active_streams 计数方便诊断"连接是否累积"。
+        """
         from backend.api.channel_manager import channel_manager
         target_interval = 1.0 / max(self.target_stream_fps, 1)
         num_ch = max(channel_manager.channel_count, 1)
@@ -8530,46 +8754,65 @@ class VideoSourceManager:
         max_idle = 600
         last_seq = -1
 
-        while True:
-            if self.is_running:
-                idle_count = 0
-                frame = None
-                with self.frame_lock:
-                    seq = self._frame_seq
-                    if seq != last_seq and self.current_frame is not None:
-                        frame = self.current_frame.copy()
-                        last_seq = seq
+        # v2.7.15 (C): 活跃 MJPEG 连接计数
+        try:
+            self._mjpeg_active_streams = getattr(self, '_mjpeg_active_streams', 0) + 1
+            print(f"[MJPEG] 新连接 ch={getattr(self, 'channel_index', '?')}, 活跃连接={self._mjpeg_active_streams}")
+        except Exception:
+            pass
 
-                if frame is None:
-                    time.sleep(0.005)
-                    continue
+        try:
+            while True:
+                if self.is_running:
+                    idle_count = 0
+                    frame = None
+                    with self.frame_lock:
+                        seq = self._frame_seq
+                        if seq != last_seq and self.current_frame is not None:
+                            frame = self.current_frame.copy()
+                            last_seq = seq
 
-                chunk = self._encode_and_yield(frame)
-                del frame
-                if chunk:
-                    yield chunk
+                    if frame is None:
+                        time.sleep(0.005)
+                        continue
 
-                if self.frame_limit_enabled:
-                    time.sleep(max(min_interval, target_interval))
+                    chunk = self._encode_and_yield(frame)
+                    del frame
+                    if chunk:
+                        yield chunk
+
+                    if self.frame_limit_enabled:
+                        time.sleep(max(min_interval, target_interval))
+                    else:
+                        time.sleep(min_interval)
                 else:
-                    time.sleep(min_interval)
-            else:
-                frame = self.get_frame()
-                if frame is None:
-                    frame = self._get_placeholder_frame()
-                chunk = self._encode_and_yield(frame)
-                del frame
-                if chunk:
-                    yield chunk
+                    frame = self.get_frame()
+                    if frame is None:
+                        frame = self._get_placeholder_frame()
+                    chunk = self._encode_and_yield(frame)
+                    del frame
+                    if chunk:
+                        yield chunk
 
-                idle_count += 1
-                if idle_count > max_idle:
-                    break
-                # 短间隔检查，以便 is_running 变 True 时快速恢复
-                for _ in range(10):
-                    if self.is_running:
+                    idle_count += 1
+                    if idle_count > max_idle:
                         break
-                    time.sleep(0.1)
+                    # 短间隔检查，以便 is_running 变 True 时快速恢复
+                    for _ in range(10):
+                        if self.is_running:
+                            break
+                        time.sleep(0.1)
+        except (GeneratorExit, ConnectionResetError, BrokenPipeError):
+            # 客户端断开, 正常退出
+            pass
+        except Exception as e:
+            print(f"[MJPEG] generator 异常退出 ch={getattr(self, 'channel_index', '?')}: {e}")
+        finally:
+            try:
+                self._mjpeg_active_streams = max(0, getattr(self, '_mjpeg_active_streams', 1) - 1)
+                print(f"[MJPEG] 连接关闭 ch={getattr(self, 'channel_index', '?')}, 活跃连接={self._mjpeg_active_streams}")
+            except Exception:
+                pass
     
     def get_snapshot(self):
         """获取当前帧的单张 JPEG 快照（用于前端 canvas 渲染）"""
