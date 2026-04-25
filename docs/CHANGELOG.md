@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.7.15 (2026-04-25)
+- [BUG-015-001] 修复: 工单管理表头修改了模板没生效, 一直是硬编码中文 (改成 v-for 渲染 visibleColOrder + colLabel 动态解析)
+- [BUG-015-002] 修复: 新建工单弹窗字段标签变成数字 (formItems 过滤掉 type=system, 表单只渲染表单字段)
+- [BUG-015-003] 修复: 字段配置"显示开关"默认 OFF 关闭后表格变全空白 (一次性迁移 visible=true + openTemplate 强制 normalize)
+- [FEAT-015-001] 新增: 工单管理表头全动态化 (SYSTEM_COL_META + colLabel, 系统列也能改显示名)
+- [FEAT-015-002] 新增: 字段"显示"开关 - 任意列可隐藏 (system / preset / custom 全可显隐)
+- [FEAT-015-003] 新增: 自定义字段也能进表格 (从 row.extra_data 取值, 默认列宽 120)
+- [FEAT-015-004] 新增: system 列"类型"显示具体类型 (标签/进度条/按钮组等), 加(不可改)后缀
+
+## v2.7.14 (2026-04-24)
+- [BUG-014-001] 修复: 跟踪模式数据中心 OK/NG 偶尔空白 + 显示非清单物品 (_settle_counting_cycle / _settle_box 严格按 expected_items 过滤 + 虚拟补齐 + 容器模式补 record_step)
+- [BUG-014-002] 修复: 摄像头检测帧率不稳定 29-31 vs 10 fps (A: _bench_fps 无条件实测一次; B: 全后端候选 CAP_PROP_BUFFERSIZE=1; C: MJPEG generator try/finally 捕获断开)
+- [FEAT-014-001] 新增: 只翻显示不翻推理 (推理用 raw_frame 保持训练精度, 显示/录像/快照用 display_frame, bbox 坐标做映射)
+- [TEST-014-001] 新增: tools/test_display_transform.py / test_tracking_settle_filter.py / test_mjpeg_disconnect.py 三套验证脚本
+
 ## v2.7.13 (2026-04-24)
 - [BUG-001] 修复: 跟踪模式"秒→帧"阈值按 fps_actual 换算导致实际延迟约设定值的 5 倍 (改用 fps_inference 新统计量, 去掉 min_cycle_age 的 1 秒兜底)
 - [BUG-002] 修复: 集群同条码二次校正后"待汇总/最近完成"两栏不一致 (方案 B: 判齐全用 all_records, 二次齐发按 overall_result+ng_items 决定是否重推 MES; 假未齐箱从 pending 列表剔除)

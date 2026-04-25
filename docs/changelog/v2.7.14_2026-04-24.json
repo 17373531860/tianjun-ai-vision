@@ -1,0 +1,49 @@
+{
+  "version": "2.7.14",
+  "date": "2026-04-24",
+  "previous_version": "2.7.13",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-014-001",
+      "title": "跟踪模式数据中心 OK/NG 偶尔空白 + 显示非清单物品",
+      "symptom": "跟踪模式下数据中心展示 OK/NG 时, 有时 OK/NG 全是空; 还会把'箱子'/'泡沫槽'等不在物品清单但启用了的物品也展示出来",
+      "root_cause": "_settle_counting_cycle 没按 expected_items 过滤 active/recent; _settle_box 容器模式漏调 record_step; 列表为空时无 fallback",
+      "fix": "_settle_counting_cycle / _settle_box 严格按 expected_items 过滤; 空时按 _tracking_class_counters 虚拟补齐; 容器模式补 record_step",
+      "files": ["backend/api/source.py", "tools/test_tracking_settle_filter.py"],
+      "keywords": ["跟踪模式", "data center", "数据中心", "OK NG 空", "expected_items", "settle_counting_cycle", "settle_box", "tracking", "物品清单", "record_step"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-014-002",
+      "title": "摄像头检测帧率不稳定 (29-31 vs 10 fps)",
+      "symptom": "检测有时 29-31 帧, 有时打开是 10 帧, 切换页面回来也可能 10 帧, 重启后大概率回到 29-31 帧",
+      "root_cause": "DSHOW 后端可能谎报 FOURCC=MJPG 实际走 YUYV 10fps; 旧逻辑只在 cc_str != MJPG 时触发选优, 谎报场景漏判; MJPEG 推流断开后客户端连接没清理累积; CAP_PROP_BUFFERSIZE 各路径未统一",
+      "fix": "A. _bench_fps 提到外层无条件实测一次, 选优条件扩展为 FOURCC!=MJPG OR bench_fps<max(5,fps*0.6); B. 所有后端候选统一 CAP_PROP_BUFFERSIZE=1; C. generate_mjpeg try/finally 捕获 GeneratorExit/ConnectionResetError/BrokenPipeError + _mjpeg_active_streams 计数日志",
+      "files": ["backend/api/source.py", "tools/test_mjpeg_disconnect.py"],
+      "keywords": ["fps", "帧率", "卡顿", "DSHOW", "MSMF", "FOURCC", "MJPG", "YUYV", "CAP_PROP_BUFFERSIZE", "MJPEG 推流", "_bench_fps", "GeneratorExit", "客户端断开"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-014-001",
+      "title": "只翻显示不翻推理",
+      "symptom": "现场需要画面镜像/旋转, 但不能影响模型推理精度",
+      "root_cause": "之前推理用的就是翻转后的画面, 跟训练数据视角不一致, 精度受影响",
+      "fix": "推理用原始 raw_frame; 显示/录像/快照用 display_frame; bbox 归一化坐标从原图映射到显示坐标系再叠加渲染",
+      "files": ["backend/api/source.py", "tools/test_display_transform.py"],
+      "keywords": ["翻转", "镜像", "rotate", "flip", "mirror", "display_frame", "raw_frame", "bbox 映射", "_apply_frame_transform", "_map_bbox_original_to_display"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/api/source.py",
+    "electron/package.json",
+    "electron/splash.html",
+    "tools/test_display_transform.py",
+    "tools/test_mjpeg_disconnect.py",
+    "tools/test_tracking_settle_filter.py"
+  ]
+}

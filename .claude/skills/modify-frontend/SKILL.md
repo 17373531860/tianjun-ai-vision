@@ -229,7 +229,8 @@ display.monitor.defaultCounters.showTotal/showGood/showBad/showNgSteps → 内�
 - 位置：「显示设置」 tab 下的「画面变换」卡片
 - `transformChannel` 选通道；`rotation/flip_h/flip_v` 绑到本地 form
 - 保存调 `POST /source/transform/config?channel=N`，立即对后续帧生效
-- **前端绝对不要对检测框做二次旋转/翻转**——后端已经在采集环节做了，检测框坐标是对齐的
+- **前端绝对不要对检测框做二次旋转/翻转**——后端已经处理好，检测框坐标已经在显示坐标系下
+- **v2.7.14 起语义变了**：推理永远走原图（保持训练精度），变换只作用于显示/录像/快照；后端会把 bbox 从原图坐标系映射到显示坐标系再下发，前端拿到的就是对齐的
 
 ### 外部设备 UI（`ExternalDevicePanel.vue` / `ScannerPanel.vue`）
 - 所有 axios 错误处理统一：`detail` 可能是 string | list | dict，展示前要规范化为 string
@@ -283,3 +284,50 @@ return h(ElInput, { modelValue, 'onUpdate:modelValue': onInput })
 - 单选值：`rest` / `form-data` / `form-urlencoded` / `query-string` / `modbus_rtu`
 - 每种下面配一句话说明 + 例子，避免用户选错
 - `form-data` 独有"表单字段名 form_key"，其余 3 种 HTTP 形式不用
+
+## v2.7.15 前端要点
+
+### `OrderPanel.vue` — 模板结构 + 表头全动态化
+
+v2.7.15 把工单管理表格表头从 9 个硬编码 `<el-table-column>` 改成完全跟模板走，模板项结构扩展：
+
+- **新字段 `visible: bool`**：每项是否在表格里显示（默认 true，旧 localStorage `undefined` 兼容也按 true）
+- **新字段 `system: bool`** + **`type: 'system'`**：标记列表系统列（来源/状态/进度/良品-不良/良率/创建时间/操作），不进新建工单表单
+- 三类字段语义：
+  - **PRESET**：表单字段，进新建工单弹窗，进工单管理表头（key 与后端 ORM 对齐）
+  - **SYSTEM**：列表系统列，**只**进表头（用户能改 label/visible/顺序，不能改 key/type/required/options/删除）
+  - **CUSTOM**：自定义字段，进表单弹窗保存到 `extra_data`，表头从 `row.extra_data[key]` 取值显示
+
+### 关键常量与 computed
+
+- `PRESET_META` / `PRESET_ORDER` / `PRESET_KEYS`：表单字段元数据
+- `SYSTEM_COL_META`：每项 `{ label, typeLabel }`，typeLabel 用于字段配置弹窗"类型"列友好显示
+- `COL_META`：表格 9 列的 `{ prop, width, minWidth, fixed }`，渲染时用 `colMetaFor(key)` 取值（自定义字段没定义时回落 `{prop:key, width:120}`）
+- `colLabel(key)` computed-like：表头 label 解析顺序 `template.label → SYSTEM_COL_META.label → PRESET_META.label → key 字面量`
+- `visibleColOrder` computed：`template.filter(it => it.visible !== false).map(it => it.key)`，**不再加兜底**，全关就空（用户意图）
+- `formItems` computed：`template.filter(it => it.type !== 'system')`，新建/编辑表单只渲染表单字段
+- `canHide()` 现在永远 true（任意列都能显隐）
+
+### localStorage 迁移
+
+- 模板 key：`mes_order_form_template_v1`（不变）
+- **新增一次性迁移标记 `mes_order_form_template_visible_migrated_v1`**：第一次加载 v2.7.15 时把所有列的 visible 强制重置为 true，避免老用户被旧版未持久化的 visible=undefined 污染
+- `loadTemplate` 还会自动补齐缺失的 SYSTEM 列到尾部（兼容 v2.7.14 及之前）
+- `openTemplate` 拷贝 `tplDraft` 时再 normalize 一次 visible（防 HMR 残留状态）
+
+### 字段配置弹窗的列保护
+
+| 字段类型 | key | label | type | required | options | 显示 | 上下移 | 删除 |
+|---|---|---|---|---|---|---|---|---|
+| PRESET | 锁定 | 可改 | 锁定 | 可改 | 可改 | 可改 | 可改 | 可删 |
+| SYSTEM | 锁定 | 可改 | 锁定（显示 typeLabel + 后缀"不可改"） | 锁定 | 锁定 | 可改 | 可改 | 锁定 |
+| CUSTOM | 可改 | 可改 | 可改 | 可改 | 可改 | 可改 | 可改 | 可删 |
+
+`saveTemplate` 落盘前会强制把 SYSTEM 列的 type='system'/required=false/optionsText='' 写回，防止任何路径绕过 UI 限制污染数据。
+
+### 改这个文件的注意事项
+
+1. **不要把表头改回硬编码** —— 客户改了模板就不生效
+2. **新增 SYSTEM 列要同时加进 `SYSTEM_COL_META` + `COL_META` + 表头 v-for 的 `<template v-else-if>` 分支**（三处不同步会渲染异常）
+3. **新增 PRESET 表单字段要同时加进 `PRESET_META` + `PRESET_ORDER` + 后端 ORM**（前端校验 key 必须对得上）
+4. **表头 v-for 里的 `<template #default="{ row }">`** 只能写一个 default slot，所有列分支都在里面用 v-if/else-if 分流（曾经踩坑：写多个 `<template #default v-if=...>` 会被 Vue 拒绝渲染）

@@ -1,0 +1,91 @@
+{
+  "version": "2.7.15",
+  "date": "2026-04-25",
+  "previous_version": "2.7.14",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-015-001",
+      "title": "工单管理表头修改了模板没生效, 一直是硬编码中文",
+      "symptom": "客户在'字段配置'里改了显示名(把'工单号'改成'批次号'), 工单管理列表的表头依然是'工单号', 没跟着变",
+      "root_cause": "OrderPanel.vue 表头 9 个 el-table-column 的 label 写的全是字面量字符串, 跟模板没绑定",
+      "fix": "表头改成 v-for 渲染 visibleColOrder, 每列 label 用 colLabel(key) 从模板动态解析",
+      "files": ["frontend/src/views/MES/OrderPanel.vue"],
+      "keywords": ["工单管理", "OrderPanel", "MES", "表头", "动态表头", "字段配置", "模板", "colLabel", "el-table-column"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-015-002",
+      "title": "新建工单弹窗字段标签变成数字 (0/1/2/...)",
+      "symptom": "用户在'字段配置'里把显示名填成 1/2/3/4/5 测试, 新建工单弹窗里就出现了数字标签 + 表格里 system 列的标签也错乱",
+      "root_cause": "老版本没有 system 列概念, 用户的 localStorage 模板里只有 PRESET 字段, '新建工单'循环 template.value 时把 PRESET 字段的'显示名'原样拿来用",
+      "fix": "加 formItems computed (过滤掉 type='system' 的列), 新建/编辑表单只渲染表单字段; system 列单独走表格表头别名",
+      "files": ["frontend/src/views/MES/OrderPanel.vue"],
+      "keywords": ["新建工单", "数字标签", "formItems", "system 列", "PRESET", "openCreate", "editOrder"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-015-003",
+      "title": "字段配置弹窗'显示开关'默认 OFF, 关闭后表格变全空白",
+      "symptom": "HMR 热更新后打开字段配置, 所有 system 列的'显示'开关都是关闭状态, 关闭弹窗→保存后, localStorage 里被写死成 visible:false, 工单管理表格变成完全空白",
+      "root_cause": "HMR 不会重跑 onMounted→loadTemplate, 内存里 template.value 没有 visible 字段; el-switch v-model='row.visible' 遇到 undefined 默认渲染成 OFF; 用户即使没动开关, 关闭弹窗保存后 visible=false 被写进 localStorage",
+      "fix": "loadTemplate 加一次性迁移 TEMPLATE_VISIBLE_MIGRATED_KEY 把所有列的 visible 重置为 true; openTemplate 拷贝 tplDraft 时强制 normalize visible (it.visible !== false)",
+      "files": ["frontend/src/views/MES/OrderPanel.vue"],
+      "keywords": ["visible", "显示开关", "HMR", "localStorage 污染", "TEMPLATE_VISIBLE_MIGRATED_KEY", "el-switch undefined", "openTemplate"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-015-001",
+      "title": "工单管理表头全动态化 (all_dyn 方案)",
+      "symptom": "客户希望工单管理表格的表头跟字段配置模板走 — 不只表单字段, 系统列(来源/状态/进度/良品-不良/良率/创建时间/操作)也要能改显示名",
+      "root_cause": "之前 system 列硬编码在表头, 模板只能改 PRESET 表单字段",
+      "fix": "新增 SYSTEM_COL_META 常量; buildDefaultTemplate 同时生成表单字段 + 系统列; colLabel 从模板解析表头; loadTemplate 自动补齐缺失 system 列(向后兼容); 字段配置里 system 列只允许改 label, key/type/required/options 锁定",
+      "files": ["frontend/src/views/MES/OrderPanel.vue"],
+      "keywords": ["all_dyn", "SYSTEM_COL_META", "buildDefaultTemplate", "colLabel", "动态表头", "工单管理", "MES"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-015-002",
+      "title": "字段'显示'开关 - 任意列可隐藏",
+      "symptom": "客户希望对 system 列也能完全控制 — 至少能隐藏不需要的列(比如不想看创建时间)",
+      "root_cause": "之前 system 列只能改名, 没有显示/隐藏的能力",
+      "fix": "新增 COL_META 整合 9 列的 prop/width/fixed; 新增 visibleColOrder computed; 字段配置弹窗加'显示'列, 所有字段(system/preset/custom)都可显隐; 表头 v-for 渲染, 全关 → 表格变空",
+      "files": ["frontend/src/views/MES/OrderPanel.vue"],
+      "keywords": ["显示开关", "visible", "COL_META", "visibleColOrder", "canHide", "字段配置"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-015-003",
+      "title": "自定义字段也能进表格 (从 extra_data 取值)",
+      "symptom": "用户在字段配置里加的自定义字段(custom_1), 之前只在新建工单表单里, 表格看不到值",
+      "root_cause": "visibleColOrder 限制了必须在 COL_META 里, 自定义字段被滤掉",
+      "fix": "visibleColOrder 不再限制必须在 COL_META 里; colMetaFor(key) helper 自定义字段没 COL_META 定义时用默认 prop:key/width:120; 表头 v-for 兜底分支 row.extra_data?.[key] ?? row[key] ?? ''",
+      "files": ["frontend/src/views/MES/OrderPanel.vue"],
+      "keywords": ["自定义字段", "custom_1", "extra_data", "colMetaFor", "工单管理表格"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-015-004",
+      "title": "system 列'类型'显示具体类型而不是统称'列表列'",
+      "symptom": "字段配置弹窗'类型'列对 system 列原本只显示'列表列', 用户搞不清每列实际是什么",
+      "root_cause": "类型列对 system 列硬编码显示'列表列', 没区分实际渲染方式",
+      "fix": "SYSTEM_COL_META 每项加 typeLabel (标签/状态标签/进度条/良品-不良数/百分比/时间/按钮组), 类型列直接显示 + 后缀'(不可改)'",
+      "files": ["frontend/src/views/MES/OrderPanel.vue"],
+      "keywords": ["typeLabel", "类型显示", "字段配置类型", "SYSTEM_COL_META"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["modify-frontend"],
+  "files_changed": [
+    "frontend/src/views/MES/OrderPanel.vue",
+    "electron/package.json",
+    "electron/splash.html",
+    ".claude/skills/modify-frontend/SKILL.md"
+  ]
+}
