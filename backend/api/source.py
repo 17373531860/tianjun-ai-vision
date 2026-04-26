@@ -77,137 +77,34 @@ def _read_engine_metadata_imgsz(engine_path: str) -> Optional[int]:
         return None
 
 
-# ========== HCNetSDK import ==========
-HCNET_SDK_AVAILABLE = False
-HCNetSession = None
-try:
-    from backend.hcnetsdk.wrapper import HCNetSession as _HCNetSession
-    if _HCNetSession.sdk_available():
-        HCNetSession = _HCNetSession
-        HCNET_SDK_AVAILABLE = True
-        print("[HCNetSDK] DLL available")
-    else:
-        print("[HCNetSDK] DLL not found (Windows deploy only)")
-except Exception as _e:
-    print(f"[HCNetSDK] load failed: {_e}")
-
-# ========== 海康工业相机 SDK 导入 ==========
-import sys
-HIK_SDK_AVAILABLE = False
-MvCamera = None
-MV_CC_DEVICE_INFO_LIST = None
-MV_CC_DEVICE_INFO = None
-MV_USB_DEVICE = None
-MV_GIGE_DEVICE = None
-
-# ========== 调试日志开关 ==========
-HIK_DEBUG = False  # 海康SDK详细日志（仅调试时开启）
-FREEZE_DEBUG = True  # 卡死调试日志
-
-def debug_log(msg, category="MAIN"):
-    """调试日志 - 默认关闭，需要时手动开启 FREEZE_DEBUG"""
-    if FREEZE_DEBUG:
-        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        print(f"[{timestamp}] [DEBUG/{category}] {msg}", flush=True)
-
-def hik_log(msg, level="INFO"):
-    """海康相机调试日志 - 默认关闭，需要时手动开启 HIK_DEBUG"""
-    if HIK_DEBUG or level in ("ERROR", "WARN", "SUCCESS"):
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        print(f"[{timestamp}] [海康SDK/{level}] {msg}", flush=True)
-
-try:
-    _mv_import_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MvImport")
-    _mv_lib_dir = os.path.join(_mv_import_dir, "lib")
-    
-    if _mv_import_dir not in sys.path:
-        sys.path.insert(0, _mv_import_dir)
-    
-    from backend.api.MvImport.MvCameraControl_class import MvCamera
-    from backend.api.MvImport.CameraParams_header import (
-        MV_CC_DEVICE_INFO_LIST, 
-        MV_CC_DEVICE_INFO,
-        MV_FRAME_OUT_INFO_EX,
-        MVCC_INTVALUE,
-        MV_TRIGGER_MODE_OFF,
-        MV_CC_PIXEL_CONVERT_PARAM
-    )
-    from backend.api.MvImport.CameraParams_const import (
-        MV_USB_DEVICE, 
-        MV_GIGE_DEVICE,
-        MV_ACCESS_Exclusive
-    )
-    from backend.api.MvImport.PixelType_header import (
-        PixelType_Gvsp_Mono8,
-        PixelType_Gvsp_BayerRG8,
-        PixelType_Gvsp_RGB8_Packed,
-        PixelType_Gvsp_BGR8_Packed,
-        PixelType_Gvsp_YUV422_Packed,
-        PixelType_Gvsp_YUV422_YUYV_Packed
-    )
-    
-    HIK_SDK_AVAILABLE = True
-    
-except Exception:
-    pass
-
-
-def _decode_hik_string(ctypes_char_array):
-    """从 ctypes 字符数组解码为字符串，用于海康设备名称/序列号"""
-    if ctypes_char_array is None:
-        return ""
-    try:
-        byte_str = memoryview(ctypes_char_array).tobytes()
-        null_index = byte_str.find(b'\x00')
-        if null_index != -1:
-            byte_str = byte_str[:null_index]
-        for enc in ('utf-8', 'gbk', 'latin-1'):
-            try:
-                return byte_str.decode(enc).strip()
-            except UnicodeDecodeError:
-                continue
-        return byte_str.decode('latin-1', errors='replace').strip()
-    except Exception:
-        return ""
-
-
-def get_hikvision_device_list():
-    """
-    枚举当前可用的海康工业相机（USB + GigE），返回 [{"index": 设备索引, "name": 显示名称}, ...]
-    未安装 SDK 或枚举失败时返回空列表
-    """
-    if not HIK_SDK_AVAILABLE:
-        return []
-    try:
-        device_list = MV_CC_DEVICE_INFO_LIST()
-        tlayer_type = MV_USB_DEVICE | MV_GIGE_DEVICE
-        ret = MvCamera.MV_CC_EnumDevices(tlayer_type, device_list)
-        if ret != 0 or device_list.nDeviceNum == 0:
-            return []
-        
-        result = []
-        for i in range(device_list.nDeviceNum):
-            st_dev = cast(device_list.pDeviceInfo[i], POINTER(MV_CC_DEVICE_INFO)).contents
-            name = ""
-            if st_dev.nTLayerType == MV_USB_DEVICE:
-                model = _decode_hik_string(st_dev.SpecialInfo.stUsb3VInfo.chModelName)
-                serial = _decode_hik_string(st_dev.SpecialInfo.stUsb3VInfo.chSerialNumber)
-                name = f"USB [{model}] {serial}" if serial else f"USB [{model}]"
-            elif st_dev.nTLayerType == MV_GIGE_DEVICE:
-                model = _decode_hik_string(st_dev.SpecialInfo.stGigEInfo.chModelName)
-                ip = st_dev.SpecialInfo.stGigEInfo.nCurrentIp
-                ip_str = "%d.%d.%d.%d" % (
-                    (ip >> 24) & 0xff, (ip >> 16) & 0xff,
-                    (ip >> 8) & 0xff, ip & 0xff
-                )
-                name = f"GigE [{model}] {ip_str}"
-            if not name.strip():
-                name = f"海康相机 {i}"
-            result.append({"index": i, "name": name})
-        return result
-    except Exception as e:
-        hik_log(f"枚举设备失败: {e}", "ERROR")
-        return []
+# ========== 调试日志 + HCNetSDK + 海康工业相机 SDK (P7 第八刀: 全部迁至 source_sdk_loader) ==========
+# 通过 re-export 兼容历史调用: `from backend.api.source import debug_log / HIK_SDK_AVAILABLE / ...`
+from backend.api.source_sdk_loader import (  # noqa: E402,F401
+    # 调试日志
+    debug_log,
+    hik_log,
+    HIK_DEBUG,
+    FREEZE_DEBUG,
+    # HCNetSDK (NVR / 网络硬盘录像机)
+    HCNET_SDK_AVAILABLE,
+    HCNetSession,
+    # 海康工业相机 SDK
+    HIK_SDK_AVAILABLE,
+    MvCamera,
+    MV_CC_DEVICE_INFO_LIST,
+    MV_CC_DEVICE_INFO,
+    MV_FRAME_OUT_INFO_EX,
+    MVCC_INTVALUE,
+    MV_TRIGGER_MODE_OFF,
+    MV_CC_PIXEL_CONVERT_PARAM,
+    MV_USB_DEVICE,
+    MV_GIGE_DEVICE,
+    MV_ACCESS_Exclusive,
+    PixelType_Gvsp_RGB8_Packed,
+    # 工具函数
+    _decode_hik_string,
+    get_hikvision_device_list,
+)
 
 
 # ========== FFmpeg 路径查找 ==========
@@ -256,208 +153,9 @@ def get_cached_ffmpeg_path():
 
 
 # ========== FFmpeg 录制器类（替代 OpenCV VideoWriter，更稳定） ==========
-class FFmpegRecorder:
-    """
-    使用 FFmpeg 进程进行视频录制
-    通过管道发送帧数据，完全独立于 Python/CUDA，避免卡死
-    """
-    # 录制分辨率上限（降低分辨率大幅减少 FFmpeg 内存）
-    MAX_RECORD_WIDTH = 640
-    MAX_RECORD_HEIGHT = 360
-    
-    def __init__(self, filepath: str, width: int, height: int, fps: int = 25):
-        self.filepath = filepath
-        # 限制录制分辨率，保持宽高比
-        if width > self.MAX_RECORD_WIDTH or height > self.MAX_RECORD_HEIGHT:
-            scale = min(self.MAX_RECORD_WIDTH / width, self.MAX_RECORD_HEIGHT / height)
-            self.width = int(width * scale) // 2 * 2  # 确保偶数
-            self.height = int(height * scale) // 2 * 2
-        else:
-            self.width = width
-            self.height = height
-        self.input_width = width
-        self.input_height = height
-        self.fps = fps
-        self.process = None
-        self._lock = threading.Lock()
-        self._is_open = False
-        self._frame_count = 0
-    
-    def open(self) -> bool:
-        """启动 FFmpeg 进程"""
-        try:
-            ffmpeg_path = get_cached_ffmpeg_path()
-            
-            cmd = [
-                ffmpeg_path,
-                '-y',
-                '-f', 'rawvideo',
-                '-vcodec', 'rawvideo',
-                '-pix_fmt', 'bgr24',
-                '-s', f'{self.width}x{self.height}',
-                '-r', str(self.fps),
-                '-i', 'pipe:0',
-                '-c:v', 'libx264',
-                '-preset', 'ultrafast',
-                '-tune', 'zerolatency',  # 禁用前瞻缓冲，大幅减少内存
-                '-threads', '1',  # 单线程编码，减少内存
-                '-crf', '28',  # 略降质量换取更小的编码缓冲
-                '-pix_fmt', 'yuv420p',
-                '-movflags', '+faststart',
-                self.filepath
-            ]
-            
-            self.process = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                bufsize=10**6
-            )
-            self._is_open = True
-            self._frame_count = 0
-            print(f"[FFmpeg录制] 已启动: {os.path.basename(self.filepath)}")
-            return True
-        except Exception as e:
-            print(f"[FFmpeg录制] 启动失败: {e}")
-            self._is_open = False
-            return False
-    
-    def write(self, frame) -> bool:
-        """写入一帧（非阻塞，失败时静默）"""
-        if not self._is_open or self.process is None:
-            return False
-        
-        try:
-            with self._lock:
-                if self.process.poll() is not None:
-                    self._is_open = False
-                    return False
-                
-                # 缩放到录制分辨率
-                if frame.shape[1] != self.width or frame.shape[0] != self.height:
-                    frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
-                
-                self.process.stdin.write(frame.tobytes())
-                self._frame_count += 1
-                return True
-        except (BrokenPipeError, OSError):
-            self._is_open = False
-            return False
-        except Exception:
-            return False
-    
-    def release(self):
-        """关闭录制器"""
-        with self._lock:
-            if self.process is not None:
-                try:
-                    if self.process.stdin:
-                        self.process.stdin.close()
-                except Exception:
-                    pass
-                try:
-                    self.process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    try:
-                        self.process.kill()
-                        self.process.wait(timeout=2)
-                    except Exception:
-                        pass
-                except Exception:
-                    try:
-                        self.process.kill()
-                    except Exception:
-                        pass
-                finally:
-                    self.process = None
-            self._is_open = False
-            print(f"[FFmpeg录制] 已停止: {os.path.basename(self.filepath)}, 共 {self._frame_count} 帧")
-    
-    def isOpened(self) -> bool:
-        """检查是否正在录制"""
-        return self._is_open and self.process is not None and self.process.poll() is None
 
 
 # ========== 卡尔曼滤波器类 ==========
-class KalmanFilter2D:
-    """
-    2D 卡尔曼滤波器，用于平滑检测框位置
-    状态向量: [x, y, w, h, vx, vy, vw, vh] (位置 + 速度)
-    """
-    def __init__(self, initial_state, process_noise=0.03, measurement_noise=0.1):
-        """
-        初始化卡尔曼滤波器
-        
-        Args:
-            initial_state: [x, y, w, h] 初始位置
-            process_noise: 过程噪声 Q (越小越平滑，越大响应越快)
-            measurement_noise: 观测噪声 R (越大越平滑，对突变不敏感)
-        """
-        # 状态向量 [x, y, w, h, vx, vy, vw, vh]
-        self.state = np.array([
-            initial_state[0], initial_state[1], initial_state[2], initial_state[3],
-            0, 0, 0, 0  # 初始速度为0
-        ], dtype=np.float64)
-        
-        # 状态转移矩阵 (假设匀速运动)
-        self.F = np.array([
-            [1, 0, 0, 0, 1, 0, 0, 0],  # x = x + vx
-            [0, 1, 0, 0, 0, 1, 0, 0],  # y = y + vy
-            [0, 0, 1, 0, 0, 0, 1, 0],  # w = w + vw
-            [0, 0, 0, 1, 0, 0, 0, 1],  # h = h + vh
-            [0, 0, 0, 0, 1, 0, 0, 0],  # vx = vx
-            [0, 0, 0, 0, 0, 1, 0, 0],  # vy = vy
-            [0, 0, 0, 0, 0, 0, 1, 0],  # vw = vw
-            [0, 0, 0, 0, 0, 0, 0, 1],  # vh = vh
-        ], dtype=np.float64)
-        
-        # 观测矩阵 (只能观测位置，不能直接观测速度)
-        self.H = np.array([
-            [1, 0, 0, 0, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 0, 0, 0],
-            [0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 1, 0, 0, 0, 0],
-        ], dtype=np.float64)
-        
-        # 过程噪声协方差矩阵
-        self.Q = np.eye(8, dtype=np.float64) * process_noise
-        
-        # 观测噪声协方差矩阵
-        self.R = np.eye(4, dtype=np.float64) * measurement_noise
-        
-        # 估计误差协方差矩阵
-        self.P = np.eye(8, dtype=np.float64)
-        
-    def predict(self):
-        """预测步骤"""
-        # 状态预测
-        self.state = self.F @ self.state
-        # 协方差预测
-        self.P = self.F @ self.P @ self.F.T + self.Q
-        return self.state[:4]  # 返回 [x, y, w, h]
-    
-    def update(self, measurement):
-        """更新步骤"""
-        z = np.array(measurement, dtype=np.float64)
-        
-        # 卡尔曼增益
-        S = self.H @ self.P @ self.H.T + self.R
-        K = self.P @ self.H.T @ np.linalg.inv(S)
-        
-        # 状态更新
-        y = z - self.H @ self.state  # 测量残差
-        self.state = self.state + K @ y
-        
-        # 协方差更新
-        I = np.eye(8)
-        self.P = (I - K @ self.H) @ self.P
-        
-        return self.state[:4]  # 返回 [x, y, w, h]
-    
-    def get_position(self):
-        """获取当前位置估计"""
-        return self.state[:4]
 
 
 # 全局变量管理视频源状态

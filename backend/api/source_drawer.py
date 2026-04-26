@@ -28,9 +28,9 @@ except ImportError:
     Image = ImageDraw = ImageFont = None
 
 
-# 来自 source.py 的内部 KalmanFilter2D, 通过 lazy import 避免循环引用
+# KalmanFilter2D 由 source_recorder.py 维护 (P7 第六刀后 source.py 不再有副本)
 def _get_kalman_filter_cls():
-    from backend.api.source import KalmanFilter2D
+    from backend.api.source_recorder import KalmanFilter2D
     return KalmanFilter2D
 
 
