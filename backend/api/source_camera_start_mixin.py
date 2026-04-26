@@ -18,6 +18,7 @@
           rtsp_url / video_speed / _running / _thread / etc.
   - 方法: stop / _capture_loop / debug_log
 """
+import os
 import time
 import threading
 import traceback

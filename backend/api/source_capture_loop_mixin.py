@@ -12,6 +12,7 @@ _capture_handle_no_frame / _capture_recover_from_errors。
 """
 from __future__ import annotations
 
+import platform
 import time
 import traceback
 
