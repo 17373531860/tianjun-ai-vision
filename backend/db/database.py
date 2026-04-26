@@ -24,8 +24,8 @@ def _sqlite_on_connect(dbapi_connection, connection_record):
         cursor.execute("PRAGMA synchronous=NORMAL;")
         cursor.execute("PRAGMA busy_timeout=15000;")
         cursor.close()
-    except Exception:
-        pass
+    except Exception as _e:
+        print(f"[DB] PRAGMA 设置失败（非 SQLite 时正常）: {_e}", flush=True)
 
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

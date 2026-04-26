@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List
 import cv2
-import asyncio
 from backend.db.database import get_db
 from backend.models.models import Camera
 from backend.schemas.camera import CameraCreate, CameraUpdate, CameraResponse

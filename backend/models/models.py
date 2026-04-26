@@ -177,6 +177,9 @@ class DetectionSession(Base):
     # 操作员
     operator_id = Column(Integer, ForeignKey("operators.id", ondelete="SET NULL"), nullable=True)
 
+    # MES 工单关联（迁移 v2.7.x 新增）
+    order_id = Column(Integer, nullable=True, index=True)
+
     # 关系
     project = relationship("Project", back_populates="detection_sessions")
     cycles = relationship("DetectionCycle", back_populates="session", cascade="all, delete-orphan")
@@ -212,6 +215,9 @@ class DetectionCycle(Base):
     
     # 操作员
     operator_id = Column(Integer, ForeignKey("operators.id", ondelete="SET NULL"), nullable=True)
+
+    # MES 工单关联（迁移 v2.7.x 新增）
+    order_id = Column(Integer, nullable=True, index=True)
 
     # 关系
     session = relationship("DetectionSession", back_populates="cycles")

@@ -5,10 +5,8 @@ from fastapi.responses import StreamingResponse, Response
 from backend.core.config import settings
 from backend.db.database import engine, Base
 from backend.api import api_router
-from backend.api.websocket import router as ws_router
-from backend.api.source import router as source_router, get_video_feed, get_video_manager
+from backend.api.source import router as source_router, get_video_manager
 from backend.api.channel_manager import router as workstation_router
-from backend.api.detection import router as detection_router
 from backend.api.sessions import router as sessions_router
 from backend.api.mes import router as mes_router
 from backend.api.scanner import router as scanner_router
@@ -17,10 +15,7 @@ from backend.api.mes_gateway import router as mes_gateway_router
 from backend.api.operators import router as operators_router
 from backend.api.cluster import router as cluster_router
 from backend.api.external_device import router as extdev_router
-from backend.services.detector import get_detection_service
 # Import models to ensure they are registered
-from backend.models import models
-from backend.models import mes_models
 import os
 import cv2
 import atexit
@@ -90,6 +85,8 @@ def migrate_database():
         ("external_devices", "weight_no_barcode_alarm_enabled", "BOOLEAN DEFAULT 0"),
         ("external_devices", "weight_no_barcode_alarm_delay_sec", "INTEGER DEFAULT 10"),
         ("scanner_devices", "ok_rescan_cooldown_sec", "INTEGER DEFAULT 0"),
+        # v2.7.16 迟到扫码补绑窗口（秒），0 关闭
+        ("scanner_devices", "late_scan_bind_window_sec", "INTEGER DEFAULT 3"),
     ]
     
     try:
@@ -109,7 +106,6 @@ def fix_orphan_sessions():
     """修复孤立的会话（服务器重启后，之前运行中的会话应该标记为已中断）"""
     from backend.models.models import DetectionSession, DetectionCycle
     from sqlalchemy.orm import Session
-    from sqlalchemy import func
     
     try:
         with Session(engine) as db:
@@ -159,6 +155,73 @@ def fix_orphan_sessions():
         import traceback
         traceback.print_exc()
 
+
+def cleanup_orphan_inspections():
+    """清理工件检测记录中指向不存在 Cycle/Session 的孤儿引用
+
+    历史数据中 WorkpieceInspection 与 DetectionCycle 之间没有强外键，
+    cycle 被删除时不会级联清理 inspection.cycle_id，导致越积越多的孤儿。
+    本函数把这些孤儿引用置为 NULL（保留 inspection 痕迹但断开错误链接），
+    并打印数量供运维参考。
+    """
+    from sqlalchemy import text
+    try:
+        with engine.connect() as conn:
+            try:
+                rs = conn.execute(text("""
+                    SELECT COUNT(*) FROM workpiece_inspections wi
+                    WHERE wi.cycle_id IS NOT NULL
+                      AND NOT EXISTS (SELECT 1 FROM detection_cycles dc WHERE dc.id = wi.cycle_id)
+                """)).fetchone()
+                orphan_cycle = rs[0] if rs else 0
+            except Exception:
+                orphan_cycle = 0
+
+            try:
+                rs = conn.execute(text("""
+                    SELECT COUNT(*) FROM workpiece_inspections wi
+                    WHERE wi.session_id IS NOT NULL
+                      AND NOT EXISTS (SELECT 1 FROM detection_sessions ds WHERE ds.id = wi.session_id)
+                """)).fetchone()
+                orphan_session = rs[0] if rs else 0
+            except Exception:
+                orphan_session = 0
+
+            try:
+                rs = conn.execute(text("""
+                    SELECT COUNT(*) FROM defect_records dr
+                    WHERE dr.cycle_id IS NOT NULL
+                      AND NOT EXISTS (SELECT 1 FROM detection_cycles dc WHERE dc.id = dr.cycle_id)
+                """)).fetchone()
+                orphan_defect = rs[0] if rs else 0
+            except Exception:
+                orphan_defect = 0
+
+            if orphan_cycle or orphan_session or orphan_defect:
+                print(
+                    f"[孤儿清理] 发现 inspection→cycle:{orphan_cycle} inspection→session:{orphan_session} "
+                    f"defect→cycle:{orphan_defect} 条孤儿引用，置 NULL"
+                )
+                conn.execute(text("""
+                    UPDATE workpiece_inspections SET cycle_id = NULL
+                    WHERE cycle_id IS NOT NULL
+                      AND NOT EXISTS (SELECT 1 FROM detection_cycles dc WHERE dc.id = workpiece_inspections.cycle_id)
+                """))
+                conn.execute(text("""
+                    UPDATE workpiece_inspections SET session_id = NULL
+                    WHERE session_id IS NOT NULL
+                      AND NOT EXISTS (SELECT 1 FROM detection_sessions ds WHERE ds.id = workpiece_inspections.session_id)
+                """))
+                conn.execute(text("""
+                    UPDATE defect_records SET cycle_id = NULL
+                    WHERE cycle_id IS NOT NULL
+                      AND NOT EXISTS (SELECT 1 FROM detection_cycles dc WHERE dc.id = defect_records.cycle_id)
+                """))
+                conn.commit()
+    except Exception as _e:
+        print(f"[孤儿清理] 跳过（表可能不存在）: {_e}")
+
+
 def migrate_data_to_external_dir():
     """Migrate data from old install directory to external data directory.
 
@@ -166,7 +229,7 @@ def migrate_data_to_external_dir():
     by checking whether the existing DB is empty before skipping.
     After copying files, rewrites absolute paths stored in the database.
     """
-    from backend.core.config import BASE_DIR, DATA_DIR, _is_empty_db, _fix_db_paths
+    from backend.core.config import DATA_DIR, _is_empty_db, _fix_db_paths
     if os.path.abspath(DATA_DIR) == os.path.abspath(BASE_DIR):
         return
     
@@ -183,7 +246,7 @@ def migrate_data_to_external_dir():
                 os.makedirs(DATA_DIR, exist_ok=True)
                 shutil.copy2(old_db, new_db)
                 need_path_fix = True
-                print(f"[数据迁移] 数据库已迁移")
+                print("[数据迁移] 数据库已迁移")
             except Exception as e:
                 print(f"[数据迁移] 数据库迁移失败: {e}")
                 import traceback
@@ -215,11 +278,8 @@ def migrate_data_to_external_dir():
     
     print("[数据迁移] 迁移完成")
 
-print(f"[DIAG] main.py: running migrate_data_to_external_dir()")
-migrate_data_to_external_dir()
-
 def _fixup_stale_paths():
-    from backend.core.config import BASE_DIR, DATA_DIR, _fix_db_paths
+    from backend.core.config import DATA_DIR, _fix_db_paths
     if os.path.abspath(DATA_DIR) == os.path.abspath(BASE_DIR):
         return
     db_path = os.path.join(DATA_DIR, 'sql_app.db')
@@ -227,7 +287,10 @@ def _fixup_stale_paths():
         print(f"[DIAG] main.py: running _fixup_stale_paths on {db_path}")
         _fix_db_paths(db_path, BASE_DIR, DATA_DIR)
 
-_fixup_stale_paths()
+if not os.environ.get("BACKEND_SKIP_INIT"):
+    print("[DIAG] main.py: running migrate_data_to_external_dir()")
+    migrate_data_to_external_dir()
+    _fixup_stale_paths()
 
 # Post-migration DB health check
 def _diag_db_health():
@@ -239,7 +302,7 @@ def _diag_db_health():
         return
     try:
         conn = sqlite3.connect(db_path)
-        for table in ('projects', 'ml_models', 'detection_sessions', 'detection_cycles', 'step_records', 'video_clips'):
+        for table in ('projects', 'models', 'detection_sessions', 'detection_cycles', 'step_records', 'video_clips'):
             try:
                 count = conn.execute(f"SELECT COUNT(*) FROM [{table}]").fetchone()[0]
                 print(f"[DIAG] DB health: {table} = {count} rows")
@@ -247,20 +310,31 @@ def _diag_db_health():
                 print(f"[DIAG] DB health: {table} = <table not found>")
         # Check model file_path validity
         try:
-            rows = conn.execute("SELECT id, name, file_path FROM ml_models").fetchall()
+            rows = conn.execute("SELECT id, name, file_path FROM models").fetchall()
             for mid, mname, mpath in rows:
                 exists = os.path.isfile(mpath) if mpath else False
                 print(f"[DIAG] Model #{mid} '{mname}': path={mpath}, file_exists={exists}")
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"[DIAG] models 表读取失败（已忽略）: {_e}", flush=True)
         conn.close()
     except Exception as e:
         print(f"[DIAG] DB health check failed: {e}")
 
-_diag_db_health()
+def _run_startup_init():
+    """统一启动初始化：诊断、迁移、孤儿清理
 
-migrate_database()
-fix_orphan_sessions()
+    包成函数好处:
+    1. 测试场景可设 BACKEND_SKIP_INIT=1 跳过, 避免 import 即触发副作用
+    2. 失败时单一入口便于排查/补救
+    3. 顺序集中可控
+    """
+    _diag_db_health()
+    migrate_database()
+    fix_orphan_sessions()
+    cleanup_orphan_inspections()
+
+if not os.environ.get("BACKEND_SKIP_INIT"):
+    _run_startup_init()
 
 def _build_project_config(project) -> dict:
     """从 Project ORM 对象构建 config dict"""
@@ -342,7 +416,8 @@ def auto_load_active_project():
         print(f"[启动] 自动加载项目失败: {e}")
         import traceback; traceback.print_exc()
 
-auto_load_active_project()
+if not os.environ.get("BACKEND_SKIP_INIT"):
+    auto_load_active_project()
 
 
 def auto_restore_video_sources():
@@ -422,7 +497,8 @@ def auto_restore_video_sources():
     except Exception as e:
         print(f"[启动] 视频源自动恢复整体失败: {e}")
 
-auto_restore_video_sources()
+if not os.environ.get("BACKEND_SKIP_INIT"):
+    auto_restore_video_sources()
 
 # ========== MES Hook + Scanner 初始化 ==========
 def _init_mes_services():
@@ -467,7 +543,8 @@ def _init_mes_services():
     except Exception as e:
         print(f"[MES] 服务初始化失败（非致命）: {e}")
 
-_init_mes_services()
+if not os.environ.get("BACKEND_SKIP_INIT"):
+    _init_mes_services()
 
 # ========== 后台自动清理定时任务 ==========
 _cleanup_timer = None
@@ -476,7 +553,7 @@ def _schedule_auto_cleanup():
     """后台定时执行数据清理（每24小时一次）"""
     global _cleanup_timer
     try:
-        from backend.api.sessions import _perform_auto_cleanup
+        from backend.api.sessions_maintenance import _perform_auto_cleanup
         _perform_auto_cleanup()
     except Exception as e:
         print(f"[定时清理] 执行失败: {e}")
@@ -561,8 +638,8 @@ def cleanup_on_exit():
             get_mes_hook().stop()
             get_cluster_collector().stop()
             get_external_device_service().stop_all()
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"[Shutdown] 停止 MES/集群/外设服务时异常（已忽略）: {_e}", flush=True)
 
         # v2.7.3: 兜底熄灭所有通道报警灯并断开串口，避免主进程被 KILL 时灯塔残留
         try:
@@ -571,8 +648,8 @@ def cleanup_on_exit():
                 try:
                     mgr._idle_light_active = False
                     mgr.all_off()
-                except Exception:
-                    pass
+                except Exception as _e:
+                    print(f"[退出钩子] 报警器熄灯失败 ch{ch_id}（已忽略）: {_e}", flush=True)
             alarm_router.disconnect_all()
             print("[退出钩子] 所有通道报警器已熄灯并断开串口")
         except Exception as e:
@@ -600,15 +677,35 @@ signal.signal(signal.SIGTERM, signal_handler)
 app = FastAPI(
     title=settings.PROJECT_NAME, 
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    # 安全：默认开放，设置 ENABLE_API_DOCS=0 可关闭（出厂版建议关闭）
+    docs_url="/docs" if os.environ.get("ENABLE_API_DOCS", "1") != "0" else None,
+    redoc_url="/redoc" if os.environ.get("ENABLE_API_DOCS", "1") != "0" else None,
 )
 
 # Set all CORS enabled origins
+# 安全：CORS_ALLOW_ORIGINS 环境变量可配置（逗号分隔），未设置时仅允许本机
+# 出厂工控机：前端通过 Electron 直连 127.0.0.1，无需放开公网域
+_cors_origins_env = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
+if _cors_origins_env:
+    if _cors_origins_env == "*":
+        _cors_origins = ["*"]
+        _cors_creds = False  # CORS 规范：origin=* 时不能开 credentials
+    else:
+        _cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+        _cors_creds = True
+else:
+    _cors_origins = [
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:8000", "http://127.0.0.1:8000",
+        "http://localhost:5174", "http://127.0.0.1:5174",
+        "app://./", "file://",
+    ]
+    _cors_creds = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_creds,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -616,14 +713,10 @@ app.add_middleware(
 # Include API routers
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
-# Include WebSocket router
-app.include_router(ws_router)
-
 # Include Source router
 app.include_router(source_router, prefix=f"{settings.API_V1_STR}/source", tags=["source"])
 
-# Include Detection router
-app.include_router(detection_router, prefix=f"{settings.API_V1_STR}/detection", tags=["detection"])
+# Detection router 已删除 (走 /source/detection/* 即 source_routes.py, 前端只用这套)
 
 # Include Sessions router (数据管理)
 app.include_router(sessions_router, prefix=f"{settings.API_V1_STR}/data", tags=["data"])
@@ -649,13 +742,15 @@ if os.path.exists(settings.RECORDING_DIR):
     app.mount("/recordings", StaticFiles(directory=settings.RECORDING_DIR), name="recordings")
 
 # ========== 应用热补丁 (如果存在) ==========
-try:
-    from backend import hotfix
-    hotfix.apply(app)
-except ImportError:
-    pass
-except Exception as _hf_err:
-    print(f"[Hotfix] 加载失败: {_hf_err}")
+# BACKEND_SKIP_INIT=1 时跳过 hotfix（测试环境无需 monkey patch 摄像头/RTSP）
+if not os.environ.get("BACKEND_SKIP_INIT"):
+    try:
+        from backend import hotfix
+        hotfix.apply(app)
+    except ImportError:
+        pass
+    except Exception as _hf_err:
+        print(f"[Hotfix] 加载失败: {_hf_err}")
 
 @app.get("/")
 def root():
@@ -693,8 +788,8 @@ def shutdown_step(step: str):
                             try:
                                 from backend.api.alarm import alarm_router
                                 alarm_router.stop_idle_light(channel_id=ch_id)
-                            except Exception:
-                                pass
+                            except Exception as _e:
+                                print(f"[关闭步骤] ch{ch_id} stop_idle_light 失败（已忽略）: {_e}", flush=True)
                     except Exception as e:
                         print(f"[关闭步骤] ch{ch_id} stop_detection 失败: {e}")
             except Exception as e:
@@ -714,8 +809,8 @@ def shutdown_step(step: str):
             if video_manager.current_cycle_id:
                 try:
                     video_manager.end_cycle(is_good=False, reason="程序关闭")
-                except:
-                    pass
+                except Exception as _e:
+                    print(f"[Shutdown] end_cycle 失败（已忽略）: {_e}", flush=True)
             return {"status": "success", "step": step}
         
         elif step == "end_session":
@@ -735,8 +830,8 @@ def shutdown_step(step: str):
             if video_manager.capture:
                 try:
                     video_manager.capture.release()
-                except:
-                    pass
+                except Exception as _e:
+                    print(f"[Shutdown] capture.release 失败（已忽略）: {_e}", flush=True)
                 video_manager.capture = None
             return {"status": "success", "step": step}
         
@@ -754,8 +849,8 @@ def shutdown_step(step: str):
                     try:
                         mgr._idle_light_active = False
                         mgr.all_off()
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        print(f"[关闭步骤] 报警器熄灯失败 ch{ch_id}（已忽略）: {_e}", flush=True)
                 alarm_router.disconnect_all()
                 print("[关闭步骤] 所有通道报警器已熄灯并断开串口")
             except Exception as e:

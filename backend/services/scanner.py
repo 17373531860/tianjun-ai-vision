@@ -146,6 +146,7 @@ class ScannerConnection:
     external_only: bool = False
     pairing_group: Optional[str] = None
     ok_rescan_cooldown_sec: int = 0
+    late_scan_bind_window_sec: int = 3
 
     status: str = "disconnected"
     device_type: str = "text_lon"  # "text_lon"(默认), "auto", "text", "wmax"
@@ -697,9 +698,7 @@ class ScannerService:
 
         logger.debug("[Scanner] 检测设备类型: %s", peer)
         try:
-            from backend.services.wmax.protocol import (
-                pack, Command, CmdType, DataReceiver, DEFAULT_FLAG,
-            )
+            from backend.services.wmax.protocol import pack, Command, CmdType
             handshake_cmd = Command(cmd_type=CmdType.HandShake)
             frame = pack(handshake_cmd)
             sock.sendall(frame)
@@ -764,6 +763,7 @@ class ScannerService:
             external_only=bool(getattr(dev, 'external_only', False)),
             pairing_group=(getattr(dev, 'pairing_group', None) or None),
             ok_rescan_cooldown_sec=int(getattr(dev, 'ok_rescan_cooldown_sec', 0) or 0),
+            late_scan_bind_window_sec=int(getattr(dev, 'late_scan_bind_window_sec', 3) or 0),
         )
         conn.device_type = db_device_type
         conn.parse_config["parse_mode"] = dev.parse_mode or "direct"
@@ -1036,9 +1036,7 @@ class ScannerService:
     def _wmax_listen_loop(self, conn: ScannerConnection, sock: socket.socket):
         """WMax 二进制协议监听模式"""
         try:
-            from backend.services.wmax.protocol import (
-                DataReceiver, CmdType, parse_new_image, parse_old_image,
-            )
+            from backend.services.wmax.protocol import DataReceiver, CmdType
             from backend.services.wmax.messages import decode_rpt_code
         except ImportError as e:
             logger.error("[Scanner] WMax 模块导入失败: %s — 回退到文本模式", e)

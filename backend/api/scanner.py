@@ -35,6 +35,7 @@ class ScannerCreate(BaseModel):
     external_only: bool = False
     pairing_group: Optional[str] = None
     ok_rescan_cooldown_sec: int = 0
+    late_scan_bind_window_sec: int = 3
 
 
 class ScannerUpdate(BaseModel):
@@ -58,6 +59,7 @@ class ScannerUpdate(BaseModel):
     external_only: Optional[bool] = None
     pairing_group: Optional[str] = None
     ok_rescan_cooldown_sec: Optional[int] = None
+    late_scan_bind_window_sec: Optional[int] = None
 
 
 def _serialize_device(d):
@@ -78,6 +80,7 @@ def _serialize_device(d):
         "external_only": bool(getattr(d, 'external_only', False)),
         "pairing_group": getattr(d, 'pairing_group', None),
         "ok_rescan_cooldown_sec": int(getattr(d, 'ok_rescan_cooldown_sec', 0) or 0),
+        "late_scan_bind_window_sec": int(getattr(d, 'late_scan_bind_window_sec', 3) or 0),
     }
 
 

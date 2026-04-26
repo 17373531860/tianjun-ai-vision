@@ -17,7 +17,7 @@ from __future__ import annotations
 import struct
 import logging
 from enum import IntEnum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)

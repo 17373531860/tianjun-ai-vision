@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from backend.api import projects, models, cameras, tasks, reports, websocket, alarm
+from backend.api import projects, models, cameras, tasks, reports, alarm
 
 api_router = APIRouter()
 

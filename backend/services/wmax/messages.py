@@ -124,7 +124,6 @@ def _parse_raw_fields(data: bytes) -> list[tuple[int, int, bytes]]:
         except (IndexError, ValueError):
             break
         if wt == 0:
-            val_start = tag_end
             _, val_end = _decode_varint(data, tag_end)
             entries.append((fn, wt, data[pos:val_end]))
             pos = val_end

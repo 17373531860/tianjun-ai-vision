@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
@@ -6,7 +6,7 @@ from typing import List, Optional
 from datetime import datetime, timedelta
 import io
 from backend.db.database import get_db
-from backend.models.models import Task, Project, DailyStat
+from backend.models.models import Task, Project
 from backend.schemas.report import ReportSummary, DailyStatResponse, TrendData
 
 router = APIRouter()
@@ -209,8 +209,6 @@ def export_report(
         from reportlab.lib.pagesizes import A4
         from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
         
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4)

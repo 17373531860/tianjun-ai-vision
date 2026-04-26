@@ -16,7 +16,6 @@ from typing import Optional
 from backend.db.database import SessionLocal
 from backend.models.mes_models import MESConnection, MESCommLog
 from backend.services.mes_adapters import get_adapter
-from backend.services.mes_adapters.base import render_template
 
 
 class MESGateway:

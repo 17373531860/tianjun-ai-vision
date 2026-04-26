@@ -4,7 +4,6 @@ REST/JSON 适配器
 发送 JSON 格式的 HTTP 请求到外部 MES。
 支持 GET/POST/PUT, 可配置 headers 和 auth。
 """
-import json
 import time
 import requests
 from typing import Any

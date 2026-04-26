@@ -302,7 +302,7 @@ class ChannelManager:
                 if 1 <= count <= MAX_CHANNELS and count != self.channel_count:
                     self.set_channel_count(count)
             else:
-                print(f"[ChannelManager] 配置文件不存在，使用默认 channel_count=1")
+                print("[ChannelManager] 配置文件不存在，使用默认 channel_count=1")
         except Exception as e:
             print(f"[ChannelManager] Failed to load config: {e}")
 

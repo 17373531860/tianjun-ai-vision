@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Optional
 from backend.db.database import get_db
 from backend.models.models import Project, Model
 from backend.schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectListResponse
@@ -224,7 +224,7 @@ def _reload_model_for_active_project(db: Session, project: Project) -> None:
 
     remaining = [cid for cid in channel_manager.channels if cid not in bound_to_other]
     if not remaining:
-        print(f"[激活项目] 所有通道都已绑定其它项目，跳过模型重载")
+        print("[激活项目] 所有通道都已绑定其它项目，跳过模型重载")
         return
 
     if len(remaining) == 1:
@@ -261,6 +261,22 @@ def activate_project(project_id: int, db: Session = Depends(get_db)):
         import traceback
         print(f"[激活项目] 模型重载异常 (不影响激活状态): {e}")
         traceback.print_exc()
+
+    # 项目切换：清空所有通道的 MES pending/inspecting 状态，避免旧项目的扫码被新项目错误绑定
+    try:
+        from backend.services.mes_hooks import get_mes_hook
+        from backend.api.channel_manager import channel_manager
+        hook = get_mes_hook()
+        ch_ids = list(channel_manager.channels.keys()) if hasattr(channel_manager, "channels") else [0]
+        for ch_id in ch_ids:
+            try:
+                res = hook.clear_pending_scan(ch_id, force=False, db=db)
+                if res and res.get("cleared_workpiece_id"):
+                    print(f"[激活项目] 清除 ch{ch_id} 残留扫码: {res}", flush=True)
+            except Exception as _e:
+                print(f"[激活项目] ch{ch_id} 清除扫码失败（忽略）: {_e}", flush=True)
+    except Exception as _e:
+        print(f"[激活项目] MES 状态清理跳过: {_e}", flush=True)
 
     return ProjectResponse(
         id=db_project.id,

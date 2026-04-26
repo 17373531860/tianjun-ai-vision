@@ -13,14 +13,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
-import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
 
 from .protocol import (
     pack, Command, CmdType, DataReceiver,
-    DEFAULT_FLAG, FLAG_IS_RESPONSE,
 )
 from .messages import decode_find_device_resp
 

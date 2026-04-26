@@ -1,6 +1,5 @@
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime, date
 
 class ReportQuery(BaseModel):
     start_date: Optional[str] = None  # YYYY-MM-DD

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 import ctypes
 import threading
 import numpy as np
@@ -17,7 +16,6 @@ from .types import (
     NET_DVR_LOCAL_SDK_PATH,
     NET_DVR_LOCAL_GENERAL_CFG,
     NET_DVR_PREVIEWINFO,
-    FRAME_INFO,
     REALDATACALLBACK,
     DECCBFUN,
     NET_DVR_SYSHEAD,

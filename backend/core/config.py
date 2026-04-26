@@ -1,5 +1,4 @@
 from pydantic_settings import BaseSettings
-from typing import Optional
 import os
 import shutil
 import logging
@@ -13,7 +12,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.environ.get('TIANJUN_DATA_DIR', BASE_DIR)
 
 # ===== Startup diagnostics =====
-print(f"[DIAG] config.py loaded")
+print("[DIAG] config.py loaded")
 print(f"[DIAG] BASE_DIR = {BASE_DIR}")
 print(f"[DIAG] DATA_DIR = {DATA_DIR}")
 print(f"[DIAG] TIANJUN_DATA_DIR env = {os.environ.get('TIANJUN_DATA_DIR', '<not set>')}")
@@ -92,9 +91,9 @@ def _migrate_old_data():
     Handles the edge case where create_all already created an empty DB
     in DATA_DIR — we overwrite it with the real data from the old location.
     """
-    print(f"[DIAG] _migrate_old_data() called")
+    print("[DIAG] _migrate_old_data() called")
     if DATA_DIR == BASE_DIR:
-        print(f"[DIAG] DATA_DIR == BASE_DIR, skipping migration")
+        print("[DIAG] DATA_DIR == BASE_DIR, skipping migration")
         return
 
     os.makedirs(DATA_DIR, exist_ok=True)

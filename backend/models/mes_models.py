@@ -156,6 +156,10 @@ class WorkpieceInspection(Base):
     1. 保持现有 Cycle 表结构不变，降低迁移风险
     2. 一个工件可被多次检测 (返工场景)
     3. 中间表可存每次检测的独立结果快照
+
+    cycle_id / session_id 加 FK ondelete="SET NULL"：
+    cycle 被删时只置空，保留检测痕迹，避免孤儿记录污染统计。
+    旧库不强制加 FK 约束（SQLite ALTER TABLE 限制），仅新建库生效。
     """
     __tablename__ = "workpiece_inspections"
     __table_args__ = (
@@ -165,8 +169,10 @@ class WorkpieceInspection(Base):
     id = Column(Integer, primary_key=True, index=True)
     workpiece_id = Column(Integer, ForeignKey("workpieces.id", ondelete="CASCADE"),
                           nullable=False, index=True)
-    cycle_id = Column(Integer, nullable=False, index=True)
-    session_id = Column(Integer, nullable=True)
+    cycle_id = Column(Integer, ForeignKey("detection_cycles.id", ondelete="SET NULL"),
+                      nullable=True, index=True)
+    session_id = Column(Integer, ForeignKey("detection_sessions.id", ondelete="SET NULL"),
+                        nullable=True)
 
     inspection_seq = Column(Integer, nullable=False, default=1)
     result = Column(String(10), nullable=False, default="pending")
@@ -195,8 +201,10 @@ class DefectRecord(Base):
                           nullable=False, index=True)
     inspection_id = Column(Integer, ForeignKey("workpiece_inspections.id", ondelete="SET NULL"),
                            nullable=True)
-    cycle_id = Column(Integer, nullable=True)
-    step_record_id = Column(Integer, nullable=True)
+    cycle_id = Column(Integer, ForeignKey("detection_cycles.id", ondelete="SET NULL"),
+                      nullable=True)
+    step_record_id = Column(Integer, ForeignKey("step_records.id", ondelete="SET NULL"),
+                            nullable=True)
 
     defect_code = Column(String(32), nullable=False, index=True)
     defect_name = Column(String(128), nullable=False)
@@ -277,6 +285,11 @@ class ScannerDevice(Base):
     # 同码二次扫抑制：若同条码对应工件上次检测合格、且距完成时间不超过该秒数，本次扫码静默丢弃。
     # 用于过滤"搬运过程中扫码器误扫到已完成合格工件"的场景。0 = 关闭。
     ok_rescan_cooldown_sec = Column(Integer, default=0)
+    # v2.7.16 迟到扫码补绑窗口：cycle 已结算但 _inspecting_workpiece 为空时，
+    # 若 _pending_workpiece 中存在的扫码事件与本次 cycle 结束时间相差 <= 该秒数，
+    # 自动把这枚工件补绑到刚结算的 cycle，避免"扫码晚一步导致未绑码"。
+    # 0 = 关闭（保持旧行为）。
+    late_scan_bind_window_sec = Column(Integer, default=3)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

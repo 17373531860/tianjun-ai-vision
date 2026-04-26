@@ -7,7 +7,6 @@
 3. 所有工位到齐后触发 MES Gateway 推送 box_complete 事件
 4. 超时未齐的箱子按策略处理（推送不完整数据或告警）
 """
-import json
 import threading
 import time
 import traceback
@@ -647,12 +646,6 @@ class ClusterCollector:
 
         if early_return.get("payload") is not None:
             return early_return["payload"]
-
-        # summary 现在一定存在, 重新取一下用于后续 push 字段更新
-        summary = (
-            db.query(BoxSummary)
-            .filter(BoxSummary.box_serial == box_serial).first()
-        )
 
         # v2.7.13: 二次校正且无关键字段变化, summary 已刷新但不重推 MES
         if not state.get("needs_repush"):

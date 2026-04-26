@@ -160,11 +160,19 @@ class AlarmManager:
                 self._priority_order = list(priority_order)
             if event_priority_map:
                 self._event_priority_map = dict(event_priority_map)
-            print(f"[报警] 共享模式启用: 服务工位 {sorted(self._shared_channels)}, "
-                  f"优先级={self._priority_order}", flush=True)
+            if not os.environ.get("BACKEND_SKIP_INIT"):
+                print(f"[报警] 共享模式启用: 服务工位 {sorted(self._shared_channels)}, "
+                      f"优先级={self._priority_order}", flush=True)
 
     def is_shared(self) -> bool:
-        return len(self._shared_channels) > 1
+        # 用同一把 RLock 保证 set 大小读取与共享模式启停不撕裂
+        with self._state_lock:
+            return len(self._shared_channels) > 1
+
+    def get_shared_channels_snapshot(self):
+        """对外暴露 _shared_channels 的快照，避免外部 sorted/iter 时被改"""
+        with self._state_lock:
+            return list(self._shared_channels)
 
     def connect(self, port: str, baudrate: int = 9600) -> dict:
         """连接串口，返回 {"ok": bool, "msg": str}"""
@@ -251,7 +259,8 @@ class AlarmManager:
                         return bytes([int(x, 16) for x in cmd_str.split()])
                     else:
                         return cmd_str.encode()
-                except:
+                except Exception as _e:
+                    print(f"[Alarm] 命令编码失败，按原文回退: {_e}", flush=True)
                     return cmd_str.encode()
             return b''
         else:
@@ -329,13 +338,16 @@ class AlarmManager:
                     self.buzzer_on()
 
             def delayed_off():
-                time.sleep(duration)
                 self._send_command(self._get_command('all_off'))
                 if self._idle_light_active:
                     time.sleep(0.05)
                     self.restore_idle_light()
 
-            threading.Thread(target=delayed_off, daemon=True).start()
+            # 用 threading.Timer 替代 Thread+sleep：内部走 Event.wait，可被 cancel，
+            # 关停时也更可控（避免悬挂的 sleep 线程）
+            t = threading.Timer(duration, delayed_off)
+            t.daemon = True
+            t.start()
 
         except Exception as e:
             print(f"报警执行失败: {e}")
@@ -356,7 +368,6 @@ class AlarmManager:
             self._recompose_and_apply()
 
         def expire():
-            time.sleep(duration)
             with self._state_lock:
                 cur = self._channel_states.get(channel_id)
                 # 仅当还是这个事件时才清（避免覆盖了别的新事件）
@@ -366,7 +377,9 @@ class AlarmManager:
                     cur['expire_at'] = 0.0
                     self._recompose_and_apply()
 
-        threading.Thread(target=expire, daemon=True).start()
+        t = threading.Timer(duration, expire)
+        t.daemon = True
+        t.start()
 
     def stop_alarm(self):
         self._alarm_stop_event.set()
@@ -390,12 +403,12 @@ class AlarmManager:
         # v2.7.3: 静默 return 都改为打印原因，方便现场排查为什么"开始检测但灯不亮"
         idle_cfg = self.config.get('idle_light', {})
         if not idle_cfg.get('enabled'):
-            print(f"[报警] 工作指示灯未启用（idle_light.enabled=False）→ 不亮。"
-                  f"请到「报警配置」页底部勾选「启用空闲常亮」并保存。")
+            print("[报警] 工作指示灯未启用（idle_light.enabled=False）→ 不亮。"
+                  "请到「报警配置」页底部勾选「启用空闲常亮」并保存。")
             return
         if not self.config.get('enabled'):
-            print(f"[报警] 报警器未启用（enabled=False）→ 工作指示灯不亮。"
-                  f"请到「报警配置」页勾选「启用报警」并连接串口。")
+            print("[报警] 报警器未启用（enabled=False）→ 工作指示灯不亮。"
+                  "请到「报警配置」页勾选「启用报警」并连接串口。")
             return
         if not self.is_connected():
             print(f"[报警] 串口未连接（port={self.config.get('port', '')}）→ 工作指示灯不亮。"
@@ -422,7 +435,7 @@ class AlarmManager:
 
         # 非共享模式：原行为
         if not self._send_command(self._get_command('all_off')):
-            print(f"[报警] 发送 all_off 失败（串口写入异常）→ 工作指示灯不亮")
+            print("[报警] 发送 all_off 失败（串口写入异常）→ 工作指示灯不亮")
             return
         time.sleep(0.05)
         if self._send_command(cmd):
@@ -501,10 +514,10 @@ class AlarmManager:
             print(f"[报警·共享] 显示 ch{ch} 的 {event_type}", flush=True)
         elif target_key[0] == 'idle':
             self._apply_idle_visual()
-            print(f"[报警·共享] 回退到 idle 灯", flush=True)
+            print("[报警·共享] 回退到 idle 灯", flush=True)
         else:
             self._send_command(self._get_command('all_off'))
-            print(f"[报警·共享] 全灯熄灭", flush=True)
+            print("[报警·共享] 全灯熄灭", flush=True)
 
     def _apply_event_visual(self, event_type: str):
         """从 trigger_solo 抽出的"发命令"部分，用于共享模式立即应用。"""
@@ -605,9 +618,13 @@ class AlarmRouter:
                         pass
                 self.managers[ch] = owner_mgr
                 self._owner_for[ch] = owner_ch
-            print(f"[报警] 共享组: owner=ch{owner_ch}, 服务={all_chs}", flush=True)
+            if not os.environ.get("BACKEND_SKIP_INIT"):
+                print(f"[报警] 共享组: owner=ch{owner_ch}, 服务={all_chs}", flush=True)
 
         # 自动连接（每个物理 manager 只连一次）
+        # 测试环境（BACKEND_SKIP_INIT=1）跳过串口连接，避免日志刷屏 + 串口被占
+        if os.environ.get("BACKEND_SKIP_INIT"):
+            return
         connected_managers = set()
         for ch_id, mgr in self.managers.items():
             if id(mgr) in connected_managers:
@@ -718,19 +735,22 @@ class AlarmRouter:
             return
 
         # 共享模式：只把这个 ch 从服务集合摘掉，保留物理设备
-        if mgr.is_shared() and channel_id in mgr._shared_channels:
-            with mgr._state_lock:
+        # 注意：判断和操作必须放在同一把锁里，否则中间可能被 set_shared_mode 改写
+        with mgr._state_lock:
+            in_shared = (len(mgr._shared_channels) > 1) and (channel_id in mgr._shared_channels)
+            if in_shared:
                 mgr._shared_channels.discard(channel_id)
                 mgr._channel_states.pop(channel_id, None)
-                # 重算合成（被摘的 ch 如果有 idle/event，影响要消除）
                 try:
                     mgr._recompose_and_apply()
                 except Exception as e:
                     print(f"[报警] ch{channel_id} 共享摘除后合成失败: {e}")
+                remaining = sorted(mgr._shared_channels)
+        if in_shared:
             self.managers.pop(channel_id, None)
             self._owner_for.pop(channel_id, None)
             print(f"[报警] ch{channel_id} 从共享组摘除，物理设备保留服务剩余工位 "
-                  f"{sorted(mgr._shared_channels)}", flush=True)
+                  f"{remaining}", flush=True)
             return
 
         # 非共享：原行为
@@ -849,7 +869,7 @@ async def get_status(channel: int = Query(-1, description="工位通道，-1 返
             "config": mgr.config,
             # v2.7.3: 共享状态信息
             "is_shared": mgr.is_shared(),
-            "shared_channels": sorted(mgr._shared_channels) if mgr.is_shared() else [],
+            "shared_channels": sorted(mgr.get_shared_channels_snapshot()) if mgr.is_shared() else [],
             "owner_channel": owner_ch,
             "is_owner": (owner_ch == channel),
         }
@@ -862,7 +882,7 @@ async def get_status(channel: int = Query(-1, description="工位通道，-1 返
                 "port": mgr.port_name,
                 "config": mgr.config,
                 "is_shared": mgr.is_shared(),
-                "shared_channels": sorted(mgr._shared_channels) if mgr.is_shared() else [],
+                "shared_channels": sorted(mgr.get_shared_channels_snapshot()) if mgr.is_shared() else [],
                 "owner_channel": owner_ch,
                 "is_owner": (owner_ch == ch_id),
             }

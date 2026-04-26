@@ -4,7 +4,7 @@
 连接管理 CRUD + 测试连接 + 手动推送 + 通讯日志查询
 """
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 

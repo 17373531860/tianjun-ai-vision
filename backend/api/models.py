@@ -8,11 +8,10 @@ import json
 import threading
 import queue
 import traceback
-from datetime import datetime
 from backend.db.database import get_db, SessionLocal
 from backend.models.models import Model, ModelConversion, Project
 from backend.schemas.model import (
-    ModelCreate, ModelUpdate, ModelResponse, ModelListResponse,
+    ModelUpdate, ModelResponse, ModelListResponse,
     ConversionRequest, ConversionResponse, ConversionStatusResponse,
     FormatInfo, FormatsAvailableResponse,
 )
@@ -184,8 +183,8 @@ def _get_trt_diagnosis() -> dict:
         elif trt_major == 8 and cuda_major >= 12:
             info["tensorrt_compatible"] = False
             info["issues"].append(
-                f"TensorRT 8.x 不兼容 CUDA 12.x，"
-                f"请升级 TensorRT 到 10.x"
+                "TensorRT 8.x 不兼容 CUDA 12.x，"
+                "请升级 TensorRT 到 10.x"
             )
         else:
             info["tensorrt_compatible"] = True
@@ -228,7 +227,6 @@ def _conversion_worker():
             db.commit()
 
             from ultralytics import YOLO
-            import numpy as np
 
             model = YOLO(model_file_path)
             export_args = FORMAT_EXPORT_ARGS.get(fmt_key)
@@ -392,7 +390,7 @@ def parse_model_labels(file_path: str, framework: str) -> Optional[List[str]]:
                             labels = json.loads(prop.value)
                             if isinstance(labels, dict):
                                 labels = list(labels.values())
-                        except:
+                        except Exception:
                             labels = prop.value.split(',')
                 print(f"[Model Parser] 从 ONNX 模型解析到标签: {labels}")
             except ImportError:

@@ -24,12 +24,12 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from .protocol import (
     CmdType, Command, DataReceiver, ZImage,
     pack, parse_new_image, parse_old_image,
-    DEFAULT_FLAG, FLAG_IS_PROTOBUF, FLAG_IS_RESPONSE,
+    DEFAULT_FLAG, FLAG_IS_RESPONSE,
 )
 from . import messages as msg
 

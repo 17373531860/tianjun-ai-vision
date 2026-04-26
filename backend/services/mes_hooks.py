@@ -251,7 +251,7 @@ class MESHookManager:
                 if self._conn_serves_channel(conn, channel_id):
                     return conn.duplicate_scan_action or "overwrite"
         except Exception:
-            pass
+            pass  # 高频路径：连接未就绪/字段缺失时回退默认，避免刷屏
         return "overwrite"
 
     def _get_bind_timing(self, channel_id: int) -> str:
@@ -263,7 +263,7 @@ class MESHookManager:
                 if self._conn_serves_channel(conn, channel_id):
                     return conn.bind_timing or "mid_cycle"
         except Exception:
-            pass
+            pass  # 高频路径：连接未就绪/字段缺失时回退默认
         return "mid_cycle"
 
     def _get_current_cycle_id(self, channel_id: int) -> Optional[int]:
@@ -293,7 +293,7 @@ class MESHookManager:
                 if self._conn_serves_channel(conn, channel_id):
                     return conn.rebind_mode or "rescan"
         except Exception:
-            pass
+            pass  # 高频路径：连接未就绪/字段缺失时回退默认
         return "rescan"
 
     def _get_ok_rescan_cooldown(self, channel_id: int) -> int:
@@ -305,12 +305,119 @@ class MESHookManager:
                 if self._conn_serves_channel(conn, channel_id):
                     return int(getattr(conn, "ok_rescan_cooldown_sec", 0) or 0)
         except Exception:
-            pass
+            pass  # 高频路径：连接未就绪/字段缺失时回退默认
         return 0
+
+    def _get_late_bind_window(self, channel_id: int) -> int:
+        """获取该工位的"迟到扫码补绑窗口秒数"配置。0 = 关闭兜底。
+
+        v2.7.16: 解决"扫码动作晚于 cycle 结算几毫秒~几秒，导致工件未被绑定到刚结算
+        的 cycle、本次 cycle_end 报未绑码"的痛点。"""
+        try:
+            from backend.services.scanner import get_scanner_service
+            svc = get_scanner_service()
+            for conn in svc._connections.values():
+                if self._conn_serves_channel(conn, channel_id):
+                    return int(getattr(conn, "late_scan_bind_window_sec", 3) or 0)
+        except Exception:
+            pass  # 高频路径：连接未就绪/字段缺失时回退默认
+        return 3
 
     def get_rebind_prompt(self, channel_id: int) -> Optional[dict]:
         """获取 manual rebind 弹窗数据"""
         return self._rebind_prompt.get(channel_id)
+
+    def clear_pending_scan(self, channel_id: int, force: bool = False,
+                           db=None) -> dict:
+        """清除该工位的"待检 / 最近扫码 / 当前检测"状态，让工人能重扫一次。
+
+        v2.7.16: 解决五个场景
+        1) reject 模式下 _pending 挂着导致后续扫码全被拒（B4 死锁）；
+        2) 工人扫错码想立即丢弃；
+        3) 节拍间隙重置卡片显示；
+        4) (force) 工人扫码后才发现拿错件 / 装到一半要中止，需要作废本次检测；
+        5) (force) 同 cycle 内想换一个条码重新绑。
+
+        参数:
+            force: False (默认) → 只清"未绑定"前置状态，已绑到 cycle 的不动；
+                   True       → 连同 _inspecting_workpiece 一起作废，
+                                把工件 status 回退到 queued，
+                                删除该 (workpiece, cycle) 的 WorkpieceInspection 记录，
+                                让本次 cycle 自然走到 cycle_end 时报"未绑码"，
+                                cycle 仍会被结算但不计入 MES/工单/集群。
+
+        本接口跟"迟到扫码补绑"的兼容性:
+            因为 _last_scan_event 一并清掉，cycle_end 的兜底不会把刚作废的 wp
+            又绑回来 (workpiece_id 不匹配)。
+        """
+        cleared = {}
+        wp_id = self._pending_workpiece.pop(channel_id, None)
+        if wp_id is not None:
+            cleared["pending_workpiece_id"] = wp_id
+        q = self._pending_queue.pop(channel_id, None)
+        if q:
+            cleared["pending_queue"] = list(q)
+        ev = self._last_scan_event.pop(channel_id, None)
+        if ev:
+            cleared["last_scan_event"] = ev
+        rb = self._rebind_prompt.pop(channel_id, None)
+        if rb:
+            cleared["rebind_prompt"] = rb
+
+        if force:
+            # 原子 pop：避免与 worker 线程的 _handle_cycle_end 抢同一个 wp_id。
+            # 若在 HTTP get→pop 之间 worker 已经把 wp 拿走结算了，这里 pop 拿到 None
+            # → 不能再回退状态（worker 那边马上就要 set_result 写 ok/ng + 集群分发了）
+            # → 返回 "race_lost"，前端提示用户"操作来不及，本次工件已结算完成"。
+            inspecting_id = self._inspecting_workpiece.pop(channel_id, None)
+            cleared["inspecting_workpiece_id"] = inspecting_id
+            if inspecting_id is None:
+                cleared["force_canceled_inspecting"] = False
+                cleared["force_race_lost"] = True
+            else:
+                cleared["force_canceled_inspecting"] = True
+                # 回退 workpiece status + 删除 WorkpieceInspection 关联
+                local_db = db
+                owns_db = False
+                if local_db is None:
+                    local_db = SessionLocal()
+                    owns_db = True
+                try:
+                    from backend.models.mes_models import Workpiece, WorkpieceInspection
+                    cycle_id = self._get_current_cycle_id(channel_id)
+                    if cycle_id:
+                        deleted = (
+                            local_db.query(WorkpieceInspection)
+                            .filter(WorkpieceInspection.workpiece_id == inspecting_id,
+                                    WorkpieceInspection.cycle_id == cycle_id)
+                            .delete()
+                        )
+                        cleared["deleted_inspections"] = deleted
+                    wp = local_db.query(Workpiece).filter(Workpiece.id == inspecting_id).first()
+                    if wp:
+                        wp.status = "queued"
+                        cleared["workpiece_reverted_to"] = "queued"
+                    if owns_db:
+                        local_db.commit()
+                except Exception as e:
+                    if owns_db:
+                        local_db.rollback()
+                    print(f"[MES] clear_pending_scan(force) 回退失败 ch{channel_id} wp{inspecting_id}: {e}",
+                          flush=True)
+                finally:
+                    if owns_db:
+                        local_db.close()
+        else:
+            # 非 force 路径只读，不动 _inspecting_workpiece
+            cleared["inspecting_workpiece_id"] = self._inspecting_workpiece.get(channel_id)
+
+        if cleared.get("pending_workpiece_id") or cleared.get("pending_queue") \
+                or cleared.get("last_scan_event") \
+                or cleared.get("force_canceled_inspecting") \
+                or cleared.get("force_race_lost"):
+            print(f"[MES] 清除 ch{channel_id} 扫码状态 (force={force}): {cleared}",
+                  flush=True)
+        return cleared
 
     def resolve_rebind(self, channel_id: int, action: str):
         """处理 manual rebind 选择（continue=继续当前工件，new=扫新工件）"""
@@ -424,6 +531,14 @@ class MESHookManager:
                             session_id=session_id, channel_id=channel_id
                         )
                         self._inspecting_workpiece[channel_id] = consumed_id
+                        # v2.7.16 (B7) queue 模式 + mid_cycle 同时启用时，
+                        # mid_cycle 拿走的工件也要同步从 _pending_queue 移除，
+                        # 否则会泄漏在队列里、且队列后续永远消费不到下一条。
+                        q = self._pending_queue.get(channel_id)
+                        if q and consumed_id in q:
+                            q.remove(consumed_id)
+                            if q:
+                                self._pending_workpiece[channel_id] = q[0]
                         print(f"[MES] 中途绑定: 工件#{consumed_id} -> Cycle#{current_cid} (工位{channel_id})", flush=True)
 
     def _handle_cycle_start(self, db, channel_id: int, cycle_id: int,
@@ -442,7 +557,7 @@ class MESHookManager:
                 self._pending_workpiece[channel_id] = q[0]
 
         self._workpiece_svc.mark_inspecting(db, wp_id)
-        insp = self._workpiece_svc.link_to_cycle(
+        self._workpiece_svc.link_to_cycle(
             db, wp_id, cycle_id, session_id=session_id, channel_id=channel_id
         )
 
@@ -466,10 +581,57 @@ class MESHookManager:
                           project_id: int):
         """Cycle 结束: 更新工件状态, 记录缺陷, 更新工单"""
         wp_id = self._inspecting_workpiece.pop(channel_id, None)
+
+        # v2.7.16 改进 B：迟到扫码补绑兜底。
+        # 触发场景："工人放完物品 → 抬手扫码 → cycle 已经在毫秒/几秒前 settle 了"。
+        # 现象：cycle_end 触发时 _inspecting_workpiece 空，但 _pending_workpiece
+        # 已被 _handle_scan 写入（晚到的扫码事件正在排队 / 已落到 _pending）。
+        # 兜底：如果该工件的 scan_event 时间戳与本 cycle 结束时间相差 ≤ window 秒，
+        # 则把该工件补绑到刚结算的 cycle，避免"未绑码"误报。
         if not wp_id:
-            print(f"[MES] Cycle#{cycle_id} ch{channel_id} 结束但未绑定工件 "
-                  f"(_inspecting_workpiece 为空) → 跳过 MES/集群分发", flush=True)
-            return
+            window = self._get_late_bind_window(channel_id)
+            pending_id = self._pending_workpiece.get(channel_id)
+            scan_event = self._last_scan_event.get(channel_id)
+            if window > 0 and pending_id and scan_event \
+                    and scan_event.get("workpiece_id") == pending_id:
+                try:
+                    from backend.models.models import DetectionCycle
+                    cyc = db.query(DetectionCycle).filter(
+                        DetectionCycle.id == cycle_id
+                    ).first()
+                    cyc_end_ts = cyc.end_time.timestamp() if cyc and cyc.end_time \
+                        else time.time()
+                    cyc_start_ts = cyc.start_time.timestamp() if cyc and cyc.start_time \
+                        else (cyc_end_ts - (duration or 0))
+                    scan_ts = float(scan_event.get("timestamp", 0))
+                    # 接受范围：[cycle.start - window, cycle.end + window]
+                    # 用宽松窗口覆盖 worker queue 微竞争 + 工人慢半拍两种场景。
+                    if (cyc_start_ts - window) <= scan_ts <= (cyc_end_ts + window):
+                        wp_id = self._pending_workpiece.pop(channel_id, None)
+                        if wp_id:
+                            self._workpiece_svc.mark_inspecting(db, wp_id)
+                            session_id = self._get_current_session_id(channel_id)
+                            self._workpiece_svc.link_to_cycle(
+                                db, wp_id, cycle_id,
+                                session_id=session_id, channel_id=channel_id
+                            )
+                            # 同步清 queue（沿用 B7 修复思路）
+                            q = self._pending_queue.get(channel_id)
+                            if q and wp_id in q:
+                                q.remove(wp_id)
+                                if q:
+                                    self._pending_workpiece[channel_id] = q[0]
+                            delay = scan_ts - cyc_end_ts
+                            print(f"[MES] 迟到补绑: 工件#{wp_id} -> Cycle#{cycle_id} "
+                                  f"(scan 距 cycle_end {delay:+.2f}s, 窗口{window}s, ch{channel_id})",
+                                  flush=True)
+                except Exception as e:
+                    print(f"[MES] 迟到补绑检查异常 ch{channel_id}: {e}", flush=True)
+
+            if not wp_id:
+                print(f"[MES] Cycle#{cycle_id} ch{channel_id} 结束但未绑定工件 "
+                      f"(_inspecting_workpiece 为空) → 跳过 MES/集群分发", flush=True)
+                return
 
         self._workpiece_svc.set_result(db, wp_id, is_good, cycle_id)
         self._workpiece_svc.update_inspection_result(
@@ -481,11 +643,6 @@ class MESHookManager:
         )
 
         if not is_good:
-            wp = self._workpiece_svc.get_by_id(db, wp_id)
-            insp = (
-                db.query(self._workpiece_svc.__class__)
-                if False else None
-            )
             from backend.models.mes_models import WorkpieceInspection
             insp = (
                 db.query(WorkpieceInspection)
@@ -621,7 +778,7 @@ class MESHookManager:
             elif role == "slave":
                 master_url = config.get("master_url")
                 if not master_url:
-                    print(f"[Cluster/Dispatch] slave 跳过上报: master_url 为空", flush=True)
+                    print("[Cluster/Dispatch] slave 跳过上报: master_url 为空", flush=True)
                     return False
                 result = collector.report_to_master(
                     cycle_context=cycle_context,

@@ -4,7 +4,7 @@ MES 系统 REST API
 工单管理、工件追溯、缺陷记录、质量统计的完整 CRUD 端点。
 """
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 

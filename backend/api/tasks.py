@@ -1,13 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
-from typing import List, Optional
+from typing import Optional
 import os
 import shutil
 import uuid
-from datetime import datetime
 from backend.db.database import get_db
-from backend.models.models import Task, Project, Model
+from backend.models.models import Task, Project
 from backend.schemas.task import TaskCreate, TaskResponse, TaskListResponse
 from backend.core.config import settings
 
@@ -153,8 +152,8 @@ async def record_detection(
     if result_data:
         try:
             parsed_result_data = json.loads(result_data)
-        except:
-            pass
+        except (json.JSONDecodeError, TypeError) as _e:
+            print(f"[Tasks] result_data 不是合法 JSON，按字符串保留: {_e}", flush=True)
     
     # 创建任务记录
     db_task = Task(

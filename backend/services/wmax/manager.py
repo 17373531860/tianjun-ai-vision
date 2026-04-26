@@ -3,9 +3,7 @@ WMax 设备管理器 — 全局单例，管理多台 WMax 设备的生命周期
 """
 from __future__ import annotations
 
-import asyncio
 import base64
-import io
 import json
 import logging
 import os
@@ -13,7 +11,7 @@ import threading
 import traceback
 from typing import Optional
 
-from .device import WMaxDevice, DeviceInfo, DEFAULT_PORT
+from .device import WMaxDevice, DEFAULT_PORT
 from .discovery import WMaxDiscovery
 
 logger = logging.getLogger(__name__)
