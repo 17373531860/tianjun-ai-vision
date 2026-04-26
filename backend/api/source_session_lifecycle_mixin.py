@@ -232,23 +232,8 @@ class SessionLifecycleMixin:
             self._session_start_date = None
             self._session_start_shift = None
     
-    def _get_counter_file(self) -> str:
-        """返回当前通道的计数器持久化文件路径"""
-        project_id = self.project_config.get('id') if self.project_config else None
-        return os.path.join(DATA_DIR, 'counters', f'project_{project_id}_ch{self.channel_id}.json')
-
-    def _persist_counters(self):
-        """将当前计数器值写到通道专属文件，避免多通道竞争同一行"""
-        project_id = self.project_config.get('id') if self.project_config else None
-        if not project_id or not self.counters:
-            return
-        try:
-            path = self._get_counter_file()
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, 'w', encoding='utf-8') as f:
-                _json.dump(self.counters, f, ensure_ascii=False)
-        except Exception as e:
-            print(f"[计数器持久化] ch{self.channel_id} 保存失败: {e}")
+    # _get_counter_file / _persist_counters 已迁至 source_counters.py (P7 第三刀)
+    # 历史调用 self._persist_counters() 通过 VSM.__getattr__ 转发到 counters_mgr
 
     def _get_current_shift(self) -> Optional[str]:
         """Return 'day' or 'night' based on current time and project data_config.

@@ -477,6 +477,7 @@ from backend.api.source_recording_api_mixin import RecordingApiMixin  # noqa: E4
 from backend.api.source_lifecycle_mixin import LifecycleMixin  # noqa: E402  P6 阶段一第十五刀: 11 个 pause/resume/stop/clear_caches 控制方法搬到独立 mixin
 from backend.api.source_drawer import Drawer  # noqa: E402  P7 阶段一第一刀: DrawMixin 重构为 has-a 组合 (自持 kalman 状态)
 from backend.api.source_mediapipe import MediaPipeOverlay  # noqa: E402  P7 第二刀: MediaPipe 子系统改组合 (自持 _mp_* 状态)
+from backend.api.source_counters import Counters  # noqa: E402  P7 第三刀: 计数器子系统改组合 (自持 counters dict + 持久化)
 
 
 class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, RecordingApiMixin, LifecycleMixin):
@@ -514,9 +515,17 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         '_apply_mediapipe_overlay': 'apply_overlay',
     }
 
+    # Counters 接管的字段 + 方法名 (P7 第三刀)
+    _COUNTERS_FIELDS = {'counters'}
+    _COUNTERS_METHOD_ALIASES = {
+        '_persist_counters': 'persist',
+        '_get_counter_file': 'get_file_path',
+        '_save_counters_snapshot': 'save_snapshot_to_db',
+    }
+
     def __getattr__(self, name):
         # __getattr__ 仅在常规查找未命中时触发
-        if name in ('drawer', 'mp_overlay'):
+        if name in ('drawer', 'mp_overlay', 'counters_mgr'):
             raise AttributeError(name)
         d = self.__dict__
         if name in type(self)._DRAWER_FIELDS:
@@ -527,18 +536,25 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             return getattr(d['mp_overlay'], name)
         if name in type(self)._MP_METHOD_ALIASES:
             return getattr(d['mp_overlay'], type(self)._MP_METHOD_ALIASES[name])
+        if name in type(self)._COUNTERS_FIELDS:
+            return getattr(d['counters_mgr'], name)
+        if name in type(self)._COUNTERS_METHOD_ALIASES:
+            return getattr(d['counters_mgr'], type(self)._COUNTERS_METHOD_ALIASES[name])
         raise AttributeError(
             f"{type(self).__name__!r} object has no attribute {name!r}"
         )
 
     def __setattr__(self, name, value):
-        # 极少数路由直接赋值 _mp_process_interval 等组件字段, 拦截转发
+        # 极少数路由/历史代码直接赋值组件字段, 拦截转发
         cls = type(self)
         if name in cls._MP_FIELDS and 'mp_overlay' in self.__dict__:
             setattr(self.__dict__['mp_overlay'], name, value)
             return
         if name in cls._DRAWER_FIELDS and 'drawer' in self.__dict__:
             setattr(self.__dict__['drawer'], name, value)
+            return
+        if name in cls._COUNTERS_FIELDS and 'counters_mgr' in self.__dict__:
+            setattr(self.__dict__['counters_mgr'], name, value)
             return
         super().__setattr__(name, value)
 
@@ -861,8 +877,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self._simultaneous_groups = []  # 配置列表
         self._sim_group_buffers = {}  # 缓冲排序器状态 {group_idx: {collecting, start_time, collected_labels, ...}}
         
-        # 事件与计数器
-        self.counters = {}  # {counter_name: value}
+        # 事件与计数器 (P7 第三刀: 实际状态归 self.counters_mgr.counters,
+        # 通过 __getattr__/__setattr__ 兼容层让 self.counters 透明转发)
+        self.counters_mgr = Counters(host=self)
         self.events_log = []  # 事件日志
         self._event_seq = 0  # 事件唯一递增序号
         self.ng_step_cycle_counts = {}  # {step_label: count_of_ng_cycles} for NG TOP3

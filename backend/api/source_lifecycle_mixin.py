@@ -362,25 +362,9 @@ class LifecycleMixin:
         
         print(f"[缓存清理] 完成 - 清理了 {screenshot_count} 张截图缓存")
     
-    def _save_counters_snapshot(self):
-        """定期保存计数器快照到会话（防止闪退丢失数据）"""
-        if not self.current_session_id or not self.counters:
-            return
-        
-        try:
-            db = self._get_db_session()
-            session = db.query(DetectionSession).filter(
-                DetectionSession.id == self.current_session_id
-            ).first()
-            
-            if session:
-                session.counters_snapshot = self.counters.copy()
-                db.commit()
-                print(f"[数据持久化] 计数器已保存: {self.counters}")
-            
-            db.close()
-        except Exception as e:
-            print(f"[数据持久化] 保存计数器失败: {e}")
+    # _save_counters_snapshot 已迁至 source_counters.py (P7 第三刀)
+    # 历史调用 self._save_counters_snapshot() 通过 VSM.__getattr__ 转发
+
     
     def _gpu_deep_cleanup(self):
         """GPU 显存深度清理 - 每10分钟执行一次，防止长时间运行显存碎片累积"""
