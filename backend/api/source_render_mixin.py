@@ -25,76 +25,9 @@ from backend.api.source_geometry import get_chinese_font as _ext_get_chinese_fon
 
 
 class RenderMixin:
-    # ============== 画面变换：旋转 + 镜像 ==============
-    def _apply_frame_transform(self, frame):
-        """按通道配置对帧做旋转 + 镜像。
-
-        顺序：先旋转（90° 倍数），再水平镜像，再垂直镜像。
-        OpenCV 原生实现，零拷贝 90°/180°/270°，极低开销。
-        """
-        if frame is None:
-            return frame
-        rot = self.video_rotation
-        if rot == 90:
-            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-        elif rot == 180:
-            frame = cv2.rotate(frame, cv2.ROTATE_180)
-        elif rot == 270:
-            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        if self.video_flip_h and self.video_flip_v:
-            frame = cv2.flip(frame, -1)
-        elif self.video_flip_h:
-            frame = cv2.flip(frame, 1)
-        elif self.video_flip_v:
-            frame = cv2.flip(frame, 0)
-        return frame
-
-    def _has_display_transform(self) -> bool:
-        """是否配置了任何画面变换（旋转/镜像）。无变换时走快路径跳过坐标映射。"""
-        return bool(
-            (self.video_rotation or 0) % 360 != 0
-            or self.video_flip_h
-            or self.video_flip_v
-        )
-
-    def _map_bbox_original_to_display(self, x: float, y: float, w: float, h: float):
-        """把单个归一化 bbox 从原图坐标系映射到显示坐标系。
-
-        变换顺序与 _apply_frame_transform 完全一致：先旋转, 再水平镜像, 再垂直镜像。
-        坐标均为归一化值 (相对各自坐标系的宽高), 无需知道像素尺寸。
-        """
-        rot = (self.video_rotation or 0) % 360
-        if rot == 90:
-            # 顺时针 90°: 左上角 (x, y) -> (1 - y - h, x), 宽高交换
-            nx, ny, nw, nh = 1.0 - y - h, x, h, w
-        elif rot == 180:
-            nx, ny, nw, nh = 1.0 - x - w, 1.0 - y - h, w, h
-        elif rot == 270:
-            # 逆时针 90°: 左上角 (x, y) -> (y, 1 - x - w), 宽高交换
-            nx, ny, nw, nh = y, 1.0 - x - w, h, w
-        else:
-            nx, ny, nw, nh = x, y, w, h
-        if self.video_flip_h:
-            nx = 1.0 - nx - nw
-        if self.video_flip_v:
-            ny = 1.0 - ny - nh
-        return nx, ny, nw, nh
-
-    def _map_detections_original_to_display(self, detections):
-        """就地把 detections 列表里每个 det 的 x/y/w/h 从原图坐标系映射到显示坐标系。
-
-        无变换时直接返回, 零开销。归一化坐标下只做少量加减, 对上千目标也 < 1ms。
-        """
-        if not self._has_display_transform() or not detections:
-            return detections
-        for det in detections:
-            if 'x' in det and 'y' in det and 'w' in det and 'h' in det:
-                nx, ny, nw, nh = self._map_bbox_original_to_display(
-                    float(det['x']), float(det['y']),
-                    float(det['w']), float(det['h']),
-                )
-                det['x'], det['y'], det['w'], det['h'] = nx, ny, nw, nh
-        return detections
+    # _apply_frame_transform / _has_display_transform / _map_bbox_original_to_display /
+    # _map_detections_original_to_display 已迁至 source_video_transform.py (P7 第四刀)
+    # 历史调用 self._apply_frame_transform(...) 等通过 VSM.__getattr__ 自动转发
 
     # ============== 字体 + 检测框绘制 ==============
     def _get_chinese_font(self, size=20):

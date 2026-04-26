@@ -478,6 +478,7 @@ from backend.api.source_lifecycle_mixin import LifecycleMixin  # noqa: E402  P6 
 from backend.api.source_drawer import Drawer  # noqa: E402  P7 阶段一第一刀: DrawMixin 重构为 has-a 组合 (自持 kalman 状态)
 from backend.api.source_mediapipe import MediaPipeOverlay  # noqa: E402  P7 第二刀: MediaPipe 子系统改组合 (自持 _mp_* 状态)
 from backend.api.source_counters import Counters  # noqa: E402  P7 第三刀: 计数器子系统改组合 (自持 counters dict + 持久化)
+from backend.api.source_video_transform import VideoTransform  # noqa: E402  P7 第四刀: 画面旋转/镜像/坐标映射改组合
 
 
 class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, RecordingApiMixin, LifecycleMixin):
@@ -523,23 +524,37 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         '_save_counters_snapshot': 'save_snapshot_to_db',
     }
 
+    # VideoTransform 接管的字段 + 方法名 (P7 第四刀)
+    _VT_FIELDS = {'video_rotation', 'video_flip_h', 'video_flip_v'}
+    _VT_METHOD_ALIASES = {
+        '_apply_frame_transform': 'apply_to_frame',
+        '_has_display_transform': 'has_transform',
+        '_map_bbox_original_to_display': 'map_bbox_to_display',
+        '_map_detections_original_to_display': 'map_detections_to_display',
+    }
+
     def __getattr__(self, name):
         # __getattr__ 仅在常规查找未命中时触发
-        if name in ('drawer', 'mp_overlay', 'counters_mgr'):
+        if name in ('drawer', 'mp_overlay', 'counters_mgr', 'video_transform'):
             raise AttributeError(name)
         d = self.__dict__
-        if name in type(self)._DRAWER_FIELDS:
+        cls = type(self)
+        if name in cls._DRAWER_FIELDS:
             return getattr(d['drawer'], name)
-        if name in type(self)._DRAWER_METHOD_ALIASES:
-            return getattr(d['drawer'], type(self)._DRAWER_METHOD_ALIASES[name])
-        if name in type(self)._MP_FIELDS:
+        if name in cls._DRAWER_METHOD_ALIASES:
+            return getattr(d['drawer'], cls._DRAWER_METHOD_ALIASES[name])
+        if name in cls._MP_FIELDS:
             return getattr(d['mp_overlay'], name)
-        if name in type(self)._MP_METHOD_ALIASES:
-            return getattr(d['mp_overlay'], type(self)._MP_METHOD_ALIASES[name])
-        if name in type(self)._COUNTERS_FIELDS:
+        if name in cls._MP_METHOD_ALIASES:
+            return getattr(d['mp_overlay'], cls._MP_METHOD_ALIASES[name])
+        if name in cls._COUNTERS_FIELDS:
             return getattr(d['counters_mgr'], name)
-        if name in type(self)._COUNTERS_METHOD_ALIASES:
-            return getattr(d['counters_mgr'], type(self)._COUNTERS_METHOD_ALIASES[name])
+        if name in cls._COUNTERS_METHOD_ALIASES:
+            return getattr(d['counters_mgr'], cls._COUNTERS_METHOD_ALIASES[name])
+        if name in cls._VT_FIELDS:
+            return getattr(d['video_transform'], name)
+        if name in cls._VT_METHOD_ALIASES:
+            return getattr(d['video_transform'], cls._VT_METHOD_ALIASES[name])
         raise AttributeError(
             f"{type(self).__name__!r} object has no attribute {name!r}"
         )
@@ -547,15 +562,15 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
     def __setattr__(self, name, value):
         # 极少数路由/历史代码直接赋值组件字段, 拦截转发
         cls = type(self)
-        if name in cls._MP_FIELDS and 'mp_overlay' in self.__dict__:
-            setattr(self.__dict__['mp_overlay'], name, value)
-            return
-        if name in cls._DRAWER_FIELDS and 'drawer' in self.__dict__:
-            setattr(self.__dict__['drawer'], name, value)
-            return
-        if name in cls._COUNTERS_FIELDS and 'counters_mgr' in self.__dict__:
-            setattr(self.__dict__['counters_mgr'], name, value)
-            return
+        d = self.__dict__
+        if name in cls._MP_FIELDS and 'mp_overlay' in d:
+            setattr(d['mp_overlay'], name, value); return
+        if name in cls._DRAWER_FIELDS and 'drawer' in d:
+            setattr(d['drawer'], name, value); return
+        if name in cls._COUNTERS_FIELDS and 'counters_mgr' in d:
+            setattr(d['counters_mgr'], name, value); return
+        if name in cls._VT_FIELDS and 'video_transform' in d:
+            setattr(d['video_transform'], name, value); return
         super().__setattr__(name, value)
 
     # 配置文件路径
@@ -623,9 +638,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # 推理输出的 bbox（原图归一化坐标）在 _inference_loop 里立即通过
         # _map_detections_original_to_display 映射到显示坐标系, 下游 ROI/容器/步骤/前端画框
         # 全部基于显示坐标系运行, 无需二次适配。
-        self.video_rotation = 0  # 0 / 90 / 180 / 270
-        self.video_flip_h = False  # 左右镜像
-        self.video_flip_v = False  # 上下镜像
+        # P7 第四刀: 旋转/镜像/坐标映射归 self.video_transform 组件,
+        # 通过 __getattr__/__setattr__ 兼容层让 self.video_rotation 等透明转发
+        self.video_transform = VideoTransform()
         
         # YOLO 模型
         self.model = None
@@ -722,75 +737,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         except Exception as e:
             print(f"保存设备配置失败: {e}")
 
-    def _apply_frame_transform(self, frame):
-        """按通道配置对帧做旋转 + 镜像。
-
-        顺序：先旋转（90° 倍数），再水平镜像，再垂直镜像。
-        OpenCV 原生实现，零拷贝 90°/180°/270°，极低开销。
-        """
-        if frame is None:
-            return frame
-        rot = self.video_rotation
-        if rot == 90:
-            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-        elif rot == 180:
-            frame = cv2.rotate(frame, cv2.ROTATE_180)
-        elif rot == 270:
-            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        if self.video_flip_h and self.video_flip_v:
-            frame = cv2.flip(frame, -1)
-        elif self.video_flip_h:
-            frame = cv2.flip(frame, 1)
-        elif self.video_flip_v:
-            frame = cv2.flip(frame, 0)
-        return frame
-
-    def _has_display_transform(self) -> bool:
-        """是否配置了任何画面变换（旋转/镜像）。无变换时走快路径跳过坐标映射。"""
-        return bool(
-            (self.video_rotation or 0) % 360 != 0
-            or self.video_flip_h
-            or self.video_flip_v
-        )
-
-    def _map_bbox_original_to_display(self, x: float, y: float, w: float, h: float):
-        """把单个归一化 bbox 从原图坐标系映射到显示坐标系。
-
-        变换顺序与 _apply_frame_transform 完全一致：先旋转, 再水平镜像, 再垂直镜像。
-        坐标均为归一化值 (相对各自坐标系的宽高), 无需知道像素尺寸。
-        """
-        rot = (self.video_rotation or 0) % 360
-        if rot == 90:
-            # 顺时针 90°: 左上角 (x, y) -> (1 - y - h, x), 宽高交换
-            nx, ny, nw, nh = 1.0 - y - h, x, h, w
-        elif rot == 180:
-            nx, ny, nw, nh = 1.0 - x - w, 1.0 - y - h, w, h
-        elif rot == 270:
-            # 逆时针 90°: 左上角 (x, y) -> (y, 1 - x - w), 宽高交换
-            nx, ny, nw, nh = y, 1.0 - x - w, h, w
-        else:
-            nx, ny, nw, nh = x, y, w, h
-        if self.video_flip_h:
-            nx = 1.0 - nx - nw
-        if self.video_flip_v:
-            ny = 1.0 - ny - nh
-        return nx, ny, nw, nh
-
-    def _map_detections_original_to_display(self, detections):
-        """就地把 detections 列表里每个 det 的 x/y/w/h 从原图坐标系映射到显示坐标系。
-
-        无变换时直接返回, 零开销。归一化坐标下只做少量加减, 对上千目标也 < 1ms。
-        """
-        if not self._has_display_transform() or not detections:
-            return detections
-        for det in detections:
-            if 'x' in det and 'y' in det and 'w' in det and 'h' in det:
-                nx, ny, nw, nh = self._map_bbox_original_to_display(
-                    float(det['x']), float(det['y']),
-                    float(det['w']), float(det['h']),
-                )
-                det['x'], det['y'], det['w'], det['h'] = nx, ny, nw, nh
-        return detections
+    # _apply_frame_transform / _has_display_transform / _map_bbox_original_to_display /
+    # _map_detections_original_to_display 已迁至 source_video_transform.py (P7 第四刀)
+    # 历史调用通过 VSM.__getattr__ 转发到 self.video_transform
 
 
     def _init_inference_vars(self):
