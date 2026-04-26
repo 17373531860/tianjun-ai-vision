@@ -479,6 +479,7 @@ from backend.api.source_drawer import Drawer  # noqa: E402  P7 阶段一第一�
 from backend.api.source_mediapipe import MediaPipeOverlay  # noqa: E402  P7 第二刀: MediaPipe 子系统改组合 (自持 _mp_* 状态)
 from backend.api.source_counters import Counters  # noqa: E402  P7 第三刀: 计数器子系统改组合 (自持 counters dict + 持久化)
 from backend.api.source_video_transform import VideoTransform  # noqa: E402  P7 第四刀: 画面旋转/镜像/坐标映射改组合
+from backend.api.source_inference_executor import InferenceExecutor  # noqa: E402  P7 第五刀: 推理线程池改组合
 
 
 class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, RecordingApiMixin, LifecycleMixin):
@@ -533,44 +534,52 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         '_map_detections_original_to_display': 'map_detections_to_display',
     }
 
+    # InferenceExecutor 接管的字段 + 方法名 (P7 第五刀)
+    _IE_FIELDS = {'_inference_executor'}
+    _IE_METHOD_ALIASES = {
+        '_get_inference_executor': 'get',
+        '_shutdown_inference_executor': 'shutdown',
+    }
+
+    # P7 兼容层路由表: 字段集 → 组件实例属性名, 方法别名 → 组件实例属性名
+    # 单一来源, __getattr__/__setattr__ 共享, 加新组件只需扩这张表
+    _COMPONENT_ROUTES = (
+        # (component_attr, fields_set_name, method_aliases_name)
+        ('drawer',          '_DRAWER_FIELDS',   '_DRAWER_METHOD_ALIASES'),
+        ('mp_overlay',      '_MP_FIELDS',       '_MP_METHOD_ALIASES'),
+        ('counters_mgr',    '_COUNTERS_FIELDS', '_COUNTERS_METHOD_ALIASES'),
+        ('video_transform', '_VT_FIELDS',       '_VT_METHOD_ALIASES'),
+        ('inference_exec',  '_IE_FIELDS',       '_IE_METHOD_ALIASES'),
+    )
+
     def __getattr__(self, name):
         # __getattr__ 仅在常规查找未命中时触发
-        if name in ('drawer', 'mp_overlay', 'counters_mgr', 'video_transform'):
+        cls = type(self)
+        component_attrs = {r[0] for r in cls._COMPONENT_ROUTES}
+        if name in component_attrs:
             raise AttributeError(name)
         d = self.__dict__
-        cls = type(self)
-        if name in cls._DRAWER_FIELDS:
-            return getattr(d['drawer'], name)
-        if name in cls._DRAWER_METHOD_ALIASES:
-            return getattr(d['drawer'], cls._DRAWER_METHOD_ALIASES[name])
-        if name in cls._MP_FIELDS:
-            return getattr(d['mp_overlay'], name)
-        if name in cls._MP_METHOD_ALIASES:
-            return getattr(d['mp_overlay'], cls._MP_METHOD_ALIASES[name])
-        if name in cls._COUNTERS_FIELDS:
-            return getattr(d['counters_mgr'], name)
-        if name in cls._COUNTERS_METHOD_ALIASES:
-            return getattr(d['counters_mgr'], cls._COUNTERS_METHOD_ALIASES[name])
-        if name in cls._VT_FIELDS:
-            return getattr(d['video_transform'], name)
-        if name in cls._VT_METHOD_ALIASES:
-            return getattr(d['video_transform'], cls._VT_METHOD_ALIASES[name])
+        for comp_attr, fields_name, methods_name in cls._COMPONENT_ROUTES:
+            if comp_attr not in d:
+                continue
+            comp = d[comp_attr]
+            if name in getattr(cls, fields_name):
+                return getattr(comp, name)
+            method_aliases = getattr(cls, methods_name)
+            if name in method_aliases:
+                return getattr(comp, method_aliases[name])
         raise AttributeError(
             f"{type(self).__name__!r} object has no attribute {name!r}"
         )
 
     def __setattr__(self, name, value):
-        # 极少数路由/历史代码直接赋值组件字段, 拦截转发
+        # 极少数路由/历史代码直接赋值组件字段, 拦截转发到对应组件
         cls = type(self)
         d = self.__dict__
-        if name in cls._MP_FIELDS and 'mp_overlay' in d:
-            setattr(d['mp_overlay'], name, value); return
-        if name in cls._DRAWER_FIELDS and 'drawer' in d:
-            setattr(d['drawer'], name, value); return
-        if name in cls._COUNTERS_FIELDS and 'counters_mgr' in d:
-            setattr(d['counters_mgr'], name, value); return
-        if name in cls._VT_FIELDS and 'video_transform' in d:
-            setattr(d['video_transform'], name, value); return
+        for comp_attr, fields_name, _ in cls._COMPONENT_ROUTES:
+            if comp_attr in d and name in getattr(cls, fields_name):
+                setattr(d[comp_attr], name, value)
+                return
         super().__setattr__(name, value)
 
     # 配置文件路径
@@ -768,7 +777,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self._inference_timeout = 10.0  # 单次推理超时时间（秒）
         self._inference_timeout_count = 0  # 推理超时计数
         self._max_consecutive_timeouts = 5  # 最大连续超时次数，超过后重置模型
-        self._inference_executor = None  # 持久线程池（避免每帧创建新线程池导致内存泄漏）
+        # P7 第五刀: 推理线程池归 self.inference_exec 组件,
+        # 通过 __getattr__/__setattr__ 让 self._inference_executor 透明转发
+        self.inference_exec = InferenceExecutor()
         self._last_successful_inference = time.time()  # 最后一次成功推理的时间
         
         # ========== Drawer 组件 (P7 阶段一: 替代 DrawMixin) ==========
@@ -1618,21 +1629,8 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         return inside
     
     
-    def _get_inference_executor(self):
-        """获取持久推理线程池（懒初始化，避免每帧创建新线程池）"""
-        from concurrent.futures import ThreadPoolExecutor
-        if self._inference_executor is None or self._inference_executor._shutdown:
-            self._inference_executor = ThreadPoolExecutor(max_workers=1)
-        return self._inference_executor
-    
-    def _shutdown_inference_executor(self):
-        """关闭推理线程池"""
-        if self._inference_executor is not None:
-            try:
-                self._inference_executor.shutdown(wait=False)
-            except Exception:
-                pass
-            self._inference_executor = None
+    # _get_inference_executor / _shutdown_inference_executor 已迁至
+    # source_inference_executor.py (P7 第五刀), 历史调用通过 __getattr__ 转发
     
     def _apply_rod_filters(self, detections: list) -> list:
         """统一应用两层传动杆过滤：companion 空间共现 + session gate。
