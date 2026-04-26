@@ -476,15 +476,18 @@ from backend.api.source_recording_thread_mixin import RecordingThreadMixin  # no
 from backend.api.source_recording_api_mixin import RecordingApiMixin  # noqa: E402  P6 阶段一第十四刀: 8 个录制公共 API (session/cycle/step) 搬到独立 mixin
 from backend.api.source_lifecycle_mixin import LifecycleMixin  # noqa: E402  P6 阶段一第十五刀: 11 个 pause/resume/stop/clear_caches 控制方法搬到独立 mixin
 from backend.api.source_drawer import Drawer  # noqa: E402  P7 阶段一第一刀: DrawMixin 重构为 has-a 组合 (自持 kalman 状态)
+from backend.api.source_mediapipe import MediaPipeOverlay  # noqa: E402  P7 第二刀: MediaPipe 子系统改组合 (自持 _mp_* 状态)
 
 
 class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, RecordingApiMixin, LifecycleMixin):
     """主管理器 (P7 进行中: DrawMixin 已改组合 → self.drawer)"""
 
     # ===== P7 兼容层: 把已迁移到组件的属性/方法名映射回组件实例 =====
-    # 形如 self._kalman_enabled / self._draw_box(...) 的历史调用通过 __getattr__
-    # 自动转发到 self.drawer.xxx, 现有调用代码无需修改.
-    # 所有权: Drawer 拥有所有 _kalman_* / _draw_box* / _get_chinese_font 等
+    # 形如 self._kalman_enabled / self._mp_pose / self._draw_box(...) 的历史调用
+    # 通过 __getattr__/__setattr__ 自动转发到 self.drawer / self.mp_overlay,
+    # 现有调用代码无需修改. 各组件拥有自己的状态字段, 数据所有权清晰.
+
+    # Drawer (kalman + draw_box) 接管的字段
     _DRAWER_FIELDS = {
         '_kalman_filters', '_kalman_enabled',
         '_kalman_process_noise', '_kalman_measurement_noise',
@@ -498,21 +501,46 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         '_get_chinese_font': 'get_chinese_font',
     }
 
+    # MediaPipeOverlay 接管的字段 (注意 mediapipe_enabled / pose / hands /
+    # confidence 4 个 public 配置字段保留在 VSM 上, 不在此列表)
+    _MP_FIELDS = {
+        '_mp_pose', '_mp_hands', '_mp_draw', '_mp_draw_styles',
+        '_mp_last_pose_results', '_mp_last_hands_results',
+        '_mp_frame_counter', '_mp_process_interval',
+    }
+    _MP_METHOD_ALIASES = {
+        '_init_mediapipe': 'init',
+        '_release_mediapipe': 'release',
+        '_apply_mediapipe_overlay': 'apply_overlay',
+    }
+
     def __getattr__(self, name):
-        # __getattr__ 仅在常规查找未命中时触发, 不会影响 self.drawer 自身访问
-        if name == 'drawer':
+        # __getattr__ 仅在常规查找未命中时触发
+        if name in ('drawer', 'mp_overlay'):
             raise AttributeError(name)
-        try:
-            drawer = self.__dict__['drawer']
-        except KeyError:
-            raise AttributeError(name)
+        d = self.__dict__
         if name in type(self)._DRAWER_FIELDS:
-            return getattr(drawer, name)
+            return getattr(d['drawer'], name)
         if name in type(self)._DRAWER_METHOD_ALIASES:
-            return getattr(drawer, type(self)._DRAWER_METHOD_ALIASES[name])
+            return getattr(d['drawer'], type(self)._DRAWER_METHOD_ALIASES[name])
+        if name in type(self)._MP_FIELDS:
+            return getattr(d['mp_overlay'], name)
+        if name in type(self)._MP_METHOD_ALIASES:
+            return getattr(d['mp_overlay'], type(self)._MP_METHOD_ALIASES[name])
         raise AttributeError(
             f"{type(self).__name__!r} object has no attribute {name!r}"
         )
+
+    def __setattr__(self, name, value):
+        # 极少数路由直接赋值 _mp_process_interval 等组件字段, 拦截转发
+        cls = type(self)
+        if name in cls._MP_FIELDS and 'mp_overlay' in self.__dict__:
+            setattr(self.__dict__['mp_overlay'], name, value)
+            return
+        if name in cls._DRAWER_FIELDS and 'drawer' in self.__dict__:
+            setattr(self.__dict__['drawer'], name, value)
+            return
+        super().__setattr__(name, value)
 
     # 配置文件路径
     CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'device_config.json')
@@ -555,18 +583,14 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self.use_half = False  # FP16 半精度推理（默认关闭，用户可在设置中开启）
         
         # MediaPipe overlay (纯视觉叠加，默认关闭)
+        # ===== MediaPipeOverlay 组件 (P7 第二刀) =====
+        # 4 个 public 用户配置字段保留在 VSM 上 (routes 直接读写)
         self.mediapipe_enabled = False
-        self.mediapipe_pose = True       # 显示姿态骨架
-        self.mediapipe_hands = True      # 显示手部关键点
-        self.mediapipe_confidence = 0.7  # 检测置信度阈值 (0.1-1.0)
-        self._mp_pose = None             # lazy-loaded mediapipe Pose instance
-        self._mp_hands = None            # lazy-loaded mediapipe Hands instance
-        self._mp_draw = None             # mediapipe drawing utils
-        self._mp_draw_styles = None
-        self._mp_last_pose_results = None
-        self._mp_last_hands_results = None
-        self._mp_frame_counter = 0
-        self._mp_process_interval = 2    # 每隔 N 帧跑一次 MediaPipe（节省性能）
+        self.mediapipe_pose = True
+        self.mediapipe_hands = True
+        self.mediapipe_confidence = 0.7
+        # 8 个内部 _mp_* 状态字段移至组件, __getattr__/__setattr__ 透明转发
+        self.mp_overlay = MediaPipeOverlay(host=self)
         
         # 视频播放控制
         self.video_speed = 1.0  # 视频倍速
@@ -752,113 +776,6 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 det['x'], det['y'], det['w'], det['h'] = nx, ny, nw, nh
         return detections
 
-    def _init_mediapipe(self):
-        """Lazy-load MediaPipe models on first use."""
-        try:
-            import mediapipe as mp
-            self._mp_draw = mp.solutions.drawing_utils
-            self._mp_draw_styles = mp.solutions.drawing_styles
-            conf = max(0.1, min(1.0, self.mediapipe_confidence))
-            if self.mediapipe_pose and self._mp_pose is None:
-                self._mp_pose = mp.solutions.pose.Pose(
-                    static_image_mode=False,
-                    model_complexity=0,
-                    min_detection_confidence=conf,
-                    min_tracking_confidence=0.5,
-                )
-                print(f"[MediaPipe] Pose 模型已加载 (confidence={conf})")
-            if self.mediapipe_hands and self._mp_hands is None:
-                self._mp_hands = mp.solutions.hands.Hands(
-                    static_image_mode=False,
-                    max_num_hands=2,
-                    model_complexity=0,
-                    min_detection_confidence=conf,
-                    min_tracking_confidence=0.5,
-                )
-                print("[MediaPipe] Hands 模型已加载")
-        except ImportError:
-            print("[MediaPipe] 警告: mediapipe 未安装，pip install mediapipe")
-            self.mediapipe_enabled = False
-        except Exception as e:
-            print(f"[MediaPipe] 初始化失败: {e}")
-            self.mediapipe_enabled = False
-
-    def _release_mediapipe(self):
-        """Release MediaPipe resources."""
-        if self._mp_pose is not None:
-            try:
-                self._mp_pose.close()
-            except Exception:
-                pass
-            self._mp_pose = None
-        if self._mp_hands is not None:
-            try:
-                self._mp_hands.close()
-            except Exception:
-                pass
-            self._mp_hands = None
-        self._mp_last_pose_results = None
-        self._mp_last_hands_results = None
-        self._mp_frame_counter = 0
-        print("[MediaPipe] 资源已释放")
-
-    def _apply_mediapipe_overlay(self, frame):
-        """Run MediaPipe on the frame (or reuse cached results) and draw landmarks.
-        
-        Returns the annotated frame (modified in-place for performance).
-        """
-        if not self.mediapipe_enabled:
-            return frame
-        
-        if self._mp_draw is None:
-            self._init_mediapipe()
-            if not self.mediapipe_enabled:
-                return frame
-        
-        import mediapipe as mp
-        
-        self._mp_frame_counter += 1
-        should_process = (self._mp_frame_counter % max(self._mp_process_interval, 1)) == 0
-        
-        if should_process:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            rgb.flags.writeable = False
-            
-            if self._mp_pose is not None and self.mediapipe_pose:
-                try:
-                    self._mp_last_pose_results = self._mp_pose.process(rgb)
-                except Exception:
-                    self._mp_last_pose_results = None
-            else:
-                self._mp_last_pose_results = None
-            
-            if self._mp_hands is not None and self.mediapipe_hands:
-                try:
-                    self._mp_last_hands_results = self._mp_hands.process(rgb)
-                except Exception:
-                    self._mp_last_hands_results = None
-            else:
-                self._mp_last_hands_results = None
-        
-        if self._mp_last_pose_results and self._mp_last_pose_results.pose_landmarks:
-            self._mp_draw.draw_landmarks(
-                frame,
-                self._mp_last_pose_results.pose_landmarks,
-                mp.solutions.pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=self._mp_draw_styles.get_default_pose_landmarks_style(),
-            )
-        
-        if self._mp_last_hands_results and self._mp_last_hands_results.multi_hand_landmarks:
-            for hand_landmarks in self._mp_last_hands_results.multi_hand_landmarks:
-                self._mp_draw.draw_landmarks(
-                    frame,
-                    hand_landmarks,
-                    mp.solutions.hands.HAND_CONNECTIONS,
-                    self._mp_draw_styles.get_default_hand_landmarks_style(),
-                    self._mp_draw_styles.get_default_hand_connections_style(),
-                )
-        
-        return frame
 
     def _init_inference_vars(self):
         """初始化推理相关变量（在__init__的_load_device_config之后调用）"""
