@@ -473,12 +473,47 @@ from backend.api.source_detect_runners_mixin import DetectRunnersMixin  # noqa: 
 from backend.api.source_camera_start_mixin import CameraStartMixin  # noqa: E402  P6 阶段一第十刀: 10 个 start_*/release_*/reconnect/get_frame 摄像头方法搬到独立 mixin
 from backend.api.source_session_lifecycle_mixin import SessionLifecycleMixin  # noqa: E402  P6 阶段一第十一刀: 16 个 session/cycle 生命周期方法搬到独立 mixin
 from backend.api.source_recording_thread_mixin import RecordingThreadMixin  # noqa: E402  P6 阶段一第十二刀: 5 个 recording thread 方法搬到独立 mixin
-from backend.api.source_draw_mixin import DrawMixin  # noqa: E402  P6 阶段一第十三刀: 5 个 draw_box / kalman 方法搬到独立 mixin
 from backend.api.source_recording_api_mixin import RecordingApiMixin  # noqa: E402  P6 阶段一第十四刀: 8 个录制公共 API (session/cycle/step) 搬到独立 mixin
 from backend.api.source_lifecycle_mixin import LifecycleMixin  # noqa: E402  P6 阶段一第十五刀: 11 个 pause/resume/stop/clear_caches 控制方法搬到独立 mixin
+from backend.api.source_drawer import Drawer  # noqa: E402  P7 阶段一第一刀: DrawMixin 重构为 has-a 组合 (自持 kalman 状态)
 
 
-class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, DrawMixin, RecordingApiMixin, LifecycleMixin):
+class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, RecordingApiMixin, LifecycleMixin):
+    """主管理器 (P7 进行中: DrawMixin 已改组合 → self.drawer)"""
+
+    # ===== P7 兼容层: 把已迁移到组件的属性/方法名映射回组件实例 =====
+    # 形如 self._kalman_enabled / self._draw_box(...) 的历史调用通过 __getattr__
+    # 自动转发到 self.drawer.xxx, 现有调用代码无需修改.
+    # 所有权: Drawer 拥有所有 _kalman_* / _draw_box* / _get_chinese_font 等
+    _DRAWER_FIELDS = {
+        '_kalman_filters', '_kalman_enabled',
+        '_kalman_process_noise', '_kalman_measurement_noise',
+        '_detection_history', '_detection_missing_frames', '_max_missing_frames',
+    }
+    _DRAWER_METHOD_ALIASES = {
+        '_apply_kalman_filter': 'apply_kalman_filter',
+        'update_kalman_params': 'update_kalman_params',
+        '_draw_box': 'draw_box',
+        '_draw_box_simple': 'draw_box_simple',
+        '_get_chinese_font': 'get_chinese_font',
+    }
+
+    def __getattr__(self, name):
+        # __getattr__ 仅在常规查找未命中时触发, 不会影响 self.drawer 自身访问
+        if name == 'drawer':
+            raise AttributeError(name)
+        try:
+            drawer = self.__dict__['drawer']
+        except KeyError:
+            raise AttributeError(name)
+        if name in type(self)._DRAWER_FIELDS:
+            return getattr(drawer, name)
+        if name in type(self)._DRAWER_METHOD_ALIASES:
+            return getattr(drawer, type(self)._DRAWER_METHOD_ALIASES[name])
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {name!r}"
+        )
+
     # 配置文件路径
     CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'device_config.json')
     
@@ -854,14 +889,11 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self._inference_executor = None  # 持久线程池（避免每帧创建新线程池导致内存泄漏）
         self._last_successful_inference = time.time()  # 最后一次成功推理的时间
         
-        # ========== 卡尔曼滤波相关 ==========
-        self._kalman_filters = {}  # {label: KalmanFilter} 每个目标一个滤波器
-        self._kalman_enabled = False  # 是否启用卡尔曼滤波（默认关闭）
-        self._kalman_process_noise = 0.03  # 过程噪声 Q (越小越平滑，越大响应越快)
-        self._kalman_measurement_noise = 0.1  # 观测噪声 R (越大越平滑)
-        self._detection_history = {}  # 检测框历史 {label: last_detection}
-        self._detection_missing_frames = {}  # 目标消失帧数统计 {label: count}
-        self._max_missing_frames = 5  # 目标消失多少帧后移除滤波器
+        # ========== Drawer 组件 (P7 阶段一: 替代 DrawMixin) ==========
+        # 卡尔曼滤波 + 中文字体缓存 + 检测平滑相关状态全部归入 self.drawer
+        # 历史代码访问 self._kalman_* / self._draw_box / self._apply_kalman_filter
+        # 通过 __getattr__ 兼容层透明转发到 self.drawer
+        self.drawer = Drawer()
         
         # 统计
         self.fps_actual = 0  # 采集线程的 FPS (摄像头实际读帧速度)
