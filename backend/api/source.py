@@ -178,6 +178,7 @@ from backend.api.source_mediapipe import MediaPipeOverlay  # noqa: E402  P7 第�
 from backend.api.source_counters import Counters  # noqa: E402  P7 第三刀: 计数器子系统改组合 (自持 counters dict + 持久化)
 from backend.api.source_video_transform import VideoTransform  # noqa: E402  P7 第四刀: 画面旋转/镜像/坐标映射改组合
 from backend.api.source_inference_executor import InferenceExecutor  # noqa: E402  P7 第五刀: 推理线程池改组合
+from backend.api.source_sequence_labels import SequenceLabels  # noqa: E402  P7 第九刀: 步骤标签查询改组合 (无状态, 仅依赖 project_config)
 
 
 class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, RecordingApiMixin, LifecycleMixin):
@@ -239,6 +240,18 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         '_shutdown_inference_executor': 'shutdown',
     }
 
+    # SequenceLabels 接管的方法 (P7 第九刀): 无状态, 7 个标签查询函数
+    _SEQ_FIELDS = set()
+    _SEQ_METHOD_ALIASES = {
+        '_get_first_sequence_step_label': 'get_first_step_label',
+        '_get_last_sequence_step_label':  'get_last_step_label',
+        '_get_expected_sequence_labels':  'get_expected_labels',
+        '_get_detection_step_labels':     'get_detection_labels',
+        '_get_first_detection_step_label': 'get_first_detection_label',
+        '_get_last_detection_step_label':  'get_last_detection_label',
+        '_is_condition_prefix':           'is_condition_prefix',
+    }
+
     # P7 兼容层路由表: 字段集 → 组件实例属性名, 方法别名 → 组件实例属性名
     # 单一来源, __getattr__/__setattr__ 共享, 加新组件只需扩这张表
     _COMPONENT_ROUTES = (
@@ -248,6 +261,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         ('counters_mgr',    '_COUNTERS_FIELDS', '_COUNTERS_METHOD_ALIASES'),
         ('video_transform', '_VT_FIELDS',       '_VT_METHOD_ALIASES'),
         ('inference_exec',  '_IE_FIELDS',       '_IE_METHOD_ALIASES'),
+        ('sequence_labels', '_SEQ_FIELDS',      '_SEQ_METHOD_ALIASES'),
     )
 
     def __getattr__(self, name):
@@ -450,386 +464,24 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
 
 
     def _init_inference_vars(self):
-        """初始化推理相关变量（在__init__的_load_device_config之后调用）"""
-        self.conf_threshold = 0.25
-        self.iou_threshold = 0.45
-        
-        # ========== 双线程架构相关 ==========
-        self._inference_thread = None  # 推理线程
-        self._inference_running = False  # 推理线程运行标志
-        self._latest_frame_for_inference = None  # 供推理线程使用的最新帧（可能是缩小后的, 原图视角）
-        self._latest_frame_original_size = None  # 原始帧尺寸 (h, w)，用于坐标还原
-        # v2.7.14: 推理用原图, stats/screenshot 用显示帧 → 两份分开存
-        self._latest_display_small_for_stats = None  # 推理线程做 stats 截图用的显示帧(缩小版)
-        self._inference_frame_lock = threading.Lock()  # 保护推理帧的锁
-        self._confirmed_detections = []  # 经过帧计数确认的检测结果
-        self._confirmed_detections_lock = threading.Lock()  # 保护确认结果的锁
-        
-        # ========== 健康检查相关 ==========
-        self._last_inference_heartbeat = time.time()  # 推理线程心跳时间
-        self._last_capture_heartbeat = time.time()  # 捕获线程心跳时间
-        self._health_check_interval = 5.0  # 健康检查间隔（秒）
-        self._thread_timeout_threshold = 10.0  # 线程无响应阈值（秒）
-        
-        # ========== 推理超时保护 ==========
-        self._inference_timeout = 10.0  # 单次推理超时时间（秒）
-        self._inference_timeout_count = 0  # 推理超时计数
-        self._max_consecutive_timeouts = 5  # 最大连续超时次数，超过后重置模型
-        # P7 第五刀: 推理线程池归 self.inference_exec 组件,
-        # 通过 __getattr__/__setattr__ 让 self._inference_executor 透明转发
-        self.inference_exec = InferenceExecutor()
-        self._last_successful_inference = time.time()  # 最后一次成功推理的时间
-        
-        # ========== Drawer 组件 (P7 阶段一: 替代 DrawMixin) ==========
-        # 卡尔曼滤波 + 中文字体缓存 + 检测平滑相关状态全部归入 self.drawer
-        # 历史代码访问 self._kalman_* / self._draw_box / self._apply_kalman_filter
-        # 通过 __getattr__ 兼容层透明转发到 self.drawer
-        self.drawer = Drawer()
-        
-        # 统计
-        self.fps_actual = 0  # 采集线程的 FPS (摄像头实际读帧速度)
-        self.fps_inference = 0  # 推理线程的 FPS (实际跑模型的速度)
-        # v2.7.13: 跟踪/事件 帧数阈值必须按 "推理 FPS" 换算, 因为:
-        #   - _update_tracking_stats / _update_step_stats 都在推理线程里累加帧数
-        #   - 采集 FPS 通常 25~30, 推理 FPS 往往只有 5~8 (GPU/模型大小决定)
-        #   - 如果用 fps_actual 当基准, 1 秒 = 30 帧阈值, 但推理线程 1 秒只加 5~8,
-        #     实际要等 3~6 秒才到阈值, 用户感知就是 "延迟 5 倍"
-        self.latency = 0
-        self._fps_counter = 0
-        self._fps_time = time.time()
-        self._fps_inference_counter = 0
-        self._fps_inference_time = time.time()
-        self._frame_seq = 0
-        
-        # 步骤截图 {step_name: base64_image}
-        self.step_screenshots = {}
-        self.step_counts = {}  # {step_name: count}
-        self.step_last_seen = {}  # {step_name: timestamp} 最后一次检测到的时间
-        self.step_start_time = {}  # {step_name: timestamp} 步骤开始检测的时间
-        self.step_time_config = {}  # {step_name: {min_duration, max_duration, max_interval, disappear_delay}}
-        
-        # 项目配置
-        self.project_config = None
-        self.settlement_mode = 'first_step'  # 'first_step' or 'last_step'
-        self.idle_timeout_seconds = 0         # 0 = disabled
-        self.cycle_max_duration = 0           # 0 = disabled, >0 = 周期总时长超时NG
-        self.step_conf_thresholds = {}  # {step_name: threshold}
-        # 传动杆误判过滤（两层，默认全关，从 project_config 读开关）
-        self._rod_filter_cfg = read_rod_filter_config(None)
-        self._rod_gate = RodSessionGate(
-            rod_label=self._rod_filter_cfg["gate_rod_label"],
-            gate_labels=self._rod_filter_cfg["gate_labels"],
-        )
-        self.step_min_frames = {}  # {step_name: min_frames} 每个步骤的最少帧数配置
-        self.step_consecutive_frames = {}  # {step_name: count} 跟踪每个标签连续出现的帧数
-        self.step_frame_confirmed = {}  # {step_name: bool} 标记标签是否已确认（达到最少帧数）
-        self.step_gap_tolerance = {}  # {step_name: int} 允许的连续丢帧数，默认0
-        self._step_gap_count = {}  # {step_name: int} 当前连续丢帧计数
-        
-        # 静态步骤配置
-        self.step_detection_type = {}  # {step_name: 'dynamic'|'static'} 检测类型
-        self.step_static_config = {}  # {step_name: {trigger_frames, join_cycle, trigger_event}}
-        self.step_static_triggered = {}  # {step_name: bool} 静态步骤是否已触发（防止重复触发）
-        
-        # 同时出现组配置
-        self._simultaneous_groups = []  # 配置列表
-        self._sim_group_buffers = {}  # 缓冲排序器状态 {group_idx: {collecting, start_time, collected_labels, ...}}
-        
-        # 事件与计数器 (P7 第三刀: 实际状态归 self.counters_mgr.counters,
-        # 通过 __getattr__/__setattr__ 兼容层让 self.counters 透明转发)
-        self.counters_mgr = Counters(host=self)
-        self.events_log = []  # 事件日志
-        self._event_seq = 0  # 事件唯一递增序号
-        self.ng_step_cycle_counts = {}  # {step_label: count_of_ng_cycles} for NG TOP3
-        self.current_cycle_steps = []  # 当前周期检测到的步骤顺序
-        self.last_added_step = None  # 上一个添加到周期的步骤（用于去重判断）
-        self.cycle_complete = False
-        
-        # Backup steps (替补步骤)
-        self.step_backup_map = {}            # {backup_label: primary_label}
-        self.step_primary_to_backup = {}     # {primary_label: backup_label}
-        self.backup_steps_seen_in_cycle = set()
-        self.step_strict_order = {}          # {label: True} only accept when predecessors done
-        self.step_accept_once = {}           # {label: True} only accept once per cycle
-        self._first_step_had_gap = False
-        self._first_step_reconfirmed = False
-        self._first_step_disappeared_at = None
-        self._last_step_added_time = None
-        self._step_raw_start = {}
-        self._last_ng_time = 0
-        self._cycle_regression = False       # A-B-A 步骤回退标记
-        
-        # ========== Tracking Mode (跟踪模式 — 物品清点) ==========
-        self._tracking_objects = {}     # {track_id: {class_name, display_id, first_seen, last_seen, bbox, order_idx}}
-        self._tracking_class_counters = {}  # {class_name: int} auto-increment per class
-        self._tracking_display_map = {}  # {track_id: display_id}
-        self._tracking_item_checklist = {}  # {class_name: {expected, counted, prefix}}
-        self._tracking_lost_frames = {}  # {track_id: frames_missing}
-        self._tracking_letter_map = {}  # {class_name: letter_prefix}
-        self._tracking_letter_idx = 0
-        self._tracking_order_seq = 0    # placement order counter
-        self._tracking_prev_count = 0   # previous frame's tracked object count (for all_gone detection)
-        self._tracking_gone_frames = 0  # consecutive frames where count <= threshold
-        self._tracking_cycle_active = False  # whether a counting cycle is in progress
-        self._tracking_had_roi_objects = False  # has any object been in ROI during this cycle
-        self._tracking_trigger_frames = 0   # frames the trigger label has been visible
-        self._tracking_recently_lost = {}   # {old_track_id: {class_name, display_id, bbox, lost_time, order_idx}}
-        self._tracking_transferred_ids = {}  # {old_track_id: transfer_time} - IDs migrated to new tracks
-        self._tracking_prev_positions = {}   # {display_id: (cx, cy, class_name)} for swap detection
-        self._tracking_appearance = {}       # {display_id: histogram} for appearance matching
-        self._tracking_stable_frames = {}    # {track_id: consecutive_seen_frames} for ID lock
-        self._tracking_locked_ids = {}       # {display_id: (cx, cy)} locked IDs won't be re-matched
-        self._tracking_registered_positions = {}  # {display_id: {class_name, cx, cy, stable_frames}}
-        self._custom_tracker_yaml = None    # path to dynamic bytetrack config
-        
-        # Event counting mode (动作计数)
-        self._event_counters = {}           # {class_name: completed_event_count}
-        self._event_state = {}              # {class_name: 'idle'|'visible'|'gone'}
-        self._event_visible_frames = {}     # {class_name: consecutive_visible_frames}
-        self._event_gone_frames_count = {}  # {class_name: consecutive_gone_frames}
-        self._event_first_seen = {}         # {class_name: timestamp of first event start}
-        self._event_last_seen = {}          # {class_name: timestamp of last event end}
+        """初始化推理相关变量 (在 __init__ 的 _load_device_config 之后调用)
 
-        # v2.7.4: Stack mode (堆叠模式 — 物品已放好但被堆叠/遮挡，消失再出现算下一层)
-        # 仅 logic_mode=tracking + count_mode=track 时生效
-        self._stack_state = {}              # {class_name: 'idle'|'visible'|'disappeared'}
-        self._stack_counters = {}           # {class_name: 已计入的"层"数}
-        self._stack_disappeared_at = {}     # {class_name: timestamp 进入 disappeared 的时间}
-        self._stack_visible_frames = {}     # {class_name: 当前 visible 状态下连续帧数}
-        
-        # Container mode (box + items hierarchy)
-        self._container_mode = False
-        self._container_label = ''
-        self._box_objects = {}       # {box_track_id: BoxState}
-        self._box_counter = 0
-        self._box_settled_results = []
-        
-        # Cycle Time 统计
-        self.cycle_start_time = None  # 当前周期开始时间
-        self.cycle_times = []  # 记录最近的周期时间（最多保留100个）
-        self.ng_cycle_times = []  # NG cycle durations (up to 100)
-        self.step_detection_times = {}  # 步骤检测时间 {step_name: timestamp}
-        self.step_durations = {}  # 步骤耗时 {step_name: duration_seconds}
-        self.step_durations_history = {}  # {step_name: [d1, d2, ...]} for average PT
-        self.step_intervals = {}  # 步骤间隔时间 {step_name: interval_from_previous}
-        self.last_step_completed_time = None  # 上一个步骤完成的时间
-        
-        # ========== 会话和周期记录 ==========
-        self.current_session_id = None  # 当前会话ID
-        self.current_session_uuid = None  # 当前会话UUID
-        self.current_cycle_id = None  # 当前周期ID
-        self.current_cycle_uuid = None  # 当前周期UUID
-        self.current_cycle_number = 0  # 当前周期序号
-        self.cycle_step_records = []  # 当前周期的步骤记录 (用于批量保存)
-        self.step_order_counter = 0  # 步骤顺序计数器
-        self.recording_enabled = False  # 是否启用录制
-        self.export_settings = None  # 导出设置缓存
-        self.last_cycle_end_time = None  # 上一周期结束时间（用于计算周期间隔）
-        self._session_start_date = None  # 当前会话的开始日期（用于跨日自动拆分）
-        self._session_start_shift = None  # "day" / "night" / None — 班次实时拆分
-        
-        # 视频录制
-        self.video_writer = None  # 视频录制器
-        self.cycle_video_writer = None  # 周期视频录制器
-        self.step_video_writers = {}  # 步骤视频录制器 {step_label: writer}
-        self._step_writers_lock = threading.Lock()  # 保护 step_video_writers 的并发访问
-        self._writer_lock = threading.Lock()  # 保护 video_writer 和 cycle_video_writer
-        
-        # ========== 录制队列（独立线程，避免与 CUDA 冲突） ==========
-        import queue
-        self._recording_queue = queue.Queue(maxsize=30)  # 约1秒缓冲 @30fps（最小化内存）
-        self._recording_thread = None
-        self._recording_running = False
-        self._recording_drop_count = 0  # 统计丢帧数
+        实现已迁至 source_state_init.py (P7 第十刀), 按主题切分为 13 个 init helper.
+        本方法保留为薄 wrapper 以保持原 API 不变.
+        """
+        from backend.api.source_state_init import init_state
+        init_state(self)
+
         
     def set_project_config(self, config: dict):
-        """设置项目配置"""
-        self.project_config = config
-        
-        # 刷新传动杆过滤参数 + 重建 SessionGate
-        try:
-            self._rod_filter_cfg = read_rod_filter_config(config)
-            self._rod_gate = RodSessionGate(
-                rod_label=self._rod_filter_cfg["gate_rod_label"],
-                gate_labels=self._rod_filter_cfg["gate_labels"],
-            )
-        except Exception as _e:
-            print(f"[rod_filter] read config failed, fallback to defaults: {_e}")
-            self._rod_filter_cfg = read_rod_filter_config(None)
-            self._rod_gate = RodSessionGate()
+        """设置项目配置 → 应用全部步骤/周期/计数器状态
 
-        # 解析步骤置信度阈值和时间配置
-        self.step_conf_thresholds = {}
-        self.step_time_config = {}
-        self.step_min_frames = {}  # 最少帧数配置
-        self.step_consecutive_frames = {}  # 重置连续帧计数
-        self.step_frame_confirmed = {}  # 重置确认状态
-        self.step_gap_tolerance = {}  # 重置丢帧容忍
-        self._step_gap_count = {}  # 重置丢帧计数
-        self.step_detection_type = {}  # 检测类型
-        self.step_static_config = {}  # 静态步骤配置
-        self.step_static_triggered = {}  # 静态步骤触发状态
-        self.step_display_names = {}  # label -> displayLabel mapping
-        self.step_backup_map = {}        # {backup_label: primary_label}
-        self.step_primary_to_backup = {} # {primary_label: backup_label}
-        self.backup_steps_seen_in_cycle = set()
-        self.step_strict_order = {}
-        self.step_accept_once = {}
-        self._first_step_had_gap = False
-        self._first_step_reconfirmed = False
-        self._first_step_disappeared_at = None
-        self._last_step_added_time = None
-        self._step_raw_start = {}
-        self._cycle_regression = False
-        
-        steps_config = config.get('steps_config', [])
-        for step in steps_config:
-            if step.get('enabled', True):
-                label = step.get('label', '')
-                # 前端发送的是百分比（10-100），需要转换为小数（0.1-1.0）
-                threshold = step.get('threshold', 50)
-                if threshold > 1:
-                    threshold = threshold / 100.0  # 转换百分比为小数
-                self.step_conf_thresholds[label] = threshold
-                
-                display_label = step.get('displayLabel') or step.get('display_name') or label
-                if display_label != label:
-                    self.step_display_names[label] = display_label
-                
-                # 步骤时间配置
-                self.step_time_config[label] = {
-                    'min_duration': step.get('min_duration'),  # 最短持续时间
-                    'max_duration': step.get('max_duration'),  # 最大持续时间
-                    'max_interval': step.get('max_interval', 1.0),  # 去重间隔，默认1秒
-                    'disappear_delay': step.get('disappear_delay', 0),  # 消失确认延迟，默认0秒（立即确认）
-                    'timeout_ng': step.get('timeout_ng', False),  # 超时自动判NG
-                }
-                
-                # 最少帧数配置（默认1帧）
-                min_frames = step.get('min_frames')
-                self.step_min_frames[label] = min_frames if min_frames and min_frames > 0 else 1
-                
-                gap_tolerance = step.get('gap_tolerance')
-                self.step_gap_tolerance[label] = gap_tolerance if gap_tolerance and gap_tolerance > 0 else 0
-                
-                if step.get('strict_order'):
-                    self.step_strict_order[label] = True
-                if step.get('accept_once'):
-                    self.step_accept_once[label] = True
-                
-                detection_type = step.get('detection_type', 'dynamic')
-                self.step_detection_type[label] = detection_type
-                
-                # 静态步骤配置
-                if detection_type == 'static':
-                    self.step_static_config[label] = {
-                        'trigger_frames': step.get('static_trigger_frames', 30),
-                        'join_cycle': step.get('join_cycle', True),
-                        'trigger_event': step.get('triggerEvent')  # 触发的事件
-                    }
-                    self.step_static_triggered[label] = False
-        
-        # Second pass: build backup step mapping (needs all labels resolved first)
-        for step in steps_config:
-            if step.get('enabled', True):
-                label = step.get('label', '')
-                backup_for_id = step.get('backup_for')
-                if backup_for_id:
-                    for s in steps_config:
-                        if s.get('id') == backup_for_id:
-                            primary_label = s.get('label', '')
-                            if primary_label:
-                                self.step_backup_map[label] = primary_label
-                                self.step_primary_to_backup[primary_label] = label
-                            break
-        
-        if self.step_backup_map:
-            print(f"替补步骤映射: {self.step_backup_map}")
-        
-        # 解析同时出现组配置
-        pipeline_config = config.get('pipeline_config', {})
-        self._simultaneous_groups = pipeline_config.get('simultaneous_groups', [])
-        self._sim_group_buffers = {}
-        if self._simultaneous_groups:
-            print(f"同时出现组: {self._simultaneous_groups}")
-        
-        # Settlement mode: 'first_step' or 'last_step'
-        self.settlement_mode = pipeline_config.get('settlement_mode', 'first_step')
-        self.idle_timeout_seconds = pipeline_config.get('idle_timeout_seconds', 0)
-        self.cycle_max_duration = pipeline_config.get('cycle_max_duration', 0)
-        print(f"结算模式: {self.settlement_mode}, 空闲超时: {self.idle_timeout_seconds}s, 周期超时: {self.cycle_max_duration}s")
-        
-        # 结算步骤不允许有 strict_order，确保结算步骤始终能进入周期
-        if self.settlement_mode == 'last_step':
-            settle_label = self._get_last_sequence_step_label()
-        else:
-            settle_label = self._get_first_sequence_step_label()
-        if settle_label and self.step_strict_order.get(settle_label):
-            del self.step_strict_order[settle_label]
-            print(f"[{self.settlement_mode}模式] 自动移除结算步骤 [{settle_label}] 的严格顺序")
-        
-        # 初始化计数器（确保默认计数器始终存在）
-        self.counters = {}
-        counters_config = config.get('counters_config', [])
-        
-        # 默认计数器名称列表
-        DEFAULT_COUNTERS = ['总产量', '合格总数', '不良总数', 'NG步骤']
-        
-        # 先从项目配置添加计数器（作为默认值）
-        for counter in counters_config:
-            self.counters[counter.get('name', '')] = counter.get('value', 0)
-        
-        # 确保默认计数器存在
-        for default_name in DEFAULT_COUNTERS:
-            if default_name not in self.counters:
-                self.counters[default_name] = 0
+        实现已迁至 source_project_config_apply.py (P7 第十一刀),
+        按主题切分为 8 个 helper. 本方法保留为薄 wrapper.
+        """
+        from backend.api.source_project_config_apply import apply_project_config
+        apply_project_config(self, config)
 
-        # 从通道专属文件恢复持久化的值（覆盖默认值）
-        project_id = config.get('id')
-        if project_id:
-            counter_file = os.path.join(DATA_DIR, 'counters', f'project_{project_id}_ch{self.channel_id}.json')
-            if os.path.exists(counter_file):
-                try:
-                    with open(counter_file, 'r', encoding='utf-8') as f:
-                        saved = _json.load(f)
-                    for name, val in saved.items():
-                        if name in self.counters:
-                            self.counters[name] = val
-                    print(f"[计数器] ch{self.channel_id} 从文件恢复: {self.counters}")
-                except Exception as e:
-                    print(f"[计数器] ch{self.channel_id} 恢复失败: {e}")
-        
-        # 重置周期状态
-        self.current_cycle_steps = []
-        self.last_added_step = None  # 重置上一个添加的步骤
-        self.backup_steps_seen_in_cycle = set()
-        self.cycle_complete = False
-        self.events_log = []
-        self.ng_step_cycle_counts = {}
-        self.step_start_time = {}  # 重置步骤开始时间
-        
-        if config.get('logic_mode') == 'tracking':
-            self._reset_counting_cycle()
-            self._generate_custom_tracker_yaml(pipeline_config)
-            # Container mode: activated when strategy is 'container' and label is set
-            clabel = pipeline_config.get('tracking_container_label', '')
-            is_container_strategy = pipeline_config.get('tracking_cycle_strategy') == 'container'
-            self._container_label = clabel if is_container_strategy else ''
-            self._container_mode = is_container_strategy and bool(clabel)
-        
-        print(f"项目配置已加载: {config.get('name', 'Unknown')}, task_type={config.get('task_type')}, logic_mode={config.get('logic_mode')}")
-        print(f"步骤阈值: {self.step_conf_thresholds}")
-        print(f"步骤时间配置: {self.step_time_config}")
-        print(f"步骤最少帧数: {self.step_min_frames}")
-        print(f"步骤丢帧容忍: {self.step_gap_tolerance}")
-        print(f"步骤检测类型: {self.step_detection_type}")
-        print(f"静态步骤配置: {self.step_static_config}")
-        print(f"计数器: {self.counters}")
-        if config.get('logic_mode') == 'tracking':
-            event_labels = [s.get('label') for s in steps_config if s.get('enabled', True) and s.get('count_mode') == 'event']
-            print(f"跟踪模式配置: strategy={pipeline_config.get('tracking_cycle_strategy')}, expected={pipeline_config.get('counting_expected_items')}")
-            if event_labels:
-                print(f"动作计数标签: {event_labels}")
     
     def _release_model(self):
         """释放模型和 GPU 资源"""
@@ -865,206 +517,6 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 print("[资源释放] 模型资源已释放")
         except Exception as e:
             print(f"[资源释放] 释放模型时出错: {e}")
-    
-    def _get_first_sequence_step_label(self):
-        """获取顺序模式下配置的第一个启用步骤的标签（自定义模式使用custom_sequence_order）"""
-        if not self.project_config:
-            return None
-        
-        logic_mode = self.project_config.get('logic_mode', 'sequential')
-        pipeline_config = self.project_config.get('pipeline_config', {})
-        steps_config = self.project_config.get('steps_config', [])
-        
-        # 根据模式选择配置
-        if logic_mode == 'custom':
-            sequence_order = pipeline_config.get('custom_sequence_order', [])
-        else:
-            sequence_order = pipeline_config.get('sequence_order', [])
-        
-        if not sequence_order or not steps_config:
-            return None
-        
-        # 创建步骤ID到标签的映射（只包含启用的步骤）
-        id_to_label = {}
-        enabled_step_ids = set()
-        for step in steps_config:
-            step_id = step.get('id')
-            label = step.get('label', '')
-            if step_id and label:
-                id_to_label[step_id] = label
-                if step.get('enabled', True):
-                    enabled_step_ids.add(step_id)
-        
-        # 获取第一个启用步骤的标签
-        for item in sequence_order:
-            step_id = item.get('step_id')
-            if step_id in enabled_step_ids:
-                return id_to_label.get(step_id)
-        
-        return None
-    
-    def _get_last_sequence_step_label(self):
-        """获取顺序模式下配置的最后一个启用步骤的标签
-        
-        对于自定义模式，使用独立的 custom_sequence_order 配置
-        """
-        if not self.project_config:
-            return None
-        
-        logic_mode = self.project_config.get('logic_mode', 'sequential')
-        pipeline_config = self.project_config.get('pipeline_config', {})
-        steps_config = self.project_config.get('steps_config', [])
-        
-        # 根据模式选择不同的配置
-        if logic_mode == 'custom':
-            sequence_order = pipeline_config.get('custom_sequence_order', [])
-        else:
-            sequence_order = pipeline_config.get('sequence_order', [])
-        
-        if not sequence_order or not steps_config:
-            return None
-        
-        # 创建步骤ID到标签的映射（只包含启用的步骤）
-        id_to_label = {}
-        enabled_step_ids = set()
-        for step in steps_config:
-            step_id = step.get('id')
-            label = step.get('label', '')
-            if step_id and label:
-                id_to_label[step_id] = label
-                if step.get('enabled', True):
-                    enabled_step_ids.add(step_id)
-        
-        # 从后向前找第一个启用的步骤
-        for item in reversed(sequence_order):
-            step_id = item.get('step_id')
-            if step_id in enabled_step_ids:
-                return id_to_label.get(step_id)
-        
-        return None
-    
-    def _get_expected_sequence_labels(self):
-        """获取当前模式下预期的步骤标签有序列表"""
-        if not self.project_config:
-            return []
-        
-        logic_mode = self.project_config.get('logic_mode', 'sequential')
-        pipeline_config = self.project_config.get('pipeline_config', {})
-        steps_config = self.project_config.get('steps_config', [])
-        
-        if logic_mode == 'custom':
-            sequence_order = pipeline_config.get('custom_sequence_order', [])
-        else:
-            sequence_order = pipeline_config.get('sequence_order', [])
-        
-        if not sequence_order or not steps_config:
-            return []
-        
-        id_to_label = {}
-        enabled_step_ids = set()
-        for step in steps_config:
-            step_id = step.get('id')
-            label = step.get('label', '')
-            if step_id and label:
-                id_to_label[step_id] = label
-                if step.get('enabled', True):
-                    enabled_step_ids.add(step_id)
-        
-        expected = []
-        for item in sequence_order:
-            step_id = item.get('step_id')
-            if step_id in id_to_label and step_id in enabled_step_ids:
-                expected.append(id_to_label[step_id])
-        return expected
-    
-    def _get_detection_step_labels(self):
-        """获取检测模式下需要检测的步骤标签列表（按 steps_config 配置顺序）"""
-        if not self.project_config:
-            return []
-        
-        pipeline_config = self.project_config.get('pipeline_config', {})
-        steps_config = self.project_config.get('steps_config', [])
-        detection_step_ids = pipeline_config.get('detection_steps', [])
-        
-        id_to_label = {}
-        ordered_enabled = []
-        for step in steps_config:
-            step_id = step.get('id')
-            label = step.get('label', '')
-            if step_id and label and step.get('enabled', True):
-                id_to_label[step_id] = label
-                ordered_enabled.append((step_id, label))
-        
-        if detection_step_ids:
-            det_set = set(detection_step_ids)
-            return [label for sid, label in ordered_enabled if sid in det_set]
-        else:
-            return [label for _, label in ordered_enabled]
-    
-    def _get_first_detection_step_label(self):
-        """获取检测模式下第一个步骤的标签"""
-        labels = self._get_detection_step_labels()
-        return labels[0] if labels else None
-    
-    def _get_last_detection_step_label(self):
-        """获取检测模式下最后一个步骤的标签"""
-        labels = self._get_detection_step_labels()
-        return labels[-1] if labels else None
-    
-    def _is_condition_prefix(self, sequence_to_check: list) -> bool:
-        """检查给定序列是否是任何自定义条件的前缀
-        
-        Args:
-            sequence_to_check: 要检查的步骤标签序列
-        
-        Returns:
-            如果是任何条件的前缀返回 True，否则返回 False
-        """
-        if not self.project_config:
-            return False
-        
-        pipeline_config = self.project_config.get('pipeline_config', {})
-        custom_conditions = pipeline_config.get('custom_conditions', [])
-        steps_config = self.project_config.get('steps_config', [])
-        
-        if not custom_conditions:
-            return False
-        
-        # 创建步骤ID到标签的映射，并获取启用的步骤ID集合
-        id_to_label = {}
-        enabled_step_ids = set()
-        for step in steps_config:
-            step_id = step.get('id')
-            label = step.get('label', '')
-            if step_id and label:
-                id_to_label[step_id] = label
-                if step.get('enabled', True):
-                    enabled_step_ids.add(step_id)
-        
-        # 检查每个条件
-        for cond in custom_conditions:
-            cond_sequence = cond.get('sequence', [])
-            if not cond_sequence:
-                continue
-            
-            # 将条件中的步骤ID转换为标签（只包含启用的步骤）
-            cond_labels = [id_to_label.get(sid) for sid in cond_sequence if sid in id_to_label and sid in enabled_step_ids]
-            
-            if not cond_labels:
-                continue
-            
-            # 检查 sequence_to_check 是否是 cond_labels 的前缀
-            if len(sequence_to_check) <= len(cond_labels):
-                is_prefix = True
-                for i, label in enumerate(sequence_to_check):
-                    if label != cond_labels[i]:
-                        is_prefix = False
-                        break
-                if is_prefix:
-                    print(f"  前缀匹配成功: {sequence_to_check} 是条件 {cond_labels} 的前缀")
-                    return True
-        
-        return False
     
     def _supplement_step_durations(self):
         """Supplement step_durations for steps still being tracked at settle time.
