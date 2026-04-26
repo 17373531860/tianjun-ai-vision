@@ -1,0 +1,436 @@
+"""生命周期控制 + 资源清理 (v2.7.16 P6 阶段一第十五刀)。
+
+把 11 个公共控制 API + 资源清理方法集中到一处 (合计 ~410 行):
+  pause / resume / standby / resume_inference / stop  : 公共控制 API
+  _reopen_camera / _reopen_hik_camera                 : 重连辅助
+  _clear_all_caches / _save_counters_snapshot         : 资源/状态清理
+  _gpu_deep_cleanup / _periodic_cache_cleanup         : GPU 内存维护
+
+依赖宿主 (VideoSourceManager):
+  - 状态: is_running / is_detecting / cap / hcnet_session / hik_camera /
+          source_type / model / counters / current_session_id / etc.
+  - 方法: _close_all_writers / _stop_inference_thread / _stop_recording_thread /
+          _release_hcnet_session / _release_hik_camera / debug_log
+"""
+import os
+import gc
+import time
+import json
+import traceback
+
+
+class LifecycleMixin:
+    def pause(self):
+        """暂停：停止画面更新和检测，但保持当前帧"""
+        self.is_running = False
+        self.is_detecting = False
+        # v2.7.3: 暂停也必须熄灭工作指示灯，前端 Monitor 的"停止"按钮调的是 pause
+        # 之前未调用导致灯保持常亮，关软件后还亮
+        try:
+            from backend.api.alarm import alarm_router
+            alarm_router.stop_idle_light(channel_id=self.channel_id)
+        except Exception:
+            pass
+        # 先停止推理线程，避免残留
+        self._stop_inference_thread()
+        # 停止录制线程和 FFmpeg 进程，防止资源泄漏
+        self._stop_recording_thread()
+        self._close_all_writers()
+        # 等待捕获线程退出
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+        with self.detection_lock:
+            self.current_detections = []
+        # 清理推理缓存
+        self._clear_inference_caches()
+
+        # Camera/Hikvision: release the device so it's not locked
+        # (current_frame is kept for frozen display, model stays loaded for fast resume)
+        if self.source_type == 'camera' and self.capture:
+            try:
+                self.capture.release()
+            except Exception as e:
+                print(f"[pause] release camera failed: {e}")
+            self.capture = None
+            print("已暂停：摄像头已释放，保留模型和画面")
+        elif self.source_type == 'hikvision':
+            self._release_hik_camera()
+            print("已暂停：海康相机已释放，保留模型和画面")
+        elif self.source_type == 'hcnetsdk':
+            self._release_hcnet_session()
+            print("[pause] HCNetSDK released, model kept")
+        else:
+            print("已暂停：画面和检测都停止")
+    
+    def _reopen_camera(self):
+        """Re-open USB camera that was released during pause"""
+        import platform
+        try:
+            if platform.system() == "Windows":
+                self.capture = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+            else:
+                self.capture = cv2.VideoCapture(self.camera_index)
+            if not self.capture.isOpened():
+                print(f"[resume] 摄像头 {self.camera_index} 打开失败")
+                self.capture = None
+                return False
+            self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
+            self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+            self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            self.capture.set(cv2.CAP_PROP_FPS, self.fps)
+            print(f"[resume] 摄像头已重新打开 (MJPG): index={self.camera_index}")
+            return True
+        except Exception as e:
+            print(f"[resume] 重新打开摄像头失败: {e}")
+            return False
+
+    def _reopen_hik_camera(self):
+        """Re-open Hikvision camera that was released during pause (preserves model)"""
+        if not HIK_SDK_AVAILABLE:
+            print("[resume] 海康 SDK 不可用")
+            return False
+        try:
+            self.hik_camera = MvCamera()
+            device_list = MV_CC_DEVICE_INFO_LIST()
+            ret = MvCamera.MV_CC_EnumDevices(MV_USB_DEVICE | MV_GIGE_DEVICE, device_list)
+            if ret != 0 or device_list.nDeviceNum == 0:
+                raise Exception("未发现海康相机设备")
+            if self.hik_device_index >= device_list.nDeviceNum:
+                raise Exception(f"设备索引 {self.hik_device_index} 无效")
+            st_device_info = cast(device_list.pDeviceInfo[self.hik_device_index], POINTER(MV_CC_DEVICE_INFO)).contents
+            ret = self.hik_camera.MV_CC_CreateHandle(st_device_info)
+            if ret != 0:
+                raise Exception(f"创建句柄失败: {hex(ret)}")
+            ret = self.hik_camera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
+            if ret != 0:
+                self.hik_camera.MV_CC_DestroyHandle()
+                raise Exception(f"打开设备失败: {hex(ret)}")
+            self.hik_camera.MV_CC_SetEnumValue("TriggerMode", MV_TRIGGER_MODE_OFF)
+            st_param = MVCC_INTVALUE()
+            memset(byref(st_param), 0, sizeof(MVCC_INTVALUE))
+            ret = self.hik_camera.MV_CC_GetIntValue("PayloadSize", st_param)
+            if ret != 0:
+                self._release_hik_camera()
+                raise Exception(f"获取 PayloadSize 失败: {hex(ret)}")
+            self.hik_payload_size = st_param.nCurValue
+            ret = self.hik_camera.MV_CC_StartGrabbing()
+            if ret != 0:
+                self._release_hik_camera()
+                raise Exception(f"开始取流失败: {hex(ret)}")
+            self.hik_data_buf = (c_ubyte * self.hik_payload_size)()
+            self.hik_frame_info = MV_FRAME_OUT_INFO_EX()
+            memset(byref(self.hik_frame_info), 0, sizeof(MV_FRAME_OUT_INFO_EX))
+            print(f"[resume] 海康相机已重新打开: index={self.hik_device_index}")
+            return True
+        except Exception as e:
+            print(f"[resume] 重新打开海康相机失败: {e}")
+            self._release_hik_camera()
+            return False
+
+    def resume(self):
+        """恢复：从暂停状态恢复，重新启动视频流和推理"""
+        # Re-open camera if it was released during pause
+        if self.capture is None and self.source_type == 'camera':
+            if not self._reopen_camera():
+                return False
+
+        if self.source_type == 'hikvision' and self.hik_camera is None:
+            if not self._reopen_hik_camera():
+                return False
+
+        if self.capture is None and self.source_type not in ('hikvision', 'image'):
+            print("无法恢复：没有可用的视频源")
+            return False
+
+        # 确保旧捕获线程已完全停止，避免双重线程
+        if self._thread and self._thread.is_alive():
+            self.is_running = False
+            self._thread.join(timeout=1.0)
+
+        self.is_running = True
+        self.is_detecting = True
+        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._thread.start()
+
+        if self.model is not None:
+            self._start_inference_thread()
+
+        self._ensure_session_active()
+
+        # v2.7.3: 恢复检测时重新点亮工作指示灯（pause 已熄，否则灯不会再亮）
+        try:
+            from backend.api.alarm import alarm_router
+            alarm_router.start_idle_light(channel_id=self.channel_id)
+        except Exception as _e:
+            print(f"[Alarm/Source] resume start_idle_light 失败: {_e}")
+
+        # v2.7.5b: 从暂停恢复时同步唤醒扫码器（原代码仅在 start_detection 里调过，导致 resume 漏发 LON）
+        try:
+            from backend.services.scanner import get_scanner_service
+            print(f"[Scanner/Source] resume ch={self.channel_id} → start_scanning")
+            get_scanner_service().start_scanning(channel_id=self.channel_id)
+        except Exception as _e:
+            import traceback as _tb
+            print(f"[Scanner/Source] resume start_scanning 失败: {_e}\n{_tb.format_exc()}")
+
+        print("已恢复：视频流和推理重新启动")
+        return True
+    
+    def standby(self):
+        """Standby: stop inference but keep the video capture thread running."""
+        self.is_detecting = False
+        # v2.7.3: 待机时也熄灭工作指示灯（语义上"不在检测"就不应该亮工作灯）
+        try:
+            from backend.api.alarm import alarm_router
+            alarm_router.stop_idle_light(channel_id=self.channel_id)
+        except Exception as _e:
+            print(f"[Alarm/Source] standby stop_idle_light 失败: {_e}")
+
+        # v2.7.5b: 待机时关闭扫码器 LON
+        try:
+            from backend.services.scanner import get_scanner_service
+            print(f"[Scanner/Source] standby ch={self.channel_id} → stop_scanning")
+            get_scanner_service().stop_scanning(channel_id=self.channel_id)
+        except Exception as _e:
+            print(f"[Scanner/Source] standby stop_scanning 失败: {_e}")
+
+        self._stop_inference_thread()
+        self._stop_recording_thread()
+        self._close_all_writers()
+        with self.detection_lock:
+            self.current_detections = []
+        self._clear_inference_caches()
+        print("已待机：检测停止，画面继续")
+
+    def resume_inference(self):
+        """Resume inference from standby (capture thread already running)."""
+        if not self.is_running:
+            print("[resume_inference] 视频流未运行，无法恢复推理")
+            return False
+        if self.model is None:
+            print("[resume_inference] 模型未加载，无法恢复推理")
+            return False
+        self.is_detecting = True
+        self._start_inference_thread()
+        
+        self._ensure_session_active()
+        
+        if self.recording_enabled:
+            self._start_recording_thread()
+        self.start_session_recording()
+
+        # v2.7.3: 从待机恢复推理时重新点亮工作指示灯
+        try:
+            from backend.api.alarm import alarm_router
+            alarm_router.start_idle_light(channel_id=self.channel_id)
+        except Exception as _e:
+            print(f"[Alarm/Source] resume_inference start_idle_light 失败: {_e}")
+
+        # v2.7.5b: 从待机恢复时同步唤醒扫码器（关键修复——之前走 resume_inference 的路径永远不发 LON）
+        try:
+            from backend.services.scanner import get_scanner_service
+            print(f"[Scanner/Source] resume_inference ch={self.channel_id} → start_scanning")
+            get_scanner_service().start_scanning(channel_id=self.channel_id)
+        except Exception as _e:
+            import traceback as _tb
+            print(f"[Scanner/Source] resume_inference start_scanning 失败: {_e}\n{_tb.format_exc()}")
+
+        print("已从待机恢复推理")
+    
+    def stop(self, release_model: bool = True):
+        """停止当前输入源（完全停止并释放资源）
+        
+        Args:
+            release_model: If False, keep the YOLO model in memory for reuse
+                           after switching input sources.
+        """
+        self.is_running = False
+        self.is_detecting = False
+        
+        # 停止推理线程
+        self._stop_inference_thread()
+        
+        # 关闭推理线程池
+        self._shutdown_inference_executor()
+        
+        # 停止录制线程
+        self._stop_recording_thread()
+        
+        # 等待捕获线程结束（多次尝试）
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+            # 如果线程还在运行，再等待一次
+            if self._thread.is_alive():
+                print("[警告] 捕获线程第一次超时，再次等待...")
+                self._thread.join(timeout=2.0)
+            # 如果还是没有结束，记录警告
+            if self._thread.is_alive():
+                print("[错误] 捕获线程未能结束，可能存在死锁，强制继续")
+        
+        # Release HCNetSDK
+        if self.source_type == 'hcnetsdk':
+            self._release_hcnet_session()
+        
+        # 释放海康相机资源
+        if self.source_type == 'hikvision':
+            self._release_hik_camera()
+        
+        # 释放摄像头/视频资源
+        if self.capture:
+            try:
+                self.capture.release()
+            except Exception as e:
+                print(f"[警告] 释放摄像头时出错: {e}")
+            self.capture = None
+        
+        if release_model:
+            self._release_model()
+        else:
+            self._shutdown_inference_executor()
+            print("[VideoManager] 保留模型，仅停止输入源")
+        
+        # 等待一小段时间确保资源被系统释放
+        time.sleep(0.3)
+        
+        self.source_type = None
+        self.current_frame = None
+        self._thread = None
+        with self.detection_lock:
+            self.current_detections = []
+        
+        # 清理所有内存缓存
+        self._clear_all_caches()
+        
+        print("[VideoManager] 已完全停止并释放资源")
+    
+    def _clear_all_caches(self):
+        """清理所有内存缓存 - 防止内存泄漏"""
+        import gc
+        
+        print("[缓存清理] 开始清理内存缓存...")
+        
+        # 1. 清理卡尔曼滤波器缓存
+        self._kalman_filters.clear()
+        self._detection_missing_frames.clear()
+        self._detection_history.clear()
+        
+        # 2. 清理步骤截图缓存（这个可能很大！）
+        screenshot_count = len(self.step_screenshots)
+        self.step_screenshots.clear()
+        
+        # 3. 限制事件日志大小（保留最近500条）
+        if len(self.events_log) > 500:
+            self.events_log = self.events_log[-500:]
+        
+        # 4. 清理推理相关缓存
+        with self._inference_frame_lock:
+            self._latest_frame_for_inference = None
+            self._latest_frame_original_size = None
+            self._latest_display_small_for_stats = None
+        with self._confirmed_detections_lock:
+            self._confirmed_detections = []
+        
+        # 5. 清理帧计数缓存
+        self.step_consecutive_frames.clear()
+        self.step_frame_confirmed.clear()
+        self._step_gap_count.clear()
+        
+        self.step_static_triggered.clear()
+        
+        # 6. 限制周期时间记录（保留最近50条）
+        if len(self.cycle_times) > 50:
+            self.cycle_times = self.cycle_times[-50:]
+        if len(self.ng_cycle_times) > 50:
+            self.ng_cycle_times = self.ng_cycle_times[-50:]
+        for _lbl in list(self.step_durations_history.keys()):
+            if len(self.step_durations_history[_lbl]) > 100:
+                self.step_durations_history[_lbl] = self.step_durations_history[_lbl][-100:]
+        
+        # 7. 强制垃圾回收
+        gc.collect()
+        
+        # 8. 清理 CUDA 缓存
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                allocated = torch.cuda.memory_allocated() / 1024**2
+                cached = torch.cuda.memory_reserved() / 1024**2
+                print(f"[缓存清理] GPU显存: 已分配={allocated:.1f}MB, 缓存={cached:.1f}MB")
+        except Exception as e:
+            print(f"[缓存清理] 清理 CUDA 缓存时出错: {e}")
+        
+        print(f"[缓存清理] 完成 - 清理了 {screenshot_count} 张截图缓存")
+    
+    def _save_counters_snapshot(self):
+        """定期保存计数器快照到会话（防止闪退丢失数据）"""
+        if not self.current_session_id or not self.counters:
+            return
+        
+        try:
+            db = self._get_db_session()
+            session = db.query(DetectionSession).filter(
+                DetectionSession.id == self.current_session_id
+            ).first()
+            
+            if session:
+                session.counters_snapshot = self.counters.copy()
+                db.commit()
+                print(f"[数据持久化] 计数器已保存: {self.counters}")
+            
+            db.close()
+        except Exception as e:
+            print(f"[数据持久化] 保存计数器失败: {e}")
+    
+    def _gpu_deep_cleanup(self):
+        """GPU 显存深度清理 - 每10分钟执行一次，防止长时间运行显存碎片累积"""
+        import gc
+        try:
+            import torch
+            if torch.cuda.is_available():
+                before_alloc = torch.cuda.memory_allocated() / 1024**2
+                before_cached = torch.cuda.memory_reserved() / 1024**2
+                
+                gc.collect()
+                torch.cuda.empty_cache()
+                
+                after_alloc = torch.cuda.memory_allocated() / 1024**2
+                after_cached = torch.cuda.memory_reserved() / 1024**2
+                freed = before_cached - after_cached
+                
+                if freed > 1:
+                    print(f"[GPU清理] 释放显存: {freed:.1f}MB (分配: {after_alloc:.1f}MB, 缓存: {after_cached:.1f}MB)")
+            else:
+                gc.collect()
+        except Exception as e:
+            print(f"[GPU清理] 清理失败: {e}")
+    
+    def _periodic_cache_cleanup(self):
+        """周期性缓存清理 - 在检测循环中定期调用"""
+        import gc
+        
+        # 1. 限制事件日志大小
+        if len(self.events_log) > 1000:
+            self.events_log = self.events_log[-500:]
+            print("[缓存清理] 事件日志已裁剪至500条")
+        
+        # 2. 限制截图缓存（每个步骤只保留最新截图，这里额外检查总数）
+        if len(self.step_screenshots) > 100:
+            # 保留最后添加的50个
+            keys = list(self.step_screenshots.keys())[-50:]
+            self.step_screenshots = {k: self.step_screenshots[k] for k in keys}
+            print("[缓存清理] 截图缓存已裁剪至50张")
+        
+        # 3. 清理长时间未更新的卡尔曼滤波器
+        current_time = time.time()
+        stale_filters = [k for k, v in self._detection_missing_frames.items() 
+                        if v > self._max_missing_frames * 2]
+        for k in stale_filters:
+            if k in self._kalman_filters:
+                del self._kalman_filters[k]
+            if k in self._detection_missing_frames:
+                del self._detection_missing_frames[k]
+        
+        # 4. 轻量级垃圾回收
+        gc.collect(generation=0)  # 只清理最年轻的一代，速度快
+    
