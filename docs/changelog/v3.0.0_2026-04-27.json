@@ -169,18 +169,62 @@
       "breaking": false
     },
     {
+      "type": "feature",
+      "id": "TOOL-300-001",
+      "title": "新增全量路由烟测与导入检查工具",
+      "symptom": "后端大拆分后需要快速发现路由不可用、mixin 漏 import、硬件类接口误测等问题。",
+      "root_cause": "手工逐个接口和 import 检查成本高，且容易漏掉拆分后的 NameError。",
+      "fix": "新增 smoke_all_routes.py 做 FastAPI 路由烟测，新增 check_imports.py 扫描常见漏导入。",
+      "files": ["tools/smoke_all_routes.py", "tools/check_imports.py"],
+      "keywords": ["smoke test", "route smoke", "import check", "FastAPI", "mixin", "路由烟测", "导入检查"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "TOOL-300-002",
+      "title": "新增 MES / Source 端到端回归测试脚本",
+      "symptom": "全功能 QA 后需要留下可复跑的重点链路验证脚本。",
+      "root_cause": "之前很多验证是一次性脚本或手工流程，复测成本高。",
+      "fix": "新增报警/操作员、MES 工单/扫码绑定/迟到扫码、source 几何和检测管线端到端测试脚本。",
+      "files": ["test_alarm_and_operator.py", "test_mes_e2e.py", "test_mes_late_bind.py", "test_source_geometry.py", "test_source_pipeline_e2e.py"],
+      "keywords": ["MES E2E", "source pipeline", "late bind", "geometry", "regression test", "端到端测试"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "TEST-300-001",
+      "title": "完成全前后端功能 QA 复测",
+      "symptom": "需要确认 v3.0 运行环境统一后，主要页面、按钮、常见搭配和检测流程仍可用。",
+      "root_cause": "运行环境、模拟入口、停止/待机、MES 面板等多个模块本轮都有调整。",
+      "fix": "使用 Playwright 做浏览器自动化，配合 API 直接验证 Monitor、MES、Data、Settings、模拟扫码、模拟外设、检测启动/待机/停止等流程。",
+      "files": ["frontend/src/views/Monitor/index.vue", "frontend/src/views/MES/ScannerPanel.vue", "frontend/src/views/MES/ExternalDevicePanel.vue", "frontend/src/views/Data/index.vue"],
+      "keywords": ["Playwright", "functional QA", "buttons", "Monitor", "MES", "Data", "Settings", "全功能测试"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "TEST-300-002",
+      "title": "验证检测运行环境与发版元数据",
+      "symptom": "需要确认开发机 tianjun-runtime、TensorRT engine 和 v3.0 版本元数据一致。",
+      "root_cause": "旧开发环境与客户/CI 环境不一致导致检测启动失败，版本号也需要和 tag、启动页、changelog 对齐。",
+      "fix": "验证 oppo_sop1 + 指定测试视频可启动检测；校验 JSON changelog 可解析，package 版本、启动页显示和 changelog 版本均为 3.0.0。",
+      "files": ["start_backend.sh", "electron/package.json", "electron/splash.html", "docs/changelog/v3.0.0_2026-04-27.json"],
+      "keywords": ["tianjun-runtime", "TensorRT", "version consistency", "json validation", "oppo_sop1", "版本一致性"],
+      "breaking": false
+    },
+    {
       "type": "skill",
       "id": "SKILL-300-001",
-      "title": "更新 API、MES、前端、打包发版 skill",
-      "symptom": "v3.0 新增的模拟入口、录像异常、环境对齐规则需要后续 AI 能检索。",
-      "root_cause": "旧 skill 不包含本轮 QA 和发版经验。",
-      "fix": "更新 api-sync、debug-mes、debug-frontend、build-release。",
-      "files": [".claude/skills/api-sync/SKILL.md", ".claude/skills/debug-mes/SKILL.md", ".claude/skills/debug-frontend/SKILL.md", ".claude/skills/build-release/SKILL.md"],
-      "keywords": ["skills", "api-sync", "debug-mes", "debug-frontend", "build-release", "v3.0"],
+      "title": "更新 v3.0 相关 skill 记忆",
+      "symptom": "v3.0 新增的模拟入口、录像异常、source 拆分、运行环境统一和 QA 结论需要后续 AI 能检索。",
+      "root_cause": "旧 skill 不包含本轮发版和全功能 QA 经验。",
+      "fix": "更新 add-api-endpoint、api-sync、build-release、debug-detection、debug-frontend、debug-mes、debug-session、debug-source、modify-api、modify-source。",
+      "files": [".claude/skills/add-api-endpoint/SKILL.md", ".claude/skills/api-sync/SKILL.md", ".claude/skills/build-release/SKILL.md", ".claude/skills/debug-detection/SKILL.md", ".claude/skills/debug-frontend/SKILL.md", ".claude/skills/debug-mes/SKILL.md", ".claude/skills/debug-session/SKILL.md", ".claude/skills/debug-source/SKILL.md", ".claude/skills/modify-api/SKILL.md", ".claude/skills/modify-source/SKILL.md"],
+      "keywords": ["skills", "api-sync", "debug-mes", "debug-frontend", "build-release", "debug-detection", "debug-source", "modify-source", "v3.0"],
       "breaking": false
     }
   ],
-  "skills_updated": ["api-sync", "debug-mes", "debug-frontend", "build-release"],
+  "skills_updated": ["add-api-endpoint", "api-sync", "build-release", "debug-detection", "debug-frontend", "debug-mes", "debug-session", "debug-source", "modify-api", "modify-source"],
   "files_changed": [
     "start_backend.sh",
     "electron/package.json",
@@ -206,9 +250,22 @@
     "frontend/src/views/Monitor/index.vue",
     "frontend/src/views/Report/index.vue",
     "electron/main.js",
+    "tools/smoke_all_routes.py",
+    "tools/check_imports.py",
+    "test_alarm_and_operator.py",
+    "test_mes_e2e.py",
+    "test_mes_late_bind.py",
+    "test_source_geometry.py",
+    "test_source_pipeline_e2e.py",
+    ".claude/skills/add-api-endpoint/SKILL.md",
     ".claude/skills/api-sync/SKILL.md",
-    ".claude/skills/debug-mes/SKILL.md",
+    ".claude/skills/build-release/SKILL.md",
+    ".claude/skills/debug-detection/SKILL.md",
     ".claude/skills/debug-frontend/SKILL.md",
-    ".claude/skills/build-release/SKILL.md"
+    ".claude/skills/debug-mes/SKILL.md",
+    ".claude/skills/debug-session/SKILL.md",
+    ".claude/skills/debug-source/SKILL.md",
+    ".claude/skills/modify-api/SKILL.md",
+    ".claude/skills/modify-source/SKILL.md"
   ]
 }

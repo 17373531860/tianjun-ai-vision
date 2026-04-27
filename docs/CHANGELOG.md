@@ -16,7 +16,11 @@
 - [FEAT-300-003] 新增: MES 刷新/测试按钮 loading 与可见反馈
 - [CONFIG-300-001] 配置: 开发机后端启动环境切换为 `tianjun-runtime`
 - [CONFIG-300-002] 配置: 版本号升级到 3.0.0
-- [SKILL-300-001] 更新: API、MES、前端、打包发版 skill
+- [TOOL-300-001] 新增: 全量路由烟测与导入检查工具
+- [TOOL-300-002] 新增: MES / Source 端到端回归测试脚本
+- [TEST-300-001] 验证: 全前后端功能 QA 复测
+- [TEST-300-002] 验证: 检测运行环境与发版元数据一致性
+- [SKILL-300-001] 更新: 10 个 v3.0 相关 skill（API、source、检测、MES、前端、Session、打包发版）
 
 ## v2.7.15 (2026-04-25)
 - [BUG-015-001] 修复: 工单管理表头修改了模板没生效, 一直是硬编码中文 (改成 v-for 渲染 visibleColOrder + colLabel 动态解析)
