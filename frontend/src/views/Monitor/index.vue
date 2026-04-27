@@ -109,6 +109,60 @@
           </transition-group>
         </div>
       </template>
+
+      <button
+        v-if="totalRecordingFailureCount > 0"
+        class="absolute right-2 bottom-2 z-40 bg-amber-600/90 hover:bg-amber-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1"
+        @click="showRecordingFailurePanel = true"
+      >
+        <el-icon><Warning /></el-icon>
+        录像异常 {{ totalRecordingFailureCount }}
+      </button>
+
+      <div v-if="showRecordingFailurePanel" class="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+        <div class="w-full max-w-5xl max-h-[85vh] bg-slate-900 border border-slate-700 rounded-lg flex flex-col">
+          <div class="px-4 py-3 border-b border-slate-700 flex items-center">
+            <span class="text-amber-300 font-bold">录像异常详情</span>
+            <span class="text-xs text-gray-400 ml-3">仅记录最近异常，用于排查</span>
+            <div class="ml-auto flex gap-2">
+              <el-button size="small" type="warning" plain :loading="recordingFailureLoading" @click="clearRecordingFailures">
+                清空列表
+              </el-button>
+              <el-button size="small" @click="showRecordingFailurePanel = false">关闭</el-button>
+            </div>
+          </div>
+          <div class="p-3 overflow-auto">
+            <table class="w-full text-xs text-left">
+              <thead class="text-gray-400 border-b border-slate-700">
+                <tr>
+                  <th class="py-1 pr-2">时间</th>
+                  <th class="py-1 pr-2">工位</th>
+                  <th class="py-1 pr-2">类型</th>
+                  <th class="py-1 pr-2">原因</th>
+                  <th class="py-1 pr-2">文件</th>
+                  <th class="py-1 pr-2">已写帧</th>
+                </tr>
+              </thead>
+              <tbody class="text-gray-200">
+                <tr v-for="(item, idx) in recordingFailureRows" :key="idx" class="border-b border-slate-800">
+                  <td class="py-1 pr-2 whitespace-nowrap">{{ formatRecordingFailureTime(item.timestamp) }}</td>
+                  <td class="py-1 pr-2">工位{{ item.channel_id + 1 }}</td>
+                  <td class="py-1 pr-2">{{ item.recorder_type }}</td>
+                  <td class="py-1 pr-2">
+                    <div>{{ getRecordingFailureReasonText(item.reason) }}</div>
+                    <div v-if="item.error" class="text-gray-400 break-all">{{ item.error }}</div>
+                  </td>
+                  <td class="py-1 pr-2 break-all text-gray-300">{{ item.file_path || '-' }}</td>
+                  <td class="py-1 pr-2">{{ item.frame_count ?? '-' }}</td>
+                </tr>
+                <tr v-if="recordingFailureRows.length === 0">
+                  <td colspan="6" class="py-4 text-center text-gray-500">暂无录像异常</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -228,6 +282,60 @@
               <span class="text-sm font-bold text-white">{{ systemStore.display.monitor.ngTopDisplayMode === 'count' ? item.count : item.rate.toFixed(0) + '%' }}</span>
             </div>
             <div v-if="!multiChannelData[selectedChannel]?.ngStepRanking?.length" class="flex items-center justify-center h-full text-gray-600 text-xs">暂无数据</div>
+          </div>
+        </div>
+      </div>
+
+      <button
+        v-if="totalRecordingFailureCount > 0"
+        class="absolute right-2 bottom-2 z-40 bg-amber-600/90 hover:bg-amber-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1"
+        @click="showRecordingFailurePanel = true"
+      >
+        <el-icon><Warning /></el-icon>
+        录像异常 {{ totalRecordingFailureCount }}
+      </button>
+
+      <div v-if="showRecordingFailurePanel" class="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+        <div class="w-full max-w-5xl max-h-[85vh] bg-slate-900 border border-slate-700 rounded-lg flex flex-col">
+          <div class="px-4 py-3 border-b border-slate-700 flex items-center">
+            <span class="text-amber-300 font-bold">录像异常详情</span>
+            <span class="text-xs text-gray-400 ml-3">仅记录最近异常，用于排查</span>
+            <div class="ml-auto flex gap-2">
+              <el-button size="small" type="warning" plain :loading="recordingFailureLoading" @click="clearRecordingFailures">
+                清空列表
+              </el-button>
+              <el-button size="small" @click="showRecordingFailurePanel = false">关闭</el-button>
+            </div>
+          </div>
+          <div class="p-3 overflow-auto">
+            <table class="w-full text-xs text-left">
+              <thead class="text-gray-400 border-b border-slate-700">
+                <tr>
+                  <th class="py-1 pr-2">时间</th>
+                  <th class="py-1 pr-2">工位</th>
+                  <th class="py-1 pr-2">类型</th>
+                  <th class="py-1 pr-2">原因</th>
+                  <th class="py-1 pr-2">文件</th>
+                  <th class="py-1 pr-2">已写帧</th>
+                </tr>
+              </thead>
+              <tbody class="text-gray-200">
+                <tr v-for="(item, idx) in recordingFailureRows" :key="idx" class="border-b border-slate-800">
+                  <td class="py-1 pr-2 whitespace-nowrap">{{ formatRecordingFailureTime(item.timestamp) }}</td>
+                  <td class="py-1 pr-2">工位{{ item.channel_id + 1 }}</td>
+                  <td class="py-1 pr-2">{{ item.recorder_type }}</td>
+                  <td class="py-1 pr-2">
+                    <div>{{ getRecordingFailureReasonText(item.reason) }}</div>
+                    <div v-if="item.error" class="text-gray-400 break-all">{{ item.error }}</div>
+                  </td>
+                  <td class="py-1 pr-2 break-all text-gray-300">{{ item.file_path || '-' }}</td>
+                  <td class="py-1 pr-2">{{ item.frame_count ?? '-' }}</td>
+                </tr>
+                <tr v-if="recordingFailureRows.length === 0">
+                  <td colspan="6" class="py-4 text-center text-gray-500">暂无录像异常</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -543,8 +651,26 @@
           <span class="text-yellow-200 text-sm">请扫描工件条码</span>
         </div>
         <div v-else-if="!displayWorkpiece && !mesData?.order" class="text-gray-500 text-xs">等待扫码...</div>
+        <!-- 清除本次扫码（重扫用） -->
+        <div class="ml-auto flex items-center gap-2">
+          <el-tooltip
+            :content="displayWorkpiece && displayWorkpiece.status === 'inspecting'
+              ? '本次工件已开始检测，点击可作废本次检测、回到等待扫码状态'
+              : '清除待检/扫码状态，让操作员重扫一次条码'"
+            placement="top"
+          >
+            <el-button
+              size="small"
+              type="warning"
+              plain
+              @click="clearPendingScan(selectedChannel)"
+            >
+              清除本次扫码
+            </el-button>
+          </el-tooltip>
+        </div>
         <!-- 额外字段输入 (外部 MES 动态字段) -->
-        <div v-if="extraFieldsSchema.length" class="flex items-center gap-2 ml-auto border-l border-cyan-800/50 pl-4">
+        <div v-if="extraFieldsSchema.length" class="flex items-center gap-2 border-l border-cyan-800/50 pl-4">
           <div v-for="f in extraFieldsSchema" :key="f.key" class="flex items-center gap-1">
             <span class="text-gray-400 text-xs">{{ f.label || f.key }}:</span>
             <el-input
@@ -698,6 +824,60 @@
         </transition-group>
       </div>
     </template>
+
+    <button
+      v-if="totalRecordingFailureCount > 0"
+      class="absolute right-2 bottom-2 z-40 bg-amber-600/90 hover:bg-amber-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1"
+      @click="showRecordingFailurePanel = true"
+    >
+      <el-icon><Warning /></el-icon>
+      录像异常 {{ totalRecordingFailureCount }}
+    </button>
+
+    <div v-if="showRecordingFailurePanel" class="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+      <div class="w-full max-w-5xl max-h-[85vh] bg-slate-900 border border-slate-700 rounded-lg flex flex-col">
+        <div class="px-4 py-3 border-b border-slate-700 flex items-center">
+          <span class="text-amber-300 font-bold">录像异常详情</span>
+          <span class="text-xs text-gray-400 ml-3">仅记录最近异常，用于排查</span>
+          <div class="ml-auto flex gap-2">
+            <el-button size="small" type="warning" plain :loading="recordingFailureLoading" @click="clearRecordingFailures">
+              清空列表
+            </el-button>
+            <el-button size="small" @click="showRecordingFailurePanel = false">关闭</el-button>
+          </div>
+        </div>
+        <div class="p-3 overflow-auto">
+          <table class="w-full text-xs text-left">
+            <thead class="text-gray-400 border-b border-slate-700">
+              <tr>
+                <th class="py-1 pr-2">时间</th>
+                <th class="py-1 pr-2">工位</th>
+                <th class="py-1 pr-2">类型</th>
+                <th class="py-1 pr-2">原因</th>
+                <th class="py-1 pr-2">文件</th>
+                <th class="py-1 pr-2">已写帧</th>
+              </tr>
+            </thead>
+            <tbody class="text-gray-200">
+              <tr v-for="(item, idx) in recordingFailureRows" :key="idx" class="border-b border-slate-800">
+                <td class="py-1 pr-2 whitespace-nowrap">{{ formatRecordingFailureTime(item.timestamp) }}</td>
+                <td class="py-1 pr-2">工位{{ item.channel_id + 1 }}</td>
+                <td class="py-1 pr-2">{{ item.recorder_type }}</td>
+                <td class="py-1 pr-2">
+                  <div>{{ getRecordingFailureReasonText(item.reason) }}</div>
+                  <div v-if="item.error" class="text-gray-400 break-all">{{ item.error }}</div>
+                </td>
+                <td class="py-1 pr-2 break-all text-gray-300">{{ item.file_path || '-' }}</td>
+                <td class="py-1 pr-2">{{ item.frame_count ?? '-' }}</td>
+              </tr>
+              <tr v-if="recordingFailureRows.length === 0">
+                <td colspan="6" class="py-4 text-center text-gray-500">暂无录像异常</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -782,6 +962,18 @@ const activeStream = ref(0);           // which img is currently visible (0 or 1
 const streamSrc0 = ref('');
 const streamSrc1 = ref('');
 let streamErrorCount = 0;
+let monitorMounted = false;
+let streamReconnectTimer = null;
+let cycleResetTimer = null;
+let progressReconnectTimer = null;
+let speedGuardTimer = null;
+
+const clearMonitorPendingTimers = () => {
+  if (streamReconnectTimer) { clearTimeout(streamReconnectTimer); streamReconnectTimer = null; }
+  if (cycleResetTimer) { clearTimeout(cycleResetTimer); cycleResetTimer = null; }
+  if (progressReconnectTimer) { clearTimeout(progressReconnectTimer); progressReconnectTimer = null; }
+  if (speedGuardTimer) { clearTimeout(speedGuardTimer); speedGuardTimer = null; }
+};
 
 const videoElement = computed(() => activeStream.value === 0 ? streamImg0.value : streamImg1.value);
 
@@ -795,12 +987,90 @@ let multiPollingInProgress = false;
 const multiActiveToasts = ref({});
 const multiLastSeenSeq = {};
 const multiFrameNaturalSize = {};
+const showRecordingFailurePanel = ref(false);
+const recordingFailureLoading = ref(false);
+
+const resetMultiRuntimeState = (clearChannelData = false) => {
+  multiPollingInProgress = false;
+  selectedChannel.value = 0;
+  showRecordingFailurePanel.value = false;
+  multiActiveToasts.value = {};
+  Object.keys(multiLastSeenSeq).forEach((k) => delete multiLastSeenSeq[k]);
+  Object.keys(multiFrameNaturalSize).forEach((k) => delete multiFrameNaturalSize[k]);
+  if (clearChannelData) {
+    multiChannelData.value = {};
+  }
+};
+
+const recordingFailureRows = computed(() => {
+  const rows = [];
+  const maxChannel = Math.max(channelCount.value || 1, 1);
+  for (let ch = 0; ch < maxChannel; ch++) {
+    const failures = multiChannelData.value[ch]?.mes?.recording_failures || [];
+    failures.forEach(item => {
+      rows.push({
+        ...item,
+        channel_id: Number.isInteger(item?.channel_id) ? item.channel_id : ch,
+      });
+    });
+  }
+  return rows
+    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+    .slice(0, 120);
+});
+
+const totalRecordingFailureCount = computed(() => recordingFailureRows.value.length);
+
+const formatRecordingFailureTime = (ts) => {
+  if (!ts) return '-';
+  const d = new Date(ts * 1000);
+  if (Number.isNaN(d.getTime())) return '-';
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
+};
+
+const getRecordingFailureReasonText = (reason) => {
+  const map = {
+    open_failed: '录制器启动失败',
+    open_exception: '录制器启动异常',
+    write_failed: '写入失败/通道失效',
+    write_exception: '写入异常',
+  };
+  return map[reason] || reason || '未知异常';
+};
+
+const clearRecordingFailures = async () => {
+  recordingFailureLoading.value = true;
+  try {
+    const requests = [];
+    for (let ch = 0; ch < Math.max(channelCount.value || 1, 1); ch++) {
+      requests.push(
+        api.post('/source/detection/recording-failures/clear', null, {
+          params: { channel: ch },
+        }).catch(() => null)
+      );
+    }
+    await Promise.all(requests);
+    Object.keys(multiChannelData.value).forEach((k) => {
+      const idx = Number(k);
+      const mes = multiChannelData.value[idx]?.mes;
+      if (mes) {
+        mes.recording_failures = [];
+      }
+    });
+    ElMessage.success('录像异常列表已清空');
+  } finally {
+    recordingFailureLoading.value = false;
+  }
+};
 
 const initMultiChannelData = (count) => {
   // v2.7.2: 每次初始化都强制重置所有状态，避免切换工位时残留旧数据
   // 1) 清理超出新 count 的通道条目（降工位场景）
   Object.keys(multiChannelData.value).forEach(k => {
     if (parseInt(k) >= count) delete multiChannelData.value[k];
+  });
+  Object.keys(multiActiveToasts.value).forEach(k => {
+    if (parseInt(k) >= count) delete multiActiveToasts.value[k];
   });
   Object.keys(multiLastSeenSeq).forEach(k => {
     if (parseInt(k) >= count) delete multiLastSeenSeq[k];
@@ -822,6 +1092,7 @@ const initMultiChannelData = (count) => {
       _ngStepCountMap: {},
       _processedEventIds: new Set(),
     };
+    multiActiveToasts.value[i] = [];
     multiLastSeenSeq[i] = 0;
     multiFrameNaturalSize[i] = null;
   }
@@ -974,8 +1245,8 @@ const processChannelResult = (ch, d) => {
   if (d.tracking) chData.tracking = d.tracking;
 
   // MES 实时数据 — 每个工位各自显示，不限 selectedChannel
+  chData.mes = d.mes || null;
   if (d.mes) {
-    chData.mes = d.mes;
     if (d.mes.scan_event) {
       handleScanToast(d.mes.scan_event, ch);
     }
@@ -1223,14 +1494,24 @@ const fetchChannelCount = async () => {
     const res = await getWorkstations();
     const count = res.data.channel_count || 1;
     channelCount.value = count;
+    if (selectedChannel.value >= count) {
+      selectedChannel.value = 0;
+    }
     if (count > 1) {
       initMultiChannelData(count);
       startMultiStreams(count);
       startMultiPolling();
       loadPerChannelDetectionSettings(res.data.source_configs || {});
+    } else {
+      stopMultiPolling();
+      stopMultiStreams();
+      resetMultiRuntimeState(true);
     }
   } catch (e) {
     channelCount.value = 1;
+    stopMultiPolling();
+    stopMultiStreams();
+    resetMultiRuntimeState(true);
   }
 };
 
@@ -1296,11 +1577,20 @@ const onStreamReady = (idx) => {
 };
 
 const onStreamError = (idx) => {
+  if (!monitorMounted) return;
   if (idx !== activeStream.value) return;
   streamErrorCount++;
   if (streamErrorCount > 50) return;
   const delay = Math.min(streamErrorCount * 300, 3000);
-  setTimeout(() => connectStream(), delay);
+  if (streamReconnectTimer) {
+    clearTimeout(streamReconnectTimer);
+    streamReconnectTimer = null;
+  }
+  streamReconnectTimer = setTimeout(() => {
+    streamReconnectTimer = null;
+    if (!monitorMounted) return;
+    connectStream();
+  }, delay);
 };
 
 // 当前项目
@@ -1800,7 +2090,13 @@ const handleProgressChange = async () => {
     }
     
     // 强制重连视频流
-    setTimeout(() => {
+    if (progressReconnectTimer) {
+      clearTimeout(progressReconnectTimer);
+      progressReconnectTimer = null;
+    }
+    progressReconnectTimer = setTimeout(() => {
+      progressReconnectTimer = null;
+      if (!monitorMounted) return;
       forceReconnectStream();
       sourceStore.setSourceType('video');
     }, 100);
@@ -1820,7 +2116,13 @@ const handleSpeedChange = async (speed) => {
     await api.post('/source/video/speed', { speed });
     ElMessage.success(`播放倍速已设为 ${speed}x`);
     // 延迟解除保护，确保后端已更新
-    setTimeout(() => {
+    if (speedGuardTimer) {
+      clearTimeout(speedGuardTimer);
+      speedGuardTimer = null;
+    }
+    speedGuardTimer = setTimeout(() => {
+      speedGuardTimer = null;
+      if (!monitorMounted) return;
       isChangingSpeed.value = false;
     }, 500);
   } catch (err) {
@@ -2512,6 +2814,72 @@ const handleRebindPrompt = async (rebindData, ch = 0) => {
   }
 };
 
+// v2.7.16 清除本次扫码状态（让操作员重扫一次条码）
+// - 未绑入 cycle 时直接清 _pending/_queue/_last_scan/_rebind 4 个 dict
+// - 已绑入 cycle (status='inspecting') 时弹确认框，确认后 force=true 作废本次检测：
+//   * 工件 status 回退到 queued（可被重扫）
+//   * 删该 (workpiece, cycle) 的 WorkpieceInspection 记录
+//   * cycle 仍会自然走完，cycle_end 时报"未绑码"，不计入 MES/工单/集群
+const clearPendingScan = async (ch) => {
+  const wp = displayWorkpiece.value;
+  let force = false;
+
+  if (wp && wp.status === 'inspecting') {
+    try {
+      await ElMessageBox.confirm(
+        `本次工件 ${wp.serial_no} 已经在检测中（第 ${wp.inspection_count} 次）。\n` +
+        `确认作废吗？作废后本次 cycle 不会计入 MES 和工单完成数，工件可重新扫码再次检测。`,
+        '作废本次检测',
+        {
+          confirmButtonText: '确认作废',
+          cancelButtonText: '取消',
+          type: 'warning',
+          dangerouslyUseHTMLString: false,
+        }
+      );
+      force = true;
+    } catch {
+      return;
+    }
+  }
+
+  try {
+    const res = await api.post(
+      '/source/detection/clear_pending_scan', null,
+      { params: { channel: ch, force } }
+    );
+    const status = res.data?.status;
+    const msg = res.data?.message;
+    const cleared = res.data?.cleared || {};
+
+    if (cleared.force_race_lost) {
+      // 后端原子 pop 拿到 None：worker 在我们之前已经把工件 pop 走结算了。
+      // 不能清前端工件显示，下一轮 polling 会自然把 status 刷新成 ok/ng。
+      ElMessage.warning(msg || '操作来不及：本次工件已经结算完成');
+      return;
+    }
+    if (status === 'warn') {
+      ElMessage.warning(msg || '本次工件已开始检测，待结算后会自动归零');
+    } else if (cleared.force_canceled_inspecting) {
+      ElMessage.success(msg || '已作废本次工件检测，可重新扫码');
+    } else {
+      const pwp = cleared.pending_workpiece_id;
+      ElMessage.success(pwp ? `已清除待检工件 #${pwp}，可重新扫码` : '已清除扫码状态，可重新扫码');
+    }
+
+    const idx = (channelCount.value > 1) ? ch : 0;
+    if (multiChannelData.value[idx]?.mes) {
+      multiChannelData.value[idx].mes.workpiece = null;
+      multiChannelData.value[idx].mes.scan_event = null;
+    }
+    workpieceOverride.value = null;
+    if (workpieceOverrideTimer) { clearTimeout(workpieceOverrideTimer); workpieceOverrideTimer = null; }
+    if (workpieceHideTimer) { clearTimeout(workpieceHideTimer); workpieceHideTimer = null; }
+  } catch (e) {
+    ElMessage.error('清除失败: ' + (e.response?.data?.detail || e.message || '未知错误'));
+  }
+};
+
 // 缓存上一次截图 base64，避免重复创建 data URL
 const cachedScreenshotUrls = {};
 
@@ -2551,7 +2919,13 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
   const currentNg = backendCounters?.['不良总数'] ?? 0;
   if (lastTotalCount >= 0 && currentTotal > lastTotalCount) {
     // 新周期产生，延迟后重置视觉状态，让用户看到上一轮的颜色反馈
-    setTimeout(() => {
+    if (cycleResetTimer) {
+      clearTimeout(cycleResetTimer);
+      cycleResetTimer = null;
+    }
+    cycleResetTimer = setTimeout(() => {
+      cycleResetTimer = null;
+      if (!monitorMounted) return;
       steps.value.forEach(s => {
         s.status = 'pending';
         s.cycleResult = null;
@@ -2839,17 +3213,17 @@ const resetCountersForChannel = async (ch) => {
   } catch (e) {
     console.error(`Ch${ch} 重置后端统计失败:`, e);
   }
-  if (multiChannelData[ch]) {
-    multiChannelData[ch].total = 0;
-    multiChannelData[ch].ok = 0;
-    multiChannelData[ch].ng = 0;
-    multiChannelData[ch].yieldRate = 0;
-    if (multiChannelData[ch].steps) {
-      multiChannelData[ch].steps.forEach(s => { s.status = 'pending'; s.screenshot = null; });
-    }
-    if (multiChannelData[ch].tableData) {
-      multiChannelData[ch].tableData.forEach(t => { t.count = 0; t.status = 'pending'; });
-    }
+  const chData = multiChannelData.value[ch];
+  if (chData) {
+    multiChannelData.value[ch] = {
+      ...chData,
+      total: 0,
+      ok: 0,
+      ng: 0,
+      yieldRate: 0,
+      steps: (chData.steps || []).map(s => ({ ...s, status: 'pending', screenshot: null })),
+      tableData: (chData.tableData || []).map(t => ({ ...t, count: 0, status: 'pending' })),
+    };
   }
   ElMessage.success(`工位 ${ch + 1} 计数器已清零`);
 };
@@ -2974,6 +3348,7 @@ const autoRestoreSource = async () => {
 };
 
 onMounted(() => {
+  monitorMounted = true;
   systemStore.loadSettings();
   fetchChannelCount();
   loadExtraFieldsSchema();
@@ -2990,6 +3365,7 @@ onMounted(() => {
   window.addEventListener('resize', handleResize);
   
   getSourceStatus().then(async res => {
+    if (!monitorMounted) return;
     if (res.data.source_type) {
       sourceStore.setSourceType(res.data.source_type);
     }
@@ -3016,6 +3392,7 @@ onMounted(() => {
     
     if (!res.data.source_type) {
       await autoRestoreSource();
+      if (!monitorMounted) return;
     } else if (res.data.source_type && !res.data.is_running) {
       forceReconnectStream();
     }
@@ -3034,10 +3411,16 @@ const handleResize = () => {
 };
 
 onUnmounted(() => {
+  monitorMounted = false;
   window.removeEventListener('resize', handleResize);
   stopPolling();
   stopMultiPolling();
   stopMultiStreams();
+  resetMultiRuntimeState(true);
+  clearMonitorPendingTimers();
+  if (workpieceOverrideTimer) { clearTimeout(workpieceOverrideTimer); workpieceOverrideTimer = null; }
+  if (workpieceHideTimer) { clearTimeout(workpieceHideTimer); workpieceHideTimer = null; }
+  workpieceOverride.value = undefined;
   
   disconnectStream();
   

@@ -50,6 +50,7 @@ class FFmpegRecorder:
         self._lock = threading.Lock()
         self._is_open = False
         self._frame_count = 0
+        self.last_error = ""
 
     def open(self) -> bool:
         """启动 FFmpeg 进程"""
@@ -84,10 +85,12 @@ class FFmpegRecorder:
             )
             self._is_open = True
             self._frame_count = 0
+            self.last_error = ""
             print(f"[FFmpeg录制] 已启动: {os.path.basename(self.filepath)}")
             return True
         except Exception as e:
             print(f"[FFmpeg录制] 启动失败: {e}")
+            self.last_error = f"open_failed: {e}"
             self._is_open = False
             return False
 
@@ -99,6 +102,7 @@ class FFmpegRecorder:
         try:
             with self._lock:
                 if self.process.poll() is not None:
+                    self.last_error = f"ffmpeg_exited: code={self.process.returncode}"
                     self._is_open = False
                     return False
 
@@ -109,9 +113,11 @@ class FFmpegRecorder:
                 self._frame_count += 1
                 return True
         except (BrokenPipeError, OSError):
+            self.last_error = "pipe_broken_or_os_error"
             self._is_open = False
             return False
-        except Exception:
+        except Exception as e:
+            self.last_error = f"write_exception: {e}"
             return False
 
     def release(self):

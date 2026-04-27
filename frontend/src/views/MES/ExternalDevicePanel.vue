@@ -15,6 +15,9 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+          <el-button v-if="systemStore.developerMode" size="small" type="warning" plain @click="showSimulate = true">
+            模拟数据
+          </el-button>
           <el-button size="small" type="success" @click="openAdd">添加设备</el-button>
         </div>
       </div>
@@ -48,7 +51,7 @@
             </div>
           </div>
           <div class="flex gap-1 mt-3">
-            <el-button size="small" @click="testDev(dev)">测试</el-button>
+            <el-button size="small" @click="testDev(dev)" :loading="testingDeviceId === dev.id">测试</el-button>
             <el-button size="small" type="primary" @click="editDev(dev)">编辑</el-button>
             <el-button size="small" type="danger" @click="handleDelete(dev)">删除</el-button>
           </div>
@@ -61,7 +64,7 @@
       <div class="flex items-center justify-between mb-3">
         <h3 class="text-cyan-300 font-semibold">数据日志</h3>
         <div class="flex gap-1">
-          <el-button size="small" @click="loadLogs">刷新</el-button>
+          <el-button size="small" @click="loadLogs(true)" :loading="logsLoading">刷新</el-button>
           <el-button size="small" type="danger" @click="handleClearLogs">清空</el-button>
         </div>
       </div>
@@ -356,6 +359,35 @@
         <el-button size="small" type="primary" @click="handleSave" :loading="saving">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showSimulate" title="模拟外部设备数据（调试）" width="460px" class="mes-dialog" destroy-on-close>
+      <el-form label-width="100px" size="small">
+        <el-form-item label="设备">
+          <el-select v-model="simulateForm.device_id" class="w-full" clearable placeholder="可不选，使用虚拟称重器">
+            <el-option v-for="dev in devices" :key="dev.id" :label="dev.name" :value="dev.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="原始数据" required>
+          <el-input v-model="simulateForm.raw_data" placeholder="12.34kg" />
+        </el-form-item>
+        <el-form-item label="条码">
+          <el-input v-model="simulateForm.barcode" placeholder="AUTO_QA_BOX_001，可留空" clearable />
+        </el-form-item>
+        <el-form-item label="工位">
+          <el-select v-model="simulateForm.channel_id" class="w-full">
+            <el-option v-for="opt in channelOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="真实链路">
+          <el-switch v-model="simulateForm.full_chain" />
+          <div class="text-xs text-gray-500 mt-1">关闭时只写日志；开启时会按设备配置进入 extra fields / 集群链路。</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="showSimulate = false">取消</el-button>
+        <el-button size="small" type="primary" @click="submitSimulateData" :loading="simulating">注入数据</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -366,16 +398,22 @@ import { QuestionFilled } from '@element-plus/icons-vue'
 import {
   getExternalDevices, createExternalDevice, updateExternalDevice,
   deleteExternalDevice, getExternalDeviceStatus, testExternalDevice,
-  getExternalDeviceLogs, clearExternalDeviceLogs
+  getExternalDeviceLogs, clearExternalDeviceLogs, simulateExternalDeviceData
 } from '@/api/external_device'
 import { getWorkstations } from '@/api/detection'
+import { useSystemStore } from '@/store/useSystemStore'
 
+const systemStore = useSystemStore()
 const devices = ref([])
 const statusMap = ref({})
 const logs = ref([])
 const showDialog = ref(false)
 const editingId = ref(null)
 const saving = ref(false)
+const logsLoading = ref(false)
+const testingDeviceId = ref(null)
+const showSimulate = ref(false)
+const simulating = ref(false)
 const channelCount = ref(1)
 const channelOptions = computed(() =>
   Array.from({ length: channelCount.value }, (_, i) => ({
@@ -399,6 +437,13 @@ const defaultForm = () => ({
   weight_no_barcode_alarm_delay_sec: 10,
 })
 const form = ref(defaultForm())
+const simulateForm = ref({
+  device_id: null,
+  raw_data: '12.34kg',
+  barcode: 'AUTO_QA_BOX_001',
+  channel_id: 0,
+  full_chain: false,
+})
 
 const splitDelimiter = ref(',')
 const splitBarcodeIdx = ref(0)
@@ -644,6 +689,7 @@ const handleDelete = async (dev) => {
 }
 
 const testDev = async (dev) => {
+  testingDeviceId.value = dev.id
   try {
     const res = await testExternalDevice({
       protocol: dev.protocol, ip: dev.ip, port: dev.port,
@@ -652,7 +698,37 @@ const testDev = async (dev) => {
     })
     if (res.data.success) ElMessage.success(res.data.message)
     else ElMessage.error(res.data.message)
-  } catch (e) { ElMessage.error('测试失败') }
+  } catch (e) {
+    ElMessage.error('测试失败: ' + (e.response?.data?.detail || e.message || '网络错误'))
+  } finally {
+    testingDeviceId.value = null
+  }
+}
+
+const submitSimulateData = async () => {
+  const raw = (simulateForm.value.raw_data || '').trim()
+  if (!raw) {
+    ElMessage.warning('请填写模拟原始数据')
+    return
+  }
+  simulating.value = true
+  try {
+    const { data } = await simulateExternalDeviceData({
+      device_id: simulateForm.value.device_id || null,
+      raw_data: raw,
+      barcode: (simulateForm.value.barcode || '').trim() || null,
+      channel_id: simulateForm.value.channel_id,
+      full_chain: simulateForm.value.full_chain,
+      repeat_count: simulateForm.value.full_chain ? 5 : 1,
+    })
+    ElMessage.success(data.message || '模拟数据已注入')
+    showSimulate.value = false
+    await Promise.all([refreshStatus(), loadLogs()])
+  } catch (e) {
+    ElMessage.error('模拟数据失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
+  } finally {
+    simulating.value = false
+  }
 }
 
 const loadDevices = async () => {
@@ -667,9 +743,18 @@ const refreshStatus = async () => {
     statusMap.value = map
   } catch (e) { console.warn('[ExtDev] 刷新状态失败:', e.message) }
 }
-const loadLogs = async () => {
-  try { logs.value = (await getExternalDeviceLogs({ limit: 30 })).data.items || [] }
-  catch (e) { console.warn('[ExtDev] 加载日志失败:', e.message) }
+const loadLogs = async (showFeedback = false) => {
+  if (showFeedback) logsLoading.value = true
+  try {
+    logs.value = (await getExternalDeviceLogs({ limit: 30 })).data.items || []
+    if (showFeedback) ElMessage.success('外部设备日志已刷新')
+  } catch (e) {
+    const msg = e.response?.data?.detail || e.message || '网络错误'
+    if (showFeedback) ElMessage.error('刷新外部设备日志失败: ' + msg)
+    else console.warn('[ExtDev] 加载日志失败:', msg)
+  } finally {
+    if (showFeedback) logsLoading.value = false
+  }
 }
 const handleClearLogs = async () => {
   try {

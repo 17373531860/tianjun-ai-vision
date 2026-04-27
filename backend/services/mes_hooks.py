@@ -17,9 +17,12 @@ import threading
 import queue
 import time
 import traceback
+import json
+import os
 from datetime import datetime
 from typing import Optional
 
+from backend.core.config import DATA_DIR
 from backend.db.database import SessionLocal
 from backend.services.work_order import WorkOrderService
 from backend.services.workpiece import WorkpieceService
@@ -50,6 +53,12 @@ class MESHookManager:
         self._task_queue: queue.Queue = queue.Queue(maxsize=500)
         self._worker_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._queue_drop_count = 0
+        self._queue_block_count = 0
+        self._spill_file = os.path.join(DATA_DIR, "mes_hook_spool.jsonl")
+        self._spill_lock = threading.Lock()
+        self._spill_write_count = 0
+        self._spill_replay_count = 0
 
     def start(self):
         """启动后台工作线程"""
@@ -72,6 +81,8 @@ class MESHookManager:
     def _worker_loop(self):
         """后台工作线程: 从队列消费任务, 批量处理"""
         while not self._stop_event.is_set():
+            # 优先尝试把落盘的关键事件回放回队列
+            self._drain_spill_once(max_items=20)
             try:
                 task = self._task_queue.get(timeout=1.0)
             except queue.Empty:
@@ -89,14 +100,132 @@ class MESHookManager:
             finally:
                 db.close()
 
-    def _enqueue(self, func, *args, **kwargs):
-        """将任务放入队列, 队列满则丢弃 (不阻塞检测)"""
+    @staticmethod
+    def _is_spillable_handler(handler_name: str) -> bool:
+        return handler_name in {
+            "_handle_scan",
+            "_handle_cycle_start",
+            "_handle_cycle_end",
+            "_handle_session_start",
+            "_handle_session_end",
+        }
+
+    def _spill_task(self, func, args, kwargs) -> bool:
+        handler_name = getattr(func, "__name__", "")
+        if not self._is_spillable_handler(handler_name):
+            return False
+        payload = {
+            "handler": handler_name,
+            "args": list(args),
+            "kwargs": kwargs or {},
+            "created_at": time.time(),
+        }
+        try:
+            with self._spill_lock:
+                os.makedirs(os.path.dirname(self._spill_file), exist_ok=True)
+                with open(self._spill_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                self._spill_write_count += 1
+            return True
+        except Exception as e:
+            print(f"[MES] 关键任务落盘失败: {e}", flush=True)
+            return False
+
+    def _drain_spill_once(self, max_items: int = 20):
+        if max_items <= 0:
+            return
+        with self._spill_lock:
+            if not os.path.exists(self._spill_file):
+                return
+            try:
+                with open(self._spill_file, "r", encoding="utf-8") as f:
+                    lines = [ln.strip() for ln in f if ln.strip()]
+            except Exception:
+                return
+
+            if not lines:
+                try:
+                    os.remove(self._spill_file)
+                except Exception:
+                    pass
+                return
+
+            kept_lines = []
+            replayed = 0
+            idx = 0
+            while idx < len(lines):
+                line = lines[idx]
+                if replayed >= max_items:
+                    kept_lines.extend(lines[idx:])
+                    break
+                try:
+                    payload = json.loads(line)
+                    handler_name = payload.get("handler")
+                    if not self._is_spillable_handler(handler_name):
+                        idx += 1
+                        continue
+                    handler = getattr(self, handler_name, None)
+                    if handler is None:
+                        idx += 1
+                        continue
+                    args = payload.get("args", [])
+                    kwargs = payload.get("kwargs", {})
+                    self._task_queue.put_nowait((handler, tuple(args), kwargs))
+                    replayed += 1
+                except queue.Full:
+                    kept_lines.append(line)
+                    kept_lines.extend(lines[idx + 1:])
+                    break
+                except Exception:
+                    # 单行损坏直接跳过，避免整份补偿文件阻塞
+                    pass
+                idx += 1
+
+            try:
+                if kept_lines:
+                    with open(self._spill_file, "w", encoding="utf-8") as f:
+                        f.write("\n".join(kept_lines) + "\n")
+                else:
+                    os.remove(self._spill_file)
+            except Exception:
+                pass
+
+            if replayed:
+                self._spill_replay_count += replayed
+                print(f"[MES] 已回放落盘关键任务 {replayed} 条 "
+                      f"(replayed_total={self._spill_replay_count}, left={len(kept_lines)})",
+                      flush=True)
+
+    def _enqueue(self, func, *args, critical: bool = True, **kwargs):
+        """将任务放入队列。
+
+        - critical=True: 关键业务事件（scan/cycle/session）优先保证入队；
+          队列满时会短暂等待而不是立即丢弃。
+        - critical=False: 非关键事件仍可快速失败，避免拖慢主流程。
+        """
         if not self.enabled:
             return
         try:
             self._task_queue.put_nowait((func, args, kwargs))
         except queue.Full:
-            print("[MES] 任务队列已满, 丢弃任务", flush=True)
+            if critical:
+                # 关键事件不直接丢弃：短暂阻塞等待一次，降低追溯断链概率
+                try:
+                    self._queue_block_count += 1
+                    self._task_queue.put((func, args, kwargs), timeout=0.8)
+                    print(f"[MES] 任务队列拥塞，关键任务等待入队成功 "
+                          f"(blocked={self._queue_block_count}, qsize={self._task_queue.qsize()})",
+                          flush=True)
+                    return
+                except queue.Full:
+                    pass
+            spilled = False
+            if critical:
+                spilled = self._spill_task(func, args, kwargs)
+            self._queue_drop_count += 1
+            print(f"[MES] 任务队列已满, 任务被丢弃 "
+                  f"(critical={critical}, spilled={spilled}, dropped={self._queue_drop_count}, qsize={self._task_queue.qsize()})",
+                  flush=True)
 
     # ====== 5 个核心 Hook ======
 
@@ -106,7 +235,7 @@ class MESHookManager:
         """扫码器收到数据后调用 (ScannerService -> 此方法)"""
         self._enqueue(
             self._handle_scan, channel_id, serial_no, raw_data,
-            project_id, device_id
+            project_id, device_id, critical=True
         )
 
     def on_cycle_start(self, channel_id: int, cycle_id: int,
@@ -114,7 +243,7 @@ class MESHookManager:
         """source.py start_cycle() commit 成功后调用"""
         self._enqueue(
             self._handle_cycle_start, channel_id, cycle_id,
-            session_id, project_id
+            session_id, project_id, critical=True
         )
 
     def on_cycle_end(self, channel_id: int, cycle_id: int,
@@ -125,20 +254,20 @@ class MESHookManager:
         self._enqueue(
             self._handle_cycle_end, channel_id, cycle_id,
             is_good, event_name, result_reason, duration,
-            step_sequence, project_id
+            step_sequence, project_id, critical=True
         )
 
     def on_session_start(self, channel_id: int, session_id: int,
                          project_id: int):
         """source.py start_session() 后调用"""
         self._enqueue(
-            self._handle_session_start, channel_id, session_id, project_id
+            self._handle_session_start, channel_id, session_id, project_id, critical=True
         )
 
     def on_session_end(self, channel_id: int, session_id: int):
         """source.py end_session() 后调用"""
         self._enqueue(
-            self._handle_session_end, channel_id, session_id
+            self._handle_session_end, channel_id, session_id, critical=True
         )
 
     def on_channel_removed(self, channel_id: int):
@@ -815,10 +944,12 @@ class MESHookManager:
 
     def _handle_session_end(self, db, channel_id: int, session_id: int):
         """Session 结束: 清理状态"""
+        cleared_order_id = self._active_orders.pop(channel_id, None)
         self._pending_workpiece.pop(channel_id, None)
         self._pending_queue.pop(channel_id, None)
         self._inspecting_workpiece.pop(channel_id, None)
-        print(f"[MES] Session#{session_id} 结束, 清理工位{channel_id}状态", flush=True)
+        print(f"[MES] Session#{session_id} 结束, 清理工位{channel_id}状态 "
+              f"(order={cleared_order_id})", flush=True)
 
         # 外部 MES 推送
         try:

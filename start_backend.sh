@@ -1,9 +1,9 @@
 #!/bin/bash
 # 启动后端服务脚本
 
-# 激活 conda 环境
+# 激活与客户现场/发版一致的后端运行环境
 source ~/anaconda3/etc/profile.d/conda.sh
-conda activate tianjun
+conda activate tianjun-runtime
 
 # 切换到后端目录
 cd "$(dirname "$0")"

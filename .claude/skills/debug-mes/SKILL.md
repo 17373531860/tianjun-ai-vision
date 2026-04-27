@@ -286,6 +286,25 @@ end_cycle() → on_cycle_end()
 - Modbus 适配器与报警灯共用 RS485 串口时使用 `_serial_lock` 互斥，但长时间写入可能延迟报警响应
 - `mes_hooks.py` 中 import 错误容易被 `except Exception: pass` 静默吞掉，新增代码务必加 print 输出异常
 
+## v3.0 MES/设备调试入口与日志降噪
+
+### 1. 无硬件调试入口
+- 扫码器：`POST /api/v1/scanner/simulate`，前端 `ScannerPanel.vue` 开发者模式显示"模拟扫码"。
+  - body: `{ barcode, channel_id, external_only, pairing_group }`
+  - 用途：不连真实扫码器也能验证扫码日志、工件注册、MES Hook 绑定链路。
+- 外部设备：`POST /api/v1/external-devices/simulate`，前端 `ExternalDevicePanel.vue` 开发者模式显示"模拟数据"。
+  - body: `{ raw_data, device_id?, barcode?, channel_id, full_chain, repeat_count }`
+  - `full_chain=false` 只写日志；`true` 走真实 extra_fields/cluster 分发链路。
+
+### 2. 停止/待机不能被离线扫码器阻塞
+- 现象：`/source/detection/standby` 和 `/stop` 卡约 20 秒。
+- 根因：`ScannerService.stop_scanning()` 对离线 WMax/auto 设备执行 `trigger_off` 时同步重连，5 次失败约 20 秒。
+- 规则：`trigger_on` 可自动重连；`trigger_off` 不为停止动作同步重连，离线则打印 `SKIPPED: 设备离线，不为停止动作同步重连`。
+
+### 3. 离线设备日志
+- 扫码器/外设离线、端口未开、连接拒绝属于预期现场状态，日志应是一行短提示并继续重试。
+- 只有未知异常才打印 traceback。否则客户机日志会被 `ConnectionRefusedError` 堆栈淹没，掩盖真正错误。
+
 ## MES 推送 Context 字段清单（v2.7.5 更新）
 
 `MESGateway.build_context_from_cycle()` 返回的 context dict：

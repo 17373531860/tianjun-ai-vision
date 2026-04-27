@@ -124,6 +124,18 @@ def _ensure_wmax_connected(ip: str, cause: str = ""):
         return None
 
 
+def _is_expected_connection_error(exc: Exception) -> bool:
+    """设备离线/未插线时的预期网络错误，不需要每次打印整段堆栈。"""
+    return isinstance(exc, (
+        ConnectionRefusedError,
+        ConnectionResetError,
+        ConnectionAbortedError,
+        TimeoutError,
+        socket.timeout,
+        OSError,
+    ))
+
+
 @dataclass
 class ScannerConnection:
     """单个扫码器的连接状态"""
@@ -169,6 +181,9 @@ class ScannerService:
         self._project_id_getter = None
         # 合并 2s 内多次 text_lon→auto 升级触发, 避免反复跑 UDP 发现
         self._wmax_discover_pending = {"flag": False, "lock": threading.Lock()}
+        # 未匹配来源扫码的重试去抖：同一(ip,barcode)短时间只安排一个重试任务
+        self._unmatched_retry_lock = threading.Lock()
+        self._unmatched_retry_keys: set[tuple[str, str]] = set()
 
     def set_mes_hook(self, hook):
         self._mes_hook = hook
@@ -423,15 +438,22 @@ class ScannerService:
         命令做三件事:
           1. 兼容需要单次触发的固件变体
           2. 在 start_scanning/stop_scanning 边界留下可观测日志
-          3. 如果 dev 在空闲期被扫码器主动断开, 这里自动重连并重新激活 RPT
+          3. 如果 dev 在空闲期被扫码器主动断开, trigger_on 时自动重连并重新激活 RPT
         """
         if conn.device_type not in ("auto", "wmax", "wmax_scan"):
             print(f"[Scanner/WMax] skip trigger_{('on' if on else 'off')} '{conn.name}' "
                   f"(device_type={conn.device_type})", flush=True)
             return
         try:
-            dev = _ensure_wmax_connected(
-                conn.ip, cause=f"trigger_{('on' if on else 'off')}")
+            if on:
+                dev = _ensure_wmax_connected(conn.ip, cause="trigger_on")
+            else:
+                from backend.services.wmax.device import DEFAULT_PORT as WMAX_CMD_PORT
+                from backend.services.wmax.manager import get_wmax_manager
+                dev = get_wmax_manager().get_device(conn.ip, WMAX_CMD_PORT)
+                if dev is None or not getattr(dev.state, "connected", False):
+                    print(f"[Scanner/WMax] trigger_off '{conn.name}' SKIPPED: 设备离线，不为停止动作同步重连", flush=True)
+                    return
             if dev is None:
                 print(f"[Scanner/WMax] trigger_{('on' if on else 'off')} '{conn.name}' "
                       f"SKIPPED: 无法建立 WMax 连接", flush=True)
@@ -876,8 +898,11 @@ class ScannerService:
             except Exception as e:
                 conn.last_error = str(e)
                 conn.status = "error"
-                logger.error("[Scanner] %s 连接失败: %s\n%s",
-                             conn.name, e, traceback.format_exc())
+                if _is_expected_connection_error(e):
+                    logger.warning("[Scanner] %s 连接失败，将继续重试: %s", conn.name, e)
+                else:
+                    logger.error("[Scanner] %s 连接异常: %s\n%s",
+                                 conn.name, e, traceback.format_exc())
 
             if conn._socket:
                 try:
@@ -1179,7 +1204,46 @@ class ScannerService:
         except Exception as e:
             logger.debug("[Scanner] 注入外部设备条码失败: %s", e)
 
-    def inject_scan_result(self, ip: str, barcode: str):
+    def simulate_scan(self, barcode: str, device_id: int = None, channel_id: int = 0,
+                      external_only: bool = False, pairing_group: str = None) -> dict:
+        """调试入口：不连真实硬件，按真实扫码处理链路注入一条条码。"""
+        conn = self._connections.get(device_id) if device_id is not None else None
+        if conn is None:
+            conn = ScannerConnection(
+                device_id=device_id or -999001,
+                name="AUTO_QA_虚拟扫码器",
+                ip=f"virtual-scanner-{channel_id}",
+                port=0,
+                channel_id=channel_id,
+                enabled=True,
+                parse_config={},
+                dedup_interval_sec=0,
+                auto_create_workpiece=not external_only,
+                auto_link_order=True,
+                scan_required=False,
+                duplicate_scan_action="overwrite",
+                warn_no_barcode=False,
+                rebind_mode="rescan",
+                bind_timing="mid_cycle",
+                broadcast_channels=[],
+                device_type="virtual",
+                external_only=external_only,
+                pairing_group=pairing_group or None,
+            )
+
+        result = self._parser.parse(barcode, conn.parse_config)
+        self._on_data_received(conn, barcode)
+        return {
+            "success": bool(result.success),
+            "device_id": conn.device_id,
+            "device_name": conn.name,
+            "channel_id": conn.channel_id,
+            "barcode": barcode,
+            "serial_no": result.serial_no if result.success else barcode,
+            "external_only": bool(conn.external_only),
+        }
+
+    def inject_scan_result(self, ip: str, barcode: str, _retry_once: bool = False):
         """外部注入扫码结果（WMax RPT 端口转发用）"""
         conn = None
         for c in self._connections.values():
@@ -1189,27 +1253,68 @@ class ScannerService:
         if conn:
             self._on_data_received(conn, barcode)
         else:
-            logger.info("[Scanner] WMax 注入扫码 (无匹配设备): ip=%s data=%s", ip, barcode)
-            if self._mes_hook:
-                from backend.api.channel_manager import channel_manager
-                result = self._parser.parse(barcode, {})
-                serial_no = result.serial_no if result.success else barcode
-                for ch_id in channel_manager.active_channels():
-                    project_id = None
-                    if self._project_id_getter:
+            logger.warning("[Scanner] WMax 注入扫码来源未匹配: ip=%s data=%s retry=%s",
+                           ip, barcode, _retry_once)
+            if not _retry_once:
+                retry_key = (ip, barcode)
+                should_schedule = False
+                with self._unmatched_retry_lock:
+                    if retry_key not in self._unmatched_retry_keys:
+                        self._unmatched_retry_keys.add(retry_key)
+                        should_schedule = True
+                if should_schedule:
+                    def _run_retry():
                         try:
-                            project_id = self._project_id_getter(ch_id)
-                        except Exception:
-                            pass
-                    if project_id:
-                        self._mes_hook.on_scan_received(
-                            channel_id=ch_id,
-                            serial_no=serial_no,
-                            raw_data=barcode,
-                            project_id=project_id,
-                        )
-                logger.info("[Scanner] WMax 注入扫码 → 广播到 %s: %s",
-                            channel_manager.active_channels(), serial_no)
+                            self.inject_scan_result(ip, barcode, _retry_once=True)
+                        finally:
+                            with self._unmatched_retry_lock:
+                                self._unmatched_retry_keys.discard(retry_key)
+
+                    t = threading.Timer(0.8, _run_retry)
+                    t.daemon = True
+                    t.start()
+                return
+
+            if not self._mes_hook:
+                return
+
+            try:
+                from backend.api.channel_manager import channel_manager
+                active_channels = list(channel_manager.active_channels())
+            except Exception as e:
+                logger.warning("[Scanner] 无法获取活跃工位，未匹配扫码已丢弃: ip=%s err=%s", ip, e)
+                return
+
+            # 安全降级策略：
+            # - 单工位：允许注入该唯一工位，避免单机场景漏码
+            # - 多工位：不再广播，避免串工位；留日志等待来源修复
+            if len(active_channels) != 1:
+                logger.error("[Scanner] 未匹配来源扫码未分发（多工位保护）: ip=%s active=%s data=%s",
+                             ip, active_channels, barcode)
+                return
+
+            ch_id = active_channels[0]
+            project_id = None
+            if self._project_id_getter:
+                try:
+                    project_id = self._project_id_getter(ch_id)
+                except Exception:
+                    pass
+            if not project_id:
+                logger.warning("[Scanner] 未匹配来源扫码未分发（缺少项目）: ip=%s ch=%s data=%s",
+                               ip, ch_id, barcode)
+                return
+
+            result = self._parser.parse(barcode, {})
+            serial_no = result.serial_no if result.success else barcode
+            self._mes_hook.on_scan_received(
+                channel_id=ch_id,
+                serial_no=serial_no,
+                raw_data=barcode,
+                project_id=project_id,
+            )
+            logger.warning("[Scanner] 未匹配来源扫码按单工位降级分发: ip=%s ch=%s serial=%s",
+                           ip, ch_id, serial_no)
 
 
 # 全局单例

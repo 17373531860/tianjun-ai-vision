@@ -22,6 +22,47 @@ import cv2
 
 class RecordingThreadMixin:
     # ========== 录制线程相关方法（独立于 CUDA，避免段错误） ==========
+
+    def _append_recording_failure(self, recorder_type: str, reason: str,
+                                  writer=None, error: str = ""):
+        """统一记录录像通道失效事件，供前端二级详情查看。"""
+        lock = getattr(self, "_recording_failure_lock", None)
+        failures = getattr(self, "recording_failures", None)
+        if lock is None or failures is None:
+            return
+        event = {
+            "timestamp": time.time(),
+            "channel_id": getattr(self, "channel_id", 0),
+            "recorder_type": recorder_type,   # session / cycle / step
+            "reason": reason,                 # open_failed / write_failed / write_exception
+            "error": error or "",
+            "file_path": getattr(writer, "filepath", None) if writer else None,
+            "frame_count": getattr(writer, "_frame_count", None) if writer else None,
+        }
+        with lock:
+            failures.append(event)
+            if len(failures) > 30:
+                del failures[:-30]
+
+    def get_recording_failures(self, limit: int = 20):
+        lock = getattr(self, "_recording_failure_lock", None)
+        failures = getattr(self, "recording_failures", None)
+        if lock is None or failures is None:
+            return []
+        with lock:
+            if limit <= 0:
+                return []
+            return list(failures[-limit:])
+
+    def clear_recording_failures(self):
+        lock = getattr(self, "_recording_failure_lock", None)
+        failures = getattr(self, "recording_failures", None)
+        if lock is None or failures is None:
+            return 0
+        with lock:
+            count = len(failures)
+            failures.clear()
+            return count
     
     def _start_recording_thread(self):
         """启动独立录制线程"""
@@ -172,9 +213,12 @@ class RecordingThreadMixin:
             if session_w:
                 try:
                     if session_w.isOpened():
-                        session_w.write(frame)
+                        ok = session_w.write(frame)
+                        if not ok:
+                            raise RuntimeError(getattr(session_w, "last_error", "write_failed"))
                 except Exception as e:
                     print(f"[录制警告] 写入会话视频失败: {e}")
+                    self._append_recording_failure("session", "write_failed", writer=session_w, error=str(e))
                     with self._writer_lock:
                         if self.video_writer is session_w:
                             self.video_writer = None
@@ -186,9 +230,12 @@ class RecordingThreadMixin:
             if cycle_w:
                 try:
                     if cycle_w.isOpened():
-                        cycle_w.write(frame)
+                        ok = cycle_w.write(frame)
+                        if not ok:
+                            raise RuntimeError(getattr(cycle_w, "last_error", "write_failed"))
                 except Exception as e:
                     print(f"[录制警告] 写入周期视频失败: {e}")
+                    self._append_recording_failure("cycle", "write_failed", writer=cycle_w, error=str(e))
                     with self._writer_lock:
                         if self.cycle_video_writer is cycle_w:
                             self.cycle_video_writer = None
@@ -218,9 +265,17 @@ class RecordingThreadMixin:
                     try:
                         writer = step_info.get('writer')
                         if writer and writer.isOpened():
-                            writer.write(frame)
+                            ok = writer.write(frame)
+                            if not ok:
+                                raise RuntimeError(getattr(writer, "last_error", "write_failed"))
                     except Exception as e:
                         print(f"[录制警告] 写入步骤视频 {step_label} 失败: {e}")
+                        self._append_recording_failure(
+                            "step",
+                            "write_failed",
+                            writer=step_info.get('writer'),
+                            error=f"{step_label}: {e}",
+                        )
                         failed_steps.append(step_label)
                 
                 # 清理失败的步骤录制器

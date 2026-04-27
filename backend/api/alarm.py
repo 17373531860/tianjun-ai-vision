@@ -12,10 +12,11 @@ import threading
 import time
 import json
 import os
+from backend.core.config import DATA_DIR
 
 router = APIRouter()
 
-ALARM_CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'alarm_config.json')
+ALARM_CONFIG_FILE = os.path.join(DATA_DIR, 'alarm_config.json')
 
 PROTOCOLS = {
     'modbus_4color': {

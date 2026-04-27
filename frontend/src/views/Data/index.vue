@@ -745,6 +745,16 @@ const handleChannelFilterChange = () => {
   }
 };
 
+const loadSessions = () => {
+  if (selectedDate.value) {
+    handleDateChange(selectedDate.value);
+  } else {
+    sessions.value = [];
+    selectedSession.value = null;
+    resetOverviewData();
+  }
+};
+
 const loadChannelCount = async () => {
   try {
     const res = await getWorkstations();
@@ -962,12 +972,32 @@ const startPolling = () => {
   
   pollingTimer = setInterval(async () => {
     try {
-      const res = await getDetectionResults();
-      if (res.data?.counters) {
-        // 更新计数器数据
+      // 多工位场景：
+      // - 选了工位 => 只拉该工位
+      // - 未选工位 => 拉全部工位并按同名计数器求和
+      const channelsToPoll = channelFilter.value !== null
+        ? [channelFilter.value]
+        : Array.from({ length: Math.max(totalChannelCount.value, 1) }, (_, i) => i);
+
+      const responses = await Promise.all(
+        channelsToPoll.map((ch) => getDetectionResults(ch).catch(() => null))
+      );
+
+      const mergedCounters = {};
+      for (const res of responses) {
+        const counters = res?.data?.counters;
+        if (!counters) continue;
+        for (const [name, rawVal] of Object.entries(counters)) {
+          const val = Number(rawVal);
+          if (!Number.isFinite(val)) continue;
+          mergedCounters[name] = (mergedCounters[name] || 0) + val;
+        }
+      }
+
+      if (Object.keys(mergedCounters).length) {
         currentCounters.value = currentCounters.value.map(counter => ({
           ...counter,
-          value: res.data.counters[counter.name] ?? counter.value
+          value: mergedCounters[counter.name] ?? counter.value
         }));
       }
     } catch (e) {

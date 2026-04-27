@@ -207,6 +207,22 @@ hash 是 64 位随机 hex, 在 certutil 输出里作为子串碰撞概率 ~0.
 11. [通道 B, 仅 tag] 上传到 17373531860/tianjun-releases Release
 ```
 
+### v3.0 开发机运行环境对齐
+
+- 开发机后端统一使用 conda 环境 `tianjun-runtime`（`start_backend.sh` 已切换），目标是尽量贴近 CI/客户包的 Python 3.10 + CUDA 12.8 运行环境。
+- CI 打包环境名仍是 `tianjun`，客户包内是 conda-pack 解出的 `resources/python`，**不要用环境名判断是否一致**，要看：
+  - Python 3.10
+  - PyTorch cu128 / CUDA 12.8
+  - NumPy `<2.0`
+  - OpenCV `<4.11`
+  - TensorRT / onnxruntime-gpu 是否可 import
+- 现场定位优先看启动日志：
+  - `DATA_DIR` 是否指向 AppData
+  - 模型 `file_exists=True/False`
+  - `torch.cuda.is_available()`
+  - TensorRT engine 是否报 `engine plan file is not compatible`
+- TensorRT `.engine` 和 GPU/TensorRT 版本强绑定，开发机重建的 engine 不保证客户机可用。客户机若检测启动卡住或 engine 反序列化失败，应回退 `.pt` 或在客户机重建 engine。
+
 ---
 
 ## 关键构建配置

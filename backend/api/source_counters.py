@@ -21,9 +21,7 @@
 """
 import os
 import json as _json
-
-# 与原 source_session_lifecycle_mixin / source_lifecycle_mixin 保持一致
-DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+from backend.core.config import DATA_DIR
 
 
 class Counters:

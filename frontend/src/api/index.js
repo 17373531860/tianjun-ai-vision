@@ -1,7 +1,8 @@
 import axios from 'axios';
 
-// 后端地址常量
-const BACKEND_URL = 'http://localhost:8001';
+// 后端默认地址（当环境变量未配置时使用）
+const DEFAULT_BACKEND_HOST = 'http://localhost:8001';
+const ENV_API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
 // 检测是否在桌面应用环境中运行（每次调用时检测）
 function isDesktopApp() {
@@ -21,11 +22,15 @@ function isDesktopApp() {
   return false;
 }
 
-// API requests always go directly to backend, bypassing Vite proxy.
-// The MJPEG long-lived stream stalls proxied API calls, so we must
-// connect to the backend directly for all API requests.
+function trimSlash(s) {
+  return (s || '').replace(/\/+$/, '');
+}
+
 function getBaseURL() {
-  return BACKEND_URL + '/api/v1';
+  // 优先使用环境变量（支持部署时配置）
+  if (ENV_API_BASE_URL) return trimSlash(ENV_API_BASE_URL);
+  // 未配置时回退默认本机后端
+  return `${DEFAULT_BACKEND_HOST}/api/v1`;
 }
 
 // MJPEG video stream uses Vite proxy in dev mode (same-origin, reliable
@@ -33,7 +38,16 @@ function getBaseURL() {
 // This is safe because API calls already bypass the proxy, so the MJPEG
 // long-lived stream no longer blocks API requests.
 export function getBackendHost() {
-  return isDesktopApp() ? BACKEND_URL : '';
+  // 若配置了绝对 API 地址，尝试从中提取 host（用于视频流等非 /api/v1 地址）
+  if (ENV_API_BASE_URL && /^https?:\/\//i.test(ENV_API_BASE_URL)) {
+    try {
+      const url = new URL(ENV_API_BASE_URL);
+      return `${url.protocol}//${url.host}`;
+    } catch (_) {
+      // ignore, fallback below
+    }
+  }
+  return isDesktopApp() ? DEFAULT_BACKEND_HOST : '';
 }
 
 const baseURL = getBaseURL();

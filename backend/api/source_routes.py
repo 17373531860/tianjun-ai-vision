@@ -28,7 +28,7 @@ import uuid
 from typing import Optional
 
 from fastapi import File, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.core.config import settings
 
@@ -137,11 +137,11 @@ class ProjectConfigRequest(BaseModel):
     name: str
     task_type: str = 'detection'
     logic_mode: str = 'detection'
-    steps_config: list = []
-    pipeline_config: dict = {}
-    events_config: list = []
-    counters_config: list = []
-    data_config: dict = {}
+    steps_config: list = Field(default_factory=list)
+    pipeline_config: dict = Field(default_factory=dict)
+    events_config: list = Field(default_factory=list)
+    counters_config: list = Field(default_factory=list)
+    data_config: dict = Field(default_factory=dict)
 
 
 # ============================================================
@@ -908,10 +908,21 @@ def get_detection_results(channel: int = Query(0)):
             tracking_data['settled_ng'] = sum(1 for r in mgr._box_settled_results if not r['is_complete'])
         result['tracking'] = tracking_data
 
-    # MES 实时数据 (扫码状态 + 当前工件 + 工单进度)
+    # MES 实时数据 + 录像异常详情 (录像异常不依赖 MES 开关)
+    mes_data = {}
+    try:
+        recording_failures = []
+        try:
+            recording_failures = mgr.get_recording_failures(limit=20)
+        except Exception:
+            recording_failures = []
+        if recording_failures:
+            mes_data['recording_failures'] = recording_failures
+    except Exception:
+        pass
+
     if mgr._mes_hook and mgr._mes_hook.enabled:
         try:
-            mes_data = {}
             wp_info = mgr._mes_hook.get_current_workpiece(mgr.channel_id)
             if wp_info:
                 mes_data['workpiece'] = wp_info
@@ -928,10 +939,11 @@ def get_detection_results(channel: int = Query(0)):
             rebind = mgr._mes_hook.get_rebind_prompt(mgr.channel_id)
             if rebind:
                 mes_data['rebind_prompt'] = rebind
-            if mes_data:
-                result['mes'] = mes_data
         except Exception:
             pass
+
+    if mes_data:
+        result['mes'] = mes_data
 
     # 当前操作员
     try:
@@ -1117,3 +1129,14 @@ def clear_pending_scan(channel: int = 0, force: bool = False):
             "cleared": cleared,
         }
     return {"status": "ok", "cleared": cleared}
+
+
+@router.post("/detection/recording-failures/clear")
+def clear_recording_failures(channel: int = 0):
+    """清空该工位录像异常详情列表（仅影响前端详情展示，不影响业务数据）。"""
+    mgr = _get_mgr(channel)
+    try:
+        count = mgr.clear_recording_failures()
+        return {"status": "ok", "cleared_count": count}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

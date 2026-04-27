@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, case, Integer
 from typing import List, Optional
 from datetime import datetime, timedelta
 import io
@@ -10,6 +10,35 @@ from backend.models.models import Task, Project
 from backend.schemas.report import ReportSummary, DailyStatResponse, TrendData
 
 router = APIRouter()
+
+def _apply_datetime_and_hour_filters(
+    query,
+    start_date: Optional[str],
+    end_date: Optional[str],
+    start_hour: Optional[str],
+    end_hour: Optional[str],
+):
+    """Apply date/hour filters with correct overnight-shift window semantics."""
+    if start_date and end_date and start_hour and end_hour and start_hour > end_hour:
+        try:
+            start_dt = datetime.strptime(f"{start_date} {start_hour}", "%Y-%m-%d %H:%M")
+            end_base = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            end_dt = datetime.strptime(
+                f"{end_base.strftime('%Y-%m-%d')} {end_hour}",
+                "%Y-%m-%d %H:%M",
+            )
+            return query.filter(Task.timestamp >= start_dt, Task.timestamp < end_dt)
+        except Exception:
+            # Fall back to legacy filters on parse error.
+            pass
+
+    if start_date:
+        query = query.filter(Task.timestamp >= start_date)
+    if end_date:
+        query = query.filter(Task.timestamp <= end_date + " 23:59:59")
+    query = _apply_hour_filter(query, start_hour, end_hour)
+    return query
+
 
 def _apply_hour_filter(query, start_hour: Optional[str], end_hour: Optional[str]):
     """Apply hour-of-day filter for shift queries (e.g. day shift 08:00-20:00)."""
@@ -38,11 +67,9 @@ def get_summary(
     
     if project_id:
         query = query.filter(Task.project_id == project_id)
-    if start_date:
-        query = query.filter(Task.timestamp >= start_date)
-    if end_date:
-        query = query.filter(Task.timestamp <= end_date + " 23:59:59")
-    query = _apply_hour_filter(query, start_hour, end_hour)
+    query = _apply_datetime_and_hour_filters(
+        query, start_date, end_date, start_hour, end_hour
+    )
     
     total_count = query.count()
     good_count = query.filter(Task.is_good == True).count()
@@ -78,11 +105,9 @@ def get_records(
     
     if project_id:
         query = query.filter(Task.project_id == project_id)
-    if start_date:
-        query = query.filter(Task.timestamp >= start_date)
-    if end_date:
-        query = query.filter(Task.timestamp <= end_date + " 23:59:59")
-    query = _apply_hour_filter(query, start_hour, end_hour)
+    query = _apply_datetime_and_hour_filters(
+        query, start_date, end_date, start_hour, end_hour
+    )
     if is_good is not None:
         query = query.filter(Task.is_good == is_good)
     
@@ -155,19 +180,19 @@ def get_daily_stats(
     db: Session = Depends(get_db)
 ):
     """获取每日统计数据"""
+    # 用 case 把 Boolean 折成 0/1 再累加, 兼容 sqlite/mysql/pg
+    good_int = case((Task.is_good == True, 1), else_=0)
     query = db.query(
         func.date(Task.timestamp).label('date'),
         func.count(Task.id).label('total_count'),
-        func.sum(func.cast(Task.is_good, type_=db.bind.dialect.name == 'sqlite' and 'INTEGER' or 'INT')).label('good_count')
+        func.sum(good_int).label('good_count'),
     )
     
     if project_id:
         query = query.filter(Task.project_id == project_id)
-    if start_date:
-        query = query.filter(Task.timestamp >= start_date)
-    if end_date:
-        query = query.filter(Task.timestamp <= end_date + " 23:59:59")
-    query = _apply_hour_filter(query, start_hour, end_hour)
+    query = _apply_datetime_and_hour_filters(
+        query, start_date, end_date, start_hour, end_hour
+    )
     
     results = query.group_by(func.date(Task.timestamp)).order_by(func.date(Task.timestamp)).all()
     
@@ -196,7 +221,7 @@ def export_report(
     end_date: Optional[str] = None,
     start_hour: Optional[str] = None,
     end_hour: Optional[str] = None,
-    format: str = "pdf",
+    format: str = "csv",
     db: Session = Depends(get_db)
 ):
     """导出报表（PDF/Excel）"""
@@ -204,11 +229,16 @@ def export_report(
     records = get_records(project_id, start_date, end_date, start_hour, end_hour, None, 0, 1000, db)
     
     if format == "pdf":
-        # 生成PDF
-        from reportlab.lib import colors
-        from reportlab.lib.pagesizes import A4
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        try:
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import A4
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        except ImportError:
+            raise HTTPException(
+                status_code=501,
+                detail="PDF 导出需要安装 reportlab (pip install reportlab); 当前请用 format=csv",
+            )
         
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4)
@@ -290,7 +320,7 @@ def export_report(
         
         buffer = io.StringIO()
         writer = csv.writer(buffer)
-        writer.writerow(["Timestamp", "Project", "Result", "Confidence", "Duration", "Step"])
+        writer.writerow(["Timestamp", "Project", "Result", "Confidence", "Duration(ms)", "Step"])
         
         for record in records:
             writer.writerow([

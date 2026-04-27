@@ -1,11 +1,71 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 const BackendManager = require('./backend-manager');
 const LicenseManager = require('./license-manager');
 
 let licenseManager = null;
 let isLicensed = false;
+
+// ===== 文件日志：把 console.error / console.warn 复制一份到磁盘 =====
+// 解决"出错只在控制台、客户机器没有保留任何痕迹"的痛点。
+// 单文件最大 10MB，超出则滚动一次（.1.log → 删除，当前 → .1.log）。
+function setupFileLogger() {
+  try {
+    const logDir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    const logPath = path.join(logDir, 'electron.log');
+
+    // 启动时检查滚动
+    try {
+      const st = fs.statSync(logPath);
+      if (st.size > 10 * 1024 * 1024) {
+        const old = path.join(logDir, 'electron.1.log');
+        try { fs.unlinkSync(old); } catch (_e) { /* 不存在 */ }
+        try { fs.renameSync(logPath, old); } catch (_e) { /* 重命名失败也不致命 */ }
+      }
+    } catch (_e) { /* 文件不存在，首次运行 */ }
+
+    const stream = fs.createWriteStream(logPath, { flags: 'a' });
+    const writeLine = (level, args) => {
+      try {
+        const ts = new Date().toISOString();
+        const line = args.map(a => {
+          if (a instanceof Error) return a.stack || a.message;
+          if (typeof a === 'object') {
+            try { return JSON.stringify(a); } catch (_) { return String(a); }
+          }
+          return String(a);
+        }).join(' ');
+        stream.write(`[${ts}] ${level} ${line}\n`);
+      } catch (_e) { /* 日志写入失败时静默，不能反过来再 console.error 造成无限递归 */ }
+    };
+    const origError = console.error.bind(console);
+    const origWarn = console.warn.bind(console);
+    console.error = (...args) => { writeLine('ERROR', args); origError(...args); };
+    console.warn = (...args) => { writeLine('WARN ', args); origWarn(...args); };
+    writeLine('INFO ', [`Electron 启动 (pid=${process.pid}, version=${app.getVersion()})`]);
+  } catch (e) {
+    // 如果连初始化都失败，至少保留控制台输出，不影响主流程
+    console.error('[App] 文件日志初始化失败:', e && e.message);
+  }
+}
+app.on('ready', setupFileLogger);
+// 早期错误（ready 之前）也记下来：先注入临时缓冲
+const _earlyErrorBuffer = [];
+const _earlyError = console.error.bind(console);
+const _earlyWarn = console.warn.bind(console);
+console.error = (...args) => { _earlyErrorBuffer.push({ lvl: 'ERROR', args }); _earlyError(...args); };
+console.warn = (...args) => { _earlyErrorBuffer.push({ lvl: 'WARN ', args }); _earlyWarn(...args); };
+app.on('ready', () => {
+  // setupFileLogger 已替换 console.error/warn，回灌缓冲
+  for (const { lvl, args } of _earlyErrorBuffer) {
+    if (lvl === 'ERROR') console.error('[startup-buffered]', ...args);
+    else console.warn('[startup-buffered]', ...args);
+  }
+  _earlyErrorBuffer.length = 0;
+});
 
 // GPU stability: disable shader disk cache, enable GPU restart on crash
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
@@ -31,14 +91,100 @@ let shutdownWindow = null;
 let backendManager = null;
 let isQuitting = false;
 let shutdownCancelled = false;
+let renderGoneReloadTimer = null;
+let unresponsiveReloadTimer = null;
+let gpuCrashReloadTimer = null;
+let splashCloseTimer = null;
+const managedTimeouts = new Set();
+
+function setManagedTimeout(callback, delayMs) {
+  const timer = setTimeout(() => {
+    managedTimeouts.delete(timer);
+    callback();
+  }, delayMs);
+  managedTimeouts.add(timer);
+  return timer;
+}
+
+function clearManagedTimeout(timer) {
+  if (!timer) return;
+  clearTimeout(timer);
+  managedTimeouts.delete(timer);
+}
+
+function clearAllManagedTimeouts() {
+  for (const timer of managedTimeouts) {
+    clearTimeout(timer);
+  }
+  managedTimeouts.clear();
+}
+
+function clearReloadTimers() {
+  if (renderGoneReloadTimer) {
+    clearManagedTimeout(renderGoneReloadTimer);
+    renderGoneReloadTimer = null;
+  }
+  if (unresponsiveReloadTimer) {
+    clearManagedTimeout(unresponsiveReloadTimer);
+    unresponsiveReloadTimer = null;
+  }
+  if (gpuCrashReloadTimer) {
+    clearManagedTimeout(gpuCrashReloadTimer);
+    gpuCrashReloadTimer = null;
+  }
+}
+
+function scheduleMainWindowReload(reason, delayMs, timerKey) {
+  if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return;
+
+  if (timerKey === 'render') {
+    if (renderGoneReloadTimer) clearManagedTimeout(renderGoneReloadTimer);
+    renderGoneReloadTimer = setManagedTimeout(() => {
+      renderGoneReloadTimer = null;
+      if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return;
+      console.log(`[App] ${reason}，正在重载渲染进程...`);
+      try { mainWindow.webContents.reload(); } catch (e) { console.error('[App] 重载失败:', e); }
+    }, delayMs);
+    return;
+  }
+
+  if (timerKey === 'unresponsive') {
+    if (unresponsiveReloadTimer) clearManagedTimeout(unresponsiveReloadTimer);
+    unresponsiveReloadTimer = setManagedTimeout(() => {
+      unresponsiveReloadTimer = null;
+      if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return;
+      console.log(`[App] ${reason}，正在重载渲染进程...`);
+      try { mainWindow.webContents.reload(); } catch (e) { console.error('[App] 重载失败:', e); }
+    }, delayMs);
+    return;
+  }
+
+  if (gpuCrashReloadTimer) clearManagedTimeout(gpuCrashReloadTimer);
+  gpuCrashReloadTimer = setManagedTimeout(() => {
+    gpuCrashReloadTimer = null;
+    if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return;
+    console.log(`[App] ${reason}，正在重载渲染进程...`);
+    try { mainWindow.webContents.reload(); } catch (e) { console.error('[App] 重载失败:', e); }
+  }, delayMs);
+}
 
 // 应用配置
 const CONFIG = {
   appName: '天军科技AI视觉检测系统',
   backendPort: 8001,
   backendHost: 'localhost',
+  frontendPort: 6001,
+  frontendHost: 'localhost',
   isDev: !app.isPackaged,
 };
+
+function getFrontendDevURL() {
+  const envUrl = process.env.FRONTEND_DEV_URL || process.env.VITE_DEV_SERVER_URL;
+  if (envUrl && /^https?:\/\//i.test(envUrl)) {
+    return envUrl;
+  }
+  return `http://${CONFIG.frontendHost}:${CONFIG.frontendPort}`;
+}
 
 // 获取资源路径
 function getResourcePath(...segments) {
@@ -131,7 +277,7 @@ function createWindow() {
   // 加载前端页面
   if (CONFIG.isDev) {
     // 开发模式：加载 Vite 开发服务器
-    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.loadURL(getFrontendDevURL());
     mainWindow.webContents.openDevTools();
   } else {
     // 生产模式：加载打包后的前端文件
@@ -153,12 +299,7 @@ function createWindow() {
     console.error(`[App] 主进程内存: RSS=${(mem.rss/1048576).toFixed(1)}MB, Heap=${(mem.heapUsed/1048576).toFixed(1)}/${(mem.heapTotal/1048576).toFixed(1)}MB`);
     console.error(`[App] 时间: ${new Date().toLocaleString()}`);
     console.error(`[App] ===========================`);
-    if (!isQuitting && mainWindow && !mainWindow.isDestroyed()) {
-      setTimeout(() => {
-        console.log('[App] 正在重载渲染进程...');
-        mainWindow.webContents.reload();
-      }, 1000);
-    }
+    scheduleMainWindowReload('渲染进程崩溃', 1000, 'render');
   });
 
   mainWindow.webContents.on('unresponsive', () => {
@@ -168,15 +309,7 @@ function createWindow() {
     console.warn(`[App] 时间: ${new Date().toLocaleString()}`);
     console.warn(`[App] 5秒后将自动重载...`);
     console.warn(`[App] =============================`);
-    setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed() && !isQuitting) {
-        try {
-          mainWindow.webContents.reload();
-        } catch (e) {
-          console.error('[App] 重载失败:', e);
-        }
-      }
-    }, 5000);
+    scheduleMainWindowReload('渲染进程无响应', 5000, 'unresponsive');
   });
 
   mainWindow.webContents.on('responsive', () => {
@@ -208,6 +341,7 @@ function createWindow() {
   });
 
   mainWindow.on('closed', () => {
+    clearReloadTimers();
     mainWindow = null;
   });
 }
@@ -385,6 +519,12 @@ async function executeShutdown() {
 // 完成关闭
 async function finishShutdown(forced = false) {
   isQuitting = true;
+  clearReloadTimers();
+  if (splashCloseTimer) {
+    clearManagedTimeout(splashCloseTimer);
+    splashCloseTimer = null;
+  }
+  clearAllManagedTimeouts();
   
   console.log(`[App] Finishing shutdown (forced: ${forced})...`);
   
@@ -448,7 +588,7 @@ app.on('child-process-gone', (event, details) => {
   console.error(`[App] ==========================`);
   if (details.type === 'GPU' && mainWindow && !mainWindow.isDestroyed() && !isQuitting) {
     console.log('[App] GPU进程崩溃, 1.5秒后重载渲染进程...');
-    setTimeout(() => mainWindow.webContents.reload(), 1500);
+    scheduleMainWindowReload('GPU进程崩溃', 1500, 'gpu');
   }
 });
 
@@ -483,7 +623,11 @@ app.whenReady().then(async () => {
     await startBackend();
     createWindow();
     
-    setTimeout(() => {
+    if (splashCloseTimer) {
+      clearManagedTimeout(splashCloseTimer);
+    }
+    splashCloseTimer = setManagedTimeout(() => {
+      splashCloseTimer = null;
       splash.close();
     }, 500);
     
@@ -515,6 +659,12 @@ app.on('before-quit', async (event) => {
   if (!isQuitting) {
     event.preventDefault();
     isQuitting = true;
+    clearReloadTimers();
+    if (splashCloseTimer) {
+      clearManagedTimeout(splashCloseTimer);
+      splashCloseTimer = null;
+    }
+    clearAllManagedTimeouts();
     
     console.log('[App] Before quit - stopping backend...');
     try {

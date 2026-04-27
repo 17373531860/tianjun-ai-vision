@@ -196,7 +196,7 @@ def _reload_model_for_active_project(db: Session, project: Project) -> None:
 
     逻辑与 backend/main.py::auto_load_active_project 的 fallback 分支保持一致：
     - 已绑定其它 project_id 的通道不动（多工位各自的项目优先）
-    - 其余通道单通道走 load_model_for_channel，多通道走 load_shared_model
+    - 其余通道全部走 load_model_for_channel（每通道独立实例）
     - 任何失败只打日志，不影响 activate 本身的成功响应
     """
     import os
@@ -227,14 +227,14 @@ def _reload_model_for_active_project(db: Session, project: Project) -> None:
         print("[激活项目] 所有通道都已绑定其它项目，跳过模型重载")
         return
 
-    if len(remaining) == 1:
-        ok = channel_manager.load_model_for_channel(remaining[0], model.file_path, "auto")
-        print(f"[激活项目] ch{remaining[0]} 加载模型 '{model.name}': "
+    all_ok = True
+    for ch_id in remaining:
+        ok = channel_manager.load_model_for_channel(ch_id, model.file_path, "auto")
+        all_ok = all_ok and ok
+        print(f"[激活项目] ch{ch_id} 加载模型 '{model.name}': "
               f"{'成功' if ok else '失败'}")
-    else:
-        ok = channel_manager.load_shared_model(model.file_path, "auto")
-        print(f"[激活项目] 共享模型 '{model.name}' 加载到通道 {remaining}: "
-              f"{'成功' if ok else '失败'}")
+    if len(remaining) > 1:
+        print(f"[激活项目] 多通道独立实例加载结果: channels={remaining}, all_ok={all_ok}")
 
 
 @router.post("/{project_id}/activate", response_model=ProjectResponse)

@@ -16,6 +16,20 @@
       </div>
       <div class="flex items-center gap-2">
         <el-switch v-model="autoRefresh" size="small" active-text="自动刷新" @change="toggleAutoRefresh" />
+        <el-select
+          v-model="activeTemplateId"
+          size="small"
+          class="w-40"
+          placeholder="选择模板"
+          @change="handleTemplateSwitch"
+        >
+          <el-option
+            v-for="tpl in templateLibrary"
+            :key="tpl.id"
+            :label="tpl.name"
+            :value="tpl.id"
+          />
+        </el-select>
         <el-button size="small" @click="openTemplate">字段配置</el-button>
         <el-button size="small" type="success" @click="openCreate">新建工单</el-button>
       </div>
@@ -73,7 +87,7 @@
               <el-button v-if="row.status === 'in_progress'" size="small" type="primary" @click="changeStatus(row, 'completed')">完成</el-button>
               <el-button size="small" @click="editOrder(row)">编辑</el-button>
               <el-button v-if="hasExtraData(row)" size="small" type="info" @click="showExtraData(row)">附加</el-button>
-              <el-button v-if="['draft','cancelled'].includes(row.status)" size="small" type="danger" @click="handleDelete(row)">删除</el-button>
+              <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
             </div>
           </template>
           <!-- 自定义字段 / 未来新增 preset: 从 extra_data 或 row 自身取值 -->
@@ -124,6 +138,26 @@
     <el-dialog v-model="showTemplate" title="工单表单字段配置" width="720px" class="mes-dialog" destroy-on-close>
       <div class="text-xs text-gray-400 mb-3">
         拖动顺序请用上下按钮；系统预设字段可改名或删除（删除后新建工单时：工单号自动生成 <code>ORD-时间戳</code>，产品名称默认『未命名』），其余字段保存到工单的附加字段中。
+      </div>
+      <div class="flex items-center gap-2 mb-3">
+        <el-select
+          v-model="activeTemplateId"
+          size="small"
+          class="w-40"
+          placeholder="选择模板"
+          @change="handleTemplateSwitch"
+        >
+          <el-option
+            v-for="tpl in templateLibrary"
+            :key="tpl.id"
+            :label="tpl.name"
+            :value="tpl.id"
+          />
+        </el-select>
+        <el-button size="small" @click="createTemplate">新建模板</el-button>
+        <el-button size="small" @click="duplicateTemplate">另存为</el-button>
+        <el-button size="small" @click="renameTemplate">重命名</el-button>
+        <el-button size="small" type="danger" plain @click="deleteTemplate">删除模板</el-button>
       </div>
 
       <el-table :data="tplDraft" size="small" border class="tpl-table">
@@ -253,6 +287,9 @@ import { getOrders, createOrder, updateOrder, changeOrderStatus, deleteOrder, up
 
 // ========== 模板常量 ==========
 const TEMPLATE_KEY = 'mes_order_form_template_v1'
+const TEMPLATE_LIBRARY_KEY = 'mes_order_template_library_v1'
+const TEMPLATE_ACTIVE_ID_KEY = 'mes_order_template_active_id_v1'
+const ORDER_ARCHIVE_KEY = 'mes_order_archived_ids_v1'
 // v2.7.15: 一次性迁移标记 — 旧版可能把 visible 写成 false 污染了 localStorage
 // 第一次加载时强制把所有列的 visible 重置成 true, 再写标记防止再触发
 const TEMPLATE_VISIBLE_MIGRATED_KEY = 'mes_order_form_template_visible_migrated_v1'
@@ -421,6 +458,7 @@ function parseOptions(text) {
 // ========== 列表/分页/过滤 ==========
 const orders = ref([])
 const total = ref(0)
+const archivedOrderIds = ref(new Set())
 const currentPage = ref(1)
 const pageSize = ref(50)
 const keyword = ref('')
@@ -433,6 +471,8 @@ let refreshTimer = null
 
 // ========== 模板状态 ==========
 const template = ref(buildDefaultTemplate())
+const templateLibrary = ref([])
+const activeTemplateId = ref('')
 const presetValues = ref({})   // key: order_no / product_name / ...
 const customValues = ref({})   // 自定义字段 → 最后进 extra_data
 const _editingExtraOriginal = ref({})  // 编辑时原 extra_data 副本，用于保留模板之外的字段
@@ -473,63 +513,164 @@ const formatTime = (t) => {
 
 const hasExtraData = (row) => row.extra_data && Object.keys(row.extra_data).length > 0
 
-// ========== 模板持久化 ==========
-const loadTemplate = () => {
+const loadArchivedOrderIds = () => {
   try {
-    const raw = localStorage.getItem(TEMPLATE_KEY)
+    const raw = localStorage.getItem(ORDER_ARCHIVE_KEY)
     if (!raw) {
-      template.value = buildDefaultTemplate()
+      archivedOrderIds.value = new Set()
       return
     }
     const arr = JSON.parse(raw)
-    // v2.7.15: 一次性迁移 — 把旧版误写入的 visible:false 全部重置为 true
-    const needMigrate = !localStorage.getItem(TEMPLATE_VISIBLE_MIGRATED_KEY)
-    if (Array.isArray(arr)) {
-      const normalized = arr.map(it => {
-        const k = String(it.key || '')
-        const isSystem = SYSTEM_COL_KEYS.has(k)
-        return {
-          key: k,
-          label: String(it.label || it.key || ''),
-          type: isSystem ? 'system' : (it.type || 'text'),
-          required: !isSystem && !!it.required,
-          preset: PRESET_KEYS.has(k),
-          system: isSystem,
-          visible: needMigrate ? true : (it.visible !== false),
-          optionsText: isSystem ? '' : (it.optionsText || ''),
-        }
-      }).filter(it => it.key)
-
-      // v2.7.15 兼容: 旧版没有 system 列, 自动补回到尾部, 用默认中文名
-      const existingKeys = new Set(normalized.map(it => it.key))
-      for (const sk of SYSTEM_COL_ORDER) {
-        if (!existingKeys.has(sk)) {
-          normalized.push({
-            key: sk,
-            label: SYSTEM_COL_META[sk].label,
-            type: 'system',
-            required: false,
-            preset: false,
-            system: true,
-            visible: true,
-            optionsText: '',
-          })
-        }
-      }
-      template.value = normalized
-    } else {
-      template.value = buildDefaultTemplate()
+    if (!Array.isArray(arr)) {
+      archivedOrderIds.value = new Set()
+      return
     }
-    if (needMigrate) {
-      try { localStorage.setItem(TEMPLATE_VISIBLE_MIGRATED_KEY, '1') } catch {}
-    }
+    archivedOrderIds.value = new Set(arr.map(v => Number(v)).filter(v => Number.isInteger(v) && v > 0))
   } catch {
-    template.value = buildDefaultTemplate()
+    archivedOrderIds.value = new Set()
   }
 }
 
-const persistTemplate = () => {
+const persistArchivedOrderIds = () => {
+  localStorage.setItem(ORDER_ARCHIVE_KEY, JSON.stringify(Array.from(archivedOrderIds.value)))
+}
+
+const archiveOrderLocally = (orderId) => {
+  archivedOrderIds.value.add(orderId)
+  persistArchivedOrderIds()
+}
+
+const unarchiveOrderLocally = (orderId) => {
+  if (archivedOrderIds.value.delete(orderId)) {
+    persistArchivedOrderIds()
+  }
+}
+
+// ========== 模板持久化 ==========
+const normalizeTemplateItems = (arr, forceVisible = false) => {
+  if (!Array.isArray(arr)) return buildDefaultTemplate()
+  const normalized = arr.map(it => {
+    const k = String(it.key || '')
+    const isSystem = SYSTEM_COL_KEYS.has(k)
+    return {
+      key: k,
+      label: String(it.label || it.key || ''),
+      type: isSystem ? 'system' : (it.type || 'text'),
+      required: !isSystem && !!it.required,
+      preset: PRESET_KEYS.has(k),
+      system: isSystem,
+      visible: forceVisible ? true : (it.visible !== false),
+      optionsText: isSystem ? '' : (it.optionsText || ''),
+    }
+  }).filter(it => it.key)
+
+  const existingKeys = new Set(normalized.map(it => it.key))
+  for (const sk of SYSTEM_COL_ORDER) {
+    if (!existingKeys.has(sk)) {
+      normalized.push({
+        key: sk,
+        label: SYSTEM_COL_META[sk].label,
+        type: 'system',
+        required: false,
+        preset: false,
+        system: true,
+        visible: true,
+        optionsText: '',
+      })
+    }
+  }
+  return normalized
+}
+
+const buildTemplateName = (library) => {
+  let idx = 1
+  while (library.some(t => t.name === `模板${idx}`)) idx++
+  return `模板${idx}`
+}
+
+const buildTemplateRecord = (name, items) => ({
+  id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  name,
+  items: normalizeTemplateItems(items),
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+})
+
+const applyActiveTemplate = () => {
+  const current = templateLibrary.value.find(t => t.id === activeTemplateId.value)
+  if (current) {
+    template.value = JSON.parse(JSON.stringify(current.items))
+    return
+  }
+  if (templateLibrary.value.length > 0) {
+    activeTemplateId.value = templateLibrary.value[0].id
+    template.value = JSON.parse(JSON.stringify(templateLibrary.value[0].items))
+    return
+  }
+  const fallback = buildTemplateRecord('模板1', buildDefaultTemplate())
+  templateLibrary.value = [fallback]
+  activeTemplateId.value = fallback.id
+  template.value = JSON.parse(JSON.stringify(fallback.items))
+}
+
+const persistTemplateLibrary = () => {
+  localStorage.setItem(TEMPLATE_LIBRARY_KEY, JSON.stringify(templateLibrary.value))
+  localStorage.setItem(TEMPLATE_ACTIVE_ID_KEY, activeTemplateId.value || '')
   localStorage.setItem(TEMPLATE_KEY, JSON.stringify(template.value))
+}
+
+const loadTemplate = () => {
+  try {
+    const needMigrateVisible = !localStorage.getItem(TEMPLATE_VISIBLE_MIGRATED_KEY)
+    const rawLibrary = localStorage.getItem(TEMPLATE_LIBRARY_KEY)
+
+    if (rawLibrary) {
+      const parsed = JSON.parse(rawLibrary)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        templateLibrary.value = parsed.map((item, i) => ({
+          id: String(item.id || `tpl_${Date.now()}_${i}`),
+          name: String(item.name || `模板${i + 1}`),
+          items: normalizeTemplateItems(item.items, needMigrateVisible),
+          createdAt: Number(item.createdAt) || Date.now(),
+          updatedAt: Number(item.updatedAt) || Date.now(),
+        }))
+        const storedActiveId = localStorage.getItem(TEMPLATE_ACTIVE_ID_KEY) || ''
+        activeTemplateId.value = templateLibrary.value.some(t => t.id === storedActiveId)
+          ? storedActiveId
+          : templateLibrary.value[0].id
+        applyActiveTemplate()
+        if (needMigrateVisible) {
+          try { localStorage.setItem(TEMPLATE_VISIBLE_MIGRATED_KEY, '1') } catch {}
+          persistTemplateLibrary()
+        }
+        return
+      }
+    }
+
+    const rawLegacy = localStorage.getItem(TEMPLATE_KEY)
+    const legacyItems = rawLegacy ? JSON.parse(rawLegacy) : buildDefaultTemplate()
+    const migrated = buildTemplateRecord('模板1', normalizeTemplateItems(legacyItems, needMigrateVisible))
+    templateLibrary.value = [migrated]
+    activeTemplateId.value = migrated.id
+    applyActiveTemplate()
+    if (needMigrateVisible) {
+      try { localStorage.setItem(TEMPLATE_VISIBLE_MIGRATED_KEY, '1') } catch {}
+    }
+    persistTemplateLibrary()
+  } catch {
+    const fallback = buildTemplateRecord('模板1', buildDefaultTemplate())
+    templateLibrary.value = [fallback]
+    activeTemplateId.value = fallback.id
+    applyActiveTemplate()
+    persistTemplateLibrary()
+  }
+}
+
+const handleTemplateSwitch = (id) => {
+  if (!id) return
+  activeTemplateId.value = id
+  applyActiveTemplate()
+  persistTemplateLibrary()
 }
 
 // ========== 列表加载 ==========
@@ -541,8 +682,10 @@ const loadOrders = async () => {
       skip: (currentPage.value - 1) * pageSize.value,
       limit: pageSize.value,
     })
-    orders.value = res.data.items || []
-    total.value = res.data.total || 0
+    const items = res.data.items || []
+    orders.value = items.filter(item => !archivedOrderIds.value.has(item.id))
+    const serverTotal = res.data.total || 0
+    total.value = Math.max(0, serverTotal - archivedOrderIds.value.size)
   } catch (e) {
     ElMessage.error('加载工单失败')
   }
@@ -657,9 +800,22 @@ const changeStatus = async (row, status) => {
 
 const handleDelete = async (row) => {
   try {
-    await ElMessageBox.confirm(`确定删除工单 ${row.order_no}？`, '确认')
-    await deleteOrder(row.id)
-    ElMessage.success('工单已删除')
+    if (['draft', 'cancelled'].includes(row.status)) {
+      await ElMessageBox.confirm(`确定删除工单 ${row.order_no}？此操作不可恢复。`, '确认')
+      await deleteOrder(row.id)
+      unarchiveOrderLocally(row.id)
+      ElMessage.success('工单已删除')
+      loadOrders()
+      return
+    }
+
+    await ElMessageBox.confirm(
+      `工单 ${row.order_no} 当前处于${statusLabel(row.status)}，为避免影响追溯数据，将执行归档隐藏（可继续保留历史记录）。是否继续？`,
+      '归档工单',
+      { type: 'warning' }
+    )
+    archiveOrderLocally(row.id)
+    ElMessage.success('工单已归档隐藏')
     loadOrders()
   } catch (e) {
     if (e !== 'cancel' && e !== 'close')
@@ -747,6 +903,67 @@ const resetTemplate = () => {
   tplDraft.value = buildDefaultTemplate()
 }
 
+const createTemplate = () => {
+  const name = buildTemplateName(templateLibrary.value)
+  const record = buildTemplateRecord(name, buildDefaultTemplate())
+  templateLibrary.value.push(record)
+  activeTemplateId.value = record.id
+  applyActiveTemplate()
+  tplDraft.value = JSON.parse(JSON.stringify(template.value))
+  persistTemplateLibrary()
+  ElMessage.success(`已创建${name}`)
+}
+
+const duplicateTemplate = () => {
+  const source = templateLibrary.value.find(t => t.id === activeTemplateId.value)
+  const name = buildTemplateName(templateLibrary.value)
+  const record = buildTemplateRecord(name, source ? source.items : template.value)
+  templateLibrary.value.push(record)
+  activeTemplateId.value = record.id
+  applyActiveTemplate()
+  tplDraft.value = JSON.parse(JSON.stringify(template.value))
+  persistTemplateLibrary()
+  ElMessage.success(`已另存为${name}`)
+}
+
+const renameTemplate = async () => {
+  const current = templateLibrary.value.find(t => t.id === activeTemplateId.value)
+  if (!current) return
+  try {
+    const { value } = await ElMessageBox.prompt('请输入模板名称', '重命名模板', {
+      inputValue: current.name,
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      inputPattern: /.+/,
+      inputErrorMessage: '模板名称不能为空',
+    })
+    const name = String(value || '').trim()
+    if (!name) return
+    current.name = name
+    current.updatedAt = Date.now()
+    persistTemplateLibrary()
+    ElMessage.success('模板已重命名')
+  } catch {}
+}
+
+const deleteTemplate = async () => {
+  if (templateLibrary.value.length <= 1) {
+    ElMessage.warning('至少保留一个模板')
+    return
+  }
+  const current = templateLibrary.value.find(t => t.id === activeTemplateId.value)
+  if (!current) return
+  try {
+    await ElMessageBox.confirm(`确定删除模板『${current.name}』？`, '删除模板')
+    templateLibrary.value = templateLibrary.value.filter(t => t.id !== current.id)
+    activeTemplateId.value = templateLibrary.value[0]?.id || ''
+    applyActiveTemplate()
+    tplDraft.value = JSON.parse(JSON.stringify(template.value))
+    persistTemplateLibrary()
+    ElMessage.success('模板已删除')
+  } catch {}
+}
+
 const saveTemplate = () => {
   // 校验自定义字段 key 唯一且为合法标识符
   const keys = new Set()
@@ -770,13 +987,24 @@ const saveTemplate = () => {
       it.optionsText = ''
     }
   }
-  template.value = JSON.parse(JSON.stringify(tplDraft.value))
-  persistTemplate()
+  const normalizedItems = normalizeTemplateItems(tplDraft.value)
+  const current = templateLibrary.value.find(t => t.id === activeTemplateId.value)
+  if (current) {
+    current.items = JSON.parse(JSON.stringify(normalizedItems))
+    current.updatedAt = Date.now()
+  } else {
+    const record = buildTemplateRecord(buildTemplateName(templateLibrary.value), normalizedItems)
+    templateLibrary.value.push(record)
+    activeTemplateId.value = record.id
+  }
+  applyActiveTemplate()
+  persistTemplateLibrary()
   ElMessage.success('字段模板已保存')
   showTemplate.value = false
 }
 
 onMounted(() => {
+  loadArchivedOrderIds()
   loadTemplate()
   loadOrders()
 })

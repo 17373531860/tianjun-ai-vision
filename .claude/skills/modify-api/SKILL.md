@@ -29,10 +29,10 @@ app.include_router(api_router, prefix="/api/v1")
 
 # 单独挂载的路由
 app.include_router(source_router,      prefix="/api/v1/source")
-app.include_router(detection_router,   prefix="/api/v1/detection")
-app.include_router(sessions_router,    prefix="/api/v1")
+app.include_router(sessions_router,    prefix="/api/v1")  # sessions.py 主入口（已 v2.7.x 拆 4 个文件，但 router 仍统一注册）
 app.include_router(ws_router,          prefix="")
 app.include_router(workstation_router, prefix="/api/v1")
+# ❌ detection_router 已在 v2.7.x 全删（detection.py / services/detector.py 死代码清除）
 
 # MES & Scanner (v2.3.0+)
 app.include_router(mes_router,     prefix="/api/v1")  # → /api/v1/mes/*
@@ -62,9 +62,8 @@ app.include_router(operators_router, prefix="/api/v1")  # → /api/v1/operators/
 
 | 后端模块 | 前端API文件 | 前端视图 |
 |----------|-------------|----------|
-| source.py (source_router) | detection.js | Monitor, Source |
-| detection.py | detection.js | Monitor |
-| sessions.py | data.js | Data |
+| source.py + 11 个 source_*.py mixin/组件 (source_router) | detection.js | Monitor, Source |
+| sessions.py / sessions_export.py / sessions_stats.py / sessions_maintenance.py (统一 sessions_router) | data.js | Data |
 | projects.py | project.js | Project, Navbar |
 | models.py | model.js | Model, Project, Monitor |
 | cameras.py | camera.js | (基本未直接使用) |
@@ -123,9 +122,9 @@ app.include_router(operators_router, prefix="/api/v1")  # → /api/v1/operators/
 ### 第4步: 检查跨模块调用
 
 某些API端点被其他后端模块调用:
-- `source.py` 的 `get_video_manager()` 被 detection.py, main.py 调用
+- `source.py` 的 `get_video_manager()` 被 main.py 调用
 - `channel_manager.py` 的 `channel_manager` 被 main.py 调用
-- 关机端点被 electron/main.js 调用
+- 关机端点（`/api/v1/source/shutdown/*`）被 electron/main.js 8 步关机流程调用
 
 ### 第5步: 生成影响报告
 

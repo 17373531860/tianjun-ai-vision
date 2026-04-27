@@ -14,6 +14,18 @@ from backend.services.external_device_models import DeviceConnection
 
 logger = logging.getLogger(__name__)
 
+def _is_expected_connection_error(exc: Exception) -> bool:
+    """设备未连接、端口未开、网络不可达等预期离线错误。"""
+    return isinstance(exc, (
+        ConnectionRefusedError,
+        ConnectionResetError,
+        ConnectionAbortedError,
+        TimeoutError,
+        socket.timeout,
+        OSError,
+    ))
+
+
 class ExternalDeviceProtocolsMixin:
     def _device_loop(self, conn: DeviceConnection):
         retry_delay = 2.0
@@ -39,7 +51,10 @@ class ExternalDeviceProtocolsMixin:
             except Exception as e:
                 conn.last_error = str(e)
                 conn.status = "error"
-                logger.error("[ExtDev] %s 异常: %s", conn.name, e)
+                if _is_expected_connection_error(e):
+                    logger.warning("[ExtDev] %s 连接/通讯失败，将继续重试: %s", conn.name, e)
+                else:
+                    logger.error("[ExtDev] %s 异常: %s", conn.name, e)
 
             conn.status = "disconnected"
             if not conn._stop_event.is_set():

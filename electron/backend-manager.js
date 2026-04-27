@@ -246,36 +246,34 @@ class BackendManager extends EventEmitter {
         
         // Windows: 第二步 - 如果端口还被占用，尝试查找 uvicorn 相关进程
         if (this.isPortInUse()) {
-          console.log('[BackendManager] Port still in use, trying to find uvicorn processes...');
+          console.log('[BackendManager] Port still in use, trying to find backend uvicorn processes...');
           try {
-            // 查找命令行包含 uvicorn 的进程
-            const result = execSync('tasklist /v /fo csv', {
+            // 仅清理“明确属于本应用后端”的 Python 进程，避免误杀系统其他 Python 服务
+            // 需要命令行同时包含: python + uvicorn + backend.main
+            const psCmd = `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python' -and $_.CommandLine -match 'uvicorn' -and $_.CommandLine -match 'backend.main' } | Select-Object -ExpandProperty ProcessId"`;
+            const result = execSync(psCmd, {
               encoding: 'utf-8',
               stdio: ['pipe', 'pipe', 'pipe'],
-              maxBuffer: 10 * 1024 * 1024 // 10MB buffer
+              maxBuffer: 10 * 1024 * 1024
             });
-            
-            const lines = result.trim().split('\n');
-            for (const line of lines) {
-              // 查找 python.exe 进程
-              if (line.toLowerCase().includes('python.exe')) {
-                const match = line.match(/"[^"]*","(\d+)"/);
-                if (match) {
-                  const pid = parseInt(match[1]);
-                  if (pid && pid > 0) {
-                    console.log(`[BackendManager] Killing Python process PID: ${pid}`);
-                    try {
-                      execSync(`taskkill /pid ${pid} /f /t`, { stdio: 'ignore' });
-                      cleaned = true;
-                    } catch (e) {
-                      // 忽略
-                    }
-                  }
-                }
+
+            const pids = result
+              .trim()
+              .split(/\r?\n/)
+              .map(s => parseInt((s || '').trim(), 10))
+              .filter(pid => Number.isInteger(pid) && pid > 0 && pid !== process.pid);
+
+            for (const pid of pids) {
+              console.log(`[BackendManager] Killing backend uvicorn PID: ${pid}`);
+              try {
+                execSync(`taskkill /pid ${pid} /f /t`, { stdio: 'ignore' });
+                cleaned = true;
+              } catch (e) {
+                // 忽略，继续清理其他进程
               }
             }
           } catch (e) {
-            console.log('[BackendManager] tasklist failed:', e.message);
+            console.log('[BackendManager] Unable to resolve backend uvicorn process list:', e.message);
           }
         }
         

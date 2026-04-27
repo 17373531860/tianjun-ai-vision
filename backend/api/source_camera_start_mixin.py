@@ -25,7 +25,7 @@ import traceback
 import cv2
 import numpy as np
 
-from backend.api.source_sdk_loader import debug_log
+from backend.api.source_sdk_loader import debug_log, hik_log
 
 
 class CameraStartMixin:

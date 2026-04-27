@@ -1371,7 +1371,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch, nextTick } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, Loading, Warning } from '@element-plus/icons-vue';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
@@ -1394,6 +1394,13 @@ const gpuName = ref('');
 const convertingFormat = ref(null);
 const conversionId = ref(null);
 const conversionPolling = ref(null);
+
+const stopConversionPolling = () => {
+  if (conversionPolling.value) {
+    clearInterval(conversionPolling.value);
+    conversionPolling.value = null;
+  }
+};
 
 const projects = ref([]);
 const modelList = ref([]);
@@ -1490,6 +1497,10 @@ onMounted(async () => {
       console.error('加载项目检测配置失败:', e);
     }
   }
+});
+
+onBeforeUnmount(() => {
+  stopConversionPolling();
 });
 
 const filteredProjects = computed(() => {
@@ -2258,21 +2269,19 @@ const selectFormat = async (fmt) => {
 };
 
 const startConversionPolling = (fmtKey) => {
-  if (conversionPolling.value) clearInterval(conversionPolling.value);
+  stopConversionPolling();
   conversionPolling.value = setInterval(async () => {
     try {
       const res = await getConversionStatus(conversionId.value);
       const s = res.data;
       if (s.status === 'ready') {
-        clearInterval(conversionPolling.value);
-        conversionPolling.value = null;
+        stopConversionPolling();
         convertingFormat.value = null;
         activeProject.value.model_format = fmtKey;
         showFormatSelect.value = false;
         ElMessage.success(`${getFormatDisplayName(fmtKey)} 转换完成`);
       } else if (s.status === 'failed') {
-        clearInterval(conversionPolling.value);
-        conversionPolling.value = null;
+        stopConversionPolling();
         convertingFormat.value = null;
         const errMsg = s.error_msg || '未知错误';
         try {
@@ -2308,8 +2317,7 @@ const startConversionPolling = (fmtKey) => {
 };
 
 const cancelFormatSelect = () => {
-  if (conversionPolling.value) clearInterval(conversionPolling.value);
-  conversionPolling.value = null;
+  stopConversionPolling();
   convertingFormat.value = null;
   showFormatSelect.value = false;
 };

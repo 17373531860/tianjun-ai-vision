@@ -16,6 +16,8 @@ import traceback
 import cv2
 import numpy as np
 
+from backend.api.source_sdk_loader import debug_log
+
 
 class DetectRunnersMixin:
     def _detect_only(self, frame: np.ndarray) -> list:

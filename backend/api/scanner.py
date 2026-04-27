@@ -62,6 +62,14 @@ class ScannerUpdate(BaseModel):
     late_scan_bind_window_sec: Optional[int] = None
 
 
+class ScannerSimulate(BaseModel):
+    barcode: str
+    device_id: Optional[int] = None
+    channel_id: int = 0
+    external_only: bool = False
+    pairing_group: Optional[str] = None
+
+
 def _serialize_device(d):
     return {
         "id": d.id, "name": d.name, "ip": d.ip, "port": d.port,
@@ -247,6 +255,40 @@ def trigger_scan(device_id: Optional[int] = None, ip: Optional[str] = None):
         return svc.trigger_scan_by_ip(ip)
     else:
         raise HTTPException(400, "需要提供 device_id 或 ip")
+
+
+@router.post("/simulate")
+def simulate_scan(body: ScannerSimulate):
+    """调试用：模拟扫码结果，不需要真实扫码器硬件。"""
+    barcode = (body.barcode or "").strip()
+    if not barcode:
+        raise HTTPException(400, "barcode 不能为空")
+    svc = get_scanner_service()
+    result = svc.simulate_scan(
+        barcode=barcode,
+        device_id=body.device_id,
+        channel_id=body.channel_id,
+        external_only=body.external_only,
+        pairing_group=body.pairing_group,
+    )
+
+    # 真实扫码日志通常在 MES Hook 中异步补齐。模拟入口额外落一条可见日志，
+    # 让前端点"刷新"能立刻看到按钮确实生效。
+    db = SessionLocal()
+    try:
+        log = ScanLog(
+            device_id=body.device_id,
+            channel_id=body.channel_id,
+            raw_data=barcode,
+            parsed_serial=result.get("serial_no"),
+            success=result.get("success", True),
+            error_msg="AUTO_QA_SIMULATED",
+        )
+        db.add(log)
+        db.commit()
+    finally:
+        db.close()
+    return result
 
 
 @router.get("/status")

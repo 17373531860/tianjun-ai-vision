@@ -125,7 +125,15 @@ const dateRange = ref(null)
 const traceData = ref(null)
 
 const wpStatusLabel = (s) => ({ registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良', rework: '返工中', scrapped: '已报废' }[s] || s)
-const wpStatusType = (s) => ({ ok: 'success', ng: 'danger', inspecting: 'warning', rework: '', scrapped: 'info', registered: 'info', queued: '' }[s] || '')
+const wpStatusType = (s) => ({
+  ok: 'success',
+  ng: 'danger',
+  inspecting: 'warning',
+  rework: 'warning',
+  scrapped: 'info',
+  registered: 'info',
+  queued: 'info',
+}[s] || 'info')
 const formatTime = (t) => t ? t.replace('T', ' ').substring(0, 19) : '-'
 
 const loadList = async () => {

@@ -9,8 +9,36 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 
 # modify-source: source.py 安全修改分析
 
-你正在帮用户安全修改 `backend/api/source.py`（~8616行）。
-**这是整个系统最危险的文件，任何修改前必须完成以下分析。**
+你正在帮用户安全修改 `backend/api/source.py`（v2.7.x 全修后 **~1525 行**，曾经 8600+ 行，已通过 P6 mixin + P7 组合拆分）。
+**这仍是整个系统最危险的文件，任何修改前必须完成以下分析。**
+
+## 当前拆分结构（v2.7.x 全修后）
+
+```
+source.py (1525L)                       -- VSM 主类骨架 + 共享方法
+├── source_capture_loop_mixin.py        -- _capture_loop 主循环
+├── source_camera_start_mixin.py        -- start_camera/rtsp/hikvision/hcnetsdk/video/image
+├── source_lifecycle_mixin.py           -- 启停/资源清理
+├── source_session_lifecycle_mixin.py   -- start/end_session, start/end_cycle, record_step
+├── source_inference_loop_mixin.py      -- 推理线程主循环 + fps_inference 统计
+├── source_detect_runners_mixin.py      -- _detect_only/_detect_and_track/_detect_segment
+├── source_recording_api_mixin.py       -- 录像公共 API
+├── source_recording_thread_mixin.py    -- 录像后台线程
+├── source_recording_mixin.py           -- 录像绘图/Kalman 辅助
+├── source_check_modes_mixin.py         -- 聚合 mixin（4 个子 mixin 多继承）
+│   ├── source_container_grouping_mixin.py
+│   ├── source_checklist_mixin.py
+│   ├── source_events_check_mixin.py
+│   └── source_sequential_mixin.py
+└── 组合（不是 mixin，是 self.xxx 组件）：
+    ├── source_drawer.py                -- Drawer (画框/文字)
+    ├── source_mediapipe.py             -- MediaPipeOverlay
+    ├── source_counters.py              -- Counters
+    ├── source_video_transform.py       -- VideoTransform (旋转/翻转)
+    └── source_inference_executor.py    -- InferenceExecutor (推理线程池)
+```
+
+**修改前先用 Grep 在所有 `source_*.py` 中搜索方法名，定位到真正的实现文件。**
 
 计划修改: $ARGUMENTS
 
@@ -35,20 +63,22 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 
 ```
 必查文件:
-  backend/api/source.py          -- 内部调用
+  backend/api/source*.py         -- VSM 主类 + 11 个 mixin/组件文件，全部 grep
   backend/api/channel_manager.py -- 多通道管理器调用
-  backend/api/detection.py       -- 检测控制端点
-  backend/main.py                -- 启动/关机/video_feed/MES初始化
+  backend/main.py                -- 启动/关机/video_feed/MES初始化（含 video_feed/snapshot 直接挂在 app 上）
   backend/hotfix.py              -- 运行时猴子补丁！
   patches/session_fix_patch.py   -- 会话修复补丁！
-  backend/services/mes_hooks.py  -- MES Hook 回调（读取 cycle/session 数据）；周期结束/会话结束处会调用 MESGateway.dispatch 推送外部 MES
-  
+  backend/services/mes_hooks.py  -- MES Hook 回调；周期/会话结束处调用 MESGateway.dispatch 推送外部 MES
+
 可能相关:
-  backend/api/sessions.py        -- 如果涉及Session/Cycle
-  backend/services/detector.py   -- 如果涉及检测
+  backend/api/sessions*.py       -- 如果涉及Session/Cycle（已拆 4 个文件）
   backend/services/scanner.py    -- 扫码器（通过 mes_hooks 间接依赖 source）
   frontend/src/api/detection.js  -- 前端检测API
   frontend/src/views/Monitor/index.vue -- 监控页（含 MES 信息条）
+
+❌ 已删除（看到引用立刻清理）:
+  backend/api/detection.py       -- 已删
+  backend/services/detector.py   -- 已删
 ```
 
 ### 第3步: 检查线程安全
@@ -119,6 +149,7 @@ MES Hook 影响: [是否影响 5 个 Hook 调用点]
 5. **线程安全:** 跨线程变量使用原子操作或加锁
 6. **DB事务:** 涉及多个DB操作时使用事务
 7. **异常处理:** 不要用 bare except，至少 log 异常信息
+8. **mixin 顶层 import 自查:** 改动 `source_*_mixin.py` 后，必须搜该文件中用到的 `os/cv2/threading/uuid/datetime/platform/hik_log/debug_log` 等是否在顶部 `import`。mixin 拆分后曾多次出现 `NameError: name 'xxx' is not defined`（v2.7.x 修了 5 个）。可跑 `python tools/check_imports.py` 静态扫一遍
 
 ## 高危操作清单
 

@@ -15,12 +15,9 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 
 ## 已知的不一致问题
 
-### 1. resetDetection URL 路径不一致
-```
-前端 detection.js: POST /detection/reset       ← 错误路径
-其他检测API:       POST /source/detection/...   ← 正确路径前缀
-```
-**影响:** resetDetection 可能打到 detection.py 的端点而非 source.py 的端点。
+### 1. ~~resetDetection URL 路径不一致~~（v2.7.x 已不再适用）
+- `backend/api/detection.py` 已删，整个 `/detection/*` 前缀不再注册
+- 前端如果还残留 `POST /detection/reset` 调用应直接删或改走 `/source/detection/reset-stats`
 
 ### 2. 重复函数
 ```javascript
@@ -57,7 +54,8 @@ vite.config.js:     server.port = 6001                // 实际端口
 | `GET /source/detection/results` | source_router `/detection/results` | OK |
 | `GET /source/status` | source_router `/status` | OK |
 | `POST /source/detection/reset-stats` | source_router `/detection/reset-stats` | OK |
-| **`POST /detection/reset`** | **detection_router?** | **路径不一致!** |
+| `POST /source/detection/recording-failures/clear` | source_router `/detection/recording-failures/clear` | OK |
+| ~~`POST /detection/reset`~~ | ~~detection_router~~ | **已删（v2.7.x），改用 `/source/detection/reset-stats`** |
 | `POST /source/camera/start` | source_router `/camera/start` | OK |
 | `POST /source/rtsp/start` | source_router `/rtsp/start` | OK |
 | `POST /source/video/upload` | source_router `/video/upload` | OK |
@@ -177,6 +175,7 @@ vite.config.js:     server.port = 6001                // 实际端口
 | `GET /scanner/status` | scanner_router `/status` | OK |
 | `GET /scanner/latest/{ch}` | scanner_router `/latest/{ch}` | OK |
 | `GET /scanner/logs` | scanner_router `/logs` | OK |
+| `POST /scanner/simulate` | scanner_router `/simulate` | OK (开发者模式调试入口) |
 
 ### MES Gateway 模块 (/api/v1/mes/gateway) — 外部 MES 适配器
 | 前端调用 (gateway.js) | 后端端点 (mes_gateway.py) | 状态 |
@@ -261,7 +260,14 @@ vite.config.js:     server.port = 6001                // 实际端口
 - `POST /external-devices/{id}/connect` — 连接设备
 - `POST /external-devices/{id}/disconnect` — 断开设备
 - `GET /external-devices/{id}/logs` — 获取设备数据日志
+- `POST /external-devices/simulate` — 调试注入外设原始数据（可只写日志或走 full_chain）
 - 前端: `frontend/src/api/external_device.js`
+
+### v3.0 调试/状态类 API
+- `POST /scanner/simulate`：无真实扫码器时注入条码，前端 `ScannerPanel.vue` 仅开发者模式显示"模拟扫码"。
+- `POST /external-devices/simulate`：无真实称重器/传感器时注入外设数据，前端 `ExternalDevicePanel.vue` 仅开发者模式显示"模拟数据"。
+- `GET /source/detection/results` 的 `mes.recording_failures`：录像通道失效事件详情，不依赖 MES 开关。
+- `POST /source/detection/recording-failures/clear`：清空当前工位录像异常详情，仅影响前端展示。
 
 ### channel_manager.py（修改）
 - `PUT /workstations/channel-config` — 持久化单通道配置（接受任意字段 dict）
@@ -320,3 +326,28 @@ Body（Pydantic `TransformConfigRequest`）：
 - **路由顺序**：`DELETE /external_device/{device_id}` 必须**放在**所有静态路径（`/logs`、`/scan` 等）之后注册，否则 FastAPI 会把 `/logs` 当成 `device_id="logs"` 报 `int_parsing`
 - **错误返回**：`create_device/update_device` 如果设备立即连接失败（串口未插、IP 不通），不再返回 400，而是 200 + `warning` 字段，前端用 `ElMessage.warning` 展示
 - **POST/PUT 入口**：`_sanitize_device_payload(data)` 对 `name/serial_port/ip/station_id` strip，防止前端拷贝粘贴带空格
+
+## v2.7.x 全修变更（架构重构 + 全量 API 烟测发现的修复）
+
+### 已删除路由（看到引用立刻清理）
+| 路由 | 状态 | 替代 |
+|------|------|------|
+| `POST /api/v1/detection/start|stop|reset` | **已删** | `POST /api/v1/source/detection/start|stop`、`/reset-stats` |
+| `backend/api/detection.py` | **已删** | — |
+| `backend/services/detector.py` | **已删** | `VideoSourceManager` 内置推理 |
+
+### 后端文件拆分（路由不变，文件位置变了）
+| 模块 | 原文件 | 现状 |
+|------|--------|------|
+| sessions | `sessions.py` 1901L | 拆 `sessions.py` (主入口) + `sessions_export.py` (CSV) + `sessions_stats.py` (averages) + `sessions_maintenance.py` (清理/备份) |
+| external_device | `services/external_device.py` 1205L | 拆 `external_device.py` + `external_device_protocols.py` + `external_device_pipeline.py` + `external_device_models.py` |
+| source | `api/source.py` 8616L | 拆 `source.py` (1525L) + 11 个 mixin/组件文件 |
+
+### v2.7.x 烟测修复
+- **`/api/v1/reports/daily-stats`**：`func.cast(Task.is_good, type_='INTEGER')` 在 SQLite 抛 `AttributeError`，改为 `case((Task.is_good == True, 1), else_=0)`
+- **`/api/v1/reports/export`**：默认 `format` 从 `pdf` 改为 `csv`（前端只用 CSV）；`reportlab` 缺失改为 501 而非崩溃
+- **CORS**：`backend/main.py` 增加 `allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"`，明确加入 `localhost:6001`，解决 Vite 端口与 CORS 不一致
+
+### 新增烟测工具
+- `tools/smoke_all_routes.py` — 对所有 FastAPI 路由跑 TestClient 烟测，结果写 `smoke_report.txt`；硬件类（`/scanner/wmax/auto-discover`、`/video_feed`、`/snapshot`、`/source/shutdown/complete`、`/system/restart`）已加入 `SKIP_PATHS`
+- `tools/check_imports.py` — 静态扫 `backend/api`、`backend/services`，发现使用了但没 import 的常见名字（`os/cv2/threading/uuid/datetime/platform/hik_log/debug_log` 等），用于排查 mixin 拆分后的 `NameError`

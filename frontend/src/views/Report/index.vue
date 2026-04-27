@@ -50,8 +50,8 @@
         <p class="text-2xl font-mono mt-1 text-tech-blue">{{ summary.yield_rate.toFixed(2) }}%</p>
       </div>
       <div class="bg-ind-panel p-4 rounded border border-gray-800">
-        <p class="text-gray-400 text-xs">平均耗时</p>
-        <p class="text-2xl font-mono mt-1 text-yellow-400">{{ summary.avg_duration.toFixed(1) }}s</p>
+        <p class="text-gray-400 text-xs">平均耗时 (ms)</p>
+        <p class="text-2xl font-mono mt-1 text-yellow-400">{{ summary.avg_duration.toFixed(0) }}ms</p>
       </div>
     </div>
 

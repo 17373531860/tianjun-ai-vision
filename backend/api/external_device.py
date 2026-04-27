@@ -83,6 +83,15 @@ class BarcodeInject(BaseModel):
     barcode: str
 
 
+class SimulateData(BaseModel):
+    raw_data: str
+    device_id: Optional[int] = None
+    barcode: Optional[str] = None
+    full_chain: bool = False
+    repeat_count: int = 1
+    channel_id: int = 0
+
+
 def _serialize(d):
     return {
         "id": d.id, "name": d.name,
@@ -181,6 +190,23 @@ def inject_barcode(body: BarcodeInject):
     svc = get_external_device_service()
     svc.set_barcode(body.device_id, body.barcode)
     return {"success": True, "device_id": body.device_id, "barcode": body.barcode}
+
+
+@router.post("/simulate")
+def simulate_data(body: SimulateData):
+    """调试用：模拟外部设备原始数据，不需要真实称重器/传感器硬件。"""
+    raw = (body.raw_data or "").strip()
+    if not raw:
+        raise HTTPException(400, "raw_data 不能为空")
+    svc = get_external_device_service()
+    return svc.simulate_raw_data(
+        raw=raw,
+        device_id=body.device_id,
+        barcode=(body.barcode or "").strip() or None,
+        full_chain=body.full_chain,
+        repeat_count=body.repeat_count,
+        channel_id=body.channel_id,
+    )
 
 
 

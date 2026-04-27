@@ -158,6 +158,13 @@ pollTimer = setInterval(() => {
 
 ## 常见问题诊断
 
+### v3.0 全功能 QA 结论
+- `Activation/index.vue` 在浏览器环境会主动 `router.replace('/')`，这是为了只在 Electron 内走真实授权流程。浏览器访问 `#/activation` 跳回 Monitor 不影响客户桌面版授权，只影响浏览器调试。
+- `Report/index.vue` 文件和 `api/report.js` 存在，但当前 `router/index.js` 与侧边栏没有 `/report` 入口；访问 `#/report` 会 no match。若要给客户独立报表中心，必须同时加路由、侧边栏入口，并复测查询与 CSV 导出。
+- `Settings/index.vue` 的"基本信息设置"是卡片标题，不是按钮；自动化点击它失败不算功能问题。
+- Settings 操作员"删除"是后端软删除（`active=false`），前端若继续拉全量 `GET /operators`，用户会误以为没删。若要符合直觉，列表默认传 `active=true`；如需恢复停用人员，再做"显示停用/恢复"入口。
+- MES 的"模拟扫码/模拟数据"按钮只在开发者模式显示，Playwright 复测前要设置 `localStorage['tianjun_developer_mode']='true'` 或通过 UI 开启开发者模式。
+
 ### 页面状态不同步
 1. 检查 Pinia store 更新是否触发响应式
 2. Navbar 的 `handleProjectChange()` 是否完整执行
@@ -226,6 +233,21 @@ multiChannelData.value[0].mes = data.mes
 - 选中后切换为串口/TCP 配置表单（隐藏 REST 专属字段）
 - `buildConfig()` 根据 `adapter_type` 分支构建不同 config
 - `openEdit()` 需从 `cfg` 加载所有 Modbus 字段（transport/port/host/baudrate 等）
+
+## 路由记忆机制 (v2.7.x 新增)
+
+**问题背景**：之前每次启动应用都强制跳到 `/monitor`，无视用户上次离开的页面。
+
+**实现位置**：`frontend/src/router/index.js`
+- `LAST_ROUTE_KEY = 'tianjun:lastRoute'`（localStorage）
+- `REMEMBERABLE_NAMES = {'Monitor','Project','Model','Data','Source','Settings','Alarm','MES'}`
+- `router.afterEach`：每次成功导航后，如果 `to.name` 在白名单内 → 写入 localStorage（`Activation` 不记忆）
+- `router.beforeEach`：**冷启动**判定（`from.name === undefined && to.path === '/monitor'`），从 localStorage 读出上次路径并 redirect 到那里；只触发一次（`lastRouteRestored` 标志位）
+
+**排查清单**：
+- 启动后还是默认到 Monitor？→ DevTools → Application → Local Storage 查 `tianjun:lastRoute` 是否被写入
+- 想跳过记忆（演示场景）？→ `localStorage.removeItem('tianjun:lastRoute')` 或临时把名字从 `REMEMBERABLE_NAMES` 删
+- 死循环跳转？→ 检查 `lastRouteRestored` 是否被重置；正常应该一次会话只跳一次
 
 ## 已知陷阱
 - License检查异常时 `licenseChecked` 仍设为 true（静默通过）

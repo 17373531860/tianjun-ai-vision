@@ -405,11 +405,13 @@ def auto_load_active_project():
                 if fallback_project.default_model_id:
                     model = db.query(Model).filter(Model.id == fallback_project.default_model_id).first()
                     if model and model.file_path and os.path.exists(model.file_path):
-                        if len(remaining) == 1:
-                            channel_manager.load_model_for_channel(remaining[0], model.file_path)
-                        else:
-                            channel_manager.load_shared_model(model.file_path)
-                        print(f"[启动] 兜底: 模型 '{model.name}' 加载到通道 {remaining}")
+                        all_ok = True
+                        for ch_id in remaining:
+                            ok = channel_manager.load_model_for_channel(ch_id, model.file_path)
+                            all_ok = all_ok and ok
+                            print(f"[启动] 兜底: ch{ch_id} 模型 '{model.name}' "
+                                  f"{'加载成功' if ok else '加载失败'}")
+                        print(f"[启动] 兜底: 模型 '{model.name}' 独立实例加载到通道 {remaining}, all_ok={all_ok}")
             elif not fallback_project and not loaded_channels:
                 print("[启动] 没有激活的项目，也没有通道绑定项目，跳过自动加载")
     except Exception as e:

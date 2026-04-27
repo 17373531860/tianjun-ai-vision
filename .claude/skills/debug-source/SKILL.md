@@ -9,50 +9,46 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 
 # debug-source: VideoSourceManager 诊断
 
-你正在诊断 **天军AI视觉检测系统** 的核心文件 `backend/api/source.py`（约8600行）。
-这是整个系统最复杂、最脆弱的文件，包含 `VideoSourceManager` 上帝对象。
+你正在诊断 **天军AI视觉检测系统** 的核心 `VideoSourceManager`（v2.7.x 起拆成 1 个主文件 + 11 个 mixin/组件，共 ~5000 行）。
+这是整个系统最复杂、最脆弱的子系统，曾经是 8600+ 行的单文件上帝对象。
 
 用户问题: $ARGUMENTS
 
-## 文件结构地图
+## 文件结构地图（v2.7.x 拆分后）
 
 ```
-backend/api/source.py (~8616 行)
-├── 模块级工具函数
-│   ├── debug_log(), hik_log()          -- 条件调试日志
-│   ├── get_ffmpeg_path()               -- FFmpeg 路径解析
-│   ├── get_hikvision_device_list()     -- 海康工业相机枚举
-│   └── _decode_hik_string()            -- ctypes 字符串解码
-├── FFmpegRecorder 类                    -- 视频录制（FFmpeg子进程管道）
-├── KalmanFilter2D 类                    -- 8状态卡尔曼滤波（检测框平滑）
-└── VideoSourceManager 类 (~8000 行)     -- 上帝对象
-    ├── __init__()                       -- 基础初始化
-    ├── _load_device_config()            -- 读 device_config.json
-    ├── _init_inference_vars()           -- 初始化 ~100+ 推理状态变量
-    ├── set_project_config()             -- 解析项目配置到内部状态
-    ├── load_model()                     -- 加载 YOLO 模型
-    ├── _capture_loop()                  -- 主采集线程（读帧→推理→录制）
-    ├── _inference_thread               -- YOLO推理（在_capture_loop内部）
-    ├── start_session() / end_session()  -- 会话生命周期
-    ├── start_cycle() / end_cycle()      -- 周期生命周期
-    ├── record_step()                    -- 写入步骤记录到DB
-    ├── _reconcile_step_records()        -- 对齐DB步骤记录与实际检测
-    ├── _force_timeout_ng()              -- 超时NG判定
-    ├── _auto_split_session()            -- 自动分割长会话
-    ├── 视频源启动方法
-    │   ├── start_camera()              -- USB摄像头
-    │   ├── start_hikvision()           -- 海康工业相机
-    │   ├── start_rtsp()                -- RTSP流（被hotfix.py猴子补丁）
-    │   ├── start_hcnetsdk()            -- 海康NVR SDK
-    │   ├── start_video()               -- 视频文件
-    │   └── start_image()               -- 图片
-    ├── MediaPipe
-    │   ├── _init_mediapipe()
-    │   ├── _release_mediapipe()
-    │   └── _apply_mediapipe_overlay()
-    └── 模型管理
-        └── _release_model()             -- 释放GPU显存
+backend/api/source.py (~1525 行)            -- VSM 主类骨架（聚合所有 mixin + 持有组件）
+│   ├── 模块级工具函数（debug_log, hik_log, get_ffmpeg_path）
+│   ├── FFmpegRecorder 类
+│   ├── KalmanFilter2D 类
+│   └── VideoSourceManager 类
+│       ├── __init__() / _init_inference_vars()
+│       ├── set_project_config()
+│       └── 持有的组件（self.xxx, P7 组合）：
+│           - self.drawer        (source_drawer.py)
+│           - self.mediapipe     (source_mediapipe.py)
+│           - self.counters      (source_counters.py)
+│           - self.video_transform (source_video_transform.py)
+│           - self.inference_executor (source_inference_executor.py)
+│
+├── source_capture_loop_mixin.py            -- _capture_loop 主采集循环（含画面变换调用点）
+├── source_inference_loop_mixin.py          -- _inference_loop 推理线程 + fps_inference 统计
+├── source_detect_runners_mixin.py          -- _detect_only / _detect_and_track / _detect_segment
+├── source_camera_start_mixin.py            -- start_camera/rtsp/hikvision/hcnetsdk/video/image
+├── source_lifecycle_mixin.py               -- 启停 / 资源清理 / _release_model
+├── source_session_lifecycle_mixin.py       -- start/end_session, start/end_cycle, record_step,
+│                                              _reconcile_step_records, _force_timeout_ng
+├── source_recording_api_mixin.py           -- 录像公共 API
+├── source_recording_thread_mixin.py        -- 录像后台线程
+├── source_recording_mixin.py               -- 录像绘图/Kalman 辅助
+└── 判定模式（4 个子 mixin 多继承到 CheckModesMixin）：
+    ├── source_container_grouping_mixin.py  -- 容器分组 + per-box 结算
+    ├── source_checklist_mixin.py           -- checklist 维护 + counting
+    ├── source_events_check_mixin.py        -- 事件 FSM
+    └── source_sequential_mixin.py          -- 顺序 / 自定义顺序 / 自定义检测
 ```
+
+**搜方法名时不要只 grep `source.py`，要 grep `backend/api/source*.py` 全集。**
 
 ## 4种检测模式的状态机
 

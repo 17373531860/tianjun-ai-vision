@@ -19,9 +19,11 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write"
 
 | 功能领域 | 后端文件 | 路由前缀 | 前端API |
 |----------|----------|----------|---------|
-| 视频源控制 | `api/source.py` | `/api/v1/source` | `detection.js` |
-| 检测控制 | `api/detection.py` | `/api/v1/detection` | `detection.js` |
-| 会话数据 | `api/sessions.py` | `/api/v1` | `data.js` |
+| 视频源 + 检测控制 | `api/source.py` + `source_*_mixin.py` | `/api/v1/source` | `detection.js` |
+| 会话列表/详情 | `api/sessions.py` | `/api/v1` | `data.js` |
+| 会话导出 (CSV) | `api/sessions_export.py` | `/api/v1` | `data.js` |
+| 会话统计 (averages) | `api/sessions_stats.py` | `/api/v1` | `data.js` |
+| 数据维护 (清理/备份) | `api/sessions_maintenance.py` | `/api/v1` | `data.js` |
 | 项目管理 | `api/projects.py` | `/api/v1/projects` | `project.js` |
 | 模型管理 | `api/models.py` | `/api/v1/models` | `model.js` |
 | 摄像头管理 | `api/cameras.py` | `/api/v1/cameras` | `camera.js` |
@@ -30,6 +32,14 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write"
 | 多工位 | `api/channel_manager.py` | `/api/v1/workstations` | `detection.js` |
 | MES 管理 | `api/mes.py` (22端点) | `/api/v1/mes` | `mes.js` |
 | 扫码器 | `api/scanner.py` (8端点) | `/api/v1/scanner` | `scanner.js` |
+| 外部设备 | `api/external_device.py` | `/api/v1/external-devices` | `external_device.js` |
+| 集群（主从汇总） | `api/cluster.py` | `/api/v1/cluster` | `cluster.js` |
+| MES 网关 | `api/mes_gateway.py` | `/api/v1/mes/gateway` | `gateway.js` |
+| 操作员 | `api/operators.py` | `/api/v1/operators` | `operators.js` |
+
+**❌ 已删除归属（不要往这些文件加）：**
+- `api/detection.py` — 死路由，v2.7.x 删除（前端不再调用，有需要请加到 `source.py` / `source_*_mixin.py`）
+- `services/detector.py` — 死实现类，v2.7.x 删除
 
 ### 第2步: 定义 Schema（如需要）
 

@@ -16,7 +16,7 @@
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-cyan-300 font-semibold">扫码器设备</h3>
           <div class="flex gap-2">
-            <el-button size="small" @click="refreshStatus">刷新状态</el-button>
+            <el-button size="small" @click="refreshStatus(true)" :loading="statusRefreshing">刷新状态</el-button>
             <el-button size="small" type="primary" @click="handleAutoDiscover" :loading="discovering">
               搜索设备
             </el-button>
@@ -26,6 +26,9 @@
             </el-button>
             <el-button v-if="hasVirtualWmax" size="small" type="danger" @click="deleteVirtualWmax">
               删除虚拟设备
+            </el-button>
+            <el-button v-if="systemStore.developerMode" size="small" type="warning" plain @click="showSimulate = true">
+              模拟扫码
             </el-button>
           </div>
         </div>
@@ -90,7 +93,7 @@
               </div>
             </div>
             <div class="flex gap-1 mt-3">
-              <el-button size="small" @click="testDevice(dev)">测试</el-button>
+            <el-button size="small" @click="testDevice(dev)" :loading="testingDeviceId === dev.id">测试</el-button>
               <el-button size="small" type="primary" @click="editDevice(dev)">编辑</el-button>
               <el-button v-if="getDevType(dev.id) === 'wmax'" size="small" type="warning"
                          @click="openWmaxPanel(dev)">高级控制</el-button>
@@ -105,7 +108,7 @@
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-cyan-300 font-semibold">扫码记录</h3>
           <div class="flex gap-1">
-            <el-button size="small" @click="loadLogs">刷新</el-button>
+            <el-button size="small" @click="loadLogs(true)" :loading="logsLoading">刷新</el-button>
             <el-button size="small" type="danger" @click="handleClearLogs">清空</el-button>
           </div>
         </div>
@@ -183,6 +186,16 @@
             同条码对应的工件上次检测<span class="text-green-400">合格</span>后、
             这么多秒内再次扫到将被静默忽略（避免搬运抖动产生脏数据）。
             设 <b>0</b> 关闭；NG 工件不受此限制，可立即重扫复检。建议填满一个节拍时间。
+          </div>
+        </el-form-item>
+        <el-form-item label="迟到扫码补绑">
+          <el-input-number v-model="form.late_scan_bind_window_sec" :min="0" :max="60" :precision="0" class="w-full" controls-position="right">
+            <template #append>秒</template>
+          </el-input-number>
+          <div class="text-xs text-gray-500 mt-1">
+            周期已经结算时若扫码事件距 cycle_end 时间不超过该秒数，自动把工件
+            <b>补绑到刚结算的周期</b>，避免"工人慢半拍扫码 → 未绑码"误报。
+            设 <b>0</b> 关闭；推荐 3 秒，节拍很快可调小，工人动作慢可调大。
           </div>
         </el-form-item>
         <el-form-item label="广播工位">
@@ -301,6 +314,29 @@
         <el-button size="small" type="primary" @click="handleSave" :loading="saving">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showSimulate" title="模拟扫码（调试）" width="420px" class="mes-dialog" destroy-on-close>
+      <el-form label-width="90px" size="small">
+        <el-form-item label="条码" required>
+          <el-input v-model="simulateForm.barcode" placeholder="AUTO_QA_SCAN_001" />
+        </el-form-item>
+        <el-form-item label="工位">
+          <el-select v-model="simulateForm.channel_id" class="w-full">
+            <el-option v-for="opt in channelOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="只喂外设">
+          <el-switch v-model="simulateForm.external_only" />
+        </el-form-item>
+        <el-form-item label="分组号">
+          <el-input v-model="simulateForm.pairing_group" placeholder="如 scale-c，可留空" clearable />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="showSimulate = false">取消</el-button>
+        <el-button size="small" type="primary" @click="submitSimulateScan" :loading="simulating">注入扫码</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -311,7 +347,7 @@ import { QuestionFilled } from '@element-plus/icons-vue'
 import {
   getScannerDevices, createScannerDevice, updateScannerDevice,
   deleteScannerDevice, testScannerConnection, getScannerStatus, getScanLogs,
-  clearScanLogs, discoverScanners
+  clearScanLogs, discoverScanners, simulateScannerScan
 } from '@/api/scanner'
 import { getWorkstations } from '@/api/detection'
 import {
@@ -333,6 +369,17 @@ const showAdd = ref(false)
 const editingId = ref(null)
 const saving = ref(false)
 const channelCount = ref(1)
+const statusRefreshing = ref(false)
+const logsLoading = ref(false)
+const testingDeviceId = ref(null)
+const showSimulate = ref(false)
+const simulating = ref(false)
+const simulateForm = ref({
+  barcode: 'AUTO_QA_SCAN_001',
+  channel_id: 0,
+  external_only: false,
+  pairing_group: '',
+})
 // 后端 channel_id 仍以 0 开始，前端展示统一 +1。工位数按系统实际 channel_count 动态生成。
 const channelOptions = computed(() =>
   Array.from({ length: channelCount.value }, (_, i) => ({
@@ -353,6 +400,7 @@ const defaultForm = () => ({
   external_only: false,
   pairing_group: '',
   ok_rescan_cooldown_sec: 0,
+  late_scan_bind_window_sec: 3,
 })
 const form = ref(defaultForm())
 
@@ -514,7 +562,8 @@ const applyQuickDedup = async (val) => {
   }
 }
 
-const refreshStatus = async () => {
+const refreshStatus = async (showFeedback = false) => {
+  if (showFeedback) statusRefreshing.value = true
   try {
     const res = await getScannerStatus()
     const map = {}
@@ -523,7 +572,14 @@ const refreshStatus = async () => {
     }
     statusMap.value = map
     mergeAutoDevices()
-  } catch (e) { console.warn('[Scanner] 刷新状态失败:', e.message) }
+    if (showFeedback) ElMessage.success('扫码器状态已刷新')
+  } catch (e) {
+    const msg = e.response?.data?.detail || e.message || '网络错误'
+    if (showFeedback) ElMessage.error('刷新状态失败: ' + msg)
+    else console.warn('[Scanner] 刷新状态失败:', msg)
+  } finally {
+    if (showFeedback) statusRefreshing.value = false
+  }
 }
 
 const mergeAutoDevices = () => {
@@ -544,11 +600,19 @@ const mergeAutoDevices = () => {
   })
 }
 
-const loadLogs = async () => {
+const loadLogs = async (showFeedback = false) => {
+  if (showFeedback) logsLoading.value = true
   try {
     const res = await getScanLogs({ limit: 30 })
     logs.value = res.data.items || []
-  } catch (e) { console.warn('[Scanner] 加载日志失败:', e.message) }
+    if (showFeedback) ElMessage.success('扫码记录已刷新')
+  } catch (e) {
+    const msg = e.response?.data?.detail || e.message || '网络错误'
+    if (showFeedback) ElMessage.error('刷新扫码记录失败: ' + msg)
+    else console.warn('[Scanner] 加载日志失败:', msg)
+  } finally {
+    if (showFeedback) logsLoading.value = false
+  }
 }
 
 const handleClearLogs = async () => {
@@ -579,6 +643,7 @@ const handleClearLogs = async () => {
 }
 
 const testDevice = async (dev) => {
+  testingDeviceId.value = dev.id
   try {
     const res = await testScannerConnection(dev.ip, dev.port)
     if (res.data.success) {
@@ -588,7 +653,35 @@ const testDevice = async (dev) => {
       ElMessage.error(res.data.message)
     }
     refreshStatus()
-  } catch (e) { ElMessage.error('测试失败') }
+  } catch (e) {
+    ElMessage.error('测试失败: ' + (e.response?.data?.detail || e.message || '网络错误'))
+  } finally {
+    testingDeviceId.value = null
+  }
+}
+
+const submitSimulateScan = async () => {
+  const barcode = (simulateForm.value.barcode || '').trim()
+  if (!barcode) {
+    ElMessage.warning('请填写模拟条码')
+    return
+  }
+  simulating.value = true
+  try {
+    const { data } = await simulateScannerScan({
+      barcode,
+      channel_id: simulateForm.value.channel_id,
+      external_only: simulateForm.value.external_only,
+      pairing_group: (simulateForm.value.pairing_group || '').trim() || null,
+    })
+    ElMessage.success(`已注入模拟扫码: ${data.serial_no || barcode}`)
+    showSimulate.value = false
+    await Promise.all([refreshStatus(), loadLogs()])
+  } catch (e) {
+    ElMessage.error('模拟扫码失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
+  } finally {
+    simulating.value = false
+  }
 }
 
 const handleSave = async () => {

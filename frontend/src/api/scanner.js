@@ -10,3 +10,4 @@ export const getLatestScan = (channelId) => api.get(`/scanner/latest/${channelId
 export const getScanLogs = (params) => api.get('/scanner/logs', { params })
 export const clearScanLogs = () => api.delete('/scanner/logs')
 export const discoverScanners = () => api.post('/scanner/discover')
+export const simulateScannerScan = (data) => api.post('/scanner/simulate', data)

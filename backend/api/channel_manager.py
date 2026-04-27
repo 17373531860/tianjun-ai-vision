@@ -10,12 +10,13 @@ import json
 import os
 from typing import Dict, Optional, List
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from backend.core.config import DATA_DIR
 
 router = APIRouter(prefix="/workstations", tags=["workstations"])
 
 MAX_CHANNELS = 4
-_CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'workstation_config.json')
+_CONFIG_FILE = os.path.join(DATA_DIR, 'workstation_config.json')
 
 
 class WorkstationConfig(BaseModel):
@@ -31,7 +32,7 @@ class WorkstationConfig(BaseModel):
 
 class WorkstationModeRequest(BaseModel):
     channel_count: int = 1             # 1, 2, or 4
-    channels: List[WorkstationConfig] = []
+    channels: List[WorkstationConfig] = Field(default_factory=list)
 
 
 class ChannelManager:
@@ -44,11 +45,7 @@ class ChannelManager:
         self.channels: Dict[int, "VideoSourceManager"] = {
             0: VideoSourceManager(channel_id=0)
         }
-        self._shared_model = None
-        self._shared_model_path: Optional[str] = None
         self._model_lock = threading.Lock()
-        self._gpu_models: Dict[str, object] = {}  # {device_str: YOLO model}
-        self._gpu_model_paths: Dict[str, str] = {}  # {device_str: model file path}
         self._load_config()
 
     # ------------------------------------------------------------------
@@ -119,100 +116,45 @@ class ChannelManager:
         print(f"[ChannelManager] Channel count set to {count}, active: {self.active_channels()}")
 
     # ------------------------------------------------------------------
-    # Model management (shared single-GPU or multi-GPU)
+    # Model management
     # ------------------------------------------------------------------
 
     def load_shared_model(self, model_path: str, device: str = "auto") -> bool:
-        """Load YOLO model once and share the reference across all channels on the same GPU."""
+        """Load the same model path for all channels with independent instances.
+
+        NOTE:
+        - "shared" here means shared model PATH/config, not shared runtime object.
+        - Each channel keeps its own model instance to avoid cross-channel race.
+        """
         with self._model_lock:
-            ch0 = self.channels[0]
-            if device != "auto":
-                ch0.device = device
-            success = ch0.load_model(model_path)
-            if not success:
-                return False
-            self._shared_model = ch0.model
-            self._shared_model_path = model_path
-            self._gpu_models[ch0.device] = ch0.model
-            self._gpu_model_paths[ch0.device] = model_path
-
-            for cid, mgr in self.channels.items():
-                if cid != 0:
-                    mgr.model = self._shared_model
-                    mgr.model_path = self._shared_model_path
-                    mgr.current_device_info = ch0.current_device_info
-                    # v2.7.3: 共享模型时同步推理相关属性
-                    mgr._model_imgsz = ch0._model_imgsz
-                    mgr._is_native_pytorch = ch0._is_native_pytorch
-                    mgr.model_task = ch0.model_task
-                    mgr._original_pt_path = ch0._original_pt_path
-
-        return True
+            all_ok = True
+            for cid in sorted(self.channels.keys()):
+                ok = self._load_model_for_channel_locked(cid, model_path, device)
+                if not ok:
+                    all_ok = False
+                    print(f"[ChannelManager] ch{cid} 独立模型加载失败: {model_path}")
+            return all_ok
 
     def load_model_for_channel(self, channel_id: int, model_path: str, device: str = "auto") -> bool:
-        """Load a model for a specific channel.
-        Only reuses an existing GPU model if it was loaded from the SAME path."""
+        """Load a model for a specific channel with an independent instance."""
+        with self._model_lock:
+            return self._load_model_for_channel_locked(channel_id, model_path, device)
+
+    def _load_model_for_channel_locked(self, channel_id: int, model_path: str, device: str = "auto") -> bool:
         mgr = self.channels.get(channel_id)
         if mgr is None:
             return False
 
-        with self._model_lock:
-            resolved_device = self._resolve_device(device)
-
-            cached = self._gpu_models.get(resolved_device)
-            cached_path = self._gpu_model_paths.get(resolved_device)
-            if cached is not None and cached_path == model_path:
-                mgr.model = cached
-                mgr.model_path = model_path
-                mgr.device = resolved_device
-                # v2.7.3: cache hit 时必须把 imgsz / task / native 标志一并复制到新通道，
-                # 否则新通道 _model_imgsz 会停留在默认 640，导致 .engine 推理 AssertionError
-                # （input size [1,3,640,640] != max model size [1,3,Nxxx,Nxxx]）
-                ref_mgr = next(
-                    (m for m in self.channels.values()
-                     if m is not mgr and m.model is cached and getattr(m, '_model_imgsz', 640) > 0),
-                    None,
-                )
-                if ref_mgr is not None:
-                    mgr._model_imgsz = ref_mgr._model_imgsz
-                    mgr._is_native_pytorch = ref_mgr._is_native_pytorch
-                    mgr.model_task = ref_mgr.model_task
-                    mgr._original_pt_path = ref_mgr._original_pt_path
-                    mgr.current_device_info = ref_mgr.current_device_info
-                else:
-                    # 兜底：用任意带 device_info 的 channel
-                    fallback = next((m for m in self.channels.values() if m.current_device_info), None)
-                    if fallback:
-                        mgr.current_device_info = fallback.current_device_info
-                print(f"[ChannelManager] ch{channel_id} reusing model on {resolved_device} "
-                      f"(imgsz={getattr(mgr, '_model_imgsz', '?')}, task={getattr(mgr, 'model_task', '?')})")
-                return True
-
-            mgr.device = resolved_device
-            success = mgr.load_model(model_path)
-            if success:
-                self._gpu_models[resolved_device] = mgr.model
-                self._gpu_model_paths[resolved_device] = model_path
-                if self._shared_model is None:
-                    self._shared_model = mgr.model
-                    self._shared_model_path = model_path
-                print(f"[ChannelManager] ch{channel_id} loaded NEW model on {resolved_device}: {os.path.basename(model_path)}")
-            return success
+        resolved_device = self._resolve_device(device)
+        mgr.device = resolved_device
+        success = mgr.load_model(model_path)
+        if success:
+            print(f"[ChannelManager] ch{channel_id} loaded model instance on {resolved_device}: {os.path.basename(model_path)}")
+        return success
 
     def _propagate_model(self, channel_id: int):
-        """Give a newly-created channel the shared model reference (same GPU)."""
-        if self._shared_model is not None:
-            mgr = self.channels.get(channel_id)
-            if mgr and mgr.model is None:
-                ch0 = self.channels[0]
-                mgr.model = self._shared_model
-                mgr.model_path = self._shared_model_path
-                mgr.current_device_info = ch0.current_device_info
-                # v2.7.3: 同步推理属性，避免新通道 imgsz 默认 640 与 engine 不匹配
-                mgr._model_imgsz = ch0._model_imgsz
-                mgr._is_native_pytorch = ch0._is_native_pytorch
-                mgr.model_task = ch0.model_task
-                mgr._original_pt_path = ch0._original_pt_path
+        """No-op: model instances are no longer propagated/shared across channels."""
+        return
 
     @staticmethod
     def _resolve_device(device: str) -> str:

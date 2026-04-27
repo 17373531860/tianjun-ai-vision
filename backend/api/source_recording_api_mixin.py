@@ -47,6 +47,12 @@ class RecordingApiMixin:
             writer = FFmpegRecorder(filepath, width, height, fps)
             if not writer.open():
                 print(f"[录制警告] 无法创建会话视频录制器")
+                self._append_recording_failure(
+                    "session",
+                    "open_failed",
+                    writer=writer,
+                    error=getattr(writer, "last_error", "open_failed"),
+                )
                 return
             with self._writer_lock:
                 self.video_writer = writer
@@ -76,6 +82,7 @@ class RecordingApiMixin:
             db.close()
         except Exception as e:
             print(f"开始会话录制失败: {e}")
+            self._append_recording_failure("session", "open_exception", error=str(e))
     
     def stop_session_recording(self):
         """停止会话视频录制 - delayed release to flush queued frames"""
@@ -137,6 +144,12 @@ class RecordingApiMixin:
             writer = FFmpegRecorder(filepath, width, height, fps)
             if not writer.open():
                 print(f"[录制警告] 无法创建周期视频录制器")
+                self._append_recording_failure(
+                    "cycle",
+                    "open_failed",
+                    writer=writer,
+                    error=getattr(writer, "last_error", "open_failed"),
+                )
                 return
             with self._writer_lock:
                 self.cycle_video_writer = writer
@@ -166,6 +179,7 @@ class RecordingApiMixin:
             db.close()
         except Exception as e:
             print(f"开始周期录制失败: {e}")
+            self._append_recording_failure("cycle", "open_exception", error=str(e))
     
     def stop_cycle_recording(self):
         """停止周期视频录制 - delayed release to flush queued frames"""
@@ -225,6 +239,12 @@ class RecordingApiMixin:
                 writer = FFmpegRecorder(filepath, width, height, fps)
                 if not writer.open():
                     print(f"[录制警告] 无法创建步骤视频录制器: {step_label}")
+                    self._append_recording_failure(
+                        "step",
+                        "open_failed",
+                        writer=writer,
+                        error=f"{step_label}: {getattr(writer, 'last_error', 'open_failed')}",
+                    )
                     return None
                     
                 self.step_video_writers[step_label] = {
@@ -239,6 +259,7 @@ class RecordingApiMixin:
                 return video_uuid
         except Exception as e:
             print(f"开始步骤录制失败: {e}")
+            self._append_recording_failure("step", "open_exception", error=f"{step_label}: {e}")
             import traceback
             traceback.print_exc()
             return None

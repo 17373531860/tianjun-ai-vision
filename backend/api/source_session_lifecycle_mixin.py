@@ -26,7 +26,7 @@ from typing import Optional
 from datetime import datetime, timedelta
 
 from backend.db.database import SessionLocal
-from backend.models.models import DetectionSession, DetectionCycle, StepRecord
+from backend.models.models import DetectionSession, DetectionCycle, StepRecord, DataExportSetting
 from sqlalchemy import func
 
 
@@ -83,6 +83,7 @@ class SessionLifecycleMixin:
 
     def start_session(self, project_id: int) -> dict:
         """开始新的检测会话"""
+        db = None
         try:
             db = self._get_db_session()
             session_uuid = str(uuid.uuid4())[:8]
@@ -109,36 +110,47 @@ class SessionLifecycleMixin:
             self._session_start_date = datetime.now().date()
             self._session_start_shift = current_shift
             
-            # 加载导出设置
-            self._load_export_settings()
-            
-            db.close()
             print(f"检测会话已创建: {session_uuid}")
-            
+
+            # 后续步骤按“尽力执行”处理，避免出现 DB 已创建成功却返回失败
+            try:
+                self._load_export_settings()
+            except Exception as e:
+                print(f"[session] 加载导出设置失败（不影响会话）: {e}")
+
             # MES Hook: Session 开始
             if self._mes_hook:
                 try:
-                    project_id = self.project_config.get('id') if self.project_config else None
-                    if project_id:
+                    hook_project_id = self.project_config.get('id') if self.project_config else None
+                    if hook_project_id:
                         self._mes_hook.on_session_start(
                             channel_id=self.channel_id,
                             session_id=session.id,
-                            project_id=project_id,
+                            project_id=hook_project_id,
                         )
                 except Exception as e:
                     print(f"[MES] session_start hook 异常: {e}")
             
             # 启动录制线程（独立于 CUDA）
             if self.is_detecting:
-                self._start_recording_thread()
+                try:
+                    self._start_recording_thread()
+                except Exception as e:
+                    print(f"[session] 启动录制线程失败（不影响会话）: {e}")
             
             # 开始会话视频录制
-            self.start_session_recording()
+            try:
+                self.start_session_recording()
+            except Exception as e:
+                print(f"[session] 启动会话录制失败（不影响会话）: {e}")
             
             return {"session_id": session.id, "session_uuid": session_uuid}
         except Exception as e:
             print(f"创建会话失败: {e}")
             return None
+        finally:
+            if db:
+                db.close()
     
     def end_session(self):
         """结束当前检测会话"""

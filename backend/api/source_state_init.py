@@ -230,6 +230,8 @@ def _init_recording_state(h):
     h._recording_thread = None
     h._recording_running = False
     h._recording_drop_count = 0
+    h.recording_failures = []
+    h._recording_failure_lock = threading.Lock()
 
 
 # ============================================================

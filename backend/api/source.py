@@ -295,7 +295,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         super().__setattr__(name, value)
 
     # 配置文件路径
-    CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'device_config.json')
+    CONFIG_FILE = os.path.join(DATA_DIR, 'device_config.json')
     
     def __init__(self, channel_id: int = 0):
         self.channel_id = channel_id  # workstation/channel index (0-based)

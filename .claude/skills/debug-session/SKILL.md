@@ -85,6 +85,17 @@ start_detection()
 - `_filter_valid_steps()` — 过滤掉幻影步骤（<0.1秒的步骤记录）
 - `convert_video_for_browser()` — FFmpeg转H.264给浏览器播放
 
+### sessions 模块 v2.7.x 拆分（路由 prefix 不变，仍统一 `/api/v1`）
+
+| 子文件 | 职责 | 关键端点/函数 |
+|--------|------|---------------|
+| `sessions.py` (880L) | 主入口 + 列表/详情/视频 | `/sessions*`, `/cycles*`, `/videos*`, `_get_step_order_map`, `_filter_valid_steps` |
+| `sessions_export.py` (412L) | CSV 导出 | `/export/csv`, `/export-settings` |
+| `sessions_stats.py` (166L) | 统计聚合 | `/stats/step-averages`, `/stats/cycle-averages` |
+| `sessions_maintenance.py` (403L) | 数据维护 | `/backup/database`, `/clear/all`, `/clear/range`, `/cleanup-settings`, `/storage-info`, `/cleanup/run` |
+
+**改 sessions 相关功能时 grep 范围：`backend/api/sessions*.py`**。
+
 ## 常见数据问题诊断
 
 ### 1. Session 状态异常
@@ -158,7 +169,7 @@ MES 数据使用独立 DB session，不影响检测数据链路。
 - 如果工件码为空，说明该周期未绑定条码（可能扫码器未扫或未启用）
 
 ## 已知陷阱
-- `get_ffmpeg_path()` 在 source.py 和 sessions.py 各有一份（重复代码）
+- ~~`get_ffmpeg_path()` 在 source.py 和 sessions.py 各有一份（重复代码）~~ v2.7.x 已去重
 - `_perform_auto_cleanup()` 清理文件时可能与正在录制的文件冲突
 - `backup_database()` 路径拼接相对于 UPLOAD_DIR 的父目录，不是 DATA_DIR（脆弱）
 - `_filter_valid_steps()` 过滤 <0.1秒步骤可能误删合法记录

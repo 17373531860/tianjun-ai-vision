@@ -1,6 +1,6 @@
 ---
 name: debug-detection
-description: "诊断检测推理问题：模型加载失败、推理结果异常、FPS低、两套检测系统冲突、置信度/IOU配置不生效。当检测不出目标或结果不准时使用。"
+description: "诊断检测推理问题：模型加载失败、推理结果异常、FPS低、置信度/IOU配置不生效、TRT 引擎 imgsz 不匹配。当检测不出目标或结果不准时使用。"
 argument-hint: "[问题描述]"
 model: opus
 effort: high
@@ -13,26 +13,21 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 
 用户问题: $ARGUMENTS
 
-## 两套检测系统（重要！）
+## 唯一推理路径（v2.7.x 起）
 
-本项目存在 **两套独立的检测实现**，这是历史遗留问题：
+历史上存在过两套检测实现，**v2.7.x 全修阶段已彻底删除 `detection.py` 和 `services/detector.py`**，现在只剩一条路径：
 
-### 系统A: VideoSourceManager 内置推理（主力，实际使用）
-- **位置:** `backend/api/source.py` VideoSourceManager 类
-- **模型加载:** `load_model()` 方法
-- **推理执行:** `_capture_loop()` 内部的推理分支
-- **特性:** Kalman滤波、帧计数、步骤状态机、4种检测模式、MediaPipe
+### VideoSourceManager 内置推理（唯一）
+- **入口:** `POST /api/v1/source/detection/start`（`source.py::source_router`）
+- **类:** `backend/api/source.py::VideoSourceManager`
+- **模型加载:** `load_model()`（已 P7 拆出 `source_inference_executor.py` 组件）
+- **推理执行:** `_inference_loop_mixin` / `_detect_runners_mixin` 中的推理分支
+- **特性:** Kalman滤波、帧计数、步骤状态机、4种检测模式、MediaPipe、ByteTrack
 
-### 系统B: DetectionService（基本废弃）
-- **位置:** `backend/services/detector.py` (281行)
-- **类:** `YOLODetector` + `DetectionService`
-- **端点:** `backend/api/detection.py` 的 `/detection/start`, `/stop`, `/reset`
-- **特性:** 简单推理循环，基础步骤匹配，无Kalman、无状态机
-
-### 冲突风险
-- `detection.py` 的端点同时操作两个系统：先调 `DetectionService` 再调 `VideoSourceManager`
-- 如果只改了其中一个系统，另一个不会同步
-- **Monitor页面实际使用的是系统A的端点** (`/source/detection/...`)
+### 已不存在的旧端点（看到代码引用立刻删）
+- `backend/api/detection.py` — 已删（曾经的 `DetectionService` 入口）
+- `backend/services/detector.py` — 已删（曾经的 `YOLODetector` / `DetectionService`）
+- `POST /api/v1/detection/start|stop|reset` — 已不再注册，前端 `detection.js` 不再调用
 
 ## 模型加载链路
 
@@ -107,16 +102,16 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 4. 去重间隔 `dedup_interval`
 
 ## 关键文件
-- `backend/api/source.py` — 主推理逻辑（搜索 `load_model`, `_capture_loop`）
-- `backend/services/detector.py` — 废弃的检测服务（但仍挂接）
-- `backend/api/detection.py` — 检测控制端点
+- `backend/api/source.py` + `source_*_mixin.py` — 主推理逻辑（搜索 `load_model`, `_capture_loop`, `_inference_loop`, `_detect_*`）
+- `backend/api/source_inference_executor.py` — 推理线程池组件 (P7 拆分)
+- `backend/api/source_detect_runners_mixin.py` — `_detect_only/_detect_and_track/_detect_segment`
 - `backend/api/models.py` — 模型管理和格式转换
 - `backend/data/device_config.json` — 设备推理配置
 - `frontend/src/api/detection.js` — 前端检测API
 - `frontend/src/views/Monitor/index.vue` — 检测结果轮询和显示
 
 ## 已知陷阱
-- `resetDetection` 前端用 `/detection/reset`，但其他检测端点用 `/source/detection/...`（路径不一致）
+- ~~`resetDetection` 前端用 `/detection/reset`...~~ v2.7.x 已修，前端不再调 `/detection/*`
 - `getDetectionStatus` 和 `getSourceStatus` 是完全重复的函数
 - 模型格式转换是异步后台队列，转换中途查询状态需要轮询 `/conversions/{id}/status`
 - `_release_model()` 释放GPU显存时如果推理线程还在运行，可能崩溃

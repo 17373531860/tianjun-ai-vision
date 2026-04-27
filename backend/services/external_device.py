@@ -202,6 +202,84 @@ class ExternalDeviceService(
             return self._test_http(protocol_config or {}, timeout)
         return {"success": False, "message": f"未知协议: {protocol}"}
 
+    def simulate_raw_data(self, raw: str, device_id: int = None, barcode: str = None,
+                          full_chain: bool = False, repeat_count: int = 1,
+                          channel_id: int = 0) -> dict:
+        """调试入口：不依赖真实外设，模拟一条称重器/传感器原始数据。"""
+        conn = self._connections.get(device_id) if device_id is not None else None
+        if conn is None:
+            conn = DeviceConnection(
+                device_id=device_id,
+                name="AUTO_QA_虚拟外部设备",
+                device_role="weight",
+                protocol="virtual",
+                ip=None,
+                port=None,
+                serial_port=None,
+                serial_baud=9600,
+                protocol_config={},
+                parse_mode="direct",
+                parse_config={},
+                station_id=None,
+                channel_id=channel_id,
+                data_target="extra_fields",
+                validation_rules={},
+                enabled=True,
+                stable_enabled=False,
+                stable_delta=0.05,
+                stable_count=2,
+                zero_threshold=0.05,
+            )
+
+        if barcode:
+            self._barcode_buffer[conn.device_id] = barcode
+
+        repeat = max(1, min(int(repeat_count or 1), 20))
+        if full_chain:
+            for _ in range(repeat):
+                self._on_raw_data(conn, raw)
+            parsed = conn.last_parsed or self._parse_data(conn, raw) or {}
+            return {
+                "success": True,
+                "message": "模拟数据已按真实链路注入",
+                "device_id": conn.device_id,
+                "device_name": conn.name,
+                "raw_data": raw,
+                "parsed": parsed,
+                "barcode": barcode,
+                "full_chain": True,
+            }
+
+        conn.last_data = raw
+        conn.last_data_time = time.time()
+        parsed = self._parse_data(conn, raw)
+        if parsed is None:
+            self._log_data(conn, raw, None, False, "模拟数据解析失败", barcode)
+            return {
+                "success": False,
+                "message": "模拟数据解析失败",
+                "device_id": conn.device_id,
+                "raw_data": raw,
+                "full_chain": False,
+            }
+
+        if barcode:
+            parsed["barcode"] = barcode
+        conn.last_parsed = parsed
+        is_valid, error = self._validate(conn, parsed)
+        self._log_data(conn, raw, parsed, is_valid, error or "AUTO_QA_SIMULATED", barcode)
+        return {
+            "success": is_valid,
+            "message": "模拟数据已写入日志（未触发真实业务链路）",
+            "device_id": conn.device_id,
+            "device_name": conn.name,
+            "raw_data": raw,
+            "parsed": parsed,
+            "barcode": barcode,
+            "full_chain": False,
+            "error": error,
+        }
+
     def _start_device(self, dev: ExternalDevice):
         conn = DeviceConnection(
             device_id=dev.id,

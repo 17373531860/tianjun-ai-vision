@@ -12,6 +12,15 @@ import enUS from './locales/en-US.js';
 import jaJP from './locales/ja-JP.js';
 import koKR from './locales/ko-KR.js';
 
+// 生产构建下静默 console.log/debug，保留 warn/error 用于线上排错
+// 开发模式下保持原样；console.error/warn 始终保留以便定位问题
+if (!import.meta.env.DEV) {
+  // eslint-disable-next-line no-console
+  console.log = () => {};
+  // eslint-disable-next-line no-console
+  console.debug = () => {};
+}
+
 // 屏幕自适应：根据视口宽度动态设置 html font-size，
 // Tailwind 的 rem 单位会跟着等比缩放
 ;(function initResponsive() {
