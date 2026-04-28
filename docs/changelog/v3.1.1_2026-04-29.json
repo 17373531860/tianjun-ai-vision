@@ -1,0 +1,83 @@
+{
+  "version": "3.1.1",
+  "date": "2026-04-29",
+  "previous_version": "3.1.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-311-001",
+      "title": "称重器'即时快照'配对模式 (pairing_mode = instant)",
+      "symptom": "客户反馈流水线连续上料工件来不及回零, 1 工件 1 工位不允许丢数据。原 stable 模式要么 buffer 残留把新条码误绑到旧工件的稳定值, 要么等不到稳定值丢数据。客户明确要求'扫码瞬间(或最近一次接收到称重器的数据)是多少就绑定多少'。",
+      "root_cause": "set_barcode 在 stable 模式下需要等 conn._stable_state == 'stable' 且 _last_reported_value 非空才补发, 流水线工件不回零场景下稳定状态机要么卡 idle, 要么把多个工件的稳定值串台。pipeline._on_raw_data 也强依赖稳定状态机过滤, 不存在'扫码瞬间快照'这个语义通道。",
+      "fix": "新增 ExternalDevice.pairing_mode 字段 (stable/instant), DeviceConnection 同步加字段, _start_device 装载。set_barcode 加 instant 分支调用 _instant_dispatch_on_scan: 取 last_parsed 立即派发 + 立刻 pop _barcode_buffer; last_parsed=None 时把条码留 buffer 等下一帧 _on_raw_data 兜底。_on_raw_data instant 分支不走稳定状态机也不走有重无码告警, 默认只更新 last_parsed, 仅 buffer 有残留时派发并清。API Pydantic 加字段 _serialize 输出, 前端 ExternalDevicePanel 加'配对模式'下拉 (称重器可见), instant 模式下隐藏稳定值参数面板和有重无码告警 (永远不触发)。",
+      "files": [
+        "backend/models/mes_models.py",
+        "backend/main.py",
+        "backend/services/external_device.py",
+        "backend/services/external_device_pipeline.py",
+        "backend/services/external_device_models.py",
+        "backend/api/external_device.py",
+        "frontend/src/views/MES/ExternalDevicePanel.vue"
+      ],
+      "keywords": [
+        "称重器配对", "pairing_mode", "instant 模式", "stable 模式",
+        "_instant_dispatch_on_scan", "set_barcode", "_barcode_buffer",
+        "扫码即派发", "派发后清 buffer", "瞬时快照绑定",
+        "流水线工件不回零", "1工件1工位不丢数据",
+        "ExternalDeviceService", "ExternalDevicePipelineMixin",
+        "DeviceConnection", "_on_raw_data", "_handle_weight_stability",
+        "称重器条码绑定", "外部设备配对模式"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CONFIG-311-001",
+      "title": "版本号升级到 3.1.1",
+      "symptom": "patch 级别新增可选配对模式, 不破坏老行为, bump version。",
+      "root_cause": "v3.1.0 之后新增 pairing_mode 字段。",
+      "fix": "electron/package.json + electron/splash.html 更新到 3.1.1。",
+      "files": [
+        "electron/package.json",
+        "electron/splash.html"
+      ],
+      "keywords": ["version bump", "3.1.1"],
+      "breaking": false
+    },
+    {
+      "type": "tool",
+      "id": "TOOL-311-001",
+      "title": "称重器配对模式端到端仿真脚本",
+      "symptom": "instant 模式跨 set_barcode + _on_raw_data + _dispatch 三层逻辑, 需要回归测试支撑。",
+      "root_cause": "新模式与老模式共存, 既要验证新模式 7 个边界场景, 也要保证老模式行为不退化。",
+      "fix": "tools/test_weight_pairing.py 用 Mock _FakeService 屏蔽 DB / cluster 副作用, 覆盖 stable 抖动+迟到补发 (回归) 和 instant 5 个场景 (无条码不派发/称重先到+扫码后到/扫码先到+称重后到兜底/不回零连续流/同码不重复派发) 共 7 个用例 (7 PASS / 0 FAIL)。",
+      "files": [
+        "tools/test_weight_pairing.py"
+      ],
+      "keywords": [
+        "称重器测试", "pairing 仿真", "test_weight_pairing",
+        "instant 回归测试", "Mock 服务"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/models/mes_models.py",
+    "backend/main.py",
+    "backend/services/external_device.py",
+    "backend/services/external_device_pipeline.py",
+    "backend/services/external_device_models.py",
+    "backend/api/external_device.py",
+    "frontend/src/views/MES/ExternalDevicePanel.vue",
+    "tools/test_weight_pairing.py",
+    "electron/package.json",
+    "electron/splash.html",
+    "docs/changelog/v3.1.1_2026-04-29.md",
+    "docs/changelog/v3.1.1_2026-04-29.json",
+    "docs/CHANGELOG.md"
+  ],
+  "db_migrations": [
+    "ALTER TABLE external_devices ADD COLUMN pairing_mode VARCHAR(16) DEFAULT 'stable'"
+  ]
+}

@@ -42,6 +42,8 @@ class DeviceCreate(BaseModel):
     # v2.7.5 有重无码告警
     weight_no_barcode_alarm_enabled: Optional[bool] = False
     weight_no_barcode_alarm_delay_sec: Optional[int] = 10
+    # v3.1.1 配对模式: stable (默认, 等稳定值) / instant (扫码瞬间立即绑最近读数)
+    pairing_mode: Optional[str] = "stable"
 
 
 class DeviceUpdate(BaseModel):
@@ -67,6 +69,7 @@ class DeviceUpdate(BaseModel):
     zero_threshold: Optional[float] = None
     weight_no_barcode_alarm_enabled: Optional[bool] = None
     weight_no_barcode_alarm_delay_sec: Optional[int] = None
+    pairing_mode: Optional[str] = None
 
 
 class TestRequest(BaseModel):
@@ -111,6 +114,7 @@ def _serialize(d):
         "zero_threshold": float(getattr(d, "zero_threshold", 0.05) or 0.05),
         "weight_no_barcode_alarm_enabled": bool(getattr(d, "weight_no_barcode_alarm_enabled", False)),
         "weight_no_barcode_alarm_delay_sec": int(getattr(d, "weight_no_barcode_alarm_delay_sec", 10) or 10),
+        "pairing_mode": str(getattr(d, "pairing_mode", "stable") or "stable").lower(),
     }
 
 

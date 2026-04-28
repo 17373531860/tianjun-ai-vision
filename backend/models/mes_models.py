@@ -494,6 +494,14 @@ class ExternalDevice(Base):
     weight_no_barcode_alarm_enabled = Column(Boolean, default=False)
     weight_no_barcode_alarm_delay_sec = Column(Integer, default=10)
 
+    # v3.1.1: 配对模式 — stable / instant
+    # stable  (默认, 老逻辑): 等称重稳定 → 用稳定值绑定扫码; 流水线"工件不回零"场景
+    #         会出现"新条码绑到旧重量"的错位.
+    # instant (新): 扫码瞬间立即用最近一次称重读数绑定 + 派发后立即清 buffer.
+    #         适合"工件来不及回零、不允许丢数据"的连续上料流水线;
+    #         代价是个别瞬时读数可能不准 (如 A 未离开 B 已经压上, 读数=A+B).
+    pairing_mode = Column(String(16), default="stable")
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

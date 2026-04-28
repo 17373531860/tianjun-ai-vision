@@ -24,6 +24,27 @@ class ExternalDevicePipelineMixin:
             self._log_data(conn, raw, None, False, "解析失败")
             return
 
+        # v3.1.1: instant 模式 —— 不走稳定状态机, 也不主动每帧 dispatch.
+        # 只更新 last_parsed (供 set_barcode 取最新读数), 仅在 buffer 里有
+        # 待消费条码时才派发一次然后清掉; 这是"扫码先到, 称重后到"的兜底通道.
+        if (conn.device_role == "weight"
+                and (conn.pairing_mode or "stable").lower() == "instant"):
+            self._extract_weight(parsed)
+            num_w = parsed.get("weight")
+            if isinstance(num_w, (int, float)):
+                parsed["_raw_value"] = float(num_w)
+            conn.last_parsed = parsed
+            pending_barcode = parsed.get("barcode") or self._barcode_buffer.get(conn.device_id)
+            if not pending_barcode:
+                self._log_data(conn, raw, parsed, True, "instant_idle", None)
+                return
+            is_valid, error = self._validate(conn, parsed)
+            self._log_data(conn, raw, parsed, is_valid,
+                           error or "instant_pair_late", pending_barcode)
+            self._dispatch(conn, parsed, pending_barcode)
+            self._barcode_buffer.pop(conn.device_id, None)
+            return
+
         conn.last_parsed = parsed
 
         # v2.7.5: 称重器稳定值判定 —— 抖动、空载、未稳定的数据不往下传

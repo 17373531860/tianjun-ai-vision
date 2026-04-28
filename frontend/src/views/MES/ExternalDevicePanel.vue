@@ -307,8 +307,30 @@
           </div>
         </div>
 
-        <!-- 稳定值判定（仅称重） -->
+        <!-- v3.1.1 配对模式（仅称重） -->
         <div v-if="form.device_role === 'weight'" class="bg-slate-900/50 rounded p-3 mb-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400">配对模式（决定扫码与重量怎么绑）</span>
+            <el-select v-model="form.pairing_mode" size="small" style="width:200px">
+              <el-option value="stable" label="稳定值绑定（默认）" />
+              <el-option value="instant" label="即时快照绑定" />
+            </el-select>
+          </div>
+          <div class="text-xs text-gray-500 leading-relaxed">
+            <div v-if="form.pairing_mode === 'stable'">
+              等称重稳定后才用稳定值与条码绑定。<b>抖动 / 空载 / 未稳定的数据会被过滤</b>。
+              适用于"工件压上 → 静止 → 离开 → 回零"的工位制场景。
+            </div>
+            <div v-else>
+              <b>扫码瞬间立即用最近一次称重读数绑定</b>，派发后条码立刻消费，下一次扫码再读最新值。
+              适用于"流水线、工件不会回零、不允许丢数据"的连续上料场景。
+              <span class="text-amber-300">代价：A 还在秤上 B 已压上时，B 的重量可能等于 A+B 的合重，请评估能否接受。</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 稳定值判定（仅称重，instant 模式下隐藏：instant 不依赖状态机） -->
+        <div v-if="form.device_role === 'weight' && form.pairing_mode !== 'instant'" class="bg-slate-900/50 rounded p-3 mb-3">
           <div class="flex items-center justify-between mb-2">
             <span class="text-xs text-gray-400">稳定值判定（抖动、空载数据将被过滤，不上报）</span>
             <el-switch v-model="form.stable_enabled" size="small" />
@@ -332,8 +354,8 @@
           </div>
         </div>
 
-        <!-- 有重无码告警（仅称重） -->
-        <div v-if="form.device_role === 'weight'" class="bg-slate-900/50 rounded p-3 mb-3">
+        <!-- 有重无码告警（仅称重，instant 模式下隐藏：状态机不跑→永远不触发） -->
+        <div v-if="form.device_role === 'weight' && form.pairing_mode !== 'instant'" class="bg-slate-900/50 rounded p-3 mb-3">
           <div class="flex items-center justify-between mb-2">
             <span class="text-xs text-gray-400">有重无码告警（稳定值非零但未扫码超时触发）</span>
             <el-switch v-model="form.weight_no_barcode_alarm_enabled" size="small" />
@@ -435,6 +457,7 @@ const defaultForm = () => ({
   zero_threshold: 0.05,
   weight_no_barcode_alarm_enabled: false,
   weight_no_barcode_alarm_delay_sec: 10,
+  pairing_mode: 'stable',
 })
 const form = ref(defaultForm())
 const simulateForm = ref({
@@ -572,7 +595,8 @@ const openAdd = () => {
 
 const editDev = (dev) => {
   editingId.value = dev.id
-  form.value = { ...dev }
+  form.value = { ...defaultForm(), ...dev }
+  if (!form.value.pairing_mode) form.value.pairing_mode = 'stable'
   const pc = dev.parse_config || {}
   const pcfg = dev.protocol_config || {}
   if (dev.parse_mode === 'split') {

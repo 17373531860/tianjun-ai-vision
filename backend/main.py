@@ -95,6 +95,8 @@ def migrate_database():
         ("work_orders", "binding_scope", "VARCHAR(20) DEFAULT 'project'"),
         ("work_orders", "target_channels", "TEXT"),
         ("work_orders", "target_stations", "TEXT"),
+        # v3.1.1 称重器配对模式 (stable / instant)
+        ("external_devices", "pairing_mode", "VARCHAR(16) DEFAULT 'stable'"),
     ]
     
     try:

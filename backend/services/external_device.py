@@ -153,9 +153,19 @@ class ExternalDeviceService(
     def set_barcode(self, device_id: int, barcode: str):
         """外部设置条码（当设备本身不带扫码器时，由扫码器回调注入）。
 
-        v2.7.10: 若目标设备是已稳定的称重器，立即用缓存的稳定值补发一次 dispatch，
-        否则节流逻辑会把"先上称再扫码"的场景永远卡住（重量不变 → 永远不再派发 →
-        集群和业务链路都收不到配对数据）。
+        两种配对模式（按 `conn.pairing_mode`）:
+
+        - ``stable`` (默认, v2.7.10 老逻辑):
+            条码先存入 ``_barcode_buffer``。若目标设备是已稳定的称重器，
+            立即用缓存的稳定值补发一次 dispatch，否则节流逻辑会把
+            "先上称再扫码"场景永远卡住。
+        - ``instant`` (v3.1.1 新):
+            扫码瞬间 → 立即用 ``last_parsed`` 里"最近一次称重器读数"
+            (不论是否稳定) 派发一次, **派发后立即把 buffer 里这个 device_id 的
+            条码清掉**, 防止下一帧称重数据再误用同一条码。
+            适用于"工件不会回零、不允许丢数据"的连续上料流水线。
+            如果秤还没出过任何读数 (`last_parsed is None`), 则把条码留在
+            buffer, 等下一帧 ``_on_raw_data`` 到达时立即派发 (兜底)。
         """
         self._barcode_buffer[device_id] = barcode
 
@@ -164,6 +174,13 @@ class ExternalDeviceService(
             return
         if conn.device_role != "weight":
             return
+
+        # v3.1.1 instant 模式: 扫码即派发, 派发后立即清 buffer
+        if (conn.pairing_mode or "stable").lower() == "instant":
+            self._instant_dispatch_on_scan(conn, barcode)
+            return
+
+        # 老 stable 模式: 已稳定才补发
         if conn._stable_state != "stable":
             return
         if conn._last_reported_value is None:
@@ -184,6 +201,47 @@ class ExternalDeviceService(
                         conn.name, conn._last_reported_value, barcode)
         except Exception as e:
             logger.error("[ExtDev] %s 扫码迟到补发失败: %s", conn.name, e)
+
+    def _instant_dispatch_on_scan(self, conn: DeviceConnection, barcode: str):
+        """instant 模式下, 扫码事件触发的"瞬时绑定"派发。
+
+        策略: 用 conn.last_parsed (最近一次任意读数, 不论 stable / unstable / idle)
+              立即派发一次, 然后清 _barcode_buffer 里这个设备的条码。
+              如果秤还没出过任何读数, 则保留 buffer, 让下一帧 _on_raw_data 兜底。
+        """
+        if conn.last_parsed is None:
+            logger.info("[ExtDev] %s instant 暂存条码 %s, 等首帧称重数据兜底派发",
+                        conn.name, barcode)
+            return
+
+        parsed = dict(conn.last_parsed)
+        weight = parsed.get("weight")
+        if weight is None:
+            weight = parsed.get("_raw_value")
+        if weight is None:
+            logger.warning("[ExtDev] %s instant last_parsed 无 weight 字段, 跳过: %s",
+                           conn.name, parsed)
+            return
+        try:
+            parsed["weight"] = float(weight)
+            parsed["_raw_value"] = float(weight)
+        except (TypeError, ValueError):
+            logger.warning("[ExtDev] %s instant 重量字段非数字: %s", conn.name, weight)
+            return
+
+        is_valid, error = self._validate(conn, parsed)
+        raw_repr = str(conn.last_data or parsed["weight"])
+
+        try:
+            self._log_data(conn, raw_repr, parsed, is_valid,
+                           error or "instant_pair", barcode)
+            self._dispatch(conn, parsed, barcode)
+            self._barcode_buffer.pop(conn.device_id, None)
+            logger.info("[ExtDev] %s instant 扫码即绑: weight=%.4f, barcode=%s "
+                        "(stable=%s)", conn.name, parsed["weight"], barcode,
+                        conn._stable_state)
+        except Exception as e:
+            logger.error("[ExtDev] %s instant 派发失败: %s", conn.name, e)
 
     def test_connection(self, protocol: str, ip: str = None, port: int = None,
                         serial_port: str = None, serial_baud: int = 9600,
@@ -305,6 +363,7 @@ class ExternalDeviceService(
             zero_threshold=float(getattr(dev, "zero_threshold", 0.05) or 0.05),
             weight_no_barcode_alarm_enabled=bool(getattr(dev, "weight_no_barcode_alarm_enabled", False)),
             weight_no_barcode_alarm_delay_sec=max(1, int(getattr(dev, "weight_no_barcode_alarm_delay_sec", 10) or 10)),
+            pairing_mode=str(getattr(dev, "pairing_mode", "stable") or "stable").lower(),
         )
         self._connections[dev.id] = conn
         conn._stop_event.clear()

@@ -33,6 +33,9 @@ class DeviceConnection:
     weight_no_barcode_alarm_enabled: bool = False
     weight_no_barcode_alarm_delay_sec: int = 10
 
+    # v3.1.1 配对模式: stable (老逻辑) / instant (扫码瞬间立即绑最近读数, 派发后清 buffer)
+    pairing_mode: str = "stable"
+
     status: str = "disconnected"
     last_data: Optional[str] = None
     last_data_time: float = 0
