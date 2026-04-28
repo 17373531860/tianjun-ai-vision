@@ -675,6 +675,23 @@ class ClusterCollector:
 
             _run_with_retry(db, mark_pushed,
                             f"check_and_dispatch_pushed({box_serial})")
+
+            # v3.1.0: cluster 模式工单计件 — 一个 box_serial 完成一次算 1 件.
+            # 校正重推 (is_recovery=True) 不再 +1, 避免同一 box 多次累加.
+            # 超时未齐的 box 走 _push_timeout_result, 那条路径不计件.
+            if not state.get("is_recovery"):
+                try:
+                    self._increment_cluster_orders(
+                        db, box_serial,
+                        station_ids={r.station_id for r in matched_records},
+                        is_good=overall_good,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "[Cluster] 箱子 %s 工单计件失败 (不影响推送): %s\n%s",
+                        box_serial, e, traceback.format_exc(),
+                    )
+
             if state.get("is_recovery"):
                 logger.info(
                     "[Cluster] 箱子 %s 校正后重推 MES 完成 (%s)",
@@ -696,6 +713,40 @@ class ClusterCollector:
             "stations": len(expected),
             "is_recovery": state.get("is_recovery", False),
         }
+
+    def _increment_cluster_orders(self, db, box_serial: str,
+                                  station_ids: set, is_good: bool):
+        """v3.1.0: 给 binding_scope=cluster 的 in_progress 工单按 box_serial 计件.
+
+        匹配规则: 工单的 target_stations 跟当前 box 涉及到的 station_ids 有交集.
+        允许多个工单同时匹配 (各自 +1, 互不影响).
+        计件后若 completed_qty >= planned_qty, 自动把工单切到 completed.
+        """
+        from backend.services.work_order import WorkOrderService
+        wo_svc = WorkOrderService()
+        orders = wo_svc.find_cluster_orders(db, station_ids)
+        if not orders:
+            return
+
+        for order in orders:
+            try:
+                wo_svc.increment_completed(db, order.id, is_good)
+                logger.info(
+                    "[Cluster] 工单 %s +1 (box=%s, %s, scope=cluster)",
+                    order.order_no, box_serial, "OK" if is_good else "NG",
+                )
+                if wo_svc.check_completion(db, order.id):
+                    wo_svc.change_status(db, order.id, "completed")
+                    logger.info("[Cluster] 工单 %s 计划数达成, 自动切 completed",
+                                order.order_no)
+            except Exception as e:
+                logger.error("[Cluster] 工单 %s 计件失败: %s",
+                             order.order_no, e)
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error("[Cluster] cluster 工单 +1 commit 失败: %s", e)
 
     def _push_timeout_result(self, db, box_serial: str, records, expected, missing):
         """超时后仍推送已收集到的数据给 MES，标注缺失工位

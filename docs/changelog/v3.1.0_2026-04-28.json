@@ -1,0 +1,124 @@
+{
+  "version": "3.1.0",
+  "date": "2026-04-28",
+  "previous_version": "3.0.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-310-001",
+      "title": "工单按项目/工位/集群三选一计件",
+      "symptom": "客户反馈集群汇总显示已完成但工单完成数量一直为 0;前端工单创建表单根本没暴露 project_id 字段,导致 get_active_order 永远查不到活跃工单。",
+      "root_cause": "WorkOrder 模型只有 project_id 一种绑定字段,前端创建表单也未提供 project_id 入口,加之集群多机部署下需要按 box_serial 计件而不是按本机 cycle 计件。",
+      "fix": "WorkOrder 新增 binding_scope (project/channels/cluster) + target_channels + target_stations 三个字段;WorkOrderService._normalize_binding 统一三选一校验;get_active_order 重写按 scope 路由匹配 (cluster 跳过);新增 find_cluster_orders 给 cluster_collector 用;cluster_collector._check_and_dispatch 在 box_complete 推送成功且非 is_recovery 时调 _increment_cluster_orders 给 cluster 工单 +1;前端 OrderPanel.vue dialog 顶部加独立 radio 必填,联动显示项目下拉/工位多选/集群说明;列表新增'绑定'系统列,老工单 project_id 为空显示红色'未绑定'警告。",
+      "files": [
+        "backend/models/mes_models.py",
+        "backend/main.py",
+        "backend/services/work_order.py",
+        "backend/services/mes_hooks.py",
+        "backend/services/cluster_collector.py",
+        "backend/api/mes.py",
+        "frontend/src/views/MES/OrderPanel.vue"
+      ],
+      "keywords": [
+        "工单绑定", "binding_scope", "target_channels", "target_stations",
+        "工单计件", "completed_qty", "工单数量为0",
+        "WorkOrder", "WorkOrderService", "_normalize_binding",
+        "get_active_order", "find_cluster_orders",
+        "increment_completed", "_active_orders", "_handle_session_start",
+        "cluster_collector", "_check_and_dispatch", "_increment_cluster_orders",
+        "box_complete", "box_serial", "BoxAggregation",
+        "OrderPanel", "新建工单", "未绑定项目",
+        "MES 工单管理", "工单与项目绑定", "集群计件"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-310-002",
+      "title": "集群模式简化为主机单点 (不再选目标站点)",
+      "symptom": "用户反馈'集群应该直接选主机就行,为什么会让选某个站点'。",
+      "root_cause": "首版设计了 target_stations 多选,意图是'工单可分发到指定集群站点',但客户的实际心智模型是'工单建在主机即代表整个集群',多选反而增加心智负担。",
+      "fix": "前端 cluster 模式不再显示 target_stations 多选,改成一段说明文字。后端 find_cluster_orders 默认按 priority + created_at 取首条 in_progress cluster 工单,不做 station 过滤。target_stations 字段在数据库保留作扩展位,UI 不暴露,工单显式带值时才走交集过滤逻辑。",
+      "files": [
+        "backend/services/work_order.py",
+        "frontend/src/views/MES/OrderPanel.vue"
+      ],
+      "keywords": [
+        "cluster 工单", "集群单点", "target_stations 简化",
+        "find_cluster_orders", "首条优先级"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-310-001",
+      "title": "静默 cluster-only 部署下'没找到工单'日志噪声",
+      "symptom": "纯 cluster 部署下每开一次 session 都刷 [MES] Session#X chN 没找到活跃工单 日志。",
+      "root_cause": "cluster 模式工单本来就不进 _handle_session_start 的绑定路径(由 cluster_collector 在 box_complete 时直接 +1),但 _handle_session_start 找不到工单时仍会打印 INFO 日志。",
+      "fix": "_handle_session_start 找不到 active_order 时 pass。诊断渠道转交给前端工单列表'未绑定'红色 tag + cycle_end 现有的 'Cycle#X 结束但未绑定工件' 日志,不丢可观测性。",
+      "files": [
+        "backend/services/mes_hooks.py"
+      ],
+      "keywords": [
+        "_handle_session_start", "MES 日志降噪", "cluster-only"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CONFIG-310-001",
+      "title": "版本号升级到 3.1.0",
+      "symptom": "新增 minor feature, 需要 bump version。",
+      "root_cause": "3.0.0 之后新增工单绑定范围功能。",
+      "fix": "electron/package.json + electron/splash.html 更新到 3.1.0。",
+      "files": [
+        "electron/package.json",
+        "electron/splash.html"
+      ],
+      "keywords": ["version bump", "3.1.0"],
+      "breaking": false
+    },
+    {
+      "type": "tool",
+      "id": "TOOL-310-001",
+      "title": "新增工单绑定端到端仿真脚本",
+      "symptom": "新功能需要回归测试支撑。",
+      "root_cause": "v3.1.0 工单绑定改动跨多模块 (model/service/api/前端),需要独立 SQLite 仿真验证三条计件链路。",
+      "fix": "tools/test_workorder_binding.py 用独立 SQLite + Mock MES gateway,覆盖 _normalize_binding 校验/project 模式/channels 模式/cluster 端到端/auto-completed/优先级取首条共 6 个场景 32 个断言。",
+      "files": [
+        "tools/test_workorder_binding.py"
+      ],
+      "keywords": [
+        "工单测试", "binding 仿真", "test_workorder_binding",
+        "Mock MES gateway", "回归测试"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [
+    "debug-mes",
+    "modify-model",
+    "modify-frontend",
+    "modify-api"
+  ],
+  "files_changed": [
+    "backend/models/mes_models.py",
+    "backend/main.py",
+    "backend/services/work_order.py",
+    "backend/services/mes_hooks.py",
+    "backend/services/cluster_collector.py",
+    "backend/api/mes.py",
+    "frontend/src/views/MES/OrderPanel.vue",
+    "tools/test_workorder_binding.py",
+    "electron/package.json",
+    "electron/splash.html",
+    "docs/changelog/v3.1.0_2026-04-28.md",
+    "docs/changelog/v3.1.0_2026-04-28.json",
+    "docs/CHANGELOG.md"
+  ],
+  "db_migrations": [
+    "ALTER TABLE work_orders ADD COLUMN binding_scope VARCHAR(20) DEFAULT 'project'",
+    "ALTER TABLE work_orders ADD COLUMN target_channels TEXT",
+    "ALTER TABLE work_orders ADD COLUMN target_stations TEXT"
+  ]
+}

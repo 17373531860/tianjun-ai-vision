@@ -146,6 +146,7 @@ class ExternalDeviceProtocolsMixin:
         finally:
             client.close()
 
+    @staticmethod
     def _open_serial_with_retry(port: str, baudrate: int, *,
                                  bytesize: int = 8, parity: str = "N",
                                  stopbits: int = 1, timeout: float = 2.0,
@@ -155,6 +156,9 @@ class ExternalDeviceProtocolsMixin:
         常见场景：上次连接或测试关闭后 Windows 串口资源未完全释放、
         或者连接线程与 test_connection 短时间内先后打开同一端口。
         这种情况下首次 open 失败、间隔 1 秒后再试往往就能成功。
+
+        v2.7.17: 漏 @staticmethod 导致 self.xxx(port=...) 调用时 self 落到 port
+        位置参数, 又有 kwargs port=... → "got multiple values for argument 'port'".
         """
         import serial
         last_err: Optional[Exception] = None
@@ -235,10 +239,12 @@ class ExternalDeviceProtocolsMixin:
         finally:
             ser.close()
 
+    @staticmethod
     def _modbus_ascii_lrc(data: bytes) -> int:
         """Modbus ASCII LRC 校验"""
         return (-sum(data)) & 0xFF
 
+    @staticmethod
     def _build_modbus_ascii_read(slave: int, register: int, count: int) -> bytes:
         """构建 Modbus ASCII 读保持寄存器请求帧 (功能码 03)
 
@@ -249,10 +255,13 @@ class ExternalDeviceProtocolsMixin:
         pdu = bytes([slave, func_code,
                       (register >> 8) & 0xFF, register & 0xFF,
                       (count >> 8) & 0xFF, count & 0xFF])
-        lrc = ExternalDeviceService._modbus_ascii_lrc(pdu)
+        # v2.7.17: 之前误用宿主 service 类名 (本模块没 import 它), 触发 NameError.
+        # 用 mixin 自身静态方法即可.
+        lrc = ExternalDeviceProtocolsMixin._modbus_ascii_lrc(pdu)
         hex_str = pdu.hex().upper() + f"{lrc:02X}"
         return f":{hex_str}\r\n".encode("ascii")
 
+    @staticmethod
     def _parse_modbus_ascii_response(frame: str, expected_slave: int = 1) -> Optional[list]:
         """解析 Modbus ASCII 响应帧，返回寄存器值列表
 
@@ -324,29 +333,58 @@ class ExternalDeviceProtocolsMixin:
 
         modbus_register = doc_register - 40001 if doc_register >= 40001 else doc_register
 
-        conn.status = "connecting"
-        try:
-            ser = self._open_serial_with_retry(
-                port=conn.serial_port,
-                baudrate=conn.serial_baud,
-                bytesize=cfg.get("bytesize", 8),
-                parity=cfg.get("parity", "N"),
-                stopbits=cfg.get("stopbits", 1),
-                timeout=1.0,
-            )
-        except Exception as e:
-            conn.status = "error"
-            conn.last_error = str(e)
-            raise
-
-        conn.status = "connected"
-        conn.last_error = ""
-        logger.info("[ExtDev] %s Modbus ASCII 主从模式启动 (slave=%d, reg=%d, count=%d)",
-                    conn.name, slave_id, modbus_register, count)
+        # v2.7.17: 把 open + 主循环包成"外层重连循环".
+        # 之前 open 在 while 外, 内层 except 只 log 不重连, 导致 USB 拔插后
+        # 句柄失效就 EIO 死刷, 重新拔插也救不回来 (新设备号变 ttyUSB1 了).
+        # 现在: 任何串口异常 → 关 ser → 退内层 → 外层重新走 _open_serial_with_retry.
+        # 重连失败 backoff 5 秒再试.
+        import errno as _errno
+        reconnect_backoff = 5.0
+        ser = None
+        first_open = True
 
         try:
             while not conn._stop_event.is_set():
+                # ---- (re)connect ----
+                if ser is None:
+                    conn.status = "connecting"
+                    try:
+                        ser = self._open_serial_with_retry(
+                            port=conn.serial_port,
+                            baudrate=conn.serial_baud,
+                            bytesize=cfg.get("bytesize", 8),
+                            parity=cfg.get("parity", "N"),
+                            stopbits=cfg.get("stopbits", 1),
+                            timeout=1.0,
+                        )
+                    except Exception as e:
+                        conn.status = "error"
+                        conn.last_error = str(e)
+                        if first_open:
+                            # 首次失败保持原行为 raise, 让上层服务知道启动失败
+                            raise
+                        logger.warning(
+                            "[ExtDev] %s 串口重连失败, %.1fs 后再试: %s",
+                            conn.name, reconnect_backoff, e,
+                        )
+                        if conn._stop_event.wait(timeout=reconnect_backoff):
+                            return
+                        continue
+
+                    conn.status = "connected"
+                    conn.last_error = ""
+                    if first_open:
+                        logger.info(
+                            "[ExtDev] %s Modbus ASCII 主从模式启动 (slave=%d, reg=%d, count=%d)",
+                            conn.name, slave_id, modbus_register, count,
+                        )
+                    else:
+                        logger.info("[ExtDev] %s 串口已重连: %s", conn.name, conn.serial_port)
+                    first_open = False
+
+                # ---- 一轮 read/write ----
                 request = self._build_modbus_ascii_read(slave_id, modbus_register, count)
+                fatal = False
                 try:
                     ser.reset_input_buffer()
                     ser.write(request)
@@ -388,12 +426,45 @@ class ExternalDeviceProtocolsMixin:
                     else:
                         logger.debug("[ExtDev] %s Modbus 无响应", conn.name)
 
+                except OSError as e:
+                    # EIO / ENODEV / ENXIO 都意味着设备掉线, 必须重连
+                    if getattr(e, 'errno', None) in (
+                        _errno.EIO, _errno.ENODEV, _errno.ENXIO,
+                        _errno.EBADF, _errno.EACCES,
+                    ):
+                        logger.error(
+                            "[ExtDev] %s 串口掉线 (errno=%s, %s), 关闭后重连...",
+                            conn.name, e.errno, e,
+                        )
+                        fatal = True
+                    else:
+                        logger.error("[ExtDev] %s Modbus ASCII 通信错误: %s", conn.name, e)
                 except Exception as e:
+                    # serial.SerialException 也归到致命这边
+                    msg = str(e)
+                    if 'device' in msg.lower() and ('disconnect' in msg.lower() or 'remove' in msg.lower()):
+                        fatal = True
                     logger.error("[ExtDev] %s Modbus ASCII 通信错误: %s", conn.name, e)
+
+                if fatal:
+                    try:
+                        ser.close()
+                    except Exception:
+                        pass
+                    ser = None
+                    conn.status = "error"
+                    conn.last_error = "串口掉线, 等待重连"
+                    if conn._stop_event.wait(timeout=reconnect_backoff):
+                        return
+                    continue
 
                 conn._stop_event.wait(timeout=poll_interval)
         finally:
-            ser.close()
+            if ser is not None:
+                try:
+                    ser.close()
+                except Exception:
+                    pass
 
     def _serial_continuous_loop(self, conn: DeviceConnection):
         """串口连续接收模式 — 设备主动推送数据（需设备端配置为连续发送模式）"""

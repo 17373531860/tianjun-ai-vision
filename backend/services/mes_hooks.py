@@ -929,8 +929,15 @@ class MESHookManager:
 
     def _handle_session_start(self, db, channel_id: int, session_id: int,
                               project_id: int):
-        """Session 开始: 查找活跃工单"""
-        order = self._work_order_svc.get_active_order(db, project_id)
+        """Session 开始: 查找活跃工单.
+
+        v3.1.0: 支持按 binding_scope 匹配. cluster 模式不在 session_start 绑,
+        由 cluster_collector 在 box_complete 时直接 +1, 所以 _active_orders
+        里只会装 project/channels 模式的工单.
+        """
+        order = self._work_order_svc.get_active_order(
+            db, project_id=project_id, channel_id=channel_id,
+        )
         if order:
             self._active_orders[channel_id] = order.id
             from backend.models.models import DetectionSession
@@ -940,7 +947,13 @@ class MESHookManager:
             if session and hasattr(session, 'order_id'):
                 session.order_id = order.id
                 db.flush()
-            print(f"[MES] Session#{session_id} 关联工单 {order.order_no}", flush=True)
+            print(f"[MES] Session#{session_id} 关联工单 {order.order_no} "
+                  f"(scope={order.binding_scope}, ch={channel_id})", flush=True)
+        else:
+            # v3.1.0: 静默处理 — cluster-only 部署下这条日志会一直刷, 没有诊断价值.
+            # 真正"工单数量不+1"的排查靠工单列表"未绑定"红色 tag + cycle_end 那条
+            # "Cycle#X 结束但未绑定工件" 的日志即可.
+            pass
 
     def _handle_session_end(self, db, channel_id: int, session_id: int):
         """Session 结束: 清理状态"""

@@ -15,6 +15,7 @@ from backend.api.mes_gateway import router as mes_gateway_router
 from backend.api.operators import router as operators_router
 from backend.api.cluster import router as cluster_router
 from backend.api.external_device import router as extdev_router
+from backend.api.debug import router as debug_router
 # Import models to ensure they are registered
 import os
 import cv2
@@ -87,6 +88,13 @@ def migrate_database():
         ("scanner_devices", "ok_rescan_cooldown_sec", "INTEGER DEFAULT 0"),
         # v2.7.16 迟到扫码补绑窗口（秒），0 关闭
         ("scanner_devices", "late_scan_bind_window_sec", "INTEGER DEFAULT 3"),
+        # v2.7.16 扫描模式 + B 模式间隔
+        ("scanner_devices", "scan_mode", "VARCHAR(32) DEFAULT 'continuous'"),
+        ("scanner_devices", "throttle_idle_ms", "INTEGER DEFAULT 500"),
+        # v3.1.0 工单绑定范围 (project / channels / cluster)
+        ("work_orders", "binding_scope", "VARCHAR(20) DEFAULT 'project'"),
+        ("work_orders", "target_channels", "TEXT"),
+        ("work_orders", "target_stations", "TEXT"),
     ]
     
     try:
@@ -738,6 +746,7 @@ app.include_router(mes_gateway_router, prefix=f"{settings.API_V1_STR}", tags=["M
 app.include_router(operators_router, prefix=f"{settings.API_V1_STR}", tags=["Operators"])
 app.include_router(cluster_router, prefix=f"{settings.API_V1_STR}", tags=["Cluster"])
 app.include_router(extdev_router, prefix=f"{settings.API_V1_STR}", tags=["External Devices"])
+app.include_router(debug_router, prefix=f"{settings.API_V1_STR}", tags=["Debug"])
 
 # Mount static files for uploads (images, etc.)
 if os.path.exists(settings.UPLOAD_DIR):
@@ -746,17 +755,6 @@ if os.path.exists(settings.UPLOAD_DIR):
 # Mount recordings directory for video playback
 if os.path.exists(settings.RECORDING_DIR):
     app.mount("/recordings", StaticFiles(directory=settings.RECORDING_DIR), name="recordings")
-
-# ========== 应用热补丁 (如果存在) ==========
-# BACKEND_SKIP_INIT=1 时跳过 hotfix（测试环境无需 monkey patch 摄像头/RTSP）
-if not os.environ.get("BACKEND_SKIP_INIT"):
-    try:
-        from backend import hotfix
-        hotfix.apply(app)
-    except ImportError:
-        pass
-    except Exception as _hf_err:
-        print(f"[Hotfix] 加载失败: {_hf_err}")
 
 @app.get("/")
 def root():
@@ -886,10 +884,42 @@ def shutdown_complete():
 
 @app.get("/video_feed")
 def video_feed(channel: int = 0):
-    """视频流端点 - 支持多通道。?channel=0 (default), ?channel=1, etc."""
-    vm = get_video_manager(channel)
+    """视频流端点 - 支持多通道。?channel=0 (default), ?channel=1, etc.
+
+    通道未启动任何视频源时,返回一张黑底白字的 "Ch{N} - No Source" 占位 MJPEG 流,
+    避免前端 <img> 因为 EOF 反复闪烁/重连. cv2.putText 在 OpenCV 4.11 + 某些
+    Linux 环境下渲染特定字符会段错误, 用 try/except 兜底, 失败时退化为纯黑帧.
+    """
+    from backend.api.channel_manager import channel_manager
+    vm = channel_manager.get(channel)
+
+    if vm.is_running or vm.source_type:
+        return StreamingResponse(
+            vm.generate_mjpeg(),
+            media_type="multipart/x-mixed-replace; boundary=frame"
+        )
+
+    import numpy as np
+    import time as _time
+
+    def _generate_no_source_frames():
+        black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        try:
+            cv2.putText(black_frame, f"Ch{channel} - No Source", (180, 240),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        except cv2.error:
+            pass
+        ret, buffer = cv2.imencode('.jpg', black_frame)
+        if not ret:
+            return
+        frame_bytes = buffer.tobytes()
+        while True:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            _time.sleep(0.1)
+
     return StreamingResponse(
-        vm.generate_mjpeg(),
+        _generate_no_source_frames(),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 

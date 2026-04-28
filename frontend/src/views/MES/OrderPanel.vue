@@ -56,6 +56,15 @@
               {{ row.source === 'external' ? '外部' : '手动' }}
             </el-tag>
           </template>
+          <template v-else-if="key === 'binding'">
+            <!-- v3.1.0: 显示绑定方式 + 详情 + 旧工单警告 -->
+            <div class="flex flex-col gap-0.5">
+              <el-tag :type="bindingTagType(row)" size="small">{{ bindingLabel(row) }}</el-tag>
+              <span class="text-xs text-gray-400 truncate" :title="bindingDetail(row)">
+                {{ bindingDetail(row) }}
+              </span>
+            </div>
+          </template>
           <template v-else-if="key === 'status'">
             <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
           </template>
@@ -107,8 +116,40 @@
     </div>
 
     <!-- 新建/编辑 对话框（模板驱动） -->
-    <el-dialog v-model="showCreate" :title="editingId ? '编辑工单' : '新建工单'" width="620px" class="mes-dialog" destroy-on-close>
-      <el-form label-width="100px" size="small">
+    <el-dialog v-model="showCreate" :title="editingId ? '编辑工单' : '新建工单'" width="640px" class="mes-dialog" destroy-on-close>
+      <el-form label-width="110px" size="small">
+        <!-- v3.1.0: 绑定方式 (不进模板, 三选一必填) -->
+        <el-form-item label="绑定方式" required>
+          <el-radio-group v-model="bindingForm.scope" size="small">
+            <el-radio-button value="project">按项目</el-radio-button>
+            <el-radio-button value="channels">按工位</el-radio-button>
+            <el-radio-button value="cluster">按集群站点</el-radio-button>
+          </el-radio-group>
+          <div class="text-xs text-gray-400 mt-1 leading-tight">
+            <span v-if="bindingForm.scope === 'project'">本机任意工位上, 该项目下的 cycle 完成都计入此工单 (按 cycle +1)</span>
+            <span v-else-if="bindingForm.scope === 'channels'">只有指定工位上的 cycle 完成才计入此工单 (按 cycle +1, 不限项目)</span>
+            <span v-else-if="bindingForm.scope === 'cluster'">集群里指定站点参与时, 一个 box_serial 完成算一件 (按 box +1)</span>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="bindingForm.scope === 'project'" label="所属项目" required>
+          <el-select v-model="bindingForm.project_id" placeholder="选择项目" clearable filterable size="small" style="width: 100%">
+            <el-option v-for="p in projectOptions" :key="p.id" :value="p.id" :label="`${p.name} (#${p.id})`" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="bindingForm.scope === 'channels'" label="目标工位" required>
+          <el-select v-model="bindingForm.target_channels" multiple placeholder="选择工位号 (例如 0, 1)" size="small" style="width: 100%">
+            <el-option v-for="n in channelOptions" :key="n" :value="n" :label="`工位 ${n}`" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="bindingForm.scope === 'cluster'" label="集群计件">
+          <div class="text-xs text-gray-300 leading-relaxed bg-slate-700/30 rounded px-3 py-2 w-full">
+            <div>工单建在主机即可, 集群里所有完成的 box (主机推送 box_complete 时) 自动 +1.</div>
+            <div class="text-gray-400 mt-1">一个 box_serial = 1 件. 同一时间只会有一条活跃集群工单 (按优先级取).</div>
+          </div>
+        </el-form-item>
+
+        <el-divider class="!my-3" />
+
         <el-empty v-if="formItems.length === 0" description="还未配置任何字段，点『字段配置』添加" :image-size="60" />
         <el-form-item
           v-for="item in formItems" :key="item.key"
@@ -284,6 +325,8 @@ import {
 } from 'element-plus'
 import { Close } from '@element-plus/icons-vue'
 import { getOrders, createOrder, updateOrder, changeOrderStatus, deleteOrder, updateOrderExtraData } from '@/api/mes'
+import { getProjects } from '@/api/project'
+import { getClusterConfig } from '@/api/cluster'
 
 // ========== 模板常量 ==========
 const TEMPLATE_KEY = 'mes_order_form_template_v1'
@@ -311,6 +354,7 @@ const PRESET_KEYS = new Set(PRESET_ORDER)
 // type='system' 标记: v-for 表单循环跳过, 字段配置只允许改 label, 不可改 key/type/required/options
 const SYSTEM_COL_META = {
   source:     { label: '来源',      typeLabel: '标签'   },
+  binding:    { label: '绑定',      typeLabel: '绑定标签' },   // v3.1.0 新增
   status:     { label: '状态',      typeLabel: '状态标签' },
   progress:   { label: '进度',      typeLabel: '进度条'  },
   good_ng:    { label: '良品/不良', typeLabel: '良品/不良数' },
@@ -328,6 +372,7 @@ const COL_META = {
   product_name: { prop: 'product_name', width: 120 },
   product_code: { prop: 'product_code', width: 100 },
   source:       { width: 80 },
+  binding:      { width: 180 },   // v3.1.0
   status:       { prop: 'status',       width: 100 },
   progress:     { width: 180 },
   good_ng:      { width: 120 },
@@ -469,6 +514,23 @@ const saving = ref(false)
 const autoRefresh = ref(false)
 let refreshTimer = null
 
+// v3.1.0: 工单绑定方式 — project / channels / cluster, 不进模板, 单独维护
+const defaultBindingForm = () => ({
+  scope: 'project',
+  project_id: null,
+  target_channels: [],
+  target_stations: [],
+})
+const bindingForm = ref(defaultBindingForm())
+const projectOptions = ref([])     // [{id, name, channel_count}]
+const stationOptions = ref([])     // ["A","B"...] 集群 expected_stations
+const channelOptions = computed(() => {
+  // 工位号候选: 项目选了的话用项目 channel_count, 否则给 0..3 让用户手填
+  const proj = projectOptions.value.find(p => p.id === bindingForm.value.project_id)
+  const cnt = (proj && proj.channel_count) || 4
+  return Array.from({ length: Math.max(cnt, 4) }, (_, i) => i)
+})
+
 // ========== 模板状态 ==========
 const template = ref(buildDefaultTemplate())
 const templateLibrary = ref([])
@@ -505,6 +567,37 @@ const savingExtra = ref(false)
 
 const statusLabel = (s) => ({ draft: '草稿', pending: '待生产', in_progress: '生产中', paused: '已暂停', completed: '已完成', cancelled: '已取消' }[s] || s)
 const statusType = (s) => ({ draft: 'info', pending: 'warning', in_progress: 'success', paused: '', completed: 'primary', cancelled: 'danger' }[s] || '')
+
+// v3.1.0: 工单绑定方式列渲染
+const bindingLabel = (row) => {
+  const scope = row.binding_scope || 'project'
+  if (scope === 'channels') return '工位'
+  if (scope === 'cluster')  return '集群'
+  // project 模式但没绑项目 → "未绑定" 警告
+  if (!row.project_id) return '未绑定'
+  return '项目'
+}
+const bindingTagType = (row) => {
+  const scope = row.binding_scope || 'project'
+  if (scope === 'channels') return 'success'
+  if (scope === 'cluster')  return 'primary'
+  if (!row.project_id) return 'danger'
+  return 'info'
+}
+const bindingDetail = (row) => {
+  const scope = row.binding_scope || 'project'
+  if (scope === 'channels') {
+    return `工位 [${(row.target_channels || []).join(', ')}]`
+  }
+  if (scope === 'cluster') {
+    // v3.1.0: 简化为整集群计件, target_stations 留作高级扩展位
+    const ts = row.target_stations || []
+    return ts.length > 0 ? `集群 [${ts.join(', ')}]` : '集群整体 (按 box_serial)'
+  }
+  if (!row.project_id) return '⚠ 未绑定项目, 不会计件'
+  const proj = projectOptions.value.find(p => p.id === row.project_id)
+  return proj ? `项目: ${proj.name}` : `项目 #${row.project_id}`
+}
 
 const formatTime = (t) => {
   if (!t) return '-'
@@ -701,7 +794,28 @@ const toggleAutoRefresh = (val) => {
 }
 
 // ========== 打开新建/编辑 ==========
-const openCreate = () => {
+const loadBindingOptions = async () => {
+  // 项目列表
+  try {
+    const res = await getProjects()
+    const data = res.data?.items || res.data || []
+    projectOptions.value = (Array.isArray(data) ? data : []).map(p => ({
+      id: p.id, name: p.name, channel_count: p.channel_count || 1,
+    }))
+  } catch {
+    projectOptions.value = []
+  }
+  // 集群站点候选
+  try {
+    const res = await getClusterConfig()
+    const cfg = res.data || {}
+    stationOptions.value = Array.isArray(cfg.expected_stations) ? cfg.expected_stations : []
+  } catch {
+    stationOptions.value = []
+  }
+}
+
+const openCreate = async () => {
   editingId.value = null
   _editingExtraOriginal.value = {}
   presetValues.value = {}
@@ -710,10 +824,12 @@ const openCreate = () => {
     if (it.preset) presetValues.value[it.key] = defaultValueFor(it)
     else customValues.value[it.key] = defaultValueFor(it)
   }
+  bindingForm.value = defaultBindingForm()
+  await loadBindingOptions()
   showCreate.value = true
 }
 
-const editOrder = (row) => {
+const editOrder = async (row) => {
   editingId.value = row.id
   const extra = row.extra_data || {}
   _editingExtraOriginal.value = JSON.parse(JSON.stringify(extra))
@@ -727,6 +843,15 @@ const editOrder = (row) => {
       customValues.value[it.key] = extra[it.key] ?? defaultValueFor(it)
     }
   }
+
+  // v3.1.0: 回填绑定方式. 老工单可能字段全空 → 默认 project, project_id 也可能空
+  bindingForm.value = {
+    scope: row.binding_scope || 'project',
+    project_id: row.project_id ?? null,
+    target_channels: Array.isArray(row.target_channels) ? [...row.target_channels] : [],
+    target_stations: Array.isArray(row.target_stations) ? [...row.target_stations] : [],
+  }
+  await loadBindingOptions()
   showCreate.value = true
 }
 
@@ -746,6 +871,18 @@ const handleSave = async () => {
       return
     }
   }
+
+  // v3.1.0: 绑定方式校验
+  const bf = bindingForm.value
+  if (bf.scope === 'project' && !bf.project_id) {
+    ElMessage.warning('请选择「所属项目」')
+    return
+  }
+  if (bf.scope === 'channels' && (!Array.isArray(bf.target_channels) || bf.target_channels.length === 0)) {
+    ElMessage.warning('请至少选择一个「目标工位」')
+    return
+  }
+  // v3.1.0: cluster 模式不再要求选站点 (主机即代表整个集群)
 
   saving.value = true
   try {
@@ -770,6 +907,13 @@ const handleSave = async () => {
     }
     // product_code/spec 等非必填，后端允许为空/null
     payload.extra_data = Object.keys(extra).length > 0 ? extra : null
+
+    // v3.1.0: 绑定字段 (后端 _normalize_binding 会按 scope 三选一)
+    // cluster 模式不再带 target_stations, 由后端 find_cluster_orders 取首条活跃工单
+    payload.binding_scope = bf.scope
+    payload.project_id = bf.scope === 'project' ? bf.project_id : null
+    payload.target_channels = bf.scope === 'channels' ? bf.target_channels : null
+    payload.target_stations = null
 
     if (editingId.value) {
       await updateOrder(editingId.value, payload)
@@ -1007,6 +1151,8 @@ onMounted(() => {
   loadArchivedOrderIds()
   loadTemplate()
   loadOrders()
+  // v3.1.0: 列表里要显示项目名/集群站点, 提前拉一次
+  loadBindingOptions()
 })
 
 onBeforeUnmount(() => {

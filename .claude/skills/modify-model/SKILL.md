@@ -32,6 +32,12 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 
 **注意:** `DetectionSession` 和 `DetectionCycle` 表在 v2.3.0+ 新增了 `order_id` 列，与 MES 工单关联。
 
+**v3.1.0 工单绑定字段**: `WorkOrder` 新增 `binding_scope` (project/channels/cluster) + `target_channels` (JSON list) + `target_stations` (JSON list)。配合 `WorkOrderService._normalize_binding(data, strict)` 做三选一校验。SQLite 迁移走 `backend/main.py` 的 migrations 列表(`ALTER TABLE work_orders ADD COLUMN ...`)。**改这三个字段时**:
+- 后端 `OrderCreate`/`OrderUpdate` Pydantic 跟着加;`_serialize_order` 跟着输出。
+- 前端 `OrderPanel.vue` 创建/编辑表单 + 列表"绑定"列 跟着改。
+- `get_active_order(project_id, channel_id, station_id)` 按 scope 路由;`find_cluster_orders` 给 cluster_collector 用。
+- 计件触点: project/channels 走 `_handle_cycle_end → increment_completed`,cluster 走 `cluster_collector._check_and_dispatch → _increment_cluster_orders`。
+
 ## MES ORM 模型 (backend/models/mes_models.py) — v2.3.0+
 
 | 模型 | 主要写入者 | 主要读取者 | 前端对应 |

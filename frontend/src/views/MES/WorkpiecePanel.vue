@@ -25,12 +25,18 @@
         clearable
       />
       <el-button size="small" type="primary" @click="loadList">查询</el-button>
+      <el-button size="small" type="danger" plain :disabled="selected.length === 0"
+                 @click="handleBatchDelete">
+        批量删除{{ selected.length > 0 ? `(${selected.length})` : '' }}
+      </el-button>
     </div>
 
     <div class="flex gap-4 h-[calc(100vh-240px)]">
       <!-- 左: 工件列表 -->
       <div class="flex-1 overflow-auto">
-        <el-table :data="items" stripe size="small" class="mes-table" highlight-current-row @current-change="handleSelect">
+        <el-table :data="items" stripe size="small" class="mes-table" highlight-current-row
+                  @current-change="handleSelect" @selection-change="handleSelectionChange">
+          <el-table-column type="selection" width="42" />
           <el-table-column prop="serial_no" label="序列号" width="160" />
           <el-table-column prop="status" label="状态" width="90">
             <template #default="{ row }">
@@ -42,10 +48,11 @@
           <el-table-column prop="registered_at" label="登记时间" width="160">
             <template #default="{ row }">{{ formatTime(row.registered_at) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="160">
+          <el-table-column label="操作" width="220">
             <template #default="{ row }">
               <el-button v-if="row.status === 'ng'" size="small" type="warning" @click="doAction(row, 'rework')">返工</el-button>
               <el-button v-if="['ng','rework'].includes(row.status)" size="small" type="danger" @click="doAction(row, 'scrap')">报废</el-button>
+              <el-button size="small" type="danger" plain @click="handleDelete(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -113,7 +120,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getWorkpieces, getWorkpieceTrace, workpieceAction } from '@/api/mes'
+import { getWorkpieces, getWorkpieceTrace, workpieceAction, deleteWorkpiece } from '@/api/mes'
 
 const items = ref([])
 const total = ref(0)
@@ -123,6 +130,9 @@ const keyword = ref('')
 const filterStatus = ref('')
 const dateRange = ref(null)
 const traceData = ref(null)
+const selected = ref([])
+
+const handleSelectionChange = (rows) => { selected.value = rows || [] }
 
 const wpStatusLabel = (s) => ({ registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良', rework: '返工中', scrapped: '已报废' }[s] || s)
 const wpStatusType = (s) => ({
@@ -177,6 +187,49 @@ const doAction = async (row, action) => {
   } catch (e) {
     if (e !== 'cancel' && e !== 'close')
       ElMessage.error('操作失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
+  }
+}
+
+const handleDelete = async (row) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除工件 ${row.serial_no} ？\n\n会同时清掉它的全部检测关联和缺陷记录, 不可撤销。`,
+      '删除确认', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+    await deleteWorkpiece(row.id)
+    ElMessage.success('已删除')
+    if (traceData.value?.workpiece?.id === row.id) traceData.value = null
+    loadList()
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close')
+      ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
+  }
+}
+
+const handleBatchDelete = async () => {
+  if (selected.value.length === 0) return
+  const n = selected.value.length
+  try {
+    await ElMessageBox.confirm(
+      `确定批量删除 ${n} 个工件？\n\n会同时清掉这些工件的全部检测关联和缺陷记录, 不可撤销。`,
+      '批量删除确认', { type: 'warning', confirmButtonText: `删除 ${n} 个`, cancelButtonText: '取消' }
+    )
+    const ids = selected.value.map(r => r.id)
+    const results = await Promise.allSettled(ids.map(id => deleteWorkpiece(id)))
+    const failed = results.filter(r => r.status === 'rejected').length
+    if (failed === 0) {
+      ElMessage.success(`已删除 ${n} 个工件`)
+    } else {
+      ElMessage.warning(`成功 ${n - failed} 个, 失败 ${failed} 个`)
+    }
+    if (traceData.value && selected.value.some(r => r.id === traceData.value.workpiece?.id)) {
+      traceData.value = null
+    }
+    selected.value = []
+    loadList()
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close')
+      ElMessage.error('批量删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
   }
 }
 

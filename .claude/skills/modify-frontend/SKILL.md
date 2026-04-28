@@ -323,6 +323,28 @@ v2.7.15 把工单管理表格表头从 9 个硬编码 `<el-table-column>` 改成
 | SYSTEM | 锁定 | 可改 | 锁定（显示 typeLabel + 后缀"不可改"） | 锁定 | 锁定 | 可改 | 可改 | 锁定 |
 | CUSTOM | 可改 | 可改 | 可改 | 可改 | 可改 | 可改 | 可改 | 可删 |
 
+## v3.1.0 前端要点
+
+### `OrderPanel.vue` — 工单"绑定方式"独立区块
+
+v3.1.0 新增"绑定方式"功能,**不走模板字段系统**,在新建/编辑 dialog 顶部加一段固定 radio (按项目/按工位/按集群站点),必填,联动显示对应选择控件:
+
+- **`bindingForm` ref**: `{ scope, project_id, target_channels, target_stations }`,默认 scope=`project`
+- **联动选项加载**: `openCreate` / `editOrder` 调 `loadBindingOptions()` 拉项目列表 (`getProjects`) + 集群站点 (`getClusterConfig.expected_stations`)
+- **`channelOptions` computed**: 项目选了就用 `project.channel_count`,否则给 0..3 兜底
+- **`handleSave` 校验**: project 模式查 project_id; channels 模式查 target_channels 非空; cluster 模式不再校验(整集群计件)
+- **payload 合并**: 绑定字段独立追加到 payload,`target_stations` 始终传 null(后端 find_cluster_orders 默认取首条)
+
+**列表"绑定"系统列**:
+- `SYSTEM_COL_META.binding` + `COL_META.binding` 加完整定义
+- `bindingLabel(row)` / `bindingTagType(row)` / `bindingDetail(row)`:**老工单 `binding_scope=project AND project_id IS NULL` 显示红色 ⚠ "未绑定项目, 不会计件"**
+- `normalizeTemplateItems` 已经会自动补 binding 系统列到老用户的模板里,无需迁移
+
+**Q: 改这块要注意什么?**
+- 别把绑定字段塞进 `PRESET_META` 模板(用户可能不小心删掉) — 必须独立维护
+- 编辑工单时 `bindingForm.value` 要从 row 回填(scope 从 `row.binding_scope`,各字段对应回填)
+- API 端见 `OrderCreate`/`OrderUpdate` Pydantic 字段 + 后端 `_normalize_binding(strict)`
+
 `saveTemplate` 落盘前会强制把 SYSTEM 列的 type='system'/required=false/optionsText='' 写回，防止任何路径绕过 UI 限制污染数据。
 
 ### 改这个文件的注意事项

@@ -21,11 +21,13 @@ export const getWorkpiece = (id) => api.get(`/mes/workpieces/${id}`)
 export const getWorkpieceTrace = (id) => api.get(`/mes/workpieces/${id}/trace`)
 export const workpieceAction = (id, data) => api.post(`/mes/workpieces/${id}/action`, data)
 export const searchWorkpieces = (keyword, params) => api.get(`/mes/workpieces/search/${keyword}`, { params })
+export const deleteWorkpiece = (id) => api.delete(`/mes/workpieces/${id}`)
 
 // ---- 缺陷 ----
 export const getDefects = (params) => api.get('/mes/defects', { params })
 export const createDefect = (data) => api.post('/mes/defects', data)
 export const getPareto = (params) => api.get('/mes/defects/pareto', { params })
+export const deleteDefect = (id) => api.delete(`/mes/defects/${id}`)
 
 // ---- 缺陷代码 ----
 export const getDefectCodes = (params) => api.get('/mes/defect-codes', { params })

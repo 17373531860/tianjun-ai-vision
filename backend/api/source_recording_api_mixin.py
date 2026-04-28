@@ -18,6 +18,18 @@ import traceback
 from datetime import datetime
 import cv2
 
+# v2.7.17: mixin 方法运行时使用本模块 globals 解析名字, 不会借宿主模块的 import,
+# 之前漏了下面这些 import 导致触发录制时 NameError ("settings is not defined" 等),
+# session/cycle/step 三种录制都会偶发掉到 except 里只打"开始XX录制失败".
+from backend.core.config import settings, DATA_DIR  # noqa: F401  DATA_DIR 备用
+from backend.models.models import (  # noqa: F401
+    DetectionSession,
+    DetectionCycle,
+    StepRecord,
+    VideoClip,
+)
+from backend.api.source_recorder import FFmpegRecorder
+
 
 class RecordingApiMixin:
     # ========== 视频录制功能 ==========

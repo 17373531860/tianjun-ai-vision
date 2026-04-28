@@ -205,6 +205,26 @@ class WorkpieceService:
         items = q.order_by(desc(Workpiece.created_at)).offset(skip).limit(limit).all()
         return items, total
 
+    def delete_workpiece(self, db: Session, workpiece_id: int) -> bool:
+        """删除工件 + 级联清理 WorkpieceInspection / DefectRecord.
+
+        v2.7.17: 给前端"工件追溯"加删除键. 不动 DetectionCycle / DetectionSession
+        (那是检测原始数据, 跟工件解耦, 不应跟着删).
+        """
+        wp = db.query(Workpiece).filter(Workpiece.id == workpiece_id).first()
+        if not wp:
+            return False
+        db.query(WorkpieceInspection).filter(
+            WorkpieceInspection.workpiece_id == workpiece_id
+        ).delete(synchronize_session=False)
+        from backend.models.mes_models import DefectRecord
+        db.query(DefectRecord).filter(
+            DefectRecord.workpiece_id == workpiece_id
+        ).delete(synchronize_session=False)
+        db.delete(wp)
+        db.flush()
+        return True
+
     def search_by_serial(self, db: Session, keyword: str,
                          project_id: int = None, limit: int = 20) -> list[Workpiece]:
         q = db.query(Workpiece).filter(

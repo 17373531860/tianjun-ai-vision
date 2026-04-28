@@ -232,3 +232,12 @@ class DefectService:
         db.delete(code)
         db.flush()
         return True
+
+    def delete_defect(self, db: Session, defect_id: int) -> bool:
+        """删除单条缺陷记录 (DefectRecord). v2.7.17: 给前端缺陷列表加删除键."""
+        rec = db.query(DefectRecord).filter(DefectRecord.id == defect_id).first()
+        if not rec:
+            return False
+        db.delete(rec)
+        db.flush()
+        return True

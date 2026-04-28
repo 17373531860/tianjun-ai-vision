@@ -350,6 +350,34 @@ operator.{name,employee_no,id}
 - 编辑时：模板外的原 `extra_data` 字段会保留到 payload 里，避免破坏既有数据
 - 故障诊断：新建工单出现 `order_no 必填` 之类后端 422 → 检查 `PRESET_META` 是否和后端 schema 字段对齐
 
+## 工单绑定范围 binding_scope（v3.1.0 新增）
+
+**字段**：`WorkOrder.binding_scope` (project / channels / cluster) + `target_channels` (JSON list, channels 模式必填) + `target_stations` (JSON list, cluster 模式留作扩展位 UI 不暴露)。
+
+**计件链路对照表**：
+
+| scope | 谁找工单 | 触发 +1 时机 | 备注 |
+|---|---|---|---|
+| `project` | `mes_hooks._handle_session_start` 调 `get_active_order(project_id, channel_id)` | `_handle_cycle_end` → `increment_completed` | 老逻辑;`project_id` 必填 |
+| `channels` | 同上但按 `channel_id ∈ target_channels` 匹配,**不看 project_id** | 同上 | 同一台机分上下班 / 不同工位跑不同活 |
+| `cluster` | 不进 `_active_orders`,由 `cluster_collector` 直接 `find_cluster_orders` | `cluster_collector._check_and_dispatch` 推送 `box_complete` 后 (且 `is_recovery=False`) → `_increment_cluster_orders` | **1 个 box_serial = 1 件**;校正重推不重复 +1 |
+
+**客户报"集群已完成但工单数量 0"排查路径**：
+
+1. **前端列表「绑定」列**：红色"未绑定"tag 直接定位——`binding_scope=project AND project_id IS NULL`(老工单或漏选项目)。`OrderPanel.vue` 创建表单顶部 radio 必填,用户必须三选一。
+2. **状态不是 `in_progress`**:`get_active_order` / `find_cluster_orders` 都按 `status='in_progress'` 过滤,`draft/pending/paused` 都不会被找到。
+3. **工单中途切 in_progress 不会 hot bind**:`_active_orders[channel_id]` 只在 `_handle_session_start` 时填一次,session 已经在跑时切工单状态对当前 session 无效,需要重启 session 或新 cycle。**这是已知设计**,v3.1.0 未改。
+4. **cluster 模式下不会进 `_active_orders`**:正常的;`_handle_session_start` 找不到工单时**静默**(v3.1.0 BUG-310-001),不再打 INFO 日志。
+5. **校正重推不重复 +1**:`is_recovery=True` 时 cluster +1 跳过,只有首次推送才计件。
+
+**关键代码点**：
+- `backend/services/work_order.py::WorkOrderService._normalize_binding(data, strict)`:三选一校验 + 互斥清空。`strict=False` 给 `receive_external_order` 走宽松路径(允许 `project_id` 空入库,前端红字提示)。
+- `backend/services/work_order.py::WorkOrderService.find_cluster_orders(station_ids=None)`:默认按 priority + created_at 取首条,无 station 过滤;工单显式带 `target_stations` 时才走交集过滤。
+- `backend/services/cluster_collector.py::_check_and_dispatch` → `_increment_cluster_orders` 在 `gw.dispatch("box_complete")` 后 + 非 `is_recovery` 才执行。
+- 前端 `frontend/src/views/MES/OrderPanel.vue::handleSave`:绑定字段独立合并到 payload,**不走模板系统**。
+
+**回归测试**：`tools/test_workorder_binding.py`(独立 SQLite + Mock MES gateway,32 PASS / 0 FAIL)。
+
 ## 集群汇总 / 副机心跳（v2.7.6 引入、v2.7.8 修正）
 
 **架构**：多机协同时一台为 master，其它为 slave；每个工位产出一个 cycle 就 POST `/api/v1/cluster/report` 给 master，master 按 `box_serial` 聚合所有工位后推 MES。副机在线状态靠定时 `POST /api/v1/cluster/heartbeat` 维护，主机超时 `_slave_timeout=20s` 自动清除。

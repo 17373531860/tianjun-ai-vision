@@ -40,6 +40,10 @@ class OrderCreate(BaseModel):
     remark: Optional[str] = None
     extra_data: Optional[dict] = None
     created_by: Optional[str] = None
+    # v3.1.0 工单绑定范围
+    binding_scope: str = "project"           # project / channels / cluster
+    target_channels: Optional[List[int]] = None
+    target_stations: Optional[List[str]] = None
 
 class OrderUpdate(BaseModel):
     product_name: Optional[str] = None
@@ -53,6 +57,9 @@ class OrderUpdate(BaseModel):
     customer_name: Optional[str] = None
     remark: Optional[str] = None
     extra_data: Optional[dict] = None
+    binding_scope: Optional[str] = None
+    target_channels: Optional[List[int]] = None
+    target_stations: Optional[List[str]] = None
 
 class ExternalOrderPush(BaseModel):
     """客户 MES 推送工单 (外部接收)"""
@@ -140,6 +147,10 @@ def _serialize_order(o):
         "yield_rate": o.yield_rate,
         "project_id": o.project_id, "priority": o.priority,
         "status": o.status, "source": o.source,
+        # v3.1.0 工单绑定范围
+        "binding_scope": getattr(o, "binding_scope", None) or "project",
+        "target_channels": getattr(o, "target_channels", None),
+        "target_stations": getattr(o, "target_stations", None),
         "planned_start": o.planned_start.isoformat() if o.planned_start else None,
         "planned_end": o.planned_end.isoformat() if o.planned_end else None,
         "actual_start": o.actual_start.isoformat() if o.actual_start else None,
@@ -507,6 +518,23 @@ def search_workpieces(keyword: str, project_id: Optional[int] = None,
         db.close()
 
 
+@router.delete("/workpieces/{workpiece_id}")
+def delete_workpiece(workpiece_id: int):
+    """删除工件 (级联清 WorkpieceInspection 和 DefectRecord). v2.7.17 新增."""
+    db = SessionLocal()
+    try:
+        ok = _wp_svc.delete_workpiece(db, workpiece_id)
+        if not ok:
+            raise HTTPException(404, "工件不存在")
+        db.commit()
+        return {"success": True}
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+    finally:
+        db.close()
+
+
 # ============================================================
 # 缺陷 API
 # ============================================================
@@ -559,6 +587,23 @@ def get_pareto(project_id: Optional[int] = None,
     db = SessionLocal()
     try:
         return _defect_svc.get_pareto_data(db, project_id, order_id, limit)
+    finally:
+        db.close()
+
+
+@router.delete("/defects/{defect_id}")
+def delete_defect(defect_id: int):
+    """删除单条缺陷记录. v2.7.17 新增, 配合前端"缺陷分析"列表的删除键."""
+    db = SessionLocal()
+    try:
+        ok = _defect_svc.delete_defect(db, defect_id)
+        if not ok:
+            raise HTTPException(404, "缺陷记录不存在")
+        db.commit()
+        return {"success": True}
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
     finally:
         db.close()
 

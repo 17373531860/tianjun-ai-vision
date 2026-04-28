@@ -73,6 +73,7 @@ app.include_router(operators_router, prefix="/api/v1")  # → /api/v1/operators/
 | websocket.py | websocket.js | (未使用，Monitor用轮询) |
 | channel_manager.py | detection.js | Source, Monitor |
 | mes.py (22端点) | mes.js | MES (工单/工件/缺陷/缺陷代码) |
+| **v3.1.0**: `OrderCreate`/`OrderUpdate` 加 `binding_scope` + `target_channels` + `target_stations` | mes.js (createOrder/updateOrder 直传) | MES/OrderPanel.vue 顶部 radio 三选一 |
 | scanner.py (8端点) | scanner.js | MES/ScannerPanel |
 | mes_gateway.py (`/mes/gateway/*`) | gateway.js | MES/GatewayPanel（外部对接：连接 CRUD、测试、手动推送、额外字段、通讯日志） |
 | operators.py (`/operators`, `/operators/*`) | operators.js | Settings（操作员管理卡片）、Monitor（操作员选择器）、Navbar（当前作业员/设备编号展示）、Data（按操作员筛选与列展示） |

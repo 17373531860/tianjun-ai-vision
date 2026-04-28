@@ -1031,10 +1031,22 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 detections = self._detect_only(frame)
             
             if _is_tracking:
+                # 关键: yolo tracker 会**回收**消失对象的 track_id, 让新出现的不同类
+                # 物体复用同一个 id. 此时 _tracking_display_map[tid] 还是旧类的 display_id,
+                # 直接赋给新 det 会出现 label='线槽' 但 display_id='泡沫槽2' 的错位.
+                # 这里在赋 display_id 之前先校验 class_name 一致性, 不一致就丢弃旧映射,
+                # 让 _detect_and_track 下一帧重新走 phase2 分配新 display_id.
                 for det in detections:
                     tid = det.get('track_id', -1)
                     if tid in self._tracking_display_map:
-                        det['display_id'] = self._tracking_display_map[tid]
+                        cur_obj = self._tracking_objects.get(tid)
+                        if cur_obj is None or cur_obj.get('class_name') == det.get('label'):
+                            det['display_id'] = self._tracking_display_map[tid]
+                        else:
+                            # 类别变了 → 老 display_id 报废, 不输出错位的 display
+                            self._tracking_display_map.pop(tid, None)
+                            self._tracking_objects.pop(tid, None)
+                            self._tracking_lost_frames.pop(tid, None)
                 confirmed = detections
             else:
                 confirmed = detections

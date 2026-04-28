@@ -45,6 +45,16 @@ class WorkOrder(Base):
     status = Column(String(20), nullable=False, default="draft", index=True)
     source = Column(String(20), nullable=False, default="manual")
 
+    # v3.1.0: 工单绑定范围 — project / channels / cluster (三选一)
+    #   project  : 按 project_id 匹配, 任意工位都可消费 (老逻辑)
+    #   channels : 按本机 channel_id 白名单匹配 (target_channels), 不看 project_id
+    #   cluster  : 按集群 station_id 白名单匹配 (target_stations), 一个 box_serial 算一件
+    #              cluster 模式 +1 不在 _handle_cycle_end 触发, 由 cluster_collector
+    #              在 box_complete 时调 increment_completed.
+    binding_scope = Column(String(20), nullable=False, default="project", index=True)
+    target_channels = Column(JSON, nullable=True)   # [0, 1] 工位号列表
+    target_stations = Column(JSON, nullable=True)   # ["A", "B"] 集群站点列表
+
     planned_start = Column(DateTime(timezone=True), nullable=True)
     planned_end = Column(DateTime(timezone=True), nullable=True)
     actual_start = Column(DateTime(timezone=True), nullable=True)
@@ -290,6 +300,15 @@ class ScannerDevice(Base):
     # 自动把这枚工件补绑到刚结算的 cycle，避免"扫码晚一步导致未绑码"。
     # 0 = 关闭（保持旧行为）。
     late_scan_bind_window_sec = Column(Integer, default=3)
+    # v2.7.16 扫描模式 (text_lon 协议下的"灯/扫描节奏"控制):
+    #   continuous     = 当前默认: ERROR/扫到码后立刻续 LON, 灯持续闪等下一码
+    #   throttled      = 同 continuous, 但 ERROR/扫到码后等 throttle_idle_ms 才续 LON,
+    #                    降低闪烁频率, 减少蜂鸣 / 省电
+    #   once_per_cycle = 扫到码后发 LOFF 灯灭, 等当前周期结束时由后端自动重新发 LON
+    #                    一个工件扫一次, 适合"先扫后检"的强校验工位
+    scan_mode = Column(String(32), default="continuous")
+    # 仅 scan_mode="throttled" 时生效, ERROR/扫到码后等待多少毫秒再续 LON.
+    throttle_idle_ms = Column(Integer, default=500)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

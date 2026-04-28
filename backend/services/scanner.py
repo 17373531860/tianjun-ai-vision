@@ -159,6 +159,12 @@ class ScannerConnection:
     pairing_group: Optional[str] = None
     ok_rescan_cooldown_sec: int = 0
     late_scan_bind_window_sec: int = 3
+    # v2.7.16 扫描模式 (仅 text_lon 协议生效):
+    #   "continuous"     : 默认, 持续 LON 续发, 灯一直闪等下一码
+    #   "throttled"      : 同 continuous 但每次续 LON 等 throttle_idle_ms 毫秒
+    #   "once_per_cycle" : 扫到码 LOFF 灯灭, 等周期结束 (cycle_end) 再续 LON
+    scan_mode: str = "continuous"
+    throttle_idle_ms: int = 500
 
     status: str = "disconnected"
     device_type: str = "text_lon"  # "text_lon"(默认), "auto", "text", "wmax"
@@ -170,6 +176,11 @@ class ScannerConnection:
     _stop_event: threading.Event = field(default_factory=threading.Event, repr=False)
     _wmax_device: Optional[object] = field(default=None, repr=False)
     _scanning: bool = False
+    # v2.7.16 once_per_cycle 模式专用: 扫到码后置 True, 阻止 listen loop 自动续 LON;
+    # cycle_end 时被 resume_after_cycle() 清掉, listen loop 自动续 LON.
+    _wait_cycle_resume: bool = False
+    # v2.7.16 throttled 模式: 下一次允许续 LON 的时间戳 (time.monotonic()), 0 = 立即.
+    _next_lon_after: float = 0.0
 
 
 class ScannerService:
@@ -184,6 +195,11 @@ class ScannerService:
         # 未匹配来源扫码的重试去抖：同一(ip,barcode)短时间只安排一个重试任务
         self._unmatched_retry_lock = threading.Lock()
         self._unmatched_retry_keys: set[tuple[str, str]] = set()
+        # "扫码器测试"期间忽略入码: 用户在 UI 点"测试"会触发扫码器扫一次,
+        # 但这只是连通性验证, 不应进 MES / 外部设备 / 工件登记.
+        # 这里维护正在测试的 IP 集合, _on_data_received 入口直接丢弃匹配的 IP 上来的码.
+        self._testing_ips_lock = threading.Lock()
+        self._testing_ips: set[str] = set()
 
     def set_mes_hook(self, hook):
         self._mes_hook = hook
@@ -430,6 +446,34 @@ class ScannerService:
                 fixed.append(b)
         return fixed or [0]
 
+    def _text_lon_send(self, conn: "ScannerConnection", payload: bytes, label: str) -> bool:
+        """对 text_lon 设备直发命令 (LON/LOFF). 同步, 带详细诊断日志.
+
+        v2.7.16: 修复"_lon_sent 状态残留导致 LON 发不出去"的 bug.
+        之前依赖 listen loop 的状态机 (`if _scanning and not _lon_sent: send`),
+        线程重启时 `_scanning=True` 但 `_lon_sent=True` 残留 → 永远不发 LON,
+        前端日志只看到 start_scanning 调用、看不到 "LON 已发送" — 抓包确认零字节
+        出去. 现在直接 sendall, 不再依赖状态.
+        """
+        sock = conn._socket
+        if sock is None:
+            print(f"[Scanner/text_lon] {conn.name} {label} 未发送: socket 为空 "
+                  f"(status={conn.status})", flush=True)
+            return False
+        try:
+            fd = sock.fileno()
+        except Exception:
+            fd = -1
+        try:
+            sock.sendall(payload)
+            print(f"[Scanner/text_lon] {conn.name} {label} 已发送 "
+                  f"({len(payload)}B → fd={fd})", flush=True)
+            return True
+        except OSError as e:
+            print(f"[Scanner/text_lon] {conn.name} {label} 发送失败: {e} (fd={fd})",
+                  flush=True)
+            return False
+
     def _wmax_trigger(self, conn: ScannerConnection, on: bool):
         """给 auto/wmax 类型的扫码器发 trigger_on/off.
 
@@ -491,7 +535,12 @@ class ScannerService:
 
         for conn in targets:
             conn._scanning = True
-            self._wmax_trigger(conn, on=True)
+            if conn.device_type == "text_lon":
+                # text_lon: 直接同步发 LON, 不依赖 listen loop 的 _lon_sent 状态机
+                if self._text_lon_send(conn, b"LON\r\n", "LON (开始扫码)"):
+                    conn._lon_sent = True
+            else:
+                self._wmax_trigger(conn, on=True)
         if targets:
             names = [f"{c.name}[type={c.device_type}]" for c in targets]
             print(f"[Scanner] start_scanning(ch={channel_id}) → {names}")
@@ -510,7 +559,12 @@ class ScannerService:
 
         for conn in targets:
             conn._scanning = False
-            self._wmax_trigger(conn, on=False)
+            if conn.device_type == "text_lon":
+                # text_lon: 直接同步发 LOFF, 不依赖 listen loop 的 _lon_sent 状态机
+                if self._text_lon_send(conn, b"LOFF\r\n", "LOFF (停止扫码)"):
+                    conn._lon_sent = False
+            else:
+                self._wmax_trigger(conn, on=False)
         if targets:
             names = [c.name for c in targets]
             print(f"[Scanner] stop_scanning(ch={channel_id}) → {names}")
@@ -608,14 +662,78 @@ class ScannerService:
                 }
         return None
 
-    def test_connection(self, ip: str, port: int, timeout: float = 3.0) -> dict:
-        """测试扫码器: 优先走 WMax 协议 (激活 RPT + 5s 同步采集条码), 失败时降级到文本 LON/LOFF.
+    def resume_after_cycle(self, channel_id: int) -> list[str]:
+        """v2.7.16: cycle_end 时调用, 让 once_per_cycle 模式的扫码器恢复扫描.
 
-        v2.7.7c 合并后: 这里走 activate_rpt_reporting (GetConfigOpt + TurnOnOffVideo on),
-        和现场实际工作方式一致. 之前用 flash_and_scan(LON/LOFF) 在现场 WMax 上根本扫不到码
-        (固件不响应 Trigger 单次触发), 导致用户误以为扫码器坏了.
+        once_per_cycle 模式下, 扫到码后 listen loop 会发 LOFF 并 set _wait_cycle_resume=True,
+        阻止自动续 LON. 周期结束(无论 OK/NG/作废)时调本方法解除阻塞,
+        listen loop 下一轮就会自动 LON, 扫码器灯重新亮起等下一码.
+
+        返回被恢复的扫码器名列表.
         """
-        print(f"[Scanner/WMax] test_connection({ip}:{port}) 开始 ...", flush=True)
+        resumed = []
+        for conn in self._connections.values():
+            if conn.device_type != "text_lon":
+                continue
+            if (conn.scan_mode or "continuous") != "once_per_cycle":
+                continue
+            bound = self._resolve_bound_channels(conn)
+            if channel_id not in bound:
+                continue
+            if not getattr(conn, '_wait_cycle_resume', False):
+                continue
+            conn._wait_cycle_resume = False
+            conn._lon_sent = False
+            conn._next_lon_after = 0.0
+            resumed.append(conn.name)
+        if resumed:
+            print(f"[Scanner] resume_after_cycle(ch={channel_id}) → {resumed} "
+                  f"(once_per_cycle 模式, 周期结束恢复扫描)", flush=True)
+        return resumed
+
+    def clear_last_scan(self, channel_id: int) -> list[str]:
+        """清除该工位绑定的扫码器的 last_scan / last_scan_time.
+
+        v2.7.16: 配合前端"清除本次扫码"按钮 - 之前只清 MES 那边的状态,
+        scanner 本身的去重缓存没动 → 用户清除后重扫同码会被
+        `_on_data_received` 的 dedup_interval_sec(默认 2s) 静默吞掉,
+        前端看不到"扫码成功". 现在两边都清, 用户立即可重扫同码.
+
+        返回被清除的扫码器名列表 (主要用于日志).
+        """
+        cleared = []
+        for conn in self._connections.values():
+            bound = self._resolve_bound_channels(conn)
+            if channel_id in bound and conn.last_scan:
+                cleared.append(f"{conn.name}({conn.last_scan})")
+                conn.last_scan = ""
+                conn.last_scan_time = 0
+        return cleared
+
+    def test_connection(self, ip: str, port: int, timeout: float = 3.0,
+                        device_type: str = "auto") -> dict:
+        """测试扫码器, 行为受 device_type 控制:
+
+        - device_type='text_lon': **只走** 55256 LON/LOFF 文本路径 (LON 后 5s 必发 LOFF)
+          适用于在 UI 选了"省电模式 / 单次触发"的场景, 不应去打开 WMax 视频流.
+        - device_type='auto'/'wmax': 优先 WMax 三端口路径 (GetConfigOpt + TurnOnOffVideo on),
+          5s 后**强制关闭视频流** (TurnOnOffVideo off), 否则灯会一直亮.
+          失败时再降级到文本 LON/LOFF.
+
+        历史背景: v2.7.7c 改成默认走 WMax, 但**没在测试结束时关视频流**, 导致 WMax 设备
+        点了一次"测试"后灯就一直亮, 必须重启设备/断网才能恢复. 这里彻底修掉.
+        """
+        print(f"[Scanner/WMax] test_connection({ip}:{port}, device_type={device_type}) "
+              f"开始 ...", flush=True)
+
+        # 用户在 UI 明确选了 text_lon: 严格只走文本路径, 不要去打开 WMax 视频流
+        if device_type == "text_lon":
+            return self._test_text_lon(ip, port, timeout)
+
+        # 测试期间标记 IP, 让 RPT 注入路径上扫到的码被丢弃, 不进 MES
+        with self._testing_ips_lock:
+            self._testing_ips.add(ip)
+        wmax_path_done = False
         try:
             dev = _ensure_wmax_connected(ip, cause="test_connection")
             if dev is None:
@@ -658,6 +776,14 @@ class ScannerService:
                         print(f"[Scanner/WMax] test_connection({ip}) "
                               f"activate_rpt 异常: {e}", flush=True)
                     loop.run_until_complete(asyncio.sleep(5.0))
+                    # 关键: 测试结束必须关掉视频流, 否则 WMax 灯会一直亮
+                    try:
+                        loop.run_until_complete(dev.turn_on_video(on=False, bank_id=1))
+                        print(f"[Scanner/WMax] test_connection({ip}) "
+                              f"已发送 TurnOnOffVideo off=true, 灯应已熄灭", flush=True)
+                    except Exception as e:
+                        print(f"[Scanner/WMax] test_connection({ip}) "
+                              f"关闭视频流失败: {e}", flush=True)
                 finally:
                     try:
                         dev.on_code_received = orig_cb
@@ -667,6 +793,7 @@ class ScannerService:
 
                 print(f"[Scanner/WMax] test_connection({ip}) 收码结束, "
                       f"采集 {len(collected)} 条码", flush=True)
+                wmax_path_done = True
                 if collected:
                     return {
                         "success": True,
@@ -683,8 +810,27 @@ class ScannerService:
                 }
         except Exception as e:
             logger.warning("[Scanner] WMax test_connection 失败, 降级 text_lon: %s", e)
+        finally:
+            # WMax 路径走完(成功或异常)后, 清掉测试标记;
+            # 走 fallthrough 到 _test_text_lon 时让其自行 add (它内部会管 discard).
+            with self._testing_ips_lock:
+                self._testing_ips.discard(ip)
+            if wmax_path_done:
+                print(f"[Scanner/Test] {ip} WMax 测试结束, 已恢复正常入码", flush=True)
 
         # 2) 文本模式降级: 走老 LON/LOFF (仅对真正的 55256 文本模式扫码器有效)
+        return self._test_text_lon(ip, port, timeout)
+
+    def _test_text_lon(self, ip: str, port: int, timeout: float) -> dict:
+        """文本模式测试: 发 LON, 等 5 秒, 发 LOFF, 关 socket. LON/LOFF 严格配对.
+
+        测试期间在 _testing_ips 标记此 IP, 让常驻 listener 收到的"测试码"被丢弃,
+        不要被当成业务扫码登进 MES.
+        """
+        # 先标记测试中, 防止 connect 完成到线程启动之间的窗口里
+        # listener 抢到设备主动推送的码 (不大可能但廉价).
+        with self._testing_ips_lock:
+            self._testing_ips.add(ip)
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(timeout)
@@ -700,14 +846,23 @@ class ScannerService:
                     pass
                 finally:
                     sock.close()
+                    # 多给 0.5s 缓冲, 让 listener 把可能在管线上还没读完的字节排掉,
+                    # 再把 ip 移出测试集合, 避免边界码漏丢.
+                    time.sleep(0.5)
+                    with self._testing_ips_lock:
+                        self._testing_ips.discard(ip)
+                    print(f"[Scanner/Test] {ip} 测试结束, 已恢复正常入码", flush=True)
 
-            threading.Thread(target=_flash_and_stop, daemon=True).start()
+            threading.Thread(target=_flash_and_stop, daemon=True,
+                             name=f"scanner-test-{ip}").start()
             return {
                 "success": True,
-                "message": f"连接 {ip}:{port} 成功 (闪灯 5 秒, 文本模式)",
+                "message": f"连接 {ip}:{port} 成功 (LON/LOFF 闪灯 5 秒, 文本模式)",
                 "device_type": "text_lon",
             }
         except Exception as e:
+            with self._testing_ips_lock:
+                self._testing_ips.discard(ip)
             return {"success": False, "message": str(e)}
 
     def _detect_device_type(self, sock: socket.socket, timeout: float = 2.0) -> str:
@@ -752,18 +907,16 @@ class ScannerService:
 
     def _start_device(self, dev: ScannerDevice):
         raw_type = (getattr(dev, 'device_type', None) or 'text_lon').strip() or 'text_lon'
-        # v2.7.7c 合并: 老数据库里 ScannerPanel.vue 默认写 "text_lon", 对现场 WMax 扫码器
-        # 发 'LON\r\n' 到 55256 根本不吃. 这里在连接时自动升级成 'auto' (走三端口 WMax 协议).
-        # 新版前端已改默认 'auto', 这个兜底主要给历史数据迁移用.
+        # v2.7.8: 协议选择交还给用户。前端"扫码器编辑"表单上有"协议"下拉,
+        #   - text_lon: 走 55256 LON/LOFF 文本协议(默认,省电模式)
+        #              检测开始时发 LON,设备亮灯扫码;停止时发 LOFF,设备灭灯
+        #              不开 IMG 视频流,所以扫码器不会一直闪光
+        #   - auto / wmax: 走 WMax 三端口 (55266 CMD + 55276 IMG + 55286 RPT)
+        #              IMG 视频流持续推送,设备补光灯一直亮
+        #              适合需要图像流 / 跨工位 RPT 上报的场景
+        # v2.7.7c 之前曾强制把 text_lon 升级成 auto, 是基于"WMax 不吃 LON"的误判
+        # (实测 192.168.0.100 完全吃 LON\r\n)。现在保留用户选择,不再自动升级。
         upgraded_from_text_lon = False
-        if raw_type == "text_lon":
-            raw_type = "auto"
-            upgraded_from_text_lon = True
-            print(f"[Scanner] 扫码器 '{dev.name}' device_type=text_lon → auto "
-                  f"(升级到 WMax 三端口协议)", flush=True)
-        # 注: 'auto' / 'wmax' 走 WMaxDeviceManager 三端口协议 (55266 CMD + 55276 IMG + 55286 RPT),
-        #      条码由 _auto_discover_wmax_bg + wmax.manager 的 on_code_received 回调 → inject_scan_result 进来.
-        #      不再降级成 text_lon (那条路径发 ASCII 'LON\r\n' 到 55256, WMax 根本不吃).
         db_device_type = raw_type
         conn = ScannerConnection(
             device_id=dev.id,
@@ -786,6 +939,8 @@ class ScannerService:
             pairing_group=(getattr(dev, 'pairing_group', None) or None),
             ok_rescan_cooldown_sec=int(getattr(dev, 'ok_rescan_cooldown_sec', 0) or 0),
             late_scan_bind_window_sec=int(getattr(dev, 'late_scan_bind_window_sec', 3) or 0),
+            scan_mode=(getattr(dev, 'scan_mode', None) or 'continuous'),
+            throttle_idle_ms=int(getattr(dev, 'throttle_idle_ms', 500) or 500),
         )
         conn.device_type = db_device_type
         conn.parse_config["parse_mode"] = dev.parse_mode or "direct"
@@ -923,28 +1078,87 @@ class ScannerService:
                 retry_delay = min(retry_delay * 2, max_delay)
 
     def _text_lon_listen_loop(self, conn: ScannerConnection, sock: socket.socket):
-        """LON/LOFF 模式监听：保持 TCP 连接，检测开始时发 LON，停止时发 LOFF"""
-        sock.settimeout(2.0)
-        buffer = b""
-        last_activity = time.time()
+        """LON/LOFF 模式监听 — 检测开始时发 LON,停止时发 LOFF。
 
+        实测某些 WMax 型号 (192.168.0.100) 在 55256 端口回的条码是**裸字节,无 \\r\\n
+        结尾**。所以这里既支持按行切 (老款 LON/LOFF 扫码枪),也支持
+        idle-timeout 切帧 (新款 WMax 文本端口):
+          - 收到数据后如果 80ms 内没有更多字节进来,把缓冲整段当一条码送出
+          - 仍然优先按 \\r\\n / \\n 切, 已带换行的设备零成本兼容
+
+        另外,设备对"无码"返回 'ERROR' 字符串,该值不会被当作条码上报。
+        """
+        sock.settimeout(0.08)  # 80ms 短轮询: 既驱动 LON/LOFF 状态机, 又用作 idle-timeout
+        buffer = b""
+        last_byte_time = 0.0
+        last_activity = time.time()
+        idle_flush_ms = 0.08
+
+        def _schedule_next_lon():
+            """根据 scan_mode 设置下次 LON 续发的时机标志."""
+            mode = getattr(conn, 'scan_mode', 'continuous') or 'continuous'
+            if mode == "once_per_cycle":
+                # 扫到码后 LOFF 灯灭, 等 cycle_end 由 resume_after_cycle() 解锁.
+                # 这里也发一次 LOFF 让扫码器立刻熄灭, 反馈"已成功"+"等下一周期".
+                try:
+                    sock.sendall(b"LOFF\r\n")
+                    print(f"[Scanner/text_lon] {conn.name} once_per_cycle: "
+                          f"已 LOFF, 等周期结束再开扫", flush=True)
+                except OSError as e:
+                    print(f"[Scanner/text_lon] {conn.name} once_per_cycle LOFF 失败: {e}",
+                          flush=True)
+                conn._lon_sent = False
+                conn._wait_cycle_resume = True
+                return
+            if mode == "throttled":
+                conn._next_lon_after = time.monotonic() + max(0, conn.throttle_idle_ms) / 1000.0
+            else:
+                conn._next_lon_after = 0.0
+            conn._lon_sent = False
+
+        def _emit(raw: bytes):
+            text = raw.decode("utf-8", errors="ignore").strip()
+            if not text:
+                return
+            # 'ERROR' = 扫码器本轮无码超时, 不是条码 → 不进 _on_data_received.
+            # 三种模式下都要续 LON 否则扫码器会"睡死". once_per_cycle 模式下
+            # ERROR 也续 LON (因为 ERROR 不算"扫到一个有效码", 不该锁住等周期结束).
+            if text.upper() == "ERROR":
+                if getattr(conn, '_wait_cycle_resume', False):
+                    # 罕见: 已经在等周期, 又收到一个 ERROR, 不动.
+                    return
+                mode = getattr(conn, 'scan_mode', 'continuous') or 'continuous'
+                if mode == "throttled":
+                    conn._next_lon_after = time.monotonic() + max(0, conn.throttle_idle_ms) / 1000.0
+                else:
+                    conn._next_lon_after = 0.0
+                conn._lon_sent = False
+                print(f"[Scanner/text_lon] {conn.name} 收到 ERROR (本轮无码, "
+                      f"将自动续发 LON, mode={mode})", flush=True)
+                return
+            self._on_data_received(conn, text)
+            # 扫到一个真码 → 按 scan_mode 决定下次行为.
+            _schedule_next_lon()
+
+        # v2.7.16: LON/LOFF 发送主入口在 service 层 (start_scanning / stop_scanning).
+        # listen loop 只负责"续发 LON"维持扫描状态, 三种模式控制续发节奏:
+        #   continuous     : 收到 ERROR / 码后, 立刻续 LON
+        #   throttled      : 同上但每次延迟 throttle_idle_ms 毫秒, 灯闪慢一点
+        #   once_per_cycle : 扫到一个真码后 LOFF + 等 cycle_end 解锁
         while not conn._stop_event.is_set():
-            if conn._scanning and not getattr(conn, '_lon_sent', False):
+            if (conn._scanning
+                    and not getattr(conn, '_lon_sent', False)
+                    and not getattr(conn, '_wait_cycle_resume', False)
+                    and time.monotonic() >= getattr(conn, '_next_lon_after', 0.0)):
                 try:
                     sock.sendall(b"LON\r\n")
                     conn._lon_sent = True
-                    print(f"[Scanner] {conn.name} LON 已发送 (开始扫码)")
+                    mode = getattr(conn, 'scan_mode', 'continuous') or 'continuous'
+                    print(f"[Scanner/text_lon] {conn.name} LON 续发 (mode={mode})",
+                          flush=True)
                 except OSError as e:
-                    print(f"[Scanner] {conn.name} LON 发送失败: {e}")
-                    break
-
-            if not conn._scanning and getattr(conn, '_lon_sent', False):
-                try:
-                    sock.sendall(b"LOFF\r\n")
-                    conn._lon_sent = False
-                    print(f"[Scanner] {conn.name} LOFF 已发送 (停止扫码)")
-                except OSError as e:
-                    print(f"[Scanner] {conn.name} LOFF 发送失败: {e}")
+                    print(f"[Scanner/text_lon] {conn.name} LON 续发失败: {e}",
+                          flush=True)
                     break
 
             try:
@@ -952,16 +1166,23 @@ class ScannerService:
                 if not data:
                     break
                 buffer += data
-                last_activity = time.time()
+                last_byte_time = time.time()
+                last_activity = last_byte_time
 
+                # 优先按行切 (兼容真·LON/LOFF 扫码枪, 它们带 \r\n)
                 while b"\r\n" in buffer or b"\n" in buffer:
                     sep = b"\r\n" if b"\r\n" in buffer else b"\n"
                     line, buffer = buffer.split(sep, 1)
-                    text = line.decode("utf-8", errors="ignore").strip()
-                    if text:
-                        self._on_data_received(conn, text)
+                    _emit(line)
 
             except socket.timeout:
+                # idle 切帧: 缓冲里有数据 + 短 idle 后没新字节 -> 当一条整码 flush
+                if buffer and last_byte_time and \
+                        (time.time() - last_byte_time) >= idle_flush_ms:
+                    chunk, buffer = buffer, b""
+                    _emit(chunk)
+                    last_byte_time = 0.0
+
                 if time.time() - last_activity > 30.0:
                     try:
                         sock.getpeername()
@@ -1125,8 +1346,30 @@ class ScannerService:
     def _on_data_received(self, conn: ScannerConnection, raw_data: str):
         """收到扫码数据的处理"""
         now = time.time()
+        # v2.7.16: 关键节点全部 print, 不依赖 log-level (uvicorn 默认 warning 过滤 INFO).
+        print(f"[Scanner/recv] {conn.name} 原始数据: '{raw_data}' ({len(raw_data)}B)",
+              flush=True)
+
+        # 测试期间任何途径(listener / WMax RPT 注入)收到的码都丢弃,
+        # 不要让"测试连通性"的 LON 误触发工件登记.
+        with self._testing_ips_lock:
+            if conn.ip in self._testing_ips:
+                print(f"[Scanner/recv] {conn.name} 测试期间, 已忽略 (不进 MES)",
+                      flush=True)
+                return
         if (raw_data == conn.last_scan
                 and (now - conn.last_scan_time) < conn.dedup_interval_sec):
+            # v2.7.16: dedup 命中时打印日志, 让用户能区分"扫码器没扫到"和
+            # "扫到了被去重". 之前静默 return → 用户以为扫码器没工作.
+            elapsed = now - conn.last_scan_time
+            print(f"[Scanner/recv] {conn.name} 同码去重: '{raw_data}' "
+                  f"(距上次 {elapsed:.1f}s < dedup {conn.dedup_interval_sec}s, 已忽略). "
+                  f"如需强制重扫, 点前端 [清除本次扫码] 按钮.", flush=True)
+            # v2.7.16: dedup 命中时**滑动**时间戳, 否则同码一直在视野里的话,
+            # 每隔 dedup_interval_sec 就会"漏放一次"重复触发 MES, 引发
+            # workpiece_inspections UNIQUE 冲突. 现在只要持续看到同码就一直拦,
+            # 直到用户挪开码 >= dedup_interval_sec 才允许同码再次触发.
+            conn.last_scan_time = now
             return
 
         conn.last_scan = raw_data
@@ -1134,16 +1377,19 @@ class ScannerService:
 
         result: ParseResult = self._parser.parse(raw_data, conn.parse_config)
         if not result.success:
-            logger.warning("[Scanner] %s 解析失败: %s (原始: %s)",
-                           conn.name, result.error, raw_data)
+            print(f"[Scanner/recv] {conn.name} 解析失败: {result.error} "
+                  f"(原始: '{raw_data}', parse_config={conn.parse_config})",
+                  flush=True)
             return
+        print(f"[Scanner/recv] {conn.name} 解析成功 → serial_no='{result.serial_no}'",
+              flush=True)
 
         # external_only=True 时扫码只用来喂外部设备（秤等），不触发任何视觉 cycle。
         # 适用于"扫完放秤"这类和视觉检测完全解耦的扫码枪。
         if conn.external_only:
             self._inject_barcode_to_external_devices(conn, result.serial_no)
-            logger.info("[Scanner] %s: 扫码 → %s (仅喂外部设备, 不触发视觉)",
-                        conn.name, result.serial_no)
+            print(f"[Scanner/recv] {conn.name} external_only=True, "
+                  f"仅喂外部设备, 不触发视觉/MES", flush=True)
             return
 
         channels = conn.broadcast_channels if conn.broadcast_channels else [conn.channel_id]
@@ -1153,24 +1399,41 @@ class ScannerService:
             if self._project_id_getter:
                 try:
                     project_id = self._project_id_getter(ch_id)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    print(f"[Scanner/recv] {conn.name} 获取 ch{ch_id} project_id 异常: {_e}",
+                          flush=True)
 
-            if project_id and self._mes_hook and conn.auto_create_workpiece:
-                self._mes_hook.on_scan_received(
-                    channel_id=ch_id,
-                    serial_no=result.serial_no,
-                    raw_data=raw_data,
-                    project_id=project_id,
-                    device_id=conn.device_id,
-                )
+            if not project_id:
+                print(f"[Scanner/recv] {conn.name} ch{ch_id}: project_id 为空, "
+                      f"前端不会显示扫码成功 (检查工位是否激活了项目)", flush=True)
+                continue
+            if not self._mes_hook:
+                print(f"[Scanner/recv] {conn.name} ch{ch_id}: MES Hook 未启用, "
+                      f"扫码不进 MES (检查 MES 配置)", flush=True)
+                continue
+            if not conn.auto_create_workpiece:
+                print(f"[Scanner/recv] {conn.name} ch{ch_id}: auto_create_workpiece=False, "
+                      f"扫码不进 MES (检查扫码器配置)", flush=True)
+                continue
+
+            print(f"[Scanner/recv] {conn.name} → MES.on_scan_received "
+                  f"(ch={ch_id}, serial={result.serial_no}, project={project_id})",
+                  flush=True)
+            self._mes_hook.on_scan_received(
+                channel_id=ch_id,
+                serial_no=result.serial_no,
+                raw_data=raw_data,
+                project_id=project_id,
+                device_id=conn.device_id,
+            )
 
         self._inject_barcode_to_external_devices(conn, result.serial_no)
 
         if len(channels) > 1:
-            logger.info("[Scanner] %s: 扫码 → %s (广播到 channels %s)", conn.name, result.serial_no, channels)
+            print(f"[Scanner] {conn.name}: 扫码 → {result.serial_no} "
+                  f"(广播到 channels {channels})", flush=True)
         else:
-            logger.info("[Scanner] %s: 扫码 → %s", conn.name, result.serial_no)
+            print(f"[Scanner] {conn.name}: 扫码 → {result.serial_no}", flush=True)
 
     def _inject_barcode_to_external_devices(self, conn: ScannerConnection, serial_no: str):
         """扫码后把条码注入给和扫码枪配对的外部设备（如称重器）。

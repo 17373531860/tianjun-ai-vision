@@ -889,13 +889,26 @@
                       <span class="text-gray-400 shrink-0">确认帧数</span>
                       <el-input-number v-model="activeProject.tracking_trigger_min_frames" :min="0" :step="5" :precision="2" size="small" class="!w-28" />
                     </div>
-                    <div v-else-if="activeProject.tracking_cycle_strategy === 'container'" class="flex items-center gap-4 text-xs">
+                    <div v-else-if="activeProject.tracking_cycle_strategy === 'container'" class="flex items-center gap-4 text-xs flex-wrap">
                       <span class="text-gray-400 shrink-0">容器类别</span>
                       <el-select v-model="activeProject.tracking_container_label" size="small" class="!w-40" placeholder="选择容器标签">
                         <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
                       </el-select>
                       <span class="text-gray-400 shrink-0">消失确认帧数</span>
                       <el-input-number v-model="activeProject.tracking_gone_confirm_frames" :min="0" :step="5" :precision="2" size="small" class="!w-28" />
+                      <el-tooltip placement="top">
+                        <template #content>
+                          <div style="max-width:280px;line-height:1.5">
+                            <b>单箱(默认)</b>: 画面里同时出现两个箱子时只承认最早进入的"主箱",其他箱子被屏蔽,落进它们的物品也不计。主箱出去后下一个箱子自动接管,杜绝"一码两箱"和野生 settle。<br/>
+                            <b>多箱(实验性)</b>: 历史行为,允许多个箱子同时被分组。当前 cycle 调度会让一个工件号绑多个箱子,会污染数据,仅用于排查回归。
+                          </div>
+                        </template>
+                        <span class="text-gray-400 shrink-0 cursor-help">同框策略 ⓘ</span>
+                      </el-tooltip>
+                      <el-select v-model="activeProject.container_box_mode" size="small" class="!w-44">
+                        <el-option label="单箱(只承认主箱)" value="single" />
+                        <el-option label="多箱(实验性)" value="multi" />
+                      </el-select>
                     </div>
                     <div v-else class="flex items-center gap-4 text-xs">
                       <span class="text-gray-400 shrink-0">消失确认帧数</span>
@@ -1917,6 +1930,9 @@ const initProjectDefaults = (project) => {
   if (project.tracking_container_label === undefined) {
     project.tracking_container_label = pipelineConfig.tracking_container_label || '';
   }
+  if (project.container_box_mode === undefined) {
+    project.container_box_mode = pipelineConfig.container_box_mode || 'single';
+  }
   if (project.tracking_roi_polygon === undefined) {
     const roi = pipelineConfig.tracking_roi || {};
     project.tracking_roi_polygon = roi.polygon || [];
@@ -2089,6 +2105,7 @@ const handleSaveProject = async () => {
           polygon: activeProject.value.tracking_roi_polygon || []
         },
         tracking_container_label: activeProject.value.tracking_cycle_strategy === 'container' ? (activeProject.value.tracking_container_label || '') : '',
+        container_box_mode: activeProject.value.container_box_mode || 'single',
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,

@@ -303,12 +303,30 @@ class TrackingMixin:
 
             if track_id in self._tracking_objects:
                 obj = self._tracking_objects[track_id]
-                obj['bbox'] = new_bbox
-                if in_roi or cycle_strategy != 'roi_exit':
-                    obj['last_seen'] = current_time
-                    self._tracking_lost_frames[track_id] = 0
-                    seen_track_ids.add(track_id)
-                continue
+                # yolo tracker 会回收 track_id 给新对象复用, 类别可能跟之前的不同.
+                # 类别不同时不能复用旧 display_id, 否则会出现 label/display_id 错位.
+                # 这里把旧关联清掉, 走下面的"新对象"路径重新分配.
+                if obj.get('class_name') != label:
+                    old_did = obj.get('display_id', '')
+                    old_class = obj.get('class_name', '')
+                    self._tracking_objects.pop(track_id, None)
+                    self._tracking_display_map.pop(track_id, None)
+                    self._tracking_lost_frames.pop(track_id, None)
+                    # 如果旧 obj 是容器(箱子), _box_objects 里的对应记录也是脏数据,
+                    # 不清掉会让前端"容器清点"显示一个画面里其实不存在的"幽灵箱子"
+                    # (要等 gone_confirm_frames 倒计时才会自然消失).
+                    if (getattr(self, '_container_mode', False)
+                            and old_class == getattr(self, '_container_label', '')
+                            and old_did
+                            and old_did in getattr(self, '_box_objects', {})):
+                        self._box_objects.pop(old_did, None)
+                else:
+                    obj['bbox'] = new_bbox
+                    if in_roi or cycle_strategy != 'roi_exit':
+                        obj['last_seen'] = current_time
+                        self._tracking_lost_frames[track_id] = 0
+                        seen_track_ids.add(track_id)
+                    continue
 
             if not in_roi:
                 continue

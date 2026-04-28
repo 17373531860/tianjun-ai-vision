@@ -15,9 +15,19 @@ class ContainerGroupingMixin:
         v2.7.7c 合并: 同一个 box 里同一 label 达到 step 配置的 max_recognized 后,
         新出现的 track_id 不再计数 (只刷新老条目的 last_seen). 这解决了帧内 top-N
         之后跨帧出现新 track_id (遮挡/重新出现) 导致的超额误判.
+
+        v2.7.17 single_box_mode: pipeline_config.container_box_mode 默认 'single', 此时
+        只承认 first_seen 最早的"主箱", 其他 box 的 bbox 不入 _box_objects, 落进它们的
+        物品也不被分组(直接丢). 主箱 confirmed gone → _settle_box → 通过 _trigger_event
+        触发 end_cycle, 实现"一箱一 cycle 一工件号". 'multi' 是历史多箱兼容值, 行为
+        和老版一样(可能出现一码多箱污染), 留给 Phase 2 重写.
         """
         container_label = self._container_label
         expected_no_container = {k: v for k, v in expected_items.items() if k != container_label}
+
+        # v2.7.17: 单箱模式 - 默认开启, 由 pipeline_config.container_box_mode 控制
+        pcfg = (self.project_config or {}).get('pipeline_config', {}) if self.project_config else {}
+        single_box_mode = (pcfg.get('container_box_mode', 'single') or 'single') == 'single'
 
         # 从 steps_config 读每个 label 的 max_recognized 上限 (只处理 count_mode='track')
         max_recognized_per_label: dict = {}
@@ -79,7 +89,46 @@ class ContainerGroupingMixin:
                 if did in self._box_objects and did not in active_box_dids:
                     active_box_dids.add(did)
                     box_bboxes[did] = obj['bbox']
-        
+
+        # v2.7.17 single_box_mode: 在画面里挑一个"主箱", 其他 box 全部从 _box_objects
+        # 和 box_bboxes 里踢掉, 这样它们的 bbox 不参与物品分配, 落它们里的物品被丢弃,
+        # 也不会对它们做 gone-confirm/settle. 主箱选取规则:
+        #   1) 优先选已经在 _box_objects 里的(避免遮挡复活时主箱漂移)
+        #   2) 多个候选时挑 first_seen 最早的
+        # 主箱出去后 _box_objects 被清空, 下一帧 active_boxes 里挑下一个最早进入的
+        # 升级为新主箱, 物品累积自然过渡到新 cycle.
+        if single_box_mode and active_box_dids:
+            existing_primary = [did for did in active_box_dids if did in self._box_objects]
+            if existing_primary:
+                primary_did = min(
+                    existing_primary,
+                    key=lambda d: self._box_objects[d].get('first_seen', current_time)
+                )
+            else:
+                # 还没有任何 box 进 _box_objects, 从 active 里挑 first_seen 最早的
+                def _box_first_seen(did: str) -> float:
+                    for tid, obj in self._tracking_objects.items():
+                        if obj.get('display_id') == did and obj['class_name'] == container_label:
+                            return obj.get('first_seen', current_time)
+                    for tid, obj in self._tracking_recently_lost.items():
+                        if obj.get('display_id') == did and obj['class_name'] == container_label:
+                            return obj.get('first_seen', current_time)
+                    return current_time
+                primary_did = min(active_box_dids, key=_box_first_seen)
+            # 1) 屏蔽其他 box 的 bbox(物品不会分到它们里)
+            box_bboxes = {primary_did: box_bboxes[primary_did]}
+            active_box_dids = {primary_did}
+            # 2) 清掉之前可能进过 _box_objects 但不再是主箱的条目
+            #    本次循环里第二个 box 也会经历"进 _box_objects → 被踢"的流程,
+            #    会让 _box_counter 虚高(只影响显示编号), 这里同步回退一次.
+            removed = 0
+            for box_did in list(self._box_objects.keys()):
+                if box_did != primary_did:
+                    self._box_objects.pop(box_did, None)
+                    removed += 1
+            if removed > 0 and self._box_counter >= removed:
+                self._box_counter -= removed
+
         # Assign items to boxes: item center inside box bbox, pick smallest box
         for item_tid, item_label, item_did, item_bbox in item_entries:
             item_cx = item_bbox['x'] + item_bbox['w'] / 2

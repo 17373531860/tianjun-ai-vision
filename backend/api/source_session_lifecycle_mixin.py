@@ -357,7 +357,17 @@ class SessionLifecycleMixin:
 
             db.close()
             print(f"新周期开始: #{self.current_cycle_number} ({cycle_uuid})")
-            
+
+            # v2.7.17: once_per_cycle 死锁兜底 - 如果上一轮扫码发生在 cycle 间隙
+            # (扫码器 LOFF 了但当时已经没有进行中的 cycle, end_cycle 的 resume 是 no-op),
+            # 在新 cycle 起步时再 resume 一次, 解开 _wait_cycle_resume=True 的死锁.
+            try:
+                from backend.services.scanner import get_scanner_service
+                get_scanner_service().resume_after_cycle(self.channel_id)
+            except Exception as e:
+                print(f"[Scanner] cycle_start resume 异常 (ch={self.channel_id}): {e}",
+                      flush=True)
+
             # MES Hook: Cycle 开始
             if self._mes_hook:
                 try:
@@ -422,6 +432,30 @@ class SessionLifecycleMixin:
                         )
                     except Exception as e:
                         print(f"[MES] cycle_end hook 异常: {e}")
+
+                # v2.7.16: once_per_cycle 模式下, 周期结束 (无论 OK/NG) 都让扫码器
+                # 恢复扫描, 等下一个工件的码. 模式不匹配时是 no-op, 不需要额外判断.
+                try:
+                    from backend.services.scanner import get_scanner_service
+                    get_scanner_service().resume_after_cycle(self.channel_id)
+                except Exception as e:
+                    print(f"[Scanner] resume_after_cycle 异常 (ch={self.channel_id}): {e}",
+                          flush=True)
+
+                # v2.7.17: 容器模式杠"野生 settle" - cycle 已经结束, 任何残留在
+                # _box_objects 里没及时 confirmed_gone 的 box, 后面才超时 settle 时
+                # 因为 cycle 已不在跑, 走 _trigger_event 又会 end_cycle + 计数 +1,
+                # 形成"多算一个 NG". 这里强制清空, 让残留 box 被丢弃, 等真正进入下一
+                # 个 cycle 才能再 settle.
+                try:
+                    if getattr(self, '_container_mode', False) and self._box_objects:
+                        dropped = list(self._box_objects.keys())
+                        self._box_objects.clear()
+                        if dropped:
+                            print(f"[Container] cycle_end 清残留 box: {dropped} "
+                                  f"(避免野生 settle 重复计数)", flush=True)
+                except Exception as e:
+                    print(f"[Container] cycle_end 清 _box_objects 异常: {e}", flush=True)
             
             db.close()
         except Exception as e:

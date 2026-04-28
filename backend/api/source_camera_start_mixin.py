@@ -19,6 +19,7 @@
   - 方法: stop / _capture_loop / debug_log
 """
 import os
+import platform
 import time
 import threading
 import traceback
@@ -26,6 +27,22 @@ import cv2
 import numpy as np
 
 from backend.api.source_sdk_loader import debug_log, hik_log
+
+
+def _v4l2_safe_bufsize_1(cap):
+    """v2.7.16: 仅在 Windows 上设 BUFFERSIZE=1 减延迟.
+
+    Linux V4L2 backend 在 BUFFERSIZE=1 下, OpenCV 的 cap.read() 必须等内核
+    dequeue/queue 一个新帧, 单帧耗时从 ~33ms 飙到 ~67ms, 实际 FPS 直接腰斩
+    (硬件 29fps → OpenCV 15fps). 实测见 _bench_camera.py.
+    Linux 上保留默认 4 帧环形 buffer, 只要消费者跟得上, 实际拿到的也是最新帧.
+    """
+    if platform.system() != "Windows":
+        return
+    try:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception:
+        pass
 
 
 class CameraStartMixin:
@@ -85,11 +102,9 @@ class CameraStartMixin:
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.capture.set(cv2.CAP_PROP_FPS, fps)
-        # v2.7.15 (B): 默认关小缓冲区, 减少 bench 偏差 + 降采集延迟
-        try:
-            self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        except Exception:
-            pass
+        # v2.7.16 (Linux fix): Windows 用 BUFSZ=1 减延迟; Linux V4L2 上 BUFSZ=1
+        # 反而把 cap.read() 拖到 ~67ms, 实际 FPS 腰斩. helper 内部按平台分流.
+        _v4l2_safe_bufsize_1(self.capture)
 
         cc_str = _get_fourcc_str(self.capture)
 
@@ -117,10 +132,7 @@ class CameraStartMixin:
                 msmf_cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                 msmf_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                 msmf_cap.set(cv2.CAP_PROP_FPS, fps)
-                try:
-                    msmf_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                except Exception:
-                    pass
+                _v4l2_safe_bufsize_1(msmf_cap)
                 msmf_cc = _get_fourcc_str(msmf_cap)
                 msmf_fps = _bench_fps(msmf_cap)
                 print(f"[Camera] MSMF({msmf_cc}) 实测 {msmf_fps:.0f}fps")
@@ -140,10 +152,7 @@ class CameraStartMixin:
                 self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                 self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                 self.capture.set(cv2.CAP_PROP_FPS, fps)
-                try:
-                    self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                except Exception:
-                    pass
+                _v4l2_safe_bufsize_1(self.capture)
                 cc_str = _get_fourcc_str(self.capture)
                 print(f"[Camera] 保留 DirectShow 后端 ({dshow_fps:.0f}fps >= MSMF {msmf_fps:.0f}fps)")
 
@@ -157,10 +166,7 @@ class CameraStartMixin:
                     any_cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                     any_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                     any_cap.set(cv2.CAP_PROP_FPS, fps)
-                    try:
-                        any_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                    except Exception:
-                        pass
+                    _v4l2_safe_bufsize_1(any_cap)
                     any_cc = _get_fourcc_str(any_cap)
                     any_fps = _bench_fps(any_cap)
                     print(f"[Camera] CAP_ANY({any_cc}) 实测 {any_fps:.0f}fps")
@@ -188,11 +194,7 @@ class CameraStartMixin:
                         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                         print(f"[Camera] 低分辨率无改善，恢复 {width}x{height}")
 
-                # 设置缓冲区大小为1减少延迟
-                try:
-                    self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                except Exception:
-                    pass
+                _v4l2_safe_bufsize_1(self.capture)
         
         # Strategy 3: If still not MJPG on Linux, try without explicit backend
         if cc_str != 'MJPG' and platform.system() != "Windows":

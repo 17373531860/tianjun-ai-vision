@@ -3,7 +3,7 @@
     <div class="flex gap-4">
       <!-- 左: 缺陷列表 -->
       <div class="flex-1">
-        <div class="flex items-center gap-3 mb-4">
+        <div class="flex items-center gap-3 mb-4 flex-wrap">
           <el-select v-model="filterCategory" placeholder="分类" size="small" class="w-28" clearable @change="loadDefects">
             <el-option label="外观" value="appearance" />
             <el-option label="尺寸" value="dimension" />
@@ -17,9 +17,15 @@
           </el-select>
           <el-button size="small" type="primary" @click="loadDefects">查询</el-button>
           <el-button size="small" @click="showCodeMgr = true">缺陷代码管理</el-button>
+          <el-button size="small" type="danger" plain :disabled="selected.length === 0"
+                     @click="handleBatchDeleteDefect">
+            批量删除{{ selected.length > 0 ? `(${selected.length})` : '' }}
+          </el-button>
         </div>
 
-        <el-table :data="defects" stripe size="small" class="mes-table" max-height="calc(100vh - 320px)">
+        <el-table :data="defects" stripe size="small" class="mes-table" max-height="calc(100vh - 320px)"
+                  @selection-change="handleSelectionChange">
+          <el-table-column type="selection" width="42" />
           <el-table-column prop="defect_code" label="缺陷代码" width="120" />
           <el-table-column prop="defect_name" label="缺陷名称" width="140" />
           <el-table-column prop="defect_category" label="分类" width="80" />
@@ -34,6 +40,11 @@
           <el-table-column prop="source" label="来源" width="80" />
           <el-table-column prop="created_at" label="时间" width="160">
             <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="80" fixed="right">
+            <template #default="{ row }">
+              <el-button size="small" type="danger" plain @click="handleDeleteDefect(row)">删除</el-button>
+            </template>
           </el-table-column>
         </el-table>
 
@@ -122,7 +133,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getDefects, getPareto, getDefectCodes, createDefectCode, deleteDefectCode } from '@/api/mes'
+import { getDefects, getPareto, getDefectCodes, createDefectCode, deleteDefectCode, deleteDefect } from '@/api/mes'
 
 const defects = ref([])
 const total = ref(0)
@@ -137,6 +148,9 @@ const showCodeMgr = ref(false)
 const codes = ref([])
 const showAddCode = ref(false)
 const codeForm = ref({ code: '', name: '', category: 'other', severity: 'minor', labelsStr: '' })
+
+const selected = ref([])
+const handleSelectionChange = (rows) => { selected.value = rows || [] }
 
 const formatTime = (t) => t ? t.replace('T', ' ').substring(0, 19) : '-'
 
@@ -197,6 +211,47 @@ const handleDeleteCode = async (row) => {
   } catch (e) {
     if (e !== 'cancel' && e !== 'close')
       ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
+  }
+}
+
+const handleDeleteDefect = async (row) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除缺陷记录 ${row.defect_code || row.defect_name || ''} ？此操作不可撤销。`,
+      '删除确认', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+    await deleteDefect(row.id)
+    ElMessage.success('已删除')
+    loadDefects()
+    loadPareto()
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close')
+      ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
+  }
+}
+
+const handleBatchDeleteDefect = async () => {
+  if (selected.value.length === 0) return
+  const n = selected.value.length
+  try {
+    await ElMessageBox.confirm(
+      `确定批量删除 ${n} 条缺陷记录？此操作不可撤销。`,
+      '批量删除确认', { type: 'warning', confirmButtonText: `删除 ${n} 条`, cancelButtonText: '取消' }
+    )
+    const ids = selected.value.map(r => r.id)
+    const results = await Promise.allSettled(ids.map(id => deleteDefect(id)))
+    const failed = results.filter(r => r.status === 'rejected').length
+    if (failed === 0) {
+      ElMessage.success(`已删除 ${n} 条`)
+    } else {
+      ElMessage.warning(`成功 ${n - failed} 条, 失败 ${failed} 条`)
+    }
+    selected.value = []
+    loadDefects()
+    loadPareto()
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close')
+      ElMessage.error('批量删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
   }
 }
 

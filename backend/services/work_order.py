@@ -15,14 +15,70 @@ class WorkOrderService:
 
     # ---- 工单 CRUD ----
 
+    @staticmethod
+    def _normalize_binding(data: dict, *, strict: bool = True) -> dict:
+        """规范化绑定字段并校验, 返回需要写入的子字段字典.
+
+        v3.1.0: 工单按 binding_scope 三选一绑定:
+          - project  : 按 project_id 匹配 (strict 模式下必填)
+          - channels : 必须有 target_channels (非空数组), project_id 强制清空
+          - cluster  : 必须有 target_stations (非空数组), project_id 强制清空
+
+        strict=False 时为外部 MES 推工单等场景: 没绑就允许 project_id 为空入库,
+        前端列表里会显示"未绑定项目"警告, 不会被 get_active_order 拿到 → 自然不计件.
+        """
+        scope = (data.get("binding_scope") or "project").lower()
+        if scope not in ("project", "channels", "cluster"):
+            raise ValueError(f"binding_scope 必须是 project/channels/cluster, 收到: {scope}")
+
+        out = {"binding_scope": scope}
+
+        if scope == "project":
+            pid = data.get("project_id")
+            if pid in (None, "", 0):
+                if strict:
+                    raise ValueError("绑定项目模式下, project_id 必填")
+                out["project_id"] = None
+            else:
+                out["project_id"] = int(pid)
+            out["target_channels"] = None
+            out["target_stations"] = None
+        elif scope == "channels":
+            tc = data.get("target_channels") or []
+            if not isinstance(tc, list) or not tc:
+                raise ValueError("绑定工位模式下, target_channels 必须是非空数组, 例如 [0, 1]")
+            try:
+                tc = [int(x) for x in tc]
+            except Exception:
+                raise ValueError("target_channels 元素必须是整数工位号")
+            out["project_id"] = None
+            out["target_channels"] = tc
+            out["target_stations"] = None
+        else:  # cluster
+            # v3.1.0 简化: 工单建在主机 = 整个集群所有完成的 box 都给它计件,
+            # 不再要求选"目标站点". target_stations 字段保留作高级扩展位 (将来
+            # 想做"分站点工单"还能用), UI 不暴露; 默认 None 时由
+            # find_cluster_orders 走"取首条 in_progress cluster 工单"的逻辑.
+            ts = data.get("target_stations")
+            out["project_id"] = None
+            out["target_channels"] = None
+            if isinstance(ts, list) and ts:
+                out["target_stations"] = [str(x) for x in ts]
+            else:
+                out["target_stations"] = None
+        return out
+
     def create_order(self, db: Session, data: dict) -> WorkOrder:
+        # 创建场景: 外部 MES 推送 (source=external) 时允许 project_id 为空
+        # (前端列表会显示"未绑定项目"警告), 用户手动新建时前端必须传完整 binding.
+        strict = data.get("source") != "external"
+        binding = self._normalize_binding(data, strict=strict)
         order = WorkOrder(
             order_no=data["order_no"],
             product_name=data["product_name"],
             product_code=data.get("product_code"),
             product_spec=data.get("product_spec"),
             planned_qty=data.get("planned_qty", 0),
-            project_id=data.get("project_id"),
             priority=data.get("priority", 3),
             status=data.get("status", "draft"),
             source=data.get("source", "manual"),
@@ -32,6 +88,7 @@ class WorkOrderService:
             remark=data.get("remark"),
             extra_data=data.get("extra_data"),
             created_by=data.get("created_by"),
+            **binding,
         )
         db.add(order)
         db.flush()
@@ -43,12 +100,27 @@ class WorkOrderService:
             return None
         editable = [
             "product_name", "product_code", "product_spec", "planned_qty",
-            "project_id", "priority", "planned_start", "planned_end",
+            "priority", "planned_start", "planned_end",
             "customer_name", "remark", "extra_data",
         ]
         for field in editable:
             if field in data:
                 setattr(order, field, data[field])
+
+        # v3.1.0: 只要请求里出现 binding_scope 就走重新校验流程,
+        # 否则即使前端只改了备注, 老 binding 也会被原样保留.
+        if "binding_scope" in data or "project_id" in data \
+                or "target_channels" in data or "target_stations" in data:
+            merged = {
+                "binding_scope": data.get("binding_scope", order.binding_scope),
+                "project_id": data.get("project_id", order.project_id),
+                "target_channels": data.get("target_channels", order.target_channels),
+                "target_stations": data.get("target_stations", order.target_stations),
+            }
+            binding = self._normalize_binding(merged)
+            for k, v in binding.items():
+                setattr(order, k, v)
+
         db.flush()
         return order
 
@@ -95,15 +167,84 @@ class WorkOrderService:
     def get_order_by_no(self, db: Session, order_no: str) -> Optional[WorkOrder]:
         return db.query(WorkOrder).filter(WorkOrder.order_no == order_no).first()
 
-    def get_active_order(self, db: Session, project_id: int) -> Optional[WorkOrder]:
-        """获取指定项目当前 in_progress 的工单（按优先级排序取第一个）"""
-        return (
+    def get_active_order(self, db: Session,
+                         project_id: Optional[int] = None,
+                         channel_id: Optional[int] = None,
+                         station_id: Optional[str] = None) -> Optional[WorkOrder]:
+        """根据上下文匹配 in_progress 工单, 按 priority+created_at 优先级返回首条.
+
+        v3.1.0: 支持三种 binding_scope (project/channels/cluster). cluster 模式
+        不在这里返回 (那是按 box 计件, 由 cluster_collector 触发), 这里只筛
+        project/channels.
+
+        匹配规则:
+          - project  模式: WorkOrder.project_id == project_id
+          - channels 模式: channel_id 在 target_channels 列表中
+          - cluster  模式: 跳过 (调用方应在 box_complete 时用 find_cluster_orders)
+
+        无匹配返回 None.
+        """
+        orders = (
             db.query(WorkOrder)
-            .filter(WorkOrder.project_id == project_id,
-                    WorkOrder.status == "in_progress")
+            .filter(WorkOrder.status == "in_progress")
             .order_by(WorkOrder.priority.asc(), WorkOrder.created_at.asc())
-            .first()
+            .all()
         )
+        for o in orders:
+            scope = (o.binding_scope or "project").lower()
+            if scope == "project":
+                if project_id is None or o.project_id != project_id:
+                    continue
+                return o
+            elif scope == "channels":
+                if channel_id is None:
+                    continue
+                tc = o.target_channels or []
+                if int(channel_id) in [int(x) for x in tc]:
+                    return o
+            elif scope == "cluster":
+                continue
+        return None
+
+    def find_cluster_orders(self, db: Session,
+                            station_ids: set = None) -> list[WorkOrder]:
+        """给 cluster_collector 用: 找当前 in_progress 的集群工单.
+
+        v3.1.0: 简化语义为"工单建在主机 = 主机这边推 box_complete 的全计入".
+        默认不过滤 station, 按 priority + created_at 取首条 (同一时刻只让一条
+        活跃集群工单跑, 跟 project/channels 模式语义统一).
+
+        target_stations 字段保留作扩展位: 工单显式填了 target_stations 时,
+        会跟当前 box 涉及到的 station_ids 做交集过滤; 都没填则默认匹配.
+
+        返回 list 是给将来"多工单同时跑"留口子, 当前实现最多返回 1 条.
+        """
+        orders = (
+            db.query(WorkOrder)
+            .filter(WorkOrder.status == "in_progress",
+                    WorkOrder.binding_scope == "cluster")
+            .order_by(WorkOrder.priority.asc(), WorkOrder.created_at.asc())
+            .all()
+        )
+        if not orders:
+            return []
+
+        # 高级路径: 工单显式带了 target_stations 才过滤
+        if station_ids:
+            wanted = {str(x) for x in station_ids}
+            scoped = []
+            for o in orders:
+                ts = o.target_stations or []
+                if not ts:
+                    scoped.append(o)
+                    continue
+                if {str(x) for x in ts} & wanted:
+                    scoped.append(o)
+            if scoped:
+                return [scoped[0]]
+            return []
+
+        return [orders[0]]
 
     def list_orders(self, db: Session, *, status: str = None, project_id: int = None,
                     keyword: str = None, date_from: str = None, date_to: str = None,

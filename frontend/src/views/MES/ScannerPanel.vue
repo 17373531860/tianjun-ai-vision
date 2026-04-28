@@ -72,7 +72,11 @@
             <div class="flex items-center justify-between mb-2">
               <span class="font-medium">{{ dev.name }}</span>
               <div class="flex items-center gap-1">
-                <el-tag v-if="getDevType(dev.id) === 'wmax'" type="primary" size="small" effect="dark">WMax</el-tag>
+                <el-tag
+                  :type="dev.device_type === 'text_lon' ? 'success' : 'primary'"
+                  size="small" effect="dark">
+                  {{ dev.device_type === 'text_lon' ? 'LON模式' : 'WMax三端口' }}
+                </el-tag>
                 <el-tag v-if="dev.external_only" type="warning" size="small" effect="dark">只喂外设</el-tag>
                 <el-tag v-if="dev.pairing_group" type="info" size="small" effect="dark">分组: {{ dev.pairing_group }}</el-tag>
                 <el-tag :type="getDevStatus(dev.id) === 'connected' ? 'success' : getDevStatus(dev.id) === 'connecting' ? 'warning' : 'danger'" size="small">
@@ -95,8 +99,10 @@
             <div class="flex gap-1 mt-3">
             <el-button size="small" @click="testDevice(dev)" :loading="testingDeviceId === dev.id">测试</el-button>
               <el-button size="small" type="primary" @click="editDevice(dev)">编辑</el-button>
-              <el-button v-if="getDevType(dev.id) === 'wmax'" size="small" type="warning"
-                         @click="openWmaxPanel(dev)">高级控制</el-button>
+              <el-button
+                v-if="dev.device_type === 'auto' || dev.device_type === 'wmax' || getDevType(dev.id) === 'wmax'"
+                size="small" type="warning"
+                @click="openWmaxPanel(dev)">高级控制</el-button>
               <el-button size="small" type="danger" @click="handleDelete(dev)">删除</el-button>
             </div>
           </div>
@@ -177,6 +183,44 @@
             <el-option label="中途绑定（默认，扫码立即绑当前周期）" value="mid_cycle" />
             <el-option label="下周期绑定（扫码后等下个周期开始才绑）" value="cycle_start" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="通讯协议">
+          <el-select v-model="form.device_type" class="w-full" @change="onDeviceTypeChange">
+            <el-option label="55256 LON/LOFF（推荐 / 省电模式：仅检测时亮灯）" value="text_lon" />
+            <el-option label="WMax 三端口（55266+55276+55286，持续视频流，灯一直闪）" value="auto" />
+          </el-select>
+          <div class="text-xs text-gray-500 mt-1">
+            <b>LON/LOFF</b>：检测开始时发 LON 让设备扫码，停止时发 LOFF 关灯，
+            扫码器只在检测周期内工作，不耗电也不刺眼。<br>
+            <b>WMax 三端口</b>：连接后立刻打开 IMG 图像流，
+            设备补光灯持续点亮直到软件关闭，仅在需要"扫码即抓图"等高级功能时使用。<br>
+            <span class="text-amber-400">切换协议会自动调整默认端口，保存后下次启动生效。</span>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="form.device_type === 'text_lon'" label="扫描模式">
+          <el-select v-model="form.scan_mode" class="w-full">
+            <el-option label="A 持续扫描（默认，扫码器灯一直闪等下一码）" value="continuous" />
+            <el-option label="B 降速持续扫描（每次续 LON 间隔，灯闪慢一点）" value="throttled" />
+            <el-option label="C 单次/周期扫描（扫到码 LOFF 灭灯，周期结束才再开扫）" value="once_per_cycle" />
+          </el-select>
+          <div class="text-xs text-gray-500 mt-1">
+            <b>A 持续</b>：扫码器是单次触发型时，后端每收到一个 ERROR / 条码立刻续发 LON，
+            灯持续闪，扫到一个码立刻能扫下一个，蜂鸣 / 闪烁较多。<br>
+            <b>B 降速</b>：同 A，但每次续发 LON 间会等若干毫秒，降低闪烁频率，省电安静。<br>
+            <b>C 单次/周期</b>：扫到一个码后立刻 LOFF 灭灯，等当前检测周期结束（OK / NG / 作废）
+            后端自动恢复扫描——一个工件只扫一次，符合"先扫后检"的强校验工位流程。
+          </div>
+        </el-form-item>
+        <el-form-item v-if="form.device_type === 'text_lon' && form.scan_mode === 'throttled'"
+                      label="续发间隔">
+          <el-input-number v-model="form.throttle_idle_ms" :min="0" :max="5000" :step="100"
+                           :precision="0" class="w-full" controls-position="right">
+            <template #append>毫秒</template>
+          </el-input-number>
+          <div class="text-xs text-gray-500 mt-1">
+            B 模式专用：扫码器回 ERROR / 扫到码后等待这么多毫秒再续 LON。
+            填 <b>0</b> 等同于 A 模式；推荐 300–800 ms。
+          </div>
         </el-form-item>
         <el-form-item label="OK 后同码冷却">
           <el-input-number v-model="form.ok_rescan_cooldown_sec" :min="0" :max="600" :precision="0" class="w-full" controls-position="right">
@@ -401,6 +445,16 @@ const defaultForm = () => ({
   pairing_group: '',
   ok_rescan_cooldown_sec: 0,
   late_scan_bind_window_sec: 3,
+  // v2.7.8: 协议选择
+  //   text_lon = 55256 LON/LOFF 文本协议 (默认 / 省电模式 / 检测才亮灯)
+  //   auto / wmax = WMax 三端口协议 (55266 CMD + 55276 IMG + 55286 RPT, 持续视频流, 一直闪灯)
+  device_type: 'text_lon',
+  // v2.7.16: 扫描模式 (text_lon 协议下控制扫码节奏)
+  //   continuous     = 默认, 持续 LON 续发, 灯一直闪等下一码
+  //   throttled      = 同 continuous 但每次续 LON 等 throttle_idle_ms 毫秒, 闪慢一点
+  //   once_per_cycle = 扫到一个码后 LOFF 灭灯, 等当前周期结束自动恢复扫描
+  scan_mode: 'continuous',
+  throttle_idle_ms: 500,
 })
 const form = ref(defaultForm())
 
@@ -410,6 +464,17 @@ const handleManualAdd = () => {
   editingId.value = null
   form.value = defaultForm()
   showAdd.value = true
+}
+
+// v2.7.8: 协议切换时联动端口默认值
+//   text_lon 走 55256 (LON/LOFF 文本端口)
+//   auto / wmax 走 55266 (WMax 三端口的管理端口)
+const onDeviceTypeChange = (newType) => {
+  if (newType === 'text_lon' && form.value.port === 55266) {
+    form.value.port = 55256
+  } else if ((newType === 'auto' || newType === 'wmax') && form.value.port === 55256) {
+    form.value.port = 55266
+  }
 }
 
 const formatTime = (t) => t ? t.replace('T', ' ').substring(0, 19) : '-'
@@ -645,7 +710,8 @@ const handleClearLogs = async () => {
 const testDevice = async (dev) => {
   testingDeviceId.value = dev.id
   try {
-    const res = await testScannerConnection(dev.ip, dev.port)
+    // 把当前配置的 device_type 传给后端, 让 text_lon 模式只走 LON/LOFF, 不打开视频流
+    const res = await testScannerConnection(dev.ip, dev.port, dev.device_type || 'auto')
     if (res.data.success) {
       const typeLabel = res.data.device_type === 'wmax' ? ' (WMax 设备)' : ' (文本设备)'
       ElMessage.success(res.data.message + typeLabel)

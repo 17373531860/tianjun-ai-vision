@@ -1110,6 +1110,17 @@ def clear_pending_scan(channel: int = 0, force: bool = False):
     if not mgr._mes_hook:
         return {"status": "error", "message": "MES 未启用"}
     cleared = mgr._mes_hook.clear_pending_scan(mgr.channel_id, force=force)
+    # v2.7.16: 同时清扫码器本身的去重缓存 (last_scan / last_scan_time),
+    # 否则用户点了清除后重扫同码会被 scanner.dedup_interval_sec 静默吞掉.
+    try:
+        from backend.services.scanner import get_scanner_service
+        scanners_cleared = get_scanner_service().clear_last_scan(mgr.channel_id)
+        if scanners_cleared:
+            cleared["scanner_dedup_reset"] = scanners_cleared
+            print(f"[Scanner] clear_pending_scan(ch={channel}) 同步重置去重缓存: {scanners_cleared}",
+                  flush=True)
+    except Exception as e:
+        print(f"[Scanner] clear_pending_scan 重置 last_scan 失败: {e}", flush=True)
     if cleared.get("force_race_lost"):
         return {
             "status": "warn",

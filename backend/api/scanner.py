@@ -36,6 +36,8 @@ class ScannerCreate(BaseModel):
     pairing_group: Optional[str] = None
     ok_rescan_cooldown_sec: int = 0
     late_scan_bind_window_sec: int = 3
+    scan_mode: str = "continuous"
+    throttle_idle_ms: int = 500
 
 
 class ScannerUpdate(BaseModel):
@@ -60,6 +62,8 @@ class ScannerUpdate(BaseModel):
     pairing_group: Optional[str] = None
     ok_rescan_cooldown_sec: Optional[int] = None
     late_scan_bind_window_sec: Optional[int] = None
+    scan_mode: Optional[str] = None
+    throttle_idle_ms: Optional[int] = None
 
 
 class ScannerSimulate(BaseModel):
@@ -89,6 +93,8 @@ def _serialize_device(d):
         "pairing_group": getattr(d, 'pairing_group', None),
         "ok_rescan_cooldown_sec": int(getattr(d, 'ok_rescan_cooldown_sec', 0) or 0),
         "late_scan_bind_window_sec": int(getattr(d, 'late_scan_bind_window_sec', 3) or 0),
+        "scan_mode": getattr(d, 'scan_mode', 'continuous') or 'continuous',
+        "throttle_idle_ms": int(getattr(d, 'throttle_idle_ms', 500) or 500),
     }
 
 
@@ -240,9 +246,15 @@ def delete_device(device_id: int):
 
 
 @router.post("/devices/test")
-def test_connection(ip: str, port: int = 55256):
+def test_connection(ip: str, port: int = 55256, device_type: str = "auto"):
+    """测试扫码器连接.
+
+    device_type:
+      - 'text_lon': 只走 LON/LOFF 文本路径 (省电模式, 不打开 WMax 视频流)
+      - 'auto'/'wmax': 优先 WMax 三端口, 失败降级 text_lon
+    """
     svc = get_scanner_service()
-    return svc.test_connection(ip, port)
+    return svc.test_connection(ip, port, device_type=device_type)
 
 
 @router.post("/trigger")
