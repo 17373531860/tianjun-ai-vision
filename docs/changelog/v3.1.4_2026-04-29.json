@@ -1,0 +1,115 @@
+{
+  "version": "3.1.4",
+  "date": "2026-04-29",
+  "previous_version": "3.1.3",
+  "changes": [
+    {
+      "type": "bug",
+      "id": "BUG-314-001",
+      "title": "修复容器多箱模式幽灵箱误报 NG (客户机合格率 30% → 真实合格率)",
+      "symptom": "客户机 jc 项目 (单工位, container_box_mode='multi') 录屏: 检测 126/OK 38/NG 85, 合格率 30.2%; 已结算 92 (OK 26/NG 67), NG 占 73%。NG TOP3 三个步骤 box / cable_hook / pillar_no_core 同 NG 率完全相同 53.x%。50 秒一口气结算 6 个箱子里 5 个 NG (画面里只有 1 个真实箱子流转)。多工位现场也有同样问题。",
+      "root_cause": "_update_container_grouping line 60-75: 工人遮挡瞬间 ByteTrack 给真箱新 track_id => display_id 也变 => 后端把它当新 box 启动新条目, 老条目还在 _box_objects 里等 30 帧 gone-confirm; 期间老条目 item_class_counts={} 永远是空 (新物品全归到新 box_did 名下); 30 帧后 _settle_box 触发, expected_no_container 整列 missing => is_ok=False => 入账 NG。NG TOP3 三步骤同 NG 率即'每个幽灵箱都被记成全步骤缺件'。50 秒批量结算 = 多个老条目集中到达 gone-confirm 一齐入账 NG。",
+      "fix": "_settle_box 入口加阈值前置过滤: 当 box.item_class_counts 总件数 < pipeline_config.container_settle_min_items (默认 1) 时, 直接 pop 不入账, 既不计 OK 也不计 NG, 不写 StepRecord, 不 trigger_event。从根本让幽灵空箱无法污染 OK/NG 计数。边缘情况: 配置显式 None/'' 时 fallback 到 1 (默认值), 而不是 0 (那样会关闭过滤); 阈值=0 是显式关闭过滤, 退化到 v3.1.3 行为, 仅排查回归用。",
+      "files": [
+        "backend/api/source_container_grouping_mixin.py"
+      ],
+      "keywords": [
+        "幽灵箱",
+        "container_box_mode multi",
+        "_settle_box 阈值过滤",
+        "container_settle_min_items",
+        "ByteTrack ID 漂移",
+        "NG TOP3 三步骤同 NG 率 53.x%",
+        "50 秒批量结算 5 NG",
+        "客户机合格率 30%",
+        "工人遮挡 track_id 切换",
+        "_box_objects 累积"
+      ],
+      "breaking": false
+    }
+  ],
+  "features": [
+    {
+      "type": "feature",
+      "id": "FEAT-314-001",
+      "title": "容器结算最少件数阈值 UI 可调",
+      "symptom": "客户现场 multi 模式幽灵箱误判 NG, 需要可调阈值过滤空箱。",
+      "root_cause": "原 _settle_box 没阈值检查, 任何 box 离开视野 + gone-confirm 都被结算, 即使 item_class_counts 是空。",
+      "fix": "项目设置 → 跟踪选项 → 容器策略下加 '结算最少件数' el-input-number (min 0, max 100, step 1, 默认 1), 带 tooltip 解释幽灵箱原理与三档语义 (默认 1 / 关闭过滤 0 / 现场遮挡严重时调高)。持久化路径 pipeline_config.container_settle_min_items, 与 force_settle_pending_cycle(min_items) 兼容互补。",
+      "files": [
+        "frontend/src/views/Project/index.vue"
+      ],
+      "keywords": [
+        "container_settle_min_items",
+        "项目设置 跟踪选项",
+        "结算最少件数",
+        "幽灵箱 UI 阈值"
+      ],
+      "breaking": false
+    }
+  ],
+  "tools": [
+    {
+      "type": "tool",
+      "id": "TOOL-314-001",
+      "title": "test_ghost_box_fix.py 11 用例覆盖幽灵箱修复",
+      "symptom": "需要回归保护以防 _settle_box 阈值过滤被无意中改坏。",
+      "root_cause": "原 v3.1.2 仿真套件没覆盖容器多箱场景下幽灵箱 batch settle 行为。",
+      "fix": "Group 1 (4): 阈值过滤核心 — 空箱跳过 / 1 件入账 / 多件入账 / 阈值=0 关闭过滤; Group 2 (3): 阈值边界 — 默认值 / 上下限 / 类型异常 fallback (字符串/None/[]/''); Group 3 (2): 与原行为兼容 — 装齐 OK / 缺件 NG / 超量 extra 仍 NG; Group 4 (2): 防回归 — 模拟客户机 6 box 一次结算 (5 幽灵+1 真箱) 修复后只 1 OK; 阈值=0 复刻 v3.1.3 行为证明 bug 真实存在。测试还顺手 catch 了真实生产 bug: `pcfg.get('key', 1) or 0` 在 None/'' 输入时得 0 关闭过滤, 改成 `if val is None or val == '': val = 1` 显式回退后 11/11 全过。",
+      "files": [
+        "tools/test_ghost_box_fix.py"
+      ],
+      "keywords": [
+        "幽灵箱仿真",
+        "11 用例",
+        "客户机现场复刻",
+        "Negative test 阈值=0 证 bug"
+      ],
+      "breaking": false
+    }
+  ],
+  "config_changes": [
+    {
+      "type": "config",
+      "id": "CONFIG-314-001",
+      "title": "版本号升级到 3.1.4",
+      "symptom": "patch 级别 1 个 bug 修复 + 1 个 UI 旋钮, 不破坏老行为, bump version。",
+      "root_cause": "v3.1.3 之后修了容器多箱幽灵箱 NG 误判。",
+      "fix": "electron/package.json + electron/splash.html 更新到 3.1.4。",
+      "files": [
+        "electron/package.json",
+        "electron/splash.html"
+      ],
+      "keywords": ["version bump", "3.1.4"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/api/source_container_grouping_mixin.py",
+    "frontend/src/views/Project/index.vue",
+    "tools/test_ghost_box_fix.py",
+    "electron/package.json",
+    "electron/splash.html",
+    "docs/changelog/v3.1.4_2026-04-29.md",
+    "docs/changelog/v3.1.4_2026-04-29.json",
+    "docs/CHANGELOG.md"
+  ],
+  "db_migrations": [],
+  "test_results": {
+    "v3_1_4_new_suite": {
+      "name": "tools/test_ghost_box_fix.py",
+      "total": 11,
+      "passed": 11,
+      "failed": 0,
+      "elapsed_seconds": 0.001
+    },
+    "v3_1_2_regression_suite": {
+      "name": "tools/run_v3_1_2_sim_all.py",
+      "total": 75,
+      "passed": 75,
+      "failed": 0,
+      "elapsed_seconds": 8.6
+    }
+  }
+}

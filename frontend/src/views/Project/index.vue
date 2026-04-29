@@ -909,6 +909,21 @@
                         <el-option label="单箱(只承认主箱)" value="single" />
                         <el-option label="多箱(实验性)" value="multi" />
                       </el-select>
+                      <el-tooltip placement="top">
+                        <template #content>
+                          <div style="max-width:300px;line-height:1.5">
+                            <b>幽灵箱过滤</b>: 单/多箱模式下, 真箱被遮挡瞬间 ByteTrack 切了 ID,
+                            老 ID 仍在 _box_objects 里挂 30 帧 gone-confirm, 期间没新物品落进去
+                            (新 ID 接走了), 等结算时件数=0 → 整箱缺件 → 入账 NG。<br/>
+                            阈值 = 该箱至少装 N 件才视为真箱; 件数低于阈值的箱子直接丢弃, 不计 OK 不计 NG。<br/>
+                            · <b>默认 1</b>: 至少装 1 件才入账 (推荐)<br/>
+                            · 设 0: 关闭过滤, 所有箱子都入账 (v3.1.3 行为, 容易出"幽灵 NG")<br/>
+                            · 设大: 要求装件更多才入账 (现场遮挡严重时可调高)
+                          </div>
+                        </template>
+                        <span class="text-gray-400 shrink-0 cursor-help">结算最少件数 ⓘ</span>
+                      </el-tooltip>
+                      <el-input-number v-model="activeProject.container_settle_min_items" :min="0" :max="100" :step="1" :precision="2" size="small" class="!w-24" />
                     </div>
                     <div v-else class="flex items-center gap-4 text-xs">
                       <span class="text-gray-400 shrink-0">消失确认帧数</span>
@@ -1951,6 +1966,11 @@ const initProjectDefaults = (project) => {
   if (project.container_box_mode === undefined) {
     project.container_box_mode = pipelineConfig.container_box_mode || 'single';
   }
+  if (project.container_settle_min_items === undefined) {
+    const v = pipelineConfig.container_settle_min_items;
+    // v3.1.4: 默认 1 = 装件 < 1 (空箱) 视为幽灵箱不结算
+    project.container_settle_min_items = (typeof v === 'number' && v >= 0) ? v : 1;
+  }
   if (project.tracking_roi_polygon === undefined) {
     const roi = pipelineConfig.tracking_roi || {};
     project.tracking_roi_polygon = roi.polygon || [];
@@ -2129,6 +2149,11 @@ const handleSaveProject = async () => {
         },
         tracking_container_label: activeProject.value.tracking_cycle_strategy === 'container' ? (activeProject.value.tracking_container_label || '') : '',
         container_box_mode: activeProject.value.container_box_mode || 'single',
+        container_settle_min_items: (() => {
+          const v = Number(activeProject.value.container_settle_min_items);
+          if (!Number.isFinite(v) || v < 0) return 1;
+          return Math.max(0, Math.min(100, Math.floor(v)));
+        })(),
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,

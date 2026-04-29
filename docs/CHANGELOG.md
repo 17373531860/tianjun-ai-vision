@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.1.4 (2026-04-29)
+- [BUG-314-001] 修复: 容器多箱模式幽灵箱误报 NG (客户机合格率 30% → 真实合格率), `_settle_box` 入口加 `container_settle_min_items` 阈值过滤
+- [FEAT-314-001] 新增: 项目设置 → 跟踪选项 → 容器策略下"结算最少件数" UI (默认 1, 设 0 关闭过滤)
+- [TOOL-314-001] 新增: `tools/test_ghost_box_fix.py` 11 用例覆盖 (含 Negative 复刻 v3.1.3 bug 现象的反证)
+- [CONFIG-314-001] 配置: 版本号升级到 3.1.4
+
 ## v3.1.3 (2026-04-29)
 - [BUG-313-001] 修复: ffmpeg 多线程解码偶发断言 SIGABRT 导致 uvicorn worker 崩溃 / 8001 永久卡死 (强制单线程解码兜底)
 - [BUG-313-002] 修复: 跟踪模式下"步骤统计"表永远停在 `--/待检测`, 改用 `tracking.item_checklist` 翻 OK

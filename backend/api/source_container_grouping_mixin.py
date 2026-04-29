@@ -216,15 +216,46 @@ class ContainerGroupingMixin:
                 bs['gone_frames'] = 0
 
     def _settle_box(self, box_display_id: str, expected_items: dict):
-        """Settle a single box: record its items and completeness."""
+        """Settle a single box: record its items and completeness.
+
+        v3.1.4: 加"幽灵箱跳过"前置过滤 — 当 box.item_class_counts 的总件数
+        < pipeline_config.container_settle_min_items (默认 1) 时, 直接 pop 不入账,
+        既不计 OK 也不计 NG。
+
+        触发场景: 多箱模式 (container_box_mode='multi') 下, 工人遮挡瞬间真箱被
+        ByteTrack 切了 track_id, 后端把同一物理箱当成新 box_did 启动新条目, 而
+        老条目里 item_class_counts 永远是空 ({}), 之后等够 30 帧 gone-confirm
+        被结算时, 因为 expected_no_container 整列缺失, is_ok=False, 直接入账 NG。
+        客户机表象就是 NG TOP3 几个步骤 NG 率完全相同 = 53.x%, 50 秒批量结算 5 个 NG。
+
+        阈值默认 1 = 至少装 1 件才视为真箱; 设 0 退化到 v3.1.3 行为 (空箱也入账)。
+        """
         box_state = self._box_objects.pop(box_display_id, None)
         if box_state is None:
             return
-        
+
+        item_counts = box_state['item_class_counts']
+
+        # v3.1.4 幽灵箱前置过滤
+        # 注意 None/''/[] 都 fallback 到默认 1 (而不是 0), 否则用户清空配置反而关闭过滤
+        try:
+            pcfg = (self.project_config or {}).get('pipeline_config', {}) if self.project_config else {}
+            _val = pcfg.get('container_settle_min_items', 1)
+            if _val is None or _val == '':
+                _val = 1
+            min_items_threshold = int(_val)
+        except (TypeError, ValueError):
+            min_items_threshold = 1
+        if min_items_threshold > 0:
+            total_items = sum(int(v) for v in item_counts.values())
+            if total_items < min_items_threshold:
+                print(f"[Container] {box_display_id} 跳过结算 "
+                      f"(装件 {total_items} < 阈值 {min_items_threshold}, 视为幽灵箱)")
+                return
+
         container_label = self._container_label
         expected_no_container = {k: v for k, v in expected_items.items() if k != container_label}
-        
-        item_counts = box_state['item_class_counts']
+
         missing = []
         extra = []
         for cls, exp in expected_no_container.items():
