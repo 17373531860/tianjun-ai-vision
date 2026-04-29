@@ -97,6 +97,12 @@ def migrate_database():
         ("work_orders", "target_stations", "TEXT"),
         # v3.1.1 称重器配对模式 (stable / instant)
         ("external_devices", "pairing_mode", "VARCHAR(16) DEFAULT 'stable'"),
+        # v3.1.2 多工位广播结算联动: 主工位结算时强制带动其他广播工位
+        ("scanner_devices", "broadcast_settle_mode", "VARCHAR(20) DEFAULT 'independent'"),
+        ("scanner_devices", "primary_settle_channel", "INTEGER"),
+        ("scanner_devices", "primary_settle_min_items", "INTEGER DEFAULT 1"),
+        # v3.1.2 集群站点结果合并策略 (latest / ok_lock)
+        ("cluster_config", "station_result_strategy", "VARCHAR(20) DEFAULT 'latest'"),
     ]
     
     try:
@@ -465,8 +471,13 @@ def auto_restore_video_sources():
                     res = ch_cfg.get("resolution", "1280x720")
                     w, h = (int(x) for x in res.split("x")) if "x" in str(res) else (1280, 720)
                     fps = ch_cfg.get("fps", 60)
-                    mgr.start_camera(dev_idx, w, h, fps)
-                    print(f"[启动] ch{ch_id} 自动恢复摄像头: device={dev_idx}")
+                    auto_exp = ch_cfg.get("auto_exposure", True)
+                    exp_val = ch_cfg.get("exposure_value", -6.0)
+                    mgr.start_camera(dev_idx, w, h, fps,
+                                     auto_exposure=auto_exp,
+                                     exposure_value=exp_val)
+                    print(f"[启动] ch{ch_id} 自动恢复摄像头: device={dev_idx}, "
+                          f"auto_exposure={auto_exp}, exposure={exp_val}")
                 elif src_type == "rtsp":
                     url = ch_cfg.get("url", "")
                     if url:

@@ -211,6 +211,7 @@ class ClusterCollector:
                     "timeout_push": False,
                     "enabled": False,
                     "channel_station_map": {},
+                    "station_result_strategy": "latest",
                 }
             else:
                 result = {
@@ -223,6 +224,7 @@ class ClusterCollector:
                     "timeout_push": getattr(cfg, 'timeout_push', False) or False,
                     "enabled": cfg.enabled,
                     "channel_station_map": getattr(cfg, 'channel_station_map', None) or {},
+                    "station_result_strategy": (getattr(cfg, 'station_result_strategy', None) or 'latest'),
                 }
             self._config_cache = result
             self._config_ts = now
@@ -361,6 +363,22 @@ class ClusterCollector:
                         merged_event = ok_events[-1]
                     else:
                         merged_event = event_name or existing.event_name
+
+                    # v3.1.2 OK 锁定模式: 已合格的站点不再被 NG 覆盖, NG 仍写入审计.
+                    # 反向 (NG 站点收到 OK 数据) 走默认逻辑允许翻盘.
+                    strategy = (self.get_config(db).get("station_result_strategy") or "latest")
+                    if strategy == "ok_lock" and existing.is_good and not merged_is_good:
+                        logger.info(
+                            "[Cluster ok_lock] 拒绝 NG 覆盖 OK: box=%s station=%s "
+                            "(本次 sub_reports 仍写入审计, is_good 维持 OK)",
+                            box_serial, station_id,
+                        )
+                        merged_is_good = True
+                        # 保留原 OK 事件名 (如果存在); 否则取本次 OK sub 的事件名
+                        if existing.event_name:
+                            merged_event = existing.event_name
+                        elif ok_events:
+                            merged_event = ok_events[-1]
 
                     # 同步更新 cycle.is_good / cycle.result 给前端
                     if isinstance(merged_context.get("cycle"), dict):

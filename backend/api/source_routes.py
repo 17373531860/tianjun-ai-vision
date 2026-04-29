@@ -57,6 +57,8 @@ class CameraStartRequest(BaseModel):
     width: int = 1280
     height: int = 720
     fps: int = 60
+    auto_exposure: bool = True
+    exposure_value: float = -6.0
 
 
 class VideoStartRequest(BaseModel):
@@ -455,7 +457,9 @@ def start_camera(req: CameraStartRequest, channel: int = Query(0)):
             device_index=req.device_index,
             width=req.width,
             height=req.height,
-            fps=req.fps
+            fps=req.fps,
+            auto_exposure=req.auto_exposure,
+            exposure_value=req.exposure_value,
         )
         return {"status": "success", "message": f"摄像头已启动 (ch{channel})"}
     except HTTPException:

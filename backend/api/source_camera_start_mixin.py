@@ -45,9 +45,62 @@ def _v4l2_safe_bufsize_1(cap):
         pass
 
 
+def _apply_exposure_setting(cap, auto_exposure: bool, exposure_value: float):
+    """v3.1.2: 跨平台曝光控制.
+
+    背景: UVC USB 摄像头默认开"自动曝光", 现场光线变暗时驱动会自动把曝光时间
+    拉长 (例 33ms → 100ms), 帧率被相机端从 30fps 直接锁到 10fps, 之后即使
+    光线恢复也回不去. 客户现场已多次复现.
+
+    解决: 关掉自动曝光, 固定曝光值, 让 FPS 不再受光线影响.
+
+    Parameters
+    ----------
+    auto_exposure : bool
+        True  → 默认行为, 不动相机参数 (向后兼容, 开发机/光照稳定环境继续自动)
+        False → 强制关自动曝光, 用 exposure_value 固定曝光时间
+    exposure_value : float
+        DirectShow / MSMF 上是 log2(秒) 刻度, 典型范围 -13..0
+            -6  ≈ 1/64s  ≈ 15ms  (能保证 30fps+, 偏暗, 需要补光)
+            -5  ≈ 1/32s  ≈ 31ms  (≈30fps 上限, 较平衡)
+            -4  ≈ 1/16s  ≈ 62ms  (亮但帧率会被压到 ~16fps)
+        V4L2 上是绝对时间 (单位 100us), 这里按 1/(2^|v|) 秒做近似换算.
+    """
+    if auto_exposure:
+        return
+    is_windows = platform.system() == "Windows"
+    try:
+        if is_windows:
+            # DirectShow: 0.25=manual, 0.75=auto;  MSMF: 0=manual, 1=auto
+            # 同时下两个值, 哪个生效看当前 backend
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
+            cap.set(cv2.CAP_PROP_EXPOSURE, float(exposure_value))
+            print(f"[Camera] 已关自动曝光, exposure={exposure_value} (DirectShow/MSMF log2s)")
+        else:
+            # V4L2: 1=manual_exposure, 3=aperture_priority(自动)
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+            ev = float(exposure_value)
+            if ev < 0:
+                seconds = 1.0 / (2 ** abs(ev))
+                v4l2_value = max(1, int(seconds * 10000))
+            else:
+                v4l2_value = max(1, int(ev))
+            cap.set(cv2.CAP_PROP_EXPOSURE, v4l2_value)
+            print(f"[Camera] 已关自动曝光, exposure={v4l2_value} (V4L2 单位 100us)")
+    except Exception as e:
+        print(f"[Camera] 曝光设置失败 (相机可能不支持手动曝光): {e}")
+
+
 class CameraStartMixin:
-    def start_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60):
-        """启动摄像头"""
+    def start_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60,
+                     auto_exposure: bool = True, exposure_value: float = -6.0):
+        """启动摄像头.
+
+        v3.1.2 新增 auto_exposure / exposure_value: 关掉自动曝光防止 UVC 摄像头
+        在光线变暗时把帧率从 30fps 自驱降到 10fps. 默认 auto_exposure=True
+        保持向后兼容, 只有客户在 UI 显式关闭时才生效.
+        """
         self.stop(release_model=False)
         
         # 等待一小段时间确保之前的资源已释放
@@ -216,7 +269,13 @@ class CameraStartMixin:
             print(f"[Camera] ⚠ 当前格式 {cc_str} (未压缩)，高分辨率下帧率通常只有 5-10fps")
             print(f"[Camera]   原因: 大多数 USB 摄像头在 {cc_str} 模式下硬件吞吐率有限")
             print(f"[Camera]   建议: 1) 确认摄像头支持 MJPG  2) 降低分辨率  3) 更换支持 MJPG 的摄像头")
-        
+
+        # v3.1.2: 曝光控制 — 必须在最终 backend 选定之后才能 set, 否则会被
+        # 后续的 backend 切换 / capture.release() 抹掉
+        _apply_exposure_setting(self.capture, auto_exposure, exposure_value)
+        self._auto_exposure = auto_exposure
+        self._exposure_value = exposure_value
+
         self.source_type = 'camera'
         self._camera_backend = int(self.capture.get(cv2.CAP_PROP_BACKEND)) if hasattr(cv2, 'CAP_PROP_BACKEND') else None
         self.camera_index = device_index

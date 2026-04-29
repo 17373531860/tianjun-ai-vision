@@ -249,6 +249,42 @@
           <div class="text-xs text-gray-500 mt-1">选多个工位时，扫码结果同时发送到所有选中工位</div>
         </el-form-item>
 
+        <!-- v3.1.2 多工位广播结算联动: 仅在勾了 ≥ 2 个广播工位时才显示 -->
+        <template v-if="(form.broadcast_channels || []).length >= 2">
+          <el-form-item label="广播结算模式">
+            <el-radio-group v-model="form.broadcast_settle_mode" @change="onSettleModeChange">
+              <el-radio value="independent">各自独立结算 (默认)</el-radio>
+              <el-radio value="primary">主工位驱动</el-radio>
+            </el-radio-group>
+            <div class="text-xs text-gray-500 mt-1">
+              <span v-if="form.broadcast_settle_mode === 'independent'">
+                每个广播工位用自己的"消失"信号独立结算 (老行为)
+              </span>
+              <span v-else>
+                由<b>主工位</b>结算时, 强制带动其他广播工位同步结算; 适合大件 (容器) + 小件 (全部消失) 同箱的双工位场景
+              </span>
+            </div>
+          </el-form-item>
+          <el-form-item v-if="form.broadcast_settle_mode === 'primary'" label="主工位">
+            <el-select v-model="form.primary_settle_channel" placeholder="选择作为节拍源的工位" class="w-full">
+              <el-option
+                v-for="ch in (form.broadcast_channels || [])"
+                :key="ch"
+                :label="(channelOptions.find(o => o.value === ch) || {}).label || ('工位 ' + (ch + 1))"
+                :value="ch"
+              />
+            </el-select>
+            <div class="text-xs text-gray-500 mt-1">通常选"快"的那一个 (如小件全部消失工位)</div>
+          </el-form-item>
+          <el-form-item v-if="form.broadcast_settle_mode === 'primary'" label="件数门槛">
+            <el-input-number v-model="form.primary_settle_min_items" :min="0" :max="100" :step="1" class="!w-32" />
+            <div class="text-xs text-gray-500 mt-1">
+              其他工位被联动结算时, 当前周期内已检出件数 ≥ 该值才结算; <b>空箱/低件箱跳过</b>不动, 留给下一轮.
+              默认 <b>1</b> (放了 1 件就跟随), 现场可调.
+            </div>
+          </el-form-item>
+        </template>
+
         <!-- 中部：数字输入框并排 -->
         <div class="grid grid-cols-3 gap-3 my-3">
           <div class="text-center">
@@ -455,8 +491,43 @@ const defaultForm = () => ({
   //   once_per_cycle = 扫到一个码后 LOFF 灭灯, 等当前周期结束自动恢复扫描
   scan_mode: 'continuous',
   throttle_idle_ms: 500,
+  // v3.1.2: 多工位广播结算联动 (仅当广播工位 >= 2 时生效)
+  broadcast_settle_mode: 'independent',
+  primary_settle_channel: null,
+  primary_settle_min_items: 1,
 })
 const form = ref(defaultForm())
+
+const onSettleModeChange = async (val) => {
+  if (val !== 'primary') return
+  const broadcast = form.value.broadcast_channels || []
+  // 默认主工位: 优先用绑定工位 (channel_id), 其次用广播工位中第一个
+  if (!broadcast.includes(form.value.primary_settle_channel)) {
+    form.value.primary_settle_channel = broadcast.includes(form.value.channel_id)
+      ? form.value.channel_id
+      : broadcast[0]
+  }
+  // 弹一次"件数门槛"输入框, 让用户即时配置
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '其他广播工位被主工位带动结算时, 已检出件数 ≥ 该门槛才结算 (空箱/低件箱跳过, 留给下一轮)',
+      '设置件数门槛',
+      {
+        inputValue: String(form.value.primary_settle_min_items ?? 1),
+        inputPattern: /^\d+$/,
+        inputErrorMessage: '请输入非负整数',
+        confirmButtonText: '确定',
+        cancelButtonText: '保持默认 (1)',
+      }
+    )
+    const n = parseInt(value, 10)
+    if (Number.isFinite(n) && n >= 0) {
+      form.value.primary_settle_min_items = n
+    }
+  } catch (e) {
+    // 用户取消, 维持默认值, 不报错
+  }
+}
 
 const quickDedup = ref(2)
 

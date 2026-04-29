@@ -310,6 +310,17 @@ class ScannerDevice(Base):
     # 仅 scan_mode="throttled" 时生效, ERROR/扫到码后等待多少毫秒再续 LON.
     throttle_idle_ms = Column(Integer, default=500)
 
+    # v3.1.2 多工位广播结算联动 (仅当 broadcast_channels 非空时生效):
+    #   independent = 各工位独立结算 (默认, 旧行为)
+    #   primary     = 由 primary_settle_channel 指定的"主工位"结算时,
+    #                 通知其他广播工位强制结算当前周期, 实现大小件同步.
+    broadcast_settle_mode = Column(String(20), default="independent")
+    # primary 模式下, 哪个 channel 作为节拍源 (必须出现在 broadcast_channels 里).
+    primary_settle_channel = Column(Integer, nullable=True)
+    # primary 模式下跟随结算的最低件数门槛: 箱子 / 周期里已检出物品数 < 该值时跳过,
+    # 避免上游空箱子被冤判 NG. 默认 1 (放了一件就跟随), 0 = 不过滤, N = 至少 N 件.
+    primary_settle_min_items = Column(Integer, default=1)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -402,6 +413,11 @@ class ClusterConfig(Base):
     # 本机"视觉通道 → 站点"映射表，例如 {"0":"B","1":"B"} 表示两路视觉都上报到站点 B。
     # 为空时沿用旧逻辑：channel_count>1 自动拼 "{station_id}-{channel_id}"。
     channel_station_map = Column(JSON, nullable=True)
+    # v3.1.2 站点结果合并策略 (同一 station_id 多次上报时):
+    #   "latest"   = 默认 / 现状: 同一路最新覆盖, 多路 AND 判 OK/NG (任一路 NG → 整站 NG)
+    #   "ok_lock"  = OK 锁定: 已合格的站点不被 NG 覆盖, NG 站点可被 OK 翻盘.
+    #                被拒的 NG sub_report 仍写入审计, 不影响 is_good.
+    station_result_strategy = Column(String(20), default="latest")
 
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

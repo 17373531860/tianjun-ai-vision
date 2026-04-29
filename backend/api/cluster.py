@@ -26,6 +26,7 @@ class ClusterConfigUpdate(BaseModel):
     timeout_push: Optional[bool] = None
     enabled: Optional[bool] = None
     channel_station_map: Optional[dict] = None
+    station_result_strategy: Optional[str] = None
 
 
 class StationReport(BaseModel):

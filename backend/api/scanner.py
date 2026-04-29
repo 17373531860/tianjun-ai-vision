@@ -38,6 +38,9 @@ class ScannerCreate(BaseModel):
     late_scan_bind_window_sec: int = 3
     scan_mode: str = "continuous"
     throttle_idle_ms: int = 500
+    broadcast_settle_mode: str = "independent"
+    primary_settle_channel: Optional[int] = None
+    primary_settle_min_items: int = 1
 
 
 class ScannerUpdate(BaseModel):
@@ -64,6 +67,9 @@ class ScannerUpdate(BaseModel):
     late_scan_bind_window_sec: Optional[int] = None
     scan_mode: Optional[str] = None
     throttle_idle_ms: Optional[int] = None
+    broadcast_settle_mode: Optional[str] = None
+    primary_settle_channel: Optional[int] = None
+    primary_settle_min_items: Optional[int] = None
 
 
 class ScannerSimulate(BaseModel):
@@ -95,6 +101,9 @@ def _serialize_device(d):
         "late_scan_bind_window_sec": int(getattr(d, 'late_scan_bind_window_sec', 3) or 0),
         "scan_mode": getattr(d, 'scan_mode', 'continuous') or 'continuous',
         "throttle_idle_ms": int(getattr(d, 'throttle_idle_ms', 500) or 500),
+        "broadcast_settle_mode": getattr(d, 'broadcast_settle_mode', 'independent') or 'independent',
+        "primary_settle_channel": getattr(d, 'primary_settle_channel', None),
+        "primary_settle_min_items": int(getattr(d, 'primary_settle_min_items', 1) or 1),
     }
 
 

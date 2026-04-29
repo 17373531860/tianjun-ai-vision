@@ -934,6 +934,20 @@
                         <el-input-number v-model="activeProject.tracking_id_lock_frames" :min="0" :step="5" :precision="2" size="small" class="!w-24" />
                       </div>
                       <div class="flex items-center gap-1.5">
+                        <el-tooltip placement="top" effect="dark">
+                          <template #content>
+                            <div class="text-xs leading-relaxed">
+                              ByteTrack IoU 匹配阈值<br />
+                              · 默认 0.8 (官方默认)<br />
+                              · 容器/多目标场景建议 0.5~0.7<br />
+                              · 越低越宽松, ID 越稳但可能错连相邻目标
+                            </div>
+                          </template>
+                          <span class="text-gray-400 cursor-help">匹配阈值</span>
+                        </el-tooltip>
+                        <el-input-number v-model="activeProject.tracking_match_thresh" :min="0.1" :max="0.99" :step="0.05" :precision="2" size="small" class="!w-24" />
+                      </div>
+                      <div class="flex items-center gap-1.5">
                         <span class="text-gray-400">顺序检查</span>
                         <el-switch v-model="activeProject.tracking_check_order" size="small" />
                       </div>
@@ -1923,6 +1937,10 @@ const initProjectDefaults = (project) => {
   if (project.tracking_id_lock_frames === undefined) {
     project.tracking_id_lock_frames = pipelineConfig.tracking_id_lock_frames || 15;
   }
+  if (project.tracking_match_thresh === undefined) {
+    const v = pipelineConfig.tracking_match_thresh;
+    project.tracking_match_thresh = (typeof v === 'number' && v > 0) ? v : 0.8;
+  }
   if (project.counting_expected_list === undefined) {
     const items = pipelineConfig.counting_expected_items || {};
     project.counting_expected_list = Object.entries(items).map(([label, count]) => ({ label, count }));
@@ -2093,6 +2111,11 @@ const handleSaveProject = async () => {
         tracking_appearance_match: activeProject.value.tracking_appearance_match || false,
         tracking_id_lock: activeProject.value.tracking_id_lock || false,
         tracking_id_lock_frames: activeProject.value.tracking_id_lock_frames || 15,
+        tracking_match_thresh: (() => {
+          const v = Number(activeProject.value.tracking_match_thresh);
+          if (!Number.isFinite(v) || v <= 0) return 0.8;
+          return Math.max(0.1, Math.min(0.99, v));
+        })(),
         tracking_expected_order: activeProject.value.tracking_check_order
           ? (activeProject.value.counting_expected_list || []).flatMap(item => Array(item.count || 1).fill(item.label)).filter(Boolean)
           : [],

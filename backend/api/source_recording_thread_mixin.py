@@ -19,6 +19,8 @@ import threading
 import traceback
 import cv2
 
+from backend.api.source_recorder import FFmpegRecorder
+
 
 class RecordingThreadMixin:
     # ========== 录制线程相关方法（独立于 CUDA，避免段错误） ==========
@@ -160,7 +162,8 @@ class RecordingThreadMixin:
         """
         if frame is None or not self._recording_running:
             return
-        
+
+        # v3.1.2 防御: 程序性错误必须暴露, 否则会像 v3.1.1 那样 import 漏了导致全程 0 帧静默丢帧.
         try:
             max_w, max_h = FFmpegRecorder.MAX_RECORD_WIDTH, FFmpegRecorder.MAX_RECORD_HEIGHT
             h, w = frame.shape[:2]
@@ -171,20 +174,29 @@ class RecordingThreadMixin:
                 small_frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
             else:
                 small_frame = frame
-            
+        except Exception as e:
+            if not getattr(self, "_recording_prep_warned", False):
+                print(f"[录制线程] 帧预处理失败 (后续不再重复打印): {type(e).__name__}: {e}")
+                self._recording_prep_warned = True
+            self._recording_drop_count += 1
+            return
+
+        try:
+            self._recording_queue.put_nowait(small_frame)
+        except queue.Full:
+            try:
+                self._recording_queue.get_nowait()
+            except Exception:
+                pass
             try:
                 self._recording_queue.put_nowait(small_frame)
             except Exception:
-                try:
-                    self._recording_queue.get_nowait()
-                except Exception:
-                    pass
-                try:
-                    self._recording_queue.put_nowait(small_frame)
-                except Exception:
-                    pass
-                self._recording_drop_count += 1
-        except Exception:
+                pass
+            self._recording_drop_count += 1
+        except Exception as e:
+            if not getattr(self, "_recording_queue_warned", False):
+                print(f"[录制线程] 入队异常 (后续不再重复打印): {type(e).__name__}: {e}")
+                self._recording_queue_warned = True
             self._recording_drop_count += 1
     
     def _write_frame_to_writers(self, frame):

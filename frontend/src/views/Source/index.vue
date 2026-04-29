@@ -149,6 +149,45 @@
                 </el-select>
               </el-form-item>
             </div>
+            <div v-if="wsConfigs[ch - 1].sourceType === 'camera'" class="grid grid-cols-2 gap-2">
+              <el-form-item>
+                <template #label>
+                  <span class="text-xs">自动曝光
+                    <el-tooltip placement="top">
+                      <template #content>
+                        <div style="max-width: 320px">
+                          关掉自动曝光可防止 USB 摄像头在光线变暗时<br/>
+                          自驱把帧率从 30fps 降到 10fps (现场已复现).<br/>
+                          建议: 现场光照不稳定 / 工人遮挡频繁时关闭,<br/>
+                          搭配 LED 补光保证画面亮度.
+                        </div>
+                      </template>
+                      <el-icon class="ml-1" style="vertical-align: -2px"><InfoFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                </template>
+                <el-switch v-model="wsConfigs[ch - 1].autoExposure" active-text="开" inactive-text="关" />
+              </el-form-item>
+              <el-form-item v-if="!wsConfigs[ch - 1].autoExposure">
+                <template #label>
+                  <span class="text-xs">曝光等级
+                    <el-tooltip placement="top">
+                      <template #content>
+                        <div style="max-width: 320px">
+                          DirectShow / MSMF 上是 log2(秒) 刻度:<br/>
+                          -6 ≈ 1/64s ≈ 15ms (推荐, 保证 30fps 上限)<br/>
+                          -5 ≈ 1/32s ≈ 31ms (~30fps, 较亮)<br/>
+                          -4 ≈ 1/16s ≈ 62ms (~16fps, 很亮)<br/>
+                          值越小画面越暗但帧率越稳.
+                        </div>
+                      </template>
+                      <el-icon class="ml-1" style="vertical-align: -2px"><InfoFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                </template>
+                <el-input-number v-model="wsConfigs[ch - 1].exposureValue" :min="-13" :max="0" :step="1" class="w-full" />
+              </el-form-item>
+            </div>
           </el-form>
         </el-card>
       </div>
@@ -266,6 +305,45 @@
               <div class="text-xs text-gray-400 mt-1">
                 提示：如果检测速度跟不上，降低帧率可以避免丢帧
               </div>
+            </el-form-item>
+
+            <el-form-item>
+              <template #label>
+                <span>自动曝光
+                  <el-tooltip placement="top">
+                    <template #content>
+                      <div style="max-width: 340px">
+                        关掉自动曝光可防止 USB 摄像头在光线变暗时<br/>
+                        自驱把帧率从 30fps 降到 10fps (现场已复现, 客户机日志验证).<br/>
+                        建议: 现场光照不稳定 / 工人遮挡频繁时关闭,<br/>
+                        搭配 LED 补光保证画面亮度.
+                      </div>
+                    </template>
+                    <el-icon class="ml-1" style="vertical-align: -2px"><InfoFilled /></el-icon>
+                  </el-tooltip>
+                </span>
+              </template>
+              <el-switch v-model="cameraSettings.autoExposure" active-text="开 (默认)" inactive-text="关 (锁定曝光)" />
+            </el-form-item>
+
+            <el-form-item v-if="!cameraSettings.autoExposure">
+              <template #label>
+                <span>曝光等级
+                  <el-tooltip placement="top">
+                    <template #content>
+                      <div style="max-width: 340px">
+                        DirectShow / MSMF 上是 log2(秒) 刻度 (Linux 自动换算):<br/>
+                        -6 ≈ 1/64s ≈ 15ms (推荐, 保证 30fps 上限)<br/>
+                        -5 ≈ 1/32s ≈ 31ms (~30fps, 较亮)<br/>
+                        -4 ≈ 1/16s ≈ 62ms (~16fps, 很亮)<br/>
+                        值越小画面越暗但帧率越稳.
+                      </div>
+                    </template>
+                    <el-icon class="ml-1" style="vertical-align: -2px"><InfoFilled /></el-icon>
+                  </el-tooltip>
+                </span>
+              </template>
+              <el-input-number v-model="cameraSettings.exposureValue" :min="-13" :max="0" :step="1" class="w-full" />
             </el-form-item>
           </el-form>
         </el-card>
@@ -513,7 +591,7 @@ import { ref, computed, onMounted, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { 
   VideoCamera, Camera, VideoPlay, Picture, 
-  UploadFilled, Refresh, Check, Monitor
+  UploadFilled, Refresh, Check, Monitor, InfoFilled
 } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import api from '@/api/index';
@@ -529,7 +607,7 @@ const systemStore = useSystemStore();
 
 // ===== Workstation Mode =====
 const workstationMode = ref(1);
-const makeDefaultWsConfig = () => ({ sourceType: 'camera', cameraId: '', projectId: null, resolution: '1280x720', fps: 60, gpuDevice: 'auto', videoFile: null, imageFile: null, rtspUrl: '', rtspFps: 25, hcnetIp: '', hcnetPort: 8000, hcnetUsername: 'admin', hcnetPassword: '', hcnetChannel: 1, hcnetStreamType: 1 });
+const makeDefaultWsConfig = () => ({ sourceType: 'camera', cameraId: '', projectId: null, resolution: '1280x720', fps: 60, gpuDevice: 'auto', autoExposure: true, exposureValue: -6, videoFile: null, imageFile: null, rtspUrl: '', rtspFps: 25, hcnetIp: '', hcnetPort: 8000, hcnetUsername: 'admin', hcnetPassword: '', hcnetChannel: 1, hcnetStreamType: 1 });
 const wsConfigured = (idx) => {
   const c = wsConfigs[idx];
   if (!c) return false;
@@ -575,7 +653,14 @@ const saveAndStartMulti = async () => {
         if (!cam) continue;
         const [w, h] = cfg.resolution.split('x').map(Number);
         if (cam.type === 'usb') {
-          await api.post(`/source/camera/start?channel=${ch}`, { device_index: cam.index, width: w, height: h, fps: cfg.fps });
+          await api.post(`/source/camera/start?channel=${ch}`, {
+            device_index: cam.index,
+            width: w,
+            height: h,
+            fps: cfg.fps,
+            auto_exposure: cfg.autoExposure !== false,
+            exposure_value: typeof cfg.exposureValue === 'number' ? cfg.exposureValue : -6
+          });
         } else if (cam.type === 'hikvision') {
           await api.post(`/source/hikvision/start?channel=${ch}`, { device_index: cam.index, width: w, height: h, fps: cfg.fps });
         }
@@ -617,6 +702,8 @@ const saveAndStartMulti = async () => {
         persistCfg.device_index = cfg.cameraId;
         persistCfg.resolution = cfg.resolution;
         persistCfg.fps = cfg.fps;
+        persistCfg.auto_exposure = cfg.autoExposure !== false;
+        persistCfg.exposure_value = typeof cfg.exposureValue === 'number' ? cfg.exposureValue : -6;
       } else if (cfg.sourceType === 'rtsp') {
         persistCfg.url = cfg.rtspUrl;
         persistCfg.rtsp_fps = cfg.rtspFps;
@@ -698,6 +785,8 @@ const loadWorkstationMode = async () => {
         if (cfg.gpu_device) wsConfigs[idx].gpuDevice = cfg.gpu_device;
         if (cfg.fps) wsConfigs[idx].fps = cfg.fps;
         if (cfg.rtsp_fps) wsConfigs[idx].rtspFps = cfg.rtsp_fps;
+        if (cfg.auto_exposure !== undefined) wsConfigs[idx].autoExposure = cfg.auto_exposure;
+        if (cfg.exposure_value !== undefined) wsConfigs[idx].exposureValue = cfg.exposure_value;
         if (cfg.hcnet_ip) wsConfigs[idx].hcnetIp = cfg.hcnet_ip;
         if (cfg.hcnet_port) wsConfigs[idx].hcnetPort = cfg.hcnet_port;
         if (cfg.hcnet_username) wsConfigs[idx].hcnetUsername = cfg.hcnet_username;
@@ -716,7 +805,9 @@ const sourceType = ref('camera');
 const cameraSettings = ref({
   deviceIndex: 0,
   resolution: '1280x720',
-  fps: 60
+  fps: 60,
+  autoExposure: true,
+  exposureValue: -6
 });
 
 // RTSP 设置
@@ -946,7 +1037,9 @@ const saveAndStart = async () => {
           device_index: cam.index,
           width,
           height,
-          fps: cameraSettings.value.fps
+          fps: cameraSettings.value.fps,
+          auto_exposure: cameraSettings.value.autoExposure !== false,
+          exposure_value: typeof cameraSettings.value.exposureValue === 'number' ? cameraSettings.value.exposureValue : -6
         });
         
         // 更新 store
@@ -1076,6 +1169,8 @@ const saveAndStart = async () => {
       singlePersist.device_index = selectedCamera.value.id;
       singlePersist.resolution = cameraSettings.value.resolution;
       singlePersist.fps = cameraSettings.value.fps;
+      singlePersist.auto_exposure = cameraSettings.value.autoExposure !== false;
+      singlePersist.exposure_value = typeof cameraSettings.value.exposureValue === 'number' ? cameraSettings.value.exposureValue : -6;
     } else if (sourceType.value === 'rtsp') {
       singlePersist.url = rtspSettings.value.url;
       singlePersist.rtsp_fps = rtspSettings.value.fps;

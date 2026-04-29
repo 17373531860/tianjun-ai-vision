@@ -79,6 +79,26 @@
             <el-switch v-model="config.timeout_push" size="small" @change="saveConfig" />
           </div>
         </div>
+
+        <!-- v3.1.2 站点结果合并策略 -->
+        <div v-if="config.role === 'master'" class="mt-3">
+          <div class="text-xs text-gray-400 mb-1">站点结果合并策略</div>
+          <el-radio-group v-model="config.station_result_strategy" size="small" @change="saveConfig">
+            <el-radio value="latest">最新覆盖 (默认)</el-radio>
+            <el-radio value="ok_lock">OK 锁定</el-radio>
+          </el-radio-group>
+          <div class="text-xs text-gray-500 mt-1 leading-relaxed">
+            <div v-if="config.station_result_strategy === 'ok_lock'">
+              <b class="text-yellow-300">OK 锁定模式</b>: 站点一旦合格 (OK), 后续 NG 数据<b>不能</b>把它改回 NG;
+              NG 站点收到 OK 数据时<b>允许翻盘</b>. 被拒的 NG 仍会写入子上报记录, 便于审计追溯.
+              适合"返工后第二次检测合格"或"工人补救后重新检测"的场景.
+            </div>
+            <div v-else>
+              <b>最新覆盖</b>: 同一路重复上报取最新; 跨路 / 多次上报中<b>任一 NG 即整站 NG</b>.
+              宁可错杀, 适合"必须每次都合格"的高质量管控场景.
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- 本机通道 → 站点映射 -->
@@ -373,6 +393,7 @@ const config = ref({
   timeout_push: false,
   enabled: false,
   channel_station_map: {},
+  station_result_strategy: 'latest',
 })
 
 // 本机多通道场景下，每个视觉通道各自归属哪个站点。

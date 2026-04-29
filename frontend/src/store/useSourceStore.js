@@ -8,7 +8,9 @@ export const useSourceStore = defineStore('source', {
     cameraSettings: {
       deviceIndex: 0,
       resolution: '1280x720',
-      fps: 60
+      fps: 60,
+      autoExposure: true,
+      exposureValue: -6
     },
     // 海康工业相机设置
     hikvisionSettings: {

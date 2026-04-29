@@ -456,7 +456,17 @@ class SessionLifecycleMixin:
                                   f"(避免野生 settle 重复计数)", flush=True)
                 except Exception as e:
                     print(f"[Container] cycle_end 清 _box_objects 异常: {e}", flush=True)
-            
+
+                # v3.1.2 多工位广播结算联动: 主工位结算时带动其他广播工位强制结算.
+                # 仅当本次 end_cycle 不是"被联动"触发的, 才向外通知 (防止循环).
+                if not getattr(self, '_force_settling_in_progress', False):
+                    try:
+                        from backend.services.scanner import get_scanner_service
+                        get_scanner_service().notify_cycle_settled(self.channel_id)
+                    except Exception as e:
+                        print(f"[Scanner] notify_cycle_settled 异常 (ch={self.channel_id}): {e}",
+                              flush=True)
+
             db.close()
         except Exception as e:
             print(f"结束周期失败: {e}")
@@ -678,4 +688,109 @@ class SessionLifecycleMixin:
         finally:
             if db:
                 db.close()
-        
+
+    # ==================== v3.1.2: 多工位广播结算联动 ====================
+
+    def force_settle_pending_cycle(self, min_items: int = 1, reason: str = "") -> int:
+        """被扫码器联动外部强制结算当前未完成的周期 / 容器.
+
+        约定:
+          - 容器模式: 逐个检查 _box_objects, 已检出件数 >= min_items 的 box 立刻 settle;
+                      件数不足的 box 留着不动 (避免上游空箱子被冤判 NG).
+          - 非容器模式: 当前已检出"在期望清单内"的物品总数 >= min_items 时, 走
+                       _settle_counting_cycle 整盘结算; 否则跳过.
+
+        防重入:
+          通过 self._force_settling_in_progress 标志, 阻止 _settle_box → end_cycle →
+          notify_cycle_settled → 又回来调本方法的循环.
+
+        返回真正被强制结算的 box 数 (容器模式) 或 1/0 (非容器模式).
+        """
+        if not getattr(self, "project_config", None):
+            return 0
+
+        # 重入检测放入口而非外面, 兼容直接被 API 调用的情形.
+        if getattr(self, "_force_settling_in_progress", False):
+            return 0
+
+        self._force_settling_in_progress = True
+        settled_count = 0
+        try:
+            pcfg = (self.project_config.get("pipeline_config") or {}) if self.project_config else {}
+            expected_items = pcfg.get("counting_expected_items", {}) or {}
+            container_label = getattr(self, "_container_label", None)
+
+            # ------- 容器模式 -------
+            if getattr(self, "_container_mode", False) and getattr(self, "_box_objects", None):
+                for box_did in list(self._box_objects.keys()):
+                    if box_did not in self._box_objects:
+                        continue
+                    bs = self._box_objects[box_did]
+                    item_count = sum((bs.get("item_class_counts") or {}).values())
+                    if item_count < max(0, int(min_items or 0)):
+                        print(
+                            f"[ForceSettle] ch{getattr(self, 'channel_id', '?')} {box_did} "
+                            f"件数 {item_count} < 阈值 {min_items}, 跳过 ({reason})",
+                            flush=True,
+                        )
+                        continue
+                    try:
+                        self._settle_box(box_did, expected_items)
+                        settled_count += 1
+                        print(
+                            f"[ForceSettle] ch{getattr(self, 'channel_id', '?')} {box_did} "
+                            f"已强制结算 (件数 {item_count}, {reason})",
+                            flush=True,
+                        )
+                    except Exception as e:
+                        print(
+                            f"[ForceSettle] ch{getattr(self, 'channel_id', '?')} {box_did} "
+                            f"结算失败: {e}",
+                            flush=True,
+                        )
+                return settled_count
+
+            # ------- 非容器 -------
+            if not getattr(self, "current_cycle_id", None):
+                return 0
+            if not getattr(self, "_tracking_cycle_active", False):
+                return 0
+
+            def _in_checklist(cn: str) -> bool:
+                if not expected_items:
+                    return True
+                return cn in expected_items
+
+            tracking_objs = getattr(self, "_tracking_objects", {}) or {}
+            total_items = sum(
+                1
+                for obj in tracking_objs.values()
+                if _in_checklist(obj.get("class_name", "")) and obj.get("class_name") != container_label
+            )
+            if total_items < max(0, int(min_items or 0)):
+                print(
+                    f"[ForceSettle] ch{getattr(self, 'channel_id', '?')} 非容器, "
+                    f"件数 {total_items} < 阈值 {min_items}, 跳过 ({reason})",
+                    flush=True,
+                )
+                return 0
+
+            try:
+                check_order = pcfg.get("tracking_check_order", False)
+                expected_order = pcfg.get("tracking_expected_order", []) or []
+                self._settle_counting_cycle(expected_items, check_order, expected_order)
+                settled_count = 1
+                print(
+                    f"[ForceSettle] ch{getattr(self, 'channel_id', '?')} 非容器周期已强制结算 "
+                    f"(件数 {total_items}, {reason})",
+                    flush=True,
+                )
+            except Exception as e:
+                print(
+                    f"[ForceSettle] ch{getattr(self, 'channel_id', '?')} 非容器结算失败: {e}",
+                    flush=True,
+                )
+            return settled_count
+        finally:
+            self._force_settling_in_progress = False
+

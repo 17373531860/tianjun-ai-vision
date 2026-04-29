@@ -166,6 +166,15 @@ class ScannerConnection:
     scan_mode: str = "continuous"
     throttle_idle_ms: int = 500
 
+    # v3.1.2 多工位广播结算联动 (仅当 broadcast_channels 非空时生效).
+    #   "independent" = 各广播工位独立结算 (默认, 旧行为).
+    #   "primary"     = 由 primary_settle_channel 指定的工位作为节拍源,
+    #                    它结算时强制带动其他广播工位结算当前周期, 实现大小件同步.
+    broadcast_settle_mode: str = "independent"
+    primary_settle_channel: Optional[int] = None
+    # 跟随结算的件数门槛: 工位当前已检出物品数 < 该值时跳过 (避免空箱被冤判 NG).
+    primary_settle_min_items: int = 1
+
     status: str = "disconnected"
     device_type: str = "text_lon"  # "text_lon"(默认), "auto", "text", "wmax"
     last_scan: str = ""
@@ -691,6 +700,70 @@ class ScannerService:
                   f"(once_per_cycle 模式, 周期结束恢复扫描)", flush=True)
         return resumed
 
+    def notify_cycle_settled(self, channel_id: int) -> list[int]:
+        """v3.1.2: 某工位刚完成结算 → 检查是否要带动其他广播工位强制结算.
+
+        触发条件 (任一扫码器满足):
+          - broadcast_channels 包含 channel_id
+          - broadcast_settle_mode == "primary"
+          - primary_settle_channel == channel_id
+
+        命中后, 把同 broadcast_channels 里其他工位调 force_settle_pending_cycle().
+        防重入: 来源 channel 本身正处于"被联动结算"状态时跳过, 由调用方在 source 侧
+                  设置 _force_settling_in_progress 标志保证不会循环.
+
+        返回真正被强制结算的 channel_id 列表.
+        """
+        triggered: list[int] = []
+        for conn in list(self._connections.values()):
+            if (conn.broadcast_settle_mode or "independent") != "primary":
+                continue
+            if conn.primary_settle_channel != channel_id:
+                continue
+            broadcast = list(conn.broadcast_channels or [])
+            if not broadcast:
+                continue
+            min_items = max(0, int(conn.primary_settle_min_items or 0))
+            for other_ch in broadcast:
+                if other_ch == channel_id:
+                    continue
+                ok = self._dispatch_force_settle(other_ch, min_items, source_channel=channel_id, scanner_name=conn.name)
+                if ok:
+                    triggered.append(other_ch)
+        return triggered
+
+    def _dispatch_force_settle(self, target_channel: int, min_items: int,
+                                source_channel: int, scanner_name: str) -> bool:
+        """通过 ChannelManager 找目标 channel 的 VideoSourceManager 并强制结算."""
+        try:
+            from backend.api.channel_manager import get_channel_manager
+        except Exception as e:
+            print(f"[Scanner] notify_cycle_settled: import ChannelManager 失败: {e}", flush=True)
+            return False
+
+        try:
+            mgr = get_channel_manager().get(target_channel)
+        except Exception:
+            return False
+        if mgr is None:
+            return False
+
+        force_fn = getattr(mgr, "force_settle_pending_cycle", None)
+        if not callable(force_fn):
+            return False
+
+        try:
+            triggered = force_fn(min_items=min_items, reason=f"primary_ch{source_channel}_via_{scanner_name}")
+        except Exception as e:
+            print(f"[Scanner] force_settle_pending_cycle ch={target_channel} 失败: {e}", flush=True)
+            return False
+
+        if triggered:
+            print(f"[Scanner] '{scanner_name}' 主工位 ch{source_channel} 结算 → "
+                  f"带动 ch{target_channel} 强制结算 (min_items={min_items}, 已结算={triggered})", flush=True)
+            return True
+        return False
+
     def clear_last_scan(self, channel_id: int) -> list[str]:
         """清除该工位绑定的扫码器的 last_scan / last_scan_time.
 
@@ -941,6 +1014,9 @@ class ScannerService:
             late_scan_bind_window_sec=int(getattr(dev, 'late_scan_bind_window_sec', 3) or 0),
             scan_mode=(getattr(dev, 'scan_mode', None) or 'continuous'),
             throttle_idle_ms=int(getattr(dev, 'throttle_idle_ms', 500) or 500),
+            broadcast_settle_mode=(getattr(dev, 'broadcast_settle_mode', None) or 'independent'),
+            primary_settle_channel=(getattr(dev, 'primary_settle_channel', None) if getattr(dev, 'primary_settle_channel', None) is not None else None),
+            primary_settle_min_items=int(getattr(dev, 'primary_settle_min_items', 1) or 1),
         )
         conn.device_type = db_device_type
         conn.parse_config["parse_mode"] = dev.parse_mode or "direct"

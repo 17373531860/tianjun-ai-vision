@@ -189,6 +189,9 @@ def _init_container_state(h):
     h._box_objects = {}
     h._box_counter = 0
     h._box_settled_results = []
+    # v3.1.2: 多工位广播结算联动 - 标识当前是否处于"被联动强制结算"中,
+    # 用于阻断 _settle_box → end_cycle → notify_cycle_settled → 又回到本工位的循环.
+    h._force_settling_in_progress = False
 
 
 def _init_cycle_time_state(h):

@@ -186,7 +186,11 @@ class ContainerGroupingMixin:
                         bs['had_roi'] = True
         
         # Per-box gone confirmation (same pattern as cycle-level settlement)
+        # 注意: _settle_box 会调 _end_cycle, _end_cycle 会清空 _box_objects,
+        # 所以同一帧内若有先后多个箱子结算, 后续 box_did 已被清掉, 必须重判 key.
         for box_did in list(self._box_objects.keys()):
+            if box_did not in self._box_objects:
+                continue
             bs = self._box_objects[box_did]
             box_visible = box_did in active_box_dids
             

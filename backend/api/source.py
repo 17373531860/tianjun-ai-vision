@@ -615,20 +615,30 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # 生成时机比推理线程先启动, fps_inference 可能还是 0, 用 10 作为默认估算
         fps = max(self.fps_inference, 10)
         track_buffer = max(30, int(max_lost_sec * fps))
+
+        # v3.1.2: match_thresh 暴露到项目设置 (容器/多目标场景下放低能减少 ID 漂移,
+        #         默认 0.8 是 ByteTrack 官方默认, 现场可调到 0.5~0.95 之间)
+        try:
+            match_thresh = float(pipeline_config.get('tracking_match_thresh', 0.8))
+        except (TypeError, ValueError):
+            match_thresh = 0.8
+        match_thresh = max(0.1, min(0.99, match_thresh))
+
         yaml_content = (
             f"tracker_type: bytetrack\n"
             f"track_high_thresh: 0.25\n"
             f"track_low_thresh: 0.1\n"
             f"new_track_thresh: 0.25\n"
             f"track_buffer: {track_buffer}\n"
-            f"match_thresh: 0.8\n"
+            f"match_thresh: {match_thresh}\n"
             f"fuse_score: true\n"
         )
         yaml_path = os.path.join(tempfile.gettempdir(), f'bytetrack_custom_{id(self)}.yaml')
         with open(yaml_path, 'w') as f:
             f.write(yaml_content)
         self._custom_tracker_yaml = yaml_path
-        print(f"[Tracking] Custom tracker config: track_buffer={track_buffer} (max_lost={max_lost_sec}s, fps={fps:.0f})")
+        print(f"[Tracking] Custom tracker config: track_buffer={track_buffer} match_thresh={match_thresh} "
+              f"(max_lost={max_lost_sec}s, fps={fps:.0f})")
 
     @staticmethod
     def _bbox_iou(a: dict, b: dict) -> float:

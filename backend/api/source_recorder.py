@@ -51,6 +51,9 @@ class FFmpegRecorder:
         self._is_open = False
         self._frame_count = 0
         self.last_error = ""
+        # v3.1.2: 保留 ffmpeg stderr 最后 20 行, 出错时能看到原因 (避免之前那种全静默)
+        self._stderr_lines: list = []
+        self._stderr_thread = None
 
     def open(self) -> bool:
         """启动 FFmpeg 进程"""
@@ -80,12 +83,17 @@ class FFmpegRecorder:
                 cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 bufsize=10**6
             )
             self._is_open = True
             self._frame_count = 0
             self.last_error = ""
+            self._stderr_lines = []
+            self._stderr_thread = threading.Thread(
+                target=self._drain_stderr, daemon=True, name=f"ffmpeg-stderr-{os.path.basename(self.filepath)}"
+            )
+            self._stderr_thread.start()
             print(f"[FFmpeg录制] 已启动: {os.path.basename(self.filepath)}")
             return True
         except Exception as e:
@@ -120,6 +128,26 @@ class FFmpegRecorder:
             self.last_error = f"write_exception: {e}"
             return False
 
+    def _drain_stderr(self):
+        """后台线程: 持续读 ffmpeg stderr, 只保留最后 20 行用于诊断."""
+        proc = self.process
+        if proc is None or proc.stderr is None:
+            return
+        try:
+            for raw in iter(proc.stderr.readline, b''):
+                if not raw:
+                    break
+                try:
+                    text = raw.decode('utf-8', errors='replace').rstrip()
+                except Exception:
+                    text = str(raw)
+                if text:
+                    self._stderr_lines.append(text)
+                    if len(self._stderr_lines) > 20:
+                        del self._stderr_lines[:-20]
+        except Exception:
+            pass
+
     def release(self):
         """关闭录制器"""
         with self._lock:
@@ -146,6 +174,11 @@ class FFmpegRecorder:
                     self.process = None
             self._is_open = False
             print(f"[FFmpeg录制] 已停止: {os.path.basename(self.filepath)}, 共 {self._frame_count} 帧")
+            # v3.1.2: 0 帧时打印 ffmpeg stderr, 便于现场排查 (只在异常情况下打, 正常录制不刷屏)
+            if self._frame_count == 0 and self._stderr_lines:
+                print(f"[FFmpeg录制] !!! 0 帧异常, ffmpeg stderr 末尾 {len(self._stderr_lines)} 行:")
+                for line in self._stderr_lines:
+                    print(f"  | {line}")
 
     def isOpened(self) -> bool:
         """检查是否正在录制"""
