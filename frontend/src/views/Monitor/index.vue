@@ -24,6 +24,43 @@
           <span class="ml-auto text-gray-400">FPS: {{ multiChannelData[ch - 1]?.fps ?? 0 }}</span>
         </div>
       </div>
+      <!-- v3.1.3: per-channel MES 信息条 (工件号 / 未绑码警告 / 等待扫码 / 清除按钮) -->
+      <div v-if="shouldShowMesBarFor(ch - 1)"
+           class="bg-slate-900 border border-cyan-800/50 rounded-lg px-2 py-1 flex items-center gap-3 text-xs flex-shrink-0">
+        <div v-if="getDisplayWorkpieceFor(ch - 1)" class="flex items-center gap-1.5 min-w-0">
+          <span class="text-cyan-400 font-bold">工件:</span>
+          <span class="font-mono text-white truncate" :title="getDisplayWorkpieceFor(ch - 1).serial_no">{{ getDisplayWorkpieceFor(ch - 1).serial_no }}</span>
+          <el-tag :type="getDisplayWorkpieceFor(ch - 1).status === 'ok' ? 'success' : getDisplayWorkpieceFor(ch - 1).status === 'ng' ? 'danger' : getDisplayWorkpieceFor(ch - 1).status === 'inspecting' ? 'warning' : 'info'" size="small">
+            {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(ch - 1).status] || getDisplayWorkpieceFor(ch - 1).status }}
+          </el-tag>
+        </div>
+        <div v-if="getMesDataFor(ch - 1)?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-1 bg-yellow-600/30 border border-yellow-500 rounded px-2 py-0.5">
+          <span class="text-yellow-300 font-bold">⚠ 未绑码</span>
+          <span class="text-yellow-200">请扫描工件条码</span>
+        </div>
+        <div v-else-if="!getDisplayWorkpieceFor(ch - 1) && !getMesDataFor(ch - 1)?.order" class="text-gray-500">等待扫码...</div>
+        <div v-if="getMesDataFor(ch - 1)?.order" class="flex items-center gap-1 text-[0.625rem] ml-auto pl-2 border-l border-cyan-800/40">
+          <span class="text-cyan-400">工单:</span>
+          <span class="text-white truncate max-w-[80px]" :title="getMesDataFor(ch - 1).order.order_no">{{ getMesDataFor(ch - 1).order.order_no }}</span>
+          <span class="text-gray-400">{{ getMesDataFor(ch - 1).order.completed_qty }}/{{ getMesDataFor(ch - 1).order.planned_qty }}</span>
+        </div>
+        <el-tooltip
+          :content="getDisplayWorkpieceFor(ch - 1) && getDisplayWorkpieceFor(ch - 1).status === 'inspecting'
+            ? '本次工件已开始检测，点击可作废本次检测、回到等待扫码状态'
+            : '清除待检/扫码状态，让操作员重扫一次条码'"
+          placement="top"
+        >
+          <el-button
+            :class="getMesDataFor(ch - 1)?.order ? '' : 'ml-auto'"
+            size="small"
+            type="warning"
+            plain
+            @click.stop="clearPendingScan(ch - 1)"
+          >
+            清除
+          </el-button>
+        </el-tooltip>
+      </div>
       <!-- Row 1: Counters (scrollable) + Yield Rate -->
       <div class="flex gap-2 flex-shrink-0">
         <div class="flex-1 flex gap-2 overflow-x-auto min-w-0">
@@ -190,6 +227,24 @@
           <span class="text-white font-mono">NG:<span class="text-red-400 font-bold">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</span></span>
           <span class="ml-auto text-gray-400">FPS:{{ multiChannelData[ch - 1]?.fps ?? 0 }}</span>
         </div>
+        <!-- v3.1.3: 4 工位每个小卡片在视频上沿额外显示一行 工件号 / 未绑码 / 等待扫码 -->
+        <div v-if="shouldShowMesBarFor(ch - 1)"
+             class="absolute top-7 left-1 right-1 bg-slate-900/85 border border-cyan-800/50 rounded px-1.5 py-0.5 flex items-center gap-1.5 text-[0.625rem] z-10">
+          <template v-if="getDisplayWorkpieceFor(ch - 1)">
+            <span class="text-cyan-400 font-bold">工件</span>
+            <span class="font-mono text-white truncate min-w-0" :title="getDisplayWorkpieceFor(ch - 1).serial_no">{{ getDisplayWorkpieceFor(ch - 1).serial_no }}</span>
+            <span class="ml-auto px-1 rounded font-bold"
+                  :class="getDisplayWorkpieceFor(ch - 1).status === 'ok' ? 'bg-green-700 text-green-100' : getDisplayWorkpieceFor(ch - 1).status === 'ng' ? 'bg-red-700 text-red-100' : getDisplayWorkpieceFor(ch - 1).status === 'inspecting' ? 'bg-yellow-700 text-yellow-100' : 'bg-slate-700 text-gray-300'">
+              {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(ch - 1).status] || getDisplayWorkpieceFor(ch - 1).status }}
+            </span>
+          </template>
+          <template v-else-if="getMesDataFor(ch - 1)?.warn_no_barcode">
+            <span class="warn-no-barcode-blink text-yellow-300 font-bold w-full text-center">⚠ 未绑码 请扫描</span>
+          </template>
+          <template v-else>
+            <span class="text-gray-400 w-full text-center">等待扫码...</span>
+          </template>
+        </div>
         <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
           <div class="absolute z-50 pointer-events-none flex flex-col gap-1" :class="getMultiPositionClass(position)">
             <transition-group name="toast">
@@ -208,9 +263,25 @@
     </div>
     <!-- Selected channel detail panel -->
     <div class="h-64 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col flex-shrink-0">
-      <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex items-center gap-3">
+      <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex items-center gap-3 flex-wrap">
         <span class="text-cyan-400 font-bold text-sm">工位 {{ selectedChannel + 1 }} 详情</span>
         <span class="text-[0.625rem] bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ getDisplayCT(multiChannelData[selectedChannel]) }}</span>
+        <!-- v3.1.3: 选中工位完整 MES 信息条 -->
+        <template v-if="shouldShowMesBarFor(selectedChannel)">
+          <span class="h-4 w-px bg-slate-600"></span>
+          <div v-if="getDisplayWorkpieceFor(selectedChannel)" class="flex items-center gap-1 text-xs">
+            <span class="text-cyan-400 font-bold">工件:</span>
+            <span class="font-mono text-white">{{ getDisplayWorkpieceFor(selectedChannel).serial_no }}</span>
+            <el-tag :type="getDisplayWorkpieceFor(selectedChannel).status === 'ok' ? 'success' : getDisplayWorkpieceFor(selectedChannel).status === 'ng' ? 'danger' : getDisplayWorkpieceFor(selectedChannel).status === 'inspecting' ? 'warning' : 'info'" size="small">
+              {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(selectedChannel).status] || getDisplayWorkpieceFor(selectedChannel).status }}
+            </el-tag>
+          </div>
+          <div v-if="getMesDataFor(selectedChannel)?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-1 bg-yellow-600/30 border border-yellow-500 rounded px-2 py-0.5 text-xs">
+            <span class="text-yellow-300 font-bold">⚠ 未绑码</span>
+          </div>
+          <div v-else-if="!getDisplayWorkpieceFor(selectedChannel) && !getMesDataFor(selectedChannel)?.order" class="text-gray-500 text-xs">等待扫码...</div>
+          <el-button size="small" type="warning" plain @click="clearPendingScan(selectedChannel)">清除本次扫码</el-button>
+        </template>
         <div class="ml-auto flex gap-1.5">
           <button @click="startDetectionForChannel(selectedChannel)" :disabled="(!multiChannelData[selectedChannel]?.project && !currentProject) || multiChannelData[selectedChannel]?.isDetecting"
             class="bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[0.625rem] font-bold">开始</button>
@@ -1231,9 +1302,32 @@ const processChannelResult = (ch, d) => {
     chData.projectName = d.project_config.project_name;
   }
   const ctrs = d.counters || {};
-  chData.total = ctrs['总产量'] ?? 0;
+  // v3.1.3: 多工位下也按 channel 维护 OK/NG hold (跟单工位一致),
+  // 总产量从 N → N+1 时, 把当前 mes.workpiece 用 OK/NG 标签覆盖 3.5s,
+  // 然后清空让 UI 显示 "等待扫码..."
+  const prevTotal = multiChannelData.value[ch]?.total ?? -1;
+  const prevNg = multiChannelData.value[ch]?.ng ?? -1;
+  const newTotal = ctrs['总产量'] ?? 0;
+  const newNg = ctrs['不良总数'] ?? 0;
+  if (channelCount.value > 1 && prevTotal >= 0 && newTotal > prevTotal) {
+    const cycleIsNg = prevNg >= 0 && newNg > prevNg;
+    const realWp = d.mes?.workpiece;
+    if (realWp) {
+      if (workpieceOverrideTimers[ch]) { clearTimeout(workpieceOverrideTimers[ch]); workpieceOverrideTimers[ch] = null; }
+      if (workpieceHideTimers[ch]) { clearTimeout(workpieceHideTimers[ch]); workpieceHideTimers[ch] = null; }
+      workpieceOverridesByCh.value = {
+        ...workpieceOverridesByCh.value,
+        [ch]: { ...realWp, status: cycleIsNg ? 'ng' : 'ok' },
+      };
+      workpieceHideTimers[ch] = setTimeout(() => {
+        workpieceOverridesByCh.value = { ...workpieceOverridesByCh.value, [ch]: null };
+        workpieceHideTimers[ch] = null;
+      }, WORKPIECE_RESULT_HOLD_MS);
+    }
+  }
+  chData.total = newTotal;
   chData.ok = ctrs['合格总数'] ?? 0;
-  chData.ng = ctrs['不良总数'] ?? 0;
+  chData.ng = newNg;
   chData.counters = ctrs;
   chData.avgCycleTime = d.average_cycle_time || 0;
   chData.avgCycleTimeWithNg = d.average_cycle_time_with_ng || 0;
@@ -1245,6 +1339,17 @@ const processChannelResult = (ch, d) => {
   if (d.tracking) chData.tracking = d.tracking;
 
   // MES 实时数据 — 每个工位各自显示，不限 selectedChannel
+  // v3.1.3: 新扫码来了 (serial_no 从 X → Y), 清掉残留的 override 恢复默认显示
+  const prevSn = multiChannelData.value[ch]?.mes?.workpiece?.serial_no;
+  const newSn = d.mes?.workpiece?.serial_no;
+  if (newSn && newSn !== prevSn && ch in workpieceOverridesByCh.value) {
+    if (workpieceOverrideTimers[ch]) { clearTimeout(workpieceOverrideTimers[ch]); workpieceOverrideTimers[ch] = null; }
+    if (workpieceHideTimers[ch]) { clearTimeout(workpieceHideTimers[ch]); workpieceHideTimers[ch] = null; }
+    const next = { ...workpieceOverridesByCh.value };
+    delete next[ch];
+    workpieceOverridesByCh.value = next;
+  }
+
   chData.mes = d.mes || null;
   if (d.mes) {
     if (d.mes.scan_event) {
@@ -1277,6 +1382,25 @@ const processChannelResult = (ch, d) => {
   }
   chData.allCounters = allC;
 
+  // v3.1.3: 跟踪模式下,后端不推 _currentCycleSteps,改用 tracking.item_checklist
+  // 把 counted > 0 的步骤翻成 completed/OK,避免步骤一直停在"--/待检测"
+  const _isTracking = (d.project_config?.logic_mode || currentProject.value?.logic_mode) === 'tracking';
+  const _trackChecklist = _isTracking ? (d.tracking?.item_checklist || {}) : null;
+  const _trackBoxes = _isTracking ? (d.tracking?.boxes || {}) : null;
+  const _isContainer = _isTracking && !!d.tracking?.container_mode;
+  const _trackHit = (label) => {
+    if (!_isTracking) return false;
+    if (_isContainer && _trackBoxes) {
+      // 容器模式: 任意箱子里 counted > 0 即视为已检测
+      for (const bid of Object.keys(_trackBoxes)) {
+        const items = _trackChecklist?._boxes?.[bid]?.items;
+        if (items && items[label] && items[label].counted > 0) return true;
+      }
+      return false;
+    }
+    return !!(_trackChecklist?.[label] && _trackChecklist[label].counted > 0);
+  };
+
   if (d.detections) {
     const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
     const stMap = {};
@@ -1284,11 +1408,12 @@ const processChannelResult = (ch, d) => {
     const td = stepsConf.filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view).map((s) => {
       const inCycle = chData.currentCycleSteps.includes(s.label);
       const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
+      const trackHit = _trackHit(s.label);
       return {
         step: s.displayLabel || s.label,
         label: s.label,
-        status: inCycle || coveredByBackup ? 'completed' : 'pending',
-        cycleResult: null,
+        status: (inCycle || coveredByBackup || trackHit) ? 'completed' : 'pending',
+        cycleResult: trackHit ? 'ok' : null,
       };
     });
     chData.tableData = td;
@@ -1300,11 +1425,12 @@ const processChannelResult = (ch, d) => {
     const sopSteps = stepsConf.filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view).map(s => {
       const inCycle = chData.currentCycleSteps.includes(s.label);
       const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
+      const trackHit = _trackHit(s.label);
       const rawB64 = screenshots[s.label];
       return {
         name: s.displayLabel || s.label,
         label: s.label,
-        status: inCycle || coveredByBackup ? 'completed' : 'pending',
+        status: (inCycle || coveredByBackup || trackHit) ? 'completed' : 'pending',
         screenshot: rawB64 ? `data:image/jpeg;base64,${rawB64}` : null,
       };
     });
@@ -1603,15 +1729,63 @@ const mesData = computed(() => multiChannelData.value[selectedChannel.value]?.me
 
 // 工件卡片显示覆盖：周期结束时先把最终结果 OK/NG 覆盖上去保留几秒，然后清空让 UI 回到"等待扫码..."
 // undefined = 跟随 mesData.workpiece；object = 强制显示这个快照；null = 强制隐藏（显示等待扫码提示）
-const workpieceOverride = ref(undefined);
-let workpieceOverrideTimer = null;
-let workpieceHideTimer = null;
+//
+// v3.1.3: 改为按 channel 索引存储 (workpieceOverridesByCh: Record<channelId, override>),
+// 让双工位/4 工位每个工位都有自己的"等待扫码..."/OK/NG 显示状态.
+// 现有 workpieceOverride 计算属性指向 selectedChannel 的 override (向后兼容旧代码).
+const workpieceOverridesByCh = ref({});
+const workpieceOverrideTimers = {};   // {ch: timeoutId} for OK/NG hold
+const workpieceHideTimers = {};       // {ch: timeoutId} for hide-after-hold
 const WORKPIECE_RESULT_HOLD_MS = 3500;  // 结果 OK/NG 标签保留时长
 
+const workpieceOverride = computed({
+  get: () => {
+    const ch = selectedChannel.value;
+    return ch in workpieceOverridesByCh.value ? workpieceOverridesByCh.value[ch] : undefined;
+  },
+  set: (v) => {
+    const ch = selectedChannel.value;
+    if (v === undefined) {
+      delete workpieceOverridesByCh.value[ch];
+    } else {
+      workpieceOverridesByCh.value[ch] = v;
+    }
+  },
+});
+
+// 旧的 workpieceOverrideTimer / workpieceHideTimer 通过 channel-aware getter/setter 提供,
+// 仍然只代理 selectedChannel 的 timer (旧代码路径 = 单工位, 等价语义不变).
+let workpieceOverrideTimer = null;
+let workpieceHideTimer = null;
+
+// per-channel 工件展示 helper (双工位/4 工位每个 ch 用各自的数据)
+function getMesDataFor(ch) {
+  return multiChannelData.value[ch]?.mes || null;
+}
+function getDisplayWorkpieceFor(ch) {
+  const ov = workpieceOverridesByCh.value[ch];
+  if (ov === null) return null;            // 强制"等待扫码..."
+  if (ov) return ov;                       // OK/NG 临时快照
+  return multiChannelData.value[ch]?.mes?.workpiece || null;
+}
+function shouldShowMesBarFor(ch) {
+  const mes = getMesDataFor(ch);
+  const wp = getDisplayWorkpieceFor(ch);
+  if (wp) return true;
+  if (mes?.order) return true;
+  if (mes?.warn_no_barcode) return true;
+  if (workpieceOverridesByCh.value[ch] === null) return true;  // 显示"等待扫码"
+  // v3.1.3: 多工位下只要工位在跑就显示信息条 (默认 "等待扫码..."),
+  // 让客户能直观看到这一栏的存在 (单工位另有路径已显示)
+  if (channelCount.value > 1) {
+    const ch_data = multiChannelData.value[ch];
+    if (ch_data?.isRunning || ch_data?.isDetecting) return true;
+  }
+  return false;
+}
+
 const displayWorkpiece = computed(() => {
-  if (workpieceOverride.value === null) return null;
-  if (workpieceOverride.value) return workpieceOverride.value;
-  return mesData.value?.workpiece || null;
+  return getDisplayWorkpieceFor(selectedChannel.value);
 });
 
 // 真实工件变化（新扫码绑了新工件）立即恢复默认显示，清掉残留的 override
@@ -2872,9 +3046,10 @@ const clearPendingScan = async (ch) => {
       multiChannelData.value[idx].mes.workpiece = null;
       multiChannelData.value[idx].mes.scan_event = null;
     }
-    workpieceOverride.value = null;
-    if (workpieceOverrideTimer) { clearTimeout(workpieceOverrideTimer); workpieceOverrideTimer = null; }
-    if (workpieceHideTimer) { clearTimeout(workpieceHideTimer); workpieceHideTimer = null; }
+    // v3.1.3: 多工位下清掉指定 ch 的 override + timer; 单工位走 selectedChannel
+    workpieceOverridesByCh.value = { ...workpieceOverridesByCh.value, [idx]: null };
+    if (workpieceOverrideTimers[idx]) { clearTimeout(workpieceOverrideTimers[idx]); workpieceOverrideTimers[idx] = null; }
+    if (workpieceHideTimers[idx]) { clearTimeout(workpieceHideTimers[idx]); workpieceHideTimers[idx] = null; }
   } catch (e) {
     ElMessage.error('清除失败: ' + (e.response?.data?.detail || e.message || '未知错误'));
   }
@@ -3050,6 +3225,37 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       
       if (tableData.value[idx]) {
         tableData.value[idx].count = count;
+      }
+    });
+  }
+
+  // v3.1.3: 跟踪模式补丁 — 跟踪模式不发 _currentCycleSteps,
+  // 用 trackingChecklist (普通模式) / trackingChecklist._boxes (容器模式) 中
+  // counted > 0 来翻 step "已检测/OK"
+  if (isTrackingMode.value) {
+    const checklist = trackingChecklist.value || {};
+    const boxes = trackingBoxes.value || {};
+    const isContainer = !!trackingContainerMode.value;
+    const trackHit = (label) => {
+      if (isContainer) {
+        const boxesMap = checklist._boxes || {};
+        for (const bid of Object.keys(boxes)) {
+          const items = boxesMap[bid]?.items;
+          if (items && items[label] && items[label].counted > 0) return true;
+        }
+        return false;
+      }
+      return !!(checklist[label] && checklist[label].counted > 0);
+    };
+    steps.value.forEach((step, idx) => {
+      const label = step.label || step.name;
+      if (trackHit(label)) {
+        step.status = 'completed';
+        step.cycleResult = 'ok';
+        if (tableData.value[idx]) {
+          tableData.value[idx].status = 'completed';
+          tableData.value[idx].cycleResult = 'ok';
+        }
       }
     });
   }

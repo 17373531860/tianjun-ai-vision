@@ -11,6 +11,11 @@ cd "$(dirname "$0")"
 # 设置 Python 路径
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 
+# v3.1.3: 强制 OpenCV 内置 ffmpeg 单线程解码,避免视频文件回放时偶发的
+# "Assertion fctx->async_lock failed at libavcodec/pthread_frame.c:175" SIGABRT
+# 触发后会把 uvicorn worker 子进程整个 abort 掉,--reload 模式下不会自动复活
+export OPENCV_FFMPEG_CAPTURE_OPTIONS="threads;1"
+
 # 清理旧进程 (启动前自动杀死占用端口的进程)
 cleanup() {
     echo ""

@@ -1,0 +1,96 @@
+{
+  "version": "3.1.3",
+  "date": "2026-04-29",
+  "previous_version": "3.1.2",
+  "changes": [
+    {
+      "type": "bug",
+      "id": "BUG-313-001",
+      "title": "修复 ffmpeg 多线程解码偶发断言导致 uvicorn worker 崩溃 / 8001 永久卡死",
+      "symptom": "终端瞬间刷出 [swscaler] bad src image pointers 加 Assertion fctx->async_lock failed at libavcodec/pthread_frame.c:175, 之后 lsof :8001 仍 LISTEN 但所有 API 请求 timeout, 前端 MJPEG 黑屏。pstree 看 uvicorn worker 子进程已经是 <defunct> 僵尸。",
+      "root_cause": "OpenCV 内置 ffmpeg 启用了多线程解码 (libavcodec frame-level threading), 某些视频文件 / seek 时序下 pthread_frame.c:175 的 assert(fctx->async_lock) 会失败, C assert() 触发 SIGABRT 把 uvicorn worker 子进程整个 abort 退出。--reload 模式 reloader 主进程只监视文件变化不监控 worker 存活, 8001 端口由主进程持有依然 LISTEN, accept 后无人处理 → 永久 timeout。",
+      "fix": "启动时 os.environ.setdefault('OPENCV_FFMPEG_CAPTURE_OPTIONS', 'threads;1'), 强制 OpenCV 调 ffmpeg 用单线程解码, 直接消除 pthread_frame 那条断言。在 backend/main.py 顶端 (cv2 被任何模块间接 import 之前) 兜底, start_backend.sh 也 export 同名 env (双保险, 客户包/开发机都覆盖)。",
+      "files": [
+        "backend/main.py",
+        "start_backend.sh"
+      ],
+      "keywords": [
+        "ffmpeg pthread_frame", "libavcodec async_lock",
+        "swscaler bad src image pointers", "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+        "uvicorn worker SIGABRT", "8001 LISTEN 但 timeout",
+        "<defunct> 僵尸 worker", "视频回放崩溃",
+        "--reload 不复活 worker"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bug",
+      "id": "BUG-313-002",
+      "title": "修复跟踪模式下步骤统计表永远停在 --/待检测 不翻 OK",
+      "symptom": "项目 logic_mode=tracking, 镜头里出现某标签, 物品清点卡片 counted 已涨, 但右侧步骤统计表的状态列始终 --, 结果列始终空。双工位 / 四工位卡片 2 列表也一样不翻 OK。",
+      "root_cause": "步骤表的 tableData[i].status 在 updateStepsFromBackend / updateAllChannels 里只靠 backendCounters._currentCycleSteps (后端 current_cycle_steps) 驱动, 而该字段是 detection / SOP 模式专用 — 跟踪模式从来不推。跟踪模式真正的进度信息推到 tracking.item_checklist, 但只有 line 576 的物品清点卡片在用, 步骤表没接通。",
+      "fix": "在两条更新路径加跟踪模式补丁: 当 tracking.item_checklist[label].counted > 0 (普通) 或 _boxes[bid].items[label].counted > 0 (容器, 任意箱子算命中) 时, 把对应步骤翻成 status='completed' + cycleResult='ok'。覆盖单工位 SOP 卡片 + 步骤统计表 / 双工位与四工位卡片 2 列表 / 详情面板表。",
+      "files": [
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": [
+        "tracking 模式步骤不翻 OK",
+        "_currentCycleSteps detection 专用",
+        "tracking.item_checklist counted",
+        "步骤统计表",
+        "双工位卡片 2 列表",
+        "容器模式 _boxes items"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-313-001",
+      "title": "多工位 Monitor 加 per-channel MES 信息条 (与单工位行为对齐)",
+      "symptom": "客户双 / 四工位现场反馈, 单工位下方'操作员 → 工件号 / 未绑码 / 等待扫码'提示条非常关键, 但多工位模板没有, 工人无法快速看到当前工位是否扫码、绑了哪个工件号、扫码异常时的红字告警。",
+      "root_cause": "Monitor/index.vue 多工位模板 (channelCount === 2 与 channelCount > 2) 历史上只渲染了视频 + 计数器行, 没有 MES 信息条; workpieceOverride OK/NG 3.5s hold 也只在单工位的 updateStepsFromBackend 实现, 多工位的 updateAllChannels 路径没接。",
+      "fix": "新增 getMesDataFor(ch) / getDisplayWorkpieceFor(ch) / shouldShowMesBarFor(ch) 工具方法 + per-channel 状态 (workpieceOverridesByCh / workpieceOverrideTimers / workpieceHideTimers, 用 dict-by-channel 取代单 ref)。双工位每个工位插一行紧凑 MES 条 (工件号 + OK/NG 标签 + 未绑码红字 + 订单进度 + 等待扫码 + 清除按钮); 四工位每个卡片视频上沿一行超紧凑标签, 选中工位详情面板顶部一行完整 MES 条。OK / NG 3.5s hold 跟单工位完全一致 (总产量 N → N+1 时把 mes.workpiece 用 OK/NG 状态覆盖 3.5s, 然后清空回到等待扫码)。显示条件放宽: 工位 isRunning || isDetecting 即显示, 不要求'必须有 workpiece 或扫码事件', 避免画面空白让工人误以为系统没启动。",
+      "files": [
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": [
+        "多工位 MES 信息条",
+        "per-channel workpieceOverride",
+        "workpieceOverridesByCh",
+        "shouldShowMesBarFor",
+        "getDisplayWorkpieceFor",
+        "OK NG 3.5s hold 多工位对齐",
+        "未绑码 warn_no_barcode",
+        "等待扫码 占位",
+        "清除按钮 clearPendingScan"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CONFIG-313-001",
+      "title": "版本号升级到 3.1.3",
+      "symptom": "patch 级别 2 个 bug 修复 + 1 个新特性, 不破坏老行为, bump version。",
+      "root_cause": "v3.1.2 之后修了 1 个 worker 崩溃 + 1 个跟踪模式 UI 不翻 OK + 1 个多工位 MES 条对齐。",
+      "fix": "electron/package.json + electron/splash.html 更新到 3.1.3。",
+      "files": [
+        "electron/package.json",
+        "electron/splash.html"
+      ],
+      "keywords": ["version bump", "3.1.3"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/main.py",
+    "start_backend.sh",
+    "frontend/src/views/Monitor/index.vue",
+    "electron/package.json",
+    "electron/splash.html",
+    "docs/changelog/v3.1.3_2026-04-29.md",
+    "docs/changelog/v3.1.3_2026-04-29.json",
+    "docs/CHANGELOG.md"
+  ],
+  "db_migrations": []
+}

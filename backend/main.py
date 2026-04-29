@@ -1,3 +1,8 @@
+import os as _bootstrap_os
+# v3.1.3: 在 cv2 / ffmpeg 被(间接)导入之前就锁定单线程解码,
+# 防止视频文件回放偶发的 libavcodec pthread_frame.c:175 断言把 worker 整个 abort 掉
+_bootstrap_os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "threads;1")
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles

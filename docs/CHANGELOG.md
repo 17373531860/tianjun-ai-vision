@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.1.3 (2026-04-29)
+- [BUG-313-001] 修复: ffmpeg 多线程解码偶发断言 SIGABRT 导致 uvicorn worker 崩溃 / 8001 永久卡死 (强制单线程解码兜底)
+- [BUG-313-002] 修复: 跟踪模式下"步骤统计"表永远停在 `--/待检测`, 改用 `tracking.item_checklist` 翻 OK
+- [FEAT-313-001] 新增: 多工位 Monitor per-channel MES 信息条 (工件号/未绑码/等待扫码/清除按钮 + OK/NG 3.5s hold), 与单工位行为对齐
+- [CONFIG-313-001] 配置: 版本号升级到 3.1.3
+
 ## v3.1.2 (2026-04-29)
 - [BUG-312-001] 修复: 容器分组迭代过程中并发删除导致 `KeyError: '泡沫槽3'`
 - [BUG-312-002] 修复: 客户机录制视频全是 0 帧 / 播放失败 (NameError 被吞 + FFmpeg stderr 屏蔽 三层叠加)
