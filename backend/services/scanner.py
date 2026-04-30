@@ -557,6 +557,14 @@ class ScannerService:
         for conn in targets:
             conn._scanning = True
             if conn.device_type == "text_lon":
+                # v3.4.1: D 模式下 LON 由 source._scan_d_update 按 box 跨线触发
+                # 主动调 send_lon_for_channel 发, start_scanning 不在这里发 LON
+                # (一开始灯保持灭, 等第一个 box 跨线/进区域才亮).
+                if (conn.scan_mode or 'continuous') == 'D':
+                    print(f"[Scanner/text_lon] {conn.name} D 模式 start_scanning: "
+                          f"不发 LON (等 box 跨线触发)", flush=True)
+                    conn._lon_sent = False
+                    continue
                 # text_lon: 直接同步发 LON, 不依赖 listen loop 的 _lon_sent 状态机
                 if self._text_lon_send(conn, b"LON\r\n", "LON (开始扫码)"):
                     conn._lon_sent = True
@@ -1284,11 +1292,18 @@ class ScannerService:
             # 'ERROR' = 扫码器本轮无码超时, 不是条码 → 不进 _on_data_received.
             # 三种模式下都要续 LON 否则扫码器会"睡死". once_per_cycle 模式下
             # ERROR 也续 LON (因为 ERROR 不算"扫到一个有效码", 不该锁住等周期结束).
+            # v3.4.1: D 模式下 ERROR 不续 LON (LON 由 source._scan_d_update 按
+            # box 跨线主动触发); 仅 log, 保持 _lon_sent 当前状态不动.
             if text.upper() == "ERROR":
                 if getattr(conn, '_wait_cycle_resume', False):
                     # 罕见: 已经在等周期, 又收到一个 ERROR, 不动.
                     return
                 mode = getattr(conn, 'scan_mode', 'continuous') or 'continuous'
+                if mode == 'D':
+                    # D 模式 ERROR: 表示本次 LON 窗口扫码器没看到码, 灯应当自然
+                    # 进入"未亮"状态等下次 box 跨线再 send_lon_for_channel.
+                    # 不动 _lon_sent / _next_lon_after, listen 主循环不会续 LON.
+                    return
                 if mode == "throttled":
                     conn._next_lon_after = time.monotonic() + max(0, conn.throttle_idle_ms) / 1000.0
                 else:
@@ -1302,12 +1317,16 @@ class ScannerService:
             _schedule_next_lon()
 
         # v2.7.16: LON/LOFF 发送主入口在 service 层 (start_scanning / stop_scanning).
-        # listen loop 只负责"续发 LON"维持扫描状态, 三种模式控制续发节奏:
+        # listen loop 只负责"续发 LON"维持扫描状态, 四种模式控制续发节奏:
         #   continuous     : 收到 ERROR / 码后, 立刻续 LON
         #   throttled      : 同上但每次延迟 throttle_idle_ms 毫秒, 灯闪慢一点
         #   once_per_cycle : 扫到一个真码后 LOFF + 等 cycle_end 解锁
+        #   D              : v3.4.1 LON 由 source._scan_d_update 按 box 跨线/进区域
+        #                    主动调 send_lon_for_channel 触发, listen loop 不续发
         while not conn._stop_event.is_set():
+            _mode_now = getattr(conn, 'scan_mode', 'continuous') or 'continuous'
             if (conn._scanning
+                    and _mode_now != 'D'
                     and not getattr(conn, '_lon_sent', False)
                     and not getattr(conn, '_wait_cycle_resume', False)
                     and time.monotonic() >= getattr(conn, '_next_lon_after', 0.0)):

@@ -592,10 +592,25 @@ class ContainerGroupingMixin:
             cy = bbox.get('y', 0) + bbox.get('h', 0) / 2.0
 
             st = self._scan_d_box_states.get(box_did)
-            if st is None:
+            first_seen = st is None
+            if first_seen:
                 st = {"side": 0, "in_zone": None, "armed": False,
                       "scanned": False, "gone_frames": 0}
                 self._scan_d_box_states[box_did] = st
+                # v3.4.1 诊断: 新 box 首次进入 D 状态机, 打印初始几何关系
+                if geometry == 'line':
+                    init_side = line_check(cx, cy)
+                    side_label = 'A(蓝)' if init_side == 1 else (
+                        'B(橙)' if init_side == -1 else '线上/未知')
+                    need_dir = 'A→B' if side_a_to_b else 'B→A'
+                    print(f"[ScanD] ch{getattr(self,'channel_id','?')} {box_did} 首次"
+                          f"出现 (cx={cx:.0f},cy={cy:.0f}) side={side_label}, "
+                          f"配置方向={need_dir}, 等待跨线...", flush=True)
+                else:
+                    in_zone = self._point_in_polygon(cx, cy, zone_polygon)
+                    print(f"[ScanD] ch{getattr(self,'channel_id','?')} {box_did} 首次"
+                          f"出现 (cx={cx:.0f},cy={cy:.0f}) in_zone={in_zone}, "
+                          f"等待进入区域...", flush=True)
             st['gone_frames'] = 0  # 还在画面里, 重置
 
             if st.get('armed') or st.get('scanned'):
@@ -615,6 +630,14 @@ class ContainerGroupingMixin:
                         triggered = True
                     elif (not side_a_to_b) and prev_side == -1 and cur_side == 1:
                         triggered = True
+                    else:
+                        # v3.4.1 诊断: 跨线了, 但方向反 → 提示用户配置可能选反
+                        prev_label = 'A(蓝)' if prev_side == 1 else 'B(橙)'
+                        cur_label = 'A(蓝)' if cur_side == 1 else 'B(橙)'
+                        need_dir = 'A→B' if side_a_to_b else 'B→A'
+                        print(f"[ScanD] ch{getattr(self,'channel_id','?')} {box_did} "
+                              f"跨线方向={prev_label}→{cur_label}, 但配置要求={need_dir}, "
+                              f"未触发 (是不是把方向选反了?)", flush=True)
                 st['side'] = cur_side
             else:
                 cur_in = self._point_in_polygon(cx, cy, zone_polygon)

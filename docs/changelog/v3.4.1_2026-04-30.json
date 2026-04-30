@@ -1,0 +1,117 @@
+{
+  "version": "3.4.1",
+  "date": "2026-04-30",
+  "previous_version": "3.4.0",
+  "changes": [],
+  "bug_fixes": [
+    {
+      "type": "bug",
+      "id": "BUG-341-001",
+      "title": "D 模式扫码器灯一直闪 (ERROR 续 LON 没排除 D 模式)",
+      "symptom": "客户切到 scan_mode='D' 启动检测后, 扫码器灯像 A 持续扫码模式那样一直闪, box 跨没跨线都一直亮; 终端日志整段刷 'mode=D 收到 ERROR 续发 LON' 这两行.",
+      "root_cause": "v3.4.0 实现 D 模式时, services/scanner.py 三处 LON 续发路径只把日志加了个 mode=D 标签, 实际续发逻辑根本没排除 D 模式: (1) start_scanning 启动时一上来就 LON, (2) _text_lon_recv ERROR 自动清 _lon_sent 触发主循环续 LON, (3) listen 主循环按 _lon_sent=False 自动续 LON.",
+      "fix": "三处都加 D 模式判断: start_scanning 时 D 模式直接 continue 跳过 LON 发送; ERROR 处理 D 模式直接 return 不动 _lon_sent / _next_lon_after; listen 主循环加 _mode_now != 'D' 守卫. 修复后 D 模式 LON 唯一发送源是 source._scan_d_update.send_lon_for_channel, 按 box 跨线/进区域脉冲式发.",
+      "files": [
+        "backend/services/scanner.py"
+      ],
+      "keywords": [
+        "D 模式 LON 续发排除",
+        "scanner ERROR 路径",
+        "listen loop mode 守卫",
+        "start_scanning D 模式不发 LON"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bug",
+      "id": "BUG-341-002",
+      "title": "前端 D 模式校验工位用错 (broadcast[0] 而非 channel_id)",
+      "symptom": "客户场景: 绑定工位=工位2 (容器模式项目), 广播=[工位1, 工位2]. 切到 D 模式弹警告'工位 1 不是容器模式'被回退. 校验该过没过.",
+      "root_cause": "v3.4.0 ScannerPanel.vue onScanModeChange 取 broadcast_channels[0] 而不是 channel_id 做容器模式校验; 几何编辑器 loadTriggerGeoSnapshot 也是同样错误. broadcast_channels 是扫到码后的事件分发列表, 跟 D 模式触发判定无关 — D 模式状态机跑在扫码器'绑定工位'的检测帧循环里, 看绑定工位的摄像头.",
+      "fix": "两处都改成只看 form.value.channel_id (绑定工位); 错误提示文案也改成更清楚的 '绑定工位 X 当前绑定的项目不是容器模式 (广播工位与 D 模式无关)'.",
+      "files": [
+        "frontend/src/views/MES/ScannerPanel.vue"
+      ],
+      "keywords": [
+        "D 模式校验工位",
+        "channel_id vs broadcast_channels",
+        "几何编辑器加载 snapshot 工位"
+      ],
+      "breaking": false
+    }
+  ],
+  "features": [
+    {
+      "type": "feature",
+      "id": "FEAT-341-001",
+      "title": "D 模式诊断日志增强 (首次出现 + 跨线方向反提示)",
+      "symptom": "v3.4.0 客户首次实测画线后 LON 没触发, 日志只能看到 gone-confirm 一行, 不知道是 box 没跨线还是配的方向反了.",
+      "root_cause": "_scan_d_update 缺乏诊断 log, 没法定位'为什么没触发'.",
+      "fix": "加两类低频 log: (1) 新 box 首次进入状态机时打印它的初始 side / in_zone + 配置方向 + 等待提示; (2) box 跨线但方向不匹配时直接提示'是不是把方向选反了?'. 频率每 box 一次, 不刷屏.",
+      "files": [
+        "backend/api/source_container_grouping_mixin.py"
+      ],
+      "keywords": [
+        "ScanD 诊断 log",
+        "首次出现 box 方向",
+        "跨线方向反提示"
+      ],
+      "breaking": false
+    }
+  ],
+  "tools": [
+    {
+      "type": "tool",
+      "id": "TOOL-341-001",
+      "title": "test_scan_d_trigger.py 8/8 全过 (含诊断 log)",
+      "symptom": "诊断 log 修改可能影响判定逻辑.",
+      "root_cause": "回归保护必须确认.",
+      "fix": "8 用例全部维持不变, 测试通过, 仅多了诊断 log 输出.",
+      "files": [
+        "tools/test_scan_d_trigger.py"
+      ],
+      "keywords": [
+        "回归 scan_d 8/8"
+      ],
+      "breaking": false
+    }
+  ],
+  "config_changes": [
+    {
+      "type": "config",
+      "id": "CONFIG-341-001",
+      "title": "版本号 3.4.0 → 3.4.1 (hotfix)",
+      "symptom": "纯 bug fix, 无 schema 改动, 无新接口.",
+      "root_cause": "维持版本号唯一权威源.",
+      "fix": "electron/package.json + electron/splash.html → 3.4.1.",
+      "files": [
+        "electron/package.json",
+        "electron/splash.html"
+      ],
+      "keywords": [
+        "version bump 3.4.1 hotfix"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/services/scanner.py",
+    "backend/api/source_container_grouping_mixin.py",
+    "frontend/src/views/MES/ScannerPanel.vue",
+    "electron/package.json",
+    "electron/splash.html",
+    "docs/changelog/v3.4.1_2026-04-30.md",
+    "docs/changelog/v3.4.1_2026-04-30.json",
+    "docs/CHANGELOG.md"
+  ],
+  "db_migrations": [],
+  "test_results": {
+    "v3_4_1_regression": {
+      "name": "tools/test_scan_d_trigger.py",
+      "total": 8,
+      "passed": 8,
+      "failed": 0
+    }
+  }
+}

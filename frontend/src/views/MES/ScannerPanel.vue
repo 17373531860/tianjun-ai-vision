@@ -639,16 +639,17 @@ const onScanModeChange = async (val) => {
     lastNonDScanMode.value = val
     return
   }
-  // 校验绑定工位 (单工位绑定 channel_id; 多工位广播取广播列表第一个)
-  const broadcast = form.value.broadcast_channels || []
-  const checkCh = broadcast.length > 0 ? broadcast[0] : (form.value.channel_id ?? 0)
+  // 校验"绑定工位 (channel_id)" 是不是容器模式. D 模式状态机跑在扫码器绑定的
+  // 视觉源头工位的检测帧循环里 (用那个工位的摄像头看 box 跨线/进区域); 广播工位
+  // 只是扫到码后的事件分发对象, 与 D 模式触发判定无关, 所以 D 模式只关心 channel_id.
+  const checkCh = form.value.channel_id ?? 0
   try {
     const { data } = await checkContainerMode(checkCh)
     if (!data?.is_container_mode) {
       ElMessageBox.alert(
-        `工位 ${checkCh + 1} 当前绑定的项目不是容器模式 (logic_mode=${data?.logic_mode || '?'},` +
-        ` container_label="${data?.container_label || ''}"). D 模式仅适用于容器模式项目, ` +
-        `请先在"项目"页把容器步骤标签设好后再切.`,
+        `绑定工位 ${checkCh + 1} 当前绑定的项目不是容器模式 (logic_mode=${data?.logic_mode || '?'},` +
+        ` container_label="${data?.container_label || ''}"). D 模式只看绑定工位的摄像头判 box 跨线/进区域, ` +
+        `所以必须把绑定工位先在"项目"页设成容器步骤标签 (广播工位与 D 模式无关).`,
         'D 模式不可用',
         { type: 'warning', confirmButtonText: '知道了' }
       )
@@ -709,8 +710,8 @@ const openTriggerGeoEditor = async () => {
 const loadTriggerGeoSnapshot = () => {
   const canvas = triggerGeoCanvas.value
   if (!canvas) return
-  const broadcast = form.value.broadcast_channels || []
-  const ch = broadcast.length > 0 ? broadcast[0] : (form.value.channel_id ?? 0)
+  // D 模式几何画在"绑定工位"的摄像头视角上 (state machine 在该工位帧循环里跑)
+  const ch = form.value.channel_id ?? 0
   const img = new Image()
   img.crossOrigin = 'anonymous'
   const host = getBackendHost()

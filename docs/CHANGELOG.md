@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.4.1 (2026-04-30)
+- [BUG-341-001] 修复: D 模式扫码器灯一直闪 (像 continuous 持续扫码) — `services/scanner.py` 的 ERROR 自动续 LON 路径只把日志加了个 `mode=D` 标签, 没真正排除 D 模式; listen 主循环也照样按 `_lon_sent=False` 逻辑续 LON. 改动 3 处: `start_scanning` D 模式不发 LON (灯一开始保持灭, 等 box 跨线触发); ERROR 收到 D 模式只 log 不动 `_lon_sent / _next_lon_after`; listen 主循环 D 模式跳过自动续 LON. 现在 D 模式 LON 唯一发送源是 `source._scan_d_update.send_lon_for_channel`, 真正实现"按 box 物理位置脉冲式发"
+- [BUG-341-002] 修复: 前端 D 模式校验工位拿错 — 切到 D 模式时校验的是 `broadcast_channels[0]` (广播工位的第一个) 而不是 `channel_id` (绑定工位); 几何编辑器加载 snapshot 也是同样错误. 用户场景"绑定工位=工位2 / 广播=[工位1, 工位2]"时报"工位 1 不是容器模式"被回退. D 模式状态机跑在扫码器**绑定工位**的检测帧循环里 (用绑定工位的摄像头看 box), 广播工位与 D 触发判定无关. 改成只看 `channel_id`
+- [FEAT-341-001] D 模式诊断日志增强: `_scan_d_update` 加首次出现 box / 跨线方向反 / 跨线触发 LON 三类调试 log, 让用户拿到日志一眼看出"为什么没触发" (是 box 没跨过线 / 还是配的方向反了 / 还是 box 一直在线同侧). 客户场景 v3.4.0 测试时画线后 LON 没触发, 加这日志后能直接定位
+- [TOOL-341-001] tools/test_scan_d_trigger.py 8 用例全过 (含新增诊断 log 不破坏判定逻辑)
+- [CONFIG-341-001] 配置: 版本号升级到 3.4.1 (hotfix)
+
 ## v3.4.0 (2026-04-30)
 - [FEAT-340-001] 新增: 扫码模式 D — 容器跨线/区域触发 LON/LOFF 闭环 (仅容器模式项目可启用). 扫码器编辑加 D 选项 + 几何弹窗 (画线 + A/B 两侧染色 + 选触发方向, 或画 polygon 区域); 容器中心点跨线方向匹配 / 进区域 → 后端发 LON, 扫到码自动 LOFF + 等 box 离开 reset 允下一个; 同时刻只允许一个 armed box (产线节奏串行假设, 异常并发 log 不重复发); armed 但 box 离开未扫到码 → 主动 LOFF 防 LON 残留
 - [API-340-001] 新增: `GET /scanner/check-container-mode?channel_id=N` — 切换 D 模式时前端校验绑定工位是否容器项目, 否则弹警告自动回退. `services/scanner.py` 加 `send_lon_for_channel / send_loff_for_channel / is_scan_d_for_channel / get_scan_d_config_for_channel` helper
