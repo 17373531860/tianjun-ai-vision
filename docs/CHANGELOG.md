@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.2.0 (2026-04-30)
+- [BUG-320-001] 修复: 容器 ID 漂移幽灵箱深层兜底 — `_update_container_grouping` 加 active 接管 (gone-confirm 期间同位置 IoU≥阈值复用老 did, 不开新条目); JC1 测试视频离线仿真 17→12 settle, 合并 5 次 ByteTrack 切 ID
+- [FEAT-320-001] 新增: 项目设置 → 跟踪选项 → 容器策略行加 "ID 漂移合并 IoU" `el-input-number` (默认 0=关闭, 0.5=推荐, 0.7+=保守; 老项目升级行为不变)
+- [TOOL-320-001] 新增: `tools/test_id_drift_merge.py` 6 用例覆盖 (核心 / 边界 / 配置兼容); v3.1.4 回归 11/11 全过
+- [CONFIG-320-001] 配置: 版本号升级到 3.2.0
+
 ## v3.1.4 (2026-04-29)
 - [BUG-314-001] 修复: 容器多箱模式幽灵箱误报 NG (客户机合格率 30% → 真实合格率), `_settle_box` 入口加 `container_settle_min_items` 阈值过滤
 - [FEAT-314-001] 新增: 项目设置 → 跟踪选项 → 容器策略下"结算最少件数" UI (默认 1, 设 0 关闭过滤)

@@ -21,6 +21,14 @@ class ContainerGroupingMixin:
         物品也不被分组(直接丢). 主箱 confirmed gone → _settle_box → 通过 _trigger_event
         触发 end_cycle, 实现"一箱一 cycle 一工件号". 'multi' 是历史多箱兼容值, 行为
         和老版一样(可能出现一码多箱污染), 留给 Phase 2 重写.
+
+        v3.2.0 container_id_drift_merge_iou (可选, 默认 0=关闭):
+        ByteTrack 在工人遮挡时切换 box 的 track_id, 即使 source_tracking_mixin 的
+        phase2 id_match (recently_lost re-id, 5 秒窗口) 也接不住跨 5 秒的接管时,
+        新 track 在 _update_container_grouping 这一层会进入新条目, 老条目空着等
+        gone-confirm 后被 _settle_box 当 NG 入账. 本配置 > 0 时, 创建新 _box_objects
+        条目前先扫已存在的 gone-confirm 中老 did, 找到 IoU >= 阈值的就复用老 did
+        继续累计装件, 不开新条目. 推荐值 0.5 (位置明显重合即合并). 0.7+ 更保守.
         """
         container_label = self._container_label
         expected_no_container = {k: v for k, v in expected_items.items() if k != container_label}
@@ -28,6 +36,24 @@ class ContainerGroupingMixin:
         # v2.7.17: 单箱模式 - 默认开启, 由 pipeline_config.container_box_mode 控制
         pcfg = (self.project_config or {}).get('pipeline_config', {}) if self.project_config else {}
         single_box_mode = (pcfg.get('container_box_mode', 'single') or 'single') == 'single'
+
+        # v3.2.0: ID 漂移合并阈值. 0 = 关闭(默认, 兼容老项目). 0.5 推荐.
+        # 当一个新 box did 即将进入 _box_objects 时, 先扫已存在的 gone-confirm 中的老
+        # did, 如果同位置 IoU >= 此阈值, 视为同一物理箱继续累计装件 (复用老 did,
+        # 重置 gone_frames=0, 改写 _tracking_objects[tid].display_id 让后续帧对齐).
+        # 这是 source_tracking_mixin phase2 id_match 之后的最后一道兜底,
+        # 对付 ByteTrack 切 ID 又超过 max_lost_sec 已被 phase2 释放的边界场景.
+        try:
+            _miou = pcfg.get('container_id_drift_merge_iou', 0)
+            id_drift_merge_iou = float(_miou) if _miou not in (None, '') else 0.0
+        except (TypeError, ValueError):
+            id_drift_merge_iou = 0.0
+        try:
+            _mgf = pcfg.get('container_id_drift_merge_max_gone_frames', 30)
+            id_drift_max_gone = int(_mgf) if _mgf not in (None, '') else 30
+        except (TypeError, ValueError):
+            id_drift_max_gone = 30
+        id_drift_merge_enabled = id_drift_merge_iou > 0
 
         # 从 steps_config 读每个 label 的 max_recognized 上限 (只处理 count_mode='track')
         max_recognized_per_label: dict = {}
@@ -58,24 +84,56 @@ class ContainerGroupingMixin:
         for tid, obj in self._tracking_objects.items():
             if obj['class_name'] == container_label:
                 did = obj['display_id']
-                active_box_dids.add(did)
-                box_bboxes[did] = obj['bbox']
                 if did not in self._box_objects:
-                    self._box_counter += 1
-                    self._box_objects[did] = {
-                        'display_id': did,
-                        'bbox': obj['bbox'],
-                        'first_seen': obj.get('first_seen', current_time),
-                        'last_seen': current_time,
-                        'gone_frames': 0,
-                        'had_roi': False,
-                        'items_ever_seen': {},
-                        'item_class_counts': {},
-                        'is_complete': False,
-                    }
+                    # v3.2.0 ID 漂移合并: 在新建 _box_objects 条目前, 看老条目里
+                    # 有没有 gone-confirm 中且同位置 IoU >= 阈值的, 找到就复用老 did.
+                    # 这样 ByteTrack 切了 box 的 track_id 也不会让一个真实物理箱
+                    # 被切成两个独立 _box_objects 条目, 避免老条目被 settle 成幽灵 NG.
+                    merged_to = None
+                    if id_drift_merge_enabled:
+                        new_bbox = obj['bbox']
+                        best_old_did, best_iou = None, id_drift_merge_iou
+                        for old_did, _bs in self._box_objects.items():
+                            if _bs.get('gone_frames', 0) <= 0 \
+                                    or _bs['gone_frames'] > id_drift_max_gone:
+                                continue
+                            try:
+                                _iou = self._bbox_iou(_bs['bbox'], new_bbox)
+                            except Exception:
+                                continue
+                            if _iou >= best_iou:
+                                best_iou = _iou
+                                best_old_did = old_did
+                        if best_old_did:
+                            print(f"[Container] ID drift merge: new did={did} → "
+                                  f"复用 老 did={best_old_did} (IoU={best_iou:.2f}, "
+                                  f"old.gone={self._box_objects[best_old_did]['gone_frames']}f)")
+                            obj['display_id'] = best_old_did
+                            self._tracking_display_map[tid] = best_old_did
+                            self._box_objects[best_old_did]['bbox'] = new_bbox
+                            self._box_objects[best_old_did]['last_seen'] = current_time
+                            self._box_objects[best_old_did]['gone_frames'] = 0
+                            merged_to = best_old_did
+                            did = best_old_did
+
+                    if merged_to is None:
+                        self._box_counter += 1
+                        self._box_objects[did] = {
+                            'display_id': did,
+                            'bbox': obj['bbox'],
+                            'first_seen': obj.get('first_seen', current_time),
+                            'last_seen': current_time,
+                            'gone_frames': 0,
+                            'had_roi': False,
+                            'items_ever_seen': {},
+                            'item_class_counts': {},
+                            'is_complete': False,
+                        }
                 else:
                     self._box_objects[did]['bbox'] = obj['bbox']
                     self._box_objects[did]['last_seen'] = current_time
+                active_box_dids.add(did)
+                box_bboxes[did] = obj['bbox']
             else:
                 item_entries.append((
                     tid, obj['class_name'],

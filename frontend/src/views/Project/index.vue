@@ -924,6 +924,22 @@
                         <span class="text-gray-400 shrink-0 cursor-help">结算最少件数 ⓘ</span>
                       </el-tooltip>
                       <el-input-number v-model="activeProject.container_settle_min_items" :min="0" :max="100" :step="1" :precision="2" size="small" class="!w-24" />
+                      <el-tooltip placement="top">
+                        <template #content>
+                          <div style="max-width:320px;line-height:1.5">
+                            <b>ID 漂移合并 (v3.2.0 试验性)</b>: ByteTrack 在工人手部遮挡瞬间常常切换 box 的 track_id;
+                            后端 phase2 已有 5 秒窗口的 IoU + 外观再识别, 但跨 5 秒的接管接不住, 老条目仍会被 settle 成幽灵 NG。<br/>
+                            本配置 > 0 时, 新 box 即将进入 _box_objects 前先扫已 gone-confirm 中的老条目,
+                            位置 IoU ≥ 此阈值就复用老 did 继续累计装件, 不开新条目。<br/>
+                            · <b>0 (默认)</b>: 关闭, 兼容老项目<br/>
+                            · <b>0.5</b>: 推荐, 合并明显接管<br/>
+                            · <b>0.7+</b>: 保守, 位置必须几乎完全重合<br/>
+                            · 副作用: 传送带场景下"老箱离开后新箱刚好移到原位置"可能误合并, 谨慎调高阈值。
+                          </div>
+                        </template>
+                        <span class="text-gray-400 shrink-0 cursor-help">ID漂移合并 IoU ⓘ</span>
+                      </el-tooltip>
+                      <el-input-number v-model="activeProject.container_id_drift_merge_iou" :min="0" :max="1" :step="0.05" :precision="2" size="small" class="!w-24" />
                     </div>
                     <div v-else class="flex items-center gap-4 text-xs">
                       <span class="text-gray-400 shrink-0">消失确认帧数</span>
@@ -1971,6 +1987,15 @@ const initProjectDefaults = (project) => {
     // v3.1.4: 默认 1 = 装件 < 1 (空箱) 视为幽灵箱不结算
     project.container_settle_min_items = (typeof v === 'number' && v >= 0) ? v : 1;
   }
+  if (project.container_id_drift_merge_iou === undefined) {
+    const v = pipelineConfig.container_id_drift_merge_iou;
+    // v3.2.0: 默认 0 = 关闭, 老项目升级行为不变
+    project.container_id_drift_merge_iou = (typeof v === 'number' && v >= 0 && v <= 1) ? v : 0;
+  }
+  if (project.container_id_drift_merge_max_gone_frames === undefined) {
+    const v = pipelineConfig.container_id_drift_merge_max_gone_frames;
+    project.container_id_drift_merge_max_gone_frames = (typeof v === 'number' && v > 0) ? v : 30;
+  }
   if (project.tracking_roi_polygon === undefined) {
     const roi = pipelineConfig.tracking_roi || {};
     project.tracking_roi_polygon = roi.polygon || [];
@@ -2153,6 +2178,16 @@ const handleSaveProject = async () => {
           const v = Number(activeProject.value.container_settle_min_items);
           if (!Number.isFinite(v) || v < 0) return 1;
           return Math.max(0, Math.min(100, Math.floor(v)));
+        })(),
+        container_id_drift_merge_iou: (() => {
+          const v = Number(activeProject.value.container_id_drift_merge_iou);
+          if (!Number.isFinite(v) || v < 0) return 0;
+          return Math.max(0, Math.min(1, v));
+        })(),
+        container_id_drift_merge_max_gone_frames: (() => {
+          const v = Number(activeProject.value.container_id_drift_merge_max_gone_frames);
+          if (!Number.isFinite(v) || v < 1) return 30;
+          return Math.max(1, Math.min(180, Math.floor(v)));
         })(),
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,

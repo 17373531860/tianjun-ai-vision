@@ -1,0 +1,113 @@
+{
+  "version": "3.2.0",
+  "date": "2026-04-30",
+  "previous_version": "3.1.4",
+  "changes": [
+    {
+      "type": "bug",
+      "id": "BUG-320-001",
+      "title": "容器 ID 漂移幽灵箱深层修复 (v3.1.4 阈值过滤之外的兜底)",
+      "symptom": "客户机 JC1 项目 (container_box_mode='multi') 测试视频 d5eb9a3f...mp4 (98s, 30fps) 真相 2 OK + 1 NG, 但 v3.1.4 跑出 14 NG。ByteTrack 在工人手部遮挡时频繁切换 box 的 track_id, 老条目里有部分装件却被切走, 30 帧 gone-confirm 后入账 NG。同一个真实物理箱被切成多个 _box_objects 条目, 离线诊断 17 次 settle 实际只对应 3 个真实物理箱。",
+      "root_cause": "_update_container_grouping line 76-130 在 box did 第一次进入 _box_objects 时无条件创建新条目。source_tracking_mixin.py 的 phase2 id_match 已有 5 秒窗口的 recently_lost re-id (IoU + 外观特征复用 display_id), 但跨 5 秒接管的边界场景接不住, 仍会产生新 display_id, 容器层接到新 did 就开新条目。多箱模式 (container_box_mode='multi') 下尤其严重, 单箱模式因 single_box_mode 主箱挑选会自动屏蔽其他 box 较少受影响。",
+      "fix": "_update_container_grouping 新建 _box_objects 条目前加 active 接管检查 — pcfg.container_id_drift_merge_iou > 0 时启用, 扫已存在 _box_objects 里 gone_frames > 0 且 ≤ container_id_drift_merge_max_gone_frames 的老条目, 找 IoU ≥ 阈值最高的, 找到就复用老 did 继续累计装件 (改写 obj.display_id + _tracking_display_map[tid] + 重置老条目 gone_frames=0), 不开新条目。这是 phase2 之外的最后一道兜底。不附带 retroactive 撤销已 settle 老 NG (验证发现会误吞真实'没装齐就移走'的合理 NG, 副作用过大)。默认 0 关闭, 老项目升级行为不变。",
+      "files": [
+        "backend/api/source_container_grouping_mixin.py"
+      ],
+      "keywords": [
+        "container_id_drift_merge_iou",
+        "ID 漂移合并",
+        "ByteTrack 切 track_id",
+        "active 接管",
+        "phase2 id_match 兜底",
+        "容器多箱模式",
+        "gone-confirm 期间复用 did",
+        "JC1 项目测试视频",
+        "v3.1.4 阈值过滤之外"
+      ],
+      "breaking": false
+    }
+  ],
+  "features": [
+    {
+      "type": "feature",
+      "id": "FEAT-320-001",
+      "title": "项目设置加 'ID 漂移合并 IoU' 配置项",
+      "symptom": "客户需要可调阈值控制 ID 漂移合并的激进程度, 不同现场遮挡严重程度不一样。",
+      "root_cause": "v3.2.0 新增的 active 接管逻辑没有 UI 入口, 客户没法在前端启用。",
+      "fix": "项目设置 → 跟踪选项 → 容器策略行 (容器策略下拉框 + 结算最少件数) 后面紧挨着加 'ID 漂移合并 IoU' el-input-number (min 0, max 1, step 0.05, 精度 2 位小数), 默认 0 (关闭)。带 tooltip 解释 v3.2.0 active 接管原理 + 三档语义 (0=关闭 / 0.5=推荐合并 / 0.7+=保守) + 副作用警告 (传送带场景可能误合并)。持久化路径 pipeline_config.container_id_drift_merge_iou 和 container_id_drift_merge_max_gone_frames (默认 30, 暂不暴露 UI)。",
+      "files": [
+        "frontend/src/views/Project/index.vue"
+      ],
+      "keywords": [
+        "container_id_drift_merge_iou UI",
+        "项目设置 跟踪选项",
+        "ID 漂移合并 IoU",
+        "el-input-number"
+      ],
+      "breaking": false
+    }
+  ],
+  "tools": [
+    {
+      "type": "tool",
+      "id": "TOOL-320-001",
+      "title": "test_id_drift_merge.py 6 用例覆盖 active 接管逻辑",
+      "symptom": "需要回归保护以防 v3.2.0 active 接管逻辑被无意中改坏, 同时验证不破坏 v3.1.4 阈值过滤行为。",
+      "root_cause": "v3.2.0 新增的 active 接管在 _update_container_grouping line 79-110 是关键路径, 没有测试容易回归。",
+      "fix": "Group 1 (3): 核心 — 高 IoU 复用老 did / 阈值=0 关闭 / 多个候选挑最高 IoU; Group 2 (2): 边界 — gone_frames 超过 max_gone 不合并 / IoU 不达阈值不合并 (避免吞真实新箱); Group 3 (1): 兼容 — 配置缺失 fallback 默认 0 (老项目升级行为不变)。同时回归跑 test_ghost_box_fix.py 11/11 全过, 证明 v3.2.0 不破坏 v3.1.4。",
+      "files": [
+        "tools/test_id_drift_merge.py"
+      ],
+      "keywords": [
+        "active 接管单元测试",
+        "6 用例",
+        "回归 v3.1.4"
+      ],
+      "breaking": false
+    }
+  ],
+  "config_changes": [
+    {
+      "type": "config",
+      "id": "CONFIG-320-001",
+      "title": "版本号升级到 3.2.0",
+      "symptom": "跨 minor 因为新增 1 个项目配置 schema (container_id_drift_merge_iou) + 1 个 UI 控件, 算 feature 级别。",
+      "root_cause": "v3.1.4 之后增加了容器 ID 漂移合并的可选兜底。",
+      "fix": "electron/package.json + electron/splash.html 更新到 3.2.0。",
+      "files": [
+        "electron/package.json",
+        "electron/splash.html"
+      ],
+      "keywords": ["version bump", "3.2.0"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/api/source_container_grouping_mixin.py",
+    "frontend/src/views/Project/index.vue",
+    "tools/test_id_drift_merge.py",
+    "electron/package.json",
+    "electron/splash.html",
+    "docs/changelog/v3.2.0_2026-04-30.md",
+    "docs/changelog/v3.2.0_2026-04-30.json",
+    "docs/CHANGELOG.md"
+  ],
+  "db_migrations": [],
+  "test_results": {
+    "v3_2_0_new_suite": {
+      "name": "tools/test_id_drift_merge.py",
+      "total": 6,
+      "passed": 6,
+      "failed": 0,
+      "elapsed_seconds": 0.001
+    },
+    "v3_1_4_regression_suite": {
+      "name": "tools/test_ghost_box_fix.py",
+      "total": 11,
+      "passed": 11,
+      "failed": 0,
+      "elapsed_seconds": 0.001
+    }
+  }
+}
