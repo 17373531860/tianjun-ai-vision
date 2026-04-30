@@ -59,6 +59,36 @@ from backend.db.database import Base, engine, SessionLocal  # noqa: E402
 import backend.models.models  # noqa: E402,F401  触发 ORM 注册
 import backend.models.mes_models  # noqa: E402,F401
 Base.metadata.create_all(engine)
+# create_all 对已存在的表不会改 schema (拷过来的老 sql_app.db 缺新增列时会报
+# "no such column"). 跑一遍跟 main.py 同步的轻量 migration 把所有期望列补齐.
+try:
+    from sqlalchemy import inspect as _sql_inspect, text as _sql_text
+    _insp = _sql_inspect(engine)
+    _tables = set(_insp.get_table_names())
+    # (table, column, ddl_type)
+    _migrations = [
+        ("cluster_config", "station_result_strategy", "VARCHAR(20) DEFAULT 'latest'"),
+        ("cluster_config", "channel_station_map", "JSON"),
+        ("cluster_config", "timeout_push", "BOOLEAN DEFAULT 0"),
+        ("scanner_devices", "scan_pair_max_wait_sec", "INTEGER DEFAULT 0"),
+        ("scanner_devices", "broadcast_settle_mode", "VARCHAR(20) DEFAULT 'independent'"),
+        ("scanner_devices", "primary_settle_channel", "INTEGER"),
+        ("scanner_devices", "primary_settle_min_items", "INTEGER DEFAULT 1"),
+    ]
+    with engine.connect() as _conn:
+        for _t, _c, _ddl in _migrations:
+            if _t not in _tables:
+                continue
+            _cols = {col["name"] for col in _insp.get_columns(_t)}
+            if _c in _cols:
+                continue
+            try:
+                _conn.execute(_sql_text(f"ALTER TABLE {_t} ADD COLUMN {_c} {_ddl}"))
+                _conn.commit()
+            except Exception as _e:
+                print(f"[ENV] migration {_t}.{_c} 跳过: {_e}")
+except Exception as _e:
+    print(f"[ENV] 轻量 migration 异常: {_e}")
 print(f"[ENV] DB schema 已建好")
 
 

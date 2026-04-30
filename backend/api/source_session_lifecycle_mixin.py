@@ -794,3 +794,108 @@ class SessionLifecycleMixin:
         finally:
             self._force_settling_in_progress = False
 
+    # ============== v3.3.0 码-码闭环结算 (bind_timing="scan_pair") ==============
+
+    def settle_for_scan_pair(self, *, force_ng: bool = False, reason: str = "") -> int:
+        """v3.3.0 由 mes_hooks 在扫码 B 到达 (或超时) 时调用, 结算当前周期 / 容器.
+
+        与 force_settle_pending_cycle 的区别:
+          - 不依赖 min_items 件数门槛, 完全按"曾齐过"sticky flag 判 OK/NG.
+          - 容器模式下结算 *所有* _box_objects (不分件数多少), 然后清空.
+            空箱仍会被 v3.1.4 的 container_settle_min_items 过滤掉避免冤判.
+          - 非容器模式下: 整盘按 _tracking_was_complete 判 OK/NG (sticky), 然后结算.
+          - force_ng=True: 用于超时分支, 一律判 NG.
+
+        防重入: 复用 _force_settling_in_progress 标志.
+        """
+        if not getattr(self, "project_config", None):
+            return 0
+        if getattr(self, "_force_settling_in_progress", False):
+            return 0
+
+        self._force_settling_in_progress = True
+        settled_count = 0
+        try:
+            pcfg = (self.project_config.get("pipeline_config") or {}) if self.project_config else {}
+            expected_items = pcfg.get("counting_expected_items", {}) or {}
+
+            # ------- 容器模式 -------
+            if getattr(self, "_container_mode", False) and getattr(self, "_box_objects", None):
+                for box_did in list(self._box_objects.keys()):
+                    if box_did not in self._box_objects:
+                        continue
+                    try:
+                        self._settle_box(
+                            box_did, expected_items,
+                            via_scan_pair=True,
+                            scan_pair_force_ng=force_ng,
+                        )
+                        settled_count += 1
+                    except Exception as e:
+                        print(
+                            f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} "
+                            f"{box_did} 结算失败: {e}",
+                            flush=True,
+                        )
+                print(
+                    f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} 容器, "
+                    f"结算 {settled_count} 个箱子 (force_ng={force_ng}, {reason})",
+                    flush=True,
+                )
+                return settled_count
+
+            # ------- 非容器跟踪模式 -------
+            if not getattr(self, "current_cycle_id", None):
+                return 0
+            if not getattr(self, "_tracking_cycle_active", False):
+                return 0
+
+            if force_ng:
+                # 超时强制 NG: 不走 _settle_counting_cycle (它按 expected 计数判),
+                # 直接调 end_cycle(False, ...) 收尾, _tracking_was_complete 不影响.
+                try:
+                    self._end_cycle(
+                        is_ok=False,
+                        event_name="scan_pair_timeout",
+                        result_reason="scan_pair_timeout",
+                    )
+                    settled_count = 1
+                    print(
+                        f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} 非容器, "
+                        f"超时强制 NG ({reason})",
+                        flush=True,
+                    )
+                except Exception as e:
+                    print(
+                        f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} "
+                        f"非容器 force_ng 失败: {e}",
+                        flush=True,
+                    )
+                return settled_count
+
+            # 正常 (扫码 B 触发): _settle_counting_cycle 内部把 OK 判定切到
+            # _tracking_was_complete (在 source_checklist_mixin 改造里实现).
+            # 这里设置一个 hint 标志位让结算逻辑识别 scan_pair 路径.
+            self._scan_pair_settle_hint = True
+            try:
+                check_order = pcfg.get("tracking_check_order", False)
+                expected_order = pcfg.get("tracking_expected_order", []) or []
+                self._settle_counting_cycle(expected_items, check_order, expected_order)
+                settled_count = 1
+                print(
+                    f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} 非容器, "
+                    f"按曾齐过结算 ({reason})",
+                    flush=True,
+                )
+            except Exception as e:
+                print(
+                    f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} "
+                    f"非容器结算失败: {e}",
+                    flush=True,
+                )
+            finally:
+                self._scan_pair_settle_hint = False
+            return settled_count
+        finally:
+            self._force_settling_in_progress = False
+

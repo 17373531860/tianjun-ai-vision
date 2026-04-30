@@ -724,6 +724,8 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self._tracking_cycle_active = False
         self._tracking_had_roi_objects = False
         self._tracking_trigger_frames = 0
+        # v3.3.0 scan_pair: 清掉 sticky 'was_complete' 防止跨周期串台
+        self._tracking_was_complete = False
         self._tracking_recently_lost.clear()
         self._tracking_transferred_ids.clear()
         self._tracking_prev_positions.clear()

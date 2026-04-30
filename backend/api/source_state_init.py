@@ -154,6 +154,19 @@ def _init_tracking_state(h):
     h._tracking_cycle_active = False
     h._tracking_had_roi_objects = False
     h._tracking_trigger_frames = 0
+    # v3.3.0 scan_pair: 跨帧 sticky '曾齐过' flag, 由 _update_tracking_stats 维护,
+    # _reset_counting_cycle 清空. settle_for_scan_pair 调 _settle_counting_cycle 时
+    # 通过 _scan_pair_settle_hint 让本字段决定 OK/NG.
+    h._tracking_was_complete = False
+    h._scan_pair_settle_hint = False
+
+    # v3.4.0 scan_mode='D' (容器跨线/区域触发扫码) 状态机:
+    # _scan_d_armed_box: 当前正在等扫码的 box display_id (None = 没有)
+    # _scan_d_box_states: {box_did: {"side": -1/0/1, "in_zone": bool, "armed": bool,
+    #                                "scanned": bool, "gone_frames": int}}
+    #   side: 上一帧 box 中心点位于线的哪一侧 (line 模式), 0=未知/在线上
+    h._scan_d_armed_box = None
+    h._scan_d_box_states = {}
     h._tracking_recently_lost = {}
     h._tracking_transferred_ids = {}
     h._tracking_prev_positions = {}

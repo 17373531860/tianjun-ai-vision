@@ -40,3 +40,9 @@ export const setWorkstationMode = (channelCount) => api.post('/workstations/mode
 export const setChannelGpu = (channelId, device) => api.post(`/workstations/${channelId}/gpu`, { device });
 
 export const getGpuAllocation = () => api.get('/workstations/gpu-allocation');
+
+// v3.3.0 码-码闭环结算: 查询当前窗口 / 停止时收尾最后一码
+export const getScanPairActive = (channel = 0) => api.get(`/scanner/scan-pair/active?channel_id=${channel}`);
+
+export const settleScanPairForStop = (channel = 0, discard = false) =>
+  api.post('/scanner/scan-pair/stop', { channel_id: channel, discard });

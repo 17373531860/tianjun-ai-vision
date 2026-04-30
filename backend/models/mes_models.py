@@ -321,6 +321,28 @@ class ScannerDevice(Base):
     # 避免上游空箱子被冤判 NG. 默认 1 (放了一件就跟随), 0 = 不过滤, N = 至少 N 件.
     primary_settle_min_items = Column(Integer, default=1)
 
+    # v3.3.0 码-码闭环结算 (bind_timing="scan_pair"): 扫码 A 开周期, 扫码 B (≠A)
+    # 触发结算 A 周期 + 启动 B 周期。判定 OK/NG 依据"窗口内物品/箱子是否曾齐过",
+    # 不依赖物理消失或 ROI 退出。下面字段仅 bind_timing="scan_pair" 时生效:
+    # 扫码 A 后等待 B 的最大秒数: 0 = 不超时 (推荐工人节拍稳定时),
+    # > 0 = 到时强制 NG 结算, 防止漏扫导致周期永远卡死.
+    scan_pair_max_wait_sec = Column(Integer, default=0)
+
+    # v3.4.0 D 容器跨线/区域触发扫码 (scan_mode='D' 时生效, 仅容器模式项目可启用):
+    # 几何选择:
+    #   "line"  = 一条线段 + 方向, 容器跨线触发 LON, 扫到码自动 LOFF
+    #   "zone"  = 一个 polygon 区域, 容器中心点进入触发 LON, 扫到码自动 LOFF
+    scan_d_geometry = Column(String(8), default="line")
+    # 线模式几何配置 (像素坐标, 相对原始视频帧):
+    #   {x1, y1, x2, y2, side_a_to_b: bool}
+    # side_a_to_b=True: 从线左侧(A)→右侧(B)触发; False: 从右(B)→左(A)触发
+    scan_d_line = Column(JSON, nullable=True)
+    # 区域模式几何配置 (像素坐标 polygon): [[x,y], ...] 至少 3 个点
+    scan_d_zone = Column(JSON, nullable=True)
+    # D 模式专属"box 离开后多少帧才视为可触发下一个" 默认 30 帧 (= 1秒@30fps).
+    # 0 表示沿用项目 pipeline_config.gone_confirm_frames.
+    scan_d_gone_confirm_frames = Column(Integer, default=30)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

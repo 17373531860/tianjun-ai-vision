@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.4.0 (2026-04-30)
+- [FEAT-340-001] 新增: 扫码模式 D — 容器跨线/区域触发 LON/LOFF 闭环 (仅容器模式项目可启用). 扫码器编辑加 D 选项 + 几何弹窗 (画线 + A/B 两侧染色 + 选触发方向, 或画 polygon 区域); 容器中心点跨线方向匹配 / 进区域 → 后端发 LON, 扫到码自动 LOFF + 等 box 离开 reset 允下一个; 同时刻只允许一个 armed box (产线节奏串行假设, 异常并发 log 不重复发); armed 但 box 离开未扫到码 → 主动 LOFF 防 LON 残留
+- [API-340-001] 新增: `GET /scanner/check-container-mode?channel_id=N` — 切换 D 模式时前端校验绑定工位是否容器项目, 否则弹警告自动回退. `services/scanner.py` 加 `send_lon_for_channel / send_loff_for_channel / is_scan_d_for_channel / get_scan_d_config_for_channel` helper
+- [TOOL-340-001] 新增: `tools/test_scan_d_trigger.py` 8 用例 (line A→B 触发 / 反向不触发 / 扫码 LOFF / scanned 后 gone 重置 / 同 box 不重 LON / zone 进入触发 / armed 离开未扫码强制 LOFF / 并发 box 不重发); v3.3.0 / v3.2.x / v3.1.x 回归 87/87 全过
+- [CONFIG-340-001] 配置: scanner_devices 加 `scan_d_geometry / scan_d_line / scan_d_zone / scan_d_gone_confirm_frames` 4 个字段 (自动 migration); 版本号升级到 3.4.0
+
+## v3.3.0 (2026-04-30)
+- [FEAT-330-001] 新增: 扫码闭环结算 (`bind_timing='scan_pair'`) — 扫码 A 起新窗口, 扫码 B (≠A) 结算 A 周期 + 起 B 窗口, 同码二次扫软忽略 + 推 dup_warning toast, 多工位广播共享窗口同步开/同步结算; 容器模式按 sticky `was_complete` 判 OK/NG (允许工人扫前从箱里拿件后扫下一码), 非容器模式按 `_tracking_was_complete` 判定; 新增 `scan_pair_max_wait_sec` 超时兜底 (0=不超时, >0=强制 NG); 切到此模式自动锁定 `scan_required=on / scan_mode≠C / late_bind=0`; 停止/待机时弹窗 [结算 (默认)] / [丢弃] 收尾最后一码窗口; container_grouping 在 scan_pair 激活时关掉 gone-confirm 自动 _settle_box (扫码节拍接管)
+- [TOOL-330-001] 新增: `tools/test_scan_pair_settle.py` 8 用例覆盖 (首扫 / 同码软忽略 / 不同码切窗口 / sticky OK / 从未齐过 NG / 超时强制 NG / 多工位广播共享 / 停止双分支); v3.2.0 / v3.2.1 / v3.1.2 回归 6+8+11 全过
+- [CONFIG-330-001] 配置: scanner_devices 加 `scan_pair_max_wait_sec INTEGER DEFAULT 0` (自动 migration); bind_timing 字符串字段加新枚举值 `'scan_pair'`; 版本号升级到 3.3.0
+
 ## v3.2.0 (2026-04-30)
 - [BUG-320-001] 修复: 容器 ID 漂移幽灵箱深层兜底 — `_update_container_grouping` 加 active 接管 (gone-confirm 期间同位置 IoU≥阈值复用老 did, 不开新条目); JC1 测试视频离线仿真 17→12 settle, 合并 5 次 ByteTrack 切 ID
 - [FEAT-320-001] 新增: 项目设置 → 跟踪选项 → 容器策略行加 "ID 漂移合并 IoU" `el-input-number` (默认 0=关闭, 0.5=推荐, 0.7+=保守; 老项目升级行为不变)

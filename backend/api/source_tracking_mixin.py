@@ -112,9 +112,37 @@ class TrackingMixin:
         其余 detection 的 track_id 强制改为最近 keeper 的 track_id。
 
         注意: 只改输出 track_id, 不影响 ByteTrack 内部状态 (下一帧仍正常跟踪)。
+
+        v3.2.1 两条修复:
+          1) 容器模式下, container_label (例如 "box") 自动从 max_recognized 限制里
+             剔除。否则会跟 container_box_mode='multi' 语义冲突, 把画面上多个真实
+             物理箱强制合并到同一个 track_id → 两个箱子都显示成"箱子1"且物品
+             被错误归到同一个 _box_objects 条目。容器类多箱并存由 container_box_mode
+             ('single' 主箱选举 / 'multi' 平铺) 单独控制。
+          2) 非容器类被合并到 keeper 的多余 detection 打 hidden=True, 前端
+             drawDetections / drawMultiDetections 跳过画框, 避免"同一物品被模型
+             分裂识别 → 画面两个共享 display_id 的重影框"。hidden 不影响
+             tracking/容器分组内部逻辑, 只挡视觉重影。
         """
         if not max_recognized_per_label:
             return
+
+        # v3.2.1 修复 1: 容器模式下剔除容器类
+        container_label = ''
+        if getattr(self, '_container_mode', False):
+            container_label = getattr(self, '_container_label', '')
+        if container_label and container_label in max_recognized_per_label:
+            if not getattr(self, '_warned_container_max_recognized', False):
+                print(f"[Tracking] 容器模式下 container_label='{container_label}' 的 "
+                      f"max_recognized={max_recognized_per_label[container_label]} 已自动忽略 "
+                      f"(避免与 container_box_mode 冲突, 多箱并存请用 container_box_mode 控制)")
+                self._warned_container_max_recognized = True
+            max_recognized_per_label = {
+                k: v for k, v in max_recognized_per_label.items() if k != container_label
+            }
+        if not max_recognized_per_label:
+            return
+
         from collections import defaultdict as _dd
         _by_label = _dd(list)
         for _det in detections:
@@ -144,6 +172,7 @@ class TrackingMixin:
                         _best_k = _k
                 if _best_k is not None:
                     _d['track_id'] = _best_k.get('track_id', _d.get('track_id', -1))
+                    _d['hidden'] = True
 
     def _tracking_collect_frame_dets(self, detections, trigger_label, cycle_strategy, event_steps):
         """一帧检测分类: trigger 标签 / event 标签 / 普通 track_id 标签。
@@ -922,11 +951,37 @@ class TrackingMixin:
                 gone_confirm_frames=gone_confirm_frames,
                 cycle_strategy=cycle_strategy,
             )
+            # v3.4.0 D 模式: 容器跨线/区域触发扫码 (LON/LOFF)
+            try:
+                self._scan_d_update()
+            except Exception as _e:
+                print(f"[ScanD] _scan_d_update 异常 ch{getattr(self,'channel_id','?')}: {_e}")
 
         # 11) 截图 (限频 1Hz)
         self._tracking_capture_screenshots(seen_track_ids, original_frame)
 
         self._rebuild_checklist(expected_items)
+
+        # v3.3.0 scan_pair sticky '曾齐过' 判定 (非容器跟踪模式).
+        # 每帧检查: 若 expected_items 都被 (tracking + event + stack) 覆盖, sticky 置 True.
+        # _settle_counting_cycle 在 scan_pair 路径里按此 flag 判 OK/NG.
+        # 仅维护 flag, 不影响 settle 时机.
+        if expected_items and getattr(self, '_tracking_cycle_active', False):
+            try:
+                merged = dict(self._tracking_class_counters)
+                for _cn, _cnt in self._event_counters.items():
+                    merged[_cn] = merged.get(_cn, 0) + _cnt
+                # stack 模式: 用 max(tracking, stack) 合并 (与 _rebuild_checklist 一致)
+                for _cn, _cnt in self._stack_counters.items():
+                    merged[_cn] = max(merged.get(_cn, 0), _cnt)
+                _all_met = all(
+                    merged.get(_cn, 0) >= _exp
+                    for _cn, _exp in expected_items.items()
+                )
+                if _all_met:
+                    self._tracking_was_complete = True
+            except Exception:
+                pass
 
         if not self._tracking_cycle_active:
             return

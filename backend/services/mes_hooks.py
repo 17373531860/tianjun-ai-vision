@@ -50,6 +50,15 @@ class MESHookManager:
         # channel_id -> {workpiece_id, cycle_id, timestamp} (manual rebind 提示)
         self._rebind_prompt: dict[int, dict] = {}
 
+        # v3.3.0 码-码闭环结算 (bind_timing="scan_pair") 状态:
+        # channel_id -> {"serial_no": str, "wp_id": int, "scanned_at": float}
+        # 当前窗口的"开始码"。下一码到达 (≠serial_no) 时触发 settle + 用新码替换。
+        # 同码二次扫只触发 toast 提醒, 不更新本字段。
+        self._scan_pair_active: dict[int, dict] = {}
+        # channel_id -> threading.Timer (超时定时器), scan_pair_max_wait_sec > 0 时启用
+        self._scan_pair_timeout_timers: dict[int, "threading.Timer"] = {}
+        self._scan_pair_lock = threading.Lock()
+
         self._task_queue: queue.Queue = queue.Queue(maxsize=500)
         self._worker_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -282,10 +291,13 @@ class MESHookManager:
             ("_inspecting_workpiece", self._inspecting_workpiece),
             ("_last_scan_event", self._last_scan_event),
             ("_rebind_prompt", self._rebind_prompt),
+            ("_scan_pair_active", self._scan_pair_active),
         ):
             if channel_id in d:
                 d.pop(channel_id, None)
                 removed.append(name)
+        # v3.3.0 关闭遗留的 scan_pair 超时定时器
+        self._cancel_scan_pair_timer(channel_id)
         if removed:
             print(f"[MES] ch{channel_id} 被移除，已清理残留: {removed}", flush=True)
 
@@ -394,6 +406,223 @@ class MESHookManager:
         except Exception:
             pass  # 高频路径：连接未就绪/字段缺失时回退默认
         return "mid_cycle"
+
+    # ============== v3.3.0 码-码闭环结算 ==============
+
+    def is_scan_pair_mode(self, channel_id: int) -> bool:
+        """该工位是否处于 bind_timing='scan_pair' 模式 (码-码闭环结算)."""
+        return self._get_bind_timing(channel_id) == "scan_pair"
+
+    def _get_scan_pair_max_wait_sec(self, channel_id: int) -> int:
+        """获取扫码 A 后等待 B 的最大秒数, 0 = 不超时."""
+        try:
+            from backend.services.scanner import get_scanner_service
+            svc = get_scanner_service()
+            for conn in svc._connections.values():
+                if self._conn_serves_channel(conn, channel_id):
+                    return max(0, int(getattr(conn, 'scan_pair_max_wait_sec', 0) or 0))
+        except Exception:
+            pass
+        return 0
+
+    def get_scan_pair_active_serial(self, channel_id: int) -> Optional[str]:
+        """供前端/Monitor 显示当前周期的开始码; None 表示窗口未开."""
+        with self._scan_pair_lock:
+            entry = self._scan_pair_active.get(channel_id)
+            return entry.get("serial_no") if entry else None
+
+    def _scan_pair_resolve_broadcast_channels(self, channel_id: int) -> list[int]:
+        """返回与本工位'共享窗口'的所有工位 (含本工位).
+
+        约定: 一扫码器 → 多工位广播是唯一拓扑, 多扫码器 → 一工位不存在.
+        所以扫码事件命中的扫码器, 它的 broadcast_channels (或 [channel_id])
+        就是共享窗口的全集. 同步开 / 同步结算.
+        """
+        try:
+            from backend.services.scanner import get_scanner_service
+            svc = get_scanner_service()
+            for conn in svc._connections.values():
+                if self._conn_serves_channel(conn, channel_id):
+                    if conn.broadcast_channels:
+                        return list(conn.broadcast_channels)
+                    return [conn.channel_id]
+        except Exception:
+            pass
+        return [channel_id]
+
+    def _cancel_scan_pair_timer(self, channel_id: int):
+        """取消该工位的超时定时器 (若有)."""
+        timer = self._scan_pair_timeout_timers.pop(channel_id, None)
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+
+    def _arm_scan_pair_timer(self, channel_id: int):
+        """启动该工位的超时定时器 (scan_pair_max_wait_sec > 0 时)."""
+        wait = self._get_scan_pair_max_wait_sec(channel_id)
+        if wait <= 0:
+            return
+        self._cancel_scan_pair_timer(channel_id)
+        timer = threading.Timer(
+            float(wait),
+            self._on_scan_pair_timeout,
+            args=(channel_id,),
+        )
+        timer.daemon = True
+        timer.start()
+        self._scan_pair_timeout_timers[channel_id] = timer
+
+    def _on_scan_pair_timeout(self, channel_id: int):
+        """超时回调: 把当前窗口强制 NG 结算 (按曾齐过判定 → 但超时强制 NG),
+        并清空窗口状态. 用户没扫到下一码就强制收尾, 防止周期永远卡死."""
+        try:
+            with self._scan_pair_lock:
+                if channel_id not in self._scan_pair_active:
+                    return
+                entry = self._scan_pair_active.pop(channel_id)
+            self._scan_pair_timeout_timers.pop(channel_id, None)
+            print(
+                f"[ScanPair] ch{channel_id} 超时未扫下一码, 强制 NG 结算 "
+                f"(开始码={entry.get('serial_no')})",
+                flush=True,
+            )
+            self._dispatch_scan_pair_settle(channel_id, force_ng=True,
+                                            reason="scan_pair_timeout")
+        except Exception as e:
+            print(f"[ScanPair] 超时处理异常 ch={channel_id}: {e}", flush=True)
+
+    def _dispatch_scan_pair_settle(self, channel_id: int, *,
+                                    force_ng: bool = False,
+                                    reason: str = "") -> int:
+        """把'结算当前窗口'分发给 source 的 _settle_for_scan_pair() 方法.
+
+        force_ng=True 时直接判 NG (用于超时); 否则交给 source 看 _was_complete 判 OK/NG.
+        多工位广播时由调用方负责对每个工位都调一次本方法.
+        返回结算的 box 数 (容器) 或 1/0 (非容器).
+        """
+        try:
+            from backend.api.channel_manager import channel_manager
+            mgr = channel_manager.get(channel_id)
+        except Exception as e:
+            print(f"[ScanPair] dispatch import 失败 ch={channel_id}: {e}", flush=True)
+            return 0
+        if mgr is None:
+            return 0
+        fn = getattr(mgr, "settle_for_scan_pair", None)
+        if not callable(fn):
+            print(f"[ScanPair] ch{channel_id} 后端没有 settle_for_scan_pair 方法",
+                  flush=True)
+            return 0
+        try:
+            return int(fn(force_ng=force_ng, reason=reason) or 0)
+        except Exception as e:
+            print(f"[ScanPair] settle_for_scan_pair 异常 ch={channel_id}: {e}",
+                  flush=True)
+            return 0
+
+    def settle_scan_pair_for_stop(self, channel_id: int, *,
+                                   discard: bool) -> int:
+        """前端在 '停止/待机' 弹窗里调本方法收尾最后一码窗口.
+
+        discard=True  → 不结算, 直接清空状态 (产能不计入)
+        discard=False → 按曾齐过判定 OK/NG 结算 + 清空状态
+        """
+        with self._scan_pair_lock:
+            entry = self._scan_pair_active.pop(channel_id, None)
+        self._cancel_scan_pair_timer(channel_id)
+        if not entry:
+            return 0
+        if discard:
+            print(
+                f"[ScanPair] ch{channel_id} 停止/待机, 用户选择丢弃最后一码 "
+                f"(serial={entry.get('serial_no')})",
+                flush=True,
+            )
+            return 0
+        return self._dispatch_scan_pair_settle(
+            channel_id, force_ng=False, reason="stop_or_standby_user_settle"
+        )
+
+    def _handle_scan_pair_event(self, db, channel_id: int, serial_no: str,
+                                 wp_id: int):
+        """v3.3.0 scan_pair 模式扫码事件入口 (在 _handle_scan 里被调用).
+
+        逻辑:
+          1) 同码二次扫 (== _scan_pair_active[ch].serial_no) → toast 提醒, 不动
+          2) 不同码 / 首次扫 → 解析共享窗口 (broadcast 多工位)
+             - 若每个工位都未开窗 → 起新窗口 (本码作为开始码), 起超时定时器
+             - 若有工位已有开始码 → 触发结算上一窗口, 然后用新码起新窗口
+
+        多工位广播:
+          一个扫码事件会对每个 broadcast channel 都调一次本方法 (scanner.py
+          循环 channels 时分发的). 为避免重复结算 / 重复起窗口, 只在 channels
+          列表里的"第一次出现 (ch == channels[0])"时执行真正动作, 其它兄弟
+          channel 的同事件直接 no-op (它们的状态在第一次时已经一并写完).
+        """
+        broadcast_chs = self._scan_pair_resolve_broadcast_channels(channel_id)
+        if broadcast_chs and channel_id != broadcast_chs[0]:
+            return
+
+        with self._scan_pair_lock:
+            existing = self._scan_pair_active.get(channel_id)
+            same_code_dup = (
+                existing is not None
+                and existing.get("serial_no") == serial_no
+            )
+
+        if same_code_dup:
+            print(
+                f"[ScanPair] ch{channel_id} 同码二次扫 (serial={serial_no}), "
+                f"软忽略, 等待新码",
+                flush=True,
+            )
+            for ch in broadcast_chs:
+                self._scan_pair_emit_dup_toast(ch, serial_no)
+            return
+
+        # 触发各工位的结算 (有开始码的工位才结算)
+        triggered_settle = []
+        for ch in broadcast_chs:
+            with self._scan_pair_lock:
+                if ch in self._scan_pair_active:
+                    self._cancel_scan_pair_timer(ch)
+                    triggered_settle.append(ch)
+        for ch in triggered_settle:
+            self._dispatch_scan_pair_settle(
+                ch, force_ng=False, reason=f"scan_pair_next_code:{serial_no}"
+            )
+
+        # 用新码起新窗口
+        now_ts = time.time()
+        with self._scan_pair_lock:
+            for ch in broadcast_chs:
+                self._scan_pair_active[ch] = {
+                    "serial_no": serial_no,
+                    "wp_id": wp_id,
+                    "scanned_at": now_ts,
+                }
+        for ch in broadcast_chs:
+            self._arm_scan_pair_timer(ch)
+        print(
+            f"[ScanPair] 起新窗口 (开始码={serial_no}, wp#{wp_id}, "
+            f"工位={broadcast_chs})",
+            flush=True,
+        )
+
+    def _scan_pair_emit_dup_toast(self, channel_id: int, serial_no: str):
+        """同码二次扫 → 通知前端弹 toast 'duplicate scan in scan_pair mode'.
+
+        复用 _last_scan_event 字段加一个 dup_warning 标志, 前端轮询 detection
+        results 时检查该字段并弹 toast.
+        """
+        self._last_scan_event[channel_id] = {
+            "serial_no": serial_no,
+            "workpiece_id": None,
+            "timestamp": time.time(),
+            "scan_pair_dup_warning": True,
+        }
 
     def _get_current_cycle_id(self, channel_id: int) -> Optional[int]:
         """获取该工位当前活跃周期 ID"""
@@ -646,8 +875,26 @@ class MESHookManager:
             "timestamp": time.time(),
         }
 
+        # v3.4.0 scan_mode='D' (容器跨线触发) 收到码后立刻发 LOFF.
+        # 与 bind_timing 完全正交; 调完 LOFF 后照走 bind_timing 分支处理工件绑定.
+        try:
+            from backend.api.channel_manager import channel_manager
+            _mgr = channel_manager.get(channel_id)
+            if _mgr is not None and hasattr(_mgr, 'scan_d_on_scan_received'):
+                _mgr.scan_d_on_scan_received()
+        except Exception as _e:
+            print(f"[ScanD] scan_d_on_scan_received 异常 ch={channel_id}: {_e}", flush=True)
+
+        # v3.3.0 scan_pair (码-码闭环) 模式: 扫码 A 触发结算上一窗口 + 起新窗口.
+        # 这里 hijack 后续的 mid_cycle / cycle_start 路径, 由 scan_pair 单独管理
+        # cycle 结算节奏, 不进入老的 bind_timing 分支.
+        bind_timing = self._get_bind_timing(channel_id)
+        if bind_timing == "scan_pair":
+            self._handle_scan_pair_event(db, channel_id, serial_no, wp.id)
+            return
+
         # mid_cycle: 如果当前有活跃周期且未绑定工件，立即绑定
-        if self._get_bind_timing(channel_id) == "mid_cycle":
+        if bind_timing == "mid_cycle":
             if channel_id not in self._inspecting_workpiece:
                 current_cid = self._get_current_cycle_id(channel_id)
                 if current_cid:

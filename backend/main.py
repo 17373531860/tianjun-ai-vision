@@ -108,6 +108,13 @@ def migrate_database():
         ("scanner_devices", "primary_settle_min_items", "INTEGER DEFAULT 1"),
         # v3.1.2 集群站点结果合并策略 (latest / ok_lock)
         ("cluster_config", "station_result_strategy", "VARCHAR(20) DEFAULT 'latest'"),
+        # v3.3.0 码-码闭环结算: bind_timing="scan_pair" 模式下扫 A 后等待扫 B 的最大秒数
+        ("scanner_devices", "scan_pair_max_wait_sec", "INTEGER DEFAULT 0"),
+        # v3.4.0 D 容器跨线/区域触发扫码 (scan_mode='D')
+        ("scanner_devices", "scan_d_geometry", "VARCHAR(8) DEFAULT 'line'"),
+        ("scanner_devices", "scan_d_line", "JSON"),
+        ("scanner_devices", "scan_d_zone", "JSON"),
+        ("scanner_devices", "scan_d_gone_confirm_frames", "INTEGER DEFAULT 30"),
     ]
     
     try:

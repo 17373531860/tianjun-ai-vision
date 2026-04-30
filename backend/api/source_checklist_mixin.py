@@ -201,9 +201,18 @@ class ChecklistMixin:
         
         print(f"[Tracking] 判定: merged={merged_counters}, missing={missing}, extra={extra}, "
               f"cycle_id={self.current_cycle_id}, cycle_active={self._tracking_cycle_active}")
-        
+
+        # v3.3.0 scan_pair: 由 settle_for_scan_pair() 设置的提示标志, 此时把
+        # OK/NG 判定切到 sticky 'was_complete', 而不是基于当前帧的 missing/extra.
+        scan_pair_hint = bool(getattr(self, '_scan_pair_settle_hint', False))
+        was_complete = bool(getattr(self, '_tracking_was_complete', False))
+
         if not expected_items:
             self._trigger_event(1, f'Counting complete: {dict(merged_counters)}')
+        elif scan_pair_hint and was_complete:
+            self._trigger_event(
+                1, f'Scan-pair: was complete (final={dict(merged_counters)})'
+            )
         elif missing or extra:
             reasons = []
             if missing: reasons.append(f'missing: {missing}')

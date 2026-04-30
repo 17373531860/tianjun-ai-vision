@@ -128,6 +128,9 @@ class ContainerGroupingMixin:
                             'items_ever_seen': {},
                             'item_class_counts': {},
                             'is_complete': False,
+                            # v3.3.0: sticky 'was_complete' — 一旦曾经齐过永久 True,
+                            # 直到 _settle_box() 清空。供 scan_pair 模式判 OK/NG。
+                            'was_complete': False,
                         }
                 else:
                     self._box_objects[did]['bbox'] = obj['bbox']
@@ -229,6 +232,18 @@ class ContainerGroupingMixin:
                 box_state['item_class_counts'][item_label] = \
                     box_state['item_class_counts'].get(item_label, 0) + 1
         
+        # v3.3.0 scan_pair (码-码闭环结算) 模式判定: 由 mes_hooks 在扫码事件里
+        # 维护 cycle 节奏, 这里关掉 gone-confirm 触发的自动 _settle_box. 仅维护
+        # _was_complete sticky flag, 后续 settle_for_scan_pair() 时按此判 OK/NG.
+        scan_pair_active = False
+        try:
+            from backend.services.mes_hooks import get_mes_hook
+            _mes_mgr = get_mes_hook()
+            if _mes_mgr and getattr(_mes_mgr, 'enabled', False):
+                scan_pair_active = _mes_mgr.is_scan_pair_mode(getattr(self, 'channel_id', 0))
+        except Exception:
+            scan_pair_active = False
+
         # Recalculate completeness for all active boxes
         for box_did in active_box_dids:
             if box_did in self._box_objects:
@@ -237,12 +252,16 @@ class ContainerGroupingMixin:
                     bs['item_class_counts'].get(cls, 0) >= exp
                     for cls, exp in expected_no_container.items()
                 )
+                # v3.3.0: sticky 'was_complete' — 一旦曾经 is_complete=True 永久置 True,
+                # 直到本 box 被 _settle_box() 清空。供 scan_pair 模式按"曾齐过"判 OK/NG。
+                if bs['is_complete']:
+                    bs['was_complete'] = True
                 if cycle_strategy == 'roi_exit':
                     det = {'x': bs['bbox']['x'], 'y': bs['bbox']['y'],
                            'w': bs['bbox']['w'], 'h': bs['bbox']['h']}
                     if self._is_in_roi(det):
                         bs['had_roi'] = True
-        
+
         # Per-box gone confirmation (same pattern as cycle-level settlement)
         # 注意: _settle_box 会调 _end_cycle, _end_cycle 会清空 _box_objects,
         # 所以同一帧内若有先后多个箱子结算, 后续 box_did 已被清掉, 必须重判 key.
@@ -263,17 +282,25 @@ class ContainerGroupingMixin:
                 if bs['gone_frames'] == 1:
                     print(f"[Container] {box_did} gone, confirming: {gone_confirm_frames} frames")
                 if bs['gone_frames'] >= gone_confirm_frames:
-                    print(f"[Container] {box_did} confirmed gone ({bs['gone_frames']}/{gone_confirm_frames})")
-                    _sd = self.project_config.get('pipeline_config', {}).get('settle_dedup', False) if self.project_config else False
-                    if _sd and not self.current_cycle_id:
-                        self.start_cycle()
-                    self._settle_box(box_did, expected_items)
+                    if scan_pair_active:
+                        # v3.3.0: 扫码闭环模式下, 物理消失不结算, 由下一码事件触发.
+                        # 这里只刷 last_seen / 保留 was_complete, 并把 gone_frames 卡在阈值
+                        # 防止反复打印日志. (重新出现还能 reset 到 0)
+                        bs['gone_frames'] = gone_confirm_frames
+                    else:
+                        print(f"[Container] {box_did} confirmed gone ({bs['gone_frames']}/{gone_confirm_frames})")
+                        _sd = self.project_config.get('pipeline_config', {}).get('settle_dedup', False) if self.project_config else False
+                        if _sd and not self.current_cycle_id:
+                            self.start_cycle()
+                        self._settle_box(box_did, expected_items)
             else:
                 if bs.get('gone_frames', 0) > 0:
                     print(f"[Container] {box_did} reappeared, reset ({bs['gone_frames']}/{gone_confirm_frames})")
                 bs['gone_frames'] = 0
 
-    def _settle_box(self, box_display_id: str, expected_items: dict):
+    def _settle_box(self, box_display_id: str, expected_items: dict, *,
+                    via_scan_pair: bool = False,
+                    scan_pair_force_ng: bool = False):
         """Settle a single box: record its items and completeness.
 
         v3.1.4: 加"幽灵箱跳过"前置过滤 — 当 box.item_class_counts 的总件数
@@ -287,6 +314,14 @@ class ContainerGroupingMixin:
         客户机表象就是 NG TOP3 几个步骤 NG 率完全相同 = 53.x%, 50 秒批量结算 5 个 NG。
 
         阈值默认 1 = 至少装 1 件才视为真箱; 设 0 退化到 v3.1.3 行为 (空箱也入账)。
+
+        v3.3.0 scan_pair (码-码闭环) 模式参数:
+          - via_scan_pair=True: 由 settle_for_scan_pair() 调用; 此时 OK/NG 判定改用
+            box_state['was_complete'] (sticky 历史齐过) 而非当前帧 is_complete.
+            因为扫码闭环允许工人扫前从箱里拿件再扫下一码, 最后帧件数可能不齐,
+            但只要"曾齐过"就算 OK. 老路径 (gone-confirm 触发) 不传此参数, 行为不变.
+          - scan_pair_force_ng=True: 超时强制结算 (must with via_scan_pair=True),
+            不论 was_complete 一律判 NG.
         """
         box_state = self._box_objects.pop(box_display_id, None)
         if box_state is None:
@@ -325,8 +360,18 @@ class ContainerGroupingMixin:
                 display = self.step_display_names.get(cls, cls)
                 extra.append(f"{display}: {actual}/{exp}")
         # 不在期望清单中的类别不参与判定（允许画框但不影响 OK/NG）
-        
-        is_ok = not missing and not extra
+
+        # v3.3.0 scan_pair: 判定基准从"当前 is_complete (current_is_ok)"切换到
+        # "曾齐过 was_complete"; 超时 force_ng 时直接 NG. 老路径行为不变.
+        current_is_ok = not missing and not extra
+        if via_scan_pair and scan_pair_force_ng:
+            is_ok = False
+            if not missing and not extra:
+                missing.append("scan_pair_timeout")
+        elif via_scan_pair:
+            is_ok = bool(box_state.get('was_complete', False)) or current_is_ok
+        else:
+            is_ok = current_is_ok
         
         result = {
             'display_id': box_display_id,
@@ -465,3 +510,193 @@ class ContainerGroupingMixin:
             '_settled_ok': sum(1 for r in self._box_settled_results if r['is_complete']),
             '_settled_ng': sum(1 for r in self._box_settled_results if not r['is_complete']),
         }
+
+    # ============== v3.4.0 scan_mode='D' 容器跨线/区域触发扫码 ==============
+
+    def _scan_d_update(self):
+        """v3.4.0 D 模式状态机. 仅在容器模式 + scan_mode='D' 时启用.
+
+        状态机 (per box display_id):
+            idle      → 跨线方向匹配 / 进区域 → armed (发 LON, set _scan_d_armed_box)
+            armed     → mes_hooks 收到扫码 → scanned (发 LOFF, 清 armed_box)
+                      → 异常 (box 离开未扫到码) → 强制 LOFF + reset
+            scanned   → box gone-confirm 完成 → reset (允许下一个 box)
+
+        约束: 同一时刻只允许一个 armed_box (产线节奏保证串行); 若并发跨线只
+        log warning 不重复发 LON.
+        """
+        if not getattr(self, '_container_mode', False):
+            return
+        try:
+            from backend.services.scanner import get_scanner_service
+            svc = get_scanner_service()
+            if not svc.is_scan_d_for_channel(self.channel_id):
+                return
+            cfg = svc.get_scan_d_config_for_channel(self.channel_id)
+        except Exception:
+            return
+        if not cfg:
+            return
+
+        geometry = cfg.get('geometry', 'line')
+        gone_threshold = int(cfg.get('gone_confirm_frames', 30) or 30)
+
+        # 几何配置以归一化坐标 [0,1] 存储 (与 ROI 一致), 这里乘以当前帧分辨率得像素
+        frame_w = float(getattr(self, 'width', 1280) or 1280)
+        frame_h = float(getattr(self, 'height', 720) or 720)
+
+        line_check = None
+        zone_polygon = None
+        side_a_to_b = True
+
+        if geometry == 'line':
+            line_cfg = cfg.get('line') or {}
+            need = ('x1', 'y1', 'x2', 'y2')
+            if not all(k in line_cfg and line_cfg[k] is not None for k in need):
+                return  # 几何未配置, 静默跳过
+            x1 = float(line_cfg['x1']) * frame_w
+            y1 = float(line_cfg['y1']) * frame_h
+            x2 = float(line_cfg['x2']) * frame_w
+            y2 = float(line_cfg['y2']) * frame_h
+            side_a_to_b = bool(line_cfg.get('side_a_to_b', True))
+
+            def _side_of(cx, cy):
+                # 叉积符号: > 0 = A 侧 (line LHS), < 0 = B 侧 (line RHS)
+                # 接近 0 视为线上 (未知方向)
+                cross = (x2 - x1) * (cy - y1) - (y2 - y1) * (cx - x1)
+                if cross > 0.5:
+                    return 1
+                if cross < -0.5:
+                    return -1
+                return 0
+            line_check = _side_of
+        elif geometry == 'zone':
+            zone_norm = cfg.get('zone') or []
+            if len(zone_norm) < 3:
+                return
+            zone_polygon = [
+                [float(p[0]) * frame_w, float(p[1]) * frame_h]
+                for p in zone_norm
+                if isinstance(p, (list, tuple)) and len(p) >= 2
+            ]
+            if len(zone_polygon) < 3:
+                return
+        else:
+            return
+
+        seen_box_dids = set()
+        for box_did, bs in (self._box_objects or {}).items():
+            seen_box_dids.add(box_did)
+            bbox = bs.get('bbox') or {}
+            cx = bbox.get('x', 0) + bbox.get('w', 0) / 2.0
+            cy = bbox.get('y', 0) + bbox.get('h', 0) / 2.0
+
+            st = self._scan_d_box_states.get(box_did)
+            if st is None:
+                st = {"side": 0, "in_zone": None, "armed": False,
+                      "scanned": False, "gone_frames": 0}
+                self._scan_d_box_states[box_did] = st
+            st['gone_frames'] = 0  # 还在画面里, 重置
+
+            if st.get('armed') or st.get('scanned'):
+                # 已在 D 流程里, 状态推进交给扫码事件 (LOFF) / gone (reset)
+                if geometry == 'line':
+                    st['side'] = line_check(cx, cy)
+                else:
+                    st['in_zone'] = self._point_in_polygon(cx, cy, zone_polygon)
+                continue
+
+            triggered = False
+            if geometry == 'line':
+                cur_side = line_check(cx, cy)
+                prev_side = st.get('side', 0)
+                if prev_side and cur_side and prev_side != cur_side:
+                    if side_a_to_b and prev_side == 1 and cur_side == -1:
+                        triggered = True
+                    elif (not side_a_to_b) and prev_side == -1 and cur_side == 1:
+                        triggered = True
+                st['side'] = cur_side
+            else:
+                cur_in = self._point_in_polygon(cx, cy, zone_polygon)
+                prev_in = st.get('in_zone')
+                if prev_in is False and cur_in:
+                    triggered = True
+                st['in_zone'] = cur_in
+
+            if not triggered:
+                continue
+
+            if self._scan_d_armed_box is not None:
+                # 健壮性: 同时刻只允许一个 armed; 后到的 box 跨线只 log
+                print(f"[ScanD] ch{getattr(self,'channel_id','?')} {box_did} 跨"
+                      f"{geometry}, 但 armed_box={self._scan_d_armed_box} 仍未扫到码, "
+                      f"忽略本次 (产线节奏异常?)")
+                continue
+
+            st['armed'] = True
+            self._scan_d_armed_box = box_did
+            try:
+                n = svc.send_lon_for_channel(
+                    self.channel_id, reason=f"box={box_did} {geometry}"
+                )
+                print(f"[ScanD] ch{getattr(self,'channel_id','?')} {box_did} 跨"
+                      f"{geometry} → LON 已发 ({n} 个 text_lon 扫码器)")
+            except Exception as e:
+                print(f"[ScanD] LON 发送异常 ch{getattr(self,'channel_id','?')}: {e}")
+
+        # 不在画面的 box → gone_frames 累加, 超阈值 reset 状态
+        for box_did in list(self._scan_d_box_states.keys()):
+            if box_did in seen_box_dids:
+                continue
+            st = self._scan_d_box_states[box_did]
+            st['gone_frames'] = st.get('gone_frames', 0) + 1
+            if st['gone_frames'] < gone_threshold:
+                continue
+            was_armed = st.get('armed', False)
+            was_scanned = st.get('scanned', False)
+            del self._scan_d_box_states[box_did]
+            if self._scan_d_armed_box == box_did:
+                self._scan_d_armed_box = None
+                if was_armed and not was_scanned:
+                    # 异常: armed 但 box 离开未扫到码, 主动 LOFF 防止 LON 残留
+                    try:
+                        svc.send_loff_for_channel(
+                            self.channel_id,
+                            reason=f"abandon armed box={box_did}",
+                        )
+                        print(f"[ScanD] ch{getattr(self,'channel_id','?')} "
+                              f"{box_did} armed 但离开未扫到码, 已强制 LOFF")
+                    except Exception:
+                        pass
+            print(f"[ScanD] ch{getattr(self,'channel_id','?')} "
+                  f"{box_did} gone-confirm 完成 (>={gone_threshold}f), reset")
+
+    def scan_d_on_scan_received(self) -> bool:
+        """v3.4.0 由 mes_hooks._handle_scan 在 D 模式扫到码后调用. 返回是否真正
+        发了 LOFF (即当前是否有 armed box 等待此码).
+
+        把 _scan_d_armed_box 切到 scanned 状态, 主动发 LOFF 关灯, 等 box 真正
+        离开 (gone-confirm) 才允许下一个 box 触发 LON.
+        """
+        armed_did = getattr(self, '_scan_d_armed_box', None)
+        if not armed_did:
+            return False
+        st = self._scan_d_box_states.get(armed_did)
+        if not st:
+            self._scan_d_armed_box = None
+            return False
+        st['armed'] = False
+        st['scanned'] = True
+        self._scan_d_armed_box = None
+        try:
+            from backend.services.scanner import get_scanner_service
+            svc = get_scanner_service()
+            n = svc.send_loff_for_channel(
+                getattr(self, 'channel_id', 0),
+                reason=f"scan received for box={armed_did}",
+            )
+            print(f"[ScanD] ch{getattr(self,'channel_id','?')} {armed_did} "
+                  f"扫到码 → LOFF 已发 ({n} 个扫码器), 等 box 离开 reset")
+        except Exception as e:
+            print(f"[ScanD] LOFF 发送异常: {e}")
+        return True

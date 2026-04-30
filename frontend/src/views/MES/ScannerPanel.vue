@@ -179,10 +179,27 @@
           </el-select>
         </el-form-item>
         <el-form-item label="绑定时机">
-          <el-select v-model="form.bind_timing" class="w-full">
+          <el-select v-model="form.bind_timing" class="w-full" @change="onBindTimingChange">
             <el-option label="中途绑定（默认，扫码立即绑当前周期）" value="mid_cycle" />
             <el-option label="下周期绑定（扫码后等下个周期开始才绑）" value="cycle_start" />
+            <el-option label="码-码闭环（扫码 A 开周期，扫码 B 结算 A 并开新周期）" value="scan_pair" />
           </el-select>
+          <div v-if="form.bind_timing === 'scan_pair'" class="text-xs text-amber-300 mt-1">
+            码-码闭环模式: 系统强制 <b>先扫后检 (开)</b>、<b>扫描模式 ≠ C 单次/周期</b>、
+            <b>迟到补绑 = 0 秒</b>。下面相关字段已自动锁定。判 OK/NG 依据"窗口内是否曾齐过"
+            而非物理消失。
+          </div>
+        </el-form-item>
+        <el-form-item v-if="form.bind_timing === 'scan_pair'" label="超时秒数">
+          <el-input-number v-model="form.scan_pair_max_wait_sec" :min="0" :max="3600"
+                           :precision="0" class="w-full" controls-position="right">
+            <template #append>秒</template>
+          </el-input-number>
+          <div class="text-xs text-gray-500 mt-1">
+            扫码 A 后等待下一码的最大秒数。<b>0</b> = 不超时 (节拍稳定时推荐);
+            填 <b>N &gt; 0</b> = N 秒内还没扫下一码就强制 NG 结算并清空窗口,
+            防止漏扫导致周期永远卡死。
+          </div>
         </el-form-item>
         <el-form-item label="通讯协议">
           <el-select v-model="form.device_type" class="w-full" @change="onDeviceTypeChange">
@@ -198,19 +215,66 @@
           </div>
         </el-form-item>
         <el-form-item v-if="form.device_type === 'text_lon'" label="扫描模式">
-          <el-select v-model="form.scan_mode" class="w-full">
+          <el-select v-model="form.scan_mode" class="w-full" @change="onScanModeChange">
             <el-option label="A 持续扫描（默认，扫码器灯一直闪等下一码）" value="continuous" />
             <el-option label="B 降速持续扫描（每次续 LON 间隔，灯闪慢一点）" value="throttled" />
-            <el-option label="C 单次/周期扫描（扫到码 LOFF 灭灯，周期结束才再开扫）" value="once_per_cycle" />
+            <el-option label="C 单次/周期扫描（扫到码 LOFF 灭灯，周期结束才再开扫）"
+                       value="once_per_cycle"
+                       :disabled="form.bind_timing === 'scan_pair'" />
+            <el-option label="D 容器跨线/区域触发（容器模式专用，箱子跨线发 LON，扫到码 LOFF）"
+                       value="D" />
           </el-select>
           <div class="text-xs text-gray-500 mt-1">
             <b>A 持续</b>：扫码器是单次触发型时，后端每收到一个 ERROR / 条码立刻续发 LON，
             灯持续闪，扫到一个码立刻能扫下一个，蜂鸣 / 闪烁较多。<br>
             <b>B 降速</b>：同 A，但每次续发 LON 间会等若干毫秒，降低闪烁频率，省电安静。<br>
             <b>C 单次/周期</b>：扫到一个码后立刻 LOFF 灭灯，等当前检测周期结束（OK / NG / 作废）
-            后端自动恢复扫描——一个工件只扫一次，符合"先扫后检"的强校验工位流程。
+            后端自动恢复扫描——一个工件只扫一次，符合"先扫后检"的强校验工位流程。<br>
+            <b>D 容器跨线触发</b>（仅容器模式项目）：箱子跨过画面里画的线 / 进入区域 → 后端发 LON
+            让扫码器开扫，扫到码立即 LOFF。每个箱子各自一次 LON-扫码-LOFF 循环，
+            <span class="text-amber-400">绑定工位必须是容器模式项目，否则切到此模式会被拒绝</span>。
           </div>
         </el-form-item>
+
+        <!-- v3.4.0 D 模式专属几何配置 -->
+        <template v-if="form.device_type === 'text_lon' && form.scan_mode === 'D'">
+          <el-form-item label="触发几何">
+            <el-radio-group v-model="form.scan_d_geometry">
+              <el-radio value="line">线 (跨线触发)</el-radio>
+              <el-radio value="zone">区域 (进入触发)</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="几何配置">
+            <div class="flex items-center gap-2">
+              <el-button type="primary" size="small" @click="openTriggerGeoEditor">
+                {{ scanDGeometryConfigured ? '重新绘制' : '绘制 ' + (form.scan_d_geometry === 'line' ? '触发线' : '触发区域') }}
+              </el-button>
+              <el-button v-if="scanDGeometryConfigured" type="danger" size="small" plain
+                         @click="clearScanDGeometry">清除</el-button>
+              <span v-if="scanDGeometryConfigured" class="text-xs text-green-400">
+                {{ form.scan_d_geometry === 'line'
+                    ? '已配置触发线 (' + (form.scan_d_line?.side_a_to_b ? 'A → B' : 'B → A') + ')'
+                    : '已配置触发区域 (' + (form.scan_d_zone?.length || 0) + ' 顶点)' }}
+              </span>
+              <span v-else class="text-xs text-amber-400">未配置 (D 模式不会触发)</span>
+            </div>
+            <div class="text-xs text-gray-500 mt-1">
+              在视频画面上画一条线或一个多边形区域。线模式下选择哪一侧 → 哪一侧为
+              "正方向"，箱子中心点跨过此线触发 LON；区域模式下箱子中心点进入区域触发 LON。
+            </div>
+          </el-form-item>
+          <el-form-item label="离开判定帧数">
+            <el-input-number v-model="form.scan_d_gone_confirm_frames" :min="0" :max="600"
+                             :precision="0" class="w-full" controls-position="right">
+              <template #append>帧</template>
+            </el-input-number>
+            <div class="text-xs text-gray-500 mt-1">
+              箱子离开画面（或退出区域）多少帧后认为已"走完"，允许下一个箱子触发。
+              <b>0</b> 沿用项目 pipeline_config 设置；推荐 30 帧 (1 秒@30fps)。
+            </div>
+          </el-form-item>
+        </template>
+
         <el-form-item v-if="form.device_type === 'text_lon' && form.scan_mode === 'throttled'"
                       label="续发间隔">
           <el-input-number v-model="form.throttle_idle_ms" :min="0" :max="5000" :step="100"
@@ -233,7 +297,9 @@
           </div>
         </el-form-item>
         <el-form-item label="迟到扫码补绑">
-          <el-input-number v-model="form.late_scan_bind_window_sec" :min="0" :max="60" :precision="0" class="w-full" controls-position="right">
+          <el-input-number v-model="form.late_scan_bind_window_sec" :min="0" :max="60"
+                           :precision="0" class="w-full" controls-position="right"
+                           :disabled="form.bind_timing === 'scan_pair'">
             <template #append>秒</template>
           </el-input-number>
           <div class="text-xs text-gray-500 mt-1">
@@ -323,7 +389,8 @@
             <span class="text-xs text-gray-300">启用</span>
           </div>
           <div class="flex items-center gap-1.5">
-            <el-switch v-model="form.scan_required" size="small" />
+            <el-switch v-model="form.scan_required" size="small"
+                       :disabled="form.bind_timing === 'scan_pair'" />
             <span class="text-xs text-gray-300">先扫后检</span>
           </div>
           <div class="flex items-center gap-1.5">
@@ -417,18 +484,74 @@
         <el-button size="small" type="primary" @click="submitSimulateScan" :loading="simulating">注入扫码</el-button>
       </template>
     </el-dialog>
+
+    <!-- v3.4.0 D 模式触发几何编辑器 -->
+    <el-dialog v-model="triggerGeoEditorVisible"
+               :title="triggerGeoMode === 'line' ? '绘制 D 模式触发线' : '绘制 D 模式触发区域'"
+               width="80%" :close-on-click-modal="false" destroy-on-close>
+      <div class="space-y-3">
+        <div class="flex items-center gap-3 text-sm flex-wrap">
+          <template v-if="triggerGeoMode === 'line'">
+            <span class="text-gray-400">单击画面 2 次添加起点+终点; 画完两侧会染色 (蓝=A, 橙=B). 已画线再单击会清空重画.</span>
+            <div class="flex-1"></div>
+            <span class="text-xs">触发方向:</span>
+            <el-radio-group v-model="triggerGeoSideAtoB" size="small">
+              <el-radio-button :value="true">A → B (蓝→橙)</el-radio-button>
+              <el-radio-button :value="false">B → A (橙→蓝)</el-radio-button>
+            </el-radio-group>
+          </template>
+          <template v-else>
+            <span class="text-gray-400">单击添加顶点, 点击<b class="text-amber-400">第一个点</b>闭合多边形 (双击也可闭合).</span>
+            <div class="flex-1"></div>
+          </template>
+          <el-button size="small" @click="triggerGeoUndo"
+                     :disabled="(triggerGeoMode === 'line' ? triggerGeoLinePts.length : triggerGeoZonePts.length) === 0">
+            撤销
+          </el-button>
+          <el-button size="small" type="warning" @click="triggerGeoClear">全部清除</el-button>
+        </div>
+        <div class="relative bg-black rounded overflow-hidden flex justify-center" style="max-height: 70vh;">
+          <canvas ref="triggerGeoCanvas" class="cursor-crosshair"
+                  style="max-width: 100%; max-height: 70vh; object-fit: contain;"
+                  @click="triggerGeoCanvasClick"
+                  @dblclick="triggerGeoCanvasDblClick"
+                  @mousemove="triggerGeoCanvasMouseMove"></canvas>
+        </div>
+        <div class="flex items-center gap-3 text-xs text-gray-500">
+          <template v-if="triggerGeoMode === 'line'">
+            <span>已点击: {{ triggerGeoLinePts.length }} / 2</span>
+            <span v-if="triggerGeoLinePts.length === 2" class="text-green-400">线段已画好,
+              箱子从 <b class="text-sky-400">A 侧</b> → <b class="text-orange-400">B 侧</b>
+              {{ triggerGeoSideAtoB ? '(当前方向)' : '反向不触发' }}
+            </span>
+          </template>
+          <template v-else>
+            <span>顶点数: {{ triggerGeoZonePts.length }}</span>
+            <span v-if="triggerGeoZoneClosed" class="text-green-400 font-bold">多边形已闭合</span>
+          </template>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="triggerGeoEditorVisible = false">取消</el-button>
+        <el-button type="primary" @click="triggerGeoSave"
+          :disabled="triggerGeoMode === 'line' ? triggerGeoLinePts.length !== 2 : !triggerGeoZoneClosed">
+          保存几何
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import {
   getScannerDevices, createScannerDevice, updateScannerDevice,
   deleteScannerDevice, testScannerConnection, getScannerStatus, getScanLogs,
-  clearScanLogs, discoverScanners, simulateScannerScan
+  clearScanLogs, discoverScanners, simulateScannerScan, checkContainerMode,
 } from '@/api/scanner'
+import { getBackendHost } from '@/api/index'
 import { getWorkstations } from '@/api/detection'
 import {
   wmaxCreateVirtual, wmaxDeleteVirtual, wmaxAutoDiscover,
@@ -495,8 +618,358 @@ const defaultForm = () => ({
   broadcast_settle_mode: 'independent',
   primary_settle_channel: null,
   primary_settle_min_items: 1,
+  // v3.3.0: 码-码闭环结算超时秒数 (bind_timing='scan_pair' 时生效, 0=不超时)
+  scan_pair_max_wait_sec: 0,
+  // v3.4.0 D 容器跨线/区域触发扫码 (scan_mode='D' 时生效, 仅容器模式项目可启用)
+  //   scan_d_geometry: 'line' | 'zone'
+  //   scan_d_line: { x1,y1,x2,y2 [0..1 归一化], side_a_to_b: bool }
+  //   scan_d_zone: [[x,y], ...] [0..1 归一化, >=3 个点]
+  //   scan_d_gone_confirm_frames: 0=沿用项目设置, >0=D 模式专属
+  scan_d_geometry: 'line',
+  scan_d_line: null,
+  scan_d_zone: null,
+  scan_d_gone_confirm_frames: 30,
 })
 const form = ref(defaultForm())
+
+// v3.4.0 切到 D (容器跨线触发) 时校验绑定工位是否容器模式项目
+const lastNonDScanMode = ref('continuous')
+const onScanModeChange = async (val) => {
+  if (val !== 'D') {
+    lastNonDScanMode.value = val
+    return
+  }
+  // 校验绑定工位 (单工位绑定 channel_id; 多工位广播取广播列表第一个)
+  const broadcast = form.value.broadcast_channels || []
+  const checkCh = broadcast.length > 0 ? broadcast[0] : (form.value.channel_id ?? 0)
+  try {
+    const { data } = await checkContainerMode(checkCh)
+    if (!data?.is_container_mode) {
+      ElMessageBox.alert(
+        `工位 ${checkCh + 1} 当前绑定的项目不是容器模式 (logic_mode=${data?.logic_mode || '?'},` +
+        ` container_label="${data?.container_label || ''}"). D 模式仅适用于容器模式项目, ` +
+        `请先在"项目"页把容器步骤标签设好后再切.`,
+        'D 模式不可用',
+        { type: 'warning', confirmButtonText: '知道了' }
+      )
+      form.value.scan_mode = lastNonDScanMode.value || 'continuous'
+      return
+    }
+    ElMessage.success(`已切到 D 容器跨线触发模式 (项目: ${data?.project_name || '未命名'})`)
+  } catch (e) {
+    ElMessageBox.alert(
+      '无法校验工位项目模式; 请确认后端服务正常: ' + (e?.message || e),
+      'D 模式校验失败',
+      { type: 'error' }
+    )
+    form.value.scan_mode = lastNonDScanMode.value || 'continuous'
+  }
+}
+
+// v3.4.0 D 模式几何配置: 是否已配置 + 清除
+const scanDGeometryConfigured = computed(() => {
+  if (form.value.scan_d_geometry === 'line') {
+    const ln = form.value.scan_d_line
+    return !!(ln && ln.x1 != null && ln.y1 != null && ln.x2 != null && ln.y2 != null)
+  } else {
+    return Array.isArray(form.value.scan_d_zone) && form.value.scan_d_zone.length >= 3
+  }
+})
+const clearScanDGeometry = () => {
+  if (form.value.scan_d_geometry === 'line') {
+    form.value.scan_d_line = null
+  } else {
+    form.value.scan_d_zone = null
+  }
+}
+
+// v3.4.0 触发几何编辑器 (line / zone)
+const triggerGeoEditorVisible = ref(false)
+const triggerGeoCanvas = ref(null)
+const triggerGeoMode = ref('line')  // 'line' | 'zone'
+const triggerGeoLinePts = ref([])   // [{x,y}, {x,y}] (像素 canvas 坐标)
+const triggerGeoZonePts = ref([])
+const triggerGeoZoneClosed = ref(false)
+const triggerGeoSideAtoB = ref(true)
+let triggerGeoImage = null
+let triggerGeoMousePos = null
+
+const openTriggerGeoEditor = async () => {
+  triggerGeoMode.value = form.value.scan_d_geometry || 'line'
+  triggerGeoLinePts.value = []
+  triggerGeoZonePts.value = []
+  triggerGeoZoneClosed.value = false
+  triggerGeoSideAtoB.value = !!(form.value.scan_d_line?.side_a_to_b ?? true)
+  triggerGeoMousePos = null
+  triggerGeoEditorVisible.value = true
+  await nextTick()
+  setTimeout(() => loadTriggerGeoSnapshot(), 200)
+}
+
+const loadTriggerGeoSnapshot = () => {
+  const canvas = triggerGeoCanvas.value
+  if (!canvas) return
+  const broadcast = form.value.broadcast_channels || []
+  const ch = broadcast.length > 0 ? broadcast[0] : (form.value.channel_id ?? 0)
+  const img = new Image()
+  img.crossOrigin = 'anonymous'
+  const host = getBackendHost()
+  img.src = `${host}/snapshot?channel=${ch}&t=${Date.now()}`
+  img.onload = () => {
+    triggerGeoImage = img
+    canvas.width = img.naturalWidth
+    canvas.height = img.naturalHeight
+    // 把已有几何按归一化坐标还原到 canvas 像素
+    if (triggerGeoMode.value === 'line' && form.value.scan_d_line) {
+      const L = form.value.scan_d_line
+      triggerGeoLinePts.value = [
+        { x: L.x1 * canvas.width, y: L.y1 * canvas.height },
+        { x: L.x2 * canvas.width, y: L.y2 * canvas.height },
+      ]
+    } else if (triggerGeoMode.value === 'zone' && Array.isArray(form.value.scan_d_zone)) {
+      triggerGeoZonePts.value = form.value.scan_d_zone.map(([nx, ny]) => ({
+        x: nx * canvas.width, y: ny * canvas.height,
+      }))
+      triggerGeoZoneClosed.value = triggerGeoZonePts.value.length >= 3
+    }
+    triggerGeoRedraw()
+  }
+  img.onerror = () => {
+    const ctx = canvas.getContext('2d')
+    canvas.width = 1280
+    canvas.height = 720
+    ctx.fillStyle = '#1e293b'
+    ctx.fillRect(0, 0, 1280, 720)
+    ctx.fillStyle = '#94a3b8'
+    ctx.font = '20px Arial'
+    ctx.textAlign = 'center'
+    ctx.fillText('无法获取摄像头画面，请确保工位摄像头已连接', 640, 360)
+    triggerGeoImage = null
+  }
+}
+
+const triggerGeoGetCanvasXY = (e) => {
+  const canvas = triggerGeoCanvas.value
+  if (!canvas) return null
+  const rect = canvas.getBoundingClientRect()
+  const sx = canvas.width / rect.width
+  const sy = canvas.height / rect.height
+  return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy }
+}
+
+const triggerGeoCanvasClick = (e) => {
+  const pt = triggerGeoGetCanvasXY(e)
+  if (!pt) return
+  if (triggerGeoMode.value === 'line') {
+    if (triggerGeoLinePts.value.length >= 2) {
+      // 已经画完了, 重新开始
+      triggerGeoLinePts.value = [pt]
+    } else {
+      triggerGeoLinePts.value.push(pt)
+    }
+    triggerGeoRedraw()
+  } else {
+    // zone
+    if (triggerGeoZoneClosed.value) {
+      triggerGeoZonePts.value = [pt]
+      triggerGeoZoneClosed.value = false
+      triggerGeoRedraw()
+      return
+    }
+    if (triggerGeoZonePts.value.length >= 3) {
+      const first = triggerGeoZonePts.value[0]
+      const dist = Math.hypot(pt.x - first.x, pt.y - first.y)
+      const canvas = triggerGeoCanvas.value
+      const scale = canvas.width / (canvas.getBoundingClientRect().width || 1)
+      if (dist < 15 * scale) {
+        triggerGeoZoneClosed.value = true
+        triggerGeoRedraw()
+        return
+      }
+    }
+    triggerGeoZonePts.value.push(pt)
+    triggerGeoRedraw()
+  }
+}
+
+const triggerGeoCanvasDblClick = (e) => {
+  e.preventDefault()
+  if (triggerGeoMode.value === 'zone' && triggerGeoZonePts.value.length >= 3 && !triggerGeoZoneClosed.value) {
+    triggerGeoZoneClosed.value = true
+    triggerGeoRedraw()
+  }
+}
+
+const triggerGeoCanvasMouseMove = (e) => {
+  triggerGeoMousePos = triggerGeoGetCanvasXY(e)
+  triggerGeoRedraw()
+}
+
+const triggerGeoUndo = () => {
+  if (triggerGeoMode.value === 'line') {
+    triggerGeoLinePts.value.pop()
+  } else {
+    if (triggerGeoZoneClosed.value) {
+      triggerGeoZoneClosed.value = false
+    } else {
+      triggerGeoZonePts.value.pop()
+    }
+  }
+  triggerGeoRedraw()
+}
+
+const triggerGeoClear = () => {
+  triggerGeoLinePts.value = []
+  triggerGeoZonePts.value = []
+  triggerGeoZoneClosed.value = false
+  triggerGeoMousePos = null
+  triggerGeoRedraw()
+}
+
+// 把画面分两半: A 侧染浅蓝色透明, B 侧染浅橙色透明 (供用户判断方向)
+// A 侧 = 叉积 > 0 (即线段左侧, 数学坐标系; 屏幕坐标 y 向下不影响相对方位)
+const triggerGeoRedraw = () => {
+  const canvas = triggerGeoCanvas.value
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  if (triggerGeoImage) ctx.drawImage(triggerGeoImage, 0, 0)
+
+  if (triggerGeoMode.value === 'line') {
+    const pts = triggerGeoLinePts.value
+    if (pts.length === 2) {
+      // 染色两侧
+      const [p1, p2] = pts
+      const W = canvas.width, H = canvas.height
+      const sideOf = (x, y) => (p2.x - p1.x) * (y - p1.y) - (p2.y - p1.y) * (x - p1.x)
+      // 用 ImageData 像素染色稍贵, 简化用 4 个角填充判断 + 半透明矩形
+      // 更简单: 沿线段法向偏移, 画两条贴线段长度方向的胖梯形
+      const dx = p2.x - p1.x, dy = p2.y - p1.y
+      const len = Math.hypot(dx, dy) || 1
+      const nx = -dy / len, ny = dx / len  // 法向: 叉积 > 0 这一侧 (A)
+      const reach = Math.hypot(W, H)  // 远到画面外
+      // A 侧 (叉积 > 0): 平移 +nx,ny 方向
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.18)'  // 浅蓝
+      ctx.beginPath()
+      ctx.moveTo(p1.x, p1.y)
+      ctx.lineTo(p2.x, p2.y)
+      ctx.lineTo(p2.x + nx * reach, p2.y + ny * reach)
+      ctx.lineTo(p1.x + nx * reach, p1.y + ny * reach)
+      ctx.closePath()
+      ctx.fill()
+      // B 侧 (叉积 < 0): 平移 -nx,-ny
+      ctx.fillStyle = 'rgba(251, 146, 60, 0.18)'  // 浅橙
+      ctx.beginPath()
+      ctx.moveTo(p1.x, p1.y)
+      ctx.lineTo(p2.x, p2.y)
+      ctx.lineTo(p2.x - nx * reach, p2.y - ny * reach)
+      ctx.lineTo(p1.x - nx * reach, p1.y - ny * reach)
+      ctx.closePath()
+      ctx.fill()
+      // 标注 A / B
+      ctx.font = 'bold 28px Arial'
+      ctx.textAlign = 'center'
+      ctx.fillStyle = '#38bdf8'
+      ctx.fillText('A', (p1.x + p2.x) / 2 + nx * 80, (p1.y + p2.y) / 2 + ny * 80)
+      ctx.fillStyle = '#fb923c'
+      ctx.fillText('B', (p1.x + p2.x) / 2 - nx * 80, (p1.y + p2.y) / 2 - ny * 80)
+    }
+    // 画线段本体
+    ctx.strokeStyle = '#22c55e'
+    ctx.lineWidth = 3
+    ctx.setLineDash(pts.length < 2 ? [8, 4] : [])
+    ctx.beginPath()
+    if (pts.length >= 1) ctx.moveTo(pts[0].x, pts[0].y)
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+    if (pts.length === 1 && triggerGeoMousePos) ctx.lineTo(triggerGeoMousePos.x, triggerGeoMousePos.y)
+    ctx.stroke()
+    ctx.setLineDash([])
+    pts.forEach((pt, i) => {
+      ctx.fillStyle = i === 0 ? '#22c55e' : '#16a34a'
+      ctx.beginPath()
+      ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = 'white'
+      ctx.font = 'bold 12px Arial'
+      ctx.fillText(i === 0 ? '起点' : '终点', pt.x + 10, pt.y - 6)
+    })
+  } else {
+    // zone polygon
+    const pts = triggerGeoZonePts.value
+    if (pts.length === 0) return
+    if (triggerGeoZoneClosed.value && pts.length >= 3) {
+      ctx.fillStyle = 'rgba(34, 197, 94, 0.18)'
+      ctx.beginPath()
+      ctx.moveTo(pts[0].x, pts[0].y)
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+      ctx.closePath()
+      ctx.fill()
+    }
+    ctx.strokeStyle = '#22c55e'
+    ctx.lineWidth = 2
+    ctx.setLineDash(triggerGeoZoneClosed.value ? [] : [8, 4])
+    ctx.beginPath()
+    ctx.moveTo(pts[0].x, pts[0].y)
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+    if (triggerGeoZoneClosed.value) ctx.closePath()
+    else if (triggerGeoMousePos) ctx.lineTo(triggerGeoMousePos.x, triggerGeoMousePos.y)
+    ctx.stroke()
+    ctx.setLineDash([])
+    pts.forEach((pt, i) => {
+      const isFirst = i === 0
+      ctx.fillStyle = isFirst ? '#f59e0b' : '#16a34a'
+      ctx.beginPath()
+      ctx.arc(pt.x, pt.y, isFirst ? 7 : 5, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = 'white'
+      ctx.font = 'bold 11px Arial'
+      ctx.fillText(`${i + 1}`, pt.x + 8, pt.y - 4)
+    })
+  }
+}
+
+const triggerGeoSave = () => {
+  const canvas = triggerGeoCanvas.value
+  if (!canvas) return
+  const W = canvas.width, H = canvas.height
+  if (triggerGeoMode.value === 'line') {
+    if (triggerGeoLinePts.value.length !== 2) {
+      ElMessage.warning('线模式需要 2 个点; 单击画面添加起点和终点')
+      return
+    }
+    const [p1, p2] = triggerGeoLinePts.value
+    form.value.scan_d_line = {
+      x1: Math.round((p1.x / W) * 10000) / 10000,
+      y1: Math.round((p1.y / H) * 10000) / 10000,
+      x2: Math.round((p2.x / W) * 10000) / 10000,
+      y2: Math.round((p2.y / H) * 10000) / 10000,
+      side_a_to_b: !!triggerGeoSideAtoB.value,
+    }
+    form.value.scan_d_geometry = 'line'
+  } else {
+    if (!triggerGeoZoneClosed.value || triggerGeoZonePts.value.length < 3) {
+      ElMessage.warning('区域模式需要至少 3 个点并闭合多边形')
+      return
+    }
+    form.value.scan_d_zone = triggerGeoZonePts.value.map(p => [
+      Math.round((p.x / W) * 10000) / 10000,
+      Math.round((p.y / H) * 10000) / 10000,
+    ])
+    form.value.scan_d_geometry = 'zone'
+  }
+  triggerGeoEditorVisible.value = false
+  ElMessage.success('几何已保存; 点保存按钮提交到设备')
+}
+
+// v3.3.0 切到 "码-码闭环" 时强制锁定 scan_required=on / scan_mode≠C / late_bind=0,
+// 避免与扫码闭环节奏冲突。切回其它模式时不自动恢复 (用户自己改)。
+const onBindTimingChange = (val) => {
+  if (val !== 'scan_pair') return
+  if (!form.value.scan_required) form.value.scan_required = true
+  if (form.value.scan_mode === 'once_per_cycle') form.value.scan_mode = 'continuous'
+  if (form.value.late_scan_bind_window_sec > 0) form.value.late_scan_bind_window_sec = 0
+  ElMessage.info('已切换为码-码闭环结算; 已自动启用先扫后检, 关闭迟到补绑')
+}
 
 const onSettleModeChange = async (val) => {
   if (val !== 'primary') return

@@ -1,0 +1,144 @@
+{
+  "version": "3.3.0",
+  "date": "2026-04-30",
+  "previous_version": "3.2.0",
+  "changes": [],
+  "features": [
+    {
+      "type": "feature",
+      "id": "FEAT-330-001",
+      "title": "扫码闭环结算 (码-码闭环) — 扫码 A 开周期, 扫码 B 结算 A 并开新周期",
+      "symptom": "客户场景: 容器装件场景下, 工人节奏快, 物理消失/ROI 退出/超时这些 cycle 触发条件经常误触发或者错过 — 装到一半挪一下盒子被当成 ROI 退出 NG; 装齐后还没扫就被超时强制 NG; 单箱模式 + ByteTrack 切 ID 容易漏判。客户希望以'扫码工件号'作为唯一节拍源 — 扫一次开周期, 扫第二次说明前一件已结束, 立刻把前一件按'是否曾装齐过'结算 OK/NG。",
+      "root_cause": "现有 bind_timing 只支持 mid_cycle / cycle_start, 都依赖检测引擎自己探测 cycle 边界 (物理消失 + gone-confirm); 扫码事件只用来'绑工件号', 不直接驱动 cycle 节奏。当工人节奏与 gone-confirm 阈值/ROI 设计不匹配, 就会出 NG 错判, 客户得不停调阈值。",
+      "fix": "新增 bind_timing='scan_pair' 模式 (码-码闭环): scanner 收到扫码 A → mes_hooks._handle_scan_pair_event 起新窗口 (写 _scan_pair_active[ch] + 起 scan_pair_max_wait_sec 超时定时器, 0=不超时); 收到扫码 B (≠A) → 先调 source.settle_for_scan_pair() 结算 A 周期 (容器模式遍历所有 _box_objects 按 sticky was_complete 判 OK/NG, 复用 v3.1.4 的 container_settle_min_items 过滤幽灵箱; 非容器模式按 sticky _tracking_was_complete 判定), 再起 B 窗口。同码二次扫 → 软忽略 + 推 dup_warning toast 给前端, 窗口仍开。多工位广播 (1扫码器→N工位) 共享同一码窗口 — broadcast_chs[0] 做主分发, 兄弟 ch 的同事件 dispatch no-op, 同步开/同步结算。停止/待机时由前端弹窗 [结算 (默认)] / [丢弃] 收尾最后一码窗口。强制超时分支判 NG。container_grouping 在 scan_pair 激活时关掉 gone-confirm 自动 _settle_box (扫码节拍接管), 仅维护 sticky was_complete flag。互斥锁定: scan_pair 模式自动 scan_required=on / 锁掉 scan_mode=C / late_scan_bind_window_sec=0。",
+      "files": [
+        "backend/models/mes_models.py",
+        "backend/main.py",
+        "backend/api/scanner.py",
+        "backend/services/scanner.py",
+        "backend/services/mes_hooks.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/source_container_grouping_mixin.py",
+        "backend/api/source_tracking_mixin.py",
+        "backend/api/source_checklist_mixin.py",
+        "backend/api/source_state_init.py",
+        "backend/api/source.py",
+        "frontend/src/views/MES/ScannerPanel.vue",
+        "frontend/src/views/Monitor/index.vue",
+        "frontend/src/api/detection.js"
+      ],
+      "keywords": [
+        "scan_pair",
+        "码-码闭环结算",
+        "_handle_scan_pair_event",
+        "settle_for_scan_pair",
+        "_was_complete sticky",
+        "_tracking_was_complete sticky",
+        "_scan_pair_active 窗口",
+        "scan_pair_max_wait_sec 超时",
+        "广播多工位共享窗口",
+        "停止/待机弹窗 [结算/丢弃]",
+        "同码二次扫软忽略 + dup_warning toast",
+        "互斥锁定 scan_required/scan_mode/late_bind"
+      ],
+      "breaking": false
+    }
+  ],
+  "tools": [
+    {
+      "type": "tool",
+      "id": "TOOL-330-001",
+      "title": "test_scan_pair_settle.py 8 用例覆盖码-码闭环全状态机",
+      "symptom": "scan_pair 是新引入的 cycle 节拍机制, 涉及 mes_hooks 状态机 + source 结算分发 + 多工位广播 + 超时定时器 + sticky 判定, 任何一处回归都会引发严重客户事故 (NG 错判 / 工件丢失 / 周期串台)。",
+      "root_cause": "上线前必须有可重复运行的回归保护, 覆盖所有结算分支和边界。",
+      "fix": "8 个 unittest 用例: case_1 首扫起窗口 / case_2 同码二次扫软忽略 + dup_warning / case_3 不同码触发结算前一窗口 + 切窗口 / case_4 sticky was_complete=True 判 OK (即使最后帧不齐) / case_5 从未齐过判 NG / case_6 超时 force_ng 分支 (mock _get_scan_pair_max_wait_sec=0.2s 加速) / case_7 多工位广播共享窗口 (broadcast_chs[0] 主分发, 兄弟 ch no-op) / case_8 settle_scan_pair_for_stop 双分支 (settle / discard)。同时回归跑 test_id_drift_merge.py (6) + test_max_recognized_hidden.py (8) + test_broadcast_settle.py (11) 全过, 证明 v3.3.0 不破坏 v3.2.0 / v3.2.1 / v3.1.2。",
+      "files": [
+        "tools/test_scan_pair_settle.py"
+      ],
+      "keywords": [
+        "scan_pair 单元测试",
+        "8 用例",
+        "回归 v3.2.0/v3.2.1/v3.1.2"
+      ],
+      "breaking": false
+    }
+  ],
+  "config_changes": [
+    {
+      "type": "config",
+      "id": "CONFIG-330-001",
+      "title": "新增字段 scan_pair_max_wait_sec + 版本号升级到 3.3.0",
+      "symptom": "scanner_devices 表新增 scan_pair_max_wait_sec INTEGER DEFAULT 0 (扫码 A 后等待 B 的最大秒数, 0=不超时); 跨 minor 因为引入 scan_pair bind_timing 新枚举值 + 工作流改造, 算 feature 级别。",
+      "root_cause": "码-码闭环模式需要可配置的超时保护防止漏扫卡死。",
+      "fix": "main.py migration 加 ('scanner_devices','scan_pair_max_wait_sec','INTEGER DEFAULT 0'); ScannerDevice / ScannerCreate / ScannerUpdate / ScannerConnection / _serialize_device 全链路新增字段; ScannerPanel.vue 在 bind_timing='scan_pair' 时露出 el-input-number 让用户配置。electron/package.json + electron/splash.html 更新到 3.3.0。",
+      "files": [
+        "backend/models/mes_models.py",
+        "backend/main.py",
+        "backend/api/scanner.py",
+        "backend/services/scanner.py",
+        "frontend/src/views/MES/ScannerPanel.vue",
+        "electron/package.json",
+        "electron/splash.html"
+      ],
+      "keywords": [
+        "scan_pair_max_wait_sec",
+        "version bump 3.3.0",
+        "DB migration"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/models/mes_models.py",
+    "backend/main.py",
+    "backend/api/scanner.py",
+    "backend/services/scanner.py",
+    "backend/services/mes_hooks.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/source_container_grouping_mixin.py",
+    "backend/api/source_tracking_mixin.py",
+    "backend/api/source_checklist_mixin.py",
+    "backend/api/source_state_init.py",
+    "backend/api/source.py",
+    "frontend/src/views/MES/ScannerPanel.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/api/detection.js",
+    "tools/test_scan_pair_settle.py",
+    "electron/package.json",
+    "electron/splash.html",
+    "docs/changelog/v3.3.0_2026-04-30.md",
+    "docs/changelog/v3.3.0_2026-04-30.json",
+    "docs/CHANGELOG.md"
+  ],
+  "db_migrations": [
+    "scanner_devices.scan_pair_max_wait_sec INTEGER DEFAULT 0"
+  ],
+  "test_results": {
+    "v3_3_0_new_suite": {
+      "name": "tools/test_scan_pair_settle.py",
+      "total": 8,
+      "passed": 8,
+      "failed": 0,
+      "elapsed_seconds": 1.4
+    },
+    "v3_2_0_regression_suite": {
+      "name": "tools/test_id_drift_merge.py",
+      "total": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "v3_2_1_regression_suite": {
+      "name": "tools/test_max_recognized_hidden.py",
+      "total": 8,
+      "passed": 8,
+      "failed": 0
+    },
+    "v3_1_2_regression_suite": {
+      "name": "tools/test_broadcast_settle.py",
+      "total": 11,
+      "passed": 11,
+      "failed": 0
+    }
+  }
+}

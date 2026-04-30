@@ -41,6 +41,11 @@ class ScannerCreate(BaseModel):
     broadcast_settle_mode: str = "independent"
     primary_settle_channel: Optional[int] = None
     primary_settle_min_items: int = 1
+    scan_pair_max_wait_sec: int = 0
+    scan_d_geometry: str = "line"
+    scan_d_line: Optional[dict] = None
+    scan_d_zone: Optional[list] = None
+    scan_d_gone_confirm_frames: int = 30
 
 
 class ScannerUpdate(BaseModel):
@@ -70,6 +75,11 @@ class ScannerUpdate(BaseModel):
     broadcast_settle_mode: Optional[str] = None
     primary_settle_channel: Optional[int] = None
     primary_settle_min_items: Optional[int] = None
+    scan_pair_max_wait_sec: Optional[int] = None
+    scan_d_geometry: Optional[str] = None
+    scan_d_line: Optional[dict] = None
+    scan_d_zone: Optional[list] = None
+    scan_d_gone_confirm_frames: Optional[int] = None
 
 
 class ScannerSimulate(BaseModel):
@@ -104,6 +114,11 @@ def _serialize_device(d):
         "broadcast_settle_mode": getattr(d, 'broadcast_settle_mode', 'independent') or 'independent',
         "primary_settle_channel": getattr(d, 'primary_settle_channel', None),
         "primary_settle_min_items": int(getattr(d, 'primary_settle_min_items', 1) or 1),
+        "scan_pair_max_wait_sec": int(getattr(d, 'scan_pair_max_wait_sec', 0) or 0),
+        "scan_d_geometry": getattr(d, 'scan_d_geometry', 'line') or 'line',
+        "scan_d_line": getattr(d, 'scan_d_line', None),
+        "scan_d_zone": getattr(d, 'scan_d_zone', None),
+        "scan_d_gone_confirm_frames": int(getattr(d, 'scan_d_gone_confirm_frames', 30) or 30),
     }
 
 
@@ -379,3 +394,88 @@ def clear_scan_logs():
         raise HTTPException(500, str(e))
     finally:
         db.close()
+
+
+# ============== v3.4.0 D 容器跨线触发: 工位项目模式校验 ==============
+
+@router.get("/check-container-mode")
+def check_container_mode(channel_id: int = Query(0)):
+    """v3.4.0 前端切到 scan_mode='D' 时调本接口校验绑定工位是否容器模式项目.
+    不是 → 前端弹警告 + 自动回退到 A.
+    """
+    try:
+        from backend.api.channel_manager import channel_manager
+        mgr = channel_manager.get(channel_id)
+    except Exception as e:
+        return {
+            "channel_id": channel_id,
+            "is_container_mode": False,
+            "reason": f"channel_not_found: {e}",
+        }
+    if mgr is None or getattr(mgr, 'project_config', None) is None:
+        return {
+            "channel_id": channel_id,
+            "is_container_mode": False,
+            "reason": "no_project_assigned",
+        }
+    pc = mgr.project_config or {}
+    logic_mode = pc.get('logic_mode', '')
+    pipeline = pc.get('pipeline_config', {}) or {}
+    container_label = pipeline.get('tracking_container_label', '') or ''
+    is_container = (logic_mode == 'tracking') and bool(container_label)
+    return {
+        "channel_id": channel_id,
+        "is_container_mode": is_container,
+        "logic_mode": logic_mode,
+        "container_label": container_label,
+        "project_id": pc.get('id'),
+        "project_name": pc.get('name', ''),
+    }
+
+
+# ============== v3.3.0 码-码闭环结算 状态查询/操作 ==============
+
+@router.get("/scan-pair/active")
+def get_scan_pair_active(channel_id: int = Query(0)):
+    """v3.3.0 查询某工位 scan_pair 模式下当前窗口的开始码 (None 表示未开窗口).
+
+    前端 Monitor 页定时拉取 → 决定停止/待机时是否要弹"丢弃/结算"提示框.
+    """
+    try:
+        from backend.services.mes_hooks import get_mes_hook
+        mes = get_mes_hook()
+        return {
+            "channel_id": channel_id,
+            "is_scan_pair_mode": bool(mes.is_scan_pair_mode(channel_id)) if mes else False,
+            "active_serial": mes.get_scan_pair_active_serial(channel_id) if mes else None,
+        }
+    except Exception as e:
+        return {
+            "channel_id": channel_id,
+            "is_scan_pair_mode": False,
+            "active_serial": None,
+            "error": str(e),
+        }
+
+
+class ScanPairStopRequest(BaseModel):
+    channel_id: int = 0
+    discard: bool = False  # True=丢弃当前窗口, False=按曾齐过结算后清空
+
+
+@router.post("/scan-pair/stop")
+def settle_scan_pair_for_stop(req: ScanPairStopRequest):
+    """v3.3.0 在停止检测 / 进入待机时由前端调用, 收尾最后一码窗口.
+
+    前端流程: 用户点击 '停止检测'/'待机' → 先调 GET /scan-pair/active 查到
+    active_serial 非空 → 弹弹窗 [丢弃] [结算] (默认结算) → 调本接口 → 真正停止.
+    """
+    try:
+        from backend.services.mes_hooks import get_mes_hook
+        mes = get_mes_hook()
+        if mes is None:
+            return {"settled_count": 0, "discarded": req.discard}
+        n = mes.settle_scan_pair_for_stop(req.channel_id, discard=req.discard)
+        return {"settled_count": int(n), "discarded": req.discard}
+    except Exception as e:
+        raise HTTPException(500, f"settle_scan_pair_for_stop failed: {e}")

@@ -1,0 +1,147 @@
+{
+  "version": "3.4.0",
+  "date": "2026-04-30",
+  "previous_version": "3.3.0",
+  "changes": [],
+  "features": [
+    {
+      "type": "feature",
+      "id": "FEAT-340-001",
+      "title": "扫码模式 D — 容器跨线 / 进区域触发 LON, 扫到码自动 LOFF (容器模式专用)",
+      "symptom": "客户场景: 容器装件场景下, 工位扫码器(text_lon 协议)默认 A/B/C 三种模式都不能精确匹配产线节奏 — A/B 是持续扫码灯一直闪, 工人扫到一个码就立刻能扫下一个; C 是扫到码 LOFF 等周期结束才再开扫, 但一个箱子可能要装多件中间还要扫多个工件码, C 模式只能扫一次。客户希望以'箱子物理位置'作为扫码窗口源 — 箱子从产线上某条触发线 / 进入某个区域才允许扫码, 扫到对应箱码后立刻 LOFF 灯灭, 等箱子真正离开 (gone-confirm) 才允许下一个箱子触发, 实现一箱一灯一码闭环。",
+      "root_cause": "现有 scan_mode 三种 (continuous/throttled/once_per_cycle) 都基于 cycle 节拍, 不能感知 box 的物理位置变化; LON/LOFF 只在检测启动/停止时一次性发, 无法做'按 box 位置脉冲式发'。需要增加一个第四种模式 D, 由 source 检测帧循环里直接维护 box 位置状态机, 主动调 scanner 发 LON/LOFF。",
+      "fix": "新增 scan_mode='D' (容器模式专用): scanner_devices 加 4 个新字段 (scan_d_geometry='line'|'zone' / scan_d_line / scan_d_zone / scan_d_gone_confirm_frames). source_container_grouping_mixin 加 _scan_d_update() 状态机, 每帧调 scanner.is_scan_d_for_channel + get_scan_d_config_for_channel 拿配置, 对每个 _box_objects 维护 (side / in_zone / armed / scanned / gone_frames) 状态: line 模式跨方向匹配则触发 (叉积符号判 A/B 侧), zone 模式中心点从外进入则触发; 触发时若 _scan_d_armed_box is None 设 armed_box + 调 scanner.send_lon_for_channel; mes_hooks._handle_scan 头部加 scan_d_on_scan_received 调用, 由 source 发 LOFF + 标 scanned + 清 armed_box; box gone-confirm (默认 30 帧) 后真正 reset, 允下一个 box 触发. 同一时刻只允许一个 armed box (产线节奏串行假设); 异常情况 (并发跨线 / armed 离开未扫码) log 不重发 / 主动 LOFF 防 LON 残留。前端 ScannerPanel 加 D 选项 + 切换时调 GET /scanner/check-container-mode 校验绑定工位是容器项目, 否则弹 ElMessageBox 警告自动回退; 几何弹窗 line 模式画 2 点+两侧染色 (蓝=A, 橙=B) + 选触发方向 [A→B] / [B→A], zone 模式复用 ROI polygon 画法; 几何坐标归一化 [0,1] 存储, 后端按当前帧分辨率乘换像素做几何判断 (与 ROI 风格一致)。",
+      "files": [
+        "backend/models/mes_models.py",
+        "backend/main.py",
+        "backend/api/scanner.py",
+        "backend/services/scanner.py",
+        "backend/services/mes_hooks.py",
+        "backend/api/source_container_grouping_mixin.py",
+        "backend/api/source_tracking_mixin.py",
+        "backend/api/source_state_init.py",
+        "frontend/src/views/MES/ScannerPanel.vue",
+        "frontend/src/api/scanner.js"
+      ],
+      "keywords": [
+        "scan_mode D",
+        "容器跨线触发",
+        "scan_d_geometry line/zone",
+        "_scan_d_update 状态机",
+        "_scan_d_armed_box 单 slot",
+        "scan_d_on_scan_received → LOFF",
+        "send_lon_for_channel / send_loff_for_channel",
+        "is_scan_d_for_channel / get_scan_d_config_for_channel",
+        "归一化坐标 [0,1] 几何",
+        "GET /scanner/check-container-mode 校验回退",
+        "前端几何弹窗 A/B 染色 + 方向选择",
+        "armed 但未扫码强制 LOFF 防残留"
+      ],
+      "breaking": false
+    }
+  ],
+  "tools": [
+    {
+      "type": "tool",
+      "id": "TOOL-340-001",
+      "title": "test_scan_d_trigger.py 8 用例覆盖 D 模式状态机",
+      "symptom": "D 模式涉及 source 帧循环里的几何判定 + LON/LOFF 主动发送 + scan 事件触发的 LOFF 反馈 + 多 box 并发健壮性, 任何一处回归都会让客户产线扫码错位 (该响应的不响应 / 不该响应的乱响应)。",
+      "root_cause": "上线前必须有可重复运行的回归保护, 覆盖 line/zone 两种几何 + armed 推进 + gone-confirm reset + 并发护栏。",
+      "fix": "8 个 unittest 用例直接驱动 ContainerGroupingMixin._scan_d_update + scan_d_on_scan_received: case_1 line A→B 方向匹配跨线触发 LON / case_2 反向 (B→A) 不触发 / case_3 armed → on_scan 发 LOFF + scanned / case_4 scanned box 离开 gone-confirm 后 reset 允下一个 / case_5 已 armed 期间同 box 抖动跨线不重 LON / case_6 zone 模式中心点进入触发 LON / case_7 armed 但 box 离开未扫码 → 主动 LOFF + reset / case_8 并发: armed box_A 时 box_B 跨线被忽略 (产线节奏串行假设)。回归全部 v3.3.0/v3.2.x/v3.1.x suite 87/87 全过 (5 项 parser 假 FAIL 经手动复核均为 OK; test_mes_gateway 0/3 是 v3.2.0 既存历史 FAIL, 与本次改动无关)。",
+      "files": [
+        "tools/test_scan_d_trigger.py"
+      ],
+      "keywords": [
+        "scan_d 单元测试",
+        "8 用例",
+        "回归 v3.3.0/v3.2.x/v3.1.x"
+      ],
+      "breaking": false
+    }
+  ],
+  "config_changes": [
+    {
+      "type": "config",
+      "id": "CONFIG-340-001",
+      "title": "scanner_devices 新增 scan_d_* 4 字段 + 版本号升级到 3.4.0",
+      "symptom": "scanner_devices 表新增 4 个 D 模式专属字段; 新增 scan_mode 枚举值 'D'; 新增 GET /scanner/check-container-mode 接口; 跨 minor 因为引入新触发模式 + 与 v3.3.0 scan_pair 完全正交 (D 控扫码灯, scan_pair 控结算节拍, 同一扫码器可同时启用)。",
+      "root_cause": "D 模式的几何配置和 gone_confirm_frames 必须可持久化; 切换 D 模式时必须能验证绑定工位项目类型, 否则容易把非容器项目误配。",
+      "fix": "main.py migration 加 4 行 ALTER TABLE (scan_d_geometry VARCHAR(8) DEFAULT 'line' / scan_d_line JSON / scan_d_zone JSON / scan_d_gone_confirm_frames INTEGER DEFAULT 30); ScannerDevice / ScannerCreate / ScannerUpdate / ScannerConnection / _serialize_device 全链路加; scanner.py 新增 GET /scanner/check-container-mode 通过 channel_manager 拿 mgr.project_config 判 logic_mode='tracking' && tracking_container_label != ''; 前端 api/scanner.js 加 checkContainerMode helper. electron/package.json + electron/splash.html 升级到 3.4.0。",
+      "files": [
+        "backend/models/mes_models.py",
+        "backend/main.py",
+        "backend/api/scanner.py",
+        "backend/services/scanner.py",
+        "frontend/src/api/scanner.js",
+        "frontend/src/views/MES/ScannerPanel.vue",
+        "electron/package.json",
+        "electron/splash.html"
+      ],
+      "keywords": [
+        "scan_d_geometry / scan_d_line / scan_d_zone / scan_d_gone_confirm_frames",
+        "version bump 3.4.0",
+        "DB migration",
+        "GET /scanner/check-container-mode"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/models/mes_models.py",
+    "backend/main.py",
+    "backend/api/scanner.py",
+    "backend/services/scanner.py",
+    "backend/services/mes_hooks.py",
+    "backend/api/source_container_grouping_mixin.py",
+    "backend/api/source_tracking_mixin.py",
+    "backend/api/source_state_init.py",
+    "frontend/src/views/MES/ScannerPanel.vue",
+    "frontend/src/api/scanner.js",
+    "tools/test_scan_d_trigger.py",
+    "electron/package.json",
+    "electron/splash.html",
+    "docs/changelog/v3.4.0_2026-04-30.md",
+    "docs/changelog/v3.4.0_2026-04-30.json",
+    "docs/CHANGELOG.md"
+  ],
+  "db_migrations": [
+    "scanner_devices.scan_d_geometry VARCHAR(8) DEFAULT 'line'",
+    "scanner_devices.scan_d_line JSON",
+    "scanner_devices.scan_d_zone JSON",
+    "scanner_devices.scan_d_gone_confirm_frames INTEGER DEFAULT 30"
+  ],
+  "test_results": {
+    "v3_4_0_new_suite": {
+      "name": "tools/test_scan_d_trigger.py",
+      "total": 8,
+      "passed": 8,
+      "failed": 0,
+      "elapsed_seconds": 0.6
+    },
+    "v3_3_0_regression_suite": {
+      "name": "tools/test_scan_pair_settle.py",
+      "total": 8,
+      "passed": 8,
+      "failed": 0
+    },
+    "v3_2_0_regression_suite": {
+      "name": "tools/test_id_drift_merge.py",
+      "total": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "v3_2_1_regression_suite": {
+      "name": "tools/test_max_recognized_hidden.py",
+      "total": 8,
+      "passed": 8,
+      "failed": 0
+    },
+    "v3_1_2_regression_suite": {
+      "name": "tools/test_broadcast_settle.py",
+      "total": 11,
+      "passed": 11,
+      "failed": 0
+    }
+  }
+}

@@ -175,6 +175,18 @@ class ScannerConnection:
     # 跟随结算的件数门槛: 工位当前已检出物品数 < 该值时跳过 (避免空箱被冤判 NG).
     primary_settle_min_items: int = 1
 
+    # v3.3.0 码-码闭环结算 (bind_timing="scan_pair") 专用. 扫码 A 后等待 B 的最大秒数,
+    # 0 = 不超时, > 0 = 到时强制 NG 结算并重置窗口.
+    scan_pair_max_wait_sec: int = 0
+
+    # v3.4.0 D 容器跨线/区域触发扫码 (scan_mode='D' 时生效). 几何由前端配置,
+    # source 检测帧循环按几何判定 box 跨线/进区域 → 主动调 scanner._text_lon_send
+    # 发 LON; 扫到码后由 mes_hooks 调发 LOFF.
+    scan_d_geometry: str = "line"
+    scan_d_line: Optional[dict] = None
+    scan_d_zone: Optional[list] = None
+    scan_d_gone_confirm_frames: int = 30
+
     status: str = "disconnected"
     device_type: str = "text_lon"  # "text_lon"(默认), "auto", "text", "wmax"
     last_scan: str = ""
@@ -555,6 +567,74 @@ class ScannerService:
             print(f"[Scanner] start_scanning(ch={channel_id}) → {names}")
         else:
             print(f"[Scanner] start_scanning(ch={channel_id}) 无匹配设备, 已跳过: {skipped}")
+
+    def send_lon_for_channel(self, channel_id: int, reason: str = "") -> int:
+        """v3.4.0 D 模式 (容器跨线/区域触发) 专用: 主动发 LON 给绑定该工位的所有
+        text_lon 扫码器. 跟 start_scanning 的区别:
+          - start_scanning: 检测启动时一次性发, 状态机置 _scanning=True
+          - send_lon_for_channel: 帧循环里按需脉冲式发, 不动 _scanning 状态
+        返回真正发出 LON 的连接数.
+        """
+        cnt = 0
+        for conn in list(self._connections.values()):
+            if conn.status != "connected":
+                continue
+            bound = self._resolve_bound_channels(conn)
+            if channel_id not in bound:
+                continue
+            if conn.device_type != "text_lon":
+                continue
+            if self._text_lon_send(conn, b"LON\r\n",
+                                    f"LON [scan_d {reason}]"):
+                conn._lon_sent = True
+                cnt += 1
+        return cnt
+
+    def send_loff_for_channel(self, channel_id: int, reason: str = "") -> int:
+        """v3.4.0 D 模式专用: 主动发 LOFF 给绑定该工位的所有 text_lon 扫码器."""
+        cnt = 0
+        for conn in list(self._connections.values()):
+            if conn.status != "connected":
+                continue
+            bound = self._resolve_bound_channels(conn)
+            if channel_id not in bound:
+                continue
+            if conn.device_type != "text_lon":
+                continue
+            if self._text_lon_send(conn, b"LOFF\r\n",
+                                    f"LOFF [scan_d {reason}]"):
+                conn._lon_sent = False
+                cnt += 1
+        return cnt
+
+    def is_scan_d_for_channel(self, channel_id: int) -> bool:
+        """v3.4.0 查询绑定该工位的扫码器是否处于 scan_mode='D' 模式."""
+        for conn in list(self._connections.values()):
+            bound = self._resolve_bound_channels(conn)
+            if channel_id not in bound:
+                continue
+            if (conn.scan_mode or "continuous") == "D":
+                return True
+        return False
+
+    def get_scan_d_config_for_channel(self, channel_id: int) -> Optional[dict]:
+        """v3.4.0 拿到该工位 D 模式的几何配置 (供 source 帧循环判跨线/进区域).
+        返回首个绑定该工位且 scan_mode='D' 的扫码器配置. None 表示未配置."""
+        for conn in list(self._connections.values()):
+            bound = self._resolve_bound_channels(conn)
+            if channel_id not in bound:
+                continue
+            if (conn.scan_mode or "continuous") != "D":
+                continue
+            return {
+                "geometry": getattr(conn, 'scan_d_geometry', 'line') or 'line',
+                "line": getattr(conn, 'scan_d_line', None),
+                "zone": getattr(conn, 'scan_d_zone', None),
+                "gone_confirm_frames": int(
+                    getattr(conn, 'scan_d_gone_confirm_frames', 30) or 30
+                ),
+            }
+        return None
 
     def stop_scanning(self, channel_id: int = None):
         """检测停止时调用: 让绑定的扫码器发 LOFF 停止扫码 (ondemand: 灯灭 + 停扫)"""
@@ -1017,6 +1097,11 @@ class ScannerService:
             broadcast_settle_mode=(getattr(dev, 'broadcast_settle_mode', None) or 'independent'),
             primary_settle_channel=(getattr(dev, 'primary_settle_channel', None) if getattr(dev, 'primary_settle_channel', None) is not None else None),
             primary_settle_min_items=int(getattr(dev, 'primary_settle_min_items', 1) or 1),
+            scan_pair_max_wait_sec=int(getattr(dev, 'scan_pair_max_wait_sec', 0) or 0),
+            scan_d_geometry=(getattr(dev, 'scan_d_geometry', None) or 'line'),
+            scan_d_line=getattr(dev, 'scan_d_line', None),
+            scan_d_zone=getattr(dev, 'scan_d_zone', None),
+            scan_d_gone_confirm_frames=int(getattr(dev, 'scan_d_gone_confirm_frames', 30) or 30),
         )
         conn.device_type = db_device_type
         conn.parse_config["parse_mode"] = dev.parse_mode or "direct"

@@ -960,7 +960,7 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { useSourceStore } from '@/store/useSourceStore';
 import { Check, Folder, Picture, CircleCheck, CircleClose, Warning } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations } from '@/api/detection';
+import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getScanPairActive, settleScanPairForStop } from '@/api/detection';
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import api, { getBackendHost } from '@/api/index';
 import { getExtraFieldsSchema, setExtraFields } from '@/api/gateway';
@@ -1401,39 +1401,72 @@ const processChannelResult = (ch, d) => {
     return !!(_trackChecklist?.[label] && _trackChecklist[label].counted > 0);
   };
 
+  // v3.2.1: 跟踪模式下,步骤统计/SOP 只展示"每箱期望物品"中的项目,
+  // 排除作为"容器"的箱子类别(避免容器分组模式表格里出现"箱子"行)
+  const _trkExpectedLabels = (() => {
+    if (!_isTracking) return null;
+    const projCfg = d.project_config || currentProject.value || {};
+    const pipeCfg = projCfg.pipeline_config || {};
+    const expList = projCfg.counting_expected_list
+      || pipeCfg.counting_expected_list
+      || [];
+    const expDict = pipeCfg.counting_expected_items || {};
+    const set = new Set();
+    expList.forEach(it => { if (it && it.label) set.add(it.label); });
+    Object.keys(expDict).forEach(l => set.add(l));
+    if (set.size > 0) return set;
+    // 兜底:未填清单时仅排除容器 label
+    const containerLabel = projCfg.tracking_container_label
+      || pipeCfg.tracking_container_label
+      || '';
+    return containerLabel ? { _excludeContainer: containerLabel } : null;
+  })();
+  const _trkAllow = (label) => {
+    if (!_trkExpectedLabels) return true;
+    if (_trkExpectedLabels instanceof Set) return _trkExpectedLabels.has(label);
+    if (_trkExpectedLabels._excludeContainer) {
+      return label !== _trkExpectedLabels._excludeContainer;
+    }
+    return true;
+  };
+
   if (d.detections) {
     const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
     const stMap = {};
     stepsConf.forEach(s => { stMap[s.label] = s; });
-    const td = stepsConf.filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view).map((s) => {
-      const inCycle = chData.currentCycleSteps.includes(s.label);
-      const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
-      const trackHit = _trackHit(s.label);
-      return {
-        step: s.displayLabel || s.label,
-        label: s.label,
-        status: (inCycle || coveredByBackup || trackHit) ? 'completed' : 'pending',
-        cycleResult: trackHit ? 'ok' : null,
-      };
-    });
+    const td = stepsConf
+      .filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view && _trkAllow(s.label))
+      .map((s) => {
+        const inCycle = chData.currentCycleSteps.includes(s.label);
+        const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
+        const trackHit = _trackHit(s.label);
+        return {
+          step: s.displayLabel || s.label,
+          label: s.label,
+          status: (inCycle || coveredByBackup || trackHit) ? 'completed' : 'pending',
+          cycleResult: trackHit ? 'ok' : null,
+        };
+      });
     chData.tableData = td;
   }
 
   if (d.detections) {
     const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
     const screenshots = d.step_screenshots || {};
-    const sopSteps = stepsConf.filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view).map(s => {
-      const inCycle = chData.currentCycleSteps.includes(s.label);
-      const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
-      const trackHit = _trackHit(s.label);
-      const rawB64 = screenshots[s.label];
-      return {
-        name: s.displayLabel || s.label,
-        label: s.label,
-        status: (inCycle || coveredByBackup || trackHit) ? 'completed' : 'pending',
-        screenshot: rawB64 ? `data:image/jpeg;base64,${rawB64}` : null,
-      };
-    });
+    const sopSteps = stepsConf
+      .filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view && _trkAllow(s.label))
+      .map(s => {
+        const inCycle = chData.currentCycleSteps.includes(s.label);
+        const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
+        const trackHit = _trackHit(s.label);
+        const rawB64 = screenshots[s.label];
+        return {
+          name: s.displayLabel || s.label,
+          label: s.label,
+          status: (inCycle || coveredByBackup || trackHit) ? 'completed' : 'pending',
+          screenshot: rawB64 ? `data:image/jpeg;base64,${rawB64}` : null,
+        };
+      });
     chData.steps = sopSteps;
   }
   // v2.7.4: 收集"项目配置中标记隐藏标注框"的 label 集合，drawMultiDetections 据此跳过画框
@@ -1593,7 +1626,49 @@ const updateGlobalDetectingState = () => {
   projectStore.setRunningStatus(anyDetecting);
 };
 
+// v3.3.0 码-码闭环结算: 停止/待机前如果工位有"未关闭的扫码窗口", 弹窗让用户选
+//   - 结算 (默认): 把这枚工件按"曾齐过"判定 OK/NG 入账
+//   - 丢弃: 直接丢, 产能不计
+//   - 取消: 中止本次停止操作
+// 返回 true=继续 stop, false=取消 stop.
+const confirmScanPairBeforeStop = async (ch) => {
+  try {
+    const res = await getScanPairActive(ch);
+    const data = res.data || {};
+    if (!data.is_scan_pair_mode || !data.active_serial) return true;
+    let action = 'settle';
+    try {
+      await ElMessageBox({
+        title: '码-码闭环: 最后一码未关闭',
+        message: `工位 ${ch + 1} 当前周期开始码 "${data.active_serial}" 尚未扫到下一码。\n` +
+                 `选择如何收尾本枚工件:`,
+        showCancelButton: true,
+        confirmButtonText: '结算 (默认)',
+        cancelButtonText: '丢弃',
+        distinguishCancelAndClose: true,
+        type: 'warning',
+      });
+      action = 'settle';
+    } catch (e) {
+      if (e === 'close') return false;
+      action = 'discard';
+    }
+    try {
+      await settleScanPairForStop(ch, action === 'discard');
+      ElMessage.success(action === 'discard'
+        ? `工位 ${ch + 1} 最后一码已丢弃`
+        : `工位 ${ch + 1} 最后一码已结算`);
+    } catch (e) {
+      ElMessage.error(`工位 ${ch + 1} 收尾失败: ${e?.response?.data?.detail || e?.message || e}`);
+    }
+    return true;
+  } catch (e) {
+    return true;
+  }
+};
+
 const stopDetectionForChannel = async (ch) => {
+  if (!(await confirmScanPairBeforeStop(ch))) return;
   try {
     await pauseDetection(ch);
     if (multiChannelData.value[ch]) multiChannelData.value[ch].isDetecting = false;
@@ -1605,6 +1680,7 @@ const stopDetectionForChannel = async (ch) => {
 };
 
 const standbyForChannel = async (ch) => {
+  if (!(await confirmScanPairBeforeStop(ch))) return;
   try {
     await standbyDetection(ch);
     if (multiChannelData.value[ch]) multiChannelData.value[ch].isDetecting = false;
@@ -2531,7 +2607,33 @@ watch(() => currentProject.value, (newProject, oldProject) => {
   } else {
     stepsToShow = stepsConfig.filter(s => s.enabled);
   }
-  
+
+  // v3.2.1: 跟踪模式 — 步骤统计/SOP 只展示"每箱期望物品"中的项目,
+  // 不显示作为"容器"的箱子类别(否则容器分组模式会出现"箱子"行)
+  if (logicMode === 'tracking') {
+    const expectedList = newProject.counting_expected_list
+      || pipelineConfig.counting_expected_list
+      || [];
+    const expectedDict = pipelineConfig.counting_expected_items || {};
+    const expectedLabels = new Set();
+    expectedList.forEach(item => {
+      if (item && item.label) expectedLabels.add(item.label);
+    });
+    Object.keys(expectedDict).forEach(label => expectedLabels.add(label));
+
+    if (expectedLabels.size > 0) {
+      stepsToShow = stepsToShow.filter(s => expectedLabels.has(s.label));
+    } else {
+      // 兜底:用户未填期望清单时,仅排除容器 label,其它步骤仍展示
+      const containerLabel = newProject.tracking_container_label
+        || pipelineConfig.tracking_container_label
+        || '';
+      if (containerLabel) {
+        stepsToShow = stepsToShow.filter(s => s.label !== containerLabel);
+      }
+    }
+  }
+
   // v2.7.4: 过滤掉 backup_for 和 hide_in_view 步骤（仅视觉隐藏，不影响检测/数据）
   stepsToShow = stepsToShow.filter(s => !s.backup_for && !s.hide_in_view);
 
@@ -2766,6 +2868,8 @@ const startDetection = async () => {
 
 const stopDetectionHandler = async () => {
   if (isOperating.value) return;
+  // v3.3.0 码-码闭环: 单工位 stop 也走同一确认流程; 多工位时仅检查当前选中
+  if (!(await confirmScanPairBeforeStop(selectedChannel.value || 0))) return;
   isOperating.value = true;
   try {
     await pauseDetection();
@@ -2953,6 +3057,18 @@ const shownEventIds = ref(new Set());
 // 扫码提示去重 — 按通道独立记录时间戳
 const lastScanToastTs = {};
 const handleScanToast = (scanEvent, ch = 0) => {
+  // v3.3.0 码-码闭环: 同码二次扫的软警告 (后端在 _last_scan_event 里写 scan_pair_dup_warning=true)
+  if (scanEvent.scan_pair_dup_warning) {
+    if (scanEvent.timestamp <= (lastScanToastTs[ch] || 0)) return;
+    lastScanToastTs[ch] = scanEvent.timestamp;
+    const msg = `重复扫码: ${scanEvent.serial_no} - 等待新码`;
+    if (channelCount.value > 1) {
+      ElMessage.warning(`工位 ${ch + 1} ${msg}`);
+    } else {
+      ElMessage.warning(msg);
+    }
+    return;
+  }
   const scanConfig = systemStore.detection.toasts?.scan;
   if (!scanConfig?.enabled) return;
   if (scanEvent.timestamp <= (lastScanToastTs[ch] || 0)) return;
@@ -3330,6 +3446,7 @@ const stopPolling = () => {
 
 const standbyHandler = async () => {
   if (isOperating.value) return;
+  if (!(await confirmScanPairBeforeStop(selectedChannel.value || 0))) return;
   isOperating.value = true;
   try {
     await standbyDetection();

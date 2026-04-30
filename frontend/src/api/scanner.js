@@ -12,3 +12,7 @@ export const getScanLogs = (params) => api.get('/scanner/logs', { params })
 export const clearScanLogs = () => api.delete('/scanner/logs')
 export const discoverScanners = () => api.post('/scanner/discover')
 export const simulateScannerScan = (data) => api.post('/scanner/simulate', data)
+
+// v3.4.0 D 容器跨线触发: 校验工位是否容器模式项目
+export const checkContainerMode = (channelId = 0) =>
+  api.get(`/scanner/check-container-mode?channel_id=${channelId}`)
