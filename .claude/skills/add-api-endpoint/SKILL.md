@@ -148,3 +148,25 @@ POST   /resources/{id}/action  -- 特殊操作
 - [ ] 视图集成
 - [ ] 错误处理（HTTPException，不要 bare except）
 - [ ] 确认不与现有路由冲突
+
+## v3.5.0 新增的 API 子系统
+
+### 自定义导出 / 实时规则 (`backend/api/export_custom.py` + `export_realtime.py`)
+
+- 路由前缀: `/api/v1/export/`
+- 模板 CRUD: `templates`, `templates/{id}`, `templates/{id}/upload-template-file` (路线 B 占位符上传)
+- 渲染: `POST /preview` (Jinja2 字符串预览), `POST /render` (二进制返回 txt/csv/docx/xlsx/pdf)
+- 实时规则 CRUD: `realtime-rules`, `realtime-rules/{id}/test-run`, `realtime-rules/{id}/run-logs`
+- **路由位置 / 注册**: 在 `backend/main.py` 显式 `include_router`. 新增同类 API 时**继承同样的前缀和 tag**
+- **依赖**:
+  - 渲染层: `services/export_renderer.py` 主入口 → `_docx.py / _xlsx.py / _pdf.py` 三种二进制扩展
+  - 上下文构造: `services/export_context.py` (cycle/range/system 三种), 修改字段时同步 `export_field_registry.py` (308 字段中央仓库)
+  - ORM: `models/export_models.py` (ExportTemplate, ExportRealtimeRule, ExportRunLog)
+- **测试**: `tests/step_defs/test_custom_export.py` + `test_realtime_rules.py` + `tests/test_pairwise_export.py`
+
+### System 显示字段 (`backend/api/system_display.py`)
+
+- 路由前缀: `/api/v1/system/`
+- `GET/PUT /display` — brand_name/app_name/inspector_name/device_number/factory_name/line_name 等 KV
+- `POST /license-cache` — 前端 Electron IPC 推 license 信息进来, 后续模板用 `{{ license.* }}`
+- ORM: `SystemConfig` (KV 表), 在 `backend/main.py::migrate_database()` 加表

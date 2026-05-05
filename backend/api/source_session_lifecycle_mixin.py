@@ -433,6 +433,16 @@ class SessionLifecycleMixin:
                     except Exception as e:
                         print(f"[MES] cycle_end hook 异常: {e}")
 
+                # v3.5.0: 周期性强制动作判定（每 N 轮做 E）
+                # 独立 try/except，不影响 MES Hook / Scanner resume / Container 清理
+                try:
+                    if hasattr(self, '_check_periodic_actions'):
+                        self._check_periodic_actions(
+                            cycle.step_sequence or [], bool(is_good)
+                        )
+                except Exception as e:
+                    print(f"[PeriodicActions] cycle_end 判定异常: {e}")
+
                 # v2.7.16: once_per_cycle 模式下, 周期结束 (无论 OK/NG) 都让扫码器
                 # 恢复扫描, 等下一个工件的码. 模式不匹配时是 no-op, 不需要额外判断.
                 try:
@@ -796,6 +806,86 @@ class SessionLifecycleMixin:
 
     # ============== v3.3.0 码-码闭环结算 (bind_timing="scan_pair") ==============
 
+    def _ensure_cycle_for_scan_pair_settle(self) -> bool:
+        """v3.4.2 hotfix: scan_pair 模式不走 start_cycle 路径, current_cycle_id
+        永远是 None → end_cycle 早返回 → 不调 on_cycle_end → 工件 set_result /
+        外部 MES 推送 / 集群汇总 全都不发生. 这里在 settle 触发 _trigger_event
+        之前手动 create cycle 行 + 把 _inspecting_workpiece (=上一码 wp) link
+        到 cycle, 让下游 on_cycle_end 拿得到 cycle_id + wp_id, 走完整 MES 路径.
+
+        cycle.start_time 取上一码 _scan_pair_active.scanned_at (即 ScanPair 真实
+        起点), 让 cycle 表里时长跟 _trigger_event log 的 "周期时间(OK)" 一致.
+        """
+        if getattr(self, "current_cycle_id", None):
+            return True  # 已有 cycle (其他路径起的) 不重复建
+        if not getattr(self, "current_session_id", None):
+            return False  # 没 session 起不了 cycle
+        if not getattr(self, "_mes_hook", None):
+            return False
+        ch = getattr(self, "channel_id", 0)
+        wp_id = self._mes_hook._inspecting_workpiece.get(ch)
+        if not wp_id:
+            # 没绑工件就不起 cycle, 让 _trigger_event/end_cycle 走原 fallback
+            # 路径 (counters +1, 不写 cycle 行, 不发集群 — 跟修前一样).
+            return False
+
+        try:
+            from backend.models.models import DetectionCycle
+            from backend.api.operators import get_current_operator_id
+            from datetime import datetime as _dt
+
+            db = self._get_db_session()
+            now = _dt.now()
+            self.current_cycle_number += 1
+            cycle_uuid = str(uuid.uuid4())[:8]
+
+            scanned_at = None
+            try:
+                sp = self._mes_hook._scan_pair_active.get(ch) or {}
+                scanned_at = sp.get("scanned_at")
+            except Exception:
+                scanned_at = None
+            start_dt = _dt.fromtimestamp(scanned_at) if scanned_at else now
+
+            cycle = DetectionCycle(
+                cycle_uuid=cycle_uuid,
+                session_id=self.current_session_id,
+                cycle_number=self.current_cycle_number,
+                start_time=start_dt,
+                operator_id=get_current_operator_id(ch),
+            )
+            db.add(cycle)
+            db.commit()
+            db.refresh(cycle)
+            # v3.4.2 hotfix-2: cycle.id 在 db.close() 后再 print 会触发
+            # DetachedInstanceError, 整个函数被 except 吞掉, 上层 settle
+            # 流程拿不到正确的 cycle_id ↔ wp_id 关联. 先存到局部变量, 后面
+            # 所有引用都走 _cid 不再碰 ORM.
+            _cid = cycle.id
+            self.current_cycle_id = _cid
+            self.current_cycle_uuid = cycle_uuid
+
+            try:
+                self._mes_hook._workpiece_svc.link_to_cycle(
+                    db, wp_id, _cid,
+                    session_id=self.current_session_id, channel_id=ch,
+                )
+                db.commit()
+            except Exception as e:
+                print(f"[ScanPairSettle] link_to_cycle 失败: {e}", flush=True)
+
+            db.close()
+            print(
+                f"[ScanPairSettle] ch{ch} 同步 create Cycle#{_cid} + "
+                f"关联工件#{wp_id} (start_time={start_dt.isoformat(timespec='seconds')})",
+                flush=True,
+            )
+            return True
+        except Exception as e:
+            print(f"[ScanPairSettle] _ensure_cycle 异常: {e}\n{traceback.format_exc()}",
+                  flush=True)
+            return False
+
     def settle_for_scan_pair(self, *, force_ng: bool = False, reason: str = "") -> int:
         """v3.3.0 由 mes_hooks 在扫码 B 到达 (或超时) 时调用, 结算当前周期 / 容器.
 
@@ -807,6 +897,9 @@ class SessionLifecycleMixin:
           - force_ng=True: 用于超时分支, 一律判 NG.
 
         防重入: 复用 _force_settling_in_progress 标志.
+
+        v3.4.2 hotfix: 触发事件前先 _ensure_cycle_for_scan_pair_settle, 让
+        cycle 行存在 + wp 绑上 → on_cycle_end 才能正常分发集群.
         """
         if not getattr(self, "project_config", None):
             return 0
@@ -816,85 +909,202 @@ class SessionLifecycleMixin:
         self._force_settling_in_progress = True
         settled_count = 0
         try:
+            # v3.4.2 hotfix: 确保有 cycle 行 (用上一码扫码时间作 start_time),
+            # 否则下游 end_cycle → on_cycle_end → 集群分发 整条链路全断.
+            self._ensure_cycle_for_scan_pair_settle()
             pcfg = (self.project_config.get("pipeline_config") or {}) if self.project_config else {}
             expected_items = pcfg.get("counting_expected_items", {}) or {}
 
             # ------- 容器模式 -------
+            # v3.4.2 用户语义: scan_pair 模式下"一码一结算, 不管周期内多少个箱子,
+            # 只要其中至少一个曾装齐过 → OK; 否则 NG". 计数器只 +1 (整周期 1 次事件).
+            # 实现:
+            #   1) 遍历所有 _box_objects 调 _settle_box(suppress_event=True), 写每个 box
+            #      到 _box_settled_results / 写 StepRecord (前端数据中心展开能看到明细),
+            #      但不调 _trigger_event.
+            #   2) 聚合: any(was_complete) → OK, force_ng → 一律 NG.
+            #   3) 调一次 _trigger_event 让 _end_cycle 写 cycle 行 + 计数器 +1.
             if getattr(self, "_container_mode", False) and getattr(self, "_box_objects", None):
-                for box_did in list(self._box_objects.keys()):
+                box_dids = list(self._box_objects.keys())
+                ok_results = []
+                ng_results = []
+                # v3.4.2 hotfix-2: 收集每个 NG box 的 missing/extra 明细, 给整周期
+                # _trigger_event 拼出像非容器模式那样的"缺少 X: 0/N"信息. 不然
+                # 集群/数据中心只看到"0/1 箱齐过"不知道是缺哪个件 → 没法追溯.
+                ng_missing_per_box: list[dict] = []
+                # 记录 _settle_box append 进 _box_settled_results 之前的尾部位置,
+                # 以便从中精确取出本周期内 settle 的 result 行 (含 missing/extra/items).
+                _prev_settled_len = len(getattr(self, "_box_settled_results", []) or [])
+
+                for box_did in box_dids:
                     if box_did not in self._box_objects:
                         continue
+                    # 抓 was_complete 在 pop 前 (suppress 路径里 _settle_box 会 pop)
+                    was_complete_before = bool(
+                        self._box_objects[box_did].get('was_complete', False)
+                    )
                     try:
-                        self._settle_box(
+                        is_ok = self._settle_box(
                             box_did, expected_items,
                             via_scan_pair=True,
                             scan_pair_force_ng=force_ng,
+                            suppress_event=True,
                         )
+                        if is_ok is None:
+                            # 幽灵箱过滤掉, 不计
+                            continue
                         settled_count += 1
+                        if is_ok:
+                            ok_results.append(box_did)
+                        else:
+                            ng_results.append(box_did)
                     except Exception as e:
                         print(
                             f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} "
                             f"{box_did} 结算失败: {e}",
                             flush=True,
                         )
+
+                # 从本次 settle append 进 _box_settled_results 的尾段, 抓 NG 详情
+                _new_settled = (
+                    list(self._box_settled_results[_prev_settled_len:])
+                    if getattr(self, "_box_settled_results", None) else []
+                )
+                # v3.4.2 hotfix-3: 用户语义 — 容器模式下整周期 NG 只关心"有没有
+                # 哪个件从来没出现过". 单个箱子缺件不重要 — 只要别的箱子里出现过
+                # (max(item_counts) >= expected), 就不算"真缺".
+                # 所以 missing 用"跨 box 聚合 max" 算, 而不是按 box 拆.
+                _agg_max_counts: dict = {}  # label → max(item_counts across boxes)
+                for r in _new_settled:
+                    items_cnt = r.get('item_counts') or {}
+                    for k, v in items_cnt.items():
+                        _agg_max_counts[k] = max(_agg_max_counts.get(k, 0), int(v or 0))
+                    # 仍然把按 box 的明细收着, force_ng/超时分支可能要用
+                    if r.get('is_complete'):
+                        continue
+                    ng_missing_per_box.append({
+                        "box": r.get('display_id'),
+                        "missing": list(r.get('missing') or []),
+                        "extra": list(r.get('extra') or []),
+                        "items": dict(items_cnt),
+                    })
+
+                # 跨 box 聚合后真正的"缺"清单 (任意一箱出现过 → 算齐, 不计入)
+                _container_label = getattr(self, '_container_label', None)
+                _agg_missing: list[str] = []
+                for k, exp_n in (expected_items or {}).items():
+                    if k == _container_label:
+                        continue
+                    actual = _agg_max_counts.get(k, 0)
+                    if actual < int(exp_n or 0):
+                        disp = self.step_display_names.get(k, k) \
+                            if hasattr(self, 'step_display_names') else k
+                        _agg_missing.append(f"{disp}: {actual}/{exp_n}")
+
+                # v3.4.2 hotfix-5: 用户原则"件齐就 OK, 不管几箱、不管 force_ng".
+                #   - 跨 box 聚合后所有 expected 件都出现过 → OK
+                #   - 任意 expected 件 max(item_counts)==0 (从没出现过) → NG
+                #   - force_ng (超时) 也走同一判定, 只在文案前加"超时"前缀提示
+                #   - 全幽灵箱 (settled_count==0) 仍跳过 (无意义)
+                if settled_count == 0:
+                    print(
+                        f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} 容器, "
+                        f"无真箱 (全幽灵), 跳过事件 ({reason})",
+                        flush=True,
+                    )
+                    return 0
+
+                cycle_is_ok = not _agg_missing
+                _prefix = "超时" if force_ng else ""
+
+                # 触发一次整周期事件 → 计数器 +1
+                try:
+                    if cycle_is_ok:
+                        self._trigger_event(
+                            1, f'{_prefix}合格(OK)' if _prefix else '合格(OK)'
+                        )
+                    else:
+                        self._trigger_event(
+                            2,
+                            f'{_prefix}NG: 缺 [{", ".join(_agg_missing)}]'
+                            if _prefix else
+                            f'NG: 缺 [{", ".join(_agg_missing)}]',
+                        )
+                except Exception as e:
+                    print(
+                        f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} "
+                        f"trigger_event 失败: {e}",
+                        flush=True,
+                    )
+
                 print(
                     f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} 容器, "
-                    f"结算 {settled_count} 个箱子 (force_ng={force_ng}, {reason})",
+                    f"周期聚合 {'OK' if cycle_is_ok else 'NG'} "
+                    f"({len(ok_results)} 齐过 / {len(ng_results)} 未齐, "
+                    f"force_ng={force_ng}, {reason})",
                     flush=True,
                 )
                 return settled_count
 
             # ------- 非容器跟踪模式 -------
-            if not getattr(self, "current_cycle_id", None):
-                return 0
-            if not getattr(self, "_tracking_cycle_active", False):
-                return 0
+            # v3.4.2: scan_pair 模式下 tracking 工位完全不依赖 _start_cycle /
+            # current_cycle_id (没人会调). 这里直接按 _tracking_was_complete
+            # (sticky 标志) + force_ng 判 OK/NG, 调 _trigger_event 让计数器 +1.
+            # 即便 cycle_id=None 也工作: end_cycle 内部会因 cycle_id=None 而早返
+            # 回不写 db cycle 行, 但 counters / events_log 仍会更新, 前端能看到.
+            ch_for_log = getattr(self, "channel_id", "?")
+            was_complete = bool(getattr(self, "_tracking_was_complete", False))
+            counters = dict(getattr(self, "_tracking_class_counters", {}) or {})
 
-            if force_ng:
-                # 超时强制 NG: 不走 _settle_counting_cycle (它按 expected 计数判),
-                # 直接调 end_cycle(False, ...) 收尾, _tracking_was_complete 不影响.
-                try:
-                    self._end_cycle(
-                        is_ok=False,
-                        event_name="scan_pair_timeout",
-                        result_reason="scan_pair_timeout",
-                    )
-                    settled_count = 1
-                    print(
-                        f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} 非容器, "
-                        f"超时强制 NG ({reason})",
-                        flush=True,
-                    )
-                except Exception as e:
-                    print(
-                        f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} "
-                        f"非容器 force_ng 失败: {e}",
-                        flush=True,
-                    )
-                return settled_count
+            # v3.4.2 hotfix-5: 跟容器分支同样原则 — "件齐就 OK, 不管 force_ng".
+            #   - was_complete (期间曾齐过) → OK
+            #   - 否则按 counters 算 missing; 列表空 → 件其实齐了 → OK
+            #   - 列表非空 → NG
+            #   - force_ng (超时) 不再硬判 NG, 只在文案前加"超时"前缀
+            missing = [
+                f"{self.step_display_names.get(k, k) if hasattr(self, 'step_display_names') else k}: "
+                f"{counters.get(k, 0)}/{v}"
+                for k, v in (expected_items or {}).items()
+                if counters.get(k, 0) < v
+            ]
+            is_ok = was_complete or not missing
+            _prefix = "超时" if force_ng else ""
+            if is_ok:
+                event_reason = f"{_prefix}合格(OK)" if _prefix else "合格(OK)"
+            else:
+                event_reason = (
+                    f"{_prefix}NG: 缺 [{', '.join(missing)}]"
+                    if _prefix else
+                    f"NG: 缺 [{', '.join(missing)}]"
+                )
 
-            # 正常 (扫码 B 触发): _settle_counting_cycle 内部把 OK 判定切到
-            # _tracking_was_complete (在 source_checklist_mixin 改造里实现).
-            # 这里设置一个 hint 标志位让结算逻辑识别 scan_pair 路径.
             self._scan_pair_settle_hint = True
             try:
-                check_order = pcfg.get("tracking_check_order", False)
-                expected_order = pcfg.get("tracking_expected_order", []) or []
-                self._settle_counting_cycle(expected_items, check_order, expected_order)
+                self._trigger_event(1 if is_ok else 2, event_reason)
                 settled_count = 1
                 print(
-                    f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} 非容器, "
-                    f"按曾齐过结算 ({reason})",
+                    f"[ScanPairSettle] ch{ch_for_log} 非容器, "
+                    f"{'OK' if is_ok else 'NG'} (was_complete={was_complete}, "
+                    f"counters={counters}, force_ng={force_ng}, {reason})",
                     flush=True,
                 )
             except Exception as e:
                 print(
-                    f"[ScanPairSettle] ch{getattr(self, 'channel_id', '?')} "
-                    f"非容器结算失败: {e}",
+                    f"[ScanPairSettle] ch{ch_for_log} 非容器结算失败: {e}",
                     flush=True,
                 )
             finally:
                 self._scan_pair_settle_hint = False
+
+            # 重置 sticky 状态 / counters, 给下一个 scan_pair 周期让位.
+            try:
+                if hasattr(self, "_reset_counting_cycle"):
+                    self._reset_counting_cycle()
+            except Exception as e:
+                print(
+                    f"[ScanPairSettle] ch{ch_for_log} reset 失败: {e}",
+                    flush=True,
+                )
             return settled_count
         finally:
             self._force_settling_in_progress = False

@@ -1,0 +1,142 @@
+"""Playwright E2E 浏览器测试配置。
+
+约定：
+  - 假设用户已经启动了 backend (8001) 和 frontend (6001)
+  - 浏览器测试通过 BASE_URL 访问 frontend
+  - 所有测试创建的资源用 _E2E_PREFIX 前缀，结束统一清理
+  - 不动用户已有的项目 / 模板 / 规则
+"""
+from __future__ import annotations
+
+import os
+import socket
+import time
+from contextlib import contextmanager
+from typing import Iterator
+
+import pytest
+import requests
+
+
+BASE_URL = os.environ.get("E2E_BASE_URL", "http://localhost:6001")
+API_URL = os.environ.get("E2E_API_URL", "http://localhost:8001")
+E2E_PREFIX = "__e2e_"
+
+
+def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def pytest_collection_modifyitems(config, items):
+    """如果 backend/frontend 没启动，全部跳过 e2e 测试"""
+    if not _port_open("localhost", 8001):
+        skip = pytest.mark.skip(reason="backend (8001) 未启动")
+        for item in items:
+            item.add_marker(skip)
+        return
+    if not _port_open("localhost", 6001):
+        skip = pytest.mark.skip(reason="frontend (6001) 未启动")
+        for item in items:
+            item.add_marker(skip)
+
+
+@pytest.fixture(scope="session")
+def base_url():
+    return BASE_URL
+
+
+@pytest.fixture(scope="session")
+def api_url():
+    return API_URL
+
+
+@pytest.fixture
+def page_with_app(page, base_url):
+    """打开应用首页，等待主布局加载"""
+    page.goto(f"{base_url}/#/monitor", wait_until="domcontentloaded", timeout=15000)
+    # 等到 Vue 主布局渲染（左侧导航出现）
+    try:
+        page.wait_for_selector(".el-menu, .layout-sidebar, [class*='sidebar']",
+                                timeout=10000)
+    except Exception:
+        pass  # 即使没有 menu 也允许继续
+    return page
+
+
+@pytest.fixture(autouse=True)
+def cleanup_e2e_resources(api_url):
+    """每个测试前后都清一次以 __e2e_ 开头的模板和规则"""
+    yield
+    _cleanup_resources(api_url)
+
+
+def _list_field(payload):
+    """适配 API 返回 {items:[...]} 或裸 list"""
+    if isinstance(payload, dict) and "items" in payload:
+        return payload["items"]
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
+def _cleanup_resources(api_url: str):
+    """清理所有以 __e2e_ 开头的导出模板/规则/项目"""
+    try:
+        r = requests.get(f"{api_url}/api/v1/export/realtime-rules", timeout=5)
+        if r.status_code == 200:
+            for rule in _list_field(r.json()):
+                if (rule.get("name") or "").startswith(E2E_PREFIX):
+                    requests.delete(
+                        f"{api_url}/api/v1/export/realtime-rules/{rule['id']}",
+                        timeout=5,
+                    )
+    except Exception as e:
+        print(f"[cleanup] rules 清理失败: {e}")
+
+    try:
+        r = requests.get(f"{api_url}/api/v1/export/templates", timeout=5)
+        if r.status_code == 200:
+            for tpl in _list_field(r.json()):
+                if (tpl.get("name") or "").startswith(E2E_PREFIX):
+                    requests.delete(
+                        f"{api_url}/api/v1/export/templates/{tpl['id']}",
+                        timeout=5,
+                    )
+    except Exception as e:
+        print(f"[cleanup] templates 清理失败: {e}")
+
+
+@pytest.fixture
+def api_helper(api_url):
+    """直接对 backend 发 HTTP，不通过 UI（用于 setup 测试数据）"""
+    class _ApiHelper:
+        def __init__(self):
+            self.url = api_url
+
+        def get(self, path):
+            return requests.get(f"{self.url}{path}", timeout=10)
+
+        def post(self, path, json=None):
+            return requests.post(f"{self.url}{path}", json=json, timeout=10)
+
+        def put(self, path, json=None):
+            return requests.put(f"{self.url}{path}", json=json, timeout=10)
+
+        def delete(self, path):
+            return requests.delete(f"{self.url}{path}", timeout=10)
+
+        def create_template(self, name_suffix, fmt="txt", content="hello {{ app.version }}"):
+            r = self.post("/api/v1/export/templates", json={
+                "name": f"{E2E_PREFIX}{name_suffix}",
+                "format": fmt,
+                "scope": "both",
+                "content": content,
+            })
+            r.raise_for_status()
+            return r.json()
+
+    return _ApiHelper()

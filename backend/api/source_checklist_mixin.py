@@ -25,39 +25,83 @@ class ChecklistMixin:
                 'expected': expected_count, 'counted': actual,
                 'prefix': prefix, 'display_name': display_name
             }
-        for cls_name, count in self._tracking_class_counters.items():
-            if cls_name not in self._tracking_item_checklist:
-                stack_n = self._stack_counters.get(cls_name, 0)
-                actual = max(count, stack_n)
-                display_name = self.step_display_names.get(cls_name, cls_name)
-                prefix = self._tracking_letter_map.get(cls_name, display_name)
-                self._tracking_item_checklist[cls_name] = {
-                    'expected': 0, 'counted': actual,
-                    'prefix': prefix, 'display_name': display_name
-                }
-        for cls_name, count in self._event_counters.items():
-            if cls_name not in self._tracking_item_checklist:
-                display_name = self.step_display_names.get(cls_name, cls_name)
-                self._tracking_item_checklist[cls_name] = {
-                    'expected': 0, 'counted': count,
-                    'prefix': display_name, 'display_name': display_name
-                }
-        # v2.7.4: 仅 stack 模式（无 tracking_class_counter 也无 event_counter）的 label
-        for cls_name, count in self._stack_counters.items():
-            if cls_name not in self._tracking_item_checklist:
-                display_name = self.step_display_names.get(cls_name, cls_name)
-                prefix = self._tracking_letter_map.get(cls_name, display_name)
-                self._tracking_item_checklist[cls_name] = {
-                    'expected': 0, 'counted': count,
-                    'prefix': prefix, 'display_name': display_name
-                }
+        # v3.4.2: 严格按"期望物品清单"显示, 跳过非期望类的额外补充, 防止
+        # 模型识别到的干扰类(如泡沫槽/备件)出现在前端"物品清点"面板里.
+        # 用户语义: 物品清点 = 项目配置的期望物品清单, 不是"模型识别到的所有类".
+        # 仅当 expected_items 为空 (老项目未配清单) 时才回退旧行为, 显示全部.
+        if not expected_items:
+            for cls_name, count in self._tracking_class_counters.items():
+                if cls_name not in self._tracking_item_checklist:
+                    stack_n = self._stack_counters.get(cls_name, 0)
+                    actual = max(count, stack_n)
+                    display_name = self.step_display_names.get(cls_name, cls_name)
+                    prefix = self._tracking_letter_map.get(cls_name, display_name)
+                    self._tracking_item_checklist[cls_name] = {
+                        'expected': 0, 'counted': actual,
+                        'prefix': prefix, 'display_name': display_name
+                    }
+            for cls_name, count in self._event_counters.items():
+                if cls_name not in self._tracking_item_checklist:
+                    display_name = self.step_display_names.get(cls_name, cls_name)
+                    self._tracking_item_checklist[cls_name] = {
+                        'expected': 0, 'counted': count,
+                        'prefix': display_name, 'display_name': display_name
+                    }
+            # v2.7.4: 仅 stack 模式（无 tracking_class_counter 也无 event_counter）的 label
+            for cls_name, count in self._stack_counters.items():
+                if cls_name not in self._tracking_item_checklist:
+                    display_name = self.step_display_names.get(cls_name, cls_name)
+                    prefix = self._tracking_letter_map.get(cls_name, display_name)
+                    self._tracking_item_checklist[cls_name] = {
+                        'expected': 0, 'counted': count,
+                        'prefix': prefix, 'display_name': display_name
+                    }
 
     def _settle_counting_cycle(self, expected_items: dict, check_order: bool = False, expected_order: list = None):
         """Validate tracking-mode cycle and trigger OK or NG event."""
+        # v3.4.2 race-condition guard: 推理线程 (all_gone settle confirmed) 和
+        # mes_hooks 线程 (settle_for_scan_pair) 可能并行调本函数, 导致同一 cycle
+        # 被 _trigger_event 跑两次 → 计数 +1+1, NG 多算. 用 RLock 互斥;
+        # 后到的 try-acquire 失败 → 静默跳过, 由先到方完成结算.
+        # RLock 允许同线程递归 (settle_for_scan_pair 内部又调 _settle_counting_cycle 不会死锁).
+        _lk = getattr(self, '_settle_lock', None)
+        if _lk is not None:
+            if not _lk.acquire(blocking=False):
+                print(f"[Settle] _settle_counting_cycle 跳过: 锁被占 (其他线程正在 settle 同一 cycle)", flush=True)
+                return
+        try:
+            self._settle_counting_cycle_impl(expected_items, check_order, expected_order)
+        finally:
+            if _lk is not None:
+                _lk.release()
+
+    def _settle_counting_cycle_impl(self, expected_items: dict, check_order: bool = False, expected_order: list = None):
+        """Internal: real settlement work, wrapped by _settle_counting_cycle for race protection."""
         print(f"[Tracking] Settling cycle: counters={self._tracking_class_counters}, events={self._event_counters}, expected={expected_items}")
-        
+
         # In container mode, settle remaining boxes then reset (skip cycle-level count validation)
         if self._container_mode:
+            # v3.4.2: scan_pair (码-码闭环) 模式下, 物品清空 / all_gone 也不直接结算,
+            # 由下一码事件触发 settle_for_scan_pair. 这里只保留 _box_objects 状态
+            # (already-complete 的 was_complete 不丢), 等扫码再判. 修 bug: 之前只挡了
+            # gone-confirm 路径, all_gone (用户拿走箱子触发 settle_confirmed) 这条会
+            # 强制 _settle_box → 结算 + 把 box 清掉 → "码丢了" 现象.
+            scan_pair_active = False
+            try:
+                from backend.services.mes_hooks import get_mes_hook
+                _mes_mgr = get_mes_hook()
+                if _mes_mgr and getattr(_mes_mgr, 'enabled', False):
+                    scan_pair_active = _mes_mgr.is_scan_pair_mode(
+                        getattr(self, 'channel_id', 0)
+                    )
+            except Exception:
+                scan_pair_active = False
+            if scan_pair_active:
+                # 不 settle, 不 reset; _box_objects / was_complete 保留, 等扫下一码.
+                print(f"[Container] all_gone 但 scan_pair 模式 → 跳过 settle, "
+                      f"等下一码触发 (active boxes={list(self._box_objects.keys())})",
+                      flush=True)
+                return
             box_list = list(self._box_objects.keys())
             _sd = self.project_config.get('pipeline_config', {}).get('settle_dedup', False) if self.project_config else False
             for i, box_did in enumerate(box_list):
@@ -206,6 +250,22 @@ class ChecklistMixin:
         # OK/NG 判定切到 sticky 'was_complete', 而不是基于当前帧的 missing/extra.
         scan_pair_hint = bool(getattr(self, '_scan_pair_settle_hint', False))
         was_complete = bool(getattr(self, '_tracking_was_complete', False))
+
+        # v3.4.2: tracking 模式 scan_pair: 非"扫码触发"路径(all_gone自动)也要跳过
+        # 直接结算, 由下一码事件触发. _tracking_was_complete sticky 已在
+        # source_tracking_mixin 里维护, 这里不能 _reset_counting_cycle 否则丢状态.
+        if not scan_pair_hint:
+            try:
+                from backend.services.mes_hooks import get_mes_hook
+                _mes_mgr = get_mes_hook()
+                if (_mes_mgr and getattr(_mes_mgr, 'enabled', False)
+                        and _mes_mgr.is_scan_pair_mode(getattr(self, 'channel_id', 0))):
+                    print(f"[Tracking] all_gone 但 scan_pair 模式 → 跳过 settle, "
+                          f"等下一码触发 (was_complete={was_complete}, "
+                          f"merged={dict(merged_counters)})", flush=True)
+                    return
+            except Exception:
+                pass
 
         if not expected_items:
             self._trigger_event(1, f'Counting complete: {dict(merged_counters)}')

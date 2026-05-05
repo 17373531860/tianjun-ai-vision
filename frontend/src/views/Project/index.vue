@@ -827,6 +827,104 @@
                 </div>
               </el-card>
 
+              <!-- Periodic Required Actions: 周期性强制动作（每 N 轮做 E 否则告警） -->
+              <el-card shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header>
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <span class="font-bold text-white">周期性强制动作</span>
+                      <p class="text-xs text-gray-500 mt-0.5">
+                        每做完 N 轮主流程必须执行的保养/校准动作（清洁、上油、换刀、标定...），
+                        到期未做即触发事件
+                      </p>
+                    </div>
+                    <el-button type="primary" size="small" link @click="addPeriodicAction">+ 新增规则</el-button>
+                  </div>
+                </template>
+                <div class="space-y-3 text-sm text-gray-300">
+                  <div v-for="(rule, idx) in (activeProject.periodic_actions || [])" :key="rule.id || idx"
+                       class="bg-slate-900 p-3 rounded border border-slate-700">
+                    <div class="flex justify-between items-start mb-3">
+                      <div class="flex items-center gap-3 flex-1">
+                        <el-switch v-model="rule.enabled" size="small" />
+                        <el-input v-model="rule.name" size="small" placeholder="规则名（如：每20件清洁治具）"
+                                  class="flex-1 max-w-md" />
+                      </div>
+                      <el-button type="danger" size="small" link @click="removePeriodicAction(idx)">删除</el-button>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3 mb-3">
+                      <div>
+                        <p class="text-xs text-gray-500 mb-1">强制周期 N（每多少轮必须做一次）</p>
+                        <el-input-number v-model="rule.interval" size="small" :min="1" :max="100000"
+                                         class="w-full" controls-position="right" />
+                      </div>
+                      <div>
+                        <p class="text-xs text-gray-500 mb-1">计数基准</p>
+                        <el-select v-model="rule.count_basis" size="small" class="w-full">
+                          <el-option label="所有 cycle 都计数" value="all" />
+                          <el-option label="只数合格 cycle (推荐)" value="good_only" />
+                          <el-option label="只数不良 cycle" value="ng_only" />
+                        </el-select>
+                      </div>
+                    </div>
+
+                    <div class="mb-3">
+                      <p class="text-xs text-gray-500 mb-1">完成动作（检测到任一即视为已做）</p>
+                      <el-select v-model="rule.trigger_step_ids" multiple size="small" class="w-full"
+                                 placeholder="从已启用步骤中多选">
+                        <el-option v-for="step in enabledSteps" :key="step.id"
+                                   :label="step.displayLabel || step.label" :value="step.id" />
+                      </el-select>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3 mb-3">
+                      <div>
+                        <p class="text-xs text-gray-500 mb-1">重置策略</p>
+                        <el-select v-model="rule.reset_policy" size="small" class="w-full">
+                          <el-option label="任意时刻做了都重置（默认）" value="always" />
+                          <el-option label="只有到期后做才重置（严格）" value="only_when_due" />
+                        </el-select>
+                      </div>
+                      <div>
+                        <p class="text-xs text-gray-500 mb-1">超期触发频率</p>
+                        <el-select v-model="rule.overdue_repeat" size="small" class="w-full">
+                          <el-option label="每个 cycle 都触发" value="every_cycle" />
+                          <el-option label="只在刚超期时触发一次" value="once" />
+                          <el-option label="冷却 5 轮触发一次" value="cooldown:5" />
+                          <el-option label="冷却 10 轮触发一次" value="cooldown:10" />
+                          <el-option label="冷却 20 轮触发一次" value="cooldown:20" />
+                        </el-select>
+                      </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                      <div>
+                        <p class="text-xs text-gray-500 mb-1">到期提醒事件 (counter == N)</p>
+                        <el-select v-model="rule.due_warning_event_id" size="small" class="w-full"
+                                   clearable placeholder="可选 — 到点提醒一次">
+                          <el-option v-for="ev in (activeProject.events_config || [])"
+                                     :key="ev.id" :label="ev.name" :value="ev.id" />
+                        </el-select>
+                      </div>
+                      <div>
+                        <p class="text-xs text-gray-500 mb-1">超期告警事件 (counter > N)</p>
+                        <el-select v-model="rule.overdue_event_id" size="small" class="w-full"
+                                   clearable placeholder="超过 N 轮还没做时触发">
+                          <el-option v-for="ev in (activeProject.events_config || [])"
+                                     :key="ev.id" :label="ev.name" :value="ev.id" />
+                        </el-select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-if="!activeProject.periodic_actions || activeProject.periodic_actions.length === 0"
+                       class="text-gray-500 text-center py-4 border border-dashed border-slate-700 rounded">
+                    暂无规则，点击右上角"新增规则"添加（如：每 20 轮清洁治具）
+                  </div>
+                </div>
+              </el-card>
+
               <!-- Tracking Mode Config -->
               <el-card v-if="activeProject.logic_mode === 'tracking'" shadow="never" class="bg-slate-800 border-slate-700">
                 <template #header><span class="font-bold text-white">跟踪模式 - 物品清点配置</span></template>
@@ -1899,6 +1997,24 @@ const initProjectDefaults = (project) => {
     sequence: Array.isArray(cond.sequence) ? cond.sequence : [],
     event_id: cond.event_id || null
   }));
+
+  // v3.5.0: 周期性强制动作（每 N 轮做 E 否则告警）
+  if (project.periodic_actions === undefined) {
+    project.periodic_actions = pipelineConfig.periodic_actions || [];
+  }
+  project.periodic_actions = (project.periodic_actions || []).map((rule, idx) => ({
+    id: rule.id || `pa_${Date.now()}_${idx}`,
+    name: rule.name || `规则 ${idx + 1}`,
+    enabled: rule.enabled !== false,
+    trigger_step_ids: Array.isArray(rule.trigger_step_ids) ? rule.trigger_step_ids : [],
+    interval: typeof rule.interval === 'number' ? rule.interval : 20,
+    count_basis: rule.count_basis || 'good_only',
+    reset_policy: rule.reset_policy || 'always',
+    due_warning_event_id: rule.due_warning_event_id ?? null,
+    overdue_event_id: rule.overdue_event_id ?? null,
+    overdue_repeat: rule.overdue_repeat || 'every_cycle',
+    channel_filter: rule.channel_filter || null,
+  }));
   
   if (project.custom_based_on === undefined) {
     project.custom_based_on = pipelineConfig.custom_based_on || null;  // 默认不选择
@@ -2046,6 +2162,7 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.settlement_mode = project.settlement_mode || 'first_step';
   project.pipeline_config.idle_timeout_seconds = project.idle_timeout_seconds || 0;
   project.pipeline_config.cycle_max_duration = project.cycle_max_duration || 0;
+  project.pipeline_config.periodic_actions = project.periodic_actions;
   
   return project;
 };
@@ -2193,7 +2310,20 @@ const handleSaveProject = async () => {
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,
         rod_companion_filter: _sanitizeCompanionFilter(activeProject.value.rod_companion_filter),
-        rod_session_gate: _sanitizeSessionGate(activeProject.value.rod_session_gate)
+        rod_session_gate: _sanitizeSessionGate(activeProject.value.rod_session_gate),
+        periodic_actions: (activeProject.value.periodic_actions || []).map(rule => ({
+          id: rule.id,
+          name: rule.name || '',
+          enabled: rule.enabled !== false,
+          trigger_step_ids: Array.isArray(rule.trigger_step_ids) ? rule.trigger_step_ids : [],
+          interval: Math.max(1, Math.floor(Number(rule.interval) || 20)),
+          count_basis: rule.count_basis || 'good_only',
+          reset_policy: rule.reset_policy || 'always',
+          due_warning_event_id: rule.due_warning_event_id ?? null,
+          overdue_event_id: rule.overdue_event_id ?? null,
+          overdue_repeat: rule.overdue_repeat || 'every_cycle',
+          channel_filter: rule.channel_filter || null,
+        })),
       }
     };
     data.data_config = {
@@ -2528,6 +2658,28 @@ const addCustomCondition = () => {
 
 const removeCustomCondition = (idx) => {
   activeProject.value.custom_conditions.splice(idx, 1);
+};
+
+// v3.5.0: 周期性强制动作
+const addPeriodicAction = () => {
+  if (!activeProject.value.periodic_actions) activeProject.value.periodic_actions = [];
+  activeProject.value.periodic_actions.push({
+    id: `pa_${Date.now()}_${activeProject.value.periodic_actions.length}`,
+    name: `规则 ${activeProject.value.periodic_actions.length + 1}`,
+    enabled: true,
+    trigger_step_ids: [],
+    interval: 20,
+    count_basis: 'good_only',
+    reset_policy: 'always',
+    due_warning_event_id: null,
+    overdue_event_id: null,
+    overdue_repeat: 'every_cycle',
+    channel_filter: null,
+  });
+};
+
+const removePeriodicAction = (idx) => {
+  activeProject.value.periodic_actions.splice(idx, 1);
 };
 
 // 自定义条件中的步骤操作

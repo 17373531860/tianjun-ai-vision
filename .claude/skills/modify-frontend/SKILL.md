@@ -353,3 +353,34 @@ v3.1.0 新增"绑定方式"功能,**不走模板字段系统**,在新建/编辑 
 2. **新增 SYSTEM 列要同时加进 `SYSTEM_COL_META` + `COL_META` + 表头 v-for 的 `<template v-else-if>` 分支**（三处不同步会渲染异常）
 3. **新增 PRESET 表单字段要同时加进 `PRESET_META` + `PRESET_ORDER` + 后端 ORM**（前端校验 key 必须对得上）
 4. **表头 v-for 里的 `<template #default="{ row }">`** 只能写一个 default slot，所有列分支都在里面用 v-if/else-if 分流（曾经踩坑：写多个 `<template #default v-if=...>` 会被 Vue 拒绝渲染）
+
+## v3.5.0 新增的前端组件
+
+### 自定义导出对话框 (`frontend/src/views/Data/components/CustomExportDialog.vue`)
+
+- 入口: Data 页"数据导出"tab "自定义导出 / 客户模板"按钮 → `openCustomExportDialog()`
+- 左侧: 308 字段树 (按 group 分组), 拖到右侧编辑器即生成 `{{ field.path }}` 模板片段
+- 右侧: monaco 风格 textarea, Jinja2 模板编辑 + 实时预览
+- props: `v-model:visible / initial-scope / initial-cycle-id / initial-session-id`
+- 调用: `frontend/src/api/export.js` 封装的 templates / preview / render
+- **不要**在模板里直接写 `{{ }}` 在 Vue template attributes 里 — Vue 会先解析掉. 用 `:placeholder="contentPlaceholder"` 计算属性绕过, 或在 div 文字里用 HTML entity `&#123;&#123;`
+
+### 实时规则对话框 (`frontend/src/views/Data/components/RealtimeRulesDialog.vue`)
+
+- 入口: Data 页"实时规则（扫码自动写入）"按钮 → `openRealtimeRulesDialog()`
+- 表格列出所有规则 (含 enabled toggle / channel/project filter / template / output_dir / filename_template)
+- "新建规则"按钮 + test-run 按钮 + run-logs 抽屉
+- empty-text 不要带嵌套引号 (`""暂无规则""` 会语法错), 用 `empty-text="暂无规则，点上方按钮新建一条"`
+
+### Project 页"周期性强制动作"卡片 (`Project/index.vue`)
+
+- 在"逻辑设置"tab 内, 与 task_type / logic_mode 选项独立
+- 数据字段: `activeProject.periodic_actions: Array<{id, name, enabled, trigger_step_ids, interval, count_basis, reset_policy, due_warning_event_id, overdue_event_id, overdue_repeat}>`
+- 保存时: `handleSaveProject` 把这数组写到 `pipeline_config.periodic_actions`
+- 读取时: `initProjectDefaults` 从 `pipeline_config.periodic_actions` 同步到 `activeProject.periodic_actions`
+
+### Monitor 页"周期性强制动作"进度区 (`Monitor/index.vue`)
+
+- 数据来源: `get_detection_results` API 返回的 `periodic_actions` 字段 (定时轮询)
+- 状态色: `state === 'ok'` 灰 / `'due'` 黄 / `'overdue'` 红
+- 仅当 `periodicActions.length > 0` 时显示, 单条/多条用 grid-cols-1/2 自适应

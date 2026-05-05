@@ -261,4 +261,12 @@ def apply_project_config(h, config: dict):
     _apply_counters(h, config)
     _reset_cycle_state(h)
     _apply_tracking_mode(h, config, pipeline_config)
+
+    # v3.5.0: 周期性强制动作（每 N 轮做 E 否则告警）
+    if hasattr(h, '_apply_periodic_actions'):
+        try:
+            h._apply_periodic_actions(config)
+        except Exception as e:
+            print(f"[PeriodicActions] 应用配置失败: {e}")
+
     _print_summary(h, config, steps_config, pipeline_config)

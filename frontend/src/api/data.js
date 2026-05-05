@@ -45,6 +45,12 @@ export const getCycle = (cycleId) => {
   return api.get(`/data/cycles/${cycleId}`);
 };
 
+// v3.4.3 按工件条码全局检索关联检测周期 (跨 session/日期)
+export const searchCyclesBySerial = (serialNo, { skip = 0, limit = 50, fuzzy = true } = {}) => {
+  const sn = encodeURIComponent((serialNo || '').trim());
+  return api.get(`/data/cycles/by-serial/${sn}`, { params: { skip, limit, fuzzy } });
+};
+
 // 获取周期的所有步骤记录
 export const getCycleSteps = (cycleId) => {
   return api.get(`/data/cycles/${cycleId}/steps`);

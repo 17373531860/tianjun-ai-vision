@@ -300,7 +300,8 @@ class ContainerGroupingMixin:
 
     def _settle_box(self, box_display_id: str, expected_items: dict, *,
                     via_scan_pair: bool = False,
-                    scan_pair_force_ng: bool = False):
+                    scan_pair_force_ng: bool = False,
+                    suppress_event: bool = False):
         """Settle a single box: record its items and completeness.
 
         v3.1.4: 加"幽灵箱跳过"前置过滤 — 当 box.item_class_counts 的总件数
@@ -464,6 +465,12 @@ class ContainerGroupingMixin:
                     is_valid=True,
                 )
 
+        # v3.4.2 scan_pair 聚合结算: 调用方 (settle_for_scan_pair 容器分支) 用
+        # suppress_event=True 让本 box 只写记录, 最后由调用方按"周期内任一齐过 → OK"
+        # 聚合后只 trigger 一次, 计数器只 +1. 老路径 (gone-confirm) 默认行为不变.
+        if suppress_event:
+            return is_ok
+
         if is_ok:
             self._trigger_event(1, f'{box_display_id} OK: {item_counts}')
         else:
@@ -473,6 +480,7 @@ class ContainerGroupingMixin:
             if extra:
                 reasons.append(f'extra: {extra}')
             self._trigger_event(2, f'{box_display_id} NG: {", ".join(reasons) if reasons else "no items"}')
+        return is_ok
 
     def _rebuild_container_checklist(self, expected_items: dict):
         """Build per-box checklist for container mode."""
@@ -541,9 +549,13 @@ class ContainerGroupingMixin:
         geometry = cfg.get('geometry', 'line')
         gone_threshold = int(cfg.get('gone_confirm_frames', 30) or 30)
 
-        # 几何配置以归一化坐标 [0,1] 存储 (与 ROI 一致), 这里乘以当前帧分辨率得像素
-        frame_w = float(getattr(self, 'width', 1280) or 1280)
-        frame_h = float(getattr(self, 'height', 720) or 720)
+        # v3.4.2 修坐标系 bug: bbox 在 _tracking_objects 里是 normalized [0,1]
+        # (source_detect_runners_mixin: det['x']=x1/w 等), 几何配置也按 [0,1] 存,
+        # 所以这里直接在 normalized 空间做计算, 不再乘 frame_w/frame_h.
+        # 之前乘像素分辨率 + cx/cy 实际是 normalized → 全部塌缩到 (0,0)/(1,1)
+        # 永远不跨线, D 模式无法触发.
+        # 叉积阈值: normalized 空间下数值范围 [-1,1], 用 1e-6 表示"几乎在线上";
+        # 0.5 在 [0,1]² 几乎不可能达到 → 会把所有点判为线上, 是原 bug 之一.
 
         line_check = None
         zone_polygon = None
@@ -554,19 +566,20 @@ class ContainerGroupingMixin:
             need = ('x1', 'y1', 'x2', 'y2')
             if not all(k in line_cfg and line_cfg[k] is not None for k in need):
                 return  # 几何未配置, 静默跳过
-            x1 = float(line_cfg['x1']) * frame_w
-            y1 = float(line_cfg['y1']) * frame_h
-            x2 = float(line_cfg['x2']) * frame_w
-            y2 = float(line_cfg['y2']) * frame_h
+            x1 = float(line_cfg['x1'])
+            y1 = float(line_cfg['y1'])
+            x2 = float(line_cfg['x2'])
+            y2 = float(line_cfg['y2'])
             side_a_to_b = bool(line_cfg.get('side_a_to_b', True))
 
             def _side_of(cx, cy):
                 # 叉积符号: > 0 = A 侧 (line LHS), < 0 = B 侧 (line RHS)
-                # 接近 0 视为线上 (未知方向)
+                # 接近 0 视为线上 (未知方向). normalized 空间 |cross| 上界 ≈ 1,
+                # 1e-6 足以避开浮点抖动且不会把大部分点误判为线上.
                 cross = (x2 - x1) * (cy - y1) - (y2 - y1) * (cx - x1)
-                if cross > 0.5:
+                if cross > 1e-6:
                     return 1
-                if cross < -0.5:
+                if cross < -1e-6:
                     return -1
                 return 0
             line_check = _side_of
@@ -575,7 +588,7 @@ class ContainerGroupingMixin:
             if len(zone_norm) < 3:
                 return
             zone_polygon = [
-                [float(p[0]) * frame_w, float(p[1]) * frame_h]
+                [float(p[0]), float(p[1])]
                 for p in zone_norm
                 if isinstance(p, (list, tuple)) and len(p) >= 2
             ]
@@ -604,12 +617,12 @@ class ContainerGroupingMixin:
                         'B(橙)' if init_side == -1 else '线上/未知')
                     need_dir = 'A→B' if side_a_to_b else 'B→A'
                     print(f"[ScanD] ch{getattr(self,'channel_id','?')} {box_did} 首次"
-                          f"出现 (cx={cx:.0f},cy={cy:.0f}) side={side_label}, "
+                          f"出现 (cx={cx:.3f},cy={cy:.3f}) side={side_label}, "
                           f"配置方向={need_dir}, 等待跨线...", flush=True)
                 else:
                     in_zone = self._point_in_polygon(cx, cy, zone_polygon)
                     print(f"[ScanD] ch{getattr(self,'channel_id','?')} {box_did} 首次"
-                          f"出现 (cx={cx:.0f},cy={cy:.0f}) in_zone={in_zone}, "
+                          f"出现 (cx={cx:.3f},cy={cy:.3f}) in_zone={in_zone}, "
                           f"等待进入区域...", flush=True)
             st['gone_frames'] = 0  # 还在画面里, 重置
 
@@ -693,6 +706,22 @@ class ContainerGroupingMixin:
                         pass
             print(f"[ScanD] ch{getattr(self,'channel_id','?')} "
                   f"{box_did} gone-confirm 完成 (>={gone_threshold}f), reset")
+            # v3.4.2: 任何 box gone-confirm 都尝试 resume_after_cycle, 用于解开
+            # _wait_cycle_resume=True 的 LOFF 死锁. resume_after_cycle 内部检查
+            # _wait_cycle_resume, 不在等的连接会跳过, 故安全幂等.
+            # 用户场景: 扫码可能先于 box 跨线 (此时 _scan_d_armed_box=None,
+            # scan_d_on_scan_received return False, 但 _emit 已设
+            # _wait_cycle_resume=True). was_scanned=False, 但 box 离开时也得
+            # 释放扫码器, 否则下个 box 来时灯还是灭着.
+            try:
+                resumed = svc.resume_after_cycle(self.channel_id)
+                if resumed:
+                    print(f"[ScanD] ch{getattr(self,'channel_id','?')} "
+                          f"{box_did} 离开 → 已 resume LON ({len(resumed)} 个扫码器), "
+                          f"等下一箱 (was_scanned={was_scanned})")
+            except Exception as e:
+                print(f"[ScanD] resume_after_cycle 异常 "
+                      f"ch{getattr(self,'channel_id','?')}: {e}")
 
     def scan_d_on_scan_received(self) -> bool:
         """v3.4.0 由 mes_hooks._handle_scan 在 D 模式扫到码后调用. 返回是否真正

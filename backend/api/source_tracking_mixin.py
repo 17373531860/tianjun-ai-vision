@@ -994,5 +994,16 @@ class TrackingMixin:
             seen_track_ids, current_time)
 
         if should_settle:
-            print(f"[Tracking] settle confirmed ({self._tracking_gone_frames}/{gone_confirm_frames} frames)")
-            self._settle_counting_cycle(expected_items, check_order, expected_order)
+            # v3.4.2: 防 race-condition. 当 settle_for_scan_pair / force_settle_pending_cycle
+            # (mes_hooks/scanner 线程) 正在 force settle 同一 cycle 时, 推理线程也并行
+            # 调 _settle_counting_cycle 会导致 _trigger_event 跑两次 (计数+2, NG 多算).
+            # 此处见 _force_settling_in_progress=True 直接跳过, 由对方完成结算.
+            if getattr(self, '_force_settling_in_progress', False):
+                print(
+                    f"[Tracking] settle confirmed ({self._tracking_gone_frames}/{gone_confirm_frames} frames) "
+                    f"但 force_settle 已在跑 → 跳过本次, 由对方处理",
+                    flush=True,
+                )
+            else:
+                print(f"[Tracking] settle confirmed ({self._tracking_gone_frames}/{gone_confirm_frames} frames)")
+                self._settle_counting_cycle(expected_items, check_order, expected_order)

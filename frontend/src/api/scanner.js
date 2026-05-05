@@ -16,3 +16,10 @@ export const simulateScannerScan = (data) => api.post('/scanner/simulate', data)
 // v3.4.0 D 容器跨线触发: 校验工位是否容器模式项目
 export const checkContainerMode = (channelId = 0) =>
   api.get(`/scanner/check-container-mode?channel_id=${channelId}`)
+
+// v3.4.2 按工位"禁用扫码"开关
+export const getScannerDisableStatus = () =>
+  api.get('/scanner/disable-status')
+
+export const toggleScannerDisable = (channelId, disabled) =>
+  api.post('/scanner/disable-toggle', { channel_id: channelId, disabled })

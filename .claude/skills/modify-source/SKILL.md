@@ -225,3 +225,20 @@ MES Hook 影响: [是否影响 5 个 Hook 调用点]
 - **不要**为 tracking 模式加类似 `min_cycle_age = max(max_lost_sec, 1.0)` 的秒级硬兜底，这等于把用户小于 1 秒的配置强行拉到 1 秒
 - API 层已在 `get_detection_results` / `get_source_status` / `get_manager_config` 透出 `fps_inference`，前端可展示
 - 新增"秒"类参数时，在 UI 文案里可以标注"按推理速度换算"，让用户理解慢 GPU 下的表现
+
+## 周期性强制动作 (v3.5.0 新增)
+
+- **mixin**: `backend/api/source_periodic_actions_mixin.py` (`PeriodicActionsMixin`)
+- **VSM MRO**: 已在 `backend/api/source.py` 加入. 修改时**保持在 LifecycleMixin 之后**, 否则 hook 顺序错
+- **集成入口** (3 处):
+  1. `source_project_config_apply.py::apply_project_config` 末尾调用 `h._apply_periodic_actions(config)` — 解析 `pipeline_config.periodic_actions` 列表, 初始化每条规则的 counter (从 `backend/data/counters/project_{pid}_ch{ch}.json` 恢复)
+  2. `source_session_lifecycle_mixin.py::end_cycle()` 在 commit + MES Hook 之后调用 `self._check_periodic_actions(cycle.step_sequence, is_good)` — **必须独立 try/except**, 否则会把 cycle 关闭流程拖崩
+  3. `source_routes.py::get_detection_results` 末尾调 `mgr.get_periodic_actions_status()` 注入 result['periodic_actions']
+- **配置项 4 维度** (任意修改都要看 frontend `Project/index.vue` 的对应选项):
+  - `count_basis ∈ {all, good_only, ng_only}` — 哪些 cycle 计入 counter
+  - `reset_policy ∈ {always, only_when_due}` — 触发动作 E 时是否重置 counter
+  - `overdue_repeat ∈ {every_cycle, once, cooldown:N}` — 超期后多久触发一次告警
+  - `interval` 任意正整数, `due_warning_event_id` / `overdue_event_id` 可选
+- **不要**在 `_check_periodic_actions` 里调 `end_cycle()`, 因为 cycle 已经结算完了; 用 `_emit_periodic_notification(event_id, reason)` 写一条轻量事件即可
+- **持久化**: `_persist_periodic_counters` 写盘到 `backend/data/counters/project_{pid}_ch{ch}.json`, 启动时 `_restore_periodic_counters` 读
+- **测试覆盖**: `tests/test_pairwise_periodic.py` (54 组合 → 11 pairwise) + `tests/features/periodic_actions.feature`

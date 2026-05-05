@@ -173,6 +173,7 @@ from backend.api.source_session_lifecycle_mixin import SessionLifecycleMixin  # 
 from backend.api.source_recording_thread_mixin import RecordingThreadMixin  # noqa: E402  P6 阶段一第十二刀: 5 个 recording thread 方法搬到独立 mixin
 from backend.api.source_recording_api_mixin import RecordingApiMixin  # noqa: E402  P6 阶段一第十四刀: 8 个录制公共 API (session/cycle/step) 搬到独立 mixin
 from backend.api.source_lifecycle_mixin import LifecycleMixin  # noqa: E402  P6 阶段一第十五刀: 11 个 pause/resume/stop/clear_caches 控制方法搬到独立 mixin
+from backend.api.source_periodic_actions_mixin import PeriodicActionsMixin  # noqa: E402  v3.5.0: 周期性强制动作 (每 N 轮做 E)
 from backend.api.source_drawer import Drawer  # noqa: E402  P7 阶段一第一刀: DrawMixin 重构为 has-a 组合 (自持 kalman 状态)
 from backend.api.source_mediapipe import MediaPipeOverlay  # noqa: E402  P7 第二刀: MediaPipe 子系统改组合 (自持 _mp_* 状态)
 from backend.api.source_counters import Counters  # noqa: E402  P7 第三刀: 计数器子系统改组合 (自持 counters dict + 持久化)
@@ -181,7 +182,7 @@ from backend.api.source_inference_executor import InferenceExecutor  # noqa: E40
 from backend.api.source_sequence_labels import SequenceLabels  # noqa: E402  P7 第九刀: 步骤标签查询改组合 (无状态, 仅依赖 project_config)
 
 
-class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, RecordingApiMixin, LifecycleMixin):
+class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, RecordingApiMixin, LifecycleMixin, PeriodicActionsMixin):
     """主管理器 (P7 进行中: DrawMixin 已改组合 → self.drawer)"""
 
     # ===== P7 兼容层: 把已迁移到组件的属性/方法名映射回组件实例 =====

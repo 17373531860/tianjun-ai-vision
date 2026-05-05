@@ -168,6 +168,27 @@ def _get_camera_name_linux(index):
     return None
 
 
+def _get_video4linux_subdev_index(index):
+    """Linux: 读 /sys/class/video4linux/videoN/index 拿 UVC 子设备序号.
+
+    UVC 摄像头一般注册多个 V4L2 节点 (一个 capture, 一个 metadata 等),
+    sysfs 里的 index 字段 = 0 表示主 capture 节点, >=1 是辅助节点 (metadata
+    /VBI 之类不能 cv2.VideoCapture 出帧的). 老逻辑用 'V4L2 节点号 % 2 == 0'
+    判主, 但 USB 热插拔后节点号可能是奇数 (如 video3+video5), 主节点会被
+    错误过滤. sysfs 字段不依赖节点号顺序, 是稳定的判断依据.
+
+    返回 None 表示读不到 (sysfs 不存在 / 权限不足), 让上层走兜底逻辑.
+    """
+    try:
+        idx_path = f"/sys/class/video4linux/video{index}/index"
+        if os.path.exists(idx_path):
+            with open(idx_path, 'r') as f:
+                return int(f.read().strip())
+    except Exception:
+        pass
+    return None
+
+
 def _detect_cameras_linux():
     """Linux: 通过 /dev/video* 快速检测摄像头，跳过当前正在被占用的设备"""
     import glob
@@ -193,8 +214,17 @@ def _detect_cameras_linux():
             if name and "Virtual" in name:
                 cameras.append({"index": index, "name": f"{name} (索引 {index})"})
             elif name:
-                # 物理摄像头通常成对出现，只取偶数索引避免重复
-                if index % 2 != 0:
+                # v3.4.2: 用 sysfs 的 UVC 子设备 index 判定主 capture 节点
+                # (=0), 不再依赖"V4L2 节点号必须偶数"的脆弱启发式. USB 热插拔
+                # 后节点号可能是奇数 (如 video3+video5), 老逻辑会误过滤主节点
+                # 导致前端摄像头列表少一个.
+                subdev_idx = _get_video4linux_subdev_index(index)
+                if subdev_idx is None:
+                    # sysfs 拿不到 → 回退老的"偶数为主"启发式, 兼容老内核.
+                    if index % 2 != 0:
+                        continue
+                elif subdev_idx != 0:
+                    # 辅助节点 (metadata/VBI), 跳过
                     continue
                 cameras.append({"index": index, "name": f"{name} (索引 {index})"})
             else:
@@ -874,43 +904,96 @@ def get_detection_results(channel: int = Query(0)):
 
     result['model_task'] = getattr(mgr, 'model_task', 'detect')
 
+    # 多通道场景下前端不能用 currentProject (顶部下拉框单一值) 兜底,
+    # 必须每帧带上 tracking 过滤所需的字段, 否则容器模式表格里"箱子"行
+    # 过滤不掉 (前端 Monitor/index.vue 的 _trkExpectedLabels 依赖这里).
+    _pcfg = (mgr.project_config.get('pipeline_config', {}) or {}) \
+        if mgr.project_config else {}
     result['project_config'] = {
         'project_id': mgr.project_config.get('id') if mgr.project_config else None,
         'project_name': mgr.project_config.get('name', '') if mgr.project_config else '',
         'logic_mode': mgr.project_config.get('logic_mode', 'detection') if mgr.project_config else 'detection',
         'steps_config': mgr.project_config.get('steps_config', []) if mgr.project_config else [],
+        'pipeline_config': {
+            'counting_expected_items': _pcfg.get('counting_expected_items', {}),
+            'tracking_container_label': _pcfg.get('tracking_container_label', ''),
+        },
     }
 
     logic_mode = mgr.project_config.get('logic_mode') if mgr.project_config else None
-    if logic_mode == 'tracking':
-        tracked_objs = {}
-        for tid, obj in mgr._tracking_objects.items():
+
+    # v3.5.0: tracking 子树始终返回完整字段（非 tracking 模式下大多为空 dict / None），
+    # 给自定义导出系统的 live.tracking.* 字段提供数据源。
+    # 旧字段位置不变，前端 Monitor 现有读取逻辑兼容。
+    tracked_objs = {}
+    try:
+        for tid, obj in (mgr._tracking_objects or {}).items():
             tracked_objs[str(tid)] = {
-                'class_name': obj['class_name'],
-                'display_id': obj['display_id'],
+                'class_name': obj.get('class_name'),
+                'display_id': obj.get('display_id'),
                 'bbox': obj.get('bbox'),
                 'order_idx': obj.get('order_idx', 0),
             }
-        tracking_data = {
-            'tracked_objects': tracked_objs,
-            'class_counters': dict(mgr._tracking_class_counters),
-            'item_checklist': dict(mgr._tracking_item_checklist),
-            'cycle_active': mgr._tracking_cycle_active,
-            'container_mode': mgr._container_mode,
-        }
-        if mgr._container_mode:
-            box_status = {}
-            for box_did, bs in mgr._box_objects.items():
-                box_status[box_did] = {
+    except Exception:
+        tracked_objs = {}
+
+    tracking_data = {
+        # 全局开关
+        'cycle_active': bool(getattr(mgr, '_tracking_cycle_active', False)),
+        'container_mode': bool(getattr(mgr, '_container_mode', False)),
+        # Stack 模式（堆叠）
+        'stack_states': dict(getattr(mgr, '_stack_state', {}) or {}),
+        'stack_counters': dict(getattr(mgr, '_stack_counters', {}) or {}),
+        # Tracking 模式（物品清点）
+        'active_count': len(getattr(mgr, '_tracking_objects', {}) or {}),
+        'locked_count': len(getattr(mgr, '_tracking_locked_ids', {}) or {}),
+        'lost_count': len(getattr(mgr, '_tracking_recently_lost', {}) or {}),
+        'prev_count': int(getattr(mgr, '_tracking_prev_count', 0) or 0),
+        'was_complete': bool(getattr(mgr, '_tracking_was_complete', False)),
+        'class_counters': dict(getattr(mgr, '_tracking_class_counters', {}) or {}),
+        'tracked_objects': tracked_objs,
+        'item_checklist': dict(getattr(mgr, '_tracking_item_checklist', {}) or {}),
+        # Event Counter 模式（动作计数）
+        'event_counters': dict(getattr(mgr, '_event_counters', {}) or {}),
+        'event_states': dict(getattr(mgr, '_event_state', {}) or {}),
+        # Container 模式（容器结算）
+        'box_counter': int(getattr(mgr, '_box_counter', 0) or 0),
+        'boxes': {},
+        'settled_boxes': 0,
+        'settled_ok': 0,
+        'settled_ng': 0,
+        # Scan-D 模式
+        'scan_d_armed_box': getattr(mgr, '_scan_d_armed_box', None),
+    }
+
+    if tracking_data['container_mode']:
+        try:
+            for box_did, bs in (mgr._box_objects or {}).items():
+                tracking_data['boxes'][str(box_did)] = {
                     'bbox': bs.get('bbox'),
-                    'is_complete': bs['is_complete'],
-                    'item_counts': dict(bs['item_class_counts']),
+                    'is_complete': bs.get('is_complete'),
+                    'item_counts': dict(bs.get('item_class_counts', {}) or {}),
                 }
-            tracking_data['boxes'] = box_status
-            tracking_data['settled_boxes'] = len(mgr._box_settled_results)
-            tracking_data['settled_ok'] = sum(1 for r in mgr._box_settled_results if r['is_complete'])
-            tracking_data['settled_ng'] = sum(1 for r in mgr._box_settled_results if not r['is_complete'])
-        result['tracking'] = tracking_data
+            tracking_data['settled_boxes'] = len(mgr._box_settled_results or [])
+            tracking_data['settled_ok'] = sum(
+                1 for r in (mgr._box_settled_results or []) if r.get('is_complete')
+            )
+            tracking_data['settled_ng'] = (
+                tracking_data['settled_boxes'] - tracking_data['settled_ok']
+            )
+        except Exception:
+            pass
+
+    result['tracking'] = tracking_data
+
+    # v3.5.0: 周期性强制动作进度（前端 Monitor 显示"距下次清洁还有 X 轮"）
+    try:
+        if hasattr(mgr, 'get_periodic_actions_status'):
+            pa_status = mgr.get_periodic_actions_status()
+            if pa_status:
+                result['periodic_actions'] = pa_status
+    except Exception:
+        pass
 
     # MES 实时数据 + 录像异常详情 (录像异常不依赖 MES 开关)
     mes_data = {}
@@ -943,6 +1026,12 @@ def get_detection_results(channel: int = Query(0)):
             rebind = mgr._mes_hook.get_rebind_prompt(mgr.channel_id)
             if rebind:
                 mes_data['rebind_prompt'] = rebind
+            # v3.4.2 hotfix: 把"扫码禁用"状态推到前端, 让 Pinia store 自动同步.
+            # 否则 backend reload (从 disk 恢复 _disabled_channels) / 多终端联动
+            # 时, 前端 store 不知道, 守门失效, 误弹"未绑码" / 显示信息条等.
+            mes_data['scan_disabled'] = bool(
+                mgr._mes_hook.is_channel_scan_disabled(mgr.channel_id)
+            )
         except Exception:
             pass
 

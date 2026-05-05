@@ -69,10 +69,26 @@ class MESHookManager:
         self._spill_write_count = 0
         self._spill_replay_count = 0
 
+        # v3.4.2 "禁用扫码"全局开关 (按工位粒度).
+        #   _disabled_channels 里的工位:
+        #     • on_scan_received 直接丢码 (扫码器物理已 LOFF, 这里再防御一道)
+        #     • is_scan_pair_mode / has_pending_workpiece / get_current_workpiece
+        #       全部短路返回 False/None, 让 source 走"项目原生结算"路径
+        #       (tracking → all_gone, 容器 → box gone-confirm)
+        #   联动语义: 用户在工位 N 切禁用 → 由 ScannerService 解析"所有 broadcast
+        #   覆盖 N 的扫码器", 把这些扫码器的全部 broadcast 工位一起加进/移出本集合.
+        #   所以集合永远是"完整的扫码器联动闭包".
+        self._disabled_channels: set[int] = set()
+        self._disable_state_lock = threading.RLock()
+        self._disable_state_file = os.path.join(
+            DATA_DIR, "scanner_runtime_state.json"
+        )
+
     def start(self):
         """启动后台工作线程"""
         self.enabled = True
         self._stop_event.clear()
+        self._load_disabled_state_from_disk()
         self._worker_thread = threading.Thread(
             target=self._worker_loop, daemon=True, name="mes-hook-worker"
         )
@@ -86,6 +102,130 @@ class MESHookManager:
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=5)
         print("[MES] Hook 管理器已停止", flush=True)
+
+    # ==================== v3.4.2 "禁用扫码"按工位开关 ====================
+
+    def _load_disabled_state_from_disk(self):
+        """启动时从 scanner_runtime_state.json 恢复 _disabled_channels.
+        文件不存在或解析失败 → 静默回退默认 (空集 = 全部启用)."""
+        try:
+            if not os.path.exists(self._disable_state_file):
+                return
+            with open(self._disable_state_file, "r", encoding="utf-8") as f:
+                payload = json.load(f) or {}
+            chs = payload.get("disabled_channels") or []
+            with self._disable_state_lock:
+                self._disabled_channels = {
+                    int(x) for x in chs if isinstance(x, (int, str))
+                    and str(x).lstrip("-").isdigit()
+                }
+            print(f"[ScannerDisable] 从 {self._disable_state_file} 恢复禁用工位: "
+                  f"{sorted(self._disabled_channels)}", flush=True)
+        except Exception as e:
+            print(f"[ScannerDisable] 加载禁用状态失败: {e}", flush=True)
+
+    def _save_disabled_state_to_disk(self):
+        """把当前 _disabled_channels 写到磁盘. 调用方需保证已持锁."""
+        try:
+            os.makedirs(os.path.dirname(self._disable_state_file), exist_ok=True)
+            payload = {"disabled_channels": sorted(self._disabled_channels)}
+            with open(self._disable_state_file, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[ScannerDisable] 持久化失败: {e}", flush=True)
+
+    def is_channel_scan_disabled(self, channel_id: int) -> bool:
+        """守门点: 该工位是否已被用户手动禁用扫码."""
+        with self._disable_state_lock:
+            return channel_id in self._disabled_channels
+
+    def get_disabled_channels(self) -> list[int]:
+        """API 拉状态用. 返回排序后的列表."""
+        with self._disable_state_lock:
+            return sorted(self._disabled_channels)
+
+    def _compute_linked_channels(self, channel_id: int) -> set[int]:
+        """计算与 channel_id 联动的所有工位.
+
+        规则: 找出"主绑或 broadcast 包含 channel_id"的所有扫码器, 把这些
+        扫码器的全部 broadcast 工位 (空 broadcast 退化成 [channel_id]) 取并集.
+        即"以这个工位为锚, 牵出所有相关扫码器, 再把它们覆盖的工位都拉进来".
+
+        没有任何扫码器配置覆盖 channel_id → 返回 {channel_id} (单工位禁用,
+        起码影响自己的 4 个守门点).
+        """
+        linked: set[int] = {int(channel_id)}
+        try:
+            from backend.services.scanner import get_scanner_service
+            svc = get_scanner_service()
+            for conn in svc._connections.values():
+                chs = (list(conn.broadcast_channels)
+                       if conn.broadcast_channels
+                       else [conn.channel_id])
+                if channel_id in chs:
+                    linked.update(int(x) for x in chs)
+        except Exception as e:
+            print(f"[ScannerDisable] 计算联动工位异常 ch={channel_id}: {e}",
+                  flush=True)
+        return linked
+
+    def set_channel_disabled(self, channel_id: int,
+                              disabled: bool) -> dict:
+        """切换某工位的扫码禁用状态.
+
+        语义:
+          • disabled=True  → 把 ch 联动闭包加入 _disabled_channels, 同时让
+            ScannerService 给覆盖这些 ch 的扫码器发 LOFF + 关 _scanning
+          • disabled=False → 反向: 从 _disabled_channels 移除联动闭包,
+            ScannerService 对正在检测的工位重发 LON
+          • A 方案: 切换瞬间清空 ch (含联动) 上的 scan_pair / pending /
+            inspecting 状态, 让 cycle 自然走原生 all_gone 收尾, 不强结算.
+
+        返回 {"disabled_channels": [...], "linked": [...]} 给前端展示.
+        """
+        ch = int(channel_id)
+        linked = self._compute_linked_channels(ch)
+
+        with self._disable_state_lock:
+            before = set(self._disabled_channels)
+            if disabled:
+                self._disabled_channels.update(linked)
+            else:
+                self._disabled_channels.difference_update(linked)
+            after = set(self._disabled_channels)
+            changed = (before != after)
+            if changed:
+                self._save_disabled_state_to_disk()
+            snapshot = sorted(self._disabled_channels)
+
+        # A 方案: 禁用瞬间清空联动 ch 的 scan_pair / pending / inspecting
+        if disabled:
+            for c in linked:
+                with self._scan_pair_lock:
+                    self._scan_pair_active.pop(c, None)
+                self._cancel_scan_pair_timer(c)
+                self._pending_workpiece.pop(c, None)
+                self._pending_queue.pop(c, None)
+                self._inspecting_workpiece.pop(c, None)
+                self._last_scan_event.pop(c, None)
+                self._rebind_prompt.pop(c, None)
+
+        # 物理操作: 让扫码器灭灯 / 重新亮灯
+        try:
+            from backend.services.scanner import get_scanner_service
+            svc = get_scanner_service()
+            svc.apply_channel_disable_change(linked, disabled)
+        except Exception as e:
+            print(f"[ScannerDisable] 通知 ScannerService 失败: {e}", flush=True)
+
+        print(f"[ScannerDisable] ch{ch} → {'禁用' if disabled else '启用'} "
+              f"(联动 {sorted(linked)}, 全集 {snapshot}, changed={changed})",
+              flush=True)
+        return {
+            "disabled_channels": snapshot,
+            "linked": sorted(linked),
+            "changed": changed,
+        }
 
     def _worker_loop(self):
         """后台工作线程: 从队列消费任务, 批量处理"""
@@ -242,6 +382,12 @@ class MESHookManager:
                          raw_data: str, project_id: int,
                          device_id: int = None):
         """扫码器收到数据后调用 (ScannerService -> 此方法)"""
+        # v3.4.2 守门点: 该工位被用户手动禁用扫码 → 直接丢码 (扫码器物理已 LOFF,
+        # 这里再防御一道, 防止串口残留字节意外触发).
+        if self.is_channel_scan_disabled(channel_id):
+            print(f"[ScannerDisable] ch{channel_id} 已禁用, 丢弃扫码 "
+                  f"(serial={serial_no})", flush=True)
+            return
         self._enqueue(
             self._handle_scan, channel_id, serial_no, raw_data,
             project_id, device_id, critical=True
@@ -305,6 +451,10 @@ class MESHookManager:
 
     def has_pending_workpiece(self, channel_id: int) -> bool:
         """同步检查该工位是否有待检工件（供 start_cycle 阻止无码周期）"""
+        # v3.4.2 守门点: 工位禁用 → 假装总有码, 让 start_cycle 不再因"未扫码"
+        # 阻塞 / 弹警告. (返回 True 表示"有码", source 那边 cycle 照常起.)
+        if self.is_channel_scan_disabled(channel_id):
+            return True
         return channel_id in self._pending_workpiece
 
     def _conn_serves_channel(self, conn, channel_id: int) -> bool:
@@ -314,6 +464,9 @@ class MESHookManager:
 
     def is_scan_required(self, channel_id: int) -> bool:
         """查询该工位是否要求先扫码才能开始周期"""
+        # v3.4.2 守门点: 工位禁用 → 假装不需要扫码, source 不阻塞 cycle 起新.
+        if self.is_channel_scan_disabled(channel_id):
+            return False
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
@@ -326,6 +479,9 @@ class MESHookManager:
 
     def is_warn_no_barcode(self, channel_id: int) -> bool:
         """查询该工位是否启用无码告警"""
+        # v3.4.2 守门点: 工位禁用 → 不再弹"未扫码"警告.
+        if self.is_channel_scan_disabled(channel_id):
+            return False
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
@@ -342,6 +498,10 @@ class MESHookManager:
 
     def get_current_workpiece(self, channel_id: int) -> Optional[dict]:
         """返回当前工位的工件信息 (用于 Monitor 显示)"""
+        # v3.4.2 守门点: 工位禁用 → 不返回工件, 前端码栏自然空, 也不会显示
+        # "已扫码 / 未扫码" 状态 (前端结合 store 里的 disabled 标志直接整栏隐藏).
+        if self.is_channel_scan_disabled(channel_id):
+            return None
         wp_id = (self._inspecting_workpiece.get(channel_id)
                  or self._pending_workpiece.get(channel_id))
         if not wp_id:
@@ -411,6 +571,10 @@ class MESHookManager:
 
     def is_scan_pair_mode(self, channel_id: int) -> bool:
         """该工位是否处于 bind_timing='scan_pair' 模式 (码-码闭环结算)."""
+        # v3.4.2 守门点: 禁用扫码 → 假装非 scan_pair, 让 source 走原生 all_gone
+        # / 容器 gone-confirm 结算路径, 不再被 scan_pair_active 拦截 settle.
+        if self.is_channel_scan_disabled(channel_id):
+            return False
         return self._get_bind_timing(channel_id) == "scan_pair"
 
     def _get_scan_pair_max_wait_sec(self, channel_id: int) -> int:
@@ -555,14 +719,23 @@ class MESHookManager:
              - 若每个工位都未开窗 → 起新窗口 (本码作为开始码), 起超时定时器
              - 若有工位已有开始码 → 触发结算上一窗口, 然后用新码起新窗口
 
-        多工位广播:
-          一个扫码事件会对每个 broadcast channel 都调一次本方法 (scanner.py
-          循环 channels 时分发的). 为避免重复结算 / 重复起窗口, 只在 channels
-          列表里的"第一次出现 (ch == channels[0])"时执行真正动作, 其它兄弟
-          channel 的同事件直接 no-op (它们的状态在第一次时已经一并写完).
+        多工位广播 (v3.4.2 重构):
+          scanner.py 对 broadcast_channels 里的每个 ch 都调一次 _handle_scan,
+          各 register 一个 wp 并设 _pending_workpiece[ch]. 然后调本方法.
+          - 兄弟 ch (channel_id != broadcast_chs[0]): 只 promote pending →
+            inspecting, 让前端显示新码; 不重复 settle / 起窗口.
+          - 主 ch (channel_id == broadcast_chs[0]): 执行完整 settle 上一窗口
+            + 起新窗口, 然后 promote 自己的 pending → inspecting.
+
+          这样两个工位会同时显示新码, 而不是"一个登记一个排队".
         """
         broadcast_chs = self._scan_pair_resolve_broadcast_channels(channel_id)
-        if broadcast_chs and channel_id != broadcast_chs[0]:
+        if not broadcast_chs:
+            broadcast_chs = [channel_id]
+
+        if channel_id != broadcast_chs[0]:
+            # 兄弟 ch: 只 promote, 不重复 settle / 起窗口
+            self._scan_pair_promote_pending(db, channel_id, wp_id, serial_no)
             return
 
         with self._scan_pair_lock:
@@ -593,6 +766,8 @@ class MESHookManager:
             self._dispatch_scan_pair_settle(
                 ch, force_ng=False, reason=f"scan_pair_next_code:{serial_no}"
             )
+            # settle 完成 → 清掉 inspecting, 让本码 promote 上来
+            self._inspecting_workpiece.pop(ch, None)
 
         # 用新码起新窗口
         now_ts = time.time()
@@ -610,6 +785,37 @@ class MESHookManager:
             f"工位={broadcast_chs})",
             flush=True,
         )
+
+        # 主 ch 自己也要 promote pending → inspecting (兄弟 ch 各自已 promote)
+        self._scan_pair_promote_pending(db, channel_id, wp_id, serial_no)
+
+    def _scan_pair_promote_pending(self, db, channel_id: int, wp_id: int,
+                                    serial_no: str):
+        """v3.4.2 scan_pair 模式下 promote _pending_workpiece[ch] →
+        _inspecting_workpiece[ch], 让前端 get_current_workpiece 立即看到新码.
+
+        scan_pair 模式不依赖 _start_cycle/_handle_cycle_start 流程, 故需要在
+        扫码当时手动 promote, 否则 _inspecting_workpiece[ch] 永远是上一码 (或
+        None), 前端显示卡住.
+        """
+        # 上一码 inspecting 在 _dispatch_scan_pair_settle 之后应该被清; 这里再
+        # 强制清一次防御异常路径.
+        prev_inspecting = self._inspecting_workpiece.pop(channel_id, None)
+        # _handle_scan 已把 wp_id 写到 _pending_workpiece[channel_id], 这里 pop
+        # 出来 promote.
+        pending_id = self._pending_workpiece.pop(channel_id, None)
+        if pending_id is None:
+            # 兜底: 用入参 wp_id (理论上 == _pending)
+            pending_id = wp_id
+        self._inspecting_workpiece[channel_id] = pending_id
+        try:
+            self._workpiece_svc.mark_inspecting(db, pending_id)
+        except Exception as e:
+            print(f"[ScanPair] mark_inspecting 异常 ch={channel_id} "
+                  f"wp#{pending_id}: {e}", flush=True)
+        print(f"[ScanPair] ch{channel_id} promote: wp#{pending_id} "
+              f"(serial={serial_no}) → inspecting "
+              f"(prev_inspecting={prev_inspecting})", flush=True)
 
     def _scan_pair_emit_dup_toast(self, channel_id: int, serial_no: str):
         """同码二次扫 → 通知前端弹 toast 'duplicate scan in scan_pair mode'.
@@ -956,7 +1162,38 @@ class MESHookManager:
                           duration: float, step_sequence: list,
                           project_id: int):
         """Cycle 结束: 更新工件状态, 记录缺陷, 更新工单"""
-        wp_id = self._inspecting_workpiece.pop(channel_id, None)
+        # v3.4.2 hotfix-2: ScanPair 模式下, settle_for_scan_pair 触发 end_cycle
+        # 是同步链, 但本方法被丢进 worker queue 异步跑. 等 worker 拿到 _inspecting
+        # 时, _handle_scan_pair_event 已经 promote 把 _inspecting 改成"新码 wp"
+        # 了 → pop 出来的是新码 wp_id, 上一码的结算结果就被错写到新码头上,
+        # 同时上一码 (cycle 真正绑的那个) 永远拿不到 set_result → 集群拿不到 OK.
+        #
+        # 修复: 优先用 cycle_id 反查 WorkpieceInspection (link_to_cycle 那步已写),
+        # 拿到真正属于这个 cycle 的 wp_id; 找不到才 fallback 到 pop _inspecting
+        # (老 bind_timing 路径 _handle_cycle_start 也写过 inspection 行 —
+        # 都拿不到才说明确实没绑工件).
+        wp_id = None
+        try:
+            from backend.models.mes_models import WorkpieceInspection
+            insp_pre = (
+                db.query(WorkpieceInspection)
+                .filter(WorkpieceInspection.cycle_id == cycle_id)
+                .order_by(WorkpieceInspection.id.desc())
+                .first()
+            )
+            if insp_pre and insp_pre.workpiece_id:
+                wp_id = insp_pre.workpiece_id
+                # 同步把 _inspecting_workpiece[ch] 也清掉, 避免野生 wp_id 泄漏
+                # 但只清掉跟我们 cycle 绑的那个, 不要碰别的 (新码已经 promote 进来了).
+                cur_insp = self._inspecting_workpiece.get(channel_id)
+                if cur_insp == wp_id:
+                    self._inspecting_workpiece.pop(channel_id, None)
+        except Exception as e:
+            print(f"[MES] cycle_end 反查 wp_id 异常 ch{channel_id} "
+                  f"cycle#{cycle_id}: {e}", flush=True)
+
+        if wp_id is None:
+            wp_id = self._inspecting_workpiece.pop(channel_id, None)
 
         # v2.7.16 改进 B：迟到扫码补绑兜底。
         # 触发场景："工人放完物品 → 抬手扫码 → cycle 已经在毫秒/几秒前 settle 了"。
@@ -1081,6 +1318,19 @@ class MESHookManager:
         except Exception as e:
             import traceback
             print(f"[MES] 外部推送(cycle_end)失败: {e}\n{traceback.format_exc()}",
+                  flush=True)
+
+        # v3.5.0: 自定义导出实时规则触发（独立 try/except，不影响 MES 推送）
+        # 客户的 SN.txt 三行写出在这里闭环：扫码后 cycle 结束 → 按规则渲染模板 → 落到客户指定文件夹
+        try:
+            from backend.services.export_realtime import dispatch_cycle_end_export
+            dispatch_cycle_end_export(
+                db, channel_id=channel_id, cycle_id=cycle_id,
+                project_id=project_id,
+            )
+        except Exception as e:
+            import traceback
+            print(f"[ExportRealtime] cycle_end 触发失败: {e}\n{traceback.format_exc()}",
                   flush=True)
 
         rebind = self._get_rebind_mode(channel_id)

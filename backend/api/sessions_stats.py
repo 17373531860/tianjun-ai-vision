@@ -82,12 +82,21 @@ def get_step_averages(
             "label": label,
             "name": step.step_name or label,
             "count": 0,
+            "good_count": 0,
+            "ng_count": 0,
             "durations": [],
             "intervals": [],
+            "confidences": [],
         })
         ss["count"] += 1
+        if step.is_valid is True:
+            ss["good_count"] += 1
+        elif step.is_valid is False:
+            ss["ng_count"] += 1
         if step.duration is not None:
             ss["durations"].append(step.duration)
+        if step.confidence is not None:
+            ss["confidences"].append(step.confidence)
         if step.cycle_id in good_cycle_ids:
             iv = step.interval_to_next if step.interval_to_next is not None else step.interval_from_prev
             if iv is not None:
@@ -112,16 +121,26 @@ def get_step_averages(
     for label, st in step_stats.items():
         avg_d = sum(st["durations"]) / len(st["durations"]) if st["durations"] else 0
         avg_i = sum(st["intervals"]) / len(st["intervals"]) if st["intervals"] else 0
+        # v3.5.0: 新增置信度聚合 — 给"自定义导出"模板提供 stats.step_averages[*].avg/min/max_confidence
+        avg_c = (sum(st["confidences"]) / len(st["confidences"])) if st["confidences"] else None
+        min_c = min(st["confidences"]) if st["confidences"] else None
+        max_c = max(st["confidences"]) if st["confidences"] else None
         result.append({
             "label": label,
             "name": st["name"],
             "count": st["count"],
+            "good_count": st["good_count"],
+            "ng_count": st["ng_count"],
             "avg_duration": round(avg_d, 2),
             "min_duration": round(min(st["durations"]), 2) if st["durations"] else 0,
             "max_duration": round(max(st["durations"]), 2) if st["durations"] else 0,
             "avg_interval": round(avg_i, 2),
             "min_interval": round(min(st["intervals"]), 2) if st["intervals"] else 0,
             "max_interval": round(max(st["intervals"]), 2) if st["intervals"] else 0,
+            "avg_confidence": round(avg_c, 4) if avg_c is not None else None,
+            "min_confidence": round(min_c, 4) if min_c is not None else None,
+            "max_confidence": round(max_c, 4) if max_c is not None else None,
+            "confidence_count": len(st["confidences"]),
         })
     result.sort(key=lambda r: order_map.get(r["label"], 999))
     return {"steps": result}

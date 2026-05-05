@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.5.0 (2026-05-06)
+- [FEAT-350-001] 新增: 自定义导出 / 客户模板系统 — Data 页"数据导出"tab 加"自定义导出"+ "实时规则"按钮; 5 种格式 (txt/csv/docx/xlsx/pdf) + 3 种 input_file_mode (none/read_template/append) + 路线 A (Jinja2 自动样式) / 路线 B (占位符模板上传); 308 字段中央仓库 (`export_field_registry.py`) 含拖拽编辑器; 新增 ORM `ExportTemplate / ExportRealtimeRule / ExportRunLog / SystemConfig` + manual migration; 解决客户场景"从固定文件夹提取 SN.txt → 检测后改写测试结果/各项检测值/程序版本号"
+- [FEAT-350-002] 新增: 实时规则 — cycle 结束自动渲染落盘. `services/export_realtime.py::dispatch_cycle_end_export` 入口扫描启用规则、按 channel/project filter 匹配后渲染; `mes_hooks._handle_cycle_end` 末尾调用, 独立 try/except 不影响 MES Hook / Scanner / Container 清理; ExportRunLog 记录每次执行 + 错误堆栈 + 前端日志面板; 规则 CRUD 含 test-run 干跑能力
+- [FEAT-350-003] 新增: 周期性强制动作 (Periodic Required Actions) — 解决场景"动作 A-B-C-D 每做完 20 轮必须做动作 E, 超期触发事件". 新增 `PeriodicActionsMixin` (count_basis ∈ {all/good_only/ng_only} × reset_policy ∈ {always/only_when_due} × overdue_repeat ∈ {every_cycle/once/cooldown:N} × interval 全可配); VSM MRO 加 mixin; `apply_project_config` 末尾调用 `_apply_periodic_actions`; `end_cycle()` 在 commit + MES Hook 后调用 `_check_periodic_actions`; `get_detection_results` 暴露 periodic_actions 状态; Project 页"逻辑设置"加独立卡片 + Monitor 页加进度区块 (counter 进度条 + 状态色 ok/due/overdue); 计数器 JSON 持久化
+- [FEAT-350-004] 新增: SystemConfig KV + License 缓存 — `/api/v1/system/display` 读写 brand_name / app_name / inspector_name / device_number / factory_name / line_name; 前端从 Electron IPC 推 license 给后端 (`/api/v1/system/license-cache`), 模板可用 `{{ license.customer }} {{ display.factory_name }}` 等
+- [FEAT-350-005] 新增: Step 置信度聚合 (`sessions_stats.py` 加 avg/min/max_confidence) + 内部跟踪状态暴露 (`_stack_state / max_recognized` 通过 `get_detection_results.tracking` 子树暴露)
+- [TEST-350-001] 测试框架建立 — 4 层 86 个测试 1 分 9 秒跑完: L1 BDD/集成 (pytest-bdd 29 个) + L2 Pairwise 矩阵 (allpairspy 减枝, 周期性 4 维 11 个 / 导出 3 维 9 个 / input_modes 9+3 个) + L3 集成链路 (5 个真 DB+真 Jinja2+真磁盘 IO) + 真实视频 sanity (1 个 @slow, 启真 cv2 + VSM) + L4 Playwright 浏览器 E2E (sanity 5 + Project 4 + Monitor 3 + Data 5 + 实时规则 3 = 20 个); 全 conftest 隔离; e2e_browser 用 `__e2e_` 前缀清理保证不留垃圾
+- [CONFIG-350-001] 配置: 版本号升级到 3.5.0; 新依赖 `allpairspy / pytest-bdd / playwright / pytest-playwright / docxtpl / reportlab` 写入 `backend/requirements.txt`
+
 ## v3.4.1 (2026-04-30)
 - [BUG-341-001] 修复: D 模式扫码器灯一直闪 (像 continuous 持续扫码) — `services/scanner.py` 的 ERROR 自动续 LON 路径只把日志加了个 `mode=D` 标签, 没真正排除 D 模式; listen 主循环也照样按 `_lon_sent=False` 逻辑续 LON. 改动 3 处: `start_scanning` D 模式不发 LON (灯一开始保持灭, 等 box 跨线触发); ERROR 收到 D 模式只 log 不动 `_lon_sent / _next_lon_after`; listen 主循环 D 模式跳过自动续 LON. 现在 D 模式 LON 唯一发送源是 `source._scan_d_update.send_lon_for_channel`, 真正实现"按 box 物理位置脉冲式发"
 - [BUG-341-002] 修复: 前端 D 模式校验工位拿错 — 切到 D 模式时校验的是 `broadcast_channels[0]` (广播工位的第一个) 而不是 `channel_id` (绑定工位); 几何编辑器加载 snapshot 也是同样错误. 用户场景"绑定工位=工位2 / 广播=[工位1, 工位2]"时报"工位 1 不是容器模式"被回退. D 模式状态机跑在扫码器**绑定工位**的检测帧循环里 (用绑定工位的摄像头看 box), 广播工位与 D 触发判定无关. 改成只看 `channel_id`

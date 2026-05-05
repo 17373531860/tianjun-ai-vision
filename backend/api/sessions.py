@@ -621,6 +621,123 @@ def get_session_cycles(
     return {"items": items, "total": total}
 
 
+@router.get("/cycles/by-serial/{serial_no}")
+def get_cycles_by_serial(
+    serial_no: str,
+    skip: int = 0,
+    limit: int = 50,
+    fuzzy: bool = True,
+    db: Session = Depends(get_db),
+):
+    """v3.4.3: 按工件条码全局检索关联检测周期 (跨 session/日期).
+    返回结构跟 /sessions/{id}/cycles 完全一致, 前端能复用同一套渲染.
+    每条额外附带 session_uuid / session_id / project_name 让用户知道来源.
+    """
+    from backend.models.mes_models import WorkpieceInspection, Workpiece
+
+    serial_no = (serial_no or "").strip()
+    if not serial_no:
+        return {"items": [], "total": 0, "matched_workpieces": []}
+
+    # 模糊匹配 serial (默认开), 严格 fuzzy=False 时只命中完全相等
+    if fuzzy:
+        wp_q = db.query(Workpiece).filter(
+            Workpiece.serial_no.like(f"%{serial_no}%")
+        )
+    else:
+        wp_q = db.query(Workpiece).filter(Workpiece.serial_no == serial_no)
+    wps = wp_q.order_by(Workpiece.id.desc()).all()
+    if not wps:
+        return {"items": [], "total": 0, "matched_workpieces": []}
+
+    wp_ids = [w.id for w in wps]
+    wp_serial_map = {w.id: w.serial_no for w in wps}
+
+    # 拿到所有 inspection 行 (一件可有多次检测)
+    insps = (
+        db.query(WorkpieceInspection)
+        .filter(WorkpieceInspection.workpiece_id.in_(wp_ids))
+        .filter(WorkpieceInspection.cycle_id.isnot(None))
+        .all()
+    )
+    cycle_id_to_serial: dict = {}
+    for ins in insps:
+        if ins.cycle_id and ins.cycle_id not in cycle_id_to_serial:
+            cycle_id_to_serial[ins.cycle_id] = wp_serial_map.get(ins.workpiece_id)
+    if not cycle_id_to_serial:
+        return {
+            "items": [], "total": 0,
+            "matched_workpieces": [
+                {"id": w.id, "serial_no": w.serial_no} for w in wps
+            ],
+        }
+
+    cycle_ids = list(cycle_id_to_serial.keys())
+    base = db.query(DetectionCycle).filter(DetectionCycle.id.in_(cycle_ids))
+    total = base.count()
+    cycles = (
+        base.order_by(DetectionCycle.start_time.desc())
+        .offset(skip).limit(limit).all()
+    )
+
+    # 一次性拿来源 session/project 信息, 避免 N+1
+    sess_ids = list({c.session_id for c in cycles if c.session_id})
+    sess_rows = (
+        db.query(DetectionSession).filter(DetectionSession.id.in_(sess_ids)).all()
+        if sess_ids else []
+    )
+    sess_map = {s.id: s for s in sess_rows}
+    proj_ids = list({s.project_id for s in sess_rows if s.project_id})
+    proj_rows = (
+        db.query(Project).filter(Project.id.in_(proj_ids)).all()
+        if proj_ids else []
+    )
+    proj_map = {p.id: p.name for p in proj_rows}
+
+    op_ids = list({c.operator_id for c in cycles if c.operator_id})
+    op_map = {}
+    if op_ids:
+        for op in db.query(Operator).filter(Operator.id.in_(op_ids)).all():
+            op_map[op.id] = op.name
+
+    items = []
+    for cycle in cycles:
+        sess = sess_map.get(cycle.session_id)
+        items.append({
+            "id": cycle.id,
+            "cycle_uuid": cycle.cycle_uuid,
+            "cycle_number": cycle.cycle_number,
+            "start_time": cycle.start_time.strftime("%Y-%m-%d %H:%M:%S")
+                          if cycle.start_time else None,
+            "end_time": cycle.end_time.strftime("%Y-%m-%d %H:%M:%S")
+                        if cycle.end_time else None,
+            "duration": cycle.duration,
+            "is_good": cycle.is_good,
+            "event_name": cycle.event_name,
+            "result_reason": cycle.result_reason,
+            "step_sequence": cycle.step_sequence,
+            "video_id": cycle.video_id,
+            "operator_id": cycle.operator_id,
+            "operator_name": op_map.get(cycle.operator_id) if cycle.operator_id else None,
+            "serial_no": cycle_id_to_serial.get(cycle.id),
+            # 跨 session 检索特有的来源信息
+            "session_id": cycle.session_id,
+            "session_uuid": sess.session_uuid if sess else None,
+            "session_start_time": (sess.start_time.strftime("%Y-%m-%d %H:%M:%S")
+                                    if sess and sess.start_time else None),
+            "project_id": sess.project_id if sess else None,
+            "project_name": proj_map.get(sess.project_id) if sess else None,
+        })
+
+    return {
+        "items": items,
+        "total": total,
+        "matched_workpieces": [
+            {"id": w.id, "serial_no": w.serial_no} for w in wps
+        ],
+    }
+
+
 @router.get("/cycles/{cycle_id}", response_model=CycleResponse)
 def get_cycle(cycle_id: int, db: Session = Depends(get_db)):
     """获取单个周期详情"""

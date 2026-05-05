@@ -205,6 +205,13 @@ def _init_container_state(h):
     # v3.1.2: 多工位广播结算联动 - 标识当前是否处于"被联动强制结算"中,
     # 用于阻断 _settle_box → end_cycle → notify_cycle_settled → 又回到本工位的循环.
     h._force_settling_in_progress = False
+    # v3.4.2 race-condition fix: _settle_counting_cycle 重入锁. 推理线程 (settle
+    # confirmed) 与 mes_hooks 线程 (settle_for_scan_pair) 可能并行调本函数, 同一
+    # cycle 被 trigger NG 两次 → 计数 +1+1, NG 多算. RLock 让同线程递归调用 OK
+    # (settle_for_scan_pair 会嵌套调 _settle_counting_cycle), 跨线程则后到的
+    # try-acquire 失败 → 静默跳过.
+    import threading as _threading
+    h._settle_lock = _threading.RLock()
 
 
 def _init_cycle_time_state(h):

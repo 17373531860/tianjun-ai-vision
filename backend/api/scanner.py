@@ -479,3 +479,54 @@ def settle_scan_pair_for_stop(req: ScanPairStopRequest):
         return {"settled_count": int(n), "discarded": req.discard}
     except Exception as e:
         raise HTTPException(500, f"settle_scan_pair_for_stop failed: {e}")
+
+
+# ==================== v3.4.2 "禁用扫码"按工位开关 ====================
+
+class ScannerDisableToggleRequest(BaseModel):
+    channel_id: int
+    disabled: bool
+
+
+@router.get("/disable-status")
+def get_scanner_disable_status():
+    """前端 Pinia store 启动时拉一次 + 后续切换后再拉一次, 返回当前所有
+    被禁用扫码的工位列表 (含联动闭包).
+    """
+    try:
+        from backend.services.mes_hooks import get_mes_hook
+        mes = get_mes_hook()
+        if mes is None:
+            return {"disabled_channels": []}
+        return {"disabled_channels": mes.get_disabled_channels()}
+    except Exception as e:
+        return {"disabled_channels": [], "error": str(e)}
+
+
+@router.post("/disable-toggle")
+def toggle_scanner_disable(req: ScannerDisableToggleRequest):
+    """v3.4.2 按工位禁用 / 启用扫码.
+
+    语义:
+      • disabled=True  → 该工位 + 所有联动 (与同一扫码器 broadcast 共享的工位)
+        全部进入禁用集合; 这些工位绑定的扫码器立即 LOFF + 关 _scanning;
+        这些工位下的 4 个守门点 (on_scan_received / is_scan_pair_mode /
+        has_pending_workpiece / get_current_workpiece) 全部短路, source 退回
+        项目原生结算 (tracking → all_gone, 容器 → box gone-confirm)
+      • disabled=False → 反向, 把联动闭包从禁用集合移除, 对仍在 detecting 的
+        工位重发 LON 复活扫码器
+      • 状态持久化到 backend/scanner_runtime_state.json, 重启保留
+
+    返回 {"disabled_channels": [...], "linked": [...], "changed": bool}
+    """
+    try:
+        from backend.services.mes_hooks import get_mes_hook
+        mes = get_mes_hook()
+        if mes is None:
+            raise HTTPException(503, "MES Hook 未启用, 无法切换扫码禁用状态")
+        result = mes.set_channel_disabled(req.channel_id, req.disabled)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"toggle_scanner_disable failed: {e}")

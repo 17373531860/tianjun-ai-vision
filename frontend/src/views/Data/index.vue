@@ -34,6 +34,36 @@
             <span>数据查询</span>
           </div>
           <div class="space-y-3">
+            <!-- v3.4.3: 工件码全局搜索 (跨日期/会话, 支持模糊) -->
+            <div>
+              <div class="text-xs text-gray-500 mb-1.5 flex items-center justify-between">
+                <span>工件码搜索</span>
+                <el-button
+                  v-if="searchActive"
+                  type="info"
+                  size="small"
+                  link
+                  @click="clearSerialSearch"
+                >清除</el-button>
+              </div>
+              <el-input
+                v-model="serialSearchInput"
+                size="small"
+                placeholder="输入工件码 (支持模糊)"
+                clearable
+                @keyup.enter="runSerialSearch"
+                @clear="clearSerialSearch"
+              >
+                <template #append>
+                  <el-button :loading="loadingSerialSearch" @click="runSerialSearch">
+                    <el-icon><Search /></el-icon>
+                  </el-button>
+                </template>
+              </el-input>
+              <div v-if="searchActive" class="text-[11px] text-cyan-400 mt-1 font-mono">
+                搜索中: {{ serialSearchActive }} · {{ cycleTotal }} 条记录
+              </div>
+            </div>
             <el-date-picker
               v-model="selectedDate"
               type="date"
@@ -42,6 +72,7 @@
               value-format="YYYY-MM-DD"
               class="w-full"
               :disabled-date="disabledDate"
+              :disabled="searchActive"
               @change="handleDateChange"
             />
             <div>
@@ -198,11 +229,12 @@
           <div class="flex justify-between items-center mb-3">
             <div class="panel-header mb-0">
               <el-icon class="text-violet-400"><TrendCharts /></el-icon>
-              <span>{{ selectedSession ? '会话详情' : (selectedDate ? '当日统计' : '数据详情') }}</span>
+              <span v-if="searchActive">搜索结果: <span class="text-cyan-400 font-mono">{{ serialSearchActive }}</span></span>
+              <span v-else>{{ selectedSession ? '会话详情' : (selectedDate ? '当日统计' : '数据详情') }}</span>
             </div>
             <div class="flex items-center gap-3">
-              <span v-if="selectedSession" class="text-xs text-gray-500 font-mono">{{ selectedSession.session_uuid }}</span>
-              <el-button v-if="selectedSession && cycles.length > 0" size="small" type="primary" plain round @click="exportSessionData">
+              <span v-if="!searchActive && selectedSession" class="text-xs text-gray-500 font-mono">{{ selectedSession.session_uuid }}</span>
+              <el-button v-if="!searchActive && selectedSession && cycles.length > 0" size="small" type="primary" plain round @click="exportSessionData">
                 <el-icon class="mr-1" :size="12"><Download /></el-icon>导出会话
               </el-button>
             </div>
@@ -232,9 +264,11 @@
             </el-table>
           </div>
 
-          <!-- 周期详情 -->
-          <div v-if="selectedSession && cycles.length > 0">
-            <div class="text-xs text-gray-500 mb-2 font-medium">周期详情</div>
+          <!-- 周期详情 / 搜索结果 -->
+          <div v-if="(selectedSession || searchActive) && cycles.length > 0">
+            <div class="text-xs text-gray-500 mb-2 font-medium">
+              {{ searchActive ? '匹配的周期' : '周期详情' }}
+            </div>
             <el-table 
               :data="cycles" 
               size="small" 
@@ -279,9 +313,20 @@
                   <span v-else class="text-gray-600 text-xs">-</span>
                 </template>
               </el-table-column>
-              <el-table-column label="开始时间" width="90">
+              <!-- 搜索模式下额外的 来源 列 (项目 / 启动时间) -->
+              <el-table-column v-if="searchActive" label="来源" min-width="160">
                 <template #default="{ row }">
-                  <span class="font-mono">{{ formatTime(row.start_time) }}</span>
+                  <div class="flex flex-col leading-tight">
+                    <span class="text-violet-300 text-xs">{{ row.project_name || '—' }}</span>
+                    <span class="text-gray-500 text-[10px] font-mono">
+                      {{ row.session_start_time || row.session_uuid || '' }}
+                    </span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column :label="searchActive ? '周期开始' : '开始时间'" width="100">
+                <template #default="{ row }">
+                  <span class="font-mono text-xs">{{ searchActive ? (row.start_time || '').slice(5, 16) : formatTime(row.start_time) }}</span>
                 </template>
               </el-table-column>
               <el-table-column label="耗时" width="80" align="center">
@@ -484,6 +529,21 @@
                   <el-button type="primary" plain class="w-full" @click="showExportDialog('range')">
                     <el-icon class="mr-1"><Download /></el-icon> 导出日期范围
                   </el-button>
+
+                  <!-- v3.5.0: 自定义导出 (txt/csv 模板，可选 cycle/session/range/system) -->
+                  <div class="border-t border-slate-800 pt-3 mt-1 space-y-2">
+                    <el-button type="success" class="w-full" @click="openCustomExportDialog">
+                      <el-icon class="mr-1"><MagicStick /></el-icon> 自定义导出 / 客户模板
+                    </el-button>
+                    <el-button type="info" plain class="w-full" @click="openRealtimeRulesDialog">
+                      <el-icon class="mr-1"><Connection /></el-icon> 实时规则（扫码自动写入）
+                    </el-button>
+                    <div class="text-[11px] text-gray-500 leading-relaxed px-1">
+                      支持 Jinja2 模板渲染、308 项数据字段、txt/csv 输出。<br>
+                      <span class="text-cyan-400">实时规则</span>：cycle 结束后按规则自动渲染落盘到客户文件夹。
+                    </div>
+                  </div>
+
                   <div class="border-t border-slate-800 pt-3 mt-1 space-y-2">
                     <el-button type="warning" plain class="w-full" @click="handleBackup">
                       备份数据库
@@ -622,6 +682,18 @@
         <span class="text-gray-500 text-xs">提示：视频首次加载可能需要几秒钟进行格式转换</span>
       </template>
     </el-dialog>
+
+    <!-- v3.5.0: 自定义导出对话框 -->
+    <CustomExportDialog
+      v-model="customExportVisible"
+      :initial-scope="customExportInitialScope"
+      :initial-cycle-id="customExportInitialCycleId"
+      :initial-session-id="customExportInitialSessionId"
+      :initial-date-range="customExportInitialDateRange"
+    />
+
+    <!-- v3.5.0 Step 4: 实时规则管理对话框 -->
+    <RealtimeRulesDialog v-model="realtimeRulesVisible" />
   </div>
 </template>
 
@@ -630,13 +702,16 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
-import { Calendar, Clock, DataLine, Setting, Download, Folder, TrendCharts, VideoPlay, Delete, Warning } from '@element-plus/icons-vue';
+import { Calendar, Clock, DataLine, Setting, Download, Folder, TrendCharts, VideoPlay, Delete, Warning, Search, MagicStick, Connection } from '@element-plus/icons-vue';
+import CustomExportDialog from './components/CustomExportDialog.vue';
+import RealtimeRulesDialog from './components/RealtimeRulesDialog.vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getDetectionResults, getWorkstations } from '@/api/detection';
 import { 
   getSessionsByDate, 
   getSessionDates,
   getSessionCycles,
+  searchCyclesBySerial,
   getCycleSteps,
   getStepAverages,
   getExportSettings,
@@ -772,6 +847,12 @@ const loadingOverview = ref(false);
 const exporting = ref(false);
 const clearing = ref(false);
 
+// v3.4.3 工件码搜索
+const serialSearchInput = ref('');     // 输入框双向绑定
+const serialSearchActive = ref('');    // 当前生效的搜索关键字
+const searchActive = computed(() => !!serialSearchActive.value);
+const loadingSerialSearch = ref(false);
+
 // 历史数据概览
 const overviewData = reactive({
   total_cycles: 0,
@@ -822,6 +903,41 @@ const exportWeek = ref('');
 const exportWeekDate = ref(null);
 const exportMonth = ref('');
 const exportDateRange = ref([]);
+
+// v3.5.0: 自定义导出对话框
+const customExportVisible = ref(false);
+const customExportInitialScope = ref('system');
+const customExportInitialCycleId = ref(null);
+const customExportInitialSessionId = ref(null);
+const customExportInitialDateRange = ref(null);
+
+// v3.5.0 Step 4: 实时规则对话框
+const realtimeRulesVisible = ref(false);
+function openRealtimeRulesDialog() {
+  realtimeRulesVisible.value = true;
+}
+
+function openCustomExportDialog() {
+  // 默认按当前页面状态预填范围：
+  // 1) 已选某 session → 单 session
+  // 2) 否则 → 日期范围（左侧筛选器的日期）
+  // 3) 兜底 system 级
+  if (selectedSession.value?.id) {
+    customExportInitialScope.value = 'session';
+    customExportInitialSessionId.value = selectedSession.value.id;
+    customExportInitialDateRange.value = null;
+  } else if (selectedDate.value) {
+    customExportInitialScope.value = 'range';
+    customExportInitialSessionId.value = null;
+    customExportInitialDateRange.value = [selectedDate.value, selectedDate.value];
+  } else {
+    customExportInitialScope.value = 'system';
+    customExportInitialSessionId.value = null;
+    customExportInitialDateRange.value = null;
+  }
+  customExportInitialCycleId.value = null;
+  customExportVisible.value = true;
+}
 
 // 导出专用时间段（独立于左侧查询时间段）
 const exportShiftType = ref('all');
@@ -1089,6 +1205,11 @@ const resetOverviewData = () => {
 
 // 选择会话
 const selectSession = async (session) => {
+  // v3.4.3: 切换到 session 视图时退出搜索模式
+  if (searchActive.value) {
+    serialSearchInput.value = '';
+    serialSearchActive.value = '';
+  }
   selectedSession.value = session;
   loadingOverview.value = true;
   expandedRows.value = [];
@@ -1134,9 +1255,64 @@ const loadCycles = async (sessionId) => {
 
 const handleCyclePageChange = (page) => {
   cyclePage.value = page;
+  expandedRows.value = [];
+  cycleStepsMap.value = {};
+  if (searchActive.value) {
+    loadSerialSearchPage();
+  } else if (selectedSession.value) {
+    loadCycles(selectedSession.value.id);
+  }
+};
+
+// v3.4.3 工件码搜索 — 触发新搜索
+const runSerialSearch = async () => {
+  const q = (serialSearchInput.value || '').trim();
+  if (!q) {
+    ElMessage.info('请输入工件码');
+    return;
+  }
+  serialSearchActive.value = q;
+  selectedSession.value = null;
+  cyclePage.value = 1;
+  expandedRows.value = [];
+  cycleStepsMap.value = {};
+  await loadSerialSearchPage();
+};
+
+// 翻页 / 内部加载
+const loadSerialSearchPage = async () => {
+  if (!serialSearchActive.value) return;
+  loadingSerialSearch.value = true;
+  try {
+    const skip = (cyclePage.value - 1) * cyclePageSize.value;
+    const res = await searchCyclesBySerial(serialSearchActive.value, {
+      skip, limit: cyclePageSize.value, fuzzy: true,
+    });
+    cycles.value = res.data?.items || [];
+    cycleTotal.value = res.data?.total || 0;
+    if (cycles.value.length === 0) {
+      ElMessage.warning(`未找到与 "${serialSearchActive.value}" 关联的检测周期`);
+    }
+  } catch (e) {
+    console.error('工件码搜索失败:', e);
+    ElMessage.error('工件码搜索失败');
+    cycles.value = [];
+    cycleTotal.value = 0;
+  } finally {
+    loadingSerialSearch.value = false;
+  }
+};
+
+// 清除搜索 → 回到正常 (按当前日期/会话) 模式
+const clearSerialSearch = () => {
+  serialSearchInput.value = '';
+  serialSearchActive.value = '';
+  cycles.value = [];
+  cycleTotal.value = 0;
+  cyclePage.value = 1;
+  expandedRows.value = [];
+  cycleStepsMap.value = {};
   if (selectedSession.value) {
-    expandedRows.value = [];
-    cycleStepsMap.value = {};
     loadCycles(selectedSession.value.id);
   }
 };

@@ -440,6 +440,11 @@ class ScannerService:
         except Exception:
             return 1
 
+    # v3.4.2 hotfix: 降级警告"已打过的 (conn_name, bad_ch, ch_count)"快照,
+    # 防止 _resolve_bound_channels 被 status 轮询/帧循环高频调用时刷屏 (实测
+    # 终端 500 行里 498 行都是同一条警告, 真信号被淹没).
+    _resolve_warned_keys: set[tuple] = set()
+
     @classmethod
     def _resolve_bound_channels(cls, conn: "ScannerConnection") -> list:
         """解析扫码器实际绑定的 channel 列表。
@@ -459,10 +464,15 @@ class ScannerService:
             if b >= ch_count or b < 0:
                 if 0 not in fixed:
                     fixed.append(0)
-                print(
-                    f"[Scanner] 扫码器 '{conn.name}' 的 channel={b} 超出系统工位数 {ch_count}, "
-                    f"已自动降级到 ch0。建议在 MES→扫码器面板 把'绑定工位'改为 0"
-                )
+                # 同一 (扫码器, 错配 ch, 系统工位数) 的警告只打一次,
+                # 系统工位数变化时会自然重打 (因为 key 包含 ch_count).
+                _key = (conn.name, b, ch_count)
+                if _key not in cls._resolve_warned_keys:
+                    cls._resolve_warned_keys.add(_key)
+                    print(
+                        f"[Scanner] 扫码器 '{conn.name}' 的 channel={b} 超出系统工位数 {ch_count}, "
+                        f"已自动降级到 ch0。建议在 MES→扫码器面板 把'绑定工位'改为 0"
+                    )
             elif b not in fixed:
                 fixed.append(b)
         return fixed or [0]
@@ -536,8 +546,129 @@ class ScannerService:
             print(f"[Scanner/WMax] trigger_{('on' if on else 'off')} '{conn.name}' "
                   f"异常: {e}\n{traceback.format_exc()}", flush=True)
 
+    def _catch_up_lon_for_detecting_channels(self, conn: "ScannerConnection"):
+        """v3.4.2: 扫码器连上时回扫 detecting 中的 channel, 补发 LON.
+
+        修 reload 时序 bug: 后端 reload 后 ChannelManager 先恢复 detecting +
+        调 start_scanning, 此时 ScannerService 还没建立 TCP, "无匹配设备已跳过";
+        扫码器后到的连接事件就需要主动补发 LON, 否则灯永远不亮也不 ERROR.
+        """
+        if conn.device_type != "text_lon":
+            return
+        try:
+            from backend.api.channel_manager import get_channel_manager
+            cm = get_channel_manager()
+        except Exception:
+            return
+        # v3.4.2 尊重"扫码禁用"持久化状态: 如果该 conn 的 broadcast 闭包里
+        # 有任何 ch 处于 _disabled_channels, 整个 conn 都不补 LON (因为禁用
+        # 是按"扫码器联动"语义的, 一个 ch 禁则该扫码器整体禁).
+        try:
+            from backend.services.mes_hooks import get_mes_hook
+            _mh = get_mes_hook()
+        except Exception:
+            _mh = None
+        bound = self._resolve_bound_channels(conn)
+        if _mh is not None:
+            for _b in bound:
+                if _mh.is_channel_scan_disabled(_b):
+                    print(f"[Scanner] catch-up 跳过 {conn.name}: "
+                          f"ch={_b} 已被用户禁用扫码", flush=True)
+                    return
+        for cid in list(getattr(cm, 'channels', {}).keys()):
+            if cid not in bound:
+                continue
+            mgr = cm.channels.get(cid)
+            if mgr is None or not getattr(mgr, 'is_detecting', False):
+                continue
+            # 同步本端 _scanning 标志 (start_scanning 的等价副作用), 这样
+            # listen loop 主循环和 _emit 续 LON 路径都会工作.
+            conn._scanning = True
+            conn._wait_cycle_resume = False
+            conn._next_lon_after = 0.0
+            try:
+                if self._text_lon_send(conn, b"LON\r\n",
+                                        f"LON (catch-up ch={cid})"):
+                    conn._lon_sent = True
+                    print(f"[Scanner] catch-up LON: {conn.name} ch={cid} "
+                          f"在 detecting 中, 补发 LON", flush=True)
+            except Exception as e:
+                print(f"[Scanner] catch-up LON 异常 ch={cid}: {e}", flush=True)
+
+    def apply_channel_disable_change(self, channels, disabled: bool):
+        """v3.4.2 由 mes_hooks.set_channel_disabled 调用.
+
+        给 broadcast 与 channels 集合有交集的所有扫码器物理操作:
+          • disabled=True  → text_lon: 立即发 LOFF + _scanning=False, 阻断
+            listen loop 续 LON; wmax: trigger off
+          • disabled=False → 逐个 ch 调 start_scanning, 对仍在 detecting 的
+            工位重新发 LON 复活扫码器 (跟"开始检测"一致)
+        """
+        try:
+            chset = {int(x) for x in channels} if channels else set()
+        except Exception:
+            chset = set()
+
+        affected_off = []
+        affected_on_chs = []
+
+        for conn in list(self._connections.values()):
+            if conn.status != "connected":
+                continue
+            bound = set(self._resolve_bound_channels(conn))
+            if not bound & chset:
+                continue
+            if disabled:
+                conn._scanning = False
+                conn._wait_cycle_resume = False
+                conn._next_lon_after = 0.0
+                conn._lon_sent = False
+                if conn.device_type == "text_lon":
+                    try:
+                        self._text_lon_send(
+                            conn, b"LOFF\r\n",
+                            "LOFF [scanner-disabled]",
+                        )
+                    except Exception as _e:
+                        print(f"[ScannerDisable] LOFF 失败 {conn.name}: {_e}",
+                              flush=True)
+                else:
+                    try:
+                        self._wmax_trigger(conn, on=False)
+                    except Exception:
+                        pass
+                affected_off.append(conn.name)
+            else:
+                # 启用: 逐个匹配 ch 调 start_scanning 复活. start_scanning 内部
+                # 会按 detecting 检查, 没在跑的工位不会乱亮灯.
+                for ch in sorted(bound & chset):
+                    affected_on_chs.append(ch)
+
+        if disabled and affected_off:
+            print(f"[ScannerDisable] 已 LOFF: {affected_off} (channels={sorted(chset)})",
+                  flush=True)
+        if not disabled and affected_on_chs:
+            for ch in sorted(set(affected_on_chs)):
+                try:
+                    self.start_scanning(ch)
+                except Exception as e:
+                    print(f"[ScannerDisable] start_scanning(ch={ch}) 异常: {e}",
+                          flush=True)
+
     def start_scanning(self, channel_id: int = None):
         """检测开始时调用: 让绑定的扫码器发 LON 进入扫码状态 (ondemand: 灯亮 + 开始扫)"""
+        # v3.4.2 尊重"扫码禁用": ch 被禁则跳过, 不让扫码器亮
+        try:
+            from backend.services.mes_hooks import get_mes_hook
+            _mh = get_mes_hook()
+        except Exception:
+            _mh = None
+        if (channel_id is not None and _mh is not None
+                and _mh.is_channel_scan_disabled(channel_id)):
+            print(f"[Scanner] start_scanning(ch={channel_id}) 已禁用扫码, 跳过",
+                  flush=True)
+            return
+
         targets = []
         skipped = []
         for conn in self._connections.values():
@@ -552,20 +683,27 @@ class ScannerService:
                         f"bcast={conn.broadcast_channels},resolved={bound})"
                     )
                     continue
+            # v3.4.2 conn 的 bound 闭包里有任何禁用 ch → 整个 conn 跳过
+            if _mh is not None:
+                _bnd = self._resolve_bound_channels(conn)
+                if any(_mh.is_channel_scan_disabled(_b) for _b in _bnd):
+                    skipped.append(
+                        f"{conn.name}(disabled in bound={_bnd})"
+                    )
+                    continue
             targets.append(conn)
 
         for conn in targets:
             conn._scanning = True
             if conn.device_type == "text_lon":
-                # v3.4.1: D 模式下 LON 由 source._scan_d_update 按 box 跨线触发
-                # 主动调 send_lon_for_channel 发, start_scanning 不在这里发 LON
-                # (一开始灯保持灭, 等第一个 box 跨线/进区域才亮).
-                if (conn.scan_mode or 'continuous') == 'D':
-                    print(f"[Scanner/text_lon] {conn.name} D 模式 start_scanning: "
-                          f"不发 LON (等 box 跨线触发)", flush=True)
-                    conn._lon_sent = False
-                    continue
-                # text_lon: 直接同步发 LON, 不依赖 listen loop 的 _lon_sent 状态机
+                # v3.4.2: start_scanning 必须清掉残留的 _wait_cycle_resume + 重置
+                # _next_lon_after, 否则上一次会话扫到码后设的"等周期" flag 会拦
+                # 本次会话的 ERROR 续 LON, 导致扫码器 LON 5s → LOFF → 永不再亮
+                # 的死锁. once_per_cycle / D 模式都依赖这个清理.
+                conn._wait_cycle_resume = False
+                conn._next_lon_after = 0.0
+                # 各 scan_mode (含 D) 开始检测都先发首次 LON, 灯立即亮.
+                # 后续 ERROR 由 listen loop 自动续 LON 维持工作.
                 if self._text_lon_send(conn, b"LON\r\n", "LON (开始扫码)"):
                     conn._lon_sent = True
             else:
@@ -582,7 +720,22 @@ class ScannerService:
           - start_scanning: 检测启动时一次性发, 状态机置 _scanning=True
           - send_lon_for_channel: 帧循环里按需脉冲式发, 不动 _scanning 状态
         返回真正发出 LON 的连接数.
+
+        v3.4.2: box 跨线触发时同步清掉 _wait_cycle_resume + _next_lon_after,
+        否则 5s 后 ERROR 进 _emit 会被 _wait_cycle_resume=True 拦截 → 不续 LON
+        → 灯亮 5s 又灭, 用户视觉上"亮一下又熄". 清完后让 listen loop 自动续 LON.
+
+        v3.4.2 hotfix: 守门 → 该 ch 或扫码器闭包里任意 ch 被用户禁用就 NOOP.
+        否则容器跨线会绕过 disable, 让"禁用扫码"瞬间扫码器又亮.
         """
+        try:
+            from backend.services.mes_hooks import get_mes_hook
+            _mh = get_mes_hook()
+        except Exception:
+            _mh = None
+        if _mh is not None and _mh.is_channel_scan_disabled(channel_id):
+            return 0
+
         cnt = 0
         for conn in list(self._connections.values()):
             if conn.status != "connected":
@@ -592,14 +745,24 @@ class ScannerService:
                 continue
             if conn.device_type != "text_lon":
                 continue
+            if _mh is not None and any(
+                _mh.is_channel_scan_disabled(_b) for _b in bound
+            ):
+                continue
             if self._text_lon_send(conn, b"LON\r\n",
                                     f"LON [scan_d {reason}]"):
                 conn._lon_sent = True
+                conn._wait_cycle_resume = False
+                conn._next_lon_after = 0.0
                 cnt += 1
         return cnt
 
     def send_loff_for_channel(self, channel_id: int, reason: str = "") -> int:
-        """v3.4.0 D 模式专用: 主动发 LOFF 给绑定该工位的所有 text_lon 扫码器."""
+        """v3.4.0 D 模式专用: 主动发 LOFF 给绑定该工位的所有 text_lon 扫码器.
+
+        v3.4.2 hotfix: LOFF 不需要守门 (即使禁用了, LOFF 也是把灯关掉, 安全).
+        但禁用状态下设备本来就不该 LON, 这里发 LOFF 也没意义, 仍然允许 (兜底).
+        """
         cnt = 0
         for conn in list(self._connections.values()):
             if conn.status != "connected":
@@ -616,7 +779,20 @@ class ScannerService:
         return cnt
 
     def is_scan_d_for_channel(self, channel_id: int) -> bool:
-        """v3.4.0 查询绑定该工位的扫码器是否处于 scan_mode='D' 模式."""
+        """v3.4.0 查询绑定该工位的扫码器是否处于 scan_mode='D' 模式.
+
+        v3.4.2 hotfix: 该 ch 被用户禁用 → 返回 False, 让 source 的
+        _scan_d_update 早返回, D 模式状态机彻底休眠 (不会 armed/跨线/触发 LON).
+        否则即使灯不亮, 状态机仍会在每帧跑, 一旦下次启用就可能触发"幽灵 LON".
+        """
+        try:
+            from backend.services.mes_hooks import get_mes_hook
+            _mh = get_mes_hook()
+        except Exception:
+            _mh = None
+        if _mh is not None and _mh.is_channel_scan_disabled(channel_id):
+            return False
+
         for conn in list(self._connections.values()):
             bound = self._resolve_bound_channels(conn)
             if channel_id not in bound:
@@ -660,6 +836,11 @@ class ScannerService:
                 # text_lon: 直接同步发 LOFF, 不依赖 listen loop 的 _lon_sent 状态机
                 if self._text_lon_send(conn, b"LOFF\r\n", "LOFF (停止扫码)"):
                     conn._lon_sent = False
+                # v3.4.2: 一并清 D / once_per_cycle 残留 flag, 避免下次 start
+                # 时被上一轮状态污染 (上一轮扫到码 → _wait_cycle_resume=True,
+                # stop 不清 → 下次 start ERROR 续 LON 被拦 → 永久灭灯).
+                conn._wait_cycle_resume = False
+                conn._next_lon_after = 0.0
             else:
                 self._wmax_trigger(conn, on=False)
         if targets:
@@ -760,11 +941,16 @@ class ScannerService:
         return None
 
     def resume_after_cycle(self, channel_id: int) -> list[str]:
-        """v2.7.16: cycle_end 时调用, 让 once_per_cycle 模式的扫码器恢复扫描.
+        """v2.7.16: cycle_end 时调用, 让"扫到码后停灯"模式 (once_per_cycle / D)
+        的扫码器恢复扫描.
 
-        once_per_cycle 模式下, 扫到码后 listen loop 会发 LOFF 并 set _wait_cycle_resume=True,
-        阻止自动续 LON. 周期结束(无论 OK/NG/作废)时调本方法解除阻塞,
-        listen loop 下一轮就会自动 LON, 扫码器灯重新亮起等下一码.
+        once_per_cycle: 扫到码后 listen loop 发 LOFF + _wait_cycle_resume=True,
+        阻止自动续 LON. 周期结束(无论 OK/NG/作废)时调本方法解除阻塞.
+
+        v3.4.2: D 模式同样需要 (扫到码 LOFF + _wait_cycle_resume=True), 解锁
+        信号源是"box gone-confirm 完成", 由 _scan_d_update 调本方法. 之前漏了
+        D 模式 → 调用无效, _wait_cycle_resume 死锁导致灯永熄, 这是 D 模式
+        "扫到码后再也不亮"的根因.
 
         返回被恢复的扫码器名列表.
         """
@@ -772,7 +958,7 @@ class ScannerService:
         for conn in self._connections.values():
             if conn.device_type != "text_lon":
                 continue
-            if (conn.scan_mode or "continuous") != "once_per_cycle":
+            if (conn.scan_mode or "continuous") not in ("once_per_cycle", "D"):
                 continue
             bound = self._resolve_bound_channels(conn)
             if channel_id not in bound:
@@ -785,7 +971,7 @@ class ScannerService:
             resumed.append(conn.name)
         if resumed:
             print(f"[Scanner] resume_after_cycle(ch={channel_id}) → {resumed} "
-                  f"(once_per_cycle 模式, 周期结束恢复扫描)", flush=True)
+                  f"(once_per_cycle/D 模式, 周期或 box 结束恢复扫描)", flush=True)
         return resumed
 
     def notify_cycle_settled(self, channel_id: int) -> list[int]:
@@ -1195,6 +1381,15 @@ class ScannerService:
 
                 if conn.device_type == "text_lon":
                     print(f"[Scanner] {conn.name} ({conn.ip}:{conn.port}) 已连接 (LON/LOFF 模式)")
+                    # v3.4.2: 修 reload 时序 bug. 后端 reload 时 ChannelManager
+                    # 自动恢复 detecting 状态会先调 start_scanning, 但那时
+                    # ScannerService 还没连上扫码器 → "无匹配设备已跳过", 扫码器
+                    # 后来才连上但没人发 LON → 灯不亮, 也不会 ERROR 续 LON.
+                    # 这里连上后回扫 detecting 中的 channel, 主动补一次 LON.
+                    try:
+                        self._catch_up_lon_for_detecting_channels(conn)
+                    except Exception as _e:
+                        print(f"[Scanner] catch-up LON 异常: {_e}", flush=True)
                     self._text_lon_listen_loop(conn, sock)
                 elif conn.device_type == "wmax_scan":
                     logger.info("[Scanner] %s (%s:%d) WMax 扫码数据端口，被动监听",
@@ -1266,15 +1461,17 @@ class ScannerService:
         def _schedule_next_lon():
             """根据 scan_mode 设置下次 LON 续发的时机标志."""
             mode = getattr(conn, 'scan_mode', 'continuous') or 'continuous'
-            if mode == "once_per_cycle":
-                # 扫到码后 LOFF 灯灭, 等 cycle_end 由 resume_after_cycle() 解锁.
-                # 这里也发一次 LOFF 让扫码器立刻熄灭, 反馈"已成功"+"等下一周期".
+            # v3.4.2: D 模式扫到码后行为同 once_per_cycle (LOFF + 等 cycle_end
+            # 由 resume_after_cycle 解锁). 容器模式下还会有 source._scan_d_update
+            # 的 box 跨线 send_lon_for_channel 在 cycle 之外提前触发 LON.
+            if mode in ("once_per_cycle", "D"):
+                tag = "once_per_cycle" if mode == "once_per_cycle" else "D 模式"
                 try:
                     sock.sendall(b"LOFF\r\n")
-                    print(f"[Scanner/text_lon] {conn.name} once_per_cycle: "
-                          f"已 LOFF, 等周期结束再开扫", flush=True)
+                    print(f"[Scanner/text_lon] {conn.name} {tag}: "
+                          f"扫到码后已 LOFF, 等周期结束再开扫", flush=True)
                 except OSError as e:
-                    print(f"[Scanner/text_lon] {conn.name} once_per_cycle LOFF 失败: {e}",
+                    print(f"[Scanner/text_lon] {conn.name} {tag} LOFF 失败: {e}",
                           flush=True)
                 conn._lon_sent = False
                 conn._wait_cycle_resume = True
@@ -1290,20 +1487,17 @@ class ScannerService:
             if not text:
                 return
             # 'ERROR' = 扫码器本轮无码超时, 不是条码 → 不进 _on_data_received.
-            # 三种模式下都要续 LON 否则扫码器会"睡死". once_per_cycle 模式下
+            # 各 scan_mode 都要续 LON 否则扫码器会"睡死". once_per_cycle 模式下
             # ERROR 也续 LON (因为 ERROR 不算"扫到一个有效码", 不该锁住等周期结束).
-            # v3.4.1: D 模式下 ERROR 不续 LON (LON 由 source._scan_d_update 按
-            # box 跨线主动触发); 仅 log, 保持 _lon_sent 当前状态不动.
+            # v3.4.2: D 模式 ERROR 改回续 LON (与 continuous 一致). 之前 v3.4.1
+            # 设计意图是"按 box 跨线脉冲触发", 但实际产线用户期望"开始检测扫码器
+            # 立即并持续工作", 所以放弃精细脉冲式控制. send_lon_for_channel 在
+            # box 跨线时仍然调用, 但已在亮态时是 no-op, 不影响行为.
             if text.upper() == "ERROR":
                 if getattr(conn, '_wait_cycle_resume', False):
                     # 罕见: 已经在等周期, 又收到一个 ERROR, 不动.
                     return
                 mode = getattr(conn, 'scan_mode', 'continuous') or 'continuous'
-                if mode == 'D':
-                    # D 模式 ERROR: 表示本次 LON 窗口扫码器没看到码, 灯应当自然
-                    # 进入"未亮"状态等下次 box 跨线再 send_lon_for_channel.
-                    # 不动 _lon_sent / _next_lon_after, listen 主循环不会续 LON.
-                    return
                 if mode == "throttled":
                     conn._next_lon_after = time.monotonic() + max(0, conn.throttle_idle_ms) / 1000.0
                 else:
@@ -1317,16 +1511,15 @@ class ScannerService:
             _schedule_next_lon()
 
         # v2.7.16: LON/LOFF 发送主入口在 service 层 (start_scanning / stop_scanning).
-        # listen loop 只负责"续发 LON"维持扫描状态, 四种模式控制续发节奏:
+        # listen loop 只负责"续发 LON"维持扫描状态, 各模式控制续发节奏:
         #   continuous     : 收到 ERROR / 码后, 立刻续 LON
         #   throttled      : 同上但每次延迟 throttle_idle_ms 毫秒, 灯闪慢一点
         #   once_per_cycle : 扫到一个真码后 LOFF + 等 cycle_end 解锁
-        #   D              : v3.4.1 LON 由 source._scan_d_update 按 box 跨线/进区域
-        #                    主动调 send_lon_for_channel 触发, listen loop 不续发
+        #   D              : v3.4.2 续 LON 行为同 continuous (开始检测后持续工作);
+        #                    box 跨线时 source._scan_d_update 仍会调
+        #                    send_lon_for_channel, 但灯本来就在亮, 实际是 no-op
         while not conn._stop_event.is_set():
-            _mode_now = getattr(conn, 'scan_mode', 'continuous') or 'continuous'
             if (conn._scanning
-                    and _mode_now != 'D'
                     and not getattr(conn, '_lon_sent', False)
                     and not getattr(conn, '_wait_cycle_resume', False)
                     and time.monotonic() >= getattr(conn, '_next_lon_after', 0.0)):

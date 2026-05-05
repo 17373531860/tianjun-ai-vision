@@ -9,6 +9,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, Response
 from backend.core.config import settings
 from backend.db.database import engine, Base
+# v3.5.0 自定义导出系统：必须在 create_all 之前 import 让表注册到 Base.metadata
+from backend.models import export_models  # noqa: F401
 from backend.api import api_router
 from backend.api.source import router as source_router, get_video_manager
 from backend.api.channel_manager import router as workstation_router
@@ -348,6 +350,22 @@ def _diag_db_health():
     except Exception as e:
         print(f"[DIAG] DB health check failed: {e}")
 
+def _seed_export_builtin_templates():
+    """v3.5.0: 插入/更新系统预设导出模板（is_system=True）
+
+    调用 backend.services.export_seed.seed_builtin_templates() 完成。
+    每次启动都会刷新一遍内置模板的 content / format（保证升级后用户拿到最新的预设），
+    但不会覆盖用户复制后的自建模板。失败仅打日志，不阻塞启动。
+    """
+    try:
+        from backend.services.export_seed import seed_builtin_templates
+        seed_builtin_templates()
+    except Exception as e:
+        print(f"[Export] 系统预设模板初始化失败: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def _run_startup_init():
     """统一启动初始化：诊断、迁移、孤儿清理
 
@@ -360,6 +378,7 @@ def _run_startup_init():
     migrate_database()
     fix_orphan_sessions()
     cleanup_orphan_inspections()
+    _seed_export_builtin_templates()
 
 if not os.environ.get("BACKEND_SKIP_INIT"):
     _run_startup_init()

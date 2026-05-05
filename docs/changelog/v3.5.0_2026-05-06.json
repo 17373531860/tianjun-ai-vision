@@ -1,0 +1,214 @@
+{
+  "version": "3.5.0",
+  "date": "2026-05-06",
+  "previous_version": "3.4.1",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "自定义导出 / 客户模板系统",
+      "symptom": "客户要求'从固定文件夹提取 SN.txt → 检测后改写测试结果/各项检测值/程序版本号'，希望通用化为可在数据中心选输入文件、输出格式、自由编辑输出内容。",
+      "root_cause": "原系统仅有按日期范围导出 CSV 的快捷按钮，无法满足客户改写既有文件 + 多种格式（txt/csv/docx/xlsx/pdf）+ 模板化字段的需求。",
+      "fix": "新增完整自定义导出子系统：ORM (ExportTemplate/ExportRealtimeRule/ExportRunLog/SystemConfig) + manual migration + REST API (/api/v1/export/*) + 三种渲染上下文 (cycle/range/system) + 308 字段中央仓库 (export_field_registry.py) + 5 种格式渲染器 + 路线 A (Jinja2 自动样式) / 路线 B (占位符模板上传) + input_file_mode 三种 (none/read_template/append) + 前端 CustomExportDialog/RealtimeRulesDialog 拖拽编辑器。",
+      "files": [
+        "backend/api/export_custom.py",
+        "backend/api/export_realtime.py",
+        "backend/api/system_display.py",
+        "backend/models/export_models.py",
+        "backend/services/export_context.py",
+        "backend/services/export_field_registry.py",
+        "backend/services/export_renderer.py",
+        "backend/services/export_renderer_docx.py",
+        "backend/services/export_renderer_xlsx.py",
+        "backend/services/export_renderer_pdf.py",
+        "backend/services/export_seed.py",
+        "backend/main.py",
+        "backend/api/__init__.py",
+        "frontend/src/api/export.js",
+        "frontend/src/views/Data/components/CustomExportDialog.vue",
+        "frontend/src/views/Data/components/RealtimeRulesDialog.vue",
+        "frontend/src/views/Data/index.vue"
+      ],
+      "keywords": [
+        "自定义导出", "客户模板", "Jinja2", "ExportTemplate", "ExportRealtimeRule",
+        "input_file_mode", "SN.txt", "txt", "csv", "docx", "xlsx", "pdf",
+        "render_to_file", "export_field_registry", "拖拽编辑器", "308字段",
+        "custom export", "template engine", "drag and drop"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "实时规则 — cycle 结束自动渲染落盘",
+      "symptom": "客户希望扫码完成检测后按规则自动写入文件夹，不需手动点导出。",
+      "root_cause": "导出仅支持手动触发，没有事件驱动机制。",
+      "fix": "services/export_realtime.py 提供 dispatch_cycle_end_export 入口，扫描启用规则、按 channel_filter / project_filter 匹配后渲染落盘；mes_hooks._handle_cycle_end 末尾调用 dispatch（独立 try/except 不影响 MES Hook / Scanner / Container 清理）；ExportRunLog 记录每次执行 + 错误堆栈；规则 CRUD 含 test-run 干跑能力。",
+      "files": [
+        "backend/services/export_realtime.py",
+        "backend/api/export_realtime.py",
+        "backend/services/mes_hooks.py"
+      ],
+      "keywords": [
+        "实时规则", "realtime rule", "cycle_end", "dispatch_cycle_end_export",
+        "mes_hooks", "ExportRunLog", "test-run", "channel_filter", "project_filter",
+        "auto export", "扫码自动写入"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "周期性强制动作（Periodic Required Actions）",
+      "symptom": "客户场景：动作 A-B-C-D 每做完 20 轮必须做动作 E，超期触发事件。希望通用化，count_basis / reset_policy / overdue_repeat 三维度都可配置。",
+      "root_cause": "原 logic_mode 状态机只判断单 cycle 内步骤顺序，无跨 cycle 的'第 N 轮'强制动作能力。",
+      "fix": "新增 PeriodicActionsMixin (source_periodic_actions_mixin.py) 含 _apply / _check / _emit_notification / get_status 方法；VSM MRO 加入 mixin；apply_project_config 末尾调用 _apply_periodic_actions；end_cycle() 在 commit + MES Hook 后调用 _check_periodic_actions（独立 try/except）；get_detection_results API 暴露 periodic_actions 状态字段；Project 页加'周期性强制动作'卡片含 4 维度选择器；Monitor 页加进度区块（进度条 + 状态色 ok/due/overdue）；计数器 JSON 持久化到 backend/data/counters/。",
+      "files": [
+        "backend/api/source_periodic_actions_mixin.py",
+        "backend/api/source.py",
+        "backend/api/source_project_config_apply.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/source_routes.py",
+        "frontend/src/views/Project/index.vue",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": [
+        "周期性强制动作", "periodic actions", "PeriodicActionsMixin",
+        "count_basis", "reset_policy", "overdue_repeat", "interval",
+        "due_warning_event_id", "overdue_event_id", "_check_periodic_actions",
+        "every N cycles", "每N轮", "保养", "校准", "清洁"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "System 显示字段 + License 缓存",
+      "symptom": "自定义导出模板需引用品牌名 / 厂名 / 工位号 / 客户授权信息等系统级显示字段。",
+      "root_cause": "原系统这些字段散落在 Electron 配置和 license 文件中，后端无统一访问。",
+      "fix": "新增 SystemConfig KV 表 + /api/v1/system/display 读写接口；前端从 Electron IPC 拿到 license 后 POST 给后端 /api/v1/system/license-cache；模板可用 {{ license.customer }} {{ display.brand_name }} 等。",
+      "files": [
+        "backend/api/system_display.py",
+        "backend/main.py"
+      ],
+      "keywords": [
+        "system display", "license cache", "SystemConfig", "brand_name",
+        "factory_name", "line_name", "device_number", "inspector_name",
+        "Electron IPC", "授权信息", "客户名"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "Step 置信度聚合 + 内部跟踪状态暴露",
+      "symptom": "自定义导出模板需要 step 的 avg/min/max_confidence；前端 Monitor 想看跟踪模式的内部状态 (_stack_state, max_recognized)。",
+      "root_cause": "sessions_stats.py 仅聚合 cycle 级，无 step 级置信度统计；get_detection_results 未暴露 tracking mixin 的内部状态。",
+      "fix": "sessions_stats.py 在 step 维度新增 avg/min/max_confidence 聚合；source_routes.py 始终返回完整 tracking 子树。",
+      "files": [
+        "backend/api/sessions_stats.py",
+        "backend/api/source_routes.py",
+        "backend/api/source_tracking_mixin.py"
+      ],
+      "keywords": [
+        "step confidence", "avg_confidence", "min_confidence", "max_confidence",
+        "_stack_state", "max_recognized", "tracking state", "sessions_stats"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "完整 BDD + E2E + 浏览器 + 真实视频测试框架（86 个测试）",
+      "symptom": "用户要求保险点对全部本轮变更做 E2E + BDD 测试，并追加要求跑浏览器 E2E、各种搭配组合、真实视频。",
+      "root_cause": "项目无形式化测试框架，只有手动验收。",
+      "fix": "建立 4 层测试架构：L1 BDD/集成 (pytest-bdd, 29 个) + L2 Pairwise 矩阵 (allpairspy 减枝, 31 个) + L3 集成链路 (5 个) + 真实视频 sanity (1 个 @slow) + L4 Playwright 浏览器 E2E (20 个); conftest 隔离 (临时 DATA_DIR + in-memory DB); e2e_browser 用 __e2e_ 前缀清理保证不留垃圾; 全集 1 分 9 秒跑完。",
+      "files": [
+        "tests/__init__.py",
+        "tests/conftest.py",
+        "pytest.ini",
+        "tests/features/periodic_actions.feature",
+        "tests/features/custom_export.feature",
+        "tests/features/realtime_rules.feature",
+        "tests/features/system_display.feature",
+        "tests/step_defs/test_periodic_actions.py",
+        "tests/step_defs/test_custom_export.py",
+        "tests/step_defs/test_realtime_rules.py",
+        "tests/step_defs/test_system_display.py",
+        "tests/test_detection_results_exposure.py",
+        "tests/test_pairwise_periodic.py",
+        "tests/test_pairwise_export.py",
+        "tests/test_pairwise_input_modes.py",
+        "tests/test_integration_cycle_end_chain.py",
+        "tests/test_real_video_smoke.py",
+        "tests/e2e_browser/conftest.py",
+        "tests/e2e_browser/test_sanity.py",
+        "tests/e2e_browser/test_project_page.py",
+        "tests/e2e_browser/test_monitor_page.py",
+        "tests/e2e_browser/test_data_export_dialog.py",
+        "tests/e2e_browser/test_realtime_rules.py",
+        "backend/requirements.txt"
+      ],
+      "keywords": [
+        "pytest", "pytest-bdd", "Gherkin", "allpairspy", "pairwise", "playwright",
+        "chromium", "E2E", "BDD", "TestClient", "MagicMock", "fixture",
+        "conftest", "测试框架", "组合矩阵", "真实视频", "浏览器测试"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [
+    "add-api-endpoint",
+    "modify-api",
+    "modify-source",
+    "modify-model",
+    "modify-frontend",
+    "debug-source",
+    "debug-frontend"
+  ],
+  "skills_created": [],
+  "files_changed": [
+    "backend/api/__init__.py",
+    "backend/api/scanner.py",
+    "backend/api/sessions.py",
+    "backend/api/sessions_stats.py",
+    "backend/api/source.py",
+    "backend/api/source_checklist_mixin.py",
+    "backend/api/source_container_grouping_mixin.py",
+    "backend/api/source_project_config_apply.py",
+    "backend/api/source_routes.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/source_state_init.py",
+    "backend/api/source_tracking_mixin.py",
+    "backend/main.py",
+    "backend/requirements.txt",
+    "backend/services/mes_hooks.py",
+    "backend/services/scanner.py",
+    "frontend/src/api/data.js",
+    "frontend/src/api/scanner.js",
+    "frontend/src/views/Data/index.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Project/index.vue",
+    "backend/api/export_custom.py",
+    "backend/api/export_realtime.py",
+    "backend/api/source_periodic_actions_mixin.py",
+    "backend/api/system_display.py",
+    "backend/models/export_models.py",
+    "backend/services/export_context.py",
+    "backend/services/export_field_registry.py",
+    "backend/services/export_realtime.py",
+    "backend/services/export_renderer.py",
+    "backend/services/export_renderer_docx.py",
+    "backend/services/export_renderer_pdf.py",
+    "backend/services/export_renderer_xlsx.py",
+    "backend/services/export_seed.py",
+    "frontend/src/api/export.js",
+    "frontend/src/store/useScannerDisableStore.js",
+    "frontend/src/views/Data/components/CustomExportDialog.vue",
+    "frontend/src/views/Data/components/RealtimeRulesDialog.vue",
+    "pytest.ini",
+    "tests/**/*.py",
+    "tests/features/*.feature",
+    "electron/package.json"
+  ]
+}

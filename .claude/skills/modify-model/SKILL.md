@@ -157,3 +157,17 @@ JSON字段影响: [如果是JSON字段，列出所有解析点]
 - `adapter_type` 现在支持 `"modbus_rtu"` 值
 - `config` JSON 字段新增 Modbus 专属配置 (port/baudrate/slave_id/registers 等)
 - 前端: `GatewayPanel.vue` 根据 adapter_type 切换 config 表单
+
+## v3.5.0 新增的 ORM (`backend/models/export_models.py`)
+
+- `ExportTemplate` — 模板表 (id, name, format, scope, content, is_system, template_file_path, ...)
+- `ExportRealtimeRule` — 实时规则表 (id, name, enabled, template_id, output_dir, filename_template, channel_filter JSON, project_filter JSON, input_file_mode, input_dir, overwrite_policy, trigger_event)
+- `ExportRunLog` — 落盘执行日志 (id, rule_id, cycle_id, session_id, status, output_path, file_size, duration_ms, error_msg, created_at)
+- `SystemConfig` — KV 表存储 brand_name / app_name / inspector_name / device_number / factory_name / line_name + license cache JSON
+
+**Migration**: 在 `backend/main.py::migrate_database()` 用手动 `ALTER TABLE` 添加新表/字段, 见现有 `_migrate_export_models` 区块作为模板. 字段变更时同步:
+
+1. ORM 定义
+2. migration 脚本
+3. `services/export_seed.py` 内置模板的字段映射
+4. 前端 `CustomExportDialog` 字段树 (308 字段 在 `export_field_registry.py`)
