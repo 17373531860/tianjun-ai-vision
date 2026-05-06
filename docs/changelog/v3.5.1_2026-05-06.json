@@ -1,0 +1,64 @@
+{
+  "version": "3.5.1",
+  "date": "2026-05-06",
+  "previous_version": "3.5.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-301",
+      "title": "Monitor 页 PT/CT 三档显示口径 + 后端字段暴露",
+      "symptom": "Monitor 页 PT (步骤耗时) / CT (周期时间) 历来只显示历史平均，用户希望能切到'最近一轮'或'当前周期内'实时跳动，且 PT 和 CT 各能独立切。",
+      "root_cause": "后端 get_detection_results 只暴露 average_cycle_time / avg_step_durations 单一聚合口径，前端 Monitor formatStepPT / displayCT / getDisplayCT 直接绑定平均，无切换能力。",
+      "fix": "后端在 /api/v1/source/detection/results 暴露 4 个新字段 (last_cycle_time / last_cycle_time_with_ng / current_cycle_time / last_step_durations)；前端 systemStore.display.monitor 加 ptMode/ctMode (默认 'avg')；Settings 页加两个独立下拉选择器；formatStepPT / getDisplayCT / displayCT 全面改造跟随 mode + ctIncludeNg 二维组合；multiChannelData 缓存 lastCycleTime/currentCycleTime/lastStepDurations 支持多工位。",
+      "files": [
+        "backend/api/source_routes.py",
+        "frontend/src/store/useSystemStore.js",
+        "frontend/src/views/Settings/index.vue",
+        "frontend/src/views/Monitor/index.vue",
+        "tests/test_pt_ct_modes_exposure.py"
+      ],
+      "verify": "5 个测试覆盖三档字段暴露 (last_step_durations / last_cycle_time / current_cycle_time 在 is_detecting=False/True 不同状态下的取值)；Settings 页切换后立即生效，下一轮 polling (~0.5s) 反映新口径；PT/CT 可独立组合 (PT=last + CT=avg 等 9 种组合)。"
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-302",
+      "title": "数据中心快捷 CSV 导出与 PT/CT 显示口径联动",
+      "symptom": "用户在显示设置切到'平均'后，希望数据中心'导出当日/某周/某月/日期范围'4 个快捷 CSV 按钮的输出也跟着变成平均口径，而不只是 Monitor UI 变化。",
+      "root_cause": "/data/export/csv 端点和 sessions_export.py 三个 builder 历来只输出单 cycle/step 真实值，没有 mode 概念。前端调用 exportDateRangeCsv / Week / Month 时也没有 mode 参数。",
+      "fix": "后端：/data/export/csv 接 pt_mode / ct_mode query 参数；新增 _calc_aggregates(cycles, steps) 工具函数 (按 step_label 分组求平均)；_write_session_export / _write_cycle_export / _write_range_export 三个 builder 全部接受 mode 并按需在原列旁额外输出'耗时(平均/秒)'列；last/current/None 时 CSV 保持原列结构 (兼容老脚本)；build_csv_response 透传新参数。前端：3 个 export API 函数加 ptMode/ctMode 参数；Data/index.vue 的 resolveExportScopeParams 从 systemStore 读取并透传到 4 个按钮。",
+      "files": [
+        "backend/api/sessions.py",
+        "backend/api/sessions_export.py",
+        "frontend/src/api/data.js",
+        "frontend/src/views/Data/index.vue",
+        "tests/test_csv_export_pt_ct_modes.py"
+      ],
+      "verify": "5 个测试覆盖：默认无平均列 / ct_mode=avg 周期添加平均列 (全局平均 10.00 正确) / pt_mode=avg 步骤添加平均列 (A=4.00 / B=6.00 按 step_label 分组聚合正确) / pt=last + ct=avg 独立组合 (周期有平均列、步骤无) / current 模式退化为 last。"
+    },
+    {
+      "type": "docs",
+      "id": "DOC-301",
+      "title": "操作手册大幅扩充 (v1.0 → v3.5.1，约 +880 行)",
+      "symptom": "上一版操作手册仅 690 行，未包含 v3.5.0 三大新功能 (自定义导出 / 实时规则 / 周期性强制动作)，也完全没有 MES 管理章节，不能给客户/工人交付。",
+      "root_cause": "操作手册自 v1.0 起未跟随产品迭代更新，新增功能在 changelog 写完后没回流到面向客户的操作手册。",
+      "fix": "操作手册从 690 行扩充至 1579 行：4.2 项目管理增加'周期性强制动作'小节 (4 维度配置速查表)；4.5 数据管理彻底重写'数据导出'为 4 类 (快捷 CSV / 自定义导出 / 实时规则 / 备份清理)，含 308 字段速查；4.7 系统设置增加 PT/CT 三档显示说明 + factory_name/line_name 字段；4.8 MES 管理完整章节 (~330 行，覆盖 7 个 Tab：工单 / 工件追溯 / 缺陷分析 / 扫码器 / 外部对接 / 外部设备 / 集群汇总，含 LON/WMax/Modbus/称重稳定值/集群主从/通道映射等)；新增 5.4-5.9 共 6 个常见配方 (SN.txt 改写 / 每 N 件清洁治具 / Word 占位符 / 日报汇总 / 跟踪模式校准 / 扫码 → 推送 MES 闭环)；FAQ 从 Q8 扩展到 Q19 (Q9-Q19 全部 v3.5.x 相关)；版本号 v1.0 → v3.5.1，版权 2025 → 2026。",
+      "files": [
+        "docs/软件操作手册.md"
+      ],
+      "verify": "目录与正文锚点一致 (Q1-Q19 编号连续，5.1-5.9 编号连续)；MES 7 个 Tab 全覆盖；常见配方涵盖 v3.5.0 三大功能 + MES 闭环 5 大类客户场景；PT/CT 显示开关与 CSV 导出联动行为在 4.5/4.7/Q16 三处一致表述。"
+    },
+    {
+      "type": "test",
+      "id": "TEST-301",
+      "title": "测试套件扩充至 95 项，所有测试全过",
+      "symptom": "v3.5.0 测试覆盖 70 项 (BDD + 集成 + Pairwise + Playwright)；本次新增 PT/CT 后端字段、CSV 联动两套功能后，需要补对应测试。",
+      "root_cause": "新功能上线必须有对应单元/集成/E2E 测试覆盖，避免回归。",
+      "fix": "新增两套 pytest 测试：tests/test_pt_ct_modes_exposure.py (5 项, 验证后端 4 个新字段) + tests/test_csv_export_pt_ct_modes.py (5 项, 验证 CSV mode=avg 时的列结构和聚合值)。回归时 BDD + 集成 + Pairwise 共 75 项 + Playwright 浏览器 E2E 20 项 = 95 项全过。",
+      "files": [
+        "tests/test_pt_ct_modes_exposure.py",
+        "tests/test_csv_export_pt_ct_modes.py"
+      ],
+      "verify": "pytest tests/ --ignore=tests/e2e_browser --ignore=tests/test_real_video_smoke.py: 75 passed in 14.69s；pytest tests/e2e_browser/: 20 passed in 83.83s。共 95 passed。"
+    }
+  ]
+}

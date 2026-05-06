@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.5.1 (2026-05-06)
+- [FEAT-351-001] 新增: Monitor 页 PT/CT 三档显示口径 — 后端 `/api/v1/source/detection/results` 暴露 `last_cycle_time / last_cycle_time_with_ng / current_cycle_time / last_step_durations` 4 个新字段; 前端 systemStore 加 `ptMode/ctMode` (默认 'avg', 三档 avg/last/current); Settings 页两个独立下拉支持 9 种组合; `formatStepPT / getDisplayCT / displayCT` 全面改造跟随 mode + ctIncludeNg 二维组合; multiChannelData 缓存新字段支持多工位
+- [FEAT-351-002] 新增: 数据中心快捷 CSV 导出与显示口径联动 — `/data/export/csv` 接 `pt_mode/ct_mode` 参数; 新增 `_calc_aggregates(cycles, steps)` 工具 (按 step_label 分组求平均); `_write_session_export / _write_cycle_export / _write_range_export` 三个 builder 全部接受 mode; `ct_mode=avg` 时周期详情区在"耗时(秒)"旁多一列"耗时(平均/秒)" (每行填全局平均); `pt_mode=avg` 时步骤详情区同样多一列; last/current/None 时 CSV 保持原列结构 (老脚本兼容); 前端 4 个快捷按钮 (当日/某周/某月/日期范围) 全覆盖
+- [DOC-351-001] 操作手册大幅扩充 — 690 行 → 1579 行 (+880 行); 4.2 加周期性强制动作 / 4.5 数据导出 4 类彻底重写 / 4.7 PT/CT 三档说明 / 4.8 MES 完整章节 (~330 行覆盖 7 个 Tab) / 5.4-5.9 共 6 个常见配方 (SN.txt / 清洁治具 / Word 占位符 / 日报 / 跟踪校准 / MES 闭环) / FAQ Q9-Q19 共 11 项 v3.5.x 相关
+- [TEST-351-001] 测试套件扩至 95 项全过 — 新增 `tests/test_pt_ct_modes_exposure.py` (5) + `tests/test_csv_export_pt_ct_modes.py` (5); BDD/集成/Pairwise 75 项 (14.69s) + Playwright 浏览器 E2E 20 项 (83.83s)
+- [CONFIG-351-001] 配置: 版本号升级到 3.5.1; 完全兼容 v3.5.0 数据结构与 API, 无需 migration
+
 ## v3.5.0 (2026-05-06)
 - [FEAT-350-001] 新增: 自定义导出 / 客户模板系统 — Data 页"数据导出"tab 加"自定义导出"+ "实时规则"按钮; 5 种格式 (txt/csv/docx/xlsx/pdf) + 3 种 input_file_mode (none/read_template/append) + 路线 A (Jinja2 自动样式) / 路线 B (占位符模板上传); 308 字段中央仓库 (`export_field_registry.py`) 含拖拽编辑器; 新增 ORM `ExportTemplate / ExportRealtimeRule / ExportRunLog / SystemConfig` + manual migration; 解决客户场景"从固定文件夹提取 SN.txt → 检测后改写测试结果/各项检测值/程序版本号"
 - [FEAT-350-002] 新增: 实时规则 — cycle 结束自动渲染落盘. `services/export_realtime.py::dispatch_cycle_end_export` 入口扫描启用规则、按 channel/project filter 匹配后渲染; `mes_hooks._handle_cycle_end` 末尾调用, 独立 try/except 不影响 MES Hook / Scanner / Container 清理; ExportRunLog 记录每次执行 + 错误堆栈 + 前端日志面板; 规则 CRUD 含 test-run 干跑能力
