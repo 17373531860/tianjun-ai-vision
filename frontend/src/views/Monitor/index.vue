@@ -1111,6 +1111,10 @@ const fps = ref(0);
 const latency = ref(0);
 const cycleTime = ref(0);
 const cycleTimeWithNg = ref(0);
+const lastCycleTime = ref(0);
+const lastCycleTimeWithNg = ref(0);
+const currentCycleTime = ref(0);
+const lastStepDurations = ref({});
 const detectionCount = ref(0);
 const currentDetections = ref([]);
 
@@ -1441,6 +1445,12 @@ const processChannelResult = (ch, d) => {
   chData.counters = ctrs;
   chData.avgCycleTime = d.average_cycle_time || 0;
   chData.avgCycleTimeWithNg = d.average_cycle_time_with_ng || 0;
+  chData.lastCycleTime = d.last_cycle_time || 0;
+  chData.lastCycleTimeWithNg = d.last_cycle_time_with_ng || 0;
+  chData.currentCycleTime = d.current_cycle_time || 0;
+  chData.lastStepDurations = d.last_step_durations || {};
+  chData.stepDurations = d.step_durations || {};
+  chData.avgStepDurations = d.avg_step_durations || {};
   chData.detections = d.detections || [];
   chData.currentCycleSteps = d.current_cycle_steps || [];
   chData.backupCoveredLabels = d.backup_covered_labels || [];
@@ -2345,16 +2355,20 @@ const formatStepTime = (stepLabel) => {
   return `${hours}:${minutes}:${seconds}`;
 };
 
-// 格式化步骤耗时 (average PT)
-const formatDuration = (stepLabel) => {
-  const duration = avgStepDurations.value[stepLabel];
-  if (duration === undefined || duration === null) return '--';
-  return `${duration.toFixed(1)}s`;
-};
+// 格式化步骤耗时（与 formatStepPT 行为一致，跟随 ptMode）
+const formatDuration = (stepLabel) => formatStepPT(stepLabel);
 
-// 格式化当前周期内步骤检测时间（PT） - uses average
+// 格式化步骤检测时间（PT）— 根据系统设置的 ptMode 决定取哪一档
+//   avg     → 历史平均（默认，旧行为）
+//   last    → 最近一轮已结束 cycle 的该 step 耗时
+//   current → 当前正在跑的 cycle 中该 step 已累计耗时
 const formatStepPT = (stepLabel) => {
-  const duration = avgStepDurations.value[stepLabel];
+  const mode = systemStore.display?.monitor?.ptMode || 'avg';
+  let src;
+  if (mode === 'last') src = lastStepDurations.value;
+  else if (mode === 'current') src = stepDurations.value;
+  else src = avgStepDurations.value;
+  const duration = src ? src[stepLabel] : undefined;
   if (duration === undefined || duration === null) return '--';
   return `${duration.toFixed(1)}s`;
 };
@@ -2366,16 +2380,35 @@ const formatInterval = (stepLabel) => {
   return `${interval.toFixed(1)}s`;
 };
 
+// CT 取值: 根据 ctMode 三档 + ctIncludeNg 是否含 NG
+//   - current 模式: ctIncludeNg 不影响 (cycle 还没结束分不出 OK/NG, 直接用当前已耗时)
+//   - avg / last: 跟随 ctIncludeNg 切普通版/含 NG 版
 const getDisplayCT = (chData) => {
   if (!chData) return '--';
+  const mode = systemStore.display?.monitor?.ctMode || 'avg';
   const includeNg = systemStore.display?.monitor?.ctIncludeNg;
-  const val = includeNg ? chData.avgCycleTimeWithNg : chData.avgCycleTime;
+  let val = 0;
+  if (mode === 'current') {
+    val = chData.currentCycleTime || 0;
+  } else if (mode === 'last') {
+    val = includeNg ? chData.lastCycleTimeWithNg : chData.lastCycleTime;
+  } else {
+    val = includeNg ? chData.avgCycleTimeWithNg : chData.avgCycleTime;
+  }
   return val ? val.toFixed(1) + 's' : '--';
 };
 
 const displayCT = computed(() => {
+  const mode = systemStore.display?.monitor?.ctMode || 'avg';
   const includeNg = systemStore.display?.monitor?.ctIncludeNg;
-  const val = includeNg ? cycleTimeWithNg.value : cycleTime.value;
+  let val = 0;
+  if (mode === 'current') {
+    val = currentCycleTime.value;
+  } else if (mode === 'last') {
+    val = includeNg ? lastCycleTimeWithNg.value : lastCycleTime.value;
+  } else {
+    val = includeNg ? cycleTimeWithNg.value : cycleTime.value;
+  }
   return val || 0;
 });
 
@@ -3062,6 +3095,12 @@ const startPolling = () => {
       detectionCount.value = (data.detections || []).length;
       cycleTime.value = data.average_cycle_time || 0;
       cycleTimeWithNg.value = data.average_cycle_time_with_ng || 0;
+      lastCycleTime.value = data.last_cycle_time || 0;
+      lastCycleTimeWithNg.value = data.last_cycle_time_with_ng || 0;
+      currentCycleTime.value = data.current_cycle_time || 0;
+      if (data.last_step_durations) {
+        lastStepDurations.value = data.last_step_durations;
+      }
       
       const now = Date.now();
       

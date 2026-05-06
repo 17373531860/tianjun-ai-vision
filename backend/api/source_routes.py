@@ -870,9 +870,28 @@ def get_detection_results(channel: int = Query(0)):
         avg_cycle_time_with_ng = round(sum(all_ct) / len(all_ct), 2)
 
     avg_step_durations = {}
+    last_step_durations = {}
     for lbl, hist in mgr.step_durations_history.items():
         if hist:
             avg_step_durations[lbl] = round(sum(hist) / len(hist), 2)
+            last_step_durations[lbl] = hist[-1]
+
+    last_cycle_time = mgr.cycle_times[-1] if mgr.cycle_times else 0
+    last_cycle_time_with_ng = 0
+    _all_ct_for_last = []
+    if mgr.cycle_times:
+        _all_ct_for_last.append(mgr.cycle_times[-1])
+    if mgr.ng_cycle_times:
+        _all_ct_for_last.append(mgr.ng_cycle_times[-1])
+    if _all_ct_for_last:
+        last_cycle_time_with_ng = max(_all_ct_for_last)
+
+    current_cycle_time = 0
+    if getattr(mgr, 'cycle_start_time', None) and getattr(mgr, 'is_detecting', False):
+        try:
+            current_cycle_time = round(time.time() - mgr.cycle_start_time, 2)
+        except Exception:
+            current_cycle_time = 0
 
     result = {
         "channel_id": channel,
@@ -888,12 +907,16 @@ def get_detection_results(channel: int = Query(0)):
         "step_detection_times": mgr.step_detection_times.copy(),
         "step_durations": mgr.step_durations.copy(),
         "avg_step_durations": avg_step_durations,
+        "last_step_durations": last_step_durations,
         "step_intervals": mgr.step_intervals.copy(),
         "counters": mgr.counters.copy(),
         "recent_events": recent_events,
         "ng_step_cycle_counts": mgr.ng_step_cycle_counts.copy(),
         "average_cycle_time": avg_cycle_time,
         "average_cycle_time_with_ng": avg_cycle_time_with_ng,
+        "last_cycle_time": last_cycle_time,
+        "last_cycle_time_with_ng": last_cycle_time_with_ng,
+        "current_cycle_time": current_cycle_time,
         "current_cycle_steps": list(mgr.current_cycle_steps),
         "backup_covered_labels": [
             mgr.step_backup_map[b]

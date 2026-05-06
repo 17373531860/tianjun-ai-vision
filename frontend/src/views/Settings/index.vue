@@ -204,6 +204,28 @@
                 <el-switch v-model="store.display.monitor.ctIncludeNg" @change="saveDisplaySettings" />
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">PT 显示口径</span>
+                  <span class="text-[10px] text-gray-500">步骤耗时取哪一轮</span>
+                </div>
+                <el-select v-model="store.display.monitor.ptMode" size="small" style="width: 8rem" @change="saveDisplaySettings">
+                  <el-option label="平均" value="avg" />
+                  <el-option label="最近一轮" value="last" />
+                  <el-option label="当前周期内" value="current" />
+                </el-select>
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">CT 显示口径</span>
+                  <span class="text-[10px] text-gray-500">周期时间取哪一轮</span>
+                </div>
+                <el-select v-model="store.display.monitor.ctMode" size="small" style="width: 8rem" @change="saveDisplaySettings">
+                  <el-option label="平均" value="avg" />
+                  <el-option label="最近一轮" value="last" />
+                  <el-option label="当前周期内" value="current" />
+                </el-select>
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <span class="text-gray-300">NG步骤TOP3</span>
                 <el-switch v-model="store.display.monitor.ngTop3" @change="saveDisplaySettings" />
               </div>

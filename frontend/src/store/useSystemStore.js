@@ -108,6 +108,8 @@ export const useSystemStore = defineStore('system', {
         showLatency: true,
         showDetectionCount: true,
         ctIncludeNg: false,
+        ptMode: 'avg',  // 'avg' | 'last' | 'current' — 步骤耗时显示口径
+        ctMode: 'avg',  // 'avg' | 'last' | 'current' — 周期时间显示口径
         ngTop3: true,
         ngTopDisplayMode: 'percentage',  // 'percentage' | 'count'
         defaultCounters: {
