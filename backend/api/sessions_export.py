@@ -36,6 +36,29 @@ def _load_export_opts(db) -> dict:
     }
 
 
+def _calc_aggregates(cycles, steps_iterable=None):
+    """计算 cycle/step 在给定集合内的平均时长。
+
+    返回 (avg_cycle_dur_str, step_avg_map) 二元组：
+      - avg_cycle_dur_str: "12.34" 字符串（无数据返回空串）
+      - step_avg_map: {step_label: "1.23" 字符串}
+    """
+    cycle_durs = [c.duration for c in cycles if c.duration]
+    avg_c = sum(cycle_durs) / len(cycle_durs) if cycle_durs else None
+    avg_c_s = f"{avg_c:.2f}" if avg_c is not None else ""
+
+    step_buckets = {}
+    if steps_iterable:
+        for s in steps_iterable:
+            if s.duration:
+                step_buckets.setdefault(s.step_label, []).append(s.duration)
+    step_avg_map = {
+        lbl: f"{(sum(durs) / len(durs)):.2f}"
+        for lbl, durs in step_buckets.items()
+    }
+    return avg_c_s, step_avg_map
+
+
 def _resolve_week_month(week: Optional[str], month: Optional[str],
                         start_date: Optional[str], end_date: Optional[str]):
     """把 week / month 参数解析成 start_date/end_date"""
@@ -67,10 +90,15 @@ def _resolve_week_month(week: Optional[str], month: Optional[str],
 
 # ----- builders for the three export_type branches -----
 
-def _write_session_export(writer, db, session_id: int, opts: dict, get_order_map):
+def _write_session_export(writer, db, session_id: int, opts: dict, get_order_map,
+                          *, pt_mode: Optional[str] = None,
+                          ct_mode: Optional[str] = None):
     session = db.query(DetectionSession).filter(DetectionSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
+    # 显示口径联动：avg 时多加平均列，last/current/None 保持原列结构
+    ct_avg_on = (ct_mode == 'avg')
+    pt_avg_on = (pt_mode == 'avg')
 
     sess_proj = db.query(Project).filter(Project.id == session.project_id).first()
     sess_proj_name = sess_proj.name if sess_proj else "Unknown"
@@ -99,9 +127,25 @@ def _write_session_export(writer, db, session_id: int, opts: dict, get_order_map
     if not cycles:
         return
 
+    # 平均聚合（仅 avg 模式用）
+    all_steps_for_avg = []
+    if pt_avg_on:
+        all_steps_for_avg = (
+            db.query(StepRecord)
+            .join(DetectionCycle, StepRecord.cycle_id == DetectionCycle.id)
+            .filter(DetectionCycle.session_id == session_id)
+            .all()
+        )
+    avg_cycle_dur_s, step_avg_map = _calc_aggregates(
+        cycles, all_steps_for_avg if pt_avg_on else None,
+    )
+
     writer.writerow(["周期详情"])
     headers = ["周期序号", "开始时间", "结束时间"]
-    if opts['cycle_duration']: headers.append("耗时(秒)")
+    if opts['cycle_duration']:
+        headers.append("耗时(秒)")
+        if ct_avg_on:
+            headers.append("耗时(平均/秒)")
     if opts['cycle_interval']: headers.append("周期间隔(秒)")
     if opts['cycle_result']:   headers.extend(["结果", "事件"])
     headers.append("步骤序列")
@@ -115,6 +159,8 @@ def _write_session_export(writer, db, session_id: int, opts: dict, get_order_map
         ]
         if opts['cycle_duration']:
             row.append(f"{cycle.duration:.2f}" if cycle.duration else "")
+            if ct_avg_on:
+                row.append(avg_cycle_dur_s)
         if opts['cycle_interval']:
             iv = getattr(cycle, 'interval_to_next', None)
             row.append(f"{iv:.2f}" if iv else "")
@@ -129,7 +175,10 @@ def _write_session_export(writer, db, session_id: int, opts: dict, get_order_map
     writer.writerow([])
     writer.writerow(["步骤详情"])
     step_headers = ["周期序号", "步骤序号", "步骤名称", "开始时间"]
-    if opts['step_duration']: step_headers.append("耗时(秒)")
+    if opts['step_duration']:
+        step_headers.append("耗时(秒)")
+        if pt_avg_on:
+            step_headers.append("耗时(平均/秒)")
     if opts['step_interval']: step_headers.append("到下步间隔(秒)")
     writer.writerow(step_headers)
 
@@ -146,20 +195,47 @@ def _write_session_export(writer, db, session_id: int, opts: dict, get_order_map
             ]
             if opts['step_duration']:
                 row.append(f"{step.duration:.2f}" if step.duration else "")
+                if pt_avg_on:
+                    row.append(step_avg_map.get(step.step_label, ""))
             if opts['step_interval']:
                 iv = getattr(step, 'interval_to_next', None) or step.interval_from_prev
                 row.append(f"{iv:.2f}" if iv else "")
             writer.writerow(row)
 
 
-def _write_cycle_export(writer, db, cycle_id: int, opts: dict, get_order_map):
+def _write_cycle_export(writer, db, cycle_id: int, opts: dict, get_order_map,
+                        *, pt_mode: Optional[str] = None,
+                        ct_mode: Optional[str] = None):
     cycle = db.query(DetectionCycle).filter(DetectionCycle.id == cycle_id).first()
     if not cycle:
         raise HTTPException(status_code=404, detail="周期不存在")
+    # 单 cycle 导出"平均"= 该 session 的全局平均（最有意义的对比基准）
+    ct_avg_on = (ct_mode == 'avg')
+    pt_avg_on = (pt_mode == 'avg')
+    avg_cycle_dur_s = ""
+    step_avg_map: dict = {}
+    if (ct_avg_on or pt_avg_on) and cycle.session_id:
+        sess_cycles = (
+            db.query(DetectionCycle)
+            .filter(DetectionCycle.session_id == cycle.session_id)
+            .all()
+        )
+        sess_steps = []
+        if pt_avg_on:
+            sess_steps = (
+                db.query(StepRecord)
+                .join(DetectionCycle, StepRecord.cycle_id == DetectionCycle.id)
+                .filter(DetectionCycle.session_id == cycle.session_id)
+                .all()
+            )
+        avg_cycle_dur_s, step_avg_map = _calc_aggregates(sess_cycles, sess_steps)
 
     writer.writerow(["周期信息"])
     headers = ["周期ID", "开始时间", "结束时间"]
-    if opts['cycle_duration']: headers.append("耗时(秒)")
+    if opts['cycle_duration']:
+        headers.append("耗时(秒)")
+        if ct_avg_on:
+            headers.append("耗时(平均/秒)")
     if opts['cycle_result']:   headers.extend(["结果", "事件", "原因"])
     writer.writerow(headers)
 
@@ -170,6 +246,8 @@ def _write_cycle_export(writer, db, cycle_id: int, opts: dict, get_order_map):
     ]
     if opts['cycle_duration']:
         row.append(f"{cycle.duration:.2f}" if cycle.duration else "")
+        if ct_avg_on:
+            row.append(avg_cycle_dur_s)
     if opts['cycle_result']:
         row.extend([
             "合格" if cycle.is_good else "不良",
@@ -187,7 +265,10 @@ def _write_cycle_export(writer, db, cycle_id: int, opts: dict, get_order_map):
 
     writer.writerow(["步骤详情"])
     step_headers = ["序号", "步骤名称", "开始时间", "结束时间"]
-    if opts['step_duration']: step_headers.append("耗时(秒)")
+    if opts['step_duration']:
+        step_headers.append("耗时(秒)")
+        if pt_avg_on:
+            step_headers.append("耗时(平均/秒)")
     if opts['step_interval']: step_headers.append("到下步间隔(秒)")
     writer.writerow(step_headers)
 
@@ -201,6 +282,8 @@ def _write_cycle_export(writer, db, cycle_id: int, opts: dict, get_order_map):
         ]
         if opts['step_duration']:
             row.append(f"{step.duration:.2f}" if step.duration else "")
+            if pt_avg_on:
+                row.append(step_avg_map.get(step.step_label, ""))
         if opts['step_interval']:
             iv = getattr(step, 'interval_to_next', None) or step.interval_from_prev
             row.append(f"{iv:.2f}" if iv else "")
@@ -256,13 +339,18 @@ def _shift_filter_cycles(db, sessions, date, start_date, start_hour, end_hour):
 
 def _write_range_export(writer, db, opts, get_order_map, *,
                         date, start_date, end_date, start_hour, end_hour,
-                        project_id, channel_id):
+                        project_id, channel_id,
+                        pt_mode: Optional[str] = None,
+                        ct_mode: Optional[str] = None):
     sessions = _filter_sessions_for_range(
         db, date, start_date, end_date, start_hour, end_hour, project_id, channel_id,
     )
     shift_cycle_ids, sessions = _shift_filter_cycles(
         db, sessions, date, start_date, start_hour, end_hour,
     )
+    # 显示口径联动
+    ct_avg_on = (ct_mode == 'avg')
+    pt_avg_on = (pt_mode == 'avg')
 
     proj_label = "全部项目"
     if project_id is not None:
@@ -305,9 +393,24 @@ def _write_range_export(writer, db, opts, get_order_map, *,
         sp_name = sp.name if sp else "Unknown"
         sch = f"工位{(s.channel_id or 0) + 1}"
 
+        # 该会话内 cycle / step 的平均聚合（仅 avg 模式用）
+        sess_steps_for_avg = []
+        if pt_avg_on:
+            sess_steps_for_avg = (
+                db.query(StepRecord)
+                .filter(StepRecord.cycle_id.in_([c.id for c in cycles]))
+                .all()
+            )
+        avg_cycle_dur_s, step_avg_map = _calc_aggregates(
+            cycles, sess_steps_for_avg if pt_avg_on else None,
+        )
+
         writer.writerow([f"[{sp_name} / {sch}] 会话 {s.session_uuid} 的周期详情"])
         headers = ["周期序号", "开始时间"]
-        if opts['cycle_duration']: headers.append("耗时(秒)")
+        if opts['cycle_duration']:
+            headers.append("耗时(秒)")
+            if ct_avg_on:
+                headers.append("耗时(平均/秒)")
         if opts['cycle_interval']: headers.append("周期间隔(秒)")
         if opts['cycle_result']:   headers.extend(["结果", "事件"])
         headers.append("步骤序列")
@@ -317,6 +420,8 @@ def _write_range_export(writer, db, opts, get_order_map, *,
             row = [cycle.cycle_number, cycle.start_time.strftime("%Y-%m-%d %H:%M:%S")]
             if opts['cycle_duration']:
                 row.append(f"{cycle.duration:.2f}" if cycle.duration else "")
+                if ct_avg_on:
+                    row.append(avg_cycle_dur_s)
             if opts['cycle_interval']:
                 iv = getattr(cycle, 'interval_to_next', None)
                 row.append(f"{iv:.2f}" if iv else "")
@@ -331,7 +436,10 @@ def _write_range_export(writer, db, opts, get_order_map, *,
 
         writer.writerow([f"[{sp_name} / {sch}] 会话 {s.session_uuid} 的步骤详情"])
         step_headers = ["周期序号", "步骤序号", "步骤名称", "开始时间"]
-        if opts['step_duration']: step_headers.append("耗时(秒)")
+        if opts['step_duration']:
+            step_headers.append("耗时(秒)")
+            if pt_avg_on:
+                step_headers.append("耗时(平均/秒)")
         if opts['step_interval']: step_headers.append("到下步间隔(秒)")
         if opts['step_event']:    step_headers.append("是否有效")
         writer.writerow(step_headers)
@@ -349,6 +457,8 @@ def _write_range_export(writer, db, opts, get_order_map, *,
                 ]
                 if opts['step_duration']:
                     row.append(f"{step.duration:.2f}" if step.duration else "")
+                    if pt_avg_on:
+                        row.append(step_avg_map.get(step.step_label, ""))
                 if opts['step_interval']:
                     iv = getattr(step, 'interval_to_next', None) or step.interval_from_prev
                     row.append(f"{iv:.2f}" if iv else "")
@@ -372,7 +482,9 @@ def build_csv_response(db, get_order_map, *,
                        start_hour: Optional[str],
                        end_hour: Optional[str],
                        project_id: Optional[int],
-                       channel_id: Optional[int]) -> StreamingResponse:
+                       channel_id: Optional[int],
+                       pt_mode: Optional[str] = None,
+                       ct_mode: Optional[str] = None) -> StreamingResponse:
     try:
         opts = _load_export_opts(db)
         buffer = io.StringIO()
@@ -381,15 +493,18 @@ def build_csv_response(db, get_order_map, *,
         start_date, end_date = _resolve_week_month(week, month, start_date, end_date)
 
         if export_type == "session" and session_id:
-            _write_session_export(writer, db, session_id, opts, get_order_map)
+            _write_session_export(writer, db, session_id, opts, get_order_map,
+                                  pt_mode=pt_mode, ct_mode=ct_mode)
         elif export_type == "cycle" and cycle_id:
-            _write_cycle_export(writer, db, cycle_id, opts, get_order_map)
+            _write_cycle_export(writer, db, cycle_id, opts, get_order_map,
+                                pt_mode=pt_mode, ct_mode=ct_mode)
         else:
             _write_range_export(
                 writer, db, opts, get_order_map,
                 date=date, start_date=start_date, end_date=end_date,
                 start_hour=start_hour, end_hour=end_hour,
                 project_id=project_id, channel_id=channel_id,
+                pt_mode=pt_mode, ct_mode=ct_mode,
             )
 
         buffer.seek(0)

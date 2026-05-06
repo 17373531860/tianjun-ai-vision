@@ -978,9 +978,15 @@ def export_csv(
     end_hour: Optional[str] = None,
     project_id: Optional[int] = Query(None, description="按项目过滤，None=全部项目"),
     channel_id: Optional[int] = Query(None, description="按工位过滤(0-based)，None=全部工位"),
+    pt_mode: Optional[str] = Query(None, description="PT 显示口径: avg/last/current; avg 时 CSV 增加 step 平均列"),
+    ct_mode: Optional[str] = Query(None, description="CT 显示口径: avg/last/current; avg 时 CSV 增加 cycle 平均列"),
     db: Session = Depends(get_db)
 ):
-    """导出CSV报表 (实现见 sessions_export.py，按 export_type=session/cycle/all 分派)"""
+    """导出CSV报表 (实现见 sessions_export.py，按 export_type=session/cycle/all 分派)
+
+    pt_mode/ct_mode 跟随前端"系统设置 → 显示设置 → PT/CT 显示口径"开关，
+    avg 时为相应列额外输出"(平均)"列；last/current/None 时保持原列结构。
+    """
     from backend.api.sessions_export import build_csv_response
     return build_csv_response(
         db, _get_step_order_map,
@@ -988,6 +994,7 @@ def export_csv(
         date=date, start_date=start_date, end_date=end_date,
         week=week, month=month, start_hour=start_hour, end_hour=end_hour,
         project_id=project_id, channel_id=channel_id,
+        pt_mode=pt_mode, ct_mode=ct_mode,
     )
 
 # === 子模块挂载 (拆分自原 sessions.py) ===

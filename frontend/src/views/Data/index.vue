@@ -1410,7 +1410,10 @@ const buildExportFilenameScope = () => {
 const resolveExportScopeParams = () => {
   const projectId = exportAllProjects.value ? null : (projectStore.currentProjectId || null);
   const channelId = channelFilter.value; // null 表示全部工位
-  return { projectId, channelId };
+  // v3.5.x: PT/CT 显示口径透传给后端 — avg 时 CSV 多输出"耗时(平均/秒)"列
+  const ptMode = store.display?.monitor?.ptMode || null;
+  const ctMode = store.display?.monitor?.ctMode || null;
+  return { projectId, channelId, ptMode, ctMode };
 };
 
 // 导出当日数据
@@ -1423,9 +1426,9 @@ const exportByDate = async () => {
   exporting.value = true;
   try {
     const { start: sh, end: eh } = getExportShiftHours();
-    const { projectId, channelId } = resolveExportScopeParams();
+    const { projectId, channelId, ptMode, ctMode } = resolveExportScopeParams();
     const res = await exportDateRangeCsv(
-      selectedDate.value, selectedDate.value, sh, eh, projectId, channelId
+      selectedDate.value, selectedDate.value, sh, eh, projectId, channelId, ptMode, ctMode
     );
     const filename = `data_${buildExportFilenameScope()}_${selectedDate.value}.csv`;
     downloadBlob(res.data, filename);
@@ -1456,16 +1459,16 @@ const handleExport = async () => {
     let res, filename;
 
     const { start: sh, end: eh } = getExportShiftHours();
-    const { projectId, channelId } = resolveExportScopeParams();
+    const { projectId, channelId, ptMode, ctMode } = resolveExportScopeParams();
     const scope = buildExportFilenameScope();
     if (exportDialogType.value === 'week' && exportWeek.value) {
-      res = await exportWeekCsv(exportWeek.value, sh, eh, projectId, channelId);
+      res = await exportWeekCsv(exportWeek.value, sh, eh, projectId, channelId, ptMode, ctMode);
       filename = `data_${scope}_${exportWeek.value}.csv`;
     } else if (exportDialogType.value === 'month' && exportMonth.value) {
-      res = await exportMonthCsv(exportMonth.value, sh, eh, projectId, channelId);
+      res = await exportMonthCsv(exportMonth.value, sh, eh, projectId, channelId, ptMode, ctMode);
       filename = `data_${scope}_${exportMonth.value}.csv`;
     } else if (exportDialogType.value === 'range' && exportDateRange.value?.length === 2) {
-      res = await exportDateRangeCsv(exportDateRange.value[0], exportDateRange.value[1], sh, eh, projectId, channelId);
+      res = await exportDateRangeCsv(exportDateRange.value[0], exportDateRange.value[1], sh, eh, projectId, channelId, ptMode, ctMode);
       filename = `data_${scope}_${exportDateRange.value[0]}_to_${exportDateRange.value[1]}.csv`;
     } else {
       ElMessage.warning('请选择导出范围');

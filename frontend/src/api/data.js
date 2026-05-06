@@ -120,36 +120,45 @@ export const exportCycleCsv = (cycleId) => {
 
 // v2.7.2: 三个批量导出 API 支持 projectId/channelId 过滤，避免不同项目/工位数据混入同一份 CSV
 // projectId=null 表示"全部项目"，channelId=null 表示"全部工位"
-export const exportDateRangeCsv = (startDate, endDate, startHour = null, endHour = null, projectId = null, channelId = null) => {
+// v3.5.x: ptMode/ctMode 跟随显示设置 (avg/last/current)，avg 时 CSV 多输出"耗时(平均/秒)"列
+const _appendModeParams = (params, ptMode, ctMode) => {
+  if (ptMode) params.pt_mode = ptMode;
+  if (ctMode) params.ct_mode = ctMode;
+};
+
+export const exportDateRangeCsv = (startDate, endDate, startHour = null, endHour = null, projectId = null, channelId = null, ptMode = null, ctMode = null) => {
   const params = { export_type: 'all', start_date: startDate, end_date: endDate };
   if (startHour) params.start_hour = startHour;
   if (endHour) params.end_hour = endHour;
   if (projectId !== null && projectId !== undefined) params.project_id = projectId;
   if (channelId !== null && channelId !== undefined) params.channel_id = channelId;
+  _appendModeParams(params, ptMode, ctMode);
   return api.get('/data/export/csv', {
     params,
     responseType: 'blob'
   });
 };
 
-export const exportWeekCsv = (week, startHour = null, endHour = null, projectId = null, channelId = null) => {
+export const exportWeekCsv = (week, startHour = null, endHour = null, projectId = null, channelId = null, ptMode = null, ctMode = null) => {
   const params = { export_type: 'all', week };
   if (startHour) params.start_hour = startHour;
   if (endHour) params.end_hour = endHour;
   if (projectId !== null && projectId !== undefined) params.project_id = projectId;
   if (channelId !== null && channelId !== undefined) params.channel_id = channelId;
+  _appendModeParams(params, ptMode, ctMode);
   return api.get('/data/export/csv', {
     params,
     responseType: 'blob'
   });
 };
 
-export const exportMonthCsv = (month, startHour = null, endHour = null, projectId = null, channelId = null) => {
+export const exportMonthCsv = (month, startHour = null, endHour = null, projectId = null, channelId = null, ptMode = null, ctMode = null) => {
   const params = { export_type: 'all', month };
   if (startHour) params.start_hour = startHour;
   if (endHour) params.end_hour = endHour;
   if (projectId !== null && projectId !== undefined) params.project_id = projectId;
   if (channelId !== null && channelId !== undefined) params.channel_id = channelId;
+  _appendModeParams(params, ptMode, ctMode);
   return api.get('/data/export/csv', {
     params,
     responseType: 'blob'
