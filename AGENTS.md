@@ -103,6 +103,7 @@
 | 出新版本（version bump / changelog / tag / CI）| `update-release` |
 | 打包流程问题排查 | `build-release` |
 | 给客户出热补丁 | `create-hotfix` |
+| 分支合并 / 多 agent 并行协作 / 解决合并冲突 | `merge-branch` |
 
 ---
 
