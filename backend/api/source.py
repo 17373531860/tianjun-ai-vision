@@ -1145,7 +1145,14 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         
         if self.recording_enabled:
             self._start_recording_thread()
-        
+
+        # v3.5.2: 周期性强制动作 — 开机首检规则在每次 start_detection 时触发一次.
+        try:
+            if hasattr(self, '_run_periodic_actions_on_start'):
+                self._run_periodic_actions_on_start()
+        except Exception as _e:
+            print(f"[PeriodicActions] run_on_start 触发失败: {_e}")
+
         print("检测已启动")
         return True
     
@@ -1256,7 +1263,23 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         for key in self.counters:
             self.counters[key] = 0
         self._persist_counters()
-        
+
+        # v3.5.2: 周期性强制动作 counter 同步清零 + 重置触发节流标志.
+        # 用户在 Monitor 点"清零"=想从零开始, 包括"距下次保养还有几轮"也归零.
+        if hasattr(self, '_periodic_counters') and isinstance(self._periodic_counters, dict):
+            for rule_id in list(self._periodic_counters.keys()):
+                self._periodic_counters[rule_id] = 0
+            for rule in getattr(self, '_periodic_actions', []) or []:
+                rule['last_overdue_count'] = -1
+            try:
+                if hasattr(self, '_persist_periodic_counters'):
+                    self._persist_periodic_counters()
+            except Exception as _e:
+                print(f"[PeriodicActions] reset_stats 持久化失败: {_e}")
+        # v3.5.2: 清空开机首检 pending 集合 (防止历史 pending 影响新一轮 start)
+        if hasattr(self, '_run_on_start_pending') and isinstance(self._run_on_start_pending, set):
+            self._run_on_start_pending.clear()
+
         # Cycle state
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()

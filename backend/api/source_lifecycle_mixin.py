@@ -175,6 +175,13 @@ class LifecycleMixin:
             import traceback as _tb
             print(f"[Scanner/Source] resume start_scanning 失败: {_e}\n{_tb.format_exc()}")
 
+        # v3.5.2: 周期性强制动作 — 开机首检规则在每次"开始/恢复检测"时触发
+        try:
+            if hasattr(self, '_run_periodic_actions_on_start'):
+                self._run_periodic_actions_on_start()
+        except Exception as _e:
+            print(f"[PeriodicActions] resume run_on_start 触发失败: {_e}")
+
         print("已恢复：视频流和推理重新启动")
         return True
     
@@ -236,6 +243,13 @@ class LifecycleMixin:
         except Exception as _e:
             import traceback as _tb
             print(f"[Scanner/Source] resume_inference start_scanning 失败: {_e}\n{_tb.format_exc()}")
+
+        # v3.5.2: 周期性强制动作 — 开机首检规则在每次"开始/恢复检测"时触发
+        try:
+            if hasattr(self, '_run_periodic_actions_on_start'):
+                self._run_periodic_actions_on_start()
+        except Exception as _e:
+            print(f"[PeriodicActions] resume_inference run_on_start 触发失败: {_e}")
 
         print("已从待机恢复推理")
     

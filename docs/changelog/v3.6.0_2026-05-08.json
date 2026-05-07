@@ -1,0 +1,153 @@
+{
+  "version": "3.6.0",
+  "date": "2026-05-08",
+  "previous_version": "3.5.1",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-360-001",
+      "title": "周期性强制动作能力增强 + 语义修正",
+      "symptom": "v3.5.0 的周期性强制动作只能在 cycle_end 立即触发；用户实测发现：清空统计时把周期性计数器一起清了不期望；想在'开机首件'强制触发避免漏检但只能配 cycle_end；触发事件只能选 OK/NG 不能用项目自定义事件名。",
+      "root_cause": "原 PeriodicActionsMixin 只挂 end_cycle hook，没有 first-step hook；reset_stats 把所有 _* 计数器一并清空；前端事件选择器与项目自定义事件管理是两个分离 UI，配置流程脱节。",
+      "fix": "pipeline_config 加 run_on_start 开关；resume()/resume_inference() 把 run_on_start=true 的规则计数推到 interval 并加入 _run_on_start_pending（不立即发事件）；新增 _check_periodic_actions_on_first_step(step_label) 钩入 source_step_stats_mixin 步骤完成流程（首步是触发步骤→静默清零；首步不是触发步骤→立即发漏检告警）；reset_stats() 显式保留 _periodic_counters 与 _run_on_start_pending；_emit_periodic_notification 标 should_warn_no_barcode=False；前端 Project 页加 run_on_start switch + 事件选择器旁加'+ 新建事件'按钮直跳事件管理对话框。",
+      "files": [
+        "backend/api/source.py",
+        "backend/api/source_lifecycle_mixin.py",
+        "backend/api/source_periodic_actions_mixin.py",
+        "backend/api/source_step_stats_mixin.py",
+        "backend/api/source_event_trigger_mixin.py",
+        "frontend/src/views/Project/index.vue",
+        "tests/features/periodic_actions.feature",
+        "tests/step_defs/test_periodic_actions.py",
+        "tests/test_periodic_actions_v352.py"
+      ],
+      "verify": "BDD 覆盖 run_on_start 三种场景（首步=触发步骤静默 / 首步≠触发步骤即时告警 / 关闭时不触发）；reset_stats 调用后周期计数 + run_on_start_pending 仍保留；should_warn_no_barcode=False 在前端 toast 链路验证不弹未绑码。"
+    },
+    {
+      "type": "fix",
+      "id": "FIX-360-001",
+      "title": "检测框跑出画面边界（偶发幽灵框）三层防御性 clipping",
+      "symptom": "客户实测出现'框跑外面去了'偶发性 bug——视频画面里检测框被绘制到画面框之外。",
+      "root_cause": "三处独立潜在源叠加：① 后端 YOLO 推理输出归一化坐标极少数情况轻微 >1.0（浮点误差）；② Kalman 过预测 smoothed_pos 短暂超出 [0,1]；③ 前端 Canvas 绘制时无最后一道防线，任一上游漏过即直接画到画面外。",
+      "fix": "三层独立防御：① 后端推理出口新增 source_geometry.py::clip_bbox_normalized(x1,y1,x2,y2,w,h)，_detect_only / _detect_and_track / _detect_segment 全部接入；② source_drawer.py::apply_kalman_filter 在卡尔曼更新后对 smoothed_pos 做 [0,1] clip；③ 前端 Monitor/index.vue 新增 clipNormalizedBox(det) 助手，drawMultiDetections / drawDetections / mask polygon 顶点全部接入。任一层独立兜底即可。",
+      "files": [
+        "backend/api/source_detect_runners_mixin.py",
+        "backend/api/source_drawer.py",
+        "backend/api/source_geometry.py",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "verify": "构造极端推理输出（x1/w=1.001 等浮点越界值）走完三层后均被 clip 到 [0,1]；卡尔曼过预测注入 smoothed_pos=(1.05,1.05) 后被 clip 到 1.0；前端拿到任意输入坐标后 canvas 绘制范围始终在画面内。"
+    },
+    {
+      "type": "fix",
+      "id": "FIX-360-002",
+      "title": "MES 无扫码器时不再误报 ⚠ 未绑码",
+      "symptom": "用户清空 MES 管理的扫码器列表后，检测中心仍弹 ⚠ 未绑码 toast。",
+      "root_cause": "前端 toast 触发逻辑没有检查'是否真有扫码器'，且多通道下 hasScannerFor(ch - 1) 存在 0/1-based 索引混淆。",
+      "fix": "权威决策上提到后端：services/mes_hooks.py 新增 has_any_scanner_present() 遍历所有 scanner 连接判断；is_warn_no_barcode() 加 early-exit（无任何扫码器含虚拟→直接 False）；source_event_trigger_mixin.py 在每个 event 写入 events_log 时附加 should_warn_no_barcode 字段，前端只消费这个布尔值。",
+      "files": [
+        "backend/services/mes_hooks.py",
+        "backend/api/source_event_trigger_mixin.py",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "verify": "85c351c 已在 v3.5.1 之后 commit 进 main；本版本一并发布。无扫码器 + 无虚拟扫码器场景，所有 cycle_end 事件 should_warn_no_barcode=false，前端不弹 toast。"
+    },
+    {
+      "type": "fix",
+      "id": "FIX-360-003",
+      "title": "海康摄像头 NameError 永久修复",
+      "symptom": "客户端启动时偶发 NameError: name 'HIK_SDK_AVAILABLE' is not defined 导致摄像头打不开。",
+      "root_cause": "source_camera_start_mixin.py 顶部缺失 SDK 与 ctypes 相关 import，仅在主类作用域可见。",
+      "fix": "在 mixin 文件顶部补全所有需要的 import（HIK_SDK_AVAILABLE / HCNETSDK / ctypes 类型等）。",
+      "files": [
+        "backend/api/source_camera_start_mixin.py"
+      ],
+      "verify": "df7ce2c 已 commit 进 main；本版本一并发布；不再依赖之前下发的临时热补丁。"
+    },
+    {
+      "type": "docs",
+      "id": "DOC-360-001",
+      "title": "文档体系大重构：新建 AGENTS.md + 全面整治 27 个 skill",
+      "symptom": "项目交接给新 AI 模型时无统一'项目地图'，全靠 skill 按需触发；24 个 skill 多为 v2.x 时代写的，部分行数差实际 6-10 倍（如 debug-mes 写 mes_hooks.py ~250 行，实际 1505 行）；Cluster / Custom Export / Operator-License 等核心模块无专属 skill。",
+      "root_cause": "skill 体系自 v2.x 后未统一全面更新；AI 助手缺少全局视角的 AGENTS.md；3 个 v3.x 重要新模块（自定义导出 / 集群 / 操作员-License）缺 skill 覆盖。",
+      "fix": "新建 AGENTS.md（827 行）作为项目地图：14 章覆盖项目档案 / 技术栈 / 工作守则 / skill 触发表 / 系统架构 / 20 个核心模块 / Hub 关系图 / 关键扩展点 / 不变量 / 已知架构 bug & dead code 索引 / 关键环境变量 / 文件路径速查。27 个 skill 对齐 v3.5.x 真相：8 大修（debug-mes / modify-source / debug-source / modify-project-config / api-sync / build-release / debug-channel / debug-session）+ 6 中修（modify-frontend / debug-frontend / debug-detection / debug-alarm / modify-model / modify-api）+ 2 小修（fix-data / add-api-endpoint）+ 3 新建（debug-export / debug-cluster / debug-operator-license）+ 8 保留。事实修正：14→15 mixin、12→10 视图、24→27 skill 总数。",
+      "files": [
+        "AGENTS.md",
+        ".claude/skills/debug-export/SKILL.md",
+        ".claude/skills/debug-cluster/SKILL.md",
+        ".claude/skills/debug-operator-license/SKILL.md",
+        ".claude/skills/add-api-endpoint/SKILL.md",
+        ".claude/skills/api-sync/SKILL.md",
+        ".claude/skills/build-release/SKILL.md",
+        ".claude/skills/debug-alarm/SKILL.md",
+        ".claude/skills/debug-channel/SKILL.md",
+        ".claude/skills/debug-detection/SKILL.md",
+        ".claude/skills/debug-frontend/SKILL.md",
+        ".claude/skills/debug-mes/SKILL.md",
+        ".claude/skills/debug-session/SKILL.md",
+        ".claude/skills/debug-source/SKILL.md",
+        ".claude/skills/fix-data/SKILL.md",
+        ".claude/skills/modify-api/SKILL.md",
+        ".claude/skills/modify-frontend/SKILL.md",
+        ".claude/skills/modify-model/SKILL.md",
+        ".claude/skills/modify-project-config/SKILL.md",
+        ".claude/skills/modify-source/SKILL.md"
+      ],
+      "verify": "27 个 SKILL.md 与 AGENTS.md 互相引用一致（mixin 数 / 视图数 / skill 总数对齐）；AGENTS.md 第四节触发表 + 各模块章节末尾 skill 指针完备；3 个新 skill 由 v3.5.x 代码反推编写。"
+    },
+    {
+      "type": "docs",
+      "id": "DOC-360-002",
+      "title": "操作手册 PDF 化 + 字符编码修复",
+      "symptom": "v3.5.1 操作手册 markdown 在 Linux / macOS 正常，Windows / Android 显示乱码。",
+      "root_cause": "markdown 文件无 UTF-8 BOM，部分 Windows / Android 解析器默认 GBK 解读。",
+      "fix": "UTF-8 BOM 写入；新增 tools/build_manual_pdf.py 把 markdown 编译成带样式 PDF（reportlab + 中文字体注册），交付物 docs/软件操作手册.pdf (~2.3MB) 入仓。",
+      "files": [
+        "docs/软件操作手册.md",
+        "docs/软件操作手册.pdf",
+        "tools/build_manual_pdf.py"
+      ],
+      "verify": "Windows 记事本 / Android Markor 直接打开 .md 显示中文正常；PDF reportlab 中文字体不显示方框；移植到客户机随安装包分发。"
+    },
+    {
+      "type": "config",
+      "id": "CONFIG-360-001",
+      "title": ".gitignore 收紧 + 仓库整洁度",
+      "symptom": "工作区累积大量过程产物（subagent 报告 / 误创建目录 / 现场诊断脚本 / PDF 中间产物），git status 持续杂乱。",
+      "root_cause": ".gitignore 未覆盖这类工作过程产物。",
+      "fix": ".gitignore 新增 .tmp_audit/ / test (2)/ / tools/diag_*.py / tools/test_scan_pair_*.py / docs/*.html 五条规则，发版前 git status 清爽。",
+      "files": [
+        ".gitignore"
+      ],
+      "verify": "本次发版 git status 干净，无误入仓的过程产物。"
+    },
+    {
+      "type": "test",
+      "id": "TEST-360-001",
+      "title": "周期性动作测试套件按新语义重写 + 集成测试新增",
+      "symptom": "v3.5.0 周期性动作测试只覆盖 cycle_end 单点；本版本加 run_on_start + first-step 语义后需要补对应测试。",
+      "root_cause": "新增功能上线必须有对应单元 / 集成 / E2E 测试覆盖避免回归。",
+      "fix": "tests/features/periodic_actions.feature 与 tests/step_defs/test_periodic_actions.py 按 v3.5.x first-step 语义重写；新增 tests/test_periodic_actions_v352.py 集成测试覆盖 run_on_start / 首步触发分支 / 自定义事件 / reset 不清零 / should_warn_no_barcode 标记。E2E Playwright tests/e2e_browser/test_project_page.py 同步更新。",
+      "files": [
+        "tests/features/periodic_actions.feature",
+        "tests/step_defs/test_periodic_actions.py",
+        "tests/test_periodic_actions_v352.py",
+        "tests/e2e_browser/test_project_page.py"
+      ],
+      "verify": "BDD 覆盖 run_on_start 三种场景；集成测试覆盖 reset_stats 不清零、_run_on_start_pending 集合、should_warn_no_barcode 标记；E2E Playwright 验证前端 run_on_start switch + '+ 新建事件'按钮。"
+    },
+    {
+      "type": "config",
+      "id": "CONFIG-360-002",
+      "title": "版本号升级到 3.6.0 + feat/plugin-system 分支清理",
+      "symptom": "上一版 v3.5.1；本版本因为 AGENTS.md / 27 skill 重构 + 周期性动作语义升级，按 SemVer 走 minor。feat/plugin-system 分支自创建以来无独立提交，所有改动都在 main 工作区，分支没用了。",
+      "root_cause": "—",
+      "fix": "electron/package.json 与 electron/splash.html 升至 3.6.0；删除本地 + 远程 origin/feat/plugin-system 分支。",
+      "files": [
+        "electron/package.json",
+        "electron/splash.html"
+      ],
+      "verify": "git tag v3.6.0 + git push origin main + git push origin v3.6.0 触发 GitHub Actions CI 自动打包；feat/plugin-system 分支不再可见。"
+    }
+  ]
+}

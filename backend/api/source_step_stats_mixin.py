@@ -314,7 +314,15 @@ class StepStatsMixin:
                             is_valid=True,
                             video_info=step_video_info
                         )
-                        
+
+                        # v3.5.2: 周期性强制动作 — 开机首检在第一个步骤完成时清算
+                        # (做了 trigger_step 静默 reset, 否则立即提醒). 一次性判定.
+                        try:
+                            if hasattr(self, '_check_periodic_actions_on_first_step'):
+                                self._check_periodic_actions_on_first_step(label)
+                        except Exception as _e:
+                            print(f"[PeriodicActions] on_first_step 触发失败: {_e}")
+
                         # 记录该步骤消失时的结束时间，供顺序模式结算时补写未“消失”的步骤记录
                         if not hasattr(self, '_last_disappeared_step_times'):
                             self._last_disappeared_step_times = {}

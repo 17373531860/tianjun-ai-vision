@@ -78,3 +78,64 @@
     假设 配置一条规则 interval=4 trigger=E
     当 我完成 5 个不含 E 的 cycle
     那么 status 应返回 state=overdue remaining=-1 counter=5
+
+  # v3.5.2: 清零计数器同步重置 periodic counter
+  场景: reset_stats 时 periodic counter 应被同步清零
+    假设 配置一条规则 interval=5 trigger=E
+    当 我完成 3 个不含 E 的 cycle
+    并且 我调用 reset_stats
+    那么 该规则的 counter 应为 0
+
+  场景: reset_stats 时 cooldown 状态也被清掉
+    假设 配置一条规则 interval=2 trigger=E overdue_event_id=20 overdue_repeat=once
+    并且 events_config 包含 id=20 名称为"清洁超期"的事件
+    当 我连续完成 4 个不含 E 的 cycle
+    并且 我调用 reset_stats
+    并且 我连续完成 3 个不含 E 的 cycle
+    那么 id=20 的事件应被触发至少 2 次
+
+  # v3.5.2: 开机首检 (run_on_start) — 启动检测时静默推 counter, 等第一轮自然判定
+  场景: run_on_start=true 时启动检测把 counter 推到 interval (静默, 不立即 emit 事件)
+    假设 配置一条规则 interval=10 trigger=E run_on_start=true due_warning_event_id=30
+    并且 events_config 包含 id=30 名称为"开机首检"的事件
+    当 我调用 _run_periodic_actions_on_start
+    那么 该规则的 counter 应为 10
+    并且 events_log 不应记录到 id 为 30 的事件
+
+  场景: run_on_start 后首个完成步骤 = trigger_step → 静默 reset, 不触发任何事件
+    假设 配置一条规则 interval=5 trigger=E run_on_start=true due_warning_event_id=30 overdue_event_id=40 reset_policy=always
+    并且 events_config 包含 id=30 名称为"到期"的事件
+    并且 events_config 包含 id=40 名称为"超期"的事件
+    当 我调用 _run_periodic_actions_on_start
+    并且 完成步骤 E
+    那么 该规则的 counter 应为 0
+    并且 events_log 不应记录到 id 为 30 的事件
+    并且 events_log 不应记录到 id 为 40 的事件
+
+  场景: run_on_start 后首个完成步骤 != trigger_step → 立即 emit overdue 事件
+    假设 配置一条规则 interval=5 trigger=E run_on_start=true overdue_event_id=40
+    并且 events_config 包含 id=40 名称为"超期"的事件
+    当 我调用 _run_periodic_actions_on_start
+    并且 完成步骤 A
+    那么 该规则的 counter 应为 5
+    并且 events_log 应记录到 id 为 40 的事件
+
+  场景: run_on_start 首检判定一次性, 第二个步骤不再 emit
+    假设 配置一条规则 interval=5 trigger=E run_on_start=true overdue_event_id=40
+    并且 events_config 包含 id=40 名称为"超期"的事件
+    当 我调用 _run_periodic_actions_on_start
+    并且 完成步骤 A
+    并且 完成步骤 B
+    那么 id=40 的事件触发次数应不超过 1 次
+
+  场景: run_on_start=false 时启动检测不变更 counter
+    假设 配置一条规则 interval=10 trigger=E run_on_start=false
+    当 我调用 _run_periodic_actions_on_start
+    那么 该规则的 counter 应为 0
+
+  场景: run_on_start 不会重复推 — 已经在到期状态保持不变
+    假设 配置一条规则 interval=5 trigger=E run_on_start=true due_warning_event_id=30
+    并且 events_config 包含 id=30 名称为"开机首检"的事件
+    当 我调用 _run_periodic_actions_on_start
+    并且 我调用 _run_periodic_actions_on_start
+    那么 该规则的 counter 应为 5

@@ -898,9 +898,15 @@
                       </div>
                     </div>
 
-                    <div class="grid grid-cols-2 gap-3">
+                    <div class="grid grid-cols-2 gap-3 mb-3">
                       <div>
-                        <p class="text-xs text-gray-500 mb-1">到期提醒事件 (counter == N)</p>
+                        <div class="flex items-center justify-between mb-1">
+                          <p class="text-xs text-gray-500">到期提醒事件 (counter == N)</p>
+                          <el-button type="primary" size="small" link
+                                     @click="addEventAndBindToRule(rule, 'due_warning_event_id')">
+                            + 新建事件
+                          </el-button>
+                        </div>
                         <el-select v-model="rule.due_warning_event_id" size="small" class="w-full"
                                    clearable placeholder="可选 — 到点提醒一次">
                           <el-option v-for="ev in (activeProject.events_config || [])"
@@ -908,12 +914,30 @@
                         </el-select>
                       </div>
                       <div>
-                        <p class="text-xs text-gray-500 mb-1">超期告警事件 (counter > N)</p>
+                        <div class="flex items-center justify-between mb-1">
+                          <p class="text-xs text-gray-500">超期告警事件 (counter > N)</p>
+                          <el-button type="primary" size="small" link
+                                     @click="addEventAndBindToRule(rule, 'overdue_event_id')">
+                            + 新建事件
+                          </el-button>
+                        </div>
                         <el-select v-model="rule.overdue_event_id" size="small" class="w-full"
                                    clearable placeholder="超过 N 轮还没做时触发">
                           <el-option v-for="ev in (activeProject.events_config || [])"
                                      :key="ev.id" :label="ev.name" :value="ev.id" />
                         </el-select>
+                      </div>
+                    </div>
+
+                    <!-- v3.5.2: 开机首检 — 每次"开始检测"时立刻触发一次到期提醒 -->
+                    <div class="flex items-center gap-2 bg-slate-800/60 border border-slate-700 rounded p-2">
+                      <el-switch v-model="rule.run_on_start" size="small" />
+                      <div class="flex-1">
+                        <p class="text-xs text-gray-300">开机首检：每次开始检测时强制做一次</p>
+                        <p class="text-[0.65rem] text-gray-500 mt-0.5">
+                          勾选后，每次点"开始"立刻把 counter 推到 {{ rule.interval || 20 }}
+                          并触发到期提醒事件，必须先做完动作才会归零
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -2014,6 +2038,7 @@ const initProjectDefaults = (project) => {
     overdue_event_id: rule.overdue_event_id ?? null,
     overdue_repeat: rule.overdue_repeat || 'every_cycle',
     channel_filter: rule.channel_filter || null,
+    run_on_start: rule.run_on_start === true,  // v3.5.2: 开机首检
   }));
   
   if (project.custom_based_on === undefined) {
@@ -2323,6 +2348,7 @@ const handleSaveProject = async () => {
           overdue_event_id: rule.overdue_event_id ?? null,
           overdue_repeat: rule.overdue_repeat || 'every_cycle',
           channel_filter: rule.channel_filter || null,
+          run_on_start: rule.run_on_start === true,
         })),
       }
     };
@@ -2675,7 +2701,28 @@ const addPeriodicAction = () => {
     overdue_event_id: null,
     overdue_repeat: 'every_cycle',
     channel_filter: null,
+    run_on_start: false,
   });
+};
+
+// v3.5.2: 在 periodic_actions 里直接快捷新建事件并绑定到规则
+const addEventAndBindToRule = (rule, fieldKey) => {
+  if (!activeProject.value.events_config) activeProject.value.events_config = [];
+  const newId = Date.now();
+  const defaultName = fieldKey === 'due_warning_event_id'
+    ? `${rule.name || '保养'}-到期提醒`
+    : `${rule.name || '保养'}-超期告警`;
+  activeProject.value.events_config.push({
+    id: newId,
+    name: defaultName,
+    color: fieldKey === 'overdue_event_id' ? '#ef4444' : '#f59e0b',
+    actions: [],
+    show_notification: true,
+    notification_type: fieldKey === 'overdue_event_id' ? 'critical' : 'normal',
+    toast_id: 'ng',
+  });
+  rule[fieldKey] = newId;
+  ElMessage.success(`已新建事件「${defaultName}」并绑定到本规则`);
 };
 
 const removePeriodicAction = (idx) => {

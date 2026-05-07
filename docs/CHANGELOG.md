@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.6.0 (2026-05-08)
+- [FEAT-360-001] 周期性强制动作能力增强 + 语义修正 — `pipeline_config.run_on_start` 新开关；`resume()/resume_inference()` 把 run_on_start=true 的规则计数推到 interval 并加入 `_run_on_start_pending`（不立即发事件）；新增 `_check_periodic_actions_on_first_step(step_label)` 钩入步骤完成流程（首步=触发步骤→静默清零；首步≠触发步骤→立即发漏检告警）；`reset_stats()` 显式保留周期计数器与 `_run_on_start_pending`；`_emit_periodic_notification` 标 `should_warn_no_barcode=False`；前端 Project 页加 run_on_start switch + 事件选择器旁加"+ 新建事件"按钮直跳事件管理对话框
+- [FIX-360-001] 检测框越界三层防御性 clipping — 后端推理出口 `source_geometry.py::clip_bbox_normalized`（_detect_only / _detect_and_track / _detect_segment 全接入）+ 后端 Kalman 输出 `apply_kalman_filter` 对 smoothed_pos clip + 前端 Monitor `clipNormalizedBox` 助手（drawMultiDetections / drawDetections / mask polygon 全覆盖），任一层独立兜底
+- [FIX-360-002] MES 无扫码器时不再误报 ⚠ 未绑码 (85c351c) — `services/mes_hooks.py::has_any_scanner_present()` + `is_warn_no_barcode()` early-exit；`source_event_trigger_mixin.py` 在每个 event 写 `should_warn_no_barcode` 字段，前端只消费这个布尔值
+- [FIX-360-003] 海康摄像头 NameError 永久修复 (df7ce2c) — `source_camera_start_mixin.py` 顶部补全 SDK / ctypes import，不再依赖临时热补丁
+- [DOC-360-001] 文档体系大重构 — 新建 `AGENTS.md`（827 行，14 章项目地图）；27 个 skill 全面整治：8 大修 / 6 中修 / 2 小修 / 3 新建（debug-export / debug-cluster / debug-operator-license）/ 8 保留；事实修正 14→**15** mixin、12→**10** 视图、24→**27** skill 总数
+- [DOC-360-002] 操作手册 PDF 化 + UTF-8 BOM 修复 — 解决 Windows / Android 乱码问题；新增 `tools/build_manual_pdf.py` (reportlab + 中文字体)；交付物 `docs/软件操作手册.pdf` (~2.3MB) 入仓
+- [TEST-360-001] 周期性动作测试套件按新语义重写 — `tests/features/periodic_actions.feature` + `tests/step_defs/test_periodic_actions.py` 重写；新增 `tests/test_periodic_actions_v352.py` 集成测试覆盖 run_on_start / 首步触发分支 / reset 不清零 / `should_warn_no_barcode` 标记
+- [CONFIG-360-001] `.gitignore` 收紧 — 排除 `.tmp_audit/` / `test (2)/` / `tools/diag_*.py` / `tools/test_scan_pair_*.py` / `docs/*.html`
+- [CONFIG-360-002] 版本号升级到 3.6.0；feat/plugin-system 分支清理（无独立提交）
+
 ## v3.5.1 (2026-05-06)
 - [FEAT-351-001] 新增: Monitor 页 PT/CT 三档显示口径 — 后端 `/api/v1/source/detection/results` 暴露 `last_cycle_time / last_cycle_time_with_ng / current_cycle_time / last_step_durations` 4 个新字段; 前端 systemStore 加 `ptMode/ctMode` (默认 'avg', 三档 avg/last/current); Settings 页两个独立下拉支持 9 种组合; `formatStepPT / getDisplayCT / displayCT` 全面改造跟随 mode + ctIncludeNg 二维组合; multiChannelData 缓存新字段支持多工位
 - [FEAT-351-002] 新增: 数据中心快捷 CSV 导出与显示口径联动 — `/data/export/csv` 接 `pt_mode/ct_mode` 参数; 新增 `_calc_aggregates(cycles, steps)` 工具 (按 step_label 分组求平均); `_write_session_export / _write_cycle_export / _write_range_export` 三个 builder 全部接受 mode; `ct_mode=avg` 时周期详情区在"耗时(秒)"旁多一列"耗时(平均/秒)" (每行填全局平均); `pt_mode=avg` 时步骤详情区同样多一列; last/current/None 时 CSV 保持原列结构 (老脚本兼容); 前端 4 个快捷按钮 (当日/某周/某月/日期范围) 全覆盖

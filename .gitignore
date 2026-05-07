@@ -135,3 +135,16 @@ backend/workstation_config.json
 
 # Internal / reverse-engineering scratch (not for release)
 docs/wmax_decompiled/
+
+# Manual auditing intermediate output (subagent reports / scan dumps)
+.tmp_audit/
+
+# Stray/duplicate scratch directory
+test (2)/
+
+# Field diagnostic & simulation scripts (not part of product)
+tools/diag_*.py
+tools/test_scan_pair_*.py
+
+# HTML intermediate artifact for manual (PDF is the released form)
+docs/*.html

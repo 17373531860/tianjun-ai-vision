@@ -188,6 +188,52 @@ def given_no_event(ctx, evt_id):
         del ctx["_pending_rule"]
 
 
+# ----- v3.5.2: run_on_start 规则参数化 given -----
+@given(parsers.parse(
+    "配置一条规则 interval={interval:d} trigger={trigger} "
+    "run_on_start={ros} due_warning_event_id={evt_id:d}"
+))
+def given_rule_with_run_on_start_due(ctx, interval, trigger, ros, evt_id):
+    rule = _build_rule(ctx, interval=interval, trigger=trigger,
+                       run_on_start=_str_to_bool(ros),
+                       due_warning_event_id=evt_id)
+    ctx["_pending_rule"] = rule
+
+
+@given(parsers.parse(
+    "配置一条规则 interval={interval:d} trigger={trigger} "
+    "run_on_start={ros} overdue_event_id={evt_id:d}"
+))
+def given_rule_with_run_on_start_overdue(ctx, interval, trigger, ros, evt_id):
+    rule = _build_rule(ctx, interval=interval, trigger=trigger,
+                       run_on_start=_str_to_bool(ros),
+                       overdue_event_id=evt_id)
+    ctx["_pending_rule"] = rule
+
+
+@given(parsers.parse("配置一条规则 interval={interval:d} trigger={trigger} run_on_start={ros}"))
+def given_rule_with_run_on_start_only(ctx, interval, trigger, ros):
+    rule = _build_rule(ctx, interval=interval, trigger=trigger,
+                       run_on_start=_str_to_bool(ros))
+    ctx["config"] = _make_config(rule)
+    _apply_now(ctx)
+
+
+# v3.5.2: 完整参数版 — 同时设 due / overdue / reset_policy
+@given(parsers.parse(
+    "配置一条规则 interval={interval:d} trigger={trigger} "
+    "run_on_start={ros} due_warning_event_id={due_id:d} overdue_event_id={over_id:d} "
+    "reset_policy={policy}"
+))
+def given_rule_with_run_on_start_full(ctx, interval, trigger, ros, due_id, over_id, policy):
+    rule = _build_rule(ctx, interval=interval, trigger=trigger,
+                       run_on_start=_str_to_bool(ros),
+                       due_warning_event_id=due_id,
+                       overdue_event_id=over_id,
+                       reset_policy=policy)
+    ctx["_pending_rule"] = rule
+
+
 # ============================================================
 # Whens
 # ============================================================
@@ -216,6 +262,11 @@ def when_run_with_e(ctx, n):
         ctx["host"]._check_periodic_actions(["A", "B", "C", "D", "E"], True)
 
 
+@when(parsers.parse("我连续完成 {n:d} 个含 E 的 cycle"))
+def when_run_n_with_e(ctx, n):
+    when_run_with_e(ctx, n)
+
+
 @when(parsers.parse("我完成 {n:d} 个 NG 的 cycle"))
 def when_run_ng(ctx, n):
     for _ in range(n):
@@ -226,6 +277,30 @@ def when_run_ng(ctx, n):
 def when_run_ok(ctx, n):
     for _ in range(n):
         ctx["host"]._check_periodic_actions(["A", "B", "C", "D"], True)
+
+
+# v3.5.2: reset_stats / run_on_start 用例
+@when("我调用 reset_stats")
+def when_reset_stats(ctx):
+    """模拟 source.py:reset_stats() 中针对 _periodic_counters 的那一段。"""
+    host = ctx["host"]
+    if hasattr(host, "_periodic_counters") and isinstance(host._periodic_counters, dict):
+        for rid in list(host._periodic_counters.keys()):
+            host._periodic_counters[rid] = 0
+        for rule in getattr(host, "_periodic_actions", []) or []:
+            rule["last_overdue_count"] = -1
+        host._persist_periodic_counters()
+
+
+@when("我调用 _run_periodic_actions_on_start")
+def when_run_on_start(ctx):
+    ctx["host"]._run_periodic_actions_on_start()
+
+
+@when(parsers.parse("完成步骤 {label}"))
+def when_complete_single_step(ctx, label):
+    """v3.5.2: 模拟 source_step_stats_mixin 在每个步骤完成后调钩子."""
+    ctx["host"]._check_periodic_actions_on_first_step(label)
 
 
 @when("我新建一个 mixin 实例并应用相同配置")
@@ -277,6 +352,14 @@ def then_event_logged(ctx, evt_id):
     assert found, f"events_log 中没有 id={evt_id} 的事件; events_log={ctx['host'].events_log}"
 
 
+@then(parsers.parse("events_log 不应记录到 id 为 {evt_id:d} 的事件"))
+def then_event_not_logged(ctx, evt_id):
+    found = [e for e in ctx["host"].events_log if str(e.get("event_id")) == str(evt_id)]
+    assert not found, (
+        f"events_log 中**不应**有 id={evt_id} 的事件, 但找到 {len(found)} 条: {found}"
+    )
+
+
 @then(parsers.parse("id={evt_id:d} 的事件应被触发至少 {n:d} 次"))
 def then_event_triggered_at_least(ctx, evt_id, n):
     count = sum(1 for e in ctx["host"].events_log if str(e.get("event_id")) == str(evt_id))
@@ -323,9 +406,16 @@ def _build_rule(ctx, interval, trigger, **overrides):
         "overdue_event_id": None,
         "overdue_repeat": "every_cycle",
         "channel_filter": None,
+        "run_on_start": False,
     }
     rule.update(overrides)
     return rule
+
+
+def _str_to_bool(s) -> bool:
+    if isinstance(s, bool):
+        return s
+    return str(s).strip().lower() in ("true", "1", "yes", "on")
 
 
 def _apply_now(ctx):

@@ -83,11 +83,19 @@ class Drawer:
 
             self._detection_missing_frames[label] = 0
 
+            # v3.5.2: Kalman predict 在测量跳跃/目标短暂消失时, 用速度向量外推
+            # 可能瞬间产生 x+w > 1 或负值, 让前端框跑到画面外. 这里 clip 到 [0, 1]
+            # 兜底, 同时保证 x+w <= 1 / y+h <= 1 (右下角不会越界)
+            sx = max(0.0, min(1.0, float(smoothed_pos[0])))
+            sy = max(0.0, min(1.0, float(smoothed_pos[1])))
+            sw = max(0.0, min(1.0 - sx, float(smoothed_pos[2])))
+            sh = max(0.0, min(1.0 - sy, float(smoothed_pos[3])))
+
             smoothed_det = det.copy()
-            smoothed_det['x'] = float(smoothed_pos[0])
-            smoothed_det['y'] = float(smoothed_pos[1])
-            smoothed_det['w'] = float(smoothed_pos[2])
-            smoothed_det['h'] = float(smoothed_pos[3])
+            smoothed_det['x'] = sx
+            smoothed_det['y'] = sy
+            smoothed_det['w'] = sw
+            smoothed_det['h'] = sh
             smoothed.append(smoothed_det)
 
         labels_to_remove = []

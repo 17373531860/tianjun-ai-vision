@@ -105,6 +105,58 @@ def test_logic_mode_切换器_包含四个选项(page, base_url, api_url):
         assert loc.count() >= 1, f"应有 logic_mode 选项 {label}"
 
 
+# v3.5.2: run_on_start 开关 + 新建事件快捷按钮
+def test_周期性强制动作_含开机首检开关(page, base_url, api_url):
+    _goto_project(page, base_url)
+    if _select_first_project(page, api_url) is None:
+        pytest.skip()
+    _click_logic_tab(page)
+
+    title = page.locator("text=周期性强制动作").first
+    title.wait_for(state="visible", timeout=8000)
+    title.scroll_into_view_if_needed()
+
+    # 没规则就先建一条
+    rule_count = page.locator("input[placeholder*='规则名']").count()
+    if rule_count == 0:
+        btn = page.locator("button:has-text('+ 新增规则')").first
+        if btn.count() == 0:
+            btn = page.locator("button:has-text('新增规则')").first
+        btn.scroll_into_view_if_needed()
+        btn.click(timeout=5000)
+        time.sleep(0.5)
+
+    # 找 "开机首检" 文案
+    on_start = page.locator("text=开机首检")
+    assert on_start.count() >= 1, "应至少有一处显示'开机首检'文案"
+
+
+def test_周期性强制动作_含新建事件快捷按钮(page, base_url, api_url):
+    _goto_project(page, base_url)
+    if _select_first_project(page, api_url) is None:
+        pytest.skip()
+    _click_logic_tab(page)
+
+    title = page.locator("text=周期性强制动作").first
+    title.wait_for(state="visible", timeout=8000)
+    title.scroll_into_view_if_needed()
+
+    rule_count = page.locator("input[placeholder*='规则名']").count()
+    if rule_count == 0:
+        btn = page.locator("button:has-text('+ 新增规则')").first
+        if btn.count() == 0:
+            btn = page.locator("button:has-text('新增规则')").first
+        btn.scroll_into_view_if_needed()
+        btn.click(timeout=5000)
+        time.sleep(0.5)
+
+    # 在卡片里应该看到至少 2 个 "+ 新建事件" 链接按钮 (due / overdue)
+    new_event_btns = page.locator("button:has-text('+ 新建事件')")
+    assert new_event_btns.count() >= 2, (
+        f"应有至少 2 个'+ 新建事件'快捷按钮 (到期/超期), 实际 {new_event_btns.count()}"
+    )
+
+
 def test_切换到事件设置_tab_有事件配置区(page, base_url, api_url):
     _goto_project(page, base_url)
     if _select_first_project(page, api_url) is None:

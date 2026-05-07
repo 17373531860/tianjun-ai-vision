@@ -97,6 +97,17 @@ class EventTriggerMixin:
             had_workpiece = (self.channel_id in self._mes_hook._inspecting_workpiece
                              or self.channel_id in self._mes_hook._pending_workpiece)
 
+        # v3.5.2: 后端权威判定"是否该弹未绑码 toast", 前端直接读, 不再做客户端守门.
+        # 三种情况静默: (1) 事件已绑工件 (2) 该工位已禁用扫码 (3) 系统中根本没扫码器.
+        should_warn_no_barcode = False
+        try:
+            if self._mes_hook is not None and not had_workpiece:
+                scan_disabled = self._mes_hook.is_channel_scan_disabled(self.channel_id)
+                has_scanner = self._mes_hook.has_any_scanner_present()
+                should_warn_no_barcode = bool(has_scanner and not scan_disabled)
+        except Exception:
+            should_warn_no_barcode = False
+
         # 结束当前周期并记录到数据库
         self.end_cycle(
             is_good=is_good,
@@ -204,6 +215,7 @@ class EventTriggerMixin:
             'show_notification': event.get('show_notification', False),
             'toast_id': event.get('toast_id', 'ok' if event.get('id') == 1 else 'ng' if event.get('id') == 2 else 'ok'),
             'had_workpiece': had_workpiece,
+            'should_warn_no_barcode': should_warn_no_barcode,
         })
         
         # 触发报警器（如果已配置）— 按通道路由到对应工位的指示灯

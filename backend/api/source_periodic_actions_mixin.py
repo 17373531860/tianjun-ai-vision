@@ -95,14 +95,27 @@ class PeriodicActionsMixin:
                 'overdue_event_id': raw.get('overdue_event_id'),
                 'overdue_repeat': raw.get('overdue_repeat', 'every_cycle'),
                 'channel_filter': raw.get('channel_filter'),
+                # v3.5.2: 是否在每次"开始检测"时立刻触发一次到期提醒
+                # (典型场景: 开机首检 = 必须先做一次清洁/标定 才能正式投产).
+                'run_on_start': bool(raw.get('run_on_start', False)),
                 # 运行时状态（每条 rule 独立）
                 'last_overdue_count': -1,
             })
 
+        # v3.5.2: 临时诊断
+        prev_counters = dict(getattr(self, '_periodic_counters', {}) or {})
         self._periodic_actions = parsed
         self._periodic_counters: Dict[str, int] = {r['id']: 0 for r in parsed}
+        # v3.5.2: 开机首检 — 一组待判定的 rule_id 集合, 在第一个步骤完成时清算.
+        # _run_periodic_actions_on_start 时填充, _check_periodic_actions_on_first_step 时清算并触发事件.
+        if not hasattr(self, '_run_on_start_pending') or not isinstance(getattr(self, '_run_on_start_pending', None), set):
+            self._run_on_start_pending = set()
 
         self._restore_periodic_counters(config)
+        # v3.5.2: 临时诊断 — apply 前后 counter 变化
+        if parsed:
+            print(f"[PeriodicActions/DBG] _apply_periodic_actions ch{getattr(self, 'channel_id', 0)}: "
+                  f"prev={prev_counters} → reset → restored={self._periodic_counters}")
 
         if parsed:
             print(f"[PeriodicActions] ch{getattr(self, 'channel_id', 0)} "
@@ -159,6 +172,11 @@ class PeriodicActionsMixin:
     def _check_periodic_actions(self, cycle_steps: List[str], is_good: bool) -> None:
         """每 cycle_end 后调一次。遍历所有规则 → 计数 / 重置 / 触发事件"""
         rules = getattr(self, '_periodic_actions', None)
+        # v3.5.2: 临时诊断日志
+        print(f"[PeriodicActions/DBG] _check_periodic_actions called: "
+              f"rules_count={len(rules) if rules else 0}, "
+              f"cycle_steps={cycle_steps}, is_good={is_good}, "
+              f"counters={getattr(self, '_periodic_counters', None)}")
         if not rules:
             return
 
@@ -203,6 +221,9 @@ class PeriodicActionsMixin:
                 counter += 1
                 self._periodic_counters[rule['id']] = counter
                 changed = True
+                # v3.5.2: 临时诊断
+                print(f"[PeriodicActions/DBG] '{rule['name']}' counter += 1 → {counter} "
+                      f"(interval={interval}, did_trigger={did_trigger})")
 
             # ---- 通知触发 ----
             if counter == interval and rule.get('due_warning_event_id'):
@@ -221,6 +242,117 @@ class PeriodicActionsMixin:
 
         if changed:
             self._persist_periodic_counters()
+
+    # ============================================================
+    # 开机首检 — start_detection 时调用
+    # ============================================================
+
+    def _run_periodic_actions_on_start(self) -> None:
+        """每次 start_detection / resume / resume_inference 调一次.
+
+        把所有 `run_on_start=true` 的规则 counter 推到 interval (= 到期),
+        让 Monitor 进度条立刻显示"已到期 20/20"红黄状态. 但 **不立即触发**
+        toast / 报警 / 计数器事件 — 等开机后**第一个步骤完成**时, 在
+        `_check_periodic_actions_on_first_step(label)` 里清算:
+
+        - 第一个完成的步骤 ∈ trigger_labels → 静默 reset, 表示"客户记得做首件".
+        - 第一个完成的步骤 ∉ trigger_labels → 立刻 emit overdue (或 due) 事件,
+          告诉客户"先做首件再继续".
+
+        这就是 v3.5.2 调整后的语义 — 客户做的"第一个动作"不是 trigger_step
+        就立即提醒. 多次 start (比如停了又开) 都会重新把规则填回 pending 集合,
+        重新让 Monitor 进入"已到期"状态等待下一次判定.
+        """
+        rules = getattr(self, '_periodic_actions', None)
+        if not rules:
+            return
+
+        on_start_rules = [r for r in rules if r.get('run_on_start')]
+        if not on_start_rules:
+            return
+
+        if not hasattr(self, '_run_on_start_pending') or not isinstance(self._run_on_start_pending, set):
+            self._run_on_start_pending = set()
+
+        changed = False
+        for rule in on_start_rules:
+            channel_filter = rule.get('channel_filter')
+            if channel_filter and getattr(self, 'channel_id', 0) not in channel_filter:
+                continue
+            counter_before = self._periodic_counters.get(rule['id'], 0)
+            interval = rule['interval']
+            if counter_before < interval:
+                self._periodic_counters[rule['id']] = interval
+                rule['last_overdue_count'] = -1  # 重置 cooldown 让首次 overdue 能弹
+                changed = True
+
+            self._run_on_start_pending.add(rule['id'])
+            print(f"[PeriodicActions] '{rule['name']}' run_on_start: "
+                  f"counter {counter_before} → {self._periodic_counters[rule['id']]}, "
+                  f"等待首个步骤判定 (开机首检, pending={list(self._run_on_start_pending)})")
+
+        if changed:
+            try:
+                self._persist_periodic_counters()
+            except Exception as e:
+                print(f"[PeriodicActions] run_on_start 持久化失败: {e}")
+
+    def _check_periodic_actions_on_first_step(self, step_label: str) -> None:
+        """开机首检判定 — 在每个步骤完成时调用.
+
+        遍历 `_run_on_start_pending` 中的规则:
+        - step_label ∈ rule.trigger_labels → 静默 reset (counter=0)
+        - 否则 → emit overdue / due 事件
+        无论哪条路径, 该 rule 都从 pending 集合移除 (一次性判定).
+        """
+        if not step_label:
+            return
+        pending = getattr(self, '_run_on_start_pending', None)
+        if not pending:
+            return
+
+        rules = getattr(self, '_periodic_actions', None) or []
+        # 用 dict 加速查找
+        rules_by_id = {r['id']: r for r in rules}
+        changed = False
+
+        for rid in list(pending):
+            rule = rules_by_id.get(rid)
+            if not rule:
+                pending.discard(rid)
+                continue
+
+            channel_filter = rule.get('channel_filter')
+            if channel_filter and getattr(self, 'channel_id', 0) not in channel_filter:
+                pending.discard(rid)
+                continue
+
+            if step_label in rule['trigger_labels']:
+                # 客户做了首件 trigger_step — 静默重置
+                self._periodic_counters[rid] = 0
+                rule['last_overdue_count'] = -1
+                changed = True
+                print(f"[PeriodicActions] '{rule['name']}' 开机首检通过: "
+                      f"客户做了 '{step_label}', counter → 0")
+            else:
+                # 不是 trigger_step — 立即触发提醒
+                target_event = rule.get('overdue_event_id') or rule.get('due_warning_event_id')
+                if target_event:
+                    self._emit_periodic_notification(
+                        target_event,
+                        f"{rule['name']} 开机首检：第一个动作是 '{step_label}', "
+                        f"请先执行首件检"
+                    )
+                else:
+                    print(f"[PeriodicActions] '{rule['name']}' 首检失败 ('{step_label}' "
+                          f"非 trigger), 但未配事件, 仅静默")
+            pending.discard(rid)
+
+        if changed:
+            try:
+                self._persist_periodic_counters()
+            except Exception as e:
+                print(f"[PeriodicActions] on_first_step 持久化失败: {e}")
 
     def _should_trigger_overdue(self, rule: Dict[str, Any], counter: int) -> bool:
         """根据 overdue_repeat 决定是否触发本次 overdue 事件"""
@@ -278,6 +410,8 @@ class PeriodicActionsMixin:
             'show_notification': event.get('show_notification', True),
             'toast_id': event.get('toast_id', 'ng'),
             'had_workpiece': False,
+            # v3.5.2: 周期性强制动作和扫码绑定无关, 后端权威告知前端"不要弹未绑码 toast"
+            'should_warn_no_barcode': False,
             'source': 'periodic_action',
         })
 

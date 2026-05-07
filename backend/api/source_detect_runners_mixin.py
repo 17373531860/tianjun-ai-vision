@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from backend.api.source_sdk_loader import debug_log
+from backend.api.source_geometry import clip_bbox_normalized
 
 
 class DetectRunnersMixin:
@@ -121,12 +122,13 @@ class DetectRunnersMixin:
                         if step_threshold is not None and confidence < step_threshold:
                             continue
                     
-                    # 记录检测结果（归一化坐标）
+                    # 记录检测结果（归一化坐标 + [0,1] clip 防越界）
+                    nx, ny, nw, nh = clip_bbox_normalized(x1, y1, x2, y2, w, h)
                     det = {
-                        'x': float(x1 / w),
-                        'y': float(y1 / h),
-                        'w': float((x2 - x1) / w),
-                        'h': float((y2 - y1) / h),
+                        'x': nx,
+                        'y': ny,
+                        'w': nw,
+                        'h': nh,
                         'confidence': confidence,
                         'class_id': class_id,
                         'label': class_name
@@ -211,9 +213,9 @@ class DetectRunnersMixin:
                         if thr is not None and confidence < thr:
                             continue
                     
+                    nx, ny, nw, nh = clip_bbox_normalized(x1, y1, x2, y2, w, h)
                     det = {
-                        'x': float(x1 / w), 'y': float(y1 / h),
-                        'w': float((x2 - x1) / w), 'h': float((y2 - y1) / h),
+                        'x': nx, 'y': ny, 'w': nw, 'h': nh,
                         'confidence': confidence, 'class_id': class_id,
                         'label': class_name, 'track_id': track_id
                     }
@@ -291,9 +293,9 @@ class DetectRunnersMixin:
                         if thr is not None and confidence < thr:
                             continue
                     
+                    nx, ny, nw, nh = clip_bbox_normalized(x1, y1, x2, y2, w, h)
                     det = {
-                        'x': float(x1 / w), 'y': float(y1 / h),
-                        'w': float((x2 - x1) / w), 'h': float((y2 - y1) / h),
+                        'x': nx, 'y': ny, 'w': nw, 'h': nh,
                         'confidence': confidence, 'class_id': class_id, 'label': class_name
                     }
                     if has_masks:

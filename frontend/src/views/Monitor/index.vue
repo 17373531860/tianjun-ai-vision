@@ -1620,10 +1620,12 @@ const processChannelResult = (ch, d) => {
       showMultiToast(ch, toastId, event.event_name, event.reason);
 
       const warnCfg = systemStore.detection.toasts?.warn_no_barcode;
-      // v3.4.2 hotfix: 禁用扫码的工位回退到项目原生结算, 不应再弹"未绑码" toast
-      // (用户已经主动选了"我现在不要扫码", 出现 OK/NG 是正常的, 不是缺扫码错误).
-      // v3.5.2: MES → 扫码器列表为空(连虚拟扫码器都没创建) → 同样静默, 没扫码功能就不该提示.
-      if (warnCfg?.enabled && !event.had_workpiece && !isScanDisabledFor(ch - 1) && hasScannerFor(ch - 1)) {
+      // v3.5.2: 直接读后端权威判定, 不再做客户端守门 (避免索引错位/缓存竞态).
+      // 老后端缺该字段时按"未绑码 + 没有显式静默"逻辑保持原行为兼容.
+      const _shouldWarn = event.should_warn_no_barcode !== undefined
+        ? !!event.should_warn_no_barcode
+        : !event.had_workpiece;
+      if (warnCfg?.enabled && _shouldWarn) {
         setTimeout(() => {
           showMultiToast(ch, 'warn_no_barcode', warnCfg.text || '⚠ 未绑码', warnCfg.subText || '本次结算未绑定工件条码');
         }, 300);
@@ -1674,6 +1676,16 @@ const updateMultiCharts = () => {
   // Data-driven rendering via template — no separate ECharts needed for multi-view
 };
 
+// v3.5.2: 把归一化 bbox clip 到 [0, 1] 防越界, 兜底后端推理/Kalman 滤波偶发飘出
+// 即使后端漏 clip, 前端也保证框永远画在画面内
+const clipNormalizedBox = (det) => {
+  const x = Math.max(0, Math.min(1, Number(det.x) || 0));
+  const y = Math.max(0, Math.min(1, Number(det.y) || 0));
+  const w = Math.max(0, Math.min(1 - x, Number(det.w) || 0));
+  const h = Math.max(0, Math.min(1 - y, Number(det.h) || 0));
+  return { x, y, w, h };
+};
+
 const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null) => {
   if (!canvas) return;
   const parent = canvas.parentElement;
@@ -1695,13 +1707,16 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null) => {
   detections.forEach(det => {
     if (det.hidden) return;
     if (hiddenLabels && det.label && hiddenLabels.has(det.label)) return;
-    const x = det.x * dw + dx, y = det.y * dh + dy;
-    const w = det.w * dw, h = det.h * dh;
+    const cb = clipNormalizedBox(det);
+    const x = cb.x * dw + dx, y = cb.y * dh + dy;
+    const w = cb.w * dw, h = cb.h * dh;
     const color = det.is_ng ? '#ef4444' : '#10b981';
     if (det.mask && Array.isArray(det.mask) && det.mask.length > 2) {
       ctx.beginPath();
       det.mask.forEach((pt, i) => {
-        const mx = pt[0] * dw + dx, my = pt[1] * dh + dy;
+        const mxN = Math.max(0, Math.min(1, Number(pt[0]) || 0));
+        const myN = Math.max(0, Math.min(1, Number(pt[1]) || 0));
+        const mx = mxN * dw + dx, my = myN * dh + dy;
         if (i === 0) ctx.moveTo(mx, my); else ctx.lineTo(mx, my);
       });
       ctx.closePath();
@@ -2618,10 +2633,11 @@ const drawDetections = (detections) => {
     if (!enabledLabels.has(det.label)) return;
     if (det.hidden) return;
     if (hiddenLabels.has(det.label)) return;
-    const x = offsetX + det.x * renderW;
-    const y = offsetY + det.y * renderH;
-    const w = det.w * renderW;
-    const h = det.h * renderH;
+    const cb = clipNormalizedBox(det);
+    const x = offsetX + cb.x * renderW;
+    const y = offsetY + cb.y * renderH;
+    const w = cb.w * renderW;
+    const h = cb.h * renderH;
     
     const color = det.is_ng ? ngColor : boxColor;
     
@@ -2629,8 +2645,10 @@ const drawDetections = (detections) => {
     if (det.mask && Array.isArray(det.mask) && det.mask.length > 2) {
       ctx.beginPath();
       det.mask.forEach((pt, i) => {
-        const mx = offsetX + pt[0] * renderW;
-        const my = offsetY + pt[1] * renderH;
+        const mxN = Math.max(0, Math.min(1, Number(pt[0]) || 0));
+        const myN = Math.max(0, Math.min(1, Number(pt[1]) || 0));
+        const mx = offsetX + mxN * renderW;
+        const my = offsetY + myN * renderH;
         if (i === 0) ctx.moveTo(mx, my);
         else ctx.lineTo(mx, my);
       });
@@ -3584,9 +3602,11 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
         showToastById(toastId, event.event_name, event.reason);
         
         const warnCfg = systemStore.detection.toasts?.warn_no_barcode;
-        // v3.4.2 hotfix: 禁用扫码的工位回退到项目原生结算, 不应再弹"未绑码" toast
-        // v3.5.2: MES → 扫码器列表为空 → 同样静默
-        if (warnCfg?.enabled && !event.had_workpiece && !isScanDisabledFor(selectedChannel) && hasScannerFor(selectedChannel)) {
+        // v3.5.2: 直接读后端权威判定 should_warn_no_barcode (统一判定来源).
+        const _shouldWarn = event.should_warn_no_barcode !== undefined
+          ? !!event.should_warn_no_barcode
+          : !event.had_workpiece;
+        if (warnCfg?.enabled && _shouldWarn) {
           setTimeout(() => {
             showToastById('warn_no_barcode', warnCfg.text || '⚠ 未绑码', warnCfg.subText || '本次结算未绑定工件条码');
           }, 300);

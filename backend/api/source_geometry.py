@@ -18,6 +18,30 @@ from typing import List, Sequence
 from PIL import ImageFont
 
 
+def clip_bbox_normalized(x1: float, y1: float, x2: float, y2: float,
+                          w: float, h: float) -> tuple:
+    """像素坐标 (x1,y1,x2,y2) → 归一化 (x,y,w,h)，并 clip 到 [0, 1]。
+
+    防御性边界处理，避免以下情况让框跑到画面外：
+      - 模型输出 letterbox 边界外的像素值 (理论上 ultralytics 会 clip, 但兜底)
+      - 浮点除法误差导致 x+w > 1.0 (例: 1.000000001)
+      - 后续 Kalman 滤波/坐标变换累积误差
+
+    Args:
+        x1,y1,x2,y2: 像素坐标 (左上 / 右下)
+        w,h: 帧的 宽度 / 高度 (像素)
+    Returns:
+        (nx, ny, nw, nh): 归一化坐标, 保证 0 <= nx, nx+nw <= 1, 0 <= ny, ny+nh <= 1
+    """
+    if w <= 0 or h <= 0:
+        return 0.0, 0.0, 0.0, 0.0
+    nx = max(0.0, min(1.0, float(x1) / w))
+    ny = max(0.0, min(1.0, float(y1) / h))
+    nx2 = max(0.0, min(1.0, float(x2) / w))
+    ny2 = max(0.0, min(1.0, float(y2) / h))
+    return nx, ny, max(0.0, nx2 - nx), max(0.0, ny2 - ny)
+
+
 def bbox_iou(a: dict, b: dict) -> float:
     """两个 {x,y,w,h} 框的 IoU，归一化坐标。"""
     ax1, ay1, ax2, ay2 = a['x'], a['y'], a['x'] + a['w'], a['y'] + a['h']
