@@ -484,41 +484,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         apply_project_config(self, config)
 
     
-    def _release_model(self):
-        """释放模型和 GPU 资源"""
-        try:
-            import torch
-            import gc
-            
-            # 先关闭推理线程池
-            self._shutdown_inference_executor()
-            
-            if self.model is not None:
-                print("[资源释放] 开始释放模型资源...")
-                
-                # 1. 等待 CUDA 操作完成
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                
-                del self.model
-                self.model = None
-                self.model_task = 'detect'
-                
-                # 3. Python 垃圾回收
-                gc.collect()
-                
-                # 4. 清理 CUDA 缓存
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    # 获取显存使用情况
-                    allocated = torch.cuda.memory_allocated() / 1024**2
-                    cached = torch.cuda.memory_reserved() / 1024**2
-                    print(f"[资源释放] 显存状态: 已分配={allocated:.1f}MB, 缓存={cached:.1f}MB")
-                
-                print("[资源释放] 模型资源已释放")
-        except Exception as e:
-            print(f"[资源释放] 释放模型时出错: {e}")
-    
+    # _release_model 已迁至 ModelLoadMixin (Step 3 feat/multi-model-roi-link).
+    # mixin 实现保持原行为 100% 兼容, 末尾增加 _mirror_host_to_main() 同步 main slot.
+
     def _supplement_step_durations(self):
         """Supplement step_durations for steps still being tracked at settle time.
         Must be called BEFORE clearing step_last_seen / step_start_time."""
