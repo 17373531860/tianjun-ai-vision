@@ -1058,6 +1058,16 @@ def get_detection_results(channel: int = Query(0)):
         except Exception:
             pass
 
+    # v3.5.2: 透出"系统是否注册任何扫码器(含虚拟)"标记 - 放在 MES Hook
+    # 启用判断之外, 让前端任何模式下都能据此屏蔽"⚠ 未绑码"信息条/toast.
+    try:
+        if mgr._mes_hook is not None:
+            mes_data['scanner_present'] = bool(
+                mgr._mes_hook.has_any_scanner_present()
+            )
+    except Exception:
+        pass
+
     if mes_data:
         result['mes'] = mes_data
 

@@ -34,7 +34,7 @@
             {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(ch - 1).status] || getDisplayWorkpieceFor(ch - 1).status }}
           </el-tag>
         </div>
-        <div v-if="!isScanDisabledFor(ch - 1) && getMesDataFor(ch - 1)?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-1 bg-yellow-600/30 border border-yellow-500 rounded px-2 py-0.5">
+        <div v-if="!isScanDisabledFor(ch - 1) && hasScannerFor(ch - 1) && getMesDataFor(ch - 1)?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-1 bg-yellow-600/30 border border-yellow-500 rounded px-2 py-0.5">
           <span class="text-yellow-300 font-bold">⚠ 未绑码</span>
           <span class="text-yellow-200">请扫描工件条码</span>
         </div>
@@ -261,7 +261,7 @@
               {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(ch - 1).status] || getDisplayWorkpieceFor(ch - 1).status }}
             </span>
           </template>
-          <template v-else-if="getMesDataFor(ch - 1)?.warn_no_barcode">
+          <template v-else-if="hasScannerFor(ch - 1) && getMesDataFor(ch - 1)?.warn_no_barcode">
             <span class="warn-no-barcode-blink text-yellow-300 font-bold w-full text-center">⚠ 未绑码 请扫描</span>
           </template>
           <template v-else>
@@ -299,10 +299,10 @@
               {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(selectedChannel).status] || getDisplayWorkpieceFor(selectedChannel).status }}
             </el-tag>
           </div>
-          <div v-if="!isScanDisabledFor(selectedChannel) && getMesDataFor(selectedChannel)?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-1 bg-yellow-600/30 border border-yellow-500 rounded px-2 py-0.5 text-xs">
+          <div v-if="!isScanDisabledFor(selectedChannel) && hasScannerFor(selectedChannel) && getMesDataFor(selectedChannel)?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-1 bg-yellow-600/30 border border-yellow-500 rounded px-2 py-0.5 text-xs">
             <span class="text-yellow-300 font-bold">⚠ 未绑码</span>
           </div>
-          <div v-else-if="!isScanDisabledFor(selectedChannel) && !getDisplayWorkpieceFor(selectedChannel) && !getMesDataFor(selectedChannel)?.order" class="text-gray-500 text-xs">等待扫码...</div>
+          <div v-else-if="!isScanDisabledFor(selectedChannel) && hasScannerFor(selectedChannel) && !getDisplayWorkpieceFor(selectedChannel) && !getMesDataFor(selectedChannel)?.order" class="text-gray-500 text-xs">等待扫码...</div>
           <div v-if="isScanDisabledFor(selectedChannel)" class="flex items-center gap-1 text-gray-400 italic text-xs">
             <span>⛔ 扫码已禁用 · 走项目原生结算</span>
           </div>
@@ -786,7 +786,7 @@
             良率 {{ mesData.order.yield_rate ?? '-' }}%
           </span>
         </div>
-        <div v-if="!isScanDisabledFor(selectedChannel) && mesData.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-2 bg-yellow-600/30 border border-yellow-500 rounded px-3 py-1">
+        <div v-if="!isScanDisabledFor(selectedChannel) && hasScannerFor(selectedChannel) && mesData.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-2 bg-yellow-600/30 border border-yellow-500 rounded px-3 py-1">
           <span class="text-yellow-300 font-bold text-base">⚠ 未绑码</span>
           <span class="text-yellow-200 text-sm">请扫描工件条码</span>
         </div>
@@ -1064,6 +1064,11 @@ const scannerDisableStore = useScannerDisableStore();
 
 // v3.4.2 "禁用扫码"按工位开关 helper
 const isScanDisabledFor = (ch) => scannerDisableStore.isChannelDisabled(ch);
+// v3.5.2: "MES → 扫码器"中如果根本没创建任何扫码器(连虚拟扫码器都没有),
+// 检测中心就不该再弹"⚠ 未绑码"信息条/toast.
+// 后端在 mes.scanner_present 字段透出该状态; 老后端/未启用 MES 时
+// 字段缺失, 此处默认按"有"处理保持向后兼容(即原有行为不变).
+const hasScannerFor = (ch) => getMesDataFor(ch)?.scanner_present !== false;
 async function toggleScanDisableFor(ch) {
   if (scannerDisableStore.toggling) return;
   const targetDisabled = !isScanDisabledFor(ch);
@@ -1617,7 +1622,8 @@ const processChannelResult = (ch, d) => {
       const warnCfg = systemStore.detection.toasts?.warn_no_barcode;
       // v3.4.2 hotfix: 禁用扫码的工位回退到项目原生结算, 不应再弹"未绑码" toast
       // (用户已经主动选了"我现在不要扫码", 出现 OK/NG 是正常的, 不是缺扫码错误).
-      if (warnCfg?.enabled && !event.had_workpiece && !isScanDisabledFor(ch - 1)) {
+      // v3.5.2: MES → 扫码器列表为空(连虚拟扫码器都没创建) → 同样静默, 没扫码功能就不该提示.
+      if (warnCfg?.enabled && !event.had_workpiece && !isScanDisabledFor(ch - 1) && hasScannerFor(ch - 1)) {
         setTimeout(() => {
           showMultiToast(ch, 'warn_no_barcode', warnCfg.text || '⚠ 未绑码', warnCfg.subText || '本次结算未绑定工件条码');
         }, 300);
@@ -1976,7 +1982,7 @@ function shouldShowMesBarFor(ch) {
   const wp = getDisplayWorkpieceFor(ch);
   if (wp) return true;
   if (mes?.order) return true;
-  if (mes?.warn_no_barcode) return true;
+  if (mes?.warn_no_barcode && hasScannerFor(ch)) return true;
   if (workpieceOverridesByCh.value[ch] === null) return true;  // 显示"等待扫码"
   // v3.1.3: 多工位下只要工位在跑就显示信息条 (默认 "等待扫码..."),
   // 让客户能直观看到这一栏的存在 (单工位另有路径已显示)
@@ -3579,7 +3585,8 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
         
         const warnCfg = systemStore.detection.toasts?.warn_no_barcode;
         // v3.4.2 hotfix: 禁用扫码的工位回退到项目原生结算, 不应再弹"未绑码" toast
-        if (warnCfg?.enabled && !event.had_workpiece && !isScanDisabledFor(selectedChannel)) {
+        // v3.5.2: MES → 扫码器列表为空 → 同样静默
+        if (warnCfg?.enabled && !event.had_workpiece && !isScanDisabledFor(selectedChannel) && hasScannerFor(selectedChannel)) {
           setTimeout(() => {
             showToastById('warn_no_barcode', warnCfg.text || '⚠ 未绑码', warnCfg.subText || '本次结算未绑定工件条码');
           }, 300);

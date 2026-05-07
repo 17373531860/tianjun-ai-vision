@@ -482,6 +482,9 @@ class MESHookManager:
         # v3.4.2 守门点: 工位禁用 → 不再弹"未扫码"警告.
         if self.is_channel_scan_disabled(channel_id):
             return False
+        # v3.5.2 守门点: 系统中没有任何扫码器（连虚拟扫码器都没有）→ 也不再弹.
+        if not self.has_any_scanner_present():
+            return False
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
@@ -491,6 +494,24 @@ class MESHookManager:
         except Exception as e:
             print(f"[MES] is_warn_no_barcode 异常: {e}", flush=True)
         return False
+
+    def has_any_scanner_present(self) -> bool:
+        """系统中是否注册了至少一个扫码器（含虚拟扫码器）。
+
+        用于 Monitor 端"未绑码"提示的全局守门：连一个扫码器条目都没有
+        意味着用户根本不打算用扫码功能，不应再弹"⚠ 未绑码"。
+
+        判定来源 = ScannerService._connections（含数据库 enabled 的扫码器
+        + 用户在 WMax 面板启动的虚拟设备 device_id=-999）。
+        """
+        try:
+            from backend.services.scanner import get_scanner_service
+            svc = get_scanner_service()
+            return bool(svc._connections)
+        except Exception as e:
+            print(f"[MES] has_any_scanner_present 异常: {e}", flush=True)
+            # 出现异常时保守地认为"有扫码器"，维持原有提示行为，避免误屏蔽
+            return True
 
     def get_last_scan_event(self, channel_id: int) -> Optional[dict]:
         """返回最近扫码事件（供轮询接口消费，前端去重）"""
