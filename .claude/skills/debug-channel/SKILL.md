@@ -1,225 +1,300 @@
 ---
 name: debug-channel
-description: "诊断多工位/多通道问题：ChannelManager 通道隔离、GPU分配、共享模型、通道间串扰、多通道视频推流。当多工位模式下某个通道异常或通道间数据串扰时使用。"
+description: "诊断多工位/多通道问题：ChannelManager 通道隔离、GPU分配、模型独立实例、通道间串扰、多通道视频推流。当多工位模式下某个通道异常或通道间数据串扰时使用。"
 argument-hint: "[问题描述]"
 model: opus
 effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent"
 ---
 
-# debug-channel: 多工位/多通道诊断
+# debug-channel: 多工位/多通道诊断（v3.5.x）
 
-你正在诊断天军AI视觉检测系统的 **多通道管理模块**。
+你正在诊断天军 AI 视觉检测系统的 **多通道管理模块（ChannelManager）**。
 
 用户问题: $ARGUMENTS
 
-## 架构
+## 一、模块定位
 
-```
-ChannelManager (backend/api/channel_manager.py ~318行)
-  └── channels: Dict[int, VideoSourceManager]
-      ├── channel 0: VideoSourceManager 实例
-      ├── channel 1: VideoSourceManager 实例
-      ├── channel 2: VideoSourceManager 实例 (4通道模式)
-      └── channel 3: VideoSourceManager 实例 (4通道模式)
-```
+| 项 | 值 |
+|---|---|
+| 后端单例 | `backend/api/channel_manager.py`（374 行，单例 `channel_manager`） |
+| 后端实例（每通道一个） | `VideoSourceManager`（`backend/api/source.py`，15 mixin + 6 has-a 组件） |
+| 路由文件 | `backend/api/source_routes.py`（1279 行，所有 `/source/*` 端点都接受 `?channel=N`） |
+| 工位 API | `/api/v1/workstations/*`（`channel_manager.py` 内 router） |
+| 视频流端点 | `/video_feed?channel=N`（注意：**挂在 `backend/main.py`，不带 `/api/v1` 前缀**） |
+| 持久化文件 | `backend/data/workstation_config.json` |
+| 前端入口 | `frontend/src/views/Source/index.vue`（配置）+ `Monitor/index.vue`（运行/显示） |
+| 前端 store | **无独立 channel store**；多通道运行时 state 直接在 `Monitor/index.vue` 的 `multiChannelData` ref（数组，下标=channel_id） |
 
-## ChannelManager 核心逻辑
+> 核心不变量（AGENTS.md 第八节 #4）：`channel_manager.set_channel_count()` 在降工位时**必须**调 `mes_hook.on_channel_removed(cid)` + `alarm_router.on_channel_removed(cid)`，否则 MES dict 残留 / 报警串口被占。
+
+---
+
+## 二、ChannelManager 真相（v3.5.x）
 
 ```python
 class ChannelManager:
-    channels: Dict[int, VideoSourceManager]
-    _shared_model = None          # 共享模型实例
-    _model_cache: Dict[str, Any]  # GPU级模型缓存
-    
-    # 通道管理
-    get(channel_id) → VideoSourceManager
-    get_default() → channels[0]
-    active_channels() → list of active channel ids
-    set_channel_count(count)  # 1, 2, 或 4
-    
-    # 模型管理
-    load_shared_model(model_path)       # 一次加载，所有通道共享
-    load_model_for_channel(ch, path)    # 每通道独立加载 + GPU缓存
-    _propagate_model(model)             # 分发共享模型到各通道
+    channel_count: int = 1                          # 1, 2, 或 4
+    channels: Dict[int, VideoSourceManager]         # 默认 {0: VSM(channel_id=0)}
+    _lock: threading.Lock                           # 通道增删锁
+    _model_lock: threading.Lock                     # 模型加载锁
+
+    # 通道访问
+    get(channel_id) -> VideoSourceManager           # 找不到抛 ValueError
+    get_default() -> channels[0]
+    active_channels() -> List[int]                  # sorted
+
+    # 生命周期
+    set_channel_count(count)                        # 1/2/4，含降级清理 + 升级新建
+    stop_all()
+
+    # 模型加载（v3.5.x 关键改动）
+    load_shared_model(path, device='auto')          # 给所有通道各加载一份独立实例
+    load_model_for_channel(ch, path, device='auto') # 单通道加载独立实例
+    _propagate_model(channel_id)                    # 已变成 no-op（return 直接退出）
+
+    # GPU
+    get_gpu_allocation() -> {ch_id: device}         # 每通道 mgr.device 字符串
+
+    # 持久化
+    _save_config()                                  # 仅 set_channel_count 调；只写 channel_count
+    save_channel_source(ch_id, cfg, merge=True)     # 写 channels.{id}.* 字段，不写 channel_count
+    get_channel_sources() -> dict                   # 读 channels 字典
 ```
 
-## 配置存储
+**模型语义（关键纠错）**：旧文档说 `_shared_model` / `_model_cache` 是共享对象 — **不存在**。当前实现是：
+
+- `load_shared_model("a.pt")` 实际是"路径相同、对象独立"：循环为每个通道调 `_load_model_for_channel_locked` 各加载一份。
+- 每通道独立 `mgr.model` 实例，避免推理线程跨通道竞争。
+- `_propagate_model` 已是 no-op，源码注释明确：*"model instances are no longer propagated/shared across channels"*。
+- 因此**不存在"一个通道释放模型影响其他通道"的问题**（反过来，**省显存的方式只能靠 FP16 / TRT engine / 限制工位数**）。
+
+---
+
+## 三、通道隔离机制
+
+每个通道是独立的 `VideoSourceManager`，`__init__(channel_id=N)` 时：
+
+| 独立 | 共享 |
+|---|---|
+| 视频采集线程 / 队列 / 帧缓存 | FastAPI 进程 |
+| 推理线程池（`source_inference_executor`）| SQLite 数据库（按 `channel` 字段隔离记录） |
+| 模型实例 `mgr.model`（含 device） | `MESHookManager` 单例（按 channel_id 分 dict） |
+| Session/Cycle/Step 状态机 | `ScannerService._connections`（key 是 device_id，不是 channel_id） |
+| 计数器 / 事件 log（`events_log`，30 秒窗口） | `ExternalDeviceService._connections`（同上） |
+| FFmpeg 录像管道 | `ClusterCollector`（按 station_id；多通道副机自动加 `-{channel_id}` 后缀） |
+| 画面变换/卡尔曼配置（`per_channel[str(ch)]`） | `AlarmRouter` 的串口（共享模式下多通道共一台灯柱，详见第六节） |
+
+**关键巧妙点**：`set_channel_count` 创建新通道时会把 channel 0 的 `_mes_hook` 引用赋给新 VSM（`new_mgr._mes_hook = self.channels[0]._mes_hook`），保证 4 个通道用同一个 MESHook 单例。
+
+---
+
+## 四、GPU 分配
+
+| 设备字符串 | 含义 |
+|---|---|
+| `auto` | `_resolve_device` → `torch.cuda.is_available()` 时返回 `cuda:0`，否则 `cpu` |
+| `cuda:0` / `cuda:1` / ... | 显式绑定到该 GPU index |
+| `cpu` | 强制 CPU 推理（调试/无显卡用） |
+
+设置方式：
+
+1. `POST /api/v1/workstations/{ch}/gpu` body `{ "device": "cuda:1" }` → 写 `mgr.device`，下次 `load_model` 生效。
+2. `POST /api/v1/source/detection/start?channel=N` 时，`source_routes.py:start_detection` 调 `channel_manager.load_model_for_channel(ch, path, device)`，会用当前 `mgr.device`（或 req 里指定的）加载到对应 GPU。
+3. `GET /api/v1/workstations/gpu-allocation` 看映射。
+
+**显存预算**：4 通道 × YOLOv8s FP32 ≈ 4×400MB；多卡时务必把 ch0/ch1 → cuda:0、ch2/ch3 → cuda:1。**单卡 8G 跑 4 工位会爆**，建议 FP16 + 限制 stream FPS。
+
+---
+
+## 五、多通道视频推流（MJPEG）
+
+- 端点：`GET /video_feed?channel=N`（在 `backend/main.py:929`，**不在 `/api/v1`**）。
+- 实现：`channel_manager.get(channel).generate_mjpeg()`（在 `source.py` 或 `source_streaming_mixin.py`，两者代码重叠是历史拆分残留）。
+- 通道未启动任何源时，不返回 404，而是吐黑底白字"Ch{N} - No Source"占位帧（避免前端 `<img>` 反复闪重连）。
+- `mgr._mjpeg_active_streams` 计数活跃连接，日志带 `ch={channel_index}`。
+- 前端 `Monitor/index.vue` 用 `<img :src="\`${baseURL}/video_feed?channel=${ch}\`">` 直接消费；多通道 + 双缓冲在 v2.6.0/v3.0.0/v3.1.3 多次修过（AGENTS.md 第八节 #7）。
+
+---
+
+## 六、报警共享：`shared_with` 机制（v2.7.3）
+
+多工位**共享同一灯柱**（一根 Modbus 灯柱挂多工位）的实现：
+
+- 配置：在 owner 通道的 alarm 配置里写 `shared_with: [1, 2]`。
+- `AlarmRouter._load_all`（`backend/api/alarm.py:582`）解析 `shared_with` → 在 owner `AlarmManager` 上调 `set_shared_mode(channels=all_chs, ...)` → 把这些 ch 的 `self.managers[ch]` 指向**同一个 manager 实例**。
+- 多通道触发时：每通道调 `alarm_router.trigger_alarm(event_type, channel_id=N)` → 共享 manager 把 `(channel_id, event_type)` 记进 `_channel_states` → `_recompose_and_apply` 按 `priority_order`（默认 `['ng','warn','ok','idle']`）选出最高优事件，发一次串口指令。
+- 降工位时，`AlarmRouter.on_channel_removed(ch)` 区分两种情况：
+  - 共享组里：仅 `mgr._shared_channels.discard(ch)` + 重新合成（不断串口）。
+  - 非共享：完整 `stop_alarm` + `_idle_light_active=False` + `all_off` + `disconnect` + 从 `managers` pop。
+- 序列化：`_save_all` 共享 manager 只按 owner 写一次（`id(mgr)` 去重）。
+
+> 修改报警 / 共享逻辑前必读 `debug-alarm` skill。
+
+---
+
+## 七、配置持久化（workstation_config.json）
 
 ```json
-// backend/data/workstation_config.json
 {
   "channel_count": 4,
   "channels": {
     "0": {
       "source_type": "video",
+      "video_file": "/path/to/x.avi",
       "gpu_device": "cuda:0",
       "project_id": 12,
-      "video_file": "/path/to/video.avi",
-      "was_detecting": false
-    }
+      "was_detecting": true
+    },
+    "1": { ... }
   }
 }
 ```
 
-### 自动保存/恢复 (v2.6.0)
-- **启动时**: `auto_load_active_project()` 按通道 project_id 加载独立项目+模型
-- **启动时**: `auto_restore_video_sources()` 恢复视频源+GPU+检测状态
-- **关闭时**: `cleanup_on_exit()` 保存 was_detecting 标志
-- **通道配置持久化**: `save_channel_source(ch_id, cfg, merge=True/False)`
-- **channel_count 保护**: `_save_config()` 用 `max(file_count, self.channel_count)` 防止热重载覆盖
+| 触发点 | 写入字段 | 备注 |
+|---|---|---|
+| `set_channel_count(n)` → `_save_config` | `channel_count` | **独占写 channel_count**；保留已有 `channels` 字典 |
+| `save_channel_source(ch, cfg, merge=True)` | `channels.{ch}.*` | merge=True 浅合并；**不写 channel_count** |
+| `cleanup_on_exit`（`backend/main.py:654`） | `channels.{ch}.was_detecting` | 进程退出 atexit 钩子，记录"上次是否在检测" |
+| `auto_restore_video_sources`（启动 `main.py:472`） | 读 channels 还原源 + 模型 + 检测状态 | 仅 `was_detecting=true` 的通道自动 start_detection |
+| `auto_load_active_project`（启动 `main.py:401`） | 按通道 project_id 加载项目 | |
 
-## API 端点 (挂载在 /api/v1/workstations)
+**v2.7.2 之后的关键修正**：
+- 旧版 `_save_config` 用 `max(file_count, self.channel_count)` 防热重载覆盖，副作用是工位数只能升不能降。
+- 新版：`_save_config` 仅由 `set_channel_count` 调一次，直接写 `self.channel_count`；`save_channel_source` 不再触碰 `channel_count`。
+- 降工位后 `channels.{1,2,3}` 残留条目不清理，但 `get_channel_sources()` 仅取激活通道用，无副作用。
 
-| 端点 | 功能 |
-|------|------|
-| `GET /workstations/` | 列出所有工位状态 |
-| `POST /workstations/mode` | 设置通道数 (1/2/4) |
-| `POST /workstations/{id}/gpu` | 分配GPU给通道 |
-| `GET /workstations/gpu-allocation` | GPU分配映射 |
-| `GET /workstations/{id}/status` | 单通道状态 |
+---
 
-## 前端多通道逻辑
+## 八、API 速查
 
-### Source 页面 (Source/index.vue)
-- 工位模式选择器: 单机/双工位/四工位
-- **双工位/四工位选项需要开发者模式 (v2.3.0+):** `systemStore.developerMode` 为 true 时才可选，否则禁用
-- 多工位模式: 每通道独立配置视频源、项目、分辨率、FPS
-- `setWorkstationMode(count)` → 后端创建/销毁 VideoSourceManager 实例
+### `/api/v1/workstations/*`（`channel_manager.py`）
 
-### Monitor 页面 (Monitor/index.vue)
-- `getWorkstations()` 获取通道数 → 选择显示模式
-- **双工位:** 每通道独立轮询 `getDetectionResults(channel)`
-- **四工位:** 2x2网格，选中通道显示详情
-- 每通道独立 MJPEG 流: `/video_feed?channel=N`
-- 多通道 MJPEG 用 ReadableStream 解析而非直接 img.src
+| 端点 | 作用 |
+|---|---|
+| `GET /workstations/` | 全工位状态 + `source_configs`（持久化 channels 字典） |
+| `POST /workstations/mode` | `{ channel_count, channels[] }` 改工位数 + 可选每通道 gpu |
+| `POST /workstations/{id}/gpu` | `{ device }` 设单通道 GPU |
+| `GET /workstations/gpu-allocation` | 当前 GPU 映射 |
+| `GET /workstations/{id}/status` | 单通道详细状态 |
+| `PUT /workstations/channel-config` | 持久化单通道源配置（任意字段，merge=False） |
 
-### Detection API (detection.js)
-- 所有检测API都支持 `channel` 查询参数
-- `startDetection(modelPath, conf, iou, channel)`
-- `stopDetection(channel)`, `getDetectionResults(channel)` 等
+### `/api/v1/source/*`（`source_routes.py`）
 
-## 通道隔离机制
+**所有端点都接 `?channel=N`**（默认 0），内部走 `_get_mgr(channel)` → `channel_manager.get(channel)`。覆盖：
 
-每个通道是**独立的 VideoSourceManager 实例**，拥有独立的：
-- 视频采集线程 (_capture_loop)
-- 推理状态变量 (_init_inference_vars)
-- Session/Cycle/Step 记录
-- 计数器
-- 录像管道
+- `/camera/start`, `/camera/stop`, `/rtsp/start`, `/hikvision/start`, `/hcnetsdk/start`, `/video/start`, `/image/set` ...
+- `/detection/start`, `/detection/stop`, `/detection/pause`, `/detection/resume`, `/detection/standby`
+- `/transform/config`, `/kalman/config`（**按通道独立配置**，写到 `per_channel[str(ch)]`）
+- `/detection/results`（实时状态聚合，前端 200ms 轮询）
 
-**但共享：**
-- 同一个 FastAPI 进程
-- 同一个 SQLite 数据库
-- 可能共享 YOLO 模型实例（load_shared_model）
-- 同一个 GPU（除非手动分配不同GPU）
-- MESHookManager 实例（v2.3.0+, 按 channel_id 区分数据）
-- ScannerService 实例（v2.3.0+, 每个扫码器绑定一个 channel_id）
+### 视频流（不在 `/api/v1`）
 
-## 常见问题诊断
+- `GET /video_feed?channel=N` — MJPEG 流
+- `GET /snapshot?channel=N` — 单帧 JPEG
 
-### 通道数据串扰
-1. 检查 API 调用是否传了正确的 `channel` 参数
-2. 确认 `ChannelManager.get(channel)` 返回正确的实例
-3. DB 查询是否按 `channel` 字段筛选
-4. Session/Cycle 记录的 `channel` 字段是否正确写入
+### 调试
 
-### 某个通道不工作
-1. 确认该通道的 VideoSourceManager 已初始化
-2. `set_channel_count()` 是否成功创建实例
-3. 视频源是否独立启动（每通道需要单独 start_xxx）
-4. 模型是否加载到该通道
+- `GET /api/v1/debug/channels` — 每通道 source_type / 运行状态
+- `POST /api/v1/debug/test_cluster_flow?cycle_id=&channel_id=` — 集群链路回放
 
-### GPU 内存不足
-1. 4通道 × 独立模型 = 4份GPU显存占用
-2. 考虑用 `load_shared_model()` 共享模型
-3. 检查 FP16 是否开启节省显存
-4. 检查 GPU 分配: `/workstations/gpu-allocation`
+---
 
-### 多通道视频流卡顿
-1. 前端 200ms 轮询 × 4通道 = 每秒20次API请求
-2. MJPEG ReadableStream 解析的 `findBytes()` 是逐字节搜索
-3. Electron GPU 内存限制可能不够4路解码
-4. 每路 MJPEG 都是独立 HTTP 长连接
+## 九、降工位清理矩阵（v2.7.2 后已接入的）
 
-## 关键文件
-- `backend/api/channel_manager.py` — ChannelManager + API
-- `backend/api/source.py` — VideoSourceManager（每通道一个实例）
-- `backend/data/workstation_config.json` — 通道数配置
-- `backend/main.py` — /video_feed?channel=N 端点
-- `frontend/src/views/Source/index.vue` — 工位模式配置
-- `frontend/src/views/Monitor/index.vue` — 多通道显示
-- `frontend/src/api/detection.js` — 带channel参数的API调用
-
-## 单通道模式 MES 数据传递 (v2.5.0 修复)
-
-**问题**: 单通道模式下 `startPolling` 获取的 `data.mes` 没有赋值到 `multiChannelData.value[0].mes`，导致 `mesData` computed 属性为空。
-
-**修复**: 在 `startPolling` 单通道分支中显式赋值：
-```javascript
-multiChannelData.value[0].mes = data.mes
-```
-
-**影响**: 未绑码 banner、scan toast、MES 信息条都依赖 `mesData`。
-
-## 每通道独立项目 (v2.6.0)
-
-**问题**: 前端 `startDetectionForChannel(ch)` 使用全局 `currentProject` 给所有通道设项目，导致模型类别与步骤不匹配、检测结果被丢弃。
-
-**修复**: `startDetectionForChannel` 优先使用 `multiChannelData[ch].project`（从 `workstation_config` 加载的通道绑定项目），`syncProjectConfig(ch, explicitProject)` 支持传入指定项目。
-
-**前端加载流程**:
-1. `fetchChannelCount()` → `loadPerChannelDetectionSettings(sourceConfigs)` 
-2. 每通道根据 `project_id` 从后端获取完整项目数据 → 存入 `multiChannelData[ch].project`
-3. 启动检测时用该通道绑定的项目，非全局 `currentProject`
-
-## 集群汇总 (v2.6.0)
-
-- `backend/api/cluster.py` + `backend/services/cluster_collector.py`
-- Master/Slave 角色，从机通过 `/cluster/report` 上报数据
-- 多通道从机自动用 `station_id-{channel_id}` 后缀区分通道
-- 主机等齐所有工位后触发 MES 推送
-
-## 外部设备 (v2.6.0)
-
-- `backend/api/external_device.py` + `backend/services/external_device.py`
-- 支持 TCP/Modbus TCP/串口/HTTP 轮询
-- 数据可分发到 ClusterCollector 或 MESGateway extra_fields
-
-## 已知陷阱
-- `_propagate_model` 方法的调用路径不完全清晰
-- 共享模型模式下，一个通道释放模型可能影响其他通道
-- `workstation_config.json` 是简单JSON文件，无并发写保护
-- 前端 `getWorkstations()` 在页面加载时调用一次，后续通道变化不会自动刷新
-- 单通道模式下 `startPolling` 必须手动将 `data.mes` 赋值到 `multiChannelData[0].mes`，否则 MES 相关 UI 全部失效
-- **前端 startDetectionForChannel 必须用通道绑定项目，不能用全局 currentProject，否则所有通道的步骤配置会被覆盖**
-- **channel_count 在 _save_config 中必须用 max(file_count, self.channel_count)，否则热重载时会被覆盖为 1**
-- **MJPEG 四通道必须有 min_interval sleep，否则 CPU 100%**
-- **v2.7.2 起移除 channel_count 的 max() 保护**：之前 `_save_config` 和 `save_channel_source` 都用 `max(file_count, self.channel_count)` 防止热重载覆盖，副作用是工位数永远只能升不能降（从四工位改单工位保存后下次启动仍恢复四工位）。新方案：`_save_config` 直接写 `self.channel_count`（只由 `set_channel_count` 调用一次，值一定正确）；`save_channel_source` 不再写 `channel_count` 字段，由 `set_channel_count` 独占该字段的写入权。
-- **channel_count 降级场景**：从多工位改回单工位时，workstation_config.json 中 channels 字典里 ch1/ch2/ch3 的残留条目不会自动清理，但不影响功能（`get_channel_sources()` 只返回当前激活通道需要的数据）。
-
-## 降工位残留清理（v2.7.2 新增）
-
-**背景**：降工位时若不清理按 `channel_id` 缓存的状态，会导致下次升回工位时新通道被老数据污染（toast 重复弹出、MES 工单错乱、蜂鸣器不停等）。
-
-**已接入清理（`ChannelManager.set_channel_count` 降工位循环自动调用）**：
+`set_channel_count(new_count)` 在降级循环里逐 `cid` 调用：
 
 | 模块 | 清理方法 | 清理内容 |
 |---|---|---|
-| `VideoSourceManager` | `stop_detection()` 里清 `events_log=[]` + `_event_seq=0` | 30 秒事件窗口，防止前端把老事件当新事件 |
-| `MESHookManager` | `on_channel_removed(channel_id)` | 6 个按 channel_id 存的 dict：`_pending_workpiece` / `_pending_queue` / `_active_orders` / `_inspecting_workpiece` / `_last_scan_event` / `_rebind_prompt` |
-| `AlarmRouter` | `on_channel_removed(channel_id)` | `stop_alarm()` + `_idle_light_active=False` + `all_off()` + `disconnect()` + 从 `managers` dict pop |
+| `VideoSourceManager` | `mgr.end_session()` + `mgr.stop()` | session 结尾、采集线程、推理线程 |
+| `MESHookManager` | `on_channel_removed(cid)` | 7 个 dict（`_pending_workpiece` / `_pending_queue` / `_active_orders` / `_inspecting_workpiece` / `_last_scan_event` / `_rebind_prompt` / `_scan_pair_active`）按 channel_id 弹出 |
+| `AlarmRouter` | `on_channel_removed(cid)` | 共享：从 `_shared_channels` 摘；非共享：`stop_alarm` + `all_off` + `disconnect` + pop manager |
 
-**前端同步清理**（`frontend/src/views/Monitor/index.vue` 的 `initMultiChannelData(count)`）：
-- 删除 `multiChannelData` / `multiLastSeenSeq` / `multiFrameNaturalSize` 中超出 `count` 的 key
-- 对 0..count-1 每个通道强制重置（避免切工位时 `_processedEventIds` 与 seq 基线残留）
-
-**刻意不接入清理的 3 个模块（严禁按 channel_id 清理，会误伤硬件配置）**：
+**故意不接入清理的**（按 channel_id 清会误伤硬件层）：
 
 | 模块 | 为什么不清 |
 |---|---|
-| `ScannerService._connections` | dict 的 key 是 **device_id（扫码器 DB 主键）**，不是 channel_id。扫码器配置是硬件层，跨工位切换应保留 |
-| `ExternalDeviceService._connections` | dict 的 key 是 **device_id**（称重、Modbus PLC）。断开后用户还要重新手动连接 |
-| `ClusterCollector._connected_slaves` | dict 的 key 是 **station_id（机器实例 ID）**。与 channel_id 正交，动它会误触发"副机下线" |
+| `ScannerService._connections` | key 是 **device_id**（扫码器 DB 主键），跨工位切换应保留 |
+| `ExternalDeviceService._connections` | key 是 **device_id**（称重/PLC），断开后用户要手动重连 |
+| `ClusterCollector._connected_slaves` | key 是 **station_id**（机器实例），与 channel_id 正交 |
 
-**诊断要点**：如果遇到"切工位后新通道第一周期异常"，先用 `rg on_channel_removed backend/` 确认清理调用路径齐全；再看是否误把设备层清了。
+**前端同步清理**（`Monitor/index.vue` 的 `initMultiChannelData(count)`）：删除 `multiChannelData` / `multiLastSeenSeq` / `multiFrameNaturalSize` 中超出 `count` 的 key；对 0..count-1 强制重置 seq 基线。
+
+---
+
+## 十、常见问题诊断
+
+### 1. 某通道异常（不出图 / 不检测 / 报错）
+
+1. `GET /api/v1/debug/channels` 看 channel 是否真在 `channels` 字典里。
+2. 看后端日志 `[ChannelManager]` / `[MJPEG] ch=N` 行；检查 `set_channel_count` 是否报错。
+3. `channel_manager.get(N).device` 是不是预期 GPU；如果是 `auto` 但 `torch.cuda.is_available()=False` 会 fallback 到 CPU 看上去"很慢"。
+4. 模型有没有加载到该通道：`mgr.model is not None`，看 `_load_model_for_channel_locked` 日志 `[ChannelManager] chN loaded model instance on cuda:X`。
+5. 前端 `Monitor/index.vue` 的轮询 / MJPEG 是否传了正确 `channel=N`。
+
+### 2. 通道间数据串扰（A 通道事件出现在 B 通道）
+
+1. **后端**：检查 API 调用是否传了 `?channel=`；DB 写入是否带 `channel` 字段；Session/Cycle/StepRecord 的 `channel` 是否正确写入。
+2. **共享对象**：模型是独立实例（OK）；MES Hook 是单例**按 channel_id 分 dict**（看 `mes_hooks._pending_workpiece[channel_id]`），如果新加字段忘了按 channel_id 隔离会串。
+3. **报警共享模式**：如果配了 `shared_with`，trigger_alarm 必须传正确 `channel_id`（`_recompose_and_apply` 按 channel_id 路由）。
+4. **集群副机**：多通道副机自动用 `station_id-{channel_id}` 区分，host 端按这个 key 入 `BoxAggregations`。
+5. **前端**：`multiChannelData[ch]` 数组下标是否对齐；`startDetectionForChannel(ch)` 必须用 `multiChannelData[ch].project`，**不能**用全局 `currentProject`（v2.6.0 修过）。
+
+### 3. GPU 显存爆 / OOM
+
+1. v3.5.x 模型实例**不再跨通道复用**（每通道独立 `model`），4 工位 = 4 份显存。
+2. 减分担：`POST /workstations/{id}/gpu`{ device: cuda:1 } 把工位分到第二张卡。
+3. FP16 / TRT engine 在模型管理页转换；同时把 `target_stream_fps` 调到 15。
+4. `ChannelManager._load_model_for_channel_locked` 调 `mgr.load_model(path)` — 如果 load 失败会打 `[ChannelManager] chN 独立模型加载失败`，日志看实际是 OOM 还是路径错。
+
+### 4. 多通道前端 UI 不同步
+
+1. `getDetectionResults(channel)` 必须按通道单独调，多通道下 4 路 200ms 轮询 = 20 req/s，不能合一路。
+2. `multiChannelData[ch].mes` 单通道模式下要在 `startPolling` 单通道分支里手动 `multiChannelData.value[0].mes = data.mes`，否则 MES banner 不显示（v2.5.0 修过）。
+3. 切工位后老 seq 残留 → `initMultiChannelData(count)` 清掉 `multiLastSeenSeq` / `_processedEventIds`。
+4. `getWorkstations()` 仅在页面加载调一次；动态改工位数后端**不会主动推送**前端，需重刷或主动 `fetchChannelCount()`。
+
+### 5. 通道串口/报警残留（升降工位反复后蜂鸣不停）
+
+1. 用 `rg on_channel_removed backend/` 确认 `set_channel_count` 调用链齐全。
+2. 看是否走到 `AlarmRouter.on_channel_removed(cid)`，注意共享模式只摘 channel 不断串口（设计如此）。
+3. 串口被占：先 `stop_all()` → `alarm_router.disconnect_all()` → 再降级。
+
+### 6. 视频流卡顿 / Electron 黑屏
+
+1. 4 路 MJPEG 长连接 + 200ms 轮询 + GPU 解码，Electron 默认 GPU 内存可能不够（看 `electron/main.js` 的 `disable-gpu-memory-buffer-video-frames` / `--max-old-space-size`）。
+2. `target_stream_fps`（`/source/stream/config`）调小。
+3. 后端 `[MJPEG]` 日志看活跃连接数，单通道泄漏会涨到 10+。
+
+---
+
+## 十一、修改前必读 / 关联 skill
+
+- 改 ChannelManager 本身：本 skill + `modify-source`（VSM 内部状态变量依赖链）
+- 改报警共享：`debug-alarm`
+- 改 MES 跨通道隔离：`debug-mes`
+- 改前端多通道显示：`modify-frontend` + `debug-frontend`
+- 改通道持久化字段：`modify-model`（`workstation_config.json` 不入 ORM，但启动恢复链路要测）
+- 集群多通道：`debug-mes`（含 `cluster_collector`）
+
+---
+
+## 十二、参考文件路径
+
+| 文件 | 行数 | 作用 |
+|---|---|---|
+| `backend/api/channel_manager.py` | 374 | `ChannelManager` 单例 + `/workstations/*` |
+| `backend/api/source.py` | 1573 | `VideoSourceManager` 主类 + `_get_mgr` + `/video_feed` 帮助函数 |
+| `backend/api/source_routes.py` | 1279 | 所有 `/source/*` 端点（带 `?channel=`）|
+| `backend/api/alarm.py` | 1009 | `AlarmRouter` + `shared_with` + `_recompose_and_apply` |
+| `backend/api/debug.py` | 118 | `/debug/channels` + 集群链路诊断 |
+| `backend/services/mes_hooks.py` | 1505 | `MESHookManager.on_channel_removed`（7 个 dict） |
+| `backend/main.py` | — | `/video_feed` `/snapshot` + `auto_load_active_project` + `auto_restore_video_sources` + `cleanup_on_exit` |
+| `backend/data/workstation_config.json` | — | 持久化（无并发写保护） |
+| `frontend/src/views/Source/index.vue` | — | 工位模式选择 + 每通道源/项目配置（双工位/四工位需 `systemStore.developerMode`） |
+| `frontend/src/views/Monitor/index.vue` | 4051 | 多通道运行/显示（`multiChannelData` 数组） |
+| `frontend/src/api/detection.js` | — | `getWorkstations` / `setWorkstationMode` / `setChannelGpu` / `getGpuAllocation` |
+
+---
+
+**最后更新**：2026-05-07（v3.5.x 主线 / 实测代码核对）

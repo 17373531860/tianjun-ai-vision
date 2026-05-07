@@ -1,353 +1,321 @@
 ---
 name: api-sync
-description: "前后端API对齐检查：端点路径、请求/响应字段、已知不一致、URL规范。当怀疑前后端数据不对或新增API后需要同步时使用。"
-argument-hint: "[具体的API对齐问题，或 'full-check' 做全量检查]"
+description: "前后端 API 对齐检查（v3.5.x 主线）：19 组 /api/v1/* 路由前缀、前端 16 个 axios 客户端、字段命名、已知不一致与修复流程。怀疑前后端数据不通或新增 API 后必读。"
+argument-hint: "[具体的 API 对齐问题，或 'full-check' 做全量检查]"
 model: opus
 effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent"
 ---
 
-# api-sync: 前后端API对齐检查
+# api-sync — 前后端 API 对齐（v3.5.x）
 
-你正在帮用户检查和修复前后端API的一致性。
+事实源：`AGENTS.md` 第五节（19 组路由前缀）+ `backend/main.py` 末尾的 `app.include_router(...)` 块 + `frontend/src/api/*.js`。
+本 skill 只列**真相**，不要凭记忆改路径。
 
-需求: $ARGUMENTS
+需求：$ARGUMENTS
 
-## 已知的不一致问题
+---
 
-### 1. ~~resetDetection URL 路径不一致~~（v2.7.x 已不再适用）
-- `backend/api/detection.py` 已删，整个 `/detection/*` 前缀不再注册
-- 前端如果还残留 `POST /detection/reset` 调用应直接删或改走 `/source/detection/reset-stats`
+## 0. 不变量（先读这条再做任何事）
 
-### 2. 重复函数
-```javascript
-// detection.js 中:
-getDetectionStatus(channel) → GET /source/detection/results
-getSourceStatus(channel)    → GET /source/detection/results  // 完全相同
-```
+1. **后端所有路由前缀都是 `/api/v1/`，不是 `/api/`**。
+   - 客户/旧 PR/旧 hotfix 看到 `/api/detection/*` 一律视作过期（v2.7.x 已删 `backend/api/detection.py`）。
+   - 等价端点在 `/api/v1/source/detection/*`（`source_routes.py`）。
+2. **前端 axios 实例在 `frontend/src/api/index.js`**：`baseURL = http://localhost:8001/api/v1`。
+   所有 `api.get('/foo')` 实际打 `http://localhost:8001/api/v1/foo`，**前端写路径时不要再加 `/api/v1`**。
+3. **MJPEG / 备份下载走 `getBackendHost()`**（不带 `/api/v1`）：例如 `${getBackendHost()}/video_feed`、`${getBackendHost()}/api/v1/data/videos/{id}`。
+4. **新增端点必须挂到下面 19 组前缀之一**；如果没有合适的，先回到 `add-api-endpoint` skill 决定挂哪儿。
 
-### 3. Vite 代理 vs 直连
-```javascript
-// api/index.js
-getBaseURL()     → 'http://localhost:8001/api/v1'  // 所有API直连
-getBackendHost() → 'http://localhost:8001' (桌面) 或 '' (浏览器, 走Vite代理)
-```
-MJPEG 流(`/video_feed`)走 getBackendHost()，API 走 getBaseURL()。
+---
 
-### 4. Electron 开发端口不匹配
-```
-electron/main.js:   loadURL('http://localhost:5173')  // 开发模式
-vite.config.js:     server.port = 6001                // 实际端口
-```
+## 1. 19 组路由前缀（v3.5.x 真相表）
 
-## 全量API对照表
+`backend/main.py` 第 772–793 行直接 `include_router`；`backend/api/__init__.py` 通过 `api_router` 聚合 9 个子模块。前缀全部在 `/api/v1/` 下。
 
-### Source 模块 (/api/v1/source)
-| 前端调用 (detection.js) | 后端端点 (source.py) | 状态 |
-|------------------------|---------------------|------|
-| `POST /source/detection/start` | source_router `/detection/start` | OK |
-| `POST /source/detection/stop` | source_router `/detection/stop` | OK |
-| `POST /source/detection/pause` | source_router `/detection/pause` | OK |
-| `POST /source/detection/resume` | source_router `/detection/resume` | OK |
-| `POST /source/detection/standby` | source_router `/detection/standby` | OK |
-| `POST /source/detection/resume-inference` | source_router `/detection/resume-inference` | OK |
-| `GET /source/detection/results` | source_router `/detection/results` | OK |
-| `GET /source/status` | source_router `/status` | OK |
-| `POST /source/detection/reset-stats` | source_router `/detection/reset-stats` | OK |
-| `POST /source/detection/recording-failures/clear` | source_router `/detection/recording-failures/clear` | OK |
-| ~~`POST /detection/reset`~~ | ~~detection_router~~ | **已删（v2.7.x），改用 `/source/detection/reset-stats`** |
-| `POST /source/camera/start` | source_router `/camera/start` | OK |
-| `POST /source/rtsp/start` | source_router `/rtsp/start` | OK |
-| `POST /source/video/upload` | source_router `/video/upload` | OK |
-| `POST /source/video/start` | source_router `/video/start` | OK |
-| `POST /source/image/upload` | source_router `/image/upload` | OK |
-| `POST /source/image/start` | source_router `/image/start` | OK |
-| `POST /source/hikvision/start` | source_router `/hikvision/start` | OK |
-| `POST /source/hcnetsdk/start` | source_router `/hcnetsdk/start` | OK |
+| `/api/v1/` 后的前缀 | 后端文件 | 行数 | 一句话 |
+|---|---|---|---|
+| `/source/*` | `backend/api/source.py`（router 容器）+ `source_routes.py` | 1573 + **1279** | 视频源采集 + 推理状态机的核心 API（42 个端点） |
+| `/data/*` | `sessions.py` + `sessions_export.py` + `sessions_stats.py` + `sessions_maintenance.py` | 1004+527+185+403 ≈ **2119** | session/cycle/step + CSV 导出 + 数据维护 |
+| `/projects/*` | `projects.py` | **334** | 项目 CRUD + 激活 + `/active/current` |
+| `/models/*` | `models.py` | **792** | 模型上传/转换/标签解析 |
+| `/tasks/*` | `tasks.py` | **192** | 离线推理任务（前端 `task.js` 已 dead，见 §3） |
+| `/reports/*` | `reports.py` | **344** | 趋势/日报/导出（前端 `report.js` 仅在 dead 视图引用） |
+| `/cameras/*` | `cameras.py` | **156** | **旧式相机表**，与 `/source/*` 并存；新代码不要往这写 |
+| `/system/*` | `system_display.py` | **135** | KV 配置 + license 缓存（`/display`、`/license-cache`） |
+| `/alarm/*` | `alarm.py` | **1008** | 灯塔 / 蜂鸣器 / 共享灯柱（`AlarmRouter`） |
+| `/workstations/*` | `channel_manager.py` | **373** | 多工位 + GPU 分配 + `channel-config` |
+| `/scanner/*` | `scanner.py` | **532** | 扫码器 CRUD + scan_pair + disable-toggle |
+| `/scanner/wmax/*` | `wmax.py` | **672** | WMax 三端口协议（35+ 端点） |
+| `/external-devices/*` | `external_device.py` | **365** | 称重器/串口外设（注意尾部斜杠） |
+| `/cluster/*` | `cluster.py` | **295** | 集群主从 + 心跳 + box 聚合 |
+| `/mes/*` | `mes.py` | **673** | 工单/工件/缺陷/缺陷码 |
+| `/mes/gateway/*` | `mes_gateway.py` | **450** | 外部 MES 推送连接 + 测试 + 额外字段 |
+| `/operators/*` | `operators.py` | **213** | 操作员（无 token，落盘 `current_operator.json`） |
+| `/export/*` | `export_custom.py` + `export_realtime.py` | 526+305 ≈ **831** | v3.5.0 自定义导出（模板 + 实时规则共用前缀） |
+| `/debug/*` | `debug.py` | **118** | 通道诊断 / 集群流测试 |
 
-### Workstation 模块 (/api/v1/workstations)
-| 前端调用 (detection.js) | 后端端点 (channel_manager.py) | 状态 |
-|------------------------|-------------------------------|------|
-| `GET /workstations/` | workstation_router `/workstations/` | OK |
-| `POST /workstations/mode` | workstation_router `/workstations/mode` | OK |
-| `POST /workstations/{id}/gpu` | workstation_router `/workstations/{id}/gpu` | OK |
-| `GET /workstations/gpu-allocation` | workstation_router `/workstations/gpu-allocation` | OK |
+> 注：`source.py` 自身只声明 `router = APIRouter()`，所有 42 个端点在 `source_routes.py` 里挂载（`from .source import router`）。对外仍是 `/api/v1/source/*`。
 
-### Session 模块 (/api/v1)
-| 前端调用 (data.js) | 后端端点 (sessions.py) | 状态 |
-|-------------------|----------------------|------|
-| `GET /sessions` | sessions_router `/sessions` | OK |
-| `GET /sessions/dates` | sessions_router `/sessions/dates` | OK |
-| `GET /sessions/by-date/{date}` | sessions_router `/sessions/by-date/{date}` | OK |
-| `GET /sessions/{id}` | sessions_router `/sessions/{id}` | OK |
-| `GET /sessions/{id}/cycles` | sessions_router `/sessions/{id}/cycles` | OK |
-| `GET /cycles/{id}` | sessions_router `/cycles/{id}` | OK |
-| `GET /cycles/{id}/steps` | sessions_router `/cycles/{id}/steps` | OK |
-| `GET /videos/{id}` | sessions_router `/videos/{id}` | OK |
-| `GET /videos` | sessions_router `/videos` | OK |
-| `GET /export-settings` | sessions_router `/export-settings` | OK |
-| `PUT /export-settings` | sessions_router `/export-settings` | OK |
-| `GET /export/csv` | sessions_router `/export/csv` | OK (v2.7.2 新增 project_id / channel_id 可选 query) |
-| `GET /stats/step-averages` | sessions_router `/stats/step-averages` | OK |
-| `GET /stats/cycle-averages` | sessions_router `/stats/cycle-averages` | OK |
-| `GET /backup/database` | sessions_router `/backup/database` | OK |
-| `DELETE /clear/all` | sessions_router `/clear/all` | OK |
-| `DELETE /clear/range` | sessions_router `/clear/range` | OK |
-| `GET /cleanup-settings` | sessions_router `/cleanup-settings` | OK |
-| `PUT /cleanup-settings` | sessions_router `/cleanup-settings` | OK |
-| `GET /storage-info` | sessions_router `/storage-info` | OK |
-| `POST /cleanup/run` | sessions_router `/cleanup/run` | OK |
+---
 
-### Project 模块 (/api/v1/projects)
-| 前端调用 (project.js) | 后端端点 (projects.py) | 状态 |
-|----------------------|----------------------|------|
-| `GET /projects` | projects_router `/` | OK |
-| `GET /projects/{id}` | projects_router `/{id}` | OK |
-| `POST /projects` | projects_router `/` | OK |
-| `PUT /projects/{id}` | projects_router `/{id}` | OK |
-| `DELETE /projects/{id}` | projects_router `/{id}` | OK |
-| `POST /projects/{id}/activate` | projects_router `/{id}/activate` | OK |
-| `GET /projects/active/current` | projects_router `/active/current` | ⚠️ 路由顺序 |
+## 2. 前端 API 客户端清单（`frontend/src/api/`）
 
-### Model 模块 (/api/v1/models)
-| 前端调用 (model.js) | 后端端点 (models.py) | 状态 |
-|--------------------|---------------------|------|
-| `GET /models` | models_router `/` | OK |
-| `GET /models/{id}` | models_router `/{id}` | OK |
-| `POST /models/upload` | models_router `/upload` | OK |
-| `PUT /models/{id}` | models_router `/{id}` | OK |
-| `DELETE /models/{id}` | models_router `/{id}` | OK |
-| `POST /models/{id}/set-active` | models_router `/{id}/set-active` | OK |
-| `POST /models/{id}/parse-labels` | models_router `/{id}/parse-labels` | OK |
-| `GET /models/formats/available` | models_router `/formats/available` | OK |
-| `POST /models/{id}/convert` | models_router `/{id}/convert` | OK |
-| `GET /models/conversions/{id}/status` | models_router `/conversions/{id}/status` | OK |
-| `GET /models/{id}/conversions` | models_router `/{id}/conversions` | OK |
-| `DELETE /models/conversions/{id}` | models_router `/conversions/{id}` | OK |
-| `POST /models/{id}/resolve-path` | models_router `/{id}/resolve-path` | OK |
+16 个文件，**14 个对应后端前缀**，**2 个 dead**。所有文件统一 `import api from './index'`，`api.get('/xxx')` 自动加 `/api/v1` 前缀。
 
-### Alarm 模块 (/api/v1/alarm)
-前端 Alarm/index.vue 直接用 axios 调用，不经过封装的API文件。
+| 前端文件 | 行 | 对应后端前缀 | 状态 |
+|---|---|---|---|
+| `index.js` | 102 | (axios 实例 + `getBackendHost`) | 基础设施，不要乱改 |
+| `detection.js` | 48 | `/source/*` + `/workstations/*` + `/scanner/scan-pair/*` | 在用，**含 1 处 dead 调用**：`resetDetection` 仍打 `/detection/reset`（已废弃，应删） |
+| `data.js` | 223 | `/data/*` | 在用（含 v3.4.3 `/data/cycles/by-serial`、v3.5.x `pt_mode/ct_mode`） |
+| `project.js` | 25 | `/projects/*`（+ `/models` 下拉） | 在用 |
+| `model.js` | 52 | `/models/*` | 在用 |
+| `scanner.js` | 25 | `/scanner/*` | 在用（含 v3.4.0 `check-container-mode` / v3.4.2 `disable-status` `disable-toggle`） |
+| `wmax.js` | 84 | `/scanner/wmax/*` | 在用 |
+| `mes.js` | 36 | `/mes/*` | 在用 |
+| `gateway.js` | 20 | `/mes/gateway/*` | 在用 |
+| `cluster.js` | 23 | `/cluster/*` | 在用 |
+| `external_device.js` | 14 | `/external-devices/*` | 在用（注意 list/create 端点 **要尾斜杠** `/external-devices/`） |
+| `operators.js` | 8 | `/operators/*` | 在用 |
+| `export.js` | 160 | `/export/*` | 在用（v3.5.0 自定义导出 + 实时规则） |
+| `report.js` | 25 | `/reports/*` | **半 dead**：`getSummary`、`getDailyStats`、`exportCsvReport` 仅 `views/Report/index.vue` 引用，而 `Report` 路由在 `router/index.js` 中**未注册**；其余三个函数（`getRecords`/`getTrend`/`exportPdfReport`）全前端无引用 |
+| `task.js` | 25 | `/tasks/*` | **dead**，全前端无 import（保留以防外部脚本使用） |
+| `camera.js` | 25 | `/cameras/*` | **dead**，全前端无 import |
 
-### Report 模块 (/api/v1/reports)
-| 前端调用 (report.js) | 后端端点 (reports.py) | 状态 |
-|---------------------|---------------------|------|
-| `GET /reports/summary` | reports_router `/summary` | OK |
-| `GET /reports/records` | reports_router `/records` | OK |
-| `GET /reports/trend` | reports_router `/trend` | OK |
-| `GET /reports/daily-stats` | reports_router `/daily-stats` | OK |
-| `GET /reports/export` | reports_router `/export` | OK |
+清理建议（只做不删）：
 
-### MES 模块 (/api/v1/mes) — v2.3.0+
-| 前端调用 (mes.js) | 后端端点 (mes.py) | 状态 |
-|-------------------|-------------------|------|
-| `GET /mes/orders` | mes_router `/orders` | OK |
-| `POST /mes/orders` | mes_router `/orders` | OK |
-| `GET /mes/orders/{id}` | mes_router `/orders/{id}` | OK |
-| `PUT /mes/orders/{id}` | mes_router `/orders/{id}` | OK |
-| `POST /mes/orders/{id}/status` | mes_router `/orders/{id}/status` | OK |
-| `DELETE /mes/orders/{id}` | mes_router `/orders/{id}` | OK |
-| `GET /mes/orders/{id}/summary` | mes_router `/orders/{id}/summary` | OK |
-| `POST /mes/orders/{id}/batches` | mes_router `/orders/{id}/batches` | OK |
-| `GET /mes/orders/{id}/batches` | mes_router `/orders/{id}/batches` | OK |
-| `GET /mes/workpieces` | mes_router `/workpieces` | OK |
-| `POST /mes/workpieces` | mes_router `/workpieces` | OK |
-| `GET /mes/workpieces/{id}` | mes_router `/workpieces/{id}` | OK |
-| `GET /mes/workpieces/{id}/trace` | mes_router `/workpieces/{id}/trace` | OK |
-| `POST /mes/workpieces/{id}/action` | mes_router `/workpieces/{id}/action` | OK |
-| `GET /mes/workpieces/search/{kw}` | mes_router `/workpieces/search/{kw}` | OK |
-| `GET /mes/defects` | mes_router `/defects` | OK |
-| `POST /mes/defects` | mes_router `/defects` | OK |
-| `GET /mes/defects/pareto` | mes_router `/defects/pareto` | OK |
-| `GET /mes/defect-codes` | mes_router `/defect-codes` | OK |
-| `POST /mes/defect-codes` | mes_router `/defect-codes` | OK |
-| `PUT /mes/defect-codes/{id}` | mes_router `/defect-codes/{id}` | OK |
-| `DELETE /mes/defect-codes/{id}` | mes_router `/defect-codes/{id}` | OK |
+- 不要主动删 `task.js` / `camera.js`：可能被某些客户脚本或 hotfix 拽过去。但**新代码不要 import 它们**。
+- `detection.js:29` 的 `resetDetection` → `/detection/reset` 是真死链，建议下次清理时**删该函数**或改路由到 `/source/detection/reset-stats`。当前 Monitor 视图 `import` 了它但没调用（line 1054 import / line 3670+3725 只用 `resetDetectionStats`）。
 
-### Scanner 模块 (/api/v1/scanner) — v2.3.0+
-| 前端调用 (scanner.js) | 后端端点 (scanner.py) | 状态 |
-|-----------------------|-----------------------|------|
-| `GET /scanner/devices` | scanner_router `/devices` | OK |
-| `POST /scanner/devices` | scanner_router `/devices` | OK |
-| `PUT /scanner/devices/{id}` | scanner_router `/devices/{id}` | OK |
-| `DELETE /scanner/devices/{id}` | scanner_router `/devices/{id}` | OK |
-| `POST /scanner/devices/test` | scanner_router `/devices/test` | OK |
-| `GET /scanner/status` | scanner_router `/status` | OK |
-| `GET /scanner/latest/{ch}` | scanner_router `/latest/{ch}` | OK |
-| `GET /scanner/logs` | scanner_router `/logs` | OK |
-| `POST /scanner/simulate` | scanner_router `/simulate` | OK (开发者模式调试入口) |
+---
 
-### MES Gateway 模块 (/api/v1/mes/gateway) — 外部 MES 适配器
-| 前端调用 (gateway.js) | 后端端点 (mes_gateway.py) | 状态 |
-|------------------------|---------------------------|------|
-| `GET /mes/gateway/connections` | `/mes/gateway/connections` | 对齐检查 |
-| `POST /mes/gateway/connections` | `/mes/gateway/connections` | 对齐检查 |
-| `GET /mes/gateway/connections/{id}` | `/mes/gateway/connections/{id}` | 对齐检查 |
-| `PUT /mes/gateway/connections/{id}` | `/mes/gateway/connections/{id}` | 对齐检查 |
-| `DELETE /mes/gateway/connections/{id}` | `/mes/gateway/connections/{id}` | 对齐检查 |
-| `POST /mes/gateway/connections/{id}/test` | `/mes/gateway/connections/{id}/test` | 对齐检查 |
-| `POST /mes/gateway/connections/{id}/push` | `/mes/gateway/connections/{id}/push` | 对齐检查 |
-| `POST /mes/gateway/extra-fields` | `/mes/gateway/extra-fields` | 对齐检查 |
-| `GET /mes/gateway/extra-fields` | `/mes/gateway/extra-fields` | 对齐检查 |
-| `GET /mes/gateway/extra-fields-schema` | `/mes/gateway/extra-fields-schema` | 对齐检查 |
-| `GET /mes/gateway/logs` | `/mes/gateway/logs` | 对齐检查 |
+## 3. 已知前后端不对齐问题（v3.5.x 现状）
 
-### Operators 模块 (/api/v1/operators) — 操作员管理
-| 前端调用 (operators.js) | 后端端点 (operators.py) | 状态 |
-|-------------------------|-------------------------|------|
-| `GET /operators` | operators_router `/operators` | 对齐检查 |
-| `POST /operators` | operators_router `/operators` | 对齐检查 |
-| `PUT /operators/{id}` | operators_router `/operators/{id}` | 对齐检查 |
-| `DELETE /operators/{id}` | operators_router `/operators/{id}` | 对齐检查 |
-| `POST /operators/set-current` | operators_router `/operators/set-current` | 对齐检查 |
-| `GET /operators/current` | operators_router `/operators/current` | 对齐检查 |
+### 3.1 路径前缀类（高频踩坑）
 
-**与 Session/Data 同步：** `sessions.py` 的 `SessionResponse` / `CycleResponse` 含 `operator_id`、`operator_name`；`GET /sessions`、`GET /sessions/by-date/{date}`、`GET /sessions/{id}/cycles` 等支持查询参数 `operator_id`（或项目内等价命名）。前端 `data.js` 的 `getSessionsByDate` 等需传递 `operatorId` 与后端一致。`source.py` 的 `get_detection_results` 返回体中的操作员字段需与 Monitor 展示对齐。
-
-## 对齐检查流程
-
-### 快速检查（针对特定API）
-1. Grep 前端调用点（api/*.js 和 views/**/*.vue）
-2. Grep 后端端点定义（api/*.py）
-3. 对比路径、方法、参数名、响应字段
-
-### 全量检查（`$ARGUMENTS` = 'full-check'）
-1. 读取所有前端API文件，列出所有调用
-2. 读取所有后端路由定义
-3. 逐条对比
-4. 检查请求参数和响应字段的一致性
-
-## 修复原则
-1. **前端适配后端:** 如果后端已稳定，前端改路径
-2. **后端不轻易改路由:** Electron 的关机流程也直接调用后端API
-3. **路由顺序:** 具体路径放参数路径前面
-4. **向后兼容:** 新增字段可以，不删旧字段
-
-## v2.5.0 新增/修改 API
-
-### scanner.py
-- `DELETE /scanner/logs` — 清空所有扫码记录
-- `ScannerCreate/ScannerUpdate` 新增 `rebind_mode`, `bind_timing` 字段
-
-### sessions.py
-- `CycleResponse` 新增 `serial_no` 字段（LEFT JOIN 工件表获取）
-
-### source.py
-- `get_detection_results` 返回的 `mes` 字段新增 `scan_event`, `rebind_prompt`, `warn_no_barcode`
-- `POST /detection/rebind` — 手动重绑工件
-
-### mes_gateway.py（已有，适配器扩展）
-- `modbus_rtu` 适配器类型自动通过 `test_connection` 和 `dispatch` 工作
-- 无需新增 API 端点
-
-### wmax.py（新增模块）
-- WMax 扫码器设备管理 API（发现、连接、配置、高级控制）
-
-## v2.6.0 新增/修改 API
-
-### cluster.py（新增模块，挂载 /api/v1/cluster）
-- `GET /cluster/config` — 获取集群配置
-- `PUT /cluster/config` — 更新集群配置
-- `POST /cluster/report` — 从机上报检测数据
-- `GET /cluster/boxes` — 获取待汇总/已完成箱子列表
-- `GET /cluster/health` — 集群健康检查
-- `POST /cluster/heartbeat` — 副机心跳注册（v2.7.1+, body: station_id/ip/project/channels/status）
-- `GET /cluster/slaves` — 主机查询已连接副机列表（v2.7.1+, 20秒超时自动清理离线副机）
-- 前端: `frontend/src/api/cluster.js`（含 `sendHeartbeat`, `getConnectedSlaves`）
-
-### external_device.py（新增模块，挂载 /api/v1/external-devices）
-- CRUD 外部设备 (TCP/Modbus TCP/串口/HTTP 轮询)
-- `POST /external-devices/{id}/connect` — 连接设备
-- `POST /external-devices/{id}/disconnect` — 断开设备
-- `GET /external-devices/{id}/logs` — 获取设备数据日志
-- `POST /external-devices/simulate` — 调试注入外设原始数据（可只写日志或走 full_chain）
-- 前端: `frontend/src/api/external_device.js`
-
-### v3.0 调试/状态类 API
-- `POST /scanner/simulate`：无真实扫码器时注入条码，前端 `ScannerPanel.vue` 仅开发者模式显示"模拟扫码"。
-- `POST /external-devices/simulate`：无真实称重器/传感器时注入外设数据，前端 `ExternalDevicePanel.vue` 仅开发者模式显示"模拟数据"。
-- `GET /source/detection/results` 的 `mes.recording_failures`：录像通道失效事件详情，不依赖 MES 开关。
-- `POST /source/detection/recording-failures/clear`：清空当前工位录像异常详情，仅影响前端展示。
-
-### channel_manager.py（修改）
-- `PUT /workstations/channel-config` — 持久化单通道配置（接受任意字段 dict）
-- `GET /workstations` 响应新增 `source_configs` 字段
-- `save_channel_source(ch_id, cfg, merge=True/False)` 方法
-
-### mes_gateway.py（修改）
-- `ConnectionCreate/ConnectionUpdate` 新增 `bound_channels: Optional[List[int]]`
-- `GET /mes/gateway/connections/by-channel?channel=X` — 按通道查询绑定连接
-- `_serialize_conn()` 响应新增 `bound_channels` 字段
-
-### scanner.py（修改）
-- `ScannerCreate/ScannerUpdate` 新增 `broadcast_channels` 字段
-- 扫码结果可广播到多通道
-
-### alarm.py（修改）
-- `AlarmRouter` 替代单一 `AlarmManager`，管理多通道独立报警设备
-- 所有报警 API 支持 `channel` 查询参数
-
-## v2.7.2 新增/修改 API
-
-### sessions.py（修改）
-- `GET /export/csv` 新增两个可选 query 参数：
-  - `project_id: Optional[int]` — 当 `export_type=all` 时按项目过滤 DetectionSession；不传或传 `null` 表示全部项目
-  - `channel_id: Optional[int]` — 同上，按工位（0/1/2/3）过滤；不传表示全部工位
-  - `session` 和 `cycle` 两种 `export_type` 不受该参数影响（已按 id 定位）
-- CSV 输出变化（向后兼容，仅追加列/行）：
-  - 元数据新增"项目 / 工位"两行（占位符 `[全部]` 表示未过滤）
-  - "会话列表"表头追加"工位"列，行值格式为 `工位N`
-  - "周期详情"和"步骤详情"分组标题改为 `[项目名 / 工位N] 会话 XXX`
-- 前端对应 API（`frontend/src/api/data.js`）新增 `projectId` / `channelId` 形参，透传到后端
-
-### 降工位清理钩子（新增公共接口）
-- `backend/services/mes_hooks.py::MESHookManager.on_channel_removed(channel_id)` — 清 6 个按 channel_id 存的 dict
-- `backend/api/alarm.py::AlarmRouter.on_channel_removed(channel_id)` — 停报警 + 灯全灭 + 断串口 + 从 managers pop
-- 调用方：`ChannelManager.set_channel_count()` 降工位循环，其他模块可按需调用
-- **注意**：`ScannerService` / `ExternalDeviceService` / `ClusterCollector` 的 key 分别是 `device_id` / `station_id`，不按 channel_id 清理，避免误伤硬件配置
-
-### 画面变换 API（v2.7.5 新增）
-
-| 前端调用 | 后端路由 | 说明 |
+| 现象 | 原因 | 修法 |
 |---|---|---|
-| `GET /source/transform/config?channel=N` | `source.py::get_transform_config` | 读取指定通道的旋转/镜像配置 |
-| `POST /source/transform/config?channel=N` | `source.py::set_transform_config` | 写入 + 立即生效 + 保存到 `device_config.json` 的 `per_channel[str(N)]` |
+| 前端 404 `/api/detection/*` | 老路由 `backend/api/detection.py` 已删 | 改前端路径到 `/source/detection/*`（去掉 `/api/v1` 前缀，因为 axios baseURL 已含） |
+| 前端 404 `/api/v1/api/v1/...` | 误把 `/api/v1` 又拼到 `api.get('/...')` 里 | 前端只写 `/foo`，axios 自动加 baseURL |
+| MJPEG 连不上 | 用了 `api.get('/video_feed')`（带了 `/api/v1`） | 改用 `${getBackendHost()}/video_feed` |
+| 备份下载在浏览器跨域被拦 | 用 `api.get` 而不是 `window.open` | 用 `data.js::backupDatabase()`，走 `getBackendHost()` 直接 open |
 
-Body（Pydantic `TransformConfigRequest`）：
-```json
-{ "rotation": 0|90|180|270, "flip_h": false, "flip_v": false }
+### 3.2 字段命名类
+
+后端 Pydantic 全部 `snake_case`；前端在 `data.js` / `gateway.js` 等做 camelCase ↔ snake_case 转换：
+
+```13:35:frontend/src/api/data.js
+export const getSessionsByDate = (date, projectId = null, startHour = null, endHour = null, channelId = null, shift = null, operatorId = null) => {
+  const params = {};
+  if (projectId) params.project_id = projectId;
+  if (startHour) params.start_hour = startHour;
+  if (endHour) params.end_hour = endHour;
+  if (channelId !== null && channelId !== undefined) params.channel_id = channelId;
+  if (shift) params.shift = shift;
+  if (operatorId !== null && operatorId !== undefined) params.operator_id = operatorId;
+  return api.get(`/data/sessions/by-date/${date}`, { params });
+};
 ```
 
-前端调用点：`frontend/src/views/Settings/index.vue` 的「显示设置 → 画面变换」卡片，用 `transformChannel` 选择通道，`rotation/flip_h/flip_v` 绑定到表单。
+容易出错的位置：
 
-**坐标对齐**：变换在 `_capture_loop` 里紧跟 `frame.copy()` 后执行，下游推理、MJPEG、录像拿到的都是变换后帧，检测框坐标直接对齐，前端无需二次换算。
+- `channel_id` vs `channel`：query 参数有时叫 `channel`（`/source/detection/start?channel=0`），有时叫 `channel_id`（`/scanner/scan-pair/active?channel_id=0`、`/data/sessions/by-date?channel_id=0`）。**对齐看后端签名**。
+- `device_id` vs `id`：扫码器和外设两边都用整数主键 `id`，但 `injectBarcode` body 里要写 `device_id`。
+- `bound_channels`（gateway）/ `broadcast_channels`（scanner）/ `_disabled_channels`（mes_hooks 内部 JSON）：**三个独立概念**，不要混用。
+- `pt_mode` / `ct_mode`：v3.5.x 新增，CSV 导出的"耗时显示"模式，前端是 `ptMode/ctMode`。
 
-### 外部设备 API 已知坑（v2.7.5 修复）
-- **路由顺序**：`DELETE /external_device/{device_id}` 必须**放在**所有静态路径（`/logs`、`/scan` 等）之后注册，否则 FastAPI 会把 `/logs` 当成 `device_id="logs"` 报 `int_parsing`
-- **错误返回**：`create_device/update_device` 如果设备立即连接失败（串口未插、IP 不通），不再返回 400，而是 200 + `warning` 字段，前端用 `ElMessage.warning` 展示
-- **POST/PUT 入口**：`_sanitize_device_payload(data)` 对 `name/serial_port/ip/station_id` strip，防止前端拷贝粘贴带空格
+### 3.3 路由顺序坑（FastAPI）
 
-## v2.7.x 全修变更（架构重构 + 全量 API 烟测发现的修复）
+具体路径**必须放在**带参数的路径**前面**，否则 FastAPI 会把静态字段当成参数：
 
-### 已删除路由（看到引用立刻清理）
-| 路由 | 状态 | 替代 |
-|------|------|------|
-| `POST /api/v1/detection/start|stop|reset` | **已删** | `POST /api/v1/source/detection/start|stop`、`/reset-stats` |
-| `backend/api/detection.py` | **已删** | — |
+| 文件 | 风险点 | 已修 |
+|---|---|---|
+| `projects.py` | `/active/current` 必须在 `/{project_id}` 前 | ✅ |
+| `external_device.py` | `/logs`、`/status`、`/test` 必须在 `/{device_id}` 前 | ✅（v2.7.5 修） |
+| `cluster.py` | `/boxes/{box_serial}` 必须在 `/boxes`（list） 后 | ✅ |
+| `scanner.py` | 不少静态路径（`/discover`、`/simulate`、`/check-container-mode`、`/scan-pair/*`、`/disable-*`），都在 `/devices/{id}` 之前注册 | ✅ |
+
+### 3.4 Vite 代理 vs Electron 直连
+
+```29:51:frontend/src/api/index.js
+function getBaseURL() {
+  if (ENV_API_BASE_URL) return trimSlash(ENV_API_BASE_URL);
+  return `${DEFAULT_BACKEND_HOST}/api/v1`;
+}
+export function getBackendHost() {
+  if (ENV_API_BASE_URL && /^https?:\/\//i.test(ENV_API_BASE_URL)) {
+    try {
+      const url = new URL(ENV_API_BASE_URL);
+      return `${url.protocol}//${url.host}`;
+    } catch (_) {}
+  }
+  return isDesktopApp() ? DEFAULT_BACKEND_HOST : '';
+}
+```
+
+- **API 永远直连**：`getBaseURL()` 强制 `http://localhost:8001/api/v1`，不走 Vite 代理。
+- **MJPEG/视频文件**走 `getBackendHost()`：Electron 下 `'http://localhost:8001'`，浏览器下 `''`（同源 + Vite 代理把长连接给后端）。
+- 如果客户机上后端不在 `localhost:8001`，必须设 `VITE_API_BASE_URL`（`AGENTS.md` §10）。
+
+### 3.5 已删 / 已停用（看到引用立即清理）
+
+| 资源 | 状态 | 替代 |
+|---|---|---|
+| `backend/api/detection.py` | **已删**（v2.7.x） | `source_routes.py` 内 `/source/detection/*` |
 | `backend/services/detector.py` | **已删** | `VideoSourceManager` 内置推理 |
+| `POST /api/v1/detection/reset` | **404**（路由不存在） | `POST /api/v1/source/detection/reset-stats` |
+| `frontend/src/api/task.js` | dead | 离线任务已不在前端入口；只剩 `/tasks/*` 后端在线 |
+| `frontend/src/api/camera.js` | dead | 视频源 CRUD 走 `/source/*` 和 sourceStore（前端 `useSourceStore.js`） |
+| `frontend/src/views/Report/index.vue` | 路由未挂载 | `views/Data/index.vue` 接管报表展示 |
 
-### 后端文件拆分（路由不变，文件位置变了）
-| 模块 | 原文件 | 现状 |
-|------|--------|------|
-| sessions | `sessions.py` 1901L | 拆 `sessions.py` (主入口) + `sessions_export.py` (CSV) + `sessions_stats.py` (averages) + `sessions_maintenance.py` (清理/备份) |
-| external_device | `services/external_device.py` 1205L | 拆 `external_device.py` + `external_device_protocols.py` + `external_device_pipeline.py` + `external_device_models.py` |
-| source | `api/source.py` 8616L | 拆 `source.py` (1525L) + 11 个 mixin/组件文件 |
+---
 
-### v2.7.x 烟测修复
-- **`/api/v1/reports/daily-stats`**：`func.cast(Task.is_good, type_='INTEGER')` 在 SQLite 抛 `AttributeError`，改为 `case((Task.is_good == True, 1), else_=0)`
-- **`/api/v1/reports/export`**：默认 `format` 从 `pdf` 改为 `csv`（前端只用 CSV）；`reportlab` 缺失改为 501 而非崩溃
-- **CORS**：`backend/main.py` 增加 `allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"`，明确加入 `localhost:6001`，解决 Vite 端口与 CORS 不一致
+## 4. 关键端点速查（最常对齐的 30 个）
 
-### 新增烟测工具
-- `tools/smoke_all_routes.py` — 对所有 FastAPI 路由跑 TestClient 烟测，结果写 `smoke_report.txt`；硬件类（`/scanner/wmax/auto-discover`、`/video_feed`、`/snapshot`、`/source/shutdown/complete`、`/system/restart`）已加入 `SKIP_PATHS`
-- `tools/check_imports.py` — 静态扫 `backend/api`、`backend/services`，发现使用了但没 import 的常见名字（`os/cv2/threading/uuid/datetime/platform/hik_log/debug_log` 等），用于排查 mixin 拆分后的 `NameError`
+挑前端实际频繁调用、且字段最容易错的端点。完整列表用 §5 的检查命令拉。
+
+### 4.1 source（`/api/v1/source/*`）
+
+| 方法 | 路径 | query 关键字段 | body 关键字段 |
+|---|---|---|---|
+| GET | `/source/cameras` | — | — |
+| POST | `/source/camera/start` | `channel` | `camera_index` 等 |
+| POST | `/source/rtsp/start` | `channel` | `rtsp_url` |
+| POST | `/source/video/upload` | `channel` | (multipart) |
+| POST | `/source/video/start` | `channel` | `video_path` |
+| POST | `/source/hcnetsdk/start` | `channel` | NVR 参数 |
+| POST | `/source/detection/start` | `channel` | `model_path` `conf` `iou` |
+| POST | `/source/detection/stop` `pause` `resume` `standby` `resume-inference` `reset-stats` | `channel` | — |
+| POST | `/source/detection/set-project` | `channel` | `pipeline_config` 等 7 个 JSON |
+| POST | `/source/detection/rebind` | `channel` | 手动重绑工件 |
+| POST | `/source/detection/clear_pending_scan` | `channel` | — |
+| POST | `/source/detection/recording-failures/clear` | `channel` | — |
+| GET | `/source/detection/results` | `channel` | — （返回 `mes` 子树含 `scan_event`/`rebind_prompt`/`warn_no_barcode`/`recording_failures`） |
+| GET/POST | `/source/transform/config` | `channel` | `rotation` `flip_h` `flip_v` |
+| GET/POST | `/source/stream/config` `/kalman/config` `/gpu/*` | `channel` | — |
+
+### 4.2 data（`/api/v1/data/*`，前端 `data.js`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/data/sessions` | list（`project_id` `channel_id` `operator_id` `shift` `start_hour` `end_hour`） |
+| GET | `/data/sessions/dates` | 有数据的日期 |
+| GET | `/data/sessions/by-date/{date}` | 当日 overview |
+| GET | `/data/sessions/{id}` | 单条 |
+| GET | `/data/sessions/{id}/cycles` | 周期列表（`skip` `limit`） |
+| GET | `/data/cycles/{id}` `/cycles/{id}/steps` | 周期详情 + 步骤 |
+| GET | `/data/cycles/by-serial/{serial_no}` | v3.4.3 工件全局检索 |
+| GET | `/data/videos` `/videos/{id}` | 录像列表/单条流（`{id}` 走 MJPEG/MP4） |
+| GET/PUT | `/data/export-settings` | 导出开关 |
+| GET | `/data/export/csv` | `export_type=session\|cycle\|all`，`pt_mode`/`ct_mode`/`project_id`/`channel_id`/`start_date`/`end_date`/`week`/`month` |
+| GET | `/data/stats/step-averages` `/stats/cycle-averages` | 聚合统计（v3.5.0 含置信度） |
+| GET/PUT | `/data/cleanup-settings` | 自动清理配置 |
+| POST | `/data/cleanup/run` | 手触清理 |
+| GET | `/data/storage-info` | 磁盘 |
+| DELETE | `/data/clear/all` | 全清 |
+| DELETE | `/data/clear/range` | 按 body 日期段清（注意 `data:` 不是 `params:`） |
+| GET | `/data/backup/database` | 整库下载（前端用 `window.open`） |
+
+### 4.3 scanner / wmax / mes / gateway
+
+- 所有 scanner 状态查询（`/status` `/latest/{ch}` `/logs` `/check-container-mode` `/scan-pair/*` `/disable-*`）都在静态路径区；具体设备 CRUD 走 `/devices/{id}`。
+- `/mes/gateway/connections/by-channel?channel=N` 是 v2.6.0 新增，按通道查绑定的连接。
+- `/mes/orders/{id}/extra-data`（PUT）— 工单自定义字段，前端 `mes.js::updateOrderExtraData`。
+
+### 4.4 export（v3.5.0+）
+
+挂在 `/api/v1/export/*` 下，前端只有 `export.js` 一个文件：
+
+- `GET /export/fields?flat=false` — 308 字段树（`export_field_registry.py`）
+- `GET/POST /export/templates` `/templates/{id}` `/templates/{id}/clone` `/templates/{id}/upload-template-file`
+- `POST /export/preview` `/export/render` — 预览/下载（`fmt=txt|csv|docx|xlsx|pdf`，**前端 `export.js` 注释只列了 txt/csv，是过时的**）
+- `GET/POST/PUT/DELETE /export/realtime-rules` `/realtime-rules/{id}/toggle` `/test-run` `/logs`
+- `GET /export/run-logs` — 全部触发日志
+
+---
+
+## 5. 检查方法（手动对齐）
+
+### 5.1 快速检查（针对单个 API）
+
+```bash
+# 1) 前端调用点（路径 + 字段名）
+rg -n "api\.(get|post|put|delete)\([\"\\\`']/source/detection" frontend/src
+
+# 2) 后端端点定义
+rg -n "@router\.(get|post|put|delete)\(\"/detection/" backend/api/source_routes.py
+
+# 3) Pydantic 字段（snake_case）
+rg -n "class .*Request|class .*Create|class .*Update" backend/api/source_routes.py
+```
+
+### 5.2 全量检查（`$ARGUMENTS = full-check`）
+
+```bash
+# 后端：所有 @router 装饰器（按文件分组）
+rg -n "@router\.(get|post|put|delete|patch)\(" backend/api/
+
+# 前端：所有 axios 调用（按文件分组）
+rg -n "api\.(get|post|put|delete)\(" frontend/src/api/ frontend/src/views/
+
+# 找前后端不同名的 query 参数
+rg -n "channel_id=|channel=" frontend/src/api/*.js backend/api/*.py
+```
+
+### 5.3 烟测工具
+
+`tools/smoke_all_routes.py`（v2.7.x 新增）— TestClient 跑全部 FastAPI 路由，结果写 `smoke_report.txt`。已加 `SKIP_PATHS`：`/scanner/wmax/auto-discover`、`/video_feed`、`/snapshot`、`/source/shutdown/complete`、`/system/restart`（这些一跑就摸真硬件，不能 smoke）。
+
+`tools/check_imports.py` — 静态扫 `backend/api`、`backend/services` 找漏 import 的 `os/cv2/threading/uuid/datetime` 等（`source.py` mixin 拆分后 `NameError` 高发）。
+
+---
+
+## 6. 修复原则
+
+1. **前端适配后端**：后端路由稳定后，前端改路径；不要轻易改后端路由（Electron 关机 / 客户脚本可能直连）。
+2. **新增字段可以，不删旧字段**：保持向后兼容；老安装包升级时 `backend/main.py: migrate_database()` 会跑 60+ ALTER TABLE。
+3. **路由顺序**：静态路径放参数路径之前（§3.3）。
+4. **删端点先打废弃日志**：连续 1–2 个版本返回 410 + `Deprecation` 头，再彻底移除。
+5. **新增端点必读 `add-api-endpoint`**：含路由注册、Schema、router 挂载、前端 `api/*.js` 封装、视图集成的全链路 checklist。
+6. **碰 ORM 字段必读 `modify-model`**：改完字段必须在 `migrate_database()` 加 ALTER TABLE，前端 axios 调用点同步改。
+
+---
+
+## 7. 历史变更速查（按版本）
+
+- **v2.7.x**：删 `backend/api/detection.py`；source 拆分为 `source.py`(1573) + 11 个 mixin；sessions 拆分为 4 个文件；`/api/v1/reports/daily-stats` SQLite 兼容；CORS 加 `localhost:6001` regex。
+- **v2.7.2**：`/data/export/csv` 新增 `project_id` `channel_id` query；`MESHookManager.on_channel_removed` + `AlarmRouter.on_channel_removed` 公共接口。
+- **v2.7.5**：`/source/transform/config` 画面变换；`external_device` 路由顺序 + 错误返回 200+warning。
+- **v3.0.0**：多通道 + ChannelManager + `/scanner/simulate` + `/external-devices/simulate`。
+- **v3.1.3**：FFmpeg 单线程保命（不影响 API）。
+- **v3.3.0**：scan_pair 状态机 + `/scanner/scan-pair/active` `/stop`。
+- **v3.4.0**：LON D 模式 + `/scanner/check-container-mode`。
+- **v3.4.2**：`/scanner/disable-status` `disable-toggle`；reload 时序修复。
+- **v3.4.3**：`/data/cycles/by-serial/{serial_no}` 工件追溯。
+- **v3.5.0**：`/export/*` 整组（自定义导出 + 实时规则 + 字段树）；`source.py` 周期性强制动作；session/cycle 置信度聚合（`/data/stats/*`）。
+- **v3.5.1（线上）**：CSV 导出加 `pt_mode/ct_mode`；操作手册补完。
+- **v3.5.2（未发）**：扫码器列表为空时静默"⚠ 未绑码"；海康相机 NameError；检测框三层 clip。
+
+---
+
+## 8. 排错速查表
+
+| 症状 | 先查 | 大概率原因 |
+|---|---|---|
+| 前端调用 404 | 浏览器 Network 面板 → 看完整 URL | 路径少 `/api/v1`、或路径写到了 axios baseURL 里又拼一次、或调用了已删端点（`/detection/*`） |
+| 422 Unprocessable Entity | 后端 Pydantic Schema | camelCase 没转 snake_case，或 query/body 位置错（`channel` 应在 query 还是 body 看签名） |
+| 路径里数字被当字符串报 `int_parsing` | 路由顺序 | 静态路径写在了 `/{id}` 后面 |
+| 多通道乱串 | `channel` 参数 | 前端拿固定 `channel=0` 调，后端按 `ChannelManager` 分发；多工位下要循环每个 ch |
+| MJPEG 渲染不出 | 用 `api.get` 取 stream | 用 `getBackendHost()` 拼裸地址，img.src 直接挂 |
+| Electron 桌面壳里 API 全挂 | URL 协议 `file://` 检测 | `index.js::isDesktopApp()` 误判，看 `VITE_API_BASE_URL` 是否在打包时被注入 |
+| 新加字段读不到 | ORM + Schema + 前端三处 | `models.py` 加列 + `migrate_database()` ALTER + Pydantic Response 加字段 + 前端解构同步 |
+
+---
+
+## 9. 与其他 skill 的边界
+
+- 改后端 API 端点（增/改）：**先**读 `add-api-endpoint` 或 `modify-api`，再回这里做对齐。
+- 改 ORM 字段：**先**读 `modify-model`，本 skill 只做"前后端字段名/类型"对齐部分。
+- 改前端组件 / store：**先**读 `modify-frontend`。
+- 项目配置 7 个 JSON 字段流转：`modify-project-config` 包含 source.py 状态机 ↔ Project 表的对齐细节，本 skill 不重复。
+
+完成对齐检查后，**列出**：(1) 哪些路径前后端一致 ✓；(2) 哪些不一致 ✗；(3) 修复在前端还是后端，对应改哪个文件、哪一行；(4) 有无破坏向后兼容的风险。

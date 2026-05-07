@@ -7,256 +7,262 @@ effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent"
 ---
 
-# debug-frontend: 前端诊断
+# debug-frontend: 前端诊断（v3.5.x）
 
-你正在诊断天军AI视觉检测系统的 **Vue3 前端**。
+诊断天军 AI 视觉检测系统的 **Vue3 + Pinia + Element Plus + ECharts** 前端。
 
 用户问题: $ARGUMENTS
 
-## 前端架构总览
+> 事实校验基线：`frontend/src/views/Monitor/index.vue` (4051) / `views/Data/index.vue` (1985) / `store/useSystemStore.js` (277)。
+> 前端通过 `axios.create({ baseURL })`，dev 默认 `http://localhost:8001/api/v1`，Electron 走 `file://` 时取 `DEFAULT_BACKEND_HOST`，浏览器经 Vite proxy。
+
+---
+
+## 1. 前端架构（v3.5.x 真相）
 
 ```
 frontend/src/
-├── main.js                          -- 入口，Vue3+Pinia+ElementPlus+i18n
-├── App.vue                          -- 根组件（仅 router-view）
-├── router/index.js                  -- Hash路由，License守卫
-├── api/                             -- Axios API 封装层
-│   ├── index.js                     -- Axios实例，baseURL=localhost:8001
-│   ├── camera.js, data.js, detection.js, model.js, project.js, report.js, task.js
-│   ├── mes.js                       -- MES API (工单/工件/缺陷, 22端点)
-│   └── scanner.js                   -- 扫码器 API (8端点)
-├── store/                           -- Pinia 状态管理
-│   ├── useProjectStore.js           -- 当前项目状态
-│   ├── useSourceStore.js            -- 视频源配置（localStorage持久化）
-│   └── useSystemStore.js            -- 系统设置（display/detection/performance）
+├── main.js                          Vue3 + Pinia + ElementPlus + i18n
+├── router/index.js (147)            Hash 路由 + License 守卫 + 路由记忆
+├── api/index.js                     axios 实例（baseURL=/api/v1） + getBackendHost()
+├── api/{detection,project,model,data,mes,scanner,export,...}.js
+├── store/  (4 个 Pinia)
+│   ├── useSystemStore.js (277)      display/detection/performance（v3.5.1 加 ptMode/ctMode/ngTopDisplayMode）
+│   ├── useProjectStore.js           当前项目（无持久化）
+│   ├── useSourceStore.js            视频源（localStorage）
+│   └── useScannerDisableStore.js    扫码器禁用记忆（v3.4.2）
 ├── layout/
-│   ├── index.vue                    -- 主布局（侧边栏+Navbar+BottomBar）
-│   ├── Navbar.vue (~500L)           -- 项目选择器+自动恢复+时钟
-│   └── BottomBar.vue                -- 底部状态栏
-├── views/
-│   ├── Monitor/index.vue (~1600L)   -- 核心检测监控页
-│   ├── Project/index.vue (~900L)    -- 项目配置
-│   ├── Source/index.vue             -- 输入源设置
-│   ├── Data/index.vue               -- 数据中心
-│   ├── Report/index.vue             -- 报表
-│   ├── Model/index.vue              -- 模型管理
-│   ├── Alarm/index.vue              -- 报警设置
-│   ├── Settings/index.vue           -- 系统设置
-│   ├── MES/                         -- MES 管理 (v2.3.0+)
-│   │   ├── index.vue                -- MES 主页 (Tab容器)
-│   │   ├── OrderPanel.vue           -- 工单管理
-│   │   ├── WorkpiecePanel.vue       -- 工件追溯
-│   │   ├── DefectPanel.vue          -- 缺陷分析 (帕累托图 + 缺陷代码)
-│   │   └── ScannerPanel.vue         -- VS600 扫码器管理
-│   └── Activation/index.vue         -- 许可证激活
-└── utils/
-    ├── format.js                    -- 格式化工具（基本未用）
-    └── websocket.js                 -- WebSocket客户端（未被任何视图使用）
+│   ├── index.vue                    侧边栏 + Navbar + BottomBar
+│   └── Navbar.vue (~550)            项目选择器 + 自动恢复 + 时钟
+└── views/  (12 个)
+    ├── Monitor/index.vue (4051)     检测中心（项目最大 .vue）
+    ├── Data/index.vue (1985)        数据中心 + 自定义导出
+    ├── Project/index.vue (2925)     项目配置
+    ├── Source / Model / Alarm / Settings / Activation
+    └── MES/  (5 个 Panel: Order / Workpiece / Defect / Scanner+WMax / Gateway)
 ```
 
-## 3个Pinia Store
+> **死代码**（不要花时间排查）：`api/task.js`、`api/camera.js`、`Report/index.vue`（路由未挂）、`utils/websocket.js`。
+
+---
+
+## 2. 4 个 Pinia Store（v3.5.x 字段表）
+
+### useSystemStore（核心）
+- `display.brandName / appName / inspectorName / deviceNumber` — 全局基本信息
+- `display.navbar.{brandName, appName, projectSelector, inspector, deviceId, mode, status, runtime, realtime}` — 导航栏开关
+- `display.monitor.{stepStrip, statsPanel, defectChart, capacityChart, stepTable, showFps, showLatency, showDetectionCount}` — Monitor 面板开关
+- `display.monitor.ctIncludeNg` — CT 是否含 NG（默认 false）
+- **`display.monitor.ptMode` / `ctMode`**（**v3.5.1 新增**）— `'avg' | 'last' | 'current'`
+- `display.monitor.ngTop3 / ngTopDisplayMode`（v3.5.1）— NG Top3 显示模式 `'percentage' | 'count'`
+- `display.monitor.defaultCounters.{showTotal, showGood, showBad, showNgSteps}` — 默认计数器开关
+- `detection.{boxColor, boxColorNG, boxLineWidth, labelFontSize, showConfidence, showNgReason, voiceEnabled, voiceVolume}`
+- `detection.toasts.{ok, ng, scan, warn_no_barcode}` + `customToasts[]`
+- `performance.{frameLimitEnabled, targetStreamFps, halfPrecision, mediapipeEnabled, ...}`
+- `developerMode`（密码保护，localStorage `developer_mode`）
+
+**持久化键**：`display_settings` / `performance_settings` / `developer_mode` / `detection_settings`（备份）。
+**深拷贝/深合并**：`detection` 初始化 `JSON.parse(JSON.stringify(defaultDetection))`；`loadSettings()` 对 `display.monitor.defaultCounters` 做兜底默认值。
 
 ### useProjectStore
-```javascript
-state: { currentProjectId, currentProjectName, currentProject, isRunning }
-actions: setCurrentProject(project), setRunningStatus(status)
-```
-- 无持久化，刷新丢失（靠Navbar自动恢复）
+`{ currentProjectId, currentProjectName, currentProject, isRunning }`，无持久化，靠 Navbar.vue 的 `restoreLastProject()` 启动恢复。
 
 ### useSourceStore
-```javascript
-state: { sourceType, cameraSettings, hikvisionSettings, rtspSettings, 
-         hcnetsdkSettings, videoPath, imagePath, isStreaming, streamUrl }
-actions: 各种setter, saveConfig(), loadConfig()
-```
-- **localStorage 持久化**，key: `tianjun_source_config`
+持久化到 `localStorage['tianjun_source_config']`，覆盖 6 种源：camera / video / image / hikvision (NVR) / hcnetsdk / industrial (MvCamera) / rtsp。
 
-### useSystemStore
-```javascript
-state: { language, theme, isDetecting, currentProjectId,
-         developerMode,   // v2.3.0+ 密码保护开关 (localStorage: tianjun_developer_mode)
-         display: { brandName, appName, inspectorName, deviceNumber, 
-                    navbar toggles, monitor panel toggles, defaultCounterVisibility, ngDisplayMode },
-         detection: { boxColors, lineWidth, fontSize, confidenceDisplay, 
-                      ngReasonDisplay, voice, toasts: { systemPresets, customToasts } },
-         performance: { frameLimitEnabled, targetFps, useHalf, mediapipe* } }
-```
-- display/detection/performance/developerMode 各自 localStorage 持久化
-- `loadDetectionFromProject(config)` 从项目配置合并检测设置
-- `saveDetectionSettings()` 写回项目DB + localStorage
+### useScannerDisableStore
+v3.4.2 加：每个扫码器设备的"主动禁用"标记，影响 Monitor 上的"未绑码"提示。
 
-## Monitor 页面核心逻辑 (~2800行)
+---
 
-### 项目切换与检测启动
+## 3. Monitor 视图核心（4051 行，按职责切片）
 
-**项目切换时的状态重置（2026-04修复）：**
-```javascript
-watch(currentProject, (newProject, oldProject) => {
-  if (oldProject && oldProject.id !== newProject.id) {
-    isRunning = false; isPaused = false; isDetecting = false;
-  }
-})
-```
-不重置 → 切换项目后点"开始"会走 resume 路径（不加载新模型）→ 用旧模型推理
+### 3.1 启停三条路径
+1. **standby 恢复**：`isRunning && !isDetecting` → `resumeInference()` — 不传模型路径
+2. **暂停恢复**：`isPaused` → `resumeDetection()` — 不传模型路径
+3. **完整启动**：`resolveModelPath()` → `setProjectConfig()` → `apiStartDetection(modelPath)`
 
-**startDetection() 三条路径：**
-1. **待机恢复:** `isRunning && !isDetecting` → `resumeInference()` — 不加载模型
-2. **暂停恢复:** `isPaused` → `resumeDetection()` → 后端 `resume()` — 不加载模型
-3. **完整启动:** 走到底 → `resolveModelPath()` → `apiStartDetection(modelPath)` — 加载模型
+> 路径 1/2 不传模型，**切换项目时若忘了 reset `isRunning/isPaused/isDetecting`，会用旧模型推理**。Monitor 已有 `watch(currentProject)` 强制重置（line 1947 附近）。
 
-⚠ 路径1和2不传模型路径，切换项目后如果状态没重置会用错模型
+### 3.2 轮询机制（v3.5.x 真值）
+| 视图 | 间隔 | 实现 | 端点 |
+|---|---|---|---|
+| Monitor 单工位 | **150ms** (`setInterval`，重叠保护 `pollingInProgress`) | `pollingTimer` (line 3099) | `GET /api/v1/source/detection/results?channel=0` |
+| Monitor 多工位 | **150ms** (`Promise.all` 并发) | `multiPollingTimer` (line 1650) | 同上，按 `channel=ch` 并发 N 次 |
+| Data 页 | 1000ms（仅刷计数器） | `pollingTimer` (Data line 1089) | 同上 |
 
-**onMounted 流重连（2026-04修复）：**
-- 后端运行中 → `forceReconnectStream()` + `startPolling()`
-- 后端暂停中（有源+模型但未运行）→ 也 `forceReconnectStream()`（画面仍显示）
-- 有源但未运行 → 也重连（不再黑屏）
+> 老版文档写"300ms / 200ms"已过时，以代码 `}, 150);` 为准。
 
-### 轮询机制
-```javascript
-// 单工位: 300ms 间隔
-// 多工位: 200ms 间隔
-pollTimer = setInterval(() => {
-    getDetectionResults(channel) → 更新 UI
-}, interval)
-```
-
-返回数据结构:
+`/source/detection/results` 返回核心字段（实际全集 50+ 字段，按需取）：
 ```json
 {
-  "detections": [...],      // 检测框
-  "counters": {...},        // 计数器
-  "current_steps": [...],   // 当前步骤状态
-  "events": [...],          // 事件列表
-  "tracking_data": {...},   // 追踪模式数据
-  "video_info": {...},      // 视频文件进度
-  "fps": 30,
-  "latency_ms": 15,
-  "mes": {                  // v2.3.0+ MES 实时信息
-    "current_workpiece": { "serial": "...", "status": "..." },
-    "active_order": { "order_no": "...", "progress": 0.85, "yield_rate": 0.97 }
-  }
+  "isRunning": true, "isDetecting": true, "fps": 30, "latency": 12,
+  "detections": [...],            // 检测框（归一化坐标 x/y/w/h）
+  "counters": {...},              // 计数器
+  "step_counts": {...}, "step_durations": {...},
+  "avg_step_durations": {...}, "last_step_durations": {...},
+  "step_intervals": {...}, "current_cycle_steps": [...],
+  "average_cycle_time": 0, "average_cycle_time_with_ng": 0,
+  "last_cycle_time": 0, "last_cycle_time_with_ng": 0,
+  "current_cycle_time": 0,
+  "recent_events": [{ "id", "event_name", "is_ng", "should_warn_no_barcode", ... }],
+  "tracking": {...}, "video_info": {...},
+  "periodic_actions": [...],      // v3.5.0
+  "mes": { "workpiece": {...}, "order": {...}, "scan_event": {...},
+           "warn_no_barcode": false, "rebind_prompt": null,
+           "recording_failures": [...] }
 }
 ```
 
-### 三种显示模式
-1. **单工位:** 主视频 + SOP卡片 + 右侧仪表盘
-2. **双工位:** 左右分屏，各有视频+SOP+计数器
-3. **四工位:** 2x2网格 + 选中通道详情面板
+### 3.3 MJPEG 双缓冲（**改前端 Monitor 必读**）
 
-### Toast 事件系统
+**单工位**（line 1149-1944）：两个 `<img>` 元素 `streamSrc0` / `streamSrc1` 交替持流，避免切流时 Chromium 解码器内存累积导致崩溃。
+- `connectStream()` 把 `streamSrc0 = ${getBackendHost()}/video_feed?t=${Date.now()}` 立即生效，`streamSrc1=''`。
+- 轮询每 600 次（≈90 秒）调一次 `swapStream()`：先把背景 img src 设为新 URL，等 `onStreamReady()`（其 onload）触发后翻面 + 清空旧 src 释放内存。
+- `onStreamError()` 累计 `streamErrorCount`，按 `min(errCount * 300, 3000)ms` 退避重连，>50 次放弃。
+- `forceReconnectStream()` 在 start/stop/resume/pause 路径都会调（保证流跟上后端状态）。
+
+**多工位**（line 1295-1370）：每个通道一条独立 fetch + ReadableStream，自己解析 `--frame` boundary 拿到 JPEG 字节，解码到 `multiVideoCanvasRefs[ch]` canvas。检测框画在覆盖层 `multiCanvasRefs[ch]`。
+- `STREAM_HOST = 'http://localhost:8001'`、`BOUNDARY = '--frame'`、`HEADER_END = '\r\n\r\n'`。
+- `multiStreamAborts[ch]` 是 `AbortController`，`stopMultiStreams()` 必须 abort 所有，否则切回单工位时 socket 泄漏。
+- buffer 初始 512 KB，碰到大帧自动 grow。
+
+**通道切换不闪烁**：多工位视图下 4 路 canvas 全部常驻，`selectedChannel` 只决定"哪一路放大显示"，**画面不重连**。切换工位数 (`channelCount`) 时调 `initMultiChannelData(count)` + `startMultiStreams(count)`，**老通道的 stream 先 abort 再重建**。
+
+### 3.4 检测框 Canvas 渲染
+
+**v3.5.x 三层 clip 防御**（line 1681 `clipNormalizedBox`）：
 ```javascript
-// shownEventIds: Set 防止重复显示
-// 检查新事件 → 匹配系统预设/自定义Toast → 显示动画
-// Set 超过500条时清理到最近200条
+const clipNormalizedBox = (det) => {
+  const x = Math.max(0, Math.min(1, Number(det.x) || 0));
+  const y = Math.max(0, Math.min(1, Number(det.y) || 0));
+  const w = Math.max(0, Math.min(1 - x, Number(det.w) || 0));
+  const h = Math.max(0, Math.min(1 - y, Number(det.h) || 0));
+  return { x, y, w, h };
+};
+```
+即使后端漏 clip / Kalman 滤波偶发飘出，前端也保证框画在画面内。
+
+**适配实际帧分辨率**：`multiFrameNaturalSize[ch] = {w, h}` 是 `<img onload>` 时记录的原图尺寸；`drawMultiDetections()` 按 `Math.min(cw/nat.w, ch/nat.h)` 等比缩放并居中（`dx/dy`），与 MJPEG `<img>` 的 `object-contain` 行为对齐。**改这里要同时改单/多工位两条路径**。
+
+### 3.5 Toast 事件触发（**v3.5.x 后端权威决策**）
+
+`processChannelResult()`（line ~1480-1635）按 `event.id` 去重（`shownEventIds` Set，>500 时收缩到 200）。
+
+**warn_no_barcode 关键改动**（line 1622-1633）：
+```javascript
+const _shouldWarn = event.should_warn_no_barcode !== undefined
+  ? !!event.should_warn_no_barcode
+  : (!event.barcode && !event.is_ng);  // 旧兼容路径
+```
+> v3.5.x 起 **后端在 `event.should_warn_no_barcode` 上盖章**（综合 `is_warn_no_barcode()` + 是否有扫码器在场 + 工位是否禁用扫码）。**前端不要再自己叠加判断**，老兼容路径只在字段缺失时兜底。
+
+**事件 → toastId 映射**：`ok` / `ng` / `scan` / `warn_no_barcode` / 自定义 `event.toast_id`。`getToastConfig(toastId, ch)` 优先取通道私有 `channelDetections[ch]`，没有再回落 `detection`。
+
+### 3.6 PT / CT 显示模式（**v3.5.1 新增**）
+
+```javascript
+// PT — 步骤检测时间，单步级别
+const formatStepPT = (stepLabel) => {
+  const mode = systemStore.display?.monitor?.ptMode || 'avg';
+  // avg → avgStepDurations[label] / last → lastStepDurations / current → stepDurations
+};
+
+// CT — 周期时间，整轮级别
+const getDisplayCT = (chData) => {
+  const mode = systemStore.display?.monitor?.ctMode || 'avg';
+  const includeNg = systemStore.display?.monitor?.ctIncludeNg;
+  // current 模式忽略 includeNg；avg/last 才看 ctIncludeNg
+};
 ```
 
-### 语音 TTS
-```javascript
-// SpeechSynthesis API
-// Chromium bug workaround: cancel() 后等 100ms 再 speak()
-```
+**数据来源**：`/source/detection/results` 同时下发 `avg_*` / `last_*` / 当前轮 raw（`step_durations` / `current_cycle_time`）三档原始数据，前端按 `ptMode/ctMode` 选档显示。后端**永远全量返回**，切换模式不需要重连。
 
-## 常见问题诊断
+> 改 `display.monitor.ptMode/ctMode` 还会同步影响 **Data 页 CSV 导出**：`exportCsv* (selectedDate, ..., ptMode, ctMode)` 把模式当 query 透传给 `/api/v1/data/export/csv?pt_mode=avg&ct_mode=avg`，`avg` 时多一列"耗时(平均/秒)"。
 
-### v3.0 全功能 QA 结论
-- `Activation/index.vue` 在浏览器环境会主动 `router.replace('/')`，这是为了只在 Electron 内走真实授权流程。浏览器访问 `#/activation` 跳回 Monitor 不影响客户桌面版授权，只影响浏览器调试。
-- `Report/index.vue` 文件和 `api/report.js` 存在，但当前 `router/index.js` 与侧边栏没有 `/report` 入口；访问 `#/report` 会 no match。若要给客户独立报表中心，必须同时加路由、侧边栏入口，并复测查询与 CSV 导出。
-- `Settings/index.vue` 的"基本信息设置"是卡片标题，不是按钮；自动化点击它失败不算功能问题。
-- Settings 操作员"删除"是后端软删除（`active=false`），前端若继续拉全量 `GET /operators`，用户会误以为没删。若要符合直觉，列表默认传 `active=true`；如需恢复停用人员，再做"显示停用/恢复"入口。
-- MES 的"模拟扫码/模拟数据"按钮只在开发者模式显示，Playwright 复测前要设置 `localStorage['tianjun_developer_mode']='true'` 或通过 UI 开启开发者模式。
+### 3.7 ECharts 渲染（仅单工位）
 
-### 页面状态不同步
-1. 检查 Pinia store 更新是否触发响应式
-2. Navbar 的 `handleProjectChange()` 是否完整执行
-3. `systemStore.display = JSON.parse(saved)` 直接覆盖而非深合并（会丢失新字段）
-4. 多处运行时计时器（Navbar + BottomBar）不同步
+- `defectChartRef`（饼图：合格/不良）+ `capacityGaugeRef`（产能仪表盘）。
+- `initCharts()` 必须 `dispose()` 旧实例再 `echarts.init()`，否则 HMR / remount 后双实例叠加内存翻倍。
+- 节流：`CHART_UPDATE_INTERVAL = 2000ms`（`lastChartUpdate` 控制），轮询里只在间隔到了才 setOption。
+- **多工位不画 ECharts**（`updateMultiCharts()` 内注释 `Data-driven rendering via template`），全部由模板/计数器格子展示。
 
-### Monitor 轮询异常
-1. 检查 pollTimer 是否在 onUnmounted 中清除
-2. 确认 `/source/detection/results` 端点返回正确数据
-3. 多工位: 每个通道独立轮询，4通道 = 每秒20次请求
+---
 
-### MJPEG 黑屏
-1. 单工位: 检查双缓冲 img 元素切换逻辑
-2. 多工位: 检查 ReadableStream JPEG boundary 解析
-3. 确认 `getBackendHost()` 返回正确地址
-4. Electron: 直连 `localhost:8001`；浏览器: 经 Vite proxy
+## 4. 状态不同步问题排查
 
-### Toast/语音不触发
-1. 检查 `systemStore.detection.toasts` 配置是否正确加载
-2. 确认事件 ID 未被 `shownEventIds` 过滤（重复事件不显示）
-3. 语音: 确认浏览器 SpeechSynthesis 可用
-4. Toast position 配置: top-left/top-right/bottom-left/bottom-right
+| 现象 | 排查 |
+|---|---|
+| 项目切换后画面/计数没变 | Pinia DevTools 看 `useProjectStore.currentProjectId` 是否变；Navbar 的 `handleProjectChange()` 是否走完 `setProjectConfig + reload detection settings`；Monitor `watch(currentProject)` 是否触发了 `isRunning/isPaused/isDetecting` 重置 |
+| Settings 改了但 Monitor 不刷新 | localStorage 存的可能是旧 schema；尝试 `localStorage.removeItem('display_settings')` 后刷新；`saveDetectionSettings()` 应同步写 `updateProject(id, { detection_config })` + localStorage |
+| 多工位部分通道丢数据 | 看 `multiChannelData[ch]` 是否被 `initMultiChannelData(count)` 初始化；`multiPollingInProgress` 重叠保护是否卡死（错误 `finally` 路径） |
+| 后端心跳超时画面不黑 | `forceReconnectStream()` 走 `streamErrorCount` 退避，看 onStreamError 是否被触发；MJPEG 长连接经过 Electron 主进程时被防火墙断流不会触发 onerror，需要轮询里"isRunning && !streamSrc0 && !streamSrc1" 兜底重连 |
+| F5 刷新后状态全丢 | 正常，Monitor 组件无 keep-alive，`onMounted` 走 `getSourceStatus()` 跟后端同步 `isRunning/isDetecting` |
 
-### 检测启动失败 / 检测无结果
-1. 检查 `startDetection()` 调用链:
-   - 获取模型路径 → resolveModelPath
-   - 发送项目配置 → setProjectConfig
-   - 启动检测 → POST /source/detection/start
-2. 任何一步失败都会导致检测未启动但UI可能已更新
-3. **切换项目后无检测框:** 检查后端日志是否有新模型加载（`[ChannelManager] ch0 loaded NEW model`）。如果没有，说明前端走了 resume 路径没传模型
-4. **页面导航后黑屏:** Monitor 组件无 keep-alive，每次进入都 remount。检查 `onMounted` → `getSourceStatus()` 返回的 `is_running` 状态
+---
 
-## 死代码文件（不要浪费时间看这些）
-- `layout/MainLayout.vue` — 旧布局，未使用
-- `layout/Sidebar.vue` — 占位组件，实际侧边栏在 index.vue 内联
-- `views/Dashboard.vue` — 静态原型，未挂路由
-- `components/Video/StreamCanvas.vue` — 未被引用
-- `api/task.js` — 旧版任务API，已被 data.js 取代
-- `utils/websocket.js` — WebSocket工具，Monitor用HTTP轮询代替
-- `assets/css/main.css` — 可能未被导入
+## 5. 通用诊断步骤（按顺序）
 
-## Toast 系统 (v2.5.0+)
+1. **复现现象**：单工位/多工位、源类型、是否带 MES、是否扫码器在场，记下 channel_id。
+2. **DevTools Console**：找 `[API]` / `[MJPEGStream]` / `[ChannelManager]` 等前缀的 warn/error；License 异常前端会静默通过（`licenseChecked=true`），不要被骗。
+3. **DevTools Network**：
+   - `/api/v1/source/detection/results` 状态码 / 频率（应 ~150ms）/ payload 字段是否齐全。
+   - `/video_feed?channel=N` 是否 200 且 `Content-Type: multipart/x-mixed-replace; boundary=frame`；多次断开重连说明退避机制在跑。
+   - 比对 `event.should_warn_no_barcode` 真值，确认是后端决策还是前端兜底。
+4. **Pinia DevTools**：`useSystemStore.detection.toasts.warn_no_barcode.enabled`、`useSystemStore.display.monitor.ptMode/ctMode`、`useProjectStore.currentProject`。
+5. **Vue DevTools**：定位组件树到 `MonitorIndex`，看 `multiChannelData[ch]`、`activeStream`、`streamSrc0/1`、`shownEventIds.size`、`isRunning/isPaused/isDetecting` 是否符合预期。
+6. **后端对照**：用 `debug-source` / `debug-channel` / `debug-mes` 的现象表对照后端是否真出问题。
 
-### 预设 Toast 类型
-`useSystemStore.defaultDetection.toasts` 包含 4 个系统预设：
-- `ok`: 合格提示框（绿色）
-- `ng`: NG 提示框（红色）
-- `scan`: 扫码成功提示框（青色，可在扫码器设备设置中开关）
-- `warn_no_barcode`: 未绑码告警（黄色，周期结算无条码时触发）
+---
 
-### 关键注意事项
-- **深拷贝**: `detection` 状态初始化必须用 `JSON.parse(JSON.stringify(defaultDetection))`，浅拷贝会导致嵌套的 `toasts` 对象共享引用
-- **防御性渲染**: 设置页 `<el-card>` 需加 `v-if="store.detection.toasts?.ok"` 防止 toasts 为 null 时崩溃
-- **project detection_config**: 数据库中存的 `detection_config` 可能为 `null` 或 `"null"` 字符串，`loadDetectionFromProject` 需正确处理
+## 6. 已知陷阱（v3.5.x）
 
-### 单通道 MES 数据传递
-Monitor 单通道模式下 `startPolling` 必须显式赋值：
-```javascript
-multiChannelData.value[0].mes = data.mes
-```
-否则 `mesData` computed 属性为空，warn_no_barcode banner 和 scan toast 都不会触发。
+- `Activation/index.vue` 在浏览器（非 Electron）会 `router.replace('/')`；想浏览器调试激活流，要么改路由要么直接读 `electron/license-manager.js`。
+- `Settings/index.vue` 的"基本信息设置"是卡片标题不是按钮，自动化点击它会失败。
+- 操作员"删除"是后端软删除（`active=false`），前端默认列表应该过滤 `active=true`，否则用户以为没删。
+- MES 的"模拟扫码/模拟数据"按钮只在开发者模式可见（`localStorage['developer_mode']='true'`）。
+- `index.html` title/icon 还是 Vite 默认（无影响但容易让 QA 误报）。
+- Monitor remount 后所有局部 ref（`isRunning/isPaused/isDetecting`）重置，需要 `getSourceStatus()` 同步；Vite HMR 等同 remount。
+- 前端硬编码中文很多，i18n 切语言基本无效（不是 bug，是产品决策）。
+- License 验证异常仍会设 `licenseChecked=true` 静默通过（设计如此）。
+- `detection_config` 在 DB 可能是 `null` 或字符串 `"null"`，`loadDetectionFromProject` 已处理两种情况。
 
-## GatewayPanel Modbus 配置 (v2.5.0+)
+---
 
-`GatewayPanel.vue` 新增 `modbus_rtu` 适配器类型：
-- 选中后切换为串口/TCP 配置表单（隐藏 REST 专属字段）
-- `buildConfig()` 根据 `adapter_type` 分支构建不同 config
-- `openEdit()` 需从 `cfg` 加载所有 Modbus 字段（transport/port/host/baudrate 等）
+## 7. 路由记忆（v2.7.x，仍生效）
 
-## 路由记忆机制 (v2.7.x 新增)
+- `localStorage['tianjun:lastRoute']`，白名单 `Monitor / Project / Model / Data / Source / Settings / Alarm / MES`（**Activation 不记忆**）。
+- `router.afterEach` 写入；`router.beforeEach` 仅在冷启动 (`from.name === undefined && to.path === '/monitor'`) 触发一次重定向（`lastRouteRestored` 标志位）。
+- 想跳过：`localStorage.removeItem('tianjun:lastRoute')`。
 
-**问题背景**：之前每次启动应用都强制跳到 `/monitor`，无视用户上次离开的页面。
+---
 
-**实现位置**：`frontend/src/router/index.js`
-- `LAST_ROUTE_KEY = 'tianjun:lastRoute'`（localStorage）
-- `REMEMBERABLE_NAMES = {'Monitor','Project','Model','Data','Source','Settings','Alarm','MES'}`
-- `router.afterEach`：每次成功导航后，如果 `to.name` 在白名单内 → 写入 localStorage（`Activation` 不记忆）
-- `router.beforeEach`：**冷启动**判定（`from.name === undefined && to.path === '/monitor'`），从 localStorage 读出上次路径并 redirect 到那里；只触发一次（`lastRouteRestored` 标志位）
+## 8. 历史踩坑速查（详细见 changelog）
 
-**排查清单**：
-- 启动后还是默认到 Monitor？→ DevTools → Application → Local Storage 查 `tianjun:lastRoute` 是否被写入
-- 想跳过记忆（演示场景）？→ `localStorage.removeItem('tianjun:lastRoute')` 或临时把名字从 `REMEMBERABLE_NAMES` 删
-- 死循环跳转？→ 检查 `lastRouteRestored` 是否被重置；正常应该一次会话只跳一次
+| 版本 | 修复 |
+|---|---|
+| v3.5.1 | PT/CT 三档显示（ptMode/ctMode）+ Data 导出联动 |
+| v3.5.0 | 周期性强制动作进度面板 + 自定义 Toast 事件 + 自定义导出对话框 |
+| v3.4.2 | useScannerDisableStore + ERROR 不续 LON + 禁用扫码守门 |
+| v3.4.1 | D 模式扫码器灯一直闪 + 校验工位拿错 |
+| v3.3.0 | scan_pair 状态机 → Monitor 上 warn_no_barcode banner |
+| v3.1.3 | MJPEG 双缓冲 + onMounted 流重连不黑屏 |
+| v3.0.0 | Monitor 项目切换状态重置（防用旧模型） |
+| v2.7.x | 路由记忆 + Monitor 状态守卫 |
+| v2.6.0 | 多工位视图（双/四工位） + ChannelManager 隔离 |
+| v2.5.0 | Toast 系统 + GatewayPanel modbus_rtu 适配 |
 
-## 已知陷阱
-- License检查异常时 `licenseChecked` 仍设为 true（静默通过）
-- `@vueuse/core` 和 `sortablejs` 依赖可能未使用
-- i18n 绝大部分文字硬编码中文，切换语言基本无效
-- `performance.memory` 仅 Chrome 支持
-- `index.html` 标题和图标还是 Vite 默认的
-- Monitor 组件的 `isRunning`/`isPaused`/`isDetecting` 是组件局部 ref，remount 后全部重置为 false，需通过 `getSourceStatus()` 与后端同步
-- `startDetection()` 的 resume 快捷路径不传模型路径，切换项目后必须确保状态标志被重置（否则用旧模型推理无结果）
-- Vite HMR 编辑 Monitor.vue 会导致组件重载，等同于页面导航离开再回来
-- `detection` 状态的 `toasts` 对象必须深拷贝初始化，浅拷贝会导致多项目间共享引用
-- `detection_config` 为 null 时设置页 Toast 卡片不渲染，需 v-if 防御
+> 改 Monitor 前**必看**关键不变量（AGENTS.md 第八节第 7 条）：双缓冲 MJPEG + 多通道 state 隔离，v2.6 / v3.0 / v3.1.3 多次回归过。
+
+---
+
+## 9. 改前端时配套读什么 skill
+
+- 改 Vue 组件 / Pinia store → `modify-frontend`
+- 改后端 API → `modify-api` + `api-sync`
+- 改项目配置（pipeline/steps/events）→ `modify-project-config`
+- 视频流卡顿/录像异常 → `debug-video`
+- 多工位串扰 → `debug-channel`
+- 扫码 / 工件 / Toast 联动 → `debug-mes`
+- License / Splash / 关机 → `debug-electron`
+

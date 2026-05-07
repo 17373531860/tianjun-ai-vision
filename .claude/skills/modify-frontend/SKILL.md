@@ -1,386 +1,396 @@
 ---
 name: modify-frontend
-description: "安全修改前端代码：Store依赖、API调用链、组件间数据流、i18n、ElementPlus组件约束。修改Vue组件或Store前先分析影响。"
+description: "安全修改前端代码：Store 依赖、API 调用链、组件间数据流、i18n、ElementPlus 组件约束。修改 Vue 组件或 Pinia Store 前先用本 skill 做影响分析。"
 argument-hint: "[要修改的组件或功能]"
 model: opus
 effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent"
 ---
 
-# modify-frontend: 前端安全修改分析
+# modify-frontend: 前端安全修改分析（v3.5.x）
 
 你正在帮用户安全修改前端 Vue3 代码。
 
 计划修改: $ARGUMENTS
 
-## 组件依赖关系图
+## 0. 技术栈速查（事实源 AGENTS.md 第二节）
+
+| 项 | 值 |
+|---|---|
+| 框架 | Vue 3.5.x + Composition API |
+| 状态管理 | Pinia 3.x（**4 个 store**） |
+| 路由 | Vue Router 4.x（hash 模式） |
+| UI 库 | Element Plus 2.13.x（中文 doc 主） |
+| i18n | vue-i18n 11.x（5 语种） |
+| 构建 | Vite 7.x |
+| 样式 | Tailwind CSS 3.4 + ECharts 6 + 自定义 `style.css` |
+| 图标 | `@element-plus/icons-vue` 2.3 |
+| HTTP | axios 1.13（统一封装在 `api/index.js`） |
+
+> 项目根**没有** `package.json`，前端单独是 `frontend/` 子包；`electron/package.json` 是版本号唯一权威源。
+
+## 1. 真实视图清单（事实源：`frontend/src/views/`）
+
+实际只有 **10 个视图目录**（AGENTS.md 写"12 个"不准），加 3 个 layout 组件：
+
+| 视图 | 路由名 | 行数 | 备注 |
+|---|---|---|---|
+| `Activation/index.vue` | `Activation` | 140 | **独立路由 `/activation`**（不在 Layout 下，激活前唯一可达） |
+| `Monitor/index.vue` | `Monitor` | **4051 ⚠️** | 项目最大 .vue，检测中心 |
+| `Project/index.vue` | `Project` | 2925 | 项目配置（7 个 JSON 字段集中地） |
+| `Source/index.vue` | `Source` | 1288 | 6 种视频源配置 |
+| `Data/index.vue` | `Data` | 1985 | 数据中心 + 自定义导出入口 |
+| `Data/components/CustomExportDialog.vue` | — | — | v3.5.0 自定义导出 |
+| `Data/components/RealtimeRulesDialog.vue` | — | — | v3.5.0 实时规则 |
+| `MES/index.vue` | `MES` | 75 | **7 个 Tab 容器**（不挂 WMaxPanel） |
+| `MES/{Order,Workpiece,Defect,Scanner,Gateway,External,Cluster}Panel.vue` | — | 243~1381 | 7 个子面板 |
+| `MES/WMaxPanel.vue` | — | 888 | **不在 MES tab 中**，由 `ScannerPanel.vue` 内部 v-if 挂载 |
+| `Model/index.vue` | `Model` | 339 | 模型仓库（**单数 `Model`**，不是 `Models`） |
+| `Alarm/index.vue` | `Alarm` | 921 | 报警设置 |
+| `Settings/index.vue` | `Settings` | 1441 ⚠️ | 系统设置（含画面变换、操作员管理） |
+| `Report/index.vue` | — | 299 | **死代码：路由未注册**（见第 8 节） |
+
+Layout：`frontend/src/layout/index.vue`(117) + `Navbar.vue`(549 ⚠️) + `BottomBar.vue`(69)。
+
+## 2. 路由结构（事实源：`frontend/src/router/index.js`）
+
+```
+/activation                ← 独立路由，激活页（Activation）
+/                          ← Layout（侧边抽屉 + Navbar + 内容 + BottomBar）
+  /monitor      Monitor    ← 默认 redirect 目标
+  /project      Project
+  /model        Model
+  /source       Source
+  /data         Data
+  /mes          MES
+  /alarm        Alarm
+  /settings     Settings
+```
+
+总共 **8 个 Layout 子路由 + 1 个独立 Activation = 9 路由**。**没有 Login / Reports（复数）/ Logs 等路由**——AGENTS.md 旧描述里的 12 视图是历史描述。
+
+### 路由守卫关键事实
+- `licenseChecked` 模块级单例，第一次进入 + Electron 环境会调 `window.electronAPI.getLicenseStatus()`，无效跳 `/activation`
+- `LAST_ROUTE_KEY = 'tianjun:lastRoute'` 记忆上次路由（仅 `REMEMBERABLE_NAMES` 8 个），冷启动会自动恢复
+- `licenseChecked = false` 时**不放行业务页** —— 改路由守卫时不要"异常即放行"
+
+## 3. Pinia Store 清单（事实源：`frontend/src/store/`，共 **4 个**）
+
+| Store | 行数 | 持久化 key | 主要用途 |
+|---|---|---|---|
+| `useSystemStore` | 277 | `display_settings` / `detection_settings` / `developer_mode` / `performance_settings` | 显示开关、检测框、性能、操作员、**多通道检测配置** |
+| `useProjectStore` | 25 | 无（纯内存，由 Navbar 写入） | 当前项目 id/name/object，运行状态 |
+| `useSourceStore` | 137 | `source_config` | 6 种视频源配置 |
+| `useScannerDisableStore` | 67（**v3.4.2 新增**）| 无（后端 `_disabled_channels.json` 落盘）| 按工位禁用扫码联动状态 |
+
+> `useChannelStore` **不存在**——多通道状态分布在 `useSystemStore.channelDetections`（per-channel 检测配置）和 Monitor 组件内的 `multiChannelData[ch]` 局部 state。
+
+### useSystemStore 关键字段
+- `language` / `theme` / `isDetecting` / `currentProjectId` / `developerMode`
+- `display.{ navbar, monitor, brandName, appName, inspectorName, deviceNumber }` —— 全局显示开关
+- `detection`（绑定**项目级**，从 `Project.detection_config` 加载）：boxColor、字体、`toasts.{ok,ng,scan,warn_no_barcode}`、`customToasts[]`
+- `channelDetections: { [channelId]: detectionConfig }` —— 多工位每通道独立配置
+- `data.{ retentionDays, autoCleanup, autoBackup, backupPath }`
+- `performance.{ frameLimitEnabled, targetStreamFps, halfPrecision, mediapipe* }`
+
+### Action 清单
+- `setLanguage / setTheme / setDetecting / setCurrentProjectId`
+- `loadSettings()` —— 读 `display_settings`，**深合并 navbar / monitor.defaultCounters**
+- `loadDetectionFromProject(detectionConfig)` —— 项目切换时调
+- `loadDetectionForChannel(channelId, detectionConfig)` / `getChannelDetection(channelId)`（回退到全局 `detection`）
+- `saveDetectionSettings()` —— 同时写 `Project.detection_config` 和 `localStorage.detection_settings`
+- `setDeveloperMode / loadDeveloperMode / loadPerformanceSettings / savePerformanceSettings`
+
+### useScannerDisableStore（v3.4.2）
+```
+state: { disabledChannels: number[], loaded, loading, toggling }
+getters: isChannelDisabled(channelId), disabledSet
+actions:
+  loadStatus(force=false)         # GET /scanner/disable/status
+  toggle(channelId, disabled)     # POST /scanner/disable/toggle
+  applyServerHint(ch, disabled)   # 来自 source/status 推送的 mes.scan_disabled 字段
+```
+> 不要绕过 store 自己直接调 API：禁用闭包是后端算的，全前端只信任 `disabledChannels`。
+
+## 4. localStorage 持久化键（**真实**，事实源：`grep localStorage`）
+
+| Key | 写入者 | 读取者 |
+|---|---|---|
+| `display_settings` | useSystemStore.loadSettings/Settings/Monitor | 同左 + Navbar |
+| `detection_settings` | useSystemStore.saveDetectionSettings | useSystemStore + Settings |
+| `developer_mode` | useSystemStore.setDeveloperMode | useSystemStore.loadDeveloperMode |
+| `performance_settings` | useSystemStore.savePerformanceSettings | useSystemStore.loadPerformanceSettings |
+| `source_config` | useSourceStore.saveConfig | useSourceStore.loadConfig + Monitor 启动检查 |
+| `auto_save_settings` | Navbar | Navbar / Source/index.vue |
+| `tianjun:lastRoute` | router.afterEach | router.beforeEach（冷启动恢复） |
+| `mes_order_form_template_v1` | OrderPanel | OrderPanel（**legacy fallback**，已被 library 替代） |
+| `mes_order_template_library_v1` | OrderPanel | OrderPanel |
+| `mes_order_template_active_id_v1` | OrderPanel | OrderPanel |
+| `mes_order_form_template_visible_migrated_v1` | OrderPanel | OrderPanel（v2.7.15 一次性迁移标记） |
+| `mes_order_archived_ids_v1` | OrderPanel | OrderPanel |
+
+> **旧 SKILL 提到的 `tianjun_xxx_*` 前缀键已不存在**。只有 `tianjun:lastRoute` 一个保留 `tianjun:` 前缀。
+
+## 5. API 客户端清单（`frontend/src/api/*.js`，共 16 个）
+
+| 文件 | 行数 | 后端前缀 | 状态 |
+|---|---|---|---|
+| `index.js` | 102 | — | axios 实例 + `getBackendHost`（视频流用） |
+| `cluster.js` | 23 | `/cluster/*` | OK |
+| `data.js` | 223 | `/data/*` | OK（含 `operator_id` 过滤） |
+| `detection.js` | 48 | `/source/*` | OK |
+| `export.js` | 160 | `/export/*` | OK（注释说 `txt/csv` 是过时的，**实际 5 格式**） |
+| `external_device.js` | 14 | `/external-devices/*` | OK |
+| `gateway.js` | 20 | `/mes/gateway/*` | OK |
+| `mes.js` | 36 | `/mes/*` | OK |
+| `model.js` | 52 | `/models/*` | OK |
+| `operators.js` | 8 | `/operators/*` | OK |
+| `project.js` | 25 | `/projects/*` | OK |
+| `report.js` | 25 | `/reports/*` | **部分死代码**（getRecords / getTrend / exportPdfReport 仅 Report 组件用，组件本身路由未注册） |
+| `scanner.js` | 25 | `/scanner/*` | OK |
+| `wmax.js` | 84 | `/scanner/wmax/*` | OK |
+| `task.js` | 25 | `/tasks/*` | **死代码：全前端无 import** |
+| `camera.js` | 25 | `/cameras/*` | **死代码：全前端无 import**（旧式相机表，与 `/source/*` 并存） |
+
+后端 baseURL：默认 `http://localhost:8001/api/v1`，可被 `VITE_API_BASE_URL` 覆盖。
+
+## 6. 组件依赖关系图
 
 ```
 App.vue
-  └── router-view
-      └── layout/index.vue (主布局)
-          ├── Navbar.vue ← useProjectStore, useSystemStore, api/project, api/operators（当前操作员展示：作业员姓名、设备编号；与 Monitor 选择器同步）
-          │   ├── 项目选择器 → handleProjectChange → activateProject + setProjectConfig
-          │   ├── 自动恢复 → localStorage + 动态import api/index, store/useSourceStore
-          │   └── 报警自动连接 → api (直接axios)
-          ├── router-view (页面内容)
-          │   ├── Monitor/index.vue ← useProjectStore, useSystemStore, useSourceStore, api/detection, api/model, api/operators（操作员选择器、与导航栏同步当前作业员）
-          │   ├── Project/index.vue ← api/project, api/model, useProjectStore, useSystemStore
-          │   ├── Source/index.vue ← api/index, api/detection, api/model, api/project, useSourceStore, useSystemStore
-          │   ├── Data/index.vue ← api/data, api/detection, useProjectStore, useSystemStore（操作员筛选、Session/Cycle 列表展示操作员列）
-          │   ├── Report/index.vue ← api/report, api/project
-          │   ├── Model/index.vue ← api/model
-          │   ├── Alarm/index.vue ← api/index, api/project, useProjectStore, useSystemStore
-          │   ├── Settings/index.vue ← useSystemStore, api/operators（操作员管理卡片：列表、新增、编辑、停用）
-          │   ├── MES/index.vue ← api/mes, api/scanner, api/gateway (Tabs: OrderPanel, WorkpiecePanel, DefectPanel, ScannerPanel, GatewayPanel)
-          │   │   ├── OrderPanel.vue ← api/mes (工单CRUD + 状态机)
-          │   │   ├── WorkpiecePanel.vue ← api/mes (工件追溯)
-          │   │   ├── DefectPanel.vue ← api/mes (缺陷帕累托 + 缺陷代码管理)
-          │   │   ├── ScannerPanel.vue ← api/scanner (VS600设备配置 + 状态)
-          │   │   └── GatewayPanel.vue ← api/gateway (外部 MES：连接 CRUD、字段映射、测试、通讯日志)
-          │   └── Activation/index.vue ← window.electronAPI
-          └── BottomBar.vue ← useSystemStore, useProjectStore
+└── router-view
+    ├── Activation/index.vue                      ← window.electronAPI（License）
+    └── layout/index.vue (Layout)
+        ├── Navbar.vue (549) ← useSystemStore, useProjectStore, useSourceStore(动态 import),
+        │                     api/project, api/operators, api/index(直接 axios)
+        │   ├── 项目选择器 → handleProjectChange → activateProject + setProjectConfig
+        │   ├── 自动恢复 → auto_save_settings + 动态 import api/index, store/useSourceStore
+        │   ├── 当前作业员 / 设备编号显示 ← display.navbar.* 开关
+        │   └── 报警自动连接 → api (直接 axios)
+        ├── router-view（8 子路由，互斥）
+        │   ├── Monitor/index.vue (4051 ⚠️) ← useSystemStore, useProjectStore, useSourceStore,
+        │   │                                  useScannerDisableStore, api/detection, api/model,
+        │   │                                  api/operators, api/project, api/data
+        │   │   └── multiChannelData[ch].project   ← 每通道独立项目（不要用全局 currentProject）
+        │   │   └── speak(text, ch) / getToastConfig(toastId, ch)  ← 多通道参数
+        │   ├── Project/index.vue (2925) ← useSystemStore, useProjectStore, api/project, api/model
+        │   ├── Source/index.vue (1288) ← useSystemStore, useSourceStore, api/index, api/detection,
+        │   │                              api/model, api/project
+        │   ├── Data/index.vue (1985) ← useSystemStore, useProjectStore, api/data, api/detection,
+        │   │                            api/export, api/operators
+        │   │   └── components/CustomExportDialog.vue
+        │   │   └── components/RealtimeRulesDialog.vue
+        │   ├── MES/index.vue (75) ← 7 Tab 容器
+        │   │   ├── OrderPanel.vue (1192) ← api/mes, api/cluster, api/project
+        │   │   ├── WorkpiecePanel.vue (243) ← api/mes
+        │   │   ├── DefectPanel.vue (269) ← api/mes
+        │   │   ├── ScannerPanel.vue (1381 ⚠️) ← api/scanner + 内部挂 WMaxPanel.vue
+        │   │   ├── GatewayPanel.vue (1073 ⚠️) ← api/gateway
+        │   │   ├── ExternalDevicePanel.vue (831) ← api/external_device
+        │   │   └── ClusterPanel.vue (834) ← api/cluster
+        │   ├── Model/index.vue (339) ← api/model
+        │   ├── Alarm/index.vue (921) ← useSystemStore, useProjectStore, api/index, api/project
+        │   └── Settings/index.vue (1441 ⚠️) ← useSystemStore, api/operators, api/project, api/index
+        └── BottomBar.vue (69) ← useSystemStore, useProjectStore
 ```
 
-### MES / Gateway 相关前端文件（修改对接或 Monitor 额外字段时必查）
+## 7. 修改前 grep 矩阵
 
-| 文件 | 说明 |
-|------|------|
-| `frontend/src/api/gateway.js` | 外部 MES Gateway API（`/mes/gateway/*`）封装 |
-| `frontend/src/views/MES/GatewayPanel.vue` | 「外部对接」Tab：连接 CRUD、字段映射、测试、通讯日志 |
-| `frontend/src/views/MES/index.vue` | MES 主入口，含「外部对接」Tab 挂载 |
-| `frontend/src/views/Monitor/index.vue` | 额外字段输入（`extraFieldsSchema` 等与 Gateway schema 联动） |
+修改前必查的 grep 命令：
 
-### 操作员管理相关前端文件
+| 修改对象 | 必查 grep |
+|---|---|
+| 任意 Store action | `rg "store\.<actionName>\|<storeName>\(\)" frontend/src` |
+| Store state field | `rg "<storeVar>\.<field>" frontend/src` |
+| API 函数 | `rg "import .* from '@/api/<file>'" frontend/src` + `rg "<funcName>\(" frontend/src` |
+| 视图组件 | `rg "from '@/views/<dir>'" frontend/src` |
+| localStorage key | `rg "'<key>'" frontend/src` |
+| display.* 开关字段 | `rg "display\.<sub>\.<field>" frontend/src` |
+| 多通道方法 | `rg "channelDetections\|loadDetectionForChannel\|getChannelDetection\|multiChannelData" frontend/src` |
+| 路由跳转 | `rg "router\.push\|<router-link" frontend/src` |
+| Element Plus 组件 | `rg "<el-<tag>" frontend/src` |
 
-| 文件 | 说明 |
-|------|------|
-| `frontend/src/api/operators.js` | 操作员 API 封装：`/operators` CRUD、`set-current`、`current` |
-| `frontend/src/views/Settings/index.vue` | 操作员管理卡片：列表、新增、编辑、停用 |
-| `frontend/src/views/Monitor/index.vue` | 操作员选择器；与 Navbar 同步当前作业员 |
-| `frontend/src/layout/Navbar.vue` | 显示作业员姓名、设备编号（与 `display.navbar` 等开关配合） |
-| `frontend/src/views/Data/index.vue` | 操作员筛选；Session/Cycle 表格列展示操作员 |
-| `frontend/src/api/data.js` | `getSessionsByDate`（及同类列表接口）需支持 `operatorId` 参数，与后端 `operator_id` 过滤对齐 |
+## 8. Dead code / 已知不一致（不要扩展、不要复活）
 
-## Store 数据流
+| 位置 | 状态 | 说明 |
+|---|---|---|
+| `frontend/src/views/Report/index.vue` (299) | 路由未注册 | 仍 import `api/report.js`，但路由表里没有 `/report`，不会被加载 |
+| `frontend/src/api/task.js` | 全前端无 import | 整文件死代码 |
+| `frontend/src/api/camera.js` | 全前端无 import | 整文件死代码（旧式相机表前端入口） |
+| `frontend/src/api/report.js` 中 `getRecords / getTrend / exportPdfReport` | 局部死代码 | 仅 `Report/index.vue` 用，但视图本身死了 |
+| `frontend/src/api/export.js` 顶部注释 | 文档过时 | 写 `fmt: 'txt'\|'csv'`，实际后端支持 `txt/csv/docx/xlsx/pdf` 5 种 |
+| `useSystemStore.display.brandName / appName / inspectorName / deviceNumber` | 默认值 | 真实显示走 `display.navbar.*` 开关 + 用户输入 |
+| `Navbar.vue` 自动恢复 vs Settings 修改 | 时序坑 | Navbar 用 `JSON.parse` 直接覆盖 `store.display`，而非深合并 |
+| `WMaxPanel.vue` | 不在 MES tab 直接挂载 | 由 `ScannerPanel.vue:10` 通过 `v-if="activeTab==='wmax' && hasWmaxDevice"` 间接挂 |
 
-### useProjectStore → 消费者
-- **Navbar.vue:** 写入 currentProject, currentProjectId
-- **Monitor/index.vue:** 读取 currentProject (步骤配置、检测参数)
-- **Data/index.vue:** 读取 currentProjectId (筛选数据)
-- **BottomBar.vue:** 读取 isRunning
-- **layout/index.vue:** 无直接依赖
+## 9. ElementPlus 约束（v2.13.x）
 
-### useSystemStore → 消费者
-- **Settings/index.vue:** 读写 display, detection, performance
-- **Navbar.vue:** 读写 display (自动恢复时直接覆盖!), 读写 developerMode (密码保护切换)
-- **Monitor/index.vue:** 读取 detection (检测框、Toast、语音配置)
-- **layout/index.vue:** 读取 isDetecting (导航锁)
-- **BottomBar.vue:** 读取各显示设置
-- **Project/index.vue:** loadDetectionFromProject (合并项目检测配置)
-- **Source/index.vue:** 读取 developerMode (控制多工位选项可见性)
-
-### useSourceStore → 消费者
-- **Source/index.vue:** 读写所有字段
-- **Navbar.vue:** 自动恢复时动态import读取
-- **Monitor/index.vue:** 读取 sourceType, isStreaming
-
-## localStorage 持久化键
-
-| Key | 写入者 | 读取者 | 内容 |
-|-----|--------|--------|------|
-| `tianjun_source_config` | useSourceStore | useSourceStore | 视频源配置 |
-| `tianjun_display_settings` | useSystemStore | useSystemStore, Navbar | 显示设置 |
-| `tianjun_detection_settings` | useSystemStore | useSystemStore | 检测框设置 |
-| `tianjun_performance_settings` | useSystemStore | useSystemStore | 性能设置 |
-| `tianjun_developer_mode` | useSystemStore | useSystemStore, Navbar, Source | 开发者模式开关 |
-| `tianjun_auto_save` | Navbar | Navbar | 自动保存开关 |
-| `tianjun_last_project` | Navbar | Navbar | 上次项目ID |
-| `tianjun_last_source_*` | Source | Navbar(恢复) | 上次使用的视频源 |
-
-## 强制分析流程
-
-### 第1步: 确定修改范围
-
-1. 读取要修改的组件完整代码
-2. 列出该组件的所有 import（Store、API、子组件）
-3. 列出该组件 emit 的事件和 expose 的方法
-
-### 第2步: 追踪数据流
-
-1. 如果修改 Store → 搜索所有使用该 Store 的组件
-2. 如果修改 API 调用 → 确认后端端点兼容性
-3. 如果修改 props/emit → 确认父组件适配
-4. 如果修改 localStorage key → 确认所有读取者适配
-
-### 第3步: 检查特殊约束
-
-- **检测中导航锁:** `systemStore.isDetecting` 为 true 时只能访问 Monitor
-- **自动恢复:** Navbar 的自动恢复逻辑可能覆盖你的修改
-- **项目切换:** `handleProjectChange` 会重置大量状态
-- **双重计时器:** Navbar 和 BottomBar 各有独立的 runTime 计时器
-- **store.display 直接覆盖:** Navbar 用 `JSON.parse` 直接赋值而非深合并
-
-### 第4步: 生成影响报告
-
-```
-修改的组件/文件: [路径]
-依赖的Store: [列出]
-依赖的API: [列出]
-被影响的组件: [列出所有消费者]
-localStorage影响: [涉及的key]
-导航锁影响: [是否影响检测中的行为]
-自动恢复影响: [是否影响启动恢复流程]
-建议测试: [具体测试步骤]
-```
-
-## 屏幕自适应 (rem 缩放体系)
-
-系统通过动态 `html font-size` 实现 12寸~50寸 屏幕自适应（main.js `initResponsive()`）。
-
-### 工作原理
-- 基准: 1920px 视口 → 16px root font-size
-- 范围: 12px (小屏下限) ~ 24px (大屏上限)
-- Tailwind 的所有工具类（`p-4`, `text-sm`, `h-16` 等）底层是 rem，会自动跟随缩放
-
-### 编码规范
-- **CSS/Tailwind 中必须用 rem**，禁止硬编码 px 用于尺寸/间距/字体大小
-  - ✓ `text-sm`, `p-4`, `gap-2` (Tailwind 默认 rem)
-  - ✓ `text-[0.625rem]`, `min-w-[5.625rem]` (Tailwind 任意值用 rem)
-  - ✗ `text-[10px]`, `min-w-[90px]` (不会跟随缩放)
-- **内联 fontSize 用 rem 换算:** `fontSize: (value / 16) + 'rem'`，不要 `value + 'px'`
-- **Canvas 绘制用 `window.__uiScale`:** `ctx.font = \`bold ${basePx * (window.__uiScale || 1)}px Arial\``
-- **el-icon 图标大小:** 用 CSS class `text-[1.75rem]` 替代 `:size="28"` prop（`:size` 是绝对 px，不跟随缩放）
-- **颜色/阴影/边框的 1px 可以保留 px**（视觉装饰不需要缩放）
-
-### display Store 显示开关字段
-
-```
-display.navbar.brandName      → Navbar 品牌名称显示 (v-if)
-display.navbar.appName        → Navbar 中间标题显示 (v-if)
-display.navbar.projectSelector → Navbar 项目选择器
-display.navbar.inspector      → BottomBar 作业员 + Settings 基本信息开关
-display.navbar.deviceId       → BottomBar 设备编号 + Settings 基本信息开关
-display.navbar.mode           → BottomBar 当前模式
-display.navbar.status         → BottomBar 运行状态
-display.navbar.runtime        → BottomBar 运行时间
-display.navbar.realtime       → Navbar 实时时间
-display.monitor.ngTop3        → Monitor NG步骤TOP3 面板 (v-if)
-display.monitor.ngTopDisplayMode → NG TOP3 显示模式 ('percentage' | 'count')
-display.monitor.stepStrip     → SOP流程条
-display.monitor.statsPanel    → 右侧统计面板
-display.monitor.defectChart   → 不良统计图表
-display.monitor.capacityChart → 产能完成图表
-display.monitor.stepTable     → 步骤统计表格
-display.monitor.showFps / showLatency / showDetectionCount → 性能指标
-display.monitor.ctIncludeNg   → CT 是否包含 NG 周期
-display.monitor.defaultCounters.showTotal/showGood/showBad/showNgSteps → 内置计数器
-```
-
-## 修改原则
-
-1. **响应式安全:** 不要直接替换 reactive 对象，用属性赋值或深合并
-2. **清理定时器:** onUnmounted 中清除 setInterval/setTimeout
-3. **API 错误处理:** 不要忽略 catch，至少 ElMessage.error
-4. **Store 写入:** 通过 action 写入，不要直接 `store.xxx = yyy`
-5. **i18n:** 新文本如果需要国际化，加到 locales/zh-CN.js（其他语言暂不管）
-6. **Element Plus:** 遵循暗色主题，样式在 style.css 中覆盖
-7. **尺寸单位:** 用 rem 不用 px（见「屏幕自适应」章节）
-
-## v2.6.0 多通道前端要点
-
-### Monitor 多通道数据结构
-- `multiChannelData[ch].project` — 通道绑定的完整项目数据（从后端 workstation_config 加载）
-- `multiChannelData[ch].projectName` — 通道项目名
-- `startDetectionForChannel(ch)` **必须**用 `multiChannelData[ch].project` 而非全局 `currentProject`
-- `syncProjectConfig(channel, explicitProject)` 第二参数可传入通道独立项目
-
-### 每通道检测设置
-- `useSystemStore.channelDetections` — `{ channelId: detectionConfig }` map
-- `systemStore.loadDetectionForChannel(chId, dc)` — 加载通道检测配置
-- `systemStore.getChannelDetection(chId)` — 获取通道检测配置（回退到全局）
-- `speak(text, ch)` 和 `getToastConfig(toastId, ch)` 支持通道参数
-
-### 新增前端 API 模块
-- `frontend/src/api/cluster.js` — 集群汇总 API
-- `frontend/src/api/external_device.js` — 外部设备 API
-
-### 新增页面组件
-- `frontend/src/views/MES/ClusterPanel.vue` — 集群配置 (Master/Slave)
-- `frontend/src/views/MES/ExternalDevicePanel.vue` — 外部设备管理
-
-## v2.7.5 前端要点
-
-### 工单表单模板（`OrderPanel.vue`）
-- localStorage key：`mes_order_form_template_v1`
-- 一项 item 结构：`{ key, label, type, required, preset, optionsText }`
-- `type` 取值：`text | textarea | number | date | time | datetime | select | switch`
-- 预设字段 key 必须与后端 ORM 对齐：`order_no / product_name / product_code / product_spec / planned_qty / priority / remark`
-- `DynamicFieldInput` 组件（本地定义，`h()` 渲染）统一按 type 选控件
-- 保存时：
-  - 预设字段 → payload 顶层
-  - 非预设 → `payload.extra_data`
-  - **必填字段被删**：新建时自动补 `ORD-{Date.now()}` / `未命名`，编辑时信任后端校验
-  - 编辑时保留原 `extra_data` 中模板外的键，不丢失
-- `select` 选项格式：`"紧急=1,高=2,正常=3,低=4"`（label=value）或 `"A,B,C"`（label==value）
-- 自定义字段 key 校验：`^[A-Za-z_][A-Za-z0-9_]*$` 且唯一
-
-### 画面变换 UI（`Settings/index.vue`）
-- 位置：「显示设置」 tab 下的「画面变换」卡片
-- `transformChannel` 选通道；`rotation/flip_h/flip_v` 绑到本地 form
-- 保存调 `POST /source/transform/config?channel=N`，立即对后续帧生效
-- **前端绝对不要对检测框做二次旋转/翻转**——后端已经处理好，检测框坐标已经在显示坐标系下
-- **v2.7.14 起语义变了**：推理永远走原图（保持训练精度），变换只作用于显示/录像/快照；后端会把 bbox 从原图坐标系映射到显示坐标系再下发，前端拿到的就是对齐的
-
-### 外部设备 UI（`ExternalDevicePanel.vue` / `ScannerPanel.vue`）
-- 所有 axios 错误处理统一：`detail` 可能是 string | list | dict，展示前要规范化为 string
-  ```js
-  const d = e.response?.data?.detail
-  const msg = typeof d === 'string' ? d
-            : Array.isArray(d) ? d.map(x => x.msg || JSON.stringify(x)).join('; ')
-            : d ? JSON.stringify(d) : '未知错误'
-  ElMessage.error(msg)
-  ```
-- 串口子参数（data bits / parity / stop bits）存在 `form.protocol_config` 而非顶层
-- 保存返回 200 但有 `warning` 字段 → 用 `ElMessage.warning` 提示（设备暂时不可连通）
-
-## v2.7.12 前端坑点（必看，反复翻车）
-
-### 函数式组件用 `h()` 渲染 ElementPlus 控件 → 不能写字符串组件名
-
-`frontend/src/views/MES/OrderPanel.vue` 的 `DynamicFieldInput` 犯过 3 次同一个错：
+### 必须显式 import 才能用 `h()` 渲染
+项目用 Vite + ElementPlus 全量引入（`main.js: app.use(ElementPlus)`），但**函数式渲染时字符串组件名不解析**：
 
 ```js
-// ✗ 错 — 本项目 Vite + ElementPlus auto-import 下渲染成空节点，输入框全部隐形
+// 错：Vite + ElementPlus 全量引入下渲染成空节点
 return h('el-input', { modelValue, 'onUpdate:modelValue': onInput })
 
-// ✓ 对 — 必须显式 import 组件对象
+// 对：必须显式 import 组件对象
 import { ElInput, ElInputNumber, ElDatePicker, ElTimePicker, ElSwitch, ElSelect, ElOption } from 'element-plus'
 return h(ElInput, { modelValue, 'onUpdate:modelValue': onInput })
 ```
 
-排查路径：对话框打开后 label 在、控件区域是空的、F12 Elements 看到 `<el-input>` 未被解析成真实 DOM → 90% 是这个问题。
+适用：`OrderPanel / GatewayPanel / ScannerPanel` 等所有用 `h()` 写动态表单的文件。排查路径：对话框打开后 label 在、输入框区域空白、F12 看到未解析的 `<el-input>` 标签 → 90% 是这个问题。
 
-适用文件：任何用 `h()` 手写渲染函数的文件（GatewayPanel / OrderPanel / ScannerPanel / 动态表单组件）。
+### `el-select` 单选 v-model 必须是 string/number，**不能 boolean**
+```vue
+<!-- 错：v-model 绑 boolean，下拉选中后 el-select 不更新显示 -->
+<el-select v-model="form.enabled"><el-option :value="true" label="启用" /><el-option :value="false" label="禁用" /></el-select>
 
-### `ElInputNumber` 默认 precision=2 → 整数字段会显示 `0.00`
+<!-- 对：用 string 'on'/'off' 或单独 v-if 渲染 el-switch -->
+<el-switch v-model="form.enabled" />
+```
 
-- 整数字段（如 `planned_qty` 计划数量）单独判 key 走 `precision: 0 + step: 1`
-- 或给字段 meta 加 `integer: true` 字段后在渲染分支里取用
+### `el-input` placeholder 不能是空字符串
+空 placeholder 在某些版本下会强制改回组件默认 `请输入`，绕过办法：用 `:placeholder="' '"`（一个空格）或 v-bind 计算属性。
 
-### 扫码器冷却配置（ScannerPanel.vue）
+### `ElInputNumber` 默认 `precision=2` → 整数字段显示 `0.00`
+整数字段（`planned_qty / count / interval` 等）单独 `precision: 0 + step: 1`。
 
-- 新字段 `ok_rescan_cooldown_sec` (int, 秒, 默认 0 关闭) 在"去重/冷却"区域
-- 语义：OK 工件在该秒数内的同条码重扫静默忽略；NG 不受影响便于纠错重扫
-- 后端 `ScannerConnection` dataclass / `MESHookManager._handle_scan` 对应字段必须同步
+### `el-table` 的 `empty-text` 不要嵌套引号
+```vue
+<!-- 错：HTML attr 双引号嵌字符串引号会语法错 -->
+empty-text=""暂无规则""
+<!-- 对 -->
+empty-text="暂无规则，点上方按钮新建一条"
+```
 
-### 集群 ClusterPanel 目标明细列表渲染
+### `el-icon` 用 CSS class 控制大小，别用 `:size`
+`:size` 是绝对 px，不跟随 rem 缩放：用 `<el-icon class="text-[1.75rem]">`。
 
-- `sub_reports` 必须去重：前端显示时相信后端已按 `(channel_id, source_address)` 保留最新一条
-- 若仍看到同通道多行 → 说明 `cluster_collector._receive_station_report_locked` 的去重逻辑被改坏，去查 backend 而不是前端
+### `axios error.response.data.detail` 类型规范化
+后端 422 / 400 的 `detail` 可能是 `string | list[ValidationError] | dict`，**展示前必须规范化为 string**：
+```js
+const d = e.response?.data?.detail
+const msg = typeof d === 'string' ? d
+          : Array.isArray(d) ? d.map(x => x.msg || JSON.stringify(x)).join('; ')
+          : d ? JSON.stringify(d) : '未知错误'
+ElMessage.error(msg)
+```
+适用：`ExternalDevicePanel / ScannerPanel / GatewayPanel / OrderPanel`。
 
-### MES GatewayPanel 适配器下拉 4 选 1
+## 10. Vue 模板 / Vite 坑点
 
-- 单选值：`rest` / `form-data` / `form-urlencoded` / `query-string` / `modbus_rtu`
-- 每种下面配一句话说明 + 例子，避免用户选错
-- `form-data` 独有"表单字段名 form_key"，其余 3 种 HTTP 形式不用
+### Vue 模板字符串插值
+Vue template 在 attribute 里看到 `{{ }}` 会先解析成 Vue 表达式 → 想在 placeholder/默认文本里写 Jinja2 模板片段时不能直接写：
+```vue
+<!-- 错：Vue 把它当变量解析 -->
+<el-input :placeholder="'{{ field.path }}'" />
+<!-- 对：用 computed 绕过 -->
+<el-input :placeholder="contentPlaceholder" />
+<!-- 或 div 文字里用 HTML entity -->
+<div>&#123;&#123; field.path &#125;&#125;</div>
+```
 
-## v2.7.15 前端要点
+### Vite HMR 注意
+- HMR 不会重置 Pinia store —— 改 store 默认值后必须刷整页，否则旧 state 残留
+- HMR 后 `onMounted` 不重跑，`watch` 副作用累积；改组件副作用时观察是否需要 `onUnmounted` 清理
+- 路由懒加载在 HMR 后偶发"白屏" → 强刷即可
+- `import.meta.env.DEV` 真值 → main.js 中**生产构建会静默 console.log/debug**，调试日志只在 dev 可见
 
-### `OrderPanel.vue` — 模板结构 + 表头全动态化
+### Element Plus auto-import 不在本项目
+本项目用 `app.use(ElementPlus)` 全量引入，**没有用** `unplugin-vue-components` 的 `ElementPlusResolver`。所以：
+- 模板里 `<el-input>` OK（全量注册）
+- `h(...)` 必须显式 import（参考第 9 节）
 
-v2.7.15 把工单管理表格表头从 9 个硬编码 `<el-table-column>` 改成完全跟模板走，模板项结构扩展：
+## 11. i18n 规范
 
-- **新字段 `visible: bool`**：每项是否在表格里显示（默认 true，旧 localStorage `undefined` 兼容也按 true）
-- **新字段 `system: bool`** + **`type: 'system'`**：标记列表系统列（来源/状态/进度/良品-不良/良率/创建时间/操作），不进新建工单表单
-- 三类字段语义：
-  - **PRESET**：表单字段，进新建工单弹窗，进工单管理表头（key 与后端 ORM 对齐）
-  - **SYSTEM**：列表系统列，**只**进表头（用户能改 label/visible/顺序，不能改 key/type/required/options/删除）
-  - **CUSTOM**：自定义字段，进表单弹窗保存到 `extra_data`，表头从 `row.extra_data[key]` 取值显示
+`vue-i18n` 11.x，5 语种：`zh-CN / zh-TW / en-US / ja-JP / ko-KR`。**`legacy: false` + `globalInjection: true`**，所以模板里直接 `$t('menu.monitor')`。
 
-### 关键常量与 computed
+实际状态：i18n key **只覆盖 layout 部分**（菜单、Navbar、BottomBar 少量项），其余视图全是中文硬编码。
 
-- `PRESET_META` / `PRESET_ORDER` / `PRESET_KEYS`：表单字段元数据
-- `SYSTEM_COL_META`：每项 `{ label, typeLabel }`，typeLabel 用于字段配置弹窗"类型"列友好显示
-- `COL_META`：表格 9 列的 `{ prop, width, minWidth, fixed }`，渲染时用 `colMetaFor(key)` 取值（自定义字段没定义时回落 `{prop:key, width:120}`）
-- `colLabel(key)` computed-like：表头 label 解析顺序 `template.label → SYSTEM_COL_META.label → PRESET_META.label → key 字面量`
-- `visibleColOrder` computed：`template.filter(it => it.visible !== false).map(it => it.key)`，**不再加兜底**，全关就空（用户意图）
-- `formItems` computed：`template.filter(it => it.type !== 'system')`，新建/编辑表单只渲染表单字段
-- `canHide()` 现在永远 true（任意列都能显隐）
+新文本规则：
+- 如果是菜单 / 顶栏 / 底栏 / 全局按钮 → 加到 `locales/zh-CN.js` 对应 group，其他语言**先空着**（用户不要求）
+- 如果是页面内的中文标签 / 提示 → **直接写中文字符串**（与现有代码风格一致），不强行 i18n
+- 不要把 `$t()` 引入到没用 i18n 的视图里制造一致性混乱
 
-### localStorage 迁移
+## 12. 强制分析流程（修改前必走）
 
-- 模板 key：`mes_order_form_template_v1`（不变）
-- **新增一次性迁移标记 `mes_order_form_template_visible_migrated_v1`**：第一次加载 v2.7.15 时把所有列的 visible 强制重置为 true，避免老用户被旧版未持久化的 visible=undefined 污染
-- `loadTemplate` 还会自动补齐缺失的 SYSTEM 列到尾部（兼容 v2.7.14 及之前）
-- `openTemplate` 拷贝 `tplDraft` 时再 normalize 一次 visible（防 HMR 残留状态）
+### 第 1 步：确定修改范围
+- 读取要修改的组件完整代码
+- 列出所有 import：`import { ... } from '@/store/* | @/api/* | element-plus | ...`
+- 列出 `defineProps / defineEmits / defineExpose / defineModel`
+- 列出对外暴露的 axios endpoint（如果是 api 文件）
 
-### 字段配置弹窗的列保护
+### 第 2 步：追踪数据流
+1. 改 Store action / state → grep 所有消费者
+2. 改 API 函数签名 → 对照后端路由（用 `api-sync` skill）+ grep 调用点
+3. 改 props / emit → 确认父组件适配
+4. 改 localStorage key → 确认所有读取者适配 + 是否需要迁移标记
 
-| 字段类型 | key | label | type | required | options | 显示 | 上下移 | 删除 |
-|---|---|---|---|---|---|---|---|---|
-| PRESET | 锁定 | 可改 | 锁定 | 可改 | 可改 | 可改 | 可改 | 可删 |
-| SYSTEM | 锁定 | 可改 | 锁定（显示 typeLabel + 后缀"不可改"） | 锁定 | 锁定 | 可改 | 可改 | 锁定 |
-| CUSTOM | 可改 | 可改 | 可改 | 可改 | 可改 | 可改 | 可改 | 可删 |
+### 第 3 步：检查特殊约束（**容易遗漏**）
+- **检测中导航锁**：`systemStore.isDetecting === true` 时只能停在 Monitor，layout 侧栏所有非 Monitor 链接被 `nav-disabled` + `handleNav` 拦截
+- **License 守卫**：`licenseChecked` 第一次进入业务路由必跳 `electronAPI.getLicenseStatus()`；非 Electron 直接放行
+- **自动恢复**：`Navbar.vue` 启动时读 `auto_save_settings` 可能覆盖 store；改启动逻辑前先确认它的执行顺序
+- **项目切换**：`handleProjectChange` 重置 `useSystemStore.detection`、可能重置多通道 `channelDetections`
+- **双重 runTime 计时器**：Navbar 和 BottomBar 各有独立 `setInterval`，`onUnmounted` 都要清
+- **store.display 直接覆盖**：`Navbar.vue` 用 `JSON.parse` **直接赋值**，不是深合并；改 `display` 默认值后老用户会丢字段
+- **多通道**：Monitor 用 `multiChannelData[ch].project` 启动检测，**不要**改成全局 `currentProject`
 
-## v3.1.0 前端要点
+### 第 4 步：生成影响报告
+```
+修改的组件/文件: [路径]
+依赖的 Store: [列出]
+依赖的 API: [列出]
+被影响的组件: [列出所有消费者]
+localStorage 影响: [涉及的 key + 是否需要 migration 标记]
+导航锁影响: [是否影响检测中行为]
+自动恢复影响: [是否影响 Navbar 启动恢复]
+多通道影响: [是否波及 channelDetections / multiChannelData]
+建议测试: [具体测试步骤]
+```
 
-### `OrderPanel.vue` — 工单"绑定方式"独立区块
+## 13. 屏幕自适应 (rem 缩放)
 
-v3.1.0 新增"绑定方式"功能,**不走模板字段系统**,在新建/编辑 dialog 顶部加一段固定 radio (按项目/按工位/按集群站点),必填,联动显示对应选择控件:
+`main.js: initResponsive()`：根据视口宽度（基准 1920px）动态设 `<html>` font-size，范围 12~24 px，`window.__uiScale = fs / 16`。
 
-- **`bindingForm` ref**: `{ scope, project_id, target_channels, target_stations }`,默认 scope=`project`
-- **联动选项加载**: `openCreate` / `editOrder` 调 `loadBindingOptions()` 拉项目列表 (`getProjects`) + 集群站点 (`getClusterConfig.expected_stations`)
-- **`channelOptions` computed**: 项目选了就用 `project.channel_count`,否则给 0..3 兜底
-- **`handleSave` 校验**: project 模式查 project_id; channels 模式查 target_channels 非空; cluster 模式不再校验(整集群计件)
-- **payload 合并**: 绑定字段独立追加到 payload,`target_stations` 始终传 null(后端 find_cluster_orders 默认取首条)
+### 编码规范
+- **CSS / Tailwind 必须用 rem，禁止硬编码 px**（尺寸 / 间距 / 字号）
+  - 对：`text-sm`、`p-4`、`gap-2`、`text-[0.625rem]`、`min-w-[5.625rem]`
+  - 错：`text-[10px]`、`min-w-[90px]`
+- **内联 fontSize**：`fontSize: (value / 16) + 'rem'`，**不要** `value + 'px'`
+- **Canvas 绘制**：`ctx.font = \`bold ${basePx * (window.__uiScale || 1)}px Arial\``
+- **el-icon 大小**：CSS class `text-[1.75rem]` 替代 `:size="28"` prop（`:size` 不跟随缩放）
+- 颜色 / 阴影 / 1px 边框可以保留 px（视觉装饰）
 
-**列表"绑定"系统列**:
-- `SYSTEM_COL_META.binding` + `COL_META.binding` 加完整定义
-- `bindingLabel(row)` / `bindingTagType(row)` / `bindingDetail(row)`:**老工单 `binding_scope=project AND project_id IS NULL` 显示红色 ⚠ "未绑定项目, 不会计件"**
-- `normalizeTemplateItems` 已经会自动补 binding 系统列到老用户的模板里,无需迁移
+## 14. display 显示开关字段速查
 
-**Q: 改这块要注意什么?**
-- 别把绑定字段塞进 `PRESET_META` 模板(用户可能不小心删掉) — 必须独立维护
-- 编辑工单时 `bindingForm.value` 要从 row 回填(scope 从 `row.binding_scope`,各字段对应回填)
-- API 端见 `OrderCreate`/`OrderUpdate` Pydantic 字段 + 后端 `_normalize_binding(strict)`
+```
+display.brandName / appName / inspectorName / deviceNumber  ← 实际值（非开关）
+display.navbar.brandName / appName / projectSelector / inspector / deviceId
+            / mode / status / runtime / realtime            ← Navbar+BottomBar 显示开关
+display.monitor.stepStrip / statsPanel / defectChart / capacityChart / stepTable
+display.monitor.showFps / showLatency / showDetectionCount  ← 性能指标
+display.monitor.ctIncludeNg                                  ← CT 是否包含 NG 周期
+display.monitor.ptMode / ctMode                              ← 'avg' | 'last' | 'current'
+display.monitor.ngTop3 / ngTopDisplayMode                    ← NG TOP3 + 'percentage'|'count'
+display.monitor.defaultCounters.{ showTotal, showGood, showBad, showNgSteps }
+```
 
-`saveTemplate` 落盘前会强制把 SYSTEM 列的 type='system'/required=false/optionsText='' 写回，防止任何路径绕过 UI 限制污染数据。
+## 15. 修改原则
 
-### 改这个文件的注意事项
+1. **响应式安全**：不直接替换 reactive 对象，用属性赋值或深合并
+2. **清理副作用**：`onUnmounted` 清 `setInterval / setTimeout / ResizeObserver / EventSource`
+3. **API 错误处理**：不要忽略 catch，至少 `ElMessage.error`，并按第 9 节规范化 detail
+4. **Store 写入**：通过 action 写，不要直接 `store.xxx = yyy`（除非是临时 hotfix）
+5. **i18n**：见第 11 节
+6. **Element Plus 暗色主题**：样式覆盖在 `style.css`，不要散在各组件 scoped style
+7. **rem 单位**：见第 13 节
+8. **Dead code 不要复活**：第 8 节列的文件不要修，整体死代码留给后续清理
+9. **多通道**：用 `multiChannelData[ch].project` / `getChannelDetection(ch)`，不要用全局 currentProject 启动检测
 
-1. **不要把表头改回硬编码** —— 客户改了模板就不生效
-2. **新增 SYSTEM 列要同时加进 `SYSTEM_COL_META` + `COL_META` + 表头 v-for 的 `<template v-else-if>` 分支**（三处不同步会渲染异常）
-3. **新增 PRESET 表单字段要同时加进 `PRESET_META` + `PRESET_ORDER` + 后端 ORM**（前端校验 key 必须对得上）
-4. **表头 v-for 里的 `<template #default="{ row }">`** 只能写一个 default slot，所有列分支都在里面用 v-if/else-if 分流（曾经踩坑：写多个 `<template #default v-if=...>` 会被 Vue 拒绝渲染）
+## 16. 高频踩坑参考（部分历史 bug）
 
-## v3.5.0 新增的前端组件
+> AGENTS.md 第十二节统计 `modify-frontend` 历史 bug 45 条，下面是高频四类：
 
-### 自定义导出对话框 (`frontend/src/views/Data/components/CustomExportDialog.vue`)
-
-- 入口: Data 页"数据导出"tab "自定义导出 / 客户模板"按钮 → `openCustomExportDialog()`
-- 左侧: 308 字段树 (按 group 分组), 拖到右侧编辑器即生成 `{{ field.path }}` 模板片段
-- 右侧: monaco 风格 textarea, Jinja2 模板编辑 + 实时预览
-- props: `v-model:visible / initial-scope / initial-cycle-id / initial-session-id`
-- 调用: `frontend/src/api/export.js` 封装的 templates / preview / render
-- **不要**在模板里直接写 `{{ }}` 在 Vue template attributes 里 — Vue 会先解析掉. 用 `:placeholder="contentPlaceholder"` 计算属性绕过, 或在 div 文字里用 HTML entity `&#123;&#123;`
-
-### 实时规则对话框 (`frontend/src/views/Data/components/RealtimeRulesDialog.vue`)
-
-- 入口: Data 页"实时规则（扫码自动写入）"按钮 → `openRealtimeRulesDialog()`
-- 表格列出所有规则 (含 enabled toggle / channel/project filter / template / output_dir / filename_template)
-- "新建规则"按钮 + test-run 按钮 + run-logs 抽屉
-- empty-text 不要带嵌套引号 (`""暂无规则""` 会语法错), 用 `empty-text="暂无规则，点上方按钮新建一条"`
-
-### Project 页"周期性强制动作"卡片 (`Project/index.vue`)
-
-- 在"逻辑设置"tab 内, 与 task_type / logic_mode 选项独立
-- 数据字段: `activeProject.periodic_actions: Array<{id, name, enabled, trigger_step_ids, interval, count_basis, reset_policy, due_warning_event_id, overdue_event_id, overdue_repeat}>`
-- 保存时: `handleSaveProject` 把这数组写到 `pipeline_config.periodic_actions`
-- 读取时: `initProjectDefaults` 从 `pipeline_config.periodic_actions` 同步到 `activeProject.periodic_actions`
-
-### Monitor 页"周期性强制动作"进度区 (`Monitor/index.vue`)
-
-- 数据来源: `get_detection_results` API 返回的 `periodic_actions` 字段 (定时轮询)
-- 状态色: `state === 'ok'` 灰 / `'due'` 黄 / `'overdue'` 红
-- 仅当 `periodicActions.length > 0` 时显示, 单条/多条用 grid-cols-1/2 自适应
+- Vue 模板 `{{ }}` 在 attr 中被吞 → 用 computed / HTML entity（第 10 节）
+- `h()` 渲染字符串组件名 → 显式 import 组件对象（第 9 节）
+- `el-select` 单选 v-model 绑 boolean → 改 string / 用 el-switch（第 9 节）
+- `display_settings` 直接覆盖 vs 深合并 → Navbar.vue:477 老路径用直接覆盖，改默认值时注意老 key 丢失

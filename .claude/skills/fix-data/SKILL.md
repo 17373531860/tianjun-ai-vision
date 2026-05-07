@@ -21,34 +21,49 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
   Windows: %APPDATA%/tianjun-ai-vision/
   Linux: ~/.local/share/tianjun-ai-vision/
 
-DB文件: tianjun.db (SQLite3)
+DB 文件: sql_app.db (SQLite3, WAL 模式)
+配置:    backend/core/config.py 的 SQLALCHEMY_DATABASE_URI
 ```
 
-## 数据模型关系
+> 启动时若发现 `BASE_DIR/sql_app.db` 但 `DATA_DIR/sql_app.db` 不存在，会自动迁移（参见 `backend/main.py` `_db_path` 初始化）。
 
-```sql
-DetectionSession (1)
-  ├── (N) DetectionCycle
-  │       └── (N) StepRecord
-  └── (N) VideoClip
+## 数据模型关系（v3.5.x 真实结构，共 31 张表）
 
--- MES 表 (v2.3.0+, 同库):
-WorkOrder (1)
-  ├── (N) Batch
-  ├── (N) Workpiece
-  │       └── (N) WorkpieceInspection → DetectionCycle
-  │       └── (N) DefectRecord → DefectCode
-  └── 关联: DetectionSession.order_id, DetectionCycle.order_id
+```
+detection_sessions (1)
+  ├── (N) detection_cycles
+  │       └── (N) step_records
+  └── (N) video_clips
+
+-- MES 子库（同 sql_app.db，15 张表）:
+work_orders (1)
+  ├── (N) batches
+  ├── (N) workpieces
+  │       └── (N) workpiece_inspections → detection_cycles
+  │       └── (N) defect_records → defect_codes
+  ├── (N) box_aggregations / box_summaries
+  └── 关联: detection_sessions.work_order_id, detection_cycles.work_order_id
+
+-- 导出子库（v3.5.0+，3 张表）:
+export_templates / export_realtime_rules / export_run_logs
+
+-- 设备/扫码/集群/外设:
+scanner_devices / scan_logs / mes_connections / mes_comm_logs
+external_devices / external_device_logs / cluster_config
+
+-- 业务/系统配置:
+projects / models / model_conversions / tasks / cameras
+daily_stats / system_configs / operators / data_export_settings
 ```
 
-外键关系:
-- DetectionCycle.session_id → DetectionSession.id
-- StepRecord.cycle_id → DetectionCycle.id
-- VideoClip.session_id → DetectionSession.id
-- VideoClip.cycle_id → DetectionCycle.id (可选)
-- DetectionSession.order_id → WorkOrder.id (v2.3.0+, 可NULL)
-- DetectionCycle.order_id → WorkOrder.id (v2.3.0+, 可NULL)
-- WorkpieceInspection.cycle_id → DetectionCycle.id (v2.3.0+)
+外键关系（关键）:
+- `detection_cycles.session_id` → `detection_sessions.id`
+- `step_records.cycle_id` → `detection_cycles.id`
+- `video_clips.session_id` → `detection_sessions.id`
+- `video_clips.cycle_id` → `detection_cycles.id` (可空)
+- `workpiece_inspections.cycle_id` → `detection_cycles.id`
+
+> ⚠️ ORM 类名是 `Model`（**不**是 `MLModel`），表名是 `models`（**不**是 `ml_models`）。三个 models 文件分别在 `backend/models/{models,mes_models,export_models}.py`。
 
 ## 常见数据问题及诊断SQL
 
@@ -169,15 +184,17 @@ GET /api/v1/export/csv?type=all&start_date=...&end_date=...
 5. **修复数据:** 直接SQL更新或通过API
 
 ## 关键文件
-- `backend/models/models.py` — ORM模型定义
-- `backend/api/source.py` — 数据写入端
-- `backend/api/sessions.py` — 数据读取+清理+导出
-- `backend/main.py` — fix_orphan_sessions(), migrate_database()
-- `backend/core/config.py` — DATA_DIR 路径
+- `backend/models/{models,mes_models,export_models}.py` — 31 张表 ORM 定义
+- `backend/api/source.py` (1573 行) + 14 个 `source_*_mixin.py` — 数据写入端
+- `backend/api/sessions*.py`（4 个文件 ~2086 行） — 数据读取+清理+导出
+- `backend/main.py` — `migrate_database()`（60+ ALTER TABLE）/ 启动时孤儿 session 清理
+- `backend/core/config.py` — `DATA_DIR` 路径 + DB URI
 - `frontend/src/views/Data/index.vue` — 数据展示页面
 
 ## 已知陷阱
-- SQLite 不支持真正的并发写入，多线程写入可能导致 "database is locked"
+- SQLite 不支持真正的并发写入，多线程写入可能导致 "database is locked"（生产建议用 WAL，已默认开启）
 - `_filter_valid_steps()` 过滤 <0.1秒的步骤可能误删合法数据
-- `_reconcile_step_records()` 可能在异常情况下覆盖正确的步骤时间
+- `_reconcile_step_records()` 在异常情况下可能覆盖正确的步骤时间
 - 自动清理的保留天数计算基于 UTC 时间，可能与本地时间有偏差
+- **"幽灵 cycle"问题**（v3.5.x 已知）：`last_step` 结算清除 `step_last_seen` 导致快速重检测，产生短周期单步骤记录；解法是设置 `min_duration` ≥ 0.5s。详见 `debug-source` skill
+- 旧手册 v2.4.0 写"22 张表"是过时的，以代码为准（13 + 15 + 3 = 31）

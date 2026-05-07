@@ -9,27 +9,28 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent"
 
 # build-release: 打包发版流程
 
-你正在帮用户处理天军AI视觉检测系统的打包发版。
+天军 AI 视觉检测系统 v3.5.x 主线 CI/CD 全景说明。
+当前线上版本：**v3.5.1**，权威源 `electron/package.json`。
 
 需求: $ARGUMENTS
 
 ---
 
-## 版本号的单一数据源 (v2.7.12+)
+## 一、版本号单一权威源
 
-**唯一权威来源: `electron/package.json` 的 `.version` 字段**。
+`electron/package.json` 的 `.version` 字段是**唯一**版本来源。CI 直接 `Get-Content -Raw | ConvertFrom-Json` 取值，再 `/DMyAppVersion=` 传给 Inno Setup。
 
-其他所有地方都必须和它保持一致:
+需要同步的位置：
 
-| 文件/位置 | 用途 | 约束 |
-|-----------|------|------|
-| `electron/package.json` `.version` | **权威源**, CI 从这里读 | 改版本只改这里 + splash |
-| `electron/splash.html` `.version` div | 启动画面显示 | 同步 package.json |
-| Git tag `vX.Y.Z` | 触发 Release 流程 + 一致性校验 | tag 的 X.Y.Z 必须 == package.json |
-| `docs/changelog/vX.Y.Z_*.md/json` | 变更记录 | 文件名版本号一致 |
-| `docs/CHANGELOG.md` 顶部 | 汇总 | 手动维护 |
+| 位置 | 用途 | 同步方式 |
+|---|---|---|
+| `electron/package.json` `.version` | 权威源，CI 读这里 | 手改 |
+| `electron/splash.html` 的 `.version` div（line 112） | 启动画面显示 `v3.5.1` | 手改，必须和 package.json 一致 |
+| Git tag `vX.Y.Z` | 触发 Release 通道 + 一致性校验 | `git tag -a vX.Y.Z` |
+| `docs/CHANGELOG.md` 顶部 | 总览 | 手改 |
+| `docs/changelog/vX.Y.Z_*.md` + `.json` | 单版本详细 changelog | `update-release` skill 生成 |
 
-CI 的 "Build Installer with Inno Setup" 步骤强制做 **tag ↔ package.json 一致性校验**:
+**CI 强制 tag ↔ package.json 一致性校验**（`build.yml` ~270 行）：
 ```powershell
 $pkg = Get-Content "electron/package.json" -Raw | ConvertFrom-Json
 $version = $pkg.version
@@ -37,387 +38,344 @@ if ($refName -like "v*" -and $refName.TrimStart("v") -ne $version) {
   echo "ERROR: tag 与 package.json 不一致"; exit 1
 }
 ```
-tag 不一致直接中止构建, 防止"tag=v2.7.11 但打出来的包还叫 v2.0.8"这种惨剧.
-
-### 历史踩过的坑 (2026-04-22, v2.0.8 → v2.7.11)
-
-**症状**: 副机下载 Action Artifact 的安装包, 解压出来文件名永远是 `TianJun-AI-Vision-2.0.8-Setup.exe`, 和 tag (v2.1 ~ v2.7.11) 都对不上.
-
-**根因**: 旧 build.yml 版本号来源是 `github.ref_name`:
-```powershell
-$version = "${{ github.ref_name }}".TrimStart("v")
-if (-not $version -or $version -eq "${{ github.ref_name }}") { $version = "2.0.8" }  # ← 惨案
-```
-- push tag `v2.7.11` 时 `ref_name=v2.7.11`, TrimStart 得到 `2.7.11`, 正确;
-- push main 时 `ref_name=main`, TrimStart 不去任何字符, fallback 写死 `2.0.8`.
-
-半年里 main 的 Artifact 构建一直被当"最新包"下载, 版本号全错. 这个问题直到客户副机装包才暴露.
-
-**修复**: 版本号从 `electron/package.json` 读, tag 只做一致性校验, 不参与版本号提取.
+不一致直接中止构建，杜绝"tag=v3.5.1 但打出来的包是 v3.5.0"这种事故（v2.0.8 → v2.7.11 半年间发生过一次，详见下文"历史踩坑"）。
 
 ---
 
-## 两种安装包上传通道 (v2.7.12+ 新规范)
-
-项目维护两条并行的下载通道, **不要再搞双通道都分卷这种蠢事**:
-
-### 通道 A — Action Artifact (内部/团队)
-- **不分包**, 上传完整 `TianJun-AI-Vision-X.Y.Z-Setup.exe` (约 3.75 GB)
-- **所有 push 都跑** (main / tag / PR)
-- 用途: 内部测试、开发机下载、CI 调试
-- 配额: GitHub 给付费账号 (Pro) 的公开 repo 有限 artifact 配额, 满了就 fail, 此时用 `continue-on-error: true` 不阻塞 Release 通道
-- 保留 30 天
-
-### 通道 B — GitHub Release 分卷 (外部/副机)
-- **分卷**, 拆成 1.9 GB 一块的 `*.part00.part / part01.part / ...` + `checksums.txt` + `merge_installer.bat`
-- **只在 push tag `v*` 时跑**
-- 上传到独立 public repo: `17373531860/tianjun-releases`
-- 用途: 副机/客户下载装机
-- 原因: GitHub Release 单文件硬限 **2 GB**, 3.75 GB 的 Setup.exe 必须切;  CI 生成合并脚本给用户用
-
-### 为什么 A 不分卷
-1. Action Artifact 没有单文件 2 GB 限制 (实测 4 GB+ 可传)
-2. 下载时自动 zip 压成一个文件, 用户解压直接拿到完整 exe, 不用跑合并脚本
-3. 开发/团队内部用, 少一步合并能少一个出错点
-
-### 错误示范 (v2.7.11 犯过的)
-把 Action 也改成上传分卷:
-- 多此一举: 内部下载没 2GB 限制, 为什么要切?
-- 用户双击 merge_installer.bat 才能装, 多一步出错可能
-- 分卷文件的文件名又把 v2.0.8 bug 暴露了: 用户从 Artifact 下的分卷里 part00 的前缀永远是 `TianJun-AI-Vision-2.0.8-Setup.exe.part00.part`
-**结论: Action Artifact 永远直传完整 exe, 只有 Release 需要分卷.**
-
----
-
-## merge_installer.bat 的踩坑全记录
-
-历次发版这个小小的 bat 翻车 N 次, 把所有坑都记在这, **以后改 build.yml 里生成 bat 的 PowerShell 之前先读这里**.
-
-### 坑 1: BOM 导致 @echo off 第一行失效
-```powershell
-$content | Out-File -FilePath "merge_installer.bat" -Encoding UTF8   # ← 错误
-```
-Windows PowerShell 5.1 的 `-Encoding UTF8` 默认**带 BOM** (`EF BB BF`), cmd 把 BOM 当第一行的前 3 字节, `@echo off` 匹配失败, 命令全部回显 → 所有变量/goto 提前暴露 → 脚本乱成一团 → 秒退无提示.
-
-**正确做法**: 用 `[IO.File]::WriteAllBytes` + `[Text.Encoding]::ASCII.GetBytes`.
-
-### 坑 2: 嵌 PowerShell 单行命令
-```bat
-powershell -ExecutionPolicy Bypass -Command "& { $foo = 'bar'; ... }"
-```
-在 PowerShell here-string 里生成 bat, here-string 里的 `$` 要写成 `` `$ `` 转义, 单引号双引号互相打架, 一个生成错误整个 bat 炸掉. 而且嵌套的 `"..."` 在 cmd 层被意外闭合, PowerShell 层执行到一半就挂.
-
-**正确做法**: bat 里只用 cmd 内置命令 — `copy /b`, `certutil`, `findstr`, `if`, `for`, `goto`, `set`. 够用.
-
-### 坑 3: 硬编码版本号让 bat 不通用
-```bat
-set "F0=TianJun-AI-Vision-2.7.11-Setup.exe.part00.part"
-if not exist "%F0%" goto MISSING     # ← 用户手头是 v2.0.8 分卷, 永远 MISSING
-```
-每次发版重新生成一份 bat 又硬编码 version, 用户把 v2.0.8 的分卷和 v2.7.11 的 bat 放一起就炸.
-
-**正确做法**: 用 `dir /b *.part00.part` 动态探测第一个分卷文件名, `set "OUT=%P0:.part00.part=%"` 子字符串替换得到 exe 名. bat 跨版本通用.
-
-### 坑 4: call :Label + setlocal EnableDelayedExpansion 参数展开诡异
-```bat
-setlocal EnableDelayedExpansion
-call :VerifyPart "TianJun...part00.part" "HASH"
-...
-:VerifyPart
-set "FNAME=%~1"
-if not exist "%FNAME%" ( echo [MISSING] ... )   # ← 有时判定错, 实际文件存在也报 MISSING
-```
-历史上踩过, 在延迟展开模式下 `call :Label` 带参数某些场景 `%~1` 会被二次展开破坏.
-
-**正确做法**: 二选一, 不要两个一起用:
-- 用 `call :Label` 子程序 → 不要 `setlocal EnableDelayedExpansion`, 子程序内只用 `%1 %2`
-- 用 `setlocal EnableDelayedExpansion` → 不要 `call :Label` 带参数, 所有累积写在 for 循环里用 `!VAR!`
-
-### 坑 5: echo 文本含 `(` `)` `!` `|` `&` 被 cmd 提前解析
-```bat
-if %BAD% GTR 0 (
-  echo %BAD% part file(s) corrupted. Re-download from:
-)
-```
-`file(s)` 的 `)` 被 cmd 当作外层 `if (...)` 的闭合, 后面 `corrupted. Re-download from:` 被当成独立命令, 报 `此时不应有 corrupted.。`
-
-**正确做法**: 所有 echo 文本只用 ASCII 字母/数字/`-` `_` `:` `.` `[` `]`, 不含 `( ) ! | & < > ^` 等 cmd 特殊字符; 确实需要时用 `^(` `^)` 转义.
-
-### 坑 6: 双击 bat 时 cwd 不一定是 bat 所在目录
-某些 Windows 环境 (或者通过快捷方式触发) 双击 bat 时 `%cd%` 是 `C:\Windows\System32` 或别的, `for %%f in (*.part)` 在错误目录里找不到文件.
-
-**正确做法**: bat 第一行永远加 `cd /d "%~dp0"`, 强制切到 bat 所在目录. 同时打印 `echo Working folder: %cd%` 方便排查.
-
-### 坑 7: certutil 输出 parse 陷阱
-```bat
-for /f "skip=1 tokens=*" %%h in ('certutil -hashfile X SHA256') do ...
-```
-- 中文系统 certutil 第一行/第三行是中文, `skip=1` 不够
-- 某些版本 certutil 输出 hash 里混空格
-- 对中文系统的 codepage, `tokens=*` 的分隔符也会变
-
-**正确做法**: 不 parse, 用 `findstr /i /c:"HASH"` 匹配:
-```bat
-certutil -hashfile "%FILE%" SHA256 | findstr /i /c:"%EXPECTED_HASH%" >nul
-if errorlevel 1 (...hash mismatch...) else (...ok...)
-```
-hash 是 64 位随机 hex, 在 certutil 输出里作为子串碰撞概率 ~0.
-
-### 坑 8: Windows Defender / MoTW 拦截
-- 用户浏览器下的 bat 带 Mark of the Web ADS, SmartScreen 可能拦
-- 某些杀毒软件对 "大文件合并 + hash 校验" 组合行为判毒
-- 表现: 双击 bat 看似秒退, 实际是被杀软中断
-
-**正确排查**: 让用户在 PowerShell 里 `.\merge_installer.bat` 跑, 能看到 cmd 错误输出. 如果也秒退, 让用户右键 bat → 属性 → 底部 "解除锁定" 复选框打勾.
-
-### 当前 bat 模板 (build.yml 里生成的)
-- 纯 ASCII + CRLF + 无 BOM (`[IO.File]::WriteAllBytes` + ASCII encoding)
-- `cd /d "%~dp0"` 锁定目录
-- `dir /b *.part00.part` 动态探测输出 exe 名
-- `findstr /i /c:"HASH"` 做 SHA256 校验 (best-effort, 对不上只警告继续)
-- `call :Sub` 子程序; **不**用 `setlocal EnableDelayedExpansion`
-- 所有错误路径都 pause + exit /b, 绝不闪退
-
----
-
-## 自动构建流程 (.github/workflows/build.yml)
+## 二、CI 构建流程概览（`.github/workflows/build.yml`）
 
 ### 触发条件
 
-| 事件 | Artifact (完整 exe) | Release 分卷 |
-|------|---------------------|--------------|
-| `push` main | ✅ | ❌ |
-| `push` PR | ✅ | ❌ |
-| `push` tag `v*` | ✅ | ✅ |
-| `workflow_dispatch` 手动 | ✅ | ❌ |
+| 事件 | Action Artifact（完整 exe） | GitHub Release（分卷） |
+|---|---|---|
+| `push` 到 `main` / `master` | 是 | 否 |
+| `push` tag `v*` | 是 | **是** |
+| `workflow_dispatch` 手动 | 是 | 否 |
 
-### 主流程
+> 注意：PR 不触发 CI（`on:` 只声明了 `push.tags` / `push.branches` / `workflow_dispatch`）。
+
+### 主流程（windows-latest，`timeout-minutes: 300`）
 
 ```
-1. 环境准备 (Windows runner, Python 3.10 + conda, Node.js 20)
-2. Python 依赖 (PyTorch cu128 + numpy 1.26.4 + opencv 4.10 + mediapipe --no-deps)
-3. Nuitka 编译 (source/detection/sessions/projects/cameras/alarm/reports/tasks/websocket/models/detector → .pyd)
-4. conda-pack → python-env/python/
-5. 下载 FFmpeg (win64 GPL)
-6. 前端构建 (npm ci && npm run build)
-7. electron-builder --dir --x64
-8. Inno Setup 6 → TianJun-AI-Vision-{package.json.version}-Setup.exe
-9. [通道 A] 上传完整 exe 为 Action Artifact (所有 push 都跑)
-10. [通道 B, 仅 tag] Split 为 1.9GB 分卷 + 生成 checksums.txt + merge_installer.bat
-11. [通道 B, 仅 tag] 上传到 17373531860/tianjun-releases Release
+1. 释放磁盘（删 dotnet/VS 2019/CodeQL/Java tool cache）
+2. checkout + setup Node 20 + setup Miniconda（env 名 tianjun, python 3.10）
+3. Python 依赖（PyTorch cu128 + ONNX-GPU + TensorRT + scipy + mediapipe --no-deps + numpy<2 + opencv-contrib-python<4.11 + conda-pack）
+4. Nuitka 编译核心 .py → .pyd（重要细节见第三节）
+5. conda-pack tianjun → python-env/python/（解压后约 5-6 GB）
+6. 下载 FFmpeg win64 GPL（github.com/BtbN/FFmpeg-Builds）
+7. Vite 前端构建（cd frontend && npm ci && npm run build）
+8. electron-builder --dir --x64（生成 win-unpacked/，不出 Setup）
+9. 装 Inno Setup 6（choco install innosetup -y）
+10. ISCC 打包 → TianJun-AI-Vision-{package.json.version}-Setup.exe（约 3.75 GB）
+11. [通道 A] 上传完整 exe 为 Action Artifact（30 天保留）
+12. [通道 B，仅 tag] 切 1.9 GB 分卷 + checksums.txt + merge_installer.bat
+13. [通道 B，仅 tag] gh release create 上传到 17373531860/tianjun-releases
 ```
 
-### v3.0 开发机运行环境对齐
-
-- 开发机后端统一使用 conda 环境 `tianjun-runtime`（`start_backend.sh` 已切换），目标是尽量贴近 CI/客户包的 Python 3.10 + CUDA 12.8 运行环境。
-- CI 打包环境名仍是 `tianjun`，客户包内是 conda-pack 解出的 `resources/python`，**不要用环境名判断是否一致**，要看：
-  - Python 3.10
-  - PyTorch cu128 / CUDA 12.8
-  - NumPy `<2.0`
-  - OpenCV `<4.11`
-  - TensorRT / onnxruntime-gpu 是否可 import
-- 现场定位优先看启动日志：
-  - `DATA_DIR` 是否指向 AppData
-  - 模型 `file_exists=True/False`
-  - `torch.cuda.is_available()`
-  - TensorRT engine 是否报 `engine plan file is not compatible`
-- TensorRT `.engine` 和 GPU/TensorRT 版本强绑定，开发机重建的 engine 不保证客户机可用。客户机若检测启动卡住或 engine 反序列化失败，应回退 `.pt` 或在客户机重建 engine。
+### 关键时长参考
+- 完整一轮约 45-60 min。Python 依赖装 10-15 min 是大头，Nuitka 编译每文件几十秒。
+- 磁盘清理是必要步骤，windows-latest 默认空间不够装 PyTorch+TensorRT+conda-pack。
 
 ---
 
-## 关键构建配置
+## 三、Nuitka 编译范围与已知 IP 泄露 BUG
 
-### Electron Builder (electron/package.json build section)
+CI 用 `nuitka --module` 把核心 `.py` 编成 `.pyd`，编译成功后**删除源 .py**（`build.yml` 158-163 行）。Runtime 仍 spawn `python -m uvicorn backend.main:app`，加载 `.pyd` + `.py` 混合包。
 
-```json
-{
-  "extraResources": [
-    {"from": "../frontend/dist", "to": "app/dist"},
-    {"from": "../backend/", "to": "backend/"},
-    {"from": "../python-env/python", "to": "python/"},
-    {"from": "../ffmpeg/", "to": "ffmpeg/"},
-    {"from": "../drivers/CH341SER", "to": "drivers/CH341SER"}
-  ]
-}
-```
-
-### Inno Setup (installer.iss)
-- 64位, LZMA2 压缩, 约 3.75 GB
-- 安装前备份 license.lic, 安装后恢复
-- 可选安装 CH340 驱动
-- `OutputBaseFilename=TianJun-AI-Vision-{#MyAppVersion}-Setup`
-- CI 传入 `/DMyAppVersion="$version"`, $version 从 `electron/package.json` 读
-
----
-
-## 常见构建问题
-
-### Python 依赖冲突 (经客户实测的安全版本)
-
-**锁定版本 (CI 和客户端修复均验证通过)**:
-```
-numpy==1.26.4
-opencv-contrib-python==4.10.0.84
-mediapipe==0.10.20  (必须 --no-deps)
-protobuf<5
-```
-
-- **OpenCV**: mediapipe 依赖 opencv-python, 但我们用 opencv-contrib-python
-  - 解决: 先删 opencv-python, 再装 opencv-contrib-python==4.10.0.84, mediapipe 用 --no-deps
-  - **不能有 opencv-python 和 opencv-contrib-python 共存**, 否则 import 冲突
-- **numpy**: opencv 4.11+ 编译时用 numpy 2.x ABI, 与 numpy 1.x 运行时不兼容
-  - 症状: `cv2.imencode` 报 `img is not a numpy array`, `ufunc 'isnan' not supported`
-  - 解决: 锁定 numpy==1.26.4 + opencv-contrib-python==4.10.0.84
-- **mediapipe**: 必须 --no-deps, 否则拉入 opencv-python 覆盖 opencv-contrib-python
-  - 安装顺序: numpy → opencv-contrib-python → mediapipe(--no-deps) → protobuf<5
-- **protobuf**: mediapipe 需要 protobuf<5
-
-### conda numpy ABI 陷阱 (重要!)
-- **症状**: 客户端 `cv2.putText`/`cv2.resize`/`cv2.imencode` 报 `img is not a numpy array`
-- **根因**: conda 环境 numpy 是 MKL 编译, pip 的 opencv 是 OpenBLAS 编译, C 层 ABI 不兼容
-- **CI**: `pip install --force-reinstall numpy==1.26.4`, 不加 `--force-reinstall` pip 会跳过同版本
-- **客户端修复**: 必须物理删除 `site-packages/numpy/` + `numpy.libs/` 目录后重装
-- **安装顺序**: 先装 numpy==1.26.4 (pip), 再装 opencv-contrib-python==4.10.0.84 (pip)
-- **修复脚本**: `patch_numpy_opencv_fix.bat` (清华镜像, 支持离线 whl)
-
-### TensorRT 中文路径陷阱
-- **症状**: 模型格式转换报 `[TRT] [E] Input file cannot be found`, 但文件实际存在
-- **根因**: TensorRT C 库在 Windows 上用 ANSI 编码打开文件, 无法处理中文字符路径
-- **影响**: 模型文件名、所在目录名、路径中任何包含中文的部分
-- **解决**: 模型文件名只用英文字母、数字、下划线、连字符
-
-### batch 脚本编码规范 (见上方 merge_installer.bat 坑 1/5)
-- `.bat` 文件**不能含任何非 ASCII 字符** (中文/框线字符 ─ 等都不行)
-- `chcp 65001` 只改控制台输出编码, 不改 cmd.exe 解析文件的编码
-- UTF-8 中文字节被 GBK 拆解后, 含 `)` `|` `"` 等字符会破坏批处理语法
-- 非 ASCII 输出只能在 `powershell -Command "..."` 块内 (但该坑 2 不推荐嵌 PS, 最好彻底避免非 ASCII)
-
-### Nuitka 编译失败
-- 确认 Nuitka 版本兼容 Python 3.10
-- C 编译器必须安装 (Windows: MSVC Build Tools)
-- 编译后 .pyd 文件名必须与原 .py 匹配
-
-### conda-pack 问题
-- **必须验证 cu128**: `python -c "import torch; print(torch.version.cuda)"`
-- **必须验证 sm_120**: Blackwell GPU 支持
-- pack 前确保环境干净 (无多余包)
-
----
-
-## GitHub Secrets 清单
-
-| Secret | 用途 | 有效期 | 上次更新 |
-|--------|------|--------|----------|
-| `RELEASE_TOKEN` | GitHub Fine-grained PAT → `tianjun-releases` repo (Contents: RW) | 90天 | 2026-04-03 |
-
-### RELEASE_TOKEN 过期续期流程
-
-CI 上传 Release 到 `17373531860/tianjun-releases` 时报 HTTP 401 = Token 过期.
-
-1. 登录 GitHub 账号 `17373531860`
-2. 打开 https://github.com/settings/tokens?type=beta (Fine-grained tokens)
-3. 点 **Generate new token**:
-   - Name: `release-upload`
-   - Expiration: 90天
-   - Repository access: **Only select repositories** → `tianjun-releases`
-   - Permissions → Contents: **Read and write**
-4. 复制生成的 token (`github_pat_` 开头)
-5. 设置到 CI:
-   ```bash
-   gh secret set RELEASE_TOKEN --body "<新token>" --repo 17373531860/tianjun-ai-vision
-   ```
-
-**Token 值绝不能写入代码/skill/任何 git 追踪的文件. 只存放在 GitHub Secrets 中.**
-
----
-
-## Git 认证配置
-
-GitHub 使用 `gh` CLI 管理认证, token 存储在系统 keyring 中.
-
-### Token 过期处理流程
+### CORE_FILES 列表（`build.yml` 136-148 行）
 
 ```bash
-# 第1步: 检查认证状态
-gh auth status
-
-# 第2步: 重新登录 (必须加 -s workflow, 否则推不了 .github/workflows/*)
-gh auth login -h github.com -p https -w -s workflow
-
-# 第3步: 配置 credential helper
-gh auth setup-git
-
-# 第4步: 确认 remote URL 干净 (不含嵌入 token)
-git remote -v
-
-# 第5步: 验证
-git push origin main
+CORE_FILES=(
+  "backend/api/source.py"        # 存在
+  "backend/api/detection.py"     # 不存在
+  "backend/api/sessions.py"      # 存在
+  "backend/api/projects.py"      # 存在
+  "backend/api/cameras.py"       # 存在
+  "backend/api/alarm.py"         # 存在
+  "backend/api/reports.py"       # 存在
+  "backend/api/tasks.py"         # 存在
+  "backend/api/websocket.py"     # 不存在
+  "backend/api/models.py"        # 存在
+  "backend/services/detector.py" # 不存在
+)
 ```
 
-### 常见报错
+### 已知 BUG / IP 泄露风险（**与 AGENTS.md 第九节登记一致**）
 
-| 报错 | 原因 | 解决 |
-|------|------|------|
-| `Invalid username or token` | token 过期 | 重新 `gh auth login` |
-| `refusing to allow an OAuth App to create or update workflow` | 缺 `workflow` scope | 加 `-s workflow` 重新登录 |
-| `remote: Repository not found` | private repo 权限不足 | 检查 `gh auth status` scopes |
-| `fatal: 鉴权失败` | remote URL 嵌了旧 token | `git remote set-url origin` 清理 |
+1. **11 个文件中 3 个根本不存在**：`api/detection.py` / `api/websocket.py` / `services/detector.py` 早被重构掉但 CI 列表没更新。循环里 `if [ -f "$pyfile" ]` 直接跳过，**实际只编译 8 个**，CI 打 `WARNING: Failed to compile ...` 但 build 不 fail。
+
+2. **`backend/api/source_*.py` 共 35 个 mixin/组件/工具文件全部没编译**。`source.py` 主类编译了，但 15 个继承式 mixin（`source_*_mixin.py`）和 6 个 has-a 组件（`source_drawer.py` / `source_recorder.py` / `source_geometry.py` / `source_inference_executor.py` 等等）都是源码部署到客户工控机。**业务核心逻辑约 80% 是源码可读状态**，是项目最大的 IP 泄露点。
+
+3. **`backend/services/` 目录除 `detector.py`（不存在）外完全没编译**。`services/scanner.py`（1964 行）、`services/mes_hooks.py`（1505 行）、`services/cluster_collector.py`（1122 行）、`services/export_*.py`（8 个）等核心 service 全是源码。
+
+> **修这个 BUG 的代价**：CORE_FILES 加几十个文件 → CI 时长可能 30 min → 60 min+；Nuitka 对继承式 mixin 的 `super().__init__` 链有时编译失败需要降级保留 .py。本 skill 只记录现象，**不要主动改 build.yml**，等用户决策。
+
+### 编译产物验证（编译完打印的清单）
+```
+echo "Remaining .py files in backend/api/:"   ← 应只有 source_*_mixin.py + 工具
+echo "Generated .pyd files in backend/api/:"  ← 应 8 个 .pyd
+ls -la backend/api/*.py / *.pyd
+ls -la backend/services/*.py / *.pyd
+```
 
 ---
 
-## 发版检查清单
+## 四、打包结构（客户机 `%ProgramFiles%\tianjun-ai-vision\` 解出后）
 
-**强烈建议按顺序跑, 每一项打勾再下一项.**
+| 模块 | 来源 | 编译方式 | 体积 |
+|---|---|---|---|
+| Vue 前端 | `frontend/dist/` | Vite build（JS 压缩混淆） | ~30 MB |
+| Python 后端 | `backend/` 全部 | 8 个 .pyd + 大量 .py 源码 | ~50 MB |
+| Python 运行时 | conda env `tianjun` | conda-pack tar.gz 解出 | ~5-6 GB（PyTorch+CUDA 占大头） |
+| Electron 主进程 | `electron/main.js` 等 | **不**经 Nuitka，源码部署 | ~150 MB（含 chrome 内核） |
+| FFmpeg | BtbN 预编译 win64 GPL | 二进制 | ~150 MB |
+| 海康/CH340 驱动 | `electron/drivers/CH341SER` | 二进制 | ~5 MB |
+
+`electron/package.json: build.extraResources` 决定哪些文件被打进 `resources/`：
+```json
+{"from": "../frontend/dist", "to": "app/dist"}
+{"from": "../backend",       "to": "backend"}     // 含 .py / .pyd / .dll / .cti / .ax / .ini / .manifest，排除 __pycache__/uploads/recordings/*.db
+{"from": "../python-env/python", "to": "python"}
+{"from": "../ffmpeg",        "to": "ffmpeg"}      // 只 ffmpeg.exe + ffprobe.exe
+{"from": "drivers/CH341SER", "to": "drivers/CH341SER"}
+```
+
+`backend-manager.js` 启动后端的唯一方式（line 372-378）：
+```js
+spawn(pythonPath, ['-m', 'uvicorn', 'backend.main:app',
+                   '--host', '0.0.0.0', '--port', this.options.port,
+                   '--no-access-log']);
+```
+
+### Inno Setup（`electron/build/installer.iss`）
+- AppId: `com.tianjun.ai-vision`
+- 默认目录：`%ProgramFiles%\tianjun-ai-vision`
+- 用户数据：`%APPDATA%\tianjun-ai-vision`（DB / uploads / recordings 都在这）
+- 输出：`TianJun-AI-Vision-{#MyAppVersion}-Setup.exe`，64-bit + LZMA2 压缩，约 3.75 GB
+- 装机前自动备份 `license.lic`，装机后恢复（防升级丢激活）
+- 可选安装 CH340 驱动
+
+---
+
+## 五、发布渠道
+
+### 通道 A — GitHub Action Artifact（内部/团队）
+- **不分卷**，完整 `TianJun-AI-Vision-X.Y.Z-Setup.exe` 直传
+- 所有 push 都跑（main / tag / workflow_dispatch）
+- 30 天自动清理；`continue-on-error: true` → 配额满不阻塞 Release 上传
+- 适用：开发机、内部测试、临时分发
+
+### 通道 B — GitHub Release（外部/客户副机，只在 tag 时跑）
+- 主仓库 `17373531860/tianjun-ai-vision` 是 **PRIVATE**
+- Release 发布到独立 public repo `17373531860/tianjun-releases`
+- 走 `secrets.RELEASE_TOKEN`（Fine-grained PAT，90 天到期）
+- **必须分卷**：GitHub Release 单文件硬限 2 GB，3.75 GB 安装包切 1.9 GB×N → `*.part00.part / part01.part / ...` + `checksums.txt` + `merge_installer.bat`
+- 客户下全部分卷到同一目录，双击 `merge_installer.bat` 合并 + SHA256 校验 + 输出完整 exe
+- Release 创建用 `gh release create --cleanup-tag`（删旧 release 一并清理 tag），上传后 5 次重试核对 asset 数
+
+### 通道 C — Gitee（公开下载，国内速度，独立 workflow）
+- 仓库 `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（双仓负载）
+- 由独立 workflow `.github/workflows/gitee-upload.yml` 处理（`workflow_dispatch` 手动触发，输入 version）
+- 流程：从 GH Release 下完整 exe → 切更小分块（~100 MB / 块）→ 推 Gitee
+- 适用：客户下载（境内不走 GitHub）
+
+> 临时让 Action 公开下载：`gh repo edit --visibility public`；上传完改回 `private`。
+
+---
+
+## 六、关键环境变量（详见 AGENTS.md 第十节）
+
+CI 构建期：
+- `PYTHON_VERSION=3.10` / `NODE_VERSION=20`
+- `CONDA_SOLVER=classic`（避新解析器卡顿）
+- `GH_TOKEN=${{ secrets.RELEASE_TOKEN }}`（仅 Release 步骤注入）
+
+客户机运行期：
+- `OPENCV_FFMPEG_CAPTURE_OPTIONS=threads;1`（**`backend/main.py` 第 4 行 setdefault**，必须在 cv2 import 前；v3.1.3 关键保命修复）
+- `TIANJUN_DATA_DIR`：用户数据目录，默认 BASE_DIR；客户机 Inno 装机后会指向 `%APPDATA%\tianjun-ai-vision`
+- `BACKEND_SKIP_INIT`：跳过初始化（测试/排障）
+- `ENABLE_API_DOCS`：默认 `1`，发布版可设 `0` 关 `/docs` `/redoc`
+- `CONDA_PREFIX`：开发模式 Python 路径；客户包内不用，由 `backend-manager.js` 直接定位 `resources/python/python.exe`
+- `MVCAM_COMMON_RUNENV`：海康工业相机 SDK 路径
+
+---
+
+## 七、依赖锁定版本（CI + 客户端修复脚本均验证通过）
+
+```
+torch / torchvision / torchaudio    cu128 (PyTorch 官方 wheels，CUDA 12.8 + Blackwell sm_120)
+numpy                               >=1.24.0,<2.0   ← 必须 <2，OpenCV 4.10 ABI
+opencv-contrib-python               >=4.8.0,<4.11   ← 必须 <4.11，>=4.11 编时用 numpy 2 ABI
+mediapipe                           >=0.10.0,<0.10.21（必须 --no-deps 避免拉 opencv-python）
+protobuf                            >=4.25.3,<5     ← mediapipe 限制
+onnxruntime-gpu                     最新
+tensorrt                            extra-index https://pypi.nvidia.com
+scipy                               >=1.10.0
+```
+
+**安装顺序硬性要求**（顺序错就 ABI 不兼容）：
+```
+1. PyTorch cu128
+2. backend/requirements.txt
+3. onnxruntime-gpu
+4. tensorrt
+5. scipy
+6. mediapipe --no-deps + 手动加 absl-py / attrs / flatbuffers / jax / jaxlib / matplotlib / protobuf<5 / sounddevice / sentencepiece
+7. pip uninstall opencv-python opencv-python-headless opencv-contrib-python（避免任何残留）
+8. pip install --force-reinstall numpy<2.0（不加 --force-reinstall pip 会跳过同版本）
+9. pip install --no-deps opencv-contrib-python<4.11
+10. conda-pack
+```
+
+CI 编译完会跑 7 项 verify，其中 `cv2.resize` ABI 自检最关键：
+```python
+img = np.zeros((100,100,3), dtype=np.uint8); cv2.resize(img,(50,50))
+```
+报 `img is not a numpy array` = numpy/opencv ABI 不兼容，整个构建 fail。
+
+---
+
+## 八、常见构建问题排查
+
+### 问题 1：用户在 GitHub Actions 页看不到 Artifact 下载按钮
+- **现象**：跑完 build CI 全绿，但仓库 Actions 页"Artifacts"区域看不到下载按钮
+- **根因**：用户**没登录 GitHub** 或没有这个 private repo 的访问权限。Action Artifact 默认只有 repo 协作者可下载
+- **解决**：让用户先 `gh auth login`，或临时 `gh repo edit --visibility public`，或走 Release 通道（公开 repo `tianjun-releases`）
+
+### 问题 2：Nuitka 编译失败
+- **现象**：CI 日志 `WARNING: Failed to compile backend/api/xxx.py, keeping source`
+- **可能原因**：
+  - 文件不存在（CORE_FILES 列表过期，参考第三节，已知 3 个）→ build 不 fail，源码部署
+  - C 编译器问题：windows-latest 默认带 MSVC Build Tools，理论不缺；本地构建必须装
+  - .py 文件 import 链有 Python 版本相关代码（如 walrus、match-case），Nuitka 对应版本支持不全 → 升 Nuitka
+  - 模块名冲突（生成 .pyd 时和 site-packages 同名）→ 改源文件名
+
+### 问题 3：conda-pack 体积过大
+- **正常**：解压后 5-6 GB（PyTorch cu128 大约 4 GB，CUDA runtime + cuDNN + TensorRT 占大头）
+- **超出**：`conda clean -a -y` 已在打包前跑；如果还是大，检查是否有手动 conda install 的多余包（`conda list | wc -l` 应 ~150-200）
+- **裁剪策略**：CI 不做（怕漏依赖）；现场可以删 `python/Lib/site-packages/torch/test/`、`torch/include/`，省 ~500 MB
+
+### 问题 4：cv2 ABI 不兼容（客户端报 `img is not a numpy array`）
+- **典型**：客户机 `cv2.putText / cv2.resize / cv2.imencode` 报 numpy 类型错
+- **根因**：旧版本 conda numpy 是 MKL 编译，pip opencv 是 OpenBLAS；C 层 ABI 不兼容
+- **CI 已修**：`pip install --force-reinstall numpy<2.0` + 顺序装 opencv
+- **客户端修**：跑 `patch_numpy_opencv_fix.bat`（清华镜像，离线 whl 兜底）。**必须物理删** `site-packages/numpy/` + `numpy.libs/` 再装
+
+### 问题 5：TensorRT 中文路径失败
+- **现象**：模型转换报 `[TRT] [E] Input file cannot be found`，但文件实际存在
+- **根因**：TensorRT C 库 Windows 上用 ANSI 打开文件，不支持中文
+- **解决**：模型文件名/目录全用 ASCII
+
+### 问题 6：tag 与 package.json 不一致
+- **现象**：`Build Installer with Inno Setup` 步骤直接 fail：`ERROR: tag vX.Y.Z (=X.Y.Z) 与 electron/package.json (X.Y.W) 不一致`
+- **修复**：本地改 `electron/package.json` + `electron/splash.html` → push main → 重打 tag（先 `git tag -d` 删本地旧 tag）→ push 新 tag
+
+### 问题 7：merge_installer.bat 在客户机闪退
+- 见 SKILL 历史维护积累的 8 大坑，全部已在 build.yml 367-490 行的脚本生成模板里规避：纯 ASCII + CRLF + 无 BOM、动态探测 part 文件名、`certutil + findstr` 校验、不联用 `setlocal EnableDelayedExpansion + call :Label`
+- **现场排障**：让用户右键 bat → 属性 → "解除锁定" 复选框打勾（去除 MoTW），再在 PowerShell 里 `.\merge_installer.bat` 跑能看到错误
+
+### 问题 8：RELEASE_TOKEN 401
+- **现象**：tag 触发 CI，最后一步 `gh release create` 报 HTTP 401
+- **根因**：Fine-grained PAT 过期（90 天）
+- **续期**：登录 GitHub `17373531860` → Settings → Developer settings → Fine-grained tokens → Generate new token
+  - Repository access: Only `tianjun-releases`
+  - Permissions → Contents: Read and write
+  - 拷贝 `github_pat_*` 后 `gh secret set RELEASE_TOKEN --body "<token>" --repo 17373531860/tianjun-ai-vision`
+
+---
+
+## 九、发版检查清单（按顺序打勾）
 
 ### 代码阶段
-- [ ] 确认所有改动已合并到 main
-- [ ] 更新 `electron/package.json` 的 `.version` (**唯一权威源**)
-- [ ] 更新 `electron/splash.html` 里的 `v<版本>`
-- [ ] 写 `docs/changelog/vX.Y.Z_日期.md` + `.json`
-- [ ] 更新 `docs/CHANGELOG.md` 顶部
-- [ ] 相关 skill 更新 (debug-xxx / 本 skill 本身)
-- [ ] 依赖版本没变: numpy==1.26.4, opencv-contrib-python==4.10.0.84, mediapipe==0.10.20, protobuf<5
-- [ ] 确认无 opencv-python (只有 opencv-contrib-python)
+- [ ] 改动已合并到 `main`
+- [ ] `electron/package.json` `.version` 改成新版本号（**唯一权威源**）
+- [ ] `electron/splash.html` 第 112 行 `v<版本>` 同步
+- [ ] 写 `docs/changelog/vX.Y.Z_日期.md` + 同名 `.json`（用 `update-release` skill 生成）
+- [ ] `docs/CHANGELOG.md` 顶部追加新版本条目
+- [ ] 相关 skill 更新（debug-* / 本 skill）
+- [ ] 依赖未变，仍是 numpy<2 / opencv-contrib<4.11 / mediapipe<0.10.21 / protobuf<5
 
 ### 认证阶段
-- [ ] `gh auth status`, 过期则 `gh auth login -s workflow`
+- [ ] `gh auth status`，过期则 `gh auth login -h github.com -p https -w -s workflow`
 - [ ] `gh auth setup-git`
-- [ ] `git remote -v` 确认 URL 干净
-- [ ] GitHub Secrets `RELEASE_TOKEN` 未过期 (不到 90 天)
+- [ ] `git remote -v` 确认 URL 干净（无嵌入 token）
+- [ ] `RELEASE_TOKEN` Secret 未过期
 
 ### 推送阶段
-- [ ] repo 临时设 public (CI 才有流量): `gh repo edit --visibility public --accept-visibility-change-consequences`
-- [ ] 选择性 `git add` (不要把 .pcapng / test_*.py 等调试文件提进去)
+- [ ] 主仓库临时 public（让 Action 跑流量）：`gh repo edit --visibility public --accept-visibility-change-consequences`
+- [ ] 选择性 `git add`（**不要**把 .pcapng / test_*.py / .tmp_audit/ 提进去）
 - [ ] `git commit -m "release: vX.Y.Z - ..."`
 - [ ] `git push origin main`
-- [ ] `git tag -a vX.Y.Z -m "vX.Y.Z: ..."` (tag 版本号必须和 package.json 完全一致)
+- [ ] `git tag -a vX.Y.Z -m "vX.Y.Z: ..."`（tag 版本必须等于 package.json）
 - [ ] `git push origin vX.Y.Z`
 
-### CI 阶段 (~45-60 min)
-- [ ] `gh run list --limit 3` 确认 CI 触发 (push main + push tag 两条 run)
-- [ ] `gh run view <id>` 看步骤状态, Inno Setup 步会校验 tag ↔ package.json 一致性
-- [ ] 全绿后验证两条通道:
-  - Artifact: `gh api .../actions/runs/<id>/artifacts`, 应有 `TianJun-AI-Vision-Installer`, 体积 ~3.75GB
-  - Release: `gh release view vX.Y.Z --repo 17373531860/tianjun-releases`, 应有 N 个 .part + checksums.txt + merge_installer.bat
+### CI 阶段（约 45-60 min）
+- [ ] `gh run list --limit 3` 确认 push main + push tag 各触发一条 run
+- [ ] `gh run view <id>` 各步骤全绿，特别是 Inno Setup 步的 tag/version 一致性校验
+- [ ] Artifact 下到本地，文件名前缀必须 `TianJun-AI-Vision-X.Y.Z-Setup.exe`，体积 ~3.75 GB
+- [ ] Release：`gh release view vX.Y.Z --repo 17373531860/tianjun-releases` 应有 N 个 `.part` + `checksums.txt` + `merge_installer.bat`
+
+### Gitee 同步（手动）
+- [ ] `gh workflow run gitee-upload.yml -f version=vX.Y.Z`，等绿
+- [ ] 验证 `xu-yanzhi32/tianjun-releases` 上有新版本
 
 ### 收尾
-- [ ] repo 改回 private: `gh repo edit --visibility private --accept-visibility-change-consequences`
-- [ ] 内部/开发机: 下 Action Artifact 完整 exe 直接安装
-- [ ] 副机/客户: 给 Release 页面链接, 让他们下全部分卷 + merge_installer.bat, 双击运行
-
-### 装机验证 (本次 v2.7.11 的教训 → 强烈建议加)
-- [ ] 下完装后**先确认 exe 文件名里的版本号和 tag 一致**(例如 v2.7.11 的 tag 打出来的包必须是 `TianJun-AI-Vision-2.7.11-Setup.exe`, 不是 2.0.8). 不一致立刻回查 build.yml 版本号来源是不是又走错.
-- [ ] 安装后检查 "帮助 → 关于" 版本号显示正确
-- [ ] 启动画面 splash 显示正确版本号
+- [ ] 主仓库改回 private：`gh repo edit --visibility private --accept-visibility-change-consequences`
+- [ ] 内部下 Action Artifact 装机；客户给 Gitee 链接
+- [ ] **装后冒烟**：装好启动一次，检查 splash 版本号 + "帮助 → 关于" + 后端 `/api/v1/system/...` 返回正确
 
 ---
 
-## 关键文件
+## 十、历史踩坑（重要事件）
 
-- `.github/workflows/build.yml` — 主 CI 流程 (~580 行)
-- `electron/package.json` — **版本号唯一权威源** + Electron 构建配置
-- `electron/splash.html` — 启动画面, 版本号需和 package.json 同步
-- `electron/build/installer.iss` — Inno Setup 脚本, 版本号通过 `/DMyAppVersion=` 传入
-- `scripts/build-app.bat` — 本地构建
-- `scripts/pack-python-env.bat` — Python 环境打包
-- `BUILD.md` — 完整构建文档
+### v2.0.8 → v2.7.11 半年的版本号惨案（2026-04-22 修）
+**症状**：tag v2.1 ~ v2.7.11 期间，副机下到 Action Artifact 的安装包文件名永远 `TianJun-AI-Vision-2.0.8-Setup.exe`。
+**根因**：旧 `build.yml` 用 `${{ github.ref_name }}.TrimStart("v")` 取版本，push main 时 ref_name=main，TrimStart 不去字符 → fallback 写死 `2.0.8`。
+**修复**：版本号改从 `electron/package.json` 读，tag 只做触发 + 一致性校验。
+**教训**：Action Artifact 装机后**必须**核对文件名版本号 = tag 版本号。
+
+### merge_installer.bat 的 8 个坑（每条都翻车过）
+1. UTF-8 BOM 让 `@echo off` 失效 → 用 `[IO.File]::WriteAllBytes` + ASCII
+2. 嵌 `powershell -Command` 单行命令引号互打架 → 纯 cmd 内置命令
+3. 硬编码版本号 → 用 `dir /b *.part00.part` 动态探测
+4. `setlocal EnableDelayedExpansion` 联用 `call :Label` 参数展开诡异 → 二选一
+5. echo 文本含 `( ) | & !` 被 cmd 提前解析 → 全 ASCII 字母 + `- _ : . [ ]`
+6. 双击 cwd 不一定是 bat 所在目录 → 第一行 `cd /d "%~dp0"`
+7. certutil 中文系统输出多行/分隔符 → `findstr /i /c:"%HASH%"` 不 parse
+8. MoTW / Defender 拦 → 让用户右键 → 属性 → "解除锁定"
+
+### Action 也搞分卷的反面教材（v2.7.11 当时）
+当时把 Action Artifact 也切成分卷，结果：
+- 内部下载多此一举（Artifact 没 2 GB 限制）
+- 用户多一步合并 → 多一个出错点
+- 分卷文件名暴露上面 v2.0.8 那个 bug
+
+**结论**：Action 永远整包，只有 GH Release 切分卷。
+
+---
+
+## 十一、关键文件
+
+| 文件 | 作用 |
+|---|---|
+| `.github/workflows/build.yml` | 主 CI（~590 行） |
+| `.github/workflows/gitee-upload.yml` | Gitee 同步（手动 dispatch） |
+| `electron/package.json` | **版本号唯一权威源** + electron-builder 配置 |
+| `electron/splash.html` | 启动画面，版本号显示 |
+| `electron/build/installer.iss` | Inno Setup 脚本（~145 行） |
+| `electron/backend-manager.js` | spawn `python -m uvicorn backend.main:app` |
+| `backend/main.py` | 后端入口 + 60+ ALTER TABLE 迁移 |
+| `backend/requirements.txt` | Python 依赖清单 |
+| `docs/CHANGELOG.md` | 总览 changelog |
+| `docs/changelog/vX.Y.Z_*.md` + `.json` | 单版本 changelog |
+| `scripts/build-app.bat` | 本地一键构建（不走 CI） |
+| `scripts/pack-python-env.bat` | 本地 conda-pack |
+| `BUILD.md` | 完整构建文档 |
+
+---
+
+## 十二、与其它 skill 的边界
+
+- `update-release`：写 changelog、bump 版本号、做 git commit + tag。版本号怎么写、changelog 怎么排，看那边。
+- `create-hotfix`：不走完整发版（不 bump version、不重打安装包），给客户下发 `.bat` 补丁脚本 + 替换 .py 文件。CRLF 编码 + Windows 兼容性是那边核心。
+- 本 skill 只管"CI 跑了什么 / 为什么慢 / 为什么 fail / 装包结构"。

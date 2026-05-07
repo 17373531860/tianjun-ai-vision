@@ -1,229 +1,385 @@
 ---
 name: modify-project-config
-description: "安全修改项目配置结构：步骤/逻辑/事件/计数器的完整数据流。项目配置从前端Project页→后端API→source.py状态机→DB→前端Monitor页，修改任何一环都需要全链路分析。"
+description: "安全修改项目配置结构：pipeline_config / steps_config / events_config 等 7 个 JSON 字段的全链路影响分析。配置从前端 Project 页 → POST /projects → DB → 激活后 set_project_config → VSM 状态机 → Monitor 展示，改任一环都要全链路对齐。"
 argument-hint: "[要修改的配置项]"
-model: opus
-effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
 ---
 
-# modify-project-config: 项目配置安全修改分析
+# modify-project-config: 项目配置安全修改分析（v3.5.x）
 
-你正在帮用户安全修改项目配置结构。项目配置是**贯穿整个系统的核心数据流**。
+你正在帮用户安全修改项目配置结构。Project 是天军系统的"客户脚本"，
+**贯穿前端编辑 → DB → 后端 VSM 状态机 → Monitor 显示**的核心数据流。
+任何一环对不上都会出现"配了但不生效 / 切项目残留 / 老项目崩溃"。
 
 计划修改: $ARGUMENTS
 
-## 配置数据流全景
+---
 
-```
-前端 Project/index.vue (编辑)
-  → updateProject API (保存到DB)
-    → Project 模型的 JSON 字段
-      → steps_config, events_config, counters_config
-      → alarm_config, detection_config, data_config
-      → pipeline_config
+## 一、Project 的 7 个 JSON 字段（v3.5.x 现状）
 
-前端 Navbar.vue (切换项目)
-  → activateProject → getProjectDetail
-    → handleProjectChange() 解析配置
-      → setProjectConfig API → source.py
-        → VideoSourceManager.set_project_config()
-          → 解析到 ~50个 内部变量
-          → 控制检测状态机行为
+**ORM** (`backend/models/models.py: Project`)
 
-前端 Monitor/index.vue (使用配置)
-  → 读取 projectStore.currentProject
-  → 渲染 SOP 卡片、计数器、事件列表
-  → startDetection 时发送配置到后端
+```python
+class Project(Base):
+    __tablename__ = "projects"
+    id, name, task_type, default_model_id, model_format, is_active
+    logic_mode      = Column(String, default="sequential")   # 顶层列, 不在 JSON 里!
+    pipeline_config = Column(JSON)   # 管线/步骤序列/容器/周期性强制动作
+    steps_config    = Column(JSON)   # 每步配置（label/阈值/帧/disappear_delay 等）
+    events_config   = Column(JSON)   # 事件定义（OK/NG/自定义）
+    counters_config = Column(JSON)
+    alarm_config    = Column(JSON)
+    detection_config= Column(JSON)
+    data_config     = Column(JSON)
 ```
 
-## 7个JSON配置字段详解
+**Pydantic Schema** (`backend/schemas/project.py`)：`ProjectBase / ProjectCreate / ProjectUpdate / ProjectResponse`，
+新增 JSON 顶层字段时 4 个 schema 都要加。
 
-### 1. steps_config (步骤配置)
-```json
+---
+
+### 1. pipeline_config（管线 + 周期性动作 + 容器 + 误判过滤）
+
+```jsonc
+{
+  // 顺序模式
+  "sequence_order": ["step1", "step2", "step3"],
+  // 检测模式
+  "detection_steps": [...],
+  // 自定义模式
+  "custom_based_on": "sequential|detection|null",
+  "custom_conditions": [
+    { "id": 1, "priority": 1, "sequence": ["a","b"], "event_id": 3 }
+  ],
+  "custom_sequence_order": [...],
+  "custom_detection_steps": [...],
+
+  // 结算 / 周期超时（apply 在 _apply_pipeline_config）
+  "settlement_mode": "first_step|last_step",
+  "idle_timeout_seconds": 0,
+  "cycle_max_duration": 0,
+  "ng_cycle_protect_seconds": 0,
+  "settle_dedup": false,
+  "accumulate_repeats": false,
+  "simultaneous_groups": [...],
+
+  // tracking 模式
+  "tracking_cycle_strategy": "all_gone|container",
+  "tracking_container_label": "",
+  "container_box_mode": "single",
+  "container_settle_min_items": 1,         // v3.1.4
+  "container_id_drift_merge_iou": 0,       // v3.2.0
+  "container_id_drift_merge_max_gone_frames": 30,
+  "tracking_trigger_label": "",
+  "tracking_match_thresh": 0.8,
+  "tracking_check_order": false,
+  "tracking_swap_detection": false,
+  "tracking_appearance_match": false,
+  "tracking_id_lock": false,
+  "tracking_id_lock_frames": 15,
+  "tracking_roi": { "enabled": true, "polygon": [...] },
+  "counting_expected_items": { "label1": 2 },
+
+  // 误判过滤（v2.7.8 起走 pipeline_config，apply 在 _apply_rod_filter）
+  "rod_companion_filter": { "enabled": false, "iou_threshold": 0.25,
+                            "rod_label": "", "companion_labels": [] },
+  "rod_session_gate":     { "enabled": false, "rod_label": "", "gate_labels": [] },
+
+  // ★ v3.5.0 新增：周期性强制动作（每 N 轮做 E）
+  // ★ v3.5.2 新增：每条规则的 run_on_start（开机首检）
+  "periodic_actions": [
+    {
+      "id": "pa_1700000000_0",
+      "name": "每20件清洁治具",
+      "enabled": true,
+      "trigger_step_ids": [3, 5],
+      "interval": 20,
+      "count_basis": "all|good_only|ng_only",
+      "reset_policy": "always|only_when_due",
+      "due_warning_event_id": 4,
+      "overdue_event_id": 5,
+      "overdue_repeat": "every_cycle|once|cooldown:N",
+      "channel_filter": [0, 1],
+      "run_on_start": false                   // v3.5.2
+    }
+  ]
+}
+```
+
+### 2. steps_config（每步配置）
+
+```jsonc
 [
   {
-    "label": "step1",           // YOLO标签名
-    "display_name": "第一步",    // 显示名称
+    "id": 1,
+    "label": "step1",            // YOLO 标签名
+    "displayLabel": "第一步",     // 别名 display_name 也兼容
     "enabled": true,
-    "threshold": 0.5,           // 单步置信度阈值
-    "min_duration": 0,          // 最短持续时间(秒)
-    "max_duration": 0,          // 最长持续时间(秒), 0=不限
-    "timeout_ng": false,        // 超时是否判NG
-    "dedup_interval": 2,        // 去重间隔(秒)
-    "disappear_delay": 1,       // 消失确认延迟(秒)
-    "min_frames": 3,            // 最小确认帧数
-    "detection_type": "static", // static/dynamic
-    "backup_step": "",          // 替代步骤标签
-    "strict_order": false,      // 严格顺序
-    "accept_once": true,        // 只接受一次
-    // 追踪模式专属:
-    "lost_seconds": 5,
-    "position_lock": false,
-    "count_mode": "total",
-    "event_count": 0,
-    "gone_frames": 30,
-    // v2.7.4 新增字段:
-    "hide_in_view": false,            // [前端可视化] 实时画面/SOP/步骤详情都不显示该 label，但后端检测/计数/报警/CSV 全部正常
-    "stack_enabled": false,           // [仅 count_mode=track] 堆叠模式开关
-    "stack_reappear_seconds": 1.0,    // 堆叠模式：消失 ≥N 秒后再现算下一层
-    "stack_required_count": 2,        // 堆叠模式：期望层数（最小 2）
-    "max_recognized": 0               // [仅 count_mode=track] 同时最多识别几个该物品；0=无上限；超出按距离归并到 Top-N(置信度) 的 track_id
+    "threshold": 50,             // ★ 前端发百分比, _apply_steps_config 自动 / 100
+    "min_duration": 0,
+    "max_duration": 0,
+    "max_interval": 1.0,
+    "disappear_delay": 0,
+    "timeout_ng": false,
+    "min_frames": 1,
+    "gap_tolerance": 0,
+    "strict_order": false,
+    "accept_once": false,
+    "detection_type": "static|dynamic",
+    "static_trigger_frames": 30,
+    "join_cycle": true,
+    "triggerEvent": null,        // 静态步骤被触发后弹的 event_id
+    "backup_for": null,          // primary step 的 id（替补步骤）
+    // 追踪模式
+    "count_mode": "track|event|total",
+    "event_required_count": 1,
+    "event_gone_frames": 8,
+    "tracking_gone_confirm_frames": null,
+    "tracking_max_lost_seconds": 5.0,
+    "tracking_position_lock": false,
+    // v2.7.4
+    "hide_in_view": false,
+    "stack_enabled": false,
+    "stack_reappear_seconds": 1.0,
+    "stack_required_count": 2,
+    "max_recognized": 0
   }
 ]
 ```
 
-**解析点:** `source.py: set_project_config()` → 映射到 `self.step_configs`, `self.step_sequence` 等
+`enabled=false` 的步骤会**整体被 `_apply_steps_config` 跳过**。
 
-**v2.7.4 三个新字段的处理位置：**
-- `hide_in_view`: **纯前端**，后端不读，仅在 `frontend/src/views/Monitor/index.vue` 的 `drawDetections / drawMultiDetections / stepsToShow / tableData` 过滤
-- `stack_enabled / stack_reappear_seconds / stack_required_count`: 在 `_update_tracking_stats` 的步骤循环里解析为 `stack_steps[label]`，独立状态机维护 `_stack_state / _stack_counters / _stack_disappeared_at / _stack_visible_frames`；最终通过 `_rebuild_checklist` 用 `max(tracking_class_counters, stack_counters)` 合并
-- `max_recognized`: 在 `_update_tracking_stats` 入口处对 detections 做 ID 合并（按置信度选 keeper + 最近距离归并），不动 ByteTrack 内部状态
+### 3. events_config（事件定义）
 
-### 2. pipeline_config (检测管线配置)
-```json
-{
-  "logic_mode": "sequential",    // sequential/detection/custom/tracking
-  "custom_conditions": [...],    // 自定义模式条件
-  "cycle_end_strategy": "all_done", // 追踪模式
-  "roi_config": {...},           // ROI区域
-  "trigger_labels": [...],       // 追踪触发标签
-  "expected_counts": {...},      // 期望计数
-  "container_mode": false,       // 容器模式
-  "shift_split_enabled": false,  // 班次分割
-  "shift_split_time": "08:00",
-  // v2.7.8 新增：通用误判过滤（两层叠加后处理，默认全关）
-  "rod_companion_filter": {
-    "enabled": false,
-    "iou_threshold": 0.25,
-    "rod_label": "<要过滤的 label>",
-    "companion_labels": ["<伴随 label1>", "<伴随 label2>"]
-  },
-  "rod_session_gate": {
-    "enabled": false,
-    "rod_label": "<被门控的 label>",
-    "gate_labels": ["<触发 label1>"]
-  }
-}
-```
-
-**v2.7.8 rod 过滤两字段的处理位置：**
-- **前端 Project/index.vue**：逻辑设置 Tab 底部「误判过滤（高级）」卡片；`initProjectDefaults` 从 `pipeline_config` 读；`handleSaveProject` 通过 `_sanitizeCompanionFilter / _sanitizeSessionGate` 写回 `pipeline_config`（enabled 若 rod_label 为空或 labels 为空会自动置为 false）
-- **后端 rod_filter.read_rod_filter_config**：优先读 `project_config["pipeline_config"]`，回退到 `project_config` 顶层（兼容 v2.7.6 直接 POST `/detection/set-project`）
-- **source.py**：`__init__` / `set_project_config` 每次重新读开关重建 gate；`_apply_rod_filters` 在三个推理入口前统一调用；新周期 / stop_detection 时 `gate.reset()`
-- **v2.7.6 旧坑**：当时只支持顶层读取，但 `_build_project_config` 不把这俩 key 放顶层，所以手动改 DB 也不会生效。新增类似"基于 label 的后处理过滤"时，**务必确保字段放在 pipeline_config 或在 `_build_project_config` 里显式抬到顶层**
-
-**解析点:** `source.py: set_project_config()` → `self.logic_mode`, `self.custom_conditions` 等
-
-### 3. counters_config (计数器配置)
-```json
-{
-  "total": {"visible": true, "label": "总数"},
-  "ok": {"visible": true, "label": "OK"},
-  "ng": {"visible": true, "label": "NG"},
-  "consecutive_ng": {"visible": true, "label": "连续NG"},
-  "custom_counter_1": {"visible": false, "label": "自定义1"}
-}
-```
-
-### 4. events_config (事件配置)
-```json
+```jsonc
 [
-  {
-    "id": "event_ok",
-    "name": "OK事件",
-    "trigger": "cycle_ok",
-    "counter_action": {"counter": "ok", "action": "increment"},
-    "toast": "ok",
-    "notification": true
-  }
+  { "id": 1, "name": "合格(OK)", "color": "#10b981",
+    "actions": [{ "counter_name": "合格总数", "delta": 1 },
+                { "counter_name": "总产量",   "delta": 1 }],
+    "show_notification": true, "toast_id": "ok" },
+  { "id": 2, "name": "不良(NG)", "color": "#ef4444",
+    "actions": [{ "counter_name": "不良总数", "delta": 1 },
+                { "counter_name": "总产量",   "delta": 1 }],
+    "show_notification": true, "toast_id": "ng" },
+  // v3.5.0 起：可加自定义事件，被 periodic_actions / custom_conditions / 静态步骤
+  // 通过 id 引用；触发走同一条 _trigger_event 链路。
+  { "id": 4, "name": "保养到期", "color": "#f59e0b",
+    "actions": [], "show_notification": true, "toast_id": "ng" }
 ]
 ```
 
-### 5. detection_config (检测参数)
-```json
-{
-  "conf_threshold": 0.25,
-  "iou_threshold": 0.45,
-  "max_det": 300
-}
-```
+`_trigger_event` (`source_event_trigger_mixin.py`) 同时支持数字 id（`1`/`2`/`4`）
+和字符串 id（`'event_1'`），逐项匹配 `events_config[*].id`。
+`actions[*]` 同时兼容 `delta` 和 `value` 两种字段名。
 
-### 6. alarm_config (报警配置)
-```json
-{
-  "port": "/dev/ttyUSB0",
-  "baudrate": 9600,
-  "protocol": "modbus_4color",
-  "events": {...}
-}
-```
+### 4-7. 其他四个 JSON
 
-### 7. data_config (数据记录配置)
-```json
-{
-  "record_video": true,
-  "record_images": false,
-  "retention_days": 30
-}
-```
+- **counters_config**: `[{name, value}]`（apply 在 `_apply_counters`，写盘到
+  `DATA_DIR/counters/project_{id}_ch{ch}.json`）
+- **alarm_config**: 串口/协议/triggers，由 Navbar 切项目时 `POST /alarm/config` + `/alarm/connect` 自动应用
+- **detection_config**: 检测框样式 / Toast / 语音；进 `useSourceStore.loadDetectionFromProject`
+- **data_config**: 数据导出开关 + 班次拆分（`shift_split_enabled / day_shift_start / night_shift_start`）
 
-## 强制分析流程
+---
 
-### 第1步: 确认修改的配置项
-
-1. 确认属于哪个 JSON 字段
-2. 读取当前的 JSON 结构
-3. 确认修改类型: 新增key / 修改类型 / 删除key / 改嵌套结构
-
-### 第2步: 追踪全链路
-
-**必须检查以下全部位置:**
-
-| 位置 | 文件 | 作用 |
-|------|------|------|
-| 编辑UI | `Project/index.vue` | 用户编辑配置 |
-| 保存API | `projects.py: update_project` | 写入DB |
-| DB模型 | `models.py: Project` | 存储 |
-| 项目切换 | `Navbar.vue: handleProjectChange` | 解析+填充默认值 |
-| 发送到引擎 | `detection.js: setProjectConfig` | 前端→后端 |
-| 引擎解析 | `source.py: set_project_config` | 解析到状态变量 |
-| 检测使用 | `source.py: _capture_loop` 等 | 运行时读取 |
-| 结果显示 | `Monitor/index.vue` | 渲染UI |
-
-### 第3步: 检查默认值处理
-
-**关键:** Navbar.vue 的 `handleProjectChange()` 中有大量默认值填充:
-```javascript
-// 如果项目没有某个配置，会用默认值填充
-if (!project.steps_config) project.steps_config = []
-if (!project.pipeline_config) project.pipeline_config = { logic_mode: 'sequential' }
-```
-
-新增配置项必须在此处添加默认值，否则旧项目数据加载时会缺失。
-
-### 第4步: 检查 set_project_config 解析
-
-`source.py: set_project_config()` 是配置解析的核心。
-搜索你要修改的配置 key 在该函数中的处理逻辑。
-如果是新增 key，需要在此函数中添加解析。
-
-### 第5步: 生成影响报告
+## 二、配置数据流全链路（v3.5.x）
 
 ```
-修改的配置: [JSON字段.key]
-Project/index.vue: [编辑UI需要的修改]
-Navbar.vue: [默认值需要的修改]
-source.py set_project_config: [解析逻辑需要的修改]
-source.py 运行时: [使用逻辑需要的修改]
-Monitor/index.vue: [显示逻辑需要的修改]
-旧数据兼容: [旧项目缺少该字段时的处理]
+┌─ 前端 Project/index.vue (2925 行) ───────────────────┐
+│  selectProject → getProjectDetail                    │
+│  initProjectDefaults(project)   ← 必填默认值 + 把     │
+│      pipeline_config 解包到 activeProject 顶层       │
+│  handleSaveProject               ← 把顶层重新塞回    │
+│      pipeline_config + data_config 再 PUT /projects  │
+└──────┬───────────────────────────────────────────────┘
+       │  PUT  /api/v1/projects/{id}
+       ▼
+┌─ backend/api/projects.py ────────────────────────────┐
+│  update_project: setattr 到 ORM, db.commit           │
+│  POST /projects/{id}/activate                        │
+│    → 写 is_active + _reload_model_for_active_project │
+│    → 清各通道 MES pending（避免旧码混入新项目）        │
+└──────┬───────────────────────────────────────────────┘
+       │
+       ▼  Navbar.handleProjectChange
+┌─ frontend/src/layout/Navbar.vue ─────────────────────┐
+│  activateProject + getProjectDetail                  │
+│  填默认值（counters/steps/events/pipeline_config）    │
+│  从 pipeline_config 解包 sequence_order/...到顶层    │
+│  projectStore.setCurrentProject(project)             │
+│  store.loadDetectionFromProject(project.detection_*) │
+└──────┬───────────────────────────────────────────────┘
+       │
+       ▼  Monitor.startDetection → syncProjectConfig
+┌─ POST /api/v1/source/detection/set-project?channel=N─┐
+│  ProjectConfigRequest 仅取 7 个 JSON 中 5 个          │
+│  (steps/pipeline/events/counters/data) + logic_mode  │
+└──────┬───────────────────────────────────────────────┘
+       │
+       ▼
+┌─ backend/api/source.py: VSM.set_project_config ──────┐
+│  薄 wrapper → apply_project_config(self, config) 在  │
+│  source_project_config_apply.py (P7 第十一刀):       │
+│    _apply_rod_filter           (rod_filter.py)       │
+│    _reset_step_state_dicts                           │
+│    _apply_steps_config         (threshold/100, 帧, 静态)│
+│    _apply_backup_steps         (backup_for → 映射)    │
+│    _apply_pipeline_config      (settlement / 超时)    │
+│    _apply_counters             (默认 4 计数器 + 持久化)│
+│    _reset_cycle_state                                │
+│    _apply_tracking_mode        (tracker yaml + 容器)  │
+│    _apply_periodic_actions ★   (v3.5.0)              │
+│    _print_summary                                    │
+└──────┬───────────────────────────────────────────────┘
+       │  扁平 setattr → host (VideoSourceManager)
+       ▼
+┌─ 运行期消费点 ───────────────────────────────────────┐
+│  source_inference_loop_mixin.py: 读 logic_mode       │
+│  source_events_check_mixin.py:   按模式分发 OK/NG     │
+│  source_step_stats_mixin.py:     调 _check_periodic_ │
+│      actions_on_first_step (v3.5.2 开机首检)         │
+│  source_session_lifecycle_mixin.py: cycle_end 后调   │
+│      _check_periodic_actions(cycle_steps, is_good)   │
+│  source_lifecycle_mixin.py: start_detection 时调     │
+│      _run_periodic_actions_on_start (v3.5.2)         │
+│  source_drawer.py / settlement_mixin.py / ...        │
+└──────┬───────────────────────────────────────────────┘
+       │
+       ▼  GET /api/v1/source/detection/results?channel=N
+┌─ 前端 Monitor/index.vue (4051 行) ───────────────────┐
+│  pollDetectionResults → 写 stats / events / counters │
+│  data.periodic_actions → periodicActions ref         │
+│  渲染 SOP 卡片 / 计数器 / Tracking 进度 / 周期性强制  │
+│  动作进度条（ok/due/overdue 三态）                    │
+└──────────────────────────────────────────────────────┘
 ```
 
-## 修改原则
+> 注意：set-project 路由的 `ProjectConfigRequest` **只发送 5 个 JSON**（`alarm_config / detection_config` 不发），
+> 因为这两个由前端独立的 alarm.connect / sourceStore 处理，**不进 VSM 状态机**。
 
-1. **新增 key 必须向后兼容:** 旧项目没有该 key 时不能崩溃
-2. **默认值在 3 处同步:** Navbar默认值 + set_project_config默认值 + 前端编辑UI默认值
-3. **不删除 key:** 保留旧 key 不会有副作用，删除可能导致旧数据崩溃
-4. **JSON 类型安全:** Python 端 json.loads 后要做类型检查
-5. **全链路测试:** 创建新项目 → 编辑配置 → 切换项目 → 启动检测 → 查看结果
+---
+
+## 三、修改前必跑的 grep 矩阵
+
+| 检查点 | 命令（按 key 名 grep）|
+|---|---|
+| 后端 apply 解析 | `rg 'config.get\(.<KEY>.\)' backend/api/source_project_config_apply.py backend/api/source_*_mixin.py backend/api/rod_filter.py` |
+| 后端运行期读取 | `rg 'project_config.get\(.pipeline_config.\)\.get\(.<KEY>.\)' backend/` |
+| Schema 是否漏 | `rg '<KEY>' backend/schemas/project.py` |
+| Source route 透传 | `rg '<KEY>' backend/api/source_routes.py` |
+| 前端默认值 | `rg '<KEY>' frontend/src/views/Project/index.vue` （看 initProjectDefaults + handleSaveProject）|
+| 前端 Navbar 切换 | `rg '<KEY>' frontend/src/layout/Navbar.vue` |
+| 前端 Monitor 显示 | `rg '<KEY>' frontend/src/views/Monitor/index.vue` |
+| Monitor 同步入口 | `rg 'syncProjectConfig' frontend/src/views/Monitor/index.vue -n` |
+| ORM Column | `rg '<KEY>' backend/models/models.py` |
+| reset_stats 清零 | `rg '<状态变量>' backend/api/source.py`（看 reset_stats） |
+| 持久化 | `rg 'DATA_DIR.*counters' backend/api/source_*.py` |
+
+---
+
+## 四、强制分析流程
+
+### 第 1 步：确认归属
+
+- 在哪个 JSON 字段下？（pipeline_config / steps_config / events_config / ...）
+- 修改类型：新增 key / 改类型 / 改嵌套 / 删 key
+- **跨字段引用**？（典型：`periodic_actions[*].due_warning_event_id` → `events_config[*].id`，
+  `custom_conditions[*].event_id` → `events_config[*].id`，
+  `step.triggerEvent` → `events_config[*].id`，
+  `step.backup_for` → 另一 step 的 `id`）
+
+### 第 2 步：跑 grep 矩阵确认全链路所有触点
+
+新增 key 必须在下列**全部**位置闭环：
+
+| 位置 | 文件 | 缺一会怎样 |
+|---|---|---|
+| ORM JSON Column | `models/models.py` | 已是 JSON Column 通常无需改；新增**顶层列**才需要加 + 写 ALTER TABLE 到 `backend/main.py: migrate_database()` |
+| Pydantic Schema | `schemas/project.py`（4 处）| PUT /projects 验证不过 |
+| Project 路由透传 | `api/projects.py`（5 处构造 ProjectResponse）| GET 拿不到字段 |
+| set-project 路由 schema | `api/source_routes.py: ProjectConfigRequest` | Monitor 同步时丢字段 |
+| set_project_config 解析 | `api/source_project_config_apply.py: apply_project_config` 或对应 mixin（如 `source_periodic_actions_mixin.py`）| 后端**完全不读** |
+| 状态变量初始化 | `api/source_state_init.py` | reset_stats / 切项目时找不到属性 |
+| reset_stats 清零 | `api/source.py: reset_stats` | 切项目残留旧数值 |
+| 持久化（如有）| `DATA_DIR/counters/...` | 重启丢状态 |
+| 前端 initProjectDefaults | `views/Project/index.vue`（line ~1971）| 老项目打开报错 / 字段消失 |
+| 前端 handleSaveProject | `views/Project/index.vue`（line ~2273+）pipeline_config 组装段 | 编辑后**保存不上** |
+| 前端 Navbar handleProjectChange | `layout/Navbar.vue`（line ~284）| 切项目后字段没解包到顶层 |
+| 前端 syncProjectConfig | `views/Monitor/index.vue`（line ~2935）| 启动检测时字段没送到后端 |
+| 前端 Monitor 渲染 | `views/Monitor/index.vue` 各 ref | UI 看不到 |
+| 前端 Project UI | `views/Project/index.vue` 编辑组件 | 客户编不了 |
+
+### 第 3 步：给出影响报告
+
+```
+修改的字段: pipeline_config.<KEY>
+- 后端 apply: source_project_config_apply.py / source_*_mixin.py 改动点
+- 后端 schema: schemas/project.py + source_routes.py: ProjectConfigRequest
+- 后端运行期: 读取该字段的 mixin / executor
+- VSM 状态: __init__ / state_init / reset_stats 三处
+- 前端 Project: initProjectDefaults 默认值 + handleSaveProject 写回
+- 前端 Navbar: handleProjectChange 默认值
+- 前端 Monitor: syncProjectConfig 透传 + 渲染
+- 持久化: DATA_DIR/counters/... 是否要落盘
+- 老项目兼容: 缺 key 时 .get(key, default)
+- 多通道: 是否要 channel_id / 是否要 channel_filter 限定
+```
+
+---
+
+## 五、修改原则
+
+1. **新增需求优先扩 JSON 而不是加 Column**（AGENTS.md 七节"关键扩展点"明示）。
+2. **向后兼容**：所有 `.get(key, default)`，旧项目缺字段不能崩。
+3. **默认值同步 4 处**：
+   `initProjectDefaults` + `handleSaveProject` 写回 + `Navbar.handleProjectChange` + `apply_project_config`。
+4. **threshold 单位**：前端百分比 (10-100)，后端 `_apply_steps_config` 自动 `/ 100`。**不要在前端手动除**。
+5. **logic_mode 不在 JSON 里**：是顶层 String 列，新加值要在 `source_events_check_mixin.py` 的分发处加分支。
+6. **跨字段引用 by id**：`events_config[*].id`、`steps_config[*].id`、`periodic_actions[*].id` 都是稳定字符串/整数，
+   修改时不要重新分配 id，否则 `_trigger_event` 找不到。
+7. **新状态变量必须进 reset_stats**（v3.5.2 `_periodic_counters / _run_on_start_pending` 就是这么补上的）。
+8. **多通道**：状态变量都要 per-channel（`_periodic_counter_path` 拼 `ch{channel_id}`），
+   切通道数（`channel_manager.set_channel_count`）必须考虑残留落盘文件。
+9. **激活时副作用**：`POST /projects/{id}/activate` 会**重载模型 + 清 MES pending**；
+   增加新副作用要加 try/except，**绝不让 activate 主流程失败**。
+10. **set_project_config 不重置已激活的视频源 / 模型**：只重置步骤 / 周期 / 计数器状态。
+    新加状态变量如属"周期内"语义，必须在 `_reset_cycle_state` 或 `_reset_step_state_dicts` 里清零。
+
+---
+
+## 六、v3.5.x 常见踩坑（必查）
+
+| 坑 | 症状 | 根因 |
+|---|---|---|
+| 前端加字段没到后端解析 | 编辑保存成功但运行不生效 | `apply_project_config` 漏 key |
+| 后端解析没存到 host | apply 日志 OK 但运行时 `getattr(self,...)` 报错 | 没 `setattr(h, key, value)` |
+| 状态没在 reset_stats 重置 | 用户点"清零"后字段还有旧值 | 漏在 `source.py: reset_stats` 加清零逻辑 |
+| 新字段在 pipeline_config 里读不到 | rod_filter v2.7.6 旧坑 | `_build_project_config` 没把字段抬到顶层（v2.7.8 已经统一从 pipeline_config 读，不要再走顶层） |
+| 老项目打开 Project 页崩 | `Cannot read property of undefined` | `initProjectDefaults` 漏给默认值 |
+| 编辑后保存不上 | PUT /projects 缺字段 | `handleSaveProject` 的 pipeline_config 组装段漏 |
+| 切项目后字段还在 | Navbar 没解包 → 顶层旧值 | `handleProjectChange` 漏处理 |
+| 启动检测后后端无配置 | Monitor 没透传 | `syncProjectConfig` 漏 key（pipeline_config 整体透传通常 OK，但如果**抬到了顶层**就要单独发） |
+| periodic_actions 切项目残留 | 老项目计数没归零 | 切项目走 `apply_project_config`，会从 `DATA_DIR/counters/project_{id}_ch{ch}_periodic.json` **按 project_id 重新装**，确认文件路径用了对的 project_id |
+| run_on_start 不弹 | 配置开了但开机首检静默 | `_run_periodic_actions_on_start` 在 `start_detection` / `resume_inference` 才调；`_check_periodic_actions_on_first_step` 必须在第一个步骤 disappear 时调（`source_step_stats_mixin.py`） |
+| 自定义事件触发不出来 | events_config 里有但不响应 | 检查 `id` 是不是数字/字符串混用，`_trigger_event` 双向匹配，但有些调用点（如 `due_warning_event_id`）保存的是 number，配出来是 string 会失配 |
+| Schema 校验失败 | `pipeline_config` 整体被丢 | `ProjectUpdate` Optional[dict] 是顶层，新加**顶层列**才要改 schema；JSON 内嵌 key 不需要 |
+| MES Hook 错乱 | 切项目后旧 workpiece 串到新项目 | 已由 `activate_project` 调 `hook.clear_pending_scan` 处理；新增类似副作用要参考此处 |
+
+---
+
+## 七、自检清单
+
+修改完后逐条核对：
+
+- [ ] 跑了上面 grep 矩阵，确认所有触点都改了
+- [ ] `apply_project_config` / 对应 mixin 增加了 `.get(key, default)` 解析
+- [ ] host 上的状态变量在 `source_state_init.py` 里有初始化
+- [ ] `reset_stats` 里清零（如属周期内/会话内状态）
+- [ ] `initProjectDefaults` + `handleSaveProject` 双向闭环
+- [ ] `Navbar.handleProjectChange` 默认值（如果字段被解包到顶层）
+- [ ] `Monitor.syncProjectConfig` 透传（不挂 pipeline_config 内部时才需要）
+- [ ] 4 个 Pydantic schema 同步（仅顶层列改动）
+- [ ] `projects.py` 5 处 ProjectResponse 构造同步（仅顶层列改动）
+- [ ] 老项目打开 / 编辑 / 保存 / 激活 / 启动检测 / cycle 跑通一轮
+- [ ] 多通道场景：每通道独立状态 / 持久化文件路径带 `ch{channel_id}`
+- [ ] 跨字段 id 引用没断（`due_warning_event_id` ↔ `events_config[*].id` 等）
+- [ ] lint 0 错误，启动后端无 traceback
