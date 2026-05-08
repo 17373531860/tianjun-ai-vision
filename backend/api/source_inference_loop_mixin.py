@@ -38,23 +38,27 @@ class InferenceLoopMixin:
         return (frame, display_small, frame_id)
 
     def _inference_select_and_run_model(self, frame):
-        """按 task_type + logic_mode 选用合适的推理函数, 返回 (detections, is_tracking, is_seg, t_start)。
+        """按 router 调度跑多模型 + 合并 detections + 坐标系映射.
 
-        4 种组合: detect_and_track (tracking) / detect_segment (segmentation) / detect_only (默认)。
-        坐标已通过 _map_detections_original_to_display 映射到显示坐标系。
+        Step 5 (feat/multi-model-roi-link) 改造:
+          - 老路径单模型时 router 只含 main, 行为完全等价
+          - 多模型时 router.schedule_models_for_frame(frame_id) 决定本帧应跑哪些 mi
+          - 主模型 (name='main') 按 project_config 的 task_type/logic_mode 选 runner
+          - 副模型按 mi.model_task ('detect'/'segment') 选最简 runner (不参与 tracking)
+          - detections 合并, 每条带 model_name/display_color (Step 4 注入)
+          - is_tracking/is_seg 由主模型决定 (供下游 _update_tracking_stats / _update_step_stats)
+          - per-mi fps_inference 累计 (mi.tick_fps), host fps_inference 在 _inference_tick_fps
+            中同步为 main.fps_inference (老 UI/导出兼容)
         """
+        t_start = time.time()
+        # 主模型的 task_type / logic_mode (对副模型不适用)
         _task_type = self.project_config.get('task_type', 'detection') if self.project_config else 'detection'
         _logic_mode = self.project_config.get('logic_mode', 'sequential') if self.project_config else 'sequential'
         is_tracking = (_logic_mode == 'tracking')
         is_seg = (_task_type == 'segmentation')
 
-        t_start = time.time()
-        if is_tracking:
-            detections = self._detect_and_track(frame)
-        elif is_seg:
-            detections = self._detect_segment(frame)
-        else:
-            detections = self._detect_only(frame)
+        detections = self._run_models_for_frame(frame, t_start, is_tracking, is_seg)
+
         detect_time = (time.time() - t_start) * 1000
         if detect_time > 200:
             debug_log(f"!!! 推理耗时: {detect_time:.1f}ms, 检测数={len(detections) if detections else 0}", "INFERENCE")
@@ -65,6 +69,57 @@ class InferenceLoopMixin:
             detections = self._map_detections_original_to_display(detections)
 
         return (detections, is_tracking, is_seg, t_start)
+
+    def _run_models_for_frame(self, frame, loop_start: float,
+                               main_is_tracking: bool, main_is_seg: bool) -> list:
+        """Step 5: 按 router 调度跑多模型, 串行调 runner, 合并 detections.
+
+        参数:
+          loop_start    : time.time() 刻度, 给每个跑过的 mi.tick_fps 用
+          main_is_tracking / main_is_seg : 主模型 (name='main') 的项目级模式
+        返回:
+          detections list, 每条 dict 带 model_name + display_color (Step 4 注入)
+        """
+        router = getattr(self, '_router', None)
+        if router is None or not router.models:
+            # 极端 fallback: 没 router 时走老路径 (理论上 Step 2 之后不会到这里)
+            if main_is_tracking:
+                return self._detect_and_track(frame)
+            if main_is_seg:
+                return self._detect_segment(frame)
+            return self._detect_only(frame)
+
+        frame_id = id(frame)
+        chosen = router.schedule_models_for_frame(frame_id)
+        if not chosen:
+            # 本帧所有 mi 都不应跑 (极小概率: 全是 every_n_frames + on_event 都未触发)
+            return []
+
+        all_detections = []
+        for mi in chosen:
+            if mi.model is None:
+                continue  # mi 还没加载就跳过 (Step 6 配置 apply 后才加载)
+
+            # 主模型: 走项目 logic_mode/task_type
+            # 副模型: 按 mi.model_task 选最简 runner (不参与 tracking)
+            if mi.name == 'main':
+                if main_is_tracking:
+                    dets = self._detect_and_track(frame, mi=mi)
+                elif main_is_seg:
+                    dets = self._detect_segment(frame, mi=mi)
+                else:
+                    dets = self._detect_only(frame, mi=mi)
+            else:
+                if mi.model_task == 'segment':
+                    dets = self._detect_segment(frame, mi=mi)
+                else:
+                    dets = self._detect_only(frame, mi=mi)
+
+            mi.tick_fps(loop_start)
+            if dets:
+                all_detections.extend(dets)
+
+        return all_detections
 
     def _inference_publish_detections(self, detections, is_tracking):
         """提取 confirmed 检测结果并发布给前端 + 捕获线程 (双锁更新)。"""
@@ -93,10 +148,23 @@ class InferenceLoopMixin:
 
         v2.7.13 注: 跟踪/事件帧数阈值要按 fps_inference 换算, 不能用 fps_actual,
         因为 _update_tracking_stats / _update_step_stats 都在推理线程里累加帧数。
+
+        Step 5 (feat/multi-model-roi-link):
+          - per-mi fps_inference 由 mi.tick_fps 在 _run_models_for_frame 内累计
+          - host.fps_inference 改为每秒同步为 main.fps_inference (兼容老 UI/导出)
+          - host._fps_inference_counter 仍累 (语义: 主循环迭代次数, 用于双保险),
+            如果 router 中没 main 时 fallback 到该计数
         """
         self._fps_inference_counter += 1
         if loop_start - self._fps_inference_time >= 1.0:
-            self.fps_inference = self._fps_inference_counter
+            router = getattr(self, '_router', None)
+            main = router.get('main') if router is not None else None
+            if main is not None and main.model is not None:
+                # main 已加载: host.fps_inference 反映 main 真实 fps
+                self.fps_inference = main.fps_inference
+            else:
+                # 没 main 或 main 没加载: fallback 老逻辑 (循环次数)
+                self.fps_inference = self._fps_inference_counter
             self._fps_inference_counter = 0
             self._fps_inference_time = loop_start
 
