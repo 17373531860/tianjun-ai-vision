@@ -25,7 +25,7 @@ import os
 import shutil
 import time
 import uuid
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
@@ -78,10 +78,32 @@ class ImageSetRequest(BaseModel):
     file_path: str
 
 
-class DetectionStartRequest(BaseModel):
+class ModelSpec(BaseModel):
+    """单个 slot 的多模型加载参数 (Step 6 feat/multi-model-roi-link).
+
+    name='main' 表示主模型 (与老链路 model_path/conf/iou 等价);
+    name 任意字符串则为副模型 slot, 独立 conf/iou/roi/schedule/class_filter.
+    """
+    name: str = "main"
     model_path: str
+    conf: Optional[float] = None
+    iou: Optional[float] = None
+    roi: Optional[List[List[float]]] = None  # 归一化多边形顶点 [[x,y], ...]
+    schedule: Optional[Dict[str, Any]] = None  # {type, n, events}
+    class_filter: Optional[List[str]] = None
+    priority: Optional[int] = None
+    display_color: Optional[str] = None
+    use_half: Optional[bool] = None
+    original_pt_path: Optional[str] = None
+
+
+class DetectionStartRequest(BaseModel):
+    # 老字段 (单模型, 向后兼容): 仍是必填语义但允许 None 表示 "走多模型 payload"
+    model_path: Optional[str] = None
     conf: float = 0.25
     iou: float = 0.45
+    # Step 6 新字段: 多模型 payload, 非空时优先级高于老字段
+    models: Optional[List[ModelSpec]] = None
 
 
 class StreamConfigRequest(BaseModel):
@@ -342,9 +364,71 @@ def get_current_device():
 
 @router.post("/gpu/set")
 def set_device(req: DeviceConfigRequest):
-    """设置推理设备（需要重新加载模型生效）"""
+    """设置推理设备（需要重新加载模型生效）.
+
+    Step 6 (feat/multi-model-roi-link):
+      - 单模型 (router 中只有 main 且 main.model 已加载) → 走老路径 load_model
+      - 多模型 (router 中除 main 外还有副 mi 加载) → 遍历每个 mi 重载到新设备
+      - 任何 model 都没加载 → 仅写入设备配置, 留待下次加载
+    """
     video_manager.device = req.device
     video_manager._save_device_config()
+
+    router_obj = getattr(video_manager, '_router', None)
+    loaded_specs = []
+    if router_obj is not None:
+        for mi in router_obj.models.values():
+            if mi.model is not None and mi.model_path:
+                loaded_specs.append({
+                    'name': mi.name,
+                    'model_path': mi.model_path,
+                    'conf': mi.conf,
+                    'iou': mi.iou,
+                    'roi': mi.roi,
+                    'schedule': {
+                        'type': mi.schedule.type,
+                        'n': mi.schedule.n,
+                        'events': list(mi.schedule.events),
+                    },
+                    'class_filter': (sorted(mi.class_filter)
+                                     if mi.class_filter is not None else None),
+                    'priority': mi.priority,
+                    'display_color': mi.display_color,
+                    'use_half': mi.use_half,
+                })
+
+    if len(loaded_specs) >= 2 or (
+        len(loaded_specs) == 1 and loaded_specs[0]['name'] != 'main'
+    ):
+        # 多模型 (含: 单纯副模型场景) → 遍历重载, 顺序保持 priority 高→低 由 router 决定
+        video_manager.release_all_models()
+        all_ok = True
+        for spec in loaded_specs:
+            ok = video_manager.load_model_into_slot(
+                name=spec['name'],
+                model_path=spec['model_path'],
+                conf=spec['conf'],
+                iou=spec['iou'],
+                roi=spec['roi'],
+                schedule=spec['schedule'],
+                class_filter=spec['class_filter'],
+                priority=spec['priority'],
+                display_color=spec['display_color'],
+                use_half=spec['use_half'],
+                device=req.device,
+            )
+            all_ok = all_ok and ok
+        if all_ok:
+            return {
+                "status": "success",
+                "message": f"已切换 {len(loaded_specs)} 个模型到 {video_manager.current_device_info['name']}",
+                "device": video_manager.device,
+                "current_device_info": video_manager.current_device_info,
+                "reloaded_models": [s['name'] for s in loaded_specs],
+            }
+        else:
+            return {"status": "error", "message": "切换设备失败, 部分模型重载出错"}
+
     if video_manager.model is not None and video_manager.model_path:
         success = video_manager.load_model(video_manager.model_path)
         if success:
@@ -763,20 +847,60 @@ def set_image(req: ImageSetRequest, channel: int = Query(0)):
 # ============================================================
 @router.post("/detection/start")
 def start_detection(req: DetectionStartRequest, channel: int = Query(0)):
-    """开始检测"""
+    """开始检测.
+
+    Step 6 (feat/multi-model-roi-link):
+      - 优先解析 req.models[]: 多模型 payload, 逐个 load_model_into_slot
+      - 否则走老的单模型路径 (req.model_path)
+    """
     try:
         mgr = _get_mgr(channel)
-        mgr.conf_threshold = req.conf
-        mgr.iou_threshold = req.iou
-
         from backend.api.channel_manager import channel_manager
         device = getattr(mgr, 'device', 'auto') or 'auto'
-        if req.model_path:
-            channel_manager.load_model_for_channel(channel, req.model_path, device)
-        elif mgr.model is None:
-            channel_manager._propagate_model(channel)
 
-        mgr.start_detection(req.model_path)
+        if req.models:
+            # 多模型路径: 释放所有旧 slot (含 main), 再按列表逐个加载
+            mgr.release_all_models()
+            failed = []
+            for spec in req.models:
+                ok = mgr.load_model_into_slot(
+                    name=spec.name,
+                    model_path=spec.model_path,
+                    conf=spec.conf,
+                    iou=spec.iou,
+                    roi=spec.roi,
+                    schedule=spec.schedule,
+                    class_filter=spec.class_filter,
+                    priority=spec.priority,
+                    display_color=spec.display_color,
+                    use_half=spec.use_half,
+                    device=device,
+                    original_pt_path=spec.original_pt_path,
+                )
+                if not ok:
+                    failed.append(spec.name)
+            if failed:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"加载模型失败: {failed}",
+                )
+            # 主模型 model_path 作为 start_detection 的 path 参数 (向后兼容签名)
+            main_spec = next(
+                (s for s in req.models if s.name == 'main'),
+                req.models[0] if req.models else None,
+            )
+            main_path = main_spec.model_path if main_spec else None
+        else:
+            # 老路径 (单模型, 完全等价于 Step 6 之前)
+            mgr.conf_threshold = req.conf
+            mgr.iou_threshold = req.iou
+            if req.model_path:
+                channel_manager.load_model_for_channel(channel, req.model_path, device)
+            elif mgr.model is None:
+                channel_manager._propagate_model(channel)
+            main_path = req.model_path
+
+        mgr.start_detection(main_path)
 
         if mgr.project_config and mgr.project_config.get('id'):
             session_info = mgr.start_session(mgr.project_config['id'])
@@ -926,6 +1050,16 @@ def get_detection_results(channel: int = Query(0)):
     }
 
     result['model_task'] = getattr(mgr, 'model_task', 'detect')
+
+    # Step 6 (feat/multi-model-roi-link): 透出多模型快照 (前端 Monitor 用 display_color
+    # 给检测框上色 / 用 fps_inference / latency 渲染 per-model 性能).
+    # 单模型场景仍会返回 [{'name':'main', ...}] 一项 (main slot 永远存在).
+    try:
+        if hasattr(mgr, '_router') and mgr._router is not None:
+            result['models'] = mgr._router.stats_snapshot()
+    except Exception as _e:
+        print(f"[API] /detection/results 取 models 快照失败: {_e}")
+        result['models'] = []
 
     # 多通道场景下前端不能用 currentProject (顶部下拉框单一值) 兜底,
     # 必须每帧带上 tracking 过滤所需的字段, 否则容器模式表格里"箱子"行
