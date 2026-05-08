@@ -225,5 +225,19 @@ class EventTriggerMixin:
             alarm_router.trigger_alarm(event_type, channel_id=self.channel_id)
         except Exception as e:
             print(f"触发报警失败: {e}")
-        
+
+        # feat/multi-model-roi-link: 通知 InferenceRouter, 让监听本事件的副模型下次跑一次.
+        # 投递两个 key: 'event_<id>' (稳定, 推荐) + 事件名 (人类可读, 兜底).
+        # 副模型 schedule.events 中只要任一命中即可被调度.
+        try:
+            router = getattr(self, '_router', None)
+            if router is not None:
+                event_name = event.get('name')
+                if current_event_id is not None:
+                    router.trigger_event(f"event_{current_event_id}")
+                if event_name:
+                    router.trigger_event(str(event_name))
+        except Exception as e:
+            print(f"router.trigger_event 失败: {e}")
+
         return True
