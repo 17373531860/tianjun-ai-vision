@@ -198,6 +198,134 @@
                   </div>
                 </el-card>
 
+                <!-- Step 8 (feat/multi-model-roi-link): 附加模型 (多模型 ROI) -->
+                <el-card shadow="never" class="bg-slate-800 border-slate-700 text-gray-300">
+                  <template #header>
+                    <div class="flex justify-between items-center">
+                      <span class="font-bold text-white">附加模型 (多模型 ROI)</span>
+                      <el-button type="primary" size="small" plain @click="addExtraModel"
+                        :disabled="(activeProject?.extra_models?.length || 0) >= 4">
+                        <el-icon class="mr-1"><Plus /></el-icon>添加副模型
+                      </el-button>
+                    </div>
+                  </template>
+                  <div class="text-xs text-gray-400 mb-3 leading-relaxed">
+                    在主模型基础上叠加最多 4 个独立模型，每个可以指定 ROI 区域、检测频率、独立颜色。
+                    适合主模型管 SOP 步骤、副模型在指定区域检测产品状态等场景。
+                    <br />
+                    <span class="text-amber-400">提示</span>: 多模型同时跑会增加 GPU 显存压力，
+                    4-5 GB 显存建议最多 2 个 (主+1 副)；模型加载时跨通道串行 warmup，避免 OOM。
+                  </div>
+                  <div v-if="!activeProject?.extra_models?.length" class="text-center text-gray-500 py-6 text-sm">
+                    暂无副模型，点击右上角"添加副模型"配置
+                  </div>
+                  <div v-else class="space-y-3">
+                    <div v-for="(slot, idx) in activeProject.extra_models" :key="idx"
+                      class="bg-slate-900/60 border border-slate-700 rounded-lg p-3 space-y-2">
+                      <!-- 行 1: name + 模型 + 颜色 + 删除 -->
+                      <div class="flex items-center gap-3 flex-wrap">
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-gray-400">slot 名</span>
+                          <el-input v-model="slot.name" size="small" style="width: 7.5rem"
+                            placeholder="aux" />
+                        </div>
+                        <div class="flex items-center gap-2 flex-1 min-w-[12rem]">
+                          <span class="text-xs text-gray-400">模型</span>
+                          <span v-if="slot.model_name"
+                            class="text-sm text-white truncate flex-1">
+                            {{ slot.model_name }}<span v-if="slot.model_version"
+                              class="text-gray-500 ml-1">v{{ slot.model_version }}</span>
+                          </span>
+                          <span v-else class="text-sm text-gray-500 flex-1">未选择</span>
+                          <el-button size="small" plain @click="openExtraModelSelect(idx)">
+                            选择
+                          </el-button>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-gray-400">颜色</span>
+                          <el-color-picker v-model="slot.display_color" size="small" />
+                        </div>
+                        <el-button type="danger" size="small" plain
+                          @click="removeExtraModel(idx)">
+                          <el-icon><Delete /></el-icon>
+                        </el-button>
+                      </div>
+                      <!-- 行 2: conf / iou / priority -->
+                      <div class="flex items-center gap-3 flex-wrap">
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-gray-400">置信度</span>
+                          <el-input-number v-model="slot.conf" :min="0.05" :max="1"
+                            :step="0.05" :precision="2" size="small"
+                            style="width: 7rem" />
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-gray-400">IoU</span>
+                          <el-input-number v-model="slot.iou" :min="0.1" :max="1"
+                            :step="0.05" :precision="2" size="small"
+                            style="width: 7rem" />
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-gray-400">优先级</span>
+                          <el-input-number v-model="slot.priority" :min="0" :max="100"
+                            :step="10" :precision="0" size="small"
+                            style="width: 7rem" />
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <el-checkbox v-model="slot.use_half" class="!text-gray-300">
+                            FP16
+                          </el-checkbox>
+                        </div>
+                      </div>
+                      <!-- 行 3: schedule -->
+                      <div class="flex items-center gap-3 flex-wrap">
+                        <span class="text-xs text-gray-400">检测频率</span>
+                        <el-radio-group v-model="slot.schedule_type" size="small">
+                          <el-radio-button label="every_frame">每帧</el-radio-button>
+                          <el-radio-button label="every_n_frames">间隔 N 帧</el-radio-button>
+                          <el-radio-button label="on_event">按事件</el-radio-button>
+                        </el-radio-group>
+                        <el-input-number v-if="slot.schedule_type === 'every_n_frames'"
+                          v-model="slot.schedule_n" :min="1" :max="100" :step="1"
+                          :precision="0" size="small" style="width: 6rem" />
+                        <span v-if="slot.schedule_type === 'every_n_frames'"
+                          class="text-xs text-gray-500">
+                          (每 {{ slot.schedule_n }} 帧跑一次, 减小 GPU 占用)
+                        </span>
+                      </div>
+                      <!-- 行 4: ROI -->
+                      <div class="flex items-center gap-3 flex-wrap">
+                        <span class="text-xs text-gray-400">ROI 区域</span>
+                        <el-button size="small" type="primary" plain
+                          @click="openExtraModelRoiEditor(idx)">
+                          {{ slot.roi && slot.roi.length >= 3 ? '重新绘制' : '设置区域' }}
+                        </el-button>
+                        <el-button v-if="slot.roi && slot.roi.length >= 3"
+                          size="small" type="danger" plain @click="clearExtraModelRoi(idx)">
+                          清除
+                        </el-button>
+                        <span v-if="slot.roi && slot.roi.length >= 3"
+                          class="text-xs text-green-400">
+                          已设置 {{ slot.roi.length }} 个顶点
+                        </span>
+                        <span v-else class="text-xs text-gray-500">
+                          未设置 (空 = 全画面)
+                        </span>
+                      </div>
+                      <!-- 行 5: class_filter (可选, 留空 = 模型全标签) -->
+                      <div class="flex items-start gap-3">
+                        <span class="text-xs text-gray-400 mt-1.5 w-16 shrink-0">类别白名单</span>
+                        <el-select v-model="slot.class_filter" multiple filterable
+                          allow-create default-first-option :reserve-keyword="false"
+                          placeholder="留空 = 模型全部类别"
+                          size="small" class="flex-1">
+                          <el-option v-for="lbl in (slot.class_filter || [])" :key="lbl"
+                            :label="lbl" :value="lbl" />
+                        </el-select>
+                      </div>
+                    </div>
+                  </div>
+                </el-card>
+
                 <!-- Shift Split Config -->
                 <el-card shadow="never" class="bg-slate-800 border-slate-700 text-gray-300">
                   <template #header><span class="font-bold text-white">班次拆分</span></template>
@@ -1461,7 +1589,11 @@
     </el-dialog>
 
     <!-- Model Select Dialog -->
-    <el-dialog v-model="showModelSelect" title="选择模型" width="600px">
+    <el-dialog v-model="showModelSelect"
+      :title="extraModelSelectingIdx >= 0
+        ? `选择副模型 [${activeProject?.extra_models?.[extraModelSelectingIdx]?.name || ''}]`
+        : '选择模型'"
+      width="600px" @close="extraModelSelectingIdx = -1">
       <div v-loading="loadingModels" class="space-y-2 max-h-96 overflow-y-auto">
         <div v-for="model in modelList" :key="model.id" 
           @click="selectModel(model)"
@@ -1523,7 +1655,13 @@
     </el-dialog>
 
     <!-- ROI Polygon Editor Dialog -->
-    <el-dialog v-model="roiEditorVisible" title="绘制 ROI 检测区域" width="80%" :close-on-click-modal="false" destroy-on-close class="roi-editor-dialog">
+    <el-dialog v-model="roiEditorVisible"
+      :title="extraModelRoiEditingIdx >= 0
+        ? `绘制副模型 [${activeProject?.extra_models?.[extraModelRoiEditingIdx]?.name || ''}] ROI 区域`
+        : '绘制 ROI 检测区域'"
+      width="80%" :close-on-click-modal="false" destroy-on-close
+      class="roi-editor-dialog"
+      @close="extraModelRoiEditingIdx = -1">
       <div class="space-y-3">
         <div class="flex items-center gap-3 text-sm">
           <span class="text-gray-400">单击添加顶点，点击<b class="text-amber-400">第一个点</b>闭合多边形（靠近时会变绿）。闭合后再次单击可重新绘制</span>
@@ -1709,6 +1847,12 @@ const roiEditorCanvas = ref(null);
 const roiPreviewCanvas = ref(null);
 const roiPoints = ref([]);
 const roiPolygonClosed = ref(false);
+
+// Step 8 (feat/multi-model-roi-link): 模型选择 / ROI 编辑 的目标 idx.
+// = -1 表示主模型 (写到 default_model_id / tracking_roi_polygon, 老路径)
+// >= 0 表示副模型 idx (写到 extra_models[idx])
+const extraModelSelectingIdx = ref(-1);
+const extraModelRoiEditingIdx = ref(-1);
 let roiImage = null;
 let roiMousePos = null;
 
@@ -1885,10 +2029,25 @@ const roiSave = async () => {
   const canvas = roiEditorCanvas.value;
   const w = canvas?.width || 1;
   const h = canvas?.height || 1;
-  activeProject.value.tracking_roi_polygon = roiPoints.value.map(pt => [
+  const polygon = roiPoints.value.map(pt => [
     Math.round((pt.x / w) * 10000) / 10000,
     Math.round((pt.y / h) * 10000) / 10000
   ]);
+
+  // Step 8: 副模型 ROI 编辑模式
+  if (extraModelRoiEditingIdx.value >= 0) {
+    const idx = extraModelRoiEditingIdx.value;
+    const slot = activeProject.value.extra_models?.[idx];
+    if (slot) {
+      slot.roi = polygon;
+      ElMessage.success(`副模型 [${slot.name}] ROI 已保存 (${polygon.length} 个顶点)`);
+    }
+    extraModelRoiEditingIdx.value = -1;
+    roiEditorVisible.value = false;
+    return;  // 副模型 ROI 不立即触发 saveProject (随主保存按钮一起提交)
+  }
+
+  activeProject.value.tracking_roi_polygon = polygon;
   roiEditorVisible.value = false;
   nextTick(() => drawRoiPreview());
   await handleSaveProject();
@@ -2141,7 +2300,31 @@ const initProjectDefaults = (project) => {
     const roi = pipelineConfig.tracking_roi || {};
     project.tracking_roi_polygon = roi.polygon || [];
   }
-  
+
+  // Step 8 (feat/multi-model-roi-link): 反序列化附加模型 (副 slot, 主模型由
+  // default_model_id/model_format 管理). 来源 pipeline_config.models[]
+  // 中所有 name !== 'main' 的项, 缺字段时用安全默认值.
+  if (project.extra_models === undefined) {
+    const rawModels = Array.isArray(pipelineConfig.models) ? pipelineConfig.models : [];
+    project.extra_models = rawModels
+      .filter(m => m && m.name && m.name !== 'main')
+      .map(m => ({
+        name: String(m.name || ''),
+        model_id: m.model_id ?? null,
+        model_name: m.model_name || '',
+        model_version: m.model_version || '',
+        conf: typeof m.conf === 'number' ? m.conf : 0.25,
+        iou: typeof m.iou === 'number' ? m.iou : 0.45,
+        roi: Array.isArray(m.roi) ? m.roi : null,
+        schedule_type: (m.schedule && m.schedule.type) || 'every_frame',
+        schedule_n: (m.schedule && Number(m.schedule.n)) || 1,
+        class_filter: Array.isArray(m.class_filter) ? [...m.class_filter] : [],
+        priority: typeof m.priority === 'number' ? m.priority : 50,
+        display_color: m.display_color || '#f59e0b',
+        use_half: !!m.use_half,
+      }));
+  }
+
   // 误判过滤（通用两层后处理，v2.7.8 起走 pipeline_config；默认全关，老项目兼容）
   if (project.rod_companion_filter === undefined) {
     const cf = pipelineConfig.rod_companion_filter || {};
@@ -2350,6 +2533,46 @@ const handleSaveProject = async () => {
           channel_filter: rule.channel_filter || null,
           run_on_start: rule.run_on_start === true,
         })),
+        // Step 8: 序列化多模型配置 (主 main + 副 slot 一并写入).
+        // 主 spec 仅带可调字段 (name+display_color), conf/iou 仍归 step-level;
+        // 副 spec 带完整 conf/iou/roi/schedule/class_filter/priority/display_color.
+        // model_id 是前端关联用 (后端 apply_models_config 不读, 路径解析在
+        // /detection/start 拼装时由 Monitor 完成).
+        models: (() => {
+          const out = [];
+          // main spec (永远存在, 仅承载 display_color 等可视化字段)
+          out.push({
+            name: 'main',
+            model_id: activeProject.value.default_model_id ?? null,
+            model_name: activeProject.value.model_name || '',
+            display_color: activeProject.value.main_display_color || '#10b981',
+            priority: 100,
+          });
+          for (const e of (activeProject.value.extra_models || [])) {
+            if (!e || !e.name) continue;
+            const slot = {
+              name: String(e.name).trim(),
+              model_id: e.model_id ?? null,
+              model_name: e.model_name || '',
+              model_version: e.model_version || '',
+              conf: typeof e.conf === 'number' ? e.conf : 0.25,
+              iou: typeof e.iou === 'number' ? e.iou : 0.45,
+              roi: Array.isArray(e.roi) && e.roi.length >= 3 ? e.roi : null,
+              schedule: {
+                type: e.schedule_type || 'every_frame',
+                n: Math.max(1, Math.floor(Number(e.schedule_n) || 1)),
+                events: [],
+              },
+              class_filter: Array.isArray(e.class_filter) && e.class_filter.length
+                ? [...e.class_filter] : null,
+              priority: typeof e.priority === 'number' ? e.priority : 50,
+              display_color: e.display_color || '#f59e0b',
+              use_half: !!e.use_half,
+            };
+            out.push(slot);
+          }
+          return out;
+        })(),
       }
     };
     data.data_config = {
@@ -2412,6 +2635,21 @@ const handleDeleteProject = async () => {
 
 // 选择模型
 const selectModel = (model) => {
+  // Step 8: 副模型选择分支 (extraModelSelectingIdx >= 0)
+  if (extraModelSelectingIdx.value >= 0) {
+    const idx = extraModelSelectingIdx.value;
+    const slot = activeProject.value?.extra_models?.[idx];
+    if (slot) {
+      slot.model_id = model.id;
+      slot.model_name = model.name;
+      slot.model_version = model.version || '';
+      ElMessage.success(`副模型 [${slot.name}] 已选: ${model.name}`);
+    }
+    extraModelSelectingIdx.value = -1;
+    showModelSelect.value = false;
+    return;  // 副模型不动 steps_config / 主格式
+  }
+
   activeProject.value.default_model_id = model.id;
   activeProject.value.model_name = model.name;
   activeProject.value.model_version = model.version || '';
@@ -2460,6 +2698,84 @@ const selectModel = (model) => {
   
   showModelSelect.value = false;
   openFormatSelect();
+};
+
+// Step 8 (feat/multi-model-roi-link): 副模型管理方法
+const generateExtraModelDefaultName = () => {
+  const existing = new Set((activeProject.value?.extra_models || []).map(m => m.name));
+  if (!existing.has('aux')) return 'aux';
+  for (let i = 2; i < 100; i++) {
+    const candidate = `aux${i}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  return `aux_${Date.now() % 10000}`;
+};
+
+const EXTRA_MODEL_PALETTE = ['#f59e0b', '#3b82f6', '#a855f7', '#ec4899', '#14b8a6', '#facc15'];
+
+const addExtraModel = () => {
+  if (!activeProject.value) return;
+  if (!activeProject.value.extra_models) activeProject.value.extra_models = [];
+  const list = activeProject.value.extra_models;
+  if (list.length >= 4) {
+    ElMessage.warning('副模型最多 4 个 (考虑 GPU 显存限制)');
+    return;
+  }
+  list.push({
+    name: generateExtraModelDefaultName(),
+    model_id: null,
+    model_name: '',
+    model_version: '',
+    conf: 0.25,
+    iou: 0.45,
+    roi: null,
+    schedule_type: 'every_n_frames',
+    schedule_n: 5,
+    class_filter: [],
+    priority: 50,
+    display_color: EXTRA_MODEL_PALETTE[list.length % EXTRA_MODEL_PALETTE.length],
+    use_half: false,
+  });
+};
+
+const removeExtraModel = (idx) => {
+  if (!activeProject.value?.extra_models) return;
+  activeProject.value.extra_models.splice(idx, 1);
+};
+
+const openExtraModelSelect = (idx) => {
+  extraModelSelectingIdx.value = idx;
+  showModelSelect.value = true;
+};
+
+const openExtraModelRoiEditor = async (idx) => {
+  extraModelRoiEditingIdx.value = idx;
+  // 复用主 ROI 编辑器: 把当前副模型的 roi 加载为初始 polygon
+  roiPoints.value = [];
+  roiPolygonClosed.value = false;
+  roiMousePos = null;
+  roiEditorVisible.value = true;
+  await nextTick();
+  setTimeout(() => {
+    loadRoiSnapshot();
+    // snapshot 加载后再把已有 roi 转成 canvas 坐标
+    setTimeout(() => {
+      const slot = activeProject.value?.extra_models?.[idx];
+      const existing = slot?.roi;
+      if (Array.isArray(existing) && existing.length >= 3 && roiEditorCanvas.value) {
+        const w = roiEditorCanvas.value.width || 1;
+        const h = roiEditorCanvas.value.height || 1;
+        roiPoints.value = existing.map(([nx, ny]) => ({ x: nx * w, y: ny * h }));
+        roiPolygonClosed.value = true;
+        roiRedraw();
+      }
+    }, 250);
+  }, 200);
+};
+
+const clearExtraModelRoi = (idx) => {
+  const slot = activeProject.value?.extra_models?.[idx];
+  if (slot) slot.roi = null;
 };
 
 const FORMAT_DISPLAY_NAMES = {
