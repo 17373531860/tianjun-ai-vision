@@ -419,9 +419,13 @@ def set_device(req: DeviceConfigRequest):
             )
             all_ok = all_ok and ok
         if all_ok:
+            # video_manager.current_device_info 可能是 None (例如 stub 加载或 mi
+            # 加载时未更新 host 字段), 用 device 字符串兜底.
+            dev_info = video_manager.current_device_info or {}
+            dev_label = dev_info.get('name') or video_manager.device
             return {
                 "status": "success",
-                "message": f"已切换 {len(loaded_specs)} 个模型到 {video_manager.current_device_info['name']}",
+                "message": f"已切换 {len(loaded_specs)} 个模型到 {dev_label}",
                 "device": video_manager.device,
                 "current_device_info": video_manager.current_device_info,
                 "reloaded_models": [s['name'] for s in loaded_specs],
@@ -432,9 +436,11 @@ def set_device(req: DeviceConfigRequest):
     if video_manager.model is not None and video_manager.model_path:
         success = video_manager.load_model(video_manager.model_path)
         if success:
+            dev_info = video_manager.current_device_info or {}
+            dev_label = dev_info.get('name') or video_manager.device
             return {
                 "status": "success",
-                "message": f"已切换到 {video_manager.current_device_info['name']}",
+                "message": f"已切换到 {dev_label}",
                 "device": video_manager.device,
                 "current_device_info": video_manager.current_device_info
             }
