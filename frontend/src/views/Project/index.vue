@@ -291,34 +291,67 @@
                           class="text-xs text-gray-500">
                           (每 {{ slot.schedule_n }} 帧跑一次, 减小 GPU 占用)
                         </span>
+                        <!-- c1+: on_event 模式下选事件 (从 events_config 拉) -->
+                        <el-select v-if="slot.schedule_type === 'on_event'"
+                          v-model="slot.schedule_events" multiple collapse-tags collapse-tags-tooltip
+                          size="small" style="min-width: 14rem"
+                          placeholder="选触发事件 (空 = 永不触发)">
+                          <el-option v-for="ev in (activeProject.events_config || [])"
+                            :key="ev.id" :label="`${ev.name} (id=${ev.id})`" :value="ev.id" />
+                        </el-select>
+                        <span v-if="slot.schedule_type === 'on_event' && !(slot.schedule_events?.length)"
+                          class="text-xs text-amber-400">
+                          ⚠ 未选事件, 副模型永不会跑
+                        </span>
                       </div>
                       <!-- 行 4: ROI -->
-                      <div class="flex items-center gap-3 flex-wrap">
-                        <span class="text-xs text-gray-400">ROI 区域</span>
-                        <el-button size="small" type="primary" plain
-                          @click="openExtraModelRoiEditor(idx)">
-                          {{ slot.roi && slot.roi.length >= 3 ? '重新绘制' : '设置区域' }}
-                        </el-button>
-                        <el-button v-if="slot.roi && slot.roi.length >= 3"
-                          size="small" type="danger" plain @click="clearExtraModelRoi(idx)">
-                          清除
-                        </el-button>
-                        <span v-if="slot.roi && slot.roi.length >= 3"
-                          class="text-xs text-green-400">
-                          已设置 {{ slot.roi.length }} 个顶点
-                        </span>
-                        <span v-else class="text-xs text-gray-500">
-                          未设置 (空 = 全画面)
-                        </span>
+                      <div class="flex items-start gap-3 flex-wrap">
+                        <span class="text-xs text-gray-400 mt-1.5">ROI 区域</span>
+                        <div class="flex flex-col gap-1">
+                          <div class="flex items-center gap-2">
+                            <el-button size="small" type="primary" plain
+                              @click="openExtraModelRoiEditor(idx)">
+                              {{ slot.roi && slot.roi.length >= 3 ? '重新绘制' : '设置区域' }}
+                            </el-button>
+                            <el-button v-if="slot.roi && slot.roi.length >= 3"
+                              size="small" type="danger" plain @click="clearExtraModelRoi(idx)">
+                              清除
+                            </el-button>
+                            <span v-if="slot.roi && slot.roi.length >= 3"
+                              class="text-xs text-green-400">
+                              已设置 {{ slot.roi.length }} 个顶点
+                            </span>
+                            <span v-else class="text-xs text-gray-500">
+                              未设置 (空 = 全画面)
+                            </span>
+                          </div>
+                          <!-- b2: ROI mini preview (16:9 SVG, 192x108).
+                               用 viewBox="0 0 1 1" 让归一化坐标直接当 path. -->
+                          <svg v-if="slot.roi && slot.roi.length >= 3"
+                            width="192" height="108" viewBox="0 0 1 1"
+                            preserveAspectRatio="none"
+                            class="border border-slate-700 bg-slate-950 rounded">
+                            <polygon
+                              :points="(slot.roi || []).map(p => `${p[0]},${p[1]}`).join(' ')"
+                              :fill="slot.display_color || '#f59e0b'"
+                              fill-opacity="0.25"
+                              :stroke="slot.display_color || '#f59e0b'"
+                              stroke-width="0.005"
+                              stroke-linejoin="round" />
+                          </svg>
+                        </div>
                       </div>
-                      <!-- 行 5: class_filter (可选, 留空 = 模型全标签) -->
+                      <!-- 行 5: class_filter (可选, 留空 = 模型全标签).
+                           d2: 优先用 slot.available_labels (选模型时自动拉), 兜底显示已选 class_filter. -->
                       <div class="flex items-start gap-3">
                         <span class="text-xs text-gray-400 mt-1.5 w-16 shrink-0">类别白名单</span>
                         <el-select v-model="slot.class_filter" multiple filterable
                           allow-create default-first-option :reserve-keyword="false"
-                          placeholder="留空 = 模型全部类别"
+                          :placeholder="slot.available_labels?.length
+                            ? `留空 = 模型全部 ${slot.available_labels.length} 类`
+                            : '留空 = 模型全部类别 (可手输)'"
                           size="small" class="flex-1">
-                          <el-option v-for="lbl in (slot.class_filter || [])" :key="lbl"
+                          <el-option v-for="lbl in extraModelSlotOptions(slot)" :key="lbl"
                             :label="lbl" :value="lbl" />
                         </el-select>
                       </div>
@@ -1865,31 +1898,36 @@ const openRoiEditor = async () => {
   setTimeout(() => loadRoiSnapshot(), 200);
 };
 
+// d1: 改为 Promise-based, 让调用方 await 图片加载完再画 polygon (替代裸 setTimeout 时序坑).
 const loadRoiSnapshot = () => {
-  const canvas = roiEditorCanvas.value;
-  if (!canvas) return;
-  const img = new Image();
-  img.crossOrigin = 'anonymous';
-  const host = getBackendHost();
-  img.src = `${host}/snapshot?channel=0&t=${Date.now()}`;
-  img.onload = () => {
-    roiImage = img;
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    roiRedraw();
-  };
-  img.onerror = () => {
-    const ctx = canvas.getContext('2d');
-    canvas.width = 640;
-    canvas.height = 480;
-    ctx.fillStyle = '#1e293b';
-    ctx.fillRect(0, 0, 640, 480);
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '16px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText('无法获取摄像头画面，请确保摄像头已连接', 320, 240);
-    roiImage = null;
-  };
+  return new Promise((resolve) => {
+    const canvas = roiEditorCanvas.value;
+    if (!canvas) { resolve(false); return; }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    const host = getBackendHost();
+    img.src = `${host}/snapshot?channel=0&t=${Date.now()}`;
+    img.onload = () => {
+      roiImage = img;
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      roiRedraw();
+      resolve(true);
+    };
+    img.onerror = () => {
+      const ctx = canvas.getContext('2d');
+      canvas.width = 640;
+      canvas.height = 480;
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(0, 0, 640, 480);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '16px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('无法获取摄像头画面，请确保摄像头已连接', 320, 240);
+      roiImage = null;
+      resolve(false);
+    };
+  });
 };
 
 const roiGetCanvasXY = (e) => {
@@ -2318,7 +2356,18 @@ const initProjectDefaults = (project) => {
         roi: Array.isArray(m.roi) ? m.roi : null,
         schedule_type: (m.schedule && m.schedule.type) || 'every_frame',
         schedule_n: (m.schedule && Number(m.schedule.n)) || 1,
+        // c1+: on_event 模式下监听的事件 id 列表 (前端 UI 选 ev.id, 保存时拼成 'event_<id>')
+        schedule_events: Array.isArray(m.schedule?.events)
+          ? m.schedule.events
+              .map(e => {
+                if (typeof e === 'number') return e;
+                const s = String(e);
+                const match = s.match(/^event_(\d+)$/);
+                return match ? Number(match[1]) : s;
+              })
+          : [],
         class_filter: Array.isArray(m.class_filter) ? [...m.class_filter] : [],
+        available_labels: [],  // d2: UI-only, 选模型时填充 (老项目重新选一次模型即可恢复)
         priority: typeof m.priority === 'number' ? m.priority : 50,
         display_color: m.display_color || '#f59e0b',
         use_half: !!m.use_half,
@@ -2550,6 +2599,16 @@ const handleSaveProject = async () => {
           });
           for (const e of (activeProject.value.extra_models || [])) {
             if (!e || !e.name) continue;
+            // c1+: schedule_events (UI 用 ev.id 数字 / 事件名字符串) → 后端格式
+            // 数字 id → 'event_<id>' (router 投递的 key 格式), 字符串原样.
+            const eventsOut = Array.isArray(e.schedule_events)
+              ? e.schedule_events
+                  .map(v => {
+                    if (typeof v === 'number') return `event_${v}`;
+                    return String(v);
+                  })
+                  .filter(Boolean)
+              : [];
             const slot = {
               name: String(e.name).trim(),
               model_id: e.model_id ?? null,
@@ -2561,13 +2620,14 @@ const handleSaveProject = async () => {
               schedule: {
                 type: e.schedule_type || 'every_frame',
                 n: Math.max(1, Math.floor(Number(e.schedule_n) || 1)),
-                events: [],
+                events: eventsOut,
               },
               class_filter: Array.isArray(e.class_filter) && e.class_filter.length
                 ? [...e.class_filter] : null,
               priority: typeof e.priority === 'number' ? e.priority : 50,
               display_color: e.display_color || '#f59e0b',
               use_half: !!e.use_half,
+              // available_labels 是 UI-only 字段, 不写后端
             };
             out.push(slot);
           }
@@ -2643,7 +2703,21 @@ const selectModel = (model) => {
       slot.model_id = model.id;
       slot.model_name = model.name;
       slot.model_version = model.version || '';
-      ElMessage.success(`副模型 [${slot.name}] 已选: ${model.name}`);
+      // d2: 选完副模型, 把 model.labels 解出存到 slot.available_labels
+      // 让 class_filter 下拉能显示候选 (留空 + allow-create 仍兼容).
+      let labels = [];
+      if (model.labels) {
+        try {
+          labels = typeof model.labels === 'string' ? JSON.parse(model.labels) : model.labels;
+        } catch (e) {
+          console.warn('副模型标签解析失败:', e);
+        }
+      }
+      slot.available_labels = Array.isArray(labels) ? labels : [];
+      const labelHint = slot.available_labels.length
+        ? `, 候选 ${slot.available_labels.length} 个类别`
+        : '';
+      ElMessage.success(`副模型 [${slot.name}] 已选: ${model.name}${labelHint}`);
     }
     extraModelSelectingIdx.value = -1;
     showModelSelect.value = false;
@@ -2731,11 +2805,27 @@ const addExtraModel = () => {
     roi: null,
     schedule_type: 'every_n_frames',
     schedule_n: 5,
+    schedule_events: [],   // c1+: on_event 模式监听的事件 id 列表
     class_filter: [],
+    available_labels: [],  // d2: 选模型后自动填充 (UI 候选列表)
     priority: 50,
     display_color: EXTRA_MODEL_PALETTE[list.length % EXTRA_MODEL_PALETTE.length],
     use_half: false,
   });
+};
+
+// d2: 计算 class_filter el-select 的候选项 = available_labels ∪ 已选 class_filter (去重保序).
+// 老项目没有 available_labels 时, 至少显示已选标签让用户能看到/删除.
+const extraModelSlotOptions = (slot) => {
+  const set = new Set();
+  const out = [];
+  for (const lbl of (slot.available_labels || [])) {
+    if (lbl && !set.has(lbl)) { set.add(lbl); out.push(lbl); }
+  }
+  for (const lbl of (slot.class_filter || [])) {
+    if (lbl && !set.has(lbl)) { set.add(lbl); out.push(lbl); }
+  }
+  return out;
 };
 
 const removeExtraModel = (idx) => {
@@ -2748,6 +2838,8 @@ const openExtraModelSelect = (idx) => {
   showModelSelect.value = true;
 };
 
+// d1: 改用 nextTick + await loadRoiSnapshot, 取代裸 setTimeout(200) + setTimeout(250) 嵌套.
+// 慢机器/慢摄像头快照下也能保证 polygon 在 image 加载完成后立刻被画.
 const openExtraModelRoiEditor = async (idx) => {
   extraModelRoiEditingIdx.value = idx;
   // 复用主 ROI 编辑器: 把当前副模型的 roi 加载为初始 polygon
@@ -2755,22 +2847,18 @@ const openExtraModelRoiEditor = async (idx) => {
   roiPolygonClosed.value = false;
   roiMousePos = null;
   roiEditorVisible.value = true;
-  await nextTick();
-  setTimeout(() => {
-    loadRoiSnapshot();
-    // snapshot 加载后再把已有 roi 转成 canvas 坐标
-    setTimeout(() => {
-      const slot = activeProject.value?.extra_models?.[idx];
-      const existing = slot?.roi;
-      if (Array.isArray(existing) && existing.length >= 3 && roiEditorCanvas.value) {
-        const w = roiEditorCanvas.value.width || 1;
-        const h = roiEditorCanvas.value.height || 1;
-        roiPoints.value = existing.map(([nx, ny]) => ({ x: nx * w, y: ny * h }));
-        roiPolygonClosed.value = true;
-        roiRedraw();
-      }
-    }, 250);
-  }, 200);
+  await nextTick();  // 等 dialog DOM 挂载, canvas ref 就绪
+  const ok = await loadRoiSnapshot();  // 真正等到 image.onload (或 onerror 兜底)
+  if (!ok) return;  // 快照加载失败时画兜底文字, polygon 没意义不画
+  const slot = activeProject.value?.extra_models?.[idx];
+  const existing = slot?.roi;
+  if (Array.isArray(existing) && existing.length >= 3 && roiEditorCanvas.value) {
+    const w = roiEditorCanvas.value.width || 1;
+    const h = roiEditorCanvas.value.height || 1;
+    roiPoints.value = existing.map(([nx, ny]) => ({ x: nx * w, y: ny * h }));
+    roiPolygonClosed.value = true;
+    roiRedraw();
+  }
 };
 
 const clearExtraModelRoi = (idx) => {
