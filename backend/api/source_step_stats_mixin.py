@@ -283,6 +283,9 @@ class StepStatsMixin:
                         rounded_dur = round(duration, 2)
                         self.step_durations[label] = rounded_dur
                         self.step_durations_history.setdefault(label, []).append(rounded_dur)
+                        # v3.5.x: 当前周期内的 SUM 累加（PT 合并档使用）
+                        prev_sum = self.step_cycle_durations.get(label, 0.0)
+                        self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
                         
                         # 计算与上一步骤的间隔时间
                         if self.last_step_completed_time is not None:

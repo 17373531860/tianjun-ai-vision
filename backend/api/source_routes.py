@@ -876,6 +876,15 @@ def get_detection_results(channel: int = Query(0)):
             avg_step_durations[lbl] = round(sum(hist) / len(hist), 2)
             last_step_durations[lbl] = hist[-1]
 
+    # v3.5.x: PT 合并档（同 label 同周期多次出现的 SUM）
+    cycle_sum_step_durations = getattr(mgr, 'step_cycle_durations', {}).copy()
+    avg_cycle_sum_step_durations = {}
+    last_cycle_sum_step_durations = {}
+    for lbl, hist in getattr(mgr, 'step_cycle_durations_history', {}).items():
+        if hist:
+            avg_cycle_sum_step_durations[lbl] = round(sum(hist) / len(hist), 2)
+            last_cycle_sum_step_durations[lbl] = hist[-1]
+
     last_cycle_time = mgr.cycle_times[-1] if mgr.cycle_times else 0
     last_cycle_time_with_ng = 0
     _all_ct_for_last = []
@@ -908,6 +917,10 @@ def get_detection_results(channel: int = Query(0)):
         "step_durations": mgr.step_durations.copy(),
         "avg_step_durations": avg_step_durations,
         "last_step_durations": last_step_durations,
+        # v3.5.x: PT 合并档 — 当前周期内 SUM / 最近一周期 SUM / 历史周期 SUM 平均
+        "cycle_sum_step_durations": cycle_sum_step_durations,
+        "last_cycle_sum_step_durations": last_cycle_sum_step_durations,
+        "avg_cycle_sum_step_durations": avg_cycle_sum_step_durations,
         "step_intervals": mgr.step_intervals.copy(),
         "counters": mgr.counters.copy(),
         "recent_events": recent_events,

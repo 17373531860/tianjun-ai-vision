@@ -361,6 +361,10 @@ class LifecycleMixin:
         for _lbl in list(self.step_durations_history.keys()):
             if len(self.step_durations_history[_lbl]) > 100:
                 self.step_durations_history[_lbl] = self.step_durations_history[_lbl][-100:]
+        # v3.5.x: 同步封顶 PT 合并档 history
+        for _lbl in list(self.step_cycle_durations_history.keys()):
+            if len(self.step_cycle_durations_history[_lbl]) > 100:
+                self.step_cycle_durations_history[_lbl] = self.step_cycle_durations_history[_lbl][-100:]
         
         # 7. 强制垃圾回收
         gc.collect()

@@ -538,6 +538,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                     rounded_dur = round(duration, 2)
                     self.step_durations[label] = rounded_dur
                     self.step_durations_history.setdefault(label, []).append(rounded_dur)
+                    # v3.5.x: 当前周期内的 SUM 累加（PT 合并档使用）
+                    prev_sum = self.step_cycle_durations.get(label, 0.0)
+                    self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
                     if label not in self.step_counts:
                         self.step_counts[label] = 0
                     self.step_counts[label] += 1
@@ -1294,6 +1297,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self.ng_cycle_times = []
         self.cycle_start_time = None
         self.step_durations_history = {}
+        # v3.5.x: 同步清空 PT 合并档相关状态
+        self.step_cycle_durations = {}
+        self.step_cycle_durations_history = {}
         
         # Settlement / first-step tracking flags
         self._first_step_had_gap = False

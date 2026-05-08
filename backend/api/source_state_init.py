@@ -224,6 +224,12 @@ def _init_cycle_time_state(h):
     h.step_durations_history = {}
     h.step_intervals = {}
     h.last_step_completed_time = None
+    # v3.5.x: PT 计算方式扩展 — 同一步骤在一个周期内可能多次连续出现,
+    #   step_durations / step_durations_history 是按"段"记的(每次"出现-消失"为一段),
+    #   step_cycle_durations 在本周期内对每个 label 累加 SUM, end_cycle 时快照到
+    #   step_cycle_durations_history(按 label 的 list, 上限 100), 给前端"PT 合并"档使用.
+    h.step_cycle_durations = {}
+    h.step_cycle_durations_history = {}
 
 
 def _init_session_state(h):

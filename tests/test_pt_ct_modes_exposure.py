@@ -24,6 +24,9 @@ def _make_mock_mgr(*, cycle_times, ng_cycle_times, step_history,
     mgr.step_screenshots = {}
     mgr.step_detection_times = {}
     mgr.step_durations = {"A": 0.5}  # 当前 cycle 中累加的
+    # v3.5.x: PT 合并档新增字段（默认空 dict 让路由代码走"无累计"分支）
+    mgr.step_cycle_durations = {}
+    mgr.step_cycle_durations_history = {}
     mgr.step_intervals = {}
     mgr.counters = {}
     mgr.ng_step_cycle_counts = {}
@@ -138,3 +141,38 @@ def test_空_history_新字段优雅缺省(client, monkeypatch):
     assert body["last_cycle_time_with_ng"] == 0
     assert body["current_cycle_time"] == 0
     assert body["last_step_durations"] == {}
+    # v3.5.x: PT 合并档字段在空状态下应为空 dict, 不能缺失
+    assert body["cycle_sum_step_durations"] == {}
+    assert body["last_cycle_sum_step_durations"] == {}
+    assert body["avg_cycle_sum_step_durations"] == {}
+
+
+def test_PT合并档_暴露三个字段_v3_5_x(client, monkeypatch):
+    """验证 PT 合并档（同步骤同周期 SUM）三个新字段都正确暴露。
+
+    场景：步骤 A 在 3 个已结束周期里 SUM 分别为 [3.0, 4.5, 6.0]，
+         当前正在跑的 cycle 中 A 已累计 1.5s。
+    """
+    from backend.api import source_routes
+    mgr = _make_mock_mgr(
+        cycle_times=[10.0, 11.0, 12.0],
+        ng_cycle_times=[],
+        step_history={"A": [1.5, 1.5, 2.25, 2.25, 3.0, 3.0]},  # 段级 history
+        cycle_start_time=time.time() - 1.5,
+        is_detecting=True,
+    )
+    # 周期级 SUM（A 在 3 个周期分别 SUM）
+    mgr.step_cycle_durations_history = {"A": [3.0, 4.5, 6.0]}
+    # 当前周期中 A 已累计
+    mgr.step_cycle_durations = {"A": 1.5}
+    monkeypatch.setattr(source_routes, "_get_mgr", lambda channel=0: mgr)
+
+    body = client.get("/api/v1/source/detection/results").json()
+
+    assert body["cycle_sum_step_durations"] == {"A": 1.5}, \
+        f"当前周期 SUM; got {body.get('cycle_sum_step_durations')}"
+    assert body["last_cycle_sum_step_durations"] == {"A": 6.0}, \
+        f"最近一周期 SUM 应取 history[-1]; got {body.get('last_cycle_sum_step_durations')}"
+    # 平均 (3.0 + 4.5 + 6.0) / 3 = 4.5
+    assert body["avg_cycle_sum_step_durations"] == {"A": 4.5}, \
+        f"周期 SUM 平均; got {body.get('avg_cycle_sum_step_durations')}"
