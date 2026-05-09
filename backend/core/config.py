@@ -54,7 +54,10 @@ def _fix_db_paths(db_path, old_base, new_base):
 
     try:
         conn = sqlite3.connect(db_path)
-        for table in ('ml_models', 'video_clips'):
+        # NOTE: 'models' 是模型文件表的真实表名（ORM 类名是 Model）
+        # 历史遗留：早期文档误称 'ml_models', 实际从未使用过该表名
+        # 见 docs/plugin-system/inventory/05_tech_debt.md BUG-1
+        for table in ('models', 'video_clips'):
             try:
                 conn.execute(f"SELECT file_path FROM [{table}] LIMIT 1")
             except Exception:
