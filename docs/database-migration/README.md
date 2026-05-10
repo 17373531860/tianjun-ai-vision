@@ -228,3 +228,150 @@ A：能。SQLAlchemy 的 `Column(JSON)` 在 PG 上自动映射为 `JSON` 类型�
 ALTER TABLE projects ALTER COLUMN steps_config TYPE jsonb USING steps_config::jsonb;
 CREATE INDEX idx_projects_steps_gin ON projects USING gin (steps_config);
 ```
+
+---
+
+## 11. 端到端 Runbook
+
+### 11.1 首次部署（PG 模式）
+
+```bash
+# Step 0: 准备环境
+git clone <repo> && cd tianjun-plugin
+conda activate tianjun
+pip install -r backend/requirements.txt
+cp .env.example .env       # 编辑改密码/端口
+
+# Step 1: 起 PG (首次会执行 scripts/db/initdb/01-extensions.sql 装 pg_trgm/btree_gin)
+docker compose up -d postgres
+until docker exec tianjun_pg pg_isready -U tianjun; do sleep 1; done
+
+# Step 2: 多客户场景 → 提前为每个客户建 schema
+docker exec -i tianjun_pg psql -U tianjun -d tianjun <<'SQL'
+CREATE SCHEMA IF NOT EXISTS tianjun_acme;
+GRANT ALL ON SCHEMA tianjun_acme TO tianjun;
+SQL
+
+# Step 3: Alembic baseline upgrade（每个 schema 独立 stamp）
+DATABASE_URL='postgresql+psycopg2://tianjun:tianjun_dev_pwd@127.0.0.1:5433/tianjun?options=-csearch_path%3Dtianjun_acme%2Cpublic' \
+  alembic upgrade head
+
+# Step 4: 起后端（指向具体客户的 schema）
+DATABASE_URL='postgresql+psycopg2://tianjun:tianjun_dev_pwd@127.0.0.1:5433/tianjun?options=-csearch_path%3Dtianjun_acme%2Cpublic' \
+RUNTIME_MODE=production TIANJUN_DATA_DIR=/var/lib/tianjun \
+  python -m uvicorn backend.main:app --host 0.0.0.0 --port 8001 --workers 2
+
+# Step 5: 健康检查
+curl -s http://127.0.0.1:8001/api/v1/source/status | head -50
+```
+
+### 11.2 已有 SQLite 部署 → 升级到 PG
+
+```bash
+# Step 0: 后端先停（避免迁移时新写入丢失）
+sudo systemctl stop tianjun-backend
+# 或 pkill -f "uvicorn backend.main"
+
+# Step 1: 备份 SQLite（无副作用，安全）
+cp ${TIANJUN_DATA_DIR}/sql_app.db ${TIANJUN_DATA_DIR}/sql_app.backup.$(date +%F).db
+
+# Step 2: 起 PG + 建 schema + Alembic baseline（同 11.1 Step 1-3）
+
+# Step 3: 干跑预览迁移结果（不写库）
+DATABASE_URL='postgresql+psycopg2://tianjun:pwd@127.0.0.1:5433/tianjun?options=-csearch_path%3Dtianjun_acme%2Cpublic' \
+  python scripts/db/sqlite_to_pg.py --sqlite ${TIANJUN_DATA_DIR}/sql_app.db --dry-run
+
+# Step 4: 正式搬（--truncate-first 清空目标 schema 后灌；不带它则增量 INSERT）
+DATABASE_URL='postgresql+psycopg2://tianjun:pwd@127.0.0.1:5433/tianjun?options=-csearch_path%3Dtianjun_acme%2Cpublic' \
+  python scripts/db/sqlite_to_pg.py --sqlite ${TIANJUN_DATA_DIR}/sql_app.db --truncate-first
+
+# Step 5: 后端切到 PG（设置 systemd EnvironmentFile 或 .env）
+echo 'DATABASE_URL=postgresql+psycopg2://tianjun:pwd@127.0.0.1:5433/tianjun?options=-csearch_path%3Dtianjun_acme%2Cpublic' \
+    | sudo tee -a /etc/tianjun/backend.env
+
+sudo systemctl start tianjun-backend
+
+# Step 6: 跑业务 smoke（任一项目跑一个 cycle, 看 PG 端是否落 step_records）
+docker exec tianjun_pg psql -U tianjun -d tianjun \
+  -c "SET search_path TO tianjun_acme,public; SELECT COUNT(*) FROM step_records;"
+```
+
+### 11.3 Schema 升级（已有 PG 部署 → 后端发新版本）
+
+```bash
+sudo systemctl stop tianjun-backend
+
+# 拉新代码 + 装新依赖
+git pull && pip install -r backend/requirements.txt
+
+# 跑增量迁移（多 schema 时挨个跑）
+for schema in tianjun_acme tianjun_globex; do
+  DATABASE_URL="postgresql+psycopg2://tianjun:pwd@127.0.0.1:5433/tianjun?options=-csearch_path%3D${schema}%2Cpublic" \
+    alembic upgrade head
+done
+
+sudo systemctl start tianjun-backend
+```
+
+### 11.4 systemd service 示例
+
+`/etc/systemd/system/tianjun-backend.service`：
+
+```ini
+[Unit]
+Description=Tianjun AI Vision Backend
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/tianjun/backend.env
+WorkingDirectory=/opt/tianjun
+ExecStart=/opt/tianjun/.venv/bin/python -m uvicorn backend.main:app \
+          --host 0.0.0.0 --port 8001 --workers 2 --no-access-log
+Restart=on-failure
+RestartSec=5s
+User=tianjun
+Group=tianjun
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`/etc/tianjun/backend.env`（权限 600）：
+
+```bash
+DATABASE_URL=postgresql+psycopg2://tianjun:CHANGE_ME@127.0.0.1:5433/tianjun?options=-csearch_path%3Dtianjun_acme%2Cpublic
+TIANJUN_DATA_DIR=/var/lib/tianjun
+RUNTIME_MODE=production
+DB_POOL_SIZE=10
+DB_MAX_OVERFLOW=20
+DB_POOL_RECYCLE=1800
+```
+
+启用：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now tianjun-backend
+sudo journalctl -u tianjun-backend -f
+```
+
+### 11.5 故障排查决策树
+
+```
+backend 启动失败
+├─ ConnectionRefused on 5433
+│  └─ docker compose ps  → 看 postgres 是否 healthy
+│     └─ docker logs tianjun_pg → 看 PG 自身错误
+├─ password authentication failed
+│  └─ 核对 .env / EnvironmentFile 里的密码 vs docker-compose.yml POSTGRES_PASSWORD
+├─ relation "xxx" does not exist
+│  └─ 多半 search_path 没指对：psql 进去 SHOW search_path; 看
+│     └─ 漏跑 alembic upgrade head ?
+├─ duplicate key violates unique constraint "..._id_seq"
+│  └─ 序列没重置：见第 10 节"常见问题"
+└─ ImportError: psycopg2
+   └─ pip install psycopg2-binary （已在 backend/requirements.txt）
+```
+
