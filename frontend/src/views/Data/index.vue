@@ -141,7 +141,10 @@
                     {{ formatTime(session.start_time) }}
                     <span v-if="session.end_time" class="text-gray-500"> → {{ formatTime(session.end_time) }}</span>
                   </div>
-                  <div class="flex items-center gap-2 mt-1">
+                  <div v-if="session.name" class="text-amber-300 font-mono text-xs mt-0.5 truncate" :title="session.name">
+                    标识: {{ session.name }}
+                  </div>
+                  <div class="flex items-center gap-2 mt-1 flex-wrap">
                     <el-tag v-if="totalChannelCount > 1" type="" size="small" effect="plain" round class="!text-cyan-400 !border-cyan-800">
                       工位{{ (session.channel_id || 0) + 1 }}
                     </el-tag>
@@ -157,18 +160,29 @@
                     <span v-if="session.operator_name" class="text-xs text-yellow-400">{{ session.operator_name }}</span>
                   </div>
                 </div>
+                <el-tooltip content="重命名会话标识" placement="top">
+                  <el-button
+                    type="warning"
+                    size="small"
+                    circle
+                    class="ml-2 flex-shrink-0"
+                    @click.stop="openRenameSessionDialog(session)"
+                  >
+                    <el-icon :size="12"><Edit /></el-icon>
+                  </el-button>
+                </el-tooltip>
                 <el-button
                   v-if="session.video_id"
                   type="primary"
                   size="small"
                   circle
-                  class="ml-2 flex-shrink-0"
+                  class="ml-1 flex-shrink-0"
                   @click.stop="playSessionVideo(session)"
                 >
                   <el-icon :size="12"><VideoPlay /></el-icon>
                 </el-button>
                 <el-tooltip v-else content="无会话视频" placement="top">
-                  <el-button type="info" size="small" circle disabled class="ml-2 flex-shrink-0">
+                  <el-button type="info" size="small" circle disabled class="ml-1 flex-shrink-0">
                     <el-icon :size="12"><VideoPlay /></el-icon>
                   </el-button>
                 </el-tooltip>
@@ -702,7 +716,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
-import { Calendar, Clock, DataLine, Setting, Download, Folder, TrendCharts, VideoPlay, Delete, Warning, Search, MagicStick, Connection } from '@element-plus/icons-vue';
+import { Calendar, Clock, DataLine, Setting, Download, Folder, TrendCharts, VideoPlay, Delete, Warning, Search, MagicStick, Connection, Edit } from '@element-plus/icons-vue';
 import CustomExportDialog from './components/CustomExportDialog.vue';
 import RealtimeRulesDialog from './components/RealtimeRulesDialog.vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -710,6 +724,7 @@ import { getDetectionResults, getWorkstations } from '@/api/detection';
 import { 
   getSessionsByDate, 
   getSessionDates,
+  renameSession,
   getSessionCycles,
   searchCyclesBySerial,
   getCycleSteps,
@@ -1369,6 +1384,39 @@ const playSessionVideo = (session) => {
     videoDialogVisible.value = true;
   } else {
     ElMessage.info('该会话无录制视频（请在记录设置中开启"录制会话视频"后重新检测）');
+  }
+};
+
+// v3.6.2: 重命名会话标识 (客户自定义"会话 ID")
+const openRenameSessionDialog = async (session) => {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `给该会话设置/修改业务标识。可留空清除（系统 UUID 不变）。
+
+不允许字符: / \\ : * ? " < > |
+最长 64 字符`,
+      `会话标识 — ${session.session_uuid}`,
+      {
+        inputValue: session.name || '',
+        inputPlaceholder: '如 LINE3-NIGHT-20260510 / BATCH-A1234 (可留空)',
+        confirmButtonText: '保存',
+        cancelButtonText: '取消',
+        inputValidator: (val) => {
+          if (!val) return true;
+          if (/[\\/:*?"<>|\r\n\t]/.test(val)) return '不能含 / \\ : * ? " < > | 等字符';
+          if (val.length > 64) return '最长 64 个字符';
+          return true;
+        },
+      }
+    );
+    const cleaned = (value || '').trim();
+    await renameSession(session.id, cleaned || null);
+    session.name = cleaned || null;
+    ElMessage.success(cleaned ? `会话标识已更新为：${cleaned}` : '会话标识已清除');
+  } catch (e) {
+    if (e === 'cancel' || e === 'close') return;
+    const detail = e?.response?.data?.detail || e?.message || '未知错误';
+    ElMessage.error('重命名失败: ' + detail);
   }
 };
 

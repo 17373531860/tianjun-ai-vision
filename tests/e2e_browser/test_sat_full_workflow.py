@@ -63,3 +63,28 @@ def test_sat_synthetic_drives_monitor(page, base_url, api_url, runtime_mode_requ
     finally:
         _post(api_url, "/api/v1/source/detection/stop?channel=0")
         _post(api_url, "/api/v1/test/synthetic/stop?channel=0")
+
+
+def test_sat_monitor_session_name_input(page, base_url, api_url, runtime_mode_required):
+    """v3.6.2: Monitor 页《会话 ID》输入框可见可填可校验"""
+    SHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    _post(api_url, "/api/v1/source/detection/stop?channel=0")
+    _post(api_url, "/api/v1/test/synthetic/stop?channel=0")
+
+    mp = MonitorPage(page, base_url).goto()
+    mp.sleep(0.8)
+    assert mp.has_session_name_input(), "Monitor 应有《会话 ID》输入框"
+    mp.fill_session_name("BATCH-A1234")
+    assert mp.get_session_name_value() == "BATCH-A1234"
+
+    # 非法字符校验：填一个 *
+    mp.fill_session_name("bad*name")
+    mp.sleep(0.3)
+    assert mp.has_session_name_validation_error(), "应显示输入校验提示"
+    mp.screenshot(str(SHOTS_DIR / "monitor_session_name_error.png"))
+
+    # 改回合法值
+    mp.fill_session_name("CLEAN-NAME")
+    mp.sleep(0.2)
+    assert not mp.has_session_name_validation_error()
+    mp.screenshot(str(SHOTS_DIR / "monitor_session_name_ok.png"))

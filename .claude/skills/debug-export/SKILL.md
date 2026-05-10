@@ -70,11 +70,13 @@ allowed-tools: "Read, Grep, Glob, Bash, mcp__filesystem, mcp__sequential-thinkin
 
 | trigger_event | 触发时机 | 状态 |
 |---|---|---|
-| `cycle_end` | 一个工件 cycle 结束 | ✅ **唯一实际接入**，在 `mes_hooks.dispatch_cycle_end_export` 调用 |
-| `session_end` | 一次开机 session 结束 | ⚠️ 标 `[todo]`（`backend/services/export_realtime.py` 第 13 行附近） |
+| `cycle_end` | 一个工件 cycle 结束 | ✅ 在 `mes_hooks.dispatch_cycle_end_export` 调用 |
+| `session_end` | 一次开机 session 结束 | ✅ **v3.6.2 接通**, 在 `mes_hooks._handle_session_end` 末尾调 `dispatch_session_end_export` |
 | `box_complete` | 集群所有工位 box_serial 聚齐 | ⚠️ 标 `[todo]` |
 
-> **常见误判**：客户配了 `session_end` 实时规则但不触发——这是已知 todo，**不是 bug**。
+> **常见误判**：客户配了 `box_complete` 实时规则但不触发——这是已知 todo, **不是 bug**。
+> v3.6.2 起 `session_end` 已接通：用 `build_range_context(db, session_id=N)` 构上下文,
+> 模板里能用 `{{ session.* }}` / `{{ stats.step_averages[*].* }}` / `{{ session.name }}` (客户自定义会话标识)。
 
 ---
 
@@ -211,8 +213,13 @@ frontend/src/api/data.js            前端 API 客户端
 
 ## 八、已知坑
 
-1. **session_end / box_complete 触发器是 todo**：客户配了不会触发，文档里要写明
+1. **box_complete 触发器仍是 todo**：集群场景客户配了不会触发；`cycle_end` / `session_end` 都已接通 (v3.6.2 起)
 2. **字段仓库与 context 容易分裂**：改字段时必须双改
 3. **docx/xlsx 二进制返回**：FastAPI 返回 `Response(content=bytes, media_type=...)`，前端必须 `responseType: 'blob'`
 4. **renderer 主入口 `render_to_file` 参数**：用 `output_dir` + `input_dir`，不是 `output_path` + `input_path`（旧测试用例错过这个）
 5. **实时规则的 `channel_filter` JSON 要严格匹配**：`[0]` 和 `["0"]` 不一样，前端表单要保证类型
+6. **session.name vs session.session_uuid (v3.6.2)**：
+   - `session.session_uuid` = 系统给的 8 位 hex (如 `a1b2c3d4`)，永远存在但客户改不了
+   - `session.name` = 客户在 Monitor 启动检测前填的"会话 ID"（如 `LINE3-NIGHT-20260510`），nullable
+   - 模板里推荐写 `{{ session.name or session.session_uuid }}` 兜底
+   - DB 列 `detection_sessions.name VARCHAR(64)`，老库走 `migrate_database()` 自动 ALTER

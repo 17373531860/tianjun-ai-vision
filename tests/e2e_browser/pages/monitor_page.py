@@ -20,6 +20,8 @@ class MonitorPage(BasePage):
         SELECT_PROJECT = ".el-select"
         OPERATOR_SELECT = ".el-select:has-text('选择操作员'), .el-select:has-text('操作员')"
         STEP_TABLE = "text=步骤统计"
+        # v3.6.2 会话标识输入框
+        SESSION_NAME_INPUT = "input[placeholder*='会话 ID']"
 
     def has_fps_label(self) -> bool:
         return self.wait_for_text("FPS", timeout_ms=8000)
@@ -84,3 +86,40 @@ class MonitorPage(BasePage):
 
     def has_step_table(self) -> bool:
         return self.wait_for_text("步骤统计", timeout_ms=4000)
+
+    # ===== v3.6.2 会话标识 =====
+    def has_session_name_input(self) -> bool:
+        return self.el_present(self.Sel.SESSION_NAME_INPUT)
+
+    def fill_session_name(self, value: str):
+        loc = self.page.locator(self.Sel.SESSION_NAME_INPUT).first
+        loc.fill(value)
+
+    def get_session_name_value(self) -> Optional[str]:
+        loc = self.page.locator(self.Sel.SESSION_NAME_INPUT).first
+        if loc.count() == 0:
+            return None
+        return loc.input_value()
+
+    def has_session_name_validation_error(self) -> bool:
+        body = self.body_text()
+        return ("不能含" in body) or ("最长 64" in body)
+
+    def click_start_with_session_name(self, name: str):
+        """填会话 ID → 点开始（如可点）"""
+        if name is not None:
+            self.fill_session_name(name)
+            self.sleep(0.2)
+        # 检查 disabled，避免点不动
+        btn = self.page.locator(self.Sel.BTN_START).first
+        btn.wait_for(state="visible", timeout=3000)
+        if btn.is_disabled():
+            return False
+        btn.click()
+        return True
+
+    def is_start_button_disabled(self) -> bool:
+        btn = self.page.locator(self.Sel.BTN_START).first
+        if btn.count() == 0:
+            return True
+        return btn.is_disabled()

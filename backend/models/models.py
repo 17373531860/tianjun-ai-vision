@@ -144,7 +144,8 @@ class DetectionSession(Base):
     __tablename__ = "detection_sessions"
 
     id = Column(Integer, primary_key=True, index=True)
-    session_uuid = Column(String(50), unique=True, index=True, nullable=False)  # 唯一标识
+    session_uuid = Column(String(50), unique=True, index=True, nullable=False)  # 系统唯一标识 (8 位 hex)
+    name = Column(String(64), nullable=True, index=True)  # 客户自定义会话标识 (可选, 文件名/筛选用)
     project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"))
     
     start_time = Column(DateTime(timezone=True), nullable=False)  # 启动时间

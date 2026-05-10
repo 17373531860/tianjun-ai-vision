@@ -23,6 +23,7 @@ class SyntheticStartBody(BaseModel):
     with_project: bool = False
     project_steps: Optional[list] = None
     logic_mode: str = "sequential"
+    project_id: Optional[int] = None  # 显式注入项目 id (测试场景: 用真项目 id, 让 session 关联到该项目)
 
 
 def _collect_labels_from_timeline(timeline) -> list:
@@ -49,6 +50,8 @@ def _build_min_project_config(labels: list, logic_mode: str = "sequential") -> d
         for label in labels
     ]
     return {
+        "id": -1,  # synthetic 占位 id；让 start_detection 能创建 DetectionSession
+        "name": "__synthetic__",
         "task_type": "detect",
         "logic_mode": logic_mode,
         "pipeline_config": {},
@@ -85,6 +88,16 @@ def synthetic_start(body: SyntheticStartBody):
         labels = body.project_steps or _collect_labels_from_timeline(spec.get("timeline", []))
         if labels:
             cfg = _build_min_project_config(labels, body.logic_mode)
+            # 优先级: body.project_id > mgr 已有 project_config.id > -1
+            # 让 synthetic 创建的 session.project_id 落到指定项目，Data 页按项目过滤时也能看到。
+            if isinstance(body.project_id, int) and body.project_id > 0:
+                cfg["id"] = body.project_id
+            else:
+                existing = getattr(mgr, "project_config", None) or {}
+                existing_id = existing.get("id")
+                if isinstance(existing_id, int) and existing_id > 0:
+                    cfg["id"] = existing_id
+                    cfg["name"] = existing.get("name") or cfg.get("name")
             try:
                 mgr.apply_temporary_project_config(cfg)
             except Exception as e:

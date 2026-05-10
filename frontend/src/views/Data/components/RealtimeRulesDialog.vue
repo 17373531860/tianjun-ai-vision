@@ -22,7 +22,7 @@
       <el-tab-pane label="规则列表" name="rules">
         <div class="flex justify-between items-center mb-3">
           <div class="text-xs text-gray-400">
-            cycle_end 后自动触发的规则。可绑定任意模板、输出到本地或网络路径，支持按通道/项目过滤。
+            cycle_end / session_end 后自动触发的规则。可绑定任意模板、输出到本地或网络路径，支持按通道/项目过滤。
           </div>
           <el-button type="primary" size="small" @click="onCreate">
             <el-icon class="mr-1"><Plus /></el-icon>新建规则
@@ -222,8 +222,8 @@
           <el-col :span="12">
             <el-form-item label="触发事件">
               <el-select v-model="editing.trigger_event" class="w-full">
-                <el-option label="cycle_end (每周期结束，最常用)" value="cycle_end" />
-                <el-option label="session_end (会话结束 - 暂未实现)" value="session_end" disabled />
+                <el-option label="cycle_end (每周期结束，单工件文件)" value="cycle_end" />
+                <el-option label="session_end (会话结束，整次开机汇总)" value="session_end" />
                 <el-option label="box_complete (装箱完成 - 暂未实现)" value="box_complete" disabled />
               </el-select>
             </el-form-item>

@@ -10,7 +10,7 @@ v3.5.0 自定义导出 — 实时规则调度器
 
 调用方：
 - mes_hooks._handle_cycle_end → dispatch_cycle_end_export(...)
-- mes_hooks._handle_session_end → dispatch_session_end_export(...) [todo]
+- mes_hooks._handle_session_end → dispatch_session_end_export(...)
 - 用户手动测试 → trigger_test_run(...)
 
 线程模型：
@@ -108,6 +108,85 @@ def dispatch_cycle_end_export(db: Session,
         results.append({"rule_id": rule.id, "rule_name": rule.name, **result.to_dict()})
 
     # 防止 worker 线程持有未提交事务（write_log 会 commit，但保险起见）
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    return results
+
+
+# ============================================================
+# 主入口 — session_end 事件 (v3.6.2 接通)
+# ============================================================
+
+def dispatch_session_end_export(db: Session,
+                                channel_id: int,
+                                session_id: int,
+                                project_id: Optional[int] = None,
+                                license_payload: Optional[Dict[str, Any]] = None,
+                                ) -> List[Dict[str, Any]]:
+    """每次 Session 结束后调用：扫描启用的 trigger_event='session_end' 规则,
+    用 build_range_context(session_id) 构建上下文, 渲染落盘, 写 ExportRunLog.
+
+    返回每条规则的执行结果摘要。失败不抛异常 — 错误吞到日志里。
+    调用点: mes_hooks._handle_session_end 末尾。
+    """
+    results: List[Dict[str, Any]] = []
+    try:
+        rules = (
+            db.query(ExportRealtimeRule)
+            .filter(
+                ExportRealtimeRule.enabled == True,  # noqa: E712
+                ExportRealtimeRule.trigger_event == "session_end",
+            )
+            .order_by(ExportRealtimeRule.id.asc())
+            .all()
+        )
+    except Exception as e:
+        print(f"[ExportRealtime] 查询 session_end 规则失败: {e}", flush=True)
+        return results
+
+    if not rules:
+        return results
+
+    ctx = None
+    ctx_err = None
+    for rule in rules:
+        if rule.channel_filter and channel_id not in rule.channel_filter:
+            _write_skip_log(db, rule, session_id=session_id,
+                            skip_reason=f"channel_filter:{channel_id}_not_in_list")
+            results.append({"rule_id": rule.id, "status": "skipped",
+                            "reason": "channel_filter"})
+            continue
+
+        if rule.project_filter and project_id is not None \
+                and project_id not in rule.project_filter:
+            _write_skip_log(db, rule, session_id=session_id,
+                            skip_reason=f"project_filter:{project_id}_not_in_list")
+            results.append({"rule_id": rule.id, "status": "skipped",
+                            "reason": "project_filter"})
+            continue
+
+        if ctx is None and ctx_err is None:
+            try:
+                ctx = build_range_context(db, session_id=session_id,
+                                          license_payload=license_payload)
+            except Exception as e:
+                ctx_err = f"{type(e).__name__}: {e}"
+                print(f"[ExportRealtime] build_range_context 失败 session#{session_id}: {ctx_err}",
+                      flush=True)
+
+        if ctx is None:
+            _write_failure_log(db, rule, session_id=session_id,
+                               error_msg=f"context_build_failed: {ctx_err}")
+            results.append({"rule_id": rule.id, "status": "failed",
+                            "error": ctx_err})
+            continue
+
+        result = _execute_rule(db, rule, ctx, session_id=session_id)
+        results.append({"rule_id": rule.id, "rule_name": rule.name, **result.to_dict()})
+
     try:
         db.commit()
     except Exception:

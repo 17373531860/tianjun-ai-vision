@@ -33,6 +33,11 @@ export const getSessionDates = (params = {}) => {
   return api.get('/data/sessions/dates', { params });
 };
 
+// 重命名会话（v3.6.2 新增 — 客户自定义会话标识，含合法性校验，参数 name 为 null/空清空标识）
+export const renameSession = (sessionId, name) => {
+  return api.patch(`/data/sessions/${sessionId}/name`, { name: name || null });
+};
+
 // ============ 周期管理 ============
 
 // 获取会话的周期（分页）

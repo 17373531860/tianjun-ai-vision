@@ -47,8 +47,34 @@
               <div class="text-xs text-gray-500 mt-1">默认填当前选中行的 cycle</div>
             </el-form-item>
 
-            <el-form-item v-if="form.scope === 'session'" label="Session ID">
-              <el-input-number v-model="form.session_id" :min="1" :precision="0" class="w-full" />
+            <el-form-item v-if="form.scope === 'session'" label="Session">
+              <el-select
+                v-model="form.session_id"
+                filterable
+                clearable
+                placeholder="按 ID/标识/UUID 搜索"
+                class="w-full"
+                @visible-change="onSessionSelectVisible"
+              >
+                <el-option
+                  v-for="s in sessionOptions"
+                  :key="s.id"
+                  :value="s.id"
+                  :label="`#${s.id} ${s.name || s.session_uuid} (${s.start_time})`"
+                >
+                  <div class="flex justify-between gap-3 text-xs">
+                    <span class="font-mono">#{{ s.id }}</span>
+                    <span :class="s.name ? 'text-amber-300 font-bold' : 'text-gray-400 font-mono'">
+                      {{ s.name || s.session_uuid }}
+                    </span>
+                    <span class="text-gray-500">{{ s.start_time }}</span>
+                  </div>
+                </el-option>
+              </el-select>
+              <div class="text-xs text-gray-500 mt-1">
+                如有"会话标识"列优先显示；只有 UUID 是系统自动给的。
+                也可输入数字 ID 后直接 Enter。
+              </div>
             </el-form-item>
 
             <template v-if="form.scope === 'range'">
@@ -485,6 +511,7 @@ import {
   DataAnalysis, DocumentCopy, InfoFilled, UploadFilled,
 } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/store/useSystemStore';
+import { getSessions } from '@/api/data';
 import {
   getExportFields,
   listExportTemplates,
@@ -542,6 +569,25 @@ watch(rangePicker, (v) => {
   form.start_date = v?.[0] || null;
   form.end_date = v?.[1] || null;
 });
+
+// v3.6.2: Session 下拉数据 — 解决"客户搞不清 ID 是用来填写还是选择"的歧义
+const sessionOptions = ref([]);
+const _loadSessionsOnce = async () => {
+  try {
+    const r = await getSessions({ skip: 0, limit: 200 });
+    sessionOptions.value = (r.data || []).map(s => ({
+      id: s.id,
+      name: s.name,
+      session_uuid: s.session_uuid,
+      start_time: s.start_time,
+    }));
+  } catch (e) {
+    console.warn('[CustomExportDialog] 加载会话列表失败:', e);
+  }
+};
+const onSessionSelectVisible = (visible) => {
+  if (visible && sessionOptions.value.length === 0) _loadSessionsOnce();
+};
 
 // 占位符里包含字面 {{ }}，需要在 JS 里组装绕开 Vue 模板的插值解析
 const _LB = '{' + '{';

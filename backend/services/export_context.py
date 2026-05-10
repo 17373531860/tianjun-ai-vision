@@ -326,10 +326,18 @@ def _empty_cycle_section() -> Dict[str, Any]:
         "start_time": None, "end_time": None,
         "duration": None, "duration_ms": None,
         "interval_to_next": None,
+        # v3.6.2: cycle.interval 别名 = interval_to_next（客户惯用名）
+        "interval": None,
         "is_good": None, "result": None, "result_pass_fail": None,
         "ng_step": None, "ng_step_index": None,
         "ng_reason": None, "ng_code": None,
+        # v3.6.2: cycle.event / event_id / event_name 三个字段。stats.cycles[*] 也会有；
+        # 客户模板里写 {{ cycle.event }} 会拿到 event_name。
+        "event": None, "event_id": None, "event_name": None,
         "total_steps": 0, "good_steps": 0, "ng_steps_count": 0,
+        # v3.6.2: stats.cycles[*].steps 让 jinja {% for s in cycle.steps %} 不再报 Undefined；
+        # build_range_context(include_cycles=True) 会真实填充。
+        "steps": [],
         "recognized_max": None,
         "video_clip_path": None, "video_clip_url": None,
         "test_values": [],
@@ -580,6 +588,8 @@ def _serialize_cycle_row(c: Any) -> Dict[str, Any]:
     if c.duration is not None:
         out["duration_ms"] = int(c.duration * 1000)
     out["interval_to_next"] = getattr(c, "interval_to_next", None)
+    # v3.6.2: 别名 cycle.interval 兼容客户模板（之前只有 interval_to_next）
+    out["interval"] = out["interval_to_next"]
     out["is_good"] = bool(c.is_good) if c.is_good is not None else None
     if c.is_good is not None:
         out["result"] = "良品" if c.is_good else "NG"
@@ -587,7 +597,14 @@ def _serialize_cycle_row(c: Any) -> Dict[str, Any]:
     # cycle 表没存 ng_step（首个 NG 步骤名），单 cycle 上下文里 _fill_cycle_steps_defects 反查 step_records 后再填
     out["ng_step"] = None
     out["ng_reason"] = getattr(c, "result_reason", None)
+    # v3.6.2: 暴露 cycle.event / event_id / event_name 三个字段（客户模板用 cycle.event）
+    out["event_id"] = getattr(c, "event_id", None)
+    out["event_name"] = getattr(c, "event_name", None)
+    out["event"] = out["event_name"]
     out["video_clip_path"] = getattr(c, "video_path", None)
+    # v3.6.2: stats.cycles[*].steps 默认空列表，避免 jinja {% for s in cycle.steps %} 出 UndefinedError；
+    # range/session 范围若 include_cycles=True, 后续会被填充真实 step_records。
+    out["steps"] = []
     return out
 
 
@@ -987,6 +1004,7 @@ def build_range_context(db: DBSession,
         total_ng += (s.ng_cycles or 0)
         A["sessions"].append({
             "id": s.id, "session_uuid": s.session_uuid,
+            "name": getattr(s, "name", None),
             "channel_id": getattr(s, "channel_id", 0),
             "start_time": s.start_time.isoformat() if s.start_time else None,
             "end_time": s.end_time.isoformat() if s.end_time else None,
@@ -1107,8 +1125,56 @@ def build_range_context(db: DBSession,
             cycles = db.query(DetectionCycle).filter(
                 DetectionCycle.session_id.in_(sids)
             ).order_by(DetectionCycle.start_time).all()
+            # v3.6.2: 一次性预查所有 step_records 按 cycle_id 分组, 避免 N+1 查询
+            cycle_ids = [c.id for c in cycles]
+            steps_by_cycle: Dict[int, list] = {}
+            if cycle_ids:
+                rows = db.query(StepRecord).filter(
+                    StepRecord.cycle_id.in_(cycle_ids)
+                ).order_by(StepRecord.step_order, StepRecord.id).all()
+                for s in rows:
+                    steps_by_cycle.setdefault(s.cycle_id, []).append(s)
+
             for c in cycles:
-                S["cycles"].append(_serialize_cycle_row(c))
+                cyc_dict = _serialize_cycle_row(c)
+                # 把 step_records 序列化进 cycle.steps，让客户模板里
+                # {% for s in cycle.steps %}...{% endfor %} / step_by_label 字典都能用
+                step_items = []
+                first_ng_label = None
+                first_ng_index = None
+                good_steps = 0
+                ng_steps_n = 0
+                for idx, s in enumerate(steps_by_cycle.get(c.id, [])):
+                    is_good = bool(s.is_valid) if s.is_valid is not None else None
+                    item = _empty_steps_item()
+                    item["index"] = s.step_order if s.step_order is not None else idx
+                    item["label"] = s.step_label
+                    item["is_good"] = is_good
+                    if is_good is not None:
+                        item["result"] = "OK" if is_good else "NG"
+                        item["result_pass_fail"] = "Pass" if is_good else "Fail"
+                    item["duration"] = s.duration
+                    item["interval_to_next"] = s.interval_to_next
+                    item["confidence"] = s.confidence
+                    item["start_time"] = s.start_time.isoformat() if s.start_time else None
+                    item["end_time"] = s.end_time.isoformat() if s.end_time else None
+                    step_items.append(item)
+                    if is_good is True:
+                        good_steps += 1
+                    elif is_good is False:
+                        ng_steps_n += 1
+                        if first_ng_label is None:
+                            first_ng_label = s.step_label
+                            first_ng_index = item["index"]
+                cyc_dict["steps"] = step_items
+                cyc_dict["total_steps"] = len(step_items)
+                cyc_dict["good_steps"] = good_steps
+                cyc_dict["ng_steps_count"] = ng_steps_n
+                # 单 cycle 上下文 _fill_cycle_steps_defects 把首个 NG 名字补到 ng_step；这里也补上
+                if cyc_dict.get("ng_step") is None:
+                    cyc_dict["ng_step"] = first_ng_label
+                    cyc_dict["ng_step_index"] = first_ng_index
+                S["cycles"].append(cyc_dict)
 
     # session 主体 yield_rate
     if total_cycles:

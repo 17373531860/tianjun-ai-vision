@@ -921,11 +921,25 @@
             </table>
          </div>
          
+         <!-- 会话 ID 输入框（v3.6.2 新增, 客户用作业务标识写到 DB + 模板 {{ session.name }}） -->
+         <div class="px-2 pt-2 pb-1 bg-slate-950 border-t border-slate-800">
+            <el-input
+              v-model="sessionName"
+              size="small"
+              placeholder="会话 ID（可选, 如 LINE3-NIGHT-20260510）"
+              clearable
+              maxlength="64"
+              :disabled="isDetecting || isOperating"
+              :class="sessionNameError ? 'session-name-error' : ''"
+            />
+            <div v-if="sessionNameError" class="text-xs text-red-400 mt-1">{{ sessionNameError }}</div>
+         </div>
+
          <!-- Control Buttons -->
-         <div class="p-2 bg-slate-950 border-t border-slate-800 flex gap-2">
+         <div class="p-2 bg-slate-950 flex gap-2">
             <button 
               @click="startDetection" 
-              :disabled="!currentProject || isDetecting || isOperating"
+              :disabled="!currentProject || isDetecting || isOperating || !!sessionNameError"
               class="flex-1 bg-emerald-500 hover:bg-emerald-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
               {{ isOperating && !isDetecting ? '启动中...' : '开始' }}
@@ -1107,6 +1121,32 @@ const isRunning = ref(false);   // video capture thread active
 const isDetecting = ref(false); // inference active (subset of isRunning)
 const isPaused = ref(false);    // fully paused (camera released, model kept)
 const isOperating = ref(false); // async guard for start/stop/standby buttons
+
+// 客户自定义会话标识（开始检测时传给后端 → 写入 DetectionSession.name）
+const sessionName = ref(localStorage.getItem('last_session_name') || '');
+const sessionNameError = ref('');
+const _SESSION_NAME_FORBIDDEN = /[\\/:*?"<>|\r\n\t]/;
+const validateSessionName = (val) => {
+  if (!val) { sessionNameError.value = ''; return true; }
+  if (_SESSION_NAME_FORBIDDEN.test(val)) {
+    sessionNameError.value = '不能含 / \\ : * ? " < > | 等字符';
+    return false;
+  }
+  if (val.length > 64) {
+    sessionNameError.value = '最长 64 个字符';
+    return false;
+  }
+  sessionNameError.value = '';
+  return true;
+};
+watch(sessionName, (val) => {
+  validateSessionName(val);
+  if (val) {
+    localStorage.setItem('last_session_name', val);
+  } else {
+    localStorage.removeItem('last_session_name');
+  }
+});
 
 watch(isDetecting, (newVal) => {
   systemStore.setDetecting(newVal);
@@ -1765,7 +1805,11 @@ const startDetectionForChannel = async (ch) => {
       const modelRes = await getModelDetail(modelId);
       modelPath = modelRes.data.file_path;
     }
-    await apiStartDetection(modelPath, 0.25, 0.45, ch);
+    if (!validateSessionName(sessionName.value)) {
+      ElMessage.warning('会话 ID 不合法：' + sessionNameError.value);
+      return;
+    }
+    await apiStartDetection(modelPath, 0.25, 0.45, ch, sessionName.value || null);
     ElMessage.success(`工位 ${ch + 1} 检测已启动`);
   } catch (e) {
     ElMessage.error(`工位 ${ch + 1} 启动失败: ${e.message}`);
@@ -3041,13 +3085,17 @@ const startDetection = async () => {
       return;
     }
     
-    await apiStartDetection(modelPath, 0.25, 0.45);
+    if (!validateSessionName(sessionName.value)) {
+      ElMessage.warning('会话 ID 不合法：' + sessionNameError.value);
+      return;
+    }
+    await apiStartDetection(modelPath, 0.25, 0.45, 0, sessionName.value || null);
     isRunning.value = true;
     isDetecting.value = true;
     isPaused.value = false;
     projectStore.setRunningStatus(true);
     forceReconnectStream();
-    ElMessage.success('检测已开始');
+    ElMessage.success(sessionName.value ? `检测已开始（会话 ID: ${sessionName.value}）` : '检测已开始');
     startPolling();
     
   } catch (err) {

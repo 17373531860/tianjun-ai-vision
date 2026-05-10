@@ -287,8 +287,62 @@ curl -sI http://127.0.0.1:6001/ | head -1
 - [ ] **路径 B**：新代码至少 1 个测试覆盖（或显式说明"为何不需要"，比如纯 UI 调整）；新加 ORM 字段的话，所有 mock fixture 已扫过
 - [ ] **路径 C**：用户描述的功能在 UI 上能跑通；浏览器 console 和后端 stdout 都没新增红色异常
 - [ ] **路径 D**：影响分析表里标出的所有测试都已重跑过；新加 fixture / 改 fixture 都验证过
+- [ ] **铁律 — UI 改动验收**（见下节）：所有带 UI 入口的功能改动，必须有 E2E 用例真实点过那个按钮 / 输入框，并断言后端落库或 GET 接口反映出预期变化
 
 跑完测试要给用户一句话总结：**`<层级>: N passed / M failed / K skipped (耗时 Xs)`**，然后才能往下走。
+
+---
+
+## 铁律：带 UI 的功能改动必须走 E2E 点击验证
+
+**规则**：只要新功能在前端有任何一个按钮 / 输入框 / 弹窗 / 下拉，**API 层 BDD/单测过不算验收完成**。必须再加一条 E2E 用例完成"端到端 UI→后端"链路：
+
+```
+真实点击 UI → 后端日志/数据库/GET 接口 应有预期变化 → 才算验收
+```
+
+### 为什么 BDD/单测不能替代 E2E
+
+| 风险 | BDD 能拦下 | E2E 能拦下 |
+|---|---|---|
+| 后端逻辑错 | ✅ | ✅ |
+| API schema/参数错 | ✅ | ✅ |
+| 前端 axios 客户端没传新字段 | ❌ | ✅ |
+| 前端按钮 disabled 条件写错（点不动） | ❌ | ✅ |
+| 前端表单校验阻断了提交 | ❌ | ✅ |
+| 前端 store/响应式没绑对 | ❌ | ✅ |
+| 弹窗 selector 漂移（el-message-box DOM 变了） | ❌ | ✅ |
+| 中文按钮文案改了导致 click_text 失效 | ❌ | ✅ |
+| el-select option 渲染异步导致 first-render 抓不到 | ❌ | ✅ |
+
+### 强制检查清单（开发任意 UI 改动后必填）
+
+| UI 改动类型 | 必须有的 E2E 步骤 |
+|---|---|
+| 新增输入框 | 1) 用 POM `fill_xxx()` 填值 2) GET `input_value()` 读回 3) 点关联按钮 4) **后端 GET / DB 查询验证已落** |
+| 新增按钮 | 1) `click_text()` 或 POM 方法点它 2) 验证产生的页面状态变化（toast/路由/列表项） 3) **后端 API 验证副作用** |
+| 新增弹窗 | 1) 触发弹窗 2) `wait_for_selector` 弹窗内元素 3) 填值/选择 4) 点确认/取消 5) 弹窗消失 6) 后端验证 |
+| 新增下拉/select 选项 | 1) 点开 dropdown 2) 验证选项可见 + **未被 disabled** 3) 选中 4) 验证 v-model 绑定值正确 5) 提交后后端验证 |
+| 解锁原本 disabled 的选项 | **必须** E2E 验证 disabled 属性已移除 + 选中后能正常提交（之前我犯过：把 `disabled` 删了但没测，结果客户那边因为缓存没生效） |
+| 列表项 inline 操作（重命名 / 删除等） | 1) E2E 进列表页 2) 真实点该项的按钮 3) 弹窗交互完成 4) 列表项 UI 已刷新 5) **后端 GET 验证已变** |
+
+### POM 写法约定
+
+- **每个 UI 元素都要在 `pages/*.py` 里有 selector 常量**，不要在 test 里硬写 selector
+- **每个 UI 操作都要有 POM 方法**，不要在 test 里直接调 `page.locator(...)`
+- **断言"UI 显示了什么"** 用 POM `get_xxx()` / `has_xxx()`，**断言"后端落库了什么"** 用 `requests.get(api_url, ...)` 或直接读 SQLAlchemy session
+- 弹窗类用 ElMessageBox 时，selectors 用 `.el-message-box__input input` / `.el-message-box__btns button.el-button--primary` —— 已被项目验证可工作
+
+### 反例（这次档 3 验收时差点漏掉的 4 个）
+
+| 改动 | API/BDD 测了 | E2E UI 测了 | 危险？ |
+|---|---|---|---|
+| Monitor《会话 ID》输入框 | ✅ 9 个 BDD | ❌（只测了输入框可填，没测点"开始"链路） | **是**：可能输入框值没传给 axios |
+| Data《重命名》黄色按钮 | ✅ PATCH 端点 BDD | ❌ 完全没测 | **是**：按钮可能根本点不开弹窗 |
+| RealtimeRulesDialog session_end 选项 | ✅ POST 规则 BDD | ❌ 完全没测 | **是**：可能 `disabled` 没去干净 |
+| CustomExportDialog Session 下拉 | ❌ 也没 BDD | ❌ 完全没测 | **是**：双盲，唯一保险靠手测 |
+
+**所以**：发完后端 + BDD 后**不要就报"验收通过"**，必须先看一眼自己改了哪些 .vue 文件，按上面表格补 E2E。否则等于把 UI bug 推给客户测。
 
 ---
 

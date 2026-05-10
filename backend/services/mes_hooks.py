@@ -1493,6 +1493,29 @@ class MESHookManager:
             print(f"[MES] 外部推送(session_end)失败: {e}\n{traceback.format_exc()}",
                   flush=True)
 
+        # v3.6.2: 自定义导出实时规则 — session_end 触发器接通
+        # cycle_end 是单工件文件; session_end 是整次开机的会话报告
+        try:
+            from backend.services.export_realtime import dispatch_session_end_export
+            from backend.models.models import DetectionSession
+            project_id = None
+            try:
+                sess = db.query(DetectionSession).filter(
+                    DetectionSession.id == session_id
+                ).first()
+                if sess:
+                    project_id = sess.project_id
+            except Exception:
+                pass
+            dispatch_session_end_export(
+                db, channel_id=channel_id, session_id=session_id,
+                project_id=project_id,
+            )
+        except Exception as e:
+            import traceback
+            print(f"[ExportRealtime] session_end 触发失败: {e}\n{traceback.format_exc()}",
+                  flush=True)
+
 
 # 全局单例
 _mes_hook_instance: Optional[MESHookManager] = None

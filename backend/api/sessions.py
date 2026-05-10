@@ -73,11 +73,17 @@ def _filter_valid_steps(steps: list) -> list:
 
 class SessionCreate(BaseModel):
     project_id: int
+    name: Optional[str] = None  # 客户自定义会话标识
+
+
+class SessionRename(BaseModel):
+    name: Optional[str] = None  # None 或空 → 清空标识
 
 
 class SessionResponse(BaseModel):
     id: int
     session_uuid: str
+    name: Optional[str] = None  # 客户自定义会话标识
     project_id: int
     project_name: str = ""
     start_time: str
@@ -205,12 +211,18 @@ class ExportSettingUpdate(BaseModel):
 @router.post("/sessions", response_model=SessionResponse)
 def create_session(req: SessionCreate, db: Session = Depends(get_db)):
     """创建新的检测会话（设备启动时调用）"""
+    from backend.api.source_session_lifecycle_mixin import _clean_session_name
     project = db.query(Project).filter(Project.id == req.project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
+    try:
+        cleaned_name = _clean_session_name(req.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     
     session = DetectionSession(
         session_uuid=str(uuid.uuid4())[:8],
+        name=cleaned_name,
         project_id=req.project_id,
         start_time=datetime.now(),
         status="running"
@@ -222,10 +234,53 @@ def create_session(req: SessionCreate, db: Session = Depends(get_db)):
     return SessionResponse(
         id=session.id,
         session_uuid=session.session_uuid,
+        name=session.name,
         project_id=session.project_id,
         project_name=project.name,
         start_time=session.start_time.strftime("%Y-%m-%d %H:%M:%S"),
         status=session.status
+    )
+
+
+@router.patch("/sessions/{session_id}/name", response_model=SessionResponse)
+def rename_session(session_id: int, req: SessionRename, db: Session = Depends(get_db)):
+    """重命名会话（Data 页"重命名"按钮调用）
+
+    name 为 null/空字符串 → 清空标识；
+    含禁用字符 (/ \\ : * ? " < > |) → 400。
+    """
+    from backend.api.source_session_lifecycle_mixin import _clean_session_name
+    session = db.query(DetectionSession).filter(DetectionSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    try:
+        cleaned_name = _clean_session_name(req.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    session.name = cleaned_name
+    db.commit()
+    db.refresh(session)
+
+    project = db.query(Project).filter(Project.id == session.project_id).first()
+    return SessionResponse(
+        id=session.id,
+        session_uuid=session.session_uuid,
+        name=session.name,
+        project_id=session.project_id,
+        project_name=project.name if project else "Unknown",
+        start_time=session.start_time.strftime("%Y-%m-%d %H:%M:%S"),
+        end_time=session.end_time.strftime("%Y-%m-%d %H:%M:%S") if session.end_time else None,
+        total_cycles=session.total_cycles or 0,
+        good_cycles=session.good_cycles or 0,
+        ng_cycles=session.ng_cycles or 0,
+        counters_snapshot=session.counters_snapshot,
+        avg_cycle_time=session.avg_cycle_time or 0,
+        min_cycle_time=session.min_cycle_time,
+        max_cycle_time=session.max_cycle_time,
+        video_id=session.video_id,
+        status=session.status,
+        channel_id=getattr(session, 'channel_id', 0) or 0,
+        operator_id=getattr(session, 'operator_id', None),
     )
 
 
@@ -303,6 +358,7 @@ def list_sessions(
         result.append(SessionResponse(
             id=session.id,
             session_uuid=session.session_uuid,
+            name=session.name,
             project_id=session.project_id,
             project_name=project.name if project else "Unknown",
             start_time=session.start_time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -494,6 +550,7 @@ def get_sessions_by_date(
         session_responses.append(SessionResponse(
             id=session.id,
             session_uuid=session.session_uuid,
+            name=session.name,
             project_id=session.project_id,
             project_name=project.name if project else "Unknown",
             start_time=session.start_time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -540,6 +597,7 @@ def get_session(session_id: int, db: Session = Depends(get_db)):
     return SessionResponse(
         id=session.id,
         session_uuid=session.session_uuid,
+        name=session.name,
         project_id=session.project_id,
         project_name=project.name if project else "Unknown",
         start_time=session.start_time.strftime("%Y-%m-%d %H:%M:%S"),

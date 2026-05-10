@@ -82,6 +82,7 @@ class DetectionStartRequest(BaseModel):
     model_path: Optional[str] = None
     conf: float = 0.25
     iou: float = 0.45
+    session_name: Optional[str] = None  # 客户自定义会话标识 (英文/数字/中文皆可, ≤ 64)
 
 
 class StreamConfigRequest(BaseModel):
@@ -764,6 +765,12 @@ def set_image(req: ImageSetRequest, channel: int = Query(0)):
 @router.post("/detection/start")
 def start_detection(req: DetectionStartRequest, channel: int = Query(0)):
     """开始检测"""
+    from backend.api.source_session_lifecycle_mixin import _clean_session_name
+    try:
+        cleaned_session_name = _clean_session_name(req.session_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     try:
         mgr = _get_mgr(channel)
         mgr.conf_threshold = req.conf
@@ -779,13 +786,14 @@ def start_detection(req: DetectionStartRequest, channel: int = Query(0)):
         mgr.start_detection(req.model_path)
 
         if mgr.project_config and mgr.project_config.get('id'):
-            session_info = mgr.start_session(mgr.project_config['id'])
+            session_info = mgr.start_session(mgr.project_config['id'], name=cleaned_session_name)
             if session_info:
                 return {
                     "status": "success",
                     "message": f"检测已启动 (ch{channel})",
                     "session_id": session_info.get('session_id'),
-                    "session_uuid": session_info.get('session_uuid')
+                    "session_uuid": session_info.get('session_uuid'),
+                    "session_name": session_info.get('session_name'),
                 }
 
         return {"status": "success", "message": f"检测已启动 (ch{channel})"}

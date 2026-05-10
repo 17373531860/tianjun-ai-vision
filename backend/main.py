@@ -65,6 +65,7 @@ def migrate_database():
         ("projects", "data_config", "JSON"),
         ("detection_sessions", "channel_id", "INTEGER DEFAULT 0"),
         ("detection_sessions", "shift_label", "VARCHAR(20)"),
+        ("detection_sessions", "name", "VARCHAR(64)"),
         ("projects", "model_format", "VARCHAR(50) DEFAULT 'pytorch_fp32'"),
         # MES: 现有表扩展字段 (可空, 安全迁移)
         ("detection_cycles", "order_id", "INTEGER"),

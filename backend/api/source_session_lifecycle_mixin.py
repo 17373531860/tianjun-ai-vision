@@ -30,6 +30,32 @@ from backend.models.models import DetectionSession, DetectionCycle, StepRecord, 
 from sqlalchemy import func
 
 
+# 会话标识合法性: 1~64 字符, 不允许文件路径/通配符等
+_SESSION_NAME_FORBIDDEN = set('/\\:*?"<>|\r\n\t')
+
+
+def _clean_session_name(raw):
+    """规整客户输入的会话标识. 返回 None 或干净字符串.
+
+    规则:
+      - 去首尾空白
+      - 空字符串视为 None (不写入 DB)
+      - 含禁用字符直接抛 ValueError (调用方决定 400 返回)
+      - 截断到 64 字符
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raw = str(raw)
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    bad = [c for c in cleaned if c in _SESSION_NAME_FORBIDDEN]
+    if bad:
+        raise ValueError(f"会话标识不能包含字符: {''.join(sorted(set(bad)))}")
+    return cleaned[:64]
+
+
 class SessionLifecycleMixin:
     def _get_db_session(self):
         """获取数据库会话"""
@@ -81,8 +107,13 @@ class SessionLifecycleMixin:
         print(f"[自动会话] 检测到项目已加载但无活跃会话，自动创建会话 (project_id={project_id})")
         self.start_session(project_id)
 
-    def start_session(self, project_id: int) -> dict:
-        """开始新的检测会话"""
+    def start_session(self, project_id: int, name: str = None) -> dict:
+        """开始新的检测会话
+
+        参数:
+            project_id: 项目 ID
+            name: 客户自定义会话标识 (可选, 用于文件名/筛选). 不填则为 None.
+        """
         db = None
         try:
             db = self._get_db_session()
@@ -90,8 +121,10 @@ class SessionLifecycleMixin:
             current_shift = self._get_current_shift()
             from backend.api.operators import get_current_operator_id
             current_op_id = get_current_operator_id(self.channel_id)
+            cleaned_name = _clean_session_name(name) if name else None
             session = DetectionSession(
                 session_uuid=session_uuid,
+                name=cleaned_name,
                 project_id=project_id,
                 start_time=datetime.now(),
                 status="running",
@@ -105,12 +138,13 @@ class SessionLifecycleMixin:
             
             self.current_session_id = session.id
             self.current_session_uuid = session_uuid
+            self.current_session_name = cleaned_name
             self.current_cycle_number = 0
             self.recording_enabled = True
             self._session_start_date = datetime.now().date()
             self._session_start_shift = current_shift
             
-            print(f"检测会话已创建: {session_uuid}")
+            print(f"检测会话已创建: uuid={session_uuid} name={cleaned_name or '<未设置>'}")
 
             # 后续步骤按“尽力执行”处理，避免出现 DB 已创建成功却返回失败
             try:
@@ -144,7 +178,11 @@ class SessionLifecycleMixin:
             except Exception as e:
                 print(f"[session] 启动会话录制失败（不影响会话）: {e}")
             
-            return {"session_id": session.id, "session_uuid": session_uuid}
+            return {
+                "session_id": session.id,
+                "session_uuid": session_uuid,
+                "session_name": cleaned_name,
+            }
         except Exception as e:
             print(f"创建会话失败: {e}")
             return None

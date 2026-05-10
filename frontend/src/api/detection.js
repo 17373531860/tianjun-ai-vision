@@ -1,10 +1,11 @@
 import api from './index';
 
-export const startDetection = (modelPath, conf = 0.25, iou = 0.45, channel = 0) => {
+export const startDetection = (modelPath, conf = 0.25, iou = 0.45, channel = 0, sessionName = null) => {
   return api.post(`/source/detection/start?channel=${channel}`, {
     model_path: modelPath,
     conf,
-    iou
+    iou,
+    session_name: sessionName || null,
   });
 };
 
