@@ -1,0 +1,19 @@
+{
+  "name": "ok_sequential_cycle",
+  "description": "顺序模式 OK 周期：step_a → step_b → step_c 各自连续出现 30 帧后消失，预期一个完整 OK cycle。",
+  "fps": 60,
+  "expected": {
+    "ok_cycle_increment": 1,
+    "ng_cycle_increment": 0,
+    "events": []
+  },
+  "timeline": [
+    { "from": 0,   "to": 9,   "detections": [] },
+    { "from": 10,  "to": 39,  "detections": [{ "label": "step_a", "confidence": 0.95, "bbox": [0.10, 0.10, 0.20, 0.20] }] },
+    { "from": 40,  "to": 49,  "detections": [] },
+    { "from": 50,  "to": 79,  "detections": [{ "label": "step_b", "confidence": 0.93, "bbox": [0.40, 0.10, 0.20, 0.20] }] },
+    { "from": 80,  "to": 89,  "detections": [] },
+    { "from": 90,  "to": 119, "detections": [{ "label": "step_c", "confidence": 0.94, "bbox": [0.70, 0.10, 0.20, 0.20] }] },
+    { "from": 120, "to": 200, "detections": [] }
+  ]
+}

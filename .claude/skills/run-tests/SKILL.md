@@ -719,40 +719,180 @@ class BasePage:
 
 ## 路径 G：虚拟功能测试模式（synthetic 剧本源）
 
-适用：没有摄像头与模型，但要验证「后端真实 pipeline → 前端轮询结果」或回归 Monitor/API；关键词：**虚拟检测**、**剧本**、**synthetic**、**无模型测功能**。
+> **触发关键词**：虚拟检测 / 虚拟模式 / 模拟检测 / 没视频测一下 / 没模型测一下 / 真的跑一下 / 合成数据 / 剧本 / synthetic / 无模型测功能 / 客户场景模拟 / 改了代码后帮我跑一下功能。
 
-### 原理（简述）
+### G.0 路径选择（先于动手）
 
-环境变量 `RUNTIME_MODE=test` 时挂载 `POST /api/v1/test/synthetic/*`。后端使用 `source_type=synthetic` 合成帧 + 按 JSON 剧本注入检测框，推理线程仍调用 `_update_step_stats`（与真实摄像头同源）。**无模型**时可 `POST /api/v1/source/detection/start` 且 body 省略 `model_path`。
-
-`synthetic` 下 `_get_confirmed_detections` **直通**剧本框（跳过步骤帧计数门槛），便于在无项目配置时仍能断言 API/UI。
-
-### 命令速查
-
-```bash
-# pytest 默认已 set RUNTIME_MODE=test（见 tests/conftest.py）
-pytest tests/test_synthetic_detection_api.py -v
-
-# 手动起后端（需显式 export RUNTIME_MODE=test）
-export RUNTIME_MODE=test
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8001
+```
+用户改了功能/修了 bug，要"看看通不通"
+    │
+    ├── 有真摄像头 + 真模型？
+    │       └─ 是 → 路径 F（现场验收）
+    │
+    ├── 没硬件，但只想验证 UI 渲染？
+    │       └─ 是 → 路径 E（Playwright + Mock /detection/results）
+    │
+    └── 没硬件，但要看"后端真业务流 → 前端真显示"？
+            └─ 是 → **路径 G（本节）**
 ```
 
-### 剧本文件
+### G.1 这个 synthetic 源是什么（必读，给后续 AI/人）
 
-目录：`tests/scenarios/*.json`。字段：`name`、`fps`、`timeline`（每项 `from`/`to` 帧号闭区间 + `detections` 列表，`bbox` 为归一化 xywh）。
+`backend/api/source_synthetic_mixin.py` 给 `VideoSourceManager` 加了一种新的 `source_type='synthetic'`：
 
-示例：`tests/scenarios/smoke_static_label.json`。
+- **不需要摄像头、不需要模型**：捕获线程出黑底帧（带帧号 OSD），推理线程在选择推理函数时**短路掉真实模型**，直接按 JSON 剧本返回 detections
+- **走完整 pipeline**：`_update_step_stats` → `_settle_*_cycle` → `_trigger_event` → `end_cycle` → 实时导出/MES Hook 与真实路径**完全相同**
+- **生产默认禁用**：测试控制 API `/api/v1/test/synthetic/*` 仅在 `RUNTIME_MODE=test` 时挂载（见 `backend/main.py`）；客户机不设环境变量等同没有这个能力
+- **可派别用途**：销售演示（无产线设备）、客户培训、烤机脚本、客户问题复现
 
-### HTTP
+> 改这个能力会动 6 个文件：`source.py / source_capture_loop_mixin.py / source_inference_loop_mixin.py / source_lifecycle_mixin.py / source_state_init.py / source_routes.py`。修改前先读 `modify-source` skill 做影响分析。
 
-| 方法 | 路径 | 说明 |
+### G.2 一次完整功能测试的 5 步操作手册
+
+每次走路径 G，**严格按以下 5 步**：
+
+#### 第 1 步：启动后端（带测试模式）
+
+```bash
+cd /home/qianqian/桌面/word/tianjun副本
+RUNTIME_MODE=test python -m uvicorn backend.main:app --host 0.0.0.0 --port 8001
+# 看到日志 "[RUNTIME_MODE=test] mounted /api/v1/test/synthetic/*" 即就绪
+```
+
+启动失败排查：见 G.5 踩坑表第 1 行。
+
+#### 第 2 步：选剧本
+
+```bash
+ls tests/scenarios/
+# smoke_static_label.json     ← 最简：单标签持续出现，纯 API 冒烟
+# ok_sequential_cycle.json    ← 顺序模式 OK 周期（step_a → step_b → step_c）
+# ng_missing_step.json        ← 顺序模式 NG（缺 step_b）
+# alarm_event.json            ← 持续触发同一标签（配合 events_config 验证报警链）
+```
+
+不知道选哪个？看 G.4 推荐表（按改动文件→剧本映射）。
+
+#### 第 3 步：启动剧本 + 启动检测
+
+```bash
+# 用文件
+curl -sX POST 'http://127.0.0.1:8001/api/v1/test/synthetic/start' \
+  -H 'Content-Type: application/json' \
+  -d '{"scenario":"ok_sequential_cycle.json","channel":0}'
+
+# 或用内联字典（不用落盘）
+curl -sX POST 'http://127.0.0.1:8001/api/v1/test/synthetic/start' \
+  -H 'Content-Type: application/json' \
+  -d '{"scenario_json":{"name":"adhoc","fps":60,"timeline":[{"from":0,"to":120,"detections":[{"label":"X","confidence":0.9,"bbox":[0.2,0.2,0.2,0.2]}]}]}}'
+
+# 启动检测（model_path 可以省略，因为 source_type=synthetic）
+curl -sX POST 'http://127.0.0.1:8001/api/v1/source/detection/start?channel=0' \
+  -H 'Content-Type: application/json' \
+  -d '{"conf":0.25,"iou":0.45}'
+```
+
+#### 第 4 步：观察前端 / API 反馈
+
+**A. 浏览器（首选）**：
+```
+http://127.0.0.1:6001/#/monitor   # cycle 计数器、步骤列表、检测框
+http://127.0.0.1:6001/#/data      # session 与 cycle 历史
+```
+
+**B. API 直读（无前端时）**：
+```bash
+curl -s 'http://127.0.0.1:8001/api/v1/source/detection/results?channel=0' | jq '.detections,.step_counts,.is_detecting'
+curl -s 'http://127.0.0.1:8001/api/v1/test/synthetic/state?channel=0'
+```
+
+**C. Playwright 自动化截图 + 断言**：
+
+```bash
+# 演示脚本（已带 5 步流程：启剧本 → 启检测 → 截图 → 断言 → 清理）
+python tests/playwright_demo/synthetic_demo.py tests/scenarios/ok_sequential_cycle.json
+# 截图默认落 /tmp/synthetic_demo_shots/<scenario>.png
+```
+
+写新断言时直接照抄 `tests/playwright_demo/synthetic_demo.py` 的模板（已包含 viewport 1920×1080、networkidle 等待、剧本标签拉取重试）。
+
+#### 第 5 步：清理
+
+```bash
+curl -sX POST 'http://127.0.0.1:8001/api/v1/source/detection/stop?channel=0'
+curl -sX POST 'http://127.0.0.1:8001/api/v1/test/synthetic/stop?channel=0'
+# 后端进程不用退；下次直接换剧本走第 3 步
+```
+
+### G.3 剧本格式（给 AI 写新剧本时用）
+
+```jsonc
+{
+  "name": "<剧本名>",
+  "description": "<一句话用途>",
+  "fps": 60,
+  "expected": { "ok_cycle_increment": 1, "ng_cycle_increment": 0 },  // 可选，给断言/文档参考
+  "timeline": [
+    {
+      "from": 0,        // 起始帧号（含）
+      "to": 30,         // 结束帧号（含）
+      "detections": [   // 该帧区间持续返回这些检测框（推理线程每跑一次都查表）
+        {
+          "label": "step_a",      // 与项目 steps_config 的 label 对齐
+          "confidence": 0.95,     // 0~1
+          "bbox": [0.1, 0.1, 0.2, 0.2]   // 归一化 xywh，左上角 + 宽高
+        }
+      ]
+    }
+  ]
+}
+```
+
+要 cycle 真正结束并写库 → 剧本要包含「步骤出现 → 步骤消失」完整一组（看 `ok_sequential_cycle.json`）。仅"持续出现一个标签"不会触发 cycle 结束（看 `smoke_static_label.json`）。
+
+### G.4 改了什么 → 推荐跑哪个剧本（半自动）
+
+skill 触发后**先看 git diff 头部**，按下表给用户列推荐清单（让用户点确认再跑，避免无关改动浪费时间）：
+
+| `git diff --name-only` 命中 | 建议剧本 | 理由 |
 |---|---|---|
-| POST | `/api/v1/test/synthetic/start` | body: `scenario` 文件名 或 `scenario_json` 内联字典 |
-| POST | `/api/v1/test/synthetic/stop?channel=0` | 停止 synthetic 源 |
-| GET | `/api/v1/test/synthetic/state?channel=0` | 调试：帧序号与剧本名 |
+| `backend/api/source_step_stats_mixin.py` | `ok_sequential_cycle` + `ng_missing_step` | 步骤判定核心，OK/NG 两条都覆盖 |
+| `backend/api/source_settlement_mixin.py` 或 `source_session_lifecycle_mixin.py` | `ok_sequential_cycle` | 周期结算与写库 |
+| `backend/api/source_event_trigger_mixin.py` 或 `source_events_check_mixin.py` | `alarm_event` | 事件链路 |
+| `backend/services/mes_hooks.py` 或 `backend/api/sessions*.py` | `ok_sequential_cycle` | cycle 完成 → MES Hook 与导出 |
+| `backend/services/export_*.py` 或 `backend/api/export_*.py` | `ok_sequential_cycle`（多跑几轮） | 实时导出依赖完整 cycle |
+| `frontend/src/views/Monitor/index.vue` | `smoke_static_label` + `ok_sequential_cycle` | 视觉与计数器分别覆盖 |
+| `frontend/src/views/Data/index.vue` | `ok_sequential_cycle`（再去 Data 页验证 session） | 落库后展示 |
 
-与路径 F（现场验收）关系：F 面向真机；G 面向 CI/开发机的**确定性功能链路**。
+新增剧本时同步在本表加一行（保持触发表是"实时索引"）。
+
+### G.5 踩坑表
+
+| 现象 | 根因 | 处理 |
+|---|---|---|
+| 后端启动了但 `curl /api/v1/test/synthetic/start` 返回 404 | 漏设 `RUNTIME_MODE=test`；测试路由没挂 | `export RUNTIME_MODE=test` 后重启 backend |
+| `detection/start` 报"未加载模型" | DetectionStartRequest 的 `model_path` 历史是必填，前端代码可能没改 | curl 时省略 `model_path`；前端走时确认 source_type 已是 synthetic |
+| `detection/results` 里 `detections` 一直为空 | (a) synthetic 没启动；(b) 当前帧号不在任何 timeline 区间 | 看 `/api/v1/test/synthetic/state` 的 `frame_seq`，对照剧本 `from/to` |
+| cycle 计数器不涨 | 剧本只让步骤"出现"未让其"消失"，pipeline 不结算 | 给每个 step 后留一段空白（看 `ok_sequential_cycle.json`） |
+| Playwright 截图全黑 / DOM 空 | 没等 `networkidle`；viewport 为 0 | 用 `tests/playwright_demo/synthetic_demo.py` 的模板（已处理） |
+| 前端 Monitor 不显示检测框 | synthetic 走非项目配置路径，`current_detections` 有但无 `display_id`；与 tracking 模式不兼容 | 对纯展示验证够用；如要 tracking 校验，需在剧本对应项目里设 `logic_mode=detection` |
+| pytest 测试结束打印 `[MES] Hook 管理器已停止` | conftest 默认设 `RUNTIME_MODE=test`，MES 子系统也启动 | 可接受副作用；CI 慢时可改成 fixture 级别按需打开 |
+
+### G.6 与路径 E / F 的边界
+
+| 维度 | 路径 E | 路径 F | **路径 G** |
+|---|---|---|---|
+| 是否需要硬件 | 否 | **是**（真摄像头+真模型） | 否 |
+| 后端业务流是否真跑 | 否（mock API） | 是 | **是** |
+| 前端 UI 反馈是否真发生 | 是 | 是 | **是** |
+| 适合场景 | UI 改动 | 现场验收/客户问题复现 | **CI / 改后端业务逻辑后的功能回归** |
+
+### G.7 完成判定
+
+- 剧本对应的 `expected.*` 计数器在 `/detection/results` / Monitor 上**与预期相符**
+- Playwright 截图在 `/tmp/synthetic_demo_shots/` 内，截图里能看见**剧本对应步骤的视觉反馈**
+- `[MES] Hook 管理器已停止` 这类副作用日志正常出现 → 说明完整 pipeline 走完
+- 在结束前**调用 stop 两个 API**，否则下次启动新剧本会与旧 source_type 冲突
 
 ---
 
