@@ -23,10 +23,23 @@ def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
+def _is_sat_item(item) -> bool:
+    """v3.7.0 修复: 只对真正属于 tests/sat/ 下的 item 加 skip marker.
+    原来的 hook 写法 `for item in items` 会扫整个 root 收集集合, 把
+    全部 BDD/单元测试 (不只 SAT) 都 skip 掉, 导致跑 tests/ 时 382 全 skip.
+    """
+    path = str(getattr(item, "fspath", "") or "")
+    return "/tests/sat/" in path or path.endswith("/tests/sat")
+
+
 def pytest_collection_modifyitems(config, items):
+    sat_items = [it for it in items if _is_sat_item(it)]
+    if not sat_items:
+        return
+
     if os.environ.get("RUN_SAT") != "1":
         skip_marker = pytest.mark.skip(reason="设置 RUN_SAT=1 才会跑 SAT 套件")
-        for item in items:
+        for item in sat_items:
             item.add_marker(skip_marker)
         return
 
@@ -38,7 +51,7 @@ def pytest_collection_modifyitems(config, items):
         h, port = host, 80
     if not _port_open(h, port):
         skip_marker = pytest.mark.skip(reason=f"backend 未启动: {SAT_API}")
-        for item in items:
+        for item in sat_items:
             item.add_marker(skip_marker)
 
 
