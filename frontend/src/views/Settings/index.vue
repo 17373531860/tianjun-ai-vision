@@ -1060,9 +1060,10 @@
                 <div class="flex items-center gap-2">
                   <el-icon class="text-purple-400"><Lightning /></el-icon>
                   <span class="font-bold text-white">插件管理</span>
-                  <el-tag v-if="activePluginCode" type="success" size="small">当前 active: {{ activePluginCode }}</el-tag>
+                  <el-tag v-if="pluginStore.activeCustomerCode" type="success" size="small">当前 active: {{ pluginStore.activeCustomerCode }}</el-tag>
+                  <el-tag v-if="pluginStore.licenseMismatch" type="danger" size="small">license 与激活插件 customer_code 不一致</el-tag>
                 </div>
-                <el-button size="small" :loading="pluginLoading" @click="loadPlugins">
+                <el-button size="small" :loading="pluginStore.loading" @click="pluginStore.fetchAll()">
                   <el-icon class="mr-1"><Refresh /></el-icon>刷新
                 </el-button>
               </div>
@@ -1071,11 +1072,11 @@
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
               <div class="p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="text-xs text-gray-500 mb-1">当前 License 客户码</div>
-                <div class="text-cyan-300 font-mono">{{ licenseCustomer || '未缓存' }}</div>
+                <div class="text-cyan-300 font-mono">{{ pluginStore.licenseCustomer || '未缓存' }}</div>
               </div>
               <div class="p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="text-xs text-gray-500 mb-1">已安装插件</div>
-                <div class="text-white text-lg font-bold">{{ plugins.length }}</div>
+                <div class="text-white text-lg font-bold">{{ pluginStore.items.length }}</div>
               </div>
               <div class="p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="text-xs text-gray-500 mb-1">安装包</div>
@@ -1085,12 +1086,12 @@
                   accept=".tjvplugin"
                   :on-change="onPluginFileChange"
                 >
-                  <el-button type="primary" :loading="pluginUploading">上传 .tjvplugin</el-button>
+                  <el-button type="primary" :loading="pluginStore.uploading">上传 .tjvplugin</el-button>
                 </el-upload>
               </div>
             </div>
 
-            <el-table :data="plugins" stripe size="small" class="bg-transparent" v-loading="pluginLoading">
+            <el-table :data="pluginStore.items" stripe size="small" class="bg-transparent" v-loading="pluginStore.loading">
               <el-table-column prop="name" label="插件" min-width="160">
                 <template #default="{ row }">
                   <div class="font-bold text-white">{{ row.name }}</div>
@@ -1128,8 +1129,11 @@
                 </template>
               </el-table-column>
             </el-table>
-            <div v-if="!plugins.length && !pluginLoading" class="text-center text-gray-500 text-sm py-6">
+            <div v-if="!pluginStore.hasAny && !pluginStore.loading" class="text-center text-gray-500 text-sm py-6">
               暂无插件，请上传已签名的 .tjvplugin 安装包。
+            </div>
+            <div v-if="pluginStore.lastError" class="mt-3 text-xs text-red-400">
+              {{ pluginStore.lastError }}
             </div>
           </el-card>
         </div>
@@ -1142,21 +1146,16 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
+import { usePluginStore } from '@/store/usePluginStore';
 import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjectDetail } from '@/api/project';
 import { getOperators, createOperator, updateOperator, deleteOperator, setCurrentOperator, getCurrentOperator } from '@/api/operators';
-import { getPlugins, installPlugin, activatePlugin, deactivatePlugin, deletePlugin } from '@/api/plugins';
 import api from '@/api/index';
 
 const store = useSystemStore();
 const projectStore = useProjectStore();
-
-const plugins = ref([]);
-const activePluginCode = ref(null);
-const pluginLoading = ref(false);
-const pluginUploading = ref(false);
-const licenseCustomer = ref('');
+const pluginStore = usePluginStore();
 
 // GPU相关状态
 const loadingGpu = ref(false);
@@ -1277,56 +1276,41 @@ async function confirmDeleteOp() {
   } catch { ElMessage.error('删除失败'); }
 }
 
-async function loadPluginLicense() {
-  try {
-    const { data } = await api.get('/system/license-cache');
-    licenseCustomer.value = data?.customer || data?.customerName || data?.customer_name || '';
-  } catch {
-    licenseCustomer.value = '';
-  }
-}
-
 async function loadPlugins() {
-  pluginLoading.value = true;
   try {
-    const { data } = await getPlugins();
-    plugins.value = data?.items || [];
-    activePluginCode.value = data?.active_customer_code || null;
-    await loadPluginLicense();
-  } catch (e) {
-    ElMessage.error('加载插件列表失败: ' + (e?.response?.data?.detail?.message || e?.message || ''));
-  } finally {
-    pluginLoading.value = false;
+    await pluginStore.fetchAll();
+  } catch {
+    ElMessage.error('加载插件列表失败：' + (pluginStore.lastError || '未知错误'));
   }
 }
 
 async function onPluginFileChange(uploadFile) {
   const raw = uploadFile?.raw;
   if (!raw) return;
-  pluginUploading.value = true;
   try {
-    await installPlugin(raw);
+    await pluginStore.install(raw);
     ElMessage.success('插件安装成功，激活后重启生效');
-    await loadPlugins();
-  } catch (e) {
-    const detail = e?.response?.data?.detail;
-    const message = detail?.message || detail || e?.message || '安装失败';
-    ElMessage.error(`插件安装失败: ${message}`);
-  } finally {
-    pluginUploading.value = false;
+  } catch {
+    ElMessage.error(`插件安装失败：${pluginStore.lastError || '未知错误'}`);
   }
 }
 
 async function activateInstalledPlugin(row) {
-  await activatePlugin(row.customer_code);
-  ElMessage.success('插件已激活，重启后生效');
-  await loadPlugins();
+  try {
+    await pluginStore.activate(row.customer_code);
+    ElMessage.success('插件已激活，重启后生效');
+  } catch (e) {
+    ElMessage.error('激活失败：' + (e?.response?.data?.detail?.message || e?.message || ''));
+  }
 }
 
 async function deactivateInstalledPlugin(row) {
-  await deactivatePlugin(row.customer_code);
-  ElMessage.success('插件已停用，重启后生效');
-  await loadPlugins();
+  try {
+    await pluginStore.deactivate(row.customer_code);
+    ElMessage.success('插件已停用，重启后生效');
+  } catch (e) {
+    ElMessage.error('停用失败：' + (e?.response?.data?.detail?.message || e?.message || ''));
+  }
 }
 
 async function removeInstalledPlugin(row) {
@@ -1335,9 +1319,12 @@ async function removeInstalledPlugin(row) {
     '卸载插件',
     { type: 'warning' }
   );
-  await deletePlugin(row.customer_code);
-  ElMessage.success('插件已卸载');
-  await loadPlugins();
+  try {
+    await pluginStore.remove(row.customer_code);
+    ElMessage.success('插件已卸载');
+  } catch (e) {
+    ElMessage.error('卸载失败：' + (e?.response?.data?.detail?.message || e?.message || ''));
+  }
 }
 
 const saveDisplaySettings = () => {
