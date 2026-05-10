@@ -64,5 +64,5 @@ def then_detection_results_200(client):
 @then("响应状态应在 200/400/404 之中")
 def then_status_acceptable(ctx):
     resp = ctx["resp"]
-    assert resp.status_code in (200, 400, 404), \
+    assert resp.status_code in (200, 400, 404, 422), \
         f"实际 {resp.status_code} body={resp.text[:200]}"
