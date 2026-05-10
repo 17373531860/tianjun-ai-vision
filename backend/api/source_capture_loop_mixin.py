@@ -40,12 +40,15 @@ class CaptureLoopMixin:
         last_debug_time = time.time()  # 上次调试日志时间
         
         # 如果正在检测且模型已加载，启动推理线程
-        if self.is_detecting and self.model is not None:
+        if self.is_detecting and (self.model is not None or getattr(self, 'source_type', None) == 'synthetic'):
             debug_log("启动推理线程...", "CAPTURE")
             self._start_inference_thread()
             debug_log("推理线程已启动", "CAPTURE")
         
-        while self.is_running and (self.capture is not None or self.source_type in ('hikvision', 'hcnetsdk')):
+        while self.is_running and (
+            self.capture is not None
+            or self.source_type in ('hikvision', 'hcnetsdk', 'synthetic')
+        ):
             try:
                 loop_count += 1
                 loop_start = time.time()
@@ -62,7 +65,10 @@ class CaptureLoopMixin:
                 frame = None
                 ret = False
                 
-                if self.source_type == 'hcnetsdk':
+                if self.source_type == 'synthetic':
+                    frame = self._synthetic_next_frame()
+                    ret = frame is not None
+                elif self.source_type == 'hcnetsdk':
                     # 海康设备网络SDK
                     frame = self._get_hcnetsdk_frame()
                     ret = frame is not None
@@ -127,7 +133,7 @@ class CaptureLoopMixin:
                     # ========== 预缩小帧：推理基于 raw_frame, 录制/stats 基于 display_frame ==========
                     small_frame = None          # 显示坐标系的缩小帧 (给录制 / stats 截图)
                     raw_small_frame = None      # 原图坐标系的缩小帧 (给模型推理)
-                    if self.is_detecting and self.model is not None:
+                    if self.is_detecting and (self.model is not None or self.source_type == 'synthetic'):
                         target_sz = getattr(self, '_model_imgsz', 640)
                         # 显示帧缩小
                         oh, ow = original_frame.shape[:2]
@@ -153,12 +159,16 @@ class CaptureLoopMixin:
                             raw_small_frame = small_frame
                     
                     # ========== 双线程架构：异步推理 ==========
-                    if self.is_detecting and self.model is not None:
+                    if self.is_detecting and (self.model is not None or self.source_type == 'synthetic'):
                         t_lock1_start = time.time()
                         with self._inference_frame_lock:
                             self._latest_frame_for_inference = raw_small_frame
                             self._latest_display_small_for_stats = small_frame
                             self._latest_frame_original_size = raw_frame.shape[:2]
+                            if self.source_type == 'synthetic':
+                                self._latest_synthetic_inference_idx = int(
+                                    getattr(self, '_synthetic_last_published_idx', -1)
+                                )
                         t_lock1_end = time.time()
                         if (t_lock1_end - t_lock1_start) > 0.1:
                             debug_log(f"!!! inference_frame_lock 耗时: {(t_lock1_end-t_lock1_start)*1000:.1f}ms", "CAPTURE")

@@ -276,6 +276,12 @@ def init_state(h):
     h.iou_threshold = 0.45
 
     _init_inference_threading(h)
+    # SyntheticMixin: 虚拟剧本源默认状态
+    h._synthetic_spec = None
+    h._synthetic_timeline = []
+    h._synthetic_seq = 0
+    h._synthetic_last_published_idx = -1
+    h._latest_synthetic_inference_idx = -1
     _init_health_and_timeout(h)
     _init_components(h)
     _init_fps_stats(h)

@@ -792,6 +792,16 @@ app.include_router(cluster_router, prefix=f"{settings.API_V1_STR}", tags=["Clust
 app.include_router(extdev_router, prefix=f"{settings.API_V1_STR}", tags=["External Devices"])
 app.include_router(debug_router, prefix=f"{settings.API_V1_STR}", tags=["Debug"])
 
+if os.environ.get("RUNTIME_MODE") == "test":
+    from backend.api.test_runtime_routes import router as test_synthetic_router
+
+    app.include_router(
+        test_synthetic_router,
+        prefix=f"{settings.API_V1_STR}/test/synthetic",
+        tags=["test-synthetic"],
+    )
+    print("[RUNTIME_MODE=test] mounted /api/v1/test/synthetic/* (virtual detection scenarios)")
+
 # Mount static files for uploads (images, etc.)
 if os.path.exists(settings.UPLOAD_DIR):
     app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")

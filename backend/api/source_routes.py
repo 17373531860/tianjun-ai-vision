@@ -79,7 +79,7 @@ class ImageSetRequest(BaseModel):
 
 
 class DetectionStartRequest(BaseModel):
-    model_path: str
+    model_path: Optional[str] = None
     conf: float = 0.25
     iou: float = 0.45
 
@@ -773,7 +773,7 @@ def start_detection(req: DetectionStartRequest, channel: int = Query(0)):
         device = getattr(mgr, 'device', 'auto') or 'auto'
         if req.model_path:
             channel_manager.load_model_for_channel(channel, req.model_path, device)
-        elif mgr.model is None:
+        elif mgr.model is None and getattr(mgr, 'source_type', None) != 'synthetic':
             channel_manager._propagate_model(channel)
 
         mgr.start_detection(req.model_path)
