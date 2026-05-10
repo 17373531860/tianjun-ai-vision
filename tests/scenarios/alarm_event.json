@@ -1,0 +1,9 @@
+{
+  "name": "alarm_event",
+  "description": "持续出现一个被定义为报警触发标签的目标，配合项目 events_config 可触发报警事件链路。",
+  "fps": 60,
+  "expected_notes": "需要前端激活的项目里把 step_alarm 关联到 alarm_event_id；本剧本只负责注入检测，事件触发依赖项目配置。",
+  "timeline": [
+    { "from": 0, "to": 600, "detections": [{ "label": "step_alarm", "confidence": 0.97, "bbox": [0.30, 0.30, 0.30, 0.30] }] }
+  ]
+}

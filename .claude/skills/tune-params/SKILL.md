@@ -4,7 +4,7 @@ description: "检测参数调优全流程：分析视频+模型、逐轮调参�
 argument-hint: "[项目名 或 视频路径 或 问题描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Shell, Write, StrReplace, Agent"
+allowed-tools: "Read, Grep, Glob, Shell, Write, StrReplace, Agent, mcp__context7, mcp__duckduckgo, mcp__sequential-thinking"
 ---
 
 # tune-params: 检测参数调优

@@ -4,7 +4,7 @@ description: "新增事件类型的完整流程：后端事件定义和触发、
 argument-hint: "[新事件类型描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write, mcp__context7"
 ---
 
 # add-event-type: 新增事件类型

@@ -4,7 +4,7 @@ description: "诊断集群主从模式：ClusterCollector 心跳 / box_serial �
 argument-hint: "[问题现象]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash"
+allowed-tools: "Read, Grep, Glob, Bash, mcp__sequential-thinking, mcp__sentry"
 ---
 
 # debug-cluster: 集群主从模式诊断

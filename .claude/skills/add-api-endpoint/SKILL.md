@@ -4,7 +4,7 @@ description: "新增后端API端点的完整流程：路由注册、Schema定义
 argument-hint: "[端点描述，如: GET /api/v1/xxx 用于xxx]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write, mcp__context7"
 ---
 
 # add-api-endpoint: 新增后端API端点

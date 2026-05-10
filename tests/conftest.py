@@ -20,6 +20,8 @@ _TEST_DATA_DIR = tempfile.mkdtemp(prefix="tianjun_test_")
 os.environ["TIANJUN_DATA_DIR"] = _TEST_DATA_DIR
 # 关掉打包/license 检查相关副作用
 os.environ.setdefault("TIANJUN_TEST_MODE", "1")
+# 挂载 synthetic 虚拟检测 API（backend/main.py）；不影响生产默认（未设则无路由）
+os.environ.setdefault("RUNTIME_MODE", "test")
 
 import sys  # noqa: E402
 

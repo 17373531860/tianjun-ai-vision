@@ -4,7 +4,7 @@ description: "新增检测模式的完整流程：状态机扩展、set_project_
 argument-hint: "[新检测模式的描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write, mcp__context7, mcp__sequential-thinking"
 ---
 
 # add-detection-mode: 新增检测模式

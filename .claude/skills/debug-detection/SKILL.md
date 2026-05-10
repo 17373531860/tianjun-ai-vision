@@ -4,7 +4,7 @@ description: "诊断检测推理问题：模型加载失败、推理结果异常
 argument-hint: "[问题描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7, mcp__sentry, mcp__sequential-thinking"
 ---
 
 # debug-detection: 检测推理诊断 (v3.5.x)

@@ -4,7 +4,7 @@ description: "安全修改数据模型(ORM)：字段变更、SQLite 手动迁移
 argument-hint: "[要修改的模型或字段]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 ---
 
 # modify-model: 数据模型安全修改

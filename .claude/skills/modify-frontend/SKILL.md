@@ -4,7 +4,7 @@ description: "安全修改前端代码：Store 依赖、API 调用链、组件�
 argument-hint: "[要修改的组件或功能]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__playwright, mcp__context7"
 ---
 
 # modify-frontend: 前端安全修改分析（v3.5.x）

@@ -4,7 +4,7 @@ description: "诊断 v3.5.0+ 自定义导出与实时规则：模板 CRUD、Jinj
 argument-hint: "[问题现象]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash"
+allowed-tools: "Read, Grep, Glob, Bash, mcp__filesystem, mcp__sequential-thinking"
 ---
 
 # debug-export: 自定义导出与实时规则诊断

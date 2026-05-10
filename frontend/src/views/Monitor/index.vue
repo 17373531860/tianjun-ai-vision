@@ -1456,6 +1456,10 @@ const processChannelResult = (ch, d) => {
   chData.lastStepDurations = d.last_step_durations || {};
   chData.stepDurations = d.step_durations || {};
   chData.avgStepDurations = d.avg_step_durations || {};
+  // v3.5.x: PT 合并档（多工位场景预存数据，便于未来在多工位 UI 也使用）
+  chData.cycleSumStepDurations = d.cycle_sum_step_durations || {};
+  chData.lastCycleSumStepDurations = d.last_cycle_sum_step_durations || {};
+  chData.avgCycleSumStepDurations = d.avg_cycle_sum_step_durations || {};
   chData.detections = d.detections || [];
   chData.currentCycleSteps = d.current_cycle_steps || [];
   chData.backupCoveredLabels = d.backup_covered_labels || [];
@@ -2379,16 +2383,27 @@ const formatStepTime = (stepLabel) => {
 // 格式化步骤耗时（与 formatStepPT 行为一致，跟随 ptMode）
 const formatDuration = (stepLabel) => formatStepPT(stepLabel);
 
-// 格式化步骤检测时间（PT）— 根据系统设置的 ptMode 决定取哪一档
-//   avg     → 历史平均（默认，旧行为）
-//   last    → 最近一轮已结束 cycle 的该 step 耗时
-//   current → 当前正在跑的 cycle 中该 step 已累计耗时
+// 格式化步骤检测时间（PT）— 由 ptAggregate × ptMode 共同决定数据源
+//   ptAggregate:
+//     sum  → 同步骤一周期内多次出现按 SUM 合并（默认 v3.5.x）
+//     last → 仅取最后一段（旧行为）
+//   ptMode:
+//     avg     → 历史平均
+//     last    → 最近一个已结束 cycle 的取值
+//     current → 当前正在跑 cycle 的取值
 const formatStepPT = (stepLabel) => {
   const mode = systemStore.display?.monitor?.ptMode || 'avg';
+  const agg = systemStore.display?.monitor?.ptAggregate || 'sum';
   let src;
-  if (mode === 'last') src = lastStepDurations.value;
-  else if (mode === 'current') src = stepDurations.value;
-  else src = avgStepDurations.value;
+  if (agg === 'sum') {
+    if (mode === 'last') src = lastCycleSumStepDurations.value;
+    else if (mode === 'current') src = cycleSumStepDurations.value;
+    else src = avgCycleSumStepDurations.value;
+  } else {
+    if (mode === 'last') src = lastStepDurations.value;
+    else if (mode === 'current') src = stepDurations.value;
+    else src = avgStepDurations.value;
+  }
   const duration = src ? src[stepLabel] : undefined;
   if (duration === undefined || duration === null) return '--';
   return `${duration.toFixed(1)}s`;
@@ -3077,6 +3092,14 @@ const stepDurations = ref({});
 // 步骤平均耗时 (average PT)
 const avgStepDurations = ref({});
 
+// v3.5.x: PT 合并档（同步骤同周期内多次出现的 SUM）
+//   cycleSumStepDurations    → 当前正在跑 cycle 的 SUM（实时）
+//   lastCycleSumStepDurations → 最近一个已结束 cycle 的 SUM
+//   avgCycleSumStepDurations  → 历史最近 N 个 cycle 的 SUM 算术平均
+const cycleSumStepDurations = ref({});
+const lastCycleSumStepDurations = ref({});
+const avgCycleSumStepDurations = ref({});
+
 // 步骤间隔时间
 const stepIntervals = ref({});
 
@@ -3142,6 +3165,18 @@ const startPolling = () => {
       }
       if (data.avg_step_durations) {
         Object.assign(avgStepDurations.value, data.avg_step_durations);
+      }
+      // v3.5.x: PT 合并档 (cycle SUM) — 后端无对应 label 时,
+      // cycle_sum_step_durations 用整体替换以反映"周期切换后已重置"的真实状态;
+      // last/avg 用 merge 保持 label 累积式可读, 与 last_step_durations 风格一致.
+      if (data.cycle_sum_step_durations !== undefined) {
+        cycleSumStepDurations.value = data.cycle_sum_step_durations || {};
+      }
+      if (data.last_cycle_sum_step_durations) {
+        Object.assign(lastCycleSumStepDurations.value, data.last_cycle_sum_step_durations);
+      }
+      if (data.avg_cycle_sum_step_durations) {
+        Object.assign(avgCycleSumStepDurations.value, data.avg_cycle_sum_step_durations);
       }
       if (data.step_intervals) {
         Object.assign(stepIntervals.value, data.step_intervals);
@@ -3385,6 +3420,13 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
           stepDurations.value[label] = cfg.default_pt;
           if (avgStepDurations.value[label] === undefined) {
             avgStepDurations.value[label] = cfg.default_pt;
+          }
+          // v3.5.x: PT 合并档也用 default_pt 兜底（备用步骤实际未出现，无 SUM）
+          if (cycleSumStepDurations.value[label] === undefined) {
+            cycleSumStepDurations.value[label] = cfg.default_pt;
+          }
+          if (avgCycleSumStepDurations.value[label] === undefined) {
+            avgCycleSumStepDurations.value[label] = cfg.default_pt;
           }
         }
       }
@@ -3696,6 +3738,10 @@ const resetCounters = async () => {
   stepScreenshots.value = {};
   stepDurations.value = {};
   avgStepDurations.value = {};
+  // v3.5.x: PT 合并档同步清空
+  cycleSumStepDurations.value = {};
+  lastCycleSumStepDurations.value = {};
+  avgCycleSumStepDurations.value = {};
   stepIntervals.value = {};
   stepDetectionTimes.value = {};
   Object.keys(cachedScreenshotUrls).forEach(k => delete cachedScreenshotUrls[k]);
