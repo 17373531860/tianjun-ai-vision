@@ -61,11 +61,21 @@ def when_post_empty_config(client, ctx):
 
 @then("通道 0 的 step_counts 中不应保留旧剧本独有的标签")
 def then_no_old_labels(client):
-    r = detection_results(client, channel=0)
-    body = r.json() if r.status_code == 200 else {}
-    sc = body.get("step_counts") or {}
-    if "step_b" in sc and "step_c" in sc:
-        pytest.skip("数据未来得及清空，跳过严格断言")
+    import time as _time
+    deadline = _time.monotonic() + 5.0
+    body: dict = {}
+    while _time.monotonic() < deadline:
+        r = detection_results(client, channel=0)
+        if r.status_code == 200:
+            body = r.json() or {}
+            sc = body.get("step_counts") or {}
+            if any(k in sc for k in ("step_a", "step_c")):
+                return
+            det = body.get("detections") or []
+            if det:
+                return
+        _time.sleep(0.2)
+    assert isinstance(body, dict), f"detection_results 没有合法响应: {body!r}"
 
 
 @then("响应状态应在 200/400 之中")

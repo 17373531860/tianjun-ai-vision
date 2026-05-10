@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import socket
 import time
+import uuid
 from contextlib import contextmanager
 from typing import Iterator
 
@@ -18,8 +19,8 @@ import pytest
 import requests
 
 
-BASE_URL = os.environ.get("E2E_BASE_URL", "http://localhost:6001")
-API_URL = os.environ.get("E2E_API_URL", "http://localhost:8001")
+BASE_URL = os.environ.get("E2E_BASE_URL") or os.environ.get("TIANJUN_FRONTEND_URL", "http://localhost:6001")
+API_URL = os.environ.get("E2E_API_URL") or os.environ.get("TIANJUN_BACKEND_URL", "http://localhost:8001")
 E2E_PREFIX = "__e2e_"
 
 
@@ -69,7 +70,9 @@ def page_with_app(page, base_url):
 
 @pytest.fixture(autouse=True)
 def cleanup_e2e_resources(api_url):
-    """每个测试前后都清一次以 __e2e_ 开头的模板和规则"""
+    """每个测试准备一个激活项目，结束清理所有 __e2e_ 资源。"""
+    _cleanup_resources(api_url)
+    _ensure_active_project(api_url)
     yield
     _cleanup_resources(api_url)
 
@@ -108,6 +111,49 @@ def _cleanup_resources(api_url: str):
                     )
     except Exception as e:
         print(f"[cleanup] templates 清理失败: {e}")
+
+    try:
+        r = requests.get(f"{api_url}/api/v1/projects", timeout=5)
+        if r.status_code == 200:
+            for project in _list_field(r.json()):
+                if (project.get("name") or "").startswith(E2E_PREFIX):
+                    requests.delete(
+                        f"{api_url}/api/v1/projects/{project['id']}",
+                        timeout=5,
+                    )
+    except Exception as e:
+        print(f"[cleanup] projects 清理失败: {e}")
+
+
+def _ensure_active_project(api_url: str):
+    """创建并激活一个最小项目，让 Data/Alarm 等依赖当前项目的页面可渲染主内容。"""
+    name = f"{E2E_PREFIX}project_{uuid.uuid4().hex[:8]}"
+    payload = {
+        "name": name,
+        "task_type": "detection",
+        "logic_mode": "sequential",
+        "pipeline_config": {},
+        "steps_config": [
+            {"id": 1, "label": "step_a", "name": "步骤A", "enabled": True},
+            {"id": 2, "label": "step_b", "name": "步骤B", "enabled": True},
+        ],
+        "events_config": [
+            {"id": 1, "name": "合格", "type": "ok", "enabled": True},
+            {"id": 2, "name": "NG", "type": "ng", "enabled": True},
+        ],
+        "counters_config": [],
+        "alarm_config": {},
+        "detection_config": {},
+        "data_config": {},
+        "default_model_id": None,
+        "model_format": "pytorch_fp32",
+    }
+    r = requests.post(f"{api_url}/api/v1/projects", json=payload, timeout=10)
+    r.raise_for_status()
+    project = r.json()
+    activate = requests.post(f"{api_url}/api/v1/projects/{project['id']}/activate", timeout=10)
+    activate.raise_for_status()
+    return project
 
 
 @pytest.fixture

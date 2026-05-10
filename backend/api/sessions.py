@@ -468,7 +468,8 @@ def get_sessions_by_date(
         cycle_query = db.query(DetectionCycle).filter(
             DetectionCycle.session_id.in_(session_ids)
         )
-        cycle_time_col = func.strftime('%H:%M', DetectionCycle.start_time)
+        from backend.db.sql_compat import hour_minute
+        cycle_time_col = hour_minute(DetectionCycle.start_time)
         if start_hour <= end_hour:
             cycle_query = cycle_query.filter(
                 and_(

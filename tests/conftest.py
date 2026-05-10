@@ -23,6 +23,19 @@ os.environ.setdefault("TIANJUN_TEST_MODE", "1")
 # 挂载 synthetic 虚拟检测 API（backend/main.py）；不影响生产默认（未设则无路由）
 os.environ.setdefault("RUNTIME_MODE", "test")
 
+# v3.7.0: 如果设置了 DATABASE_URL（外部 PG），则 schema 隔离用一个独立 schema
+# 避免开发库被 wipe；conftest 启动时清空再建表，session 结束 drop schema。
+_PG_DSN = os.environ.get("DATABASE_URL", "").strip()
+_PG_SCHEMA = os.environ.get("TIANJUN_TEST_PG_SCHEMA", "tianjun_test").strip() if _PG_DSN.startswith("postgresql") else None
+
+# 关键：把 search_path 通过 libpq options 注入到 DSN，
+# 这样每个新连接（含后台线程）天生就在测试 schema 里，无需 listener 时序协调。
+if _PG_SCHEMA and "options=" not in _PG_DSN:
+    sep = "&" if "?" in _PG_DSN else "?"
+    os.environ["DATABASE_URL"] = (
+        f"{_PG_DSN}{sep}options=-csearch_path%3D{_PG_SCHEMA}%2Cpublic"
+    )
+
 import sys  # noqa: E402
 
 # 把项目根加进 sys.path，让 backend.* 可导入
@@ -51,9 +64,70 @@ for _sub in ("counters", "uploads", "recordings", "exports"):
 from backend.db.database import Base, engine, SessionLocal  # noqa: E402
 from backend.models import models as _orm_models  # noqa: F401, E402
 from backend.models import export_models as _export_models  # noqa: F401, E402
+from backend.models import plugin_models as _plugin_models  # noqa: F401, E402
 
-# 建表（在干净的临时 DB 上）
+
+def _pg_reset_schema() -> None:
+    """PG 模式：清空测试 schema 后重建（隔离开发库）。
+
+    用一个**绕过 search_path 的独立连接**在 public 上下文里 drop+create schema。
+    之后所有 engine.connect()/SessionLocal() 都通过 DSN 里的 options 自动落在测试 schema。
+    """
+    if not _PG_SCHEMA:
+        return
+    import psycopg2
+    base_dsn = _PG_DSN  # 不带 options 的原始 DSN
+    raw = psycopg2.connect(base_dsn.replace("postgresql+psycopg2://", "postgresql://"))
+    try:
+        raw.autocommit = True
+        cur = raw.cursor()
+        cur.execute(f'DROP SCHEMA IF EXISTS "{_PG_SCHEMA}" CASCADE')
+        cur.execute(f'CREATE SCHEMA "{_PG_SCHEMA}"')
+        cur.close()
+    finally:
+        raw.close()
+    # 把可能预热过的池清掉，确保后续连接读新的 DSN options
+    engine.dispose()
+
+
+_pg_reset_schema()
+
+# 建表（在干净的临时 DB 上 / PG 测试 schema 上）
 Base.metadata.create_all(bind=engine)
+
+
+def _seed_dummy_project() -> None:
+    """给测试库 seed 一个最小项目，让 GET /api/v1/projects 至少有 1 条。
+
+    避免某些 BDD 在"项目列表为空"时 skip。
+    """
+    from backend.models.models import Project
+    session = SessionLocal()
+    try:
+        if session.query(Project).count() == 0:
+            session.add(Project(
+                name="__bdd_seed_project__",
+                task_type="detection",
+                logic_mode="sequential",
+                pipeline_config={},
+                steps_config=[
+                    {"id": 1, "label": "step_a", "name": "步骤A", "enabled": True},
+                ],
+                events_config=[],
+                counters_config=[],
+                alarm_config={},
+                detection_config={},
+                data_config={},
+                is_active=False,
+            ))
+            session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
+
+
+_seed_dummy_project()
 
 
 # ============================================================

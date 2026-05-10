@@ -1,0 +1,58 @@
+{
+  "PLUGIN_MANIFEST_NOT_FOUND": {
+    "zh-CN": "插件包缺少 plugin.json，请重新安装完整插件包。",
+    "en-US": "The plugin package is missing plugin.json. Reinstall the complete plugin package."
+  },
+  "PLUGIN_MANIFEST_SCHEMA_FAIL": {
+    "zh-CN": "插件清单格式不符合规范，请联系插件作者重新打包。",
+    "en-US": "The plugin manifest does not match the schema. Ask the plugin author to repackage it."
+  },
+  "PLUGIN_SIGNATURE_NOT_FOUND": {
+    "zh-CN": "插件包缺少 signature.bin，当前包可能未签名。",
+    "en-US": "The plugin package is missing signature.bin and may be unsigned."
+  },
+  "PLUGIN_SIGNATURE_FAIL": {
+    "zh-CN": "插件签名校验失败，插件可能已被篡改。",
+    "en-US": "Plugin signature verification failed. The plugin may have been tampered with."
+  },
+  "PLUGIN_FILES_DIGEST_FAIL": {
+    "zh-CN": "插件文件摘要不一致，插件内容可能已被修改。",
+    "en-US": "Plugin file digest mismatch. The plugin content may have been modified."
+  },
+  "PLUGIN_CUSTOMER_MISMATCH": {
+    "zh-CN": "插件客户码与当前授权不一致，无法加载。",
+    "en-US": "The plugin customer code does not match the current license."
+  },
+  "PLUGIN_CUSTOMER_HMAC_FAIL": {
+    "zh-CN": "插件客户绑定校验失败，请联系主作者重新签名。",
+    "en-US": "Plugin customer binding verification failed. Ask the master signer to re-sign it."
+  },
+  "PLUGIN_LICENSE_INVALID": {
+    "zh-CN": "当前授权无效，插件未加载。",
+    "en-US": "The current license is invalid. The plugin was not loaded."
+  },
+  "PLUGIN_FEATURE_DISABLED": {
+    "zh-CN": "当前授权未开通插件功能。",
+    "en-US": "The current license does not enable plugin features."
+  },
+  "PLUGIN_MAIN_VERSION_UNSUPPORTED": {
+    "zh-CN": "插件不支持当前主程序版本，请升级主程序或更换插件版本。",
+    "en-US": "This plugin does not support the current host version. Upgrade the host or use another plugin version."
+  },
+  "PLUGIN_LOAD_TIMEOUT": {
+    "zh-CN": "插件加载超时，已自动跳过。",
+    "en-US": "Plugin loading timed out and was skipped."
+  },
+  "PLUGIN_RUNTIME_ERROR": {
+    "zh-CN": "插件运行时出错，主程序已隔离该错误。",
+    "en-US": "The plugin raised a runtime error. The host isolated the failure."
+  },
+  "PLUGIN_HOOK_ERROR": {
+    "zh-CN": "插件 Hook 执行失败，主流程已继续。",
+    "en-US": "A plugin hook failed. The main workflow continued."
+  },
+  "PLUGIN_QUARANTINED": {
+    "zh-CN": "插件连续失败次数过多，已被隔离。",
+    "en-US": "The plugin failed too many times and has been quarantined."
+  }
+}

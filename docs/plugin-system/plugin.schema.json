@@ -1,0 +1,360 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tianjun-ai.com/schemas/plugin.json/v1",
+  "title": "TianJun AI Vision Plugin Manifest",
+  "description": "天骏 AI 视觉系统插件清单 (plugin.json) v1 规范。在 plugin.json 顶部加 `\"$schema\": \"../../docs/plugin-system/plugin.schema.json\"` 可以让 VSCode 自动校验。完整字段说明见 docs/plugin-system/design/01_manifest_schema.md",
+  "type": "object",
+  "required": [
+    "manifest_version",
+    "name",
+    "customer_code",
+    "plugin_version",
+    "description",
+    "author",
+    "tier",
+    "capabilities",
+    "main_version_min",
+    "created_at",
+    "signed_at",
+    "signed_by",
+    "files_digest"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "可选: VSCode 自动校验时填路径或 URL"
+    },
+    "manifest_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Manifest 版本号, v1 期间固定为 1"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[^\\n\\r]+$",
+      "description": "插件显示名称, 客户友好"
+    },
+    "customer_code": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{2,19}$",
+      "description": "客户码: 全小写字母+数字+连字符, 字母开头, 3-20 字符. 必须在 docs/plugin-system/customer-codes.md 注册"
+    },
+    "plugin_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$",
+      "description": "SemVer 2.0, 例: 1.0.0 或 1.0.0-rc1"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "author": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "homepage": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://",
+      "description": "插件主页, 必须 https"
+    },
+    "license_text": {
+      "type": "string",
+      "maxLength": 8192,
+      "description": "插件 license 全文 (注意与天骏主程序 license 区分)"
+    },
+    "tier": {
+      "type": "integer",
+      "enum": [1, 2, 3],
+      "description": "1=主题, 2=UI, 3=全栈"
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "description": "枚举见 design/01 §3.4: theme.css, theme.logo, theme.favicon, theme.app_title, theme.css_variables, theme.hidden_menus, frontend.routes, frontend.menus, frontend.stores, frontend.i18n, frontend.static, backend.routers, backend.adapters, backend.hooks, backend.tables, backend.threads, backend.export.templates, backend.export.realtime_rules, backend.export.field_resolvers, backend.export.renderers, backend.export.triggers"
+      }
+    },
+    "main_version_min": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "支持的最低主程序版本"
+    },
+    "main_version_max": {
+      "type": "string",
+      "pattern": "^\\d+\\.(\\d+|x)(\\.(\\d+|x))?$",
+      "description": "支持的最高主程序版本, 支持 x 通配, 例: 3.x"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "signed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "由 sign-plugin.py 写入"
+    },
+    "signed_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "签名者身份, 例: tianjun-ai-master"
+    },
+    "files_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "插件包内业务文件的 SHA256（排除 plugin.json 与 signature.bin，避免自引用循环；manifest 本身由 RSA 签名保护）"
+    },
+    "frontend": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Tier 1+ 用",
+      "properties": {
+        "entry": {
+          "type": "string",
+          "description": "前端入口 ESM, 例: frontend/index.esm.js (仅 Tier 2+)"
+        },
+        "theme": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "css": { "type": "string", "description": "主题 CSS 文件路径, 例: frontend/theme.css" },
+            "logo": { "type": "string" },
+            "favicon": { "type": "string" },
+            "app_title": { "type": "string", "maxLength": 100 },
+            "css_variables": {
+              "type": "object",
+              "patternProperties": { "^--[a-z][a-z0-9-]*$": { "type": "string" } },
+              "additionalProperties": false,
+              "description": "主程序约定的 --tj-* 变量覆盖"
+            }
+          }
+        },
+        "i18n": {
+          "type": "object",
+          "patternProperties": {
+            "^(zh-CN|zh-TW|en-US|ja-JP|ko-KR)$": { "type": "string" }
+          },
+          "additionalProperties": false,
+          "description": "key=locale, value=json 文件路径"
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "name", "component"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "路径段, 不带斜杠" },
+              "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+              "component": { "type": "string", "description": "插件 entry 中的导出名" },
+              "menu_label": { "type": "string", "maxLength": 50 },
+              "icon": { "type": "string" },
+              "order": { "type": "integer" },
+              "permissions": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "menus": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label", "path"],
+            "properties": {
+              "label": { "type": "string" },
+              "path": { "type": "string" },
+              "icon": { "type": "string" },
+              "order": { "type": "integer" },
+              "i18n_key": { "type": "string" }
+            }
+          }
+        },
+        "hidden_menus": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "要隐藏的主程序菜单 path. 注意: /monitor /settings /activation 是 RESERVED, 不允许隐藏 (design 04 §3.4)"
+        },
+        "stores": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "module"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^plugin-", "description": "Pinia store id, 必须 plugin- 前缀" },
+              "module": { "type": "string" }
+            }
+          }
+        },
+        "static_dir": {
+          "type": "string",
+          "description": "静态资源根目录, 由 GET /api/v1/plugins/active/assets/{path} 提供"
+        }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "required": ["entry"],
+      "additionalProperties": false,
+      "description": "仅 Tier 3 用",
+      "properties": {
+        "entry": {
+          "type": "string",
+          "description": "Python 入口, 例: backend/__init__.py, 必须暴露 register_plugin(app, registry, license_payload, host)"
+        },
+        "routers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["module", "attr"],
+            "properties": {
+              "module": { "type": "string", "description": "Python 模块路径, 相对插件根" },
+              "attr": { "type": "string", "description": "FastAPI APIRouter 实例名" },
+              "subpath": { "type": "string", "description": "挂在 /api/v1/plugins/{cc}/<subpath>" }
+            }
+          }
+        },
+        "adapters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "class_name", "module"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^plugin-", "description": "MES adapter name, 必须 plugin- 前缀避免与主程序冲突" },
+              "class_name": { "type": "string" },
+              "module": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "hooks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "module", "function"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "startup",
+                  "shutdown",
+                  "cycle_end",
+                  "session_end",
+                  "box_complete",
+                  "scan_received",
+                  "event_trigger",
+                  "alarm_trigger"
+                ]
+              },
+              "module": { "type": "string" },
+              "function": { "type": "string" },
+              "phase": { "type": "string", "description": "cycle_end 用: persist/post_cycle/realtime_export/realtime_rule/cluster_aggregate/mes_gateway_push/cleanup/notify_done" },
+              "when": { "type": "string", "enum": ["pre", "post"], "description": "phase 内的执行时机" },
+              "priority": { "type": "integer", "minimum": 0, "maximum": 1000, "description": "同 type+phase+when 多 hook 时按 priority 升序" }
+            }
+          }
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "module", "class_name"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^p_", "description": "插件表名, 必须 p_ 前缀" },
+              "module": { "type": "string" },
+              "class_name": { "type": "string", "pattern": "^Plugin", "description": "ORM 类名, 必须 Plugin 前缀" }
+            }
+          }
+        },
+        "background_threads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "module", "function"],
+            "properties": {
+              "name": { "type": "string" },
+              "module": { "type": "string" },
+              "function": { "type": "string" },
+              "auto_start": { "type": "boolean", "default": true }
+            }
+          }
+        }
+      }
+    },
+    "requires": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gpu": { "type": "boolean", "default": false, "description": "默认 false (CPU). 声明 true 后插件可用 CUDA" },
+        "cuda": { "type": ["string", "null"], "description": "需要的 CUDA 版本, 例: 12.1" },
+        "python_version": { "type": "string", "description": "需要的 Python 版本范围, 例: >=3.10,<3.11" },
+        "python_packages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "version": { "type": "string" }
+            }
+          },
+          "description": "插件运行时依赖, 主程序不会自动 pip install, 需打到 wheels/"
+        },
+        "system_libs": { "type": "array", "items": { "type": "string" } },
+        "main_features": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "default_config": {
+      "type": "object",
+      "patternProperties": {
+        "^plugin\\.[a-z][a-z0-9-]*\\..+$": {}
+      },
+      "additionalProperties": false,
+      "description": "默认配置, key 必须 plugin.{customer_code}.* 开头. 安装时写入 SystemConfig (仅当 key 不存在), 见 design 03 §6"
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu_threshold_warn_pct": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 },
+        "memory_threshold_warn_mb": { "type": "integer", "minimum": 50, "default": 500 },
+        "max_hook_duration_ms": { "type": "integer", "minimum": 100, "default": 5000 },
+        "background_thread_max_count": { "type": "integer", "minimum": 0, "maximum": 10, "default": 3 }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "插件作者自由扩展 (主程序不读)"
+    },
+    "export": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "templates": {
+          "type": "array",
+          "description": "Jinja2 模板列表, 见 design 06 §6.7",
+          "items": {
+            "type": "object",
+            "required": ["name", "file"],
+            "properties": {
+              "name": { "type": "string" },
+              "file": { "type": "string" },
+              "format": { "type": "string", "enum": ["txt", "csv", "docx", "xlsx", "pdf"] }
+            }
+          }
+        },
+        "realtime_rules": { "type": "array", "items": { "type": "object" } },
+        "field_resolvers": { "type": "array", "items": { "type": "object" } },
+        "renderers": { "type": "array", "items": { "type": "object" } },
+        "triggers": { "type": "array", "items": { "type": "object" } }
+      }
+    }
+  }
+}

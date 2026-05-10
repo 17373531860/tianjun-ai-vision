@@ -1,0 +1,19 @@
+/* Tier 1 示例：只允许覆盖主题变量和插件安全命名空间下的选择器。 */
+:root {
+  --tj-primary: #38bdf8;
+  --tj-primary-hover: #0ea5e9;
+  --tj-bg-page: #020617;
+  --tj-text-main: #e2e8f0;
+}
+
+.tj-app-shell,
+.tj-layout {
+  background:
+    radial-gradient(circle at 16% 16%, rgba(56, 189, 248, 0.18), transparent 30%),
+    var(--tj-bg-page);
+}
+
+.tj-brand-name {
+  letter-spacing: 0.04em;
+  color: var(--tj-primary);
+}

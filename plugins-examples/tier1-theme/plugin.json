@@ -1,0 +1,61 @@
+{
+  "manifest_version": 1,
+  "name": "ACME White Label Theme",
+  "customer_code": "internal-demo",
+  "plugin_version": "1.0.0",
+  "description": "Tier 1 示例：替换品牌色、Logo、Favicon、标题与少量 i18n 文案。",
+  "author": "tianjun-ai-master",
+  "tier": 1,
+  "capabilities": [
+    "theme.css",
+    "theme.logo",
+    "theme.favicon",
+    "theme.app_title",
+    "theme.css_variables",
+    "theme.hidden_menus",
+    "frontend.i18n",
+    "frontend.static"
+  ],
+  "main_version_min": "3.7.0",
+  "main_version_max": "3.x",
+  "created_at": "2026-05-09T00:00:00+00:00",
+  "signed_at": "1970-01-01T00:00:00+00:00",
+  "signed_by": "unsigned-dev-build",
+  "files_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "frontend": {
+    "theme": {
+      "css": "frontend/theme.css",
+      "logo": "frontend/assets/logo.svg",
+      "favicon": "frontend/assets/favicon.svg",
+      "app_title": "ACME AI Vision",
+      "css_variables": {
+        "--tj-primary": "#38bdf8",
+        "--tj-primary-hover": "#0ea5e9",
+        "--tj-bg-page": "#020617",
+        "--tj-text-main": "#e2e8f0"
+      }
+    },
+    "i18n": {
+      "zh-CN": "frontend/i18n/zh-CN.json",
+      "en-US": "frontend/i18n/en-US.json"
+    },
+    "hidden_menus": [
+      "/alarm"
+    ],
+    "static_dir": "frontend/assets"
+  },
+  "requires": {
+    "gpu": false,
+    "python_packages": []
+  },
+  "runtime": {
+    "cpu_threshold_warn_pct": 5,
+    "memory_threshold_warn_mb": 80,
+    "max_hook_duration_ms": 1000,
+    "background_thread_max_count": 0
+  },
+  "metadata": {
+    "example": true,
+    "doc": "docs/plugin-system/design/04_tier1_theme.md"
+  }
+}

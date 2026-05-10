@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tianjun_pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tianjun}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tianjun_dev_pwd}
+      POSTGRES_DB: ${POSTGRES_DB:-tianjun}
+      TZ: Asia/Shanghai
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - tianjun_pgdata:/var/lib/postgresql/data
+      - ./scripts/db/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tianjun} -d ${POSTGRES_DB:-tianjun}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  tianjun_pgdata:
+    name: tianjun_pgdata

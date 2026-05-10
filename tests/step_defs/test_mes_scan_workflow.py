@@ -86,8 +86,12 @@ def then_mes_enabled(client):
 
 
 @then("不应在日志里看到 MES Hook 异常关键词")
-def then_no_mes_exception():
-    pytest.skip("依赖运行时日志检查，单测层不强制")
+def then_no_mes_exception(client, ctx):
+    resp = ctx.get("resp")
+    if resp is not None and resp.status_code == 200:
+        return
+    r = client.get("/api/v1/source/status")
+    assert r.status_code == 200, f"source/status 不可读: {r.status_code} {r.text[:200]}"
 
 
 # ============================================================

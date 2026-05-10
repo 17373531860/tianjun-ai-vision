@@ -1,0 +1,172 @@
+name: DB Matrix (SQLite + PostgreSQL)
+
+# 守护 v3.7.0 起的 dialect-aware 数据库层契约
+# - 业务代码必须同时跑得通 SQLite (单机部署) 和 PostgreSQL (多客户)
+# - Alembic baseline 在 PG 上必须能正常 upgrade
+# - SQL 兼容层 (sql_compat.py) 必须覆盖所有 strftime/datetime 调用点
+
+on:
+  push:
+    branches: [main, "feat/plugin-config"]
+    paths:
+      - "backend/**"
+      - "alembic/**"
+      - "alembic.ini"
+      - "scripts/db/**"
+      - "tests/**"
+      - "docs/database-migration/**"
+      - ".github/workflows/db-matrix.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "alembic/**"
+      - "alembic.ini"
+      - "scripts/db/**"
+      - "tests/**"
+      - "docs/database-migration/**"
+      - ".github/workflows/db-matrix.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-matrix:
+    name: ${{ matrix.db }} · ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
+        suite: [unit-bdd]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tianjun
+          POSTGRES_PASSWORD: tianjun_test
+          POSTGRES_DB: tianjun_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      RUNTIME_MODE: test
+      TIANJUN_TEST_MODE: 1
+      TIANJUN_TEST_PG_SCHEMA: tianjun_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install system deps for opencv
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+            postgresql-client
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-bdd httpx jsonschema cryptography
+
+      # ----------------------------------------------------------
+      # PG 专属准备: 等服务就绪 + 创建扩展 + 跑 Alembic baseline
+      # ----------------------------------------------------------
+      - name: (PG) Wait for postgres + create extensions
+        if: matrix.db == 'postgres'
+        env:
+          PGPASSWORD: tianjun_test
+        run: |
+          for i in $(seq 1 30); do
+            if pg_isready -h 127.0.0.1 -p 5433 -U tianjun; then
+              echo "postgres ready (attempt $i)"
+              break
+            fi
+            sleep 2
+          done
+          psql -h 127.0.0.1 -p 5433 -U tianjun -d tianjun_test \
+               -f scripts/db/initdb/01-extensions.sql
+
+      - name: (PG) Run Alembic baseline upgrade
+        if: matrix.db == 'postgres'
+        env:
+          DATABASE_URL: "postgresql+psycopg2://tianjun:tianjun_test@127.0.0.1:5433/tianjun_test"
+        run: |
+          alembic upgrade head
+          # sanity: 至少要有 plugins / projects / detection_sessions 三张核心表
+          PGPASSWORD=tianjun_test psql -h 127.0.0.1 -p 5433 -U tianjun -d tianjun_test \
+            -c "\dt public.*" | tee /tmp/pg_tables.txt
+          grep -E '\bplugins\b'            /tmp/pg_tables.txt > /dev/null
+          grep -E '\bprojects\b'           /tmp/pg_tables.txt > /dev/null
+          grep -E '\bdetection_sessions\b' /tmp/pg_tables.txt > /dev/null
+          echo "[OK] Alembic baseline on PG schema"
+
+      # ----------------------------------------------------------
+      # 跑测试
+      # ----------------------------------------------------------
+      - name: (SQLite) Run unit + BDD
+        if: matrix.db == 'sqlite'
+        run: |
+          mkdir -p test-results
+          python -m pytest \
+            tests/plugin_system/ \
+            tests/test_synthetic_full_flow.py \
+            tests/test_synthetic_project_restore.py \
+            tests/step_defs/ \
+            -v --tb=short --maxfail=10 \
+            --junitxml=test-results/sqlite.xml
+
+      - name: (PG) Run unit + BDD
+        if: matrix.db == 'postgres'
+        env:
+          DATABASE_URL: "postgresql+psycopg2://tianjun:tianjun_test@127.0.0.1:5433/tianjun_test"
+        run: |
+          mkdir -p test-results
+          python -m pytest \
+            tests/plugin_system/ \
+            tests/test_synthetic_full_flow.py \
+            tests/test_synthetic_project_restore.py \
+            tests/step_defs/ \
+            -v --tb=short --maxfail=10 \
+            --junitxml=test-results/postgres.xml
+
+      # ----------------------------------------------------------
+      # PG 专属: 验证 sqlite_to_pg.py 数据迁移脚本可跑
+      # ----------------------------------------------------------
+      - name: (PG) Smoke-test sqlite→pg data migrator (dry-run)
+        if: matrix.db == 'postgres'
+        env:
+          DATABASE_URL: "postgresql+psycopg2://tianjun:tianjun_test@127.0.0.1:5433/tianjun_test"
+        run: |
+          # 用一个空 SQLite 做 dry-run, 验证脚本入口与表枚举不报错
+          python -c "import sqlite3; sqlite3.connect('/tmp/empty.db').close()"
+          python scripts/db/sqlite_to_pg.py \
+            --sqlite /tmp/empty.db \
+            --dry-run
+
+      # ----------------------------------------------------------
+      # 上传 junit
+      # ----------------------------------------------------------
+      - name: Upload junit
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-matrix-${{ matrix.db }}-junit
+          path: test-results/
+          retention-days: 7

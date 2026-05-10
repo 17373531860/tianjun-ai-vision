@@ -20,7 +20,7 @@ def _open_realtime_rules_dialog(page, base_url):
     time.sleep(0.5)
     page.locator("button:has-text('实时规则')").first.click(timeout=5000)
     time.sleep(0.7)
-    dialog = page.locator(".el-dialog:visible").first
+    dialog = page.locator(".rt-rules-dialog:visible").last
     dialog.wait_for(state="visible", timeout=5000)
     return dialog
 
@@ -63,9 +63,15 @@ def test_API_创建规则后_UI_重打开能看到(page, base_url, api_helper):
     })
     assert r.status_code == 200, f"创建规则失败: {r.text}"
 
-    # 打开对话框
+    # 打开对话框并等待异步列表刷新完成
     dialog = _open_realtime_rules_dialog(page, base_url)
-    time.sleep(0.5)
-    body = dialog.inner_text(timeout=3000)
+    try:
+        page.locator(".rt-rules-dialog:visible text=__e2e_simple_rule").first.wait_for(
+            state="visible",
+            timeout=6000,
+        )
+    except Exception:
+        pass
+    body = dialog.inner_text(timeout=5000)
     assert "__e2e_simple_rule" in body, \
         f"UI 应显示创建的规则 __e2e_simple_rule; body={body[:300]}"

@@ -19,8 +19,8 @@ def test_settings_pt_aggregate_words(page, base_url):
 def test_settings_three_tabs_present(page, base_url):
     sp = SettingsPage(page, base_url).goto()
     tabs = sp.get_visible_tabs()
-    assert set(tabs) == {"显示设置", "检测框设置", "性能设置"}, \
-        f"Settings 页应有 3 个 tab, 实际 {tabs}"
+    assert set(tabs) == {"显示设置", "检测框设置", "性能设置", "插件管理"}, \
+        f"Settings 页应有 4 个 tab, 实际 {tabs}"
 
 
 def test_settings_operator_table_present(page, base_url):
