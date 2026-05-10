@@ -66,15 +66,20 @@ def synthetic_start(body: SyntheticStartBody):
 
     mgr = _get_mgr(body.channel)
 
-    if body.scenario_json is not None:
-        spec = body.scenario_json
-        mgr.start_synthetic(scenario_dict=spec, fps=body.fps)
-    elif body.scenario:
-        mgr.start_synthetic(scenario=body.scenario, fps=body.fps)
-        spec = getattr(mgr, "_synthetic_spec", None) or {}
-    else:
-        spec = {"name": "empty", "timeline": []}
-        mgr.start_synthetic(scenario_dict=spec, fps=body.fps)
+    try:
+        if body.scenario_json is not None:
+            spec = body.scenario_json
+            mgr.start_synthetic(scenario_dict=spec, fps=body.fps)
+        elif body.scenario:
+            mgr.start_synthetic(scenario=body.scenario, fps=body.fps)
+            spec = getattr(mgr, "_synthetic_spec", None) or {}
+        else:
+            spec = {"name": "empty", "timeline": []}
+            mgr.start_synthetic(scenario_dict=spec, fps=body.fps)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (ValueError, KeyError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if body.with_project:
         labels = body.project_steps or _collect_labels_from_timeline(spec.get("timeline", []))

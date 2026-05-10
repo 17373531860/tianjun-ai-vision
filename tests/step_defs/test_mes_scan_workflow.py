@@ -86,3 +86,48 @@ def then_mes_enabled(client):
 @then("不应在日志里看到 MES Hook 异常关键词")
 def then_no_mes_exception():
     pytest.skip("依赖运行时日志检查，单测层不强制")
+
+
+# ============================================================
+# 扩展场景：新增 step
+# ============================================================
+@when("我 GET /api/v1/mes/workorders")
+def when_get_workorders(client, ctx):
+    ctx["resp"] = client.get("/api/v1/mes/workorders")
+
+
+@when("我 GET /api/v1/mes/workpieces?limit=1")
+def when_get_workpieces(client, ctx):
+    ctx["resp"] = client.get("/api/v1/mes/workpieces?limit=1")
+
+
+@when("我 PUT /api/v1/mes/config 一个 disabled 配置")
+def when_put_disabled(client, ctx):
+    ctx["resp"] = client.put("/api/v1/mes/config", json={
+        "enabled": False,
+        "endpoint": "http://localhost:0/mes",
+    })
+
+
+@when("我 GET /api/v1/mes/adapters")
+def when_get_adapters(client, ctx):
+    ctx["resp"] = client.get("/api/v1/mes/adapters")
+
+
+@when("我 PUT /api/v1/mes/config 一个不带 endpoint 的配置")
+def when_put_no_endpoint(client, ctx):
+    ctx["resp"] = client.put("/api/v1/mes/config", json={"enabled": True})
+
+
+@then("响应状态应在 200/404 之中")
+def then_status_2xx_404(ctx):
+    resp = ctx["resp"]
+    assert resp.status_code in (200, 404), \
+        f"实际 {resp.status_code} body={resp.text[:200]}"
+
+
+@then("响应状态应在 200/400/422 之中")
+def then_status_2xx_4xx(ctx):
+    resp = ctx["resp"]
+    assert resp.status_code in (200, 400, 422), \
+        f"实际 {resp.status_code} body={resp.text[:200]}"

@@ -12,6 +12,7 @@ from .project_page import ProjectPage
 from .source_page import SourcePage
 from .data_page import DataPage
 from .settings_page import SettingsPage
+from .alarm_page import AlarmPage
 
 __all__ = [
     "BasePage",
@@ -20,4 +21,5 @@ __all__ = [
     "SourcePage",
     "DataPage",
     "SettingsPage",
+    "AlarmPage",
 ]

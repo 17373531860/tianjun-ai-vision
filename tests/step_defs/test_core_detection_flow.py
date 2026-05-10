@@ -126,3 +126,45 @@ def then_status(ctx, code):
 def then_source_stopped(client):
     r = client.get("/api/v1/test/synthetic/state?channel=0")
     assert r.status_code == 200
+
+
+# ============================================================
+# 扩展场景：新增 step
+# ============================================================
+@when("我再次以同一剧本启动 synthetic")
+def when_start_again_same(client, ctx):
+    scenario = ctx.get("scenario") or "smoke_static_label.json"
+    ctx["resp"] = start_synthetic(client, scenario=scenario)
+
+
+@when(parsers.parse("我等待 {secs:f} 秒"))
+def when_sleep(secs):
+    import time
+    time.sleep(secs)
+
+
+@then("GET /api/v1/test/synthetic/state 的 frame_seq 应该 > 0")
+def then_frame_seq_gt_0(client):
+    r = client.get("/api/v1/test/synthetic/state?channel=0")
+    assert r.status_code == 200
+    seq = (r.json() or {}).get("frame_seq", 0)
+    assert seq > 0, f"frame_seq={seq} 应 > 0"
+
+
+@when("我 GET /api/v1/source/status")
+def when_get_source_status(client, ctx):
+    ctx["resp"] = client.get("/api/v1/source/status?channel=0")
+
+
+@when(parsers.parse('我用剧本 "{scenario}" 启动 synthetic + 项目 (logic_mode={mode})'))
+def when_start_synth_with_logic_mode(client, ctx, scenario, mode):
+    ctx["resp"] = start_synthetic(client, scenario=scenario, with_project=True, logic_mode=mode)
+
+
+@then("detection/results 的 detections 长度应 >= 0")
+def then_detections_len_ge_0(client):
+    r = detection_results(client, channel=0)
+    assert r.status_code == 200
+    body = r.json()
+    dets = body.get("detections") or []
+    assert isinstance(dets, list)

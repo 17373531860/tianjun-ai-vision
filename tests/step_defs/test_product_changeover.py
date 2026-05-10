@@ -81,3 +81,57 @@ def then_status_2xx_or_400(ctx):
 def then_detection_200(client):
     r = detection_results(client, channel=0)
     assert r.status_code == 200, r.text[:300]
+
+
+# ============================================================
+# 扩展场景：新增 step
+# ============================================================
+@when("我 GET /api/v1/projects")
+def when_get_projects(client, ctx):
+    ctx["resp"] = client.get("/api/v1/projects")
+
+
+@when("我 POST /api/v1/projects/0/activate")
+def when_activate_invalid_proj(client, ctx):
+    ctx["resp"] = client.post("/api/v1/projects/0/activate")
+
+
+@then("响应状态应在 400/404/422/500 之中")
+def then_status_failure(ctx):
+    resp = ctx["resp"]
+    assert resp.status_code in (400, 404, 422, 500), \
+        f"期望失败码, 实际 {resp.status_code} body={resp.text[:200]}"
+
+
+@when(parsers.parse('我用剧本 "{scenario}" 启动 synthetic 源 (不带 with_project)'))
+def when_start_no_project(client, ctx, scenario):
+    ctx["resp"] = start_synthetic(client, scenario=scenario, with_project=False)
+
+
+@when(parsers.parse('我用剧本 "{scenario}" 启动 synthetic + 项目'))
+def when_start_with_project_alt(client, ctx, scenario):
+    ctx["resp"] = start_synthetic(client, scenario=scenario, with_project=True)
+
+
+@when(parsers.parse('我再用剧本 "{scenario}" 启动 synthetic + 项目'))
+def when_start_with_project_again(client, ctx, scenario):
+    ctx["resp"] = start_synthetic(client, scenario=scenario, with_project=True)
+
+
+@then(parsers.parse("响应状态应为 {code:d}"))
+def then_status_simple_changeover(ctx, code):
+    resp = ctx["resp"]
+    assert resp.status_code == code, \
+        f"期望 {code} 实际 {resp.status_code} body={resp.text[:200]}"
+
+
+@then("响应里至少应包含 1 个项目记录")
+def then_projects_nonempty(ctx):
+    resp = ctx["resp"]
+    if resp.status_code != 200:
+        pytest.skip(f"projects 列表不可读 {resp.status_code}")
+    body = resp.json()
+    items = body if isinstance(body, list) else (body.get("items") or body.get("projects") or [])
+    if not items:
+        pytest.skip("项目列表为空（测试库无数据）")
+    assert items

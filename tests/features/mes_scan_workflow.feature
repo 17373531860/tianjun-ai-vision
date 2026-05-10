@@ -26,3 +26,23 @@
     假设 加载剧本 "ok_sequential_cycle.json" 并附带最小项目配置
     当 我启动通道 0 的检测
     那么 不应在日志里看到 MES Hook 异常关键词
+
+  场景: GET workorders 列表
+    当 我 GET /api/v1/mes/workorders
+    那么 响应状态应在 200/404 之中
+
+  场景: GET workpieces 列表
+    当 我 GET /api/v1/mes/workpieces?limit=1
+    那么 响应状态应在 200/404 之中
+
+  场景: 把 MES 配置 enabled=False 写回也应成功
+    当 我 PUT /api/v1/mes/config 一个 disabled 配置
+    那么 响应状态应为 200 或 201
+
+  场景: GET MES adapters 列表
+    当 我 GET /api/v1/mes/adapters
+    那么 响应状态应在 200/404 之中
+
+  场景: 不传 endpoint 字段的 MES 配置应被服务端校验
+    当 我 PUT /api/v1/mes/config 一个不带 endpoint 的配置
+    那么 响应状态应在 200/400/422 之中

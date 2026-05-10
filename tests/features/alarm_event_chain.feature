@@ -18,9 +18,29 @@
 
   场景: 没有 alarm 配置时手动触发报警端点应优雅响应
     当 我 POST /api/v1/alarm/test (空 body)
-    那么 响应状态应在 200/400/404 之中  # 422 (Pydantic 校验失败) 也接受
-
+    那么 响应状态应在 200/400/404 之中
 
   场景: events_log 接口在没有事件时也能返回空列表
     当 我 GET /api/v1/sessions (取最近一条)
     那么 响应状态应为 200
+
+  场景: alarm/devices 接口可访问
+    当 我 GET /api/v1/alarm/devices
+    那么 响应状态应在 200/404 之中
+
+  场景: 给 alarm/test 传一个 action 字段应返回 200/400/404
+    当 我 POST /api/v1/alarm/test 带 action="ok"
+    那么 响应状态应在 200/400/404 之中
+
+  场景: 切到 alarm 剧本后停掉 synthetic 源也应安全
+    假设 加载剧本 "alarm_event.json" 不附带项目配置
+    当 我停止 synthetic 源
+    那么 GET /api/v1/test/synthetic/state 应返回 200
+
+  场景: alarm 触发 stop 端点
+    当 我 POST /api/v1/alarm/stop
+    那么 响应状态应在 200/400/404 之中
+
+  场景: 新建报警事件后 events 列表可读
+    当 我 GET /api/v1/alarm/events
+    那么 响应状态应在 200/404 之中

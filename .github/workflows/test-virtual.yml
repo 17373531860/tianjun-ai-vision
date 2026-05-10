@@ -1,0 +1,220 @@
+name: Virtual Functional Tests
+
+# 触发：push/PR 到 main + 手动
+# 不需要 GPU、不需要摄像头、不需要真实模型 —— 全套基于 synthetic 路径
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'tests/**'
+      - 'scripts/recommend_scenarios.py'
+      - '.github/workflows/test-virtual.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest-bdd-virtual:
+    name: pytest + BDD (virtual)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RUNTIME_MODE: test
+      TIANJUN_TEST_MODE: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+
+      - name: Install system deps for opencv
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libsm6 libxext6 libxrender1
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-bdd httpx
+
+      - name: Show test discovery
+        run: |
+          python -m pytest --collect-only -q \
+            tests/test_synthetic_full_flow.py \
+            tests/step_defs/
+
+      - name: Run pytest end-to-end (TestClient, no real ports)
+        run: |
+          python -m pytest \
+            tests/test_synthetic_full_flow.py \
+            tests/step_defs/ \
+            -v --tb=short --maxfail=10 \
+            --junitxml=test-results/pytest.xml
+
+      - name: Upload pytest junit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-junit
+          path: test-results/
+
+  e2e-browser-virtual:
+    name: Playwright E2E (virtual + real backend/frontend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: pytest-bdd-virtual
+    env:
+      RUNTIME_MODE: test
+      TIANJUN_TEST_MODE: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libsm6 libxext6 libxrender1
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-bdd pytest-playwright requests httpx
+
+      - name: Install Playwright browsers
+        run: |
+          python -m playwright install --with-deps chromium
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend (vite preview is faster than dev)
+        working-directory: frontend
+        run: npm run build
+
+      - name: Start backend (background)
+        run: |
+          mkdir -p ci-logs
+          nohup python -m uvicorn backend.main:app \
+            --host 0.0.0.0 --port 8001 \
+            > ci-logs/backend.log 2>&1 &
+          echo "BACKEND_PID=$!" >> $GITHUB_ENV
+
+      - name: Start frontend preview (background, port 6001)
+        working-directory: frontend
+        run: |
+          mkdir -p ../ci-logs
+          nohup npx vite preview --host 0.0.0.0 --port 6001 \
+            > ../ci-logs/frontend.log 2>&1 &
+          echo "FRONTEND_PID=$!" >> $GITHUB_ENV
+
+      - name: Wait for ports 8001 + 6001
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf -o /dev/null http://127.0.0.1:8001/api/v1/test/synthetic/state \
+                && curl -sf -o /dev/null http://127.0.0.1:6001/; then
+              echo "ports ready (attempt $i)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ports NOT ready in 120s"
+          tail -50 ci-logs/backend.log || true
+          tail -50 ci-logs/frontend.log || true
+          exit 1
+
+      - name: Run Playwright E2E (browser tests)
+        run: |
+          python -m pytest tests/e2e_browser/ \
+            -v --tb=short \
+            --junitxml=test-results/e2e.xml
+
+      - name: Stop background processes
+        if: always()
+        run: |
+          [ -n "$BACKEND_PID" ] && kill $BACKEND_PID 2>/dev/null || true
+          [ -n "$FRONTEND_PID" ] && kill $FRONTEND_PID 2>/dev/null || true
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-screenshots
+          path: |
+            /tmp/sat_full_workflow_shots/
+            /tmp/synthetic_demo_shots/
+            test-results/
+
+      - name: Upload backend/frontend logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-server-logs
+          path: ci-logs/
+
+  recommend-scenarios:
+    name: Recommend scenarios (PR diff)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Show recommended scenarios for this PR
+        run: |
+          python scripts/recommend_scenarios.py \
+            origin/${{ github.base_ref }} HEAD \
+            > recommend.txt
+          cat recommend.txt
+
+      - name: Comment recommendations on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## 🤖 Recommended virtual scenarios for this PR\n\n';
+            try {
+              body += '```\n' + fs.readFileSync('recommend.txt', 'utf8') + '\n```';
+            } catch(e) {
+              body += '_(no recommend.txt produced)_';
+            }
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body,
+            });

@@ -88,3 +88,39 @@ def then_status_simple(ctx, code):
 def then_state_200(client):
     r = synthetic_state(client)
     assert r.status_code == 200
+
+
+# ============================================================
+# 扩展场景：新增 step
+# ============================================================
+@when("我 GET /api/v1/test/synthetic/state")
+def when_get_synth_state(client, ctx):
+    ctx["resp"] = synthetic_state(client)
+
+
+@then("响应里应包含 frame_seq 字段")
+def then_resp_has_frame_seq(ctx):
+    body = ctx["resp"].json() if ctx["resp"].status_code == 200 else {}
+    assert "frame_seq" in body, f"返回缺 frame_seq 字段, body 键={list(body)[:10]}"
+
+
+@when(parsers.parse('我用剧本 "{scenario}" 启动 synthetic 源 (不带 fps)'))
+def when_start_no_fps(client, ctx, scenario):
+    ctx["resp"] = start_synthetic(client, scenario=scenario)
+
+
+@when(parsers.parse('我用剧本 "{scenario}" 启动 synthetic 源 (fps={fps:d})'))
+def when_start_custom_fps(client, ctx, scenario, fps):
+    ctx["resp"] = start_synthetic(client, scenario=scenario, fps=float(fps))
+
+
+@then("响应状态应在 200/400/404/500 之中")
+def then_status_ok_or_err(ctx):
+    resp = ctx["resp"]
+    assert resp.status_code in (200, 400, 404, 422, 500), \
+        f"实际 {resp.status_code} body={resp.text[:200]}"
+
+
+@when("我 GET /api/v1/source/status")
+def when_get_source_status_src(client, ctx):
+    ctx["resp"] = client.get("/api/v1/source/status?channel=0")

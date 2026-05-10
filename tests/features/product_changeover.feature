@@ -20,3 +20,25 @@
     假设 我用剧本 "smoke_static_label.json" + 项目跑通
     当 我再次启动剧本 "ok_sequential_cycle.json" + 项目
     那么 detection/results 应返回 200
+
+  场景: 直接 GET /api/v1/projects 应能列出已有项目
+    当 我 GET /api/v1/projects
+    那么 响应状态应为 200
+
+  场景: 以无效 project_id 激活应优雅失败
+    当 我 POST /api/v1/projects/0/activate
+    那么 响应状态应在 400/404/422/500 之中
+
+  场景: 切回无项目 (synthetic without project) 不应崩
+    假设 我用剧本 "ok_sequential_cycle.json" 启动 synthetic + 项目
+    当 我用剧本 "smoke_static_label.json" 启动 synthetic 源 (不带 with_project)
+    那么 响应状态应为 200
+
+  场景: 同一个剧本连续切两次仍 OK
+    当 我用剧本 "ok_sequential_cycle.json" 启动 synthetic + 项目
+    并且 我再用剧本 "ok_sequential_cycle.json" 启动 synthetic + 项目
+    那么 detection/results 应返回 200
+
+  场景: 项目列表接口含工程方便排查的 fields
+    当 我 GET /api/v1/projects
+    那么 响应里至少应包含 1 个项目记录

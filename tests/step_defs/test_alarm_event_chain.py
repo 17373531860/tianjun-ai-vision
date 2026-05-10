@@ -66,3 +66,47 @@ def then_status_acceptable(ctx):
     resp = ctx["resp"]
     assert resp.status_code in (200, 400, 404, 422), \
         f"实际 {resp.status_code} body={resp.text[:200]}"
+
+
+# ============================================================
+# 扩展场景：新增 step
+# ============================================================
+from ._synthetic_helpers import stop_synthetic, synthetic_state
+
+
+@when("我 GET /api/v1/alarm/devices")
+def when_get_alarm_devices(client, ctx):
+    ctx["resp"] = client.get("/api/v1/alarm/devices")
+
+
+@when(parsers.parse('我 POST /api/v1/alarm/test 带 action="{action}"'))
+def when_post_alarm_test_action(client, ctx, action):
+    ctx["resp"] = client.post("/api/v1/alarm/test", json={"action": action})
+
+
+@when("我停止 synthetic 源")
+def when_stop_synth_alarm(client, ctx):
+    ctx["resp"] = stop_synthetic(client, channel=0)
+
+
+@when("我 POST /api/v1/alarm/stop")
+def when_post_alarm_stop(client, ctx):
+    ctx["resp"] = client.post("/api/v1/alarm/stop")
+
+
+@when("我 GET /api/v1/alarm/events")
+def when_get_alarm_events(client, ctx):
+    ctx["resp"] = client.get("/api/v1/alarm/events")
+
+
+@then("响应状态应在 200/404 之中")
+def then_status_200_or_404(ctx):
+    resp = ctx["resp"]
+    assert resp.status_code in (200, 404), \
+        f"实际 {resp.status_code} body={resp.text[:200]}"
+
+
+@then("GET /api/v1/test/synthetic/state 应返回 200")
+def then_synthetic_state_200(client):
+    r = synthetic_state(client)
+    assert r.status_code == 200

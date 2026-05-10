@@ -32,3 +32,27 @@
     当 我调用 /api/v1/source/detection/stop
     并且 我同时停掉 synthetic 源
     那么 source 状态应反映为已停止
+
+  场景: 重复启动 synthetic 不应报错
+    假设 加载剧本 "smoke_static_label.json" 不附带项目配置
+    当 我再次以同一剧本启动 synthetic
+    那么 响应状态应为 200
+
+  场景: 没有项目配置时 detection/results 也能返回数据 (synthetic 直通)
+    假设 加载剧本 "smoke_static_label.json" 不附带项目配置
+    当 我启动通道 0 的检测
+    那么 detection/results 的 detections 长度应 >= 0
+
+  场景: synthetic 源的 frame_seq 在启动后会持续增长
+    假设 加载剧本 "smoke_static_label.json" 不附带项目配置
+    当 我等待 0.3 秒
+    那么 GET /api/v1/test/synthetic/state 的 frame_seq 应该 > 0
+
+  场景: 开了项目后 source/status 接口可读
+    假设 加载剧本 "ok_sequential_cycle.json" 并附带最小项目配置
+    当 我 GET /api/v1/source/status
+    那么 响应状态应为 200
+
+  场景: 自定义 logic_mode=detection 也能启动
+    当 我用剧本 "smoke_static_label.json" 启动 synthetic + 项目 (logic_mode=detection)
+    那么 响应状态应为 200
