@@ -90,6 +90,27 @@ def apply_roi_mask(frame: np.ndarray, mi: "ModelInstance") -> np.ndarray:
     return cv2.bitwise_and(frame, frame, mask=mi._roi_mask_cache)
 
 
+def is_normalized_bbox_center_in_polygon(
+    bbox_normalized: dict, roi_normalized,
+) -> bool:
+    """检测框中心点 (归一化 0~1) 是否在归一化多边形内.
+
+    roi_normalized: [[nx, ny], ...]，至少 3 点；不合法时视为「不限制」返回 True。
+    """
+    if not roi_normalized or len(roi_normalized) < 3:
+        return True
+    for p in roi_normalized:
+        if not isinstance(p, (list, tuple)) or len(p) < 2:
+            return True
+    cx = float(bbox_normalized.get("x", 0)) + float(bbox_normalized.get("w", 0)) / 2
+    cy = float(bbox_normalized.get("y", 0)) + float(bbox_normalized.get("h", 0)) / 2
+    pts = np.array(
+        [(float(p[0]), float(p[1])) for p in roi_normalized],
+        dtype=np.float32,
+    )
+    return cv2.pointPolygonTest(pts, (cx, cy), False) >= 0
+
+
 def is_bbox_center_in_roi(bbox_normalized: dict, mi: "ModelInstance") -> bool:
     """检测框中心点是否在 ROI 多边形内. mi 上没缓存或无 ROI 时永远 True (不过滤).
 
@@ -106,4 +127,9 @@ def is_bbox_center_in_roi(bbox_normalized: dict, mi: "ModelInstance") -> bool:
     return cv2.pointPolygonTest(pts, (cx, cy), False) >= 0
 
 
-__all__ = ["ensure_roi_mask", "apply_roi_mask", "is_bbox_center_in_roi"]
+__all__ = [
+    "ensure_roi_mask",
+    "apply_roi_mask",
+    "is_bbox_center_in_roi",
+    "is_normalized_bbox_center_in_polygon",
+]

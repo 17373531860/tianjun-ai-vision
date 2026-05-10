@@ -58,6 +58,7 @@ def _reset_step_state_dicts(h):
     h.backup_steps_seen_in_cycle = set()
     h.step_strict_order = {}
     h.step_accept_once = {}
+    h.step_roi_polygons = {}
     h._first_step_had_gap = False
     h._first_step_reconfirmed = False
     h._first_step_disappeared_at = None
@@ -111,6 +112,27 @@ def _apply_steps_config(h, steps_config):
                 'trigger_event': step.get('triggerEvent'),
             }
             h.step_static_triggered[label] = False
+
+        # 逐步骤 ROI (顺序 / 检测 / 自定义 / tracking 共用): 归一化多边形 ≥3 点
+        roi_raw = step.get('roi')
+        if roi_raw and isinstance(roi_raw, list) and len(roi_raw) >= 3:
+            ok = True
+            parsed = []
+            for p in roi_raw:
+                if not isinstance(p, (list, tuple)) or len(p) < 2:
+                    ok = False
+                    break
+                try:
+                    parsed.append([float(p[0]), float(p[1])])
+                except (TypeError, ValueError):
+                    ok = False
+                    break
+            if ok:
+                h.step_roi_polygons[label] = parsed
+            else:
+                h.step_roi_polygons.pop(label, None)
+        else:
+            h.step_roi_polygons.pop(label, None)
 
 
 def _apply_backup_steps(h, steps_config):

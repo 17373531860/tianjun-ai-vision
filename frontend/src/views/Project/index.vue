@@ -422,6 +422,11 @@
                           <span class="cursor-help border-b border-dashed border-gray-500">隐藏标注框</span>
                         </el-tooltip>
                       </th>
+                      <th class="p-2 w-36">
+                        <el-tooltip content="归一化多边形区域。设置后：仅当检测框中心落在该区域内时，该步骤/标签才计入 SOP 与周期（顺序、检测、自定义、跟踪模式均生效）。不设置则不限区域。" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">步骤ROI</span>
+                        </el-tooltip>
+                      </th>
                       <template v-if="activeProject.logic_mode === 'tracking'">
                       <th class="p-2 w-28">
                         <el-tooltip content="物品被短暂遮挡后仍算在场的最长时间，在此时间内不会被判定为消失（留空使用全局值）" placement="top">
@@ -553,6 +558,23 @@
                       </td>
                       <td class="p-2 text-center">
                         <el-switch v-model="step.hide_in_view" size="small" />
+                      </td>
+                      <td class="p-2 align-top">
+                        <div class="flex flex-col gap-1 min-w-[7rem]">
+                          <div class="flex flex-wrap gap-1">
+                            <el-button size="small" type="primary" plain @click="openStepRoiEditor(step)">
+                              {{ step.roi && step.roi.length >= 3 ? '重绘' : '设置' }}
+                            </el-button>
+                            <el-button v-if="step.roi && step.roi.length >= 3" size="small" type="danger" plain @click="clearStepRoi(step)">清除</el-button>
+                          </div>
+                          <svg v-if="step.roi && step.roi.length >= 3" width="72" height="40" viewBox="0 0 1 1" preserveAspectRatio="none"
+                            class="border border-slate-700 bg-slate-950 rounded">
+                            <polygon
+                              :points="step.roi.map(p => `${p[0]},${p[1]}`).join(' ')"
+                              fill="rgba(167,139,250,0.25)" stroke="#a78bfa" stroke-width="0.008" stroke-linejoin="round" />
+                          </svg>
+                          <span v-else class="text-[0.625rem] text-gray-500">未限制</span>
+                        </div>
                       </td>
                       <template v-if="activeProject.logic_mode === 'tracking'">
                       <td class="p-2">
@@ -1689,12 +1711,10 @@
 
     <!-- ROI Polygon Editor Dialog -->
     <el-dialog v-model="roiEditorVisible"
-      :title="extraModelRoiEditingIdx >= 0
-        ? `绘制副模型 [${activeProject?.extra_models?.[extraModelRoiEditingIdx]?.name || ''}] ROI 区域`
-        : '绘制 ROI 检测区域'"
+      :title="roiEditorDialogTitle"
       width="80%" :close-on-click-modal="false" destroy-on-close
       class="roi-editor-dialog"
-      @close="extraModelRoiEditingIdx = -1">
+      @close="resetRoiEditorTargets">
       <div class="space-y-3">
         <div class="flex items-center gap-3 text-sm">
           <span class="text-gray-400">单击添加顶点，点击<b class="text-amber-400">第一个点</b>闭合多边形（靠近时会变绿）。闭合后再次单击可重新绘制</span>
@@ -1886,10 +1906,31 @@ const roiPolygonClosed = ref(false);
 // >= 0 表示副模型 idx (写到 extra_models[idx])
 const extraModelSelectingIdx = ref(-1);
 const extraModelRoiEditingIdx = ref(-1);
+// 步骤 ROI 编辑: 指向 steps_config 中某项的 id (与副模型/全局 tracking_roi 互斥)
+const stepRoiEditingStepId = ref(null);
 let roiImage = null;
 let roiMousePos = null;
 
+const resetRoiEditorTargets = () => {
+  extraModelRoiEditingIdx.value = -1;
+  stepRoiEditingStepId.value = null;
+};
+
+const roiEditorDialogTitle = computed(() => {
+  const ap = activeProject.value;
+  if (extraModelRoiEditingIdx.value >= 0) {
+    const slot = ap?.extra_models?.[extraModelRoiEditingIdx.value];
+    return `绘制副模型 [${slot?.name || ''}] ROI 区域`;
+  }
+  if (stepRoiEditingStepId.value != null) {
+    const st = ap?.steps_config?.find(s => s.id === stepRoiEditingStepId.value);
+    return `绘制步骤 [${st?.displayLabel || st?.label || ''}] ROI（框中心须在区域内才算该步骤）`;
+  }
+  return '绘制 ROI 检测区域';
+});
+
 const openRoiEditor = async () => {
+  resetRoiEditorTargets();
   roiPoints.value = [];
   roiPolygonClosed.value = false;
   roiMousePos = null;
@@ -2080,9 +2121,22 @@ const roiSave = async () => {
       slot.roi = polygon;
       ElMessage.success(`副模型 [${slot.name}] ROI 已保存 (${polygon.length} 个顶点)`);
     }
-    extraModelRoiEditingIdx.value = -1;
+    resetRoiEditorTargets();
     roiEditorVisible.value = false;
     return;  // 副模型 ROI 不立即触发 saveProject (随主保存按钮一起提交)
+  }
+
+  // 逐步骤 ROI (顺序/检测/自定义/跟踪): 写入 steps_config[].roi
+  if (stepRoiEditingStepId.value != null) {
+    const sid = stepRoiEditingStepId.value;
+    const st = activeProject.value?.steps_config?.find(s => s.id === sid);
+    if (st) {
+      st.roi = polygon;
+      ElMessage.success(`步骤 [${st.displayLabel || st.label}] ROI 已保存 (${polygon.length} 个顶点)`);
+    }
+    resetRoiEditorTargets();
+    roiEditorVisible.value = false;
+    return;
   }
 
   activeProject.value.tracking_roi_polygon = polygon;
@@ -2172,6 +2226,7 @@ const initProjectDefaults = (project) => {
     if (step.count_mode === undefined) step.count_mode = 'track';
     if (step.event_required_count === undefined) step.event_required_count = 1;
     if (step.event_gone_frames === undefined) step.event_gone_frames = 8;
+    if (step.roi === undefined) step.roi = null;
   });
   if (!project.events_config) {
     project.events_config = [
@@ -2743,6 +2798,7 @@ const selectModel = (model) => {
       label: label,
       displayLabel: label,
       enabled: true,
+      roi: null,
       threshold: 50,
       triggerEvent: null,
       min_frames: null,
@@ -2841,6 +2897,7 @@ const openExtraModelSelect = (idx) => {
 // d1: 改用 nextTick + await loadRoiSnapshot, 取代裸 setTimeout(200) + setTimeout(250) 嵌套.
 // 慢机器/慢摄像头快照下也能保证 polygon 在 image 加载完成后立刻被画.
 const openExtraModelRoiEditor = async (idx) => {
+  stepRoiEditingStepId.value = null;
   extraModelRoiEditingIdx.value = idx;
   // 复用主 ROI 编辑器: 把当前副模型的 roi 加载为初始 polygon
   roiPoints.value = [];
@@ -2864,6 +2921,30 @@ const openExtraModelRoiEditor = async (idx) => {
 const clearExtraModelRoi = (idx) => {
   const slot = activeProject.value?.extra_models?.[idx];
   if (slot) slot.roi = null;
+};
+
+const openStepRoiEditor = async (step) => {
+  extraModelRoiEditingIdx.value = -1;
+  stepRoiEditingStepId.value = step.id;
+  roiPoints.value = [];
+  roiPolygonClosed.value = false;
+  roiMousePos = null;
+  roiEditorVisible.value = true;
+  await nextTick();
+  const ok = await loadRoiSnapshot();
+  if (!ok) return;
+  const existing = step.roi;
+  if (Array.isArray(existing) && existing.length >= 3 && roiEditorCanvas.value) {
+    const w = roiEditorCanvas.value.width || 1;
+    const h = roiEditorCanvas.value.height || 1;
+    roiPoints.value = existing.map(([nx, ny]) => ({ x: nx * w, y: ny * h }));
+    roiPolygonClosed.value = true;
+    roiRedraw();
+  }
+};
+
+const clearStepRoi = (step) => {
+  if (step) step.roi = null;
 };
 
 const FORMAT_DISPLAY_NAMES = {

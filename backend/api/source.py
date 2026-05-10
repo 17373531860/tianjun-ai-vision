@@ -758,8 +758,23 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 inside = not inside
             j = i
         return inside
-    
-    
+
+    def _det_passes_roi_for_label(self, det: dict, label: str) -> bool:
+        """逐步骤 ROI (steps_config[].roi): 有配置则框中心须在多边形内.
+
+        无逐步骤 ROI 时: tracking 模式沿用全局 tracking_roi；其它模式不限区域。
+        """
+        poly_map = getattr(self, "step_roi_polygons", None) or {}
+        poly = poly_map.get(label)
+        if poly and len(poly) >= 3:
+            from backend.api.source_roi import is_normalized_bbox_center_in_polygon
+
+            return is_normalized_bbox_center_in_polygon(det, poly)
+        lm = self.project_config.get("logic_mode") if self.project_config else None
+        if lm == "tracking":
+            return self._is_in_roi(det)
+        return True
+
     # _get_inference_executor / _shutdown_inference_executor 已迁至
     # source_inference_executor.py (P7 第五刀), 历史调用通过 __getattr__ 转发
     

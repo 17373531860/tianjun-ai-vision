@@ -2832,6 +2832,31 @@ const drawDetections = (detections) => {
     ctx.setLineDash([]);
     ctx.restore();
   }
+
+  // 逐步骤 ROI (steps_config[].roi): 浅色虚线 + 微弱填充，与 tracking_roi / 副模型 ROI 区分
+  const stepRois = (currentProject.value?.steps_config || []).filter(
+    s => s && s.enabled !== false && Array.isArray(s.roi) && s.roi.length >= 3
+  );
+  const STEP_ROI_PALETTE = ['#c4b5fd', '#6ee7b7', '#fcd34d', '#f9a8d4', '#7dd3fc'];
+  stepRois.forEach((s, idx) => {
+    const col = STEP_ROI_PALETTE[idx % STEP_ROI_PALETTE.length];
+    ctx.save();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 5]);
+    ctx.beginPath();
+    ctx.moveTo(offsetX + s.roi[0][0] * renderW, offsetY + s.roi[0][1] * renderH);
+    for (let i = 1; i < s.roi.length; i++) {
+      ctx.lineTo(offsetX + s.roi[i][0] * renderW, offsetY + s.roi[i][1] * renderH);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.fillStyle = col;
+    ctx.globalAlpha = 0.04;
+    ctx.fill();
+    ctx.setLineDash([]);
+    ctx.restore();
+  });
 };
 
 // Watch for project changes to sync UI

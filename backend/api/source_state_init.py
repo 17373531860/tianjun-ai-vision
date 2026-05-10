@@ -142,6 +142,8 @@ def _init_step_state(h):
     h.backup_steps_seen_in_cycle = set()
     h.step_strict_order = {}
     h.step_accept_once = {}
+    # steps_config[].roi (归一化多边形): 该标签仅在 ROI 内才算检测到 (全模式 + tracking)
+    h.step_roi_polygons = {}
 
 
 def _init_event_and_cycle_state(h):

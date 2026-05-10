@@ -25,6 +25,8 @@ import base64
 import cv2
 import numpy as np
 
+from backend.api.source_roi import is_normalized_bbox_center_in_polygon
+
 
 class StepStatsMixin:
     def _update_step_stats(self, detections: list, original_frame: np.ndarray):
@@ -54,7 +56,14 @@ class StepStatsMixin:
                 threshold = self.step_conf_thresholds.get(label)
                 if threshold is not None and confidence < threshold:
                     continue
-            
+
+            # 逐步骤 ROI: 仅框中心在配置多边形内才计入该步骤 (顺序/检测/自定义/共用路径)
+            _poly_map = getattr(self, 'step_roi_polygons', None) or {}
+            _poly = _poly_map.get(label)
+            if _poly and len(_poly) >= 3:
+                if not is_normalized_bbox_center_in_polygon(det, _poly):
+                    continue
+
             frame_detected_labels.add(label)
         
         if not hasattr(self, '_step_raw_start'):

@@ -12,6 +12,7 @@ from backend.api.source_roi import (
     ensure_roi_mask,
     apply_roi_mask,
     is_bbox_center_in_roi,
+    is_normalized_bbox_center_in_polygon,
     _validate_roi,
 )
 
@@ -193,3 +194,20 @@ def test_综合_三角形ROI_测多个bbox():
     for bbox, expected, msg in cases:
         actual = is_bbox_center_in_roi(bbox, mi)
         assert actual is expected, f"{msg}: 期望 {expected}, 实际 {actual}"
+
+
+# ============================================================
+# is_normalized_bbox_center_in_polygon (逐步骤 ROI)
+# ============================================================
+def test_norm_polygon_不足3点_视为不限制():
+    poly = [[0.0, 0.0], [1.0, 0.0]]
+    bbox = {'x': 0.9, 'y': 0.9, 'w': 0.02, 'h': 0.02}
+    assert is_normalized_bbox_center_in_polygon(bbox, poly) is True
+
+
+def test_norm_polygon_中心在内_True_在外_False():
+    square = [[0.5, 0.5], [0.9, 0.5], [0.9, 0.9], [0.5, 0.9]]
+    assert is_normalized_bbox_center_in_polygon(
+        {'x': 0.65, 'y': 0.65, 'w': 0.02, 'h': 0.02}, square) is True
+    assert is_normalized_bbox_center_in_polygon(
+        {'x': 0.05, 'y': 0.05, 'w': 0.1, 'h': 0.1}, square) is False

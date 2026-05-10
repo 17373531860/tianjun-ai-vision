@@ -272,3 +272,62 @@ def test_apply_project_config_无_models_老配置_完全兼容(vsm):
 
     assert list(vsm._router.models.keys()) == ['main'], "老配置不应创建副 mi"
     assert vsm.step_conf_thresholds == {'step1': 0.5}
+
+
+def test_steps_config_roi_写入_step_roi_polygons(vsm):
+    apply_project_config(vsm, {
+        'id': 101,
+        'name': 'roi_steps',
+        'task_type': 'detection',
+        'logic_mode': 'detection',
+        'steps_config': [
+            {'id': 1, 'label': 'pick', 'enabled': True, 'threshold': 50,
+             'roi': [[0.5, 0.5], [0.9, 0.5], [0.9, 0.9], [0.5, 0.9]]},
+            {'id': 2, 'label': 'place', 'enabled': True, 'threshold': 50},
+        ],
+        'pipeline_config': {'settlement_mode': 'first_step'},
+        'events_config': [],
+        'counters_config': [],
+        'data_config': {},
+    })
+    assert vsm.step_roi_polygons['pick'] == [[0.5, 0.5], [0.9, 0.5], [0.9, 0.9], [0.5, 0.9]]
+    assert 'place' not in vsm.step_roi_polygons
+
+
+def test_steps_config_roi_少于3顶点_不写入(vsm):
+    apply_project_config(vsm, {
+        'id': 102,
+        'name': 'bad_roi',
+        'task_type': 'detection',
+        'logic_mode': 'detection',
+        'steps_config': [
+            {'id': 1, 'label': 'A', 'enabled': True, 'threshold': 50,
+             'roi': [[0.0, 0.0], [1.0, 0.0]]},
+        ],
+        'pipeline_config': {},
+        'events_config': [],
+        'counters_config': [],
+        'data_config': {},
+    })
+    assert 'A' not in vsm.step_roi_polygons
+
+
+def test_det_passes_roi_for_label_检测模式_仅用逐步骤ROI(vsm):
+    apply_project_config(vsm, {
+        'id': 103,
+        'name': 'gate',
+        'task_type': 'detection',
+        'logic_mode': 'detection',
+        'steps_config': [
+            {'id': 1, 'label': 'x', 'enabled': True, 'threshold': 50,
+             'roi': [[0.5, 0.5], [0.95, 0.5], [0.95, 0.95], [0.5, 0.95]]},
+        ],
+        'pipeline_config': {},
+        'events_config': [],
+        'counters_config': [],
+        'data_config': {},
+    })
+    inside = {'x': 0.7, 'y': 0.7, 'w': 0.02, 'h': 0.02}
+    outside = {'x': 0.1, 'y': 0.1, 'w': 0.05, 'h': 0.05}
+    assert vsm._det_passes_roi_for_label(inside, 'x') is True
+    assert vsm._det_passes_roi_for_label(outside, 'x') is False
