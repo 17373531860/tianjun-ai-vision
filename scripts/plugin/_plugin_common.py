@@ -245,7 +245,7 @@ def calc_pubkey_fingerprint(pub_pem: bytes) -> bytes:
 # RSA 签名 / 验证
 # ============================================================
 
-def rsa_sign_pss(message: bytes, private_pem: bytes, password: bytes) -> bytes:
+def rsa_sign_pss(message: bytes, private_pem: bytes, password: bytes | None) -> bytes:
     """RSA-PSS-SHA256 签名 (与 design/02 §3.3 一致)。"""
     try:
         from cryptography.hazmat.primitives import hashes, serialization

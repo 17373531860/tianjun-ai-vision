@@ -1,20 +1,44 @@
 name: Plugin Tooling
 
 on:
+  push:
+    branches: [main, "feat/plugin-config"]
+    paths:
+      - "docs/plugin-system/**"
+      - "scripts/plugin/**"
+      - "plugins-examples/**"
+      - "tests/plugin_system/**"
+      - "tests/features/plugin_*.feature"
+      - "tests/step_defs/test_plugin_*.py"
+      - "backend/api/plugins.py"
+      - "backend/plugin_system/**"
+      - "backend/models/plugin_models.py"
+      - ".github/workflows/plugin-tooling.yml"
   pull_request:
     paths:
       - "docs/plugin-system/**"
       - "scripts/plugin/**"
       - "plugins-examples/**"
       - "tests/plugin_system/**"
+      - "tests/features/plugin_*.feature"
+      - "tests/step_defs/test_plugin_*.py"
+      - "backend/api/plugins.py"
+      - "backend/plugin_system/**"
+      - "backend/models/plugin_models.py"
       - ".github/workflows/plugin-tooling.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  validate-plugin-system:
-    name: Validate plugin schema, tools, examples
+  # ============================================================
+  # 1. 工具/Schema/示例 静态检查
+  # ============================================================
+  static-checks:
+    name: Schema / Lint / Examples
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -25,7 +49,7 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install test dependencies
+      - name: Install lightweight deps
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest jsonschema cryptography
@@ -40,7 +64,7 @@ jobs:
               print(f"[OK] {path}")
           PY
 
-      - name: Validate schema
+      - name: Validate plugin.schema.json
         run: |
           python - <<'PY'
           import json
@@ -51,14 +75,12 @@ jobs:
           PY
 
       - name: Lint plugin documentation
-        run: |
-          python scripts/plugin/lint-plugin-docs.py
+        run: python scripts/plugin/lint-plugin-docs.py
 
-      - name: Run plugin unit tests
-        run: |
-          python -m pytest tests/plugin_system/ -q
+      - name: Run plugin unit tests (cryptography stack)
+        run: python -m pytest tests/plugin_system/ -q
 
-      - name: Pack example plugins
+      - name: Pack example plugins (unsigned)
         run: |
           mkdir -p /tmp/tjv-out
           python scripts/plugin/pack-plugin.py --src plugins-examples/tier1-theme --out /tmp/tjv-out --skip-build
@@ -69,13 +91,196 @@ jobs:
       - name: Ensure unsigned packages contain manifests
         run: |
           python - <<'PY'
-          import sys
           import zipfile
           from pathlib import Path
           for pkg in sorted(Path("/tmp/tjv-out").glob("*.tjvplugin")):
               with zipfile.ZipFile(pkg) as zf:
                   names = set(zf.namelist())
-              if "plugin.json" not in names:
-                  raise SystemExit(f"{pkg} missing plugin.json")
+              assert "plugin.json" in names, f"{pkg} missing plugin.json"
               print(f"[OK] {pkg.name}: {len(names)} files")
           PY
+
+  # ============================================================
+  # 2. 端到端真实链路：pack → sign → verify → install (dry-run)
+  # 用 plugins-examples/tier1-theme（manifest 里 customer=internal-demo）
+  # ============================================================
+  signing-roundtrip:
+    name: Pack → Sign → Verify → Install
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: static-checks
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install jsonschema cryptography
+
+      - name: Generate test key pair + secret file
+        run: |
+          mkdir -p /tmp/keys /tmp/out
+          # PLUGIN_SECRET 必须是 base64 编码的 32-byte 原始密钥
+          python -c "import base64,os;print(base64.b64encode(os.urandom(32)).decode(),end='')" > /tmp/keys/secret.txt
+          # 无密码私钥, 配合 PLUGIN_KEY_PASSWORD="" 在 CI 中跑通
+          python - <<'PY'
+          from cryptography.hazmat.primitives.asymmetric import rsa
+          from cryptography.hazmat.primitives import serialization
+          k = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+          open("/tmp/keys/priv.pem","wb").write(k.private_bytes(
+              serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+              serialization.NoEncryption()))
+          open("/tmp/keys/pub.pem","wb").write(k.public_key().public_bytes(
+              serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+          print("[OK] generated test RSA-3072 key pair + secret")
+          PY
+
+      - name: Pack tier1 (unsigned, customer_code=internal-demo)
+        run: |
+          python scripts/plugin/pack-plugin.py \
+            --src plugins-examples/tier1-theme \
+            --out /tmp/out --skip-build
+          UNS=$(ls /tmp/out/*-uns.tjvplugin | head -1)
+          echo "UNS=$UNS" >> $GITHUB_ENV
+          echo "[OK] packed: $UNS"
+
+      - name: Sign tier1
+        env:
+          PLUGIN_KEY_PASSWORD: ""  # 私钥未加密
+        run: |
+          mkdir -p /tmp/out/signed
+          python scripts/plugin/sign-plugin.py \
+            --in "$UNS" \
+            --out /tmp/out/signed \
+            --key /tmp/keys/priv.pem \
+            --secret /tmp/keys/secret.txt \
+            --signed-by ci-bot
+          SIGNED=$(ls /tmp/out/signed/*.tjvplugin | head -1)
+          echo "SIGNED=$SIGNED" >> $GITHUB_ENV
+          echo "[OK] signed: $SIGNED"
+
+      - name: Verify signed package (positive)
+        run: |
+          python scripts/plugin/verify-plugin.py \
+            --in "$SIGNED" \
+            --pub /tmp/keys/pub.pem
+
+      - name: Verify rejects tampered package (negative)
+        run: |
+          cp "$SIGNED" /tmp/out/tampered.tjvplugin
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("/tmp/out/tampered.tjvplugin")
+          data = bytearray(p.read_bytes())
+          data[len(data)//2] ^= 0x55
+          p.write_bytes(bytes(data))
+          print("[OK] tampered 1 byte at center")
+          PY
+          if python scripts/plugin/verify-plugin.py \
+                --in /tmp/out/tampered.tjvplugin \
+                --pub /tmp/keys/pub.pem 2>&1; then
+            echo "ERROR: verify should have failed for tampered package"
+            exit 1
+          fi
+          echo "[OK] correctly rejected tampered package"
+
+      - name: Verify rejects wrong public key (negative)
+        run: |
+          python - <<'PY'
+          from cryptography.hazmat.primitives.asymmetric import rsa
+          from cryptography.hazmat.primitives import serialization
+          k = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+          open("/tmp/keys/wrong_pub.pem","wb").write(k.public_key().public_bytes(
+              serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+          PY
+          if python scripts/plugin/verify-plugin.py \
+                --in "$SIGNED" \
+                --pub /tmp/keys/wrong_pub.pem 2>&1; then
+            echo "ERROR: verify should have failed for wrong public key"
+            exit 1
+          fi
+          echo "[OK] correctly rejected wrong public key"
+
+      - name: Install (dry-run, offline mode)
+        run: |
+          mkdir -p /tmp/install-data
+          python scripts/plugin/install-plugin.py \
+            --in "$SIGNED" \
+            --pub /tmp/keys/pub.pem \
+            --secret /tmp/keys/secret.txt \
+            --data-dir /tmp/install-data \
+            --dry-run
+          # dry-run 不应在目标 data-dir 留下任何 plugin 目录
+          if [ -n "$(ls -A /tmp/install-data/plugins 2>/dev/null)" ]; then
+            echo "ERROR: dry-run wrote to disk"
+            exit 1
+          fi
+          echo "[OK] dry-run produced no on-disk artifacts"
+
+      - name: Install (real, 落盘 plugins/<customer_code>/)
+        run: |
+          rm -rf /tmp/install-real
+          mkdir -p /tmp/install-real
+          python scripts/plugin/install-plugin.py \
+            --in "$SIGNED" \
+            --pub /tmp/keys/pub.pem \
+            --secret /tmp/keys/secret.txt \
+            --data-dir /tmp/install-real
+          test -f /tmp/install-real/plugins/internal-demo/plugin.json \
+            && test -f /tmp/install-real/plugins/internal-demo/signature.bin \
+            && echo "[OK] real install produced plugin.json + signature.bin on disk"
+
+  # ============================================================
+  # 3. BDD 与 API 集成（用 TestClient，不需要起真实 8001/6001）
+  # ============================================================
+  bdd-plugin:
+    name: BDD plugin install/sign API
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: static-checks
+    env:
+      RUNTIME_MODE: test
+      TIANJUN_TEST_MODE: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install system deps for opencv
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libsm6 libxext6 libxrender1
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-bdd httpx jsonschema cryptography
+
+      - name: Run plugin BDD (install API + signing + CLI)
+        run: |
+          python -m pytest \
+            tests/step_defs/test_plugin_install_api.py \
+            tests/step_defs/test_plugin_signing.py \
+            -v --tb=short --junitxml=test-results/plugin-bdd.xml
+
+      - name: Upload junit
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-bdd-junit
+          path: test-results/
+          retention-days: 7

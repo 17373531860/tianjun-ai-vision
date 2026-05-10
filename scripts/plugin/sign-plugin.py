@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -74,7 +75,7 @@ def load_plugin_secret(secret_path: Path) -> bytes:
     raise SystemExit(f"PLUGIN_SECRET 文件无有效内容: {secret_path}")
 
 
-def derive_pubkey_pem(pri_pem: bytes, password: bytes) -> bytes:
+def derive_pubkey_pem(pri_pem: bytes, password: bytes | None) -> bytes:
     """从私钥 PEM 推导公钥 PEM (用来计算 fingerprint)."""
     from cryptography.hazmat.primitives import serialization
     pri = serialization.load_pem_private_key(pri_pem, password=password)
@@ -130,7 +131,17 @@ def sign(
         # ---- 3) 加载私钥 ----
         info(f"加载私钥: {pri_key_path}")
         pri_pem = pri_key_path.read_bytes()
-        password = getpass("私钥 PEM 密码: ").encode("utf-8")
+        # 优先级: 环境变量 PLUGIN_KEY_PASSWORD > 交互式 getpass
+        # CI / 自动化场景: export PLUGIN_KEY_PASSWORD=xxx 即可避开 tty.
+        # 设置 PLUGIN_KEY_PASSWORD="" (空字符串) 表示私钥未加密.
+        env_pwd = os.environ.get("PLUGIN_KEY_PASSWORD")
+        if env_pwd is not None:
+            info("从环境变量 PLUGIN_KEY_PASSWORD 读取私钥密码")
+            password = env_pwd.encode("utf-8")
+        else:
+            password = getpass("私钥 PEM 密码 (无密码请直接回车): ").encode("utf-8")
+        if password == b"":
+            password = None  # cryptography API 约定: None 表示无密码
 
         try:
             pub_pem = derive_pubkey_pem(pri_pem, password)
