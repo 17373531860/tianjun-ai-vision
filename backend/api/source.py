@@ -252,6 +252,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         '_get_first_detection_step_label': 'get_first_detection_label',
         '_get_last_detection_step_label':  'get_last_detection_label',
         '_is_condition_prefix':           'is_condition_prefix',
+        '_is_legitimate_next_in_sequence': 'is_legitimate_next_in_sequence',
     }
 
     # P7 兼容层路由表: 字段集 → 组件实例属性名, 方法别名 → 组件实例属性名

@@ -162,9 +162,12 @@ class SettlementMixin:
             
             from collections import Counter
             expected_set = set(expected_labels)
+            expected_counter = Counter(expected_labels)
             step_counter = Counter(self.current_cycle_steps)
             unexpected = [s for s in self.current_cycle_steps if s not in expected_set]
-            duplicated = [s for s, cnt in step_counter.items() if cnt > 1]
+            # v3.7.0: 期望序列里允许的多次出现不算重复 (例 A-B-C-B-D 里 B 合法 2 次)
+            duplicated = [s for s, cnt in step_counter.items()
+                          if cnt > expected_counter.get(s, 1)]
 
             if self._cycle_regression or unexpected or duplicated:
                 reasons = []
@@ -213,14 +216,19 @@ class SettlementMixin:
                 self.current_cycle_steps, detection_labels)
             
             self._reconcile_step_records()
-            
-            present = set(self.current_cycle_steps)
-            missing = [l for l in detection_labels if l not in present]
-            
+
             from collections import Counter
+            expected_counter = Counter(detection_labels)
             step_counts = Counter(self.current_cycle_steps)
-            duplicated = [s for s, cnt in step_counts.items() if cnt > 1]
-            
+            # v3.7.0: detection_labels 同 label 多次配置也合法, 按 expected_counter 判.
+            missing = []
+            for lbl, exp_cnt in expected_counter.items():
+                act_cnt = step_counts.get(lbl, 0)
+                if act_cnt < exp_cnt:
+                    missing.extend([lbl] * (exp_cnt - act_cnt))
+            duplicated = [s for s, cnt in step_counts.items()
+                          if cnt > expected_counter.get(s, 1)]
+
             ng_reasons = []
             if missing:
                 ng_reasons.append(f'缺少步骤: {missing}')
@@ -290,13 +298,20 @@ class SettlementMixin:
         
         self._reconcile_step_records()
         
-        present = set(self.current_cycle_steps)
-        missing = [l for l in detection_labels if l not in present]
-        
         from collections import Counter
+        expected_counter = Counter(detection_labels)
         step_counts = Counter(self.current_cycle_steps)
-        duplicated = [s for s, cnt in step_counts.items() if cnt > 1]
-        
+
+        # v3.7.0: 若 detection_labels 里配置同一 label 多次 (不常见但合法),
+        # 按 expected_counter 判 missing/duplicated, 避免合法重复被误判 NG.
+        missing = []
+        for lbl, exp_cnt in expected_counter.items():
+            act_cnt = step_counts.get(lbl, 0)
+            if act_cnt < exp_cnt:
+                missing.extend([lbl] * (exp_cnt - act_cnt))
+        duplicated = [s for s, cnt in step_counts.items()
+                      if cnt > expected_counter.get(s, 1)]
+
         ng_reasons = []
         if missing:
             ng_reasons.append(f'缺少步骤: {missing}')
@@ -412,11 +427,19 @@ class SettlementMixin:
         
         from collections import Counter
         expected_set = set(expected_labels)
+        expected_counter = Counter(expected_labels)
         step_counter = Counter(self.current_cycle_steps)
 
         unexpected = [s for s in self.current_cycle_steps if s not in expected_set]
-        duplicated = [s for s, cnt in step_counter.items() if cnt > 1]
-        missing = [l for l in expected_labels if l not in self.current_cycle_steps]
+        # v3.7.0: 期望序列允许的重复 (A-B-C-B-D 里 B×2) 不算 duplicated;
+        #         label 在 actual 里少于 expected 次数算 missing.
+        duplicated = [s for s, cnt in step_counter.items()
+                      if cnt > expected_counter.get(s, 1)]
+        missing = []
+        for lbl, exp_cnt in expected_counter.items():
+            act_cnt = step_counter.get(lbl, 0)
+            if act_cnt < exp_cnt:
+                missing.extend([lbl] * (exp_cnt - act_cnt))
 
         if self._cycle_regression or unexpected or duplicated:
             reasons = []
@@ -751,11 +774,23 @@ class SettlementMixin:
                     if self.last_added_step == label:
                         pass
                     elif label in self.current_cycle_steps:
-                        self._cycle_regression = True
-                        self.current_cycle_steps.append(label)
-                        self.last_added_step = label
-                        self._last_step_added_time = current_time
-                        print(f"[步骤回退] {label} 已在周期中出现过，标记回退 (当前序列: {self.current_cycle_steps})")
+                        # v3.7.0 客户反馈: 期望序列里允许同一 label 多次出现
+                        # (例如 A-B-C-B-D 里 B 出现 2 次)。
+                        # 旧逻辑只看 "label 是否在 current_cycle_steps 里",
+                        # 第二个 B 也被当成"回退"NG。
+                        # 修复: 只有当 current_cycle_steps 里 label 的出现次数
+                        # >= 期望序列里 label 的总数, 才视为真正的回退/重复.
+                        if self._is_legitimate_next_in_sequence(label):
+                            self.current_cycle_steps.append(label)
+                            self.last_added_step = label
+                            self._last_step_added_time = current_time
+                            print(f"[期望重复] {label} 是期望序列里的合法重复 (当前序列: {self.current_cycle_steps})")
+                        else:
+                            self._cycle_regression = True
+                            self.current_cycle_steps.append(label)
+                            self.last_added_step = label
+                            self._last_step_added_time = current_time
+                            print(f"[步骤回退] {label} 已在周期中出现过且非期望重复，标记回退 (当前序列: {self.current_cycle_steps})")
                     else:
                         self.current_cycle_steps.append(label)
                         self.last_added_step = label

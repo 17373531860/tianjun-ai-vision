@@ -135,6 +135,27 @@ class SequenceLabels:
         labels = self.get_detection_labels()
         return labels[-1] if labels else None
 
+    def is_legitimate_next_in_sequence(self, label: str) -> bool:
+        """v3.7.0: 当前 label 加进 current_cycle_steps 后是否仍是 expected_labels 的合法前缀.
+
+        客户场景: 期望序列 A-B-C-B-D 里 B 合法出现 2 次。第二个 B 触发时,
+        旧代码只看 "label 已在 current_cycle_steps 里" 就标记回退 → 误判 NG.
+        这里给出位置感知判断:
+          - 仅在顺序型模式有意义 (sequential / custom-based-on-sequential)。
+          - 若 expected_labels[len(current)] == label 就合法。
+          - 检测模式不调用本方法 (那种模式按 count 判 NG, 走 settle 里的 expected_counter)。
+        """
+        cur = getattr(self._host, "current_cycle_steps", None)
+        if cur is None:
+            return False
+        expected = self.get_expected_labels()
+        if not expected:
+            return False
+        next_pos = len(cur)
+        if next_pos >= len(expected):
+            return False
+        return expected[next_pos] == label
+
     def is_condition_prefix(self, sequence_to_check: list) -> bool:
         """判断给定序列是否是任意自定义条件序列的前缀 (custom 模式)
 
