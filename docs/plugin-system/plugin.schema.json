@@ -110,7 +110,7 @@
     "files_digest": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$",
-      "description": "插件包内所有文件 (除 signature.bin 自身) 的 SHA256, 由 pack-plugin.py 计算并落到 manifest, sign-plugin.py 验证一致后再签"
+      "description": "插件包内业务文件的 SHA256（排除 plugin.json 与 signature.bin，避免自引用循环；manifest 本身由 RSA 签名保护）"
     },
     "frontend": {
       "type": "object",

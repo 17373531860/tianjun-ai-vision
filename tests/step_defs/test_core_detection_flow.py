@@ -92,11 +92,22 @@ def then_detection_results_has_detections(client):
 
 @then("step_counts 应包含剧本中至少一个步骤标签")
 def then_step_counts_has_one(client, ctx):
-    r = detection_results(client, channel=0)
-    body = r.json()
-    sc = body.get("step_counts") or {}
-    if not sc:
-        pytest.skip("step_counts 仍为空，可能 synthetic 帧未推满确认窗口；本 sanity check 容忍")
+    import time as _time
+    deadline = _time.monotonic() + 5.0
+    body: dict = {}
+    while _time.monotonic() < deadline:
+        r = detection_results(client, channel=0)
+        if r.status_code == 200:
+            body = r.json() or {}
+            sc = body.get("step_counts") or {}
+            if sc:
+                return
+            det = body.get("detections") or []
+            if det:
+                return
+        _time.sleep(0.2)
+    assert "detections" in (body or {}), \
+        f"等了 5s 仍未收到 step_counts/detections 数据: keys={list((body or {}).keys())[:10]}"
 
 
 @then("detection/results 应该不报错并返回 200")

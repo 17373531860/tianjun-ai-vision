@@ -26,7 +26,11 @@ def test_路由可达(page, base_url, route, name_keyword):
     page.on("pageerror", lambda exc: js_errors.append(str(exc)))
 
     page.goto(f"{base_url}{route}", wait_until="domcontentloaded", timeout=15000)
-    page.wait_for_load_state("networkidle", timeout=10000)
+    try:
+        page.wait_for_load_state("networkidle", timeout=10000)
+    except Exception:
+        # Monitor 等页面有轮询/MJPEG 长连接，不能把 networkidle 当作硬性页面就绪条件。
+        pass
 
     # 不应有未捕获 JS 异常
     fatal = [e for e in js_errors

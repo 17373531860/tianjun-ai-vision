@@ -60,8 +60,8 @@ def sample_plugin_dir(tmp_path: Path) -> Path:
         "capabilities": ["theme.css", "theme.logo"],
         "main_version_min": "3.7.0",
         "created_at": "2026-05-09T00:00:00+00:00",
-        "signed_at": "",
-        "signed_by": "",
+        "signed_at": "1970-01-01T00:00:00+00:00",
+        "signed_by": "unsigned-dev-build",
         "files_digest": "sha256:" + "0" * 64,
         "frontend": {
             "theme": {

@@ -35,6 +35,7 @@ PLUGIN_VERSION_REGEX = re.compile(r"^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?$")
 FILES_DIGEST_REGEX = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 DIGEST_EXCLUDE_NAMES = {
+    "plugin.json",  # manifest 由 RSA 签名保护；避免 files_digest 自引用循环
     "__pycache__",
     ".git",
     ".gitignore",
@@ -46,7 +47,7 @@ DIGEST_EXCLUDE_NAMES = {
     ".mypy_cache",
     "Thumbs.db",
     ".tjvplugin",  # 自身
-    "signature.bin",  # 签名时再加
+    "signature.bin",  # 签名产物自身不参与 digest
 }
 DIGEST_EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".swp"}
 
@@ -158,7 +159,8 @@ def calc_files_digest(plugin_dir: Path) -> str:
     """计算插件目录的 files_digest, 格式 'sha256:<64 hex>'.
 
     算法 (与 design/01 §四 一致):
-    1. 遍历目录, 排除 DIGEST_EXCLUDE_NAMES + DIGEST_EXCLUDE_SUFFIXES + signature.bin
+    1. 遍历目录, 排除 DIGEST_EXCLUDE_NAMES + DIGEST_EXCLUDE_SUFFIXES
+       其中 plugin.json 由 RSA 签名保护，不参与 files_digest，避免 files_digest 自引用循环
     2. 对每个文件, 用相对路径 (POSIX 分隔符)+ '\\0' + 内容字节 喂给 SHA256
     3. 文件之间用 '\\x1f' (RS) 分隔
     4. 文件按相对路径字典序排序后处理 (跨平台一致性)
@@ -189,7 +191,7 @@ def calc_files_digest_in_zip(zip_path: Path) -> str:
     """同 calc_files_digest, 但读 ZIP 内文件 (不用解压).
 
     用于 verify / install 阶段不必落地。
-    排除规则同 calc_files_digest, 额外排除 'signature.bin' 自身。
+    排除规则同 calc_files_digest，尤其排除 plugin.json 与 signature.bin。
     """
     if not zipfile.is_zipfile(zip_path):
         raise FilesDigestError(f"不是 ZIP: {zip_path}")

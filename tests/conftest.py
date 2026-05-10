@@ -51,9 +51,44 @@ for _sub in ("counters", "uploads", "recordings", "exports"):
 from backend.db.database import Base, engine, SessionLocal  # noqa: E402
 from backend.models import models as _orm_models  # noqa: F401, E402
 from backend.models import export_models as _export_models  # noqa: F401, E402
+from backend.models import plugin_models as _plugin_models  # noqa: F401, E402
 
 # 建表（在干净的临时 DB 上）
 Base.metadata.create_all(bind=engine)
+
+
+def _seed_dummy_project() -> None:
+    """给测试库 seed 一个最小项目，让 GET /api/v1/projects 至少有 1 条。
+
+    避免某些 BDD 在"项目列表为空"时 skip。
+    """
+    from backend.models.models import Project
+    session = SessionLocal()
+    try:
+        if session.query(Project).count() == 0:
+            session.add(Project(
+                name="__bdd_seed_project__",
+                task_type="detection",
+                logic_mode="sequential",
+                pipeline_config={},
+                steps_config=[
+                    {"id": 1, "label": "step_a", "name": "步骤A", "enabled": True},
+                ],
+                events_config=[],
+                counters_config=[],
+                alarm_config={},
+                detection_config={},
+                data_config={},
+                is_active=False,
+            ))
+            session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
+
+
+_seed_dummy_project()
 
 
 # ============================================================

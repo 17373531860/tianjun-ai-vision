@@ -11,6 +11,7 @@ from backend.core.config import settings
 from backend.db.database import engine, Base
 # v3.5.0 自定义导出系统：必须在 create_all 之前 import 让表注册到 Base.metadata
 from backend.models import export_models  # noqa: F401
+from backend.models import plugin_models  # noqa: F401
 from backend.api import api_router
 from backend.api.source import router as source_router, get_video_manager
 from backend.api.channel_manager import router as workstation_router
@@ -23,6 +24,7 @@ from backend.api.operators import router as operators_router
 from backend.api.cluster import router as cluster_router
 from backend.api.external_device import router as extdev_router
 from backend.api.debug import router as debug_router
+from backend.api.plugins import router as plugins_router
 # Import models to ensure they are registered
 import os
 import cv2
@@ -379,6 +381,11 @@ def _run_startup_init():
     fix_orphan_sessions()
     cleanup_orphan_inspections()
     _seed_export_builtin_templates()
+    try:
+        from backend.plugin_system.manager import load_active_plugin_on_startup
+        load_active_plugin_on_startup()
+    except Exception as e:
+        print(f"[Plugin] active 插件加载失败（已隔离）: {e}")
 
 if not os.environ.get("BACKEND_SKIP_INIT"):
     _run_startup_init()
@@ -791,16 +798,24 @@ app.include_router(operators_router, prefix=f"{settings.API_V1_STR}", tags=["Ope
 app.include_router(cluster_router, prefix=f"{settings.API_V1_STR}", tags=["Cluster"])
 app.include_router(extdev_router, prefix=f"{settings.API_V1_STR}", tags=["External Devices"])
 app.include_router(debug_router, prefix=f"{settings.API_V1_STR}", tags=["Debug"])
+app.include_router(plugins_router, prefix=settings.API_V1_STR, tags=["Plugins"])
 
 if os.environ.get("RUNTIME_MODE") == "test":
     from backend.api.test_runtime_routes import router as test_synthetic_router
+    from backend.api.test_compat_routes import router as test_compat_router
 
     app.include_router(
         test_synthetic_router,
         prefix=f"{settings.API_V1_STR}/test/synthetic",
         tags=["test-synthetic"],
     )
+    app.include_router(
+        test_compat_router,
+        prefix=settings.API_V1_STR,
+        tags=["test-compat"],
+    )
     print("[RUNTIME_MODE=test] mounted /api/v1/test/synthetic/* (virtual detection scenarios)")
+    print("[RUNTIME_MODE=test] mounted test-compat shim routes (mes/alarm/sessions/source legacy paths)")
 
 # Mount static files for uploads (images, etc.)
 if os.path.exists(settings.UPLOAD_DIR):

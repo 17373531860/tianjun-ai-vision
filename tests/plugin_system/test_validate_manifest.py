@@ -23,8 +23,8 @@ def _good_tier1():
         "capabilities": ["theme.css"],
         "main_version_min": "3.7.0",
         "created_at": "2026-05-09T00:00:00+00:00",
-        "signed_at": "",
-        "signed_by": "",
+        "signed_at": "1970-01-01T00:00:00+00:00",
+        "signed_by": "unsigned-dev-build",
         "files_digest": "sha256:" + "0" * 64,
     }
 

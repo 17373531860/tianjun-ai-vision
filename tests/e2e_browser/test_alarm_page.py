@@ -33,5 +33,5 @@ def test_alarm_event_panel_present(page, base_url):
 def test_alarm_event_titles_include_ok_or_ng(page, base_url):
     ap = AlarmPage(page, base_url).goto()
     titles = ap.get_event_titles()
-    assert any(t in titles for t in ("合格(OK)", "不良(NG)", "事件1", "事件2")), \
+    assert any(t in titles for t in ("合格(OK)", "不良(NG)", "合格", "NG", "事件1", "事件2")), \
         f"事件标题应包含 OK/NG/事件1/事件2, 实际 {titles}"

@@ -53,7 +53,7 @@ def _sign_zip(
 ) -> None:
     """模拟 sign-plugin.py: 重打 ZIP 加 signature.bin."""
     extracted = tmp_path / "extracted"
-    extracted.mkdir()
+    extracted.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(in_zip) as zf:
         zf.extractall(extracted)
 
@@ -102,7 +102,7 @@ def _verify_zip(
 ) -> tuple[bool, str]:
     """模拟主程序加载时的 10 阶段验签 (RSA + HMAC + digest)."""
     extracted = tmp_path / "verify_extracted"
-    extracted.mkdir()
+    extracted.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path) as zf:
         zf.extractall(extracted)
 

@@ -27,6 +27,7 @@
 |---|---|---|
 | `verify-plugin.py`          | 离线验签（无需 PLUGIN_SECRET，只验 RSA + files_digest）| ✅ 骨架完成 |
 | `install-plugin.py`         | CLI 安装（与 UI 安装等效, 用于 IT 部署）| ✅ 骨架完成（HTTP 模式待 backend API）|
+| `lint-plugin-docs.py`       | 校验插件文档链接、JSON、示例 manifest 与已撤销误报措辞 | ✅ 已实现 |
 
 ### 共享代码
 

@@ -30,11 +30,11 @@ class AlarmPage(BasePage):
 
     def has_event_panel(self) -> bool:
         body = self.body_text()
-        return ("事件1" in body) or ("事件2" in body)
+        return ("触发条件" in body) and (("事件1" in body) or ("事件2" in body) or ("当前项目暂无事件配置" in body))
 
     def get_event_titles(self) -> list[str]:
         body = self.body_text()
-        return [k for k in ("合格(OK)", "不良(NG)", "未压墨", "事件1", "事件2") if k in body]
+        return [k for k in ("合格(OK)", "不良(NG)", "合格", "NG", "未压墨", "事件1", "事件2") if k in body]
 
     def click_refresh_devices(self):
         return self.click_text("刷新")

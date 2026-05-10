@@ -1,0 +1,7 @@
+Cycle Summary
+=============
+
+cycle_id: {{ cycle.id }}
+barcode: {{ workpiece.barcode }}
+result: {{ cycle.result }}
+plugin: internal-demo-fullstack

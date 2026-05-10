@@ -68,9 +68,25 @@ def run_frontend_build(src_dir: Path) -> None:
 
 
 def collect_zip_members(src_dir: Path) -> list[Path]:
-    """收集要进 ZIP 的所有文件 (排除 .git/__pycache__/node_modules 等)。"""
-    from _plugin_common import _iter_files_for_digest
-    return list(_iter_files_for_digest(src_dir))
+    """收集要进 ZIP 的所有文件。
+
+    注意：不能复用 files_digest 的遍历器。files_digest 会排除 plugin.json
+    以避免自引用循环，但 ZIP 包必须包含 plugin.json。
+    """
+    from _plugin_common import DIGEST_EXCLUDE_NAMES, DIGEST_EXCLUDE_SUFFIXES
+
+    zip_exclude_names = set(DIGEST_EXCLUDE_NAMES) - {"plugin.json"}
+    files = []
+    for p in sorted(src_dir.rglob("*")):
+        if not p.is_file():
+            continue
+        rel_parts = p.relative_to(src_dir).parts
+        if any(part in zip_exclude_names for part in rel_parts):
+            continue
+        if p.suffix in DIGEST_EXCLUDE_SUFFIXES:
+            continue
+        files.append(p)
+    return files
 
 
 def pack(src_dir: Path, out_dir: Path, *, skip_build: bool = False) -> Path:
@@ -92,7 +108,13 @@ def pack(src_dir: Path, out_dir: Path, *, skip_build: bool = False) -> Path:
          f"version={manifest.get('plugin_version')} "
          f"customer={manifest.get('customer_code')}")
 
-    # ---- 2) 校验 manifest ----
+    # ---- 2) 补未签名占位字段后校验 manifest ----
+    # plugin.json 需要在未签名前也通过 schema 校验；签名阶段会覆盖这两个字段。
+    manifest.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+    manifest.setdefault("signed_at", "1970-01-01T00:00:00+00:00")
+    manifest.setdefault("signed_by", "unsigned-dev-build")
+    manifest.setdefault("files_digest", "sha256:" + "0" * 64)
+
     try:
         validate_manifest(manifest)
         info("manifest schema 校验通过")
@@ -113,16 +135,6 @@ def pack(src_dir: Path, out_dir: Path, *, skip_build: bool = False) -> Path:
     digest = calc_files_digest(src_dir)
     info(f"files_digest = {digest}")
     manifest["files_digest"] = digest
-
-    # 5) created_at 自动填 (如果作者没填)
-    if "created_at" not in manifest or not manifest.get("created_at"):
-        manifest["created_at"] = datetime.now(timezone.utc).isoformat()
-
-    # signed_at / signed_by 留空 (sign-plugin.py 填)
-    if "signed_at" not in manifest:
-        manifest["signed_at"] = ""
-    if "signed_by" not in manifest:
-        manifest["signed_by"] = ""
 
     # ---- 5) 落盘 canonical manifest ----
     canon = canonical_json(manifest)

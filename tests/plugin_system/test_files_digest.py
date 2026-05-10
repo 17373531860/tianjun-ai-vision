@@ -85,12 +85,28 @@ def test_digest_excludes_signature_bin(tmp_path):
     _make_dir(tmp_path, {
         "plugin.json": b"{}",
         "signature.bin": b"\xde\xad\xbe\xef",
+        "frontend/theme.css": b":root{}",
     })
     d_with = calc_files_digest(tmp_path)
 
     (tmp_path / "signature.bin").unlink()
     d_without = calc_files_digest(tmp_path)
     assert d_with == d_without
+
+
+def test_digest_excludes_plugin_json(tmp_path):
+    """plugin.json 由 RSA 签名保护，不参与 digest，避免 files_digest 字段自引用循环。"""
+    _make_dir(tmp_path, {
+        "plugin.json": b'{"files_digest":"sha256:' + b"0" * 64 + b'"}',
+        "frontend/theme.css": b":root{}",
+    })
+    d1 = calc_files_digest(tmp_path)
+
+    (tmp_path / "plugin.json").write_bytes(
+        b'{"files_digest":"sha256:' + b"f" * 64 + b'","signed_by":"x"}'
+    )
+    d2 = calc_files_digest(tmp_path)
+    assert d1 == d2
 
 
 def test_digest_excludes_git(tmp_path):

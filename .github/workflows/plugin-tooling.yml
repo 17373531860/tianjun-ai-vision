@@ -1,0 +1,81 @@
+name: Plugin Tooling
+
+on:
+  pull_request:
+    paths:
+      - "docs/plugin-system/**"
+      - "scripts/plugin/**"
+      - "plugins-examples/**"
+      - "tests/plugin_system/**"
+      - ".github/workflows/plugin-tooling.yml"
+  workflow_dispatch:
+
+jobs:
+  validate-plugin-system:
+    name: Validate plugin schema, tools, examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest jsonschema cryptography
+
+      - name: Check Python syntax for plugin tools
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          for path in sorted(Path("scripts/plugin").glob("*.py")):
+              ast.parse(path.read_text(encoding="utf-8"))
+              print(f"[OK] {path}")
+          PY
+
+      - name: Validate schema
+        run: |
+          python - <<'PY'
+          import json
+          from jsonschema import Draft202012Validator
+          schema = json.load(open("docs/plugin-system/plugin.schema.json", encoding="utf-8"))
+          Draft202012Validator.check_schema(schema)
+          print("[OK] docs/plugin-system/plugin.schema.json")
+          PY
+
+      - name: Lint plugin documentation
+        run: |
+          python scripts/plugin/lint-plugin-docs.py
+
+      - name: Run plugin unit tests
+        run: |
+          python -m pytest tests/plugin_system/ -q
+
+      - name: Pack example plugins
+        run: |
+          mkdir -p /tmp/tjv-out
+          python scripts/plugin/pack-plugin.py --src plugins-examples/tier1-theme --out /tmp/tjv-out --skip-build
+          python scripts/plugin/pack-plugin.py --src plugins-examples/tier2-ui --out /tmp/tjv-out --skip-build
+          python scripts/plugin/pack-plugin.py --src plugins-examples/tier3-fullstack --out /tmp/tjv-out --skip-build
+          ls -lh /tmp/tjv-out
+
+      - name: Ensure unsigned packages contain manifests
+        run: |
+          python - <<'PY'
+          import sys
+          import zipfile
+          from pathlib import Path
+          for pkg in sorted(Path("/tmp/tjv-out").glob("*.tjvplugin")):
+              with zipfile.ZipFile(pkg) as zf:
+                  names = set(zf.namelist())
+              if "plugin.json" not in names:
+                  raise SystemExit(f"{pkg} missing plugin.json")
+              print(f"[OK] {pkg.name}: {len(names)} files")
+          PY

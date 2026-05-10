@@ -61,6 +61,11 @@
 |---|---|
 | [REVIEW_CHECKLIST.md](./REVIEW_CHECKLIST.md) | **主作者必读**——P0/P1/P2/P3 共 84 项决策点 + 三轮会议节奏 |
 | [customer-codes.md](./customer-codes.md) | 客户码注册表 + 命名 SOP + 撤销流程 |
+| [CHANGELOG.md](./CHANGELOG.md) | 插件系统设计与工具变更记录 |
+| [error-codes.i18n.json](./error-codes.i18n.json) | 插件错误码中英双语文案 |
+| [implementation/ISSUES.md](./implementation/ISSUES.md) | F1~F15 实施项拆解 |
+| [license-plugin-integration.md](./license-plugin-integration.md) | License 与插件客户码对接契约 |
+| [adr/](./adr/) | 关键架构决策记录 |
 | `../scripts/plugin/` | CLI 工具（gen-master-keypair / pack / sign / verify ...） |
 
 ---
@@ -126,7 +131,7 @@ Day 14   ─ 签发  scripts/plugin/sign-plugin.py 签首个    30 min
 
 ---
 
-## 🎯 当前实施状态（2026-05-09）
+## 🎯 当前实施状态（2026-05-10）
 
 | 阶段 | 进度 | 文件 |
 |---|---|---|
@@ -135,12 +140,14 @@ Day 14   ─ 签发  scripts/plugin/sign-plugin.py 签首个    30 min
 | 评审清单 | ✅ 完成 | REVIEW_CHECKLIST.md |
 | 客户码注册表 | ✅ 初版 | customer-codes.md（仅 3 保留码，待主作者补真实客户）|
 | 主作者密钥工具 | ✅ 完成 | scripts/plugin/gen-master-keypair.py |
+| 插件工具算法测试 | ✅ 63 passed | tests/plugin_system/ |
+| 插件 CI 草案 | ✅ 完成 | .github/workflows/plugin-tooling.yml |
 | BUG-1 修复 | ✅ 2026-05-09 | backend/core/config.py:57 |
 | INCONSIST-2 验证 | ✅ 2026-05-09 误报撤销 | inventory/05 |
 | **P0 决策会议** | ⏳ 待主作者 | REVIEW_CHECKLIST §2 |
 | 主作者生成密钥 | ⏳ 待主作者 | scripts/plugin/gen-master-keypair.py |
 | F1~F15 主程序前置改造 | ⏳ 0 / 14（F14 已完成 / F15 撤销） | design/06 §九 |
-| 三档 demo 插件 | ⏳ 仅设计 | plugins-examples/（目录骨架待建） |
+| 三档 demo 插件 | ✅ 骨架完成，可打包 | plugins-examples/ |
 
 ---
 
@@ -149,7 +156,7 @@ Day 14   ─ 签发  scripts/plugin/sign-plugin.py 签首个    30 min
 | 议题 | 决策 | 来源 |
 |---|---|---|
 | 三档分级 | Theme / UI / Fullstack 渐进 | design 00 §第二节 |
-| 签名 | RSA-PSS-4096 + HMAC-SHA256 + files_digest | design 02, Q1 |
+| 签名 | RSA-PSS-4096 + HMAC-SHA256 + files_digest（排除 plugin.json/signature.bin）| design 02, Q1, ADR 0001 |
 | 包格式 | ZIP + `.tjvplugin` 后缀 | design 07, Q3 |
 | 客户码 | 全小写, 3~20 字符, `^[a-z][a-z0-9-]{2,19}$` | design 01, Q5, customer-codes |
 | 多插件激活 | v3.7 单插件 / v4.5 评估多插件 | design 00, M1 |

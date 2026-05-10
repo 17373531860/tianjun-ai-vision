@@ -1043,6 +1043,97 @@
           </el-card>
         </div>
       </el-tab-pane>
+
+      <!-- Plugin Management Tab -->
+      <el-tab-pane label="插件管理">
+        <div class="space-y-6 p-4">
+          <el-alert
+            title="更换或激活插件后，需要重启应用才能让插件代码生效。"
+            type="warning"
+            :closable="false"
+            show-icon
+          />
+
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <el-icon class="text-purple-400"><Lightning /></el-icon>
+                  <span class="font-bold text-white">插件管理</span>
+                  <el-tag v-if="activePluginCode" type="success" size="small">当前 active: {{ activePluginCode }}</el-tag>
+                </div>
+                <el-button size="small" :loading="pluginLoading" @click="loadPlugins">
+                  <el-icon class="mr-1"><Refresh /></el-icon>刷新
+                </el-button>
+              </div>
+            </template>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+              <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="text-xs text-gray-500 mb-1">当前 License 客户码</div>
+                <div class="text-cyan-300 font-mono">{{ licenseCustomer || '未缓存' }}</div>
+              </div>
+              <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="text-xs text-gray-500 mb-1">已安装插件</div>
+                <div class="text-white text-lg font-bold">{{ plugins.length }}</div>
+              </div>
+              <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="text-xs text-gray-500 mb-1">安装包</div>
+                <el-upload
+                  :auto-upload="false"
+                  :show-file-list="false"
+                  accept=".tjvplugin"
+                  :on-change="onPluginFileChange"
+                >
+                  <el-button type="primary" :loading="pluginUploading">上传 .tjvplugin</el-button>
+                </el-upload>
+              </div>
+            </div>
+
+            <el-table :data="plugins" stripe size="small" class="bg-transparent" v-loading="pluginLoading">
+              <el-table-column prop="name" label="插件" min-width="160">
+                <template #default="{ row }">
+                  <div class="font-bold text-white">{{ row.name }}</div>
+                  <div class="text-xs text-gray-500 font-mono">{{ row.customer_code }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="plugin_version" label="版本" width="110" />
+              <el-table-column label="状态" width="150">
+                <template #default="{ row }">
+                  <el-tag :type="row.is_active ? 'success' : 'info'" size="small">
+                    {{ row.is_active ? 'active' : row.status }}
+                  </el-tag>
+                  <div class="text-xs text-gray-500 mt-1">{{ row.runtime_status || 'stopped' }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="最近错误" min-width="180">
+                <template #default="{ row }">
+                  <span v-if="row.last_error_code" class="text-red-400">
+                    {{ row.last_error_code }}：{{ row.last_error_message }}
+                  </span>
+                  <span v-else class="text-gray-500">无</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="230" fixed="right">
+                <template #default="{ row }">
+                  <el-button v-if="!row.is_active" size="small" type="success" @click="activateInstalledPlugin(row)">
+                    激活
+                  </el-button>
+                  <el-button v-else size="small" type="warning" @click="deactivateInstalledPlugin(row)">
+                    停用
+                  </el-button>
+                  <el-button size="small" type="danger" @click="removeInstalledPlugin(row)">
+                    卸载
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-if="!plugins.length && !pluginLoading" class="text-center text-gray-500 text-sm py-6">
+              暂无插件，请上传已签名的 .tjvplugin 安装包。
+            </div>
+          </el-card>
+        </div>
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -1052,13 +1143,20 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
 import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close } from '@element-plus/icons-vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjectDetail } from '@/api/project';
 import { getOperators, createOperator, updateOperator, deleteOperator, setCurrentOperator, getCurrentOperator } from '@/api/operators';
+import { getPlugins, installPlugin, activatePlugin, deactivatePlugin, deletePlugin } from '@/api/plugins';
 import api from '@/api/index';
 
 const store = useSystemStore();
 const projectStore = useProjectStore();
+
+const plugins = ref([]);
+const activePluginCode = ref(null);
+const pluginLoading = ref(false);
+const pluginUploading = ref(false);
+const licenseCustomer = ref('');
 
 // GPU相关状态
 const loadingGpu = ref(false);
@@ -1177,6 +1275,69 @@ async function confirmDeleteOp() {
     showOpEditor.value = false;
     loadOperators();
   } catch { ElMessage.error('删除失败'); }
+}
+
+async function loadPluginLicense() {
+  try {
+    const { data } = await api.get('/system/license-cache');
+    licenseCustomer.value = data?.customer || data?.customerName || data?.customer_name || '';
+  } catch {
+    licenseCustomer.value = '';
+  }
+}
+
+async function loadPlugins() {
+  pluginLoading.value = true;
+  try {
+    const { data } = await getPlugins();
+    plugins.value = data?.items || [];
+    activePluginCode.value = data?.active_customer_code || null;
+    await loadPluginLicense();
+  } catch (e) {
+    ElMessage.error('加载插件列表失败: ' + (e?.response?.data?.detail?.message || e?.message || ''));
+  } finally {
+    pluginLoading.value = false;
+  }
+}
+
+async function onPluginFileChange(uploadFile) {
+  const raw = uploadFile?.raw;
+  if (!raw) return;
+  pluginUploading.value = true;
+  try {
+    await installPlugin(raw);
+    ElMessage.success('插件安装成功，激活后重启生效');
+    await loadPlugins();
+  } catch (e) {
+    const detail = e?.response?.data?.detail;
+    const message = detail?.message || detail || e?.message || '安装失败';
+    ElMessage.error(`插件安装失败: ${message}`);
+  } finally {
+    pluginUploading.value = false;
+  }
+}
+
+async function activateInstalledPlugin(row) {
+  await activatePlugin(row.customer_code);
+  ElMessage.success('插件已激活，重启后生效');
+  await loadPlugins();
+}
+
+async function deactivateInstalledPlugin(row) {
+  await deactivatePlugin(row.customer_code);
+  ElMessage.success('插件已停用，重启后生效');
+  await loadPlugins();
+}
+
+async function removeInstalledPlugin(row) {
+  await ElMessageBox.confirm(
+    `确认卸载插件 ${row.name}？插件业务数据表会保留。`,
+    '卸载插件',
+    { type: 'warning' }
+  );
+  await deletePlugin(row.customer_code);
+  ElMessage.success('插件已卸载');
+  await loadPlugins();
 }
 
 const saveDisplaySettings = () => {
@@ -1425,6 +1586,7 @@ onMounted(async () => {
   loadCurrentDevice();
   loadKalmanConfig();
   loadOperators();  // 加载卡尔曼滤波配置
+  loadPlugins();
   loadTransformTotalChannels();
   loadTransformConfig();
   
