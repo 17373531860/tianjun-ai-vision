@@ -351,6 +351,58 @@ curl -sI http://127.0.0.1:6001/ | head -1
 
 ---
 
+## v3.7.0 新增验收点（合并 feat/plugin-config + feat/multi-model-roi-link 后）
+
+> 这一节是**当晚合并并修复 3 个客户 bug 后沉淀的踩坑**。下次跑测试 / 验收时优先扫一遍。
+
+### 必跑场景
+
+| 场景 | 入口 / 覆盖文件 | 期望 |
+|---|---|---|
+| **MES 实时上传 (cycle_end 无扫码场景)** | `tests/features/mes_scan_workflow.feature` 的 `cycle_end 即使未绑定 workpiece 也应能进入 MES 分发链路` 场景 | gateway.dispatch("cycle_end") 被调一次 |
+| **A-B-C-B-D 期望序列重复 label** | `tests/test_step_duplicate_in_expected.py` 9 个用例 | is_legitimate_next_in_sequence + Counter 数学全绿 |
+| **cycle.steps 在 session 范围 export 里非空** | `tests/features/session_naming.feature` 的 `session 范围导出 stats.cycles 里每个 cycle 都带 steps 列表` 场景 | stats.cycles[*].steps + interval + event 都有 |
+| **会话 ID 自定义** | Monitor 输入框 → 后端 detection_sessions.name 落盘 + Data 页能改名 | `tests/e2e_browser/test_sat_session_naming_ui.py` 全 4 条绿 |
+| **插件系统三层** | `tests/plugin_system/` + `tests/step_defs/test_plugin_*.py` | 签名往返 / 安装 API / CLI 工具全绿 |
+| **多模型 ROI 路由** | `tests/test_inference_router.py` + `tests/test_source_routes_multi.py` | 多模型 dispatch + ROI 中心点裁剪都对 |
+
+### 已知陷阱（这次掉过的坑）
+
+1. **`tests/sat/conftest.py` 的 `pytest_collection_modifyitems` 必须只动 SAT items**。
+   v3.7.0 前一个版本的 hook 用 `for item in items` 扫整个 root 收集集合，
+   导致跑 `pytest tests/` 时 382 全 skip。**必须**用 `fspath` 过滤再加 marker。
+   现版本已加 `_is_sat_item()` filter。
+
+2. **MES BDD background 不能 ping `/api/v1/mes/config`（这条路由不存在）**，
+   要 ping `/api/v1/mes/orders`。否则所有 MES 场景静默 skip。
+
+3. **synthetic + 单测批跑会 pollution**（`tests/test_synthetic_*` 在 batch 末尾偶发 fail，
+   单独跑 6/6 绿）。怀疑是 `MESHook`/`ChannelManager` 模块级单例没被前面测试干净复位。
+   **临时方案**：发版前单独再跑 `pytest tests/test_synthetic_*.py` 确认绿，
+   长远要给这三类组件加 conftest function-scope reset fixture。
+
+4. **合并后必须冒烟 `python -c "from backend.main import app"`**：
+   两条 v3.6.0 分支并行改动 mes_hooks / source_settlement / migrate_database，
+   合上来可能引入隐式 NameError / ImportError 只有 import 时才会暴露。
+
+### 跑全套测试的标准命令（v3.7.0 之后）
+
+```bash
+# Layer 1: 单元 + BDD
+pytest tests/ --ignore=tests/e2e_browser --ignore=tests/plugin_system -q
+
+# Layer 2: 插件系统（独立）
+pytest tests/plugin_system/ -q
+
+# Layer 3: E2E (Playwright, 需要前端已 build / 在 dev)
+pytest tests/e2e_browser/ -q
+
+# Layer 4: synthetic 单独再跑一次防 pollution
+pytest tests/test_synthetic_detection_api.py tests/test_synthetic_full_flow.py tests/test_synthetic_project_restore.py -v
+```
+
+---
+
 ## 一些不要做的事
 
 - ❌ **跑全套测试不带 `-m "not slow"` 默认**（`@slow` 真实视频测试需要本地有 `tests/sample_video.mp4` 等资产，CI 没装会大量 SKIP，不是 fail 但浪费时间）
