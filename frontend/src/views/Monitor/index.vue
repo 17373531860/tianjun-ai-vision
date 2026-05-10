@@ -17,10 +17,20 @@
           :class="multiChannelData[ch - 1]?.isDetecting ? 'bg-green-600/90 text-white animate-pulse' : multiChannelData[ch - 1]?.isRunning ? 'bg-yellow-600/90 text-white' : 'bg-gray-600/90 text-white'">
           {{ multiChannelData[ch - 1]?.isDetecting ? '检测中' : multiChannelData[ch - 1]?.isRunning ? '待机' : '停止' }}
         </div>
-        <div class="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm px-2 py-1 flex gap-3 text-xs">
+        <div class="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm px-2 py-1 flex gap-3 text-xs items-center">
           <span class="text-white font-mono">总: <span class="text-cyan-400 font-bold">{{ multiChannelData[ch - 1]?.total ?? 0 }}</span></span>
           <span class="text-white font-mono">OK: <span class="text-green-400 font-bold">{{ multiChannelData[ch - 1]?.ok ?? 0 }}</span></span>
           <span class="text-white font-mono">NG: <span class="text-red-400 font-bold">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</span></span>
+          <!-- feat/multi-model-roi-link b1: 多通道副模型 fps 快照 (>=2 个 slot 时显示) -->
+          <template v-if="(channelModelStats[ch - 1] || []).length >= 2">
+            <span class="text-gray-500">|</span>
+            <span v-for="m in channelModelStats[ch - 1]" :key="m.name"
+                  class="flex items-center gap-1 text-[0.6875rem]" :title="`${m.name} (${m.model_loaded ? '已加载' : '未加载'})`">
+              <span class="w-2 h-2 rounded-sm flex-shrink-0" :style="{ backgroundColor: m.display_color || '#10b981' }"></span>
+              <span class="text-gray-400">{{ m.name }}</span>
+              <span class="text-cyan-400 font-mono">{{ m.fps_inference || 0 }}</span>
+            </span>
+          </template>
           <span class="ml-auto text-gray-400">FPS: {{ multiChannelData[ch - 1]?.fps ?? 0 }}</span>
         </div>
       </div>
@@ -244,10 +254,19 @@
           :class="multiChannelData[ch - 1]?.isDetecting ? 'bg-green-600/90 text-white animate-pulse' : multiChannelData[ch - 1]?.isRunning ? 'bg-yellow-600/90 text-white' : 'bg-gray-600/90 text-white'">
           {{ multiChannelData[ch - 1]?.isDetecting ? '检测中' : multiChannelData[ch - 1]?.isRunning ? '待机' : '停止' }}
         </div>
-        <div class="absolute bottom-0 left-0 right-0 bg-black/70 px-2 py-1 flex gap-3 text-[0.625rem]">
+        <div class="absolute bottom-0 left-0 right-0 bg-black/70 px-2 py-1 flex gap-3 text-[0.625rem] items-center">
           <span class="text-white font-mono">总:<span class="text-cyan-400 font-bold">{{ multiChannelData[ch - 1]?.total ?? 0 }}</span></span>
           <span class="text-white font-mono">OK:<span class="text-green-400 font-bold">{{ multiChannelData[ch - 1]?.ok ?? 0 }}</span></span>
           <span class="text-white font-mono">NG:<span class="text-red-400 font-bold">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</span></span>
+          <!-- feat/multi-model-roi-link b1: 4 工位空间紧, 仅色块+fps 数字 -->
+          <template v-if="(channelModelStats[ch - 1] || []).length >= 2">
+            <span v-for="m in channelModelStats[ch - 1]" :key="m.name"
+                  class="flex items-center gap-0.5 text-[0.5625rem]"
+                  :title="`${m.name} ${m.fps_inference || 0}fps ${m.model_loaded ? '' : '(未加载)'}`">
+              <span class="w-1.5 h-1.5 rounded-sm flex-shrink-0" :style="{ backgroundColor: m.display_color || '#10b981' }"></span>
+              <span class="text-cyan-400 font-mono">{{ m.fps_inference || 0 }}</span>
+            </span>
+          </template>
           <span class="ml-auto text-gray-400">FPS:{{ multiChannelData[ch - 1]?.fps ?? 0 }}</span>
         </div>
         <!-- v3.1.3: 4 工位每个小卡片在视频上沿额外显示一行 工件号 / 未绑码 / 等待扫码 -->
@@ -549,7 +568,7 @@
             </div>
           </div>
           <!-- 状态信息 -->
-          <div class="p-2 flex gap-6 text-xs text-gray-300">
+          <div class="p-2 flex gap-6 text-xs text-gray-300 flex-wrap">
             <span class="flex items-center gap-2">
               <span class="w-2 h-2 rounded-full" :class="isStreaming ? 'bg-green-500' : 'bg-gray-500'"></span> 
               {{ sourceStatusText }}
@@ -557,6 +576,16 @@
             <span v-if="systemStore.display.monitor.showFps !== false">FPS: <span class="text-cyan-400 font-mono">{{ fps }}</span></span>
             <span v-if="systemStore.display.monitor.showLatency !== false">延迟: <span class="text-cyan-400 font-mono">{{ latency }} ms</span></span>
             <span v-if="systemStore.display.monitor.showDetectionCount !== false">检测数: <span class="text-cyan-400 font-mono">{{ detectionCount }}</span></span>
+            <!-- Step 8 (feat/multi-model-roi-link): 多模型 per-slot 性能快照 (仅 >=2 个 slot 时显示) -->
+            <template v-if="modelStats.length >= 2">
+              <span class="text-gray-500">|</span>
+              <span v-for="m in modelStats" :key="m.name" class="flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-sm" :style="{ backgroundColor: m.display_color || '#10b981' }"></span>
+                <span class="text-gray-400">{{ m.name }}</span>
+                <span class="text-cyan-400 font-mono">{{ m.fps_inference || 0 }}fps</span>
+                <span v-if="!m.model_loaded" class="text-amber-400">(未加载)</span>
+              </span>
+            </template>
           </div>
         </div>
       </div>
@@ -1154,6 +1183,11 @@ watch(isDetecting, (newVal) => {
 const isStreaming = ref(false);
 const fps = ref(0);
 const latency = ref(0);
+// Step 8 (feat/multi-model-roi-link): 多模型运行时性能快照, 来自 /detection/results
+// 的 models[] 字段. 单模型时仅含 main 一项, 多模型时含全部 slot.
+const modelStats = ref([]);
+// 多通道版本: { [channelId]: [{name, fps_inference, latency, ...}] }
+const channelModelStats = ref({});
 const cycleTime = ref(0);
 const cycleTimeWithNg = ref(0);
 const lastCycleTime = ref(0);
@@ -1457,6 +1491,10 @@ const processChannelResult = (ch, d) => {
   chData.isDetecting = d.is_detecting;
   chData.fps = d.fps || 0;
   chData.latency = d.latency || 0;
+  // Step 8: per-channel 多模型快照
+  if (Array.isArray(d.models)) {
+    channelModelStats.value[ch] = d.models;
+  }
   if (d.project_config?.project_name) {
     chData.projectName = d.project_config.project_name;
   }
@@ -1681,7 +1719,7 @@ const processChannelResult = (ch, d) => {
 
   const canvas = multiCanvasRefs[ch];
   if (canvas && d.detections?.length) {
-    drawMultiDetections(ch, canvas, d.detections, chData._hiddenLabels);
+    drawMultiDetections(ch, canvas, d.detections, chData._hiddenLabels, d.project_config);
   } else if (canvas) {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1730,7 +1768,42 @@ const clipNormalizedBox = (det) => {
   return { x, y, w, h };
 };
 
-const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null) => {
+/** 归一化坐标下的射线法点在多边形内（含边界） */
+const pointInPolygonNorm = (px, py, poly) => {
+  if (!poly || poly.length < 3) return true;
+  let inside = false;
+  const n = poly.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = Number(poly[i][0]);
+    const yi = Number(poly[i][1]);
+    const xj = Number(poly[j][0]);
+    const yj = Number(poly[j][1]);
+    const denom = (yj - yi) || 1e-18;
+    if (((yi > py) !== (yj > py)) && (px < ((xj - xi) * (py - yi)) / denom + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+};
+
+/**
+ * pipeline_config.hide_boxes_outside_step_roi：对已配置步骤 ROI 的标签，
+ * 框中心不在多边形内则不绘制（仅监视 UI）。
+ */
+const shouldDrawDetWithStepRoi = (det, stepsConfig, pipelineConfig) => {
+  const pc = pipelineConfig || {};
+  if (!pc.hide_boxes_outside_step_roi) return true;
+  const label = det.label;
+  if (!label) return true;
+  const step = (stepsConfig || []).find(s => s && s.label === label && s.enabled !== false);
+  if (!step || !Array.isArray(step.roi) || step.roi.length < 3) return true;
+  const cb = clipNormalizedBox(det);
+  const cx = cb.x + cb.w / 2;
+  const cy = cb.y + cb.h / 2;
+  return pointInPolygonNorm(cx, cy, step.roi);
+};
+
+const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollProjectConfig = null) => {
   if (!canvas) return;
   const parent = canvas.parentElement;
   if (parent) { canvas.width = parent.offsetWidth; canvas.height = parent.offsetHeight; }
@@ -1748,9 +1821,13 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null) => {
     dy = (ch2 - dh) / 2;
   }
 
+  const stepsConfMulti = pollProjectConfig?.steps_config || currentProject.value?.steps_config || [];
+  const pipeMulti = pollProjectConfig?.pipeline_config || currentProject.value?.pipeline_config || {};
+
   detections.forEach(det => {
     if (det.hidden) return;
     if (hiddenLabels && det.label && hiddenLabels.has(det.label)) return;
+    if (!shouldDrawDetWithStepRoi(det, stepsConfMulti, pipeMulti)) return;
     const cb = clipNormalizedBox(det);
     const x = cb.x * dw + dx, y = cb.y * dh + dy;
     const w = cb.w * dw, h = cb.h * dh;
@@ -1783,6 +1860,21 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null) => {
   });
 };
 
+// Step 8 (feat/multi-model-roi-link): 解析单个 model id 到磁盘路径 (含格式回退)
+const _resolveModelPath = async (modelId, modelFormat = 'pytorch_fp32') => {
+  try {
+    const resolveRes = await apiResolveModelPath(modelId, modelFormat);
+    return {
+      path: resolveRes.data.path,
+      fallback: resolveRes.data.fallback,
+      reason: resolveRes.data.reason,
+    };
+  } catch {
+    const modelRes = await getModelDetail(modelId);
+    return { path: modelRes.data.file_path, fallback: false };
+  }
+};
+
 const startDetectionForChannel = async (ch) => {
   const chProj = multiChannelData.value[ch]?.project || currentProject.value;
   if (!chProj) {
@@ -1794,23 +1886,67 @@ const startDetectionForChannel = async (ch) => {
     const modelId = chProj.default_model_id;
     if (!modelId) { ElMessage.warning(`工位 ${ch + 1} 未配置模型`); return; }
     const modelFormat = chProj.model_format || 'pytorch_fp32';
-    let modelPath;
-    try {
-      const resolveRes = await apiResolveModelPath(modelId, modelFormat);
-      modelPath = resolveRes.data.path;
-      if (resolveRes.data.fallback && modelFormat !== 'pytorch_fp32') {
-        ElMessage.warning(resolveRes.data.reason || '转换模型不可用，已回退到原始模型');
-      }
-    } catch {
-      const modelRes = await getModelDetail(modelId);
-      modelPath = modelRes.data.file_path;
+
+    const mainResolved = await _resolveModelPath(modelId, modelFormat);
+    if (mainResolved.fallback && modelFormat !== 'pytorch_fp32') {
+      ElMessage.warning(mainResolved.reason || '转换模型不可用，已回退到原始模型');
     }
+    const mainPath = mainResolved.path;
+
+    // Step 8: 解析项目的副模型配置 (来自 pipeline_config.models[], name !== 'main')
+    const pipelineModels = chProj?.pipeline_config?.models || [];
+    const extraSlots = pipelineModels.filter(m => m && m.name && m.name !== 'main' && m.model_id);
+
+    // v3.7.0: 会话 ID 校验提前到多/单模型 if 分支之前, 失败直接退出
     if (!validateSessionName(sessionName.value)) {
       ElMessage.warning('会话 ID 不合法：' + sessionNameError.value);
       return;
     }
-    await apiStartDetection(modelPath, 0.25, 0.45, ch, sessionName.value || null);
-    ElMessage.success(`工位 ${ch + 1} 检测已启动`);
+    const _sessionId = sessionName.value || null;
+    if (extraSlots.length > 0) {
+      // 多模型 payload
+      const mainPipelineSpec = pipelineModels.find(m => m && m.name === 'main') || {};
+      const specs = [{
+        name: 'main',
+        model_path: mainPath,
+        conf: 0.25,
+        iou: 0.45,
+        display_color: mainPipelineSpec.display_color || '#10b981',
+        priority: 100,
+      }];
+      const failedSlots = [];
+      for (const e of extraSlots) {
+        try {
+          const r = await _resolveModelPath(e.model_id, 'pytorch_fp32');
+          specs.push({
+            name: e.name,
+            model_path: r.path,
+            conf: typeof e.conf === 'number' ? e.conf : 0.25,
+            iou: typeof e.iou === 'number' ? e.iou : 0.45,
+            roi: Array.isArray(e.roi) && e.roi.length >= 3 ? e.roi : null,
+            schedule: e.schedule || { type: 'every_frame', n: 1, events: [] },
+            class_filter: Array.isArray(e.class_filter) && e.class_filter.length
+              ? e.class_filter : null,
+            priority: typeof e.priority === 'number' ? e.priority : 50,
+            display_color: e.display_color || '#f59e0b',
+            use_half: !!e.use_half,
+          });
+        } catch (err) {
+          failedSlots.push(e.name);
+          console.warn(`[Monitor] 副模型 ${e.name} 路径解析失败:`, err);
+        }
+      }
+      if (failedSlots.length) {
+        ElMessage.warning(`副模型路径解析失败已跳过: ${failedSlots.join(', ')}`);
+      }
+      await apiStartDetection({ models: specs }, undefined, undefined, ch, _sessionId);
+      ElMessage.success(
+        `工位 ${ch + 1} 检测已启动 (主 + ${specs.length - 1} 个副模型)`
+      );
+    } else {
+      await apiStartDetection(mainPath, 0.25, 0.45, ch, _sessionId);
+      ElMessage.success(`工位 ${ch + 1} 检测已启动`);
+    }
   } catch (e) {
     ElMessage.error(`工位 ${ch + 1} 启动失败: ${e.message}`);
   }
@@ -2688,18 +2824,28 @@ const drawDetections = (detections) => {
     }
   }
 
+  const pipeCfg = currentProject.value?.pipeline_config || {};
+
   detections.forEach(det => {
     if (!enabledLabels.has(det.label)) return;
     if (det.hidden) return;
     if (hiddenLabels.has(det.label)) return;
+    if (!shouldDrawDetWithStepRoi(det, stepsConfig, pipeCfg)) return;
     const cb = clipNormalizedBox(det);
     const x = offsetX + cb.x * renderW;
     const y = offsetY + cb.y * renderH;
     const w = cb.w * renderW;
     const h = cb.h * renderH;
     
-    const color = det.is_ng ? ngColor : boxColor;
-    
+    // Step 8 (feat/multi-model-roi-link): 副模型检测框用其独立 display_color,
+    // 主模型仍按 NG/OK 配色. 判断: model_name 存在且不是 'main' 即为副模型.
+    let color;
+    if (det.model_name && det.model_name !== 'main' && det.display_color) {
+      color = det.display_color;
+    } else {
+      color = det.is_ng ? ngColor : boxColor;
+    }
+
     // Render polygon mask if available (segmentation model)
     if (det.mask && Array.isArray(det.mask) && det.mask.length > 2) {
       ctx.beginPath();
@@ -2712,8 +2858,13 @@ const drawDetections = (detections) => {
         else ctx.lineTo(mx, my);
       });
       ctx.closePath();
-      ctx.fillStyle = color.replace(')', ', 0.25)').replace('rgb(', 'rgba(');
+      // Step 8: color 可能是 hex (#xxxxxx) 或 rgb(...). hex 不能直接 replace 成 rgba,
+      // 用 globalAlpha 兼容两种格式.
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.25;
       ctx.fill();
+      ctx.restore();
       ctx.strokeStyle = color;
       ctx.lineWidth = lineWidth;
       ctx.stroke();
@@ -2761,6 +2912,54 @@ const drawDetections = (detections) => {
     ctx.setLineDash([]);
     ctx.restore();
   }
+
+  // Step 8 (feat/multi-model-roi-link): 副模型 ROI 多边形叠加 (各自 display_color 虚线描边).
+  // 主模型 tracking_roi 已上面画完, 副模型 ROI 单独画一圈让用户清楚每个副 slot 的工作区.
+  const extraRois = (currentProject.value?.pipeline_config?.models || [])
+    .filter(m => m && m.name && m.name !== 'main' && Array.isArray(m.roi) && m.roi.length >= 3);
+  for (const slot of extraRois) {
+    ctx.save();
+    ctx.strokeStyle = slot.display_color || '#f59e0b';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 6]);
+    ctx.beginPath();
+    ctx.moveTo(offsetX + slot.roi[0][0] * renderW, offsetY + slot.roi[0][1] * renderH);
+    for (let i = 1; i < slot.roi.length; i++) {
+      ctx.lineTo(offsetX + slot.roi[i][0] * renderW, offsetY + slot.roi[i][1] * renderH);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.fillStyle = slot.display_color || '#f59e0b';
+    ctx.globalAlpha = 0.05;
+    ctx.fill();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  // 逐步骤 ROI (steps_config[].roi): 浅色虚线 + 微弱填充，与 tracking_roi / 副模型 ROI 区分
+  const stepRois = (currentProject.value?.steps_config || []).filter(
+    s => s && s.enabled !== false && Array.isArray(s.roi) && s.roi.length >= 3
+  );
+  const STEP_ROI_PALETTE = ['#c4b5fd', '#6ee7b7', '#fcd34d', '#f9a8d4', '#7dd3fc'];
+  stepRois.forEach((s, idx) => {
+    const col = STEP_ROI_PALETTE[idx % STEP_ROI_PALETTE.length];
+    ctx.save();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 5]);
+    ctx.beginPath();
+    ctx.moveTo(offsetX + s.roi[0][0] * renderW, offsetY + s.roi[0][1] * renderH);
+    for (let i = 1; i < s.roi.length; i++) {
+      ctx.lineTo(offsetX + s.roi[i][0] * renderW, offsetY + s.roi[i][1] * renderH);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.fillStyle = col;
+    ctx.globalAlpha = 0.04;
+    ctx.fill();
+    ctx.setLineDash([]);
+    ctx.restore();
+  });
 };
 
 // Watch for project changes to sync UI
@@ -3084,12 +3283,58 @@ const startDetection = async () => {
       ElMessage.error('模型文件路径无效');
       return;
     }
-    
+
     if (!validateSessionName(sessionName.value)) {
       ElMessage.warning('会话 ID 不合法：' + sessionNameError.value);
       return;
     }
-    await apiStartDetection(modelPath, 0.25, 0.45, 0, sessionName.value || null);
+    const _sessionId = sessionName.value || null;
+
+    // Step 8 (feat/multi-model-roi-link): 单工位也支持副模型
+    const pipelineModels = currentProject.value?.pipeline_config?.models || [];
+    const extraSlots = pipelineModels.filter(m =>
+      m && m.name && m.name !== 'main' && m.model_id);
+    if (extraSlots.length > 0) {
+      const mainPipelineSpec = pipelineModels.find(m => m && m.name === 'main') || {};
+      const specs = [{
+        name: 'main', model_path: modelPath, conf: 0.25, iou: 0.45,
+        display_color: mainPipelineSpec.display_color || '#10b981', priority: 100,
+      }];
+      const failed = [];
+      for (const e of extraSlots) {
+        try {
+          const r = await _resolveModelPath(e.model_id, 'pytorch_fp32');
+          specs.push({
+            name: e.name, model_path: r.path,
+            conf: typeof e.conf === 'number' ? e.conf : 0.25,
+            iou: typeof e.iou === 'number' ? e.iou : 0.45,
+            roi: Array.isArray(e.roi) && e.roi.length >= 3 ? e.roi : null,
+            schedule: e.schedule || { type: 'every_frame', n: 1, events: [] },
+            class_filter: Array.isArray(e.class_filter) && e.class_filter.length
+              ? e.class_filter : null,
+            priority: typeof e.priority === 'number' ? e.priority : 50,
+            display_color: e.display_color || '#f59e0b',
+            use_half: !!e.use_half,
+          });
+        } catch (err) {
+          failed.push(e.name);
+        }
+      }
+      if (failed.length) {
+        ElMessage.warning(`副模型路径解析失败已跳过: ${failed.join(', ')}`);
+      }
+      await apiStartDetection({ models: specs }, undefined, undefined, 0, _sessionId);
+      isRunning.value = true;
+      isDetecting.value = true;
+      isPaused.value = false;
+      projectStore.setRunningStatus(true);
+      forceReconnectStream();
+      ElMessage.success(`检测已开始 (主 + ${specs.length - 1} 个副模型)`);
+      startPolling();
+      return;
+    }
+
+    await apiStartDetection(modelPath, 0.25, 0.45, 0, _sessionId);
     isRunning.value = true;
     isDetecting.value = true;
     isPaused.value = false;
@@ -3188,6 +3433,8 @@ const startPolling = () => {
       fps.value = data.fps || 0;
       latency.value = data.latency || 0;
       detectionCount.value = (data.detections || []).length;
+      // Step 8: 多模型快照 (单工位场景)
+      modelStats.value = Array.isArray(data.models) ? data.models : [];
       cycleTime.value = data.average_cycle_time || 0;
       cycleTimeWithNg.value = data.average_cycle_time_with_ng || 0;
       lastCycleTime.value = data.last_cycle_time || 0;

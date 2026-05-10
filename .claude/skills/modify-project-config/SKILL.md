@@ -364,6 +364,10 @@ class Project(Base):
 | 自定义事件触发不出来 | events_config 里有但不响应 | 检查 `id` 是不是数字/字符串混用，`_trigger_event` 双向匹配，但有些调用点（如 `due_warning_event_id`）保存的是 number，配出来是 string 会失配 |
 | Schema 校验失败 | `pipeline_config` 整体被丢 | `ProjectUpdate` Optional[dict] 是顶层，新加**顶层列**才要改 schema；JSON 内嵌 key 不需要 |
 | MES Hook 错乱 | 切项目后旧 workpiece 串到新项目 | 已由 `activate_project` 调 `hook.clear_pending_scan` 处理；新增类似副作用要参考此处 |
+| **顺序模式不触发 OK/NG（高频踩坑）** | 走完 step_a/b/c 三步，cycle 永远不结算，OK/NG 事件永不触发，counters 全 0 | `pipeline_config.sequence_order` **必填**。`source_sequential_mixin.py:_check_sequential_mode` 第 15-27 行：`if not sequence_order: return`，没配就直接早退、连 step 都不计数（settle 走的是别的路径，counters 触发依赖此函数）。诊断：后端日志找不到「顺序模式检查/结算: 期望=...」就是这个 |
+| **结算模式默认 first_step、不是 last_step（高频踩坑）** | step_a 只出现一次的剧本永远不结算（"第一步再次出现才结算"是 first_step 模式语义） | `pipeline_config.settlement_mode` 默认是 `'first_step'`，意思「第一步**再次被检测到**」才触发结算。要"最后一步消失就结算"得显式配 `'last_step'`。诊断：后端日志看到「[第一步结算] [step_a] 再次检测到 ... 结算当前周期」=first_step 模式；看到 `_check_sequential_mode` 由 `_check_events(last_step)` 触发 = last_step 模式 |
+| **activate ≠ set-project**（写测试时高频踩坑） | `POST /projects/{id}/activate` 后 mgr.events_config 为空，事件触发不到 | `activate_project` 只重载模型 + 写 DB `is_active=True`，**不会** push events/counters/steps 进 `mgr.project_config`。前端是靠 Monitor 启动时 `syncProjectConfig` → `POST /source/detection/set-project` 才把 5 个 JSON 推进 mgr。脚本测试要么走完整链路，要么手动 POST `/source/detection/set-project` |
+| **synthetic with_project=True 用的是「最小项目」** | 跑 synthetic 想看 OK/NG 触发，结果 `_trigger_event` 找不到事件直接 return False | `test_runtime_routes.py:_build_min_project_config` 只有 `steps_config`，`events_config: []`，`pipeline_config: {}` (无 `sequence_order` 也无 `settlement_mode`)。**要触发事件**：先 `create_activate_push` 全 payload + `set-project`，再 `start_synth(with_project=False)` 让 mgr 沿用我们推的 config |
 
 ---
 
@@ -384,3 +388,50 @@ class Project(Base):
 - [ ] 多通道场景：每通道独立状态 / 持久化文件路径带 `ch{channel_id}`
 - [ ] 跨字段 id 引用没断（`due_warning_event_id` ↔ `events_config[*].id` 等）
 - [ ] lint 0 错误，启动后端无 traceback
+
+---
+
+## 八、UAT 校验项目配置生效的最短链路（合成验证）
+
+写自动化测试或客户复现时验"配了一个 N 步顺序模式 + 自定义事件 + 计数器" 端到端确实跑通：
+
+```python
+# 1) 整个 payload（必含 sequence_order + last_step）
+payload = {
+    "name": "uat",
+    "task_type": "detection",
+    "logic_mode": "sequential",
+    "pipeline_config": {
+        "sequence_order": [{"step_id": 1}, {"step_id": 2}, {"step_id": 3}],
+        "settlement_mode": "last_step",   # 没这行，OK 永远不触发
+    },
+    "steps_config": [...],          # threshold 用 0-100，后端会 /100
+    "events_config": [...],         # OK/NG/自定义都在这
+    "counters_config": [...],       # 默认 4 个不会自动建，要列出来
+    ...
+}
+
+# 2) 顺序：建 → 激活 → set-project（必须三步全做）
+pid = POST /api/v1/projects                      json=payload
+POST /api/v1/projects/{pid}/activate
+POST /api/v1/source/detection/set-project?channel=0  json={...payload, project_id:pid}
+# ↑ activate 不 push project_config 进 mgr，必须再来一次 set-project
+
+# 3) 跑 synthetic（with_project=False 才会用 mgr 已 push 的项目，而不是 min config）
+POST /api/v1/test/synthetic/start  json={"scenario": "ok_sequential_cycle.json",
+                                          "with_project": False}
+POST /api/v1/source/detection/start?channel=0
+
+# 4) 轮询 GET /api/v1/source/detection/results 直到
+#    counters['合格总数'] == 1 且 step_counts 三步都 ≥ 1
+```
+
+**Verify 矩阵**（每条都一定要过）：
+
+| 验证项 | 期望 | 失败定位 |
+|---|---|---|
+| 三步都计数 | `step_counts == {step_a:1, step_b:1, step_c:1}` | step_min_frames / step_conf_thresholds / step_roi_polygons 哪个把帧吃了 |
+| OK 事件触发 | `counters['合格总数'] == 1` | `_check_sequential_mode` 没跑：`sequence_order` 没配 / `settlement_mode` 是 first_step 没结算 |
+| NG（反向剧本） | reverse `c→b→a` 跑出来 `counters['不良总数'] == 1` | sequence_order 是不是数字（注意是 `{"step_id":1}` 不是字符串） |
+| 步骤 ROI 限定 | bbox 中心在 polygon 外那帧不计 step | `step.roi` 必须是 [[nx,ny],...] 归一化、≥3 点 |
+| 移动目标 + ROI | 中段在 ROI 内、两端在 ROI 外 → step 计数 == 1（只有中段被认） | step_stats_mixin line 60-65 严格的中心点-多边形测试 |

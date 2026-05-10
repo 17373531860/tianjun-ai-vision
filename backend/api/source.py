@@ -486,41 +486,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         apply_project_config(self, config)
 
     
-    def _release_model(self):
-        """释放模型和 GPU 资源"""
-        try:
-            import torch
-            import gc
-            
-            # 先关闭推理线程池
-            self._shutdown_inference_executor()
-            
-            if self.model is not None:
-                print("[资源释放] 开始释放模型资源...")
-                
-                # 1. 等待 CUDA 操作完成
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                
-                del self.model
-                self.model = None
-                self.model_task = 'detect'
-                
-                # 3. Python 垃圾回收
-                gc.collect()
-                
-                # 4. 清理 CUDA 缓存
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    # 获取显存使用情况
-                    allocated = torch.cuda.memory_allocated() / 1024**2
-                    cached = torch.cuda.memory_reserved() / 1024**2
-                    print(f"[资源释放] 显存状态: 已分配={allocated:.1f}MB, 缓存={cached:.1f}MB")
-                
-                print("[资源释放] 模型资源已释放")
-        except Exception as e:
-            print(f"[资源释放] 释放模型时出错: {e}")
-    
+    # _release_model 已迁至 ModelLoadMixin (Step 3 feat/multi-model-roi-link).
+    # mixin 实现保持原行为 100% 兼容, 末尾增加 _mirror_host_to_main() 同步 main slot.
+
     def _supplement_step_durations(self):
         """Supplement step_durations for steps still being tracked at settle time.
         Must be called BEFORE clearing step_last_seen / step_start_time."""
@@ -795,8 +763,23 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 inside = not inside
             j = i
         return inside
-    
-    
+
+    def _det_passes_roi_for_label(self, det: dict, label: str) -> bool:
+        """逐步骤 ROI (steps_config[].roi): 有配置则框中心须在多边形内.
+
+        无逐步骤 ROI 时: tracking 模式沿用全局 tracking_roi；其它模式不限区域。
+        """
+        poly_map = getattr(self, "step_roi_polygons", None) or {}
+        poly = poly_map.get(label)
+        if poly and len(poly) >= 3:
+            from backend.api.source_roi import is_normalized_bbox_center_in_polygon
+
+            return is_normalized_bbox_center_in_polygon(det, poly)
+        lm = self.project_config.get("logic_mode") if self.project_config else None
+        if lm == "tracking":
+            return self._is_in_roi(det)
+        return True
+
     # _get_inference_executor / _shutdown_inference_executor 已迁至
     # source_inference_executor.py (P7 第五刀), 历史调用通过 __getattr__ 转发
     

@@ -1451,7 +1451,15 @@ const changeDevice = async (device) => {
     const res = await api.post('/source/gpu/set', { device });
     if (res.data) {
       if (res.data.status === 'success') {
-        ElMessage.success(res.data.message);
+        // Step 8 (feat/multi-model-roi-link): 多模型场景透出已重载的 slot 列表
+        const reloaded = res.data.reloaded_models;
+        if (Array.isArray(reloaded) && reloaded.length >= 2) {
+          ElMessage.success(
+            `${res.data.message} (重载: ${reloaded.join(', ')})`
+          );
+        } else {
+          ElMessage.success(res.data.message);
+        }
         currentDeviceInfo.value = res.data.current_device_info;
         isDefaultDevice.value = true;  // 标记已保存
       } else {

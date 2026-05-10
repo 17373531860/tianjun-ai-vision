@@ -198,6 +198,167 @@
                   </div>
                 </el-card>
 
+                <!-- Step 8 (feat/multi-model-roi-link): 附加模型 (多模型 ROI) -->
+                <el-card shadow="never" class="bg-slate-800 border-slate-700 text-gray-300">
+                  <template #header>
+                    <div class="flex justify-between items-center">
+                      <span class="font-bold text-white">附加模型 (多模型 ROI)</span>
+                      <el-button type="primary" size="small" plain @click="addExtraModel"
+                        :disabled="(activeProject?.extra_models?.length || 0) >= 4">
+                        <el-icon class="mr-1"><Plus /></el-icon>添加副模型
+                      </el-button>
+                    </div>
+                  </template>
+                  <div class="text-xs text-gray-400 mb-3 leading-relaxed">
+                    在主模型基础上叠加最多 4 个独立模型，每个可以指定 ROI 区域、检测频率、独立颜色。
+                    适合主模型管 SOP 步骤、副模型在指定区域检测产品状态等场景。
+                    <br />
+                    <span class="text-amber-400">提示</span>: 多模型同时跑会增加 GPU 显存压力，
+                    4-5 GB 显存建议最多 2 个 (主+1 副)；模型加载时跨通道串行 warmup，避免 OOM。
+                  </div>
+                  <div v-if="!activeProject?.extra_models?.length" class="text-center text-gray-500 py-6 text-sm">
+                    暂无副模型，点击右上角"添加副模型"配置
+                  </div>
+                  <div v-else class="space-y-3">
+                    <div v-for="(slot, idx) in activeProject.extra_models" :key="idx"
+                      class="bg-slate-900/60 border border-slate-700 rounded-lg p-3 space-y-2">
+                      <!-- 行 1: name + 模型 + 颜色 + 删除 -->
+                      <div class="flex items-center gap-3 flex-wrap">
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-gray-400">slot 名</span>
+                          <el-input v-model="slot.name" size="small" style="width: 7.5rem"
+                            placeholder="aux" />
+                        </div>
+                        <div class="flex items-center gap-2 flex-1 min-w-[12rem]">
+                          <span class="text-xs text-gray-400">模型</span>
+                          <span v-if="slot.model_name"
+                            class="text-sm text-white truncate flex-1">
+                            {{ slot.model_name }}<span v-if="slot.model_version"
+                              class="text-gray-500 ml-1">v{{ slot.model_version }}</span>
+                          </span>
+                          <span v-else class="text-sm text-gray-500 flex-1">未选择</span>
+                          <el-button size="small" plain @click="openExtraModelSelect(idx)">
+                            选择
+                          </el-button>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-gray-400">颜色</span>
+                          <el-color-picker v-model="slot.display_color" size="small" />
+                        </div>
+                        <el-button type="danger" size="small" plain
+                          @click="removeExtraModel(idx)">
+                          <el-icon><Delete /></el-icon>
+                        </el-button>
+                      </div>
+                      <!-- 行 2: conf / iou / priority -->
+                      <div class="flex items-center gap-3 flex-wrap">
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-gray-400">置信度</span>
+                          <el-input-number v-model="slot.conf" :min="0.05" :max="1"
+                            :step="0.05" :precision="2" size="small"
+                            style="width: 7rem" />
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-gray-400">IoU</span>
+                          <el-input-number v-model="slot.iou" :min="0.1" :max="1"
+                            :step="0.05" :precision="2" size="small"
+                            style="width: 7rem" />
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-gray-400">优先级</span>
+                          <el-input-number v-model="slot.priority" :min="0" :max="100"
+                            :step="10" :precision="0" size="small"
+                            style="width: 7rem" />
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <el-checkbox v-model="slot.use_half" class="!text-gray-300">
+                            FP16
+                          </el-checkbox>
+                        </div>
+                      </div>
+                      <!-- 行 3: schedule -->
+                      <div class="flex items-center gap-3 flex-wrap">
+                        <span class="text-xs text-gray-400">检测频率</span>
+                        <el-radio-group v-model="slot.schedule_type" size="small">
+                          <el-radio-button label="every_frame">每帧</el-radio-button>
+                          <el-radio-button label="every_n_frames">间隔 N 帧</el-radio-button>
+                          <el-radio-button label="on_event">按事件</el-radio-button>
+                        </el-radio-group>
+                        <el-input-number v-if="slot.schedule_type === 'every_n_frames'"
+                          v-model="slot.schedule_n" :min="1" :max="100" :step="1"
+                          :precision="0" size="small" style="width: 6rem" />
+                        <span v-if="slot.schedule_type === 'every_n_frames'"
+                          class="text-xs text-gray-500">
+                          (每 {{ slot.schedule_n }} 帧跑一次, 减小 GPU 占用)
+                        </span>
+                        <!-- c1+: on_event 模式下选事件 (从 events_config 拉) -->
+                        <el-select v-if="slot.schedule_type === 'on_event'"
+                          v-model="slot.schedule_events" multiple collapse-tags collapse-tags-tooltip
+                          size="small" style="min-width: 14rem"
+                          placeholder="选触发事件 (空 = 永不触发)">
+                          <el-option v-for="ev in (activeProject.events_config || [])"
+                            :key="ev.id" :label="`${ev.name} (id=${ev.id})`" :value="ev.id" />
+                        </el-select>
+                        <span v-if="slot.schedule_type === 'on_event' && !(slot.schedule_events?.length)"
+                          class="text-xs text-amber-400">
+                          ⚠ 未选事件, 副模型永不会跑
+                        </span>
+                      </div>
+                      <!-- 行 4: ROI -->
+                      <div class="flex items-start gap-3 flex-wrap">
+                        <span class="text-xs text-gray-400 mt-1.5">ROI 区域</span>
+                        <div class="flex flex-col gap-1">
+                          <div class="flex items-center gap-2">
+                            <el-button size="small" type="primary" plain
+                              @click="openExtraModelRoiEditor(idx)">
+                              {{ slot.roi && slot.roi.length >= 3 ? '重新绘制' : '设置区域' }}
+                            </el-button>
+                            <el-button v-if="slot.roi && slot.roi.length >= 3"
+                              size="small" type="danger" plain @click="clearExtraModelRoi(idx)">
+                              清除
+                            </el-button>
+                            <span v-if="slot.roi && slot.roi.length >= 3"
+                              class="text-xs text-green-400">
+                              已设置 {{ slot.roi.length }} 个顶点
+                            </span>
+                            <span v-else class="text-xs text-gray-500">
+                              未设置 (空 = 全画面)
+                            </span>
+                          </div>
+                          <!-- b2: ROI mini preview (16:9 SVG, 192x108).
+                               用 viewBox="0 0 1 1" 让归一化坐标直接当 path. -->
+                          <svg v-if="slot.roi && slot.roi.length >= 3"
+                            width="192" height="108" viewBox="0 0 1 1"
+                            preserveAspectRatio="none"
+                            class="border border-slate-700 bg-slate-950 rounded">
+                            <polygon
+                              :points="(slot.roi || []).map(p => `${p[0]},${p[1]}`).join(' ')"
+                              :fill="slot.display_color || '#f59e0b'"
+                              fill-opacity="0.25"
+                              :stroke="slot.display_color || '#f59e0b'"
+                              stroke-width="0.005"
+                              stroke-linejoin="round" />
+                          </svg>
+                        </div>
+                      </div>
+                      <!-- 行 5: class_filter (可选, 留空 = 模型全标签).
+                           d2: 优先用 slot.available_labels (选模型时自动拉), 兜底显示已选 class_filter. -->
+                      <div class="flex items-start gap-3">
+                        <span class="text-xs text-gray-400 mt-1.5 w-16 shrink-0">类别白名单</span>
+                        <el-select v-model="slot.class_filter" multiple filterable
+                          allow-create default-first-option :reserve-keyword="false"
+                          :placeholder="slot.available_labels?.length
+                            ? `留空 = 模型全部 ${slot.available_labels.length} 类`
+                            : '留空 = 模型全部类别 (可手输)'"
+                          size="small" class="flex-1">
+                          <el-option v-for="lbl in extraModelSlotOptions(slot)" :key="lbl"
+                            :label="lbl" :value="lbl" />
+                        </el-select>
+                      </div>
+                    </div>
+                  </div>
+                </el-card>
+
                 <!-- Shift Split Config -->
                 <el-card shadow="never" class="bg-slate-800 border-slate-700 text-gray-300">
                   <template #header><span class="font-bold text-white">班次拆分</span></template>
@@ -238,14 +399,29 @@
           <!-- Tab 2: Step Settings -->
           <el-tab-pane :label="activeProject.logic_mode === 'tracking' ? '物品设置' : '步骤设置'" name="steps">
             <div class="h-full flex flex-col p-4">
-              <div class="mb-3 text-sm text-gray-400 flex items-center flex-shrink-0">
-                <el-icon class="mr-1"><InfoFilled /></el-icon>
-                <template v-if="activeProject.logic_mode === 'tracking'">
-                  配置各物品的启用状态与置信度。跟踪参数请在"逻辑设置"中配置。
-                </template>
-                <template v-else>
-                  配置各步骤的启用状态、置信度、显示标签。启用的步骤将参与逻辑判断。
-                </template>
+              <div class="mb-3 flex flex-col gap-2 flex-shrink-0">
+                <div class="text-sm text-gray-400 flex items-center">
+                  <el-icon class="mr-1"><InfoFilled /></el-icon>
+                  <template v-if="activeProject.logic_mode === 'tracking'">
+                    配置各物品的启用状态与置信度。跟踪参数请在"逻辑设置"中配置。
+                  </template>
+                  <template v-else>
+                    配置各步骤的启用状态、置信度、显示标签。启用的步骤将参与逻辑判断。
+                  </template>
+                </div>
+                <div class="flex items-center gap-2 text-xs text-gray-300 flex-wrap">
+                  <el-switch
+                    v-model="activeProject.pipeline_config.hide_boxes_outside_step_roi"
+                    size="small"
+                  />
+                  <span>Monitor 不绘制步骤 ROI 外的框</span>
+                  <el-tooltip
+                    placement="top"
+                    content="仅影响监视画面：对已配置「步骤ROI」的标签，检测框中心不在该区域内则不画框（分割遮罩一并隐藏）。不参与后端判定。关闭则始终绘制（与原先一致）。"
+                  >
+                    <span class="cursor-help border-b border-dashed border-gray-500 text-gray-400">说明</span>
+                  </el-tooltip>
+                </div>
               </div>
 
               <div class="flex-1 overflow-y-auto custom-scrollbar min-h-0 pb-20">
@@ -259,6 +435,11 @@
                       <th class="p-2 w-20">
                         <el-tooltip content="开启后，此物品在检测画面、SOP流程卡片、步骤详情中均不显示（仅视觉隐藏）；YOLO 检测、OK/NG 判定、报警、数据记录、MES 上报等均不受影响。常用于隐藏箱子/泡沫槽等辅助类别" placement="top">
                           <span class="cursor-help border-b border-dashed border-gray-500">隐藏标注框</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-36">
+                        <el-tooltip content="归一化多边形区域。设置后：仅当检测框中心落在该区域内时，该步骤/标签才计入 SOP 与周期（顺序、检测、自定义、跟踪模式均生效）。不设置则不限区域。" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">步骤ROI</span>
                         </el-tooltip>
                       </th>
                       <template v-if="activeProject.logic_mode === 'tracking'">
@@ -392,6 +573,23 @@
                       </td>
                       <td class="p-2 text-center">
                         <el-switch v-model="step.hide_in_view" size="small" />
+                      </td>
+                      <td class="p-2 align-top">
+                        <div class="flex flex-col gap-1 min-w-[7rem]">
+                          <div class="flex flex-wrap gap-1">
+                            <el-button size="small" type="primary" plain @click="openStepRoiEditor(step)">
+                              {{ step.roi && step.roi.length >= 3 ? '重绘' : '设置' }}
+                            </el-button>
+                            <el-button v-if="step.roi && step.roi.length >= 3" size="small" type="danger" plain @click="clearStepRoi(step)">清除</el-button>
+                          </div>
+                          <svg v-if="step.roi && step.roi.length >= 3" width="72" height="40" viewBox="0 0 1 1" preserveAspectRatio="none"
+                            class="border border-slate-700 bg-slate-950 rounded">
+                            <polygon
+                              :points="step.roi.map(p => `${p[0]},${p[1]}`).join(' ')"
+                              fill="rgba(167,139,250,0.25)" stroke="#a78bfa" stroke-width="0.008" stroke-linejoin="round" />
+                          </svg>
+                          <span v-else class="text-[0.625rem] text-gray-500">未限制</span>
+                        </div>
                       </td>
                       <template v-if="activeProject.logic_mode === 'tracking'">
                       <td class="p-2">
@@ -1461,7 +1659,11 @@
     </el-dialog>
 
     <!-- Model Select Dialog -->
-    <el-dialog v-model="showModelSelect" title="选择模型" width="600px">
+    <el-dialog v-model="showModelSelect"
+      :title="extraModelSelectingIdx >= 0
+        ? `选择副模型 [${activeProject?.extra_models?.[extraModelSelectingIdx]?.name || ''}]`
+        : '选择模型'"
+      width="600px" @close="extraModelSelectingIdx = -1">
       <div v-loading="loadingModels" class="space-y-2 max-h-96 overflow-y-auto">
         <div v-for="model in modelList" :key="model.id" 
           @click="selectModel(model)"
@@ -1523,7 +1725,11 @@
     </el-dialog>
 
     <!-- ROI Polygon Editor Dialog -->
-    <el-dialog v-model="roiEditorVisible" title="绘制 ROI 检测区域" width="80%" :close-on-click-modal="false" destroy-on-close class="roi-editor-dialog">
+    <el-dialog v-model="roiEditorVisible"
+      :title="roiEditorDialogTitle"
+      width="80%" :close-on-click-modal="false" destroy-on-close
+      class="roi-editor-dialog"
+      @close="resetRoiEditorTargets">
       <div class="space-y-3">
         <div class="flex items-center gap-3 text-sm">
           <span class="text-gray-400">单击添加顶点，点击<b class="text-amber-400">第一个点</b>闭合多边形（靠近时会变绿）。闭合后再次单击可重新绘制</span>
@@ -1709,10 +1915,37 @@ const roiEditorCanvas = ref(null);
 const roiPreviewCanvas = ref(null);
 const roiPoints = ref([]);
 const roiPolygonClosed = ref(false);
+
+// Step 8 (feat/multi-model-roi-link): 模型选择 / ROI 编辑 的目标 idx.
+// = -1 表示主模型 (写到 default_model_id / tracking_roi_polygon, 老路径)
+// >= 0 表示副模型 idx (写到 extra_models[idx])
+const extraModelSelectingIdx = ref(-1);
+const extraModelRoiEditingIdx = ref(-1);
+// 步骤 ROI 编辑: 指向 steps_config 中某项的 id (与副模型/全局 tracking_roi 互斥)
+const stepRoiEditingStepId = ref(null);
 let roiImage = null;
 let roiMousePos = null;
 
+const resetRoiEditorTargets = () => {
+  extraModelRoiEditingIdx.value = -1;
+  stepRoiEditingStepId.value = null;
+};
+
+const roiEditorDialogTitle = computed(() => {
+  const ap = activeProject.value;
+  if (extraModelRoiEditingIdx.value >= 0) {
+    const slot = ap?.extra_models?.[extraModelRoiEditingIdx.value];
+    return `绘制副模型 [${slot?.name || ''}] ROI 区域`;
+  }
+  if (stepRoiEditingStepId.value != null) {
+    const st = ap?.steps_config?.find(s => s.id === stepRoiEditingStepId.value);
+    return `绘制步骤 [${st?.displayLabel || st?.label || ''}] ROI（框中心须在区域内才算该步骤）`;
+  }
+  return '绘制 ROI 检测区域';
+});
+
 const openRoiEditor = async () => {
+  resetRoiEditorTargets();
   roiPoints.value = [];
   roiPolygonClosed.value = false;
   roiMousePos = null;
@@ -1721,31 +1954,36 @@ const openRoiEditor = async () => {
   setTimeout(() => loadRoiSnapshot(), 200);
 };
 
+// d1: 改为 Promise-based, 让调用方 await 图片加载完再画 polygon (替代裸 setTimeout 时序坑).
 const loadRoiSnapshot = () => {
-  const canvas = roiEditorCanvas.value;
-  if (!canvas) return;
-  const img = new Image();
-  img.crossOrigin = 'anonymous';
-  const host = getBackendHost();
-  img.src = `${host}/snapshot?channel=0&t=${Date.now()}`;
-  img.onload = () => {
-    roiImage = img;
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    roiRedraw();
-  };
-  img.onerror = () => {
-    const ctx = canvas.getContext('2d');
-    canvas.width = 640;
-    canvas.height = 480;
-    ctx.fillStyle = '#1e293b';
-    ctx.fillRect(0, 0, 640, 480);
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '16px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText('无法获取摄像头画面，请确保摄像头已连接', 320, 240);
-    roiImage = null;
-  };
+  return new Promise((resolve) => {
+    const canvas = roiEditorCanvas.value;
+    if (!canvas) { resolve(false); return; }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    const host = getBackendHost();
+    img.src = `${host}/snapshot?channel=0&t=${Date.now()}`;
+    img.onload = () => {
+      roiImage = img;
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      roiRedraw();
+      resolve(true);
+    };
+    img.onerror = () => {
+      const ctx = canvas.getContext('2d');
+      canvas.width = 640;
+      canvas.height = 480;
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(0, 0, 640, 480);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '16px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('无法获取摄像头画面，请确保摄像头已连接', 320, 240);
+      roiImage = null;
+      resolve(false);
+    };
+  });
 };
 
 const roiGetCanvasXY = (e) => {
@@ -1885,10 +2123,38 @@ const roiSave = async () => {
   const canvas = roiEditorCanvas.value;
   const w = canvas?.width || 1;
   const h = canvas?.height || 1;
-  activeProject.value.tracking_roi_polygon = roiPoints.value.map(pt => [
+  const polygon = roiPoints.value.map(pt => [
     Math.round((pt.x / w) * 10000) / 10000,
     Math.round((pt.y / h) * 10000) / 10000
   ]);
+
+  // Step 8: 副模型 ROI 编辑模式
+  if (extraModelRoiEditingIdx.value >= 0) {
+    const idx = extraModelRoiEditingIdx.value;
+    const slot = activeProject.value.extra_models?.[idx];
+    if (slot) {
+      slot.roi = polygon;
+      ElMessage.success(`副模型 [${slot.name}] ROI 已保存 (${polygon.length} 个顶点)`);
+    }
+    resetRoiEditorTargets();
+    roiEditorVisible.value = false;
+    return;  // 副模型 ROI 不立即触发 saveProject (随主保存按钮一起提交)
+  }
+
+  // 逐步骤 ROI (顺序/检测/自定义/跟踪): 写入 steps_config[].roi
+  if (stepRoiEditingStepId.value != null) {
+    const sid = stepRoiEditingStepId.value;
+    const st = activeProject.value?.steps_config?.find(s => s.id === sid);
+    if (st) {
+      st.roi = polygon;
+      ElMessage.success(`步骤 [${st.displayLabel || st.label}] ROI 已保存 (${polygon.length} 个顶点)`);
+    }
+    resetRoiEditorTargets();
+    roiEditorVisible.value = false;
+    return;
+  }
+
+  activeProject.value.tracking_roi_polygon = polygon;
   roiEditorVisible.value = false;
   nextTick(() => drawRoiPreview());
   await handleSaveProject();
@@ -1975,6 +2241,7 @@ const initProjectDefaults = (project) => {
     if (step.count_mode === undefined) step.count_mode = 'track';
     if (step.event_required_count === undefined) step.event_required_count = 1;
     if (step.event_gone_frames === undefined) step.event_gone_frames = 8;
+    if (step.roi === undefined) step.roi = null;
   });
   if (!project.events_config) {
     project.events_config = [
@@ -2002,6 +2269,9 @@ const initProjectDefaults = (project) => {
   // 确保 pipeline_config 存在
   if (!project.pipeline_config) {
     project.pipeline_config = {};
+  }
+  if (project.pipeline_config.hide_boxes_outside_step_roi === undefined) {
+    project.pipeline_config.hide_boxes_outside_step_roi = !!pipelineConfig.hide_boxes_outside_step_roi;
   }
   
   // 使用 pipeline_config 中的值，如果没有则使用默认值
@@ -2141,7 +2411,42 @@ const initProjectDefaults = (project) => {
     const roi = pipelineConfig.tracking_roi || {};
     project.tracking_roi_polygon = roi.polygon || [];
   }
-  
+
+  // Step 8 (feat/multi-model-roi-link): 反序列化附加模型 (副 slot, 主模型由
+  // default_model_id/model_format 管理). 来源 pipeline_config.models[]
+  // 中所有 name !== 'main' 的项, 缺字段时用安全默认值.
+  if (project.extra_models === undefined) {
+    const rawModels = Array.isArray(pipelineConfig.models) ? pipelineConfig.models : [];
+    project.extra_models = rawModels
+      .filter(m => m && m.name && m.name !== 'main')
+      .map(m => ({
+        name: String(m.name || ''),
+        model_id: m.model_id ?? null,
+        model_name: m.model_name || '',
+        model_version: m.model_version || '',
+        conf: typeof m.conf === 'number' ? m.conf : 0.25,
+        iou: typeof m.iou === 'number' ? m.iou : 0.45,
+        roi: Array.isArray(m.roi) ? m.roi : null,
+        schedule_type: (m.schedule && m.schedule.type) || 'every_frame',
+        schedule_n: (m.schedule && Number(m.schedule.n)) || 1,
+        // c1+: on_event 模式下监听的事件 id 列表 (前端 UI 选 ev.id, 保存时拼成 'event_<id>')
+        schedule_events: Array.isArray(m.schedule?.events)
+          ? m.schedule.events
+              .map(e => {
+                if (typeof e === 'number') return e;
+                const s = String(e);
+                const match = s.match(/^event_(\d+)$/);
+                return match ? Number(match[1]) : s;
+              })
+          : [],
+        class_filter: Array.isArray(m.class_filter) ? [...m.class_filter] : [],
+        available_labels: [],  // d2: UI-only, 选模型时填充 (老项目重新选一次模型即可恢复)
+        priority: typeof m.priority === 'number' ? m.priority : 50,
+        display_color: m.display_color || '#f59e0b',
+        use_half: !!m.use_half,
+      }));
+  }
+
   // 误判过滤（通用两层后处理，v2.7.8 起走 pipeline_config；默认全关，老项目兼容）
   if (project.rod_companion_filter === undefined) {
     const cf = pipelineConfig.rod_companion_filter || {};
@@ -2336,6 +2641,7 @@ const handleSaveProject = async () => {
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,
         rod_companion_filter: _sanitizeCompanionFilter(activeProject.value.rod_companion_filter),
         rod_session_gate: _sanitizeSessionGate(activeProject.value.rod_session_gate),
+        hide_boxes_outside_step_roi: !!activeProject.value.pipeline_config?.hide_boxes_outside_step_roi,
         periodic_actions: (activeProject.value.periodic_actions || []).map(rule => ({
           id: rule.id,
           name: rule.name || '',
@@ -2350,6 +2656,57 @@ const handleSaveProject = async () => {
           channel_filter: rule.channel_filter || null,
           run_on_start: rule.run_on_start === true,
         })),
+        // Step 8: 序列化多模型配置 (主 main + 副 slot 一并写入).
+        // 主 spec 仅带可调字段 (name+display_color), conf/iou 仍归 step-level;
+        // 副 spec 带完整 conf/iou/roi/schedule/class_filter/priority/display_color.
+        // model_id 是前端关联用 (后端 apply_models_config 不读, 路径解析在
+        // /detection/start 拼装时由 Monitor 完成).
+        models: (() => {
+          const out = [];
+          // main spec (永远存在, 仅承载 display_color 等可视化字段)
+          out.push({
+            name: 'main',
+            model_id: activeProject.value.default_model_id ?? null,
+            model_name: activeProject.value.model_name || '',
+            display_color: activeProject.value.main_display_color || '#10b981',
+            priority: 100,
+          });
+          for (const e of (activeProject.value.extra_models || [])) {
+            if (!e || !e.name) continue;
+            // c1+: schedule_events (UI 用 ev.id 数字 / 事件名字符串) → 后端格式
+            // 数字 id → 'event_<id>' (router 投递的 key 格式), 字符串原样.
+            const eventsOut = Array.isArray(e.schedule_events)
+              ? e.schedule_events
+                  .map(v => {
+                    if (typeof v === 'number') return `event_${v}`;
+                    return String(v);
+                  })
+                  .filter(Boolean)
+              : [];
+            const slot = {
+              name: String(e.name).trim(),
+              model_id: e.model_id ?? null,
+              model_name: e.model_name || '',
+              model_version: e.model_version || '',
+              conf: typeof e.conf === 'number' ? e.conf : 0.25,
+              iou: typeof e.iou === 'number' ? e.iou : 0.45,
+              roi: Array.isArray(e.roi) && e.roi.length >= 3 ? e.roi : null,
+              schedule: {
+                type: e.schedule_type || 'every_frame',
+                n: Math.max(1, Math.floor(Number(e.schedule_n) || 1)),
+                events: eventsOut,
+              },
+              class_filter: Array.isArray(e.class_filter) && e.class_filter.length
+                ? [...e.class_filter] : null,
+              priority: typeof e.priority === 'number' ? e.priority : 50,
+              display_color: e.display_color || '#f59e0b',
+              use_half: !!e.use_half,
+              // available_labels 是 UI-only 字段, 不写后端
+            };
+            out.push(slot);
+          }
+          return out;
+        })(),
       }
     };
     data.data_config = {
@@ -2412,6 +2769,35 @@ const handleDeleteProject = async () => {
 
 // 选择模型
 const selectModel = (model) => {
+  // Step 8: 副模型选择分支 (extraModelSelectingIdx >= 0)
+  if (extraModelSelectingIdx.value >= 0) {
+    const idx = extraModelSelectingIdx.value;
+    const slot = activeProject.value?.extra_models?.[idx];
+    if (slot) {
+      slot.model_id = model.id;
+      slot.model_name = model.name;
+      slot.model_version = model.version || '';
+      // d2: 选完副模型, 把 model.labels 解出存到 slot.available_labels
+      // 让 class_filter 下拉能显示候选 (留空 + allow-create 仍兼容).
+      let labels = [];
+      if (model.labels) {
+        try {
+          labels = typeof model.labels === 'string' ? JSON.parse(model.labels) : model.labels;
+        } catch (e) {
+          console.warn('副模型标签解析失败:', e);
+        }
+      }
+      slot.available_labels = Array.isArray(labels) ? labels : [];
+      const labelHint = slot.available_labels.length
+        ? `, 候选 ${slot.available_labels.length} 个类别`
+        : '';
+      ElMessage.success(`副模型 [${slot.name}] 已选: ${model.name}${labelHint}`);
+    }
+    extraModelSelectingIdx.value = -1;
+    showModelSelect.value = false;
+    return;  // 副模型不动 steps_config / 主格式
+  }
+
   activeProject.value.default_model_id = model.id;
   activeProject.value.model_name = model.name;
   activeProject.value.model_version = model.version || '';
@@ -2431,6 +2817,7 @@ const selectModel = (model) => {
       label: label,
       displayLabel: label,
       enabled: true,
+      roi: null,
       threshold: 50,
       triggerEvent: null,
       min_frames: null,
@@ -2460,6 +2847,123 @@ const selectModel = (model) => {
   
   showModelSelect.value = false;
   openFormatSelect();
+};
+
+// Step 8 (feat/multi-model-roi-link): 副模型管理方法
+const generateExtraModelDefaultName = () => {
+  const existing = new Set((activeProject.value?.extra_models || []).map(m => m.name));
+  if (!existing.has('aux')) return 'aux';
+  for (let i = 2; i < 100; i++) {
+    const candidate = `aux${i}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  return `aux_${Date.now() % 10000}`;
+};
+
+const EXTRA_MODEL_PALETTE = ['#f59e0b', '#3b82f6', '#a855f7', '#ec4899', '#14b8a6', '#facc15'];
+
+const addExtraModel = () => {
+  if (!activeProject.value) return;
+  if (!activeProject.value.extra_models) activeProject.value.extra_models = [];
+  const list = activeProject.value.extra_models;
+  if (list.length >= 4) {
+    ElMessage.warning('副模型最多 4 个 (考虑 GPU 显存限制)');
+    return;
+  }
+  list.push({
+    name: generateExtraModelDefaultName(),
+    model_id: null,
+    model_name: '',
+    model_version: '',
+    conf: 0.25,
+    iou: 0.45,
+    roi: null,
+    schedule_type: 'every_n_frames',
+    schedule_n: 5,
+    schedule_events: [],   // c1+: on_event 模式监听的事件 id 列表
+    class_filter: [],
+    available_labels: [],  // d2: 选模型后自动填充 (UI 候选列表)
+    priority: 50,
+    display_color: EXTRA_MODEL_PALETTE[list.length % EXTRA_MODEL_PALETTE.length],
+    use_half: false,
+  });
+};
+
+// d2: 计算 class_filter el-select 的候选项 = available_labels ∪ 已选 class_filter (去重保序).
+// 老项目没有 available_labels 时, 至少显示已选标签让用户能看到/删除.
+const extraModelSlotOptions = (slot) => {
+  const set = new Set();
+  const out = [];
+  for (const lbl of (slot.available_labels || [])) {
+    if (lbl && !set.has(lbl)) { set.add(lbl); out.push(lbl); }
+  }
+  for (const lbl of (slot.class_filter || [])) {
+    if (lbl && !set.has(lbl)) { set.add(lbl); out.push(lbl); }
+  }
+  return out;
+};
+
+const removeExtraModel = (idx) => {
+  if (!activeProject.value?.extra_models) return;
+  activeProject.value.extra_models.splice(idx, 1);
+};
+
+const openExtraModelSelect = (idx) => {
+  extraModelSelectingIdx.value = idx;
+  showModelSelect.value = true;
+};
+
+// d1: 改用 nextTick + await loadRoiSnapshot, 取代裸 setTimeout(200) + setTimeout(250) 嵌套.
+// 慢机器/慢摄像头快照下也能保证 polygon 在 image 加载完成后立刻被画.
+const openExtraModelRoiEditor = async (idx) => {
+  stepRoiEditingStepId.value = null;
+  extraModelRoiEditingIdx.value = idx;
+  // 复用主 ROI 编辑器: 把当前副模型的 roi 加载为初始 polygon
+  roiPoints.value = [];
+  roiPolygonClosed.value = false;
+  roiMousePos = null;
+  roiEditorVisible.value = true;
+  await nextTick();  // 等 dialog DOM 挂载, canvas ref 就绪
+  const ok = await loadRoiSnapshot();  // 真正等到 image.onload (或 onerror 兜底)
+  if (!ok) return;  // 快照加载失败时画兜底文字, polygon 没意义不画
+  const slot = activeProject.value?.extra_models?.[idx];
+  const existing = slot?.roi;
+  if (Array.isArray(existing) && existing.length >= 3 && roiEditorCanvas.value) {
+    const w = roiEditorCanvas.value.width || 1;
+    const h = roiEditorCanvas.value.height || 1;
+    roiPoints.value = existing.map(([nx, ny]) => ({ x: nx * w, y: ny * h }));
+    roiPolygonClosed.value = true;
+    roiRedraw();
+  }
+};
+
+const clearExtraModelRoi = (idx) => {
+  const slot = activeProject.value?.extra_models?.[idx];
+  if (slot) slot.roi = null;
+};
+
+const openStepRoiEditor = async (step) => {
+  extraModelRoiEditingIdx.value = -1;
+  stepRoiEditingStepId.value = step.id;
+  roiPoints.value = [];
+  roiPolygonClosed.value = false;
+  roiMousePos = null;
+  roiEditorVisible.value = true;
+  await nextTick();
+  const ok = await loadRoiSnapshot();
+  if (!ok) return;
+  const existing = step.roi;
+  if (Array.isArray(existing) && existing.length >= 3 && roiEditorCanvas.value) {
+    const w = roiEditorCanvas.value.width || 1;
+    const h = roiEditorCanvas.value.height || 1;
+    roiPoints.value = existing.map(([nx, ny]) => ({ x: nx * w, y: ny * h }));
+    roiPolygonClosed.value = true;
+    roiRedraw();
+  }
+};
+
+const clearStepRoi = (step) => {
+  if (step) step.roi = null;
 };
 
 const FORMAT_DISPLAY_NAMES = {

@@ -23,7 +23,7 @@
 
 宿主类必须提供的方法:
   - self.start_cycle()
-  - self._is_in_roi(det) / self._try_reid_match() / self._bbox_iou()
+  - self._det_passes_roi_for_label(det, label) / self._is_in_roi(det) / ...
   - self._boost_score_with_appearance() / self._get_display_prefix()
   - self._rebuild_checklist() / self._settle_counting_cycle()
   - self._update_container_grouping()
@@ -191,16 +191,17 @@ class TrackingMixin:
             if not label:
                 continue
             if label == trigger_label and cycle_strategy == 'trigger':
-                trigger_visible = True
+                if self._det_passes_roi_for_label(det, label):
+                    trigger_visible = True
                 continue
             if label in event_steps:
-                if self._is_in_roi(det):
+                if self._det_passes_roi_for_label(det, label):
                     event_labels_seen.add(label)
                 continue
             if track_id < 0:
                 continue
             new_bbox = {'x': det['x'], 'y': det['y'], 'w': det['w'], 'h': det['h']}
-            in_roi = self._is_in_roi(det)
+            in_roi = self._det_passes_roi_for_label(det, label)
             frame_detections.append({
                 'label': label, 'track_id': track_id,
                 'bbox': new_bbox, 'in_roi': in_roi,
@@ -736,7 +737,7 @@ class TrackingMixin:
         stack_label_visible = {lbl: False for lbl in stack_steps}
         for _det in detections:
             _lbl = _det.get('label', '')
-            if _lbl in stack_steps and self._is_in_roi(_det):
+            if _lbl in stack_steps and self._det_passes_roi_for_label(_det, _lbl):
                 stack_label_visible[_lbl] = True
         for label, cfg in stack_steps.items():
             if label not in self._stack_state:

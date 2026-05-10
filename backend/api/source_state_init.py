@@ -21,12 +21,14 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from collections import OrderedDict
 
 from backend.api.rod_filter import RodSessionGate, read_rod_filter_config
 
 from backend.api.source_drawer import Drawer
 from backend.api.source_counters import Counters
 from backend.api.source_inference_executor import InferenceExecutor
+from backend.api.source_inference_router import InferenceRouter, ModelInstance
 from backend.api.source_sequence_labels import SequenceLabels
 
 
@@ -64,11 +66,32 @@ def _init_health_and_timeout(h):
 
 
 def _init_components(h):
-    """所有 P7 组合组件 (Drawer/Counters/InferenceExecutor/SequenceLabels)"""
+    """所有 P7 组合组件 (Drawer/Counters/InferenceExecutor/SequenceLabels) + Step 2 多模型 router"""
     h.inference_exec = InferenceExecutor()
     h.sequence_labels = SequenceLabels(host=h)
     h.drawer = Drawer()
     h.counters_mgr = Counters(host=h)
+    _init_inference_router(h)
+
+
+def _init_inference_router(h):
+    """Step 2 (feat/multi-model-roi-link): 多模型推理路由器 + 默认 main 空壳
+
+    设计：
+      - h._router 是 InferenceRouter 实例 (跨模型 GPU 串行锁 / 调度器 / 事件队列)
+      - h.models 是 router.models 的直接引用 (OrderedDict[name, ModelInstance])
+      - 默认创建 'main' ModelInstance 空壳 (model=None, model_path=None);
+        Step 3 起 ModelLoadMixin 在 load_model 时会把老字段双写到这个壳里
+      - **本步骤不动任何老字段** (self.model / self.conf_threshold 等保留原状),
+        老链路 100% 不受影响
+
+    扩展：
+      Step 3+ 中, 后端代码逐步迁移到通过 h._router / h.models[name] 访问;
+      最后阶段才把老字段虚拟化为 main 实例的 property (Step 9)。
+    """
+    h._router = InferenceRouter()
+    h.models = h._router.models  # 直接共享 OrderedDict (修改 router.models 即修改 h.models)
+    h._router.add_model(ModelInstance(name='main', priority=100))
 
 
 def _init_fps_stats(h):
@@ -127,6 +150,8 @@ def _init_step_state(h):
     h.backup_steps_seen_in_cycle = set()
     h.step_strict_order = {}
     h.step_accept_once = {}
+    # steps_config[].roi (归一化多边形): 该标签仅在 ROI 内才算检测到 (全模式 + tracking)
+    h.step_roi_polygons = {}
 
 
 def _init_event_and_cycle_state(h):

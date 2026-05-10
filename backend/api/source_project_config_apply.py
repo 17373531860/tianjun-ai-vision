@@ -58,6 +58,7 @@ def _reset_step_state_dicts(h):
     h.backup_steps_seen_in_cycle = set()
     h.step_strict_order = {}
     h.step_accept_once = {}
+    h.step_roi_polygons = {}
     h._first_step_had_gap = False
     h._first_step_reconfirmed = False
     h._first_step_disappeared_at = None
@@ -112,6 +113,27 @@ def _apply_steps_config(h, steps_config):
             }
             h.step_static_triggered[label] = False
 
+        # 逐步骤 ROI (顺序 / 检测 / 自定义 / tracking 共用): 归一化多边形 ≥3 点
+        roi_raw = step.get('roi')
+        if roi_raw and isinstance(roi_raw, list) and len(roi_raw) >= 3:
+            ok = True
+            parsed = []
+            for p in roi_raw:
+                if not isinstance(p, (list, tuple)) or len(p) < 2:
+                    ok = False
+                    break
+                try:
+                    parsed.append([float(p[0]), float(p[1])])
+                except (TypeError, ValueError):
+                    ok = False
+                    break
+            if ok:
+                h.step_roi_polygons[label] = parsed
+            else:
+                h.step_roi_polygons.pop(label, None)
+        else:
+            h.step_roi_polygons.pop(label, None)
+
 
 def _apply_backup_steps(h, steps_config):
     """第二遍: 构建 backup step 映射 (需要先 resolve 全部 label)"""
@@ -131,6 +153,103 @@ def _apply_backup_steps(h, steps_config):
                 break
     if h.step_backup_map:
         print(f"替补步骤映射: {h.step_backup_map}")
+
+
+def _apply_models_config(h, pipeline_config):
+    """Step 6 (feat/multi-model-roi-link): 解析 pipeline_config.models[] 配置.
+
+    职责边界 (重要):
+      - 只更新 mi 的"非模型"字段 (conf/iou/roi/schedule/class_filter/priority/
+        display_color/use_half), 不真正 load YOLO 模型 (load 是耗时副作用,
+        集中在 /detection/start 触发);
+      - 副 mi 不存在则按配置创建空壳 (mi.model=None, 等到 /detection/start
+        被加载时才有 GPU 实例);
+      - 配置中没有的旧副 mi (除 main 外) 自动释放, 防止切项目后残留;
+      - main mi 永远存在, 即使 pipeline_config.models 不含 main 也不删它.
+
+    向后兼容: pipeline_config.models 不存在 / 为空 → 完全 no-op, 老链路不变.
+    """
+    if not hasattr(h, '_router') or h._router is None:
+        return
+
+    models_cfg = pipeline_config.get('models')
+    if not models_cfg or not isinstance(models_cfg, list):
+        return
+
+    from backend.api.source_inference_router import ModelInstance, Schedule
+
+    new_names = set()
+    for m_cfg in models_cfg:
+        if not isinstance(m_cfg, dict):
+            continue
+        name = m_cfg.get('name', 'main') or 'main'
+        new_names.add(name)
+        mi = h._router.get(name)
+        if mi is None:
+            mi = ModelInstance(
+                name=name,
+                priority=int(m_cfg.get('priority', 100 if name == 'main' else 50)),
+            )
+            h._router.add_model(mi)
+
+        if m_cfg.get('conf') is not None:
+            try:
+                mi.conf = float(m_cfg['conf'])
+            except (TypeError, ValueError):
+                pass
+        if m_cfg.get('iou') is not None:
+            try:
+                mi.iou = float(m_cfg['iou'])
+            except (TypeError, ValueError):
+                pass
+        if 'roi' in m_cfg:
+            roi_val = m_cfg.get('roi')
+            mi.roi = list(roi_val) if roi_val else None
+            # 重置 ROI 缓存 (mask 形状会随 roi 变化)
+            mi._roi_mask_cache = None
+            mi._roi_mask_shape = None
+            mi._roi_polygon_pixels = None
+        if 'schedule' in m_cfg and m_cfg.get('schedule'):
+            sch = m_cfg['schedule']
+            if isinstance(sch, dict):
+                try:
+                    mi.schedule = Schedule(
+                        type=sch.get('type', 'every_frame'),
+                        n=int(sch.get('n', 1)),
+                        events=list(sch.get('events') or []),
+                    )
+                except Exception as _e:
+                    print(f"[多模型] schedule 解析失败 ({name}): {_e}, 保持原值")
+        if 'class_filter' in m_cfg:
+            cf = m_cfg.get('class_filter')
+            mi.class_filter = set(cf) if cf else None
+        if m_cfg.get('priority') is not None:
+            try:
+                mi.priority = int(m_cfg['priority'])
+            except (TypeError, ValueError):
+                pass
+        if m_cfg.get('display_color'):
+            mi.display_color = str(m_cfg['display_color'])
+        if m_cfg.get('use_half') is not None:
+            mi.use_half = bool(m_cfg['use_half'])
+
+    # 释放配置外的旧副 mi (main 永远保留, 主路径仍由老 load_model 管理)
+    obsolete = [
+        n for n in list(h._router.models.keys())
+        if n != 'main' and n not in new_names
+    ]
+    for name in obsolete:
+        mi = h._router.models.get(name)
+        if mi is not None and hasattr(h, '_release_model_from'):
+            try:
+                h._release_model_from(mi)
+            except Exception as _e:
+                print(f"[多模型] 释放旧 slot {name} 失败: {_e}")
+        h._router.remove_model(name)
+        print(f"[多模型] 配置外的旧 slot 已释放: {name}")
+
+    if new_names:
+        print(f"[多模型] pipeline_config.models 配置已应用: {sorted(new_names)}")
 
 
 def _apply_pipeline_config(h, config, pipeline_config):
@@ -257,6 +376,7 @@ def apply_project_config(h, config: dict):
 
     pipeline_config = config.get('pipeline_config', {})
     _apply_pipeline_config(h, config, pipeline_config)
+    _apply_models_config(h, pipeline_config)
 
     _apply_counters(h, config)
     _reset_cycle_state(h)

@@ -1,6 +1,6 @@
 ---
 name: run-tests
-description: "测试相关任务的统一入口，覆盖：(1) 跑现有测试套件并分析失败 (2) 给新功能/bug 修复写测试 (3) 启动后端+前端做端到端冒烟 (4) 改动后的测试影响分析 (5) Playwright 自动化前端验证（截图/DOM检查/交互测试）(6) 虚拟 synthetic 剧本源（无摄像头/无模型跑真实 pipeline）。当用户说『测一下』『跑测试』『跑一下』『写测试』『补测试』『mock 报错/失败』『fixture 怎么写』『影响哪些测试』『冒烟』『端到端验证』『客户场景模拟』『测试 X 通不通』『截图看看』『页面对不对』『UI 验证』『虚拟检测』『剧本』『无模型测试』时触发。包括项目特有的 pytest / pytest-bdd / allpairspy / pytest-playwright 四层框架命令模板，Playwright 自动化前端验证工具包，以及 conftest 隔离 / MagicMock 串污染 / e2e 清理前缀等踩坑点。"
+description: "测试相关任务的统一入口，覆盖：(1) 跑现有测试套件并分析失败 (2) 给新功能/bug 修复写测试 (3) 启动后端+前端做端到端冒烟 (4) 改动后的测试影响分析 (5) Playwright 自动化前端验证（截图/DOM检查/交互测试）(6) 虚拟 synthetic 剧本源（无摄像头/无模型跑真实 pipeline）(7) **可见浏览器 UAT — 用 headless=False 真开浏览器手点+脚本驱动+视频录像，是面向功能验证的金标准**。当用户说『测一下』『跑测试』『跑一下』『写测试』『补测试』『mock 报错/失败』『fixture 怎么写』『影响哪些测试』『冒烟』『端到端验证』『客户场景模拟』『测试 X 通不通』『截图看看』『页面对不对』『UI 验证』『虚拟检测』『剧本』『无模型测试』『手点一遍』『真开浏览器』『眼睛看一遍』『面向功能测试』『UAT』时触发。包括项目特有的 pytest / pytest-bdd / allpairspy / pytest-playwright 四层框架命令模板，Playwright 自动化前端验证工具包，可见浏览器 UAT 模板（含项目特有的 ROI/sequential/event/counter 验证矩阵 + 对话框点击/卡片点击/input 值读取等踩坑），以及 conftest 隔离 / MagicMock 串污染 / e2e 清理前缀等踩坑点。"
 allowed-tools: "Read, Grep, Glob, Shell, Write, StrReplace, Agent, mcp__playwright, mcp__context7, mcp__sequential-thinking"
 ---
 
@@ -21,8 +21,13 @@ allowed-tools: "Read, Grep, Glob, Shell, Write, StrReplace, Agent, mcp__playwrig
 | 「截图看看」「页面对不对」「UI 验证」「前端自动化」「Playwright 跑一下」 | **E：Playwright 自动化前端验证** |
 | 「验收」「现场测试」「部署后验证」「客户场景」「换产测试」「全流程跑一遍」 | **F：现场验收测试** |
 | 「虚拟检测」「synthetic」「剧本」「无模型测试」「功能链路」「确定性注入」 | **G：虚拟功能测试模式** |
+| 「面向功能测试」「真开浏览器」「眼睛看一遍」「手点一遍」「UAT」「人工验收」「视频录一段」「不要 headless」 | **H：可见浏览器 UAT（金标准）** |
 
-含糊时（仅说"测试一下"无上下文）→ 先反问："你是想 (a) 跑现有测试 (b) 给新代码写测试 (c) 启动后端+前端做端到端冒烟 (d) 看改动会破坏哪些老测试 (e) 用 Playwright 自动截图/验证前端页面 (f) 现场验收/客户场景全流程验证 (g) 虚拟剧本源（无模型跑 pipeline）？"
+含糊时（仅说"测试一下"无上下文）→ 先反问："你是想 (a) 跑现有测试 (b) 给新代码写测试 (c) 启动后端+前端做端到端冒烟 (d) 看改动会破坏哪些老测试 (e) 用 Playwright 自动截图/验证前端页面 (f) 现场验收/客户场景全流程验证 (g) 虚拟剧本源（无模型跑 pipeline） (h) **真开浏览器手点一遍录视频（面向功能测试金标准）**？"
+
+> ⚠️ **重要原则**：当用户说「面向功能测试」「真的测过」「我要看页面对不对」时，**必须走 H 而不是 E**。
+> Path E 跑的是 headless + DOM 断言（"按设定路径点过一遍"），用户**看不到**任何东西；
+> Path H 是 `headless=False` + 视频录像 + API 验证后端契约，**人眼能复核**+**脚本能回放**，是真正"面向功能"的验收。
 
 ---
 
@@ -940,6 +945,109 @@ skill 触发后**先看 git diff 头部**，按下表给用户列推荐清单（
 | 前端 Monitor 不显示检测框 | synthetic 走非项目配置路径，`current_detections` 有但无 `display_id`；与 tracking 模式不兼容 | 对纯展示验证够用；如要 tracking 校验，需在剧本对应项目里设 `logic_mode=detection` |
 | pytest 测试结束打印 `[MES] Hook 管理器已停止` | conftest 默认设 `RUNTIME_MODE=test`，MES 子系统也启动 | 可接受副作用；CI 慢时可改成 fixture 级别按需打开 |
 
+### G.5b 进阶：Export / Cluster / Tracking 三块功能契约怎么验
+
+每条都验「**真出文件 / 真双机通信 / 真位置过滤**」，**不**是只看 API 200 或对话框打开。
+
+#### G.5b-1 自定义导出真出 docx/xlsx 验内容
+
+```python
+# 1) 先用 G.2 跑一遍 OK cycle，让 DB 里有 session/cycle/StepRecord 行
+# 2) POST /api/v1/export/render 拿 bytes，自己解 zip 验字段
+body = {"cycle_id": cid,
+        "template_content": "Cycle: {{ cycle.id }}\n"
+                            "Steps: {% for s in steps %}{{ s.label }}({{ s.duration }}s) {% endfor %}",
+        "filename_template": "uat_{{ cycle.id }}.docx",
+        "fmt": "docx"}
+r = requests.post(f"{API}/api/v1/export/render", json=body, timeout=20)
+# 3) docx 本质是 zip — 解 word/document.xml 抽 <w:t> 文本
+import zipfile, io, xml.etree.ElementTree as ET
+with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+    xml = zf.read("word/document.xml").decode()
+ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+text = "\n".join(t.text or "" for t in ET.fromstring(xml).iter(f"{ns}t"))
+assert f"Cycle: {cid}" in text and "step_a" in text
+```
+
+**关键陷阱**：
+
+- 模板里 `cycle.steps` **不存在**！steps 是在**顶层** ctx，写 `{{ steps | length }}` / `{% for s in steps %}` 才能拿到 `_fill_cycle_steps_defects` 填进来的 StepRecord 列表
+- xlsx 路线 A 用 inline string（`<c t="inlineStr"><is><t>...</t></is></c>`）**不**用 sharedStrings.xml，所以解析就读 `xl/worksheets/sheet1.xml` 即可
+- docx/xlsx 路线 A = python-docx 自动样式；路线 B = `template_file_path` 必填走 docxtpl，需先 POST `/templates/{id}/upload-template-file` 上传占位符文件
+
+#### G.5b-2 Cluster 主从双后端 + 聚合判定
+
+ZeroMQ 是 v3.x 早期的设计，**v3.5.x 主从通信已经全面用 HTTP REST**（`POST /cluster/report` + `POST /cluster/heartbeat`）；ZeroMQ 仅遗留在某些 collector 内部解耦。所以双开后端验主从就是两个 uvicorn + 互相 HTTP 调用。
+
+```bash
+# 起主机（默认 DATA_DIR）
+RUNTIME_MODE=test uvicorn backend.main:app --host 127.0.0.1 --port 8011
+
+# 起副机（必须独立 DATA_DIR，不然两边写同一个 sql_app.db 抢锁）
+mkdir -p /tmp/uat_slave_data
+RUNTIME_MODE=test TIANJUN_DATA_DIR=/tmp/uat_slave_data \
+  uvicorn backend.main:app --host 127.0.0.1 --port 8021
+```
+
+```python
+# 1) 配主从角色
+PUT  /api/v1/cluster/config @ 8011  {role:"master", expected_stations:["st_main","st_slave"]}
+PUT  /api/v1/cluster/config @ 8021  {role:"slave", master_url:"http://127.0.0.1:8011", station_id:"st_slave"}
+
+# 2) 心跳：副机上报后主机 GET /cluster/slaves 应能列出 st_slave
+POST /api/v1/cluster/heartbeat @ 8011  {station_id:"st_slave", port:8021, ...}
+
+# 3) 关键：主+副都给"同一 box_serial"上报 → 主机自动聚合 box_complete
+#    生产里副机的 cluster_collector 完成 cycle 后会调主机 /cluster/report；
+#    自动化测试里直接对主机连发两次（station_id 不同）等价。
+POST /api/v1/cluster/report @ 8011  {station_id:"st_main",  box_serial:"BOX1", is_good:True}
+POST /api/v1/cluster/report @ 8011  {station_id:"st_slave", box_serial:"BOX1", is_good:True}
+# 4) 验：GET /cluster/boxes/BOX1 → summary.overall_result == "OK"
+```
+
+**关键陷阱**：
+
+- 副机 `/cluster/report` 路由有 `if config["role"] not in ("master","standalone"): raise 400`。**直接对副机发 report 会 400**——生产里副机本身不接收报告，它只 push 到 master
+- **任一工位 NG → 整盒 NG**（`StationReport.is_good=False` 会让 summary.overall_result="NG"）
+- 第二个后端必须设 `TIANJUN_DATA_DIR=/tmp/uat_slave_data`，否则两个 uvicorn 抢同一个 SQLite，主机 cluster_collector 的 INSERT 会 `database is locked`（备注：项目已开 WAL + busy_timeout=15s 兜底，但仍建议物理隔离）
+- 双后端跑久了 Cursor 终端可能给后端发 SIGTERM 误杀（看终端日志「收到信号 15」），重跑前先 `curl /api/v1/system/version` 各端口 sanity 一下
+
+#### G.5b-3 Tracking-style 动态 ROI（移动目标穿过 ROI）
+
+> **synthetic 自身的限制**：`source_inference_loop_mixin.py` 给 synthetic 帧硬编码 `is_tracking=False`，所以**注入的 detections 不会真正经过 ByteTracker 拿 track_id**。但 ROI 闸门照常工作（走 `step_stats_mixin._update_step_stats` 的 `is_normalized_bbox_center_in_polygon`）。我们用「单标签 + bbox 中心位置随帧变化」**等价模拟** track_id 在 ROI 内外移动的场景。
+
+```python
+def moving_target_scenario():
+    # 60 fps 时间线：
+    #   0-29   bbox 中心 (0.10, 0.50)  ROI 外（左）
+    #   30-89  bbox 中心 (0.50, 0.50)  ROI 内（中央，连续 60 帧）
+    #   90-119 bbox 中心 (0.90, 0.50)  ROI 外（右）
+    #   120+   detections=[] → step disappear → 触发结算
+    timeline = []
+    def seg(a, b, cx, cy):
+        bw = bh = 0.06
+        timeline.append({"from": a, "to": b,
+            "detections": [{"label":"step_a", "confidence":0.95,
+                            "bbox":[cx-bw/2, cy-bh/2, bw, bh]}]})
+    for i in range(0, 30, 5): seg(i, i+4, 0.10, 0.50)
+    for i in range(30, 90, 5): seg(i, i+4, 0.50, 0.50)
+    for i in range(90, 120, 5): seg(i, i+4, 0.90, 0.50)
+    timeline.append({"from": 120, "to": 240, "detections": []})
+    return {"name":"moving_target", "fps":60,
+            "step_rois":{"step_a":[[0.40,0.40],[0.60,0.40],[0.60,0.60],[0.40,0.60]]},
+            "timeline": timeline}
+
+# 期望 step_counts['step_a'] == 1（中段连续帧形成 1 个 step）
+# 反例：把 step_rois['step_a'] 改成 [[0.01,0.01],[0.05,0.01],...] 角落 → step_counts['step_a'] == 0
+```
+
+**关键陷阱**：
+
+- step_roi polygon **必须归一化**（[0,1]）且 ≥3 点；polygon 校验在 `apply_project_config:127` 一行里就丢，配错就静默不限制
+- synthetic 走 `with_project=True` 才会把 `step_rois` 自动注入到 `step_roi_polygons`；走 `with_project=False` 则要先 push 一个含 `steps_config[*].roi` 的 project payload
+- `min_frames` 太大会把"在 ROI 内"的帧吃成 0；调试 step_count=0 时先把 `min_frames=1`
+- 真要测 ByteTracker + tracking_roi（**全局** roi，存在 `pipeline_config.tracking_roi`，是另一套），synthetic 不够用，需要走真视频 / 真模型路径（路径 F）
+
 ### G.6 与路径 E / F 的边界
 
 | 维度 | 路径 E | 路径 F | **路径 G** |
@@ -996,6 +1104,284 @@ skill 触发后**先看 git diff 头部**，按下表给用户列推荐清单（
   "logic_mode": "sequential"                          // sequential / detection / tracking
 }
 ```
+
+---
+
+## 路径 H：可见浏览器 UAT（面向功能测试的金标准）
+
+> **核心信条**：headless 跑出来的"全过"≠真的过。
+> 客户问"真的测过吗"，唯一能拍胸口说"测过"的，是开了**可见浏览器**(`headless=False`)+**录像**+**API 后端契约校验**全跑一遍且**人眼复核**过的 UAT。
+
+### H.0 什么时候必须走 H 而不是 E
+
+| 用户说的话 | 该走 | 原因 |
+|---|---|---|
+| 「跑下 E2E 测试」「测一下 UI」 | E | 自动化即可 |
+| 「写个 E2E 覆盖这个新页面」 | E | CI 用 |
+| 「我看 ROI 真的生效了吗」「你怎么知道功能对的」「真测过吗」「面向功能测试」 | **H** | 必须人眼+API 双证据 |
+| 「上线前我心里没底，跑一遍我看着」「客户要演示前先验一遍」 | **H** | UAT 场景 |
+| 「截个图看看」 | E（screenshot 即可） | 单次定格 |
+| 「录个 8-10 分钟的视频回放看」 | **H** | 必须 video on |
+
+### H.1 H 的本质：三条 UAT 证据链
+
+任何一条 UAT 报告都要包含**三类证据**，缺一条就不算"面向功能测试"：
+
+| 证据 | 来源 | 作用 | 工具 |
+|---|---|---|---|
+| **API 后端契约证据** | 直接 POST `/api/v1/...` + 校验返回值 | 证明 backend 业务逻辑正确（ROI 闸门、sequential 排序、events→counters） | `requests` |
+| **UI 前端反馈证据** | 可见 Chromium 操作 + 视频录像 + 截图 | 证明 frontend 真把 backend 数据渲染对了 | `playwright sync_api`，`headless=False`，`video_on` |
+| **数据落库证据** | GET `/api/v1/data/sessions/.../cycles` 后比对 DB 行 | 证明跨边界一致（API 说有的，DB 真存了；前端显示的，DB 真有） | `requests` + 解析 |
+
+**三个证据齐了才算"全过"**。少 API 证据 → 你只看到了 toast 弹出，没看到 DB 真有这条 cycle；少 UI 证据 → 你证明了 backend 对，但客户看到的可能是空白；少 DB 证据 → counter 涨了，但下次重启就丢了。
+
+### H.2 一份 UAT 脚本的固定 5 段结构
+
+```python
+"""UAT 脚本骨架（参考 /tmp/uat_v2_functional.py / /tmp/uat_v3_advanced.py）"""
+import requests, time, uuid
+from playwright.sync_api import sync_playwright
+
+API = "http://127.0.0.1:8011"   # 用非默认端口避免和客户机的 8001 撞
+SHOTS = "/tmp/uat_shots"
+VIDEO = "/tmp/uat_video"
+
+steps_log = []
+def step(label, ok, detail=""):
+    rec = {"idx": len(steps_log)+1, "label": label, "ok": ok, "detail": detail}
+    steps_log.append(rec)
+    print(f"[{'OK' if ok else '!!'}] {rec['idx']:02d}. {label}  {detail}")
+
+# ──────── 第 1 段：环境准备 ────────
+def setup():
+    """检查 8001/6001 占用 → 不冲突就用，冲突就退到 8011/6011；
+    清理上轮 UAT 产物；准备 shots/video 目录。"""
+
+# ──────── 第 2 段：Phase A — API 契约证据（不开浏览器，只验后端） ────────
+def phase_a_api_contracts():
+    """逐个跑后端业务规则的 ROI / sequential / counter 链路验证：
+       A1: ROI inside  → step_counts 三步全 +1
+       A2: ROI outside → step_b 因不在 ROI 内 = 0
+       A3: 反向 c→b→a → 触发 NG 事件 → 不良总数=1
+       A4: 正向 a→b→c → 触发 OK 事件 → 合格总数=1, 总产量=1"""
+
+# ──────── 第 3 段：Phase B — 可见浏览器人眼复核（headless=False + video） ────────
+def phase_b_visible_browser():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False, slow_mo=300)
+        ctx = browser.new_context(
+            viewport={"width": 1600, "height": 1000},
+            record_video_dir=VIDEO,
+            record_video_size={"width": 1600, "height": 1000},
+        )
+        page = ctx.new_page()
+        # 页面在加载时 await page.wait_for_load_state("networkidle") + 给前端 polling 留 2s
+        # 每个页面 page.screenshot(path=f"{SHOTS}/B1_monitor.png", full_page=True)
+        # 关键交互结束后 time.sleep(1.5) 让用户眼睛跟得上
+        ctx.close()
+        browser.close()
+
+# ──────── 第 4 段：Phase C — UI CRUD 真操作（创建-激活-修改-删除）────────
+def phase_c_ui_crud():
+    """以"新建项目"为例：
+       C1: 点"新建项目"按钮 → 输入名称 → 提交
+       C2: 验列表里出现 + 点中弹详情面板
+       C3: 改某字段 → 保存 → 重新进来字段确实变了
+       C4: 删除（含确认对话框） → 列表里消失"""
+
+# ──────── 第 5 段：清理 + 总结 ────────
+def cleanup_and_report():
+    """清掉以 __uat_ 前缀创建的所有 project / template / 其他副产物。
+    汇总打印 OK/!! 表，写入 /tmp/uat_run.log"""
+```
+
+### H.3 启动可见浏览器的标准启法
+
+```python
+browser = p.chromium.launch(
+    headless=False,               # ★ 必须 False，让人眼能看
+    slow_mo=250,                  # 每个动作放慢 250ms，否则跟不上
+    args=["--disable-blink-features=AutomationControlled"],   # 防部分前端判定为爬虫
+)
+ctx = browser.new_context(
+    viewport={"width": 1600, "height": 1000},   # 必须够大，否则项目 sidebar 折起来
+    record_video_dir="/tmp/uat_video",          # ★ 视频证据
+    record_video_size={"width": 1600, "height": 1000},
+    ignore_https_errors=True,
+)
+ctx.tracing.start(screenshots=True, snapshots=True, sources=True)   # 可选：trace
+```
+
+跑完后：
+
+```python
+ctx.close(); browser.close()      # ← close ctx 才会把视频 flush 到磁盘
+# /tmp/uat_video/<uuid>.webm  ← 这是给客户/产品的"我真测过"凭证
+```
+
+### H.4 项目特有的 7 个可见浏览器踩坑（必看）
+
+| 坑 | 症状 | 根因 | 处理 |
+|---|---|---|---|
+| **点项目卡片不进详情** | `page.get_by_text("项目名").click()` 后右侧详情面板没出 | Vue `@click` 绑在外层 `div.cursor-pointer`，点 `<span>` 文字不冒泡到 handler | 用 `page.locator("div.cursor-pointer", has=page.get_by_text(NAME, exact=True)).first.click()` |
+| **events 标签页断言失败** | UI 上明明看到"合格(OK)"几个字，`inner_text()` 抓不到 | 这些值在 `<input value="合格(OK)">` 里，`inner_text` 只读 textContent | `page.locator("input").evaluate_all("els => els.map(e => e.value)")` 直接读 value 属性 |
+| **"项目页是空的"** | Project / Data / Alarm 页一片空白 | 这些页有"无激活项目占位"的条件渲染，没激活项目时所有 tab/按钮都不渲染 | UAT 第一步用 API 创建并激活一个 `__uat_` 前缀项目，phase_b 再开浏览器 |
+| **删除按钮按了没反应** | `page.click("删除")` 后项目还在 | 删除走 ElementPlus `MessageBox` 二次确认（不是 `<confirm>` 标签） | 等 `page.get_by_role("dialog")` 出来后点里面的"确定" |
+| **新建项目对话框找不到输入框** | `get_by_label("项目名称")` 报 strict mode violation | ElementPlus `<el-form-item>` 把 label 包了一层非标 `for` 关联 | 用 `page.locator("el-dialog input").first` 或 `placeholder` 文案定位 |
+| **Monitor 上 step_counts 不动** | API 已经返回 step_counts={a:1,b:1,c:1}，前端一直显示 0 | Monitor 走 polling，默认间隔 1s，前端 `polling_interval` 也可能被休眠 | `time.sleep(2.5)` 给前端两个 poll 周期；或主动触发 `page.evaluate("window.__triggerPoll && __triggerPoll()")` |
+| **视频文件 0 字节 / 无法播放** | 跑完产物里的 .webm 打不开 | 没 `ctx.close()` 直接 `browser.close()`，视频没 flush | 先 `ctx.close()` 再 `browser.close()` |
+
+### H.5 必跑的 6 大可见浏览器验收页面（项目特化）
+
+依顺序跑，前后有依赖：
+
+```python
+def visible_walkthrough(page):
+    # 1) Monitor — 确认健康指示器、画面区域、stats 区都渲染
+    page.goto(f"{FRONTEND}/monitor")
+    page.wait_for_load_state("networkidle"); time.sleep(1.5)
+    page.screenshot(path=f"{SHOTS}/B1_monitor.png", full_page=True)
+    body = page.evaluate("document.body.innerText")[:5000]
+    step("B1 Monitor 渲染", "项目" in body or "FPS" in body)
+
+    # 2) Project — 创建-激活-编辑-保存-删除全套 CRUD
+    page.goto(f"{FRONTEND}/project")
+    # ... 见 H.6
+
+    # 3) Source — 视频源类型 6 种是否全列出来
+    # 4) Settings — 至少 PT/CT 模式切换 + 显示设置存在
+    # 5) Data — Session 列表能进 + cycle 详情能开
+    # 6) Alarm — 串口/协议/触发条件三个 tab 都能切
+```
+
+### H.6 UI True CRUD 标准手法（以项目页为例）
+
+```python
+def ui_create_select_delete_project(page):
+    # B1 创建
+    page.get_by_role("button", name="新建项目").click()
+    page.locator("el-dialog input").first.fill(f"__uat_ui_{uuid.uuid4().hex[:6]}")
+    page.locator("el-dialog button:has-text('确定')").first.click()
+    page.wait_for_load_state("networkidle"); time.sleep(1.5)
+
+    # B2 列表里能看到 + 点中
+    name = page.locator("text=__uat_ui_").first.inner_text()
+    page.locator("div.cursor-pointer", has=page.get_by_text(name, exact=True)).first.click()
+    time.sleep(1.0)
+    step("B2 选中后详情面板出现", page.locator("text=基本信息").is_visible())
+
+    # B3 删除（注意 ElementPlus 二次确认）
+    page.get_by_role("button", name="删除").click()
+    page.get_by_role("dialog").get_by_role("button", name="确定").click()
+    time.sleep(1.0)
+    step("B3 删除后列表里消失", not page.get_by_text(name, exact=True).is_visible())
+```
+
+### H.7 UAT 报告产物清单
+
+跑完一次 UAT 必须产出（路径都建议 /tmp，不要污染仓库）：
+
+| 产物 | 路径 | 用途 |
+|---|---|---|
+| 视频回放 | `/tmp/uat_video/*.webm` | 给产品/客户看「我真做过」 |
+| 全页截图 | `/tmp/uat_shots/*.png` | 关键节点定格证据 |
+| run.log（JSON） | `/tmp/uat_run.log` | 自动化判定 OK/FAIL 列表 |
+| 导出文件证物 | `/tmp/uat_v3_out/*.{txt,docx,xlsx}` | 真出文件，可双击打开 |
+| Trace（可选） | `/tmp/uat_trace.zip` | 排查时用 `playwright show-trace` |
+
+### H.8 端口 / 服务管理铁律（避免误杀客户机）
+
+跑 UAT 之前**必须**先确认：
+
+```bash
+# 1) 默认端口（客户工作端）状态
+for p in 8001 6001; do
+  ss -tln 2>/dev/null | grep -q ":$p " && echo "$p BUSY (有人在用，你不能动)" || echo "$p free (可用)"
+done
+
+# 2) 占用 → 切到非默认端口
+if [客户机正在用 8001]; then
+  BACKEND_PORT=8011; FRONT_PORT=6011
+  RUNTIME_MODE=test uvicorn backend.main:app --host 127.0.0.1 --port 8011 &
+  cd frontend && DEV_SERVER_PORT=6011 \
+    DEV_API_ORIGIN=http://127.0.0.1:8011 \
+    DEV_WS_ORIGIN=ws://127.0.0.1:8011 \
+    npm run dev &
+fi
+
+# 3) 跑完一定按 PID 精准 kill，不要 pkill -f node 一把梭
+PIDS=$(ss -tlnp 2>/dev/null | awk '/:8011 |:6011 /{print $NF}' | grep -oP 'pid=\K[0-9]+' | sort -u)
+for pid in $PIDS; do kill -9 "$pid" 2>/dev/null; done
+```
+
+**铁律**：
+1. 永远先 `ss -tln | grep ":8001"` 确认端口归属，**别盲启** 8001
+2. UAT 后**逐 PID kill**，不要 `pkill -f` 误伤客户其他 node 进程
+3. 中途 Cursor 终端可能给 backend 发 SIGTERM 误杀（看 terminal log "收到信号 15"），跑前先 `curl /api/v1/system/version` 一下
+
+### H.9 Path E vs Path H 决策表（再次明确）
+
+| 问题 | Path E（headless 自动化） | **Path H（可见浏览器 UAT）** |
+|---|---|---|
+| 适用 | CI / 回归 / Smoke | **客户验收 / 上线前心里没底 / 复现客户问题** |
+| headless | True | **False，必须看得见** |
+| video | 不录 | **必须录，是证据** |
+| screenshot | 失败时偶尔 | **每个关键步定格** |
+| API 后端契约 | 偶尔（test 文件就近 mock） | **必须，phase_a 全跑一遍** |
+| 跑完时长 | 30s-3min | **8-15min，让人眼跟得上** |
+| 触发关键词 | "跑测试" "回归" | **"真的测过吗" "面向功能" "我看一遍" "UAT"** |
+| 报告交付 | pytest stdout | **视频 + 截图 + run.log 三件套** |
+
+### H.10 完成判定（用户问"测过没"时回答的标准）
+
+只有以下 6 条全过，才能说"已经做过 UAT"：
+
+- [ ] Phase A（API 契约）N 项全 OK，stdout 里有具体的 `step_counts={'step_a':1,...}` 和 `counters={'合格总数':1,...}`
+- [ ] Phase B（可见浏览器）至少跑过 6 大页面，每页有截图
+- [ ] Phase C（UI CRUD）至少创建-选中-删除一个 `__uat_` 前缀实体并且最终列表里消失
+- [ ] 视频 .webm 已 flush 到 `/tmp/uat_video/`，能播放
+- [ ] cleanup 干净：`__uat_` 前缀的 project/template 都删了；`ss -tln` 看 UAT 用的端口都释放
+- [ ] run.log 写入 `/tmp/`，里面 `failed: 0`
+
+少任何一条 → 回答"我跑了 N/M，剩 M-N 项还没过"，**不要**说"全过了"。
+
+### H.11 执行参考（实战代码）
+
+实战代码已落仓库（直接 cp 改，**不是** pytest 收集的测试**，是单文件 UAT 脚本**）：
+
+| 文件 | 用途 |
+|---|---|
+| `tests/uat/uat_v2_functional.py` | API 契约 4 项（ROI in/out + 反向序列 + 计数器联动）+ UI CRUD 3 项的标准模板（V2，7/7 全过） |
+| `tests/uat/uat_v3_advanced.py` | 进阶：Export docx/xlsx 解 zip 验字段、Cluster 主从双后端聚合、Tracking 动态 ROI 移动目标（V3，13/13 全过） |
+
+跑法：
+
+```bash
+# 1) 端口检查（永远先做）
+for p in 8001 6001 8011 8021; do
+  ss -tln 2>/dev/null | grep -q ":$p " && echo "$p BUSY" || echo "$p free"
+done
+
+# 2) 起后端 8011（V2/V3 都需要）
+RUNTIME_MODE=test uvicorn backend.main:app --host 127.0.0.1 --port 8011 &
+
+# 3) 起 slave 8021（仅 V3 的 Phase E 需要，必须独立 DATA_DIR）
+mkdir -p /tmp/uat_slave_data
+RUNTIME_MODE=test TIANJUN_DATA_DIR=/tmp/uat_slave_data \
+  uvicorn backend.main:app --host 127.0.0.1 --port 8021 &
+
+# 4) 起前端 6011（仅 V2 的 Phase B 浏览器走查需要）
+cd frontend && DEV_SERVER_PORT=6011 \
+  DEV_API_ORIGIN=http://127.0.0.1:8011 \
+  DEV_WS_ORIGIN=ws://127.0.0.1:8011 npm run dev &
+
+# 5) 跑 UAT
+python tests/uat/uat_v3_advanced.py    # 进阶 13 项
+# 或
+python tests/uat/uat_v2_functional.py  # 基础 7 项
+```
+
+> 这两个脚本**不是** pytest 用例（命名故意不带 `test_` 前缀），所以 `pytest tests/` **不会**自动跑它们 — 必须显式 `python tests/uat/...` 调起来。这是有意的：UAT 应该是"我现在就要看一眼"的人工触发，不应混进 CI 无差别跑。
 
 ---
 

@@ -1,12 +1,42 @@
 import api from './index';
 
-export const startDetection = (modelPath, conf = 0.25, iou = 0.45, channel = 0, sessionName = null) => {
-  return api.post(`/source/detection/start?channel=${channel}`, {
-    model_path: modelPath,
-    conf,
-    iou,
-    session_name: sessionName || null,
-  });
+/**
+ * v3.7.0 合并 feat/multi-model-roi-link + session-id:
+ *
+ * 老单模型 (向后 100% 兼容):
+ *   startDetection('/path/main.pt', 0.25, 0.45, 0)
+ *
+ * 新多模型 (第一参数对象):
+ *   startDetection({ models: [
+ *     { name: 'main', model_path: '/p/main.pt', conf: 0.3, iou: 0.5,
+ *       display_color: '#10b981' },
+ *     { name: 'tray', model_path: '/p/tray.pt', conf: 0.5, iou: 0.5,
+ *       roi: [[0.7,0.7],[1,0.7],[1,1],[0.7,1]],
+ *       schedule: { type: 'every_n_frames', n: 5 },
+ *       class_filter: ['tray_normal','tray_side'],
+ *       priority: 50, display_color: '#f59e0b' },
+ *   ] }, undefined, undefined, 0)
+ *
+ * sessionName (第 5 参) 可选, 给后端写入 detection_sessions.name (≤ 64).
+ */
+export const startDetection = (modelPathOrPayload, conf = 0.25, iou = 0.45,
+                                channel = 0, sessionName = null) => {
+  let body;
+  if (modelPathOrPayload && typeof modelPathOrPayload === 'object'
+      && Array.isArray(modelPathOrPayload.models)) {
+    body = { models: modelPathOrPayload.models };
+    if (modelPathOrPayload.model_path) body.model_path = modelPathOrPayload.model_path;
+    if (modelPathOrPayload.conf != null) body.conf = modelPathOrPayload.conf;
+    if (modelPathOrPayload.iou != null) body.iou = modelPathOrPayload.iou;
+  } else {
+    body = {
+      model_path: modelPathOrPayload || null,
+      conf,
+      iou,
+    };
+  }
+  if (sessionName) body.session_name = sessionName;
+  return api.post(`/source/detection/start?channel=${channel}`, body);
 };
 
 export const stopDetection = (channel = 0) => api.post(`/source/detection/stop?channel=${channel}`);
