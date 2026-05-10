@@ -63,10 +63,12 @@ jobs:
 
       - name: Upload pytest junit
         if: always()
+        continue-on-error: true   # artifact 配额满时不阻断 job
         uses: actions/upload-artifact@v4
         with:
           name: pytest-junit
           path: test-results/
+          retention-days: 7
 
   e2e-browser-virtual:
     name: Playwright E2E (virtual + real backend/frontend)
@@ -162,6 +164,7 @@ jobs:
 
       - name: Upload screenshots
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: playwright-screenshots
@@ -169,13 +172,16 @@ jobs:
             /tmp/sat_full_workflow_shots/
             /tmp/synthetic_demo_shots/
             test-results/
+          retention-days: 7
 
       - name: Upload backend/frontend logs
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: ci-server-logs
           path: ci-logs/
+          retention-days: 7
 
   recommend-scenarios:
     name: Recommend scenarios (PR diff)

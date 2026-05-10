@@ -109,50 +109,83 @@ def _git_diff_files(refs: Iterable[str]) -> List[str]:
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
-def main(argv: List[str]) -> int:
-    if not argv:
-        refs = ["origin/main"]
-    elif len(argv) == 1:
-        refs = [argv[0]]
-    else:
-        refs = [argv[0], argv[1]]
-
-    print(f"[recommend_scenarios] 比较 ref(s)：{refs}")
+def _scan_diff(refs: List[str]) -> tuple[set, set, list]:
+    """返回 (推荐剧本 set, 建议测试 set, hit 详情行列表)"""
     files = _git_diff_files(refs)
-    if not files:
-        print("[recommend_scenarios] 没有改动文件 (或 git diff 失败)")
-        return 0
-
-    print(f"[recommend_scenarios] 改动 {len(files)} 个文件\n")
-
     seen_scenarios: set = set()
     seen_tests: set = set()
-    matched_any = False
+    hit_lines: list = []
     for keyword, scenarios, tests, reason in RULES:
         hit = [f for f in files if keyword in f]
         if not hit:
             continue
-        matched_any = True
-        print(f"--- 命中规则: {keyword!r}  原因: {reason}")
+        hit_lines.append(f"--- 命中规则: {keyword!r}  原因: {reason}")
         for f in hit:
-            print(f"    diff 涉及: {f}")
+            hit_lines.append(f"    diff 涉及: {f}")
         for s in scenarios:
-            if s in seen_scenarios:
-                continue
             seen_scenarios.add(s)
-            print(f"  [推荐剧本] tests/scenarios/{s}")
         for t in tests:
-            if t in seen_tests:
-                continue
             seen_tests.add(t)
-            print(f"  [建议测试] {t}")
-        print()
+    return seen_scenarios, seen_tests, hit_lines
 
-    if not matched_any:
-        print("[recommend_scenarios] 改动未命中任何已知规则。可手动跑全套：")
-        print("  pytest tests/test_synthetic_full_flow.py tests/step_defs -v")
+
+def main(argv: List[str]) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description="按 git diff 推荐 synthetic 剧本与测试")
+    ap.add_argument("refs", nargs="*", default=["origin/main"],
+                    help="git diff 比较 ref(s)：默认 origin/main")
+    ap.add_argument("--run", action="store_true",
+                    help="看完推荐直接 pytest 跑命中的 BDD/端到端测试")
+    ap.add_argument("--full", action="store_true",
+                    help="未命中任何规则时也跑全套")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="--run 模式下只打印 pytest 命令不执行")
+    args = ap.parse_args(argv)
+
+    refs = args.refs[:2]
+    print(f"[recommend_scenarios] 比较 ref(s)：{refs}")
+
+    files = _git_diff_files(refs)
+    if not files:
+        print("[recommend_scenarios] 没有改动文件 (或 git diff 失败)")
+        if args.full and args.run:
+            return _run_pytest(["tests/test_synthetic_full_flow.py", "tests/step_defs/"], dry_run=args.dry_run)
+        return 0
+
+    print(f"[recommend_scenarios] 改动 {len(files)} 个文件\n")
+    scenarios, tests, hit_lines = _scan_diff(refs)
+    for line in hit_lines:
+        print(line)
+    print()
+    for s in sorted(scenarios):
+        print(f"  [推荐剧本] tests/scenarios/{s}")
+    for t in sorted(tests):
+        print(f"  [建议测试] {t}")
+
+    matched = bool(scenarios or tests)
+    if not matched:
+        print("\n[recommend_scenarios] 改动未命中任何已知规则。")
+        if not args.full:
+            print("  → 加 --full 跑全套：python scripts/recommend_scenarios.py --run --full")
+            return 0
+
+    if args.run:
+        targets = sorted(tests) if matched else ["tests/test_synthetic_full_flow.py", "tests/step_defs/"]
+        if args.full:
+            targets = list(set(targets) | {"tests/test_synthetic_full_flow.py", "tests/step_defs/"})
+        return _run_pytest(targets, dry_run=args.dry_run)
 
     return 0
+
+
+def _run_pytest(targets: List[str], *, dry_run: bool = False) -> int:
+    cmd = ["python", "-m", "pytest", *targets, "-v", "--tb=short"]
+    print(f"\n[recommend_scenarios] pytest 命令: {' '.join(cmd)}")
+    if dry_run:
+        print("[recommend_scenarios] --dry-run 不执行")
+        return 0
+    proc = subprocess.run(cmd)
+    return proc.returncode
 
 
 if __name__ == "__main__":

@@ -84,8 +84,46 @@ class SyntheticMixin:
         return True
 
     def stop_synthetic(self) -> None:
-        """停止 synthetic 源（等价 stop，保留模型）。"""
+        """停止 synthetic 源（等价 stop，保留模型）。
+
+        如果之前用 apply_temporary_project_config 临时改过项目，stop 时自动恢复。
+        """
         self.stop(release_model=False)
+        self._restore_project_config_after_synthetic()
+
+    def apply_temporary_project_config(self, cfg: Dict[str, Any]) -> None:
+        """给 synthetic 临时套一份项目配置；stop_synthetic 时会自动恢复。
+
+        如果当前已有 project_config，第一次调用会保存到 _pre_synthetic_project_config；
+        重复调用不会覆盖该备份（保护最初的"真"配置）。
+        """
+        if not hasattr(self, "_pre_synthetic_project_config") or self._pre_synthetic_project_config is None:
+            try:
+                snapshot = getattr(self, "project_config", None)
+                if snapshot:
+                    import copy
+                    self._pre_synthetic_project_config = copy.deepcopy(snapshot)
+                else:
+                    self._pre_synthetic_project_config = None
+            except Exception:
+                self._pre_synthetic_project_config = None
+        try:
+            self.set_project_config(cfg)
+        except Exception as e:
+            print(f"[SyntheticMixin] apply_temporary_project_config 失败: {e}")
+            raise
+
+    def _restore_project_config_after_synthetic(self) -> None:
+        backup = getattr(self, "_pre_synthetic_project_config", None)
+        if backup is None:
+            return
+        try:
+            self.set_project_config(backup)
+            print("[SyntheticMixin] 已恢复 synthetic 之前的项目配置")
+        except Exception as e:
+            print(f"[SyntheticMixin] 恢复原项目配置失败: {e}")
+        finally:
+            self._pre_synthetic_project_config = None
 
     def _synthetic_next_frame(self) -> np.ndarray:
         """生成一帧纯黑画面（带帧序号 OSD），并更新 publish 索引供推理线程查询。"""

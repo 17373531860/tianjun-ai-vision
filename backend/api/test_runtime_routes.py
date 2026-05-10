@@ -86,7 +86,7 @@ def synthetic_start(body: SyntheticStartBody):
         if labels:
             cfg = _build_min_project_config(labels, body.logic_mode)
             try:
-                mgr.set_project_config(cfg)
+                mgr.apply_temporary_project_config(cfg)
             except Exception as e:
                 return {
                     "status": "ok",

@@ -11,6 +11,11 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Skill / MCP / agent 工具产物
+.mcp.json
+skills-lock.json
+.agents/
+
 # Virtual environments
 venv/
 ENV/
