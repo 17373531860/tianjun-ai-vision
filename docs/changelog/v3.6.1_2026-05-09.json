@@ -1,0 +1,126 @@
+{
+  "version": "3.6.1",
+  "date": "2026-05-09",
+  "previous_version": "3.6.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-361-001",
+      "title": "PT 显示新增「计算方式」维度：合并 / 最后一次（默认合并）",
+      "symptom": "客户场景中同一步骤在一个周期内多次连续出现时，v3.5.x 的 PT 仅取最后那段连续出现的时长，工艺标准节拍语境下不直观；工程师真正想看的是该步骤在这件工件上的累计耗时（SUM）。",
+      "root_cause": "原有 PT 显示链路只暴露段级数据（step_durations / step_durations_history），缺少周期级 SUM 视图；step_durations[label] 在每段消失结算时被覆盖，等同『最后段』语义。",
+      "fix": "后端在周期/步骤耗时统计层新增 step_cycle_durations（当前周期 SUM）+ step_cycle_durations_history（历史周期 SUM 列表，最多 100 条）；段消失结算与 _supplement_step_durations 两路同步累加；end_cycle 快照入历史并重置；_discard_empty_cycle 仅重置；reset_stats 全清。GET /api/v1/source/detection/results 新增 cycle_sum_step_durations / last_cycle_sum_step_durations / avg_cycle_sum_step_durations 三个字段。前端 useSystemStore.display.monitor 新增 ptAggregate（'sum' | 'last'，默认 'sum'）；Settings 页加『PT 计算方式』下拉；Monitor formatStepPT 改造为（aggregate × mode）二维选数据源；单/多工位轮询同步填充新字段；备用步骤 default_pt 兜底覆盖新字段。",
+      "files": [
+        "backend/api/source_state_init.py",
+        "backend/api/source_step_stats_mixin.py",
+        "backend/api/source.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/source_lifecycle_mixin.py",
+        "backend/api/source_routes.py",
+        "frontend/src/store/useSystemStore.js",
+        "frontend/src/views/Settings/index.vue",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": [
+        "PT 计算方式",
+        "PT aggregate",
+        "步骤合并耗时",
+        "step cycle sum",
+        "步骤本周期累计",
+        "step cycle duration",
+        "同步骤多次出现",
+        "multiple step segments per cycle",
+        "PT 显示口径",
+        "ptAggregate",
+        "ptMode",
+        "cycle_sum_step_durations",
+        "last_cycle_sum_step_durations",
+        "avg_cycle_sum_step_durations",
+        "step_cycle_durations",
+        "step_cycle_durations_history",
+        "formatStepPT",
+        "Settings 显示设置",
+        "Monitor 检测中心",
+        "step segment 段级",
+        "cycle SUM 周期累计",
+        "向下兼容",
+        "default 'sum'"
+      ],
+      "breaking": false,
+      "compat_note": "新增 3 个响应字段属增量扩展，老前端不消费即可；ptAggregate 默认 'sum' 是行为变更（老用户首升后 PT 数字可能从『最后段』切到『周期累计』），但完全可逆——切回『最后一次』即等同 v3.5.x 旧行为；CSV 导出『耗时(平均/秒)』列暂不联动新开关，保持段级平均语义；StepRecord 数据库表结构不变。"
+    },
+    {
+      "type": "test",
+      "id": "TEST-361-001",
+      "title": "PT 合并档暴露测试 + 既有 mock fixture 兼容修复",
+      "symptom": "新增 3 个 polling 字段需要回归测试覆盖；既有 mock fixture 用 MagicMock 自动生成属性，对新增的 step_cycle_durations / step_cycle_durations_history 会产生非 dict 对象，序列化时会破坏现有测试。",
+      "root_cause": "MagicMock 默认对未设置属性返回新 MagicMock 实例（不是空 dict），调用 .copy() / .items() 后续 JSON 序列化阶段会出现非可序列化对象。",
+      "fix": "新增 test_PT合并档_暴露三个字段_v3_5_x（覆盖当前周期 / 最近一周期 / 平均三档值）；既有 mock fixture 显式补 2 个新属性为 {}；空 history 用例追加新字段必须为 {} 的断言。相关测试 13/13 全过。",
+      "files": [
+        "tests/test_pt_ct_modes_exposure.py",
+        "tests/test_detection_results_exposure.py"
+      ],
+      "keywords": [
+        "MagicMock fixture",
+        "测试 fixture",
+        "step_cycle_durations 属性补全",
+        "PT 合并档暴露测试",
+        "polling 接口回归"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "doc",
+      "id": "DOC-361-001",
+      "title": "操作手册新增『PT 计算方式』章节与 FAQ",
+      "symptom": "新功能上线需要给客户/调试工程师可读的口径说明。",
+      "root_cause": "无（文档同步动作）。",
+      "fix": "新增 3.2 节『PT 计算方式（v3.5.x 新增）』：合并 / 最后一次语义对照、与 PT 显示口径正交的 6 档组合、每周期单次出现场景两档等价、CSV 导出兼容性说明；FAQ Q16.1 给典型场景指引（每周期一次无需关心 / 反复出现场景默认合并更直观）+ 数据库按段记录的 SQL 提示。",
+      "files": [
+        "docs/软件操作手册.md"
+      ],
+      "keywords": [
+        "操作手册",
+        "PT 计算方式 FAQ",
+        "Q16.1",
+        "段级 vs 周期级",
+        "SUM 合并"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CONFIG-361-001",
+      "title": "版本号升级到 3.6.1",
+      "symptom": "n/a",
+      "root_cause": "n/a",
+      "fix": "electron/package.json version 字段 3.6.0 → 3.6.1；electron/splash.html 启动页版本显示同步 v3.6.0 → v3.6.1。",
+      "files": [
+        "electron/package.json",
+        "electron/splash.html"
+      ],
+      "keywords": ["版本号升级", "splash 版本"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/api/source.py",
+    "backend/api/source_lifecycle_mixin.py",
+    "backend/api/source_routes.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/source_state_init.py",
+    "backend/api/source_step_stats_mixin.py",
+    "frontend/src/store/useSystemStore.js",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Settings/index.vue",
+    "tests/test_detection_results_exposure.py",
+    "tests/test_pt_ct_modes_exposure.py",
+    "docs/软件操作手册.md",
+    "electron/package.json",
+    "electron/splash.html",
+    "docs/changelog/v3.6.1_2026-05-09.md",
+    "docs/changelog/v3.6.1_2026-05-09.json",
+    "docs/CHANGELOG.md"
+  ]
+}

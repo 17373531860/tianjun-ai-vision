@@ -4,7 +4,7 @@ description: "诊断 Session/Cycle/Step 数据问题：记录丢失、数据不�
 argument-hint: "[问题描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__filesystem, mcp__sequential-thinking, mcp__sentry"
 ---
 
 # debug-session: Session/Cycle/Step 数据诊断（v3.5.x）

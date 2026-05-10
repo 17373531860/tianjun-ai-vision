@@ -4,7 +4,7 @@ description: "诊断前端问题：Monitor视图轮询异常、状态不同步�
 argument-hint: "[问题描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__playwright, mcp__context7, mcp__sentry, mcp__sequential-thinking"
 ---
 
 # debug-frontend: 前端诊断（v3.5.x）

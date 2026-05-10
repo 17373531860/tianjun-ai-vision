@@ -4,7 +4,7 @@ description: "诊断操作员管理与 License 授权：machineId 不一致、�
 argument-hint: "[问题现象]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash"
+allowed-tools: "Read, Grep, Glob, Bash, mcp__sequential-thinking"
 ---
 
 # debug-operator-license: 操作员 + License 诊断

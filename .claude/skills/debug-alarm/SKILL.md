@@ -4,7 +4,7 @@ description: "诊断报警系统问题：串口连接失败、Modbus指令不响
 argument-hint: "[问题描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking"
 ---
 
 # debug-alarm: 报警系统诊断（v3.5.x 真相版）

@@ -140,7 +140,7 @@ class LifecycleMixin:
             if not self._reopen_hik_camera():
                 return False
 
-        if self.capture is None and self.source_type not in ('hikvision', 'image'):
+        if self.capture is None and self.source_type not in ('hikvision', 'image', 'synthetic'):
             print("无法恢复：没有可用的视频源")
             return False
 
@@ -154,7 +154,7 @@ class LifecycleMixin:
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
 
-        if self.model is not None:
+        if self.model is not None or self.source_type == 'synthetic':
             self._start_inference_thread()
 
         self._ensure_session_active()
@@ -216,7 +216,7 @@ class LifecycleMixin:
         if not self.is_running:
             print("[resume_inference] 视频流未运行，无法恢复推理")
             return False
-        if self.model is None:
+        if self.model is None and self.source_type != 'synthetic':
             print("[resume_inference] 模型未加载，无法恢复推理")
             return False
         self.is_detecting = True
@@ -343,6 +343,7 @@ class LifecycleMixin:
             self._latest_frame_for_inference = None
             self._latest_frame_original_size = None
             self._latest_display_small_for_stats = None
+            self._latest_synthetic_inference_idx = -1
         with self._confirmed_detections_lock:
             self._confirmed_detections = []
         
@@ -361,6 +362,10 @@ class LifecycleMixin:
         for _lbl in list(self.step_durations_history.keys()):
             if len(self.step_durations_history[_lbl]) > 100:
                 self.step_durations_history[_lbl] = self.step_durations_history[_lbl][-100:]
+        # v3.5.x: 同步封顶 PT 合并档 history
+        for _lbl in list(self.step_cycle_durations_history.keys()):
+            if len(self.step_cycle_durations_history[_lbl]) > 100:
+                self.step_cycle_durations_history[_lbl] = self.step_cycle_durations_history[_lbl][-100:]
         
         # 7. 强制垃圾回收
         gc.collect()

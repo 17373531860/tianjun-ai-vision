@@ -481,6 +481,17 @@ class SessionLifecycleMixin:
         except Exception as e:
             print(f"结束周期失败: {e}")
         finally:
+            # v3.5.x: 把当前周期的 step SUM 快照到 history（供 PT 合并档"最近一轮"/"平均"使用），
+            # 然后重置 step_cycle_durations 给下一个周期。仅在 cycle 真正结束时执行；
+            # _discard_empty_cycle 不快照（周期作废，数据不应进入历史）。
+            try:
+                if self.step_cycle_durations:
+                    for _lbl, _total in self.step_cycle_durations.items():
+                        if _total > 0:
+                            self.step_cycle_durations_history.setdefault(_lbl, []).append(round(_total, 2))
+                self.step_cycle_durations = {}
+            except Exception as _e:
+                print(f"[PT-Sum] 周期 SUM 快照异常: {_e}")
             self.current_cycle_id = None
             self.current_cycle_uuid = None
     
@@ -501,6 +512,8 @@ class SessionLifecycleMixin:
         except Exception as e:
             print(f"Failed to discard empty cycle: {e}")
         finally:
+            # v3.5.x: 周期作废时清空本周期 SUM 累加（不进入 history）
+            self.step_cycle_durations = {}
             self.current_cycle_id = None
             self.current_cycle_uuid = None
             if self.current_cycle_number > 0:

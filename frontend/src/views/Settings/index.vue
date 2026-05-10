@@ -216,6 +216,16 @@
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="flex flex-col">
+                  <span class="text-gray-300">PT 计算方式</span>
+                  <span class="text-[10px] text-gray-500">同步骤一周期内多次出现：合并(SUM) / 最后一次</span>
+                </div>
+                <el-select v-model="store.display.monitor.ptAggregate" size="small" style="width: 8rem" @change="saveDisplaySettings">
+                  <el-option label="合并" value="sum" />
+                  <el-option label="最后一次" value="last" />
+                </el-select>
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
                   <span class="text-gray-300">CT 显示口径</span>
                   <span class="text-[10px] text-gray-500">周期时间取哪一轮</span>
                 </div>

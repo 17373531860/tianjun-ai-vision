@@ -11,6 +11,11 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Skill / MCP / agent 工具产物
+.mcp.json
+skills-lock.json
+.agents/
+
 # Virtual environments
 venv/
 ENV/
@@ -148,3 +153,6 @@ tools/test_scan_pair_*.py
 
 # HTML intermediate artifact for manual (PDF is the released form)
 docs/*.html
+
+# External skill vendor trees (`npx skills add`, symlink targets)
+/.agents/

@@ -4,7 +4,7 @@ description: "打包发版全流程指南：版本号更新、CI流程、Nuitka�
 argument-hint: "[版本号或构建问题描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__github, mcp__filesystem"
 ---
 
 # build-release: 打包发版流程

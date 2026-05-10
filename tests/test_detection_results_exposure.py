@@ -22,6 +22,8 @@ def _make_mock_mgr(periodic_status):
     mgr.step_screenshots = {}
     mgr.step_detection_times = {}
     mgr.step_durations = {}
+    mgr.step_cycle_durations = {}
+    mgr.step_cycle_durations_history = {}
     mgr.step_intervals = {}
     mgr.counters = {}
     mgr.ng_step_cycle_counts = {}

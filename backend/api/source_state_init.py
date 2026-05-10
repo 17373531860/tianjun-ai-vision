@@ -43,6 +43,14 @@ def _init_inference_threading(h):
     h._inference_frame_lock = threading.Lock()
     h._confirmed_detections = []
     h._confirmed_detections_lock = threading.Lock()
+    # SyntheticMixin: 虚拟剧本源默认状态
+    h._synthetic_spec = None
+    h._synthetic_timeline = []
+    h._synthetic_seq = 0
+    h._synthetic_last_published_idx = -1
+    h._latest_synthetic_inference_idx = -1
+    # SyntheticMixin: 临时项目配置切回时的还原备份
+    h._pre_synthetic_project_config = None
 
 
 def _init_health_and_timeout(h):
@@ -249,6 +257,12 @@ def _init_cycle_time_state(h):
     h.step_durations_history = {}
     h.step_intervals = {}
     h.last_step_completed_time = None
+    # v3.5.x: PT 计算方式扩展 — 同一步骤在一个周期内可能多次连续出现,
+    #   step_durations / step_durations_history 是按"段"记的(每次"出现-消失"为一段),
+    #   step_cycle_durations 在本周期内对每个 label 累加 SUM, end_cycle 时快照到
+    #   step_cycle_durations_history(按 label 的 list, 上限 100), 给前端"PT 合并"档使用.
+    h.step_cycle_durations = {}
+    h.step_cycle_durations_history = {}
 
 
 def _init_session_state(h):

@@ -109,6 +109,7 @@ export const useSystemStore = defineStore('system', {
         showDetectionCount: true,
         ctIncludeNg: false,
         ptMode: 'avg',  // 'avg' | 'last' | 'current' — 步骤耗时显示口径
+        ptAggregate: 'sum',  // 'sum' | 'last' — PT 计算方式：同步骤同周期多次出现时合并求和 / 仅取最后一次（默认合并）
         ctMode: 'avg',  // 'avg' | 'last' | 'current' — 周期时间显示口径
         ngTop3: true,
         ngTopDisplayMode: 'percentage',  // 'percentage' | 'count'

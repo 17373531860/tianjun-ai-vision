@@ -4,7 +4,7 @@ description: "诊断 Electron 桌面壳问题：后端进程管理、8步关机�
 argument-hint: "[问题描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__sentry"
 ---
 
 # debug-electron: Electron 桌面壳诊断

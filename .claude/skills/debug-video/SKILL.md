@@ -4,7 +4,7 @@ description: "诊断视频采集和推流问题：6种视频源连接失败、MJ
 argument-hint: "[问题描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7, mcp__sentry"
 ---
 
 # debug-video: 视频采集与推流诊断

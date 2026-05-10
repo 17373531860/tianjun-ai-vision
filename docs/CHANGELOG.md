@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.6.1 (2026-05-09)
+- [FEAT-361-001] 步骤耗时（PT）新增「计算方式」维度：合并 / 最后一次（默认合并） — 客户场景中同一步骤一周期内多次连续出现时，原有 PT 仅取最后那段不直观；新增"合并(SUM)"档作为默认，旧行为切回"最后一次"即可。后端在周期/步骤耗时统计层加 `step_cycle_durations`（当前周期 SUM）+ `step_cycle_durations_history`（历史周期 SUM 列表，封顶 100），段消失结算 + `_supplement_step_durations` 两路同步累加，`end_cycle` 快照入历史并重置，`_discard_empty_cycle` 仅重置不入历史，`reset_stats` 全清；`/api/v1/source/detection/results` 新增 3 个字段（`cycle_sum_step_durations` / `last_cycle_sum_step_durations` / `avg_cycle_sum_step_durations`）；前端 `useSystemStore.display.monitor` 加 `ptAggregate`（默认 'sum'）；Settings 页加「PT 计算方式」下拉；Monitor `formatStepPT` 改造为（aggregate × mode）二维选数据源；单/多工位轮询同步填充新字段；备用步骤 `default_pt` 兜底覆盖新字段
+- [TEST-361-001] PT 合并档暴露测试 + 既有 mock fixture 兼容修复 — 新增 `test_PT合并档_暴露三个字段_v3_5_x` 验证当前/最近/平均三档；现有 mock fixture 显式补 2 个新属性为空 dict 防 MagicMock 序列化爆炸；空 history 用例追加新字段必须 {} 的断言；相关测试 13/13 全过
+- [DOC-361-001] 操作手册新增 3.2 节「PT 计算方式」+ FAQ Q16.1 — 合并/最后一次语义对照、与 PT 显示口径正交的 6 档组合、每周期单次出现两档等价、CSV 导出兼容性说明、SQL 端 `SUM(duration) GROUP BY cycle_id, step_label` 自助提示
+- [CONFIG-361-001] 版本号升级到 3.6.1（package.json + splash.html）；StepRecord 表结构不变；CSV 导出"耗时(平均/秒)"列暂不联动新开关保持段级语义；老 localStorage 自动深合并默认值
+
 ## v3.6.0 (2026-05-08)
 - [FEAT-360-001] 周期性强制动作能力增强 + 语义修正 — `pipeline_config.run_on_start` 新开关；`resume()/resume_inference()` 把 run_on_start=true 的规则计数推到 interval 并加入 `_run_on_start_pending`（不立即发事件）；新增 `_check_periodic_actions_on_first_step(step_label)` 钩入步骤完成流程（首步=触发步骤→静默清零；首步≠触发步骤→立即发漏检告警）；`reset_stats()` 显式保留周期计数器与 `_run_on_start_pending`；`_emit_periodic_notification` 标 `should_warn_no_barcode=False`；前端 Project 页加 run_on_start switch + 事件选择器旁加"+ 新建事件"按钮直跳事件管理对话框
 - [FIX-360-001] 检测框越界三层防御性 clipping — 后端推理出口 `source_geometry.py::clip_bbox_normalized`（_detect_only / _detect_and_track / _detect_segment 全接入）+ 后端 Kalman 输出 `apply_kalman_filter` 对 smoothed_pos clip + 前端 Monitor `clipNormalizedBox` 助手（drawMultiDetections / drawDetections / mask polygon 全覆盖），任一层独立兜底

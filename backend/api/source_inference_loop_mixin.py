@@ -51,6 +51,17 @@ class InferenceLoopMixin:
             中同步为 main.fps_inference (老 UI/导出兼容)
         """
         t_start = time.time()
+        if getattr(self, 'source_type', None) == 'synthetic':
+            idx = int(getattr(self, '_latest_synthetic_inference_idx', -1))
+            detections = self._synthetic_detections_for_frame_index(idx)
+            detect_time = (time.time() - t_start) * 1000
+            if detect_time > 200:
+                debug_log(f"!!! synthetic 推理耗时: {detect_time:.1f}ms, 检测数={len(detections)}", "INFERENCE")
+            if detections:
+                detections = self._map_detections_original_to_display(detections)
+            # 剧本注入固定走非跟踪 / 非分割路径（与 _update_step_stats 对齐）
+            return (detections, False, False, t_start)
+
         # 主模型的 task_type / logic_mode (对副模型不适用)
         _task_type = self.project_config.get('task_type', 'detection') if self.project_config else 'detection'
         _logic_mode = self.project_config.get('logic_mode', 'sequential') if self.project_config else 'sequential'
