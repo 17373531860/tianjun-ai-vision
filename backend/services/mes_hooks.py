@@ -1263,35 +1263,42 @@ class MESHookManager:
                     print(f"[MES] 迟到补绑检查异常 ch{channel_id}: {e}", flush=True)
 
             if not wp_id:
+                # v3.7.0: 客户反馈 "MES 数据不是实时上传"。
+                # 原因：原逻辑这里 return → cycle_end 整段被跳过 → 外部 MES 收不到任何数据,
+                # 直到工单"完工"才(通过其它路径) 看到数据。
+                # 修复：无扫码绑定也允许走 MES 推送 (按 cycle 实时推),
+                # 仅跳过 workpiece-related 子操作 (workpiece_svc.set_result / defect.auto_record),
+                # 因为没工件 ID 这些写操作没意义。
+                # 不破坏现有行为: 有 wp_id 的路径完全不变 (扫码客户继续按工件维度推送)。
                 print(f"[MES] Cycle#{cycle_id} ch{channel_id} 结束但未绑定工件 "
-                      f"(_inspecting_workpiece 为空) → 跳过 MES/集群分发", flush=True)
-                return
+                      f"(无扫码场景) → 仍按 cycle 实时推送 MES, 跳过 workpiece 写操作", flush=True)
 
-        self._workpiece_svc.set_result(db, wp_id, is_good, cycle_id)
-        self._workpiece_svc.update_inspection_result(
-            db, wp_id, cycle_id,
-            result="ok" if is_good else "ng",
-            event_name=event_name,
-            result_reason=result_reason,
-            duration=duration,
-        )
-
-        if not is_good:
-            from backend.models.mes_models import WorkpieceInspection
-            insp = (
-                db.query(WorkpieceInspection)
-                .filter(WorkpieceInspection.workpiece_id == wp_id,
-                        WorkpieceInspection.cycle_id == cycle_id)
-                .first()
-            )
-            self._defect_svc.auto_record(
+        if wp_id:
+            self._workpiece_svc.set_result(db, wp_id, is_good, cycle_id)
+            self._workpiece_svc.update_inspection_result(
                 db, wp_id, cycle_id,
-                inspection_id=insp.id if insp else None,
+                result="ok" if is_good else "ng",
                 event_name=event_name,
                 result_reason=result_reason,
-                step_sequence=step_sequence,
-                project_id=project_id,
+                duration=duration,
             )
+
+            if not is_good:
+                from backend.models.mes_models import WorkpieceInspection
+                insp = (
+                    db.query(WorkpieceInspection)
+                    .filter(WorkpieceInspection.workpiece_id == wp_id,
+                            WorkpieceInspection.cycle_id == cycle_id)
+                    .first()
+                )
+                self._defect_svc.auto_record(
+                    db, wp_id, cycle_id,
+                    inspection_id=insp.id if insp else None,
+                    event_name=event_name,
+                    result_reason=result_reason,
+                    step_sequence=step_sequence,
+                    project_id=project_id,
+                )
 
         order_id = self._active_orders.get(channel_id)
         if order_id:
@@ -1300,7 +1307,8 @@ class MESHookManager:
                 self._work_order_svc.change_status(db, order_id, "completed")
                 print(f"[MES] 工单#{order_id} 已自动完成", flush=True)
 
-        print(f"[MES] Cycle#{cycle_id} 结束: {'OK' if is_good else 'NG'} (工件#{wp_id})",
+        print(f"[MES] Cycle#{cycle_id} 结束: {'OK' if is_good else 'NG'} "
+              f"(工件#{wp_id if wp_id else '无绑定'})",
               flush=True)
 
         # v2.7.9: 在调集群分发之前，先 commit 释放 SQLite 写锁。
@@ -1354,22 +1362,24 @@ class MESHookManager:
             print(f"[ExportRealtime] cycle_end 触发失败: {e}\n{traceback.format_exc()}",
                   flush=True)
 
-        rebind = self._get_rebind_mode(channel_id)
-        if rebind == "auto_rebind" and not is_good:
-            from backend.models.mes_models import Workpiece
-            wp_obj = db.query(Workpiece).filter(Workpiece.id == wp_id).first()
-            if wp_obj:
-                wp_obj.status = "queued"
-                db.commit()
-            self._pending_workpiece[channel_id] = wp_id
-            print(f"[MES] 自动重绑: 工件#{wp_id} 放回待检 (auto_rebind)", flush=True)
-        elif rebind == "manual" and not is_good:
-            self._rebind_prompt[channel_id] = {
-                "workpiece_id": wp_id,
-                "cycle_id": cycle_id,
-                "timestamp": time.time(),
-            }
-            print(f"[MES] 等待手动选择: 工件#{wp_id} (manual)", flush=True)
+        # rebind 操作仅在有 wp_id 时才有意义 (没工件无从重绑)
+        if wp_id:
+            rebind = self._get_rebind_mode(channel_id)
+            if rebind == "auto_rebind" and not is_good:
+                from backend.models.mes_models import Workpiece
+                wp_obj = db.query(Workpiece).filter(Workpiece.id == wp_id).first()
+                if wp_obj:
+                    wp_obj.status = "queued"
+                    db.commit()
+                self._pending_workpiece[channel_id] = wp_id
+                print(f"[MES] 自动重绑: 工件#{wp_id} 放回待检 (auto_rebind)", flush=True)
+            elif rebind == "manual" and not is_good:
+                self._rebind_prompt[channel_id] = {
+                    "workpiece_id": wp_id,
+                    "cycle_id": cycle_id,
+                    "timestamp": time.time(),
+                }
+                print(f"[MES] 等待手动选择: 工件#{wp_id} (manual)", flush=True)
 
     def _cluster_dispatch(self, db, cycle_context: dict, channel_id: int,
                           is_good: bool, event_name: str) -> bool:
