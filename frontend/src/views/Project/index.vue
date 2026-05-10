@@ -399,14 +399,29 @@
           <!-- Tab 2: Step Settings -->
           <el-tab-pane :label="activeProject.logic_mode === 'tracking' ? '物品设置' : '步骤设置'" name="steps">
             <div class="h-full flex flex-col p-4">
-              <div class="mb-3 text-sm text-gray-400 flex items-center flex-shrink-0">
-                <el-icon class="mr-1"><InfoFilled /></el-icon>
-                <template v-if="activeProject.logic_mode === 'tracking'">
-                  配置各物品的启用状态与置信度。跟踪参数请在"逻辑设置"中配置。
-                </template>
-                <template v-else>
-                  配置各步骤的启用状态、置信度、显示标签。启用的步骤将参与逻辑判断。
-                </template>
+              <div class="mb-3 flex flex-col gap-2 flex-shrink-0">
+                <div class="text-sm text-gray-400 flex items-center">
+                  <el-icon class="mr-1"><InfoFilled /></el-icon>
+                  <template v-if="activeProject.logic_mode === 'tracking'">
+                    配置各物品的启用状态与置信度。跟踪参数请在"逻辑设置"中配置。
+                  </template>
+                  <template v-else>
+                    配置各步骤的启用状态、置信度、显示标签。启用的步骤将参与逻辑判断。
+                  </template>
+                </div>
+                <div class="flex items-center gap-2 text-xs text-gray-300 flex-wrap">
+                  <el-switch
+                    v-model="activeProject.pipeline_config.hide_boxes_outside_step_roi"
+                    size="small"
+                  />
+                  <span>Monitor 不绘制步骤 ROI 外的框</span>
+                  <el-tooltip
+                    placement="top"
+                    content="仅影响监视画面：对已配置「步骤ROI」的标签，检测框中心不在该区域内则不画框（分割遮罩一并隐藏）。不参与后端判定。关闭则始终绘制（与原先一致）。"
+                  >
+                    <span class="cursor-help border-b border-dashed border-gray-500 text-gray-400">说明</span>
+                  </el-tooltip>
+                </div>
               </div>
 
               <div class="flex-1 overflow-y-auto custom-scrollbar min-h-0 pb-20">
@@ -2255,6 +2270,9 @@ const initProjectDefaults = (project) => {
   if (!project.pipeline_config) {
     project.pipeline_config = {};
   }
+  if (project.pipeline_config.hide_boxes_outside_step_roi === undefined) {
+    project.pipeline_config.hide_boxes_outside_step_roi = !!pipelineConfig.hide_boxes_outside_step_roi;
+  }
   
   // 使用 pipeline_config 中的值，如果没有则使用默认值
   if (project.sequence_order === undefined) {
@@ -2623,6 +2641,7 @@ const handleSaveProject = async () => {
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,
         rod_companion_filter: _sanitizeCompanionFilter(activeProject.value.rod_companion_filter),
         rod_session_gate: _sanitizeSessionGate(activeProject.value.rod_session_gate),
+        hide_boxes_outside_step_roi: !!activeProject.value.pipeline_config?.hide_boxes_outside_step_roi,
         periodic_actions: (activeProject.value.periodic_actions || []).map(rule => ({
           id: rule.id,
           name: rule.name || '',

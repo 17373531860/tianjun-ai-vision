@@ -1675,7 +1675,7 @@ const processChannelResult = (ch, d) => {
 
   const canvas = multiCanvasRefs[ch];
   if (canvas && d.detections?.length) {
-    drawMultiDetections(ch, canvas, d.detections, chData._hiddenLabels);
+    drawMultiDetections(ch, canvas, d.detections, chData._hiddenLabels, d.project_config);
   } else if (canvas) {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1724,7 +1724,42 @@ const clipNormalizedBox = (det) => {
   return { x, y, w, h };
 };
 
-const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null) => {
+/** 归一化坐标下的射线法点在多边形内（含边界） */
+const pointInPolygonNorm = (px, py, poly) => {
+  if (!poly || poly.length < 3) return true;
+  let inside = false;
+  const n = poly.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = Number(poly[i][0]);
+    const yi = Number(poly[i][1]);
+    const xj = Number(poly[j][0]);
+    const yj = Number(poly[j][1]);
+    const denom = (yj - yi) || 1e-18;
+    if (((yi > py) !== (yj > py)) && (px < ((xj - xi) * (py - yi)) / denom + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+};
+
+/**
+ * pipeline_config.hide_boxes_outside_step_roi：对已配置步骤 ROI 的标签，
+ * 框中心不在多边形内则不绘制（仅监视 UI）。
+ */
+const shouldDrawDetWithStepRoi = (det, stepsConfig, pipelineConfig) => {
+  const pc = pipelineConfig || {};
+  if (!pc.hide_boxes_outside_step_roi) return true;
+  const label = det.label;
+  if (!label) return true;
+  const step = (stepsConfig || []).find(s => s && s.label === label && s.enabled !== false);
+  if (!step || !Array.isArray(step.roi) || step.roi.length < 3) return true;
+  const cb = clipNormalizedBox(det);
+  const cx = cb.x + cb.w / 2;
+  const cy = cb.y + cb.h / 2;
+  return pointInPolygonNorm(cx, cy, step.roi);
+};
+
+const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollProjectConfig = null) => {
   if (!canvas) return;
   const parent = canvas.parentElement;
   if (parent) { canvas.width = parent.offsetWidth; canvas.height = parent.offsetHeight; }
@@ -1742,9 +1777,13 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null) => {
     dy = (ch2 - dh) / 2;
   }
 
+  const stepsConfMulti = pollProjectConfig?.steps_config || currentProject.value?.steps_config || [];
+  const pipeMulti = pollProjectConfig?.pipeline_config || currentProject.value?.pipeline_config || {};
+
   detections.forEach(det => {
     if (det.hidden) return;
     if (hiddenLabels && det.label && hiddenLabels.has(det.label)) return;
+    if (!shouldDrawDetWithStepRoi(det, stepsConfMulti, pipeMulti)) return;
     const cb = clipNormalizedBox(det);
     const x = cb.x * dw + dx, y = cb.y * dh + dy;
     const w = cb.w * dw, h = cb.h * dh;
@@ -2724,10 +2763,13 @@ const drawDetections = (detections) => {
     }
   }
 
+  const pipeCfg = currentProject.value?.pipeline_config || {};
+
   detections.forEach(det => {
     if (!enabledLabels.has(det.label)) return;
     if (det.hidden) return;
     if (hiddenLabels.has(det.label)) return;
+    if (!shouldDrawDetWithStepRoi(det, stepsConfig, pipeCfg)) return;
     const cb = clipNormalizedBox(det);
     const x = offsetX + cb.x * renderW;
     const y = offsetY + cb.y * renderH;
