@@ -4,7 +4,7 @@ description: "更新发版全流程：回顾对话提取变更、生成 changelo
 argument-hint: "[版本号或留空自动决定]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Shell, Write, StrReplace, Agent"
+allowed-tools: "Read, Grep, Glob, Shell, Write, StrReplace, Agent, mcp__github, mcp__filesystem"
 ---
 
 # update-release: 更新发版流程

@@ -4,7 +4,7 @@ description: "诊断 source.py VideoSourceManager 的问题：检测状态机、
 argument-hint: "[问题描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__sentry, mcp__context7"
 ---
 
 # debug-source: VideoSourceManager 诊断（v3.5.x 主线）

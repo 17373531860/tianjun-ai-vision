@@ -4,7 +4,7 @@ description: "创建客户端热补丁：hotfix.py编写、Windows bat补丁脚�
 argument-hint: "[要修复的问题描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__github, mcp__filesystem"
 ---
 
 # create-hotfix: 客户端热补丁创建

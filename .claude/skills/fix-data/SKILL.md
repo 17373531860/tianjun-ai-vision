@@ -4,7 +4,7 @@ description: "诊断和修复数据问题：Session/Cycle/Step数据不一致、
 argument-hint: "[数据问题描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__filesystem, mcp__sequential-thinking"
 ---
 
 # fix-data: 数据诊断与修复

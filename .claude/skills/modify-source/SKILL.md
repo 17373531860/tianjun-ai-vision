@@ -4,7 +4,7 @@ description: "安全修改 source.py 的前置分析：列出所有调用者、�
 argument-hint: "[计划修改的功能或方法名]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__context7"
 ---
 
 # modify-source: source.py 安全修改分析（v3.5.x 主线）

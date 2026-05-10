@@ -4,7 +4,7 @@ description: "安全修改后端API端点：路由前缀、Schema、业务逻辑
 argument-hint: "[要修改的API端点或模块名]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 ---
 
 # modify-api: 后端 API 安全修改影响分析

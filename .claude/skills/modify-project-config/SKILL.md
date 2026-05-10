@@ -2,6 +2,7 @@
 name: modify-project-config
 description: "安全修改项目配置结构：pipeline_config / steps_config / events_config 等 7 个 JSON 字段的全链路影响分析。配置从前端 Project 页 → POST /projects → DB → 激活后 set_project_config → VSM 状态机 → Monitor 展示，改任一环都要全链路对齐。"
 argument-hint: "[要修改的配置项]"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7, mcp__sequential-thinking"
 ---
 
 # modify-project-config: 项目配置安全修改分析（v3.5.x）

@@ -4,7 +4,7 @@ description: "诊断MES系统问题：工单/工件/缺陷/扫码器/Hook/Gatewa
 argument-hint: "[问题描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__sentry"
 ---
 
 # debug-mes: MES 子系统诊断（v3.5.x 主线）

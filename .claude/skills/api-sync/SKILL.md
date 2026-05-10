@@ -4,7 +4,7 @@ description: "前后端 API 对齐检查（v3.5.x 主线）：19 组 /api/v1/* �
 argument-hint: "[具体的 API 对齐问题，或 'full-check' 做全量检查]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 ---
 
 # api-sync — 前后端 API 对齐（v3.5.x）

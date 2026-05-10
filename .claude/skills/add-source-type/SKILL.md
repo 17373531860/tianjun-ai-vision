@@ -4,7 +4,7 @@ description: "新增视频源类型的完整流程：source.py接入方法、Sou
 argument-hint: "[新视频源类型描述]"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write"
+allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write, mcp__context7"
 ---
 
 # add-source-type: 新增视频源类型

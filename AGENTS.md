@@ -100,6 +100,7 @@
 | 数据问题修复 | `fix-data` |
 | 前后端 API 对齐检查 | `api-sync` |
 | 调参（视频 + 模型）| `tune-params` |
+| 跑测试 / 写测试 / 端到端冒烟 / 测试影响分析 | `run-tests` |
 | 出新版本（version bump / changelog / tag / CI）| `update-release` |
 | 打包流程问题排查 | `build-release` |
 | 给客户出热补丁 | `create-hotfix` |
@@ -772,7 +773,7 @@ electron/
 ├── build.yml                # 主 CI (Nuitka + conda-pack + Inno Setup)
 └── gitee-upload.yml         # Gitee 中转
 
-.claude/skills/  (27 个本项目 skill)
+.claude/skills/  (29 个本项目 skill)
 
 docs/
 ├── 软件操作手册.md / .html / .pdf  # 客户用户手册

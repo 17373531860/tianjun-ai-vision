@@ -4,7 +4,7 @@ description: "分支合并与多 agent 并行协作：merge/rebase 选择、冲�
 argument-hint: "[源分支] [目标分支]，或描述合并场景"
 model: opus
 effort: high
-allowed-tools: "Read, Grep, Glob, Shell, StrReplace"
+allowed-tools: "Read, Grep, Glob, Shell, StrReplace, mcp__github"
 ---
 
 # merge-branch: 分支合并与多 agent 协作
