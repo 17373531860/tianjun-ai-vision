@@ -786,6 +786,12 @@ curl -sX POST 'http://127.0.0.1:8001/api/v1/test/synthetic/start' \
   -H 'Content-Type: application/json' \
   -d '{"scenario_json":{"name":"adhoc","fps":60,"timeline":[{"from":0,"to":120,"detections":[{"label":"X","confidence":0.9,"bbox":[0.2,0.2,0.2,0.2]}]}]}}'
 
+# 推荐：with_project=true 让后端自动按剧本里的 label 配最小项目
+# 这样 cycle 才会真结算 (step_counts/cycle_count 才会动)
+curl -sX POST 'http://127.0.0.1:8001/api/v1/test/synthetic/start' \
+  -H 'Content-Type: application/json' \
+  -d '{"scenario":"ok_sequential_cycle.json","with_project":true}'
+
 # 启动检测（model_path 可以省略，因为 source_type=synthetic）
 curl -sX POST 'http://127.0.0.1:8001/api/v1/source/detection/start?channel=0' \
   -H 'Content-Type: application/json' \
@@ -852,6 +858,8 @@ curl -sX POST 'http://127.0.0.1:8001/api/v1/test/synthetic/stop?channel=0'
 
 ### G.4 改了什么 → 推荐跑哪个剧本（半自动）
 
+> **快速做法**：直接跑 `python scripts/recommend_scenarios.py [origin/main]`，会按下表给出推荐清单。
+
 skill 触发后**先看 git diff 头部**，按下表给用户列推荐清单（让用户点确认再跑，避免无关改动浪费时间）：
 
 | `git diff --name-only` 命中 | 建议剧本 | 理由 |
@@ -893,6 +901,47 @@ skill 触发后**先看 git diff 头部**，按下表给用户列推荐清单（
 - Playwright 截图在 `/tmp/synthetic_demo_shots/` 内，截图里能看见**剧本对应步骤的视觉反馈**
 - `[MES] Hook 管理器已停止` 这类副作用日志正常出现 → 说明完整 pipeline 走完
 - 在结束前**调用 stop 两个 API**，否则下次启动新剧本会与旧 source_type 冲突
+
+### G.8 配套测试基建文件索引
+
+新加一条 BDD 场景或 E2E 场景时，按以下索引找到对应文件：
+
+| 用途 | 文件 |
+|---|---|
+| 剧本仓库 | `tests/scenarios/*.json` |
+| BDD 场景：核心检测流 | `tests/features/core_detection_flow.feature` + `tests/step_defs/test_core_detection_flow.py` |
+| BDD 场景：视频源连接 | `tests/features/source_connection.feature` + `tests/step_defs/test_source_connection.py` |
+| BDD 场景：MES 扫码工作流 | `tests/features/mes_scan_workflow.feature` + `tests/step_defs/test_mes_scan_workflow.py` |
+| BDD 场景：报警链路 | `tests/features/alarm_event_chain.feature` + `tests/step_defs/test_alarm_event_chain.py` |
+| BDD 场景：换产 | `tests/features/product_changeover.feature` + `tests/step_defs/test_product_changeover.py` |
+| BDD 共用 helper | `tests/step_defs/_synthetic_helpers.py` |
+| E2E Page Object 基类 | `tests/e2e_browser/pages/base_page.py` |
+| E2E 页面对象 | `tests/e2e_browser/pages/{monitor,project,source,data,settings}_page.py` |
+| E2E 测试 | `tests/e2e_browser/test_{source,settings,alarm,sat_full_workflow}_page.py` |
+| pytest 端到端 | `tests/test_synthetic_full_flow.py`（不需要前端） |
+| Playwright 演示模板 | `tests/playwright_demo/synthetic_demo.py` |
+| SAT 现场验收（自动） | `tests/sat/test_sat_api.py`（设 `RUN_SAT=1` 才跑） |
+| SAT 人工清单 | `tests/sat/checklist.md` |
+| 自动推荐剧本 | `scripts/recommend_scenarios.py` |
+
+### G.9 with_project 模式说明
+
+`/api/v1/test/synthetic/start` body 加 `"with_project": true` 后，后端会：
+
+1. 从剧本 `timeline[].detections[].label` 收集所有 label
+2. 自动构造 `steps_config`（每个 label 对应一个步骤，threshold=0.3, min_frames=1）
+3. 调 `mgr.set_project_config(...)` 应用到当前通道
+
+这样**不需要前端配项目**，cycle 也会真结算。如果你想强制 logic_mode：
+
+```jsonc
+{
+  "scenario": "ok_sequential_cycle.json",
+  "with_project": true,
+  "project_steps": ["step_a", "step_b", "step_c"],   // 可选，默认从剧本提取
+  "logic_mode": "sequential"                          // sequential / detection / tracking
+}
+```
 
 ---
 
