@@ -108,12 +108,12 @@ jobs:
           DATABASE_URL: "postgresql+psycopg2://tianjun:tianjun_test@127.0.0.1:5433/tianjun_test"
         run: |
           alembic upgrade head
-          # sanity: 至少要有 plugins / projects / sessions 三张核心表
+          # sanity: 至少要有 plugins / projects / detection_sessions 三张核心表
           PGPASSWORD=tianjun_test psql -h 127.0.0.1 -p 5433 -U tianjun -d tianjun_test \
             -c "\dt public.*" | tee /tmp/pg_tables.txt
-          grep -E '\bplugins\b'  /tmp/pg_tables.txt > /dev/null
-          grep -E '\bprojects\b' /tmp/pg_tables.txt > /dev/null
-          grep -E '\bsessions\b' /tmp/pg_tables.txt > /dev/null
+          grep -E '\bplugins\b'            /tmp/pg_tables.txt > /dev/null
+          grep -E '\bprojects\b'           /tmp/pg_tables.txt > /dev/null
+          grep -E '\bdetection_sessions\b' /tmp/pg_tables.txt > /dev/null
           echo "[OK] Alembic baseline on PG schema"
 
       # ----------------------------------------------------------
