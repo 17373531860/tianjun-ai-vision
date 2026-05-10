@@ -316,7 +316,8 @@ def _shift_filter_cycles(db, sessions, date, start_date, start_hour, end_hour):
         return set(), sessions
     sess_ids = [s.id for s in sessions]
     cq = db.query(DetectionCycle).filter(DetectionCycle.session_id.in_(sess_ids))
-    ct_col = func.strftime('%H:%M', DetectionCycle.start_time)
+    from backend.db.sql_compat import hour_minute
+    ct_col = hour_minute(DetectionCycle.start_time)
     if start_hour <= end_hour:
         cq = cq.filter(and_(
             func.date(DetectionCycle.start_time) == (date or start_date),

@@ -6,6 +6,9 @@ uvicorn[standard]>=0.23.0
 
 # Database
 sqlalchemy>=2.0.0
+# v3.7.0 切换到 PostgreSQL（多客户部署 + 并发写入更稳）
+psycopg2-binary>=2.9.9
+alembic>=1.13.0
 
 # Data Validation
 pydantic>=2.0.0

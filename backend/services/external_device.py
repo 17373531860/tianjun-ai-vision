@@ -82,6 +82,7 @@ class ExternalDeviceService(
         """
         from sqlalchemy import text
         from sqlalchemy.exc import OperationalError
+        from datetime import datetime, timedelta
         for attempt in range(3):
             db = SessionLocal()
             try:
@@ -89,14 +90,14 @@ class ExternalDeviceService(
                     sql = text(
                         "DELETE FROM external_device_logs "
                         "WHERE box_serial IS NULL "
-                        "AND created_at < datetime('now', :cutoff)"
+                        "AND created_at < :cutoff"
                     )
                 else:
                     sql = text(
                         "DELETE FROM external_device_logs "
-                        "WHERE created_at < datetime('now', :cutoff)"
+                        "WHERE created_at < :cutoff"
                     )
-                cutoff = f"-{older_than_seconds} seconds"
+                cutoff = datetime.utcnow() - timedelta(seconds=int(older_than_seconds))
                 res = db.execute(sql, {"cutoff": cutoff})
                 deleted = res.rowcount or 0
                 db.commit()

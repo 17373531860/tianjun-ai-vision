@@ -44,7 +44,8 @@ def _apply_hour_filter(query, start_hour: Optional[str], end_hour: Optional[str]
     """Apply hour-of-day filter for shift queries (e.g. day shift 08:00-20:00)."""
     if not start_hour or not end_hour:
         return query
-    time_col = func.strftime('%H:%M', Task.timestamp)
+    from backend.db.sql_compat import hour_minute
+    time_col = hour_minute(Task.timestamp)
     if start_hour <= end_hour:
         query = query.filter(and_(time_col >= start_hour, time_col < end_hour))
     else:

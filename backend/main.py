@@ -35,16 +35,23 @@ from sqlalchemy import text
 
 # ===== Startup diagnostics =====
 from backend.core.config import BASE_DIR, DATA_DIR
-print(f"[DIAG] main.py: DB URI = {settings.SQLALCHEMY_DATABASE_URI}")
+from backend.db.database import get_dialect as _get_dialect
+_DIALECT = _get_dialect()
+print(f"[DIAG] main.py: dialect = {_DIALECT}")
+print(f"[DIAG] main.py: DB URI = {os.environ.get('DATABASE_URL') or settings.SQLALCHEMY_DATABASE_URI}")
 print(f"[DIAG] main.py: MODEL_UPLOAD_DIR = {settings.MODEL_UPLOAD_DIR}")
-_db_path = os.path.join(DATA_DIR, 'sql_app.db')
-print(f"[DIAG] main.py: DB file exists before create_all: {os.path.exists(_db_path)}")
-if os.path.exists(_db_path):
-    print(f"[DIAG] main.py: DB file size: {os.path.getsize(_db_path)} bytes")
+if _DIALECT == "sqlite":
+    _db_path = os.path.join(DATA_DIR, 'sql_app.db')
+    print(f"[DIAG] main.py: DB file exists before create_all: {os.path.exists(_db_path)}")
+    if os.path.exists(_db_path):
+        print(f"[DIAG] main.py: DB file size: {os.path.getsize(_db_path)} bytes")
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
-print(f"[DIAG] main.py: create_all done, DB file size: {os.path.getsize(_db_path) if os.path.exists(_db_path) else 'N/A'}")
+if _DIALECT == "sqlite":
+    print(f"[DIAG] main.py: create_all done, DB file size: {os.path.getsize(_db_path) if os.path.exists(_db_path) else 'N/A'}")
+else:
+    print("[DIAG] main.py: create_all done")
 
 # 简单的数据库迁移：添加缺失的列
 def migrate_database():
@@ -121,16 +128,35 @@ def migrate_database():
         ("scanner_devices", "scan_d_gone_confirm_frames", "INTEGER DEFAULT 30"),
     ]
     
+    from sqlalchemy import inspect
+    from backend.db.database import get_dialect
+
+    dialect = get_dialect()
+
+    def _normalize_type(sql_type: str) -> str:
+        """把 SQLite 风格的列类型翻译成当前 dialect 的合法 DDL。"""
+        t = sql_type.strip()
+        if dialect == "postgresql":
+            t = t.replace("BOOLEAN DEFAULT 1", "BOOLEAN DEFAULT TRUE")
+            t = t.replace("BOOLEAN DEFAULT 0", "BOOLEAN DEFAULT FALSE")
+            if t.upper().startswith("JSON") and not t.upper().startswith("JSONB"):
+                t = "JSONB" + t[4:]
+        return t
+
     try:
+        insp = inspect(engine)
+        existing_tables = set(insp.get_table_names())
         with engine.connect() as conn:
             for table, column, col_type in migrations:
-                try:
-                    conn.execute(text(f"SELECT {column} FROM {table} LIMIT 1"))
-                except Exception:
-                    print(f"添加 {table}.{column} 列...")
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
-                    conn.commit()
-                    print(f"成功添加 {column} 列")
+                if table not in existing_tables:
+                    continue
+                cols = {c["name"] for c in insp.get_columns(table)}
+                if column in cols:
+                    continue
+                ddl = _normalize_type(col_type)
+                print(f"[DB] 添加 {table}.{column} ({ddl}) ...")
+                conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {ddl}'))
+                conn.commit()
     except Exception as e:
         print(f"数据库迁移检查: {e}")
 
@@ -257,10 +283,11 @@ def cleanup_orphan_inspections():
 def migrate_data_to_external_dir():
     """Migrate data from old install directory to external data directory.
 
-    Handles the case where create_all already made an empty DB in DATA_DIR
-    by checking whether the existing DB is empty before skipping.
-    After copying files, rewrites absolute paths stored in the database.
+    仅当当前 DSN 为 SQLite 时执行（PostgreSQL 部署不需要本地文件搬迁）。
     """
+    from backend.db.database import get_dialect
+    if get_dialect() != "sqlite":
+        return
     from backend.core.config import DATA_DIR, _is_empty_db, _fix_db_paths
     if os.path.abspath(DATA_DIR) == os.path.abspath(BASE_DIR):
         return
@@ -311,6 +338,9 @@ def migrate_data_to_external_dir():
     print("[数据迁移] 迁移完成")
 
 def _fixup_stale_paths():
+    from backend.db.database import get_dialect
+    if get_dialect() != "sqlite":
+        return
     from backend.core.config import DATA_DIR, _fix_db_paths
     if os.path.abspath(DATA_DIR) == os.path.abspath(BASE_DIR):
         return
@@ -326,29 +356,36 @@ if not os.environ.get("BACKEND_SKIP_INIT"):
 
 # Post-migration DB health check
 def _diag_db_health():
-    """Log counts from key tables so we can verify data survived migration."""
-    import sqlite3
-    db_path = os.path.join(DATA_DIR, 'sql_app.db')
-    if not os.path.exists(db_path):
-        print(f"[DIAG] DB health: file not found at {db_path}")
+    """Log counts from key tables so we can verify data survived migration.
+
+    使用 SQLAlchemy 通用写法，兼容 SQLite / PostgreSQL。
+    """
+    from sqlalchemy import inspect
+    try:
+        insp = inspect(engine)
+        existing = set(insp.get_table_names())
+    except Exception as e:
+        print(f"[DIAG] DB health: inspect 失败: {e}")
         return
     try:
-        conn = sqlite3.connect(db_path)
-        for table in ('projects', 'models', 'detection_sessions', 'detection_cycles', 'step_records', 'video_clips'):
-            try:
-                count = conn.execute(f"SELECT COUNT(*) FROM [{table}]").fetchone()[0]
-                print(f"[DIAG] DB health: {table} = {count} rows")
-            except Exception:
-                print(f"[DIAG] DB health: {table} = <table not found>")
-        # Check model file_path validity
-        try:
-            rows = conn.execute("SELECT id, name, file_path FROM models").fetchall()
-            for mid, mname, mpath in rows:
-                exists = os.path.isfile(mpath) if mpath else False
-                print(f"[DIAG] Model #{mid} '{mname}': path={mpath}, file_exists={exists}")
-        except Exception as _e:
-            print(f"[DIAG] models 表读取失败（已忽略）: {_e}", flush=True)
-        conn.close()
+        with engine.connect() as conn:
+            for table in ('projects', 'models', 'detection_sessions', 'detection_cycles', 'step_records', 'video_clips'):
+                if table not in existing:
+                    print(f"[DIAG] DB health: {table} = <table not found>")
+                    continue
+                try:
+                    count = conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar()
+                    print(f"[DIAG] DB health: {table} = {count} rows")
+                except Exception as e:
+                    print(f"[DIAG] DB health: {table} 读取失败: {e}")
+            if 'models' in existing:
+                try:
+                    rows = conn.execute(text('SELECT id, name, file_path FROM models')).fetchall()
+                    for mid, mname, mpath in rows:
+                        exists = os.path.isfile(mpath) if mpath else False
+                        print(f"[DIAG] Model #{mid} '{mname}': path={mpath}, file_exists={exists}")
+                except Exception as _e:
+                    print(f"[DIAG] models 表读取失败（已忽略）: {_e}", flush=True)
     except Exception as e:
         print(f"[DIAG] DB health check failed: {e}")
 
