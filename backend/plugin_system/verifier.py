@@ -4,7 +4,6 @@ import base64
 import json
 import os
 import shutil
-import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -12,13 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from backend.core.config import DATA_DIR
-
-
-_SCRIPT_PLUGIN_DIR = Path(__file__).resolve().parents[2] / "scripts" / "plugin"
-if str(_SCRIPT_PLUGIN_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPT_PLUGIN_DIR))
-
-from _plugin_common import (  # noqa: E402
+from backend.plugin_system._plugin_common import (
     calc_customer_hmac,
     calc_files_digest,
     calc_pubkey_fingerprint,
