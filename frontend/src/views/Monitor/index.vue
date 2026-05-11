@@ -922,9 +922,9 @@
                   <tr>
                      <th class="px-2 py-1.5">No</th>
                      <th class="px-2 py-1.5">步骤</th>
-                     <th class="px-2 py-1.5">结果</th>
-                     <th class="px-2 py-1.5">PT/s</th>
                      <th class="px-2 py-1.5">状态</th>
+                     <th class="px-2 py-1.5">PT/s</th>
+                     <th class="px-2 py-1.5">结果</th>
                   </tr>
                </thead>
                <tbody class="divide-y divide-slate-800 text-gray-300">
@@ -935,15 +935,15 @@
                      <td class="px-2 py-1.5">{{ i + 1 }}</td>
                      <td class="px-2 py-1.5">{{ row.step }}</td>
                      <td class="px-2 py-1.5">
-                       <span v-if="row.cycleResult === 'ok'" class="text-green-400">OK</span>
-                       <span v-else-if="row.cycleResult === 'ng'" class="text-red-500">NG</span>
-                       <span v-else class="text-gray-500">--</span>
-                     </td>
-                     <td class="px-2 py-1.5 text-white font-mono">{{ formatStepPT(row.label) }}</td>
-                     <td class="px-2 py-1.5">
                        <span :class="row.status === 'completed' ? 'text-white' : 'text-gray-500'">
                          {{ row.status === 'completed' ? '已检测' : '待检测' }}
                        </span>
+                     </td>
+                     <td class="px-2 py-1.5 text-white font-mono">{{ formatStepPT(row.label) }}</td>
+                     <td class="px-2 py-1.5">
+                       <span v-if="row.cycleResult === 'ok'" class="text-green-400">OK</span>
+                       <span v-else-if="row.cycleResult === 'ng'" class="text-red-500">NG</span>
+                       <span v-else class="text-gray-500">--</span>
                      </td>
                   </tr>
                </tbody>
@@ -3803,38 +3803,62 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       }
     }
     
+    // v3.7.0 客户反馈修复: 期望序列里同一 label 多次出现 (如 撕膜-顶卡托-撕膜-顶卡托-点亮屏幕)
+    // 时, 必须按"位置"分配 currentCycleSteps 里的出现次数, 而不是按"label 是否出现过"全标完成。
+    // consumedAt[idx]=true 表示该位置已用掉 cycle 里 label 的一个出现。
+    const expectedCounter = {};
+    expectedLabels.forEach(l => { expectedCounter[l] = (expectedCounter[l] || 0) + 1; });
+    // 期望里 label 的实际"已消耗"位置数 (cap 在 expectedCounter[label] 以内)
+    const consumedExpectedSlots = {};
+    expectedLabels.forEach(l => { consumedExpectedSlots[l] = 0; });
+    const completedByPos = new Array(expectedLabels.length).fill(false);
+    expectedLabels.forEach((lbl, idx) => {
+      const seen = countInCycle[lbl] || 0;
+      const expCnt = expectedCounter[lbl] || 0;
+      // 这位置消耗一个出现, 仅当 cycle 里 label 的出现数 > 已分配位置数 且未超期望总数
+      const slotsToAllocate = Math.min(seen, expCnt);
+      if (consumedExpectedSlots[lbl] < slotsToAllocate) {
+        completedByPos[idx] = true;
+        consumedExpectedSlots[lbl] += 1;
+      }
+    });
+
     // 设置每个步骤的 cycleResult
     steps.value.forEach((step, idx) => {
       const label = step.label || step.name;
       const cycleCount = countInCycle[label] || 0;
-      
+      const expCnt = expectedCounter[label] || 0;
+
       const isCoveredByBackup = backupCoveredLabels.has(label);
-      
-      if (cycleCount > 1) {
-        step.cycleResult = 'ng';  // 重复
-      } else if (label in firstPos) {
-        step.cycleResult = outOfOrder.has(label) ? 'ng' : 'ok';  // 检测到：看是否乱序
+      const thisPosCompleted = completedByPos[idx];
+
+      if (cycleCount > expCnt) {
+        // 期望出现 N 次 actual > N 次 → 真正的"超额重复"
+        step.cycleResult = 'ng';
+      } else if (thisPosCompleted) {
+        step.cycleResult = outOfOrder.has(label) ? 'ng' : 'ok';  // 这个位置已完成
       } else if (isCoveredByBackup) {
         step.cycleResult = 'ok';  // 替补覆盖：视为已完成
       } else if (idx <= maxDetectedExpectedIdx) {
-        step.cycleResult = 'ng';  // 漏做（后面的步骤已出现但此步骤未出现）
+        step.cycleResult = 'ng';  // 漏做（后面的步骤已出现但此位置未完成）
       } else {
         step.cycleResult = null;  // 还没轮到
       }
-      
-      // 设置 status
-      if (detectingLabels.has(label)) {
+
+      // 设置 status — 仅"这个位置"完成才算 completed
+      if (detectingLabels.has(label) && !thisPosCompleted) {
+        // 正在检测中且本位置尚未完成 → active
         step.status = 'active';
-      } else if (cycleCount > 0 || isCoveredByBackup) {
+      } else if (thisPosCompleted || isCoveredByBackup) {
         step.status = 'completed';
       } else {
         step.status = 'pending';
       }
-      
+
       // 同步表格状态
       if (tableData.value[idx]) {
         tableData.value[idx].count = stepCounts[label] || 0;
-        tableData.value[idx].status = (cycleCount > 0 || isCoveredByBackup) ? 'completed' : 'pending';
+        tableData.value[idx].status = (thisPosCompleted || isCoveredByBackup) ? 'completed' : 'pending';
         tableData.value[idx].cycleResult = step.cycleResult;
       }
     });
