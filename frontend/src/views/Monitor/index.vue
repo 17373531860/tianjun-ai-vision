@@ -3779,68 +3779,75 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
     const countInCycle = {};
     currentCycleSteps.forEach(l => { countInCycle[l] = (countInCycle[l] || 0) + 1; });
     
-    // 每个步骤在 currentCycleSteps 中的首次出现位置
-    const firstPos = {};
-    currentCycleSteps.forEach((l, i) => { if (!(l in firstPos)) firstPos[l] = i; });
-    
-    // 已检测到的步骤中，最大的预期位置索引
-    let maxDetectedExpectedIdx = -1;
-    expectedLabels.forEach((label, idx) => {
-      if (label in firstPos) {
-        maxDetectedExpectedIdx = Math.max(maxDetectedExpectedIdx, idx);
-      }
-    });
-    
-    // 检测乱序：按预期顺序遍历，若某步骤的实际位置 < 前面某步骤的实际位置 → 乱序
-    const outOfOrder = new Set();
-    let maxActualPos = -1;
-    for (const label of expectedLabels) {
-      if (label in firstPos) {
-        if (firstPos[label] < maxActualPos) {
-          outOfOrder.add(label);
-        }
-        maxActualPos = Math.max(maxActualPos, firstPos[label]);
-      }
-    }
-    
     // v3.7.0 客户反馈修复: 期望序列里同一 label 多次出现 (如 撕膜-顶卡托-撕膜-顶卡托-点亮屏幕)
     // 时, 必须按"位置"分配 currentCycleSteps 里的出现次数, 而不是按"label 是否出现过"全标完成。
-    // consumedAt[idx]=true 表示该位置已用掉 cycle 里 label 的一个出现。
+    //
+    // 算法:
+    //   1) 期望里每个 label 期望出现几次 → expectedCounter
+    //   2) 按 idx 顺序遍历期望, 每次出现一个 label 就消耗 cycle 里该 label 一次, 直到 cap 在
+    //      Math.min(seen, expectedCounter[label]) 之内 → completedByPos[idx]=true
+    //   3) 把 currentCycleSteps 的实际帧序 (cycle 里第 k 个该 label) 也按 idx 顺序映射到期望位置上
+    //      → assignedActualPos[idx], 用来判 乱序
+    //   4) "漏做" 判定 (maxCompletedIdx): 只看已完成位置, 而不是"label 在不在 firstPos"。
+    //      这一步是修复 idx=2(同 label)被误标 NG-红 的关键。
     const expectedCounter = {};
     expectedLabels.forEach(l => { expectedCounter[l] = (expectedCounter[l] || 0) + 1; });
-    // 期望里 label 的实际"已消耗"位置数 (cap 在 expectedCounter[label] 以内)
+
+    // cycle 里每个 label 的实际出现位置序列
+    const actualPosByLabel = {};
+    currentCycleSteps.forEach((l, i) => {
+      (actualPosByLabel[l] = actualPosByLabel[l] || []).push(i);
+    });
+
     const consumedExpectedSlots = {};
     expectedLabels.forEach(l => { consumedExpectedSlots[l] = 0; });
     const completedByPos = new Array(expectedLabels.length).fill(false);
+    const assignedActualPos = new Array(expectedLabels.length).fill(-1);
+    let maxCompletedIdx = -1;
     expectedLabels.forEach((lbl, idx) => {
-      const seen = countInCycle[lbl] || 0;
+      const seen = (actualPosByLabel[lbl] || []).length;
       const expCnt = expectedCounter[lbl] || 0;
-      // 这位置消耗一个出现, 仅当 cycle 里 label 的出现数 > 已分配位置数 且未超期望总数
       const slotsToAllocate = Math.min(seen, expCnt);
       if (consumedExpectedSlots[lbl] < slotsToAllocate) {
+        const k = consumedExpectedSlots[lbl];
         completedByPos[idx] = true;
+        assignedActualPos[idx] = actualPosByLabel[lbl][k];
         consumedExpectedSlots[lbl] += 1;
+        maxCompletedIdx = idx;
       }
     });
+
+    // 乱序判定: 按预期位置遍历已分配的实际位置,
+    // 若当前位置的实际帧序 < 前面位置的实际帧序最大值 → 乱序 (该 idx)
+    const outOfOrderIdx = new Set();
+    let maxActualSoFar = -1;
+    for (let idx = 0; idx < expectedLabels.length; idx++) {
+      if (!completedByPos[idx]) continue;
+      const p = assignedActualPos[idx];
+      if (p < maxActualSoFar) {
+        outOfOrderIdx.add(idx);
+      }
+      maxActualSoFar = Math.max(maxActualSoFar, p);
+    }
 
     // 设置每个步骤的 cycleResult
     steps.value.forEach((step, idx) => {
       const label = step.label || step.name;
-      const cycleCount = countInCycle[label] || 0;
+      const cycleCount = (actualPosByLabel[label] || []).length;
       const expCnt = expectedCounter[label] || 0;
 
       const isCoveredByBackup = backupCoveredLabels.has(label);
       const thisPosCompleted = completedByPos[idx];
 
-      if (cycleCount > expCnt) {
-        // 期望出现 N 次 actual > N 次 → 真正的"超额重复"
+      if (cycleCount > expCnt && thisPosCompleted) {
+        // 期望出现 N 次 actual > N 次 → 真正的"超额重复" (只在已完成位置标 NG)
         step.cycleResult = 'ng';
       } else if (thisPosCompleted) {
-        step.cycleResult = outOfOrder.has(label) ? 'ng' : 'ok';  // 这个位置已完成
+        step.cycleResult = outOfOrderIdx.has(idx) ? 'ng' : 'ok';
       } else if (isCoveredByBackup) {
-        step.cycleResult = 'ok';  // 替补覆盖：视为已完成
-      } else if (idx <= maxDetectedExpectedIdx) {
-        step.cycleResult = 'ng';  // 漏做（后面的步骤已出现但此位置未完成）
+        step.cycleResult = 'ok';  // 替补覆盖
+      } else if (idx < maxCompletedIdx) {
+        step.cycleResult = 'ng';  // 漏做: 此位置之后已有更靠后位置完成
       } else {
         step.cycleResult = null;  // 还没轮到
       }
