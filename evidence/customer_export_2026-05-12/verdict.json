@@ -1,0 +1,13 @@
+{
+  "downloaded_size_bytes": 1635,
+  "downloaded_has_session_header": true,
+  "downloaded_cycle_table_header": true,
+  "downloaded_columns_all_present": true,
+  "downloaded_has_arrow_sequence": true,
+  "downloaded_cycle_row_count": 8,
+  "downloaded_expected_cycle_row_count_8": true,
+  "downloaded_has_ng_row": true,
+  "downloaded_has_event_name": true,
+  "downloaded_no_None_literal": true,
+  "downloaded_has_two_decimal_duration": true
+}

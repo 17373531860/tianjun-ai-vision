@@ -1,0 +1,54 @@
+[debug] [vite] connecting...
+[debug] [vite] connected.
+[log] [API] Final baseURL: http://localhost:8001/api/v1
+[log] [⬛ Boot] main.js 开始执行 01:10:54
+[log] [⬛ Boot] 注册插件...
+[log] [⬛ Boot] ✓ Pinia
+[log] [⬛ Boot] ✓ Router
+[log] [⬛ Boot] ✓ ElementPlus
+[log] [⬛ Boot] ✓ i18n
+[log] [⬛ App] App.vue onMounted — 路由: /
+[log] [⬛ Boot] ✓ Vue 挂载成功 01:10:54
+[log] [⬛ Router] 导航: / → /monitor (name: Monitor)
+[log] [⬛ Router] 非Electron环境，跳过授权检查
+[log] [⬛ PluginTheme] 已应用: internal-demo, title="Factory Dashboard", hiddenMenus=[]
+[log] [PluginLoader] route added: /factory-dashboard (factory-dashboard)
+[log] [PluginLoader] menu added: /factory-dashboard (客户看板)
+[log] [PluginLoader] store registered: plugin-internal-demo-dashboard
+[log] [⬛ PluginLoader] Tier2/3 ESM 加载成功: customer=internal-demo
+[log] [⬛ Router] ✓ 导航完成: /monitor
+[log] [⬛ Navbar] onMounted 开始 01:10:55
+[log] [⬛ Navbar] 加载 display_settings...
+[log] [⬛ Navbar] 加载项目列表...
+[error] Failed to load resource: the server responded with a status of 500 (Internal Server Error)
+[error] API Error 500: {detail: 串口不存在: /dev/ttyUSB0（请检查USB是否插好、驱动是否安装）}
+[warning] 报警设备自动连接失败: Request failed with status code 500
+[log] [⬛ Navbar] ✓ 项目列表加载完成 (508ms), 数量: 17
+[log] [⬛ Navbar] onMounted 完成 01:10:55
+[log] [⬛ Router] 导航: /monitor → /factory-dashboard (name: factory-dashboard)
+[log] [⬛ Router] 直接放行 (licenseChecked=true, target=factory-dashboard)
+[log] [⬛ Router] ✓ 导航完成: /factory-dashboard
+[debug] [vite] connecting...
+[debug] [vite] connected.
+[log] [API] Final baseURL: http://localhost:8001/api/v1
+[log] [⬛ Boot] main.js 开始执行 01:11:00
+[log] [⬛ Boot] 注册插件...
+[log] [⬛ Boot] ✓ Pinia
+[log] [⬛ Boot] ✓ Router
+[log] [⬛ Boot] ✓ ElementPlus
+[log] [⬛ Boot] ✓ i18n
+[log] [⬛ App] App.vue onMounted — 路由: /
+[log] [⬛ Boot] ✓ Vue 挂载成功 01:11:00
+[log] [⬛ Router] 导航: / → /monitor (name: Monitor)
+[log] [⬛ Router] 非Electron环境，跳过授权检查
+[log] [⬛ PluginTheme] 无 active 插件, 走天均默认外观
+[log] [⬛ Router] ✓ 导航完成: /monitor
+[log] [⬛ Navbar] onMounted 开始 01:11:00
+[log] [⬛ Navbar] 加载 display_settings...
+[log] [⬛ Navbar] 加载项目列表...
+[log] [⬛ PluginLoader] 未加载 ESM 入口: no-active-plugin
+[error] Failed to load resource: the server responded with a status of 500 (Internal Server Error)
+[error] API Error 500: {detail: 串口不存在: /dev/ttyUSB0（请检查USB是否插好、驱动是否安装）}
+[warning] 报警设备自动连接失败: Request failed with status code 500
+[log] [⬛ Navbar] ✓ 项目列表加载完成 (437ms), 数量: 17
+[log] [⬛ Navbar] onMounted 完成 01:11:00

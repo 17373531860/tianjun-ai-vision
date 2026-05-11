@@ -1,0 +1,168 @@
+{
+  "version": "3.7.1",
+  "date": "2026-05-12",
+  "previous_version": "3.7.0",
+  "release_type": "patch",
+  "release_reason": "v3.7.0 分包安装包带 BLOCKER 启动崩溃 (ModuleNotFoundError: _plugin_common), 客户机进不去主界面. 本版释出 a3ccdc7 修复 + 插件运行时全链路 (Phase B G1/G1.5/G2/G3) + 5 步产线导出预设.",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BLOCKER-371-A",
+      "severity": "blocker",
+      "title": "客户机启动崩溃 ModuleNotFoundError: _plugin_common",
+      "symptom": "v3.7.0 分包装机后双击启动, 卡 splash, BackendManager 报 Process exited (code: 1). 软件进不去主界面.",
+      "root_cause": "老 verifier.py 用 sys.path hack 把 scripts/plugin 加进搜索路径再裸 import '_plugin_common'. 开发环境管用, 但 Nuitka 打包不复制 scripts/, 客户机 resources/ 只有 backend/, 拼出来的搜索路径不存在 → ModuleNotFoundError.",
+      "fix": "权威实现搬到 backend/plugin_system/_plugin_common.py, verifier.py 改成绝对路径 'from backend.plugin_system._plugin_common import ...'. scripts/plugin/_plugin_common.py 改成 29 行 shim, 用 importlib + sys.modules[__name__] 替换让 CLI 工具拿到的等同后端版本. 7 个 CLI 脚本 (sign / pack / install / inject-public-key / dev / verify / lint-plugin-docs) 不用改一行.",
+      "files": [
+        "backend/plugin_system/verifier.py",
+        "backend/plugin_system/_plugin_common.py",
+        "scripts/plugin/_plugin_common.py"
+      ],
+      "verification": "L0 双向验证: 反向回滚后能复现客户崩溃; 正向修复后, 隐藏 scripts/plugin/_plugin_common.py 之后 from backend.plugin_system.verifier import plugins_root 仍然成功.",
+      "keywords": [
+        "ModuleNotFoundError",
+        "_plugin_common",
+        "verifier",
+        "Nuitka",
+        "客户机启动崩溃",
+        "splash 卡住",
+        "Process exited",
+        "BackendManager",
+        "plugin_system",
+        "sys.path"
+      ],
+      "breaking": false,
+      "from_commit": "a3ccdc7"
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-371-G1",
+      "title": "后端 PluginRegistry — 路由 / 钩子 / ORM 表挂载",
+      "need": "启用插件后, 它的 FastAPI router 要真挂到 app 上 (能 curl 到), hooks 要能被业务流程 fire, ORM 表要 create_all 出来.",
+      "implementation": "新增 backend/plugin_system/registry.py: PluginRegistry 统管 RoutesRegistry / HooksRegistry / TablesRegistry + PluginHost. 改 PluginManager._load_backend_module: 把 register_plugin(app, registry, license_payload, host) 改成 4 参数标准签名. 改 backend/main.py: 插件加载从 startup_init 移到 _load_active_plugin_after_app(), 在所有内置 router + static mount 之后跑. 改 backend/plugin_system/__init__.py: 给 tianjun.plugin logger 加 StreamHandler.",
+      "files": [
+        "backend/plugin_system/registry.py",
+        "backend/plugin_system/manager.py",
+        "backend/plugin_system/__init__.py",
+        "backend/main.py",
+        "tests/plugin_system/test_g1_registry.py"
+      ],
+      "verification": "tests/plugin_system/test_g1_registry.py 10 用例: RoutesRegistry / HooksRegistry / TablesRegistry / PluginRegistry.snapshot / PluginManager._load_backend_module 契约.",
+      "keywords": [
+        "PluginRegistry",
+        "register_plugin",
+        "router",
+        "hooks",
+        "ORM",
+        "FastAPI",
+        "插件运行时"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-371-G1.5",
+      "title": "cycle_end 钩子在 source.py 真触发",
+      "need": "Tier 3 插件注册了 cycle_end hook, 但没有任何地方 fire 它.",
+      "implementation": "source_session_lifecycle_mixin.end_cycle() 在 MES 钩子后、scanner cleanup 前, try/except 调 plugin_manager.registry.hooks.fire(\"cycle_end\", \"post_cycle\", \"post\", ctx). 异常被吞, 不影响主检测流程. RUNTIME_MODE=test 下新增 POST /api/v1/test/synthetic/fire-plugin-cycle-end 调试端点.",
+      "files": [
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/test_runtime_routes.py",
+        "tests/plugin_system/test_g1_5_cycle_end_hook.py"
+      ],
+      "verification": "tests/plugin_system/test_g1_5_cycle_end_hook.py 4 用例: ctx 字段 / demo hook 消费 / 异常吞 / 空 registry 安全.",
+      "keywords": ["cycle_end", "hook", "fire", "Tier 3", "source.py", "插件运行时"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-371-G2",
+      "title": "前端 ADR-0002 ESM Loader — Tier 2/3 UI 扩展真加载",
+      "need": "Tier 2/3 插件的前端 ESM 包要被宿主 import 并按 host 注入模式 (vue/pinia/router/i18n) 跑起来.",
+      "implementation": "新增 frontend/src/composables/usePluginLoader.js: fetch .esm.js → Blob URL → dynamic import() → 调 module.default.register({host, registry}). 改 frontend/src/main.js: Pinia + router 就绪后调 loadActivePluginFrontend(router). 改 frontend/src/layout/index.vue: 菜单动态读 pluginTheme.sortedPluginMenus. 改 plugins-examples/tier2-ui demo 重写成 host 注入模式.",
+      "files": [
+        "frontend/src/composables/usePluginLoader.js",
+        "frontend/src/main.js",
+        "frontend/src/layout/index.vue",
+        "plugins-examples/tier2-ui/frontend/dist/index.esm.js",
+        "plugins-examples/tier2-ui/plugin.json",
+        "tests/manual_uat/plugin_g2_loader_uat.py"
+      ],
+      "verification": "Playwright 真开浏览器 UAT (Phase A 激活 + Phase B 反激活), 10/10 断言.",
+      "keywords": ["ESM", "loader", "ADR-0002", "host 注入", "Tier 2", "Pinia store", "vue", "router"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-371-G3",
+      "title": "前端 Tier 1 主题钩子 — 改色 / 改名 / 改 logo / 改 favicon / 改菜单",
+      "need": "装上 Tier 1 主题插件后, 标题 / 主色 / Logo / Favicon / 隐藏菜单要应用上去.",
+      "implementation": "新增 frontend/src/store/usePluginThemeStore.js (Pinia store): 拉激活插件 manifest, 套 CSS 变量 / document.title / favicon link / logo url / hidden+dynamic 菜单. 改 Navbar.vue 用 pluginTheme.appTitle + pluginTheme.logoUrl. 改 layout/index.vue 菜单 v-if=!pluginTheme.isMenuHidden(path).",
+      "files": [
+        "frontend/src/store/usePluginThemeStore.js",
+        "frontend/src/layout/Navbar.vue",
+        "frontend/src/layout/index.vue",
+        "frontend/src/main.js",
+        "plugins-examples/tier1-theme/plugin.json",
+        "tests/manual_uat/plugin_g3_theme_uat.py"
+      ],
+      "verification": "Playwright 真开浏览器 UAT (Phase A + Phase B), 10/10 断言.",
+      "keywords": ["Tier 1", "theme", "CSS 变量", "logo", "favicon", "隐藏菜单", "Pinia store"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-371-PRESET",
+      "title": "自定义导出新增系统预设「session 5 步产线 CSV」",
+      "need": "客户老胡按 v3.7.0 changelog 拼模板, 拼出来的 CSV 仍空白. 根因: 字段名混淆 (good_count vs good_cycles 等) + |default('') 对 Python None 不生效 + 浮点尾巴丑.",
+      "implementation": "在 backend/services/export_seed.py 加 builtin_session_5step_csv (csv / scope=batch). 4 个坑都已规避: 字段名修正 / or '' 替代 default('') / '%.2f' % 格式化 / 步骤名按位置查表. 默认列「拿取/正面涂黑/翻转/反面涂黑/放置」, 其他客户产线复制副本改中文名即可.",
+      "files": [
+        "backend/services/export_seed.py",
+        "tests/manual_uat/customer_export_uat.py",
+        "tests/manual_uat/customer_preset_uat.py",
+        "evidence/customer_preset_2026-05-12/"
+      ],
+      "verification": "Playwright 真开浏览器: 粘模板 11/11, 选预设 12/12. 老 3 个预设回归 preview API 全过.",
+      "keywords": ["自定义导出", "预设模板", "客户老胡", "5 步产线", "cycle.steps", "export_seed", "session 范围"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/test_runtime_routes.py",
+    "backend/main.py",
+    "backend/plugin_system/__init__.py",
+    "backend/plugin_system/manager.py",
+    "backend/plugin_system/registry.py",
+    "backend/services/export_seed.py",
+    "docs/plugin-system/implementation/ISSUES.md",
+    "electron/package.json",
+    "electron/splash.html",
+    "frontend/src/composables/usePluginLoader.js",
+    "frontend/src/layout/Navbar.vue",
+    "frontend/src/layout/index.vue",
+    "frontend/src/main.js",
+    "frontend/src/store/usePluginThemeStore.js",
+    "plugins-examples/tier1-theme/plugin.json",
+    "plugins-examples/tier2-ui/frontend/dist/index.esm.js",
+    "plugins-examples/tier2-ui/plugin.json",
+    "tests/manual_uat/plugin_management_chain_uat.py",
+    "tests/manual_uat/plugin_g2_loader_uat.py",
+    "tests/manual_uat/plugin_g3_theme_uat.py",
+    "tests/manual_uat/customer_export_uat.py",
+    "tests/manual_uat/customer_preset_uat.py",
+    "tests/plugin_system/test_g1_5_cycle_end_hook.py",
+    "tests/plugin_system/test_g1_registry.py"
+  ],
+  "evidence_dirs": [
+    "evidence/plugin_g1_2026-05-12/",
+    "evidence/plugin_g1_5_2026-05-12/",
+    "evidence/plugin_g2_2026-05-12/",
+    "evidence/plugin_g3_2026-05-12/",
+    "evidence/plugin_uat_2026-05-12/",
+    "evidence/plugin_b_path_summary_2026-05-12/",
+    "evidence/customer_export_2026-05-12/",
+    "evidence/customer_preset_2026-05-12/"
+  ]
+}

@@ -16,29 +16,41 @@
         </div>
         
         <nav class="flex-1 mt-4">
-          <router-link to="/monitor" class="nav-item" @click="sidebarOpen = false">
+          <router-link v-if="!pluginTheme.isMenuHidden('/monitor')" to="/monitor" class="nav-item" @click="sidebarOpen = false">
             <el-icon class="mr-2"><Monitor /></el-icon> {{ $t('menu.monitor') }}
           </router-link>
-          <router-link to="/project" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="!pluginTheme.isMenuHidden('/project')" to="/project" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Folder /></el-icon> {{ $t('menu.project') }}
           </router-link>
-          <router-link to="/model" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="!pluginTheme.isMenuHidden('/model')" to="/model" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Cpu /></el-icon> {{ $t('menu.model') }}
           </router-link>
-          <router-link to="/source" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="!pluginTheme.isMenuHidden('/source')" to="/source" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><VideoCamera /></el-icon> 输入源设置
           </router-link>
-          <router-link to="/data" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="!pluginTheme.isMenuHidden('/data')" to="/data" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><DataLine /></el-icon> {{ $t('menu.data') }}
           </router-link>
-          <router-link to="/mes" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="!pluginTheme.isMenuHidden('/mes')" to="/mes" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Tickets /></el-icon> MES 管理
           </router-link>
-          <router-link to="/alarm" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="!pluginTheme.isMenuHidden('/alarm')" to="/alarm" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Bell /></el-icon> 报警设置
           </router-link>
-          <router-link to="/settings" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="!pluginTheme.isMenuHidden('/settings')" to="/settings" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Setting /></el-icon> {{ $t('menu.settings') }}
+          </router-link>
+
+          <!-- G2: Tier 2/3 插件动态注入菜单 -->
+          <router-link
+            v-for="m in pluginTheme.sortedPluginMenus"
+            :key="m.path"
+            :to="m.path"
+            class="nav-item plugin-nav-item"
+            :class="{ 'nav-disabled': systemStore.isDetecting }"
+            @click.capture="handleNav"
+          >
+            <el-icon class="mr-2"><DataAnalysis /></el-icon> {{ m.label }}
           </router-link>
         </nav>
         
@@ -70,11 +82,13 @@
 import Navbar from './Navbar.vue';
 import BottomBar from './BottomBar.vue';
 import { ref } from 'vue';
-import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu, Tickets } from '@element-plus/icons-vue';
+import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu, Tickets, DataAnalysis } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/store/useSystemStore';
+import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { ElMessage } from 'element-plus';
 
 const systemStore = useSystemStore();
+const pluginTheme = usePluginThemeStore();
 const sidebarOpen = ref(false);
 
 const handleNav = (e) => {

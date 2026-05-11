@@ -1,0 +1,10 @@
+configfile: pytest.ini
+plugins: anyio-4.13.0
+collecting ... collected 4 items
+
+tests/plugin_system/test_g1_5_cycle_end_hook.py::test_ctx_field_set_locked PASSED [ 25%]
+tests/plugin_system/test_g1_5_cycle_end_hook.py::test_tier3_demo_hook_consumes_ctx PASSED [ 50%]
+tests/plugin_system/test_g1_5_cycle_end_hook.py::test_hooks_registry_swallows_plugin_exception_in_end_cycle_chain PASSED [ 75%]
+tests/plugin_system/test_g1_5_cycle_end_hook.py::test_hooks_registry_no_active_plugin_returns_empty PASSED [100%]
+
+============================== 4 passed in 0.03s ===============================

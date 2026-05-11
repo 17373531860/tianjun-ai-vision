@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +12,11 @@ from typing import Any, Dict, Optional
 from sqlalchemy.orm import Session
 
 from backend.models.plugin_models import PluginAuditLog, PluginRecord, PluginState
-from backend.plugin_system.verifier import plugins_root
+from backend.plugin_system.registry import PluginHost, PluginRegistry
+from backend.plugin_system.verifier import plugins_root, read_license_payload
+
+
+log = logging.getLogger("tianjun.plugin")
 
 
 @dataclass
@@ -19,18 +24,24 @@ class LoadedPlugin:
     customer_code: str
     manifest: Dict[str, Any]
     module: Optional[ModuleType] = None
+    registry: Optional[PluginRegistry] = None
 
 
 class PluginManager:
-    """单 active 插件加载骨架。
+    """单 active 插件加载与运行时状态。
 
-    本期只在启动时尝试加载 active 插件；加载失败写入状态，不影响主程序。
+    G1 改造:
+    - load_active() 接受 app 引用，让 register_plugin 能拿到 4 参 (app/registry/license/host)
+    - 加载成功后 registry.snapshot() 写入 audit log，便于诊断
+    - 加载失败不影响主程序（main.py 调用方已经包了 try/except 兜底，再加一层日志）
     """
 
     def __init__(self) -> None:
         self.loaded: Optional[LoadedPlugin] = None
+        self.registry: Optional[PluginRegistry] = None
+        self._app = None  # 保留 app 引用，方便后续 plugin 反查
 
-    def load_active(self, db: Session) -> Optional[LoadedPlugin]:
+    def load_active(self, db: Session, app=None, main_version: str = "3.7.x") -> Optional[LoadedPlugin]:
         record = db.query(PluginRecord).filter(PluginRecord.is_active == True).first()
         if not record:
             return None
@@ -41,14 +52,42 @@ class PluginManager:
             if not install_dir.exists():
                 raise FileNotFoundError(f"插件目录不存在: {install_dir}")
 
-            module = self._load_backend_module(record.customer_code, install_dir)
-            self.loaded = LoadedPlugin(record.customer_code, manifest, module=module)
+            license_payload = read_license_payload(db) if db is not None else {}
+            host = PluginHost(
+                customer_code=record.customer_code,
+                plugin_dir=str(install_dir),
+                main_version=main_version,
+            )
+
+            module, registry = self._load_backend_module(
+                customer_code=record.customer_code,
+                install_dir=install_dir,
+                app=app,
+                license_payload=license_payload,
+                host=host,
+            )
+            self.loaded = LoadedPlugin(record.customer_code, manifest, module=module, registry=registry)
+            self.registry = registry
+            self._app = app
+
+            snapshot = registry.snapshot() if registry else {}
             self._set_state(db, record.customer_code, "loaded", "ok", None, None)
-            self._audit(db, record.customer_code, "startup_load", "success", "插件已加载")
+            self._audit(
+                db,
+                record.customer_code,
+                "startup_load",
+                "success",
+                f"插件已加载: routes={len(snapshot.get('routes', []))} "
+                f"hooks={len(snapshot.get('hooks', []))} "
+                f"tables={len(snapshot.get('tables', []))}",
+            )
             db.commit()
+            log.info("[Plugin][%s] startup_load OK: %s", record.customer_code, snapshot)
             return self.loaded
         except Exception as exc:
+            log.exception("[Plugin][%s] startup_load 失败: %s", record.customer_code, exc)
             self.loaded = None
+            self.registry = None
             self._set_state(
                 db,
                 record.customer_code,
@@ -61,13 +100,31 @@ class PluginManager:
             db.commit()
             return None
 
-    def _load_backend_module(self, customer_code: str, install_dir: Path) -> Optional[ModuleType]:
+    def _load_backend_module(
+        self,
+        customer_code: str,
+        install_dir: Path,
+        app,
+        license_payload: Dict[str, Any],
+        host: PluginHost,
+    ) -> tuple[Optional[ModuleType], Optional[PluginRegistry]]:
         entry = install_dir / "backend" / "__init__.py"
         if not entry.exists():
-            return None
+            return None, None
+        if app is None:
+            raise RuntimeError("PluginManager.load_active 必须传入 FastAPI app 才能加载后端插件")
 
         module_name = f"tianjun_plugin_{customer_code.replace('-', '_')}"
-        spec = importlib.util.spec_from_file_location(module_name, entry)
+        # 让 from .hooks import ... / from .models import ... 这种相对 import 能工作
+        plugin_backend_dir = install_dir / "backend"
+        if str(install_dir) not in sys.path:
+            sys.path.insert(0, str(install_dir))
+
+        spec = importlib.util.spec_from_file_location(
+            module_name,
+            entry,
+            submodule_search_locations=[str(plugin_backend_dir)],
+        )
         if spec is None or spec.loader is None:
             raise RuntimeError("无法构建插件后端模块")
         module = importlib.util.module_from_spec(spec)
@@ -75,9 +132,15 @@ class PluginManager:
         spec.loader.exec_module(module)
 
         register = getattr(module, "register_plugin", None)
-        if callable(register):
-            register({"plugin_dir": str(install_dir), "customer_code": customer_code})
-        return module
+        if not callable(register):
+            log.info("[Plugin][%s] 后端 __init__ 没有 register_plugin, 跳过 registry 注册", customer_code)
+            return module, None
+
+        from backend.db.database import engine
+
+        registry = PluginRegistry(app=app, engine=engine, customer_code=customer_code)
+        register(app, registry, license_payload, host)
+        return module, registry
 
     @staticmethod
     def _set_state(
@@ -110,12 +173,17 @@ class PluginManager:
 plugin_manager = PluginManager()
 
 
-def load_active_plugin_on_startup() -> None:
+def load_active_plugin_on_startup(app=None) -> None:
+    """供 main.py 启动时调用。
+
+    `app` 在 main.py 创建完所有内置 router 之后传入；不传则插件后端不会加载
+    （仅保留 DB 状态，避免在 app 还没就绪时崩主程序）。
+    """
     from backend.db.database import SessionLocal
 
     plugins_root().mkdir(parents=True, exist_ok=True)
     db = SessionLocal()
     try:
-        plugin_manager.load_active(db)
+        plugin_manager.load_active(db, app=app)
     finally:
         db.close()

@@ -135,3 +135,40 @@ def synthetic_state(channel: int = 0):
 
     mgr = _get_mgr(channel)
     return mgr.get_synthetic_debug_state()
+
+
+@router.post("/fire-plugin-cycle-end")
+def fire_plugin_cycle_end_hook(channel: int = 0, cycle_id: int = 999, is_good: bool = False):
+    """G1.5 调试端点 — 直接触发一次 cycle_end/post_cycle/post hook (仅 RUNTIME_MODE=test).
+
+    避免 synthetic 推理链路 + 真 end_cycle 全跑通才能验证插件 hook 是否被调.
+    返回 hook handlers 的执行结果列表 (含错误信息).
+    """
+    _require_test_mode()
+    from backend.plugin_system.manager import plugin_manager
+
+    if plugin_manager.registry is None:
+        raise HTTPException(status_code=409, detail="没有 active 插件 / registry 未加载")
+
+    ctx = {
+        "channel_id": channel,
+        "cycle_id": cycle_id,
+        "cycle_uuid": f"debug-fire-{cycle_id}",
+        "session_id": -1,
+        "is_good": bool(is_good),
+        "result": "OK" if is_good else "NG",
+        "judgement": "OK" if is_good else "NG",
+        "event_id": None,
+        "event_name": "debug-trigger",
+        "reason": "manual fire from test endpoint",
+        "duration": 3.45,
+        "step_sequence": ["step_a", "step_b", "step_c"],
+        "project_id": None,
+    }
+    results = plugin_manager.registry.hooks.fire("cycle_end", "post_cycle", "post", ctx)
+    return {
+        "status": "fired",
+        "handlers_count": len(results),
+        "ctx": ctx,
+        "results": results,
+    }

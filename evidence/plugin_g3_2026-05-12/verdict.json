@@ -1,0 +1,66 @@
+{
+  "expected_title": "ACME AI Vision",
+  "actual_title": "ACME AI Vision",
+  "title_match": true,
+  "css_vars_expected": {
+    "--tj-primary": "#38bdf8",
+    "--tj-primary-hover": "#0ea5e9",
+    "--tj-bg-page": "#020617",
+    "--tj-text-main": "#e2e8f0"
+  },
+  "css_vars_actual": {
+    "--tj-primary": "#38bdf8",
+    "--tj-primary-hover": "#0ea5e9",
+    "--tj-bg-page": "#020617",
+    "--tj-text-main": "#e2e8f0"
+  },
+  "css_vars_all_applied": true,
+  "favicon": "http://localhost:8001/api/v1/plugins/active/assets/frontend/assets/favicon.svg",
+  "favicon_is_plugin": true,
+  "logo_imgs": [
+    {
+      "src": "http://localhost:8001/api/v1/plugins/active/assets/frontend/assets/logo.svg",
+      "alt": "logo",
+      "w": 240
+    },
+    {
+      "src": "http://localhost:6001/app-icon.png",
+      "alt": "logo",
+      "w": 256
+    }
+  ],
+  "logo_present": true,
+  "menu_items": [
+    {
+      "href": "#/monitor",
+      "text": "检测中心"
+    },
+    {
+      "href": "#/project",
+      "text": "项目管理"
+    },
+    {
+      "href": "#/model",
+      "text": "模型仓库"
+    },
+    {
+      "href": "#/source",
+      "text": "输入源设置"
+    },
+    {
+      "href": "#/data",
+      "text": "数据管理"
+    },
+    {
+      "href": "#/mes",
+      "text": "MES 管理"
+    },
+    {
+      "href": "#/settings",
+      "text": "显示设置"
+    }
+  ],
+  "alarm_hidden": true,
+  "menu_count": 7,
+  "manifest_customer": "internal-demo"
+}

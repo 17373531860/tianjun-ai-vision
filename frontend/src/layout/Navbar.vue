@@ -3,8 +3,11 @@
     <!-- Left: Logo & Menu & Project -->
     <div class="flex items-center gap-4 flex-shrink-0">
       <slot name="left"></slot>
-      <div v-if="store.display.navbar.brandName !== false" class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
-        {{ store.display.brandName || $t('navbar.title') }}
+      <div v-if="store.display.navbar.brandName !== false" class="flex items-center gap-2">
+        <img v-if="pluginTheme.logoUrl" :src="pluginTheme.logoUrl" alt="logo" class="h-8 w-auto object-contain" />
+        <div class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
+          {{ pluginTheme.appTitle || store.display.brandName || $t('navbar.title') }}
+        </div>
       </div>
       <div class="h-8 w-px bg-gray-700 mx-1"></div>
       
@@ -113,6 +116,7 @@
 <script setup>
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
+import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { useRouter } from 'vue-router';
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
 import { Setting, UserFilled, Check } from '@element-plus/icons-vue';
@@ -122,6 +126,7 @@ import { getProjects, getProjectDetail, activateProject } from '@/api/project';
 
 const store = useSystemStore();
 const projectStore = useProjectStore();
+const pluginTheme = usePluginThemeStore();
 const router = useRouter();
 const { locale, t } = useI18n();
 

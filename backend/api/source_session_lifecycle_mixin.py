@@ -481,6 +481,32 @@ class SessionLifecycleMixin:
                 except Exception as e:
                     print(f"[PeriodicActions] cycle_end 判定异常: {e}")
 
+                # v3.7 / G1.5: 触发 active 插件的 cycle_end/post_cycle/post hook.
+                # 独立 try/except — 插件抛错绝不影响主程序后续步骤 (Scanner resume / Container 清理 / 多工位联动).
+                try:
+                    from backend.plugin_system.manager import plugin_manager
+                    if plugin_manager.registry is not None:
+                        plugin_ctx = {
+                            "channel_id": self.channel_id,
+                            "cycle_id": cycle.id,
+                            "cycle_uuid": cycle.cycle_uuid,
+                            "session_id": cycle.session_id,
+                            "is_good": bool(is_good),
+                            "result": "OK" if is_good else "NG",
+                            "judgement": "OK" if is_good else "NG",
+                            "event_id": event_id,
+                            "event_name": event_name,
+                            "reason": reason,
+                            "duration": cycle.duration,
+                            "step_sequence": cycle.step_sequence or [],
+                            "project_id": self.project_config.get("id") if self.project_config else None,
+                        }
+                        plugin_manager.registry.hooks.fire(
+                            "cycle_end", "post_cycle", "post", plugin_ctx
+                        )
+                except Exception as e:
+                    print(f"[Plugin] cycle_end hook 触发异常 (已隔离, 主流程继续): {e}")
+
                 # v2.7.16: once_per_cycle 模式下, 周期结束 (无论 OK/NG) 都让扫码器
                 # 恢复扫描, 等下一个工件的码. 模式不匹配时是 no-op, 不需要额外判断.
                 try:

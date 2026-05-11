@@ -1,0 +1,23 @@
+{
+  "title_reverted": true,
+  "title_actual": "视觉AI行为引导系统",
+  "css_primary_not_plugin": true,
+  "css_primary_actual": "",
+  "favicon_not_plugin": true,
+  "favicon_actual": "http://localhost:6001/vite.svg",
+  "no_plugin_logo": true,
+  "logo_imgs": [
+    "http://localhost:6001/app-icon.png"
+  ],
+  "alarm_visible_again": true,
+  "menu_items": [
+    "检测中心",
+    "项目管理",
+    "模型仓库",
+    "输入源设置",
+    "数据管理",
+    "MES 管理",
+    "报警设置",
+    "显示设置"
+  ]
+}

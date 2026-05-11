@@ -419,11 +419,9 @@ def _run_startup_init():
     fix_orphan_sessions()
     cleanup_orphan_inspections()
     _seed_export_builtin_templates()
-    try:
-        from backend.plugin_system.manager import load_active_plugin_on_startup
-        load_active_plugin_on_startup()
-    except Exception as e:
-        print(f"[Plugin] active 插件加载失败（已隔离）: {e}")
+    # 注意: active 插件加载不能放在这里 — 这里 FastAPI app 尚未创建,
+    # 插件 register_plugin 需要 app 引用挂 router。移到 main.py 末尾 app
+    # 和所有内置 router/static mount 完毕之后 (见 _load_active_plugin_after_app)。
 
 if not os.environ.get("BACKEND_SKIP_INIT"):
     _run_startup_init()
@@ -862,6 +860,24 @@ if os.path.exists(settings.UPLOAD_DIR):
 # Mount recordings directory for video playback
 if os.path.exists(settings.RECORDING_DIR):
     app.mount("/recordings", StaticFiles(directory=settings.RECORDING_DIR), name="recordings")
+
+
+# v3.7 / G1: 在所有内置 router 与 static 挂载之后, 才加载 active 插件。
+# 时序原因: 插件 register_plugin(app, registry, license, host) 需要 app 引用挂 router。
+def _load_active_plugin_after_app():
+    if os.environ.get("BACKEND_SKIP_INIT"):
+        return
+    try:
+        from backend.plugin_system.manager import load_active_plugin_on_startup
+        load_active_plugin_on_startup(app=app)
+    except Exception as e:
+        print(f"[Plugin] active 插件加载失败（已隔离, 主程序继续）: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+_load_active_plugin_after_app()
+
 
 @app.get("/")
 def root():

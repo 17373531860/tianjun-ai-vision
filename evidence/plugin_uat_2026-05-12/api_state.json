@@ -1,0 +1,129 @@
+{
+  "01_after_open": {
+    "items": [],
+    "active_customer_code": null
+  },
+  "02_tier1_uploaded": {
+    "items": [
+      {
+        "customer_code": "internal-demo",
+        "name": "ACME White Label Theme",
+        "plugin_version": "1.0.0",
+        "tier": 1,
+        "status": "installed",
+        "is_active": false,
+        "files_digest": "sha256:eca4b3c8fccba24c19592407284bc3674e291bf0de3306bec61c875474f0201e",
+        "signed_by": "tianjun-dev-uat",
+        "signed_at": "2026-05-11T16:05:13.151717+00:00",
+        "public_key_fingerprint": "a24efcb5d28cdedb272ac7cb70273123",
+        "installed_at": "2026-05-11T16:32:26",
+        "updated_at": "2026-05-11T16:32:26",
+        "runtime_status": "installed",
+        "health": "unknown",
+        "last_error_code": null,
+        "last_error_message": null
+      }
+    ],
+    "active_customer_code": null
+  },
+  "03_tier1_active": {
+    "items": [
+      {
+        "customer_code": "internal-demo",
+        "name": "ACME White Label Theme",
+        "plugin_version": "1.0.0",
+        "tier": 1,
+        "status": "active",
+        "is_active": true,
+        "files_digest": "sha256:eca4b3c8fccba24c19592407284bc3674e291bf0de3306bec61c875474f0201e",
+        "signed_by": "tianjun-dev-uat",
+        "signed_at": "2026-05-11T16:05:13.151717+00:00",
+        "public_key_fingerprint": "a24efcb5d28cdedb272ac7cb70273123",
+        "installed_at": "2026-05-11T16:32:26",
+        "updated_at": "2026-05-11T16:32:27",
+        "runtime_status": "pending_restart",
+        "health": "unknown",
+        "last_error_code": null,
+        "last_error_message": null
+      }
+    ],
+    "active_customer_code": "internal-demo"
+  },
+  "04_tier1_deactivated": {
+    "items": [
+      {
+        "customer_code": "internal-demo",
+        "name": "ACME White Label Theme",
+        "plugin_version": "1.0.0",
+        "tier": 1,
+        "status": "installed",
+        "is_active": false,
+        "files_digest": "sha256:eca4b3c8fccba24c19592407284bc3674e291bf0de3306bec61c875474f0201e",
+        "signed_by": "tianjun-dev-uat",
+        "signed_at": "2026-05-11T16:05:13.151717+00:00",
+        "public_key_fingerprint": "a24efcb5d28cdedb272ac7cb70273123",
+        "installed_at": "2026-05-11T16:32:26",
+        "updated_at": "2026-05-11T16:32:30",
+        "runtime_status": "stopped",
+        "health": "unknown",
+        "last_error_code": null,
+        "last_error_message": null
+      }
+    ],
+    "active_customer_code": null
+  },
+  "05_tier1_removed": {
+    "items": [],
+    "active_customer_code": null
+  },
+  "06_tier2_active": {
+    "items": [
+      {
+        "customer_code": "internal-demo",
+        "name": "Factory Dashboard UI",
+        "plugin_version": "1.0.0",
+        "tier": 2,
+        "status": "active",
+        "is_active": true,
+        "files_digest": "sha256:f8af82f1349c1db9dc9a012113c8bcd985cafb87a92a9b39e4c2274c5badb2ad",
+        "signed_by": "tianjun-dev-uat",
+        "signed_at": "2026-05-11T16:05:40.914192+00:00",
+        "public_key_fingerprint": "a24efcb5d28cdedb272ac7cb70273123",
+        "installed_at": "2026-05-11T16:32:36",
+        "updated_at": "2026-05-11T16:32:37",
+        "runtime_status": "pending_restart",
+        "health": "unknown",
+        "last_error_code": null,
+        "last_error_message": null
+      }
+    ],
+    "active_customer_code": "internal-demo"
+  },
+  "07_tier3_active": {
+    "items": [
+      {
+        "customer_code": "internal-demo",
+        "name": "Fullstack MES Extension",
+        "plugin_version": "1.0.0",
+        "tier": 3,
+        "status": "active",
+        "is_active": true,
+        "files_digest": "sha256:02eff7736d8a69b7838fb4a9bd40c109a40337669f5137f6580870044ec650df",
+        "signed_by": "tianjun-dev-uat",
+        "signed_at": "2026-05-11T16:05:41.493506+00:00",
+        "public_key_fingerprint": "a24efcb5d28cdedb272ac7cb70273123",
+        "installed_at": "2026-05-11T16:32:42",
+        "updated_at": "2026-05-11T16:32:43",
+        "runtime_status": "pending_restart",
+        "health": "unknown",
+        "last_error_code": null,
+        "last_error_message": null
+      }
+    ],
+    "active_customer_code": "internal-demo"
+  },
+  "08_final_clean": {
+    "items": [],
+    "active_customer_code": null
+  }
+}

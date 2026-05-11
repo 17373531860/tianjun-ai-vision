@@ -1,0 +1,15 @@
+plugins: anyio-4.13.0
+collecting ... collected 10 items
+
+tests/plugin_system/test_g1_registry.py::test_routes_registry_mounts_with_customer_prefix PASSED [ 10%]
+tests/plugin_system/test_g1_registry.py::test_routes_registry_rejects_non_router PASSED [ 20%]
+tests/plugin_system/test_g1_registry.py::test_hooks_registry_register_and_fire_in_priority_order PASSED [ 30%]
+tests/plugin_system/test_g1_registry.py::test_hooks_registry_swallows_handler_exception PASSED [ 40%]
+tests/plugin_system/test_g1_registry.py::test_hooks_registry_register_requires_callable PASSED [ 50%]
+tests/plugin_system/test_g1_registry.py::test_tables_registry_creates_table PASSED [ 60%]
+tests/plugin_system/test_g1_registry.py::test_plugin_registry_snapshot_includes_all_subregistries PASSED [ 70%]
+tests/plugin_system/test_g1_registry.py::test_manager_load_backend_module_uses_four_args PASSED [ 80%]
+tests/plugin_system/test_g1_registry.py::test_manager_raises_when_app_missing PASSED [ 90%]
+tests/plugin_system/test_g1_registry.py::test_manager_handles_register_plugin_exception PASSED [100%]
+
+============================== 10 passed in 0.08s ==============================

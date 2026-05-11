@@ -1,0 +1,1437 @@
+[DIAG] config.py loaded
+[DIAG] BASE_DIR = /home/qianqian/桌面/word/tianjun副本/backend
+[DIAG] DATA_DIR = /home/qianqian/桌面/word/tianjun副本/backend
+[DIAG] TIANJUN_DATA_DIR env = <not set>
+[DIAG] BASE_DIR == DATA_DIR: True
+[DIAG] _migrate_old_data() called
+[DIAG] DATA_DIR == BASE_DIR, skipping migration
+连接报警器失败: 串口不存在: /dev/ttyUSB0（请检查USB是否插好、驱动是否安装）
+[报警] ch0 自动连接失败: 串口不存在: /dev/ttyUSB0（请检查USB是否插好、驱动是否安装）
+[HCNetSDK] DLL not found (Windows deploy only)
+[ChannelManager] 配置文件路径: /home/qianqian/桌面/word/tianjun副本/backend/workstation_config.json, 存在: True
+[ChannelManager] 加载配置: channel_count=1
+[DIAG] main.py: dialect = sqlite
+[DIAG] main.py: DB URI = sqlite:////home/qianqian/桌面/word/tianjun副本/backend/sql_app.db
+[DIAG] main.py: MODEL_UPLOAD_DIR = /home/qianqian/桌面/word/tianjun副本/backend/uploads/models
+[DIAG] main.py: DB file exists before create_all: True
+[DIAG] main.py: DB file size: 4411392 bytes
+[DIAG] main.py: create_all done, DB file size: 4411392
+[DIAG] main.py: running migrate_data_to_external_dir()
+[DIAG] DB health: projects = 17 rows
+[DIAG] DB health: models = 26 rows
+[DIAG] DB health: detection_sessions = 560 rows
+[DIAG] DB health: detection_cycles = 634 rows
+[DIAG] DB health: step_records = 2515 rows
+[DIAG] DB health: video_clips = 191 rows
+[DIAG] Model #2 'TP_SOP1': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/e7064eeae2c14487869c6d71ec7de16c_best.pt, file_exists=True
+[DIAG] Model #3 'TP_text': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/03068d4206554765b61e827fa92cb88c_best.pt, file_exists=True
+[DIAG] Model #4 'YD-SOP1': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/8b6be1a412e342a0997ab4f46ce45bc9_bestno9.pt, file_exists=True
+[DIAG] Model #5 'JT-SOP1': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/573aff0f739a451d87f38d1bee9159fa_best(3).pt, file_exists=True
+[DIAG] Model #6 'JT-SOP2': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/66e32c94a28a41669fdbb54abd9de03d_best(4).pt, file_exists=True
+[DIAG] Model #7 'LYF': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/fd4314bcbb0840ab97a08b7949a3c366_best.pt, file_exists=True
+[DIAG] Model #8 'MGN': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3a952fc35b104aa08fe7b84ce8d17743_best(1).pt, file_exists=True
+[DIAG] Model #9 'MGN': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/c522622eb4494045b231fe51de52ce7e_best(2).pt, file_exists=True
+[DIAG] Model #11 'best': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/b2555b03b10e414ba466973f44baa4ff_best.pt, file_exists=True
+[DIAG] Model #12 'MGN-NEW1': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/8ce5812984e244c48a231894e56ae8fc_best(5).pt, file_exists=True
+[DIAG] Model #13 'QG-SOP1': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/0b8a9d765e0342c8b054656e7afb3d0a_best(6).pt, file_exists=True
+[DIAG] Model #14 'best(7)': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/ae078fc5728b482cb13a6868c23d0692_best(7).pt, file_exists=True
+[DIAG] Model #15 'MGN-SOP_NEW': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/745ae901916449bf8cc661dfb502e955_best(8).pt, file_exists=True
+[DIAG] Model #16 'QG-SOP1': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/5052eb2ac1ba43329c13499c45e8b1ae_best(9).pt, file_exists=True
+[DIAG] Model #17 'JC': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/404b2930016d4515b5fa91aab41dd30d_best(gw1).pt, file_exists=True
+[DIAG] Model #18 'SYJB_SOPd14': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/af8914fe78584f679d74584388aca963_best.pt, file_exists=True
+[DIAG] Model #19 'oppo_sop1': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3ccd00327d264b5888457dbad372212a_oppo1.pt, file_exists=True
+[DIAG] Model #20 'QG-SIO1': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/8c585827e4bb4098bad656b8cf265eaa_QG_SOP5.pt, file_exists=True
+[DIAG] Model #21 'oppo_sop2': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/2e80fd1996764ba9b96036e904f40097_best.pt, file_exists=True
+[DIAG] Model #22 'Hailite': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/b55548635dfc466cb5f935109a02e993_best(1).pt, file_exists=True
+[DIAG] Model #23 'JC_T1': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/b4ea146711dc4559845916d30440aebc_工位1最新.pt, file_exists=True
+[DIAG] Model #24 'JC_T2': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/b93223211dd144d58fe724931ab99766_best(8).pt, file_exists=True
+[DIAG] Model #25 'JC_T1': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/74be6bdd9477425f8e64c41aa3f67b8a_jc2_final.pt, file_exists=True
+[DIAG] Model #26 'GW1_an': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/f613dc43ca40477594781008f18ce604_GW1_an.pt, file_exists=True
+[DIAG] Model #27 'JC_T2': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/d28ed74cadd646a8866dcff3536b1a83_best(9).pt, file_exists=True
+[DIAG] Model #28 'QG_tuhei': path=/home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3e84d00ad45542329b2c3fd2e1fbe844_QG_tuhei.pt, file_exists=True
+结算模式: last_step, 空闲超时: 0s, 周期超时: 0s
+[多模型] pipeline_config.models 配置已应用: ['main']
+[计数器] ch0 从文件恢复: {'合格总数': 0, '不良总数': 0, '总产量': 0, 'NG步骤': 0}
+项目配置已加载: oppo_sop1, task_type=detection, logic_mode=sequential
+步骤阈值: {'顶卡拖': 0.49, '撕膜': 0.5, '点亮屏幕': 0.5}
+步骤时间配置: {'顶卡拖': {'min_duration': None, 'max_duration': None, 'max_interval': None, 'disappear_delay': 0, 'timeout_ng': False}, '撕膜': {'min_duration': None, 'max_duration': None, 'max_interval': None, 'disappear_delay': 0, 'timeout_ng': False}, '点亮屏幕': {'min_duration': None, 'max_duration': None, 'max_interval': None, 'disappear_delay': 0, 'timeout_ng': False}}
+步骤最少帧数: {'顶卡拖': 1, '撕膜': 1, '点亮屏幕': 1}
+步骤丢帧容忍: {'顶卡拖': 0, '撕膜': 0, '点亮屏幕': 0}
+步骤检测类型: {'顶卡拖': 'dynamic', '撕膜': 'dynamic', '点亮屏幕': 'dynamic'}
+静态步骤配置: {}
+计数器: {'合格总数': 0, '不良总数': 0, '总产量': 0, 'NG步骤': 0}
+[启动] 兜底: 激活项目 'oppo_sop1' 加载到通道 [0]
+模型加载成功: /home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3ccd00327d264b5888457dbad372212a_oppo1.pt -> GPU: NVIDIA GeForce RTX 4060 Laptop GPU
+类别: ['顶卡拖', '撕膜', '点亮屏幕']
+模型任务类型: detect
+[模型加载] 推理分辨率 imgsz=640
+[模型预热] 主模型 CUDA warm-up (half=False, imgsz=640)...
+[模型预热] 主模型 warm-up done
+[ChannelManager] ch0 loaded model instance on cuda:0: 3ccd00327d264b5888457dbad372212a_oppo1.pt
+[启动] 兜底: ch0 模型 'oppo_sop1' 加载成功
+[启动] 兜底: 模型 'oppo_sop1' 独立实例加载到通道 [0], all_ok=True
+[推理线程] 已停止
+[录制线程] 已停止
+[VideoManager] 保留模型，仅停止输入源
+[缓存清理] 开始清理内存缓存...
+[缓存清理] GPU显存: 已分配=109.3MB, 缓存=124.0MB
+[缓存清理] 完成 - 清理了 0 张截图缓存
+[VideoManager] 已完全停止并释放资源
+视频总帧数: 16699, 倍速: 1.0x
+[00:49:29.884] [DEBUG/CAPTURE] ========== 捕获线程开始 ==========
+[启动] ch0 自动恢复视频: /home/qianqian/桌面/word/tianjun副本/backend/uploads/videos/Video_20260320203958253.avi
+[捕获线程] 开始运行
+[ScannerDisable] 从 /home/qianqian/桌面/word/tianjun副本/backend/scanner_runtime_state.json 恢复禁用工位: []
+[MES] Hook 管理器已启动
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[Scanner] 所有设备均为 LON/LOFF 模式，跳过 WMax 自动发现
+[MES] 服务初始化完成（含集群汇总、外部设备）
+[定时清理] 启动时执行首次自动清理...
+[ExtDev 定时清理] 每小时清理未绑定扫码的外设日志...
+[自动清理] 开始清理 30 天前的数据 (截止: 2026-04-12 00:49:30)
+[自动清理] 数据库: 0个会话, 0个周期, 0条步骤, 0个视频记录, 0个关联文件
+2026-05-12 00:49:30,672 [Plugin] INFO [Plugin][internal-demo] table created/ensured: p_internal_demo_notes
+2026-05-12 00:49:30,673 [Plugin] INFO [Plugin][internal-demo] router mounted at /api/v1/plugins/internal-demo/demo
+2026-05-12 00:49:30,673 [Plugin] INFO [Plugin][internal-demo] hook registered: cycle_end/post_cycle/post priority=100
+[自动清理] 没有过期数据需要清理
+2026-05-12 00:49:30,680 [Plugin] INFO [Plugin][internal-demo] startup_load OK: {'customer_code': 'internal-demo', 'routes': [{'prefix': '/api/v1/plugins/internal-demo/demo', 'tags': ['Plugin:internal-demo'], 'router_id': 132568469425024}], 'hooks': [{'hook_type': 'cycle_end', 'phase': 'post_cycle', 'when': 'post', 'priority': 100}], 'tables': ['p_internal_demo_notes'], 'export_templates_count': 0, 'export_fields_count': 0, 'realtime_triggers_count': 0}
+INFO:     Started server process [587388]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[捕获线程心跳] 运行中, FPS=37, 源=video
+[捕获线程心跳] 运行中, FPS=37, 源=video
+[捕获线程心跳] 运行中, FPS=37, 源=video
+[捕获线程心跳] 运行中, FPS=37, 源=video
+[捕获线程心跳] 运行中, FPS=37, 源=video
+INFO:     127.0.0.1:34004 - "GET /api/v1/plugins/internal-demo/demo/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34014 - "GET /api/v1/plugins/internal-demo/demo/config-preview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34030 - "GET /api/v1/plugins HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[捕获线程心跳] 运行中, FPS=37, 源=video
+[捕获线程心跳] 运行中, FPS=37, 源=video
+[捕获线程心跳] 运行中, FPS=37, 源=video
+[捕获线程心跳] 运行中, FPS=37, 源=video
+[捕获线程心跳] 运行中, FPS=38, 源=video
+[捕获线程心跳] 运行中, FPS=37, 源=video
+[捕获线程心跳] 运行中, FPS=37, 源=video
+[捕获线程心跳] 运行中, FPS=37, 源=video
+INFO:     127.0.0.1:59240 - "GET /api/v1/plugins/active/manifest HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59250 - "GET /api/v1/workstations/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59252 - "GET /api/v1/mes/gateway/extra-fields-schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59272 - "GET /api/v1/scanner/disable-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59288 - "GET /api/v1/source/status?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59256 - "GET /api/v1/operators?active=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/projects HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59298 - "GET /video_feed?t=1778518586050 HTTP/1.1" 200 OK
+[MJPEG] 新连接 ch=?, 活跃连接=1
+INFO:     127.0.0.1:59240 - "GET /api/v1/operators/current?channel_id=0 HTTP/1.1" 200 OK
+[模型加载] 释放旧模型: /home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3ccd00327d264b5888457dbad372212a_oppo1.pt
+[资源释放] 开始释放模型资源...
+[资源释放] 显存状态: 已分配=109.3MB, 缓存=124.0MB
+[资源释放] 模型资源已释放
+INFO:     127.0.0.1:59256 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59256 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59314 - "GET /video_feed?t=1778518586340 HTTP/1.1" 200 OK
+[MJPEG] 新连接 ch=?, 活跃连接=2
+INFO:     127.0.0.1:59256 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59256 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+模型加载成功: /home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3ccd00327d264b5888457dbad372212a_oppo1.pt -> GPU: NVIDIA GeForce RTX 4060 Laptop GPU
+类别: ['顶卡拖', '撕膜', '点亮屏幕']
+模型任务类型: detect
+[模型加载] 推理分辨率 imgsz=640
+[模型预热] 主模型 CUDA warm-up (half=False, imgsz=640)...
+[MJPEG] 连接关闭 ch=?, 活跃连接=1
+INFO:     127.0.0.1:59256 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59256 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+[模型预热] 主模型 warm-up done
+[ChannelManager] ch0 loaded model instance on cuda:0: 3ccd00327d264b5888457dbad372212a_oppo1.pt
+[激活项目] ch0 加载模型 'oppo_sop1': 成功
+INFO:     127.0.0.1:59240 - "POST /api/v1/projects/12/activate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/projects/12 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "OPTIONS /api/v1/alarm/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "POST /api/v1/alarm/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "OPTIONS /api/v1/alarm/connect HTTP/1.1" 200 OK
+连接报警器失败: 串口不存在: /dev/ttyUSB0（请检查USB是否插好、驱动是否安装）
+INFO:     127.0.0.1:59240 - "POST /api/v1/alarm/connect HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+[捕获线程心跳] 运行中, FPS=35, 源=video
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/projects HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/projects HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+[捕获线程心跳] 运行中, FPS=35, 源=video
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+[Video] 视频播放完毕，已停止
+[捕获线程] 结束运行
+[推理线程] 已停止
+[录制线程] 已停止
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/detection/results?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/source/video/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56466 - "GET /api/v1/source/status?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56436 - "GET /api/v1/workstations/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56462 - "GET /api/v1/operators?active=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56452 - "GET /api/v1/mes/gateway/extra-fields-schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56478 - "GET /video_feed?t=1778518662878 HTTP/1.1" 200 OK
+[MJPEG] 新连接 ch=?, 活跃连接=2
+INFO:     127.0.0.1:56452 - "GET /api/v1/operators/current?channel_id=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /api/v1/projects HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56486 - "GET /video_feed?t=1778518663177 HTTP/1.1" 200 OK
+[MJPEG] 新连接 ch=?, 活跃连接=3
+[MJPEG] 连接关闭 ch=?, 活跃连接=2
+INFO:     127.0.0.1:53786 - "POST /api/v1/plugins/internal-demo/deactivate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53792 - "DELETE /api/v1/plugins/internal-demo HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53796 - "POST /api/v1/plugins/install HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53800 - "POST /api/v1/plugins/internal-demo/activate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53810 - "GET /api/v1/plugins/active/manifest HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+INFO:     127.0.0.1:55830 - "GET /api/v1/plugins/active/manifest HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55830 - "GET /api/v1/plugins/active/assets/frontend/theme.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55832 - "GET /api/v1/plugins/active/assets/frontend/assets/logo.svg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55852 - "GET /api/v1/mes/gateway/extra-fields-schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55842 - "GET /api/v1/workstations/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55886 - "GET /api/v1/source/status?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55870 - "GET /api/v1/scanner/disable-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55868 - "GET /api/v1/operators?active=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55830 - "GET /api/v1/projects HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55832 - "GET /video_feed?t=1778518785122 HTTP/1.1" 200 OK
+[MJPEG] 新连接 ch=?, 活跃连接=3
+INFO:     127.0.0.1:55830 - "GET /api/v1/operators/current?channel_id=0 HTTP/1.1" 200 OK
+[模型加载] 释放旧模型: /home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3ccd00327d264b5888457dbad372212a_oppo1.pt
+[资源释放] 开始释放模型资源...
+[资源释放] 显存状态: 已分配=141.9MB, 缓存=222.0MB
+[资源释放] 模型资源已释放
+INFO:     127.0.0.1:55898 - "GET /video_feed?t=1778518785409 HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[MJPEG] 新连接 ch=?, 活跃连接=4
+模型加载成功: /home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3ccd00327d264b5888457dbad372212a_oppo1.pt -> GPU: NVIDIA GeForce RTX 4060 Laptop GPU
+类别: ['顶卡拖', '撕膜', '点亮屏幕']
+模型任务类型: detect
+[模型加载] 推理分辨率 imgsz=640
+[模型预热] 主模型 CUDA warm-up (half=False, imgsz=640)...
+[模型预热] 主模型 warm-up done
+[ChannelManager] ch0 loaded model instance on cuda:0: 3ccd00327d264b5888457dbad372212a_oppo1.pt
+[激活项目] ch0 加载模型 'oppo_sop1': 成功
+INFO:     127.0.0.1:55830 - "POST /api/v1/projects/12/activate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55830 - "GET /api/v1/projects/12 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55830 - "OPTIONS /api/v1/alarm/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55868 - "POST /api/v1/alarm/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55868 - "OPTIONS /api/v1/alarm/connect HTTP/1.1" 200 OK
+连接报警器失败: 串口不存在: /dev/ttyUSB0（请检查USB是否插好、驱动是否安装）
+INFO:     127.0.0.1:55830 - "POST /api/v1/alarm/connect HTTP/1.1" 500 Internal Server Error
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[MJPEG] 连接关闭 ch=?, 活跃连接=3
+INFO:     127.0.0.1:55830 - "GET /api/v1/plugins/active/manifest HTTP/1.1" 200 OK
+[MJPEG] 连接关闭 ch=?, 活跃连接=2
+INFO:     127.0.0.1:54774 - "GET /api/v1/plugins/active/manifest HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54774 - "GET /api/v1/plugins/active/assets/frontend/theme.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54786 - "GET /api/v1/plugins/active/assets/frontend/assets/logo.svg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54792 - "GET /api/v1/workstations/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54806 - "GET /api/v1/mes/gateway/extra-fields-schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54824 - "GET /api/v1/scanner/disable-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54818 - "GET /api/v1/operators?active=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54840 - "GET /api/v1/source/status?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54774 - "GET /api/v1/projects HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54792 - "GET /api/v1/operators/current?channel_id=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54786 - "GET /video_feed?t=1778518809556 HTTP/1.1" 200 OK
+[MJPEG] 新连接 ch=?, 活跃连接=3
+[模型加载] 释放旧模型: /home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3ccd00327d264b5888457dbad372212a_oppo1.pt
+[资源释放] 开始释放模型资源...
+[资源释放] 显存状态: 已分配=141.6MB, 缓存=220.0MB
+[资源释放] 模型资源已释放
+模型加载成功: /home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3ccd00327d264b5888457dbad372212a_oppo1.pt -> GPU: NVIDIA GeForce RTX 4060 Laptop GPU
+类别: ['顶卡拖', '撕膜', '点亮屏幕']
+模型任务类型: detect
+[模型加载] 推理分辨率 imgsz=640
+[模型预热] 主模型 CUDA warm-up (half=False, imgsz=640)...
+INFO:     127.0.0.1:54848 - "GET /video_feed?t=1778518809848 HTTP/1.1" 200 OK
+[MJPEG] 新连接 ch=?, 活跃连接=4
+[模型预热] 主模型 warm-up done
+[ChannelManager] ch0 loaded model instance on cuda:0: 3ccd00327d264b5888457dbad372212a_oppo1.pt
+[激活项目] ch0 加载模型 'oppo_sop1': 成功
+INFO:     127.0.0.1:54792 - "POST /api/v1/projects/12/activate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54792 - "GET /api/v1/projects/12 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54792 - "OPTIONS /api/v1/alarm/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54774 - "POST /api/v1/alarm/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54774 - "OPTIONS /api/v1/alarm/connect HTTP/1.1" 200 OK
+连接报警器失败: 串口不存在: /dev/ttyUSB0（请检查USB是否插好、驱动是否安装）
+INFO:     127.0.0.1:54792 - "POST /api/v1/alarm/connect HTTP/1.1" 500 Internal Server Error
+[MJPEG] 连接关闭 ch=?, 活跃连接=3
+INFO:     127.0.0.1:54792 - "GET /api/v1/plugins/active/manifest HTTP/1.1" 200 OK
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 1/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 2/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] /dev/ttyUSB0 打开失败 第 3/3 次尝试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[ExtDev] c 连接/通讯失败，将继续重试: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+[MJPEG] 连接关闭 ch=?, 活跃连接=2
+INFO:     127.0.0.1:59702 - "POST /api/v1/plugins/internal-demo/activate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59716 - "GET /api/v1/plugins/active/manifest HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59716 - "GET /api/v1/plugins/active/assets/frontend/theme.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59718 - "GET /api/v1/plugins/active/assets/frontend/assets/logo.svg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59732 - "GET /api/v1/mes/gateway/extra-fields-schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59740 - "GET /api/v1/scanner/disable-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59720 - "GET /api/v1/workstations/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59746 - "GET /api/v1/source/status?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59734 - "GET /api/v1/operators?active=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59716 - "GET /api/v1/projects HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59718 - "GET /video_feed?t=1778518886987 HTTP/1.1" 200 OK
+[MJPEG] 新连接 ch=?, 活跃连接=3
+INFO:     127.0.0.1:59716 - "GET /api/v1/operators/current?channel_id=0 HTTP/1.1" 200 OK
+[模型加载] 释放旧模型: /home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3ccd00327d264b5888457dbad372212a_oppo1.pt
+[资源释放] 开始释放模型资源...
+[资源释放] 显存状态: 已分配=141.3MB, 缓存=244.0MB
+[资源释放] 模型资源已释放
+INFO:     127.0.0.1:59754 - "GET /video_feed?t=1778518887278 HTTP/1.1" 200 OK
+[MJPEG] 新连接 ch=?, 活跃连接=4
+模型加载成功: /home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3ccd00327d264b5888457dbad372212a_oppo1.pt -> GPU: NVIDIA GeForce RTX 4060 Laptop GPU
+类别: ['顶卡拖', '撕膜', '点亮屏幕']
+模型任务类型: detect
+[模型加载] 推理分辨率 imgsz=640
+[模型预热] 主模型 CUDA warm-up (half=False, imgsz=640)...
+[模型预热] 主模型 warm-up done
+[ChannelManager] ch0 loaded model instance on cuda:0: 3ccd00327d264b5888457dbad372212a_oppo1.pt
+[激活项目] ch0 加载模型 'oppo_sop1': 成功
+INFO:     127.0.0.1:59716 - "POST /api/v1/projects/12/activate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59716 - "GET /api/v1/projects/12 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59716 - "OPTIONS /api/v1/alarm/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59734 - "POST /api/v1/alarm/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59734 - "OPTIONS /api/v1/alarm/connect HTTP/1.1" 200 OK
+连接报警器失败: 串口不存在: /dev/ttyUSB0（请检查USB是否插好、驱动是否安装）
+INFO:     127.0.0.1:59716 - "POST /api/v1/alarm/connect HTTP/1.1" 500 Internal Server Error
+[MJPEG] 连接关闭 ch=?, 活跃连接=3
+INFO:     127.0.0.1:59716 - "GET /api/v1/plugins/active/manifest HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59716 - "POST /api/v1/plugins/internal-demo/deactivate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59716 - "GET /api/v1/plugins/active/manifest HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59746 - "GET /api/v1/mes/gateway/extra-fields-schema HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59732 - "GET /api/v1/scanner/disable-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59720 - "GET /api/v1/operators?active=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59740 - "GET /api/v1/source/status?channel=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59734 - "GET /api/v1/workstations/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59716 - "GET /api/v1/projects HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59716 - "GET /api/v1/operators/current?channel_id=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59758 - "GET /video_feed?t=1778518890313 HTTP/1.1" 200 OK
+[MJPEG] 新连接 ch=?, 活跃连接=4
+[模型加载] 释放旧模型: /home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3ccd00327d264b5888457dbad372212a_oppo1.pt
+[资源释放] 开始释放模型资源...
+[资源释放] 显存状态: 已分配=142.1MB, 缓存=244.0MB
+[资源释放] 模型资源已释放
+[MJPEG] 连接关闭 ch=?, 活跃连接=3
+INFO:     127.0.0.1:59760 - "GET /video_feed?t=1778518890607 HTTP/1.1" 200 OK
+[MJPEG] 新连接 ch=?, 活跃连接=4
+模型加载成功: /home/qianqian/桌面/word/tianjun副本/backend/uploads/models/3ccd00327d264b5888457dbad372212a_oppo1.pt -> GPU: NVIDIA GeForce RTX 4060 Laptop GPU
+类别: ['顶卡拖', '撕膜', '点亮屏幕']
+模型任务类型: detect
+[模型加载] 推理分辨率 imgsz=640
+[模型预热] 主模型 CUDA warm-up (half=False, imgsz=640)...
+[模型预热] 主模型 warm-up done
+[ChannelManager] ch0 loaded model instance on cuda:0: 3ccd00327d264b5888457dbad372212a_oppo1.pt
+[激活项目] ch0 加载模型 'oppo_sop1': 成功
+INFO:     127.0.0.1:59716 - "POST /api/v1/projects/12/activate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59716 - "GET /api/v1/projects/12 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59716 - "POST /api/v1/alarm/config HTTP/1.1" 200 OK
+连接报警器失败: 串口不存在: /dev/ttyUSB0（请检查USB是否插好、驱动是否安装）
+INFO:     127.0.0.1:59716 - "POST /api/v1/alarm/connect HTTP/1.1" 500 Internal Server Error

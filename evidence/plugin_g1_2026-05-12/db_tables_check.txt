@@ -1,0 +1,8 @@
+[DIAG] config.py loaded
+[DIAG] BASE_DIR = /home/qianqian/桌面/word/tianjun副本/backend
+[DIAG] DATA_DIR = /home/qianqian/桌面/word/tianjun副本/backend
+[DIAG] TIANJUN_DATA_DIR env = <not set>
+[DIAG] BASE_DIR == DATA_DIR: True
+[DIAG] _migrate_old_data() called
+[DIAG] DATA_DIR == BASE_DIR, skipping migration
+plugin tables: ['p_internal_demo_notes']

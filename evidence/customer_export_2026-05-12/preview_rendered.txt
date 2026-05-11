@@ -1,0 +1,116 @@
+﻿自定义导出
+数据范围
+范围模式
+单 cycle (按 ID)
+单 session (按 ID)
+日期范围
+系统级 (无周期)
+Session
+#843 导出实测 demo session (2026-05-12 01:30:16)
+如有"会话标识"列优先显示；只有 UUID 是系统自动给的。 也可输入数字 ID 后直接 Enter。
+模板
+选择模板
+选择已有模板，或点 + 新建
+模板名称
+输出格式
+txt - 纯文本
+文件名模板
+Jinja2 模板。常用：{{ cycle.id }}、{{ now_ymdhms }}
+字段速查 (308)
+刷新
+ 时间/日期 (8)
+now当前时间(完整)
+now_date当前日期
+now_time当前时分秒
+now_ymdhms时间戳(紧凑)
+now_unixUnix 时间戳(秒)
+now_unix_msUnix 时间戳(毫秒)
+now_isoISO 8601
+today_shift当前班次
+ 软件信息 (6)
+app.name软件名称
+app.version软件版本号
+app.product_name产品名(英文)
+app.brand_name品牌名
+app.build_date构建日期
+app.commit_hashGit Commit
+ 品牌/显示 (6)
+ License (6)
+ 系统/硬件 (9)
+ 通道/工位 (8)
+ 项目配置 (25)
+ 会话(Session) (22)
+ 周期(Cycle) (24)
+cycle.id周期 ID
+cycle.session_id所属 session ID
+cycle.channel_id通道 ID
+cycle.cycle_number周期序号
+cycle.start_time周期开始
+cycle.end_time周期结束
+cycle.duration周期时长(秒)
+cycle.duration_ms周期时长(毫秒)
+cycle.interval_to_next到下一周期间隔(秒)
+cycle.is_good是否良品
+cycle.result结果(中文)
+cycle.result_pass_fail结果(英文)
+cycle.ng_step首个 NG 步骤名
+cycle.ng_step_index首个 NG 步骤序号(0 起)
+cycle.ng_reasonNG 原因
+cycle.ng_codeNG 编码
+cycle.total_steps总步骤数
+cycle.good_steps通过步骤数
+cycle.ng_steps_count失败步骤数
+cycle.recognized_max本轮识别峰值
+cycle.video_clip_path录像文件路径
+cycle.video_clip_url录像 URL
+cycle.test_values测试值数组(自定义)
+cycle.barcode工件条码(冗余)
+ 步骤(Steps数组) (14)
+ 缺陷(数组) (13)
+ 工件(Workpiece) (15)
+workpiece.id工件 ID(数据库)
+workpiece.serial_no条码/SN
+workpiece.batch_no批次号
+workpiece.product_code产品料号
+workpiece.product_name产品名称
+workpiece.status工件状态
+workpiece.is_good是否良品
+workpiece.first_seen_at首次扫码时间
+workpiece.last_inspection_at最近检测时间
+workpiece.inspection_count检测次数
+workpiece.rework_count返工次数
+workpiece.defect_count缺陷数量
+workpiece.barcode_parse条码解析(JSON)
+workpiece.work_order_id关联工单 ID
+workpiece.order_no关联工单号
+ 工单(Order) (26)
+ 操作员 (6)
+ 集箱聚合(Box) (14)
+ 扫码/外设 (10)
+ MES 上下文 (10)
+ 实时检测 (24)
+ 实时追踪状态 (20)
+ 计数器 (6)
+ Session 聚合统计 (23)
+ 跨 Session 聚合 (13)
+点击字段插入到光标位置 · Step 3 会做拖拽编辑器
+模板内容 (Jinja2)
+ display
+快插：
+if/else
+for cycles
+for steps
+for test_values
+时间戳
+版本
+NG-code
+实时预览
+刷新
+查看上下文 JSON
+输入文件改写模式（仅在保存为实时规则时生效）
+直接生成 (无输入文件)
+读取作为模板初值
+追加到现有文件末尾
+v3.5.0 · 字段总数 308 · 系统预设 3 · 自建 1
+关闭
+立即下载

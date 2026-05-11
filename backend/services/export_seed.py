@@ -67,6 +67,48 @@ _TPL_SESSION_CYCLES_CSV = """cycle_id,start_time,duration_s,is_good,ng_step
 _DESC_SESSION_CYCLES_CSV = "session 范围 cycle 列表 CSV — 演示如何遍历 cycles 数组，适用于批量导出。"
 
 
+# ---- 客户 5 步产线 (拿取/正面涂黑/翻转/反面涂黑/放置) 完整 CSV ----
+# v3.7.0+ 客户老胡场景: 把 session 下每个周期的 5 个步骤分别独立成列, 配会话头 + 计数器统计.
+# 已规避 4 个常见坑:
+#   - good_cycles/total_cycles 字段名 (不是 good_count/total_count)
+#   - avg_cycle_time (不是 avg_duration)
+#   - or '' 替代 |default('') 以处理 Python None
+#   - '%.2f' % 格式化避免 5.239999999999999 浮点尾巴
+_TPL_SESSION_5STEP_CSV = """会话信息
+会话ID,{{ session.id }}
+开始时间,{{ session.start_time or '' }}
+结束时间,{{ session.end_time or '' }}
+总周期数,{{ stats.cycles|length }}
+合格数,{{ stats.good_cycles or 0 }}
+不良数,{{ stats.ng_cycles or 0 }}
+平均周期时间(秒),{{ '%.2f' % (stats.avg_cycle_time or 0) }}
+
+计数器统计
+计数器名称,数值
+合格总数,{{ stats.good_cycles or 0 }}
+不良总数,{{ stats.ng_cycles or 0 }}
+总产量,{{ stats.total_cycles or 0 }}
+
+周期序号,开始时间,结束时间,耗时(秒),周期间隔(秒),结果,事件,步骤序列,拿取,正面涂黑,翻转,反面涂黑,放置
+{% for cycle in stats.cycles -%}
+{% set step_by_label = {} -%}
+{% for s in cycle.steps -%}
+{% set _ = step_by_label.update({s.label: s}) -%}
+{% endfor -%}
+{{ cycle.cycle_number }},{{ cycle.start_time or '' }},{{ cycle.end_time or '' }},{{ '%.2f' % (cycle.duration or 0) }},{{ '%.2f' % (cycle.interval or 0) if cycle.interval else '' }},{{ '合格' if cycle.is_good else '不良' }},{{ cycle.event or '' }},{{ cycle.steps|map(attribute='label')|join(' -> ') }},{{ '%.2f' % (step_by_label['拿取'].duration if '拿取' in step_by_label else 0) }},{{ '%.2f' % (step_by_label['正面涂黑'].duration if '正面涂黑' in step_by_label else 0) }},{{ '%.2f' % (step_by_label['翻转'].duration if '翻转' in step_by_label else 0) }},{{ '%.2f' % (step_by_label['反面涂黑'].duration if '反面涂黑' in step_by_label else 0) }},{{ '%.2f' % (step_by_label['放置'].duration if '放置' in step_by_label else 0) }}
+{% endfor %}"""
+
+_DESC_SESSION_5STEP_CSV = (
+    "session 5 步产线 CSV (客户老胡场景) —\n"
+    "  • 数据范围选「单 session」, 系统会自动加载所有 cycle + 步骤明细\n"
+    "  • 表头三段: 会话信息 / 计数器统计 / 周期明细 (每周期一行, 含 5 步独立列)\n"
+    "  • 默认列名为「拿取/正面涂黑/翻转/反面涂黑/放置」, 如果产线步骤不一样,\n"
+    "    复制本模板后, 修改表头那行 + for 循环里 5 个 step_by_label[...] 的中文名即可\n"
+    "  • 数字已统一格式化为 2 位小数 (5.24 而非 5.239999999...)\n"
+    "  • 没值的字段会显示为空白 (不再出现 None 字面量)"
+)
+
+
 # ============================================================
 # 注册表
 # ============================================================
@@ -96,6 +138,14 @@ _BUILTIN_TEMPLATES = [
         "batch",
         _TPL_SESSION_CYCLES_CSV,
         _DESC_SESSION_CYCLES_CSV,
+    ),
+    (
+        "builtin_session_5step_csv",
+        "session 5 步产线 CSV (会话信息+计数器+周期明细)",
+        "csv",
+        "batch",
+        _TPL_SESSION_5STEP_CSV,
+        _DESC_SESSION_5STEP_CSV,
     ),
 ]
 

@@ -1,0 +1,27 @@
+{
+  "title_actual": "Factory Dashboard",
+  "title_expected": "Factory Dashboard",
+  "title_match": true,
+  "plugin_menu_present": true,
+  "menu_items_count": 9,
+  "dashboard_rendered": true,
+  "dashboard_h2": "客户看板",
+  "dashboard_h2_match": true,
+  "dashboard_cards": [
+    {
+      "label": "当班目标",
+      "value": "1200"
+    },
+    {
+      "label": "缺陷阈值",
+      "value": "8%"
+    }
+  ],
+  "card_shifttarget_match": true,
+  "card_defect_match": true,
+  "pinia_plugin_store_present": true,
+  "pinia_plugin_store_state": {
+    "shiftTarget": 1200,
+    "defectThreshold": 8
+  }
+}

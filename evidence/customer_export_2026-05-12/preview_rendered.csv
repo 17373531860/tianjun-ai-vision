@@ -1,0 +1,23 @@
+﻿会话信息
+会话ID,{{ session.id }}
+开始时间,{{ session.start_time or '' }}
+结束时间,{{ session.end_time or '' }}
+总周期数,{{ stats.cycles|length }}
+合格数,{{ stats.good_cycles or 0 }}
+不良数,{{ stats.ng_cycles or 0 }}
+平均周期时间(秒),{{ '%.2f' % (stats.avg_cycle_time or 0) }}
+
+计数器统计
+计数器名称,数值
+合格总数,{{ stats.good_cycles or 0 }}
+不良总数,{{ stats.ng_cycles or 0 }}
+总产量,{{ stats.total_cycles or 0 }}
+
+周期序号,开始时间,结束时间,耗时(秒),周期间隔(秒),结果,事件,步骤序列,拿取,正面涂黑,翻转,反面涂黑,放置
+{% for cycle in stats.cycles -%}
+{% set step_by_label = {} -%}
+{% for s in cycle.steps -%}
+{% set _ = step_by_label.update({s.label: s}) -%}
+{% endfor -%}
+{{ cycle.cycle_number }},{{ cycle.start_time or '' }},{{ cycle.end_time or '' }},{{ '%.2f' % (cycle.duration or 0) }},{{ '%.2f' % (cycle.interval or 0) if cycle.interval else '' }},{{ '合格' if cycle.is_good else '不良' }},{{ cycle.event or '' }},{{ cycle.steps|map(attribute='label')|join(' -> ') }},{{ '%.2f' % (step_by_label['拿取'].duration if '拿取' in step_by_label else 0) }},{{ '%.2f' % (step_by_label['正面涂黑'].duration if '正面涂黑' in step_by_label else 0) }},{{ '%.2f' % (step_by_label['翻转'].duration if '翻转' in step_by_label else 0) }},{{ '%.2f' % (step_by_label['反面涂黑'].duration if '反面涂黑' in step_by_label else 0) }},{{ '%.2f' % (step_by_label['放置'].duration if '放置' in step_by_label else 0) }}
+{% endfor %}

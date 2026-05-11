@@ -1,0 +1,4 @@
+2026-05-12 00:49:30,672 [Plugin] INFO [Plugin][internal-demo] table created/ensured: p_internal_demo_notes
+2026-05-12 00:49:30,673 [Plugin] INFO [Plugin][internal-demo] router mounted at /api/v1/plugins/internal-demo/demo
+2026-05-12 00:49:30,673 [Plugin] INFO [Plugin][internal-demo] hook registered: cycle_end/post_cycle/post priority=100
+2026-05-12 00:49:30,680 [Plugin] INFO [Plugin][internal-demo] startup_load OK: {'customer_code': 'internal-demo', 'routes': [{'prefix': '/api/v1/plugins/internal-demo/demo', 'tags': ['Plugin:internal-demo'], 'router_id': 132568469425024}], 'hooks': [{'hook_type': 'cycle_end', 'phase': 'post_cycle', 'when': 'post', 'priority': 100}], 'tables': ['p_internal_demo_notes'], 'export_templates_count': 0, 'export_fields_count': 0, 'realtime_triggers_count': 0}

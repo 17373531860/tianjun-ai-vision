@@ -1,7 +1,8 @@
 # v3.7 插件系统实施 Issue 清单
 
 > 来源：`docs/plugin-system/design/06_tier3_fullstack.md` §九。  
-> 状态：F14 已完成，F15 已验证为误报撤销。剩余 13 个实施项建议拆成独立 PR。
+> 状态：F14 已完成，F15 已验证为误报撤销。剩余 13 个实施项建议拆成独立 PR。  
+> **2026-05-12 补充：在开发机做完管理链 UAT (`evidence/plugin_uat_2026-05-12/`) 后，发现 F1–F13 当前的"完成度"实际只到「管理外壳」，真正"激活后插件代码生效"的运行时实现还有 3 个硬缺口（G1/G2/G3），见末尾 §运行时缺口。**
 
 ## 标签建议
 
@@ -131,3 +132,91 @@ Week 3:
   三档示例插件端到端
   回归 / 安全 / 打包测试
 ```
+
+---
+
+## 运行时缺口（2026-05-12 UAT 暴露）
+
+> 上下文：路径 A 用 `tests/manual_uat/plugin_management_chain_uat.py` 跑完客户管理链 UAT，证据全过（见 `evidence/plugin_uat_2026-05-12/`）。但管理链 PASS ≠ 插件功能 PASS。下面 3 个缺口是**激活成功后插件代码到底有没有真生效**这一层的硬缺口。按硬约束铁律 4「测试矩阵全绿不等于验收完成」立档。
+
+### G1 后端 PluginManager 缺 registry，且 `register_plugin` 调用签名不匹配 demo
+
+- 标签：`plugin-v3.7`, `plugin-backend`, `risk-high`, `test-required`, `blocker`
+- 现状证据：
+  - 主程序调用方 (`backend/plugin_system/manager.py:77-80`) 传 **1 个 dict**：
+    ```python
+    register({"plugin_dir": str(install_dir), "customer_code": customer_code})
+    ```
+  - 但 `plugins-examples/tier3-fullstack/backend/__init__.py:8` 期望 **4 个对象**：
+    ```python
+    def register_plugin(app, registry, license_payload, host):
+        registry.tables.register(...)
+        registry.routes.include_router(...)
+        registry.hooks.register(...)
+    ```
+  - 全仓 `grep "PluginRegistry|registry\."` 在 `backend/` 内只命中 `manager.py` 自身，**主程序根本没有 `registry` 对象 / `routes` 接入 / `hooks` 接入 / `tables` 接入**。
+- 客户视角影响：Tier 3 插件激活后即抛 `TypeError: register_plugin() missing 3 required positional arguments`，**整个 Tier 3 等于不可用**。Tier 1/2 不抛但也没用——因为它们的 demo 也都假设 registry 存在。
+- 验收：
+  - 在 `backend/plugin_system/` 加 `registry.py`，提供 `routes` / `hooks` / `tables` / `export_templates` / `export_fields` / `realtime_triggers` 6 个子 registry
+  - `PluginManager._load_backend_module` 改成 `register_plugin(app, registry, license_payload, host)` 4 参调用
+  - 跑 Tier 3 示例 → 激活 → 重启后端 → `GET /api/v1/plugins/demo/notes` 真返回 200 + 表 `p_internal_demo_notes` 真建出来 + cycle_end hook 真被触发一次
+  - 三件套：视频 + 截图 + `app.log` 中 `[Plugin][internal-demo] cycle_end post_cycle 触发` 行
+- 关联：F1（cycle_end phase）、F11（PluginManager）、F2–F9（hook/registry）。这条 issue 是它们的**联合验收门**。
+
+### G2 前端没实现 ADR-0002 的运行时插件加载器
+
+- 标签：`plugin-v3.7`, `plugin-frontend`, `risk-high`, `test-required`, `blocker`
+- 现状证据：
+  - ADR-0002 描述的「`fetch(entryUrl) → Blob → URL.createObjectURL → dynamic import(blobUrl) → module.default.register(ctx)`」加载流程，在 `frontend/src/**/*` 全仓 `grep` 关键字 `pluginLoader|loadPlugin|registerPlugin|__pluginVendor|active/manifest`，**全部零命中**。
+  - 唯一对 `pluginStore.activeCustomerCode` 的消费在 `frontend/src/views/Settings/index.vue:1063`，仅用来在表格里显示一个绿 tag。
+- 客户视角影响：
+  - Tier 2 demo `frontend/dist/index.esm.js` 永远不会被加载
+  - Tier 2 demo 声明的 `/factory-dashboard` 路由永远不会注册 → 客户激活后该 URL 仍 404
+  - Tier 2 demo 的 Pinia store `plugin-internal-demo-dashboard` 永远不会进 store registry
+- 验收：
+  - 新增 `frontend/src/composables/usePluginLoader.js`：监听 `pluginStore.activeCustomerCode`，按 ADR-0002 流程加载 `entry.js`
+  - 暴露 `window.__pluginVendor = { vue, pinia, elementPlus, ... }`
+  - Tier 2 demo 激活 + 重启 → 浏览器能访问 `/#/factory-dashboard` 并看到该页面渲染出来
+  - 三件套：视频显示菜单出现新项、点进新页面看到 demo UI
+- 关联：F10（菜单数据驱动）、F13（Settings UI）。F10 改完是基础，G2 是真正的加载器。
+
+### G3 Tier 1 主题前端钩子缺失
+
+- 标签：`plugin-v3.7`, `plugin-frontend`, `test-required`
+- 现状证据：
+  - 全仓 `grep "css_variables|tj-primary|app_title|hidden_menus"` 在 `frontend/src/**` **零命中**
+  - 即使 G2 加载器实现了，Tier 1 主题也不需要走 `dynamic import`——它是声明式资产（CSS 变量 / Logo URL / 隐藏菜单列表），需要一个**声明式应用器**：
+    - 读 `active/manifest` 的 `frontend.theme.css_variables` → 写 `document.documentElement.style.setProperty(...)`
+    - 读 `frontend.theme.app_title` → 写 `document.title` + Layout 标题栏
+    - 读 `frontend.theme.logo` / `favicon` → 替换 `<link rel='icon'>` 和 Layout Logo `<img>`
+    - 读 `frontend.theme.css` → fetch 并 `<style>` 插入
+    - 读 `frontend.hidden_menus` → 影响 F10 菜单驱动器
+- 客户视角影响：激活 Tier 1 白标主题后 UI **不会有任何变化**——客户付钱买的"白标交付"等于空头支票。
+- 验收：
+  - 新增 `frontend/src/composables/usePluginTheme.js`，启动 + activeCustomerCode 变化时拉 `active/manifest` 应用
+  - Tier 1 demo 激活 → 浏览器标题栏变 "ACME AI Vision"、主色变 `#38bdf8`、`/alarm` 菜单消失、Logo 换成 ACME logo
+  - 三件套：激活前后的截图对比清晰可见
+
+### B 路径整体验收（G1+G2+G3 都做完后）
+
+- 标签：`plugin-v3.7`, `test-required`, `meta-uat`
+- 任务：把 `tests/manual_uat/plugin_management_chain_uat.py` 升级为 `plugin_runtime_chain_uat.py`，**在每个 active 阶段额外断言**：
+  - Tier 1：`document.title == 'ACME AI Vision'` + 主色 RGB 命中 #38bdf8
+  - Tier 2：`page.goto('/factory-dashboard')` 200 且看到 "客户看板" 文本
+  - Tier 3：`requests.get('/api/v1/plugins/demo/notes') == 200` + `SELECT * FROM p_internal_demo_notes` 表存在
+- 产物：`evidence/plugin_uat_<date>/` 新一轮三件套
+- 这是 G1+G2+G3 全部完成的**唯一验收依据**，按铁律 6 不接受单元测试矩阵代替。
+
+---
+
+### 现状自评汇总表（按客户视角）
+
+| 维度 | 实现度 | 缺口 issue |
+|---|---|---|
+| 主作者打包 + 签名 + 离线验签 | ✅ 完整 | — |
+| 客户 UI 上传 / 列表 / 激活按钮 | ✅ 完整 | F13 已实现 |
+| 后端 verifier（RSA + HMAC + digest + license） | ✅ 完整 | F11/F12 已实现 |
+| DB 状态机 `installed → active → stopped/loaded/failed` | ✅ 完整 | F11/F12 已实现 |
+| **Tier 1 主题真生效（改色/换 Logo/隐菜单）** | ❌ 未实现 | **G3** |
+| **Tier 2 前端动态加载（路由/menu/store）** | ❌ 未实现 | **G2**, F10 |
+| **Tier 3 后端 hook/router/table 接入** | ❌ 未实现 + 接口对不上 | **G1**, F1–F9 |

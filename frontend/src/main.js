@@ -86,6 +86,32 @@ try {
   console.error('[⬛ Boot] 插件注册失败:', e);
 }
 
+// G3 + G2: active 插件主题 + Tier2/3 ESM loader — 在 Vue mount 前 fire-and-forget
+// (失败静默 fallback, 主程序继续走默认外观与默认路由表)
+(async () => {
+  try {
+    const { usePluginThemeStore } = await import('./store/usePluginThemeStore.js');
+    const themeStore = usePluginThemeStore();
+    await themeStore.apply();
+    if (themeStore.isActive) {
+      console.log(`[⬛ PluginTheme] 已应用: ${themeStore.activeCustomerCode}, title="${themeStore.appTitle}", hiddenMenus=${JSON.stringify(themeStore.hiddenMenus)}`);
+    } else {
+      console.log('[⬛ PluginTheme] 无 active 插件, 走天均默认外观');
+    }
+
+    const { loadActivePluginFrontend, setPluginLoaderI18n } = await import('./composables/usePluginLoader.js');
+    setPluginLoaderI18n(i18n);
+    const loadResult = await loadActivePluginFrontend(router);
+    if (loadResult.loaded) {
+      console.log(`[⬛ PluginLoader] Tier2/3 ESM 加载成功: customer=${loadResult.customerCode}`);
+    } else {
+      console.log(`[⬛ PluginLoader] 未加载 ESM 入口: ${loadResult.reason}`);
+    }
+  } catch (e) {
+    console.warn('[⬛ PluginBootstrap] 失败:', e);
+  }
+})();
+
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component)

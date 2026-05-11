@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.7.1 (2026-05-12)
+- [BLOCKER-371-A] **客户机启动崩溃修复** — v3.7.0 分包安装包客户机崩溃 `ModuleNotFoundError: No module named '_plugin_common'`. 根因 Nuitka 不复制 scripts/, 老 verifier.py 用 sys.path hack 找 _plugin_common.py 在客户机失败. 修复: 权威实现搬到 `backend/plugin_system/_plugin_common.py`, verifier 改绝对路径 import, CLI shim 兜底, 7 个 CLI 脚本不用动一行. 双向验证已确认.
+- [FEAT-371-G1] 后端 PluginRegistry — 路由 / 钩子 / ORM 表挂载. `register_plugin(app, registry, license_payload, host)` 4 参数标准签名. 锁定: 10 个单元测试.
+- [FEAT-371-G1.5] cycle_end 钩子在 `source_session_lifecycle_mixin.end_cycle()` 真触发, MES 后 scanner cleanup 前. `RUNTIME_MODE=test` 下挂调试触发端点. 锁定: 4 个单元测试.
+- [FEAT-371-G2] 前端 ESM Loader (ADR-0002 host 注入模式) — `usePluginLoader` composable + `loadActivePluginFrontend(router)`, Tier 2/3 demo 重写. 锁定: Playwright UAT 10/10.
+- [FEAT-371-G3] Tier 1 主题钩子 — `usePluginThemeStore` 套 CSS 变量 / title / favicon / logo / 隐藏菜单. 锁定: Playwright UAT 10/10.
+- [FEAT-371-PRESET] 自定义导出新增系统预设「session 5 步产线 CSV」— 已踩平 4 个坑 (字段名 / |default vs or '' / 浮点格式化 / 步骤名按位置查表), 客户下拉一选直接用. 锁定: Playwright 真开浏览器 11/11 + 12/12.
+- [CONFIG-371-001] 版本号 3.7.0 → 3.7.1 (`electron/package.json` + `electron/splash.html`).
+
 ## v3.7.0 (2026-05-11)
 - [FEAT-370-001] 插件系统落地（白标 / 客户定制能力）— 三层 tier 粒度（Theme / UI / 全栈）+ RSA-PSS-SHA256 签名 + HMAC-SHA256 客户码绑定。`docs/plugin-system/` 全套设计 + `scripts/plugin/{pack,sign,verify,install,inject-public-key,lint-docs}.py` CLI + `plugins-examples/` 三层示例 + `backend/plugin_system/{verifier,manager}.py` + `backend/api/plugins.py`（`/api/v1/plugins/*` REST API）+ `backend/models/plugin_models.py`（4 张表 plugins/plugin_state/plugin_audit_log/plugin_config_versions）+ `frontend/src/api/plugins.js` + `frontend/src/store/usePluginStore.js`（Pinia store 抽象，含 `licenseMismatch` getter）+ Settings 新"插件管理" tab 全部走 store
 - [FEAT-370-002] 数据库主线切到 PostgreSQL（保留 SQLite 单机回退）— `backend/db/database.py` dialect-aware（`DATABASE_URL` 前缀决定，连接池/PRAGMA 分别处理）+ `backend/db/sql_compat.py`（`hour_minute()`/`date_str()` 替代 `func.strftime`，已替换 sessions/sessions_export/reports）+ `backend/services/external_device.py` `datetime('now')` 改 Python timedelta + Alembic 全套（`alembic.ini` + `env.py` + baseline `2026_05_11_0040`，走 `Base.metadata.create_all` 规避 FK 顺序坑）+ `docker-compose.yml`（PG 16-alpine on 5433）+ `.env.example` + `scripts/db/initdb/01-extensions.sql`（pg_trgm + btree_gin）+ `scripts/db/sqlite_to_pg.py`（按 FK 排序、TRUNCATE RESTART IDENTITY、setval 重置序列、--dry-run/--truncate-first）+ 多客户 schema 隔离走 DSN `options=-csearch_path` + `tests/conftest.py` 自动检测 PG 模式独立 raw psycopg2 重置 schema
