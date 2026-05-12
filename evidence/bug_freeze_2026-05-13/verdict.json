@@ -1,0 +1,61 @@
+{
+  "started_at": "2026-05-13T01:48:36",
+  "test_project_id": 6,
+  "phases": {
+    "monitor_landing": {
+      "streamSrc0_present": true,
+      "streamSrc0_src": "http://localhost:8001/video_feed?t=1778608119887",
+      "streamSrc0_natural_w": 2448,
+      "streamSrc0_natural_h": 2048,
+      "step_cards_count": 0,
+      "step_cards_classes": [],
+      "is_running_btn_text": "开始",
+      "polling_likely_alive": false,
+      "page_url": "http://localhost:6001/#/monitor"
+    },
+    "after_start_5s": {
+      "streamSrc0_present": true,
+      "streamSrc0_src": "http://localhost:8001/video_feed?t=1778608119887",
+      "streamSrc0_natural_w": 2448,
+      "streamSrc0_natural_h": 2048,
+      "step_cards_count": 0,
+      "step_cards_classes": [],
+      "is_running_btn_text": "开始",
+      "polling_likely_alive": false,
+      "page_url": "http://localhost:6001/#/monitor"
+    },
+    "back_immediate": {
+      "streamSrc0_present": true,
+      "streamSrc0_src": "http://localhost:8001/video_feed?t=1778608150665",
+      "streamSrc0_natural_w": 2448,
+      "streamSrc0_natural_h": 2048,
+      "step_cards_count": 0,
+      "step_cards_classes": [],
+      "is_running_btn_text": "开始",
+      "polling_likely_alive": false,
+      "page_url": "http://localhost:6001/#/monitor"
+    },
+    "back_after_10s": {
+      "streamSrc0_present": true,
+      "streamSrc0_src": "http://localhost:8001/video_feed?t=1778608150665",
+      "streamSrc0_natural_w": 2448,
+      "streamSrc0_natural_h": 2048,
+      "step_cards_count": 0,
+      "step_cards_classes": [],
+      "is_running_btn_text": "开始",
+      "polling_likely_alive": false,
+      "page_url": "http://localhost:6001/#/monitor"
+    }
+  },
+  "console_errors": [],
+  "console_warnings": [],
+  "pageerrors": [],
+  "verdict": "NOT REPRODUCED (dev env)",
+  "activate_status": 200,
+  "steps_count_before": 6,
+  "console_errors_after_start": 0,
+  "param_changed": false,
+  "console_errors_final": 0,
+  "second_cycle_error": "Locator.click: Timeout 3000ms exceeded.\nCall log:\n  - waiting for locator(\"a[href='#/project'], a[href='/project']\").first\n",
+  "finished_at": "2026-05-13T01:49:25"
+}

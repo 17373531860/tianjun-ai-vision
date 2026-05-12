@@ -1,0 +1,45 @@
+{
+  "started_at": "2026-05-13T04:06:47.852867",
+  "c_strategies": {
+    "c1_cycle_start_snapshot": {
+      "status": "PASS",
+      "output_file": "/tmp/uat_c_s4ooazga/c1_out/C1_LOCKED.txt",
+      "content_preview": "C1_LOCKED_VAL\r\n\r\n合格\r\n取件: 2.34s | 装配: 5.67s\r\n3.7.1\r\n"
+    },
+    "c2_mtime": {
+      "status": "PASS"
+    },
+    "c3_mtime_stable_max_age": {
+      "status": "PASS"
+    }
+  },
+  "d_box_color": {
+    "status": "PASS",
+    "tested_label": "安装smc板",
+    "before": "",
+    "after": "#ff00cc",
+    "from_model_roundtrip": "main"
+  },
+  "e_dedupe": {
+    "status": "PASS",
+    "logs_skip_reasons": [
+      "dedupe_timeout:SAME.txt",
+      "dedupe_queued:SAME.txt",
+      "",
+      "",
+      ""
+    ]
+  },
+  "f_frontend": {
+    "rule_visible_in_table": true,
+    "click_test_button": true,
+    "output_file_created": true,
+    "content_preview": "F_TEST_VAL_FRONTEND\n\n合格\n取件: 2.34s | 装配: 5.67s\n3.7.1\n",
+    "test_run_output_file": true,
+    "test_run_content": "F_TEST_VAL_FRONTEND\n\n合格\n取件: 2.34s | 装配: 5.67s\n3.7.1\n",
+    "status": "PASS"
+  },
+  "errors": [],
+  "completed_at": "2026-05-13T04:07:15.221650",
+  "overall": true
+}

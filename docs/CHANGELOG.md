@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.7.2 (2026-05-12)
+- [FEAT-372-SCANNER-BYPASS] **扫码器旁路 三行 TXT 完整路径** — 客户外部扫码器每次扫码生成 TXT (只一行序列号), 周期结束复制该 TXT 写入"序列号 / 空行 / 合格不合格 / 步骤时长 / 软件版本"五行结构, 输出到指定目录. 三种策略: `cycle_start_snapshot` (默认, 周期开始锁快照彻底防串号) / `mtime` (取 mtime 最新) / `mtime_stable` (`wait_stable_ms` 等稳定后再取); `max_age_sec` 默认 60s 过滤旧文件; 同名去重命中 → 主线程立即跳过 + 异步线程池轮询 (默认 100ms 间隔最长 5s) → 超时按"跳过本规则"处理不阻塞主线程. Jinja2 helper: `latest_input_filename()` / `latest_input_text()` / `now()`. 系统预设 `builtin_scanner_bypass_3line_txt` 带 `default_rule_config` 12 字段, 客户下拉一选自动填 (只需填 input_dir/output_dir).
+- [FEAT-381-B] 每个标签可单独设置检测框颜色 — 项目页步骤设置表加 `box_color` 列 + `el-color-picker`, 默认空走全局设置. Monitor 页 `pickDetColor` 三级优先级: 副模型 `display_color` > `steps_config.box_color` > 全局 OK/NG. 锁定: 6 个单测.
+- [FEAT-381-C] 副模型与主模型权限对等 — 添加副模型时, 其标签自动 append 到 `steps_config` 携 `from_model` 标识, 每个 step 可独立配 conf / box_color / sequence_order. 步骤设置表加 `from_model` 徽章.
+- [FIX-381-A] 顺序/自定义模式守卫: 不在 `expected_sequence` 的标签不入 cycle 判定 — 之前场景: 项目配 A→B→D 序列, 但 E/F 启用且检出 → 加入 `current_cycle_steps` → 错判. 修复在 `_process_single_step` 增加守卫, **不入 cycle 但仍画检测框**. 锁定: `test_unexpected_labels_dont_join_cycle.py` 6 个单测.
+- [DB-372-001] 数据库迁移 9 个新字段 (启动自动 ALTER TABLE): `detection_cycles.external_meta` JSON / `export_realtime_rules` 7 字段 (latest_file_strategy/wait_stable_ms/max_age_sec/dedupe_same_filename/dedupe_retry_max_sec/dedupe_retry_interval_ms/last_used_input_filename) / `export_templates.default_rule_config` JSON.
+- [DOC-372-001] `docs/客户操作-扫码器旁路导出.md` 客户面向操作文档 (扫码器目录、输出目录、策略选择、常见问题).
+- [UAT-372-001] 完整路径 UAT 全 PASS (`evidence/v372_full_path_<时间>/verdict.json`): C1 snapshot 锁文件防串号 / C2 mtime / C3 mtime_stable + max_age=30 过滤 100s 前旧文件 / D box_color #ff00cc 持久化往返 + from_model=main / E dedupe_queued → dedupe_timeout → 跳过 / F 前端立即触发 → 后端真实执行 → 三行 TXT 落盘.
+- [CONFIG-372-001] 版本号 3.7.1 → 3.7.2 (`electron/package.json` + `electron/splash.html`).
+
 ## v3.7.1 (2026-05-12)
 - [BLOCKER-371-A] **客户机启动崩溃修复** — v3.7.0 分包安装包客户机崩溃 `ModuleNotFoundError: No module named '_plugin_common'`. 根因 Nuitka 不复制 scripts/, 老 verifier.py 用 sys.path hack 找 _plugin_common.py 在客户机失败. 修复: 权威实现搬到 `backend/plugin_system/_plugin_common.py`, verifier 改绝对路径 import, CLI shim 兜底, 7 个 CLI 脚本不用动一行. 双向验证已确认.
 - [FEAT-371-G1] 后端 PluginRegistry — 路由 / 钩子 / ORM 表挂载. `register_plugin(app, registry, license_payload, host)` 4 参数标准签名. 锁定: 10 个单元测试.

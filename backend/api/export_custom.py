@@ -92,6 +92,8 @@ class TemplateOut(BaseModel):
     scope: str
     is_system: bool
     builtin_id: Optional[str] = None
+    # v3.7.2 模板自带"推荐规则配置" — 选模板新建规则时, 前端用它自动填空字段
+    default_rule_config: Optional[Dict[str, Any]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -107,6 +109,7 @@ class TemplateOut(BaseModel):
             scope=row.scope,
             is_system=row.is_system,
             builtin_id=row.builtin_id,
+            default_rule_config=row.default_rule_config,
             created_at=row.created_at.isoformat() if row.created_at else None,
             updated_at=row.updated_at.isoformat() if row.updated_at else None,
         )
@@ -119,6 +122,7 @@ class TemplateCreate(BaseModel):
     content: str = ""
     scope: str = Field("both", pattern="^(batch|realtime|both)$")
     template_file_path: Optional[str] = None
+    default_rule_config: Optional[Dict[str, Any]] = None
 
 
 class TemplateUpdate(BaseModel):
@@ -128,6 +132,7 @@ class TemplateUpdate(BaseModel):
     content: Optional[str] = None
     scope: Optional[str] = Field(None, pattern="^(batch|realtime|both)$")
     template_file_path: Optional[str] = None
+    default_rule_config: Optional[Dict[str, Any]] = None
 
 
 @router.get("/templates")
@@ -167,6 +172,7 @@ def create_template(payload: TemplateCreate,
         content=payload.content,
         scope=payload.scope,
         template_file_path=payload.template_file_path,
+        default_rule_config=payload.default_rule_config,
         is_system=False,
         builtin_id=None,
     )
@@ -218,6 +224,8 @@ def clone_template(tpl_id: int,
         raise HTTPException(404, f"模板 {tpl_id} 不存在")
 
     name = new_name or f"{src.name} (副本)"
+    # v3.7.2 default_rule_config 跟着模板复制 — 客户复制扫码器旁路预设后,
+    # 自建模板继续保留"推荐规则配置", 新建规则时表单仍能自动填充.
     row = ExportTemplate(
         name=name,
         description=src.description,
@@ -225,6 +233,10 @@ def clone_template(tpl_id: int,
         content=src.content,
         scope=src.scope,
         template_file_path=src.template_file_path,
+        default_rule_config=(
+            dict(src.default_rule_config) if isinstance(src.default_rule_config, dict)
+            else None
+        ),
         is_system=False,
         builtin_id=None,
     )

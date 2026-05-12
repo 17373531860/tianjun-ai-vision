@@ -1,0 +1,46 @@
+{
+  "started_at": "2026-05-13T03:52:52.467821",
+  "phase_a_project_page": {
+    "has_box_color_column": true,
+    "color_pickers": 18,
+    "from_model_tags": {
+      "main_en": 0,
+      "primary_cn": 0,
+      "secondary": 0
+    },
+    "status": "PASS"
+  },
+  "phase_b_realtime_rule": {
+    "page_buttons": [
+      "",
+      "选择",
+      "",
+      "导出当日数据",
+      "导出某周数据",
+      "导出某月数据",
+      "导出日期范围",
+      "自定义导出 / 客户模板",
+      "实时规则（扫码自动写入）",
+      "备份数据库",
+      "清空所有历史数据",
+      " 立即执行清理 ",
+      " 删除选定范围数据 ",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "template_has_star": true,
+    "template_option_text": "[txt] 扫码器旁路三行 TXT (序列号+OK/NG+步骤时长+版本) (系统) ★",
+    "auto_apply_hint": true,
+    "c_strategy_default": true,
+    "status": "PASS"
+  },
+  "errors": [],
+  "completed_at": "2026-05-13T03:53:18.164157",
+  "overall": true
+}

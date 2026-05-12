@@ -1,0 +1,75 @@
+{
+  "version": "3.7.2",
+  "date": "2026-05-12",
+  "based_on": "3.7.1",
+  "summary": "扫码器旁路完整路径 + 顺序模式守卫 + 副模型对等 + 单标签框色",
+  "features": [
+    {
+      "id": "FEAT-372-SCANNER-BYPASS",
+      "title": "扫码器旁路 三行 TXT 完整路径",
+      "highlights": [
+        "三种文件获取策略: cycle_start_snapshot (默认, 防串号) / mtime / mtime_stable",
+        "max_age_sec 过滤旧文件 (默认 60s)",
+        "同名去重 + 异步重试 + 超时跳过 (主线程不阻塞)",
+        "Jinja2 helper: latest_input_filename / latest_input_text / now",
+        "系统预设 builtin_scanner_bypass_3line_txt 带 default_rule_config 12 字段",
+        "三行输出: 序列号 / 空行 / 合格不合格 / 步骤时长 / 软件版本"
+      ]
+    },
+    {
+      "id": "FEAT-381-B",
+      "title": "每个标签可单独设置检测框颜色",
+      "highlights": [
+        "项目页步骤设置表加 box_color 列 + el-color-picker",
+        "Monitor 页 pickDetColor 三级优先级: 副模型 display_color > step.box_color > 全局 OK/NG"
+      ]
+    },
+    {
+      "id": "FEAT-381-C",
+      "title": "副模型与主模型权限对等",
+      "highlights": [
+        "副模型标签自动 append 到 steps_config, 携 from_model 标识",
+        "每个 step 独立配 conf / box_color / sequence_order",
+        "步骤设置表加 from_model 徽章"
+      ]
+    }
+  ],
+  "fixes": [
+    {
+      "id": "FIX-381-A",
+      "title": "顺序/自定义模式不在 sequence 的标签不应入 cycle 判定",
+      "before": "E/F 启用且检出 → 加入 current_cycle_steps → 错判",
+      "after": "守卫: 不在 expected_sequence 的标签不入 cycle, 仍画检测框",
+      "files": [
+        "backend/api/source_settlement_mixin.py",
+        "tests/test_unexpected_labels_dont_join_cycle.py"
+      ]
+    }
+  ],
+  "db_migrations": [
+    {"table": "detection_cycles", "column": "external_meta", "type": "JSON"},
+    {"table": "export_realtime_rules", "column": "latest_file_strategy", "type": "TEXT"},
+    {"table": "export_realtime_rules", "column": "latest_file_wait_stable_ms", "type": "INTEGER"},
+    {"table": "export_realtime_rules", "column": "latest_file_max_age_sec", "type": "INTEGER"},
+    {"table": "export_realtime_rules", "column": "dedupe_same_filename", "type": "BOOLEAN"},
+    {"table": "export_realtime_rules", "column": "dedupe_retry_max_sec", "type": "INTEGER"},
+    {"table": "export_realtime_rules", "column": "dedupe_retry_interval_ms", "type": "INTEGER"},
+    {"table": "export_realtime_rules", "column": "last_used_input_filename", "type": "TEXT"},
+    {"table": "export_templates", "column": "default_rule_config", "type": "JSON"}
+  ],
+  "uat": {
+    "evidence_dir": "evidence/v372_full_path_2026-05-13_0406",
+    "all_pass": true,
+    "scenarios": [
+      "C1 cycle_start_snapshot 锁快照防串号 PASS",
+      "C2 mtime 策略取最新 PASS",
+      "C3 mtime_stable + max_age_sec=30 过滤 PASS",
+      "D  box_color #ff00cc 持久化往返 PASS",
+      "E  dedupe_queued → dedupe_timeout → 跳过 PASS",
+      "F  前端立即触发 → 后端执行 → 三行 TXT 落盘 PASS"
+    ]
+  },
+  "known_issues": [
+    "全绿冻屏 客户机问题 (v3.7.1 报告) 仍在排查, 本版本未触碰相关代码"
+  ]
+}

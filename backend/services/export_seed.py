@@ -109,44 +109,136 @@ _DESC_SESSION_5STEP_CSV = (
 )
 
 
+# ---- 扫码器旁路三行 TXT (v3.7.2 客户场景) ----
+# 场景: 客户扫码器无法接入软件, 但会在固定目录里生成 txt (空 / 仅一行序列号).
+# 每个 cycle_end 时, 我们从该目录读 mtime 最新的 txt 文件, 把内容作为首行保留,
+# 再追加 "OK/NG → 每步时长 → 软件版本" 三行, 写到客户指定的输出目录.
+#
+# Jinja2 helper:
+#   latest_input_text() : 读输入目录最新 txt 文件内容 (空目录返回空)
+#   latest_input_filename() : 取最新文件名 (用于"输出文件名跟扫码 txt 同名")
+# 不传参时自动用 ExportRealtimeRule.input_dir.
+#
+# 模板版面:
+#   第 1 行: 扫码序列号 (来自客户扫码 txt)
+#   第 2 行: 空行 (用户要求)
+#   第 3 行: 合格 / 不合格
+#   第 4 行: 每个步骤检测时长 (label: x.xx s | label: x.xx s | ...)
+#   第 5 行: 软件版本号
+_TPL_SCANNER_BYPASS_3LINE = """{{ latest_input_text() }}
+
+{{ '合格' if cycle.is_good else '不合格' }}
+{% for s in steps %}{{ s.label }}: {{ '%.2f' % (s.duration or 0) }}s{% if not loop.last %} | {% endif %}{% endfor %}
+{{ app.version }}
+"""
+
+_DESC_SCANNER_BYPASS_3LINE = (
+    "扫码器旁路三行 TXT (v3.7.2 新增) —\n"
+    "  适用场景: 客户扫码器无法接入软件, 但会在固定目录写 txt 文件.\n"
+    "\n"
+    "  用法:\n"
+    "  1. 复制本预设到自建模板\n"
+    "  2. 新建「实时规则」, 触发事件选「cycle_end」\n"
+    "  3. 输入目录 = 客户扫码器生成 txt 的目录 (例: D:/扫码器输入/)\n"
+    "  4. 输入文件模式选「none」 (内容靠 Jinja2 helper 取, 不要选 append)\n"
+    "  5. 输出目录 = 客户希望的结果目录 (例: D:/检测结果/)\n"
+    "  6. 输出文件名模板选下面任一:\n"
+    "     • 跟扫码 txt 同名: {{ latest_input_filename() }}\n"
+    "     • 加 cycle ID:    {{ latest_input_filename() | replace('.txt','') }}_{{ cycle.id }}.txt\n"
+    "     • 时间戳:         {{ now('%Y%m%d_%H%M%S') }}.txt\n"
+    "     • 客户自定义:     按 Jinja2 语法自由写\n"
+    "  7. 换行符建议选「crlf」(Windows 客户)\n"
+    "  8. 「取文件策略」三选一 (新建规则默认 C 推荐):\n"
+    "     • C (cycle_start_snapshot) 周期开始锁快照, 最稳, DB 留痕\n"
+    "     • B (mtime_stable) 取最新 + 等稳定 + 限制年龄, 加保险\n"
+    "     • A (mtime) 直接取 mtime 最新, 调试 / 客户不严格\n"
+    "  9. 同名去重 (可选): 防止两周期撞同一份扫码 txt, 命中重名异步等下一个新文件,\n"
+    "     超时后跳过本规则 (写 SKIPPED 日志, 不写文件)\n"
+    "\n"
+    "  输出文件示例 (扫码 txt 内容 = 'WP20260513_001'):\n"
+    "    WP20260513_001\n"
+    "    \n"
+    "    合格\n"
+    "    取件: 2.34s | 装配: 5.67s | 检查: 1.89s\n"
+    "    v3.7.2\n"
+    "\n"
+    "  注意:\n"
+    "  • 扫码器生成的 txt 我们只读, 不动 (客户自己定期清理)\n"
+    "  • 扫码 txt 为空时, 输出文件首行也是空 (cycle_end 不会报错)\n"
+    "  • 多工位场景每个工位建一条规则, 用「通道过滤」字段区分\n"
+    "  • C 策略下 cycle.external_meta 字段会留存「这一轮锁了哪份扫码 txt」, 事后可追溯"
+)
+
+
 # ============================================================
 # 注册表
 # ============================================================
 
 # 每项: (builtin_id, name, format, scope, content, description)
+# v3.7.2 扫码器旁路场景的 "推荐规则配置". 选这个模板新建规则时, 前端自动填.
+# 客户只需要填 input_dir + output_dir 两个目录就能跑.
+_DEFAULT_RULE_SCANNER_BYPASS = {
+    "trigger_event": "cycle_end",
+    "input_file_mode": "none",
+    "filename_template": "{{ latest_input_filename() }}",
+    "encoding": "utf-8",
+    "newline": "crlf",                       # Windows 客户
+    "overwrite_policy": "overwrite",
+    "latest_file_strategy": "cycle_start_snapshot",   # C 策略
+    "latest_file_wait_stable_ms": 100,       # 100ms 稳定等待
+    "latest_file_max_age_sec": 60,           # 60s 内的扫码 txt 才采用
+    "dedupe_same_filename": False,           # 默认关 — 客户决定是否开
+    "dedupe_retry_max_sec": 5,
+    "dedupe_retry_interval_ms": 100,
+}
+
+
 _BUILTIN_TEMPLATES = [
-    (
-        "builtin_sn_pass_fail_txt",
-        "客户 SN.txt（Pass/Fail 三行）",
-        "txt",
-        "realtime",
-        _TPL_SN_PASS_FAIL_TXT,
-        _DESC_SN_PASS_FAIL_TXT,
-    ),
-    (
-        "builtin_cycle_simple_txt",
-        "单 cycle 简明文本",
-        "txt",
-        "both",
-        _TPL_CYCLE_SIMPLE_TXT,
-        _DESC_CYCLE_SIMPLE_TXT,
-    ),
-    (
-        "builtin_session_cycles_csv",
-        "session cycle 列表 CSV",
-        "csv",
-        "batch",
-        _TPL_SESSION_CYCLES_CSV,
-        _DESC_SESSION_CYCLES_CSV,
-    ),
-    (
-        "builtin_session_5step_csv",
-        "session 5 步产线 CSV (会话信息+计数器+周期明细)",
-        "csv",
-        "batch",
-        _TPL_SESSION_5STEP_CSV,
-        _DESC_SESSION_5STEP_CSV,
-    ),
+    {
+        "builtin_id": "builtin_sn_pass_fail_txt",
+        "name": "客户 SN.txt（Pass/Fail 三行）",
+        "format": "txt",
+        "scope": "realtime",
+        "content": _TPL_SN_PASS_FAIL_TXT,
+        "description": _DESC_SN_PASS_FAIL_TXT,
+        "default_rule_config": None,
+    },
+    {
+        "builtin_id": "builtin_cycle_simple_txt",
+        "name": "单 cycle 简明文本",
+        "format": "txt",
+        "scope": "both",
+        "content": _TPL_CYCLE_SIMPLE_TXT,
+        "description": _DESC_CYCLE_SIMPLE_TXT,
+        "default_rule_config": None,
+    },
+    {
+        "builtin_id": "builtin_session_cycles_csv",
+        "name": "session cycle 列表 CSV",
+        "format": "csv",
+        "scope": "batch",
+        "content": _TPL_SESSION_CYCLES_CSV,
+        "description": _DESC_SESSION_CYCLES_CSV,
+        "default_rule_config": None,
+    },
+    {
+        "builtin_id": "builtin_session_5step_csv",
+        "name": "session 5 步产线 CSV (会话信息+计数器+周期明细)",
+        "format": "csv",
+        "scope": "batch",
+        "content": _TPL_SESSION_5STEP_CSV,
+        "description": _DESC_SESSION_5STEP_CSV,
+        "default_rule_config": None,
+    },
+    {
+        "builtin_id": "builtin_scanner_bypass_3line_txt",
+        "name": "扫码器旁路三行 TXT (序列号+OK/NG+步骤时长+版本)",
+        "format": "txt",
+        "scope": "realtime",
+        "content": _TPL_SCANNER_BYPASS_3LINE,
+        "description": _DESC_SCANNER_BYPASS_3LINE,
+        "default_rule_config": _DEFAULT_RULE_SCANNER_BYPASS,
+    },
 ]
 
 
@@ -155,18 +247,20 @@ def seed_builtin_templates() -> None:
     inserted = 0
     updated = 0
     with DBSession(engine) as db:
-        for builtin_id, name, fmt, scope, content, description in _BUILTIN_TEMPLATES:
+        for tpl_spec in _BUILTIN_TEMPLATES:
+            builtin_id = tpl_spec["builtin_id"]
             row = db.query(ExportTemplate).filter(
                 ExportTemplate.builtin_id == builtin_id
             ).first()
             if row is None:
                 row = ExportTemplate(
                     builtin_id=builtin_id,
-                    name=name,
-                    format=fmt,
-                    scope=scope,
-                    content=content,
-                    description=description,
+                    name=tpl_spec["name"],
+                    format=tpl_spec["format"],
+                    scope=tpl_spec["scope"],
+                    content=tpl_spec["content"],
+                    description=tpl_spec["description"],
+                    default_rule_config=tpl_spec.get("default_rule_config"),
                     is_system=True,
                 )
                 db.add(row)
@@ -174,14 +268,19 @@ def seed_builtin_templates() -> None:
             else:
                 changed = False
                 # 名字保留用户修改的（避免覆盖客户改的中文名），但允许首次显示我们的默认名
-                if row.format != fmt:
-                    row.format = fmt; changed = True
-                if row.scope != scope:
-                    row.scope = scope; changed = True
-                if row.content != content:
-                    row.content = content; changed = True
-                if row.description != description:
-                    row.description = description; changed = True
+                if row.format != tpl_spec["format"]:
+                    row.format = tpl_spec["format"]; changed = True
+                if row.scope != tpl_spec["scope"]:
+                    row.scope = tpl_spec["scope"]; changed = True
+                if row.content != tpl_spec["content"]:
+                    row.content = tpl_spec["content"]; changed = True
+                if row.description != tpl_spec["description"]:
+                    row.description = tpl_spec["description"]; changed = True
+                # v3.7.2: default_rule_config 总是用预设最新版覆盖
+                # (这是"系统推荐", 客户改了 rule 字段时是改 ExportRealtimeRule, 不是模板)
+                new_drc = tpl_spec.get("default_rule_config")
+                if (row.default_rule_config or None) != new_drc:
+                    row.default_rule_config = new_drc; changed = True
                 if not row.is_system:
                     row.is_system = True; changed = True
                 if changed:

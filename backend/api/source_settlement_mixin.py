@@ -743,6 +743,19 @@ class SettlementMixin:
             is_new_appearance = True
         
         if is_new_appearance:
+            # v3.7.2 (FIX-381): 顺序 / 自定义-基于顺序 模式下,
+            # 仅"勾进序列"的步骤参与周期生命周期 (开 cycle / 入 cycle 累计).
+            # 不在序列里的启用步骤仍可被画检测框、更新 step_last_seen、刷新截图,
+            # 客户能在 SOP 卡片上看到出现, 但不会让周期被判 NG.
+            # 老行为 (E/F 入 cycle 触发"重复步骤: []") 仅在 expected 非空时屏蔽,
+            # 避免序列未配置时把所有步骤都误挡掉.
+            if logic_mode == 'sequential' or (
+                logic_mode == 'custom' and custom_based_on == 'sequential'
+            ):
+                expected_seq = self._get_expected_sequence_labels()
+                if expected_seq and label not in expected_seq:
+                    return
+
             # 检测模式：只有第一步能开启新周期
             if len(self.current_cycle_steps) == 0 and logic_mode == 'detection':
                 first_det_label = self._get_first_detection_step_label()

@@ -127,6 +127,25 @@ def migrate_database():
         ("scanner_devices", "scan_d_line", "JSON"),
         ("scanner_devices", "scan_d_zone", "JSON"),
         ("scanner_devices", "scan_d_gone_confirm_frames", "INTEGER DEFAULT 30"),
+        # v3.7.2 扫码器旁路 — DetectionCycle 加 external_meta 存 cycle_start 锁定的快照
+        ("detection_cycles", "external_meta", "JSON"),
+        # v3.7.2 模板自带"推荐规则配置" (扫码器旁路等预设带默认 rule 字段)
+        ("export_templates", "default_rule_config", "JSON"),
+        # v3.7.2 扫码器旁路 — ExportRealtimeRule 加策略 + 去重重试
+        ("export_realtime_rules", "latest_file_strategy",
+         "VARCHAR(32) DEFAULT 'cycle_start_snapshot'"),
+        ("export_realtime_rules", "latest_file_wait_stable_ms",
+         "INTEGER DEFAULT 100"),
+        ("export_realtime_rules", "latest_file_max_age_sec",
+         "INTEGER DEFAULT 0"),
+        ("export_realtime_rules", "dedupe_same_filename",
+         "BOOLEAN DEFAULT 0"),
+        ("export_realtime_rules", "dedupe_retry_max_sec",
+         "INTEGER DEFAULT 5"),
+        ("export_realtime_rules", "dedupe_retry_interval_ms",
+         "INTEGER DEFAULT 100"),
+        ("export_realtime_rules", "last_used_input_filename",
+         "VARCHAR(256)"),
     ]
     
     from sqlalchemy import inspect

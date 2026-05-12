@@ -19,17 +19,43 @@ v3.5.0 自定义导出 — 实时规则调度器
 """
 from __future__ import annotations
 
+import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from backend.db.database import SessionLocal
 from backend.models.export_models import ExportRealtimeRule, ExportRunLog
+from backend.models.models import DetectionCycle
 from backend.services.export_context import (
     build_cycle_context, build_range_context, build_system_context,
 )
-from backend.services.export_renderer import render_to_file, RenderResult
+from backend.services.export_renderer import (
+    render_to_file, RenderResult,
+    latest_input_filename, latest_input_text,
+)
+from backend.services.export_snapshot import lookup_snapshot_from_cycle
+
+
+# v3.7.2 异步重试线程池. 用于"去重命中重名 → 等下一份新文件"的轮询.
+# 单 worker 串行执行就够 — 不同规则的等待相互独立, 但 MES Hook 一周期通常
+# 也就触发几条规则, 不需要高并发. 用单线程更易调试 + 不抢检测主 GPU.
+_RETRY_EXECUTOR: Optional[ThreadPoolExecutor] = None
+_RETRY_EXECUTOR_LOCK = threading.Lock()
+
+
+def _get_retry_executor() -> ThreadPoolExecutor:
+    global _RETRY_EXECUTOR
+    if _RETRY_EXECUTOR is None:
+        with _RETRY_EXECUTOR_LOCK:
+            if _RETRY_EXECUTOR is None:
+                _RETRY_EXECUTOR = ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix="export-retry"
+                )
+    return _RETRY_EXECUTOR
 
 
 # ============================================================
@@ -199,6 +225,90 @@ def dispatch_session_end_export(db: Session,
 # 单规则执行
 # ============================================================
 
+def _resolve_input_for_rule(db: Session,
+                             rule: ExportRealtimeRule,
+                             cycle_id: Optional[int]) -> Tuple[str, str, str]:
+    """根据 rule.latest_file_strategy 决定本次渲染时用的 input filename 和 text.
+
+    返回 (filename, text, source).
+    source 用于日志: 'snapshot' / 'mtime_stable' / 'mtime' / 'none'.
+
+    cycle_start_snapshot 优先 — cycle.external_meta 有快照就用快照, 没有则
+    fallback 到 mtime (规则后建 / cycle_start 那一刻拍照失败的兜底).
+    """
+    strategy = rule.latest_file_strategy or "cycle_start_snapshot"
+    input_dir = rule.input_dir or ""
+
+    if strategy == "cycle_start_snapshot" and cycle_id:
+        try:
+            cyc = db.query(DetectionCycle).filter(
+                DetectionCycle.id == cycle_id
+            ).first()
+            if cyc is not None:
+                snap = lookup_snapshot_from_cycle(cyc.external_meta, input_dir)
+                if snap and snap.get("filename"):
+                    return (
+                        snap.get("filename") or "",
+                        snap.get("text") or "",
+                        "snapshot",
+                    )
+        except Exception as e:
+            print(f"[ExportRealtime] rule#{rule.id} 读快照异常 cycle#{cycle_id}: {e}",
+                  flush=True)
+        # 走到这意味着没拍到 / 规则后建 / cycle 找不到 — fallback 走 mtime
+
+    # B / fallback: mtime_stable 或 cycle_start_snapshot 兜底
+    wait_ms = int(rule.latest_file_wait_stable_ms or 0)
+    max_age = int(rule.latest_file_max_age_sec or 0)
+    if strategy == "mtime":
+        # A 模式: 不开稳定 / 年龄保险
+        wait_ms = 0
+        max_age = 0
+    filename = latest_input_filename(input_dir, wait_stable_ms=wait_ms,
+                                      max_age_sec=max_age)
+    text = latest_input_text(input_dir, wait_stable_ms=wait_ms,
+                              max_age_sec=max_age) if filename else ""
+    if filename:
+        source = "mtime_stable" if (strategy == "mtime_stable") else "mtime"
+        return filename, text, source
+    return "", "", "none"
+
+
+def _inject_export_ctx(ctx: Dict[str, Any],
+                        rule: ExportRealtimeRule,
+                        locked_filename: str,
+                        locked_text: str) -> None:
+    """把 rule + locked 快照塞进 ctx['export'], 让 helper 模板能拿到.
+
+    对于策略 != cycle_start_snapshot (没有 locked 快照):
+      也要把 wait_stable_ms / max_age_sec 透传到 ctx, 否则模板里
+      {{ latest_input_text() }} fallback 走 mtime 时不会享受到加固保险.
+    """
+    ctx.setdefault("export", {})
+    if not isinstance(ctx["export"], dict):
+        return
+    ctx["export"]["input_dir"] = rule.input_dir or ""
+    ctx["export"]["output_dir"] = rule.output_dir or ""
+    ctx["export"]["rule_name"] = rule.name or ""
+    ctx["export"]["rule_id"] = rule.id
+    # 透传 mtime 策略参数 — 哪怕策略是 mtime, 也认为 wait/max_age 都是 0
+    strategy = rule.latest_file_strategy or "cycle_start_snapshot"
+    if strategy == "mtime":
+        ctx["export"]["wait_stable_ms"] = 0
+        ctx["export"]["max_age_sec"] = 0
+    else:
+        ctx["export"]["wait_stable_ms"] = int(rule.latest_file_wait_stable_ms or 0)
+        ctx["export"]["max_age_sec"] = int(rule.latest_file_max_age_sec or 0)
+    if locked_filename or locked_text:
+        ctx["export"]["locked"] = {
+            "filename": locked_filename or "",
+            "text": locked_text or "",
+        }
+    else:
+        # 没快照: 显式清掉 locked, 防止上一周期的 locked 残留 (理论上不会, 但保险)
+        ctx["export"].pop("locked", None)
+
+
 def _execute_rule(db: Session,
                   rule: ExportRealtimeRule,
                   ctx: Dict[str, Any],
@@ -206,7 +316,7 @@ def _execute_rule(db: Session,
                   cycle_id: Optional[int] = None,
                   session_id: Optional[int] = None,
                   source_type: str = "realtime") -> RenderResult:
-    """执行一条规则：渲染 + 落盘 + 写日志 + 更新统计"""
+    """执行一条规则: 策略分发 + 去重判定 + 同步渲染 / 异步重试调度."""
     t0 = time.perf_counter()
     template = rule.template
     if template is None:
@@ -230,6 +340,37 @@ def _execute_rule(db: Session,
                                session_id=session_id, source_type=source_type)
         return result
 
+    # 解析当前 input filename / text (策略分发)
+    filename, text, src = _resolve_input_for_rule(db, rule, cycle_id)
+
+    # v3.7.2 去重: 同名时丢异步线程池轮询, 主线程立即返回 "queued"
+    if rule.dedupe_same_filename and filename and rule.last_used_input_filename \
+            and filename == rule.last_used_input_filename:
+        print(f"[ExportRealtime] rule#{rule.id} 命中重名 {filename!r}, "
+              f"丢异步线程池等待新文件 (最长 {rule.dedupe_retry_max_sec}s)", flush=True)
+        # 异步线程会用新 db session 重新 lookup → 渲染 → 写日志
+        _get_retry_executor().submit(
+            _async_dedupe_retry,
+            rule_id=rule.id,
+            cycle_id=cycle_id,
+            session_id=session_id,
+            source_type=source_type,
+            initial_filename=filename,
+            max_wait_sec=int(rule.dedupe_retry_max_sec or 5),
+            interval_ms=int(rule.dedupe_retry_interval_ms or 100),
+        )
+        # 主线程立即写一条 "queued" 日志, 不阻塞下一轮 cycle_end
+        result = RenderResult(
+            status="skipped",
+            skip_reason=f"dedupe_queued:{filename}",
+            duration_ms=int((time.perf_counter() - t0) * 1000),
+        )
+        _write_log_from_result(db, rule, result, cycle_id=cycle_id,
+                               session_id=session_id, source_type=source_type)
+        return result
+
+    _inject_export_ctx(ctx, rule, filename, text)
+
     try:
         result = render_to_file(
             template_content=template.content or "",
@@ -252,9 +393,155 @@ def _execute_rule(db: Session,
             duration_ms=int((time.perf_counter() - t0) * 1000),
         )
 
+    # 成功落盘 → 把 filename 写回 rule.last_used_input_filename, 给下一周期去重用
+    if result.status == "success" and filename and rule.dedupe_same_filename:
+        try:
+            rule.last_used_input_filename = filename
+            db.flush()
+        except Exception as e:
+            print(f"[ExportRealtime] 回填 last_used_input_filename 异常 rule#{rule.id}: {e}",
+                  flush=True)
+
     _write_log_from_result(db, rule, result, cycle_id=cycle_id,
                            session_id=session_id, source_type=source_type)
     return result
+
+
+# ============================================================
+# 异步去重重试 — 在独立线程 + 独立 db session 里跑
+# ============================================================
+
+def _async_dedupe_retry(rule_id: int,
+                         cycle_id: Optional[int],
+                         session_id: Optional[int],
+                         source_type: str,
+                         initial_filename: str,
+                         max_wait_sec: int,
+                         interval_ms: int) -> None:
+    """轮询 rule.input_dir, 直到出现 != initial_filename 的新文件, 然后渲染.
+
+    超时 → 写 SKIPPED 日志, status=dedupe_timeout (Q2: 选 b "跳过本规则").
+    线程内自管 db session, 不共享主线程的 session.
+    """
+    db = SessionLocal()
+    deadline = time.time() + max(0, max_wait_sec)
+    poll_interval = max(0.01, interval_ms / 1000.0)
+    try:
+        rule = db.query(ExportRealtimeRule).filter(
+            ExportRealtimeRule.id == rule_id
+        ).first()
+        if rule is None:
+            print(f"[ExportRealtime/AsyncDedupe] rule#{rule_id} 已被删, 终止重试",
+                  flush=True)
+            return
+
+        new_filename = ""
+        new_text = ""
+        while time.time() < deadline:
+            # 不重读快照 — 重试是为了等扫码器写新文件, 我们要拿"当下"的状态, 不是
+            # cycle_start 那一刻锁定的状态.
+            wait_ms = int(rule.latest_file_wait_stable_ms or 0)
+            max_age = int(rule.latest_file_max_age_sec or 0)
+            cand = latest_input_filename(rule.input_dir or "",
+                                          wait_stable_ms=wait_ms,
+                                          max_age_sec=max_age)
+            if cand and cand != initial_filename:
+                new_filename = cand
+                new_text = latest_input_text(rule.input_dir or "",
+                                              wait_stable_ms=wait_ms,
+                                              max_age_sec=max_age)
+                break
+            time.sleep(poll_interval)
+
+        if not new_filename:
+            # 超时 — 跳过本条 (Q2=b)
+            print(f"[ExportRealtime/AsyncDedupe] rule#{rule_id} 重试超时 "
+                  f"({max_wait_sec}s), initial={initial_filename!r}, "
+                  f"按 [跳过本规则] 处理", flush=True)
+            result = RenderResult(
+                status="skipped",
+                skip_reason=f"dedupe_timeout:{initial_filename}",
+                duration_ms=int(max_wait_sec * 1000),
+            )
+            _write_log_from_result(db, rule, result, cycle_id=cycle_id,
+                                   session_id=session_id, source_type=source_type)
+            return
+
+        # 重建 ctx (异步线程不能共享主线程 ctx, 主线程那个可能已经被 GC 改了)
+        try:
+            if cycle_id:
+                ctx = build_cycle_context(db, cycle_id)
+            elif session_id:
+                ctx = build_range_context(db, session_id=session_id)
+            else:
+                ctx = build_system_context(db)
+        except Exception as e:
+            print(f"[ExportRealtime/AsyncDedupe] rule#{rule_id} build_ctx 异常: {e}",
+                  flush=True)
+            result = RenderResult(
+                status="failed",
+                error_msg=f"async_build_ctx: {type(e).__name__}: {e}",
+                duration_ms=int((time.time() - (deadline - max_wait_sec)) * 1000),
+            )
+            _write_log_from_result(db, rule, result, cycle_id=cycle_id,
+                                   session_id=session_id, source_type=source_type)
+            return
+
+        _inject_export_ctx(ctx, rule, new_filename, new_text)
+
+        template = rule.template
+        if template is None:
+            result = RenderResult(
+                status="failed",
+                error_msg=f"模板 ID#{rule.template_id} 不存在",
+            )
+            _write_log_from_result(db, rule, result, cycle_id=cycle_id,
+                                   session_id=session_id, source_type=source_type)
+            return
+
+        fmt = template.format or "txt"
+        t0 = time.perf_counter()
+        try:
+            result = render_to_file(
+                template_content=template.content or "",
+                filename_template=rule.filename_template or "{{ cycle.id }}.txt",
+                output_dir=rule.output_dir,
+                context=ctx,
+                fmt=fmt,
+                input_file_mode=rule.input_file_mode or "none",
+                input_dir=rule.input_dir,
+                overwrite_policy=rule.overwrite_policy or "overwrite",
+                encoding=rule.encoding or "utf-8",
+                newline=rule.newline or "lf",
+                ensure_dir=True,
+                template_file_path=template.template_file_path,
+            )
+        except Exception as e:
+            result = RenderResult(
+                status="failed",
+                error_msg=f"async_render: {type(e).__name__}: {e}\n{traceback.format_exc()}",
+                duration_ms=int((time.perf_counter() - t0) * 1000),
+            )
+
+        if result.status == "success":
+            rule.last_used_input_filename = new_filename
+            db.flush()
+            print(f"[ExportRealtime/AsyncDedupe] rule#{rule_id} 重试成功: "
+                  f"{initial_filename!r} -> {new_filename!r}", flush=True)
+        _write_log_from_result(db, rule, result, cycle_id=cycle_id,
+                               session_id=session_id, source_type=source_type)
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        print(f"[ExportRealtime/AsyncDedupe] rule#{rule_id} 总异常: {e}\n"
+              f"{traceback.format_exc()}", flush=True)
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 # ============================================================

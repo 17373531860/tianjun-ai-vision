@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 from jinja2.sandbox import SandboxedEnvironment
-from jinja2 import StrictUndefined, ChainableUndefined, TemplateError
+from jinja2 import StrictUndefined, ChainableUndefined, TemplateError, pass_context
 
 from backend.core.config import BASE_DIR
 
@@ -115,6 +115,239 @@ def _filter_csv_escape(value):
     return s
 
 
+# ============================================================
+# Jinja2 全局函数 — 外部文件桥接
+# ============================================================
+# v3.7.2 客户场景: 扫码器旁路 — 扫码器无法接入软件, 但会在固定目录里
+# 生成 txt 文件 (空 / 含一行序列号). 客户希望我们读取该目录里最新的
+# txt 文件名 (可用作输出文件命名) 和文件内容 (作为周期结果的首行),
+# 再把"检测结果 + 步骤时长 + 版本号"追加, 输出到客户指定目录.
+#
+# 这两个 helper 注册成 Jinja2 globals, 客户在 ExportTemplate.content
+# 或 ExportRealtimeRule.filename_template 里直接调用即可:
+#
+#   {{ latest_input_filename('D:/扫码器/') }}      -> 'XYZ001.txt'
+#   {{ latest_input_text('D:/扫码器/') }}          -> 'XYZ001'
+#
+# 安全: 任何异常 (目录不存在 / 无权限 / 编码错 / 大文件) 都安静返回 '',
+# 不让一个 helper 把 cycle_end 链路带崩.
+
+def _glob_latest_file(directory: str, pattern: str = "*.txt",
+                       max_age_sec: int = 0) -> Optional[str]:
+    """返回目录里按 mtime 排序最新的文件绝对路径; 没有匹配返回 None.
+
+    max_age_sec > 0 时, 过滤掉 mtime 距现在超过 N 秒的文件
+    (防止"很久没换码, 误取上一轮旧 txt").
+    """
+    if not directory:
+        return None
+    try:
+        import glob
+        if not os.path.isdir(directory):
+            print(f"[ExportRenderer] latest_input: 目录不存在 {directory}", flush=True)
+            return None
+        files = glob.glob(os.path.join(directory, pattern))
+        files = [f for f in files if os.path.isfile(f)]
+        if not files:
+            print(f"[ExportRenderer] latest_input: {directory} 无匹配 {pattern}",
+                  flush=True)
+            return None
+        if max_age_sec and max_age_sec > 0:
+            cutoff = time.time() - max_age_sec
+            files = [f for f in files if os.path.getmtime(f) >= cutoff]
+            if not files:
+                print(f"[ExportRenderer] latest_input: {directory} 内文件均超出 "
+                      f"max_age_sec={max_age_sec}s, 拒绝采用", flush=True)
+                return None
+        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return files[0]
+    except Exception as e:
+        print(f"[ExportRenderer] _glob_latest_file({directory}, {pattern}) 异常: {e}",
+              flush=True)
+        return None
+
+
+def _wait_for_stable(path: str, wait_stable_ms: int = 100) -> bool:
+    """检查文件 size+mtime 在 wait_stable_ms 间隔后是否一致 (即"写完了").
+
+    返回 True 表示稳定, False 表示文件仍在写或读失败.
+    wait_stable_ms <= 0 时直接返回 True (不检查).
+    """
+    if wait_stable_ms <= 0:
+        return True
+    try:
+        st1 = os.stat(path)
+        time.sleep(wait_stable_ms / 1000.0)
+        st2 = os.stat(path)
+        if st1.st_size == st2.st_size and st1.st_mtime == st2.st_mtime:
+            return True
+        print(f"[ExportRenderer] _wait_for_stable({path}) 未稳定: "
+              f"{st1.st_size}/{st1.st_mtime} -> {st2.st_size}/{st2.st_mtime}",
+              flush=True)
+        return False
+    except Exception as e:
+        print(f"[ExportRenderer] _wait_for_stable({path}) 异常: {e}", flush=True)
+        return False
+
+
+def _resolve_dir_from_ctx(ctx) -> str:
+    """从渲染上下文里取 ctx.export.input_dir 兜底.
+
+    @pass_context 装饰过的函数, ctx 是 jinja2.runtime.Context.
+    实时规则路径 (export_realtime._execute_rule) 会塞 'export.input_dir' 进 ctx.
+    """
+    try:
+        export_ns = ctx.get("export") or {}
+        if isinstance(export_ns, dict):
+            return export_ns.get("input_dir") or ""
+        return getattr(export_ns, "input_dir", "") or ""
+    except Exception:
+        return ""
+
+
+def latest_input_filename(directory: str = "", pattern: str = "*.txt",
+                          with_ext: bool = True,
+                          wait_stable_ms: int = 0,
+                          max_age_sec: int = 0) -> str:
+    """取目录里 mtime 最新的文件名 (不含路径).
+
+    Python 直接调用版本.
+    目录为空 / 不存在 / 无匹配 / 超 max_age_sec -> 返回 ''.
+    wait_stable_ms > 0 时, 必须在该毫秒数内文件 size+mtime 不变才采纳.
+    """
+    p = _glob_latest_file(directory, pattern, max_age_sec=max_age_sec)
+    if not p:
+        return ""
+    if wait_stable_ms > 0 and not _wait_for_stable(p, wait_stable_ms):
+        return ""
+    name = os.path.basename(p)
+    if not with_ext:
+        name = os.path.splitext(name)[0]
+    return name
+
+
+def latest_input_text(directory: str = "", pattern: str = "*.txt",
+                      encoding: str = "utf-8", strip: bool = True,
+                      max_bytes: int = 1024 * 1024,
+                      wait_stable_ms: int = 0,
+                      max_age_sec: int = 0) -> str:
+    """读目录里 mtime 最新文件的文本内容.
+
+    Python 直接调用版本.
+    目录为空 / 不存在 / 无匹配 / 超 max_age_sec -> 返回 ''.
+    wait_stable_ms > 0 时, 必须在该毫秒数内文件 size+mtime 不变才采纳.
+    编码错误用 errors='replace' 兜底. 大于 max_bytes 截断.
+    """
+    p = _glob_latest_file(directory, pattern, max_age_sec=max_age_sec)
+    if not p:
+        return ""
+    if wait_stable_ms > 0 and not _wait_for_stable(p, wait_stable_ms):
+        return ""
+    try:
+        size = os.path.getsize(p)
+        read_size = max_bytes if size > max_bytes else size
+        with open(p, "r", encoding=encoding, errors="replace") as f:
+            content = f.read(read_size)
+        if strip:
+            content = content.strip()
+        return content
+    except Exception as e:
+        print(f"[ExportRenderer] latest_input_text({p}) 读取失败: {e}", flush=True)
+        return ""
+
+
+def _resolve_locked_from_ctx(ctx, want: str) -> Optional[str]:
+    """C 策略: 从 ctx 里读 cycle_start 锁定的快照. want='filename'|'text'.
+    返回 None 表示没有锁定 (调用方应 fallback 到 mtime 路径)."""
+    try:
+        export_ns = ctx.get("export") or {}
+        locked = export_ns.get("locked") if isinstance(export_ns, dict) else None
+        if not locked or not isinstance(locked, dict):
+            return None
+        if want == "filename":
+            return locked.get("filename")
+        if want == "text":
+            return locked.get("text")
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_int_from_ctx(ctx, key: str, default: int = 0) -> int:
+    """从 ctx.export.<key> 读 int. 缺失/异常返回 default."""
+    try:
+        export_ns = ctx.get("export") or {}
+        if isinstance(export_ns, dict):
+            v = export_ns.get(key)
+            if v is None:
+                return default
+            return int(v)
+    except Exception:
+        return default
+    return default
+
+
+@pass_context
+def _jinja_latest_input_filename(ctx, directory: str = "",
+                                  pattern: str = "*.txt",
+                                  with_ext: bool = True,
+                                  wait_stable_ms: int = -1,
+                                  max_age_sec: int = -1) -> str:
+    """Jinja2 模板入口 (装饰版).
+
+    解析顺序:
+      1. C 策略 — 若 ctx.export.locked.filename 已被 cycle_start hook 写入, 直接用
+      2. 否则按 ctx.export.input_dir / 显式 directory 走 mtime 路径
+         wait_stable_ms / max_age_sec 默认 -1 表示"未显式传, 走 ctx.export 配置"
+    """
+    locked = _resolve_locked_from_ctx(ctx, "filename")
+    if locked:
+        if not with_ext:
+            return os.path.splitext(locked)[0]
+        return locked
+    if not directory:
+        directory = _resolve_dir_from_ctx(ctx)
+    if wait_stable_ms < 0:
+        wait_stable_ms = _resolve_int_from_ctx(ctx, "wait_stable_ms", 0)
+    if max_age_sec < 0:
+        max_age_sec = _resolve_int_from_ctx(ctx, "max_age_sec", 0)
+    return latest_input_filename(directory, pattern, with_ext,
+                                  wait_stable_ms, max_age_sec)
+
+
+@pass_context
+def _jinja_latest_input_text(ctx, directory: str = "",
+                              pattern: str = "*.txt",
+                              encoding: str = "utf-8",
+                              strip: bool = True,
+                              max_bytes: int = 1024 * 1024,
+                              wait_stable_ms: int = -1,
+                              max_age_sec: int = -1) -> str:
+    """Jinja2 模板入口 (装饰版).
+
+    解析顺序同 _jinja_latest_input_filename: 先看 ctx.export.locked.text, 再 mtime.
+    """
+    locked = _resolve_locked_from_ctx(ctx, "text")
+    if locked is not None:
+        return locked.strip() if strip else locked
+    if not directory:
+        directory = _resolve_dir_from_ctx(ctx)
+    if wait_stable_ms < 0:
+        wait_stable_ms = _resolve_int_from_ctx(ctx, "wait_stable_ms", 0)
+    if max_age_sec < 0:
+        max_age_sec = _resolve_int_from_ctx(ctx, "max_age_sec", 0)
+    return latest_input_text(directory, pattern, encoding, strip, max_bytes,
+                              wait_stable_ms, max_age_sec)
+
+
+def _global_now(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    """渲染时取当前时间, 给 filename_template 配时间戳命名用.
+
+        {{ now('%Y%m%d_%H%M%S') }}.txt  -> 20260513_023045.txt
+    """
+    return datetime.now().strftime(fmt)
+
+
 def _build_env() -> SandboxedEnvironment:
     env = SandboxedEnvironment(
         undefined=_SilentUndefined,
@@ -131,6 +364,12 @@ def _build_env() -> SandboxedEnvironment:
     env.filters["yn"] = _filter_yn
     env.filters["yesno"] = _filter_yesno
     env.filters["csv_esc"] = _filter_csv_escape
+
+    # v3.7.2 扫码器旁路场景: 模板里读外部 txt 文件
+    # 用装饰版入口让模板可以省略 directory 参数 (自动用 ctx.export.input_dir)
+    env.globals["latest_input_filename"] = _jinja_latest_input_filename
+    env.globals["latest_input_text"] = _jinja_latest_input_text
+    env.globals["now"] = _global_now
     return env
 
 

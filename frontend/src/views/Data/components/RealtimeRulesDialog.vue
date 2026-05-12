@@ -209,14 +209,18 @@
         <el-row :gutter="12">
           <el-col :span="12">
             <el-form-item label="绑定模板" required>
-              <el-select v-model="editing.template_id" placeholder="选模板" class="w-full" filterable>
+              <el-select v-model="editing.template_id" placeholder="选模板" class="w-full"
+                          filterable @change="onTemplateChange">
                 <el-option
                   v-for="t in templates"
                   :key="t.id"
-                  :label="`[${t.format}] ${t.name}${t.is_system ? ' (系统)' : ''}`"
+                  :label="`[${t.format}] ${t.name}${t.is_system ? ' (系统)' : ''}${t.default_rule_config ? ' ★' : ''}`"
                   :value="t.id"
                 />
               </el-select>
+              <div v-if="appliedTemplateHint" class="text-xs text-cyan-400 mt-1">
+                {{ appliedTemplateHint }}
+              </div>
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -253,12 +257,84 @@
           </el-radio-group>
         </el-form-item>
 
-        <el-form-item v-if="editing.input_file_mode !== 'none'" label="输入目录" required>
+        <el-form-item v-if="editing.input_file_mode !== 'none' || needsInputDirForStrategy" label="输入目录" :required="editing.input_file_mode !== 'none' || needsInputDirForStrategy">
           <el-input v-model="editing.input_dir" :placeholder="osInputPlaceholder" />
           <div class="text-xs text-gray-500 mt-1">
             实际输入文件路径 = input_dir + 文件名模板渲染结果。客户 SN 流程：扫码 SN12345 → 读 input_dir/SN12345.txt 作模板 → 写入 output_dir/SN12345.txt。
+            <br/>
+            <span class="text-cyan-400">扫码器旁路场景：</span>下方「取文件策略」启用后，input_dir 即为客户扫码器生成 txt 的目录，模板里 <code>&#123;&#123; latest_input_text() &#125;&#125;</code> 会自动读取该目录最新文件。
           </div>
         </el-form-item>
+
+        <!-- v3.7.2 扫码器旁路 — 取「输入目录最新文件」的策略 -->
+        <el-divider content-position="left">
+          <span class="text-xs text-cyan-400">扫码器旁路：取最新文件策略</span>
+        </el-divider>
+
+        <el-form-item label="取文件策略">
+          <el-radio-group v-model="editing.latest_file_strategy">
+            <el-radio value="cycle_start_snapshot">
+              C · 周期开始锁快照（推荐）
+            </el-radio>
+            <el-radio value="mtime_stable">
+              B · 取最新 + 等稳定 + 限制年龄
+            </el-radio>
+            <el-radio value="mtime">
+              A · 直接取 mtime 最新（最简）
+            </el-radio>
+          </el-radio-group>
+          <div class="text-xs text-gray-500 mt-1">
+            <b>C 推荐</b>：周期开始那一刻就锁住扫码 txt 内容写到 DB，结束渲染时直接用，最稳。<br/>
+            <b>B</b>：结束时翻文件夹但加保险（避免读半截 / 限制最大年龄）。<br/>
+            <b>A</b>：结束时翻文件夹按 mtime 最新取，调试用。
+          </div>
+        </el-form-item>
+
+        <el-row v-if="editing.latest_file_strategy !== 'mtime'" :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="稳定等待 (毫秒)">
+              <el-input-number v-model="editing.latest_file_wait_stable_ms"
+                :min="0" :max="5000" :step="50" class="w-full" />
+              <div class="text-xs text-gray-500 mt-1">
+                读两次中间等 N 毫秒，size+mtime 一致才采用。0 = 不等。建议 100ms。
+              </div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="最大年龄 (秒)">
+              <el-input-number v-model="editing.latest_file_max_age_sec"
+                :min="0" :max="3600" :step="5" class="w-full" />
+              <div class="text-xs text-gray-500 mt-1">
+                只接受 mtime 在 N 秒内的文件。0 = 不限。建议 60s。
+              </div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-form-item label="同名去重">
+          <el-switch v-model="editing.dedupe_same_filename" />
+          <span class="text-xs text-gray-500 ml-2">
+            开启后：本轮取到的文件名 = 上一轮用过的 → 异步等待新文件，超时跳过本规则
+          </span>
+        </el-form-item>
+
+        <el-row v-if="editing.dedupe_same_filename" :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="重试最大等待 (秒)">
+              <el-input-number v-model="editing.dedupe_retry_max_sec"
+                :min="1" :max="60" :step="1" class="w-full" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="轮询间隔 (毫秒)">
+              <el-input-number v-model="editing.dedupe_retry_interval_ms"
+                :min="50" :max="2000" :step="50" class="w-full" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-divider />
+
 
         <el-row :gutter="12">
           <el-col :span="12">
@@ -458,7 +534,68 @@ function _emptyRule() {
     overwrite_policy: 'overwrite',
     encoding: 'utf-8',
     newline: 'lf',
+    // v3.7.2 扫码器旁路
+    latest_file_strategy: 'cycle_start_snapshot',
+    latest_file_wait_stable_ms: 100,
+    latest_file_max_age_sec: 0,
+    dedupe_same_filename: false,
+    dedupe_retry_max_sec: 5,
+    dedupe_retry_interval_ms: 100,
   };
+}
+
+// v3.7.2: 取文件策略需要 input_dir 来定位扫码器输入目录
+const needsInputDirForStrategy = computed(() => {
+  return ['cycle_start_snapshot', 'mtime_stable', 'mtime'].includes(
+    editing.latest_file_strategy || ''
+  );
+});
+
+// v3.7.2: 选模板后, 若模板带 default_rule_config 就自动合并到 editing
+// (仅对客户没改过的字段, 避免覆盖客户已经填的内容)
+const appliedTemplateHint = ref('');
+
+// 哪些字段允许"自动从模板的 default_rule_config 填进来"
+// input_dir / output_dir / channel_filter / project_filter / name 这些是场景相关的,
+// 不在自动填范围内 - 客户必须自己填.
+const _AUTO_FILL_KEYS = [
+  'trigger_event', 'input_file_mode', 'filename_template',
+  'encoding', 'newline', 'overwrite_policy',
+  'latest_file_strategy', 'latest_file_wait_stable_ms', 'latest_file_max_age_sec',
+  'dedupe_same_filename', 'dedupe_retry_max_sec', 'dedupe_retry_interval_ms',
+];
+
+// 一个字段算"客户已改过"的判断 — 跟 _emptyRule 的默认值不同 = 已改
+function _isFieldUntouched(key) {
+  const tpl = _emptyRule()[key];
+  const cur = editing[key];
+  return tpl === cur || (tpl == null && cur == null);
+}
+
+function onTemplateChange(tplId) {
+  appliedTemplateHint.value = '';
+  if (!tplId) return;
+  const tpl = templates.value.find(t => t.id === tplId);
+  if (!tpl) return;
+  const cfg = tpl.default_rule_config;
+  if (!cfg || typeof cfg !== 'object') return;
+
+  // 只填客户没改过的字段
+  const applied = [];
+  const skipped = [];
+  for (const k of _AUTO_FILL_KEYS) {
+    if (!(k in cfg)) continue;
+    if (_isFieldUntouched(k)) {
+      editing[k] = cfg[k];
+      applied.push(k);
+    } else {
+      skipped.push(k);
+    }
+  }
+  if (applied.length === 0) return;
+  appliedTemplateHint.value =
+    `★ 已自动应用模板「${tpl.name}」的推荐配置 (${applied.length} 项) ` +
+    (skipped.length ? `, ${skipped.length} 项已被你修改未覆盖` : '');
 }
 
 // ============ 加载 ============

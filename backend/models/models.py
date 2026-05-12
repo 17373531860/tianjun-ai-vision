@@ -220,6 +220,23 @@ class DetectionCycle(Base):
     # MES 工单关联（迁移 v2.7.x 新增）
     order_id = Column(Integer, nullable=True, index=True)
 
+    # v3.7.2 外部桥接元数据 (JSON dict).
+    # 用途: 在 cycle_start 时锁定外部数据快照, cycle_end 渲染时直接用,
+    # 避免"翻文件夹取最新"的所有时序坑.
+    # 现行结构:
+    #   {
+    #     "scan_snapshots": {
+    #       "<规范化的 input_dir>": {
+    #         "filename": "WP001.txt",
+    #         "text": "WP20260513_001",
+    #         "mtime": 1747109700.0,
+    #         "snapshot_at": "2026-05-13T03:15:00+08:00"
+    #       }
+    #     }
+    #   }
+    # 未来可塞: 外部温度/压力/批号等 cycle 开始那一刻的环境数据.
+    external_meta = Column(JSON, nullable=True)
+
     # 关系
     session = relationship("DetectionSession", back_populates="cycles")
     step_records = relationship("StepRecord", back_populates="cycle", cascade="all, delete-orphan")

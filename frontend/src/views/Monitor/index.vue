@@ -1831,7 +1831,7 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollPr
     const cb = clipNormalizedBox(det);
     const x = cb.x * dw + dx, y = cb.y * dh + dy;
     const w = cb.w * dw, h = cb.h * dh;
-    const color = det.is_ng ? '#ef4444' : '#10b981';
+    const color = pickDetColor(det, stepsConfMulti, '#10b981', '#ef4444');
     if (det.mask && Array.isArray(det.mask) && det.mask.length > 2) {
       ctx.beginPath();
       det.mask.forEach((pt, i) => {
@@ -2074,6 +2074,21 @@ const loadPerChannelDetectionSettings = async (sourceConfigs) => {
 // ==================== End Multi-Channel ====================
 
 const buildStreamUrl = () => `${getBackendHost()}/video_feed?t=${Date.now()}`;
+
+// v3.7.2 (FIX-381-B): 单条 detection 的检测框颜色优先级.
+//   1) 副模型 display_color (model_name != 'main' 且后端注入了 display_color)
+//   2) steps_config 里该 label 配置的 box_color
+//   3) 全局 OK / NG 兜底 (来自 systemStore.detection 或 multi 版本的硬编码)
+const pickDetColor = (det, stepsConfig, fallbackOK, fallbackNG) => {
+  if (det && det.model_name && det.model_name !== 'main' && det.display_color) {
+    return det.display_color;
+  }
+  if (stepsConfig && det && det.label) {
+    const cfg = stepsConfig.find(s => s && s.label === det.label);
+    if (cfg && cfg.box_color) return cfg.box_color;
+  }
+  return det && det.is_ng ? fallbackNG : fallbackOK;
+};
 
 const connectStream = () => {
   streamSrc0.value = buildStreamUrl();
@@ -2837,14 +2852,10 @@ const drawDetections = (detections) => {
     const w = cb.w * renderW;
     const h = cb.h * renderH;
     
-    // Step 8 (feat/multi-model-roi-link): 副模型检测框用其独立 display_color,
-    // 主模型仍按 NG/OK 配色. 判断: model_name 存在且不是 'main' 即为副模型.
-    let color;
-    if (det.model_name && det.model_name !== 'main' && det.display_color) {
-      color = det.display_color;
-    } else {
-      color = det.is_ng ? ngColor : boxColor;
-    }
+    // v3.7.2 (FIX-381-B): 颜色优先级 副模型 display_color > 步骤 box_color > OK/NG 兜底.
+    // 历史行为: 仅主模型按 NG/OK 配色, 副模型用其独立 display_color.
+    // 新增: steps_config[*].box_color 可让客户给单个 label 独立配色.
+    const color = pickDetColor(det, stepsConfig, boxColor, ngColor);
 
     // Render polygon mask if available (segmentation model)
     if (det.mask && Array.isArray(det.mask) && det.mask.length > 2) {

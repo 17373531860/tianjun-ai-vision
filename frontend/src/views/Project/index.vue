@@ -437,6 +437,11 @@
                           <span class="cursor-help border-b border-dashed border-gray-500">隐藏标注框</span>
                         </el-tooltip>
                       </th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="该标签的检测框单独配色（任何模式都生效）。留空 = 沿用「显示设置」里的全局 OK/NG 颜色。副模型自带的 display_color 仍优先生效。" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">检测框颜色</span>
+                        </el-tooltip>
+                      </th>
                       <th class="p-2 w-36">
                         <el-tooltip content="归一化多边形区域。设置后：仅当检测框中心落在该区域内时，该步骤/标签才计入 SOP 与周期（顺序、检测、自定义、跟踪模式均生效）。不设置则不限区域。" placement="top">
                           <span class="cursor-help border-b border-dashed border-gray-500">步骤ROI</span>
@@ -560,7 +565,14 @@
                   </thead>
                   <tbody>
                     <tr v-for="step in (activeProject.steps_config || [])" :key="step.id" class="border-b border-slate-700 hover:bg-slate-700/30">
-                      <td class="p-2 font-mono text-cyan-400">{{ step.label }}</td>
+                      <td class="p-2 font-mono text-cyan-400">
+                        <div class="flex items-center gap-1.5 flex-wrap">
+                          <span>{{ step.label }}</span>
+                          <el-tag v-if="step.from_model && step.from_model !== 'main'" size="small" type="warning" effect="plain" class="!h-5 !leading-5">
+                            {{ step.from_model }}
+                          </el-tag>
+                        </div>
+                      </td>
                       <td class="p-2"><el-switch v-model="step.enabled" size="small" @change="(val) => onStepEnabledChange(step, val)" /></td>
                       <td class="p-2">
                         <div class="flex items-center gap-1">
@@ -573,6 +585,9 @@
                       </td>
                       <td class="p-2 text-center">
                         <el-switch v-model="step.hide_in_view" size="small" />
+                      </td>
+                      <td class="p-2 text-center">
+                        <el-color-picker v-model="step.box_color" size="small" :predefine="['#10b981','#ef4444','#f59e0b','#3b82f6','#a78bfa','#ec4899','#06b6d4','#84cc16']" />
                       </td>
                       <td class="p-2 align-top">
                         <div class="flex flex-col gap-1 min-w-[7rem]">
@@ -2242,6 +2257,8 @@ const initProjectDefaults = (project) => {
     if (step.event_required_count === undefined) step.event_required_count = 1;
     if (step.event_gone_frames === undefined) step.event_gone_frames = 8;
     if (step.roi === undefined) step.roi = null;
+    if (step.box_color === undefined) step.box_color = '';
+    if (step.from_model === undefined) step.from_model = 'main';
   });
   if (!project.events_config) {
     project.events_config = [
@@ -2791,11 +2808,57 @@ const selectModel = (model) => {
       const labelHint = slot.available_labels.length
         ? `, 候选 ${slot.available_labels.length} 个类别`
         : '';
-      ElMessage.success(`副模型 [${slot.name}] 已选: ${model.name}${labelHint}`);
+
+      // v3.7.2 (FIX-381-C): 副模型标签也写进 steps_config, 让客户能像主模型一样
+      // 给副模型识别出的 label 单独配 threshold/min_duration/ROI/box_color 等.
+      // 后端按 label 索引一视同仁, 此处只补前端的 UI 入口.
+      // 默认不自动加进 sequence_order — 客户在「逻辑设置」里手动决定是否参与序列.
+      let appended = 0;
+      if (slot.available_labels.length && Array.isArray(activeProject.value?.steps_config)) {
+        const sc = activeProject.value.steps_config;
+        const existing = new Set(sc.map(s => s && s.label).filter(Boolean));
+        const usedIds = sc.map(s => s && s.id).filter(Number.isFinite);
+        let nextId = (usedIds.length ? Math.max(...usedIds) : 0) + 1;
+        for (const lbl of slot.available_labels) {
+          if (!lbl || existing.has(lbl)) continue;
+          sc.push({
+            id: nextId++,
+            label: lbl,
+            displayLabel: lbl,
+            enabled: true,
+            roi: null,
+            threshold: 50,
+            triggerEvent: null,
+            min_frames: null,
+            detection_type: 'dynamic',
+            static_trigger_frames: 30,
+            join_cycle: true,
+            backup_for: null,
+            default_pt: null,
+            strict_order: false,
+            accept_once: false,
+            tracking_gone_confirm_frames: null,
+            tracking_max_lost_seconds: 5.0,
+            tracking_position_lock: false,
+            count_mode: 'track',
+            event_required_count: 1,
+            event_gone_frames: 8,
+            box_color: slot.display_color || '',
+            from_model: slot.name,
+          });
+          appended += 1;
+        }
+      }
+      const appendHint = appended > 0
+        ? `, 已把 ${appended} 个新标签加进「步骤设置」`
+        : (slot.available_labels.length ? ', 标签均已在步骤里' : '');
+      ElMessage.success(
+        `副模型 [${slot.name}] 已选: ${model.name}${labelHint}${appendHint}`
+      );
     }
     extraModelSelectingIdx.value = -1;
     showModelSelect.value = false;
-    return;  // 副模型不动 steps_config / 主格式
+    return;
   }
 
   activeProject.value.default_model_id = model.id;
@@ -2833,7 +2896,9 @@ const selectModel = (model) => {
       tracking_position_lock: false,
       count_mode: 'track',
       event_required_count: 1,
-      event_gone_frames: 8
+      event_gone_frames: 8,
+      box_color: '',
+      from_model: 'main',
     }));
     
     // 自动初始化顺序

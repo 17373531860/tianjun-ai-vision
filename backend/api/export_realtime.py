@@ -35,6 +35,9 @@ router = APIRouter()
 # Pydantic Schema
 # ============================================================
 
+_LATEST_FILE_STRATEGY_PATTERN = "^(mtime|mtime_stable|cycle_start_snapshot)$"
+
+
 class _RuleBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     enabled: bool = True
@@ -50,6 +53,15 @@ class _RuleBase(BaseModel):
     overwrite_policy: str = Field("overwrite", pattern="^(overwrite|rename|skip)$")
     encoding: str = Field("utf-8", pattern="^(utf-8|utf-8-sig|gbk|ascii)$")
     newline: str = Field("lf", pattern="^(lf|crlf)$")
+    # v3.7.2 扫码器旁路 — 取最新文件策略 + 去重重试
+    latest_file_strategy: str = Field(
+        "cycle_start_snapshot", pattern=_LATEST_FILE_STRATEGY_PATTERN,
+    )
+    latest_file_wait_stable_ms: int = Field(100, ge=0, le=10000)
+    latest_file_max_age_sec: int = Field(0, ge=0, le=86400)
+    dedupe_same_filename: bool = False
+    dedupe_retry_max_sec: int = Field(5, ge=1, le=300)
+    dedupe_retry_interval_ms: int = Field(100, ge=10, le=5000)
 
 
 class RuleCreate(_RuleBase):
@@ -71,6 +83,14 @@ class RuleUpdate(BaseModel):
     overwrite_policy: Optional[str] = Field(None, pattern="^(overwrite|rename|skip)$")
     encoding: Optional[str] = Field(None, pattern="^(utf-8|utf-8-sig|gbk|ascii)$")
     newline: Optional[str] = Field(None, pattern="^(lf|crlf)$")
+    latest_file_strategy: Optional[str] = Field(
+        None, pattern=_LATEST_FILE_STRATEGY_PATTERN,
+    )
+    latest_file_wait_stable_ms: Optional[int] = Field(None, ge=0, le=10000)
+    latest_file_max_age_sec: Optional[int] = Field(None, ge=0, le=86400)
+    dedupe_same_filename: Optional[bool] = None
+    dedupe_retry_max_sec: Optional[int] = Field(None, ge=1, le=300)
+    dedupe_retry_interval_ms: Optional[int] = Field(None, ge=10, le=5000)
 
 
 class TestRunRequest(BaseModel):
@@ -101,6 +121,13 @@ def _serialize_rule(r: ExportRealtimeRule, *, with_template: bool = False) -> Di
         "overwrite_policy": r.overwrite_policy,
         "encoding": r.encoding,
         "newline": r.newline,
+        "latest_file_strategy": r.latest_file_strategy or "cycle_start_snapshot",
+        "latest_file_wait_stable_ms": r.latest_file_wait_stable_ms or 0,
+        "latest_file_max_age_sec": r.latest_file_max_age_sec or 0,
+        "dedupe_same_filename": bool(r.dedupe_same_filename),
+        "dedupe_retry_max_sec": r.dedupe_retry_max_sec or 5,
+        "dedupe_retry_interval_ms": r.dedupe_retry_interval_ms or 100,
+        "last_used_input_filename": r.last_used_input_filename,
         "last_run_time": r.last_run_time.isoformat() if r.last_run_time else None,
         "last_run_status": r.last_run_status,
         "last_run_error": r.last_run_error,

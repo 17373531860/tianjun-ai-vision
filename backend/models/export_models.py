@@ -64,6 +64,19 @@ class ExportTemplate(Base):
     # 用于代码侧引用（如 4 个按钮根据 builtin_id 找对应模板）
     builtin_id = Column(String(64), nullable=True, unique=True, index=True)
 
+    # v3.7.2 模板自带"推荐规则配置".
+    # 用法: 选中此模板新建 ExportRealtimeRule 时, 前端自动用此字典填空字段
+    # (input_dir / output_dir 这些场地相关的不在里面, 客户自己填).
+    # 适用例: 扫码器旁路预设带上
+    #   {"trigger_event": "cycle_end", "input_file_mode": "none",
+    #    "filename_template": "{{ latest_input_filename() }}",
+    #    "newline": "crlf", "latest_file_strategy": "cycle_start_snapshot",
+    #    "latest_file_wait_stable_ms": 100, "latest_file_max_age_sec": 60,
+    #    ...}
+    # 客户复制模板成自建模板时, 这份 JSON 跟着拷过去 (default_rule_config
+    # 不绑 builtin_id, 只是模板的一部分属性).
+    default_rule_config = Column(JSON, nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -122,6 +135,31 @@ class ExportRealtimeRule(Base):
 
     # 换行符: lf | crlf
     newline = Column(String(8), nullable=False, default="lf")
+
+    # v3.7.2 扫码器旁路 — 取「输入目录最新文件」的策略:
+    #   mtime                 : 每次触发现去翻文件夹按 mtime 排序 (最简单, 最不稳)
+    #   mtime_stable          : 同 mtime 但加 wait_stable_ms / max_age_sec 保险
+    #   cycle_start_snapshot  : 周期开始那一刻就锁定快照写到 DetectionCycle.external_meta,
+    #                           cycle_end 直接读快照 (最稳, 推荐, 默认)
+    latest_file_strategy = Column(String(32), nullable=False,
+                                  default="cycle_start_snapshot")
+
+    # mtime_stable 策略参数:
+    #   wait_stable_ms: 读两次中间等待毫秒数, 两次 size+mtime 一致才认为稳定. 0 = 不等
+    #   max_age_sec:    只接受 mtime 在最近 N 秒内的文件. 0 = 不限制
+    latest_file_wait_stable_ms = Column(Integer, nullable=False, default=100)
+    latest_file_max_age_sec = Column(Integer, nullable=False, default=0)
+
+    # v3.7.2 同名去重 — 防止两个周期撞同一个输入文件名导致输出覆盖.
+    #   dedupe_same_filename:    开关, 默认 false
+    #   dedupe_retry_max_sec:    重试最大等待秒数 (默认 5)
+    #   dedupe_retry_interval_ms: 轮询间隔毫秒 (默认 100)
+    #   last_used_input_filename: 上一次成功用过的输入文件名 (运行时回填)
+    #   超时后 → 按 Q2 选择 b: 跳过本规则 (写 SKIPPED 日志, 不写文件)
+    dedupe_same_filename = Column(Boolean, nullable=False, default=False)
+    dedupe_retry_max_sec = Column(Integer, nullable=False, default=5)
+    dedupe_retry_interval_ms = Column(Integer, nullable=False, default=100)
+    last_used_input_filename = Column(String(256), nullable=True)
 
     # 最近一次运行状态
     last_run_time = Column(DateTime(timezone=True), nullable=True)

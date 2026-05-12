@@ -1146,7 +1146,21 @@ class MESHookManager:
 
     def _handle_cycle_start(self, db, channel_id: int, cycle_id: int,
                             session_id: int, project_id: int):
-        """Cycle 开始: 关联待检工件"""
+        """Cycle 开始: 关联待检工件 + (v3.7.2) 锁定扫码器旁路文件快照."""
+        # v3.7.2 扫码器旁路 — C 策略 (cycle_start_snapshot):
+        # 周期开始那一刻就把所有"cycle_start_snapshot"规则的 input_dir 各拍一份照,
+        # 写到 DetectionCycle.external_meta. cycle_end 渲染时直接读, 不再翻文件夹.
+        # 失败不抛 — 主流程 (扫码 → 工件绑定) 不能被这一步影响.
+        try:
+            from backend.services.export_snapshot import snapshot_for_cycle_start
+            snapshot_for_cycle_start(
+                db, channel_id=channel_id, cycle_id=cycle_id,
+                project_id=project_id,
+            )
+        except Exception as e:
+            print(f"[MES] cycle_start snapshot 异常 ch{channel_id} "
+                  f"cycle#{cycle_id}: {e}", flush=True)
+
         wp_id = self._pending_workpiece.pop(channel_id, None)
         if not wp_id:
             return
