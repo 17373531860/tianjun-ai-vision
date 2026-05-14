@@ -48,3 +48,10 @@ psutil>=5.9.0
 python-docx>=1.0.0       # docx 路线 A 自动样式渲染
 docxtpl>=0.16.0          # docx 路线 B 占位符模板渲染（基于 python-docx + jinja2）
 openpyxl>=3.1.0          # xlsx 渲染器
+
+# v3.7.0 插件系统 - RSA-PSS-SHA256 签名 + HMAC-SHA256 客户码绑定
+# v3.7.3 (CI 债): 之前漏了这一行, CI 的 Virtual Functional Tests 连挂 5 个版本
+# (test_plugin_signing / test_plugin_install_api 全炸 ModuleNotFoundError).
+# 客户机打包时 conda env 里有 cryptography (作为别的 deps 拉过来的), 所以客户机
+# 不影响, 只是 CI runner 跑 pytest 时炸. 现在显式声明.
+cryptography>=42.0.0,<46
