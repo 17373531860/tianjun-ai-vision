@@ -52,6 +52,14 @@ class StreamingMixin:
 
         v2.7.15 (C): try/finally + 异常捕获, 客户端断开时立即释放资源,
         并维护 _mjpeg_active_streams 计数方便诊断"连接是否累积"。
+
+        v3.7.x: "新连接上位, 旧连接让位" 防僵尸连接累积。
+        Chrome keep-alive 不会立即关闭旧 MJPEG socket, 旧 generator 仍
+        会 hold 住 frame_lock + thread-pool worker, 导致新连接拿不到锁
+        几秒, 浏览器 <img> 收不到首帧 -> 黑屏。修复: 每条 generator 分配
+        connection_id, 记录该 channel 最新 id, 旧 generator 每次 yield
+        前检测自己是否过期, 是则主动 break 释放资源。同一 channel 同时
+        只保留 1 条 generator, 切换 Monitor / 路由刷新都不会累积。
         """
         from backend.api.channel_manager import channel_manager
         target_interval = 1.0 / max(self.target_stream_fps, 1)
@@ -60,16 +68,26 @@ class StreamingMixin:
         idle_count = 0
         max_idle = 600
         last_seq = -1
+        ch_label = getattr(self, 'channel_index', '?')
 
-        # v2.7.15 (C): 活跃 MJPEG 连接计数
+        # v3.7.x 分配 connection id, 同 channel 后来者上位
+        self._mjpeg_next_conn_id = getattr(self, '_mjpeg_next_conn_id', 0) + 1
+        my_conn_id = self._mjpeg_next_conn_id
+        self._mjpeg_active_conn_id = my_conn_id
+
         try:
             self._mjpeg_active_streams = getattr(self, '_mjpeg_active_streams', 0) + 1
-            print(f"[MJPEG] 新连接 ch={getattr(self, 'channel_index', '?')}, 活跃连接={self._mjpeg_active_streams}")
+            print(f"[MJPEG] 新连接 #{my_conn_id} ch={ch_label}, 活跃连接={self._mjpeg_active_streams}")
         except Exception:
             pass
 
         try:
             while True:
+                # 旧连接让位: 同 channel 有更新的 id 进来 -> 主动退出
+                if getattr(self, '_mjpeg_active_conn_id', my_conn_id) != my_conn_id:
+                    print(f"[MJPEG] 连接 #{my_conn_id} ch={ch_label} 让位给 #{self._mjpeg_active_conn_id}, 主动退出")
+                    break
+
                 if self.is_running:
                     idle_count = 0
                     frame = None
@@ -113,11 +131,11 @@ class StreamingMixin:
             # 客户端断开, 正常退出
             pass
         except Exception as e:
-            print(f"[MJPEG] generator 异常退出 ch={getattr(self, 'channel_index', '?')}: {e}")
+            print(f"[MJPEG] generator #{my_conn_id} 异常退出 ch={ch_label}: {e}")
         finally:
             try:
                 self._mjpeg_active_streams = max(0, getattr(self, '_mjpeg_active_streams', 1) - 1)
-                print(f"[MJPEG] 连接关闭 ch={getattr(self, 'channel_index', '?')}, 活跃连接={self._mjpeg_active_streams}")
+                print(f"[MJPEG] 连接 #{my_conn_id} 关闭 ch={ch_label}, 活跃连接={self._mjpeg_active_streams}")
             except Exception:
                 pass
 

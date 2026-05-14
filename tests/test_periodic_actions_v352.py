@@ -423,3 +423,118 @@ class TestRunOnStart:
 
         vsm._run_periodic_actions_on_start()
         assert vsm._periodic_counters["pa_test_7"] == 0
+
+
+class TestManualResetPeriodicCounter:
+    """v3.7.3: Monitor"重置"按钮 → reset_periodic_counter(rule_id) 行为."""
+
+    def _rule(self, rid="pa_manual", interval=10):
+        return {
+            "id": rid,
+            "name": rid,
+            "enabled": True,
+            "trigger_step_ids": ["s_E"],
+            "interval": interval,
+            "count_basis": "all",
+            "reset_policy": "always",
+            "due_warning_event_id": 300,
+            "overdue_event_id": 301,
+            "overdue_repeat": "every_cycle",
+            "run_on_start": False,
+        }
+
+    def test_reset_single_zeros_only_target(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "backend.api.source_periodic_actions_mixin.DATA_DIR", str(tmp_path)
+        )
+        vsm = VideoSourceManager(channel_id=0)
+        vsm.project_config = {
+            "id": 99100,
+            "steps_config": [
+                {"id": "s_A", "label": "A", "enabled": True},
+                {"id": "s_E", "label": "E", "enabled": True},
+            ],
+            "events_config": [_due_event(eid=300), _due_event(eid=301)],
+            "pipeline_config": {
+                "periodic_actions": [self._rule("pa_a"), self._rule("pa_b")],
+            },
+        }
+        vsm.counters = {"合格总数": 0, "不良总数": 0, "总产量": 0, "NG步骤": 0}
+        vsm._apply_periodic_actions(vsm.project_config)
+
+        vsm._periodic_counters["pa_a"] = 7
+        vsm._periodic_counters["pa_b"] = 4
+        # 模拟有一条规则已在 overdue cooldown 中
+        for r in vsm._periodic_actions:
+            if r["id"] == "pa_a":
+                r["last_overdue_count"] = 15
+
+        result = vsm.reset_periodic_counter("pa_a")
+        assert result == {"reset": ["pa_a"]}
+        assert vsm._periodic_counters["pa_a"] == 0
+        assert vsm._periodic_counters["pa_b"] == 4  # 未动
+        pa_a_rule = next(r for r in vsm._periodic_actions if r["id"] == "pa_a")
+        assert pa_a_rule["last_overdue_count"] == -1  # cooldown 已解
+
+    def test_reset_all_when_rule_id_none(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "backend.api.source_periodic_actions_mixin.DATA_DIR", str(tmp_path)
+        )
+        vsm = VideoSourceManager(channel_id=0)
+        vsm.project_config = {
+            "id": 99101,
+            "steps_config": [{"id": "s_E", "label": "E", "enabled": True}],
+            "events_config": [_due_event(eid=300), _due_event(eid=301)],
+            "pipeline_config": {
+                "periodic_actions": [self._rule("pa_x"), self._rule("pa_y")],
+            },
+        }
+        vsm.counters = {"合格总数": 0, "不良总数": 0, "总产量": 0, "NG步骤": 0}
+        vsm._apply_periodic_actions(vsm.project_config)
+
+        vsm._periodic_counters["pa_x"] = 11
+        vsm._periodic_counters["pa_y"] = 99
+
+        result = vsm.reset_periodic_counter(None)
+        assert set(result["reset"]) == {"pa_x", "pa_y"}
+        assert vsm._periodic_counters == {"pa_x": 0, "pa_y": 0}
+
+    def test_reset_unknown_rule_noop(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "backend.api.source_periodic_actions_mixin.DATA_DIR", str(tmp_path)
+        )
+        vsm = _make_vsm_with_rule(self._rule("pa_real"))
+        vsm._periodic_counters["pa_real"] = 3
+
+        result = vsm.reset_periodic_counter("pa_ghost")
+        assert result == {"reset": []}
+        assert vsm._periodic_counters["pa_real"] == 3  # 未动
+
+    def test_reset_persists_to_disk(self, tmp_path, monkeypatch):
+        import json
+        monkeypatch.setattr(
+            "backend.api.source_periodic_actions_mixin.DATA_DIR", str(tmp_path)
+        )
+        vsm = _make_vsm_with_rule(self._rule("pa_disk"))
+        vsm._periodic_counters["pa_disk"] = 8
+        vsm._persist_periodic_counters()
+
+        vsm.reset_periodic_counter("pa_disk")
+        path = vsm._periodic_counter_path(vsm.project_config["id"])
+        with open(path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        assert saved["pa_disk"] == 0
+
+    def test_reset_clears_run_on_start_pending(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "backend.api.source_periodic_actions_mixin.DATA_DIR", str(tmp_path)
+        )
+        rule = self._rule("pa_rs")
+        rule["run_on_start"] = True
+        vsm = _make_vsm_with_rule(rule, events=[_due_event(eid=300)])
+        vsm._run_periodic_actions_on_start()
+        assert "pa_rs" in vsm._run_on_start_pending
+
+        vsm.reset_periodic_counter("pa_rs")
+        assert "pa_rs" not in vsm._run_on_start_pending
+        assert vsm._periodic_counters["pa_rs"] == 0

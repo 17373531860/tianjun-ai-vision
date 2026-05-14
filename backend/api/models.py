@@ -8,6 +8,7 @@ import json
 import threading
 import queue
 import traceback
+from datetime import datetime, timedelta
 from backend.db.database import get_db, SessionLocal
 from backend.models.models import Model, ModelConversion, Project
 from backend.schemas.model import (
@@ -224,6 +225,9 @@ def _conversion_worker():
             if not conv or conv.status != "queued":
                 continue
             conv.status = "converting"
+            # 刷新 created_at = "本次开始转换时刻"，避免复用历史记录时
+            # reap 把刚开始的转换误判为僵死（_reap_stale_conversions 用 created_at 算超时）
+            conv.created_at = datetime.utcnow()
             db.commit()
 
             from ultralytics import YOLO
@@ -340,6 +344,53 @@ def _ensure_worker():
         if _convert_thread is None or not _convert_thread.is_alive():
             _convert_thread = threading.Thread(target=_conversion_worker, daemon=True)
             _convert_thread.start()
+
+
+# ---------------------------------------------------------------------------
+# 僵死任务懒回收
+# ---------------------------------------------------------------------------
+# worker 内 model.export(...) 跑在 daemon 子线程，主 worker t.join(timeout=600)
+# 在 ultralytics/TRT 的 C 扩展里阻塞 GIL 时不一定按时返回，导致 status 永远卡
+# 在 'converting'，前端转圈无穷无尽。
+# 这里在所有"查/再提交"入口做懒回收：超过阈值的 converting 视为僵死，
+# 直接落库改 failed,worker 真线程是否还活着无所谓（反正进程重启就清掉）。
+# 阈值 = worker 硬超时 600s + 5 分钟安全缓冲。
+STALE_CONVERSION_TIMEOUT_SEC = 900
+
+
+def _reap_stale_conversions(db: Session, convs):
+    """对单个或一组 ModelConversion 做僵死回收;就地修改并 commit。"""
+    if convs is None:
+        return convs
+    single = not isinstance(convs, (list, tuple))
+    items = [convs] if single else list(convs)
+
+    now = datetime.utcnow()
+    threshold = timedelta(seconds=STALE_CONVERSION_TIMEOUT_SEC)
+    dirty = False
+    for c in items:
+        if c.status != "converting" or c.created_at is None:
+            continue
+        if (now - c.created_at) > threshold:
+            c.status = "failed"
+            c.error_msg = (
+                f"转换线程超时无响应（>{STALE_CONVERSION_TIMEOUT_SEC // 60} 分钟），"
+                f"已自动标记失败。请重新发起转换。"
+            )
+            dirty = True
+            print(
+                f"[ModelConvert] reap 僵死任务 conv_id={c.id} "
+                f"format={c.format} created_at={c.created_at}",
+                flush=True,
+            )
+    if dirty:
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"[ModelConvert] reap commit 失败: {e}", flush=True)
+
+    return items[0] if single else items
 
 def get_file_extension(filename: str) -> str:
     return os.path.splitext(filename)[1].lower()
@@ -483,6 +534,7 @@ def get_conversion_status(conv_id: int, db: Session = Depends(get_db)):
     conv = db.query(ModelConversion).filter(ModelConversion.id == conv_id).first()
     if not conv:
         raise HTTPException(status_code=404, detail="Conversion not found")
+    _reap_stale_conversions(db, conv)
     return conv
 
 
@@ -713,6 +765,8 @@ def convert_model(model_id: int, req: ConversionRequest, db: Session = Depends(g
         ModelConversion.gpu_arch == lookup_arch,
     ).first()
     if existing:
+        # 用户主动再次点转换时，先回收僵死的 converting，避免被旧记录卡住
+        _reap_stale_conversions(db, existing)
         if existing.status == "ready":
             if existing.file_path and os.path.exists(existing.file_path):
                 return existing
@@ -750,9 +804,11 @@ def convert_model(model_id: int, req: ConversionRequest, db: Session = Depends(g
 @router.get("/{model_id}/conversions", response_model=List[ConversionResponse])
 def get_model_conversions(model_id: int, db: Session = Depends(get_db)):
     """列出该模型的所有已有转换版本"""
-    return db.query(ModelConversion).filter(
+    convs = db.query(ModelConversion).filter(
         ModelConversion.model_id == model_id
     ).order_by(ModelConversion.created_at.desc()).all()
+    _reap_stale_conversions(db, convs)
+    return convs
 
 
 @router.post("/{model_id}/resolve-path")

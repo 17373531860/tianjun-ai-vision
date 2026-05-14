@@ -237,6 +237,16 @@
                               class="text-gray-500 ml-1">v{{ slot.model_version }}</span>
                           </span>
                           <span v-else class="text-sm text-gray-500 flex-1">未选择</span>
+                          <!-- v3.7.x: 副模型格式 tag + 切换格式按钮 (与主模型对齐) -->
+                          <el-tag v-if="slot.model_id"
+                            size="small"
+                            :type="(slot.model_format || 'pytorch_fp32') === 'pytorch_fp32' ? 'info' : 'success'">
+                            {{ getFormatDisplayName(slot.model_format || 'pytorch_fp32') }}
+                          </el-tag>
+                          <el-button v-if="slot.model_id" size="small" plain
+                            @click="openExtraModelFormatSelect(idx)">
+                            切换格式
+                          </el-button>
                           <el-button size="small" plain @click="openExtraModelSelect(idx)">
                             选择
                           </el-button>
@@ -250,30 +260,83 @@
                           <el-icon><Delete /></el-icon>
                         </el-button>
                       </div>
-                      <!-- 行 2: conf / iou / priority -->
+                      <!-- 行 2: 置信度 (常用, 多数客户只调这个) + 高级参数折叠按钮 -->
                       <div class="flex items-center gap-3 flex-wrap">
                         <div class="flex items-center gap-2">
                           <span class="text-xs text-gray-400">置信度</span>
                           <el-input-number v-model="slot.conf" :min="0.05" :max="1"
                             :step="0.05" :precision="2" size="small"
                             style="width: 7rem" />
+                          <el-tooltip placement="top" effect="dark">
+                            <template #content>
+                              模型对一个识别有多确定. 0.25 = 至少 25% 把握才认.<br/>
+                              真正卡 OK/NG 的是"步骤详情"里每个 label 的 threshold(%),<br/>
+                              这里只是模型层的"地板", 一般留 0.25 即可.
+                            </template>
+                            <el-icon class="text-gray-500 cursor-help"><QuestionFilled /></el-icon>
+                          </el-tooltip>
                         </div>
+                        <el-button size="small" text type="info" @click="slot._adv_open = !slot._adv_open">
+                          高级参数 {{ slot._adv_open ? '▴' : '▾' }}
+                        </el-button>
+                      </div>
+                      <!-- 行 2.5: 高级参数 (IoU / 优先级 / FP16), 默认折叠 -->
+                      <div v-show="slot._adv_open"
+                        class="flex items-center gap-3 flex-wrap bg-slate-900/40 rounded p-2 border border-slate-700/50">
                         <div class="flex items-center gap-2">
                           <span class="text-xs text-gray-400">IoU</span>
                           <el-input-number v-model="slot.iou" :min="0.1" :max="1"
                             :step="0.05" :precision="2" size="small"
                             style="width: 7rem" />
+                          <el-tooltip placement="top" effect="dark">
+                            <template #content>
+                              NMS 阈值: 同一个东西被模型框了好几次时, 重叠超过此比例算同一个,<br/>
+                              合并保留最好的. 0.45 = 重叠 45% 以上合并.<br/>
+                              · 数字大 → 不积极合并, 可能同物多框<br/>
+                              · 数字小 → 积极合并, 不同物体可能被错合<br/>
+                              一般留 0.45, 出现重复框/漏框再调.
+                            </template>
+                            <el-icon class="text-gray-500 cursor-help"><QuestionFilled /></el-icon>
+                          </el-tooltip>
                         </div>
                         <div class="flex items-center gap-2">
                           <span class="text-xs text-gray-400">优先级</span>
                           <el-input-number v-model="slot.priority" :min="0" :max="100"
                             :step="10" :precision="0" size="small"
                             style="width: 7rem" />
+                          <el-tooltip placement="top" effect="dark">
+                            <template #content>
+                              多个模型同时跑时谁先抢 GPU. 主模型默认 100, 副模型默认 50.<br/>
+                              副模型多到 GPU 抢不过来时才调; 单副模型留 50 不动.
+                            </template>
+                            <el-icon class="text-gray-500 cursor-help"><QuestionFilled /></el-icon>
+                          </el-tooltip>
                         </div>
+                        <!-- v3.7.x: FP16 只对 .pt 推理生效. 选了 TensorRT/ONNX 后,
+                             精度由编译文件决定, 此开关被后端无视 -> UX 上 disable. -->
                         <div class="flex items-center gap-2">
-                          <el-checkbox v-model="slot.use_half" class="!text-gray-300">
-                            FP16
-                          </el-checkbox>
+                          <el-tooltip placement="top" effect="dark"
+                            :disabled="(slot.model_format || 'pytorch_fp32') === 'pytorch_fp32'">
+                            <template #content>
+                              当前格式 [{{ getFormatDisplayName(slot.model_format || 'pytorch_fp32') }}]
+                              已固化精度, 这个开关无效.<br/>
+                              要 FP16 推理请用上面的 "切换格式".
+                            </template>
+                            <span>
+                              <el-checkbox v-model="slot.use_half" class="!text-gray-300"
+                                :disabled="(slot.model_format || 'pytorch_fp32') !== 'pytorch_fp32'">
+                                FP16
+                              </el-checkbox>
+                            </span>
+                          </el-tooltip>
+                          <el-tooltip placement="top" effect="dark">
+                            <template #content>
+                              "半精度推理": 用一半小数位算, 速度快/省显存, 精度稍降.<br/>
+                              仅对 .pt (PyTorch FP32) 模型生效.<br/>
+                              选了 TensorRT/PyTorch FP16 后精度已固化, 此开关失效.
+                            </template>
+                            <el-icon class="text-gray-500 cursor-help"><QuestionFilled /></el-icon>
+                          </el-tooltip>
                         </div>
                       </div>
                       <!-- 行 3: schedule -->
@@ -1696,7 +1759,11 @@
     </el-dialog>
 
     <!-- Format Select Dialog -->
-    <el-dialog v-model="showFormatSelect" title="选择推理格式" width="640px" :close-on-click-modal="!convertingFormat" @close="cancelFormatSelect">
+    <el-dialog v-model="showFormatSelect"
+      :title="formatSelectingExtraIdx !== null
+        ? `选择推理格式 [副模型: ${activeProject?.extra_models?.[formatSelectingExtraIdx]?.name || ''}]`
+        : '选择推理格式 [主模型]'"
+      width="640px" :close-on-click-modal="!convertingFormat" @close="cancelFormatSelect">
       <div v-if="convertingFormat" class="text-center py-12">
         <el-icon class="is-loading text-4xl text-blue-400 mb-4"><Loading /></el-icon>
         <p class="text-white text-lg mb-2">正在转换为 {{ getFormatDisplayName(convertingFormat) }}...</p>
@@ -1717,7 +1784,9 @@
             fmt.available
               ? 'cursor-pointer hover:border-blue-500 bg-slate-800 border-slate-700'
               : 'cursor-not-allowed opacity-50 bg-slate-900 border-slate-800',
-            (activeProject.model_format || 'pytorch_fp32') === fmt.key
+            (formatSelectingExtraIdx !== null
+              ? (activeProject?.extra_models?.[formatSelectingExtraIdx]?.model_format || 'pytorch_fp32')
+              : (activeProject.model_format || 'pytorch_fp32')) === fmt.key
               ? 'border-blue-500 bg-slate-700'
               : ''
           ]">
@@ -1729,7 +1798,9 @@
             <div class="flex gap-1.5">
               <el-tag v-if="fmt.tag" size="small" :type="fmt.tag === '最快' ? 'success' : fmt.tag === '实验性' ? 'warning' : 'info'">{{ fmt.tag }}</el-tag>
               <el-tag v-if="recommendedFormat === fmt.key" size="small" type="success">推荐</el-tag>
-              <el-tag v-if="(activeProject.model_format || 'pytorch_fp32') === fmt.key" size="small">当前</el-tag>
+              <el-tag v-if="(formatSelectingExtraIdx !== null
+                ? (activeProject?.extra_models?.[formatSelectingExtraIdx]?.model_format || 'pytorch_fp32')
+                : (activeProject.model_format || 'pytorch_fp32')) === fmt.key" size="small">当前</el-tag>
             </div>
           </div>
           <p class="text-xs text-gray-400 mt-1">{{ fmt.description }}</p>
@@ -1773,7 +1844,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
-import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, Loading, Warning } from '@element-plus/icons-vue';
+import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, Loading, Warning, QuestionFilled } from '@element-plus/icons-vue';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -1789,6 +1860,9 @@ const activeTab = ref('basic');
 const createDialogVisible = ref(false);
 const showModelSelect = ref(false);
 const showFormatSelect = ref(false);
+// v3.7.x: null=主模型走 openFormatSelect; 数字=副 slot idx 走 openExtraModelFormatSelect.
+// selectFormat / startConversionPolling 据此决定: 调哪个 model_id 转换, 写回哪个 .model_format.
+const formatSelectingExtraIdx = ref(null);
 const formatList = ref([]);
 const recommendedFormat = ref('pytorch_fp32');
 const gpuName = ref('');
@@ -2260,6 +2334,50 @@ const initProjectDefaults = (project) => {
     if (step.box_color === undefined) step.box_color = '';
     if (step.from_model === undefined) step.from_model = 'main';
   });
+
+  // v3.7.x (FIX): 清理孤儿步骤 — from_model 既不是 'main' 也对不上当前 extra_models slot.
+  // 来源: 老版本 removeExtraModel 只 splice slot 不清 steps_config, 留下"幽灵标签".
+  // 后果: 步骤详情显示已删除的副模型 label, 还可能因为 sequence_order 残留引用导致
+  // "压墨"被误标结算步骤等. 反序列化时自愈一次.
+  const _extraSlotNames = new Set(
+    Array.isArray(project.extra_models)
+      ? project.extra_models.map(m => m && m.name).filter(Boolean)
+      : (project.pipeline_config?.models || [])
+          .filter(m => m && m.name && m.name !== 'main')
+          .map(m => m.name)
+  );
+  const _orphanIds = new Set();
+  project.steps_config = project.steps_config.filter(s => {
+    const fm = s.from_model;
+    if (!fm || fm === 'main') return true;
+    if (_extraSlotNames.has(fm)) return true;
+    _orphanIds.add(s.id);
+    console.warn(`[Project] 自动清理孤儿步骤: id=${s.id} label=${s.label} from_model=${fm} (副模型 slot 已删除)`);
+    return false;
+  });
+  if (_orphanIds.size > 0) {
+    // 同步清掉 sequence_order / custom_sequence_order / detection_steps / custom_detection_steps
+    const _filterSeq = (arr) => Array.isArray(arr) ? arr.filter(item => !_orphanIds.has(item?.step_id)) : arr;
+    const _filterIds = (arr) => Array.isArray(arr) ? arr.filter(id => !_orphanIds.has(id)) : arr;
+    if (project.sequence_order) project.sequence_order = _filterSeq(project.sequence_order);
+    if (project.custom_sequence_order) project.custom_sequence_order = _filterSeq(project.custom_sequence_order);
+    if (project.detection_steps) project.detection_steps = _filterIds(project.detection_steps);
+    if (project.custom_detection_steps) project.custom_detection_steps = _filterIds(project.custom_detection_steps);
+    if (Array.isArray(project.custom_conditions)) {
+      project.custom_conditions.forEach(cond => {
+        if (Array.isArray(cond?.sequence)) {
+          cond.sequence = cond.sequence.filter(id => !_orphanIds.has(id));
+        }
+      });
+    }
+    if (Array.isArray(project.pipeline_config?.simultaneous_groups)) {
+      project.pipeline_config.simultaneous_groups.forEach(g => {
+        if (Array.isArray(g?.step_ids)) {
+          g.step_ids = g.step_ids.filter(id => !_orphanIds.has(id));
+        }
+      });
+    }
+  }
   if (!project.events_config) {
     project.events_config = [
       { id: 1, name: '合格(OK)', color: '#10b981', actions: [{ counter_name: '合格总数', delta: 1 }, { counter_name: '总产量', delta: 1 }], show_notification: true, toast_id: 'ok' },
@@ -2441,6 +2559,7 @@ const initProjectDefaults = (project) => {
         model_id: m.model_id ?? null,
         model_name: m.model_name || '',
         model_version: m.model_version || '',
+        model_format: m.model_format || 'pytorch_fp32',  // v3.7.x: 副模型格式 (老项目兜底)
         conf: typeof m.conf === 'number' ? m.conf : 0.25,
         iou: typeof m.iou === 'number' ? m.iou : 0.45,
         roi: Array.isArray(m.roi) ? m.roi : null,
@@ -2705,6 +2824,7 @@ const handleSaveProject = async () => {
               model_id: e.model_id ?? null,
               model_name: e.model_name || '',
               model_version: e.model_version || '',
+              model_format: e.model_format || 'pytorch_fp32',  // v3.7.x: 副模型推理格式, Monitor 启动检测时 resolve-path 用
               conf: typeof e.conf === 'number' ? e.conf : 0.25,
               iou: typeof e.iou === 'number' ? e.iou : 0.45,
               roi: Array.isArray(e.roi) && e.roi.length >= 3 ? e.roi : null,
@@ -2940,6 +3060,7 @@ const addExtraModel = () => {
     model_id: null,
     model_name: '',
     model_version: '',
+    model_format: 'pytorch_fp32',  // v3.7.x: 副模型推理格式 (与主模型对齐, 可切 TensorRT FP16 提速)
     conf: 0.25,
     iou: 0.45,
     roi: null,
@@ -2968,9 +3089,56 @@ const extraModelSlotOptions = (slot) => {
   return out;
 };
 
-const removeExtraModel = (idx) => {
+const removeExtraModel = async (idx) => {
   if (!activeProject.value?.extra_models) return;
+  const slot = activeProject.value.extra_models[idx];
+  if (!slot) return;
+
+  // v3.7.x (FIX): 删 slot 时同步清理它在 steps_config 里带进来的 label.
+  // 之前只 splice extra_models, 副模型的 step (from_model === slot.name) 仍留在
+  // 步骤详情, 客户感知"副模型删了, 标签还在", 还可能因为这些孤儿 step 残留在
+  // sequence_order 里干扰检测判定 (例如把"压墨"当结算步骤).
+  const slotName = slot.name;
+  const orphanSteps = (activeProject.value.steps_config || [])
+    .filter(s => s && s.from_model === slotName);
+
+  if (orphanSteps.length > 0) {
+    const labelList = orphanSteps
+      .map(s => `· ${s.displayLabel || s.label}`)
+      .join('\n');
+    try {
+      await ElMessageBox.confirm(
+        `副模型 [${slotName}] 带进来的以下 ${orphanSteps.length} 个步骤标签也会一并删除:\n\n${labelList}\n\n确定继续吗?`,
+        '删除副模型',
+        {
+          confirmButtonText: '一起删除',
+          cancelButtonText: '取消',
+          type: 'warning',
+          customStyle: { whiteSpace: 'pre-wrap' },
+        }
+      );
+    } catch (_e) {
+      return;  // 用户取消
+    }
+
+    const orphanIds = new Set(orphanSteps.map(s => s.id));
+    // 复用 onStepEnabledChange 的"禁用清理" — 走 sequence_order / detection_steps /
+    // custom_sequence_order / custom_detection_steps / custom_conditions.sequence
+    // 全套清理, 避免漏一处导致 sequence_order 里 step_id 找不到对应 step (鬼步骤).
+    for (const step of orphanSteps) {
+      try { onStepEnabledChange(step, false); } catch (_e) { /* 单条失败继续 */ }
+    }
+    // 再从 steps_config 里彻底删除 (onStepEnabledChange 只动序列, 不删步骤本身)
+    activeProject.value.steps_config = (activeProject.value.steps_config || [])
+      .filter(s => !orphanIds.has(s.id));
+  }
+
   activeProject.value.extra_models.splice(idx, 1);
+  ElMessage.success(
+    orphanSteps.length > 0
+      ? `副模型 [${slotName}] 及其 ${orphanSteps.length} 个步骤标签已删除`
+      : `副模型 [${slotName}] 已删除`
+  );
 };
 
 const openExtraModelSelect = (idx) => {
@@ -3044,6 +3212,7 @@ const FORMAT_DISPLAY_NAMES = {
 const getFormatDisplayName = (key) => FORMAT_DISPLAY_NAMES[key] || key;
 
 const openFormatSelect = async () => {
+  formatSelectingExtraIdx.value = null;  // v3.7.x: 主模型上下文
   try {
     const res = await getAvailableFormats();
     formatList.value = res.data.formats || [];
@@ -3058,27 +3227,76 @@ const openFormatSelect = async () => {
   }
 };
 
+// v3.7.x: 副模型切换格式入口. 复用同一 dialog, 通过 formatSelectingExtraIdx 区分上下文.
+// 后端 /models/{id}/convert 对主/副模型完全通用 — 只是按 model_id 转换文件,
+// 区别只在前端写回哪个 .model_format 字段.
+const openExtraModelFormatSelect = async (idx) => {
+  const slot = activeProject.value?.extra_models?.[idx];
+  if (!slot || !slot.model_id) {
+    ElMessage.warning('请先选择副模型');
+    return;
+  }
+  formatSelectingExtraIdx.value = idx;
+  try {
+    const res = await getAvailableFormats();
+    formatList.value = res.data.formats || [];
+    recommendedFormat.value = res.data.recommended || 'pytorch_fp32';
+    gpuName.value = res.data.gpu_name || '';
+    convertingFormat.value = null;
+    conversionId.value = null;
+    showFormatSelect.value = true;
+  } catch (e) {
+    ElMessage.error('获取可用格式失败');
+    console.error(e);
+  }
+};
+
+// v3.7.x: 根据 formatSelectingExtraIdx 决定回写到主项目还是副 slot.
+//   null  → activeProject.model_format       (主模型)
+//   0..3  → extra_models[idx].model_format   (副模型 slot)
+const _getFormatTargetSlot = () => {
+  const idx = formatSelectingExtraIdx.value;
+  if (idx === null || idx === undefined) return null;
+  return activeProject.value?.extra_models?.[idx] || null;
+};
+const _writeFormat = (key) => {
+  const slot = _getFormatTargetSlot();
+  if (slot) slot.model_format = key;
+  else activeProject.value.model_format = key;
+};
+const _getConvertModelId = () => {
+  const slot = _getFormatTargetSlot();
+  if (slot) return slot.model_id;
+  return activeProject.value?.default_model_id;
+};
+
 const selectFormat = async (fmt) => {
   if (!fmt.available) return;
   const key = fmt.key;
 
   if (key === 'pytorch_fp32') {
-    activeProject.value.model_format = key;
+    _writeFormat(key);
     showFormatSelect.value = false;
     ElMessage.success('已选择 PyTorch FP32（原始模型）');
     return;
   }
 
+  const targetId = _getConvertModelId();
+  if (!targetId) {
+    ElMessage.error('当前对象未配置模型');
+    return;
+  }
+
   convertingFormat.value = key;
   try {
-    const res = await convertModel(activeProject.value.default_model_id, {
+    const res = await convertModel(targetId, {
       format: key,
       project_id: activeProject.value.id,
     });
     const conv = res.data;
 
     if (conv.status === 'ready') {
-      activeProject.value.model_format = key;
+      _writeFormat(key);
       showFormatSelect.value = false;
       convertingFormat.value = null;
       ElMessage.success(`已选择 ${getFormatDisplayName(key)}`);
@@ -3102,7 +3320,7 @@ const startConversionPolling = (fmtKey) => {
       if (s.status === 'ready') {
         stopConversionPolling();
         convertingFormat.value = null;
-        activeProject.value.model_format = fmtKey;
+        _writeFormat(fmtKey);  // v3.7.x: 主/副模型分流写回
         showFormatSelect.value = false;
         ElMessage.success(`${getFormatDisplayName(fmtKey)} 转换完成`);
       } else if (s.status === 'failed') {
@@ -3145,6 +3363,7 @@ const cancelFormatSelect = () => {
   stopConversionPolling();
   convertingFormat.value = null;
   showFormatSelect.value = false;
+  formatSelectingExtraIdx.value = null;  // v3.7.x: 重置上下文, 防止下次主模型切换误判
 };
 
 const showDiagnosis = async () => {
@@ -3184,13 +3403,30 @@ const removeSequenceStep = (idx) => {
   activeProject.value.sequence_order.splice(idx, 1);
 };
 
+// v3.7.x (FIX): isSettlementStep 此前硬编码读 sequence_order, 在 custom 模式
+// (custom_based_on='sequential') 下完全错: 后端实际用 custom_sequence_order
+// (见 backend/api/source_sequence_labels.py:_sequence_order), 而前端 UI 却
+// 用残留的旧 sequence_order 算"结算步骤". 后果: UI 把不在自定义顺序里的步骤
+// (如残留的"压墨") 错标成结算步骤, 禁用它的严格顺序/单次接受开关, 客户感知为
+// "压墨怎么算最后一步".
+// 修复: 与后端 _sequence_order() 对齐 — custom + custom_based_on=sequential
+// 时读 custom_sequence_order, 其余走 sequence_order.
+const _activeSequenceOrder = () => {
+  const ap = activeProject.value;
+  if (!ap) return [];
+  if (ap.logic_mode === 'custom' && ap.custom_based_on === 'sequential') {
+    return ap.custom_sequence_order || [];
+  }
+  return ap.sequence_order || [];
+};
+
 const isSettlementStep = (step) => {
   const mode = activeProject.value?.settlement_mode || 'first_step';
   const logicMode = activeProject.value?.logic_mode;
   if (logicMode !== 'sequential' && !(logicMode === 'custom' && activeProject.value?.custom_based_on === 'sequential')) {
     return false;
   }
-  const seqOrder = activeProject.value?.sequence_order || [];
+  const seqOrder = _activeSequenceOrder();
   if (seqOrder.length === 0) return false;
   if (mode === 'first_step') {
     return step.id === seqOrder[0]?.step_id;

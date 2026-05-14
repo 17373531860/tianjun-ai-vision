@@ -82,34 +82,51 @@ class SequentialMixin:
         
         print(f"顺序模式检查: 期望={expected_labels}, 本周期={this_cycle}, 下周期残留={next_carry}")
         
-        # ── 判定 ──
-        if len(this_cycle) > len(expected_labels):
-            from collections import Counter
-            step_counter = Counter(this_cycle)
-            duplicated = [s for s, cnt in step_counter.items() if cnt > 1]
-            print(f"  → 序列长度({len(this_cycle)})超过预期({len(expected_labels)}) → NG")
-            self._trigger_event(2, f'重复步骤: {duplicated}')
-        elif not all(lbl in this_cycle for lbl in expected_labels):
-            missing = [l for l in expected_labels if l not in this_cycle]
+        # ── 判定 (v3.7.x: 与 _settle_sequential_cycle 对齐, 用 Counter 区分多次出现) ──
+        from collections import Counter
+        expected_counter = Counter(expected_labels)
+        step_counter = Counter(this_cycle)
+        unexpected = [s for s in this_cycle if s not in set(expected_labels)]
+        duplicated = [s for s, cnt in step_counter.items()
+                      if cnt > expected_counter.get(s, 1)]
+        missing = []
+        for lbl, exp_cnt in expected_counter.items():
+            act_cnt = step_counter.get(lbl, 0)
+            if act_cnt < exp_cnt:
+                missing.extend([lbl] * (exp_cnt - act_cnt))
+        
+        if unexpected or duplicated:
+            reasons = []
+            if unexpected:
+                reasons.append(f'多余步骤: {list(dict.fromkeys(unexpected))}')
+            if duplicated:
+                reasons.append(f'重复步骤: {duplicated}')
+            print(f"  → {', '.join(reasons)} → NG")
+            self._trigger_event(2, ', '.join(reasons))
+        elif missing:
+            # 旧实现用 `not all(lbl in this_cycle for lbl in expected_labels)` 的存在性判,
+            # 在 expected 含重复时 (例 A-B-C-B-D) 漏判 second-B 的 missing,
+            # 使本应报"缺少 B"的 case 错走顺序判定误报"顺序错误", 客户困惑.
             print(f"  → 周期不完整，缺少: {missing} → NG")
             self._trigger_event(2, f'周期不完整，缺少: {missing}')
         else:
-            cycle_order_correct = True
-            order_error_labels = []
-            last_pos = -1
-            prev_lbl = None
-            for lbl in expected_labels:
-                pos = this_cycle.index(lbl)
-                if pos < last_pos:
-                    cycle_order_correct = False
-                    order_error_labels = [prev_lbl, lbl]
-                    break
-                last_pos = pos
-                prev_lbl = lbl
-            if cycle_order_correct:
+            # v3.7.x: this_cycle 与 expected_labels 长度相同且每个 expected 标签都在
+            # (前面分支已过滤). multiset 相同 → 直接逐位比较.
+            # 旧实现用 this_cycle.index(lbl) 总返首次位置, 在 sequence_order
+            # 含重复元素时把正确序列误判为顺序错误.
+            if this_cycle == expected_labels:
                 print(f"  → 顺序正确 → OK")
                 self._trigger_event(1, '顺序正确完成')
             else:
+                mismatch_idx = -1
+                for k in range(min(len(this_cycle), len(expected_labels))):
+                    if this_cycle[k] != expected_labels[k]:
+                        mismatch_idx = k
+                        break
+                if mismatch_idx >= 0:
+                    order_error_labels = [expected_labels[mismatch_idx], this_cycle[mismatch_idx]]
+                else:
+                    order_error_labels = ['?', '?']
                 print(f"  → 顺序错误 → NG: {order_error_labels}")
                 self._trigger_event(2, f'顺序错误，期望[{order_error_labels[0]}]在前 实际[{order_error_labels[1]}]在前')
         
@@ -237,34 +254,45 @@ class SequentialMixin:
         
         print(f"自定义模式（基于顺序）检查: 期望={expected_labels}, 本周期={this_cycle}, 下周期残留={next_carry}")
         
-        # ── 判定 ──
-        if len(this_cycle) > len(expected_labels):
-            from collections import Counter
-            step_counter = Counter(this_cycle)
-            duplicated = [s for s, cnt in step_counter.items() if cnt > 1]
-            print(f"  → 序列长度({len(this_cycle)})超过预期({len(expected_labels)}) → NG")
-            self._trigger_event(2, f'重复步骤: {duplicated}')
-        elif not all(lbl in this_cycle for lbl in expected_labels):
-            missing = [l for l in expected_labels if l not in this_cycle]
+        # ── 判定 (v3.7.x: 与 _settle_sequential_cycle 对齐, 同 _check_sequential_mode) ──
+        from collections import Counter
+        expected_counter = Counter(expected_labels)
+        step_counter = Counter(this_cycle)
+        unexpected = [s for s in this_cycle if s not in set(expected_labels)]
+        duplicated = [s for s, cnt in step_counter.items()
+                      if cnt > expected_counter.get(s, 1)]
+        missing = []
+        for lbl, exp_cnt in expected_counter.items():
+            act_cnt = step_counter.get(lbl, 0)
+            if act_cnt < exp_cnt:
+                missing.extend([lbl] * (exp_cnt - act_cnt))
+        
+        if unexpected or duplicated:
+            reasons = []
+            if unexpected:
+                reasons.append(f'多余步骤: {list(dict.fromkeys(unexpected))}')
+            if duplicated:
+                reasons.append(f'重复步骤: {duplicated}')
+            print(f"  → {', '.join(reasons)} → NG")
+            self._trigger_event(2, ', '.join(reasons))
+        elif missing:
             print(f"  → 周期不完整，缺少: {missing} → NG")
             self._trigger_event(2, f'周期不完整，缺少: {missing}')
         else:
-            cycle_order_correct = True
-            order_error_labels = []
-            last_pos = -1
-            prev_lbl = None
-            for lbl in expected_labels:
-                pos = this_cycle.index(lbl)
-                if pos < last_pos:
-                    cycle_order_correct = False
-                    order_error_labels = [prev_lbl, lbl]
-                    break
-                last_pos = pos
-                prev_lbl = lbl
-            if cycle_order_correct:
+            # v3.7.x: 同上, 直接逐位比较, 修 sequence_order 含重复元素时的误判.
+            if this_cycle == expected_labels:
                 print(f"  → 顺序正确 → OK")
                 self._trigger_event(1, '顺序正确完成')
             else:
+                mismatch_idx = -1
+                for k in range(min(len(this_cycle), len(expected_labels))):
+                    if this_cycle[k] != expected_labels[k]:
+                        mismatch_idx = k
+                        break
+                if mismatch_idx >= 0:
+                    order_error_labels = [expected_labels[mismatch_idx], this_cycle[mismatch_idx]]
+                else:
+                    order_error_labels = ['?', '?']
                 print(f"  → 顺序错误 → NG: {order_error_labels}")
                 self._trigger_event(2, f'顺序错误，期望[{order_error_labels[0]}]在前 实际[{order_error_labels[1]}]在前')
         

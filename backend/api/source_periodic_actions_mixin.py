@@ -450,6 +450,51 @@ class PeriodicActionsMixin:
     # 暴露给前端 Monitor 的状态查询
     # ============================================================
 
+    # ============================================================
+    # 手动重置 — 任何时候都可调
+    # ============================================================
+
+    def reset_periodic_counter(self, rule_id: Optional[str] = None) -> Dict[str, Any]:
+        """把周期性强制动作计数器清回 0。
+
+        rule_id=None  → 重置所有规则
+        rule_id=具体  → 只重置指定规则
+        返回 {reset: [rule_id, ...]} 给路由层回写。
+        与 reset_stats 不同：本方法不动产量计数器、step 统计、cycle 状态、
+        events_log，只动周期性强制动作 counter / last_overdue_count /
+        run_on_start_pending。允许在检测运行中调用。
+        """
+        counters = getattr(self, '_periodic_counters', None)
+        if not isinstance(counters, dict):
+            return {'reset': []}
+        rules = getattr(self, '_periodic_actions', []) or []
+        rules_by_id = {r['id']: r for r in rules}
+
+        if rule_id is None:
+            target_ids = list(counters.keys())
+        else:
+            if rule_id not in counters:
+                return {'reset': []}
+            target_ids = [rule_id]
+
+        for rid in target_ids:
+            counters[rid] = 0
+            rule = rules_by_id.get(rid)
+            if rule is not None:
+                rule['last_overdue_count'] = -1
+            pending = getattr(self, '_run_on_start_pending', None)
+            if isinstance(pending, set):
+                pending.discard(rid)
+
+        try:
+            self._persist_periodic_counters()
+        except Exception as e:
+            print(f"[PeriodicActions] reset_periodic_counter 持久化失败: {e}")
+
+        print(f"[PeriodicActions] ch{getattr(self, 'channel_id', 0)} "
+              f"手动重置: {target_ids}")
+        return {'reset': target_ids}
+
     def get_periodic_actions_status(self) -> List[Dict[str, Any]]:
         """返回每条规则的当前进度 — 给 get_detection_results 用"""
         rules = getattr(self, '_periodic_actions', None)

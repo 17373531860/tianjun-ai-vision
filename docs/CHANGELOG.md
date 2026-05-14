@@ -1,5 +1,24 @@
 # Changelog
 
+## v3.7.3 (2026-05-14)
+- [FEAT-373-AUX-CONVERT] **副模型支持 TensorRT/ONNX 转换全链路** — Project 页副模型卡片加"切换格式"按钮 + 格式 tag + `model_format` 字段进 pipeline_config.models[i]; Monitor 单/多通道分支 `_resolveModelPath` 都改读 `e.model_format||'pytorch_fp32'`, 老项目兜底. 副模型现可与主模型同速跑 TRT FP16.
+- [FEAT-373-PROJECT-UX] **Project 页副模型参数 UX 简化** — `conf`/`iou`/`priority`/`FP16` 四列并排改成"置信度 + 高级参数 ▾"折叠; 4 个参数加详细中文 tooltip (人话, 不是术语); 非 `pytorch_fp32` 格式时 FP16 自动 disable + 解释 tooltip.
+- [FEAT-373-PERIODIC-RESET] **周期性强制动作支持单独重置** — 新增 `PeriodicActionsMixin.reset_periodic_counter(rule_id=None)` + `POST /api/v1/source/detection/reset-periodic`, 允许检测运行中调用, 只动 counter/last_overdue_count/run_on_start_pending 不动产量统计; 前端 `detection.js` 加 `resetPeriodicAction`; 测试 `test_periodic_actions_v352.py` 锁定行为.
+- [FEAT-373-SCANNER-BYPASS-CUSTOMIZE] **预设模板"扫码器旁路三行 TXT"客户文案微调** — L3 `合格/不合格` → `Pass/Fail`; L4 去掉 `step.label`, 按 `step_order` 顺序只输出耗时 ` | ` 分隔; description 同步更新 Pass 完整 5 列示例 + Fail 截断 3 列示例 + Fail 不补 0 占位说明 + app.version env 注入修复说明; `seed_builtin_templates` 启动按 `builtin_id` 刷新不动自建副本.
+- [FIX-373-APP-VERSION] **客户机导出模板 `{{ app.version }}` 显示 "0.0.0" 修复** — 根因: `electron/package.json` 被打进 `resources/app.asar`, Python `open()` 完全读不到, fall back "0.0.0" 还被缓存. 修复: `electron/backend-manager.js` 顶部 `require('./package.json')`, spawn 后端时通过 env 注入 `TIANJUN_APP_VERSION` + 5 个辅助 env; `export_context._read_app_info` 改"env 优先 → fs 多候选兜底 → 默认值不缓存"三段式.
+- [FIX-373-AUX-LOAD] **副模型配完后 Monitor 仍显示"未加载"修复** — 双重 bug: A `syncProjectConfig` 把 axios response 当 project 用 (真 project 在 `.data`), store 永远不更新 → `extraSlots=[]`; B 后端预加载主模型后 `isPaused=true`, 启动走"resume"分支跳过 `pipeline_config.models` 解析. 修 A 取 `resp?.data`; 修 B 检测到 `_hasExtraSlots` 强制 `apiStopDetection()` + 全启动路径 (release + load 主+副).
+- [FIX-373-AUX-DELETE] **副模型删除后 step label 残留修复** — `removeExtraModel` 只 splice extra_models, 不动 `steps_config` / `sequence_order` / `detection_steps` / `custom_*` / `simultaneous_groups`. 修复: 加 ElMessageBox.confirm 列出影响 step, 确认后清各引用 + 删 step; `initProjectDefaults` 加孤儿步骤自动清理应对历史脏数据.
+- [FIX-373-VIDEO-SEEK] **视频源拖动进度条后开始检测回到起点修复** — `start_detection` 无脑 `cv2.CAP_PROP_POS_FRAMES=0` 忽略用户 seek 位置. 修复: 只有 `video_ended` 才 reset; 否则读 capture 位置同步到 `video_current_frame`.
+- [FIX-373-SETTLEMENT-UI] **"压墨"被误标为结算步骤修复** — custom 模式 + sequential 基底时 `isSettlementStep` 硬读 `sequence_order` 而非 `custom_sequence_order`. 修复: 加 `_activeSequenceOrder()` 助手按 logic_mode 选对应数组, 与后端行为对齐.
+- [FIX-373-MODEL-CONVERT-STUCK] **模型转换僵死任务永远卡 'converting' 修复** — ultralytics/TRT C 扩展卡 GIL 时 `t.join(timeout=600)` 不一定按时返回, 子线程僵死. 加 `_reap_stale_conversions` 在所有查询入口做懒回收, 阈值 900s 落库改 failed.
+- [FIX-373-ACTIVATE-PROJECT] **激活项目后阈值改动不生效修复** — `activate_project` 只重载模型不调 `mgr.set_project_config`, VSM 状态机还跑旧值. 修复: `_sync_project_config_to_channels` 同步配置到所有未绑定其它项目的 channel, 与启动期 `auto_load_active_project` fallback 行为同源.
+- [FIX-373-SEQ-DUP-LABEL] **顺序模式重复 label 误判 NG (0% OK 率) 修复** — `sequence_order` 含重复元素 (A-B-C-B-D, B×2) 时, 旧 `unique_steps + zip` 截断 + `unique_steps.index()` 总返首次位置. 修复: `_check_sequential_completion` 改 Counter 区分多次出现; `_settle_sequential_cycle` / `_finalize_sequential_cycle` 用 multiset 相同 + 逐位比较.
+- [FIX-373-GHOST-CYCLE] **结算后"鬼周期"启动修复** — 上一周期最后一步 settle 后, 模型对它仍连续识别 → ghost cycle (1 step) → 后续步骤被 strict_order 拦截. 加 `_post_settle_ignore_labels` 集合, 要求 label 必须先彻底 disappear 一次才能再 add-to-cycle.
+- [FIX-373-ACCEPT-ONCE] **`accept_once` 阻挡周期内同 label N 次修复** — sequence_order 含重复 label (检查外观×2), 第 2 次被 accept_once 拦下不变绿. 修复: 按 `expected_seq.count(label)` 配额放行.
+- [FIX-373-MJPEG-LEAK] **MJPEG 旧连接累积导致黑屏修复** — Chrome keep-alive 不立即关旧 socket, 旧 generator hold frame_lock. 修复: 每条 generator 分配 `connection_id`, 同 channel 后来者上位旧的主动 break.
+- [CHORE-373-001] export_custom / export_realtime 行结束符 CRLF → LF (无逻辑变更).
+- [CONFIG-373-001] 版本号 3.7.2 → 3.7.3 (`electron/package.json` + `electron/splash.html`).
+
 ## v3.7.2 (2026-05-12)
 - [FEAT-372-SCANNER-BYPASS] **扫码器旁路 三行 TXT 完整路径** — 客户外部扫码器每次扫码生成 TXT (只一行序列号), 周期结束复制该 TXT 写入"序列号 / 空行 / 合格不合格 / 步骤时长 / 软件版本"五行结构, 输出到指定目录. 三种策略: `cycle_start_snapshot` (默认, 周期开始锁快照彻底防串号) / `mtime` (取 mtime 最新) / `mtime_stable` (`wait_stable_ms` 等稳定后再取); `max_age_sec` 默认 60s 过滤旧文件; 同名去重命中 → 主线程立即跳过 + 异步线程池轮询 (默认 100ms 间隔最长 5s) → 超时按"跳过本规则"处理不阻塞主线程. Jinja2 helper: `latest_input_filename()` / `latest_input_text()` / `now()`. 系统预设 `builtin_scanner_bypass_3line_txt` 带 `default_rule_config` 12 字段, 客户下拉一选自动填 (只需填 input_dir/output_dir).
 - [FEAT-381-B] 每个标签可单独设置检测框颜色 — 项目页步骤设置表加 `box_color` 列 + `el-color-picker`, 默认空走全局设置. Monitor 页 `pickDetColor` 三级优先级: 副模型 `display_color` > `steps_config.box_color` > 全局 OK/NG. 锁定: 6 个单测.

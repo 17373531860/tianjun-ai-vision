@@ -474,9 +474,13 @@
       
       <!-- Video Region -->
       <div class="min-h-0 bg-black border-2 border-slate-700 rounded-lg relative overflow-hidden group" style="aspect-ratio: 16/9; max-height: 100%;">
-        <!-- 视频流：双缓冲 img，交替使用以释放 Chromium 原生解码内存 -->
+        <!-- 视频流：双缓冲 img + key 控制的 DOM 重建。watchdog 触发强制
+             重连时 streamKey++, Vue 销毁旧 <img> 节点 + 创建新节点, Chrome
+             看到 DOM 节点移除会关掉 keep-alive socket, 新 <img> 起新连接
+             而不复用 pool, 是破"socket 卡死"的唯一可靠方式。 -->
         <img 
           v-show="activeStream === 0"
+          :key="`img0-${streamKey}`"
           ref="streamImg0"
           :src="streamSrc0"
           class="w-full h-full object-contain"
@@ -485,6 +489,7 @@
         />
         <img 
           v-show="activeStream === 1"
+          :key="`img1-${streamKey}`"
           ref="streamImg1"
           :src="streamSrc1"
           class="w-full h-full object-contain"
@@ -713,7 +718,13 @@
       <div v-if="periodicActions.length > 0" class="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
         <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex items-center justify-between">
           <span class="text-cyan-400 text-base font-bold">周期性强制动作</span>
-          <span class="text-[0.625rem] text-gray-500">每 N 轮必做（清洁/上油/校准...）</span>
+          <div class="flex items-center gap-2">
+            <span class="text-[0.625rem] text-gray-500">每 N 轮必做（清洁/上油/校准...）</span>
+            <button @click="resetAllPeriodicActions"
+                    class="bg-slate-700 hover:bg-cyan-600 text-white px-2 py-0.5 rounded text-[0.625rem] font-bold transition-colors">
+              全部重置
+            </button>
+          </div>
         </div>
         <div class="p-2 grid gap-2" :class="periodicActions.length === 1 ? 'grid-cols-1' : 'grid-cols-2'">
           <div v-for="rule in periodicActions" :key="rule.id"
@@ -739,6 +750,10 @@
                            'bg-cyan-500'"
                    :style="{ width: Math.min(100, (rule.counter / rule.interval) * 100) + '%' }"></div>
             </div>
+            <button @click="resetSinglePeriodicAction(rule)"
+                    class="bg-slate-700 hover:bg-cyan-600 text-white px-2 py-0.5 rounded text-[0.625rem] font-bold transition-colors flex-shrink-0">
+              重置
+            </button>
           </div>
         </div>
       </div>
@@ -1094,8 +1109,9 @@ import { useSourceStore } from '@/store/useSourceStore';
 import { useScannerDisableStore } from '@/store/useScannerDisableStore';
 import { Check, Folder, Picture, CircleCheck, CircleClose, Warning } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getScanPairActive, settleScanPairForStop } from '@/api/detection';
+import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, resetPeriodicAction, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getScanPairActive, settleScanPairForStop } from '@/api/detection';
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
+import { getProjectDetail } from '@/api/project';
 import api, { getBackendHost } from '@/api/index';
 import { getExtraFieldsSchema, setExtraFields } from '@/api/gateway';
 import { getOperators, setCurrentOperator, getCurrentOperator } from '@/api/operators';
@@ -1225,6 +1241,10 @@ const isChangingSpeed = ref(false);  // 是否正在改变倍速（防止轮询�
 const activeStream = ref(0);           // which img is currently visible (0 or 1)
 const streamSrc0 = ref('');
 const streamSrc1 = ref('');
+// v3.7.x: <img> 元素的 key, watchdog 触发"强制重连"时 ++,
+// Vue 会销毁旧 <img> DOM 节点 + 创建新节点, 这样 Chrome 必断
+// keep-alive socket pool 里那条卡死的旧连接, 这是单纯改 src 做不到的。
+const streamKey = ref(0);
 let streamErrorCount = 0;
 let monitorMounted = false;
 let streamReconnectTimer = null;
@@ -1232,11 +1252,32 @@ let cycleResetTimer = null;
 let progressReconnectTimer = null;
 let speedGuardTimer = null;
 
+// v3.7.x MJPEG watchdog: "改完参数回 Monitor 偶尔黑屏"的根因是
+// Chrome 对 multipart/x-mixed-replace 长连接的 socket 可能在 keep-alive
+// pool 里复用到一条已经卡死的旧连接, <img @error> 不会触发, 导致
+// 永远收不到新帧, 也没有任何兜底自愈机制。watchdog 在 connectStream 后
+// 启动 N 秒首帧检测, 期间没收到首帧 -> 强制 disconnect+ ++streamKey 重建
+// <img> DOM + 用新 url 重连, 这是破 Chrome socket pool 复用的唯一方式。
+//
+// 注: multipart/x-mixed-replace 流的 <img> 只在【首帧】触发 @load 事件,
+// 后续帧通过 image decoder 直接推到 GPU, 不触发 onload。所以心跳式 watchdog
+// (每帧 onload 重置 timer) 不可行 — 会误触发把好流当死流重连。中途流卡死
+// 的检测改用"后端轮询 fps > 0 但前端 isStreaming=false" 来判定 (见
+// pollDetectionResults 内 streamStuck 检测)。
+let streamWatchdogTimer = null;
+let streamConnectAttempts = 0;
+const STREAM_FIRST_FRAME_TIMEOUT_MS = 5000;
+const STREAM_MAX_WATCHDOG_RETRIES = 10;
+// 后端报 fps > 0 但前端 isStreaming 假持续超过这个秒数 -> 判定真黑屏
+const STREAM_BACKEND_FPS_MISMATCH_THRESHOLD_MS = 4000;
+let streamBackendMismatchSince = 0;
+
 const clearMonitorPendingTimers = () => {
   if (streamReconnectTimer) { clearTimeout(streamReconnectTimer); streamReconnectTimer = null; }
   if (cycleResetTimer) { clearTimeout(cycleResetTimer); cycleResetTimer = null; }
   if (progressReconnectTimer) { clearTimeout(progressReconnectTimer); progressReconnectTimer = null; }
   if (speedGuardTimer) { clearTimeout(speedGuardTimer); speedGuardTimer = null; }
+  if (streamWatchdogTimer) { clearTimeout(streamWatchdogTimer); streamWatchdogTimer = null; }
 };
 
 const videoElement = computed(() => activeStream.value === 0 ? streamImg0.value : streamImg1.value);
@@ -1917,7 +1958,9 @@ const startDetectionForChannel = async (ch) => {
       const failedSlots = [];
       for (const e of extraSlots) {
         try {
-          const r = await _resolveModelPath(e.model_id, 'pytorch_fp32');
+          // v3.7.x: 副模型也按 model_format resolve (与单通道分支对齐).
+          // 无 model_format 字段的老项目兜底 pytorch_fp32, 行为完全等价旧版本.
+          const r = await _resolveModelPath(e.model_id, e.model_format || 'pytorch_fp32');
           specs.push({
             name: e.name,
             model_path: r.path,
@@ -2090,14 +2133,60 @@ const pickDetColor = (det, stepsConfig, fallbackOK, fallbackNG) => {
   return det && det.is_ng ? fallbackNG : fallbackOK;
 };
 
+// 启动一个 watchdog timer。timeoutMs 内若没有被 onStreamReady 重新
+// armStreamWatchdog 重置, 触发强制重连: ++ streamKey 重建 <img> DOM,
+// nextTick 后设新 url。这是破 Chrome socket pool 复用的唯一可靠方式。
+const armStreamWatchdog = (timeoutMs) => {
+  if (streamWatchdogTimer) {
+    clearTimeout(streamWatchdogTimer);
+    streamWatchdogTimer = null;
+  }
+  streamWatchdogTimer = setTimeout(() => {
+    streamWatchdogTimer = null;
+    if (!monitorMounted) return;
+    if (streamConnectAttempts >= STREAM_MAX_WATCHDOG_RETRIES) {
+      console.warn('[MJPEG] watchdog 重试已达上限, 放弃自动重连');
+      return;
+    }
+    streamConnectAttempts++;
+    console.warn(`[MJPEG] watchdog 第 ${streamConnectAttempts} 次强制重连: ${timeoutMs}ms 内未收到帧, 重建 <img> DOM`);
+    isStreaming.value = false;
+    streamSrc0.value = '';
+    streamSrc1.value = '';
+    streamKey.value++;
+    nextTick(() => {
+      if (!monitorMounted) return;
+      streamSrc0.value = buildStreamUrl();
+      activeStream.value = 0;
+      armStreamWatchdog(STREAM_FIRST_FRAME_TIMEOUT_MS);
+    });
+  }, timeoutMs);
+};
+
 const connectStream = () => {
-  streamSrc0.value = buildStreamUrl();
-  activeStream.value = 0;
+  // 先清两个 img 的 src + 重建 DOM, 让浏览器关掉潜在旧 socket;
+  // nextTick 后再设新 url, 配合 watchdog 形成完整的"破 socket 复用"信号。
+  streamSrc0.value = '';
   streamSrc1.value = '';
+  isStreaming.value = false;
   streamErrorCount = 0;
+  streamConnectAttempts = 0;
+  streamKey.value++;
+  nextTick(() => {
+    if (!monitorMounted) return;
+    streamSrc0.value = buildStreamUrl();
+    activeStream.value = 0;
+    armStreamWatchdog(STREAM_FIRST_FRAME_TIMEOUT_MS);
+  });
 };
 
 const disconnectStream = () => {
+  if (streamWatchdogTimer) {
+    clearTimeout(streamWatchdogTimer);
+    streamWatchdogTimer = null;
+  }
+  streamConnectAttempts = 0;
+  isStreaming.value = false;
   streamSrc0.value = '';
   streamSrc1.value = '';
 };
@@ -2114,7 +2203,15 @@ const forceReconnectStream = () => connectStream();
 
 const onStreamReady = (idx) => {
   streamErrorCount = 0;
+  streamConnectAttempts = 0;
   isStreaming.value = true;
+  streamBackendMismatchSince = 0;
+  // 首帧成功 -> 取消首帧 watchdog。multipart/x-mixed-replace 后续帧不
+  // 触发 onload, 不能用心跳 watchdog 重置, 中途卡死改由 polling 路径检测。
+  if (streamWatchdogTimer) {
+    clearTimeout(streamWatchdogTimer);
+    streamWatchdogTimer = null;
+  }
   resizeCanvas();
   if (idx !== activeStream.value) {
     const oldIdx = activeStream.value;
@@ -3203,8 +3300,30 @@ let pollingTimer = null;
 
 // Helper: build and send latest project config to backend
 const syncProjectConfig = async (channel = 0, explicitProject = null) => {
-  const proj = explicitProject || currentProject.value;
+  let proj = explicitProject || currentProject.value;
   if (!proj) return;
+  // 启动检测前先从后端拉一次最新项目数据,避免 Pinia store 缓存
+  // 与 DB 不一致时把 store 里的旧 steps_config (例如其它进程改过
+  // min_duration 之类) 推回后端 VSM,覆盖掉真实配置。
+  if (!explicitProject && proj.id != null) {
+    try {
+      // v3.7.x (FIX): getProjectDetail 返回 axios response, 真正的 project 在 .data 里.
+      // 老代码漏了 .data 解构, 导致 fresh.id 永远 undefined, store 永远不更新.
+      // 后果: 用户在 Project 页改完副模型/切换格式后, Monitor 启动检测仍用旧
+      // currentProject (pipeline_config.models 没有副模型), extraSlots=[] →
+      // 走单模型老路径, 副模型彻底不加载.
+      const resp = await getProjectDetail(proj.id);
+      const fresh = resp?.data;
+      if (fresh && fresh.id != null) {
+        proj = fresh;
+        if (projectStore.currentProjectId === proj.id) {
+          projectStore.setCurrentProject(proj);
+        }
+      }
+    } catch (e) {
+      console.warn('[Monitor] 拉取最新项目配置失败, 使用 store 缓存:', e);
+    }
+  }
   const pipelineCfg = {
     ...(proj.pipeline_config || {}),
     sequence_order: proj.sequence_order || proj.pipeline_config?.sequence_order || [],
@@ -3238,8 +3357,17 @@ const startDetection = async () => {
   try {
     await syncProjectConfig();
 
+    // v3.7.x (FIX): standby/paused 恢复路径走 resumeInference/resumeDetection,
+    // 不会走 /detection/start, 也不读 pipeline_config.models, 副模型永远加载不了.
+    // 后端重启 + auto_load_active_project 一定会让前端进入 paused (model_loaded=true
+    // 且 is_detecting=false), 客户感知"副模型 aux Mfps (未加载) 永远不变".
+    // 修复: 项目配置了副模型时, 强制走完整启动路径 (release_all + load_model_into_slot
+    // 逐个加载 main+aux), 跳过 resume 快路径.
+    const _hasExtraSlots = (currentProject.value?.pipeline_config?.models || [])
+      .some(m => m && m.name && m.name !== 'main' && m.model_id);
+
     // From standby: video stream still running + model loaded → just resume inference
-    if (isRunning.value && !isDetecting.value) {
+    if (!_hasExtraSlots && isRunning.value && !isDetecting.value) {
       try {
         await resumeInference();
         isDetecting.value = true;
@@ -3254,7 +3382,7 @@ const startDetection = async () => {
     }
 
     // From paused: camera released, need full resume
-    if (isPaused.value) {
+    if (!_hasExtraSlots && isPaused.value) {
       try {
         await resumeDetection();
         isPaused.value = false;
@@ -3269,6 +3397,17 @@ const startDetection = async () => {
         console.warn('恢复失败，回退到完整启动:', err);
         isPaused.value = false;
       }
+    }
+
+    // 有副模型时, 重置状态让下方完整启动路径正常工作
+    if (_hasExtraSlots && (isRunning.value || isPaused.value || isDetecting.value)) {
+      console.log('[Monitor] 检测到副模型配置, 强制走完整启动 (release+load 主+副)');
+      try {
+        await apiStopDetection();
+      } catch (_e) { /* 旧状态可能本就没在跑, 静默 */ }
+      isRunning.value = false;
+      isDetecting.value = false;
+      isPaused.value = false;
     }
     
     // Full start: load model, start capture + inference
@@ -3305,6 +3444,18 @@ const startDetection = async () => {
     const pipelineModels = currentProject.value?.pipeline_config?.models || [];
     const extraSlots = pipelineModels.filter(m =>
       m && m.name && m.name !== 'main' && m.model_id);
+    // v3.7.x 诊断: 让客户在 F12 一眼看出多模型链路是否被触发
+    console.log('[Monitor/start-detection]', {
+      _fix_marker: 'v3.7.x-aux-load-fix-1',
+      projectId: currentProject.value?.id,
+      projectName: currentProject.value?.name,
+      pipelineModelsLen: pipelineModels.length,
+      pipelineModelsNames: pipelineModels.map(m => m?.name),
+      extraSlotsLen: extraSlots.length,
+      extraSlotsDetail: extraSlots.map(m => ({
+        name: m.name, model_id: m.model_id, model_format: m.model_format,
+      })),
+    });
     if (extraSlots.length > 0) {
       const mainPipelineSpec = pipelineModels.find(m => m && m.name === 'main') || {};
       const specs = [{
@@ -3314,7 +3465,10 @@ const startDetection = async () => {
       const failed = [];
       for (const e of extraSlots) {
         try {
-          const r = await _resolveModelPath(e.model_id, 'pytorch_fp32');
+          // v3.7.x: 副模型也支持 TensorRT FP16 等加速格式 (与主模型对齐).
+          // Project 页 "切换格式" 后存到 pipeline_config.models[i].model_format,
+          // 此处按该值 resolve 到对应转换文件; 老项目无此字段时兜底 pytorch_fp32.
+          const r = await _resolveModelPath(e.model_id, e.model_format || 'pytorch_fp32');
           specs.push({
             name: e.name, model_path: r.path,
             conf: typeof e.conf === 'number' ? e.conf : 0.25,
@@ -3444,6 +3598,23 @@ const startPolling = () => {
       fps.value = data.fps || 0;
       latency.value = data.latency || 0;
       detectionCount.value = (data.detections || []).length;
+
+      // v3.7.x 流卡死检测: 后端在推理 (fps > 0 且 is_running) 但前端
+      // <img> 没收到过任何帧 (isStreaming=false), 持续 N ms -> 真黑屏。
+      // multipart 后续帧不触发 onload, 没法用心跳 watchdog 检测中途卡死,
+      // 改用后端心跳信号反推。一旦判定卡死, 强制重建 <img> DOM 破 socket。
+      const _nowTs = Date.now();
+      if (data.is_running && (data.fps || 0) > 0 && !isStreaming.value) {
+        if (streamBackendMismatchSince === 0) {
+          streamBackendMismatchSince = _nowTs;
+        } else if (_nowTs - streamBackendMismatchSince > STREAM_BACKEND_FPS_MISMATCH_THRESHOLD_MS) {
+          console.warn(`[MJPEG] 后端推理中但前端 <img> 未收到帧持续 ${(_nowTs - streamBackendMismatchSince) / 1000}s, 强制重连`);
+          streamBackendMismatchSince = 0;
+          connectStream();
+        }
+      } else if (isStreaming.value) {
+        streamBackendMismatchSince = 0;
+      }
       // Step 8: 多模型快照 (单工位场景)
       modelStats.value = Array.isArray(data.models) ? data.models : [];
       cycleTime.value = data.average_cycle_time || 0;
@@ -3942,11 +4113,15 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
   }
   
   // 更新截图
-  steps.value.forEach((step) => {
+  // v3.7.x: cache key 用 `${idx}_${label}` 而非纯 label, 否则 sequence_order 含
+  // 重复 label 时 (如 "检查外观" × 2), 第 1 个卡片更新 cache 后第 2 个卡片
+  // 因 cache 已命中而被跳过, 永远 screenshot=null.
+  steps.value.forEach((step, idx) => {
     const stepLabel = step.label || step.name;
     const rawB64 = stepScreenshots.value[stepLabel];
-    if (rawB64 && cachedScreenshotUrls[stepLabel] !== rawB64) {
-      cachedScreenshotUrls[stepLabel] = rawB64;
+    const cacheKey = `${idx}_${stepLabel}`;
+    if (rawB64 && cachedScreenshotUrls[cacheKey] !== rawB64) {
+      cachedScreenshotUrls[cacheKey] = rawB64;
       step.screenshot = `data:image/jpeg;base64,${rawB64}`;
     }
   });
@@ -4122,6 +4297,52 @@ const resetCountersForChannel = async (ch) => {
     };
   }
   ElMessage.success(`工位 ${ch + 1} 计数器已清零`);
+};
+
+// v3.7.3: 周期性强制动作 — 单条/全部手动重置，任何时候都可点（含检测运行中）
+const _periodicTargetChannel = () => (channelCount.value > 1 ? selectedChannel.value : 0);
+
+const resetSinglePeriodicAction = async (rule) => {
+  if (!rule?.id) return;
+  try {
+    await ElMessageBox.confirm(
+      `确认将「${rule.name}」计数器归零？当前进度 ${rule.counter}/${rule.interval}。`,
+      '重置周期性强制动作',
+      { confirmButtonText: '重置', cancelButtonText: '取消', type: 'warning' }
+    );
+  } catch (_) {
+    return;
+  }
+  try {
+    await resetPeriodicAction(_periodicTargetChannel(), rule.id);
+    const hit = periodicActions.value.find(r => r.id === rule.id);
+    if (hit) { hit.counter = 0; hit.state = 'ok'; hit.remaining = hit.interval; }
+    ElMessage.success(`「${rule.name}」已重置`);
+  } catch (e) {
+    console.error('重置周期性强制动作失败:', e);
+    ElMessage.error('重置失败: ' + (e.response?.data?.detail || e.message));
+  }
+};
+
+const resetAllPeriodicActions = async () => {
+  if (!periodicActions.value.length) return;
+  try {
+    await ElMessageBox.confirm(
+      `确认将全部 ${periodicActions.value.length} 条周期性强制动作计数器归零？`,
+      '全部重置',
+      { confirmButtonText: '全部重置', cancelButtonText: '取消', type: 'warning' }
+    );
+  } catch (_) {
+    return;
+  }
+  try {
+    await resetPeriodicAction(_periodicTargetChannel(), null);
+    periodicActions.value.forEach(r => { r.counter = 0; r.state = 'ok'; r.remaining = r.interval; });
+    ElMessage.success('已全部重置');
+  } catch (e) {
+    console.error('全部重置周期性强制动作失败:', e);
+    ElMessage.error('重置失败: ' + (e.response?.data?.detail || e.message));
+  }
 };
 
 

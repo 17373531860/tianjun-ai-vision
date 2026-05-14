@@ -188,17 +188,16 @@ class SettlementMixin:
                 print(f"  → 周期不完整，缺少: {missing} → NG")
                 self._trigger_event(2, f'周期不完整，缺少: {missing}')
             else:
-                unique_steps = []
-                for s in self.current_cycle_steps:
-                    if s not in unique_steps:
-                        unique_steps.append(s)
+                # v3.7.x: actual 与 expected multiset 相同 (前面 unexpected/duplicated 都已 NG),
+                # 直接逐位比较. 旧实现用 unique_steps + zip 截断, 在 sequence_order
+                # 含重复元素时把正确序列误判 NG.
                 mismatch_idx = -1
-                for i, (actual, expected) in enumerate(zip(unique_steps, expected_labels)):
-                    if actual != expected:
-                        mismatch_idx = i
+                for k in range(min(len(self.current_cycle_steps), len(expected_labels))):
+                    if self.current_cycle_steps[k] != expected_labels[k]:
+                        mismatch_idx = k
                         break
                 if mismatch_idx >= 0:
-                    print(f"  → 第{mismatch_idx+1}步顺序错误: 期望[{expected_labels[mismatch_idx]}], 实际[{unique_steps[mismatch_idx]}] → NG")
+                    print(f"  → 第{mismatch_idx+1}步顺序错误: 期望[{expected_labels[mismatch_idx]}], 实际[{self.current_cycle_steps[mismatch_idx]}] → NG")
                     self._trigger_event(2, f'第{mismatch_idx+1}步顺序错误')
                 else:
                     print(f"  → 顺序错误 → NG")
@@ -246,6 +245,7 @@ class SettlementMixin:
                 self._trigger_event(2, reason)
         
         # 重置周期
+        self._capture_post_settle_ignore_labels()
         self._cycle_regression = False
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
@@ -328,6 +328,7 @@ class SettlementMixin:
             print(f"  → {reason} → NG")
             self._trigger_event(2, reason)
         
+        self._capture_post_settle_ignore_labels()
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
         self.last_added_step = None
@@ -481,33 +482,30 @@ class SettlementMixin:
             self.last_step_completed_time = None
             return
         
-        # 检查顺序是否正确（去除重复项后）
-        unique_steps = []
-        for s in self.current_cycle_steps:
-            if s not in unique_steps:
-                unique_steps.append(s)
-        cycle_order_correct = True
-        order_error_labels = []
-        last_idx = -1
-        prev_label = None
-        for label in expected_labels:
-            if label in unique_steps:
-                idx = unique_steps.index(label)
-                if idx < last_idx:
-                    cycle_order_correct = False
-                    order_error_labels = [prev_label, label]
-                    break
-                last_idx = idx
-            prev_label = label
-        
-        if cycle_order_correct:
+        # v3.7.x: 到这里 unexpected/duplicated/missing 都已过滤,
+        # actual 与 expected 是 multiset 完全相同的两个序列,
+        # 直接逐位比较即可. 旧实现用 unique_steps.index() 总返首次位置,
+        # 在 sequence_order 含重复元素时 (例 A-B-C-B-D 里 B×2)
+        # 会把"完全正确的序列"误判为"顺序错误", 客户感知为 0% OK.
+        if self.current_cycle_steps == expected_labels:
             print(f"  → 顺序正确 → OK")
             self._trigger_event(1, '顺序正确完成')
         else:
-            print(f"  → 顺序错误 → NG: {order_error_labels}")
+            mismatch_idx = -1
+            for k in range(min(len(self.current_cycle_steps), len(expected_labels))):
+                if self.current_cycle_steps[k] != expected_labels[k]:
+                    mismatch_idx = k
+                    break
+            if mismatch_idx >= 0:
+                order_error_labels = [expected_labels[mismatch_idx],
+                                      self.current_cycle_steps[mismatch_idx]]
+            else:
+                order_error_labels = ['?', '?']
+            print(f"  → 顺序错误 → NG: 第{mismatch_idx+1}步 期望[{order_error_labels[0]}] 实际[{order_error_labels[1]}]")
             self._trigger_event(2, f'顺序错误，期望[{order_error_labels[0]}]在前 实际[{order_error_labels[1]}]在前')
         
         # 重置周期
+        self._capture_post_settle_ignore_labels()
         self._cycle_regression = False
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
@@ -519,6 +517,23 @@ class SettlementMixin:
         self._step_gap_count.clear()
         
         self.last_step_completed_time = None
+    
+    def _capture_post_settle_ignore_labels(self):
+        """v3.7.x (FIX-鬼周期):
+        上一周期"最后一步"动作 (如"放置产品") 可能延续到本次结算之后还在被模型识别.
+        旧实现 step_last_seen.clear() / step_frame_confirmed.clear() 后下一帧再次识别
+        就被当作"新出现"启动 ghost cycle. cycle_steps 只含这一个 step, 客户后续动作
+        (拿取配件1 ...) 因 strict_order 缺前置而"闪一下没反应", 直到下一个"放置产品"
+        再来触发 settle -> NG.
+        修复: 记录结算时仍处于"已确认中"的 label, 要求它们必须先彻底 disappear 一次
+        才能再触发 add-to-cycle. 由 source_step_stats_mixin.py 的消失处理负责清理.
+        """
+        if hasattr(self, 'step_frame_confirmed'):
+            self._post_settle_ignore_labels = set(
+                lbl for lbl, conf in self.step_frame_confirmed.items() if conf
+            )
+        else:
+            self._post_settle_ignore_labels = set()
     
     def _process_simultaneous_groups(self, frame_detected_labels: set, detected_labels: set, current_time: float):
         """
@@ -628,6 +643,16 @@ class SettlementMixin:
         if label not in enabled_labels:
             return
         
+        # v3.7.x (FIX-鬼周期): 上一周期 settle 时仍处于"已确认中"的 label
+        # 必须先彻底消失一次, 才能再次参与新 cycle 的启动 / 累计.
+        # 否则模型对"放置产品"的连续识别会立即在 cycle_steps=[] 时启动 ghost cycle,
+        # 导致后续步骤被 strict_order 拦截"闪一下没反应".
+        # disappear handler (source_step_stats_mixin.py) 负责在 label 消失时把它从
+        # ignore set 里移除.
+        ignore = getattr(self, '_post_settle_ignore_labels', None)
+        if ignore and label in ignore:
+            return
+        
         if self.step_strict_order.get(label):
             expected = self._get_expected_sequence_labels()
             if label in expected:
@@ -668,9 +693,26 @@ class SettlementMixin:
         # ── accept_once 拦截 ──
         # 在 first_step 结算模式下，第一步即使设了 accept_once，真正消失后重现
         # 也必须放行以触发结算；只有连续检测（未消失）才拦截。
+        #
+        # v3.7.x (FIX-客户工艺 cycle 内 N 次同 label):
+        # 旧逻辑: `label in self.current_cycle_steps` 即拦截 -> 周期内只允许 1 次.
+        # 但当 sequence_order 含重复元素 (如 "检查外观" × 2), accept_once 把模型
+        # 第 2 次识别拦下, 客户感知"框冒蓝色但不变绿". 现按 sequence_order 期望次数
+        # 放行: 已入 cycle 次数 < 期望次数时不拦截.
         if self.step_accept_once.get(label) and label in self.current_cycle_steps:
+            expected_count = 0
+            if is_seq_like:
+                expected_seq = self._get_expected_sequence_labels()
+                if expected_seq:
+                    expected_count = expected_seq.count(label)
+            current_count = self.current_cycle_steps.count(label)
+            quota_reached = current_count >= max(1, expected_count)
+
             allow_through = False
-            if self.settlement_mode == 'first_step' and is_seq_like and len(self.current_cycle_steps) > 1:
+            if not quota_reached:
+                # 期望多次出现, 名额未满 -> 放行让 add-to-cycle 走 [期望重复] 分支
+                allow_through = True
+            elif self.settlement_mode == 'first_step' and is_seq_like and len(self.current_cycle_steps) > 1:
                 first_step_label = self._get_first_sequence_step_label()
                 if first_step_label and label == first_step_label and old_last_seen is not None:
                     gap = current_time - old_last_seen

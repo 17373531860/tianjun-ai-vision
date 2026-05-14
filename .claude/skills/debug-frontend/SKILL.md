@@ -237,10 +237,63 @@ const getDisplayCT = (chData) => {
 
 ---
 
+## 7.x. v3.7.3 关键踩坑（Monitor 副模型启动 / MJPEG 后来者上位 / Project 副模型 UI）
+
+### 7.x.1 Monitor 启动检测时副模型不加载（极坑）
+
+**症状**：Project 页配好副模型 → Monitor 点开始 → 提示"副模型未加载"，只跑主模型。
+
+**根因 A（store 永远旧）**：`syncProjectConfig` 把 `getProjectDetail(projectId)` 返回值当 project 用，但它**是 axios response** —— 真 project 在 `.data` 里。旧代码 `const fresh = await getProjectDetail(proj.id); if (fresh && fresh.id) ...` 永远不进 if，store 永远是老配置 → `extraSlots = []` → 走单模型路径。
+
+```javascript
+// ❌ 错: fresh 是 axios resp, fresh.id 是 undefined
+const fresh = await getProjectDetail(proj.id);
+// ✅ 对:
+const resp = await getProjectDetail(proj.id);
+const fresh = resp?.data;
+```
+
+**根因 B（resume 分支跳过 pipeline）**：后端启动期 `_reload_model_for_active_project` 自动装主模型 → Monitor mount 时 `getSourceStatus` 看到 `model_loaded=true` 把 `isPaused` 标为 true → 启动走 `resumeDetection()` 分支，它**不重新解析 `pipeline_config.models`**，副模型彻底没机会装。
+
+**v3.7.3 修法**：`startDetection` 顶部计算 `_hasExtraSlots`，若为 true 强制 `apiStopDetection()` 后走完整启动路径（release + load 主+副），bypass resume 分支。
+
+**调试**：客户反馈"副模型没加载"先让他 F12 看 `[Monitor/start-detection]` 诊断日志 — 里面会打 `extraSlotsLen` / `extraSlotsDetail`，立刻能看出是 store 没更新还是没走对启动路径。
+
+### 7.x.2 MJPEG 切换路由 / 刷新黑屏几秒
+
+**症状**：从 Project 切回 Monitor、或浏览器刷新、或多 client 连同一通道，新页面 `<img>` 黑屏 2-5 秒才出图。
+
+**根因**：Chrome HTTP keep-alive 不立即关闭旧 MJPEG socket，旧 `_generate_mjpeg_stream` generator 仍在 `with frame_lock:` 里 hold 锁 + thread-pool worker；新连接抢不到锁就一直没首帧。
+
+**v3.7.3 修法**（后端，前端无改动）：每条 generator 分配 `connection_id`，记录 channel 当前最新 id 到 `_mjpeg_active_conn_id`；旧 generator 每次 yield 前检测自己是否过期，过期主动 `break` 释放资源。同 channel 同时只保留 1 条 generator。
+
+**前端没改动 = 用户看到的差别**：切 Monitor 路由首帧延迟从 2-5s 降到 < 200ms，不再有"黑屏一闪"。如果客户机 Chrome 版本极老 / 走代理时还能遇到，多半是反代层 keep-alive 设置过激进。
+
+### 7.x.3 Project 页删副模型后 step label 残留
+
+**症状**：Project 页删副模型 → 步骤详情里它的 step 还在 → 改东西保存 → Monitor 报"step xxx 的 from_model 找不到对应 model"。
+
+**老坑**：`removeExtraModel` 只 `splice(extra_models)`，不动 `steps_config` / `sequence_order` / `detection_steps` / `custom_*` / `simultaneous_groups`。
+
+**v3.7.3 修法**：
+- `removeExtraModel` 加 `ElMessageBox.confirm` 列出会被一起删的 step，确认后 `onStepEnabledChange(step, false)` 清各引用 + 删 step 本体
+- `initProjectDefaults` 加孤儿步骤自动清理：加载老项目时若 `from_model` 不再有对应 slot，自动剔除 step + sequence/condition 引用
+
+**调试**：客户报 "from_model 找不到 model" 报错先看 v3.7.3 自动清理日志（`console.warn('[Project] 自动清理孤儿步骤: ...')`），多半是历史脏数据，重新打开项目就会自愈。
+
+### 7.x.4 Project 页副模型参数 UX
+
+v3.7.3 起 IoU / 优先级 / FP16 收进"高级参数 ▾"折叠区（默认收起），客户截图反馈"参数不见了"实际是没展开折叠区。
+
+非 `pytorch_fp32` 格式时 FP16 checkbox 自动 disable + tooltip 解释（精度由编译文件决定，这开关无效）。客户切到 TensorRT 后误以为"FP16 失效"实际是设计如此。
+
+---
+
 ## 8. 历史踩坑速查（详细见 changelog）
 
 | 版本 | 修复 |
 |---|---|
+| v3.7.3 | 副模型启动强制全启动 / syncProjectConfig 取 resp.data / MJPEG 后来者上位 / 孤儿步骤清理 |
 | v3.5.1 | PT/CT 三档显示（ptMode/ctMode）+ Data 导出联动 |
 | v3.5.0 | 周期性强制动作进度面板 + 自定义 Toast 事件 + 自定义导出对话框 |
 | v3.4.2 | useScannerDisableStore + ERROR 不续 LON + 禁用扫码守门 |

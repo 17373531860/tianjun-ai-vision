@@ -170,6 +170,7 @@ def _init_event_and_cycle_state(h):
     h._step_raw_start = {}
     h._last_ng_time = 0
     h._cycle_regression = False  # A-B-A 步骤回退标记
+    h._post_settle_ignore_labels = set()  # v3.7.x 鬼周期防护: settle 时未消失的 label, 必须 disappear 一次后才能再触发新 cycle
 
 
 def _init_tracking_state(h):

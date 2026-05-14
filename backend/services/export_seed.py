@@ -109,10 +109,10 @@ _DESC_SESSION_5STEP_CSV = (
 )
 
 
-# ---- 扫码器旁路三行 TXT (v3.7.2 客户场景) ----
+# ---- 扫码器旁路三行 TXT (v3.7.2 客户场景, v3.7.3 调整文案) ----
 # 场景: 客户扫码器无法接入软件, 但会在固定目录里生成 txt (空 / 仅一行序列号).
 # 每个 cycle_end 时, 我们从该目录读 mtime 最新的 txt 文件, 把内容作为首行保留,
-# 再追加 "OK/NG → 每步时长 → 软件版本" 三行, 写到客户指定的输出目录.
+# 再追加 "Pass/Fail → 每步时长 → 软件版本" 三行, 写到客户指定的输出目录.
 #
 # Jinja2 helper:
 #   latest_input_text() : 读输入目录最新 txt 文件内容 (空目录返回空)
@@ -121,20 +121,27 @@ _DESC_SESSION_5STEP_CSV = (
 #
 # 模板版面:
 #   第 1 行: 扫码序列号 (来自客户扫码 txt)
-#   第 2 行: 空行 (用户要求)
-#   第 3 行: 合格 / 不合格
-#   第 4 行: 每个步骤检测时长 (label: x.xx s | label: x.xx s | ...)
-#   第 5 行: 软件版本号
+#   第 2 行: 空行 (客户要求)
+#   第 3 行: Pass / Fail (v3.7.3: 由"合格/不合格"改成 Pass/Fail, 客户固定英文要求)
+#   第 4 行: 各步骤检测时长 (v3.7.3: 去掉 label, 只按 step_order 顺序输出耗时, " | " 分隔)
+#   第 5 行: 软件版本号 (v3.7.3 配合 env 注入修复, 打包后客户机不再显示 0.0.0)
 _TPL_SCANNER_BYPASS_3LINE = """{{ latest_input_text() }}
 
-{{ '合格' if cycle.is_good else '不合格' }}
-{% for s in steps %}{{ s.label }}: {{ '%.2f' % (s.duration or 0) }}s{% if not loop.last %} | {% endif %}{% endfor %}
+{{ 'Pass' if cycle.is_good else 'Fail' }}
+{% for s in steps %}{{ '%.2f' % (s.duration or 0) }}s{% if not loop.last %} | {% endif %}{% endfor %}
 {{ app.version }}
 """
 
 _DESC_SCANNER_BYPASS_3LINE = (
-    "扫码器旁路三行 TXT (v3.7.2 新增) —\n"
+    "扫码器旁路三行 TXT (v3.7.2 新增, v3.7.3 改 Pass/Fail + 仅耗时) —\n"
     "  适用场景: 客户扫码器无法接入软件, 但会在固定目录写 txt 文件.\n"
+    "\n"
+    "  输出文件版面 (共 5 行):\n"
+    "    L1: 扫码序列号 (从 input_dir 读最新 txt, 内容原样保留)\n"
+    "    L2: 空行\n"
+    "    L3: Pass / Fail (v3.7.3 起统一英文, 客户要求)\n"
+    "    L4: 各步骤耗时, 按 step_order 顺序, 仅数字+秒, 用 ' | ' 分隔, 不带步骤名\n"
+    "    L5: 软件版本号 (例 3.7.3)\n"
     "\n"
     "  用法:\n"
     "  1. 复制本预设到自建模板\n"
@@ -155,18 +162,30 @@ _DESC_SCANNER_BYPASS_3LINE = (
     "  9. 同名去重 (可选): 防止两周期撞同一份扫码 txt, 命中重名异步等下一个新文件,\n"
     "     超时后跳过本规则 (写 SKIPPED 日志, 不写文件)\n"
     "\n"
-    "  输出文件示例 (扫码 txt 内容 = 'WP20260513_001'):\n"
+    "  输出示例 — Pass 周期 (扫码 txt 内容 = 'WP20260513_001', 5 步全部完成):\n"
     "    WP20260513_001\n"
     "    \n"
-    "    合格\n"
-    "    取件: 2.34s | 装配: 5.67s | 检查: 1.89s\n"
-    "    v3.7.2\n"
+    "    Pass\n"
+    "    2.34s | 5.67s | 1.89s | 2.10s | 0.98s\n"
+    "    3.7.3\n"
+    "\n"
+    "  输出示例 — Fail 周期 (在第 3 步失败, 后续两步未执行):\n"
+    "    WP20260513_002\n"
+    "    \n"
+    "    Fail\n"
+    "    2.34s | 5.67s | 1.89s\n"
+    "    3.7.3\n"
+    "    ← 注意: Fail 时只输出已执行的步骤, 未走到的步骤不会以 0 占位\n"
+    "      (因为 step_records 表里就没那几行). 客户如果要求 Fail 时仍输出\n"
+    "      5 个固定列 (未到的填 0 / -), 改模板用 project.sequence_order\n"
+    "      做「按预定顺序补位」循环, 见自定义导出文档.\n"
     "\n"
     "  注意:\n"
     "  • 扫码器生成的 txt 我们只读, 不动 (客户自己定期清理)\n"
     "  • 扫码 txt 为空时, 输出文件首行也是空 (cycle_end 不会报错)\n"
     "  • 多工位场景每个工位建一条规则, 用「通道过滤」字段区分\n"
-    "  • C 策略下 cycle.external_meta 字段会留存「这一轮锁了哪份扫码 txt」, 事后可追溯"
+    "  • C 策略下 cycle.external_meta 字段会留存「这一轮锁了哪份扫码 txt」, 事后可追溯\n"
+    "  • app.version 来自 Electron 启动后端时注入的 env (v3.7.3 修复), 打包后不会再显示 0.0.0"
 )
 
 

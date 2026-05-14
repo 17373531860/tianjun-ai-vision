@@ -9,6 +9,28 @@ const http = require('http');
 const fs = require('fs');
 const EventEmitter = require('events');
 
+// v3.7.x: 把 electron/package.json 的版本号注入到后端进程的环境变量.
+// 打包后 electron/package.json 被 electron-builder 默认行为打进 resources/app.asar,
+// Python 侧 open() 读不到 — 所以 export_context._read_app_info 无论怎么找路径
+// 都只能拿到 "0.0.0" 兜底. 用 env 传是最稳的, electron 主进程 require 同目录
+// package.json 在开发 / 打包 / asar 内 都能正确解析.
+let _APP_PKG_META = { version: '0.0.0', name: '', description: '', author: '' };
+try {
+  const _pkg = require('./package.json');
+  _APP_PKG_META = {
+    version: _pkg.version || '0.0.0',
+    name: _pkg.name || '',
+    description: _pkg.description || '',
+    author: typeof _pkg.author === 'string'
+      ? _pkg.author
+      : (_pkg.author && _pkg.author.name) || '',
+    buildDate: _pkg.buildDate || '',
+    commitHash: _pkg.commitHash || '',
+  };
+} catch (e) {
+  console.warn('[BackendManager] 读 ./package.json 失败, 版本号将留默认:', e.message);
+}
+
 class BackendManager extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -117,6 +139,17 @@ class BackendManager extends EventEmitter {
     env.PYTHONIOENCODING = 'utf-8';
     env.PYTHONLEGACYWINDOWSSTDIO = '0';
     env.PYTHONUTF8 = '1';
+
+    // v3.7.x: 把 Electron 端 package.json 的 app 元数据注入到 Python 后端.
+    // 后端 export_context._read_app_info() 优先读这些 env, 拿不到才回退到
+    // fs 搜索 electron/package.json. 打包后 package.json 进了 app.asar,
+    // Python 没法 fs 读, 所以必须靠 env 传 — 否则 app.version 永远 0.0.0.
+    env.TIANJUN_APP_VERSION = _APP_PKG_META.version;
+    if (_APP_PKG_META.name) env.TIANJUN_APP_NAME = _APP_PKG_META.name;
+    if (_APP_PKG_META.description) env.TIANJUN_APP_PRODUCT_NAME = _APP_PKG_META.description;
+    if (_APP_PKG_META.author) env.TIANJUN_APP_BRAND = _APP_PKG_META.author;
+    if (_APP_PKG_META.buildDate) env.TIANJUN_APP_BUILD_DATE = _APP_PKG_META.buildDate;
+    if (_APP_PKG_META.commitHash) env.TIANJUN_APP_COMMIT = _APP_PKG_META.commitHash;
     
     // Windows 控制台设为 UTF-8 代码页
     if (process.platform === 'win32') {

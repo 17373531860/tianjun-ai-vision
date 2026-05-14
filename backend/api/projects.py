@@ -191,6 +191,67 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
     db.commit()
     return None
 
+def _build_project_config_dict(project: Project) -> dict:
+    """从 Project ORM 对象构建用于 mgr.set_project_config 的 dict.
+    与 backend/main.py::_build_project_config 字段保持一致.
+    """
+    return {
+        'id': project.id,
+        'name': project.name,
+        'task_type': getattr(project, 'task_type', 'detection'),
+        'logic_mode': project.logic_mode,
+        'steps_config': project.steps_config or [],
+        'pipeline_config': project.pipeline_config or {},
+        'events_config': project.events_config or [],
+        'counters_config': project.counters_config or [],
+        'data_config': project.data_config or {},
+    }
+
+
+def _sync_project_config_to_channels(project: Project) -> None:
+    """把项目配置同步到所有未绑定其它项目的 channel 的 mgr.
+
+    v3.7.x 修复: activate 此前只重载模型, 不刷新 mgr.project_config,
+    导致客户在 Project 页改完阈值/min_duration/sequence_order 后点保存,
+    Monitor 页跑检测仍用旧配置, 必须手动重启检测才能生效 (用户感知为"参数没用").
+
+    与 backend/main.py::auto_load_active_project 的 fallback 分支同源:
+      - 已绑定其它 project_id 的通道不动 (多工位各自的项目优先)
+      - 其余通道一律调 mgr.set_project_config
+      - 任何失败只打日志, 不影响 activate 本身
+    """
+    from backend.api.channel_manager import channel_manager
+
+    sources = channel_manager.get_channel_sources()
+    bound_to_other = set()
+    for ch_str, ch_cfg in sources.items():
+        pid = ch_cfg.get("project_id")
+        if pid and pid != project.id:
+            try:
+                bound_to_other.add(int(ch_str))
+            except (TypeError, ValueError):
+                continue
+
+    remaining = [cid for cid in channel_manager.channels if cid not in bound_to_other]
+    if not remaining:
+        print("[激活项目] 所有通道都已绑定其它项目，跳过配置同步")
+        return
+
+    config = _build_project_config_dict(project)
+    for ch_id in remaining:
+        mgr = channel_manager.channels.get(ch_id)
+        if not mgr:
+            continue
+        try:
+            mgr.set_project_config(config)
+            print(f"[激活项目] ch{ch_id} 配置已同步: '{project.name}' "
+                  f"(steps={len(config['steps_config'])}, "
+                  f"sequence_order={len(config['pipeline_config'].get('sequence_order', []))} 步)")
+        except Exception as e:
+            print(f"[激活项目] ch{ch_id} 配置同步失败 (忽略): {e}")
+            import traceback; traceback.print_exc()
+
+
 def _reload_model_for_active_project(db: Session, project: Project) -> None:
     """激活项目后把 default_model 装到未绑定专属项目的通道上。
 
@@ -260,6 +321,16 @@ def activate_project(project_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         import traceback
         print(f"[激活项目] 模型重载异常 (不影响激活状态): {e}")
+        traceback.print_exc()
+
+    # v3.7.x 修复：activate 之前只重载模型, 不刷新 mgr.project_config, 导致
+    # Project 页改完阈值/min_duration/sequence_order 等配置后, Monitor 页仍用旧配置
+    # (用户感知为"参数没用"). 此处补上配置同步, 与启动期 auto_load_active_project 行为对齐.
+    try:
+        _sync_project_config_to_channels(db_project)
+    except Exception as e:
+        import traceback
+        print(f"[激活项目] 配置同步异常 (不影响激活状态): {e}")
         traceback.print_exc()
 
     # 项目切换：清空所有通道的 MES pending/inspecting 状态，避免旧项目的扫码被新项目错误绑定

@@ -283,6 +283,12 @@ class StepStatsMixin:
                     if label in self.step_start_time:
                         del self.step_start_time[label]
                     
+                    # v3.7.x (FIX-鬼周期): label 已彻底消失, 从 post-settle ignore set
+                    # 中移除. 之后它再次出现就能正常启动新 cycle / 加入 cycle.
+                    _ignore = getattr(self, '_post_settle_ignore_labels', None)
+                    if _ignore and label in _ignore:
+                        _ignore.discard(label)
+                    
                     # 只有有效的检测才计数
                     if is_valid:
                         if label not in self.step_counts:

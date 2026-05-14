@@ -987,6 +987,22 @@ def reset_detection_stats(channel: int = Query(0)):
     return {"status": "success", "message": "统计数据已重置"}
 
 
+@router.post("/detection/reset-periodic")
+def reset_periodic_action(
+    channel: int = Query(0),
+    rule_id: Optional[str] = Query(None, description="规则 id；不传则重置所有"),
+):
+    """单独重置周期性强制动作计数器，不动产量统计 / cycle 状态。
+
+    任何时候都可调用（检测运行中也可）。rule_id 不传 = 重置该通道全部规则。
+    """
+    mgr = _get_mgr(channel)
+    if not hasattr(mgr, 'reset_periodic_counter'):
+        raise HTTPException(status_code=500, detail="该通道不支持周期性强制动作")
+    result = mgr.reset_periodic_counter(rule_id)
+    return {"status": "success", "reset": result.get('reset', [])}
+
+
 @router.get("/detection/results")
 def get_detection_results(channel: int = Query(0)):
     """获取检测结果（含 MES/操作员/tracking 等聚合信息）"""

@@ -1,0 +1,222 @@
+{
+  "version": "3.7.3",
+  "date": "2026-05-14",
+  "previous_version": "3.7.2",
+  "theme": "副模型转换全链路 + 顺序模式重复 label 修复 + 客户机版本号注入 + 鬼周期防护 + 扫码器旁路文案",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "'压墨'被误标为结算步骤",
+      "symptom": "custom 模式 + sequential 基底时, Project 页步骤详情把不在执行顺序里的步骤高亮为'结算步骤'",
+      "root_cause": "isSettlementStep 与 watch(settlement_mode) 硬读 activeProject.sequence_order, 没区分 logic_mode==='custom' && custom_based_on==='sequential' 时真正生效的是 custom_sequence_order",
+      "fix": "加 _activeSequenceOrder() 助手按 logic_mode 选对应数组, isSettlementStep 与 settlement_mode 监听都走它",
+      "files": ["frontend/src/views/Project/index.vue"],
+      "keywords": ["settlement_mode", "isSettlementStep", "custom_sequence_order", "custom_based_on", "压墨", "结算步骤", "first_step", "last_step"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "副模型未加载",
+      "symptom": "Project 页配好副模型, Monitor 启动检测仍只跑主模型, 提示'副模型未加载'",
+      "root_cause": "A: syncProjectConfig 把 getProjectDetail 返回值当 project 用 (实际是 axios resp, project 在 .data), store 永远不更新, extraSlots=[] → 单模型路径; B: 后端预加载主模型后 isPaused=true, 启动走 resume 分支跳过 pipeline_config.models 解析",
+      "fix": "A: const fresh = resp?.data; B: _hasExtraSlots 时强制 stop + 全启动路径 release+load 主+副; 加 console.log 诊断 extraSlots",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["副模型", "extra_models", "pipeline_config.models", "extraSlots", "syncProjectConfig", "_resolveModelPath", "isPaused", "resume", "未加载"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "副模型删除后 step label 残留",
+      "symptom": "删除副模型后, 它对应的 step 仍出现在步骤详情, sequence_order 也带着它, 客户感知'删了等于没删'",
+      "root_cause": "removeExtraModel 只 splice(extra_models), 不动 steps_config / sequence_order / detection_steps / custom_* / custom_conditions / simultaneous_groups",
+      "fix": "A: removeExtraModel 加 ElMessageBox.confirm, 确认后 onStepEnabledChange(step,false) 清各引用 + 删 step 本体; B: initProjectDefaults 加孤儿步骤自动清理 (from_model 对不上任何 slot 时自动剔除)",
+      "files": ["frontend/src/views/Project/index.vue"],
+      "keywords": ["removeExtraModel", "from_model", "孤儿步骤", "orphan steps", "initProjectDefaults", "extra_models", "副模型删除"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "视频拖动后开始检测回到起点",
+      "symptom": "视频源调试场景, 拖进度条到中段 → 点开始 → 视频从第 0 帧重新跑",
+      "root_cause": "start_detection 无脑 cv2.CAP_PROP_POS_FRAMES=0, 忽略用户 seek 位置",
+      "fix": "只有 video_ended 才 reset; 否则读 capture.get(CAP_PROP_POS_FRAMES) 同步到 self.video_current_frame, 让进度反算正确",
+      "files": ["backend/api/source.py"],
+      "keywords": ["video_ended", "CAP_PROP_POS_FRAMES", "视频拖动", "start_detection", "video_current_frame", "seek", "进度条"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-005",
+      "title": "导出模板 app.version 显示 '0.0.0'",
+      "symptom": "客户机自定义导出模板 {{ app.version }} 渲染成 '0.0.0' 而非真实版本",
+      "root_cause": "_read_app_info 用 BASE_DIR/../electron/package.json 相对路径, 客户机打包后 electron/package.json 被打进 resources/app.asar, Python open() 完全读不到, fall back '0.0.0' 还被永久缓存",
+      "fix": "A: electron/backend-manager.js 顶部 require('./package.json'), spawn 后端时通过 env 注入 TIANJUN_APP_VERSION + 5 个辅助 env; B: export_context._read_app_info 改 env 优先 → fs 多候选兜底 → 默认值不缓存",
+      "files": ["backend/services/export_context.py", "electron/backend-manager.js"],
+      "keywords": ["app.version", "0.0.0", "package.json", "app.asar", "asar", "TIANJUN_APP_VERSION", "_read_app_info", "_app_info_cache", "electron-builder", "extraResources", "客户机"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-006",
+      "title": "模型转换僵死任务永远卡 'converting'",
+      "symptom": "客户点转换后状态永远 'converting', 前端转圈无穷无尽",
+      "root_cause": "worker 内 model.export(...) 跑在 daemon 子线程, t.join(timeout=600) 在 ultralytics/TRT C 扩展卡 GIL 时不一定按时返回; 主 worker 不死但子线程僵死",
+      "fix": "加 _reap_stale_conversions, 在 get_conversion_status / get_model_conversions / convert_model 所有查询入口做懒回收, 阈值 900s (600s worker 超时 + 5min 缓冲), 落库改 failed + 友好错误; worker 开始转换刷新 created_at 防误回收",
+      "files": ["backend/api/models.py"],
+      "keywords": ["ModelConversion", "_reap_stale_conversions", "converting", "僵死任务", "ultralytics", "TensorRT", "TRT", "t.join", "GIL", "model_convert"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-007",
+      "title": "激活项目后阈值改动不生效",
+      "symptom": "客户在 Project 页改阈值 / min_duration / sequence_order 后保存, 切回 Monitor 跑检测仍用旧配置, 必须手动重启检测才生效",
+      "root_cause": "activate_project 只调 _reload_model_for_active_project 重载模型, 不刷新 mgr.project_config — VSM 状态机还跑旧值",
+      "fix": "加 _sync_project_config_to_channels, 把项目配置 push 到所有未绑定其它项目的 channel mgr.set_project_config, 与启动期 auto_load_active_project fallback 行为同源",
+      "files": ["backend/api/projects.py"],
+      "keywords": ["activate_project", "set_project_config", "project_config 不刷新", "channel_manager", "min_duration", "sequence_order 不生效", "阈值不生效"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-008",
+      "title": "顺序模式重复 label 误判 NG (0% OK 率)",
+      "symptom": "sequence_order 含重复元素 (例 A-B-C-B-D, B×2) 时, 客户跑出来 0% OK 全部 NG",
+      "root_cause": "旧 settle 用 unique_steps = [...] 去重后 zip(unique_steps, expected_labels) 截断, 与含重复的 expected 怎么也对不上; _finalize_sequential_cycle 里 unique_steps.index() 总返首次位置也是同一坑",
+      "fix": "A: _check_sequential_completion 改 Counter 区分多次出现, unexpected/duplicated/missing 按 multiset 判定; B: _settle_sequential_cycle / _finalize_sequential_cycle 用 'multiset 相同 → 逐位比较', 不再 unique 去重",
+      "files": ["backend/api/source_sequential_mixin.py", "backend/api/source_settlement_mixin.py"],
+      "keywords": ["sequence_order", "顺序模式", "重复 label", "unique_steps", "Counter", "multiset", "_settle_sequential_cycle", "_finalize_sequential_cycle", "_check_sequential_completion", "0% OK"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-009",
+      "title": "结算后'鬼周期'启动",
+      "symptom": "上一周期最后一步 settle 完后, 模型对它仍连续识别 → 下一帧立即启动 ghost cycle (cycle_steps 只含 1 个 step), 客户后续动作被 strict_order 缺前置拦截'闪一下没反应', 直到下一个最后步骤再触发 settle → NG",
+      "root_cause": "settle 后 step_last_seen / step_frame_confirmed 立刻清空, 同一 label 下一帧再识别就被当'新出现'启动新 cycle",
+      "fix": "加 _post_settle_ignore_labels 集合, settle 时记录'仍处于已确认中'的 label, 要求它们必须先彻底 disappear 一次才能再 add-to-cycle; source_step_stats_mixin disappear 处理负责清理 ignore set",
+      "files": ["backend/api/source_settlement_mixin.py", "backend/api/source_state_init.py", "backend/api/source_step_stats_mixin.py"],
+      "keywords": ["鬼周期", "ghost cycle", "_post_settle_ignore_labels", "step_frame_confirmed", "step_last_seen", "strict_order", "结算后", "闪一下没反应"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-010",
+      "title": "accept_once 阻挡周期内同 label N 次出现",
+      "symptom": "sequence_order 含重复 label (例'检查外观×2'), 第 2 次识别被 accept_once 拦下 — 框冒蓝色但不变绿",
+      "root_cause": "旧 accept_once 是硬规则 'label in current_cycle_steps 即拦', 不看期望次数",
+      "fix": "按 expected_seq.count(label) 配额放行 — 已入 cycle 次数 < 期望次数时不拦截, 让 add-to-cycle 走'期望重复'分支",
+      "files": ["backend/api/source_settlement_mixin.py"],
+      "keywords": ["accept_once", "重复 label", "周期内 N 次", "expected_seq.count", "step_accept_once", "不变绿", "检查外观"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-011",
+      "title": "MJPEG 旧连接累积导致黑屏",
+      "symptom": "切换 Monitor 路由 / 浏览器刷新 / 多客户端连同一通道, 新页面黑屏几秒才出图",
+      "root_cause": "Chrome keep-alive 不立即关旧 MJPEG socket, 旧 generator 仍 hold frame_lock + thread-pool worker, 新连接抢不到锁",
+      "fix": "每条 generator 分配 connection_id, 记录每 channel 最新 id, 旧 generator 每次 yield 前检测自己过期主动 break; 同 channel 同时只保留 1 条 generator",
+      "files": ["backend/api/source_streaming_mixin.py"],
+      "keywords": ["MJPEG", "黑屏", "_mjpeg_active_conn_id", "connection_id", "后来者上位", "frame_lock", "keep-alive", "thread-pool", "streaming"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "副模型支持 TensorRT / ONNX 格式转换",
+      "rationale": "主模型已能切换加速格式 (约提速 3-5x), 但副模型 UI 没暴露切换按钮, 且 Monitor 启动时 _resolveModelPath 硬编码 pytorch_fp32 — 副模型即使转好也不会加载",
+      "implementation": "A: Project 页副模型卡片加'切换格式'按钮 + 格式 tag, model_format 字段进序列化/反序列化, formatSelectingExtraIdx 跟踪当前 slot, 对话框标题/当前标记按上下文切换; B: Monitor 单/多通道分支 _resolveModelPath 都改读 e.model_format||'pytorch_fp32', 老项目兜底",
+      "files": ["frontend/src/views/Project/index.vue", "frontend/src/views/Monitor/index.vue"],
+      "keywords": ["副模型转换", "model_format", "extra_models", "pipeline_config.models", "_resolveModelPath", "切换格式", "formatSelectingExtraIdx", "TensorRT", "ONNX", "pytorch_fp32"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "Project 页副模型参数 UX 简化",
+      "rationale": "副模型卡片把 conf / IoU / 优先级 / FP16 全部一字排开, 客户分不清哪些是常用; 多数客户只调 conf 一个",
+      "implementation": "A: 主行只留'置信度' + '高级参数 ▾' 折叠按钮; B: 折叠区放 IoU/优先级/FP16; C: 4 个参数加详细中文 tooltip (人话, 不是术语); D: 非 pytorch_fp32 格式时 FP16 自动 disable + 解释 tooltip",
+      "files": ["frontend/src/views/Project/index.vue"],
+      "keywords": ["UX", "副模型参数", "高级参数", "_adv_open", "tooltip", "FP16 disable", "use_half", "model_format"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "周期性强制动作手动重置",
+      "rationale": "客户中途想清零周期性动作计数器 (例新班从 0 算), 但 reset_stats 会一并清产量/cycle/events, 太重",
+      "implementation": "A: PeriodicActionsMixin.reset_periodic_counter(rule_id=None), 只动 counter/last_overdue_count/run_on_start_pending; B: POST /api/v1/source/detection/reset-periodic; C: 前端 detection.js 加 resetPeriodicAction 封装; D: test_periodic_actions_v352.py 锁定行为",
+      "files": ["backend/api/source_periodic_actions_mixin.py", "backend/api/source_routes.py", "frontend/src/api/detection.js", "tests/test_periodic_actions_v352.py"],
+      "keywords": ["reset_periodic_counter", "周期性强制动作", "POST /detection/reset-periodic", "resetPeriodicAction", "_periodic_counters", "last_overdue_count", "PeriodicActionsMixin"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "预设模板'扫码器旁路三行 TXT'客户文案微调",
+      "rationale": "客户固定要求英文 Pass/Fail + 步骤时长行不要 label (5 步固定产线看耗时就够)",
+      "implementation": "A: L3 合格/不合格 → Pass/Fail; B: L4 去掉 step.label, 按 step_order 顺序输出耗时, ' | ' 分隔; C: description 同步更新版面 + Pass 完整 5 列示例 + Fail 截断 3 列示例 + Fail 不补 0 占位说明 + app.version env 注入修复说明; seed_builtin_templates 启动按 builtin_id 刷新 (不动自建副本)",
+      "files": ["backend/services/export_seed.py"],
+      "keywords": ["扫码器旁路", "_TPL_SCANNER_BYPASS_3LINE", "builtin_scanner_bypass_3line_txt", "Pass/Fail", "step.duration", "seed_builtin_templates", "is_system", "预设模板"],
+      "breaking": false
+    },
+    {
+      "type": "chore",
+      "id": "CHORE-001",
+      "title": "export_custom / export_realtime 行结束符规范化",
+      "rationale": "两文件历史是 CRLF, 与项目其它 .py LF 风格不一致, 易引起 IDE / git 假 diff",
+      "implementation": "CRLF → LF, 无逻辑变更, git diff --ignore-cr-at-eol 后空 diff",
+      "files": ["backend/api/export_custom.py", "backend/api/export_realtime.py"],
+      "keywords": ["CRLF", "LF", "行结束符", "line endings"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [
+    "debug-source",
+    "debug-frontend"
+  ],
+  "skills_to_update_next_round": [
+    "modify-api: 新增 POST /detection/reset-periodic",
+    "add-api-endpoint: 同上",
+    "api-sync: 同上",
+    "modify-source: source_settlement_mixin 重大重构 (鬼周期 / multiset / accept_once 配额)",
+    "modify-frontend: Monitor 启动路径 / Project 副模型 UI",
+    "debug-channel: activate_project 全 channel 配置同步"
+  ],
+  "files_changed": [
+    "backend/api/export_custom.py",
+    "backend/api/export_realtime.py",
+    "backend/api/models.py",
+    "backend/api/projects.py",
+    "backend/api/source.py",
+    "backend/api/source_periodic_actions_mixin.py",
+    "backend/api/source_routes.py",
+    "backend/api/source_sequential_mixin.py",
+    "backend/api/source_settlement_mixin.py",
+    "backend/api/source_state_init.py",
+    "backend/api/source_step_stats_mixin.py",
+    "backend/api/source_streaming_mixin.py",
+    "backend/services/export_context.py",
+    "backend/services/export_seed.py",
+    "electron/backend-manager.js",
+    "electron/package.json",
+    "electron/splash.html",
+    "frontend/src/api/detection.js",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Project/index.vue",
+    "tests/test_periodic_actions_v352.py",
+    "docs/changelog/v3.7.3_2026-05-14.md",
+    "docs/changelog/v3.7.3_2026-05-14.json",
+    "docs/CHANGELOG.md"
+  ],
+  "known_issues": [
+    "Nuitka 编译范围仍不全 (source_*_mixin 共 15 个文件 + services/ 大多数仍源码部署), IP 泄露风险已登记 build-release skill 第三节",
+    "backend/counters/project_*.json 这类运行时计数 JSON 仍 tracked, 本次发版手动 checkout 丢弃, 后续应加 .gitignore",
+    "skills_to_update_next_round 列出 6 个 skill 需补; 本次只更新最关键的 debug-source / debug-frontend"
+  ]
+}

@@ -496,6 +496,71 @@ mixin 改动就是源码裸跑（IP 漏出去），但行为对得上。
 - `mes_hooks.py` 内部 import 必须 `from services.xxx` 不是 `from backend.services.xxx`，
   否则 ImportError 被静默吞掉
 
+## 十二·五、v3.7.3 关键行为变更（顺序模式 / 鬼周期 / accept_once）
+
+> 这块是 v3.7.3 才稳定的，遇到顺序判定问题先看这一节，否则可能照旧版理解错。
+
+### 1. 顺序模式判定 — 多次出现 label 不再误判 NG
+
+**老坑**：`sequence_order` 含重复元素（例 `A-B-C-B-D`，B 出现 2 次）时，v3.7.2 之前的实现：
+- `_check_sequential_completion` 用 `unique_steps = [...]` 去重后比对，A-B-C-B-D 期望被截成 A-B-C-D
+- `_settle_sequential_cycle` / `_finalize_sequential_cycle` 用 `unique_steps.index(label)` 总返首次位置，B 第二次出现的索引永远是第一个 B 的位置 → 顺序检查总挂
+
+**v3.7.3 起**：
+- `_check_sequential_completion` 改用 `collections.Counter` 区分多次出现；unexpected / duplicated / missing 都按 multiset 判定（actual_counter[label] vs expected_counter[label]）
+- `_settle_sequential_cycle` / `_finalize_sequential_cycle` 走"multiset 相同 → 逐位比较 current_cycle_steps vs expected_labels"，不再 unique 去重
+
+**调试要点**：客户报 0% OK 率时优先查 `pipeline_config.sequence_order` 是否含重复 label；前 / 后端都需 v3.7.3+ 才能正确处理（旧客户机要发新版）。
+
+### 2. "鬼周期" 防护 — `_post_settle_ignore_labels`
+
+**老坑**（v3.7.2 及之前）：
+- 周期 settle 完后立刻 `step_last_seen.clear()` / `step_frame_confirmed.clear()`
+- 但模型对上一周期最后一步（例"放置产品"）的连续识别**还在持续**
+- 下一帧识别到"放置产品" → `_process_single_step` 立即把它加入新 cycle → ghost cycle（cycle_steps = ["放置产品"]）
+- 客户接下来做"拿取配件 1"被 strict_order 拦截（前置不全），UI"闪一下没反应"
+- 直到下一个"放置产品"再来触发 settle → 整轮 NG，客户感知"软件突然失灵"
+
+**v3.7.3 起**：
+- settle 时调 `_capture_post_settle_ignore_labels()`，把"settle 时仍处于 `step_frame_confirmed` 为 True"的 label 全部记到 `self._post_settle_ignore_labels: set`
+- `_process_single_step` 入口检查 `if label in _post_settle_ignore_labels: return`，被记下的 label 想再加入新 cycle 必须先彻底 disappear 一次
+- `source_step_stats_mixin` 的 disappear 处理负责调 `_post_settle_ignore_labels.discard(label)`
+
+**调试要点**：
+- 客户报"settle 后第一个动作没反应"先查日志里有没有 `_post_settle_ignore_labels` 相关 print
+- `_init_event_and_cycle_state` 已加 `h._post_settle_ignore_labels = set()` 初始化；新增 state 字段时要同步进这里
+- 测试时如要强制清空，可在测试 fixture 里 `mgr._post_settle_ignore_labels.clear()`
+
+### 3. `accept_once` 周期内 N 次配额放行
+
+**老坑**（v3.7.2 及之前）：
+- `_process_single_step` 里 `if step_accept_once.get(label) and label in current_cycle_steps: 拦截`
+- `sequence_order` 含 `检查外观×2` 时第 2 次识别被拦下 → 框冒蓝色但不变绿
+
+**v3.7.3 起**：
+- 计算 `expected_count = expected_seq.count(label)` 和 `current_count = current_cycle_steps.count(label)`
+- 若 `current_count < max(1, expected_count)` 不拦截，让后续 add-to-cycle 走"期望重复"分支
+- 否则按老 first_step / 已完成 cycle 等分支处理
+
+**调试要点**：
+- accept_once 现在不再是"周期内 1 次硬规则"，是"按 sequence_order 期望次数限额"
+- 期望次数=0（label 不在 sequence_order 里）时仍按 1 次限额兜底
+
+### 4. v3.7.x 状态字段索引（按所属 init 函数）
+
+| 字段 | 类型 | 用途 | 初始化位置 |
+|---|---|---|---|
+| `_post_settle_ignore_labels` | `set[str]` | 鬼周期防护 — settle 时未消失的 label，必须 disappear 一次后才能再触发 | `source_state_init._init_event_and_cycle_state` |
+| `_periodic_counters` | `dict[rule_id, int]` | 周期性强制动作触发计数 | `_init_periodic_actions` |
+| `_run_on_start_pending` | `set[rule_id]` | run_on_start 规则待发漏检告警的标记 | `_init_periodic_actions` |
+| `_mjpeg_active_conn_id` | `int` | MJPEG 后来者上位 — 当前 channel 最新 generator id | StreamingMixin 内 lazy init |
+| `_mjpeg_next_conn_id` | `int` | MJPEG generator id 分配序号 | StreamingMixin 内 lazy init |
+| `_cycle_regression` | `bool` | A-B-A 步骤回退标记 | `_init_event_and_cycle_state` |
+
+新增 state 字段时**必须**同步：1) 对应 `_init_*` 函数；2) `reset_stats` 显式保留 / 清零；3) 若涉及周期开始 / 结束行为，去 `source_settlement_mixin` 和 `source_session_lifecycle_mixin` 检查 reset 时机。
+
+---
+
 ## 十三、读取检查清单（开始修问题前）
 
 1. `backend/api/source.py`（先 grep 函数名再 Read，全文 1573 行别一次读完）

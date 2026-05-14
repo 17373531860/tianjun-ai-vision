@@ -45,12 +45,21 @@ _system_info_cache: Optional[Dict[str, Any]] = None
 
 
 def _read_app_info() -> Dict[str, Any]:
-    """从 electron/package.json 读软件元数据 — 启动后基本不变，缓存"""
+    """读软件元数据 — 启动后基本不变, 缓存.
+
+    优先级 (v3.7.x 调整):
+      1. 环境变量 TIANJUN_APP_VERSION / TIANJUN_APP_BRAND / ... — Electron
+         backend-manager.js spawn 后端时注入. 客户机打包环境唯一可靠通道,
+         因为 electron/package.json 被 electron-builder 默认打进 resources/app.asar,
+         Python open() 完全读不到.
+      2. fs 搜索 electron/package.json 多候选路径 — 仅开发模式直接 uvicorn
+         启动后端 (没经 electron) 时生效.
+      3. 都失败 → 兜底 "0.0.0", 但不缓存, 下次再试.
+    """
     global _app_info_cache
     if _app_info_cache is not None:
         return _app_info_cache
 
-    pkg_path = os.path.normpath(os.path.join(BASE_DIR, "..", "electron", "package.json"))
     info = {
         "name": "天骏视觉",
         "version": "0.0.0",
@@ -59,23 +68,67 @@ def _read_app_info() -> Dict[str, Any]:
         "build_date": "",
         "commit_hash": "",
     }
-    try:
-        if os.path.exists(pkg_path):
+
+    # —— 优先级 1: 环境变量 (打包客户机这条是唯一可靠路径) ——
+    env_version = os.environ.get("TIANJUN_APP_VERSION", "").strip()
+    if env_version:
+        info["version"] = env_version
+        if os.environ.get("TIANJUN_APP_PRODUCT_NAME"):
+            info["product_name"] = os.environ["TIANJUN_APP_PRODUCT_NAME"]
+        elif os.environ.get("TIANJUN_APP_NAME"):
+            info["product_name"] = os.environ["TIANJUN_APP_NAME"]
+        if os.environ.get("TIANJUN_APP_BRAND"):
+            info["brand_name"] = os.environ["TIANJUN_APP_BRAND"]
+        if os.environ.get("TIANJUN_APP_BUILD_DATE"):
+            info["build_date"] = os.environ["TIANJUN_APP_BUILD_DATE"]
+        if os.environ.get("TIANJUN_APP_COMMIT"):
+            info["commit_hash"] = os.environ["TIANJUN_APP_COMMIT"]
+        print(f"[ExportContext] app.version={info['version']} (来源: env TIANJUN_APP_VERSION)")
+        _app_info_cache = info
+        return info
+
+    # —— 优先级 2: fs 搜索 (仅开发模式 uvicorn 直跑 backend 时) ——
+    candidates = [
+        os.path.normpath(os.path.join(BASE_DIR, "..", "electron", "package.json")),
+        os.path.normpath(os.path.join(BASE_DIR, "..", "..", "electron", "package.json")),
+        os.path.normpath(os.path.join(BASE_DIR, "..", "..", "resources", "app.asar.unpacked", "electron", "package.json")),
+        os.path.normpath(os.path.join(BASE_DIR, "..", "..", "..", "electron", "package.json")),
+        os.path.normpath(os.path.join(BASE_DIR, "package.json")),
+    ]
+
+    used_path = None
+    for pkg_path in candidates:
+        try:
+            if not os.path.exists(pkg_path):
+                continue
             with open(pkg_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            info["version"] = data.get("version") or info["version"]
+            ver = data.get("version") or ""
+            if not ver:
+                continue
+            info["version"] = ver
             info["product_name"] = data.get("description") or data.get("name") or info["product_name"]
             author = data.get("author") or {}
             if isinstance(author, dict):
                 info["brand_name"] = author.get("name") or info["brand_name"]
             elif isinstance(author, str):
                 info["brand_name"] = author
-            # build_date / commit_hash 由 CI 注入到 package.json 自定义字段
             info["build_date"] = data.get("buildDate", "")
             info["commit_hash"] = data.get("commitHash", "")
-    except Exception as e:
-        print(f"[ExportContext] 读 package.json 失败: {e}")
+            used_path = pkg_path
+            break
+        except Exception as e:
+            print(f"[ExportContext] 读 {pkg_path} 失败: {e}")
 
+    if used_path is None:
+        print(
+            f"[ExportContext] 未拿到 app 版本 (env TIANJUN_APP_VERSION 空, "
+            f"fs 试过 {len(candidates)} 个路径都没命中, BASE_DIR={BASE_DIR}), "
+            f"app.version 暂用 '0.0.0'. 客户机打包环境请确认 Electron 启动后端时已注入环境变量."
+        )
+        return info  # 不缓存兜底值
+
+    print(f"[ExportContext] app.version={info['version']} (来源: {used_path})")
     _app_info_cache = info
     return info
 

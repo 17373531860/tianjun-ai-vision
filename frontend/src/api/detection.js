@@ -61,6 +61,12 @@ export const resetDetection = (channel = 0) => api.post(`/detection/reset?channe
 
 export const resetDetectionStats = (channel = 0) => api.post(`/source/detection/reset-stats?channel=${channel}`);
 
+export const resetPeriodicAction = (channel = 0, ruleId = null) => {
+  const params = new URLSearchParams({ channel: String(channel) });
+  if (ruleId) params.append('rule_id', ruleId);
+  return api.post(`/source/detection/reset-periodic?${params.toString()}`);
+};
+
 export const getDetectionStatus = (channel = 0) => api.get(`/source/status?channel=${channel}`);
 
 // Multi-channel / workstation APIs

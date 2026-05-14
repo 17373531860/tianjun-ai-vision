@@ -1098,9 +1098,22 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=1.0)
             if self.source_type == 'video':
-                self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                self.video_current_frame = 0
-                self.video_ended = False
+                # v3.7.x (FIX): 之前无脑 set POS_FRAMES=0, 客户拖动进度条到中段后再点开始,
+                # 视频会跳回第 0 帧, 客户感知"拖了等于没拖". 只有视频已播完时才需要回到
+                # 起点 (相当于"重播一次"), 暂停 + 拖动后的位置应该保留.
+                if self.video_ended:
+                    self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    self.video_current_frame = 0
+                    self.video_ended = False
+                else:
+                    # 与 capture 实际位置对齐 — 拖动可能更新了 cv2 内部指针但 self.video_current_frame
+                    # 没同步, 这里读一次 capture 的位置, 让 progress 反算正确.
+                    try:
+                        cur = int(self.capture.get(cv2.CAP_PROP_POS_FRAMES))
+                        if cur >= 0:
+                            self.video_current_frame = cur
+                    except Exception:
+                        pass
             self.is_running = True
             self._thread = threading.Thread(target=self._capture_loop, daemon=True)
             self._thread.start()
@@ -1358,6 +1371,14 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
 
         v2.7.15 (C): try/finally + 异常捕获, 客户端断开时立即释放资源,
         并维护 _mjpeg_active_streams 计数方便诊断"连接是否累积"。
+
+        v3.7.x: "新连接上位, 旧连接让位" 防僵尸连接累积。
+        Chrome keep-alive 不会立即关闭旧 MJPEG socket, 旧 generator 仍
+        会 hold 住 frame_lock + thread-pool worker, 导致新连接拿不到锁
+        几秒, 浏览器 <img> 收不到首帧 -> 黑屏。修复: 每条 generator 分配
+        connection_id, 记录该 channel 最新 id, 旧 generator 每次 yield
+        前检测自己是否过期, 是则主动 break 释放资源。同一 channel 同时
+        只保留 1 条 generator, 切换 Monitor / 路由刷新都不会累积。
         """
         from backend.api.channel_manager import channel_manager
         target_interval = 1.0 / max(self.target_stream_fps, 1)
@@ -1366,16 +1387,26 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         idle_count = 0
         max_idle = 600
         last_seq = -1
+        ch_label = getattr(self, 'channel_index', '?')
 
-        # v2.7.15 (C): 活跃 MJPEG 连接计数
+        # v3.7.x 分配 connection id, 同 channel 后来者上位
+        self._mjpeg_next_conn_id = getattr(self, '_mjpeg_next_conn_id', 0) + 1
+        my_conn_id = self._mjpeg_next_conn_id
+        self._mjpeg_active_conn_id = my_conn_id
+
         try:
             self._mjpeg_active_streams = getattr(self, '_mjpeg_active_streams', 0) + 1
-            print(f"[MJPEG] 新连接 ch={getattr(self, 'channel_index', '?')}, 活跃连接={self._mjpeg_active_streams}")
+            print(f"[MJPEG] 新连接 #{my_conn_id} ch={ch_label}, 活跃连接={self._mjpeg_active_streams}", flush=True)
         except Exception:
             pass
 
         try:
             while True:
+                # 旧连接让位: 同 channel 有更新的 id 进来 -> 主动退出
+                if getattr(self, '_mjpeg_active_conn_id', my_conn_id) != my_conn_id:
+                    print(f"[MJPEG] 连接 #{my_conn_id} ch={ch_label} 让位给 #{self._mjpeg_active_conn_id}, 主动退出", flush=True)
+                    break
+
                 if self.is_running:
                     idle_count = 0
                     frame = None
@@ -1419,11 +1450,11 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             # 客户端断开, 正常退出
             pass
         except Exception as e:
-            print(f"[MJPEG] generator 异常退出 ch={getattr(self, 'channel_index', '?')}: {e}")
+            print(f"[MJPEG] generator #{my_conn_id} 异常退出 ch={ch_label}: {e}", flush=True)
         finally:
             try:
                 self._mjpeg_active_streams = max(0, getattr(self, '_mjpeg_active_streams', 1) - 1)
-                print(f"[MJPEG] 连接关闭 ch={getattr(self, 'channel_index', '?')}, 活跃连接={self._mjpeg_active_streams}")
+                print(f"[MJPEG] 连接 #{my_conn_id} 关闭 ch={ch_label}, 活跃连接={self._mjpeg_active_streams}", flush=True)
             except Exception:
                 pass
     
