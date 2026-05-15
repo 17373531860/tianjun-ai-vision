@@ -1269,11 +1269,17 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
 
         # v3.5.2: 周期性强制动作 counter 同步清零 + 重置触发节流标志.
         # 用户在 Monitor 点"清零"=想从零开始, 包括"距下次保养还有几轮"也归零.
+        # v3.7.4: 时间维度的 last_done_ts 也同步刷成 now ("视为刚做完").
         if hasattr(self, '_periodic_counters') and isinstance(self._periodic_counters, dict):
+            now = time.time()
             for rule_id in list(self._periodic_counters.keys()):
                 self._periodic_counters[rule_id] = 0
+            if hasattr(self, '_periodic_last_done_ts') and isinstance(self._periodic_last_done_ts, dict):
+                for rule_id in list(self._periodic_last_done_ts.keys()):
+                    self._periodic_last_done_ts[rule_id] = now
             for rule in getattr(self, '_periodic_actions', []) or []:
                 rule['last_overdue_count'] = -1
+                rule['last_overdue_time_gap'] = -1.0
             try:
                 if hasattr(self, '_persist_periodic_counters'):
                     self._persist_periodic_counters()

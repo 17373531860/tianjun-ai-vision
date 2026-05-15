@@ -523,7 +523,10 @@ class TestManualResetPeriodicCounter:
         path = vsm._periodic_counter_path(vsm.project_config["id"])
         with open(path, "r", encoding="utf-8") as f:
             saved = json.load(f)
-        assert saved["pa_disk"] == 0
+        # v3.7.4: 持久化升级为 {"counters": {...}, "last_done_ts": {...}}.
+        # 老格式 ({rule_id: counter}) 仅在读取时兼容, 写出统一新格式.
+        assert saved["counters"]["pa_disk"] == 0
+        assert "last_done_ts" in saved
 
     def test_reset_clears_run_on_start_pending(self, tmp_path, monkeypatch):
         monkeypatch.setattr(

@@ -9,18 +9,25 @@
     Rule = {
       id, name, enabled,
       trigger_step_ids:        List[step_id]      多个 step 算 OR — 任一出现都算
-      interval:                int                强制周期 N
+      interval:                int                强制周期 N (=0 关闭按次数触发)
+      time_interval_seconds:   int                超时秒数 N (=0 关闭按时间触发, v3.7.4)
       count_basis:             "all"|"good_only"|"ng_only"
       reset_policy:            "always"|"only_when_due"
-      due_warning_event_id:    Optional[int]      counter == N 时弹一次提醒
-      overdue_event_id:        Optional[int]      counter > N 时按 overdue_repeat 触发
+      due_warning_event_id:    Optional[int]      到期时弹一次提醒
+      overdue_event_id:        Optional[int]      超期后按 overdue_repeat 触发
       overdue_repeat:          "every_cycle"|"once"|"cooldown:N"
       channel_filter:          Optional[List[int]] 多通道时限定
     }
 
+  ★ v3.7.4: interval (按次数) 与 time_interval_seconds (按时间) 是 OR 关系,
+    谁先到期谁先触发. 任一为 0 视为该维度关闭. 完成动作 (做了 trigger_step)
+    会同时重置 counter=0 + last_done_ts=now.
+
 接入点：
   - apply_project_config 时调 _apply_periodic_actions(config)
   - end_cycle() commit 后调 _check_periodic_actions(step_sequence, is_good)
+  - inference_loop 主循环每 5 秒 throttle 调一次 _check_periodic_actions_time_only(now)
+    (v3.7.4: 即使生产停了, 只要 detection 在跑, 时间到期也会主动触发)
 
 事件分发：
   本 mixin 不直接调 _trigger_event（那个会 end_cycle，会和已经结束的 cycle 冲突），
@@ -80,15 +87,29 @@ class PeriodicActionsMixin:
                 continue
 
             try:
-                interval = max(1, int(raw.get('interval', 20)))
+                interval = max(0, int(raw.get('interval', 20)))
             except (TypeError, ValueError):
                 interval = 20
+
+            # v3.7.4: time_interval_seconds — 按时间触发 (0=关闭).
+            # 注意 0 是合法的（关闭该维度），不要 max(1,...) 强制最小值.
+            try:
+                time_interval = max(0, int(raw.get('time_interval_seconds', 0) or 0))
+            except (TypeError, ValueError):
+                time_interval = 0
+
+            # 至少要开一种维度, 否则规则等同于"什么都不做"
+            if interval <= 0 and time_interval <= 0:
+                print(f"[PeriodicActions] 规则 '{raw.get('name')}' interval 和 "
+                      f"time_interval_seconds 都为 0, 跳过")
+                continue
 
             parsed.append({
                 'id': rule_id,
                 'name': raw.get('name', f'规则_{rule_id}'),
                 'trigger_labels': trigger_labels,
                 'interval': interval,
+                'time_interval_seconds': time_interval,  # v3.7.4
                 'count_basis': raw.get('count_basis', 'all'),
                 'reset_policy': raw.get('reset_policy', 'always'),
                 'due_warning_event_id': raw.get('due_warning_event_id'),
@@ -100,12 +121,20 @@ class PeriodicActionsMixin:
                 'run_on_start': bool(raw.get('run_on_start', False)),
                 # 运行时状态（每条 rule 独立）
                 'last_overdue_count': -1,
+                # v3.7.4: 时间维度的"上次超期时秒数差", 用于 cooldown / once 节流
+                'last_overdue_time_gap': -1.0,
             })
 
         # v3.5.2: 临时诊断
         prev_counters = dict(getattr(self, '_periodic_counters', {}) or {})
         self._periodic_actions = parsed
         self._periodic_counters: Dict[str, int] = {r['id']: 0 for r in parsed}
+        # v3.7.4: 时间维度状态 — 上次"完成动作"的时间戳. 初始 = 当前时间,
+        # 表示"刚开始, 还没超时". 持久化文件里如果存了就 _restore_periodic_counters
+        # 覆盖回来 (跨重启保持). 节流标志 _last_periodic_time_check 给 inference loop 用.
+        now_init = time.time()
+        self._periodic_last_done_ts: Dict[str, float] = {r['id']: now_init for r in parsed}
+        self._last_periodic_time_check = now_init
         # v3.5.2: 开机首检 — 一组待判定的 rule_id 集合, 在第一个步骤完成时清算.
         # _run_periodic_actions_on_start 时填充, _check_periodic_actions_on_first_step 时清算并触发事件.
         if not hasattr(self, '_run_on_start_pending') or not isinstance(getattr(self, '_run_on_start_pending', None), set):
@@ -123,6 +152,12 @@ class PeriodicActionsMixin:
                   ", ".join(f"{r['name']}(每{r['interval']}轮)" for r in parsed))
 
     def _restore_periodic_counters(self, config: Dict[str, Any]) -> None:
+        """从落盘文件恢复 counter + last_done_ts.
+
+        v3.7.4 起持久化格式从 ``{rule_id: counter}`` 升级为
+        ``{"counters": {rule_id: counter}, "last_done_ts": {rule_id: ts}}``,
+        但向后兼容老格式 (老格式只恢复 counter).
+        """
         project_id = (config or {}).get('id')
         if not project_id:
             return
@@ -132,15 +167,31 @@ class PeriodicActionsMixin:
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 saved = json.load(f) or {}
+
+            # 兼容判定: 新格式有 "counters" 键, 老格式直接是 {rule_id: int}
+            if isinstance(saved, dict) and 'counters' in saved and isinstance(saved.get('counters'), dict):
+                saved_counters = saved.get('counters') or {}
+                saved_ts = saved.get('last_done_ts') or {}
+            else:
+                saved_counters = saved if isinstance(saved, dict) else {}
+                saved_ts = {}
+
             for rule_id in list(self._periodic_counters.keys()):
-                if rule_id in saved:
+                if rule_id in saved_counters:
                     try:
-                        self._periodic_counters[rule_id] = int(saved[rule_id])
+                        self._periodic_counters[rule_id] = int(saved_counters[rule_id])
                     except (TypeError, ValueError):
                         pass
+                if rule_id in saved_ts:
+                    try:
+                        self._periodic_last_done_ts[rule_id] = float(saved_ts[rule_id])
+                    except (TypeError, ValueError):
+                        pass
+
             if self._periodic_counters:
                 print(f"[PeriodicActions] ch{getattr(self, 'channel_id', 0)} "
-                      f"恢复持久化计数: {self._periodic_counters}")
+                      f"恢复持久化计数: counters={self._periodic_counters} "
+                      f"last_done_ts={ {k: round(v, 1) for k, v in self._periodic_last_done_ts.items()} }")
         except Exception as e:
             print(f"[PeriodicActions] 恢复计数失败: {e}")
 
@@ -153,8 +204,13 @@ class PeriodicActionsMixin:
         path = self._periodic_counter_path(project_id)
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
+            # v3.7.4: 新格式同时存 counters + last_done_ts.
+            payload = {
+                'counters': dict(self._periodic_counters),
+                'last_done_ts': dict(getattr(self, '_periodic_last_done_ts', {}) or {}),
+            }
             with open(path, 'w', encoding='utf-8') as f:
-                json.dump(self._periodic_counters, f, ensure_ascii=False)
+                json.dump(payload, f, ensure_ascii=False)
         except Exception as e:
             print(f"[PeriodicActions] 持久化失败: {e}")
 
@@ -170,7 +226,11 @@ class PeriodicActionsMixin:
     # ============================================================
 
     def _check_periodic_actions(self, cycle_steps: List[str], is_good: bool) -> None:
-        """每 cycle_end 后调一次。遍历所有规则 → 计数 / 重置 / 触发事件"""
+        """每 cycle_end 后调一次。遍历所有规则 → 计数 / 重置 / 触发事件.
+
+        v3.7.4: 同时检查时间维度. 完成动作 (做了 trigger_step) 会同时重置
+        counter=0 + last_done_ts=now. 触发判定: 按次数 OR 按时间到期都会触发.
+        """
         rules = getattr(self, '_periodic_actions', None)
         # v3.5.2: 临时诊断日志
         print(f"[PeriodicActions/DBG] _check_periodic_actions called: "
@@ -181,6 +241,7 @@ class PeriodicActionsMixin:
             return
 
         cycle_step_set = set(cycle_steps or [])
+        now = time.time()
         changed = False
 
         for rule in rules:
@@ -200,20 +261,29 @@ class PeriodicActionsMixin:
 
             counter = self._periodic_counters.get(rule['id'], 0)
             interval = rule['interval']
+            time_interval = rule.get('time_interval_seconds', 0)
+            last_done = self._periodic_last_done_ts.get(rule['id'], now)
+            time_gap = now - last_done
 
             # ---- 重置判定 ----
             if did_trigger:
+                # v3.7.4: only_when_due 现在要看"任一维度到期"
                 if rule['reset_policy'] == 'always':
                     do_reset = True
                 else:  # only_when_due — 必须到期了做才算
-                    do_reset = counter >= interval
+                    count_due = interval > 0 and counter >= interval
+                    time_due = time_interval > 0 and time_gap >= time_interval
+                    do_reset = count_due or time_due
 
                 if do_reset:
                     self._periodic_counters[rule['id']] = 0
+                    self._periodic_last_done_ts[rule['id']] = now  # v3.7.4
                     rule['last_overdue_count'] = -1  # 重置 cooldown 状态
+                    rule['last_overdue_time_gap'] = -1.0  # v3.7.4
                     changed = True
                     print(f"[PeriodicActions] '{rule['name']}' 检测到完成动作，"
-                          f"counter {counter} → 0 (policy={rule['reset_policy']})")
+                          f"counter {counter} → 0, time_gap {time_gap:.0f}s → 0 "
+                          f"(policy={rule['reset_policy']})")
                     continue  # 抑制本次告警
 
             # ---- 累加 ----
@@ -225,23 +295,95 @@ class PeriodicActionsMixin:
                 print(f"[PeriodicActions/DBG] '{rule['name']}' counter += 1 → {counter} "
                       f"(interval={interval}, did_trigger={did_trigger})")
 
-            # ---- 通知触发 ----
-            if counter == interval and rule.get('due_warning_event_id'):
-                self._emit_periodic_notification(
-                    rule['due_warning_event_id'],
-                    f"{rule['name']} 已到期 ({counter}/{interval})，请尽快执行"
-                )
-            elif counter > interval and rule.get('overdue_event_id'):
-                if self._should_trigger_overdue(rule, counter):
-                    self._emit_periodic_notification(
-                        rule['overdue_event_id'],
-                        f"{rule['name']} 已超期 {counter - interval} 轮 "
-                        f"(累计 {counter}/{interval})"
-                    )
-                    rule['last_overdue_count'] = counter
+            # ---- 通知触发: 按次数 OR 按时间, 谁先到期谁触发 ----
+            self._maybe_emit_periodic(rule, counter, time_gap)
 
         if changed:
             self._persist_periodic_counters()
+
+    def _check_periodic_actions_time_only(self, now: Optional[float] = None) -> None:
+        """v3.7.4: 仅检查时间维度的到期/超期 — 由 inference_loop 主循环每 5 秒 throttle 调一次.
+
+        独立于 cycle_end, 用于解决"生产停了但仍在检测中"场景:
+        客户工人下班吃饭半小时不开工, 也应该按 time_interval_seconds 触发提醒.
+
+        本方法只触发 due/overdue 事件, **不动 counter**, 不动 last_done_ts —
+        那些只在 _check_periodic_actions (cycle_end 路径) 或检测到 trigger_step 时变化.
+        """
+        rules = getattr(self, '_periodic_actions', None)
+        if not rules:
+            return
+        if now is None:
+            now = time.time()
+
+        for rule in rules:
+            time_interval = rule.get('time_interval_seconds', 0)
+            if time_interval <= 0:
+                continue
+            channel_filter = rule.get('channel_filter')
+            if channel_filter and getattr(self, 'channel_id', 0) not in channel_filter:
+                continue
+
+            counter = self._periodic_counters.get(rule['id'], 0)
+            last_done = self._periodic_last_done_ts.get(rule['id'], now)
+            time_gap = now - last_done
+
+            # 只在时间维度真的到期时才尝试触发, 避免无意义判定
+            if time_gap < time_interval:
+                continue
+
+            # 复用 _maybe_emit_periodic — 它内部判定 cooldown / once 节流
+            self._maybe_emit_periodic(rule, counter, time_gap)
+
+    def _maybe_emit_periodic(self, rule: Dict[str, Any], counter: int, time_gap: float) -> None:
+        """统一的 due/overdue 触发判定 — count + time 两维度 OR.
+
+        优先级: overdue (任一维度超期) > due (任一维度刚到期, 且没超期)
+        """
+        interval = rule['interval']
+        time_interval = rule.get('time_interval_seconds', 0)
+
+        # 维度状态
+        count_overdue = interval > 0 and counter > interval
+        count_due = interval > 0 and counter == interval
+        time_overdue = time_interval > 0 and time_gap > time_interval
+        time_due = time_interval > 0 and time_gap >= time_interval and not time_overdue
+
+        if (count_overdue or time_overdue) and rule.get('overdue_event_id'):
+            # 优先取更"严重"的描述
+            if count_overdue and time_overdue:
+                reason = (f"{rule['name']} 已超期 — 次数维度 {counter - interval} 轮 / "
+                          f"时间维度 {time_gap - time_interval:.0f} 秒 "
+                          f"(累计 {counter}/{interval} 轮, {time_gap:.0f}/{time_interval} 秒)")
+            elif count_overdue:
+                reason = (f"{rule['name']} 已超期 {counter - interval} 轮 "
+                          f"(累计 {counter}/{interval})")
+            else:
+                reason = (f"{rule['name']} 已超期 {time_gap - time_interval:.0f} 秒 "
+                          f"(距上次 {time_gap:.0f}s, 阈值 {time_interval}s)")
+            if self._should_trigger_overdue_v2(rule, counter, time_gap):
+                self._emit_periodic_notification(rule['overdue_event_id'], reason)
+                rule['last_overdue_count'] = counter
+                rule['last_overdue_time_gap'] = time_gap
+        elif (count_due or time_due) and rule.get('due_warning_event_id'):
+            if count_due and time_due:
+                reason = (f"{rule['name']} 已到期 (次数 {counter}/{interval}, "
+                          f"时间 {time_gap:.0f}/{time_interval} 秒)，请尽快执行")
+            elif count_due:
+                reason = f"{rule['name']} 已到期 ({counter}/{interval})，请尽快执行"
+            else:
+                reason = f"{rule['name']} 已到期 ({time_gap:.0f}/{time_interval} 秒)，请尽快执行"
+            # due 事件每个维度只在"刚到期"时弹一次, 节流走 last_overdue_count/time_gap
+            already_signaled = (
+                (count_due and rule.get('last_overdue_count', -1) >= counter) or
+                (time_due and rule.get('last_overdue_time_gap', -1.0) >= time_gap - 1.0)
+            )
+            if not already_signaled:
+                self._emit_periodic_notification(rule['due_warning_event_id'], reason)
+                if count_due:
+                    rule['last_overdue_count'] = counter
+                if time_due:
+                    rule['last_overdue_time_gap'] = time_gap
 
     # ============================================================
     # 开机首检 — start_detection 时调用
@@ -330,7 +472,11 @@ class PeriodicActionsMixin:
             if step_label in rule['trigger_labels']:
                 # 客户做了首件 trigger_step — 静默重置
                 self._periodic_counters[rid] = 0
+                # v3.7.4: 时间维度同步重置
+                if hasattr(self, '_periodic_last_done_ts'):
+                    self._periodic_last_done_ts[rid] = time.time()
                 rule['last_overdue_count'] = -1
+                rule['last_overdue_time_gap'] = -1.0
                 changed = True
                 print(f"[PeriodicActions] '{rule['name']}' 开机首检通过: "
                       f"客户做了 '{step_label}', counter → 0")
@@ -355,7 +501,11 @@ class PeriodicActionsMixin:
                 print(f"[PeriodicActions] on_first_step 持久化失败: {e}")
 
     def _should_trigger_overdue(self, rule: Dict[str, Any], counter: int) -> bool:
-        """根据 overdue_repeat 决定是否触发本次 overdue 事件"""
+        """根据 overdue_repeat 决定是否触发本次 overdue 事件 (历史 API, 仅看 counter).
+
+        v3.7.4 起 _maybe_emit_periodic 走 _should_trigger_overdue_v2 (兼顾时间维度).
+        本方法保留供老调用方使用.
+        """
         repeat = (rule.get('overdue_repeat') or 'every_cycle').strip()
         last = rule.get('last_overdue_count', -1)
 
@@ -369,6 +519,40 @@ class PeriodicActionsMixin:
             except (IndexError, ValueError):
                 return True
             return last < 0 or (counter - last) >= max(1, gap)
+        return True
+
+    def _should_trigger_overdue_v2(self, rule: Dict[str, Any], counter: int, time_gap: float) -> bool:
+        """v3.7.4: overdue 节流判定 — 兼顾次数维度与时间维度.
+
+        - every_cycle: 每次调都触发 (注意 _check_periodic_actions_time_only 由 inference loop
+          每 5 秒调一次, 实际就是每 5 秒最多一次, 不会刷屏).
+        - once:       只要任一维度还没触发过 overdue 就触发, 之后永久静默直到 reset.
+        - cooldown:N: 任一维度的进度与 last 的差值 ≥ N 才触发. N 对次数 = 轮数,
+                      对时间 = 秒数 (复用同一个 N, 简化配置).
+        """
+        repeat = (rule.get('overdue_repeat') or 'every_cycle').strip()
+        last_cnt = rule.get('last_overdue_count', -1)
+        last_gap = rule.get('last_overdue_time_gap', -1.0)
+        interval = rule['interval']
+        time_interval = rule.get('time_interval_seconds', 0)
+
+        if repeat == 'every_cycle':
+            return True
+        if repeat == 'once':
+            count_first = (interval > 0 and counter > interval and last_cnt < 0)
+            time_first = (time_interval > 0 and time_gap > time_interval and last_gap < 0)
+            return count_first or time_first
+        if repeat.startswith('cooldown:'):
+            try:
+                gap = int(repeat.split(':', 1)[1])
+            except (IndexError, ValueError):
+                return True
+            gap = max(1, gap)
+            count_ok = (interval > 0 and counter > interval
+                        and (last_cnt < 0 or (counter - last_cnt) >= gap))
+            time_ok = (time_interval > 0 and time_gap > time_interval
+                       and (last_gap < 0 or (time_gap - last_gap) >= gap))
+            return count_ok or time_ok
         return True
 
     # ============================================================
@@ -477,11 +661,20 @@ class PeriodicActionsMixin:
                 return {'reset': []}
             target_ids = [rule_id]
 
+        # v3.7.4: reset 时同步重置时间维度 — 视为"刚做完了一次"
+        now = time.time()
+        last_done_map = getattr(self, '_periodic_last_done_ts', None)
+        if not isinstance(last_done_map, dict):
+            self._periodic_last_done_ts = {}
+            last_done_map = self._periodic_last_done_ts
+
         for rid in target_ids:
             counters[rid] = 0
+            last_done_map[rid] = now
             rule = rules_by_id.get(rid)
             if rule is not None:
                 rule['last_overdue_count'] = -1
+                rule['last_overdue_time_gap'] = -1.0
             pending = getattr(self, '_run_on_start_pending', None)
             if isinstance(pending, set):
                 pending.discard(rid)
@@ -496,30 +689,74 @@ class PeriodicActionsMixin:
         return {'reset': target_ids}
 
     def get_periodic_actions_status(self) -> List[Dict[str, Any]]:
-        """返回每条规则的当前进度 — 给 get_detection_results 用"""
+        """返回每条规则的当前进度 — 给 get_detection_results 用.
+
+        v3.7.4 新增字段: time_interval_seconds / time_elapsed / time_remaining /
+        time_state. 整体 state 取次数维度与时间维度中"更严重"的那个
+        (overdue > due > ok), 让 Monitor UI 一眼看到最紧急的提示.
+        """
         rules = getattr(self, '_periodic_actions', None)
         if not rules:
             return []
+        now = time.time()
+        last_done_map = getattr(self, '_periodic_last_done_ts', {}) or {}
         out = []
         for rule in rules:
             counter = self._periodic_counters.get(rule['id'], 0)
             interval = rule['interval']
-            if counter < interval:
-                state = 'ok'
+
+            # 次数维度
+            if interval <= 0:
+                count_state = 'disabled'
+                remaining = 0
+            elif counter < interval:
+                count_state = 'ok'
                 remaining = interval - counter
             elif counter == interval:
-                state = 'due'
+                count_state = 'due'
                 remaining = 0
             else:
-                state = 'overdue'
+                count_state = 'overdue'
                 remaining = -(counter - interval)
+
+            # v3.7.4: 时间维度
+            time_interval = rule.get('time_interval_seconds', 0)
+            last_done = last_done_map.get(rule['id'], now)
+            time_elapsed = max(0.0, now - last_done)
+            if time_interval <= 0:
+                time_state = 'disabled'
+                time_remaining = 0
+            elif time_elapsed < time_interval:
+                time_state = 'ok'
+                time_remaining = int(time_interval - time_elapsed)
+            elif int(time_elapsed) == time_interval:
+                time_state = 'due'
+                time_remaining = 0
+            else:
+                time_state = 'overdue'
+                time_remaining = -int(time_elapsed - time_interval)
+
+            # 整体 state 取更严重的
+            severity = {'disabled': -1, 'ok': 0, 'due': 1, 'overdue': 2}
+            if severity[count_state] >= severity[time_state]:
+                overall_state = count_state if count_state != 'disabled' else time_state
+            else:
+                overall_state = time_state if time_state != 'disabled' else count_state
+            if overall_state == 'disabled':
+                overall_state = 'ok'
+
             out.append({
                 'id': rule['id'],
                 'name': rule['name'],
                 'counter': counter,
                 'interval': interval,
-                'state': state,            # ok | due | overdue
-                'remaining': remaining,    # 距离到期还有几轮（负数=已超期几轮）
+                'state': overall_state,             # ok | due | overdue (整体)
+                'remaining': remaining,             # 距离次数到期还有几轮
+                'count_state': count_state,         # v3.7.4: 单独的次数维度状态
+                'time_interval_seconds': time_interval,  # v3.7.4
+                'time_elapsed_seconds': int(time_elapsed),  # v3.7.4
+                'time_remaining_seconds': time_remaining,   # v3.7.4: 距时间到期还有几秒 (负=超期)
+                'time_state': time_state,           # v3.7.4: 单独的时间维度状态
                 'count_basis': rule['count_basis'],
                 'reset_policy': rule['reset_policy'],
                 'trigger_labels': sorted(rule['trigger_labels']),

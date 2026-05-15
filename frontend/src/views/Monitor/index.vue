@@ -734,21 +734,41 @@
                        'border-slate-700 bg-slate-800/50'">
             <span class="text-sm font-bold text-white truncate flex-1">{{ rule.name }}</span>
             <div class="flex items-center gap-2 text-xs whitespace-nowrap">
-              <span class="text-gray-400">{{ rule.counter }} / {{ rule.interval }}</span>
-              <span v-if="rule.state === 'ok'" class="text-cyan-400">还有 {{ rule.remaining }} 轮</span>
-              <span v-else-if="rule.state === 'due'" class="text-yellow-400 animate-pulse">
-                请执行 {{ (rule.trigger_labels || []).join(' / ') }}
-              </span>
-              <span v-else class="text-red-400 font-bold animate-pulse">
-                超期 {{ -rule.remaining }} 轮
-              </span>
+              <!-- 次数维度 (interval > 0 才显示) -->
+              <template v-if="rule.interval > 0">
+                <span class="text-gray-400">{{ rule.counter }} / {{ rule.interval }}</span>
+                <span v-if="rule.count_state === 'ok'" class="text-cyan-400">还有 {{ rule.remaining }} 轮</span>
+                <span v-else-if="rule.count_state === 'due'" class="text-yellow-400 animate-pulse">
+                  请执行 {{ (rule.trigger_labels || []).join(' / ') }}
+                </span>
+                <span v-else-if="rule.count_state === 'overdue'" class="text-red-400 font-bold animate-pulse">
+                  超期 {{ -rule.remaining }} 轮
+                </span>
+              </template>
+              <!-- v3.7.4: 时间维度 (time_interval_seconds > 0 才显示) -->
+              <template v-if="rule.time_interval_seconds > 0">
+                <span v-if="rule.interval > 0" class="text-gray-600">|</span>
+                <span class="text-gray-400">⏱ {{ rule.time_elapsed_seconds }}s / {{ rule.time_interval_seconds }}s</span>
+                <span v-if="rule.time_state === 'ok'" class="text-cyan-400">
+                  还有 {{ formatRemainingTime(rule.time_remaining_seconds) }}
+                </span>
+                <span v-else-if="rule.time_state === 'due'" class="text-yellow-400 animate-pulse">
+                  时间到期
+                </span>
+                <span v-else class="text-red-400 font-bold animate-pulse">
+                  超期 {{ formatRemainingTime(-rule.time_remaining_seconds) }}
+                </span>
+              </template>
+              <!-- 没配 trigger_labels 引导文案 (整体 due/overdue 时, 上面分维度都没显示就用这个) -->
+              <span v-if="rule.state !== 'ok' && (rule.interval || 0) === 0 && (rule.time_interval_seconds || 0) === 0"
+                    class="text-yellow-400">请执行 {{ (rule.trigger_labels || []).join(' / ') }}</span>
             </div>
             <div class="w-32 h-2 bg-slate-900 rounded overflow-hidden flex-shrink-0">
               <div class="h-full transition-all"
                    :class="rule.state === 'overdue' ? 'bg-red-500' :
                            rule.state === 'due' ? 'bg-yellow-500' :
                            'bg-cyan-500'"
-                   :style="{ width: Math.min(100, (rule.counter / rule.interval) * 100) + '%' }"></div>
+                   :style="{ width: Math.min(100, getPeriodicProgress(rule) * 100) + '%' }"></div>
             </div>
             <button @click="resetSinglePeriodicAction(rule)"
                     class="bg-slate-700 hover:bg-cyan-600 text-white px-2 py-0.5 rounded text-[0.625rem] font-bold transition-colors flex-shrink-0">
@@ -4299,6 +4319,30 @@ const resetCountersForChannel = async (ch) => {
   ElMessage.success(`工位 ${ch + 1} 计数器已清零`);
 };
 
+// v3.7.4: 周期性强制动作 UI 工具
+// 进度条同时考虑次数 + 时间维度, 取"更接近爆表的那个"
+const getPeriodicProgress = (rule) => {
+  const cnt = rule.interval > 0 ? Math.min(1, (rule.counter || 0) / rule.interval) : 0;
+  const tm = rule.time_interval_seconds > 0
+    ? Math.min(1, (rule.time_elapsed_seconds || 0) / rule.time_interval_seconds)
+    : 0;
+  return Math.max(cnt, tm);
+};
+
+// 把秒数渲染成 "32m15s" / "1h10m" / "45s" 这样的友好格式
+const formatRemainingTime = (seconds) => {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) {
+    const m = Math.floor(s / 60);
+    const ss = s % 60;
+    return ss === 0 ? `${m}m` : `${m}m${ss}s`;
+  }
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return m === 0 ? `${h}h` : `${h}h${m}m`;
+};
+
 // v3.7.3: 周期性强制动作 — 单条/全部手动重置，任何时候都可点（含检测运行中）
 const _periodicTargetChannel = () => (channelCount.value > 1 ? selectedChannel.value : 0);
 
@@ -4316,7 +4360,14 @@ const resetSinglePeriodicAction = async (rule) => {
   try {
     await resetPeriodicAction(_periodicTargetChannel(), rule.id);
     const hit = periodicActions.value.find(r => r.id === rule.id);
-    if (hit) { hit.counter = 0; hit.state = 'ok'; hit.remaining = hit.interval; }
+    if (hit) {
+      hit.counter = 0; hit.state = 'ok'; hit.remaining = hit.interval;
+      // v3.7.4: 时间维度也乐观更新
+      hit.count_state = hit.interval > 0 ? 'ok' : 'disabled';
+      hit.time_elapsed_seconds = 0;
+      hit.time_remaining_seconds = hit.time_interval_seconds || 0;
+      hit.time_state = hit.time_interval_seconds > 0 ? 'ok' : 'disabled';
+    }
     ElMessage.success(`「${rule.name}」已重置`);
   } catch (e) {
     console.error('重置周期性强制动作失败:', e);
@@ -4337,7 +4388,14 @@ const resetAllPeriodicActions = async () => {
   }
   try {
     await resetPeriodicAction(_periodicTargetChannel(), null);
-    periodicActions.value.forEach(r => { r.counter = 0; r.state = 'ok'; r.remaining = r.interval; });
+    periodicActions.value.forEach(r => {
+      r.counter = 0; r.state = 'ok'; r.remaining = r.interval;
+      // v3.7.4: 时间维度也乐观更新
+      r.count_state = r.interval > 0 ? 'ok' : 'disabled';
+      r.time_elapsed_seconds = 0;
+      r.time_remaining_seconds = r.time_interval_seconds || 0;
+      r.time_state = r.time_interval_seconds > 0 ? 'ok' : 'disabled';
+    });
     ElMessage.success('已全部重置');
   } catch (e) {
     console.error('全部重置周期性强制动作失败:', e);

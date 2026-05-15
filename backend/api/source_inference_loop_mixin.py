@@ -196,6 +196,10 @@ class InferenceLoopMixin:
         last_log_time = time.time()
         log_interval = 10.0              # 每 10 秒打印诊断状态
         last_debug_time = time.time()    # 每 5 秒打印 debug log
+        # v3.7.4: 周期性强制动作的"时间维度"触发节流 — 每 5 秒检查一次,
+        # 即使生产停了 (没有新 cycle_end), 只要 detection 在跑就会主动报警.
+        last_periodic_time_check = time.time()
+        periodic_time_check_interval = 5.0
 
         while self._inference_running and self.is_detecting:
             try:
@@ -209,6 +213,15 @@ class InferenceLoopMixin:
                 if loop_start - last_log_time > log_interval:
                     print(f"[推理线程诊断] 帧数={frame_count}, 延迟={self.latency}ms, 运行中...")
                     last_log_time = loop_start
+
+                # v3.7.4: 周期性强制动作"时间维度"主动检查 (每 5s 节流)
+                if loop_start - last_periodic_time_check > periodic_time_check_interval:
+                    if hasattr(self, '_check_periodic_actions_time_only'):
+                        try:
+                            self._check_periodic_actions_time_only(loop_start)
+                        except Exception as _e:
+                            debug_log(f"!!! periodic_actions_time_only 异常: {_e}", "INFERENCE")
+                    last_periodic_time_check = loop_start
 
                 # 周期性缓存清理 (60s) + GPU 深度清理 (600s)
                 if loop_start - last_cleanup_time > cleanup_interval:

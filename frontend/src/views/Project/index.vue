@@ -1129,14 +1129,21 @@
                       <el-button type="danger" size="small" link @click="removePeriodicAction(idx)">删除</el-button>
                     </div>
 
-                    <div class="grid grid-cols-2 gap-3 mb-3">
+                    <div class="grid grid-cols-3 gap-3 mb-3">
                       <div>
-                        <p class="text-xs text-gray-500 mb-1">强制周期 N（每多少轮必须做一次）</p>
-                        <el-input-number v-model="rule.interval" size="small" :min="1" :max="100000"
+                        <p class="text-xs text-gray-500 mb-1">强制周期 N（每多少轮做一次, 0=关闭）</p>
+                        <el-input-number v-model="rule.interval" size="small" :min="0" :max="100000"
                                          class="w-full" controls-position="right" />
                       </div>
                       <div>
-                        <p class="text-xs text-gray-500 mb-1">计数基准</p>
+                        <!-- v3.7.4: 按时间触发 — 解决"生产停了但仍在检测中"场景 -->
+                        <p class="text-xs text-gray-500 mb-1">超时秒数（多少秒没做就报警, 0=关闭）</p>
+                        <el-input-number v-model="rule.time_interval_seconds" size="small" :min="0" :max="86400"
+                                         class="w-full" controls-position="right"
+                                         placeholder="例: 1800 = 30 分钟" />
+                      </div>
+                      <div>
+                        <p class="text-xs text-gray-500 mb-1">计数基准（仅按次数模式生效）</p>
                         <el-select v-model="rule.count_basis" size="small" class="w-full">
                           <el-option label="所有 cycle 都计数" value="all" />
                           <el-option label="只数合格 cycle (推荐)" value="good_only" />
@@ -1144,6 +1151,9 @@
                         </el-select>
                       </div>
                     </div>
+                    <p class="text-[0.65rem] text-gray-500 -mt-2 mb-3">
+                      ★ 两种触发条件可任意组合 — 谁先到期谁先报警。完成动作（做了"完成动作"步骤）会同时重置两个计数。
+                    </p>
 
                     <div class="mb-3">
                       <p class="text-xs text-gray-500 mb-1">完成动作（检测到任一即视为已做）</p>
@@ -2437,6 +2447,8 @@ const initProjectDefaults = (project) => {
     enabled: rule.enabled !== false,
     trigger_step_ids: Array.isArray(rule.trigger_step_ids) ? rule.trigger_step_ids : [],
     interval: typeof rule.interval === 'number' ? rule.interval : 20,
+    // v3.7.4: 按时间触发 (0=关闭, 老项目默认 0 = 行为完全不变)
+    time_interval_seconds: typeof rule.time_interval_seconds === 'number' ? rule.time_interval_seconds : 0,
     count_basis: rule.count_basis || 'good_only',
     reset_policy: rule.reset_policy || 'always',
     due_warning_event_id: rule.due_warning_event_id ?? null,
@@ -2783,7 +2795,10 @@ const handleSaveProject = async () => {
           name: rule.name || '',
           enabled: rule.enabled !== false,
           trigger_step_ids: Array.isArray(rule.trigger_step_ids) ? rule.trigger_step_ids : [],
-          interval: Math.max(1, Math.floor(Number(rule.interval) || 20)),
+          // v3.7.4: interval 现在允许 0 (关闭按次数). 后端 _apply_periodic_actions 会校验
+          // interval+time_interval_seconds 不能同时为 0.
+          interval: Math.max(0, Math.floor(Number(rule.interval) || 0)),
+          time_interval_seconds: Math.max(0, Math.floor(Number(rule.time_interval_seconds) || 0)),
           count_basis: rule.count_basis || 'good_only',
           reset_policy: rule.reset_policy || 'always',
           due_warning_event_id: rule.due_warning_event_id ?? null,
@@ -3500,6 +3515,7 @@ const addPeriodicAction = () => {
     enabled: true,
     trigger_step_ids: [],
     interval: 20,
+    time_interval_seconds: 0,  // v3.7.4: 默认 0=按时间不触发, 客户按需配置
     count_basis: 'good_only',
     reset_policy: 'always',
     due_warning_event_id: null,
