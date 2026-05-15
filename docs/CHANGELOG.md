@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.7.4 (2026-05-15)
+- [FEAT-374-PERIODIC-TIME] **周期性强制动作支持按时间触发** — 客户产线生产间断（吃饭/换班/换工序）整个 cycle 不推进但 detection 仍在跑, 原按次数触发的强制保养动作不报警, 客户希望按时间也能报. 新增 `pipeline_config.periodic_actions[*].time_interval_seconds` 字段（=0 关闭，>0 启用, 与 `interval` 是 OR 关系）. 后端新增 `_check_periodic_actions_time_only` + `inference_loop` 每 5s throttle 调用, 完成动作时同步重置 counter + last_done_ts; 持久化 JSON 升级为 `{counters, last_done_ts}` 结构兼容老格式; `get_periodic_actions_status` 返回新增 `time_state/count_state/state` 取更严重那个; 前端 Project 页加超时秒数输入, Monitor 页加 `⏱ Xs/Ys` 时间维度展示与 reset 同步; 完全向后兼容老项目. 11/11 单元测试 + 11/11 UAT(可见浏览器) PASS, 红绿双向验证通过.
+- [FIX-374-START-FRONTEND] **`./start_frontend.sh` 在 Node 18 下报 `crypto.hash is not a function` 修复** — Vite 7.x 要求 Node ≥ v20.19, 但 Ubuntu 24.04 默认 node v18.19.1. 脚本加 `ensure_node_version`: 探测当前 node 主版本 < 20 时自动 `nvm use` 已装最高 v20/22/24, 用 `--delete-prefix` 兼容 .npmrc 干扰, 切换后用 `node -v` 重校验是否真生效. 客户机走 Electron 打包 dist 与本修复无关.
+- [TEST-374-001] 归档 `tests/uat/uat_20260515_periodic_time_trigger.py` 作为长期回归护栏（不带 test_ 前缀避免 pytest 自动收集）.
+- [SKILL-374-001] `modify-project-config` 追加 `time_interval_seconds` 字段说明 + 双维度 OR 关系语义.
+- [CONFIG-374-001] 版本号 3.7.3 → 3.7.4 (`electron/package.json` + `electron/splash.html`).
+- **SE9 (Sophon BM1688 ARM64) 适配未随版发布** — 相关代码隔离在 `feature/se9-arm64` 分支, sophon-sail 集成 / bmodel 转换 / 装机脚本仍在调试中, Windows 客户不受影响.
+
 ## v3.7.3 (2026-05-14)
 - [FEAT-373-AUX-CONVERT] **副模型支持 TensorRT/ONNX 转换全链路** — Project 页副模型卡片加"切换格式"按钮 + 格式 tag + `model_format` 字段进 pipeline_config.models[i]; Monitor 单/多通道分支 `_resolveModelPath` 都改读 `e.model_format||'pytorch_fp32'`, 老项目兜底. 副模型现可与主模型同速跑 TRT FP16.
 - [FEAT-373-PROJECT-UX] **Project 页副模型参数 UX 简化** — `conf`/`iou`/`priority`/`FP16` 四列并排改成"置信度 + 高级参数 ▾"折叠; 4 个参数加详细中文 tooltip (人话, 不是术语); 非 `pytorch_fp32` 格式时 FP16 自动 disable + 解释 tooltip.

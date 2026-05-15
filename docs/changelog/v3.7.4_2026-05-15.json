@@ -1,0 +1,108 @@
+{
+  "version": "3.7.4",
+  "date": "2026-05-15",
+  "previous_version": "3.7.3",
+  "theme": "周期性强制动作新增按时间触发维度（解决检测中但停工场景的保养超时报警）+ 开发机 Vite 7 启动门槛修复",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "周期性强制动作支持按时间触发",
+      "symptom": "客户产线生产间断（吃饭/换班/换工序），整个 cycle 停止推进但 detection 仍在跑，原有按 cycle 数触发的强制保养动作（清洁治具/上油/校准）此时不会触发提醒，客户希望按时间维度也能报警",
+      "root_cause": "v3.7.3 及之前版本的 periodic_actions 只有 interval（按次数）维度，没有时间维度；inference loop 也没有 time-based check 主动检查",
+      "fix": "1) Schema 新增 time_interval_seconds 字段（=0 关闭，>0 启用），与 interval 是 OR 关系；2) 后端新增 _check_periodic_actions_time_only 方法 + inference_loop 每 5s throttle 调用一次；3) 持久化 JSON 升级为 {counters, last_done_ts} 结构，自动兼容老格式；4) get_periodic_actions_status 返回新增 time_state/count_state/state（取更严重那个）；5) 前端 Project 页加超时秒数输入，Monitor 页加时间维度展示与 reset；6) 完成动作时同时重置 counter + last_done_ts；7) 完全向后兼容老项目",
+      "files": [
+        "backend/api/source_periodic_actions_mixin.py",
+        "backend/api/source_inference_loop_mixin.py",
+        "backend/api/source.py",
+        "frontend/src/views/Project/index.vue",
+        "frontend/src/views/Monitor/index.vue",
+        "tests/test_periodic_actions_v352.py",
+        "tests/test_periodic_actions_v374_time.py",
+        "tests/uat/uat_20260515_periodic_time_trigger.py"
+      ],
+      "keywords": [
+        "周期性强制动作",
+        "periodic_actions",
+        "time_interval_seconds",
+        "按时间触发",
+        "保养超时",
+        "停工报警",
+        "time_only_check",
+        "_periodic_last_done_ts",
+        "inference_loop throttle",
+        "5 second throttle",
+        "OR 关系",
+        "double dimension trigger",
+        "持久化升级",
+        "向后兼容"
+      ],
+      "breaking": false,
+      "tested": {
+        "unit_tests": "tests/test_periodic_actions_v374_time.py (11/11 PASS) + tests/test_periodic_actions_v352.py (17/17 PASS)",
+        "uat": "tests/uat/uat_20260515_periodic_time_trigger.py (11/11 PASS, 红绿双向验证: feature 11/11 PASS, main 9/11 FAIL)"
+      }
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "开发机 ./start_frontend.sh 在 Node 18 下报 crypto.hash is not a function",
+      "symptom": "开发同事跑 ./start_frontend.sh 报错 TypeError: crypto.hash is not a function，前端起不来",
+      "root_cause": "Vite 7.x 要求 Node >= v20.19，但 Ubuntu 24.04 系统默认 node v18.19.1，脚本未做版本检测",
+      "fix": "start_frontend.sh 增加 ensure_node_version 函数：1) 探测当前 node 主版本；2) <20 时自动 source nvm.sh 并 nvm use 已装的最高 v20/22/24（精确匹配真实安装版本，排除别名行）；3) 用 nvm use --delete-prefix 兼容 .npmrc 干扰；4) 切换后用 node -v 重新校验是否真生效（不看退出码）；5) 没装 nvm 或已 >=20 的环境不受影响。客户机走 Electron 打包 dist 与本修复无关",
+      "files": [
+        "start_frontend.sh"
+      ],
+      "keywords": [
+        "start_frontend.sh",
+        "vite 7",
+        "node 18",
+        "crypto.hash is not a function",
+        "nvm use",
+        "ensure_node_version",
+        "开发机环境",
+        "Ubuntu 24.04"
+      ],
+      "breaking": false,
+      "tested": {
+        "manual": "开发机 Ubuntu 24.04 (系统 node v18) 跑 ./start_frontend.sh 自动切到 v22 启动成功"
+      }
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "归档 v3.7.4 周期性按时间触发的 UAT 脚本作为长期回归护栏",
+      "symptom": "按 run-tests skill 铁律 5 — 每条客户反馈或新功能必须沉淀对应回归护栏到仓库",
+      "root_cause": "—",
+      "fix": "tests/uat/uat_20260515_periodic_time_trigger.py，包含 Phase A 后端 API 契约 + Phase B 可见浏览器 UI + Phase C 清理与报告。文件名带日期防止冲突，不带 test_ 前缀避免被 pytest 自动收集，必须 python 显式调用",
+      "files": [
+        "tests/uat/uat_20260515_periodic_time_trigger.py"
+      ],
+      "keywords": [
+        "UAT",
+        "User Acceptance Testing",
+        "回归护栏",
+        "可见浏览器",
+        "playwright headless False",
+        "video recording",
+        "screenshot evidence"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [
+    "modify-project-config"
+  ],
+  "files_changed": [
+    "backend/api/source.py",
+    "backend/api/source_inference_loop_mixin.py",
+    "backend/api/source_periodic_actions_mixin.py",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Project/index.vue",
+    "start_frontend.sh",
+    "tests/test_periodic_actions_v352.py",
+    "tests/test_periodic_actions_v374_time.py",
+    "tests/uat/uat_20260515_periodic_time_trigger.py"
+  ],
+  "se9_status": "本次发版不带 SE9 (Sophon BM1688 ARM64) 改动，相关代码在 feature/se9-arm64 分支单独发版。Windows 客户不受影响"
+}

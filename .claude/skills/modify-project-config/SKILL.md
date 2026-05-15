@@ -87,13 +87,15 @@ class Project(Base):
 
   // ★ v3.5.0 新增：周期性强制动作（每 N 轮做 E）
   // ★ v3.5.2 新增：每条规则的 run_on_start（开机首检）
+  // ★ v3.7.4 新增：time_interval_seconds（按时间触发，与 interval OR 关系）
   "periodic_actions": [
     {
       "id": "pa_1700000000_0",
       "name": "每20件清洁治具",
       "enabled": true,
       "trigger_step_ids": [3, 5],
-      "interval": 20,
+      "interval": 20,                         // 按次数 (=0 关闭)
+      "time_interval_seconds": 600,           // ★ v3.7.4: 按时间秒数 (=0 关闭, >0 启用)
       "count_basis": "all|good_only|ng_only",
       "reset_policy": "always|only_when_due",
       "due_warning_event_id": 4,
@@ -105,6 +107,15 @@ class Project(Base):
   ]
 }
 ```
+
+#### v3.7.4 时间维度语义（必读）
+
+- **OR 关系**：`interval` 与 `time_interval_seconds` 谁先到期谁先报警；做 `trigger_step` 时**两个维度同时重置**。两个都 =0 视为无效规则会被跳过。
+- **典型场景**：客户产线生产间断（吃饭/换班/换工序），整个 cycle 不推进但 detection 仍在跑。`interval` 按次数维度永远不到期，新维度 `time_interval_seconds` 兜住。
+- **运行期主动检查**：`source_inference_loop_mixin._inference_loop` 每 5 秒 throttle 调一次 `_check_periodic_actions_time_only(now)`，即使**没有新 cycle**也能触发时间维度报警（与现有 60s 缓存清理 / 600s GPU 清理同款机制）。
+- **持久化升级**：`DATA_DIR/counters/project_X_chY_periodic.json` 从 `{rule_id: counter}` 升级为 `{"counters": {rule_id: counter}, "last_done_ts": {rule_id: ts}}`。`_restore_periodic_counters` 兼容老格式（自动识别后向兼容读）。
+- **状态返回**：`get_periodic_actions_status` 在原 `count_state / counter / interval` 基础上新增 `time_state / time_elapsed_seconds / time_remaining_seconds / time_interval_seconds`，整体 `state` 字段取**更严重**那个（severity: ok < due < overdue），前端进度条按更接近爆表那个维度渲染。
+- **完全向后兼容**：老项目 schema 缺 `time_interval_seconds` 时默认 0 = 行为完全等同 v3.7.3。
 
 ### 2. steps_config（每步配置）
 
@@ -235,11 +246,16 @@ class Project(Base):
        ▼
 ┌─ 运行期消费点 ───────────────────────────────────────┐
 │  source_inference_loop_mixin.py: 读 logic_mode       │
+│      ★ v3.7.4: 每 5s throttle 调                     │
+│      _check_periodic_actions_time_only(now) →        │
+│      纯时间维度检查, 即使没新 cycle 也能报警          │
 │  source_events_check_mixin.py:   按模式分发 OK/NG     │
 │  source_step_stats_mixin.py:     调 _check_periodic_ │
 │      actions_on_first_step (v3.5.2 开机首检)         │
 │  source_session_lifecycle_mixin.py: cycle_end 后调   │
 │      _check_periodic_actions(cycle_steps, is_good)   │
+│      ★ v3.7.4: 完成动作时同时 reset counter +        │
+│      _periodic_last_done_ts                          │
 │  source_lifecycle_mixin.py: start_detection 时调     │
 │      _run_periodic_actions_on_start (v3.5.2)         │
 │  source_drawer.py / settlement_mixin.py / ...        │
