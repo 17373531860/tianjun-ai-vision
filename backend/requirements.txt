@@ -48,3 +48,8 @@ psutil>=5.9.0
 python-docx>=1.0.0       # docx 路线 A 自动样式渲染
 docxtpl>=0.16.0          # docx 路线 B 占位符模板渲染（基于 python-docx + jinja2）
 openpyxl>=3.1.0          # xlsx 渲染器
+
+# v3.7.1 插件签名 / License 校验 (RSA-PSS-SHA256)
+# 之前漏列, CI v3.7.2~v3.7.4 三轮 Virtual Functional Tests 都因 ModuleNotFoundError 挂掉
+# backend/plugin_system/_plugin_common.py 与 backend/scripts/generate_license.py 都依赖
+cryptography>=42.0.0

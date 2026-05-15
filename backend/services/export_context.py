@@ -1012,7 +1012,11 @@ def build_range_context(db: DBSession,
     返回完整 302 字段 dict (cycle.* / steps 留空，业务实体取 session 内首条做代表)
     """
     from backend.models.models import DetectionSession, DetectionCycle, StepRecord
+    from sqlalchemy import case
     from sqlalchemy import func as sa_func
+
+    cycle_good_int = case((DetectionCycle.is_good == True, 1), else_=0)  # noqa: E712
+    step_valid_int = case((StepRecord.is_valid == True, 1), else_=0)  # noqa: E712
 
     ctx = _empty_context()
     _fill_app_display_license_system(ctx, db, license_payload)
@@ -1090,7 +1094,7 @@ def build_range_context(db: DBSession,
         rows = db.query(
             sa_func.date(DetectionCycle.start_time).label("d"),
             sa_func.count(DetectionCycle.id),
-            sa_func.sum(DetectionCycle.is_good == True),  # noqa: E712
+            sa_func.sum(cycle_good_int),
         ).filter(DetectionCycle.session_id.in_(sids)).group_by("d").order_by("d").all()
         for d, total, good in rows:
             good = int(good or 0)
@@ -1143,7 +1147,7 @@ def build_range_context(db: DBSession,
         step_rows = db.query(
             StepRecord.step_label,
             sa_func.count(StepRecord.id),
-            sa_func.sum(StepRecord.is_valid == True),  # noqa: E712
+            sa_func.sum(step_valid_int),
             sa_func.avg(StepRecord.duration),
             sa_func.min(StepRecord.duration),
             sa_func.max(StepRecord.duration),
