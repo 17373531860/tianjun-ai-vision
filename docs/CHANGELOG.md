@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.7.5 (2026-05-18)
+- [BUG-375-PERIODIC-RESET] **顺序模式下做了周期性强制动作仍然不清零修复（FIX-381 副作用）** — 客户配主流程顺序 A-B-C-D 同时配每 20 轮/每 600 秒做一次保养动作 E，做完 E 之后周期强制动作的未完成轮数/时间继续累加不清零，保养报警一直挂. 根因: v3.7.2 (FIX-381) 在 `process_step_detection` 顺序模式分支拦截了 `expected_seq` 外的步骤直接 return，但保养类 trigger_step 本来就在主序列外 → E 永远进不了 `cycle.step_sequence` → `_check_periodic_actions` 永远看不见 → 永远不清零. 修复"小账本"方案: 新增 `_periodic_triggers_observed` 旁路观察账本独立于 cycle.step_sequence, `_observe_periodic_trigger` 在 `process_step_detection` 早于 FIX-381 拦截调一次记账, `_check_periodic_actions` 入口合并 cycle_steps + 旁路账本算 did_trigger, 判定后清空, `reset_stats` / `_discard_empty_cycle` 同步清账本防串轮. 完全向后兼容老项目零开销. 新增 8 个测试覆盖 observe 记账/过滤/去重/核心场景/清空/全局重置/通道过滤/时间维度同步.
+- [BUG-375-AUX-COLOR] **副模型检测框始终是默认色 客户在步骤列表配的颜色失效修复** — 客户用副模型识别错误放置（默认 `display_color = #f59e0b` 琥珀黄），在步骤列表"检测框颜色"列单独配了红色但 Monitor 仍然黄色，跟 tooltip 写"任何模式都生效"自相矛盾. 根因: v3.7.2 (FIX-381-B) 设计 `pickDetColor` 时把副模型 `display_color` 放最高位 → 客户对单个 label 配色的明确意图被忽视, 步骤 `box_color` 形同摆设. 修复: 翻转优先级 步骤级 `box_color` > 副模型 `display_color` > OK/NG 兜底; Project 页 tooltip 文案改清说明新行为. 副模型不配 `box_color` 时行为与 v3.7.4 一致不破坏现有项目视觉.
+- [CONFIG-375-001] 版本号 3.7.4 → 3.7.5 (`electron/package.json` + `electron/splash.html`).
+- **历史长期红灯 CI 仍未修** — `Virtual Functional Tests` (cryptography 依赖缺失) 和 `DB Matrix (SQLite + PostgreSQL)` (PG SUM(boolean) dialect 不兼容) 自 v3.7.4 起持续红灯, 跟 feature/plugin-system 引入相关. SE9 分支已修但未 cherry-pick 到 main, 留待 v3.7.6.
+- **SE9 (Sophon BM1688 ARM64) 适配未随版发布** — 相关代码隔离在 `feature/se9-arm64` 分支, Windows 客户不受影响.
+
 ## v3.7.4 (2026-05-15)
 - [FEAT-374-PERIODIC-TIME] **周期性强制动作支持按时间触发** — 客户产线生产间断（吃饭/换班/换工序）整个 cycle 不推进但 detection 仍在跑, 原按次数触发的强制保养动作不报警, 客户希望按时间也能报. 新增 `pipeline_config.periodic_actions[*].time_interval_seconds` 字段（=0 关闭，>0 启用, 与 `interval` 是 OR 关系）. 后端新增 `_check_periodic_actions_time_only` + `inference_loop` 每 5s throttle 调用, 完成动作时同步重置 counter + last_done_ts; 持久化 JSON 升级为 `{counters, last_done_ts}` 结构兼容老格式; `get_periodic_actions_status` 返回新增 `time_state/count_state/state` 取更严重那个; 前端 Project 页加超时秒数输入, Monitor 页加 `⏱ Xs/Ys` 时间维度展示与 reset 同步; 完全向后兼容老项目. 11/11 单元测试 + 11/11 UAT(可见浏览器) PASS, 红绿双向验证通过.
 - [FIX-374-START-FRONTEND] **`./start_frontend.sh` 在 Node 18 下报 `crypto.hash is not a function` 修复** — Vite 7.x 要求 Node ≥ v20.19, 但 Ubuntu 24.04 默认 node v18.19.1. 脚本加 `ensure_node_version`: 探测当前 node 主版本 < 20 时自动 `nvm use` 已装最高 v20/22/24, 用 `--delete-prefix` 兼容 .npmrc 干扰, 切换后用 `node -v` 重校验是否真生效. 客户机走 Electron 打包 dist 与本修复无关.

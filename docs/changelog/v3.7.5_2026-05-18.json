@@ -1,0 +1,111 @@
+{
+  "version": "3.7.5",
+  "date": "2026-05-18",
+  "previous_version": "3.7.4",
+  "theme": "顺序模式下旁路保养动作做了清不了零修复（FIX-381 副作用）+ 副模型检测框颜色让步给客户的步骤级配色",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "顺序模式下做了周期性强制动作仍然不清零（FIX-381 副作用）",
+      "symptom": "客户配主流程顺序 A-B-C-D 同时配每 20 轮 / 每 600 秒做一次保养动作 E（trigger_step=E），实测做完 E 之后周期强制动作的未完成轮数 / 时间依然继续累加，没清零，保养报警一直不消除",
+      "root_cause": "v3.7.2 (FIX-381) 在 process_step_detection 顺序/自定义-基于顺序模式分支拦截了 expected_seq 外的步骤直接 return，本意隔离序列外步骤误判 NG。但周期强制动作的 trigger_step（保养类）本来就在主序列外，被一起拦了：E 永远进不了 cycle.step_sequence，_check_periodic_actions 的 did_trigger=bool(cycle_step_set & trigger_labels) 永远是 False，counter/_periodic_last_done_ts 永远不重置",
+      "fix": "方案'小账本': 给周期强制动作单独开一本旁路观察账本 _periodic_triggers_observed，不污染 cycle.step_sequence（数据导出仍干净），只服务周期判定。1) source_periodic_actions_mixin.py 在 _apply_periodic_actions 初始化新状态 Set，新增 _observe_periodic_trigger 方法拿 step_label 比对所有规则的 trigger_labels 命中就记账，_check_periodic_actions 入口处用 cycle_step_set | _periodic_triggers_observed 合并算 did_trigger，判定完清空账本。2) source_settlement_mixin.py 在 process_step_detection is_new_appearance 分支最前面（早于 FIX-381 拦截）调一次 _observe_periodic_trigger。3) source.py reset_stats 清账本。4) source_session_lifecycle_mixin.py _discard_empty_cycle finally 段也清账本。完全向后兼容，rules 为空时 observe 直接 early return 零开销",
+      "files": [
+        "backend/api/source.py",
+        "backend/api/source_periodic_actions_mixin.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/source_settlement_mixin.py",
+        "tests/test_periodic_actions_v352.py"
+      ],
+      "keywords": [
+        "周期性强制动作",
+        "periodic_actions",
+        "FIX-381 副作用",
+        "顺序模式",
+        "sequential mode",
+        "保养动作清不了零",
+        "旁路保养",
+        "trigger_step 不进 cycle",
+        "expected_seq 拦截",
+        "_periodic_triggers_observed",
+        "_observe_periodic_trigger",
+        "小账本",
+        "side ledger",
+        "did_trigger",
+        "cycle.step_sequence",
+        "process_step_detection",
+        "reset_stats",
+        "_discard_empty_cycle",
+        "向后兼容"
+      ],
+      "breaking": false,
+      "tested": {
+        "unit_tests": "tests/test_periodic_actions_v352.py 新增 TestPeriodicTriggerObservedBypassesSequentialFilter 类 8 个用例，在 feature/se9-arm64 分支跑过 8/8 PASS",
+        "ast_validated": "main 上的 5 个 py 文件 AST 语法验证通过；本地未跑完整 pytest（开发机缺 tianjun conda env 的 pyserial/httpx）",
+        "code_structural_equivalence": "main 与 feature/se9-arm64 的 source_settlement_mixin.py FIX-381 拦截点 0 差异，source.py 与 source_session_lifecycle_mixin.py 清账本点同源；改动结构等价"
+      }
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "副模型检测框始终是默认色 客户在步骤列表配的颜色失效",
+      "symptom": "客户用副模型识别错误放置（默认 display_color = #f59e0b 琥珀黄）在 Project 页步骤列表检测框颜色列单独配了红色，但 Monitor 实时画面里检测框仍然是黄色跟设置不一致，同一处 tooltip 写'任何模式都生效'自相矛盾",
+      "root_cause": "v3.7.2 (FIX-381-B) 设计 pickDetColor 优先级时把副模型 display_color 放在最高位（旧逻辑: 副模型色 > 步骤 box_color > OK/NG），设计本意副模型整体识别色统一直观，但客户对单个 label 配色的明确意图被忽视了，步骤列表里的 box_color 形同摆设",
+      "fix": "翻转优先级，用户明确意图最高。frontend/src/views/Monitor/index.vue pickDetColor 改 if 顺序: 1) 步骤级 box_color 最高 2) 副模型 display_color 其次 3) 全局 OK/NG 兜底；两处使用点的注释也对齐。frontend/src/views/Project/index.vue 检测框颜色列 tooltip 文案改为说清新行为：留空 = 副模型沿用默认识别色 / 主模型沿用全局 OK/NG，设了颜色就以这里为准，副模型默认色让位。副模型不配 box_color（留空）时行为与 v3.7.4 一致不破坏现有项目视觉",
+      "files": [
+        "frontend/src/views/Monitor/index.vue",
+        "frontend/src/views/Project/index.vue"
+      ],
+      "keywords": [
+        "副模型",
+        "auxiliary model",
+        "检测框颜色",
+        "box_color",
+        "display_color",
+        "pickDetColor",
+        "步骤级配色",
+        "颜色优先级翻转",
+        "FIX-381-B",
+        "用户配置覆盖默认色",
+        "amber 黄色",
+        "tooltip 文案",
+        "项目配置生效"
+      ],
+      "breaking": false,
+      "tested": {
+        "manual": "前端代码变更轻量，按新优先级人肉走一遍 if-else 逻辑可验证；客户实际场景需在装好 v3.7.5 客户机上做 UAT"
+      }
+    },
+    {
+      "type": "config",
+      "id": "CONFIG-001",
+      "title": "版本号 3.7.4 -> 3.7.5",
+      "files": [
+        "electron/package.json",
+        "electron/splash.html"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/api/source.py",
+    "backend/api/source_periodic_actions_mixin.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/source_settlement_mixin.py",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Project/index.vue",
+    "tests/test_periodic_actions_v352.py",
+    "electron/package.json",
+    "electron/splash.html",
+    "docs/changelog/v3.7.5_2026-05-18.md",
+    "docs/changelog/v3.7.5_2026-05-18.json",
+    "docs/CHANGELOG.md"
+  ],
+  "se9_status": "本次发版不带 SE9 (Sophon BM1688 ARM64) 改动，相关代码在 feature/se9-arm64 分支单独发版。Windows 客户不受影响",
+  "known_issues": [
+    "Virtual Functional Tests CI 长期红灯 (ModuleNotFoundError: cryptography) — 跟 feature/plugin-system 引入的插件签名测试相关，SE9 分支 35f818b 已修但未 cherry-pick 到 main，留待 v3.7.6",
+    "DB Matrix (SQLite + PostgreSQL) CI 长期红灯 (PG SUM(boolean) dialect 不兼容) — 同上"
+  ]
+}
