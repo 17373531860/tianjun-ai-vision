@@ -541,3 +541,118 @@ class TestManualResetPeriodicCounter:
         vsm.reset_periodic_counter("pa_rs")
         assert "pa_rs" not in vsm._run_on_start_pending
         assert vsm._periodic_counters["pa_rs"] == 0
+
+
+# ============================================================================
+# v3.7.5: 旁路保养观察账本 — 顺序模式下 FIX-381 拦截 trigger_step 后仍能清零
+# ============================================================================
+class TestPeriodicTriggerObservedBypassesSequentialFilter:
+    """v3.7.5: _observe_periodic_trigger + _periodic_triggers_observed 旁路账本.
+
+    背景: v3.7.2 (FIX-381) 在 process_step_detection 顺序模式分支拦截了"非
+    expected_seq 内的步骤"return, 导致保养类 trigger_step (本来就在主序列外)
+    永远进不了 cycle.step_sequence, _check_periodic_actions 永远看不到 -> 永远
+    清不了零. 修法: 早于 FIX-381 拦截先记一笔到旁路账本, 周期判定时合并算 trigger.
+    """
+
+    def _rule(self, rid="pa_obs", trigger="E", interval=5):
+        return {
+            "id": rid,
+            "name": f"保养-{rid}",
+            "interval": interval,
+            "trigger_step": trigger,
+            "trigger_labels": [trigger],
+            "due_event_id": 300,
+            "overdue_event_id": 301,
+            "due_message": "{name} 该做了 ({counter}/{interval})",
+            "overdue_message": "{name} 已超 {overdue} 轮!",
+            "reset_policy": "always",
+            "count_basis": "all",
+            "channel_filter": [],
+            "run_on_start": False,
+            "time_interval_seconds": 0,
+            "time_due_message": "",
+            "time_overdue_message": "",
+        }
+
+    def test_observe_records_trigger_into_book(self):
+        """observe 应把 trigger_labels 里的 label 加进 _periodic_triggers_observed."""
+        vsm = _make_vsm_with_rule(self._rule(trigger="E"))
+        assert vsm._periodic_triggers_observed == set()
+
+        vsm._observe_periodic_trigger("E")
+        assert "E" in vsm._periodic_triggers_observed
+
+    def test_observe_ignores_irrelevant_label(self):
+        """非 trigger_labels 里的 label 不应进账本."""
+        vsm = _make_vsm_with_rule(self._rule(trigger="E"))
+        vsm._observe_periodic_trigger("A")
+        vsm._observe_periodic_trigger("D")
+        assert vsm._periodic_triggers_observed == set()
+
+    def test_observe_dedupes_same_label(self):
+        """同一轮多次观察到同一 label, 账本去重 (set)."""
+        vsm = _make_vsm_with_rule(self._rule(trigger="E"))
+        vsm._observe_periodic_trigger("E")
+        vsm._observe_periodic_trigger("E")
+        vsm._observe_periodic_trigger("E")
+        assert vsm._periodic_triggers_observed == {"E"}
+
+    def test_check_resets_when_only_observed_has_trigger(self):
+        """核心场景: cycle_steps 里没有 E (被 FIX-381 拦截了), 但旁路账本有 ->
+        _check_periodic_actions 仍应识别为 did_trigger 并清零."""
+        rule = self._rule(trigger="E", interval=5)
+        vsm = _make_vsm_with_rule(rule)
+        vsm._periodic_counters["pa_obs"] = 3
+
+        vsm._observe_periodic_trigger("E")
+        vsm._check_periodic_actions(cycle_steps=["A", "B", "D"], is_good=True)
+
+        assert vsm._periodic_counters["pa_obs"] == 0, (
+            "旁路账本里有 trigger 时, did_trigger 应被识别 -> reset_policy=always 清零"
+        )
+
+    def test_observed_book_cleared_after_check(self):
+        """_check_periodic_actions 判定完应清空旁路账本, 不串到下一轮."""
+        rule = self._rule(trigger="E")
+        vsm = _make_vsm_with_rule(rule)
+        vsm._observe_periodic_trigger("E")
+        assert "E" in vsm._periodic_triggers_observed
+
+        vsm._check_periodic_actions(cycle_steps=["A"], is_good=True)
+        assert vsm._periodic_triggers_observed == set(), "判定完应清空"
+
+    def test_reset_stats_clears_observed_book(self):
+        """reset_stats 应连同账本一起清, 防 reset 后还残留."""
+        rule = self._rule(trigger="E")
+        vsm = _make_vsm_with_rule(rule)
+        vsm._observe_periodic_trigger("E")
+        assert "E" in vsm._periodic_triggers_observed
+
+        vsm.reset_stats()
+        assert vsm._periodic_triggers_observed == set(), "reset_stats 应清空账本"
+
+    def test_channel_filter_respected_in_observe(self):
+        """observe 时应遵守 rule.channel_filter, 别工位的 trigger 不能错记到本工位."""
+        rule = self._rule(trigger="E")
+        rule["channel_filter"] = [1, 2]  # 仅 channel 1/2 关心
+        vsm = _make_vsm_with_rule(rule, channel_id=0)  # 本工位是 0
+        vsm._observe_periodic_trigger("E")
+        assert vsm._periodic_triggers_observed == set(), "channel 0 不在 filter 里, 不应记账"
+
+    def test_time_also_resets_via_observed_path(self):
+        """时间维度 (last_done_ts) 也应通过旁路账本路径同步重置."""
+        import time
+        rule = self._rule(trigger="E", interval=5)
+        rule["time_interval_seconds"] = 600  # 同时启用时间维度
+        vsm = _make_vsm_with_rule(rule)
+        vsm._periodic_counters["pa_obs"] = 3
+        # 把 last_done_ts 倒推, 制造已超期场景
+        vsm._periodic_last_done_ts["pa_obs"] = time.time() - 1000
+
+        vsm._observe_periodic_trigger("E")
+        vsm._check_periodic_actions(cycle_steps=["A"], is_good=True)
+
+        assert vsm._periodic_counters["pa_obs"] == 0
+        # last_done_ts 应被刷到现在 (允许 1 秒误差)
+        assert abs(vsm._periodic_last_done_ts["pa_obs"] - time.time()) < 1.0

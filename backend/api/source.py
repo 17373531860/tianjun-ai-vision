@@ -1288,6 +1288,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # v3.5.2: 清空开机首检 pending 集合 (防止历史 pending 影响新一轮 start)
         if hasattr(self, '_run_on_start_pending') and isinstance(self._run_on_start_pending, set):
             self._run_on_start_pending.clear()
+        # v3.7.5: 清空旁路保养观察账本 (防 reset 后还残留上一周期的保养 trigger)
+        if hasattr(self, '_periodic_triggers_observed') and isinstance(self._periodic_triggers_observed, set):
+            self._periodic_triggers_observed.clear()
 
         # Cycle state
         self.current_cycle_steps = []

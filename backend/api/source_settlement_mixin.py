@@ -785,6 +785,15 @@ class SettlementMixin:
             is_new_appearance = True
         
         if is_new_appearance:
+            # v3.7.5: 早于 FIX-381 拦截把保养类 trigger 记进旁路账本.
+            # 顺序模式里 expected_seq 之外的步骤会被下方 return 拦掉, 永远进不了
+            # cycle.step_sequence — 但周期性强制动作的 trigger_step 本来就在序列外,
+            # 拦掉了就清不了零. 这里独立记一笔, 让 _check_periodic_actions 看得见.
+            try:
+                self._observe_periodic_trigger(label)
+            except Exception as _e:
+                print(f"[PeriodicActions] _observe_periodic_trigger 失败: {_e}")
+
             # v3.7.2 (FIX-381): 顺序 / 自定义-基于顺序 模式下,
             # 仅"勾进序列"的步骤参与周期生命周期 (开 cycle / 入 cycle 累计).
             # 不在序列里的启用步骤仍可被画检测框、更新 step_last_seen、刷新截图,

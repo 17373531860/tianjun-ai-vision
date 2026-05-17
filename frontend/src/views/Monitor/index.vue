@@ -2138,17 +2138,19 @@ const loadPerChannelDetectionSettings = async (sourceConfigs) => {
 
 const buildStreamUrl = () => `${getBackendHost()}/video_feed?t=${Date.now()}`;
 
-// v3.7.2 (FIX-381-B): 单条 detection 的检测框颜色优先级.
-//   1) 副模型 display_color (model_name != 'main' 且后端注入了 display_color)
-//   2) steps_config 里该 label 配置的 box_color
+// v3.7.5: 单条 detection 的检测框颜色优先级 (改自 v3.7.2 FIX-381-B).
+//   1) steps_config 里该 label 配置的 box_color (用户明确意图最高优先级)
+//   2) 副模型 display_color (model_name != 'main' 且后端注入了 display_color)
 //   3) 全局 OK / NG 兜底 (来自 systemStore.detection 或 multi 版本的硬编码)
+// 注: 老版优先级 (副模型色 > 步骤色) 让客户在步骤列表给副模型 label 配的颜色
+// 形同摆设, tooltip 又写"任何模式都生效", 自相矛盾. 翻过来后用户配啥就是啥.
 const pickDetColor = (det, stepsConfig, fallbackOK, fallbackNG) => {
-  if (det && det.model_name && det.model_name !== 'main' && det.display_color) {
-    return det.display_color;
-  }
   if (stepsConfig && det && det.label) {
     const cfg = stepsConfig.find(s => s && s.label === det.label);
     if (cfg && cfg.box_color) return cfg.box_color;
+  }
+  if (det && det.model_name && det.model_name !== 'main' && det.display_color) {
+    return det.display_color;
   }
   return det && det.is_ng ? fallbackNG : fallbackOK;
 };
@@ -2969,9 +2971,9 @@ const drawDetections = (detections) => {
     const w = cb.w * renderW;
     const h = cb.h * renderH;
     
-    // v3.7.2 (FIX-381-B): 颜色优先级 副模型 display_color > 步骤 box_color > OK/NG 兜底.
-    // 历史行为: 仅主模型按 NG/OK 配色, 副模型用其独立 display_color.
-    // 新增: steps_config[*].box_color 可让客户给单个 label 独立配色.
+    // v3.7.5: 颜色优先级 步骤 box_color > 副模型 display_color > OK/NG 兜底.
+    // (v3.7.2 FIX-381-B 原先把副模型色放最高, 但客户在步骤列表配的颜色被覆盖,
+    // 与 tooltip 文案"任何模式都生效"矛盾, 现翻转优先级让用户配置说了算.)
     const color = pickDetColor(det, stepsConfig, boxColor, ngColor);
 
     // Render polygon mask if available (segmentation model)

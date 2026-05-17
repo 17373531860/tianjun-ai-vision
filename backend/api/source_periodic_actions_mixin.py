@@ -140,6 +140,12 @@ class PeriodicActionsMixin:
         if not hasattr(self, '_run_on_start_pending') or not isinstance(getattr(self, '_run_on_start_pending', None), set):
             self._run_on_start_pending = set()
 
+        # v3.7.5: 顺序模式下"旁路保养动作"独立观察账本 — 不进 cycle.step_sequence
+        # 也能让 _check_periodic_actions 看到, 修复 FIX-381 副作用导致清不了零.
+        # 详见 _observe_periodic_trigger / _check_periodic_actions 内的合并逻辑.
+        if not hasattr(self, '_periodic_triggers_observed') or not isinstance(getattr(self, '_periodic_triggers_observed', None), set):
+            self._periodic_triggers_observed = set()
+
         self._restore_periodic_counters(config)
         # v3.5.2: 临时诊断 — apply 前后 counter 变化
         if parsed:
@@ -240,7 +246,11 @@ class PeriodicActionsMixin:
         if not rules:
             return
 
-        cycle_step_set = set(cycle_steps or [])
+        # v3.7.5: 合并 cycle 记录 + 旁路观察账本一起算 did_trigger.
+        # 旁路账本 (_periodic_triggers_observed) 由 _observe_periodic_trigger 在
+        # process_step_detection 内填, 专门处理顺序模式下 FIX-381 拦截的保养动作.
+        observed_triggers = set(getattr(self, '_periodic_triggers_observed', None) or set())
+        cycle_step_set = set(cycle_steps or []) | observed_triggers
         now = time.time()
         changed = False
 
@@ -300,6 +310,13 @@ class PeriodicActionsMixin:
 
         if changed:
             self._persist_periodic_counters()
+
+        # v3.7.5: 判定完, 清空本轮旁路观察账本 (下一轮重头记).
+        # 这里清而不是 cycle_start 清, 是因为 _observe_periodic_trigger 在步骤
+        # 出现的一瞬间就记, 而 cycle_start 时序晚于这个时刻.
+        observed_book = getattr(self, '_periodic_triggers_observed', None)
+        if isinstance(observed_book, set):
+            observed_book.clear()
 
     def _check_periodic_actions_time_only(self, now: Optional[float] = None) -> None:
         """v3.7.4: 仅检查时间维度的到期/超期 — 由 inference_loop 主循环每 5 秒 throttle 调一次.
@@ -762,3 +779,36 @@ class PeriodicActionsMixin:
                 'trigger_labels': sorted(rule['trigger_labels']),
             })
         return out
+
+    def _observe_periodic_trigger(self, step_label: str) -> None:
+        """记录"本轮观察到的 trigger label" 到旁路账本 — 不进 cycle.step_sequence.
+
+        意图: v3.7.2 (FIX-381) 在顺序模式拦截了"非序列内的步骤"进 cycle, 但
+        保养类周期动作 (periodic_actions 的 trigger_step) 本来就在主序列外 —
+        之前被拦了 = 永远进不了 cycle_steps = _check_periodic_actions 永远看不见 =
+        永远清不了零. 修法是把这种"旁路 trigger" 独立记一笔, 周期判定时单独看.
+
+        调用点: source_settlement_mixin.process_step_detection 里 is_new_appearance
+        分支的最前面, 早于 FIX-381 拦截 return, 保证保养动作也能进账本.
+        清空点: _check_periodic_actions 每次判定完清空, reset_stats /
+        _discard_empty_cycle 也清, 防 reset 后或周期作废后还残留.
+
+        参数:
+            step_label: 当前判定为"新出现"的步骤标签.
+        """
+        if not step_label:
+            return
+        rules = getattr(self, '_periodic_actions', None) or []
+        if not rules:
+            return
+        if not hasattr(self, '_periodic_triggers_observed') or not isinstance(self._periodic_triggers_observed, set):
+            self._periodic_triggers_observed = set()
+        cid = getattr(self, 'channel_id', 0)
+        for rule in rules:
+            channel_filter = rule.get('channel_filter')
+            if channel_filter and cid not in channel_filter:
+                continue
+            trigger_labels = rule.get('trigger_labels') or set()
+            if step_label in trigger_labels:
+                self._periodic_triggers_observed.add(step_label)
+                return

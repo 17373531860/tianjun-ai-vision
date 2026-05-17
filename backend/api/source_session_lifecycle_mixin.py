@@ -582,6 +582,10 @@ class SessionLifecycleMixin:
             self.current_cycle_uuid = None
             if self.current_cycle_number > 0:
                 self.current_cycle_number -= 1
+            # v3.7.5: 旁路保养观察账本也清, 防作废的周期里观察到的 trigger 串到下一周期
+            obs = getattr(self, '_periodic_triggers_observed', None)
+            if isinstance(obs, set):
+                obs.clear()
     
     def _reconcile_step_records(self):
         """Align StepRecords with self.current_cycle_steps using a

@@ -501,7 +501,7 @@
                         </el-tooltip>
                       </th>
                       <th class="p-2 w-20">
-                        <el-tooltip content="该标签的检测框单独配色（任何模式都生效）。留空 = 沿用「显示设置」里的全局 OK/NG 颜色。副模型自带的 display_color 仍优先生效。" placement="top">
+                        <el-tooltip content="该标签的检测框单独配色（任何模式都生效）。留空 = 副模型沿用其默认识别色 / 主模型沿用全局 OK/NG 颜色。设了颜色就以这里为准，副模型默认色让位。" placement="top">
                           <span class="cursor-help border-b border-dashed border-gray-500">检测框颜色</span>
                         </el-tooltip>
                       </th>
