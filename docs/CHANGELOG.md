@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.7.6 (2026-05-18)
+- [BUG-376-SEQ-SUPPLEMENT-PT] **顺序模式 cycle 末尾步骤"OK 已出 PT 仍 --"修复** — 客户「步骤详情」表里某一步状态=已检测、结果=OK，但 PT/s 列一直是 `--`，最典型出现在 cycle 末尾那一步（A→B→C→D 的 D）。根因：顺序模式 / 自定义顺序模式 cycle 判定结尾的"补计"路径只写 `step_counts` + `step_durations` + `step_durations_history`，**漏写 `step_cycle_durations`**；前端 `step_counts +1` → `actualPosByLabel` 含该 label → 标 OK，但 PT 合并档（`cycle_sum_*` / `avg_cycle_sum_*` / `last_cycle_sum_*`）都没该 label → PT 列永远 `--`。修复：两处补计路径补齐 `step_cycle_durations` 累加，跟主路径 `source_step_stats_mixin.py:298-303` 对齐。
+- [BUG-376-PT-NO-RESET] **PT 时间周期结束不归零修复**（"当前周期内 + 最后一次"组合） — 客户切到该组合时周期结束后 PT 列停在上一周期值。根因：双端不对齐 — 后端 `step_durations` 字段只在 `reset_stats()` 清，cycle 结束时不清；前端 `Monitor/index.vue:3663` 用 `Object.assign` merge 而非整体替换，即便后端清了前端字典也清不掉。修复：后端 `end_cycle` / `_discard_empty_cycle` finally 块追加 `self.step_durations = {}`（位置在主体兜底引用之后安全）；前端 `stepDurations` 改成整体替换 `stepDurations.value = data.step_durations || {}`。
+- [FEAT-376-STEP-TABLE-UI] **步骤详情表"列顺序调整 + 结果列硬性守门"** — 客户要求"先出时间再显示 OK/NG"。两步走：① 列顺序 `No / 步骤 / **PT/s** / 状态 / 结果`，PT 前移到状态前；② 结果列加 `v-if` 守门 — 非跟踪模式下 PT 必须有真实数值才显示 OK/NG（堵 accept_once / 跟踪类场景中间窗口的视觉错位），跟踪模式（`isTrackingMode`）跳过守门保持原 `counted>0→OK` 语义。
+- [FEAT-376-PT-DEFAULT-CURRENT] **PT 显示口径默认值从「平均」改为「当前周期内」** — 客户希望出厂默认就归零。`useSystemStore.js` 默认 `ptMode: 'avg' → 'current'`（配合默认 `ptAggregate='sum'` 组合为「当前周期内 + 合并」，数据源 `cycleSumStepDurations`，cycle 结束自动归零）；`Monitor/index.vue: formatStepPT` 兜底默认对齐。已手动调过设置的老客户 localStorage 选择保留不动。
+- [CONFIG-376-001] 版本号 3.7.5 → 3.7.6 (`electron/package.json` + `electron/splash.html`).
+- **历史长期红灯 CI 仍未修** — `Virtual Functional Tests` (cryptography 依赖缺失) 和 `DB Matrix (SQLite + PostgreSQL)` (PG SUM(boolean) dialect 不兼容) 自 v3.7.4 起持续红灯，SE9 分支已修但未 cherry-pick 到 main，留待后续版本。
+- **SE9 (Sophon BM1688 ARM64) 适配未随版发布** — 相关代码隔离在 `feature/se9-arm64` 分支，Windows 客户不受影响。
+
 ## v3.7.5 (2026-05-18)
 - [BUG-375-PERIODIC-RESET] **顺序模式下做了周期性强制动作仍然不清零修复（FIX-381 副作用）** — 客户配主流程顺序 A-B-C-D 同时配每 20 轮/每 600 秒做一次保养动作 E，做完 E 之后周期强制动作的未完成轮数/时间继续累加不清零，保养报警一直挂. 根因: v3.7.2 (FIX-381) 在 `process_step_detection` 顺序模式分支拦截了 `expected_seq` 外的步骤直接 return，但保养类 trigger_step 本来就在主序列外 → E 永远进不了 `cycle.step_sequence` → `_check_periodic_actions` 永远看不见 → 永远不清零. 修复"小账本"方案: 新增 `_periodic_triggers_observed` 旁路观察账本独立于 cycle.step_sequence, `_observe_periodic_trigger` 在 `process_step_detection` 早于 FIX-381 拦截调一次记账, `_check_periodic_actions` 入口合并 cycle_steps + 旁路账本算 did_trigger, 判定后清空, `reset_stats` / `_discard_empty_cycle` 同步清账本防串轮. 完全向后兼容老项目零开销. 新增 8 个测试覆盖 observe 记账/过滤/去重/核心场景/清空/全局重置/通道过滤/时间维度同步.
 - [BUG-375-AUX-COLOR] **副模型检测框始终是默认色 客户在步骤列表配的颜色失效修复** — 客户用副模型识别错误放置（默认 `display_color = #f59e0b` 琥珀黄），在步骤列表"检测框颜色"列单独配了红色但 Monitor 仍然黄色，跟 tooltip 写"任何模式都生效"自相矛盾. 根因: v3.7.2 (FIX-381-B) 设计 `pickDetColor` 时把副模型 `display_color` 放最高位 → 客户对单个 label 配色的明确意图被忽视, 步骤 `box_color` 形同摆设. 修复: 翻转优先级 步骤级 `box_color` > 副模型 `display_color` > OK/NG 兜底; Project 页 tooltip 文案改清说明新行为. 副模型不配 `box_color` 时行为与 v3.7.4 一致不破坏现有项目视觉.

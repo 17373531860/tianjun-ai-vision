@@ -154,6 +154,11 @@ class SequentialMixin:
                     rounded_dur = round(duration, 2)
                     self.step_durations[label] = rounded_dur
                     self.step_durations_history.setdefault(label, []).append(rounded_dur)
+                    # v3.7.x: 与主路径对齐，补写本周期 SUM。
+                    # 漏写会导致前端 PT 列在 cycle 末尾被补计的步骤（典型: 周期最后一步）显示 --，
+                    # 但 step_counts 已 +1 → 前端仍标 OK，造成 "OK 出了 PT 没出" 的语义错位。
+                    prev_sum = self.step_cycle_durations.get(label, 0.0)
+                    self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
                     print(f"  顺序判定补计: {label}, 耗时 {duration:.2f}s, 累计: {self.step_counts[label]}")
                 
                 del self.step_last_seen[label]
@@ -320,6 +325,9 @@ class SequentialMixin:
                     rounded_dur = round(duration, 2)
                     self.step_durations[label] = rounded_dur
                     self.step_durations_history.setdefault(label, []).append(rounded_dur)
+                    # v3.7.x: 与主路径对齐，补写本周期 SUM（同顺序模式补计）
+                    prev_sum = self.step_cycle_durations.get(label, 0.0)
+                    self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
                     print(f"  自定义顺序判定补计: {label}, 耗时 {duration:.2f}s, 累计: {self.step_counts[label]}")
                 
                 del self.step_last_seen[label]

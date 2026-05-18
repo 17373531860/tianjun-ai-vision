@@ -1,0 +1,102 @@
+{
+  "version": "3.7.6",
+  "date": "2026-05-18",
+  "previous_version": "3.7.5",
+  "theme": "步骤详情面板「先时间后结果」全链路对齐",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-376-SEQ-SUPPLEMENT-PT",
+      "title": "顺序模式 cycle 末尾步骤 OK 已出 PT 仍 -- 修复",
+      "symptom": "客户在「步骤详情」表里看到某一步状态=已检测、结果=OK，但 PT/s 列一直是 --，最典型出现在 cycle 末尾那一步（如 A-B-C-D 顺序里的 D）",
+      "root_cause": "顺序模式 / 自定义顺序模式 cycle 判定结尾的'补计'路径（source_sequential_mixin.py 的两处 if is_valid 块）只写了 step_counts + step_durations + step_durations_history，漏写了 step_cycle_durations。前端 step_counts +1 让 actualPosByLabel 含该 label 进而标 OK，但 PT 合并档（cycleSumStepDurations / avgCycleSumStepDurations / lastCycleSumStepDurations）都没该 label 的 key，PT 列永远 --",
+      "fix": "在两处补计路径补齐 step_cycle_durations 写入，跟主路径 source_step_stats_mixin.py:298-303 完全对齐（prev_sum = self.step_cycle_durations.get(label, 0.0); self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)）",
+      "files": ["backend/api/source_sequential_mixin.py"],
+      "keywords": ["顺序模式", "补计", "step_cycle_durations", "PT 不出", "OK 先于 PT", "sequential", "supplement", "settle"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-376-PT-NO-RESET",
+      "title": "PT 时间周期结束不归零修复（current+last 组合）",
+      "symptom": "客户切到 PT 显示口径=当前周期内 + PT 计算方式=最后一次 时，周期结束后 PT 列停在上一周期的值，没归零",
+      "root_cause": "双端不对齐。后端 step_durations 字段（按 label 持续覆盖式最近一次耗时）只在 reset_stats() 里清，cycle 结束时不清；而 step_cycle_durations（合并 SUM 档）在 end_cycle / _discard_empty_cycle 的 finally 里清。前端 Monitor/index.vue:3663 用 Object.assign 把后端推送 merge 而非替换，即便后端清了前端字典里老 label 也清不掉",
+      "fix": "双端同时对齐：后端 end_cycle / _discard_empty_cycle finally 块追加 self.step_durations = {}（位置在主体兜底引用之后安全）；前端把 stepDurations 改成整体替换 stepDurations.value = data.step_durations || {} 与 cycle_sum_step_durations 行为对齐。avg / last 历史档保持 merge 不动",
+      "files": ["backend/api/source_session_lifecycle_mixin.py", "frontend/src/views/Monitor/index.vue"],
+      "keywords": ["PT 不清零", "周期结束", "step_durations", "ptMode current last", "cycle end reset"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-376-STEP-TABLE-UI",
+      "title": "步骤详情表列顺序调整 + 结果列硬性守门",
+      "symptom": "客户要求步骤详情板块先出时间再显示 OK/NG 的结果",
+      "root_cause": "原列顺序 No/步骤/状态/PT/s/结果 不符合「先时间后结果」叙事；且某些底层场景（accept_once / cycle 末尾补计未修前）会出现 step_counts 已 +1 但 step_durations 还没写的中间窗口，导致 OK 先出 PT 没出",
+      "fix": "两步走：1) 表头列顺序调整为 No / 步骤 / PT/s / 状态 / 结果，PT 前移到状态前；2) 结果列加 v-if 守门 —— 非跟踪模式下 PT 必须有真实数值才显示 OK/NG，跟踪模式（isTrackingMode）跳过守门保持原 counted>0→OK 语义",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["步骤详情", "列顺序", "UI 守门", "先时间后结果", "PT 优先", "isTrackingMode", "结果列"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-376-PT-DEFAULT-CURRENT",
+      "title": "PT 显示口径默认值从「平均」改为「当前周期内」",
+      "symptom": "客户希望周期结束 PT 时间默认归零，默认 avg 不符合直觉",
+      "root_cause": "出厂默认 monitor.ptMode='avg'（历史平均，永不归零），跟客户「每周期独立计时」的心智模型不一致",
+      "fix": "frontend/src/store/useSystemStore.js 默认 ptMode 改为 'current'（配合默认 ptAggregate='sum'，组合为 当前周期内+合并，数据源 cycleSumStepDurations，cycle 结束自动归零）；frontend/src/views/Monitor/index.vue formatStepPT 兜底默认 || 'avg' → || 'current' 对齐",
+      "files": ["frontend/src/store/useSystemStore.js", "frontend/src/views/Monitor/index.vue"],
+      "keywords": ["ptMode 默认值", "current", "周期内", "PT 归零", "默认行为变更"],
+      "breaking": false,
+      "compatibility_note": "已手动调过 PT 显示口径的老客户保留 localStorage 中的选择不动；全新装机 / 没手动改过的客户升级后看到新默认行为（实时累加 + 周期结束归零），可能误以为历史数据丢失，需引导到 Settings → PT 显示口径 切回「平均」"
+    },
+    {
+      "type": "config",
+      "id": "CONFIG-376-001",
+      "title": "版本号 3.7.5 → 3.7.6",
+      "files": ["electron/package.json", "electron/splash.html"],
+      "keywords": ["version bump"]
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/api/source_sequential_mixin.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/store/useSystemStore.js",
+    "electron/package.json",
+    "electron/splash.html",
+    "docs/CHANGELOG.md",
+    "docs/changelog/v3.7.6_2026-05-18.md",
+    "docs/changelog/v3.7.6_2026-05-18.json"
+  ],
+  "user_feedback_loop": [
+    {
+      "round": 1,
+      "user_input": "主分支，客户希望步骤详情板块，先出时间再显示 OK 或者 NG 的结果",
+      "interpretation": "列顺序：把 PT 列前移到状态列前",
+      "action": "调整表头与 tbody 列顺序",
+      "outcome": "未消除 OK 先出 PT 没出现象"
+    },
+    {
+      "round": 2,
+      "user_input": "但是这样 PT 时间周期结束好像不会清零了是不是 / 数字停在上一周期的值, 默认归零",
+      "interpretation": "PT 不清零 bug + 客户期望出厂默认就归零",
+      "action": "修 current+last 组合不清零 bug + 默认值改为 current",
+      "outcome": "归零生效，但下一截图仍出现第 1 步 OK 先于 PT"
+    },
+    {
+      "round": 3,
+      "user_input": "看第三个，OK 先出时间还没出",
+      "interpretation": "cycle 末尾步骤补计路径漏写 step_cycle_durations 的真 bug",
+      "action": "补齐两处后端补计路径写入",
+      "outcome": "继续等客户验证"
+    },
+    {
+      "round": 4,
+      "user_input": "没区别，没办法硬性规定 OK 和 NG 的结果一定出现在 PT 时间出现的后面吗",
+      "interpretation": "底层还有 accept_once / 跟踪类场景，UI 层必须硬性守门",
+      "action": "结果列加 v-if 守门，PT 有值才显示 OK/NG，跟踪模式跳过",
+      "outcome": "等客户验证"
+    }
+  ]
+}

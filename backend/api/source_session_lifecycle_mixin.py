@@ -556,6 +556,10 @@ class SessionLifecycleMixin:
                 self.step_cycle_durations = {}
             except Exception as _e:
                 print(f"[PT-Sum] 周期 SUM 快照异常: {_e}")
+            # v3.7.x: 周期结束同步清空 step_durations（按 label 覆盖式的"最近一次耗时"），
+            # 这样前端 "当前周期内 + 最后一次" 口径在周期切换瞬间也能归零（与 step_cycle_durations 对齐）。
+            # end_cycle 主体里第 629/661 行的兜底引用都在 finally 之前，已经用完，此处清空安全。
+            self.step_durations = {}
             self.current_cycle_id = None
             self.current_cycle_uuid = None
     
@@ -578,6 +582,8 @@ class SessionLifecycleMixin:
         finally:
             # v3.5.x: 周期作废时清空本周期 SUM 累加（不进入 history）
             self.step_cycle_durations = {}
+            # v3.7.x: 同步清 step_durations，对齐周期结束清零行为
+            self.step_durations = {}
             self.current_cycle_id = None
             self.current_cycle_uuid = None
             if self.current_cycle_number > 0:

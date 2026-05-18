@@ -957,8 +957,8 @@
                   <tr>
                      <th class="px-2 py-1.5">No</th>
                      <th class="px-2 py-1.5">步骤</th>
-                     <th class="px-2 py-1.5">状态</th>
                      <th class="px-2 py-1.5">PT/s</th>
+                     <th class="px-2 py-1.5">状态</th>
                      <th class="px-2 py-1.5">结果</th>
                   </tr>
                </thead>
@@ -969,15 +969,24 @@
                   >
                      <td class="px-2 py-1.5">{{ i + 1 }}</td>
                      <td class="px-2 py-1.5">{{ row.step }}</td>
+                     <td class="px-2 py-1.5 text-white font-mono">{{ formatStepPT(row.label) }}</td>
                      <td class="px-2 py-1.5">
                        <span :class="row.status === 'completed' ? 'text-white' : 'text-gray-500'">
                          {{ row.status === 'completed' ? '已检测' : '待检测' }}
                        </span>
                      </td>
-                     <td class="px-2 py-1.5 text-white font-mono">{{ formatStepPT(row.label) }}</td>
                      <td class="px-2 py-1.5">
-                       <span v-if="row.cycleResult === 'ok'" class="text-green-400">OK</span>
-                       <span v-else-if="row.cycleResult === 'ng'" class="text-red-500">NG</span>
+                       <!--
+                         v3.7.x 客户硬性要求：结果(OK/NG) 必须等 PT 时间出现后才显示。
+                         守门条件：PT 字段已有真实数值（不是 "--"）才允许显示 OK/NG。
+                         例外：跟踪模式底层不写 step_durations，PT 永远是 "--"，
+                              该模式下跳过守门保持原"counted > 0 → OK"语义。
+                       -->
+                       <template v-if="isTrackingMode || formatStepPT(row.label) !== '--'">
+                         <span v-if="row.cycleResult === 'ok'" class="text-green-400">OK</span>
+                         <span v-else-if="row.cycleResult === 'ng'" class="text-red-500">NG</span>
+                         <span v-else class="text-gray-500">--</span>
+                       </template>
                        <span v-else class="text-gray-500">--</span>
                      </td>
                   </tr>
@@ -2706,7 +2715,7 @@ const formatDuration = (stepLabel) => formatStepPT(stepLabel);
 //     last    → 最近一个已结束 cycle 的取值
 //     current → 当前正在跑 cycle 的取值
 const formatStepPT = (stepLabel) => {
-  const mode = systemStore.display?.monitor?.ptMode || 'avg';
+  const mode = systemStore.display?.monitor?.ptMode || 'current';
   const agg = systemStore.display?.monitor?.ptAggregate || 'sum';
   let src;
   if (agg === 'sum') {
@@ -3659,8 +3668,11 @@ const startPolling = () => {
       if (data.step_detection_times) {
         Object.assign(stepDetectionTimes.value, data.step_detection_times);
       }
-      if (data.step_durations) {
-        Object.assign(stepDurations.value, data.step_durations);
+      // v3.7.x: stepDurations 是"当前周期"的口径数据源（ptMode=current + ptAggregate=last 时使用），
+      // 必须用整体替换才能在周期结束的瞬间归零；与 cycle_sum_step_durations 行为对齐。
+      // 注意区别：avg_step_durations / last_step_durations 是历史档，仍然 merge（label 累积式可读）。
+      if (data.step_durations !== undefined) {
+        stepDurations.value = data.step_durations || {};
       }
       if (data.avg_step_durations) {
         Object.assign(avgStepDurations.value, data.avg_step_durations);
