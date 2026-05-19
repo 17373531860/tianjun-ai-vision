@@ -97,6 +97,7 @@
 | 排查前端问题 | `debug-frontend` |
 | 排查自定义导出 / 实时规则 / 模板 / 字段中央仓库（v3.5.0+）| `debug-export` |
 | 排查操作员 / License 授权（machineId / RSA 验签 / 当前操作员落盘）| `debug-operator-license` |
+| 排查 per_item 逐件覆盖模式（打螺丝场景 / 周期不开始 / 漏件不报 / PerItemPanel 空白 / mock 注入失败）（v3.8.0+）| `debug-per-item` |
 | 数据问题修复 | `fix-data` |
 | 前后端 API 对齐检查 | `api-sync` |
 | 调参（视频 + 模型）| `tune-params` |
@@ -321,15 +322,27 @@
 - `source_step_stats_mixin.py` — 步骤统计聚合
 - `source_event_trigger_mixin.py` — `_trigger_event()` 中心 hook
 - `source_periodic_actions_mixin.py` — v3.5.0 周期性强制动作
+- `source_per_item_mixin.py` (~650) — **v3.8.0 逐件覆盖模式**（独立路径，与其他 4 种模式正交）
 - `models/models.py` — `DetectionSession` / `DetectionCycle` / `StepRecord`
 
-**对外接口**：`/api/v1/source/detection/results`（实时状态全集，含 PT/CT raw 数据）
+**对外接口**：`/api/v1/source/detection/results`（实时状态全集，含 PT/CT raw 数据 + `per_item_state`）
 
-**改动它必读**：`modify-source` + `debug-source` + `add-event-type`（如果新增事件类型）
+**改动它必读**：`modify-source` + `debug-source` + `add-event-type`（如果新增事件类型） + `debug-per-item`（若涉及 per_item 模式）
+
+**5 种 logic_mode 速查**：
+
+| logic_mode | 行为 | 主要文件 |
+|---|---|---|
+| `sequential` | 顺序模式：步骤按 index 递增 | `source_sequential_mixin.py` |
+| `detection` | 无序检测模式：检查 cycle_steps 完成度 | `source_step_stats_mixin.py` |
+| `custom` | 自定义优先级匹配 + base_mode 兜底 | `source_check_modes_mixin.py` |
+| `tracking` | 跟踪模式：tracked_items 字典 + ID 跟踪 + container_mode | `source_step_stats_mixin.py` |
+| `per_item` | **v3.8.0 新增** 逐件覆盖：N 个个体逐件被工序覆盖 → 收尾标签结算 | `source_per_item_mixin.py` |
 
 **关键扩展点**：
 - `_trigger_event` 是中心 hook，所有事件都从这里发出，插件可挂事件后处理
 - `events_config` JSON 已支持自定义事件，新增需求优先扩此 JSON
+- `pipeline_config.per_item` / `steps_config[i].per_item` — v3.8.0 新增逐件覆盖配置位
 
 ---
 
@@ -643,6 +656,8 @@
 | 周期性强制动作 (v3.5.0) | JSON | 每 N 轮做 X | `source_periodic_actions_mixin.py` |
 | 操作员系统 | 表 | current_operator 影响数据归属 | `api/operators.py` |
 | Scanner `broadcast_channels` | JSON | 一扫码器服务多工位 | `models/mes_models.py:ScannerDevice` |
+| `pipeline_config.per_item` (v3.8.0+) | JSON | 逐件覆盖项目级参数（稳定窗口/收尾标签等） | `source_per_item_mixin.py` |
+| `steps_config[i].per_item` (v3.8.0+) | JSON | 逐件覆盖步骤级参数（item_label/action_label/sustain_frames 等） | 同上 |
 
 ---
 
@@ -702,6 +717,7 @@
 | `TIANJUN_DATA_DIR` | `BASE_DIR` | 用户数据目录（DB / uploads / recordings） |
 | `BACKEND_SKIP_INIT` | 否 | 跳过启动初始化（测试/调试用） |
 | `ENABLE_API_DOCS` | `1` | `0` 关闭 `/docs` `/redoc` |
+| `ENABLE_DEV_MOCKS` | `0` | `1` 放开 `/source/detection/per-item-mock` 等开发 mock 端点（v3.8.0+，**出厂版必须保持 0**） |
 | `CORS_ALLOW_ORIGINS` | — | CORS 白名单 |
 | `OPENCV_FFMPEG_CAPTURE_OPTIONS` | `threads;1` | 必须 cv2 import 前 setdefault |
 | `MVCAM_COMMON_RUNENV` | — | 海康 SDK 路径 |
@@ -721,6 +737,7 @@ backend/
 ├── models/                        # ORM (3 文件 31 表)
 ├── api/                           # 25 个文件
 │   ├── source.py + 35 个 source_* (mixin/组件/工具/路由)
+│   │   └── source_per_item_mixin.py (~650)   # v3.8.0 逐件覆盖模式 (独立路径)
 │   ├── projects.py / models.py / sessions*.py (4 个) / cameras.py
 │   ├── tasks.py / reports.py / system_display.py / alarm.py
 │   ├── operators.py / channel_manager.py / debug.py / rod_filter.py
@@ -744,6 +761,7 @@ frontend/src/
 ├── views/    (12 个 .vue)
 │   ├── Activation/   Source/   Project/   Model/
 │   ├── Monitor/      ⭐ 检测中心 (4051 行 ⚠️ 项目最大 .vue)
+│   │   └── PerItemPanel.vue  # v3.8.0 逐件覆盖面板 (视频下方全宽, 仿 tracking)
 │   ├── Data/         ⭐ 数据中心 + 自定义导出
 │   ├── MES/          ⭐ 5 个子 Panel (Order / Workpiece / Defect / Scanner / Gateway)
 │   ├── Alarm/        Settings/  Report/ ❌ 死代码
@@ -789,6 +807,7 @@ docs/
 
 | 版本 | 日期 | 主要变更 |
 |---|---|---|
+| v3.8.0 | 2026-05-19 | **per_item 逐件覆盖模式**（打螺丝场景）+ PerItemPanel 全宽面板 + ENABLE_DEV_MOCKS 守门 + Project 配置 UI 扩展 |
 | v3.5.1 | 2026-05-06 | PT/CT 三档显示 + CSV 导出联动 + 操作手册补完 |
 | v3.5.0 | 2026-05-04 | 自定义导出 + 实时规则 + 周期性强制动作 + 完整测试框架 |
 | v3.4.2 | hotfix | 禁用扫码守门 + reload 时序 + ERROR 不续 LON |
@@ -804,8 +823,9 @@ docs/
 - `85c351c` feat(mes): 扫码器列表为空时静默"⚠ 未绑码"
 - `f5b8c92`+ feat(periodic): 周期性强制动作 run-on-start + 不重置 + 自定义事件
 - `??????` fix(geometry): 检测框越界 三层 clip 防御
+- (新)    feat(per_item): 逐件覆盖模式（v3.8.0+），含 PerItemPanel / Project 配置 UI / mock endpoint + dev 守门
 
-下次 tag（v3.5.2 或 v3.6.0）会带上以上修复。
+下次 tag（v3.7.7 或 v3.8.0）会带上以上修复。
 
 > **历史 bug 全档**：33 个 changelog × 184 条 BUG/FEAT/HOTFIX 已分类到 24 个旧 skill 内"历史踩坑"章节。统计：`debug-mes` 61 条 / `modify-frontend` 45 / `modify-source` 40 / `debug-source` 24 / `add-api-endpoint` 22 / `debug-video` 19。新增 3 个 skill（`debug-export` / `debug-cluster` / `debug-operator-license`）由 v3.5.x 真实代码反推编写，未追溯历史 changelog。
 
@@ -829,6 +849,6 @@ docs/
 
 ---
 
-**本文件最后更新**：2026-05-07
+**本文件最后更新**：2026-05-19
 **维护者**：项目主作者 + AI agents
 **事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）
