@@ -595,8 +595,8 @@
         </div>
       </div>
 
-      <!-- SOP流程 (Step Indicators) — non-tracking modes -->
-      <div v-if="systemStore.display.monitor.stepStrip && steps.length > 0 && !isTrackingMode" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
+      <!-- SOP流程 (Step Indicators) — non-tracking & non-per_item modes -->
+      <div v-if="systemStore.display.monitor.stepStrip && steps.length > 0 && !isTrackingMode && !isPerItemMode" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
         <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0">
           <span class="text-cyan-400 text-lg font-bold">SOP流程卡片</span>
         </div>
@@ -705,7 +705,13 @@
           </div>
         </div>
       </div>
-      
+
+      <!-- v3.8+ 逐件模式专属面板 (与 SOP/Tracking 排他, 占视频下方核心展示位) -->
+      <PerItemPanel
+        v-else-if="isPerItemMode"
+        :state="perItemState"
+      />
+
       <!-- No Project Selected -->
       <div v-else-if="!currentProject" class="h-40 bg-slate-900 border border-slate-700 rounded-lg flex items-center justify-center text-gray-500">
         <div class="text-center">
@@ -781,7 +787,7 @@
 
     <!-- RIGHT COLUMN: DASHBOARD Stats -->
     <div class="col-span-5 flex flex-col gap-3 min-h-0">
-      
+
       <!-- Top Row: Stats Counters (Dynamic) -->
       <div v-if="systemStore.display.monitor.statsPanel" class="bg-slate-900 border border-slate-700 rounded-lg p-3 flex flex-col">
         <template v-if="currentProject && counters.length > 0">
@@ -922,8 +928,66 @@
             <h3 class="text-cyan-400 text-base font-bold absolute top-1.5 left-2">合格率</h3>
             <div ref="capacityGaugeRef" class="w-full h-full"></div>
          </div>
-         <!-- NG Step Ranking -->
-         <div v-if="systemStore.display.monitor.ngTop3 !== false" class="bg-slate-900 border border-slate-700 rounded-lg p-2 flex flex-col">
+         <!-- v3.8+: per_item 模式专属 - 逐件实时反馈 (排他 NG TOP3) -->
+         <div v-if="isPerItemMode" class="bg-slate-900 border border-slate-700 rounded-lg p-2 flex flex-col">
+            <div class="flex items-center justify-between mb-1">
+              <h3 class="text-cyan-400 text-base font-bold">逐件实时反馈</h3>
+              <span v-if="perItemRemaining > 0" class="text-[0.625rem] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 font-bold animate-pulse">
+                漏 {{ perItemRemaining }} 颗
+              </span>
+              <span v-else-if="perItemTotal > 0" class="text-[0.625rem] px-1.5 py-0.5 rounded bg-green-500/20 text-green-400 font-bold">
+                全部完成 ✓
+              </span>
+              <span v-else class="text-[0.625rem] text-gray-500">等待中</span>
+            </div>
+
+            <!-- 还差 X 颗 - 巨大数字 (第一反馈) -->
+            <div v-if="perItemTotal > 0" class="flex items-baseline gap-1.5 mb-0.5">
+              <span class="text-gray-400 text-xs">还差</span>
+              <span class="font-mono font-bold leading-none"
+                    :class="perItemRemaining > 0 ? 'text-red-400 text-4xl' : 'text-green-400 text-4xl'">
+                {{ perItemRemaining }}
+              </span>
+              <span class="text-gray-500 text-base">颗</span>
+              <span class="text-gray-500 text-xs ml-auto font-mono">
+                {{ perItemCovered }}/{{ perItemTotal }}
+              </span>
+            </div>
+
+            <!-- 已耗时 + 当前进度 -->
+            <div v-if="perItemTotal > 0" class="text-[0.625rem] text-gray-400 mb-1.5 flex items-center gap-2">
+              <span>已用 <span class="text-cyan-400 font-mono font-bold">{{ perItemElapsedSec.toFixed(1) }}s</span></span>
+              <span v-if="perItemCovered > 0">·</span>
+              <span v-if="perItemCovered > 0">第 <span class="text-white font-mono font-bold">{{ perItemCovered }}</span> 颗</span>
+            </div>
+
+            <!-- 未覆盖 id chip 列表 -->
+            <div class="flex-1 min-h-0 flex flex-col">
+              <div v-if="perItemMissingIds.length > 0" class="text-[0.625rem] text-gray-500 mb-0.5">
+                未覆盖物件:
+              </div>
+              <div v-if="perItemMissingIds.length > 0" class="flex flex-wrap gap-1 overflow-y-auto custom-scrollbar">
+                <span v-for="id in perItemMissingIds.slice(0, 16)" :key="'miss-'+id"
+                      class="bg-red-950/50 border border-red-700/60 text-red-300 px-1.5 py-0.5 rounded text-[0.6875rem] font-mono font-bold">
+                  #{{ id }}
+                </span>
+                <span v-if="perItemMissingIds.length > 16"
+                      class="text-gray-500 text-[0.625rem] flex items-center px-1">
+                  +{{ perItemMissingIds.length - 16 }}
+                </span>
+              </div>
+              <div v-else-if="perItemTotal > 0 && perItemRemaining === 0"
+                   class="flex items-center justify-center h-full text-green-400 text-sm font-bold">
+                ✓ 已全部覆盖
+              </div>
+              <div v-else class="flex items-center justify-center h-full text-gray-600 text-xs">
+                等待识别物件…
+              </div>
+            </div>
+         </div>
+
+         <!-- NG Step Ranking (非 per_item 模式) -->
+         <div v-else-if="systemStore.display.monitor.ngTop3 !== false" class="bg-slate-900 border border-slate-700 rounded-lg p-2 flex flex-col">
             <div class="flex items-center justify-between mb-1.5">
               <h3 class="text-cyan-400 text-base font-bold">NG步骤TOP3</h3>
               <span class="text-xs text-gray-500 cursor-pointer hover:text-cyan-400 select-none"
@@ -1144,6 +1208,7 @@ import { getProjectDetail } from '@/api/project';
 import api, { getBackendHost } from '@/api/index';
 import { getExtraFieldsSchema, setExtraFields } from '@/api/gateway';
 import { getOperators, setCurrentOperator, getCurrentOperator } from '@/api/operators';
+import PerItemPanel from './PerItemPanel.vue';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
@@ -1233,6 +1298,9 @@ const latency = ref(0);
 const modelStats = ref([]);
 // 多通道版本: { [channelId]: [{name, fps_inference, latency, ...}] }
 const channelModelStats = ref({});
+// v3.8+: per_item 逐件模式运行时状态, 来自 /detection/results 的 per_item_state 字段.
+// 非 per_item 模式或后端尚未启用时为 null. PerItemPanel 直接消费该结构.
+const perItemState = ref(null);
 const cycleTime = ref(0);
 const cycleTimeWithNg = ref(0);
 const lastCycleTime = ref(0);
@@ -2274,6 +2342,30 @@ const onStreamError = (idx) => {
 const currentProject = computed(() => projectStore.currentProject);
 
 const isTrackingMode = computed(() => currentProject.value?.logic_mode === 'tracking');
+// v3.8+: 逐件模式 — 视频下方专属面板, 排他 SOP/Tracking
+const isPerItemMode = computed(() => currentProject.value?.logic_mode === 'per_item');
+
+// v3.8+: per_item 派生统计 (右栏「逐件实时反馈」卡片用)
+// 聚合所有 per_item 步骤的 items 数据, 给"还差几颗"+"漏哪几颗"两个核心展示供数据.
+const _perItemAllItems = computed(() => {
+  const steps = perItemState.value?.steps || [];
+  const out = [];
+  for (const s of steps) {
+    for (const it of (s.items || [])) {
+      out.push({ ...it, _step_label: s.display_label || s.label });
+    }
+  }
+  return out;
+});
+const perItemTotal = computed(() => _perItemAllItems.value.length);
+const perItemCovered = computed(() => _perItemAllItems.value.filter(it => it.covered).length);
+const perItemRemaining = computed(() => Math.max(0, perItemTotal.value - perItemCovered.value));
+const perItemMissingIds = computed(() => _perItemAllItems.value.filter(it => !it.covered).map(it => it.id));
+const perItemElapsedSec = computed(() => {
+  const start = perItemState.value?.cycle_start_time;
+  if (!start) return 0;
+  return Math.max(0, (Date.now() / 1000) - start);
+});
 
 // MES 实时数据 (从轮询结果中获取)
 const mesData = computed(() => multiChannelData.value[selectedChannel.value]?.mes || null);
@@ -3648,6 +3740,8 @@ const startPolling = () => {
       }
       // Step 8: 多模型快照 (单工位场景)
       modelStats.value = Array.isArray(data.models) ? data.models : [];
+      // v3.8+: 逐件模式状态 (非 per_item 项目时后端返回 null, 这里原样转交 PerItemPanel)
+      perItemState.value = data.per_item_state || null;
       cycleTime.value = data.average_cycle_time || 0;
       cycleTimeWithNg.value = data.average_cycle_time_with_ng || 0;
       lastCycleTime.value = data.last_cycle_time || 0;

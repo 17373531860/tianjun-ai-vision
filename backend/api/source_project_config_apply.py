@@ -389,4 +389,14 @@ def apply_project_config(h, config: dict):
         except Exception as e:
             print(f"[PeriodicActions] 应用配置失败: {e}")
 
+    # v3.6.x: per_item 逐件覆盖模式 (logic_mode='per_item')
+    # 非 per_item 项目时 _per_item_apply_config 返回 False, 不影响任何状态
+    if hasattr(h, '_per_item_apply_config'):
+        try:
+            h._per_item_apply_config(config)
+        except Exception as e:
+            print(f"[per_item] 应用配置失败: {e}")
+            import traceback
+            traceback.print_exc()
+
     _print_summary(h, config, steps_config, pipeline_config)

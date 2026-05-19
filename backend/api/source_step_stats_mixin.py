@@ -35,6 +35,13 @@ class StepStatsMixin:
         注意：置信度阈值过滤已在 _detect_only 方法中完成，
         此处收到的 detections 都是通过阈值的有效检测
         """
+        # ==================== per_item 模式分流 ====================
+        # logic_mode='per_item' 走独立路径, 完全绕开 sequential/detection/custom
+        # 的 cycle/step 状态机. 见 source_per_item_mixin.PerItemMixin.
+        _pc = self.project_config or {}
+        if _pc.get('logic_mode') == 'per_item' and hasattr(self, '_update_step_stats_per_item'):
+            return self._update_step_stats_per_item(detections, original_frame)
+
         import base64
         current_time = time.time()
         detected_labels = set()  # 用于统计的标签（通过阈值的）

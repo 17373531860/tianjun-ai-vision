@@ -1105,6 +1105,15 @@ def get_detection_results(channel: int = Query(0)):
         print(f"[API] /detection/results 取 models 快照失败: {_e}")
         result['models'] = []
 
+    # v3.6.x: per_item 模式运行时状态 (含个体覆盖率, 给前端 Monitor 可视化).
+    # 非 per_item 项目时返回 None, 前端按 None 处理即可.
+    try:
+        if hasattr(mgr, 'get_per_item_state'):
+            result['per_item_state'] = mgr.get_per_item_state()
+    except Exception as _e:
+        print(f"[API] /detection/results 取 per_item_state 失败: {_e}")
+        result['per_item_state'] = None
+
     # 多通道场景下前端不能用 currentProject (顶部下拉框单一值) 兜底,
     # 必须每帧带上 tracking 过滤所需的字段, 否则容器模式表格里"箱子"行
     # 过滤不掉 (前端 Monitor/index.vue 的 _trkExpectedLabels 依赖这里).
@@ -1292,6 +1301,185 @@ def set_project_config(req: ProjectConfigRequest, channel: int = Query(0)):
         print(f"[API] /detection/set-project 失败 (ch{channel}): {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# v3.8+: per_item dev-only mock 注入 (前端可视化调样用, 真模型上线后可删)
+#
+# 安全守门 (与项目现有 ENABLE_API_DOCS 同语义, 默认"关")
+#   ENABLE_DEV_MOCKS 未设 或 ≠ '1' → 端点返回 403, 注入失败
+#   ENABLE_DEV_MOCKS = '1'        → 允许注入
+#
+# 启动示例:
+#   ENABLE_DEV_MOCKS=1 python -m uvicorn backend.main:app --reload --port 8001
+# ============================================================
+def _dev_mocks_enabled() -> bool:
+    """开发 mock 守门: 出厂版默认关闭, 防止客户机器被意外注入假数据."""
+    return os.environ.get("ENABLE_DEV_MOCKS", "0") == "1"
+
+
+@router.post("/detection/per-item-mock")
+def inject_per_item_mock(channel: int = Query(0),
+                         total_items: int = Query(12),
+                         covered_items: int = Query(5),
+                         cycle_age_seconds: float = Query(3.5),
+                         ok_count: int = Query(23),
+                         ng_count: int = Query(3),
+                         inject_stats: bool = Query(True),
+                         inject_ng: bool = Query(False),
+                         ng_cycle_duration: float = Query(9.3)):
+    """开发用: 给当前 mgr 注入一个激活态 per_item_state + 配套统计 mock.
+
+    ⚠ 必须用 ENABLE_DEV_MOCKS=1 启动后端, 否则端点 403.
+    必须先 /detection/set-project 把 logic_mode 设为 per_item, 才能注入成功.
+
+    参数:
+        total_items: 当前周期物件总数
+        covered_items: 已覆盖件数
+        cycle_age_seconds: 周期已运行秒数
+        ok_count / ng_count: 历史合格/不良总数 (供右上角统计卡片 / 饼图 / 仪表盘消费)
+        inject_stats: 是否同时写入 counters/cycle_time 等统计数据 (默认 True)
+        inject_ng: 是否同时注入一条"上次 NG"详情 (供 PerItemPanel 底栏红条展示, 默认 False)
+        ng_cycle_duration: 模拟的上次 NG 周期耗时 (秒, 仅 inject_ng=true 时生效)
+    """
+    if not _dev_mocks_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail="dev mock 端点已禁用. 启动后端时设置 ENABLE_DEV_MOCKS=1 才能调用 (出厂版必须保持禁用).",
+        )
+    import time
+    mgr = _get_mgr(channel)
+    if not getattr(mgr, '_per_item_config', None):
+        raise HTTPException(status_code=400, detail="当前 channel 未启用 per_item 模式, 请先 set-project")
+    if not getattr(mgr, '_per_item_steps', None):
+        raise HTTPException(status_code=400, detail="per_item 步骤列表为空, 请检查 steps_config[i].per_item")
+
+    step = mgr._per_item_steps[0]
+    # 清空旧状态
+    step.items.clear()
+    step.next_item_id = 1
+
+    # 造 N 颗"螺丝", 排成 3 行 × ceil(N/3) 列网格, 模拟工件上的螺丝阵列
+    import math
+    cols = max(1, math.ceil(total_items / 3))
+    cell_w = 0.95 / cols
+    cell_h = 0.85 / 3
+    box_w = cell_w * 0.55
+    box_h = cell_h * 0.55
+
+    now = time.time()
+    cycle_start = now - max(0.0, cycle_age_seconds)
+    from backend.api.source_per_item_mixin import _PerItemItemState
+
+    for idx in range(total_items):
+        row = idx // cols
+        col = idx % cols
+        cx = 0.05 + (col + 0.5) * cell_w
+        cy = 0.10 + (row + 0.5) * cell_h
+        x = max(0.0, cx - box_w / 2)
+        y = max(0.0, cy - box_h / 2)
+        bbox = (x, y, box_w, box_h)
+        iid = step.next_item_id
+        step.next_item_id += 1
+        st = _PerItemItemState(iid, bbox, frame_id=120, ts=now)
+        if idx < covered_items:
+            st.covered = True
+            st.first_covered_at = cycle_start + (idx + 1) * 0.4
+            st.consecutive_overlap_frames = step.sustain_frames
+        step.items[iid] = st
+
+    step.locked_count = total_items
+    step.completed = (covered_items >= total_items)
+
+    sess = getattr(mgr, '_per_item_session', None)
+    if sess is not None:
+        sess.cycle_active = True
+        sess.cycle_start_time = cycle_start
+        sess.cycle_start_frame_id = 60
+        sess.frame_id = 120
+        sess.stability_buffer.clear() if hasattr(sess.stability_buffer, 'clear') else None
+
+    # ──── 配套统计 mock (右上角计数器 / 饼图 / 仪表盘 / 历史 cycle 时间) ────
+    stats_injected = {}
+    if inject_stats:
+        total_count = ok_count + ng_count
+        # 三个内置计数器, 前端 BUILTIN_THREE 直接消费
+        mgr.counters['合格总数'] = ok_count
+        mgr.counters['不良总数'] = ng_count
+        mgr.counters['总产量'] = total_count
+
+        # 历史 cycle 时间 (后端 detection/results 从 mgr.cycle_times 算 avg/last)
+        try:
+            import random
+            random.seed(42)
+            if hasattr(mgr, 'cycle_times') and hasattr(mgr.cycle_times, 'clear'):
+                mgr.cycle_times.clear()
+                for _ in range(min(max(1, ok_count), 30)):
+                    mgr.cycle_times.append(round(7.0 + random.random() * 2.5, 2))
+            if hasattr(mgr, 'ng_cycle_times') and hasattr(mgr.ng_cycle_times, 'clear'):
+                mgr.ng_cycle_times.clear()
+                for _ in range(min(max(1, ng_count), 10)):
+                    mgr.ng_cycle_times.append(round(4.5 + random.random() * 3.5, 2))
+        except Exception as _e:
+            print(f"[per-item-mock] 注入 cycle_times 失败: {_e}")
+
+        stats_injected = {
+            'ok_count': ok_count,
+            'ng_count': ng_count,
+            'total_count': total_count,
+            'yield_rate': round(ok_count / max(1, total_count) * 100, 1),
+        }
+
+    # ──── NG 详情 mock (PerItemPanel 底栏红条 / 右侧"逐件实时反馈"用) ────
+    ng_injected = None
+    if inject_ng:
+        # 用当前 step 的未覆盖件作为漏件清单, 自然贴合视觉
+        steps_failed = []
+        missing_total = 0
+        for step in mgr._per_item_steps:
+            missing_ids = [iid for iid, st in step.items.items() if not st.covered]
+            if missing_ids:
+                steps_failed.append({
+                    'step_label': step.step_label,
+                    'display_label': step.display_label,
+                    'covered_count': step.covered_count(),
+                    'total': len(step.items),
+                    'missing_item_ids': missing_ids,
+                })
+                missing_total += len(missing_ids)
+        reason = '; '.join(
+            f"[{d['display_label']}] 未完成({d['covered_count']}/{d['total']})"
+            for d in steps_failed
+        ) or '逐件覆盖未完成'
+        mgr._per_item_last_ng_detail = {
+            'reason_summary': reason,
+            'cycle_duration_sec': round(float(ng_cycle_duration), 2),
+            'settled_at': now,
+            'missing_total': missing_total,
+            'steps_failed': steps_failed,
+        }
+        ng_injected = {
+            'missing_total': missing_total,
+            'cycle_duration_sec': round(float(ng_cycle_duration), 2),
+            'steps_failed_count': len(steps_failed),
+        }
+    else:
+        # 没要求注入 NG 时清掉旧痕迹, 避免污染下次 OK 流程的视觉
+        if hasattr(mgr, '_per_item_last_ng_detail'):
+            mgr._per_item_last_ng_detail = None
+
+    return {
+        "status": "success",
+        "channel": channel,
+        "injected": {
+            "total": total_items,
+            "covered": covered_items,
+            "cycle_age_seconds": cycle_age_seconds,
+            "stats": stats_injected,
+            "ng": ng_injected,
+        },
+        "snapshot": mgr.get_per_item_state(),
+    }
 
 
 # ============================================================
