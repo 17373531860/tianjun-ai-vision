@@ -145,8 +145,11 @@ export const useSystemStore = defineStore('system', {
       mediapipeEnabled: false,   // MediaPipe 骨架叠加（默认关闭）
       mediapipePose: true,       // 显示姿态骨架
       mediapipeHands: true,      // 显示手部关键点
-      mediapipeConfidence: 0.7,  // MediaPipe 检测置信度
-      mediapipeInterval: 2       // MediaPipe 处理间隔（帧）
+      mediapipeConfidence: 0.7,  // MediaPipe 检测置信度（首检阈值）
+      mediapipeInterval: 2,      // MediaPipe 处理间隔（帧）
+      // v3.8.0 hands 调优：朋友同款"完美骨架" = complexity=1 + confidence=0.5 + trackConfidence=0.5
+      mediapipeModelComplexity: 0,   // 0=lite (默认, 快、CPU 友好) / 1=full (慢, 精度高)
+      mediapipeTrackConfidence: 0.5  // 跟踪置信度（值越低骨架越粘但抖动更大）
     }
   }),
   actions: {

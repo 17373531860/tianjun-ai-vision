@@ -132,6 +132,7 @@ backend/alarm_config.json
 backend/current_operator.json
 backend/scanner_runtime_state.json
 backend/workstation_config.json
+backend/device_config.json
 
 # Local ad-hoc scripts at repo root (not product code)
 /_bench_camera.py

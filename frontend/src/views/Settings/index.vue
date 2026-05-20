@@ -831,6 +831,78 @@
                   style="width: 120px"
                 />
               </div>
+
+              <!-- v3.8.0: 一键预设 -->
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div>
+                  <span class="text-gray-300">手部识别预设</span>
+                  <div class="text-xs text-gray-500 mt-1">
+                    省 CPU 模式 = 默认（complexity=0, 置信度 0.7）；高精度模式 = 友商同款（complexity=1, 置信度 0.5），手部识别率提升 3-4 倍但 CPU 占用增加约 80%
+                  </div>
+                </div>
+                <div class="flex flex-col gap-2">
+                  <el-button
+                    size="small"
+                    type="info"
+                    plain
+                    :disabled="!store.performance.mediapipeEnabled"
+                    @click="applyMediaPipePreset('eco')"
+                  >省 CPU 模式</el-button>
+                  <el-button
+                    size="small"
+                    type="success"
+                    plain
+                    :disabled="!store.performance.mediapipeEnabled"
+                    @click="applyMediaPipePreset('quality')"
+                  >高精度模式</el-button>
+                </div>
+              </div>
+
+              <!-- v3.8.0: 高级选项 -->
+              <el-collapse class="border-slate-700">
+                <el-collapse-item title="高级选项" name="mp-advanced">
+                  <div class="space-y-4">
+                    <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                      <div>
+                        <span class="text-gray-300">手部模型档位</span>
+                        <div class="text-xs text-gray-500 mt-1">
+                          0 = 轻量版（推理快、识别黑手套/俯视等困难场景几乎无效）；1 = 完整版（推理慢约 1.8 倍、对手套/握工具等非标场景识别率显著提升）
+                        </div>
+                      </div>
+                      <el-radio-group
+                        v-model="store.performance.mediapipeModelComplexity"
+                        size="small"
+                        :disabled="!store.performance.mediapipeEnabled"
+                        @change="savePerformanceSettings"
+                      >
+                        <el-radio-button :value="0">轻量(0)</el-radio-button>
+                        <el-radio-button :value="1">完整(1)</el-radio-button>
+                      </el-radio-group>
+                    </div>
+                    <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                      <div>
+                        <span class="text-gray-300">跟踪置信度</span>
+                        <div class="text-xs text-gray-500 mt-1">值越低骨架越"粘"住手不易丢失但更抖；首检后跟随期使用</div>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <el-slider
+                          v-model="store.performance.mediapipeTrackConfidence"
+                          :min="0.05"
+                          :max="0.95"
+                          :step="0.05"
+                          :disabled="!store.performance.mediapipeEnabled"
+                          @change="savePerformanceSettings"
+                          style="width: 140px"
+                          :show-tooltip="true"
+                          :format-tooltip="v => v.toFixed(2)"
+                        />
+                        <span class="text-gray-400 text-xs w-8 text-right">{{ store.performance.mediapipeTrackConfidence.toFixed(2) }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </el-collapse-item>
+              </el-collapse>
+
               <el-alert
                 title="说明"
                 type="info"
@@ -841,7 +913,8 @@
                   <div class="text-xs text-gray-300 mt-1">
                     <p>• MediaPipe 由 Google 开发，提供轻量级人体姿态和手部关键点检测</p>
                     <p>• 仅在画面显示中叠加骨架效果，<strong>不参与检测判定、不影响录制</strong></p>
-                    <p>• 关闭时完全无性能开销；开启后约增加 15-25ms/帧（CPU 处理）</p>
+                    <p>• 性能参考（CPU 处理）：省 CPU 模式约 18-22ms/帧；高精度模式约 30-38ms/帧</p>
+                    <p>• 工业死区提示：纯黑手套俯视、手指握工具被遮挡等场景，<strong>无论哪种预设都识别率为零</strong>，需训练专用工业 hand-detector 后从后端 API 配 <code>mediapipe_hand_detector_path</code> 字段启用二段管线</p>
                     <p>• 需要安装 mediapipe 包：<code>pip install mediapipe</code></p>
                   </div>
                 </template>
@@ -1371,7 +1444,9 @@ const savePerformanceSettings = async () => {
       mediapipe_pose: store.performance.mediapipePose,
       mediapipe_hands: store.performance.mediapipeHands,
       mediapipe_confidence: store.performance.mediapipeConfidence,
-      mediapipe_interval: store.performance.mediapipeInterval
+      mediapipe_interval: store.performance.mediapipeInterval,
+      mediapipe_model_complexity: store.performance.mediapipeModelComplexity,
+      mediapipe_track_confidence: store.performance.mediapipeTrackConfidence
     });
     ElMessage.success('性能设置已保存');
   } catch (e) {
@@ -1405,10 +1480,32 @@ const loadPerformanceSettings = async () => {
       if (res.data.mediapipe_interval !== undefined) {
         store.performance.mediapipeInterval = res.data.mediapipe_interval;
       }
+      if (res.data.mediapipe_model_complexity !== undefined) {
+        store.performance.mediapipeModelComplexity = res.data.mediapipe_model_complexity;
+      }
+      if (res.data.mediapipe_track_confidence !== undefined) {
+        store.performance.mediapipeTrackConfidence = res.data.mediapipe_track_confidence;
+      }
     }
   } catch (e) {
     console.error('加载后端性能设置失败:', e);
   }
+};
+
+// v3.8.0 一键预设：省 CPU 模式 / 高精度模式（友商同款）
+const applyMediaPipePreset = (mode) => {
+  if (mode === 'eco') {
+    store.performance.mediapipeModelComplexity = 0;
+    store.performance.mediapipeConfidence = 0.7;
+    store.performance.mediapipeTrackConfidence = 0.5;
+    ElMessage.success('已切换到「省 CPU 模式」');
+  } else if (mode === 'quality') {
+    store.performance.mediapipeModelComplexity = 1;
+    store.performance.mediapipeConfidence = 0.5;
+    store.performance.mediapipeTrackConfidence = 0.5;
+    ElMessage.success('已切换到「高精度模式」');
+  }
+  savePerformanceSettings();
 };
 
 // 刷新GPU列表

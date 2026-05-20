@@ -340,11 +340,24 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         
         # MediaPipe overlay (纯视觉叠加，默认关闭)
         # ===== MediaPipeOverlay 组件 (P7 第二刀) =====
-        # 4 个 public 用户配置字段保留在 VSM 上 (routes 直接读写)
+        # 4 个老 public 用户配置字段保留在 VSM 上 (routes 直接读写)
         self.mediapipe_enabled = False
         self.mediapipe_pose = True
         self.mediapipe_hands = True
         self.mediapipe_confidence = 0.7
+        # v3.8.0 mp.solutions.hands 调优 (朋友程序同款参数 = complexity=1 + det_conf=0.5)
+        # 默认 complexity=0 (跟 v2.7.16 行为一致, 不主动改变老客户性能特征)
+        self.mediapipe_model_complexity = 0     # 0=lite (快, 准度低) / 1=full (慢, 准度高)
+        self.mediapipe_track_confidence = 0.5
+        # v3.8.0 二段 pipeline 新增配置 (空 hand_detector_path = 走 baseline)
+        self.mediapipe_hand_detector_path = ""
+        self.mediapipe_hand_detector_kind = "v8"   # 'v8' (ultralytics) / 'v5' (legacy)
+        self.mediapipe_hand_detector_conf = 0.25
+        self.mediapipe_hand_detector_iou = 0.45
+        self.mediapipe_hand_detector_imgsz = 640
+        self.mediapipe_hand_detector_class = -1     # -1 = 所有类, 否则只保留该类 id
+        self.mediapipe_hand_roi_pad = 0.3
+        self.mediapipe_landmarker_task_path = ""    # 空 = 用内置 backend/data/models/hand_landmarker.task
         # 8 个内部 _mp_* 状态字段移至组件, __getattr__/__setattr__ 透明转发
         self.mp_overlay = MediaPipeOverlay(host=self)
         
@@ -409,6 +422,18 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                     self.mediapipe_hands = config.get('mediapipe_hands', True)
                     self.mediapipe_confidence = config.get('mediapipe_confidence', 0.7)
                     self._mp_process_interval = config.get('mediapipe_interval', 2)
+                    # v3.8.0 mp.solutions.hands 调优 (朋友程序密码)
+                    self.mediapipe_model_complexity = int(config.get('mediapipe_model_complexity', 0))
+                    self.mediapipe_track_confidence = float(config.get('mediapipe_track_confidence', 0.5))
+                    # v3.8.0 二段 pipeline 配置 (向后兼容: 缺省 = baseline)
+                    self.mediapipe_hand_detector_path = config.get('mediapipe_hand_detector_path', '') or ''
+                    self.mediapipe_hand_detector_kind = config.get('mediapipe_hand_detector_kind', 'v8') or 'v8'
+                    self.mediapipe_hand_detector_conf = float(config.get('mediapipe_hand_detector_conf', 0.25))
+                    self.mediapipe_hand_detector_iou = float(config.get('mediapipe_hand_detector_iou', 0.45))
+                    self.mediapipe_hand_detector_imgsz = int(config.get('mediapipe_hand_detector_imgsz', 640))
+                    self.mediapipe_hand_detector_class = int(config.get('mediapipe_hand_detector_class', -1))
+                    self.mediapipe_hand_roi_pad = float(config.get('mediapipe_hand_roi_pad', 0.3))
+                    self.mediapipe_landmarker_task_path = config.get('mediapipe_landmarker_task_path', '') or ''
 
                     per_ch = (config.get('per_channel') or {}).get(str(self.channel_id), {})
                     rot = per_ch.get('rotation', 0)
@@ -454,6 +479,18 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 'mediapipe_hands': self.mediapipe_hands,
                 'mediapipe_confidence': self.mediapipe_confidence,
                 'mediapipe_interval': self._mp_process_interval,
+                # v3.8.0 mp.solutions.hands 调优
+                'mediapipe_model_complexity': int(getattr(self, 'mediapipe_model_complexity', 0)),
+                'mediapipe_track_confidence': float(getattr(self, 'mediapipe_track_confidence', 0.5)),
+                # v3.8.0 二段 pipeline 持久化
+                'mediapipe_hand_detector_path': getattr(self, 'mediapipe_hand_detector_path', '') or '',
+                'mediapipe_hand_detector_kind': getattr(self, 'mediapipe_hand_detector_kind', 'v8') or 'v8',
+                'mediapipe_hand_detector_conf': float(getattr(self, 'mediapipe_hand_detector_conf', 0.25)),
+                'mediapipe_hand_detector_iou': float(getattr(self, 'mediapipe_hand_detector_iou', 0.45)),
+                'mediapipe_hand_detector_imgsz': int(getattr(self, 'mediapipe_hand_detector_imgsz', 640)),
+                'mediapipe_hand_detector_class': int(getattr(self, 'mediapipe_hand_detector_class', -1)),
+                'mediapipe_hand_roi_pad': float(getattr(self, 'mediapipe_hand_roi_pad', 0.3)),
+                'mediapipe_landmarker_task_path': getattr(self, 'mediapipe_landmarker_task_path', '') or '',
                 'per_channel': per_channel,
             }
             with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
