@@ -101,6 +101,7 @@
 | 数据问题修复 | `fix-data` |
 | 前后端 API 对齐检查 | `api-sync` |
 | 调参（视频 + 模型）| `tune-params` |
+| 训工业 hand-detector（客户手套/俯视等 MediaPipe 死区救场）| `train-hand-detector` |
 | 跑测试 / 写测试 / 端到端冒烟 / 测试影响分析 | `run-tests` |
 | 出新版本（version bump / changelog / tag / CI）| `update-release` |
 | 打包流程问题排查 | `build-release` |
