@@ -494,7 +494,27 @@ def get_stream_config():
         "mediapipe_hand_detector_class": int(getattr(video_manager, "mediapipe_hand_detector_class", -1)),
         "mediapipe_hand_roi_pad": float(getattr(video_manager, "mediapipe_hand_roi_pad", 0.3)),
         "mediapipe_landmarker_task_path": getattr(video_manager, "mediapipe_landmarker_task_path", "") or "",
+        # v3.8.0 二段管线运行时状态: 给前端显示"基础模式 / 已启用 / 路径无效 / 加载失败"
+        "mediapipe_two_stage_status": _compute_two_stage_status(video_manager),
     }
+
+
+def _compute_two_stage_status(vm) -> Dict[str, Any]:
+    """计算二段管线当前状态, 给前端显示徽章."""
+    path = (getattr(vm, "mediapipe_hand_detector_path", "") or "").strip()
+    if not path:
+        return {"state": "baseline", "message": "未启用专用手部模型 (走基础 MediaPipe)"}
+    if not os.path.exists(path):
+        return {"state": "path_invalid", "message": f"模型文件不存在: {path}"}
+    # path 有效, 看运行时是否真的加载成功
+    overlay = getattr(vm, "mp_overlay", None)
+    # _mp_draw 在 overlay.init() 首次调用时才会赋值, None = 还没尝试 init
+    overlay_initialized = overlay is not None and getattr(overlay, "_mp_draw", None) is not None
+    if not overlay_initialized:
+        return {"state": "pending", "message": "已配置, 等待启用 MediaPipe 后首次加载 (开启检测画面后生效)"}
+    if getattr(overlay, "_two_stage_active", False):
+        return {"state": "active", "message": "专用手部模型已启用 (二段管线)"}
+    return {"state": "load_failed", "message": "模型存在但加载失败, 已回退基础模式 (看后端日志)"}
 
 
 @router.post("/stream/config")
