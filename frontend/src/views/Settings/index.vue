@@ -187,6 +187,29 @@
                 <span class="text-gray-300">步骤统计表格</span>
                 <el-switch v-model="store.display.monitor.stepTable" @change="saveDisplaySettings" />
               </div>
+              <div v-if="store.display.monitor.stepTable" class="ml-3 pl-3 border-l-2 border-slate-700 space-y-2">
+                <div class="text-xs text-gray-500 px-1">表格列显示（默认全开）</div>
+                <div class="flex items-center justify-between p-2 bg-slate-900/80 rounded border border-slate-800">
+                  <span class="text-gray-300 text-sm">序号</span>
+                  <el-switch v-model="store.display.monitor.stepTableColumns.showNo" @change="saveDisplaySettings" />
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-900/80 rounded border border-slate-800">
+                  <span class="text-gray-300 text-sm">步骤</span>
+                  <el-switch v-model="store.display.monitor.stepTableColumns.showStep" @change="saveDisplaySettings" />
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-900/80 rounded border border-slate-800">
+                  <span class="text-gray-300 text-sm">状态</span>
+                  <el-switch v-model="store.display.monitor.stepTableColumns.showStatus" @change="saveDisplaySettings" />
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-900/80 rounded border border-slate-800">
+                  <span class="text-gray-300 text-sm">PT/s</span>
+                  <el-switch v-model="store.display.monitor.stepTableColumns.showPt" @change="saveDisplaySettings" />
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-900/80 rounded border border-slate-800">
+                  <span class="text-gray-300 text-sm">结果</span>
+                  <el-switch v-model="store.display.monitor.stepTableColumns.showResult" @change="saveDisplaySettings" />
+                </div>
+              </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <span class="text-gray-300">FPS</span>
                 <el-switch v-model="store.display.monitor.showFps" @change="saveDisplaySettings" />

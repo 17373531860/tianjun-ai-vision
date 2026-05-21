@@ -104,6 +104,13 @@ export const useSystemStore = defineStore('system', {
         defectChart: true,
         capacityChart: true,
         stepTable: true,
+        stepTableColumns: {
+          showNo: true,
+          showStep: true,
+          showStatus: true,
+          showPt: true,
+          showResult: true
+        },
         showFps: true,
         showLatency: true,
         showDetectionCount: true,
@@ -185,6 +192,14 @@ export const useSystemStore = defineStore('system', {
                 showBad: true,
                 showNgSteps: true,
                 ...(saved.monitor?.defaultCounters || {})
+              },
+              stepTableColumns: {
+                showNo: true,
+                showStep: true,
+                showStatus: true,
+                showPt: true,
+                showResult: true,
+                ...(saved.monitor?.stepTableColumns || {})
               }
             }
           };

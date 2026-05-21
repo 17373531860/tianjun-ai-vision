@@ -1019,11 +1019,11 @@
             <table class="w-full text-left text-sm">
                <thead class="bg-slate-800 text-gray-400 top-0 sticky">
                   <tr>
-                     <th class="px-2 py-1.5">No</th>
-                     <th class="px-2 py-1.5">步骤</th>
-                     <th class="px-2 py-1.5">状态</th>
-                     <th class="px-2 py-1.5">PT/s</th>
-                     <th class="px-2 py-1.5">结果</th>
+                     <th v-if="systemStore.display.monitor.stepTableColumns?.showNo !== false" class="px-2 py-1.5">No</th>
+                     <th v-if="systemStore.display.monitor.stepTableColumns?.showStep !== false" class="px-2 py-1.5">步骤</th>
+                     <th v-if="systemStore.display.monitor.stepTableColumns?.showStatus !== false" class="px-2 py-1.5">状态</th>
+                     <th v-if="systemStore.display.monitor.stepTableColumns?.showPt !== false" class="px-2 py-1.5">PT/s</th>
+                     <th v-if="systemStore.display.monitor.stepTableColumns?.showResult !== false" class="px-2 py-1.5">结果</th>
                   </tr>
                </thead>
                <tbody class="divide-y divide-slate-800 text-gray-300">
@@ -1031,9 +1031,9 @@
                     class="hover:bg-slate-800/50"
                     :class="row.status === 'completed' ? 'bg-green-800/30' : ''"
                   >
-                     <td class="px-2 py-1.5">{{ i + 1 }}</td>
-                     <td class="px-2 py-1.5">{{ row.step }}</td>
-                     <td class="px-2 py-1.5">
+                     <td v-if="systemStore.display.monitor.stepTableColumns?.showNo !== false" class="px-2 py-1.5">{{ i + 1 }}</td>
+                     <td v-if="systemStore.display.monitor.stepTableColumns?.showStep !== false" class="px-2 py-1.5">{{ row.step }}</td>
+                     <td v-if="systemStore.display.monitor.stepTableColumns?.showStatus !== false" class="px-2 py-1.5">
                        <span :class="row.status === 'completed' ? 'text-white' : 'text-gray-500'">
                          {{ row.status === 'completed' ? '已检测' : '待检测' }}
                        </span>
@@ -1044,10 +1044,10 @@
                        但视觉上只要这一步还没进入本周期, PT 就不应该显示任何数字。
                        跟踪模式跳过守门 (其 PT 字典本就为空, 不会有残留)。
                      -->
-                     <td class="px-2 py-1.5 text-white font-mono">
+                     <td v-if="systemStore.display.monitor.stepTableColumns?.showPt !== false" class="px-2 py-1.5 text-white font-mono">
                        {{ (isTrackingMode || row.status === 'completed') ? formatStepPT(row.label) : '--' }}
                      </td>
-                     <td class="px-2 py-1.5">
+                     <td v-if="systemStore.display.monitor.stepTableColumns?.showResult !== false" class="px-2 py-1.5">
                        <!--
                          v3.7.x: 结果(OK/NG) 必须等 PT 时间出现后才显示。
                          v3.8.x (三次修订): 守门口径跟 PT 列对齐 — 必须 row.status === 'completed'。
