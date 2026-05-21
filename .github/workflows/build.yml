@@ -54,7 +54,9 @@ jobs:
             Remove-Item -Recurse -Force "$env:ProgramData\Docker" -ErrorAction SilentlyContinue
             Get-ChildItem "$env:RUNNER_TEMP" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
             Get-ChildItem "$env:TEMP" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-            conda clean --all -y 2>$null
+            if (Get-Command conda -ErrorAction SilentlyContinue) {
+              try { conda clean --all -y } catch { Write-Host "conda clean skipped: $_" }
+            }
           }
 
           Write-Host "Disk space after cleanup:"
