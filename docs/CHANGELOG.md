@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.8.1 (2026-05-22)
+- [BUG-001] **严格+单次接受 PT 位置守门** — 仅拦多余位置的新出现，修复翻转 PT 虚高/0.0s。
+- [BUG-002] **TRT 预热失败自动回退 PyTorch** — engine 版本不兼容时不再静默 0 检测。
+- [BUG-003] **Monitor 中间步闪动 + OK/PT 不同步** — 已走过步骤锁定、结算步 OK 回填前面、PT=0 显示 `--`。
+- [CI-001] **Actions 储空间清理 + build 磁盘 >70% 深度清理** — 清旧 caches/artifacts；CI 加阈值告警与 extra cleanup。
+
 ## v3.8.0 (2026-05-21)
 - [FEAT-001] **定时导出 — 按 cron 周期性自动出报表**：新建 `ExportScheduledRule` + APScheduler 后台调度，7 种数据窗口预设（含早晚班/跨日截断，跟手动按钮零差异）、5 种输出格式、全局默认目录 + 单规则覆盖、运行日志回查；新组件 `ScheduledRulesDialog`（cron 简化模式 + 高级 cron + 下次触发预览 + 端到端表单）。
 - [FEAT-002] **数据页 4 个快捷按钮 + 定时导出支持多格式 (csv/txt/xlsx/docx/pdf)**：抽出 `build_csv_string`，新模块 `export_scheduled_writers` 集中实现；DOCX 走 XML fast-path 解决 O(n²) 性能（386 行 >2min → <1s）；PDF 用 reportlab 内建 STSong-Light CID 字体免外部依赖；前端加输出格式下拉。

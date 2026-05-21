@@ -1049,12 +1049,17 @@
                      </td>
                      <td class="px-2 py-1.5">
                        <!--
-                         v3.7.x 客户硬性要求：结果(OK/NG) 必须等 PT 时间出现后才显示。
-                         守门条件：PT 字段已有真实数值（不是 "--"）才允许显示 OK/NG。
-                         例外：跟踪模式底层不写 step_durations，PT 永远是 "--"，
-                              该模式下跳过守门保持原"counted > 0 → OK"语义。
+                         v3.7.x: 结果(OK/NG) 必须等 PT 时间出现后才显示。
+                         v3.8.x (三次修订): 守门口径跟 PT 列对齐 — 必须 row.status === 'completed'。
+                         旧守门 formatStepPT() !== '--' 会被 in-flight 实时累加值打穿:
+                         步骤还在画面里 (status=active) 时, PT 列被守门挡显示 '--',
+                         但 formatStepPT() 因为有 in-flight fallback 返回真实数字,
+                         结果列守门直接放行 → 客户看到 "状态=待检测 + PT=-- + 结果=OK" 视觉割裂.
+                         现在两道门同步: status='completed' 才允许显示 PT 和结果, 严格同帧出现.
+                         例外：跟踪模式底层不写 step_durations, PT 永远是 '--',
+                              该模式下跳过守门保持原"counted > 0 → OK"语义.
                        -->
-                       <template v-if="isTrackingMode || formatStepPT(row.label) !== '--'">
+                       <template v-if="isTrackingMode || row.status === 'completed'">
                          <span v-if="row.cycleResult === 'ok'" class="text-green-400">OK</span>
                          <span v-else-if="row.cycleResult === 'ng'" class="text-red-500">NG</span>
                          <span v-else class="text-gray-500">--</span>
@@ -2875,6 +2880,7 @@ const formatStepPT = (stepLabel) => {
     if (inflight !== undefined && inflight !== null) duration = inflight;
   }
   if (duration === undefined || duration === null) return '--';
+  if (duration <= 0) return '--';
   return `${duration.toFixed(1)}s`;
 };
 
@@ -4258,13 +4264,24 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       const isCoveredByBackup = backupCoveredLabels.has(label);
       const thisPosCompleted = completedByPos[idx];
 
-      // v3.8.x: cycleResult 的 OK/NG 也要等"权威 PT 已写入"才能下结论。
-      // 旧逻辑下 step 一进入 cycle_steps (画面里出现, PT 还在涨) 就把 cycleResult='ok',
-      // 导致客户看到 "状态: 待检测 + 结果: OK" 的割裂语义 ── 跟 status 改动不一致。
-      // 现在 thisPosCompleted 还要 && 权威 PT 写入才认为"该位置真完成", 否则结果列暂时空着 (null)。
       const _posCyclePT = cycleSumStepDurations.value[label];
       const _posAuthoritative = _posCyclePT !== undefined && _posCyclePT !== null && _posCyclePT > 0;
-      const _posDone = thisPosCompleted && _posAuthoritative;
+      const _inflightPT = stepInflightDurations.value[label];
+      const _hasTimedPT = _posAuthoritative
+        || (_inflightPT !== undefined && _inflightPT !== null && _inflightPT > 0);
+
+      // 后续期望位置已有步骤进 cycle → 本位置视为"已走过", 不因画面里再次识别回退到 active/NG 闪动
+      const _passedThisStep = maxCompletedIdx > idx && thisPosCompleted;
+      const _inFrame = detectingLabels.has(label);
+      const _leftFrame = !_inFrame;
+
+      const _isLastStep = expectedLabels.length > 0 && idx === expectedLabels.length - 1;
+      // 最后一步: 离开画面即可 OK+PT 同帧; 中间步: 要有可显示 PT, 且已离开画面或后续步骤已往前走
+      const _posDone = thisPosCompleted && (
+        _isLastStep
+          ? _leftFrame
+          : (_hasTimedPT && (_leftFrame || _passedThisStep))
+      );
 
       if (cycleCount > expCnt && _posDone) {
         step.cycleResult = 'ng';
@@ -4272,24 +4289,16 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
         step.cycleResult = outOfOrderIdx.has(idx) ? 'ng' : 'ok';
       } else if (isCoveredByBackup) {
         step.cycleResult = 'ok';  // 替补覆盖
-      } else if (idx < maxAuthCompletedIdx) {
-        step.cycleResult = 'ng';  // 漏做: 此位置之后已有"权威完成"的位置
+      } else if (!thisPosCompleted && idx < maxAuthCompletedIdx) {
+        // 漏做: 此位置从未进 cycle, 但后面已有权威 PT — 仅真漏做才标 NG, 已进 cycle 等 PT 的不闪 NG
+        step.cycleResult = 'ng';
       } else {
-        step.cycleResult = null;  // 还没轮到 / 该位置步骤还在画面里 PT 涨着 / 后续位置还没权威完成
+        step.cycleResult = null;
       }
 
-      // v3.8.x (二次修订): "状态"列响应放宽 — 步骤离开画面就标完成, 不再硬等权威 PT 写入。
-      // 客户视频反馈: 之前严格等 cycle_sum_step_durations 才标 completed, 导致
-      //   - A 步做完 4 秒才显示 "已检测" (disappear_delay + polling 时延)
-      //   - D 步太快, cycle 结算时 D 还没等到权威 PT 写入, 直接被周期清空, 表里从没出现过
-      // 现在判定改为:
-      //   - 步骤在画面里 (detectingLabels) → 'active' (PT 列 fallback 显示 in-flight 实时涨)
-      //   - 步骤已纳入 cycle_steps + 不在画面 → 'completed' (即"做过就算完")
-      //   - 否则 → 'pending'
-      // cycleResult (OK/NG) 仍保留权威 PT 守门 (上面 _posAuthoritative 那段),
-      // 所以视觉序列仍是: 状态先变完成 → PT 稳定显示 → 结果才出 OK, 不会出现"PT 没稳定就标 OK"。
       const _completed = thisPosCompleted || isCoveredByBackup;
-      if (detectingLabels.has(label)) {
+      // 已走过的步骤不因画面残留识别回退 "已检测→待检测" 闪动
+      if (_inFrame && !_passedThisStep) {
         step.status = 'active';
       } else if (_completed) {
         step.status = 'completed';
@@ -4304,6 +4313,21 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
         tableData.value[idx].cycleResult = step.cycleResult;
       }
     });
+
+    // v3.8.x: 结算步已 OK 时, 前面已进 cycle 的中间步同步 OK —
+    // 后端 PT 写入比最后一步慢半拍时, 避免 "最后一步 OK+PT, 中间步只有 PT 或全 --".
+    const _lastIdx = expectedLabels.length - 1;
+    if (_lastIdx >= 0 && steps.value[_lastIdx]?.cycleResult === 'ok') {
+      steps.value.forEach((step, idx) => {
+        if (idx >= _lastIdx) return;
+        if (completedByPos[idx] && step.cycleResult == null && !outOfOrderIdx.has(idx)) {
+          step.cycleResult = 'ok';
+          if (tableData.value[idx]) {
+            tableData.value[idx].cycleResult = 'ok';
+          }
+        }
+      });
+    }
     
     // 自动滚动到最新变化的卡片
     let latestChangedIdx = -1;

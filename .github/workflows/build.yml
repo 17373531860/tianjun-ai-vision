@@ -25,14 +25,43 @@ jobs:
       - name: Free disk space
         shell: pwsh
         run: |
-          echo "Disk space before cleanup:"
-          Get-PSDrive C | Select-Object Used,Free
+          function Show-Disk {
+            $d = Get-PSDrive C
+            $total = $d.Used + $d.Free
+            $pct = if ($total -gt 0) { [math]::Round($d.Used / $total * 100, 1) } else { 0 }
+            Write-Host ("Disk C: used={0:N2}GB free={1:N2}GB ({2}% used)" -f ($d.Used/1GB), ($d.Free/1GB), $pct)
+            return $pct
+          }
+
+          Write-Host "Disk space before cleanup:"
+          $pctBefore = Show-Disk
+
+          # 基础清理（每次构建都跑）
           Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "C:\Program Files (x86)\Microsoft Visual Studio\2019" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "C:\hostedtoolcache\CodeQL" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "C:\hostedtoolcache\Java_Temurin-Hotspot_jdk" -ErrorAction SilentlyContinue
-          echo "Disk space after cleanup:"
-          Get-PSDrive C | Select-Object Used,Free
+
+          # v3.8.1: 磁盘占用 >70% 时加做深度清理（conda-pack + Inno 大文件容易顶满 runner）
+          $pctMid = Show-Disk
+          if ($pctMid -gt 70) {
+            Write-Host "WARNING: disk usage ${pctMid}% > 70%, running deep cleanup..."
+            Remove-Item -Recurse -Force "C:\Program Files\Android" -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force "C:\Program Files\MongoDB" -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force "C:\Program Files\MySQL" -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force "C:\Program Files\Git\usr\share\locale" -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Docker" -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force "$env:ProgramData\Docker" -ErrorAction SilentlyContinue
+            Get-ChildItem "$env:RUNNER_TEMP" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            Get-ChildItem "$env:TEMP" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            conda clean --all -y 2>$null
+          }
+
+          Write-Host "Disk space after cleanup:"
+          $pctAfter = Show-Disk
+          if ($pctAfter -gt 85) {
+            Write-Host "::warning::Disk still ${pctAfter}% used after cleanup — build may fail on conda-pack/Inno"
+          }
       
       - name: Checkout code
         uses: actions/checkout@v4

@@ -1,0 +1,58 @@
+{
+  "version": "3.8.1",
+  "date": "2026-05-22",
+  "previous_version": "3.8.0",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "严格+单次接受 PT 位置守门",
+      "symptom": "翻转 PT 虚高或 0.0s",
+      "root_cause": "守门每帧拦截计时表",
+      "fix": "仅拦截多余位置的新出现",
+      "files": ["backend/api/source_settlement_mixin.py"],
+      "keywords": ["strict_order", "accept_once", "PT合并", "翻转"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "TRT 预热失败回退 PyTorch",
+      "symptom": "检测数一直 0",
+      "root_cause": "engine 版本不兼容且预热异常被吞",
+      "fix": "warmup 失败自动 load .pt",
+      "files": ["backend/api/source_model_load_mixin.py"],
+      "keywords": ["TensorRT", "warmup", "fallback"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "Monitor 步骤闪动与 OK/PT 同步",
+      "symptom": "中间步闪、最后步 OK 中间无 OK",
+      "root_cause": "状态/结果/PT 三列判定不一致",
+      "fix": "锁定已走过步骤、结算步 OK 回填前面",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["Monitor", "PT", "OK", "闪动"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CI-001",
+      "title": "Actions 空间清理与 70% 磁盘深度清理",
+      "symptom": "CI runner 磁盘满导致打包失败",
+      "root_cause": "旧 caches/artifacts 累积",
+      "fix": "手动清理 + build.yml 70% 阈值",
+      "files": [".github/workflows/build.yml"],
+      "keywords": ["Actions", "disk", "cleanup"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/api/source_settlement_mixin.py",
+    "backend/api/source_model_load_mixin.py",
+    "frontend/src/views/Monitor/index.vue",
+    ".github/workflows/build.yml"
+  ]
+}

@@ -124,11 +124,38 @@ class ModelLoadMixin:
             print(f"[模型加载] 推理分辨率 imgsz={self._model_imgsz}")
 
             # CUDA warm-up (Step 3: 走 router.warmup_lock 串行)
+            warmup_ok = True
             if device.startswith('cuda'):
-                self._warmup_model_cuda(self.model, device, self._model_imgsz,
-                                        self.use_half, is_native_pytorch,
-                                        log_tag='主模型',
-                                        update_imgsz_cb=lambda sz: setattr(self, '_model_imgsz', sz))
+                warmup_ok = self._warmup_model_cuda(self.model, device, self._model_imgsz,
+                                                   self.use_half, is_native_pytorch,
+                                                   log_tag='主模型',
+                                                   update_imgsz_cb=lambda sz: setattr(self, '_model_imgsz', sz))
+
+            # v3.8.x: 转换格式 (.engine / .onnx / .torchscript) 预热失败 → 自动 fallback 到原始 PyTorch 模型.
+            # 触发场景: TRT 版本不兼容 / engine 文件损坏 / ONNX runtime 缺失 等.
+            # 老行为是吞掉异常, 留下空壳模型, 每帧推理 deserialize 失败, 客户看到"画面在跑但检测数一直 0".
+            # 新行为: 检测到失败 + 有原始 .pt 路径 → 释放当前坏模型, 重新加载 .pt 走 PyTorch 推理.
+            if (not warmup_ok) and (not is_native_pytorch) \
+                    and self._original_pt_path and model_path != self._original_pt_path:
+                print(f"[模型加载] 转换模型预热失败 ({model_path}), 自动 fallback 到原始 PyTorch 模型: {self._original_pt_path}")
+                try:
+                    self._release_model()
+                except Exception as _e:
+                    print(f"[模型加载] fallback 前释放坏模型出错 (忽略): {_e}")
+                self.model = YOLO(self._original_pt_path)
+                model_path = self._original_pt_path
+                self.model_path = model_path
+                self.model_task = getattr(self.model, 'task', 'detect')
+                is_native_pytorch = True
+                self._is_native_pytorch = True
+                self.model.to(device)
+                self._model_imgsz = self._detect_model_imgsz(self.model, model_path, True)
+                print(f"[模型加载] fallback 后 imgsz={self._model_imgsz}")
+                if device.startswith('cuda'):
+                    self._warmup_model_cuda(self.model, device, self._model_imgsz,
+                                            self.use_half, True,
+                                            log_tag='主模型(fallback)',
+                                            update_imgsz_cb=lambda sz: setattr(self, '_model_imgsz', sz))
 
             # warm-up 之后 AutoBackend 已实例化, 用权威 imgsz 做最终修正
             authoritative = self._read_authoritative_imgsz(self.model)
@@ -526,11 +553,18 @@ class ModelLoadMixin:
 
     def _warmup_model_cuda(self, model, device: str, imgsz: int, use_half: bool,
                            is_native_pytorch: bool, log_tag: str = '',
-                           update_imgsz_cb=None) -> None:
+                           update_imgsz_cb=None) -> bool:
         """CUDA warm-up + AssertionError 时自动修正 imgsz.
 
         Step 3: 在 router.warmup_lock 下串行 — 多模型场景下避免同时初始化
         TensorRT context / 申请 workspace 内存, 防 3050 OOM 峰值.
+
+        Returns:
+            True  → 预热成功 (或 imgsz 修正后成功).
+            False → 预热失败. 调用方可据此决定是否 fallback 到原始 PyTorch 模型.
+                    历史上本方法吞掉所有异常返回 None, 导致 .engine 文件失效时
+                    (TRT 版本不兼容 / engine 损坏) 模型加载假装成功, 实际每帧
+                    推理都 deserialize 失败, 客户感知"画面在跑但检测结果一直 0".
         """
         warmup_lock = getattr(getattr(self, '_router', None), 'warmup_lock', None)
 
@@ -549,6 +583,7 @@ class ModelLoadMixin:
             else:
                 _do_warmup(imgsz)
             print(f"[模型预热] {log_tag} warm-up done")
+            return True
         except AssertionError as ae:
             import re
             m = re.search(r'model size \(1, 3, (\d+), (\d+)\)', str(ae))
@@ -564,12 +599,16 @@ class ModelLoadMixin:
                     else:
                         _do_warmup(correct_sz)
                     print(f"[模型预热] {log_tag} warm-up done (修正后)")
+                    return True
                 except Exception as e2:
                     print(f"[模型预热] {log_tag} 修正后 warm-up 仍失败: {e2}")
+                    return False
             else:
                 print(f"[模型预热] {log_tag} warm-up failed: {ae}")
+                return False
         except Exception as e:
             print(f"[模型预热] {log_tag} warm-up failed: {e}")
+            return False
 
     @staticmethod
     def _read_authoritative_imgsz(model) -> Optional[int]:

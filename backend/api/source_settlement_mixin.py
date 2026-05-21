@@ -690,6 +690,39 @@ class SettlementMixin:
         # and is_new_appearance calculations below.
         old_last_seen = self.step_last_seen.get(label)
 
+        # 提前计算 is_new_appearance — 严格+单次守门只拦"多余位置的新出现",
+        # 不拦画面里持续识别 (is_new_appearance=False). 旧实现在每帧都拦,
+        # 把合法步骤的 step_last_seen 掐断 → PT 算出 0.00s.
+        time_config = self.step_time_config.get(label, {})
+        max_interval = time_config.get('max_interval') or 1.0
+        if old_last_seen is not None:
+            time_since_last = current_time - old_last_seen
+            if is_seq_like:
+                is_new_appearance = time_since_last > max_interval
+            elif self.last_added_step is not None and self.last_added_step != label:
+                is_new_appearance = True
+            else:
+                is_new_appearance = time_since_last > max_interval
+        else:
+            is_new_appearance = True
+
+        # ── v3.8.x: 严格 + 单次接受 → 仅拦截"多余位置的新出现" ──
+        if (is_new_appearance
+                and is_seq_like
+                and self.step_strict_order.get(label)
+                and self.step_accept_once.get(label)
+                and not self._is_legitimate_next_in_sequence(label)):
+            expected_labels = self._get_expected_sequence_labels()
+            _is_first_step_reentry = (
+                len(self.current_cycle_steps) > 0
+                and bool(expected_labels)
+                and label == expected_labels[0]
+            )
+            if not _is_first_step_reentry:
+                print(f"[严格+单次守门] '{label}' 多余位置的新出现, 拒绝计时 "
+                      f"(current={list(self.current_cycle_steps)})")
+                return
+
         # ── accept_once 拦截 ──
         # 在 first_step 结算模式下，第一步即使设了 accept_once，真正消失后重现
         # 也必须放行以触发结算；只有连续检测（未消失）才拦截。
@@ -769,20 +802,6 @@ class SettlementMixin:
         
         # Always update step_last_seen so duration calculations reflect actual last detection time
         self.step_last_seen[label] = current_time
-        
-        time_config = self.step_time_config.get(label, {})
-        max_interval = time_config.get('max_interval') or 1.0
-        
-        if old_last_seen is not None:
-            time_since_last = current_time - old_last_seen
-            if is_seq_like:
-                is_new_appearance = time_since_last > max_interval
-            elif self.last_added_step is not None and self.last_added_step != label:
-                is_new_appearance = True
-            else:
-                is_new_appearance = time_since_last > max_interval
-        else:
-            is_new_appearance = True
         
         if is_new_appearance:
             # v3.7.5: 早于 FIX-381 拦截把保养类 trigger 记进旁路账本.
