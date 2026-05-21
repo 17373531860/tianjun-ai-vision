@@ -757,6 +757,13 @@ def cleanup_on_exit():
         except Exception as _e:
             print(f"[Shutdown] 停止 MES/集群/外设服务时异常（已忽略）: {_e}", flush=True)
 
+        # v3.8.x 停止定时导出调度器
+        try:
+            from backend.services.export_scheduled import stop_scheduler
+            stop_scheduler()
+        except Exception as _e:
+            print(f"[Shutdown] 停止定时导出调度器异常（已忽略）: {_e}", flush=True)
+
         # v2.7.3: 兜底熄灭所有通道报警灯并断开串口，避免主进程被 KILL 时灯塔残留
         try:
             from backend.api.alarm import alarm_router
@@ -896,6 +903,23 @@ def _load_active_plugin_after_app():
 
 
 _load_active_plugin_after_app()
+
+
+# v3.8.x: 定时导出 — APScheduler 后台线程在主进程启动时启动,
+# 在 lifespan shutdown 时停掉 (Electron 8 步关机会调 /shutdown/complete)。
+def _start_scheduled_export():
+    if os.environ.get("BACKEND_SKIP_INIT"):
+        return
+    try:
+        from backend.services.export_scheduled import start_scheduler
+        start_scheduler()
+    except Exception as e:
+        print(f"[Scheduled] 定时导出启动失败 (已隔离, 主程序继续): {e}")
+        import traceback
+        traceback.print_exc()
+
+
+_start_scheduled_export()
 
 
 @app.get("/")

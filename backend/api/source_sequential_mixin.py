@@ -157,8 +157,11 @@ class SequentialMixin:
                     # v3.7.x: 与主路径对齐，补写本周期 SUM。
                     # 漏写会导致前端 PT 列在 cycle 末尾被补计的步骤（典型: 周期最后一步）显示 --，
                     # 但 step_counts 已 +1 → 前端仍标 OK，造成 "OK 出了 PT 没出" 的语义错位。
-                    prev_sum = self.step_cycle_durations.get(label, 0.0)
-                    self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
+                    # 守门：补计场景下 label 一定在 current_cycle_steps（否则 step_counts 不该 +1），
+                    # 加守门是为了对齐主路径，防止顺序错误的标签也被无脑塞进 SUM 字典污染下个周期。
+                    if label in self.current_cycle_steps:
+                        prev_sum = self.step_cycle_durations.get(label, 0.0)
+                        self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
                     print(f"  顺序判定补计: {label}, 耗时 {duration:.2f}s, 累计: {self.step_counts[label]}")
                 
                 del self.step_last_seen[label]
@@ -169,13 +172,23 @@ class SequentialMixin:
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
         self._step_gap_count.clear()
-        if next_carry:
+        # v3.8.x: 残留传染守门 —— 残留必须是期望序列的**合法前缀**才传给下周期。
+        # 客户报障 "一次 NG 后正常做的也全 NG"：旧实现无脑把 next_carry 塞进下周期，
+        # 而 NG 周期下 next_carry 常是切割算法误判产生的乱序残渣（比如期望 [A,B,C,D]
+        # 实际 [C,D,A,B,D] → 按 D 第一次出现切 → 本周期[C,D] 残留[A,B,D]）。
+        # 残留[A,B,D] 不是期望前缀 [A,B,C]，下周期起手就带垃圾，用户再正常做也变 NG，
+        # 残留滚雪球 → 永远 NG。
+        # 合法前缀场景（保留传递）：典型为"上周期末尾步骤画面没消失就被新周期识别"，
+        # next_carry 是期望从头开始的连续步骤（[A] / [A,B] / [A,B,C,D] 等）。
+        if next_carry and next_carry == expected_labels[:len(next_carry)]:
             self.current_cycle_steps = next_carry
             self.last_added_step = next_carry[-1]
             self.cycle_start_time = self.step_start_time.get(next_carry[0], time.time())
             self._last_step_added_time = time.time()
             self.start_cycle()
         else:
+            if next_carry:
+                print(f"  → 残留 {next_carry} 不是期望前缀 {expected_labels[:len(next_carry)]}, 丢弃避免 NG 滚雪球")
             self.current_cycle_steps = []
             self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
@@ -326,8 +339,10 @@ class SequentialMixin:
                     self.step_durations[label] = rounded_dur
                     self.step_durations_history.setdefault(label, []).append(rounded_dur)
                     # v3.7.x: 与主路径对齐，补写本周期 SUM（同顺序模式补计）
-                    prev_sum = self.step_cycle_durations.get(label, 0.0)
-                    self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
+                    # 守门见同文件 line 160 处说明。
+                    if label in self.current_cycle_steps:
+                        prev_sum = self.step_cycle_durations.get(label, 0.0)
+                        self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
                     print(f"  自定义顺序判定补计: {label}, 耗时 {duration:.2f}s, 累计: {self.step_counts[label]}")
                 
                 del self.step_last_seen[label]
@@ -338,13 +353,16 @@ class SequentialMixin:
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
         self._step_gap_count.clear()
-        if next_carry:
+        # v3.8.x: 残留传染守门 —— 与 _check_sequential_mode 同, 详见上方注释。
+        if next_carry and next_carry == expected_labels[:len(next_carry)]:
             self.current_cycle_steps = next_carry
             self.last_added_step = next_carry[-1]
             self.cycle_start_time = self.step_start_time.get(next_carry[0], time.time())
             self._last_step_added_time = time.time()
             self.start_cycle()
         else:
+            if next_carry:
+                print(f"  → 残留 {next_carry} 不是期望前缀 {expected_labels[:len(next_carry)]}, 丢弃避免 NG 滚雪球")
             self.current_cycle_steps = []
             self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None

@@ -471,6 +471,51 @@ def _write_range_export(writer, db, opts, get_order_map, *,
 
 # ----- public entry -----
 
+def build_csv_string(db, get_order_map, *,
+                     export_type: str,
+                     session_id: Optional[int],
+                     cycle_id: Optional[int],
+                     date: Optional[str],
+                     start_date: Optional[str],
+                     end_date: Optional[str],
+                     week: Optional[str],
+                     month: Optional[str],
+                     start_hour: Optional[str],
+                     end_hour: Optional[str],
+                     project_id: Optional[int],
+                     channel_id: Optional[int],
+                     pt_mode: Optional[str] = None,
+                     ct_mode: Optional[str] = None) -> str:
+    """v3.8.x: 抽出 builder 核心, 返回纯 CSV 字符串 (含 BOM 前缀, 调用方按需 encode)。
+
+    与 build_csv_response 共用全部业务逻辑, 让定时导出 / 多格式 writer / 测试用例
+    能直接拿原始内容, 不必经过 StreamingResponse 包一层。
+    """
+    opts = _load_export_opts(db)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+
+    start_date, end_date = _resolve_week_month(week, month, start_date, end_date)
+
+    if export_type == "session" and session_id:
+        _write_session_export(writer, db, session_id, opts, get_order_map,
+                              pt_mode=pt_mode, ct_mode=ct_mode)
+    elif export_type == "cycle" and cycle_id:
+        _write_cycle_export(writer, db, cycle_id, opts, get_order_map,
+                            pt_mode=pt_mode, ct_mode=ct_mode)
+    else:
+        _write_range_export(
+            writer, db, opts, get_order_map,
+            date=date, start_date=start_date, end_date=end_date,
+            start_hour=start_hour, end_hour=end_hour,
+            project_id=project_id, channel_id=channel_id,
+            pt_mode=pt_mode, ct_mode=ct_mode,
+        )
+
+    buffer.seek(0)
+    return '\ufeff' + buffer.getvalue()
+
+
 def build_csv_response(db, get_order_map, *,
                        export_type: str,
                        session_id: Optional[int],
@@ -485,38 +530,49 @@ def build_csv_response(db, get_order_map, *,
                        project_id: Optional[int],
                        channel_id: Optional[int],
                        pt_mode: Optional[str] = None,
-                       ct_mode: Optional[str] = None) -> StreamingResponse:
+                       ct_mode: Optional[str] = None,
+                       output_format: str = "csv") -> StreamingResponse:
+    """对外 HTTP 入口 (Data 页 4 个快捷按钮的服务端实现)。
+
+    v3.8.x: 增加 output_format 入参支持 csv / txt / xlsx / docx / pdf 多格式下载,
+    底层先拿 CSV 字符串再走 scheduled_writer 转格式 (DRY, 跟定时导出共用一份多格式渲染)。
+    """
     try:
-        opts = _load_export_opts(db)
-        buffer = io.StringIO()
-        writer = csv.writer(buffer)
+        csv_str = build_csv_string(
+            db, get_order_map,
+            export_type=export_type, session_id=session_id, cycle_id=cycle_id,
+            date=date, start_date=start_date, end_date=end_date,
+            week=week, month=month,
+            start_hour=start_hour, end_hour=end_hour,
+            project_id=project_id, channel_id=channel_id,
+            pt_mode=pt_mode, ct_mode=ct_mode,
+        )
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-        start_date, end_date = _resolve_week_month(week, month, start_date, end_date)
-
-        if export_type == "session" and session_id:
-            _write_session_export(writer, db, session_id, opts, get_order_map,
-                                  pt_mode=pt_mode, ct_mode=ct_mode)
-        elif export_type == "cycle" and cycle_id:
-            _write_cycle_export(writer, db, cycle_id, opts, get_order_map,
-                                pt_mode=pt_mode, ct_mode=ct_mode)
-        else:
-            _write_range_export(
-                writer, db, opts, get_order_map,
-                date=date, start_date=start_date, end_date=end_date,
-                start_hour=start_hour, end_hour=end_hour,
-                project_id=project_id, channel_id=channel_id,
-                pt_mode=pt_mode, ct_mode=ct_mode,
+        fmt = (output_format or "csv").lower().strip()
+        if fmt in ("csv", ""):
+            csv_content = csv_str.encode('utf-8')
+            return StreamingResponse(
+                iter([csv_content]),
+                media_type="text/csv",
+                headers={
+                    "Content-Disposition": f"attachment; filename=export_{ts}.csv",
+                    "Content-Type": "text/csv; charset=utf-8",
+                },
             )
 
-        buffer.seek(0)
-        filename = f"export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        csv_content = ('\ufeff' + buffer.getvalue()).encode('utf-8')
+        from backend.services.export_scheduled_writers import (
+            csv_string_to_format_bytes, MEDIA_TYPES, FILE_EXTENSIONS,
+        )
+        body_bytes = csv_string_to_format_bytes(csv_str, fmt)
+        ext = FILE_EXTENSIONS.get(fmt, fmt)
+        media = MEDIA_TYPES.get(fmt, "application/octet-stream")
         return StreamingResponse(
-            iter([csv_content]),
-            media_type="text/csv",
+            iter([body_bytes]),
+            media_type=media,
             headers={
-                "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Type": "text/csv; charset=utf-8",
+                "Content-Disposition": f"attachment; filename=export_{ts}.{ext}",
+                "Content-Type": media,
             },
         )
     except HTTPException:

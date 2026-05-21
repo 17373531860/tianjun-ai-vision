@@ -226,3 +226,104 @@ class ExportRunLog(Base):
 
 # 复合索引：rule_id + triggered_at 用于"查某条规则最近 N 条日志"
 Index("ix_export_run_logs_rule_time", ExportRunLog.rule_id, ExportRunLog.triggered_at.desc())
+
+
+# ============================================================
+# v3.8.x 定时导出规则
+# ============================================================
+
+class ExportScheduledRule(Base):
+    """定时导出规则 — 按 cron 表达式周期性自动写一份数据文件
+
+    场景: 客户希望"每天凌晨 0 点把昨天一整天的检测数据导出到 D:\\日报\\"。
+    与 ExportRealtimeRule 的区别:
+      - realtime: 事件触发 (cycle_end / session_end / box_complete), 单个周期/会话
+      - scheduled: 时间触发 (cron), 一段时间范围的数据聚合
+
+    数据窗口语义复用现有 sessions_export 的早晚班 / 跨日截断逻辑:
+      - data_window_type 选什么, 调度服务就按对应规则算出 (date, start_date, end_date, start_hour, end_hour)
+      - 传给 sessions_export 内部 builder
+      - 跨日班次 (start_hour > end_hour) 自动走跨日 OR 查询路径, 跟手动按钮的行为完全一致
+    """
+    __tablename__ = "export_scheduled_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(128), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    description = Column(Text, nullable=True)
+
+    # ---- 触发时机 ----
+    # CRON 表达式 (5 字段标准 cron, 例 "0 0 * * *" 表示每天 0:00)
+    # 前端 UI 提供"每天几点"简化模式 → 自动转 cron, 也允许直接填高级 cron
+    cron_expression = Column(String(64), nullable=False, default="0 0 * * *")
+
+    # ---- 数据窗口 ----
+    # 数据窗口类型:
+    #   yesterday              昨天全天 (复用按日导出, date=昨天)
+    #   today                  今天截至当前 (date=今天)
+    #   last_n_hours           过去 N 小时滚动窗 (用 start_date/end_date 精确)
+    #   last_n_days            过去 N 天 (用 start_date/end_date)
+    #   shift_day_yesterday    昨天白班 (date=昨天, start_hour/end_hour 由 window_config 配)
+    #   shift_night_yesterday  昨夜班 (跨日, date=昨天, start_hour > end_hour 自动走跨日逻辑)
+    #   custom_offset          自定义日期偏移 + 任意时段
+    data_window_type = Column(String(32), nullable=False, default="yesterday")
+
+    # 数据窗口附加参数 (JSON):
+    #   last_n_hours: {"n": 24}
+    #   last_n_days:  {"n": 7}
+    #   shift_*:      {"start_hour": "08:00", "end_hour": "20:00"}
+    #   custom_offset: {"date_offset_days": -1, "start_hour": "08:00", "end_hour": "20:00"}
+    data_window_config = Column(JSON, nullable=True)
+
+    # 项目过滤 / 工位过滤 (单值, 复用 sessions_export 的入参约定; None = 全部)
+    project_id = Column(Integer, nullable=True, index=True)
+    channel_id = Column(Integer, nullable=True, index=True)
+
+    # ---- 输出 ----
+    # 输出格式: csv | txt | xlsx | docx | pdf
+    output_format = Column(String(16), nullable=False, default="csv")
+
+    # 输出目录 (Optional; 为空走 SystemConfig 的全局默认目录 export.scheduled.default_dir)
+    output_dir = Column(String(500), nullable=True)
+
+    # 文件名模板 (Jinja2-like 简单占位, 渲染时支持 {date} {datetime} {rule_name} {format} {window_start} {window_end})
+    # 默认: "{rule_name}_{date}.{format}"
+    filename_template = Column(String(256), nullable=False, default="{rule_name}_{date}.{format}")
+
+    # 模板选择:
+    #   use_standard_daily_report=True  → 走 sessions_export 的标准列 (跟手动按钮同一份代码, 无需 template_id)
+    #   use_standard_daily_report=False → 走 template_id 指向的 ExportTemplate (自定义 Jinja2 模板)
+    use_standard_daily_report = Column(Boolean, nullable=False, default=True)
+    template_id = Column(Integer, ForeignKey("export_templates.id", ondelete="SET NULL"),
+                         nullable=True, index=True)
+
+    # 文件编码 / 换行 / 覆盖策略 (复用 ExportRealtimeRule 同名字段语义)
+    encoding = Column(String(16), nullable=False, default="utf-8-sig")
+    newline = Column(String(8), nullable=False, default="lf")
+    overwrite_policy = Column(String(16), nullable=False, default="overwrite")
+
+    # PT / CT 显示模式 (跟数据页 4 个按钮一致, 影响 CSV 列内容)
+    pt_mode = Column(String(16), nullable=True)  # avg | last | None (走系统默认)
+    ct_mode = Column(String(16), nullable=True)
+
+    # ---- 运行状态 ----
+    last_run_time = Column(DateTime(timezone=True), nullable=True)
+    last_run_status = Column(String(16), nullable=True)  # success | failed | skipped | no_data
+    last_run_error = Column(Text, nullable=True)
+    last_output_file = Column(String(500), nullable=True)
+
+    next_run_time = Column(DateTime(timezone=True), nullable=True, index=True)  # croniter 预算的下次触发时间
+
+    success_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    skipped_count = Column(Integer, nullable=False, default=0)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    template = relationship("ExportTemplate", foreign_keys=[template_id])
+
+
+# 复合索引: enabled + next_run_time 加速调度服务"找到下一个该跑的规则"
+Index("ix_export_scheduled_enabled_nextrun",
+      ExportScheduledRule.enabled, ExportScheduledRule.next_run_time)

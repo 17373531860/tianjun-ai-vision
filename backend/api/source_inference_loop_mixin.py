@@ -199,7 +199,10 @@ class InferenceLoopMixin:
         # v3.7.4: 周期性强制动作的"时间维度"触发节流 — 每 5 秒检查一次,
         # 即使生产停了 (没有新 cycle_end), 只要 detection 在跑就会主动报警.
         last_periodic_time_check = time.time()
-        periodic_time_check_interval = 5.0
+        # v3.8.x: 从 5.0s 降到 1.0s — 让 'continuous:N' 模式 N=1~4 也能按预期触发.
+        # 检查本身只是 dict 遍历 + 简单条件判断, 1Hz 开销可忽略 (相比每帧推理).
+        # 实际触发频率仍由 _should_trigger_overdue_v2 节流, 这里只决定"检查间隔上限".
+        periodic_time_check_interval = 1.0
 
         while self._inference_running and self.is_detecting:
             try:

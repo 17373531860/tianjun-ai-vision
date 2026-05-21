@@ -1021,8 +1021,8 @@
                   <tr>
                      <th class="px-2 py-1.5">No</th>
                      <th class="px-2 py-1.5">步骤</th>
-                     <th class="px-2 py-1.5">PT/s</th>
                      <th class="px-2 py-1.5">状态</th>
+                     <th class="px-2 py-1.5">PT/s</th>
                      <th class="px-2 py-1.5">结果</th>
                   </tr>
                </thead>
@@ -1033,11 +1033,19 @@
                   >
                      <td class="px-2 py-1.5">{{ i + 1 }}</td>
                      <td class="px-2 py-1.5">{{ row.step }}</td>
-                     <td class="px-2 py-1.5 text-white font-mono">{{ formatStepPT(row.label) }}</td>
                      <td class="px-2 py-1.5">
                        <span :class="row.status === 'completed' ? 'text-white' : 'text-gray-500'">
                          {{ row.status === 'completed' ? '已检测' : '待检测' }}
                        </span>
+                     </td>
+                     <!--
+                       v3.7.x: PT 列硬性守门 — "待检测" (pending) 状态下强制显示 "--"。
+                       数据源 cycleSumStepDurations 的 race / 历史档可能在 polling 间隔里残留旧值,
+                       但视觉上只要这一步还没进入本周期, PT 就不应该显示任何数字。
+                       跟踪模式跳过守门 (其 PT 字典本就为空, 不会有残留)。
+                     -->
+                     <td class="px-2 py-1.5 text-white font-mono">
+                       {{ (isTrackingMode || row.status === 'completed') ? formatStepPT(row.label) : '--' }}
                      </td>
                      <td class="px-2 py-1.5">
                        <!--
@@ -1368,6 +1376,11 @@ const STREAM_MAX_WATCHDOG_RETRIES = 10;
 // 后端报 fps > 0 但前端 isStreaming 假持续超过这个秒数 -> 判定真黑屏
 const STREAM_BACKEND_FPS_MISMATCH_THRESHOLD_MS = 4000;
 let streamBackendMismatchSince = 0;
+
+// v3.8.x: swap watchdog — swap 后给 bg img 3 秒窗口接首帧, 超时强制 connectStream.
+// 这是检测"中途卡死"的核心机制 (multipart 后续帧不触发 onload, 没法靠心跳).
+// swap 是主动探活: 给 bg 拿新带时间戳的 url, 如果后端流仍活, bg 立刻触发 onload + 切 active;
+// 如果后端推流卡死或 socket 被 Chrome pool 复用到死连接, bg 一直收不到首帧 → 此 watchdog 兜底.
 
 const clearMonitorPendingTimers = () => {
   if (streamReconnectTimer) { clearTimeout(streamReconnectTimer); streamReconnectTimer = null; }
@@ -1790,6 +1803,10 @@ const processChannelResult = (ch, d) => {
         const inCycle = chData.currentCycleSteps.includes(s.label);
         const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
         const trackHit = _trackHit(s.label);
+        // v3.8.x (二次修订): 多工位 SOP/状态表"已完成"判定与单工位 status 对齐 —
+        // 步骤进过 cycle_steps 就算完成, 不再硬等权威 PT 写入。
+        // 修客户反馈"反应慢, 第三步显示时第一步 PT 还没出, 最后一步常常被周期清空根本来不及显示"。
+        // cycleResult (OK/NG) 仍在 updateStepsFromBackend 那条路用权威 PT 守门, 这里 trackHit 不变。
         return {
           step: s.displayLabel || s.label,
           label: s.label,
@@ -1809,6 +1826,7 @@ const processChannelResult = (ch, d) => {
         const inCycle = chData.currentCycleSteps.includes(s.label);
         const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
         const trackHit = _trackHit(s.label);
+        // v3.8.x (二次修订): 同步 sopSteps 与上方 tableData 的放宽规则, 进 cycle_steps 就算完成。
         const rawB64 = screenshots[s.label];
         return {
           name: s.displayLabel || s.label,
@@ -1962,6 +1980,16 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollPr
   const stepsConfMulti = pollProjectConfig?.steps_config || currentProject.value?.steps_config || [];
   const pipeMulti = pollProjectConfig?.pipeline_config || currentProject.value?.pipeline_config || {};
 
+  // v3.8.x: 多工位画框也读用户配置 (老逻辑硬编码 #10b981/#ef4444、线宽2、字号11,
+  // 客户在设置页改的检测框颜色/线宽/字号在多工位下全部失效).
+  // 优先取该通道独立配置, 没配就回退全局检测配置.
+  const chDet = systemStore.getChannelDetection(ch) || systemStore.detection;
+  const okColorMulti = chDet.boxColor || '#10b981';
+  const ngColorMulti = chDet.boxColorNG || '#ef4444';
+  const lineWidthMulti = Number(chDet.boxLineWidth) || 2;
+  const fontSizeMulti = (Number(chDet.labelFontSize) || 11) * (window.__uiScale || 1);
+  const showConfMulti = chDet.showConfidence !== false;
+
   detections.forEach(det => {
     if (det.hidden) return;
     if (hiddenLabels && det.label && hiddenLabels.has(det.label)) return;
@@ -1969,7 +1997,7 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollPr
     const cb = clipNormalizedBox(det);
     const x = cb.x * dw + dx, y = cb.y * dh + dy;
     const w = cb.w * dw, h = cb.h * dh;
-    const color = pickDetColor(det, stepsConfMulti, '#10b981', '#ef4444');
+    const color = pickDetColor(det, stepsConfMulti, okColorMulti, ngColorMulti);
     if (det.mask && Array.isArray(det.mask) && det.mask.length > 2) {
       ctx.beginPath();
       det.mask.forEach((pt, i) => {
@@ -1979,22 +2007,27 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollPr
         if (i === 0) ctx.moveTo(mx, my); else ctx.lineTo(mx, my);
       });
       ctx.closePath();
-      ctx.fillStyle = color + '40';
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.25;
       ctx.fill();
+      ctx.restore();
       ctx.strokeStyle = color;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = lineWidthMulti;
       ctx.stroke();
     } else {
       ctx.strokeStyle = color;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = lineWidthMulti;
       ctx.strokeRect(x, y, w, h);
     }
-    ctx.font = 'bold 11px Arial';
-    const label = det.display_id || det.display_name || det.label || '';
+    ctx.font = `bold ${fontSizeMulti}px Arial`;
+    let label = det.display_id || det.display_name || det.label || '';
+    if (showConfMulti && det.confidence) label += ` ${(det.confidence * 100).toFixed(0)}%`;
+    const lh = Math.max(12, fontSizeMulti + 2);
     ctx.fillStyle = color;
-    ctx.fillRect(x, y - 14, ctx.measureText(label).width + 6, 14);
+    ctx.fillRect(x, y - lh, ctx.measureText(label).width + 6, lh);
     ctx.fillStyle = 'white';
-    ctx.fillText(label, x + 3, y - 2);
+    ctx.fillText(label, x + 3, y - 4);
   });
 };
 
@@ -2294,7 +2327,12 @@ const swapStream = () => {
   const bg = activeStream.value === 0 ? 1 : 0;
   const bgSrcRef = bg === 0 ? streamSrc0 : streamSrc1;
   bgSrcRef.value = buildStreamUrl();
-  // onStreamReady(bg) will do the actual swap when the first frame arrives
+  // onStreamReady(bg) will do the actual swap when the first frame arrives.
+  //
+  // 历史踩坑: 这里曾经加过 swap watchdog (3s 内 bg 接不到首帧就强制 connectStream),
+  // 但健康流的 swap 也会偶发 onload 延迟超过 3s, watchdog 误判 → 整体重连 → 闪烁。
+  // (实测: uvicorn 日志每 9s 一组 3 次 /video_feed 长连接.)
+  // 现在 swap 失败保持 active 不切, 等下次 swap (默认 1 分钟) 再尝试, 不再做激进探活。
 };
 
 // Kept as alias so existing call-sites (start/stop/resume) still work
@@ -2323,6 +2361,10 @@ const onStreamReady = (idx) => {
 
 const onStreamError = (idx) => {
   if (!monitorMounted) return;
+  // 只 active img 的 error 触发重连; bg img 接不到首帧改由 swap watchdog 兜底。
+  // 之前尝试取消这个守门让 bg error 也走重连, 结果 connectStream 清空 src='' 又
+  // 触发新一轮 error → onStreamError → connectStream 的死循环, 画面 100ms 一次闪烁。
+  // (uvicorn 日志同一秒内建 3 次 /video_feed 长连接 → 闭环已确认.)
   if (idx !== activeStream.value) return;
   streamErrorCount++;
   if (streamErrorCount > 50) return;
@@ -2530,9 +2572,15 @@ const counters = computed(() => {
   });
   
   // 添加自定义计数器（排除默认计数器）
+  // v3.8.x: 自定义计数器默认不在监控页统计板块显示,
+  // 必须在 Project 页勾选 show_in_monitor=true 才会出现。
+  // 旧项目数据缺该字段时按"未勾选"处理 (符合"默认不显示"的设计意图),
+  // 客户感觉之前没设过的计数器突然消失, 这是预期行为, 改完去 Project 页勾上即可。
   allCounters.forEach(counter => {
     if (!DEFAULT_COUNTERS.includes(counter.name)) {
-      customCounters.push(counter);
+      if (counter.show_in_monitor === true) {
+        customCounters.push(counter);
+      }
     }
   });
   
@@ -2819,7 +2867,13 @@ const formatStepPT = (stepLabel) => {
     else if (mode === 'current') src = stepDurations.value;
     else src = avgStepDurations.value;
   }
-  const duration = src ? src[stepLabel] : undefined;
+  let duration = src ? src[stepLabel] : undefined;
+  // v3.8.x: 权威值没有 (步骤还在画面里, 没完成) → fallback 到 in-flight 实时 PT, 让用户看到渐增数字。
+  // 仅 mode='current' 时 fallback (avg/last 是历史值, 不该被 in-flight 干扰)。
+  if ((duration === undefined || duration === null) && mode === 'current') {
+    const inflight = stepInflightDurations.value[stepLabel];
+    if (inflight !== undefined && inflight !== null) duration = inflight;
+  }
   if (duration === undefined || duration === null) return '--';
   return `${duration.toFixed(1)}s`;
 };
@@ -3681,12 +3735,25 @@ const cycleSumStepDurations = ref({});
 const lastCycleSumStepDurations = ref({});
 const avgCycleSumStepDurations = ref({});
 
+// v3.8.x: in-flight 实时 PT (步骤还在画面里持续涨, 与权威值 cycleSumStepDurations 分开)。
+// 设计语义:
+//   - cycleSumStepDurations[label] 存在 → 步骤已完成 (权威, 不再变), 前端标 OK
+//   - stepInflightDurations[label] 存在但 cycleSum 没值 → 步骤进行中 (PT 列 fallback 显示渐增值, 不标 OK)
+// 修客户反馈 "PT 还在涨, 但 OK 已经亮"。
+const stepInflightDurations = ref({});
+
 // 步骤间隔时间
 const stepIntervals = ref({});
 
+// v3.8.x: 单工位 polling 维护的"上一轮 cycle_id"快照, 用于检测周期切换边界。
+// 后端 detection/results 透出 current_cycle_id (新周期=int, 周期间隙=null),
+// 前端比对到值变化 (含 null → int / int → int') 就立刻清空步骤表 status/cycleResult/cycle_sum,
+// 避免上一周期 OK + 旧 PT 残留到新周期前 1-2 步做完才被覆盖的视觉 bug。
+let lastSingleCycleId = null;
+
 // Periodic double-buffer swap to release Chromium native decoder memory
 let streamSwapCounter = 0;
-const STREAM_SWAP_INTERVAL = 600; // every ~5 min (600 x 500ms polling)
+const STREAM_SWAP_INTERVAL = 600;
 let lastChartUpdate = 0;
 const CHART_UPDATE_INTERVAL = 2000; // 图表最多每2秒更新一次
 let lastScreenshotUpdate = 0;
@@ -3771,12 +3838,40 @@ const startPolling = () => {
       if (data.avg_step_durations) {
         Object.assign(avgStepDurations.value, data.avg_step_durations);
       }
+      // v3.8.x: 周期切换边界检测 — 后端 current_cycle_id 变化触发"步骤表清零"。
+      // ★ 关键时机: 只在"新周期已经起来"那一瞬清, 不在"周期刚结算"清。
+      //   - number → null (周期刚结算): 保留显示, 让客户看到 ABCD 全 OK 的视觉反馈期
+      //   - null → number (新周期开始): 立刻清, 准备进入新一轮
+      //   - number → 另一个 number (罕见, 直接换号): 清
+      // 之前一改动就在 "number → null" 也清, 导致 cycle 一结算 PT/状态全消失,
+      // 客户感觉"只有最后一步算数, 前 3 步刚显示就被清掉"。
+      const _incomingCycleId = data.current_cycle_id ?? null;
+      if (_incomingCycleId !== lastSingleCycleId) {
+        const _newCycleStarted = _incomingCycleId !== null && lastSingleCycleId !== _incomingCycleId;
+        if (_newCycleStarted) {
+          cycleSumStepDurations.value = {};
+          stepInflightDurations.value = {};
+          stepDurations.value = {};
+          steps.value.forEach(s => {
+            s.status = 'pending';
+            s.cycleResult = null;
+          });
+          tableData.value.forEach(t => {
+            t.status = 'pending';
+            t.cycleResult = null;
+          });
+        }
+        lastSingleCycleId = _incomingCycleId;
+      }
       // v3.5.x: PT 合并档 (cycle SUM) — 后端无对应 label 时,
       // cycle_sum_step_durations 用整体替换以反映"周期切换后已重置"的真实状态;
       // last/avg 用 merge 保持 label 累积式可读, 与 last_step_durations 风格一致.
       if (data.cycle_sum_step_durations !== undefined) {
         cycleSumStepDurations.value = data.cycle_sum_step_durations || {};
       }
+      // v3.8.x: in-flight 实时 PT (步骤还在画面里, 持续涨), 与权威 cycle_sum 分开,
+      // 整体替换才能在步骤完成 / 周期切换时立刻消失 (不留旧标签残影)。
+      stepInflightDurations.value = data.step_inflight_durations || {};
       if (data.last_cycle_sum_step_durations) {
         Object.assign(lastCycleSumStepDurations.value, data.last_cycle_sum_step_durations);
       }
@@ -4140,6 +4235,20 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       maxActualSoFar = Math.max(maxActualSoFar, p);
     }
 
+    // v3.8.x: 漏做判定也要权威化 ── 只在"后面位置权威完成"时才认定前面位置漏做,
+    // 否则后面步骤还在画面 PT 涨着的时候, 前面位置会被立刻标 NG,
+    // 等用户其实是补做了前面 → 又改成 OK, 形成 "null → NG → OK" 的视觉抖动。
+    // 客户反馈 "OK 出之前会先闪 NG"。
+    let maxAuthCompletedIdx = -1;
+    expectedLabels.forEach((lbl, idx) => {
+      if (completedByPos[idx]) {
+        const pt = cycleSumStepDurations.value[lbl];
+        if (pt !== undefined && pt !== null && pt > 0) {
+          maxAuthCompletedIdx = idx;
+        }
+      }
+    });
+
     // 设置每个步骤的 cycleResult
     steps.value.forEach((step, idx) => {
       const label = step.label || step.name;
@@ -4149,33 +4258,49 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       const isCoveredByBackup = backupCoveredLabels.has(label);
       const thisPosCompleted = completedByPos[idx];
 
-      if (cycleCount > expCnt && thisPosCompleted) {
-        // 期望出现 N 次 actual > N 次 → 真正的"超额重复" (只在已完成位置标 NG)
+      // v3.8.x: cycleResult 的 OK/NG 也要等"权威 PT 已写入"才能下结论。
+      // 旧逻辑下 step 一进入 cycle_steps (画面里出现, PT 还在涨) 就把 cycleResult='ok',
+      // 导致客户看到 "状态: 待检测 + 结果: OK" 的割裂语义 ── 跟 status 改动不一致。
+      // 现在 thisPosCompleted 还要 && 权威 PT 写入才认为"该位置真完成", 否则结果列暂时空着 (null)。
+      const _posCyclePT = cycleSumStepDurations.value[label];
+      const _posAuthoritative = _posCyclePT !== undefined && _posCyclePT !== null && _posCyclePT > 0;
+      const _posDone = thisPosCompleted && _posAuthoritative;
+
+      if (cycleCount > expCnt && _posDone) {
         step.cycleResult = 'ng';
-      } else if (thisPosCompleted) {
+      } else if (_posDone) {
         step.cycleResult = outOfOrderIdx.has(idx) ? 'ng' : 'ok';
       } else if (isCoveredByBackup) {
         step.cycleResult = 'ok';  // 替补覆盖
-      } else if (idx < maxCompletedIdx) {
-        step.cycleResult = 'ng';  // 漏做: 此位置之后已有更靠后位置完成
+      } else if (idx < maxAuthCompletedIdx) {
+        step.cycleResult = 'ng';  // 漏做: 此位置之后已有"权威完成"的位置
       } else {
-        step.cycleResult = null;  // 还没轮到
+        step.cycleResult = null;  // 还没轮到 / 该位置步骤还在画面里 PT 涨着 / 后续位置还没权威完成
       }
 
-      // 设置 status — 仅"这个位置"完成才算 completed
-      if (detectingLabels.has(label) && !thisPosCompleted) {
-        // 正在检测中且本位置尚未完成 → active
+      // v3.8.x (二次修订): "状态"列响应放宽 — 步骤离开画面就标完成, 不再硬等权威 PT 写入。
+      // 客户视频反馈: 之前严格等 cycle_sum_step_durations 才标 completed, 导致
+      //   - A 步做完 4 秒才显示 "已检测" (disappear_delay + polling 时延)
+      //   - D 步太快, cycle 结算时 D 还没等到权威 PT 写入, 直接被周期清空, 表里从没出现过
+      // 现在判定改为:
+      //   - 步骤在画面里 (detectingLabels) → 'active' (PT 列 fallback 显示 in-flight 实时涨)
+      //   - 步骤已纳入 cycle_steps + 不在画面 → 'completed' (即"做过就算完")
+      //   - 否则 → 'pending'
+      // cycleResult (OK/NG) 仍保留权威 PT 守门 (上面 _posAuthoritative 那段),
+      // 所以视觉序列仍是: 状态先变完成 → PT 稳定显示 → 结果才出 OK, 不会出现"PT 没稳定就标 OK"。
+      const _completed = thisPosCompleted || isCoveredByBackup;
+      if (detectingLabels.has(label)) {
         step.status = 'active';
-      } else if (thisPosCompleted || isCoveredByBackup) {
+      } else if (_completed) {
         step.status = 'completed';
       } else {
         step.status = 'pending';
       }
 
-      // 同步表格状态
+      // 同步表格状态 (跟 step.status 走同一份逻辑, 不要用 _completed 单值, 因为 active 也算"已走到")
       if (tableData.value[idx]) {
         tableData.value[idx].count = stepCounts[label] || 0;
-        tableData.value[idx].status = (thisPosCompleted || isCoveredByBackup) ? 'completed' : 'pending';
+        tableData.value[idx].status = step.status;
         tableData.value[idx].cycleResult = step.cycleResult;
       }
     });
@@ -4192,17 +4317,25 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       scrollToSopCard(latestChangedIdx);
     }
   } else {
-    // 周期未开始或已结束：不改变 cycleResult（保留上一轮的视觉反馈直到 reset）
+    // 周期间隙 (currentCycleSteps 为空) — 不主动修改 status/cycleResult,
+    // 保留上一轮的视觉反馈直到:
+    //   1) 下一周期开始: 上方 if 分支会按新一轮重算
+    //   2) cycle_id 变化: polling 入口边界检测会把 status/cycleResult 全清成 pending/null
+    // v3.8.x (二次修订): 删掉旧 fallback "!step.cycleResult && count > 0 ... → 'completed'",
+    // 该 fallback 会让边界清零后的 'pending' 状态被翻回 'completed', 跟周期切换体感冲突。
     steps.value.forEach((step, idx) => {
       const label = step.label || step.name;
       const count = stepCounts[label] || 0;
-      
+
       if (detectingLabels.has(label)) {
+        // 新一轮第一个步骤刚进画面 → 立刻显示 active (此时 cycle_id 可能还是 null,
+        // 但 detectingLabels 已经有内容了)
         step.status = 'active';
-      } else if (!step.cycleResult && count > 0 && currentCycleSteps.length === 0) {
-        step.status = 'completed';
+        if (tableData.value[idx]) {
+          tableData.value[idx].status = 'active';
+        }
       }
-      
+
       if (tableData.value[idx]) {
         tableData.value[idx].count = count;
       }

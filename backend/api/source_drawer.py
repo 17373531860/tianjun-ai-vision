@@ -18,7 +18,10 @@
   get_chinese_font(size)                 : 加载/缓存中文 PIL 字体
   clear_filters()                        : 清空 kalman 滤波器 + missing 计数
 """
+import json
+import os
 import time
+
 import numpy as np
 import cv2
 
@@ -27,11 +30,39 @@ try:
 except ImportError:
     Image = ImageDraw = ImageFont = None
 
+from backend.core.config import DATA_DIR
+
 
 # KalmanFilter2D 由 source_recorder.py 维护 (P7 第六刀后 source.py 不再有副本)
 def _get_kalman_filter_cls():
     from backend.api.source_recorder import KalmanFilter2D
     return KalmanFilter2D
+
+
+# v3.8.x: Kalman 参数持久化 (全局共享, 多通道共用一份配置).
+# 老逻辑参数只在内存里, 后端一重启就回默认 (enabled=False, Q=0.03, R=0.1, max=5).
+# 客户在"设置→性能"调好后必丢, 体感"每次更新都被刷"的元凶之一.
+_KALMAN_CONFIG_PATH = os.path.join(DATA_DIR, 'kalman_config.json')
+
+
+def _load_persisted_kalman_config() -> dict:
+    """启动时从磁盘读 Kalman 配置, 让后端重启后参数不归零."""
+    try:
+        if os.path.exists(_KALMAN_CONFIG_PATH):
+            with open(_KALMAN_CONFIG_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f) or {}
+    except Exception as e:
+        print(f"[Drawer] 加载持久化 Kalman 配置失败: {e}")
+    return {}
+
+
+def _persist_kalman_config(payload: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(_KALMAN_CONFIG_PATH) or '.', exist_ok=True)
+        with open(_KALMAN_CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False)
+    except Exception as e:
+        print(f"[Drawer] 持久化 Kalman 配置失败: {e}")
 
 
 class Drawer:
@@ -48,6 +79,31 @@ class Drawer:
         self._max_missing_frames = 5
         # 中文字体缓存 (按 size), 避免每次重新探 7 条路径
         self._font_cache = {}
+
+        # v3.8.x: 从磁盘恢复持久化的 Kalman 配置 (修"后端重启滤波归零"bug).
+        # 多通道场景每个 Drawer 实例都会读同一份文件 → 所有通道初始状态一致.
+        saved = _load_persisted_kalman_config()
+        if 'enabled' in saved:
+            self._kalman_enabled = bool(saved['enabled'])
+        if 'process_noise' in saved:
+            try:
+                self._kalman_process_noise = max(0.001, min(0.5, float(saved['process_noise'])))
+            except (TypeError, ValueError):
+                pass
+        if 'measurement_noise' in saved:
+            try:
+                self._kalman_measurement_noise = max(0.01, min(1.0, float(saved['measurement_noise'])))
+            except (TypeError, ValueError):
+                pass
+        if 'max_missing_frames' in saved:
+            try:
+                self._max_missing_frames = max(1, min(30, int(saved['max_missing_frames'])))
+            except (TypeError, ValueError):
+                pass
+        if saved:
+            print(f"[Drawer] 恢复持久化 Kalman 配置: enabled={self._kalman_enabled} "
+                  f"Q={self._kalman_process_noise} R={self._kalman_measurement_noise} "
+                  f"max_missing={self._max_missing_frames}")
 
     # ===== 状态清理 =====
     def clear_filters(self):
@@ -128,6 +184,14 @@ class Drawer:
         print(f"[卡尔曼滤波] 参数更新: enabled={self._kalman_enabled}, "
               f"Q={self._kalman_process_noise}, R={self._kalman_measurement_noise}, "
               f"max_missing={self._max_missing_frames}")
+
+        # v3.8.x: 写盘持久化, 让后端重启后参数仍然生效
+        _persist_kalman_config({
+            'enabled': self._kalman_enabled,
+            'process_noise': self._kalman_process_noise,
+            'measurement_noise': self._kalman_measurement_noise,
+            'max_missing_frames': self._max_missing_frames,
+        })
 
     # ===== 中文字体 (带缓存) =====
     def get_chinese_font(self, size=20):

@@ -305,9 +305,16 @@ class StepStatsMixin:
                         rounded_dur = round(duration, 2)
                         self.step_durations[label] = rounded_dur
                         self.step_durations_history.setdefault(label, []).append(rounded_dur)
-                        # v3.5.x: 当前周期内的 SUM 累加（PT 合并档使用）
-                        prev_sum = self.step_cycle_durations.get(label, 0.0)
-                        self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
+                        # v3.7.x: 当前周期内的 SUM 累加（PT 合并档使用）
+                        # 守门：只有被本周期接纳的步骤才累加 SUM，避免两类污染：
+                        #   1) 上一周期残留标签的 disappear_delay 在新周期触发 →
+                        #      current_cycle_steps 已是新周期，旧 label 不在 → 不写。
+                        #   2) 本周期"被识别但顺序错误未接纳"的标签 → 没进
+                        #      current_cycle_steps → 不写。
+                        # 客户报障："步骤还是『待检测』，PT 列却有时间" 由此修复。
+                        if label in self.current_cycle_steps:
+                            prev_sum = self.step_cycle_durations.get(label, 0.0)
+                            self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
                         
                         # 计算与上一步骤的间隔时间
                         if self.last_step_completed_time is not None:

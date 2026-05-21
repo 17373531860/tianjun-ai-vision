@@ -48,3 +48,8 @@ psutil>=5.9.0
 python-docx>=1.0.0       # docx 路线 A 自动样式渲染
 docxtpl>=0.16.0          # docx 路线 B 占位符模板渲染（基于 python-docx + jinja2）
 openpyxl>=3.1.0          # xlsx 渲染器
+
+# v3.8.x 定时导出 - 后台调度器 + cron 表达式
+APScheduler>=3.11.0      # 后台 BackgroundScheduler, 支持 CRON / interval / date 三种触发器
+croniter>=2.0.0          # cron 表达式解析 + 下次触发时间计算 (前端预览用)
+tzlocal>=5.0.0           # APScheduler 时区支持

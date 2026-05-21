@@ -385,7 +385,17 @@ class SessionLifecycleMixin:
             self.current_cycle_uuid = cycle_uuid
             self.cycle_step_records = []
             self.step_order_counter = 0
-            
+
+            # v3.8.x: PT 累计字典在"新周期开始"清，而不是"周期结束"清。
+            # 客户语义：上一周期 D 完成 OK 后，到下一周期 A 步骤到来之前，
+            # 应该保留 D 的 PT + 已检测/OK 视觉反馈。
+            # 旧实现把清空放在 end_cycle.finally，导致周期结束瞬间 PT 列就变 '--'，
+            # 与"已检测"状态不一致（前端反馈期 1.2s 内能看见状态保留但 PT 已丢）。
+            # 现在挪到这里：周期间隙保留累计，新周期起步再清，自然衔接前端 reset 时机。
+            # 第一道守门（label in current_cycle_steps 才写入）继续防止跨周期污染。
+            self.step_cycle_durations = {}
+            self.step_durations = {}
+
             # 新周期开始：重置传动杆 SessionGate（上一个周期见过的框架记忆不应跨周期）
             if getattr(self, "_rod_gate", None) is not None:
                 try:
@@ -425,11 +435,51 @@ class SessionLifecycleMixin:
         except Exception as e:
             print(f"创建周期失败: {e}")
     
+    def _flush_active_steps_pt(self):
+        """v3.8.x: 周期结算前，把还在画面里的、已被本周期接纳的步骤的 PT 主动写入累计字典。
+
+        客户反馈："NG 周期最后一步 PT 一直不显示，直接结算"。
+        根因：D 步骤还在画面里就触发 settle → end_cycle，而 disappear_delay 还没到，
+        正常的"步骤完成"日志在 end_cycle 之后才触发，PT 写入滞后于 history 快照。
+
+        本方法在 end_cycle 入口调用，把 step_last_seen 里仍存活的、且已经在 current_cycle_steps
+        里的标签，用 (last_seen - start_time) 算出 duration 并写入 step_durations/step_cycle_durations，
+        同时清掉 step_last_seen/step_start_time，避免 disappear_delay 路径再次累加。
+        """
+        try:
+            last_seen = getattr(self, 'step_last_seen', {})
+            start_map = getattr(self, 'step_start_time', {})
+            if not last_seen:
+                return
+            for label, last_t in list(last_seen.items()):
+                if label not in self.current_cycle_steps:
+                    continue
+                start_t = start_map.get(label, last_t)
+                duration = last_t - start_t
+                if duration <= 0:
+                    continue
+                rounded = round(duration, 2)
+                self.step_durations[label] = rounded
+                self.step_durations_history.setdefault(label, []).append(rounded)
+                prev_sum = self.step_cycle_durations.get(label, 0.0)
+                self.step_cycle_durations[label] = round(prev_sum + rounded, 2)
+                # 清掉 step_last_seen / step_start_time，避免 disappear 路径再来一次累加（重复计数）
+                del last_seen[label]
+                if label in start_map:
+                    del start_map[label]
+                print(f"[flush] 结算前补写 {label} PT={rounded}s（避免 D 步骤直接结算时 PT 缺失）")
+        except Exception as e:
+            print(f"[flush] _flush_active_steps_pt 异常: {e}")
+
     def end_cycle(self, is_good: bool, event_id: int = None, event_name: str = None, reason: str = None):
         """结束当前检测周期"""
         if not self.current_cycle_id or not self.recording_enabled:
             return
-        
+
+        # v3.8.x: 在 stop_recording / history 快照 之前，把还在画面里的步骤 PT 主动写入累计字典。
+        # 解决 NG 周期下 D 步骤直接结算时 PT 显示 '--' 的客户报障（详见 _flush_active_steps_pt 注释）。
+        self._flush_active_steps_pt()
+
         # 停止周期视频录制
         self.stop_cycle_recording()
         
@@ -545,21 +595,22 @@ class SessionLifecycleMixin:
         except Exception as e:
             print(f"结束周期失败: {e}")
         finally:
-            # v3.5.x: 把当前周期的 step SUM 快照到 history（供 PT 合并档"最近一轮"/"平均"使用），
-            # 然后重置 step_cycle_durations 给下一个周期。仅在 cycle 真正结束时执行；
-            # _discard_empty_cycle 不快照（周期作废，数据不应进入历史）。
+            # v3.5.x: 把当前周期的 step SUM 快照到 history（供 PT 合并档"最近一轮"/"平均"使用）。
+            # 仅在 cycle 真正结束时执行；_discard_empty_cycle 不快照（周期作废，数据不进入历史）。
+            #
+            # v3.8.x: 清空 step_cycle_durations / step_durations 的动作**不再**在这里做，
+            # 已移到 start_cycle（新周期开始时清）。
+            # 原因：客户报障"D 完成 OK 后短暂间隙 PT 列就变 '--'"。旧实现在 end_cycle 立即清，
+            # 把前端 1.2s 视觉反馈期里"已检测/OK + PT 数字"的展示连带消除。
+            # 现在 history 入库后保留 cycle_sum/step_durations，让前端在周期间隙继续显示，
+            # 直到新周期 start_cycle 起步时一次性清干净。
             try:
                 if self.step_cycle_durations:
                     for _lbl, _total in self.step_cycle_durations.items():
                         if _total > 0:
                             self.step_cycle_durations_history.setdefault(_lbl, []).append(round(_total, 2))
-                self.step_cycle_durations = {}
             except Exception as _e:
                 print(f"[PT-Sum] 周期 SUM 快照异常: {_e}")
-            # v3.7.x: 周期结束同步清空 step_durations（按 label 覆盖式的"最近一次耗时"），
-            # 这样前端 "当前周期内 + 最后一次" 口径在周期切换瞬间也能归零（与 step_cycle_durations 对齐）。
-            # end_cycle 主体里第 629/661 行的兜底引用都在 finally 之前，已经用完，此处清空安全。
-            self.step_durations = {}
             self.current_cycle_id = None
             self.current_cycle_uuid = None
     

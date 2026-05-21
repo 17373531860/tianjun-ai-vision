@@ -131,6 +131,55 @@ export const listAllRunLogs = (params = {}) => {
   return api.get('/export/run-logs', { params });
 };
 
+// ============ 定时导出规则 (v3.8.x) ============
+
+export const listScheduledRules = (params = {}) => {
+  return api.get('/export/scheduled-rules', { params });
+};
+
+export const getScheduledRule = (id) => {
+  return api.get(`/export/scheduled-rules/${id}`);
+};
+
+export const createScheduledRule = (payload) => {
+  return api.post('/export/scheduled-rules', payload);
+};
+
+export const updateScheduledRule = (id, payload) => {
+  return api.put(`/export/scheduled-rules/${id}`, payload);
+};
+
+export const deleteScheduledRule = (id) => {
+  return api.delete(`/export/scheduled-rules/${id}`);
+};
+
+export const toggleScheduledRule = (id) => {
+  return api.post(`/export/scheduled-rules/${id}/toggle`);
+};
+
+export const testRunScheduledRule = (id) => {
+  return api.post(`/export/scheduled-rules/${id}/test-run`);
+};
+
+export const listScheduledRuleLogs = (id, params = {}) => {
+  return api.get(`/export/scheduled-rules/${id}/logs`, { params });
+};
+
+export const getDefaultOutputDir = () => {
+  return api.get('/export/scheduled-rules/_default-output-dir');
+};
+
+export const setDefaultOutputDir = (value) => {
+  return api.put('/export/scheduled-rules/_default-output-dir', { value });
+};
+
+export const previewCron = (cronExpression, count = 5) => {
+  return api.post('/export/scheduled-rules/_cron-preview', {
+    cron_expression: cronExpression,
+    count,
+  });
+};
+
 // ============ 辅助 ============
 
 // 把后端返回的 Blob + filename 触发浏览器下载

@@ -529,6 +529,17 @@
                       <span class="text-xs text-gray-400">导出全部项目</span>
                       <el-switch v-model="exportAllProjects" size="small" />
                     </div>
+                    <!-- v3.8.x: 导出格式 (CSV / TXT / XLSX / DOCX / PDF) -->
+                    <div class="flex items-center justify-between pt-1 border-t border-slate-700/60">
+                      <span class="text-xs text-gray-400">输出格式</span>
+                      <el-select v-model="exportOutputFormat" size="small" class="w-28">
+                        <el-option label="CSV" value="csv" />
+                        <el-option label="TXT" value="txt" />
+                        <el-option label="XLSX (Excel)" value="xlsx" />
+                        <el-option label="DOCX (Word)" value="docx" />
+                        <el-option label="PDF" value="pdf" />
+                      </el-select>
+                    </div>
                   </div>
 
                   <el-button type="primary" class="w-full" @click="exportByDate" :loading="exporting" :disabled="!selectedDate">
@@ -552,9 +563,14 @@
                     <el-button type="info" plain class="w-full" @click="openRealtimeRulesDialog">
                       <el-icon class="mr-1"><Connection /></el-icon> 实时规则（扫码自动写入）
                     </el-button>
+                    <!-- v3.8.x: 定时导出 — 按 cron 周期性把"标准日报"自动写到客户指定目录 -->
+                    <el-button type="warning" plain class="w-full" @click="openScheduledRulesDialog">
+                      <el-icon class="mr-1"><Clock /></el-icon> 定时导出（每天某时自动）
+                    </el-button>
                     <div class="text-[11px] text-gray-500 leading-relaxed px-1">
                       支持 Jinja2 模板渲染、308 项数据字段、txt/csv 输出。<br>
-                      <span class="text-cyan-400">实时规则</span>：cycle 结束后按规则自动渲染落盘到客户文件夹。
+                      <span class="text-cyan-400">实时规则</span>：cycle 结束后按规则自动渲染落盘到客户文件夹。<br>
+                      <span class="text-orange-400">定时导出</span>：按 cron 定时把日报 CSV/XLSX/PDF 等写到指定目录。
                     </div>
                   </div>
 
@@ -708,6 +724,9 @@
 
     <!-- v3.5.0 Step 4: 实时规则管理对话框 -->
     <RealtimeRulesDialog v-model="realtimeRulesVisible" />
+
+    <!-- v3.8.x: 定时导出规则管理对话框 -->
+    <ScheduledRulesDialog v-model="scheduledRulesVisible" />
   </div>
 </template>
 
@@ -719,6 +738,7 @@ import { useProjectStore } from '@/store/useProjectStore';
 import { Calendar, Clock, DataLine, Setting, Download, Folder, TrendCharts, VideoPlay, Delete, Warning, Search, MagicStick, Connection, Edit } from '@element-plus/icons-vue';
 import CustomExportDialog from './components/CustomExportDialog.vue';
 import RealtimeRulesDialog from './components/RealtimeRulesDialog.vue';
+import ScheduledRulesDialog from './components/ScheduledRulesDialog.vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getDetectionResults, getWorkstations } from '@/api/detection';
 import { 
@@ -788,6 +808,9 @@ const channelFilter = ref(null); // null = all channels
 // 打开后将无视 projectStore.currentProjectId，导出所选日期内所有项目的数据
 // （currentProjectName 已在上方声明，这里直接复用）
 const exportAllProjects = ref(false);
+
+// v3.8.x: 4 个快捷导出按钮共用的输出格式 (csv / txt / xlsx / docx / pdf)
+const exportOutputFormat = ref('csv');
 
 // 导出范围摘要文案（用于按钮上方提示条）
 const exportScopeText = computed(() => {
@@ -930,6 +953,12 @@ const customExportInitialDateRange = ref(null);
 const realtimeRulesVisible = ref(false);
 function openRealtimeRulesDialog() {
   realtimeRulesVisible.value = true;
+}
+
+// v3.8.x: 定时导出对话框
+const scheduledRulesVisible = ref(false);
+function openScheduledRulesDialog() {
+  scheduledRulesVisible.value = true;
 }
 
 function openCustomExportDialog() {
@@ -1464,7 +1493,7 @@ const resolveExportScopeParams = () => {
   return { projectId, channelId, ptMode, ctMode };
 };
 
-// 导出当日数据
+// 导出当日数据 (v3.8.x: 加 outputFormat 支持)
 const exportByDate = async () => {
   if (!selectedDate.value) {
     ElMessage.warning('请先选择日期');
@@ -1475,10 +1504,11 @@ const exportByDate = async () => {
   try {
     const { start: sh, end: eh } = getExportShiftHours();
     const { projectId, channelId, ptMode, ctMode } = resolveExportScopeParams();
+    const fmt = exportOutputFormat.value || 'csv';
     const res = await exportDateRangeCsv(
-      selectedDate.value, selectedDate.value, sh, eh, projectId, channelId, ptMode, ctMode
+      selectedDate.value, selectedDate.value, sh, eh, projectId, channelId, ptMode, ctMode, fmt
     );
-    const filename = `data_${buildExportFilenameScope()}_${selectedDate.value}.csv`;
+    const filename = `data_${buildExportFilenameScope()}_${selectedDate.value}.${fmt}`;
     downloadBlob(res.data, filename);
     ElMessage.success(`已导出到下载文件夹: ${filename}`);
   } catch (e) {
@@ -1500,7 +1530,7 @@ const showExportDialog = (type) => {
   exportDialogVisible.value = true;
 };
 
-// 执行导出
+// 执行导出 (v3.8.x: 加 outputFormat 支持)
 const handleExport = async () => {
   exporting.value = true;
   try {
@@ -1509,21 +1539,22 @@ const handleExport = async () => {
     const { start: sh, end: eh } = getExportShiftHours();
     const { projectId, channelId, ptMode, ctMode } = resolveExportScopeParams();
     const scope = buildExportFilenameScope();
+    const fmt = exportOutputFormat.value || 'csv';
     if (exportDialogType.value === 'week' && exportWeek.value) {
-      res = await exportWeekCsv(exportWeek.value, sh, eh, projectId, channelId, ptMode, ctMode);
-      filename = `data_${scope}_${exportWeek.value}.csv`;
+      res = await exportWeekCsv(exportWeek.value, sh, eh, projectId, channelId, ptMode, ctMode, fmt);
+      filename = `data_${scope}_${exportWeek.value}.${fmt}`;
     } else if (exportDialogType.value === 'month' && exportMonth.value) {
-      res = await exportMonthCsv(exportMonth.value, sh, eh, projectId, channelId, ptMode, ctMode);
-      filename = `data_${scope}_${exportMonth.value}.csv`;
+      res = await exportMonthCsv(exportMonth.value, sh, eh, projectId, channelId, ptMode, ctMode, fmt);
+      filename = `data_${scope}_${exportMonth.value}.${fmt}`;
     } else if (exportDialogType.value === 'range' && exportDateRange.value?.length === 2) {
-      res = await exportDateRangeCsv(exportDateRange.value[0], exportDateRange.value[1], sh, eh, projectId, channelId, ptMode, ctMode);
-      filename = `data_${scope}_${exportDateRange.value[0]}_to_${exportDateRange.value[1]}.csv`;
+      res = await exportDateRangeCsv(exportDateRange.value[0], exportDateRange.value[1], sh, eh, projectId, channelId, ptMode, ctMode, fmt);
+      filename = `data_${scope}_${exportDateRange.value[0]}_to_${exportDateRange.value[1]}.${fmt}`;
     } else {
       ElMessage.warning('请选择导出范围');
       exporting.value = false;
       return;
     }
-    
+
     downloadBlob(res.data, filename);
     ElMessage.success(`已导出到下载文件夹: ${filename}`);
     exportDialogVisible.value = false;

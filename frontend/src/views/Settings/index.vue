@@ -1586,23 +1586,20 @@ onMounted(async () => {
   loadTransformConfig();
   
   // 从当前项目加载检测配置（包括自定义提示框）
+  // v3.8.x: 不再守 `if (res.data?.detection_config)` — DB null 也要进 store,
+  // store 内部会用 localStorage 兜底 + 自动回写 DB. 设置页是改这些配置的主入口,
+  // 必须确保 currentProjectId 被绑定, 否则用户改的颜色/线宽全进不了 DB.
   if (projectStore.currentProjectId) {
     try {
       const res = await getProjectDetail(projectStore.currentProjectId);
-      if (res.data?.detection_config) {
-        store.loadDetectionFromProject(res.data.detection_config);
-      }
+      store.setCurrentProjectId(projectStore.currentProjectId);
+      store.loadDetectionFromProject(res.data?.detection_config || null, projectStore.currentProjectId);
     } catch (e) {
       console.error('加载项目检测配置失败:', e);
     }
   } else {
-    // 没有选择项目时，尝试从 localStorage 恢复
-    const saved = localStorage.getItem('detection_settings');
-    if (saved) {
-      try {
-        store.loadDetectionFromProject(JSON.parse(saved));
-      } catch (e) {}
-    }
+    // 没有项目时也走 store, 它内部读 localStorage; 无 projectId 不会回写 DB
+    store.loadDetectionFromProject(null);
   }
 });
 </script>

@@ -18,7 +18,27 @@ import time
 import json
 import threading
 import traceback
+from ctypes import POINTER, byref, c_ubyte, cast, memset, sizeof
+
 import cv2
+
+# v3.8.x: _reopen_hik_camera 用到的海康 SDK 名字 ── 历史遗漏 import 导致
+# "name 'HIK_SDK_AVAILABLE' is not defined" NameError, 海康相机用户每次 pause→resume
+# (前端"停止→开始"按钮) 都报"启动检测失败"。客户报障: 只能去"输入源"页面重启才能恢复。
+# 同名方法在 IndustrialCameraMixin (line ~397) 也有一份, 但该 mixin 未在 VideoSourceManager
+# 继承列表里, 实际生效的是本文件这份, 必须补全 import。
+from backend.api.source_sdk_loader import (
+    HIK_SDK_AVAILABLE,
+    MV_ACCESS_Exclusive,
+    MV_CC_DEVICE_INFO,
+    MV_CC_DEVICE_INFO_LIST,
+    MV_FRAME_OUT_INFO_EX,
+    MV_GIGE_DEVICE,
+    MV_TRIGGER_MODE_OFF,
+    MV_USB_DEVICE,
+    MVCC_INTVALUE,
+    MvCamera,
+)
 
 
 class LifecycleMixin:

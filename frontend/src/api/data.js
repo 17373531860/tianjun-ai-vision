@@ -131,39 +131,47 @@ const _appendModeParams = (params, ptMode, ctMode) => {
   if (ctMode) params.ct_mode = ctMode;
 };
 
-export const exportDateRangeCsv = (startDate, endDate, startHour = null, endHour = null, projectId = null, channelId = null, ptMode = null, ctMode = null) => {
+// v3.8.x: outputFormat 支持 csv/txt/xlsx/docx/pdf, 默认 csv
+const _appendFormat = (params, outputFormat) => {
+  if (outputFormat && outputFormat !== 'csv') params.output_format = outputFormat;
+};
+
+export const exportDateRangeCsv = (startDate, endDate, startHour = null, endHour = null, projectId = null, channelId = null, ptMode = null, ctMode = null, outputFormat = 'csv') => {
   const params = { export_type: 'all', start_date: startDate, end_date: endDate };
   if (startHour) params.start_hour = startHour;
   if (endHour) params.end_hour = endHour;
   if (projectId !== null && projectId !== undefined) params.project_id = projectId;
   if (channelId !== null && channelId !== undefined) params.channel_id = channelId;
   _appendModeParams(params, ptMode, ctMode);
+  _appendFormat(params, outputFormat);
   return api.get('/data/export/csv', {
     params,
     responseType: 'blob'
   });
 };
 
-export const exportWeekCsv = (week, startHour = null, endHour = null, projectId = null, channelId = null, ptMode = null, ctMode = null) => {
+export const exportWeekCsv = (week, startHour = null, endHour = null, projectId = null, channelId = null, ptMode = null, ctMode = null, outputFormat = 'csv') => {
   const params = { export_type: 'all', week };
   if (startHour) params.start_hour = startHour;
   if (endHour) params.end_hour = endHour;
   if (projectId !== null && projectId !== undefined) params.project_id = projectId;
   if (channelId !== null && channelId !== undefined) params.channel_id = channelId;
   _appendModeParams(params, ptMode, ctMode);
+  _appendFormat(params, outputFormat);
   return api.get('/data/export/csv', {
     params,
     responseType: 'blob'
   });
 };
 
-export const exportMonthCsv = (month, startHour = null, endHour = null, projectId = null, channelId = null, ptMode = null, ctMode = null) => {
+export const exportMonthCsv = (month, startHour = null, endHour = null, projectId = null, channelId = null, ptMode = null, ctMode = null, outputFormat = 'csv') => {
   const params = { export_type: 'all', month };
   if (startHour) params.start_hour = startHour;
   if (endHour) params.end_hour = endHour;
   if (projectId !== null && projectId !== undefined) params.project_id = projectId;
   if (channelId !== null && channelId !== undefined) params.channel_id = channelId;
   _appendModeParams(params, ptMode, ctMode);
+  _appendFormat(params, outputFormat);
   return api.get('/data/export/csv', {
     params,
     responseType: 'blob'

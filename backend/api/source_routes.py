@@ -1040,6 +1040,35 @@ def get_detection_results(channel: int = Query(0)):
             avg_cycle_sum_step_durations[lbl] = round(sum(hist) / len(hist), 2)
             last_cycle_sum_step_durations[lbl] = hist[-1]
 
+    # v3.8.x: in-flight 实时 PT ── 让前端 PT 列在步骤还在画面里时就能显示渐增数字,
+    # 而不是等到 "步骤消失 + disappear_delay 超时" 写入权威值才显示。
+    #
+    # 关键设计 (v3.8.x 修订): in-flight 走**独立字段** step_inflight_durations,
+    # **不污染** step_durations / cycle_sum_step_durations 这些"权威完成值"。
+    # 前端语义因此清晰:
+    #   - 步骤在画面里, 没真完成 → step_inflight_durations 有值, cycle_sum_step_durations 无值
+    #     → PT 列 fallback 显示 in-flight (渐增), 状态 = '待检测'(不标 OK)
+    #   - 步骤离开画面 + disappear_delay 写入权威值 → cycle_sum_step_durations 有值
+    #     → PT 列显示权威值 (停止涨), 状态 = '已检测' / OK
+    #
+    # 历史版本曾把 in-flight 直接覆盖到 step_durations / cycle_sum 字段, 导致
+    # "PT 出现 = 标 OK" 而 PT 还在涨, 客户投诉 "PT 没稳定就标合格了"。
+    step_inflight_durations = {}
+    try:
+        _live_last = getattr(mgr, 'step_last_seen', None) or {}
+        _live_start = getattr(mgr, 'step_start_time', None) or {}
+        _live_cycle = getattr(mgr, 'current_cycle_steps', None) or []
+        for _lbl, _last_t in _live_last.items():
+            if _lbl not in _live_cycle:
+                continue
+            _start_t = _live_start.get(_lbl, _last_t)
+            _live_dur = _last_t - _start_t
+            if _live_dur <= 0:
+                continue
+            step_inflight_durations[_lbl] = round(_live_dur, 2)
+    except Exception as _e:
+        print(f"[API] in-flight PT 收集异常 (ch{channel}): {_e}")
+
     last_cycle_time = mgr.cycle_times[-1] if mgr.cycle_times else 0
     last_cycle_time_with_ng = 0
     _all_ct_for_last = []
@@ -1070,6 +1099,9 @@ def get_detection_results(channel: int = Query(0)):
         "step_screenshots": mgr.step_screenshots.copy(),
         "step_detection_times": mgr.step_detection_times.copy(),
         "step_durations": mgr.step_durations.copy(),
+        # v3.8.x: in-flight 实时 PT (步骤还在画面里, 持续涨), 独立字段, 不污染权威值。
+        # 前端用法: PT 列 fallback 显示, 状态判定不取这个 (否则"没稳定就标 OK")。
+        "step_inflight_durations": step_inflight_durations,
         "avg_step_durations": avg_step_durations,
         "last_step_durations": last_step_durations,
         # v3.5.x: PT 合并档 — 当前周期内 SUM / 最近一周期 SUM / 历史周期 SUM 平均
@@ -1086,6 +1118,14 @@ def get_detection_results(channel: int = Query(0)):
         "last_cycle_time_with_ng": last_cycle_time_with_ng,
         "current_cycle_time": current_cycle_time,
         "current_cycle_steps": list(mgr.current_cycle_steps),
+        # v3.8.x: 透 cycle_id 给前端做"周期切换"边界检测信号。
+        # 用途: 前端 polling 收到 cycle_id 变化 (上一周期 → null → 下一周期 / 直接换号)
+        # 就立刻清掉步骤表 status/cycleResult/cycle_sum 残留, 解决客户反馈
+        # "上一周期 OK 显示在新周期前 1-2 步做完之前一直挂着" 的视觉残留 bug。
+        # 周期间隙 (end_cycle 完成、start_cycle 未触发) current_cycle_id 为 None,
+        # 前端识别 None → 新值 也按"周期切换"处理。
+        "current_cycle_id": getattr(mgr, 'current_cycle_id', None),
+        "current_cycle_uuid": getattr(mgr, 'current_cycle_uuid', None),
         "backup_covered_labels": [
             mgr.step_backup_map[b]
             for b in mgr.backup_steps_seen_in_cycle

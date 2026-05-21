@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.8.0 (2026-05-21)
+- [FEAT-001] **定时导出 — 按 cron 周期性自动出报表**：新建 `ExportScheduledRule` + APScheduler 后台调度，7 种数据窗口预设（含早晚班/跨日截断，跟手动按钮零差异）、5 种输出格式、全局默认目录 + 单规则覆盖、运行日志回查；新组件 `ScheduledRulesDialog`（cron 简化模式 + 高级 cron + 下次触发预览 + 端到端表单）。
+- [FEAT-002] **数据页 4 个快捷按钮 + 定时导出支持多格式 (csv/txt/xlsx/docx/pdf)**：抽出 `build_csv_string`，新模块 `export_scheduled_writers` 集中实现；DOCX 走 XML fast-path 解决 O(n²) 性能（386 行 >2min → <1s）；PDF 用 reportlab 内建 STSong-Light CID 字体免外部依赖；前端加输出格式下拉。
+- [FEAT-003] **自定义计数器显示开关**（默认隐藏）：`Project.counters_config[i].show_in_monitor`，Project 页加勾选 + tooltip，Monitor 统计板块按字段过滤；系统三计数器恒显示。
+- [FEAT-004] **周期性强制动作 — 多触发频率 / 时间触发 / 自定义事件 / 立即清零**：`notify_mode` (once/every_cycle/interval) + `notify_interval_sec` + `notify_event`，强制动作命中后立即清零并停止间隔通知。
+- [BUG-001] **PT/CT 显示时机 + 周期切换视觉残留修复**：后端透出 `current_cycle_id` 让前端做边界检测；累计字典清空挪到 `start_cycle` 而非 `end_cycle`；新增 `_flush_active_steps_pt` 结算前主动写入仍在画面的 PT；前端 status 放宽三态，cycleResult 继续严格等 authoritative。
+- [BUG-002] **检测框越界 — 三层 clip 防御**：geometry / inference_loop / drawer 三处分别加 clip 兜底，避免文字外溢黑屏。
+- [BUG-003] **海康相机 NameError 修复**：v3.7.x mixin 拆分回归，补全 `MV_CC_DEVICE_INFO_LIST` 等 SDK 常量 import。
+- [BUG-004] **扫码器列表为空时不再报"未绑码"**：settlement mixin 加守门，没装扫码器时静默不报警。
+- [BUG-005] **顺序模式新一轮开始时不结算上一轮修复**：A-B-C 没 D 紧跟下一轮 A，新增"结算步骤即将到来时新一轮第一步出现 → 结算上一轮 NG + 启动新一轮"逻辑（按钮配置默认关）。
+- [BUG-006] **检测停止/重启后画面残留修复**：stop 路径加 `clear_filters()` + `last_annotated_frame = None`。
+- [CONFIG-001] 版本号 3.7.6 → 3.8.0 (`electron/package.json` + `electron/splash.html`)。
+- [DEPS-001] `backend/requirements.txt` 新增 `APScheduler>=3.11.0` + `croniter>=2.0.0` + `tzlocal>=5.0.0`。
+
 ## v3.7.6 (2026-05-18)
 - [BUG-376-SEQ-SUPPLEMENT-PT] **顺序模式 cycle 末尾步骤"OK 已出 PT 仍 --"修复** — 客户「步骤详情」表里某一步状态=已检测、结果=OK，但 PT/s 列一直是 `--`，最典型出现在 cycle 末尾那一步（A→B→C→D 的 D）。根因：顺序模式 / 自定义顺序模式 cycle 判定结尾的"补计"路径只写 `step_counts` + `step_durations` + `step_durations_history`，**漏写 `step_cycle_durations`**；前端 `step_counts +1` → `actualPosByLabel` 含该 label → 标 OK，但 PT 合并档（`cycle_sum_*` / `avg_cycle_sum_*` / `last_cycle_sum_*`）都没该 label → PT 列永远 `--`。修复：两处补计路径补齐 `step_cycle_durations` 累加，跟主路径 `source_step_stats_mixin.py:298-303` 对齐。
 - [BUG-376-PT-NO-RESET] **PT 时间周期结束不归零修复**（"当前周期内 + 最后一次"组合） — 客户切到该组合时周期结束后 PT 列停在上一周期值。根因：双端不对齐 — 后端 `step_durations` 字段只在 `reset_stats()` 清，cycle 结束时不清；前端 `Monitor/index.vue:3663` 用 `Object.assign` merge 而非整体替换，即便后端清了前端字典也清不掉。修复：后端 `end_cycle` / `_discard_empty_cycle` finally 块追加 `self.step_durations = {}`（位置在主体兜底引用之后安全）；前端 `stepDurations` 改成整体替换 `stepDurations.value = data.step_durations || {}`。

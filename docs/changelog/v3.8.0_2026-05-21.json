@@ -1,0 +1,225 @@
+{
+  "version": "3.8.0",
+  "date": "2026-05-21",
+  "previous_version": "3.7.6",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "定时导出 — 按 cron 周期性自动出报表",
+      "symptom": "客户希望每天凌晨 0 点把昨天一整天检测数据导出到指定目录, 早晚班/跨日截断要跟手动按钮一致",
+      "root_cause": "原系统只支持手动点按钮和 cycle_end 事件触发的实时导出, 没有时间触发的批量导出能力",
+      "fix": "新建 ExportScheduledRule 表 + APScheduler BackgroundScheduler 后台调度, 数据窗口 7 种预设(yesterday/today/last_n_hours/last_n_days/shift_day_yesterday/shift_night_yesterday/custom_offset), 跨日窗口自动走 sessions_export 原跨日 OR 查询路径; 全局默认输出目录可配, 单规则可覆盖; 失败/跳过/no_data 借 ExportRunLog 记录",
+      "files": [
+        "backend/models/export_models.py",
+        "backend/services/export_scheduled.py",
+        "backend/services/export_scheduled_writers.py",
+        "backend/api/export_scheduled.py",
+        "backend/api/__init__.py",
+        "backend/main.py",
+        "backend/requirements.txt",
+        "frontend/src/api/export.js",
+        "frontend/src/views/Data/index.vue",
+        "frontend/src/views/Data/components/ScheduledRulesDialog.vue"
+      ],
+      "keywords": [
+        "scheduled export", "定时导出", "cron", "APScheduler", "BackgroundScheduler",
+        "ExportScheduledRule", "data_window", "shift_night_yesterday",
+        "croniter", "每天某时", "标准日报", "全局默认目录"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "数据页 4 个快捷按钮 + 定时导出支持多格式 (csv/txt/xlsx/docx/pdf)",
+      "symptom": "原本 4 个手动按钮只能导 CSV, 客户希望可选 txt/docx/xlsx/pdf",
+      "root_cause": "build_csv_response 直接返回 StreamingResponse, 没有抽出字符串构造层",
+      "fix": "抽出 build_csv_string 让多格式 writer 与 HTTP response 共用; 新模块 export_scheduled_writers.csv_string_to_format_bytes 集中实现; DOCX 走 XML fast-path 绕开 cell.text O(n²) 问题(386 行 >2min -> <1s); PDF 用 reportlab 内建 STSong-Light CID 字体免外部依赖; Data 页加输出格式下拉",
+      "files": [
+        "backend/api/sessions_export.py",
+        "backend/api/sessions.py",
+        "backend/services/export_scheduled_writers.py",
+        "frontend/src/api/data.js",
+        "frontend/src/views/Data/index.vue"
+      ],
+      "keywords": [
+        "multi format export", "xlsx docx pdf", "output_format",
+        "build_csv_string", "openpyxl", "python-docx", "reportlab",
+        "STSong-Light", "docx fast-path"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "自定义计数器显示开关 — 默认隐藏",
+      "symptom": "计数器只要在事件里设置过就会出现在 Monitor 右上角, 客户希望按需显示",
+      "root_cause": "Monitor 统计板块无条件渲染所有 counters_config 条目",
+      "fix": "Project.counters_config[i] 加 show_in_monitor 字段(默认 false), Project UI 加'显示'勾选+tooltip; Monitor 统计板块按 show_in_monitor 过滤, 系统三计数器(检测/OK/NG)恒显示",
+      "files": [
+        "frontend/src/views/Project/index.vue",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": [
+        "counter visibility", "计数器显示开关", "show_in_monitor",
+        "counters_config", "Monitor 统计板块"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "周期性强制动作 — 多触发频率 / 时间触发 / 自定义事件 / 立即清零",
+      "symptom": "原本'周期未做强制动作'每周期结束只触发一次事件, 客户希望持续报警, 触发频率可调, 强制动作一旦做出立即清零",
+      "root_cause": "Periodic actions 只有 once 触发模式, 缺乏 every_cycle/interval 节奏控制",
+      "fix": "pipeline_config.periodic_actions[i] 加 notify_mode (once/every_cycle/interval) / notify_interval_sec / notify_event 字段; 强制动作命中后立即清零+取消间隔通知; 同时支持按时间触发和按周期触发两种模式",
+      "files": [
+        "backend/api/source_periodic_actions_mixin.py",
+        "backend/api/source_routes.py",
+        "frontend/src/views/Project/index.vue"
+      ],
+      "keywords": [
+        "periodic actions", "周期性强制动作", "notify_mode", "interval",
+        "强制清零", "自定义事件", "持续报警"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "PT/CT 显示时机 + 周期切换视觉残留",
+      "symptom": "周期结算后 SOP 卡片仍全绿挂着直到下一周期 A 步骤; 部分周期最后一步 PT 显示明显滞后; OK 结果可能先于 PT 出现",
+      "root_cause": "前端 step.status 必须等 authoritative PT 才标 completed; 后端 cycle_sum_step_durations 在 end_cycle.finally 立刻清空导致 PT 列丢失; 前端 else 分支 fallback 与边界清零冲突",
+      "fix": "(1) source_routes.py 透出 current_cycle_id/uuid 给前端做边界信号; (2) Monitor 用 lastSingleCycleId 跟踪 cycle_id 变化, 仅在'新周期开始'(null→int 或 int→新 int) 清状态; (3) session_lifecycle 把累计字典清空挪到 start_cycle 而非 end_cycle; (4) 新增 _flush_active_steps_pt 结算前主动写入仍在画面的 PT; (5) status 放宽三态, cycleResult 继续严格等 authoritative",
+      "files": [
+        "backend/api/source_routes.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/source_settlement_mixin.py",
+        "backend/api/source_step_stats_mixin.py",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": [
+        "PT display", "视觉残留", "cycle_id 边界", "current_cycle_id",
+        "step.status", "_flush_active_steps_pt", "周期切换", "OK 闪烁"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "检测框越界 — 三层 clip 防御",
+      "symptom": "极端帧下检测框超出图像边界, 文字外溢黑屏",
+      "root_cause": "YOLO 在边界外推出 xyxy 超过 (W,H), Drawer 直接传给 cv2 描点",
+      "fix": "在 geometry / inference_loop / drawer 三处分别加 clip 兜底",
+      "files": [
+        "backend/api/source_drawer.py",
+        "backend/api/source_inference_loop_mixin.py"
+      ],
+      "keywords": [
+        "bbox clip", "检测框越界", "geometry clip", "三层防御"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "海康相机 NameError (mixin 拆分回归)",
+      "symptom": "连接海康工业相机抛 NameError, 相机无法启动",
+      "root_cause": "v3.7.x mixin 拆分漏 import MV_CC_DEVICE_INFO_LIST 等海康 SDK 常量",
+      "fix": "在 source.py 和 source_lifecycle_mixin.py 补全 import",
+      "files": [
+        "backend/api/source.py",
+        "backend/api/source_lifecycle_mixin.py"
+      ],
+      "keywords": [
+        "海康相机", "MV_CC_DEVICE_INFO_LIST", "NameError", "mixin 拆分"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "扫码器列表为空时不再报'未绑码'",
+      "symptom": "客户机没装任何扫码器, 结算时仍触发'⚠ 未绑码'事件干扰报警",
+      "root_cause": "is_warn_no_barcode() 没检查 has_any_scanner_present()",
+      "fix": "settlement mixin 加守门: 扫码器列表为空直接返回 False",
+      "files": [
+        "backend/api/source_settlement_mixin.py"
+      ],
+      "keywords": [
+        "扫码器静默", "未绑码", "has_any_scanner_present", "无扫码器"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-005",
+      "title": "顺序模式新一轮开始时不结算上一轮 (A-B-C 没 D 又来 A)",
+      "symptom": "严格 A-B-C-D 顺序模式, 前一轮 D 没检到紧跟下一轮 A 出现, 前一轮静默吞掉",
+      "root_cause": "顺序状态机只在结算步骤出现时才结算, 没考虑'结算步骤没来但新一轮第一步提前到'",
+      "fix": "加'结算步骤即将到来时新一轮第一步出现 → 结算上一轮 NG + 启动新一轮'逻辑, 按钮配置默认关",
+      "files": [
+        "backend/api/source_sequential_mixin.py"
+      ],
+      "keywords": [
+        "顺序模式", "sequential", "上一轮结算", "新一轮触发"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-006",
+      "title": "检测停止后画面残留 / 重启检测后画面残留",
+      "symptom": "检测启动后停止再去其他页面改配置回 Monitor 页画面仍有上次渲染; 连续 start/stop/start 也残留",
+      "root_cause": "stop_detection 没清 Drawer 内部 Kalman/missing 缓存 + last_frame 缓存",
+      "fix": "stop 路径加 clear_filters() + last_annotated_frame = None",
+      "files": [
+        "backend/api/source_lifecycle_mixin.py",
+        "backend/api/source.py"
+      ],
+      "keywords": [
+        "画面残留", "stop_detection", "clear_filters", "last_annotated_frame"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "dependencies_added": [
+    "APScheduler>=3.11.0",
+    "croniter>=2.0.0",
+    "tzlocal>=5.0.0"
+  ],
+  "files_changed": [
+    "backend/api/__init__.py",
+    "backend/api/sessions.py",
+    "backend/api/sessions_export.py",
+    "backend/api/source.py",
+    "backend/api/source_drawer.py",
+    "backend/api/source_inference_loop_mixin.py",
+    "backend/api/source_lifecycle_mixin.py",
+    "backend/api/source_periodic_actions_mixin.py",
+    "backend/api/source_routes.py",
+    "backend/api/source_sequential_mixin.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/source_settlement_mixin.py",
+    "backend/api/source_step_stats_mixin.py",
+    "backend/main.py",
+    "backend/models/export_models.py",
+    "backend/requirements.txt",
+    "backend/api/export_scheduled.py",
+    "backend/services/export_scheduled.py",
+    "backend/services/export_scheduled_writers.py",
+    "frontend/src/api/data.js",
+    "frontend/src/api/export.js",
+    "frontend/src/layout/Navbar.vue",
+    "frontend/src/store/useSystemStore.js",
+    "frontend/src/views/Data/index.vue",
+    "frontend/src/views/Data/components/ScheduledRulesDialog.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Project/index.vue",
+    "frontend/src/views/Settings/index.vue",
+    "electron/package.json",
+    ".gitignore"
+  ]
+}

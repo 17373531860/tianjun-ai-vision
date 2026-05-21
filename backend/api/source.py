@@ -509,9 +509,12 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                     rounded_dur = round(duration, 2)
                     self.step_durations[label] = rounded_dur
                     self.step_durations_history.setdefault(label, []).append(rounded_dur)
-                    # v3.5.x: 当前周期内的 SUM 累加（PT 合并档使用）
-                    prev_sum = self.step_cycle_durations.get(label, 0.0)
-                    self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
+                    # v3.7.x: 当前周期内的 SUM 累加（PT 合并档使用）
+                    # 守门：只有本周期接纳的步骤才写 SUM 字典，避免跨周期/顺序错误的标签污染。
+                    # 详见 source_step_stats_mixin.py 同处守门说明。
+                    if label in self.current_cycle_steps:
+                        prev_sum = self.step_cycle_durations.get(label, 0.0)
+                        self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
                     if label not in self.step_counts:
                         self.step_counts[label] = 0
                     self.step_counts[label] += 1

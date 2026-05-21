@@ -123,6 +123,10 @@ class PeriodicActionsMixin:
                 'last_overdue_count': -1,
                 # v3.7.4: 时间维度的"上次超期时秒数差", 用于 cooldown / once 节流
                 'last_overdue_time_gap': -1.0,
+                # v3.8.x: 'continuous:N' 模式专用 — 上次发 overdue 通知的绝对时间戳。
+                # 持续触发模式按"现在 - last_overdue_emit_ts >= N" 判定要不要再发,
+                # 跟次数/秒数 gap 那套独立。0.0 = 从未发过, 一旦超期立刻发首次。
+                'last_overdue_emit_ts': 0.0,
             })
 
         # v3.5.2: 临时诊断
@@ -290,6 +294,7 @@ class PeriodicActionsMixin:
                     self._periodic_last_done_ts[rule['id']] = now  # v3.7.4
                     rule['last_overdue_count'] = -1  # 重置 cooldown 状态
                     rule['last_overdue_time_gap'] = -1.0  # v3.7.4
+                    rule['last_overdue_emit_ts'] = 0.0  # v3.8.x: 'continuous:N' 节流
                     changed = True
                     print(f"[PeriodicActions] '{rule['name']}' 检测到完成动作，"
                           f"counter {counter} → 0, time_gap {time_gap:.0f}s → 0 "
@@ -319,10 +324,13 @@ class PeriodicActionsMixin:
             observed_book.clear()
 
     def _check_periodic_actions_time_only(self, now: Optional[float] = None) -> None:
-        """v3.7.4: 仅检查时间维度的到期/超期 — 由 inference_loop 主循环每 5 秒 throttle 调一次.
+        """v3.7.4: 由 inference_loop 主循环每 1 秒 throttle 调一次 (v3.8.x 改为 1 秒).
 
-        独立于 cycle_end, 用于解决"生产停了但仍在检测中"场景:
-        客户工人下班吃饭半小时不开工, 也应该按 time_interval_seconds 触发提醒.
+        独立于 cycle_end, 解决两种场景:
+        - v3.7.4 原意: "生产停了但仍在检测中" 时, 按时间到期触发提醒
+          (例如客户工人下班吃饭半小时不开工)
+        - v3.8.x 新增: continuous:N 模式 — 超期后持续按 N 秒间隔反复触发,
+          不论"按次数超期"还是"按时间超期"都走
 
         本方法只触发 due/overdue 事件, **不动 counter**, 不动 last_done_ts —
         那些只在 _check_periodic_actions (cycle_end 路径) 或检测到 trigger_step 时变化.
@@ -334,22 +342,38 @@ class PeriodicActionsMixin:
             now = time.time()
 
         for rule in rules:
-            time_interval = rule.get('time_interval_seconds', 0)
-            if time_interval <= 0:
-                continue
             channel_filter = rule.get('channel_filter')
             if channel_filter and getattr(self, 'channel_id', 0) not in channel_filter:
                 continue
+
+            interval = rule['interval']
+            time_interval = rule.get('time_interval_seconds', 0)
+            repeat = (rule.get('overdue_repeat') or 'every_cycle').strip()
+            is_continuous = repeat.startswith('continuous:')
 
             counter = self._periodic_counters.get(rule['id'], 0)
             last_done = self._periodic_last_done_ts.get(rule['id'], now)
             time_gap = now - last_done
 
-            # 只在时间维度真的到期时才尝试触发, 避免无意义判定
-            if time_gap < time_interval:
-                continue
+            count_overdue = interval > 0 and counter > interval
+            time_overdue = time_interval > 0 and time_gap > time_interval
 
-            # 复用 _maybe_emit_periodic — 它内部判定 cooldown / once 节流
+            # v3.8.x: continuous 模式 — 任一维度超期就进 _maybe_emit_periodic 走节流.
+            # 这样客户只配了"按次数 20 轮 + continuous:2s" 时, counter 超 20 后
+            # 每 2 秒响一次, 不再受"时间维度未开/未到"两道守门拦住.
+            if is_continuous:
+                if not (count_overdue or time_overdue):
+                    continue
+            else:
+                # 老行为 (每 cycle/once/cooldown): 仅在"时间维度开启 + 已到期"时介入,
+                # 避免每秒被无故触发. 这些模式的次数维度判定走 _check_periodic_actions
+                # (cycle_end 路径).
+                if time_interval <= 0:
+                    continue
+                if time_gap < time_interval:
+                    continue
+
+            # 复用 _maybe_emit_periodic — 它内部判定 cooldown / once / continuous 节流
             self._maybe_emit_periodic(rule, counter, time_gap)
 
     def _maybe_emit_periodic(self, rule: Dict[str, Any], counter: int, time_gap: float) -> None:
@@ -382,6 +406,9 @@ class PeriodicActionsMixin:
                 self._emit_periodic_notification(rule['overdue_event_id'], reason)
                 rule['last_overdue_count'] = counter
                 rule['last_overdue_time_gap'] = time_gap
+                # v3.8.x: 'continuous:N' 节流锚点 — 每次实际发完 overdue 才更新,
+                # 让下次 _should_trigger_overdue_v2 用 now - 这个值 与 N 比.
+                rule['last_overdue_emit_ts'] = time.time()
         elif (count_due or time_due) and rule.get('due_warning_event_id'):
             if count_due and time_due:
                 reason = (f"{rule['name']} 已到期 (次数 {counter}/{interval}, "
@@ -494,6 +521,7 @@ class PeriodicActionsMixin:
                     self._periodic_last_done_ts[rid] = time.time()
                 rule['last_overdue_count'] = -1
                 rule['last_overdue_time_gap'] = -1.0
+                rule['last_overdue_emit_ts'] = 0.0  # v3.8.x: 'continuous:N' 节流
                 changed = True
                 print(f"[PeriodicActions] '{rule['name']}' 开机首检通过: "
                       f"客户做了 '{step_label}', counter → 0")
@@ -542,10 +570,14 @@ class PeriodicActionsMixin:
         """v3.7.4: overdue 节流判定 — 兼顾次数维度与时间维度.
 
         - every_cycle: 每次调都触发 (注意 _check_periodic_actions_time_only 由 inference loop
-          每 5 秒调一次, 实际就是每 5 秒最多一次, 不会刷屏).
-        - once:       只要任一维度还没触发过 overdue 就触发, 之后永久静默直到 reset.
-        - cooldown:N: 任一维度的进度与 last 的差值 ≥ N 才触发. N 对次数 = 轮数,
-                      对时间 = 秒数 (复用同一个 N, 简化配置).
+          每 1 秒调一次, v3.8.x 把 throttle 从 5s 降到 1s 以支持 continuous:N 小 N 值).
+        - once:        只要任一维度还没触发过 overdue 就触发, 之后永久静默直到 reset.
+        - cooldown:N:  任一维度的进度与 last 的差值 ≥ N 才触发. N 对次数 = 轮数,
+                       对时间 = 秒数 (复用同一个 N, 简化配置).
+        - continuous:N (v3.8.x): 超期后**每 N 秒持续触发一次**, 直到客户做了 trigger_step
+          被 reset 路径清掉. 节流锚点是绝对时间戳 last_overdue_emit_ts (不是 time_gap),
+          这样不论"按次数超期"还是"按时间超期"进来, 都按 N 秒固定间隔反复响.
+          典型场景: 漏做"未压墨"等保养动作时, 客户希望红灯响个不停直到处理.
         """
         repeat = (rule.get('overdue_repeat') or 'every_cycle').strip()
         last_cnt = rule.get('last_overdue_count', -1)
@@ -570,6 +602,16 @@ class PeriodicActionsMixin:
             time_ok = (time_interval > 0 and time_gap > time_interval
                        and (last_gap < 0 or (time_gap - last_gap) >= gap))
             return count_ok or time_ok
+        if repeat.startswith('continuous:'):
+            try:
+                interval_sec = float(repeat.split(':', 1)[1])
+            except (IndexError, ValueError):
+                interval_sec = 5.0
+            interval_sec = max(0.5, interval_sec)
+            last_emit = float(rule.get('last_overdue_emit_ts', 0.0) or 0.0)
+            now = time.time()
+            # 首次超期 (last_emit==0) 立刻发; 之后每 interval_sec 秒发一次.
+            return last_emit <= 0 or (now - last_emit) >= interval_sec
         return True
 
     # ============================================================
@@ -692,6 +734,7 @@ class PeriodicActionsMixin:
             if rule is not None:
                 rule['last_overdue_count'] = -1
                 rule['last_overdue_time_gap'] = -1.0
+                rule['last_overdue_emit_ts'] = 0.0  # v3.8.x: 'continuous:N' 节流
             pending = getattr(self, '_run_on_start_pending', None)
             if isinstance(pending, set):
                 pending.discard(rid)

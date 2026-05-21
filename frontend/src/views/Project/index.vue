@@ -131,10 +131,18 @@
                 <span class="text-[10px] text-gray-500 bg-slate-700 px-1 rounded">默认</span>
               </div>
               <!-- 用户自定义计数器 -->
-              <div v-if="customCounters.length > 0" class="text-xs text-gray-500 mt-3 mb-1">自定义：</div>
+              <div v-if="customCounters.length > 0" class="text-xs text-gray-500 mt-3 mb-1">
+                自定义：
+                <span class="text-[10px] text-gray-600 ml-1">（默认不在监控页显示，需勾选"显示"才会出现在右上角统计板块）</span>
+              </div>
               <div v-for="(counter, idx) in customCounters" :key="'custom-'+idx" class="flex items-center gap-2 bg-slate-800 p-2 rounded">
                 <el-input v-model="counter.name" size="small" placeholder="计数器名称" class="flex-1" />
                 <el-input-number v-model="counter.value" size="small" :min="0" :precision="2" class="w-24" controls-position="right" />
+                <!-- v3.8.x: 默认不显示, 用户主动勾选才在 Monitor 顶部统计板块出现。
+                     旧项目数据 counter.show_in_monitor 缺省 → undefined → 隐藏 (符合"默认不显示"语义)。 -->
+                <el-tooltip content="是否在监控页右上角统计板块显示该计数器" placement="top">
+                  <el-checkbox v-model="counter.show_in_monitor" size="small" class="!mr-0">显示</el-checkbox>
+                </el-tooltip>
                 <el-button type="danger" size="small" link @click="removeCounter(idx + 3)">×</el-button>
               </div>
             </div>
@@ -955,6 +963,18 @@
                     <el-input-number v-model="activeProject.cycle_max_duration" size="small" :min="0" :step="5" :precision="2" />
                     <span class="text-xs text-gray-500">周期总时长超过此值直接判定NG（0=不启用）</span>
                   </div>
+                  <!-- v3.8.x: 严格顺序模式专属 — 等待结算步骤时遇到首步立刻开新周期 -->
+                  <div v-if="activeProject.logic_mode === 'sequential' || (activeProject.logic_mode === 'custom' && activeProject.custom_based_on === 'sequential')"
+                       class="flex items-start gap-3 pt-2 border-t border-slate-700">
+                    <el-switch v-model="activeProject.first_step_aborts_pending_settle" size="default" />
+                    <div class="flex-1">
+                      <p class="text-gray-300 text-xs">等待结算步骤时遇到首步立刻开新周期</p>
+                      <p class="text-[0.65rem] text-gray-500 mt-1">
+                        ★ 场景: 严格顺序 A→B→C→D, 客户做完 ABC 等不到 D 就直接重做 ABCD。
+                        开启后旧周期判 NG (缺末步), 本次首步开启新周期。仅在"前置步骤都齐、只差结算步骤"时触发, 其他场景仍走步骤回退。
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </el-card>
 
@@ -1182,13 +1202,27 @@
                       </div>
                       <div>
                         <p class="text-xs text-gray-500 mb-1">超期触发频率</p>
-                        <el-select v-model="rule.overdue_repeat" size="small" class="w-full">
-                          <el-option label="每个 cycle 都触发" value="every_cycle" />
-                          <el-option label="只在刚超期时触发一次" value="once" />
-                          <el-option label="冷却 5 轮触发一次" value="cooldown:5" />
-                          <el-option label="冷却 10 轮触发一次" value="cooldown:10" />
-                          <el-option label="冷却 20 轮触发一次" value="cooldown:20" />
-                        </el-select>
+                        <div class="flex items-center gap-2">
+                          <el-select :model-value="getOverdueRepeatMode(rule.overdue_repeat)"
+                                     @update:model-value="(m) => setOverdueRepeatMode(rule, m)"
+                                     size="small" class="flex-1">
+                            <el-option label="每个 cycle 都触发" value="every_cycle" />
+                            <el-option label="只在刚超期时触发一次" value="once" />
+                            <el-option label="冷却 5 轮触发一次" value="cooldown:5" />
+                            <el-option label="冷却 10 轮触发一次" value="cooldown:10" />
+                            <el-option label="冷却 20 轮触发一次" value="cooldown:20" />
+                            <el-option label="持续触发（每 N 秒一次）" value="continuous" />
+                          </el-select>
+                          <el-input-number v-if="String(rule.overdue_repeat || '').startsWith('continuous')"
+                                           :model-value="getContinuousSeconds(rule.overdue_repeat)"
+                                           @update:model-value="(v) => rule.overdue_repeat = `continuous:${v || 5}`"
+                                           :min="1" :max="600" :step="1" size="small"
+                                           controls-position="right" style="width: 120px" />
+                        </div>
+                        <p v-if="String(rule.overdue_repeat || '').startsWith('continuous')"
+                           class="text-[0.65rem] text-orange-500 mt-1">
+                          ★ 持续模式：超期后每 N 秒响一次，客户做了"完成动作"立刻停止。
+                        </p>
                       </div>
                     </div>
 
@@ -2135,12 +2169,13 @@ onMounted(async () => {
   systemStore.loadSettings();
   
   // 从当前项目加载检测配置（包括自定义提示框）
+  // v3.8.x: 不再用 `if (res.data?.detection_config)` 守门 — DB null 也要进 store,
+  // store 会自动用 localStorage 兜底并回写 DB.
   if (projectStore.currentProjectId) {
     try {
       const res = await getProjectDetail(projectStore.currentProjectId);
-      if (res.data?.detection_config) {
-        systemStore.loadDetectionFromProject(res.data.detection_config);
-      }
+      systemStore.setCurrentProjectId(projectStore.currentProjectId);
+      systemStore.loadDetectionFromProject(res.data?.detection_config || null, projectStore.currentProjectId);
     } catch (e) {
       console.error('加载项目检测配置失败:', e);
     }
@@ -2658,6 +2693,10 @@ const initProjectDefaults = (project) => {
   if (project.cycle_max_duration === undefined) {
     project.cycle_max_duration = pipelineConfig.cycle_max_duration || 0;
   }
+  // v3.8.x: 严格顺序模式 - "等待结算步骤时遇到首步立刻开新周期" 开关 (默认 false)
+  if (project.first_step_aborts_pending_settle === undefined) {
+    project.first_step_aborts_pending_settle = pipelineConfig.first_step_aborts_pending_settle === true;
+  }
   // Tracking mode
   if (project.tracking_cycle_strategy === undefined) {
     project.tracking_cycle_strategy = pipelineConfig.tracking_cycle_strategy || 'all_gone';
@@ -2816,6 +2855,7 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.settlement_mode = project.settlement_mode || 'first_step';
   project.pipeline_config.idle_timeout_seconds = project.idle_timeout_seconds || 0;
   project.pipeline_config.cycle_max_duration = project.cycle_max_duration || 0;
+  project.pipeline_config.first_step_aborts_pending_settle = project.first_step_aborts_pending_settle === true;
   project.pipeline_config.periodic_actions = project.periodic_actions;
   
   return project;
@@ -2838,6 +2878,11 @@ const handleActivateProject = async () => {
   try {
     await activateProject(activeProject.value.id);
     projectStore.setCurrentProject(activeProject.value);
+    // v3.8.x: 同步 systemStore 的当前项目 ID + 加载检测框配置 —
+    // 老版本这里漏了, 导致设置页改的检测框配置永远写不进 DB (currentProjectId 一直 null),
+    // 重启就回默认. 现在激活项目立刻把绑定补上.
+    systemStore.setCurrentProjectId(activeProject.value.id);
+    systemStore.loadDetectionFromProject(activeProject.value.detection_config, activeProject.value.id);
     ElMessage.success(`已激活项目: ${activeProject.value.name}`);
     loadProjects();
   } catch (err) {
@@ -2963,6 +3008,7 @@ const handleSaveProject = async () => {
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,
+        first_step_aborts_pending_settle: activeProject.value.first_step_aborts_pending_settle === true,  // v3.8.x
         rod_companion_filter: _sanitizeCompanionFilter(activeProject.value.rod_companion_filter),
         rod_session_gate: _sanitizeSessionGate(activeProject.value.rod_session_gate),
         hide_boxes_outside_step_roi: !!activeProject.value.pipeline_config?.hide_boxes_outside_step_roi,
@@ -3716,6 +3762,30 @@ const addPeriodicAction = () => {
   });
 };
 
+// v3.8.x: 'continuous:N' 模式辅助 — UI 上 select 只显示 mode (不带 N),
+// N 用旁边的数字输入框, 提交时拼回 'continuous:N' 字符串到 overdue_repeat.
+// 老配置 (every_cycle / once / cooldown:N) 不受影响, 走原 path.
+const getOverdueRepeatMode = (val) => {
+  const s = String(val || 'every_cycle');
+  if (s.startsWith('continuous')) return 'continuous';
+  return s;
+};
+const setOverdueRepeatMode = (rule, mode) => {
+  if (mode === 'continuous') {
+    const prev = getContinuousSeconds(rule.overdue_repeat);
+    rule.overdue_repeat = `continuous:${prev || 5}`;
+  } else {
+    rule.overdue_repeat = mode;
+  }
+};
+const getContinuousSeconds = (val) => {
+  const s = String(val || '');
+  if (!s.startsWith('continuous')) return 5;
+  const parts = s.split(':');
+  const n = parts.length > 1 ? Number(parts[1]) : 5;
+  return Number.isFinite(n) && n > 0 ? n : 5;
+};
+
 // v3.5.2: 在 periodic_actions 里直接快捷新建事件并绑定到规则
 const addEventAndBindToRule = (rule, fieldKey) => {
   if (!activeProject.value.events_config) activeProject.value.events_config = [];
@@ -3864,7 +3934,9 @@ const onStepEnabledChange = (step, enabled) => {
 // 计数器操作
 const addCounter = () => {
   if (!activeProject.value.counters_config) activeProject.value.counters_config = [];
-  activeProject.value.counters_config.push({ name: '新计数器', value: 0 });
+  // v3.8.x: 新增自定义计数器默认 show_in_monitor=false (Monitor 页统计板块不显示),
+  // 客户在事件配置/逻辑里用计数器, 不必全部都堆在监控页上。需要时手动勾"显示"。
+  activeProject.value.counters_config.push({ name: '新计数器', value: 0, show_in_monitor: false });
 };
 
 const removeCounter = (idx) => {

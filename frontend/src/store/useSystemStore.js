@@ -191,8 +191,15 @@ export const useSystemStore = defineStore('system', {
         } catch (e) {}
       }
     },
-    // 从项目加载检测框设置
-    loadDetectionFromProject(detectionConfig) {
+    // 从项目加载检测框设置.
+    // v3.8.x: 加 localStorage 兜底 + 自动回写 DB.
+    //   - detectionConfig 存在: 直接合并加载, 同时刷新 localStorage 当快照
+    //   - detectionConfig 为空 + 给了 projectId: 读 localStorage 当首选, 加载完后
+    //     自动 updateProject 写回 DB, 让下次重启直接命中 DB 不再走兜底
+    //   - detectionConfig 为空 + 没 projectId (例如用户切到"无项目"): 回默认值
+    // 这是修"重启检测框配置被刷掉"bug 的核心 — 老逻辑 DB null 时直接默认, 用户改的
+    // 颜色/线宽/Toast 永久丢失.
+    loadDetectionFromProject(detectionConfig, projectId = null) {
       if (detectionConfig) {
         // 深度合并，确保缺失的字段使用默认值
         this.detection = {
@@ -206,10 +213,42 @@ export const useSystemStore = defineStore('system', {
           },
           customToasts: detectionConfig.customToasts || []
         };
-      } else {
-        // 没有项目配置，使用默认值（深拷贝）
-        this.detection = JSON.parse(JSON.stringify(defaultDetection));
+        // 同步 localStorage 快照 (下次冷启动 / 切项目兜底要用)
+        try { localStorage.setItem('detection_settings', JSON.stringify(this.detection)); } catch {}
+        return;
       }
+
+      // DB 没有 → 试 localStorage 兜底
+      let restored = null;
+      try {
+        const saved = localStorage.getItem('detection_settings');
+        if (saved) restored = JSON.parse(saved);
+      } catch {}
+
+      if (restored) {
+        this.detection = {
+          ...defaultDetection,
+          ...restored,
+          toasts: {
+            ok: { ...defaultDetection.toasts.ok, ...(restored.toasts?.ok || {}) },
+            ng: { ...defaultDetection.toasts.ng, ...(restored.toasts?.ng || {}) },
+            scan: { ...defaultDetection.toasts.scan, ...(restored.toasts?.scan || {}) },
+            warn_no_barcode: { ...defaultDetection.toasts.warn_no_barcode, ...(restored.toasts?.warn_no_barcode || {}) }
+          },
+          customToasts: restored.customToasts || []
+        };
+        // 有 projectId 就主动回写 DB, 修复"localStorage 有 / DB 空"的历史项目
+        if (projectId) {
+          this.currentProjectId = projectId;
+          updateProject(projectId, { detection_config: this.detection }).catch((e) => {
+            console.warn('[useSystemStore] 回写 DB 失败 (localStorage 兜底已生效):', e?.message);
+          });
+        }
+        return;
+      }
+
+      // localStorage 也空 → 用默认值
+      this.detection = JSON.parse(JSON.stringify(defaultDetection));
     },
     // 为指定通道加载检测设置
     loadDetectionForChannel(channelId, detectionConfig) {

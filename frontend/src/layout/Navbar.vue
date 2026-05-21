@@ -331,9 +331,10 @@ const handleProjectChange = async (projectId) => {
     
     projectStore.setCurrentProject(project);
     
-    // 加载项目的检测框设置
+    // 加载项目的检测框设置 (v3.8.x: 传 projectId 让 store 能在 DB null 时
+    // 走 localStorage 兜底并自动回写 DB)
     store.setCurrentProjectId(projectId);
-    store.loadDetectionFromProject(project.detection_config);
+    store.loadDetectionFromProject(project.detection_config, projectId);
     
     // 自动连接报警设备（如果有保存的配置）
     if (project.alarm_config?.port) {
