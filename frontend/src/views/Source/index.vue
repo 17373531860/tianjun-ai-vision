@@ -661,6 +661,7 @@ const saveAndStartMulti = async () => {
             auto_exposure: cfg.autoExposure !== false,
             exposure_value: typeof cfg.exposureValue === 'number' ? cfg.exposureValue : -6
           });
+          tryPersistUsbDeviceId(ch, cam.index, cam.name);   // v3.8.2: 给启动界面手势识别用
         } else if (cam.type === 'hikvision') {
           await api.post(`/source/hikvision/start?channel=${ch}`, { device_index: cam.index, width: w, height: h, fps: cfg.fps });
         }
@@ -868,6 +869,28 @@ const sourceTypeLabel = computed(() => {
   return labels[sourceType.value] || '未知';
 });
 
+// v3.8.2: 把浏览器侧的 MediaDeviceInfo.deviceId 持久化到后端配置
+// 启动 splash 时拿这个 deviceId 给 getUserMedia({deviceId}) 精确锁同一台 USB 摄像头
+// 失败/无权限静默, 不影响主激活流程 (splash 自己有降级到系统默认 webcam 的兜底)
+const tryPersistUsbDeviceId = async (channelId, deviceIndex, deviceLabel = '') => {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoInputs = devices.filter(d => d.kind === 'videoinput');
+    if (videoInputs.length === 0) return;
+    // 按浏览器枚举顺序匹配 OpenCV 的 cv2.VideoCapture(index) — 大多数平台同序
+    const picked = videoInputs[deviceIndex] || videoInputs[0];
+    if (!picked || !picked.deviceId) return;   // 没授权时 deviceId 是空串
+    await api.put(`/workstations/${channelId}/usb-device`, {
+      device_id: picked.deviceId,
+      device_label: deviceLabel || picked.label || '',
+    });
+    console.log(`[Source] 已绑定 ch${channelId} 摄像头 deviceId (供启动界面手势识别用)`);
+  } catch (e) {
+    console.warn('[Source] 持久化 USB deviceId 失败 (启动界面会降级到默认 webcam):', e.message);
+  }
+};
+
 // 刷新所有摄像头列表（USB + 海康）
 const refreshAllCameras = async () => {
   loadingCameras.value = true;
@@ -1041,7 +1064,8 @@ const saveAndStart = async () => {
           auto_exposure: cameraSettings.value.autoExposure !== false,
           exposure_value: typeof cameraSettings.value.exposureValue === 'number' ? cameraSettings.value.exposureValue : -6
         });
-        
+        tryPersistUsbDeviceId(0, cam.index, cam.name);   // v3.8.2: 默认工位绑定 ch0
+
         // 更新 store
         sourceStore.setSourceType('camera');
         sourceStore.setCameraSettings({

@@ -1,0 +1,1330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>天军 AI 视觉检测系统 · 启动中</title>
+  <!-- 赛博朋克字体（本地化）：VT323（CRT 终端）+ Orbitron（未来 sans）+ JetBrains Mono（代码） -->
+  <style>
+    @font-face { font-family: "VT323";          font-style: normal; font-weight: 400; font-display: block;
+      src: url("./fonts/VT323-Regular.ttf")     format("truetype"); }
+    @font-face { font-family: "Orbitron";       font-style: normal; font-weight: 500; font-display: block;
+      src: url("./fonts/Orbitron-500.ttf")      format("truetype"); }
+    @font-face { font-family: "Orbitron";       font-style: normal; font-weight: 700; font-display: block;
+      src: url("./fonts/Orbitron-700.ttf")      format("truetype"); }
+    @font-face { font-family: "Orbitron";       font-style: normal; font-weight: 900; font-display: block;
+      src: url("./fonts/Orbitron-900.ttf")      format("truetype"); }
+    @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: block;
+      src: url("./fonts/JetBrainsMono-400.ttf") format("truetype"); }
+    @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 500; font-display: block;
+      src: url("./fonts/JetBrainsMono-500.ttf") format("truetype"); }
+  </style>
+  <style>
+    /* ==================== 赛博配色系（霓虹青 + 洋红 + 电黄 + 酸绿） ==================== */
+    :root {
+      --cyber-cyan:    #00E5FF;
+      --cyber-magenta: #FF2D7E;
+      --cyber-yellow:  #FFEE00;
+      --cyber-green:   #00FF94;
+      --cyber-deep:    #02060c;
+      --cyber-cyan-soft:    rgba(  0, 229, 255, 0.55);
+      --cyber-magenta-soft: rgba(255,  45, 126, 0.55);
+    }
+
+    /* ==================== 全局基底 ==================== */
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      width: 100%;
+      height: 100%;
+      background: var(--cyber-deep);
+      color: var(--cyber-cyan);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                   "Microsoft YaHei", Roboto, sans-serif;
+      cursor: crosshair;
+      user-select: none;
+    }
+    canvas#three {
+      display: block;
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+    }
+
+    /* ==================== CRT 扫描线 全屏覆盖（v0.12 全程在线） ==================== */
+    /* 每 3px 一条极淡青线，模拟阴极射线管显像。
+       从程序启动那一刻就显示——舱体框架永远在，不再仅限 READY 阶段。 */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 9999;
+      background: repeating-linear-gradient(
+        to bottom,
+        transparent 0,
+        transparent 2px,
+        rgba(0, 229, 255, 0.035) 2px,
+        rgba(0, 229, 255, 0.035) 3px
+      );
+      mix-blend-mode: overlay;
+      opacity: 1;
+    }
+
+    /* ==================== 偶发 glitch 抖动（JS 触发） ==================== */
+    /* 只让 logo 和 HUD 抖，不影响 three.js 渲染区 */
+    body.glitch #brandReveal,
+    body.glitch .hud-corner {
+      animation: glitchShake 0.14s steps(3) 1;
+    }
+    @keyframes glitchShake {
+      0%   { transform: translate(0, 0); }
+      25%  { transform: translate(-3px, 1px); filter: hue-rotate(-15deg); }
+      50%  { transform: translate(3px, -1px); filter: hue-rotate(15deg); }
+      75%  { transform: translate(-1px, -2px); }
+      100% { transform: translate(0, 0); }
+    }
+
+    /* ==================== 旧 #brandTop / #brandBottom v0.12 完全隐藏 ==================== */
+    /* 让位给四角赛博 HUD（已替代它们的所有功能） */
+    #brandTop, #brandBottom { display: none !important; }
+
+    /* #hint 已删除（v0.12.1）——boot sequence 已经表达了"等待"的语义，
+       多一行"伸手进入"的中文提示反而显得啰嗦、降低赛博感 */
+
+    /* ==================== 摄像头预览角窗（v0.12 赛博边框） ==================== */
+    #webcamWrap {
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 200px;
+      height: 60px;
+      border: 1px solid var(--cyber-cyan-soft);
+      border-radius: 0;
+      overflow: hidden;
+      z-index: 10;
+      background: #000;
+      box-shadow:
+        0 0 12px rgba(0, 229, 255, 0.35),
+        inset 0 0 8px rgba(0, 229, 255, 0.1);
+      opacity: 0;
+      transition: opacity 0.6s ease;
+    }
+    #webcamWrap.show { opacity: 0.55; }
+    #webcam {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+    #handCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      transform: scaleX(-1);
+    }
+    #webcamLabel {
+      position: absolute;
+      top: 4px;
+      left: 8px;
+      color: var(--cyber-cyan);
+      font-family: "VT323", monospace;
+      font-size: 13px;
+      letter-spacing: 0.15em;
+      pointer-events: none;
+      text-shadow: 0 0 4px rgba(0, 229, 255, 0.7);
+    }
+
+    /* ==================== 右下角小字 ==================== */
+    #brandBottom {
+      position: fixed;
+      bottom: 36px;
+      right: 40px;
+      z-index: 10;
+      color: #2c4060;
+      font-size: 10px;
+      letter-spacing: 0.3em;
+      pointer-events: none;
+      text-align: right;
+      line-height: 1.7;
+    }
+
+    /* ==================== 流体装饰层（READY 阶段的全屏代码瀑布 + 拓扑图） ==================== */
+    /* 设计：8 道代码瀑布全屏分布，速度/方向交替错落。
+       整层用 radial-gradient mask 在中央给 logo 挖一个椭圆"光区"，
+       让 logo 浮于代码丛林之上又不破坏代码全屏蔓延感。 */
+    #codeRail, #topology {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 1.8s ease-out;
+    }
+    #codeRail   { z-index: 8; }
+    #topology   { z-index: 7; }
+
+    /* 全屏代码瀑布 + 中央椭圆光区给 logo 让 C 位 */
+    #codeRail {
+      -webkit-mask-image: radial-gradient(
+        ellipse 420px 320px at center,
+        transparent 18%,
+        rgba(0,0,0,0.35) 45%,
+        rgba(0,0,0,0.85) 75%,
+        #000 100%
+      );
+              mask-image: radial-gradient(
+        ellipse 420px 320px at center,
+        transparent 18%,
+        rgba(0,0,0,0.35) 45%,
+        rgba(0,0,0,0.85) 75%,
+        #000 100%
+      );
+    }
+
+    body.stage-ready #codeRail  { opacity: 1;   transition-delay: 0.5s; }
+    body.stage-ready #topology  { opacity: 0.72; transition-delay: 0.8s; }
+
+    .code-stream {
+      position: absolute;
+      top: -50%;
+      width: 12vw;
+      min-width: 200px;
+      max-width: 280px;
+      height: 240%;
+      font-family: "JetBrains Mono", "SF Mono", "Source Code Pro", Consolas, monospace;
+      font-size: 11.5px;
+      line-height: 1.65;
+      letter-spacing: 0.02em;
+      color: rgba(0, 229, 255, 0.45);   /* 主基调：电青 */
+      text-shadow: 0 0 4px rgba(0, 229, 255, 0.18);
+      white-space: pre;
+      will-change: transform;
+    }
+    /* 8 道全屏分布：屏宽八等分 (0%/12.5%/.../87.5%) 起跳点，速度/方向错开 */
+    .cs-1 { left: 0%;    animation: codeFlow 22s linear infinite; }
+    .cs-2 { left: 12%;   animation: codeFlow 28s linear infinite reverse; animation-delay: -5s; color: rgba(0, 229, 255, 0.32); }
+    .cs-3 { left: 25%;   animation: codeFlow 26s linear infinite; animation-delay: -3s; }
+    .cs-4 { left: 37.5%; animation: codeFlow 31s linear infinite reverse; animation-delay: -8s; color: rgba(0, 229, 255, 0.30); }
+    .cs-5 { left: 50%;   animation: codeFlow 24s linear infinite; animation-delay: -2s; }
+    .cs-6 { left: 62.5%; animation: codeFlow 29s linear infinite reverse; animation-delay: -6s; color: rgba(0, 229, 255, 0.30); }
+    .cs-7 { left: 75%;   animation: codeFlow 27s linear infinite; animation-delay: -4s; }
+    .cs-8 { left: 87%;   animation: codeFlow 33s linear infinite reverse; animation-delay: -9s; color: rgba(0, 229, 255, 0.32); }
+
+    @keyframes codeFlow {
+      from { transform: translateY(0); }
+      to   { transform: translateY(-50%); }
+    }
+    .code-line {
+      display: block;
+      transition: color 0.6s ease;
+    }
+    /* 电黄高亮——15%，关键事件 / 业务高亮 */
+    .code-line.gold {
+      color: var(--cyber-yellow);
+      text-shadow:
+        0 0 6px rgba(255, 230, 0, 0.65),
+        0 0 14px rgba(255, 230, 0, 0.25);
+    }
+    /* 洋红——12%，冷暖对比 */
+    .code-line.bright {
+      color: var(--cyber-magenta);
+      text-shadow:
+        0 0 5px rgba(255, 45, 126, 0.55),
+        0 0 12px rgba(255, 45, 126, 0.2);
+    }
+    /* 酸绿——"成功标记" ✓ 行 60% 概率染绿 */
+    .code-line.ok {
+      color: var(--cyber-green);
+      text-shadow:
+        0 0 5px rgba(0, 255, 148, 0.5),
+        0 0 12px rgba(0, 255, 148, 0.18);
+    }
+
+    /* SVG 拓扑：连线"通电" + 金色节点闪烁 */
+    #topology svg { width: 100%; height: 100%; display: block; }
+    #topology .link {
+      fill: none;
+      stroke: rgba(140, 200, 255, 0.35);
+      stroke-width: 0.7;
+    }
+    body.stage-ready #topology .link {
+      animation: linkDraw 2.6s ease-out forwards;
+    }
+    @keyframes linkDraw {
+      from { stroke-dashoffset: var(--len); }
+      to   { stroke-dashoffset: 0; }
+    }
+    #topology .node {
+      fill: #d4a040;
+      opacity: 0;
+      filter: drop-shadow(0 0 4px rgba(212, 160, 64, 0.85));
+    }
+    body.stage-ready #topology .node {
+      animation: nodeOn 0.4s ease-out forwards,
+                 nodeFlicker 4.2s ease-in-out infinite alternate;
+    }
+    @keyframes nodeOn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    @keyframes nodeFlicker {
+      0%   { opacity: 0.55; }
+      50%  { opacity: 1.0; }
+      100% { opacity: 0.45; }
+    }
+    /* 节点光环（次要：仅每 3 个加一个慢呼吸） */
+    #topology .node.big {
+      r: 4;
+    }
+
+    /* ==================== 四角赛博 HUD ==================== */
+    /* 每角一个 L 形准星 + 业务文字（系统名/版本/UID/状态/通道/时钟）
+       UID 与 CRC 由 JS 每帧随机跳变，造"系统活着"的感觉 */
+    .hud-corner {
+      position: fixed;
+      z-index: 9;
+      /* VT323：经典 CRT 终端字体，赛博朋克标配 */
+      font-family: "VT323", "JetBrains Mono", Consolas, monospace;
+      font-size: 15px;
+      letter-spacing: 0.06em;
+      color: var(--cyber-cyan-soft);
+      pointer-events: none;
+      opacity: 1;
+      line-height: 1.6;
+    }
+    .hud-tl { top: 24px; left: 26px; }
+    .hud-tr { top: 24px; right: 26px; text-align: right; }
+    .hud-bl { bottom: 24px; left: 26px; }
+    .hud-br { bottom: 24px; right: 26px; text-align: right; }
+
+    .hud-cross {
+      display: block;
+      width: 18px; height: 18px;
+      margin-bottom: 8px;
+      stroke: var(--cyber-cyan);
+      stroke-width: 1.4;
+      fill: none;
+      filter: drop-shadow(0 0 5px rgba(0, 229, 255, 0.8));
+    }
+    .hud-tr .hud-cross { margin-left: auto; transform: scaleX(-1); }
+    .hud-bl .hud-cross { transform: scaleY(-1); }
+    .hud-br .hud-cross { margin-left: auto; transform: scale(-1, -1); }
+
+    .hud-line .k {
+      color: rgba(0, 229, 255, 0.35);
+      margin-right: 6px;
+    }
+    .hud-line .v {
+      color: rgba(180, 240, 255, 0.92);
+      text-shadow: 0 0 6px rgba(0, 229, 255, 0.4);
+    }
+    .hud-line .v.magenta { color: var(--cyber-magenta); text-shadow: 0 0 6px rgba(255, 45, 126, 0.5); }
+    .hud-line .v.yellow  { color: var(--cyber-yellow);  text-shadow: 0 0 6px rgba(255, 230, 0, 0.55); }
+    .hud-line .v.green   { color: var(--cyber-green);   text-shadow: 0 0 6px rgba(0, 255, 148, 0.5); }
+    .hud-line .v.flicker { animation: hudFlicker 1.6s steps(8) infinite; }
+    @keyframes hudFlicker {
+      0%, 80%, 100% { opacity: 1; }
+      83%, 86%      { opacity: 0.3; }
+    }
+
+    /* spectrum 频谱条：右下角 16 根条，模拟"音频/状态"分析仪 */
+    .hud-spectrum {
+      display: flex;
+      gap: 2px;
+      align-items: flex-end;
+      height: 22px;
+      margin-top: 6px;
+      justify-content: flex-end;
+    }
+    .hud-spectrum .bar {
+      width: 3px;
+      background: linear-gradient(to top, var(--cyber-cyan), var(--cyber-magenta));
+      animation: barPulse 0.55s ease-in-out infinite alternate;
+      box-shadow: 0 0 4px rgba(0, 229, 255, 0.4);
+    }
+    .hud-spectrum .bar:nth-child(1)  { animation-duration: 0.38s; }
+    .hud-spectrum .bar:nth-child(2)  { animation-duration: 0.51s; }
+    .hud-spectrum .bar:nth-child(3)  { animation-duration: 0.67s; }
+    .hud-spectrum .bar:nth-child(4)  { animation-duration: 0.42s; }
+    .hud-spectrum .bar:nth-child(5)  { animation-duration: 0.59s; }
+    .hud-spectrum .bar:nth-child(6)  { animation-duration: 0.73s; }
+    .hud-spectrum .bar:nth-child(7)  { animation-duration: 0.45s; }
+    .hud-spectrum .bar:nth-child(8)  { animation-duration: 0.62s; }
+    .hud-spectrum .bar:nth-child(9)  { animation-duration: 0.48s; }
+    .hud-spectrum .bar:nth-child(10) { animation-duration: 0.69s; }
+    .hud-spectrum .bar:nth-child(11) { animation-duration: 0.40s; }
+    .hud-spectrum .bar:nth-child(12) { animation-duration: 0.56s; }
+    .hud-spectrum .bar:nth-child(13) { animation-duration: 0.71s; }
+    .hud-spectrum .bar:nth-child(14) { animation-duration: 0.49s; }
+    .hud-spectrum .bar:nth-child(15) { animation-duration: 0.64s; }
+    .hud-spectrum .bar:nth-child(16) { animation-duration: 0.43s; }
+    @keyframes barPulse {
+      from { height: 25%; }
+      to   { height: 100%; }
+    }
+
+    /* v0.14：左右侧栏整体隐藏（用户反馈"球被遮、画面太乱"）
+       想恢复时把这行注释掉即可；DOM 与 JS 数据驱动逻辑都仍保留 */
+    .side-rail { display: none !important; }
+
+    /* ==================== 左右两侧装饰侧栏（J · 数字地球标志性侧栏卡片） ==================== */
+    /* 屏幕左/右各 3 张卡片：身份卡 + 雷达/频谱 + 实时日志/告警。
+       和四角 HUD 互补——四角讲"身份与全局"，侧栏讲"实时数据与拓扑"。
+       中部留空给粒子球 + logo C 位。 */
+    .side-rail {
+      position: fixed;
+      top: 200px;            /* 让出 hud-tl/hud-tr 的高度 */
+      bottom: 200px;         /* 让出 hud-bl/hud-br + boot sequence */
+      width: 240px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 12px;
+      pointer-events: none;
+      font-family: "VT323", "JetBrains Mono", monospace;
+      color: var(--cyber-cyan);
+      animation: railFadeIn 1.4s ease-out;
+    }
+    .side-rail-l { left: 16px; }
+    .side-rail-r { right: 16px; }
+    @keyframes railFadeIn {
+      from { opacity: 0; transform: translateX(-8px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    .side-rail-r { animation-name: railFadeInR; }
+    @keyframes railFadeInR {
+      from { opacity: 0; transform: translateX(8px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    /* ---- 单张卡片：装甲化边框 + corner cut + 头部信息条 ---- */
+    .side-card {
+      position: relative;
+      padding: 8px 12px 10px;
+      background:
+        linear-gradient(180deg, rgba(0, 24, 36, 0.55), rgba(0, 12, 24, 0.85));
+      border: 1px solid rgba(0, 229, 255, 0.28);
+      box-shadow:
+        inset 0 0 12px rgba(0, 229, 255, 0.06),
+        0 0 14px rgba(0, 229, 255, 0.08);
+      backdrop-filter: blur(4px);
+      /* 左右上下 8px 切角，让卡片像被激光切过的装甲板 */
+      clip-path: polygon(
+        0 8px, 8px 0,
+        calc(100% - 8px) 0, 100% 8px,
+        100% calc(100% - 8px), calc(100% - 8px) 100%,
+        8px 100%, 0 calc(100% - 8px));
+    }
+    .side-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0;
+      width: 14px; height: 1px;
+      background: var(--cyber-yellow);
+      box-shadow: 0 0 6px rgba(255, 230, 0, 0.8);
+    }
+    .side-card::after {
+      content: '';
+      position: absolute;
+      bottom: 0; right: 0;
+      width: 14px; height: 1px;
+      background: var(--cyber-magenta);
+      box-shadow: 0 0 6px rgba(255, 45, 126, 0.8);
+    }
+
+    /* ---- 卡片头：索引号 + 标题 + 状态点 ---- */
+    .card-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      padding-bottom: 6px;
+      margin-bottom: 6px;
+      border-bottom: 1px dashed rgba(0, 229, 255, 0.22);
+    }
+    .card-head .card-idx {
+      color: var(--cyber-magenta);
+      font-weight: 700;
+      text-shadow: 0 0 5px rgba(255, 45, 126, 0.6);
+    }
+    .card-head .card-title {
+      flex: 1;
+      color: var(--cyber-cyan);
+      text-shadow: 0 0 5px rgba(0, 229, 255, 0.55);
+    }
+    .card-head .card-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--cyber-yellow);
+      box-shadow: 0 0 6px var(--cyber-yellow);
+    }
+    .card-head .card-dot.live   { animation: dotLive 1.4s ease-in-out infinite; }
+    .card-head .card-dot.green  { background: var(--cyber-green);   box-shadow: 0 0 6px var(--cyber-green);   }
+    .card-head .card-dot.magenta{ background: var(--cyber-magenta); box-shadow: 0 0 6px var(--cyber-magenta); }
+    @keyframes dotLive {
+      0%, 100% { opacity: 0.35; }
+      50%      { opacity: 1.0; }
+    }
+    .card-foot {
+      margin-top: 6px;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      color: rgba(0, 229, 255, 0.55);
+    }
+    .card-foot .cyan    { color: var(--cyber-cyan);    text-shadow: 0 0 5px rgba(0, 229, 255, 0.5); }
+    .card-foot .yellow  { color: var(--cyber-yellow);  text-shadow: 0 0 5px rgba(255, 230, 0, 0.5); }
+
+    /* ---- A · TELEMETRY：5 根渐变 bar 模拟系统资源 ---- */
+    .telemetry { display: flex; flex-direction: column; gap: 4px; }
+    .telem-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      letter-spacing: 0.08em;
+    }
+    .telem-row .tk {
+      width: 36px;
+      color: rgba(0, 229, 255, 0.65);
+    }
+    .telem-row .tbar {
+      flex: 1;
+      height: 6px;
+      background: rgba(0, 229, 255, 0.1);
+      border: 1px solid rgba(0, 229, 255, 0.2);
+      position: relative;
+      overflow: hidden;
+    }
+    .telem-row .tfill {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg,
+        var(--cyber-cyan)   0%,
+        var(--cyber-yellow) 70%,
+        var(--cyber-magenta) 100%);
+      box-shadow: 0 0 6px rgba(0, 229, 255, 0.55);
+      transition: width 0.4s linear;
+    }
+    .telem-row .tv {
+      width: 28px;
+      text-align: right;
+      color: var(--cyber-yellow);
+      text-shadow: 0 0 4px rgba(255, 230, 0, 0.5);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ---- B · RADAR MINI：方框内的扫描雷达 + 3 个跟踪光点 ---- */
+    .radar-mini {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      margin: 4px 0;
+      border: 1px solid rgba(0, 229, 255, 0.25);
+      background:
+        radial-gradient(ellipse at center,
+          rgba(0, 229, 255, 0.08) 0%,
+          rgba(0, 24, 36, 0.85) 70%);
+      overflow: hidden;
+    }
+    .radar-mini .rm-grid {
+      position: absolute; inset: 0;
+      background:
+        repeating-linear-gradient(0deg,  transparent 0 19%, rgba(0,229,255,0.07) 19% 20%),
+        repeating-linear-gradient(90deg, transparent 0 19%, rgba(0,229,255,0.07) 19% 20%);
+    }
+    .radar-mini .rm-cross {
+      position: absolute;
+      background: rgba(0, 229, 255, 0.3);
+    }
+    .radar-mini .rm-cross.h { top: 50%; left: 6%; right: 6%; height: 1px; }
+    .radar-mini .rm-cross.v { left: 50%; top: 6%; bottom: 6%; width: 1px; }
+    .radar-mini .rm-ring {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      border: 1px solid rgba(0, 229, 255, 0.4);
+      border-radius: 50%;
+    }
+    .radar-mini .rm-ring.r1 { width: 28%; height: 28%; }
+    .radar-mini .rm-ring.r2 { width: 60%; height: 60%; }
+    .radar-mini .rm-sweep {
+      position: absolute; top: 50%; left: 50%;
+      width: 50%; height: 50%;
+      margin-top: -25%; margin-left: 0;
+      background: conic-gradient(from 0deg,
+        rgba(0, 229, 255, 0.8) 0deg,
+        rgba(0, 229, 255, 0.0) 60deg,
+        transparent 360deg);
+      transform-origin: 0% 50%;
+      animation: rmSweep 3.8s linear infinite;
+      pointer-events: none;
+      mix-blend-mode: screen;
+    }
+    @keyframes rmSweep {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    .radar-mini .rm-blip {
+      position: absolute;
+      width: 5px; height: 5px;
+      background: var(--cyber-yellow);
+      border-radius: 50%;
+      box-shadow: 0 0 6px var(--cyber-yellow), 0 0 14px rgba(255, 230, 0, 0.6);
+      animation: rmBlip 1.6s ease-in-out infinite;
+    }
+    .radar-mini .rm-blip:nth-child(7) { animation-delay: 0.4s;  background: var(--cyber-magenta); box-shadow: 0 0 6px var(--cyber-magenta); }
+    .radar-mini .rm-blip:nth-child(8) { animation-delay: 0.9s;  background: var(--cyber-green);   box-shadow: 0 0 6px var(--cyber-green); }
+    @keyframes rmBlip {
+      0%, 100% { opacity: 0.3; transform: scale(0.7); }
+      50%      { opacity: 1.0; transform: scale(1.2); }
+    }
+
+    /* ---- C · 警示三角：SVG + 文字标签 ---- */
+    .warn-tri {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 4px 0;
+    }
+    .warn-tri .warn-svg {
+      width: 44px;
+      flex-shrink: 0;
+      animation: warnPulse 1.4s ease-in-out infinite;
+    }
+    .warn-tri .warn-svg polygon {
+      fill: rgba(255, 230, 0, 0.12);
+      stroke: var(--cyber-yellow);
+      stroke-width: 2;
+      filter: drop-shadow(0 0 4px rgba(255, 230, 0, 0.7));
+    }
+    .warn-tri .warn-svg text {
+      fill: var(--cyber-yellow);
+      font-family: "Orbitron", monospace;
+      font-weight: 900;
+      font-size: 28px;
+      filter: drop-shadow(0 0 4px rgba(255, 230, 0, 0.9));
+    }
+    @keyframes warnPulse {
+      0%, 100% { opacity: 0.65; }
+      50%      { opacity: 1.0; }
+    }
+    .warn-text { font-size: 13px; letter-spacing: 0.12em; line-height: 1.4; }
+    .warn-text .warn-l1 { color: var(--cyber-yellow); text-shadow: 0 0 5px rgba(255, 230, 0, 0.5); }
+    .warn-text .warn-l2.green { color: var(--cyber-green);  text-shadow: 0 0 5px rgba(0, 255, 148, 0.5); }
+
+    /* ---- D · CHANNELS：4 路通道状态 ---- */
+    .chn-list { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+    .chn-row {
+      display: flex; align-items: center; gap: 6px;
+      letter-spacing: 0.08em;
+    }
+    .chn-row .chn-id { color: var(--cyber-yellow); width: 36px; }
+    .chn-row .chn-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--cyber-green);
+      box-shadow: 0 0 6px var(--cyber-green);
+      animation: dotLive 1.2s ease-in-out infinite;
+    }
+    .chn-row .chn-dot.warn { background: var(--cyber-yellow); box-shadow: 0 0 6px var(--cyber-yellow); }
+    .chn-row .chn-status { flex: 1; color: var(--cyber-green); text-shadow: 0 0 4px rgba(0, 255, 148, 0.4); }
+    .chn-row .chn-status.yellow { color: var(--cyber-yellow); text-shadow: 0 0 4px rgba(255, 230, 0, 0.5); }
+    .chn-row .chn-model { color: rgba(0, 229, 255, 0.55); }
+
+    /* ---- E · SPECTRUM bar chart：24 根高度随机 ---- */
+    .bar-chart {
+      display: flex;
+      gap: 2px;
+      align-items: flex-end;
+      height: 56px;
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(0, 229, 255, 0.18);
+    }
+    .bar-chart .bc-bar {
+      flex: 1;
+      height: 30%;
+      background: linear-gradient(to top,
+        var(--cyber-magenta) 0%,
+        var(--cyber-yellow)  50%,
+        var(--cyber-cyan)    100%);
+      box-shadow: 0 0 4px rgba(0, 229, 255, 0.5);
+      transition: height 0.25s ease;
+    }
+
+    /* ---- F · EVENT LOG：滚动日志条 ---- */
+    .event-log {
+      font-size: 13px;
+      line-height: 1.55;
+      max-height: 130px;
+      overflow: hidden;
+      letter-spacing: 0.06em;
+    }
+    .event-log .ev-row {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      opacity: 0;
+      animation: evRowIn 0.4s ease-out forwards;
+    }
+    @keyframes evRowIn { to { opacity: 1; } }
+    .event-log .ev-ts   { color: rgba(0, 229, 255, 0.55); margin-right: 4px; }
+    .event-log .ev-tag  { color: var(--cyber-yellow);     margin-right: 4px; }
+    .event-log .ev-tag.ok    { color: var(--cyber-green); }
+    .event-log .ev-tag.warn  { color: var(--cyber-yellow); }
+    .event-log .ev-tag.ng    { color: var(--cyber-magenta); }
+    .event-log .ev-msg  { color: rgba(0, 229, 255, 0.75); }
+
+    /* glitch 闪烁时整条侧栏跟着闪一下，强化"屏幕被信号干扰"的感觉 */
+    body.glitch .side-rail { filter: hue-rotate(20deg) brightness(1.15); }
+
+    /* ==================== 启动序列叙事 #bootSequence ==================== */
+    /* 屏幕底部一行 "BOOT 03/12 · loading model · yolov8m-bolt-v3.pt"
+       12 个阶段每 800ms 切换，循环往复；READY 后淡出。
+       叙事感：让等待变成"机器在 boot"，而不是空虚的 loading。 */
+    #bootSequence {
+      position: fixed;
+      bottom: 200px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      font-family: "VT323", "JetBrains Mono", monospace;
+      font-size: 18px;
+      letter-spacing: 0.08em;
+      color: var(--cyber-cyan);
+      text-shadow:
+        0 0 6px rgba(0, 229, 255, 0.6),
+        0 0 14px rgba(0, 229, 255, 0.25);
+      white-space: nowrap;
+      pointer-events: none;
+      transition: opacity 0.8s ease-out;
+    }
+    #bootSequence .boot-tag {
+      color: var(--cyber-yellow);
+      margin-right: 14px;
+      text-shadow:
+        0 0 6px rgba(255, 230, 0, 0.7),
+        0 0 14px rgba(255, 230, 0, 0.3);
+    }
+    #bootSequence .boot-ok {
+      color: var(--cyber-green);
+      margin-left: 10px;
+      text-shadow:
+        0 0 5px rgba(0, 255, 148, 0.7),
+        0 0 12px rgba(0, 255, 148, 0.3);
+    }
+    #bootSequence .boot-cursor {
+      display: inline-block;
+      margin-left: 6px;
+      animation: cursorBlink 0.55s steps(2) infinite;
+      color: var(--cyber-cyan);
+    }
+    @keyframes cursorBlink { to { opacity: 0; } }
+    /* READY 时整条 boot sequence 淡出，舞台让给 logo */
+    body.stage-ready #bootSequence { opacity: 0; }
+
+    /* 顶部底部 thin neon 装饰线（屏幕边缘的"装甲条"） */
+    .neon-edge {
+      position: fixed;
+      left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg,
+        transparent 0%,
+        var(--cyber-cyan) 20%,
+        var(--cyber-cyan) 80%,
+        transparent 100%);
+      box-shadow: 0 0 8px rgba(0, 229, 255, 0.6);
+      z-index: 9;
+      opacity: 0.85;
+    }
+    .neon-edge.top    { top: 0; }
+    .neon-edge.bottom { bottom: 0; }
+
+    /* ==================== 原有 HUD 在 READY 阶段统一淡出 ==================== */
+    #brandTop, #brandBottom, #hint, #webcamWrap {
+      transition: opacity 1.0s ease;
+    }
+    body.stage-ready #brandTop,
+    body.stage-ready #brandBottom,
+    body.stage-ready #hint,
+    body.stage-ready #webcamWrap {
+      opacity: 0 !important;
+      pointer-events: none;
+    }
+
+    /* ==================== 品牌揭示层 ==================== */
+    /* 设计原则：留白 + 字距 + 渐进入场，让 logo 与粒子球的灵魂衔接 */
+    #brandReveal {
+      position: fixed;
+      inset: 0;
+      z-index: 11;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 1.4s ease-out, visibility 0s linear 1.4s;
+      font-family: "PingFang SC", "Noto Sans SC", "Source Han Sans SC",
+                   "Microsoft YaHei", -apple-system, sans-serif;
+    }
+    body.stage-ready #brandReveal {
+      opacity: 1;
+      visibility: visible;
+      transition: opacity 1.4s ease-out, visibility 0s linear 0s;
+    }
+
+    /* 公共：入场状态由 body.stage-ready 触发，各元素 delay 阶梯出现 */
+    #brandReveal > * {
+      opacity: 0;
+      transform: translateY(14px);
+      transition: opacity 1.0s ease-out, transform 1.0s ease-out;
+    }
+    body.stage-ready #brandReveal > * {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* 阶梯延迟：radar → zh → en → tag-zh → tag-en → enter */
+    body.stage-ready .reveal-radar  { transition-delay: 0.05s; }
+    body.stage-ready .reveal-zh     { transition-delay: 0.30s; }
+    body.stage-ready .reveal-en     { transition-delay: 0.55s; }
+    body.stage-ready .reveal-tag-zh { transition-delay: 0.80s; }
+    body.stage-ready .reveal-tag-en { transition-delay: 0.95s; }
+    body.stage-ready .reveal-loader { transition-delay: 1.30s; }
+
+    /* ---------- 雷达扫描圈（替代原细圆环） ---------- */
+    /* 三层同心圆 + conic-gradient 扫描臂 + 十字刻度 + 中央原点
+       视觉等同雷达 PPI（plan position indicator），传达"系统扫描中" */
+    .reveal-radar {
+      position: relative;
+      width: 110px;
+      height: 110px;
+      margin-bottom: 38px;
+    }
+    .radar-ring {
+      position: absolute;
+      top: 50%; left: 50%;
+      border-radius: 50%;
+      border: 1px solid rgba(0, 229, 255, 0.35);
+      transform: translate(-50%, -50%);
+    }
+    .radar-ring.r1 { width: 110px; height: 110px; border-color: rgba(0, 229, 255, 0.45); }
+    .radar-ring.r2 { width: 74px;  height: 74px;  border-color: rgba(0, 229, 255, 0.28); border-style: dashed; }
+    .radar-ring.r3 { width: 38px;  height: 38px;  border-color: rgba(0, 229, 255, 0.22); }
+    /* 扫描臂：conic-gradient 一段渐变的扇形，旋转起来像雷达扫描 */
+    .radar-sweep {
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      background: conic-gradient(
+        from 0deg,
+        rgba(0, 229, 255, 0.0)  0deg,
+        rgba(0, 229, 255, 0.45) 50deg,
+        rgba(0, 229, 255, 0.0)  90deg,
+        rgba(0, 229, 255, 0.0) 360deg
+      );
+      animation: radarSpin 2.4s linear infinite;
+      -webkit-mask-image: radial-gradient(circle, #000 65%, transparent 100%);
+              mask-image: radial-gradient(circle, #000 65%, transparent 100%);
+    }
+    @keyframes radarSpin { to { transform: rotate(360deg); } }
+    /* 十字刻度 */
+    .radar-cross {
+      position: absolute;
+      top: 50%; left: 50%;
+      background: rgba(0, 229, 255, 0.4);
+    }
+    .radar-cross.h { width: 110px; height: 1px; transform: translate(-50%, -0.5px); }
+    .radar-cross.v { width: 1px; height: 110px; transform: translate(-0.5px, -50%); }
+    /* 中央原点 + 外发光 */
+    .reveal-radar::after {
+      content: '';
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 5px; height: 5px;
+      background: var(--cyber-cyan);
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      box-shadow:
+        0 0 8px var(--cyber-cyan),
+        0 0 18px rgba(0, 229, 255, 0.6);
+    }
+
+    /* ---------- 主标 中文「天军」+ chromatic aberration ---------- */
+    .reveal-zh {
+      font-size: 72px;
+      font-weight: 200;
+      letter-spacing: 0.38em;
+      padding-left: 0.38em;
+      line-height: 1;
+      margin-bottom: 28px;
+      color: #ffffff;
+      /* 双向色差：洋红往左、青往右，模拟 CRT chromatic aberration */
+      text-shadow:
+        -2px 0 0 rgba(255, 45, 126, 0.65),
+         2px 0 0 rgba(0, 229, 255, 0.65),
+         0 0 18px rgba(0, 229, 255, 0.35);
+    }
+    /* logo 持续微抖：和 glitch 频率不同的"呼吸式"位移，让画面有生命感 */
+    body.stage-ready .reveal-zh {
+      animation: zhBreath 4.2s ease-in-out infinite;
+    }
+    @keyframes zhBreath {
+      0%, 100% { text-shadow:
+        -2px 0 0 rgba(255, 45, 126, 0.65),
+         2px 0 0 rgba(0, 229, 255, 0.65),
+         0 0 18px rgba(0, 229, 255, 0.35); }
+      50%      { text-shadow:
+        -1.5px 0 0 rgba(255, 45, 126, 0.85),
+         1.5px 0 0 rgba(0, 229, 255, 0.85),
+         0 0 26px rgba(0, 229, 255, 0.55); }
+    }
+
+    /* ---------- 副标 英文「TYENJUN」（Orbitron 未来 sans） ---------- */
+    .reveal-en {
+      font-family: "Orbitron", "JetBrains Mono", monospace;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.55em;
+      padding-left: 0.55em;
+      color: var(--cyber-cyan);
+      margin-bottom: 32px;
+      text-shadow:
+        0 0 8px rgba(0, 229, 255, 0.95),
+        0 0 22px rgba(0, 229, 255, 0.5);
+    }
+
+    /* ---------- Tagline 中文 + 英文 ---------- */
+    .reveal-tag-zh {
+      font-size: 12px;
+      letter-spacing: 0.55em;
+      padding-left: 0.55em;
+      color: rgba(255, 45, 126, 0.78);
+      text-shadow: 0 0 6px rgba(255, 45, 126, 0.35);
+      margin-bottom: 8px;
+    }
+    .reveal-tag-en {
+      font-family: "Orbitron", "JetBrains Mono", monospace;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.45em;
+      padding-left: 0.45em;
+      color: rgba(0, 229, 255, 0.75);
+      text-shadow: 0 0 5px rgba(0, 229, 255, 0.4);
+      margin-bottom: 48px;
+    }
+
+    /* ---------- 加载进度条（替代原按钮，仿真启动加载） ---------- */
+    /* 6 秒内从 0% 到 100%，11 个真实加载阶段轮换显示；满后自动跳转主界面。
+       上：阶段标签 + 百分比；中：渐变进度条；下：当前正在加载的内容。 */
+    .reveal-loader {
+      width: 420px;
+      max-width: 80vw;
+      font-family: "VT323", "JetBrains Mono", monospace;
+      pointer-events: none;
+    }
+    .loader-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 14px;
+      letter-spacing: 0.22em;
+      margin-bottom: 8px;
+    }
+    .loader-stage {
+      color: var(--cyber-yellow);
+      text-shadow:
+        0 0 6px rgba(255, 230, 0, 0.7),
+        0 0 14px rgba(255, 230, 0, 0.3);
+    }
+    .loader-pct {
+      color: var(--cyber-cyan);
+      text-shadow:
+        0 0 6px rgba(0, 229, 255, 0.7),
+        0 0 14px rgba(0, 229, 255, 0.3);
+      font-variant-numeric: tabular-nums;
+    }
+    .loader-bar {
+      height: 3px;
+      background: rgba(0, 229, 255, 0.12);
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(0, 229, 255, 0.25);
+      box-shadow: inset 0 0 4px rgba(0, 229, 255, 0.15);
+    }
+    .loader-fill {
+      position: absolute;
+      top: 0; left: 0; bottom: 0;
+      width: 0%;
+      background: linear-gradient(90deg,
+        var(--cyber-cyan)   0%,
+        var(--cyber-yellow) 70%,
+        var(--cyber-magenta) 100%);
+      box-shadow:
+        0 0 8px rgba(0, 229, 255, 0.85),
+        0 0 16px rgba(255, 230, 0, 0.5);
+      transition: width 0.2s linear;
+    }
+    /* 进度条右侧前端光点，扫过去带轨迹感 */
+    .loader-fill::after {
+      content: '';
+      position: absolute;
+      right: -1px; top: -2px; bottom: -2px;
+      width: 3px;
+      background: #ffffff;
+      box-shadow: 0 0 12px #ffffff, 0 0 24px var(--cyber-yellow);
+    }
+    .loader-step {
+      margin-top: 10px;
+      font-size: 14px;
+      letter-spacing: 0.08em;
+      color: rgba(0, 229, 255, 0.75);
+      text-shadow: 0 0 5px rgba(0, 229, 255, 0.35);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    /* 加载完成时的视觉爆点：整个 loader 闪一下电黄 */
+    .reveal-loader.complete .loader-stage { color: var(--cyber-green); }
+    .reveal-loader.complete .loader-pct   { color: var(--cyber-green); text-shadow: 0 0 8px rgba(0, 255, 148, 0.8); }
+    .reveal-loader.complete .loader-fill  {
+      background: var(--cyber-green);
+      box-shadow: 0 0 18px rgba(0, 255, 148, 0.95);
+    }
+    .reveal-loader.complete .loader-step  { color: var(--cyber-green); }
+
+    /* ==================== Dev panel（按 D 切换） ==================== */
+    #devPanel {
+      position: fixed;
+      top: 36px;
+      right: 40px;
+      z-index: 10;
+      padding: 14px 20px;
+      background: rgba(0, 12, 24, 0.65);
+      border: 1px solid rgba(80, 160, 220, 0.2);
+      border-radius: 4px;
+      color: #88c8ff;
+      font-size: 10px;
+      line-height: 1.7;
+      letter-spacing: 0.1em;
+      pointer-events: none;
+      display: none;
+      backdrop-filter: blur(8px);
+      min-width: 240px;
+    }
+    #devPanel.show { display: block; }
+    #devPanel .label { color: #4a6890; display: inline-block; width: 80px; }
+    #devPanel .value { color: #aedcff; }
+    #devPanel .value.warn { color: #ffcc66; }
+    #devPanel .value.ok   { color: #80ffaa; }
+    #devPanel .value.dim  { color: #506890; }
+
+    /* v0.15 · 音效开关 */
+    #audioToggle {
+      position: fixed;
+      bottom: 14px;
+      left: 14px;
+      z-index: 20;
+      padding: 6px 12px;
+      font-family: "VT323", monospace;
+      font-size: 15px;
+      letter-spacing: 0.12em;
+      color: var(--cyber-cyan);
+      background: rgba(0, 24, 36, 0.75);
+      border: 1px solid rgba(0, 229, 255, 0.35);
+      cursor: pointer;
+      backdrop-filter: blur(4px);
+      text-shadow: 0 0 6px rgba(0, 229, 255, 0.5);
+      transition: border-color 0.2s, color 0.2s;
+    }
+    #audioToggle:hover {
+      border-color: var(--cyber-cyan);
+      color: #fff;
+    }
+    #audioToggle.muted {
+      color: rgba(0, 229, 255, 0.35);
+      border-color: rgba(0, 229, 255, 0.15);
+      text-shadow: none;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ==================== Three.js 渲染层 ==================== -->
+  <canvas id="three"></canvas>
+
+  <!-- ==================== 左上角品牌字 ==================== -->
+  <div id="brandTop">
+    <div class="title">粒子 · 幻境<span class="ver">v0.3</span></div>
+    <div class="sub" id="subText">LINK ESTABLISHED</div>
+    <div class="line"><span class="k">▸ 后端状态</span><span class="v dim" id="subBackend">待机</span></div>
+    <div class="line"><span class="k">▸ 输入源</span>  <span class="v dim" id="subInput">检测中</span></div>
+  </div>
+
+  <!-- ==================== 启动序列叙事（IDLE/HOVER/COLLAPSE 显示） ==================== -->
+  <div id="bootSequence">
+    <span class="boot-tag" id="bootTag">[BOOT 01/12]</span><span id="bootMsg">mount filesystem ...</span><span class="boot-cursor">_</span>
+  </div>
+
+  <!-- ==================== 摄像头预览 ==================== -->
+  <div id="webcamWrap">
+    <video id="webcam" autoplay muted playsinline></video>
+    <canvas id="handCanvas"></canvas>
+    <div id="webcamLabel">HAND TRACKER</div>
+  </div>
+
+  <!-- ==================== 右下角小字 ==================== -->
+  <div id="brandBottom">
+    NEBULA · LOGIC<br>
+    天 军 · AI 视觉检测
+  </div>
+
+  <div id="devPanel">
+    <div><span class="label">STAGE</span><span class="value" id="hudStage">IDLE</span></div>
+    <div><span class="label">HAND</span><span class="value dim" id="hudHand">--</span></div>
+    <div><span class="label">PINCH</span><span class="value dim" id="hudPinch">--</span></div>
+    <div><span class="label">PARTICLES</span><span class="value" id="hudCount">--</span></div>
+    <div><span class="label">FPS</span><span class="value" id="hudFps">--</span></div>
+    <div><span class="label">GPU TIER</span><span class="value dim" id="hudTier">--</span></div>
+    <div><span class="label">GPU</span><span class="value dim" id="hudGpu">--</span></div>
+  </div>
+
+  <button type="button" id="audioToggle" title="音效开关">♪ AUDIO ON</button>
+
+  <!-- ==================== 流体装饰层（READY 时出现） ==================== -->
+  <!-- 8 道金色代码瀑布全屏分布；整层 radial mask 给中央 logo 让 C 位 -->
+  <div id="codeRail">
+    <div class="code-stream cs-1"></div>
+    <div class="code-stream cs-2"></div>
+    <div class="code-stream cs-3"></div>
+    <div class="code-stream cs-4"></div>
+    <div class="code-stream cs-5"></div>
+    <div class="code-stream cs-6"></div>
+    <div class="code-stream cs-7"></div>
+    <div class="code-stream cs-8"></div>
+  </div>
+
+  <!-- 拓扑图 SVG：节点 + 通电连线，JS 注入 -->
+  <div id="topology">
+    <svg viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+      <g class="topo-group"></g>
+    </svg>
+  </div>
+
+  <!-- ==================== 顶部底部霓虹装甲条 ==================== -->
+  <div class="neon-edge top"></div>
+  <div class="neon-edge bottom"></div>
+
+  <!-- ==================== 四角赛博 HUD ==================== -->
+  <!-- 左上：系统身份（SYS / VER / UID 跳变） -->
+  <div class="hud-corner hud-tl">
+    <svg class="hud-cross" viewBox="0 0 18 18">
+      <polyline points="0,9 0,0 9,0"/>
+      <line x1="0" y1="14" x2="3" y2="14"/>
+    </svg>
+    <div class="hud-line"><span class="k">SYS</span><span class="v">TJ-VISION</span></div>
+    <div class="hud-line"><span class="k">VER</span><span class="v yellow" id="hudVer">v3.8.2</span></div>
+    <div class="hud-line"><span class="k">UID</span><span class="v" id="hudUid">9b3f8a2c</span></div>
+    <div class="hud-line"><span class="k">CRC</span><span class="v magenta" id="hudCrc">0x4F2A</span></div>
+  </div>
+
+  <!-- 右上：通道 / GPU / 推理状态 -->
+  <div class="hud-corner hud-tr">
+    <svg class="hud-cross" viewBox="0 0 18 18">
+      <polyline points="0,9 0,0 9,0"/>
+      <line x1="0" y1="14" x2="3" y2="14"/>
+    </svg>
+    <div class="hud-line"><span class="k">CHN</span><span class="v">04/04 ACTIVE</span></div>
+    <div class="hud-line"><span class="k">GPU</span><span class="v green">cuda:0 · cuda:1</span></div>
+    <div class="hud-line"><span class="k">MEM</span><span class="v" id="hudMem">1.24 / 4.00 GB</span></div>
+    <div class="hud-line"><span class="k">NET</span><span class="v flicker green">ONLINE</span></div>
+  </div>
+
+  <!-- 左下：神经网络 / 模型状态 -->
+  <div class="hud-corner hud-bl">
+    <svg class="hud-cross" viewBox="0 0 18 18">
+      <polyline points="0,9 0,0 9,0"/>
+      <line x1="0" y1="14" x2="3" y2="14"/>
+    </svg>
+    <div class="hud-line"><span class="k">NEURAL</span><span class="v green">ONLINE</span></div>
+    <div class="hud-line"><span class="k">MODEL </span><span class="v">yolov8m-bolt-v3</span></div>
+    <div class="hud-line"><span class="k">FPS   </span><span class="v yellow" id="hudFps2">54.2</span></div>
+    <div class="hud-line"><span class="k">LAT   </span><span class="v" id="hudLat">18.4 ms</span></div>
+  </div>
+
+  <!-- 右下：时钟 + spectrum 频谱条 -->
+  <div class="hud-corner hud-br">
+    <svg class="hud-cross" viewBox="0 0 18 18">
+      <polyline points="0,9 0,0 9,0"/>
+      <line x1="0" y1="14" x2="3" y2="14"/>
+    </svg>
+    <div class="hud-line"><span class="k">TIME</span><span class="v" id="hudTime">14:00:00.000</span></div>
+    <div class="hud-line"><span class="k">SEED</span><span class="v magenta" id="hudSeed">0x7E2A19</span></div>
+    <div class="hud-line"><span class="k">STAT</span><span class="v green">READY ✓</span></div>
+    <div class="hud-spectrum">
+      <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+      <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+      <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+      <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+    </div>
+  </div>
+
+  <!-- ==================== 左侧装饰侧栏（J · 系统状态卡片堆栈） ==================== -->
+  <!-- 留出上下两端给 hud-tl / hud-bl 四行身份信息，中段挂 3 张 cyberpunk 风装饰卡 -->
+  <aside class="side-rail side-rail-l">
+    <!-- A · 系统遥测：5 根渐变 bar 模拟 CPU/GPU/RAM/DISK 占用 -->
+    <div class="side-card">
+      <div class="card-head">
+        <span class="card-idx">A.01</span>
+        <span class="card-title">TELEMETRY</span>
+        <span class="card-dot live"></span>
+      </div>
+      <div class="telemetry">
+        <div class="telem-row"><span class="tk">CPU </span><span class="tbar"><span class="tfill" id="telCpu"  style="width:47%"></span></span><span class="tv" id="telCpuV">047</span></div>
+        <div class="telem-row"><span class="tk">GPU0</span><span class="tbar"><span class="tfill" id="telGpu0" style="width:72%"></span></span><span class="tv" id="telGpu0V">072</span></div>
+        <div class="telem-row"><span class="tk">GPU1</span><span class="tbar"><span class="tfill" id="telGpu1" style="width:89%"></span></span><span class="tv" id="telGpu1V">089</span></div>
+        <div class="telem-row"><span class="tk">RAM </span><span class="tbar"><span class="tfill" id="telRam"  style="width:31%"></span></span><span class="tv" id="telRamV">031</span></div>
+        <div class="telem-row"><span class="tk">DISK</span><span class="tbar"><span class="tfill" id="telDisk" style="width:58%"></span></span><span class="tv" id="telDiskV">058</span></div>
+      </div>
+    </div>
+    <!-- B · 雷达 mini：扫描臂 + 跟踪光点 -->
+    <div class="side-card">
+      <div class="card-head">
+        <span class="card-idx">B.02</span>
+        <span class="card-title">RADAR · MINI</span>
+        <span class="card-dot live"></span>
+      </div>
+      <div class="radar-mini">
+        <div class="rm-grid"></div>
+        <div class="rm-cross h"></div>
+        <div class="rm-cross v"></div>
+        <div class="rm-ring r1"></div>
+        <div class="rm-ring r2"></div>
+        <div class="rm-sweep"></div>
+        <span class="rm-blip" style="top:32%; left:64%"></span>
+        <span class="rm-blip" style="top:58%; left:28%"></span>
+        <span class="rm-blip" style="top:72%; left:71%"></span>
+      </div>
+      <div class="card-foot">TRACKING <span class="yellow">3</span> · SECTOR-7</div>
+    </div>
+    <!-- C · 警示三角 -->
+    <div class="side-card">
+      <div class="card-head">
+        <span class="card-idx">C.03</span>
+        <span class="card-title">FAILSAFE</span>
+        <span class="card-dot live green"></span>
+      </div>
+      <div class="warn-tri">
+        <svg viewBox="0 0 60 54" class="warn-svg">
+          <polygon points="30,4 56,50 4,50" />
+          <text x="30" y="44" text-anchor="middle">!</text>
+        </svg>
+        <div class="warn-text">
+          <div class="warn-l1">ZERO INTRUSION</div>
+          <div class="warn-l2 green">SYSTEM · NOMINAL</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ==================== 右侧装饰侧栏（J · 检测数据卡片堆栈） ==================== -->
+  <aside class="side-rail side-rail-r">
+    <!-- D · 通道矩阵：4 路通道 + yolov8m-bolt-v3 模型 -->
+    <div class="side-card">
+      <div class="card-head">
+        <span class="card-idx">D.04</span>
+        <span class="card-title">CHANNELS</span>
+        <span class="card-dot live"></span>
+      </div>
+      <div class="chn-list">
+        <div class="chn-row"><span class="chn-id">CH01</span><span class="chn-dot ok"></span><span class="chn-status">ACTIVE</span><span class="chn-model">yolov8m</span></div>
+        <div class="chn-row"><span class="chn-id">CH02</span><span class="chn-dot ok"></span><span class="chn-status">ACTIVE</span><span class="chn-model">yolov8m</span></div>
+        <div class="chn-row"><span class="chn-id">CH03</span><span class="chn-dot ok"></span><span class="chn-status">ACTIVE</span><span class="chn-model">yolov8m</span></div>
+        <div class="chn-row"><span class="chn-id">CH04</span><span class="chn-dot warn"></span><span class="chn-status yellow">WARMUP</span><span class="chn-model">yolov8m</span></div>
+      </div>
+    </div>
+    <!-- E · bar chart 频谱（I · HUD 图标系统的核心元素之一） -->
+    <div class="side-card">
+      <div class="card-head">
+        <span class="card-idx">E.05</span>
+        <span class="card-title">SPECTRUM</span>
+        <span class="card-dot live"></span>
+      </div>
+      <div class="bar-chart" id="barChart">
+        <!-- 24 根条，JS 实时更新高度 -->
+        <span class="bc-bar"></span><span class="bc-bar"></span><span class="bc-bar"></span><span class="bc-bar"></span>
+        <span class="bc-bar"></span><span class="bc-bar"></span><span class="bc-bar"></span><span class="bc-bar"></span>
+        <span class="bc-bar"></span><span class="bc-bar"></span><span class="bc-bar"></span><span class="bc-bar"></span>
+        <span class="bc-bar"></span><span class="bc-bar"></span><span class="bc-bar"></span><span class="bc-bar"></span>
+        <span class="bc-bar"></span><span class="bc-bar"></span><span class="bc-bar"></span><span class="bc-bar"></span>
+        <span class="bc-bar"></span><span class="bc-bar"></span><span class="bc-bar"></span><span class="bc-bar"></span>
+      </div>
+      <div class="card-foot">FREQ <span class="cyan">2.4-12.8 kHz</span></div>
+    </div>
+    <!-- F · 实时事件日志 -->
+    <div class="side-card">
+      <div class="card-head">
+        <span class="card-idx">F.06</span>
+        <span class="card-title">EVENTS · LIVE</span>
+        <span class="card-dot live magenta"></span>
+      </div>
+      <div class="event-log" id="eventLog">
+        <!-- JS 每秒推一行 -->
+      </div>
+    </div>
+  </aside>
+
+  <!-- ==================== 品牌揭示层（爆炸完出现） ==================== -->
+  <div id="brandReveal">
+    <!-- 雷达扫描圈：替代原 reveal-ring，3 同心圆 + conic 扫描臂 + 十字刻度 -->
+    <div class="reveal-radar">
+      <div class="radar-cross h"></div>
+      <div class="radar-cross v"></div>
+      <div class="radar-ring r1"></div>
+      <div class="radar-ring r2"></div>
+      <div class="radar-ring r3"></div>
+      <div class="radar-sweep"></div>
+    </div>
+    <div class="reveal-zh">天军</div>
+    <div class="reveal-en">TYENJUN</div>
+    <div class="reveal-tag-zh">智 能 视 觉 检 测</div>
+    <div class="reveal-tag-en">AI · VISION · DETECTION</div>
+    <!-- 加载进度条（爆炸完后启动 ~6s 模拟加载，满后自动跳转） -->
+    <div class="reveal-loader" id="revealLoader">
+      <div class="loader-meta">
+        <span class="loader-stage" id="loaderStage">INITIALIZING</span>
+        <span class="loader-pct"   id="loaderPct">000%</span>
+      </div>
+      <div class="loader-bar">
+        <div class="loader-fill" id="loaderFill"></div>
+      </div>
+      <div class="loader-step" id="loaderStep">▸ open splash render context</div>
+    </div>
+  </div>
+
+  <!-- ==================== MediaPipe Hands（本地化，离线机器零延迟） ==================== -->
+  <script src="./vendor/mediapipe/hands.js"></script>
+  <script src="./vendor/mediapipe/camera_utils.js"></script>
+
+  <!-- ==================== Three.js + addons importmap（本地化） ==================== -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three/three.module.js",
+      "three/addons/": "./vendor/three-addons/"
+    }
+  }
+  </script>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

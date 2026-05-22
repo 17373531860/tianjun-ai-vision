@@ -157,3 +157,8 @@ docs/*.html
 
 # External skill vendor trees (`npx skills add`, symlink targets)
 /.agents/
+
+# Local prototypes & SDK scratch (not for release / kept locally for fast iteration)
+prototype/
+se9/
+wheels_se9/

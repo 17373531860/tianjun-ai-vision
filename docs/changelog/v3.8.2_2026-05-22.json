@@ -1,0 +1,149 @@
+{
+  "version": "3.8.2",
+  "date": "2026-05-22",
+  "previous_version": "3.7.6",
+  "theme": "工业级全屏启动体验 - 粒子球 + 手势识别 + 真实日志驱动 splash, 叠加 v3.8.0 MediaPipe 手部骨架配置化与二段管线",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-382-SPLASH-CYBER",
+      "title": "全新赛博 splash 启动界面 (取代旧 400×300 小弹窗)",
+      "symptom": "客户工控机开机时旧 splash 简陋, 跟产品定位不符; 启动等待几秒钟用户什么也看不到",
+      "fix": "新增 electron/splash/ 目录: Three.js + WebGL 粒子球 + UnrealBloomPass + 5 阶段状态机 (IDLE→HOVER→COLLAPSE→EXPLOSION→READY) + 8 道全屏代码瀑布 + 4 角 cyber HUD + 底部 BOOT 序列 + 程序化 Web Audio 音效. 资源全部本地化 (Three.js / MediaPipe / 6 个 ttf 字体) 离线工厂可跑.",
+      "files": [
+        "electron/splash/index.html",
+        "electron/splash/main.js",
+        "electron/splash/audio.js",
+        "electron/splash/preload.js",
+        "electron/splash/vendor/three/*",
+        "electron/splash/vendor/three-addons/*",
+        "electron/splash/vendor/mediapipe/*",
+        "electron/splash/fonts/*.ttf"
+      ],
+      "files_deleted": ["electron/splash.html"],
+      "keywords": ["splash", "cyber", "particles", "Three.js", "WebGL", "UnrealBloomPass", "fullscreen", "本地化", "vendor"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-382-SPLASH-PROGRESS",
+      "title": "Splash 进度条由真实后端 stdout 行数驱动 (不再假 6 秒模拟)",
+      "symptom": "之前的 splash 是装样子的假进度条; 现在要把进度跟后端真实加载状态绑定",
+      "fix": "主进程 monitorBackendManager.stdout/stderr/ready 通过 IPC splash:backend-log / splash:backend-ready 转发给 splash. Splash 每收到一行日志进度 +0.5% 封顶 95%, 后端 ready 强制补 100%. Stage 标签 (INITIALIZING/BOOTSTRAP/LOADING DB/LOADING UI/WARMUP) 按行数粗映射; step 文案取最近一条日志. 满 100% 后 IPC splash:finished 关 splash 显示主窗",
+      "files": ["electron/main.js", "electron/splash/main.js", "electron/splash/preload.js"],
+      "keywords": ["progress bar", "backend log", "IPC", "splash:backend-log", "splash:finished"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-382-SPLASH-HAND",
+      "title": "Splash 接入工位 1 摄像头做手势触发 (MediaPipe Hands)",
+      "symptom": "用户对屏幕握拳 → 中心粒子塌缩; 张开五指 → 爆炸辐射进入 logo 揭示阶段",
+      "fix": "Splash 启动时 splashAPI.getWorkstationConfig() 读 workstation_config.json 拿 channels.\"1\".usb_device_id, getUserMedia({deviceId: {ideal}}) 精确锁同一台 USB 摄像头. MediaPipe Hands locateFile 改本地. 摄像头/MediaPipe 不可用时 scheduleAutoplayFallback() 等后端 ready 自动 COLLAPSE→EXPLOSION→READY 不卡死. ESC 随时跳过手势",
+      "files": ["electron/splash/main.js"],
+      "keywords": ["MediaPipe Hands", "getUserMedia", "deviceId", "gesture", "fist", "explosion", "ESC", "autoplay fallback"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-382-FULLSCREEN-FRAMELESS",
+      "title": "主窗与 splash 双双全屏 + 杀菜单栏 + 杀标题栏 (工业部署形态)",
+      "symptom": "截图上 Windows 标题栏 + File/Edit/View 菜单栏 两条都不该出现, 应用从启动开始就全屏",
+      "fix": "electron/main.js 顶部 Menu.setApplicationMenu(null) 全局禁菜单. createWindow: fullscreen + frame:false + backgroundColor #02060c (跟 splash 同色过场无闪烁); 主窗 show:false 后台预热, splash:finished 才显示. createSplashWindow 同样 fullscreen + frame:false + alwaysOnTop, 预加载 splash/preload.js",
+      "files": ["electron/main.js"],
+      "keywords": ["fullscreen", "frame false", "menu null", "frameless", "工业部署", "全屏"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-382-NAVBAR-IPC-QUIT",
+      "title": "Navbar 退出按钮改走 IPC 优雅关机",
+      "symptom": "全屏无边框后没有窗口 × 按钮, 退出必须能触发 8 步关机流程",
+      "fix": "electron/preload.js 暴露 electronAPI.gracefulQuit() → ipcMain.handle('app:graceful-quit') → mainWindow.close 触发已注册的 startGracefulShutdown. Navbar.vue case 'logout' 检测到 electronAPI.gracefulQuit 走 IPC, 否则退回老行为 (浏览器调试模式跳 /login)",
+      "files": ["electron/preload.js", "electron/main.js", "frontend/src/layout/Navbar.vue"],
+      "keywords": ["IPC", "graceful quit", "Navbar logout", "8 步关机", "退出"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-382-USB-DEVICE-PERSIST",
+      "title": "USB 摄像头 deviceId 持久化 (思路 B: 前端 enumerateDevices)",
+      "symptom": "Splash 端要拿到工位 1 上次绑定的那台 USB 摄像头的稳定标识, 下次启动直接锁",
+      "fix": "后端 channel_manager.py 新增 PUT /api/v1/workstations/{channel_id}/usb-device + UsbDeviceBindRequest schema (device_id / device_label), save_channel_source(merge=True) 仅追加这两个字段不动其它配置. 前端 Source/index.vue tryPersistUsbDeviceId helper: USB 启动成功后 enumerateDevices() 拿浏览器 MediaDeviceInfo.deviceId, 按 OpenCV index 顺序匹配 videoinput, PUT 回写后端; 失败静默不阻塞主流程. saveAndStartMulti + saveAndStart 两条路径都加",
+      "files": ["backend/api/channel_manager.py", "frontend/src/views/Source/index.vue"],
+      "keywords": ["USB camera", "deviceId", "MediaDeviceInfo", "enumerateDevices", "workstation_config", "splash camera"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-380-MEDIAPIPE-CONFIG",
+      "title": "MediaPipe 手部骨架完美渲染配置化 (v3.8.0 起, 本次合并发布)",
+      "symptom": "友商手部骨架渲染明显更准, 客户工厂黑手套 / 俯视场景仍是死区",
+      "root_cause": "逆向定罪友商完美骨架密码: mp.solutions.hands 整帧调用 + model_complexity=1 + min_detection_confidence=0.5. 300 帧实测米色手套平视场景命中率 12.3% (我们默认) → 47.7% (友商同款), 提升 3.9 倍; 工业黑手套俯视场景双方均 0% 是 MediaPipe 训练分布之外的死区",
+      "fix": "source.py 加 mediapipe_model_complexity / mediapipe_track_confidence 字段默认保守 complexity=0 不影响老客户 CPU. source_routes.py StreamConfigRequest 加 Optional 字段 default=None 防老前端误重置. source_mediapipe.py baseline 初始化时读 host 字段, 顺手修 baseline 分支没把 path/kind 落到 _hand_detector_path_loaded 导致 apply_overlay 每帧误 reload 的 bug. Settings UI 加一键预设 (省 CPU / 高精度) + 高级折叠 (单选档位 + 跟踪置信度 slider) + 工业死区提示",
+      "files": ["backend/api/source.py", "backend/api/source_routes.py", "backend/api/source_mediapipe.py", "frontend/src/views/Settings/index.vue"],
+      "keywords": ["MediaPipe", "model_complexity", "min_detection_confidence", "hand skeleton", "完美渲染", "300 帧实测", "工业死区"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-380-TWO-STAGE-PIPELINE",
+      "title": "二段管线集成框架 + Settings 工业模型配置面板 (v3.8.0 起)",
+      "symptom": "MediaPipe 在工业黑手套俯视场景是 0% 命中 (训练分布外), 需要先用工业 YOLO 手部检测器拿 ROI 再喂给 MediaPipe HandLandmarker (Tasks API) 出 21 个关键点",
+      "fix": "后端 source_mediapipe.py 支持配 hand_detector_path 走 YOLO bbox → ROI → MediaPipe HandLandmarker 二段流程, 失败优雅 fallback baseline. source_routes.py 加 7 个新字段 (path/kind/conf/iou/imgsz/class/roi_pad/task) + _compute_two_stage_status() 返回 5 态 (baseline / path_invalid / pending / active / load_failed). useSystemStore.performance 加 6 个新字段镜像. Settings/index.vue MediaPipe 卡片新增工业专用手部模型折叠面板: 状态徽章实时刷新 + 路径输入 + v8/v5 单选 + 4 个高级参数 (conf/iou/imgsz/ROI pad) + 横幅说明",
+      "files": ["backend/api/source.py", "backend/api/source_routes.py", "backend/api/source_mediapipe.py", "backend/data/models/hand_landmarker.task", "frontend/src/views/Settings/index.vue", "frontend/src/store/useSystemStore.js"],
+      "keywords": ["two-stage", "二段管线", "YOLO hand-detector", "MediaPipe HandLandmarker", "Tasks API", "ROI", "工业死区"],
+      "breaking": false
+    },
+    {
+      "type": "docs",
+      "id": "DOCS-382-TRAIN-HAND-DETECTOR-SKILL",
+      "title": "新增 train-hand-detector skill (工业 hand-detector 训练全流程)",
+      "fix": "落地 v3.8.0 二段管线的配套训练 SOP, 覆盖: 现场录像策略 (5 个不可省略覆盖维度) → 抽帧 (ffmpeg fps=2) → 标注 (X-AnyLabeling + SAM 半自动) → 训练 (yolo train + yolov11s, epochs=80) → 验证 (tools/diag_hand_two_stage.py) → 部署 (Settings UI 或 curl) → 持续维护. AGENTS.md 第四节登记触发关键词",
+      "files": [".claude/skills/train-hand-detector/SKILL.md", "AGENTS.md"],
+      "keywords": ["skill", "train hand detector", "工业 YOLO", "训练 SOP", "标注", "yolov11s"]
+    },
+    {
+      "type": "config",
+      "id": "CONFIG-382-001",
+      "title": "版本号 3.7.6 → 3.8.2 + package.json files 列表更新",
+      "fix": "electron/package.json version 3.7.6 → 3.8.2; build.files 把 splash.html 替换为 splash/** (带 vendor 全套约 19MB)",
+      "files": ["electron/package.json"],
+      "keywords": ["version bump", "package.json", "splash 资源"]
+    }
+  ],
+  "skills_updated": ["train-hand-detector"],
+  "files_changed": [
+    "electron/splash/index.html",
+    "electron/splash/main.js",
+    "electron/splash/audio.js",
+    "electron/splash/preload.js",
+    "electron/splash/vendor/three/three.module.js",
+    "electron/splash/vendor/three-addons/postprocessing/*.js",
+    "electron/splash/vendor/three-addons/shaders/*.js",
+    "electron/splash/vendor/mediapipe/*.{js,wasm,data,binarypb,tflite}",
+    "electron/splash/fonts/*.ttf",
+    "electron/main.js",
+    "electron/preload.js",
+    "electron/package.json",
+    "backend/api/channel_manager.py",
+    "backend/api/source.py",
+    "backend/api/source_routes.py",
+    "backend/api/source_mediapipe.py",
+    "backend/data/models/hand_landmarker.task",
+    "frontend/src/views/Source/index.vue",
+    "frontend/src/views/Settings/index.vue",
+    "frontend/src/store/useSystemStore.js",
+    "frontend/src/layout/Navbar.vue",
+    ".claude/skills/train-hand-detector/SKILL.md",
+    "AGENTS.md",
+    "docs/changelog/v3.8.2_2026-05-22.md",
+    "docs/changelog/v3.8.2_2026-05-22.json"
+  ],
+  "files_deleted": ["electron/splash.html"],
+  "known_issues": [
+    "Splash 资源体积: vendor/mediapipe ~18MB + vendor/three 1.3MB + fonts 0.4MB ≈ 19MB, 全部本地化为了离线工厂场景",
+    "首次握拳浏览器权限: 客户机第一次启动会弹摄像头授权请求, 拒绝时走自动播放兜底, splash 仍能完成启动",
+    "历史长期红灯 CI 仍未修 (Virtual Functional Tests cryptography + DB Matrix PG SUM dialect, 已在 SE9 分支修复待 cherry-pick)"
+  ]
+}
