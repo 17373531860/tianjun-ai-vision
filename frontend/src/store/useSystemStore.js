@@ -152,8 +152,18 @@ export const useSystemStore = defineStore('system', {
       mediapipeEnabled: false,   // MediaPipe 骨架叠加（默认关闭）
       mediapipePose: true,       // 显示姿态骨架
       mediapipeHands: true,      // 显示手部关键点
-      mediapipeConfidence: 0.7,  // MediaPipe 检测置信度
-      mediapipeInterval: 2       // MediaPipe 处理间隔（帧）
+      mediapipeConfidence: 0.7,  // MediaPipe 检测置信度（首检阈值）
+      mediapipeInterval: 2,      // MediaPipe 处理间隔（帧）
+      // v3.8.0 hands 调优：朋友同款"完美骨架" = complexity=1 + confidence=0.5 + trackConfidence=0.5
+      mediapipeModelComplexity: 0,   // 0=lite (默认, 快、CPU 友好) / 1=full (慢, 精度高)
+      mediapipeTrackConfidence: 0.5, // 跟踪置信度（值越低骨架越粘但抖动更大）
+      // v3.8.0 工业 hand-detector 二段管线（公司日常自训模型, 路径填了即启用）
+      mediapipeHandDetectorPath: '',    // 自训 hand-detector .pt 路径 (空=走基础)
+      mediapipeHandDetectorKind: 'v8',  // v8 (ultralytics 默认) / v5 (legacy yolov5)
+      mediapipeHandDetectorConf: 0.25,  // YOLO 框检测置信度阈值
+      mediapipeHandDetectorIou: 0.45,   // NMS 阈值
+      mediapipeHandDetectorImgsz: 640,  // 输入尺寸
+      mediapipeHandRoiPad: 0.3          // ROI 外扩比例（手指容易被框边切到 → 外扩）
     }
   }),
   actions: {

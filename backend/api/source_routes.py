@@ -116,6 +116,19 @@ class StreamConfigRequest(BaseModel):
     mediapipe_hands: bool = True
     mediapipe_confidence: float = 0.7
     mediapipe_interval: int = 2
+    # v3.8.0 mp.solutions.hands 调优 (朋友程序密码 = complexity=1 + det_conf=0.5)
+    # default None: 老前端不带字段时跳过覆盖, 保留 host 当前值
+    mediapipe_model_complexity: Optional[int] = None
+    mediapipe_track_confidence: Optional[float] = None
+    # v3.8.0 二段 pipeline: 配 hand-detector .pt 即启用 (空 = 走 baseline)
+    mediapipe_hand_detector_path: Optional[str] = ""
+    mediapipe_hand_detector_kind: Optional[str] = "v8"
+    mediapipe_hand_detector_conf: Optional[float] = 0.25
+    mediapipe_hand_detector_iou: Optional[float] = 0.45
+    mediapipe_hand_detector_imgsz: Optional[int] = 640
+    mediapipe_hand_detector_class: Optional[int] = -1
+    mediapipe_hand_roi_pad: Optional[float] = 0.3
+    mediapipe_landmarker_task_path: Optional[str] = ""
 
 
 class DeviceConfigRequest(BaseModel):
@@ -468,8 +481,40 @@ def get_stream_config():
         "mediapipe_pose": video_manager.mediapipe_pose,
         "mediapipe_hands": video_manager.mediapipe_hands,
         "mediapipe_confidence": video_manager.mediapipe_confidence,
-        "mediapipe_interval": video_manager._mp_process_interval
+        "mediapipe_interval": video_manager._mp_process_interval,
+        # v3.8.0 mp.solutions.hands 调优
+        "mediapipe_model_complexity": int(getattr(video_manager, "mediapipe_model_complexity", 0)),
+        "mediapipe_track_confidence": float(getattr(video_manager, "mediapipe_track_confidence", 0.5)),
+        # v3.8.0 二段 pipeline
+        "mediapipe_hand_detector_path": getattr(video_manager, "mediapipe_hand_detector_path", "") or "",
+        "mediapipe_hand_detector_kind": getattr(video_manager, "mediapipe_hand_detector_kind", "v8") or "v8",
+        "mediapipe_hand_detector_conf": float(getattr(video_manager, "mediapipe_hand_detector_conf", 0.25)),
+        "mediapipe_hand_detector_iou": float(getattr(video_manager, "mediapipe_hand_detector_iou", 0.45)),
+        "mediapipe_hand_detector_imgsz": int(getattr(video_manager, "mediapipe_hand_detector_imgsz", 640)),
+        "mediapipe_hand_detector_class": int(getattr(video_manager, "mediapipe_hand_detector_class", -1)),
+        "mediapipe_hand_roi_pad": float(getattr(video_manager, "mediapipe_hand_roi_pad", 0.3)),
+        "mediapipe_landmarker_task_path": getattr(video_manager, "mediapipe_landmarker_task_path", "") or "",
+        # v3.8.0 二段管线运行时状态: 给前端显示"基础模式 / 已启用 / 路径无效 / 加载失败"
+        "mediapipe_two_stage_status": _compute_two_stage_status(video_manager),
     }
+
+
+def _compute_two_stage_status(vm) -> Dict[str, Any]:
+    """计算二段管线当前状态, 给前端显示徽章."""
+    path = (getattr(vm, "mediapipe_hand_detector_path", "") or "").strip()
+    if not path:
+        return {"state": "baseline", "message": "未启用专用手部模型 (走基础 MediaPipe)"}
+    if not os.path.exists(path):
+        return {"state": "path_invalid", "message": f"模型文件不存在: {path}"}
+    # path 有效, 看运行时是否真的加载成功
+    overlay = getattr(vm, "mp_overlay", None)
+    # _mp_draw 在 overlay.init() 首次调用时才会赋值, None = 还没尝试 init
+    overlay_initialized = overlay is not None and getattr(overlay, "_mp_draw", None) is not None
+    if not overlay_initialized:
+        return {"state": "pending", "message": "已配置, 等待启用 MediaPipe 后首次加载 (开启检测画面后生效)"}
+    if getattr(overlay, "_two_stage_active", False):
+        return {"state": "active", "message": "专用手部模型已启用 (二段管线)"}
+    return {"state": "load_failed", "message": "模型存在但加载失败, 已回退基础模式 (看后端日志)"}
 
 
 @router.post("/stream/config")
@@ -481,16 +526,42 @@ def set_stream_config(req: StreamConfigRequest):
 
     mp_was_enabled = video_manager.mediapipe_enabled
     old_conf = video_manager.mediapipe_confidence
+    old_complexity = int(getattr(video_manager, "mediapipe_model_complexity", 0))
+    old_track_conf = float(getattr(video_manager, "mediapipe_track_confidence", 0.5))
+    old_detector_path = getattr(video_manager, "mediapipe_hand_detector_path", "") or ""
+    old_detector_kind = getattr(video_manager, "mediapipe_hand_detector_kind", "v8") or "v8"
     video_manager.mediapipe_enabled = req.mediapipe_enabled
     video_manager.mediapipe_pose = req.mediapipe_pose
     video_manager.mediapipe_hands = req.mediapipe_hands
     video_manager.mediapipe_confidence = max(0.1, min(1.0, req.mediapipe_confidence))
     video_manager._mp_process_interval = max(1, min(10, req.mediapipe_interval))
+    # v3.8.0 mp.solutions.hands 调优 (老前端不发这俩字段时保留当前值, 不强制重置 default)
+    if req.mediapipe_model_complexity is not None:
+        video_manager.mediapipe_model_complexity = max(0, min(1, int(req.mediapipe_model_complexity)))
+    if req.mediapipe_track_confidence is not None:
+        video_manager.mediapipe_track_confidence = max(0.05, min(0.95, float(req.mediapipe_track_confidence)))
+    # v3.8.0 二段 pipeline 字段, 都加 sanity clip
+    new_path = (req.mediapipe_hand_detector_path or "").strip()
+    new_kind = (req.mediapipe_hand_detector_kind or "v8").strip()
+    if new_kind not in ("v5", "v8"):
+        new_kind = "v8"
+    video_manager.mediapipe_hand_detector_path = new_path
+    video_manager.mediapipe_hand_detector_kind = new_kind
+    video_manager.mediapipe_hand_detector_conf = max(0.05, min(0.95, float(req.mediapipe_hand_detector_conf or 0.25)))
+    video_manager.mediapipe_hand_detector_iou = max(0.1, min(0.9, float(req.mediapipe_hand_detector_iou or 0.45)))
+    video_manager.mediapipe_hand_detector_imgsz = max(160, min(1280, int(req.mediapipe_hand_detector_imgsz or 640)))
+    video_manager.mediapipe_hand_detector_class = int(req.mediapipe_hand_detector_class if req.mediapipe_hand_detector_class is not None else -1)
+    video_manager.mediapipe_hand_roi_pad = max(0.0, min(2.0, float(req.mediapipe_hand_roi_pad or 0.3)))
+    video_manager.mediapipe_landmarker_task_path = (req.mediapipe_landmarker_task_path or "").strip()
 
     conf_changed = abs(video_manager.mediapipe_confidence - old_conf) > 0.01
+    complexity_changed = video_manager.mediapipe_model_complexity != old_complexity
+    track_changed = abs(video_manager.mediapipe_track_confidence - old_track_conf) > 0.01
+    detector_changed = (new_path != old_detector_path) or (new_kind != old_detector_kind)
     if not req.mediapipe_enabled and mp_was_enabled:
         video_manager._release_mediapipe()
-    elif conf_changed and req.mediapipe_enabled:
+    elif (conf_changed or complexity_changed or track_changed or detector_changed) and req.mediapipe_enabled:
+        # 任一参数变化 -> 释放重载
         video_manager._release_mediapipe()
 
     video_manager._save_device_config()
@@ -503,7 +574,17 @@ def set_stream_config(req: StreamConfigRequest):
         "mediapipe_pose": video_manager.mediapipe_pose,
         "mediapipe_hands": video_manager.mediapipe_hands,
         "mediapipe_confidence": video_manager.mediapipe_confidence,
-        "mediapipe_interval": video_manager._mp_process_interval
+        "mediapipe_interval": video_manager._mp_process_interval,
+        "mediapipe_model_complexity": video_manager.mediapipe_model_complexity,
+        "mediapipe_track_confidence": video_manager.mediapipe_track_confidence,
+        "mediapipe_hand_detector_path": video_manager.mediapipe_hand_detector_path,
+        "mediapipe_hand_detector_kind": video_manager.mediapipe_hand_detector_kind,
+        "mediapipe_hand_detector_conf": video_manager.mediapipe_hand_detector_conf,
+        "mediapipe_hand_detector_iou": video_manager.mediapipe_hand_detector_iou,
+        "mediapipe_hand_detector_imgsz": video_manager.mediapipe_hand_detector_imgsz,
+        "mediapipe_hand_detector_class": video_manager.mediapipe_hand_detector_class,
+        "mediapipe_hand_roi_pad": video_manager.mediapipe_hand_roi_pad,
+        "mediapipe_landmarker_task_path": video_manager.mediapipe_landmarker_task_path,
     }
 
 

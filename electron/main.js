@@ -1,9 +1,13 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const BackendManager = require('./backend-manager');
 const LicenseManager = require('./license-manager');
+
+// v3.8.2: 工业部署默认杀掉应用菜单栏（File / Edit / View / Window / Help）
+// 工控机用户不需要这些；DevTools 仍可通过 Ctrl+Shift+I 打开
+Menu.setApplicationMenu(null);
 
 let licenseManager = null;
 let isLicensed = false;
@@ -87,6 +91,7 @@ if (!gotTheLock) {
 
 // 保持对窗口对象的全局引用
 let mainWindow = null;
+let splashWindow = null;        // v3.8.2: 新版赛博 splash 窗口
 let shutdownWindow = null;
 let backendManager = null;
 let isQuitting = false;
@@ -95,6 +100,7 @@ let renderGoneReloadTimer = null;
 let unresponsiveReloadTimer = null;
 let gpuCrashReloadTimer = null;
 let splashCloseTimer = null;
+let splashFinishedByRenderer = false;   // v3.8.2: splash 端是否已通过 IPC 通知"播完了"
 const managedTimeouts = new Set();
 
 function setManagedTimeout(callback, delayMs) {
@@ -255,10 +261,8 @@ async function stopBackend() {
 // 创建主窗口
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1600,
-    height: 900,
-    minWidth: 1200,
-    minHeight: 700,
+    fullscreen: true,          // v3.8.2: 工业部署默认全屏（取代 1600x900 窗口模式）
+    frame: false,              // v3.8.2: 杀 Windows 标题栏（截图框出来的第一条）
     title: CONFIG.appName,
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
@@ -268,11 +272,10 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
     },
     show: false,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#02060c',  // v3.8.2: 跟 splash 同色，关 splash → show 主窗时不闪
   });
-  
-  // 移除菜单栏（可选）
-  // mainWindow.setMenuBarVisibility(false);
+
+  mainWindow.setMenuBarVisibility(false);  // v3.8.2: 杀菜单栏（截图框出来的第二条）
   
   // 加载前端页面
   if (CONFIG.isDev) {
@@ -285,9 +288,10 @@ function createWindow() {
     mainWindow.loadFile(indexPath);
   }
   
-  // 窗口准备好后显示
+  // v3.8.2: 主窗准备好不立即显示, 等 splash 完成播放后通过 IPC 显示。
+  // 这样后端启动 / 前端 Vue 加载 都在 splash 后台进行, 用户看到的是连贯过场。
   mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
+    maybeShowMainWindow();
   });
 
   // Renderer crash recovery: auto-reload when the Chromium renderer dies
@@ -346,25 +350,26 @@ function createWindow() {
   });
 }
 
-// 创建启动画面
+// 创建启动画面（v3.8.2 全新 cyber splash: 粒子球 + 手势 + 真实后端日志驱动进度条）
 function createSplashWindow() {
   const splash = new BrowserWindow({
-    width: 400,
-    height: 300,
+    fullscreen: true,                // 全屏（取代旧 400x300 弹窗模式）
     frame: false,
-    transparent: true,
     alwaysOnTop: true,
     resizable: false,
+    skipTaskbar: false,
     icon: path.join(__dirname, 'build', 'icon.png'),
+    backgroundColor: '#02060c',      // 跟 splash CSS --cyber-deep 同色
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload: path.join(__dirname, 'splash', 'preload.js'),
+      // splash 需要 file:// 协议下能 ES module + getUserMedia + AudioContext
+      webSecurity: false,
     },
   });
-  
-  // 加载启动画面 HTML
-  splash.loadFile(path.join(__dirname, 'splash.html'));
-  
+
+  splash.loadFile(path.join(__dirname, 'splash', 'index.html'));
   return splash;
 }
 
@@ -614,30 +619,102 @@ app.whenReady().then(async () => {
 
   if (!isLicensed) {
     createWindow();
+    mainWindow.once('ready-to-show', () => mainWindow.show()); // 未授权页直接显示，绕过 splash
     return;
   }
 
-  const splash = createSplashWindow();
-  
-  try {
-    await startBackend();
-    createWindow();
-    
-    if (splashCloseTimer) {
-      clearManagedTimeout(splashCloseTimer);
+  // v3.8.2: 全新赛博 splash, 全屏覆盖, 接 BackendManager 日志实时驱动进度
+  splashWindow = createSplashWindow();
+  splashFinishedByRenderer = false;
+
+  // 把后端日志和 ready 事件转发给 splash renderer
+  initBackendManager();
+  const forwardStdout = (msg) => {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.webContents.send('splash:backend-log', { stream: 'stdout', msg });
     }
-    splashCloseTimer = setManagedTimeout(() => {
-      splashCloseTimer = null;
-      splash.close();
-    }, 500);
-    
+  };
+  const forwardStderr = (msg) => {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.webContents.send('splash:backend-log', { stream: 'stderr', msg });
+    }
+  };
+  const forwardReady = () => {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.webContents.send('splash:backend-ready');
+    }
+  };
+  backendManager.on('stdout', forwardStdout);
+  backendManager.on('stderr', forwardStderr);
+  backendManager.once('ready', forwardReady);
+
+  try {
+    // 后端启动期间, splash 自顾自播放粒子球 + 等用户握拳; 进度由 stdout 行数驱动
+    await startBackend();
+    // 后端 ready 后立即创建主窗后台预热(show:false), 真正显示交给 splash:finished
+    if (!mainWindow) createWindow();
   } catch (error) {
     console.error(`[App] Failed to start: ${error.message}`);
-    splash.close();
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
+    splashWindow = null;
     dialog.showErrorBox('启动失败', `无法启动应用: ${error.message}`);
     app.quit();
   }
 });
+
+// =====================================================================
+// v3.8.2: Splash 与主窗的 IPC 协议
+// ---------------------------------------------------------------------
+//   splash:get-workstation-config — splash 读 ch1.usb_device_id 锁手势摄像头
+//   splash:finished               — splash 端完成播放 + 进度满, 通知关 splash + 显示主窗
+//   app:graceful-quit             — 前端 Navbar "退出" 按钮触发 8 步关机流程
+// =====================================================================
+ipcMain.handle('splash:get-workstation-config', () => {
+  try {
+    const cfgPath = path.join(__dirname, '..', 'backend', 'data', 'workstation_config.json');
+    if (!fs.existsSync(cfgPath)) return {};
+    return JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+  } catch (e) {
+    console.warn('[Splash] 读 workstation_config.json 失败:', e.message);
+    return {};
+  }
+});
+
+ipcMain.on('splash:finished', () => {
+  splashFinishedByRenderer = true;
+  console.log('[App] splash 端通知播放完毕, 准备关闭 splash + 显示主窗');
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    try { splashWindow.close(); } catch (e) { console.warn('[App] 关 splash 失败:', e.message); }
+    splashWindow = null;
+  }
+  maybeShowMainWindow();
+});
+
+ipcMain.handle('app:graceful-quit', () => {
+  console.log('[App] 收到前端优雅退出请求, 触发 mainWindow.close → graceful shutdown');
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    // 主窗 close 事件已经被拦截 → startGracefulShutdown 8 步流程
+    mainWindow.close();
+  } else {
+    app.quit();
+  }
+  return { ok: true };
+});
+
+// 主窗 ready + splash finished 双满足才显示主窗; 也容忍 splash 失败时强制显示
+function maybeShowMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!splashFinishedByRenderer) {
+    // splash 还没结束, 主窗先后台预热不显示
+    return;
+  }
+  try {
+    mainWindow.show();
+    mainWindow.focus();
+  } catch (e) {
+    console.warn('[App] 显示主窗失败:', e.message);
+  }
+}
 
 // 所有窗口关闭时（这里不做任何事，关闭由 graceful shutdown 处理）
 app.on('window-all-closed', () => {

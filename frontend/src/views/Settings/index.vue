@@ -854,6 +854,241 @@
                   style="width: 120px"
                 />
               </div>
+
+              <!-- v3.8.0: 一键预设 -->
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div>
+                  <span class="text-gray-300">手部识别预设</span>
+                  <div class="text-xs text-gray-500 mt-1">
+                    省 CPU 模式 = 默认（complexity=0, 置信度 0.7）；高精度模式 = 友商同款（complexity=1, 置信度 0.5），手部识别率提升 3-4 倍但 CPU 占用增加约 80%
+                  </div>
+                </div>
+                <div class="flex flex-col gap-2">
+                  <el-button
+                    size="small"
+                    type="info"
+                    plain
+                    :disabled="!store.performance.mediapipeEnabled"
+                    @click="applyMediaPipePreset('eco')"
+                  >省 CPU 模式</el-button>
+                  <el-button
+                    size="small"
+                    type="success"
+                    plain
+                    :disabled="!store.performance.mediapipeEnabled"
+                    @click="applyMediaPipePreset('quality')"
+                  >高精度模式</el-button>
+                </div>
+              </div>
+
+              <!-- v3.8.0: 高级选项 -->
+              <el-collapse class="border-slate-700">
+                <el-collapse-item title="高级选项" name="mp-advanced">
+                  <div class="space-y-4">
+                    <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                      <div>
+                        <span class="text-gray-300">手部模型档位</span>
+                        <div class="text-xs text-gray-500 mt-1">
+                          0 = 轻量版（推理快、识别黑手套/俯视等困难场景几乎无效）；1 = 完整版（推理慢约 1.8 倍、对手套/握工具等非标场景识别率显著提升）
+                        </div>
+                      </div>
+                      <el-radio-group
+                        v-model="store.performance.mediapipeModelComplexity"
+                        size="small"
+                        :disabled="!store.performance.mediapipeEnabled"
+                        @change="savePerformanceSettings"
+                      >
+                        <el-radio-button :value="0">轻量(0)</el-radio-button>
+                        <el-radio-button :value="1">完整(1)</el-radio-button>
+                      </el-radio-group>
+                    </div>
+                    <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                      <div>
+                        <span class="text-gray-300">跟踪置信度</span>
+                        <div class="text-xs text-gray-500 mt-1">值越低骨架越"粘"住手不易丢失但更抖；首检后跟随期使用</div>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <el-slider
+                          v-model="store.performance.mediapipeTrackConfidence"
+                          :min="0.05"
+                          :max="0.95"
+                          :step="0.05"
+                          :disabled="!store.performance.mediapipeEnabled"
+                          @change="savePerformanceSettings"
+                          style="width: 140px"
+                          :show-tooltip="true"
+                          :format-tooltip="v => v.toFixed(2)"
+                        />
+                        <span class="text-gray-400 text-xs w-8 text-right">{{ store.performance.mediapipeTrackConfidence.toFixed(2) }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </el-collapse-item>
+              </el-collapse>
+
+              <!-- v3.8.0: 工业专用手部模型 (二段管线) -->
+              <el-collapse class="border-slate-700">
+                <el-collapse-item name="mp-industrial">
+                  <template #title>
+                    <div class="flex items-center gap-2">
+                      <span class="text-gray-200 font-bold">工业专用手部模型</span>
+                      <el-tag
+                        v-if="mediapipeStatusState === 'baseline'"
+                        size="small"
+                        type="info"
+                      >未启用</el-tag>
+                      <el-tag
+                        v-else-if="mediapipeStatusState === 'active'"
+                        size="small"
+                        type="success"
+                      >已启用</el-tag>
+                      <el-tag
+                        v-else-if="mediapipeStatusState === 'pending'"
+                        size="small"
+                        type="warning"
+                      >待加载</el-tag>
+                      <el-tag
+                        v-else
+                        size="small"
+                        type="danger"
+                      >异常</el-tag>
+                    </div>
+                  </template>
+                  <div class="space-y-4">
+                    <el-alert
+                      :title="mediapipeStatusMessage"
+                      :type="mediapipeStatusAlertType"
+                      :closable="false"
+                      show-icon
+                    >
+                      <template #default>
+                        <div class="text-xs text-gray-300 mt-1">
+                          基础 MediaPipe 在黑手套俯视、握工具遮挡等"工业死区"场景识别率为零。配一个本地训练的 hand-detector
+                          (YOLO .pt) 即可启用二段管线 (YOLO 框出手部位置 → ROI 切割 → MediaPipe 画骨架)。
+                          训好的模型放本地任意路径，填到下方即可，<strong>不需要重启</strong>。
+                        </div>
+                      </template>
+                    </el-alert>
+
+                    <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                      <div class="text-gray-300 mb-2">模型文件路径</div>
+                      <div class="text-xs text-gray-500 mb-2">
+                        本地 .pt 文件绝对路径（例如 <code>D:/tianjun/models/industrial_hand.pt</code>）。留空 = 关闭二段管线，走基础 MediaPipe
+                      </div>
+                      <div class="flex gap-2">
+                        <el-input
+                          v-model="store.performance.mediapipeHandDetectorPath"
+                          placeholder="留空走基础模式 / 填本地 .pt 路径启用专用模型"
+                          :disabled="!store.performance.mediapipeEnabled"
+                          clearable
+                          @change="savePerformanceSettings"
+                        />
+                        <el-button
+                          size="default"
+                          :disabled="!store.performance.mediapipeEnabled"
+                          @click="savePerformanceSettings"
+                        >应用</el-button>
+                      </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                        <div>
+                          <span class="text-gray-300">模型格式</span>
+                          <div class="text-xs text-gray-500 mt-1">YOLOv5 老格式选 v5，其余选 v8</div>
+                        </div>
+                        <el-radio-group
+                          v-model="store.performance.mediapipeHandDetectorKind"
+                          size="small"
+                          :disabled="!store.performance.mediapipeEnabled || !store.performance.mediapipeHandDetectorPath"
+                          @change="savePerformanceSettings"
+                        >
+                          <el-radio-button value="v8">v8</el-radio-button>
+                          <el-radio-button value="v5">v5</el-radio-button>
+                        </el-radio-group>
+                      </div>
+                      <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                        <div>
+                          <span class="text-gray-300">检测置信度</span>
+                          <div class="text-xs text-gray-500 mt-1">框越多→精度越低</div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <el-slider
+                            v-model="store.performance.mediapipeHandDetectorConf"
+                            :min="0.05"
+                            :max="0.9"
+                            :step="0.05"
+                            :disabled="!store.performance.mediapipeEnabled || !store.performance.mediapipeHandDetectorPath"
+                            @change="savePerformanceSettings"
+                            style="width: 120px"
+                            :show-tooltip="true"
+                            :format-tooltip="v => v.toFixed(2)"
+                          />
+                          <span class="text-gray-400 text-xs w-8 text-right">{{ store.performance.mediapipeHandDetectorConf.toFixed(2) }}</span>
+                        </div>
+                      </div>
+                      <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                        <div>
+                          <span class="text-gray-300">NMS 阈值</span>
+                          <div class="text-xs text-gray-500 mt-1">两个框重叠超此比例时去重</div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <el-slider
+                            v-model="store.performance.mediapipeHandDetectorIou"
+                            :min="0.1"
+                            :max="0.9"
+                            :step="0.05"
+                            :disabled="!store.performance.mediapipeEnabled || !store.performance.mediapipeHandDetectorPath"
+                            @change="savePerformanceSettings"
+                            style="width: 120px"
+                            :show-tooltip="true"
+                            :format-tooltip="v => v.toFixed(2)"
+                          />
+                          <span class="text-gray-400 text-xs w-8 text-right">{{ store.performance.mediapipeHandDetectorIou.toFixed(2) }}</span>
+                        </div>
+                      </div>
+                      <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                        <div>
+                          <span class="text-gray-300">输入尺寸</span>
+                          <div class="text-xs text-gray-500 mt-1">YOLO resize 后边长（640 兼顾速度/精度）</div>
+                        </div>
+                        <el-input-number
+                          v-model="store.performance.mediapipeHandDetectorImgsz"
+                          size="small"
+                          :min="320"
+                          :max="1280"
+                          :step="32"
+                          :precision="0"
+                          :disabled="!store.performance.mediapipeEnabled || !store.performance.mediapipeHandDetectorPath"
+                          @change="savePerformanceSettings"
+                          style="width: 110px"
+                        />
+                      </div>
+                      <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800 md:col-span-2">
+                        <div>
+                          <span class="text-gray-300">ROI 外扩比例</span>
+                          <div class="text-xs text-gray-500 mt-1">手指容易被 YOLO 框切到 → 把框向外扩这个比例后再喂给 MediaPipe</div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <el-slider
+                            v-model="store.performance.mediapipeHandRoiPad"
+                            :min="0"
+                            :max="1"
+                            :step="0.05"
+                            :disabled="!store.performance.mediapipeEnabled || !store.performance.mediapipeHandDetectorPath"
+                            @change="savePerformanceSettings"
+                            style="width: 180px"
+                            :show-tooltip="true"
+                            :format-tooltip="v => v.toFixed(2)"
+                          />
+                          <span class="text-gray-400 text-xs w-12 text-right">{{ (store.performance.mediapipeHandRoiPad * 100).toFixed(0) }}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </el-collapse-item>
+              </el-collapse>
+
               <el-alert
                 title="说明"
                 type="info"
@@ -864,7 +1099,7 @@
                   <div class="text-xs text-gray-300 mt-1">
                     <p>• MediaPipe 由 Google 开发，提供轻量级人体姿态和手部关键点检测</p>
                     <p>• 仅在画面显示中叠加骨架效果，<strong>不参与检测判定、不影响录制</strong></p>
-                    <p>• 关闭时完全无性能开销；开启后约增加 15-25ms/帧（CPU 处理）</p>
+                    <p>• 性能参考（CPU 处理）：省 CPU 模式约 18-22ms/帧；高精度模式约 30-38ms/帧；专用模型模式约 13-16ms/帧（更快）</p>
                     <p>• 需要安装 mediapipe 包：<code>pip install mediapipe</code></p>
                   </div>
                 </template>
@@ -1394,9 +1629,20 @@ const savePerformanceSettings = async () => {
       mediapipe_pose: store.performance.mediapipePose,
       mediapipe_hands: store.performance.mediapipeHands,
       mediapipe_confidence: store.performance.mediapipeConfidence,
-      mediapipe_interval: store.performance.mediapipeInterval
+      mediapipe_interval: store.performance.mediapipeInterval,
+      mediapipe_model_complexity: store.performance.mediapipeModelComplexity,
+      mediapipe_track_confidence: store.performance.mediapipeTrackConfidence,
+      // v3.8.0 工业 hand-detector
+      mediapipe_hand_detector_path: store.performance.mediapipeHandDetectorPath || '',
+      mediapipe_hand_detector_kind: store.performance.mediapipeHandDetectorKind || 'v8',
+      mediapipe_hand_detector_conf: store.performance.mediapipeHandDetectorConf,
+      mediapipe_hand_detector_iou: store.performance.mediapipeHandDetectorIou,
+      mediapipe_hand_detector_imgsz: store.performance.mediapipeHandDetectorImgsz,
+      mediapipe_hand_roi_pad: store.performance.mediapipeHandRoiPad
     });
     ElMessage.success('性能设置已保存');
+    // 保存后立即刷新二段状态（让徽章动）
+    await refreshMediaPipeStatus();
   } catch (e) {
     console.error('同步性能设置到后端失败:', e);
   }
@@ -1428,10 +1674,76 @@ const loadPerformanceSettings = async () => {
       if (res.data.mediapipe_interval !== undefined) {
         store.performance.mediapipeInterval = res.data.mediapipe_interval;
       }
+      if (res.data.mediapipe_model_complexity !== undefined) {
+        store.performance.mediapipeModelComplexity = res.data.mediapipe_model_complexity;
+      }
+      if (res.data.mediapipe_track_confidence !== undefined) {
+        store.performance.mediapipeTrackConfidence = res.data.mediapipe_track_confidence;
+      }
+      if (res.data.mediapipe_hand_detector_path !== undefined) {
+        store.performance.mediapipeHandDetectorPath = res.data.mediapipe_hand_detector_path || '';
+      }
+      if (res.data.mediapipe_hand_detector_kind !== undefined) {
+        store.performance.mediapipeHandDetectorKind = res.data.mediapipe_hand_detector_kind || 'v8';
+      }
+      if (res.data.mediapipe_hand_detector_conf !== undefined) {
+        store.performance.mediapipeHandDetectorConf = res.data.mediapipe_hand_detector_conf;
+      }
+      if (res.data.mediapipe_hand_detector_iou !== undefined) {
+        store.performance.mediapipeHandDetectorIou = res.data.mediapipe_hand_detector_iou;
+      }
+      if (res.data.mediapipe_hand_detector_imgsz !== undefined) {
+        store.performance.mediapipeHandDetectorImgsz = res.data.mediapipe_hand_detector_imgsz;
+      }
+      if (res.data.mediapipe_hand_roi_pad !== undefined) {
+        store.performance.mediapipeHandRoiPad = res.data.mediapipe_hand_roi_pad;
+      }
+      // v3.8.0 二段管线状态
+      if (res.data.mediapipe_two_stage_status) {
+        mediapipeStatusState.value = res.data.mediapipe_two_stage_status.state || 'baseline';
+        mediapipeStatusMessage.value = res.data.mediapipe_two_stage_status.message || '';
+      }
     }
   } catch (e) {
     console.error('加载后端性能设置失败:', e);
   }
+};
+
+// v3.8.0 二段管线状态轮询（只在面板展开时调一次）
+const mediapipeStatusState = ref('baseline');     // baseline / active / pending / path_invalid / load_failed
+const mediapipeStatusMessage = ref('未启用专用手部模型 (走基础 MediaPipe)');
+const mediapipeStatusAlertType = computed(() => {
+  const s = mediapipeStatusState.value;
+  if (s === 'active') return 'success';
+  if (s === 'baseline' || s === 'pending') return 'info';
+  return 'error';
+});
+const refreshMediaPipeStatus = async () => {
+  try {
+    const res = await api.get('/source/stream/config');
+    if (res.data?.mediapipe_two_stage_status) {
+      mediapipeStatusState.value = res.data.mediapipe_two_stage_status.state || 'baseline';
+      mediapipeStatusMessage.value = res.data.mediapipe_two_stage_status.message || '';
+    }
+  } catch (e) {
+    // 静默
+  }
+};
+
+// v3.8.0 一键预设：省 CPU 模式 / 高精度模式（友商同款）
+const applyMediaPipePreset = (mode) => {
+  if (mode === 'eco') {
+    store.performance.mediapipeModelComplexity = 0;
+    store.performance.mediapipeConfidence = 0.7;
+    store.performance.mediapipeTrackConfidence = 0.5;
+    ElMessage.success('已切换到「省 CPU 模式」');
+  } else if (mode === 'quality') {
+    store.performance.mediapipeModelComplexity = 1;
+    store.performance.mediapipeConfidence = 0.5;
+    store.performance.mediapipeTrackConfidence = 0.5;
+    ElMessage.success('已切换到「高精度模式」');
+  }
+  savePerformanceSettings();
 };
 
 // 刷新GPU列表

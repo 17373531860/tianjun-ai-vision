@@ -468,6 +468,34 @@ def get_gpu_allocation():
     }
 
 
+class UsbDeviceBindRequest(BaseModel):
+    """v3.8.2: 把工位绑定的 USB 摄像头 deviceId 持久化, 供启动 splash 手势识别用.
+
+    deviceId 是浏览器 MediaDeviceInfo.deviceId 字符串 (跨刷新稳定, 跨重启可能变,
+    但 splash 拿到后用 getUserMedia({deviceId: {ideal}}) 仍然会精准锁同一个设备;
+    匹配失败则降级到系统默认 webcam — 不会卡死).
+    """
+    device_id: str = Field("", description="MediaDeviceInfo.deviceId 字符串, 空串表示清除绑定")
+    device_label: str = Field("", description="可选, 摄像头型号 (HD Pro Webcam C920 等), 仅用于调试")
+
+
+@router.put("/{channel_id}/usb-device")
+def bind_usb_device(channel_id: int, req: UsbDeviceBindRequest):
+    """v3.8.2: 把工位绑定的 USB 摄像头 deviceId 写入 workstation_config.json.
+
+    用 merge=True, 仅追加 usb_device_id / usb_device_label 两个字段,
+    不影响该工位现有 source_type / project_id / gpu_device 等其他字段.
+    """
+    if not 0 <= channel_id < MAX_CHANNELS:
+        raise HTTPException(status_code=400, detail=f"channel_id 越界 (允许 0..{MAX_CHANNELS - 1})")
+    patch = {
+        "usb_device_id":    req.device_id or "",
+        "usb_device_label": req.device_label or "",
+    }
+    channel_manager.save_channel_source(channel_id, patch, merge=True)
+    return {"status": "success", "channel_id": channel_id, **patch}
+
+
 @router.get("/{channel_id}/status")
 def workstation_status(channel_id: int):
     """Return detailed status for a single workstation."""

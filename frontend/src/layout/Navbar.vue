@@ -426,9 +426,22 @@ const handleCommand = (command) => {
         confirmButtonText: t('navbar.logout'),
         cancelButtonText: t('navbar.cancel'),
         type: 'warning'
-      }).then(() => {
-        ElMessage.success(t('navbar.safeExit'));
-        router.push('/login');
+      }).then(async () => {
+        // v3.8.2: 全屏 + 无边框模式下没有 Windows 标题栏的 × 按钮,
+        // 这里统一接管"退出"为主进程优雅关机 (8 步), 而不是路由跳登录页.
+        // 浏览器调试场景 (没有 electronAPI) 退回老行为, 跳登录页.
+        if (window.electronAPI && typeof window.electronAPI.gracefulQuit === 'function') {
+          ElMessage.success(t('navbar.safeExit'));
+          try {
+            await window.electronAPI.gracefulQuit();
+          } catch (e) {
+            console.warn('[Navbar] gracefulQuit 失败, 退回路由模式:', e.message);
+            router.push('/login');
+          }
+        } else {
+          ElMessage.success(t('navbar.safeExit'));
+          router.push('/login');
+        }
       }).catch(() => {});
       break;
     case 'cancel':
