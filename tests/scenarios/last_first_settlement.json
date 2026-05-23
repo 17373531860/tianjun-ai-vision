@@ -1,0 +1,53 @@
+{
+  "name": "last_first_settlement",
+  "description": "v3.8.x last_first 模式 e2e 剧本: 周期 1 完整 ABCD = OK, 周期 2 ABC 后跳过 D 二次 A = 上周期 NG (缺 D) + 新周期 ABCD = OK. 用于验证末步结算 + 首步开周期 + D 缺位 fallback 三条核心路径.",
+  "fps": 60,
+  "expected": {
+    "settlement_mode": "last_first",
+    "ok_cycles_min": 2,
+    "ng_cycles_min": 1,
+    "comment": "周期 1 = OK, 周期 2 (跳过 D) = NG, 周期 3 = OK"
+  },
+  "timeline": [
+    { "from": 0,   "to": 9,   "detections": [] },
+
+    { "from": 10,  "to": 24,  "comment": "周期 1: A", "detections": [
+        { "label": "A", "confidence": 0.95, "bbox": [0.10, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 25,  "to": 39,  "comment": "周期 1: B", "detections": [
+        { "label": "B", "confidence": 0.93, "bbox": [0.30, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 40,  "to": 54,  "comment": "周期 1: C", "detections": [
+        { "label": "C", "confidence": 0.94, "bbox": [0.50, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 55,  "to": 69,  "comment": "周期 1: D → R1 触发结算 OK", "detections": [
+        { "label": "D", "confidence": 0.92, "bbox": [0.70, 0.10, 0.18, 0.18] }
+    ] },
+
+    { "from": 70,  "to": 84,  "comment": "空白窗 (D 屏蔽集合应被解除前 / disappear_delay 跨过)", "detections": [] },
+
+    { "from": 85,  "to": 99,  "comment": "周期 2: A", "detections": [
+        { "label": "A", "confidence": 0.95, "bbox": [0.10, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 100, "to": 114, "comment": "周期 2: B", "detections": [
+        { "label": "B", "confidence": 0.93, "bbox": [0.30, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 115, "to": 129, "comment": "周期 2: C", "detections": [
+        { "label": "C", "confidence": 0.94, "bbox": [0.50, 0.10, 0.18, 0.18] }
+    ] },
+
+    { "from": 130, "to": 144, "comment": "跳过 D! 直接 A → R3 D 缺位 fallback: 周期 2 判 NG, 新周期开始", "detections": [
+        { "label": "A", "confidence": 0.95, "bbox": [0.10, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 145, "to": 159, "comment": "周期 3: B", "detections": [
+        { "label": "B", "confidence": 0.93, "bbox": [0.30, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 160, "to": 174, "comment": "周期 3: C", "detections": [
+        { "label": "C", "confidence": 0.94, "bbox": [0.50, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 175, "to": 189, "comment": "周期 3: D → R1 触发结算 OK", "detections": [
+        { "label": "D", "confidence": 0.92, "bbox": [0.70, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 190, "to": 200, "detections": [] }
+  ]
+}

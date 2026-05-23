@@ -21,11 +21,13 @@ def get_projects(
     for p in projects:
         model_name = None
         model_version = None
+        model_labels = None
         if p.default_model_id:
             model = db.query(Model).filter(Model.id == p.default_model_id).first()
             if model:
                 model_name = model.name
                 model_version = model.version
+                model_labels = model.labels or []
         
         items.append(ProjectResponse(
             id=p.id,
@@ -45,7 +47,8 @@ def get_projects(
             created_at=p.created_at,
             updated_at=p.updated_at,
             model_name=model_name,
-            model_version=model_version
+            model_version=model_version,
+            model_labels=model_labels
         ))
     
     return ProjectListResponse(total=total, items=items)
@@ -59,11 +62,13 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
     
     model_name = None
     model_version = None
+    model_labels = None
     if project.default_model_id:
         model = db.query(Model).filter(Model.id == project.default_model_id).first()
         if model:
             model_name = model.name
             model_version = model.version
+            model_labels = model.labels or []
     
     return ProjectResponse(
         id=project.id,
@@ -83,7 +88,8 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
         created_at=project.created_at,
         updated_at=project.updated_at,
         model_name=model_name,
-        model_version=model_version
+        model_version=model_version,
+        model_labels=model_labels
     )
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -153,11 +159,13 @@ def update_project(project_id: int, project: ProjectUpdate, db: Session = Depend
     
     model_name = None
     model_version = None
+    model_labels = None
     if db_project.default_model_id:
         model = db.query(Model).filter(Model.id == db_project.default_model_id).first()
         if model:
             model_name = model.name
             model_version = model.version
+            model_labels = model.labels or []
     
     return ProjectResponse(
         id=db_project.id,
@@ -177,7 +185,8 @@ def update_project(project_id: int, project: ProjectUpdate, db: Session = Depend
         created_at=db_project.created_at,
         updated_at=db_project.updated_at,
         model_name=model_name,
-        model_version=model_version
+        model_version=model_version,
+        model_labels=model_labels
     )
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -349,6 +358,16 @@ def activate_project(project_id: int, db: Session = Depends(get_db)):
     except Exception as _e:
         print(f"[激活项目] MES 状态清理跳过: {_e}", flush=True)
 
+    model_name = None
+    model_version = None
+    model_labels = None
+    if db_project.default_model_id:
+        model = db.query(Model).filter(Model.id == db_project.default_model_id).first()
+        if model:
+            model_name = model.name
+            model_version = model.version
+            model_labels = model.labels or []
+
     return ProjectResponse(
         id=db_project.id,
         name=db_project.name,
@@ -365,7 +384,10 @@ def activate_project(project_id: int, db: Session = Depends(get_db)):
         model_format=db_project.model_format or "pytorch_fp32",
         is_active=db_project.is_active,
         created_at=db_project.created_at,
-        updated_at=db_project.updated_at
+        updated_at=db_project.updated_at,
+        model_name=model_name,
+        model_version=model_version,
+        model_labels=model_labels
     )
 
 @router.get("/active/current", response_model=Optional[ProjectResponse])
@@ -377,11 +399,13 @@ def get_active_project(db: Session = Depends(get_db)):
     
     model_name = None
     model_version = None
+    model_labels = None
     if project.default_model_id:
         model = db.query(Model).filter(Model.id == project.default_model_id).first()
         if model:
             model_name = model.name
             model_version = model.version
+            model_labels = model.labels or []
     
     return ProjectResponse(
         id=project.id,
@@ -401,5 +425,6 @@ def get_active_project(db: Session = Depends(get_db)):
         created_at=project.created_at,
         updated_at=project.updated_at,
         model_name=model_name,
-        model_version=model_version
+        model_version=model_version,
+        model_labels=model_labels
     )

@@ -1,0 +1,41 @@
+{
+  "name": "cross_cycle_e_residue",
+  "description": "鬼周期复现场景: 顺序 A→B→C→D→E 完成后, E 持续残影 + 下周期首步 A 几乎同时出现. 用来验证跨周期同时出现组能阻止鬼周期生成.",
+  "fps": 60,
+  "expected": {
+    "with_cross_cycle_group": {
+      "ok_cycles": 1,
+      "ng_cycles_max": 0,
+      "comment": "配了跨周期组 E-A → 上周期 OK 结算, 下周期 [A], 无鬼周期"
+    },
+    "without_cross_cycle_group": {
+      "ng_cycles_min": 1,
+      "comment": "没配跨周期组 → E 残影立即开新 cycle 形成鬼周期"
+    }
+  },
+  "timeline": [
+    { "from": 0,   "to": 9,   "detections": [] },
+    { "from": 10,  "to": 29,  "detections": [
+        { "label": "A", "confidence": 0.95, "bbox": [0.10, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 30,  "to": 49,  "detections": [
+        { "label": "B", "confidence": 0.93, "bbox": [0.30, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 50,  "to": 69,  "detections": [
+        { "label": "C", "confidence": 0.94, "bbox": [0.50, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 70,  "to": 89,  "detections": [
+        { "label": "D", "confidence": 0.92, "bbox": [0.70, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 90,  "to": 119, "detections": [
+        { "label": "E", "confidence": 0.91, "bbox": [0.10, 0.50, 0.18, 0.18] }
+    ] },
+    { "from": 120, "to": 149, "comment": "E 残影继续 + 下周期 A 同时出现 (鬼周期触发窗口)", "detections": [
+        { "label": "E", "confidence": 0.88, "bbox": [0.10, 0.50, 0.18, 0.18] },
+        { "label": "A", "confidence": 0.94, "bbox": [0.10, 0.10, 0.18, 0.18] }
+    ] },
+    { "from": 150, "to": 199, "detections": [
+        { "label": "A", "confidence": 0.94, "bbox": [0.10, 0.10, 0.18, 0.18] }
+    ] }
+  ]
+}

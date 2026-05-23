@@ -512,24 +512,40 @@ mixin 改动就是源码裸跑（IP 漏出去），但行为对得上。
 
 **调试要点**：客户报 0% OK 率时优先查 `pipeline_config.sequence_order` 是否含重复 label；前 / 后端都需 v3.7.3+ 才能正确处理（旧客户机要发新版）。
 
-### 2. "鬼周期" 防护 — `_post_settle_ignore_labels`
+### 2. "鬼周期" 防护演化轨迹（v3.7.3 拦阻名单 → v3.8.x 治本方案）
 
-**老坑**（v3.7.2 及之前）：
+**鬼周期的根本原因**（v3.7.2 及之前）：
 - 周期 settle 完后立刻 `step_last_seen.clear()` / `step_frame_confirmed.clear()`
 - 但模型对上一周期最后一步（例"放置产品"）的连续识别**还在持续**
-- 下一帧识别到"放置产品" → `_process_single_step` 立即把它加入新 cycle → ghost cycle（cycle_steps = ["放置产品"]）
-- 客户接下来做"拿取配件 1"被 strict_order 拦截（前置不全），UI"闪一下没反应"
+- 下一帧识别到"放置产品" → `_process_single_step` 立即把它加入新 cycle → ghost cycle (`cycle_steps = ["放置产品"]`)
+- 客户接下来做"拿取配件 1"被 strict_order 拦截，UI"闪一下没反应"
 - 直到下一个"放置产品"再来触发 settle → 整轮 NG，客户感知"软件突然失灵"
 
-**v3.7.3 起**：
-- settle 时调 `_capture_post_settle_ignore_labels()`，把"settle 时仍处于 `step_frame_confirmed` 为 True"的 label 全部记到 `self._post_settle_ignore_labels: set`
-- `_process_single_step` 入口检查 `if label in _post_settle_ignore_labels: return`，被记下的 label 想再加入新 cycle 必须先彻底 disappear 一次
-- `source_step_stats_mixin` 的 disappear 处理负责调 `_post_settle_ignore_labels.discard(label)`
+**v3.7.3 中间方案** — `_post_settle_ignore_labels`（鬼周期拦阻名单）：
+- settle 时把"仍处于 `step_frame_confirmed=True`"的 label 全部记到 `self._post_settle_ignore_labels: set`
+- `_process_single_step` 入口拦截这些 label，必须先 disappear 一次才能再加入新 cycle
+- **缺点**：拦阻名单语义模糊（客户故意做的步骤被误拦）、与"按步骤的消失等待时间"语义冲突、状态字段散落
 
-**调试要点**：
-- 客户报"settle 后第一个动作没反应"先查日志里有没有 `_post_settle_ignore_labels` 相关 print
-- `_init_event_and_cycle_state` 已加 `h._post_settle_ignore_labels = set()` 初始化；新增 state 字段时要同步进这里
-- 测试时如要强制清空，可在测试 fixture 里 `mgr._post_settle_ignore_labels.clear()`
+**v3.8.x 治本方案** — 删除拦阻名单，分两层治理：
+1. **第一层（参数）**：把 `max_interval` / `gap_tolerance` 合并成单一"消失等待时间 disappear_delay"
+   - 客户只调一个参数：步骤消失等待几秒才认为真的消失
+   - 残影只要消失等待时间够长就能被自然消化（不会触发新 cycle）
+   - 规则 1：消失等待期间若出现其他有意义步骤，立即终止等待（语义上"客户已经推进到下一步"）
+2. **第二层（同时出现组重构）**：见 §十二·六
+   - 类一：周期内顺序无关的同时组（B-C 谁先谁后）
+   - 类二：跨周期同时组（上一周期末步 E + 下一周期首步 A 互相等待）
+   - 类二自带"被屏蔽标签集合 + 跨周期等待状态"，**结构性消除鬼周期**
+
+**v3.8.x 已删除的字段**（grep 不到也别复活）：
+- `_post_settle_ignore_labels`（拦阻名单本体）
+- `_capture_post_settle_ignore_labels`（settle 时的写入函数）
+- `_first_step_had_gap` / `_first_step_reconfirmed` / `_first_step_disappeared_at`（首步重出辅助标记）
+
+**调试要点**（v3.8.x 之后）：
+- 客户报"settle 后第一个动作没反应"先查 `disappear_delay` 是否过长
+- 客户报"做完一件马上鬼周期"先查项目是否配了跨周期同时组（一般 E-A 互相等待就能消除）
+- 看日志：`[跨周期等待终止·*]` 表示跨周期路由生效；`[跨周期屏蔽解除]` 表示出现组外步骤后屏蔽集合被清空
+- 测试时强制清空：调 `mgr._clear_step_runtime_state()`（一次性清掉所有 11 个状态字段，含新增的 `_blocked_labels` / `_cross_cycle_waiting`）
 
 ### 3. `accept_once` 周期内 N 次配额放行
 
@@ -546,18 +562,169 @@ mixin 改动就是源码裸跑（IP 漏出去），但行为对得上。
 - accept_once 现在不再是"周期内 1 次硬规则"，是"按 sequence_order 期望次数限额"
 - 期望次数=0（label 不在 sequence_order 里）时仍按 1 次限额兜底
 
-### 4. v3.7.x 状态字段索引（按所属 init 函数）
+### 4. v3.7.x / v3.8.x 状态字段索引（按所属 init 函数）
 
 | 字段 | 类型 | 用途 | 初始化位置 |
 |---|---|---|---|
-| `_post_settle_ignore_labels` | `set[str]` | 鬼周期防护 — settle 时未消失的 label，必须 disappear 一次后才能再触发 | `source_state_init._init_event_and_cycle_state` |
 | `_periodic_counters` | `dict[rule_id, int]` | 周期性强制动作触发计数 | `_init_periodic_actions` |
 | `_run_on_start_pending` | `set[rule_id]` | run_on_start 规则待发漏检告警的标记 | `_init_periodic_actions` |
 | `_mjpeg_active_conn_id` | `int` | MJPEG 后来者上位 — 当前 channel 最新 generator id | StreamingMixin 内 lazy init |
 | `_mjpeg_next_conn_id` | `int` | MJPEG generator id 分配序号 | StreamingMixin 内 lazy init |
 | `_cycle_regression` | `bool` | A-B-A 步骤回退标记 | `_init_event_and_cycle_state` |
+| `_sim_group_buffers` | `dict[group_idx, {...}]` | 类一同时出现组缓冲（顺序无关的成员逐个挂起再按优先顺序输出） | `_init_event_and_cycle_state` |
+| `_blocked_labels` | `set[str]` | **v3.8.x** 跨周期同时组的被屏蔽标签集合 — 上周期残影不再触发新 cycle，出现组外有意义步骤时一次性解除 | `_init_event_and_cycle_state` |
+| `_cross_cycle_waiting` | `dict[group_idx, {'phase','first_member','first_role','wait_start_time',...}]` | **v3.8.x** 跨周期同时组的等待状态机；4 种终止路径：另一侧到达 / 组外步骤 / 超时 / 屏蔽残影 | `_init_event_and_cycle_state` |
 
-新增 state 字段时**必须**同步：1) 对应 `_init_*` 函数；2) `reset_stats` 显式保留 / 清零；3) 若涉及周期开始 / 结束行为，去 `source_settlement_mixin` 和 `source_session_lifecycle_mixin` 检查 reset 时机。
+新增 state 字段时**必须**同步：
+1. 对应 `_init_*` 函数（一般是 `source_state_init._init_event_and_cycle_state`）
+2. `_clear_step_runtime_state`（`source.py`）— 这是 v3.8.x 引入的"一次性清空所有运行时状态"统一入口，被 `start_detection` / `stop_detection` / `apply_project_config` / `_force_timeout_ng` 共用
+3. `reset_stats` 显式保留 / 清零
+4. 若涉及周期开始 / 结束行为，去 `source_settlement_mixin` 和 `source_session_lifecycle_mixin` 检查 reset 时机
+
+---
+
+## 十二·六、v3.8.x 同时出现组重构（鬼周期治本方案）
+
+> 这一节是 v3.8.x 主要架构变化，配合 §十二·五·2 的演化轨迹一起看。
+
+### 总览：两类同时组
+
+| 类别 | `cross_cycle` | 解决问题 | 主路径 |
+|---|---|---|---|
+| 类一·周期内同时组 | `false` | 一个周期内 B-C 谁先谁后由模型决定（不稳定），但客户需要它们按固定顺序写入 cycle | `_process_simultaneous_groups`（缓冲 + 结算前重排）|
+| 类二·跨周期同时组 | `true` | 上周期末步残影 + 下周期首步同时出现，避免鬼周期 | `_process_cross_cycle_groups`（等待状态机 + 屏蔽集合）|
+
+### 类一·非跨周期（周期内重排）
+
+**配置 schema**：
+```jsonc
+{
+  "enabled": true,
+  "cross_cycle": false,
+  "labels": ["B", "C"],
+  "priority_order": ["B", "C"],     // 决定写入 cycle_steps 的顺序
+  "time_window": 2.0                // 缓冲窗口（秒）
+}
+```
+
+**行为**：
+- 缓冲收集：组内成员逐个识别后挂起，等待全员到齐 → 按 `priority_order` 一次性输出到 `ready_ordered`
+- **缓冲提前释放**（v3.8.x 新加）：等待期间出现"非组内有意义步骤"（detected_labels 减去组成员后非空），立即终止缓冲，已收集成员按 `priority_order` 输出
+- **结算前重排**（v3.8.x 新加）：`_settle_*_cycle` 在 `_filter_cycle_by_duration` 之后、正式结算之前调 `_reorder_simultaneous_groups_in_cycle()`，把 `current_cycle_steps` 里同组成员按 `priority_order` 兜底回写
+  - 解决"运行时缓冲被打断 / 模型先后顺序不稳定 → cycle_steps 顺序错乱"
+
+### 类二·跨周期（鬼周期治本）
+
+**配置 schema**：
+```jsonc
+{
+  "enabled": true,
+  "cross_cycle": true,
+  "labels": ["E", "A"],
+  "priority_order": ["E", "A"],
+  "prev_cycle_labels": ["E"],        // 上一周期成员（一般是结算步骤）
+  "next_cycle_labels": ["A"],        // 下一周期成员（一般是首步）
+  "time_window": 3.0                 // 等待窗口（秒）
+}
+```
+
+**前端配置 UI**：每个组成员可选"上周期 / 下周期"归属（`period_roles[label] = 'prev'|'next'`），保存时推导成 `prev_cycle_labels` / `next_cycle_labels`；加载时反向推导回 `period_roles`。
+
+**互斥校验**：`cross_cycle=true` 的组不允许与 `settle_dedup=true` 并存（前端保存时校验，后端默认允许写入但运行时跨周期路由会绕过 settle_dedup）。
+
+**状态机的 4 种终止路径**：
+
+| 路径 | 触发 | 行为 |
+|---|---|---|
+| ① 另一侧到达 | 一侧成员先入等待，另一侧成员在 `time_window` 内到达 | 结算上周期 + 启动下周期（next 成员入 cycle_steps）+ 全员塞 `_blocked_labels` |
+| ② 组外有意义步骤 | 等待中出现 `detected_labels - group_labels` 非空的标签 | 立即结算上周期 + 全员屏蔽 + 让组外步骤走正常路径 |
+| ③ 等待超时 | `current_time - wait_start_time > time_window` | 自动结算上周期 + 全员屏蔽 |
+| ④ 屏蔽残影（不终止）| 等待中同侧成员重复识别（残影持续闪） | 单帧消费掉，状态不变（不重复写入 cycle_steps） |
+
+**入场逻辑差异化**（关键）：
+- `first_role == 'prev'`（如 E 先到）：把成员加入 `current_cycle_steps`（情况乙：上周期末步进序列）
+- `first_role == 'next'`（如 A 先到 + 当前周期非空）：成员**不**加入 cycle_steps（属于下周期），仅更新 `step_last_seen`
+
+**`_blocked_labels` 解除机制**：每帧主循环先调 `_handle_blocked_labels_release(detected_labels)`，若本帧出现"非任何跨周期组成员"的有意义标签，一次性清空屏蔽集合（语义：客户已推进到下下步，残影窗口结束）。
+
+### 主循环接入位置
+
+`source_step_stats_mixin._update_step_stats` 在 `_process_simultaneous_groups` **之前**插入两步：
+
+```
+1. _handle_blocked_labels_release(detected_labels)  # 先检查是否解除屏蔽
+2. consumed = _process_cross_cycle_groups(frame_detected_labels, detected_labels, current_time)
+3. detected_labels -= consumed
+   frame_detected_labels -= consumed
+4. → _process_simultaneous_groups（类一缓冲）
+5. → ready_ordered + _process_single_step（常规路径）
+```
+
+### 跨周期路由的 `_settle_for_cross_cycle()`
+
+跨周期路由不走"识别到结算步骤 → 自然 settle"路径，而是直接调一个适配函数 `_settle_for_cross_cycle()`：
+- 按当前 `logic_mode` 选 `_settle_sequential_cycle` / `_settle_custom_cycle` / `_settle_detection_cycle`
+- `current_cycle_steps` 为空时跳过（避免重复结算）
+
+### 排查模板
+
+| 现象 | 第一步看 | 第二步看 | 修复方向 |
+|---|---|---|---|
+| 配置跨周期组后 settle 后 A 没进新周期 | 日志找 `[跨周期等待终止·*]` | 看 `_cross_cycle_waiting` 字典是否还在 waiting 状态 | 检查 `prev_cycle_labels` / `next_cycle_labels` 配置是否正确分组 |
+| 仍然出鬼周期 | 看 cycle_steps 第一个步骤的标签 | 看 `_blocked_labels` 是否在残影期间没记上 | 把残影 label 加进跨周期组 + 加大 `time_window` |
+| settle 后客户做新动作没反应 | 看 `_blocked_labels` 内容 | 看本帧 `detected_labels` 是否被 `_handle_blocked_labels_release` 解除 | 检查动作 label 是否被误划进跨周期组 |
+| 类一缓冲输出顺序错乱 | 看 `_reorder_simultaneous_groups_in_cycle` 是否被 settle 调用 | 看 `priority_order` 配置 | 缺则补 |
+| settle_dedup 与跨周期组互相影响 | 前端是否走过保存校验 | 后端直写 DB 绕过校验 | 提示客户从前端走保存或后端拒收 |
+
+---
+
+## 十二·七、v3.8.x last_first 结算模式（末步结算 + 首步开周期）
+
+**触发场景**：客户工艺要求 D 出现就立即结算（不等 D 消失），且任何状态下 A 重出现都意味着"新周期开始 / 上周期 NG"。
+
+### 入口与守门
+
+- 配置位：`pipeline_config.settlement_mode = 'last_first'`
+- 状态字段：`_pending_first_step` (bool)，`_blocked_labels` 复用类二（互斥保证不会冲突）
+- 入口：`source_settlement_mixin.py:_process_last_first_mode` 在 `_update_step_stats` 跨周期路由后被调
+- 守门：方法首行 `if settlement_mode != 'last_first': return set()` → **其他模式零影响**
+- logic_mode 必须是 `sequential` 或 `custom-based-on-sequential`，否则方法直接退化
+
+### 6 条核心规则（按代码内顺序）
+
+| 规则 | 条件 | 动作 |
+|---|---|---|
+| **R5** | D 在 `_blocked_labels` + 当前帧含 D | 消费 D（残影屏蔽，不触发任何动作） |
+| **R1** | 当前帧含 D + D 不在屏蔽中 | 把 D 写入 `cycle_steps` → `_settle_for_cross_cycle()` → `_pending_first_step=True` + `_blocked_labels.add(D)` + 消费 D |
+| **R3** | `cycle_steps` 已含 A + 当前帧含 A + `cycle_steps[-1] != D` | 立即结算上周期（NG 缺 D）→ 手动设 `cycle_steps=[A]` + `start_cycle()` + `step_last_seen[A]=now` + 消费 A |
+| **R2** | `_pending_first_step=True` + 当前帧含 A | `_pending_first_step=False`（让主循环 `_process_single_step` 写 A 入 cycle_steps） |
+| **R4** | `cycle_steps` 空 + A 不在帧 + 序列内非 D 的下一步在帧中 | `_pending_first_step=False`（让主循环写顶替步骤入 cycle_steps） |
+| **R6** | 帧里出现非屏蔽集合的有意义步骤 | 复用现行 `_handle_blocked_labels_release` 自动清空 `_blocked_labels` |
+
+### 互斥校验（前端阻 + 后端兜底）
+
+| 不能与 last_first 共存 | 校验位置 | 兜底行为 |
+|---|---|---|
+| 任意 step.strict_order=true | 前端 watch + 保存校验 | `_apply_pipeline_config` 强清空 `step_strict_order` |
+| 跨周期同时出现组（cross_cycle=True） | 前端保存校验 | 复用 `_blocked_labels` 不会两边同时写 |
+| pipeline_config.per_item.enabled=true | 前端保存校验 | per_item 走独立路径，不会触发 last_first |
+| pipeline_config.first_step_aborts_pending_settle=true | 前端 watch + UI 隐藏开关 | `_apply_pipeline_config` 强制覆盖为 false |
+| logic_mode = detection / tracking | 守门内 `is_seq_like` 直接返空 | — |
+
+### 排查模板
+
+| 现象 | 第一步看 | 第二步看 | 修复方向 |
+|---|---|---|---|
+| 选了 last_first 但 D 出现没结算 | 日志看 `_process_last_first_mode` 是否被调 | settlement_mode 是否真的是 'last_first' | 检查前端是否漏发字段 / 后端 apply_pipeline_config 是否覆盖 |
+| 周期 1 结算后周期 2 出现幽灵步骤 | `_blocked_labels` 是否含 D | `_handle_blocked_labels_release` 是否提前解除 | 检查 disappear_delay 是否过短，模型残影窗口未跨过 |
+| ABC 跳 D 直接 A，期望 NG 但出 OK | 第一个 cycle 是否真有 A | R3 触发前 cycle_steps 末尾是否真的不是 D | grep `[last_first R3]` 日志确认 fallback 路径 |
+| ABCD 完整出现但仍判 NG | settle 内部诊断哪缺步 | step_last_seen 是否被前一帧 disappear_delay 误清 | 检查 step_min_frames / disappear_delay |
+| 选了 last_first 后老逻辑（first_step）还在跑 | 看 `source_events_check_mixin.py:_check_events` | last_first 是否已加进 `('first_step', 'last_first')` 守门 | 已加，回归测试覆盖 |
+
+### 测试入口
+
+- 单测：`tests/test_settlement_last_first_v38.py` 24 条（State 0/1/2 + 互斥 + 退化）
+- E2E：`tests/test_synthetic_last_first_e2e.py` + `tests/scenarios/last_first_settlement.json`
 
 ---
 
@@ -566,12 +733,13 @@ mixin 改动就是源码裸跑（IP 漏出去），但行为对得上。
 1. `backend/api/source.py`（先 grep 函数名再 Read，全文 1573 行别一次读完）
 2. 对应 mixin（按 §一 表格找对应文件）
 3. `backend/api/source_session_lifecycle_mixin.py`（cycle / session / record_step）
-4. `backend/api/source_step_stats_mixin.py`（step 生命周期）
-5. `backend/api/source_event_trigger_mixin.py`（如涉及事件）
-6. `backend/api/source_periodic_actions_mixin.py`（如涉及保养 / 周期性提醒）
-7. `backend/hotfix.py` + `backend/patches/`（确认补丁层）
-8. `backend/api/channel_manager.py`（如涉及多通道）
-9. `backend/services/mes_hooks.py`（如涉及 MES，但具体诊断走 `debug-mes` skill）
+4. `backend/api/source_step_stats_mixin.py`（step 生命周期 + v3.8.x 跨周期路由接入位置）
+5. `backend/api/source_settlement_mixin.py`（v3.8.x 类一缓冲 + 结算前重排 + 类二跨周期路由都在这里）
+6. `backend/api/source_event_trigger_mixin.py`（如涉及事件）
+7. `backend/api/source_periodic_actions_mixin.py`（如涉及保养 / 周期性提醒）
+8. `backend/hotfix.py` + `backend/patches/`（确认补丁层）
+9. `backend/api/channel_manager.py`（如涉及多通道）
+10. `backend/services/mes_hooks.py`（如涉及 MES，但具体诊断走 `debug-mes` skill）
 
 排查问题前**必须**先确定问题属于：source 状态机 / 推理 / 视频 / MES / 通道 / 报警 ——
 对应 skill 不一样：

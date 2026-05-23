@@ -55,13 +55,22 @@ class Project(Base):
   "custom_detection_steps": [...],
 
   // 结算 / 周期超时（apply 在 _apply_pipeline_config）
-  "settlement_mode": "first_step|last_step",
+  "settlement_mode": "first_step|last_step|last_first",
   "idle_timeout_seconds": 0,
   "cycle_max_duration": 0,
   "ng_cycle_protect_seconds": 0,
   "settle_dedup": false,
   "accumulate_repeats": false,
-  "simultaneous_groups": [...],
+  // 同时出现组（v3.8.x 重构）— 详细 schema 见 §1.5
+  "simultaneous_groups": [
+    // 类一·周期内（顺序无关重排）
+    { "enabled": true, "cross_cycle": false, "labels": ["B","C"],
+      "priority_order": ["B","C"], "time_window": 2.0 },
+    // 类二·跨周期（鬼周期治本）
+    { "enabled": true, "cross_cycle": true, "labels": ["E","A"],
+      "priority_order": ["E","A"], "prev_cycle_labels": ["E"],
+      "next_cycle_labels": ["A"], "time_window": 3.0 }
+  ],
 
   // tracking 模式
   "tracking_cycle_strategy": "all_gone|container",
@@ -107,6 +116,57 @@ class Project(Base):
   ]
 }
 ```
+
+#### 1.5 simultaneous_groups（v3.8.x 重构，必读）
+
+**两类同时出现组**（共用同一个数组，靠 `cross_cycle` 区分）：
+
+| 类别 | `cross_cycle` | 作用 | 详细流程 |
+|---|---|---|---|
+| 类一·周期内同时组 | `false`（默认） | 解决周期内 B-C 谁先谁后顺序不稳定的问题 | 缓冲收集 + 全员到齐后按 `priority_order` 写入；缓冲被组外有意义步骤打断时立即输出已收集成员 |
+| 类二·跨周期同时组 | `true` | 解决"上周期末步残影 + 下周期首步"造成的鬼周期 | 等待状态机：先到一侧 → 等另一侧 → 4 种终止路径（另一侧到 / 组外步骤 / 超时 / 残影屏蔽）|
+
+**完整 schema**：
+
+```jsonc
+{
+  "enabled": true,              // 默认 true；false 时彻底跳过该组
+  "cross_cycle": false,         // ★ v3.8.x: 跨周期模式开关
+  "labels": ["B", "C"],         // 组成员标签（YOLO label，与 steps_config.label 对应）
+  "priority_order": ["B", "C"], // 写入 cycle_steps 的优先顺序（必填）
+  "time_window": 2.0,           // 类一: 缓冲收集窗口（秒）；类二: 等待对侧到达的窗口
+
+  // 仅 cross_cycle=true 时使用，前端保存时从 period_roles 推导出来
+  "prev_cycle_labels": ["E"],   // 属于上一周期的成员（一般是结算步骤）
+  "next_cycle_labels": ["A"],   // 属于下一周期的成员（一般是首步）
+
+  // 仅前端编辑用，保存到后端时被 prev/next_cycle_labels 替代；
+  // 后端拉回时 initProjectDefaults 反向推导回 period_roles
+  "period_roles": { "E": "prev", "A": "next" }
+}
+```
+
+**互斥规则**（前端保存时强校验）：
+- 任一 `cross_cycle=true` 的组与 `settle_dedup=true` **互斥**
+- `cross_cycle=true` 的组必须**同时**含至少一个 `prev` 和一个 `next` 归属的成员
+- 跨周期组每个成员必须明确标记 `period_roles[label]`，不能为空
+
+**配置生效链路**：
+```
+前端 Project/index.vue 保存
+  → simultaneous_groups 写入 pipeline_config
+  → projects.py POST /projects/ + activate
+  → source_project_config_apply.set_project_config()
+  → self._simultaneous_groups = pipeline.get('simultaneous_groups', [])
+  → 主循环 source_step_stats_mixin._update_step_stats 每帧检查
+    ├ 类一: source_settlement_mixin._process_simultaneous_groups
+    └ 类二: source_settlement_mixin._process_cross_cycle_groups
+```
+
+**配置改动 / 排查请同时看**：
+- `.claude/skills/debug-source/SKILL.md` §十二·六（状态机 / 排查模板）
+- `backend/api/source_settlement_mixin.py`（实现）
+- `backend/api/source_state_init.py`（状态字段 `_blocked_labels` / `_cross_cycle_waiting`）
 
 #### v3.7.4 时间维度语义（必读）
 
@@ -382,6 +442,7 @@ class Project(Base):
 | MES Hook 错乱 | 切项目后旧 workpiece 串到新项目 | 已由 `activate_project` 调 `hook.clear_pending_scan` 处理；新增类似副作用要参考此处 |
 | **顺序模式不触发 OK/NG（高频踩坑）** | 走完 step_a/b/c 三步，cycle 永远不结算，OK/NG 事件永不触发，counters 全 0 | `pipeline_config.sequence_order` **必填**。`source_sequential_mixin.py:_check_sequential_mode` 第 15-27 行：`if not sequence_order: return`，没配就直接早退、连 step 都不计数（settle 走的是别的路径，counters 触发依赖此函数）。诊断：后端日志找不到「顺序模式检查/结算: 期望=...」就是这个 |
 | **结算模式默认 first_step、不是 last_step（高频踩坑）** | step_a 只出现一次的剧本永远不结算（"第一步再次出现才结算"是 first_step 模式语义） | `pipeline_config.settlement_mode` 默认是 `'first_step'`，意思「第一步**再次被检测到**」才触发结算。要"最后一步消失就结算"得显式配 `'last_step'`。诊断：后端日志看到「[第一步结算] [step_a] 再次检测到 ... 结算当前周期」=first_step 模式；看到 `_check_sequential_mode` 由 `_check_events(last_step)` 触发 = last_step 模式 |
+| **v3.8.x last_first 模式（末步出现立即结算 + 首步开新周期）** | 客户工艺：D 一出现就结算（不等消失），跳 D 直接 A 也算上周期 NG | `pipeline_config.settlement_mode = 'last_first'`。语义见 `debug-source` skill §十二·七。**强制约束**（前端 + 后端双重）：所有 step.strict_order 自动关；不能与跨周期同时出现组 / per_item / first_step_aborts_pending_settle 共存；只支持 sequential / custom-based-on-sequential。诊断：后端日志看到 `[last_first R1/R3/R4]` = 进入新模式；测试入口 `tests/test_settlement_last_first_v38.py` |
 | **activate ≠ set-project**（写测试时高频踩坑） | `POST /projects/{id}/activate` 后 mgr.events_config 为空，事件触发不到 | `activate_project` 只重载模型 + 写 DB `is_active=True`，**不会** push events/counters/steps 进 `mgr.project_config`。前端是靠 Monitor 启动时 `syncProjectConfig` → `POST /source/detection/set-project` 才把 5 个 JSON 推进 mgr。脚本测试要么走完整链路，要么手动 POST `/source/detection/set-project` |
 | **synthetic with_project=True 用的是「最小项目」** | 跑 synthetic 想看 OK/NG 触发，结果 `_trigger_event` 找不到事件直接 return False | `test_runtime_routes.py:_build_min_project_config` 只有 `steps_config`，`events_config: []`，`pipeline_config: {}` (无 `sequence_order` 也无 `settlement_mode`)。**要触发事件**：先 `create_activate_push` 全 payload + `set-project`，再 `start_synth(with_project=False)` 让 mgr 沿用我们推的 config |
 

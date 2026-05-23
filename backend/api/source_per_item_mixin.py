@@ -119,6 +119,7 @@ class _PerItemStep:
         'item_label', 'action_label',
         'item_tracking_iou', 'coverage_iou', 'sustain_frames',
         'completion', 'min_item_count',
+        'expected_count',                  # v3.9+: 已知固定个体数 (0=未配置, 走 auto 路径)
         'items', 'next_item_id', 'locked_count', 'completed',
         'completed_count_in_session',
     )
@@ -130,7 +131,15 @@ class _PerItemStep:
         self.display_label = raw_step.get('displayLabel') or raw_step.get('display_name') or self.step_label
 
         # ── 必填: item_label / action_label ──
-        self.item_label = per.get('item_label', '')
+        # 兼容字符串 ('5N螺丝') 或数组 (['5N螺丝', '7N螺丝'], 表示 OR 关系)
+        # 内部统一存为 tuple[str, ...], 空串过滤掉
+        raw_item_label = per.get('item_label', '')
+        if isinstance(raw_item_label, (list, tuple)):
+            self.item_label: tuple = tuple(s for s in raw_item_label if isinstance(s, str) and s)
+        elif isinstance(raw_item_label, str) and raw_item_label:
+            self.item_label = (raw_item_label,)
+        else:
+            self.item_label = tuple()
         self.action_label = per.get('action_label', '')
 
         # ── 阈值与帧数 ──
@@ -140,6 +149,19 @@ class _PerItemStep:
 
         self.completion = per.get('completion', 'all_covered')
         self.min_item_count = per.get('min_item_count', 'auto')
+
+        # ── 固定数量模式 (v3.9+) ──
+        # 配了 expected_count > 0 时:
+        #   1. 周期开始判定改为"检出数 ≥ expected_count × tolerance_ratio"
+        #   2. 周期开始锁定 min(expected_count, 当前检出数) 颗
+        #   3. 周期内 lock_lookahead_seconds 秒内继续吸收新位置, 直到补满 expected_count
+        try:
+            ec = per.get('expected_count', 0)
+            if isinstance(ec, str):
+                ec = 0 if ec.strip().lower() in ('', 'auto') else int(ec)
+            self.expected_count = max(0, int(ec))
+        except (TypeError, ValueError):
+            self.expected_count = 0
 
         # ── 运行时状态 ──
         self.items: dict[int, _PerItemItemState] = {}
@@ -233,17 +255,21 @@ class _PerItemStep:
     def cleanup_stale_items(self, ts: float, timeout_sec: float, lock_count_on_start: bool):
         """清理超时未出现的个体.
 
-        锁定模式: 已覆盖个体永远不清理(语义已完成); 未覆盖个体超时才清.
-        dynamic 模式: 一律按超时清.
+        锁定模式 (lock_count_on_start=true):
+            周期内一律不清 — 工人手/工具会遮挡未覆盖件长达数秒,
+            清掉会导致后续工序 box 找不到匹配 → 永远 NG.
+            个体表只在周期结算时整体 reset.
+        dynamic 模式 (lock_count_on_start=false):
+            按 timeout_sec 清, 0 = 不清.
         """
+        if lock_count_on_start:
+            return
         if timeout_sec <= 0:
             return
-        stale = []
-        for iid, st in self.items.items():
-            if (ts - st.last_seen_time) > timeout_sec:
-                if lock_count_on_start and st.covered:
-                    continue
-                stale.append(iid)
+        stale = [
+            iid for iid, st in self.items.items()
+            if (ts - st.last_seen_time) > timeout_sec
+        ]
         for iid in stale:
             self.items.pop(iid, None)
 
@@ -267,8 +293,10 @@ class _PerItemStep:
             'step_id': self.step_id,
             'label': self.step_label,
             'display_label': self.display_label,
-            'item_label': self.item_label,
+            # item_label 内部是 tuple, 序列化时若仅 1 个还原为字符串 (兼容老前端)
+            'item_label': self.item_label[0] if len(self.item_label) == 1 else list(self.item_label),
             'action_label': self.action_label,
+            'expected_count': self.expected_count,
             'total': len(self.items),
             'locked_count': self.locked_count,
             'covered_count': self.covered_count(),
@@ -285,6 +313,9 @@ class _PerItemSession:
         'stability_buffer',
         'finish_label_seen_at', 'finish_label_consec_frames',
         'frame_id',
+        'last_activity_time',           # 最近一次看到 item/action 标签的时刻 (空闲超时用)
+        'all_done_first_at',            # 所有步骤首次全 completed 的时刻 (完成即结算用)
+        'lock_lookahead_deadline',      # 周期开始后补锁定窗口的截止时刻
     )
 
     def __init__(self):
@@ -295,6 +326,9 @@ class _PerItemSession:
         self.finish_label_seen_at: Optional[float] = None
         self.finish_label_consec_frames = 0
         self.frame_id = 0
+        self.last_activity_time: Optional[float] = None
+        self.all_done_first_at: Optional[float] = None
+        self.lock_lookahead_deadline: Optional[float] = None
 
     def reset_after_cycle(self):
         self.cycle_active = False
@@ -303,6 +337,9 @@ class _PerItemSession:
         self.stability_buffer.clear()
         self.finish_label_seen_at = None
         self.finish_label_consec_frames = 0
+        self.last_activity_time = None
+        self.all_done_first_at = None
+        self.lock_lookahead_deadline = None
 
 
 # ==================== 主 Mixin ====================
@@ -352,18 +389,40 @@ class PerItemMixin:
         # ── 项目级参数 ──
         stability_window = int(per_item_cfg.get('stability_window_frames', 10))
         stability_iou = float(per_item_cfg.get('stability_iou_threshold', 0.7))
+        stability_count_tol = int(per_item_cfg.get('stability_count_tolerance', 0))
         item_timeout = float(per_item_cfg.get('item_timeout_seconds', 3.0))
         lock_on_start = bool(per_item_cfg.get('lock_count_on_start', True))
         finish_label = per_item_cfg.get('finish_label', '')
         finish_sustain = int(per_item_cfg.get('finish_sustain_frames', 3))
+        settle_after_all_done = float(per_item_cfg.get('settle_after_all_done_sec', 0.0))
+        lock_lookahead = float(per_item_cfg.get('lock_lookahead_seconds', 5.0))
+
+        # v3.9+ per_item 专属字段 (与其他模式隔离, 不读项目级 cycle_max_duration / idle_timeout_seconds)
+        # 兼容老 per_item 项目: 若专属字段未配, 落回项目级老字段 (一次性数据迁移)
+        cycle_max_sec = float(per_item_cfg.get('cycle_max_duration_sec', 0.0))
+        if cycle_max_sec <= 0:
+            cycle_max_sec = float(pipeline.get('cycle_max_duration', 0) or 0)
+        idle_timeout_sec = float(per_item_cfg.get('idle_timeout_sec', 0.0))
+        if idle_timeout_sec <= 0:
+            idle_timeout_sec = float(pipeline.get('idle_timeout_seconds', 0) or 0)
+
+        # 路径 A 检出比例 (替换之前硬编码 0.85)
+        # 含义: 配了 expected_count 时, 检出数 ≥ expected_count × stability_count_ratio 即放行
+        stability_count_ratio = float(per_item_cfg.get('stability_count_ratio', 0.85))
 
         self._per_item_config = {
             'stability_window_frames': max(1, stability_window),
             'stability_iou_threshold': stability_iou,
+            'stability_count_tolerance': max(0, stability_count_tol),
+            'stability_count_ratio': max(0.1, min(1.0, stability_count_ratio)),
             'item_timeout_seconds': max(0.0, item_timeout),
             'lock_count_on_start': lock_on_start,
             'finish_label': finish_label,
             'finish_sustain_frames': max(1, finish_sustain),
+            'settle_after_all_done_sec': max(0.0, settle_after_all_done),
+            'lock_lookahead_seconds': max(0.0, lock_lookahead),
+            'cycle_max_duration_sec': max(0.0, cycle_max_sec),
+            'idle_timeout_sec': max(0.0, idle_timeout_sec),
         }
 
         # ── 步骤级解析 ──
@@ -432,18 +491,35 @@ class PerItemMixin:
             return
 
         # ──── 3. 周期内: 更新每个 per_item 步骤 ────
+        # "活动" = action 标签出现 (工人在做工序), 不包括 item 标签 (静态工件)
+        # 这样模型把桌面误检出残留 item 标签也不会刷新 idle 计时, idle_timeout 能正常兜底
+        any_action_this_frame = False
+        in_lookahead = (
+            sess.lock_lookahead_deadline is not None
+            and current_time <= sess.lock_lookahead_deadline
+        )
         for step in self._per_item_steps:
-            # 3a. 更新个体位置 (按 item_label)
-            item_boxes = boxes_by_label.get(step.item_label, [])
+            # 3a. 更新个体位置 (多标签 OR 合并)
+            item_boxes = self._collect_item_boxes(boxes_by_label, step.item_label)
             if item_boxes:
                 step.update_item_positions(
                     item_boxes, sess.frame_id, current_time,
                     cfg['lock_count_on_start'],
                 )
+                # 3a'. 补锁定窗口 (v3.9+): 配了 expected_count + 当前锁定数 < expected_count
+                # + 仍在 lookahead 窗口内 → 吸收"新位置"的 box
+                if (
+                    in_lookahead
+                    and step.expected_count > 0
+                    and len(step.items) < step.expected_count
+                ):
+                    self._per_item_absorb_new_items(step, item_boxes, sess.frame_id, current_time)
             # 3b. 应用工序覆盖 (按 action_label)
             action_boxes = boxes_by_label.get(step.action_label, [])
+            if action_boxes:
+                any_action_this_frame = True
             step.apply_coverage(action_boxes, sess.frame_id, current_time)
-            # 3c. 超时清理
+            # 3c. 超时清理 (锁定模式下已是 no-op)
             step.cleanup_stale_items(
                 current_time, cfg['item_timeout_seconds'],
                 cfg['lock_count_on_start'],
@@ -466,7 +542,48 @@ class PerItemMixin:
                     f"({step.covered_count()}/{len(step.items)})"
                 )
 
-        # ──── 4. 收尾标签判定 ────
+        # 刷新 last_activity_time (本帧出现 action 标签 = 工人在做工序 = 有活动)
+        # 注意: 只看 action, 不看 item — 工件静置画面里有 item 标签不算"活动",
+        # 否则工人放工件不操作时永远 idle=0, 触发不了 idle_timeout 兜底.
+        if any_action_this_frame:
+            sess.last_activity_time = current_time
+
+        # ──── 4. 完成即结算 (OK 路径, 无需收尾标签) ────
+        # 所有 per_item 步骤都 completed → 保持 settle_after_all_done_sec 秒 → 立即结算 OK
+        settle_after_all_done = cfg.get('settle_after_all_done_sec', 0)
+        if settle_after_all_done > 0 and self._per_item_steps:
+            all_done = all(s.completed for s in self._per_item_steps)
+            if all_done:
+                if sess.all_done_first_at is None:
+                    sess.all_done_first_at = current_time
+                elif (current_time - sess.all_done_first_at) >= settle_after_all_done:
+                    print(f"[per_item] 所有步骤完成已保持 {settle_after_all_done:.1f}s, 立即结算 OK")
+                    self._per_item_settle_cycle(current_time)
+                    return
+            else:
+                sess.all_done_first_at = None
+
+        # ──── 5. 周期超时强制结算 (NG 兜底, per_item 专属参数) ────
+        cycle_max = cfg.get('cycle_max_duration_sec', 0)
+        if cycle_max > 0 and sess.cycle_start_time is not None:
+            cycle_elapsed = current_time - sess.cycle_start_time
+            if cycle_elapsed > cycle_max:
+                print(f"[per_item] 周期总时长超时 {cycle_elapsed:.1f}s > {cycle_max}s, 强制结算")
+                self._per_item_settle_cycle(current_time)
+                return
+
+        # ──── 6. 空闲超时强制结算 (NG 兜底, per_item 专属参数) ────
+        # 本场景核心兜底: 工人停手 → 持续 N 秒无 action 标签 → 强制结算
+        # 注: 只看 action 标签, 不看 item, 见上面 last_activity_time 刷新规则
+        idle_timeout = cfg.get('idle_timeout_sec', 0)
+        if idle_timeout > 0 and sess.last_activity_time is not None:
+            idle_elapsed = current_time - sess.last_activity_time
+            if idle_elapsed > idle_timeout:
+                print(f"[per_item] 空闲 {idle_elapsed:.1f}s > {idle_timeout}s, 强制结算")
+                self._per_item_settle_cycle(current_time)
+                return
+
+        # ──── 7. 收尾标签判定 (兼容原有路径, 配了 finish_label 仍然生效) ────
         finish_label = cfg.get('finish_label') or ''
         if finish_label and finish_label in boxes_by_label:
             sess.finish_label_consec_frames += 1
@@ -477,66 +594,158 @@ class PerItemMixin:
 
     # ──── 周期开始: 稳定窗口判定 ────
     def _per_item_try_start_cycle(self, boxes_by_label, current_time: float):
-        """连续 stability_window_frames 帧都满足: 第一步 item_label 数量 + 位置稳定 → 周期开始"""
+        """周期开始判定. 分两条路径:
+
+        (A) 第一步配了 expected_count > 0 (固定数量模式, v3.9+):
+            连续 K 帧检出数 ≥ expected_count - count_tolerance → 立刻锁定 + 进入周期.
+            不要求"数量完全相同"、不要求"两两 IoU > 阈值" — 工件螺丝数已知, 抖动不影响.
+        (B) 第一步未配 expected_count (auto 模式, 老路径):
+            连续 stability_window 帧"数量完全恒定 + 两两 IoU > 阈值" → 进入周期.
+        """
         if not self._per_item_steps:
             return
         cfg = self._per_item_config
         first_step = self._per_item_steps[0]
-        trigger_label = first_step.item_label
 
-        boxes_now = boxes_by_label.get(trigger_label, [])
+        # 多标签 OR: 把第一步所有 item_label 的 boxes 合并起来当触发集合
+        boxes_now = self._collect_item_boxes(boxes_by_label, first_step.item_label)
         sess = self._per_item_session
         sess.stability_buffer.append(list(boxes_now))
 
         if len(sess.stability_buffer) < cfg['stability_window_frames']:
             return
 
-        # ──── 稳定性校验 ────
-        # 1. 数量恒定
-        counts = [len(b) for b in sess.stability_buffer]
-        if len(set(counts)) != 1:
-            return
-        item_count = counts[0]
-        if item_count <= 0:
-            return
+        item_count = 0
+        latest_boxes: list = []
 
-        # 2. 位置稳定 (相邻帧 IoU > 阈值, 按 NN 匹配)
-        prev = list(sess.stability_buffer[0])
-        for fr in list(sess.stability_buffer)[1:]:
-            if not self._per_item_frames_position_stable(prev, fr, cfg['stability_iou_threshold']):
-                return
-            prev = list(fr)
+        if first_step.expected_count > 0:
+            # ──── 路径 A: 固定数量模式 ────
+            target = first_step.expected_count
+            ratio = cfg.get('stability_count_ratio', 0.85)
+            count_tol = cfg.get('stability_count_tolerance', 0)
+            required = max(1, min(target, int(target * ratio), target - count_tol))
 
-        # 3. min_item_count 校验
-        min_required = first_step.min_item_count
-        if min_required != 'auto' and isinstance(min_required, int):
-            if item_count < min_required:
-                # 数量太少, 不算稳定也不进周期
+            # 窗口里每帧的检出数都要 ≥ required
+            window_frames = list(sess.stability_buffer)
+            if any(len(fr) < required for fr in window_frames):
                 return
+            # 锁定时挑窗口里"检出最多"的那一帧 (最接近真实数量)
+            best_fr = max(window_frames, key=lambda fr: len(fr))
+            latest_boxes = list(best_fr)[:target]      # 截到 target 颗封顶
+            item_count = len(latest_boxes)
+        else:
+            # ──── 路径 B: auto 模式 (老路径) ────
+            counts = [len(b) for b in sess.stability_buffer]
+            if len(set(counts)) != 1:
+                return
+            item_count = counts[0]
+            if item_count <= 0:
+                return
+            # 位置稳定 (相邻帧 IoU > 阈值, 按 NN 匹配)
+            prev = list(sess.stability_buffer[0])
+            for fr in list(sess.stability_buffer)[1:]:
+                if not self._per_item_frames_position_stable(prev, fr, cfg['stability_iou_threshold']):
+                    return
+                prev = list(fr)
+            # min_item_count 校验
+            min_required = first_step.min_item_count
+            if min_required != 'auto' and isinstance(min_required, int):
+                if item_count < min_required:
+                    return
+            latest_boxes = list(sess.stability_buffer[-1])
 
         # ──── 进入周期 ────
         sess.cycle_active = True
         sess.cycle_start_time = current_time
         sess.cycle_start_frame_id = sess.frame_id
+        sess.last_activity_time = current_time        # 周期开始即视为有活动
+        sess.all_done_first_at = None
+        # 补锁定窗口截止时刻 (v3.9+): 项目级 lock_lookahead_seconds (默认 5s)
+        # 配 expected_count 后, 周期内此窗口期会持续吸收新位置
+        lookahead = float(cfg.get('lock_lookahead_seconds', 5.0))
+        sess.lock_lookahead_deadline = current_time + lookahead if lookahead > 0 else None
         try:
-            self.cycle_start_time = current_time      # 兼容现有 current_cycle_time 输出
+            self.cycle_start_time = current_time
         except Exception:
             pass
 
-        # 锁定所有 per_item 步骤的个体表 (用最新帧的 boxes)
-        latest_boxes = list(sess.stability_buffer[-1])
+        # 锁定所有 per_item 步骤的个体表
         for step in self._per_item_steps:
-            if step.item_label == trigger_label:
+            if step is first_step:
                 step.lock_items_from_boxes(latest_boxes, sess.frame_id, current_time)
             else:
-                # 不同 item_label 的步骤: 用本帧实际识别的 boxes 锁定
-                other_boxes = boxes_by_label.get(step.item_label, [])
+                # 不同步骤的 item_label 可能完全不同, 各自从本帧抽 boxes
+                other_boxes = self._collect_item_boxes(boxes_by_label, step.item_label)
+                # 若该步骤也配了 expected_count, 截顶
+                if step.expected_count > 0:
+                    other_boxes = other_boxes[:step.expected_count]
                 step.lock_items_from_boxes(other_boxes, sess.frame_id, current_time)
 
         print(
-            f"[per_item] 周期开始: 触发标签='{trigger_label}', 锁定个体数={item_count}, "
-            f"frame_id={sess.frame_id}"
+            f"[per_item] 周期开始: 锁定首步个体数={item_count}, frame_id={sess.frame_id}, "
+            f"路径={'expected_count' if first_step.expected_count > 0 else 'auto'}"
         )
+        for s in self._per_item_steps:
+            print(
+                f"  · 步骤 [{s.step_label}]: 锁定={len(s.items)} "
+                f"(expected={s.expected_count if s.expected_count > 0 else 'auto'})"
+            )
+
+    # ──── 多标签 OR 合并工具 ────
+    @staticmethod
+    def _collect_item_boxes(boxes_by_label: dict, labels) -> list:
+        """把 step.item_label (tuple[str,...]) 涉及的所有 label 的 boxes 合并成单一列表.
+
+        给"涂黑"这种"覆盖多种螺丝"的步骤用 (item_label=['5N螺丝','7N螺丝']).
+        老配置 item_label=str 也兼容 (__init__ 已统一成 tuple).
+        """
+        out = []
+        if isinstance(labels, str):
+            labels = (labels,) if labels else ()
+        for lbl in labels:
+            out.extend(boxes_by_label.get(lbl, []) or [])
+        return out
+
+    # ──── 周期内补锁定 (v3.9+) ────
+    @staticmethod
+    def _per_item_absorb_new_items(step, item_boxes, frame_id: int, ts: float):
+        """周期开始后 lookahead 窗口内, 用本帧 item_boxes 补充被遮挡漏锁的个体.
+
+        策略: 本帧每个 box 与现有所有 items 计算 IoU, 都低于 item_tracking_iou
+        视为"新位置" → 加入个体表 (covered=false), 直到达到 expected_count 上限.
+
+        语义保证:
+          - 已 covered 的个体永远不会被替换 (单调性, 见不变量 §一.1)
+          - 不影响已锁定的 N 个个体, 仅追加缺失的
+          - 一旦达到 expected_count 立即停止补锁
+        """
+        if step.expected_count <= 0:
+            return
+        room = step.expected_count - len(step.items)
+        if room <= 0:
+            return
+        added = 0
+        for bbox in item_boxes:
+            if added >= room:
+                break
+            # 与现有 items 计算最高 IoU
+            max_iou = 0.0
+            for st in step.items.values():
+                iou = _bbox_iou(st.bbox, bbox)
+                if iou > max_iou:
+                    max_iou = iou
+            if max_iou < step.item_tracking_iou:
+                # 新位置 → 加入
+                iid = step.next_item_id
+                step.next_item_id += 1
+                step.items[iid] = _PerItemItemState(iid, bbox, frame_id, ts)
+                added += 1
+        if added > 0:
+            step.locked_count = len(step.items)
+            print(
+                f"[per_item] 步骤 [{step.step_label}] 补锁定 +{added} → "
+                f"{len(step.items)}/{step.expected_count}"
+            )
 
     # ──── 位置稳定性辅助 ────
     @staticmethod
@@ -641,9 +850,18 @@ class PerItemMixin:
             'frame_id': sess.frame_id if sess else 0,
             'config': {
                 'stability_window_frames': cfg['stability_window_frames'],
+                'stability_iou_threshold': cfg.get('stability_iou_threshold', 0.5),
+                'stability_count_tolerance': cfg.get('stability_count_tolerance', 0),
+                'stability_count_ratio': cfg.get('stability_count_ratio', 0.85),
                 'item_timeout_seconds': cfg['item_timeout_seconds'],
                 'lock_count_on_start': cfg['lock_count_on_start'],
                 'finish_label': cfg['finish_label'],
+                'finish_sustain_frames': cfg.get('finish_sustain_frames', 3),
+                'settle_after_all_done_sec': cfg.get('settle_after_all_done_sec', 0.0),
+                'lock_lookahead_seconds': cfg.get('lock_lookahead_seconds', 5.0),
+                # per_item 专属超时 (与其他模式隔离)
+                'cycle_max_duration_sec': cfg.get('cycle_max_duration_sec', 0.0),
+                'idle_timeout_sec': cfg.get('idle_timeout_sec', 0.0),
             },
             'steps': steps_state,
             'last_ng_detail': getattr(self, '_per_item_last_ng_detail', None),

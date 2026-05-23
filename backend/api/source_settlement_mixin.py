@@ -48,6 +48,8 @@ class SettlementMixin:
         self._supplement_step_durations()
         
         self.current_cycle_steps = self._filter_cycle_by_duration(self.current_cycle_steps)
+        # v3.8.x: 结算前对同时出现组成员按优先顺序兜底重排
+        self._reorder_simultaneous_groups_in_cycle()
         
         print(f"自定义模式结算: 当前序列={self.current_cycle_steps}")
         
@@ -60,8 +62,6 @@ class SettlementMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
-            
             self.last_step_completed_time = None
             return
         
@@ -91,7 +91,6 @@ class SettlementMixin:
                     self.step_start_time.clear()
                     self.step_consecutive_frames.clear()
                     self.step_frame_confirmed.clear()
-                    self._step_gap_count.clear()
                     if hasattr(self, '_step_raw_start'):
                         self._step_raw_start.clear()
                     self.last_step_completed_time = None
@@ -110,7 +109,6 @@ class SettlementMixin:
                 self.step_start_time.clear()
                 self.step_consecutive_frames.clear()
                 self.step_frame_confirmed.clear()
-                self._step_gap_count.clear()
                 if hasattr(self, '_step_raw_start'):
                     self._step_raw_start.clear()
                 self.last_step_completed_time = None
@@ -130,7 +128,6 @@ class SettlementMixin:
                 self.step_start_time.clear()
                 self.step_consecutive_frames.clear()
                 self.step_frame_confirmed.clear()
-                self._step_gap_count.clear()
                 if hasattr(self, '_step_raw_start'):
                     self._step_raw_start.clear()
                 self.last_step_completed_time = None
@@ -149,7 +146,6 @@ class SettlementMixin:
                 self.step_start_time.clear()
                 self.step_consecutive_frames.clear()
                 self.step_frame_confirmed.clear()
-                self._step_gap_count.clear()
                 if hasattr(self, '_step_raw_start'):
                     self._step_raw_start.clear()
                 self.last_step_completed_time = None
@@ -245,7 +241,6 @@ class SettlementMixin:
                 self._trigger_event(2, reason)
         
         # 重置周期
-        self._capture_post_settle_ignore_labels()
         self._cycle_regression = False
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
@@ -254,8 +249,6 @@ class SettlementMixin:
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
-        self._step_gap_count.clear()
-        
         self.last_step_completed_time = None
     
     def _settle_detection_cycle(self):
@@ -279,6 +272,8 @@ class SettlementMixin:
         self.current_cycle_steps = self._inject_backup_steps(
             self.current_cycle_steps, detection_labels)
         self.current_cycle_steps = self._filter_cycle_by_duration(self.current_cycle_steps)
+        # v3.8.x: 结算前对同时出现组成员按优先顺序兜底重排
+        self._reorder_simultaneous_groups_in_cycle()
         
         if not self.current_cycle_steps:
             self._discard_empty_cycle()
@@ -290,7 +285,6 @@ class SettlementMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
             if hasattr(self, '_step_raw_start'):
                 self._step_raw_start.clear()
             self.last_step_completed_time = None
@@ -328,7 +322,6 @@ class SettlementMixin:
             print(f"  → {reason} → NG")
             self._trigger_event(2, reason)
         
-        self._capture_post_settle_ignore_labels()
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
         self.last_added_step = None
@@ -337,7 +330,6 @@ class SettlementMixin:
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
-        self._step_gap_count.clear()
         if hasattr(self, '_step_raw_start'):
             self._step_raw_start.clear()
         self.last_step_completed_time = None
@@ -378,8 +370,6 @@ class SettlementMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
-            
             self.last_step_completed_time = None
             return
         
@@ -397,8 +387,6 @@ class SettlementMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
-            
             self.last_step_completed_time = None
             return
         
@@ -407,7 +395,9 @@ class SettlementMixin:
         self.current_cycle_steps = self._inject_backup_steps(
             self.current_cycle_steps, expected_labels)
         self.current_cycle_steps = self._filter_cycle_by_duration(self.current_cycle_steps)
-        
+        # v3.8.x: 结算前对同时出现组成员按优先顺序兜底重排
+        self._reorder_simultaneous_groups_in_cycle()
+
         if not self.current_cycle_steps:
             self._discard_empty_cycle()
             self.current_cycle_steps = []
@@ -417,8 +407,6 @@ class SettlementMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
-            
             self.last_step_completed_time = None
             return
         
@@ -461,8 +449,6 @@ class SettlementMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
-            
             self.last_step_completed_time = None
             return
 
@@ -477,8 +463,6 @@ class SettlementMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
-            
             self.last_step_completed_time = None
             return
         
@@ -505,7 +489,6 @@ class SettlementMixin:
             self._trigger_event(2, f'顺序错误，期望[{order_error_labels[0]}]在前 实际[{order_error_labels[1]}]在前')
         
         # 重置周期
-        self._capture_post_settle_ignore_labels()
         self._cycle_regression = False
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
@@ -514,57 +497,482 @@ class SettlementMixin:
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
-        self._step_gap_count.clear()
-        
         self.last_step_completed_time = None
-    
-    def _capture_post_settle_ignore_labels(self):
-        """v3.7.x (FIX-鬼周期):
-        上一周期"最后一步"动作 (如"放置产品") 可能延续到本次结算之后还在被模型识别.
-        旧实现 step_last_seen.clear() / step_frame_confirmed.clear() 后下一帧再次识别
-        就被当作"新出现"启动 ghost cycle. cycle_steps 只含这一个 step, 客户后续动作
-        (拿取配件1 ...) 因 strict_order 缺前置而"闪一下没反应", 直到下一个"放置产品"
-        再来触发 settle -> NG.
-        修复: 记录结算时仍处于"已确认中"的 label, 要求它们必须先彻底 disappear 一次
-        才能再触发 add-to-cycle. 由 source_step_stats_mixin.py 的消失处理负责清理.
+
+    def _handle_blocked_labels_release(self, detected_labels: set):
+        """v3.8.x (类二): 检查是否解除被屏蔽集合.
+
+        解除条件: 本帧已过帧确认的启用步骤里, 出现了任何"非任何跨周期组成员"的标签
+        → 一次性清空 _blocked_labels.
+
+        语义: 客户已经推进到跨周期组外的步骤, 说明上一周期残影窗口已经过去,
+        屏蔽不再必要.
         """
-        if hasattr(self, 'step_frame_confirmed'):
-            self._post_settle_ignore_labels = set(
-                lbl for lbl, conf in self.step_frame_confirmed.items() if conf
-            )
-        else:
-            self._post_settle_ignore_labels = set()
-    
+        if not getattr(self, '_blocked_labels', None):
+            return
+        # 收集所有跨周期组的成员标签
+        cross_cycle_members = set()
+        for group in getattr(self, '_simultaneous_groups', []) or []:
+            if group.get('enabled', True) and group.get('cross_cycle'):
+                cross_cycle_members.update(group.get('labels', []))
+        # 本帧有非跨周期组成员的有意义步骤 → 解除屏蔽
+        if detected_labels - cross_cycle_members:
+            print(f"[跨周期屏蔽解除] 本帧出现组外步骤, 清空被屏蔽集合: {self._blocked_labels}")
+            self._blocked_labels = set()
+
+    def _process_cross_cycle_groups(self, frame_detected_labels: set, detected_labels: set, current_time: float):
+        """v3.8.x (类二): 跨周期同时出现组路由.
+
+        语义: 跨周期同时出现组配置 (cross_cycle=true) 指"上一周期某些成员和下一周期
+        某些成员实际会几乎同时入场". 状态机为这两组成员互相等待: 任一侧先到 → 进入
+        等待 → 等待中另一侧到来一起结算上周期并启动下周期; 等待中出现组外步骤 / 等待
+        超时 → 立即结算上周期 + 把所有组员加入被屏蔽集合.
+
+        被屏蔽集合 (_blocked_labels) 的作用: 上一周期残影 (例如已结算后的 E 持续被
+        识别) 不再触发新周期 / 不再写入 cycle_steps. 屏蔽解除靠 _handle_blocked_labels_release.
+
+        组配置 schema:
+          - cross_cycle: true
+          - labels: 全部成员
+          - prev_cycle_labels: 上周期成员标签列表 (子集)
+          - next_cycle_labels: 下周期成员标签列表 (子集)
+          - time_window: 等待超时秒数 (默认 3.0)
+          - priority_order: 输出顺序 (仅影响下周期成员入序的排列)
+
+        返回:
+            consumed: set -- 本帧被跨周期路由"消费"掉的标签, 应该从 detected_labels /
+                            frame_detected_labels 里去掉, 不让后续主循环再处理.
+        """
+        consumed = set()
+        if not self._simultaneous_groups:
+            return consumed
+
+        # 应用被屏蔽集合: 本帧若识别到屏蔽中的标签, 直接消费掉
+        if getattr(self, '_blocked_labels', None):
+            blocked_in_frame = frame_detected_labels & self._blocked_labels
+            if blocked_in_frame:
+                consumed.update(blocked_in_frame)
+
+        for idx, group in enumerate(self._simultaneous_groups):
+            if not group.get('enabled', True):
+                continue
+            if not group.get('cross_cycle'):
+                continue
+
+            group_labels = set(group.get('labels', []))
+            if len(group_labels) < 2:
+                continue
+            prev_labels = set(group.get('prev_cycle_labels', []))
+            next_labels = set(group.get('next_cycle_labels', []))
+            if not prev_labels or not next_labels:
+                # 配置不完整, 跳过 (前端应该禁止保存这种组)
+                continue
+            time_window = group.get('time_window', 3.0)
+
+            # 本帧组内成员 (排除已屏蔽的)
+            present = (group_labels & frame_detected_labels) - self._blocked_labels
+            present_in_detected = (group_labels & detected_labels) - self._blocked_labels
+
+            wait_state = self._cross_cycle_waiting.get(idx)
+
+            if wait_state is None or wait_state.get('phase') != 'waiting':
+                # idle 状态: 等待第一个成员到来
+                if not present_in_detected:
+                    continue
+
+                # 选一个本帧已确认的成员作为"先到者"
+                # 优先 prev 成员 (上周期结算步骤通常先到), 否则取 next 成员
+                first_member = None
+                first_role = None
+                for lbl in present_in_detected:
+                    if lbl in prev_labels:
+                        first_member = lbl
+                        first_role = 'prev'
+                        break
+                if first_member is None:
+                    for lbl in present_in_detected:
+                        if lbl in next_labels:
+                            first_member = lbl
+                            first_role = 'next'
+                            break
+                if first_member is None:
+                    continue
+
+                # 关键差异化处理:
+                # - prev 成员先到: 它属于上周期, 应加入 current_cycle_steps (情况乙),
+                #   但不立即触发结算, 进入等待 next 成员
+                # - next 成员先到: 它属于下周期, 暂不加入 current_cycle_steps
+                #   (current_cycle_steps 必须非空, 否则没什么可等的)
+                if first_role == 'prev':
+                    # prev 成员先到的等待: 防御"本周期还在中间, prev 成员 (例如 E) 因为
+                    # 模型误检提前出现"的误触发 — 严格顺序模式下, 序列里 prev 成员之前的
+                    # 步骤必须已经在 cycle_steps 里, 否则放任主循环按"步骤回退/重复"逻辑处理.
+                    expected_seq = self._get_expected_sequence_labels() if hasattr(self, '_get_expected_sequence_labels') else None
+                    if expected_seq and first_member in expected_seq:
+                        prev_member_idx = expected_seq.index(first_member)
+                        required_predecessors = expected_seq[:prev_member_idx]
+                        if required_predecessors and not all(p in self.current_cycle_steps for p in required_predecessors):
+                            # 前驱步骤还没齐, 不视为"上周期收尾", 让主循环正常处理
+                            continue
+                    if first_member not in self.current_cycle_steps:
+                        self.current_cycle_steps.append(first_member)
+                        self.last_added_step = first_member
+                        self._last_step_added_time = current_time
+                        # 同步更新 step_start_time / step_last_seen
+                        if first_member not in self.step_start_time:
+                            self.step_start_time[first_member] = current_time
+                        self.step_last_seen[first_member] = current_time
+                        print(f"[跨周期等待] 上周期成员 {first_member} 到达, 加入 cycle_steps "
+                              f"(当前序列: {self.current_cycle_steps}), 进入等待")
+                elif first_role == 'next':
+                    # next 成员先到的等待: 必须 cycle_steps 里已经含至少一个 prev 成员,
+                    # 这是"上一周期已经接近完成"的强信号. 否则 next 成员就是"本周期首步
+                    # 刚出现"被误判, 会把 [A] 错当成"上一周期 [A] + 下一周期等 prev",
+                    # 造成结算时实际 cycle_steps=[A] 与期望 [A,B,C,D,E] 不符判 NG.
+                    if not self.current_cycle_steps:
+                        # 没有上一周期, 跨周期等待没意义, 让 next 成员走正常路径开新周期
+                        continue
+                    if not (set(self.current_cycle_steps) & prev_labels):
+                        # cycle_steps 里还没有任何 prev 成员 = 上一周期没完成 = 不是真正
+                        # 跨周期场景, 让 next 成员走正常主循环 (例如它本身就是本周期首步)
+                        continue
+                    print(f"[跨周期等待] 下周期成员 {first_member} 到达, 暂不写入 cycle_steps "
+                          f"(等上周期成员)")
+                    # 仅更新 step_last_seen 让 disappear 路径正常工作
+                    self.step_last_seen[first_member] = current_time
+
+                self._cross_cycle_waiting[idx] = {
+                    'phase': 'waiting',
+                    'first_member': first_member,
+                    'first_role': first_role,
+                    'wait_start_time': current_time,
+                    'time_window': time_window,
+                    'group_labels': group_labels,
+                    'prev_labels': prev_labels,
+                    'next_labels': next_labels,
+                }
+                consumed.update({first_member})
+                continue
+
+            # phase == 'waiting'
+            first_member = wait_state['first_member']
+            first_role = wait_state['first_role']
+            elapsed = current_time - wait_state['wait_start_time']
+
+            other_role_labels = wait_state['next_labels'] if first_role == 'prev' else wait_state['prev_labels']
+            other_arrived = present_in_detected & other_role_labels
+            # 本帧"组外有意义步骤" (用于中断等待)
+            other_meaningful = detected_labels - group_labels
+
+            if other_arrived:
+                # 路径 1: 另一侧成员到达 → 结算上周期 + 启动下周期 + 屏蔽所有组员
+                arrived_label = next(iter(other_arrived))
+                print(f"[跨周期等待终止·组合到齐] 先到 {first_member}({first_role}) + "
+                      f"另一侧 {arrived_label} → 结算上周期 + 启动下周期")
+                self._settle_for_cross_cycle()
+
+                # 启动下周期: 用 next 成员 (按优先顺序排好)
+                if first_role == 'next':
+                    new_cycle_first = first_member
+                elif arrived_label in wait_state['next_labels']:
+                    new_cycle_first = arrived_label
+                else:
+                    new_cycle_first = None
+
+                if new_cycle_first is not None:
+                    self.cycle_start_time = current_time
+                    self.start_cycle()
+                    self.current_cycle_steps.append(new_cycle_first)
+                    self.last_added_step = new_cycle_first
+                    self._last_step_added_time = current_time
+                    self.step_start_time[new_cycle_first] = current_time
+                    self.step_last_seen[new_cycle_first] = current_time
+
+                # 屏蔽所有组员, 直到出现组外有意义步骤
+                self._blocked_labels |= group_labels
+                self._cross_cycle_waiting.pop(idx, None)
+                consumed.update(group_labels & frame_detected_labels)
+                continue
+
+            if other_meaningful:
+                # 路径 2: 出现组外有意义步骤 → 立即结算上周期 + 屏蔽组员
+                print(f"[跨周期等待终止·组外步骤] 先到 {first_member}({first_role}), "
+                      f"组外步骤 {other_meaningful} 到达 → 结算上周期 + 让组外步骤走正常路径")
+                self._settle_for_cross_cycle()
+                self._blocked_labels |= group_labels
+                self._cross_cycle_waiting.pop(idx, None)
+                # 注意: 不 consume 组外标签, 让它们继续走正常主循环
+                consumed.update(group_labels & frame_detected_labels)
+                continue
+
+            if elapsed > time_window:
+                # 路径 3: 等待超时 → 自动结算上周期 + 屏蔽组员
+                print(f"[跨周期等待终止·超时] 先到 {first_member}({first_role}), "
+                      f"等待 {elapsed:.2f}s > {time_window}s → 自动结算上周期")
+                self._settle_for_cross_cycle()
+                self._blocked_labels |= group_labels
+                self._cross_cycle_waiting.pop(idx, None)
+                consumed.update(group_labels & frame_detected_labels)
+                continue
+
+            # 等待中: 本帧组员被消费 (即使是同一个 first_member 再次出现, 也屏蔽)
+            consumed.update(group_labels & frame_detected_labels)
+
+        return consumed
+
+    def _settle_for_cross_cycle(self):
+        """跨周期路由触发的上周期结算 (按当前 logic_mode 选择 settle 函数)."""
+        if not self.project_config:
+            return
+        if not self.current_cycle_steps:
+            return
+        logic_mode = self.project_config.get('logic_mode', 'detection')
+        pipeline_config = self.project_config.get('pipeline_config', {})
+        custom_based_on = pipeline_config.get('custom_based_on')
+        if logic_mode == 'custom' and custom_based_on == 'sequential':
+            self._settle_custom_cycle()
+        elif logic_mode == 'sequential':
+            self._settle_sequential_cycle()
+        elif logic_mode == 'detection':
+            self._settle_detection_cycle()
+        elif logic_mode == 'custom':
+            self._settle_custom_cycle()
+
+    def _process_last_first_mode(self, frame_detected_labels: set,
+                                 detected_labels: set, current_time: float) -> set:
+        """v3.8.x last_first 结算模式状态机 (前置过滤器, 仅 last_first 模式生效).
+
+        锚点:
+          - 末步 D = 结算锚: 当前帧含 D 且 cycle_steps 非空 (或空 = State 0) → 立即结算 (R1)
+          - 首步 A = 开周期锚: cycle_steps 含 A + 又一帧 A → D 缺位 fallback 立即结算 (R3)
+          - pending 状态 + 首步 A → 退出 pending 让主循环写 cycle_steps (R2)
+          - pending / 空 + A 缺 + 序列下一步在帧里 → 让主循环写它入 cycle_steps (R4)
+
+        D 残影屏蔽:
+          - R1 触发后 _blocked_labels.add(D), 后续帧 D 出现被消费 (R5)
+          - 帧里出现序列内非 D 步骤 → _handle_blocked_labels_release 自动清空屏蔽 (R6)
+
+        互斥保证 (前端 + apply_pipeline_config 双重校验):
+          - 与 v3.8.x 类二跨周期同时出现组互斥 → _blocked_labels 不会被两边同时写
+          - 与 per_item / 严格顺序互斥
+          - 仅在 logic_mode ∈ {sequential, custom-based-on-sequential} 下激活
+
+        Args:
+            frame_detected_labels: 当前帧识别 (含未确认)
+            detected_labels: 帧确认后的有效集合
+            current_time: 当前时间
+
+        Returns:
+            consumed: 被本方法处理掉的标签集合, 主循环应从 detected_labels /
+                      frame_detected_labels 中扣除 (避免后续 _process_single_step 重复处理).
+        """
+        consumed: set = set()
+
+        # 守门 1: 仅 last_first 模式
+        if self.settlement_mode != 'last_first':
+            return consumed
+        if not self.project_config:
+            return consumed
+
+        # 守门 2: 仅顺序型 (sequential / custom-based-on-sequential)
+        logic_mode = self.project_config.get('logic_mode', 'detection')
+        pipeline_config = self.project_config.get('pipeline_config', {})
+        custom_based_on = pipeline_config.get('custom_based_on')
+        is_seq_like = (
+            logic_mode == 'sequential'
+            or (logic_mode == 'custom' and custom_based_on == 'sequential')
+        )
+        if not is_seq_like:
+            return consumed
+
+        # 取首末步标签 + 完整序列
+        first_label = self._get_first_sequence_step_label()
+        last_label = self._get_last_sequence_step_label()
+        if not first_label or not last_label or first_label == last_label:
+            # 序列长度 < 2 时本模式没意义, 退化为不动
+            return consumed
+        seq_labels = self._get_expected_sequence_labels()
+        if not seq_labels:
+            return consumed
+
+        # ─── R5: D 残影屏蔽 (优先级最高) ───
+        # 前提: D 已在 _blocked_labels (上一次 R1 结算后置入).
+        # 屏蔽集合的"出现非 D 步骤就清空"由 _handle_blocked_labels_release 在主循环里负责.
+        if last_label in self._blocked_labels and last_label in detected_labels:
+            consumed.add(last_label)
+
+        # ─── R1: D 锚结算 (末步出现且不在屏蔽中) ───
+        # State 1 (cycle_steps 非空) + D → 把 D 加进 cycle_steps 一起结算
+        # State 0 (cycle_steps 空 + 非 pending) + D → 决策点②选 a: 结算空周期 [D] (NG 缺所有)
+        # 注意 R3 触发后 cycle_steps 也会被清空, 此时 R1 不该再跑 (我们用 _r1_triggered 标志阻断)
+        _r1_triggered = False
+        if (last_label in detected_labels
+                and last_label not in self._blocked_labels):
+            if last_label not in self.current_cycle_steps:
+                self.current_cycle_steps.append(last_label)
+            self._settle_for_cross_cycle()
+            self._pending_first_step = True
+            self._blocked_labels.add(last_label)
+            consumed.add(last_label)
+            _r1_triggered = True
+            # _settle 内部已清空 cycle_steps + step_last_seen + step_start_time
+
+        # ─── R3: D 缺位 fallback ───
+        # cycle_steps 已含首步 + 当前帧又来首步 + cycle_steps 末尾非 D
+        # (R1 触发后 cycle_steps 已空, 自然不会进 R3)
+        if (not _r1_triggered
+                and first_label in detected_labels
+                and first_label in self.current_cycle_steps
+                and self.current_cycle_steps
+                and self.current_cycle_steps[-1] != last_label):
+            self._settle_for_cross_cycle()
+            # _settle 已清空所有运行时状态, 现在手动把首步当新周期首步写入,
+            # 避免主循环 _process_single_step 与同帧其他标签产生竞态顺序.
+            self.current_cycle_steps = [first_label]
+            self.cycle_start_time = current_time
+            try:
+                self.start_cycle()
+            except Exception as _e:
+                print(f"[last_first R3] start_cycle 异常: {_e}")
+            self.step_last_seen[first_label] = current_time
+            self.step_start_time[first_label] = current_time
+            self.last_added_step = first_label
+            self._last_step_added_time = current_time
+            min_frames_required = max(1, int(self.step_min_frames.get(first_label, 1)))
+            self.step_consecutive_frames[first_label] = min_frames_required
+            self.step_frame_confirmed[first_label] = True
+            self._pending_first_step = False
+            consumed.add(first_label)
+            print(f"[last_first R3] D 缺位 fallback: 上周期结算 NG (缺末步) → 新周期 [{first_label}]")
+            return consumed
+
+        # ─── R2: pending 状态 + 首步正常开周期 ───
+        # 不消费 first_label, 让主循环 _process_single_step 把它写入 cycle_steps.
+        # 仅把 _pending_first_step 置 False 阻止 R4 顶替.
+        if self._pending_first_step and first_label in detected_labels:
+            self._pending_first_step = False
+
+        # ─── R4: 首步缺位顶替 (State 0 / State 2 + 首步缺) ───
+        # cycle_steps 为空 + 首步不在 detected_labels + 序列里下一个未出现的非末步在帧中
+        # 决策点⑤选 a: 项目首启动 + B 直接来也允许顶替
+        if (not self.current_cycle_steps
+                and first_label not in detected_labels):
+            for lbl in seq_labels:
+                if lbl == last_label:
+                    break  # D 不能顶替 (D 已被 R1 处理)
+                if lbl == first_label:
+                    continue
+                if lbl in detected_labels and lbl not in consumed:
+                    # 让主循环正常处理 lbl, 它会写入 cycle_steps
+                    self._pending_first_step = False
+                    print(f"[last_first R4] 首步 {first_label} 缺位, {lbl} 顶替开新周期")
+                    break
+
+        return consumed
+
+    def _reorder_simultaneous_groups_in_cycle(self):
+        """结算前对当前周期内的同时出现组成员按优先顺序回写到 cycle_steps.
+
+        v3.8.x 新增. 兜底保险: 不管运行时 cycle_steps 是因为模型识别先后顺序、
+        缓冲超时单独走、或缓冲被非组内步骤打断, 写入顺序怎么乱, 结算前一律按
+        客户配的优先顺序回写组内成员对应的位置.
+
+        例: 期望 A-B-C-D, B-C 是同时组(优先顺序 B-C), 运行时 cycle_steps =
+        [A, C, B, D] (C 先入了周期) → 重排后 [A, B, C, D].
+
+        策略:
+        - 找出每个组内成员在 cycle_steps 中的所有索引位置
+        - 收集这些位置上的成员实际值, 按优先顺序排序
+        - 把排序后的成员填回原来的位置 (位置数 = 成员数)
+        - 跨周期组在类二有独立逻辑, 此处跳过 (cross_cycle=True 的组)
+        """
+        if not self._simultaneous_groups or not self.current_cycle_steps:
+            return
+        for group in self._simultaneous_groups:
+            if not group.get('enabled', True):
+                continue
+            if group.get('cross_cycle'):
+                continue
+            priority_order = group.get('priority_order') or list(group.get('labels', []))
+            group_labels_set = set(priority_order)
+            if len(group_labels_set) < 2:
+                continue
+
+            positions = [i for i, lbl in enumerate(self.current_cycle_steps) if lbl in group_labels_set]
+            if len(positions) < 2:
+                continue
+
+            members_at_positions = [self.current_cycle_steps[p] for p in positions]
+            # 多重集合: 同一标签可能在 cycle_steps 中出现多次, 重排要保留出现次数.
+            from collections import Counter
+            member_counter = Counter(members_at_positions)
+            reordered = []
+            for lbl in priority_order:
+                if member_counter.get(lbl, 0) > 0:
+                    reordered.extend([lbl] * member_counter[lbl])
+
+            if reordered != members_at_positions:
+                print(
+                    f"[同时出现组结算重排] 原序 {members_at_positions} → "
+                    f"新序 {reordered} (位置 {positions})"
+                )
+                for pos, member in zip(positions, reordered):
+                    self.current_cycle_steps[pos] = member
+
     def _process_simultaneous_groups(self, frame_detected_labels: set, detected_labels: set, current_time: float):
         """
-        同时出现组缓冲排序层。
-        
-        当检测到某个组的成员时，开始收集。在时间窗口内收集到的成员按用户
-        配置的优先顺序排序后输出。不区分跨周期/同周期，统一处理。
-        
+        同时出现组缓冲排序层 (v3.8.x 重构).
+
+        语义:
+          客户配置一组在期望序列里"必然几乎同时入场、但模型识别顺序不可靠"
+          的标签 (例如 B-C). 缓冲层负责: 部分成员先到时挂起、全员到齐时按客户
+          配置的优先顺序输出, 让 cycle_steps 写入顺序对客户可控.
+
+        进入缓冲条件 (跨周期组在类二处理, 这里跳过):
+          - 当前周期已有步骤
+          - 本帧出现组内成员
+          - 至少一个成员在"最后看见时间戳"里不存在 (即"潜在新出现")
+          - 否则视为连续识别, 不缓冲
+
+        缓冲终止 (按优先级判断):
+          1) 全员到齐: 按优先顺序输出 (最佳路径)
+          2) 出现非组内有意义步骤 (= detected_labels - group_labels 非空):
+             立刻按"已收集成员的优先顺序"输出, 让那个非组内步骤接着走正常路径
+             (后续可能因顺序错误被结算判 NG, 由结算逻辑处理)
+          3) 时间窗口到: 按"已收集成员的优先顺序"输出, 缺的成员归结算时
+             "缺步骤" NG 判定
+
         返回:
             pending_labels: set  -- 正在缓冲中、本帧不应处理的标签
             ready_ordered: list  -- 缓冲完成、按配置顺序输出的标签列表
         """
         pending_labels = set()
         ready_ordered = []
-        
+
         if not self._simultaneous_groups:
             return pending_labels, ready_ordered
-        
+
         for idx, group in enumerate(self._simultaneous_groups):
             if not group.get('enabled', True):
                 continue
-            
+
+            # 跨周期组在类二路径处理 (结算延迟 / 被屏蔽集合), 这里跳过.
+            if group.get('cross_cycle'):
+                continue
+
             group_labels = set(group.get('labels', []))
             if len(group_labels) < 2:
                 continue
-            
+
             time_window = group.get('time_window', 2.0)
             priority_order = group.get('priority_order') or list(group.get('labels', [])) or list(group_labels)
-            
+
             present_members = group_labels & frame_detected_labels
-            
+
+            # 本帧"非组内的有意义步骤": 已通过帧确认的启用步骤集合, 去掉本组成员.
+            # 这是缓冲提前释放的触发信号 (规则: 客户已经推进到组外步骤, 不再等组内成员).
+            other_meaningful = detected_labels - group_labels
+
             buf = self._sim_group_buffers.get(idx)
             if buf is None:
                 buf = {
@@ -575,31 +983,25 @@ class SettlementMixin:
                     'time_window': time_window,
                     'priority_order': priority_order,
                 }
-            
+
             if not buf['collecting']:
                 if present_members:
-                    # 只在当前周期已有步骤时才启动缓冲
                     if len(self.current_cycle_steps) == 0:
+                        # 周期空时不启动缓冲 (跨周期场景由类二处理)
                         pass
                     else:
-                        # 只在有"潜在新出现"的成员时才缓冲，避免连续检测被误缓冲
-                        has_potential_new = False
-                        for lbl in present_members:
-                            if lbl not in self.step_last_seen:
-                                has_potential_new = True
-                                break
-                            tc = self.step_time_config.get(lbl, {})
-                            mi = tc.get('max_interval') or 1.0
-                            if current_time - self.step_last_seen[lbl] > mi:
-                                has_potential_new = True
-                                break
-                        
+                        # 只有"潜在新出现"的成员才进缓冲. step_last_seen 里还有
+                        # 记录说明步骤尚未走完消失结算, 是连续识别, 不缓冲.
+                        has_potential_new = any(
+                            lbl not in self.step_last_seen for lbl in present_members
+                        )
+
                         if not has_potential_new:
-                            pass  # 都是连续检测，不缓冲
+                            pass  # 连续检测, 不缓冲
                         elif present_members >= group_labels:
                             ordered = [l for l in priority_order if l in group_labels]
                             ready_ordered.extend(ordered)
-                            print(f"[同时出现组 {idx}] 全员同帧到齐，按序输出: {ordered}")
+                            print(f"[同时出现组 {idx}] 全员同帧到齐, 按序输出: {ordered}")
                         else:
                             buf['collecting'] = True
                             buf['start_time'] = current_time
@@ -608,14 +1010,28 @@ class SettlementMixin:
             else:
                 buf['collected_labels'].update(present_members)
                 elapsed = current_time - buf['start_time']
-                
+
                 if buf['collected_labels'] >= group_labels:
                     ordered = [l for l in priority_order if l in group_labels]
                     ready_ordered.extend(ordered)
                     buf['collecting'] = False
                     buf['start_time'] = None
                     buf['collected_labels'] = set()
-                    print(f"[同时出现组 {idx}] 全员在 {elapsed:.2f}s 内到齐，按序输出: {ordered}")
+                    print(f"[同时出现组 {idx}] 全员在 {elapsed:.2f}s 内到齐, 按序输出: {ordered}")
+                elif other_meaningful:
+                    # v3.8.x 新增: 缓冲中出现非组内有意义步骤 → 立即释放
+                    # 客户已经推进到组外步骤, 不再等组内剩余成员; 已收集的按优先顺序
+                    # 输出, 缺的部分由结算逻辑判 NG (顺序错误或缺步骤).
+                    collected = buf['collected_labels']
+                    ordered = [l for l in priority_order if l in collected]
+                    ready_ordered.extend(ordered)
+                    buf['collecting'] = False
+                    buf['start_time'] = None
+                    buf['collected_labels'] = set()
+                    print(
+                        f"[同时出现组 {idx}] 缓冲中出现非组内步骤 {other_meaningful}, "
+                        f"提前释放已收集 {ordered}"
+                    )
                 elif elapsed > time_window:
                     collected = buf['collected_labels']
                     ordered = [l for l in priority_order if l in collected]
@@ -623,12 +1039,12 @@ class SettlementMixin:
                     buf['collecting'] = False
                     buf['start_time'] = None
                     buf['collected_labels'] = set()
-                    print(f"[同时出现组 {idx}] 超时 {elapsed:.2f}s，输出已收集: {ordered}")
+                    print(f"[同时出现组 {idx}] 超时 {elapsed:.2f}s, 输出已收集: {ordered}")
                 else:
                     pending_labels.update(buf['collected_labels'])
-            
+
             self._sim_group_buffers[idx] = buf
-        
+
         return pending_labels, ready_ordered
     
     def _process_single_step(self, label, current_time, enabled_labels, is_seq_like,
@@ -642,17 +1058,7 @@ class SettlementMixin:
         
         if label not in enabled_labels:
             return
-        
-        # v3.7.x (FIX-鬼周期): 上一周期 settle 时仍处于"已确认中"的 label
-        # 必须先彻底消失一次, 才能再次参与新 cycle 的启动 / 累计.
-        # 否则模型对"放置产品"的连续识别会立即在 cycle_steps=[] 时启动 ghost cycle,
-        # 导致后续步骤被 strict_order 拦截"闪一下没反应".
-        # disappear handler (source_step_stats_mixin.py) 负责在 label 消失时把它从
-        # ignore set 里移除.
-        ignore = getattr(self, '_post_settle_ignore_labels', None)
-        if ignore and label in ignore:
-            return
-        
+
         if self.step_strict_order.get(label):
             expected = self._get_expected_sequence_labels()
             if label in expected:
@@ -693,18 +1099,21 @@ class SettlementMixin:
         # 提前计算 is_new_appearance — 严格+单次守门只拦"多余位置的新出现",
         # 不拦画面里持续识别 (is_new_appearance=False). 旧实现在每帧都拦,
         # 把合法步骤的 step_last_seen 掐断 → PT 算出 0.00s.
-        time_config = self.step_time_config.get(label, {})
-        max_interval = time_config.get('max_interval') or 1.0
-        if old_last_seen is not None:
-            time_since_last = current_time - old_last_seen
-            if is_seq_like:
-                is_new_appearance = time_since_last > max_interval
-            elif self.last_added_step is not None and self.last_added_step != label:
-                is_new_appearance = True
-            else:
-                is_new_appearance = time_since_last > max_interval
-        else:
+        #
+        # v3.8.x: 原"用 max_interval (去重间隔) 判定窗口"已合并入 disappear_delay
+        # (消失等待时间). 现在判定逻辑统一为:
+        # - step_last_seen 还在 → 说明上一次出现尚未走完消失结算 → 连续识别
+        # - step_last_seen 已被 del (消失结算路径已清理) → 新出现
+        # 检测模式下"步骤交替"(last_added_step != label) 这条独立的新出现信号保留,
+        # 因为顺序无关时不同步骤交替本就该算一次"切换"而非"接续".
+        if old_last_seen is None:
             is_new_appearance = True
+        elif (not is_seq_like
+              and self.last_added_step is not None
+              and self.last_added_step != label):
+            is_new_appearance = True
+        else:
+            is_new_appearance = False
 
         # ── v3.8.x: 严格 + 单次接受 → 仅拦截"多余位置的新出现" ──
         if (is_new_appearance
@@ -747,11 +1156,11 @@ class SettlementMixin:
                 allow_through = True
             elif self.settlement_mode == 'first_step' and is_seq_like and len(self.current_cycle_steps) > 1:
                 first_step_label = self._get_first_sequence_step_label()
-                if first_step_label and label == first_step_label and old_last_seen is not None:
-                    gap = current_time - old_last_seen
-                    dedup_interval = (self.step_time_config.get(label, {}).get('max_interval')) or 1.0
-                    if gap > dedup_interval:
-                        allow_through = True
+                # v3.8.x: 改用"上一次出现已被消失结算清理"作为放行信号
+                # (旧版用 max_interval 判时间窗已废弃, 合并入 disappear_delay).
+                # old_last_seen is None 即首步彻底消失后再次出现 → 触发第一步重现结算.
+                if first_step_label and label == first_step_label and old_last_seen is None:
+                    allow_through = True
             if not allow_through:
                 self.step_last_seen[label] = current_time
                 if label not in self.step_start_time:
@@ -850,9 +1259,6 @@ class SettlementMixin:
                 logic_mode = self.project_config.get('logic_mode') if self.project_config else 'detection'
                 if logic_mode == 'custom' or logic_mode == 'sequential':
                     if len(self.current_cycle_steps) == 0:
-                        self._first_step_had_gap = False
-                        self._first_step_reconfirmed = False
-                        self._first_step_disappeared_at = None
                         self._cycle_regression = False
                     if self.last_added_step == label:
                         pass

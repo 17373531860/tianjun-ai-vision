@@ -370,8 +370,6 @@ class LifecycleMixin:
         # 5. 清理帧计数缓存
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
-        self._step_gap_count.clear()
-        
         self.step_static_triggered.clear()
         
         # 6. 限制周期时间记录（保留最近50条）

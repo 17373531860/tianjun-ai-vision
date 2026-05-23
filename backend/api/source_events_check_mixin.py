@@ -68,8 +68,10 @@ class EventsCheckMixin:
                         return  # 匹配后不再检查其他条件和基础模式
             
             # 没有自定义条件匹配，回退到基础模式
-            # first_step 模式下跳过"最后一步消失"触发，只由第一步重现触发结算
-            if self.settlement_mode == 'first_step':
+            # first_step / last_first 模式跳过"最后一步消失"触发:
+            #   - first_step: 由第一步重现触发结算
+            #   - last_first (v3.8.x): 由末步"出现"立即触发 (在 _process_last_first_mode R1 处理)
+            if self.settlement_mode in ('first_step', 'last_first'):
                 pass
             elif custom_based_on == 'sequential':
                 last_step_label = self._get_last_sequence_step_label()
@@ -86,7 +88,8 @@ class EventsCheckMixin:
         
         # 顺序模式
         elif logic_mode == 'sequential':
-            if self.settlement_mode != 'first_step':
+            # last_first 模式跳过末步消失结算 (R1 在 _process_last_first_mode 已处理)
+            if self.settlement_mode not in ('first_step', 'last_first'):
                 last_step_label = self._get_last_sequence_step_label()
                 if last_step_label and completed_step == last_step_label:
                     if completed_step in self.current_cycle_steps:
@@ -94,7 +97,7 @@ class EventsCheckMixin:
                     else:
                         print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
         
-        # 检测模式
+        # 检测模式 (last_first 不适用于 detection 模式, 互斥校验已阻止此组合)
         elif logic_mode == 'detection':
             if self.settlement_mode != 'first_step':
                 last_det_label = self._get_last_detection_step_label()

@@ -754,8 +754,6 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
-        self._step_gap_count.clear()
-        
         self.last_step_completed_time = None
         
         # Event counting mode reset
@@ -1104,7 +1102,59 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         except Exception as e:
             print(f"[Image] 图片推理失败: {e}")
             import traceback; traceback.print_exc()
-    
+
+    def _clear_step_runtime_state(self):
+        """清空步骤识别 / 周期序列 / 同时出现组的全部运行时状态.
+
+        覆盖以下 11 个字段:
+        - 步骤识别层: 累计帧、已确认帧、最后看见时间戳、步骤开始时间、静态触发标记、原始开始时间
+        - 周期序列层: 当前周期序列、上一加入步骤、备用步骤已见集合
+        - 同时出现组: 缓冲、待挂队列
+
+        调用时机 (v3.8.x 起统一):
+        - start_detection: 开机第一帧前清零, 防止停止-启动复用上次残影
+        - stop_detection : 停止时彻底释放, 不留时间戳给下次启动
+        - apply_project_config: 切换项目时全清, 防止新项目同名标签接续旧周期
+        - _force_timeout_ng   : 周期被强制结算时清零, 防鬼周期
+
+        不清: 项目配置 (阈值/帧数/时间/排序等) —— 那些是配置层
+        不清: 累计统计 (step_counts / cycle_times / 周期编号) —— 那些归 reset_stats 管
+        """
+        # 步骤识别层
+        self.step_consecutive_frames.clear()
+        self.step_frame_confirmed.clear()
+        self.step_last_seen.clear()
+        self.step_start_time.clear()
+        self.step_static_triggered.clear()
+        if hasattr(self, '_step_raw_start'):
+            self._step_raw_start.clear()
+
+        # 周期序列层
+        self.current_cycle_steps = []
+        self.last_added_step = None
+        self.backup_steps_seen_in_cycle = set()
+        self._last_step_added_time = None
+        self.last_step_completed_time = None
+        self._cycle_regression = False
+
+        # 同时出现组缓冲
+        self._sim_group_buffers = {}
+        if hasattr(self, '_currently_pending_labels'):
+            self._currently_pending_labels = set()
+
+        # 上一步消失时间戳 (供回填 StepRecord 用)
+        if hasattr(self, '_last_disappeared_step_times'):
+            self._last_disappeared_step_times = {}
+
+        # 跨周期同时出现组 (v3.8.x 类二): 被屏蔽集合 + 等待状态
+        if hasattr(self, '_blocked_labels'):
+            self._blocked_labels = set()
+        if hasattr(self, '_cross_cycle_waiting'):
+            self._cross_cycle_waiting = {}
+        # v3.8.x last_first 结算模式: 等待首步标记
+        if hasattr(self, '_pending_first_step'):
+            self._pending_first_step = False
+
     def start_detection(self, model_path: str = None):
         """开始检测"""
         if model_path and (self.model is None or self.model_path != model_path):
@@ -1159,8 +1209,13 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             self._thread = threading.Thread(target=self._capture_loop, daemon=True)
             self._thread.start()
         
+        # v3.8.x: 开始检测前统一清空步骤运行时状态.
+        # 防止 stop → start 路径上, 上次最后一帧的残影时间戳/帧确认状态被新一轮直接接续,
+        # 进而引发场景甲 (残影开鬼周期) / 场景癸 (项目切换后同名标签接续).
+        self._clear_step_runtime_state()
+
         self.is_detecting = True
-        
+
         try:
             from backend.services.scanner import get_scanner_service
             print(f"[Scanner/Source] start_detection ch={self.channel_id} → start_scanning")
@@ -1262,16 +1317,12 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             self._latest_display_small_for_stats = None
         with self._confirmed_detections_lock:
             self._confirmed_detections = []
-        
-        # 清理帧计数状态
-        self.step_consecutive_frames.clear()
-        self.step_frame_confirmed.clear()
-        self._step_gap_count.clear()
-        
-        
-        # 重置同时出现组状态
-        self._sim_group_buffers = {}
-        
+
+        # v3.8.x: 把步骤运行时残影 / 周期序列 / 同时出现组缓冲统一交给清空函数处理.
+        # 旧实现只清了累计帧 / 已确认帧 / 同时组缓冲, 漏了"最后看见时间戳 / 当前周期序列"等关键字段,
+        # 导致停止 → 开始时残影直接被当成上次周期的延续.
+        self._clear_step_runtime_state()
+
         # 限制事件日志大小
         if len(self.events_log) > 500:
             self.events_log = self.events_log[-500:]
@@ -1351,10 +1402,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self.step_cycle_durations = {}
         self.step_cycle_durations_history = {}
         
-        # Settlement / first-step tracking flags
-        self._first_step_had_gap = False
-        self._first_step_reconfirmed = False
-        self._first_step_disappeared_at = None
+        # Settlement / cycle-regression tracking
         self._last_step_added_time = None
         self._cycle_regression = False
         self._step_raw_start = {}
@@ -1374,7 +1422,6 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # Frame-counting state
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
-        self._step_gap_count.clear()
         self.step_static_triggered.clear()
         
         # Tracking-mode (counting) state

@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.9.0 (2026-05-23)
+- [FEAT-001] **新增结算模式 last_first（末步结算 + 首步开周期）** — 客户产线 ABCD 4 步流水末步即结算 + 首步即开新周期 + 跳 D 重做 A 走 R3 fallback NG。`source_settlement_mixin.py` 新增 `_process_last_first_mode` 状态机（6 条规则 R1-R6），作为 `_update_step_stats` 前置过滤层，仅 settlement_mode=last_first 时生效。前后端双层互斥校验：与 strict_mode/cross_cycle/per_item/detection/tracking 等模式严格互斥；前端 Project 页选中后弹约束提示卡 + 自动取消 strict_order；后端 `_apply_pipeline_config` 兜底覆盖。隔离性证据：first_step 模式跑同剧本 R3 触发=0。
+- [FEAT-002] **跨周期组（类二 cross_cycle）独立状态机** — 新增 `_process_cross_cycle_groups`，处理上下周期成员先后到达 + 屏蔽集合 + 等待超时 7 种状态迁移。和类一同帧组的 `_process_simultaneous_groups` 完全分离，box 时序 D 余像 + A 新周期场景不再窜逻辑。
+- [FEAT-003] **per_item 逐件覆盖 5 项补丁（v3.9 增强）** — (1) expected_count 固定数量 + lock_lookahead 周期内补锁定 (2) 锁定模式下 cleanup_stale_items 不清未覆盖件 (3) 周期/空闲超时强制结算 (4) settle_after_all_done_sec 立即 OK (5) item_label 数组多标签 OR。
+- [BUG-001] **last_first 模式下基于消失的旧结算路径误触发** — `_check_events` 对所有模式都跑'末步消失结算'，导致 R1 已结算后 D 消失再结算一次。修：first_step / last_first 两种基于出现的模式跳过基于消失路径。
+- [TEST-001] 新增测试矩阵：24 个 last_first 单测 + cross_cycle BDD + per_item v3.9 单测 + 2 条 synthetic E2E + 2 份 UAT 脚本。
+- [UAT-001] last_first 可见浏览器 UAT 4 阶段 31/31 通过（API 契约 14 + 可见浏览器 9 + UI CRUD 6 + 先红后绿 2），三件套：1.3MB webm 视频 + 6 张截图 + 31 行 JSON 日志。
+- [SKILL-001] 更新 debug-source / modify-project-config 两个 skill：新增 last_first 章节 + settlement_mode 枚举 + 互斥踩坑条目。
+- [CONFIG-001] 版本号 `3.8.2 → 3.9.0`（minor: 三个新功能模块）。
+
 ## v3.8.2 (2026-05-22)
 - [FEAT-382-SPLASH-CYBER] **全新赛博 splash 启动界面（取代旧 400×300 小弹窗）** — 新增 `electron/splash/` 目录: Three.js + WebGL 粒子球 + UnrealBloomPass + 5 阶段状态机（IDLE→HOVER→COLLAPSE→EXPLOSION→READY）+ 8 道全屏代码瀑布 + 四角 cyber HUD（SYS/VER/UID/CHN/GPU/MEM/MODEL/FPS/TIME）+ 底部 BOOT 序列叙事 + 程序化 Web Audio 音效。资源全本地化（Three.js / MediaPipe / 6 个 ttf 字体），离线工厂可跑，安装包多 ~19 MB。
 - [FEAT-382-SPLASH-PROGRESS] **进度条由真实后端 stdout 行数驱动（不再假 6 秒模拟）** — 主进程监听 `BackendManager` 的 stdout/stderr/ready 事件通过 IPC `splash:backend-log` / `splash:backend-ready` 转发给 splash；每行日志推进 +0.5% 封顶 95%，后端 ready 强制补 100%；满 100% 后 IPC `splash:finished` 关 splash + 显示主窗。沙盒模式（浏览器直开）退回 5 秒假进度兼容调试。

@@ -22,7 +22,6 @@ class SequentialMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
             self.last_step_completed_time = None
             return
         
@@ -46,7 +45,6 @@ class SequentialMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
             self.last_step_completed_time = None
             return
         
@@ -74,7 +72,6 @@ class SequentialMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
             self.last_step_completed_time = None
             return
         
@@ -171,7 +168,6 @@ class SequentialMixin:
         # ── 重置 / 承接下一周期 ──
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
-        self._step_gap_count.clear()
         # v3.8.x: 残留传染守门 —— 残留必须是期望序列的**合法前缀**才传给下周期。
         # 客户报障 "一次 NG 后正常做的也全 NG"：旧实现无脑把 next_carry 塞进下周期，
         # 而 NG 周期下 next_carry 常是切割算法误判产生的乱序残渣（比如期望 [A,B,C,D]
@@ -213,7 +209,6 @@ class SequentialMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
             self.last_step_completed_time = None
             return
         
@@ -236,7 +231,6 @@ class SequentialMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
             self.last_step_completed_time = None
             return
         
@@ -264,7 +258,6 @@ class SequentialMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
-            self._step_gap_count.clear()
             self.last_step_completed_time = None
             return
         
@@ -352,7 +345,6 @@ class SequentialMixin:
         # ── 重置 / 承接下一周期 ──
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
-        self._step_gap_count.clear()
         # v3.8.x: 残留传染守门 —— 与 _check_sequential_mode 同, 详见上方注释。
         if next_carry and next_carry == expected_labels[:len(next_carry)]:
             self.current_cycle_steps = next_carry

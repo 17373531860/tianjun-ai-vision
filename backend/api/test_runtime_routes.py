@@ -44,7 +44,6 @@ def _build_min_project_config(labels: list, logic_mode: str = "sequential") -> d
             "label": label,
             "threshold": 0.3,
             "min_frames": 1,
-            "gap_tolerance": 5,
             "color": "#1976d2",
         }
         for label in labels

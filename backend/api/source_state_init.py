@@ -116,7 +116,7 @@ def _init_step_state(h):
 
     # 项目配置 + 检测阈值
     h.project_config = None
-    h.settlement_mode = 'first_step'  # 'first_step' or 'last_step'
+    h.settlement_mode = 'first_step'  # 'first_step' / 'last_step' / 'last_first'(v3.8.x)
     h.idle_timeout_seconds = 0
     h.cycle_max_duration = 0
     h.step_conf_thresholds = {}
@@ -132,8 +132,6 @@ def _init_step_state(h):
     h.step_min_frames = {}
     h.step_consecutive_frames = {}
     h.step_frame_confirmed = {}
-    h.step_gap_tolerance = {}
-    h._step_gap_count = {}
 
     # 静态步骤
     h.step_detection_type = {}  # 'dynamic' / 'static'
@@ -163,14 +161,26 @@ def _init_event_and_cycle_state(h):
     h.last_added_step = None
     h.cycle_complete = False
 
-    h._first_step_had_gap = False
-    h._first_step_reconfirmed = False
-    h._first_step_disappeared_at = None
     h._last_step_added_time = None
     h._step_raw_start = {}
     h._last_ng_time = 0
     h._cycle_regression = False  # A-B-A 步骤回退标记
-    h._post_settle_ignore_labels = set()  # v3.7.x 鬼周期防护: settle 时未消失的 label, 必须 disappear 一次后才能再触发新 cycle
+
+    # v3.8.x 跨周期同时出现组 (类二):
+    # 被屏蔽标签集合: 这些标签当前不参与状态机 (不更新 step_last_seen / 不加入 cycle_steps /
+    # 不进同时组缓冲), 直到出现"非屏蔽、非组内、对周期有意义"的标签时一次性解除.
+    h._blocked_labels = set()
+    # 跨周期等待状态: { group_idx: {'phase': 'waiting', 'first_member': label,
+    #                                'wait_start_time': float, 'time_window': float,
+    #                                'group_labels': set} }
+    # phase 仅 'waiting' 一个值, 占位是为以后好扩展.
+    h._cross_cycle_waiting = {}
+
+    # v3.8.x last_first 结算模式专属:
+    #   _pending_first_step: D 锚结算后置 True, 等待首步开新周期; 首步 / 顶替步进入 cycle_steps 后置 False
+    #   仅在 settlement_mode == 'last_first' 时被读写; 其他模式下永远保持 False
+    # D 残影屏蔽集合复用现有 _blocked_labels (last_first 与跨周期同时出现组互斥, 不会冲突)
+    h._pending_first_step = False
 
 
 def _init_tracking_state(h):

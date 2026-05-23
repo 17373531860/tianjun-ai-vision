@@ -4,7 +4,7 @@
 (若后续需要细分, 可以在本文件继续按职责拆 _step_collect_*/_step_check_*/...)。
 
 宿主必须提供的属性: self.step_conf_thresholds / step_consecutive_frames /
-                  step_frame_confirmed / step_min_frames / step_gap_tolerance /
+                  step_frame_confirmed / step_min_frames /
                   step_static_triggered / step_static_config / step_detection_type /
                   step_time_config / step_display_names / step_screenshots /
                   step_last_seen / step_start_time / step_counts / step_durations /
@@ -16,6 +16,17 @@
                   _check_static_step_conditions / _force_timeout_ng / _check_events /
                   _settle_custom_cycle / _settle_sequential_cycle / _settle_detection_cycle /
                   _trigger_event / _get_first_sequence_step_label
+
+v3.8.x 参数语义重整 (本次):
+  - 删除「丢帧容忍 gap_tolerance」「去重间隔 max_interval」两个旧参数, 统一并入
+    「消失等待时间 disappear_delay」.
+  - 未确认阶段 (frame_confirmed=False) 本帧丢失 → 立即清零累计帧, 防止噪声闪烁
+    被累积成假性确认.
+  - 已确认阶段 (frame_confirmed=True) 本帧丢失 → 不清零, 由 step_last_seen +
+    disappear_delay 路径正式判定消失.
+  - 规则 B (消失等待被打断): 已确认 label 处于等待消失期间, 若本帧出现其他对
+    周期有意义的步骤, 立即按"已消失"处理 — 等待时间只为本步骤的偶发漏帧而设,
+    出现别的步骤说明操作已经推进, 不必继续干等.
 """
 from __future__ import annotations
 
@@ -77,7 +88,6 @@ class StepStatsMixin:
             self._step_raw_start = {}
         
         for label in frame_detected_labels:
-            self._step_gap_count[label] = 0
             prev_count = self.step_consecutive_frames.get(label, 0)
             if prev_count == 0:
                 self._step_raw_start[label] = current_time
@@ -90,9 +100,6 @@ class StepStatsMixin:
                 if not self.step_frame_confirmed.get(label):
                     self.step_frame_confirmed[label] = True
                     just_confirmed_labels.add(label)
-                    first_seq_lbl = self._get_first_sequence_step_label() if self.current_cycle_steps else None
-                    if label == first_seq_lbl and label in self.current_cycle_steps:
-                        self._first_step_reconfirmed = True
         
         # Backup step processing: mark seen, then remove from detected_labels
         if self.step_backup_map:
@@ -101,25 +108,19 @@ class StepStatsMixin:
                 self.backup_steps_seen_in_cycle.add(b_label)
             detected_labels -= backup_in_detected
         
-        # 对于本帧没有检测到的标签，根据 gap_tolerance 决定是否重置连续帧计数
+        # 对于本帧没有检测到的标签:
+        # - 未确认阶段 (frame_confirmed=False): 立即清零累计帧, 防止噪声闪烁假性累积成确认
+        # - 已确认阶段 (frame_confirmed=True):  保持帧确认状态, 由 step_last_seen +
+        #   disappear_delay 路径正式判定消失 (含规则 B "消失等待被打断")
         all_configured_labels = set(self.step_conf_thresholds.keys()) if self.step_conf_thresholds else set()
-        first_seq_label = self._get_first_sequence_step_label() if self.current_cycle_steps else None
         for label in all_configured_labels:
             if label not in frame_detected_labels:
-                gap_tolerance = self.step_gap_tolerance.get(label, 0)
-                current_gap = self._step_gap_count.get(label, 0) + 1
-                self._step_gap_count[label] = current_gap
-
-                if current_gap > gap_tolerance:
+                was_confirmed = self.step_frame_confirmed.get(label, False)
+                if not was_confirmed:
                     was_tracking = self.step_consecutive_frames.get(label, 0) > 0
-                    was_confirmed = self.step_frame_confirmed.get(label, False)
                     self.step_consecutive_frames[label] = 0
-                    self.step_frame_confirmed[label] = False
-                    self._step_gap_count[label] = 0
-                    if was_tracking and not was_confirmed:
+                    if was_tracking:
                         self.stop_step_recording(label)
-                    if was_confirmed and label == first_seq_label and label in self.current_cycle_steps:
-                        self._first_step_disappeared_at = time.time()
                 # 重置静态步骤的触发状态（标签消失后可以再次触发）
                 if label in self.step_static_triggered:
                     self.step_static_triggered[label] = False
@@ -164,7 +165,31 @@ class StepStatsMixin:
         
         # 存储当前帧检测到的标签（供周期结算时清理 step_last_seen）
         self._current_detected_labels = detected_labels
-        
+
+        # v3.8.x (类二): 跨周期同时出现组路由
+        # 顺序:
+        #   1. 先检查是否解除被屏蔽集合 (本帧出现组外有意义步骤 → 清空屏蔽)
+        #   2. 调用跨周期路由处理: 维护等待状态机, 在 4 种终止路径上结算上周期 + 启动下周期 + 屏蔽组员
+        #   3. 把被消费的标签 (含屏蔽中的、等待中的) 从 detected_labels / frame_detected_labels 移除,
+        #      它们不再进入下面的同时组缓冲 / _process_single_step / 消失检测.
+        if hasattr(self, '_handle_blocked_labels_release'):
+            self._handle_blocked_labels_release(detected_labels)
+        if hasattr(self, '_process_cross_cycle_groups'):
+            consumed_by_cross_cycle = self._process_cross_cycle_groups(
+                frame_detected_labels, detected_labels, current_time)
+            if consumed_by_cross_cycle:
+                detected_labels -= consumed_by_cross_cycle
+                frame_detected_labels -= consumed_by_cross_cycle
+
+        # v3.8.x: last_first 结算模式状态机 (互斥保证: 与跨周期同时出现组不并存,
+        # 且方法内部 settlement_mode != 'last_first' 时立即返回空集 → 其他模式零影响)
+        if hasattr(self, '_process_last_first_mode'):
+            consumed_by_last_first = self._process_last_first_mode(
+                frame_detected_labels, detected_labels, current_time)
+            if consumed_by_last_first:
+                detected_labels -= consumed_by_last_first
+                frame_detected_labels -= consumed_by_last_first
+
         # 调用缓冲排序层
         pending_labels, ready_ordered = self._process_simultaneous_groups(
             frame_detected_labels, detected_labels, current_time)
@@ -211,7 +236,6 @@ class StepStatsMixin:
                 del self.step_start_time[label]
                 self.step_consecutive_frames[label] = 0
                 self.step_frame_confirmed[label] = False
-                self._step_gap_count[label] = 0
                 if label in getattr(self, '_step_raw_start', {}):
                     del self._step_raw_start[label]
 
@@ -248,7 +272,14 @@ class StepStatsMixin:
         # 使用延迟判定机制：先记录所有消失的步骤，再统一进行事件判定
         # 这样可以确保所有步骤都被正确记录到当前周期，避免因判定触发 end_cycle 导致后续步骤记录失败
         pending_event_checks = []  # 收集需要检查事件的步骤
-        
+
+        # 规则 B 预计算: 本帧"对周期有意义"的其他步骤集合
+        # — 用于打断 disappear_delay 等待 (消失等待时间只为同一步骤的偶发漏帧而设,
+        #   出现别的有意义步骤说明操作已经推进, 不必继续干等)
+        # 注意: detected_labels 已经过滤了 min_frames 且不含本帧未到的标签,
+        # 取交集 enabled_labels 进一步限制在"项目配置启用"的步骤范围内.
+        meaningful_in_frame = detected_labels & enabled_labels
+
         _pending = getattr(self, '_currently_pending_labels', set())
         for label, last_time in list(self.step_last_seen.items()):
             if label in _pending:
@@ -257,8 +288,16 @@ class StepStatsMixin:
                 # 获取步骤时间配置
                 time_config = self.step_time_config.get(label, {})
                 disappear_delay = time_config.get('disappear_delay') or 0
-                
-                if current_time - last_time > disappear_delay:
+
+                # 规则 B: 等待期间出现其他对周期有意义的步骤 → 立即按消失处理
+                # (排除自身: label not in detected_labels 已保证, 但保险起见显式排除)
+                other_meaningful_present = bool(meaningful_in_frame - {label})
+                effective_delay = 0 if other_meaningful_present else disappear_delay
+
+                if current_time - last_time > effective_delay:
+                    # 已确认过的 label 走完消失结算后, 清零帧确认状态
+                    self.step_frame_confirmed[label] = False
+                    self.step_consecutive_frames[label] = 0
                     # 计算持续时间
                     start_time = self.step_start_time.get(label, last_time)
                     duration = last_time - start_time
@@ -289,13 +328,7 @@ class StepStatsMixin:
                     del self.step_last_seen[label]
                     if label in self.step_start_time:
                         del self.step_start_time[label]
-                    
-                    # v3.7.x (FIX-鬼周期): label 已彻底消失, 从 post-settle ignore set
-                    # 中移除. 之后它再次出现就能正常启动新 cycle / 加入 cycle.
-                    _ignore = getattr(self, '_post_settle_ignore_labels', None)
-                    if _ignore and label in _ignore:
-                        _ignore.discard(label)
-                    
+
                     # 只有有效的检测才计数
                     if is_valid:
                         if label not in self.step_counts:

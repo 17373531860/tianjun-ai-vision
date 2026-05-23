@@ -203,12 +203,12 @@
                     </div>
                     <div>
                       <p class="text-white font-bold">{{ activeProject.model_name || '未配置模型' }}<span v-if="activeProject.model_version" class="text-gray-400 font-normal ml-2">v{{ activeProject.model_version }}</span></p>
-                      <p class="text-xs text-gray-500">Labels: {{ (activeProject.steps_config || []).length }} 个类别已识别
+                      <p class="text-xs text-gray-500">Labels: {{ (activeProject.model_labels || []).length }} 个类别 · 步骤: {{ (activeProject.steps_config || []).length }} 个
                         <el-tag v-if="activeProject.default_model_id" size="small" class="ml-2" :type="activeProject.model_format === 'pytorch_fp32' ? 'info' : 'success'">{{ getFormatDisplayName(activeProject.model_format || 'pytorch_fp32') }}</el-tag>
                       </p>
                       <div class="mt-2 flex gap-2 flex-wrap">
-                        <el-tag v-for="tag in (activeProject.steps_config || []).slice(0, 5)" :key="tag.label" size="small" type="info">{{ tag.displayLabel || tag.label }}</el-tag>
-                        <span v-if="(activeProject.steps_config || []).length > 5" class="text-xs text-gray-500">+{{ activeProject.steps_config.length - 5 }}</span>
+                        <el-tag v-for="label in (activeProject.model_labels || []).slice(0, 8)" :key="label" size="small" type="info">{{ label }}</el-tag>
+                        <span v-if="(activeProject.model_labels || []).length > 8" class="text-xs text-gray-500">+{{ activeProject.model_labels.length - 8 }}</span>
                       </div>
                     </div>
                   </div>
@@ -590,13 +590,8 @@
                         </el-tooltip>
                       </th>
                       <th class="p-2 w-28">
-                        <el-tooltip content="同一步骤消失后再次出现，若间隔小于此值则视为同一次检测（0.01-3600秒，留空使用默认1秒）" placement="top">
-                          <span class="cursor-help border-b border-dashed border-gray-500">去重间隔(秒)</span>
-                        </el-tooltip>
-                      </th>
-                      <th class="p-2 w-28">
-                        <el-tooltip content="步骤从画面消失后，等待多久确认其真正消失（默认0秒=立即确认，适当增大可容忍短暂检测中断）" placement="top">
-                          <span class="cursor-help border-b border-dashed border-gray-500">消失确认(秒)</span>
+                        <el-tooltip content="步骤从画面消失后，等待多久才正式认定它已经消失（默认0秒=立刻认定）。等待期间若画面里又出现别的有效步骤，会立刻结束等待按消失处理；该值同时承担了旧版『去重间隔』『丢帧容忍』的语义。" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">消失等待时间(秒)</span>
                         </el-tooltip>
                       </th>
                       <th class="p-2 w-24">
@@ -647,6 +642,15 @@
                       <td class="p-2 font-mono text-cyan-400">
                         <div class="flex items-center gap-1.5 flex-wrap">
                           <span>{{ step.label }}</span>
+                          <el-tag
+                            v-if="activeProject.logic_mode === 'per_item'"
+                            size="small"
+                            :type="(step.per_item && step.per_item.action_label) ? 'success' : 'info'"
+                            effect="plain"
+                            class="!h-5 !leading-5"
+                          >
+                            {{ (step.per_item && step.per_item.action_label) ? '动作' : '目标' }}
+                          </el-tag>
                           <el-tag v-if="step.from_model && step.from_model !== 'main'" size="small" type="warning" effect="plain" class="!h-5 !leading-5">
                             {{ step.from_model }}
                           </el-tag>
@@ -810,18 +814,6 @@
                       </td>
                       <td class="p-2">
                         <el-input-number 
-                          v-model="step.max_interval" 
-                          size="small" 
-                          :min="0" 
-                          :step="0.1"
-                          :precision="2"
-                          :controls="false"
-                          placeholder="默认1秒"
-                          class="w-full"
-                        />
-                      </td>
-                      <td class="p-2">
-                        <el-input-number 
                           v-model="step.disappear_delay" 
                           size="small" 
                           :min="0" 
@@ -952,7 +944,19 @@
                       <span class="text-gray-300">最后一步结算</span>
                       <span class="text-xs text-gray-500 ml-1">— 最后一步消失后结算当前周期</span>
                     </el-radio>
+                    <el-radio value="last_first">
+                      <span class="text-gray-300">末步结算 + 首步开周期</span>
+                      <span class="text-xs text-gray-500 ml-1">— v3.8.x 末步出现立即结算上周期，首步开新周期；缺步骤自动判 NG</span>
+                    </el-radio>
                   </el-radio-group>
+                  <!-- last_first 模式说明 -->
+                  <div v-if="activeProject.settlement_mode === 'last_first'" class="bg-slate-900 rounded p-3 text-xs text-gray-400 border border-amber-700/50">
+                    <p class="text-amber-400 font-bold mb-1">末步结算 + 首步开周期模式约束</p>
+                    <p class="mb-1">• 末步出现立即结算上周期，序列内 缺哪步自动判 NG（缺哪步报哪步）</p>
+                    <p class="mb-1">• 首步未出现时，序列后面的步骤可顶替开新周期</p>
+                    <p class="mb-1">• 首步又出现时，无论何种状态都立即结算上周期 NG（缺末步）+ 开新周期</p>
+                    <p class="text-red-400">⚠ 强制约束：本模式下所有步骤的"严格顺序"会被自动关闭；不能与"跨周期同时出现组"或"逐件覆盖模式"同时启用</p>
+                  </div>
                   <div class="flex items-center gap-3 pt-2 border-t border-slate-700">
                     <span class="text-gray-400 text-xs whitespace-nowrap">空闲超时(秒)</span>
                     <el-input-number v-model="activeProject.idle_timeout_seconds" size="small" :min="0" :step="5" :precision="2" />
@@ -963,8 +967,8 @@
                     <el-input-number v-model="activeProject.cycle_max_duration" size="small" :min="0" :step="5" :precision="2" />
                     <span class="text-xs text-gray-500">周期总时长超过此值直接判定NG（0=不启用）</span>
                   </div>
-                  <!-- v3.8.x: 严格顺序模式专属 — 等待结算步骤时遇到首步立刻开新周期 -->
-                  <div v-if="activeProject.logic_mode === 'sequential' || (activeProject.logic_mode === 'custom' && activeProject.custom_based_on === 'sequential')"
+                  <!-- v3.8.x: 严格顺序模式专属 — 等待结算步骤时遇到首步立刻开新周期; last_first 已自带此能力, 隐藏开关 -->
+                  <div v-if="activeProject.settlement_mode !== 'last_first' && (activeProject.logic_mode === 'sequential' || (activeProject.logic_mode === 'custom' && activeProject.custom_based_on === 'sequential'))"
                        class="flex items-start gap-3 pt-2 border-t border-slate-700">
                     <el-switch v-model="activeProject.first_step_aborts_pending_settle" size="default" />
                     <div class="flex-1">
@@ -1477,65 +1481,124 @@
 
               <!-- Per-Item Mode Config (v3.8+) -->
               <el-card v-if="activeProject.logic_mode === 'per_item'" shadow="never" class="bg-slate-800 border-slate-700">
-                <template #header><span class="font-bold text-white">逐件模式 - 项目级配置</span></template>
+                <template #header><span class="font-bold text-white">逐件覆盖 — 通用参数</span></template>
                 <div class="space-y-4 text-sm text-gray-300">
                   <p class="text-xs text-gray-400">
-                    每个 cycle 内追踪「同类多件物品」(例: N 颗螺丝),要求每件都被某个动作(例: 打/划)依次覆盖一次。
-                    所有件齐 → 事件 1; 单件超时未覆盖 → 事件 2。
+                    每个周期内追踪「同类多件物品」(例: N 颗螺丝), 要求每件都被某个动作(例: 打/划)依次覆盖一次。
+                    所有件齐 → 合格(OK); 单件超时未覆盖 → 不良(NG)。
                   </p>
 
                   <!-- 稳定窗口 -->
                   <div class="grid grid-cols-2 gap-4">
                     <div>
-                      <div class="text-xs text-gray-400 mb-1.5">稳定窗口帧数</div>
+                      <div class="text-xs text-gray-400 mb-1.5">连续稳定帧数</div>
                       <el-input-number
                         v-model="activeProject.pipeline_config.per_item.stability_window_frames"
                         size="small" :min="1" :step="1" :precision="0" class="!w-full" />
-                      <div class="text-[10px] text-gray-500 mt-1">画面里物件数量+位置稳定多少帧后,才认为「场景已就绪」,自动开新周期</div>
+                      <div class="text-[10px] text-gray-500 mt-1">画面里目标的数量+位置稳定多少帧后, 才认为「场景已就绪」, 自动开新周期</div>
                     </div>
                     <div>
-                      <div class="text-xs text-gray-400 mb-1.5">位置稳定 IoU 阈值</div>
+                      <div class="text-xs text-gray-400 mb-1.5">位置稳定阈值(重合度)</div>
                       <el-input-number
                         v-model="activeProject.pipeline_config.per_item.stability_iou_threshold"
                         size="small" :min="0.1" :max="0.99" :step="0.05" :precision="2" class="!w-full" />
-                      <div class="text-[10px] text-gray-500 mt-1">两帧间同件物品的 IoU 需高于此值才算「位置稳定」</div>
+                      <div class="text-[10px] text-gray-500 mt-1">两帧间同件目标的重合度需高于此值才算「位置稳定」; 默认 0.7</div>
                     </div>
                   </div>
 
                   <!-- 超时 + 锁数量 -->
                   <div class="grid grid-cols-2 gap-4">
                     <div>
-                      <div class="text-xs text-gray-400 mb-1.5">单件超时秒数</div>
+                      <div class="text-xs text-gray-400 mb-1.5">单件离开多少秒才算消失</div>
                       <el-input-number
                         v-model="activeProject.pipeline_config.per_item.item_timeout_seconds"
                         size="small" :min="0" :step="0.5" :precision="2" class="!w-full" />
-                      <div class="text-[10px] text-gray-500 mt-1">某件物品在周期开始后 X 秒还未被覆盖 → 事件 2 (NG)。0 表示不限</div>
+                      <div class="text-[10px] text-gray-500 mt-1">某件目标在画面里失踪多少秒, 才认为离开了; 0 = 不限</div>
                     </div>
                     <div>
-                      <div class="text-xs text-gray-400 mb-1.5">周期开始时锁定数量</div>
+                      <div class="text-xs text-gray-400 mb-1.5">周期开始就锁定数量</div>
                       <el-switch v-model="activeProject.pipeline_config.per_item.lock_count_on_start" />
-                      <div class="text-[10px] text-gray-500 mt-1">开启后,周期开始时拍下的件数即为「应有数量」,中途新增的物品不算 (推荐开启)</div>
+                      <div class="text-[10px] text-gray-500 mt-1">开启 → 周期开始那一刻看到几件就是"应有数量", 中途新出现的不算 (推荐开启)</div>
                     </div>
                   </div>
 
                   <!-- 收尾标签 (可选,例: 翻面) -->
                   <div class="grid grid-cols-2 gap-4">
                     <div>
-                      <div class="text-xs text-gray-400 mb-1.5">收尾标签 (可选)</div>
+                      <div class="text-xs text-gray-400 mb-1.5">收尾动作 (可选)</div>
                       <el-select
                         v-model="activeProject.pipeline_config.per_item.finish_label"
-                        size="small" class="!w-full" placeholder="不设置则集齐即结算" clearable>
+                        size="small" class="!w-full" placeholder="留空 → 全部覆盖完就自动结算" clearable>
                         <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
                       </el-select>
-                      <div class="text-[10px] text-gray-500 mt-1">设置后:所有件覆盖完 + 检出此标签 → 才算 OK (例: 翻面 = 工人完成此件)</div>
+                      <div class="text-[10px] text-gray-500 mt-1">设置后: 所有件覆盖完 + 检出此标签 → 才算 OK (例: 翻面 = 工人示意完成)</div>
                     </div>
                     <div>
-                      <div class="text-xs text-gray-400 mb-1.5">收尾标签持续帧数</div>
+                      <div class="text-xs text-gray-400 mb-1.5">收尾动作连续多少帧才确认</div>
                       <el-input-number
                         v-model="activeProject.pipeline_config.per_item.finish_sustain_frames"
                         size="small" :min="1" :step="1" :precision="0" class="!w-full"
                         :disabled="!activeProject.pipeline_config.per_item.finish_label" />
-                      <div class="text-[10px] text-gray-500 mt-1">收尾标签需连续出现多少帧才确认</div>
+                      <div class="text-[10px] text-gray-500 mt-1">收尾动作需连续出现多少帧才确认</div>
+                    </div>
+                  </div>
+
+                  <!-- v3.9+ 新增: 稳定性进阶 -->
+                  <div class="border-t border-slate-700 pt-3 mt-3">
+                    <div class="text-xs text-gray-400 mb-2 font-bold">稳定性进阶</div>
+                    <div class="grid grid-cols-3 gap-4">
+                      <div>
+                        <div class="text-[11px] text-gray-400 mb-1">允许漏检几件</div>
+                        <el-input-number
+                          v-model="activeProject.pipeline_config.per_item.stability_count_tolerance"
+                          size="small" :min="0" :step="1" :precision="0" class="!w-full" />
+                        <div class="text-[10px] text-gray-500 mt-1">配合"已知有几件"用, 允许 ±N 颗抖动 (默认 0)</div>
+                      </div>
+                      <div>
+                        <div class="text-[11px] text-gray-400 mb-1">最低检出比例</div>
+                        <el-input-number
+                          v-model="activeProject.pipeline_config.per_item.stability_count_ratio"
+                          size="small" :min="0.1" :max="1.0" :step="0.05" :precision="2" class="!w-full" />
+                        <div class="text-[10px] text-gray-500 mt-1">配"已知有几件"时, 检出数 ≥ N × 此比例即放行 (默认 0.85 = 允许 15% 漏检)</div>
+                      </div>
+                      <div>
+                        <div class="text-[11px] text-gray-400 mb-1">周期开始后补锁定窗口(秒)</div>
+                        <el-input-number
+                          v-model="activeProject.pipeline_config.per_item.lock_lookahead_seconds"
+                          size="small" :min="0" :step="0.5" :precision="2" class="!w-full" />
+                        <div class="text-[10px] text-gray-500 mt-1">周期开始后 N 秒内, 继续吸收"新位置"的件 (用于被遮挡漏锁的件)</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- v3.9+ 新增: 结算时机 (per_item 专属, 与其他模式隔离) -->
+                  <div class="border-t border-slate-700 pt-3 mt-3">
+                    <div class="text-xs text-gray-400 mb-2 font-bold">结算时机 <span class="text-amber-400 font-normal">(仅"逐件覆盖"模式生效, 不影响其他模式)</span></div>
+                    <div class="grid grid-cols-3 gap-4">
+                      <div>
+                        <div class="text-[11px] text-gray-400 mb-1">全部完成后等几秒自动 OK</div>
+                        <el-input-number
+                          v-model="activeProject.pipeline_config.per_item.settle_after_all_done_sec"
+                          size="small" :min="0" :step="0.5" :precision="2" class="!w-full" />
+                        <div class="text-[10px] text-gray-500 mt-1">所有步骤覆盖完后保持 N 秒 → 自动 OK 结算; 0 = 必须等"收尾动作"</div>
+                      </div>
+                      <div>
+                        <div class="text-[11px] text-gray-400 mb-1">无动作多少秒判 NG</div>
+                        <el-input-number
+                          v-model="activeProject.pipeline_config.per_item.idle_timeout_sec"
+                          size="small" :min="0" :step="1" :precision="0" class="!w-full" />
+                        <div class="text-[10px] text-gray-500 mt-1">工人停手 N 秒无任何动作 → 强制 NG 结算; 0 = 不限 (本场景建议 8 秒)</div>
+                      </div>
+                      <div>
+                        <div class="text-[11px] text-gray-400 mb-1">单周期最长几秒</div>
+                        <el-input-number
+                          v-model="activeProject.pipeline_config.per_item.cycle_max_duration_sec"
+                          size="small" :min="0" :step="10" :precision="0" class="!w-full" />
+                        <div class="text-[10px] text-gray-500 mt-1">周期开始后超过 N 秒未结算 → 强制 NG; 0 = 不限 (推荐 300 秒)</div>
+                      </div>
+                    </div>
+                    <div class="text-[10px] text-gray-500 mt-2">
+                      ※ 这三项只在"逐件覆盖"模式生效, 跟其他模式(顺序/检测/跟踪)的同名参数完全独立
                     </div>
                   </div>
                 </div>
@@ -1543,12 +1606,11 @@
 
               <!-- Per-Item Mode: Step-Level Config (v3.8+) -->
               <el-card v-if="activeProject.logic_mode === 'per_item'" shadow="never" class="bg-slate-800 border-slate-700">
-                <template #header><span class="font-bold text-white">逐件模式 - 步骤详情</span></template>
+                <template #header><span class="font-bold text-white">逐件覆盖 — 每个步骤的角色</span></template>
                 <div class="space-y-3 text-sm text-gray-300">
                   <p class="text-xs text-gray-400">
-                    每个步骤定义:用哪个标签识别「物件」(例: 螺丝),用哪个标签判定「已覆盖」(例: 打螺丝),
-                    以及覆盖判定的几何与持续条件。
-                    <span class="text-amber-400">未配置 per_item 的步骤将被忽略</span>(用于「收尾」类纯通过性步骤)。
+                    把开关打开 → 这步是「动作」(例: 扭螺丝);开关关掉 → 这步是「目标」(例: 螺丝, 被动作覆盖的对象)。
+                    <span class="text-amber-400">目标行不参与覆盖判定</span>, 只是让你能调它的检测阈值/显示等通用属性。
                   </p>
 
                   <div
@@ -1563,7 +1625,7 @@
                           if (v) {
                             step.per_item = step.per_item || {
                               item_label: '',
-                              action_label: '',
+                              action_label: step.label || '',
                               item_tracking_iou: 0.3,
                               coverage_iou: 0.3,
                               sustain_frames: 5,
@@ -1574,51 +1636,74 @@
                             delete step.per_item;
                           }
                         }"
-                        size="small" active-text="启用 per_item" />
+                        size="small" active-text="把这步设为「动作」" inactive-text="保留为「目标」" />
                     </div>
 
                     <div v-if="step.per_item" class="grid grid-cols-2 gap-3">
                       <div>
-                        <div class="text-[11px] text-gray-400 mb-1">物件识别标签 (item_label)</div>
-                        <el-input
-                          v-model="step.per_item.item_label"
-                          size="small" placeholder="例: 螺丝" />
-                        <div class="text-[10px] text-gray-500 mt-1">画面里出现这个标签 → 当作一个独立物件</div>
+                        <div class="text-[11px] text-gray-400 mb-1">这个动作要覆盖哪些目标？<span class="text-amber-400">(可多选 = "或")</span></div>
+                        <el-select
+                          :model-value="_pi_itemLabelToArray(step.per_item.item_label)"
+                          @update:model-value="(v) => { step.per_item.item_label = _pi_itemLabelFromArray(v); }"
+                          size="small" multiple filterable allow-create default-first-option
+                          collapse-tags collapse-tags-tooltip
+                          placeholder="从模型类别里选" class="!w-full">
+                          <el-option
+                            v-for="lbl in (activeProject.model_labels || [])"
+                            :key="lbl"
+                            :label="lbl"
+                            :value="lbl" />
+                        </el-select>
+                        <div class="text-[10px] text-gray-500 mt-1">画面里出现任一标签都算作"目标"; 多选表示"或"的关系(例: 涂黑工序覆盖 5N螺丝+7N螺丝)</div>
                       </div>
                       <div>
-                        <div class="text-[11px] text-gray-400 mb-1">动作覆盖标签 (action_label)</div>
-                        <el-input
+                        <div class="text-[11px] text-gray-400 mb-1">用哪个标签作为"动作"？</div>
+                        <el-select
                           v-model="step.per_item.action_label"
-                          size="small" placeholder="例: 打螺丝" />
-                        <div class="text-[10px] text-gray-500 mt-1">此标签持续与某物件重叠 → 该物件被覆盖</div>
+                          size="small" filterable allow-create default-first-option
+                          placeholder="从模型类别里选" class="!w-full">
+                          <el-option
+                            v-for="lbl in (activeProject.model_labels || [])"
+                            :key="lbl"
+                            :label="lbl"
+                            :value="lbl" />
+                        </el-select>
+                        <div class="text-[10px] text-gray-500 mt-1">这个标签持续跟某个目标重叠 → 该目标算"被覆盖"</div>
                       </div>
                       <div>
-                        <div class="text-[11px] text-gray-400 mb-1">物件跟踪 IoU</div>
+                        <div class="text-[11px] text-gray-400 mb-1">每周期已知有几件目标？</div>
+                        <el-input-number
+                          v-model="step.per_item.expected_count"
+                          size="small" :min="0" :step="1" :precision="0" class="!w-full" placeholder="0 = 自动" />
+                        <div class="text-[10px] text-gray-500 mt-1">填已知数量(如 5N螺丝=14) → 周期开始判定大幅简化; 填 0 = 走"自动稳定窗口"</div>
+                      </div>
+                      <div>
+                        <div class="text-[11px] text-gray-400 mb-1">同件跨帧匹配松紧</div>
                         <el-input-number
                           v-model="step.per_item.item_tracking_iou"
                           size="small" :min="0.1" :max="0.95" :step="0.05" :precision="2" class="!w-full" />
-                        <div class="text-[10px] text-gray-500 mt-1">同件物品跨帧匹配的 IoU 阈值</div>
+                        <div class="text-[10px] text-gray-500 mt-1">越大越严, 防止把相邻两件认成同一件; 默认 0.3</div>
                       </div>
                       <div>
-                        <div class="text-[11px] text-gray-400 mb-1">动作覆盖 IoU</div>
+                        <div class="text-[11px] text-gray-400 mb-1">动作框与目标框的重合度</div>
                         <el-input-number
                           v-model="step.per_item.coverage_iou"
                           size="small" :min="0.1" :max="0.95" :step="0.05" :precision="2" class="!w-full" />
-                        <div class="text-[10px] text-gray-500 mt-1">动作框与物件框的 IoU ≥ 此值才计入覆盖</div>
+                        <div class="text-[10px] text-gray-500 mt-1">重合度 ≥ 此值才计入"覆盖"; 默认 0.3, 动作大可调低如 0.2</div>
                       </div>
                       <div>
-                        <div class="text-[11px] text-gray-400 mb-1">持续帧数 (sustain_frames)</div>
+                        <div class="text-[11px] text-gray-400 mb-1">需连续多少帧才算覆盖</div>
                         <el-input-number
                           v-model="step.per_item.sustain_frames"
                           size="small" :min="1" :step="1" :precision="0" class="!w-full" />
-                        <div class="text-[10px] text-gray-500 mt-1">动作需连续 N 帧覆盖某物件,才确认「该件已覆盖」</div>
+                        <div class="text-[10px] text-gray-500 mt-1">动作框与目标重叠连续达到 N 帧, 才确认"已覆盖"; 默认 5</div>
                       </div>
                       <div>
-                        <div class="text-[11px] text-gray-400 mb-1">最少物件数 (min_item_count)</div>
+                        <div class="text-[11px] text-gray-400 mb-1">至少多少件目标才开始周期</div>
                         <el-input
                           v-model="step.per_item.min_item_count"
-                          size="small" placeholder="auto" />
-                        <div class="text-[10px] text-gray-500 mt-1">填数字 (例: 12) 或 'auto' (周期开始时自动锁定)</div>
+                          size="small" placeholder="留 auto 即可" />
+                        <div class="text-[10px] text-gray-500 mt-1">填数字 或 'auto'; 上方填了"已知有几件"后, 此项自动失效</div>
                       </div>
                     </div>
                   </div>
@@ -1674,17 +1759,45 @@
                         <el-button type="danger" size="small" link @click="removeSimultaneousGroup(gIdx)">删除</el-button>
                       </div>
                       <div class="space-y-3">
+                        <div class="flex items-center gap-3 pb-2 border-b border-slate-800">
+                          <el-tooltip placement="right">
+                            <template #content>
+                              <div style="max-width:320px;line-height:1.5">
+                                跨周期模式：组内同时含有"上一周期成员"和"下一周期首步"。<br/>
+                                状态机会让上周期最后一步和下周期首步互相等待对方出现，<br/>
+                                避免因模型残影把上周期末步当成新周期起点而产生鬼周期。<br/>
+                                ⚠ 与"启用防重复结算"互斥，不能同时启用。
+                              </div>
+                            </template>
+                            <span class="text-xs text-gray-400 cursor-help underline decoration-dotted">跨周期？</span>
+                          </el-tooltip>
+                          <el-switch v-model="group.cross_cycle" size="small" />
+                        </div>
                         <div>
-                          <p class="text-xs text-gray-500 mb-1">时间窗口（秒）：在此时间内先后出现视为"同时"</p>
+                          <p class="text-xs text-gray-500 mb-1">{{ group.cross_cycle ? '等待窗口（秒）：先到一侧后等另一侧的最长时间' : '时间窗口（秒）：在此时间内先后出现视为"同时"' }}</p>
                           <el-input-number v-model="group.time_window" size="small" :min="0" :step="0.5" :precision="2" />
                         </div>
                         <div>
-                          <p class="text-xs text-gray-500 mb-2">选择可能同时出现的步骤，并按优先顺序排列（拖拽或使用箭头调整）：</p>
+                          <p class="text-xs text-gray-500 mb-2">
+                            {{ group.cross_cycle
+                              ? '组内成员的归属：上一周期成员（结算前已识别）与下一周期首步（结算后才识别）'
+                              : '选择可能同时出现的步骤，并按优先顺序排列' }}
+                          </p>
                           <div class="space-y-2">
                             <div v-for="(label, sIdx) in (group.priority_order || [])" :key="sIdx" class="flex items-center gap-2">
                               <span class="text-gray-400 text-xs w-6">{{ sIdx + 1 }}.</span>
                               <el-select v-model="group.priority_order[sIdx]" size="small" class="flex-1" placeholder="选择步骤">
                                 <el-option v-for="step in enabledSteps" :key="step.id" :label="step.displayLabel || step.label" :value="step.label" />
+                              </el-select>
+                              <el-select
+                                v-if="group.cross_cycle"
+                                v-model="(group.period_roles = group.period_roles || {})[group.priority_order[sIdx]]"
+                                size="small"
+                                style="width:96px"
+                                placeholder="归属"
+                              >
+                                <el-option label="上周期" value="prev" />
+                                <el-option label="下周期" value="next" />
                               </el-select>
                               <el-button size="small" :disabled="sIdx === 0" link @click="moveSimGroupStep(gIdx, sIdx, -1)">↑</el-button>
                               <el-button size="small" :disabled="sIdx === group.priority_order.length - 1" link @click="moveSimGroupStep(gIdx, sIdx, 1)">↓</el-button>
@@ -2113,6 +2226,22 @@ const countableSteps = computed(() => {
     ? (activeProject.value?.tracking_container_label || '') : '';
   return nonBackupSteps.value.filter(s => s.label !== trigger && s.label !== container);
 });
+
+// v3.9+ per_item: item_label 兼容 string / array 两种存储
+//   - el-select multiple 需要 array
+//   - 后端兼容 string 单个 + array 多个 (字符串=单标签, 数组=OR)
+//   - 序列化时只有 1 个时落回字符串 (老前端继续可读)
+function _pi_itemLabelToArray(val) {
+  if (Array.isArray(val)) return val.filter(s => typeof s === 'string' && s);
+  if (typeof val === 'string' && val) return [val];
+  return [];
+}
+function _pi_itemLabelFromArray(arr) {
+  const clean = (arr || []).filter(s => typeof s === 'string' && s.trim()).map(s => s.trim());
+  if (clean.length === 0) return '';
+  if (clean.length === 1) return clean[0];
+  return clean;
+}
 
 // 默认计数器（前3个）
 const defaultCounters = computed(() => {
@@ -2683,6 +2812,14 @@ const initProjectDefaults = (project) => {
   if (project.simultaneous_groups === undefined) {
     project.simultaneous_groups = pipelineConfig.simultaneous_groups || [];
   }
+  // 反向推导跨周期组的 period_roles (后端只保存 prev/next_cycle_labels, 前端编辑用 period_roles)
+  (project.simultaneous_groups || []).forEach(g => {
+    if (g.cross_cycle && !g.period_roles) {
+      g.period_roles = {};
+      (g.prev_cycle_labels || []).forEach(lbl => { g.period_roles[lbl] = 'prev'; });
+      (g.next_cycle_labels || []).forEach(lbl => { g.period_roles[lbl] = 'next'; });
+    }
+  });
   // Settlement mode
   if (project.settlement_mode === undefined) {
     project.settlement_mode = pipelineConfig.settlement_mode || 'first_step';
@@ -2773,6 +2910,21 @@ const initProjectDefaults = (project) => {
   if (piCfg.lock_count_on_start === undefined) piCfg.lock_count_on_start = true;
   if (piCfg.finish_label === undefined) piCfg.finish_label = '';
   if (piCfg.finish_sustain_frames === undefined) piCfg.finish_sustain_frames = 3;
+  // v3.9+ 新增字段默认值
+  if (piCfg.stability_count_tolerance === undefined) piCfg.stability_count_tolerance = 0;
+  if (piCfg.stability_count_ratio === undefined) piCfg.stability_count_ratio = 0.85;
+  if (piCfg.settle_after_all_done_sec === undefined) piCfg.settle_after_all_done_sec = 0;
+  if (piCfg.lock_lookahead_seconds === undefined) piCfg.lock_lookahead_seconds = 5;
+  // v3.9+ per_item 专属超时 (与项目级 cycle_max_duration / idle_timeout_seconds 解耦)
+  // 老 per_item 项目: 若专属字段未配, 后端会自动从项目级老字段回落, 这里前端只兜底 0
+  if (piCfg.cycle_max_duration_sec === undefined) piCfg.cycle_max_duration_sec = 0;
+  if (piCfg.idle_timeout_sec === undefined) piCfg.idle_timeout_sec = 0;
+  // 步骤级 expected_count 默认值 (老项目 step.per_item 内可能没这字段)
+  for (const s of (project.steps_config || [])) {
+    if (s && s.per_item && typeof s.per_item === 'object') {
+      if (s.per_item.expected_count === undefined) s.per_item.expected_count = 0;
+    }
+  }
 
   // Step 8 (feat/multi-model-roi-link): 反序列化附加模型 (副 slot, 主模型由
   // default_model_id/model_format 管理). 来源 pipeline_config.models[]
@@ -2937,6 +3089,54 @@ const handleCreateProject = async () => {
 // 保存项目
 const handleSaveProject = async () => {
   if (!activeProject.value) return;
+
+  // v3.8.x last_first 模式互斥校验
+  // 1. 不能与跨周期同时出现组共存
+  // 2. 不能与 per_item 模式共存
+  // 3. 所有步骤的严格顺序应已被 watch 自动关闭, 这里再兜底校验
+  if (activeProject.value.settlement_mode === 'last_first') {
+    const crossGroups = (activeProject.value.simultaneous_groups || []).filter(g => g.enabled && g.cross_cycle);
+    if (crossGroups.length > 0) {
+      ElMessage.error('"末步结算 + 首步开周期"模式不能与跨周期同时出现组共存，请先停用其中一项');
+      return;
+    }
+    if (activeProject.value.per_item?.enabled) {
+      ElMessage.error('"末步结算 + 首步开周期"模式不能与逐件覆盖模式共存');
+      return;
+    }
+    const stillStrict = (activeProject.value.steps_config || []).filter(s => s.strict_order);
+    if (stillStrict.length > 0) {
+      // 兜底自动清掉 (避免警告刷屏)
+      stillStrict.forEach(s => { s.strict_order = false; });
+    }
+  }
+
+  // 跨周期同时出现组校验:
+  // 1. 跨周期组与"启用防重复结算"互斥
+  // 2. 跨周期组的每个成员必须明确标记"上周期 / 下周期"归属
+  // 3. 跨周期组必须同时含至少一个上周期成员和至少一个下周期成员
+  const crossCycleGroups = (activeProject.value.simultaneous_groups || []).filter(g => g.enabled && g.cross_cycle);
+  if (crossCycleGroups.length > 0 && activeProject.value.settle_dedup) {
+    ElMessage.error('启用了跨周期同时出现组时, 不能同时启用"防重复结算"。请关闭其中一项后再保存。');
+    return;
+  }
+  for (let i = 0; i < crossCycleGroups.length; i++) {
+    const g = crossCycleGroups[i];
+    const members = (g.priority_order || []).filter(l => l);
+    const roles = g.period_roles || {};
+    const missingRole = members.filter(l => !roles[l]);
+    if (missingRole.length > 0) {
+      ElMessage.error(`跨周期同时出现组 ${i + 1}: 成员 [${missingRole.join(', ')}] 未标记归属（上周期 / 下周期）`);
+      return;
+    }
+    const prev = members.filter(l => roles[l] === 'prev');
+    const next = members.filter(l => roles[l] === 'next');
+    if (prev.length === 0 || next.length === 0) {
+      ElMessage.error(`跨周期同时出现组 ${i + 1}: 必须至少有一个上周期成员和一个下周期成员`);
+      return;
+    }
+  }
+
   saving.value = true;
   try {
     const data = {
@@ -2957,10 +3157,21 @@ const handleSaveProject = async () => {
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,
         ng_cycle_protect_seconds: activeProject.value.ng_cycle_protect_seconds || 0,
-        simultaneous_groups: (activeProject.value.simultaneous_groups || []).map(g => ({
-          ...g,
-          labels: (g.priority_order || []).filter(l => l)
-        })),
+        simultaneous_groups: (activeProject.value.simultaneous_groups || []).map(g => {
+          const members = (g.priority_order || []).filter(l => l);
+          const out = { ...g, labels: members };
+          if (g.cross_cycle) {
+            const roles = g.period_roles || {};
+            out.prev_cycle_labels = members.filter(l => roles[l] === 'prev');
+            out.next_cycle_labels = members.filter(l => roles[l] === 'next');
+          } else {
+            // 非跨周期组不保留 period_roles / prev_cycle_labels / next_cycle_labels, 保持配置干净
+            delete out.period_roles;
+            delete out.prev_cycle_labels;
+            delete out.next_cycle_labels;
+          }
+          return out;
+        }),
         tracking_cycle_strategy: activeProject.value.tracking_cycle_strategy || 'all_gone',
         tracking_trigger_label: activeProject.value.tracking_trigger_label || '',
         tracking_trigger_min_frames: activeProject.value.tracking_trigger_min_frames || 15,
@@ -3024,6 +3235,14 @@ const handleSaveProject = async () => {
             lock_count_on_start: src.lock_count_on_start !== false,
             finish_label: finishLabel,
             finish_sustain_frames: Math.max(1, Math.floor(Number(src.finish_sustain_frames) || 3)),
+            // v3.9+ 新增字段
+            stability_count_tolerance: Math.max(0, Math.floor(Number(src.stability_count_tolerance) || 0)),
+            stability_count_ratio: Math.max(0.1, Math.min(1.0, Number(src.stability_count_ratio) || 0.85)),
+            settle_after_all_done_sec: Math.max(0, Number(src.settle_after_all_done_sec) || 0),
+            lock_lookahead_seconds: Math.max(0, Number(src.lock_lookahead_seconds) || 0),
+            // v3.9+ per_item 专属超时 (与其他模式隔离)
+            cycle_max_duration_sec: Math.max(0, Math.floor(Number(src.cycle_max_duration_sec) || 0)),
+            idle_timeout_sec: Math.max(0, Math.floor(Number(src.idle_timeout_sec) || 0)),
           };
         })() : {},
         periodic_actions: (activeProject.value.periodic_actions || []).map(rule => ({
@@ -3683,6 +3902,9 @@ const isSettlementStep = (step) => {
     return step.id === seqOrder[0]?.step_id;
   } else if (mode === 'last_step') {
     return step.id === seqOrder[seqOrder.length - 1]?.step_id;
+  } else if (mode === 'last_first') {
+    // v3.8.x last_first 模式: 全部步骤都不允许严格顺序
+    return true;
   }
   return false;
 };
@@ -3698,6 +3920,23 @@ watch(() => activeProject.value?.logic_mode, (mode) => {
 
 watch(() => activeProject.value?.settlement_mode, (mode) => {
   if (!activeProject.value?.steps_config) return;
+  // v3.8.x last_first 模式: 批量关闭所有步骤的严格顺序 + 关闭 first_step_aborts_pending_settle
+  if (mode === 'last_first') {
+    let cleared = 0;
+    for (const step of activeProject.value.steps_config) {
+      if (step.strict_order) {
+        step.strict_order = false;
+        cleared++;
+      }
+    }
+    if (activeProject.value.first_step_aborts_pending_settle) {
+      activeProject.value.first_step_aborts_pending_settle = false;
+    }
+    if (cleared > 0) {
+      ElMessage.info(`已自动关闭 ${cleared} 个步骤的严格顺序（last_first 模式约束）`);
+    }
+    return;
+  }
   const seqOrder = activeProject.value?.sequence_order || [];
   if (seqOrder.length === 0) return;
   const settlementStepId = mode === 'last_step'
@@ -3827,9 +4066,11 @@ const addSimultaneousGroup = () => {
   if (!activeProject.value.simultaneous_groups) activeProject.value.simultaneous_groups = [];
   activeProject.value.simultaneous_groups.push({
     enabled: true,
+    cross_cycle: false,
     labels: [],
     time_window: 2.0,
-    priority_order: []
+    priority_order: [],
+    period_roles: {}
   });
 };
 

@@ -151,11 +151,11 @@ def full_project_payload(name: str) -> dict:
         },
         "steps_config": [
             {"id": 1, "label": "step_a", "enabled": True, "threshold": 50,
-             "min_frames": 1, "gap_tolerance": 10, "color": "#22c55e"},
+             "min_frames": 1, "color": "#22c55e"},
             {"id": 2, "label": "step_b", "enabled": True, "threshold": 50,
-             "min_frames": 1, "gap_tolerance": 10, "color": "#3b82f6"},
+             "min_frames": 1, "color": "#3b82f6"},
             {"id": 3, "label": "step_c", "enabled": True, "threshold": 50,
-             "min_frames": 1, "gap_tolerance": 10, "color": "#f97316"},
+             "min_frames": 1, "color": "#f97316"},
         ],
         "events_config": [
             {"id": 1, "name": "合格(OK)", "color": "#10b981",

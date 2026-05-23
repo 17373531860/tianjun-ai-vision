@@ -7,10 +7,10 @@ REAL_PROJECT_CFG = {
     "logic_mode": "sequential",
     "pipeline_config": {},
     "steps_config": [
-        {"label": "正面涂黑", "threshold": 0.3, "min_frames": 1, "gap_tolerance": 5},
-        {"label": "翻转",     "threshold": 0.3, "min_frames": 1, "gap_tolerance": 5},
-        {"label": "反面涂黑", "threshold": 0.3, "min_frames": 1, "gap_tolerance": 5},
-        {"label": "放置",     "threshold": 0.3, "min_frames": 1, "gap_tolerance": 5},
+        {"label": "正面涂黑", "threshold": 0.3, "min_frames": 1},
+        {"label": "翻转",     "threshold": 0.3, "min_frames": 1},
+        {"label": "反面涂黑", "threshold": 0.3, "min_frames": 1},
+        {"label": "放置",     "threshold": 0.3, "min_frames": 1},
     ],
     "events_config": [],
 }

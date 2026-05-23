@@ -68,7 +68,7 @@ def _create_and_activate_project(api_url: str, with_default_model_id: bool = Fal
         "pipeline_config": {},
         "steps_config": [
             {"label": "step_a", "threshold": 0.3, "min_frames": 1,
-             "gap_tolerance": 5, "color": "#1976d2"},
+             "color": "#1976d2"},
         ],
         "events_config": [],
         "alarm_config": {},

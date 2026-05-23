@@ -313,21 +313,14 @@ class SessionLifecycleMixin:
             print(f"[自动拆分] 新会话已创建: {new_info.get('session_uuid')}")
     
     def _force_timeout_ng(self, reason: str):
-        """超时强制NG：触发NG事件并清理当前周期状态"""
+        """超时强制NG：触发NG事件并清理当前周期状态.
+
+        v3.8.x: 统一调清空函数, 把"静态触发标记 / 同时出现组缓冲 / pending 队列"
+        这三项以前漏清的字段一起清掉.
+        """
         self._trigger_event(2, reason)
-        self._cycle_regression = False
-        self.current_cycle_steps = []
-        self.backup_steps_seen_in_cycle = set()
-        self.last_added_step = None
-        self.step_last_seen.clear()
-        self.step_start_time.clear()
-        self.step_consecutive_frames.clear()
-        self.step_frame_confirmed.clear()
-        self._step_gap_count.clear()
-        if hasattr(self, '_step_raw_start'):
-            self._step_raw_start.clear()
-        self._last_step_added_time = None
-        self.last_step_completed_time = None
+        if hasattr(self, '_clear_step_runtime_state'):
+            self._clear_step_runtime_state()
 
     def start_cycle(self):
         """开始新的检测周期"""

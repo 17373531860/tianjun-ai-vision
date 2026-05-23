@@ -47,8 +47,6 @@ def _reset_step_state_dicts(h):
     h.step_min_frames = {}
     h.step_consecutive_frames = {}
     h.step_frame_confirmed = {}
-    h.step_gap_tolerance = {}
-    h._step_gap_count = {}
     h.step_detection_type = {}
     h.step_static_config = {}
     h.step_static_triggered = {}
@@ -59,9 +57,6 @@ def _reset_step_state_dicts(h):
     h.step_strict_order = {}
     h.step_accept_once = {}
     h.step_roi_polygons = {}
-    h._first_step_had_gap = False
-    h._first_step_reconfirmed = False
-    h._first_step_disappeared_at = None
     h._last_step_added_time = None
     h._step_raw_start = {}
     h._cycle_regression = False
@@ -83,19 +78,18 @@ def _apply_steps_config(h, steps_config):
         if display_label != label:
             h.step_display_names[label] = display_label
 
+        # v3.8.x: 原 max_interval (去重间隔) / gap_tolerance (丢帧容忍) 已合并入
+        # disappear_delay (消失等待时间). 老项目 JSON 里若仍带这两个键, 直接忽略
+        # — 不影响读取, 也不强制清理 DB, 下次客户在前端保存项目时自然被覆盖.
         h.step_time_config[label] = {
             'min_duration': step.get('min_duration'),
             'max_duration': step.get('max_duration'),
-            'max_interval': step.get('max_interval', 1.0),
             'disappear_delay': step.get('disappear_delay', 0),
             'timeout_ng': step.get('timeout_ng', False),
         }
 
         min_frames = step.get('min_frames')
         h.step_min_frames[label] = min_frames if min_frames and min_frames > 0 else 1
-
-        gap_tolerance = step.get('gap_tolerance')
-        h.step_gap_tolerance[label] = gap_tolerance if gap_tolerance and gap_tolerance > 0 else 0
 
         if step.get('strict_order'):
             h.step_strict_order[label] = True
@@ -268,13 +262,29 @@ def _apply_pipeline_config(h, config, pipeline_config):
     )
 
     # 结算步骤不允许有 strict_order, 确保结算步骤始终能进入周期
-    if h.settlement_mode == 'last_step':
+    if h.settlement_mode == 'last_first':
+        # last_first 模式: 全部步骤强制非严格 (前端校验 + 后端二次兜底)
+        if h.step_strict_order:
+            cleared = list(h.step_strict_order.keys())
+            h.step_strict_order = {}
+            print(f"[last_first 模式] 自动清空全部步骤的严格顺序 ({cleared})")
+        # 与 first_step_aborts_pending_settle 互斥 (功能重叠, last_first 自带 R3 fallback)
+        if pipeline_config.get('first_step_aborts_pending_settle'):
+            print("[last_first 模式] 检测到 first_step_aborts_pending_settle=True, 强制覆盖为 False (已被 last_first R3 取代)")
+            pipeline_config['first_step_aborts_pending_settle'] = False
+        # last_first 也意味着 _pending_first_step 重置 (新项目从干净状态开始)
+        if hasattr(h, '_pending_first_step'):
+            h._pending_first_step = False
+    elif h.settlement_mode == 'last_step':
         settle_label = h._get_last_sequence_step_label()
+        if settle_label and h.step_strict_order.get(settle_label):
+            del h.step_strict_order[settle_label]
+            print(f"[{h.settlement_mode}模式] 自动移除结算步骤 [{settle_label}] 的严格顺序")
     else:
         settle_label = h._get_first_sequence_step_label()
-    if settle_label and h.step_strict_order.get(settle_label):
-        del h.step_strict_order[settle_label]
-        print(f"[{h.settlement_mode}模式] 自动移除结算步骤 [{settle_label}] 的严格顺序")
+        if settle_label and h.step_strict_order.get(settle_label):
+            del h.step_strict_order[settle_label]
+            print(f"[{h.settlement_mode}模式] 自动移除结算步骤 [{settle_label}] 的严格顺序")
 
 
 def _apply_counters(h, config):
@@ -342,7 +352,6 @@ def _print_summary(h, config, steps_config, pipeline_config):
     print(f"步骤阈值: {h.step_conf_thresholds}")
     print(f"步骤时间配置: {h.step_time_config}")
     print(f"步骤最少帧数: {h.step_min_frames}")
-    print(f"步骤丢帧容忍: {h.step_gap_tolerance}")
     print(f"步骤检测类型: {h.step_detection_type}")
     print(f"静态步骤配置: {h.step_static_config}")
     print(f"计数器: {h.counters}")
@@ -380,6 +389,14 @@ def apply_project_config(h, config: dict):
 
     _apply_counters(h, config)
     _reset_cycle_state(h)
+
+    # v3.8.x: 切换项目后统一清空步骤运行时状态.
+    # _reset_step_state_dicts / _reset_cycle_state 只重建了"配置类字典 + 周期序列",
+    # 没清"最后看见时间戳 / 同时出现组待挂队列 / 上次消失时间戳"等运行时残影.
+    # 这里补一刀, 确保切换项目时上次运行的所有残影完全归零, 不会被新项目同名标签接续.
+    if hasattr(h, '_clear_step_runtime_state'):
+        h._clear_step_runtime_state()
+
     _apply_tracking_mode(h, config, pipeline_config)
 
     # v3.5.0: 周期性强制动作（每 N 轮做 E 否则告警）

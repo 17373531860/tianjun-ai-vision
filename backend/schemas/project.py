@@ -42,6 +42,10 @@ class ProjectResponse(ProjectBase):
     updated_at: datetime
     model_name: Optional[str] = None
     model_version: Optional[str] = None
+    # 模型自带的全部类别 (来自 Model.labels JSON), 给前端 Project 页展示用
+    # 与 steps_config 是两个维度: model_labels 是模型推理能识别的全部类别,
+    # steps_config 是项目里被纳入业务步骤的子集, 二者不必相等
+    model_labels: Optional[List[str]] = None
 
     class Config:
         from_attributes = True
