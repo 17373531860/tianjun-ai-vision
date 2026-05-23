@@ -1566,6 +1566,8 @@ for pid in $PIDS; do kill -9 "$pid" 2>/dev/null; done
 |---|---|
 | `tests/uat/uat_v2_functional.py` | API 契约 4 项（ROI in/out + 反向序列 + 计数器联动）+ UI CRUD 3 项的标准模板（V2，7/7 全过） |
 | `tests/uat/uat_v3_advanced.py` | 进阶：Export docx/xlsx 解 zip 验字段、Cluster 主从双后端聚合、Tracking 动态 ROI 移动目标（V3，13/13 全过） |
+| `tests/uat/uat_20260522_simultaneous_groups_v38.py` | v3.9.0 跨周期组类二状态机 UAT（同时出现组重构验收） |
+| `tests/uat/uat_20260523_last_first_settlement.py` | **v3.9.0 last_first 结算模式 UAT（4 阶段 31 项全过）** — 含"先红后绿"对照（Phase D 跑同剧本切换 first_step 模式验 R3=0），是结算模式新加 / 改的最佳模板。日志事实统计：直接 grep 后端日志统计 `[last_first R3]` 触发次数 + `周期结束: ... OK/NG` 行数，比 HTTP `counters` 字段更可靠（counters 需要 events_config 上挂 `updates_counter`）。 |
 
 跑法：
 
@@ -1589,10 +1591,13 @@ cd frontend && DEV_SERVER_PORT=6011 \
   DEV_WS_ORIGIN=ws://127.0.0.1:8011 npm run dev &
 
 # 5) 跑 UAT
-python tests/uat/uat_v3_advanced.py    # 进阶 13 项
-# 或
-python tests/uat/uat_v2_functional.py  # 基础 7 项
+python tests/uat/uat_v3_advanced.py                              # 进阶 13 项
+python tests/uat/uat_v2_functional.py                            # 基础 7 项
+python tests/uat/uat_20260523_last_first_settlement.py           # v3.9.0 last_first (4 阶段 31 项)
+python tests/uat/uat_20260522_simultaneous_groups_v38.py         # v3.9.0 跨周期组类二
 ```
+
+> 💡 **Linux UAT 启后端的关键一点**（v3.9.0 实测）：Cursor `Shell` tool 的 background 命令可能被发 SIGTERM 误杀，**用 `setsid bash -c '...exec uvicorn...' < /dev/null > log 2>&1 & disown`** 完全脱离会话才不会被中断。日志要 flush 配合 `PYTHONUNBUFFERED=1`，否则后端的 `print` 会缓冲，UAT grep 不到关键字。
 
 > 这两个脚本**不是** pytest 用例（命名故意不带 `test_` 前缀），所以 `pytest tests/` **不会**自动跑它们 — 必须显式 `python tests/uat/...` 调起来。这是有意的：UAT 应该是"我现在就要看一眼"的人工触发，不应混进 CI 无差别跑。
 

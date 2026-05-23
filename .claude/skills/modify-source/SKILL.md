@@ -300,6 +300,25 @@ source.py / mixin 中向 `MESHookManager` 单例（`backend.services.mes_hooks`�
 
 ---
 
+## 12.5. last_first 结算 + cross_cycle 跨周期组（v3.9.0）
+
+> 详细诊断见 `debug-source` 第十二·七节。这里只列**修代码时必须知道**的事实。
+
+- **入口**：`source_step_stats_mixin._update_step_stats` 在调 `_process_simultaneous_groups` 之前**先**调两个守门钩子：
+  1. `_process_cross_cycle_groups` — 仅 `simultaneous_groups[].cross_cycle == true` 的组生效，处理上下周期成员先后到达 + `_blocked_labels` 屏蔽集合 + 等待超时
+  2. `_process_last_first_mode` — 仅 `pipeline_config.settlement_mode == 'last_first'` 时生效，状态机 R1-R6
+- **两个钩子都返回 `consumed: set`**，被消费的标签从本帧的 `detected_labels` / `frame_detected_labels` 中减去，不会再走后续路径——所以**改这两个钩子前先看消费链路**。
+- **互斥**：`last_first` 与 `cross_cycle` 共用 `_blocked_labels` 字段做屏蔽，**不能同时启用**。前端拒绝保存，后端 `_apply_pipeline_config` 兜底把 `cross_cycle` 设为 false。
+- **新字段**：`_pending_first_step` (bool) 在 `source_state_init._init_step_state` 初始化，`source._clear_step_runtime_state` 清空。新增同类 flag 时记得在两处都同步。
+- **二次结算保护**：`source_events_check_mixin._check_events` 里基于"末步消失"的旧分支 v3.9.0 起对 `first_step` / `last_first` 模式 `pass`，避免 R1 已结算后又被消失路径再结算一次。改这个文件前**先看 `if self.settlement_mode in (...)` 守门**。
+- **测试矩阵**：
+  - `tests/test_settlement_last_first_v38.py` — 24 单测覆盖 R1-R6
+  - `tests/test_simultaneous_groups_v38.py` + `tests/features/simultaneous_groups_v38.feature` — cross_cycle 7 状态迁移
+  - `tests/test_synthetic_last_first_e2e.py` + `tests/scenarios/last_first_settlement.json` — 整管线剧本
+  - `tests/uat/uat_20260523_last_first_settlement.py` — 4 阶段 UAT 模板（API 契约 + 可见浏览器 + UI CRUD + 先红后绿对比 first_step）
+
+---
+
 ## 13. 周期性强制动作（v3.5.0）
 
 - **mixin**: `source_periodic_actions_mixin.py` (`PeriodicActionsMixin`)。VSM MRO 中**保持在 LifecycleMixin 之后**，否则 hook 顺序错。
@@ -358,6 +377,7 @@ MES Hook 影响: [是否影响 5 个 Hook 调用点的签名/时序]
 1. `python -c "from backend.api.source import VideoSourceManager; vsm = VideoSourceManager(0)"` — 构造不炸（验证 import + `_init_inference_vars` + 6 个 has-a 组件实例化）。
 2. `python -m pytest tests/test_periodic_actions_v352.py` — 周期性动作 + state_init 链路。
 3. `python -m pytest tests/test_pt_ct_modes_exposure.py tests/test_detection_results_exposure.py` — `get_detection_results` 字段对外承诺。
+3.5. 改 `source_settlement_mixin.py` / `source_step_stats_mixin.py` / `source_state_init.py` 务必加跑：`python -m pytest tests/test_settlement_last_first_v38.py tests/test_simultaneous_groups_v38.py tests/test_per_item_v39_features.py` — 状态机隔离性回归（v3.9.0+）。
 4. `python tools/check_imports.py`（如存在）— mixin 顶层 import 自查。
 5. **手动冒烟**：起后端 + 前端 → Source 页接 USB / 视频文件各一路 → 跑一个 cycle → 确认 detection/results 返回 + 数据页能看到 cycle/step → 关掉视频源不报错。
 6. 改了多通道相关字段：`channel_manager.set_channel_count(2)` → 跑两路 → 关一路 → 确认 `mes_hook.on_channel_removed` + `alarm_router.on_channel_removed` 都被调（AGENTS 第八节关键不变量 4）。

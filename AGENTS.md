@@ -318,12 +318,14 @@
 **关键文件**：
 - `source_session_lifecycle_mixin.py` (1111 ⚠️) — Session/Cycle 生命周期 + scan_pair settle
 - `source_check_modes_mixin.py` — 检查模式聚合器（仅 MRO）
-- `source_settlement_mixin.py` (914 ⚠️) — 8 种结算逻辑
+- `source_settlement_mixin.py` (1320 ⚠️⚠️) — 8 种结算逻辑 + **v3.9.0 `_process_last_first_mode` (双锚状态机 R1-R6) + `_process_cross_cycle_groups` (跨周期组类二独立状态机)**
 - `source_sequential_mixin.py` — 顺序模式
-- `source_step_stats_mixin.py` — 步骤统计聚合
+- `source_step_stats_mixin.py` — 步骤统计聚合（v3.9.0 加 last_first / cross_cycle 前置路由钩子）
 - `source_event_trigger_mixin.py` — `_trigger_event()` 中心 hook
+- `source_events_check_mixin.py` — 旧的"基于消失"结算路径，v3.9.0 起 `last_first` / `first_step` 模式跳过
 - `source_periodic_actions_mixin.py` — v3.5.0 周期性强制动作
-- `source_per_item_mixin.py` (~650) — **v3.8.0 逐件覆盖模式**（独立路径，与其他 4 种模式正交）
+- `source_per_item_mixin.py` (~960, v3.9.0 加五补丁) — **v3.8.0 逐件覆盖模式**（独立路径，与其他 4 种模式正交）
+- `source_project_config_apply.py` — 应用 Project 配置；v3.9.0 加 last_first 自动清空 strict_order 兜底
 - `models/models.py` — `DetectionSession` / `DetectionCycle` / `StepRecord`
 
 **对外接口**：`/api/v1/source/detection/results`（实时状态全集，含 PT/CT raw 数据 + `per_item_state`）
@@ -340,10 +342,23 @@
 | `tracking` | 跟踪模式：tracked_items 字典 + ID 跟踪 + container_mode | `source_step_stats_mixin.py` |
 | `per_item` | **v3.8.0 新增** 逐件覆盖：N 个个体逐件被工序覆盖 → 收尾标签结算 | `source_per_item_mixin.py` |
 
+**4 种 settlement_mode 速查**（与 logic_mode **正交**，前者决定"何时算一个周期完"）：
+
+| settlement_mode | 何时结算 | 何时开新周期 | 适用 |
+|---|---|---|---|
+| `first_step` | 首步**重新出现**（第一次再来） | 同上 | 默认；首尾相接的工序流（标准模式）|
+| `last_step` | 末步**消失**（最后一步走完） | 任意有意义步骤回来 | 末步消失型（少用）|
+| `no_anchor` | 周期超时 / 空闲超时 | 任意有意义步骤回来 | 不规则节拍场景 |
+| `last_first` | **v3.9.0 新增** — 末步**出现**立刻结算（不等消失） | 首步**出现**立刻开新周期；首步缺位时由序列其他步骤顶替（R4），末步缺位时由首步重出触发 NG fallback（R3）| 打螺丝/装配等"末步即出值 + 跳末步即放弃"的双锚场景 |
+
+> ⚠️ `last_first` 与以下配置**严格互斥**（前后端双层校验，前端拒绝保存 + 后端 `_apply_pipeline_config` 兜底覆盖）：`strict_mode` / 跨周期组 `cross_cycle` / `per_item` 模式 / `detection`/`tracking` logic_mode / `custom` 模式 base 不为 `sequential`。详见 `debug-source` skill。
+
 **关键扩展点**：
 - `_trigger_event` 是中心 hook，所有事件都从这里发出，插件可挂事件后处理
 - `events_config` JSON 已支持自定义事件，新增需求优先扩此 JSON
 - `pipeline_config.per_item` / `steps_config[i].per_item` — v3.8.0 新增逐件覆盖配置位
+- `pipeline_config.settlement_mode = 'last_first'` — v3.9.0 新增双锚结算位
+- `pipeline_config.simultaneous_groups[].cross_cycle = true` — v3.9.0 类二跨周期组配置位（独立状态机，与类一同帧组完全分离）
 
 ---
 
@@ -659,6 +674,9 @@
 | Scanner `broadcast_channels` | JSON | 一扫码器服务多工位 | `models/mes_models.py:ScannerDevice` |
 | `pipeline_config.per_item` (v3.8.0+) | JSON | 逐件覆盖项目级参数（稳定窗口/收尾标签等） | `source_per_item_mixin.py` |
 | `steps_config[i].per_item` (v3.8.0+) | JSON | 逐件覆盖步骤级参数（item_label/action_label/sustain_frames 等） | 同上 |
+| `pipeline_config.settlement_mode = 'last_first'` (v3.9.0+) | enum | **末步结算 + 首步开周期** 双锚状态机（R1-R6），与其他模式严格互斥 | `source_settlement_mixin.py: _process_last_first_mode` |
+| `pipeline_config.simultaneous_groups[].cross_cycle = true` (v3.9.0+) | JSON | 类二跨周期组，独立状态机处理上下周期成员 + 屏蔽集合 + 等待超时 | `source_settlement_mixin.py: _process_cross_cycle_groups` |
+| `pipeline_config.per_item.expected_count` / `lock_lookahead` / `settle_after_all_done_sec` (v3.9.0+) | int / sec | per_item 五补丁配置（固定数量 + 周期内补锁定 + 立即 OK 等） | `source_per_item_mixin.py` |
 
 ---
 
@@ -676,6 +694,7 @@
 8. **改 ORM Schema 后必须在 `backend/main.py:migrate_database()` 加 ALTER TABLE**（老 SQLite 升级路径）
 9. **bat 热补丁必须 CRLF 换行符**（LF 在 Windows 上闪退）
 10. **不要在 `OPENCV_FFMPEG_CAPTURE_OPTIONS` 之前 import cv2**（顺序敏感）
+11. **改 `source_settlement_mixin.py` 时不要把 `_process_last_first_mode` / `_process_cross_cycle_groups` 之间的守门去掉**（v3.9.0 起两个状态机都依赖 `settlement_mode == 'last_first'` / `cross_cycle == true` 严格守门，否则会污染其他模式的 cycle_steps）— 修改前必读 `debug-source` skill 第十二·七节
 
 ---
 
@@ -808,6 +827,9 @@ docs/
 
 | 版本 | 日期 | 主要变更 |
 |---|---|---|
+| v3.9.0 | 2026-05-23 | **last_first 结算模式（末步结算 + 首步开周期）**（双锚状态机 R1-R6）+ **跨周期组类二 `cross_cycle` 独立状态机**（解决 D 余像 + A 新周期同帧时序）+ **per_item v3.9 五补丁**（expected_count / lock_lookahead / settle_after_all_done_sec / cleanup_stale_items 锁定模式不清 / item_label 多标签 OR）+ UAT 4 阶段 31/31 通过 |
+| v3.8.2 | 2026-05-22 | Cyber Splash 启动界面 + 实时后端日志驱动进度 + 工业全屏无边框 + IPC 优雅退出 + USB 摄像头 deviceId 持久化 + MediaPipe 完美骨架配置化 + 二段管线集成框架 + train-hand-detector skill |
+| v3.8.1 | 2026-05-22 | PT 守门/模型回退/Monitor 同步 + 步骤统计列可隐藏 + CI 磁盘清理（hotfix 累积） |
 | v3.8.0 | 2026-05-19 | **per_item 逐件覆盖模式**（打螺丝场景）+ PerItemPanel 全宽面板 + ENABLE_DEV_MOCKS 守门 + Project 配置 UI 扩展 |
 | v3.5.1 | 2026-05-06 | PT/CT 三档显示 + CSV 导出联动 + 操作手册补完 |
 | v3.5.0 | 2026-05-04 | 自定义导出 + 实时规则 + 周期性强制动作 + 完整测试框架 |
@@ -819,14 +841,12 @@ docs/
 | v2.7.16 | 2026-04-21 | source.py P5b 拆分（mixin 化起点） |
 | v2.7.12 | 2026-04-22 | 版本号源改 package.json |
 
-主线最新（**未发布**）：
-- `df7ce2c` fix(camera): 海康相机 NameError
-- `85c351c` feat(mes): 扫码器列表为空时静默"⚠ 未绑码"
-- `f5b8c92`+ feat(periodic): 周期性强制动作 run-on-start + 不重置 + 自定义事件
-- `??????` fix(geometry): 检测框越界 三层 clip 防御
-- (新)    feat(per_item): 逐件覆盖模式（v3.8.0+），含 PerItemPanel / Project 配置 UI / mock endpoint + dev 守门
+主线最新（已合并到 v3.9.0）：
+- `91ea16f` release: v3.9.0 — last_first 结算模式 + 跨周期组类二状态机 + per_item v3.9 五补丁
 
-下次 tag（v3.7.7 或 v3.8.0）会带上以上修复。
+下次 tag 进度：
+- 待积累的小改动暂时落入 main，未达 minor bump → 累积到下次 minor 一起发版
+- 长期分支 `feat/plugin-system` 在做（多客户定制插件系统 + DB 迁 PG）
 
 > **历史 bug 全档**：33 个 changelog × 184 条 BUG/FEAT/HOTFIX 已分类到 24 个旧 skill 内"历史踩坑"章节。统计：`debug-mes` 61 条 / `modify-frontend` 45 / `modify-source` 40 / `debug-source` 24 / `add-api-endpoint` 22 / `debug-video` 19。新增 3 个 skill（`debug-export` / `debug-cluster` / `debug-operator-license`）由 v3.5.x 真实代码反推编写，未追溯历史 changelog。
 
@@ -850,6 +870,6 @@ docs/
 
 ---
 
-**本文件最后更新**：2026-05-19
+**本文件最后更新**：2026-05-23（v3.9.0 发版同步）
 **维护者**：项目主作者 + AI agents
-**事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）
+**事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）+ v3.9.0 实测代码反推（`source_settlement_mixin.py` 1320 行 / `source_per_item_mixin.py` ~960 行 / 31 项 UAT 全过）
