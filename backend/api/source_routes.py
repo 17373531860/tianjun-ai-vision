@@ -27,9 +27,10 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import File, HTTPException, Query, UploadFile
+from fastapi import Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
+from backend.core.auth_deps import require_perm
 from backend.core.config import settings
 
 # 复用 source.py 已经创建的 router 实例 + VideoSourceManager 相关符号
@@ -376,7 +377,8 @@ def get_current_device():
     }
 
 
-@router.post("/gpu/set")
+@router.post("/gpu/set",
+              dependencies=[Depends(require_perm("source.edit"))])
 def set_device(req: DeviceConfigRequest):
     """设置推理设备（需要重新加载模型生效）.
 
@@ -517,7 +519,8 @@ def _compute_two_stage_status(vm) -> Dict[str, Any]:
     return {"state": "load_failed", "message": "模型存在但加载失败, 已回退基础模式 (看后端日志)"}
 
 
-@router.post("/stream/config")
+@router.post("/stream/config",
+              dependencies=[Depends(require_perm("source.edit"))])
 def set_stream_config(req: StreamConfigRequest):
     """设置视频流配置（帧率限制 + FP16 + MediaPipe）"""
     video_manager.frame_limit_enabled = req.frame_limit_enabled
@@ -600,7 +603,8 @@ def get_transform_config(channel: int = 0):
     }
 
 
-@router.post("/transform/config")
+@router.post("/transform/config",
+              dependencies=[Depends(require_perm("source.edit"))])
 def set_transform_config(req: TransformConfigRequest, channel: int = 0):
     """设置指定通道的画面旋转/镜像配置，立即对后续帧生效"""
     mgr = _get_mgr(channel)
@@ -629,7 +633,8 @@ def get_kalman_config():
     }
 
 
-@router.post("/kalman/config")
+@router.post("/kalman/config",
+              dependencies=[Depends(require_perm("source.edit"))])
 def set_kalman_config(req: KalmanConfigRequest):
     """设置卡尔曼滤波参数"""
     video_manager.update_kalman_params(
@@ -650,7 +655,8 @@ def set_kalman_config(req: KalmanConfigRequest):
 # ============================================================
 # /camera/* + /rtsp/*
 # ============================================================
-@router.post("/camera/start")
+@router.post("/camera/start",
+              dependencies=[Depends(require_perm("source.edit"))])
 def start_camera(req: CameraStartRequest, channel: int = Query(0)):
     """启动摄像头"""
     try:
@@ -673,7 +679,8 @@ def start_camera(req: CameraStartRequest, channel: int = Query(0)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/camera/stop")
+@router.post("/camera/stop",
+              dependencies=[Depends(require_perm("source.edit"))])
 def stop_camera(channel: int = Query(0)):
     """停止摄像头"""
     mgr = _get_mgr(channel)
@@ -681,7 +688,8 @@ def stop_camera(channel: int = Query(0)):
     return {"status": "success", "message": f"摄像头已停止 (ch{channel})"}
 
 
-@router.post("/rtsp/start")
+@router.post("/rtsp/start",
+              dependencies=[Depends(require_perm("source.edit"))])
 def start_rtsp(req: RtspStartRequest, channel: int = Query(0)):
     """启动 RTSP 网络视频流"""
     try:
@@ -723,7 +731,8 @@ def list_hikvision_cameras():
         return {"cameras": [], "available": False, "message": str(e)}
 
 
-@router.post("/hikvision/start")
+@router.post("/hikvision/start",
+              dependencies=[Depends(require_perm("source.edit"))])
 def start_hikvision_camera(req: HikvisionStartRequest, channel: int = Query(0)):
     """启动海康工业相机"""
     hik_log(f"API /hikvision/start 收到请求: device_index={req.device_index}, "
@@ -743,7 +752,8 @@ def start_hikvision_camera(req: HikvisionStartRequest, channel: int = Query(0)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/hikvision/stop")
+@router.post("/hikvision/stop",
+              dependencies=[Depends(require_perm("source.edit"))])
 def stop_hikvision_camera(channel: int = Query(0)):
     """停止海康工业相机"""
     _get_mgr(channel).stop()
@@ -760,7 +770,8 @@ def get_hikvision_status():
     }
 
 
-@router.post("/hcnetsdk/start")
+@router.post("/hcnetsdk/start",
+              dependencies=[Depends(require_perm("source.edit"))])
 def start_hcnetsdk(req: HCNetSDKStartRequest, channel: int = Query(0)):
     """Connect to NVR/IP camera via HCNetSDK."""
     try:
@@ -788,7 +799,8 @@ def start_hcnetsdk(req: HCNetSDKStartRequest, channel: int = Query(0)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/hcnetsdk/stop")
+@router.post("/hcnetsdk/stop",
+              dependencies=[Depends(require_perm("source.edit"))])
 def stop_hcnetsdk(channel: int = Query(0)):
     """Stop HCNetSDK connection."""
     _get_mgr(channel).stop()
@@ -809,7 +821,8 @@ def get_hcnetsdk_status():
 # ============================================================
 # /video/* + /image/*
 # ============================================================
-@router.post("/video/upload")
+@router.post("/video/upload",
+              dependencies=[Depends(require_perm("source.edit"))])
 async def upload_video(file: UploadFile = File(...)):
     """上传视频文件（同名文件自动覆盖，清理旧的重复副本）"""
     allowed_ext = {'.mp4', '.avi', '.mov', '.mkv'}
@@ -836,7 +849,8 @@ async def upload_video(file: UploadFile = File(...)):
     return {"status": "success", "file_path": file_path, "file_name": original_name}
 
 
-@router.post("/video/start")
+@router.post("/video/start",
+              dependencies=[Depends(require_perm("source.edit"))])
 def start_video(req: VideoStartRequest, channel: int = Query(0)):
     """启动视频播放"""
     try:
@@ -851,14 +865,16 @@ def start_video(req: VideoStartRequest, channel: int = Query(0)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/video/stop")
+@router.post("/video/stop",
+              dependencies=[Depends(require_perm("source.edit"))])
 def stop_video(channel: int = Query(0)):
     """停止视频"""
     _get_mgr(channel).stop()
     return {"status": "success", "message": f"视频已停止 (ch{channel})"}
 
 
-@router.post("/video/speed")
+@router.post("/video/speed",
+              dependencies=[Depends(require_perm("source.edit"))])
 def set_video_speed(req: VideoSpeedRequest, channel: int = Query(0)):
     """设置视频播放倍速"""
     try:
@@ -871,7 +887,8 @@ def set_video_speed(req: VideoSpeedRequest, channel: int = Query(0)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/video/progress")
+@router.post("/video/progress",
+              dependencies=[Depends(require_perm("source.edit"))])
 def set_video_progress(req: VideoProgressRequest, channel: int = Query(0)):
     """设置视频播放进度"""
     try:
@@ -893,7 +910,8 @@ def get_video_info(channel: int = Query(0)):
     return {"status": "success", **info}
 
 
-@router.post("/image/upload")
+@router.post("/image/upload",
+              dependencies=[Depends(require_perm("source.edit"))])
 async def upload_image(file: UploadFile = File(...)):
     """上传图片文件"""
     allowed_ext = {'.jpg', '.jpeg', '.png', '.bmp'}
@@ -915,7 +933,8 @@ async def upload_image(file: UploadFile = File(...)):
     }
 
 
-@router.post("/image/set")
+@router.post("/image/set",
+              dependencies=[Depends(require_perm("source.edit"))])
 def set_image(req: ImageSetRequest, channel: int = Query(0)):
     """设置图片为输入源"""
     try:
@@ -933,7 +952,8 @@ def set_image(req: ImageSetRequest, channel: int = Query(0)):
 # ============================================================
 # /detection/*
 # ============================================================
-@router.post("/detection/start")
+@router.post("/detection/start",
+              dependencies=[Depends(require_perm("monitor.detection.control"))])
 def start_detection(req: DetectionStartRequest, channel: int = Query(0)):
     """开始检测.
 
@@ -1018,7 +1038,8 @@ def start_detection(req: DetectionStartRequest, channel: int = Query(0)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/detection/stop")
+@router.post("/detection/stop",
+              dependencies=[Depends(require_perm("monitor.detection.control"))])
 def stop_detection(channel: int = Query(0)):
     """停止检测（只停止推理）并结束会话"""
     mgr = _get_mgr(channel)
@@ -1027,14 +1048,16 @@ def stop_detection(channel: int = Query(0)):
     return {"status": "success", "message": f"检测已停止 (ch{channel})"}
 
 
-@router.post("/detection/pause")
+@router.post("/detection/pause",
+              dependencies=[Depends(require_perm("monitor.detection.control"))])
 def pause_detection(channel: int = Query(0)):
     """暂停：停止画面更新和检测，画面停在当前帧"""
     _get_mgr(channel).pause()
     return {"status": "success", "message": "已暂停"}
 
 
-@router.post("/detection/resume")
+@router.post("/detection/resume",
+              dependencies=[Depends(require_perm("monitor.detection.control"))])
 def resume_detection(channel: int = Query(0)):
     """恢复：从暂停状态恢复，重新启动视频流和检测"""
     if _get_mgr(channel).resume():
@@ -1043,14 +1066,16 @@ def resume_detection(channel: int = Query(0)):
         raise HTTPException(status_code=400, detail="无法恢复：没有可用的视频源")
 
 
-@router.post("/detection/standby")
+@router.post("/detection/standby",
+              dependencies=[Depends(require_perm("monitor.detection.control"))])
 def standby_detection(channel: int = Query(0)):
     """待机：只停止检测推理，画面继续播放"""
     _get_mgr(channel).standby()
     return {"status": "success", "message": "已待机"}
 
 
-@router.post("/detection/resume-inference")
+@router.post("/detection/resume-inference",
+              dependencies=[Depends(require_perm("monitor.detection.control"))])
 def resume_inference(channel: int = Query(0)):
     """从待机恢复推理（画面已在播放）"""
     result = _get_mgr(channel).resume_inference()
@@ -1059,7 +1084,10 @@ def resume_inference(channel: int = Query(0)):
     return {"status": "success", "message": "已恢复推理"}
 
 
-@router.post("/detection/reset-stats")
+# 清零 / 重置周期性动作 — 需更高的 monitor.detection.advanced 权限
+# (operator 只能开始/停止/待机, 不能清零计数; engineer/admin 可以)
+@router.post("/detection/reset-stats",
+              dependencies=[Depends(require_perm("monitor.detection.advanced"))])
 def reset_detection_stats(channel: int = Query(0)):
     """重置统计数据（计数器、步骤计数等），同时结束当前会话"""
     mgr = _get_mgr(channel)
@@ -1068,7 +1096,8 @@ def reset_detection_stats(channel: int = Query(0)):
     return {"status": "success", "message": "统计数据已重置"}
 
 
-@router.post("/detection/reset-periodic")
+@router.post("/detection/reset-periodic",
+              dependencies=[Depends(require_perm("monitor.detection.advanced"))])
 def reset_periodic_action(
     channel: int = Query(0),
     rule_id: Optional[str] = Query(None, description="规则 id；不传则重置所有"),
@@ -1379,18 +1408,22 @@ def get_detection_results(channel: int = Query(0)):
     if mes_data:
         result['mes'] = mes_data
 
-    # 当前操作员
+    # v3.10+ 阶段 4: 当前活跃用户 (字段名 operator/employee_no 保留兼容外部脚本; 值改填 User)
     try:
-        from backend.api.operators import get_current_operator_id
-        op_id = get_current_operator_id(mgr.channel_id)
-        if op_id:
+        from backend.core.auth import get_current_user_id
+        u_id = get_current_user_id()
+        if u_id:
             from backend.db.database import SessionLocal
-            from backend.models.models import Operator
+            from backend.models.auth_models import User
             _db = SessionLocal()
             try:
-                op = _db.query(Operator).filter(Operator.id == op_id).first()
-                if op:
-                    result['operator'] = {"id": op.id, "name": op.name, "employee_no": op.employee_no}
+                u = _db.query(User).filter(User.id == u_id).first()
+                if u:
+                    result['operator'] = {
+                        "id": u.id,
+                        "name": u.display_name or u.username,
+                        "employee_no": u.username,
+                    }
             finally:
                 _db.close()
     except Exception:
@@ -1399,7 +1432,8 @@ def get_detection_results(channel: int = Query(0)):
     return result
 
 
-@router.post("/detection/set-project")
+@router.post("/detection/set-project",
+              dependencies=[Depends(require_perm("project.activate"))])
 def set_project_config(req: ProjectConfigRequest, channel: int = Query(0)):
     """设置项目配置"""
     try:
@@ -1696,7 +1730,8 @@ def get_health_status(channel: int = Query(0)):
 # ============================================================
 # MES 配套：rebind 选择 / 清除扫码
 # ============================================================
-@router.post("/detection/rebind")
+@router.post("/detection/rebind",
+              dependencies=[Depends(require_perm("monitor.detection.control"))])
 def resolve_rebind(action: str = "new", channel: int = 0):
     """manual rebind 模式：用户选择继续当前工件(continue)或扫新工件(new)"""
     from backend.api.channel_manager import channel_manager
@@ -1707,7 +1742,8 @@ def resolve_rebind(action: str = "new", channel: int = 0):
     return {"status": "error", "message": "MES 未启用"}
 
 
-@router.post("/detection/clear_pending_scan")
+@router.post("/detection/clear_pending_scan",
+              dependencies=[Depends(require_perm("monitor.detection.control"))])
 def clear_pending_scan(channel: int = 0, force: bool = False):
     """清除该工位的"待检/最近扫码"状态，让工人重新扫码。
 
@@ -1755,7 +1791,8 @@ def clear_pending_scan(channel: int = 0, force: bool = False):
     return {"status": "ok", "cleared": cleared}
 
 
-@router.post("/detection/recording-failures/clear")
+@router.post("/detection/recording-failures/clear",
+              dependencies=[Depends(require_perm("monitor.detection.control"))])
 def clear_recording_failures(channel: int = 0):
     """清空该工位录像异常详情列表（仅影响前端详情展示，不影响业务数据）。"""
     mgr = _get_mgr(channel)

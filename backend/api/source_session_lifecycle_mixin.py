@@ -119,8 +119,9 @@ class SessionLifecycleMixin:
             db = self._get_db_session()
             session_uuid = str(uuid.uuid4())[:8]
             current_shift = self._get_current_shift()
-            from backend.api.operators import get_current_operator_id
-            current_op_id = get_current_operator_id(self.channel_id)
+            # v3.10+ 阶段 4: 数据归属重定向到 user_id (字段名 operator_id 保留不变)
+            from backend.core.auth import get_current_user_id
+            current_op_id = get_current_user_id()
             cleaned_name = _clean_session_name(name) if name else None
             session = DetectionSession(
                 session_uuid=session_uuid,
@@ -362,13 +363,14 @@ class SessionLifecycleMixin:
                     db.commit()
                     print(f"上一周期间隔: {interval_from_last:.2f}s")
             
-            from backend.api.operators import get_current_operator_id
+            # v3.10+ 阶段 4: cycle.operator_id 改写当前登录 user_id (字段名保留)
+            from backend.core.auth import get_current_user_id
             cycle = DetectionCycle(
                 cycle_uuid=cycle_uuid,
                 session_id=self.current_session_id,
                 cycle_number=self.current_cycle_number,
                 start_time=now,
-                operator_id=get_current_operator_id(self.channel_id),
+                operator_id=get_current_user_id(),
             )
             db.add(cycle)
             db.commit()
@@ -962,7 +964,8 @@ class SessionLifecycleMixin:
 
         try:
             from backend.models.models import DetectionCycle
-            from backend.api.operators import get_current_operator_id
+            # v3.10+ 阶段 4: cycle.operator_id 改写当前登录 user_id
+            from backend.core.auth import get_current_user_id
             from datetime import datetime as _dt
 
             db = self._get_db_session()
@@ -983,7 +986,7 @@ class SessionLifecycleMixin:
                 session_id=self.current_session_id,
                 cycle_number=self.current_cycle_number,
                 start_time=start_dt,
-                operator_id=get_current_operator_id(ch),
+                operator_id=get_current_user_id(),
             )
             db.add(cycle)
             db.commit()

@@ -1,213 +1,74 @@
 """
-操作员管理 API
+操作员管理 API — v3.10.0 阶段 5 已彻底清空
 
-CRUD + 当前操作员设置/获取
+历史: v3.9 之前的"操作员"系统已被新版"用户/角色"系统接管 (新表 users / roles).
+
+本模块当前仅保留 6 个 410 Gone 端点, 为老客户脚本提供清晰的迁移提示.
+ORM 类 Operator / current_operator.json 落盘 / get_current_operator_id() 工具函数
+全部在阶段 5 删除. operators 表也由 main.py:migrate_database 升级时 DROP.
+
+老客户机器上的 backend/current_operator.json 文件 (如有) 仍然存在但已无人读, 属
+僵尸文件; 我们不主动删除以避免误碰客户数据 — 阶段 5 之后任何路径都不再触碰它.
+
+迁移路径 (供副机 / 客户脚本作者参考):
+| 旧调用 (410)                       | 新调用                                       |
+|-----------------------------------|---------------------------------------------|
+| GET    /api/v1/operators          | GET    /api/v1/users                        |
+| POST   /api/v1/operators          | POST   /api/v1/users                        |
+| PUT    /api/v1/operators/{id}     | PUT    /api/v1/users/{id}                   |
+| DELETE /api/v1/operators/{id}     | DELETE /api/v1/users/{id}                   |
+| POST   /api/v1/operators/set-current | 由 Token 机制接管 (POST /api/v1/auth/login)|
+| GET    /api/v1/operators/current  | GET    /api/v1/auth/me                      |
 """
-import json
-import os
-import threading
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
-from backend.db.database import SessionLocal
-from backend.core.config import DATA_DIR
-from backend.models.models import Operator
 
-router = APIRouter(prefix="/operators", tags=["Operators"])
+router = APIRouter(prefix="/operators", tags=["Operators (Deprecated)"])
 
-# === 当前操作员持久化 ===
-# 之前 _current_operator 是模块级 dict, 重启即丢, 客户每次开机都要重新选人.
-# 改为 backend/data/current_operator.json 落盘, 每次 set/clear 立即写入.
-_OP_STATE_PATH = os.path.join(DATA_DIR, "current_operator.json")
-_op_state_lock = threading.Lock()
+# === 410 Gone 响应 ===
+_GONE_HEADERS = {"X-Deprecated-Replacement": "/api/v1/users"}
+_GONE_DETAIL = (
+    "此端点已弃用 (v3.10+ 用户系统接管). "
+    "请改用 /api/v1/users / /api/v1/auth/* — 详见响应头 X-Deprecated-Replacement."
+)
 
 
-def _load_current_operator() -> dict:
-    """启动时从磁盘恢复 {channel_id: operator_id}"""
-    try:
-        if not os.path.exists(_OP_STATE_PATH):
-            return {}
-        with open(_OP_STATE_PATH, "r", encoding="utf-8") as f:
-            raw = json.load(f) or {}
-        # JSON key 强制为 str, 转回 int
-        return {int(k): int(v) for k, v in raw.items() if v is not None}
-    except Exception as _e:
-        print(f"[Operator] 当前操作员状态加载失败（忽略，按空处理）: {_e}", flush=True)
-        return {}
+def _gone():
+    raise HTTPException(
+        status_code=410,
+        detail=_GONE_DETAIL,
+        headers=_GONE_HEADERS,
+    )
 
 
-def _save_current_operator():
-    """把 _current_operator 写盘, 失败不阻断业务"""
-    try:
-        os.makedirs(os.path.dirname(_OP_STATE_PATH), exist_ok=True)
-        with _op_state_lock:
-            tmp = _OP_STATE_PATH + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({str(k): v for k, v in _current_operator.items()}, f)
-            os.replace(tmp, _OP_STATE_PATH)
-    except Exception as _e:
-        print(f"[Operator] 当前操作员状态保存失败（忽略）: {_e}", flush=True)
-
-
-_current_operator: dict[int, int] = _load_current_operator()
-
-
-class OperatorCreate(BaseModel):
-    name: str
-    employee_no: str
-    role: str = "operator"
-
-class OperatorUpdate(BaseModel):
-    name: Optional[str] = None
-    employee_no: Optional[str] = None
-    role: Optional[str] = None
-    active: Optional[bool] = None
-
-class SetCurrent(BaseModel):
-    channel_id: int = 0
-    operator_id: Optional[int] = None
-
-
-def _serialize(op):
-    return {
-        "id": op.id,
-        "name": op.name,
-        "employee_no": op.employee_no,
-        "role": op.role,
-        "active": op.active,
-        "created_at": op.created_at.isoformat() if op.created_at else None,
-    }
-
-
+# ============================================================
+# 6 个 HTTP 端点 — 全部 410 Gone (v3.10+)
+# 调用方拿到 410 应迁到 /api/v1/users / /api/v1/auth/*.
+# ============================================================
 @router.get("")
-def list_operators(active: Optional[bool] = None):
-    db = SessionLocal()
-    try:
-        q = db.query(Operator)
-        if active is not None:
-            q = q.filter(Operator.active == active)
-        items = q.order_by(Operator.id).all()
-        return [_serialize(op) for op in items]
-    finally:
-        db.close()
+def list_operators():
+    _gone()
 
 
 @router.post("")
-def create_operator(body: OperatorCreate):
-    db = SessionLocal()
-    try:
-        existing = db.query(Operator).filter(Operator.employee_no == body.employee_no).first()
-        if existing:
-            raise HTTPException(400, f"工号 {body.employee_no} 已存在")
-        op = Operator(name=body.name, employee_no=body.employee_no, role=body.role)
-        db.add(op)
-        db.commit()
-        db.refresh(op)
-        return _serialize(op)
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(400, str(e))
-    finally:
-        db.close()
+def create_operator():
+    _gone()
 
 
 @router.put("/{op_id}")
-def update_operator(op_id: int, body: OperatorUpdate):
-    db = SessionLocal()
-    try:
-        op = db.query(Operator).filter(Operator.id == op_id).first()
-        if not op:
-            raise HTTPException(404, "操作员不存在")
-        data = body.model_dump(exclude_unset=True)
-        if "employee_no" in data:
-            dup = db.query(Operator).filter(
-                Operator.employee_no == data["employee_no"],
-                Operator.id != op_id
-            ).first()
-            if dup:
-                raise HTTPException(400, f"工号 {data['employee_no']} 已被使用")
-        for field, val in data.items():
-            setattr(op, field, val)
-        db.commit()
-        db.refresh(op)
-        return _serialize(op)
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(400, str(e))
-    finally:
-        db.close()
+def update_operator(op_id: int):
+    _gone()
 
 
 @router.delete("/{op_id}")
 def delete_operator(op_id: int):
-    """软删除: 设 active=False"""
-    db = SessionLocal()
-    try:
-        op = db.query(Operator).filter(Operator.id == op_id).first()
-        if not op:
-            raise HTTPException(404, "操作员不存在")
-        op.active = False
-        db.commit()
-        return {"success": True}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(400, str(e))
-    finally:
-        db.close()
+    _gone()
 
 
 @router.post("/set-current")
-def set_current_operator(body: SetCurrent):
-    """设置当前工位的操作员"""
-    if body.operator_id is not None:
-        db = SessionLocal()
-        try:
-            op = db.query(Operator).filter(Operator.id == body.operator_id).first()
-            if not op:
-                raise HTTPException(404, "操作员不存在")
-            _current_operator[body.channel_id] = body.operator_id
-            _save_current_operator()
-            return {"success": True, "channel_id": body.channel_id, "operator": _serialize(op)}
-        finally:
-            db.close()
-    else:
-        _current_operator.pop(body.channel_id, None)
-        _save_current_operator()
-        return {"success": True, "channel_id": body.channel_id, "operator": None}
+def set_current_operator():
+    _gone()
 
 
 @router.get("/current")
 def get_current_operator(channel_id: int = 0):
-    op_id = _current_operator.get(channel_id)
-    if not op_id:
-        return {"channel_id": channel_id, "operator": None}
-    db = SessionLocal()
-    try:
-        op = db.query(Operator).filter(Operator.id == op_id).first()
-        return {"channel_id": channel_id, "operator": _serialize(op) if op else None}
-    finally:
-        db.close()
-
-
-def get_current_operator_id(channel_id: int = 0) -> Optional[int]:
-    """供检测引擎内部调用"""
-    op_id = _current_operator.get(channel_id)
-    if op_id is None:
-        return None
-    # 防御: 如果磁盘里的 op_id 在 DB 中已被删除/置非 active, 应当返回 None 并清掉脏值
-    db = SessionLocal()
-    try:
-        op = db.query(Operator).filter(Operator.id == op_id, Operator.active == True).first()  # noqa: E712
-        if op is None:
-            _current_operator.pop(channel_id, None)
-            _save_current_operator()
-            return None
-        return op_id
-    finally:
-        db.close()
+    _gone()

@@ -792,15 +792,26 @@ def _fill_workpiece_order_operator(ctx: Dict[str, Any], db: DBSession,
             print(f"[ExportContext] fill_order 失败: {e}")
 
     if operator_id:
+        # v3.10+ 阶段 4: operator_id 列语义改为 user_id, 查 User 表
+        # ctx["operator"] key 名稳定 (id/name/employee_no/role) — 客户模板向后兼容
         try:
-            from backend.models.models import Operator
-            op = db.query(Operator).filter(Operator.id == operator_id).first()
-            if op:
+            from backend.models.auth_models import User
+            u = db.query(User).filter(User.id == operator_id).first()
+            if u:
+                # 取首个角色 code 作为 role 字段 (一个用户允许多角色, 模板渲染单值即可)
+                role_code = None
+                try:
+                    for ur in (u.user_roles or []):
+                        if ur.role and ur.role.code:
+                            role_code = ur.role.code
+                            break
+                except Exception:
+                    role_code = None
                 ctx["operator"].update({
-                    "id": op.id,
-                    "name": op.name,
-                    "employee_no": getattr(op, "employee_no", None),
-                    "role": getattr(op, "role", None),
+                    "id": u.id,
+                    "name": u.display_name or u.username,
+                    "employee_no": u.username,
+                    "role": role_code,
                 })
         except Exception:
             pass
