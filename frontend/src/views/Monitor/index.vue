@@ -1150,6 +1150,62 @@
       </div>
     </template>
 
+    <!-- v3.9.x 事件人工确认 全屏覆盖层 -->
+    <!-- 触发条件: 任一通道 pendingAck.active=true → 弹覆盖层, 显示需确认的工位编号 -->
+    <!-- 多通道场景: 只显示一个工位 (优先当前选中, 其次最早阻塞的), 工人逐个确认 -->
+    <div
+      v-if="pendingAckDisplay"
+      class="absolute inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+      @click.stop
+    >
+      <div class="w-full max-w-xl bg-slate-900 border-2 border-amber-500 rounded-xl shadow-2xl flex flex-col overflow-hidden">
+        <div class="px-5 py-3 bg-gradient-to-r from-amber-700 to-amber-900 flex items-center gap-3">
+          <el-icon :size="28" class="text-amber-200"><Warning /></el-icon>
+          <div class="flex-1">
+            <div class="text-white font-bold text-lg">需要人工确认</div>
+            <div class="text-amber-200 text-xs">画面与状态机已暂停 — 请工人重做本周期后点击下方按钮</div>
+          </div>
+          <span class="bg-slate-900/60 px-2 py-0.5 rounded text-amber-200 text-xs font-bold">
+            工位 {{ pendingAckDisplay.channel + 1 }}
+          </span>
+        </div>
+
+        <div class="px-5 py-4 space-y-3 text-sm">
+          <div class="flex items-center gap-3">
+            <span class="text-gray-400 w-20 shrink-0">触发事件</span>
+            <span class="text-white font-bold">{{ pendingAckDisplay.eventName || '(未命名事件)' }}</span>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="text-gray-400 w-20 shrink-0">触发原因</span>
+            <span class="text-gray-200 break-all">{{ pendingAckDisplay.reason || '—' }}</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-gray-400 w-20 shrink-0">已等待</span>
+            <span class="text-cyan-300 font-mono">{{ pendingAckWaitedSec }} 秒</span>
+            <template v-if="pendingAckDisplay.timeoutSec > 0">
+              <span class="text-gray-500">/</span>
+              <span class="text-amber-300 font-mono">{{ pendingAckRemainSec }} 秒后自动确认</span>
+            </template>
+          </div>
+          <div class="text-xs text-gray-500 bg-slate-950/60 rounded p-2 border-l-2 border-amber-700/50 leading-relaxed">
+            确认后清当前周期运行时（步骤序列、识别状态），<span class="text-amber-300">合格 / 不合格 / 自定义计数器累计值不变动</span>。如果有多个工位都在等确认，这里会按顺序依次显示。
+          </div>
+        </div>
+
+        <div class="px-5 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-3">
+          <span v-if="pendingAckDisplay.acking" class="text-xs text-gray-400">提交中...</span>
+          <el-button
+            type="warning"
+            size="large"
+            :loading="pendingAckDisplay.acking"
+            @click="ackPendingForChannel(pendingAckDisplay.channel)"
+          >
+            我已确认 — 重做工位 {{ pendingAckDisplay.channel + 1 }}
+          </el-button>
+        </div>
+      </div>
+    </div>
+
     <button
       v-if="totalRecordingFailureCount > 0"
       class="absolute right-2 bottom-2 z-40 bg-amber-600/90 hover:bg-amber-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1"
@@ -1215,7 +1271,7 @@ import { useSourceStore } from '@/store/useSourceStore';
 import { useScannerDisableStore } from '@/store/useScannerDisableStore';
 import { Check, Folder, Picture, CircleCheck, CircleClose, Warning } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, resetPeriodicAction, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getScanPairActive, settleScanPairForStop } from '@/api/detection';
+import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, resetPeriodicAction, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getScanPairActive, settleScanPairForStop, ackPendingEvent } from '@/api/detection';
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import { getProjectDetail } from '@/api/project';
 import api, { getBackendHost } from '@/api/index';
@@ -1358,7 +1414,6 @@ const streamKey = ref(0);
 let streamErrorCount = 0;
 let monitorMounted = false;
 let streamReconnectTimer = null;
-let cycleResetTimer = null;
 let progressReconnectTimer = null;
 let speedGuardTimer = null;
 
@@ -1389,10 +1444,53 @@ let streamBackendMismatchSince = 0;
 
 const clearMonitorPendingTimers = () => {
   if (streamReconnectTimer) { clearTimeout(streamReconnectTimer); streamReconnectTimer = null; }
-  if (cycleResetTimer) { clearTimeout(cycleResetTimer); cycleResetTimer = null; }
   if (progressReconnectTimer) { clearTimeout(progressReconnectTimer); progressReconnectTimer = null; }
   if (speedGuardTimer) { clearTimeout(speedGuardTimer); speedGuardTimer = null; }
   if (streamWatchdogTimer) { clearTimeout(streamWatchdogTimer); streamWatchdogTimer = null; }
+  if (resultHoldTimer) { clearTimeout(resultHoldTimer); resultHoldTimer = null; }
+  resultHoldActive = false;
+};
+
+// v3.9.x A 方案: 结果展示期 (单工位) — 周期刚结算到下一周期开始之间, 强制保留
+// "最后一步 OK + 各步骤 PT 数字" 给客户工人多看 N 秒. 默认关闭, 项目级 pipeline_config
+// 配置: result_hold_enabled / result_hold_seconds.
+//
+// 工作机制:
+//   后端 current_cycle_id: number → null (周期刚结算) → armResultHold 起 timer
+//   timer 期间: stepDurations / cycleSumStepDurations / stepInflightDurations 三大
+//               数据源整体替换被守门跳过, _newCycleStarted 清屏分支被跳过,
+//               让"上一周期的最后一步 OK + PT"稳稳停留
+//   timer 到期: resultHoldActive 翻 false + 主动执行清屏 (避免下一轮还没开始时
+//               PT 列继续残留上一轮数字)
+//
+// 与默认行为的关系: 默认 (resultHoldEnabled=false) 时不启用本 timer,
+// 上一轮 OK + PT 由"cycle_id 边界 (_newCycleStarted)"驱动的清屏自然衔接.
+// 只有用户主动开启展示期, 才需要这个独立的强制延迟.
+//
+// 注: 多工位场景 (multiChannelData) 暂不接入此机制, 单工位先验证效果再决定是否扩展.
+let resultHoldTimer = null;
+let resultHoldActive = false;
+const armResultHold = (holdSec) => {
+  if (resultHoldTimer) { clearTimeout(resultHoldTimer); resultHoldTimer = null; }
+  resultHoldActive = true;
+  resultHoldTimer = setTimeout(() => {
+    resultHoldActive = false;
+    resultHoldTimer = null;
+    if (!monitorMounted) return;
+    // 主动清屏: 与 _newCycleStarted 分支的目标字段对齐
+    cycleSumStepDurations.value = {};
+    stepInflightDurations.value = {};
+    stepDurations.value = {};
+    stepVisibleSeconds.value = {};
+    steps.value.forEach(s => {
+      s.status = 'pending';
+      s.cycleResult = null;
+    });
+    tableData.value.forEach(t => {
+      t.status = 'pending';
+      t.cycleResult = null;
+    });
+  }, Math.max(0, holdSec) * 1000);
 };
 
 const videoElement = computed(() => activeStream.value === 0 ? streamImg0.value : streamImg1.value);
@@ -1694,11 +1792,15 @@ const processChannelResult = (ch, d) => {
   chData.cycleSumStepDurations = d.cycle_sum_step_durations || {};
   chData.lastCycleSumStepDurations = d.last_cycle_sum_step_durations || {};
   chData.avgCycleSumStepDurations = d.avg_cycle_sum_step_durations || {};
+  // v3.9.x D 方案: 累计可见时长 (visible PT 数据源)
+  chData.stepVisibleSeconds = d.step_visible_seconds || {};
   chData.detections = d.detections || [];
   chData.currentCycleSteps = d.current_cycle_steps || [];
   chData.backupCoveredLabels = d.backup_covered_labels || [];
   chData.stepCounts = d.step_counts || {};
   chData.recentEvents = d.recent_events || [];
+  // v3.9.x 事件人工确认阻塞态 (后端透出, 前端 modal 直接读)
+  chData.pendingAck = d.pending_ack || { active: false };
   if (d.tracking) chData.tracking = d.tracking;
 
   // MES 实时数据 — 每个工位各自显示，不限 selectedChannel
@@ -2851,7 +2953,10 @@ const formatStepTime = (stepLabel) => {
 // 格式化步骤耗时（与 formatStepPT 行为一致，跟随 ptMode）
 const formatDuration = (stepLabel) => formatStepPT(stepLabel);
 
-// 格式化步骤检测时间（PT）— 由 ptAggregate × ptMode 共同决定数据源
+// 格式化步骤检测时间（PT）— 由 ptCalcMode × ptAggregate × ptMode 共同决定数据源
+//   ptCalcMode (v3.9.x D 方案):
+//     span    → 用 step_durations / cycle_sum_step_durations (跨度: 首次出现到消失)
+//     visible → 用 step_visible_seconds (累计: 标签每帧"在画面里"的时长之和)
 //   ptAggregate:
 //     sum  → 同步骤一周期内多次出现按 SUM 合并（默认 v3.5.x）
 //     last → 仅取最后一段（旧行为）
@@ -2859,9 +2964,22 @@ const formatDuration = (stepLabel) => formatStepPT(stepLabel);
 //     avg     → 历史平均
 //     last    → 最近一个已结束 cycle 的取值
 //     current → 当前正在跑 cycle 的取值
+//
+// visible 口径下: avg / last 仍走 span 历史档 (后端没透出 visible 历史, 真要做历史
+// 累计统计意义不大), 只有 current 改用累计可见时长.
 const formatStepPT = (stepLabel) => {
   const mode = systemStore.display?.monitor?.ptMode || 'current';
   const agg = systemStore.display?.monitor?.ptAggregate || 'sum';
+  const calcMode = systemStore.display?.monitor?.ptCalcMode || 'span';
+
+  // visible + current: 直接用累计可见时长字段, 不走 sum/last 矩阵 (visible 本身就是累计)
+  if (calcMode === 'visible' && mode === 'current') {
+    const v = stepVisibleSeconds.value ? stepVisibleSeconds.value[stepLabel] : undefined;
+    if (v === undefined || v === null) return '--';
+    if (v <= 0) return '--';
+    return `${v.toFixed(1)}s`;
+  }
+
   let src;
   if (agg === 'sum') {
     if (mode === 'last') src = lastCycleSumStepDurations.value;
@@ -3748,6 +3866,13 @@ const avgCycleSumStepDurations = ref({});
 // 修客户反馈 "PT 还在涨, 但 OK 已经亮"。
 const stepInflightDurations = ref({});
 
+// v3.9.x D 方案: 后端透出的"累计可见时长"字典 (每帧累加 detected_labels 的可见时长之和).
+// 设计语义:
+//   - 后端永远算永远透出 (mgr.step_visible_seconds), 周期开始时清零
+//   - 前端 ptCalcMode='visible' 时 formatStepPT 优先取本字典
+//   - 解决"标签持续被识别拖长 PT"的问题: 例如涂黑残留留在画面里, 跨度 18s 但累计可见 2s
+const stepVisibleSeconds = ref({});
+
 // 步骤间隔时间
 const stepIntervals = ref({});
 
@@ -3838,7 +3963,8 @@ const startPolling = () => {
       // v3.7.x: stepDurations 是"当前周期"的口径数据源（ptMode=current + ptAggregate=last 时使用），
       // 必须用整体替换才能在周期结束的瞬间归零；与 cycle_sum_step_durations 行为对齐。
       // 注意区别：avg_step_durations / last_step_durations 是历史档，仍然 merge（label 累积式可读）。
-      if (data.step_durations !== undefined) {
+      // v3.9.x A 方案: 展示期内跳过整体替换, 让客户看到上一周期最后一步 OK + PT.
+      if (data.step_durations !== undefined && !resultHoldActive) {
         stepDurations.value = data.step_durations || {};
       }
       if (data.avg_step_durations) {
@@ -3851,33 +3977,65 @@ const startPolling = () => {
       //   - number → 另一个 number (罕见, 直接换号): 清
       // 之前一改动就在 "number → null" 也清, 导致 cycle 一结算 PT/状态全消失,
       // 客户感觉"只有最后一步算数, 前 3 步刚显示就被清掉"。
+      //
+      // v3.9.x A 方案 — 在原边界判定上叠加"结果展示期":
+      //   number → null (刚结算): 显示设置开了 hold 就启动 timer, hold 期内屏蔽后续清屏 + 数据替换
+      //   null → number (新周期起): 如果 hold 期内, 不清屏不更新 lastSingleCycleId,
+      //                              等 hold timer 到期下一轮自然走清屏
+      // 配置来源: store.display.monitor.resultHoldEnabled / resultHoldSeconds (纯前端 localStorage),
+      // 切口径无需重启检测.
       const _incomingCycleId = data.current_cycle_id ?? null;
       if (_incomingCycleId !== lastSingleCycleId) {
+        const _justSettled = lastSingleCycleId !== null && _incomingCycleId === null;
         const _newCycleStarted = _incomingCycleId !== null && lastSingleCycleId !== _incomingCycleId;
-        if (_newCycleStarted) {
-          cycleSumStepDurations.value = {};
-          stepInflightDurations.value = {};
-          stepDurations.value = {};
-          steps.value.forEach(s => {
-            s.status = 'pending';
-            s.cycleResult = null;
-          });
-          tableData.value.forEach(t => {
-            t.status = 'pending';
-            t.cycleResult = null;
-          });
+        if (_justSettled) {
+          const _holdEnabled = !!systemStore.display?.monitor?.resultHoldEnabled;
+          const _holdSec = Number(systemStore.display?.monitor?.resultHoldSeconds) || 0;
+          if (_holdEnabled && _holdSec > 0) {
+            armResultHold(_holdSec);
+          }
+          lastSingleCycleId = _incomingCycleId;
+        } else if (_newCycleStarted) {
+          if (resultHoldActive) {
+            // 展示期内: 不清屏, 不同步 lastSingleCycleId, 等 timer 到期下一轮自然进入此分支清屏
+          } else {
+            cycleSumStepDurations.value = {};
+            stepInflightDurations.value = {};
+            stepDurations.value = {};
+            stepVisibleSeconds.value = {};
+            steps.value.forEach(s => {
+              s.status = 'pending';
+              s.cycleResult = null;
+            });
+            tableData.value.forEach(t => {
+              t.status = 'pending';
+              t.cycleResult = null;
+            });
+            // SOP 卡片栏滚动游标归零, 让新一轮从第一张卡片开始展示
+            lastScrolledIdx = -1;
+            lastSingleCycleId = _incomingCycleId;
+          }
+        } else {
+          lastSingleCycleId = _incomingCycleId;
         }
-        lastSingleCycleId = _incomingCycleId;
       }
       // v3.5.x: PT 合并档 (cycle SUM) — 后端无对应 label 时,
       // cycle_sum_step_durations 用整体替换以反映"周期切换后已重置"的真实状态;
       // last/avg 用 merge 保持 label 累积式可读, 与 last_step_durations 风格一致.
-      if (data.cycle_sum_step_durations !== undefined) {
+      // v3.9.x A 方案: 展示期内跳过, 让客户看到上一周期 PT 合并档.
+      if (data.cycle_sum_step_durations !== undefined && !resultHoldActive) {
         cycleSumStepDurations.value = data.cycle_sum_step_durations || {};
       }
       // v3.8.x: in-flight 实时 PT (步骤还在画面里, 持续涨), 与权威 cycle_sum 分开,
       // 整体替换才能在步骤完成 / 周期切换时立刻消失 (不留旧标签残影)。
-      stepInflightDurations.value = data.step_inflight_durations || {};
+      // v3.9.x A 方案: 展示期内冻结 inflight, 防止新周期 inflight 立刻覆盖.
+      if (!resultHoldActive) {
+        stepInflightDurations.value = data.step_inflight_durations || {};
+      }
+      // v3.9.x D 方案: 累计可见时长 (visible PT 数据源), 同样在展示期内冻结.
+      if (!resultHoldActive) {
+        stepVisibleSeconds.value = data.step_visible_seconds || {};
+      }
       if (data.last_cycle_sum_step_durations) {
         Object.assign(lastCycleSumStepDurations.value, data.last_cycle_sum_step_durations);
       }
@@ -3942,6 +4100,12 @@ const startPolling = () => {
       } else {
         if (multiChannelData.value[0]) multiChannelData.value[0].mes = null;
       }
+
+      // v3.9.x 事件人工确认阻塞态 (单通道模式 — 与 processChannelResult 多通道路径对齐)
+      // 不写到 multiChannelData[0].pendingAck 的话, 全屏覆盖层 computed 永远拿不到, 弹不出
+      if (!multiChannelData.value[0]) multiChannelData.value[0] = {};
+      multiChannelData.value[0].pendingAck = data.pending_ack || { active: false };
+      multiChannelData.value[0].recentEvents = data.recent_events || [];
       
       if (isVideoSource.value && !isDraggingProgress.value) {
         try {
@@ -4143,24 +4307,17 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
   const currentTotal = backendCounters?.['总产量'] ?? -1;
   const currentNg = backendCounters?.['不良总数'] ?? 0;
   if (lastTotalCount >= 0 && currentTotal > lastTotalCount) {
-    // 新周期产生，延迟后重置视觉状态，让用户看到上一轮的颜色反馈
-    if (cycleResetTimer) {
-      clearTimeout(cycleResetTimer);
-      cycleResetTimer = null;
-    }
-    cycleResetTimer = setTimeout(() => {
-      cycleResetTimer = null;
-      if (!monitorMounted) return;
-      steps.value.forEach(s => {
-        s.status = 'pending';
-        s.cycleResult = null;
-      });
-      tableData.value.forEach(t => {
-        t.status = 'pending';
-        t.cycleResult = null;
-      });
-      lastScrolledIdx = -1;
-    }, 1200);
+    // v3.9.x: 旧实现这里挂一个 1.2s setTimeout 强清步骤表 status='pending', 但
+    // 步骤的 PT 字典 (cycleSumStepDurations / stepDurations / stepVisibleSeconds)
+    // 由 polling 整体替换驱动, 而后端 step_cycle_durations 在 end_cycle 故意保留
+    // 给"反馈期"看, 直到下一周期 start_cycle 才清. 两套路径在 1.2s 内打架 →
+    // 客户实测画面: "翻转 待检测 + PT 10.6s" 这种 status / PT 不一致的快照 (闪).
+    //
+    // 修复: 不再用计时器驱动状态清屏. 真正的清屏统一由"cycle_id 变化"路径
+    // (上方 _newCycleStarted 分支) 触发: 上一轮 OK + PT 持续显示 → 下一轮第一步
+    // 被识别 → cycle_id 翻新 → 同帧内一次性清字典 + 替换为新数据 + 重新设状态.
+    // 这就是 4306 行原本想要的"让用户看到上一轮颜色反馈", 1.2s 之前是被错误地
+    // 当作"上限". 现在改为"至少持续到下一轮真正开始".
 
     // 工件卡片：把"检测中"替换成本轮最终结果(OK/NG)保留一会儿，之后清空回到"等待扫码..."
     const cycleIsNg = lastNgCount >= 0 && currentNg > lastNgCount;
@@ -4297,11 +4454,18 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       }
 
       const _completed = thisPosCompleted || isCoveredByBackup;
-      // 已走过的步骤不因画面残留识别回退 "已检测→待检测" 闪动
-      if (_inFrame && !_passedThisStep) {
-        step.status = 'active';
-      } else if (_completed) {
+      // v3.9.x: 步骤一旦 join 周期 (thisPosCompleted=true) 或被替补覆盖, 直接锁定 'completed',
+      // 不因画面里标签时有时无回退到 'active'. UI (行 1037) 只把 'completed' 渲染成"已检测",
+      // 其余全渲染"待检测", 老逻辑里 _inFrame 优先级最高 → 客户做这一步期间 YOLO 帧抖
+      // 让 status 在 active/completed 反复切, 体感: "已检测 ↔ 待检测 反复闪, 闪完 PT 涨一点".
+      // _passedThisStep 老豁免只在"后续步骤已往前走"时生效, 客户每步做完整动作时后面步骤
+      // 还没识别 → 不豁免 → 闪.
+      // 新口径: 已 join 一票否决, 画面再次识别不再倒退. 'active' 只剩"步骤识别到但还没 join"
+      // 那种瞬时态 (实务上极短或不出现, 比如 join_cycle=False 的静态步骤)。
+      if (_completed) {
         step.status = 'completed';
+      } else if (_inFrame) {
+        step.status = 'active';
       } else {
         step.status = 'pending';
       }
@@ -4787,6 +4951,77 @@ const autoRestoreSource = async () => {
   return restored;
 };
 
+// ==================== v3.9.x 事件人工确认 ====================
+// nowTimestamp: 实时时钟 ref, 0.5s 一次刷新, 用于驱动倒计时 / 已等待秒数 computed
+// pendingAckDisplay: 当前要在覆盖层展示哪个通道的阻塞信息 (优先选中, 其次最早阻塞)
+// pendingAckWaitedSec / pendingAckRemainSec: 实时计算的秒数 (依赖 nowTimestamp + multiChannelData)
+// ackPendingForChannel: 调后端 ack-event 接口, 成功后乐观清前端 pendingAck (后端下次 polling 也会清)
+const nowTimestamp = ref(Math.floor(Date.now() / 1000));
+let _nowTickInterval = null;
+
+const pendingAckChannelStates = computed(() => {
+  const list = [];
+  for (let ch = 0; ch < channelCount.value; ch++) {
+    const pa = multiChannelData.value[ch]?.pendingAck;
+    if (pa && pa.active) {
+      list.push({
+        channel: ch,
+        eventId: pa.event_id,
+        eventName: pa.event_name,
+        startedAt: pa.started_at || nowTimestamp.value,
+        timeoutSec: Number(pa.timeout_sec || 0),
+        reason: (multiChannelData.value[ch]?.recentEvents || [])
+          .filter(e => e.require_ack)
+          .slice(-1)[0]?.reason || '',
+        acking: !!multiChannelData.value[ch]?.pendingAckSubmitting,
+      });
+    }
+  }
+  return list;
+});
+
+const pendingAckDisplay = computed(() => {
+  const list = pendingAckChannelStates.value;
+  if (list.length === 0) return null;
+  const cur = list.find(s => s.channel === selectedChannel.value);
+  if (cur) return cur;
+  return list.slice().sort((a, b) => a.startedAt - b.startedAt)[0];
+});
+
+const pendingAckWaitedSec = computed(() => {
+  const d = pendingAckDisplay.value;
+  if (!d) return 0;
+  return Math.max(0, Math.floor(nowTimestamp.value - d.startedAt));
+});
+
+const pendingAckRemainSec = computed(() => {
+  const d = pendingAckDisplay.value;
+  if (!d || !d.timeoutSec) return 0;
+  return Math.max(0, d.timeoutSec - pendingAckWaitedSec.value);
+});
+
+const ackPendingForChannel = async (ch) => {
+  const chData = multiChannelData.value[ch];
+  if (!chData || !chData.pendingAck?.active) return;
+  if (chData.pendingAckSubmitting) return;
+  chData.pendingAckSubmitting = true;
+  try {
+    const res = await ackPendingEvent(ch);
+    if (res?.data?.acked) {
+      ElMessage.success(`工位 ${ch + 1} 确认成功，已重置当前周期`);
+    } else {
+      ElMessage.info(`工位 ${ch + 1} 当前没有待确认事件`);
+    }
+    chData.pendingAck = { active: false };
+  } catch (e) {
+    console.error('[ackPendingForChannel] failed', e);
+    ElMessage.error('确认失败：' + (e?.message || '未知错误'));
+  } finally {
+    chData.pendingAckSubmitting = false;
+  }
+};
+// ==============================================================
+
 onMounted(() => {
   monitorMounted = true;
   systemStore.loadSettings();
@@ -4794,6 +5029,10 @@ onMounted(() => {
   loadExtraFieldsSchema();
   loadOperatorList();
   scannerDisableStore.loadStatus();
+
+  _nowTickInterval = setInterval(() => {
+    nowTimestamp.value = Math.floor(Date.now() / 1000);
+  }, 500);
   
   // Reset error count so reconnection works after page navigation
   streamErrorCount = 0;
@@ -4853,6 +5092,7 @@ const handleResize = () => {
 
 onUnmounted(() => {
   monitorMounted = false;
+  if (_nowTickInterval) { clearInterval(_nowTickInterval); _nowTickInterval = null; }
   window.removeEventListener('resize', handleResize);
   stopPolling();
   stopMultiPolling();

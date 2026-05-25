@@ -20,7 +20,15 @@ class EventTriggerMixin:
         """触发事件。返回 True 表示事件已触发，False 表示被抑制或失败。"""
         if not self.project_config:
             return False
-        
+
+        # v3.9.x 事件人工确认阻塞门:
+        # 已经在阻塞态时, 后续事件直接丢弃 — 工人还没确认上一件 NG, 状态机本来就被
+        # 主循环守门拦下, 不应该再触发新事件 (即使被某条边路触发到, 计数 / MES Hook /
+        # 报警的二次叠加都没意义, 反而会引起重复推送).
+        if getattr(self, '_pending_ack', False):
+            print(f"[_trigger_event] 阻塞中 (等待人工确认), 丢弃事件 event={event_id}, reason={reason}")
+            return False
+
         # 防重复结算（仅在项目配置中开启 settle_dedup 时生效）
         settle_dedup = self.project_config.get('pipeline_config', {}).get('settle_dedup', False)
         if settle_dedup and not self.current_cycle_id and self.recording_enabled:
@@ -204,6 +212,17 @@ class EventTriggerMixin:
         if counters_changed:
             self._persist_counters()
         
+        # v3.9.x 事件人工确认开关:
+        # - require_ack=True : 触发阻塞态, 主循环 / 推流 / 状态机全停 (本通道范围内),
+        #                     直到 /api/v1/source/detection/ack-event 主动确认才解除
+        # - ack_timeout_sec  : 超时阈值 (0 = 永不超时, 必须人工点击)
+        # 阻塞态在事件正常入库 / 计数 / MES / 报警都执行完之后再设置, 这样:
+        #   - NG 计数 / OK 计数已累加 (符合"已判定本周期 NG, 等工人重做这件"语义)
+        #   - 报警闪光 / MES 推送照常出去 (现场设备和外部系统不能停)
+        #   - 但状态机阻塞 → 工人重做时新周期不会被旧残影直接顶替
+        require_ack = bool(event.get('require_ack', False))
+        ack_timeout_sec = max(0, int(event.get('ack_timeout_sec', 0) or 0))
+
         # 记录事件
         self._event_seq += 1
         self.events_log.append({
@@ -216,7 +235,20 @@ class EventTriggerMixin:
             'toast_id': event.get('toast_id', 'ok' if event.get('id') == 1 else 'ng' if event.get('id') == 2 else 'ok'),
             'had_workpiece': had_workpiece,
             'should_warn_no_barcode': should_warn_no_barcode,
+            'require_ack': require_ack,
+            'ack_timeout_sec': ack_timeout_sec,
         })
+
+        # v3.9.x 进入阻塞态 (事件正常落库 + 计数 + 报警 + MES Hook 都执行完之后)
+        if require_ack:
+            self._pending_ack = True
+            self._pending_ack_started_at = time.time()
+            self._pending_ack_event_id = str(event.get('id', event_id))
+            self._pending_ack_event_name = event.get('name', '')
+            self._pending_ack_timeout_sec = ack_timeout_sec
+            print(f"[ack] 进入人工确认阻塞态: event={self._pending_ack_event_name} "
+                  f"(id={self._pending_ack_event_id}, timeout={ack_timeout_sec}s, "
+                  f"channel_id={self.channel_id})")
         
         # 触发报警器（如果已配置）— 按通道路由到对应工位的指示灯
         try:

@@ -625,6 +625,10 @@ class PeriodicActionsMixin:
         - 不调 self.end_cycle()（cycle 已经结束）
         - 不动 cycle_times / NG步骤计数 / NG TOP3
         - 标记 source='periodic_action'，前端 toast 可以据此区分样式
+
+        v3.9.x: 也读 event 的 require_ack 字段, 进入与 _trigger_event 等价的人工
+        确认阻塞态. 这条路径独立于主事件分发, 之前漏接了 require_ack 处理, 表现
+        为"周期性强制动作触发的事件不弹确认框" (用户实际场景).
         """
         if not getattr(self, 'project_config', None):
             return
@@ -639,6 +643,17 @@ class PeriodicActionsMixin:
         if not event:
             print(f"[PeriodicActions] event_id={event_id} 未在 events_config 中找到")
             return
+
+        # v3.9.x: 已经在阻塞态 → 丢弃后续周期性事件, 等工人确认完再说
+        # (与 _trigger_event 入口同样的早退保护)
+        if getattr(self, '_pending_ack', False):
+            print(f"[PeriodicActions] 阻塞中 (等待人工确认), 丢弃事件 "
+                  f"event_id={event_id}, reason={reason}")
+            return
+
+        # v3.9.x: 读 require_ack / ack_timeout_sec
+        require_ack = bool(event.get('require_ack', False))
+        ack_timeout_sec = max(0, int(event.get('ack_timeout_sec', 0) or 0))
 
         # 写入 events_log（前端轮询拿 → toast / 语音）
         self._event_seq = getattr(self, '_event_seq', 0) + 1
@@ -656,6 +671,9 @@ class PeriodicActionsMixin:
             # v3.5.2: 周期性强制动作和扫码绑定无关, 后端权威告知前端"不要弹未绑码 toast"
             'should_warn_no_barcode': False,
             'source': 'periodic_action',
+            # v3.9.x: 把 require_ack 字段也带到日志里, 前端可据此区分需要确认的事件
+            'require_ack': require_ack,
+            'ack_timeout_sec': ack_timeout_sec,
         })
 
         # 执行该事件配的 counter actions
@@ -688,6 +706,19 @@ class PeriodicActionsMixin:
 
         print(f"[PeriodicActions] 触发事件 #{event.get('id')} "
               f"({event.get('name', '')}): {reason}")
+
+        # v3.9.x: 进入人工确认阻塞态 (与 _trigger_event 末尾等价).
+        # 阻塞门会在 _update_step_stats 入口和 _capture_loop 写帧前生效, 状态机
+        # 与画面同步定格, 直到工人调 /detection/ack-event 主动解除.
+        if require_ack:
+            self._pending_ack = True
+            self._pending_ack_started_at = time.time()
+            self._pending_ack_event_id = str(event.get('id', event_id))
+            self._pending_ack_event_name = event.get('name', '')
+            self._pending_ack_timeout_sec = ack_timeout_sec
+            print(f"[ack] (周期性) 进入人工确认阻塞态: event={self._pending_ack_event_name} "
+                  f"(id={self._pending_ack_event_id}, timeout={ack_timeout_sec}s, "
+                  f"channel_id={getattr(self, 'channel_id', 0)})")
 
     # ============================================================
     # 暴露给前端 Monitor 的状态查询

@@ -1064,29 +1064,71 @@ async function initHands() {
 
   const videoEl = document.getElementById('webcam');
 
-  // ---- 摄像头选择策略：优先 ch1 持久化的 deviceId，否则系统默认 ----
-  // 上次工位 1 选过 USB 摄像头时，后端把 MediaDeviceInfo.deviceId 落盘到了
-  // workstation_config.json 的 channels."1".usb_device_id（v3.8.2+）。
-  // splash 拿这个字符串直接给 getUserMedia 精确锁住同一个设备。
-  // 拿不到 / 不匹配时退回系统默认 webcam。
+  // ─────────────────────────────────────────────────────────────────
+  // 摄像头选择策略 (v3.9.x): 三档可配置, 落盘 workstation_config.json 顶层 splash 字段.
+  // ─────────────────────────────────────────────────────────────────
+  // 客户痛点: 工厂工控机经常装了 Todesk / 向日葵等远程控制软件, 它们会注册"虚拟摄像头",
+  // 老逻辑只看 ch1 USB 绑定 → 没绑就 facingMode:user → 浏览器随机挑一个 → 经常拿到虚拟相机.
+  //
+  // 配置来源 — 主前端「设置 → 启动动画手势相机」
+  //   cfg.splash = {
+  //     camera_mode: 'auto'     - 老逻辑 (优先 ch1.usb_device_id, 否则 facingMode:user)
+  //                  'specific' - 锁死指定 device_id, 拿不到走"无摄像头"兜底
+  //                  'disabled' - 不开摄像头, splash 直接进自动播放
+  //     device_id:    '...'     - specific 模式锁的 deviceId
+  //     device_label: '...'     - 仅回显, splash 不读
+  //   }
+  // ─────────────────────────────────────────────────────────────────
+  let cameraMode = 'auto';
   let preferredDeviceId = '';
   if (splashAPI && typeof splashAPI.getWorkstationConfig === 'function') {
     try {
       const cfg = await splashAPI.getWorkstationConfig();
-      const ch1 = cfg && cfg.channels && cfg.channels['1'];
-      if (ch1 && ch1.usb_device_id) {
-        preferredDeviceId = String(ch1.usb_device_id);
-        console.log(`[Camera] 使用工位 1 持久化 deviceId: ${preferredDeviceId.slice(0, 16)}...`);
+      // 顶层 splash 段 (v3.9.x+)
+      const splashCfg = cfg && cfg.splash;
+      if (splashCfg && typeof splashCfg.camera_mode === 'string') {
+        cameraMode = splashCfg.camera_mode;
+        if (cameraMode === 'specific' && splashCfg.device_id) {
+          preferredDeviceId = String(splashCfg.device_id);
+          console.log(`[Camera] 模式=specific, 锁定 deviceId: ${preferredDeviceId.slice(0, 16)}...`);
+        } else {
+          console.log(`[Camera] 模式=${cameraMode}`);
+        }
+      }
+      // 老路径 (v3.8.2): 当 mode=auto 且 splash 段没明确 device_id 时, 沿用工位 1 USB 绑定
+      if (cameraMode === 'auto' && !preferredDeviceId) {
+        const ch1 = cfg && cfg.channels && cfg.channels['1'];
+        if (ch1 && ch1.usb_device_id) {
+          preferredDeviceId = String(ch1.usb_device_id);
+          console.log(`[Camera] auto 模式, 沿用工位 1 deviceId: ${preferredDeviceId.slice(0, 16)}...`);
+        }
       }
     } catch (e) {
       console.warn('[Camera] 读取工位配置失败，降级到系统默认:', e.message);
     }
   }
 
+  // disabled: 用户主动关闭手势, 直接走自动播放兜底, 不打扰任何摄像头授权弹窗
+  if (cameraMode === 'disabled') {
+    console.log('[Camera] 用户关闭手势, 跳过 getUserMedia, 进入自动播放');
+    setInput('已关闭手势（自动播放）', 'dim');
+    input.source = 'mouse';
+    scheduleAutoplayFallback();
+    return false;
+  }
+
   try {
-    const videoConstraint = preferredDeviceId
-      ? { deviceId: { ideal: preferredDeviceId }, width: 640, height: 480 }
-      : { width: 640, height: 480, facingMode: 'user' };
+    // specific 模式: exact 强制锁定; auto 模式: ideal 软锁定 (拿不到会回退到其他设备).
+    // 老逻辑统一用 ideal — 在 auto 模式下行为不变; specific 模式必须用 exact, 否则
+    // 浏览器找不到指定相机时会偷偷换一台 (经常就换到了 todesk 虚拟相机), 违背用户意图.
+    let videoConstraint;
+    if (cameraMode === 'specific' && preferredDeviceId) {
+      videoConstraint = { deviceId: { exact: preferredDeviceId }, width: 640, height: 480 };
+    } else if (preferredDeviceId) {
+      videoConstraint = { deviceId: { ideal: preferredDeviceId }, width: 640, height: 480 };
+    } else {
+      videoConstraint = { width: 640, height: 480, facingMode: 'user' };
+    }
     const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraint });
     videoEl.srcObject = stream;
     await videoEl.play();
@@ -1094,7 +1136,7 @@ async function initHands() {
     document.getElementById('webcamWrap').classList.add('show');
   } catch (e) {
     console.warn('[Camera] 获取摄像头失败，自动播放兜底:', e.message);
-    setInput('无摄像头（自动播放）', 'warn');
+    setInput(cameraMode === 'specific' ? '指定相机不可用（自动播放）' : '无摄像头（自动播放）', 'warn');
     input.source = 'mouse';
     scheduleAutoplayFallback();   // 没摄像头：等后端 ready 后自动塌缩+爆炸
     return false;
@@ -1414,6 +1456,23 @@ window.addEventListener('resize', () => {
 
 // v0.12.1：按钮已删除，由 startReadyLoading() 6s 后自动触发跳转
 
+// ─────────────────────────────────────────────────────────────────────
+// 跳过手势 → 直接进 READY 的统一入口 (v3.9.x)
+// ─────────────────────────────────────────────────────────────────────
+// 触发源:
+//   - 键盘 ESC      (v3.8.2 起)
+//   - 鼠标点击屏幕   (v3.9.x 起 — 客户工厂工控机经常没键盘 / 没人知道按 ESC)
+// 守门: 仅 IDLE / HOVER 阶段响应; COLLAPSE / EXPLOSION / READY 期间忽略,
+// 避免动画播到一半被二次触发打断 (状态机不接受倒退).
+function skipToReady(reason) {
+  if (currentStage !== Stage.IDLE && currentStage !== Stage.HOVER) return;
+  console.log(`[Splash] ${reason} 触发, 跳过手势直接进 READY`);
+  transitionTo(Stage.COLLAPSE);
+  setTimeout(() => {
+    if (currentStage === Stage.COLLAPSE) transitionTo(Stage.EXPLOSION);
+  }, 1200);
+}
+
 // 调试 + 跳过快捷键
 window.addEventListener('keydown', (e) => {
   // D: 切换 dev panel（隐藏面板，按 D 调出来看 FPS / 粒子数 / GPU 信息）
@@ -1430,17 +1489,23 @@ window.addEventListener('keydown', (e) => {
     document.body.classList.remove('stage-ready');
     transitionTo(Stage.IDLE);
   }
-  // ESC (v3.8.2): 跳过手势, 直接走 COLLAPSE → EXPLOSION → READY
-  // 给"没有耐心做手势"或"摄像头死了"的边界场景兜底
+  // ESC (v3.8.2): 跳过手势 — 给"没有耐心做手势"或"摄像头死了"的场景兜底
   if (e.key === 'Escape') {
-    if (currentStage === Stage.IDLE || currentStage === Stage.HOVER) {
-      console.log('[Splash] ESC 跳过手势, 直接进 READY');
-      transitionTo(Stage.COLLAPSE);
-      setTimeout(() => {
-        if (currentStage === Stage.COLLAPSE) transitionTo(Stage.EXPLOSION);
-      }, 1200);
-    }
+    skipToReady('ESC');
   }
+});
+
+// v3.9.x: 鼠标点击空白区域跳过手势 → 触发塌缩 + 爆炸 → 加载动画
+// 守门:
+//   1) 已交互元素 (audioToggle 等 <button>) 的 click 通过 closest('button,a,input') 排除,
+//      避免按音效按钮也被当成"跳过"。
+//   2) skipToReady 内部再守 IDLE/HOVER 阶段, 不会重复触发或打断动画。
+window.addEventListener('click', (e) => {
+  const t = e.target;
+  if (t && typeof t.closest === 'function' && t.closest('button, a, input, select, textarea')) {
+    return;  // 点中已有 UI 按钮 — 不当作跳过手势
+  }
+  skipToReady('CLICK');
 });
 
 // v0.15 · 音效开关按钮

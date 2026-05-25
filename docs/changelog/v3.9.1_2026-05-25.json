@@ -1,0 +1,175 @@
+{
+  "version": "3.9.1",
+  "date": "2026-05-25",
+  "previous_version": "3.9.0",
+  "release_type": "patch",
+  "summary": "v3.9.0 之后的累积增量: 事件交互手动确认 + PT/CT 显示口径可配 + Splash 启动体验定制化 + 步骤显示稳定性修复.",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "事件手动确认 require_ack / ack_resets_periodic",
+      "symptom": "客户产线对 NG / 自定义警告事件希望弹提示框 + 冻结检测 + 等工人按确认后才继续; 周期性强制动作 (如未压墨提示) 不希望客户没确认就被反复触发轰炸",
+      "root_cause": "原架构: _trigger_event 是事件中心 hook 但不支持 ack 阻塞; 周期性强制动作走独立路径 _emit_periodic_notification 绕过 _trigger_event, 没法复用一套 ack 机制; 多种事件类型需统一逻辑",
+      "fix": "事件配置加 require_ack + ack_timeout_sec + ack_resets_periodic; _trigger_event 检测到 require_ack=true 时挂 _pending_ack 状态, 主推流线程冻结帧推送, 等前端 POST /detection/ack-event 放行; 周期性事件统一接入同一套, ack_resets_periodic=true 时重置 N 轮计数器防一直弹; 前端 Monitor 全屏 overlay + Project 页加 3 个 UI 控件",
+      "files": [
+        "backend/api/source_event_trigger_mixin.py",
+        "backend/api/source_periodic_actions_mixin.py",
+        "backend/api/source_capture_loop_mixin.py",
+        "backend/api/source_routes.py",
+        "backend/api/source_step_stats_mixin.py",
+        "backend/api/source_state_init.py",
+        "backend/api/source.py",
+        "backend/api/projects.py",
+        "frontend/src/api/detection.js",
+        "frontend/src/views/Project/index.vue",
+        "frontend/src/views/Monitor/index.vue",
+        "tests/test_event_ack_v39.py",
+        "tests/uat/uat_20260525_event_ack_v39.py"
+      ],
+      "keywords": ["require_ack", "manual confirmation", "事件手动确认", "ack_resets_periodic", "ack_timeout_sec", "周期性强制动作", "_pending_ack", "_emit_periodic_notification", "未压墨提示框关不掉", "工人重做周期"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "PT 计算口径可配 span / visible 累计可见时长",
+      "symptom": "客户场景里一个步骤的标签可能从早到晚都被 YOLO 识别到 (涂黑残留 / 翻面后还在画面 / 上一件还摆工位), 老的跨度 PT 把 18 秒识别周期算成 18s, 客户实际操作只用 2 秒",
+      "root_cause": "step_durations 用 last_seen - start_time 跨度计算, 与客户实际操作时长不一致; 但跨度仍是 CSV 导出 / history 等下游消费者契约, 不能直接换语义",
+      "fix": "后端永远算两份: step_durations (跨度, 老字段) + step_visible_seconds (累计可见时长, 新字段, 每帧累加 detected_labels 里每个 label 的 _dt, 上限 1.0s 防 FPS 极低时单帧大跨度污染); 前端 formatStepPT 按 systemStore.display.monitor.ptCalcMode 选源 ('span' / 'visible'), 默认 'span' 不动老客户行为",
+      "files": [
+        "backend/api/source_routes.py",
+        "backend/api/source_state_init.py",
+        "backend/api/source_step_stats_mixin.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "frontend/src/store/useSystemStore.js",
+        "frontend/src/views/Settings/index.vue",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": ["PT 计算口径", "step_visible_seconds", "累计可见时长", "ptCalcMode", "span", "visible", "PT 数字太大", "跨度", "涂黑残留拖长 PT"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "结算后强制保留显示 resultHold",
+      "symptom": "客户产线工人在末步完成的瞬间看不到 OK + PT 数字, 下一周期立刻覆盖",
+      "root_cause": "周期切换时前端立刻清屏 cycleSumStepDurations, 上一轮 OK + PT 数字消失太快",
+      "fix": "systemStore.display.monitor 加 resultHoldEnabled + resultHoldSeconds (默认关, 开启时默认 1.5s); 周期结算后 armResultHold(N) 起 timer, 期内冻结 cycleSumStepDurations / stepInflightDurations / stepDurations / stepVisibleSeconds 不被 polling 替换; 期满主动清屏对齐 _newCycleStarted 字段集合",
+      "files": [
+        "frontend/src/store/useSystemStore.js",
+        "frontend/src/views/Settings/index.vue",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": ["resultHold", "resultHoldEnabled", "resultHoldSeconds", "结算后强制保留显示", "OK + PT 多停留", "armResultHold"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "启动动画手势相机配置 auto/specific/disabled",
+      "symptom": "客户工厂工控机经常装了 Todesk / 向日葵等远程虚拟相机; 工业相机方案下工位 1 没绑 USB 跟启动动画想用的相机解耦; 老逻辑随机挑相机经常拿到虚拟相机",
+      "root_cause": "splash/main.js 旧策略: 工位 1 USB 绑了就用, 没绑就走 facingMode:user → 浏览器随机挑 → 经常拿到 todesk 虚拟相机; 客户没法自己选",
+      "fix": "workstation_config.json 顶层新增 splash 字段 (camera_mode + device_id + device_label) — 不放 systemStore 是因为 splash 比主前端先加载, 跨进程只能读 JSON; 后端加 GET/PUT /workstations/splash-camera (注意路由必须在 /{channel_id}/... 之前); 前端 Settings 加新卡片『启动动画手势相机』 (三档下拉 + 扫描相机 + 选择对话框); splash/main.js 改三档策略 — auto 等价老逻辑 / specific 用 deviceId.exact 强制锁定 (找不到走兜底, 不再回退到 todesk) / disabled 跳过 getUserMedia 直接自动播放",
+      "files": [
+        "backend/api/channel_manager.py",
+        "frontend/src/views/Settings/index.vue",
+        "electron/splash/main.js"
+      ],
+      "keywords": ["splash camera", "启动动画相机", "todesk 虚拟相机", "deviceId.exact", "camera_mode", "auto specific disabled", "workstation_config.json", "splash_config", "手势识别相机选择"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "Splash 鼠标点击跳过手势",
+      "symptom": "客户工厂工控机一般没键盘 / 客户不知道按 ESC 能跳过手势, 眼睁睁看着粒子球转半天",
+      "root_cause": "splash 只有 ESC 键跳过, 没有鼠标点击路径; 客户工控机或触摸屏场景下不可达",
+      "fix": "抽出统一入口 skipToReady(reason) 复用 ESC 路径 (COLLAPSE → 1.2s 后 EXPLOSION); 新增 window click 监听, 排除 <button>/<a>/<input>/<select>/<textarea> 等已有交互元素 (closest 沿祖先树检查, 防误触发音效按钮等); 守门只看阶段, 仅 IDLE / HOVER 响应, 动画播到一半的二次点击被吞掉",
+      "files": [
+        "electron/splash/main.js"
+      ],
+      "keywords": ["splash 点击跳过", "skipToReady", "鼠标点击跳过手势", "工厂工控机没键盘", "ESC 跳过"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "严格顺序 PT 起点 anchor 修正 — 解决 CT < PT 之和与负 interval",
+      "symptom": "客户严格顺序模式 (strict_order=true) 下, CT=6.21s 但 PT 加起来比 CT 大很多, 翻转步骤 PT 高达 7.5s 而实际只用 0.6 秒; 步骤间 interval 出现负值",
+      "root_cause": "翻转标签在'正面涂黑'还在进行时就被 YOLO 提前识别, PT 起点被记录到上一步骤还在执行的时刻; duration = last_seen - start_time 横跨了两步操作; 严格顺序下 interval (上一步 last_seen 到本步 start 的差) 出现负值",
+      "fix": "引入 _resolve_step_pt_anchor(label, fallback_start) 助手函数, 严格顺序步骤的 PT 起点强制 max(fallback_start, last_step_completed_time); 应用到 5 个 PT 写入点: _supplement_step_durations / _flush_active_steps_pt / _check_sequential_mode / _check_custom_sequential_mode 两条补计 / step_inflight_durations (必须用同一 anchor 否则步骤完成时 PT 大数字跳到小数字造成闪一下)",
+      "files": [
+        "backend/api/source.py",
+        "backend/api/source_sequential_mixin.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/source_step_stats_mixin.py",
+        "backend/api/source_routes.py"
+      ],
+      "keywords": ["严格顺序 PT", "_resolve_step_pt_anchor", "last_step_completed_time", "CT < PT 之和", "负 interval", "翻转 PT 太大", "in-flight PT 闪一下"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "步骤状态机锁定 — 已检测不因画面残留回退到待检测, 消除文字闪烁",
+      "symptom": "周期内某步状态文字反复在 '已检测 ↔ 待检测' 切换, 闪完 PT 涨一点; 例如反面涂黑帧 50 显示 已检测 PT '--', 帧 55 又变回 待检测 PT '--'",
+      "root_cause": "Monitor updateStepsFromBackend 4458 行状态机里 _inFrame 优先级最高; 步骤已 join cycle_steps (thisPosCompleted=true), 客户继续做这一步时 YOLO 检测框时有时无 — 标签出现 → status='active' → UI 渲染'待检测' (UI 1037 行只把 completed 渲染成'已检测'); 标签消失 → status='completed' → UI 渲染'已检测'; 反复抖动造成文字闪烁",
+      "fix": "调整状态机优先级: 步骤一旦 thisPosCompleted=true 或被 backup 覆盖, 直接锁 'completed', 不因画面残留回退; 'active' 只剩'步骤识别到但还没 join 周期'瞬时态 (实务上极短, 主要给 join_cycle=False 静态步骤用)",
+      "files": [
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": ["步骤状态闪烁", "已检测 待检测 反复切", "_inFrame 优先级", "thisPosCompleted 锁定", "_passedThisStep 豁免不足", "YOLO 帧抖", "PT 闪一下涨一点"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "删除 cycleResetTimer 1.2s 强制清屏 — 解决周期切换时步骤显示先空再补",
+      "symptom": "周期完成后约 1.2 秒, 步骤状态先变 'pending' (待检测, PT '--'), 但 cycleSumStepDurations 字典里还残留上一轮 PT 值 → 出现 '翻转 待检测 PT 10.6s OK' 这种状态/PT 不一致快照",
+      "root_cause": "前端有两条独立清屏路径打架: cycleResetTimer (1.2s 固定 setTimeout, 清 step.status 但不清 cycleSumStepDurations) + _newCycleStarted (cycle_id 翻新时触发, 清完整字段集合); 两 timer 错开 1.2s 窗口出现 status 已清 + PT 没清的不一致状态",
+      "fix": "删除 cycleResetTimer 整套机制; 清屏路径统一由 _newCycleStarted 驱动 — cycle_id 翻新时一次性清空所有字段 (step.status / cycleResult / cycleSumStepDurations / stepInflightDurations / stepDurations / stepVisibleSeconds / 滚动游标 lastScrolledIdx)",
+      "files": [
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": ["cycleResetTimer", "1.2s 强制清屏", "周期切换闪烁", "status PT 不一致", "_newCycleStarted", "lastScrolledIdx 重置"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-source", "debug-electron"],
+  "config_changes": {
+    "electron/package.json": "version 3.9.0 -> 3.9.1",
+    "workstation_config.json": "顶层新增 splash 段 (camera_mode/device_id/device_label), 不存在时默认 auto 模式, 向后兼容",
+    "systemStore.display.monitor": "新增 ptCalcMode (默认 'span') / resultHoldEnabled (默认 false) / resultHoldSeconds (默认 1.5)",
+    "events_config": "事件新增 require_ack (默认 false) / ack_timeout_sec (默认 0) / ack_resets_periodic (默认 false)"
+  },
+  "files_changed": [
+    "backend/api/channel_manager.py",
+    "backend/api/projects.py",
+    "backend/api/source.py",
+    "backend/api/source_capture_loop_mixin.py",
+    "backend/api/source_event_trigger_mixin.py",
+    "backend/api/source_periodic_actions_mixin.py",
+    "backend/api/source_routes.py",
+    "backend/api/source_sequential_mixin.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/source_state_init.py",
+    "backend/api/source_step_stats_mixin.py",
+    "electron/splash/main.js",
+    "electron/package.json",
+    "frontend/src/api/detection.js",
+    "frontend/src/store/useSystemStore.js",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Project/index.vue",
+    "frontend/src/views/Settings/index.vue",
+    "tests/test_event_ack_v39.py",
+    "tests/uat/uat_20260525_event_ack_v39.py",
+    "docs/CHANGELOG.md",
+    "docs/changelog/v3.9.1_2026-05-25.md",
+    "docs/changelog/v3.9.1_2026-05-25.json"
+  ],
+  "known_issues": [
+    "MES Gateway 实时规则的 session_end / box_complete 触发器仍标 [todo], 目前只 cycle_end 接入",
+    "CI 历史长期红灯: Virtual Functional Tests (cryptography) 和 DB Matrix (SQLite + PostgreSQL) (PG SUM(boolean) dialect) 自 v3.7.4 起持续红灯, SE9 分支已修待 cherry-pick"
+  ]
+}

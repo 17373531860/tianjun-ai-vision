@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.9.1 (2026-05-25)
+- [FEAT-001] **事件手动确认** — 事件配置加 `require_ack` / `ack_timeout_sec` / `ack_resets_periodic`，触发后冻结主推流 + Monitor 全屏 overlay 等工人按确认；周期性强制动作统一接入同一套，`ack_resets_periodic` 解决"未压墨提示框关不掉一直弹"。
+- [FEAT-002] **PT 计算口径可配 span / visible 累计可见时长** — 后端永远算两份 PT 字段，前端 Settings 下拉切换显示口径；解决"标签从早到晚都被识别 → 老的跨度 PT 算成 18 秒、实际操作只用 2 秒"问题。
+- [FEAT-003] **结算后强制保留显示** — `resultHoldEnabled` / `resultHoldSeconds`（默认关），周期结算后冻结 OK + PT 数字 N 秒不被下一周期立刻覆盖，给产线工人多看一会儿。
+- [FEAT-004] **启动动画手势相机配置** — `workstation_config.json` 顶层加 `splash` 段（auto/specific/disabled 三档），Settings 加新卡片自选 USB 摄像头。客户工厂 Todesk / 向日葵等虚拟相机不再被 splash 误用；工业相机方案下手势相机跟生产线相机解耦。
+- [FEAT-005] **Splash 鼠标点击跳过手势** — 抽 `skipToReady(reason)` 统一入口，ESC + window click 共用一条路径；排除已有 UI 按钮避免误触发。工厂工控机没键盘也能跳过手势。
+- [BUG-001] **严格顺序 PT 起点 anchor 修正** — 修复 CT < PT 之和、步骤 interval 负值。新增 `_resolve_step_pt_anchor` 助手函数，严格顺序步骤的 PT 起点强制 `max(start, 上一步完成时刻)`，5 个 PT 写入点全部接入（含 step_inflight_durations 同 anchor，避免步骤完成时 PT 大数字跳到小数字闪一下）。
+- [BUG-002] **步骤状态机锁定** — 修复"已检测 ↔ 待检测"反复切换 + PT 涨一点的视觉闪烁。状态机优先级调整：步骤一旦 join 周期就锁 `'completed'`，画面残留识别不再回退到 `'active'`。
+- [BUG-003] **删除 cycleResetTimer 1.2s 强制清屏** — 修复周期切换时"翻转 待检测 PT 10.6s OK"这种 status/PT 不一致快照。清屏路径统一由 `_newCycleStarted` 驱动，一次清空所有字段。
+- [CONFIG-001] 版本号 `3.9.0 → 3.9.1`（patch: 没新增 logic_mode，纯粹是对现有功能的增强 + bug 修复）。
+
 ## v3.9.0 (2026-05-23)
 - [FEAT-001] **新增结算模式 last_first（末步结算 + 首步开周期）** — 客户产线 ABCD 4 步流水末步即结算 + 首步即开新周期 + 跳 D 重做 A 走 R3 fallback NG。`source_settlement_mixin.py` 新增 `_process_last_first_mode` 状态机（6 条规则 R1-R6），作为 `_update_step_stats` 前置过滤层，仅 settlement_mode=last_first 时生效。前后端双层互斥校验：与 strict_mode/cross_cycle/per_item/detection/tracking 等模式严格互斥；前端 Project 页选中后弹约束提示卡 + 自动取消 strict_order；后端 `_apply_pipeline_config` 兜底覆盖。隔离性证据：first_step 模式跑同剧本 R3 触发=0。
 - [FEAT-002] **跨周期组（类二 cross_cycle）独立状态机** — 新增 `_process_cross_cycle_groups`，处理上下周期成员先后到达 + 屏蔽集合 + 等待超时 7 种状态迁移。和类一同帧组的 `_process_simultaneous_groups` 完全分离，box 时序 D 余像 + A 新周期场景不再窜逻辑。

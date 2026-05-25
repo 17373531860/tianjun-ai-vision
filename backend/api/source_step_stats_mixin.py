@@ -46,6 +46,23 @@ class StepStatsMixin:
         注意：置信度阈值过滤已在 _detect_only 方法中完成，
         此处收到的 detections 都是通过阈值的有效检测
         """
+        # ==================== v3.9.x 人工确认阻塞门 (优先级最高) ====================
+        # 触发了 require_ack=True 的事件后, 状态机完全停摆, 等待 /ack-event 主动解除.
+        # 在阻塞门内同步处理"超时自动确认": 客户离岗等场景下避免无限阻塞.
+        # 注意: 即便 logic_mode=per_item, 也走这个守门 (在 per_item 分流之前判定).
+        if getattr(self, '_pending_ack', False):
+            timeout = getattr(self, '_pending_ack_timeout_sec', 0) or 0
+            started = getattr(self, '_pending_ack_started_at', 0) or 0
+            if timeout > 0 and started > 0 and (time.time() - started) >= timeout:
+                ev_name = getattr(self, '_pending_ack_event_name', '?') or '?'
+                print(f"[ack] 阻塞超时自动确认: event={ev_name} 已阻塞 {time.time() - started:.1f}s "
+                      f">= {timeout}s, 自动解除并清运行时 (channel_id={self.channel_id})")
+                self._clear_step_runtime_state()
+                # _clear_step_runtime_state 已经把 _pending_ack 等字段重置, 下面正常往下走
+            else:
+                # 仍处于阻塞态: 直接 return, 不推进状态机
+                return
+
         # ==================== per_item 模式分流 ====================
         # logic_mode='per_item' 走独立路径, 完全绕开 sequential/detection/custom
         # 的 cycle/step 状态机. 见 source_per_item_mixin.PerItemMixin.
@@ -165,6 +182,23 @@ class StepStatsMixin:
         
         # 存储当前帧检测到的标签（供周期结算时清理 step_last_seen）
         self._current_detected_labels = detected_labels
+
+        # ==================== v3.9.x D 方案: 累计标签在画面里的可见时长 ====================
+        # 用稳定检测集 (已过 min_frames + ROI + 阈值守门) 累加, 跳过瞬态噪声.
+        # 步骤完成时如果项目配了 pt_calc_mode='visible', PT 用本字典累计值;
+        # 否则继续用现行 (last_seen - start_time) 跨度.
+        # mode='span' (默认) 时数据仍在累加但不被读取, 客户切到 visible 立刻能用.
+        # _dt 上限 1.0s, 防 FPS 极低 / 暂停恢复 / GPU 卡顿等单帧大跨度污染累计值.
+        _last_ts = getattr(self, '_last_frame_ts_for_visible', None)
+        if _last_ts is not None and current_time > _last_ts:
+            _dt = current_time - _last_ts
+            if _dt > 1.0:
+                _dt = 1.0
+            if not hasattr(self, 'step_visible_seconds') or self.step_visible_seconds is None:
+                self.step_visible_seconds = {}
+            for _lbl in detected_labels:
+                self.step_visible_seconds[_lbl] = self.step_visible_seconds.get(_lbl, 0.0) + _dt
+        self._last_frame_ts_for_visible = current_time
 
         # v3.8.x (类二): 跨周期同时出现组路由
         # 顺序:
@@ -299,7 +333,11 @@ class StepStatsMixin:
                     self.step_frame_confirmed[label] = False
                     self.step_consecutive_frames[label] = 0
                     # 计算持续时间
-                    start_time = self.step_start_time.get(label, last_time)
+                    # v3.9.x: 严格顺序步骤的 PT 起点夹到 max(start, 上一步完成时刻),
+                    # 防止"标签提前被识别"把起点拖到上一步骤还在进行的时刻
+                    # (导致 PT 跨度比客户实际操作时间大很多, 间隔出现负值).
+                    raw_start = self.step_start_time.get(label, last_time)
+                    start_time = self._resolve_step_pt_anchor(label, raw_start)
                     duration = last_time - start_time
                     
                     # 检查持续时间是否在有效范围内
@@ -334,7 +372,7 @@ class StepStatsMixin:
                         if label not in self.step_counts:
                             self.step_counts[label] = 0
                         self.step_counts[label] += 1
-                        
+
                         rounded_dur = round(duration, 2)
                         self.step_durations[label] = rounded_dur
                         self.step_durations_history.setdefault(label, []).append(rounded_dur)

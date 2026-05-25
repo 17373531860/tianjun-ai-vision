@@ -152,6 +152,8 @@ app.commandLine.appendSwitch('gpu-memory-buffer-compositor-resources', 256)
 - `electron/license-manager.js` — License系统
 - `electron/preload.js` — renderer API
 - `electron/shutdown.html` — 关机进度UI
+- `electron/splash/main.js` — v3.8.2 起的赛博 splash 状态机 + 摄像头逻辑（v3.9.1 起改三档可配）
+- `electron/splash/preload.js` — splash IPC 桥（`getWorkstationConfig` / `onBackendLog` / `notifySplashFinished`）
 - `backend/main.py` — shutdown/step 端点实现
 - `backend/scripts/generate_license.py` — License生成工具
 
@@ -160,3 +162,65 @@ app.commandLine.appendSwitch('gpu-memory-buffer-compositor-resources', 256)
 - splash.html 版本号硬编码 v1.0.0，实际是 v2.2.0
 - shutdown.html 使用 nodeIntegration:true（安全风险，但功能需要）
 - 单实例锁: 第二个实例会静默退出，可能让用户困惑
+
+## v3.9.1 新增：Splash 摄像头三档配置 + 鼠标点击跳过
+
+> v3.8.2 引入了赛博 splash + MediaPipe 手势识别后，客户工厂工控机经常装 Todesk / 向日葵等远程虚拟相机被 splash 误用；工控机一般没键盘，ESC 跳过手势对客户不可达。v3.9.1 给出系统化解。
+
+### 摄像头三档可配（auto / specific / disabled）
+
+**配置位置**：`backend/data/workstation_config.json` 顶层 `splash` 字段。**不是**放在 `channels` 里——splash 用的相机不一定是任何工位的检测相机，跟生产线相机彻底解耦。
+
+```json
+{
+  "channels": { ... },
+  "splash": {
+    "camera_mode": "auto" | "specific" | "disabled",
+    "device_id":   "...",     // specific 模式锁定的 MediaDeviceInfo.deviceId
+    "device_label": "..."     // 仅回显, splash 不读
+  }
+}
+```
+
+**三档语义**：
+| 模式 | 行为 | 拿不到时 |
+|---|---|---|
+| `auto`（默认） | 沿用老逻辑：先工位 1 `usb_device_id` → 否则 `facingMode: 'user'` 系统默认 | 无摄像头自动播放兜底 |
+| `specific` | `deviceId.exact` 强制锁定 | "指定相机不可用（自动播放）"，**不回退到 todesk** |
+| `disabled` | 直接跳过 `getUserMedia`，进自动播放 | — |
+
+**关键区别 `exact` vs `ideal`**：v3.8.2 的 auto 用 `ideal`（软锁定，找不到自动换设备 → 经常换到 todesk）；v3.9.1 specific 必须用 `exact`（硬锁定，找不到走兜底，不偷换）。
+
+### API & 前端入口
+
+- 后端：`GET /api/v1/workstations/splash-camera` / `PUT /api/v1/workstations/splash-camera`（`backend/api/channel_manager.py`）
+- 前端：Settings → 显示设置 → 监视设置卡片下方的『启动动画手势相机』
+- 路由顺序：`/splash-camera` **必须**注册在 `/{channel_id}/...` 之前，否则被 catch-all 抢走
+
+### 鼠标点击跳过手势
+
+**触发源**：
+- ESC 键（v3.8.2 起）
+- window click（v3.9.1 起，排除 `<button>` `<a>` `<input>` `<select>` `<textarea>`）
+
+两条路径都走统一函数 `skipToReady(reason)` → `transitionTo(COLLAPSE)` → 1.2s 后 → `transitionTo(EXPLOSION)`。
+
+**守门**：仅 `Stage.IDLE` / `Stage.HOVER` 阶段响应；`COLLAPSE` / `EXPLOSION` / `READY` 期间忽略，动画播到一半不会被打断。
+
+### 排查模板
+
+| 现象 | 第一步看 | 第二步看 | 修复方向 |
+|---|---|---|---|
+| Splash 总是拿到 todesk 虚拟相机 | 主前端 Settings → 启动动画手势相机的模式 | `workstation_config.json` 顶层 `splash.camera_mode` | 改 `specific` 锁定真实摄像头，或改 `disabled` 直接关 |
+| Splash 启动很慢，狂等 | 客户机有没有键盘 / 是不是触摸屏 | 是否点屏幕没反应 | v3.9.1 已加 click 跳过，确认是这个版本之后 |
+| Settings 扫描相机点了没反应 | 浏览器有没有摄像头权限 | 控制台 `enumerateDevices` 报错 | 客户机第一次扫会弹权限弹窗（Electron 默认放行，应该不弹给客户） |
+| Splash 选了 `specific` 但下次启动还是默认 | `workstation_config.json` 顶层 `splash` 段是否存在 | `set_splash_config` 是否真写盘 | `curl /api/v1/workstations/splash-camera` 验证 |
+| Splash 点屏幕跳到一半又被打断 | 是否有快速重复点击 | `skipToReady` 守门是否生效 | 守门只看 `currentStage`，IDLE/HOVER 之外二次点击被吞 |
+| Splash 点了 audioBtn 也跳过了 | `closest('button')` 是否生效 | `<button>` 嵌套元素的 click target | 已加 `closest('button, a, input, select, textarea')` 豁免 |
+
+### 跨进程数据访问要点
+
+Splash 是早于主前端加载的**独立 BrowserWindow**：
+- 不能用 localStorage / Pinia store
+- 跨进程数据只能走 IPC（`splash:get-workstation-config` 同步读 JSON 文件）
+- 添加新配置项给 splash 用：**写文件**（`workstation_config.json`）+ 主进程 IPC handler（`electron/main.js`），不要试图走 HTTP API（splash 启动期间后端可能还没起来）

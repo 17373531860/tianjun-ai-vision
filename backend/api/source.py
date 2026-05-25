@@ -527,11 +527,45 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
     # _release_model 已迁至 ModelLoadMixin (Step 3 feat/multi-model-roi-link).
     # mixin 实现保持原行为 100% 兼容, 末尾增加 _mirror_host_to_main() 同步 main slot.
 
+    def _resolve_step_pt_anchor(self, label: str, fallback_start: float) -> float:
+        """v3.9.x: 严格顺序步骤的 PT 起点修正.
+
+        客户报障: 严格模式下某些步骤 (如"翻转") PT 数字过大、步骤间隔出现负值,
+        PT 之和超过 CT. 根因是 YOLO 在客户做上一步骤时把目标标签噪声识别一两帧,
+        step_start_time 被定到上一步骤还在进行的时刻, 算出来的 last_seen - start_time
+        覆盖了上一步骤的耗时段.
+
+        严格顺序的语义本就是"上一步未完成时, 下一步不能开始计时". 所以这里把
+        PT 起点夹住: 不允许早于 last_step_completed_time. 修正后:
+        - 步骤耗时 = last_seen - max(start_time, last_step_completed_time)
+        - 步骤间隔 = max(start_time, last_step_completed_time) - last_step_completed_time
+                  = 0 (客户提前识别) 或 正值 (客户中间空等)
+
+        生效条件:
+        - step_strict_order[label] == True (项目把这步配成严格)
+        - last_step_completed_time != None (说明已经有上一步完成时刻可参照)
+        - last_step_completed_time > fallback_start (本步起点确实早于上一步完成 → 异常)
+
+        非严格步骤 (设计上允许交错) 继续走 fallback_start, 不动语义.
+        last_first 模式会先把所有步骤的 strict_order 清空, 所以本修正不会触发.
+        """
+        if not getattr(self, 'step_strict_order', None):
+            return fallback_start
+        if not self.step_strict_order.get(label):
+            return fallback_start
+        last_completed = getattr(self, 'last_step_completed_time', None)
+        if last_completed is None or last_completed <= fallback_start:
+            return fallback_start
+        return last_completed
+
     def _supplement_step_durations(self):
         """Supplement step_durations for steps still being tracked at settle time.
         Must be called BEFORE clearing step_last_seen / step_start_time."""
         for label, last_time in list(self.step_last_seen.items()):
-            start_time = self.step_start_time.get(label, last_time)
+            # v3.9.x: 严格顺序 PT 起点夹到 max(start, 上一步完成时刻), 详见
+            # _resolve_step_pt_anchor 注释.
+            raw_start = self.step_start_time.get(label, last_time)
+            start_time = self._resolve_step_pt_anchor(label, raw_start)
             duration = last_time - start_time
             if duration >= 0:
                 time_config = self.step_time_config.get(label, {})
@@ -1154,6 +1188,18 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # v3.8.x last_first 结算模式: 等待首步标记
         if hasattr(self, '_pending_first_step'):
             self._pending_first_step = False
+
+        # v3.9.x 事件人工确认阻塞态:
+        # 清理函数被 start_detection / stop_detection / apply_project_config /
+        # 强制超时结算 / 确认 API 共用. 这里统一重置阻塞态字段:
+        # - 启停 / 切换项目 → 阻塞态自然失效, 防止旧阻塞跨会话残留
+        # - 确认 API → 调本函数清运行时, 阻塞态也一并清掉
+        if hasattr(self, '_pending_ack'):
+            self._pending_ack = False
+            self._pending_ack_started_at = None
+            self._pending_ack_event_id = None
+            self._pending_ack_event_name = None
+            self._pending_ack_timeout_sec = 0
 
     def start_detection(self, model_path: str = None):
         """开始检测"""

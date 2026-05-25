@@ -247,6 +247,17 @@
                   <el-option label="最后一次" value="last" />
                 </el-select>
               </div>
+              <!-- v3.9.x D 方案: PT 计算口径 (跨度 / 累计可见时长) -->
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">PT 计算口径</span>
+                  <span class="text-[10px] text-gray-500">跨度=首次出现到消失之间; 累计可见=每帧"标签在画面里"时长之和</span>
+                </div>
+                <el-select v-model="store.display.monitor.ptCalcMode" size="small" style="width: 9rem" @change="saveDisplaySettings">
+                  <el-option label="跨度（默认）" value="span" />
+                  <el-option label="累计可见时长" value="visible" />
+                </el-select>
+              </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="flex flex-col">
                   <span class="text-gray-300">CT 显示口径</span>
@@ -257,6 +268,28 @@
                   <el-option label="最近一轮" value="last" />
                   <el-option label="当前周期内" value="current" />
                 </el-select>
+              </div>
+              <!-- v3.9.x A 方案: 结算后强制保留显示 (默认关) -->
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">结算后强制保留显示</span>
+                  <span class="text-[10px] text-gray-500">周期结算后保留 OK + PT 数字, 多停留 N 秒再切下一周期</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <el-switch v-model="store.display.monitor.resultHoldEnabled" @change="saveDisplaySettings" />
+                  <el-input-number
+                    v-model="store.display.monitor.resultHoldSeconds"
+                    size="small"
+                    :min="0"
+                    :max="10"
+                    :step="0.1"
+                    :precision="1"
+                    style="width: 7rem"
+                    :disabled="!store.display.monitor.resultHoldEnabled"
+                    @change="saveDisplaySettings"
+                  />
+                  <span class="text-xs text-gray-500">秒</span>
+                </div>
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <span class="text-gray-300">NG步骤TOP3</span>
@@ -271,6 +304,82 @@
               </div>
             </div>
           </el-card>
+
+          <!-- v3.9.x: 启动动画手势相机 (打包安装版的 Cyber Splash 用) -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-cyan-400"><VideoCamera /></el-icon>
+                <span class="font-bold text-white">启动动画手势相机</span>
+                <el-tag size="small" type="info">仅打包桌面版生效</el-tag>
+              </div>
+            </template>
+            <div class="mb-3 text-xs text-gray-500">
+              客户端启动时的赛博粒子球动画通过摄像头识别"握拳"手势进入主界面。<br>
+              工厂场景下若有 Todesk / 向日葵等远程虚拟相机，老逻辑可能误选；这里指定一台真实摄像头可避免此类问题。<br>
+              本设置仅影响打包安装后的启动动画，不影响检测中心的视频源。
+            </div>
+            <div class="space-y-2">
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">启用模式</span>
+                  <span class="text-[10px] text-gray-500">自动=工位 1 已绑 USB 就用它，否则系统默认；指定=锁定一台；关闭=直接自动播放，不开摄像头</span>
+                </div>
+                <el-select v-model="splashCamera.camera_mode" size="small" style="width: 9rem" @change="onSplashModeChange">
+                  <el-option label="自动" value="auto" />
+                  <el-option label="指定相机" value="specific" />
+                  <el-option label="关闭手势" value="disabled" />
+                </el-select>
+              </div>
+              <div v-if="splashCamera.camera_mode === 'specific'" class="flex flex-col gap-2 p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-gray-300 whitespace-nowrap">指定的相机</span>
+                  <span class="text-xs text-gray-400 truncate flex-1 text-right" :title="splashCamera.device_label || splashCamera.device_id">
+                    {{ splashCamera.device_label || (splashCamera.device_id ? '已锁定 (无名称)' : '未选择') }}
+                  </span>
+                </div>
+                <div class="flex items-center justify-end gap-2">
+                  <el-button size="small" :loading="splashCameraScanning" @click="enumerateSplashCameras">
+                    扫描可用相机
+                  </el-button>
+                  <el-button size="small" type="primary" :disabled="!splashCameraAvailable.length" @click="openSplashCameraDialog">
+                    选择...
+                  </el-button>
+                </div>
+                <div class="text-[10px] text-gray-500">
+                  浏览器要求拿到摄像头授权后才能列出名称；首次扫描会弹一次系统的相机权限申请。
+                </div>
+              </div>
+            </div>
+          </el-card>
+
+          <!-- 启动动画相机选择对话框 -->
+          <el-dialog v-model="splashCameraDialogOpen" title="选择启动动画使用的相机" width="36rem" align-center>
+            <div class="space-y-2 max-h-96 overflow-y-auto">
+              <div
+                v-for="cam in splashCameraAvailable"
+                :key="cam.deviceId"
+                class="flex items-center justify-between p-3 bg-slate-900 rounded border cursor-pointer hover:border-cyan-600"
+                :class="splashCameraDialogPick === cam.deviceId ? 'border-cyan-500' : 'border-slate-800'"
+                @click="splashCameraDialogPick = cam.deviceId"
+              >
+                <div class="flex flex-col flex-1 min-w-0">
+                  <span class="text-gray-200 truncate">{{ cam.label || '未知相机' }}</span>
+                  <span class="text-[10px] text-gray-500 truncate">{{ cam.deviceId.slice(0, 24) }}...</span>
+                </div>
+                <el-icon v-if="splashCameraDialogPick === cam.deviceId" class="text-cyan-400 ml-2"><Aim /></el-icon>
+              </div>
+              <div v-if="!splashCameraAvailable.length" class="p-4 text-center text-gray-500 text-sm">
+                未扫到任何摄像头。请先点"扫描可用相机"并允许浏览器访问。
+              </div>
+            </div>
+            <template #footer>
+              <el-button @click="splashCameraDialogOpen = false">取消</el-button>
+              <el-button type="primary" :disabled="!splashCameraDialogPick" @click="confirmSplashCameraPick">
+                确定使用此相机
+              </el-button>
+            </template>
+          </el-dialog>
 
           <!-- 默认计数器显示设置 -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
@@ -1909,6 +2018,99 @@ async function saveTransformConfig() {
   }
 }
 
+// ========== v3.9.x: 启动动画手势相机配置 ==========
+// 配置不放 systemStore (localStorage) 而是落盘 workstation_config.json,
+// 因为 splash 比主前端先加载, 只能跨进程读 JSON, 拿不到 localStorage。
+// 详见 backend/api/channel_manager.py:get_splash_config 注释。
+const splashCamera = reactive({
+  camera_mode: 'auto',     // 'auto' | 'specific' | 'disabled'
+  device_id: '',
+  device_label: '',
+});
+const splashCameraAvailable = ref([]);     // [{deviceId, label}]
+const splashCameraScanning = ref(false);
+const splashCameraDialogOpen = ref(false);
+const splashCameraDialogPick = ref('');
+
+async function loadSplashCameraConfig() {
+  try {
+    const res = await api.get('/workstations/splash-camera');
+    splashCamera.camera_mode = res?.data?.camera_mode || 'auto';
+    splashCamera.device_id = res?.data?.device_id || '';
+    splashCamera.device_label = res?.data?.device_label || '';
+  } catch (e) {
+    console.warn('加载启动动画相机配置失败:', e?.message);
+  }
+}
+
+async function saveSplashCameraConfig() {
+  try {
+    await api.put('/workstations/splash-camera', {
+      camera_mode: splashCamera.camera_mode,
+      device_id: splashCamera.device_id || '',
+      device_label: splashCamera.device_label || '',
+    });
+  } catch (e) {
+    ElMessage.error('保存启动动画相机配置失败: ' + (e?.response?.data?.detail || e?.message || ''));
+  }
+}
+
+const onSplashModeChange = () => {
+  // 切到 auto / disabled 时清掉锁定的 device_id, 否则用户切回 specific 会看到老选择残留
+  if (splashCamera.camera_mode !== 'specific') {
+    splashCamera.device_id = '';
+    splashCamera.device_label = '';
+  }
+  saveSplashCameraConfig();
+};
+
+async function enumerateSplashCameras() {
+  splashCameraScanning.value = true;
+  try {
+    // 浏览器隐私设计: 不先 getUserMedia 拿过授权, enumerateDevices 返回的 label 是空。
+    // 这里申请一次最低分辨率的视频流, 拿到授权后立即关掉, 仅为获取设备名称。
+    let tempStream = null;
+    try {
+      tempStream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+    } catch (permErr) {
+      ElMessage.warning('需要授权摄像头才能列出名称: ' + (permErr?.message || ''));
+      // 没授权也试着 enumerate, 至少能拿到 deviceId
+    }
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    splashCameraAvailable.value = devices
+      .filter(d => d.kind === 'videoinput')
+      .map(d => ({ deviceId: d.deviceId, label: d.label }));
+    if (tempStream) tempStream.getTracks().forEach(t => t.stop());
+    if (!splashCameraAvailable.value.length) {
+      ElMessage.info('未扫到摄像头');
+    } else {
+      ElMessage.success(`扫到 ${splashCameraAvailable.value.length} 台摄像头`);
+    }
+  } catch (e) {
+    ElMessage.error('扫描摄像头失败: ' + (e?.message || ''));
+  } finally {
+    splashCameraScanning.value = false;
+  }
+}
+
+const openSplashCameraDialog = () => {
+  splashCameraDialogPick.value = splashCamera.device_id || '';
+  splashCameraDialogOpen.value = true;
+};
+
+const confirmSplashCameraPick = () => {
+  const pick = splashCameraAvailable.value.find(c => c.deviceId === splashCameraDialogPick.value);
+  if (!pick) {
+    ElMessage.warning('请先选择一台摄像头');
+    return;
+  }
+  splashCamera.device_id = pick.deviceId;
+  splashCamera.device_label = pick.label || '';
+  splashCameraDialogOpen.value = false;
+  saveSplashCameraConfig();
+  ElMessage.success(`已锁定: ${pick.label || pick.deviceId.slice(0, 16) + '...'}`);
+};
+
 onMounted(async () => {
   store.loadSettings();
   loadPerformanceSettings();
@@ -1919,6 +2121,7 @@ onMounted(async () => {
   loadPlugins();
   loadTransformTotalChannels();
   loadTransformConfig();
+  loadSplashCameraConfig();
   
   // 从当前项目加载检测配置（包括自定义提示框）
   // v3.8.x: 不再守 `if (res.data?.detection_config)` — DB null 也要进 store,
