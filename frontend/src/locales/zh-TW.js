@@ -15,7 +15,12 @@ export default {
     cancel: '取消',
     exitConfirm: '確定要退出系統嗎?',
     exitTitle: '退出提示',
-    safeExit: '已安全退出'
+    safeExit: '已安全退出',
+    notLoggedIn: '未登入',
+    login: '登入',
+    logoutSuccess: '已登出帳號',
+    logoutFailed: '登出失敗',
+    detectingNoLogout: '檢測運行中，請先停止檢測'
   },
   menu: {
     monitor: '實時監控',

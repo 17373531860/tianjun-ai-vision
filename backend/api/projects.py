@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Optional
+from backend.core.auth_deps import require_perm
 from backend.db.database import get_db
 from backend.models.models import Project, Model
 from backend.schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectListResponse
@@ -92,7 +93,8 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
         model_labels=model_labels
     )
 
-@router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED,
+              dependencies=[Depends(require_perm("project.create"))])
 def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
     """创建新项目"""
     existing = db.query(Project).filter(Project.name == project.name).first()
@@ -136,7 +138,8 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
         updated_at=db_project.updated_at
     )
 
-@router.put("/{project_id}", response_model=ProjectResponse)
+@router.put("/{project_id}", response_model=ProjectResponse,
+             dependencies=[Depends(require_perm("project.edit"))])
 def update_project(project_id: int, project: ProjectUpdate, db: Session = Depends(get_db)):
     """更新项目"""
     db_project = db.query(Project).filter(Project.id == project_id).first()
@@ -200,7 +203,8 @@ def update_project(project_id: int, project: ProjectUpdate, db: Session = Depend
         model_labels=model_labels
     )
 
-@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[Depends(require_perm("project.delete"))])
 def delete_project(project_id: int, db: Session = Depends(get_db)):
     """删除项目"""
     db_project = db.query(Project).filter(Project.id == project_id).first()
@@ -318,7 +322,8 @@ def _reload_model_for_active_project(db: Session, project: Project) -> None:
         print(f"[激活项目] 多通道独立实例加载结果: channels={remaining}, all_ok={all_ok}")
 
 
-@router.post("/{project_id}/activate", response_model=ProjectResponse)
+@router.post("/{project_id}/activate", response_model=ProjectResponse,
+              dependencies=[Depends(require_perm("project.activate"))])
 def activate_project(project_id: int, db: Session = Depends(get_db)):
     """激活项目（设为当前运行项目）"""
     # 先取消所有项目的激活状态

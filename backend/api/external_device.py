@@ -4,10 +4,11 @@
 设备 CRUD、连接测试、状态查询、数据日志、条码注入。
 """
 import logging
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 
+from backend.core.auth_deps import require_perm
 from backend.db.database import SessionLocal
 from backend.models.mes_models import ExternalDevice, ExternalDeviceLog
 from backend.services.external_device import get_external_device_service
@@ -137,7 +138,8 @@ def _sanitize_device_payload(d: dict) -> dict:
     return d
 
 
-@router.post("/")
+@router.post("/",
+              dependencies=[Depends(require_perm("mes.external.edit"))])
 def create_device(body: DeviceCreate):
     db = SessionLocal()
     try:
@@ -175,7 +177,8 @@ def get_status():
     return svc.get_all_status()
 
 
-@router.post("/test")
+@router.post("/test",
+              dependencies=[Depends(require_perm("mes.external.edit"))])
 def test_connection(body: TestRequest):
     svc = get_external_device_service()
     return svc.test_connection(
@@ -188,7 +191,8 @@ def test_connection(body: TestRequest):
     )
 
 
-@router.post("/barcode")
+@router.post("/barcode",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def inject_barcode(body: BarcodeInject):
     """为没有自带扫码器的设备注入条码"""
     svc = get_external_device_service()
@@ -196,7 +200,8 @@ def inject_barcode(body: BarcodeInject):
     return {"success": True, "device_id": body.device_id, "barcode": body.barcode}
 
 
-@router.post("/simulate")
+@router.post("/simulate",
+              dependencies=[Depends(require_perm("mes.external.edit"))])
 def simulate_data(body: SimulateData):
     """调试用：模拟外部设备原始数据，不需要真实称重器/传感器硬件。"""
     raw = (body.raw_data or "").strip()
@@ -244,7 +249,8 @@ def list_logs(
         db.close()
 
 
-@router.delete("/logs")
+@router.delete("/logs",
+                dependencies=[Depends(require_perm("mes.external.edit"))])
 def clear_logs(device_id: Optional[int] = None):
     """清空外部设备数据日志
 
@@ -306,7 +312,8 @@ def clear_logs(device_id: Optional[int] = None):
 # 例如 DELETE /logs 会被 DELETE /{device_id} 误吞（device_id="logs" 解析失败 422）
 # ============================================================
 
-@router.put("/{device_id}")
+@router.put("/{device_id}",
+             dependencies=[Depends(require_perm("mes.external.edit"))])
 def update_device(device_id: int, body: DeviceUpdate):
     db = SessionLocal()
     try:
@@ -346,7 +353,8 @@ def update_device(device_id: int, body: DeviceUpdate):
     return payload
 
 
-@router.delete("/{device_id}")
+@router.delete("/{device_id}",
+                dependencies=[Depends(require_perm("mes.external.edit"))])
 def delete_device(device_id: int):
     db = SessionLocal()
     try:

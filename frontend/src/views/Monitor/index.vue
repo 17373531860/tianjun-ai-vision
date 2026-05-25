@@ -821,23 +821,6 @@
         </div>
       </div>
 
-      <!-- 操作员选择 + MES 信息条 -->
-      <div class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-4 text-sm">
-        <div class="flex items-center gap-2">
-          <span class="text-cyan-400 font-bold text-xs">操作员:</span>
-          <el-select
-            v-model="currentOperatorId"
-            placeholder="选择操作员"
-            size="small"
-            class="w-32"
-            clearable
-            @change="onOperatorChange"
-          >
-            <el-option v-for="op in operatorList" :key="op.id" :label="`${op.name} (${op.employee_no})`" :value="op.id" />
-          </el-select>
-        </div>
-      </div>
-
       <!-- MES 信息条 -->
       <div v-if="displayWorkpiece || mesData?.order || mesData?.warn_no_barcode || workpieceOverride === null || isScanDisabledFor(selectedChannel)" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
         <div v-if="!isScanDisabledFor(selectedChannel) && displayWorkpiece" class="flex items-center gap-2">
@@ -1276,7 +1259,6 @@ import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/m
 import { getProjectDetail } from '@/api/project';
 import api, { getBackendHost } from '@/api/index';
 import { getExtraFieldsSchema, setExtraFields } from '@/api/gateway';
-import { getOperators, setCurrentOperator, getCurrentOperator } from '@/api/operators';
 import PerItemPanel from './PerItemPanel.vue';
 
 const projectStore = useProjectStore();
@@ -2591,30 +2573,6 @@ watch(
     }
   }
 );
-
-// 操作员选择
-const operatorList = ref([]);
-const currentOperatorId = ref(null);
-async function loadOperatorList() {
-  try {
-    const { data } = await getOperators({ active: true });
-    operatorList.value = data || [];
-    const { data: cur } = await getCurrentOperator(selectedChannel.value);
-    if (cur?.operator) currentOperatorId.value = cur.operator.id;
-  } catch { /* ignore */ }
-}
-async function onOperatorChange(opId) {
-  try {
-    await setCurrentOperator({ channel_id: selectedChannel.value, operator_id: opId || null });
-    if (opId) {
-      const op = operatorList.value.find(o => o.id === opId);
-      if (op) {
-        systemStore.display.inspectorName = op.name;
-        localStorage.setItem('display_settings', JSON.stringify(systemStore.display));
-      }
-    }
-  } catch { /* ignore */ }
-}
 
 // 外部 MES 额外字段
 const extraFieldsSchema = ref([]);
@@ -5027,7 +4985,6 @@ onMounted(() => {
   systemStore.loadSettings();
   fetchChannelCount();
   loadExtraFieldsSchema();
-  loadOperatorList();
   scannerDisableStore.loadStatus();
 
   _nowTickInterval = setInterval(() => {

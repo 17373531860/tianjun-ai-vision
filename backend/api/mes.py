@@ -3,11 +3,13 @@ MES 系统 REST API
 
 工单管理、工件追溯、缺陷记录、质量统计的完整 CRUD 端点。
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
+from backend.core.api_key import require_api_key
+from backend.core.auth_deps import require_perm
 from backend.db.database import SessionLocal
 from backend.services.work_order import WorkOrderService
 from backend.services.workpiece import WorkpieceService
@@ -232,7 +234,8 @@ def list_orders(
         db.close()
 
 
-@router.post("/orders")
+@router.post("/orders",
+              dependencies=[Depends(require_perm("mes.order.edit"))])
 def create_order(body: OrderCreate):
     db = SessionLocal()
     try:
@@ -246,7 +249,9 @@ def create_order(body: OrderCreate):
         db.close()
 
 
-@router.post("/orders/receive")
+# M2M: 外部 MES 系统推送工单进来 — auth=off 放行, auth=on 必须 X-API-Key scope=mes.receive
+@router.post("/orders/receive",
+              dependencies=[Depends(require_api_key("mes.receive"))])
 def receive_external_order(body: ExternalOrderPush):
     """接收客户 MES 推送的工单 (upsert: 按 order_no 新建或更新)"""
     db = SessionLocal()
@@ -295,7 +300,8 @@ def get_order(order_id: int):
         db.close()
 
 
-@router.put("/orders/{order_id}")
+@router.put("/orders/{order_id}",
+             dependencies=[Depends(require_perm("mes.order.edit"))])
 def update_order(order_id: int, body: OrderUpdate):
     db = SessionLocal()
     try:
@@ -312,7 +318,8 @@ def update_order(order_id: int, body: OrderUpdate):
         db.close()
 
 
-@router.post("/orders/{order_id}/status")
+@router.post("/orders/{order_id}/status",
+              dependencies=[Depends(require_perm("mes.order.edit"))])
 def change_order_status(order_id: int, body: StatusChange):
     db = SessionLocal()
     try:
@@ -328,7 +335,8 @@ def change_order_status(order_id: int, body: StatusChange):
         db.close()
 
 
-@router.delete("/orders/{order_id}")
+@router.delete("/orders/{order_id}",
+                dependencies=[Depends(require_perm("mes.order.edit"))])
 def delete_order(order_id: int):
     db = SessionLocal()
     try:
@@ -353,7 +361,8 @@ def get_order_summary(order_id: int):
         db.close()
 
 
-@router.put("/orders/{order_id}/extra-data")
+@router.put("/orders/{order_id}/extra-data",
+             dependencies=[Depends(require_perm("mes.order.edit"))])
 def update_order_extra_data(order_id: int, body: dict):
     """单独更新工单的 extra_data (合并模式，不覆盖已有字段)"""
     db = SessionLocal()
@@ -377,7 +386,8 @@ def update_order_extra_data(order_id: int, body: dict):
 
 # ---- 批次 ----
 
-@router.post("/orders/{order_id}/batches")
+@router.post("/orders/{order_id}/batches",
+              dependencies=[Depends(require_perm("mes.order.edit"))])
 def create_batch(order_id: int, body: BatchCreate):
     db = SessionLocal()
     try:
@@ -440,7 +450,8 @@ def list_workpieces(
         db.close()
 
 
-@router.post("/workpieces")
+@router.post("/workpieces",
+              dependencies=[Depends(require_perm("mes.workpiece.edit"))])
 def register_workpiece(body: WorkpieceRegister):
     db = SessionLocal()
     try:
@@ -483,7 +494,8 @@ def get_workpiece_trace(workpiece_id: int):
         db.close()
 
 
-@router.post("/workpieces/{workpiece_id}/action")
+@router.post("/workpieces/{workpiece_id}/action",
+              dependencies=[Depends(require_perm("mes.workpiece.edit"))])
 def workpiece_action(workpiece_id: int, body: WorkpieceAction):
     db = SessionLocal()
     try:
@@ -518,7 +530,8 @@ def search_workpieces(keyword: str, project_id: Optional[int] = None,
         db.close()
 
 
-@router.delete("/workpieces/{workpiece_id}")
+@router.delete("/workpieces/{workpiece_id}",
+                dependencies=[Depends(require_perm("mes.workpiece.edit"))])
 def delete_workpiece(workpiece_id: int):
     """删除工件 (级联清 WorkpieceInspection 和 DefectRecord). v2.7.17 新增."""
     db = SessionLocal()
@@ -566,7 +579,8 @@ def list_defects(
         db.close()
 
 
-@router.post("/defects")
+@router.post("/defects",
+              dependencies=[Depends(require_perm("mes.defect.edit"))])
 def create_defect(body: DefectManual):
     db = SessionLocal()
     try:
@@ -591,7 +605,8 @@ def get_pareto(project_id: Optional[int] = None,
         db.close()
 
 
-@router.delete("/defects/{defect_id}")
+@router.delete("/defects/{defect_id}",
+                dependencies=[Depends(require_perm("mes.defect.edit"))])
 def delete_defect(defect_id: int):
     """删除单条缺陷记录. v2.7.17 新增, 配合前端"缺陷分析"列表的删除键."""
     db = SessionLocal()
@@ -626,7 +641,8 @@ def list_defect_codes(project_id: Optional[int] = None):
         db.close()
 
 
-@router.post("/defect-codes")
+@router.post("/defect-codes",
+              dependencies=[Depends(require_perm("mes.defect.edit"))])
 def create_defect_code(body: DefectCodeCreate):
     db = SessionLocal()
     try:
@@ -640,7 +656,8 @@ def create_defect_code(body: DefectCodeCreate):
         db.close()
 
 
-@router.put("/defect-codes/{code_id}")
+@router.put("/defect-codes/{code_id}",
+             dependencies=[Depends(require_perm("mes.defect.edit"))])
 def update_defect_code(code_id: int, body: DefectCodeUpdate):
     db = SessionLocal()
     try:
@@ -657,7 +674,8 @@ def update_defect_code(code_id: int, body: DefectCodeUpdate):
         db.close()
 
 
-@router.delete("/defect-codes/{code_id}")
+@router.delete("/defect-codes/{code_id}",
+                dependencies=[Depends(require_perm("mes.defect.edit"))])
 def delete_defect_code(code_id: int):
     db = SessionLocal()
     try:

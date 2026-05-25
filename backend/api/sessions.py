@@ -17,11 +17,14 @@ import subprocess
 import tempfile
 import shutil
 
+from backend.core.auth_deps import require_perm
 from backend.db.database import get_db
 from backend.models.models import (
-    DetectionSession, DetectionCycle, StepRecord, 
-    VideoClip, DataExportSetting, Project, SystemConfig, Operator
+    DetectionSession, DetectionCycle, StepRecord,
+    VideoClip, DataExportSetting, Project, SystemConfig,
 )
+# v3.10+ 阶段 4: operator_id 列语义重定向到 user_id, 查 User 表
+from backend.models.auth_models import User
 from backend.core.config import settings
 # ========== FFmpeg 路径 (统一从 source 导入) ==========
 from backend.api.source import get_ffmpeg_path, get_cached_ffmpeg_path  # noqa: F401
@@ -353,8 +356,8 @@ def list_sessions(
         op_name = None
         op_id = getattr(session, 'operator_id', None)
         if op_id:
-            op = db.query(Operator).filter(Operator.id == op_id).first()
-            op_name = op.name if op else None
+            u = db.query(User).filter(User.id == op_id).first()
+            op_name = (u.display_name or u.username) if u else None
         result.append(SessionResponse(
             id=session.id,
             session_uuid=session.session_uuid,
@@ -546,8 +549,8 @@ def get_sessions_by_date(
         s_op_id = getattr(session, 'operator_id', None)
         s_op_name = None
         if s_op_id:
-            s_op = db.query(Operator).filter(Operator.id == s_op_id).first()
-            s_op_name = s_op.name if s_op else None
+            s_u = db.query(User).filter(User.id == s_op_id).first()
+            s_op_name = (s_u.display_name or s_u.username) if s_u else None
         session_responses.append(SessionResponse(
             id=session.id,
             session_uuid=session.session_uuid,
@@ -592,8 +595,8 @@ def get_session(session_id: int, db: Session = Depends(get_db)):
     g_op_id = getattr(session, 'operator_id', None)
     g_op_name = None
     if g_op_id:
-        g_op = db.query(Operator).filter(Operator.id == g_op_id).first()
-        g_op_name = g_op.name if g_op else None
+        g_u = db.query(User).filter(User.id == g_op_id).first()
+        g_op_name = (g_u.display_name or g_u.username) if g_u else None
     
     return SessionResponse(
         id=session.id,
@@ -658,8 +661,8 @@ def get_session_cycles(
         c_op_id = getattr(cycle, 'operator_id', None)
         c_op_name = None
         if c_op_id:
-            c_op = db.query(Operator).filter(Operator.id == c_op_id).first()
-            c_op_name = c_op.name if c_op else None
+            c_u = db.query(User).filter(User.id == c_op_id).first()
+            c_op_name = (c_u.display_name or c_u.username) if c_u else None
         items.append(CycleResponse(
             id=cycle.id,
             cycle_uuid=cycle.cycle_uuid,
@@ -756,8 +759,8 @@ def get_cycles_by_serial(
     op_ids = list({c.operator_id for c in cycles if c.operator_id})
     op_map = {}
     if op_ids:
-        for op in db.query(Operator).filter(Operator.id.in_(op_ids)).all():
-            op_map[op.id] = op.name
+        for u in db.query(User).filter(User.id.in_(op_ids)).all():
+            op_map[u.id] = u.display_name or u.username
 
     items = []
     for cycle in cycles:
@@ -807,8 +810,8 @@ def get_cycle(cycle_id: int, db: Session = Depends(get_db)):
     gc_op_id = getattr(cycle, 'operator_id', None)
     gc_op_name = None
     if gc_op_id:
-        gc_op = db.query(Operator).filter(Operator.id == gc_op_id).first()
-        gc_op_name = gc_op.name if gc_op else None
+        gc_u = db.query(User).filter(User.id == gc_op_id).first()
+        gc_op_name = (gc_u.display_name or gc_u.username) if gc_u else None
     
     return CycleResponse(
         id=cycle.id,
@@ -1002,7 +1005,8 @@ def get_export_settings(db: Session = Depends(get_db)):
     return _build_export_response(setting)
 
 
-@router.put("/export-settings", response_model=ExportSettingResponse)
+@router.put("/export-settings", response_model=ExportSettingResponse,
+             dependencies=[Depends(require_perm("data.export"))])
 def update_export_settings(req: ExportSettingUpdate, db: Session = Depends(get_db)):
     """更新导出设置"""
     setting = db.query(DataExportSetting).first()

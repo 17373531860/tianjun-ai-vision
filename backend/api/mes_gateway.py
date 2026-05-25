@@ -3,11 +3,12 @@
 
 连接管理 CRUD + 测试连接 + 手动推送 + 通讯日志查询
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
+from backend.core.auth_deps import require_perm
 from backend.db.database import SessionLocal
 from backend.models.mes_models import MESConnection, MESCommLog
 from backend.services.mes_gateway import get_mes_gateway
@@ -103,7 +104,8 @@ def list_connections():
         db.close()
 
 
-@router.post("/connections")
+@router.post("/connections",
+              dependencies=[Depends(require_perm("mes.gateway.edit"))])
 def create_connection(body: ConnectionCreate):
     db = SessionLocal()
     try:
@@ -159,7 +161,8 @@ def get_connection(conn_id: int):
         db.close()
 
 
-@router.put("/connections/{conn_id}")
+@router.put("/connections/{conn_id}",
+             dependencies=[Depends(require_perm("mes.gateway.edit"))])
 def update_connection(conn_id: int, body: ConnectionUpdate):
     db = SessionLocal()
     try:
@@ -179,7 +182,8 @@ def update_connection(conn_id: int, body: ConnectionUpdate):
         db.close()
 
 
-@router.delete("/connections/{conn_id}")
+@router.delete("/connections/{conn_id}",
+                dependencies=[Depends(require_perm("mes.gateway.edit"))])
 def delete_connection(conn_id: int):
     db = SessionLocal()
     try:
@@ -272,7 +276,8 @@ def _build_test_context_box_timeout() -> dict:
     return ctx
 
 
-@router.post("/connections/{conn_id}/test")
+@router.post("/connections/{conn_id}/test",
+              dependencies=[Depends(require_perm("mes.gateway.edit"))])
 def test_connection(conn_id: int, body: TestPayload = None):
     """发送测试数据到外部 MES, 验证连接+格式.
 
@@ -349,7 +354,8 @@ def test_connection(conn_id: int, body: TestPayload = None):
 # 手动推送
 # ============================================================
 
-@router.post("/connections/{conn_id}/push")
+@router.post("/connections/{conn_id}/push",
+              dependencies=[Depends(require_perm("mes.gateway.edit"))])
 def manual_push(conn_id: int, body: ManualPush):
     """手动推送指定 cycle/session 的数据"""
     db = SessionLocal()
@@ -377,7 +383,8 @@ def manual_push(conn_id: int, body: ManualPush):
 # 额外字段 (Monitor 页实时输入)
 # ============================================================
 
-@router.post("/extra-fields")
+@router.post("/extra-fields",
+              dependencies=[Depends(require_perm("mes.gateway.edit"))])
 def set_extra_fields(body: ExtraFieldsUpdate):
     """设置当前工位的额外字段值"""
     gw = get_mes_gateway()

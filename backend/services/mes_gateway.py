@@ -272,7 +272,9 @@ class MESGateway:
             if proj:
                 context["project"]["name"] = proj.name
 
-        from backend.models.models import DetectionCycle, StepRecord, Operator
+        from backend.models.models import DetectionCycle, StepRecord
+        # v3.10+ 阶段 4: cycle.operator_id 语义改为 user_id, 查 User 表
+        from backend.models.auth_models import User
         cycle = db.query(DetectionCycle).filter(DetectionCycle.id == cycle_id).first()
         if cycle:
             # DetectionCycle ORM 模型本身没有 completed_steps/total_steps 字段，
@@ -286,11 +288,17 @@ class MESGateway:
             context["cycle"]["total_steps"] = total_steps
             context["cycle"]["start_time"] = cycle.start_time.isoformat() if cycle.start_time else None
             context["cycle"]["end_time"] = cycle.end_time.isoformat() if cycle.end_time else None
-            op_id = getattr(cycle, 'operator_id', None)
-            if op_id:
-                op = db.query(Operator).filter(Operator.id == op_id).first()
-                if op:
-                    context["operator"] = {"name": op.name, "employee_no": op.employee_no, "id": op.id}
+            # operator_id 列保留字段名 (SQLite 无法 rename), 值改为 user.id
+            # MES payload key "operator" 字段名稳定: name / employee_no / id (向后兼容客户模板)
+            u_id = getattr(cycle, 'operator_id', None)
+            if u_id:
+                u = db.query(User).filter(User.id == u_id).first()
+                if u:
+                    context["operator"] = {
+                        "name": u.display_name or u.username,
+                        "employee_no": u.username,
+                        "id": u.id,
+                    }
 
         steps = db.query(StepRecord).filter(StepRecord.cycle_id == cycle_id).order_by(StepRecord.id).all()
         for s in steps:

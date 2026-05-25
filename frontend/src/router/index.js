@@ -8,6 +8,12 @@ const routes = [
     component: () => import('@/views/Activation/index.vue'),
   },
   {
+    // v3.10.0 用户系统: 独立登录页, 不受 License 守卫干扰 (License 先过, 才能进登录页)
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/Login/index.vue'),
+  },
+  {
     path: '/',
     component: Layout,
     redirect: '/monitor',
@@ -63,12 +69,32 @@ const router = createRouter({
 
 let licenseChecked = false;
 let lastRouteRestored = false;
+let authInitialized = false;
 
 const LAST_ROUTE_KEY = 'tianjun:lastRoute';
-// 允许被记忆的路由 (Activation 不在内, 不能恢复到激活页)
+// 允许被记忆的路由 (Activation / Login 不在内, 不能恢复到这两个页)
 const REMEMBERABLE_NAMES = new Set([
   'Monitor', 'Project', 'Model', 'Data', 'Source', 'Settings', 'Alarm', 'MES'
 ]);
+
+/**
+ * v3.10.0 用户系统: 在路由守卫中确保 useAuthStore 已 init.
+ *
+ * - 失败时仅打日志, 不阻断导航 (后端可能正在启动)
+ * - 多次调用幂等 (store 内部 initialized flag 自己挡住)
+ * - import 用 dynamic 避免与 main.js 启动时序冲突
+ */
+async function ensureAuthInitialized() {
+  if (authInitialized) return;
+  try {
+    const { useAuthStore } = await import('@/store/useAuthStore');
+    const authStore = useAuthStore();
+    await authStore.init();
+    authInitialized = true;
+  } catch (e) {
+    console.warn('[⬛ Router] AuthStore 初始化失败 (不阻断导航):', e?.message || e);
+  }
+}
 
 router.beforeEach(async (to, from) => {
   console.log(`[⬛ Router] 导航: ${from.fullPath} → ${to.fullPath} (name: ${to.name})`);
@@ -102,14 +128,32 @@ router.beforeEach(async (to, from) => {
     }
   }
 
-  if (licenseChecked || to.name === 'Activation') {
-    console.log(`[⬛ Router] 直接放行 (licenseChecked=${licenseChecked}, target=${to.name})`);
+  // License 已通过 / 目标本身就是激活页 / 目标是登录页 → 跳过 License 校验
+  // (Login 是登录前可达页, 不能要求 License 已过)
+  if (licenseChecked || to.name === 'Activation' || to.name === 'Login') {
+    console.log(`[⬛ Router] 跳过 License (licenseChecked=${licenseChecked}, target=${to.name})`);
+    // 业务页放行前先同步用户系统状态 (登录/激活页内部自己 init, 这里不重复)
+    if (to.name !== 'Activation' && to.name !== 'Login') {
+      await ensureAuthInitialized();
+      // v3.10+ 强制登录守卫: 鉴权启用 + 匿名兜底关 + 当前匿名 → 跳登录页
+      try {
+        const { useAuthStore } = await import('@/store/useAuthStore');
+        const authStore = useAuthStore();
+        if (authStore.requiresLogin()) {
+          console.log('[⬛ Router] 匿名兜底已关, 强制跳登录页');
+          return { name: 'Login', query: { redirect: to.fullPath } };
+        }
+      } catch (e) {
+        console.warn('[⬛ Router] 强制登录守卫失败:', e?.message || e);
+      }
+    }
     return;
   }
 
   if (!window.electronAPI?.isElectron) {
     console.log('[⬛ Router] 非Electron环境，跳过授权检查');
     licenseChecked = true;
+    await ensureAuthInitialized();
     return;
   }
 
@@ -120,9 +164,11 @@ router.beforeEach(async (to, from) => {
     console.log(`[⬛ Router] 授权检查完成 (${Date.now() - t0}ms): valid=${status.valid}`);
     licenseChecked = true;
     if (!status.valid) return { name: 'Activation' };
+    // License 通过 → 顺便初始化用户系统状态
+    await ensureAuthInitialized();
   } catch (e) {
     console.error('[⬛ Router] 授权检查异常:', e);
-    // 授权状态未知时不放行业务页，防止“异常即放行”
+    // 授权状态未知时不放行业务页，防止"异常即放行"
     licenseChecked = false;
     return { name: 'Activation' };
   }

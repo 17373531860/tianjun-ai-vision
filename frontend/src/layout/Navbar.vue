@@ -53,15 +53,52 @@
 
     <!-- Right: Status & System -->
     <div class="flex items-center gap-6 flex-shrink-0">
-      <!-- 作业员 & 设备编号 -->
+      <!-- v3.10+ 阶段 6: 作业员/身份 + 设备编号 + 登录按钮 -->
+      <!-- 作业员/身份块内容自动随鉴权状态切换:
+           - 鉴权关闭        → 显示 inspectorName 字符串 (旧行为)
+           - 鉴权启用+已登录  → 显示当前登录 display_name + 角色徽章
+           - 鉴权启用+未登录  → 显示"操作员（未登录）" -->
       <div class="flex items-center gap-4 text-sm">
-        <div v-if="store.display.navbar.inspector !== false && store.display.inspectorName" class="flex items-center gap-1.5 bg-slate-800/60 px-2.5 py-1 rounded border border-slate-700">
+        <div v-if="effectiveInspectorVisible"
+             class="flex items-center gap-1.5 bg-slate-800/60 px-2.5 py-1 rounded border border-slate-700"
+             data-testid="navbar-identity">
+          <el-icon v-if="authStore.authEnabled" class="text-gray-400 text-[0.875rem]"><UserFilled /></el-icon>
           <span class="text-gray-400 text-xs">作业员</span>
-          <span class="text-cyan-300 font-medium">{{ store.display.inspectorName }}</span>
+          <span :class="effectiveInspectorClass" data-testid="navbar-identity-name">
+            {{ effectiveInspectorName }}
+          </span>
+          <el-tag v-if="effectiveRoleBadge"
+                  :type="effectiveRoleType"
+                  size="small"
+                  effect="dark"
+                  class="!ml-1 !py-0 !h-4 !text-[0.625rem] !leading-3 !px-1"
+                  data-testid="navbar-role-badge">
+            {{ effectiveRoleBadge }}
+          </el-tag>
         </div>
-        <div v-if="store.display.navbar.deviceId !== false && store.display.deviceNumber" class="flex items-center gap-1.5 bg-slate-800/60 px-2.5 py-1 rounded border border-slate-700">
+
+        <div v-if="store.display.navbar.deviceId !== false && store.display.deviceNumber"
+             class="flex items-center gap-1.5 bg-slate-800/60 px-2.5 py-1 rounded border border-slate-700">
           <span class="text-gray-400 text-xs">设备</span>
           <span class="text-white font-mono">{{ store.display.deviceNumber }}</span>
+        </div>
+
+        <!-- 登录/登出按钮 (仅鉴权启用时, 独立按钮位避免内容冗余) -->
+        <div v-if="authStore.authEnabled" class="flex items-center">
+          <button v-if="authStore.isLoggedIn"
+                  class="text-xs bg-slate-700 hover:bg-rose-700 text-gray-300 hover:text-white px-2 py-1 rounded cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="store.isDetecting"
+                  @click="handleAccountLogout"
+                  data-testid="navbar-logout-btn"
+                  :title="store.isDetecting ? '检测运行中, 不可登出' : '登出账号'">
+            {{ $t('navbar.logout') }}
+          </button>
+          <button v-else
+                  class="text-xs bg-cyan-700 hover:bg-cyan-600 text-white px-2 py-1 rounded cursor-pointer transition-colors"
+                  @click="handleAccountLogin"
+                  data-testid="navbar-login-btn">
+            {{ $t('navbar.login') }}
+          </button>
         </div>
       </div>
 
@@ -117,6 +154,7 @@
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { useRouter } from 'vue-router';
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
 import { Setting, UserFilled, Check } from '@element-plus/icons-vue';
@@ -127,6 +165,7 @@ import { getProjects, getProjectDetail, activateProject } from '@/api/project';
 const store = useSystemStore();
 const projectStore = useProjectStore();
 const pluginTheme = usePluginThemeStore();
+const authStore = useAuthStore();
 const router = useRouter();
 const { locale, t } = useI18n();
 
@@ -455,6 +494,29 @@ const setLang = (lang, msg) => {
   ElMessage.success(msg);
 };
 
+// v3.10.0 用户系统: 顶栏账号登录/登出 (区别于"退出软件"的 handleCommand-logout)
+const handleAccountLogin = () => {
+  if (store.isDetecting) {
+    ElMessage.warning(t('navbar.detectingNoLogout'));
+    return;
+  }
+  // 把当前路由作为 redirect 带上, 登录后跳回
+  router.push({ name: 'Login', query: { redirect: router.currentRoute.value.fullPath } });
+};
+
+const handleAccountLogout = async () => {
+  if (store.isDetecting) {
+    ElMessage.warning(t('navbar.detectingNoLogout'));
+    return;
+  }
+  try {
+    await authStore.logout();
+    ElMessage.success(t('navbar.logoutSuccess'));
+  } catch (e) {
+    ElMessage.error(e?.message || t('navbar.logoutFailed'));
+  }
+};
+
 const modeLabel = computed(() => {
   const mode = projectStore.currentProject?.logic_mode;
   const map = {
@@ -463,6 +525,56 @@ const modeLabel = computed(() => {
     'custom': t('mode.custom')
   };
   return map[mode] || t('mode.undefined');
+});
+
+// ============================================================
+// v3.10+ 阶段 6: 顶栏"作业员"标签内容随鉴权状态切换
+// ============================================================
+
+// 是否显示作业员/身份块:
+// - 鉴权关闭: 看 inspectorName 是否非空 (旧行为)
+// - 鉴权启用: 永远显示 (无论是否登录, 总要展示当前身份)
+const effectiveInspectorVisible = computed(() => {
+  if (store.display?.navbar?.inspector === false) return false;
+  if (!authStore.authEnabled) return !!store.display.inspectorName;
+  return true;
+});
+
+// 显示的名字:
+// - 鉴权关闭        → inspectorName (旧字符串)
+// - 鉴权启用+已登录  → display_name (或 username 兜底)
+// - 鉴权启用+未登录  → "操作员（未登录）"
+const effectiveInspectorName = computed(() => {
+  if (!authStore.authEnabled) return store.display.inspectorName || '';
+  if (authStore.isLoggedIn) {
+    return authStore.currentUser.display_name || authStore.currentUser.username;
+  }
+  return '操作员（未登录）';
+});
+
+// 名字文本颜色 (区分 3 种状态视觉)
+const effectiveInspectorClass = computed(() => {
+  if (!authStore.authEnabled) return 'text-cyan-300 font-medium';
+  if (authStore.isLoggedIn) return 'text-emerald-300 font-medium';
+  return 'text-amber-300 font-medium';
+});
+
+// 角色徽章 (仅鉴权启用且已登录时显示)
+const effectiveRoleBadge = computed(() => {
+  if (!authStore.authEnabled || !authStore.isLoggedIn) return '';
+  const roles = authStore.currentUser?.roles || [];
+  if (roles.includes('admin')) return '管理员';
+  if (roles.includes('engineer')) return '工程师';
+  if (roles.includes('operator')) return '操作员';
+  return roles[0] || '';
+});
+
+// 角色徽章配色: admin=红 / engineer=橙 / operator=灰
+const effectiveRoleType = computed(() => {
+  const roles = authStore.currentUser?.roles || [];
+  if (roles.includes('admin')) return 'danger';
+  if (roles.includes('engineer')) return 'warning';
+  return 'info';
 });
 
 // Timer Logic

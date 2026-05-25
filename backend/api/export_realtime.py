@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from backend.core.auth_deps import require_perm
 from backend.db.database import get_db
 from backend.models.export_models import (
     ExportRealtimeRule, ExportRunLog, ExportTemplate,
@@ -208,7 +209,8 @@ def _validate_rule(payload: _RuleBase) -> None:
             f"input_file_mode={payload.input_file_mode} 时 input_dir 必填")
 
 
-@router.post("/realtime-rules")
+@router.post("/realtime-rules",
+              dependencies=[Depends(require_perm("data.export"))])
 def create_rule(payload: RuleCreate, db: Session = Depends(get_db)) -> Dict[str, Any]:
     _check_template_exists(db, payload.template_id)
     _validate_rule(payload)
@@ -220,7 +222,8 @@ def create_rule(payload: RuleCreate, db: Session = Depends(get_db)) -> Dict[str,
     return _serialize_rule(row, with_template=True)
 
 
-@router.put("/realtime-rules/{rule_id}")
+@router.put("/realtime-rules/{rule_id}",
+             dependencies=[Depends(require_perm("data.export"))])
 def update_rule(rule_id: int, payload: RuleUpdate,
                 db: Session = Depends(get_db)) -> Dict[str, Any]:
     row = db.query(ExportRealtimeRule).filter(
@@ -247,7 +250,8 @@ def update_rule(rule_id: int, payload: RuleUpdate,
     return _serialize_rule(row, with_template=True)
 
 
-@router.delete("/realtime-rules/{rule_id}")
+@router.delete("/realtime-rules/{rule_id}",
+                dependencies=[Depends(require_perm("data.export"))])
 def delete_rule(rule_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
     row = db.query(ExportRealtimeRule).filter(
         ExportRealtimeRule.id == rule_id
@@ -259,7 +263,8 @@ def delete_rule(rule_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
     return {"deleted": rule_id}
 
 
-@router.post("/realtime-rules/{rule_id}/toggle")
+@router.post("/realtime-rules/{rule_id}/toggle",
+              dependencies=[Depends(require_perm("data.export"))])
 def toggle_rule(rule_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
     row = db.query(ExportRealtimeRule).filter(
         ExportRealtimeRule.id == rule_id
@@ -276,7 +281,8 @@ def toggle_rule(rule_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
 # 测试触发 + 日志
 # ============================================================
 
-@router.post("/realtime-rules/{rule_id}/test-run")
+@router.post("/realtime-rules/{rule_id}/test-run",
+              dependencies=[Depends(require_perm("data.export"))])
 def test_run(rule_id: int, payload: TestRunRequest = TestRunRequest(),
              db: Session = Depends(get_db)) -> Dict[str, Any]:
     """手动触发一次（source_type=manual_test）— 用于调试规则配置"""

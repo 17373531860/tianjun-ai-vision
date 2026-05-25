@@ -96,7 +96,7 @@
 | 排查 Electron 桌面壳问题 | `debug-electron` |
 | 排查前端问题 | `debug-frontend` |
 | 排查自定义导出 / 实时规则 / 模板 / 字段中央仓库（v3.5.0+）| `debug-export` |
-| 排查操作员 / License 授权（machineId / RSA 验签 / 当前操作员落盘）| `debug-operator-license` |
+| 排查用户系统 / License 授权（machineId / RSA 验签 / 当前登录用户落盘 / token 鉴权 / 权限不通过 / API Key）| `debug-operator-license` |
 | 排查 per_item 逐件覆盖模式（打螺丝场景 / 周期不开始 / 漏件不报 / PerItemPanel 空白 / mock 注入失败）（v3.8.0+）| `debug-per-item` |
 | 数据问题修复 | `fix-data` |
 | 前后端 API 对齐检查 | `api-sync` |
@@ -168,16 +168,20 @@
 | `/cluster/*` | `cluster.py` (296) | 集群主从 + 副机心跳 |
 | `/mes/*` | `mes.py` (673 ⚠️) | 工单/工件/缺陷/缺陷码 |
 | `/mes/gateway/*` | `mes_gateway.py` (450) | MES 推送连接 + 测试 |
-| `/operators/*` | `operators.py` (214) | 操作员（无 token，文件落盘） |
+| `/auth/*` | `auth.py` (274) | **v3.10.0** 登录/登出/启用-关闭鉴权/me/权限目录 |
+| `/users/*` | `users.py` (186) | **v3.10.0** 用户 CRUD + 角色绑定 |
+| `/roles/*` | `roles.py` (136) | **v3.10.0** 角色 CRUD + 权限编辑 |
+| `/api-keys/*` | `api_keys.py` (143) | **v3.10.0** M2M API Key 管理（SHA256 哈希 + scope） |
+| `/operators/*` | `operators.py` (74) | ⚠️ **v3.10.0 已废弃** — 全部 410 Gone，重定向 `X-Deprecated-Replacement: /api/v1/users` |
 | `/export/*` | `export_custom.py` + `export_realtime.py` | v3.5.0 自定义导出（共用前缀） |
 | `/debug/*` | `debug.py` (118) | 通道诊断 |
 
 > **常见误解**：路径前缀是**`/api/v1/`** 不是 `/api/`；旧手册写的 `/api/detection/*` 已删，等价端点在 `/api/v1/source/detection/*`。
 
-### 31 张数据库表（仅速查；详细字段见 modify-model skill）
+### 35 张数据库表（v3.10.0+；仅速查，详细字段见 modify-model skill）
 
-**`backend/models/models.py` 13 张**（核心检测）：
-`projects` / `models` / `model_conversions` / `tasks` / `cameras` / `daily_stats` / `system_configs` / `operators` / `detection_sessions` / `detection_cycles` / `step_records` / `video_clips` / `data_export_settings`
+**`backend/models/models.py` 12 张**（核心检测）：
+`projects` / `models` / `model_conversions` / `tasks` / `cameras` / `daily_stats` / `system_configs` / `detection_sessions` / `detection_cycles` / `step_records` / `video_clips` / `data_export_settings`
 
 **`backend/models/mes_models.py` 15 张**（MES）：
 `work_orders` / `batches` / `workpieces` / `workpiece_inspections` / `defect_records` / `defect_codes` / `scanner_devices` / `scan_logs` / `mes_connections` / `mes_comm_logs` / `cluster_config` / `box_aggregations` / `external_devices` / `external_device_logs` / `box_summaries`
@@ -185,7 +189,11 @@
 **`backend/models/export_models.py` 3 张**（v3.5.0+）：
 `export_templates` / `export_realtime_rules` / `export_run_logs`
 
-> ⚠️ 产品交接手册 v2.4.0 说"22 张表"是**过时的**，以代码为准。
+**`backend/models/auth_models.py` 5 张**（v3.10.0+ 用户系统）：
+`users` / `roles` / `user_roles` / `session_tokens` / `api_keys`
+
+> ⚠️ **v3.10.0 起 `operators` 表已 DROP**（启动迁移自动执行 `DROP TABLE IF EXISTS operators`）；`detection_sessions.operator_id` 字段保留但语义改为指向 `users.id`，FK 加 `ondelete=SET NULL`。
+> ⚠️ 产品交接手册 v2.4.0 说"22 张表"是**严重过时的**，以代码为准。
 > ⚠️ ORM 类名是 `Model`（**不**是 `MLModel`）；表名是 `models`（**不**是 `ml_models`）。
 
 ### Hub 关系图（最大集成中心）
@@ -466,20 +474,73 @@
 
 ---
 
-#### 模块 10：操作员 + License
+#### 模块 10：用户系统 + License（v3.10.0+）
 
-**做什么**：操作员（current_operator 影响数据归属）+ 软件激活 / License 验证。
+**做什么**：完整的多角色账号系统（基于 token 的鉴权 + 端点级细粒度权限 + 角色 RBAC + M2M API Key）+ 软件激活 / License 验证。
 
-**关键文件**：
-- `backend/api/operators.py` (214) — 操作员 API（**无 token，落盘 `current_operator.json`**）
+> ⚠️ **v3.10.0 重大变更**：彻底删除旧 `operators` 系统（表 + API + UI + utils 全清），用 `users` + `roles` + `user_roles` + `session_tokens` + `api_keys` 5 张新表全面替换。前端"当前作业员"显示语义改为"当前登录用户"。**总开关默认关闭**（`auth.enabled=false`），客户体验**零差异**：未启用时所有人=隐式超级管理员。
+
+**核心设计 4 大不变量**：
+1. **零差异默认**：`auth_enabled=false` 时所有 `require_perm` 依赖全放行，相当于隐式 superuser。客户不开鉴权，体验完全和 v3.9 一致。
+2. **启用即创建超管**：通过 `POST /auth/enable-auth` 同时启用 + 创建第一个超级管理员，没有预置默认账户。
+3. **匿名 = 操作员**：启用后无 token 的访问被识别为匿名操作员，仅允许 `monitor.detection.control`（开始/停止/待机 3 个按钮）。
+4. **数据归属重定向**：`DetectionSession.operator_id` / `DetectionCycle.operator_id` 字段名保留但 FK 改指 `users.id`；导出模板和 MES payload 的 `{operator.*}` 字段名保留但语义改为"当前登录用户"。
+
+**关键文件**（按职责分组）：
+
+> **数据模型 / 内核**
+- `backend/models/auth_models.py` (174) — 5 张表 ORM 定义（User/Role/UserRole/SessionToken/APIKey）
+- `backend/core/auth.py` (226) — 密码哈希 (bcrypt) + token 内存池 + 磁盘持久化 (`current_user.json` / `session_tokens.json`)
+- `backend/core/auth_deps.py` (247) — FastAPI 依赖（`get_current_user` / `require_perm` / `require_role`）
+- `backend/core/api_key.py` (193) — M2M API Key 依赖（`require_api_key` + scope 校验）
+- `backend/core/permissions.py` (175) — 权限目录 + 通配符匹配引擎
+
+> **API 路由层**
+- `backend/api/auth.py` (274) — `/auth/*` 登录/登出/启用/me/权限目录
+- `backend/api/users.py` (186) — `/users/*` 用户 CRUD + 角色绑定
+- `backend/api/roles.py` (136) — `/roles/*` 角色 CRUD + 权限编辑
+- `backend/api/api_keys.py` (143) — `/api-keys/*` M2M API Key 管理
+- `backend/api/operators.py` (74) — ⚠️ **v3.10.0 仅留 410 Gone 骨架**，所有端点重定向 `/users/*`
+
+> **License（与 v3.9 一致）**
 - `backend/scripts/generate_license.py` — License 生成（私钥签名）
-- `backend/models/models.py: Operator`
 - `electron/license-manager.js` (203) — License 验证（RSA SHA256 + machineId）
 - `frontend/src/views/Activation/`
 
-**改动它必读**：`debug-operator-license`（machineId / 验签 / 当前操作员落盘） + `debug-electron`（Electron 主进程通用问题）
+> **前端**
+- `frontend/src/store/useAuthStore.js` — Pinia 用户系统 store
+- `frontend/src/views/Login/index.vue` — 登录页
+- `frontend/src/views/Settings/AuthPanel.vue` — 账号鉴权管理面板（启用/用户/角色/API Key）
+- `frontend/src/layout/Navbar.vue` / `BottomBar.vue` — 身份显示按鉴权状态切换（v3.10.0 阶段 6）
+- `frontend/src/router/index.js` — `beforeEach` 守卫调 `authStore.canAccessRoute`
 
-**License 算法（速查）**：
+**改动它必读**：`debug-operator-license`（machineId / 验签 / 当前用户落盘） + `debug-electron`（Electron 主进程通用问题）
+
+**3 个内置角色 + 权限速查**：
+
+| 角色 | 权限 | 用途 |
+|---|---|---|
+| `admin` | `["*"]` | 超级管理员，全权 |
+| `engineer` | `monitor.*` / `project.*` / `source.*` / `model.*` / `alarm.*` / `data.*` / `mes.*` / `settings.view` / `system.apikey.manage` 等约 30 条 | 工程师，除"账号鉴权 Tab"外全开 |
+| `operator` | `monitor.view` / `monitor.detection.control` | 操作员，仅 3 个按钮 |
+
+**权限 key 命名规则**：`<module>.<action>` 两段式（如 `monitor.detection.advanced`），通配符 `*` / `module.*` 支持。
+
+**Token 算法（速查）**：
+1. 登录验证密码 (bcrypt.checkpw) → 生成 UUID4 token
+2. token 同时写内存池 (`_token_cache`) + 磁盘 (`session_tokens.json`)
+3. 客户端 header `Authorization: Bearer <token>` 传递
+4. 后端 `get_current_user` 解析 → 命中 → 查 user + roles + permissions
+5. 登录方同时落 `current_user.json` 给后台无 token 进程（session_lifecycle_mixin / mes_gateway / export_context）查"当前登录人"
+
+**M2M API Key 算法（速查）**：
+1. 创建时生成原始 token `tj_<scope>_<32_random>`，仅返回一次
+2. DB 存 SHA256(token) + scope，原文不落盘
+3. 调用方 header `X-API-Key: <token>`
+4. 后端 `require_api_key(required_scope)` 校验 SHA256 哈希 + scope 匹配
+5. 用于副机 → 主机心跳 / MES 接收 / license 缓存推送等 M2M 端点
+
+**License 算法（速查，与 v3.9 一致）**：
 1. machineId = SHA256(stableFp) → `TJ-` + 12 位大写 hex
 2. license.lic = JSON `{ data: stringPayload, signature: base64 }`
 3. RSA + SHA256 验签（公钥嵌在 license-manager.js）
@@ -670,7 +731,9 @@
 | 自定义导出字段注册表 | `ALL_FIELDS` | **308 个字段** | `services/export_field_registry.py` |
 | 实时导出规则 | JSON 配置 | 按工位/项目过滤 | `models/export_models.py` |
 | 周期性强制动作 (v3.5.0) | JSON | 每 N 轮做 X | `source_periodic_actions_mixin.py` |
-| 操作员系统 | 表 | current_operator 影响数据归属 | `api/operators.py` |
+| 用户系统 (v3.10.0+) | 5 张表 | 多角色账号 + token 鉴权 + 端点级权限 + M2M API Key；数据归属字段 `operator_id` 改指 `users.id` | `models/auth_models.py` / `api/{auth,users,roles,api_keys}.py` |
+| `require_perm("<perm.key>")` 依赖 (v3.10.0+) | FastAPI 依赖 | 端点级细粒度权限标记，`auth_enabled=false` 时自动放行 | `core/auth_deps.py` |
+| 内置角色 + 权限目录 (v3.10.0+) | 常量 | 三档角色（admin/engineer/operator）+ 完整权限目录，UI 渲染权限树用 | `core/permissions.py` / 启动时 `main.py:_seed_builtin_roles` |
 | Scanner `broadcast_channels` | JSON | 一扫码器服务多工位 | `models/mes_models.py:ScannerDevice` |
 | `pipeline_config.per_item` (v3.8.0+) | JSON | 逐件覆盖项目级参数（稳定窗口/收尾标签等） | `source_per_item_mixin.py` |
 | `steps_config[i].per_item` (v3.8.0+) | JSON | 逐件覆盖步骤级参数（item_label/action_label/sustain_frames 等） | 同上 |
@@ -748,21 +811,32 @@
 
 ## 十一、文件路径速查
 
-### 后端（25 个 api / 22 个 services）
+### 后端（29 个 api / 22 个 services / 5 个 core，v3.10.0+）
 ```
 backend/
-├── main.py                        # FastAPI 入口 + 12 步启动 + 60+ ALTER TABLE 迁移
-├── core/config.py                 # 配置 (DATA_DIR, BASE_DIR 等)
+├── main.py                        # FastAPI 入口 + 启动迁移 (v3.10 自动 DROP operators)
+├── core/                          # ⭐ v3.10 内核扩展
+│   ├── config.py                  # 配置 (DATA_DIR, BASE_DIR 等)
+│   ├── auth.py (226)              # v3.10 密码哈希 + token 池 + current_user.json 持久化
+│   ├── auth_deps.py (247)         # v3.10 require_perm / get_current_user / 路由依赖
+│   ├── api_key.py (193)           # v3.10 M2M API Key 依赖 + scope 校验
+│   └── permissions.py (175)       # v3.10 权限目录 + 通配符匹配
 ├── db/database.py                 # SQLAlchemy engine + WAL
-├── models/                        # ORM (3 文件 31 表)
-├── api/                           # 25 个文件
+├── models/                        # ORM (4 文件 35 表)
+│   ├── models.py                  # 12 张核心检测 (operators 表 v3.10 已 DROP)
+│   ├── mes_models.py              # 15 张 MES
+│   ├── export_models.py           # 3 张自定义导出 (v3.5.0)
+│   └── auth_models.py (174)       # ⭐ v3.10 用户系统 5 张表
+├── api/                           # 29 个文件
 │   ├── source.py + 35 个 source_* (mixin/组件/工具/路由)
 │   │   └── source_per_item_mixin.py (~650)   # v3.8.0 逐件覆盖模式 (独立路径)
 │   ├── projects.py / models.py / sessions*.py (4 个) / cameras.py
 │   ├── tasks.py / reports.py / system_display.py / alarm.py
-│   ├── operators.py / channel_manager.py / debug.py / rod_filter.py
+│   ├── channel_manager.py / debug.py / rod_filter.py
 │   ├── scanner.py / wmax.py / mes.py / mes_gateway.py / cluster.py / external_device.py
 │   ├── export_custom.py / export_realtime.py    # v3.5.0
+│   ├── auth.py (274) / users.py (186) / roles.py (136) / api_keys.py (143)   # ⭐ v3.10 用户系统
+│   ├── operators.py (74)          # ⚠️ v3.10 已废弃, 仅留 410 Gone 骨架
 │   └── __init__.py (api_router 聚合)
 ├── services/                      # 22 个文件
 │   ├── scanner.py (1964) / mes_hooks.py (1505) / mes_gateway.py
@@ -778,19 +852,23 @@ backend/
 ### 前端（4 store / 16 api / 12 view / 3 layout）
 ```
 frontend/src/
-├── views/    (12 个 .vue)
+├── views/    (13 个 .vue, v3.10.0+)
 │   ├── Activation/   Source/   Project/   Model/
 │   ├── Monitor/      ⭐ 检测中心 (4051 行 ⚠️ 项目最大 .vue)
 │   │   └── PerItemPanel.vue  # v3.8.0 逐件覆盖面板 (视频下方全宽, 仿 tracking)
+│   ├── Login/        # ⭐ v3.10.0 用户系统登录页
 │   ├── Data/         ⭐ 数据中心 + 自定义导出
 │   ├── MES/          ⭐ 5 个子 Panel (Order / Workpiece / Defect / Scanner / Gateway)
 │   ├── Alarm/        Settings/  Report/ ❌ 死代码
-├── store/  (4 个 Pinia store)
+│   └── Settings/AuthPanel.vue  # ⭐ v3.10.0 账号鉴权 Tab (启用/用户/角色/API Key)
+├── store/  (5 个 Pinia store, v3.10.0+)
 │   ├── useSystemStore (277 行) / useProjectStore / useSourceStore / useScannerDisableStore
-├── api/    (16 个 axios 封装，其中 task.js / camera.js 死代码)
-├── layout/ (3 个：index.vue / Navbar.vue 550 行 ⚠️ / BottomBar.vue)
+│   └── useAuthStore   # ⭐ v3.10.0 用户系统 (token / currentUser / authEnabled / canAccessRoute)
+├── api/    (17 个 axios 封装, v3.10.0+ 加 auth.js, task.js / camera.js 死代码)
+├── layout/ (3 个：index.vue / Navbar.vue / BottomBar.vue)
+│   # v3.10.0 阶段 6: 顶/底栏"作业员"位置随鉴权状态切换为登录用户名 + 角色徽章
 ├── locales/ (5 种语言 zh-CN/zh-TW/en-US/ja-JP/ko-KR)
-└── router/index.js (147 行 / 9 路由)
+└── router/index.js   # ⭐ v3.10.0 加 beforeEach 守卫调 authStore.canAccessRoute
 ```
 
 ### Electron（双进程）
@@ -827,6 +905,7 @@ docs/
 
 | 版本 | 日期 | 主要变更 |
 |---|---|---|
+| v3.10.0 | 2026-05-25（开发中） | **用户系统完整闭环**：多角色账号（admin/engineer/operator）+ token 鉴权 + 端点级权限（约 160 个端点 require_perm）+ M2M API Key + 总开关默认关闭零差异 + 彻底清除旧 operators 系统（表+API+UI+utils 全删，5 阶段渐进式 strangle）+ Navbar/BottomBar 身份显示按鉴权状态切换 |
 | v3.9.0 | 2026-05-23 | **last_first 结算模式（末步结算 + 首步开周期）**（双锚状态机 R1-R6）+ **跨周期组类二 `cross_cycle` 独立状态机**（解决 D 余像 + A 新周期同帧时序）+ **per_item v3.9 五补丁**（expected_count / lock_lookahead / settle_after_all_done_sec / cleanup_stale_items 锁定模式不清 / item_label 多标签 OR）+ UAT 4 阶段 31/31 通过 |
 | v3.8.2 | 2026-05-22 | Cyber Splash 启动界面 + 实时后端日志驱动进度 + 工业全屏无边框 + IPC 优雅退出 + USB 摄像头 deviceId 持久化 + MediaPipe 完美骨架配置化 + 二段管线集成框架 + train-hand-detector skill |
 | v3.8.1 | 2026-05-22 | PT 守门/模型回退/Monitor 同步 + 步骤统计列可隐藏 + CI 磁盘清理（hotfix 累积） |
@@ -844,8 +923,16 @@ docs/
 主线最新（已合并到 v3.9.0）：
 - `91ea16f` release: v3.9.0 — last_first 结算模式 + 跨周期组类二状态机 + per_item v3.9 五补丁
 
+正在做（**`feat/user-system` 分支**，未合并）：
+- v3.10.0 用户系统 6 阶段实施完成：
+  - 阶段 1-3：数据模型 / 后端鉴权内核 / 前端 token + store + 登录页 + 路由守卫
+  - 阶段 4：端点级 require_perm 标记（R1-R4 共 ~160 端点）+ M2M API Key 系统
+  - 阶段 5：旧 operators 系统 5 阶段渐进式 strangle 删除（UI 隐藏 → UI 清除 → API 410 Gone → 数据归属重定向 → 表 DROP）
+  - 阶段 6：Navbar/BottomBar 身份显示统一（鉴权状态切换语义 + 角色徽章）
+- UAT 累计：阶段 1 X 项 / 阶段 2 X 项 / 阶段 3 20/20 / 阶段 4 41/41 / 阶段 5 26/26 / 阶段 6 20/20 全通
+
 下次 tag 进度：
-- 待积累的小改动暂时落入 main，未达 minor bump → 累积到下次 minor 一起发版
+- v3.10.0 待客户验收后发版
 - 长期分支 `feat/plugin-system` 在做（多客户定制插件系统 + DB 迁 PG）
 
 > **历史 bug 全档**：33 个 changelog × 184 条 BUG/FEAT/HOTFIX 已分类到 24 个旧 skill 内"历史踩坑"章节。统计：`debug-mes` 61 条 / `modify-frontend` 45 / `modify-source` 40 / `debug-source` 24 / `add-api-endpoint` 22 / `debug-video` 19。新增 3 个 skill（`debug-export` / `debug-cluster` / `debug-operator-license`）由 v3.5.x 真实代码反推编写，未追溯历史 changelog。
@@ -854,7 +941,8 @@ docs/
 
 ## 十三、当前在做的事（动态，看 git log 和分支名）
 
-- 主分支 `main`：稳定版，发布给客户
+- 主分支 `main`：稳定版，发布给客户（v3.9.0）
+- 分支 `feat/user-system`：**v3.10.0 用户系统**（6 阶段全部完成，UAT 全过，待客户验收发版）
 - 分支 `feat/plugin-system`：**多客户定制插件系统 + 数据库迁 PG**（在做，长期分支）
   - 决策已敲定：迁 PG / 三档插件全做 / 签名机制 / 不做沙箱
 
@@ -870,6 +958,6 @@ docs/
 
 ---
 
-**本文件最后更新**：2026-05-23（v3.9.0 发版同步）
+**本文件最后更新**：2026-05-25（v3.10.0 用户系统 6 阶段完成同步）
 **维护者**：项目主作者 + AI agents
-**事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）+ v3.9.0 实测代码反推（`source_settlement_mixin.py` 1320 行 / `source_per_item_mixin.py` ~960 行 / 31 项 UAT 全过）
+**事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）+ v3.9.0/v3.10.0 实测代码反推（`source_settlement_mixin.py` 1320 行 / `source_per_item_mixin.py` ~960 行 / v3.10 用户系统 ~841 行 core + 5 张新表 + 12 个 UAT 全过）

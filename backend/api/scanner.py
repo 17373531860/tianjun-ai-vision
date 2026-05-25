@@ -3,10 +3,11 @@
 
 设备 CRUD、连接测试、状态查询、扫码记录。
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 
+from backend.core.auth_deps import require_perm
 from backend.db.database import SessionLocal
 from backend.models.mes_models import ScannerDevice, ScanLog
 from backend.services.scanner import get_scanner_service
@@ -132,7 +133,8 @@ def list_devices():
         db.close()
 
 
-@router.post("/discover")
+@router.post("/discover",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def discover_scanners(subnet: str = Query("192.168.0", description="子网前缀"),
                       port: int = Query(55256), timeout: float = Query(0.3)):
     """TCP 端口扫描发现局域网内的扫码器（不走 WMax 协议，不会触发闪光）"""
@@ -161,7 +163,8 @@ def discover_scanners(subnet: str = Query("192.168.0", description="子网前缀
     return {"results": found, "total": len(found)}
 
 
-@router.post("/devices")
+@router.post("/devices",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def create_device(body: ScannerCreate):
     db = SessionLocal()
     try:
@@ -200,7 +203,8 @@ def create_device(body: ScannerCreate):
         db.close()
 
 
-@router.put("/devices/{device_id}")
+@router.put("/devices/{device_id}",
+             dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def update_device(device_id: int, body: ScannerUpdate):
     db = SessionLocal()
     try:
@@ -248,7 +252,8 @@ def update_device(device_id: int, body: ScannerUpdate):
         db.close()
 
 
-@router.delete("/devices/{device_id}")
+@router.delete("/devices/{device_id}",
+                dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def delete_device(device_id: int):
     db = SessionLocal()
     try:
@@ -269,7 +274,8 @@ def delete_device(device_id: int):
         db.close()
 
 
-@router.post("/devices/test")
+@router.post("/devices/test",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def test_connection(ip: str, port: int = 55256, device_type: str = "auto"):
     """测试扫码器连接.
 
@@ -281,7 +287,8 @@ def test_connection(ip: str, port: int = 55256, device_type: str = "auto"):
     return svc.test_connection(ip, port, device_type=device_type)
 
 
-@router.post("/trigger")
+@router.post("/trigger",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def trigger_scan(device_id: Optional[int] = None, ip: Optional[str] = None):
     """手动触发一次扫码（向 55256 端口发送 LON）"""
     svc = get_scanner_service()
@@ -293,7 +300,8 @@ def trigger_scan(device_id: Optional[int] = None, ip: Optional[str] = None):
         raise HTTPException(400, "需要提供 device_id 或 ip")
 
 
-@router.post("/simulate")
+@router.post("/simulate",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def simulate_scan(body: ScannerSimulate):
     """调试用：模拟扫码结果，不需要真实扫码器硬件。"""
     barcode = (body.barcode or "").strip()
@@ -380,7 +388,8 @@ def list_scan_logs(
         db.close()
 
 
-@router.delete("/logs")
+@router.delete("/logs",
+                dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def clear_scan_logs():
     """清空所有扫码记录"""
     db = SessionLocal()
@@ -463,7 +472,8 @@ class ScanPairStopRequest(BaseModel):
     discard: bool = False  # True=丢弃当前窗口, False=按曾齐过结算后清空
 
 
-@router.post("/scan-pair/stop")
+@router.post("/scan-pair/stop",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def settle_scan_pair_for_stop(req: ScanPairStopRequest):
     """v3.3.0 在停止检测 / 进入待机时由前端调用, 收尾最后一码窗口.
 
@@ -503,7 +513,8 @@ def get_scanner_disable_status():
         return {"disabled_channels": [], "error": str(e)}
 
 
-@router.post("/disable-toggle")
+@router.post("/disable-toggle",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def toggle_scanner_disable(req: ScannerDisableToggleRequest):
     """v3.4.2 按工位禁用 / 启用扫码.
 

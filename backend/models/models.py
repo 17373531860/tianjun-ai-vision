@@ -127,16 +127,10 @@ class SystemConfig(Base):
     description = Column(String(500), nullable=True)
 
 
-class Operator(Base):
-    """操作员表"""
-    __tablename__ = "operators"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(64), nullable=False)
-    employee_no = Column(String(32), unique=True, index=True)
-    role = Column(String(20), default="operator")
-    active = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+# v3.10+ 阶段 5: Operator 类已删除, 改由 backend/models/auth_models.py:User 接管.
+# detection_sessions.operator_id / detection_cycles.operator_id 列保留 (SQLite 不支持 rename),
+# FK 改指向 users.id, 语义重定向到当前登录用户 id.
+# 老 schema 里 FK 指向 operators.id 不会引发问题 — SQLite 默认 PRAGMA foreign_keys=OFF.
 
 
 class DetectionSession(Base):
@@ -175,16 +169,15 @@ class DetectionSession(Base):
     # 班次标记 ("day" / "night" / null if shift splitting disabled)
     shift_label = Column(String(20), nullable=True, index=True)
     
-    # 操作员
-    operator_id = Column(Integer, ForeignKey("operators.id", ondelete="SET NULL"), nullable=True)
+    # v3.10+ 阶段 5: 字段名保留, 语义重定向 — 写入"当前登录 user.id"; FK 改指 users
+    operator_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     # MES 工单关联（迁移 v2.7.x 新增）
     order_id = Column(Integer, nullable=True, index=True)
 
-    # 关系
+    # 关系 (Operator → User 切换不再注册 relationship, 用代码层 join: backend/api/sessions.py)
     project = relationship("Project", back_populates="detection_sessions")
     cycles = relationship("DetectionCycle", back_populates="session", cascade="all, delete-orphan")
-    operator = relationship("Operator", foreign_keys=[operator_id])
 
 
 class DetectionCycle(Base):
@@ -214,8 +207,8 @@ class DetectionCycle(Base):
     video_path = Column(String(500), nullable=True)  # 周期视频路径
     video_id = Column(String(50), nullable=True)  # 视频ID
     
-    # 操作员
-    operator_id = Column(Integer, ForeignKey("operators.id", ondelete="SET NULL"), nullable=True)
+    # v3.10+ 阶段 5: 字段名保留, 语义重定向到当前登录 user.id; FK 改指 users
+    operator_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     # MES 工单关联（迁移 v2.7.x 新增）
     order_id = Column(Integer, nullable=True, index=True)
@@ -237,10 +230,9 @@ class DetectionCycle(Base):
     # 未来可塞: 外部温度/压力/批号等 cycle 开始那一刻的环境数据.
     external_meta = Column(JSON, nullable=True)
 
-    # 关系
+    # 关系 (Operator → User 切换不再注册 relationship, 用代码层 join: backend/services/mes_gateway.py 等)
     session = relationship("DetectionSession", back_populates="cycles")
     step_records = relationship("StepRecord", back_populates="cycle", cascade="all, delete-orphan")
-    operator = relationship("Operator", foreign_keys=[operator_id])
 
 
 class StepRecord(Base):

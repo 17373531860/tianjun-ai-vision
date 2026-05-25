@@ -1,0 +1,333 @@
+{
+  "version": "3.10.0",
+  "date": "2026-05-25",
+  "previous_version": "3.9.0",
+  "release_type": "minor",
+  "headline": "用户系统完整闭环 (多角色账号 + token 鉴权 + 端点级权限 + M2M API Key) + 彻底删除旧 operators 系统 (5 阶段 strangle, 零客户感知)",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "用户系统数据模型 + 后端鉴权内核",
+      "symptom": "v3.0 起一直用的旧 operators 系统是简单标签机制 (单表 + 文件落盘 + 无密码 + 无角色), 无法满足多客户对账号鉴权 / 按角色屏蔽功能 / 机器对机器接口隔离的真实需求。",
+      "root_cause": "旧 operators 系统设计目标只是'打标签让数据带操作员名字', 不是真正的鉴权系统。多客户场景下需要密码、角色、权限、token、API Key 等完整体系。",
+      "fix": "建立 5 张新表 (users/roles/user_roles/session_tokens/api_keys) + 5 个 core 模块 (auth/auth_deps/api_key/permissions) + 3 个内置角色 (admin/engineer/operator) 的完整体系。bcrypt 密码哈希, token 内存池 + 磁盘持久化 (session_tokens.json / current_user.json), 通配符权限匹配 (* / module.* / 精确)。auth_enabled=false 时所有 require_perm 全放行, 客户体验零差异。",
+      "files": [
+        "backend/models/auth_models.py",
+        "backend/core/auth.py",
+        "backend/core/auth_deps.py",
+        "backend/core/api_key.py",
+        "backend/core/permissions.py",
+        "backend/main.py",
+        "requirements.txt"
+      ],
+      "keywords": [
+        "用户系统",
+        "bcrypt",
+        "session_tokens",
+        "current_user.json",
+        "require_perm",
+        "auth_enabled",
+        "零差异",
+        "内置角色",
+        "admin",
+        "engineer",
+        "operator",
+        "SUPERUSER"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "后端用户系统 API + 前端登录页 + 路由守卫",
+      "symptom": "需要暴露完整的'登录/登出/启用-关闭鉴权/用户 CRUD/角色 CRUD/权限目录'API, 前端集成 token 注入、路由守卫、菜单可见性。",
+      "fix": "后端: auth.py (274) + users.py (186) + roles.py (136), 涵盖登录/登出/me/状态/启用/关闭/权限目录/用户 CRUD/角色 CRUD/权限编辑。前端: useAuthStore (Pinia, token 持久化 tianjun:auth_token + canAccessRoute + hasPermission 通配符), axios 拦截器自动注 Bearer token, Login view 支持 redirect query, router beforeEach 守卫调 canAccessRoute。新加业务路由不需要改 store, 默认放行。",
+      "files": [
+        "backend/api/auth.py",
+        "backend/api/users.py",
+        "backend/api/roles.py",
+        "frontend/src/store/useAuthStore.js",
+        "frontend/src/api/auth.js",
+        "frontend/src/views/Login/index.vue",
+        "frontend/src/router/index.js"
+      ],
+      "keywords": [
+        "auth API",
+        "Login view",
+        "useAuthStore",
+        "Bearer token",
+        "路由守卫",
+        "canAccessRoute",
+        "ROUTE_PERM_MAP",
+        "hasPermission"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "端点级 require_perm 4 轮标记 (R1-R4 共 ~160 端点)",
+      "symptom": "所有'写操作 + 危险读操作'必须打权限标记。读操作 (视频流、检测状态、Monitor 显示) 保持公开, 操作员能看不能改。",
+      "root_cause": "FastAPI 不像 Django 自带 permission 注解, 必须在每个 endpoint 上挂 dependencies。约 25 个 API 模块文件需要逐个端点过一遍。",
+      "fix": "经过 7 个决策点 (D1-D7) 边界讨论后, 分 4 轮渐进式标记: R1 项目/模型/检测控制/Monitor advanced, R2 视频源/报警/系统设置, R3 MES/扫码器/Gateway/集群非 M2M/外设, R4 M2M API Key 端点走独立 require_api_key 体系。D1: 清零计数拒绝给 operator → 新加 monitor.detection.advanced。D2: 报警手动测试端点 alarm.edit 仅工程师。D5: M2M 端点走 API Key 不走 token。D6: wmax 30+ 端点逐个标 system.wmax.manage。D7: sessions.py 内部端点不标 (后端自调可能无 token)。",
+      "files": [
+        "backend/api/projects.py",
+        "backend/api/models.py",
+        "backend/api/source.py + source_*",
+        "backend/api/alarm.py",
+        "backend/api/system_display.py",
+        "backend/api/mes.py",
+        "backend/api/mes_gateway.py",
+        "backend/api/cluster.py",
+        "backend/api/scanner.py",
+        "backend/api/wmax.py",
+        "backend/api/external_device.py",
+        "backend/api/channel_manager.py",
+        "backend/api/export_custom.py",
+        "backend/api/export_realtime.py"
+      ],
+      "keywords": [
+        "require_perm",
+        "端点级权限",
+        "R1-R4",
+        "D1-D7 决策",
+        "wmax",
+        "cluster 心跳",
+        "license-cache",
+        "M2M",
+        "monitor.detection.advanced",
+        "alarm.edit",
+        "system.wmax.manage"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "M2M API Key 系统",
+      "symptom": "副机集群上报、MES 主动接收、license 缓存推送这类机器对机器接口不能用人类 token (无人值守, 无法过期管理)。",
+      "root_cause": "Session token 设计为短寿命 + 与 user 绑定 + 写 session_tokens 表, 不适合 M2M 长寿命无人值守场景。",
+      "fix": "新加 api_keys 表 (key_hash SHA256 + scope + 一次性查看 + 启用禁用), backend/core/api_key.py 提供 require_api_key(scope) 依赖。创建时返回原文一次格式 tj_<scope>_<32_random>, DB 只存 SHA256 hash 不存原文。4 个 M2M 端点改造: cluster.report/heartbeat (cluster scope), license-cache (license.cache scope), mes/orders/receive (mes.receive scope)。前端 Settings/AuthPanel.vue 加 M2M API Key 管理卡片, 仅 system.apikey.manage (admin) 可见。",
+      "files": [
+        "backend/models/auth_models.py",
+        "backend/api/api_keys.py",
+        "backend/core/api_key.py",
+        "backend/api/cluster.py",
+        "backend/api/system_display.py",
+        "backend/api/mes.py",
+        "frontend/src/views/Settings/AuthPanel.vue"
+      ],
+      "keywords": [
+        "API Key",
+        "X-API-Key",
+        "SHA256",
+        "scope",
+        "M2M",
+        "cluster.report",
+        "license-cache",
+        "mes.receive",
+        "一次性查看",
+        "tj_ prefix"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "Settings AuthPanel 完整 UI (启用对话框 / 用户 CRUD / 角色编辑器 / API Key 管理)",
+      "fix": "frontend/src/views/Settings/AuthPanel.vue 综合面板: (1) 启用对话框必须同时填首个超管 (admin_username/password/display_name), (2) 用户列表 + 创建/编辑/禁用/删除 + 角色多选, (3) 角色权限编辑器 (分组权限树按 module 折叠 + 全选/反选 + 通配符快捷 + admin 角色保护性警告), (4) API Key 管理 (创建后明文展示对话框仅一次 + 列表展示 hash 前缀 + 启用/禁用 + 删除), (5) 初次启用后弹'是否立刻跳转登录'对话框。权限树按 permissions.py:CATALOG 动态渲染, 新加权限只需改一处。",
+      "files": [
+        "frontend/src/views/Settings/AuthPanel.vue",
+        "backend/core/permissions.py"
+      ],
+      "keywords": [
+        "AuthPanel",
+        "启用对话框",
+        "角色编辑器",
+        "API Key 明文对话框",
+        "权限树",
+        "CATALOG"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "Navbar / BottomBar 身份显示统一切换 (阶段 6)",
+      "symptom": "鉴权启用后顶栏同时显示'作业员: <inspectorName>'和'账号: <username>'两个独立块, 冗余且可能误导客户 (以为是两个不同的人)。底栏完全不感知登录态。",
+      "root_cause": "v3.10 阶段 1-5 完成后, 顶栏的旧'作业员'块和新'账号'块是平行设计, 没合并语义。",
+      "fix": "在 Navbar.vue / BottomBar.vue 新加 4 个 computed (effectiveInspectorVisible / effectiveInspectorName / effectiveInspectorClass / effectiveRoleBadge / effectiveRoleType), 让'作业员'位置内容随鉴权状态自动切换: 鉴权关闭 → inspectorName (cyan-300), 鉴权启用+已登录 → display_name (emerald-300) + 角色徽章 (admin=红 / engineer=橙 / operator=灰), 鉴权启用+未登录 → '操作员（未登录）'(amber-300)。登录/登出按钮独立位仅鉴权启用时显示, 登出按钮在检测运行中禁用。鉴权关闭时完全不显示任何登录/登出按钮或角色徽章, 老客户感知不到用户系统存在。",
+      "files": [
+        "frontend/src/layout/Navbar.vue",
+        "frontend/src/layout/BottomBar.vue"
+      ],
+      "keywords": [
+        "Navbar",
+        "BottomBar",
+        "inspectorName",
+        "display_name",
+        "角色徽章",
+        "鉴权状态切换",
+        "effectiveInspectorName",
+        "effectiveRoleBadge",
+        "零差异"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "breaking",
+      "id": "BREAK-001",
+      "title": "删除旧 operators 系统 (5 阶段 strangle, 零客户感知)",
+      "symptom": "v3.0 起的旧 operators 系统 (单表 + 6 个 API + 文件落盘 current_operator.json) 与 v3.10 用户系统语义冲突且无价值。",
+      "root_cause": "两个系统并存会产生'作业员 vs 用户'语义分裂, 长期维护成本高。",
+      "fix": "5 阶段渐进式 strangle 模式: 阶段 1 前端 UI 隐藏 (v-if='!authStore.authEnabled' feature flag), 阶段 2 前端代码清除 (物理删除 Settings 操作员管理 Tab + Monitor 操作员选择器 + Data 页操作员过滤器), 阶段 3 后端 API 410 Gone (6 端点 + X-Deprecated-Replacement: /api/v1/users), 阶段 4 数据归属重定向 (operator_id FK 改指 users.id + ondelete=SET NULL + 7 处查询从 Operator 改查 User + set_current_active_user/get_current_user_id 写 current_user.json), 阶段 5 旧表 + 类彻底清除 (models.py 删 Operator + relationship + operators.py 仅留 74 行 410 骨架 + main.py 启动迁移加 DROP TABLE IF EXISTS operators)。兼容性: 老 operator_id 历史数据变'悬空指针'但 SET NULL 不报错, 导出模板 {operator.*} 和 MES payload 字段名继续可用且语义改为当前登录用户。",
+      "files": [
+        "backend/api/operators.py",
+        "backend/models/models.py",
+        "backend/main.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/source_routes.py",
+        "backend/api/sessions.py",
+        "backend/services/mes_gateway.py",
+        "backend/services/export_context.py",
+        "backend/core/auth.py",
+        "backend/api/auth.py",
+        "test_alarm_and_operator.py",
+        "frontend/src/views/Settings/index.vue",
+        "frontend/src/views/Monitor/index.vue",
+        "frontend/src/views/Data/index.vue"
+      ],
+      "keywords": [
+        "strangle pattern",
+        "410 Gone",
+        "operator 删除",
+        "DROP TABLE",
+        "operator_id 重定向",
+        "零客户感知",
+        "ondelete SET NULL",
+        "current_user.json",
+        "set_current_active_user",
+        "5 阶段",
+        "X-Deprecated-Replacement"
+      ],
+      "breaking": true
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "6 阶段累计 UAT 全过",
+      "fix": "新增 10+ 个 UAT 脚本覆盖整个用户系统闭环: 阶段 4 R1-R4 后端 require_perm 各轮, ⑤a 阶段 1-5 ⑤b ⑤c 阶段 1-5 阶段 6, 每个脚本独立可跑前置自动清数据库 + 重启后端 + 收尾恢复 auth=false。阶段 5 + 阶段 6 是纯回归测试, 确认前面阶段无回归。",
+      "files": [
+        "tests/uat/uat_20260525_route_perm.py",
+        "tests/uat/uat_20260525_perm_monitor.py",
+        "tests/uat/uat_20260525_perm_r2.py",
+        "tests/uat/uat_20260525_perm_r3.py",
+        "tests/uat/uat_20260525_perm_r4.py",
+        "tests/uat/uat_20260525_apikey_and_role_editor.py",
+        "tests/uat/uat_20260525_phase1_hide_legacy_operator.py",
+        "tests/uat/uat_20260525_phase2_legacy_op_purged.py",
+        "tests/uat/uat_20260525_phase3_operators_410.py",
+        "tests/uat/uat_20260525_phase4_user_attribution.py",
+        "tests/uat/uat_20260525_phase5_operator_purged.py",
+        "tests/uat/uat_20260525_phase6_navbar_identity.py"
+      ],
+      "keywords": [
+        "UAT",
+        "可见浏览器",
+        "Playwright",
+        "回归测试",
+        "phase4",
+        "phase5",
+        "phase6"
+      ]
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-001",
+      "title": "更新 debug-operator-license + AGENTS.md 模块 10",
+      "fix": "debug-operator-license/SKILL.md 升级覆盖 v3.10 用户系统 (token 解析失败 / 权限不通过 / API Key 校验 / current_user.json 损坏 / 老 operators 残留排查)。AGENTS.md 模块 10 '操作员 + License' → '用户系统 + License' 整章重写: 列全所有 v3.10 新文件 + 4 大不变量 (零差异默认 / 启用即创建超管 / 匿名 = 操作员 / 数据归属重定向) + token / API Key 算法速查 + 3 个内置角色权限速查。同时更新顶部路由前缀表 (加 /auth /users /roles /api-keys, 标 /operators 已废弃)、DB 表清单 (31 → 35 张, 移除 operators 加 auth_models 5 张)、扩展点表 (旧操作员系统 → 用户系统三档)、目录树 (加 core/* 5 文件 + auth_models.py + auth/users/roles/api_keys 4 个 API 文件 + Login view + useAuthStore + AuthPanel)、版本里程碑表 (加 v3.10.0 条目)。",
+      "files": [
+        "AGENTS.md",
+        ".claude/skills/debug-operator-license/SKILL.md"
+      ],
+      "keywords": [
+        "AGENTS.md",
+        "debug-operator-license",
+        "模块 10 重写"
+      ]
+    }
+  ],
+  "skills_updated": ["debug-operator-license"],
+  "files_changed": [
+    "backend/main.py",
+    "backend/core/auth.py",
+    "backend/core/auth_deps.py",
+    "backend/core/api_key.py",
+    "backend/core/permissions.py",
+    "backend/models/auth_models.py",
+    "backend/models/models.py",
+    "backend/api/auth.py",
+    "backend/api/users.py",
+    "backend/api/roles.py",
+    "backend/api/api_keys.py",
+    "backend/api/operators.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/source_routes.py",
+    "backend/api/sessions.py",
+    "backend/api/projects.py",
+    "backend/api/models.py",
+    "backend/api/alarm.py",
+    "backend/api/system_display.py",
+    "backend/api/mes.py",
+    "backend/api/mes_gateway.py",
+    "backend/api/cluster.py",
+    "backend/api/scanner.py",
+    "backend/api/wmax.py",
+    "backend/api/external_device.py",
+    "backend/api/channel_manager.py",
+    "backend/api/export_custom.py",
+    "backend/api/export_realtime.py",
+    "backend/services/mes_gateway.py",
+    "backend/services/export_context.py",
+    "requirements.txt",
+    "frontend/src/store/useAuthStore.js",
+    "frontend/src/api/auth.js",
+    "frontend/src/views/Login/index.vue",
+    "frontend/src/views/Settings/index.vue",
+    "frontend/src/views/Settings/AuthPanel.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Data/index.vue",
+    "frontend/src/layout/Navbar.vue",
+    "frontend/src/layout/BottomBar.vue",
+    "frontend/src/router/index.js",
+    "AGENTS.md",
+    "docs/changelog/v3.10.0_2026-05-25.md",
+    "docs/changelog/v3.10.0_2026-05-25.json"
+  ],
+  "uat_acceptance": {
+    "phases": [
+      "阶段 1-2 前端 UI 隐藏 + 代码清除",
+      "阶段 3 API 410 Gone (20/20)",
+      "阶段 4 数据归属重定向 (41/41)",
+      "阶段 5 旧表彻底清除 (26/26)",
+      "阶段 6 Navbar/BottomBar 身份显示 (20/20)",
+      "⑤a + ⑤b API Key UI + 角色编辑器",
+      "R1-R4 后端 require_perm 各轮"
+    ],
+    "total_uat_files": 12,
+    "evidence": {
+      "screenshots": "/tmp/uat_p*_shots/",
+      "logs": "/tmp/uat_p*_run.log"
+    }
+  },
+  "compatibility_notes": {
+    "auto_migration": "启动时自动 DROP TABLE IF EXISTS operators, 老 operator 数据会丢",
+    "data_attribution": "DetectionSession.operator_id / DetectionCycle.operator_id 历史值变'悬空指针' (FK ondelete=SET NULL 不报错), 新数据指向 users.id",
+    "export_template": "{operator.*} 字段名继续可用, 语义改为当前登录用户 (未登录时空字符串)",
+    "mes_payload": "{operator.*} 字段名继续可用, 客户无需改 MES 模板",
+    "default_experience": "auth.enabled=false 时所有人 = 隐式超级管理员, 体验与 v3.9 完全一致"
+  },
+  "breaking_change": true,
+  "branch": "feat/user-system"
+}

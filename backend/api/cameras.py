@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
 import cv2
+from backend.core.auth_deps import require_perm
 from backend.db.database import get_db
 from backend.models.models import Camera
 from backend.schemas.camera import CameraCreate, CameraUpdate, CameraResponse
@@ -68,7 +69,8 @@ def get_camera(camera_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Camera not found")
     return camera
 
-@router.post("", response_model=CameraResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=CameraResponse, status_code=status.HTTP_201_CREATED,
+              dependencies=[Depends(require_perm("source.edit"))])
 def create_camera(camera: CameraCreate, db: Session = Depends(get_db)):
     """创建相机配置"""
     db_camera = Camera(**camera.model_dump())
@@ -77,7 +79,8 @@ def create_camera(camera: CameraCreate, db: Session = Depends(get_db)):
     db.refresh(db_camera)
     return db_camera
 
-@router.put("/{camera_id}", response_model=CameraResponse)
+@router.put("/{camera_id}", response_model=CameraResponse,
+             dependencies=[Depends(require_perm("source.edit"))])
 def update_camera(camera_id: int, camera: CameraUpdate, db: Session = Depends(get_db)):
     """更新相机配置"""
     db_camera = db.query(Camera).filter(Camera.id == camera_id).first()
@@ -92,7 +95,8 @@ def update_camera(camera_id: int, camera: CameraUpdate, db: Session = Depends(ge
     db.refresh(db_camera)
     return db_camera
 
-@router.delete("/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{camera_id}", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[Depends(require_perm("source.edit"))])
 def delete_camera(camera_id: int, db: Session = Depends(get_db)):
     """删除相机配置"""
     db_camera = db.query(Camera).filter(Camera.id == camera_id).first()

@@ -3,10 +3,12 @@
 
 主从配置、数据上报、汇总状态查询。
 """
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel
 from typing import Optional
 
+from backend.core.api_key import require_api_key
+from backend.core.auth_deps import require_perm
 from backend.db.database import SessionLocal
 from backend.models.mes_models import ClusterConfig, BoxAggregation, BoxSummary
 from backend.services.cluster_collector import get_cluster_collector
@@ -54,7 +56,8 @@ def get_config():
     return collector.get_config()
 
 
-@router.put("/config")
+@router.put("/config",
+             dependencies=[Depends(require_perm("mes.cluster.edit"))])
 def update_config(body: ClusterConfigUpdate):
     db = SessionLocal()
     try:
@@ -81,7 +84,9 @@ def update_config(body: ClusterConfigUpdate):
 
 # ---- 数据上报（从机 -> 主机） ----
 
-@router.post("/report")
+@router.post("/report",
+              dependencies=[Depends(require_api_key("cluster"))])
+# M2M: 副机推送数据到主机 — auth=off 放行, auth=on 必须 X-API-Key scope=cluster
 def receive_report(body: StationReport, request: Request):
     collector = get_cluster_collector()
     config = collector.get_config()
@@ -158,7 +163,9 @@ def get_box_detail(box_serial: str):
 
 # ---- 副机心跳 ----
 
-@router.post("/heartbeat")
+@router.post("/heartbeat",
+              dependencies=[Depends(require_api_key("cluster"))])
+# M2M: 副机心跳 — auth=off 放行, auth=on 必须 X-API-Key scope=cluster
 def slave_heartbeat(body: SlaveHeartbeat, request: Request):
     """副机定时上报心跳，主机记录在线状态"""
     collector = get_cluster_collector()
@@ -180,7 +187,8 @@ def list_connected_slaves():
 
 # ---- 删除记录 ----
 
-@router.delete("/boxes/{box_serial}")
+@router.delete("/boxes/{box_serial}",
+                dependencies=[Depends(require_perm("mes.cluster.edit"))])
 def delete_box(box_serial: str):
     """删除单个箱号的所有 BoxAggregation + BoxSummary 记录。
     用于前端集群汇总页"删除"按钮，清理测试/异常数据。
@@ -208,7 +216,8 @@ def delete_box(box_serial: str):
         db.close()
 
 
-@router.delete("/boxes")
+@router.delete("/boxes",
+                dependencies=[Depends(require_perm("mes.cluster.edit"))])
 def clear_boxes(
     scope: str = Query("all", pattern="^(all|pending|recent|older)$"),
     before_days: int = Query(0, ge=0, le=3650,

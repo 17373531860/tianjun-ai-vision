@@ -86,6 +86,19 @@ try {
   console.error('[⬛ Boot] 插件注册失败:', e);
 }
 
+// v3.10.0 用户系统: 启动时拉一次 /auth/status + /auth/me 让 store 就位
+// (失败静默 — 后端可能正在启动, 路由守卫和 Settings 页都会再 init 一次)
+(async () => {
+  try {
+    const { useAuthStore } = await import('./store/useAuthStore.js');
+    const authStore = useAuthStore();
+    await authStore.init();
+    console.log(`[⬛ AuthStore] 初始化完成: enabled=${authStore.authEnabled}, user=${authStore.displayLabel}`);
+  } catch (e) {
+    console.warn('[⬛ AuthStore] 初始化失败 (不影响主流程):', e?.message || e);
+  }
+})();
+
 // G3 + G2: active 插件主题 + Tier2/3 ESM loader — 在 Vue mount 前 fire-and-forget
 // (失败静默 fallback, 主程序继续走默认外观与默认路由表)
 (async () => {

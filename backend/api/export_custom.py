@@ -35,6 +35,7 @@ from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from backend.core.auth_deps import require_perm
 from backend.core.config import DATA_DIR
 from backend.db.database import get_db
 from backend.models.export_models import ExportTemplate
@@ -162,7 +163,8 @@ def get_template(tpl_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
     return TemplateOut.from_orm_row(row).model_dump()
 
 
-@router.post("/templates")
+@router.post("/templates",
+              dependencies=[Depends(require_perm("data.export"))])
 def create_template(payload: TemplateCreate,
                     db: Session = Depends(get_db)) -> Dict[str, Any]:
     row = ExportTemplate(
@@ -182,7 +184,8 @@ def create_template(payload: TemplateCreate,
     return TemplateOut.from_orm_row(row).model_dump()
 
 
-@router.put("/templates/{tpl_id}")
+@router.put("/templates/{tpl_id}",
+             dependencies=[Depends(require_perm("data.export"))])
 def update_template(tpl_id: int, payload: TemplateUpdate,
                     db: Session = Depends(get_db)) -> Dict[str, Any]:
     row = db.query(ExportTemplate).filter(ExportTemplate.id == tpl_id).first()
@@ -202,7 +205,8 @@ def update_template(tpl_id: int, payload: TemplateUpdate,
     return TemplateOut.from_orm_row(row).model_dump()
 
 
-@router.delete("/templates/{tpl_id}")
+@router.delete("/templates/{tpl_id}",
+                dependencies=[Depends(require_perm("data.export"))])
 def delete_template(tpl_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
     row = db.query(ExportTemplate).filter(ExportTemplate.id == tpl_id).first()
     if not row:
@@ -214,7 +218,8 @@ def delete_template(tpl_id: int, db: Session = Depends(get_db)) -> Dict[str, Any
     return {"status": "ok"}
 
 
-@router.post("/templates/{tpl_id}/clone")
+@router.post("/templates/{tpl_id}/clone",
+              dependencies=[Depends(require_perm("data.export"))])
 def clone_template(tpl_id: int,
                    new_name: Optional[str] = None,
                    db: Session = Depends(get_db)) -> Dict[str, Any]:
@@ -291,7 +296,8 @@ def _build_context(payload: _ContextSelector, db: Session) -> Dict[str, Any]:
     return build_system_context(db, license_payload=payload.license_payload)
 
 
-@router.post("/preview")
+@router.post("/preview",
+              dependencies=[Depends(require_perm("data.export"))])
 def preview_template(payload: PreviewRequest,
                      db: Session = Depends(get_db)) -> Dict[str, Any]:
     """预览模板渲染结果
@@ -367,7 +373,8 @@ class RenderRequest(_ContextSelector):
     display_payload: Optional[Dict[str, Any]] = None
 
 
-@router.post("/render")
+@router.post("/render",
+              dependencies=[Depends(require_perm("data.export"))])
 def render_to_download(payload: RenderRequest,
                        db: Session = Depends(get_db)) -> StreamingResponse:
     """立即渲染并以文件流返回（前端"立即下载"按钮）"""
@@ -418,7 +425,8 @@ def render_to_download(payload: RenderRequest,
 # 路线 B 模板文件上传/下载/删除
 # ============================================================
 
-@router.post("/templates/{template_id}/upload-template-file")
+@router.post("/templates/{template_id}/upload-template-file",
+              dependencies=[Depends(require_perm("data.export"))])
 async def upload_template_file(
     template_id: int,
     file: UploadFile = File(...),
@@ -482,7 +490,8 @@ async def upload_template_file(
     return TemplateOut.from_orm_row(row).model_dump()
 
 
-@router.delete("/templates/{template_id}/template-file")
+@router.delete("/templates/{template_id}/template-file",
+                dependencies=[Depends(require_perm("data.export"))])
 def delete_template_file(template_id: int,
                          db: Session = Depends(get_db)) -> Dict[str, Any]:
     """删除已上传的占位符模板文件 — 删除后渲染会回退到路线 A 自动样式"""

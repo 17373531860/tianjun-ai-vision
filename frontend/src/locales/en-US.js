@@ -15,7 +15,12 @@ export default {
     cancel: 'Cancel',
     exitConfirm: 'Are you sure you want to exit?',
     exitTitle: 'Exit System',
-    safeExit: 'Safely Exited'
+    safeExit: 'Safely Exited',
+    notLoggedIn: 'Not Logged In',
+    login: 'Login',
+    logoutSuccess: 'Logged out',
+    logoutFailed: 'Logout failed',
+    detectingNoLogout: 'Detection running, please stop first'
   },
   menu: {
     monitor: 'Monitor',
