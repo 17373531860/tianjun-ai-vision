@@ -26,6 +26,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from backend.core.auth_deps import require_perm
 from backend.db.database import get_db
 from backend.models.export_models import ExportScheduledRule, ExportRunLog
 from backend.services.export_scheduled import (
@@ -152,7 +153,8 @@ def get_default_dir():
     return {"key": DEFAULT_OUTPUT_DIR_KEY, "value": get_default_output_dir()}
 
 
-@router.put("/scheduled-rules/_default-output-dir")
+@router.put("/scheduled-rules/_default-output-dir",
+             dependencies=[Depends(require_perm("data.export"))])
 def set_default_dir(payload: dict = Body(...), db: Session = Depends(get_db)):
     from backend.models.models import SystemConfig
     value = (payload.get("value") or "").strip()
@@ -167,7 +169,8 @@ def set_default_dir(payload: dict = Body(...), db: Session = Depends(get_db)):
     return {"key": DEFAULT_OUTPUT_DIR_KEY, "value": get_default_output_dir(db)}
 
 
-@router.post("/scheduled-rules/_cron-preview")
+@router.post("/scheduled-rules/_cron-preview",
+              dependencies=[Depends(require_perm("data.export"))])
 def cron_preview(payload: dict = Body(...)):
     """前端实时预览: 给一个 cron 字符串, 返回下 N 次触发时间."""
     expr = (payload.get("cron_expression") or "").strip()
@@ -192,7 +195,8 @@ def get_rule(rule_id: int, db: Session = Depends(get_db)):
     return _serialize(rule)
 
 
-@router.post("/scheduled-rules")
+@router.post("/scheduled-rules",
+              dependencies=[Depends(require_perm("data.export"))])
 def create_rule(body: RuleCreate, db: Session = Depends(get_db)):
     _validate_cron(body.cron_expression)
     rule = ExportScheduledRule(**body.model_dump())
@@ -203,7 +207,8 @@ def create_rule(body: RuleCreate, db: Session = Depends(get_db)):
     return _serialize(rule)
 
 
-@router.put("/scheduled-rules/{rule_id}")
+@router.put("/scheduled-rules/{rule_id}",
+             dependencies=[Depends(require_perm("data.export"))])
 def update_rule(rule_id: int, body: RuleUpdate, db: Session = Depends(get_db)):
     rule = db.query(ExportScheduledRule).filter(ExportScheduledRule.id == rule_id).first()
     if not rule:
@@ -219,7 +224,8 @@ def update_rule(rule_id: int, body: RuleUpdate, db: Session = Depends(get_db)):
     return _serialize(rule)
 
 
-@router.delete("/scheduled-rules/{rule_id}")
+@router.delete("/scheduled-rules/{rule_id}",
+                dependencies=[Depends(require_perm("data.export"))])
 def delete_rule(rule_id: int, db: Session = Depends(get_db)):
     rule = db.query(ExportScheduledRule).filter(ExportScheduledRule.id == rule_id).first()
     if not rule:
@@ -230,7 +236,8 @@ def delete_rule(rule_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-@router.post("/scheduled-rules/{rule_id}/toggle")
+@router.post("/scheduled-rules/{rule_id}/toggle",
+              dependencies=[Depends(require_perm("data.export"))])
 def toggle_rule(rule_id: int, db: Session = Depends(get_db)):
     rule = db.query(ExportScheduledRule).filter(ExportScheduledRule.id == rule_id).first()
     if not rule:
@@ -245,7 +252,8 @@ def toggle_rule(rule_id: int, db: Session = Depends(get_db)):
     return _serialize(rule)
 
 
-@router.post("/scheduled-rules/{rule_id}/test-run")
+@router.post("/scheduled-rules/{rule_id}/test-run",
+              dependencies=[Depends(require_perm("data.export"))])
 def test_run(rule_id: int, db: Session = Depends(get_db)):
     """立即同步触发一次。返回结果 + 刷新 last_run_*."""
     rule = db.query(ExportScheduledRule).filter(ExportScheduledRule.id == rule_id).first()

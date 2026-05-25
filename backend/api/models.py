@@ -9,6 +9,7 @@ import threading
 import queue
 import traceback
 from datetime import datetime, timedelta
+from backend.core.auth_deps import require_perm
 from backend.db.database import get_db, SessionLocal
 from backend.models.models import Model, ModelConversion, Project
 from backend.schemas.model import (
@@ -538,7 +539,8 @@ def get_conversion_status(conv_id: int, db: Session = Depends(get_db)):
     return conv
 
 
-@router.delete("/conversions/{conv_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/conversions/{conv_id}", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[Depends(require_perm("model.delete"))])
 def delete_conversion(conv_id: int, db: Session = Depends(get_db)):
     """删除一个转换记录及其文件"""
     conv = db.query(ModelConversion).filter(ModelConversion.id == conv_id).first()
@@ -562,7 +564,8 @@ def get_model(model_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Model not found")
     return model
 
-@router.post("/upload", response_model=ModelResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/upload", response_model=ModelResponse, status_code=status.HTTP_201_CREATED,
+              dependencies=[Depends(require_perm("model.upload"))])
 async def upload_model(
     file: UploadFile = File(...),
     name: str = Form(...),
@@ -632,7 +635,8 @@ async def upload_model(
     
     return db_model
 
-@router.post("/{model_id}/parse-labels", response_model=ModelResponse)
+@router.post("/{model_id}/parse-labels", response_model=ModelResponse,
+              dependencies=[Depends(require_perm("model.upload"))])
 def parse_model_labels_api(model_id: int, db: Session = Depends(get_db)):
     """重新解析模型标签"""
     db_model = db.query(Model).filter(Model.id == model_id).first()
@@ -652,7 +656,8 @@ def parse_model_labels_api(model_id: int, db: Session = Depends(get_db)):
     
     return db_model
 
-@router.put("/{model_id}", response_model=ModelResponse)
+@router.put("/{model_id}", response_model=ModelResponse,
+             dependencies=[Depends(require_perm("model.upload"))])
 def update_model(model_id: int, model: ModelUpdate, db: Session = Depends(get_db)):
     """更新模型信息"""
     db_model = db.query(Model).filter(Model.id == model_id).first()
@@ -680,7 +685,8 @@ def update_model(model_id: int, model: ModelUpdate, db: Session = Depends(get_db
     
     return db_model
 
-@router.delete("/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{model_id}", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[Depends(require_perm("model.delete"))])
 def delete_model(model_id: int, db: Session = Depends(get_db)):
     """删除模型"""
     db_model = db.query(Model).filter(Model.id == model_id).first()
@@ -711,7 +717,8 @@ def delete_model(model_id: int, db: Session = Depends(get_db)):
     db.commit()
     return None
 
-@router.post("/{model_id}/set-active", response_model=ModelResponse)
+@router.post("/{model_id}/set-active", response_model=ModelResponse,
+              dependencies=[Depends(require_perm("model.upload"))])
 def set_model_active(model_id: int, db: Session = Depends(get_db)):
     """将模型设为当前使用"""
     db_model = db.query(Model).filter(Model.id == model_id).first()
@@ -732,7 +739,8 @@ def set_model_active(model_id: int, db: Session = Depends(get_db)):
     return db_model
 
 
-@router.post("/{model_id}/convert", response_model=ConversionResponse)
+@router.post("/{model_id}/convert", response_model=ConversionResponse,
+              dependencies=[Depends(require_perm("model.upload"))])
 def convert_model(model_id: int, req: ConversionRequest, db: Session = Depends(get_db)):
     """发起模型格式转换。已有相同转换时直接复用。"""
     db_model = db.query(Model).filter(Model.id == model_id).first()
@@ -811,7 +819,8 @@ def get_model_conversions(model_id: int, db: Session = Depends(get_db)):
     return convs
 
 
-@router.post("/{model_id}/resolve-path")
+@router.post("/{model_id}/resolve-path",
+              dependencies=[Depends(require_perm("model.upload"))])
 def resolve_model_path(
     model_id: int,
     format: str = "pytorch_fp32",

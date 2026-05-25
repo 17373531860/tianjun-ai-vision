@@ -20,6 +20,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backend.core.api_key import require_api_key
+from backend.core.auth_deps import require_perm
 from backend.db.database import get_db
 from backend.models.models import SystemConfig
 
@@ -78,7 +80,8 @@ def get_display(db: Session = Depends(get_db)) -> Dict[str, Any]:
     return out
 
 
-@router.put("/display")
+@router.put("/display",
+             dependencies=[Depends(require_perm("settings.edit"))])
 def put_display(payload: DisplayPayload,
                 db: Session = Depends(get_db)) -> Dict[str, Any]:
     """更新 display 字段（前端 useSystemStore 保存时调用）"""
@@ -118,7 +121,9 @@ class LicenseCachePayload(BaseModel):
     features: Optional[list] = None
 
 
-@router.put("/license-cache")
+@router.put("/license-cache",
+             dependencies=[Depends(require_api_key("license.cache"))])
+# M2M-like: License IPC 缓存写入 — auth=off 放行, auth=on 必须 X-API-Key scope=license.cache
 def put_license_cache(payload: LicenseCachePayload,
                       db: Session = Depends(get_db)) -> Dict[str, Any]:
     """前端通过 Electron IPC 拿到 License 信息后，PUT 一次到后端缓存

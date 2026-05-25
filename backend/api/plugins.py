@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from backend.core.auth_deps import require_perm
 from backend.db.database import get_db
 from backend.models.plugin_models import PluginAuditLog, PluginRecord, PluginState
 from backend.plugin_system.verifier import (
@@ -94,7 +95,8 @@ def list_plugins(db: Session = Depends(get_db)) -> Dict[str, Any]:
     }
 
 
-@router.post("/install")
+@router.post("/install",
+              dependencies=[Depends(require_perm("system.plugin.manage"))])
 async def install_plugin(file: UploadFile = File(...), db: Session = Depends(get_db)) -> Dict[str, Any]:
     if not file.filename or not file.filename.endswith(".tjvplugin"):
         raise HTTPException(status_code=400, detail="只支持 .tjvplugin 文件")
@@ -174,7 +176,8 @@ def get_active_asset(asset_path: str, db: Session = Depends(get_db)) -> FileResp
     return FileResponse(target, media_type=media_type)
 
 
-@router.post("/{customer_code}/activate")
+@router.post("/{customer_code}/activate",
+              dependencies=[Depends(require_perm("system.plugin.manage"))])
 def activate_plugin(customer_code: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
     record = _get_record(db, customer_code)
     for row in db.query(PluginRecord).all():
@@ -189,7 +192,8 @@ def activate_plugin(customer_code: str, db: Session = Depends(get_db)) -> Dict[s
     return {"status": "ok", "plugin": _serialize(record, db.query(PluginState).filter(PluginState.customer_code == customer_code).first())}
 
 
-@router.post("/{customer_code}/deactivate")
+@router.post("/{customer_code}/deactivate",
+              dependencies=[Depends(require_perm("system.plugin.manage"))])
 def deactivate_plugin(customer_code: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
     record = _get_record(db, customer_code)
     record.is_active = False
@@ -201,7 +205,8 @@ def deactivate_plugin(customer_code: str, db: Session = Depends(get_db)) -> Dict
     return {"status": "ok", "plugin": _serialize(record, db.query(PluginState).filter(PluginState.customer_code == customer_code).first())}
 
 
-@router.delete("/{customer_code}")
+@router.delete("/{customer_code}",
+                dependencies=[Depends(require_perm("system.plugin.manage"))])
 def delete_plugin(customer_code: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
     record = _get_record(db, customer_code)
     install_path = Path(record.install_path)

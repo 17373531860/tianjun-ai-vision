@@ -8,12 +8,13 @@ import asyncio
 import logging
 import traceback
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 import base64
 
+from backend.core.auth_deps import require_perm
 from backend.services.wmax.manager import get_wmax_manager
 from backend.services.wmax.virtual_device import VirtualWMaxDevice, VIRTUAL_IP
 
@@ -100,7 +101,8 @@ async def discover_devices(timeout: float = Query(2.0, ge=0.5, le=10.0)):
         raise HTTPException(500, f"设备发现失败: {e}")
 
 
-@router.post("/auto-discover")
+@router.post("/auto-discover",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def auto_discover_and_connect(timeout: float = Query(3.0, ge=1.0, le=10.0)):
     """自动发现并连接所有 WMax 设备（跟启动时相同逻辑）"""
     logger.info("[WMaxAPI] POST /auto-discover timeout=%.1f", timeout)
@@ -156,7 +158,8 @@ def get_discovered_devices():
 
 # ── 连接管理 ─────────────────────────────────────────────
 
-@router.post("/connect")
+@router.post("/connect",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def connect_device(body: ConnectRequest):
     logger.info("[WMaxAPI] POST /connect %s:%d", body.ip, body.port)
     try:
@@ -169,7 +172,8 @@ def connect_device(body: ConnectRequest):
         raise HTTPException(500, f"连接失败: {e}")
 
 
-@router.post("/disconnect")
+@router.post("/disconnect",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def disconnect_device(body: DeviceRequest):
     logger.info("[WMaxAPI] POST /disconnect %s:%d", body.ip, body.port)
     mgr = get_wmax_manager()
@@ -185,7 +189,8 @@ def get_all_wmax_status():
 
 # ── 握手与初始化 ──────────────────────────────────────────
 
-@router.post("/handshake")
+@router.post("/handshake",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def handshake(body: DeviceRequest):
     logger.info("[WMaxAPI] POST /handshake %s:%d", body.ip, body.port)
     try:
@@ -199,7 +204,8 @@ async def handshake(body: DeviceRequest):
         raise HTTPException(500, f"握手失败: {e}")
 
 
-@router.post("/load-config")
+@router.post("/load-config",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def load_config(body: DeviceRequest, config_id: int = Query(-1)):
     """读取设备全部配置（包含 sensor/light/common/code/reading/dataEdit/IO）"""
     logger.info("[WMaxAPI] POST /load-config %s:%d config_id=%d", body.ip, body.port, config_id)
@@ -214,7 +220,8 @@ async def load_config(body: DeviceRequest, config_id: int = Query(-1)):
         raise HTTPException(500, f"读取配置失败: {e}")
 
 
-@router.post("/device-features")
+@router.post("/device-features",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def get_device_features(body: DeviceRequest):
     logger.info("[WMaxAPI] POST /device-features %s:%d", body.ip, body.port)
     mgr = get_wmax_manager()
@@ -223,7 +230,8 @@ async def get_device_features(body: DeviceRequest):
 
 # ── 全参数读写 ────────────────────────────────────────────
 
-@router.put("/params")
+@router.put("/params",
+             dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def set_params(body: FullParamsRequest):
     """下发所有类型参数（不保存到设备 Flash）"""
     param_types = [k for k in ("sensor_params", "light_params", "common_params",
@@ -253,7 +261,8 @@ async def set_params(body: FullParamsRequest):
         raise HTTPException(500, f"下发参数失败: {e}")
 
 
-@router.post("/save-params")
+@router.post("/save-params",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def save_params(body: FullParamsRequest):
     """保存参数到设备 Flash"""
     param_types = [k for k in ("sensor_params", "light_params", "common_params",
@@ -285,7 +294,8 @@ async def save_params(body: FullParamsRequest):
 
 # ── 输出端子与指示灯 ──────────────────────────────────────
 
-@router.put("/output-config")
+@router.put("/output-config",
+             dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def set_output_config(body: OutputConfigRequest):
     """设置输出端子: signal_mask (0=无, 1=OK, 4=错误, 5=OK+错误, 1024=触发器忙), duration_ms"""
     logger.info("[WMaxAPI] PUT /output-config %s:%d signal=0x%X dur=%dms save=%s",
@@ -306,7 +316,8 @@ async def set_output_config(body: OutputConfigRequest):
         raise HTTPException(500, f"设置输出端子失败: {e}")
 
 
-@router.put("/indicator-config")
+@router.put("/indicator-config",
+             dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def set_indicator_config(body: IndicatorConfigRequest):
     """设置指示灯模式: mode (1=手动亮灯, 3=仅扫描时自动亮灯)"""
     logger.info("[WMaxAPI] PUT /indicator-config %s:%d mode=%d save=%s",
@@ -326,7 +337,8 @@ async def set_indicator_config(body: IndicatorConfigRequest):
 
 # ── 参数预设（4组） ───────────────────────────────────────
 
-@router.post("/preset/load")
+@router.post("/preset/load",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def load_preset(body: PresetRequest):
     """加载指定预设组（config_id: 0-3）"""
     logger.info("[WMaxAPI] POST /preset/load %s:%d config_id=%d", body.ip, body.port, body.config_id)
@@ -334,7 +346,8 @@ async def load_preset(body: PresetRequest):
     return await mgr.load_config(body.ip, body.port, body.config_id)
 
 
-@router.post("/preset/save")
+@router.post("/preset/save",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def save_preset(body: PresetRequest):
     """保存当前参数到指定预设组"""
     logger.info("[WMaxAPI] POST /preset/save %s:%d config_id=%d", body.ip, body.port, body.config_id)
@@ -344,21 +357,24 @@ async def save_preset(body: PresetRequest):
 
 # ── 自动对焦与调参 ────────────────────────────────────────
 
-@router.post("/autofocus")
+@router.post("/autofocus",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def auto_focus(body: DeviceRequest, start: bool = Query(True)):
     logger.info("[WMaxAPI] POST /autofocus %s:%d start=%s", body.ip, body.port, start)
     mgr = get_wmax_manager()
     return await mgr.auto_focus(body.ip, body.port, start)
 
 
-@router.post("/autotune")
+@router.post("/autotune",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def start_autotune(body: DeviceRequest):
     logger.info("[WMaxAPI] POST /autotune %s:%d", body.ip, body.port)
     mgr = get_wmax_manager()
     return await mgr.start_tune(body.ip, body.port)
 
 
-@router.post("/cancel-tune")
+@router.post("/cancel-tune",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def cancel_autotune(body: DeviceRequest):
     logger.info("[WMaxAPI] POST /cancel-tune %s:%d", body.ip, body.port)
     mgr = get_wmax_manager()
@@ -367,14 +383,16 @@ async def cancel_autotune(body: DeviceRequest):
 
 # ── 图像 ─────────────────────────────────────────────────
 
-@router.post("/video")
+@router.post("/video",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def turn_on_video(body: TriggerRequest):
     logger.info("[WMaxAPI] POST /video %s:%d on=%s", body.ip, body.port, body.on)
     mgr = get_wmax_manager()
     return await mgr.turn_on_video(body.ip, body.port, body.on)
 
 
-@router.post("/trigger-image")
+@router.post("/trigger-image",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def turn_on_trigger_image(body: TriggerRequest):
     logger.info("[WMaxAPI] POST /trigger-image %s:%d on=%s", body.ip, body.port, body.on)
     mgr = get_wmax_manager()
@@ -436,7 +454,8 @@ def mjpeg_stream(ip: str, port: int = Query(55266), fps: int = Query(10)):
 
 # ── 触发控制 ──────────────────────────────────────────────
 
-@router.post("/trigger")
+@router.post("/trigger",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def trigger_control(body: TriggerRequest):
     logger.info("[WMaxAPI] POST /trigger %s:%d on=%s", body.ip, body.port, body.on)
     mgr = get_wmax_manager()
@@ -459,7 +478,8 @@ def get_last_code(ip: str, port: int = Query(55266)):
 
 # ── 运行模式 ─────────────────────────────────────────────
 
-@router.put("/run-mode")
+@router.put("/run-mode",
+             dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def set_run_mode(body: RunModeRequest):
     logger.info("[WMaxAPI] PUT /run-mode %s:%d mode=%d", body.ip, body.port, body.mode)
     mgr = get_wmax_manager()
@@ -470,7 +490,8 @@ async def set_run_mode(body: RunModeRequest):
 
 # ── 读码率测试 ───────────────────────────────────────────
 
-@router.post("/read-rate/start")
+@router.post("/read-rate/start",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def start_read_rate_test(body: DeviceRequest):
     """开始读码率测试"""
     logger.info("[WMaxAPI] POST /read-rate/start %s:%d", body.ip, body.port)
@@ -478,7 +499,8 @@ async def start_read_rate_test(body: DeviceRequest):
     return await mgr.start_read_rate_test(body.ip, body.port)
 
 
-@router.post("/read-rate/stop")
+@router.post("/read-rate/stop",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def stop_read_rate_test(body: DeviceRequest):
     """停止读码率测试"""
     logger.info("[WMaxAPI] POST /read-rate/stop %s:%d", body.ip, body.port)
@@ -498,21 +520,24 @@ def get_read_rate_result(ip: str, port: int = Query(55266)):
 
 # ── 设备控制 ─────────────────────────────────────────────
 
-@router.post("/reboot")
+@router.post("/reboot",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def reboot_device(body: DeviceRequest):
     logger.warning("[WMaxAPI] POST /reboot %s:%d", body.ip, body.port)
     mgr = get_wmax_manager()
     return await mgr.reboot(body.ip, body.port)
 
 
-@router.post("/reset")
+@router.post("/reset",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def reset_device(body: DeviceRequest):
     logger.warning("[WMaxAPI] POST /reset %s:%d", body.ip, body.port)
     mgr = get_wmax_manager()
     return await mgr.reset_to_default(body.ip, body.port)
 
 
-@router.post("/indicate")
+@router.post("/indicate",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 async def indicate_device(body: DeviceRequest):
     logger.info("[WMaxAPI] POST /indicate %s:%d", body.ip, body.port)
     mgr = get_wmax_manager()
@@ -521,7 +546,8 @@ async def indicate_device(body: DeviceRequest):
 
 # ── 虚拟设备（演示用） ────────────────────────────────────
 
-@router.post("/virtual/create")
+@router.post("/virtual/create",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def create_virtual_device():
     """创建虚拟 WMax 设备用于 UI 预览"""
     logger.info("[WMaxAPI] POST /virtual/create")
@@ -541,7 +567,8 @@ def create_virtual_device():
         raise HTTPException(500, f"创建虚拟设备失败: {e}")
 
 
-@router.post("/virtual/delete")
+@router.post("/virtual/delete",
+              dependencies=[Depends(require_perm("mes.scanner.edit"))])
 def delete_virtual_device():
     """删除虚拟 WMax 设备"""
     logger.info("[WMaxAPI] POST /virtual/delete")

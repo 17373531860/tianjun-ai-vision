@@ -3,7 +3,7 @@
 支持 USB 串口报警器的检测、配置和控制
 支持多通道（每个工位独立串口设备）
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
 import serial
@@ -12,6 +12,7 @@ import threading
 import time
 import json
 import os
+from backend.core.auth_deps import require_perm
 from backend.core.config import DATA_DIR
 
 router = APIRouter()
@@ -837,7 +838,8 @@ async def list_ports(channel: int = Query(0, description="工位通道")):
     }
 
 
-@router.post("/connect")
+@router.post("/connect",
+              dependencies=[Depends(require_perm("alarm.edit"))])
 async def connect(req: ConnectRequest, channel: int = Query(0, description="工位通道")):
     """连接到报警器"""
     mgr = alarm_router.get(channel)
@@ -849,7 +851,8 @@ async def connect(req: ConnectRequest, channel: int = Query(0, description="工�
         raise HTTPException(status_code=500, detail=result["msg"])
 
 
-@router.post("/disconnect")
+@router.post("/disconnect",
+              dependencies=[Depends(require_perm("alarm.edit"))])
 async def disconnect(channel: int = Query(0, description="工位通道")):
     """断开报警器连接"""
     alarm_router.get(channel).disconnect()
@@ -890,7 +893,8 @@ async def get_status(channel: int = Query(-1, description="工位通道，-1 返
         return {"success": True, "channels": all_status}
 
 
-@router.post("/config")
+@router.post("/config",
+              dependencies=[Depends(require_perm("alarm.edit"))])
 async def save_config(req: ConfigRequest, channel: int = Query(0, description="工位通道")):
     """保存报警器配置"""
     mgr = alarm_router.get(channel)
@@ -935,7 +939,8 @@ async def save_config(req: ConfigRequest, channel: int = Query(0, description="�
     }
 
 
-@router.post("/reload")
+@router.post("/reload",
+              dependencies=[Depends(require_perm("alarm.edit"))])
 async def reload_alarm_config():
     """v2.7.3: 重新加载报警配置（支持运行时切换共享/独立模式）"""
     try:
@@ -945,7 +950,8 @@ async def reload_alarm_config():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/test")
+@router.post("/test",
+              dependencies=[Depends(require_perm("alarm.edit"))])
 async def test_alarm(req: TestRequest, channel: int = Query(0, description="工位通道")):
     """测试报警器"""
     mgr = alarm_router.get(channel)
@@ -963,7 +969,8 @@ async def test_alarm(req: TestRequest, channel: int = Query(0, description="工�
         raise HTTPException(status_code=400, detail=f"无效的动作: {req.action}")
 
 
-@router.post("/trigger/{event_type}")
+@router.post("/trigger/{event_type}",
+              dependencies=[Depends(require_perm("alarm.edit"))])
 async def trigger_alarm(event_type: str, channel: int = Query(0, description="工位通道")):
     """手动触发报警"""
     mgr = alarm_router.get(channel)
@@ -975,21 +982,24 @@ async def trigger_alarm(event_type: str, channel: int = Query(0, description="�
     return {"success": True, "message": f"工位 {channel} 已触发 {event_type} 报警"}
 
 
-@router.post("/stop")
+@router.post("/stop",
+              dependencies=[Depends(require_perm("alarm.edit"))])
 async def stop_alarm(channel: int = Query(0, description="工位通道")):
     """停止报警"""
     alarm_router.stop_alarm(channel)
     return {"success": True, "message": f"工位 {channel} 已停止报警"}
 
 
-@router.post("/idle-light/start")
+@router.post("/idle-light/start",
+              dependencies=[Depends(require_perm("alarm.edit"))])
 async def start_idle_light(channel: int = Query(0, description="工位通道")):
     """手动开启工作指示灯"""
     alarm_router.start_idle_light(channel)
     return {"success": True, "message": f"工位 {channel} 工作指示灯已开启"}
 
 
-@router.post("/idle-light/stop")
+@router.post("/idle-light/stop",
+              dependencies=[Depends(require_perm("alarm.edit"))])
 async def stop_idle_light(channel: int = Query(0, description="工位通道")):
     """手动关闭工作指示灯"""
     alarm_router.stop_idle_light(channel)

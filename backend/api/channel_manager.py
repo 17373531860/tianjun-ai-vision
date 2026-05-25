@@ -9,8 +9,9 @@ import threading
 import json
 import os
 from typing import Dict, Optional, List
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from backend.core.auth_deps import require_perm
 from backend.core.config import DATA_DIR
 
 router = APIRouter(prefix="/workstations", tags=["workstations"])
@@ -416,7 +417,8 @@ def list_workstations():
     }
 
 
-@router.post("/mode")
+@router.post("/mode",
+              dependencies=[Depends(require_perm("settings.edit"))])
 def set_workstation_mode(req: WorkstationModeRequest):
     """Set the number of active workstations and optionally apply per-channel config."""
     try:
@@ -436,7 +438,8 @@ def set_workstation_mode(req: WorkstationModeRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.put("/channel-config")
+@router.put("/channel-config",
+             dependencies=[Depends(require_perm("settings.edit"))])
 def save_channel_config(body: dict):
     """持久化单个工位的视频源配置（接受任意字段）"""
     ch_id = body.pop("channel_id", 0)
@@ -448,7 +451,8 @@ class GpuAssignRequest(BaseModel):
     device: str = "auto"  # auto, cuda:0, cuda:1, cpu
 
 
-@router.post("/{channel_id}/gpu")
+@router.post("/{channel_id}/gpu",
+              dependencies=[Depends(require_perm("source.edit"))])
 def set_channel_gpu(channel_id: int, req: GpuAssignRequest):
     """Assign a GPU device to a specific workstation/channel."""
     try:
@@ -479,7 +483,8 @@ class UsbDeviceBindRequest(BaseModel):
     device_label: str = Field("", description="可选, 摄像头型号 (HD Pro Webcam C920 等), 仅用于调试")
 
 
-@router.put("/{channel_id}/usb-device")
+@router.put("/{channel_id}/usb-device",
+             dependencies=[Depends(require_perm("source.edit"))])
 def bind_usb_device(channel_id: int, req: UsbDeviceBindRequest):
     """v3.8.2: 把工位绑定的 USB 摄像头 deviceId 写入 workstation_config.json.
 

@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
+from backend.core.auth_deps import require_perm
 from backend.core.config import settings
 from backend.db.database import get_db, SessionLocal
 from backend.models.models import (
@@ -181,7 +182,8 @@ def backup_database():
     )
 
 
-@router.delete("/clear/all")
+@router.delete("/clear/all",
+                dependencies=[Depends(require_perm("data.cleanup"))])
 def clear_all_data(db: Session = Depends(get_db)):
     """清空所有历史数据：会话、周期、步骤、视频记录、录制文件、缓存、上传视频"""
     try:
@@ -244,7 +246,8 @@ class DateRangeCleanup(BaseModel):
     end_date: str
 
 
-@router.delete("/clear/range")
+@router.delete("/clear/range",
+                dependencies=[Depends(require_perm("data.cleanup"))])
 def clear_data_by_range(req: DateRangeCleanup, db: Session = Depends(get_db)):
     """删除指定日期范围内 (YYYY-MM-DD) 的历史数据"""
     try:
@@ -328,7 +331,8 @@ def get_cleanup_settings(db: Session = Depends(get_db)):
     }
 
 
-@router.put("/cleanup-settings")
+@router.put("/cleanup-settings",
+             dependencies=[Depends(require_perm("data.cleanup"))])
 def update_cleanup_settings(req: CleanupSettingsUpdate, db: Session = Depends(get_db)):
     """更新数据清理设置"""
     if req.retention_days is not None:
@@ -393,7 +397,8 @@ def get_storage_info():
     }
 
 
-@router.post("/cleanup/run")
+@router.post("/cleanup/run",
+              dependencies=[Depends(require_perm("data.cleanup"))])
 def run_cleanup_now():
     """立即执行一次自动清理（按保留天数）"""
     try:
