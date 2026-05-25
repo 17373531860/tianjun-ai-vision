@@ -350,6 +350,47 @@
                   浏览器要求拿到摄像头授权后才能列出名称；首次扫描会弹一次系统的相机权限申请。
                 </div>
               </div>
+
+              <!-- v3.9.x: 启动动画闲置超时 (任意 camera_mode 都生效) -->
+              <div
+                data-testid="splash-idle-section"
+                class="flex flex-col gap-2 p-3 bg-slate-900 rounded border border-slate-800"
+              >
+                <div class="flex items-center justify-between">
+                  <div class="flex flex-col">
+                    <span class="text-gray-300">闲置自动跳过</span>
+                    <span class="text-[10px] text-gray-500">客户工厂工控机无人值守时，自动跳过手势直接进主程序</span>
+                  </div>
+                  <el-switch
+                    v-model="splashIdleEnabled"
+                    data-testid="splash-idle-switch"
+                    inline-prompt
+                    active-text="启用"
+                    inactive-text="永不"
+                    @change="onSplashIdleEnabledChange"
+                  />
+                </div>
+                <div v-if="splashIdleEnabled" class="flex items-center justify-between">
+                  <span class="text-gray-300">超时秒数</span>
+                  <div class="flex items-center gap-2">
+                    <el-input-number
+                      v-model="splashCamera.idle_timeout_sec"
+                      data-testid="splash-idle-seconds"
+                      :min="10"
+                      :max="3600"
+                      :step="60"
+                      size="small"
+                      controls-position="right"
+                      style="width: 7.5rem"
+                      @change="saveSplashCameraConfig"
+                    />
+                    <span class="text-xs text-gray-400 whitespace-nowrap">秒（默认 600 = 10 分钟）</span>
+                  </div>
+                </div>
+                <div class="text-[10px] text-gray-500 leading-snug">
+                  ⚠️ 建议至少 60 秒以上：后端模型加载在性能弱的工控机上可能要 30-60 秒，期间启动动画处于等待状态。配置过短可能在后端就绪前就强制跳过。
+                </div>
+              </div>
             </div>
           </el-card>
 
@@ -2023,14 +2064,18 @@ async function saveTransformConfig() {
 // 因为 splash 比主前端先加载, 只能跨进程读 JSON, 拿不到 localStorage。
 // 详见 backend/api/channel_manager.py:get_splash_config 注释。
 const splashCamera = reactive({
-  camera_mode: 'auto',     // 'auto' | 'specific' | 'disabled'
+  camera_mode: 'auto',          // 'auto' | 'specific' | 'disabled'
   device_id: '',
   device_label: '',
+  idle_timeout_sec: 600,        // v3.9.x: 0=永不超时; >0=N 秒后强制跳过
 });
 const splashCameraAvailable = ref([]);     // [{deviceId, label}]
 const splashCameraScanning = ref(false);
 const splashCameraDialogOpen = ref(false);
 const splashCameraDialogPick = ref('');
+// 开关 UI 状态 — 跟 idle_timeout_sec=0 双向同步, 但单独存,
+// 因为切到"永不"再切回来要恢复用户上一次填的秒数, 不能直接读 idle_timeout_sec.
+const splashIdleEnabled = ref(true);
 
 async function loadSplashCameraConfig() {
   try {
@@ -2038,6 +2083,21 @@ async function loadSplashCameraConfig() {
     splashCamera.camera_mode = res?.data?.camera_mode || 'auto';
     splashCamera.device_id = res?.data?.device_id || '';
     splashCamera.device_label = res?.data?.device_label || '';
+    const rawTimeout = res?.data?.idle_timeout_sec;
+    const n = parseInt(rawTimeout, 10);
+    if (Number.isFinite(n) && n >= 0) {
+      // 0 = 永不: 开关关掉, 但保留默认 600 在 input 框里, 切回"启用"时不至于显示 0
+      if (n === 0) {
+        splashIdleEnabled.value = false;
+        splashCamera.idle_timeout_sec = 600;
+      } else {
+        splashIdleEnabled.value = true;
+        splashCamera.idle_timeout_sec = n;
+      }
+    } else {
+      splashIdleEnabled.value = true;
+      splashCamera.idle_timeout_sec = 600;
+    }
   } catch (e) {
     console.warn('加载启动动画相机配置失败:', e?.message);
   }
@@ -2045,10 +2105,13 @@ async function loadSplashCameraConfig() {
 
 async function saveSplashCameraConfig() {
   try {
+    // 落盘时把 UI 开关状态翻译成 0/N 秒: 关掉开关 → 后端存 0 → splash 不启 timer
+    const timeoutToSave = splashIdleEnabled.value ? (splashCamera.idle_timeout_sec || 600) : 0;
     await api.put('/workstations/splash-camera', {
       camera_mode: splashCamera.camera_mode,
       device_id: splashCamera.device_id || '',
       device_label: splashCamera.device_label || '',
+      idle_timeout_sec: timeoutToSave,
     });
   } catch (e) {
     ElMessage.error('保存启动动画相机配置失败: ' + (e?.response?.data?.detail || e?.message || ''));
@@ -2061,6 +2124,11 @@ const onSplashModeChange = () => {
     splashCamera.device_id = '';
     splashCamera.device_label = '';
   }
+  saveSplashCameraConfig();
+};
+
+const onSplashIdleEnabledChange = () => {
+  // 开关切换时立刻持久化, 不需要用户再点保存
   saveSplashCameraConfig();
 };
 

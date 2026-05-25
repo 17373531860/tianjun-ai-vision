@@ -1,5 +1,11 @@
 # Changelog
 
+> ⚠️ **下次发版前必做（v3.9.2 / v3.10.0 任意一个）**：v3.9.1a 热补丁的两个修复 commit（`7688179` + `dc94734`）**只在本地、未推 origin、未打 tag**。下一次跑 `update-release` 出新版本时，必须确认：
+> 1. `git log v3.9.1..HEAD --oneline` 能看到这两个 commit；
+> 2. 新 tag 包含这两个 commit（不能只 cherry-pick 主分支提交跳过它们）；
+> 3. 新版本 changelog 顶部 `## vX.Y.Z` 段落要复述 HOTFIX-001/002 修复内容，避免客户拿正式安装包却没拿到这两个修复。
+> 4. 推送之前先 `git push origin main` 把这两个 commit 同步到远端。
+
 ## v3.9.1a hotfix (2026-05-25)
 - [HOTFIX-001] **Splash 跳过手势路径卡死 EXPLOSION 末态** — 客户工厂触摸屏机器启动 v3.9.1 后触摸屏幕想跳过启动动画，splash 跑完塌缩/爆炸卡在满屏粒子辐射星空 + 中央橙黄光球，永远进不去主程序。根因：v3.9.1 加的鼠标/触摸点击跳过和 v3.8.2 加的 ESC 跳过都走同一个 `skipToReady` 函数，但只触发了视觉阶段切换，没把"虚拟后端 ready 信号"`backendReady` 打开 → 爆炸跑完没人打开标志 → 永远卡 EXPLOSION 末帧。修：`skipToReady` 补一行 `backendReady = true`，三条跳过路径（ESC/鼠标/触摸）统一修好。
 - [HOTFIX-002] **Splash 进度条 99% 收敛 + 完成兜底**（v3.9.1a 内迭代补强）— HOTFIX-001 回归测试发现：即使进了 READY 阶段，进度条也可能因为浮点收敛 edge case（`displayPct` 卡 99.95 floor 后显示 99）+ rAF 节流卡 99% 永远不到 100%，导致 `splashAPI.notifySplashFinished()` 永远不触发，splash 永远关不掉。修两层兜底：(A) progress tick 加 `targetPct=100 && displayPct>=99 && <100` 时强制 snap 100；(B) 抽 `forceSplashFinish` 统一完成入口 + `splashFinished` flag 防重入，在 `onBackendReady` 后加 8 秒 hard deadline timer——后端真 ready 后最多再等 8 秒，进度条还没自然冲到 100% 就强制走 IPC finish 路径。**注意必须在 backendReadyFromIPC=true 之后才开始计时**（不是 splash 启动就计时），否则后端模型加载慢的工控机会过早被强制关 splash 进入"后端没就位"状态。

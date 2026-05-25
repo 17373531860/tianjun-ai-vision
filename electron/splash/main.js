@@ -1351,6 +1351,13 @@ function transitionTo(next) {
   if (next === Stage.EXPLOSION) explosionPower = 0;
   setHud('hudStage', stageLabel[next]);
 
+  // v3.9.x: 进入 IDLE/HOVER 之外的任何阶段都清掉闲置 timer
+  // (手势自动塌缩 / autoplayFallback 走 transitionTo 但不走 skipToReady,
+  //  这里兜一次, 避免动画播一半被超时强制 skipToReady 二次打断)
+  if (next !== Stage.IDLE && next !== Stage.HOVER) {
+    clearIdleTimeout();
+  }
+
   // Fresnel 壳跟阶段切换：保留"颜色随阶段切换"的机制（用户喜欢这个），
   // 但整体强度大幅降低 → 壳只在球边缘留一圈微光，不再罩住粒子本体
   if (next === Stage.IDLE) {
@@ -1473,10 +1480,69 @@ function skipToReady(reason) {
   // 历史: v3.8.2 ESC 跳过 + v3.9.1 鼠标/触摸跳过 都遗漏了这一步,
   //       客户工厂触摸屏机器随手一摸就复现 → 修。
   backendReady = true;
+  clearIdleTimeout();  // 一旦真的进入 COLLAPSE 路径就不再需要兜底 timer
   transitionTo(Stage.COLLAPSE);
   setTimeout(() => {
     if (currentStage === Stage.COLLAPSE) transitionTo(Stage.EXPLOSION);
   }, 1200);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// IDLE 闲置超时自动跳过 (v3.9.x+)
+// ─────────────────────────────────────────────────────────────────────
+// 客户痛点: 工厂工控机开机后没人值守, 想看主程序起没起的工人发现 splash 卡了半天,
+// 又不知道按 ESC / 戳屏幕能跳过, 干瞪眼怀疑软件挂了.
+//
+// 行为:
+//   - IDLE / HOVER 阶段闲置超过 idle_timeout_sec 秒就视为"没人在", 自动 skipToReady
+//   - COLLAPSE / EXPLOSION / READY 阶段从不被超时打断 (动画已在跑, 主程序马上就来)
+//   - 任何成功的交互 (点击 → skipToReady, 按键 → skipToReady, 手势 active → HOVER)
+//     都会通过 transitionTo / skipToReady 间接清掉 timer, 不需要再单独监听
+//
+// 配置: workstation_config.json.splash.idle_timeout_sec
+//   0    = 永不超时 (老行为, 必须真人介入)
+//   >0   = N 秒后自动跳
+//   默认 600 (10 分钟); 后端模型加载慢的工控机也来得及自然完成 splash,
+//   又不至于无人值守真的永远停在 IDLE.
+let idleTimeoutSec = 0;
+let idleTimeoutTimer = null;
+
+function clearIdleTimeout() {
+  if (idleTimeoutTimer) {
+    clearTimeout(idleTimeoutTimer);
+    idleTimeoutTimer = null;
+  }
+}
+
+function armIdleTimeout() {
+  clearIdleTimeout();
+  if (!idleTimeoutSec || idleTimeoutSec <= 0) return;  // 0 = 永不
+  idleTimeoutTimer = setTimeout(() => {
+    if (currentStage !== Stage.IDLE && currentStage !== Stage.HOVER) return;
+    console.log(`[Splash] IDLE 已 ${idleTimeoutSec}s 无交互, 触发自动跳过`);
+    skipToReady(`IDLE_TIMEOUT_${idleTimeoutSec}S`);
+  }, idleTimeoutSec * 1000);
+}
+
+async function setupIdleTimeout() {
+  if (!splashAPI || typeof splashAPI.getWorkstationConfig !== 'function') {
+    // 沙盒模式 / IPC 不可用 — 没有真实配置可读, 不启 timer (沙盒老行为)
+    return;
+  }
+  try {
+    const cfg = await splashAPI.getWorkstationConfig();
+    const raw = cfg && cfg.splash && cfg.splash.idle_timeout_sec;
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 0) {
+      idleTimeoutSec = n;
+    } else {
+      idleTimeoutSec = 600;  // 字段不存在 / 解析失败 → 默认 10 分钟
+    }
+    console.log(`[Splash] 闲置超时配置: ${idleTimeoutSec === 0 ? '永不' : idleTimeoutSec + 's'}`);
+    armIdleTimeout();
+  } catch (e) {
+    console.warn('[Splash] 读 idle_timeout_sec 失败, 不启 timer:', e.message);
+  }
 }
 
 // 调试 + 跳过快捷键
@@ -1696,6 +1762,7 @@ setHud('hudStage', stageLabel[Stage.IDLE]);
 setBackend('待机 · 等待手势', 'dim');
 
 initHands();
+setupIdleTimeout();   // v3.9.x: 启动 IDLE 闲置超时 (默认 600s, 客户工厂工控机兜底)
 loop();
 
 // =====================================================================
