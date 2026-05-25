@@ -12,6 +12,9 @@ from backend.db.database import engine, Base
 # v3.5.0 自定义导出系统：必须在 create_all 之前 import 让表注册到 Base.metadata
 from backend.models import export_models  # noqa: F401
 from backend.models import plugin_models  # noqa: F401
+# v3.10.0 用户系统: User/Role/UserRole/SessionToken 四张表
+# 必须在 create_all 之前 import 让表注册到 Base.metadata
+from backend.models import auth_models  # noqa: F401
 from backend.api import api_router
 from backend.api.source import router as source_router, get_video_manager
 from backend.api.channel_manager import router as workstation_router
@@ -25,6 +28,11 @@ from backend.api.cluster import router as cluster_router
 from backend.api.external_device import router as extdev_router
 from backend.api.debug import router as debug_router
 from backend.api.plugins import router as plugins_router
+# v3.10.0 用户系统: 登录 / 账号 / 角色 三组路由
+from backend.api.auth import router as auth_router
+from backend.api.users import router as users_router
+from backend.api.roles import router as roles_router
+from backend.api.api_keys import router as api_keys_router
 # Import models to ensure they are registered
 import os
 import cv2
@@ -179,6 +187,22 @@ def migrate_database():
                 conn.commit()
     except Exception as e:
         print(f"数据库迁移检查: {e}")
+
+    # =====================================================
+    # v3.10+ 阶段 5: 删除旧 operators 表 (用户/角色系统接管)
+    # detection_sessions.operator_id / detection_cycles.operator_id 列保留,
+    # 语义已重定向到 users.id (阶段 4 完成). 历史 operator_id 指向不存在 user 时,
+    # 代码层 (api/sessions.py / services/*) 已做 None 兜底.
+    # =====================================================
+    try:
+        insp = inspect(engine)
+        if "operators" in set(insp.get_table_names()):
+            print("[DB] 阶段 5 清理: DROP TABLE operators (旧操作员表)")
+            with engine.connect() as conn:
+                conn.execute(text("DROP TABLE IF EXISTS operators"))
+                conn.commit()
+    except Exception as e:
+        print(f"[DB] 删除旧 operators 表失败 (忽略): {e}")
 
 def fix_orphan_sessions():
     """修复孤立的会话（服务器重启后，之前运行中的会话应该标记为已中断）"""
@@ -425,6 +449,58 @@ def _seed_export_builtin_templates():
         traceback.print_exc()
 
 
+def _seed_auth_builtin_roles():
+    """v3.10.0 用户系统: 启动种子三个内置角色 (admin / engineer / operator).
+
+    幂等: 已存在则刷新 name/description/permissions, 不存在则插入.
+    内置角色的 is_builtin=True, 不可删 (api/roles.py 检查).
+    种子失败不阻塞启动, 仅打日志.
+
+    重要约束: 不种任何账号 (User) — 客户首次启用账号鉴权时
+    通过 POST /api/v1/auth/enable-auth 自己创建第一个管理员.
+    """
+    try:
+        from backend.core.permissions import BUILTIN_ROLES
+        from backend.models.auth_models import Role
+        from sqlalchemy.orm import Session as DBSession
+
+        with DBSession(engine) as db:
+            for code, info in BUILTIN_ROLES.items():
+                role = db.query(Role).filter(Role.code == code).first()
+                if role is None:
+                    role = Role(
+                        code=code,
+                        name=info["name"],
+                        description=info.get("description"),
+                        permissions=list(info["permissions"]),
+                        is_builtin=True,
+                    )
+                    db.add(role)
+                    print(f"[Auth] 种子内置角色: {code}")
+                else:
+                    # 已存在: 刷新名称/描述/默认权限 (客户可能改过, 但首次升级时 description 字段为 NULL)
+                    role.name = info["name"]
+                    role.description = info.get("description")
+                    role.is_builtin = True
+                    # 仅 permissions 为空时刷新, 避免覆盖客户自定义
+                    if not role.permissions:
+                        role.permissions = list(info["permissions"])
+            db.commit()
+    except Exception as e:
+        print(f"[Auth] 内置角色种子失败 (忽略): {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def _restore_session_tokens():
+    """v3.10.0 启动恢复内存 token 缓存 (落盘的 session_tokens 表回填到 _token_cache)"""
+    try:
+        from backend.core.auth import load_tokens_from_disk
+        load_tokens_from_disk()
+    except Exception as e:
+        print(f"[Auth] token 启动恢复失败 (忽略): {e}")
+
+
 def _run_startup_init():
     """统一启动初始化：诊断、迁移、孤儿清理
 
@@ -438,6 +514,9 @@ def _run_startup_init():
     fix_orphan_sessions()
     cleanup_orphan_inspections()
     _seed_export_builtin_templates()
+    # v3.10.0 用户系统: 种子三个内置角色 + 从落盘恢复内存 token 缓存
+    _seed_auth_builtin_roles()
+    _restore_session_tokens()
     # 注意: active 插件加载不能放在这里 — 这里 FastAPI app 尚未创建,
     # 插件 register_plugin 需要 app 引用挂 router。移到 main.py 末尾 app
     # 和所有内置 router/static mount 完毕之后 (见 _load_active_plugin_after_app)。
@@ -861,6 +940,12 @@ app.include_router(cluster_router, prefix=f"{settings.API_V1_STR}", tags=["Clust
 app.include_router(extdev_router, prefix=f"{settings.API_V1_STR}", tags=["External Devices"])
 app.include_router(debug_router, prefix=f"{settings.API_V1_STR}", tags=["Debug"])
 app.include_router(plugins_router, prefix=settings.API_V1_STR, tags=["Plugins"])
+
+# v3.10.0 用户系统: 登录 / 账号 / 角色
+app.include_router(auth_router, prefix=settings.API_V1_STR, tags=["Auth"])
+app.include_router(users_router, prefix=settings.API_V1_STR, tags=["Users"])
+app.include_router(roles_router, prefix=settings.API_V1_STR, tags=["Roles"])
+app.include_router(api_keys_router, prefix=settings.API_V1_STR, tags=["API Keys"])
 
 if os.environ.get("RUNTIME_MODE") == "test":
     from backend.api.test_runtime_routes import router as test_synthetic_router

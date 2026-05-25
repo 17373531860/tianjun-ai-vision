@@ -35,17 +35,7 @@
                   <span class="text-gray-300">当前作业员</span>
                   <el-switch v-model="store.display.navbar.inspector" @change="saveDisplaySettings" />
                 </div>
-                <el-select
-                  v-model="selectedOperatorId"
-                  placeholder="选择操作员"
-                  size="default"
-                  class="w-full"
-                  clearable
-                  @change="onSettingsOperatorChange"
-                >
-                  <el-option v-for="op in activeOperators" :key="op.id" :label="`${op.name} (${op.employee_no})`" :value="op.id" />
-                </el-select>
-                <div v-if="store.display.inspectorName" class="text-xs text-cyan-400 mt-1">当前: {{ store.display.inspectorName }}</div>
+                <el-input v-model="store.display.inspectorName" placeholder="张三" @change="saveDisplaySettings" />
               </div>
               <div class="p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="flex items-center justify-between mb-2">
@@ -57,75 +47,6 @@
             </div>
           </el-card>
           
-          <!-- 操作员管理 -->
-          <el-card shadow="never" class="bg-slate-800 border-slate-700">
-            <template #header>
-              <div class="flex items-center justify-between">
-                <div class="flex items-center gap-2">
-                  <el-icon class="text-tech-blue"><User /></el-icon>
-                  <span class="font-bold text-white">操作员管理</span>
-                </div>
-                <el-button size="small" type="success" @click="openAddOp">
-                  <el-icon class="mr-1"><Plus /></el-icon>添加
-                </el-button>
-              </div>
-            </template>
-            <el-table :data="operators" stripe size="small" max-height="300px" class="bg-transparent">
-              <el-table-column prop="name" label="姓名" width="120" />
-              <el-table-column prop="employee_no" label="工号" width="120" />
-              <el-table-column prop="role" label="角色" width="100">
-                <template #default="{ row }">
-                  <el-tag size="small" :type="row.role === 'supervisor' ? 'warning' : 'info'">
-                    {{ row.role === 'supervisor' ? '主管' : '操作员' }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="状态" width="80">
-                <template #default="{ row }">
-                  <el-switch v-model="row.active" size="small" @change="toggleOpActive(row)" />
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="80">
-                <template #default="{ row }">
-                  <el-button size="small" link @click="openEditOp(row)">编辑</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-            <div v-if="!operators.length" class="text-center text-gray-500 text-sm py-4">暂无操作员，点击上方"添加"</div>
-          </el-card>
-
-          <!-- 操作员编辑对话框 -->
-          <el-dialog v-model="showOpEditor" :title="editingOp ? '编辑操作员' : '添加操作员'" width="400px" destroy-on-close>
-            <el-form :model="opForm" label-width="70px" size="small">
-              <el-form-item label="姓名" required>
-                <el-input v-model="opForm.name" placeholder="张三" />
-              </el-form-item>
-              <el-form-item label="工号" required>
-                <el-input v-model="opForm.employee_no" placeholder="EMP001" />
-              </el-form-item>
-              <el-form-item label="角色">
-                <el-radio-group v-model="opForm.role">
-                  <el-radio value="operator">操作员</el-radio>
-                  <el-radio value="supervisor">主管</el-radio>
-                </el-radio-group>
-              </el-form-item>
-            </el-form>
-            <template #footer>
-              <div class="flex justify-between w-full">
-                <el-popconfirm v-if="editingOp" title="确认删除该操作员？历史数据不受影响。" @confirm="confirmDeleteOp">
-                  <template #reference>
-                    <el-button type="danger">删除</el-button>
-                  </template>
-                </el-popconfirm>
-                <span v-else></span>
-                <div class="flex gap-2">
-                  <el-button @click="showOpEditor = false">取消</el-button>
-                  <el-button type="primary" :loading="opSaving" @click="saveOp">保存</el-button>
-                </div>
-              </div>
-            </template>
-          </el-dialog>
-
           <!-- Navbar Settings -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
@@ -1396,6 +1317,11 @@
           </el-card>
         </div>
       </el-tab-pane>
+
+      <!-- 账号鉴权 Tab (v3.10.0 用户系统) -->
+      <el-tab-pane label="账号鉴权">
+        <AuthPanel />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -1408,8 +1334,8 @@ import { usePluginStore } from '@/store/usePluginStore';
 import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjectDetail } from '@/api/project';
-import { getOperators, createOperator, updateOperator, deleteOperator, setCurrentOperator, getCurrentOperator } from '@/api/operators';
 import api from '@/api/index';
+import AuthPanel from './AuthPanel.vue';
 
 const store = useSystemStore();
 const projectStore = useProjectStore();
@@ -1435,104 +1361,6 @@ const kalmanConfig = reactive({
   measurementNoise: 0.1,
   maxMissingFrames: 5
 });
-
-// ========== 操作员管理 ==========
-const operators = ref([]);
-const selectedOperatorId = ref(null);
-const activeOperators = computed(() => operators.value.filter(o => o.active));
-
-function onSettingsOperatorChange(opId) {
-  if (opId) {
-    const op = operators.value.find(o => o.id === opId);
-    if (op) {
-      store.display.inspectorName = op.name;
-      saveDisplaySettings();
-      setCurrentOperator({ channel_id: 0, operator_id: opId }).catch(() => {});
-    }
-  } else {
-    store.display.inspectorName = '';
-    saveDisplaySettings();
-    setCurrentOperator({ channel_id: 0, operator_id: null }).catch(() => {});
-  }
-}
-const showOpEditor = ref(false);
-const editingOp = ref(null);
-const opForm = reactive({ name: '', employee_no: '', role: 'operator' });
-const opSaving = ref(false);
-
-async function loadOperators() {
-  try {
-    const { data } = await getOperators();
-    operators.value = data || [];
-    const { data: cur } = await getCurrentOperator(0);
-    if (cur?.operator) selectedOperatorId.value = cur.operator.id;
-  } catch { ElMessage.error('加载操作员失败'); }
-}
-
-function openAddOp() {
-  editingOp.value = null;
-  opForm.name = '';
-  opForm.employee_no = '';
-  opForm.role = 'operator';
-  showOpEditor.value = true;
-}
-
-function openEditOp(op) {
-  editingOp.value = op;
-  opForm.name = op.name;
-  opForm.employee_no = op.employee_no;
-  opForm.role = op.role;
-  showOpEditor.value = true;
-}
-
-async function saveOp() {
-  if (!opForm.name.trim() || !opForm.employee_no.trim()) {
-    ElMessage.warning('姓名和工号不能为空');
-    return;
-  }
-  opSaving.value = true;
-  try {
-    if (editingOp.value) {
-      await updateOperator(editingOp.value.id, { ...opForm });
-      ElMessage.success('已更新');
-    } else {
-      await createOperator({ ...opForm });
-      ElMessage.success('已添加');
-    }
-    showOpEditor.value = false;
-    loadOperators();
-  } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '操作失败');
-  } finally { opSaving.value = false; }
-}
-
-async function toggleOpActive(op) {
-  try {
-    await updateOperator(op.id, { active: op.active });
-    ElMessage.success(op.active ? '已启用' : '已停用');
-  } catch {
-    op.active = !op.active;
-    ElMessage.error('操作失败');
-  }
-}
-
-async function removeOp(op) {
-  try {
-    await deleteOperator(op.id);
-    ElMessage.success('已停用');
-    loadOperators();
-  } catch { ElMessage.error('操作失败'); }
-}
-
-async function confirmDeleteOp() {
-  if (!editingOp.value) return;
-  try {
-    await deleteOperator(editingOp.value.id);
-    ElMessage.success('已删除');
-    showOpEditor.value = false;
-    loadOperators();
-  } catch { ElMessage.error('删除失败'); }
-}
 
 async function loadPlugins() {
   try {
@@ -1915,7 +1743,6 @@ onMounted(async () => {
   refreshGpuList();
   loadCurrentDevice();
   loadKalmanConfig();
-  loadOperators();  // 加载卡尔曼滤波配置
   loadPlugins();
   loadTransformTotalChannels();
   loadTransformConfig();

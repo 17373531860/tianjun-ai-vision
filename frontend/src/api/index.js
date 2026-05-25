@@ -61,37 +61,71 @@ const api = axios.create({
   }
 });
 
-// 请求拦截器
+// ============================================================
+// v3.10.0 用户系统: token 注入 + 401 自动登出
+//
+// 设计原则:
+// 1. token 从 localStorage('tianjun:auth_token') 直读, 不依赖 store
+//    (避免循环依赖: useAuthStore 也 import 这个 api 实例)
+// 2. 401 = 当前 token 失效 → 清 token + localStorage + 跳 /login
+//    但仅在 auth_enabled=true 状态下才跳转, 否则只清 token
+// 3. 登录 / 启用鉴权这两个端点本身不带 token 也能用, 所以请求拦截器
+//    "有就加, 没有就跳过" 不强制
+// ============================================================
+
+const AUTH_TOKEN_KEY = 'tianjun:auth_token';
+
+function readToken() {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function clearToken() {
+  try {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch {}
+}
+
+// 请求拦截器: 有 token 就加 Authorization header
 api.interceptors.request.use(
-  (config) => config,
+  (config) => {
+    const token = readToken();
+    if (token) {
+      config.headers = config.headers || {};
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
   (error) => Promise.reject(error)
 );
 
-// 响应拦截器
+// 响应拦截器: 401 = token 失效, 清掉 + 跳 /login (D3 启用状态下)
 api.interceptors.response.use(
-  (response) => {
-    return response;
-  },
+  (response) => response,
   (error) => {
-    // 统一错误处理
     if (error.response) {
-      const { status, data } = error.response;
+      const { status, data, config } = error.response;
       console.error(`API Error ${status}:`, data);
-      
-      switch (status) {
-        case 401:
-          // 未授权
-          break;
-        case 403:
-          // 禁止访问
-          break;
-        case 404:
-          // 资源不存在
-          break;
-        case 500:
-          // 服务器错误
-          break;
+
+      if (status === 401) {
+        // 跳过 login 端点自己的 401 (登录失败提示交给调用方)
+        const isLoginCall = config?.url?.includes('/auth/login');
+        if (!isLoginCall) {
+          clearToken();
+          // 仅在桌面/浏览器环境下跳转, 防止单元测试触发
+          if (typeof window !== 'undefined' && window.location) {
+            // 用 hash 路由跳转 (避免依赖 router 实例)
+            const hash = window.location.hash || '';
+            if (!hash.startsWith('#/login') && !hash.startsWith('#/activation')) {
+              window.location.hash = '#/login';
+            }
+          }
+        }
       }
+      // 403 不动 token, 仅打日志 (调用方按 detail 提示用户)
     } else if (error.request) {
       console.error('Network Error:', error.message);
     }

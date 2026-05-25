@@ -53,3 +53,7 @@ openpyxl>=3.1.0          # xlsx 渲染器
 APScheduler>=3.11.0      # 后台 BackgroundScheduler, 支持 CRON / interval / date 三种触发器
 croniter>=2.0.0          # cron 表达式解析 + 下次触发时间计算 (前端预览用)
 tzlocal>=5.0.0           # APScheduler 时区支持
+
+# v3.10.0 用户系统 - 登录鉴权 + 密码哈希
+# 直接用 bcrypt 库 (不走 passlib, 后者与 bcrypt 5.x 有 __about__ 兼容警告)
+bcrypt>=4.0.0
