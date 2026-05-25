@@ -171,5 +171,48 @@
   "known_issues": [
     "MES Gateway 实时规则的 session_end / box_complete 触发器仍标 [todo], 目前只 cycle_end 接入",
     "CI 历史长期红灯: Virtual Functional Tests (cryptography) 和 DB Matrix (SQLite + PostgreSQL) (PG SUM(boolean) dialect) 自 v3.7.4 起持续红灯, SE9 分支已修待 cherry-pick"
-  ]
+  ],
+  "hotfix": {
+    "id": "v3.9.1a",
+    "date": "2026-05-25",
+    "changes": [
+      {
+        "type": "hotfix",
+        "id": "HOTFIX-001",
+        "title": "Splash 跳过手势路径卡死 EXPLOSION 末态",
+        "symptom": "客户工厂触摸屏机器启动 v3.9.1 后, 触摸屏幕想跳过启动动画 -> splash 跑完塌缩/爆炸 -> 卡在满屏粒子辐射星空 + 中央橙黄光球, 右下角虽然写着 READY 就绪 但 splash 不退出, 主程序不显示",
+        "root_cause": "Splash 状态机里 EXPLOSION -> READY 的过渡条件是 stageProgress >= 1.0 && backendReady (electron/splash/main.js:1570). backendReady 标志原本只在 events.HAND_DETECTED 等 3800ms 模拟虚拟后端 ready 和调试快捷键 R 处会被打开. v3.9.1 加的鼠标/触摸点击跳过 和 v3.8.2 加的 ESC 跳过都走同一个 skipToReady 函数, 只触发了视觉阶段切换, 没碰 backendReady -> 爆炸跑完没人打开标志 -> 永远卡 EXPLOSION 末帧. ESC 同款 bug 自 v3.8.2 起埋下, 因工控机一般没键盘 + 客户不知道有 ESC 而长期没被触发; v3.9.1 触摸点击太自然, 工厂触摸屏一摸就复现",
+        "fix": "skipToReady 函数补一行 backendReady = true (同时修好 ESC + 鼠标 + 触摸三条路径). 塌缩 + 爆炸跑完会自然进入 READY 阶段 -> 等真后端 IPC 通知 -> 进度条冲 100% -> splash:finished 关 splash -> 显主程序",
+        "files": [
+          "electron/splash/main.js"
+        ],
+        "deliverables": {
+          "release_repo": "17373531860/tianjun-releases",
+          "release_tag": "v3.9.1",
+          "assets": [
+            "patch_v3.9.1a.bat",
+            "app.asar"
+          ]
+        },
+        "rollback": "重命名 resources\\app.asar.bak_v3.9.1 回 app.asar 即可",
+        "keywords": [
+          "splash",
+          "skipToReady",
+          "backendReady",
+          "Stage.EXPLOSION",
+          "Stage.READY",
+          "触摸屏卡死",
+          "启动动画卡死",
+          "ESC 跳过",
+          "鼠标点击跳过",
+          "工控机"
+        ],
+        "breaking": false
+      }
+    ],
+    "followup_v392": [
+      "Splash 进度条虚拟阶段标签显示 READY 时实际可能还没进 Stage.READY, 文案有误导. 建议把阶段标签和真实 currentStage 解耦或直接显示真实阶段",
+      "backendReady (动画内部虚拟 ready) 和 backendReadyFromIPC (主进程真后端 ready) 是两个独立变量, 命名相近容易引起此类遗漏. 建议统一概念或重命名"
+    ]
+  }
 }

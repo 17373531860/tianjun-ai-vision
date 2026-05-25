@@ -1,5 +1,8 @@
 # Changelog
 
+## v3.9.1a hotfix (2026-05-25)
+- [HOTFIX-001] **Splash 跳过手势路径卡死 EXPLOSION 末态** — 客户工厂触摸屏机器启动 v3.9.1 后触摸屏幕想跳过启动动画，splash 跑完塌缩/爆炸卡在满屏粒子辐射星空 + 中央橙黄光球，永远进不去主程序。根因：v3.9.1 加的鼠标/触摸点击跳过和 v3.8.2 加的 ESC 跳过都走同一个 `skipToReady` 函数，但只触发了视觉阶段切换，没把"虚拟后端 ready 信号"`backendReady` 打开 → 爆炸跑完没人打开标志 → 永远卡 EXPLOSION 末帧。修：`skipToReady` 补一行 `backendReady = true`，三条跳过路径（ESC/鼠标/触摸）统一修好。补丁发布产物：中转仓 v3.9.1 Release 附件 `patch_v3.9.1a.bat` + `app.asar`（20 MB），客户下载到同目录双击 bat 即可。
+
 ## v3.9.1 (2026-05-25)
 - [FEAT-001] **事件手动确认** — 事件配置加 `require_ack` / `ack_timeout_sec` / `ack_resets_periodic`，触发后冻结主推流 + Monitor 全屏 overlay 等工人按确认；周期性强制动作统一接入同一套，`ack_resets_periodic` 解决"未压墨提示框关不掉一直弹"。
 - [FEAT-002] **PT 计算口径可配 span / visible 累计可见时长** — 后端永远算两份 PT 字段，前端 Settings 下拉切换显示口径；解决"标签从早到晚都被识别 → 老的跨度 PT 算成 18 秒、实际操作只用 2 秒"问题。

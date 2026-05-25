@@ -1467,6 +1467,12 @@ window.addEventListener('resize', () => {
 function skipToReady(reason) {
   if (currentStage !== Stage.IDLE && currentStage !== Stage.HOVER) return;
   console.log(`[Splash] ${reason} 触发, 跳过手势直接进 READY`);
+  // v3.9.1a hotfix: 跳过手势路径必须自己把"虚拟后端 ready 信号"打开,
+  // 否则 EXPLOSION 末态 (stageProgress=1.0) 会卡死等不到 backendReady=true,
+  // 永远进不去 Stage.READY → splash 永远关不掉。
+  // 历史: v3.8.2 ESC 跳过 + v3.9.1 鼠标/触摸跳过 都遗漏了这一步,
+  //       客户工厂触摸屏机器随手一摸就复现 → 修。
+  backendReady = true;
   transitionTo(Stage.COLLAPSE);
   setTimeout(() => {
     if (currentStage === Stage.COLLAPSE) transitionTo(Stage.EXPLOSION);
