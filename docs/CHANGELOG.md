@@ -1,7 +1,9 @@
 # Changelog
 
 ## v3.9.1a hotfix (2026-05-25)
-- [HOTFIX-001] **Splash 跳过手势路径卡死 EXPLOSION 末态** — 客户工厂触摸屏机器启动 v3.9.1 后触摸屏幕想跳过启动动画，splash 跑完塌缩/爆炸卡在满屏粒子辐射星空 + 中央橙黄光球，永远进不去主程序。根因：v3.9.1 加的鼠标/触摸点击跳过和 v3.8.2 加的 ESC 跳过都走同一个 `skipToReady` 函数，但只触发了视觉阶段切换，没把"虚拟后端 ready 信号"`backendReady` 打开 → 爆炸跑完没人打开标志 → 永远卡 EXPLOSION 末帧。修：`skipToReady` 补一行 `backendReady = true`，三条跳过路径（ESC/鼠标/触摸）统一修好。补丁发布产物：中转仓 v3.9.1 Release 附件 `patch_v3.9.1a.bat` + `app.asar`（20 MB），客户下载到同目录双击 bat 即可。
+- [HOTFIX-001] **Splash 跳过手势路径卡死 EXPLOSION 末态** — 客户工厂触摸屏机器启动 v3.9.1 后触摸屏幕想跳过启动动画，splash 跑完塌缩/爆炸卡在满屏粒子辐射星空 + 中央橙黄光球，永远进不去主程序。根因：v3.9.1 加的鼠标/触摸点击跳过和 v3.8.2 加的 ESC 跳过都走同一个 `skipToReady` 函数，但只触发了视觉阶段切换，没把"虚拟后端 ready 信号"`backendReady` 打开 → 爆炸跑完没人打开标志 → 永远卡 EXPLOSION 末帧。修：`skipToReady` 补一行 `backendReady = true`，三条跳过路径（ESC/鼠标/触摸）统一修好。
+- [HOTFIX-002] **Splash 进度条 99% 收敛 + 完成兜底**（v3.9.1a 内迭代补强）— HOTFIX-001 回归测试发现：即使进了 READY 阶段，进度条也可能因为浮点收敛 edge case（`displayPct` 卡 99.95 floor 后显示 99）+ rAF 节流卡 99% 永远不到 100%，导致 `splashAPI.notifySplashFinished()` 永远不触发，splash 永远关不掉。修两层兜底：(A) progress tick 加 `targetPct=100 && displayPct>=99 && <100` 时强制 snap 100；(B) 抽 `forceSplashFinish` 统一完成入口 + `splashFinished` flag 防重入，在 `onBackendReady` 后加 8 秒 hard deadline timer——后端真 ready 后最多再等 8 秒，进度条还没自然冲到 100% 就强制走 IPC finish 路径。**注意必须在 backendReadyFromIPC=true 之后才开始计时**（不是 splash 启动就计时），否则后端模型加载慢的工控机会过早被强制关 splash 进入"后端没就位"状态。
+- 补丁发布产物（HOTFIX-001 + HOTFIX-002 合并发布）：中转仓 v3.9.1 Release 附件 `patch_v3.9.1a.bat` + `app.asar`（20 MB）。客户操作（推荐）：把两个文件直接拖进软件安装根目录（能看到 `resources\` 子目录的那一层），双击 bat → "Drop-in mode" 自动打完 → 重启软件。
 
 ## v3.9.1 (2026-05-25)
 - [FEAT-001] **事件手动确认** — 事件配置加 `require_ack` / `ack_timeout_sec` / `ack_resets_periodic`，触发后冻结主推流 + Monitor 全屏 overlay 等工人按确认；周期性强制动作统一接入同一套，`ack_resets_periodic` 解决"未压墨提示框关不掉一直弹"。

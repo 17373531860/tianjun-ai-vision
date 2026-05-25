@@ -186,15 +186,6 @@
         "files": [
           "electron/splash/main.js"
         ],
-        "deliverables": {
-          "release_repo": "17373531860/tianjun-releases",
-          "release_tag": "v3.9.1",
-          "assets": [
-            "patch_v3.9.1a.bat",
-            "app.asar"
-          ]
-        },
-        "rollback": "重命名 resources\\app.asar.bak_v3.9.1 回 app.asar 即可",
         "keywords": [
           "splash",
           "skipToReady",
@@ -208,11 +199,46 @@
           "工控机"
         ],
         "breaking": false
+      },
+      {
+        "type": "hotfix",
+        "id": "HOTFIX-002",
+        "title": "Splash 进度条 99% 收敛 + 完成兜底 (v3.9.1a 内迭代补强)",
+        "symptom": "浏览器沙盒模式回归 HOTFIX-001 时发现: 即使到 READY 阶段, 进度条卡 99% 不到 100% -> splashAPI.notifySplashFinished() 永远不触发 -> splash 永远关不掉. 真客户机理论上后端 ready 后会一步到 100% 概率小, 但工控机性能弱时仍可能命中边界",
+        "root_cause": "(1) 进度条平滑插值退出条件 `Math.abs(diff) > 0.05` 让 displayPct 卡在 targetPct - 0.05 区间出不来, Math.floor(99.95)=99, 完成判定 `pctVal >= 100` 永远不触发. (2) 浏览器 tab 失焦 / F12 打开时 rAF 被节流到 1Hz 甚至冻结, 收敛过程拉到无限长",
+        "fix": "两层兜底: (A) 收敛 edge case 兜底——progress tick 加 `if (targetPct >= 100 && displayPct >= 99 && displayPct < 100) displayPct = 100;`, 仅当 targetPct 已锁 100 且 display ≥ 99 时强制 snap, 不影响 0-99 区间正常爬升. (B) hard deadline 兜底——抽 forceSplashFinish(reason) 统一完成入口 + splashFinished flag 防重入, 在 onBackendReady 回调里加 8s setTimeout, 后端真 ready 之后最多再等 8s 强制走 IPC finish. 必须 backendReadyFromIPC=true 之后才计时, 不能 splash 启动就计时 (后端模型加载可能要 30-60s, 提前关 splash 会让客户进入主界面但后端没就位的诡异状态). progress tick 自然完成路径也统一走 forceSplashFinish 共用 flag",
+        "files": [
+          "electron/splash/main.js"
+        ],
+        "keywords": [
+          "splash",
+          "progress",
+          "卡99%",
+          "displayPct",
+          "Math.floor 99.95",
+          "forceSplashFinish",
+          "splashFinished",
+          "hard deadline",
+          "onBackendReady",
+          "rAF 节流"
+        ],
+        "breaking": false
       }
     ],
+    "deliverables": {
+      "release_repo": "17373531860/tianjun-releases",
+      "release_tag": "v3.9.1",
+      "assets": [
+        "patch_v3.9.1a.bat",
+        "app.asar"
+      ],
+      "note": "HOTFIX-001 + HOTFIX-002 合并发布在同一个补丁包"
+    },
+    "rollback": "重命名 resources\\app.asar.bak_v3.9.1 回 app.asar 即可",
     "followup_v392": [
       "Splash 进度条虚拟阶段标签显示 READY 时实际可能还没进 Stage.READY, 文案有误导. 建议把阶段标签和真实 currentStage 解耦或直接显示真实阶段",
-      "backendReady (动画内部虚拟 ready) 和 backendReadyFromIPC (主进程真后端 ready) 是两个独立变量, 命名相近容易引起此类遗漏. 建议统一概念或重命名"
+      "backendReady (动画内部虚拟 ready) 和 backendReadyFromIPC (主进程真后端 ready) 是两个独立变量, 命名相近容易引起此类遗漏. 建议统一概念或重命名",
+      "progress 平滑插值的 epsilon 0.05 是数值魔法常量, 建议和 snap 阈值 0.5 一起重新评估或换成线性追到 targetPct 避免浮点收敛问题"
     ]
   }
 }

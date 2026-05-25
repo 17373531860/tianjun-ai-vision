@@ -2287,6 +2287,14 @@ function startReadyLoading() {
       displayPct += diff * 0.12;
       if (Math.abs(targetPct - displayPct) < 0.5) displayPct = targetPct;
     }
+    // v3.9.1a hotfix: 浮点收敛 edge case 兜底——targetPct=100 且 displayPct≥99 时强制 snap。
+    // 修原 `Math.abs(diff) > 0.05` 退出条件下 displayPct 永远卡 99.95 (floor=99) 的边界:
+    //   - rAF 节流 (浏览器后台 tab / F12 打开) 或浮点累积都可能让 displayPct 落在
+    //     `(targetPct - 0.05, targetPct]` 区间永远出不来 → pctVal=99 → 完成判定 `>=100` 永远不触发。
+    // 仅当 target=100 (真后端 ready 或沙盒 5s 后) 且 display≥99 时生效, 不影响 0-99 区间正常爬升。
+    if (targetPct >= 100 && displayPct >= 99 && displayPct < 100) {
+      displayPct = 100;
+    }
     const pctVal = Math.floor(displayPct);
 
     if (pctEl)  pctEl.textContent  = String(pctVal).padStart(3, '0') + '%';
@@ -2317,14 +2325,10 @@ function startReadyLoading() {
       if (loader) loader.classList.add('complete');
       if (stepEl) stepEl.textContent = '✓ jack in monitor view';
       if (FEAT.audio) playLoadCompleteSfx();
-      // 600ms 闪烁停留后通知 Electron 主进程关闭 splash + 显示主界面
-      setTimeout(() => {
-        if (splashAPI && typeof splashAPI.notifySplashFinished === 'function') {
-          splashAPI.notifySplashFinished();
-        } else {
-          console.log('[Splash] 沙盒模式：splash 流程完成');
-        }
-      }, 600);
+      // 600ms 闪烁停留后走统一的 forceSplashFinish 路径
+      // (v3.9.1a hotfix: 收敛到同一个 finish 入口, 和 hard deadline 兜底共享 splashFinished flag,
+      //  避免两条路径都触发 finish IPC 让主进程重复处理)
+      setTimeout(() => forceSplashFinish('progress-100'), 600);
       return;
     }
     requestAnimationFrame(tick);
@@ -2368,10 +2372,32 @@ if (splashAPI && typeof splashAPI.onBackendLog === 'function') {
     for (const ln of lines) consumeBackendLog(ln);
   });
 }
+// v3.9.1a hotfix: splash 完成状态共享 flag, 给 hard deadline 兜底用,
+// 避免 progress tick 自然完成 和 hard deadline 强制完成 重复触发 finish IPC。
+let splashFinished = false;
+
+function forceSplashFinish(reason) {
+  if (splashFinished) return;
+  splashFinished = true;
+  console.log(`[Splash] forceFinish 触发: ${reason}`);
+  if (splashAPI && typeof splashAPI.notifySplashFinished === 'function') {
+    splashAPI.notifySplashFinished();
+  } else {
+    console.log('[Splash] 沙盒模式: 流程完成 (无主进程可通知)');
+  }
+}
+
 if (splashAPI && typeof splashAPI.onBackendReady === 'function') {
   splashAPI.onBackendReady(() => {
     console.log('[Splash] 主进程通知后端 ready');
     backendReadyFromIPC = true;
+
+    // v3.9.1a hotfix: hard deadline 兜底——后端真 ready 后最多再等 8s,
+    // 进度条还没自然冲到 100% 就强制走 finish 路径,
+    // 防御 progress tick 收敛 bug / rAF 节流 / 任何未知阻塞让 splash 永远关不掉。
+    // 注意: 必须 backendReadyFromIPC=true 之后才开始计时, 不是 splash 启动就计时——
+    //   后端模型加载可能要 30-60s (工控机性能弱时), 不能在后端没 ready 时就强制关 splash。
+    setTimeout(() => forceSplashFinish('backend-ready-deadline-8s'), 8000);
   });
 }
 
