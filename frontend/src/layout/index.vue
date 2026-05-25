@@ -16,28 +16,28 @@
         </div>
         
         <nav class="flex-1 mt-4">
-          <router-link v-if="!pluginTheme.isMenuHidden('/monitor')" to="/monitor" class="nav-item" @click="sidebarOpen = false">
+          <router-link v-if="canShow('/monitor')" to="/monitor" class="nav-item" @click="sidebarOpen = false">
             <el-icon class="mr-2"><Monitor /></el-icon> {{ $t('menu.monitor') }}
           </router-link>
-          <router-link v-if="!pluginTheme.isMenuHidden('/project')" to="/project" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/project')" to="/project" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Folder /></el-icon> {{ $t('menu.project') }}
           </router-link>
-          <router-link v-if="!pluginTheme.isMenuHidden('/model')" to="/model" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/model')" to="/model" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Cpu /></el-icon> {{ $t('menu.model') }}
           </router-link>
-          <router-link v-if="!pluginTheme.isMenuHidden('/source')" to="/source" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/source')" to="/source" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><VideoCamera /></el-icon> 输入源设置
           </router-link>
-          <router-link v-if="!pluginTheme.isMenuHidden('/data')" to="/data" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/data')" to="/data" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><DataLine /></el-icon> {{ $t('menu.data') }}
           </router-link>
-          <router-link v-if="!pluginTheme.isMenuHidden('/mes')" to="/mes" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/mes')" to="/mes" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Tickets /></el-icon> MES 管理
           </router-link>
-          <router-link v-if="!pluginTheme.isMenuHidden('/alarm')" to="/alarm" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/alarm')" to="/alarm" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Bell /></el-icon> 报警设置
           </router-link>
-          <router-link v-if="!pluginTheme.isMenuHidden('/settings')" to="/settings" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/settings')" to="/settings" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Setting /></el-icon> {{ $t('menu.settings') }}
           </router-link>
 
@@ -85,11 +85,19 @@ import { ref } from 'vue';
 import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu, Tickets, DataAnalysis } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { ElMessage } from 'element-plus';
 
 const systemStore = useSystemStore();
 const pluginTheme = usePluginThemeStore();
+const authStore = useAuthStore();
 const sidebarOpen = ref(false);
+
+// 菜单可见 = 插件主题未隐藏 AND 当前账号有路由权限.
+// 两层门各自独立: 插件主题是客户定制层 (按 brand 隐藏), 权限层是账号层 (按角色隐藏).
+const canShow = (path) => {
+  return !pluginTheme.isMenuHidden(path) && authStore.canAccessRoute(path);
+};
 
 const handleNav = (e) => {
   if (systemStore.isDetecting) {
