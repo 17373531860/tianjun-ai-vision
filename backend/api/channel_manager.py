@@ -351,6 +351,91 @@ class ChannelManager:
             print(f"[ChannelManager] 读取源配置失败: {e}")
         return {}
 
+    # ------------------------------------------------------------------
+    # v3.9.x: 启动动画 (splash) 摄像头配置
+    # ------------------------------------------------------------------
+    # 设计要点 — 为什么放在 workstation_config.json 顶层而不是 channels 下:
+    #   1) splash 比主前端先加载, 没有 localStorage / Pinia store 可用; 唯一能跨进程
+    #      读到的就是这个 JSON (Electron 通过 IPC `splash:get-workstation-config` 读)。
+    #   2) splash 用的相机不一定就是工位 1 的相机 — 工业相机方案下 ch1 可能压根没绑
+    #      USB 设备, 笔记本前置 / 桌面 webcam 这种"专给手势用"的相机跟生产线相机解耦。
+    #   3) 模式三档:
+    #        - auto     : 默认, 沿用老逻辑 (工位 1 的 usb_device_id → 系统默认)
+    #        - specific : 锁定指定 device_id, 拿不到走 splash 自带的"无摄像头"兜底
+    #        - disabled : 完全不开摄像头, splash 直接走自动播放 (避免 todesk / 隐私扫描)
+    #   4) device_label 只用于 UI 回显, splash 不读它。
+    def get_splash_config(self) -> dict:
+        """读 workstation_config.json 顶层 splash 字段, 不存在返回默认.
+
+        idle_timeout_sec 语义:
+          0      = 永不超时 (老行为, 必须人/手势/键鼠介入才能跳过)
+          >0     = 多少秒内没有任何交互就强制跳过 splash 进主程序
+          默认 600 (10 分钟); UI 提示客户工厂工控机至少留 60 秒, 别配 5 秒,
+          不然真后端模型加载 30-60s 就被强制关 splash 进入"后端没就位"状态。
+        """
+        try:
+            if os.path.exists(_CONFIG_FILE):
+                with open(_CONFIG_FILE, 'r') as f:
+                    data = json.load(f)
+                splash = data.get("splash") or {}
+                # idle_timeout_sec 容错: 字符串 / None / 负数都兜成默认 600
+                raw_timeout = splash.get("idle_timeout_sec", 600)
+                try:
+                    timeout_int = int(raw_timeout)
+                    if timeout_int < 0:
+                        timeout_int = 600
+                except (TypeError, ValueError):
+                    timeout_int = 600
+                return {
+                    "camera_mode":      splash.get("camera_mode", "auto"),
+                    "device_id":        splash.get("device_id", ""),
+                    "device_label":     splash.get("device_label", ""),
+                    "idle_timeout_sec": timeout_int,
+                }
+        except Exception as e:
+            print(f"[ChannelManager] 读取 splash 配置失败: {e}")
+        return {
+            "camera_mode":      "auto",
+            "device_id":        "",
+            "device_label":     "",
+            "idle_timeout_sec": 600,
+        }
+
+    def set_splash_config(self, camera_mode: str, device_id: str, device_label: str,
+                          idle_timeout_sec: int = 600):
+        """写 workstation_config.json 顶层 splash 字段; 仅替换 splash 段, 不动 channels / channel_count.
+
+        camera_mode 必须是 'auto' / 'specific' / 'disabled' 之一; 其他值兜底成 'auto'.
+        idle_timeout_sec 必须 >= 0; 负数或非法值兜底成 600。
+        """
+        if camera_mode not in ("auto", "specific", "disabled"):
+            camera_mode = "auto"
+        try:
+            timeout_int = int(idle_timeout_sec)
+            if timeout_int < 0:
+                timeout_int = 600
+        except (TypeError, ValueError):
+            timeout_int = 600
+        try:
+            os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
+            data = {}
+            if os.path.exists(_CONFIG_FILE):
+                try:
+                    with open(_CONFIG_FILE, 'r') as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            data["splash"] = {
+                "camera_mode":      camera_mode,
+                "device_id":        device_id or "",
+                "device_label":     device_label or "",
+                "idle_timeout_sec": timeout_int,
+            }
+            with open(_CONFIG_FILE, 'w') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[ChannelManager] 保存 splash 配置失败: {e}")
+
     def _load_config(self):
         try:
             print(f"[ChannelManager] 配置文件路径: {_CONFIG_FILE}, 存在: {os.path.exists(_CONFIG_FILE)}")
@@ -470,6 +555,43 @@ def get_gpu_allocation():
         "channel_count": channel_manager.channel_count,
         "allocation": channel_manager.get_gpu_allocation(),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v3.9.x: 启动动画 (splash) 摄像头配置 API
+# ─────────────────────────────────────────────────────────────────────
+# 路由必须放在 /{channel_id}/... 之前, 否则会被 catch-all 抢走。
+# splash 端 (electron/splash/main.js) 通过 IPC `splash:get-workstation-config` 读
+# 整个 JSON 后, 自己读 cfg.splash.camera_mode 决定相机选择策略 — 不依赖这个 HTTP
+# 接口 (splash 启动时后端可能还没起来)。本接口只给主前端 Settings 页 CRUD 用。
+class SplashCameraRequest(BaseModel):
+    """启动动画手势相机 + 闲置超时配置请求体。"""
+    camera_mode: str = Field("auto", description="auto=默认 / specific=锁指定 / disabled=不开手势")
+    device_id: str = Field("", description="MediaDeviceInfo.deviceId, 仅 specific 模式生效")
+    device_label: str = Field("", description="人类可读名 (回显用)")
+    # v3.9.x: splash 闲置自动跳超时 (秒); 0 = 永不, >0 = 几秒内没有任何交互就强制跳进主程序。
+    # 默认 600 (10 分钟): 给客户工厂工控机一个"打开软件去倒杯水回来都还没进主界面"的窗口,
+    # 又不至于因为没人留意 splash 真的卡了导致工人怀疑软件挂了。
+    idle_timeout_sec: int = Field(600, description="闲置超时秒数; 0=永不超时; >0 触发自动跳过手势")
+
+
+@router.get("/splash-camera")
+def get_splash_camera():
+    """读启动动画相机配置 + 闲置超时。"""
+    return channel_manager.get_splash_config()
+
+
+@router.put("/splash-camera",
+            dependencies=[Depends(require_perm("settings.edit"))])
+def set_splash_camera(req: SplashCameraRequest):
+    """写启动动画相机配置 + 闲置超时, 立即落盘 workstation_config.json.
+
+    下次启动 splash 时 (Electron 包) 会读到新配置生效。
+    """
+    channel_manager.set_splash_config(
+        req.camera_mode, req.device_id, req.device_label, req.idle_timeout_sec,
+    )
+    return {"status": "success", **channel_manager.get_splash_config()}
 
 
 class UsbDeviceBindRequest(BaseModel):

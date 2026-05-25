@@ -946,7 +946,7 @@
                     </el-radio>
                     <el-radio value="last_first">
                       <span class="text-gray-300">末步结算 + 首步开周期</span>
-                      <span class="text-xs text-gray-500 ml-1">— v3.8.x 末步出现立即结算上周期，首步开新周期；缺步骤自动判 NG</span>
+                      <span class="text-xs text-gray-500 ml-1">— 末步出现立即结算上周期，首步开新周期；缺步骤自动判 NG（v3.9.0+）</span>
                     </el-radio>
                   </el-radio-group>
                   <!-- last_first 模式说明 -->
@@ -2013,6 +2013,35 @@
                         </el-select>
                       </div>
                     </div>
+
+                    <!-- v3.9.x 需人工确认重做 -->
+                    <div class="border-t border-slate-800 pt-3 mt-3">
+                      <div class="flex items-center gap-4 flex-wrap">
+                        <el-checkbox v-model="ev.require_ack" size="small">
+                          <span class="text-amber-300">需人工确认（重做本周期）</span>
+                        </el-checkbox>
+                        <template v-if="ev.require_ack">
+                          <span class="text-xs text-gray-400">超时自动确认（秒）</span>
+                          <el-input-number v-model="ev.ack_timeout_sec" size="small" :min="0" :step="5" :precision="0" class="w-24" controls-position="right" />
+                          <span class="text-xs text-gray-500">0 = 永不超时，必须手动确认</span>
+                        </template>
+                      </div>
+                      <div v-if="ev.require_ack" class="text-xs text-gray-500 mt-2 leading-relaxed bg-slate-950/60 rounded p-2 border-l-2 border-amber-700/50">
+                        触发本事件后：弹原提示框 + 弹"确认重做"对话框，<span class="text-amber-300">画面与状态机暂停</span>，工人确认后清当前周期但保留计数（OK / NG / 自定义计数器累计值不动），现场重做这一件。本机生效，不同步到集群副机。
+                      </div>
+
+                      <!-- v3.9.x 周期性强制动作触发的事件: 确认时是否清账 -->
+                      <div v-if="ev.require_ack" class="mt-2 flex items-center gap-3 flex-wrap">
+                        <el-checkbox v-model="ev.ack_resets_periodic" size="small">
+                          <span class="text-cyan-300">确认时清账周期性强制动作</span>
+                        </el-checkbox>
+                      </div>
+                      <div v-if="ev.require_ack" class="text-xs text-gray-500 mt-2 leading-relaxed bg-slate-950/60 rounded p-2 border-l-2 border-cyan-700/50">
+                        仅当本事件被<span class="text-cyan-300">周期性强制动作</span>（每 N 轮 / 每 N 秒提醒一次）触发时生效。
+                        勾上：工人确认 = 等价于做了一次保养完成动作，对应规则计数器清零，下次重新累计到阈值才再提醒。
+                        不勾（默认）：仅消除阻塞，规则计数继续累加，下次到点立刻又触发（适合"按死值催办"场景）。
+                      </div>
+                    </div>
                   </div>
                 </div>
               </el-card>
@@ -2717,15 +2746,19 @@ const initProjectDefaults = (project) => {
   }
   if (!project.events_config) {
     project.events_config = [
-      { id: 1, name: '合格(OK)', color: '#10b981', actions: [{ counter_name: '合格总数', delta: 1 }, { counter_name: '总产量', delta: 1 }], show_notification: true, toast_id: 'ok' },
-      { id: 2, name: '不良(NG)', color: '#ef4444', actions: [{ counter_name: '不良总数', delta: 1 }, { counter_name: '总产量', delta: 1 }], show_notification: true, toast_id: 'ng' }
+      { id: 1, name: '合格(OK)', color: '#10b981', actions: [{ counter_name: '合格总数', delta: 1 }, { counter_name: '总产量', delta: 1 }], show_notification: true, toast_id: 'ok', require_ack: false, ack_timeout_sec: 0, ack_resets_periodic: false },
+      { id: 2, name: '不良(NG)', color: '#ef4444', actions: [{ counter_name: '不良总数', delta: 1 }, { counter_name: '总产量', delta: 1 }], show_notification: true, toast_id: 'ng', require_ack: false, ack_timeout_sec: 0, ack_resets_periodic: false }
     ];
   }
-  // 确保每个事件都有 toast_id
+  // 确保每个事件都有 toast_id + v3.9.x 人工确认字段 (老项目兼容)
   project.events_config.forEach((ev, idx) => {
     if (!ev.toast_id) {
       ev.toast_id = idx === 0 ? 'ok' : (idx === 1 ? 'ng' : 'ok');
     }
+    if (typeof ev.require_ack !== 'boolean') ev.require_ack = false;
+    if (typeof ev.ack_timeout_sec !== 'number') ev.ack_timeout_sec = 0;
+    // v3.9.x: 周期性强制动作触发该事件时, 确认是否同步清账规则计数 (默认 false)
+    if (typeof ev.ack_resets_periodic !== 'boolean') ev.ack_resets_periodic = false;
   });
   if (!project.counters_config) {
     project.counters_config = [
@@ -4194,7 +4227,10 @@ const addEvent = () => {
     color: '#3b82f6',
     actions: [],
     show_notification: false,
-    notification_type: 'normal'
+    notification_type: 'normal',
+    require_ack: false,
+    ack_timeout_sec: 0,
+    ack_resets_periodic: false,
   });
 };
 

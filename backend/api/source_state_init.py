@@ -182,6 +182,23 @@ def _init_event_and_cycle_state(h):
     # D 残影屏蔽集合复用现有 _blocked_labels (last_first 与跨周期同时出现组互斥, 不会冲突)
     h._pending_first_step = False
 
+    # v3.9.x 事件人工确认阻塞态:
+    #   触发 require_ack=True 的事件后, 主循环 + 推流 + 状态机全停, 直到工人调
+    #   /api/v1/source/detection/ack-event 主动确认才解除. 设计为通道级隔离,
+    #   多通道场景某个工位阻塞不影响其他工位.
+    #
+    # 字段语义:
+    #   _pending_ack             : True 即阻塞态
+    #   _pending_ack_started_at  : 阻塞起始时间戳 (用于超时计算)
+    #   _pending_ack_event_id    : 触发阻塞的事件编号 (前端可用于关联提示框)
+    #   _pending_ack_event_name  : 触发阻塞的事件名 (前端展示)
+    #   _pending_ack_timeout_sec : 超时阈值秒数 (0 = 永不超时, 必须人工确认)
+    h._pending_ack = False
+    h._pending_ack_started_at = None
+    h._pending_ack_event_id = None
+    h._pending_ack_event_name = None
+    h._pending_ack_timeout_sec = 0
+
 
 def _init_tracking_state(h):
     """Tracking 模式 (物品清点) 全部状态"""
@@ -274,6 +291,23 @@ def _init_cycle_time_state(h):
     #   step_cycle_durations_history(按 label 的 list, 上限 100), 给前端"PT 合并"档使用.
     h.step_cycle_durations = {}
     h.step_cycle_durations_history = {}
+
+    # v3.9.x D 方案 (V2 架构): 步骤"在画面里实际可见的帧时长之和"(秒).
+    #
+    # 现行 step_durations / step_cycle_durations 用"跨度" (last_seen - start_time)
+    # 算 PT, 客户场景里某个标签从早到晚都被识别 (涂黑残留 / 翻面后还在画面 / 上一件
+    # 还摆在工位等), 跨度会被拖到 18 秒, 但客户实际做这一步只用 2 秒.
+    #
+    # 后端的策略: 永远多算一份"累计可见时长"(每帧累加 detected_labels 里每个 label),
+    # 通过 detection/results 透出. 前端"显示设置 → PT 计算口径"是纯展示档:
+    # 'span'    (默认) → 用 step_durations / step_cycle_durations
+    # 'visible'        → 用 step_visible_seconds
+    #
+    # 后端的 step_durations 等字段语义不变 (CSV 导出 / history 等下游消费者都不受影响).
+    # 周期开始时清空累计字典, 步骤完成时不清 (同周期内"出现-消失-出现"段落都累加).
+    # _dt 上限 1.0s 防 FPS 极低 / 暂停恢复单帧大跨度污染累计值.
+    h.step_visible_seconds = {}
+    h._last_frame_ts_for_visible = None
 
 
 def _init_session_state(h):

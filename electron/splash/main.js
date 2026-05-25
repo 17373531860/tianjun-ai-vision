@@ -1064,29 +1064,71 @@ async function initHands() {
 
   const videoEl = document.getElementById('webcam');
 
-  // ---- 摄像头选择策略：优先 ch1 持久化的 deviceId，否则系统默认 ----
-  // 上次工位 1 选过 USB 摄像头时，后端把 MediaDeviceInfo.deviceId 落盘到了
-  // workstation_config.json 的 channels."1".usb_device_id（v3.8.2+）。
-  // splash 拿这个字符串直接给 getUserMedia 精确锁住同一个设备。
-  // 拿不到 / 不匹配时退回系统默认 webcam。
+  // ─────────────────────────────────────────────────────────────────
+  // 摄像头选择策略 (v3.9.x): 三档可配置, 落盘 workstation_config.json 顶层 splash 字段.
+  // ─────────────────────────────────────────────────────────────────
+  // 客户痛点: 工厂工控机经常装了 Todesk / 向日葵等远程控制软件, 它们会注册"虚拟摄像头",
+  // 老逻辑只看 ch1 USB 绑定 → 没绑就 facingMode:user → 浏览器随机挑一个 → 经常拿到虚拟相机.
+  //
+  // 配置来源 — 主前端「设置 → 启动动画手势相机」
+  //   cfg.splash = {
+  //     camera_mode: 'auto'     - 老逻辑 (优先 ch1.usb_device_id, 否则 facingMode:user)
+  //                  'specific' - 锁死指定 device_id, 拿不到走"无摄像头"兜底
+  //                  'disabled' - 不开摄像头, splash 直接进自动播放
+  //     device_id:    '...'     - specific 模式锁的 deviceId
+  //     device_label: '...'     - 仅回显, splash 不读
+  //   }
+  // ─────────────────────────────────────────────────────────────────
+  let cameraMode = 'auto';
   let preferredDeviceId = '';
   if (splashAPI && typeof splashAPI.getWorkstationConfig === 'function') {
     try {
       const cfg = await splashAPI.getWorkstationConfig();
-      const ch1 = cfg && cfg.channels && cfg.channels['1'];
-      if (ch1 && ch1.usb_device_id) {
-        preferredDeviceId = String(ch1.usb_device_id);
-        console.log(`[Camera] 使用工位 1 持久化 deviceId: ${preferredDeviceId.slice(0, 16)}...`);
+      // 顶层 splash 段 (v3.9.x+)
+      const splashCfg = cfg && cfg.splash;
+      if (splashCfg && typeof splashCfg.camera_mode === 'string') {
+        cameraMode = splashCfg.camera_mode;
+        if (cameraMode === 'specific' && splashCfg.device_id) {
+          preferredDeviceId = String(splashCfg.device_id);
+          console.log(`[Camera] 模式=specific, 锁定 deviceId: ${preferredDeviceId.slice(0, 16)}...`);
+        } else {
+          console.log(`[Camera] 模式=${cameraMode}`);
+        }
+      }
+      // 老路径 (v3.8.2): 当 mode=auto 且 splash 段没明确 device_id 时, 沿用工位 1 USB 绑定
+      if (cameraMode === 'auto' && !preferredDeviceId) {
+        const ch1 = cfg && cfg.channels && cfg.channels['1'];
+        if (ch1 && ch1.usb_device_id) {
+          preferredDeviceId = String(ch1.usb_device_id);
+          console.log(`[Camera] auto 模式, 沿用工位 1 deviceId: ${preferredDeviceId.slice(0, 16)}...`);
+        }
       }
     } catch (e) {
       console.warn('[Camera] 读取工位配置失败，降级到系统默认:', e.message);
     }
   }
 
+  // disabled: 用户主动关闭手势, 直接走自动播放兜底, 不打扰任何摄像头授权弹窗
+  if (cameraMode === 'disabled') {
+    console.log('[Camera] 用户关闭手势, 跳过 getUserMedia, 进入自动播放');
+    setInput('已关闭手势（自动播放）', 'dim');
+    input.source = 'mouse';
+    scheduleAutoplayFallback();
+    return false;
+  }
+
   try {
-    const videoConstraint = preferredDeviceId
-      ? { deviceId: { ideal: preferredDeviceId }, width: 640, height: 480 }
-      : { width: 640, height: 480, facingMode: 'user' };
+    // specific 模式: exact 强制锁定; auto 模式: ideal 软锁定 (拿不到会回退到其他设备).
+    // 老逻辑统一用 ideal — 在 auto 模式下行为不变; specific 模式必须用 exact, 否则
+    // 浏览器找不到指定相机时会偷偷换一台 (经常就换到了 todesk 虚拟相机), 违背用户意图.
+    let videoConstraint;
+    if (cameraMode === 'specific' && preferredDeviceId) {
+      videoConstraint = { deviceId: { exact: preferredDeviceId }, width: 640, height: 480 };
+    } else if (preferredDeviceId) {
+      videoConstraint = { deviceId: { ideal: preferredDeviceId }, width: 640, height: 480 };
+    } else {
+      videoConstraint = { width: 640, height: 480, facingMode: 'user' };
+    }
     const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraint });
     videoEl.srcObject = stream;
     await videoEl.play();
@@ -1094,7 +1136,7 @@ async function initHands() {
     document.getElementById('webcamWrap').classList.add('show');
   } catch (e) {
     console.warn('[Camera] 获取摄像头失败，自动播放兜底:', e.message);
-    setInput('无摄像头（自动播放）', 'warn');
+    setInput(cameraMode === 'specific' ? '指定相机不可用（自动播放）' : '无摄像头（自动播放）', 'warn');
     input.source = 'mouse';
     scheduleAutoplayFallback();   // 没摄像头：等后端 ready 后自动塌缩+爆炸
     return false;
@@ -1309,6 +1351,13 @@ function transitionTo(next) {
   if (next === Stage.EXPLOSION) explosionPower = 0;
   setHud('hudStage', stageLabel[next]);
 
+  // v3.9.x: 进入 IDLE/HOVER 之外的任何阶段都清掉闲置 timer
+  // (手势自动塌缩 / autoplayFallback 走 transitionTo 但不走 skipToReady,
+  //  这里兜一次, 避免动画播一半被超时强制 skipToReady 二次打断)
+  if (next !== Stage.IDLE && next !== Stage.HOVER) {
+    clearIdleTimeout();
+  }
+
   // Fresnel 壳跟阶段切换：保留"颜色随阶段切换"的机制（用户喜欢这个），
   // 但整体强度大幅降低 → 壳只在球边缘留一圈微光，不再罩住粒子本体
   if (next === Stage.IDLE) {
@@ -1414,6 +1463,88 @@ window.addEventListener('resize', () => {
 
 // v0.12.1：按钮已删除，由 startReadyLoading() 6s 后自动触发跳转
 
+// ─────────────────────────────────────────────────────────────────────
+// 跳过手势 → 直接进 READY 的统一入口 (v3.9.x)
+// ─────────────────────────────────────────────────────────────────────
+// 触发源:
+//   - 键盘 ESC      (v3.8.2 起)
+//   - 鼠标点击屏幕   (v3.9.x 起 — 客户工厂工控机经常没键盘 / 没人知道按 ESC)
+// 守门: 仅 IDLE / HOVER 阶段响应; COLLAPSE / EXPLOSION / READY 期间忽略,
+// 避免动画播到一半被二次触发打断 (状态机不接受倒退).
+function skipToReady(reason) {
+  if (currentStage !== Stage.IDLE && currentStage !== Stage.HOVER) return;
+  console.log(`[Splash] ${reason} 触发, 跳过手势直接进 READY`);
+  // v3.9.1a hotfix: 跳过手势路径必须自己把"虚拟后端 ready 信号"打开,
+  // 否则 EXPLOSION 末态 (stageProgress=1.0) 会卡死等不到 backendReady=true,
+  // 永远进不去 Stage.READY → splash 永远关不掉。
+  // 历史: v3.8.2 ESC 跳过 + v3.9.1 鼠标/触摸跳过 都遗漏了这一步,
+  //       客户工厂触摸屏机器随手一摸就复现 → 修。
+  backendReady = true;
+  clearIdleTimeout();  // 一旦真的进入 COLLAPSE 路径就不再需要兜底 timer
+  transitionTo(Stage.COLLAPSE);
+  setTimeout(() => {
+    if (currentStage === Stage.COLLAPSE) transitionTo(Stage.EXPLOSION);
+  }, 1200);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// IDLE 闲置超时自动跳过 (v3.9.x+)
+// ─────────────────────────────────────────────────────────────────────
+// 客户痛点: 工厂工控机开机后没人值守, 想看主程序起没起的工人发现 splash 卡了半天,
+// 又不知道按 ESC / 戳屏幕能跳过, 干瞪眼怀疑软件挂了.
+//
+// 行为:
+//   - IDLE / HOVER 阶段闲置超过 idle_timeout_sec 秒就视为"没人在", 自动 skipToReady
+//   - COLLAPSE / EXPLOSION / READY 阶段从不被超时打断 (动画已在跑, 主程序马上就来)
+//   - 任何成功的交互 (点击 → skipToReady, 按键 → skipToReady, 手势 active → HOVER)
+//     都会通过 transitionTo / skipToReady 间接清掉 timer, 不需要再单独监听
+//
+// 配置: workstation_config.json.splash.idle_timeout_sec
+//   0    = 永不超时 (老行为, 必须真人介入)
+//   >0   = N 秒后自动跳
+//   默认 600 (10 分钟); 后端模型加载慢的工控机也来得及自然完成 splash,
+//   又不至于无人值守真的永远停在 IDLE.
+let idleTimeoutSec = 0;
+let idleTimeoutTimer = null;
+
+function clearIdleTimeout() {
+  if (idleTimeoutTimer) {
+    clearTimeout(idleTimeoutTimer);
+    idleTimeoutTimer = null;
+  }
+}
+
+function armIdleTimeout() {
+  clearIdleTimeout();
+  if (!idleTimeoutSec || idleTimeoutSec <= 0) return;  // 0 = 永不
+  idleTimeoutTimer = setTimeout(() => {
+    if (currentStage !== Stage.IDLE && currentStage !== Stage.HOVER) return;
+    console.log(`[Splash] IDLE 已 ${idleTimeoutSec}s 无交互, 触发自动跳过`);
+    skipToReady(`IDLE_TIMEOUT_${idleTimeoutSec}S`);
+  }, idleTimeoutSec * 1000);
+}
+
+async function setupIdleTimeout() {
+  if (!splashAPI || typeof splashAPI.getWorkstationConfig !== 'function') {
+    // 沙盒模式 / IPC 不可用 — 没有真实配置可读, 不启 timer (沙盒老行为)
+    return;
+  }
+  try {
+    const cfg = await splashAPI.getWorkstationConfig();
+    const raw = cfg && cfg.splash && cfg.splash.idle_timeout_sec;
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 0) {
+      idleTimeoutSec = n;
+    } else {
+      idleTimeoutSec = 600;  // 字段不存在 / 解析失败 → 默认 10 分钟
+    }
+    console.log(`[Splash] 闲置超时配置: ${idleTimeoutSec === 0 ? '永不' : idleTimeoutSec + 's'}`);
+    armIdleTimeout();
+  } catch (e) {
+    console.warn('[Splash] 读 idle_timeout_sec 失败, 不启 timer:', e.message);
+  }
+}
+
 // 调试 + 跳过快捷键
 window.addEventListener('keydown', (e) => {
   // D: 切换 dev panel（隐藏面板，按 D 调出来看 FPS / 粒子数 / GPU 信息）
@@ -1430,17 +1561,23 @@ window.addEventListener('keydown', (e) => {
     document.body.classList.remove('stage-ready');
     transitionTo(Stage.IDLE);
   }
-  // ESC (v3.8.2): 跳过手势, 直接走 COLLAPSE → EXPLOSION → READY
-  // 给"没有耐心做手势"或"摄像头死了"的边界场景兜底
+  // ESC (v3.8.2): 跳过手势 — 给"没有耐心做手势"或"摄像头死了"的场景兜底
   if (e.key === 'Escape') {
-    if (currentStage === Stage.IDLE || currentStage === Stage.HOVER) {
-      console.log('[Splash] ESC 跳过手势, 直接进 READY');
-      transitionTo(Stage.COLLAPSE);
-      setTimeout(() => {
-        if (currentStage === Stage.COLLAPSE) transitionTo(Stage.EXPLOSION);
-      }, 1200);
-    }
+    skipToReady('ESC');
   }
+});
+
+// v3.9.x: 鼠标点击空白区域跳过手势 → 触发塌缩 + 爆炸 → 加载动画
+// 守门:
+//   1) 已交互元素 (audioToggle 等 <button>) 的 click 通过 closest('button,a,input') 排除,
+//      避免按音效按钮也被当成"跳过"。
+//   2) skipToReady 内部再守 IDLE/HOVER 阶段, 不会重复触发或打断动画。
+window.addEventListener('click', (e) => {
+  const t = e.target;
+  if (t && typeof t.closest === 'function' && t.closest('button, a, input, select, textarea')) {
+    return;  // 点中已有 UI 按钮 — 不当作跳过手势
+  }
+  skipToReady('CLICK');
 });
 
 // v0.15 · 音效开关按钮
@@ -1625,6 +1762,7 @@ setHud('hudStage', stageLabel[Stage.IDLE]);
 setBackend('待机 · 等待手势', 'dim');
 
 initHands();
+setupIdleTimeout();   // v3.9.x: 启动 IDLE 闲置超时 (默认 600s, 客户工厂工控机兜底)
 loop();
 
 // =====================================================================
@@ -2216,6 +2354,14 @@ function startReadyLoading() {
       displayPct += diff * 0.12;
       if (Math.abs(targetPct - displayPct) < 0.5) displayPct = targetPct;
     }
+    // v3.9.1a hotfix: 浮点收敛 edge case 兜底——targetPct=100 且 displayPct≥99 时强制 snap。
+    // 修原 `Math.abs(diff) > 0.05` 退出条件下 displayPct 永远卡 99.95 (floor=99) 的边界:
+    //   - rAF 节流 (浏览器后台 tab / F12 打开) 或浮点累积都可能让 displayPct 落在
+    //     `(targetPct - 0.05, targetPct]` 区间永远出不来 → pctVal=99 → 完成判定 `>=100` 永远不触发。
+    // 仅当 target=100 (真后端 ready 或沙盒 5s 后) 且 display≥99 时生效, 不影响 0-99 区间正常爬升。
+    if (targetPct >= 100 && displayPct >= 99 && displayPct < 100) {
+      displayPct = 100;
+    }
     const pctVal = Math.floor(displayPct);
 
     if (pctEl)  pctEl.textContent  = String(pctVal).padStart(3, '0') + '%';
@@ -2246,14 +2392,10 @@ function startReadyLoading() {
       if (loader) loader.classList.add('complete');
       if (stepEl) stepEl.textContent = '✓ jack in monitor view';
       if (FEAT.audio) playLoadCompleteSfx();
-      // 600ms 闪烁停留后通知 Electron 主进程关闭 splash + 显示主界面
-      setTimeout(() => {
-        if (splashAPI && typeof splashAPI.notifySplashFinished === 'function') {
-          splashAPI.notifySplashFinished();
-        } else {
-          console.log('[Splash] 沙盒模式：splash 流程完成');
-        }
-      }, 600);
+      // 600ms 闪烁停留后走统一的 forceSplashFinish 路径
+      // (v3.9.1a hotfix: 收敛到同一个 finish 入口, 和 hard deadline 兜底共享 splashFinished flag,
+      //  避免两条路径都触发 finish IPC 让主进程重复处理)
+      setTimeout(() => forceSplashFinish('progress-100'), 600);
       return;
     }
     requestAnimationFrame(tick);
@@ -2297,10 +2439,32 @@ if (splashAPI && typeof splashAPI.onBackendLog === 'function') {
     for (const ln of lines) consumeBackendLog(ln);
   });
 }
+// v3.9.1a hotfix: splash 完成状态共享 flag, 给 hard deadline 兜底用,
+// 避免 progress tick 自然完成 和 hard deadline 强制完成 重复触发 finish IPC。
+let splashFinished = false;
+
+function forceSplashFinish(reason) {
+  if (splashFinished) return;
+  splashFinished = true;
+  console.log(`[Splash] forceFinish 触发: ${reason}`);
+  if (splashAPI && typeof splashAPI.notifySplashFinished === 'function') {
+    splashAPI.notifySplashFinished();
+  } else {
+    console.log('[Splash] 沙盒模式: 流程完成 (无主进程可通知)');
+  }
+}
+
 if (splashAPI && typeof splashAPI.onBackendReady === 'function') {
   splashAPI.onBackendReady(() => {
     console.log('[Splash] 主进程通知后端 ready');
     backendReadyFromIPC = true;
+
+    // v3.9.1a hotfix: hard deadline 兜底——后端真 ready 后最多再等 8s,
+    // 进度条还没自然冲到 100% 就强制走 finish 路径,
+    // 防御 progress tick 收敛 bug / rAF 节流 / 任何未知阻塞让 splash 永远关不掉。
+    // 注意: 必须 backendReadyFromIPC=true 之后才开始计时, 不是 splash 启动就计时——
+    //   后端模型加载可能要 30-60s (工控机性能弱时), 不能在后端没 ready 时就强制关 splash。
+    setTimeout(() => forceSplashFinish('backend-ready-deadline-8s'), 8000);
   });
 }
 

@@ -206,13 +206,18 @@ class CaptureLoopMixin:
                         display_frame = original_frame.copy()
                         self._apply_mediapipe_overlay(display_frame)
                     
-                    t_lock4_start = time.time()
-                    with self.frame_lock:
-                        self.current_frame = display_frame
-                        self._frame_seq += 1
-                    t_lock4_end = time.time()
-                    if (t_lock4_end - t_lock4_start) > 0.1:
-                        debug_log(f"!!! frame_lock 耗时: {(t_lock4_end-t_lock4_start)*1000:.1f}ms", "CAPTURE")
+                    # v3.9.x 人工确认阻塞门 (推流冻结):
+                    # 阻塞期间不更新 current_frame / 不递增 _frame_seq → MJPEG generator
+                    # 看到 seq 不变, 不 yield 新帧, 浏览器维持触发瞬间最后一帧 (含检测框).
+                    # 实际效果: 工人看到 NG 提示框 + 当时的画面定格, 一目了然知道哪件需要重做.
+                    if not getattr(self, '_pending_ack', False):
+                        t_lock4_start = time.time()
+                        with self.frame_lock:
+                            self.current_frame = display_frame
+                            self._frame_seq += 1
+                        t_lock4_end = time.time()
+                        if (t_lock4_end - t_lock4_start) > 0.1:
+                            debug_log(f"!!! frame_lock 耗时: {(t_lock4_end-t_lock4_start)*1000:.1f}ms", "CAPTURE")
                     
                     # FPS 计算
                     self._fps_counter += 1

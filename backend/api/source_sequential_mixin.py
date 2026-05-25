@@ -130,7 +130,9 @@ class SequentialMixin:
         # ── 补计：对本周期中尚未被计数的步骤进行补计 ──
         for label in this_cycle:
             if label in self.step_last_seen:
-                start_time = self.step_start_time.get(label, self.step_last_seen[label])
+                # v3.9.x: 严格顺序 PT 起点夹到 max(start, 上一步完成时刻).
+                raw_start = self.step_start_time.get(label, self.step_last_seen[label])
+                start_time = self._resolve_step_pt_anchor(label, raw_start)
                 last_time = self.step_last_seen[label]
                 duration = last_time - start_time
                 
@@ -310,7 +312,9 @@ class SequentialMixin:
         # ── 补计：对本周期中尚未被计数的步骤进行补计 ──
         for label in this_cycle:
             if label in self.step_last_seen:
-                start_time = self.step_start_time.get(label, self.step_last_seen[label])
+                # v3.9.x: 严格顺序 PT 起点夹到 max(start, 上一步完成时刻).
+                raw_start = self.step_start_time.get(label, self.step_last_seen[label])
+                start_time = self._resolve_step_pt_anchor(label, raw_start)
                 last_time = self.step_last_seen[label]
                 duration = last_time - start_time
                 

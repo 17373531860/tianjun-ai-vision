@@ -159,7 +159,18 @@ def update_project(project_id: int, project: ProjectUpdate, db: Session = Depend
     
     db.commit()
     db.refresh(db_project)
-    
+
+    # v3.9.x: 项目当前是激活态时, 自动把最新配置 push 到运行时 VSM, 客户在 Project
+    # 页保存事件配置 / 阈值 / sequence_order 等不再需要"重新激活项目"才能生效.
+    # 之前 v3.7.x 只在 activate 路径加了这个同步, 这里把 update 路径也补上.
+    # 现象 (此前): 客户勾上"需人工确认", 保存项目, 项目仍在跑 → require_ack 仍是
+    # 旧值, 事件触发时不阻塞.
+    if db_project.is_active:
+        try:
+            _sync_project_config_to_channels(db_project)
+        except Exception as _e:
+            print(f"[update_project] 配置同步到运行时失败 (忽略): {_e}")
+
     model_name = None
     model_version = None
     model_labels = None

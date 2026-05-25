@@ -61,6 +61,9 @@ export const resetDetection = (channel = 0) => api.post(`/detection/reset?channe
 
 export const resetDetectionStats = (channel = 0) => api.post(`/source/detection/reset-stats?channel=${channel}`);
 
+// v3.9.x 工人确认重做 — 解除 require_ack 触发的阻塞态
+export const ackPendingEvent = (channel = 0) => api.post(`/source/detection/ack-event?channel=${channel}`);
+
 export const resetPeriodicAction = (channel = 0, ruleId = null) => {
   const params = new URLSearchParams({ channel: String(channel) });
   if (ruleId) params.append('rule_id', ruleId);

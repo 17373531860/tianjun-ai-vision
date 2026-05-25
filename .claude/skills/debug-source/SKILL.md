@@ -728,6 +728,83 @@ mixin 改动就是源码裸跑（IP 漏出去），但行为对得上。
 
 ---
 
+## 十二·B、v3.9.1 新增：事件手动确认 + 严格顺序 PT anchor 修正
+
+> 这一节是 v3.9.1 patch 新增到 source 状态机的两个关键机制，全部跟 mixin/host 状态强相关。
+
+### 事件手动确认（require_ack）
+
+**配置位置**：项目 `events_config` 里每个事件支持新字段：
+- `require_ack`（默认 false）：触发后冻结主推流 + 弹前端 overlay 等工人按确认
+- `ack_timeout_sec`（默认 0）：超时自动确认，0 不超时
+- `ack_resets_periodic`（默认 false）：确认后重置该规则的 N 轮计数器，防"未压墨提示框关不掉一直弹"
+
+**架构**：
+- 内部状态 `_pending_ack`（dict，含 `event_id` / `event_name` / `triggered_at` / `timeout_sec` / `is_periodic` / `periodic_rule_id`）—— `source_state_init.py` 初始化
+- `_trigger_event` 检测到 `require_ack=true` 时挂状态，主推流线程（`source_capture_loop_mixin.py`）检测到该状态后停止帧推送
+- 周期性强制动作（保养提示等）走独立路径 `_emit_periodic_notification`，原本绕过 `_trigger_event`；v3.9.1 后两条路径统一接入 `_pending_ack`
+- 前端调 `POST /api/v1/source/detection/ack-event` → `source_routes.py:ack_pending_event` 清状态，`ack_resets_periodic=true` 时重置 `periodic_actions[rule_id].counter`
+
+**排查模板**：
+
+| 现象 | 第一步看 | 第二步看 | 修复方向 |
+|---|---|---|---|
+| NG 事件触发但没弹 overlay | `events_config[event].require_ack` 是否 true | `_pending_ack` 是否真的被设 | grep `_trigger_event` 加 print 看条件分支 |
+| 周期性动作 (如未压墨) 触发后没弹 overlay | `_emit_periodic_notification` 路径是否接入 `_pending_ack` | 项目配置 `events_config` 里对应事件是否真的开 `require_ack` | 确认 v3.9.1 patch 已合并 |
+| 确认后又立刻再弹 | `ack_resets_periodic` 是否 true | `periodic_actions[rule_id].counter` 是否重置 | 没重置 → 客户没勾这个选项, 引导客户开 |
+| 主程序卡死, 看不到视频 | `_pending_ack` 是否残留 | 前端是否真发 ack POST | 直接 POST 后端 `/ack-event` 强制清; 或重启检测 |
+
+**关键不变量**：
+- `_pending_ack` 残留 → 整个工位的帧推送都停 → 必须有清理路径（前端按钮 / 后端 API / `_clear_step_runtime_state` 内部清）
+- 多通道场景：每个 channel 独立 `_pending_ack`，互不影响（VSM 实例级）
+
+### 严格顺序 PT 起点 anchor 修正
+
+**背景**：客户严格顺序模式（`step.strict_order=true`）下，CT=6.21s 但 PT 加起来比 CT 大很多；翻转步骤 PT 高达 7.5s 而实际只用 0.6 秒。
+
+**根因**：翻转标签在"正面涂黑"还在执行时就被 YOLO 提前识别 → `step_start_time[翻转]` 被记录到上一步骤还在执行的时刻 → `duration = last_seen - start_time` 横跨两步操作 → 严格顺序下相邻步骤 interval 出现负值（步骤完成时间早于开始时间）。
+
+**修复**：`backend/api/source.py:_resolve_step_pt_anchor(label, fallback_start)` 助手函数，严格顺序步骤的 PT 起点夹到 `max(fallback_start, last_step_completed_time)`，确保起点不早于上一步完成时刻。
+
+**接入位置（5 个写入点必须全部用同一 anchor）**：
+| 位置 | 函数 | 原因 |
+|---|---|---|
+| `source.py` | `_supplement_step_durations` | settle 时补计跨度 |
+| `source_session_lifecycle_mixin.py` | `_flush_active_steps_pt` | cycle 结束时 flush 还在画面的标签 |
+| `source_sequential_mixin.py` | `_check_sequential_mode` 补计段 | sequential 模式 NG 路径补计 |
+| `source_sequential_mixin.py` | `_check_custom_sequential_mode` 补计段 | custom-based-on-sequential 模式 NG 路径补计 |
+| `source_routes.py` | `step_inflight_durations` 计算块 | **关键**：in-flight 实时 PT 也必须用同一 anchor，否则步骤完成时 PT 从大数字"啪"地跳到小数字（客户报 "PT 闪一下"） |
+
+**排查模板**：
+
+| 现象 | 第一步看 | 第二步看 | 修复方向 |
+|---|---|---|---|
+| CT < PT 之和 | `step.strict_order` 是否全 true | `_resolve_step_pt_anchor` 是否被调（grep "_resolve_step_pt_anchor"）| 没接入 → patch 不完整 |
+| 步骤间 interval 负值 | `step_start_time` 是否在上一步 last_seen 之后 | `last_step_completed_time` 是否被正确更新 | 检查 `_check_*_mode` 结算路径 |
+| 步骤完成瞬间 PT 闪一下从大跳小 | `step_inflight_durations` 是否用 anchor | `source_routes.py` 里 inflight 块是否调 `_resolve_step_pt_anchor` | v3.9.1 已修, 没修 = patch 缺位 |
+| 非严格顺序模式下 PT 突然变小 | `step.strict_order=false` 是否被误开 | 非 strict 时 anchor 返 fallback_start 不改值 | 确认 step config |
+
+---
+
+## 十二·C、v3.9.1 新增：PT 计算口径 visible（累计可见时长）
+
+> 这是后端永远算两份 PT 字段、前端 Settings 选源的显示口径功能。源生命周期相关，不是状态机改动。
+
+**两份字段并行**：
+- `step_durations` / `cycle_sum_step_durations`（跨度，老字段，CSV 导出 / history 等下游消费者契约不变）
+- `step_visible_seconds`（累计可见时长，新字段，每帧累加 `detected_labels` 里每个 label 的 `_dt`，上限 1.0s 防 FPS 极低时单帧大跨度污染）
+
+**生命周期**（在 `source_session_lifecycle_mixin.py`）：
+- `start_cycle()` 调用时清零（与 `step_cycle_durations` 同步）
+- 周期间隙保留（前端 resultHold 展示期内还能看见上一周期数据）
+- 累计逻辑在 `source_step_stats_mixin.py` 每帧入口
+
+**排查**：
+- 客户报"我的 PT 数字变小了，跟以前不一样" → 看 Settings → PT 计算口径，可能选了 `visible`；切回 `span` 即可
+- 客户报"step_visible_seconds 字段缺失" → 旧 SQLite session 表不入库这字段，只在 runtime 透出 → 不是 bug
+
+---
+
 ## 十三、读取检查清单（开始修问题前）
 
 1. `backend/api/source.py`（先 grep 函数名再 Read，全文 1573 行别一次读完）

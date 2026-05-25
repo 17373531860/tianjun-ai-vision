@@ -391,6 +391,11 @@ class SessionLifecycleMixin:
             self.step_cycle_durations = {}
             self.step_durations = {}
 
+            # v3.9.x D 方案: 累计可见时长字典也在新周期起步时清, 跟 step_cycle_durations 同步
+            # 周期间隙保留 (前端展示期内还能看见上一周期 PT), 新周期起立刻清进入下一轮.
+            if hasattr(self, 'step_visible_seconds'):
+                self.step_visible_seconds = {}
+
             # 新周期开始：重置传动杆 SessionGate（上一个周期见过的框架记忆不应跨周期）
             if getattr(self, "_rod_gate", None) is not None:
                 try:
@@ -449,7 +454,9 @@ class SessionLifecycleMixin:
             for label, last_t in list(last_seen.items()):
                 if label not in self.current_cycle_steps:
                     continue
-                start_t = start_map.get(label, last_t)
+                # v3.9.x: 严格顺序 PT 起点夹到 max(start, 上一步完成时刻).
+                raw_start = start_map.get(label, last_t)
+                start_t = self._resolve_step_pt_anchor(label, raw_start)
                 duration = last_t - start_t
                 if duration <= 0:
                     continue

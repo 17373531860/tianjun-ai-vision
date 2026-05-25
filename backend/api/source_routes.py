@@ -1096,6 +1096,72 @@ def reset_detection_stats(channel: int = Query(0)):
     return {"status": "success", "message": "统计数据已重置"}
 
 
+# v3.9.x 工人确认 ack-event — operator/engineer/admin 都能确认事件 (产线上谁都可能按)
+# 跟开始/停止/待机同权限级别 monitor.detection.control, 不要求 advanced (清零计数才要 advanced).
+@router.post("/detection/ack-event",
+             dependencies=[Depends(require_perm("monitor.detection.control"))])
+def ack_pending_event(channel: int = Query(0)):
+    """v3.9.x 工人确认重做 — 解除 require_ack 触发的阻塞态。
+
+    使用场景:
+        触发了 require_ack=True 的 NG / 自定义事件后, 状态机 + 推流被守门拦下,
+        画面定格在事件触发瞬间. 工人在监控页点"确认重做"按钮 → 调本接口:
+            1. 清阻塞态字段 (_pending_ack 等)
+            2. 调 _clear_step_runtime_state 清当前周期运行时 (步骤识别 / 周期序列
+               / 同时组缓冲 / 跨周期屏蔽集 / last_first 屏蔽集)
+            3. 计数器 / 累计统计 / 已上报的 MES 工件 不动 (语义: 已判 NG 入库,
+               工人重做这一件, 不是回滚记录)
+
+    幂等:
+        不在阻塞态时调用直接返回 {acked: False, reason: "no pending ack"}
+    """
+    mgr = _get_mgr(channel)
+    if not getattr(mgr, '_pending_ack', False):
+        return {"status": "success", "acked": False, "reason": "no pending ack"}
+    ev_name = getattr(mgr, '_pending_ack_event_name', '?') or '?'
+    ev_id = getattr(mgr, '_pending_ack_event_id', '') or ''
+    started = getattr(mgr, '_pending_ack_started_at', 0) or 0
+    waited = round(time.time() - started, 2) if started else 0
+    print(f"[ack] 收到工人确认: event={ev_name} 已等待 {waited}s, 清运行时 (channel_id={channel})")
+
+    # v3.9.x: 事件级开关 ack_resets_periodic — 默认 false (仅消除阻塞), 开了之后
+    # 确认按钮等价于工人在产线上做了一次该规则配的"完成动作", 把对应的周期性强制
+    # 动作规则计数器清零, 避免"确认完下个周期立刻又因累计超期再触发"的死循环.
+    # 反查路径: pending_ack 的 event_id → 所有 overdue_event_id 匹配的规则 → reset.
+    reset_rules: list = []
+    cfg = getattr(mgr, 'project_config', None) or {}
+    events_config = cfg.get('events_config', []) if isinstance(cfg, dict) else []
+    matched_event = None
+    for e in events_config or []:
+        if str(e.get('id', '')) == str(ev_id):
+            matched_event = e
+            break
+    should_reset = bool((matched_event or {}).get('ack_resets_periodic', False))
+    if should_reset and hasattr(mgr, 'reset_periodic_counter'):
+        rules = getattr(mgr, '_periodic_actions', []) or []
+        for rule in rules:
+            if str(rule.get('overdue_event_id', '')) == str(ev_id):
+                rid = rule.get('id')
+                if rid:
+                    try:
+                        result = mgr.reset_periodic_counter(rid)
+                        for done in (result or {}).get('reset', []):
+                            reset_rules.append(done)
+                    except Exception as _e:
+                        print(f"[ack] 规则重置失败 rule_id={rid}: {_e}")
+        if reset_rules:
+            print(f"[ack] 已重置周期性规则 (event_id={ev_id}): {reset_rules}")
+
+    mgr._clear_step_runtime_state()
+    return {
+        "status": "success",
+        "acked": True,
+        "event_name": ev_name,
+        "waited_sec": waited,
+        "reset_rules": reset_rules,
+    }
+
+
 @router.post("/detection/reset-periodic",
               dependencies=[Depends(require_perm("monitor.detection.advanced"))])
 def reset_periodic_action(
@@ -1168,10 +1234,21 @@ def get_detection_results(channel: int = Query(0)):
         _live_last = getattr(mgr, 'step_last_seen', None) or {}
         _live_start = getattr(mgr, 'step_start_time', None) or {}
         _live_cycle = getattr(mgr, 'current_cycle_steps', None) or []
+        # v3.9.x: in-flight 起点也走 _resolve_step_pt_anchor (与权威 PT 同口径).
+        # 否则严格顺序步骤被提前识别时, in-flight 按"跨度"持续涨到很大,
+        # 步骤一旦完成 fallback 切到权威值 (修正后小很多), 前端 PT 列会
+        # "啪一下从大数字跳到小数字" → 客户报的"PT 闪一下 + OK 跟着改变"。
+        # 这里走同一份 anchor, 让 in-flight 起点 ≥ 上一步完成时刻, 与权威值连续过渡.
+        _anchor = getattr(mgr, '_resolve_step_pt_anchor', None)
         for _lbl, _last_t in _live_last.items():
             if _lbl not in _live_cycle:
                 continue
             _start_t = _live_start.get(_lbl, _last_t)
+            if _anchor is not None:
+                try:
+                    _start_t = _anchor(_lbl, _start_t)
+                except Exception:
+                    pass
             _live_dur = _last_t - _start_t
             if _live_dur <= 0:
                 continue
@@ -1218,6 +1295,15 @@ def get_detection_results(channel: int = Query(0)):
         "cycle_sum_step_durations": cycle_sum_step_durations,
         "last_cycle_sum_step_durations": last_cycle_sum_step_durations,
         "avg_cycle_sum_step_durations": avg_cycle_sum_step_durations,
+        # v3.9.x D 方案: 累计可见时长 ── 标签每帧"在画面里"时长之和 (秒).
+        # 后端永远算永远透出, 前端"显示设置 → PT 计算口径"是纯展示档:
+        #   span (默认) → 用 step_durations / cycle_sum_step_durations (现行行为)
+        #   visible     → 用本字典的累计值 (规避"标签持续被识别拖长 PT"的问题)
+        # 周期开始时清零, 同周期内累加. 详见 source_state_init.py 同名字段注释.
+        "step_visible_seconds": {
+            k: round(float(v), 2)
+            for k, v in (getattr(mgr, 'step_visible_seconds', {}) or {}).items()
+        },
         "step_intervals": mgr.step_intervals.copy(),
         "counters": mgr.counters.copy(),
         "recent_events": recent_events,
@@ -1240,7 +1326,20 @@ def get_detection_results(channel: int = Query(0)):
             mgr.step_backup_map[b]
             for b in mgr.backup_steps_seen_in_cycle
             if b in mgr.step_backup_map
-        ]
+        ],
+        # v3.9.x 事件人工确认阻塞态 (前端用此判断是否弹"确认重做"模态框).
+        # active=False 时其他字段无意义; active=True 时前端应:
+        #   1. 弹模态框 (覆盖在原 OK/NG toast 上, 锁定操作)
+        #   2. 显示 event_name + reason + 已等待秒数 (started_at = epoch 秒)
+        #   3. timeout_sec > 0 时倒计时显示 "X 秒后自动确认"
+        #   4. 工人点"确认重做"按钮 → POST /detection/ack-event
+        "pending_ack": {
+            "active": bool(getattr(mgr, '_pending_ack', False)),
+            "event_id": getattr(mgr, '_pending_ack_event_id', None),
+            "event_name": getattr(mgr, '_pending_ack_event_name', None),
+            "started_at": getattr(mgr, '_pending_ack_started_at', None),
+            "timeout_sec": int(getattr(mgr, '_pending_ack_timeout_sec', 0) or 0),
+        },
     }
 
     result['model_task'] = getattr(mgr, 'model_task', 'detect')
