@@ -15,7 +15,12 @@ export default {
     cancel: '취소',
     exitConfirm: '시스템을 종료하시겠습니까?',
     exitTitle: '종료 확인',
-    safeExit: '안전하게 종료되었습니다'
+    safeExit: '안전하게 종료되었습니다',
+    notLoggedIn: '로그인 안됨',
+    login: '로그인',
+    logoutSuccess: '로그아웃 완료',
+    logoutFailed: '로그아웃 실패',
+    detectingNoLogout: '검출 실행 중, 먼저 중지하세요'
   },
   menu: {
     monitor: '실시간 모니터링',

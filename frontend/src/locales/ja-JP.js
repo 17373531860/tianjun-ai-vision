@@ -15,7 +15,12 @@ export default {
     cancel: 'キャンセル',
     exitConfirm: 'システムを終了しますか？',
     exitTitle: '終了確認',
-    safeExit: '安全に終了しました'
+    safeExit: '安全に終了しました',
+    notLoggedIn: '未ログイン',
+    login: 'ログイン',
+    logoutSuccess: 'ログアウトしました',
+    logoutFailed: 'ログアウト失敗',
+    detectingNoLogout: '検出実行中、先に停止してください'
   },
   menu: {
     monitor: 'モニタリング',

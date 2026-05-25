@@ -15,7 +15,12 @@ export default {
     cancel: '取消',
     exitConfirm: '确定要退出系统吗?',
     exitTitle: '退出提示',
-    safeExit: '已安全退出'
+    safeExit: '已安全退出',
+    notLoggedIn: '未登录',
+    login: '登录',
+    logoutSuccess: '已登出账号',
+    logoutFailed: '登出失败',
+    detectingNoLogout: '检测运行中，请先停止检测'
   },
   menu: {
     monitor: '检测中心',
