@@ -1,5 +1,24 @@
 # Changelog
 
+## v3.10.1 (2026-05-26)
+
+> v3.10.0 用户系统主线之后的"客户机视觉行为"补丁版。无破坏性改动，老项目 JSON/DB/接口全部兼容。详细 changelog 见 `docs/changelog/v3.10.1_2026-05-26.md`。
+
+- [BUG-001] **修复 PT 多段策略"仅首段"显示 0.0s / "--"** — `_supplement_step_durations` 用 `duration>=0` 放过 0.0 段, 污染 `step_cycle_segments[label]` 历史, `first_only=segments[0]=0.0` 触发前端 `--`。`_accumulate_step_pt` 入口加 `<=0.005` 零段守门, 一处出口挡掉 5 个调用点的兜底污染。`sum` / `max` 不受影响 (加 0 / 最大值跟 0 无关), 只有 first_only 暴露此 bug。
+- [BUG-002] **修复严格顺序模式 PT 负 `interval`** — 新增 `_resolve_step_pt_anchor` 把 PT 起点夹到 `max(raw_start, 上一步完成时刻)`, 帧号版 `_resolve_step_pt_anchor_frame_pos` 跟 B 方案 v2 同口径。
+- [BUG-003] **修复"防重复结算"开关 UI 打开但不落库** — `saveProject` 漏写 `settle_dedup`, UI 开关一直空转, MES 重推 / 计数翻倍。前端补字段持久化, 后端重写冷却窗口模式覆盖所有方向 (OK→NG / 同节拍重发 / 自定义事件)。
+- [FEAT-001] **PT/CT 显示口径重做 — B 方案 v2 (视频源帧号锚)** — 视频源用 `(last_fr - start_fr) / 视频原 fps` 算秒, 客户机解码速度 / 视频快进慢放完全解耦。非视频源 fallback 回 wall-clock, 行为完全不变。所有 `step_start_time/last_seen/cycle_start_time` 赋值点同步镜像写帧号字段 (state_init / session_lifecycle / settlement / sequential / step_stats / per_item / tracking 全覆盖)。
+- [FEAT-002] **PT 多段合并策略三档可切 (sum / max / first_only)** — 后端 `_accumulate_step_pt` 统一出口, 同时维护 `step_cycle_durations` (sum 累加, 老接口语义不变) 与 `step_cycle_segments` (完整分段列表)。前端 `Settings` 加三档下拉, `Monitor.formatStepPT` 在 sum+current 时根据策略对 segments 现算。默认 `sum` 保持客户体验。
+- [FEAT-003] **防重复结算 → 时间窗口冷却模式** — `_trigger_event` 入口加冷却窗口, 任意事件触发后在 `settle_dedup_window_seconds` (默认 2.0s) 内所有事件被吃, 跟 `ng_cycle_protect_seconds` 共存互补。
+- [FEAT-004] **Splash 行为可配 + 默认关闭** — `workstation_config.splash.enabled` 默认 `false`, Electron 启动早期读到关 → 走无 splash 路径直接建主窗 + 后台预热后端, ready 即 show。`true` 走老 splash 完整流程 (摄像头 / 手动跳过 / 闲置超时不动)。
+- [FEAT-005] **窗口模式 — 默认窗口模式 + 全屏热切 + 最小化按钮** — `workstation_config.window.fullscreen` 默认 `false` (1600×900 居中带 Windows 原生标题栏), 客户能正常最小化 / 切别的程序。新增 `window:minimize` / `window:set-fullscreen` IPC, `Settings` 加窗口模式卡片。
+
+Skill 更新：`modify-source` / `debug-source` / `debug-electron` 三个 skill 补本版新事实和踩坑。
+
+已知问题（暂不修，待 v3.10.2 / v3.11.0）：
+- YOLO 把"正面涂黑"识别成 4-6 秒连续段（模型边界判定问题，10 个周期历史比例 1.6×~5.1×）— 真测确认软件没吞段，单帧只输出一个标签。三种显示策略都救不了，要调高 confidence / 配 max_duration / 加负样本重训。视频回放问题，现场实际可接受，暂不动。
+- `step_start_frame_pos / step_last_frame_pos` 跨周期不显式 clear — 实际无害（每个赋值点都同步镜像写, 新周期被新值覆盖）, 留作下次整理。
+
 ## v3.10.0 (2026-05-25)
 
 > 上一发布版本 **v3.9.1**（含 v3.9.1a 两个 hotfix）。本版**完整吸收** v3.9.1 release + v3.9.1a hotfix（HOTFIX-001 + HOTFIX-002）+ splash idle 自动跳过特性，并新增用户系统主线。详细 changelog 见 `docs/changelog/v3.10.0_2026-05-25.md`。

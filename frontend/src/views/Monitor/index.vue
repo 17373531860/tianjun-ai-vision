@@ -1461,6 +1461,7 @@ const armResultHold = (holdSec) => {
     if (!monitorMounted) return;
     // 主动清屏: 与 _newCycleStarted 分支的目标字段对齐
     cycleSumStepDurations.value = {};
+    stepCycleSegments.value = {};
     stepInflightDurations.value = {};
     stepDurations.value = {};
     stepVisibleSeconds.value = {};
@@ -1774,6 +1775,7 @@ const processChannelResult = (ch, d) => {
   chData.cycleSumStepDurations = d.cycle_sum_step_durations || {};
   chData.lastCycleSumStepDurations = d.last_cycle_sum_step_durations || {};
   chData.avgCycleSumStepDurations = d.avg_cycle_sum_step_durations || {};
+  chData.stepCycleSegments = d.step_cycle_segments || {};
   // v3.9.x D 方案: 累计可见时长 (visible PT 数据源)
   chData.stepVisibleSeconds = d.step_visible_seconds || {};
   chData.detections = d.detections || [];
@@ -2929,6 +2931,8 @@ const formatStepPT = (stepLabel) => {
   const mode = systemStore.display?.monitor?.ptMode || 'current';
   const agg = systemStore.display?.monitor?.ptAggregate || 'sum';
   const calcMode = systemStore.display?.monitor?.ptCalcMode || 'span';
+  // v3.10.x: 多次出现的合并策略 (仅 ptAggregate='sum' + ptMode='current' 时生效)
+  const accStrat = systemStore.display?.monitor?.ptAccumulateStrategy || 'max';
 
   // visible + current: 直接用累计可见时长字段, 不走 sum/last 矩阵 (visible 本身就是累计)
   if (calcMode === 'visible' && mode === 'current') {
@@ -2949,6 +2953,18 @@ const formatStepPT = (stepLabel) => {
     else src = avgStepDurations.value;
   }
   let duration = src ? src[stepLabel] : undefined;
+  // v3.10.x: ptAggregate='sum' + ptMode='current' 时, max/first 策略改读分段历史现算
+  // (后端 cycle_sum_step_durations 始终是 SUM, 不动它的语义)
+  if (agg === 'sum' && mode === 'current' && accStrat !== 'sum') {
+    const segs = stepCycleSegments.value ? stepCycleSegments.value[stepLabel] : undefined;
+    if (Array.isArray(segs) && segs.length > 0) {
+      if (accStrat === 'max') {
+        duration = Math.max(...segs);
+      } else if (accStrat === 'first_only' || accStrat === 'first') {
+        duration = segs[0];
+      }
+    }
+  }
   // v3.8.x: 权威值没有 (步骤还在画面里, 没完成) → fallback 到 in-flight 实时 PT, 让用户看到渐增数字。
   // 仅 mode='current' 时 fallback (avg/last 是历史值, 不该被 in-flight 干扰)。
   if ((duration === undefined || duration === null) && mode === 'current') {
@@ -3816,6 +3832,8 @@ const avgStepDurations = ref({});
 const cycleSumStepDurations = ref({});
 const lastCycleSumStepDurations = ref({});
 const avgCycleSumStepDurations = ref({});
+// v3.10.x: 当前周期内每步分段时长列表 (后端透出, 前端按 sum/max/first 切档现算)
+const stepCycleSegments = ref({});
 
 // v3.8.x: in-flight 实时 PT (步骤还在画面里持续涨, 与权威值 cycleSumStepDurations 分开)。
 // 设计语义:
@@ -3958,6 +3976,7 @@ const startPolling = () => {
             // 展示期内: 不清屏, 不同步 lastSingleCycleId, 等 timer 到期下一轮自然进入此分支清屏
           } else {
             cycleSumStepDurations.value = {};
+            stepCycleSegments.value = {};
             stepInflightDurations.value = {};
             stepDurations.value = {};
             stepVisibleSeconds.value = {};
@@ -3983,6 +4002,10 @@ const startPolling = () => {
       // v3.9.x A 方案: 展示期内跳过, 让客户看到上一周期 PT 合并档.
       if (data.cycle_sum_step_durations !== undefined && !resultHoldActive) {
         cycleSumStepDurations.value = data.cycle_sum_step_durations || {};
+      }
+      // v3.10.x: 分段历史 (供 sum/max/first 三档现算)
+      if (data.step_cycle_segments !== undefined && !resultHoldActive) {
+        stepCycleSegments.value = data.step_cycle_segments || {};
       }
       // v3.8.x: in-flight 实时 PT (步骤还在画面里, 持续涨), 与权威 cycle_sum 分开,
       // 整体替换才能在步骤完成 / 周期切换时立刻消失 (不留旧标签残影)。
@@ -4661,6 +4684,7 @@ const resetCounters = async () => {
   cycleSumStepDurations.value = {};
   lastCycleSumStepDurations.value = {};
   avgCycleSumStepDurations.value = {};
+  stepCycleSegments.value = {};
   stepIntervals.value = {};
   stepDetectionTimes.value = {};
   Object.keys(cachedScreenshotUrls).forEach(k => delete cachedScreenshotUrls[k]);

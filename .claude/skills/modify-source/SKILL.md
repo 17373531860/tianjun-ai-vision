@@ -319,6 +319,73 @@ source.py / mixin 中向 `MESHookManager` 单例（`backend.services.mes_hooks`�
 
 ---
 
+## 12.6. PT/CT 帧号锚 + 多段策略 + 零段守门（v3.10.1）
+
+> 改动 `_accumulate_step_pt` / `step_cycle_durations` / `step_cycle_segments` / `step_*_frame_pos` / `cycle_start_frame_pos` 前必读。
+
+### 一、视频源帧号锚（B 方案 v2）
+
+- **问题**：客户机解码慢 / 视频快进慢放 / FFmpeg 卡顿 → wall-clock 算 PT/CT 偏差极大，视频回放尤其失真。
+- **方案**：视频源场景下镜像维护一组帧号锚字段，PT/CT/in-flight 全用帧号差 / 视频原 `fps_source` 算秒。
+- **新增字段**（`source_state_init._init_cycle_time_state`）：
+  - `cycle_start_frame_pos: Optional[int]` — 周期开始时的视频帧号（非视频源写 None）
+  - `step_start_frame_pos: dict[str, int]` — 步骤起点帧号镜像 `step_start_time`
+  - `step_last_frame_pos: dict[str, int]` — 步骤末次见到帧号镜像 `step_last_seen`
+- **三个工具方法**（都在 `source.py`）：
+  - `_video_frame_pos() -> int` — 拿当前视频帧号（非视频源返回 0）
+  - `_compute_duration_sec(start_fr, end_fr, fallback_start_wall, fallback_end_wall) -> float` —
+    视频源走帧号差 / `fps_source`，非视频源 fallback 回 wall-clock。**所有 PT/CT/in-flight 计算口的唯一出口**。
+  - `_resolve_step_pt_anchor_frame_pos(label, raw_start_fr) -> int` — 帧号版 anchor 夹紧（跟 wall-clock 版同口径）。
+- **关键不变量**：
+  - **所有** `step_start_time[label] = ...` 赋值点必须**同步**镜像 `step_start_frame_pos[label] = self._video_frame_pos()`。
+  - **所有** `step_last_seen[label] = ...` 赋值点必须**同步**镜像 `step_last_frame_pos[label] = self._video_frame_pos()`。
+  - **所有** `cycle_start_time = ...` 赋值点必须**同步**镜像 `cycle_start_frame_pos = self._video_frame_pos()`。
+  - 漏一个赋值点 → 该路径走 anchor 取 0 → 算出超大 PT。
+  - 已覆盖的文件：`source_state_init.py` / `source_session_lifecycle_mixin.py` / `source_settlement_mixin.py` / `source_sequential_mixin.py` / `source_step_stats_mixin.py` / `source_per_item_mixin.py` / `source_tracking_mixin.py`。
+- **已知遗漏（v3.10.1 KNOWN-002）**：`step_start_frame_pos / step_last_frame_pos` 在 cycle 切换时**不显式 clear**。实际无害（每个赋值点都同步镜像写, 新周期被新值覆盖），但留作下次整理一并补。
+
+### 二、`_accumulate_step_pt` 是 PT 落账的**唯一出口**
+
+- **位置**：`source.py: VideoSourceManager._accumulate_step_pt(label, rounded_dur) -> float`
+- **职责**：
+  1. **零段守门**：`rounded_dur <= 0.005` 直接返回当前 `step_cycle_durations[label]`，不进 segments / 不累加。
+  2. 追加 `rounded_dur` 到 `step_cycle_segments[label]`（前端 max / first_only 现算依赖此 list）。
+  3. 按当前策略（默认 `sum`）写 `step_cycle_durations[label]`，老接口语义不变。
+  4. 返回最终写入值。
+- **5 个调用点**（新增 PT 落账路径必须走本方法，**不要**直接 `self.step_cycle_durations[label] = ...`）：
+  - `source.py:_supplement_step_durations` — settle 时画面还在的 label 兜底落账
+  - `source_session_lifecycle_mixin._flush_active_steps_pt` — `end_cycle` 入口冲刷未消失步骤的 PT
+  - `source_step_stats_mixin._check_disappeared_steps` — 步骤 disappear_delay 后正式落账
+  - `source_sequential_mixin._check_strict_sequential` x2 — 严格顺序的两条落账路径
+- **必须**为 cycle 切换 / 周期作废 时同步清 `step_cycle_segments` —— v3.10.1 已在 `_session_lifecycle_mixin` 两个清理点加 `if hasattr(self, 'step_cycle_segments'): self.step_cycle_segments = {}`。
+
+### 三、PT 多段合并策略（前端三档现算）
+
+- **后端语义**：`step_cycle_durations[label]` 永远是**累加和**（`sum`），保持老接口字段含义不变。`step_cycle_segments[label]` 是**完整分段列表**。
+- **前端语义**：`useSystemStore.display.monitor.ptAccumulateStrategy ∈ {'sum', 'max', 'first_only'}`，默认 `'sum'`。
+  - `Monitor/index.vue:formatStepPT` 在 `ptAggregate=sum` + `ptMode=current` + `accStrat != 'sum'` 时，对 `stepCycleSegments[label]` 现算 `Math.max(...segs)` / `segs[0]`。
+  - 后端权威字段不动，切换无需重启。
+- **API 透出**：`source_routes.get_detection_results` 末尾把 `step_cycle_segments` 全量字典序列化进 result。
+- **不要**在后端动 `step_cycle_durations` 的 sum 语义，会立刻断老接口与 CSV 导出兼容性。
+
+### 四、严格顺序模式 PT 起点夹紧
+
+- **背景**：严格顺序模式下，当前步骤的 `start_time`（YOLO 第一次见到该 label 的瞬间）可能**小于**上一步的 `end_time` —— 直接拿来做 `interval = current_start - prev_end` 会出现负值。
+- **方案**：`_resolve_step_pt_anchor(label, raw_start) -> float` 把起点夹到 `max(raw_start, 上一步完成时刻)`。
+- **使用规则**：sequential / custom 模式下所有 PT 计算入口都走 `_resolve_step_pt_anchor`（wall-clock）+ `_resolve_step_pt_anchor_frame_pos`（帧号）成对调用。
+
+### 五、防重复结算冷却窗口（v3.10.1）
+
+- **位置**：`source_event_trigger_mixin._trigger_event` 入口
+- **配置字段**（`pipeline_config`）：
+  - `settle_dedup: bool` — 开关
+  - `settle_dedup_window_seconds: float` — 冷却时长（默认 2.0；0 等同于关闭）
+- **行为**：任意事件触发后记 `self._last_event_time = current_time`；在冷却窗口内来的所有事件（OK / NG / 自定义）一律 `_discard_empty_cycle()` 并返回 `False`。
+- **跟 `ng_cycle_protect_seconds` 共存**：后者只挡 NG → NG，本守门覆盖所有方向。
+- **新增同类时间锚**：在 `source_state_init` 初始化 + 各 clearance 路径同步重置，不要忘。
+
+---
+
 ## 13. 周期性强制动作（v3.5.0）
 
 - **mixin**: `source_periodic_actions_mixin.py` (`PeriodicActionsMixin`)。VSM MRO 中**保持在 LifecycleMixin 之后**，否则 hook 顺序错。

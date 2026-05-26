@@ -805,6 +805,99 @@ mixin 改动就是源码裸跑（IP 漏出去），但行为对得上。
 
 ---
 
+## 十二·D、v3.10.1 新增：PT 多段策略 + 帧号锚 + 零段污染（含一个典型踩坑）
+
+### 现象 → 根因 → 修复（v3.10.1 BUG-001）
+
+**客户/QA 报**：显示设置切到 PT 多段合并策略 = **仅首段**（`first_only`）后，Monitor 步骤统计 PT 列大面积变成 `0.0s` 或 `--`，明明步骤已检测、有时长。
+
+**根因链**（典型）：
+
+1. `_supplement_step_durations`（settle 时给"画面还在的 label"兜底落账）用 `if duration >= 0` 守门，**放过了 0**。
+2. 同帧 `step_last_seen == step_start_time` 场景（兜底首帧 / 单帧消失），`duration = 0`。
+3. `_accumulate_step_pt(label, 0.0)` 把 `0.0` 追加进 `step_cycle_segments[label]` 历史。
+4. 一个周期触发十几次这种 0.0 落账，真实首段（如 `2.24`）被挤到 list 中后部。
+5. 前端 `formatStepPT` 在 `first_only` 取 `segments[0]` = `0.0` → `if (duration <= 0) return '--'` → 显示 `--`。
+
+**`sum` / `max` 为什么没暴露**：`sum` 加 0 = 加 0；`max(0.0, 0.0, ..., 2.24)` = `2.24`。**只有 `first_only` 取首位才会被零段污染**。
+
+**修复**：`_accumulate_step_pt` **入口加守门**（v3.10.1）：
+
+```python
+if rounded_dur is None or rounded_dur <= 0.005:
+    return self.step_cycle_durations.get(label, 0.0)
+```
+
+5 个调用点共用一道守门，不用每处分别加。
+
+### 排查步骤
+
+1. **抓 segments 真实值**（关键命令，能 1 秒定位"是不是零段污染"）：
+
+   ```bash
+   curl -s "http://localhost:8001/api/v1/source/detection/results?channel=0" | python3 -c "
+   import json, sys
+   d = json.load(sys.stdin)
+   seg = d.get('step_cycle_segments') or {}
+   for k, v in seg.items():
+       print(f'{k}: segments(n={len(v)})={v}')
+   print('cycle_sum:', d.get('cycle_sum_step_durations'))
+   "
+   ```
+
+   - **健康样本**（修复后）：`正面涂黑: segments(n=1)=[4.78]`
+   - **病变样本**（修复前）：`正面涂黑: segments(n=22)=[0.0, 0.0, ..., 2.24, 0.8, 0.07, 0.0, 0.02, 0.04]`
+
+2. 看 `segments` 长度：单段连续场景 n=1；YOLO 抖动多段场景 n=2~5；**n > 10 几乎一定是零段污染或老版本未修**。
+
+3. 看是否本机版本 < v3.10.1：`cat electron/package.json | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"version\"])'`。
+
+### 三种策略的真实行为（debug 时常误判）
+
+| 场景 | sum | max | first_only |
+|---|---|---|---|
+| `segments = [2.0]` 单段 | 2.0 | 2.0 | 2.0 — 三档完全一样 |
+| `segments = [0.14, 0.65, 2.04]` 多段（主操作在末尾） | 2.83 | 2.04 | **0.14 漏主操作** |
+| `segments = [4.78]` YOLO 输出一整段 5 秒 | 4.78 | 4.78 | 4.78 — 三档同样无救 |
+| `segments = [0, 0, ..., 2.24, ...]` 零段污染（修前） | 2.24+ | 2.24 | **0.0 / --** |
+
+**关键认知**：YOLO 真实输出一整段 N 秒时，**三种显示策略完全等价**，都救不了。要切 max / first_only 起效，必须 YOLO 把同一动作识别成多段。
+
+### 帧号锚踩坑
+
+**症状**：视频源场景下 PT 跳变 / CT 跟视频时钟对不上 / 客户机解码慢时 PT 比真实小 30%+。
+
+**根因**：`_compute_duration_sec` 视频源走 `(end_fr - start_fr) / fps_source`，**任一帧号字段是 0** 就退化成 fallback wall-clock。
+
+**最常见错误**：新加的状态机分支 `step_start_time[label] = some_time` **没同步**写 `step_start_frame_pos[label] = self._video_frame_pos()` → anchor 取 0 → duration 算成超大。
+
+**排查命令**：
+
+```bash
+curl -s "http://localhost:8001/api/v1/source/detection/results?channel=0" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+# 间接看后端是否走了帧号锚 (in-flight 值在视频快进时应该比 wall-clock 增长慢)
+print('inflight:', d.get('step_inflight_durations'))
+print('current_cycle_time:', d.get('current_cycle_time'))
+"
+```
+
+视频快进 2x 跑，若 `current_cycle_time` 跟前端进度条对得上 → 帧号锚正确生效；若以 wall-clock 速度爆涨 → 有路径漏镜像写。
+
+### 防重复结算（settle_dedup_window_seconds）
+
+**字段位置**：`pipeline_config.settle_dedup`（开关）+ `pipeline_config.settle_dedup_window_seconds`（默认 2.0）。
+
+**排查"开了开关但还在重复结算"**：
+
+1. 看后端日志有没有 `[_trigger_event] 防重复结算: 距上次事件 X.XXs < Y.YYs, 抑制 (event=..., reason=...)` 行 — 没有就说明守门没生效。
+2. 看 DB 该项目 `pipeline_config` 字段是否真有 `settle_dedup: true`（v3.10.1 之前 `saveProject` 漏写）。
+3. 看 `_last_event_time` 是否在 `_init_cycle_time_state` 初始化（应有）。
+4. **不要**把这个 dedup 跟 `ng_cycle_protect_seconds` 混用 — 后者只挡 NG → NG，前者覆盖所有方向，两个可同时启用。
+
+---
+
 ## 十三、读取检查清单（开始修问题前）
 
 1. `backend/api/source.py`（先 grep 函数名再 Read，全文 1573 行别一次读完）

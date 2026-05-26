@@ -1,0 +1,159 @@
+{
+  "version": "3.10.1",
+  "date": "2026-05-26",
+  "previous_version": "3.10.0",
+  "release_type": "patch",
+  "breaking": false,
+  "summary": "PT/CT 显示口径补丁版: 帧号锚 + 多段策略 + 防重复结算冷却窗口 + Splash/窗口模式行为可配. 无破坏性改动, 老项目 JSON/DB/接口全部兼容.",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "PT 多段策略选\"仅首段\"显示 0.0s / \"--\"",
+      "symptom": "切到 first_only 后 Monitor PT 列大面积显示 0.0s 或 --, 真实首段时长 (例 2.24s) 完全不显示",
+      "root_cause": "_supplement_step_durations 用 duration>=0 守门, 让 0.0 段进 _accumulate_step_pt → segments[0]=0.0 → 前端 first_only=segs[0]=0.0 → 命中 duration<=0 触发 '--'",
+      "fix": "_accumulate_step_pt 入口加 rounded_dur<=0.005 守门, 一处出口统一挡掉所有 5 个调用点的零段污染",
+      "files": ["backend/api/source.py"],
+      "keywords": ["first_only", "PT 显示", "0.0s", "segments 污染", "_accumulate_step_pt", "_supplement_step_durations", "兜底落账"],
+      "validated": "同视频跑完整 OK 周期, 4 步 segments 都是单段干净数据 (4.78/1.63/2.93/1.15), first_only 显示正常",
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "严格顺序模式 PT 负 interval",
+      "symptom": "严格顺序模式下某些步骤的 interval_from_prev 出现负值, CSV 导出显示异常",
+      "root_cause": "PT 起点取 YOLO 第一次见到该 label 的瞬间, 严格顺序模式下上一步在该步骤前已完成 → current_start < prev_end → interval<0",
+      "fix": "新增 _resolve_step_pt_anchor(label, raw_start) 把 PT 起点夹到 max(raw_start, 上一步完成时刻); 帧号版 _resolve_step_pt_anchor_frame_pos 同口径",
+      "files": ["backend/api/source.py", "backend/api/source_sequential_mixin.py", "backend/api/source_step_stats_mixin.py", "backend/api/source_session_lifecycle_mixin.py"],
+      "keywords": ["sequential", "顺序模式", "PT 起点", "interval", "负值", "anchor", "夹紧"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "防重复结算开关 UI 打开但实际不落库",
+      "symptom": "项目页\"防重复结算\"开关打开后, 同一节拍仍连续触发 OK/NG 多次结算, MES 重推, 计数翻倍",
+      "root_cause": "Project/index.vue:saveProject 写 pipeline_config 时漏写 settle_dedup 字段, UI 开关只在前端 state 转, 没进 DB",
+      "fix": "前端 saveProject 显式写 settle_dedup + settle_dedup_window_seconds; 后端重写防重复逻辑为冷却窗口模式覆盖所有方向 (OK→NG/同节拍重发/自定义事件)",
+      "files": ["backend/api/source_event_trigger_mixin.py", "frontend/src/views/Project/index.vue"],
+      "keywords": ["settle_dedup", "防重复结算", "MES 重推", "saveProject 漏字段", "冷却窗口"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "PT/CT 显示口径重做 — B 方案 v2 (视频源帧号锚)",
+      "requirement": "客户机解码速度/视频快进慢放/FFmpeg 卡顿都让 wall-clock PT/CT 严重偏差, 视频回放尤其失真",
+      "implementation": "视频源场景维护一组帧号锚 (cycle_start_frame_pos / step_start_frame_pos / step_last_frame_pos), PT/CT/in-flight 全用 (last_fr - start_fr) / 视频原 fps 算秒. 新增 _compute_duration_sec / _video_frame_pos / _resolve_step_pt_anchor_frame_pos 三个工具方法, 所有 step_start_time/last_seen/cycle_start_time 赋值点同步镜像写帧号字段",
+      "files": [
+        "backend/api/source.py",
+        "backend/api/source_state_init.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/source_settlement_mixin.py",
+        "backend/api/source_sequential_mixin.py",
+        "backend/api/source_step_stats_mixin.py",
+        "backend/api/source_per_item_mixin.py",
+        "backend/api/source_tracking_mixin.py",
+        "backend/api/source_routes.py"
+      ],
+      "keywords": ["B 方案 v2", "帧号锚", "frame_pos", "PT/CT 计算", "视频源", "解耦解码速度"],
+      "compatibility": "非视频源 (USB/RTSP/海康相机) 帧号字段写 0, 计算口 fallback 回 wall-clock, 行为完全不变",
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "PT 多段合并策略三档可切 (sum / max / first_only)",
+      "requirement": "YOLO 抖动严重时步骤被识别成多段 (例 [0.14, 0.65, 2.04]), 默认 sum 累加显示偏大. 客户想要可切换的 max/first_only 兜底, 不破坏 sum 默认行为",
+      "implementation": "后端 _accumulate_step_pt 统一出口同时维护 step_cycle_durations(sum 累加) 和 step_cycle_segments(完整分段列表); 前端 useSystemStore 加 ptAccumulateStrategy 字段默认 sum; Settings 加三档下拉; Monitor.formatStepPT 在 sum+current 时根据策略对 segments 现算 max/first_only",
+      "files": [
+        "backend/api/source.py",
+        "backend/api/source_routes.py",
+        "backend/api/source_state_init.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/source_step_stats_mixin.py",
+        "backend/api/source_sequential_mixin.py",
+        "frontend/src/store/useSystemStore.js",
+        "frontend/src/views/Monitor/index.vue",
+        "frontend/src/views/Settings/index.vue"
+      ],
+      "keywords": ["PT 多段策略", "ptAccumulateStrategy", "sum/max/first_only", "step_cycle_segments", "_accumulate_step_pt"],
+      "depends_on": ["BUG-001"],
+      "note": "必须配合 BUG-001 才能完整可用, 否则 first_only 会持续显示 0.0s",
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "防重复结算 → 时间窗口冷却模式",
+      "requirement": "同一节拍因 YOLO 切换/状态机抖动/disappear_delay 等连续触发多次结算, 老版本只挡空周期挡不住 OK→NG 等所有方向",
+      "implementation": "_trigger_event 入口加冷却窗口, 任意事件触发后在 settle_dedup_window_seconds (默认 2.0s) 内所有事件 (OK/NG/自定义) 一律 _discard_empty_cycle 并返回 False. 跟 ng_cycle_protect_seconds 共存互补. 前端 Project 页加 冷却时长(秒) 数字输入框",
+      "files": ["backend/api/source_event_trigger_mixin.py", "backend/api/source_state_init.py", "frontend/src/views/Project/index.vue"],
+      "keywords": ["settle_dedup_window_seconds", "防重复结算", "冷却窗口", "_last_event_time", "_trigger_event"],
+      "new_config_fields": ["pipeline_config.settle_dedup", "pipeline_config.settle_dedup_window_seconds"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "Splash 行为可配 + 默认关闭",
+      "requirement": "客户反馈启动 splash 太久像没启动, 老板要求默认跳过 splash 直进主程序, 保留启用选项给 demo 客户",
+      "implementation": "channel_manager.splash 段加 enabled 字段默认 False; electron/main.js 启动早期 readWorkstationConfig() 读取, False 走无 splash 路径 (建主窗+后台预热+ready 即 show), True 走老 splash 完整流程",
+      "files": ["backend/api/channel_manager.py", "electron/main.js"],
+      "keywords": ["splash.enabled", "默认跳过 splash", "无 splash 路径", "readWorkstationConfig"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "窗口模式 — 默认窗口 + 全屏热切 + 最小化按钮",
+      "requirement": "v3.8.2 起默认全屏+无标题栏 kiosk 风格, 桌面办公场景客户反馈不能最小化/不能调大小, 老板要求默认窗口模式带原生标题栏",
+      "implementation": "workstation_config.json 顶层加 window 段含 fullscreen 默认 False; createWindow 接受 opts.fullscreen, False 时 1600×900 居中带 frame, True 时 fullscreen+frame:false; 新增 window:minimize / window:set-fullscreen IPC; preload 暴露 minimizeWindow / setFullScreen; Settings 加窗口模式卡片",
+      "files": ["backend/api/channel_manager.py", "electron/main.js", "electron/preload.js", "frontend/src/views/Settings/index.vue"],
+      "keywords": ["window.fullscreen", "窗口模式", "kiosk", "最小化", "全屏热切", "window:minimize", "window:set-fullscreen"],
+      "new_config_fields": ["workstation_config.window.fullscreen"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["modify-source", "debug-source", "debug-electron"],
+  "skills_created": [],
+  "files_changed": [
+    "backend/api/channel_manager.py",
+    "backend/api/source.py",
+    "backend/api/source_event_trigger_mixin.py",
+    "backend/api/source_per_item_mixin.py",
+    "backend/api/source_routes.py",
+    "backend/api/source_sequential_mixin.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/source_settlement_mixin.py",
+    "backend/api/source_state_init.py",
+    "backend/api/source_step_stats_mixin.py",
+    "backend/api/source_tracking_mixin.py",
+    "electron/main.js",
+    "electron/preload.js",
+    "frontend/src/store/useSystemStore.js",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Project/index.vue",
+    "frontend/src/views/Settings/index.vue",
+    "electron/package.json",
+    "docs/changelog/v3.10.1_2026-05-26.md",
+    "docs/changelog/v3.10.1_2026-05-26.json",
+    "docs/CHANGELOG.md"
+  ],
+  "known_issues": [
+    {
+      "id": "KNOWN-001",
+      "title": "YOLO 把\"正面涂黑\"识别成 4-6 秒连续段",
+      "diagnosis": "YOLO 模型边界判定问题, 不是软件 bug. 单帧只输出一个标签没有并存, 没有软件层吞段. segments=[4.78] 一段, sum/max/first_only 三种策略完全等价",
+      "tunings": ["调高 confidence 阈值", "配 max_duration=3.5s 截断", "加负样本重训"],
+      "decision": "视频回放问题, 现场实际识别效果可接受, 暂不动, 等真实工厂数据验证后再调"
+    },
+    {
+      "id": "KNOWN-002",
+      "title": "step_start_frame_pos / step_last_frame_pos 在 cycle 切换不显式 clear",
+      "diagnosis": "B 方案 v2 引入的帧号锚字段, 跨周期没显式置零. 每个 step_start_time 赋值点同步镜像写帧号, 新周期 step 首次出现时帧号会被新值覆盖, 跨多周期真测数据正常",
+      "decision": "留作 v3.10.2 / v3.11.0 整理时一并处理"
+    }
+  ]
+}

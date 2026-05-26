@@ -164,6 +164,7 @@ def _init_event_and_cycle_state(h):
     h._last_step_added_time = None
     h._step_raw_start = {}
     h._last_ng_time = 0
+    h._last_event_time = 0.0  # v3.10.x 防重复结算时间窗口锚
     h._cycle_regression = False  # A-B-A 步骤回退标记
 
     # v3.8.x 跨周期同时出现组 (类二):
@@ -280,6 +281,12 @@ def _init_cycle_time_state(h):
     h.cycle_start_time = None
     h.cycle_times = []
     h.ng_cycle_times = []
+    # v3.10.x B方案v2: 视频源场景下镜像记录"帧号锚", PT/CT 用 (last - start) / fps 算耗时,
+    # 跟客户机解码速度完全解耦. 状态机的 disappear_delay 等仍走 wall-clock 不动.
+    # 非视频源 (实时摄像头) 这些字段写 0, 计算口会 fallback 回 wall-clock.
+    h.cycle_start_frame_pos = None
+    h.step_start_frame_pos = {}
+    h.step_last_frame_pos = {}
     h.step_detection_times = {}
     h.step_durations = {}
     h.step_durations_history = {}
@@ -291,6 +298,8 @@ def _init_cycle_time_state(h):
     #   step_cycle_durations_history(按 label 的 list, 上限 100), 给前端"PT 合并"档使用.
     h.step_cycle_durations = {}
     h.step_cycle_durations_history = {}
+    # v3.10.x: 当前周期内每步的分段时长列表 (供前端 sum/max/first_only 三档切换)
+    h.step_cycle_segments = {}
 
     # v3.9.x D 方案 (V2 架构): 步骤"在画面里实际可见的帧时长之和"(秒).
     #

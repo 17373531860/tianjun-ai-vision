@@ -666,6 +666,7 @@ class PerItemMixin:
         sess.lock_lookahead_deadline = current_time + lookahead if lookahead > 0 else None
         try:
             self.cycle_start_time = current_time
+            self.cycle_start_frame_pos = self._video_frame_pos()
         except Exception:
             pass
 

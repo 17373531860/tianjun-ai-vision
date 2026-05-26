@@ -516,6 +516,7 @@ class TrackingMixin:
                 if not self._tracking_cycle_active and label in expected_items:
                     self._tracking_cycle_active = True
                     self.cycle_start_time = current_time
+                    self.cycle_start_frame_pos = self._video_frame_pos()
                     self.start_cycle()
 
     def _tracking_apply_anti_flicker(self, seen_track_ids, per_class_position_lock,
@@ -695,6 +696,7 @@ class TrackingMixin:
                     if not self._tracking_cycle_active:
                         self._tracking_cycle_active = True
                         self.cycle_start_time = current_time
+                        self.cycle_start_frame_pos = self._video_frame_pos()
                         self.start_cycle()
             elif state == 'visible':
                 if is_visible:
@@ -754,6 +756,7 @@ class TrackingMixin:
                     if not self._tracking_cycle_active:
                         self._tracking_cycle_active = True
                         self.cycle_start_time = current_time
+                        self.cycle_start_frame_pos = self._video_frame_pos()
                         try:
                             self.start_cycle()
                         except Exception:

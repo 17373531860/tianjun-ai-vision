@@ -29,14 +29,24 @@ class EventTriggerMixin:
             print(f"[_trigger_event] 阻塞中 (等待人工确认), 丢弃事件 event={event_id}, reason={reason}")
             return False
 
-        # 防重复结算（仅在项目配置中开启 settle_dedup 时生效）
-        settle_dedup = self.project_config.get('pipeline_config', {}).get('settle_dedup', False)
-        if settle_dedup and not self.current_cycle_id and self.recording_enabled:
-            print(f"[_trigger_event] 防重复结算: 跳过, 当前无活跃周期 (event={event_id}, reason={reason})")
-            return False
-        
-        # NG cycle protection: suppress rapid consecutive NG reports
+        # v3.10.x: 防重复结算 - 时间窗口冷却
+        # 任意事件触发后, 在窗口期 (settle_dedup_window_seconds, 默认 2s) 内,
+        # 所有事件 (OK / NG / 自定义) 全部被吃, 解决 OK 结算后又来 NG / 同节拍多结算等问题.
+        # 与 ng_cycle_protect_seconds 可共存: ng_protect 只针对 NG → NG; 本守门覆盖所有方向.
+        # 守门通过且事件最终触发成功后, 在函数末尾记录 _last_event_time, 抑制本身不记锚点.
+        pipeline_cfg = self.project_config.get('pipeline_config', {}) or {}
+        settle_dedup = bool(pipeline_cfg.get('settle_dedup', False))
         current_time = time.time()
+        if settle_dedup:
+            dedup_window = float(pipeline_cfg.get('settle_dedup_window_seconds', 2.0) or 0)
+            if dedup_window > 0:
+                last_event = float(getattr(self, '_last_event_time', 0.0) or 0.0)
+                if last_event and (current_time - last_event) < dedup_window:
+                    print(f"[_trigger_event] 防重复结算: 距上次事件 {current_time - last_event:.2f}s < {dedup_window:.2f}s, 抑制 (event={event_id}, reason={reason})")
+                    self._discard_empty_cycle()
+                    return False
+
+        # NG cycle protection: suppress rapid consecutive NG reports
         is_ng = (event_id == 2 or str(event_id) == '2')
         if is_ng:
             ng_protect_sec = self.project_config.get('pipeline_config', {}).get(
@@ -88,7 +98,14 @@ class EventTriggerMixin:
         
         # Record cycle time for both OK and NG cycles
         if self.cycle_start_time is not None:
-            cycle_time = time.time() - self.cycle_start_time
+            # v3.10.x B方案v2: 视频源用帧号差/fps 算 CT, 跟客户机解码速度解耦
+            _ct_start_fr = getattr(self, 'cycle_start_frame_pos', None) or 0
+            _ct_end_fr = self._video_frame_pos()
+            cycle_time = self._compute_duration_sec(
+                _ct_start_fr, _ct_end_fr,
+                fallback_start_wall=self.cycle_start_time,
+                fallback_end_wall=time.time(),
+            )
             if current_event_id == 1:
                 self.cycle_times.append(cycle_time)
                 if len(self.cycle_times) > 100:
@@ -272,4 +289,7 @@ class EventTriggerMixin:
         except Exception as e:
             print(f"router.trigger_event 失败: {e}")
 
+        # v3.10.x: 防重复结算时间窗口锚 - 仅在事件实际触发成功后记录,
+        # 抑制路径不更新, 避免反复触发反复延长窗口.
+        self._last_event_time = time.time()
         return True

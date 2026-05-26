@@ -134,7 +134,14 @@ class SequentialMixin:
                 raw_start = self.step_start_time.get(label, self.step_last_seen[label])
                 start_time = self._resolve_step_pt_anchor(label, raw_start)
                 last_time = self.step_last_seen[label]
-                duration = last_time - start_time
+                # v3.10.x B方案v2: 视频源用帧号差/fps 算耗时
+                _raw_start_fr = self.step_start_frame_pos.get(label, 0)
+                _start_fr = self._resolve_step_pt_anchor_frame_pos(label, _raw_start_fr)
+                _last_fr = self.step_last_frame_pos.get(label, 0)
+                duration = self._compute_duration_sec(
+                    _start_fr, _last_fr,
+                    fallback_start_wall=start_time, fallback_end_wall=last_time,
+                )
                 
                 time_config = self.step_time_config.get(label, {})
                 min_duration = time_config.get('min_duration')
@@ -159,8 +166,7 @@ class SequentialMixin:
                     # 守门：补计场景下 label 一定在 current_cycle_steps（否则 step_counts 不该 +1），
                     # 加守门是为了对齐主路径，防止顺序错误的标签也被无脑塞进 SUM 字典污染下个周期。
                     if label in self.current_cycle_steps:
-                        prev_sum = self.step_cycle_durations.get(label, 0.0)
-                        self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
+                        self._accumulate_step_pt(label, rounded_dur)
                     print(f"  顺序判定补计: {label}, 耗时 {duration:.2f}s, 累计: {self.step_counts[label]}")
                 
                 del self.step_last_seen[label]
@@ -182,6 +188,8 @@ class SequentialMixin:
             self.current_cycle_steps = next_carry
             self.last_added_step = next_carry[-1]
             self.cycle_start_time = self.step_start_time.get(next_carry[0], time.time())
+            # v3.10.x B方案v2: 同步 cycle_start_frame_pos 与首步 step_start_frame_pos
+            self.cycle_start_frame_pos = self.step_start_frame_pos.get(next_carry[0], self._video_frame_pos())
             self._last_step_added_time = time.time()
             self.start_cycle()
         else:
@@ -316,7 +324,14 @@ class SequentialMixin:
                 raw_start = self.step_start_time.get(label, self.step_last_seen[label])
                 start_time = self._resolve_step_pt_anchor(label, raw_start)
                 last_time = self.step_last_seen[label]
-                duration = last_time - start_time
+                # v3.10.x B方案v2: 视频源用帧号差/fps 算耗时
+                _raw_start_fr = self.step_start_frame_pos.get(label, 0)
+                _start_fr = self._resolve_step_pt_anchor_frame_pos(label, _raw_start_fr)
+                _last_fr = self.step_last_frame_pos.get(label, 0)
+                duration = self._compute_duration_sec(
+                    _start_fr, _last_fr,
+                    fallback_start_wall=start_time, fallback_end_wall=last_time,
+                )
                 
                 time_config = self.step_time_config.get(label, {})
                 min_duration = time_config.get('min_duration')
@@ -338,8 +353,7 @@ class SequentialMixin:
                     # v3.7.x: 与主路径对齐，补写本周期 SUM（同顺序模式补计）
                     # 守门见同文件 line 160 处说明。
                     if label in self.current_cycle_steps:
-                        prev_sum = self.step_cycle_durations.get(label, 0.0)
-                        self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
+                        self._accumulate_step_pt(label, rounded_dur)
                     print(f"  自定义顺序判定补计: {label}, 耗时 {duration:.2f}s, 累计: {self.step_counts[label]}")
                 
                 del self.step_last_seen[label]
@@ -354,6 +368,8 @@ class SequentialMixin:
             self.current_cycle_steps = next_carry
             self.last_added_step = next_carry[-1]
             self.cycle_start_time = self.step_start_time.get(next_carry[0], time.time())
+            # v3.10.x B方案v2: 同步 cycle_start_frame_pos 与首步 step_start_frame_pos
+            self.cycle_start_frame_pos = self.step_start_frame_pos.get(next_carry[0], self._video_frame_pos())
             self._last_step_added_time = time.time()
             self.start_cycle()
         else:

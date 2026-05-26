@@ -338,7 +338,14 @@ class StepStatsMixin:
                     # (导致 PT 跨度比客户实际操作时间大很多, 间隔出现负值).
                     raw_start = self.step_start_time.get(label, last_time)
                     start_time = self._resolve_step_pt_anchor(label, raw_start)
-                    duration = last_time - start_time
+                    # v3.10.x B方案v2: 视频源用帧号差/fps 算耗时
+                    _raw_start_fr = self.step_start_frame_pos.get(label, 0)
+                    _start_fr = self._resolve_step_pt_anchor_frame_pos(label, _raw_start_fr)
+                    _last_fr = self.step_last_frame_pos.get(label, 0)
+                    duration = self._compute_duration_sec(
+                        _start_fr, _last_fr,
+                        fallback_start_wall=start_time, fallback_end_wall=last_time,
+                    )
                     
                     # 检查持续时间是否在有效范围内
                     min_duration = time_config.get('min_duration')
@@ -384,8 +391,7 @@ class StepStatsMixin:
                         #      current_cycle_steps → 不写。
                         # 客户报障："步骤还是『待检测』，PT 列却有时间" 由此修复。
                         if label in self.current_cycle_steps:
-                            prev_sum = self.step_cycle_durations.get(label, 0.0)
-                            self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
+                            self._accumulate_step_pt(label, rounded_dur)
                         
                         # 计算与上一步骤的间隔时间
                         if self.last_step_completed_time is not None:

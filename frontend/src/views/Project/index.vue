@@ -1727,14 +1727,29 @@
                 </div>
               </el-card>
 
-              <!-- 防重复结算 -->
+              <!-- 防重复结算 (v3.10.x: 时间窗口冷却模式) -->
               <el-card shadow="never" class="bg-slate-800 border-slate-700">
                 <template #header><span class="font-bold text-white">防重复结算</span></template>
                 <div class="space-y-3 text-sm text-gray-300">
-                  <p class="text-xs text-gray-400">开启后，同一结算批次中如果已有事件结束了当前周期，后续事件将被抑制，避免一次结算同时产生 OK 和 NG 两个结果。</p>
+                  <p class="text-xs text-gray-400">
+                    开启后，任意事件（OK / NG / 自定义）触发后，在设定的冷却时长内，所有事件都会被抑制，
+                    避免同一节拍因模型延迟、状态机切换等原因连续触发多次结算。
+                  </p>
                   <div class="flex items-center gap-3">
                     <span>启用防重复结算</span>
-                    <el-switch v-model="activeProject.settle_dedup" />
+                    <el-switch v-model="activeProject.settle_dedup" data-testid="settle-dedup-switch" />
+                  </div>
+                  <div class="flex items-center gap-3" v-if="activeProject.settle_dedup">
+                    <span>冷却时长 (秒)</span>
+                    <el-input-number
+                      v-model="activeProject.settle_dedup_window_seconds"
+                      size="small"
+                      :min="0"
+                      :step="0.5"
+                      :precision="2"
+                      data-testid="settle-dedup-window"
+                    />
+                    <span class="text-xs text-gray-500">设为 0 等同于关闭；默认 2 秒</span>
                   </div>
                 </div>
               </el-card>
@@ -2837,9 +2852,13 @@ const initProjectDefaults = (project) => {
   if (project.ng_cycle_protect_seconds === undefined) {
     project.ng_cycle_protect_seconds = pipelineConfig.ng_cycle_protect_seconds || 0;
   }
-  // 防重复结算
+  // 防重复结算 (v3.10.x: 时间窗口冷却模式)
   if (project.settle_dedup === undefined) {
     project.settle_dedup = pipelineConfig.settle_dedup || false;
+  }
+  if (project.settle_dedup_window_seconds === undefined) {
+    const v = Number(pipelineConfig.settle_dedup_window_seconds);
+    project.settle_dedup_window_seconds = Number.isFinite(v) && v >= 0 ? v : 2.0;
   }
   // 同时出现组
   if (project.simultaneous_groups === undefined) {
@@ -3190,6 +3209,12 @@ const handleSaveProject = async () => {
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,
         ng_cycle_protect_seconds: activeProject.value.ng_cycle_protect_seconds || 0,
+        // v3.10.x: 防重复结算 - 时间窗口冷却 (历史回归: 旧版 saveProject 漏写本字段, 导致 UI 开关从未真正落库)
+        settle_dedup: !!activeProject.value.settle_dedup,
+        settle_dedup_window_seconds: (() => {
+          const v = Number(activeProject.value.settle_dedup_window_seconds);
+          return Number.isFinite(v) && v >= 0 ? v : 2.0;
+        })(),
         simultaneous_groups: (activeProject.value.simultaneous_groups || []).map(g => {
           const members = (g.priority_order || []).filter(l => l);
           const out = { ...g, labels: members };

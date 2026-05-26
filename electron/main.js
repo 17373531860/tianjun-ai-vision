@@ -258,11 +258,46 @@ async function stopBackend() {
   }
 }
 
+// v3.10.x: 读 workstation_config.json (主进程启动早期, 比前端先, 必须直读 JSON)
+// 返回值:
+//   splash.enabled (默认 false), splash.* (相机/超时, 透传给 splash renderer)
+//   window.fullscreen (默认 false, 客户要求默认窗口模式带原生标题栏)
+function readWorkstationConfig() {
+  // 安装版用户数据目录: userData/workstation_config.json
+  // 开发版回退优先序: backend/ → backend/data/ (取决于 TIANJUN_DATA_DIR 是否设置)
+  // 见 backend/core/config.py: DATA_DIR 默认 == BASE_DIR == backend/
+  const candidates = [
+    path.join(app.getPath('userData'), 'workstation_config.json'),
+    path.join(__dirname, '..', 'backend', 'workstation_config.json'),
+    path.join(__dirname, '..', 'backend', 'data', 'workstation_config.json'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        return JSON.parse(fs.readFileSync(p, 'utf-8'));
+      }
+    } catch (e) {
+      console.warn(`[App] 读 ${p} 失败: ${e.message}`);
+    }
+  }
+  return {};
+}
+
 // 创建主窗口
-function createWindow() {
+// v3.10.x: 新增 opts.fullscreen 参数, 默认 false (窗口模式带标题栏)
+function createWindow(opts = {}) {
+  const fullscreen = !!opts.fullscreen;
   mainWindow = new BrowserWindow({
-    fullscreen: true,          // v3.8.2: 工业部署默认全屏（取代 1600x900 窗口模式）
-    frame: false,              // v3.8.2: 杀 Windows 标题栏（截图框出来的第一条）
+    // v3.10.x: 全屏 / 窗口模式由 workstation_config.window.fullscreen 控制, 默认窗口模式
+    // 全屏 → frame:false 杀掉 Windows 标题栏 (kiosk 风格)
+    // 窗口 → frame:true (默认), 给客户原生最小化/最大化/关闭三件套, 1600x900 居中
+    fullscreen,
+    frame: !fullscreen,
+    width: fullscreen ? undefined : 1600,
+    height: fullscreen ? undefined : 900,
+    minWidth: 1024,
+    minHeight: 720,
+    center: !fullscreen,
     title: CONFIG.appName,
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
@@ -617,9 +652,37 @@ app.whenReady().then(async () => {
     isLicensed = result.valid;
   }
 
+  // v3.10.x: 启动早期读 workstation_config.json — splash.enabled / window.fullscreen
+  // 都在主进程一次性决策, 重启生效 (热切只能切窗口模式, 不能切 splash 行为).
+  const wsCfg = readWorkstationConfig();
+  const splashCfg = (wsCfg && wsCfg.splash) || {};
+  const winCfg = (wsCfg && wsCfg.window) || {};
+  const splashEnabled = splashCfg.enabled === true;  // 默认 false
+  const windowFullscreen = winCfg.fullscreen === true;  // 默认 false
+  console.log(`[App] 启动配置: splash.enabled=${splashEnabled}, window.fullscreen=${windowFullscreen}`);
+
   if (!isLicensed) {
-    createWindow();
+    createWindow({ fullscreen: windowFullscreen });
     mainWindow.once('ready-to-show', () => mainWindow.show()); // 未授权页直接显示，绕过 splash
+    return;
+  }
+
+  // v3.10.x: splash 默认不启用 (用户要求). 关闭时走"无 splash 路径": 先建主窗后台预热,
+  // 后端 ready 后直接 show 主窗, 不经过 splash:finished IPC.
+  if (!splashEnabled) {
+    console.log('[App] splash 已关闭, 直接进主程序路径');
+    splashFinishedByRenderer = true;   // 让 maybeShowMainWindow 直接放行 (不等 splash IPC)
+    createWindow({ fullscreen: windowFullscreen });
+    initBackendManager();
+    try {
+      await startBackend();
+      // 后端 ready 后 ready-to-show 已经触发过 maybeShowMainWindow, 这里兜底再调一次
+      maybeShowMainWindow();
+    } catch (error) {
+      console.error(`[App] Failed to start: ${error.message}`);
+      dialog.showErrorBox('启动失败', `无法启动应用: ${error.message}`);
+      app.quit();
+    }
     return;
   }
 
@@ -652,7 +715,7 @@ app.whenReady().then(async () => {
     // 后端启动期间, splash 自顾自播放粒子球 + 等用户握拳; 进度由 stdout 行数驱动
     await startBackend();
     // 后端 ready 后立即创建主窗后台预热(show:false), 真正显示交给 splash:finished
-    if (!mainWindow) createWindow();
+    if (!mainWindow) createWindow({ fullscreen: windowFullscreen });
   } catch (error) {
     console.error(`[App] Failed to start: ${error.message}`);
     if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
@@ -699,6 +762,42 @@ ipcMain.handle('app:graceful-quit', () => {
     app.quit();
   }
   return { ok: true };
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// v3.10.x: 窗口控制 IPC (最小化 + 全屏热切)
+// ---------------------------------------------------------------------
+//   window:minimize      — 前端"最小化"按钮 → 主窗收进任务栏 (进程不退出)
+//   window:set-fullscreen — 前端全屏开关热切, 同时持久化让下次启动生效
+// ─────────────────────────────────────────────────────────────────────
+ipcMain.handle('window:minimize', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.minimize();
+      return { ok: true };
+    } catch (e) {
+      console.warn('[App] minimize 失败:', e.message);
+      return { ok: false, error: e.message };
+    }
+  }
+  return { ok: false, error: 'no mainWindow' };
+});
+
+ipcMain.handle('window:set-fullscreen', (_evt, fullscreen) => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, error: 'no mainWindow' };
+  }
+  try {
+    // 注: Electron 的 setFullScreen 在 frame:true 窗口上是 F11 模式
+    // (会临时隐藏标题栏但保留进程), 退出全屏后标题栏恢复.
+    // 跟启动时 frame:false 的 kiosk 全屏体验略有差异, 但满足"临时全屏"需求,
+    // 客户要真 kiosk 全屏必须重启 (frame 是 BrowserWindow 启动时一次性参数).
+    mainWindow.setFullScreen(!!fullscreen);
+    return { ok: true, fullscreen: mainWindow.isFullScreen() };
+  } catch (e) {
+    console.warn('[App] setFullScreen 失败:', e.message);
+    return { ok: false, error: e.message };
+  }
 });
 
 // 主窗 ready + splash finished 双满足才显示主窗; 也容忍 splash 失败时强制显示

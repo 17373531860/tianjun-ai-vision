@@ -367,6 +367,10 @@ class ChannelManager:
     def get_splash_config(self) -> dict:
         """读 workstation_config.json 顶层 splash 字段, 不存在返回默认.
 
+        enabled 语义 (v3.10.x 新增):
+          False  = 启动直接进主程序, 完全跳过赛博 splash (默认, 客户要求)
+          True   = 启动播 splash 动画 (老行为, 沿用 splash 自带的相机/超时配置)
+
         idle_timeout_sec 语义:
           0      = 永不超时 (老行为, 必须人/手势/键鼠介入才能跳过)
           >0     = 多少秒内没有任何交互就强制跳过 splash 进主程序
@@ -387,6 +391,7 @@ class ChannelManager:
                 except (TypeError, ValueError):
                     timeout_int = 600
                 return {
+                    "enabled":          bool(splash.get("enabled", False)),
                     "camera_mode":      splash.get("camera_mode", "auto"),
                     "device_id":        splash.get("device_id", ""),
                     "device_label":     splash.get("device_label", ""),
@@ -395,6 +400,7 @@ class ChannelManager:
         except Exception as e:
             print(f"[ChannelManager] 读取 splash 配置失败: {e}")
         return {
+            "enabled":          False,
             "camera_mode":      "auto",
             "device_id":        "",
             "device_label":     "",
@@ -402,11 +408,12 @@ class ChannelManager:
         }
 
     def set_splash_config(self, camera_mode: str, device_id: str, device_label: str,
-                          idle_timeout_sec: int = 600):
+                          idle_timeout_sec: int = 600, enabled: bool = False):
         """写 workstation_config.json 顶层 splash 字段; 仅替换 splash 段, 不动 channels / channel_count.
 
         camera_mode 必须是 'auto' / 'specific' / 'disabled' 之一; 其他值兜底成 'auto'.
         idle_timeout_sec 必须 >= 0; 负数或非法值兜底成 600。
+        enabled (v3.10.x): True 启用 splash; False 直接跳过 splash 进主程序 (默认).
         """
         if camera_mode not in ("auto", "specific", "disabled"):
             camera_mode = "auto"
@@ -426,6 +433,7 @@ class ChannelManager:
                 except Exception:
                     data = {}
             data["splash"] = {
+                "enabled":          bool(enabled),
                 "camera_mode":      camera_mode,
                 "device_id":        device_id or "",
                 "device_label":     device_label or "",
@@ -435,6 +443,46 @@ class ChannelManager:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"[ChannelManager] 保存 splash 配置失败: {e}")
+
+    # ------------------------------------------------------------------
+    # v3.10.x: 窗口模式 (Electron 主窗口 fullscreen / windowed)
+    # ------------------------------------------------------------------
+    # 也放在 workstation_config.json 顶层, 因为:
+    #   1) Electron 主进程启动时就要读, 比主前端更早, 不能用 localStorage
+    #   2) 它跟 splash.enabled 是一对兄弟字段, 都是"客户机视觉行为"配置
+    #   3) 跨工位共用 (整个 Electron 实例就一个主窗口)
+    # fullscreen=False 时主窗口带原生标题栏 (最小化 / 最大化 / 关闭三件套),
+    # 1600x900 居中显示, 用户可自由拖动 / 调整大小。
+    def get_window_config(self) -> dict:
+        """读 workstation_config.json 顶层 window 段, 不存在返回默认 (不全屏)."""
+        try:
+            if os.path.exists(_CONFIG_FILE):
+                with open(_CONFIG_FILE, 'r') as f:
+                    data = json.load(f)
+                window = data.get("window") or {}
+                return {
+                    "fullscreen": bool(window.get("fullscreen", False)),
+                }
+        except Exception as e:
+            print(f"[ChannelManager] 读取 window 配置失败: {e}")
+        return {"fullscreen": False}
+
+    def set_window_config(self, fullscreen: bool):
+        """写 workstation_config.json 顶层 window 段; 仅替换 window 段."""
+        try:
+            os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
+            data = {}
+            if os.path.exists(_CONFIG_FILE):
+                try:
+                    with open(_CONFIG_FILE, 'r') as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            data["window"] = {"fullscreen": bool(fullscreen)}
+            with open(_CONFIG_FILE, 'w') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[ChannelManager] 保存 window 配置失败: {e}")
 
     def _load_config(self):
         try:
@@ -565,7 +613,9 @@ def get_gpu_allocation():
 # 整个 JSON 后, 自己读 cfg.splash.camera_mode 决定相机选择策略 — 不依赖这个 HTTP
 # 接口 (splash 启动时后端可能还没起来)。本接口只给主前端 Settings 页 CRUD 用。
 class SplashCameraRequest(BaseModel):
-    """启动动画手势相机 + 闲置超时配置请求体。"""
+    """启动动画手势相机 + 闲置超时 + 总开关 配置请求体。"""
+    # v3.10.x: 启动动画总开关; False = 完全跳过 splash 直接进主程序 (默认, 客户要求)
+    enabled: bool = Field(False, description="是否启用启动动画 (false=直接进主程序)")
     camera_mode: str = Field("auto", description="auto=默认 / specific=锁指定 / disabled=不开手势")
     device_id: str = Field("", description="MediaDeviceInfo.deviceId, 仅 specific 模式生效")
     device_label: str = Field("", description="人类可读名 (回显用)")
@@ -577,21 +627,44 @@ class SplashCameraRequest(BaseModel):
 
 @router.get("/splash-camera")
 def get_splash_camera():
-    """读启动动画相机配置 + 闲置超时。"""
+    """读启动动画相机配置 + 闲置超时 + 总开关。"""
     return channel_manager.get_splash_config()
 
 
 @router.put("/splash-camera",
             dependencies=[Depends(require_perm("settings.edit"))])
 def set_splash_camera(req: SplashCameraRequest):
-    """写启动动画相机配置 + 闲置超时, 立即落盘 workstation_config.json.
+    """写启动动画总开关 / 相机配置 / 闲置超时, 立即落盘 workstation_config.json.
 
-    下次启动 splash 时 (Electron 包) 会读到新配置生效。
+    下次启动应用时 (Electron 包) 会读到新配置生效 (splash 在主进程启动早期一次性决策).
     """
     channel_manager.set_splash_config(
         req.camera_mode, req.device_id, req.device_label, req.idle_timeout_sec,
+        enabled=req.enabled,
     )
     return {"status": "success", **channel_manager.get_splash_config()}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v3.10.x: 窗口模式 (Electron 主窗口 fullscreen / windowed)
+# ─────────────────────────────────────────────────────────────────────
+class WindowConfigRequest(BaseModel):
+    """主窗口模式配置请求体。"""
+    fullscreen: bool = Field(False, description="True=全屏无边框; False=带原生标题栏的窗口模式 (默认)")
+
+
+@router.get("/window-config")
+def get_window_config():
+    """读主窗口模式配置。"""
+    return channel_manager.get_window_config()
+
+
+@router.put("/window-config",
+            dependencies=[Depends(require_perm("settings.edit"))])
+def set_window_config(req: WindowConfigRequest):
+    """写主窗口模式; 立即落盘. 前端调用后再走 Electron IPC 通知主进程热切窗口模式."""
+    channel_manager.set_window_config(req.fullscreen)
+    return {"status": "success", **channel_manager.get_window_config()}
 
 
 class UsbDeviceBindRequest(BaseModel):

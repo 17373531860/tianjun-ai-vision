@@ -168,6 +168,18 @@
                   <el-option label="最后一次" value="last" />
                 </el-select>
               </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800"
+                   v-if="store.display.monitor.ptAggregate === 'sum'">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">PT 多段合并策略</span>
+                  <span class="text-[10px] text-gray-500">总和=累加所有段 (默认, 现场识别准时贴近真实); 取最长=抗 YOLO 抖动累加; 仅首段=accept_once 步骤适用</span>
+                </div>
+                <el-select v-model="store.display.monitor.ptAccumulateStrategy" size="small" style="width: 9rem" @change="saveDisplaySettings">
+                  <el-option label="总和（默认）" value="sum" />
+                  <el-option label="取最长" value="max" />
+                  <el-option label="仅首段" value="first_only" />
+                </el-select>
+              </div>
               <!-- v3.9.x D 方案: PT 计算口径 (跨度 / 累计可见时长) -->
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="flex flex-col">
@@ -226,25 +238,84 @@
             </div>
           </el-card>
 
-          <!-- v3.9.x: 启动动画手势相机 (打包安装版的 Cyber Splash 用) -->
+          <!-- v3.10.x: 窗口模式 (主窗口全屏 / 窗口 + 最小化) -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-cyan-400"><Monitor /></el-icon>
+                <span class="font-bold text-white">窗口模式</span>
+                <el-tag size="small" type="info">仅打包桌面版生效</el-tag>
+              </div>
+            </template>
+            <div class="mb-3 text-xs text-gray-500">
+              控制主窗口的显示模式。默认窗口模式带 Windows 原生最小化 / 最大化 / 关闭三件套；全屏模式去掉标题栏 (kiosk 风格)。<br>
+              全屏开关立即生效；下次启动也会按此设置走。
+            </div>
+            <div class="space-y-2">
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">主窗口全屏</span>
+                  <span class="text-[10px] text-gray-500">关闭 = 1600×900 窗口模式带原生标题栏；启用 = 占满显示器</span>
+                </div>
+                <el-switch
+                  v-model="windowFullscreen"
+                  data-testid="window-fullscreen-switch"
+                  :disabled="!isElectronEnv"
+                  @change="onWindowFullscreenChange"
+                />
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">最小化到任务栏</span>
+                  <span class="text-[10px] text-gray-500">把主界面收到 Windows 任务栏 (后端继续运行, 不退出应用)</span>
+                </div>
+                <el-button
+                  type="primary"
+                  size="small"
+                  data-testid="window-minimize-btn"
+                  :disabled="!isElectronEnv"
+                  @click="onMinimizeWindow"
+                >
+                  <el-icon class="mr-1"><Minus /></el-icon>最小化
+                </el-button>
+              </div>
+              <div v-if="!isElectronEnv" class="text-[10px] text-amber-400">
+                ⚠ 当前在浏览器中预览, 窗口控制按钮仅在打包桌面版下可用。
+              </div>
+            </div>
+          </el-card>
+
+          <!-- v3.9.x / v3.10.x: 启动动画 (打包安装版的 Cyber Splash 用) -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
               <div class="flex items-center gap-2">
                 <el-icon class="text-cyan-400"><VideoCamera /></el-icon>
-                <span class="font-bold text-white">启动动画手势相机</span>
+                <span class="font-bold text-white">启动动画</span>
                 <el-tag size="small" type="info">仅打包桌面版生效</el-tag>
               </div>
             </template>
             <div class="mb-3 text-xs text-gray-500">
               客户端启动时的赛博粒子球动画通过摄像头识别"握拳"手势进入主界面。<br>
-              工厂场景下若有 Todesk / 向日葵等远程虚拟相机，老逻辑可能误选；这里指定一台真实摄像头可避免此类问题。<br>
-              本设置仅影响打包安装后的启动动画，不影响检测中心的视频源。
+              默认关闭, 直接进主程序; 启用后, 工厂场景下若有 Todesk / 向日葵等远程虚拟相机, 老逻辑可能误选, 可在下方"指定相机"避免。<br>
+              本设置仅影响打包安装后的启动动画, 不影响检测中心的视频源。开关切换需<b>重启应用</b>生效。
             </div>
             <div class="space-y-2">
+              <!-- v3.10.x: 启动动画总开关 -->
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="flex flex-col">
-                  <span class="text-gray-300">启用模式</span>
-                  <span class="text-[10px] text-gray-500">自动=工位 1 已绑 USB 就用它，否则系统默认；指定=锁定一台；关闭=直接自动播放，不开摄像头</span>
+                  <span class="text-gray-300">启用启动动画</span>
+                  <span class="text-[10px] text-gray-500">关闭 = 直接进主程序 (默认); 启用 = 播放粒子球 + 手势识别</span>
+                </div>
+                <el-switch
+                  v-model="splashCamera.enabled"
+                  data-testid="splash-enabled-switch"
+                  @change="saveSplashCameraConfig"
+                />
+              </div>
+              <div v-if="splashCamera.enabled" class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">手势识别模式</span>
+                  <span class="text-[10px] text-gray-500">自动=工位 1 已绑 USB 就用它, 否则系统默认; 指定=锁定一台; 关闭=直接自动播放, 不开摄像头</span>
                 </div>
                 <el-select v-model="splashCamera.camera_mode" size="small" style="width: 9rem" @change="onSplashModeChange">
                   <el-option label="自动" value="auto" />
@@ -252,7 +323,7 @@
                   <el-option label="关闭手势" value="disabled" />
                 </el-select>
               </div>
-              <div v-if="splashCamera.camera_mode === 'specific'" class="flex flex-col gap-2 p-3 bg-slate-900 rounded border border-slate-800">
+              <div v-if="splashCamera.enabled && splashCamera.camera_mode === 'specific'" class="flex flex-col gap-2 p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="flex items-center justify-between gap-2">
                   <span class="text-gray-300 whitespace-nowrap">指定的相机</span>
                   <span class="text-xs text-gray-400 truncate flex-1 text-right" :title="splashCamera.device_label || splashCamera.device_id">
@@ -272,8 +343,9 @@
                 </div>
               </div>
 
-              <!-- v3.9.x: 启动动画闲置超时 (任意 camera_mode 都生效) -->
+              <!-- v3.9.x: 启动动画闲置超时 (任意 camera_mode 都生效, 仅 splash 启用时显示) -->
               <div
+                v-if="splashCamera.enabled"
                 data-testid="splash-idle-section"
                 class="flex flex-col gap-2 p-3 bg-slate-900 rounded border border-slate-800"
               >
@@ -1481,7 +1553,7 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
 import { usePluginStore } from '@/store/usePluginStore';
-import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close } from '@element-plus/icons-vue';
+import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close, Minus } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjectDetail } from '@/api/project';
 import api from '@/api/index';
@@ -1892,6 +1964,7 @@ async function saveTransformConfig() {
 // 因为 splash 比主前端先加载, 只能跨进程读 JSON, 拿不到 localStorage。
 // 详见 backend/api/channel_manager.py:get_splash_config 注释。
 const splashCamera = reactive({
+  enabled: false,               // v3.10.x: 启动动画总开关 (默认 false, 客户要求)
   camera_mode: 'auto',          // 'auto' | 'specific' | 'disabled'
   device_id: '',
   device_label: '',
@@ -1908,6 +1981,7 @@ const splashIdleEnabled = ref(true);
 async function loadSplashCameraConfig() {
   try {
     const res = await api.get('/workstations/splash-camera');
+    splashCamera.enabled = res?.data?.enabled === true;
     splashCamera.camera_mode = res?.data?.camera_mode || 'auto';
     splashCamera.device_id = res?.data?.device_id || '';
     splashCamera.device_label = res?.data?.device_label || '';
@@ -1936,6 +2010,7 @@ async function saveSplashCameraConfig() {
     // 落盘时把 UI 开关状态翻译成 0/N 秒: 关掉开关 → 后端存 0 → splash 不启 timer
     const timeoutToSave = splashIdleEnabled.value ? (splashCamera.idle_timeout_sec || 600) : 0;
     await api.put('/workstations/splash-camera', {
+      enabled: splashCamera.enabled === true,
       camera_mode: splashCamera.camera_mode,
       device_id: splashCamera.device_id || '',
       device_label: splashCamera.device_label || '',
@@ -1943,6 +2018,52 @@ async function saveSplashCameraConfig() {
     });
   } catch (e) {
     ElMessage.error('保存启动动画相机配置失败: ' + (e?.response?.data?.detail || e?.message || ''));
+  }
+}
+
+// ========== v3.10.x: 主窗口模式 (Electron) ==========
+const windowFullscreen = ref(false);
+const isElectronEnv = computed(() => !!(typeof window !== 'undefined' && window.electronAPI?.isElectron));
+
+async function loadWindowConfig() {
+  try {
+    const res = await api.get('/workstations/window-config');
+    windowFullscreen.value = res?.data?.fullscreen === true;
+  } catch (e) {
+    console.warn('加载窗口模式配置失败:', e?.message);
+  }
+}
+
+async function onWindowFullscreenChange(val) {
+  try {
+    // 1. 持久化让下次启动生效
+    await api.put('/workstations/window-config', { fullscreen: !!val });
+    // 2. 立即热切当前主窗口 (仅 Electron 环境有效)
+    if (typeof window !== 'undefined' && window.electronAPI?.setFullScreen) {
+      const r = await window.electronAPI.setFullScreen(!!val);
+      if (r?.ok) {
+        ElMessage.success(val ? '已切换到全屏模式' : '已切换到窗口模式');
+      } else {
+        ElMessage.warning('已保存配置, 但热切失败: ' + (r?.error || '未知错误'));
+      }
+    } else {
+      ElMessage.info('已保存配置, 下次启动生效 (当前在浏览器中预览)');
+    }
+  } catch (e) {
+    ElMessage.error('保存窗口模式失败: ' + (e?.response?.data?.detail || e?.message || ''));
+    // 回滚 UI 状态
+    windowFullscreen.value = !val;
+  }
+}
+
+async function onMinimizeWindow() {
+  if (typeof window !== 'undefined' && window.electronAPI?.minimizeWindow) {
+    const r = await window.electronAPI.minimizeWindow();
+    if (!r?.ok) {
+      ElMessage.warning('最小化失败: ' + (r?.error || '未知错误'));
+    }
+  } else {
+    ElMessage.info('最小化按钮仅在打包桌面版下可用 (当前是浏览器预览)');
   }
 }
 
@@ -2017,6 +2138,7 @@ onMounted(async () => {
   loadTransformTotalChannels();
   loadTransformConfig();
   loadSplashCameraConfig();
+  loadWindowConfig();   // v3.10.x: 主窗口模式
   
   // 从当前项目加载检测配置（包括自定义提示框）
   // v3.8.x: 不再守 `if (res.data?.detection_config)` — DB null 也要进 store,

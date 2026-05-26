@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // v3.8.2: 全屏 + 无边框模式下没有窗口×按钮, 前端 Navbar 的"退出"按钮走这里
   // 触发主进程 mainWindow.close → 已注册的 startGracefulShutdown 8 步关机流程
   gracefulQuit: () => ipcRenderer.invoke('app:graceful-quit'),
+  // v3.10.x: 窗口控制 — 最小化收任务栏 + 全屏热切
+  // 设置 → 显示设置里的"最小化界面" / "全屏" 按钮调这两个
+  minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
+  setFullScreen: (fullscreen) => ipcRenderer.invoke('window:set-fullscreen', !!fullscreen),
   platform: process.platform,
   isElectron: true,
 });

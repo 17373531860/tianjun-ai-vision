@@ -224,3 +224,92 @@ Splash 是早于主前端加载的**独立 BrowserWindow**：
 - 不能用 localStorage / Pinia store
 - 跨进程数据只能走 IPC（`splash:get-workstation-config` 同步读 JSON 文件）
 - 添加新配置项给 splash 用：**写文件**（`workstation_config.json`）+ 主进程 IPC handler（`electron/main.js`），不要试图走 HTTP API（splash 启动期间后端可能还没起来）
+
+---
+
+## v3.10.1 新增：Splash 默认关 + 窗口模式可配 + 最小化 IPC
+
+### `splash.enabled` 字段（默认 `false`）
+
+**改动语义**：客户老板要求"启动直接进主程序，不要那个 splash 动画"。`workstation_config.json` 顶层 `splash.enabled` 默认 `false`。
+
+**Electron 主进程启动早期**（`main.js: app.whenReady().then(...)`）：
+
+1. 调 `readWorkstationConfig()` **直读 JSON 文件**（比前端先起，不能用 HTTP）。三层 fallback 路径：
+   - `app.getPath('userData')/workstation_config.json`（**安装版**首选）
+   - `<exe>/../backend/workstation_config.json`（**开发版**）
+   - `<exe>/../backend/data/workstation_config.json`（`TIANJUN_DATA_DIR` 设置时）
+2. `splashEnabled = cfg.splash?.enabled === true`（默认 false）
+3. **`false` 走"无 splash 路径"**：
+   - `splashFinishedByRenderer = true`（绕过 splash:finished IPC 守门）
+   - `createWindow({ fullscreen })` 建主窗（开头隐藏）
+   - `initBackendManager() + startBackend()` 后台预热
+   - 后端 ready → `maybeShowMainWindow()` 直接 show
+4. **`true` 走老 splash 完整流程**：摄像头 / 手动跳过 / 闲置超时 全部不动。
+
+**排查"客户更新到 v3.10.1 但还在播 splash"**：
+- `workstation_config.json` 里 `splash.enabled` 是不是被显式设成了 `true`（老配置写 enabled=true 不会自动改回 false，只有新装才默认 false）。
+- 控制台日志看 `[App] 启动配置: splash.enabled=...` 行。
+
+### `window.fullscreen` 字段（默认 `false`）
+
+**改动语义**：v3.8.2 起默认全屏 + 无标题栏（kiosk）。客户桌面办公场景反馈"不能最小化 / 不能调大小"，v3.10.1 改回默认窗口模式带原生标题栏。
+
+**`workstation_config.json` 顶层 `window` 段**：
+
+```json
+{
+  "splash": { "enabled": false, "camera_mode": "auto", ... },
+  "window": { "fullscreen": false },
+  "channels": [...]
+}
+```
+
+**Electron `createWindow({ fullscreen })` 行为**：
+
+| fullscreen | frame | 尺寸 | 用途 |
+|---|---|---|---|
+| `true` (kiosk) | `false` | 占满显示器 | 工业部署，无标题栏 |
+| `false` (默认) | `true` | 1600×900 居中 | 桌面办公，Windows 原生最小化 / 最大化 / 关闭 |
+
+**两个新 IPC 通道**：
+
+| 通道 | 入参 | 行为 |
+|---|---|---|
+| `window:minimize` | — | `mainWindow.minimize()` 收任务栏，进程不退出 |
+| `window:set-fullscreen` | `{ fullscreen: boolean }` | 热切 `mainWindow.setFullScreen(...)` + `mainWindow.setMenuBarVisibility/setAutoHideMenuBar` + 持久化到 `workstation_config.window.fullscreen` |
+
+**`preload.js` 暴露**：
+
+```js
+window.electronAPI.minimizeWindow()       // → window:minimize
+window.electronAPI.setFullScreen(true)    // → window:set-fullscreen
+```
+
+**前端入口**：`Settings/index.vue` → "窗口模式" 卡片（仅 `isElectronEnv` 显示）。
+
+**排查模板**：
+
+| 现象 | 第一步看 | 第二步看 | 修复 |
+|---|---|---|---|
+| 客户更新后窗口变窗口模式了 | `workstation_config.window.fullscreen` 是否 false | 是 v3.10.1 默认行为 | 客户想全屏 → Settings 切开关 |
+| 全屏开关切了但下次启动还是窗口 | `set-fullscreen` IPC 是否真写盘 | grep `[Window] 持久化 fullscreen` 日志 | 检查 `ChannelManager.set_window_config` 是否被调 |
+| 最小化按钮点了没反应 | `isElectronEnv` 是否 true | 浏览器预览态下按钮 disabled | 必须打包桌面版下才生效 |
+| Settings 显示 "⚠ 当前在浏览器中预览" | `window.electronAPI` 是否注入 | 是否 dev 模式 vite serve | 这是正常提示，开发环境无法测窗口 IPC |
+
+### `readWorkstationConfig` 路径三层 fallback 的踩坑
+
+**症状**：新装客户机改了 `workstation_config.json` 但 Electron 启动还按老行为。
+
+**根因**：写错了 `workstation_config.json` 的位置。安装版/开发版/`TIANJUN_DATA_DIR` 三个路径**互不互通**，主进程**只读第一个存在的**。
+
+**排查命令**（Windows 客户机）：
+
+```bat
+:: 看真实安装版应该读哪个
+echo %APPDATA%\tianjun-ai-vision\workstation_config.json
+:: 看 Electron 启动早期实际读到的
+:: → 在 Settings 页底部"诊断信息"区显示 (TODO: v3.10.x 后续补上)
+```
+
+**新增配置项必须**：写到 `channel_manager.py` 的 `get_*_config / set_*_config` 出口，前端走 `/api/v1/workstations/*` 调；splash 启动早期需要的字段则**额外**在 `electron/main.js: readWorkstationConfig()` 直读。

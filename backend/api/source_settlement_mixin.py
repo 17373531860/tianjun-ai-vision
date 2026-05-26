@@ -621,7 +621,9 @@ class SettlementMixin:
                         # 同步更新 step_start_time / step_last_seen
                         if first_member not in self.step_start_time:
                             self.step_start_time[first_member] = current_time
+                            self.step_start_frame_pos[first_member] = self._video_frame_pos()
                         self.step_last_seen[first_member] = current_time
+                        self.step_last_frame_pos[first_member] = self._video_frame_pos()
                         print(f"[跨周期等待] 上周期成员 {first_member} 到达, 加入 cycle_steps "
                               f"(当前序列: {self.current_cycle_steps}), 进入等待")
                 elif first_role == 'next':
@@ -640,6 +642,7 @@ class SettlementMixin:
                           f"(等上周期成员)")
                     # 仅更新 step_last_seen 让 disappear 路径正常工作
                     self.step_last_seen[first_member] = current_time
+                    self.step_last_frame_pos[first_member] = self._video_frame_pos()
 
                 self._cross_cycle_waiting[idx] = {
                     'phase': 'waiting',
@@ -681,12 +684,15 @@ class SettlementMixin:
 
                 if new_cycle_first is not None:
                     self.cycle_start_time = current_time
+                    self.cycle_start_frame_pos = self._video_frame_pos()
                     self.start_cycle()
                     self.current_cycle_steps.append(new_cycle_first)
                     self.last_added_step = new_cycle_first
                     self._last_step_added_time = current_time
                     self.step_start_time[new_cycle_first] = current_time
+                    self.step_start_frame_pos[new_cycle_first] = self._video_frame_pos()
                     self.step_last_seen[new_cycle_first] = current_time
+                    self.step_last_frame_pos[new_cycle_first] = self._video_frame_pos()
 
                 # 屏蔽所有组员, 直到出现组外有意义步骤
                 self._blocked_labels |= group_labels
@@ -830,12 +836,15 @@ class SettlementMixin:
             # 避免主循环 _process_single_step 与同帧其他标签产生竞态顺序.
             self.current_cycle_steps = [first_label]
             self.cycle_start_time = current_time
+            self.cycle_start_frame_pos = self._video_frame_pos()
             try:
                 self.start_cycle()
             except Exception as _e:
                 print(f"[last_first R3] start_cycle 异常: {_e}")
             self.step_last_seen[first_label] = current_time
+            self.step_last_frame_pos[first_label] = self._video_frame_pos()
             self.step_start_time[first_label] = current_time
+            self.step_start_frame_pos[first_label] = self._video_frame_pos()
             self.last_added_step = first_label
             self._last_step_added_time = current_time
             min_frames_required = max(1, int(self.step_min_frames.get(first_label, 1)))
@@ -1163,9 +1172,11 @@ class SettlementMixin:
                     allow_through = True
             if not allow_through:
                 self.step_last_seen[label] = current_time
+                self.step_last_frame_pos[label] = self._video_frame_pos()
                 if label not in self.step_start_time:
                     raw_start = getattr(self, '_step_raw_start', {}).get(label, current_time)
                     self.step_start_time[label] = raw_start
+                    self.step_start_frame_pos[label] = self._video_frame_pos()
                 return
         
         # ── 第一步重现结算（仅 first_step 结算模式） ──
@@ -1211,6 +1222,7 @@ class SettlementMixin:
         
         # Always update step_last_seen so duration calculations reflect actual last detection time
         self.step_last_seen[label] = current_time
+        self.step_last_frame_pos[label] = self._video_frame_pos()
         
         if is_new_appearance:
             # v3.7.5: 早于 FIX-381 拦截把保养类 trigger 记进旁路账本.
@@ -1243,10 +1255,12 @@ class SettlementMixin:
             
             raw_start = getattr(self, '_step_raw_start', {}).get(label, current_time)
             self.step_start_time[label] = raw_start
+            self.step_start_frame_pos[label] = self._video_frame_pos()
             self.step_detection_times[label] = raw_start
             
             if len(self.current_cycle_steps) == 0:
                 self.cycle_start_time = current_time
+                self.cycle_start_frame_pos = self._video_frame_pos()
                 self.start_cycle()
         
         if is_new_appearance and label in enabled_labels:
@@ -1292,6 +1306,7 @@ class SettlementMixin:
                             # settle 内部已清掉 current_cycle_steps / last_added_step / step_* 各种状态.
                             # 现在用本次 label 当新周期首步.
                             self.cycle_start_time = current_time
+                            self.cycle_start_frame_pos = self._video_frame_pos()
                             self.start_cycle()
                             self.current_cycle_steps.append(label)
                             self.last_added_step = label

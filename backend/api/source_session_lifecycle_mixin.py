@@ -390,6 +390,9 @@ class SessionLifecycleMixin:
             # 第一道守门（label in current_cycle_steps 才写入）继续防止跨周期污染。
             self.step_cycle_durations = {}
             self.step_durations = {}
+            # v3.10.x: 分段历史与 cycle_sum_step_durations 同步生命周期
+            if hasattr(self, 'step_cycle_segments'):
+                self.step_cycle_segments = {}
 
             # v3.9.x D 方案: 累计可见时长字典也在新周期起步时清, 跟 step_cycle_durations 同步
             # 周期间隙保留 (前端展示期内还能看见上一周期 PT), 新周期起立刻清进入下一轮.
@@ -457,14 +460,20 @@ class SessionLifecycleMixin:
                 # v3.9.x: 严格顺序 PT 起点夹到 max(start, 上一步完成时刻).
                 raw_start = start_map.get(label, last_t)
                 start_t = self._resolve_step_pt_anchor(label, raw_start)
-                duration = last_t - start_t
+                # v3.10.x B方案v2: 视频源用帧号差/fps 算耗时
+                _raw_start_fr = self.step_start_frame_pos.get(label, 0)
+                _start_fr = self._resolve_step_pt_anchor_frame_pos(label, _raw_start_fr)
+                _last_fr = self.step_last_frame_pos.get(label, 0)
+                duration = self._compute_duration_sec(
+                    _start_fr, _last_fr,
+                    fallback_start_wall=start_t, fallback_end_wall=last_t,
+                )
                 if duration <= 0:
                     continue
                 rounded = round(duration, 2)
                 self.step_durations[label] = rounded
                 self.step_durations_history.setdefault(label, []).append(rounded)
-                prev_sum = self.step_cycle_durations.get(label, 0.0)
-                self.step_cycle_durations[label] = round(prev_sum + rounded, 2)
+                self._accumulate_step_pt(label, rounded)
                 # 清掉 step_last_seen / step_start_time，避免 disappear 路径再来一次累加（重复计数）
                 del last_seen[label]
                 if label in start_map:
@@ -637,6 +646,9 @@ class SessionLifecycleMixin:
             self.step_cycle_durations = {}
             # v3.7.x: 同步清 step_durations，对齐周期结束清零行为
             self.step_durations = {}
+            # v3.10.x: 同步清分段历史
+            if hasattr(self, 'step_cycle_segments'):
+                self.step_cycle_segments = {}
             self.current_cycle_id = None
             self.current_cycle_uuid = None
             if self.current_cycle_number > 0:

@@ -558,6 +558,120 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             return fallback_start
         return last_completed
 
+    # v3.10.x: 步骤多次出现的 PT 累加策略
+    # 后端默认永远走 'sum' (保持老接口 cycle_sum_step_durations 字段含义不变),
+    # 同时维护 step_cycle_segments (每步分段时长列表), 让前端按需现算 max/first.
+    # 这样既不破坏老客户接入, 又给前端 UI 三档切换 (sum/max/first) 留口子.
+    _step_pt_strategy = 'sum'
+
+    def _accumulate_step_pt(self, label: str, rounded_dur: float) -> float:
+        """v3.10.x: 步骤多次出现的 PT 落账策略统一出口.
+
+        所有 step_cycle_durations[label] 的写入都该走本方法, 不要直接做 prev + dur.
+        - step_cycle_durations: 按策略汇总 (默认 sum, 兼容老接口)
+        - step_cycle_segments:  全量分段列表 (前端按 max/first 现算)
+
+        返回最终写入 step_cycle_durations[label] 的值.
+        """
+        # 守门: 零长度段不进入历史 (供 _supplement_step_durations 的"补落账"调用,
+        # 那里只判 >=0 让单帧/同帧 last_seen==start_time 的 0s 段也跑到这里; 这些 0s
+        # 落账后前端 first_only=segments[0]=0.0, 把真实第一段 (例如 2.24) 完全屏蔽).
+        if rounded_dur is None or rounded_dur <= 0.005:
+            return self.step_cycle_durations.get(label, 0.0)
+
+        # 永远追加到分段历史 (供前端按需选 max/first/sum)
+        try:
+            segs = getattr(self, 'step_cycle_segments', None)
+            if segs is None:
+                self.step_cycle_segments = {}
+                segs = self.step_cycle_segments
+            segs.setdefault(label, []).append(round(rounded_dur, 2))
+        except Exception:
+            pass
+
+        try:
+            import os as _os
+            strat = (_os.environ.get('TIANJUN_PT_STRATEGY')
+                     or getattr(self, '_step_pt_strategy', 'sum')
+                     or 'sum')
+        except Exception:
+            strat = 'sum'
+        prev = self.step_cycle_durations.get(label, 0.0)
+        if strat == 'first_only':
+            if label in self.step_cycle_durations:
+                return prev
+            new_val = round(rounded_dur, 2)
+        elif strat == 'max':
+            new_val = round(max(prev, rounded_dur), 2)
+        else:  # sum
+            new_val = round(prev + rounded_dur, 2)
+        self.step_cycle_durations[label] = new_val
+        return new_val
+
+    def _resolve_step_pt_anchor_frame_pos(self, label: str, fallback_start_frame: int) -> int:
+        """v3.10.x B方案v2: _resolve_step_pt_anchor 的帧号版本.
+
+        语义同 wall-clock 版: 严格顺序模式下, 步骤起点帧号不能早于"已完成步骤的最大 last_frame_pos".
+        - 非视频源 / 非严格顺序 / 起点缺失 → 原样返回
+        - 否则取 max(本步 fallback_start_frame, 其他步骤的 last_frame_pos 最大值)
+        排除本 label 自己, 避免把"本步正在进行的最新帧号"拿来夹自己.
+        """
+        if (getattr(self, 'source_type', None) != 'video'
+                or not fallback_start_frame):
+            return fallback_start_frame
+        try:
+            pc = self.project_config.get('pipeline_config', {}) if self.project_config else {}
+            logic_mode = self.project_config.get('logic_mode') if self.project_config else None
+            custom_based_on = pc.get('custom_based_on')
+            is_seq_like = (logic_mode == 'sequential'
+                           or (logic_mode == 'custom' and custom_based_on == 'sequential'))
+            if not is_seq_like:
+                return fallback_start_frame
+            other_max = max(
+                (fr for lbl, fr in self.step_last_frame_pos.items()
+                 if lbl != label and fr),
+                default=None,
+            )
+            if other_max is None:
+                return fallback_start_frame
+            return max(int(fallback_start_frame), int(other_max))
+        except Exception:
+            return fallback_start_frame
+
+    def _video_frame_pos(self) -> int:
+        """v3.10.x B方案v2: 当前视频帧号 (供 PT/CT 帧号锚记).
+
+        视频源 → 返回 capture_loop 每帧更新的 video_current_frame (整数, 单调递增).
+        其他源 → 返回 0 (后续 _compute_duration_sec 看到 0 会 fallback 回 wall-clock).
+        """
+        if getattr(self, 'source_type', None) == 'video':
+            try:
+                return int(getattr(self, 'video_current_frame', 0) or 0)
+            except Exception:
+                return 0
+        return 0
+
+    def _compute_duration_sec(self, start_frame, end_frame,
+                              fallback_start_wall=None, fallback_end_wall=None) -> float:
+        """v3.10.x B方案v2: 计算"耗时秒数", 视频源用帧号差, 其他源用 wall-clock 差.
+
+        视频源 + start/end frame 都有 → (end - start) / 视频原 fps. 跟客户机性能完全解耦,
+                  不管视频被拖到几倍速, 算出来的秒数都 = 视频里真实发生的秒数.
+        其他源 或 帧号缺失 → fallback 到 wall-clock 差 (老行为).
+
+        所有 PT / CT / in-flight / step duration 计算都该走本方法, 不要直接做 (last - start).
+        """
+        if (getattr(self, 'source_type', None) == 'video'
+                and start_frame is not None and end_frame is not None
+                and end_frame > start_frame):
+            fps = float(getattr(self, 'fps', 0) or 30)
+            if fps > 0:
+                return (end_frame - start_frame) / fps
+        if fallback_start_wall is not None and fallback_end_wall is not None:
+            diff = fallback_end_wall - fallback_start_wall
+            return diff if diff > 0 else 0.0
+        return 0.0
+
     def _supplement_step_durations(self):
         """Supplement step_durations for steps still being tracked at settle time.
         Must be called BEFORE clearing step_last_seen / step_start_time."""
@@ -566,7 +680,15 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             # _resolve_step_pt_anchor 注释.
             raw_start = self.step_start_time.get(label, last_time)
             start_time = self._resolve_step_pt_anchor(label, raw_start)
-            duration = last_time - start_time
+            # v3.10.x B方案v2: 视频源用帧号差/fps 算耗时, 跟客户机解码性能解耦.
+            # frame_pos 字段在每个 step_start_time / step_last_seen 写入点同步镜像写入.
+            _raw_start_fr = self.step_start_frame_pos.get(label, 0)
+            _start_fr = self._resolve_step_pt_anchor_frame_pos(label, _raw_start_fr)
+            _last_fr = self.step_last_frame_pos.get(label, 0)
+            duration = self._compute_duration_sec(
+                _start_fr, _last_fr,
+                fallback_start_wall=start_time, fallback_end_wall=last_time,
+            )
             if duration >= 0:
                 time_config = self.step_time_config.get(label, {})
                 min_dur = time_config.get('min_duration')
@@ -584,8 +706,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                     # 守门：只有本周期接纳的步骤才写 SUM 字典，避免跨周期/顺序错误的标签污染。
                     # 详见 source_step_stats_mixin.py 同处守门说明。
                     if label in self.current_cycle_steps:
-                        prev_sum = self.step_cycle_durations.get(label, 0.0)
-                        self.step_cycle_durations[label] = round(prev_sum + rounded_dur, 2)
+                        self._accumulate_step_pt(label, rounded_dur)
                     if label not in self.step_counts:
                         self.step_counts[label] = 0
                     self.step_counts[label] += 1
@@ -624,7 +745,13 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                     continue
                 start_t = self.step_start_time.get(label, cycle_end_time)
                 last_t = self.step_last_seen.get(label, cycle_end_time)
-                duration = max(0, last_t - start_t)
+                # v3.10.x B方案v2: 视频源用帧号差/fps 算耗时
+                _start_fr = self.step_start_frame_pos.get(label, 0)
+                _last_fr = self.step_last_frame_pos.get(label, 0)
+                duration = max(0.0, self._compute_duration_sec(
+                    _start_fr, _last_fr,
+                    fallback_start_wall=start_t, fallback_end_wall=last_t,
+                ))
 
                 time_cfg = self.step_time_config.get(label, {})
                 min_dur = time_cfg.get('min_duration')
@@ -1443,16 +1570,22 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self.cycle_times = []
         self.ng_cycle_times = []
         self.cycle_start_time = None
+        # v3.10.x B方案v2: 视频源 PT/CT 的帧号镜像锚, 详见 source_state_init._init_cycle_time_state.
+        self.cycle_start_frame_pos = None
+        self.step_start_frame_pos = {}
+        self.step_last_frame_pos = {}
         self.step_durations_history = {}
         # v3.5.x: 同步清空 PT 合并档相关状态
         self.step_cycle_durations = {}
         self.step_cycle_durations_history = {}
+        self.step_cycle_segments = {}
         
         # Settlement / cycle-regression tracking
         self._last_step_added_time = None
         self._cycle_regression = False
         self._step_raw_start = {}
         self._last_ng_time = 0
+        self._last_event_time = 0.0  # v3.10.x 防重复结算时间窗口锚
         if hasattr(self, '_last_disappeared_step_times'):
             self._last_disappeared_step_times = {}
         

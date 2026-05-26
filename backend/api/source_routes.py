@@ -1209,6 +1209,10 @@ def get_detection_results(channel: int = Query(0)):
 
     # v3.5.x: PT 合并档（同 label 同周期多次出现的 SUM）
     cycle_sum_step_durations = getattr(mgr, 'step_cycle_durations', {}).copy()
+    # v3.10.x: 完整分段历史 (前端 sum/max/first 三档现算)
+    step_cycle_segments = {
+        k: list(v) for k, v in getattr(mgr, 'step_cycle_segments', {}).items()
+    }
     avg_cycle_sum_step_durations = {}
     last_cycle_sum_step_durations = {}
     for lbl, hist in getattr(mgr, 'step_cycle_durations_history', {}).items():
@@ -1234,12 +1238,17 @@ def get_detection_results(channel: int = Query(0)):
         _live_last = getattr(mgr, 'step_last_seen', None) or {}
         _live_start = getattr(mgr, 'step_start_time', None) or {}
         _live_cycle = getattr(mgr, 'current_cycle_steps', None) or []
+        _live_start_fr = getattr(mgr, 'step_start_frame_pos', None) or {}
+        _live_last_fr = getattr(mgr, 'step_last_frame_pos', None) or {}
         # v3.9.x: in-flight 起点也走 _resolve_step_pt_anchor (与权威 PT 同口径).
         # 否则严格顺序步骤被提前识别时, in-flight 按"跨度"持续涨到很大,
         # 步骤一旦完成 fallback 切到权威值 (修正后小很多), 前端 PT 列会
         # "啪一下从大数字跳到小数字" → 客户报的"PT 闪一下 + OK 跟着改变"。
         # 这里走同一份 anchor, 让 in-flight 起点 ≥ 上一步完成时刻, 与权威值连续过渡.
+        # v3.10.x B方案v2: 视频源走帧号差/fps 算耗时, 跟权威 PT 同口径.
         _anchor = getattr(mgr, '_resolve_step_pt_anchor', None)
+        _anchor_fr = getattr(mgr, '_resolve_step_pt_anchor_frame_pos', None)
+        _compute_dur = getattr(mgr, '_compute_duration_sec', None)
         for _lbl, _last_t in _live_last.items():
             if _lbl not in _live_cycle:
                 continue
@@ -1249,7 +1258,20 @@ def get_detection_results(channel: int = Query(0)):
                     _start_t = _anchor(_lbl, _start_t)
                 except Exception:
                     pass
-            _live_dur = _last_t - _start_t
+            _start_fr = _live_start_fr.get(_lbl, 0)
+            _last_fr = _live_last_fr.get(_lbl, 0)
+            if _anchor_fr is not None:
+                try:
+                    _start_fr = _anchor_fr(_lbl, _start_fr)
+                except Exception:
+                    pass
+            if _compute_dur is not None:
+                _live_dur = _compute_dur(
+                    _start_fr, _last_fr,
+                    fallback_start_wall=_start_t, fallback_end_wall=_last_t,
+                )
+            else:
+                _live_dur = _last_t - _start_t
             if _live_dur <= 0:
                 continue
             step_inflight_durations[_lbl] = round(_live_dur, 2)
@@ -1269,7 +1291,23 @@ def get_detection_results(channel: int = Query(0)):
     current_cycle_time = 0
     if getattr(mgr, 'cycle_start_time', None) and getattr(mgr, 'is_detecting', False):
         try:
-            current_cycle_time = round(time.time() - mgr.cycle_start_time, 2)
+            # v3.10.x B方案v2: 视频源用 (当前帧号 - cycle 开始帧号) / 视频原 fps 算 CT,
+            # 跟客户机解码速度完全解耦. 实时摄像头仍走 wall-clock.
+            _ct_start_fr = getattr(mgr, 'cycle_start_frame_pos', None) or 0
+            _ct_end_fr = 0
+            try:
+                _ct_end_fr = int(getattr(mgr, 'video_current_frame', 0) or 0)
+            except Exception:
+                _ct_end_fr = 0
+            _compute_dur = getattr(mgr, '_compute_duration_sec', None)
+            if _compute_dur is not None:
+                current_cycle_time = round(_compute_dur(
+                    _ct_start_fr, _ct_end_fr,
+                    fallback_start_wall=mgr.cycle_start_time,
+                    fallback_end_wall=time.time(),
+                ), 2)
+            else:
+                current_cycle_time = round(time.time() - mgr.cycle_start_time, 2)
         except Exception:
             current_cycle_time = 0
 
@@ -1293,6 +1331,8 @@ def get_detection_results(channel: int = Query(0)):
         "last_step_durations": last_step_durations,
         # v3.5.x: PT 合并档 — 当前周期内 SUM / 最近一周期 SUM / 历史周期 SUM 平均
         "cycle_sum_step_durations": cycle_sum_step_durations,
+        # v3.10.x: 当前周期内每步的分段时长数组 (供前端 sum/max/first 三档现算)
+        "step_cycle_segments": step_cycle_segments,
         "last_cycle_sum_step_durations": last_cycle_sum_step_durations,
         "avg_cycle_sum_step_durations": avg_cycle_sum_step_durations,
         # v3.9.x D 方案: 累计可见时长 ── 标签每帧"在画面里"时长之和 (秒).
