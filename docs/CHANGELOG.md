@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.10.2 (2026-05-26)
+
+> **紧急修复版**：v3.10.1 / v3.10.0 / 之前所有版本存在 **machineId 多机撞 ID 漏洞**（已确认现场出现 7-8 台机器同 ID）。本版重做硬件指纹采集逻辑，**不影响老客户在用机器的 license**，但新装机会拿到唯一 ID。详细 changelog 见 `docs/changelog/v3.10.2_2026-05-26.md`。
+
+- [BUG-001] **修复 machineId 多机撞 ID 漏洞** — 老算法只用 `wmic baseboard get product`（主板型号不是序列号，同型号工控机批量出货时值完全一样）+ `wmic csproduct get uuid`（厂家常忘刷 BIOS UUID）+ `os.cpus()[0].model`（同款 CPU 必相同）。雪上加霜 Win11 24H2 起 wmic 被 Microsoft 默认移除，新机器上前两个调用直接返回空，最后只剩 CPU 型号一个来源，同款 CPU 必撞 ID。`execSafe` 失败兜底返回空 + `parts.filter(Boolean)` 过滤掉，没任何报错日志，所以一直没人发现。重写 `getStableFingerprint` 为 5 强标识源 + 2 弱标识源（PowerShell `Get-CimInstance` 优先 + wmic 兜底 + 黑名单过滤占位值 + 强度守门 + 老 cache 兼容）。
+- [FEAT-001] **现场 machineId 诊断脚本** — 新增 `electron/scripts/diagnose-machine-id.bat`，客户机现场双击就能跑，输出每个硬件源的返回值 + 哪些被黑名单拒收 + 最终 machineId + 强标识源数量，自动写报告文件方便发邮件。
+- [FEAT-002] **machineId 指纹诊断 IPC** — 新增 `get-machine-id-report` IPC，前端可读 `electronAPI.getMachineIdReport()`，后续可在"关于"/"设置"页加诊断面板。
+
+现场处置：
+- **老机器（已激活）零影响**：升级 v3.10.2 后 `machine_id.txt` 缓存还在，沿用老 ID，老 license 继续有效。
+- **现场已撞 ID 的 7-8 台机器需要重发 license**：远程让客户删 `%APPDATA%\tianjun-ai-vision\{machine_id.txt, hw_verify.txt, license.lic}` 三个文件 → 重启软件 → 拿到新 machineId → 用 `generate_license.py` 重发 license。
+- **新装机**：自动用新算法，强标识源 ≥ 1 即可生成稳定唯一 ID。
+
+Skill 更新：`debug-operator-license` 补 v3.10.2 章节（machineId 撞 ID 历史 bug、新指纹算法、现场处置指引、诊断脚本用法）。
+
+---
+
 ## v3.10.1 (2026-05-26)
 
 > v3.10.0 用户系统主线之后的"客户机视觉行为"补丁版。无破坏性改动，老项目 JSON/DB/接口全部兼容。详细 changelog 见 `docs/changelog/v3.10.1_2026-05-26.md`。

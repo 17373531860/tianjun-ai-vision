@@ -19,27 +19,147 @@ function readFileSafe(filePath) {
 }
 
 function execSafe(cmd) {
-  try { return execSync(cmd, { timeout: 5000, encoding: 'utf-8' }).trim(); } catch { return ''; }
+  try { return execSync(cmd, { timeout: 8000, encoding: 'utf-8' }).trim(); } catch { return ''; }
 }
 
-function getStableFingerprint() {
-  const parts = [];
+// v3.10.2: 过滤"工控机厂家偷懒"返回的占位字符串. 这些值出现在多台同批次机器上,
+// 不能拿来当唯一指纹.
+const BAD_VALUES = new Set([
+  '',
+  '0',
+  '00000000-0000-0000-0000-000000000000',
+  'ffffffff-ffff-ffff-ffff-ffffffffffff',
+  'default string',
+  'to be filled by o.e.m.',
+  'to be filled by o.e.m',
+  'system serial number',
+  'system manufacturer',
+  'system product name',
+  'not specified',
+  'not applicable',
+  'not available',
+  'none',
+  'null',
+  'undefined',
+  'unknown',
+  'na',
+  'n/a',
+  'chassis serial number',
+  'baseboard serial number',
+  'default',
+]);
 
+function isUsable(value) {
+  if (!value || typeof value !== 'string') return false;
+  const norm = value.trim().toLowerCase();
+  if (norm.length < 4) return false;
+  return !BAD_VALUES.has(norm);
+}
+
+// v3.10.2: Windows 单一 PowerShell 调用一把取回所有需要的字段,
+// 比串行 5 次 wmic 快得多 + 不依赖 Win11 24H2+ 已废弃的 wmic 工具.
+function probeWindows() {
+  const ps = [
+    "$ErrorActionPreference='SilentlyContinue';",
+    "$bb=Get-CimInstance Win32_BaseBoard;",
+    "$cs=Get-CimInstance Win32_ComputerSystemProduct;",
+    "$bios=Get-CimInstance Win32_BIOS;",
+    "$disk=Get-CimInstance Win32_DiskDrive | Where-Object {$_.MediaType -match 'Fixed' -or $_.InterfaceType -ne 'USB'} | Sort-Object Index | Select-Object -First 1;",
+    "$mac=(Get-NetAdapter -Physical | Where-Object Status -ne 'Disabled' | Sort-Object ifIndex | Select-Object -First 1 -ExpandProperty MacAddress);",
+    "@{",
+    "  bbSerial=$bb.SerialNumber;",
+    "  bbProduct=$bb.Product;",
+    "  uuid=$cs.UUID;",
+    "  biosSerial=$bios.SerialNumber;",
+    "  diskSerial=$disk.SerialNumber;",
+    "  mac=$mac",
+    "} | ConvertTo-Json -Compress"
+  ].join(' ');
+  try {
+    const raw = execSync(`powershell -NoProfile -NonInteractive -Command "${ps.replace(/"/g, '\\"')}"`, {
+      timeout: 15000,
+      encoding: 'utf-8',
+    }).trim();
+    return JSON.parse(raw);
+  } catch (err) {
+    return {};
+  }
+}
+
+// v3.10.2: 老 wmic 命令兜底 (Windows 10 / Win11 早期版本)
+function probeWindowsWmicFallback() {
+  return {
+    bbSerial: execSafe('wmic baseboard get serialnumber /value').replace(/SerialNumber=/i, '').trim(),
+    bbProduct: execSafe('wmic baseboard get product /value').replace(/Product=/i, '').trim(),
+    uuid: execSafe('wmic csproduct get uuid /value').replace(/UUID=/i, '').trim(),
+    biosSerial: execSafe('wmic bios get serialnumber /value').replace(/SerialNumber=/i, '').trim(),
+    diskSerial: execSafe('wmic diskdrive where "Index=0" get serialnumber /value').replace(/SerialNumber=/i, '').trim(),
+    mac: '',
+  };
+}
+
+function probeLinux() {
+  const probe = {
+    bbSerial: readFileSafe('/sys/class/dmi/id/board_serial'),
+    bbProduct: readFileSafe('/sys/class/dmi/id/board_name'),
+    uuid: readFileSafe('/sys/class/dmi/id/product_uuid'),
+    biosSerial: readFileSafe('/sys/class/dmi/id/product_serial'),
+    diskSerial: '',
+    mac: '',
+  };
+  if (!isUsable(probe.uuid)) {
+    const sudoUuid = execSafe('sudo -n cat /sys/class/dmi/id/product_uuid 2>/dev/null');
+    if (isUsable(sudoUuid)) probe.uuid = sudoUuid;
+  }
+  // 第一块非 lo / 非虚拟网卡 MAC
+  const mac = execSafe(
+    "ls /sys/class/net | grep -v -E '^(lo|docker|br-|veth|virbr|tun|tap)' | head -1 | xargs -I{} cat /sys/class/net/{}/address 2>/dev/null"
+  );
+  if (isUsable(mac)) probe.mac = mac;
+  // 系统盘 / 第一块物理盘的型号+序列号 (lsblk 在大多数发行版默认有)
+  const disk = execSafe(
+    "lsblk -ndo SERIAL,MODEL $(lsblk -no PKNAME $(findmnt -no SOURCE /) 2>/dev/null | head -1 | xargs -I{} echo /dev/{}) 2>/dev/null"
+  );
+  if (isUsable(disk)) probe.diskSerial = disk;
+  return probe;
+}
+
+// v3.10.2: 完整 fingerprint pipeline.
+// 返回 { fingerprint, parts, weakSources } —— 调用方可以判 weakSources 决定是否报警.
+function getStableFingerprint() {
+  const probe = process.platform === 'win32' ? probeWindows() : probeLinux();
+  // Windows: PowerShell 一把没拿到 → 兜底走老 wmic
   if (process.platform === 'win32') {
-    parts.push(execSafe('wmic baseboard get product /value').replace(/Product=/i, '').trim());
-    parts.push(execSafe('wmic csproduct get uuid /value').replace(/UUID=/i, '').trim());
-  } else {
-    parts.push(readFileSafe('/sys/class/dmi/id/board_name'));
-    parts.push(readFileSafe('/sys/class/dmi/id/board_vendor'));
-    let uuid = readFileSafe('/sys/class/dmi/id/product_uuid');
-    if (!uuid) uuid = execSafe('cat /sys/class/dmi/id/product_uuid 2>/dev/null');
-    if (!uuid) uuid = execSafe('sudo cat /sys/class/dmi/id/product_uuid 2>/dev/null');
-    parts.push(uuid);
+    const winCount = ['bbSerial', 'uuid', 'biosSerial', 'diskSerial', 'mac']
+      .filter(k => isUsable(probe[k])).length;
+    if (winCount === 0) {
+      const fb = probeWindowsWmicFallback();
+      Object.assign(probe, fb);
+    }
   }
 
-  parts.push(os.cpus()[0]?.model || '');
+  const parts = [];
+  const debug = {};
+  for (const key of ['bbSerial', 'uuid', 'biosSerial', 'diskSerial', 'mac', 'bbProduct']) {
+    const v = (probe[key] || '').toString().trim();
+    if (isUsable(v)) {
+      parts.push(`${key}:${v}`);
+      debug[key] = v;
+    } else {
+      debug[key] = `[skipped: "${v}"]`;
+    }
+  }
 
-  return parts.filter(Boolean).join('|');
+  // CPU 型号永远加一份, 但**只作弱标识**, 不计入"有效源数量"
+  const cpu = os.cpus()[0]?.model || '';
+  if (cpu) parts.push(`cpu:${cpu}`);
+
+  return {
+    fingerprint: parts.join('|'),
+    parts,
+    strongCount: parts.filter(p => !p.startsWith('cpu:') && !p.startsWith('bbProduct:')).length,
+    debug,
+  };
 }
 
 class LicenseManager {
@@ -76,8 +196,25 @@ class LicenseManager {
     const cacheFile = path.join(this.userDataPath, 'machine_id.txt');
     const verifyFile = path.join(this.userDataPath, 'hw_verify.txt');
 
-    const stableFp = getStableFingerprint();
+    // v3.10.2: 调用方需要时可以读 _lastFingerprintReport (诊断用)
+    const fp = getStableFingerprint();
+    const stableFp = fp.fingerprint;
+    this._lastFingerprintReport = fp;
     const verifyHash = crypto.createHash('sha256').update(stableFp).digest('hex').substring(0, 16);
+
+    // v3.10.2 守门: 强标识源 (主板序列号/BIOS UUID/磁盘序列号/网卡 MAC) 必须 ≥ 1 个.
+    // 全部失败时只剩 CPU 型号 + 主板型号, 同型号机器会算出同一 machineId (v3.10.1 已知 bug).
+    if (fp.strongCount === 0) {
+      console.error('[License] !!!! NO STRONG HARDWARE IDENTIFIER AVAILABLE !!!!');
+      console.error('[License] All of {boardSerial, biosUuid, biosSerial, diskSerial, mac} are missing or placeholder.');
+      console.error('[License] Probe result:', JSON.stringify(fp.debug, null, 2));
+      console.error('[License] machineId would collide across same-model machines — refusing to cache.');
+      // 仍然返回一个值让上层继续, 但不写缓存 (这样客户机一旦升级到含真序列号的硬件/系统, 自然会拿到正确 ID)
+      const hash = crypto.createHash('sha256').update(stableFp).digest('hex');
+      this._machineId = 'TJ-' + hash.substring(0, 12).toUpperCase();
+      this._machineIdQuality = 'weak';
+      return this._machineId;
+    }
 
     try {
       if (fs.existsSync(cacheFile)) {
@@ -89,13 +226,15 @@ class LicenseManager {
               console.log('[License] Hardware verification mismatch — cache from different machine, regenerating');
             } else {
               this._machineId = cached;
-              console.log(`[License] Machine ID (cached, verified): ${this._machineId}`);
+              this._machineIdQuality = 'cached';
+              console.log(`[License] Machine ID (cached, verified): ${this._machineId}  [strongSources=${fp.strongCount}]`);
               return this._machineId;
             }
           } else {
             try { fs.writeFileSync(verifyFile, verifyHash, 'utf-8'); } catch {}
             this._machineId = cached;
-            console.log(`[License] Machine ID (cached, verify file created): ${this._machineId}`);
+            this._machineIdQuality = 'cached';
+            console.log(`[License] Machine ID (cached, verify file created): ${this._machineId}  [strongSources=${fp.strongCount}]`);
             return this._machineId;
           }
         }
@@ -104,8 +243,10 @@ class LicenseManager {
 
     const hash = crypto.createHash('sha256').update(stableFp).digest('hex');
     this._machineId = 'TJ-' + hash.substring(0, 12).toUpperCase();
+    this._machineIdQuality = 'fresh';
 
-    console.log(`[License] Stable fingerprint: ${stableFp.substring(0, 80)}...`);
+    console.log(`[License] Fingerprint sources: ${JSON.stringify(fp.debug)}`);
+    console.log(`[License] Strong source count: ${fp.strongCount}`);
     console.log(`[License] Machine ID (new): ${this._machineId}`);
 
     try {
@@ -118,6 +259,17 @@ class LicenseManager {
     }
 
     return this._machineId;
+  }
+
+  // v3.10.2: 暴露指纹诊断报告, 供 main.js / 前端 / 客户支持现场排错
+  getMachineIdReport() {
+    if (!this._machineId) this.getMachineId();
+    return {
+      machineId: this._machineId,
+      quality: this._machineIdQuality || 'unknown',
+      strongSourceCount: this._lastFingerprintReport?.strongCount || 0,
+      sources: this._lastFingerprintReport?.debug || {},
+    };
   }
 
   verify() {

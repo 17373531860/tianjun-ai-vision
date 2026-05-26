@@ -871,6 +871,12 @@ ipcMain.handle('get-license-status', () => {
   return { valid: isLicensed, machineId: licenseManager.getMachineId(), info: licenseManager.getLicenseInfo() };
 });
 
+// v3.10.2: machineId 指纹诊断 — 现场工程师/客户支持可读, 排查"同 ID 多机"问题
+ipcMain.handle('get-machine-id-report', () => {
+  if (!licenseManager) return { error: 'not_initialized' };
+  return licenseManager.getMachineIdReport();
+});
+
 ipcMain.handle('import-license', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: '导入授权文件',

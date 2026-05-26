@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
   getBackendUrl: () => ipcRenderer.invoke('get-backend-url'),
   getLicenseStatus: () => ipcRenderer.invoke('get-license-status'),
+  // v3.10.2: machineId 指纹诊断 — 设置页 / 关于页可调, 显示哪些硬件源生效
+  getMachineIdReport: () => ipcRenderer.invoke('get-machine-id-report'),
   importLicense: () => ipcRenderer.invoke('import-license'),
   onLicenseActivated: (callback) => ipcRenderer.on('license-activated', callback),
   // v3.8.2: 全屏 + 无边框模式下没有窗口×按钮, 前端 Navbar 的"退出"按钮走这里

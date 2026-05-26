@@ -1,0 +1,59 @@
+{
+  "version": "3.10.2",
+  "date": "2026-05-26",
+  "previous_version": "3.10.1",
+  "release_type": "patch",
+  "breaking": false,
+  "summary": "紧急修复 machineId 多机撞 ID 漏洞 + 现场诊断脚本. 老客户在用机器零影响 (cache 命中走老 ID 保留 license), 新装机会拿到唯一 ID. 现场已撞 ID 的 7-8 台机需要远程删 machine_id.txt + hw_verify.txt + license.lic 重启重生成新 ID.",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "machineId 多台机器撞 ID",
+      "symptom": "现场 7-8 台不同工控机生成同一个 machineId (例 TJ-F64AF21C6DBB), license 失去机器绑定意义, 一份 license 在多台机上都能激活",
+      "root_cause": "electron/license-manager.js getStableFingerprint 三个指纹源全部不可靠: (1) wmic baseboard get product 取主板型号不是序列号, 同型号工控机批量出货时值完全一样 (2) wmic csproduct get uuid 工控机厂家批量烧 BIOS 时常常忘刷 UUID (全 0 / 全 F / 模板 UUID) (3) os.cpus()[0].model 是 CPU 型号字符串. 雪上加霜: Win11 24H2 起 Microsoft 默认移除 wmic, 前两个调用直接失败返回空, 最后只剩 CPU 型号. execSafe 失败兜底返回空, parts.filter(Boolean).join('|') 把空值过滤掉, 没有任何报错日志, 所以一直没人发现",
+      "fix": "重写 getStableFingerprint 为 5 强标识源 + 2 弱标识源: 优先 PowerShell Get-CimInstance (不依赖 wmic) + wmic 兜底 + 黑名单过滤 'To be filled by O.E.M.' / 全 0 UUID / 全 F UUID / 'Default string' 等工控机厂家常见占位值. 加强度守门: 强标识源=0 时打 ERROR log + 不写缓存 + machineId 标记为 weak. 老机器零影响: machine_id.txt 缓存还在直接读旧 ID 不重算, 老 license 继续有效",
+      "files": ["electron/license-manager.js", "electron/main.js", "electron/preload.js"],
+      "keywords": ["machineId", "撞 ID", "重复机器码", "wmic", "Win11 24H2", "Get-CimInstance", "BIOS UUID", "工控机", "硬件指纹", "license 多机", "fingerprint", "BaseBoard", "DiskDrive", "MAC", "hw_verify"],
+      "validated": "本机 Linux 上自测: 3 个强标识源 (BIOS UUID + 磁盘序列号 + 网卡 MAC) 全部正常, 生成 TJ-BD600BF2727B. 主板序列号 / BIOS 序列号空 (笔记本厂家没刷) 被正确识别为 skipped",
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "现场 machineId 诊断脚本",
+      "need": "客户报 license 不对 / 机器码重复时缺工具远程看现场到底拿到哪些硬件源",
+      "implementation": "新增 electron/scripts/diagnose-machine-id.js + .bat. 客户机现场双击 .bat 即可跑 (自动找 Electron 自带 node.exe 或系统 node), 输出每个硬件源的实际返回值 + 哪些被黑名单拒收 + 最终 machineId + 强标识源数量. 自动写 machineid-report-<hostname>-<时间戳>.txt 方便发邮件",
+      "files": ["electron/scripts/diagnose-machine-id.js", "electron/scripts/diagnose-machine-id.bat"],
+      "keywords": ["诊断", "machineId 报告", "现场支持", "Get-CimInstance"]
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "machineId 指纹诊断 IPC",
+      "need": "客户机不一定方便跑 .bat (无桌面 / 远程 RDP / 客户拒绝命令行), 需要软件内可直接查看指纹采集状况",
+      "implementation": "新增 IPC get-machine-id-report → 前端可读 electronAPI.getMachineIdReport() 拿到详细指纹采集报告. 后续可在 '关于' / '设置' 页加诊断面板",
+      "files": ["electron/main.js", "electron/preload.js"],
+      "keywords": ["IPC", "诊断面板", "指纹报告"]
+    }
+  ],
+  "field_support_guide": {
+    "old_machines": "完全不需要操作: 升级到 v3.10.2 后 machine_id.txt 缓存还在, 沿用老 ID, 老 license 继续有效",
+    "collision_machines": "远程让客户关闭天军软件 → 删除 %APPDATA%\\tianjun-ai-vision\\{machine_id.txt, hw_verify.txt, license.lic} 三个文件 → 重新打开软件会显示'未授权'+ 新 machineId → 客户把新 machineId 报回来 → generate_license.py 重发 license",
+    "new_installations": "安装包带 v3.10.2 后自动用新算法, 强标识源 ≥ 1 即可生成稳定唯一 ID",
+    "no_hw_id_at_all": "软件日志打 '!!!! NO STRONG HARDWARE IDENTIFIER AVAILABLE !!!!', diagnose-machine-id.bat 显示 '严重警告: 没有任何强标识源!'. 建议: (1) 联系工控机厂家在 BIOS 写入真实序列号 (2) 升级到含 TPM 2.0 的硬件 (3) 在 license 里用客户名 + 工位号双重绑定"
+  },
+  "skills_updated": ["debug-operator-license"],
+  "files_changed": [
+    "electron/license-manager.js",
+    "electron/main.js",
+    "electron/preload.js",
+    "electron/scripts/diagnose-machine-id.js",
+    "electron/scripts/diagnose-machine-id.bat",
+    "electron/package.json",
+    ".claude/skills/debug-operator-license/SKILL.md",
+    "docs/CHANGELOG.md",
+    "docs/changelog/v3.10.2_2026-05-26.md",
+    "docs/changelog/v3.10.2_2026-05-26.json"
+  ]
+}

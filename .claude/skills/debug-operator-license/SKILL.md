@@ -64,28 +64,81 @@ allowed-tools: "Read, Grep, Glob, Bash, mcp__sequential-thinking"
 
 ### 2.1 machineId 生成（**必看**，最容易出问题）
 
-**来源**：稳定硬件指纹（不是 MAC，不是 IP，不是 GPU UUID）
+> **v3.10.2 重做** —— v3.10.1 及之前版本存在严重 bug，导致同型号工控机批量出货时撞 ID，详见下文 2.1.x。
 
+**v3.10.2+ 来源**：稳定硬件指纹，**5 强 + 2 弱**多源采集，黑名单过滤占位值，强度守门。
+
+| 来源 | 类别 | Windows API | Linux 路径 |
+|---|---|---|---|
+| 主板序列号 | **强** | `Win32_BaseBoard.SerialNumber` | `/sys/class/dmi/id/board_serial` |
+| BIOS UUID | **强** | `Win32_ComputerSystemProduct.UUID` | `/sys/class/dmi/id/product_uuid`（root） |
+| BIOS 序列号 | **强** | `Win32_BIOS.SerialNumber` | `/sys/class/dmi/id/product_serial` |
+| 系统盘序列号 | **强** | `Win32_DiskDrive.SerialNumber` | `lsblk -ndo SERIAL,MODEL` |
+| 第一块物理网卡 MAC | **强** | `Get-NetAdapter -Physical` | `/sys/class/net/<iface>/address`（排除 lo/docker/br-/veth/virbr） |
+| 主板型号 | 弱（不计入强标识源数） | `Win32_BaseBoard.Product` | `/sys/class/dmi/id/board_name` |
+| CPU 型号 | 弱（不计入强标识源数） | `os.cpus()[0].model` | 同左 |
+
+```js
+machineId = "TJ-" + SHA256(parts.join("|")).substring(0, 12).toUpperCase()
+// 例如: TJ-BD600BF2727B (共 15 字符)
 ```
+
+**Windows 实施细节（v3.10.2）**：
+- **优先 PowerShell `Get-CimInstance`**：单次调用一把取回所有字段，比串行 5 次 wmic 快得多，**不依赖 Win11 24H2 已废弃的 wmic 工具**
+- **wmic 兜底**：Win10 / Win11 早期版本继续能跑
+- **黑名单过滤**：拒收 `"To be filled by O.E.M."` / 全 0 UUID / 全 F UUID / `"Default string"` / `"Not Specified"` 等工控机厂家常见占位值（详见 `BAD_VALUES` 集合）
+
+**强度守门**：
+- 强标识源 ≥ 1 → 正常生成 machineId
+- 强标识源 = 0 → 打 ERROR log `!!!! NO STRONG HARDWARE IDENTIFIER AVAILABLE !!!!` + **不写缓存** + machineId 标记为 `weak`（防止该 ID 被持久化到撞 ID 状态）
+
+**老机器零影响兼容**：
+- `getMachineId()` 第一步读 `machine_id.txt`，缓存命中且 `hw_verify.txt` 校验通过 → 直接返回老 ID，不重算
+- 即升级 v3.10.2 后，**老客户机器沿用老 ID，老 license 继续有效**
+
+### 2.1.1 v3.10.1 及之前撞 ID bug（**历史踩坑**）
+
+**事故事实**：现场 7-8 台不同的工控机生成同一个 machineId（`TJ-F64AF21C6DBB`），license 失去机器绑定意义。
+
+**老算法（v3.10.1 及之前）**：
+```js
 Windows:
   parts = [
-    `wmic baseboard get product /value`,
-    `wmic csproduct get uuid /value`,
-    os.cpus()[0].model
+    wmic baseboard get product /value,    // 主板型号 → 同型号必相同
+    wmic csproduct get uuid /value,       // 工控机厂家常忘刷 → 全 0 / 全 F
+    os.cpus()[0].model                    // CPU 型号 → 同款必相同
   ]
-
-Linux:
-  parts = [
-    /sys/class/dmi/id/board_name,
-    /sys/class/dmi/id/board_vendor,
-    /sys/class/dmi/id/product_uuid（或 sudo cat），
-    os.cpus()[0].model
-  ]
-
-machineId = "TJ-" + SHA256(parts.join("|")).substring(0, 12).toUpperCase()
 ```
 
-**例子**：`TJ-A3B5C7D9E1F2`（共 15 字符）
+**三重失败**：
+1. `wmic baseboard get product` 取**主板型号**（不是序列号），同型号工控机批量出货时值完全一样（例如全是 `B660M-DS3H`）
+2. `wmic csproduct get uuid` 工控机厂家批量烧 BIOS 时常常忘刷，全 0 / 全 F / 模板 UUID 是已知问题
+3. `os.cpus()[0].model` 是 CPU 型号字符串，同款 CPU 必定一样
+
+**雪上加霜**：Win11 24H2 起 Microsoft 默认移除 `wmic`，`execSafe('wmic ...')` 直接返回空字符串 → 前两个来源都空 → 只剩 CPU 型号 → 同款 CPU 机器全是同一 machineId。`execSafe` 失败兜底返回 `''`，`parts.filter(Boolean).join('|')` 把空值过滤掉，**没有任何报错日志**，所以一直没人发现。
+
+### 2.1.2 现场撞 ID 处置（**给客户支持工程师**）
+
+| 场景 | 处置 |
+|---|---|
+| 老机器（已激活的客户机） | **完全不需要操作**：升级 v3.10.2 后沿用老 ID，老 license 继续有效 |
+| 现场已撞 ID 的机器 | 远程让客户删 3 个文件 → 重启 → 拿到新 ID → 重发 license（详见下方步骤） |
+| 新装机 | 自动用新算法，强标识源 ≥ 1 即可生成稳定唯一 ID |
+| 强标识源全部为 0（极端工控机） | 联系厂家在 BIOS 写真序列号 / 升级 TPM 2.0 / 业务层用客户名 + 工位号双重绑定 |
+
+**撞 ID 机器重发 license 步骤**：
+1. 远程让客户**关闭天军软件**
+2. 删除：
+   - `%APPDATA%\tianjun-ai-vision\machine_id.txt`
+   - `%APPDATA%\tianjun-ai-vision\hw_verify.txt`
+   - `%APPDATA%\tianjun-ai-vision\license.lic`
+3. 重新打开天军软件 → 显示"未授权"+ 新 machineId
+4. 客户把新 machineId 报回来 → `python backend/scripts/generate_license.py --machine-id <新ID> --customer "<客户名>" --expires <YYYY-MM-DD>`
+
+### 2.1.3 现场诊断工具
+
+- **`electron/scripts/diagnose-machine-id.bat`**：客户机双击就能跑，输出每个硬件源的返回值 + 哪些被黑名单拒收 + 最终 machineId + 强标识源数量，自动写 `machineid-report-<hostname>-<时间戳>.txt`
+- **IPC `get-machine-id-report`**：前端可读 `electronAPI.getMachineIdReport()` 拿到详细指纹采集报告（用于后续在"设置"页加诊断面板）
 
 ### 2.2 machineId 缓存与防换机
 
