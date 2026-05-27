@@ -710,6 +710,7 @@
       <PerItemPanel
         v-else-if="isPerItemMode"
         :state="perItemState"
+        :channel="selectedChannel"
       />
 
       <!-- No Project Selected -->

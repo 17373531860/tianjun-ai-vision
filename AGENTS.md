@@ -103,6 +103,7 @@
 | 调参（视频 + 模型）| `tune-params` |
 | 训工业 hand-detector（客户手套/俯视等 MediaPipe 死区救场）| `train-hand-detector` |
 | 跑测试 / 写测试 / 端到端冒烟 / 测试影响分析 | `run-tests` |
+| 本地启动前后端 / 起开发服务器 / 端口被占 / 副本 worktree 环境隔离 / baseURL 调错后端 | `start-dev-servers` |
 | 出新版本（version bump / changelog / tag / CI）| `update-release` |
 | 打包流程问题排查 | `build-release` |
 | 给客户出热补丁 | `create-hotfix` |
@@ -332,7 +333,7 @@
 - `source_event_trigger_mixin.py` — `_trigger_event()` 中心 hook
 - `source_events_check_mixin.py` — 旧的"基于消失"结算路径，v3.9.0 起 `last_first` / `first_step` 模式跳过
 - `source_periodic_actions_mixin.py` — v3.5.0 周期性强制动作
-- `source_per_item_mixin.py` (~960, v3.9.0 加五补丁) — **v3.8.0 逐件覆盖模式**（独立路径，与其他 4 种模式正交）
+- `source_per_item_mixin.py` (869, v3.9.0 加五补丁) — **v3.8.0 逐件覆盖模式**（独立路径，与其他 4 种模式正交）
 - `source_project_config_apply.py` — 应用 Project 配置；v3.9.0 加 last_first 自动清空 strict_order 兜底
 - `models/models.py` — `DetectionSession` / `DetectionCycle` / `StepRecord`
 
@@ -829,7 +830,7 @@ backend/
 │   └── auth_models.py (174)       # ⭐ v3.10 用户系统 5 张表
 ├── api/                           # 29 个文件
 │   ├── source.py + 35 个 source_* (mixin/组件/工具/路由)
-│   │   └── source_per_item_mixin.py (~650)   # v3.8.0 逐件覆盖模式 (独立路径)
+│   │   └── source_per_item_mixin.py (869)    # v3.8.0 逐件覆盖模式 + v3.9.0 五补丁 (独立路径)
 │   ├── projects.py / models.py / sessions*.py (4 个) / cameras.py
 │   ├── tasks.py / reports.py / system_display.py / alarm.py
 │   ├── channel_manager.py / debug.py / rod_filter.py

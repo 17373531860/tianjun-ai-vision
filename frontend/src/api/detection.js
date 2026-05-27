@@ -64,6 +64,14 @@ export const resetDetectionStats = (channel = 0) => api.post(`/source/detection/
 // v3.9.x 工人确认重做 — 解除 require_ack 触发的阻塞态
 export const ackPendingEvent = (channel = 0) => api.post(`/source/detection/ack-event?channel=${channel}`);
 
+// v3.10.2+ per_item 手动周期时机控制
+//   只代替"时机判定", 不代替"结果判定". 不可伪造 OK/NG.
+//   action:
+//     'force_start' — 手动开始周期 (= 画面稳定锁定那一刻)
+//     'settle'      — 手动触发结算 (= finish_label 那一刻); OK/NG 由真实覆盖状态判
+export const perItemControl = (action, channel = 0) =>
+  api.post(`/source/detection/per-item-control?channel=${channel}&action=${encodeURIComponent(action)}`);
+
 export const resetPeriodicAction = (channel = 0, ruleId = null) => {
   const params = new URLSearchParams({ channel: String(channel) });
   if (ruleId) params.append('rule_id', ruleId);

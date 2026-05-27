@@ -288,7 +288,16 @@ class _PerItemStep:
     def covered_count(self) -> int:
         return sum(1 for s in self.items.values() if s.covered)
 
-    def to_state_dict(self):
+    def to_state_dict(self, strict_display: bool = False):
+        # v3.10.2+ display_total 计算: 取决于全局 require_exact_count (由 host 传入)
+        #   - 严格等量 (strict_display=True) + 配了 expected_count → 显示 expected_count
+        #     (触发瞬间就保证锁满, UI 显示分母 = 期望数, 视觉上一定整齐)
+        #   - 否则 → 显示真实锁定数 len(items)
+        #     (宽松模式 / 未配期望, UI 显示实际锁了多少, 模型漏检一眼能看出, 不假装"等量")
+        if strict_display and self.expected_count > 0:
+            display_total = self.expected_count
+        else:
+            display_total = len(self.items)
         return {
             'step_id': self.step_id,
             'label': self.step_label,
@@ -297,7 +306,8 @@ class _PerItemStep:
             'item_label': self.item_label[0] if len(self.item_label) == 1 else list(self.item_label),
             'action_label': self.action_label,
             'expected_count': self.expected_count,
-            'total': len(self.items),
+            'total': len(self.items),                  # 真实锁定数
+            'display_total': display_total,            # 前端展示用分母 (期望优先)
             'locked_count': self.locked_count,
             'covered_count': self.covered_count(),
             'completed': self.completed,
@@ -410,11 +420,25 @@ class PerItemMixin:
         # 含义: 配了 expected_count 时, 检出数 ≥ expected_count × stability_count_ratio 即放行
         stability_count_ratio = float(per_item_cfg.get('stability_count_ratio', 0.85))
 
+        # v3.10.2+ 严格等量触发开关
+        # True 时: 触发条件改为"窗口里每一帧检出数 == expected_count" + 同时刻次步检出 ≥ 各自 expected_count
+        # → 触发瞬间所有步骤都能锁满, 但 trigger 时机会显著延后 (需要场景里所有目标真的全部识到)
+        # False (默认): 走 stability_count_ratio 宽松路径 (=0.85 即"够 85% 就触发, 后面靠 lookahead 补")
+        require_exact_count = bool(per_item_cfg.get('require_exact_count', False))
+
+        # v3.10.2+ 手动结算模式开关
+        # True  : 所有自动结算路径全部禁用 (finish_label / settle_after_all_done / cycle_max / idle_timeout)
+        #         周期开始仍自动 (画面稳定锁定), 但结算时机只能靠 per-item-control?action=settle 手动触发
+        # False : (默认) 各自动结算路径按各自参数生效
+        disable_auto_settle = bool(per_item_cfg.get('disable_auto_settle', False))
+
         self._per_item_config = {
             'stability_window_frames': max(1, stability_window),
             'stability_iou_threshold': stability_iou,
             'stability_count_tolerance': max(0, stability_count_tol),
             'stability_count_ratio': max(0.1, min(1.0, stability_count_ratio)),
+            'require_exact_count': require_exact_count,
+            'disable_auto_settle': disable_auto_settle,
             'item_timeout_seconds': max(0.0, item_timeout),
             'lock_count_on_start': lock_on_start,
             'finish_label': finish_label,
@@ -473,6 +497,9 @@ class PerItemMixin:
 
         # ──── 1. 按 label 分组本帧检测 ────
         boxes_by_label: dict[str, list] = {}
+        # DEBUG: 收集 finish_label 在本帧的 (conf, w, h) 列表
+        finish_label_dbg = (cfg or {}).get('finish_label') or ''
+        finish_label_dets_this_frame: list = []
         for det in detections:
             lbl = det.get('label', '')
             if not lbl:
@@ -484,6 +511,12 @@ class PerItemMixin:
             if bbox[2] <= 0 or bbox[3] <= 0:
                 continue
             boxes_by_label.setdefault(lbl, []).append(bbox)
+            if finish_label_dbg and lbl == finish_label_dbg:
+                finish_label_dets_this_frame.append({
+                    'conf': float(det.get('conf', det.get('confidence', 0))),
+                    'w': bbox[2], 'h': bbox[3],
+                    'x': bbox[0], 'y': bbox[1],
+                })
 
         # ──── 2. 周期未开始: 尝试启动 ────
         if not sess.cycle_active:
@@ -548,10 +581,13 @@ class PerItemMixin:
         if any_action_this_frame:
             sess.last_activity_time = current_time
 
+        # v3.10.2+ 手动结算模式: 所有自动结算路径全部禁用, 只能靠 manual_settle API 结算
+        disable_auto_settle = cfg.get('disable_auto_settle', False)
+
         # ──── 4. 完成即结算 (OK 路径, 无需收尾标签) ────
         # 所有 per_item 步骤都 completed → 保持 settle_after_all_done_sec 秒 → 立即结算 OK
         settle_after_all_done = cfg.get('settle_after_all_done_sec', 0)
-        if settle_after_all_done > 0 and self._per_item_steps:
+        if not disable_auto_settle and settle_after_all_done > 0 and self._per_item_steps:
             all_done = all(s.completed for s in self._per_item_steps)
             if all_done:
                 if sess.all_done_first_at is None:
@@ -565,7 +601,7 @@ class PerItemMixin:
 
         # ──── 5. 周期超时强制结算 (NG 兜底, per_item 专属参数) ────
         cycle_max = cfg.get('cycle_max_duration_sec', 0)
-        if cycle_max > 0 and sess.cycle_start_time is not None:
+        if not disable_auto_settle and cycle_max > 0 and sess.cycle_start_time is not None:
             cycle_elapsed = current_time - sess.cycle_start_time
             if cycle_elapsed > cycle_max:
                 print(f"[per_item] 周期总时长超时 {cycle_elapsed:.1f}s > {cycle_max}s, 强制结算")
@@ -576,7 +612,7 @@ class PerItemMixin:
         # 本场景核心兜底: 工人停手 → 持续 N 秒无 action 标签 → 强制结算
         # 注: 只看 action 标签, 不看 item, 见上面 last_activity_time 刷新规则
         idle_timeout = cfg.get('idle_timeout_sec', 0)
-        if idle_timeout > 0 and sess.last_activity_time is not None:
+        if not disable_auto_settle and idle_timeout > 0 and sess.last_activity_time is not None:
             idle_elapsed = current_time - sess.last_activity_time
             if idle_elapsed > idle_timeout:
                 print(f"[per_item] 空闲 {idle_elapsed:.1f}s > {idle_timeout}s, 强制结算")
@@ -584,12 +620,31 @@ class PerItemMixin:
                 return
 
         # ──── 7. 收尾标签判定 (兼容原有路径, 配了 finish_label 仍然生效) ────
+        # 注: box 尺寸过滤 (避免工件整体形态误识别为 finish_label) 已在 detection 出口
+        # 完成 (source_detect_runners_mixin._passes_box_size_limit), 这里只看通过过滤
+        # 后的 boxes_by_label 即可.
         finish_label = cfg.get('finish_label') or ''
-        if finish_label and finish_label in boxes_by_label:
+        if not disable_auto_settle and finish_label and finish_label in boxes_by_label:
             sess.finish_label_consec_frames += 1
+            # DEBUG: 保留 conf + w + h 流水, 便于排查 finish_label 信号稳定性
+            dets_str = ", ".join(
+                f"conf={d['conf']:.3f} w={d['w']:.3f} h={d['h']:.3f}"
+                for d in finish_label_dets_this_frame
+            )
+            print(
+                f"[per_item][DEBUG] finish_label='{finish_label}' 出现 "
+                f"frame_id={sess.frame_id} 连续={sess.finish_label_consec_frames}/"
+                f"{cfg['finish_sustain_frames']} dets=[{dets_str}]"
+            )
             if sess.finish_label_consec_frames >= cfg['finish_sustain_frames']:
+                print(f"[per_item][DEBUG] >>> finish_label 触发结算 <<<")
                 self._per_item_settle_cycle(current_time)
         else:
+            if sess.finish_label_consec_frames > 0:
+                print(
+                    f"[per_item][DEBUG] finish_label 计数被打断 "
+                    f"(连续 {sess.finish_label_consec_frames} 帧后断了)"
+                )
             sess.finish_label_consec_frames = 0
 
     # ──── 周期开始: 稳定窗口判定 ────
@@ -621,18 +676,35 @@ class PerItemMixin:
         if first_step.expected_count > 0:
             # ──── 路径 A: 固定数量模式 ────
             target = first_step.expected_count
-            ratio = cfg.get('stability_count_ratio', 0.85)
-            count_tol = cfg.get('stability_count_tolerance', 0)
-            required = max(1, min(target, int(target * ratio), target - count_tol))
-
-            # 窗口里每帧的检出数都要 ≥ required
+            require_exact = cfg.get('require_exact_count', False)
             window_frames = list(sess.stability_buffer)
-            if any(len(fr) < required for fr in window_frames):
-                return
-            # 锁定时挑窗口里"检出最多"的那一帧 (最接近真实数量)
-            best_fr = max(window_frames, key=lambda fr: len(fr))
-            latest_boxes = list(best_fr)[:target]      # 截到 target 颗封顶
-            item_count = len(latest_boxes)
+
+            if require_exact:
+                # v3.10.2+ 严格等量: 窗口里每帧首步都必须正好 == expected_count
+                if any(len(fr) != target for fr in window_frames):
+                    return
+                # 同时刻次步检出也必须 ≥ 各自 expected_count, 保证触发瞬间所有步骤都锁满
+                # boxes_now 已是首步的当帧检出; 次步用 boxes_by_label 即时计算
+                for other_step in self._per_item_steps[1:]:
+                    if other_step.expected_count > 0:
+                        other_now = self._collect_item_boxes(boxes_by_label, other_step.item_label)
+                        if len(other_now) < other_step.expected_count:
+                            return
+                latest_boxes = list(window_frames[-1])[:target]
+                item_count = len(latest_boxes)
+            else:
+                # 默认: 宽松触发 (>= ratio × expected, 漏检靠 lookahead 补)
+                ratio = cfg.get('stability_count_ratio', 0.85)
+                count_tol = cfg.get('stability_count_tolerance', 0)
+                required = max(1, min(target, int(target * ratio), target - count_tol))
+
+                # 窗口里每帧的检出数都要 ≥ required
+                if any(len(fr) < required for fr in window_frames):
+                    return
+                # 锁定时挑窗口里"检出最多"的那一帧 (最接近真实数量)
+                best_fr = max(window_frames, key=lambda fr: len(fr))
+                latest_boxes = list(best_fr)[:target]      # 截到 target 颗封顶
+                item_count = len(latest_boxes)
         else:
             # ──── 路径 B: auto 模式 (老路径) ────
             counts = [len(b) for b in sess.stability_buffer]
@@ -770,6 +842,99 @@ class PerItemMixin:
             used[best_idx] = True
         return True
 
+    # ──── 手动周期控制 (v3.10.2+) ────
+    #
+    # 设计原则: 手动控制只代替"时机判定", 不代替"结果判定".
+    #   - manual_settle 等价于 finish_label 触发的那一刻, OK/NG 由 _per_item_settle_cycle
+    #     按真实覆盖状态判 (覆盖全 → OK; 有缺 → NG, NG 详情含漏几件)
+    #   - manual_force_start 等价于"画面稳定锁定"的那一刻, 后续覆盖 / 超时 / NG 全真实跑
+    # ⚠ 不提供 "强制 OK / 强制 NG / 取消周期" 接口 — 不可人为伪造生产记录.
+    def per_item_manual_settle(self) -> dict:
+        """手动触发当前 per_item 周期结算 (等价 finish_label 那一刻).
+
+        OK/NG 由系统按当前真实覆盖状态判定, 不接受外部指定.
+        """
+        sess = getattr(self, '_per_item_session', None)
+        if sess is None:
+            return {"ok": False, "msg": "未启用 per_item 模式"}
+        if not sess.cycle_active:
+            return {"ok": False, "msg": "当前没有 active 周期可结算"}
+
+        self._per_item_settle_cycle(time.time())
+        return {
+            "ok": True,
+            "msg": "已按当前覆盖状态触发结算 (OK/NG 由真实覆盖判定)",
+        }
+
+    def per_item_manual_force_start(self) -> dict:
+        """强制立刻开启一个新周期 (即便 item/action 还没稳定出现).
+
+        关键: 立刻从 mgr.current_detections 取当前帧 boxes 锁定 items,
+        而不是开启一个空 items 的周期 (空 items 会让工人扭螺丝时 covered 永远 0).
+        """
+        sess = getattr(self, '_per_item_session', None)
+        if sess is None:
+            return {"ok": False, "msg": "未启用 per_item 模式"}
+        if sess.cycle_active:
+            return {"ok": False, "msg": "已存在 active 周期, 请先结算"}
+
+        now = time.time()
+        frame_id = getattr(self, 'inference_frame_count', 0) or 0
+
+        # 从 mgr 最新检出快照, 按 label 分组重建 boxes_by_label
+        boxes_by_label: dict[str, list] = {}
+        locked_labels_count: dict[str, int] = {}
+        try:
+            dets = list(getattr(self, 'current_detections', None) or [])
+            for d in dets:
+                lbl = d.get('label')
+                if not lbl:
+                    continue
+                try:
+                    bbox = (float(d['x']), float(d['y']), float(d['w']), float(d['h']))
+                except (KeyError, TypeError, ValueError):
+                    continue
+                boxes_by_label.setdefault(lbl, []).append(bbox)
+        except Exception as e:
+            print(f"[per_item][force_start] 读 current_detections 失败: {e}")
+
+        sess.cycle_active = True
+        sess.cycle_start_time = now
+        sess.cycle_start_frame_id = frame_id
+        sess.all_done_first_at = None
+        sess.last_activity_time = now
+        sess.finish_label_consec_frames = 0
+        # force_start 关键: 强制开启补锁窗口, 不依赖单帧快照
+        # 优先用 config.lock_lookahead_seconds, 配 0 时也强制 3 秒兜底.
+        # 因为手动模式下 detection 在视频里是稀疏的, 按下那一瞬间常拿不到完整 boxes,
+        # 给一个补锁窗口 → 让窗口内任何帧识别到的 item_label 都补锁进来.
+        try:
+            lookahead = float((self._per_item_config or {}).get('lock_lookahead_seconds', 0) or 0)
+        except (TypeError, ValueError):
+            lookahead = 0.0
+        if lookahead <= 0:
+            lookahead = 3.0
+        sess.lock_lookahead_deadline = now + lookahead
+
+        # 立刻锁定每个 step 的 items: 从 boxes_by_label 抽各自 item_label, 截到 expected_count
+        for step in self._per_item_steps:
+            step_boxes = self._collect_item_boxes(boxes_by_label, step.item_label)
+            if step.expected_count > 0:
+                step_boxes = step_boxes[:step.expected_count]
+            step.lock_items_from_boxes(step_boxes, frame_id, now)
+            step.completed = False
+            locked_labels_count[step.step_label] = len(step.items)
+
+        summary = ", ".join(
+            f"[{lbl}] 锁 {n}" for lbl, n in locked_labels_count.items()
+        ) or "(无 item 可锁)"
+        print(f"[per_item][force_start] 周期开始, 立即锁定: {summary}")
+        return {
+            "ok": True,
+            "msg": f"已手动开启新周期 ({summary})",
+            "locked": locked_labels_count,
+        }
+
     # ──── 周期结算 ────
     def _per_item_settle_cycle(self, current_time: float):
         """收尾标签稳定出现 → 检查所有 per_item 步骤完成情况 → OK/NG"""
@@ -842,7 +1007,9 @@ class PerItemMixin:
         sess = getattr(self, '_per_item_session', None)
         cfg = self._per_item_config
 
-        steps_state = [s.to_state_dict() for s in self._per_item_steps]
+        # v3.10.2+ strict_display 控制 step.display_total 的语义
+        strict_display = bool(cfg.get('require_exact_count', False))
+        steps_state = [s.to_state_dict(strict_display=strict_display) for s in self._per_item_steps]
 
         return {
             'enabled': True,
@@ -854,6 +1021,8 @@ class PerItemMixin:
                 'stability_iou_threshold': cfg.get('stability_iou_threshold', 0.5),
                 'stability_count_tolerance': cfg.get('stability_count_tolerance', 0),
                 'stability_count_ratio': cfg.get('stability_count_ratio', 0.85),
+                'require_exact_count': cfg.get('require_exact_count', False),
+                'disable_auto_settle': cfg.get('disable_auto_settle', False),
                 'item_timeout_seconds': cfg['item_timeout_seconds'],
                 'lock_count_on_start': cfg['lock_count_on_start'],
                 'finish_label': cfg['finish_label'],

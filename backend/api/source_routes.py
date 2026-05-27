@@ -1777,6 +1777,42 @@ def inject_per_item_mock(channel: int = Query(0),
 
 
 # ============================================================
+# v3.10.2+: per_item 手动周期控制
+#
+# 设计原则: 手动只代替"时机判定", 不代替"结果判定". 不可人为伪造生产记录.
+#   - settle      手动触发结算 (= finish_label 那一刻). OK/NG 由真实覆盖状态判
+#   - force_start 手动开始周期 (= 画面稳定锁定那一刻). 后续覆盖/超时/NG 全真实跑
+# 不提供 "强制 OK / 强制 NG / 取消周期" 接口.
+# ============================================================
+@router.post("/detection/per-item-control")
+def per_item_control(channel: int = Query(0),
+                     action: str = Query(..., description="settle | force_start")):
+    """手动控制 per_item 周期时机.
+
+    action:
+        settle       手动触发当前周期结算; OK/NG 由系统按真实覆盖状态判
+        force_start  强制开启一个新周期 (用于自动稳定判定迟迟不成时)
+    """
+    mgr = _get_mgr(channel)
+    if not getattr(mgr, '_per_item_config', None):
+        raise HTTPException(status_code=400, detail="当前 channel 未启用 per_item 模式")
+
+    action = (action or '').strip().lower()
+    if action == 'settle':
+        ret = mgr.per_item_manual_settle()
+    elif action == 'force_start':
+        ret = mgr.per_item_manual_force_start()
+    else:
+        raise HTTPException(status_code=400, detail=f"未知 action: {action} (允许: settle | force_start)")
+
+    if not ret.get('ok'):
+        raise HTTPException(status_code=400, detail=ret.get('msg', '操作失败'))
+
+    snapshot = mgr.get_per_item_state() if hasattr(mgr, 'get_per_item_state') else None
+    return {"status": "success", "action": action, "result": ret, "snapshot": snapshot}
+
+
+# ============================================================
 # /status + /health
 # ============================================================
 @router.get("/status")

@@ -6,13 +6,23 @@
   -->
   <div class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
 
-    <!-- 头部 bar (对齐 tracking 风格) -->
+      <!-- 头部 bar (对齐 tracking 风格) -->
     <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0 flex justify-between items-center">
       <div class="flex items-center gap-2">
         <span class="text-cyan-400 text-lg font-bold">逐件覆盖</span>
-        <span v-if="state?.cycle_active && overallTotal > 0"
+        <!-- 手动结算模式标记 -->
+        <span v-if="state?.config?.disable_auto_settle"
+              class="bg-amber-500/20 text-amber-300 text-[0.625rem] px-1.5 py-0.5 rounded font-mono border border-amber-500/40"
+              title="自动 OK / 周期超时 NG / 空闲超时 NG / 收尾标签触发, 全部禁用. 周期结算只能靠手动按钮.">
+          🖐 手动结算模式
+        </span>
+        <span v-if="overallDisplayTotal > 0 && state?.cycle_active"
               class="bg-green-500/20 text-green-400 text-[0.625rem] px-1.5 py-0.5 rounded font-mono">
-          周期中 · {{ overallCovered }}/{{ overallTotal }}
+          周期中 · {{ overallCovered }}/{{ overallDisplayTotal }}
+        </span>
+        <span v-else-if="overallDisplayTotal > 0"
+              class="bg-slate-700 text-cyan-300 text-[0.625rem] px-1.5 py-0.5 rounded font-mono">
+          目标 · {{ overallDisplayTotal }}
         </span>
         <span v-else-if="state?.cycle_active"
               class="bg-cyan-500/20 text-cyan-400 text-[0.625rem] px-1.5 py-0.5 rounded animate-pulse">
@@ -20,12 +30,33 @@
         </span>
         <span v-else
               class="bg-slate-700 text-gray-400 text-[0.625rem] px-1.5 py-0.5 rounded">
-          等待场景稳定 ({{ stabilityWindow }} 帧)
+          等待场景稳定 ({{ stabilityWindow }} 帧{{ state?.config?.require_exact_count ? ' · 严格等量' : '' }})
         </span>
       </div>
       <div class="flex items-center gap-3">
+        <!-- v3.10.2+ 手动周期时机控制
+             仅在「手动结算模式」开启时可见, 避免和自动判定路径互相打架.
+             需要时去「项目配置 → 逻辑设置 → 结算时机」开「纯手动」开关. -->
+        <div v-if="state?.config?.disable_auto_settle" class="flex items-center gap-1">
+          <button
+            class="px-2 py-0.5 text-[0.625rem] font-bold rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            :class="state?.cycle_active
+              ? 'bg-slate-700 text-gray-500'
+              : 'bg-cyan-600 hover:bg-cyan-500 text-white'"
+            :disabled="busy || state?.cycle_active"
+            title="手动开始一个新周期 (替代等画面稳定那一刻; 后续覆盖/超时/NG 全部真实跑)"
+            @click="handleControl('force_start')">手动开始</button>
+          <button
+            class="px-2 py-0.5 text-[0.625rem] font-bold rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            :class="state?.cycle_active
+              ? 'bg-amber-500 hover:bg-amber-400 text-white ring-2 ring-amber-300/50 animate-pulse'
+              : 'bg-slate-700 text-gray-500'"
+            :disabled="busy || !state?.cycle_active"
+            title="手动触发结算 (替代 finish_label 那一刻; OK/NG 由真实覆盖状态判定)"
+            @click="handleControl('settle')">手动结算</button>
+        </div>
         <!-- 全局进度条 (cycle 激活后才显示) -->
-        <div v-if="state?.cycle_active && overallTotal > 0" class="w-32 h-1.5 bg-slate-900 rounded-full overflow-hidden">
+        <div v-if="state?.cycle_active && overallDisplayTotal > 0" class="w-32 h-1.5 bg-slate-900 rounded-full overflow-hidden">
           <div class="h-full transition-all duration-300 rounded-full"
                :class="overallProgress >= 1 ? 'bg-green-500' : 'bg-cyan-500'"
                :style="{ width: (overallProgress * 100).toFixed(0) + '%' }"></div>
@@ -64,12 +95,18 @@
             <span class="font-mono font-bold leading-none"
                   :class="step.completed
                     ? 'text-green-400 text-4xl'
-                    : (step.total > 0 ? 'text-white text-4xl' : 'text-gray-600 text-3xl')">
+                    : ((stepDisplayTotal(step) > 0) ? 'text-white text-4xl' : 'text-gray-600 text-3xl')">
               {{ step.covered_count }}
             </span>
             <span class="text-gray-500 text-2xl font-mono leading-none">/</span>
-            <span class="text-gray-400 text-2xl font-mono leading-none">{{ step.total || '?' }}</span>
+            <span class="text-gray-400 text-2xl font-mono leading-none">{{ stepDisplayTotal(step) || '?' }}</span>
             <span class="text-[0.625rem] text-gray-500 ml-1">已 {{ step.action_label || '动作' }}</span>
+            <!-- 锁定不足提示 (期望 14 但只锁到 12 之类) -->
+            <span v-if="step.expected_count > 0 && step.total > 0 && step.total < step.expected_count"
+                  class="text-[0.5625rem] text-amber-400 ml-auto font-mono"
+                  :title="`目标 ${step.expected_count} 颗 · 实际仅锁定 ${step.total} 颗 (模型漏检或 lookahead 不足)`">
+              ⚠ 锁 {{ step.total }}/{{ step.expected_count }}
+            </span>
           </div>
 
           <!-- 中部:左网格 + 右 minimap -->
@@ -172,30 +209,61 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { perItemControl } from '@/api/detection'
 
 const props = defineProps({
   state: {
     type: Object,
     default: null,
   },
+  channel: {
+    type: Number,
+    default: 0,
+  },
 })
+
+// v3.10.2+ 手动周期时机控制 (仅 settle | force_start)
+const busy = ref(false)
+const handleControl = async (action) => {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const res = await perItemControl(action, props.channel)
+    const data = res?.data || {}
+    const msg = data?.result?.msg || data?.action || '操作完成'
+    if (action === 'force_start') ElMessage.success(`▶ ${msg}`)
+    else if (action === 'settle') ElMessage.info(`⏹ ${msg}`)
+    else ElMessage.success(msg)
+  } catch (err) {
+    const detail = err?.response?.data?.detail || err?.message || '操作失败'
+    ElMessage.error(`手动控制失败: ${detail}`)
+  } finally {
+    busy.value = false
+  }
+}
 
 // ──── 头部展示 ────
 const stabilityWindow = computed(() => props.state?.config?.stability_window_frames ?? '?')
 
 // ──── 全局进度 ────
-const overallTotal = computed(() => {
+// v3.10.2+ display_total 优先: expected_count > 0 时, 即便锁定不足也按目标显示
+const stepDisplayTotal = (st) => {
+  if (!st) return 0
+  return st.display_total ?? (st.expected_count > 0 ? st.expected_count : (st.total || 0))
+}
+const overallDisplayTotal = computed(() => {
   if (!props.state?.steps) return 0
-  return props.state.steps.reduce((s, st) => s + (st.total || 0), 0)
+  return props.state.steps.reduce((s, st) => s + stepDisplayTotal(st), 0)
 })
 const overallCovered = computed(() => {
   if (!props.state?.steps) return 0
   return props.state.steps.reduce((s, st) => s + (st.covered_count || 0), 0)
 })
 const overallProgress = computed(() => {
-  if (overallTotal.value === 0) return 0
-  return overallCovered.value / overallTotal.value
+  if (overallDisplayTotal.value === 0) return 0
+  return overallCovered.value / overallDisplayTotal.value
 })
 
 // ──── 周期已运行秒数 ────

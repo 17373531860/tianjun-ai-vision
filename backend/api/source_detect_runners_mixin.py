@@ -94,6 +94,29 @@ def _passes_class_filter(class_name: str, params: dict) -> bool:
     return class_name in cf
 
 
+def _passes_box_size_limit(host, class_name: str, nw: float, nh: float) -> bool:
+    """v3.10+ 步骤级 box 尺寸过滤.
+
+    host.step_box_size_limits = {label: (max_w, max_h)} (归一化 0~1).
+    用途: 模型把"工件整体形态"误识别为某个 label 时 box 异常宽/高,
+    通过此过滤在 detection 出口直接丢弃 (任意 logic_mode 通用).
+
+    返回 True = 通过 (保留 detection), False = 丢弃.
+    """
+    limits = getattr(host, 'step_box_size_limits', None)
+    if not limits:
+        return True
+    lim = limits.get(class_name)
+    if lim is None:
+        return True
+    max_w, max_h = lim
+    if max_w > 0 and nw > max_w:
+        return False
+    if max_h > 0 and nh > max_h:
+        return False
+    return True
+
+
 def _gpu_lock_ctx(host):
     """返回一个上下文管理器: 多模型场景下用 router.gpu_lock 串行 GPU 调用.
 
@@ -223,6 +246,9 @@ class DetectRunnersMixin:
                             continue
 
                     nx, ny, nw, nh = clip_bbox_normalized(x1, y1, x2, y2, w, h)
+                    # v3.10+ 步骤级 box 尺寸过滤
+                    if not _passes_box_size_limit(self, class_name, nw, nh):
+                        continue
                     det = {
                         'x': nx, 'y': ny, 'w': nw, 'h': nh,
                         'confidence': confidence,
@@ -335,6 +361,8 @@ class DetectRunnersMixin:
                             continue
 
                     nx, ny, nw, nh = clip_bbox_normalized(x1, y1, x2, y2, w, h)
+                    if not _passes_box_size_limit(self, class_name, nw, nh):
+                        continue
                     det = {
                         'x': nx, 'y': ny, 'w': nw, 'h': nh,
                         'confidence': confidence, 'class_id': class_id,
@@ -435,6 +463,8 @@ class DetectRunnersMixin:
                             continue
 
                     nx, ny, nw, nh = clip_bbox_normalized(x1, y1, x2, y2, w, h)
+                    if not _passes_box_size_limit(self, class_name, nw, nh):
+                        continue
                     det = {
                         'x': nx, 'y': ny, 'w': nw, 'h': nh,
                         'confidence': confidence, 'class_id': class_id, 'label': class_name,

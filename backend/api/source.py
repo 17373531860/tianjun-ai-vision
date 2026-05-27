@@ -1081,8 +1081,14 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
     def _get_confirmed_detections(self, detections):
         """
         获取已确认的检测结果（通过帧计数验证的）
+
+        注意: per_item 模式走 source_per_item_mixin 路径, 不维护 step_frame_confirmed,
+        若仍走老的 confirm 过滤会把所有 detections 滤空 → 前端永远看不到框。
+        所以 per_item 模式直接放行 raw detections, 由 per_item 逻辑自己消化。
         """
         if getattr(self, "source_type", None) == "synthetic":
+            return list(detections) if detections else []
+        if (self.project_config or {}).get('logic_mode') == 'per_item':
             return list(detections) if detections else []
         confirmed = []
         for det in detections:
