@@ -7,12 +7,46 @@ effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__context7"
 ---
 
-# modify-source: source.py 安全修改分析（v3.5.x 主线）
+# modify-source: source.py 安全修改分析（v3.5.x 主线，v3.12.0 增量）
 
 你正在帮用户安全修改 `backend/api/source.py`（**1573 行主类骨架** + 15 个继承式 mixin + 6 个 has-a 组件 + 工具模块）。
 **这仍是整个系统最危险的文件，任何修改前必须完成以下分析。**
 
 计划修改: $ARGUMENTS
+
+---
+
+## 0. v3.12.0 新增踩坑（最近增量）
+
+### 0.1 `_get_confirmed_detections` 对 per_item 模式短路放行
+
+**位置**：`source.py: _get_confirmed_detections`
+
+**新逻辑**：
+
+```python
+if (self.project_config or {}).get('logic_mode') == 'per_item':
+    return list(detections) if detections else []
+```
+
+**意图**：per_item 模式自带"瞬时累计计数 + 稳定窗口"语义，不能再过"连续帧确认"，否则首次检出永远凑不齐 expected_count。跟 synthetic 模式同等待遇。
+
+**改这块要注意**：
+- 不要回填"连续帧确认"逻辑到 per_item 路径
+- 增加任何前置过滤器（比如未来加 lighting 守门 / box ratio 等）时，per_item 路径要么也走、要么显式短路；不要让两套语义打架
+- 单跑 `test_per_item_v310_features.py` 验证
+
+### 0.2 检测框尺寸过滤 `_passes_box_size_limit`
+
+**位置**：`source_detect_runners_mixin.py`
+
+**作用**：3 种 runner 路径里都加了"按 `steps_config[i].per_item.box_max_width / box_max_height` 过滤超大检测框"的守门。
+
+**改这块要注意**：
+- 配置项归属步骤级 `per_item.box_max_*`（不是项目级），跨步骤独立
+- 归一化坐标 0-1（相对画面尺寸，不是像素绝对值）
+- 0 / 缺省 = 不启用，**不要**默认填 1.0（语义会变）
+- 3 种 runner 路径都要跑过 — 跟踪 runner 走的是另一条分支，新加过滤器要同步
 
 ---
 
@@ -445,6 +479,7 @@ MES Hook 影响: [是否影响 5 个 Hook 调用点的签名/时序]
 2. `python -m pytest tests/test_periodic_actions_v352.py` — 周期性动作 + state_init 链路。
 3. `python -m pytest tests/test_pt_ct_modes_exposure.py tests/test_detection_results_exposure.py` — `get_detection_results` 字段对外承诺。
 3.5. 改 `source_settlement_mixin.py` / `source_step_stats_mixin.py` / `source_state_init.py` 务必加跑：`python -m pytest tests/test_settlement_last_first_v38.py tests/test_simultaneous_groups_v38.py tests/test_per_item_v39_features.py` — 状态机隔离性回归（v3.9.0+）。
+3.6. 改 `source.py: _get_confirmed_detections` / `source_per_item_mixin.py` / `source_detect_runners_mixin.py` 务必加跑：`python -m pytest tests/test_per_item_v310_features.py` — per_item v3.12 增强 7 个端到端测试（严格等量 / 手动结算 / force_start / box 尺寸过滤 / SOP 字段契约 / API 校验）。
 4. `python tools/check_imports.py`（如存在）— mixin 顶层 import 自查。
 5. **手动冒烟**：起后端 + 前端 → Source 页接 USB / 视频文件各一路 → 跑一个 cycle → 确认 detection/results 返回 + 数据页能看到 cycle/step → 关掉视频源不报错。
 6. 改了多通道相关字段：`channel_manager.set_channel_count(2)` → 跑两路 → 关一路 → 确认 `mes_hook.on_channel_removed` + `alarm_router.on_channel_removed` 都被调（AGENTS 第八节关键不变量 4）。

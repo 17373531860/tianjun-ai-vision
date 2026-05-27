@@ -97,7 +97,7 @@
 | 排查前端问题 | `debug-frontend` |
 | 排查自定义导出 / 实时规则 / 模板 / 字段中央仓库（v3.5.0+）| `debug-export` |
 | 排查用户系统 / License 授权（machineId / RSA 验签 / 当前登录用户落盘 / token 鉴权 / 权限不通过 / API Key）| `debug-operator-license` |
-| 排查 per_item 逐件覆盖模式（打螺丝场景 / 周期不开始 / 漏件不报 / PerItemPanel 空白 / mock 注入失败）（v3.8.0+）| `debug-per-item` |
+| 排查 per_item 逐件覆盖模式（打螺丝场景 / 周期不开始 / 漏件不报 / PerItemPanel 空白 / mock 注入失败 / 严格等量不触发 / 手动结算 API / box 尺寸过滤误检）（v3.8.0+ / v3.12.0 增强）| `debug-per-item` |
 | 数据问题修复 | `fix-data` |
 | 前后端 API 对齐检查 | `api-sync` |
 | 调参（视频 + 模型）| `tune-params` |
@@ -736,11 +736,14 @@
 | `require_perm("<perm.key>")` 依赖 (v3.10.0+) | FastAPI 依赖 | 端点级细粒度权限标记，`auth_enabled=false` 时自动放行 | `core/auth_deps.py` |
 | 内置角色 + 权限目录 (v3.10.0+) | 常量 | 三档角色（admin/engineer/operator）+ 完整权限目录，UI 渲染权限树用 | `core/permissions.py` / 启动时 `main.py:_seed_builtin_roles` |
 | Scanner `broadcast_channels` | JSON | 一扫码器服务多工位 | `models/mes_models.py:ScannerDevice` |
-| `pipeline_config.per_item` (v3.8.0+) | JSON | 逐件覆盖项目级参数（稳定窗口/收尾标签等） | `source_per_item_mixin.py` |
-| `steps_config[i].per_item` (v3.8.0+) | JSON | 逐件覆盖步骤级参数（item_label/action_label/sustain_frames 等） | 同上 |
+| `pipeline_config.per_item` (v3.8.0+ / v3.12.0 增强) | JSON | 逐件覆盖项目级参数（稳定窗口/收尾标签等） | `source_per_item_mixin.py` |
+| `steps_config[i].per_item` (v3.8.0+ / v3.12.0 增强) | JSON | 逐件覆盖步骤级参数（item_label/action_label/sustain_frames 等） | 同上 |
 | `pipeline_config.settlement_mode = 'last_first'` (v3.9.0+) | enum | **末步结算 + 首步开周期** 双锚状态机（R1-R6），与其他模式严格互斥 | `source_settlement_mixin.py: _process_last_first_mode` |
 | `pipeline_config.simultaneous_groups[].cross_cycle = true` (v3.9.0+) | JSON | 类二跨周期组，独立状态机处理上下周期成员 + 屏蔽集合 + 等待超时 | `source_settlement_mixin.py: _process_cross_cycle_groups` |
 | `pipeline_config.per_item.expected_count` / `lock_lookahead` / `settle_after_all_done_sec` (v3.9.0+) | int / sec | per_item 五补丁配置（固定数量 + 周期内补锁定 + 立即 OK 等） | `source_per_item_mixin.py` |
+| `pipeline_config.per_item.require_exact_count` (v3.12.0+) | bool | 严格等量周期触发：每帧检出数 == expected_count + 次步同步 ≥ 各自 expected_count 才开周期。治"漏件被算 NG" | `source_per_item_mixin.py: _per_item_should_start_cycle` |
+| `pipeline_config.per_item.disable_auto_settle` (v3.12.0+) | bool | 关掉所有自动收尾，仅 `/api/v1/source/detection/per-item-control` 的 `settle` / `force_start` 才动周期 | `source_per_item_mixin.py` + `source_routes.py: per-item-control` |
+| `steps_config[i].per_item.box_max_width / box_max_height` (v3.12.0+) | float (0-1 归一化) | post-YOLO 守门：检测框宽高超上限直接过滤，治"整个料盒/操作员手臂被识别成巨型螺丝" | `source_detect_runners_mixin.py: _passes_box_size_limit` |
 
 ---
 
@@ -906,7 +909,10 @@ docs/
 
 | 版本 | 日期 | 主要变更 |
 |---|---|---|
-| v3.10.0 | 2026-05-25（开发中） | **用户系统完整闭环**：多角色账号（admin/engineer/operator）+ token 鉴权 + 端点级权限（约 160 个端点 require_perm）+ M2M API Key + 总开关默认关闭零差异 + 彻底清除旧 operators 系统（表+API+UI+utils 全删，5 阶段渐进式 strangle）+ Navbar/BottomBar 身份显示按鉴权状态切换 |
+| **v3.12.0** | **2026-05-27** | **合并 chore/feature-verify + feat/per-item-enhance 两条主线**（跳过 v3.11.x）+ **per_item v3.12 增强四件套**：严格等量周期触发（`require_exact_count`，治漏件 NG）/ 手动结算模式（`disable_auto_settle` + `/per-item-control` API，师傅按按钮控制）/ Box 尺寸过滤（步骤级 `box_max_width/height`，治整个料盒被识别成巨型螺丝）/ per_item 检测短路放行（跟 synthetic 同等待遇）+ **SOP 卡片"图永不空"**（步骤缩略图按 label 跨周期继承，治灰白闪一下的视觉跳变）+ 5 类历史测试失败修复（conftest auth_models / MagicMock 自动属性 / 字段名漂移 / 模板英文化 / jsonschema 装依赖） |
+| v3.10.2 | 2026-05-26 | **紧急修复 machineId 多机撞 ID 漏洞**（v3.10.1 之前所有版本受影响，现场出现 7-8 台机器同 ID）+ 5 强 2 弱多源指纹 + 黑名单过滤占位值 + 强度守门 + 现场诊断脚本 + IPC 暴露指纹诊断报告 |
+| v3.10.1 | 2026-05-26 | PT 多段策略"仅首段"显示 0.0s/`--` 修复 + 严格顺序 PT 负 interval 修复 + 防重复结算开关 UI 落库 + PT/CT B 方案 v2（帧号锚跟视频源解耦客户机解码速度）+ Splash 默认关闭 + 窗口模式默认带标题栏 |
+| v3.10.0 | 2026-05-25 | **用户系统完整闭环**：多角色账号（admin/engineer/operator）+ token 鉴权 + 端点级权限（约 160 个端点 require_perm）+ M2M API Key + 总开关默认关闭零差异 + 彻底清除旧 operators 系统（表+API+UI+utils 全删，5 阶段渐进式 strangle）+ Navbar/BottomBar 身份显示按鉴权状态切换 |
 | v3.9.0 | 2026-05-23 | **last_first 结算模式（末步结算 + 首步开周期）**（双锚状态机 R1-R6）+ **跨周期组类二 `cross_cycle` 独立状态机**（解决 D 余像 + A 新周期同帧时序）+ **per_item v3.9 五补丁**（expected_count / lock_lookahead / settle_after_all_done_sec / cleanup_stale_items 锁定模式不清 / item_label 多标签 OR）+ UAT 4 阶段 31/31 通过 |
 | v3.8.2 | 2026-05-22 | Cyber Splash 启动界面 + 实时后端日志驱动进度 + 工业全屏无边框 + IPC 优雅退出 + USB 摄像头 deviceId 持久化 + MediaPipe 完美骨架配置化 + 二段管线集成框架 + train-hand-detector skill |
 | v3.8.1 | 2026-05-22 | PT 守门/模型回退/Monitor 同步 + 步骤统计列可隐藏 + CI 磁盘清理（hotfix 累积） |
@@ -921,19 +927,11 @@ docs/
 | v2.7.16 | 2026-04-21 | source.py P5b 拆分（mixin 化起点） |
 | v2.7.12 | 2026-04-22 | 版本号源改 package.json |
 
-主线最新（已合并到 v3.9.0）：
-- `91ea16f` release: v3.9.0 — last_first 结算模式 + 跨周期组类二状态机 + per_item v3.9 五补丁
-
-正在做（**`feat/user-system` 分支**，未合并）：
-- v3.10.0 用户系统 6 阶段实施完成：
-  - 阶段 1-3：数据模型 / 后端鉴权内核 / 前端 token + store + 登录页 + 路由守卫
-  - 阶段 4：端点级 require_perm 标记（R1-R4 共 ~160 端点）+ M2M API Key 系统
-  - 阶段 5：旧 operators 系统 5 阶段渐进式 strangle 删除（UI 隐藏 → UI 清除 → API 410 Gone → 数据归属重定向 → 表 DROP）
-  - 阶段 6：Navbar/BottomBar 身份显示统一（鉴权状态切换语义 + 角色徽章）
-- UAT 累计：阶段 1 X 项 / 阶段 2 X 项 / 阶段 3 20/20 / 阶段 4 41/41 / 阶段 5 26/26 / 阶段 6 20/20 全通
+主线最新（已合并到 v3.12.0，已发版）：
+- `f0801ad` release: v3.12.0 — per_item 严格等量+手动结算+box 尺寸过滤 + SOP 图永不空 + 测试基础设施修复
 
 下次 tag 进度：
-- v3.10.0 待客户验收后发版
+- v3.12.x 整理 9 个测试串污染（synthetic / per_item_v310 / custom_export 系统预设，单跑全绿、批跑 fail，根因 module-level 单例 reset 缺失）
 - 长期分支 `feat/plugin-system` 在做（多客户定制插件系统 + DB 迁 PG）
 
 > **历史 bug 全档**：33 个 changelog × 184 条 BUG/FEAT/HOTFIX 已分类到 24 个旧 skill 内"历史踩坑"章节。统计：`debug-mes` 61 条 / `modify-frontend` 45 / `modify-source` 40 / `debug-source` 24 / `add-api-endpoint` 22 / `debug-video` 19。新增 3 个 skill（`debug-export` / `debug-cluster` / `debug-operator-license`）由 v3.5.x 真实代码反推编写，未追溯历史 changelog。
@@ -942,8 +940,7 @@ docs/
 
 ## 十三、当前在做的事（动态，看 git log 和分支名）
 
-- 主分支 `main`：稳定版，发布给客户（v3.9.0）
-- 分支 `feat/user-system`：**v3.10.0 用户系统**（6 阶段全部完成，UAT 全过，待客户验收发版）
+- 主分支 `main`：稳定版，**v3.12.0 已发布**（GitHub Action 跑了 47 分钟，安装包在中转仓库 `17373531860/tianjun-releases` v3.12.0 release，分卷 5 个文件含 `merge_installer.bat`）
 - 分支 `feat/plugin-system`：**多客户定制插件系统 + 数据库迁 PG**（在做，长期分支）
   - 决策已敲定：迁 PG / 三档插件全做 / 签名机制 / 不做沙箱
 
@@ -959,6 +956,6 @@ docs/
 
 ---
 
-**本文件最后更新**：2026-05-25（v3.10.0 用户系统 6 阶段完成同步）
+**本文件最后更新**：2026-05-27（v3.12.0 发版同步：per_item v3.12 增强四件套 + SOP 图永不空 + 5 类测试基础设施修复）
 **维护者**：项目主作者 + AI agents
 **事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）+ v3.9.0/v3.10.0 实测代码反推（`source_settlement_mixin.py` 1320 行 / `source_per_item_mixin.py` ~960 行 / v3.10 用户系统 ~841 行 core + 5 张新表 + 12 个 UAT 全过）

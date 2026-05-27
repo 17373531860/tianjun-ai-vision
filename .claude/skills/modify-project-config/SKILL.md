@@ -512,3 +512,64 @@ POST /api/v1/source/detection/start?channel=0
 | NG（反向剧本） | reverse `c→b→a` 跑出来 `counters['不良总数'] == 1` | sequence_order 是不是数字（注意是 `{"step_id":1}` 不是字符串） |
 | 步骤 ROI 限定 | bbox 中心在 polygon 外那帧不计 step | `step.roi` 必须是 [[nx,ny],...] 归一化、≥3 点 |
 | 移动目标 + ROI | 中段在 ROI 内、两端在 ROI 外 → step 计数 == 1（只有中段被认） | step_stats_mixin line 60-65 严格的中心点-多边形测试 |
+
+---
+
+## 七、v3.12.0 新增 per_item 配置位（全链路对照）
+
+v3.12.0 给「逐件覆盖」模式加了 4 个新配置字段，每个都跑通**前端 UI → POST /projects → DB → 激活后 set_project_config → VSM 状态机 → Monitor / 检测路径**：
+
+### 7.1 `pipeline_config.per_item.require_exact_count`（项目级 bool）
+
+| 链路环节 | 表现 |
+|---|---|
+| 前端 UI | 项目管理 → 逻辑设置 → 「严格等待检出数符合期望」开关（`frontend/src/views/Project/index.vue`）|
+| POST /projects 字段 | `pipeline_config.per_item.require_exact_count: true/false` |
+| DB | 落 `projects.pipeline_config` JSON 字段，不需要 ALTER TABLE |
+| set_project_config | `source_project_config_apply.py: _per_item_apply_config` 把该字段拷到 VSM 自身的 per_item 配置 |
+| VSM 状态机 | `source_per_item_mixin.py: _per_item_should_start_cycle` 读取，True 时改"严格等量" + 次步同步 ≥ |
+| Monitor | `frontend/src/views/Monitor/PerItemPanel.vue` 提示当前是否启用 |
+
+### 7.2 `pipeline_config.per_item.disable_auto_settle`（项目级 bool）
+
+| 链路环节 | 表现 |
+|---|---|
+| 前端 UI | 项目管理 → 逻辑设置 → 「手动结算模式」开关 |
+| POST /projects 字段 | `pipeline_config.per_item.disable_auto_settle` |
+| DB | `projects.pipeline_config` JSON |
+| set_project_config | 同上 _per_item_apply_config |
+| VSM 状态机 | per_item mixin 内所有自动收尾路径都加守门 — 跳 sustain_frames 满 / cycle_max_seconds 到 / 收尾标签触发；只接受 `per_item_manual_settle / per_item_manual_force_start` |
+| 配套 API | `POST /api/v1/source/detection/per-item-control` (`source_routes.py`) 守门 logic_mode + action 枚举 |
+| Monitor | PerItemPanel 显示「手动结算」「强制开始」两个按钮 |
+
+### 7.3 `steps_config[i].per_item.box_max_width / box_max_height`（步骤级 float, 0-1 归一化）
+
+| 链路环节 | 表现 |
+|---|---|
+| 前端 UI | 项目管理 → 步骤设置 → 展开某步骤 → 「Box 尺寸上限」两个数字输入框 |
+| POST /projects 字段 | `steps_config[i].per_item.box_max_width / height` |
+| DB | `projects.steps_config` JSON 字段 |
+| set_project_config | `source_project_config_apply.py` 把字段拷到 VSM 的步骤级 per_item 配置 dict |
+| 检测路径 | `source_detect_runners_mixin.py: _passes_box_size_limit` 在 3 种 runner（detect / detect+track / segment）里都跑一遍，按归一化坐标过滤 |
+| 影响范围 | post-YOLO 守门，**不影响推理本身**，只影响下游使用的检测列表 |
+
+### 7.4 改这 4 个字段的全链路测试
+
+```bash
+pytest tests/test_per_item_v310_features.py -v
+# 7 个端到端测试，覆盖：
+#   - per-item-control API 拒非 per_item 模式 / 拒未知 action
+#   - require_exact_count = True 漏件不开周期，凑齐立即开周期
+#   - disable_auto_settle = True 时手动 settle 才结算
+#   - force_start 立即开周期
+#   - box_max_width/height 配置正确解析到 VSM
+#   - SOP 字段 step_screenshot 在检测结果里如约暴露
+```
+
+### 7.5 改 per_item 配置前的必读检查
+
+1. **前端 UI 改了吗？** 不改的话客户只能手动 PUT JSON
+2. **`source_project_config_apply.py` 解析了新字段吗？** 不解析配置进不了 VSM
+3. **VSM 实际用了字段吗？** apply 后还要在 mixin 业务方法里读 — 漏一处就是死配置
+4. **守门 / 模式互斥规则改了吗？** v3.12.0 新加的字段都属于 per_item 模式独占，非 per_item 时**应静默忽略**（不是报错）
+5. **新加 per_item 字段时同步加测试**：参考 `tests/test_per_item_v310_features.py` 的 7 个用例模板

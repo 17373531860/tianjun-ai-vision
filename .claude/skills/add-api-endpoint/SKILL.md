@@ -179,3 +179,22 @@ POST   /resources/{id}/action  -- 特殊操作
 - `GET/PUT /display` — brand_name/app_name/inspector_name/device_number/factory_name/line_name 等 KV
 - `POST /license-cache` — 前端 Electron IPC 推 license 信息进来, 后续模板用 `{{ license.* }}`
 - ORM: `SystemConfig` (KV 表), 在 `backend/main.py::migrate_database()` 加表
+
+---
+
+## v3.12.0 新增 API 参考样板
+
+### per_item 手动控制 (`backend/api/source_routes.py` 内)
+
+- 路径: `POST /api/v1/source/detection/per-item-control`
+- 入参: `{ "action": "settle" | "force_start" }`
+- 模式守门: 当前激活项目的 `logic_mode != 'per_item'` → 400; 未知 action → 400
+- 业务实现: `source_per_item_mixin.py: per_item_manual_settle / per_item_manual_force_start`
+- 测试样板: `tests/test_per_item_v310_features.py::test_per_item_control_rejects_when_not_in_per_item_mode`
+
+**做"按模式生效"类端点时参考这套模板**:
+1. 路由层先取 mgr / project_config
+2. 校验 logic_mode 匹配 → 不匹配 400 + 明确 message
+3. 校验 action 枚举（不要直接 dispatch 字符串到方法名）
+4. 调对应 mixin 方法，返回当前状态片段（让前端拿到执行结果）
+5. 写 3 个测试: 模式守门 / action 枚举 / 正路径

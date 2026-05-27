@@ -223,5 +223,30 @@ DB 影响:   [是 / 否；具体 ORM 模型 + ALTER TABLE]
 - [ ] 跨模块：`mes_hooks` / `cluster_collector` / `export_context` / `electron/backend-manager` 是否需要联动
 - [ ] 死代码：不要给 `task.js` / `camera.js` / `report.js` 死方法 / 已删 `detection_router` 续命
 - [ ] 冒烟：启动后端 → `/docs` 看到端点 → curl 走通 → 前端页面手测一次 → `lint 0 错`
+- [ ] **模式守门**：跟特定 logic_mode 绑定的端点（典型如 v3.12.0 `/per-item-control` 只在 `per_item` 模式生效），非该模式时**必须 400 拒绝**，参考 `tests/test_per_item_v310_features.py::test_per_item_control_rejects_when_not_in_per_item_mode`
 
 > 完成修改后**主动汇报变更影响**给用户，不要 commit / push（等用户确认）。
+
+---
+
+## 九、v3.12.0 新增 API 速查
+
+| 路径 | 方法 | 用途 | 守门 |
+|---|---|---|---|
+| `/api/v1/source/detection/per-item-control` | POST | per_item 模式手动控制（`{action: "settle"\|"force_start"}`）| 非 per_item 模式 → 400；未知 action → 400 |
+
+**body schema**:
+
+```json
+{ "action": "settle" }
+```
+
+或
+
+```json
+{ "action": "force_start" }
+```
+
+**关键实现位置**：`backend/api/source_routes.py` 路由 + `backend/api/source_per_item_mixin.py: per_item_manual_settle / per_item_manual_force_start`
+
+**新增同类端点时套用同样模式**：路由层做 `logic_mode` 守门 + action 枚举校验 + 调 mixin 方法 + 返回当前状态。

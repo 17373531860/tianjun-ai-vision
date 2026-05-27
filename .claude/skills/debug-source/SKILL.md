@@ -898,6 +898,46 @@ print('current_cycle_time:', d.get('current_cycle_time'))
 
 ---
 
+## 十二·九、`_get_confirmed_detections` 短路放行（v3.12.0+，per_item 专属）
+
+**症状**：`logic_mode == 'per_item'` 模式开了，但**第一次进入 expected 标签时永远凑不齐数量**，开不了周期。看后端日志 `_get_confirmed_detections` 把检测全过滤掉了。
+
+**根因**：`_get_confirmed_detections` 默认对所有检测做"连续帧确认"（防抖），但 per_item 模式自己有"稳定窗口 + 瞬时累计计数"语义，再过一次连续帧确认就**双重过滤**了。v3.12.0 加了短路放行：
+
+```python
+# source.py: _get_confirmed_detections
+if (self.project_config or {}).get('logic_mode') == 'per_item':
+    return list(detections) if detections else []
+```
+
+**怎么诊断**：
+
+1. 看 `project_config.logic_mode` 是不是 `per_item`（不是的话不该走 per_item 路径）
+2. 看 `source.py` 当前版本是否含上面这段短路 — git blame 找 v3.12.0 这次改动
+3. 单跑 `pytest tests/test_per_item_v310_features.py::test_require_exact_count_blocks_undercount_starts_on_full -v` 应 PASS
+
+**不要这么改**：
+- 把短路移除（回到老 v3.10.x 全量过滤）— per_item 直接挂
+- 给 synthetic 加短路时不要忘了 per_item 也是同等待遇（两个分支独立判断）
+
+---
+
+## 十二·十、Box 尺寸过滤误检（v3.12.0+，步骤级 `box_max_*`）
+
+**症状**：客户配了 `steps_config[i].per_item.box_max_width = 0.4` 但**还是误开周期 / 还是看到巨型框**。
+
+**排查步骤**：
+
+1. **看是不是配在了步骤级而不是项目级**：`box_max_width` 必须在 `steps_config[i].per_item` 下（每个步骤独立），不在 `pipeline_config.per_item`
+2. **看归一化值是否搞错**：0-1 浮点（占画面宽/高比例），不是像素值。填 400 永远不会生效
+3. **看是哪个步骤没匹配**：守门按"步骤标签"匹配，标签错了就过不到这一关 — grep `_passes_box_size_limit` 看代码 + 后端日志
+4. **看 3 种 runner 都加了过滤**：detect / detect+track / segment 各自路径在 `source_detect_runners_mixin.py` 里
+5. **看是否检测框宽 OR 高都没过**：守门是 OR 逻辑（任一维度超就过滤），调小阈值时两个都要看
+
+**测试**：`pytest tests/test_per_item_v310_features.py::test_box_size_filter_drops_oversized_detections`
+
+---
+
 ## 十三、读取检查清单（开始修问题前）
 
 1. `backend/api/source.py`（先 grep 函数名再 Read，全文 1573 行别一次读完）
