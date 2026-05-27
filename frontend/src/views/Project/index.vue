@@ -521,6 +521,20 @@
                           <span class="cursor-help border-b border-dashed border-gray-500">检测框颜色</span>
                         </el-tooltip>
                       </th>
+                      <th class="p-2 w-40">
+                        <el-tooltip placement="top">
+                          <template #content>
+                            <div style="max-width: 320px; line-height: 1.5">
+                              <b>Box 尺寸上限</b>（归一化 0~1, <b>0 = 关闭</b>，默认关闭）<br/>
+                              检测框宽 / 高 超过比例时直接丢弃该 detection。<br/>
+                              用途：模型把"工件整体形态"误识别为某个 label 时（如 box 宽 ≈ 整张画面），<br/>
+                              用 W≤0.85 即可滤掉，而真正的局部动作 box（≤80%）不受影响。<br/>
+                              该过滤在所有逻辑模式下生效。
+                            </div>
+                          </template>
+                          <span class="cursor-help border-b border-dashed border-gray-500">Box尺寸上限</span>
+                        </el-tooltip>
+                      </th>
                       <th class="p-2 w-36">
                         <el-tooltip content="归一化多边形区域。设置后：仅当检测框中心落在该区域内时，该步骤/标签才计入 SOP 与周期（顺序、检测、自定义、跟踪模式均生效）。不设置则不限区域。" placement="top">
                           <span class="cursor-help border-b border-dashed border-gray-500">步骤ROI</span>
@@ -671,6 +685,26 @@
                       </td>
                       <td class="p-2 text-center">
                         <el-color-picker v-model="step.box_color" size="small" :predefine="['#10b981','#ef4444','#f59e0b','#3b82f6','#a78bfa','#ec4899','#06b6d4','#84cc16']" />
+                      </td>
+                      <td class="p-2">
+                        <div class="flex items-center gap-1 text-[10px] text-gray-400">
+                          <span>W≤</span>
+                          <el-input-number
+                            v-model="step.box_max_width"
+                            :min="0" :max="1" :step="0.05" :precision="2"
+                            size="small" controls-position="right"
+                            style="width: 68px"
+                            placeholder="0"
+                          />
+                          <span class="ml-1">H≤</span>
+                          <el-input-number
+                            v-model="step.box_max_height"
+                            :min="0" :max="1" :step="0.05" :precision="2"
+                            size="small" controls-position="right"
+                            style="width: 68px"
+                            placeholder="0"
+                          />
+                        </div>
                       </td>
                       <td class="p-2 align-top">
                         <div class="flex flex-col gap-1 min-w-[7rem]">
@@ -1525,13 +1559,13 @@
                   <!-- 收尾标签 (可选,例: 翻面) -->
                   <div class="grid grid-cols-2 gap-4">
                     <div>
-                      <div class="text-xs text-gray-400 mb-1.5">收尾动作 (可选)</div>
+                      <div class="text-xs text-gray-400 mb-1.5">收尾动作 / 信号标签 (可选)</div>
                       <el-select
                         v-model="activeProject.pipeline_config.per_item.finish_label"
                         size="small" class="!w-full" placeholder="留空 → 全部覆盖完就自动结算" clearable>
                         <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
                       </el-select>
-                      <div class="text-[10px] text-gray-500 mt-1">设置后: 所有件覆盖完 + 检出此标签 → 才算 OK (例: 翻面 = 工人示意完成)</div>
+                      <div class="text-[10px] text-gray-500 mt-1">这是「<span class="text-amber-300">纯动作</span>」/「<span class="text-amber-300">信号</span>」: 出现即结算周期, <span class="text-amber-400">不参与覆盖判定</span> (例: 放置、翻面)。跟下方步骤卡片的「覆盖动作」是<span class="text-amber-400">两套独立机制</span>, 不冲突。</div>
                     </div>
                     <div>
                       <div class="text-xs text-gray-400 mb-1.5">收尾动作连续多少帧才确认</div>
@@ -1546,20 +1580,42 @@
                   <!-- v3.9+ 新增: 稳定性进阶 -->
                   <div class="border-t border-slate-700 pt-3 mt-3">
                     <div class="text-xs text-gray-400 mb-2 font-bold">稳定性进阶</div>
+
+                    <!-- v3.10.2+ 严格等量触发开关 (一行高亮, 醒目) -->
+                    <div class="mb-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+                      <div class="flex items-center justify-between gap-3">
+                        <div class="flex-1">
+                          <div class="text-[12px] font-bold text-cyan-300">严格等待检出数符合期望</div>
+                          <div class="text-[10px] text-gray-500 mt-0.5">
+                            开启后: 必须窗口里每帧首步检出 = 期望颗数, 且同一时刻其他步骤的物件也 ≥ 各自期望, 才触发周期 (锁定即满)<br/>
+                            关闭 (默认): 走"最低检出比例"宽松触发, 漏检靠"补锁定窗口"补; 若模型识别不稳, 严格等量可能迟迟无法触发
+                          </div>
+                        </div>
+                        <el-switch
+                          v-model="activeProject.pipeline_config.per_item.require_exact_count"
+                          active-text="严格等量"
+                          inactive-text="宽松触发"
+                          inline-prompt
+                          size="default" />
+                      </div>
+                    </div>
+
                     <div class="grid grid-cols-3 gap-4">
                       <div>
                         <div class="text-[11px] text-gray-400 mb-1">允许漏检几件</div>
                         <el-input-number
                           v-model="activeProject.pipeline_config.per_item.stability_count_tolerance"
-                          size="small" :min="0" :step="1" :precision="0" class="!w-full" />
-                        <div class="text-[10px] text-gray-500 mt-1">配合"已知有几件"用, 允许 ±N 颗抖动 (默认 0)</div>
+                          size="small" :min="0" :step="1" :precision="0" class="!w-full"
+                          :disabled="activeProject.pipeline_config.per_item.require_exact_count" />
+                        <div class="text-[10px] text-gray-500 mt-1">配合"已知有几件"用, 允许 ±N 颗抖动 (默认 0)<span v-if="activeProject.pipeline_config.per_item.require_exact_count" class="text-amber-400"> · 严格等量下忽略</span></div>
                       </div>
                       <div>
                         <div class="text-[11px] text-gray-400 mb-1">最低检出比例</div>
                         <el-input-number
                           v-model="activeProject.pipeline_config.per_item.stability_count_ratio"
-                          size="small" :min="0.1" :max="1.0" :step="0.05" :precision="2" class="!w-full" />
-                        <div class="text-[10px] text-gray-500 mt-1">配"已知有几件"时, 检出数 ≥ N × 此比例即放行 (默认 0.85 = 允许 15% 漏检)</div>
+                          size="small" :min="0.1" :max="1.0" :step="0.05" :precision="2" class="!w-full"
+                          :disabled="activeProject.pipeline_config.per_item.require_exact_count" />
+                        <div class="text-[10px] text-gray-500 mt-1">配"已知有几件"时, 检出数 ≥ N × 此比例即放行 (默认 0.85 = 允许 15% 漏检)<span v-if="activeProject.pipeline_config.per_item.require_exact_count" class="text-amber-400"> · 严格等量下忽略</span></div>
                       </div>
                       <div>
                         <div class="text-[11px] text-gray-400 mb-1">周期开始后补锁定窗口(秒)</div>
@@ -1574,31 +1630,55 @@
                   <!-- v3.9+ 新增: 结算时机 (per_item 专属, 与其他模式隔离) -->
                   <div class="border-t border-slate-700 pt-3 mt-3">
                     <div class="text-xs text-gray-400 mb-2 font-bold">结算时机 <span class="text-amber-400 font-normal">(仅"逐件覆盖"模式生效, 不影响其他模式)</span></div>
+
+                    <!-- v3.10.2+ 手动结算模式总开关 (一行高亮, 醒目) -->
+                    <div class="mb-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+                      <div class="flex items-center justify-between gap-3">
+                        <div class="flex-1">
+                          <div class="text-[12px] font-bold text-amber-300">手动结算模式</div>
+                          <div class="text-[10px] text-gray-500 mt-0.5">
+                            开启后: 自动 OK / 周期超时 NG / 空闲超时 NG / 收尾标签触发, <b class="text-amber-400">全部禁用</b>, 只能去 Monitor 页头部点「手动结算」按钮触发<br/>
+                            关闭 (默认): 下面四个自动结算策略按各自参数生效
+                          </div>
+                        </div>
+                        <el-switch
+                          v-model="activeProject.pipeline_config.per_item.disable_auto_settle"
+                          active-text="纯手动"
+                          inactive-text="自动结算"
+                          inline-prompt
+                          size="default" />
+                      </div>
+                    </div>
+
                     <div class="grid grid-cols-3 gap-4">
                       <div>
                         <div class="text-[11px] text-gray-400 mb-1">全部完成后等几秒自动 OK</div>
                         <el-input-number
                           v-model="activeProject.pipeline_config.per_item.settle_after_all_done_sec"
-                          size="small" :min="0" :step="0.5" :precision="2" class="!w-full" />
-                        <div class="text-[10px] text-gray-500 mt-1">所有步骤覆盖完后保持 N 秒 → 自动 OK 结算; 0 = 必须等"收尾动作"</div>
+                          size="small" :min="0" :step="0.5" :precision="2" class="!w-full"
+                          :disabled="activeProject.pipeline_config.per_item.disable_auto_settle" />
+                        <div class="text-[10px] text-gray-500 mt-1">所有步骤覆盖完后保持 N 秒 → 自动 OK 结算; 0 = 必须等"收尾动作"<span v-if="activeProject.pipeline_config.per_item.disable_auto_settle" class="text-amber-400"> · 手动模式下忽略</span></div>
                       </div>
                       <div>
                         <div class="text-[11px] text-gray-400 mb-1">无动作多少秒判 NG</div>
                         <el-input-number
                           v-model="activeProject.pipeline_config.per_item.idle_timeout_sec"
-                          size="small" :min="0" :step="1" :precision="0" class="!w-full" />
-                        <div class="text-[10px] text-gray-500 mt-1">工人停手 N 秒无任何动作 → 强制 NG 结算; 0 = 不限 (本场景建议 8 秒)</div>
+                          size="small" :min="0" :step="1" :precision="0" class="!w-full"
+                          :disabled="activeProject.pipeline_config.per_item.disable_auto_settle" />
+                        <div class="text-[10px] text-gray-500 mt-1">工人停手 N 秒无任何动作 → 强制 NG 结算; 0 = 不限 (本场景建议 8 秒)<span v-if="activeProject.pipeline_config.per_item.disable_auto_settle" class="text-amber-400"> · 手动模式下忽略</span></div>
                       </div>
                       <div>
                         <div class="text-[11px] text-gray-400 mb-1">单周期最长几秒</div>
                         <el-input-number
                           v-model="activeProject.pipeline_config.per_item.cycle_max_duration_sec"
-                          size="small" :min="0" :step="10" :precision="0" class="!w-full" />
-                        <div class="text-[10px] text-gray-500 mt-1">周期开始后超过 N 秒未结算 → 强制 NG; 0 = 不限 (推荐 300 秒)</div>
+                          size="small" :min="0" :step="10" :precision="0" class="!w-full"
+                          :disabled="activeProject.pipeline_config.per_item.disable_auto_settle" />
+                        <div class="text-[10px] text-gray-500 mt-1">周期开始后超过 N 秒未结算 → 强制 NG; 0 = 不限 (推荐 300 秒)<span v-if="activeProject.pipeline_config.per_item.disable_auto_settle" class="text-amber-400"> · 手动模式下忽略</span></div>
                       </div>
                     </div>
                     <div class="text-[10px] text-gray-500 mt-2">
-                      ※ 这三项只在"逐件覆盖"模式生效, 跟其他模式(顺序/检测/跟踪)的同名参数完全独立
+                      ※ 这三项只在"逐件覆盖"模式生效, 跟其他模式(顺序/检测/跟踪)的同名参数完全独立<br/>
+                      ※ 手动模式下"收尾动作"标签 (上方下拉) 也不再触发自动结算, 但仍允许保留配置 (作为元信息)
                     </div>
                   </div>
                 </div>
@@ -1609,9 +1689,13 @@
                 <template #header><span class="font-bold text-white">逐件覆盖 — 每个步骤的角色</span></template>
                 <div class="space-y-3 text-sm text-gray-300">
                   <p class="text-xs text-gray-400">
-                    把开关打开 → 这步是「动作」(例: 扭螺丝);开关关掉 → 这步是「目标」(例: 螺丝, 被动作覆盖的对象)。
-                    <span class="text-amber-400">目标行不参与覆盖判定</span>, 只是让你能调它的检测阈值/显示等通用属性。
+                    每个步骤只有两种角色 (二选一): <span class="text-cyan-400">「覆盖动作」</span> 或 <span class="text-cyan-400">「目标」</span>。
                   </p>
+                  <ul class="text-[11px] text-gray-400 pl-4 list-disc space-y-0.5">
+                    <li><span class="text-cyan-300">覆盖动作</span>: 要持续重叠某个"目标"才算完成 (例: 扭螺丝 → 覆盖 5N螺丝)。把下面的开关 <span class="text-emerald-400">打开</span>。</li>
+                    <li><span class="text-cyan-300">目标</span>: 被动作覆盖的对象 (例: 5N螺丝、7N螺丝)。<span class="text-amber-400">不参与覆盖判定</span>, 只显示, 把开关 <span class="text-rose-400">关掉</span>。</li>
+                    <li><span class="text-amber-300">收尾信号 (如"放置"/"翻面")</span>: 不是"覆盖动作", 不在这里开关 — 请到上方"收尾动作"下拉里配, 出现即结算周期。</li>
+                  </ul>
 
                   <div
                     v-for="step in (activeProject.steps_config || []).filter(s => s.enabled)"
@@ -1636,32 +1720,37 @@
                             delete step.per_item;
                           }
                         }"
-                        size="small" active-text="把这步设为「动作」" inactive-text="保留为「目标」" />
+                        size="small" active-text="设为「覆盖动作」" inactive-text="保留为「目标」" />
                     </div>
 
                     <div v-if="step.per_item" class="grid grid-cols-2 gap-3">
                       <div>
-                        <div class="text-[11px] text-gray-400 mb-1">这个动作要覆盖哪些目标？<span class="text-amber-400">(可多选 = "或")</span></div>
+                        <div class="text-[11px] text-gray-400 mb-1">这个覆盖动作要盖哪些目标？<span class="text-amber-400">(可多选 = "或")</span></div>
                         <el-select
                           :model-value="_pi_itemLabelToArray(step.per_item.item_label)"
                           @update:model-value="(v) => { step.per_item.item_label = _pi_itemLabelFromArray(v); }"
                           size="small" multiple filterable allow-create default-first-option
                           collapse-tags collapse-tags-tooltip
-                          placeholder="从模型类别里选" class="!w-full">
+                          :placeholder="(activeProject.model_labels || []).length ? '从模型类别里选' : '先选主模型才能列出类别'"
+                          class="!w-full">
                           <el-option
                             v-for="lbl in (activeProject.model_labels || [])"
                             :key="lbl"
                             :label="lbl"
                             :value="lbl" />
                         </el-select>
-                        <div class="text-[10px] text-gray-500 mt-1">画面里出现任一标签都算作"目标"; 多选表示"或"的关系(例: 涂黑工序覆盖 5N螺丝+7N螺丝)</div>
+                        <div v-if="!(activeProject.model_labels || []).length" class="text-[10px] text-amber-400 mt-1">
+                          ⚠ 模型类别为空：请到"基础设置"tab 选择主模型并点"保存配置"后再来配
+                        </div>
+                        <div v-else class="text-[10px] text-gray-500 mt-1">画面里出现任一标签都算作"目标"; 多选表示"或"的关系(例: 涂黑工序覆盖 5N螺丝+7N螺丝)</div>
                       </div>
                       <div>
-                        <div class="text-[11px] text-gray-400 mb-1">用哪个标签作为"动作"？</div>
+                        <div class="text-[11px] text-gray-400 mb-1">用哪个标签作为"覆盖动作"？</div>
                         <el-select
                           v-model="step.per_item.action_label"
                           size="small" filterable allow-create default-first-option
-                          placeholder="从模型类别里选" class="!w-full">
+                          :placeholder="(activeProject.model_labels || []).length ? '从模型类别里选' : '先选主模型才能列出类别'"
+                          class="!w-full">
                           <el-option
                             v-for="lbl in (activeProject.model_labels || [])"
                             :key="lbl"
@@ -2091,6 +2180,7 @@
             <el-option label="检测模式" value="detection" />
             <el-option label="自定义模式" value="custom" />
             <el-option label="跟踪模式" value="tracking" />
+            <el-option label="逐件模式" value="per_item" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -2215,6 +2305,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjects, getProjectDetail, createProject, updateProject, deleteProject, activateProject } from '@/api/project';
 import { getModels, getAvailableFormats, convertModel, getConversionStatus, getFormatDiagnosis } from '@/api/model';
 import { getBackendHost } from '@/api/index';
+import { setProjectConfig } from '@/api/detection';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
@@ -2714,6 +2805,9 @@ const initProjectDefaults = (project) => {
     if (step.roi === undefined) step.roi = null;
     if (step.box_color === undefined) step.box_color = '';
     if (step.from_model === undefined) step.from_model = 'main';
+    // v3.10+ Box 尺寸上限 (归一化 0~1, 0 = 关闭过滤)
+    if (step.box_max_width === undefined) step.box_max_width = 0;
+    if (step.box_max_height === undefined) step.box_max_height = 0;
   });
 
   // v3.7.x (FIX): 清理孤儿步骤 — from_model 既不是 'main' 也对不上当前 extra_models slot.
@@ -2967,6 +3061,10 @@ const initProjectDefaults = (project) => {
   if (piCfg.stability_count_ratio === undefined) piCfg.stability_count_ratio = 0.85;
   if (piCfg.settle_after_all_done_sec === undefined) piCfg.settle_after_all_done_sec = 0;
   if (piCfg.lock_lookahead_seconds === undefined) piCfg.lock_lookahead_seconds = 5;
+  // v3.10.2+ 严格等量触发开关 (默认 false = 走宽松路径, 保持向后兼容)
+  if (piCfg.require_exact_count === undefined) piCfg.require_exact_count = false;
+  // v3.10.2+ 手动结算模式开关 (默认 false = 自动结算生效)
+  if (piCfg.disable_auto_settle === undefined) piCfg.disable_auto_settle = false;
   // v3.9+ per_item 专属超时 (与项目级 cycle_max_duration / idle_timeout_seconds 解耦)
   // 老 per_item 项目: 若专属字段未配, 后端会自动从项目级老字段回落, 这里前端只兜底 0
   if (piCfg.cycle_max_duration_sec === undefined) piCfg.cycle_max_duration_sec = 0;
@@ -3298,6 +3396,10 @@ const handleSaveProject = async () => {
             stability_count_ratio: Math.max(0.1, Math.min(1.0, Number(src.stability_count_ratio) || 0.85)),
             settle_after_all_done_sec: Math.max(0, Number(src.settle_after_all_done_sec) || 0),
             lock_lookahead_seconds: Math.max(0, Number(src.lock_lookahead_seconds) || 0),
+            // v3.10.2+ 严格等量触发开关
+            require_exact_count: src.require_exact_count === true,
+            // v3.10.2+ 手动结算模式开关
+            disable_auto_settle: src.disable_auto_settle === true,
             // v3.9+ per_item 专属超时 (与其他模式隔离)
             cycle_max_duration_sec: Math.max(0, Math.floor(Number(src.cycle_max_duration_sec) || 0)),
             idle_timeout_sec: Math.max(0, Math.floor(Number(src.idle_timeout_sec) || 0)),
@@ -3381,19 +3483,44 @@ const handleSaveProject = async () => {
       night_shift_start: activeProject.value.night_shift_start || '20:00',
     };
     await updateProject(activeProject.value.id, data);
-    
+
     activeProject.value.data_config = data.data_config;
     activeProject.value.pipeline_config = data.pipeline_config;
-    
+
     const idx = projects.value.findIndex(p => p.id === activeProject.value.id);
     if (idx !== -1) {
       projects.value[idx] = { ...projects.value[idx], ...data };
     }
-    
+
     if (projectStore.currentProjectId === activeProject.value.id) {
       projectStore.setCurrentProject(activeProject.value);
     }
-    
+
+    // v3.10.2+ 热同步: 当前 active 项目就是这个项目时, 把新 pipeline/steps 推给所有 channel 的 mgr,
+    // 否则用户改完配置点保存, mgr 内存里仍是旧 config (例如 disable_auto_settle 改了但运行中没生效).
+    // 不阻塞主流程, 失败时只 warn.
+    if (projectStore.currentProjectId === activeProject.value.id) {
+      try {
+        const syncPayload = {
+          project_id: activeProject.value.id,
+          name: activeProject.value.name,
+          task_type: activeProject.value.task_type,
+          logic_mode: activeProject.value.logic_mode,
+          steps_config: data.steps_config,
+          pipeline_config: data.pipeline_config,
+          events_config: data.events_config,
+          counters_config: data.counters_config,
+          data_config: data.data_config,
+        };
+        // ch0 即可 (项目当前只激活一个 channel); 多 channel 后续按需扩展
+        await setProjectConfig(syncPayload, 0);
+      } catch (syncErr) {
+        // 同步失败不影响主保存流程, 但提醒用户重启检测
+        console.warn('[保存] 热同步到 mgr 失败:', syncErr);
+        ElMessage.warning('配置已保存, 但同步给运行中的检测引擎失败, 请停止后重新启动检测以生效');
+      }
+    }
+
     ElMessage.success('配置已保存');
   } catch (err) {
     ElMessage.error('保存失败: ' + (err.response?.data?.detail || err.message));
@@ -3493,6 +3620,8 @@ const selectModel = (model) => {
             event_gone_frames: 8,
             box_color: slot.display_color || '',
             from_model: slot.name,
+            box_max_width: 0,
+            box_max_height: 0,
           });
           appended += 1;
         }
@@ -3523,6 +3652,7 @@ const selectModel = (model) => {
   }
   
   if (labels && labels.length > 0) {
+    activeProject.value.model_labels = labels;
     activeProject.value.steps_config = labels.map((label, idx) => ({
       id: idx + 1,
       label: label,
@@ -3547,15 +3677,17 @@ const selectModel = (model) => {
       event_gone_frames: 8,
       box_color: '',
       from_model: 'main',
+      box_max_width: 0,
+      box_max_height: 0,
     }));
     
     // 自动初始化顺序
     activeProject.value.sequence_order = labels.map((_, idx) => ({ step_id: idx + 1 }));
     activeProject.value.detection_steps = labels.map((_, idx) => idx + 1);
     
-    ElMessage.success(`已选择模型: ${model.name}，识别到 ${labels.length} 个类别`);
+    ElMessage.success(`已选择模型: ${model.name}，识别到 ${labels.length} 个类别 (记得点右上角"保存配置"落库)`);
   } else {
-    ElMessage.warning(`已选择模型: ${model.name}，但未能解析到标签`);
+    ElMessage.warning(`已选择模型: ${model.name}，但未能解析到标签 (记得点右上角"保存配置"落库)`);
   }
   
   showModelSelect.value = false;

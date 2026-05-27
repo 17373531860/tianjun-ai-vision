@@ -43,6 +43,7 @@ def _apply_rod_filter(h, config):
 def _reset_step_state_dicts(h):
     """重置所有步骤状态字典 (后续会按 steps_config 重新填充)"""
     h.step_conf_thresholds = {}
+    h.step_box_size_limits = {}
     h.step_time_config = {}
     h.step_min_frames = {}
     h.step_consecutive_frames = {}
@@ -73,6 +74,23 @@ def _apply_steps_config(h, steps_config):
         if threshold > 1:
             threshold = threshold / 100.0
         h.step_conf_thresholds[label] = threshold
+
+        # v3.10+ 步骤级 box 尺寸过滤 (归一化比例 0~1, 0 = 关闭).
+        # 模型若把"工件整体形态" / "ROI 大区域" 误识别为某个 label, box 通常会异常宽/高.
+        # 配置 box_max_width=0.85 即可在 detection 出口直接丢弃 (任意逻辑模式通用).
+        try:
+            box_max_w = float(step.get('box_max_width') or 0)
+        except (TypeError, ValueError):
+            box_max_w = 0.0
+        try:
+            box_max_h = float(step.get('box_max_height') or 0)
+        except (TypeError, ValueError):
+            box_max_h = 0.0
+        if box_max_w > 0 or box_max_h > 0:
+            h.step_box_size_limits[label] = (
+                max(0.0, min(1.0, box_max_w)),
+                max(0.0, min(1.0, box_max_h)),
+            )
 
         display_label = step.get('displayLabel') or step.get('display_name') or label
         if display_label != label:

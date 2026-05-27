@@ -11,7 +11,7 @@ class Project(Base):
     task_type = Column(String(50), default="detection")  # detection, segmentation, etc.
     pipeline_config = Column(JSON, nullable=True)
     default_model_id = Column(Integer, ForeignKey("models.id", ondelete="SET NULL"), nullable=True)
-    logic_mode = Column(String(50), default="sequential")  # sequential, detection, custom
+    logic_mode = Column(String(50), default="sequential")  # sequential / detection / custom / tracking / per_item
     steps_config = Column(JSON, nullable=True)  # 步骤配置
     events_config = Column(JSON, nullable=True)  # 事件配置
     counters_config = Column(JSON, nullable=True)  # 计数器配置

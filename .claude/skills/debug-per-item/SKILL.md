@@ -7,7 +7,7 @@ effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking"
 ---
 
-# debug-per-item: 逐件覆盖模式诊断（v3.8.0+）
+# debug-per-item: 逐件覆盖模式诊断（v3.8.0 引入 / v3.9.0 五补丁扩展）
 
 per_item 是 logic_mode 的**第 5 种**模式（前 4 种为 `sequential` / `detection` / `tracking` / `custom`），
 为「画面里 N 个独立个体 → 工序逐件覆盖 → 收尾标签结算」场景设计（典型：打螺丝、点焊检验、涂胶）。
@@ -67,28 +67,60 @@ per_item 是 logic_mode 的**第 5 种**模式（前 4 种为 `sequential` / `de
 
 ### 项目级 `pipeline_config.per_item`
 
-| 字段 | 默认 | 含义 |
-|------|------|------|
-| `stability_window_frames` | 10 | 连续 N 帧画面稳定才算"周期开始" |
-| `stability_iou_threshold` | 0.7 | 跨帧同位置 box IoU 阈值（数量必须恒定） |
-| `item_timeout_seconds` | 3.0 | 个体超时清理时间（**注意**：只清未覆盖件，已覆盖永远不清） |
-| `lock_count_on_start` | true | 周期开始锁定个体数 → 后续不再加新件 |
-| `finish_label` | `""` | 收尾标签（出现 `finish_sustain_frames` 帧 → 触发结算） |
-| `finish_sustain_frames` | 3 | 收尾标签需持续多少帧 |
+| 字段 | 默认 | 引入版本 | 含义 |
+|------|------|---------|------|
+| `stability_window_frames` | 10 | v3.8 | 连续 N 帧画面稳定才算"周期开始" |
+| `stability_iou_threshold` | 0.7 | v3.8 | **路径 B**: 跨帧同位置 box IoU 阈值（数量必须恒定） |
+| `stability_count_ratio` | 0.85 | **v3.9** | **路径 A**: 检出数 ≥ `expected_count × ratio` 即放行（替换之前硬编码 0.85） |
+| `stability_count_tolerance` | 0 | **v3.9** | **路径 A**: 与 `expected_count` 差几颗内允许启动 |
+| `item_timeout_seconds` | 3.0 | v3.8 | 个体超时清理时间（**注意**：锁定模式 + 已覆盖件永远不清，见 §六.1） |
+| `lock_count_on_start` | true | v3.8 | 周期开始锁定个体数 → 后续 dynamic 模式才会动态加 |
+| `lock_lookahead_seconds` | 5.0 | **v3.9** | 配 `expected_count` 时，周期开始后 N 秒窗口内继续吸收漏锁个体（应对启动那一帧个别被遮挡） |
+| `finish_label` | `""` | v3.8 | 收尾标签（出现 `finish_sustain_frames` 帧 → 触发结算）|
+| `finish_sustain_frames` | 3 | v3.8 | 收尾标签需持续多少帧 |
+| `settle_after_all_done_sec` | 0.0 | **v3.9** | > 0 时：所有 per_item 步骤都 completed 并保持 N 秒 → **立即 OK 结算**（不等收尾标签）|
+| `cycle_max_duration_sec` | 0.0 | **v3.9** | per_item **专属**周期超时（替代项目级 `pipeline_config.cycle_max_duration`，老项目自动回落兼容）。> 0 + 周期总时长超此 → 强制结算（NG 兜底）|
+| `idle_timeout_sec` | 0.0 | **v3.9** | per_item **专属**空闲超时（替代项目级 `pipeline_config.idle_timeout_seconds`，老项目自动回落兼容）。> 0 + 连续 N 秒无 **action 标签** → 强制结算（NG 兜底，**只看 action 不看 item**，否则工件静置永远 idle=0） |
 
 ### 步骤级 `steps_config[i].per_item`
 
-| 字段 | 默认 | 含义 |
-|------|------|------|
-| `item_label` | — | 个体识别标签（如"螺丝"） |
-| `action_label` | — | 工序覆盖标签（如"打螺丝"） |
-| `item_tracking_iou` | 0.3 | 个体跨帧 IoU（用于跟踪同一个个体） |
-| `coverage_iou` | 0.3 | 工序框与个体框的覆盖 IoU 阈值 |
-| `sustain_frames` | 5 | 工序与个体持续重叠 N 帧才算覆盖 |
-| `completion` | `"all_covered"` | 完成判定（本版仅实现该种） |
-| `min_item_count` | `"auto"` | 最低个体数（`"auto"` 或固定数字） |
+| 字段 | 默认 | 引入版本 | 含义 |
+|------|------|---------|------|
+| `item_label` | — | v3.8 | 个体识别标签（如"螺丝"）。**v3.9 起兼容数组 OR**：`["5N螺丝","7N螺丝"]` 表示任一标签都算个体 |
+| `action_label` | — | v3.8 | 工序覆盖标签（如"打螺丝"） |
+| `expected_count` | 0 | **v3.9** | > 0 → 启用**路径 A 固定数量模式**（替代 auto 稳定窗口）；0 → 走老路径 B |
+| `item_tracking_iou` | 0.3 | v3.8 | 个体跨帧 IoU（用于跟踪同一个个体） |
+| `coverage_iou` | 0.3 | v3.8 | 工序框与个体框的覆盖 IoU 阈值 |
+| `sustain_frames` | 5 | v3.8 | 工序与个体持续重叠 N 帧才算覆盖 |
+| `completion` | `"all_covered"` | v3.8 | 完成判定（**本版仍仅实现 `all_covered`**；其他值会兜底 `False` 且**无报错日志**，配错会"周期永远不结算"——见 §八扩展点 #1） |
+| `min_item_count` | `"auto"` | v3.8 | 路径 B 下最低个体数（`"auto"` 或固定数字）|
 
 **步骤不填 `per_item` 字段** → 视为收尾步骤，**不进入 per_item 步骤列表**（典型：翻面步骤，仅靠 finish_label 触发）。
+
+### v3.9 启动判定两条路径速查
+
+```
+┌─ 第 1 步配了 expected_count > 0 ──→ 路径 A (固定数量)
+│   连续 stability_window 帧, 每帧检出数 ≥ max(1, target × ratio, target - tolerance)
+│   → 立即锁定 + 进入周期 (锁定时挑窗口内"检出最多"的那一帧, 截顶到 expected_count)
+│   优势: 抖动/数量轻微波动不影响; 工件螺丝数已知场景首选
+│
+└─ 第 1 步未配 expected_count ──→ 路径 B (auto 老路径)
+    连续 stability_window 帧数量"完全恒定" + 相邻帧 NN-IoU > stability_iou_threshold
+    → 锁定最末帧 + 进入周期
+    适用: 不确定数量场景, 但抖动敏感
+```
+
+### v3.9 结算路径速查（按优先级）
+
+```
+1. settle_after_all_done_sec > 0 + 所有步骤已 completed 持续 N 秒 → OK 结算   (条件最严)
+2. cycle_max_duration_sec    > 0 + 周期总时长 > N 秒                → 强制结算 (NG 兜底)
+3. idle_timeout_sec          > 0 + 连续 N 秒无 action 标签           → 强制结算 (NG 兜底)
+4. finish_label != ""        + 收尾标签持续 finish_sustain_frames 帧 → 结算
+```
+
+> 任一路径 1-4 触发后 `_per_item_settle_cycle()`，按当前所有步骤 `completed` 状态判 OK/NG。配置全 0 / 全空 → 周期永远不结算（v3.8 原行为）。
 
 ---
 
@@ -107,33 +139,63 @@ per_item 是 logic_mode 的**第 5 种**模式（前 4 种为 `sequential` / `de
    - `null` → 当前项目根本没启用 per_item，检查 `pipeline_config.logic_mode`
    - 有但 `enabled=false` → 步骤 per_item 字段缺失，看日志 `[per_item] 步骤 [X] per_item 配置缺...`
 
-2. **稳定窗口未填满**：
-   ```bash
-   grep -c "稳定窗口" /tmp/tianjun-backend.log   # 看是否真有触发标签
-   ```
-   - 触发标签（任一步骤的 `item_label`）必须连续 `stability_window_frames` 帧出现 + 跨帧 IoU > 阈值
-   - 模型置信度低 / 抖动大 → 不稳定 → 永远不开周期
-   - **临时解法**：调小 `stability_iou_threshold`（如 0.5）或缩 `stability_window_frames`（如 5）
+2. **稳定窗口未填满（按路径分别排查，v3.9 起两条路径）**：
 
-3. **触发标签不一致**：模型输出的 label 字符串和 `steps_config[i].per_item.item_label` 必须**完全一致**（含中文标点空格）。
+   先看后端日志开头的"周期开始"打印行确认走的哪条路径：
+
+   ```bash
+   grep "周期开始" /tmp/tianjun-backend.log | tail -3
+   # 输出例: [per_item] 周期开始: 锁定首步个体数=12, frame_id=NNN, 路径=expected_count
+   #        或 路径=auto
+   ```
+
+   **若走路径 A（`expected_count > 0`，v3.9）**：
+   - 窗口内**每一帧**检出数 ≥ `max(1, expected_count × stability_count_ratio, expected_count - stability_count_tolerance)` 才放行
+   - 调试技巧：把 `stability_count_ratio` 临时降到 `0.5`，看是否能启动 → 启动说明模型检出数普遍偏低
+   - 配错 `expected_count`（例：写了 12 颗实际只能稳定检 9 颗）→ 永远启动不了
+
+   **若走路径 B（`expected_count` 为 0 / 未配，v3.8 老路径）**：
+   - 窗口里**数量必须完全恒定**（一帧出现一次抖动 → 整个窗口作废重来）
+   - 跨帧 IoU > `stability_iou_threshold` 阈值
+   - 模型置信度低 / 抖动大 → 永远不开周期
+   - **临时解法**：调小 `stability_iou_threshold`（如 0.5）或缩 `stability_window_frames`（如 5），**或干脆配 `expected_count` 切到路径 A**
+
+3. **触发标签不一致**：模型输出的 label 字符串和 `steps_config[i].per_item.item_label` 必须**完全一致**（含中文标点空格）。**v3.9 起 `item_label` 可以是数组**（`["5N螺丝","7N螺丝"]` 表 OR），但每个元素仍要与模型 label 精确一致。
 
 ### 故障 B：周期开始但永远不结算
 
 **症状**：进度条卡在 X/N，后端日志没有 `[per_item] 周期结算` 行。
 
-**排查链**：
+**v3.9 已新增 3 条结算路径（见 §二「结算路径速查」），故障 B 排查范围扩大**：
 
-1. **收尾标签未配置或对不上**：
-   - `pipeline_config.per_item.finish_label` 为空 → 永远不结算
-   - 模型输出 label ≠ `finish_label` → 永远不触发
+1. **4 条结算路径全部未配**（最常见配置错误）：
+   - `settle_after_all_done_sec` = 0 ✗
+   - `cycle_max_duration_sec` = 0 ✗
+   - `idle_timeout_sec` = 0 ✗
+   - `finish_label` = "" ✗
+   - → 周期**永远不结算**。至少要配其中一条
+   - **推荐组合**：`settle_after_all_done_sec=1.0` (OK 路径) + `idle_timeout_sec=15.0` (NG 兜底)
 
-2. **收尾标签持续帧不够**：
-   - `finish_sustain_frames` 默认 3 帧
-   - 收尾标签仅闪现 1-2 帧 → 不触发，提高模型对收尾标签的稳定性
+2. **`settle_after_all_done_sec` 配了但仍不结算**：
+   - 检查是否真的所有步骤 `completed=True`：
+     ```bash
+     curl -s "http://localhost:8001/api/v1/source/detection/results?channel=0" | jq '.per_item_state.steps[] | {label:.step_label, completed, cov:.covered_count, total:.total}'
+     ```
+   - 任一步骤 `completed=False` → 这条路径不触发，需要靠其他兜底
 
-3. **个体未全覆盖且无超时机制**：
-   - per_item 当前**没有"周期超时强制结算"机制**（这是 v3.8.0 已知短板）
-   - 工人放下不干 → 永远不结算 → 必须靠操作员手动 stop_session 或上 finish_label
+3. **`idle_timeout_sec` 配了但仍不结算**：
+   - **只看 action 标签，不看 item 标签**（v3.9 设计）—— 工件静置画面有 item 也不刷新 idle
+   - 工人手离开但 action 标签是非"打螺丝"类**易误检的标签** → 模型仍持续输出 → idle 计时被刷新 → 不触发
+   - 排查：`grep "action 标签" /tmp/tianjun-backend.log` 或看 `_per_item_session.last_activity_time`
+
+4. **`finish_label` 收尾标签未触发**：
+   - 配了但模型输出 label ≠ `finish_label` → 永远不触发
+   - 收尾标签仅闪现 1-2 帧 < `finish_sustain_frames`（默认 3） → 不触发
+
+5. **`completion` 配了 `all_covered` 以外的值**（v3.8 起未实现）：
+   - `_PerItemStep.check_completion()` 仅认 `'all_covered'`，其他**兜底 False 且无日志**
+   - 设置了 `"min_n_covered"` 之类 → 步骤永远 `completed=False` → `settle_after_all_done_sec` 路径永不触发
+   - 见 §八扩展点 #1
 
 ### 故障 C：明明漏件却报 OK（或反之）
 
@@ -298,10 +360,12 @@ mgr._per_item_last_ng_detail = {
    - per_item 步骤完成时 `step_counts[step_label] += 1`，等价于 sequential 行为
    - `_trigger_event(1/2, reason)` 直接走老 hook，MES / 报警 / 实时导出全链路自然衔接
 
-3. **没有"周期内单件超时立即 NG"机制**（v3.8.0 短板）：
-   - 仅在收尾标签触发后才整体判 NG
-   - 如需"漏一颗就立刻报警"，要在 `_update_step_stats_per_item` 里加 per-item 倒计时
-   - **不要混淆**：`cleanup_stale_items` 用的 `item_timeout_seconds` 是**清理用**不是**报警用**
+3. **粒度递进的"周期内强制结算"机制（v3.8 → v3.9 演化）**：
+   - **v3.8.0 短板**：仅靠收尾标签触发整体 NG，工人放下不干就永远不结算
+   - **v3.9.0 部分修复**：加 `cycle_max_duration_sec`（周期总时长上限）+ `idle_timeout_sec`（无 action 持续超时）→ 周期级 NG 兜底已可用
+   - **仍未做**：**单件级**立即 NG（漏哪颗就立刻报哪颗，对应未覆盖件触发 `_trigger_event(2)`）
+   - 如需此能力，要在 `_update_step_stats_per_item` 里加 per-item 倒计时 + 防重 set，见 §八扩展点 #2
+   - **不要混淆**：`cleanup_stale_items` 用的 `item_timeout_seconds` 是**清理用**不是**报警用**；而且锁定模式下根本是 no-op（mixin 265-266）
 
 4. **mock endpoint 仅注入第一个 per_item 步骤**：
    - `step = mgr._per_item_steps[0]` 写死的
@@ -335,19 +399,32 @@ mgr._per_item_last_ng_detail = {
 
 如需为 per_item 加新能力，按优先级：
 
-1. **加 `completion` 类型**（如 `"min_n_covered"`）：
-   - `_PerItemStep.check_completion()` 加分支
-   - `steps_config[i].per_item.completion` 配置值
-   - 前端 Project/index.vue 加下拉
+1. **❌ 未做 - 加 `completion` 类型**（如 `"min_n_covered"` / `"n_of_m"`）：
+   - 客户已发现需求：例 "10 颗里覆盖到 8 颗即算完成"（容忍 2 颗漏件）
+   - `_PerItemStep.check_completion()` 当前**仅认 `all_covered`，其他兜底 False 且无日志**（mixin 286 行）
+   - 实现：
+     - `check_completion()` 加 `min_n_covered` / `n_of_m` 分支
+     - **顺手加未实现类型的 WARN 日志**（避免客户配错字段静默卡死，见 §三故障 B.5）
+     - `steps_config[i].per_item.completion` 配置值 + 配套参数（如 `min_n` 字段）
+     - 前端 `Project/index.vue` 加下拉 + 关联参数输入
 
-2. **加"周期内立即 NG"**（漏件立即报警）：
-   - `_update_step_stats_per_item` 末尾加遍历 items，对未覆盖件做 `time.time() - first_seen_at > X` 判断
-   - 触发 `_trigger_event(2, ...)` 但**不重置周期**（避免连发）
-   - 标记位 `_per_item_session.warned_items: set[int]` 防重
+2. **🟡 半做 - "周期内立即 NG"（漏件立即报警）**：
+   - **v3.9 已做**：周期级 NG 兜底（`cycle_max_duration_sec` / `idle_timeout_sec`）
+   - **仍未做**：**单件级**立即 NG（漏哪颗 → 触发哪颗的报警），需求来自"实时质量看板"
+   - 实现：
+     - `_update_step_stats_per_item` 末尾加遍历 items，对未覆盖件做 `current_time - item.first_seen_at > X` 判断
+     - 触发 `_trigger_event(2, ...)` 但**不重置周期**（避免连发）
+     - 标记位 `_per_item_session.warned_items: set[int]` 防重
+     - 新增项目级配置 `per_item.single_item_warn_after_sec`
 
-3. **PerItemPanel 加自定义可视化**（如 SVG 热力图）：
+3. **❌ 未做 - PerItemPanel 加自定义可视化**（如 SVG 热力图 / minimap）：
    - 新建 `frontend/src/views/Monitor/components/PerItemMinimap.vue`
-   - PerItemPanel 引入并按 step 渲染
+   - PerItemPanel 引入并按 step 渲染（参考 tracking 模式 `TrackingMinimap.vue` 已有实现）
+
+4. **❌ 未做 - mock endpoint 多步骤支持**：
+   - `source_routes.py:/detection/per-item-mock` 当前写死 `step = mgr._per_item_steps[0]`（见 §六.4）
+   - 多步骤项目（"打螺丝 + 划螺丝 + 涂胶"）的演示场景受限
+   - 实现：加 `?step_index=N` 或 `?step_label=xxx` 参数
 
 ---
 
@@ -355,7 +432,7 @@ mgr._per_item_last_ng_detail = {
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `backend/api/source_per_item_mixin.py` | ~650 | 主 Mixin + 3 个状态类 |
+| `backend/api/source_per_item_mixin.py` | 869 | 主 Mixin + 3 个状态类（v3.9.0 加五补丁） |
 | `backend/api/source.py` | — | 引入 `PerItemMixin` 加进 VSM 继承链 |
 | `backend/api/source_step_stats_mixin.py` | — | `_update_step_stats` 入口分流 |
 | `backend/api/source_project_config_apply.py` | — | 末尾调 `_per_item_apply_config` |
@@ -363,5 +440,7 @@ mgr._per_item_last_ng_detail = {
 | `frontend/src/views/Monitor/PerItemPanel.vue` | ~260 | 视频下方全宽面板 |
 | `frontend/src/views/Monitor/index.vue` | — | `isPerItemMode` + 右侧"逐件实时反馈"卡 |
 | `frontend/src/views/Project/index.vue` | — | 项目级 + 步骤级配置 UI |
-| `tests/test_per_item_smoke.py` | ~330 | 10 个冒烟用例（OK/NG/sustain/timeout/重新打） |
+| `tests/test_per_item_smoke.py` | 363 | 10 个冒烟用例（OK/NG/sustain/timeout/重新打） |
+| `tests/test_per_item_v39_features.py` | 539 | **v3.9 五补丁专属测试**（expected_count / lookahead / settle_after_all_done / item_label 数组 / idle_timeout / cycle_max） |
+| `tests/test_synthetic_per_item.py` | 345 | 合成场景测试（多步骤组合 / 边界 case）|
 | `~/per-item-mock.sh` | — | 一键 mock 脚本 |

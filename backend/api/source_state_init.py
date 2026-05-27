@@ -120,6 +120,9 @@ def _init_step_state(h):
     h.idle_timeout_seconds = 0
     h.cycle_max_duration = 0
     h.step_conf_thresholds = {}
+    # v3.10+ 步骤级 box 尺寸过滤: {label: (max_w, max_h)} 归一化比例
+    # 0 / 缺省 = 关闭过滤; 用途见 source_detect_runners_mixin._passes_box_size_limit
+    h.step_box_size_limits = {}
 
     # 传动杆误判过滤 (默认全关, 从 project_config 动态读)
     h._rod_filter_cfg = read_rod_filter_config(None)
