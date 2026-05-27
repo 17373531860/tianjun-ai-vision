@@ -1911,6 +1911,12 @@ const processChannelResult = (ch, d) => {
   if (d.detections) {
     const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
     const screenshots = d.step_screenshots || {};
+    // v3.10.x: SOP 卡片"图永不空"策略 — 后端有新图就替换, 没有就从上一轮按 label 继承,
+    // 让客户视觉上始终有缩略图(包括短步骤截图节流漏窗 / 跨周期间隙等场景).
+    // 状态色仍由 status/cycleResult 控制, 图片与状态完全解耦.
+    const prevSopByLabel = Object.fromEntries(
+      (chData.steps || []).map(s => [s.label, s.screenshot])
+    );
     const sopSteps = stepsConf
       .filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view && _trkAllow(s.label))
       .map(s => {
@@ -1923,7 +1929,9 @@ const processChannelResult = (ch, d) => {
           name: s.displayLabel || s.label,
           label: s.label,
           status: (inCycle || coveredByBackup || trackHit) ? 'completed' : 'pending',
-          screenshot: rawB64 ? `data:image/jpeg;base64,${rawB64}` : null,
+          screenshot: rawB64
+            ? `data:image/jpeg;base64,${rawB64}`
+            : (prevSopByLabel[s.label] || null),
         };
       });
     chData.steps = sopSteps;
@@ -3456,6 +3464,11 @@ watch(() => currentProject.value, (newProject, oldProject) => {
   stepsToShow = stepsToShow.filter(s => !s.backup_for && !s.hide_in_view);
 
   // 更新步骤条 - 同时保存 label 用于后端匹配
+  // v3.10.x: SOP 卡片"图永不空"策略 — 重建步骤数组时按 label 从旧数组继承缩略图.
+  // (切项目: 新 label 找不到 → 自然落 null; 同项目 deep 变化: label 不变 → 完美继承)
+  const oldByLabel = Object.fromEntries(
+    (steps.value || []).map(s => [s.label, s.screenshot])
+  );
   steps.value = stepsToShow.map((s, idx) => ({
     id: s.id,
     name: s.displayLabel || s.label,
@@ -3463,7 +3476,7 @@ watch(() => currentProject.value, (newProject, oldProject) => {
     status: 'pending',
     result: null,
     cycleResult: null,
-    screenshot: null
+    screenshot: oldByLabel[s.label] || null,
   }));
 
   // 更新表格数据
