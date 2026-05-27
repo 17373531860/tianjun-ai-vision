@@ -541,8 +541,32 @@ curl -sI http://127.0.0.1:6001/ | head -1
    单独跑 6/6 绿）。怀疑是 `MESHook`/`ChannelManager` 模块级单例没被前面测试干净复位。
    **临时方案**：发版前单独再跑 `pytest tests/test_synthetic_*.py` 确认绿，
    长远要给这三类组件加 conftest function-scope reset fixture。
+   **v3.12 实测**：合并 `feat/per-item-enhance` 后新加的 `tests/test_per_item_v310_features.py`
+   也吃这一份毒: 单跑 7/7 全绿, 跟其他 600+ 测试一起跑 2 个 fail (require_exact_count /
+   disable_auto_settle). 同样属于 module-level 单例污染家族, 不阻塞发版。
 
-4. **合并后必须冒烟 `python -c "from backend.main import app"`**：
+4. **测试 fixture 与生产代码字段名漂移**（v3.12 修过 `test_periodic_actions_v352`）：
+   测试 fixture 给 `trigger_labels: [...]`, 但生产代码 `_apply_periodic_actions` 读的是
+   `trigger_step_ids` 或 `trigger_step_labels` (没 _step 前缀的不读)。结果 rule 解析后
+   `trigger_labels` 集合空 → 触发器被跳过 → 旁路账本永远空 → 6 个测试全 fail。
+   **常见踩坑**：写测试 fixture 时一定对照生产代码 `_apply_*` 解析逻辑里的 `raw.get('xxx')` 字段名,
+   别凭印象写。新加生产字段时搜全测试 fixture 是否要同步。
+
+5. **MagicMock 自动属性导致路由走错路径**（v3.12 修过 `test_pt_ct_modes_exposure`）：
+   `MagicMock()` 默认对未显式设置的属性返新 `MagicMock` 实例 (不是 `None`/`AttributeError`)。
+   生产代码 `getattr(mgr, 'method', None)` 永远拿到一个新 mock → `is not None` 误为真 →
+   `round(MagicMock, 2)` 返 dict → 测试断言 `<` 报 `TypeError`。
+   **修法**：测试 fixture 把不想被路由调到的方法 / 属性显式设 `None`, 让 `is not None` 守门生效。
+   长远建议用 `spec=RealClass` 限定 MagicMock 的属性集。
+
+6. **测试环境缺 `jsonschema` 等可选依赖**（v3.12 装过）：
+   `backend/plugin_system/_plugin_common.py: validate_manifest` 用 jsonschema 库做 schema 严格校验,
+   缺依赖时静默走 fallback 模式只校验 3 个粗粒度字段 (required / customer_code / plugin_version) →
+   stores prefix / table prefix / adapter prefix / hook enum 等 67 个细粒度测试集体降级 fail。
+   **必装清单**: `jsonschema` (plugin_system 用), `allpairspy` (test_pairwise_*.py 用)。
+   建议在 `requirements-dev.txt` 显式声明。
+
+7. **合并后必须冒烟 `python -c "from backend.main import app"`**：
    两条 v3.6.0 分支并行改动 mes_hooks / source_settlement / migrate_database，
    合上来可能引入隐式 NameError / ImportError 只有 import 时才会暴露。
 

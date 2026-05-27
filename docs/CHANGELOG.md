@@ -1,5 +1,28 @@
 # Changelog
 
+## v3.12.0 (2026-05-27)
+
+> 合并 `chore/feature-verify` + `feat/per-item-enhance` 两条主线分支正式发版 (跳过 v3.11.x 直接到 v3.12.0, 用户决定)。无破坏性改动, 老项目 JSON/DB/接口全部兼容。详细 changelog 见 `docs/changelog/v3.12.0_2026-05-27.md`。
+
+- [FEAT-001] **per_item 严格等量周期触发** — `pipeline_config.per_item.require_exact_count = True` 时改成"稳定窗口里每帧 == expected_count"+ "次步同时刻 ≥ 各自 expected_count"才开周期, 治打螺丝场景漏件被算 NG。
+- [FEAT-002] **per_item 手动结算模式** — `disable_auto_settle = True` 时跳过所有自动收尾, 仅手动 `/api/v1/source/detection/per-item-control settle` 或 `force_start` 才动周期状态, 给师傅手动按按钮的现场用。
+- [FEAT-003] **box 尺寸过滤 (post-YOLO 守门)** — 新增 `_passes_box_size_limit`, 按 `steps_config[i].per_item.box_max_width / box_max_height` (归一化坐标) 过滤超大检测框 (整个料盒 / 操作员手臂误识别)。
+- [FEAT-004] **per_item 检测短路放行** — `_get_confirmed_detections` 在 logic_mode == per_item 时直接放行, 跟 synthetic 模式同等待遇, 治 per_item 首次检出永远凑不齐 expected_count。
+- [FEAT-005] **SOP 卡片"图永不空"** — Monitor 步骤缩略图按 label 跨周期继承上一周期同 label 的最后一帧, 治新周期开始那一瞬间灰白闪一下的视觉跳变。
+- [BUG-001] **conftest.py 漏 import auth_models** — v3.10.0 用户系统引入的 users 表没在 conftest 显式 import, `Base.metadata.create_all` 解析 ForeignKey 时炸 → 全套测试无法跑。补一行 import 修复。
+- [BUG-002] **test_pt_ct_modes_exposure MagicMock 自动属性问题** — MagicMock 默认对未显式设属性返新实例, 让路由 `_compute_dur is not None` 误为真, `round(MagicMock, 2)` 返 dict → 测试断言炸。fixture 显式设 None 走 wall-clock fallback。
+- [BUG-003] **test_periodic_actions_v352 字段名漂移** — 测试 fixture 给 `trigger_labels`, 生产代码读 `trigger_step_labels` (没 _step 前缀的不读) → rule 解析后空集合 → 旁路账本永远空。fixture 字段名对齐生产代码。
+- [BUG-004] **scanner_bypass 集成测试没跟上模板英文化** — v3.7.3 按客户固定英文要求把内置扫码器旁路模板从 "合格/不合格" 改成 "Pass/Fail", 集成测试没跟上。5 个断言批改 Pass/Fail + 第 4 行只断言时长数值。
+- [BUG-005] **测试环境缺 jsonschema 依赖** — plugin_system 67 个细粒度测试因 fallback 模式集体降级。`pip install jsonschema` 后 81/81 全 PASS。
+- [TEST-001] **新增 tests/test_per_item_v310_features.py** — 7 个 synthetic 剧本驱动的端到端测试, 覆盖 per-item-control API + require_exact_count + disable_auto_settle + force_start + box_max + SOP 字段契约。
+- [TEST-002] **新增 tests/uat/uat_v3102_merge_verify.py** — 21 步 Playwright UAT (headless=False + 视频录制 + 关键步骤截图), Phase A API 契约 + Phase B 前端 UI + Phase C 清理。
+
+Skill 更新: `debug-per-item` 补 v3.12 章节, `run-tests` 补 jsonschema 缺依赖 / 测试 fixture 字段漂移踩坑。
+
+已知问题 (暂不修): 9 个测试串污染 (单跑全绿, 全套批跑 fail), 根因 MESHook / ChannelManager module-level 单例没清, 修需给 conftest 加 autouse reset fixture, 风险大留作 v3.12.x 整理。
+
+---
+
 ## v3.10.2 (2026-05-26)
 
 > **紧急修复版**：v3.10.1 / v3.10.0 / 之前所有版本存在 **machineId 多机撞 ID 漏洞**（已确认现场出现 7-8 台机器同 ID）。本版重做硬件指纹采集逻辑，**不影响老客户在用机器的 license**，但新装机会拿到唯一 ID。详细 changelog 见 `docs/changelog/v3.10.2_2026-05-26.md`。

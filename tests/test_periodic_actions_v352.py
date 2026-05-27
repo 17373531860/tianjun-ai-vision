@@ -561,7 +561,10 @@ class TestPeriodicTriggerObservedBypassesSequentialFilter:
             "name": f"保养-{rid}",
             "interval": interval,
             "trigger_step": trigger,
-            "trigger_labels": [trigger],
+            # _apply_periodic_actions 读 trigger_step_labels (兼容前端直传 labels);
+            # v3.7.5 测试历史上写成 trigger_labels (没 _step 前缀), 与生产代码字段
+            # 名不一致 → _apply 解析后 rule 列表为空 → _observe 永远不写账本.
+            "trigger_step_labels": [trigger],
             "due_event_id": 300,
             "overdue_event_id": 301,
             "due_message": "{name} 该做了 ({counter}/{interval})",

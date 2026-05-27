@@ -155,7 +155,7 @@ def test_strategy_mtime_basic(db_session, dirs, project, cycle, builtin_tpl):
     assert os.path.exists(out_path)
     content = open(out_path).read()
     assert "SN_A1_VAL" in content
-    assert "合格" in content
+    assert "Pass" in content  # v3.7.3+ 客户需求 Pass/Fail
 
 
 # ============================================================
@@ -191,7 +191,7 @@ def test_strategy_mtime_stable_max_age_filters_old(
     # 首行空, 后续 3 行该有的还有
     lines = content.splitlines()
     assert lines[0] == ""
-    assert "合格" in content
+    assert "Pass" in content  # v3.7.3+ 客户需求 Pass/Fail
 
 
 def test_strategy_mtime_stable_accepts_fresh(

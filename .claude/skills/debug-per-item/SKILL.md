@@ -442,5 +442,54 @@ mgr._per_item_last_ng_detail = {
 | `frontend/src/views/Project/index.vue` | — | 项目级 + 步骤级配置 UI |
 | `tests/test_per_item_smoke.py` | 363 | 10 个冒烟用例（OK/NG/sustain/timeout/重新打） |
 | `tests/test_per_item_v39_features.py` | 539 | **v3.9 五补丁专属测试**（expected_count / lookahead / settle_after_all_done / item_label 数组 / idle_timeout / cycle_max） |
+| `tests/test_per_item_v310_features.py` | 320 | **v3.12 合并验收测试**（require_exact_count / disable_auto_settle / force_start / box_max / SOP 字段契约 / per-item-control API 校验）|
 | `tests/test_synthetic_per_item.py` | 345 | 合成场景测试（多步骤组合 / 边界 case）|
 | `~/per-item-mock.sh` | — | 一键 mock 脚本 |
+
+---
+
+## 十、v3.12 增量功能（require_exact_count / 手动结算 / box 尺寸过滤）
+
+### 10.1 严格等量周期触发（require_exact_count）
+
+**位置**: `pipeline_config.per_item.require_exact_count`（项目级 bool, 默认 false）
+
+**作用**: True 时把"开周期"条件从 v3.10.x 的"看到任一 expected 标签"升级为
+- 稳定窗口里**每帧**检出数 == 项目级 `expected_count`
+- 同时刻次步检出 ≥ 各自 `expected_count`
+
+**典型场景**: 打螺丝 6 颗, 师傅放了 5 颗就开周期会被算 NG —— 客户希望"必须看到 6 颗稳定 N 帧"才正式起步。
+
+**调试线索**:
+- 周期不开始 → 看 PerItemPanel 显示的"当前帧检出数 vs expected_count"对得上吗
+- 一直在"等"状态 → require_exact_count 是 True 吗 + expected_count 配的数对吗
+- 路径: `_per_item_should_start_cycle` 在 `source_per_item_mixin.py`
+
+### 10.2 手动结算模式（disable_auto_settle）
+
+**位置**: `pipeline_config.per_item.disable_auto_settle`（项目级 bool, 默认 false）
+
+**作用**: True 时跳过所有自动收尾（sustain_frames 满 / cycle_max_seconds 到 / 收尾标签触发）, 仅这两个手动 action 才动周期状态:
+- `POST /api/v1/source/detection/per-item-control { action: "settle" }` —— 手动结算当前周期
+- `POST /api/v1/source/detection/per-item-control { action: "force_start" }` —— 立即开周期（不等触发条件）
+
+**API 守门**:
+- 非 per_item 模式调 → 400 拒绝
+- 未知 action → 400 拒绝
+- 详见 `tests/test_per_item_v310_features.py::test_per_item_control_rejects_*`
+
+**调试线索**:
+- 周期一直不结算 → 看 disable_auto_settle 是 True 吗 + 师傅按按钮了吗
+- API 报 400 → 看 logic_mode 是不是 per_item
+
+### 10.3 box 尺寸过滤（box_max_width / box_max_height）
+
+**位置**: `steps_config[i].per_item.box_max_width / box_max_height`（步骤级 float, 0-1 归一化坐标）
+
+**作用**: post-YOLO 守门, 标签匹配且检测框任一维度超过上限直接过滤。治"整个料盒 / 操作员手臂"被识别成一颗巨型螺丝误开周期。
+
+**实现**: `source_detect_runners_mixin._passes_box_size_limit` 在三种 runner 路径里都跑一遍。
+
+**调试线索**:
+- 误开周期 → 在 Monitor 视频流上看"假阳性"框, 量它的归一化宽高
+- 配 box_max 后还误检 → 看 `steps_config[i].per_item` 里字段名是 `box_max_width` 不是 `max_box_width` (顺序)

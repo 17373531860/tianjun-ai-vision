@@ -208,10 +208,12 @@ def test_scanner_bypass_full_chain_with_builtin_preset(
     # 关键断言:
     assert lines[0] == "WP20260513_001", f"第1行应为序列号, got {lines[0]!r}"
     assert lines[1] == "", f"第2行应为空行, got {lines[1]!r}"
-    assert lines[2] == "合格", f"第3行应为合格 (cycle.is_good=True), got {lines[2]!r}"
-    assert "取件: 2.34s" in lines[3], f"第4行应含步骤时长, lines={lines}"
-    assert "装配: 5.67s" in lines[3]
-    assert "检查: 1.89s" in lines[3]
+    # v3.7.3+ 模板按客户需求把 "合格/不合格" 改成 Pass/Fail (固定英文要求)
+    assert lines[2] == "Pass", f"第3行应为 Pass (cycle.is_good=True), got {lines[2]!r}"
+    # v3.7.3+ 模板第 4 行只输出步骤时长数值 (不带步骤名标签), 用 | 分隔
+    assert "2.34s" in lines[3], f"第4行应含步骤1时长, lines={lines}"
+    assert "5.67s" in lines[3]
+    assert "1.89s" in lines[3]
     assert " | " in lines[3], "步骤间应用 | 分隔"
     # 第5行版本号 (实际 app.version 取自 backend, 不假设具体值; 但不能为空)
     assert lines[4].strip() != "", f"第5行应为版本号, got {lines[4]!r}"
@@ -264,7 +266,8 @@ def test_scanner_bypass_ng_cycle_renders_buhege(
     assert os.path.exists(out_path), f"输出应存在, dir={os.listdir(scanner_dirs['out'])}"
     content = open(out_path, "r", encoding="utf-8").read()
     assert "WP_NG_001" in content
-    assert "不合格" in content
+    # v3.7.3+ 客户需求: 不合格 → Fail
+    assert "Fail" in content
 
 
 def test_scanner_bypass_picks_latest_txt(
@@ -344,6 +347,6 @@ def test_scanner_bypass_empty_dir_still_succeeds(
     lines = content.splitlines()
     # 首行空 (扫码内容空)
     assert lines[0] == ""
-    # OK/NG / 步骤时长 / 版本 该有的还有
-    assert "合格" in content
-    assert "取件: 2.34s" in content
+    # OK/NG / 步骤时长 / 版本 该有的还有 (v3.7.3+ Pass/Fail 客户需求, 第 4 行仅时长数值)
+    assert "Pass" in content
+    assert "2.34s" in content

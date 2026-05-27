@@ -65,6 +65,7 @@ from backend.db.database import Base, engine, SessionLocal  # noqa: E402
 from backend.models import models as _orm_models  # noqa: F401, E402
 from backend.models import export_models as _export_models  # noqa: F401, E402
 from backend.models import plugin_models as _plugin_models  # noqa: F401, E402
+from backend.models import auth_models as _auth_models  # noqa: F401, E402
 
 
 def _pg_reset_schema() -> None:

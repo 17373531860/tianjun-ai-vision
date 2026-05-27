@@ -47,6 +47,13 @@ def _make_mock_mgr(*, cycle_times, ng_cycle_times, step_history,
     mgr.fps_actual = 0.0
     mgr.fps_inference = 0.0
     mgr.latency = 0.0
+    # v3.10.x: 路由用 _compute_duration_sec 算 CT (B方案v2 帧号驱动).
+    # MagicMock 默认对未设属性返新 MagicMock 实例, 让 `_compute_dur is not None`
+    # 误为真, round(MagicMock, 2) 返 dict → 测试 assert "<" 报 TypeError.
+    # 显式设 None 让路由 fallback 到 wall-clock 路径 (testing 模式干净的契约).
+    mgr._compute_duration_sec = None
+    mgr.cycle_start_frame_pos = 0
+    mgr.video_current_frame = 0
     mgr.get_detections = MagicMock(return_value=[])
     mgr.get_periodic_actions_status = MagicMock(return_value=[])
     mgr.get_recording_failures = MagicMock(return_value=[])

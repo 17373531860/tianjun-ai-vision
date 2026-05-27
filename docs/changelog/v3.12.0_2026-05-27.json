@@ -1,0 +1,176 @@
+{
+  "version": "3.12.0",
+  "date": "2026-05-27",
+  "previous_version": "3.10.2",
+  "summary": "合并 chore/feature-verify + feat/per-item-enhance 两条主线分支正式发版; 跳过 v3.11.x 直接到 v3.12.0 (用户决定). 新增 per_item 严格等量+手动结算+box 尺寸过滤 + Monitor SOP 图永不空 + 5 类历史测试失败修复.",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "per_item 严格等量周期触发",
+      "symptom": "客户期望 6 颗螺丝, 不到 6 颗也开周期被算成 NG",
+      "root_cause": "v3.10.x per_item 的 should_start_cycle 用 '看到任一 expected 标签' 触发, 没要求数量",
+      "fix": "新增 require_exact_count, True 时改成 '稳定窗口里每帧 == expected_count' + '次步同时刻 ≥ 各自 expected_count'",
+      "files": [
+        "backend/api/source_per_item_mixin.py",
+        "backend/api/source_project_config_apply.py",
+        "frontend/src/views/Project/index.vue"
+      ],
+      "keywords": ["per_item", "require_exact_count", "严格等量", "漏件", "稳定窗口"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "per_item 手动结算模式",
+      "symptom": "部分客户希望师傅手动按按钮才认这一周期, 软件不能自作主张结算",
+      "root_cause": "v3.10.x 自动收尾 (sustain_frames / cycle_max_seconds / 收尾标签) 总会触发结算",
+      "fix": "新增 disable_auto_settle, True 时跳过所有自动收尾, 仅手动 /per-item-control settle 或 force_start 才动周期状态",
+      "files": [
+        "backend/api/source_per_item_mixin.py",
+        "backend/api/source_routes.py",
+        "frontend/src/views/Project/index.vue",
+        "frontend/src/views/Monitor/PerItemPanel.vue"
+      ],
+      "keywords": ["per_item", "手动结算", "disable_auto_settle", "per-item-control", "force_start"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "box 尺寸过滤 (post-YOLO 守门)",
+      "symptom": "现场摄像头偶尔把整个料盒 / 操作员手臂识别成一颗巨型螺丝, 误开周期",
+      "root_cause": "YOLO 输出框没有上限守门",
+      "fix": "新增 _passes_box_size_limit, 按 steps_config[i].per_item.box_max_width/height (归一化坐标) 过滤超大检测框",
+      "files": [
+        "backend/api/source_detect_runners_mixin.py",
+        "backend/api/source_project_config_apply.py",
+        "frontend/src/views/Project/index.vue"
+      ],
+      "keywords": ["per_item", "box_max_width", "box_max_height", "检测框过滤", "误检"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "per_item 检测短路放行",
+      "symptom": "per_item 模式首次检出永远凑不齐 expected_count",
+      "root_cause": "_get_confirmed_detections 的连续帧确认机制把 per_item 的瞬时累计计数语义吃掉",
+      "fix": "logic_mode == per_item 时直接 return list(detections), 跟 synthetic 模式同等待遇",
+      "files": ["backend/api/source.py"],
+      "keywords": ["per_item", "_get_confirmed_detections", "检测短路"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "SOP 卡片图永不空策略",
+      "symptom": "Monitor 步骤缩略图新周期那一瞬间被清空 → 灰白闪一下再填新图, 视觉跳变明显",
+      "root_cause": "v3.10.x 新周期开始时 step_screenshots 直接清空了",
+      "fix": "新周期开始时按 label 跨周期继承上一周期同 label 的最后一帧, 没有再 fallback 占位图",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["SOP 卡片", "步骤缩略图", "图永不空", "跨周期继承"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "tests/conftest.py 漏 import auth_models",
+      "symptom": "pytest 启动后 Base.metadata.create_all 报 sqlalchemy.exc.NoReferencedTableError: users, 全套测试无法跑",
+      "root_cause": "v3.10.0 feat/user-system 引入 auth_models.py, 业务代码会 import 但 conftest 没显式 import → SQLAlchemy 解析 ForeignKey 时炸",
+      "fix": "conftest.py 跟其他 ORM 模块一起加 from backend.models import auth_models as _auth_models",
+      "files": ["tests/conftest.py"],
+      "keywords": ["conftest", "auth_models", "NoReferencedTableError", "测试基础设施"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "test_pt_ct_modes_exposure MagicMock 自动属性导致路由走错路径",
+      "symptom": "test_current_cycle_time_在跑时大致正确 报 TypeError: '<' not supported between instances of 'float' and 'dict'",
+      "root_cause": "MagicMock 对未显式设的属性返新 MagicMock 实例, 让路由 _compute_dur is not None 误为真, round(MagicMock, 2) 返 dict",
+      "fix": "_make_mock_mgr 显式设 mgr._compute_duration_sec = None + 帧号字段, 让路由走 wall-clock fallback",
+      "files": ["tests/test_pt_ct_modes_exposure.py"],
+      "keywords": ["pt_ct", "MagicMock", "自动属性", "_compute_duration_sec", "测试 fixture"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "test_periodic_actions_v352 字段名漂移",
+      "symptom": "TestPeriodicTriggerObservedBypassesSequentialFilter 6 个测试全 fail, _periodic_triggers_observed 集合永远空",
+      "root_cause": "测试 fixture 给 trigger_labels 但生产代码读 trigger_step_labels (没 _step 前缀的不读) → rule 解析后 trigger_labels 集合为空 → '规则无有效 trigger 步骤跳过'",
+      "fix": "测试 fixture 补 trigger_step_labels 跟生产代码字段名对齐",
+      "files": ["tests/test_periodic_actions_v352.py"],
+      "keywords": ["periodic_actions", "trigger_step_labels", "测试 fixture", "旁路账本"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "scanner_bypass 集成测试没跟上 v3.7.3 模板英文化",
+      "symptom": "5 个 scanner_bypass 集成测试 fail, 期望 '合格/不合格' 实际 'Pass/Fail'; 步骤时长格式从 '取件: 2.34s' 变成 '2.34s | 5.67s | 1.89s'",
+      "root_cause": "v3.7.3 按客户固定英文要求把内置扫码器旁路模板英文化, 集成测试没跟上",
+      "fix": "5 个断言统一改 Pass/Fail + 第 4 行只断言时长数值",
+      "files": [
+        "tests/test_integration_scanner_bypass_export.py",
+        "tests/test_integration_scanner_bypass_strategies.py"
+      ],
+      "keywords": ["扫码器旁路", "内置模板", "Pass/Fail", "模板英文化"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-005",
+      "title": "测试环境缺 jsonschema 依赖",
+      "symptom": "tests/plugin_system/test_validate_manifest.py 7 个细节断言 fail, 错误统一 'DID NOT RAISE ManifestValidationError'",
+      "root_cause": "_plugin_common.validate_manifest 用 jsonschema 严格校验, 测试环境没装 → 走 fallback 只校验 3 个粗粒度字段 → 67 个细粒度测试集体降级",
+      "fix": "pip install jsonschema 4.26.0 + 依赖, 装好后 plugin_system 81/81 全 PASS",
+      "files": [],
+      "keywords": ["jsonschema", "plugin_system", "ManifestValidationError", "测试环境依赖"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "tests/test_per_item_v310_features.py 合并验收主测试",
+      "symptom": "v3.12 合并的 5 个新功能没有专属端到端测试",
+      "root_cause": "新增功能没自带验收套件",
+      "fix": "新增 7 个 synthetic 剧本驱动的端到端测试, 覆盖 per-item-control API 校验 / require_exact_count / disable_auto_settle / force_start / box_max 配置 / SOP 字段契约",
+      "files": ["tests/test_per_item_v310_features.py"],
+      "keywords": ["per_item", "synthetic", "端到端测试", "合并验收"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-002",
+      "title": "tests/uat/uat_v3102_merge_verify.py Playwright 可见浏览器 UAT",
+      "symptom": "前端 UI 验收没有自动化覆盖",
+      "root_cause": "缺少跨前后端的可视化端到端验收脚本",
+      "fix": "新增 21 步 Playwright UAT (headless=False + 视频录制 + 关键步骤截图), Phase A API 契约 + Phase B 前端 UI + Phase C 清理",
+      "files": ["tests/uat/uat_v3102_merge_verify.py"],
+      "keywords": ["Playwright", "UAT", "可见浏览器", "端到端验收"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [
+    "debug-per-item",
+    "run-tests"
+  ],
+  "files_changed": [
+    "electron/package.json",
+    "tests/conftest.py",
+    "tests/test_pt_ct_modes_exposure.py",
+    "tests/test_periodic_actions_v352.py",
+    "tests/test_integration_scanner_bypass_export.py",
+    "tests/test_integration_scanner_bypass_strategies.py",
+    "tests/test_per_item_v310_features.py",
+    "tests/uat/uat_v3102_merge_verify.py",
+    "docs/CHANGELOG.md",
+    "docs/changelog/v3.12.0_2026-05-27.md",
+    "docs/changelog/v3.12.0_2026-05-27.json"
+  ],
+  "known_issues": [
+    "9 个测试串污染 (单跑全绿, 全套批跑 fail): 6 synthetic_* + 2 per_item_v310 + 1 custom_export. 根因 module-level 单例 (MESHook/ChannelManager) 在 fixture 间没清干净, run-tests skill line 540 已记录. 修需给 conftest 加 autouse 单例 reset fixture, 风险高 (影响所有 600+ 测试), 留作 v3.12.x 整理时统一处理."
+  ]
+}
