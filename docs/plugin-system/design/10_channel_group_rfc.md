@@ -419,9 +419,23 @@ Pinia store：新增 `useChannelGroupStore.js`。
 | CG.6 `channel_group_settle_start` hook | ✅ | 已在 Coordinator 内 fire；done hook 留待 timeout / synchronized_all_ok 落地一并做 |
 | CG.7 PluginHost 3 个 API 真实现 | ✅ | `backend/plugin_system/registry.py`: `list_channel_groups` / `query_channel_group` (无 cap) + `broadcast_to_channel_group` (cap `runtime.channel_group_broadcast`)，解锁 M1.3b 全部 |
 | CG.8 与 cluster 互操作 | ⏸ | 留 v3.13.1（station_id 映射 + box_summary 写组级结果） |
-| CG.9 测试 | ✅ | 单元 20 + 端点 14 + PluginHost API 15 = **49 个新单元测试，349 → 377 全过零回归** |
+| CG.9 测试 | ✅ | 单元 20 + 端点 20 + PluginHost API 15 = **55 个新单元测试，328 → 383 全过零回归**（含 6 个 JSON.contains 子串误判 + PUT 漏校验回归测试） |
 | CG.9 BDD | ⏸ | 留 v3.13.1（含 cluster 互操作的 e2e 场景） |
 | CG.10 文档 | ✅ | RFC 10 §十六 + 主 CHANGELOG + manifest schema |
+
+**v3.13.0 已知边界（必读，留 v3.13.1 决断）**：
+
+| 边界 | 现状 | 短期客户绕路 |
+|---|---|---|
+| **报警/语音/事件链路不联动** | Coordinator 只改 `is_good` + `group_settle_result` 字段；alarm_router / voice / Toast / event_fire 链路是由 `_trigger_event` 在结算前触发的，这里改写 `is_good` 不会重放事件链 | 客户写一个简单插件订阅 `channel_group_settle_start` hook，在 handler 里调 `PluginHost.trigger_alarm(channel_id)` 驱动 B 通道报警灯 |
+| MES Hook 联动 | ✅ 走 `final_is_good`，MES 推送已经发 NG | 无需绕路 |
+| DB 字段联动 | ✅ `cycle.is_good=False` + `group_settle_result="NG_BY_GROUP"` + `group_settled_with=[trigger_cycle_id]` 都写了 | 无需绕路 |
+| `cycle.event_name` | ⚠️ 保留原值（OK 事件名），让分析侧能区分"本机自身 NG" vs "联动 NG"（依赖 group_settle_result 字段判定） | 数据分析按 `group_settle_result` 路由 |
+
+v3.13.1 需要决断的实现路径：
+- (a) Coordinator 持有 AlarmRouter 引用直接驱动 B 通道亮灯（跳过事件链，最快）
+- (b) 约定系统级虚拟事件 id（如 `__channel_group_ng__`）走 `_trigger_event`（最一致，但要改 alarm_config）
+- (c) 仅做 DB 标记 + 客户自定义插件订阅 hook 自己实现（v3.13.0 已选）
 
 **v3.13.0 验收**:
 - ✅ AC-CG-1（synchronized_any_ng 联动）：单元测试覆盖

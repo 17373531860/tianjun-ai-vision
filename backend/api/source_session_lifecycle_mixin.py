@@ -608,6 +608,20 @@ class SessionLifecycleMixin:
         # 客户场景: 双工位 A 站先结算 NG, 通过 coordinator 给 B 站设了 "NG" pending.
         # B 站 end_cycle 走到这里, 拿到 NG override → 强制把 is_good 改 False.
         # 通道不在任何组时, get_pending_override 直接返回 None, 零差异.
+        #
+        # ⚠️ v3.13.0 已知边界 (留待 v3.13.1):
+        #   当前仅改 is_good (DB 字段 + cycle.event_name 保留原值 + group_settle_result
+        #   写 "NG_BY_GROUP" 让分析侧可区分本机 NG 与联动 NG). MES Hook on_cycle_end /
+        #   cycle_end plugin hook 都用 final_is_good, 已经传 NG.
+        #
+        #   但 alarm_router / 语音 / Toast / event_fire 链路是由 _trigger_event 在结算前
+        #   触发的, 这里改写 is_good 不会重放事件链, 因此 B 通道的报警灯/语音/MES 工件
+        #   状态不会自动联动 NG. 后续 RFC 10 v3.13.1 需要决断:
+        #     a) Coordinator 持有 AlarmRouter 引用直接驱动 B 通道亮灯 (跳过事件链)
+        #     b) 约定系统级虚拟事件 id (如 __channel_group_ng__) 走 _trigger_event
+        #     c) 仅做 DB 标记 + 客户自定义插件订阅 channel_group_settle_start hook 自己实现
+        #   v3.13.0 选 c (零侵入) — 客户可以写一个简单插件订阅 channel_group_settle_start,
+        #   调 PluginHost.trigger_alarm(channel_id) 自己驱动 B 灯.
         try:
             from backend.services.channel_group_coordinator import get_coordinator as _get_cg_coord
             _override = _get_cg_coord().get_pending_override(self.channel_id)
