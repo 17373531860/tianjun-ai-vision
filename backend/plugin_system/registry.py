@@ -284,13 +284,30 @@ class PluginRegistry:
 class PluginHost:
     """暴露给插件代码的"主程序 host"对象。
 
-    设计目的：避免插件直接 import 主程序内部模块，给一个稳定的 facade。
+    设计目的: 避免插件直接 ``import backend.models.*`` 或玩主程序内部 ORM,
+    给一个**稳定的查询 facade**. 主程序改 ORM 字段时, 这层 facade 负责把变化
+    吸收掉 (映射到稳定字段名), 插件不感知; 真正不能吸收的字段变化, 改 facade
+    本身的契约 + 升 plugin SDK 版本, 走 main_version_min/max 拦截.
 
-    G1 阶段仅暴露:
+    G1 阶段 (v3.7.0~v3.12.0) 暴露:
     - get_db_session(): 返回受控 SQLAlchemy session（插件用完关）
     - customer_code:    当前插件 customer_code
     - plugin_dir:       插件解压目录
     - main_version:     主程序版本号
+
+    v3.13 起新增稳定查询 API (返回 dict snapshot, 不是 ORM 对象):
+    - query_session(session_id): session 元数据快照
+    - query_cycle(cycle_id):     cycle 元数据快照
+    - query_step(step_id):       step 元数据快照
+    - query_workpiece(wp_id):    workpiece 元数据快照
+
+    为何返回 dict 而不是 ORM 对象:
+    1. ORM 对象绑定 session — 插件 close session 后再访问字段会炸 DetachedInstanceError
+    2. ORM 字段改名/删字段时插件不感知, dict facade 可以做兼容映射
+    3. 强制插件以"数据传输对象 (DTO)"思路写代码, 不要把主程序数据库结构当 SDK
+
+    get_db_session() 保留**不删** (向后兼容, 老插件可能在用), 但**新插件不应再用**.
+    docs/plugin-system/design/06_tier3_fullstack.md 已加迁移指南.
     """
 
     def __init__(self, customer_code: str, plugin_dir: str, main_version: str = "3.7.x") -> None:
@@ -299,6 +316,160 @@ class PluginHost:
         self.main_version = main_version
 
     def get_db_session(self):
+        """返回原始 SQLAlchemy session.
+
+        ⚠️ 历史 API, 向后兼容保留. 新插件请改用 query_* facade 系列.
+        直接用 session 的风险: 主程序 ORM 字段改名 → 插件代码运行时炸.
+        """
         from backend.db.database import SessionLocal
 
         return SessionLocal()
+
+    # ============================================================
+    # v3.13: 稳定查询 facade
+    # 字段集合是契约的一部分, 改字段名 = 升 plugin SDK 版本 (走 main_version_min/max 拦截)
+    # ============================================================
+
+    def query_session(self, session_id: int) -> Optional[Dict[str, Any]]:
+        """查 DetectionSession 快照, 找不到返回 ``None``.
+
+        稳定字段 (v3.13 契约):
+            id / session_uuid / name / project_id / start_time / end_time /
+            status / total_cycles / good_cycles / ng_cycles /
+            avg_cycle_time / min_cycle_time / max_cycle_time / counters_snapshot
+        """
+        from backend.db.database import SessionLocal
+        from backend.models.models import DetectionSession
+
+        db = SessionLocal()
+        try:
+            row = db.query(DetectionSession).filter(DetectionSession.id == session_id).first()
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "session_uuid": row.session_uuid,
+                "name": getattr(row, "name", None),
+                "project_id": row.project_id,
+                "start_time": row.start_time.isoformat() if row.start_time else None,
+                "end_time": row.end_time.isoformat() if row.end_time else None,
+                "status": row.status,
+                "total_cycles": row.total_cycles,
+                "good_cycles": row.good_cycles,
+                "ng_cycles": row.ng_cycles,
+                "avg_cycle_time": row.avg_cycle_time,
+                "min_cycle_time": row.min_cycle_time,
+                "max_cycle_time": row.max_cycle_time,
+                "counters_snapshot": dict(row.counters_snapshot) if row.counters_snapshot else {},
+            }
+        finally:
+            db.close()
+
+    def query_cycle(self, cycle_id: int) -> Optional[Dict[str, Any]]:
+        """查 DetectionCycle 快照, 找不到返回 ``None``.
+
+        稳定字段 (v3.13 契约):
+            id / cycle_uuid / cycle_number / session_id / start_time / end_time /
+            duration / is_good / event_id / event_name / result_reason /
+            step_sequence
+        """
+        from backend.db.database import SessionLocal
+        from backend.models.models import DetectionCycle
+
+        db = SessionLocal()
+        try:
+            row = db.query(DetectionCycle).filter(DetectionCycle.id == cycle_id).first()
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "cycle_uuid": row.cycle_uuid,
+                "cycle_number": row.cycle_number,
+                "session_id": row.session_id,
+                "start_time": row.start_time.isoformat() if row.start_time else None,
+                "end_time": row.end_time.isoformat() if row.end_time else None,
+                "duration": row.duration,
+                "is_good": row.is_good,
+                "event_id": row.event_id,
+                "event_name": row.event_name,
+                "result_reason": row.result_reason,
+                "step_sequence": list(row.step_sequence) if row.step_sequence else [],
+            }
+        finally:
+            db.close()
+
+    def query_step(self, step_id: int) -> Optional[Dict[str, Any]]:
+        """查 StepRecord 快照, 找不到返回 ``None``.
+
+        稳定字段 (v3.13 契约):
+            id / record_uuid / cycle_id / step_id / step_label / step_name /
+            step_order / start_time / end_time / duration / interval_to_next /
+            is_valid / confidence
+        """
+        from backend.db.database import SessionLocal
+        from backend.models.models import StepRecord
+
+        db = SessionLocal()
+        try:
+            row = db.query(StepRecord).filter(StepRecord.id == step_id).first()
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "record_uuid": row.record_uuid,
+                "cycle_id": row.cycle_id,
+                "step_id": row.step_id,
+                "step_label": row.step_label,
+                "step_name": row.step_name,
+                "step_order": row.step_order,
+                "start_time": row.start_time.isoformat() if row.start_time else None,
+                "end_time": row.end_time.isoformat() if row.end_time else None,
+                "duration": row.duration,
+                "interval_to_next": row.interval_to_next,
+                "is_valid": row.is_valid,
+                "confidence": row.confidence,
+            }
+        finally:
+            db.close()
+
+    def query_workpiece(self, workpiece_id: int) -> Optional[Dict[str, Any]]:
+        """查 Workpiece 快照, 找不到返回 ``None``.
+
+        稳定字段 (v3.13 契约):
+            id / serial_no / raw_barcode / order_id / batch_id / project_id /
+            channel_id / status / final_result / inspection_count / operator /
+            registered_at / first_inspect_at / last_inspect_at /
+            created_at / updated_at
+
+        注: ``final_result`` 是 ORM 真实字段名 (workpieces.final_result), 不要在
+        facade 里改成 ``result`` — 与 hook ctx 中的 ``result`` (= "OK"/"NG"
+        cycle 级判定) 是两回事, 改名会让插件作者混淆.
+        """
+        from backend.db.database import SessionLocal
+        from backend.models.mes_models import Workpiece
+
+        db = SessionLocal()
+        try:
+            row = db.query(Workpiece).filter(Workpiece.id == workpiece_id).first()
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "serial_no": row.serial_no,
+                "raw_barcode": row.raw_barcode,
+                "order_id": row.order_id,
+                "batch_id": row.batch_id,
+                "project_id": row.project_id,
+                "channel_id": row.channel_id,
+                "status": row.status,
+                "final_result": row.final_result,
+                "inspection_count": row.inspection_count,
+                "operator": row.operator,
+                "registered_at": row.registered_at.isoformat() if row.registered_at else None,
+                "first_inspect_at": row.first_inspect_at.isoformat() if row.first_inspect_at else None,
+                "last_inspect_at": row.last_inspect_at.isoformat() if row.last_inspect_at else None,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+        finally:
+            db.close()
