@@ -11,9 +11,11 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
+from backend._version import get_main_version
 from backend.models.plugin_models import PluginAuditLog, PluginRecord, PluginState
 from backend.plugin_system.registry import PluginHost, PluginRegistry
 from backend.plugin_system.verifier import plugins_root, read_license_payload
+from backend.plugin_system.version_check import check_main_version_compat
 
 
 log = logging.getLogger("tianjun.plugin")
@@ -41,10 +43,14 @@ class PluginManager:
         self.registry: Optional[PluginRegistry] = None
         self._app = None  # 保留 app 引用，方便后续 plugin 反查
 
-    def load_active(self, db: Session, app=None, main_version: str = "3.7.x") -> Optional[LoadedPlugin]:
+    def load_active(self, db: Session, app=None, main_version: Optional[str] = None) -> Optional[LoadedPlugin]:
         record = db.query(PluginRecord).filter(PluginRecord.is_active == True).first()
         if not record:
             return None
+
+        # 主程序版本号: 默认从 electron/package.json 读 (唯一权威源).
+        # 显式传值仅用于测试场景 (mock 不同版本验证 main_version_min/max 行为).
+        effective_version = main_version if main_version is not None else get_main_version()
 
         try:
             manifest = json.loads(record.manifest_json)
@@ -52,11 +58,33 @@ class PluginManager:
             if not install_dir.exists():
                 raise FileNotFoundError(f"插件目录不存在: {install_dir}")
 
+            # v3.13: main_version_min/max 强制校验.
+            # manifest schema 早就有这两个字段 + min 是 required, 但 v3.7.0~v3.12.0
+            # 加载流程一直没读, 改了底层后旧插件会带病加载. 这里在 register_plugin
+            # 之前先把不兼容的拦截掉, 写 audit + state=incompatible_version.
+            compatible, reason = check_main_version_compat(manifest, effective_version)
+            if not compatible:
+                self._set_state(
+                    db,
+                    record.customer_code,
+                    "failed",
+                    "error",
+                    "PLUGIN_INCOMPATIBLE_VERSION",
+                    reason,
+                )
+                self._audit(db, record.customer_code, "startup_load", "rejected", reason)
+                db.commit()
+                log.warning(
+                    "[Plugin][%s] 拒绝加载 (版本不兼容): %s",
+                    record.customer_code, reason,
+                )
+                return None
+
             license_payload = read_license_payload(db) if db is not None else {}
             host = PluginHost(
                 customer_code=record.customer_code,
                 plugin_dir=str(install_dir),
-                main_version=main_version,
+                main_version=effective_version,
             )
 
             module, registry = self._load_backend_module(
