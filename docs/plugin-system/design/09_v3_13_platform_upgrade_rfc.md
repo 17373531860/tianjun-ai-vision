@@ -352,13 +352,18 @@ plugin.uiHidden = [
 - 主程序 API 序列化时**保留** `plugin_data` 透传，但不做 schema 校验
 - 客户卸载插件时，`plugin_data.<customer_code>` 可选清理（走 plugin_uninstall hook）
 
-### 6.3 子任务 M3.2：SystemConfig 命名空间
+### 6.3 子任务 M3.2：SystemConfig 命名空间 ✅（已交付 2026-05-28）
 
 主程序 `system_configs` 表已经是 KV 结构。M3 起：
-- 加一条软规则：插件写入的 key 必须 `plugin_<customer_code>_*` 前缀
-- `PluginHost.write_system_config(key, value)` 强制校验前缀（不符则抛 `PluginRuntimeError`）
-- 主程序读自家配置时不动这层
-- 客户卸载插件时清理 `plugin_<customer_code>_*` 全部 KV（走 plugin_uninstall hook）
+- ✅ 软规则：插件写入的 key 必须 `plugin_<customer_code>_*` 前缀（M1.3a 已落地）
+- ✅ `PluginHost.write_system_config(key, value)` 强制校验前缀（不符则抛 `PluginRuntimeError`）（M1.3a 已落地）
+- ✅ 主程序读自家配置时不动这层（默认行为）
+- ✅ 卸载插件时可选清理（v3.13 M3.2）：
+  * `DELETE /api/v1/plugins/{customer_code}` 加 `purge_data: bool = False` query param
+  * 默认 `false` 保留业务数据（与 v3.10 起的"卸载不动数据"语义兼容）
+  * `true` 时清理两层：(a) `system_configs` 中 `plugin_<cc>_*` 全部 KV（用 ESCAPE 防 SQL LIKE `_` 通配符误伤）；(b) Project 7 个 JSON 字段下的 `plugin_data.<cc>` 子键（dict 字段 + list 字段每项都扫）
+  * **不**清理 `step_records.plugin_data`（已结束周期视为业务历史；真要清手动 SQL）
+  * audit log 记录清理统计（`system_configs=N, projects=M`）
 
 ### 6.4 子任务 M3.3：StepRecord 加 `plugin_data` 字段 ✅（已交付 2026-05-28）
 

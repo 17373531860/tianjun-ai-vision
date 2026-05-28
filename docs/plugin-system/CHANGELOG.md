@@ -2,6 +2,20 @@
 
 ## 2026-05-28 (后续)
 
+### M3.2 交付 — 卸载插件时可选清理命名空间数据
+
+- **背景**：现有 `DELETE /api/v1/plugins/{customer_code}` 注释明确"业务数据保留"，与 RFC 09 §6.3 / AC-M3-4 "卸载后清理 plugin_<cc>_* 全部 KV"看似冲突；本次用可选 flag 解决。
+- **新参数 `purge_data: bool = False`**（`backend/api/plugins.py: delete_plugin`）：
+  - 默认 `false` 保留业务数据（向后兼容）
+  - `true` 时调用 helper `_purge_plugin_namespaced_data` 清理：
+    * `system_configs` 中 `plugin_<cc>_*` 全部 KV（**SQL LIKE ESCAPE** 防 `_` 通配符误伤 `plugin_acmex_*` 等）
+    * Project 7 个 JSON 字段下的 `plugin_data.<customer_code>` 子键（dict 字段 + list 字段每项都扫，浅拷+整字段重赋触发 SQLAlchemy mutation 检测）
+  - **不**清理 `step_records.plugin_data`（已结束周期视为业务历史；规模可能很大）
+  - audit log 记录清理统计 `system_configs=N, projects=M`
+  - 返回体加 `purge_data` + `purge_stats` 字段
+- **10 个新单测**（`tests/plugin_system/test_purge_plugin_data_M3_2.py`）：默认保留 2 个 + SystemConfig 清理 + 命名空间隔离 3 个 + Project plugin_data 清理 3 个 + audit log + LIKE ESCAPE 严格边界
+- **回归状态**：plugin_system **329/329 通过**，零回归
+
 ### M3.1 交付 — Project JSON 字段下的 `plugin_data` 透传 + 新端点
 
 - **透传守护契约**：Project 的 7 个 JSON 字段（`pipeline_config` / `steps_config` / `events_config` / `counters_config` / `alarm_config` / `detection_config` / `data_config`）下的 `plugin_data` 子键天然透传，本次加测试守护以防未来重构丢字段
