@@ -384,6 +384,23 @@ def activate_project(project_id: int, db: Session = Depends(get_db)):
             model_version = model.version
             model_labels = model.labels or []
 
+    # v3.13 M1.1: project_activated 插件 hook — 项目已落库激活 + 模型已重载 + 配置已同步 +
+    # MES pending 已清理. 客户级"激活时下发外部系统 / 二次校验配置"在这里挂.
+    try:
+        from backend.plugin_system.hook_dispatch import fire_plugin_hook
+        from backend.api.channel_manager import channel_manager as _cm
+        _active_channels = list(_cm.channels.keys()) if hasattr(_cm, "channels") else []
+        fire_plugin_hook("project_activated", "post_activate", "post", {
+            "project_id": db_project.id,
+            "project_name": db_project.name,
+            "project_version": getattr(db_project, "version", None),
+            "active_channel_ids": _active_channels,
+            "model_name": model_name,
+            "model_version": model_version,
+        })
+    except Exception as e:
+        print(f"[Plugin] project_activated hook 触发异常 (已隔离, 主流程继续): {e}")
+
     return ProjectResponse(
         id=db_project.id,
         name=db_project.name,

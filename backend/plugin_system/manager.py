@@ -81,10 +81,13 @@ class PluginManager:
                 return None
 
             license_payload = read_license_payload(db) if db is not None else {}
+            # v3.13 M1.3a: 把 manifest.capabilities 传给 PluginHost, 主动 API
+            # (trigger_alarm / mes_push / write_system_config) 在调用时强制校验.
             host = PluginHost(
                 customer_code=record.customer_code,
                 plugin_dir=str(install_dir),
                 main_version=effective_version,
+                capabilities=manifest.get("capabilities", []) or [],
             )
 
             module, registry = self._load_backend_module(

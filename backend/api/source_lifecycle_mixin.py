@@ -11,6 +11,11 @@
           source_type / model / counters / current_session_id / etc.
   - 方法: _close_all_writers / _stop_inference_thread / _stop_recording_thread /
           _release_hcnet_session / _release_hik_camera / debug_log
+
+v3.13 M1.1 末项 (2026-05-28): source_status_change hook 通过 _track_status_change
+contextmanager 接入 — 5 个 lifecycle 公共方法 + capture_loop 3 处异常中断点都会
+fire. 仅在 (is_running, is_detecting) 真发生变化时 fire, 无变化静默 (防同状态再
+赋值 / early return False 干扰).
 """
 import os
 import gc
@@ -18,6 +23,7 @@ import time
 import json
 import threading
 import traceback
+from contextlib import contextmanager
 from ctypes import POINTER, byref, c_ubyte, cast, memset, sizeof
 
 import cv2
@@ -42,8 +48,86 @@ from backend.api.source_sdk_loader import (
 
 
 class LifecycleMixin:
+    # ============================================================
+    # v3.13 M1.1 末项: source_status_change hook 基础设施
+    # ============================================================
+
+    def _fire_source_status_change(
+        self,
+        before_running: bool,
+        before_detecting: bool,
+        reason: str,
+    ) -> None:
+        """触发 source_status_change hook (仅在状态真变化时 fire).
+
+        语义: 检测/采集状态机的转换通知. 插件可挂在这里做:
+          - 工位"开始/停止"通知 (推送给客户 MES)
+          - 视频流断开后联动报警
+          - 多工位 standby 时同步关闭对应硬件
+
+        Args:
+            before_running: 调用前的 is_running 值
+            before_detecting: 调用前的 is_detecting 值
+            reason: 触发源, 枚举:
+                'pause' / 'resume' / 'standby' / 'resume_inference' / 'stop'
+                / 'capture_loop_video_ended' / 'capture_loop_reopen_failed'
+                / 'capture_loop_recover_failed'
+
+        无变化静默: before == after 时不 fire (防 pause 内"已经停了再 pause" /
+        resume early return False 时虚报状态变化).
+
+        异常隔离: hook fire 异常被 swallow, 主流程继续 (lifecycle 不能因插件 bug 卡死).
+        """
+        after_running = bool(self.is_running)
+        after_detecting = bool(self.is_detecting)
+        before_running = bool(before_running)
+        before_detecting = bool(before_detecting)
+
+        if before_running == after_running and before_detecting == after_detecting:
+            return
+
+        try:
+            from backend.plugin_system.hook_dispatch import fire_plugin_hook
+            fire_plugin_hook("source_status_change", "post_status_change", "post", {
+                "channel_id": self.channel_id,
+                "before": {
+                    "is_running": before_running,
+                    "is_detecting": before_detecting,
+                },
+                "after": {
+                    "is_running": after_running,
+                    "is_detecting": after_detecting,
+                },
+                "reason": reason,
+                "source_type": self.source_type,
+            })
+        except Exception as e:
+            print(f"[Plugin] source_status_change hook 触发异常 (已隔离, 主流程继续): {e}")
+
+    @contextmanager
+    def _track_status_change(self, reason: str):
+        """contextmanager 备用方案 — finally 自动 fire source_status_change.
+
+        本批次 (v3.13 M1.1 末项) 5 个 lifecycle 公共方法采用更轻量的 begin/end
+        模式 (开头录 before, 出口手动调 helper); 本 contextmanager 留作:
+          - 未来新增 lifecycle 方法的备用接入方式
+          - 第三方代码 (如 hotfix / 客户定制) 需要包装含异常路径的状态变更时使用
+
+        语义保证:
+          - finally 路径 fire: 包括正常返回 / early return / 抛异常 → 都会 fire
+          - 状态无变化静默 (helper 内置 dedup)
+          - 异常不被 swallow: 与 hook fire 解耦, 异常仍上抛
+        """
+        before_running = bool(self.is_running)
+        before_detecting = bool(self.is_detecting)
+        try:
+            yield
+        finally:
+            self._fire_source_status_change(before_running, before_detecting, reason)
+
     def pause(self):
         """暂停：停止画面更新和检测，但保持当前帧"""
+        _before_running, _before_detecting = self.is_running, self.is_detecting
         self.is_running = False
         self.is_detecting = False
         # v2.7.3: 暂停也必须熄灭工作指示灯，前端 Monitor 的"停止"按钮调的是 pause
@@ -83,6 +167,7 @@ class LifecycleMixin:
             print("[pause] HCNetSDK released, model kept")
         else:
             print("已暂停：画面和检测都停止")
+        self._fire_source_status_change(_before_running, _before_detecting, "pause")
     
     def _reopen_camera(self):
         """Re-open USB camera that was released during pause"""
@@ -151,17 +236,21 @@ class LifecycleMixin:
 
     def resume(self):
         """恢复：从暂停状态恢复，重新启动视频流和推理"""
+        _before_running, _before_detecting = self.is_running, self.is_detecting
         # Re-open camera if it was released during pause
         if self.capture is None and self.source_type == 'camera':
             if not self._reopen_camera():
+                self._fire_source_status_change(_before_running, _before_detecting, "resume_failed")
                 return False
 
         if self.source_type == 'hikvision' and self.hik_camera is None:
             if not self._reopen_hik_camera():
+                self._fire_source_status_change(_before_running, _before_detecting, "resume_failed")
                 return False
 
         if self.capture is None and self.source_type not in ('hikvision', 'image', 'synthetic'):
             print("无法恢复：没有可用的视频源")
+            self._fire_source_status_change(_before_running, _before_detecting, "resume_failed")
             return False
 
         # 确保旧捕获线程已完全停止，避免双重线程
@@ -203,10 +292,12 @@ class LifecycleMixin:
             print(f"[PeriodicActions] resume run_on_start 触发失败: {_e}")
 
         print("已恢复：视频流和推理重新启动")
+        self._fire_source_status_change(_before_running, _before_detecting, "resume")
         return True
     
     def standby(self):
         """Standby: stop inference but keep the video capture thread running."""
+        _before_running, _before_detecting = self.is_running, self.is_detecting
         self.is_detecting = False
         # v2.7.3: 待机时也熄灭工作指示灯（语义上"不在检测"就不应该亮工作灯）
         try:
@@ -230,14 +321,18 @@ class LifecycleMixin:
             self.current_detections = []
         self._clear_inference_caches()
         print("已待机：检测停止，画面继续")
+        self._fire_source_status_change(_before_running, _before_detecting, "standby")
 
     def resume_inference(self):
         """Resume inference from standby (capture thread already running)."""
+        _before_running, _before_detecting = self.is_running, self.is_detecting
         if not self.is_running:
             print("[resume_inference] 视频流未运行，无法恢复推理")
+            self._fire_source_status_change(_before_running, _before_detecting, "resume_inference_failed")
             return False
         if self.model is None and self.source_type != 'synthetic':
             print("[resume_inference] 模型未加载，无法恢复推理")
+            self._fire_source_status_change(_before_running, _before_detecting, "resume_inference_failed")
             return False
         self.is_detecting = True
         self._start_inference_thread()
@@ -272,6 +367,7 @@ class LifecycleMixin:
             print(f"[PeriodicActions] resume_inference run_on_start 触发失败: {_e}")
 
         print("已从待机恢复推理")
+        self._fire_source_status_change(_before_running, _before_detecting, "resume_inference")
     
     def stop(self, release_model: bool = True):
         """停止当前输入源（完全停止并释放资源）
@@ -280,6 +376,7 @@ class LifecycleMixin:
             release_model: If False, keep the YOLO model in memory for reuse
                            after switching input sources.
         """
+        _before_running, _before_detecting = self.is_running, self.is_detecting
         self.is_running = False
         self.is_detecting = False
         
@@ -338,6 +435,7 @@ class LifecycleMixin:
         self._clear_all_caches()
         
         print("[VideoManager] 已完全停止并释放资源")
+        self._fire_source_status_change(_before_running, _before_detecting, "stop")
     
     def _clear_all_caches(self):
         """清理所有内存缓存 - 防止内存泄漏"""
