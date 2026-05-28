@@ -116,6 +116,37 @@ def _validate_group_config(
         )
 
 
+def _check_member_uniqueness(
+    db: Session,
+    member_channel_ids: List[int],
+    exclude_group_id: Optional[int] = None,
+) -> None:
+    """跨组通道唯一性校验 (应用层做, 不用 SQLite JSON.contains).
+
+    背景: SQLAlchemy ``JSON.contains(int)`` 在 SQLite 上退化成文本子串匹配,
+    比如组 [10, 11] 用 ``contains(1)`` 会命中 (子串 "1" 在 "[10, 11]" 里).
+    所以这里把所有 enabled=True 的组捞回来, 用 Python ``in`` 判断成员归属.
+
+    参数:
+        member_channel_ids: 待加入的通道 id 列表
+        exclude_group_id: 排除自身 id (PUT 场景), None 表示 POST 不排除
+
+    抛 HTTPException 400 表示有通道已属于另一个 enabled 组.
+    """
+    other_groups_query = db.query(ChannelGroup).filter(ChannelGroup.enabled.is_(True))
+    if exclude_group_id is not None:
+        other_groups_query = other_groups_query.filter(ChannelGroup.id != exclude_group_id)
+
+    for other in other_groups_query.all():
+        other_members = set(other.member_channel_ids or [])
+        for cid in member_channel_ids:
+            if cid in other_members:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"channel {cid} 已属于工位组 '{other.name}' (id={other.id})",
+                )
+
+
 def _reload_coordinator(db: Session) -> None:
     """CRUD 后调 — 重载 Coordinator 让新配置立即生效."""
     try:
@@ -179,18 +210,9 @@ def create_channel_group(
     if existing:
         raise HTTPException(status_code=400, detail=f"工位组名称 '{payload.name}' 已存在")
 
-    # 通道不能同时属于多个 enabled 组
+    # 通道不能同时属于多个 enabled 组 (应用层做, 不用 JSON.contains)
     if payload.enabled:
-        for cid in payload.member_channel_ids:
-            other = db.query(ChannelGroup).filter(
-                ChannelGroup.enabled.is_(True),
-                ChannelGroup.member_channel_ids.contains(cid),  # SQLite JSON 支持
-            ).first()
-            if other:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"channel {cid} 已属于工位组 '{other.name}' (id={other.id})",
-                )
+        _check_member_uniqueness(db, payload.member_channel_ids, exclude_group_id=None)
 
     row = ChannelGroup(
         name=payload.name,
@@ -237,6 +259,14 @@ def update_channel_group(
             raise HTTPException(status_code=400, detail=f"工位组名称 '{new_name}' 已存在")
 
     _validate_group_config(new_name, new_members, new_strategy, new_timeout_action)
+
+    # 跨组通道唯一性: 当 members 或 enabled 被改时, 且最终态是 enabled 才校验.
+    final_enabled = update_data.get("enabled", row.enabled)
+    members_or_enabled_changed = (
+        "member_channel_ids" in update_data or "enabled" in update_data
+    )
+    if final_enabled and members_or_enabled_changed:
+        _check_member_uniqueness(db, list(new_members), exclude_group_id=group_id)
 
     for k, v in update_data.items():
         setattr(row, k, v)
