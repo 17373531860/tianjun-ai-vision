@@ -149,6 +149,35 @@ export async function loadActivePluginFrontend(router) {
         }
       },
     },
+    // v3.13 M2.2a: 主程序 UI Slot 注册接口
+    // 插件用 registry.slots.register('monitor.step-cell.duration', MyCellComponent) 覆盖
+    // 主程序对应 <TjSlot name="monitor.step-cell.duration" :duration="..."> 的默认实现.
+    // 同名后注册覆盖前注册 (单 active plugin 设计).
+    slots: {
+      register(slotName, component) {
+        if (!slotName) {
+          console.warn("[PluginLoader] slot register 失败: slotName 必填");
+          return;
+        }
+        if (!component) {
+          console.warn(`[PluginLoader] slot register 失败 ${slotName}: component 必填`);
+          return;
+        }
+        try {
+          themeStore.addPluginSlot(slotName, component);
+          console.log(`[PluginLoader] slot registered: ${slotName}`);
+        } catch (e) {
+          console.warn(`[PluginLoader] slot register 失败 ${slotName}:`, e);
+        }
+      },
+      unregister(slotName) {
+        try {
+          themeStore.removePluginSlot(slotName);
+        } catch (e) {
+          console.warn(`[PluginLoader] slot unregister 失败 ${slotName}:`, e);
+        }
+      },
+    },
   };
 
   try {

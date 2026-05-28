@@ -2,6 +2,27 @@
 
 ## 2026-05-28 (后续)
 
+### M2.2a 交付 — UI Slot 基础设施层（TjSlot + store + registry）
+
+- **新增 `<TjSlot>` 全局组件**（`frontend/src/components/TjSlot.vue`）：
+  - `<TjSlot name="monitor.step-cell.duration" :duration="step.duration">默认内容</TjSlot>` 三种行为：
+    * `ui_hidden` 命中 → 渲染 null（连默认都不显示）
+    * 有插件注册组件 → 渲染插件组件 + 主程序 props 透传 + default slot 可在插件组件内引用
+    * 都没有 → 渲染主程序 default slot 内容
+  - `main.js` 全局 `app.component('TjSlot', TjSlot)`，主程序任何 `.vue` 文件可直接用
+- **`usePluginThemeStore` 扩展**（`frontend/src/store/usePluginThemeStore.js`）：
+  - 加 `pluginSlots: { [name]: Component }` state（`markRaw` 防 Pinia 包 Component 引用）
+  - 加 `uiHidden: string[]` state（从 manifest.frontend.ui_hidden 应用）
+  - 加 `addPluginSlot` / `removePluginSlot` actions
+  - 加 `isSlotHidden(name)` / `getSlotComponent(name)` / `registeredSlotNames` getters
+  - `_resetTheme` 清理 `pluginSlots` + `uiHidden`
+- **`usePluginLoader` 加 `registry.slots`**（`frontend/src/composables/usePluginLoader.js`）：
+  - `registry.slots.register(slotName, component)` — 单 active 设计，同名后注册覆盖前注册
+  - `registry.slots.unregister(slotName)`
+- **manifest schema 加 `frontend.ui_hidden` 枚举**（`docs/plugin-system/design/01_manifest_schema.md` §5.3）
+- **M2.2b 7 个 slot 位置接入留待**：主程序前端无单元测试框架，4051 行 ⚠️⚠️ `Monitor/index.vue` 直接动 5 处复杂 slot 风险高；基础设施已就绪，每个 slot 接入只需 5-10 行 `.vue` 改动，等真实客户插件需求驱动按 RFC 09 §附录 E 定位逐个接入
+- **回归状态**：后端 plugin_system **329/329 通过零回归**；前端 `esbuild` transform 3 个 JS 文件零警告
+
 ### M3.2 交付 — 卸载插件时可选清理命名空间数据
 
 - **背景**：现有 `DELETE /api/v1/plugins/{customer_code}` 注释明确"业务数据保留"，与 RFC 09 §6.3 / AC-M3-4 "卸载后清理 plugin_<cc>_* 全部 KV"看似冲突；本次用可选 flag 解决。

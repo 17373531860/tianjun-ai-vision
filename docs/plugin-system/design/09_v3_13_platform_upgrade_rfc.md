@@ -235,9 +235,23 @@ interface TianjunPlugin {
 - 插件 UMD 在加载阶段抛异常 → catch 后降级，进 audit log
 - 主程序 Vue 实例 / Pinia / Router **不暴露**给插件，仅通过 `PluginHost.frontend` 提供受控 API
 
-### 5.3 子任务 M2.2：主程序 UI Slot 化改造
+### 5.3 子任务 M2.2：主程序 UI Slot 化改造 — 基础设施层 ✅（M2.2a 已交付 2026-05-28）
 
-主程序 Vue 视图必须**先把"可被插件覆盖的位置"显式声明为 slot**。这次客户需求驱动以下 slot 落地：
+**交付状态**：
+- ✅ **M2.2a 基础设施层** (2026-05-28)：
+  - 新增 `<TjSlot>` 全局组件 (`frontend/src/components/TjSlot.vue`)
+  - `usePluginThemeStore` 加 `pluginSlots` / `uiHidden` state + `addPluginSlot` / `removePluginSlot` / `isSlotHidden` / `getSlotComponent` getters
+  - `usePluginLoader` 加 `registry.slots.register(name, component)` / `unregister(name)` 接口
+  - manifest schema `frontend.ui_hidden: array<string>` 词汇加入（见 `01_manifest_schema.md` §5.3）
+  - 全局注册 `TjSlot`，主程序任何 `.vue` 文件可直接用 `<TjSlot name="...">默认内容</TjSlot>`
+- ⏸ **M2.2b 主程序 7 个 slot 位置接入**：留待真实客户插件需求驱动时按 RFC 09 §附录 E 定位逐个接入。基础设施已就绪，每个 slot 位置接入只需 5-10 行 `.vue` 改动。
+
+**为什么 M2.2b 不一并接入**：
+- 主程序无前端单元测试框架（无 vitest/jest），改 `Monitor/index.vue` (4051 行 ⚠️⚠️ 项目最大文件) 需手动 playwright 验证，与 `feature-placement` 原则"基础设施进主程序+插件平台，小众功能等真实客户驱动"一致
+- 5 个复杂 slot（含 `monitor.layout.body`）涉及双工位 layout 完全重排，无真实客户插件验证形态前贸然接入容易过度抽象
+
+
+**M2.2b 待做**：主程序 Vue 视图必须**先把"可被插件覆盖的位置"显式声明为 slot**。这次客户需求驱动以下 slot 落地：
 
 | slot key | 位置 | 默认内容 | 客户用例 |
 |---|---|---|---|

@@ -538,6 +538,20 @@ plugins/{customer_code}/
 - **限制**：不能隐藏 `/monitor`（核心视图，不允许隐藏）
 - **错误**：`MANIFEST_HIDDEN_MENU_FORBIDDEN`
 
+#### `frontend.ui_hidden`（array<string>，档位 2/3 可有，v3.13 M2.2a 新增）
+
+```json
+"ui_hidden": ["monitor.step-cell.status", "cycle-result.indicator"]
+```
+
+- **作用**：隐藏主程序 `<TjSlot name="...">` 槽（连默认内容都不渲染）
+- **典型场景**：客户要求"隐藏步骤级红色 NG 指示，只保留 cycle 级"
+- **与 `frontend.hidden_menus` 的区别**：
+  * `hidden_menus` 是隐藏导航菜单项（按 path）
+  * `ui_hidden` 是隐藏 slot（按 slot name）
+- **slot name 词汇表**：见 RFC 09 §5.3 的 7 个槽位定义；新加 slot 由主程序在 `.vue` 文件中显式声明
+- **生效时机**：主程序启动时 `usePluginThemeStore.apply()` 拉 manifest → 应用到 `store.uiHidden` → `<TjSlot>` 内部 computed 自动响应
+
 #### `frontend.stores`（array<object>，档位 2 可有）
 
 ```json
