@@ -398,6 +398,7 @@ plugins/{customer_code}/
 | `runtime.mes_push` | `host.mes_push(event_type, payload, channel_id)` | 走主程序 `MESGateway.dispatch` 外推（`event_type` 必须 `plugin_<cc>_` 前缀） |
 | `runtime.system_config_write` | `host.write_system_config(key, value, description)` | 写 `system_configs` 表（`key` 必须 `plugin_<cc>_` 前缀） |
 | `runtime.step_field_write` | `host.write_plugin_step_field(step_record_id, key, value)` | JSON 合并写入 `step_records.plugin_data`（`key` 必须 `plugin_<cc>_` 前缀，`value` 必须可 JSON 序列化）— v3.13 M3.3 |
+| `runtime.channel_group_broadcast` | `host.broadcast_to_channel_group(group_id, message)` | 给工位组成员 fire `plugin_broadcast_received` hook（`message` 必须 dict + 可 JSON 序列化）— v3.13 RFC 10 CG.7 |
 
 **注意**：
 - `host.read_system_config(...)` **不**需要声明 capability（只读无副作用，跨插件查主程序状态是合理需求）

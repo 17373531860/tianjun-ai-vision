@@ -604,6 +604,25 @@ class SessionLifecycleMixin:
         if not self.current_cycle_id or not self.recording_enabled:
             return
 
+        # v3.13 RFC 10: 工位组联动 — pending override 强制改写本次结算结果.
+        # 客户场景: 双工位 A 站先结算 NG, 通过 coordinator 给 B 站设了 "NG" pending.
+        # B 站 end_cycle 走到这里, 拿到 NG override → 强制把 is_good 改 False.
+        # 通道不在任何组时, get_pending_override 直接返回 None, 零差异.
+        try:
+            from backend.services.channel_group_coordinator import get_coordinator as _get_cg_coord
+            _override = _get_cg_coord().get_pending_override(self.channel_id)
+            if _override is not None:
+                _override_is_good = (_override == "OK")
+                if _override_is_good != is_good:
+                    print(
+                        f"[ChannelGroup] ch{self.channel_id} 结算被组级联动覆盖: "
+                        f"{'OK' if is_good else 'NG'} → {_override}",
+                        flush=True,
+                    )
+                    is_good = _override_is_good
+        except Exception as _e:
+            print(f"[ChannelGroup] get_pending_override 异常 (隔离, 不影响主流程): {_e}")
+
         # v3.13 M1.2b: pre_cycle_end 插件 hook — 结算结果已定 (is_good 入参), 但写库 +
         # 副作用 (PT flush / 录像收尾 / MES 推送 / 报警联动) 都还没发生. M1.2a 起返回的
         # returnable dict 让插件可强制改写结算结果 (override_result OK/NG). 这里消费它,
@@ -736,6 +755,20 @@ class SessionLifecycleMixin:
                         )
                 except Exception as e:
                     print(f"[Plugin] cycle_end hook 触发异常 (已隔离, 主流程继续): {e}")
+
+                # v3.13 RFC 10: 通知 ChannelGroupCoordinator 本次结算.
+                # 触发同组联动 (synchronized_any_ng: NG → 其它成员设 pending override).
+                # 通道不在任何组时直接 return, 零差异; 任何异常都隔离, 不影响主流程.
+                try:
+                    from backend.services.channel_group_coordinator import get_coordinator as _get_cg_coord
+                    _get_cg_coord().on_cycle_settled(
+                        channel_id=self.channel_id,
+                        cycle_id=cycle.id,
+                        is_good=bool(final_is_good),
+                        db=db,
+                    )
+                except Exception as _e:
+                    print(f"[ChannelGroup] on_cycle_settled 异常 (隔离, 不影响主流程): {_e}")
 
                 # v2.7.16: once_per_cycle 模式下, 周期结束 (无论 OK/NG) 都让扫码器
                 # 恢复扫描, 等下一个工件的码. 模式不匹配时是 no-op, 不需要额外判断.

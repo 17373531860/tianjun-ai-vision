@@ -173,3 +173,6 @@ register_permission("system.auth_toggle", "启用 / 关闭账号鉴权系统", "
 register_permission("system.license.manage", "管理 License 授权", "系统")
 register_permission("system.plugin.manage", "管理客户定制插件 (安装 / 启停 / 删除)", "系统")
 register_permission("system.apikey.manage", "管理 M2M API Key (副机 / 外部 MES / IPC)", "系统")
+# v3.13 RFC 10: 工位组 (单机内多通道结算联动)
+register_permission("system.channel_group.view", "查看工位组配置", "系统")
+register_permission("system.channel_group.manage", "管理工位组 (创建 / 编辑 / 删除)", "系统")

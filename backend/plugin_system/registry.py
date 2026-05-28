@@ -876,25 +876,134 @@ class PluginHost:
             )
             return False
 
-    # ---------- 仍 stub (实现等里程碑) ----------
+    # ---------- M1.3b: 工位组主动 API (RFC 10 落地后真实现) ----------
+
+    def list_channel_groups(self) -> List[Dict[str, Any]]:
+        """列出所有已加载的工位组 (v3.13 M1.3b + RFC 10 CG.7 真实现).
+
+        无 capability 要求 (查询接口对所有插件开放, 与 query_* 系列一致).
+
+        返回:
+          list of dict, 每个 dict 含:
+            {"id", "name", "member_channel_ids", "settle_strategy",
+             "timeout_ms", "timeout_action"}
+          没有任何工位组时返回 [].
+        """
+        try:
+            from backend.services.channel_group_coordinator import get_coordinator
+            return get_coordinator().list_groups()
+        except Exception as exc:
+            self._audit_log(
+                action="list_channel_groups",
+                status="failed",
+                message=f"获取工位组列表异常: {exc}",
+            )
+            log.warning(
+                "[Plugin][%s] list_channel_groups 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return []
+
+    def query_channel_group(self, group_id: int) -> Optional[Dict[str, Any]]:
+        """查单个工位组配置 (v3.13 M1.3b + RFC 10 CG.7 真实现).
+
+        无 capability 要求.
+
+        参数:
+          group_id: channel_groups 表的 id.
+
+        返回:
+          dict (字段同 list_channel_groups) 或 None (组不存在 / 已 disable).
+        """
+        try:
+            from backend.services.channel_group_coordinator import get_coordinator
+            return get_coordinator().get_group(group_id)
+        except Exception as exc:
+            self._audit_log(
+                action="query_channel_group",
+                status="failed",
+                message=f"group_id={group_id} 异常: {exc}",
+            )
+            log.warning(
+                "[Plugin][%s] query_channel_group 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return None
 
     def broadcast_to_channel_group(
         self,
         group_id: int,
         message: Dict[str, Any],
     ) -> bool:
-        """[STUB] 给工位组内其它通道发广播.
+        """给工位组内成员发自定义消息 (v3.13 M1.3b + RFC 10 CG.7 真实现).
 
-        实现等 RFC 10 (工位组主程序原生 + ChannelGroupCoordinator). 当前抛
-        ``PluginNotImplementedError``.
+        capability: ``runtime.channel_group_broadcast``.
 
-        未来契约 (RFC 10 落地后):
-        - group_id 必须是 channel_groups 表已存在的工位组 id
-        - 消息 dispatch 给同组其它 channel 的 VideoSourceManager (走主程序内存 channel)
-        - 不跨机器 (跨机器走 cluster_collector 已有路径)
+        实现: 通过 ``plugin_broadcast_received`` hook 通知同组所有成员 (含发送方),
+        插件 handler 自行决定如何消费 (例: 改本通道 cycle 状态 / 写日志 / 触发 UI).
+
+        参数:
+          group_id: channel_groups 表 id.
+          message: 必须可 JSON 序列化的 dict.
+
+        返回:
+          True = 广播 hook 已 fire; False = 组不存在 / message 非法 / 异常.
         """
-        raise PluginNotImplementedError(
-            f"[Plugin][{self.customer_code}] broadcast_to_channel_group(...) "
-            f"尚未接入主程序 (等 RFC 10 里程碑: 工位组主程序原生). "
-            f"临时替代: 用 hooks.register('cycle_end', ...) 在主程序 cycle_end 时各自处理."
-        )
+        self._require_capability("runtime.channel_group_broadcast")
+
+        if not isinstance(message, dict):
+            self._audit_log(
+                action="broadcast_to_channel_group",
+                status="rejected",
+                message=f"group_id={group_id} message 必须是 dict, 实际 {type(message).__name__}",
+            )
+            return False
+
+        import json
+        try:
+            json.dumps(message)
+        except (TypeError, ValueError) as exc:
+            self._audit_log(
+                action="broadcast_to_channel_group",
+                status="rejected",
+                message=f"group_id={group_id} message 不可 JSON 序列化: {exc}",
+            )
+            return False
+
+        try:
+            from backend.services.channel_group_coordinator import get_coordinator
+            coordinator = get_coordinator()
+            group = coordinator.get_group(group_id)
+            if not group:
+                self._audit_log(
+                    action="broadcast_to_channel_group",
+                    status="rejected",
+                    message=f"group_id={group_id} 不存在",
+                )
+                return False
+
+            from backend.plugin_system.hook_dispatch import fire_plugin_hook
+            fire_plugin_hook("plugin_broadcast_received", "broadcast", "post", {
+                "group_id": group_id,
+                "group_name": group["name"],
+                "member_channel_ids": list(group["member_channel_ids"]),
+                "sender_customer_code": self.customer_code,
+                "message": message,
+            })
+            self._audit_log(
+                action="broadcast_to_channel_group",
+                status="success",
+                message=f"group_id={group_id} members={group['member_channel_ids']}",
+            )
+            return True
+        except Exception as exc:
+            self._audit_log(
+                action="broadcast_to_channel_group",
+                status="failed",
+                message=f"group_id={group_id} 异常: {exc}",
+            )
+            log.warning(
+                "[Plugin][%s] broadcast_to_channel_group 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return False

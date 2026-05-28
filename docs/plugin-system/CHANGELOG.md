@@ -2,6 +2,46 @@
 
 ## 2026-05-28 (后续)
 
+### RFC 10 v3.13.0 骨架交付 — 工位组主程序原生（含 M1.3b 全部解锁）
+
+满足客户需求 4（双工位 A NG → B 同步 NG 联动）的主程序原生实现，同时解锁 M1.3b 留下的 3 个 PluginHost 工位组 API。
+
+**新增**：
+- **`channel_groups` 表**（`backend/models/models.py:ChannelGroup`）：单机内多通道结算联动配置
+- **`detection_cycles` 加 3 列**：`channel_group_id` / `group_settled_with: JSON` / `group_settle_result: VARCHAR(8)`
+- **`ChannelGroupCoordinator` 单例**（`backend/services/channel_group_coordinator.py`）：
+  - 持有 `_groups` / `_channel_to_group` / `_pending_override`（threading.Lock 保护）
+  - `reload_groups(db)` 启动时 + CRUD 后调
+  - `on_cycle_settled(channel_id, cycle_id, is_good, db)` VSM 结算调，触发 `synchronized_any_ng` 策略广播
+  - `get_pending_override(channel_id)` take-once 语义，VSM 下次 end_cycle 取走强制覆盖
+  - `on_channel_removed(channel_id)` ChannelManager 减通道时清理反向索引 + pending
+  - `list_groups / get_group / is_channel_in_group` 查询接口（返副本，不暴露内部 dict）
+- **VSM `end_cycle` 接入**（`backend/api/source_session_lifecycle_mixin.py`）：入口 `get_pending_override` 强制改 is_good + 写库后 `on_cycle_settled`
+- **`ChannelManager.set_channel_count` 联动**：清理 MES/Alarm 旁边补 Coordinator 清理
+- **启动加载**（`backend/main.py`）：`auto_load_active_project` 后调 `reload_groups`
+- **CRUD 端点 `/api/v1/channel-groups/*`**（`backend/api/channel_groups.py`）：list / get / create / update / delete / state，5 个端点；含 master_slave / 重复名 / 通道数 / 索引校验
+- **2 个新权限位**：`system.channel_group.view` / `system.channel_group.manage`
+- **PluginHost 3 个 API 真实现**（M1.3b 解锁）：
+  - `list_channel_groups()`（无 cap）
+  - `query_channel_group(group_id)`（无 cap）
+  - `broadcast_to_channel_group(group_id, message)`（cap `runtime.channel_group_broadcast`），fire `plugin_broadcast_received` hook
+- **`channel_group_settle_start` hook**：Coordinator NG 广播时 fire，ctx 含 group_id / group_name / trigger_channel_id / trigger_cycle_id / member_channel_ids / strategy
+
+**留待 v3.13.1**：
+- `synchronized_all_ok` 完整等待逻辑
+- timeout 机制（fallback_independent / force_ng）
+- `channel_group_settle_done` hook（依赖 timeout）
+- 与 cluster 集群互操作（station_id 映射 → BoxAggregation）
+- 前端 Settings tab（等 M2.2b 一起做）
+- BDD e2e
+
+**测试**：
+- 单元测试 20（`tests/channel_group/test_coordinator_RFC10_CG2.py`）：单例 / reload / 调度 / 策略行为 / 写库 / 查询接口 / 通道清理
+- 端点测试 14（`test_api_endpoints_RFC10_CG5.py`）：CRUD + 校验
+- PluginHost API 测试 15（`test_plugin_host_apis_RFC10_CG7.py`）：list / query / broadcast（capability / 校验 / audit）
+- 修：`test_active_apis.py: test_broadcast_to_channel_group_stub_raises` 移除（stub 已实现）
+- **回归**：plugin_system 328 + channel_group 49 = **377 全过零回归**（vs 之前 329）
+
 ### M2.2a 交付 — UI Slot 基础设施层（TjSlot + store + registry）
 
 - **新增 `<TjSlot>` 全局组件**（`frontend/src/components/TjSlot.vue`）：

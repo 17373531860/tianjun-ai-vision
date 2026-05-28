@@ -455,11 +455,9 @@ def test_mes_push_swallow_exception_returns_false(host_full_caps, isolated_db, m
 # tests/plugin_system/test_write_plugin_step_field_M3_3.py.
 
 
-def test_broadcast_to_channel_group_stub_raises(host_full_caps, isolated_db):
-    """broadcast_to_channel_group 抛 PluginNotImplementedError (等 RFC 10)."""
-    from backend.plugin_system.registry import PluginNotImplementedError
-    with pytest.raises(PluginNotImplementedError, match="RFC 10"):
-        host_full_caps.broadcast_to_channel_group(group_id=1, message={})
+# v3.13 RFC 10 CG.7: broadcast_to_channel_group / list_channel_groups /
+# query_channel_group 已真实现, 不再抛 PluginNotImplementedError.
+# 完整测试见 tests/channel_group/test_plugin_host_apis_RFC10_CG7.py.
 
 
 # ============================================================

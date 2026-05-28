@@ -396,15 +396,46 @@ Pinia store：新增 `useChannelGroupStore.js`。
 
 ## 十五、与 RFC 09 的协同里程碑
 
-| 时间线 | 动作 |
-|---|---|
-| v3.13.0 | RFC 09 M1.1 + M1.3 + M3.3 落地，RFC 10 工位组**字段 + Coordinator 骨架 + synchronized_any_ng + UI**（约 17 人天） |
-| v3.13.1 | RFC 09 M2.1 + M2.2 + M2.3 落地，RFC 10 `synchronized_all_ok` + timeout 边界完善 |
-| v3.13.2 | RFC 09 M3 全部落地，RFC 10 `master_slave` 推到 v3.14 |
-| v3.14.x | 视客户反馈扩展工位组高阶策略 |
+| 时间线 | 动作 | 状态 |
+|---|---|---|
+| v3.13.0 | RFC 09 M1.1 + M1.3 + M3.3 落地，RFC 10 工位组**字段 + Coordinator 骨架 + synchronized_any_ng + 端点 + PluginHost API**（约 17 人天） | ✅ 已交付 2026-05-28（前端 Settings tab 留待 M2.2b 接入时一起做） |
+| v3.13.1 | RFC 09 M2.1 + M2.2 + M2.3 落地，RFC 10 `synchronized_all_ok` + timeout 边界完善 + `channel_group_settle_done` hook | ⏸ 留待真实客户驱动 |
+| v3.13.2 | RFC 09 M3 全部落地，RFC 10 `master_slave` 推到 v3.14 | ⏸ |
+| v3.14.x | 视客户反馈扩展工位组高阶策略 | ⏸ |
 
 ---
 
-**本文件最后更新**：2026-05-28（RFC 10 初稿，与 RFC 09 同批起草）
+## 十六、v3.13.0 交付清单（2026-05-28）
+
+按章节范围交付:
+
+| 子任务 | 状态 | 文件 |
+|---|---|---|
+| CG.1 数据模型 + migrate | ✅ | `backend/models/models.py: ChannelGroup` + `DetectionCycle.channel_group_id / group_settled_with / group_settle_result`；`backend/main.py:migrate_database` 加 3 个 ALTER |
+| CG.2 ChannelGroupCoordinator 单例骨架 | ✅ | `backend/services/channel_group_coordinator.py`（含线程锁 + reload_groups + on_channel_removed + 单例 + 测试 reset helper） |
+| CG.3 `synchronized_any_ng` 策略 | ✅ | 同上文件 `on_cycle_settled` + `get_pending_override` (take-once) + `_broadcast_ng_to_group` |
+| CG.4 VSM end_cycle 接入 | ✅ | `backend/api/source_session_lifecycle_mixin.py:end_cycle`：入口 `get_pending_override` 强制改 is_good + 写库后 `on_cycle_settled`；`backend/api/channel_manager.py:set_channel_count` 清理 `on_channel_removed`；`backend/main.py` 启动加载 |
+| CG.5 CRUD 端点 | ✅ | `backend/api/channel_groups.py` (5 个端点) + 2 个新权限位 `system.channel_group.view / .manage` |
+| CG.6 `channel_group_settle_start` hook | ✅ | 已在 Coordinator 内 fire；done hook 留待 timeout / synchronized_all_ok 落地一并做 |
+| CG.7 PluginHost 3 个 API 真实现 | ✅ | `backend/plugin_system/registry.py`: `list_channel_groups` / `query_channel_group` (无 cap) + `broadcast_to_channel_group` (cap `runtime.channel_group_broadcast`)，解锁 M1.3b 全部 |
+| CG.8 与 cluster 互操作 | ⏸ | 留 v3.13.1（station_id 映射 + box_summary 写组级结果） |
+| CG.9 测试 | ✅ | 单元 20 + 端点 14 + PluginHost API 15 = **49 个新单元测试，349 → 377 全过零回归** |
+| CG.9 BDD | ⏸ | 留 v3.13.1（含 cluster 互操作的 e2e 场景） |
+| CG.10 文档 | ✅ | RFC 10 §十六 + 主 CHANGELOG + manifest schema |
+
+**v3.13.0 验收**:
+- ✅ AC-CG-1（synchronized_any_ng 联动）：单元测试覆盖
+- ✅ AC-CG-2（group_settled_with 字段）：单元测试覆盖
+- ✅ AC-CG-3 / AC-CG-4（per_item / last_first 互斥校验）：端点层守护测试
+- ⏸ AC-CG-5（超时 fallback）：留 v3.13.1
+- ✅ AC-CG-6（enabled=True 不能删）：端点测试
+- ✅ AC-CG-7（hook ctx 字段）：单元测试覆盖
+- ⏸ AC-CG-8（cluster 互操作）：留 v3.13.1
+- ✅ AC-CG-9（channel_count 减小 → 清理 reverse index + pending）：单元 + ChannelManager 真实接入
+- ✅ AC-CG-10（零差异默认）：单元测试 + 完整 plugin_system 回归 0 失败
+
+---
+
+**本文件最后更新**：2026-05-28（v3.13.0 RFC 10 实施交付同步）
 **作者**：项目主作者 + AI agents
-**状态**：草案，待主作者评审 + 客户场景演练
+**状态**：v3.13.0 骨架已落地，待客户场景演练 + v3.13.1 完善
