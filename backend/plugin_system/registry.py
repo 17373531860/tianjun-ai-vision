@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, FastAPI
@@ -200,20 +200,47 @@ class TablesRegistry:
 # ----------------------- export / realtime placeholders -----------------------
 
 
+class PluginNotImplementedError(NotImplementedError):
+    """插件试图调用主程序尚未接入的 registry API.
+
+    与原生 NotImplementedError 区分, 让外层 try/except 能精准捕获 (避免误吞
+    Python 标准库其它 NotImplementedError). PluginManager 加载流程会把它转成
+    audit log + state=failed, 不影响主程序启动.
+    """
+
+
 @dataclass
-class _PlaceholderRegistry:
-    """占位 registry，仅收集，不接到主程序。等 F7/F8/F9 接入。"""
+class _UnimplementedRegistry:
+    """尚未接入主程序的 registry — 调用即抛 ``PluginNotImplementedError``.
+
+    背景:
+      v3.7.0 ~ v3.12.0 版本 export_templates / export_fields / realtime_triggers 三个
+      registry 是 "善意的谎言" 占位实现 (调用成功 / 写日志 / 但主程序根本不接).
+      插件作者写代码时以为生效, 实际客户机上注册的内容对主程序导出 / 实时规则毫无
+      影响 -- 这是非常严重的认知陷阱.
+
+      v3.13 起改为 fail-fast: 调用即抛, 让插件作者立刻在加载阶段看到错, 而不是
+      在客户现场跑出 "怎么这功能没生效" 的灵异 bug.
+
+    对插件作者的迁移建议:
+      - 等主程序接入 (见 docs/plugin-system/CHANGELOG.md F7/F8/F9 进度)
+      - 临时用 hooks.register("cycle_end", ...) 在 hook 里做导出 / 实时推送绕路
+      - 在 manifest capabilities 里**不要**声明 backend.export.* / backend.realtime.*
+    """
 
     name: str
     customer_code: str
-    items: List[Any] = field(default_factory=list)
+    not_yet_milestone: str  # 例 "F7" / "F8" / "F9", 写进异常便于溯源
 
     def register(self, *args, **kwargs) -> None:
-        self.items.append({"args": args, "kwargs": kwargs})
-        log.info(
-            "[Plugin][%s] %s placeholder registered (count=%d) — 等 F7/F8/F9 接入",
-            self.customer_code, self.name, len(self.items),
+        msg = (
+            f"[Plugin][{self.customer_code}] registry.{self.name}.register(...) "
+            f"尚未接入主程序 (等 {self.not_yet_milestone} 里程碑). "
+            f"v3.7.0~v3.12.0 该接口曾是占位 (调用成功但不生效), v3.13+ 改为 fail-fast 防止"
+            f"插件作者误以为生效. 临时用 hooks.register('cycle_end', ...) 绕路."
         )
+        log.warning("[Plugin][%s] %s.register 被拒绝: %s", self.customer_code, self.name, msg)
+        raise PluginNotImplementedError(msg)
 
 
 # ----------------------- PluginRegistry -----------------------
@@ -229,9 +256,9 @@ class PluginRegistry:
         self.routes = RoutesRegistry(app=app, customer_code=customer_code)
         self.hooks = HooksRegistry(customer_code=customer_code)
         self.tables = TablesRegistry(engine=engine, customer_code=customer_code)
-        self.export_templates = _PlaceholderRegistry("export_templates", customer_code)
-        self.export_fields = _PlaceholderRegistry("export_fields", customer_code)
-        self.realtime_triggers = _PlaceholderRegistry("realtime_triggers", customer_code)
+        self.export_templates = _UnimplementedRegistry("export_templates", customer_code, "F7")
+        self.export_fields = _UnimplementedRegistry("export_fields", customer_code, "F8")
+        self.realtime_triggers = _UnimplementedRegistry("realtime_triggers", customer_code, "F9")
 
     def snapshot(self) -> Dict[str, Any]:
         """诊断快照：列出本插件注册的所有东西。"""
@@ -243,9 +270,11 @@ class PluginRegistry:
                 for h in self.hooks.list()
             ],
             "tables": self.tables.registered(),
-            "export_templates_count": len(self.export_templates.items),
-            "export_fields_count": len(self.export_fields.items),
-            "realtime_triggers_count": len(self.realtime_triggers.items),
+            # 三个 registry v3.13 起 fail-fast (调用即抛), 任何 manifest 显式声明
+            # 用了它们的插件都会在 register_plugin 阶段被拒绝, 不会抵达 snapshot.
+            "export_templates_status": "not_implemented_F7",
+            "export_fields_status": "not_implemented_F8",
+            "realtime_triggers_status": "not_implemented_F9",
         }
 
 
