@@ -34,6 +34,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session as DBSession
 
 from backend.core.config import BASE_DIR
+# v3.7.3: 跨 dialect SUM(boolean) 兼容 — PG 不允许 SUM(BooleanColumn), 必须 cast int
+from backend.db.sql_compat import sum_bool
 
 
 # ============================================================
@@ -1101,7 +1103,7 @@ def build_range_context(db: DBSession,
         rows = db.query(
             sa_func.date(DetectionCycle.start_time).label("d"),
             sa_func.count(DetectionCycle.id),
-            sa_func.sum(DetectionCycle.is_good == True),  # noqa: E712
+            sum_bool(DetectionCycle.is_good == True),  # v3.7.3 (PG fix): noqa: E712
         ).filter(DetectionCycle.session_id.in_(sids)).group_by("d").order_by("d").all()
         for d, total, good in rows:
             good = int(good or 0)
@@ -1154,7 +1156,7 @@ def build_range_context(db: DBSession,
         step_rows = db.query(
             StepRecord.step_label,
             sa_func.count(StepRecord.id),
-            sa_func.sum(StepRecord.is_valid == True),  # noqa: E712
+            sum_bool(StepRecord.is_valid == True),  # v3.7.3 (PG fix): noqa: E712
             sa_func.avg(StepRecord.duration),
             sa_func.min(StepRecord.duration),
             sa_func.max(StepRecord.duration),
