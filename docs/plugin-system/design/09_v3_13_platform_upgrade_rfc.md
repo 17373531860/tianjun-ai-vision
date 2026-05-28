@@ -159,7 +159,7 @@ def fire_plugin_hook(
 | `mes_push(event_type, payload, channel_id=None)` | 走主程序 MES Gateway 推送 | 需声明 `runtime.mes_push`；`event_type` 必须 `plugin_<customer_code>_` 前缀；`payload` 必须是 dict | ✅ M1.3a |
 | `read_system_config(key)` | 读 SystemConfig KV 值 | **不**需声明（只读无副作用）；高频不写 audit | ✅ M1.3a |
 | `write_system_config(key, value, description=None)` | upsert SystemConfig KV | 需声明 `runtime.system_config_write`；`key` 必须 `plugin_<customer_code>_` 前缀 | ✅ M1.3a |
-| `write_plugin_step_field(step_record_id, key, value)` | 在 `step_records.plugin_data` 落插件命名空间字段 | `key` 必须 `plugin_<customer_code>_` 前缀；`value` 必须可 JSON 序列化 | ⏸️ stub → M1.3b（依赖 M3.3） |
+| `write_plugin_step_field(step_record_id, key, value)` | JSON 合并写入 `step_records.plugin_data` 字段；不删其它 key（含其他客户的 key） | 需声明 `runtime.step_field_write`；`key` 必须 `plugin_<customer_code>_` 前缀；`value` 必须可 JSON 序列化（lambda / 自定义类直接被拒） | ✅ M3.3（2026-05-28） |
 | `broadcast_to_channel_group(group_id, message)` | 给工位组内其它通道发广播 | 只 active 工位组成员才生效 | ⏸️ stub → M1.3b（依赖 RFC 10） |
 
 **M1.3a 实现要点**（已落地）：
@@ -171,9 +171,9 @@ def fire_plugin_hook(
 - `manifest.capabilities` 词汇表扩展 3 个新枚举：`runtime.alarm_trigger` / `runtime.mes_push` / `runtime.system_config_write`（见 `design/01_manifest_schema.md` §3.4.1）
 - 测试覆盖：33 个新单测分 8 个维度（异常类 / capabilities / 命名空间 / 实际效果 / audit / 错误隔离 / stub / 向后兼容）
 
-**M1.3b 待做** — 见上表 stub 列；落地时机：
-- `write_plugin_step_field` ← M3.3 完成 `step_records.plugin_data` JSON 字段后即可去掉 stub
-- `broadcast_to_channel_group` / `query_channel_group` / `list_channel_groups` ← RFC 10 工位组主程序原生落地后
+**M1.3b 进度**：
+- ✅ `write_plugin_step_field` — M3.3 已落地（v3.13, 2026-05-28），见 §6.4
+- ⏸ `broadcast_to_channel_group` / `query_channel_group` / `list_channel_groups` ← RFC 10 工位组主程序原生落地后
 
 ### 4.5 验收标准（M1）
 
@@ -353,15 +353,20 @@ plugin.uiHidden = [
 - 主程序读自家配置时不动这层
 - 客户卸载插件时清理 `plugin_<customer_code>_*` 全部 KV（走 plugin_uninstall hook）
 
-### 6.4 子任务 M3.3：StepRecord 加 `plugin_data` 字段
+### 6.4 子任务 M3.3：StepRecord 加 `plugin_data` 字段 ✅（已交付 2026-05-28）
 
 需求 1 的"步骤警告"要把"是否触发警告 + 警告标签"落库（前端通过 query 接口拿到），但加专属字段会污染 `step_records` schema。
 
 **方案**：
-- `step_records` 加 `plugin_data: JSON`（默认 `{}`，nullable）
-- M1 的 `PluginHost.write_plugin_step_field(step_record_id, key, value)` 写到这个字段
-- 同样命名空间约束：key 必须 `plugin_<customer_code>_*`
-- 数据导出 / CSV / 实时规则**不**默认导出 `plugin_data`（避免暴露插件内部）；客户自定义导出模板可显式取
+- ✅ `step_records.plugin_data: Column(JSON, nullable=True)`（`backend/models/models.py`）+ `migrate_database()` 加 `("step_records", "plugin_data", "JSON")` 探针式 ALTER TABLE
+- ✅ M1.3b 的 `PluginHost.write_plugin_step_field(step_record_id, key, value)` 真实现：
+  * 需声明 `runtime.step_field_write` capability（新增枚举，见 manifest schema §3.4）
+  * key 命名空间隔离 `plugin_<customer_code>_*`（与 `write_system_config` 一致）
+  * value 必须可 JSON 序列化（lambda / 自定义类拒绝并 audit rejected，不抛）
+  * step_record_id 不存在 → 返 False + audit
+  * **JSON 合并**写入（浅拷 + 整字段重赋）避免 SQLAlchemy mutation 检测不到导致不 UPDATE
+- ✅ 主程序 `sessions_export.py` 默认 CSV 列硬拼，**不**暴露 `plugin_data`（设计目标满足）；自定义导出模板可显式取 `{step.plugin_data.<plugin_namespaced_key>}`
+- ✅ 18 个新单测覆盖 capability / 命名空间 / JSON 校验 / 合并语义 / audit / 错误隔离 / 签名锁定
 
 ### 6.5 子任务 M3.4：配置面板 tab 注入
 

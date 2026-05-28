@@ -67,6 +67,8 @@ def migrate_database():
     migrations = [
         # (表名, 列名, 列类型)
         ("step_records", "interval_to_next", "FLOAT"),
+        # v3.13 M3.3: 插件命名空间字段 (PluginHost.write_plugin_step_field 落地点)
+        ("step_records", "plugin_data", "JSON"),
         ("detection_cycles", "interval_to_next", "FLOAT"),
         ("data_export_settings", "record_cycle_interval", "BOOLEAN DEFAULT 1"),
         ("data_export_settings", "export_step_duration", "BOOLEAN DEFAULT 1"),

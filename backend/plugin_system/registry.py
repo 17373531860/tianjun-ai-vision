@@ -320,8 +320,12 @@ class PluginHost:
     - read_system_config(key):                        读主程序 SystemConfig 表
     - write_system_config(key, value, description):   写主程序 SystemConfig 表
 
-    M1.3a stub (实现等里程碑):
-    - write_plugin_step_field(...):   等 M3.3 (step_records.plugin_data JSON 字段)
+    M3.3 已落地 (v3.13, 2026-05-28 — 原 M1.3a stub 升级为真实现):
+    - write_plugin_step_field(step_record_id, key, value):
+                                       JSON 合并写入 step_records.plugin_data,
+                                       需 'runtime.step_field_write' capability
+
+    仍 stub (实现等里程碑):
     - broadcast_to_channel_group(...): 等 RFC 10 (工位组主程序原生)
 
     为何返回 dict 而不是 ORM 对象:
@@ -780,25 +784,99 @@ class PluginHost:
             )
             return False
 
-    # ---------- M1.3a stub (实现等里程碑) ----------
+    # ---------- M1.3b 真实现 (M3.3 step_records.plugin_data 已落地) ----------
 
     def write_plugin_step_field(self, step_record_id: int, key: str, value: Any) -> bool:
-        """[STUB] 在 step_records 落插件命名空间字段.
+        """在 step_records.plugin_data JSON 字段写一个插件命名空间 key.
 
-        实现等 M3.3 (step_records.plugin_data JSON 字段). 当前抛
-        ``PluginNotImplementedError``, 让插件作者明确知道这能力还没接.
+        v3.13 M3.3 解锁 (原 M1.3a stub 升级为真实现).
 
-        未来契约 (M3.3 落地后):
-        - step_record_id 必须是当前 channel 已结束的 step record id
-        - key 必须 `plugin_<customer_code>_` 前缀
-        - value 必须可 JSON 序列化
-        - 写入 step_records.plugin_data[<key>] = value (JSON 合并, 不删其它 key)
+        参数:
+            step_record_id: step_records.id (主程序写库后给插件的标识符,
+                            一般通过 step_change hook ctx['step_record_id'] 拿到).
+            key:            **必须** ``plugin_<customer_code>_`` 前缀 (命名空间隔离).
+            value:          必须可 JSON 序列化 (主流类型: bool / int / float / str /
+                            None / list / dict). 不可 JSON 序列化的值会被拒绝.
+
+        返回:
+            True  = JSON 合并写入成功 + audit 写入.
+            False = step_record 不存在 / value 不可 JSON / 异常被 swallow.
+
+        安全约束:
+            - 需要 manifest.capabilities 声明 ``runtime.step_field_write``.
+            - key 必须命名空间前缀 (与 write_system_config 一致).
+            - value 必须可 JSON 序列化 (容错: 失败时 audit + 返 False, 不抛).
+
+        语义:
+            - **JSON 合并**写入: 仅设/覆盖 ``plugin_data[key]``, 其它 key 不动 (含
+              其他客户插件的 key, 或同插件先前写过的其他 key).
+            - 不限制 step_record 必须属于当前 channel — 与 ``query_step`` 一致,
+              让插件能跨 channel 写自家命名空间字段 (例: 集群场景副机插件回填主机).
+            - 写完不通知主程序; 主程序导出/CSV/默认序列化**不**暴露此字段, 仅自定义
+              导出模板可显式取 ``{step.plugin_data.<key>}``.
         """
-        raise PluginNotImplementedError(
-            f"[Plugin][{self.customer_code}] write_plugin_step_field(...) "
-            f"尚未接入主程序 (等 M3.3 里程碑: step_records.plugin_data JSON 字段). "
-            f"临时替代: 用 backend.tables registry 注册自家表 + hook step_change 时落自家表."
-        )
+        self._require_capability("runtime.step_field_write")
+        self._require_plugin_namespace(key, field_name="key")
+
+        # value 可 JSON 序列化校验 — 必须先于 DB 查找做, 防 value 类型错误时
+        # 还白浪费一次 DB 查询.
+        import json
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError) as exc:
+            self._audit_log(
+                action="write_plugin_step_field",
+                status="rejected",
+                message=f"step_record_id={step_record_id} key={key} value 不可 JSON 序列化: {exc}",
+            )
+            return False
+
+        try:
+            from backend.db.database import SessionLocal
+            from backend.models.models import StepRecord
+
+            db = SessionLocal()
+            try:
+                row = db.query(StepRecord).filter(StepRecord.id == step_record_id).first()
+                if row is None:
+                    self._audit_log(
+                        action="write_plugin_step_field",
+                        status="rejected",
+                        message=f"step_record_id={step_record_id} 不存在",
+                    )
+                    return False
+
+                # JSON 合并: 原值为 None / 非 dict 时初始化为空 dict, 仅设/覆盖目标 key.
+                current = row.plugin_data if isinstance(row.plugin_data, dict) else {}
+                # 浅拷贝防止 SQLAlchemy 检测不到 mutation (JSON column 默认 dirty 检测对
+                # 顶层 dict 引用变化敏感; 不新建 dict 直接 row.plugin_data[key] = value 在
+                # 部分驱动 / SQLite JSON 上不会标 dirty → 不会 UPDATE).
+                merged = dict(current)
+                merged[key] = value
+                row.plugin_data = merged
+                db.commit()
+
+                self._audit_log(
+                    action="write_plugin_step_field",
+                    status="success",
+                    message=f"step_record_id={step_record_id} key={key}",
+                )
+                return True
+            finally:
+                db.close()
+        except Exception as exc:
+            self._audit_log(
+                action="write_plugin_step_field",
+                status="failed",
+                message=f"step_record_id={step_record_id} key={key} err={exc}",
+            )
+            log.warning(
+                "[Plugin][%s] write_plugin_step_field 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return False
+
+    # ---------- 仍 stub (实现等里程碑) ----------
 
     def broadcast_to_channel_group(
         self,

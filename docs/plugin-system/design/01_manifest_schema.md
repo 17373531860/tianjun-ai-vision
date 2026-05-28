@@ -382,6 +382,7 @@ plugins/{customer_code}/
 | **runtime.alarm_trigger** | 调用 `PluginHost.trigger_alarm` 触发主程序报警 | (运行时声明, 见 §3.4.1) |
 | **runtime.mes_push** | 调用 `PluginHost.mes_push` 走 MES Gateway 外推 | (运行时声明, 见 §3.4.1) |
 | **runtime.system_config_write** | 调用 `PluginHost.write_system_config` 写 KV 配置 | (运行时声明, 见 §3.4.1) |
+| **runtime.step_field_write** | 调用 `PluginHost.write_plugin_step_field` 写 `step_records.plugin_data` JSON 字段 | (运行时声明, 见 §3.4.1) |
 
 **未来扩展**：新加能力时**不删旧的**，老 manifest 保持兼容。
 
@@ -396,6 +397,7 @@ plugins/{customer_code}/
 | `runtime.alarm_trigger` | `host.trigger_alarm(channel_id, event_type, reason)` | 触发主程序 `AlarmRouter`（灯柱/蜂鸣器） |
 | `runtime.mes_push` | `host.mes_push(event_type, payload, channel_id)` | 走主程序 `MESGateway.dispatch` 外推（`event_type` 必须 `plugin_<cc>_` 前缀） |
 | `runtime.system_config_write` | `host.write_system_config(key, value, description)` | 写 `system_configs` 表（`key` 必须 `plugin_<cc>_` 前缀） |
+| `runtime.step_field_write` | `host.write_plugin_step_field(step_record_id, key, value)` | JSON 合并写入 `step_records.plugin_data`（`key` 必须 `plugin_<cc>_` 前缀，`value` 必须可 JSON 序列化）— v3.13 M3.3 |
 
 **注意**：
 - `host.read_system_config(...)` **不**需要声明 capability（只读无副作用，跨插件查主程序状态是合理需求）

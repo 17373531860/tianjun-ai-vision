@@ -263,7 +263,13 @@ class StepRecord(Base):
     screenshot_path = Column(String(500), nullable=True)  # 截图路径
     video_path = Column(String(500), nullable=True)  # 步骤视频路径
     video_id = Column(String(50), nullable=True)  # 视频ID
-    
+
+    # v3.13 M3.3: 插件命名空间字段 (PluginHost.write_plugin_step_field 写入)
+    # 结构: {"plugin_<customer_code>_<key>": <value>, ...}
+    # 主程序导出 / CSV / 默认序列化均不暴露此字段, 仅自定义导出模板可显式取
+    # ({step.plugin_data.<plugin_namespaced_key>}).
+    plugin_data = Column(JSON, nullable=True)
+
     # 关系
     cycle = relationship("DetectionCycle", back_populates="step_records")
 

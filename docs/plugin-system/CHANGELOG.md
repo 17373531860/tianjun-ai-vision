@@ -1,5 +1,23 @@
 # 插件系统设计变更记录
 
+## 2026-05-28 (后续)
+
+### M3.3 + M1.3b 部分交付 — `write_plugin_step_field` 真实现
+
+- **`step_records.plugin_data: JSON` 字段落地**（`backend/models/models.py`）+ `migrate_database()` 加 ALTER TABLE 探针（老客户库升级自动补列）
+- **`PluginHost.write_plugin_step_field(step_record_id, key, value)` 从 stub 升级为真实现**（`backend/plugin_system/registry.py`）：
+  - 需声明新 capability `runtime.step_field_write`
+  - key 必须 `plugin_<customer_code>_` 前缀（命名空间隔离，与 `write_system_config` 一致）
+  - value 必须可 JSON 序列化（lambda / 自定义类被拒，audit rejected，不抛）
+  - step_record_id 不存在 → 返 False + audit rejected
+  - **JSON 合并语义**：浅拷 + 整字段重赋（不直接 `row.plugin_data[key] = value`），防 SQLAlchemy mutation 检测失效导致不 UPDATE；不删其它 key（含其他客户插件的 key）
+  - audit log + 错误隔离与现有 4 个主动 API 一致
+- **manifest schema capabilities 词汇表加 `runtime.step_field_write` 枚举**（`docs/plugin-system/design/01_manifest_schema.md` §3.4 + §3.4.1）
+- **18 个新单测**（`tests/plugin_system/test_write_plugin_step_field_M3_3.py`）：capability 拒绝 / 命名空间拒绝 3 个 / JSON 不可序列化拒绝 3 个 / step_record 不存在拒绝 / 写入合并语义 4 个 / audit log 3 个 / 错误隔离 / 签名 + capability 字符串锁定 2 个
+- **回归状态**：plugin_system 全套 **304/304 通过**（287 + 18 新 − 1 旧 stub 测试），零回归
+- 主程序 CSV / 默认导出**不**暴露 `plugin_data`（M3.3 设计目标）；自定义导出模板可显式取 `{step.plugin_data.<key>}`
+- M1.3b 剩余项：`broadcast_to_channel_group` / `query_channel_group` / `list_channel_groups` 仍 stub，等 RFC 10 工位组主程序原生落地
+
 ## 2026-05-28
 
 ### Added

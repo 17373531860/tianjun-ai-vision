@@ -78,7 +78,7 @@ def host_no_caps(isolated_db):
 
 @pytest.fixture
 def host_full_caps(isolated_db):
-    """声明所有 3 个主动 API capabilities 的 host."""
+    """声明所有主动 API capabilities 的 host (v3.13 M3.3 加 step_field_write)."""
     from backend.plugin_system.registry import PluginHost
     return PluginHost(
         customer_code="acme",
@@ -88,6 +88,7 @@ def host_full_caps(isolated_db):
             "runtime.alarm_trigger",
             "runtime.mes_push",
             "runtime.system_config_write",
+            "runtime.step_field_write",
         ],
     )
 
@@ -448,15 +449,10 @@ def test_mes_push_swallow_exception_returns_false(host_full_caps, isolated_db, m
 
 
 # ============================================================
-# G. M1.3a stub (NotImplementedError)
+# G. 剩余 stub (NotImplementedError)
 # ============================================================
-
-
-def test_write_plugin_step_field_stub_raises(host_full_caps, isolated_db):
-    """write_plugin_step_field 抛 PluginNotImplementedError (等 M3.3)."""
-    from backend.plugin_system.registry import PluginNotImplementedError
-    with pytest.raises(PluginNotImplementedError, match="M3.3"):
-        host_full_caps.write_plugin_step_field(step_record_id=1, key="plugin_acme_x", value=1)
+# write_plugin_step_field 已在 v3.13 M3.3 升级为真实现, 见
+# tests/plugin_system/test_write_plugin_step_field_M3_3.py.
 
 
 def test_broadcast_to_channel_group_stub_raises(host_full_caps, isolated_db):
