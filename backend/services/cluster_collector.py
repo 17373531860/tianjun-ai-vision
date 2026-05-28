@@ -684,6 +684,15 @@ class ClusterCollector:
             gw = get_mes_gateway()
             gw.dispatch("box_complete", aggregated, channel_id=None)
 
+            # v3.13: box_complete 插件 hook — 集群所有工位齐发 + MES Gateway 推送后,
+            # 让插件拿到聚合 box 数据做自定义动作 (写日志 / 推第三方系统 / 写 ClickHouse 等).
+            # ctx 即 aggregated dict (核心 box 聚合结果, 字段集合见上方 aggregated = {...}).
+            try:
+                from backend.plugin_system.hook_dispatch import fire_plugin_hook
+                fire_plugin_hook("box_complete", "post_box", "post", dict(aggregated))
+            except Exception as e:
+                logger.warning("[Plugin] box_complete hook 触发异常 (已隔离, 主流程继续): %s", e)
+
             def mark_pushed(db):
                 s = (db.query(BoxSummary)
                      .filter(BoxSummary.box_serial == box_serial).first())

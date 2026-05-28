@@ -256,6 +256,30 @@ class SessionLifecycleMixin:
             else:
                 print(f"end_session: 未找到会话 ID={session_id}")
             
+            # v3.13: session_end 插件 hook — session 已写库 + 统计已聚合, db 即将关闭.
+            # 在 MES Hook 之前触发, 让插件能拿到完整统计快照 (与 cycle_end 时序对齐).
+            # 字段名为契约一部分: 改名要进 changelog + 升级 plugin SDK 测试.
+            session_ctx_total = session.total_cycles if (session and session.total_cycles is not None) else 0
+            session_ctx_good = session.good_cycles if (session and session.good_cycles is not None) else 0
+            session_ctx_ng = session.ng_cycles if (session and session.ng_cycles is not None) else 0
+            try:
+                from backend.plugin_system.hook_dispatch import fire_plugin_hook
+                fire_plugin_hook("session_end", "post_session", "post", {
+                    "channel_id": self.channel_id,
+                    "session_id": session_id,
+                    "session_uuid": session_uuid,
+                    "total_cycles": session_ctx_total,
+                    "good_cycles": session_ctx_good,
+                    "ng_cycles": session_ctx_ng,
+                    "avg_cycle_time": session.avg_cycle_time if session else None,
+                    "min_cycle_time": session.min_cycle_time if session else None,
+                    "max_cycle_time": session.max_cycle_time if session else None,
+                    "counters_snapshot": dict(session.counters_snapshot) if (session and session.counters_snapshot) else {},
+                    "project_id": self.project_config.get("id") if self.project_config else None,
+                })
+            except Exception as e:
+                print(f"[Plugin] session_end hook 触发异常 (已隔离, 主流程继续): {e}")
+
             db.close()
             
             # MES Hook: Session 结束
@@ -486,6 +510,27 @@ class SessionLifecycleMixin:
         """结束当前检测周期"""
         if not self.current_cycle_id or not self.recording_enabled:
             return
+
+        # v3.13: pre_cycle_end 插件 hook — 结算结果已定 (is_good 入参), 但写库 + 副作用
+        # (PT flush / 录像收尾 / MES 推送 / 报警联动) 都还没发生. 插件可在此做"结算决定后
+        # 但任何持久化前的最后一次审计 / 提前推送", 但**不能**修改 is_good (注释级约束).
+        try:
+            from backend.plugin_system.hook_dispatch import fire_plugin_hook
+            fire_plugin_hook("pre_cycle_end", "pre_cycle", "pre", {
+                "channel_id": self.channel_id,
+                "cycle_id": self.current_cycle_id,
+                "session_id": self.current_session_id,
+                "is_good": bool(is_good),
+                "result": "OK" if is_good else "NG",
+                "judgement": "OK" if is_good else "NG",
+                "event_id": event_id,
+                "event_name": event_name,
+                "reason": reason,
+                "project_id": self.project_config.get("id") if self.project_config else None,
+                "step_sequence": list(self.current_cycle_steps) if hasattr(self, "current_cycle_steps") else [],
+            })
+        except Exception as e:
+            print(f"[Plugin] pre_cycle_end hook 触发异常 (已隔离, 主流程继续): {e}")
 
         # v3.8.x: 在 stop_recording / history 快照 之前，把还在画面里的步骤 PT 主动写入累计字典。
         # 解决 NG 周期下 D 步骤直接结算时 PT 显示 '--' 的客户报障（详见 _flush_active_steps_pt 注释）。
