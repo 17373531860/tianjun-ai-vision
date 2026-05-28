@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 
@@ -46,9 +47,17 @@ def get_coordinator() -> "ChannelGroupCoordinator":
 
 
 def reset_coordinator_for_testing() -> None:
-    """测试用: 重置单例, 防 fixture 互相污染."""
+    """测试用: 重置单例, 防 fixture 互相污染.
+
+    会先取消所有 pending timer 防 Timer 线程跨用例触发.
+    """
     global _singleton
     with _singleton_lock:
+        if _singleton is not None:
+            try:
+                _singleton.cleanup_timers_for_testing()
+            except Exception:
+                pass
         _singleton = None
 
 
@@ -75,6 +84,10 @@ class ChannelGroupCoordinator:
         self._channel_to_group: Dict[int, int] = {}
         # channel_id → "OK" | "NG" (pending override, 下次 end_cycle 强制采用)
         self._pending_override: Dict[int, str] = {}
+        # v3.13.1: synchronized_all_ok 聚合等齐状态机
+        # group_id → { "members": {ch: {"cycle_id": int, "is_good": bool}},
+        #              "started_at": float, "timer": threading.Timer | None }
+        self._pending_aggregations: Dict[int, Dict[str, Any]] = {}
         self._lock = threading.Lock()
 
     # =============================================================
@@ -117,12 +130,31 @@ class ChannelGroupCoordinator:
     def on_channel_removed(self, channel_id: int) -> None:
         """ChannelManager.set_channel_count 减少通道时调.
 
-        清理 _channel_to_group + _pending_override 中该 channel 的痕迹.
+        清理 _channel_to_group + _pending_override + _pending_aggregations 中该 channel 的痕迹.
         组配置 (_groups) 不动 — 组配置变更走 reload_groups, 不在这里处理.
         """
         with self._lock:
             self._channel_to_group.pop(channel_id, None)
             self._pending_override.pop(channel_id, None)
+            # 把该 channel 从所有 pending aggregation 里移除. 如果导致某 agg 空了, 取消其 timer.
+            for gid in list(self._pending_aggregations.keys()):
+                agg = self._pending_aggregations[gid]
+                agg["members"].pop(channel_id, None)
+
+    def cleanup_timers_for_testing(self) -> None:
+        """测试用: 取消所有 pending aggregation 的后台 timer.
+
+        测试 teardown 时调, 防 Timer 线程跨用例污染.
+        """
+        with self._lock:
+            for agg in self._pending_aggregations.values():
+                t = agg.get("timer")
+                if t:
+                    try:
+                        t.cancel()
+                    except Exception:
+                        pass
+            self._pending_aggregations.clear()
 
     # =============================================================
     # 运行时入口
@@ -163,6 +195,8 @@ class ChannelGroupCoordinator:
                 return
             strategy = group["settle_strategy"]
             members = list(group["member_channel_ids"])
+            timeout_ms = int(group.get("timeout_ms") or 5000)
+            timeout_action = group.get("timeout_action") or "fallback_independent"
 
         # 把本通道当前 cycle 标到组里 (无论策略如何都标, 让 group_settle_result
         # 字段成为"该周期的组级原意"). 即使是 independent 策略也写, 方便审计.
@@ -173,10 +207,44 @@ class ChannelGroupCoordinator:
             settled_with=None,
         )
 
-        if strategy == "synchronized_any_ng" and not is_good:
+        # NG 立即广播到其它成员 (synchronized_any_ng 和 synchronized_all_ok 都立即响应 NG)
+        if strategy in ("synchronized_any_ng", "synchronized_all_ok") and not is_good:
             self._broadcast_ng_to_group(
                 db, group, channel_id, cycle_id, members,
             )
+
+        # synchronized_all_ok: 把本周期挂入 pending aggregation 等齐
+        if strategy == "synchronized_all_ok":
+            all_arrived = False
+            with self._lock:
+                if group_id not in self._pending_aggregations:
+                    self._pending_aggregations[group_id] = {
+                        "members": {},
+                        "started_at": time.time(),
+                        "timer": None,
+                    }
+                agg = self._pending_aggregations[group_id]
+                agg["members"][channel_id] = {"cycle_id": cycle_id, "is_good": is_good}
+                # 每来一个成员就取消老 timer (避免老 timer 早于 done hook 触发)
+                if agg["timer"]:
+                    try:
+                        agg["timer"].cancel()
+                    except Exception:
+                        pass
+                    agg["timer"] = None
+                all_arrived = all(c in agg["members"] for c in members)
+                if not all_arrived:
+                    t = threading.Timer(
+                        timeout_ms / 1000.0,
+                        self._on_aggregation_timeout,
+                        args=(group_id, timeout_action),
+                    )
+                    t.daemon = True
+                    agg["timer"] = t
+                    t.start()
+
+            if all_arrived:
+                self._finalize_aggregation(group_id, reason="complete")
 
     # =============================================================
     # 内部 helper
@@ -190,13 +258,27 @@ class ChannelGroupCoordinator:
         trigger_cycle_id: int,
         members: List[int],
     ) -> None:
-        """synchronized_any_ng 策略: NG 触发时给其它成员设 pending override."""
+        """synchronized_any_ng 策略: NG 触发时给其它成员设 pending override + 驱动报警链路."""
         other_channels = [c for c in members if c != trigger_channel_id]
 
         # 设 pending override (其它成员下次 end_cycle 取走)
         with self._lock:
             for cid in other_channels:
                 self._pending_override[cid] = "NG"
+
+        # v3.13.1: 报警链路联动 — 直接驱动 AlarmRouter 让 B 通道报警灯立刻亮 NG.
+        # 跳过 _trigger_event 链路 (避免 event_fire 双触发, 也避开 events_config 里没有
+        # 'channel_group_override' 事件 id 的限制). 错误隔离.
+        try:
+            from backend.api.alarm import alarm_router
+            for cid in other_channels:
+                try:
+                    # event2 = 标准 NG 事件 (客户 alarm 配置里默认就有 event2 = 红灯/蜂鸣 1-3s)
+                    alarm_router.trigger_alarm("event2", channel_id=cid)
+                except Exception as _e:
+                    print(f"[ChannelGroup] alarm trigger ch{cid} 异常 (隔离): {_e}")
+        except Exception as e:
+            print(f"[ChannelGroup] alarm_router import 失败 (隔离, 不影响主流程): {e}")
 
         # fire channel_group_settle_start hook
         try:
@@ -214,7 +296,91 @@ class ChannelGroupCoordinator:
 
         print(
             f"[ChannelGroup][{group['name']}] ch{trigger_channel_id} 结算 NG "
-            f"(cycle_id={trigger_cycle_id}) → 广播到 ch{other_channels}"
+            f"(cycle_id={trigger_cycle_id}) → 广播到 ch{other_channels} (含 alarm 联动)"
+        )
+
+    # =============================================================
+    # synchronized_all_ok / timeout / done hook (v3.13.1)
+    # =============================================================
+
+    def _on_aggregation_timeout(self, group_id: int, timeout_action: str) -> None:
+        """Timer 后台线程回调. 不持 db session — 写库已在每个成员 on_cycle_settled 完成.
+
+        timeout_action:
+          - fallback_independent: 已结算的不动 (各自的 group_settle_result 已写), 仅 fire done hook
+          - force_ng: 给还没到的成员设 _pending_override = "NG", 让它们下次 end_cycle 被强制 NG
+        """
+        print(f"[ChannelGroup] group {group_id} aggregation timeout, action={timeout_action}")
+        try:
+            self._finalize_aggregation(group_id, reason="timeout", timeout_action=timeout_action)
+        except Exception as e:
+            print(f"[ChannelGroup] _finalize_aggregation timeout 异常 (隔离): {e}")
+
+    def _finalize_aggregation(
+        self,
+        group_id: int,
+        reason: str,
+        timeout_action: str = "fallback_independent",
+    ) -> None:
+        """聚齐或超时调用. 计算组级结果 + fire done hook + 清 pending.
+
+        reason ∈ {"complete", "timeout"}.
+        """
+        with self._lock:
+            agg = self._pending_aggregations.pop(group_id, None)
+            group = self._groups.get(group_id)
+
+        if not agg or not group:
+            return
+
+        # 取消还在跑的 timer (complete 路径可能还有未 cancel 的)
+        t = agg.get("timer")
+        if t:
+            try:
+                t.cancel()
+            except Exception:
+                pass
+
+        members_arrived = agg.get("members", {})
+        members_expected = list(group["member_channel_ids"])
+
+        # 计算组级结果
+        group_result: str
+        if reason == "complete":
+            all_ok = all(m["is_good"] for m in members_arrived.values())
+            group_result = "OK" if all_ok else "NG"
+        else:  # timeout
+            if timeout_action == "force_ng":
+                group_result = "NG_BY_TIMEOUT"
+                # 给没到的成员设 NG override
+                with self._lock:
+                    for cid in members_expected:
+                        if cid not in members_arrived:
+                            self._pending_override[cid] = "NG"
+            else:
+                group_result = "PARTIAL"
+
+        # fire channel_group_settle_done hook
+        try:
+            from backend.plugin_system.hook_dispatch import fire_plugin_hook
+            fire_plugin_hook("channel_group_settle_done", "aggregation_finalize", "post", {
+                "group_id": group["id"],
+                "group_name": group["name"],
+                "reason": reason,
+                "group_result": group_result,
+                "timeout_action": timeout_action if reason == "timeout" else None,
+                "members_arrived": list(members_arrived.keys()),
+                "members_expected": members_expected,
+                "strategy": group["settle_strategy"],
+                "cycle_ids": {ch: m["cycle_id"] for ch, m in members_arrived.items()},
+            })
+        except Exception as e:
+            print(f"[ChannelGroup] channel_group_settle_done hook 异常 (隔离): {e}")
+
+        print(
+            f"[ChannelGroup][{group['name']}] aggregation finalized: "
+            f"reason={reason} result={group_result} arrived={list(members_arrived.keys())} "
+            f"expected={members_expected}"
         )
 
     def _write_cycle_group_fields(

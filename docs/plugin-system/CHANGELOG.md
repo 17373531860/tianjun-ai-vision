@@ -1,5 +1,60 @@
 # 插件系统设计变更记录
 
+## 2026-05-28 (v3.13.1 — 全 M 收尾)
+
+### M2.2b + M3.4 + RFC 10 v3.13.1 联合交付 — 前端 slot 全接入 + 工位组完整闭环
+
+按用户「所有 M 都要做」一次性收尾全部留待项. 测试基线: 383 → 395 (新增 12 测试, 零回归).
+
+**M2.2b 主程序 7 个 slot 位置全部接入**:
+- `settings.tab.*` — Settings/index.vue 加 `v-for el-tab-pane` + `<TjSlot>` 包装, 客户插件通过 `registry.tabs.register('settings', { key, label, component })` 注入
+- `project.tab.*` — Project/index.vue 同上, ctx 含 `:project` 透传
+- `cycle-result.indicator` — Monitor toast 渲染体可被插件替换 (每个 toast 独立 slot 实例, 含 :toast :channel-id)
+- `monitor.step-cell.duration` — 步骤表"耗时"列单元格 slot (含 :step :label :status :pt-text :is-tracking-mode)
+- `monitor.step-cell.status` — 步骤表"结果"列单元格 slot (含 :step :cycle-result)
+- `monitor.layout.body` — **整体 layout 完全覆盖**: `<component v-if=layoutBodyOverride>` + 原 DOM `v-else-if=channelCount===2` 链式守门. 没插件时永远 null → 走原分支, 字节级零差异
+- `monitor.layout.footer` — 视频区底部全局状态条 / 通知 / 控制按钮 slot, 默认不渲染 (`<component v-if=layoutFooterOverride>` 兜底)
+
+**M3.4 配置面板 tab 注入 helper**:
+- `usePluginThemeStore` 加 `settingsTabs / projectTabs` state + `addPluginTab(scope, tab) / removePluginTab(scope, key)` actions
+- `usePluginLoader` registry 加 `tabs.register(scope, { key, label, component }) / unregister(scope, key)` API
+- 跟 settings.tab / project.tab slot 联动: store 提供数据, .vue 视图 v-for 渲染
+- 改 `_resetTheme` 把两 tab 列表也清空, 防切换插件残留
+
+**RFC 10 v3.13.1 完整闭环**:
+1. **报警链路联动** (rfc10_alarm):
+   - Coordinator._broadcast_ng_to_group 内调 `alarm_router.trigger_alarm("event2", channel_id=cid)` 给联动通道直驱报警
+   - 错误隔离: alarm 抛错 / 不可用不影响 pending_override 设置
+   - 修了 v3.13.0 标记的"已知边界": 现在 B 通道也会响 NG 灯 + 蜂鸣
+2. **synchronized_all_ok 策略**:
+   - 新增 `_pending_aggregations` state (group_id → 聚合状态)
+   - 任一 NG → 立即广播 (沿用 any_ng 逻辑); 所有 OK → fire done hook 标 `group_result="OK"`
+3. **timeout 机制**:
+   - 每个成员结算时启动/重置 `threading.Timer(timeout_ms/1000, _on_aggregation_timeout)` daemon 线程
+   - 聚齐 → 取消 timer + complete 路径 finalize
+   - 超时 → fallback_independent 走 `PARTIAL`, force_ng 走 `NG_BY_TIMEOUT` (给没到的成员设 NG override)
+4. **channel_group_settle_done hook**:
+   - 聚齐或超时调 `_finalize_aggregation` fire hook
+   - ctx 含 `reason / group_result / timeout_action / members_arrived / members_expected / strategy / cycle_ids`
+5. **cluster 互操作** (rfc10_cluster):
+   - `build_context_from_cycle` 输出加 `channel_group: { id, settle_result, settled_with }` 顶层字段
+   - cycle 子树同时加便利字段 `cycle.channel_group_id / group_settle_result / group_settled_with`
+   - 跨机集群聚 box 时自动透传 (BoxAggregation.cycle_context → BoxSummary.aggregated_context.stations[i].channel_group)
+6. **测试 fixture 隔离**:
+   - `reset_coordinator_for_testing` 自动调 `cleanup_timers_for_testing` 取消 Timer 线程
+   - 新加 `cleanup_timers_for_testing` 方法清 `_pending_aggregations` 防跨用例污染
+   - `on_channel_removed` 扩展: 从 pending aggregations 内移除该 channel
+
+**测试**:
+- v3.13.1 新功能: 10 测试 (`test_v3_13_1_features.py`) — 报警联动 / all_ok 4 种行为 / timer 取消 / cleanup
+- cluster 互操作: 2 测试 (`test_cluster_interop_RFC10_CG8.py`) — cycle_context channel_group 字段透传
+- 回归: 383 → 395 全过零回归 (含原 plugin_system 328 + channel_group 67)
+
+**前端验证**:
+- @vue/compiler-sfc 编译 3 个改动 .vue 零错误
+- esbuild 验证 2 个 JS 零错误
+- 没插件时 (layoutBodyOverride.value === null / settingsTabs === [] / pluginSlots === {}) 主程序行为字节级零差异
+
 ## 2026-05-28 (后续)
 
 ### RFC 10 v3.13.0 骨架交付 — 工位组主程序原生（含 M1.3b 全部解锁）

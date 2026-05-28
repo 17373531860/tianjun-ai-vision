@@ -178,6 +178,34 @@ export async function loadActivePluginFrontend(router) {
         }
       },
     },
+    // v3.13 M2.2b/M3.4: 配置面板 tab 注入 API
+    //   registry.tabs.register('settings', { key: 'customer-rule', label: '客户规则', component: MyComp })
+    //   scope: 'settings' | 'project'
+    tabs: {
+      register(scope, tab) {
+        if (!scope || !tab || !tab.key || !tab.label) {
+          console.warn("[PluginLoader] tab register 失败: scope/key/label 必填", { scope, tab });
+          return;
+        }
+        if (scope !== "settings" && scope !== "project") {
+          console.warn(`[PluginLoader] tab register 失败: scope 必须是 settings/project (got ${scope})`);
+          return;
+        }
+        try {
+          themeStore.addPluginTab(scope, tab);
+          console.log(`[PluginLoader] ${scope} tab registered: ${tab.key} (${tab.label})`);
+        } catch (e) {
+          console.warn(`[PluginLoader] tab register 失败 ${tab.key}:`, e);
+        }
+      },
+      unregister(scope, key) {
+        try {
+          themeStore.removePluginTab(scope, key);
+        } catch (e) {
+          console.warn(`[PluginLoader] tab unregister 失败 ${scope}.${key}:`, e);
+        }
+      },
+    },
   };
 
   try {

@@ -1,6 +1,16 @@
 <template>
+  <!-- v3.13 M2.2b: monitor.layout.body slot — 整体 layout 完全覆盖.
+       客户插件用于双工位左右半屏 + 共用底栏等深度重排. 默认走原 layout, 字节级零差异. -->
+  <component
+    v-if="layoutBodyOverride"
+    :is="layoutBodyOverride"
+    :channel-count="channelCount"
+    :multi-channel-data="multiChannelData"
+    :selected-channel="selectedChannel"
+  />
+
   <!-- ===== DUAL WORKSTATION MODE (2 channels) ===== -->
-  <div v-if="channelCount === 2" class="grid grid-cols-2 gap-2 h-[calc(100vh-7.25rem)] p-2 relative">
+  <div v-else-if="channelCount === 2" class="grid grid-cols-2 gap-2 h-[calc(100vh-7.25rem)] p-2 relative">
     <div v-for="ch in 2" :key="ch - 1" class="flex flex-col gap-1.5 min-h-0 overflow-hidden relative">
       <!-- Video panel (70% height) -->
       <div class="relative bg-black border-2 rounded-lg overflow-hidden min-h-0"
@@ -165,17 +175,26 @@
           class="flex-1 bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">清零</button>
       </div>
       <!-- Per-workstation event toasts -->
+      <!-- v3.13 M2.2b: 客户插件可通过 cycle-result.indicator slot 替换或隐藏整个 toast 渲染体 -->
       <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
         <div class="absolute z-50 pointer-events-none flex flex-col gap-2" :class="getMultiPositionClass(position)">
           <transition-group name="toast">
-            <div v-for="toast in (multiActiveToasts[ch - 1] || []).filter(t => t.position === position)" :key="toast.id"
-              class="px-4 py-3 rounded-xl shadow-2xl text-white font-bold pointer-events-auto transform transition-all duration-300 text-center"
-              :style="{ backgroundColor: toast.color, fontSize: (toast.fontSize / 16) + 'rem' }">
-              <div class="flex items-center gap-2 justify-center">
-                <el-icon :size="20"><component :is="toast.icon" /></el-icon>
-                <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
+            <TjSlot
+              v-for="toast in (multiActiveToasts[ch - 1] || []).filter(t => t.position === position)"
+              :key="toast.id"
+              name="cycle-result.indicator"
+              :toast="toast"
+              :channel-id="ch - 1"
+            >
+              <div
+                class="px-4 py-3 rounded-xl shadow-2xl text-white font-bold pointer-events-auto transform transition-all duration-300 text-center"
+                :style="{ backgroundColor: toast.color, fontSize: (toast.fontSize / 16) + 'rem' }">
+                <div class="flex items-center gap-2 justify-center">
+                  <el-icon :size="20"><component :is="toast.icon" /></el-icon>
+                  <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
+                </div>
               </div>
-            </div>
+            </TjSlot>
           </transition-group>
         </div>
       </template>
@@ -1028,27 +1047,47 @@
                        但视觉上只要这一步还没进入本周期, PT 就不应该显示任何数字。
                        跟踪模式跳过守门 (其 PT 字典本就为空, 不会有残留)。
                      -->
-                     <td v-if="systemStore.display.monitor.stepTableColumns?.showPt !== false" class="px-2 py-1.5 text-white font-mono">
-                       {{ (isTrackingMode || row.status === 'completed') ? formatStepPT(row.label) : '--' }}
+                     <!-- v3.13 M2.2b: 步骤表格"耗时"单元格 slot — 客户插件可换三档颜色 / 文案 -->
+                    <td v-if="systemStore.display.monitor.stepTableColumns?.showPt !== false" class="px-2 py-1.5 text-white font-mono">
+                       <TjSlot
+                         name="monitor.step-cell.duration"
+                         :step="row"
+                         :label="row.label"
+                         :status="row.status"
+                         :is-tracking-mode="isTrackingMode"
+                         :pt-text="(isTrackingMode || row.status === 'completed') ? formatStepPT(row.label) : '--'"
+                       >
+                         {{ (isTrackingMode || row.status === 'completed') ? formatStepPT(row.label) : '--' }}
+                       </TjSlot>
                      </td>
+                     <!-- v3.13 M2.2b: 步骤表格"结果"单元格 slot — 客户可隐藏步骤级红色, 用 ui_hidden 整列隐藏走 td 外层 -->
                      <td v-if="systemStore.display.monitor.stepTableColumns?.showResult !== false" class="px-2 py-1.5">
-                       <!--
-                         v3.7.x: 结果(OK/NG) 必须等 PT 时间出现后才显示。
-                         v3.8.x (三次修订): 守门口径跟 PT 列对齐 — 必须 row.status === 'completed'。
-                         旧守门 formatStepPT() !== '--' 会被 in-flight 实时累加值打穿:
-                         步骤还在画面里 (status=active) 时, PT 列被守门挡显示 '--',
-                         但 formatStepPT() 因为有 in-flight fallback 返回真实数字,
-                         结果列守门直接放行 → 客户看到 "状态=待检测 + PT=-- + 结果=OK" 视觉割裂.
-                         现在两道门同步: status='completed' 才允许显示 PT 和结果, 严格同帧出现.
-                         例外：跟踪模式底层不写 step_durations, PT 永远是 '--',
-                              该模式下跳过守门保持原"counted > 0 → OK"语义.
-                       -->
-                       <template v-if="isTrackingMode || row.status === 'completed'">
-                         <span v-if="row.cycleResult === 'ok'" class="text-green-400">OK</span>
-                         <span v-else-if="row.cycleResult === 'ng'" class="text-red-500">NG</span>
+                       <TjSlot
+                         name="monitor.step-cell.status"
+                         :step="row"
+                         :label="row.label"
+                         :status="row.status"
+                         :cycle-result="row.cycleResult"
+                         :is-tracking-mode="isTrackingMode"
+                       >
+                         <!--
+                           v3.7.x: 结果(OK/NG) 必须等 PT 时间出现后才显示。
+                           v3.8.x (三次修订): 守门口径跟 PT 列对齐 — 必须 row.status === 'completed'。
+                           旧守门 formatStepPT() !== '--' 会被 in-flight 实时累加值打穿:
+                           步骤还在画面里 (status=active) 时, PT 列被守门挡显示 '--',
+                           但 formatStepPT() 因为有 in-flight fallback 返回真实数字,
+                           结果列守门直接放行 → 客户看到 "状态=待检测 + PT=-- + 结果=OK" 视觉割裂.
+                           现在两道门同步: status='completed' 才允许显示 PT 和结果, 严格同帧出现.
+                           例外：跟踪模式底层不写 step_durations, PT 永远是 '--',
+                                该模式下跳过守门保持原"counted > 0 → OK"语义.
+                         -->
+                         <template v-if="isTrackingMode || row.status === 'completed'">
+                           <span v-if="row.cycleResult === 'ok'" class="text-green-400">OK</span>
+                           <span v-else-if="row.cycleResult === 'ng'" class="text-red-500">NG</span>
+                           <span v-else class="text-gray-500">--</span>
+                         </template>
                          <span v-else class="text-gray-500">--</span>
-                       </template>
-                       <span v-else class="text-gray-500">--</span>
+                       </TjSlot>
                      </td>
                   </tr>
                </tbody>
@@ -1244,6 +1283,15 @@
       </div>
     </div>
   </div>
+
+  <!-- v3.13 M2.2b: monitor.layout.footer slot — 客户插件可在视频区底部叠加全局状态条 / 通知 / 控制按钮.
+       默认不渲染任何内容 (主程序原行为, 字节级零差异). -->
+  <component
+    v-if="layoutFooterOverride"
+    :is="layoutFooterOverride"
+    :channel-count="channelCount"
+    :multi-channel-data="multiChannelData"
+  />
 </template>
 
 <script setup>
@@ -1253,6 +1301,7 @@ import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useScannerDisableStore } from '@/store/useScannerDisableStore';
+import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { Check, Folder, Picture, CircleCheck, CircleClose, Warning } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, resetPeriodicAction, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getScanPairActive, settleScanPairForStop, ackPendingEvent } from '@/api/detection';
@@ -1266,6 +1315,11 @@ const projectStore = useProjectStore();
 const systemStore = useSystemStore();
 const sourceStore = useSourceStore();
 const scannerDisableStore = useScannerDisableStore();
+const pluginThemeStore = usePluginThemeStore();
+
+// v3.13 M2.2b: layout slot 覆盖 (整体 layout / 底栏). 没插件时永远是 null = 走原 layout.
+const layoutBodyOverride = computed(() => pluginThemeStore.getSlotComponent('monitor.layout.body'));
+const layoutFooterOverride = computed(() => pluginThemeStore.getSlotComponent('monitor.layout.footer'));
 
 // v3.4.2 "禁用扫码"按工位开关 helper
 const isScanDisabledFor = (ch) => scannerDisableStore.isChannelDisabled(ch);

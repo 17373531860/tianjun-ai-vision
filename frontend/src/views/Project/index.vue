@@ -2151,6 +2151,29 @@
               </el-card>
             </div>
           </el-tab-pane>
+
+          <!-- v3.13 M2.2b: 客户插件可注入项目配置 Tab -->
+          <el-tab-pane
+            v-for="tab in pluginProjectTabs"
+            :key="tab.key"
+            :label="tab.label"
+            :name="`plugin-${tab.key}`"
+          >
+            <TjSlot
+              :name="`project.tab.${tab.key}`"
+              :tab="tab"
+              :project="activeProject"
+            >
+              <component
+                v-if="tab.component"
+                :is="tab.component"
+                :project="activeProject"
+              />
+              <div v-else class="text-gray-400 p-4">
+                插件未提供 Tab 组件
+              </div>
+            </TjSlot>
+          </el-tab-pane>
         </el-tabs>
       </div>
       
@@ -2301,6 +2324,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, Loading, Warning, QuestionFilled } from '@element-plus/icons-vue';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
+import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjects, getProjectDetail, createProject, updateProject, deleteProject, activateProject } from '@/api/project';
 import { getModels, getAvailableFormats, convertModel, getConversionStatus, getFormatDiagnosis } from '@/api/model';
@@ -2309,6 +2333,10 @@ import { setProjectConfig } from '@/api/detection';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
+const pluginThemeStore = usePluginThemeStore();
+
+// v3.13 M2.2b: 客户插件注入的项目配置 Tab 列表
+const pluginProjectTabs = computed(() => pluginThemeStore.projectTabs || []);
 const searchQuery = ref('');
 const activeProject = ref(null);
 const activeTab = ref('basic');

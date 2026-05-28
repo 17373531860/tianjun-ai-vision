@@ -288,6 +288,23 @@ class MESGateway:
             context["cycle"]["total_steps"] = total_steps
             context["cycle"]["start_time"] = cycle.start_time.isoformat() if cycle.start_time else None
             context["cycle"]["end_time"] = cycle.end_time.isoformat() if cycle.end_time else None
+
+            # v3.13.1 RFC 10 CG.8: 工位组字段透传, 让 cluster collector 跨机聚 box 时
+            # 顶层能看到 "本工位是不是组级 NG 联动"; 客户 MES 模板可以引用
+            # {channel_group.settle_result} {channel_group.id}. 通道不在任何组时这些字段
+            # 都是 None / [], cluster 侧也 OK (None 不影响 MES payload 字段缺省).
+            cg_id = getattr(cycle, 'channel_group_id', None)
+            cg_result = getattr(cycle, 'group_settle_result', None)
+            cg_settled_with = getattr(cycle, 'group_settled_with', None) or []
+            context["channel_group"] = {
+                "id": cg_id,
+                "settle_result": cg_result,
+                "settled_with": list(cg_settled_with) if isinstance(cg_settled_with, list) else [],
+            }
+            # 同时也挂在 cycle 子树, 让旧模板可用 {cycle.group_settle_result} 风格直接引用
+            context["cycle"]["channel_group_id"] = cg_id
+            context["cycle"]["group_settle_result"] = cg_result
+            context["cycle"]["group_settled_with"] = context["channel_group"]["settled_with"]
             # operator_id 列保留字段名 (SQLite 无法 rename), 值改为 user.id
             # MES payload key "operator" 字段名稳定: name / employee_no / id (向后兼容客户模板)
             u_id = getattr(cycle, 'operator_id', None)
