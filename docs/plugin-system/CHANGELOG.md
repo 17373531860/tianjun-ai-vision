@@ -2,6 +2,22 @@
 
 ## 2026-05-28 (后续)
 
+### M3.1 交付 — Project JSON 字段下的 `plugin_data` 透传 + 新端点
+
+- **透传守护契约**：Project 的 7 个 JSON 字段（`pipeline_config` / `steps_config` / `events_config` / `counters_config` / `alarm_config` / `detection_config` / `data_config`）下的 `plugin_data` 子键天然透传，本次加测试守护以防未来重构丢字段
+- **新端点 `PUT /api/v1/projects/{id}/plugin-data`**（`backend/api/projects.py`）：
+  - 请求体：`{customer_code, scope, index?, data}`
+  - dict 字段：写到 `<scope>.plugin_data.<customer_code>`，index 必须为 null
+  - list 字段（steps/events/counters）：写到 `<scope>[index].plugin_data.<customer_code>`，index 必填
+  - 合并语义：浅合并到 `plugin_data[customer_code]`，未提及旧 key 保留；其它客户 `plugin_data` 子键完全不动
+  - 安全：`require_perm("project.edit")` + scope 白名单 + `customer_code` 字符校验（只允许 alnum/_/-）+ list/dict index 互斥
+  - 激活态项目自动同步配置到运行时 VSM（与 update 路径一致）
+- **Pydantic schema**：`backend/schemas/project.py` 加 `ProjectPluginDataPatch`
+- **15 个新单测**（`tests/plugin_system/test_project_plugin_data_M3_1.py`）：5 个透传守护 + 4 个 PATCH 写入语义 + 6 个参数校验
+- **回归状态**：plugin_system **319/319 通过**，零回归
+
+## 2026-05-28 (后续)
+
 ### M3.3 + M1.3b 部分交付 — `write_plugin_step_field` 真实现
 
 - **`step_records.plugin_data: JSON` 字段落地**（`backend/models/models.py`）+ `migrate_database()` 加 ALTER TABLE 探针（老客户库升级自动补列）

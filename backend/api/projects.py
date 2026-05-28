@@ -4,7 +4,7 @@ from typing import Optional
 from backend.core.auth_deps import require_perm
 from backend.db.database import get_db
 from backend.models.models import Project, Model
-from backend.schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectListResponse
+from backend.schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectListResponse, ProjectPluginDataPatch
 
 router = APIRouter()
 
@@ -422,6 +422,179 @@ def activate_project(project_id: int, db: Session = Depends(get_db)):
         model_version=model_version,
         model_labels=model_labels
     )
+
+_SCOPE_DICT_FIELDS = {
+    "pipeline_config",
+    "alarm_config",
+    "detection_config",
+    "data_config",
+}
+_SCOPE_LIST_FIELDS = {
+    "steps_config",
+    "events_config",
+    "counters_config",
+}
+_ALLOWED_SCOPES = _SCOPE_DICT_FIELDS | _SCOPE_LIST_FIELDS
+
+
+def _validate_customer_code(code: str) -> None:
+    """校验 customer_code 安全字符. 只允许 ascii alnum + _ + -.
+
+    防止 customer_code 注入特殊字符 (例: 句点 / 斜杠) 破坏 JSON 路径解析,
+    或与主程序已有 key 冲突.
+    """
+    import re
+    if not isinstance(code, str) or not code:
+        raise HTTPException(status_code=400, detail="customer_code 必填且非空")
+    if not re.match(r"^[A-Za-z0-9_-]+$", code):
+        raise HTTPException(
+            status_code=400,
+            detail=f"customer_code='{code}' 含非法字符 (只允许 字母/数字/_/-)",
+        )
+
+
+def _patch_plugin_data_into_dict(field_dict: dict, customer_code: str, patch_data: dict) -> dict:
+    """在 dict 类型字段 (pipeline_config/alarm_config/...) 写 plugin_data.<cc>.
+
+    返回新的 dict (浅拷, SQLAlchemy mutation 检测要求).
+    """
+    new_field = dict(field_dict or {})
+    plugin_data = dict(new_field.get("plugin_data") or {})
+    existing = dict(plugin_data.get(customer_code) or {})
+    existing.update(patch_data)
+    plugin_data[customer_code] = existing
+    new_field["plugin_data"] = plugin_data
+    return new_field
+
+
+def _patch_plugin_data_into_list(field_list: list, index: int, customer_code: str, patch_data: dict) -> list:
+    """在 list 类型字段 (steps_config/events_config/counters_config) 的 [index] 项里写 plugin_data.<cc>.
+
+    返回新的 list (浅拷).
+    """
+    new_field = list(field_list or [])
+    if index < 0 or index >= len(new_field):
+        raise HTTPException(
+            status_code=400,
+            detail=f"index={index} 越界 (字段长度={len(new_field)})",
+        )
+    item = dict(new_field[index] or {})
+    plugin_data = dict(item.get("plugin_data") or {})
+    existing = dict(plugin_data.get(customer_code) or {})
+    existing.update(patch_data)
+    plugin_data[customer_code] = existing
+    item["plugin_data"] = plugin_data
+    new_field[index] = item
+    return new_field
+
+
+@router.put("/{project_id}/plugin-data", response_model=ProjectResponse,
+             dependencies=[Depends(require_perm("project.edit"))])
+def patch_project_plugin_data(
+    project_id: int,
+    patch: ProjectPluginDataPatch,
+    db: Session = Depends(get_db),
+):
+    """精准 PATCH Project 的某个 JSON 字段下的 plugin_data.<customer_code> 子树.
+
+    v3.13 M3.1 新增 — 给客户专属插件存项目级配置 (例: 步骤警告耗时阈值).
+
+    路径定位:
+      - scope ∈ dict 字段: 目标 = ``<scope>.plugin_data.<customer_code>``
+      - scope ∈ list 字段: 目标 = ``<scope>[index].plugin_data.<customer_code>``
+
+    安全约束:
+      - 需要 ``project.edit`` 权限 (与 update_project 一致)
+      - scope 必须在白名单内 (7 个 JSON 字段名)
+      - list 字段必须给 index, dict 字段必须不给 (或 None)
+      - customer_code 只能 字母/数字/_/-
+      - data 必须 dict
+
+    合并语义: 浅合并到 ``plugin_data[customer_code]``, 未提及的旧 key 保留;
+    其它客户的 plugin_data 子键不动.
+
+    主程序业务代码用 ``.get(key, default)`` 拿自己的键, ``plugin_data`` 子树
+    天然透传不污染主 schema (RFC 09 §6.2).
+    """
+    if patch.scope not in _ALLOWED_SCOPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"scope='{patch.scope}' 不在白名单 {sorted(_ALLOWED_SCOPES)}",
+        )
+    _validate_customer_code(patch.customer_code)
+    if not isinstance(patch.data, dict):
+        raise HTTPException(status_code=400, detail="data 必须是 dict")
+
+    db_project = db.query(Project).filter(Project.id == project_id).first()
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    is_list_scope = patch.scope in _SCOPE_LIST_FIELDS
+    if is_list_scope:
+        if patch.index is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"scope='{patch.scope}' 是 list 字段, index 必填",
+            )
+        current = getattr(db_project, patch.scope) or []
+        new_field = _patch_plugin_data_into_list(
+            current, patch.index, patch.customer_code, patch.data,
+        )
+    else:
+        if patch.index is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"scope='{patch.scope}' 是 dict 字段, 不应给 index",
+            )
+        current = getattr(db_project, patch.scope) or {}
+        new_field = _patch_plugin_data_into_dict(
+            current, patch.customer_code, patch.data,
+        )
+
+    # 整字段重赋以触发 SQLAlchemy mutation 检测
+    setattr(db_project, patch.scope, new_field)
+    db.commit()
+    db.refresh(db_project)
+
+    # v3.7.x 风格: 激活态项目同步配置到运行时
+    if db_project.is_active:
+        try:
+            _sync_project_config_to_channels(db_project)
+        except Exception as _e:
+            print(f"[patch_project_plugin_data] 配置同步到运行时失败 (忽略): {_e}")
+
+    model_name = None
+    model_version = None
+    model_labels = None
+    if db_project.default_model_id:
+        model = db.query(Model).filter(Model.id == db_project.default_model_id).first()
+        if model:
+            model_name = model.name
+            model_version = model.version
+            model_labels = model.labels or []
+
+    return ProjectResponse(
+        id=db_project.id,
+        name=db_project.name,
+        task_type=db_project.task_type,
+        pipeline_config=db_project.pipeline_config,
+        logic_mode=db_project.logic_mode,
+        steps_config=db_project.steps_config,
+        events_config=db_project.events_config,
+        counters_config=db_project.counters_config,
+        alarm_config=db_project.alarm_config,
+        detection_config=db_project.detection_config,
+        data_config=db_project.data_config,
+        default_model_id=db_project.default_model_id,
+        model_format=db_project.model_format or "pytorch_fp32",
+        is_active=db_project.is_active,
+        created_at=db_project.created_at,
+        updated_at=db_project.updated_at,
+        model_name=model_name,
+        model_version=model_version,
+        model_labels=model_labels,
+    )
+
 
 @router.get("/active/current", response_model=Optional[ProjectResponse])
 def get_active_project(db: Session = Depends(get_db)):

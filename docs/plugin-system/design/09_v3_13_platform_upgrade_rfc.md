@@ -310,7 +310,14 @@ plugin.uiHidden = [
 2. **SystemConfig 命名空间**：插件读写 `SystemConfig` 时强制走 `plugin_<customer_code>_*` 前缀
 3. **客户配置面板**：插件能在 Project / Settings 页注入 tab，读写自家字段
 
-### 6.2 子任务 M3.1：Project JSON 字段扩展点
+### 6.2 子任务 M3.1：Project JSON 字段扩展点 ✅（已交付 2026-05-28）
+
+**交付状态**:
+- ✅ 透传守护测试：覆盖 7 个 JSON 字段下 `plugin_data` 子键经 POST/GET/PUT/`_apply_pipeline_config` 不丢
+- ✅ 新端点 `PUT /api/v1/projects/{id}/plugin-data`：精准 PATCH `<scope>.plugin_data.<customer_code>` 子树，浅合并、不动其它客户/主程序字段
+- ✅ scope 白名单 + customer_code 字符校验（只允许 alnum/_/-）+ list/dict 字段 index 互斥校验
+- ✅ 激活项目时 `_sync_project_config_to_channels` 自动透传新 plugin_data 到运行时 VSM
+- ✅ 15 个新单测，回归 319/319 通过
 
 **问题**：客户需求 1 要在每个步骤上配"警告耗时阈值"。直接改 `Project.steps_config[i]` schema 让所有客户都看到这字段，是污染。
 
