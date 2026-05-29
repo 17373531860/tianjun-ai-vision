@@ -33,6 +33,8 @@ export default {
     sequential: '순차 모드',
     detection: '감지 모드',
     custom: '사용자 정의',
+    tracking: '추적 모드',
+    per_item: '개별 커버',
     undefined: '미정의'
   },
   monitor: {

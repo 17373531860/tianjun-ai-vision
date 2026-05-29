@@ -33,6 +33,8 @@ export default {
     sequential: 'Sequential',
     detection: 'Detection',
     custom: 'Custom',
+    tracking: 'Tracking',
+    per_item: 'Per-Item',
     undefined: 'Undefined'
   },
   monitor: {

@@ -33,6 +33,8 @@ export default {
     sequential: '順序模式',
     detection: '檢測模式',
     custom: '自定義',
+    tracking: '跟蹤模式',
+    per_item: '逐件覆蓋',
     undefined: '未定義'
   },
   monitor: {
