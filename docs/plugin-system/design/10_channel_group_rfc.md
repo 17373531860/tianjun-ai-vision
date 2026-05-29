@@ -398,9 +398,9 @@ Pinia store：新增 `useChannelGroupStore.js`。
 
 | 时间线 | 动作 | 状态 |
 |---|---|---|
-| v3.13.0 | RFC 09 M1.1 + M1.3 + M3.3 落地，RFC 10 工位组**字段 + Coordinator 骨架 + synchronized_any_ng + 端点 + PluginHost API**（约 17 人天） | ✅ 已交付 2026-05-28（前端 Settings tab 留待 M2.2b 接入时一起做） |
-| v3.13.1 | RFC 09 M2.1 + M2.2 + M2.3 落地，RFC 10 `synchronized_all_ok` + timeout 边界完善 + `channel_group_settle_done` hook | ⏸ 留待真实客户驱动 |
-| v3.13.2 | RFC 09 M3 全部落地，RFC 10 `master_slave` 推到 v3.14 | ⏸ |
+| v3.13.0 | RFC 09 M1.1 + M1.3 + M3.3 落地，RFC 10 工位组**字段 + Coordinator 骨架 + synchronized_any_ng + 端点 + PluginHost API** | ✅ 已交付 2026-05-28（开发分支版本号, 未发包给客户; 与 v3.13.1 合并发版） |
+| v3.13.1 | RFC 09 M2.2b + M3.4 落地，RFC 10 `synchronized_all_ok` + timeout + `channel_group_settle_done` hook + 报警链路联动 + cluster 互操作 | ✅ 已交付 2026-05-29（跳过 v3.13.0 骨架, 直接以 v3.13.1 完整闭环发版给客户） |
+| v3.13.2 | (可选) RFC 09 剩余 `useProjectPluginData` 响应式 helper, RFC 10 工位组 Settings 前端 Tab, `master_slave` 策略 | ⏸ 留待真实客户驱动 |
 | v3.14.x | 视客户反馈扩展工位组高阶策略 | ⏸ |
 
 ---
@@ -416,40 +416,36 @@ Pinia store：新增 `useChannelGroupStore.js`。
 | CG.3 `synchronized_any_ng` 策略 | ✅ | 同上文件 `on_cycle_settled` + `get_pending_override` (take-once) + `_broadcast_ng_to_group` |
 | CG.4 VSM end_cycle 接入 | ✅ | `backend/api/source_session_lifecycle_mixin.py:end_cycle`：入口 `get_pending_override` 强制改 is_good + 写库后 `on_cycle_settled`；`backend/api/channel_manager.py:set_channel_count` 清理 `on_channel_removed`；`backend/main.py` 启动加载 |
 | CG.5 CRUD 端点 | ✅ | `backend/api/channel_groups.py` (5 个端点) + 2 个新权限位 `system.channel_group.view / .manage` |
-| CG.6 `channel_group_settle_start` hook | ✅ | 已在 Coordinator 内 fire；done hook 留待 timeout / synchronized_all_ok 落地一并做 |
+| CG.6 `channel_group_settle_start` + `_done` hook | ✅ | v3.13.0 fire start hook; v3.13.1 加 `_done` hook (聚齐 / 超时两种 reason, ctx 含 group_result / members_arrived / cycle_ids) |
 | CG.7 PluginHost 3 个 API 真实现 | ✅ | `backend/plugin_system/registry.py`: `list_channel_groups` / `query_channel_group` (无 cap) + `broadcast_to_channel_group` (cap `runtime.channel_group_broadcast`)，解锁 M1.3b 全部 |
-| CG.8 与 cluster 互操作 | ⏸ | 留 v3.13.1（station_id 映射 + box_summary 写组级结果） |
-| CG.9 测试 | ✅ | 单元 20 + 端点 20 + PluginHost API 15 = **55 个新单元测试，328 → 383 全过零回归**（含 6 个 JSON.contains 子串误判 + PUT 漏校验回归测试） |
-| CG.9 BDD | ⏸ | 留 v3.13.1（含 cluster 互操作的 e2e 场景） |
-| CG.10 文档 | ✅ | RFC 10 §十六 + 主 CHANGELOG + manifest schema |
+| CG.8 与 cluster 互操作 | ✅ **v3.13.1 已交付** | `MESGateway.build_context_from_cycle` 输出加顶层 `channel_group` + cycle 子树便利字段, 跨机透传到 `BoxSummary.aggregated_context.stations[i].channel_group`. 客户 MES 模板可直接引用 `{channel_group.settle_result}`. 2 个新测试覆盖. |
+| CG.9 单元测试 | ✅ | v3.13.0: 20 + 20 + 15 = 55 个测试; v3.13.1 增量: 10 个新功能测试 + 2 个 cluster 互操作测试 = **67 测试; 全套 395 PASSED 零回归** |
+| CG.9 BDD e2e | ⏸ | 留待真实客户驱动 (已有 67 单元测试覆盖核心, BDD 需 fake VSM + cluster fixture, 与 `feature-placement` 原则一致) |
+| CG.10 文档 | ✅ | RFC 10 §十六 + 主 CHANGELOG + manifest schema; 工位组 Settings 前端 Tab 留待真实客户驱动 (可通过 CRUD API + `settings.tab` slot 由插件实现) |
 
-**v3.13.0 已知边界（必读，留 v3.13.1 决断）**：
+## 十七、v3.13.1 交付清单（2026-05-29）
 
-| 边界 | 现状 | 短期客户绕路 |
+v3.13.1 把 v3.13.0 留待的全部边界一次性闭环:
+
+| 子任务 | 状态 | 文件 |
 |---|---|---|
-| **报警/语音/事件链路不联动** | Coordinator 只改 `is_good` + `group_settle_result` 字段；alarm_router / voice / Toast / event_fire 链路是由 `_trigger_event` 在结算前触发的，这里改写 `is_good` 不会重放事件链 | 客户写一个简单插件订阅 `channel_group_settle_start` hook，在 handler 里调 `PluginHost.trigger_alarm(channel_id)` 驱动 B 通道报警灯 |
-| MES Hook 联动 | ✅ 走 `final_is_good`，MES 推送已经发 NG | 无需绕路 |
-| DB 字段联动 | ✅ `cycle.is_good=False` + `group_settle_result="NG_BY_GROUP"` + `group_settled_with=[trigger_cycle_id]` 都写了 | 无需绕路 |
-| `cycle.event_name` | ⚠️ 保留原值（OK 事件名），让分析侧能区分"本机自身 NG" vs "联动 NG"（依赖 group_settle_result 字段判定） | 数据分析按 `group_settle_result` 路由 |
+| 报警链路联动 | ✅ | `backend/services/channel_group_coordinator.py: _broadcast_ng_to_group` 内调 `alarm_router.trigger_alarm("event2", channel_id=cid)` 直驱联动通道报警, 错误隔离不影响 pending_override 设置 |
+| `synchronized_all_ok` 策略 | ✅ | 新增 `_pending_aggregations` state, 任一 NG 立即广播 + 所有 OK fire `_done` hook 标 group_result="OK" |
+| timeout 机制 | ✅ | `threading.Timer` daemon 线程, 聚齐取消 timer; 超时按 `timeout_action` 走 `fallback_independent` (PARTIAL) 或 `force_ng` (NG_BY_TIMEOUT + 给没到的成员设 NG override) |
+| `channel_group_settle_done` hook | ✅ | 聚齐或超时调 `_finalize_aggregation` fire hook, ctx 含 `reason / group_result / timeout_action / members_arrived / members_expected / strategy / cycle_ids` |
+| cluster 互操作 (CG.8) | ✅ | `MESGateway.build_context_from_cycle` 加 `channel_group` 顶层 + cycle 子树字段, 跨机透传 `BoxSummary.aggregated_context.stations[i].channel_group` |
+| 测试 fixture 隔离 | ✅ | `reset_coordinator_for_testing` 自动 `cleanup_timers`, `on_channel_removed` 扩展清理 aggregation members |
 
-v3.13.1 需要决断的实现路径：
-- (a) Coordinator 持有 AlarmRouter 引用直接驱动 B 通道亮灯（跳过事件链，最快）
-- (b) 约定系统级虚拟事件 id（如 `__channel_group_ng__`）走 `_trigger_event`（最一致，但要改 alarm_config）
-- (c) 仅做 DB 标记 + 客户自定义插件订阅 hook 自己实现（v3.13.0 已选）
+**v3.13.1 验收补完**:
+- ✅ AC-CG-5（超时 fallback）：`test_v3_13_1_features.py` 4 个 timeout 场景测试覆盖
+- ✅ AC-CG-8（cluster 互操作）：`test_cluster_interop_RFC10_CG8.py` 2 测试覆盖
+- ✅ 报警链路联动：3 测试覆盖 `alarm_router.trigger_alarm` 调用 + OK 不触发 + 错误隔离
+- ✅ `channel_group_settle_done` hook：5 测试覆盖 complete / timeout / cancel timer 场景
 
-**v3.13.0 验收**:
-- ✅ AC-CG-1（synchronized_any_ng 联动）：单元测试覆盖
-- ✅ AC-CG-2（group_settled_with 字段）：单元测试覆盖
-- ✅ AC-CG-3 / AC-CG-4（per_item / last_first 互斥校验）：端点层守护测试
-- ⏸ AC-CG-5（超时 fallback）：留 v3.13.1
-- ✅ AC-CG-6（enabled=True 不能删）：端点测试
-- ✅ AC-CG-7（hook ctx 字段）：单元测试覆盖
-- ⏸ AC-CG-8（cluster 互操作）：留 v3.13.1
-- ✅ AC-CG-9（channel_count 减小 → 清理 reverse index + pending）：单元 + ChannelManager 真实接入
-- ✅ AC-CG-10（零差异默认）：单元测试 + 完整 plugin_system 回归 0 失败
+**v3.13.1 报警链路决断**: 采用方案 (a) — Coordinator 直接调 `alarm_router.trigger_alarm`, 跳过 `_trigger_event` 链, 错误隔离. 不引入虚拟事件 id, 不要客户改 alarm_config, 现场默认 `event2` 配置直接生效.
 
 ---
 
-**本文件最后更新**：2026-05-28（v3.13.0 RFC 10 实施交付同步）
+**本文件最后更新**：2026-05-29（v3.13.1 完整闭环交付同步）
 **作者**：项目主作者 + AI agents
-**状态**：v3.13.0 骨架已落地，待客户场景演练 + v3.13.1 完善
+**状态**：v3.13.1 全部闭环, 跳过 v3.13.0 骨架直接发包给客户 (v3.12.0 跳过 v3.11 风格一致)

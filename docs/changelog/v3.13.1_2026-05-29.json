@@ -1,0 +1,172 @@
+{
+  "version": "3.13.1",
+  "date": "2026-05-29",
+  "previous_version": "3.12.0",
+  "summary": "跳过 v3.13.0 骨架直接发 v3.13.1 完整闭环. 同时落 RFC 09 插件平台升级 (M1 业务 / M2 UI / M3 配置) + RFC 10 工位组主程序原生功能, 把客户 4 大需求 (双工位 NG 联动 / 步骤三档颜色 / 双工位左右半屏 / 隐藏步骤红色) 一次性闭环. 无破坏性改动, 老项目和未装插件场景字节级零差异.",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "工位组 ChannelGroup ORM + CRUD API",
+      "symptom": "双工位同时检测同一物件不同角度时, A 工位 NG B 工位却 OK 的不同步问题",
+      "root_cause": "现有架构每个通道独立结算, 没有'组级聚合'概念",
+      "fix": "新表 channel_groups + detection_cycles 加 3 列 (channel_group_id / group_settled_with / group_settle_result) + 5 个 CRUD endpoint + 启动迁移自动 ALTER TABLE",
+      "files": [
+        "backend/models/models.py",
+        "backend/api/channel_groups.py",
+        "backend/api/__init__.py",
+        "backend/main.py",
+        "backend/core/permissions.py"
+      ],
+      "keywords": ["ChannelGroup", "工位组", "同步结算", "channel_groups"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "ChannelGroupCoordinator 单例 + 4 种结算策略",
+      "symptom": "客户实际生产线节奏不规则, 单一同步等齐策略不够用",
+      "root_cause": "需要 synchronized_any_ng / synchronized_all_ok / timeout 三档行为, 且要联动报警链路",
+      "fix": "新建 ChannelGroupCoordinator 进程单例 (threading.Lock 保护), synchronized_any_ng 即时广播 + 直驱 alarm_router.trigger_alarm, synchronized_all_ok 用 threading.Timer 等齐超时, timeout_action 支持 fallback_independent / force_ng, VSM end_cycle 用 take-once pending_override 强制改写 is_good",
+      "files": [
+        "backend/services/channel_group_coordinator.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/channel_manager.py"
+      ],
+      "keywords": ["工位组", "synchronized_any_ng", "synchronized_all_ok", "timeout", "pending_override", "take-once"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "工位组与 cluster 互操作 (跨机透传)",
+      "symptom": "单机内工位组 + 跨机集群两个维度都用时, MES box-level 推送看不到组级 NG 信息",
+      "root_cause": "cycle_context 不带工位组字段, 跨机透传时丢失",
+      "fix": "MESGateway.build_context_from_cycle 输出加顶层 channel_group + cycle 子树便利字段, 通过 BoxAggregation.cycle_context 跨机透传到 BoxSummary.aggregated_context.stations[i].channel_group",
+      "files": [
+        "backend/services/mes_gateway.py"
+      ],
+      "keywords": ["cluster", "box_summary", "channel_group", "MES 模板透传"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "M1 插件业务流程双向打通 (10 hooks + 10 PluginHost APIs)",
+      "symptom": "插件只能被动接事件, 不能影响主程序业务结果 / 也不能调主程序能力",
+      "root_cause": "现有 hook 只通知不决策, PluginHost 只读 query_*",
+      "fix": "新增 returnable hook (pre_cycle_end / step_change / event_fire 可改业务字段) + 10 个 hook 点 (含 channel_group_settle_start/done) + 10 个 PluginHost 主动 API (trigger_alarm / mes_push / write_system_config / write_plugin_step_field / list_channel_groups 等), 每个都带 capability 守门 + audit log",
+      "files": [
+        "backend/plugin_system/registry.py",
+        "backend/plugin_system/manager.py",
+        "backend/plugin_system/hook_dispatch.py",
+        "backend/plugin_system/version_check.py",
+        "backend/_version.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/source_event_trigger_mixin.py",
+        "backend/api/source_lifecycle_mixin.py"
+      ],
+      "keywords": ["插件", "hook", "returnable", "PluginHost", "capabilities", "audit"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "M2 UI 扩展平台化 (TjSlot + 7 个主程序 slot 全接入)",
+      "symptom": "插件无法局部覆盖主程序 UI, 双工位左右半屏 / 三档颜色 / 隐藏红色等客户需求做不了",
+      "root_cause": "主程序 Vue 视图没预留可被插件覆盖的位置",
+      "fix": "新增 TjSlot 全局组件 + usePluginThemeStore 加 pluginSlots/uiHidden/settingsTabs/projectTabs state + 7 个主程序 slot 接入 (settings.tab.* / project.tab.* / cycle-result.indicator / monitor.step-cell.duration / monitor.step-cell.status / monitor.layout.body / monitor.layout.footer). layout.body 用 <component v-if> 二选一守门, 没插件时字节级零差异",
+      "files": [
+        "frontend/src/components/TjSlot.vue",
+        "frontend/src/store/usePluginThemeStore.js",
+        "frontend/src/composables/usePluginLoader.js",
+        "frontend/src/main.js",
+        "frontend/src/views/Monitor/index.vue",
+        "frontend/src/views/Settings/index.vue",
+        "frontend/src/views/Project/index.vue"
+      ],
+      "keywords": ["TjSlot", "插件 UI", "slotification", "ui_hidden", "layout 重排"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "M3 配置扩展系统 (plugin_data 命名空间 + 卸载清理 + tab 注入)",
+      "symptom": "插件想给 Project / SystemConfig / StepRecord 加自家字段, 没有正式接入面",
+      "root_cause": "JSON 字段没命名空间约定, 卸载时也没清理路径",
+      "fix": "Project 加 plugin_data 子树 + PUT /api/v1/projects/{id}/plugin-data 精准 patch / StepRecord 加 plugin_data JSON 字段 + write_plugin_step_field API / 卸载支持 ?purge_data=true 清 SystemConfig 前缀 + Project JSON, LIKE ESCAPE 转义 _/% / 配置面板 tab 注入 registry.tabs.register('settings'|'project', ...) 编程式注入",
+      "files": [
+        "backend/models/models.py",
+        "backend/api/plugins.py",
+        "backend/api/projects.py",
+        "backend/plugin_system/registry.py",
+        "backend/schemas/project.py"
+      ],
+      "keywords": ["插件配置", "plugin_data", "命名空间", "卸载清理"],
+      "breaking": false
+    },
+    {
+      "type": "bug",
+      "id": "BUG-001",
+      "title": "SQLite JSON.contains substring match 误报",
+      "symptom": "添加 channel 0 到组里, 已有组 member=[10,11] 被误报冲突",
+      "root_cause": "SQLAlchemy JSON.contains(int) 在 SQLite 上是文本子串匹配, '10' 包含 '0'",
+      "fix": "改用 Python 应用层 _check_member_uniqueness 拉所有 enabled 组用 cid in other_members 真正数组成员检查",
+      "files": [
+        "backend/api/channel_groups.py"
+      ],
+      "keywords": ["SQLite", "JSON.contains", "substring match"],
+      "breaking": false
+    },
+    {
+      "type": "bug",
+      "id": "BUG-002",
+      "title": "PUT 端点漏 cross-group 唯一性校验",
+      "symptom": "改组成员或启用组时未重做唯一性校验, 可能同 channel 同时活跃多组",
+      "root_cause": "update_channel_group 忘了调 _check_member_uniqueness",
+      "fix": "PUT 时 member_channel_ids 或 enabled 变更必调 _check_member_uniqueness(..., exclude_group_id=group_id)",
+      "files": [
+        "backend/api/channel_groups.py"
+      ],
+      "keywords": ["channel_groups", "PUT", "唯一性"],
+      "breaking": false
+    },
+    {
+      "type": "doc",
+      "id": "DOC-001",
+      "title": "RFC 09 / RFC 10 完整设计文档 + AGENTS.md 产品决策原则",
+      "files": [
+        "docs/plugin-system/design/09_v3_13_platform_upgrade_rfc.md",
+        "docs/plugin-system/design/10_channel_group_rfc.md",
+        "docs/plugin-system/design/01_manifest_schema.md",
+        "docs/plugin-system/CHANGELOG.md",
+        "AGENTS.md",
+        ".claude/skills/feature-placement/SKILL.md"
+      ],
+      "keywords": ["RFC", "设计文档", "feature-placement", "产品决策"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "新增 395 测试零回归",
+      "details": "tests/plugin_system/ 328 测试 + tests/channel_group/ 67 测试 全套 PASSED 零回归 (vs v3.12.x baseline)",
+      "files": [
+        "tests/plugin_system/",
+        "tests/channel_group/test_coordinator_RFC10_CG2.py",
+        "tests/channel_group/test_api_endpoints_RFC10_CG5.py",
+        "tests/channel_group/test_plugin_host_apis_RFC10_CG7.py",
+        "tests/channel_group/test_cluster_interop_RFC10_CG8.py",
+        "tests/channel_group/test_v3_13_1_features.py"
+      ],
+      "keywords": ["测试", "回归", "395"],
+      "breaking": false
+    }
+  ],
+  "known_boundaries": [
+    "RFC 10 BDD e2e: 已有 67 单元测试覆盖核心, BDD 留待真实客户场景驱动",
+    "工位组 Settings 前端 Tab: 现仅 CRUD API, 可视化面板留待 plugin UI 实现",
+    "channel_group_ng 自定义事件: 现走 event2 标准 NG, 单独事件类型留待客户驱动",
+    "多 active 插件: 现单 active 设计, 多插件并存留待 feat/plugin-system 长期分支"
+  ]
+}

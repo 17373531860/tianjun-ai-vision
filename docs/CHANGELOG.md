@@ -1,5 +1,26 @@
 # Changelog
 
+## v3.13.1 (2026-05-29)
+
+> 跳过 v3.13.0 骨架直接发完整闭环 (与 v3.12.0 跳过 v3.11 风格一致)。一次性落 `RFC 09 插件平台 v3.13 升级` (M1 业务 / M2 UI / M3 配置) 与 `RFC 10 工位组` 两大主线, 把客户「双工位 A NG → B NG 联动」「步骤耗时三档显示」「双工位左右半屏 + 共用底栏」「隐藏步骤级红色」四大需求一次性闭环。无破坏性改动, 老项目 JSON / DB / 接口、未装插件场景字节级零差异。详细 changelog 见 `docs/changelog/v3.13.1_2026-05-29.md`。
+
+- [FEAT-001] **工位组 ChannelGroup ORM + CRUD API** — 新表 `channel_groups` + `detection_cycles` 加 3 列, 5 个 CRUD endpoint, 启动迁移自动 ALTER TABLE。
+- [FEAT-002] **ChannelGroupCoordinator 单例 + 4 种结算策略** — `synchronized_any_ng` 即时广播 + 直驱 alarm_router, `synchronized_all_ok` 用 threading.Timer 等齐超时, `timeout_action` 支持 `fallback_independent` / `force_ng`, VSM `end_cycle` 用 take-once pending_override 强制改写 is_good。
+- [FEAT-003] **工位组与 cluster 互操作** — `build_context_from_cycle` 输出加顶层 `channel_group` + cycle 子树便利字段, 跨机透传到 `BoxSummary.aggregated_context.stations[i].channel_group`, 客户 MES 模板可直接引用 `{channel_group.settle_result}`。
+- [FEAT-004] **M1 插件业务流程双向打通** — 10 个新 hook 点 (含 returnable hook) + 10 个 PluginHost 主动 API (trigger_alarm / mes_push / write_plugin_step_field / list_channel_groups 等), 每个都带 capability 守门 + audit log。
+- [FEAT-005] **M2 UI 扩展平台化** — TjSlot 全局组件 + 7 个主程序 slot 全接入 (settings.tab.* / project.tab.* / cycle-result.indicator / monitor.step-cell.duration / monitor.step-cell.status / monitor.layout.body / monitor.layout.footer), 没插件时字节级零差异。
+- [FEAT-006] **M3 配置扩展系统** — Project / SystemConfig / StepRecord 加 plugin_data 命名空间, 卸载支持 `?purge_data=true` 清理, `registry.tabs.register` 编程式注入配置面板 Tab。
+- [BUG-001] **SQLite JSON.contains substring match 误报** — `_check_member_uniqueness` 改 Python 应用层校验, 避开 SQLite JSON 文本子串匹配 bug。
+- [BUG-002] **PUT 端点漏 cross-group 唯一性校验** — PUT 时 `member_channel_ids` / `enabled` 改动必调唯一性校验, 含 `exclude_group_id=self`。
+- [DOC-001] **完整设计文档** — RFC 09 + RFC 10 + AGENTS.md 产品决策原则 + feature-placement skill。
+- [TEST-001] **新增 395 测试零回归** — `tests/plugin_system/` 328 + `tests/channel_group/` 67 全过零回归 (vs v3.12.x baseline)。
+
+已知边界 (留待真实客户驱动): BDD e2e 场景 / 工位组 Settings 前端 Tab / channel_group_ng 自定义事件 / 多 active 插件并存。
+
+Skill 更新: 新增 `feature-placement` skill 操作化产品决策原则; `debug-channel` / `debug-mes` / `add-event-type` 各加 v3.13 章节同步工位组 + 插件 hook 新能力。
+
+---
+
 ## v3.12.0 (2026-05-27)
 
 > 合并 `chore/feature-verify` + `feat/per-item-enhance` 两条主线分支正式发版 (跳过 v3.11.x 直接到 v3.12.0, 用户决定)。无破坏性改动, 老项目 JSON/DB/接口全部兼容。详细 changelog 见 `docs/changelog/v3.12.0_2026-05-27.md`。

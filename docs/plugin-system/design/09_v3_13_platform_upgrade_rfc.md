@@ -244,9 +244,20 @@ interface TianjunPlugin {
   - `usePluginLoader` 加 `registry.slots.register(name, component)` / `unregister(name)` 接口
   - manifest schema `frontend.ui_hidden: array<string>` 词汇加入（见 `01_manifest_schema.md` §5.3）
   - 全局注册 `TjSlot`，主程序任何 `.vue` 文件可直接用 `<TjSlot name="...">默认内容</TjSlot>`
-- ⏸ **M2.2b 主程序 7 个 slot 位置接入**：留待真实客户插件需求驱动时按 RFC 09 §附录 E 定位逐个接入。基础设施已就绪，每个 slot 位置接入只需 5-10 行 `.vue` 改动。
+- ✅ **M2.2b 主程序 7 个 slot 位置全部接入** (2026-05-29 v3.13.1):
+  - `settings.tab.*` — Settings/index.vue 加 v-for el-tab-pane + `<TjSlot>` 包装
+  - `project.tab.*` — Project/index.vue 同上, 含 `:project` 透传
+  - `cycle-result.indicator` — Monitor toast 渲染体可被插件替换 (含 :toast :channel-id)
+  - `monitor.step-cell.duration` — 步骤表"耗时"列单元格 slot (含 :step :label :status :pt-text :is-tracking-mode)
+  - `monitor.step-cell.status` — 步骤表"结果"列单元格 slot (含 :step :cycle-result)
+  - `monitor.layout.body` — **整体 layout 完全覆盖** (`<component v-if=layoutBodyOverride>` + 原 DOM `v-else-if=channelCount===2` 链式守门, 没插件时字节级零差异)
+  - `monitor.layout.footer` — 视频区底部全局状态条 slot, 默认不渲染
 
-**为什么 M2.2b 不一并接入**：
+**M2.2b 落地决策回顾**:
+- layout.body 风险预案: 因涉及双工位/4工位/单工位三段 v-if/v-else 链, 改用 `<component v-if>` + 原 DOM v-else-if 链式守门, 不嵌套 TjSlot 默认 slot 4000+ 行 (避免 Vue 编译器对超大默认 slot 的潜在风险)
+- 测试覆盖: 3 个 .vue 通过 @vue/compiler-sfc 编译验证零错误; 通过 `feature-placement` 保守原则锁定零差异默认 (`layoutBodyOverride.value === null` / `settingsTabs.value === []` 时永远走原分支)
+
+**为什么 M2.2b 不一并接入** (历史决策记录, v3.13.0 阶段考虑, v3.13.1 已推翻):
 - 主程序无前端单元测试框架（无 vitest/jest），改 `Monitor/index.vue` (4051 行 ⚠️⚠️ 项目最大文件) 需手动 playwright 验证，与 `feature-placement` 原则"基础设施进主程序+插件平台，小众功能等真实客户驱动"一致
 - 5 个复杂 slot（含 `monitor.layout.body`）涉及双工位 layout 完全重排，无真实客户插件验证形态前贸然接入容易过度抽象
 
@@ -394,12 +405,13 @@ plugin.uiHidden = [
 - ✅ 主程序 `sessions_export.py` 默认 CSV 列硬拼，**不**暴露 `plugin_data`（设计目标满足）；自定义导出模板可显式取 `{step.plugin_data.<plugin_namespaced_key>}`
 - ✅ 18 个新单测覆盖 capability / 命名空间 / JSON 校验 / 合并语义 / audit / 错误隔离 / 签名锁定
 
-### 6.5 子任务 M3.4：配置面板 tab 注入
+### 6.5 子任务 M3.4：配置面板 tab 注入 ✅ (v3.13.1 已交付)
 
 M2 已经做了 `projectTabs / settingsTabs` 的前端注入；M3 把"读写后端 plugin_data"的 helper 配上：
-- `PluginHost.frontend.useProjectPluginData(projectId)` 返回当前 Project 的 `plugin_data.<customer_code>` 子树（响应式）
-- `PluginHost.frontend.saveProjectPluginData(projectId, data)` 提交到 `PUT /api/v1/projects/{id}/plugin-data`（新端点）
-- 新端点限定只能写 `plugin_data.<active_customer_code>` 子树，不能动其它字段
+- ✅ `PUT /api/v1/projects/{id}/plugin-data` 端点已落地 (`backend/api/projects.py: update_project_plugin_data`), 限定只能写 `plugin_data.<active_customer_code>` 子树, 不能动其它字段
+- ✅ `usePluginThemeStore.settingsTabs / projectTabs` state + `addPluginTab / removePluginTab` actions 已落地
+- ✅ `usePluginLoader.registry.tabs.register(scope, { key, label, component })` 编程式注入 API 已落地
+- ⏸ `PluginHost.frontend.useProjectPluginData(projectId)` Composition API helper — 客户当前可通过 `axios.put('/projects/{id}/plugin-data', ...)` 直接调端点, 响应式 helper 留待真实客户驱动
 
 ### 6.6 验收标准（M3）
 
