@@ -118,6 +118,7 @@ class _PerItemStep:
         'step_id', 'step_label', 'display_label',
         'item_label', 'action_label',
         'item_tracking_iou', 'coverage_iou', 'sustain_frames',
+        'coverage_use_center',             # v3.12+: 小物件场景启用"中心点判定" (替代 IoU)
         'completion', 'min_item_count',
         'expected_count',                  # v3.9+: 已知固定个体数 (0=未配置, 走 auto 路径)
         'items', 'next_item_id', 'locked_count', 'completed',
@@ -146,6 +147,10 @@ class _PerItemStep:
         self.item_tracking_iou = float(per.get('item_tracking_iou', 0.3))
         self.coverage_iou = float(per.get('coverage_iou', 0.3))
         self.sustain_frames = int(per.get('sustain_frames', 5))
+        # v3.12+ "小物件中心点判定": 适用涂黑 / 喷漆 / 扫码贴标 这类"动作 box 远大于物件 box"
+        # 的场景. 启用后, 覆盖判定改为"物件中心点是否落在动作 box 内", 不再用 IoU.
+        # 默认 False, 维持 IoU > coverage_iou 的老逻辑.
+        self.coverage_use_center = bool(per.get('coverage_use_center', False))
 
         self.completion = per.get('completion', 'all_covered')
         self.min_item_count = per.get('min_item_count', 'auto')
@@ -224,22 +229,38 @@ class _PerItemStep:
     def apply_coverage(self, action_boxes, frame_id: int, ts: float):
         """用本帧 action_label box 推进个体覆盖状态.
 
-        对每个 action box, 找 IoU 最高的个体. IoU > 阈值 → 该个体的
-        连续重叠帧数 +1; 反之归零. 累积达到 sustain_frames 那一刻翻转
-        covered=true.
+        默认逻辑 (IoU):
+            对每个 action box, 找 IoU 最高的个体. IoU > 阈值 → 该个体本帧被覆盖.
+        小物件中心点判定 (coverage_use_center=True):
+            适用 涂黑 / 喷漆 / 扫码贴标 等"动作 box 远大于物件 box"的场景.
+            物件中心点落在任一 action box 内 → 该物件本帧被覆盖.
+            (因为 IoU 在小物件 vs 大动作框之间永远算不到 0.3, 但物理上确实"盖住了")
+
+        被覆盖的个体: 连续重叠帧数 +1; 反之归零.
+        累积达到 sustain_frames 那一刻翻转 covered=true.
         """
         # 1. 标记本帧哪些个体被某个 action box 覆盖到
+        # 注意: bbox 是 xywh 格式 (左上角 + 宽高), 看 _bbox_iou 注释和 _bbox_center 实现.
         overlapping_ids = set()
-        for abox in action_boxes:
-            best_iid = None
-            best_iou = self.coverage_iou
+        if self.coverage_use_center:
             for iid, st in self.items.items():
-                iou = _bbox_iou(st.bbox, abox)
-                if iou > best_iou:
-                    best_iou = iou
-                    best_iid = iid
-            if best_iid is not None:
-                overlapping_ids.add(best_iid)
+                cx, cy = _bbox_center(st.bbox)
+                for abox in action_boxes:
+                    ax, ay, aw, ah = abox
+                    if ax <= cx <= ax + aw and ay <= cy <= ay + ah:
+                        overlapping_ids.add(iid)
+                        break
+        else:
+            for abox in action_boxes:
+                best_iid = None
+                best_iou = self.coverage_iou
+                for iid, st in self.items.items():
+                    iou = _bbox_iou(st.bbox, abox)
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_iid = iid
+                if best_iid is not None:
+                    overlapping_ids.add(best_iid)
 
         # 2. 推进/归零各个体的连续重叠帧数
         for iid, st in self.items.items():
@@ -277,6 +298,11 @@ class _PerItemStep:
     def check_completion(self) -> bool:
         if self.completion == 'all_covered':
             if not self.items:
+                return False
+            # v3.12+ 虚拟漏件 NG: 配了 expected_count 时,锁定数必须达到期望颗数才算完成.
+            # 配 14 颗 5N 螺丝, 但模型只稳定看到 12 颗 → 锁了 12 → 工人扭满 12 颗也算 NG (差 2 颗虚拟漏件).
+            # 通过设 expected_count=0 可关闭此严格检查 (回到老行为, 锁多少扭多少都算 OK).
+            if self.expected_count > 0 and len(self.items) < self.expected_count:
                 return False
             for st in self.items.values():
                 if not st.covered:
@@ -432,6 +458,12 @@ class PerItemMixin:
         # False : (默认) 各自动结算路径按各自参数生效
         disable_auto_settle = bool(per_item_cfg.get('disable_auto_settle', False))
 
+        # v3.12+ 工件离场互斥开关
+        # True  : finish_label 触发结算时, 同帧画面里如果还有任何工件标签 (各 step.item_label)
+        #         → 这一帧不算结算累积 (工件没真离场, 拿取手势误识别)
+        # False : (默认) 老行为, 只看 finish_label 是否连续出现, 不管桌面是否还有工件
+        finish_requires_no_items = bool(per_item_cfg.get('finish_requires_no_items', False))
+
         self._per_item_config = {
             'stability_window_frames': max(1, stability_window),
             'stability_iou_threshold': stability_iou,
@@ -439,6 +471,7 @@ class PerItemMixin:
             'stability_count_ratio': max(0.1, min(1.0, stability_count_ratio)),
             'require_exact_count': require_exact_count,
             'disable_auto_settle': disable_auto_settle,
+            'finish_requires_no_items': finish_requires_no_items,
             'item_timeout_seconds': max(0.0, item_timeout),
             'lock_count_on_start': lock_on_start,
             'finish_label': finish_label,
@@ -475,9 +508,10 @@ class PerItemMixin:
             f"lock_on_start={lock_on_start}, finish_label='{finish_label}'"
         )
         for s in self._per_item_steps:
+            cov_mode = "中心点判定" if s.coverage_use_center else f"IoU>{s.coverage_iou}"
             print(
                 f"  · 步骤 [{s.step_label}]: item='{s.item_label}', action='{s.action_label}', "
-                f"sustain={s.sustain_frames}帧, coverage_iou={s.coverage_iou}, min={s.min_item_count}"
+                f"sustain={s.sustain_frames}帧, 覆盖={cov_mode}, min={s.min_item_count}"
             )
         return True
 
@@ -625,20 +659,40 @@ class PerItemMixin:
         # 后的 boxes_by_label 即可.
         finish_label = cfg.get('finish_label') or ''
         if not disable_auto_settle and finish_label and finish_label in boxes_by_label:
-            sess.finish_label_consec_frames += 1
-            # DEBUG: 保留 conf + w + h 流水, 便于排查 finish_label 信号稳定性
-            dets_str = ", ".join(
-                f"conf={d['conf']:.3f} w={d['w']:.3f} h={d['h']:.3f}"
-                for d in finish_label_dets_this_frame
-            )
-            print(
-                f"[per_item][DEBUG] finish_label='{finish_label}' 出现 "
-                f"frame_id={sess.frame_id} 连续={sess.finish_label_consec_frames}/"
-                f"{cfg['finish_sustain_frames']} dets=[{dets_str}]"
-            )
-            if sess.finish_label_consec_frames >= cfg['finish_sustain_frames']:
-                print(f"[per_item][DEBUG] >>> finish_label 触发结算 <<<")
-                self._per_item_settle_cycle(current_time)
+            # v3.12+ 工件离场互斥校验: 开关开启时, 同帧若画面里还有任何工件标签
+            # (各 step.item_label) → 工件未离场 → 这一帧不算结算 (拿取手势误识别).
+            workpiece_still_on_table_labels = []
+            if cfg.get('finish_requires_no_items', False):
+                seen = set()
+                for step in self._per_item_steps:
+                    for ilbl in step.item_label:
+                        if ilbl in seen:
+                            continue
+                        seen.add(ilbl)
+                        if ilbl in boxes_by_label and boxes_by_label.get(ilbl):
+                            workpiece_still_on_table_labels.append(ilbl)
+
+            if workpiece_still_on_table_labels:
+                if sess.finish_label_consec_frames > 0:
+                    print(
+                        f"[per_item][DEBUG] finish_label='{finish_label}' 出现但桌面仍有工件 "
+                        f"{workpiece_still_on_table_labels} → 工件未离场, 连续帧重置"
+                    )
+                sess.finish_label_consec_frames = 0
+            else:
+                sess.finish_label_consec_frames += 1
+                dets_str = ", ".join(
+                    f"conf={d['conf']:.3f} w={d['w']:.3f} h={d['h']:.3f}"
+                    for d in finish_label_dets_this_frame
+                )
+                print(
+                    f"[per_item][DEBUG] finish_label='{finish_label}' 出现 "
+                    f"frame_id={sess.frame_id} 连续={sess.finish_label_consec_frames}/"
+                    f"{cfg['finish_sustain_frames']} dets=[{dets_str}]"
+                )
+                if sess.finish_label_consec_frames >= cfg['finish_sustain_frames']:
+                    print(f"[per_item][DEBUG] >>> finish_label 触发结算 <<<")
+                    self._per_item_settle_cycle(current_time)
         else:
             if sess.finish_label_consec_frames > 0:
                 print(
@@ -679,32 +733,39 @@ class PerItemMixin:
             require_exact = cfg.get('require_exact_count', False)
             window_frames = list(sess.stability_buffer)
 
+            # v3.12+ 改造: 开周期阈值与 require_exact_count 解耦
+            #   require_exact_count = True  → 所有步骤都要同时达标 (多步联合检查)
+            #   require_exact_count = False → 仅首步要达标 (老宽松模式, 单步检查)
+            # 但两种模式下"每步达标条件"都用 tolerance/ratio 折算 required, 不再要求严格 == expected.
+            # 想严格 == expected? 把 tolerance=0 + ratio=1.0 即可.
+            ratio = cfg.get('stability_count_ratio', 0.85)
+            count_tol = cfg.get('stability_count_tolerance', 0)
+
+            def _required_for(expected: int) -> int:
+                """单步开周期阈值: ≥ max(1, expected - tolerance, expected × ratio)"""
+                if expected <= 0:
+                    return 0
+                return max(1, min(expected, int(expected * ratio), expected - count_tol))
+
+            first_required = _required_for(target)
+
+            # 窗口里每帧首步检出数都要 ≥ first_required
+            if any(len(fr) < first_required for fr in window_frames):
+                return
+
             if require_exact:
-                # v3.10.2+ 严格等量: 窗口里每帧首步都必须正好 == expected_count
-                if any(len(fr) != target for fr in window_frames):
-                    return
-                # 同时刻次步检出也必须 ≥ 各自 expected_count, 保证触发瞬间所有步骤都锁满
-                # boxes_now 已是首步的当帧检出; 次步用 boxes_by_label 即时计算
+                # 严格等量: 同时刻次步检出也必须 ≥ 各自 required (保证触发瞬间所有步骤都满足阈值)
                 for other_step in self._per_item_steps[1:]:
                     if other_step.expected_count > 0:
+                        other_required = _required_for(other_step.expected_count)
                         other_now = self._collect_item_boxes(boxes_by_label, other_step.item_label)
-                        if len(other_now) < other_step.expected_count:
+                        if len(other_now) < other_required:
                             return
-                latest_boxes = list(window_frames[-1])[:target]
-                item_count = len(latest_boxes)
-            else:
-                # 默认: 宽松触发 (>= ratio × expected, 漏检靠 lookahead 补)
-                ratio = cfg.get('stability_count_ratio', 0.85)
-                count_tol = cfg.get('stability_count_tolerance', 0)
-                required = max(1, min(target, int(target * ratio), target - count_tol))
 
-                # 窗口里每帧的检出数都要 ≥ required
-                if any(len(fr) < required for fr in window_frames):
-                    return
-                # 锁定时挑窗口里"检出最多"的那一帧 (最接近真实数量)
-                best_fr = max(window_frames, key=lambda fr: len(fr))
-                latest_boxes = list(best_fr)[:target]      # 截到 target 颗封顶
-                item_count = len(latest_boxes)
+            # 锁定时挑窗口里"检出最多"的那一帧 (最接近真实数量), 截到 target 封顶
+            best_fr = max(window_frames, key=lambda fr: len(fr))
+            latest_boxes = list(best_fr)[:target]
+            item_count = len(latest_boxes)
         else:
             # ──── 路径 B: auto 模式 (老路径) ────
             counts = [len(b) for b in sess.stability_buffer]

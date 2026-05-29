@@ -55,9 +55,11 @@ const modeLabel = computed(() => {
   const map = {
     'sequential': t('mode.sequential'),
     'detection': t('mode.detection'),
-    'custom': t('mode.custom')
+    'custom': t('mode.custom'),
+    'tracking': t('mode.tracking'),
+    'per_item': t('mode.per_item'),
   };
-  return map[mode] || '未设置';
+  return map[mode] || t('mode.undefined');
 });
 
 // ============================================================

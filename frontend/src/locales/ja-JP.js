@@ -33,6 +33,8 @@ export default {
     sequential: 'シーケンス',
     detection: '検知モード',
     custom: 'カスタム',
+    tracking: 'トラッキング',
+    per_item: '個別カバー',
     undefined: '未定義'
   },
   monitor: {

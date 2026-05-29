@@ -1577,6 +1577,23 @@
                     </div>
                   </div>
 
+                  <!-- v3.12+ 工件离场互斥 (避免工人扭螺丝时拿取手势误触发结算) -->
+                  <div class="mt-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded"
+                       v-if="activeProject.pipeline_config.per_item.finish_label">
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="flex-1">
+                        <div class="text-[12px] font-bold text-cyan-300">工件离场才算结算 (互斥校验)</div>
+                        <div class="text-[10px] text-gray-500 mt-0.5">
+                          开启: "收尾动作"出现的同帧, 如果画面里<span class="text-amber-300">还有任何工件标签</span>(5N螺丝/7N螺丝等) → 这一帧<span class="text-amber-300">不算结算</span> (拿取手势误识别)<br/>
+                          关闭 (默认): 老行为, 只看"收尾动作"是否连续出现, 不管桌面是否有工件
+                        </div>
+                      </div>
+                      <el-switch
+                        v-model="activeProject.pipeline_config.per_item.finish_requires_no_items"
+                        active-text="工件离场" inactive-text="不校验" inline-prompt size="default" />
+                    </div>
+                  </div>
+
                   <!-- v3.9+ 新增: 稳定性进阶 -->
                   <div class="border-t border-slate-700 pt-3 mt-3">
                     <div class="text-xs text-gray-400 mb-2 font-bold">稳定性进阶</div>
@@ -1585,10 +1602,10 @@
                     <div class="mb-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
                       <div class="flex items-center justify-between gap-3">
                         <div class="flex-1">
-                          <div class="text-[12px] font-bold text-cyan-300">严格等待检出数符合期望</div>
+                          <div class="text-[12px] font-bold text-cyan-300">所有工序同时达标才开周期</div>
                           <div class="text-[10px] text-gray-500 mt-0.5">
-                            开启后: 必须窗口里每帧首步检出 = 期望颗数, 且同一时刻其他步骤的物件也 ≥ 各自期望, 才触发周期 (锁定即满)<br/>
-                            关闭 (默认): 走"最低检出比例"宽松触发, 漏检靠"补锁定窗口"补; 若模型识别不稳, 严格等量可能迟迟无法触发
+                            开启: 每个工序的物件数都要同时达到"开周期门槛"才开 (例: 5N 看到 8 颗 + 7N 看到 2 颗 + 涂黑组 看到 9 颗, 同一时刻满足) <br/>
+                            关闭: 仅看首步达标即开周期 (其他工序锁多少件靠开周期那一帧)
                           </div>
                         </div>
                         <el-switch
@@ -1605,17 +1622,15 @@
                         <div class="text-[11px] text-gray-400 mb-1">允许漏检几件</div>
                         <el-input-number
                           v-model="activeProject.pipeline_config.per_item.stability_count_tolerance"
-                          size="small" :min="0" :step="1" :precision="0" class="!w-full"
-                          :disabled="activeProject.pipeline_config.per_item.require_exact_count" />
-                        <div class="text-[10px] text-gray-500 mt-1">配合"已知有几件"用, 允许 ±N 颗抖动 (默认 0)<span v-if="activeProject.pipeline_config.per_item.require_exact_count" class="text-amber-400"> · 严格等量下忽略</span></div>
+                          size="small" :min="0" :step="1" :precision="0" class="!w-full" />
+                        <div class="text-[10px] text-gray-500 mt-1">开周期门槛: 检出数 ≥ "已知件数 - N" 即放行 (默认 0). 严格等量下也生效, 控制每步达标阈值.</div>
                       </div>
                       <div>
                         <div class="text-[11px] text-gray-400 mb-1">最低检出比例</div>
                         <el-input-number
                           v-model="activeProject.pipeline_config.per_item.stability_count_ratio"
-                          size="small" :min="0.1" :max="1.0" :step="0.05" :precision="2" class="!w-full"
-                          :disabled="activeProject.pipeline_config.per_item.require_exact_count" />
-                        <div class="text-[10px] text-gray-500 mt-1">配"已知有几件"时, 检出数 ≥ N × 此比例即放行 (默认 0.85 = 允许 15% 漏检)<span v-if="activeProject.pipeline_config.per_item.require_exact_count" class="text-amber-400"> · 严格等量下忽略</span></div>
+                          size="small" :min="0.1" :max="1.0" :step="0.05" :precision="2" class="!w-full" />
+                        <div class="text-[10px] text-gray-500 mt-1">开周期门槛: 检出数 ≥ "已知件数 × 此比例" 即放行 (默认 0.85 = 允许 15% 漏检). 严格等量下也生效.</div>
                       </div>
                       <div>
                         <div class="text-[11px] text-gray-400 mb-1">周期开始后补锁定窗口(秒)</div>
@@ -1712,6 +1727,7 @@
                               action_label: step.label || '',
                               item_tracking_iou: 0.3,
                               coverage_iou: 0.3,
+                              coverage_use_center: false,
                               sustain_frames: 5,
                               completion: 'all_covered',
                               min_item_count: 'auto',
@@ -1793,6 +1809,20 @@
                           v-model="step.per_item.min_item_count"
                           size="small" placeholder="留 auto 即可" />
                         <div class="text-[10px] text-gray-500 mt-1">填数字 或 'auto'; 上方填了"已知有几件"后, 此项自动失效</div>
+                      </div>
+                      <div class="col-span-2 px-2 py-1.5 bg-slate-900/60 border border-slate-700 rounded">
+                        <div class="flex items-center justify-between gap-3">
+                          <div class="flex-1">
+                            <div class="text-[11px] font-bold text-cyan-300">小物件场景: 用"中心点"判定覆盖</div>
+                            <div class="text-[10px] text-gray-500 mt-0.5">
+                              适用 <span class="text-amber-300">涂黑 / 喷漆 / 扫码贴标</span> 这类"动作框远大于目标"的场景<br/>
+                              开启: 目标中心点落在动作框内即算覆盖 (上方"重合度"自动忽略)<br/>
+                              关闭 (默认): 用"重合度"判定 (适合 扭螺丝 这类目标与动作框大小相近的场景)
+                            </div>
+                          </div>
+                          <el-switch v-model="step.per_item.coverage_use_center"
+                            active-text="中心点" inactive-text="重合度" inline-prompt size="default" />
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -3056,6 +3086,7 @@ const initProjectDefaults = (project) => {
   if (piCfg.lock_count_on_start === undefined) piCfg.lock_count_on_start = true;
   if (piCfg.finish_label === undefined) piCfg.finish_label = '';
   if (piCfg.finish_sustain_frames === undefined) piCfg.finish_sustain_frames = 3;
+  if (piCfg.finish_requires_no_items === undefined) piCfg.finish_requires_no_items = false;
   // v3.9+ 新增字段默认值
   if (piCfg.stability_count_tolerance === undefined) piCfg.stability_count_tolerance = 0;
   if (piCfg.stability_count_ratio === undefined) piCfg.stability_count_ratio = 0.85;
@@ -3391,6 +3422,7 @@ const handleSaveProject = async () => {
             lock_count_on_start: src.lock_count_on_start !== false,
             finish_label: finishLabel,
             finish_sustain_frames: Math.max(1, Math.floor(Number(src.finish_sustain_frames) || 3)),
+            finish_requires_no_items: src.finish_requires_no_items === true,
             // v3.9+ 新增字段
             stability_count_tolerance: Math.max(0, Math.floor(Number(src.stability_count_tolerance) || 0)),
             stability_count_ratio: Math.max(0.1, Math.min(1.0, Number(src.stability_count_ratio) || 0.85)),
