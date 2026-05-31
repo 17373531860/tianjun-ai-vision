@@ -1,5 +1,23 @@
 # Changelog
 
+## v3.14.0 (2026-05-29)
+
+> RFC 11「串行流水线结算」一次性闭环 (M0-M8 全部交付)。新增「单机内多工位串行流水线」原生能力: 同一工件依次走过 N 个摄像头工位, 全过才算合格。架构上与已有 ChannelGroup (并行) / cluster (跨机汇总) 完全独立、不冲突, 同工位互斥。三种触发模式 (扫码 / 时间窗 FIFO / 物理 GPIO) 配齐, 福建金龙现场无扫码流水线场景跑通。详细 changelog 见 `docs/plugin-system/design/11_workpiece_flow_rfc.md`。
+
+- [FEAT-001] **WorkpieceFlowConfig + WorkpieceFlowRun ORM** — 2 张新表 + `Base.metadata.create_all` 自动注册 + 启动迁移把上次进程残留的 in_progress run 自动标 aborted。
+- [FEAT-002] **WorkpieceFlowCoordinator 单例 + 状态机** — `CREATED → STATION_RUNNING → STATION_DONE → COMPLETED/SHORT_CIRCUITED/TIMEOUT` 五态闭环, FIFO 队列 + max_in_flight 守门 + threading.Timer 超时, 失败完全隔离 (db/alarm/hooks/mes 异常永远不打断主流程)。
+- [FEAT-003] **3 种触发器策略** — `TimeWindowTrigger` 监听入口 cycle_start 自动 FIFO 入队 (适合无扫码节拍稳定场景); `ScanTrigger` 复用 mes_hooks.on_scan_received + `entry` / `each_station` 两种绑定策略 + scan_pair 互斥; `PhysicalTrigger` 接 external_device GPIO/Modbus 信号 + dedup 去抖 + 自动序号生成。
+- [FEAT-004] **REST API + Pydantic schema + 权限** — `/api/v1/workpiece-flows/` 8 个端点 (列表/CRUD/state/runs/run详情), `system.workpiece_flow.view` + `system.workpiece_flow.manage` 两个新权限, 创建/启用时与 ChannelGroup 互斥校验, 启用状态下禁止删除 / 改 stations。
+- [FEAT-005] **5 个插件 hook + 2 个 PluginHost 主动 API** — `workpiece_flow_enter` / `_station_done` / `_completed` (returnable `override_final_result`) / `_timeout` (returnable `override_timeout_action`) / `_short_circuit`; PluginHost 新增 `list_workpiece_flows` / `query_workpiece_flow_state` (需 manifest 声明 `runtime.workpiece_flow_observe` capability)。
+- [FEAT-006] **Monitor + Settings UI** — Monitor 加 `monitor.workpiece-flow.indicator` slot (默认实现展示 in-flight 工件列表, 客户插件可全覆盖); Settings 加「流水线串行」Tab (3 种 trigger_mode 表单切换 + 启用前预检 + 运行时 state 查看对话框)。
+- [FEAT-007] **集成现有事件管线** — VSM `start_cycle` / `end_cycle` 接 Coordinator.on_cycle_started/settled; mes_hooks.\_handle_scan 在 channel 属于 flow 时短路给 Coordinator.on_scan_received (与 scan_pair 严格互斥); channel_manager.set_channel_count 减少通道时清理 Coordinator 内 channel_to_flow 残留。
+- [TEST-001] **77 个测试零回归** — `tests/workpiece_flow/` 73 (TimeWindow 18 + Scan 15 + API 19 + Hook 8 + Physical 13) + `tests/step_defs/test_workpiece_flow_v314.py` 4 个 BDD 场景 (福建金龙 demo + 短路 + 删除前必须禁用 + 与工位组互斥), 全部 14 秒内跑完。
+- [DOC-001] **完整 RFC + plugin manifest 文档更新** — `docs/plugin-system/design/11_workpiece_flow_rfc.md` 落 RFC 全文; `01_manifest_schema.md` 加 `runtime.workpiece_flow_observe` capability。
+
+已知边界 (留待 v3.14.1+): Flow → cluster Box 联动 (工件流完成后挂到 box_serial 汇总); 工件返工流程 (Workpiece.status='rework' 重走 flow); 多 worker / 多机 Coordinator (状态搬 Redis); WorkpieceFlowRun 软删 + 数据保留策略。
+
+---
+
 ## v3.13.1 (2026-05-29)
 
 > 跳过 v3.13.0 骨架直接发完整闭环 (与 v3.12.0 跳过 v3.11 风格一致)。一次性落 `RFC 09 插件平台 v3.13 升级` (M1 业务 / M2 UI / M3 配置) 与 `RFC 10 工位组` 两大主线, 把客户「双工位 A NG → B NG 联动」「步骤耗时三档显示」「双工位左右半屏 + 共用底栏」「隐藏步骤级红色」四大需求一次性闭环。无破坏性改动, 老项目 JSON / DB / 接口、未装插件场景字节级零差异。详细 changelog 见 `docs/changelog/v3.13.1_2026-05-29.md`。

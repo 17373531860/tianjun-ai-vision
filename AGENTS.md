@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | v3.13.1（2026-05-29 发包 — 跳过 v3.13.0 骨架直接发完整闭环） |
+| 当前线上版本 | v3.14.0（2026-05-29 发包 — RFC 11 串行流水线结算 M0-M8 全部闭环） |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -221,17 +221,19 @@
 | `/api-keys/*` | `api_keys.py` (143) | **v3.10.0** M2M API Key 管理（SHA256 哈希 + scope） |
 | `/operators/*` | `operators.py` (74) | ⚠️ **v3.10.0 已废弃** — 全部 410 Gone，重定向 `X-Deprecated-Replacement: /api/v1/users` |
 | `/export/*` | `export_custom.py` + `export_realtime.py` | v3.5.0 自定义导出（共用前缀） |
+| `/channel-groups/*` | `channel_groups.py` | **v3.13.1** 单机内多工位**并行**联动 (RFC 10) |
+| `/workpiece-flows/*` | `workpiece_flows.py` | **v3.14.0** 单机内多工位**串行**结算 (RFC 11) |
 | `/debug/*` | `debug.py` (118) | 通道诊断 |
 
 > **常见误解**：路径前缀是**`/api/v1/`** 不是 `/api/`；旧手册写的 `/api/detection/*` 已删，等价端点在 `/api/v1/source/detection/*`。
 
-### 36+ 张数据库表（v3.13.1+；仅速查，详细字段见 modify-model skill）
+### 37+ 张数据库表（v3.14.0+；仅速查，详细字段见 modify-model skill）
 
 **`backend/models/models.py` 13 张**（核心检测）：
 `projects` / `models` / `model_conversions` / `tasks` / `cameras` / `daily_stats` / `system_configs` / `detection_sessions` / `detection_cycles` / `step_records` / `video_clips` / `data_export_settings` / `channel_groups` (v3.13.1 新增, 见模块 5b 工位组)
 
-**`backend/models/mes_models.py` 15 张**（MES）：
-`work_orders` / `batches` / `workpieces` / `workpiece_inspections` / `defect_records` / `defect_codes` / `scanner_devices` / `scan_logs` / `mes_connections` / `mes_comm_logs` / `cluster_config` / `box_aggregations` / `external_devices` / `external_device_logs` / `box_summaries`
+**`backend/models/mes_models.py` 17 张**（MES + 串行流水线）：
+`work_orders` / `batches` / `workpieces` / `workpiece_inspections` / `defect_records` / `defect_codes` / `scanner_devices` / `scan_logs` / `mes_connections` / `mes_comm_logs` / `cluster_config` / `box_aggregations` / `external_devices` / `external_device_logs` / `box_summaries` / `workpiece_flow_configs` / `workpiece_flow_runs` (v3.14.0 新增 2 张, 见模块 5c 串行流水线)
 
 **`backend/models/export_models.py` 3 张**（v3.5.0+）：
 `export_templates` / `export_realtime_rules` / `export_run_logs`
@@ -792,6 +794,7 @@
 | `pipeline_config.simultaneous_groups[].cross_cycle = true` (v3.9.0+) | JSON | 类二跨周期组，独立状态机处理上下周期成员 + 屏蔽集合 + 等待超时 | `source_settlement_mixin.py: _process_cross_cycle_groups` |
 | `pipeline_config.per_item.expected_count` / `lock_lookahead` / `settle_after_all_done_sec` (v3.9.0+) | int / sec | per_item 五补丁配置（固定数量 + 周期内补锁定 + 立即 OK 等） | `source_per_item_mixin.py` |
 | `channel_groups` 表 + Coordinator (v3.13.1+) | 表 + 单例 | **工位组**: 跨通道 NG 联动 / synchronized_any_ng/all_ok / threading.Timer 超时 / 报警链路直驱; CRUD: `GET POST PUT DELETE /api/v1/channel-groups/*` + `system.channel_group.view/manage` 权限位; 跨机 cluster 自动透传 `cycle_context.channel_group.settle_result` | `models/models.py:ChannelGroup` / `services/channel_group_coordinator.py` / `api/channel_groups.py` |
+| `workpiece_flow_*` 表 + Coordinator (v3.14.0+) | 2 表 + 单例 | **串行流水线** (RFC 11): 单机内多工位**串行**结算; 3 种 trigger (time_window FIFO / scan / physical GPIO); 5 态状态机 (CREATED→STATION_RUNNING→…→COMPLETED/SHORT_CIRCUITED/TIMEOUT); FIFO 上限 + threading.Timer 超时; 与 ChannelGroup 同工位互斥; CRUD: `GET POST PUT DELETE /api/v1/workpiece-flows/*` + `system.workpiece_flow.view/manage` 权限; 5 个 hook + 2 个 PluginHost API (需 `runtime.workpiece_flow_observe` capability) | `models/mes_models.py:WorkpieceFlow{Config,Run}` / `services/workpiece_flow_coordinator.py` / `services/flow_triggers/*.py` / `api/workpiece_flows.py` |
 | 插件 returnable hook (v3.13.1+) | 函数 | **10 个 hook 点 + 10 个 PluginHost 主动 API**: `pre_cycle_end / step_change / event_fire` 可改业务字段 (suppress_alarm / is_good override / warn_label); `trigger_alarm / mes_push / write_plugin_step_field / list_channel_groups / broadcast_to_channel_group` 等带 capability 守门 + audit log | `plugin_system/{registry,manager,hook_dispatch}.py` |
 | `<TjSlot>` UI 槽位 (v3.13.1+) | 全局 Vue 组件 | **7 个主程序 slot**: `settings.tab.* / project.tab.* / cycle-result.indicator / monitor.step-cell.{duration,status} / monitor.layout.{body,footer}`; manifest `frontend.ui_hidden` 隐藏槽; `registry.slots.register / tabs.register` 编程式注入; 没插件时 `layoutBodyOverride === null` 走原 DOM 字节级零差异 | `frontend/src/components/TjSlot.vue` / `store/usePluginThemeStore.js` |
 | `plugin_data` JSON 命名空间 (v3.13.1+) | JSON 子树 | **Project / StepRecord / SystemConfig 三处可挂插件命名空间**, 卸载 `?purge_data=true` 自动清理 `plugin_<customer_code>_` 前缀 (SQL LIKE ESCAPE 转义 `_/%`); `PUT /api/v1/projects/{id}/plugin-data` 精准 patch `plugin_data.<customer_code>` 子树 | `models/models.py` / `api/{projects,plugins}.py` / `plugin_system/registry.py:write_plugin_step_field` |
@@ -960,6 +963,7 @@ docs/
 
 | 版本 | 日期 | 主要变更 |
 |---|---|---|
+| v3.14.0 | 2026-05-29 | **RFC 11 串行流水线结算 (Workpiece Flow Coordinator)** — M0-M8 一次性闭环. 新增「单机内多工位**串行**流水线」原生能力 (同一工件依次走 N 个工位, 全过才合格), 与 v3.13.1 工位组 (并行) / cluster (跨机) 完全独立同工位互斥. 2 张新表 (`workpiece_flow_configs/_runs`) + Coordinator 单例 (5 态状态机 + FIFO + Timer 超时) + 3 种触发器 (TimeWindowTrigger / ScanTrigger 与 scan_pair 互斥 / PhysicalTrigger 接 GPIO/Modbus) + REST API 8 端点 + 5 hook + 2 PluginHost API + Settings Tab + Monitor indicator slot. 77 测试零回归 (单元 73 + BDD 4), 福建金龙现场无扫码场景跑通 demo. |
 | v3.13.1 | 2026-05-29 | **RFC 09 插件平台升级 + RFC 10 工位组主程序原生** — 跳过 v3.13.0 骨架直接发完整闭环. M1 业务流程双向打通(10 hooks 含 returnable + 10 PluginHost APIs + capabilities + audit), M2 UI 平台化(TjSlot + 7 主程序 slot 全接入: settings/project tab + cycle-result.indicator + step-cell.duration/status + layout.body/footer), M3 配置扩展(plugin_data 命名空间 + 卸载清理 + tab 注入). RFC 10 工位组(`channel_groups` 表 + Coordinator + synchronized_any_ng/all_ok + threading.Timer 超时 + 报警链路联动直驱 alarm_router + cluster 互操作透传 cycle_context). 395 测试零回归 (plugin_system 328 + channel_group 67), 未装插件场景字节级零差异. |
 | v3.12.0 | 2026-05-27 | per_item 严格等量周期触发 (require_exact_count) + per_item 手动结算模式 (disable_auto_settle + force_start) + box 尺寸过滤 (per-YOLO 守门) + Monitor SOP 图永不空 + 5 类历史测试失败修复 (conftest auth_models / MagicMock / 字段名漂移 / 模板英文化 / jsonschema 缺依赖) |
 | v3.10.0 | 2026-05-25（开发中） | **用户系统完整闭环**：多角色账号（admin/engineer/operator）+ token 鉴权 + 端点级权限（约 160 个端点 require_perm）+ M2M API Key + 总开关默认关闭零差异 + 彻底清除旧 operators 系统（表+API+UI+utils 全删，5 阶段渐进式 strangle）+ Navbar/BottomBar 身份显示按鉴权状态切换 |
@@ -998,7 +1002,8 @@ docs/
 
 ## 十三、当前在做的事（动态，看 git log 和分支名）
 
-- 分支 `test/v3.12.0`：**v3.13.1 完整闭环**（RFC 09 插件平台 + RFC 10 工位组 全部交付，395 测试零回归，2026-05-29 发包）
+- 主线：**v3.14.0 RFC 11 串行流水线结算**（M0-M8 全部交付，77 测试零回归，2026-05-29 发包）
+- 上版稳定：v3.13.1（RFC 09 插件平台 + RFC 10 工位组）
 - 主分支 `main`：v3.9.0 稳定版（早期客户安装在用）
 - 分支 `feat/user-system`：**v3.10.0 用户系统**（6 阶段全部完成，UAT 全过，已合入主线）
 - 分支 `feat/plugin-system`：**多客户定制插件系统 + 数据库迁 PG**（长期分支, v3.13 阶段大部分能力已合入 test/v3.12.0）
@@ -1016,6 +1021,6 @@ docs/
 
 ---
 
-**本文件最后更新**：2026-05-29（v3.13.1 完整闭环发布同步：RFC 09 插件平台升级 M1/M2/M3 全交付 + RFC 10 工位组主程序原生功能全闭环 + 关键扩展点速查加 4 条 v3.13.1 新条目）
+**本文件最后更新**：2026-05-29（v3.14.0 RFC 11 串行流水线结算 M0-M8 全闭环同步：2 张新表 + Coordinator + 3 种 trigger + REST API + 5 hook + Settings Tab + Monitor slot + 77 测试零回归）
 **维护者**：项目主作者 + AI agents
 **事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）+ v3.9.0/v3.10.0 实测代码反推（`source_settlement_mixin.py` 1320 行 / `source_per_item_mixin.py` ~960 行 / v3.10 用户系统 ~841 行 core + 5 张新表 + 12 个 UAT 全过）

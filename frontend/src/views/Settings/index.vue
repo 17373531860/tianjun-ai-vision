@@ -1545,6 +1545,11 @@
         <AuthPanel />
       </el-tab-pane>
 
+      <!-- v3.14 RFC 11: 流水线串行 Tab -->
+      <el-tab-pane label="流水线串行">
+        <WorkpieceFlowPanel />
+      </el-tab-pane>
+
       <!-- v3.13 M2.2b: 客户插件可注入 Tab. 通过 manifest.frontend.settings_tabs 声明 -->
       <el-tab-pane
         v-for="tab in pluginSettingsTabs"
@@ -1576,6 +1581,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjectDetail } from '@/api/project';
 import api from '@/api/index';
 import AuthPanel from './AuthPanel.vue';
+import WorkpieceFlowPanel from './WorkpieceFlowPanel.vue';
 
 const store = useSystemStore();
 const projectStore = useProjectStore();

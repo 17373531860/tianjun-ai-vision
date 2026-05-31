@@ -169,3 +169,10 @@ docs/*.html
 prototype/
 se9/
 wheels_se9/
+
+# 插件签名 dev 密钥 (RSA 私钥 + PLUGIN_SECRET) — 严禁推到 git
+dev_keys/
+*.pem
+PLUGIN_SECRET.txt
+!docs/**/*.pem.example
+!tests/**/fixtures/**/*.pem

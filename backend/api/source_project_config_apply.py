@@ -279,13 +279,17 @@ def _apply_pipeline_config(h, config, pipeline_config):
         f"周期超时: {h.cycle_max_duration}s"
     )
 
-    # 结算步骤不允许有 strict_order, 确保结算步骤始终能进入周期
+    # 结算步骤不允许有 strict_order / accept_once, 确保结算步骤始终能进入周期
     if h.settlement_mode == 'last_first':
         # last_first 模式: 全部步骤强制非严格 (前端校验 + 后端二次兜底)
         if h.step_strict_order:
             cleared = list(h.step_strict_order.keys())
             h.step_strict_order = {}
             print(f"[last_first 模式] 自动清空全部步骤的严格顺序 ({cleared})")
+        if h.step_accept_once:
+            cleared_once = list(h.step_accept_once.keys())
+            h.step_accept_once = {}
+            print(f"[last_first 模式] 自动清空全部步骤的单次接受 ({cleared_once})")
         # 与 first_step_aborts_pending_settle 互斥 (功能重叠, last_first 自带 R3 fallback)
         if pipeline_config.get('first_step_aborts_pending_settle'):
             print("[last_first 模式] 检测到 first_step_aborts_pending_settle=True, 强制覆盖为 False (已被 last_first R3 取代)")
@@ -298,11 +302,17 @@ def _apply_pipeline_config(h, config, pipeline_config):
         if settle_label and h.step_strict_order.get(settle_label):
             del h.step_strict_order[settle_label]
             print(f"[{h.settlement_mode}模式] 自动移除结算步骤 [{settle_label}] 的严格顺序")
+        if settle_label and h.step_accept_once.get(settle_label):
+            del h.step_accept_once[settle_label]
+            print(f"[{h.settlement_mode}模式] 自动移除结算步骤 [{settle_label}] 的单次接受")
     else:
         settle_label = h._get_first_sequence_step_label()
         if settle_label and h.step_strict_order.get(settle_label):
             del h.step_strict_order[settle_label]
             print(f"[{h.settlement_mode}模式] 自动移除结算步骤 [{settle_label}] 的严格顺序")
+        if settle_label and h.step_accept_once.get(settle_label):
+            del h.step_accept_once[settle_label]
+            print(f"[{h.settlement_mode}模式] 自动移除结算步骤 [{settle_label}] 的单次接受")
 
 
 def _apply_counters(h, config):

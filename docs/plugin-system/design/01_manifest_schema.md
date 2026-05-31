@@ -399,6 +399,7 @@ plugins/{customer_code}/
 | `runtime.system_config_write` | `host.write_system_config(key, value, description)` | 写 `system_configs` 表（`key` 必须 `plugin_<cc>_` 前缀） |
 | `runtime.step_field_write` | `host.write_plugin_step_field(step_record_id, key, value)` | JSON 合并写入 `step_records.plugin_data`（`key` 必须 `plugin_<cc>_` 前缀，`value` 必须可 JSON 序列化）— v3.13 M3.3 |
 | `runtime.channel_group_broadcast` | `host.broadcast_to_channel_group(group_id, message)` | 给工位组成员 fire `plugin_broadcast_received` hook（`message` 必须 dict + 可 JSON 序列化）— v3.13 RFC 10 CG.7 |
+| `runtime.workpiece_flow_observe` | `host.list_workpiece_flows()` / `host.query_workpiece_flow_state(flow_id)` | 查 v3.14 RFC 11 串行流水线配置 + 当前 in-flight 工件状态。只读, 但因为涉及客户产线敏感数据, 声明性能力位以备审计 |
 
 **注意**：
 - `host.read_system_config(...)` **不**需要声明 capability（只读无副作用，跨插件查主程序状态是合理需求）

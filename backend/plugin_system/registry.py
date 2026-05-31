@@ -1007,3 +1007,67 @@ class PluginHost:
                 self.customer_code, exc,
             )
             return False
+
+    # =============================================================
+    # v3.14 RFC 11: 串行流水线 (WorkpieceFlow) 查询 API
+    # =============================================================
+
+    def list_workpiece_flows(self) -> List[Dict[str, Any]]:
+        """列出所有 enabled 串行流水线配置 (snapshot).
+
+        无 capability 要求 (只读). 但因涉及客户产线敏感数据, 仍写 audit log.
+        """
+        try:
+            from backend.services.workpiece_flow_coordinator import get_coordinator
+            flows = get_coordinator().list_flows()
+            self._audit_log(
+                action="list_workpiece_flows",
+                status="success",
+                message=f"返回 {len(flows)} 个 flow",
+            )
+            return flows
+        except Exception as exc:
+            self._audit_log(
+                action="list_workpiece_flows",
+                status="failed",
+                message=str(exc),
+            )
+            log.warning(
+                "[Plugin][%s] list_workpiece_flows 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return []
+
+    def query_workpiece_flow_state(self, flow_id: int) -> Optional[Dict[str, Any]]:
+        """查单个串行流水线的当前 in-flight 工件状态.
+
+        返回:
+          {
+            "flow": {...},
+            "in_flight": [...],
+            "in_flight_count": int,
+          }
+          flow 不存在时返回 None.
+        """
+        try:
+            from backend.services.workpiece_flow_coordinator import get_coordinator
+            coord = get_coordinator()
+            flow = coord.get_flow(flow_id)
+            if not flow:
+                return None
+            return {
+                "flow": flow,
+                "in_flight": coord.list_in_flight(flow_id),
+                "in_flight_count": len(coord.list_in_flight(flow_id)),
+            }
+        except Exception as exc:
+            self._audit_log(
+                action="query_workpiece_flow_state",
+                status="failed",
+                message=f"flow_id={flow_id} 异常: {exc}",
+            )
+            log.warning(
+                "[Plugin][%s] query_workpiece_flow_state 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return None

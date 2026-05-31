@@ -56,6 +56,16 @@ RETURNABLE_HOOK_FIELDS: Dict[str, Set[str]] = {
     #   - 严格 ``is True`` 而非 truthy: 防 ``"false"`` 字符串 / ``1`` 整数误抑制.
     #   - 安全侧默认: 任何不显式 True 的值都不抑制 (宁可误报警也不漏报警).
     "event_fire": {"suppress_alarm"},
+    # v3.14 RFC 11: 串行流水线 5 个 hook.
+    # 工件进入流水线 / 某工位完成 — 仅观察, 无 returnable 字段.
+    "workpiece_flow_enter": set(),
+    "workpiece_flow_station_done": set(),
+    # 工件流转完成 — 插件可重写最终结果 (例 跨工位质量分加权).
+    "workpiece_flow_completed": {"override_final_result"},
+    # 工件超时 — 插件可重写超时动作 (force_ng / drop / alarm_only).
+    "workpiece_flow_timeout": {"override_timeout_action"},
+    # 短路触发 — 仅观察, 客户可挂报警/导出.
+    "workpiece_flow_short_circuit": set(),
 }
 
 
@@ -135,6 +145,15 @@ def fire_plugin_hook(
                      / 解析失败 / external_only / test 期间路径**不** fire
                    - ``"project_activated"``: 项目激活 + 模型重载 + 配置同步 + MES pending
                      清理后
+
+                   RFC 12 (v3.15, 步骤进行中计时广播):
+                   - ``"step_tick"``: 步骤进行中, 主程序在推理热路径里对每个正在计时的
+                     步骤按 ~1Hz 节流 fire, ctx 携带 ``elapsed_sec`` + 步骤身份 +
+                     主程序侧 min/max_duration (只读参考). **只读 observe hook**
+                     (不在 RETURNABLE_HOOK_FIELDS), 返回值丢弃. 客户"步骤耗时三档 +
+                     实时警告/超时报警"策略挂这里 — 阈值判定 + trigger_alarm + NG 改写
+                     (经 pre_cycle_end) 全在插件侧, 主程序不内嵌任何阈值策略.
+                     ctx 字段契约见 tests/plugin_system/test_step_tick_hook.py.
 
                    M1.1 末项 (v3.13, 2026-05-28 落地):
                    - ``"source_status_change"``: 5 个 lifecycle 公共方法 (pause / resume /

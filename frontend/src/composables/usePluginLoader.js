@@ -13,7 +13,7 @@
  *   - fetch /api/v1/plugins/active/assets/{entry} 拿 ESM 文本
  *   - new Blob → URL.createObjectURL → dynamic import
  *   - 调 module.default.register({ host, registry })
- *     - host = { vue, pinia, router, i18n }   ← 让插件不需要 import "vue"
+ *     - host = { vue, pinia, router, i18n, echarts }   ← 让插件不需要 import "vue" / "echarts"
  *     - registry = {
  *         routes: { add(routeOpts), remove(name) }   → vue-router 4 addRoute/removeRoute
  *         menus:  { add(menuOpts), remove(path) }    → usePluginThemeStore.pluginMenus
@@ -28,6 +28,7 @@
 import * as Vue from "vue";
 import * as Pinia from "pinia";
 import * as VueI18n from "vue-i18n";
+import * as ECharts from "echarts";
 import api from "@/api/index";
 import { usePluginThemeStore } from "@/store/usePluginThemeStore";
 
@@ -98,6 +99,10 @@ export async function loadActivePluginFrontend(router) {
     pinia: Pinia,
     i18n: _i18nInstance ? VueI18n : null,
     router,
+    echarts: ECharts,
+    // 已配 baseURL + 鉴权拦截器的 axios 实例, 让插件前端能调自己的后端路由
+    // (/api/v1/plugins/<cc>/...). 纯附加能力, 不改任何既有行为.
+    api,
     customerCode: manifest.customer_code,
     pluginVersion: manifest.plugin_version,
   };

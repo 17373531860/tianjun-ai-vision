@@ -550,6 +550,23 @@ class SessionLifecycleMixin:
                 "start_time": now.isoformat() if now else None,
             })
 
+            # v3.14 RFC 11: 通知 WorkpieceFlowCoordinator 本通道 cycle_start.
+            # 若本通道属于某串行流水线 → 把 cycle 绑到队列首个 in-flight run 对应工位.
+            # 不属于任何 flow 时直接 return, 零差异. 任何异常隔离.
+            try:
+                from backend.services.workpiece_flow_coordinator import get_coordinator as _get_wfc_coord2
+                _wfc_db = self._get_db_session()
+                try:
+                    _get_wfc_coord2().on_cycle_started(
+                        channel_id=self.channel_id,
+                        cycle_id=cycle.id,
+                        db=_wfc_db,
+                    )
+                finally:
+                    _wfc_db.close()
+            except Exception as _e_wfc:
+                print(f"[WorkpieceFlow] on_cycle_started 异常 (隔离, 不影响主流程): {_e_wfc}")
+
             # 开始周期视频录制
             self.start_cycle_recording()
         except Exception as e:
@@ -783,6 +800,20 @@ class SessionLifecycleMixin:
                     )
                 except Exception as _e:
                     print(f"[ChannelGroup] on_cycle_settled 异常 (隔离, 不影响主流程): {_e}")
+
+                # v3.14 RFC 11: 通知 WorkpieceFlowCoordinator 本次结算.
+                # 推进串行流水线状态机 (最后一站 → COMPLETED; 任一 NG + short_circuit → SHORT_CIRCUITED).
+                # 通道不在任何 flow 时直接 return, 零差异; 任何异常都隔离, 不影响主流程.
+                try:
+                    from backend.services.workpiece_flow_coordinator import get_coordinator as _get_wfc_coord
+                    _get_wfc_coord().on_cycle_settled(
+                        channel_id=self.channel_id,
+                        cycle_id=cycle.id,
+                        is_good=bool(final_is_good),
+                        db=db,
+                    )
+                except Exception as _e:
+                    print(f"[WorkpieceFlow] on_cycle_settled 异常 (隔离, 不影响主流程): {_e}")
 
                 # v2.7.16: once_per_cycle 模式下, 周期结束 (无论 OK/NG) 都让扫码器
                 # 恢复扫描, 等下一个工件的码. 模式不匹配时是 no-op, 不需要额外判断.

@@ -16,6 +16,13 @@ export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 # 触发后会把 uvicorn worker 子进程整个 abort 掉,--reload 模式下不会自动复活
 export OPENCV_FFMPEG_CAPTURE_OPTIONS="threads;1"
 
+# 插件验签：本地开发用 dev_keys/（设置页上传 .tjvplugin 必需，否则报「未配置插件客户端绑定密钥」）
+export PLUGIN_SECRET_FILE="$(cd "$(dirname "$0")" && pwd)/dev_keys/PLUGIN_SECRET.txt"
+if [[ ! -f "$PLUGIN_SECRET_FILE" ]]; then
+  echo "警告: 未找到 PLUGIN_SECRET_FILE=$PLUGIN_SECRET_FILE"
+  echo "      插件管理页上传安装包会失败。请运行 scripts/plugin/gen-master-keypair.py 生成 dev_keys/"
+fi
+
 # 清理旧进程 (启动前自动杀死占用端口的进程)
 cleanup() {
     echo ""

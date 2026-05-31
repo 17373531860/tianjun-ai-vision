@@ -135,6 +135,13 @@ class ChannelManager:
                     _get_cg_coord().on_channel_removed(cid)
                 except Exception as e:
                     print(f"[ChannelManager] Error cleaning ChannelGroupCoordinator for ch{cid}: {e}")
+                # v3.14 RFC 11: 清理 WorkpieceFlowCoordinator 中该通道的反向索引.
+                # in-flight runs 不动 (它们走 timeout 自然终态).
+                try:
+                    from backend.services.workpiece_flow_coordinator import get_coordinator as _get_wfc_coord
+                    _get_wfc_coord().on_channel_removed(cid)
+                except Exception as e:
+                    print(f"[ChannelManager] Error cleaning WorkpieceFlowCoordinator for ch{cid}: {e}")
 
             # Create missing channels
             for cid in range(count):

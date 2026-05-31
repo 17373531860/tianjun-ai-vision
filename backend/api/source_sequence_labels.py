@@ -52,8 +52,20 @@ class SequenceLabels:
         logic_mode = cfg.get('logic_mode', 'sequential')
         pipeline = cfg.get('pipeline_config', {})
         if logic_mode == 'custom':
-            return pipeline.get('custom_sequence_order', []) or []
-        return pipeline.get('sequence_order', []) or []
+            seq = pipeline.get('custom_sequence_order', []) or []
+        else:
+            seq = pipeline.get('sequence_order', []) or []
+        if seq:
+            return seq
+        # API/脚本创建的项目常缺 sequence_order — 用 steps_config 顺序兜底
+        steps = cfg.get('steps_config', []) or []
+        fallback = []
+        for step in steps:
+            if step.get('enabled', True) and not step.get('is_backup') and not step.get('backup_for'):
+                sid = step.get('id')
+                if sid is not None:
+                    fallback.append({'step_id': sid})
+        return fallback
 
     # ============================================================
     # 公共查询接口
@@ -65,7 +77,7 @@ class SequenceLabels:
             return None
         seq = self._sequence_order()
         steps = cfg.get('steps_config', [])
-        if not seq or not steps:
+        if not steps:
             return None
         id_to_label, enabled_ids = self._index_steps(steps)
         for item in seq:
@@ -81,7 +93,7 @@ class SequenceLabels:
             return None
         seq = self._sequence_order()
         steps = cfg.get('steps_config', [])
-        if not seq or not steps:
+        if not steps:
             return None
         id_to_label, enabled_ids = self._index_steps(steps)
         for item in reversed(seq):

@@ -1,13 +1,151 @@
 <template>
   <!-- v3.13 M2.2b: monitor.layout.body slot — 整体 layout 完全覆盖.
-       客户插件用于双工位左右半屏 + 共用底栏等深度重排. 默认走原 layout, 字节级零差异. -->
-  <component
-    v-if="layoutBodyOverride"
-    :is="layoutBodyOverride"
-    :channel-count="channelCount"
-    :multi-channel-data="multiChannelData"
-    :selected-channel="selectedChannel"
-  />
+       客户插件用于双工位左右半屏 + 共用底栏等深度重排. 默认走原 layout, 字节级零差异.
+       v3.13.2 补丁: 加 :actions 透传开始/停止/待机/清零四个控制方法,
+       让 layout.body 插件能完整重排控制按钮 (项目/模型解析等复杂前置都在 Monitor 内做了). -->
+  <!-- layout.body 插件: 仅双工位启用; 全局 Toast / 人工确认 / 录像异常由宿主渲染, 避免插件漏功能 -->
+  <div
+    v-if="layoutBodyOverride && channelCount === 2"
+    class="relative h-[calc(100vh-7.25rem)] min-h-0 overflow-hidden"
+  >
+    <component
+      :is="layoutBodyOverride"
+      :channel-count="channelCount"
+      :multi-channel-data="multiChannelData"
+      :selected-channel="selectedChannel"
+      :channel-model-stats="channelModelStats"
+      :current-project="currentProject"
+      :actions="layoutBodyActions"
+      :stream-url-builder="buildMultiStreamUrl"
+      @update:selected-channel="selectedChannel = $event"
+    />
+
+    <!-- 双工位列级 OK/NG Toast (与原生双工位同结构, 保留 cycle-result.indicator slot) -->
+    <div class="pointer-events-none absolute inset-0 z-[45] grid grid-cols-2 gap-2 p-2">
+      <div v-for="ch in 2" :key="'plugin-toast-' + ch" class="relative min-h-0">
+        <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
+          <div class="absolute z-50 pointer-events-none flex flex-col gap-2" :class="getMultiPositionClass(position)">
+            <transition-group name="toast">
+              <TjSlot
+                v-for="toast in (multiActiveToasts[ch - 1] || []).filter(t => t.position === position)"
+                :key="toast.id"
+                name="cycle-result.indicator"
+                :toast="toast"
+                :channel-id="ch - 1"
+              >
+                <div
+                  class="px-4 py-3 rounded-xl shadow-2xl text-white font-bold pointer-events-auto transform transition-all duration-300 text-center"
+                  :style="{ backgroundColor: toast.color, fontSize: (toast.fontSize / 16) + 'rem' }">
+                  <div class="flex items-center gap-2 justify-center">
+                    <el-icon :size="20"><component :is="toast.icon" /></el-icon>
+                    <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
+                  </div>
+                </div>
+              </TjSlot>
+            </transition-group>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- 人工确认阻塞层 (任一工位 pendingAck.active) -->
+    <div
+      v-if="pendingAckDisplay"
+      class="absolute inset-0 z-[60] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+    >
+      <div class="w-full max-w-lg bg-slate-900 border-2 border-amber-500 rounded-xl shadow-2xl p-6 flex flex-col gap-4">
+        <div class="text-center">
+          <div class="text-amber-400 text-sm font-bold mb-1">⚠ 需要人工确认</div>
+          <div class="text-2xl font-bold text-white">
+            工位 {{ pendingAckDisplay.channel + 1 }}
+          </div>
+        </div>
+        <div class="bg-slate-800 rounded-lg p-4 space-y-2 text-sm">
+          <div class="flex gap-2">
+            <span class="text-gray-400 flex-shrink-0">事件:</span>
+            <span class="text-white font-bold">{{ pendingAckDisplay.eventName || '(未命名事件)' }}</span>
+          </div>
+          <div class="flex gap-2">
+            <span class="text-gray-400 flex-shrink-0">原因:</span>
+            <span class="text-gray-200 break-all">{{ pendingAckDisplay.reason || '—' }}</span>
+          </div>
+          <div class="flex gap-2 items-center">
+            <span class="text-gray-400 flex-shrink-0">已等待:</span>
+            <span class="text-cyan-300 font-mono">{{ pendingAckWaitedSec }} 秒</span>
+            <template v-if="pendingAckDisplay.timeoutSec > 0">
+              <span class="text-gray-600">|</span>
+              <span class="text-amber-300 font-mono">{{ pendingAckRemainSec }} 秒后自动确认</span>
+            </template>
+          </div>
+        </div>
+        <div class="flex items-center justify-center gap-3">
+          <span v-if="pendingAckDisplay.acking" class="text-xs text-gray-400">提交中...</span>
+          <el-button
+            type="warning"
+            size="large"
+            :loading="pendingAckDisplay.acking"
+            @click="ackPendingForChannel(pendingAckDisplay.channel)"
+          >
+            我已确认 — 重做工位 {{ pendingAckDisplay.channel + 1 }}
+          </el-button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 录像异常 (双工位共用入口) -->
+    <button
+      v-if="totalRecordingFailureCount > 0"
+      class="absolute right-3 bottom-3 z-[50] bg-amber-600/90 hover:bg-amber-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1"
+      @click="showRecordingFailurePanel = true"
+    >
+      <el-icon><Warning /></el-icon>
+      录像异常 {{ totalRecordingFailureCount }}
+    </button>
+    <div v-if="showRecordingFailurePanel" class="absolute inset-0 z-[55] bg-black/50 flex items-center justify-center p-4">
+      <div class="w-full max-w-5xl max-h-[85vh] bg-slate-900 border border-slate-700 rounded-lg flex flex-col">
+        <div class="px-4 py-3 border-b border-slate-700 flex items-center">
+          <span class="text-amber-300 font-bold">录像异常详情</span>
+          <span class="text-xs text-gray-400 ml-3">仅记录最近异常，用于排查</span>
+          <div class="ml-auto flex gap-2">
+            <el-button size="small" type="warning" plain :loading="recordingFailureLoading" @click="clearRecordingFailures">
+              清空列表
+            </el-button>
+            <el-button size="small" @click="showRecordingFailurePanel = false">关闭</el-button>
+          </div>
+        </div>
+        <div class="p-3 overflow-auto">
+          <table class="w-full text-xs text-left">
+            <thead class="text-gray-400 border-b border-slate-700">
+              <tr>
+                <th class="py-1 pr-2">时间</th>
+                <th class="py-1 pr-2">工位</th>
+                <th class="py-1 pr-2">类型</th>
+                <th class="py-1 pr-2">原因</th>
+                <th class="py-1 pr-2">文件</th>
+                <th class="py-1 pr-2">已写帧</th>
+              </tr>
+            </thead>
+            <tbody class="text-gray-200">
+              <tr v-for="(item, idx) in recordingFailureRows" :key="idx" class="border-b border-slate-800">
+                <td class="py-1 pr-2 whitespace-nowrap">{{ formatRecordingFailureTime(item.timestamp) }}</td>
+                <td class="py-1 pr-2">工位{{ item.channel_id + 1 }}</td>
+                <td class="py-1 pr-2">{{ item.recorder_type }}</td>
+                <td class="py-1 pr-2">
+                  <div>{{ getRecordingFailureReasonText(item.reason) }}</div>
+                  <div v-if="item.error" class="text-gray-400 break-all">{{ item.error }}</div>
+                </td>
+                <td class="py-1 pr-2 break-all text-gray-300">{{ item.file_path || '-' }}</td>
+                <td class="py-1 pr-2">{{ item.frame_count ?? '-' }}</td>
+              </tr>
+              <tr v-if="recordingFailureRows.length === 0">
+                <td colspan="6" class="py-4 text-center text-gray-500">暂无录像异常</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- ===== DUAL WORKSTATION MODE (2 channels) ===== -->
   <div v-else-if="channelCount === 2" class="grid grid-cols-2 gap-2 h-[calc(100vh-7.25rem)] p-2 relative">
@@ -1292,10 +1430,19 @@
     :channel-count="channelCount"
     :multi-channel-data="multiChannelData"
   />
+
+  <!-- v3.14 RFC 11: monitor.workpiece-flow.indicator slot — 展示当前 in-flight 工件状态.
+       主程序默认实现: 横幅式列表 (max 3 个, FIFO 上限). 客户插件可覆盖整段展示.
+       后端 /api/v1/workpiece-flows/{id}/state 提供轮询数据源. -->
+  <TjSlot
+    slot-name="monitor.workpiece-flow.indicator"
+    :channel-count="channelCount"
+    :selected-channel="selectedChannel"
+  />
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref, watch, nextTick, computed } from 'vue';
+import { onMounted, onUnmounted, ref, watch, nextTick, computed, h } from 'vue';
 import * as echarts from 'echarts';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
@@ -1310,6 +1457,7 @@ import { getProjectDetail } from '@/api/project';
 import api, { getBackendHost } from '@/api/index';
 import { getExtraFieldsSchema, setExtraFields } from '@/api/gateway';
 import PerItemPanel from './PerItemPanel.vue';
+import TjSlot from '@/components/TjSlot.vue';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
@@ -1320,6 +1468,127 @@ const pluginThemeStore = usePluginThemeStore();
 // v3.13 M2.2b: layout slot 覆盖 (整体 layout / 底栏). 没插件时永远是 null = 走原 layout.
 const layoutBodyOverride = computed(() => pluginThemeStore.getSlotComponent('monitor.layout.body'));
 const layoutFooterOverride = computed(() => pluginThemeStore.getSlotComponent('monitor.layout.footer'));
+
+/** layout.body 插件内渲染主程序 TjSlot（步骤表 PT/结果列等） */
+const renderMonitorSlot = (name, attrs, defaultRender) => {
+  const slotDefault = typeof defaultRender === 'function' ? defaultRender : () => defaultRender;
+  return h(TjSlot, { name, ...attrs }, { default: slotDefault });
+};
+
+// v3.13.2 补丁: layout.body 插件需要的控制方法集合,
+// 没插件 (layoutBodyOverride === null) 时这个对象不会被消费, 主程序行为零差异.
+// 这些方法都封装了项目/模型解析 + 扫码闭环 + 报警等完整业务逻辑, 插件直接调即可.
+const layoutBodyActions = computed(() => ({
+  startDetectionForChannel,
+  stopDetectionForChannel,
+  standbyForChannel,
+  resetCountersForChannel,
+  formatVideoTime,
+  setVideoProgressForChannel: async (ch, progress) => {
+    await api.post('/source/video/progress', { progress }, { params: { channel: ch } });
+    const videoRes = await api.get('/source/video/info', { params: { channel: ch } });
+    if (videoRes.data.status === 'success' && multiChannelData.value[ch]) {
+      multiChannelData.value[ch].videoInfo = {
+        progress: videoRes.data.progress || 0,
+        currentTime: videoRes.data.current_time || 0,
+        duration: videoRes.data.duration || 0,
+        speed: videoRes.data.speed || 1,
+        ended: videoRes.data.ended || false,
+      };
+    }
+  },
+  setVideoSpeedForChannel: async (ch, speed) => {
+    await api.post('/source/video/speed', { speed }, { params: { channel: ch } });
+    if (multiChannelData.value[ch]?.videoInfo) {
+      multiChannelData.value[ch].videoInfo.speed = speed;
+    }
+  },
+  /** layout.body 插件用: 在 canvas 上画检测框 (与原生双工位 overlay 同一套逻辑) */
+  renderDetectionOverlay: (ch, canvas) => {
+    const chData = multiChannelData.value[ch];
+    if (!canvas || !chData) return;
+    const pollCfg = chData._pollProjectConfig || (
+      chData.project
+        ? { steps_config: chData.project.steps_config, pipeline_config: chData.project.pipeline_config }
+        : null
+    );
+    drawMultiDetections(ch, canvas, chData.detections || [], chData._hiddenLabels, pollCfg);
+  },
+  /** layout.body 插件 <img> 加载后上报帧尺寸, 画框 letterbox 对齐 */
+  setFrameNaturalSize: (ch, w, h) => {
+    if (w > 0 && h > 0) multiFrameNaturalSize[ch] = { w, h };
+  },
+  // MES / 扫码 / CT / 步骤表列 — layout.body 插件与原生双工位对齐
+  shouldShowMesBarFor: (ch) => shouldShowMesBarFor(ch),
+  getDisplayWorkpieceFor: (ch) => getDisplayWorkpieceFor(ch),
+  getMesDataFor: (ch) => getMesDataFor(ch),
+  hasScannerFor: (ch) => hasScannerFor(ch),
+  isScanDisabledFor: (ch) => isScanDisabledFor(ch),
+  clearPendingScan: (ch) => clearPendingScan(ch),
+  toggleScanDisableFor: (ch) => toggleScanDisableFor(ch),
+  getScannerDisableToggling: () => scannerDisableStore.toggling,
+  getDisplayCT: (chData) => getDisplayCT(chData),
+  getStepTableColumns: () => systemStore.display?.monitor?.stepTableColumns || {},
+  isStepTableEnabled: () => systemStore.display?.monitor?.stepTable !== false,
+  getMonitorDisplay: () => systemStore.display?.monitor || {},
+  formatStepPTForChannel: (ch, stepLabel) => {
+    const chData = multiChannelData.value[ch];
+    if (!chData) return '--';
+    const isTrk = !!(chData.tracking && chData.tracking.enabled);
+    const row = (chData.tableData || []).find(r => (r.label || r.step) === stepLabel);
+    const status = row?.status;
+    if (status !== 'completed' && !isTrk) return '--';
+    const map = chData.cycleSumStepDurations || {};
+    const v = map[stepLabel];
+    if (typeof v !== 'number' || !isFinite(v)) return '--';
+    return `${v.toFixed(1)}s`;
+  },
+  /** 步骤表 PT 列 — 与原生 <TjSlot name="monitor.step-cell.duration"> 同一契约 */
+  renderStepCellDuration: ({ step, label, status, isTrackingMode, ptText, channelIdx }) => {
+    const text = ptText ?? (
+      (isTrackingMode || status === 'completed')
+        ? (() => {
+            const chData = multiChannelData.value[channelIdx];
+            if (!chData) return '--';
+            const map = chData.cycleSumStepDurations || {};
+            const v = map[label];
+            if (typeof v !== 'number' || !isFinite(v)) return '--';
+            return `${v.toFixed(1)}s`;
+          })()
+        : '--'
+    );
+    return renderMonitorSlot('monitor.step-cell.duration', {
+      step,
+      label,
+      status,
+      isTrackingMode,
+      ptText: text,
+    }, () => text);
+  },
+  /** 步骤表结果列 — 与原生 <TjSlot name="monitor.step-cell.status"> 同一契约 */
+  renderStepCellStatus: ({ step, label, status, cycleResult, isTrackingMode }) => {
+    return renderMonitorSlot('monitor.step-cell.status', {
+      step,
+      label,
+      status,
+      cycleResult,
+      isTrackingMode,
+    }, () => {
+      if (isTrackingMode || status === 'completed') {
+        if (cycleResult === 'ok') return h('span', { class: 'text-green-400' }, 'OK');
+        if (cycleResult === 'ng') return h('span', { class: 'text-red-500' }, 'NG');
+        return h('span', { class: 'text-gray-500' }, '--');
+      }
+      return h('span', { class: 'text-gray-500' }, '--');
+    });
+  },
+  isMonitorSlotHidden: (name) => pluginThemeStore.isSlotHidden(name),
+}));
+
+// 给 layout.body 插件构造每通道 MJPEG 流 URL 的 helper.
+// 主程序内部用 startMultiStreams 拉 multipart MJPEG 到 canvas (双缓冲), 插件用简化版 <img :src=url> 直接吃就够了.
+// 端点是 main.py 的 `/video_feed?channel=N` (不在 /api/v1/source 前缀下, 是顶层端点).
+const buildMultiStreamUrl = (ch) => `${STREAM_HOST}/video_feed?channel=${ch}&t=${Date.now()}`;
 
 // v3.4.2 "禁用扫码"按工位开关 helper
 const isScanDisabledFor = (ch) => scannerDisableStore.isChannelDisabled(ch);
@@ -1543,6 +1812,7 @@ let multiPollingInProgress = false;
 const multiActiveToasts = ref({});
 const multiLastSeenSeq = {};
 const multiFrameNaturalSize = {};
+const multiDraggingProgress = ref({});
 const showRecordingFailurePanel = ref(false);
 const recordingFailureLoading = ref(false);
 
@@ -1645,6 +1915,8 @@ const initMultiChannelData = (count) => {
       currentCycleSteps: [], backupCoveredLabels: [],
       ngStepRanking: [], yieldRate: 0,
       tableData: [],
+      sourceType: '',
+      videoInfo: null,
       _ngStepCountMap: {},
       _processedEventIds: new Set(),
     };
@@ -1781,6 +2053,7 @@ const processChannelResult = (ch, d) => {
   const chData = multiChannelData.value[ch] || {};
   chData.isRunning = d.is_running;
   chData.isDetecting = d.is_detecting;
+  chData.sourceType = d.source_type || '';
   chData.fps = d.fps || 0;
   chData.latency = d.latency || 0;
   // Step 8: per-channel 多模型快照
@@ -1834,6 +2107,7 @@ const processChannelResult = (ch, d) => {
   // v3.9.x D 方案: 累计可见时长 (visible PT 数据源)
   chData.stepVisibleSeconds = d.step_visible_seconds || {};
   chData.detections = d.detections || [];
+  chData._pollProjectConfig = d.project_config || null;
   chData.currentCycleSteps = d.current_cycle_steps || [];
   chData.backupCoveredLabels = d.backup_covered_labels || [];
   chData.stepCounts = d.step_counts || {};
@@ -2027,12 +2301,40 @@ const processChannelResult = (ch, d) => {
 
   multiChannelData.value[ch] = { ...chData };
 
+  const pollCfg = d.project_config || null;
+  const dets = d.detections || [];
+  const hidden = chData._hiddenLabels;
+
   const canvas = multiCanvasRefs[ch];
-  if (canvas && d.detections?.length) {
-    drawMultiDetections(ch, canvas, d.detections, chData._hiddenLabels, d.project_config);
-  } else if (canvas) {
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (canvas) {
+    if (dets.length) {
+      drawMultiDetections(ch, canvas, dets, hidden, pollCfg);
+    } else {
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }
+
+  // layout.body 插件: native overlay canvas 不在 DOM，每轮 polling 主动画到插件 canvas
+  // (不能只靠插件 watch detections — 换页/重进 Monitor 时 prop 时序会丢帧)
+  if (layoutBodyOverride.value) {
+    const paintPluginOverlay = () => {
+      const overlays = document.querySelectorAll('canvas.fjjl-det-overlay');
+      const pluginCanvas = overlays[ch];
+      if (!pluginCanvas?.parentElement) return;
+      if (pluginCanvas.parentElement.offsetWidth < 2) return;
+      if (dets.length) {
+        drawMultiDetections(ch, pluginCanvas, dets, hidden, pollCfg);
+      } else {
+        const ctx = pluginCanvas.getContext('2d');
+        ctx.clearRect(0, 0, pluginCanvas.width, pluginCanvas.height);
+      }
+    };
+    paintPluginOverlay();
+    nextTick(() => {
+      paintPluginOverlay();
+      requestAnimationFrame(paintPluginOverlay);
+    });
   }
 };
 
@@ -2050,6 +2352,24 @@ const startMultiPolling = () => {
             .then(res => processChannelResult(ch, res.data))
             .catch(() => {})
         );
+        if (multiChannelData.value[ch]?.sourceType === 'video' && !multiDraggingProgress.value[ch]) {
+          promises.push(
+            api.get('/source/video/info', { params: { channel: ch } })
+              .then((videoRes) => {
+                if (videoRes.data.status !== 'success') return;
+                const chData = multiChannelData.value[ch];
+                if (!chData) return;
+                chData.videoInfo = {
+                  progress: videoRes.data.progress || 0,
+                  currentTime: videoRes.data.current_time || 0,
+                  duration: videoRes.data.duration || 0,
+                  speed: videoRes.data.speed || 1,
+                  ended: videoRes.data.ended || false,
+                };
+              })
+              .catch(() => {})
+          );
+        }
       }
       await Promise.all(promises);
       updateGlobalDetectingState();

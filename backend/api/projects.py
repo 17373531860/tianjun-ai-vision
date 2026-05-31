@@ -5,6 +5,7 @@ from backend.core.auth_deps import require_perm
 from backend.db.database import get_db
 from backend.models.models import Project, Model
 from backend.schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectListResponse, ProjectPluginDataPatch
+from backend.services.project_config_normalize import ensure_sequence_orders
 
 router = APIRouter()
 
@@ -101,10 +102,15 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
     if existing:
         raise HTTPException(status_code=400, detail=f"项目名称 '{project.name}' 已存在")
 
+    pipeline_config = ensure_sequence_orders(
+        project.pipeline_config,
+        project.logic_mode,
+        project.steps_config,
+    )
     db_project = Project(
         name=project.name,
         task_type=project.task_type,
-        pipeline_config=project.pipeline_config,
+        pipeline_config=pipeline_config,
         default_model_id=project.default_model_id,
         model_format=getattr(project, 'model_format', 'pytorch_fp32') or 'pytorch_fp32',
         logic_mode=project.logic_mode,
@@ -147,6 +153,14 @@ def update_project(project_id: int, project: ProjectUpdate, db: Session = Depend
         raise HTTPException(status_code=404, detail="Project not found")
     
     update_data = project.model_dump(exclude_unset=True)
+    merged_pipeline = dict(db_project.pipeline_config or {})
+    if update_data.get('pipeline_config'):
+        merged_pipeline.update(update_data['pipeline_config'])
+    logic_mode = update_data.get('logic_mode', db_project.logic_mode)
+    steps_config = update_data.get('steps_config', db_project.steps_config)
+    normalized_pipeline = ensure_sequence_orders(merged_pipeline, logic_mode, steps_config)
+    if normalized_pipeline != (db_project.pipeline_config or {}):
+        update_data['pipeline_config'] = normalized_pipeline
     if 'name' in update_data:
         existing = db.query(Project).filter(
             Project.name == update_data['name'],

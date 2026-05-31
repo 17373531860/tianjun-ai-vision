@@ -1,0 +1,20 @@
+{
+  "plugin.fujian_jinlong.title": "TianJun AI Vision Detection System",
+  "plugin.fujian_jinlong.station": "Station",
+  "plugin.fujian_jinlong.total_count": "Total",
+  "plugin.fujian_jinlong.ok_count": "OK",
+  "plugin.fujian_jinlong.ng_count": "NG",
+  "plugin.fujian_jinlong.yield_rate": "Yield",
+  "plugin.fujian_jinlong.ng_steps": "NG Steps",
+  "plugin.fujian_jinlong.sop_card": "SOP Card",
+  "plugin.fujian_jinlong.step_stats": "Step Stats",
+  "plugin.fujian_jinlong.btn_start": "Start",
+  "plugin.fujian_jinlong.btn_stop": "Stop",
+  "plugin.fujian_jinlong.btn_standby": "Standby",
+  "plugin.fujian_jinlong.btn_reset": "Reset",
+  "plugin.fujian_jinlong.status_detecting": "Detecting",
+  "plugin.fujian_jinlong.status_standby": "Standby",
+  "plugin.fujian_jinlong.status_stopped": "Stopped",
+  "plugin.fujian_jinlong.no_project": "No project",
+  "plugin.fujian_jinlong.no_steps": "No steps"
+}

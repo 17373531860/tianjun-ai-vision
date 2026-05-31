@@ -1029,6 +1029,36 @@ class MESHookManager:
         """处理扫码事件"""
         from backend.models.mes_models import ScanLog
 
+        # v3.14 RFC 11: WorkpieceFlow 优先路径.
+        # 若本通道属于某串行流水线 → 走 flow 路径 (创建 WorkpieceFlowRun),
+        # 跳过本通道的 scan_pair / pending_workpiece 状态机 (互斥, 文档明示).
+        # 任何异常隔离, 不影响主流程.
+        try:
+            from backend.services.workpiece_flow_coordinator import get_coordinator as _get_wfc_coord
+            _wfc = _get_wfc_coord()
+            if _wfc.is_channel_in_flow(channel_id):
+                _wfc.on_scan_received(
+                    channel_id=channel_id,
+                    barcode=serial_no,
+                    scanner_device_id=device_id,
+                    project_id=project_id,
+                    db=db,
+                )
+                # 仍写 ScanLog 做审计
+                try:
+                    scan_log = ScanLog(
+                        device_id=device_id, channel_id=channel_id,
+                        raw_data=raw_data, parsed_serial=serial_no,
+                        success=True, error_msg="走 WorkpieceFlow 路径",
+                    )
+                    db.add(scan_log)
+                    db.commit()
+                except Exception:
+                    pass
+                return  # 互斥: 不再走原 scan_pair 路径
+        except Exception as _e_wfc_scan:
+            print(f"[WorkpieceFlow] on_scan_received 异常 (隔离, 回退到 scan_pair): {_e_wfc_scan}")
+
         # 同码二次扫抑制：上次检测合格 & 距完成时间 < 冷却秒数 → 静默丢弃
         # 用于过滤搬运过程中扫码器误扫到已合格工件的情况，避免脏数据。
         cooldown = self._get_ok_rescan_cooldown(channel_id)

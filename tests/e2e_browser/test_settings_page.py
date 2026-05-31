@@ -17,10 +17,14 @@ def test_settings_pt_aggregate_words(page, base_url):
 
 
 def test_settings_three_tabs_present(page, base_url):
+    """v3.14.0 起 Settings 含 6 个原生 Tab + 可选插件注入 Tab.
+    断言改成"包含"语义, 防加 Tab 后回归挂掉 (v3.10 加账号鉴权, v3.14 加流水线串行).
+    """
     sp = SettingsPage(page, base_url).goto()
     tabs = sp.get_visible_tabs()
-    assert set(tabs) == {"显示设置", "检测框设置", "性能设置", "插件管理"}, \
-        f"Settings 页应有 4 个 tab, 实际 {tabs}"
+    expected_native = {"显示设置", "检测框设置", "性能设置", "插件管理", "账号鉴权", "流水线串行"}
+    missing = expected_native - set(tabs)
+    assert not missing, f"Settings 页缺少原生 tab: {missing}, 实际 {tabs}"
 
 
 def test_settings_operator_table_present(page, base_url):
