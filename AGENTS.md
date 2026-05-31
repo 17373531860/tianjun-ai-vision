@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | v3.15.1（2026-05-31 — 热修 v3.15.0 现场三问题：插件 `plugin.schema.json`/`splash.html` 漏打包 + GPU 列表偶发失败；新增 CI 打包资源自检防复发。底座仍 RFC 12 step_tick + host.api + RFC 11 串行流水线） |
+| 当前线上版本 | v3.15.2（2026-06-01 — 紧急热修 v3.15.1 现场 P0：所有 Windows 客户装插件报「插件文件摘要不一致」，`files_digest` 按 Path 对象排序在 Windows 大小写不敏感致摘要漂移，改 POSIX 字符串排序键；并根治手动 cmd 启动日志乱码（`chcp 65001`）。配套热补丁可不重装修复。底座仍 RFC 12 step_tick + host.api + RFC 11 串行流水线） |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -966,6 +966,7 @@ docs/
 
 | 版本 | 日期 | 主要变更 |
 |---|---|---|
+| v3.15.2 | 2026-06-01 | **紧急热修 v3.15.1 现场 P0 (插件装不上) + 日志乱码** — (1) **P0** 所有 Windows 客户装插件报 `PLUGIN_FILES_DIGEST_FAIL`「插件文件摘要不一致」: `files_digest` 计算用 `sorted(root.rglob("*"))` 即按 **Path 对象**排序, Windows `WindowsPath` 大小写不敏感把 `README.md` 当 `readme.md` 排末尾、Linux `PosixPath` 大小写敏感排最前, 两平台文件顺序不同 → 摘要按序拼接哈希漂移 → 插件在开发端(POSIX 顺序)签名、Windows 客户机重算顺序错位摘要比对失败 (开发机 Linux 自测永远过, 只在 Windows 暴露; 与 v3.15.1 CI 自检反斜杠误判**同根**). 修复: 排序键改相对路径 POSIX 字符串 `as_posix()`, 与 `calc_files_digest_in_zip` 的 `sorted(namelist())`、打包端对齐. (2) 手动从 cmd 启动日志整屏乱码 (`澶╁啗...`): cmd 默认 GBK(936), Electron 主进程 console.log 中文+转发后端 UTF-8 日志被错解码, 主进程启动最早 `chcp 65001` 切控制台 UTF-8 (双击图标无控制台静默无副作用). (3) 加跨平台摘要排序回归测试 (`PureWindowsPath` 模拟两平台分裂, 钉死排序键 POSIX 字符串). **配套热补丁 `patch_v3.15.2a`**: 插件系统不在 Nuitka 白名单, `_plugin_common.py` 源码部署, 替换该文件重启即修, 现存 v3.15.1 客户**无需重装** (仅修 P0; 编码修复在 asar 内需重装). |
 | v3.15.1 | 2026-05-31 | **热修 v3.15.0 现场三问题 + CI 打包资源自检** — (1) 插件装不上 `PLUGIN_MANIFEST_SCHEMA_FAIL`: `plugin.schema.json`+`customer-codes.md` 没打包(backend 打包过滤器只含 `.py` 等, `docs/` 不在清单), extraResources 加 `docs/plugin-system → resources/docs/plugin-system`; (2) 启动无任何动画: 根目录 `splash.html` 漏进 files 白名单, 旧版 splash 窗口 `transparent:true` 加载失败成全透明空窗肉眼不可见, 白名单补 `splash.html`; (3) 偶发"获取GPU列表失败": 就绪健康检查只探 `/source/status`(不碰 torch)+项目未激活时 CUDA 全程冷, 进设置页 onMounted 并发撞 `torch.cuda` 冷初始化(实测约5秒), 后端启动后台线程**预热 CUDA**(移到 splash 期)+前端 GPU 查询失败**静默重试2次**; (4) 插件安装 `unlink` WinError32 掩盖真错, 包 try/except. **新增 CI 打包资源自检 step**(electron-builder 后硬验证 schema/customer-codes/main.py/splash.html 在产物, 缺则红灯阻断发版). 客户两段现场视频实证. |
 | v3.15.0 | 2026-05-31 | **RFC 12 步骤进行中计时广播 + 前端 host.api + 福建金龙插件配套** — 平台新增 `step_tick` 只读 observe hook (推理热路径 ~1Hz 节流 fire, ctx 带 `elapsed_sec` + 步骤身份 + min/max_duration 只读参考), "步骤耗时三档实时报警"策略全挂插件侧 (阈值判定 + trigger_alarm + 经 pre_cycle_end 改 NG, 主程序不内嵌阈值). 前端 `host.api` 暴露已鉴权 axios 实例 (插件前端调自有后端路由复用登录 token). 版本 bump 3.14.0→3.15.0 与福建金龙双工位插件 v1.1.8 声明的 `main_version_min=3.15.0` 对齐 (低于此版本被插件版本校验硬拒绝). |
 | v3.14.0 | 2026-05-29 | **RFC 11 串行流水线结算 (Workpiece Flow Coordinator)** — M0-M8 一次性闭环. 新增「单机内多工位**串行**流水线」原生能力 (同一工件依次走 N 个工位, 全过才合格), 与 v3.13.1 工位组 (并行) / cluster (跨机) 完全独立同工位互斥. 2 张新表 (`workpiece_flow_configs/_runs`) + Coordinator 单例 (5 态状态机 + FIFO + Timer 超时) + 3 种触发器 (TimeWindowTrigger / ScanTrigger 与 scan_pair 互斥 / PhysicalTrigger 接 GPIO/Modbus) + REST API 8 端点 + 5 hook + 2 PluginHost API + Settings Tab + Monitor indicator slot. 77 测试零回归 (单元 73 + BDD 4), 福建金龙现场无扫码场景跑通 demo. |
@@ -1004,6 +1005,7 @@ docs/
 
 - 主分支 `main`：刚合入 `test/v3.12.0`（**插件系统 v3.13 + 工位组 RFC10 + 串行流水线结算 RFC11/v3.14.0 + RFC12 step_tick/host.api**），同时含 v3.12.1 客户反馈修复（splash 双路径 / Todesk 相机错配 / per_item 四件套 / 最小化菜单），版本 bump 至 v3.15.0
 - 主线最新能力：v3.15.0 step_tick 计时广播 + host.api 鉴权 axios（福建金龙双工位插件 v1.1.8 配套）+ v3.14.0 串行流水线（Workpiece Flow）+ v3.13.1 插件平台 + 工位组
+- **v3.15.2 热修**：v3.15.1 现场 P0 — 所有 Windows 客户装插件报「插件文件摘要不一致」（`files_digest` 按 Path 对象排序，Windows 大小写不敏感致 `README.md` 排序漂移），改 POSIX 字符串排序键根治；+ 手动 cmd 启动日志乱码（`chcp 65001` 切控制台 UTF-8）+ 跨平台排序回归测试 + **配套热补丁 `patch_v3.15.2a`** 让现存 v3.15.1 客户不重装即修
 - **v3.15.1 热修**：v3.15.0 安装包三个现场问题（插件 `plugin.schema.json`/`splash.html` 漏打包 + GPU 列表偶发失败）+ 插件安装清理健壮性 + **CI 打包资源自检 step 防漏打包复发**（客户两段视频实证）
 - 分支 `feat/plugin-system`：**多客户定制插件系统 + 数据库迁 PG**（长期分支，v3.13 阶段大部分能力已合入主干）
   - 决策已敲定：迁 PG / 三档插件全做 / 签名机制 / 不做沙箱
@@ -1020,6 +1022,6 @@ docs/
 
 ---
 
-**本文件最后更新**：2026-05-31（v3.15.1 热修发版：plugin.schema.json/customer-codes.md/splash.html 打包遗漏修复 + 后端 CUDA 预热 + 前端 GPU 列表静默重试 + 插件安装清理健壮性 + CI 打包资源自检 step；客户两段现场视频实证）
+**本文件最后更新**：2026-06-01（v3.15.2 紧急热修发版：插件 `files_digest` 跨平台排序漂移修复（POSIX 字符串排序键）+ 手动 cmd 启动日志乱码根治（chcp 65001）+ 跨平台摘要排序回归测试 + 配套热补丁 patch_v3.15.2a）
 **维护者**：项目主作者 + AI agents
 **事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）+ v3.9.0/v3.10.0 实测代码反推（`source_settlement_mixin.py` 1320 行 / `source_per_item_mixin.py` ~960 行 / v3.10 用户系统 ~841 行 core + 5 张新表 + 12 个 UAT 全过）

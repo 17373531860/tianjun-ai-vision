@@ -190,3 +190,60 @@ def test_digest_changes_when_file_renamed(tmp_path):
     (tmp_path / "a.txt").rename(tmp_path / "b.txt")
     d2 = calc_files_digest(tmp_path)
     assert d1 != d2
+
+
+def test_digest_sort_key_is_platform_independent():
+    """回归 (v3.15.1 P0): 摘要的文件排序键必须是相对路径 POSIX 字符串 (大小写敏感),
+    绝不能用平台 Path 对象排序。
+
+    根因: Windows 的 WindowsPath 排序大小写不敏感, 把 README.md 当 readme.md 排到
+    与 Linux (PosixPath, 大小写敏感) 不同的位置。摘要按文件顺序拼接哈希, 顺序不同 →
+    Windows 客户机重算的 files_digest 与打包端 (POSIX) 不一致 → 装插件报
+    "插件文件摘要不一致" (PLUGIN_FILES_DIGEST_FAIL)。
+
+    本测试在 Linux 上用 PureWindowsPath 显式模拟两平台分裂, 否则 Linux 上 PosixPath
+    排序恰好等于字符串序, 旧 bug 测不出来。
+    """
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    # 含大写文件名 (README.md) 与小写目录混排 — 这是真实插件包的典型结构
+    names = [
+        "README.md",
+        "backend/__init__.py",
+        "frontend/dist/index.esm.js",
+        "frontend/i18n/zh-CN.json",
+    ]
+
+    # 反例: 直接按 Path 对象排序, 两平台顺序不同 — 证明 bug 真实存在
+    by_posix_obj = [p.as_posix() for p in sorted(map(PurePosixPath, names))]
+    by_win_obj = [p.as_posix() for p in sorted(map(PureWindowsPath, names))]
+    assert by_posix_obj != by_win_obj, "平台 Path 排序本应分裂 (README.md 漂移)"
+
+    # 正解: 按 as_posix() 字符串作 key, 两平台必须一致 — 这是修复保证的不变量
+    key = lambda p: p.as_posix()
+    by_posix_str = [p.as_posix() for p in sorted(map(PurePosixPath, names), key=key)]
+    by_win_str = [p.as_posix() for p in sorted(map(PureWindowsPath, names), key=key)]
+    assert by_posix_str == by_win_str == sorted(names)
+
+
+def test_digest_with_uppercase_filenames_matches_zip(tmp_path):
+    """回归 (v3.15.1 P0): 含大写文件名的目录, 目录算与 ZIP 算 (POSIX 字符串序基准)
+    必须一致。calc_files_digest 若退回 sorted(Path 对象), 此契约在 Windows 上会破裂。
+    """
+    src = tmp_path / "src"
+    _make_dir(src, {
+        "README.md": b"# plugin",
+        "backend/__init__.py": b"",
+        "frontend/dist/index.esm.js": b"export{}",
+        "frontend/i18n/zh-CN.json": b"{}",
+    })
+    d_dir = calc_files_digest(src)
+
+    import zipfile
+    zip_path = tmp_path / "p.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in sorted(src.rglob("*")):
+            if p.is_file():
+                zf.write(p, arcname=p.relative_to(src).as_posix())
+    d_zip = calc_files_digest_in_zip(zip_path)
+    assert d_dir == d_zip

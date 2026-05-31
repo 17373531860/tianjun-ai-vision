@@ -5,6 +5,16 @@ const http = require('http');
 const BackendManager = require('./backend-manager');
 const LicenseManager = require('./license-manager');
 
+// v3.15.2: Windows 控制台默认 GBK(936) → 主进程 console.log 的中文 + 转发的后端日志
+// 在用户手动从 cmd 启动时整屏乱码(澶╁啗...). 启动最早把当前控制台输出代码页切到
+// UTF-8(65001), 让排错日志可读. 双击桌面图标无附加控制台时此调用在隐藏子控制台里
+// 执行, 静默无副作用; 非 Windows 平台跳过.
+if (process.platform === 'win32') {
+  try {
+    require('child_process').execSync('chcp 65001', { stdio: 'ignore' });
+  } catch (_) { /* 无控制台 / 执行失败均忽略, 不影响主流程 */ }
+}
+
 // v3.8.2: 工业部署默认杀掉应用菜单栏（File / Edit / View / Window / Help）
 // 工控机用户不需要这些；DevTools 仍可通过 Ctrl+Shift+I 打开
 Menu.setApplicationMenu(null);

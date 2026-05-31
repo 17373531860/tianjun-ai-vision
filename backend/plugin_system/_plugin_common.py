@@ -143,8 +143,17 @@ def check_customer_registered(customer_code: str) -> bool:
 # ============================================================
 
 def _iter_files_for_digest(root: Path) -> Iterable[Path]:
-    """遍历 root 下所有要参与 digest 的文件 (排除 __pycache__ 等)。"""
-    for p in sorted(root.rglob("*")):
+    """遍历 root 下所有要参与 digest 的文件 (排除 __pycache__ 等)。
+
+    排序键必须是"相对路径的 POSIX 字符串"(大小写敏感, '/' 分隔), 保证跨平台一致。
+    不能直接 sorted(Path 对象): Windows 的 WindowsPath 排序大小写不敏感, 会把
+    README.md 当 readme.md 排到与 Linux(PosixPath, 大小写敏感) 不同的位置, 导致
+    同一插件在 Windows 与打包端(POSIX)算出的 files_digest 不同 → 客户装插件报
+    "插件文件摘要不一致"(PLUGIN_FILES_DIGEST_FAIL)。此排序与 calc_files_digest_in_zip
+    的 sorted(namelist()) 字符串排序对齐。
+    """
+    candidates = []
+    for p in root.rglob("*"):
         if not p.is_file():
             continue
         rel_parts = p.relative_to(root).parts
@@ -152,7 +161,9 @@ def _iter_files_for_digest(root: Path) -> Iterable[Path]:
             continue
         if p.suffix in DIGEST_EXCLUDE_SUFFIXES:
             continue
-        yield p
+        candidates.append(p)
+    candidates.sort(key=lambda p: p.relative_to(root).as_posix())
+    return candidates
 
 
 def calc_files_digest(plugin_dir: Path) -> str:
