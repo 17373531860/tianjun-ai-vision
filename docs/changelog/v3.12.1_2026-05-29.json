@@ -1,0 +1,285 @@
+{
+  "version": "3.12.1",
+  "date": "2026-05-29",
+  "previous_version": "3.12.0",
+  "release_type": "patch",
+  "breaking_changes": false,
+  "summary": "v3.12.0 客户使用反馈快速修复 + per_item 业务四件套补丁。关闭手势启动动画时恢复旧版简单 splash、修复 Todesk 虚拟相机错配、per_item 开周期门槛解耦 + 虚拟漏件 NG + 工件离场互斥 + 中心点判定坐标格式 bug、Navbar 加最小化菜单项。无破坏性改动, 老配置 / DB / 接口全部兼容。",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "关闭手势启动动画后, 主窗 UI 在后端就绪前就显示, API 全部 404",
+      "symptom": "splash.enabled=false 时打开应用, 前端 Vue 界面立刻显示, 但后端还在加载 24 个 YOLO 模型 + 串口 + 海康 SDK (耗时 5-30 秒), 期间所有 API 调用 404 / timeout, 用户看到'应用打开了但是空'的诡异状态",
+      "root_cause": "electron/main.js 第 670-687 行的'无 splash 路径'在 createWindow 之前就把 splashFinishedByRenderer = true, 导致主窗 ready-to-show 事件触发 maybeShowMainWindow 时直接 show(), 而后端 await startBackend() 还在异步执行中。本质是为图省事把'splash 已结束'伪装成 true 让流程跑通, 漏掉了'用户要看到等待反馈'这个隐含需求",
+      "fix": "从 v3.8.1 (commit 58cb96b) 历史恢复 electron/splash.html (旧版简单 loading splash) + URL query 注入版本号避免硬编码漂移。main.js 新增 legacySplashWindow 全局变量 + createLegacySplashWindow() 函数。重写'无 splash 路径': 先创建 legacy splash 窗 → createWindow 后台预热 → await startBackend() → 后端 ready 才设 splashFinishedByRenderer=true + 关 legacy splash + 显示主窗。异常分支也清理 legacy splash",
+      "files": [
+        "electron/main.js",
+        "electron/splash.html"
+      ],
+      "keywords": [
+        "splash",
+        "启动动画",
+        "时序漏洞",
+        "splashFinishedByRenderer",
+        "maybeShowMainWindow",
+        "legacy splash",
+        "BrowserWindow",
+        "ready-to-show",
+        "preload",
+        "后端就绪",
+        "API 404",
+        "v3.8.1 splash.html",
+        "electron main.js"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "启动动画手势相机 specific 模式选 OBS 实际拿到 Todesk 虚拟相机",
+      "symptom": "工控机装了 Todesk + OBS 两个虚拟相机, 用户在'设置 → 启动动画手势相机' specific 模式下明确选了 OBS, 重启后 splash 实际显示 Todesk 的画面作为手势识别输入",
+      "root_cause": "Chromium 出于隐私把 MediaDeviceInfo.deviceId 做成'按 origin + session 哈希'。主前端 webContents 的 origin (file:///.../app/dist/index.html) 跟 splash webContents 的 origin (file:///.../electron/splash/index.html) 是不同 origin → 同一台物理相机在两个窗口里的 deviceId 字符串完全不同。用户在 Settings 页存的 deviceId 是主前端哈希, splash 读这个 deviceId 去 exact 匹配, 在 splash 端可能对应到 Todesk",
+      "fix": "splash/main.js 的 initHands() getCamera 流程改用 label 反查 splash 端真实 deviceId。specific 模式下读 device_label (此前 splash 没读), 申请最低分辨率 probe 流拿权限 → enumerateDevices 列出全部 videoinput → 按 device_label 完全匹配 → 用 splash 端真实 deviceId 覆盖配置里失效的 deviceId → 用最新 deviceId exact 锁定。label 找不到 → 回退到原 deviceId exact 匹配 (兼容老配置)。exact 失败 → 自动播放兜底 (保持现有行为)。全程详细日志: 枚举到 N 台相机 + label 匹配结果 + 最终实际开启的相机 label",
+      "files": [
+        "electron/splash/main.js"
+      ],
+      "keywords": [
+        "Todesk",
+        "虚拟相机",
+        "OBS",
+        "deviceId",
+        "Chromium origin 哈希",
+        "webContents 隔离",
+        "MediaDeviceInfo",
+        "enumerateDevices",
+        "getUserMedia",
+        "label 反查",
+        "splash camera",
+        "手势相机",
+        "specific mode",
+        "exact constraint"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "per_item 模式严格等量勾上后开周期门槛过高, 模型识别不稳永远等不到",
+      "symptom": "配 14 颗 5N 螺丝 + 4 颗 7N 螺丝, 勾上'严格等量'+ tolerance=6, 模型每帧识别数轻微抖动 (12, 11, 13, 14...), 永远等不到'每帧首步检出 == 期望颗数', 周期开不起来, 工人一直扭螺丝但系统不计",
+      "root_cause": "老逻辑把'严格等量'既当成'多步联合检查开关'又当成'开周期门槛', 两个语义耦合在一起。一旦勾上就强制每帧 count == expected_count 才放行, 完全没用 tolerance 和 ratio 折算",
+      "fix": "把两个语义解耦 — '严格等量'只决定'是否多步联合检查', 每步开周期达标条件统一用 max(1, expected - tolerance, expected × ratio) 折算。前端 Project 配置的'允许漏检几件'和'最低检出比例'两个字段不再被勾选'严格等量'时禁用",
+      "files": [
+        "backend/api/source_per_item_mixin.py",
+        "frontend/src/views/Project/index.vue"
+      ],
+      "keywords": [
+        "per_item",
+        "严格等量",
+        "require_exact_count",
+        "tolerance",
+        "ratio",
+        "expected_count",
+        "开周期门槛",
+        "打螺丝",
+        "_per_item_should_start_cycle"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "per_item 中心点判定坐标格式 bug, 涂黑覆盖率恒为 0",
+      "symptom": "涂黑 / 喷漆 / 扫码贴标 这类'动作框远大于目标'的场景, 用步骤级 coverage_use_center=True 时, 实测覆盖率恒为 0, 跟没勾一样, 测试用 18 颗螺丝实际只判 0/18 覆盖",
+      "root_cause": "_PerItemStep.check_completion 的中心点判定代码用了 xyxy 格式 (左上+右下) 来算 bbox 边界, 但 YOLO 实际给出的是 xywh (左上+宽高), 导致判定区永远是错的小区域, 目标中心点永远落在外面",
+      "fix": "中心点判定的 bbox 解包按 xywh 格式来 (x_min + w >= cx 而不是 x_max >= cx)。同一份测试用例: 老 IoU 判定 8/18, 修复后中心点判定 14/18",
+      "files": [
+        "backend/api/source_per_item_mixin.py"
+      ],
+      "keywords": [
+        "per_item",
+        "中心点判定",
+        "coverage_use_center",
+        "xywh",
+        "xyxy",
+        "bbox 坐标格式",
+        "YOLO 输出格式",
+        "_PerItemStep",
+        "check_completion",
+        "涂黑",
+        "喷漆",
+        "扫码贴标"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-005",
+      "title": "底栏顶栏 modeLabel 漏 tracking + per_item 映射, 新模式显示'模式: 未设置'",
+      "symptom": "项目选了 tracking 跟踪模式或 per_item 逐件覆盖模式, Monitor 底栏和顶栏的'模式'标签显示成'模式: 未设置', 误导客户以为没选模式",
+      "root_cause": "BottomBar.vue 和 Navbar.vue 的 modeLabel 计算属性 mapping 只列了 sequential / detection / custom 三种, tracking 和 per_item 落到 undefined fallback。纯展示层 bug, 不影响业务执行",
+      "fix": "mapping 补 tracking + per_item, 兜底文案改 t('mode.undefined'), 5 种语言同步补 mode.tracking + mode.per_item + mode.undefined 文案",
+      "files": [
+        "frontend/src/layout/BottomBar.vue",
+        "frontend/src/layout/Navbar.vue",
+        "frontend/src/locales/zh-CN.js",
+        "frontend/src/locales/zh-TW.js",
+        "frontend/src/locales/en-US.js",
+        "frontend/src/locales/ja-JP.js",
+        "frontend/src/locales/ko-KR.js"
+      ],
+      "keywords": [
+        "modeLabel",
+        "tracking 模式",
+        "per_item 模式",
+        "未设置",
+        "i18n",
+        "mode.tracking",
+        "mode.per_item",
+        "Navbar",
+        "BottomBar",
+        "纯展示 bug"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "右上角齿轮菜单加「最小化到任务栏」项",
+      "requirement": "用户希望随手最小化窗口到任务栏, 不用每次跑去'设置 → 显示设置 → 窗口模式'卡片里找按钮",
+      "implementation": "Navbar.vue dropdown 在 5 种语言切换之后、开发者模式之前插入「最小化到任务栏」项 (Minus 图标 + v-if='isElectronEnv' 守门 — 浏览器预览态自动隐藏)。handleCommand 新增 case 'minimize' 分支调 window.electronAPI.minimizeWindow() (preload 第 17 行早就暴露了该 IPC, Settings 页也是用同一函数)。5 种语言同步补 navbar.minimize / minimizeFailed / minimizeBrowserOnly 文案",
+      "files": [
+        "frontend/src/layout/Navbar.vue",
+        "frontend/src/locales/zh-CN.js",
+        "frontend/src/locales/zh-TW.js",
+        "frontend/src/locales/en-US.js",
+        "frontend/src/locales/ja-JP.js",
+        "frontend/src/locales/ko-KR.js"
+      ],
+      "keywords": [
+        "Navbar",
+        "齿轮菜单",
+        "最小化到任务栏",
+        "minimizeWindow",
+        "el-dropdown",
+        "Minus icon",
+        "isElectronEnv",
+        "preload IPC"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "per_item 虚拟漏件 NG (业务等量校验)",
+      "requirement": "客户场景配 14 颗螺丝, 模型识别长期只稳定锁到 12 颗, 即便工人确实扭满 14 颗也算 12 颗合格 — 差 2 颗'虚拟漏件'永远算不上 covered, 与'配 14 就要扭满 14'的车间业务语义不符",
+      "implementation": "_PerItemStep.check_completion 在所有步骤都满足 covered 阈值后, 再检查 actual_count >= expected_count, 不足则判 NG (虚拟漏件)",
+      "files": [
+        "backend/api/source_per_item_mixin.py"
+      ],
+      "keywords": [
+        "per_item",
+        "虚拟漏件",
+        "NG",
+        "expected_count",
+        "业务等量",
+        "_PerItemStep",
+        "check_completion",
+        "打螺丝场景"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "per_item 工件离场互斥校验 (finish_requires_no_items 开关)",
+      "requirement": "工人扭螺丝中拿取手势被模型误识别为'拿取结算', 导致没拿走工件就误判周期结束",
+      "implementation": "步骤级 finish_requires_no_items=True 时, '拿取结算'出现的同帧若画面里还有任何工件标签 (各 step.item_label), 视为工人没真拿走, 该帧不算结算累积",
+      "files": [
+        "backend/api/source_per_item_mixin.py"
+      ],
+      "keywords": [
+        "per_item",
+        "finish_requires_no_items",
+        "工件离场",
+        "互斥校验",
+        "拿取结算",
+        "误触发",
+        "_PerItemStep"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "per_item 小物件中心点判定 (coverage_use_center 步骤级开关)",
+      "requirement": "涂黑 / 喷漆 / 扫码贴标 这类'动作框远大于目标'的场景 (笔尖 100×100 vs 螺丝 16×22), IoU 永远算不到 0.3 → 永远判 0 覆盖",
+      "implementation": "步骤级 coverage_use_center=True 时改用'目标中心点落在动作框内即算覆盖'。同一份测试用例: 老 IoU 判定 8/18, 中心点判定 14/18。步骤级独立开关, 不影响扭螺丝这种'动作与目标大小相近'的场景。启动日志改造: 每步打印'覆盖=中心点判定 / IoU>X'区分模式",
+      "files": [
+        "backend/api/source_per_item_mixin.py"
+      ],
+      "keywords": [
+        "per_item",
+        "coverage_use_center",
+        "中心点判定",
+        "IoU",
+        "涂黑",
+        "喷漆",
+        "扫码贴标",
+        "小物件",
+        "步骤级开关"
+      ],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "旧版简单 splash 回归 (splash.enabled=false 时使用)",
+      "requirement": "客户希望关闭手势启动动画时不是裸前端 UI 直接显示, 而是回到 v3.8.1 时代的'loading 转圈 + 等待后端 ready'体验",
+      "implementation": "见 BUG-001 修复。三种启动行为最终对照: splash.enabled=true → 赛博 splash (手势识别); splash.enabled=false → 旧版简单 splash (loading 转圈); 鉴权未通过 → 绕过所有 splash",
+      "files": [
+        "electron/main.js",
+        "electron/splash.html"
+      ],
+      "keywords": [
+        "splash",
+        "旧版 splash",
+        "loading 等待",
+        "splash.enabled",
+        "legacy splash window",
+        "v3.8.1 体验回归"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "skills_pending_update": [
+    "debug-electron (splash 时序漏洞 + Todesk 摄像头 webContents 隔离 - 高价值踩坑)",
+    "debug-per-item (虚拟漏件 NG + 离场互斥 + 中心点判定 4 字段补 v3.12.1 章节)",
+    "modify-source (source_per_item_mixin.py 改动追加)",
+    "modify-frontend (Navbar dropdown 最小化菜单追加)"
+  ],
+  "files_changed": [
+    "electron/main.js",
+    "electron/splash.html",
+    "electron/splash/main.js",
+    "electron/package.json",
+    "backend/api/source_per_item_mixin.py",
+    "frontend/src/layout/Navbar.vue",
+    "frontend/src/layout/BottomBar.vue",
+    "frontend/src/views/Project/index.vue",
+    "frontend/src/locales/zh-CN.js",
+    "frontend/src/locales/zh-TW.js",
+    "frontend/src/locales/en-US.js",
+    "frontend/src/locales/ja-JP.js",
+    "frontend/src/locales/ko-KR.js",
+    "docs/CHANGELOG.md",
+    "docs/changelog/v3.12.1_2026-05-29.md",
+    "docs/changelog/v3.12.1_2026-05-29.json"
+  ],
+  "known_issues": [
+    "Linux dev 环境无法模拟 Chromium webContents deviceId 隔离行为, BUG-002 修复需 Windows 工控机打包验证",
+    "旧版 splash.html 透明背景在 Win10 1803 之前版本可能掉色 (transparent:true + frame:false 组合)",
+    "v3.12.0 changelog 提到的 9 个测试串污染问题未在本次修复"
+  ]
+}

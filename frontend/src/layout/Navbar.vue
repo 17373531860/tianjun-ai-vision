@@ -132,6 +132,12 @@
               <el-dropdown-item command="lang_en">English</el-dropdown-item>
               <el-dropdown-item command="lang_jp">日本語</el-dropdown-item>
               <el-dropdown-item command="lang_kr">한국어</el-dropdown-item>
+              <el-dropdown-item v-if="isElectronEnv" divided command="minimize">
+                <div class="flex items-center w-full min-w-[140px]">
+                  <el-icon class="mr-2 text-[1rem]"><Minus /></el-icon>
+                  <span>{{ $t('navbar.minimize') }}</span>
+                </div>
+              </el-dropdown-item>
               <el-dropdown-item divided command="developer_mode">
                 <div class="flex items-center justify-between w-full min-w-[140px]">
                   <span>开发者模式</span>
@@ -157,7 +163,7 @@ import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useRouter } from 'vue-router';
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
-import { Setting, UserFilled, Check } from '@element-plus/icons-vue';
+import { Setting, UserFilled, Check, Minus } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjects, getProjectDetail, activateProject } from '@/api/project';
@@ -437,10 +443,35 @@ const toggleDeveloperMode = async () => {
   } catch {}
 };
 
+// 当前是否运行在 Electron 打包环境 (而非浏览器预览), 浏览器下不暴露最小化项
+const isElectronEnv = computed(() => {
+  return typeof window !== 'undefined'
+    && !!window.electronAPI
+    && typeof window.electronAPI.minimizeWindow === 'function';
+});
+
+const handleMinimizeWindow = async () => {
+  if (!window.electronAPI?.minimizeWindow) {
+    ElMessage.info(t('navbar.minimizeBrowserOnly'));
+    return;
+  }
+  try {
+    const r = await window.electronAPI.minimizeWindow();
+    if (!r?.ok) {
+      ElMessage.warning(t('navbar.minimizeFailed') + ': ' + (r?.error || ''));
+    }
+  } catch (e) {
+    ElMessage.warning(t('navbar.minimizeFailed') + ': ' + (e?.message || ''));
+  }
+};
+
 const handleCommand = (command) => {
   switch (command) {
     case 'auto_save':
       toggleAutoSave();
+      break;
+    case 'minimize':
+      handleMinimizeWindow();
       break;
     case 'developer_mode':
       toggleDeveloperMode();

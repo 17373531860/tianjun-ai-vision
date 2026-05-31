@@ -1065,22 +1065,28 @@ async function initHands() {
   const videoEl = document.getElementById('webcam');
 
   // ─────────────────────────────────────────────────────────────────
-  // 摄像头选择策略 (v3.9.x): 三档可配置, 落盘 workstation_config.json 顶层 splash 字段.
+  // 摄像头选择策略 (v3.9.x / v3.12.x): 三档可配置, 落盘 workstation_config.json 顶层 splash 字段.
   // ─────────────────────────────────────────────────────────────────
   // 客户痛点: 工厂工控机经常装了 Todesk / 向日葵等远程控制软件, 它们会注册"虚拟摄像头",
   // 老逻辑只看 ch1 USB 绑定 → 没绑就 facingMode:user → 浏览器随机挑一个 → 经常拿到虚拟相机.
   //
+  // v3.12.x 增强: specific 模式下优先按 device_label 反查 splash 端 deviceId,
+  // 因为主前端 webContents 和 splash webContents 的 deviceId 哈希按 origin 隔离,
+  // 直接拿主前端存的 deviceId 在 splash 里可能匹配错相机 (用户配 OBS 结果 splash 拿到 Todesk).
+  // label (设备友好名) 跨 webContents 稳定, 用它反查可避免错配.
+  //
   // 配置来源 — 主前端「设置 → 启动动画手势相机」
   //   cfg.splash = {
   //     camera_mode: 'auto'     - 老逻辑 (优先 ch1.usb_device_id, 否则 facingMode:user)
-  //                  'specific' - 锁死指定 device_id, 拿不到走"无摄像头"兜底
+  //                  'specific' - 锁死指定相机, 拿不到走"无摄像头"兜底
   //                  'disabled' - 不开摄像头, splash 直接进自动播放
-  //     device_id:    '...'     - specific 模式锁的 deviceId
-  //     device_label: '...'     - 仅回显, splash 不读
+  //     device_id:    '...'     - specific 模式锁的 deviceId (主前端 webContents 哈希)
+  //     device_label: '...'     - specific 模式锁的设备名 (跨 webContents 稳定, v3.12.x 起作为主匹配键)
   //   }
   // ─────────────────────────────────────────────────────────────────
   let cameraMode = 'auto';
   let preferredDeviceId = '';
+  let preferredLabel = '';
   if (splashAPI && typeof splashAPI.getWorkstationConfig === 'function') {
     try {
       const cfg = await splashAPI.getWorkstationConfig();
@@ -1088,9 +1094,10 @@ async function initHands() {
       const splashCfg = cfg && cfg.splash;
       if (splashCfg && typeof splashCfg.camera_mode === 'string') {
         cameraMode = splashCfg.camera_mode;
-        if (cameraMode === 'specific' && splashCfg.device_id) {
-          preferredDeviceId = String(splashCfg.device_id);
-          console.log(`[Camera] 模式=specific, 锁定 deviceId: ${preferredDeviceId.slice(0, 16)}...`);
+        if (cameraMode === 'specific') {
+          if (splashCfg.device_id) preferredDeviceId = String(splashCfg.device_id);
+          if (splashCfg.device_label) preferredLabel = String(splashCfg.device_label);
+          console.log(`[Camera] 模式=specific, 锁定 label="${preferredLabel || '(空)'}", deviceId=${preferredDeviceId.slice(0, 16)}...`);
         } else {
           console.log(`[Camera] 模式=${cameraMode}`);
         }
@@ -1117,6 +1124,47 @@ async function initHands() {
     return false;
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // v3.12.x: specific 模式下按 label 反查 splash 端当前 deviceId
+  // ----------------------------------------------------------------
+  // 流程: 1) 申请最低分辨率 probe 流以拿到 enumerate 所需的权限
+  //       2) enumerateDevices 列出全部 videoinput
+  //       3) 按 device_label 完全匹配, 找到 → 用其 splash 端 deviceId 覆盖 preferredDeviceId
+  //       4) 关掉 probe 流
+  //       5) 找不到 label → 回退到原 deviceId exact 匹配 (兼容老配置)
+  // ─────────────────────────────────────────────────────────────────
+  if (cameraMode === 'specific' && preferredLabel) {
+    let probeStream = null;
+    try {
+      try {
+        probeStream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+      } catch (permErr) {
+        console.warn('[Camera] probe 流申请失败 (label 解析可能拿不到完整 label):', permErr.message);
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter(d => d.kind === 'videoinput');
+      console.log(`[Camera] splash 端枚举到 ${videoInputs.length} 台相机:`,
+        videoInputs.map(d => ({ label: d.label || '(空)', id: d.deviceId.slice(0, 16) + '...' })));
+      const matched = videoInputs.find(d => d.label && d.label === preferredLabel);
+      if (matched) {
+        if (matched.deviceId !== preferredDeviceId) {
+          console.log(`[Camera] ✓ 按 label 匹配 → deviceId 替换: ${preferredDeviceId.slice(0, 16)}... → ${matched.deviceId.slice(0, 16)}...`);
+        } else {
+          console.log('[Camera] ✓ 按 label 匹配 → deviceId 不变');
+        }
+        preferredDeviceId = matched.deviceId;
+      } else {
+        console.warn(`[Camera] ⚠ label="${preferredLabel}" 未在 splash 端找到, 回退到原 deviceId exact 匹配`);
+      }
+    } catch (e) {
+      console.warn('[Camera] label 解析异常, 回退到原 deviceId:', e.message);
+    } finally {
+      if (probeStream) {
+        try { probeStream.getTracks().forEach(t => t.stop()); } catch (_e) { /* ignore */ }
+      }
+    }
+  }
+
   try {
     // specific 模式: exact 强制锁定; auto 模式: ideal 软锁定 (拿不到会回退到其他设备).
     // 老逻辑统一用 ideal — 在 auto 模式下行为不变; specific 模式必须用 exact, 否则
@@ -1133,6 +1181,12 @@ async function initHands() {
     videoEl.srcObject = stream;
     await videoEl.play();
     cameraReady = true;
+    // v3.12.x: 打印实际锁定相机的真实 label, 出问题能立刻定位"实际用了哪台"
+    try {
+      const track = stream.getVideoTracks()[0];
+      const settings = track && track.getSettings && track.getSettings();
+      console.log(`[Camera] ✓ 已开启摄像头: label="${track && track.label}", deviceId=${(settings && settings.deviceId || '').slice(0, 16)}...`);
+    } catch (_e) { /* ignore 仅日志 */ }
     document.getElementById('webcamWrap').classList.add('show');
   } catch (e) {
     console.warn('[Camera] 获取摄像头失败，自动播放兜底:', e.message);

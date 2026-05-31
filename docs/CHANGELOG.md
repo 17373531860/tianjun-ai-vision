@@ -1,5 +1,24 @@
 # Changelog
 
+## v3.12.1 (2026-05-29)
+
+> v3.12.0 客户使用反馈快速修复 + per_item 业务场景四件套补丁。无破坏性改动, 老配置 / DB / 接口全部兼容。详细 changelog 见 `docs/changelog/v3.12.1_2026-05-29.md`。
+
+- [BUG-001] **关闭手势启动动画后, 主窗 UI 在后端就绪前就显示, API 全部 404** — `splash.enabled=false` 时 `splashFinishedByRenderer=true` 被立刻设, 主窗 ready-to-show 立刻 show 而后端还在装 24 个模型。恢复 v3.8.1 旧版简单 splash + 加 `legacySplashWindow` + 后端 ready 后才放行主窗。
+- [BUG-002] **启动动画手势相机 specific 模式选 OBS 实际拿到 Todesk 虚拟相机** — Chromium 按 origin 哈希 deviceId, 主前端 webContents 跟 splash webContents 是不同 origin → deviceId 不通。splash 改用 `device_label` 反查 splash 端真实 deviceId 再 `exact` 锁定 (老 deviceId 匹配作 fallback)。
+- [BUG-003] **per_item "严格等量"勾上后开周期门槛过高, 模型识别不稳永远等不到** — 把"严格等量"跟"开周期门槛"两个语义解耦, 每步达标用 `max(1, expected - tol, expected × ratio)` 折算。
+- [BUG-004] **per_item 中心点判定坐标格式 bug, 涂黑覆盖率恒为 0** — YOLO 输出是 `xywh` 但判定代码按 `xyxy` 算, 笔尖 100×100 vs 螺丝 16×22 永远算不到覆盖。改回 xywh, 测试 14/18 vs 老 IoU 8/18。
+- [BUG-005] **底栏 / 顶栏 modeLabel 漏 tracking + per_item 映射, 新模式显示"模式: 未设置"** — 5 种语言同步补 `mode.tracking` / `mode.per_item` / `mode.undefined` 文案。
+- [FEAT-001] **右上角齿轮菜单加「最小化到任务栏」项** — Navbar dropdown 在 5 种语言之后、开发者模式之前插入 (`v-if="isElectronEnv"` 守门, 浏览器预览态自动隐藏), 5 种语言 i18n 同步。
+- [FEAT-002] **per_item 虚拟漏件 NG** — 配 14 颗实际只锁 12 颗时即便扭满 12 颗也判 NG, 符合"配 14 就要扭满 14"的业务语义。
+- [FEAT-003] **per_item 工件离场互斥校验 (`finish_requires_no_items`)** — "拿取结算"同帧若画面里还有任何工件标签视为没真拿走, 不算结算累积。治"扭螺丝中拿取手势被误识别为'拿取结算'"的误触发。
+- [FEAT-004] **per_item 小物件中心点判定 (步骤级 `coverage_use_center`)** — 涂黑 / 喷漆 / 扫码贴标 场景 IoU 算不到 0.3 永远判 0 覆盖, 改用"目标中心点落动作框内即算覆盖"。步骤级独立开关。
+- [FEAT-005] **旧版简单 splash 回归 (splash.enabled=false 时使用)** — 见 BUG-001 修复, 用户视角看到的是 "loading 转圈 + 等待后端 ready" 的连贯启动体验。
+
+已知问题: BUG-002 修复需 Windows 工控机打包验证 (Linux dev 环境模拟不了 Chromium webContents 隔离); 旧版 splash 透明背景在 Win10 1803 之前版本可能掉色; v3.12.0 提到的 9 个测试串污染未修。
+
+Skill 更新延后: `debug-electron` / `debug-per-item` / `modify-source` / `modify-frontend` (后续补 v3.12.1 章节)。
+
 ## v3.12.0 (2026-05-27)
 
 > 合并 `chore/feature-verify` + `feat/per-item-enhance` 两条主线分支正式发版 (跳过 v3.11.x 直接到 v3.12.0, 用户决定)。无破坏性改动, 老项目 JSON/DB/接口全部兼容。详细 changelog 见 `docs/changelog/v3.12.0_2026-05-27.md`。

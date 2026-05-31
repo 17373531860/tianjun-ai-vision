@@ -91,7 +91,8 @@ if (!gotTheLock) {
 
 // 保持对窗口对象的全局引用
 let mainWindow = null;
-let splashWindow = null;        // v3.8.2: 新版赛博 splash 窗口
+let splashWindow = null;        // v3.8.2: 新版赛博 splash 窗口 (手势启动动画)
+let legacySplashWindow = null;  // v3.12.x: 旧版简单 splash 窗口 (splash.enabled=false 时使用)
 let shutdownWindow = null;
 let backendManager = null;
 let isQuitting = false;
@@ -408,6 +409,34 @@ function createSplashWindow() {
   return splash;
 }
 
+// v3.12.x: 旧版简单 splash (splash.enabled=false 时使用)
+// 设计沿用 v3.8.1 之前的 splash.html: 400x300 圆角弹窗 + 蓝色渐变 + loading 进度条
+// 用途: 后端启动期间提供等待视觉反馈, 避免"主窗 UI 已显示但后端 API 全部 404"的体验灾难
+function createLegacySplashWindow() {
+  const splash = new BrowserWindow({
+    width: 400,
+    height: 300,
+    frame: false,
+    transparent: true,            // splash.html body 用了圆角, 透明背景保证视觉无锯齿
+    alwaysOnTop: true,
+    resizable: false,
+    skipTaskbar: true,
+    center: true,
+    icon: path.join(__dirname, 'build', 'icon.png'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+
+  // 通过 url query 注入版本号, 避免 splash.html 硬编码导致版本漂移
+  splash.loadFile(path.join(__dirname, 'splash.html'), {
+    query: { v: app.getVersion() },
+  });
+
+  return splash;
+}
+
 // 创建关闭进度窗口
 function createShutdownWindow() {
   shutdownWindow = new BrowserWindow({
@@ -667,19 +696,32 @@ app.whenReady().then(async () => {
     return;
   }
 
-  // v3.10.x: splash 默认不启用 (用户要求). 关闭时走"无 splash 路径": 先建主窗后台预热,
-  // 后端 ready 后直接 show 主窗, 不经过 splash:finished IPC.
+  // v3.12.x: splash.enabled=false 时启用"旧版简单 splash" (loading 转圈 + 等后端 ready)
+  // 修复 v3.10.x 的体验灾难: 当时直接 splashFinishedByRenderer=true + createWindow,
+  // 导致前端 HTML 加载完就立刻 show, 而后端还在装 24 个模型, 用户看到 UI 但 API 全部 404.
+  // 现在的两阶段: 显示 legacy splash → await startBackend() → 关 splash → show 主窗.
   if (!splashEnabled) {
-    console.log('[App] splash 已关闭, 直接进主程序路径');
-    splashFinishedByRenderer = true;   // 让 maybeShowMainWindow 直接放行 (不等 splash IPC)
+    console.log('[App] splash.enabled=false, 启用旧版简单 splash (等待后端 ready)');
+    legacySplashWindow = createLegacySplashWindow();
+    // 主窗后台创建 + 后台加载前端 (createWindow 默认 show:false), 暂不显示;
+    // splashFinishedByRenderer 保持 false 卡住 maybeShowMainWindow, 等后端 ready 才放行.
     createWindow({ fullscreen: windowFullscreen });
     initBackendManager();
     try {
       await startBackend();
-      // 后端 ready 后 ready-to-show 已经触发过 maybeShowMainWindow, 这里兜底再调一次
+      // 后端 ready: 关 legacy splash → 放行 maybeShowMainWindow → show 主窗
+      if (legacySplashWindow && !legacySplashWindow.isDestroyed()) {
+        try { legacySplashWindow.close(); } catch (e) { console.warn('[App] 关 legacy splash 失败:', e.message); }
+      }
+      legacySplashWindow = null;
+      splashFinishedByRenderer = true;
       maybeShowMainWindow();
     } catch (error) {
       console.error(`[App] Failed to start: ${error.message}`);
+      if (legacySplashWindow && !legacySplashWindow.isDestroyed()) {
+        try { legacySplashWindow.close(); } catch (_e) { /* ignore */ }
+      }
+      legacySplashWindow = null;
       dialog.showErrorBox('启动失败', `无法启动应用: ${error.message}`);
       app.quit();
     }
