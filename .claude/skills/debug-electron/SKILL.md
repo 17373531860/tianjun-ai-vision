@@ -313,3 +313,41 @@ echo %APPDATA%\tianjun-ai-vision\workstation_config.json
 ```
 
 **新增配置项必须**：写到 `channel_manager.py` 的 `get_*_config / set_*_config` 出口，前端走 `/api/v1/workstations/*` 调；splash 启动早期需要的字段则**额外**在 `electron/main.js: readWorkstationConfig()` 直读。
+
+## v3.15.1 新增：打包资源遗漏 + 启动就绪时序（客户视频实证）
+
+> v3.15.0 安装包客户现场暴露三个问题，根因都不在业务逻辑，而在「打包」和「就绪判定」。两段现场视频实证，全部已修。
+
+### 陷阱一：运行时资源忘加打包白名单 → 文件在安装包里直接消失
+
+**`electron/package.json` 有两个独立白名单，新增资源两边都要想到**：
+
+| 白名单 | 落地 | 漏配后果（v3.15.0 实例） |
+|---|---|---|
+| `extraResources` | `resources/` 文件系统 | backend 那条 `filter` **只含 `.py/.pyd/.dll/...`，`.json`/`.md` 不会被带**。`plugin.schema.json` + `customer-codes.md` 从未进包 → 插件安装 500 `PLUGIN_MANIFEST_SCHEMA_FAIL` / `FileNotFoundError: plugin.schema.json 不存在`。修复：单列 `{"from":"../docs/plugin-system","to":"docs/plugin-system"}` |
+| `files` | `app.asar`（主进程侧） | 只写了 `splash/**/*`（手势动画目录），漏了根目录 `splash.html`（旧版简单动画）。旧版 splash 窗口 `transparent:true`，`loadFile('splash.html')` 失败即**全透明空窗肉眼不可见** → 启动从桌面到主界面全程无动画。修复：`files` 加 `splash.html` |
+
+**排查模板**：
+
+| 现象 | 第一步看 | 根因 | 修复 |
+|---|---|---|---|
+| 插件装不上 / 报 schema 不存在路径 `resources\docs\plugin-system\...` | 客户机该路径文件是否存在 | extraResources 没打 docs | 加 extraResources 条目 + 重新打包（或热补丁补文件） |
+| 启动空桌面几秒后主界面突然出现、无任何 splash | 客户配置 `splash.enabled`（默认 false 走旧版） | `splash.html` 没进 `files` → 透明空窗 | `files` 加 `splash.html` 重新打包 |
+| 任何"代码里 `loadFile`/读文件但客户机找不到" | 该资源在哪个白名单 | 大概率漏配 | 加白名单 + **build.yml 自检清单同步加一条** |
+
+> **CI 自检兜底**：v3.15.1 起 `build.yml` 有「Verify packaged resources」step 硬验证关键资源在产物里，缺则红灯阻断发版。新增运行时资源时顺手加进自检清单。详见 `build-release` skill 第四节。
+
+### 陷阱二：就绪健康检查太浅 → 主界面显示了但 GPU 子系统还没热
+
+**症状**：进设置页右上角偶发弹「获取GPU列表失败」/ CUDA 显示不可用（但后端日志 GPU 实际正常）。
+
+**根因链**：
+1. `backend-manager.js` 的 `checkHealth()` 探的是 `/api/v1/source/status`——**纯对象状态读取，完全不碰 torch**。进程一起来、路由一挂，立刻判「就绪」显示主界面。
+2. 项目**未激活**时，后端启动 `auto_load_active_project()` 不加载任何模型 → 全程不碰 GPU → CUDA 上下文是冷的。
+3. 主界面一进来，`Settings/index.vue` 的 `onMounted` 并发打 6+ 个请求，其中 GPU 列表查询首次调 `torch.cuda` 触发 **CUDA 上下文冷初始化（实测约 5 秒）**，叠加并发竞争 → 偶发超时失败。
+
+**修复（v3.15.1）**：
+- 后端 `main.py` 启动后台线程**预热 CUDA**（`torch.cuda.init()`），把 5 秒冷开销移到启动期（splash 期间用户本就在等），幂等 + 异常隔离 + 无 GPU 自动跳过。
+- 前端 GPU 列表查询在**页面自动加载**时失败静默重试 2 次再提示；手动点刷新保持立即提示。
+
+> **不要**为这个去把健康检查改成「等 GPU 就绪」——那会拖慢每次启动。预热 + 前端容错是更对的解法。

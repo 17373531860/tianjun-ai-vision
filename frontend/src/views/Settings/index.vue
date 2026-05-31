@@ -1825,7 +1825,8 @@ const applyMediaPipePreset = (mode) => {
 };
 
 // 刷新GPU列表
-const refreshGpuList = async () => {
+// retries: 页面自动加载时传入, 吸收后端 CUDA 首次冷初始化导致的偶发失败 (静默重试再提示)
+const refreshGpuList = async ({ retries = 0 } = {}) => {
   loadingGpu.value = true;
   try {
     const res = await api.get('/source/gpu/list');
@@ -1836,6 +1837,10 @@ const refreshGpuList = async () => {
       gpuInfo.gpuCount = res.data.gpu_count;
     }
   } catch (e) {
+    if (retries > 0) {
+      await new Promise((r) => setTimeout(r, 1500));
+      return refreshGpuList({ retries: retries - 1 });
+    }
     console.error('获取GPU列表失败:', e);
     ElMessage.error('获取GPU列表失败');
   } finally {
@@ -2159,7 +2164,7 @@ const confirmSplashCameraPick = () => {
 onMounted(async () => {
   store.loadSettings();
   loadPerformanceSettings();
-  refreshGpuList();
+  refreshGpuList({ retries: 2 });
   loadCurrentDevice();
   loadKalmanConfig();
   loadPlugins();

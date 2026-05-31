@@ -133,12 +133,18 @@ ls -la backend/services/*.py / *.pyd
 
 `electron/package.json: build.extraResources` 决定哪些文件被打进 `resources/`：
 ```json
-{"from": "../frontend/dist", "to": "app/dist"}
-{"from": "../backend",       "to": "backend"}     // 含 .py / .pyd / .dll / .cti / .ax / .ini / .manifest，排除 __pycache__/uploads/recordings/*.db
+{"from": "../frontend/dist",     "to": "app/dist"}
+{"from": "../backend",           "to": "backend"}              // 含 .py / .pyd / .dll / .cti / .ax / .ini / .manifest，排除 __pycache__/uploads/recordings/*.db
+{"from": "../docs/plugin-system","to": "docs/plugin-system"}   // v3.15.1: 只打 plugin.schema.json + customer-codes.md (插件校验运行时刚需)
 {"from": "../python-env/python", "to": "python"}
-{"from": "../ffmpeg",        "to": "ffmpeg"}      // 只 ffmpeg.exe + ffprobe.exe
-{"from": "drivers/CH341SER", "to": "drivers/CH341SER"}
+{"from": "../ffmpeg",            "to": "ffmpeg"}               // 只 ffmpeg.exe + ffprobe.exe
+{"from": "drivers/CH341SER",     "to": "drivers/CH341SER"}
 ```
+
+> ⚠️ **打包资源遗漏是反复踩的坑（v3.15.0 连撞两次 P0）**。两个独立白名单，新增资源两边都要想到：
+> - **`extraResources`**：落在 `resources/` 文件系统（如 `backend/`、`docs/plugin-system/`）。⚠️ **backend 那条的 `filter` 只含 `.py/.pyd/.dll/...` 等扩展名，`.json`/`.md` 不会被带**——所以 `plugin.schema.json` 这类运行时资源**不能**指望放进 backend 目录自动打包，必须单列 extraResources 条目。
+> - **`files`**：打进 `app.asar`（Electron 主进程侧，如 `main.js`、`splash.html`、`splash/**/*`）。⚠️ v3.15.0 漏了根目录 `splash.html`（只写了 `splash/**/*`），导致旧版 splash 窗口（`transparent:true`）加载失败成透明空窗，启动**完全无动画**。
+> - **CI 自检兜底（v3.15.1）**：`build.yml` 在 `electron-builder --dir` 后加了「Verify packaged resources」step，硬验证 `resources/docs/plugin-system/plugin.schema.json`+`customer-codes.md`+`backend/main.py`（extraResources）和 `app.asar` 内 `splash.html`+`splash/index.html`+`main.js`（files，用 `asar list`），缺任一红灯阻断发版。**新增关键运行时资源时，顺手把它加进这个自检清单。**
 
 `backend-manager.js` 启动后端的唯一方式（line 372-378）：
 ```js

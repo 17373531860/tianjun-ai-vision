@@ -152,7 +152,11 @@ async def install_plugin(file: UploadFile = File(...), db: Session = Depends(get
     finally:
         if verified is not None:
             shutil.rmtree(verified.extracted_dir, ignore_errors=True)
-        tmp_path.unlink(missing_ok=True)
+        # Windows 上临时文件可能被占用 (WinError 32), 清理失败不应掩盖真正的安装结果
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 @router.get("/active/manifest")

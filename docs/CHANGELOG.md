@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.15.1 (2026-05-31)
+
+> 热修 v3.15.0 现场反馈三个问题（客户两段视频实证）+ CI 打包资源自检防复发。
+
+- [BUG-001] 修复: 插件安装失败 PLUGIN_MANIFEST_SCHEMA_FAIL — `plugin.schema.json` + `customer-codes.md` 没打包，extraResources 加 `docs/plugin-system`
+- [BUG-002] 修复: 启动无任何动画 — `splash.html` 漏进打包白名单致旧版 splash 透明空窗，files 加 `splash.html`
+- [BUG-003] 修复: 启动后偶发"获取GPU列表失败" — 健康检查太浅 + CUDA 冷初始化(5秒)撞前端并发，后端启动预热 CUDA + 前端静默重试
+- [BUG-004] 修复: 插件安装临时文件清理 `WinError 32` 掩盖真错，unlink 包 try/except
+- [FEAT-001] 新增: CI 打包资源自检 step，缺关键资源(schema/splash.html)红灯阻断发版，防漏打包复发
+
+---
+
 ## v3.15.0 (2026-05-31)
 
 > RFC 12「步骤进行中计时广播」平台能力 + 前端 `host.api` 已鉴权 axios 暴露, 为「步骤耗时三档实时报警」类插件铺基础设施。同步把主程序版本 bump 到 3.15.0 (与福建金龙双工位插件 v1.1.8 声明的 `main_version_min=3.15.0` 对齐 — 低于此版本的主程序会被插件版本校验硬拒绝加载)。无破坏性改动, 未装插件场景字节级零差异。

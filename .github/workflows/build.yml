@@ -276,6 +276,40 @@ jobs:
           $size = (Get-ChildItem "dist\win-unpacked" -Recurse | Measure-Object -Property Length -Sum).Sum
           echo "Total unpacked size: $([math]::Round($size/1GB, 2)) GB"
 
+      # v3.15.1: 打包资源自检 — 防止"新增资源忘记加进 files/extraResources"复发.
+      # 历史教训: v3.15.0 漏打包 plugin.schema.json(插件装不上) + splash.html(启动无动画).
+      # 缺任一关键资源直接红灯阻断发版, 不让残缺安装包流到客户.
+      - name: Verify packaged resources (防资源漏打包自检)
+        shell: pwsh
+        working-directory: electron
+        run: |
+          $base = "dist\win-unpacked\resources"
+          $fail = $false
+
+          # 1) extraResources 产物 (文件系统直接可查) — 插件校验运行时刚需
+          $extraMust = @(
+            "$base\docs\plugin-system\plugin.schema.json",
+            "$base\docs\plugin-system\customer-codes.md",
+            "$base\backend\main.py"
+          )
+          foreach ($f in $extraMust) {
+            if (Test-Path $f) { Write-Host "OK  extraResource: $f" }
+            else { Write-Host "::error::缺失打包资源(extraResources): $f"; $fail = $true }
+          }
+
+          # 2) app.asar 内 files 资源 (需 asar list) — 启动 splash 动画
+          $asarPath = "$base\app.asar"
+          if (-not (Test-Path $asarPath)) { Write-Host "::error::app.asar 不存在: $asarPath"; exit 1 }
+          $asarList = npx --yes asar list "$asarPath"
+          $asarMust = @("splash.html", "splash/index.html", "main.js")
+          foreach ($f in $asarMust) {
+            if ($asarList | Select-String -SimpleMatch $f) { Write-Host "OK  asar: $f" }
+            else { Write-Host "::error::app.asar 缺失关键资源: $f"; $fail = $true }
+          }
+
+          if ($fail) { Write-Host "打包资源自检未通过 — 阻断发版 (检查 electron/package.json 的 files/extraResources)"; exit 1 }
+          Write-Host "打包资源自检通过"
+
       - name: Install Inno Setup
         shell: pwsh
         run: |

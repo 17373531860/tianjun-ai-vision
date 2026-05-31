@@ -620,6 +620,23 @@ def auto_load_active_project():
 if not os.environ.get("BACKEND_SKIP_INIT"):
     auto_load_active_project()
 
+# v3.15.1: CUDA 预热 — 把 torch CUDA 上下文首次初始化的开销移到启动期 (splash 期间).
+# 现场问题: 项目未激活时启动全程不碰 GPU, 用户进设置页首次查 GPU 列表才触发 CUDA
+# 冷初始化, 叠加 onMounted 并发请求导致偶发 "获取GPU列表失败". 后台线程 fire-and-forget,
+# 幂等 (已加载模型则秒返回), 无 GPU 环境自动跳过, 异常隔离不影响主流程.
+if not os.environ.get("BACKEND_SKIP_INIT"):
+    def _warmup_cuda():
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.init()
+                _ = torch.cuda.device_count()
+                print("[启动] CUDA 预热完成")
+        except Exception as _e:
+            print(f"[启动] CUDA 预热跳过 (隔离, 不影响主流程): {_e}")
+    import threading as _warmup_threading
+    _warmup_threading.Thread(target=_warmup_cuda, daemon=True, name="cuda-warmup").start()
+
 # v3.13 RFC 10: 启动时加载工位组配置到 Coordinator. 客户场景 (双工位联动)
 # 才会有配置, 没有配置时返回 0 也无副作用 — 与 v3.12 零差异.
 if not os.environ.get("BACKEND_SKIP_INIT"):

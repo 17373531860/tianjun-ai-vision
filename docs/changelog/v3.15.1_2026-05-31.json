@@ -1,0 +1,65 @@
+{
+  "version": "3.15.1",
+  "date": "2026-05-31",
+  "previous_version": "3.15.0",
+  "summary": "热修 v3.15.0 现场三个问题(插件装不上/启动无动画/GPU列表偶发失败)+插件安装清理健壮性, 并加 CI 打包资源自检防复发。客户两段现场视频实证。",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "插件安装失败 PLUGIN_MANIFEST_SCHEMA_FAIL (schema 未打包)",
+      "symptom": "客户 Windows v3.15.0 上传 .tjvplugin 后端 500, 日志 FileNotFoundError: plugin.schema.json 不存在: D:\\tianjun-ai-vision\\resources\\docs\\plugin-system\\plugin.schema.json",
+      "root_cause": "electron/package.json 的 backend 打包过滤器只含 .py/.pyd/.dll 等扩展名, docs/ 目录从未在打包清单; 插件清单校验所需 plugin.schema.json + customer-codes.md 从未进安装包",
+      "fix": "extraResources 新增 docs/plugin-system -> resources/docs/plugin-system 条目(仅打 schema + customer-codes), 与代码 SCHEMA_PATH/CUSTOMER_CODES_PATH 期望路径对齐, Python 代码零改动",
+      "files": ["electron/package.json"],
+      "keywords": ["plugin.schema.json", "PLUGIN_MANIFEST_SCHEMA_FAIL", "插件安装失败", "extraResources", "打包遗漏", "schema 未打包", "customer-codes", "FileNotFoundError"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "启动无任何动画 (splash.html 未打包, 旧版 splash 透明空窗)",
+      "symptom": "客户双击启动 v3.15.0, 从关机到主界面全程无 splash, 空桌面停约5秒后主界面突然出现",
+      "root_cause": "electron/package.json files 白名单只含 splash/**/* 和 shutdown.html, 漏了根目录 splash.html; 旧版 splash 窗口 transparent:true, loadFile splash.html 失败即全透明空窗肉眼不可见",
+      "fix": "files 白名单加入 splash.html",
+      "files": ["electron/package.json"],
+      "keywords": ["splash.html", "启动无动画", "旧版 splash", "transparent 空窗", "files 白名单", "预加载", "打包遗漏", "legacy splash"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "启动后偶发 获取GPU列表失败 / CUDA 显示不可用",
+      "symptom": "v3.15.0 进设置页右上角弹 获取GPU列表失败, CUDA 状态显示不可用(但后端日志 GPU 实际正常 RTX3050/cuda:0)",
+      "root_cause": "后端就绪健康检查只探 /source/status(不碰 torch)进程一起来就判就绪显示主界面; 项目未激活时启动全程不碰 GPU CUDA 上下文为冷; 主界面 onMounted 并发6+请求, GPU 列表查询首次调 torch.cuda 触发 CUDA 冷初始化(实测约5秒)叠加并发竞争偶发超时失败",
+      "fix": "后端启动后台线程预热 CUDA(把冷初始化移到启动期 splash 期间, 幂等+异常隔离+无GPU自动跳过); 前端 GPU 列表查询页面自动加载失败静默重试2次(间隔1.5s)再提示, 手动刷新保持立即提示",
+      "files": ["backend/main.py", "frontend/src/views/Settings/index.vue"],
+      "keywords": ["获取GPU列表失败", "CUDA 不可用", "CUDA 预热", "torch.cuda 冷初始化", "健康检查", "就绪判定", "gpu/list", "onMounted 并发", "静默重试", "warmup"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "插件安装临时文件清理掩盖真实错误",
+      "symptom": "Windows 文件锁场景插件安装收尾 unlink 抛 WinError 32, 把真正的 schema 错误掩盖成 500",
+      "root_cause": "install_plugin 的 finally 中 tmp_path.unlink 无异常保护",
+      "fix": "unlink 包 try/except 清理失败静默跳过, 不掩盖主流程真实结果",
+      "files": ["backend/api/plugins.py"],
+      "keywords": ["插件安装", "临时文件清理", "WinError 32", "PermissionError", "unlink", "finally", "文件锁"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "CI 打包资源自检 (防资源漏打包复发)",
+      "symptom": "v3.15.0 连续两个 P0(BUG-001/BUG-002)同根: 新增资源忘加打包白名单, 开发机无法复现只在 Windows 打包产物暴露",
+      "root_cause": "打包清单(files/extraResources)靠人工维护易漏, 无自动守门",
+      "fix": "build.yml 在 electron-builder --dir 后、Inno Setup 前加自检 step: 硬验证 resources/docs/plugin-system/plugin.schema.json + customer-codes.md + backend/main.py(extraResources) 和 app.asar 内 splash.html + splash/index.html + main.js(files), 缺任一红灯阻断发版",
+      "files": [".github/workflows/build.yml"],
+      "keywords": ["打包自检", "资源漏打包", "CI 守门", "asar list", "extraResources", "files 白名单", "防复发"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-electron", "build-release"],
+  "files_changed": ["electron/package.json", "backend/main.py", "backend/api/plugins.py", "frontend/src/views/Settings/index.vue", ".github/workflows/build.yml"]
+}
