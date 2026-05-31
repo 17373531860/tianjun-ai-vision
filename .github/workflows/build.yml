@@ -300,7 +300,9 @@ jobs:
           # 2) app.asar 内 files 资源 (需 asar list) — 启动 splash 动画
           $asarPath = "$base\app.asar"
           if (-not (Test-Path $asarPath)) { Write-Host "::error::app.asar 不存在: $asarPath"; exit 1 }
-          $asarList = npx --yes asar list "$asarPath"
+          # asar list 在 Windows 输出反斜杠路径(\splash\index.html), 归一成正斜杠再匹配,
+          # 否则带分隔符的目标(如 splash/index.html)会被误判缺失.
+          $asarList = (npx --yes asar list "$asarPath") -replace '\\','/'
           $asarMust = @("splash.html", "splash/index.html", "main.js")
           foreach ($f in $asarMust) {
             if ($asarList | Select-String -SimpleMatch $f) { Write-Host "OK  asar: $f" }
