@@ -230,9 +230,53 @@ class DetectionCycle(Base):
     # 未来可塞: 外部温度/压力/批号等 cycle 开始那一刻的环境数据.
     external_meta = Column(JSON, nullable=True)
 
+    # v3.13 RFC 10: 工位组联动 (单机内多通道结算联动). 独立通道为 NULL.
+    channel_group_id = Column(Integer, ForeignKey("channel_groups.id", ondelete="SET NULL"), nullable=True, index=True)
+    # 同组联动结算时涉及的伙伴 cycle_id 列表 (审计 / 回溯用), 例: [42, 43]
+    group_settled_with = Column(JSON, nullable=True)
+    # 组级最终结果 (OK/NG/NULL), 与 is_good 同时存在但语义不同:
+    #   - is_good: 本通道独立结算的原始结果 (永不被组级联动覆盖, 报表用)
+    #   - group_settle_result: 组级联动后的最终结果 (实际业务采用, 例 MES 推送)
+    group_settle_result = Column(String(8), nullable=True)
+
     # 关系 (Operator → User 切换不再注册 relationship, 用代码层 join: backend/services/mes_gateway.py 等)
     session = relationship("DetectionSession", back_populates="cycles")
     step_records = relationship("StepRecord", back_populates="cycle", cascade="all, delete-orphan")
+
+
+class ChannelGroup(Base):
+    """单机内多通道结算联动组 (v3.13+, RFC 10).
+
+    与 cluster_config 的差异:
+      - cluster_config 是 "跨机聚齐 box", 每台机一行配置
+      - channel_groups 是 "同机内 channel 联动结算", 一台机可以有 0~N 个组
+
+    零差异默认: 表为空时所有通道独立结算, 行为与 v3.12 完全一致.
+    """
+    __tablename__ = "channel_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # 例 "Group-A" / "front-and-back-cameras"
+    name = Column(String(64), nullable=False, unique=True)
+    # 成员通道 id 列表, 例 [0, 1] 或 [0, 1, 2, 3]
+    member_channel_ids = Column(JSON, nullable=False)
+    # settle_strategy 枚举:
+    #   synchronized_any_ng (默认 — 客户需求 4): 任一通道 NG → 立即广播给其它成员
+    #   synchronized_all_ok: 所有成员都 OK 才整组 OK
+    #   independent (等价无组): 不做联动 (主要用于灰度 / 测试)
+    #   master_slave: 主通道结算决定整组 (v3.13 暂不实现, 留枚举位)
+    settle_strategy = Column(String(32), nullable=False, default="synchronized_any_ng")
+    # 组内成员结算等待对方的最长时间, 超时按 timeout_action 处理
+    timeout_ms = Column(Integer, nullable=False, default=5000)
+    # 超时行为:
+    #   fallback_independent (默认): 放弃联动, 各 cycle 按原结算保留
+    #   force_ng: 超时的成员强制判 NG
+    timeout_action = Column(String(32), nullable=False, default="fallback_independent")
+    enabled = Column(Boolean, default=True)
+    # v3.13 M3 风格: 客户级附加配置挂这里, 不污染主 schema
+    plugin_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class StepRecord(Base):
@@ -263,7 +307,13 @@ class StepRecord(Base):
     screenshot_path = Column(String(500), nullable=True)  # 截图路径
     video_path = Column(String(500), nullable=True)  # 步骤视频路径
     video_id = Column(String(50), nullable=True)  # 视频ID
-    
+
+    # v3.13 M3.3: 插件命名空间字段 (PluginHost.write_plugin_step_field 写入)
+    # 结构: {"plugin_<customer_code>_<key>": <value>, ...}
+    # 主程序导出 / CSV / 默认序列化均不暴露此字段, 仅自定义导出模板可显式取
+    # ({step.plugin_data.<plugin_namespaced_key>}).
+    plugin_data = Column(JSON, nullable=True)
+
     # 关系
     cycle = relationship("DetectionCycle", back_populates="step_records")
 

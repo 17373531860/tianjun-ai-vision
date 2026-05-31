@@ -1808,6 +1808,22 @@ class ScannerService:
         else:
             print(f"[Scanner] {conn.name}: 扫码 → {result.serial_no}", flush=True)
 
+        # v3.13 M1.1: scan_received 插件 hook — 主路径已完成 (MES on_scan_received 已广播
+        # 给所有目标通道 + 外部设备已注入条码). dedup/解析失败/external_only/test 等早返回
+        # 路径**不** fire (扫码事件本身未完成接收语义).
+        try:
+            from backend.plugin_system.hook_dispatch import fire_plugin_hook
+            fire_plugin_hook("scan_received", "post_scan", "post", {
+                "scanner_device_id": conn.device_id,
+                "scanner_name": conn.name,
+                "scanner_ip": conn.ip,
+                "serial_no": result.serial_no,
+                "raw": raw_data,
+                "broadcast_channel_ids": list(channels),
+            })
+        except Exception as e:
+            print(f"[Plugin] scan_received hook 触发异常 (已隔离, 主流程继续): {e}")
+
     def _inject_barcode_to_external_devices(self, conn: ScannerConnection, serial_no: str):
         """扫码后把条码注入给和扫码枪配对的外部设备（如称重器）。
 

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, FastAPI
@@ -200,20 +200,60 @@ class TablesRegistry:
 # ----------------------- export / realtime placeholders -----------------------
 
 
+class PluginNotImplementedError(NotImplementedError):
+    """插件试图调用主程序尚未接入的 registry API.
+
+    与原生 NotImplementedError 区分, 让外层 try/except 能精准捕获 (避免误吞
+    Python 标准库其它 NotImplementedError). PluginManager 加载流程会把它转成
+    audit log + state=failed, 不影响主程序启动.
+    """
+
+
+class PluginRuntimeError(RuntimeError):
+    """插件主动 API 安全约束违反 (capability 未声明 / 命名空间越权 / 参数非法).
+
+    与 PluginNotImplementedError 区分:
+      - NotImplementedError = 主程序还没做这个能力, 等里程碑
+      - RuntimeError        = 主程序做了, 但插件没遵守契约 (差声明 / 用了不该用的 key)
+
+    设计目标: 让插件作者**在测试阶段就看到错**, 而不是在客户现场偷偷越权.
+    主动 API (PluginHost.trigger_alarm / mes_push / write_system_config) 会抛这个,
+    上层 try/except 应能精准捕获后写 audit log + 拒绝调用, 不影响主程序.
+    """
+
+
 @dataclass
-class _PlaceholderRegistry:
-    """占位 registry，仅收集，不接到主程序。等 F7/F8/F9 接入。"""
+class _UnimplementedRegistry:
+    """尚未接入主程序的 registry — 调用即抛 ``PluginNotImplementedError``.
+
+    背景:
+      v3.7.0 ~ v3.12.0 版本 export_templates / export_fields / realtime_triggers 三个
+      registry 是 "善意的谎言" 占位实现 (调用成功 / 写日志 / 但主程序根本不接).
+      插件作者写代码时以为生效, 实际客户机上注册的内容对主程序导出 / 实时规则毫无
+      影响 -- 这是非常严重的认知陷阱.
+
+      v3.13 起改为 fail-fast: 调用即抛, 让插件作者立刻在加载阶段看到错, 而不是
+      在客户现场跑出 "怎么这功能没生效" 的灵异 bug.
+
+    对插件作者的迁移建议:
+      - 等主程序接入 (见 docs/plugin-system/CHANGELOG.md F7/F8/F9 进度)
+      - 临时用 hooks.register("cycle_end", ...) 在 hook 里做导出 / 实时推送绕路
+      - 在 manifest capabilities 里**不要**声明 backend.export.* / backend.realtime.*
+    """
 
     name: str
     customer_code: str
-    items: List[Any] = field(default_factory=list)
+    not_yet_milestone: str  # 例 "F7" / "F8" / "F9", 写进异常便于溯源
 
     def register(self, *args, **kwargs) -> None:
-        self.items.append({"args": args, "kwargs": kwargs})
-        log.info(
-            "[Plugin][%s] %s placeholder registered (count=%d) — 等 F7/F8/F9 接入",
-            self.customer_code, self.name, len(self.items),
+        msg = (
+            f"[Plugin][{self.customer_code}] registry.{self.name}.register(...) "
+            f"尚未接入主程序 (等 {self.not_yet_milestone} 里程碑). "
+            f"v3.7.0~v3.12.0 该接口曾是占位 (调用成功但不生效), v3.13+ 改为 fail-fast 防止"
+            f"插件作者误以为生效. 临时用 hooks.register('cycle_end', ...) 绕路."
         )
+        log.warning("[Plugin][%s] %s.register 被拒绝: %s", self.customer_code, self.name, msg)
+        raise PluginNotImplementedError(msg)
 
 
 # ----------------------- PluginRegistry -----------------------
@@ -229,9 +269,9 @@ class PluginRegistry:
         self.routes = RoutesRegistry(app=app, customer_code=customer_code)
         self.hooks = HooksRegistry(customer_code=customer_code)
         self.tables = TablesRegistry(engine=engine, customer_code=customer_code)
-        self.export_templates = _PlaceholderRegistry("export_templates", customer_code)
-        self.export_fields = _PlaceholderRegistry("export_fields", customer_code)
-        self.realtime_triggers = _PlaceholderRegistry("realtime_triggers", customer_code)
+        self.export_templates = _UnimplementedRegistry("export_templates", customer_code, "F7")
+        self.export_fields = _UnimplementedRegistry("export_fields", customer_code, "F8")
+        self.realtime_triggers = _UnimplementedRegistry("realtime_triggers", customer_code, "F9")
 
     def snapshot(self) -> Dict[str, Any]:
         """诊断快照：列出本插件注册的所有东西。"""
@@ -243,9 +283,11 @@ class PluginRegistry:
                 for h in self.hooks.list()
             ],
             "tables": self.tables.registered(),
-            "export_templates_count": len(self.export_templates.items),
-            "export_fields_count": len(self.export_fields.items),
-            "realtime_triggers_count": len(self.realtime_triggers.items),
+            # 三个 registry v3.13 起 fail-fast (调用即抛), 任何 manifest 显式声明
+            # 用了它们的插件都会在 register_plugin 阶段被拒绝, 不会抵达 snapshot.
+            "export_templates_status": "not_implemented_F7",
+            "export_fields_status": "not_implemented_F8",
+            "realtime_triggers_status": "not_implemented_F9",
         }
 
 
@@ -255,21 +297,777 @@ class PluginRegistry:
 class PluginHost:
     """暴露给插件代码的"主程序 host"对象。
 
-    设计目的：避免插件直接 import 主程序内部模块，给一个稳定的 facade。
+    设计目的: 避免插件直接 ``import backend.models.*`` 或玩主程序内部 ORM,
+    给一个**稳定的查询 facade**. 主程序改 ORM 字段时, 这层 facade 负责把变化
+    吸收掉 (映射到稳定字段名), 插件不感知; 真正不能吸收的字段变化, 改 facade
+    本身的契约 + 升 plugin SDK 版本, 走 main_version_min/max 拦截.
 
-    G1 阶段仅暴露:
+    G1 阶段 (v3.7.0~v3.12.0) 暴露:
     - get_db_session(): 返回受控 SQLAlchemy session（插件用完关）
     - customer_code:    当前插件 customer_code
     - plugin_dir:       插件解压目录
     - main_version:     主程序版本号
+
+    v3.13 起新增稳定查询 API (返回 dict snapshot, 不是 ORM 对象):
+    - query_session(session_id): session 元数据快照
+    - query_cycle(cycle_id):     cycle 元数据快照
+    - query_step(step_id):       step 元数据快照
+    - query_workpiece(wp_id):    workpiece 元数据快照
+
+    v3.13 M1.3a 起新增主动 API (插件 → 主程序方向):
+    - trigger_alarm(channel_id, event_type, reason):  调用主程序 AlarmRouter
+    - mes_push(event_type, payload, channel_id):      走主程序 MES Gateway 推送
+    - read_system_config(key):                        读主程序 SystemConfig 表
+    - write_system_config(key, value, description):   写主程序 SystemConfig 表
+
+    M3.3 已落地 (v3.13, 2026-05-28 — 原 M1.3a stub 升级为真实现):
+    - write_plugin_step_field(step_record_id, key, value):
+                                       JSON 合并写入 step_records.plugin_data,
+                                       需 'runtime.step_field_write' capability
+
+    仍 stub (实现等里程碑):
+    - broadcast_to_channel_group(...): 等 RFC 10 (工位组主程序原生)
+
+    为何返回 dict 而不是 ORM 对象:
+    1. ORM 对象绑定 session — 插件 close session 后再访问字段会炸 DetachedInstanceError
+    2. ORM 字段改名/删字段时插件不感知, dict facade 可以做兼容映射
+    3. 强制插件以"数据传输对象 (DTO)"思路写代码, 不要把主程序数据库结构当 SDK
+
+    get_db_session() 保留**不删** (向后兼容, 老插件可能在用), 但**新插件不应再用**.
+    docs/plugin-system/design/06_tier3_fullstack.md 已加迁移指南.
+
+    主动 API 安全模型 (M1.3a 契约):
+    1. **capabilities 声明门槛**: 写动作 / 外推动作必须在 manifest.capabilities 声明
+       对应 capability, 否则抛 PluginRuntimeError. 让插件作者明确说出"我要做什么",
+       避免 hooks 里偷偷调主程序高危 API.
+    2. **命名空间隔离**: write_system_config / mes_push 的 key/event_type 必须用
+       `plugin_<customer_code>_` 前缀, 防止插件踩主程序保留 key (如 license-cache).
+    3. **审计落库**: 所有写 / 外推动作都进 plugin_audit_log, 客户现场翻日志可追溯.
+    4. **错误隔离**: 主动 API 抛 PluginRuntimeError 时, 上层 hook handler 已经被
+       fire_plugin_hook 包了 try/except, 主程序流程不会被插件越权操作连带断裂.
     """
 
-    def __init__(self, customer_code: str, plugin_dir: str, main_version: str = "3.7.x") -> None:
+    def __init__(
+        self,
+        customer_code: str,
+        plugin_dir: str,
+        main_version: str = "3.7.x",
+        capabilities: Optional[List[str]] = None,
+    ) -> None:
         self.customer_code = customer_code
         self.plugin_dir = plugin_dir
         self.main_version = main_version
+        # capabilities = manifest.capabilities 列表的拷贝, 默认空 (=没声明任何能力).
+        # 未声明能力 → 调对应主动 API 抛 PluginRuntimeError.
+        # 兼容: G1 期不接收 capabilities 的老调用 (test / 极旧 manager) → 等价空列表.
+        self.capabilities = list(capabilities or [])
 
     def get_db_session(self):
+        """返回原始 SQLAlchemy session.
+
+        ⚠️ 历史 API, 向后兼容保留. 新插件请改用 query_* facade 系列.
+        直接用 session 的风险: 主程序 ORM 字段改名 → 插件代码运行时炸.
+        """
         from backend.db.database import SessionLocal
 
         return SessionLocal()
+
+    # ============================================================
+    # v3.13: 稳定查询 facade
+    # 字段集合是契约的一部分, 改字段名 = 升 plugin SDK 版本 (走 main_version_min/max 拦截)
+    # ============================================================
+
+    def query_session(self, session_id: int) -> Optional[Dict[str, Any]]:
+        """查 DetectionSession 快照, 找不到返回 ``None``.
+
+        稳定字段 (v3.13 契约):
+            id / session_uuid / name / project_id / start_time / end_time /
+            status / total_cycles / good_cycles / ng_cycles /
+            avg_cycle_time / min_cycle_time / max_cycle_time / counters_snapshot
+        """
+        from backend.db.database import SessionLocal
+        from backend.models.models import DetectionSession
+
+        db = SessionLocal()
+        try:
+            row = db.query(DetectionSession).filter(DetectionSession.id == session_id).first()
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "session_uuid": row.session_uuid,
+                "name": getattr(row, "name", None),
+                "project_id": row.project_id,
+                "start_time": row.start_time.isoformat() if row.start_time else None,
+                "end_time": row.end_time.isoformat() if row.end_time else None,
+                "status": row.status,
+                "total_cycles": row.total_cycles,
+                "good_cycles": row.good_cycles,
+                "ng_cycles": row.ng_cycles,
+                "avg_cycle_time": row.avg_cycle_time,
+                "min_cycle_time": row.min_cycle_time,
+                "max_cycle_time": row.max_cycle_time,
+                "counters_snapshot": dict(row.counters_snapshot) if row.counters_snapshot else {},
+            }
+        finally:
+            db.close()
+
+    def query_cycle(self, cycle_id: int) -> Optional[Dict[str, Any]]:
+        """查 DetectionCycle 快照, 找不到返回 ``None``.
+
+        稳定字段 (v3.13 契约):
+            id / cycle_uuid / cycle_number / session_id / start_time / end_time /
+            duration / is_good / event_id / event_name / result_reason /
+            step_sequence
+        """
+        from backend.db.database import SessionLocal
+        from backend.models.models import DetectionCycle
+
+        db = SessionLocal()
+        try:
+            row = db.query(DetectionCycle).filter(DetectionCycle.id == cycle_id).first()
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "cycle_uuid": row.cycle_uuid,
+                "cycle_number": row.cycle_number,
+                "session_id": row.session_id,
+                "start_time": row.start_time.isoformat() if row.start_time else None,
+                "end_time": row.end_time.isoformat() if row.end_time else None,
+                "duration": row.duration,
+                "is_good": row.is_good,
+                "event_id": row.event_id,
+                "event_name": row.event_name,
+                "result_reason": row.result_reason,
+                "step_sequence": list(row.step_sequence) if row.step_sequence else [],
+            }
+        finally:
+            db.close()
+
+    def query_step(self, step_id: int) -> Optional[Dict[str, Any]]:
+        """查 StepRecord 快照, 找不到返回 ``None``.
+
+        稳定字段 (v3.13 契约):
+            id / record_uuid / cycle_id / step_id / step_label / step_name /
+            step_order / start_time / end_time / duration / interval_to_next /
+            is_valid / confidence
+        """
+        from backend.db.database import SessionLocal
+        from backend.models.models import StepRecord
+
+        db = SessionLocal()
+        try:
+            row = db.query(StepRecord).filter(StepRecord.id == step_id).first()
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "record_uuid": row.record_uuid,
+                "cycle_id": row.cycle_id,
+                "step_id": row.step_id,
+                "step_label": row.step_label,
+                "step_name": row.step_name,
+                "step_order": row.step_order,
+                "start_time": row.start_time.isoformat() if row.start_time else None,
+                "end_time": row.end_time.isoformat() if row.end_time else None,
+                "duration": row.duration,
+                "interval_to_next": row.interval_to_next,
+                "is_valid": row.is_valid,
+                "confidence": row.confidence,
+            }
+        finally:
+            db.close()
+
+    def query_workpiece(self, workpiece_id: int) -> Optional[Dict[str, Any]]:
+        """查 Workpiece 快照, 找不到返回 ``None``.
+
+        稳定字段 (v3.13 契约):
+            id / serial_no / raw_barcode / order_id / batch_id / project_id /
+            channel_id / status / final_result / inspection_count / operator /
+            registered_at / first_inspect_at / last_inspect_at /
+            created_at / updated_at
+
+        注: ``final_result`` 是 ORM 真实字段名 (workpieces.final_result), 不要在
+        facade 里改成 ``result`` — 与 hook ctx 中的 ``result`` (= "OK"/"NG"
+        cycle 级判定) 是两回事, 改名会让插件作者混淆.
+        """
+        from backend.db.database import SessionLocal
+        from backend.models.mes_models import Workpiece
+
+        db = SessionLocal()
+        try:
+            row = db.query(Workpiece).filter(Workpiece.id == workpiece_id).first()
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "serial_no": row.serial_no,
+                "raw_barcode": row.raw_barcode,
+                "order_id": row.order_id,
+                "batch_id": row.batch_id,
+                "project_id": row.project_id,
+                "channel_id": row.channel_id,
+                "status": row.status,
+                "final_result": row.final_result,
+                "inspection_count": row.inspection_count,
+                "operator": row.operator,
+                "registered_at": row.registered_at.isoformat() if row.registered_at else None,
+                "first_inspect_at": row.first_inspect_at.isoformat() if row.first_inspect_at else None,
+                "last_inspect_at": row.last_inspect_at.isoformat() if row.last_inspect_at else None,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+        finally:
+            db.close()
+
+    # ============================================================
+    # v3.13 M1.3a: 主动 API (插件 → 主程序)
+    # 安全模型: capabilities 声明 + 命名空间隔离 + audit log + 错误隔离
+    # ============================================================
+
+    # ---------- 内部辅助 ----------
+
+    def _require_capability(self, cap: str) -> None:
+        """检查插件 manifest.capabilities 是否声明了该能力.
+
+        未声明 → PluginRuntimeError + audit log.
+        让插件作者**显式声明**才能调危险 API, 避免在 hook 里偷偷越权.
+        """
+        if cap not in self.capabilities:
+            self._audit_log(
+                action=f"capability_check.{cap}",
+                status="rejected",
+                message=f"未声明 capability {cap}, 拒绝调用",
+            )
+            raise PluginRuntimeError(
+                f"[Plugin][{self.customer_code}] 拒绝调用: 未在 manifest.capabilities "
+                f"声明 '{cap}'. 在 manifest.json 的 capabilities 数组里加上 '{cap}' 后重启."
+            )
+
+    def _require_plugin_namespace(self, key: str, field_name: str = "key") -> None:
+        """检查 key 是否以 `plugin_<customer_code>_` 前缀开头.
+
+        防止插件踩主程序保留 key (例 license-cache / display.monitor.ptMode),
+        也防止两个客户插件互相覆盖配置.
+        """
+        expect_prefix = f"plugin_{self.customer_code.replace('-', '_')}_"
+        if not isinstance(key, str) or not key.startswith(expect_prefix):
+            self._audit_log(
+                action="namespace_check",
+                status="rejected",
+                message=f"{field_name}={key!r} 不在命名空间 {expect_prefix}* 内",
+            )
+            raise PluginRuntimeError(
+                f"[Plugin][{self.customer_code}] 拒绝调用: {field_name}={key!r} "
+                f"必须以 '{expect_prefix}' 开头 (命名空间隔离)."
+            )
+
+    def _audit_log(self, action: str, status: str, message: str) -> None:
+        """主动 API 审计落库 (plugin_audit_log 表).
+
+        独立 session (insert + commit + close) — 不依赖调用方 session.
+        任何异常 swallow + 打日志, 不让 audit 失败拖垮主流程.
+        """
+        try:
+            from backend.db.database import SessionLocal
+            from backend.models.plugin_models import PluginAuditLog
+
+            db = SessionLocal()
+            try:
+                db.add(PluginAuditLog(
+                    customer_code=self.customer_code,
+                    action=action,
+                    status=status,
+                    message=message,
+                ))
+                db.commit()
+            finally:
+                db.close()
+        except Exception as exc:
+            # audit 失败不影响主动 API 本身的返回值 / 异常
+            log.warning(
+                "[Plugin][%s] audit_log 写库失败 (已隔离): action=%s err=%s",
+                self.customer_code, action, exc,
+            )
+
+    # ---------- 主动 API ----------
+
+    def trigger_alarm(self, channel_id: int, event_type: str, reason: str = "") -> bool:
+        """触发主程序报警 (走 AlarmRouter).
+
+        参数:
+            channel_id: 工位通道号 (0 起)
+            event_type: 报警事件类型, 必须是主程序 alarm.config 已配置的字符串
+                        (常见: "event1"="OK光", "event2"="NG警报" 等).
+                        ⚠️ event_type **不**强制 plugin_ 前缀 — 因为报警事件类型是
+                        主程序级 (灯柱配置), 插件只能复用, 不能定义新 event_type.
+            reason:     reason 字符串, 仅用于 audit log, 不影响实际报警动作.
+
+        返回:
+            True  = 已成功调用 alarm_router (实际硬件动作由 AlarmManager 异步执行).
+            False = 调用过程异常 (audit 已写, 不抛, 让 hook handler 继续).
+
+        安全约束:
+            - 需要 manifest.capabilities 声明 'runtime.alarm_trigger'.
+            - 多工位场景 channel_id 必须在 ChannelManager 已注册的范围内
+              (主程序 alarm_router.get(channel_id) 会自动按工位号路由共享灯柱).
+        """
+        self._require_capability("runtime.alarm_trigger")
+        try:
+            from backend.api.alarm import alarm_router
+            alarm_router.trigger_alarm(event_type, channel_id=channel_id)
+            self._audit_log(
+                action="trigger_alarm",
+                status="success",
+                message=f"channel_id={channel_id} event_type={event_type} reason={reason!r}",
+            )
+            return True
+        except Exception as exc:
+            self._audit_log(
+                action="trigger_alarm",
+                status="failed",
+                message=f"channel_id={channel_id} event_type={event_type} err={exc}",
+            )
+            log.warning(
+                "[Plugin][%s] trigger_alarm 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return False
+
+    def mes_push(
+        self,
+        event_type: str,
+        payload: Dict[str, Any],
+        channel_id: Optional[int] = None,
+    ) -> bool:
+        """走主程序 MES Gateway 推送一条消息.
+
+        参数:
+            event_type: 事件类型, 必须以 `plugin_<customer_code>_` 前缀
+                        (命名空间隔离, 不能用主程序保留 event_type 如 cycle_end / box_complete).
+                        主程序 MESGateway.dispatch 按 event_type 路由到所有匹配的 mes_connection.
+            payload:    数据字典, 必须可 JSON 序列化 (内部走 mes_adapters render_template).
+            channel_id: 可选, 让 Gateway 按工位过滤 connections; None = 全广播.
+
+        返回:
+            True  = dispatch 已调用成功 (实际外推由 Gateway 后台).
+            False = 异常被 swallow, audit 已写.
+
+        安全约束:
+            - 需要 manifest.capabilities 声明 'runtime.mes_push'.
+            - event_type 必须命名空间前缀.
+            - payload 必须是 dict (其它类型直接抛 TypeError).
+        """
+        self._require_capability("runtime.mes_push")
+        # event_type 命名空间校验 (主程序 cycle_end / box_complete 等不能被插件触发)
+        self._require_plugin_namespace(event_type, field_name="event_type")
+        if not isinstance(payload, dict):
+            raise TypeError(
+                f"[Plugin][{self.customer_code}] mes_push.payload 必须是 dict, 实际 {type(payload).__name__}"
+            )
+        try:
+            from backend.services.mes_gateway import get_mes_gateway
+            gateway = get_mes_gateway()
+            gateway.dispatch(event_type=event_type, context=payload, channel_id=channel_id)
+            # payload 摩要: 只取 key 列表, 避免敏感数据进 audit
+            keys_brief = sorted(payload.keys())[:10]
+            self._audit_log(
+                action="mes_push",
+                status="success",
+                message=f"event_type={event_type} channel_id={channel_id} payload_keys={keys_brief}",
+            )
+            return True
+        except Exception as exc:
+            self._audit_log(
+                action="mes_push",
+                status="failed",
+                message=f"event_type={event_type} err={exc}",
+            )
+            log.warning(
+                "[Plugin][%s] mes_push 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return False
+
+    def read_system_config(self, key: str) -> Optional[str]:
+        """读 SystemConfig 表的 KV 值.
+
+        参数:
+            key: 配置项 key, 推荐用 `plugin_<customer_code>_` 前缀; 主程序 key
+                 (例 license-cache / display.monitor.ptMode) 也允许读但**不允许写**.
+
+        返回:
+            value 字符串 (SystemConfig.value 是 TEXT); 不存在返回 None.
+
+        安全约束:
+            - **不要求**声明 capabilities (只读无副作用, 用于跨插件查主程序状态).
+            - 不写 audit (高频 read 不应淹没 audit log).
+        """
+        try:
+            from backend.db.database import SessionLocal
+            from backend.models.models import SystemConfig
+
+            db = SessionLocal()
+            try:
+                row = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+                if row is None:
+                    return None
+                return row.value
+            finally:
+                db.close()
+        except Exception as exc:
+            log.warning(
+                "[Plugin][%s] read_system_config(%s) 异常: %s",
+                self.customer_code, key, exc,
+            )
+            return None
+
+    def write_system_config(
+        self,
+        key: str,
+        value: Optional[str],
+        description: Optional[str] = None,
+    ) -> bool:
+        """写 SystemConfig 表的 KV 值 (upsert).
+
+        参数:
+            key:         **必须**以 `plugin_<customer_code>_` 前缀 (命名空间隔离,
+                         不允许覆盖主程序保留 key).
+            value:       配置值 (任意字符串, None 等价空字符串落库).
+            description: 可选, 写入 SystemConfig.description (前端显示用).
+
+        返回:
+            True  = upsert 成功 + audit 写入.
+            False = 异常被 swallow.
+
+        安全约束:
+            - 需要 manifest.capabilities 声明 'runtime.system_config_write'.
+            - key 必须命名空间前缀.
+            - value / description 强转 str (None → "").
+        """
+        self._require_capability("runtime.system_config_write")
+        self._require_plugin_namespace(key, field_name="key")
+        try:
+            from backend.db.database import SessionLocal
+            from backend.models.models import SystemConfig
+
+            db = SessionLocal()
+            try:
+                row = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+                value_str = "" if value is None else str(value)
+                if row is None:
+                    row = SystemConfig(key=key, value=value_str, description=description)
+                    db.add(row)
+                else:
+                    row.value = value_str
+                    if description is not None:
+                        row.description = description
+                db.commit()
+                self._audit_log(
+                    action="write_system_config",
+                    status="success",
+                    message=f"key={key} value_len={len(value_str)}",
+                )
+                return True
+            finally:
+                db.close()
+        except Exception as exc:
+            self._audit_log(
+                action="write_system_config",
+                status="failed",
+                message=f"key={key} err={exc}",
+            )
+            log.warning(
+                "[Plugin][%s] write_system_config(%s) 异常 (已 swallow): %s",
+                self.customer_code, key, exc,
+            )
+            return False
+
+    # ---------- M1.3b 真实现 (M3.3 step_records.plugin_data 已落地) ----------
+
+    def write_plugin_step_field(self, step_record_id: int, key: str, value: Any) -> bool:
+        """在 step_records.plugin_data JSON 字段写一个插件命名空间 key.
+
+        v3.13 M3.3 解锁 (原 M1.3a stub 升级为真实现).
+
+        参数:
+            step_record_id: step_records.id (主程序写库后给插件的标识符,
+                            一般通过 step_change hook ctx['step_record_id'] 拿到).
+            key:            **必须** ``plugin_<customer_code>_`` 前缀 (命名空间隔离).
+            value:          必须可 JSON 序列化 (主流类型: bool / int / float / str /
+                            None / list / dict). 不可 JSON 序列化的值会被拒绝.
+
+        返回:
+            True  = JSON 合并写入成功 + audit 写入.
+            False = step_record 不存在 / value 不可 JSON / 异常被 swallow.
+
+        安全约束:
+            - 需要 manifest.capabilities 声明 ``runtime.step_field_write``.
+            - key 必须命名空间前缀 (与 write_system_config 一致).
+            - value 必须可 JSON 序列化 (容错: 失败时 audit + 返 False, 不抛).
+
+        语义:
+            - **JSON 合并**写入: 仅设/覆盖 ``plugin_data[key]``, 其它 key 不动 (含
+              其他客户插件的 key, 或同插件先前写过的其他 key).
+            - 不限制 step_record 必须属于当前 channel — 与 ``query_step`` 一致,
+              让插件能跨 channel 写自家命名空间字段 (例: 集群场景副机插件回填主机).
+            - 写完不通知主程序; 主程序导出/CSV/默认序列化**不**暴露此字段, 仅自定义
+              导出模板可显式取 ``{step.plugin_data.<key>}``.
+        """
+        self._require_capability("runtime.step_field_write")
+        self._require_plugin_namespace(key, field_name="key")
+
+        # value 可 JSON 序列化校验 — 必须先于 DB 查找做, 防 value 类型错误时
+        # 还白浪费一次 DB 查询.
+        import json
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError) as exc:
+            self._audit_log(
+                action="write_plugin_step_field",
+                status="rejected",
+                message=f"step_record_id={step_record_id} key={key} value 不可 JSON 序列化: {exc}",
+            )
+            return False
+
+        try:
+            from backend.db.database import SessionLocal
+            from backend.models.models import StepRecord
+
+            db = SessionLocal()
+            try:
+                row = db.query(StepRecord).filter(StepRecord.id == step_record_id).first()
+                if row is None:
+                    self._audit_log(
+                        action="write_plugin_step_field",
+                        status="rejected",
+                        message=f"step_record_id={step_record_id} 不存在",
+                    )
+                    return False
+
+                # JSON 合并: 原值为 None / 非 dict 时初始化为空 dict, 仅设/覆盖目标 key.
+                current = row.plugin_data if isinstance(row.plugin_data, dict) else {}
+                # 浅拷贝防止 SQLAlchemy 检测不到 mutation (JSON column 默认 dirty 检测对
+                # 顶层 dict 引用变化敏感; 不新建 dict 直接 row.plugin_data[key] = value 在
+                # 部分驱动 / SQLite JSON 上不会标 dirty → 不会 UPDATE).
+                merged = dict(current)
+                merged[key] = value
+                row.plugin_data = merged
+                db.commit()
+
+                self._audit_log(
+                    action="write_plugin_step_field",
+                    status="success",
+                    message=f"step_record_id={step_record_id} key={key}",
+                )
+                return True
+            finally:
+                db.close()
+        except Exception as exc:
+            self._audit_log(
+                action="write_plugin_step_field",
+                status="failed",
+                message=f"step_record_id={step_record_id} key={key} err={exc}",
+            )
+            log.warning(
+                "[Plugin][%s] write_plugin_step_field 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return False
+
+    # ---------- M1.3b: 工位组主动 API (RFC 10 落地后真实现) ----------
+
+    def list_channel_groups(self) -> List[Dict[str, Any]]:
+        """列出所有已加载的工位组 (v3.13 M1.3b + RFC 10 CG.7 真实现).
+
+        无 capability 要求 (查询接口对所有插件开放, 与 query_* 系列一致).
+
+        返回:
+          list of dict, 每个 dict 含:
+            {"id", "name", "member_channel_ids", "settle_strategy",
+             "timeout_ms", "timeout_action"}
+          没有任何工位组时返回 [].
+        """
+        try:
+            from backend.services.channel_group_coordinator import get_coordinator
+            return get_coordinator().list_groups()
+        except Exception as exc:
+            self._audit_log(
+                action="list_channel_groups",
+                status="failed",
+                message=f"获取工位组列表异常: {exc}",
+            )
+            log.warning(
+                "[Plugin][%s] list_channel_groups 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return []
+
+    def query_channel_group(self, group_id: int) -> Optional[Dict[str, Any]]:
+        """查单个工位组配置 (v3.13 M1.3b + RFC 10 CG.7 真实现).
+
+        无 capability 要求.
+
+        参数:
+          group_id: channel_groups 表的 id.
+
+        返回:
+          dict (字段同 list_channel_groups) 或 None (组不存在 / 已 disable).
+        """
+        try:
+            from backend.services.channel_group_coordinator import get_coordinator
+            return get_coordinator().get_group(group_id)
+        except Exception as exc:
+            self._audit_log(
+                action="query_channel_group",
+                status="failed",
+                message=f"group_id={group_id} 异常: {exc}",
+            )
+            log.warning(
+                "[Plugin][%s] query_channel_group 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return None
+
+    def broadcast_to_channel_group(
+        self,
+        group_id: int,
+        message: Dict[str, Any],
+    ) -> bool:
+        """给工位组内成员发自定义消息 (v3.13 M1.3b + RFC 10 CG.7 真实现).
+
+        capability: ``runtime.channel_group_broadcast``.
+
+        实现: 通过 ``plugin_broadcast_received`` hook 通知同组所有成员 (含发送方),
+        插件 handler 自行决定如何消费 (例: 改本通道 cycle 状态 / 写日志 / 触发 UI).
+
+        参数:
+          group_id: channel_groups 表 id.
+          message: 必须可 JSON 序列化的 dict.
+
+        返回:
+          True = 广播 hook 已 fire; False = 组不存在 / message 非法 / 异常.
+        """
+        self._require_capability("runtime.channel_group_broadcast")
+
+        if not isinstance(message, dict):
+            self._audit_log(
+                action="broadcast_to_channel_group",
+                status="rejected",
+                message=f"group_id={group_id} message 必须是 dict, 实际 {type(message).__name__}",
+            )
+            return False
+
+        import json
+        try:
+            json.dumps(message)
+        except (TypeError, ValueError) as exc:
+            self._audit_log(
+                action="broadcast_to_channel_group",
+                status="rejected",
+                message=f"group_id={group_id} message 不可 JSON 序列化: {exc}",
+            )
+            return False
+
+        try:
+            from backend.services.channel_group_coordinator import get_coordinator
+            coordinator = get_coordinator()
+            group = coordinator.get_group(group_id)
+            if not group:
+                self._audit_log(
+                    action="broadcast_to_channel_group",
+                    status="rejected",
+                    message=f"group_id={group_id} 不存在",
+                )
+                return False
+
+            from backend.plugin_system.hook_dispatch import fire_plugin_hook
+            fire_plugin_hook("plugin_broadcast_received", "broadcast", "post", {
+                "group_id": group_id,
+                "group_name": group["name"],
+                "member_channel_ids": list(group["member_channel_ids"]),
+                "sender_customer_code": self.customer_code,
+                "message": message,
+            })
+            self._audit_log(
+                action="broadcast_to_channel_group",
+                status="success",
+                message=f"group_id={group_id} members={group['member_channel_ids']}",
+            )
+            return True
+        except Exception as exc:
+            self._audit_log(
+                action="broadcast_to_channel_group",
+                status="failed",
+                message=f"group_id={group_id} 异常: {exc}",
+            )
+            log.warning(
+                "[Plugin][%s] broadcast_to_channel_group 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return False
+
+    # =============================================================
+    # v3.14 RFC 11: 串行流水线 (WorkpieceFlow) 查询 API
+    # =============================================================
+
+    def list_workpiece_flows(self) -> List[Dict[str, Any]]:
+        """列出所有 enabled 串行流水线配置 (snapshot).
+
+        无 capability 要求 (只读). 但因涉及客户产线敏感数据, 仍写 audit log.
+        """
+        try:
+            from backend.services.workpiece_flow_coordinator import get_coordinator
+            flows = get_coordinator().list_flows()
+            self._audit_log(
+                action="list_workpiece_flows",
+                status="success",
+                message=f"返回 {len(flows)} 个 flow",
+            )
+            return flows
+        except Exception as exc:
+            self._audit_log(
+                action="list_workpiece_flows",
+                status="failed",
+                message=str(exc),
+            )
+            log.warning(
+                "[Plugin][%s] list_workpiece_flows 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return []
+
+    def query_workpiece_flow_state(self, flow_id: int) -> Optional[Dict[str, Any]]:
+        """查单个串行流水线的当前 in-flight 工件状态.
+
+        返回:
+          {
+            "flow": {...},
+            "in_flight": [...],
+            "in_flight_count": int,
+          }
+          flow 不存在时返回 None.
+        """
+        try:
+            from backend.services.workpiece_flow_coordinator import get_coordinator
+            coord = get_coordinator()
+            flow = coord.get_flow(flow_id)
+            if not flow:
+                return None
+            return {
+                "flow": flow,
+                "in_flight": coord.list_in_flight(flow_id),
+                "in_flight_count": len(coord.list_in_flight(flow_id)),
+            }
+        except Exception as exc:
+            self._audit_log(
+                action="query_workpiece_flow_state",
+                status="failed",
+                message=f"flow_id={flow_id} 异常: {exc}",
+            )
+            log.warning(
+                "[Plugin][%s] query_workpiece_flow_state 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return None

@@ -574,3 +574,124 @@ class BoxSummary(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# ============================================================
+# 串行流水线 (WorkpieceFlow) — RFC 11 (v3.14.0+)
+# ============================================================
+# 与 channel_groups (RFC 10, 单机并行) 是同级正交概念:
+#   ChannelGroup: 多摄像头同时拍同一工件不同侧面 → 同步结算
+#   WorkpieceFlow: 多摄像头沿流水线依次拍同一工件不同阶段 → 串行结算
+# 同一 channel_id 不能同时属于两者 (API + Settings UI 双向校验).
+
+class WorkpieceFlowConfig(Base):
+    """流水线串行结算配置 (v3.14+).
+
+    一台机器可以有 0~N 个 flow 配置, 每个 flow 管 2~N 个有序工位.
+    工件沿 station_channel_ids 顺序依次走过, 全部 OK 才算合格.
+    """
+    __tablename__ = "workpiece_flow_configs"
+    __table_args__ = (
+        Index("ix_workpiece_flow_enabled", "enabled"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(64), nullable=False, unique=True)
+    enabled = Column(Boolean, default=False)
+
+    # 有序工位列表 (流水线方向). 例 [0, 1, 2] 表示工件从工位 0 → 1 → 2.
+    station_channel_ids = Column(JSON, nullable=False)
+
+    # 触发模式: scan / time_window / physical
+    trigger_mode = Column(String(16), nullable=False, default="time_window")
+
+    # --- scan 模式专属 ---
+    scan_device_id = Column(
+        Integer,
+        ForeignKey("scanner_devices.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # entry: 入口扫一次, 广播全部工位 (依赖 ScannerDevice.broadcast_channels)
+    # each_station: 每工位前都扫一次 (更可靠, 防错绑, 1 秒内幂等去重)
+    scan_bind_strategy = Column(String(16), default="entry")
+
+    # --- time_window 模式专属 ---
+    # FIFO 队列上限 (同时追 N 个 in-flight 工件)
+    fifo_max_in_flight = Column(Integer, default=3)
+    # 工位间 cycle_end → 下一工位 cycle_start 的预期时间窗 (毫秒, 仅记录用)
+    cycle_to_cycle_window_ms = Column(Integer, default=15000)
+
+    # --- physical 模式专属 (v1 留接口, M7 实现) ---
+    # 例 {"device_id": 1, "entry_signal": "io_in_1",
+    #     "station_signals": ["io_in_2", "io_in_3"]}
+    physical_trigger_config = Column(JSON, nullable=True)
+
+    # --- 通用 ---
+    # 结算策略: all_ok_required (v1 默认且唯一)
+    settle_strategy = Column(String(16), default="all_ok_required")
+    # 任一工位 NG 立即停后续工位检测 (节省检测资源 + 报警立即响应)
+    short_circuit_on_ng = Column(Boolean, default=True)
+    # 单工件超时 (从入口算, 毫秒). 超时按 timeout_action 处理.
+    workpiece_timeout_ms = Column(Integer, default=60000)
+    # 超时动作: force_ng / drop / alarm_only
+    timeout_action = Column(String(16), default="force_ng")
+
+    plugin_data = Column(JSON, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class WorkpieceFlowRun(Base):
+    """工件流转记录 (每次工件流转一行).
+
+    与 Workpiece 表的差异:
+      - Workpiece 是"工件实体" (一个工件可能被多次返工检测)
+      - WorkpieceFlowRun 是"一次流转事件" (从入口到出口的一次完整流转)
+      - 一个 Workpiece 可以有多个 flow_runs (返工场景), v1 不做返工
+    """
+    __tablename__ = "workpiece_flow_runs"
+    __table_args__ = (
+        Index("ix_flow_run_config", "flow_config_id"),
+        Index("ix_flow_run_status", "status"),
+        Index("ix_flow_run_serial", "serial_no"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    flow_config_id = Column(
+        Integer,
+        ForeignKey("workpiece_flow_configs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workpiece_id = Column(
+        Integer,
+        ForeignKey("workpieces.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    flow_uuid = Column(String(32), unique=True, nullable=False, index=True)
+    # 扫码值 (scan 模式) 或 FIFO 自生成 (time_window 模式 "auto-<flow_id>-<8hex>")
+    serial_no = Column(String(128), nullable=True, index=True)
+
+    # 状态机: in_progress → completed / timeout / short_circuited / aborted (终态)
+    status = Column(String(16), nullable=False, default="in_progress")
+
+    # 各工位 cycle 关联 (按 flow_config.station_channel_ids 顺序对齐, 未到的位置为 None).
+    # 例 [42, 43, null]  表示工位 0, 1 已结算, 工位 2 未到.
+    station_cycle_ids = Column(JSON, nullable=True)
+    # 各工位结果 (与 station_cycle_ids 同序). 例 ["OK", "OK", null].
+    station_results = Column(JSON, nullable=True)
+    # 最终合并结果 (OK / NG / NULL=in_progress)
+    final_result = Column(String(8), nullable=True)
+
+    # 触发信息 (审计 / 回溯用)
+    trigger_mode = Column(String(16), nullable=True)
+    trigger_source_id = Column(Integer, nullable=True)  # 扫码器 ID / 物理设备 ID 等
+
+    started_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    flow_config = relationship("WorkpieceFlowConfig")
+    workpiece = relationship("Workpiece")

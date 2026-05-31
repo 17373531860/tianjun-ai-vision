@@ -53,3 +53,26 @@ class ProjectResponse(ProjectBase):
 class ProjectListResponse(BaseModel):
     total: int
     items: List[ProjectResponse]
+
+
+# v3.13 M3.1: 插件命名空间数据补丁
+# 给客户专属插件在 Project 的 7 个 JSON 配置字段下精准写
+# *.plugin_data.<customer_code> 子树, 不动其它字段.
+class ProjectPluginDataPatch(BaseModel):
+    """精准 PATCH 单个 JSON 字段下的 plugin_data.<customer_code> 子树.
+
+    路径定位:
+      - scope ∈ {"pipeline_config", "alarm_config", "detection_config", "data_config"}:
+        目标 = ``<scope>.plugin_data.<customer_code>``, index 必须为 None
+      - scope ∈ {"steps_config", "events_config", "counters_config"}:
+        目标 = ``<scope>[index].plugin_data.<customer_code>``, index 必须 >= 0
+
+    合并语义:
+      - 目标 dict 不存在 → 初始化为空 dict
+      - 浅合并 data 进去 (新 key 覆盖旧 key, 未提及的旧 key 保留)
+      - 其它客户的 plugin_data 子键 (例: `plugin_data.other_customer`) 完全不动
+    """
+    customer_code: str
+    scope: str
+    index: Optional[int] = None
+    data: dict

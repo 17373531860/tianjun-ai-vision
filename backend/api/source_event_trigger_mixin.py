@@ -8,11 +8,43 @@ _event_count_ng_top3_steps / _event_apply_actions_and_log。
 宿主必须提供的属性: self.project_config / self.alarm_manager / self.events_log /
                   counter 状态 / 周期时间统计 / NG TOP 字典等
 宿主必须提供的方法: self._discard_empty_cycle / self.end_cycle / 等
+
+v3.13 M1.2c: 重排尾部顺序让 event_fire hook 的 suppress_alarm 来得及作用.
+  重构前: events_log → _pending_ack → alarm → router → _last_event_time → event_fire hook
+  重构后: events_log → _pending_ack → event_fire hook → resolve suppress → [alarm?] → router → _last_event_time
+  无插件场景 (registry is None / 无 handler / 默认空 dict): hook 返回 {}, suppress=False,
+  alarm 照常触发 — 与重构前严格等价 (基线测试 test_trigger_event_baseline_M1_2c.py 守护).
 """
 from __future__ import annotations
 
 import time
 import traceback
+from typing import Any
+
+
+# ============================================================
+# v3.13 M1.2c: 业务侧消费 event_fire returnable 的纯函数辅助
+# 抽成纯函数让测试可独立验证消费契约 (不需要起完整 VideoSourceManager).
+# ============================================================
+
+
+def _resolve_event_fire_suppress_alarm(plugin_result: Any) -> bool:
+    """解析 event_fire returnable, 决定是否抑制本次 alarm 触发.
+
+    安全侧默认: **任何不显式 True 的值都不抑制** (宁可误报警也不漏报警).
+    严格 ``is True`` 而非 truthy: 防 ``"false"`` 字符串 / ``1`` 整数 / 任意非 bool truthy
+    被误识为抑制. 这是与 M1.2b ``override_result`` 的细微差异 — 后者用枚举 "OK"/"NG"
+    严格匹配, 这里用 ``is True`` 严格匹配.
+
+    契约:
+        - plugin_result 非 dict → False (默认不抑制)
+        - ``suppress_alarm`` 缺省 / None / 非 True → False
+        - 仅 ``plugin_result.get("suppress_alarm") is True`` 才抑制
+        - handler 异常已被 fire 层吞 → 不会到达此处
+    """
+    if not isinstance(plugin_result, dict):
+        return False
+    return plugin_result.get("suppress_alarm") is True
 
 
 class EventTriggerMixin:
@@ -132,6 +164,10 @@ class EventTriggerMixin:
                 should_warn_no_barcode = bool(has_scanner and not scan_disabled)
         except Exception:
             should_warn_no_barcode = False
+
+        # v3.13 M1.1: event_fire 插件 hook 在 end_cycle 后 fire, 但 cycle_id 在 end_cycle
+        # 内会被清成 None, 这里先把"被结算的那个 cycle_id"缓存到局部变量供 hook ctx 用.
+        _event_cycle_id = self.current_cycle_id
 
         # 结束当前周期并记录到数据库
         self.end_cycle(
@@ -267,17 +303,57 @@ class EventTriggerMixin:
                   f"(id={self._pending_ack_event_id}, timeout={ack_timeout_sec}s, "
                   f"channel_id={self.channel_id})")
         
-        # 触发报警器（如果已配置）— 按通道路由到对应工位的指示灯
+        # v3.13 M1.2c: event_fire 插件 hook **上移到 alarm 之前**, 让 suppress_alarm
+        # 来得及作用. event_kind 三档: 1=OK / 2=NG / 其它=CUSTOM.
+        # cycle_id 用上面缓存的 _event_cycle_id (self.current_cycle_id 已被 end_cycle 清零).
+        # 注: end_cycle / 计数 / MES Hub / events_log 已经在上面完成, "事件已基本完整发生";
+        # 仅 alarm / router / _last_event_time 三个尾部副作用还没发生, 这正是 hook 能影响的部分.
+        if current_event_id == 1:
+            _event_kind = "OK"
+        elif current_event_id == 2:
+            _event_kind = "NG"
+        else:
+            _event_kind = "CUSTOM"
+        suppress_alarm = False
         try:
-            from backend.api.alarm import alarm_router
-            event_type = f'event{current_event_id}'
-            alarm_router.trigger_alarm(event_type, channel_id=self.channel_id)
+            from backend.plugin_system.hook_dispatch import fire_plugin_hook
+            plugin_result = fire_plugin_hook("event_fire", "post_event", "post", {
+                "channel_id": self.channel_id,
+                "cycle_id": _event_cycle_id,
+                "event_id": current_event_id,
+                "event_name": event.get('name', ''),
+                "event_kind": _event_kind,
+                "reason": reason,
+                "had_workpiece": had_workpiece,
+                "should_warn_no_barcode": should_warn_no_barcode,
+                "require_ack": require_ack,
+            })
+            # M1.2c: 消费 suppress_alarm 字段. 见 _resolve_event_fire_suppress_alarm 契约.
+            # 无插件 / 无 handler / handler 不返 suppress_alarm → 安全侧默认 False, alarm 照常触发.
+            suppress_alarm = _resolve_event_fire_suppress_alarm(plugin_result)
+            if suppress_alarm:
+                print(
+                    f"[Plugin] event_fire suppress_alarm 生效, 跳过 alarm 触发 "
+                    f"(channel_id={self.channel_id}, event_id={current_event_id}, "
+                    f"reason={reason!r})",
+                    flush=True,
+                )
         except Exception as e:
-            print(f"触发报警失败: {e}")
+            # fire_plugin_hook 自身已 swallow, 这里兜一层 import 层异常.
+            # 异常路径下 suppress_alarm 维持初值 False — alarm 照常触发 (安全侧默认).
+            print(f"[Plugin] event_fire hook 触发异常 (已隔离, 主流程继续): {e}")
+
+        # M1.2c: 触发报警器 (按 suppress_alarm 决定). 抽到 _dispatch_event_alarm 让
+        # 测试可静态扫描 + 单独覆盖 alarm 触发逻辑.
+        # 无插件场景下 suppress_alarm=False, _dispatch_event_alarm 与 M1.2c 重构前的
+        # 274-280 行严格等价 (基线测试 test_trigger_event_baseline_M1_2c.py 守护).
+        if not suppress_alarm:
+            self._dispatch_event_alarm(current_event_id)
 
         # feat/multi-model-roi-link: 通知 InferenceRouter, 让监听本事件的副模型下次跑一次.
         # 投递两个 key: 'event_<id>' (稳定, 推荐) + 事件名 (人类可读, 兜底).
         # 副模型 schedule.events 中只要任一命中即可被调度.
+        # M1.2c 不变: router 调用仍在 alarm 之后 (维持 v3.10.1 settle_dedup 锚点契约).
         try:
             router = getattr(self, '_router', None)
             if router is not None:
@@ -290,6 +366,28 @@ class EventTriggerMixin:
             print(f"router.trigger_event 失败: {e}")
 
         # v3.10.x: 防重复结算时间窗口锚 - 仅在事件实际触发成功后记录,
-        # 抑制路径不更新, 避免反复触发反复延长窗口.
+        # 抑制路径 (settle_dedup / ng_protect / _pending_ack / event 未找到) 不更新,
+        # 避免反复触发反复延长窗口.
+        # M1.2c 不变: anchor 仍在 alarm + router 之后, 维持 v3.10.1 契约.
         self._last_event_time = time.time()
+
         return True
+
+    def _dispatch_event_alarm(self, current_event_id) -> None:
+        """触发本通道 alarm (v3.13 M1.2c 抽出).
+
+        与 M1.2c 重构前 _trigger_event 中 274-280 行的 alarm 触发逻辑**严格等价**:
+        - event_type 格式 ``f'event{current_event_id}'`` 不变
+        - channel_id 来自 self.channel_id 不变
+        - alarm 串口失败 swallow + print 不变
+
+        抽出原因:
+        - 让 M1.2c 的 ``if not suppress_alarm: self._dispatch_event_alarm(...)`` 语义清晰
+        - 让基线测试可静态扫描 / 单独 monkey-patch 验证 alarm 调用
+        """
+        try:
+            from backend.api.alarm import alarm_router
+            event_type = f'event{current_event_id}'
+            alarm_router.trigger_alarm(event_type, channel_id=self.channel_id)
+        except Exception as e:
+            print(f"触发报警失败: {e}")

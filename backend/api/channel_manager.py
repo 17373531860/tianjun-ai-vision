@@ -128,6 +128,20 @@ class ChannelManager:
                     alarm_router.on_channel_removed(cid)
                 except Exception as e:
                     print(f"[ChannelManager] Error cleaning AlarmRouter for ch{cid}: {e}")
+                # v3.13 RFC 10: 清理 ChannelGroupCoordinator 中该通道的反向索引和 pending override
+                # 避免降再升工位时残留状态导致新通道莫名被联动 NG.
+                try:
+                    from backend.services.channel_group_coordinator import get_coordinator as _get_cg_coord
+                    _get_cg_coord().on_channel_removed(cid)
+                except Exception as e:
+                    print(f"[ChannelManager] Error cleaning ChannelGroupCoordinator for ch{cid}: {e}")
+                # v3.14 RFC 11: 清理 WorkpieceFlowCoordinator 中该通道的反向索引.
+                # in-flight runs 不动 (它们走 timeout 自然终态).
+                try:
+                    from backend.services.workpiece_flow_coordinator import get_coordinator as _get_wfc_coord
+                    _get_wfc_coord().on_channel_removed(cid)
+                except Exception as e:
+                    print(f"[ChannelManager] Error cleaning WorkpieceFlowCoordinator for ch{cid}: {e}")
 
             # Create missing channels
             for cid in range(count):

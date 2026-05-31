@@ -13,7 +13,7 @@
  *   - fetch /api/v1/plugins/active/assets/{entry} 拿 ESM 文本
  *   - new Blob → URL.createObjectURL → dynamic import
  *   - 调 module.default.register({ host, registry })
- *     - host = { vue, pinia, router, i18n }   ← 让插件不需要 import "vue"
+ *     - host = { vue, pinia, router, i18n, echarts }   ← 让插件不需要 import "vue" / "echarts"
  *     - registry = {
  *         routes: { add(routeOpts), remove(name) }   → vue-router 4 addRoute/removeRoute
  *         menus:  { add(menuOpts), remove(path) }    → usePluginThemeStore.pluginMenus
@@ -28,6 +28,7 @@
 import * as Vue from "vue";
 import * as Pinia from "pinia";
 import * as VueI18n from "vue-i18n";
+import * as ECharts from "echarts";
 import api from "@/api/index";
 import { usePluginThemeStore } from "@/store/usePluginThemeStore";
 
@@ -98,6 +99,10 @@ export async function loadActivePluginFrontend(router) {
     pinia: Pinia,
     i18n: _i18nInstance ? VueI18n : null,
     router,
+    echarts: ECharts,
+    // 已配 baseURL + 鉴权拦截器的 axios 实例, 让插件前端能调自己的后端路由
+    // (/api/v1/plugins/<cc>/...). 纯附加能力, 不改任何既有行为.
+    api,
     customerCode: manifest.customer_code,
     pluginVersion: manifest.plugin_version,
   };
@@ -146,6 +151,63 @@ export async function loadActivePluginFrontend(router) {
           }
         } catch (e) {
           console.warn(`[PluginLoader] store register 失败 ${id}:`, e);
+        }
+      },
+    },
+    // v3.13 M2.2a: 主程序 UI Slot 注册接口
+    // 插件用 registry.slots.register('monitor.step-cell.duration', MyCellComponent) 覆盖
+    // 主程序对应 <TjSlot name="monitor.step-cell.duration" :duration="..."> 的默认实现.
+    // 同名后注册覆盖前注册 (单 active plugin 设计).
+    slots: {
+      register(slotName, component) {
+        if (!slotName) {
+          console.warn("[PluginLoader] slot register 失败: slotName 必填");
+          return;
+        }
+        if (!component) {
+          console.warn(`[PluginLoader] slot register 失败 ${slotName}: component 必填`);
+          return;
+        }
+        try {
+          themeStore.addPluginSlot(slotName, component);
+          console.log(`[PluginLoader] slot registered: ${slotName}`);
+        } catch (e) {
+          console.warn(`[PluginLoader] slot register 失败 ${slotName}:`, e);
+        }
+      },
+      unregister(slotName) {
+        try {
+          themeStore.removePluginSlot(slotName);
+        } catch (e) {
+          console.warn(`[PluginLoader] slot unregister 失败 ${slotName}:`, e);
+        }
+      },
+    },
+    // v3.13 M2.2b/M3.4: 配置面板 tab 注入 API
+    //   registry.tabs.register('settings', { key: 'customer-rule', label: '客户规则', component: MyComp })
+    //   scope: 'settings' | 'project'
+    tabs: {
+      register(scope, tab) {
+        if (!scope || !tab || !tab.key || !tab.label) {
+          console.warn("[PluginLoader] tab register 失败: scope/key/label 必填", { scope, tab });
+          return;
+        }
+        if (scope !== "settings" && scope !== "project") {
+          console.warn(`[PluginLoader] tab register 失败: scope 必须是 settings/project (got ${scope})`);
+          return;
+        }
+        try {
+          themeStore.addPluginTab(scope, tab);
+          console.log(`[PluginLoader] ${scope} tab registered: ${tab.key} (${tab.label})`);
+        } catch (e) {
+          console.warn(`[PluginLoader] tab register 失败 ${tab.key}:`, e);
+        }
+      },
+      unregister(scope, key) {
+        try {
+          themeStore.removePluginTab(scope, key);
+        } catch (e) {
+          console.warn(`[PluginLoader] tab unregister 失败 ${scope}.${key}:`, e);
         }
       },
     },

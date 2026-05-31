@@ -1,0 +1,20 @@
+{
+  "plugin.fujian_jinlong.title": "天军科技 AI 视觉检测系统",
+  "plugin.fujian_jinlong.station": "工位",
+  "plugin.fujian_jinlong.total_count": "检测次数",
+  "plugin.fujian_jinlong.ok_count": "OK 次数",
+  "plugin.fujian_jinlong.ng_count": "NG 次数",
+  "plugin.fujian_jinlong.yield_rate": "合格率",
+  "plugin.fujian_jinlong.ng_steps": "NG 步骤",
+  "plugin.fujian_jinlong.sop_card": "SOP 工艺卡片",
+  "plugin.fujian_jinlong.step_stats": "步骤统计",
+  "plugin.fujian_jinlong.btn_start": "开始",
+  "plugin.fujian_jinlong.btn_stop": "停止",
+  "plugin.fujian_jinlong.btn_standby": "待机",
+  "plugin.fujian_jinlong.btn_reset": "清零",
+  "plugin.fujian_jinlong.status_detecting": "检测中",
+  "plugin.fujian_jinlong.status_standby": "待机",
+  "plugin.fujian_jinlong.status_stopped": "停止",
+  "plugin.fujian_jinlong.no_project": "未绑定项目",
+  "plugin.fujian_jinlong.no_steps": "暂无步骤"
+}

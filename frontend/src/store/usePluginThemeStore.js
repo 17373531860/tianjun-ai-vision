@@ -42,12 +42,28 @@ export const usePluginThemeStore = defineStore('plugin-theme', {
     pluginMenus: [],
     // pluginRoutes: [{ path, name, ... }] (仅记录, vue-router 真挂在 router 实例)
     pluginRoutes: [],
+    // v3.13 M2.2a: 插件注册的 slot 组件 (slot name → Vue Component).
+    // 单 active 插件设计 = 每个 slot name 只允许一个组件; 同名后注册覆盖前注册.
+    // 用 markRaw 防 Vue reactive proxy 包 Component 引用 (避免性能损耗).
+    pluginSlots: {},
+    // v3.13 M2.2a: 插件 manifest.frontend.ui_hidden — slot name 列表.
+    // 命中时 <TjSlot> 渲染 null (连默认内容都不渲染), 实现"硬隐藏"语义.
+    uiHidden: [],
+    // v3.13 M2.2b/M3.4: 客户插件注入的 Settings / Project tab 列表.
+    // 元素: { key, label, component? } — component 用 plugin loader 注册的 slot 也可以,
+    // 直接挂 component 引用更常用 (经 markRaw 防 reactive 代理).
+    settingsTabs: [],
+    projectTabs: [],
   }),
 
   getters: {
     isActive: (s) => Boolean(s.activeCustomerCode),
     isMenuHidden: (s) => (path) => Array.isArray(s.hiddenMenus) && s.hiddenMenus.includes(path),
     sortedPluginMenus: (s) => [...s.pluginMenus].sort((a, b) => (a.order ?? 999) - (b.order ?? 999)),
+    // v3.13 M2.2a: TjSlot 内部用 — slot 是否在 ui_hidden 列表 / 是否有插件覆盖
+    isSlotHidden: (s) => (name) => Array.isArray(s.uiHidden) && s.uiHidden.includes(name),
+    getSlotComponent: (s) => (name) => s.pluginSlots[name] || null,
+    registeredSlotNames: (s) => Object.keys(s.pluginSlots),
   },
 
   actions: {
@@ -71,6 +87,10 @@ export const usePluginThemeStore = defineStore('plugin-theme', {
         this.appTitle = theme.app_title || null;
         this.cssVariables = theme.css_variables || {};
         this.hiddenMenus = Array.isArray(hidden) ? hidden : [];
+
+        // v3.13 M2.2a: 把 manifest.frontend.ui_hidden 应用到 store
+        const uiHidden = data?.frontend?.ui_hidden || [];
+        this.uiHidden = Array.isArray(uiHidden) ? uiHidden : [];
 
         // assets 路径：相对于插件包根目录, 通过 /api/v1/plugins/active/assets/{path}
         if (theme.logo) {
@@ -134,6 +154,57 @@ export const usePluginThemeStore = defineStore('plugin-theme', {
       this.pluginRoutes = this.pluginRoutes.filter((r) => r.name !== name);
     },
 
+    // v3.13 M2.2a: slot 注册/注销 (plugin loader 用)
+    addPluginSlot(name, component) {
+      if (!name || !component) return;
+      // markRaw 避免 Pinia 把 Vue Component 当 reactive data 来代理
+      // (Component 引用本身是不变的, 不需要 deep watch)
+      import('vue').then(({ markRaw }) => {
+        this.pluginSlots[name] = markRaw(component);
+      });
+    },
+
+    removePluginSlot(name) {
+      if (this.pluginSlots[name]) {
+        delete this.pluginSlots[name];
+      }
+    },
+
+    // v3.13 M2.2b/M3.4: tab 注入 (plugin loader 用)
+    addPluginTab(scope, tab) {
+      if (!scope || !tab || !tab.key || !tab.label) return;
+      const target = scope === 'settings' ? this.settingsTabs : (scope === 'project' ? this.projectTabs : null);
+      if (!target) return;
+      // 同 key 去重 (新覆盖旧)
+      const idx = target.findIndex((t) => t.key === tab.key);
+      const payload = {
+        key: tab.key,
+        label: tab.label,
+        component: tab.component || null,
+      };
+      // 把 component 标 raw 避免 Pinia reactive 代理 Vue Component
+      if (payload.component) {
+        import('vue').then(({ markRaw }) => {
+          payload.component = markRaw(payload.component);
+          if (idx >= 0) {
+            target.splice(idx, 1, payload);
+          } else {
+            target.push(payload);
+          }
+        });
+      } else {
+        if (idx >= 0) target.splice(idx, 1, payload);
+        else target.push(payload);
+      }
+    },
+
+    removePluginTab(scope, key) {
+      const target = scope === 'settings' ? this.settingsTabs : (scope === 'project' ? this.projectTabs : null);
+      if (!target) return;
+      const idx = target.findIndex((t) => t.key === key);
+      if (idx >= 0) target.splice(idx, 1);
+    },
+
     /** 主程序退出 / 测试用：恢复默认外观。 */
     _resetTheme() {
       // 撤销 CSS 变量
@@ -152,6 +223,10 @@ export const usePluginThemeStore = defineStore('plugin-theme', {
       this.activeCustomerCode = null;
       this.pluginMenus = [];
       this.pluginRoutes = [];
+      this.pluginSlots = {};
+      this.uiHidden = [];
+      this.settingsTabs = [];
+      this.projectTabs = [];
       this._removeInjectedThemeCss();
       this._applyDocumentTitle();
       this._applyFavicon();

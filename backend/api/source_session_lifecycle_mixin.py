@@ -22,12 +22,87 @@ import os
 import time
 import uuid
 import traceback
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 
 from backend.db.database import SessionLocal
 from backend.models.models import DetectionSession, DetectionCycle, StepRecord, DataExportSetting
 from sqlalchemy import func
+
+
+# ============================================================
+# v3.13 M1.2b: 业务侧消费 returnable hook 返回值的纯函数辅助
+# 抽成纯函数让测试可独立验证 (不需要起完整 VideoSourceManager).
+# ============================================================
+
+
+def _resolve_pre_cycle_end_overrides(
+    original_is_good: bool,
+    original_reason: Optional[str],
+    plugin_result: Any,
+) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+    """解析 pre_cycle_end returnable, 算出最终 (is_good, reason, extra_counters).
+
+    返回:
+        final_is_good:        被插件覆盖后的判定 (override_result 缺位 → 原值)
+        final_reason:         result_reason; override 发生时追加 ``[plugin override: A → B]``
+                              痕迹便于客户现场追溯
+        plugin_extra_counters: extra_counters 字典 (M1.2b 仅日志, 待 M3.3 落 DB)
+
+    契约:
+        - plugin_result 非 dict / 缺 override_result → 返回原值
+        - override_result 取值仅 "OK" / "NG", 其它值忽略 (含小写 / None)
+        - extra_counters 必须 dict, 否则视为缺失 (None / 任意非 dict 都被丢弃)
+    """
+    final_is_good = bool(original_is_good)
+    final_reason = original_reason
+    extra: Optional[Dict[str, Any]] = None
+
+    if not isinstance(plugin_result, dict):
+        return final_is_good, final_reason, extra
+
+    override = plugin_result.get("override_result")
+    if override in ("OK", "NG"):
+        new_is_good = (override == "OK")
+        if new_is_good != bool(original_is_good):
+            final_is_good = new_is_good
+            tag = f"[plugin override: {('OK' if original_is_good else 'NG')} → {override}]"
+            if original_reason:
+                final_reason = f"{original_reason} {tag}"
+            else:
+                final_reason = tag
+
+    ec = plugin_result.get("extra_counters")
+    if isinstance(ec, dict) and ec:
+        extra = ec
+
+    return final_is_good, final_reason, extra
+
+
+def _resolve_step_change_warn(
+    plugin_result: Any,
+) -> Tuple[bool, str]:
+    """解析 step_change returnable, 算出 (warn_violated, warn_label).
+
+    返回:
+        warn_violated: bool, 是否被插件标记为警告
+        warn_label:    警告标签 (例 ``"yellow"`` / ``"near_limit"`` / ``""``)
+
+    契约:
+        - plugin_result 非 dict → (False, "")
+        - warn_threshold_violated falsy → (False, "") 即使 warn_label 有值
+        - warn_label 非 None 强转 str
+    """
+    if not isinstance(plugin_result, dict):
+        return False, ""
+
+    warn_violated = bool(plugin_result.get("warn_threshold_violated"))
+    if not warn_violated:
+        return False, ""
+
+    raw_label = plugin_result.get("warn_label")
+    label = str(raw_label) if raw_label else ""
+    return True, label
 
 
 # 会话标识合法性: 1~64 字符, 不允许文件路径/通配符等
@@ -256,6 +331,30 @@ class SessionLifecycleMixin:
             else:
                 print(f"end_session: 未找到会话 ID={session_id}")
             
+            # v3.13: session_end 插件 hook — session 已写库 + 统计已聚合, db 即将关闭.
+            # 在 MES Hook 之前触发, 让插件能拿到完整统计快照 (与 cycle_end 时序对齐).
+            # 字段名为契约一部分: 改名要进 changelog + 升级 plugin SDK 测试.
+            session_ctx_total = session.total_cycles if (session and session.total_cycles is not None) else 0
+            session_ctx_good = session.good_cycles if (session and session.good_cycles is not None) else 0
+            session_ctx_ng = session.ng_cycles if (session and session.ng_cycles is not None) else 0
+            try:
+                from backend.plugin_system.hook_dispatch import fire_plugin_hook
+                fire_plugin_hook("session_end", "post_session", "post", {
+                    "channel_id": self.channel_id,
+                    "session_id": session_id,
+                    "session_uuid": session_uuid,
+                    "total_cycles": session_ctx_total,
+                    "good_cycles": session_ctx_good,
+                    "ng_cycles": session_ctx_ng,
+                    "avg_cycle_time": session.avg_cycle_time if session else None,
+                    "min_cycle_time": session.min_cycle_time if session else None,
+                    "max_cycle_time": session.max_cycle_time if session else None,
+                    "counters_snapshot": dict(session.counters_snapshot) if (session and session.counters_snapshot) else {},
+                    "project_id": self.project_config.get("id") if self.project_config else None,
+                })
+            except Exception as e:
+                print(f"[Plugin] session_end hook 触发异常 (已隔离, 主流程继续): {e}")
+
             db.close()
             
             # MES Hook: Session 结束
@@ -394,6 +493,11 @@ class SessionLifecycleMixin:
             if hasattr(self, 'step_cycle_segments'):
                 self.step_cycle_segments = {}
 
+            # v3.13 M1.2b: 清上一周期插件 step_change warn 缓存. cache key 是 step_record_id
+            # (全局唯一), 跨周期不会撞 key, 但仍然清掉避免内存无界增长 (持续运行的工控机).
+            if hasattr(self, '_plugin_step_warn_cache'):
+                self._plugin_step_warn_cache = {}
+
             # v3.9.x D 方案: 累计可见时长字典也在新周期起步时清, 跟 step_cycle_durations 同步
             # 周期间隙保留 (前端展示期内还能看见上一周期 PT), 新周期起立刻清进入下一轮.
             if hasattr(self, 'step_visible_seconds'):
@@ -432,7 +536,37 @@ class SessionLifecycleMixin:
                         )
                 except Exception as e:
                     print(f"[MES] cycle_start hook 异常: {e}")
-            
+
+            # v3.13 M1.1: cycle_start 插件 hook — cycle 已落库 + MES Hook 已通知, 此时
+            # "新周期开始"事件已完整发生; 录像启动放在 hook 之后 (录像失败不影响 cycle 已开始).
+            from backend.plugin_system.hook_dispatch import fire_plugin_hook
+            fire_plugin_hook("cycle_start", "post_cycle_start", "post", {
+                "channel_id": self.channel_id,
+                "cycle_id": cycle.id,
+                "cycle_uuid": cycle_uuid,
+                "session_id": self.current_session_id,
+                "cycle_number": self.current_cycle_number,
+                "project_id": self.project_config.get("id") if self.project_config else None,
+                "start_time": now.isoformat() if now else None,
+            })
+
+            # v3.14 RFC 11: 通知 WorkpieceFlowCoordinator 本通道 cycle_start.
+            # 若本通道属于某串行流水线 → 把 cycle 绑到队列首个 in-flight run 对应工位.
+            # 不属于任何 flow 时直接 return, 零差异. 任何异常隔离.
+            try:
+                from backend.services.workpiece_flow_coordinator import get_coordinator as _get_wfc_coord2
+                _wfc_db = self._get_db_session()
+                try:
+                    _get_wfc_coord2().on_cycle_started(
+                        channel_id=self.channel_id,
+                        cycle_id=cycle.id,
+                        db=_wfc_db,
+                    )
+                finally:
+                    _wfc_db.close()
+            except Exception as _e_wfc:
+                print(f"[WorkpieceFlow] on_cycle_started 异常 (隔离, 不影响主流程): {_e_wfc}")
+
             # 开始周期视频录制
             self.start_cycle_recording()
         except Exception as e:
@@ -487,6 +621,86 @@ class SessionLifecycleMixin:
         if not self.current_cycle_id or not self.recording_enabled:
             return
 
+        # v3.13 RFC 10: 工位组联动 — pending override 强制改写本次结算结果.
+        # 客户场景: 双工位 A 站先结算 NG, 通过 coordinator 给 B 站设了 "NG" pending.
+        # B 站 end_cycle 走到这里, 拿到 NG override → 强制把 is_good 改 False.
+        # 通道不在任何组时, get_pending_override 直接返回 None, 零差异.
+        #
+        # ⚠️ v3.13.0 已知边界 (留待 v3.13.1):
+        #   当前仅改 is_good (DB 字段 + cycle.event_name 保留原值 + group_settle_result
+        #   写 "NG_BY_GROUP" 让分析侧可区分本机 NG 与联动 NG). MES Hook on_cycle_end /
+        #   cycle_end plugin hook 都用 final_is_good, 已经传 NG.
+        #
+        #   但 alarm_router / 语音 / Toast / event_fire 链路是由 _trigger_event 在结算前
+        #   触发的, 这里改写 is_good 不会重放事件链, 因此 B 通道的报警灯/语音/MES 工件
+        #   状态不会自动联动 NG. 后续 RFC 10 v3.13.1 需要决断:
+        #     a) Coordinator 持有 AlarmRouter 引用直接驱动 B 通道亮灯 (跳过事件链)
+        #     b) 约定系统级虚拟事件 id (如 __channel_group_ng__) 走 _trigger_event
+        #     c) 仅做 DB 标记 + 客户自定义插件订阅 channel_group_settle_start hook 自己实现
+        #   v3.13.0 选 c (零侵入) — 客户可以写一个简单插件订阅 channel_group_settle_start,
+        #   调 PluginHost.trigger_alarm(channel_id) 自己驱动 B 灯.
+        try:
+            from backend.services.channel_group_coordinator import get_coordinator as _get_cg_coord
+            _override = _get_cg_coord().get_pending_override(self.channel_id)
+            if _override is not None:
+                _override_is_good = (_override == "OK")
+                if _override_is_good != is_good:
+                    print(
+                        f"[ChannelGroup] ch{self.channel_id} 结算被组级联动覆盖: "
+                        f"{'OK' if is_good else 'NG'} → {_override}",
+                        flush=True,
+                    )
+                    is_good = _override_is_good
+        except Exception as _e:
+            print(f"[ChannelGroup] get_pending_override 异常 (隔离, 不影响主流程): {_e}")
+
+        # v3.13 M1.2b: pre_cycle_end 插件 hook — 结算结果已定 (is_good 入参), 但写库 +
+        # 副作用 (PT flush / 录像收尾 / MES 推送 / 报警联动) 都还没发生. M1.2a 起返回的
+        # returnable dict 让插件可强制改写结算结果 (override_result OK/NG). 这里消费它,
+        # 所有下游 (DB / MES / 周期性强制动作 / cycle_end hook ctx) 都看 final_*.
+        original_is_good = bool(is_good)
+        final_is_good = original_is_good
+        final_reason = reason
+        plugin_extra_counters: Optional[Dict[str, Any]] = None
+        try:
+            from backend.plugin_system.hook_dispatch import fire_plugin_hook
+            plugin_result = fire_plugin_hook("pre_cycle_end", "pre_cycle", "pre", {
+                "channel_id": self.channel_id,
+                "cycle_id": self.current_cycle_id,
+                "session_id": self.current_session_id,
+                "is_good": original_is_good,
+                "result": "OK" if original_is_good else "NG",
+                "judgement": "OK" if original_is_good else "NG",
+                "event_id": event_id,
+                "event_name": event_name,
+                "reason": reason,
+                "project_id": self.project_config.get("id") if self.project_config else None,
+                "step_sequence": list(self.current_cycle_steps) if hasattr(self, "current_cycle_steps") else [],
+            })
+
+            # 抽到纯函数让测试可独立验证消费契约 (见本文件顶部 _resolve_pre_cycle_end_overrides).
+            final_is_good, final_reason, plugin_extra_counters = _resolve_pre_cycle_end_overrides(
+                original_is_good=original_is_good,
+                original_reason=reason,
+                plugin_result=plugin_result,
+            )
+
+            if final_is_good != original_is_good:
+                print(
+                    f"[Plugin] pre_cycle_end override 生效: cycle_id={self.current_cycle_id} "
+                    f"{('OK' if original_is_good else 'NG')} → {('OK' if final_is_good else 'NG')}",
+                    flush=True,
+                )
+            if plugin_extra_counters:
+                # DetectionCycle 没有 plugin_data 字段, 这里仅日志; M3.3 落字段后再写 DB.
+                print(
+                    f"[Plugin] pre_cycle_end extra_counters (M1.2b 仅日志, 待 M3.3 落库): "
+                    f"cycle_id={self.current_cycle_id} keys={sorted(plugin_extra_counters.keys())}",
+                    flush=True,
+                )
+        except Exception as e:
+            print(f"[Plugin] pre_cycle_end hook 触发异常 (已隔离, 主流程继续): {e}")
+
         # v3.8.x: 在 stop_recording / history 快照 之前，把还在画面里的步骤 PT 主动写入累计字典。
         # 解决 NG 周期下 D 步骤直接结算时 PT 显示 '--' 的客户报障（详见 _flush_active_steps_pt 注释）。
         self._flush_active_steps_pt()
@@ -503,28 +717,31 @@ class SessionLifecycleMixin:
             if cycle:
                 cycle.end_time = datetime.now()
                 cycle.duration = (cycle.end_time - cycle.start_time).total_seconds()
-                cycle.is_good = is_good
+                # M1.2b: 走 final_* (可能被 pre_cycle_end 插件 override). event_id /
+                # event_name 暂不在 returnable 白名单, 维持原值; 真要改"是哪个事件触发"
+                # 需要 M2 / M3 单独设计 (会牵连前端展示语义).
+                cycle.is_good = final_is_good
                 cycle.event_id = event_id
                 cycle.event_name = event_name
-                cycle.result_reason = reason
+                cycle.result_reason = final_reason
                 cycle.step_sequence = self.current_cycle_steps.copy()
                 
                 # 记录周期结束时间，用于计算下一周期的间隔
                 self.last_cycle_end_time = cycle.end_time
                 
                 db.commit()
-                print(f"周期结束: #{self.current_cycle_number}, 结果: {'OK' if is_good else 'NG'}, 耗时: {cycle.duration:.2f}s")
+                print(f"周期结束: #{self.current_cycle_number}, 结果: {'OK' if final_is_good else 'NG'}, 耗时: {cycle.duration:.2f}s")
                 
-                # MES Hook: Cycle 结束
+                # MES Hook: Cycle 结束 — M1.2b: 走 final_*
                 if self._mes_hook:
                     try:
                         project_id = self.project_config.get('id') if self.project_config else None
                         self._mes_hook.on_cycle_end(
                             channel_id=self.channel_id,
                             cycle_id=cycle.id,
-                            is_good=is_good,
+                            is_good=final_is_good,
                             event_name=event_name,
-                            result_reason=reason,
+                            result_reason=final_reason,
                             duration=cycle.duration,
                             step_sequence=cycle.step_sequence,
                             project_id=project_id,
@@ -532,18 +749,20 @@ class SessionLifecycleMixin:
                     except Exception as e:
                         print(f"[MES] cycle_end hook 异常: {e}")
 
-                # v3.5.0: 周期性强制动作判定（每 N 轮做 E）
+                # v3.5.0: 周期性强制动作判定（每 N 轮做 E）— M1.2b: 走 final_is_good
                 # 独立 try/except，不影响 MES Hook / Scanner resume / Container 清理
                 try:
                     if hasattr(self, '_check_periodic_actions'):
                         self._check_periodic_actions(
-                            cycle.step_sequence or [], bool(is_good)
+                            cycle.step_sequence or [], bool(final_is_good)
                         )
                 except Exception as e:
                     print(f"[PeriodicActions] cycle_end 判定异常: {e}")
 
                 # v3.7 / G1.5: 触发 active 插件的 cycle_end/post_cycle/post hook.
                 # 独立 try/except — 插件抛错绝不影响主程序后续步骤 (Scanner resume / Container 清理 / 多工位联动).
+                # M1.2b: ctx.is_good / result / reason 走 final_* — 让 post_cycle 插件看到
+                # pre_cycle_end override 后的最终判定 (链式插件契约).
                 try:
                     from backend.plugin_system.manager import plugin_manager
                     if plugin_manager.registry is not None:
@@ -552,12 +771,12 @@ class SessionLifecycleMixin:
                             "cycle_id": cycle.id,
                             "cycle_uuid": cycle.cycle_uuid,
                             "session_id": cycle.session_id,
-                            "is_good": bool(is_good),
-                            "result": "OK" if is_good else "NG",
-                            "judgement": "OK" if is_good else "NG",
+                            "is_good": bool(final_is_good),
+                            "result": "OK" if final_is_good else "NG",
+                            "judgement": "OK" if final_is_good else "NG",
                             "event_id": event_id,
                             "event_name": event_name,
-                            "reason": reason,
+                            "reason": final_reason,
                             "duration": cycle.duration,
                             "step_sequence": cycle.step_sequence or [],
                             "project_id": self.project_config.get("id") if self.project_config else None,
@@ -567,6 +786,34 @@ class SessionLifecycleMixin:
                         )
                 except Exception as e:
                     print(f"[Plugin] cycle_end hook 触发异常 (已隔离, 主流程继续): {e}")
+
+                # v3.13 RFC 10: 通知 ChannelGroupCoordinator 本次结算.
+                # 触发同组联动 (synchronized_any_ng: NG → 其它成员设 pending override).
+                # 通道不在任何组时直接 return, 零差异; 任何异常都隔离, 不影响主流程.
+                try:
+                    from backend.services.channel_group_coordinator import get_coordinator as _get_cg_coord
+                    _get_cg_coord().on_cycle_settled(
+                        channel_id=self.channel_id,
+                        cycle_id=cycle.id,
+                        is_good=bool(final_is_good),
+                        db=db,
+                    )
+                except Exception as _e:
+                    print(f"[ChannelGroup] on_cycle_settled 异常 (隔离, 不影响主流程): {_e}")
+
+                # v3.14 RFC 11: 通知 WorkpieceFlowCoordinator 本次结算.
+                # 推进串行流水线状态机 (最后一站 → COMPLETED; 任一 NG + short_circuit → SHORT_CIRCUITED).
+                # 通道不在任何 flow 时直接 return, 零差异; 任何异常都隔离, 不影响主流程.
+                try:
+                    from backend.services.workpiece_flow_coordinator import get_coordinator as _get_wfc_coord
+                    _get_wfc_coord().on_cycle_settled(
+                        channel_id=self.channel_id,
+                        cycle_id=cycle.id,
+                        is_good=bool(final_is_good),
+                        db=db,
+                    )
+                except Exception as _e:
+                    print(f"[WorkpieceFlow] on_cycle_settled 异常 (隔离, 不影响主流程): {_e}")
 
                 # v2.7.16: once_per_cycle 模式下, 周期结束 (无论 OK/NG) 都让扫码器
                 # 恢复扫描, 等下一个工件的码. 模式不匹配时是 no-op, 不需要额外判断.
@@ -843,6 +1090,51 @@ class SessionLifecycleMixin:
                 'end_time': end_time,
                 'record_uuid': record_uuid
             })
+
+            # v3.13 M1.1: step_change 插件 hook — step_record 已落库 + 本地缓存已更新.
+            # 客户需求 1 (步骤耗时三档颜色) 在这里判定 warn 阈值.
+            # ctx.duration 已经是秒, 与 step_records.duration 一致.
+            #
+            # M1.2b: 消费 returnable warn_threshold_violated / warn_label 字段, 缓存到
+            # VSM 实例字典 self._plugin_step_warn_cache. cycle 结束时清空.
+            # 落 DB 等 M3.3 (StepRecord.plugin_data JSON 字段) 解锁.
+            from backend.plugin_system.hook_dispatch import fire_plugin_hook
+            step_plugin_result = fire_plugin_hook("step_change", "post_step", "post", {
+                "channel_id": self.channel_id,
+                "cycle_id": self.current_cycle_id,
+                "step_record_id": record.id,
+                "record_uuid": record_uuid,
+                "step_id": step_id,
+                "step_label": step_label,
+                "step_name": step_name or step_label,
+                "step_order": order_to_use,
+                "duration": duration,
+                "interval_from_prev": interval,
+                "confidence": confidence,
+                "is_valid": is_valid,
+            })
+
+            # M1.2b: 解析 returnable warn 字段 (见本文件顶部 _resolve_step_change_warn).
+            warn_violated, warn_label = _resolve_step_change_warn(step_plugin_result)
+            if warn_violated:
+                # 兼容: VSM 老实例可能没这字段, 用 getattr + 兜底初始化.
+                cache = getattr(self, "_plugin_step_warn_cache", None)
+                if cache is None:
+                    cache = {}
+                    self._plugin_step_warn_cache = cache
+                cache[record.id] = {
+                    "warn_label": warn_label,
+                    "step_id": step_id,
+                    "step_label": step_label,
+                    "step_order": order_to_use,
+                    "duration": duration,
+                    "record_uuid": record_uuid,
+                }
+                print(
+                    f"[Plugin] step_change warn 生效: cycle_id={self.current_cycle_id} "
+                    f"step_record_id={record.id} label={warn_label!r} step={step_label!r}",
+                    flush=True,
+                )
         except Exception as e:
             print(f"记录步骤失败: {e}")
             import traceback

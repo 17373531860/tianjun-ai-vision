@@ -1,5 +1,220 @@
 # 插件系统设计变更记录
 
+## 2026-05-28 (v3.13.1 — 全 M 收尾)
+
+### M2.2b + M3.4 + RFC 10 v3.13.1 联合交付 — 前端 slot 全接入 + 工位组完整闭环
+
+按用户「所有 M 都要做」一次性收尾全部留待项. 测试基线: 383 → 395 (新增 12 测试, 零回归).
+
+**M2.2b 主程序 7 个 slot 位置全部接入**:
+- `settings.tab.*` — Settings/index.vue 加 `v-for el-tab-pane` + `<TjSlot>` 包装, 客户插件通过 `registry.tabs.register('settings', { key, label, component })` 注入
+- `project.tab.*` — Project/index.vue 同上, ctx 含 `:project` 透传
+- `cycle-result.indicator` — Monitor toast 渲染体可被插件替换 (每个 toast 独立 slot 实例, 含 :toast :channel-id)
+- `monitor.step-cell.duration` — 步骤表"耗时"列单元格 slot (含 :step :label :status :pt-text :is-tracking-mode)
+- `monitor.step-cell.status` — 步骤表"结果"列单元格 slot (含 :step :cycle-result)
+- `monitor.layout.body` — **整体 layout 完全覆盖**: `<component v-if=layoutBodyOverride>` + 原 DOM `v-else-if=channelCount===2` 链式守门. 没插件时永远 null → 走原分支, 字节级零差异
+- `monitor.layout.footer` — 视频区底部全局状态条 / 通知 / 控制按钮 slot, 默认不渲染 (`<component v-if=layoutFooterOverride>` 兜底)
+
+**M3.4 配置面板 tab 注入 helper**:
+- `usePluginThemeStore` 加 `settingsTabs / projectTabs` state + `addPluginTab(scope, tab) / removePluginTab(scope, key)` actions
+- `usePluginLoader` registry 加 `tabs.register(scope, { key, label, component }) / unregister(scope, key)` API
+- 跟 settings.tab / project.tab slot 联动: store 提供数据, .vue 视图 v-for 渲染
+- 改 `_resetTheme` 把两 tab 列表也清空, 防切换插件残留
+
+**RFC 10 v3.13.1 完整闭环**:
+1. **报警链路联动** (rfc10_alarm):
+   - Coordinator._broadcast_ng_to_group 内调 `alarm_router.trigger_alarm("event2", channel_id=cid)` 给联动通道直驱报警
+   - 错误隔离: alarm 抛错 / 不可用不影响 pending_override 设置
+   - 修了 v3.13.0 标记的"已知边界": 现在 B 通道也会响 NG 灯 + 蜂鸣
+2. **synchronized_all_ok 策略**:
+   - 新增 `_pending_aggregations` state (group_id → 聚合状态)
+   - 任一 NG → 立即广播 (沿用 any_ng 逻辑); 所有 OK → fire done hook 标 `group_result="OK"`
+3. **timeout 机制**:
+   - 每个成员结算时启动/重置 `threading.Timer(timeout_ms/1000, _on_aggregation_timeout)` daemon 线程
+   - 聚齐 → 取消 timer + complete 路径 finalize
+   - 超时 → fallback_independent 走 `PARTIAL`, force_ng 走 `NG_BY_TIMEOUT` (给没到的成员设 NG override)
+4. **channel_group_settle_done hook**:
+   - 聚齐或超时调 `_finalize_aggregation` fire hook
+   - ctx 含 `reason / group_result / timeout_action / members_arrived / members_expected / strategy / cycle_ids`
+5. **cluster 互操作** (rfc10_cluster):
+   - `build_context_from_cycle` 输出加 `channel_group: { id, settle_result, settled_with }` 顶层字段
+   - cycle 子树同时加便利字段 `cycle.channel_group_id / group_settle_result / group_settled_with`
+   - 跨机集群聚 box 时自动透传 (BoxAggregation.cycle_context → BoxSummary.aggregated_context.stations[i].channel_group)
+6. **测试 fixture 隔离**:
+   - `reset_coordinator_for_testing` 自动调 `cleanup_timers_for_testing` 取消 Timer 线程
+   - 新加 `cleanup_timers_for_testing` 方法清 `_pending_aggregations` 防跨用例污染
+   - `on_channel_removed` 扩展: 从 pending aggregations 内移除该 channel
+
+**测试**:
+- v3.13.1 新功能: 10 测试 (`test_v3_13_1_features.py`) — 报警联动 / all_ok 4 种行为 / timer 取消 / cleanup
+- cluster 互操作: 2 测试 (`test_cluster_interop_RFC10_CG8.py`) — cycle_context channel_group 字段透传
+- 回归: 383 → 395 全过零回归 (含原 plugin_system 328 + channel_group 67)
+
+**前端验证**:
+- @vue/compiler-sfc 编译 3 个改动 .vue 零错误
+- esbuild 验证 2 个 JS 零错误
+- 没插件时 (layoutBodyOverride.value === null / settingsTabs === [] / pluginSlots === {}) 主程序行为字节级零差异
+
+## 2026-05-28 (后续)
+
+### RFC 10 v3.13.0 骨架交付 — 工位组主程序原生（含 M1.3b 全部解锁）
+
+满足客户需求 4（双工位 A NG → B 同步 NG 联动）的主程序原生实现，同时解锁 M1.3b 留下的 3 个 PluginHost 工位组 API。
+
+**新增**：
+- **`channel_groups` 表**（`backend/models/models.py:ChannelGroup`）：单机内多通道结算联动配置
+- **`detection_cycles` 加 3 列**：`channel_group_id` / `group_settled_with: JSON` / `group_settle_result: VARCHAR(8)`
+- **`ChannelGroupCoordinator` 单例**（`backend/services/channel_group_coordinator.py`）：
+  - 持有 `_groups` / `_channel_to_group` / `_pending_override`（threading.Lock 保护）
+  - `reload_groups(db)` 启动时 + CRUD 后调
+  - `on_cycle_settled(channel_id, cycle_id, is_good, db)` VSM 结算调，触发 `synchronized_any_ng` 策略广播
+  - `get_pending_override(channel_id)` take-once 语义，VSM 下次 end_cycle 取走强制覆盖
+  - `on_channel_removed(channel_id)` ChannelManager 减通道时清理反向索引 + pending
+  - `list_groups / get_group / is_channel_in_group` 查询接口（返副本，不暴露内部 dict）
+- **VSM `end_cycle` 接入**（`backend/api/source_session_lifecycle_mixin.py`）：入口 `get_pending_override` 强制改 is_good + 写库后 `on_cycle_settled`
+- **`ChannelManager.set_channel_count` 联动**：清理 MES/Alarm 旁边补 Coordinator 清理
+- **启动加载**（`backend/main.py`）：`auto_load_active_project` 后调 `reload_groups`
+- **CRUD 端点 `/api/v1/channel-groups/*`**（`backend/api/channel_groups.py`）：list / get / create / update / delete / state，5 个端点；含 master_slave / 重复名 / 通道数 / 索引校验
+- **2 个新权限位**：`system.channel_group.view` / `system.channel_group.manage`
+- **PluginHost 3 个 API 真实现**（M1.3b 解锁）：
+  - `list_channel_groups()`（无 cap）
+  - `query_channel_group(group_id)`（无 cap）
+  - `broadcast_to_channel_group(group_id, message)`（cap `runtime.channel_group_broadcast`），fire `plugin_broadcast_received` hook
+- **`channel_group_settle_start` hook**：Coordinator NG 广播时 fire，ctx 含 group_id / group_name / trigger_channel_id / trigger_cycle_id / member_channel_ids / strategy
+
+**留待 v3.13.1**：
+- `synchronized_all_ok` 完整等待逻辑
+- timeout 机制（fallback_independent / force_ng）
+- `channel_group_settle_done` hook（依赖 timeout）
+- 与 cluster 集群互操作（station_id 映射 → BoxAggregation）
+- 前端 Settings tab（等 M2.2b 一起做）
+- BDD e2e
+
+**测试**：
+- 单元测试 20（`tests/channel_group/test_coordinator_RFC10_CG2.py`）：单例 / reload / 调度 / 策略行为 / 写库 / 查询接口 / 通道清理
+- 端点测试 14（`test_api_endpoints_RFC10_CG5.py`）：CRUD + 校验
+- PluginHost API 测试 15（`test_plugin_host_apis_RFC10_CG7.py`）：list / query / broadcast（capability / 校验 / audit）
+- 修：`test_active_apis.py: test_broadcast_to_channel_group_stub_raises` 移除（stub 已实现）
+- **回归**：plugin_system 328 + channel_group 49 = **377 全过零回归**（vs 之前 329）
+
+### M2.2a 交付 — UI Slot 基础设施层（TjSlot + store + registry）
+
+- **新增 `<TjSlot>` 全局组件**（`frontend/src/components/TjSlot.vue`）：
+  - `<TjSlot name="monitor.step-cell.duration" :duration="step.duration">默认内容</TjSlot>` 三种行为：
+    * `ui_hidden` 命中 → 渲染 null（连默认都不显示）
+    * 有插件注册组件 → 渲染插件组件 + 主程序 props 透传 + default slot 可在插件组件内引用
+    * 都没有 → 渲染主程序 default slot 内容
+  - `main.js` 全局 `app.component('TjSlot', TjSlot)`，主程序任何 `.vue` 文件可直接用
+- **`usePluginThemeStore` 扩展**（`frontend/src/store/usePluginThemeStore.js`）：
+  - 加 `pluginSlots: { [name]: Component }` state（`markRaw` 防 Pinia 包 Component 引用）
+  - 加 `uiHidden: string[]` state（从 manifest.frontend.ui_hidden 应用）
+  - 加 `addPluginSlot` / `removePluginSlot` actions
+  - 加 `isSlotHidden(name)` / `getSlotComponent(name)` / `registeredSlotNames` getters
+  - `_resetTheme` 清理 `pluginSlots` + `uiHidden`
+- **`usePluginLoader` 加 `registry.slots`**（`frontend/src/composables/usePluginLoader.js`）：
+  - `registry.slots.register(slotName, component)` — 单 active 设计，同名后注册覆盖前注册
+  - `registry.slots.unregister(slotName)`
+- **manifest schema 加 `frontend.ui_hidden` 枚举**（`docs/plugin-system/design/01_manifest_schema.md` §5.3）
+- **M2.2b 7 个 slot 位置接入留待**：主程序前端无单元测试框架，4051 行 ⚠️⚠️ `Monitor/index.vue` 直接动 5 处复杂 slot 风险高；基础设施已就绪，每个 slot 接入只需 5-10 行 `.vue` 改动，等真实客户插件需求驱动按 RFC 09 §附录 E 定位逐个接入
+- **回归状态**：后端 plugin_system **329/329 通过零回归**；前端 `esbuild` transform 3 个 JS 文件零警告
+
+### M3.2 交付 — 卸载插件时可选清理命名空间数据
+
+- **背景**：现有 `DELETE /api/v1/plugins/{customer_code}` 注释明确"业务数据保留"，与 RFC 09 §6.3 / AC-M3-4 "卸载后清理 plugin_<cc>_* 全部 KV"看似冲突；本次用可选 flag 解决。
+- **新参数 `purge_data: bool = False`**（`backend/api/plugins.py: delete_plugin`）：
+  - 默认 `false` 保留业务数据（向后兼容）
+  - `true` 时调用 helper `_purge_plugin_namespaced_data` 清理：
+    * `system_configs` 中 `plugin_<cc>_*` 全部 KV（**SQL LIKE ESCAPE** 防 `_` 通配符误伤 `plugin_acmex_*` 等）
+    * Project 7 个 JSON 字段下的 `plugin_data.<customer_code>` 子键（dict 字段 + list 字段每项都扫，浅拷+整字段重赋触发 SQLAlchemy mutation 检测）
+  - **不**清理 `step_records.plugin_data`（已结束周期视为业务历史；规模可能很大）
+  - audit log 记录清理统计 `system_configs=N, projects=M`
+  - 返回体加 `purge_data` + `purge_stats` 字段
+- **10 个新单测**（`tests/plugin_system/test_purge_plugin_data_M3_2.py`）：默认保留 2 个 + SystemConfig 清理 + 命名空间隔离 3 个 + Project plugin_data 清理 3 个 + audit log + LIKE ESCAPE 严格边界
+- **回归状态**：plugin_system **329/329 通过**，零回归
+
+### M3.1 交付 — Project JSON 字段下的 `plugin_data` 透传 + 新端点
+
+- **透传守护契约**：Project 的 7 个 JSON 字段（`pipeline_config` / `steps_config` / `events_config` / `counters_config` / `alarm_config` / `detection_config` / `data_config`）下的 `plugin_data` 子键天然透传，本次加测试守护以防未来重构丢字段
+- **新端点 `PUT /api/v1/projects/{id}/plugin-data`**（`backend/api/projects.py`）：
+  - 请求体：`{customer_code, scope, index?, data}`
+  - dict 字段：写到 `<scope>.plugin_data.<customer_code>`，index 必须为 null
+  - list 字段（steps/events/counters）：写到 `<scope>[index].plugin_data.<customer_code>`，index 必填
+  - 合并语义：浅合并到 `plugin_data[customer_code]`，未提及旧 key 保留；其它客户 `plugin_data` 子键完全不动
+  - 安全：`require_perm("project.edit")` + scope 白名单 + `customer_code` 字符校验（只允许 alnum/_/-）+ list/dict index 互斥
+  - 激活态项目自动同步配置到运行时 VSM（与 update 路径一致）
+- **Pydantic schema**：`backend/schemas/project.py` 加 `ProjectPluginDataPatch`
+- **15 个新单测**（`tests/plugin_system/test_project_plugin_data_M3_1.py`）：5 个透传守护 + 4 个 PATCH 写入语义 + 6 个参数校验
+- **回归状态**：plugin_system **319/319 通过**，零回归
+
+## 2026-05-28 (后续)
+
+### M3.3 + M1.3b 部分交付 — `write_plugin_step_field` 真实现
+
+- **`step_records.plugin_data: JSON` 字段落地**（`backend/models/models.py`）+ `migrate_database()` 加 ALTER TABLE 探针（老客户库升级自动补列）
+- **`PluginHost.write_plugin_step_field(step_record_id, key, value)` 从 stub 升级为真实现**（`backend/plugin_system/registry.py`）：
+  - 需声明新 capability `runtime.step_field_write`
+  - key 必须 `plugin_<customer_code>_` 前缀（命名空间隔离，与 `write_system_config` 一致）
+  - value 必须可 JSON 序列化（lambda / 自定义类被拒，audit rejected，不抛）
+  - step_record_id 不存在 → 返 False + audit rejected
+  - **JSON 合并语义**：浅拷 + 整字段重赋（不直接 `row.plugin_data[key] = value`），防 SQLAlchemy mutation 检测失效导致不 UPDATE；不删其它 key（含其他客户插件的 key）
+  - audit log + 错误隔离与现有 4 个主动 API 一致
+- **manifest schema capabilities 词汇表加 `runtime.step_field_write` 枚举**（`docs/plugin-system/design/01_manifest_schema.md` §3.4 + §3.4.1）
+- **18 个新单测**（`tests/plugin_system/test_write_plugin_step_field_M3_3.py`）：capability 拒绝 / 命名空间拒绝 3 个 / JSON 不可序列化拒绝 3 个 / step_record 不存在拒绝 / 写入合并语义 4 个 / audit log 3 个 / 错误隔离 / 签名 + capability 字符串锁定 2 个
+- **回归状态**：plugin_system 全套 **304/304 通过**（287 + 18 新 − 1 旧 stub 测试），零回归
+- 主程序 CSV / 默认导出**不**暴露 `plugin_data`（M3.3 设计目标）；自定义导出模板可显式取 `{step.plugin_data.<key>}`
+- M1.3b 剩余项：`broadcast_to_channel_group` / `query_channel_group` / `list_channel_groups` 仍 stub，等 RFC 10 工位组主程序原生落地
+
+## 2026-05-28
+
+### Added
+
+- **新增 `design/09_v3_13_platform_upgrade_rfc.md`（749 行）** — 插件平台 v3.13 升级 RFC，覆盖 M1（业务流程双向打通：6 新 hook 接入点 / Returnable hook 契约 / PluginHost 主动 API）+ M2（UI 扩展平台化：UMD 加载 / 7 个落地 slot / 路由 prefix / tab 注入 / 主题增强）+ M3（配置扩展系统：Project plugin_data 透传 / SystemConfig 命名空间 / StepRecord plugin_data 字段 / 配置面板 helper）+ 工位组 hook 留口；7 个附录（PluginHost.frontend 完整定义 / 里程碑依赖图 / 客户需求 → AC 反向追溯表 / M2 Slot 文件级定位 / 风险表 +4 / 测试金字塔文件级估算）
+- **新增 `design/10_channel_group_rfc.md`（410 行）** — 工位组主程序原生 RFC（承接客户需求 4 双工位 NG 联动），引入 `channel_groups` 表 + `ChannelGroupCoordinator` 单线程协调器 + 4 种 settle_strategy（`synchronized_any_ng` / `synchronized_all_ok` / `independent` / `master_slave`）+ 与 cluster 跨机聋齐正交说明 + 与 RFC 09 的耦合关系
+- 主仓库 `AGENTS.md` 第三节加"产品决策原则（功能分层归位）"硬约束 + 实操工作流；第四节"必读 skill 触发表"加 `feature-placement` 指针
+- 主仓库 `.claude/skills/feature-placement/SKILL.md` — AGENTS.md 产品决策原则的可检索详细版（8 节 + 5 个典型案例 + 决策树 + 反模式自检表）
+
+### Notes
+
+- RFC 09 / 10 状态：草案，待主作者评审 + 客户场景演练后定稿
+- RFC 10 实施依赖 RFC 09 的 M1.1（hook 接入点）+ M1.3（PluginHost 主动 API）+ M3.3（StepRecord plugin_data 字段）先落地
+
+### M1.1 末项（source_status_change）+ M1.1 首批 + M1.2a + M1.2b + M1.2c + M1.3a 代码交付（2026-05-28）
+
+- **M1.1 5 个新 hook 接入点落地**：`cycle_start` / `step_change` / `event_fire` / `scan_received` / `project_activated` 已嵌入主程序对应主流程结束点；ctx 字段契约用静态分析锁定（`tests/plugin_system/test_new_hook_points_M1.py`）
+- **M1.1 末项 `source_status_change` hook 接入点落地**（原延后项现已交付）：
+  - 5 个 lifecycle 公共方法接 hook：`pause` / `resume` / `standby` / `resume_inference` / `stop`（`source_lifecycle_mixin.py`）；`resume` 3 个 + `resume_inference` 2 个 early return False 路径同步配 `resume_failed` / `resume_inference_failed` reason
+  - capture_loop 3 处异常中断点接 hook：`capture_loop_video_ended` / `capture_loop_reopen_failed` / `capture_loop_recover_failed`（`source_capture_loop_mixin.py`）
+  - 设计选择**最小侵入**：散落 30+ 处 `is_running` / `is_detecting` 写点（init / 各 source_type 启动如海康 / 工业相机 / synthetic）全部不动，仅在客户真正关心的 lifecycle API + capture_loop 断流点接 hook
+  - helper `_fire_source_status_change(before_running, before_detecting, reason)` 自带 **dedup**：状态前后 `bool()` 相等时静默 → 防同状态再赋值虚报 / early return False 路径自动 skip
+  - 备用 contextmanager `_track_status_change(reason)` 留作未来扩展使用（finally 保证异常路径也 fire）
+  - ctx 字段稳定：`{channel_id, before:{is_running,is_detecting}, after:{is_running,is_detecting}, reason, source_type}`
+  - 26 个新单测（`tests/plugin_system/test_source_status_change_hook_M1_1.py`）：helper dedup 7 个 + contextmanager 3 个 + 5 个 lifecycle 方法静态扫描 9 个 + capture_loop 2 个 + e2e fake VSM 真消费 3 个 + 签名/ctx 字段锁定 3 个
+- **M1.2a Returnable hook 契约（基础设施层）落地**：`fire_plugin_hook` 升级为返回 `Dict[str, Any]`；新增 `_merge_handler_results` + `RETURNABLE_HOOK_FIELDS` 白名单（首批锁 `pre_cycle_end` / `step_change` 两组字段）；17 个新单测 (`tests/plugin_system/test_returnable_hook.py`)
+- **M1.2b 业务侧消费 returnable hook 返回值落地**：
+  - `end_cycle` 消费 `pre_cycle_end.override_result` → 改写 `cycle.is_good`、`result_reason` 追加 `[plugin override: A → B]` 痕迹；下游 MES `on_cycle_end` / 周期性强制动作 / `cycle_end` hook ctx 全部走 final 值
+  - `record_step` 消费 `step_change.warn_threshold_violated` + `warn_label` → 缓存到 VSM 实例 `_plugin_step_warn_cache[step_record_id]` 字典；`start_cycle` 时清空避免跨周期串污染
+  - 消费逻辑抽到 `_resolve_pre_cycle_end_overrides` + `_resolve_step_change_warn` 两个纯函数（同 `source_session_lifecycle_mixin.py`），让单测可独立验证消费契约（不需要起完整 `VideoSourceManager`）
+  - 31 个新单测（`tests/plugin_system/test_returnable_hook_consumption_M1_2b.py`）：纯函数语义 / end_cycle 静态扫描 / record_step 静态扫描 / start_cycle 清缓存 / e2e fire_plugin_hook → resolve 链路
+  - **暂未消费**：`pre_cycle_end.extra_counters`（cycle 表无 plugin_data 字段，等 M3.3）
+- **M1.2c `_trigger_event` 重构 + `event_fire.suppress_alarm` 全链路落地**：
+  - 尾部重排：`events_log → _pending_ack → event_fire hook → resolve suppress → [alarm?] → router → _last_event_time`（hook 上移到 alarm 之前，suppress_alarm 才来得及作用）
+  - 抽 `_resolve_event_fire_suppress_alarm` 模块级纯函数（严格 `is True` 才抑制，防 `1` / `"true"` / `[True]` 等非 bool truthy 被误识为抑制）
+  - 抽 `_dispatch_event_alarm` 私有方法封装 alarm 触发（让 M1.2c 顺序逻辑清晰 + 测试可静态扫描）
+  - `RETURNABLE_HOOK_FIELDS["event_fire"] = {"suppress_alarm"}` 白名单升级（**改白名单 = 升 plugin SDK 主版本**）
+  - **安全侧三大兜底**：alarm 串口抛错 → swallow + anchor 仍更新；handler 抛错 → fire 返 `{}` → 不抑制；无 active 插件 → registry is None → 不抑制
+  - **19 个基线测试**（`tests/plugin_system/test_trigger_event_baseline_M1_2c.py`）：在重构前先录"无插件场景行为"，重构后跑 0 diff 守护字节级等价；覆盖 alarm 调用次数 + 入参 + 与 router/anchor 相对顺序 + 抑制路径（settle_dedup / ng_protect / `_pending_ack` / event 未找到 / no project_config）+ alarm 异常隔离 + 返回值契约
+  - **27 个业务消费测试**（`tests/plugin_system/test_returnable_hook_consumption_M1_2c.py`）：纯函数 8 个（含 truthy non-bool 严格契约）+ 白名单 2 个 + 静态扫描 5 个 + e2e fire→resolve 5 个 + e2e fake VSM 真消费 5 个 + 签名锁定 2 个
+  - 旧 M1.2a 测试同步更新：`test_returnable_hook_fields_whitelist_event_fire`（空 → `{"suppress_alarm"}`）+ `test_merge_event_fire_whitelist_keeps_suppress_alarm_drops_others`
+- **M1.3a `PluginHost` 主动 API（4 个 API + 2 个 stub）落地**：
+  - 4 个主动 API：`trigger_alarm` / `mes_push` / `read_system_config` / `write_system_config` 已实现，安全模型四层防护（capabilities 声明 / 命名空间隔离 / audit 落库 / 错误隔离）
+  - 2 个 stub：`write_plugin_step_field`（依赖 M3.3）+ `broadcast_to_channel_group`（依赖 RFC 10）— 调用即抛 `PluginNotImplementedError` 带清晰里程碑提示
+  - 新增 `PluginRuntimeError`（RuntimeError 子类，与 `PluginNotImplementedError` 区分）
+  - manifest `capabilities` 词汇表扩展 3 个枚举：`runtime.alarm_trigger` / `runtime.mes_push` / `runtime.system_config_write`（见 `design/01_manifest_schema.md` §3.4.1）
+  - 33 个新单测（`tests/plugin_system/test_active_apis.py`），覆盖异常类 / capabilities / 命名空间 / 实际效果 / audit / 错误隔离 / stub / 向后兼容
+- **回归状态**：plugin_system 全套 **287/287 通过**（M1.1 首批 134 + M1.2a 17 + M1.3a 33 + M1.2b 31 + M1.2c baseline 19 + M1.2c consumption 27 + M1.1 末项 source_status_change 26），零回归
+- **plugin SDK 主版本号建议 +1**：因 `event_fire` 白名单从 `set()` 变为 `{"suppress_alarm"}`，按 RFC 09 §4.3 契约"改白名单 = 升 SDK 主版本"。客户插件如果原本就没用 `event_fire` returnable（包括所有 M1.1/M1.2a 时期开发的插件），实际行为完全等价 — 仅作语义化版本号信号。
+- **M1.1 hook 接入点全部 6/6 落地**：原 RFC 09 §4.2 标注 6 个 hook，首批 5 个 + 末项 1 个全部交付，AGENTS.md 的 hook 表无需再标"暂缓"。
+
 ## 2026-05-10
 
 ### Added

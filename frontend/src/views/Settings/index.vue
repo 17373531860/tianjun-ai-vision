@@ -1544,6 +1544,28 @@
       <el-tab-pane label="账号鉴权">
         <AuthPanel />
       </el-tab-pane>
+
+      <!-- v3.14 RFC 11: 流水线串行 Tab -->
+      <el-tab-pane label="流水线串行">
+        <WorkpieceFlowPanel />
+      </el-tab-pane>
+
+      <!-- v3.13 M2.2b: 客户插件可注入 Tab. 通过 manifest.frontend.settings_tabs 声明 -->
+      <el-tab-pane
+        v-for="tab in pluginSettingsTabs"
+        :key="tab.key"
+        :label="tab.label"
+      >
+        <TjSlot
+          :name="`settings.tab.${tab.key}`"
+          :tab="tab"
+        >
+          <component v-if="tab.component" :is="tab.component" />
+          <div v-else class="text-gray-400 p-4">
+            插件未提供 Tab 组件 (manifest.frontend.settings_tabs[].component)
+          </div>
+        </TjSlot>
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -1553,15 +1575,21 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
 import { usePluginStore } from '@/store/usePluginStore';
+import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close, Minus } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjectDetail } from '@/api/project';
 import api from '@/api/index';
 import AuthPanel from './AuthPanel.vue';
+import WorkpieceFlowPanel from './WorkpieceFlowPanel.vue';
 
 const store = useSystemStore();
 const projectStore = useProjectStore();
 const pluginStore = usePluginStore();
+const pluginThemeStore = usePluginThemeStore();
+
+// v3.13 M2.2b: 客户插件注入的 Settings tab 列表
+const pluginSettingsTabs = computed(() => pluginThemeStore.settingsTabs || []);
 
 // GPU相关状态
 const loadingGpu = ref(false);

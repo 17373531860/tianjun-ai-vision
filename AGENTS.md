@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | v3.5.1（已发布安装包） |
+| 当前线上版本 | v3.14.0（2026-05-29 发包 — RFC 11 串行流水线结算 M0-M8 全部闭环） |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -68,6 +68,51 @@
 - 插件挂了不能让主程序起不来 → **错误隔离是底线**
 - 老客户已装的版本升级要无损 → **数据迁移谨慎，老 schema 兼容**
 
+### 产品决策原则（功能分层归位）
+
+收到任何"加功能"诉求，**动手前必须先做这个判定**：
+
+> **这是给所有客户的基础设施，还是给这一家的小众功能？**
+>
+> - 基础设施 → **进主程序**（且要给插件平台留出可扩展钩子）
+> - 小众变种 → **进客户专属插件**（绝不污染主程序）
+
+**判定细则**：
+
+| 场景 | 归位 | 例子 |
+|---|---|---|
+| 多客户都会用、影响检测/MES/数据等核心通路 | 主程序原生 + 插件平台留 hook 给变种 | 工位组（Channel Group）、新视频源类型、新结算模式 |
+| 客户级业务变种、参数定制、UI 个性化 | 客户专属插件 | 三段时间警告档、客户自定义 NG 抑制、客户特有界面布局 |
+| 客户对接自家 IT 系统（MES / BI / ClickHouse / Webhook 等） | 客户专属插件 | 推自家 ClickHouse、企业微信通知、自定义导出格式 |
+| 主程序底层架构改动（数据模型 / 状态机 / 配置 schema） | 主程序原生（必须） | 新表、新字段、状态机分支、跨工位联动 |
+| 客户要求"主程序 UI 隐藏 / 调整某块" | 客户专属插件（Tier 1 主题或 Tier 2 视图覆盖） | 客户嫌某模块碍眼想隐藏 |
+
+**反模式（坚决禁止）**：
+
+- ❌ "客户 X 急要这功能，先在主程序改，反正其他客户用不到也不影响" — **永远说不**。这是污染主程序的开端
+- ❌ "插件平台还没接入这能力，先绕过去在主程序临时加" — 应该**先升级插件平台能力面**，再做客户插件
+- ❌ "这功能小众但通用，主程序加个开关默认关" — 默认关的开关也是污染。改插件
+- ✅ "插件平台缺 X 能力 → 先给平台补 X（基础设施）→ 客户插件用 X 实现需求" — **正解**
+
+**例外**：
+
+- 主程序底层架构本身确实需要演进（新概念、新表、新状态机分支） → 走主程序原生，但**同时**给插件平台留对应 hook，**让以后这个新架构的客户级变种也能走插件**
+
+**这条原则的目的**：让主程序保持精简、稳定、面向所有客户；让插件平台承担"客户百花齐放"的成本。
+
+**实操工作流**（接到任何"加功能"诉求时，**按这个顺序走**）：
+
+1. **判定归位**：用上面的细则表判断"基础设施 / 客户变种 / 客户 IT 对接 / 底层架构 / UI 个性化"
+2. **查现有能力面**：
+   - 基础设施 → 看 modify-* / add-* 系列 skill 能不能直接接住
+   - 客户变种 → 看插件平台当前的 hook / 主动 API / slot 是否够用（参 `docs/plugin-system/design/`）
+3. **如果现有能力面够用** → 直接立项实施（用对应 skill）
+4. **如果现有能力面不够** → **先升级平台能力面**（写 RFC 或扩展现有 RFC），再做客户实施
+5. **绝不允许**："客户先要这个功能我们先在主程序临时加，后面再迁移" — 永远说不
+6. **决策必须留痕**：每个非平凡功能立项前，至少在 commit message / PR description / RFC 里写一句话说明"为什么归这一档"
+
+详细决策流程见 `.claude/skills/feature-placement/SKILL.md`。
+
 ---
 
 ## 四、必读 skill 触发表（核心导航）
@@ -108,6 +153,7 @@
 | 打包流程问题排查 | `build-release` |
 | 给客户出热补丁 | `create-hotfix` |
 | 分支合并 / 多 agent 并行协作 / 解决合并冲突 | `merge-branch` |
+| 接到新功能诉求 / 评估"这是主程序还是插件" / 立项前归位决策 | `feature-placement` |
 
 ---
 
@@ -175,17 +221,19 @@
 | `/api-keys/*` | `api_keys.py` (143) | **v3.10.0** M2M API Key 管理（SHA256 哈希 + scope） |
 | `/operators/*` | `operators.py` (74) | ⚠️ **v3.10.0 已废弃** — 全部 410 Gone，重定向 `X-Deprecated-Replacement: /api/v1/users` |
 | `/export/*` | `export_custom.py` + `export_realtime.py` | v3.5.0 自定义导出（共用前缀） |
+| `/channel-groups/*` | `channel_groups.py` | **v3.13.1** 单机内多工位**并行**联动 (RFC 10) |
+| `/workpiece-flows/*` | `workpiece_flows.py` | **v3.14.0** 单机内多工位**串行**结算 (RFC 11) |
 | `/debug/*` | `debug.py` (118) | 通道诊断 |
 
 > **常见误解**：路径前缀是**`/api/v1/`** 不是 `/api/`；旧手册写的 `/api/detection/*` 已删，等价端点在 `/api/v1/source/detection/*`。
 
-### 35 张数据库表（v3.10.0+；仅速查，详细字段见 modify-model skill）
+### 37+ 张数据库表（v3.14.0+；仅速查，详细字段见 modify-model skill）
 
-**`backend/models/models.py` 12 张**（核心检测）：
-`projects` / `models` / `model_conversions` / `tasks` / `cameras` / `daily_stats` / `system_configs` / `detection_sessions` / `detection_cycles` / `step_records` / `video_clips` / `data_export_settings`
+**`backend/models/models.py` 13 张**（核心检测）：
+`projects` / `models` / `model_conversions` / `tasks` / `cameras` / `daily_stats` / `system_configs` / `detection_sessions` / `detection_cycles` / `step_records` / `video_clips` / `data_export_settings` / `channel_groups` (v3.13.1 新增, 见模块 5b 工位组)
 
-**`backend/models/mes_models.py` 15 张**（MES）：
-`work_orders` / `batches` / `workpieces` / `workpiece_inspections` / `defect_records` / `defect_codes` / `scanner_devices` / `scan_logs` / `mes_connections` / `mes_comm_logs` / `cluster_config` / `box_aggregations` / `external_devices` / `external_device_logs` / `box_summaries`
+**`backend/models/mes_models.py` 17 张**（MES + 串行流水线）：
+`work_orders` / `batches` / `workpieces` / `workpiece_inspections` / `defect_records` / `defect_codes` / `scanner_devices` / `scan_logs` / `mes_connections` / `mes_comm_logs` / `cluster_config` / `box_aggregations` / `external_devices` / `external_device_logs` / `box_summaries` / `workpiece_flow_configs` / `workpiece_flow_runs` (v3.14.0 新增 2 张, 见模块 5c 串行流水线)
 
 **`backend/models/export_models.py` 3 张**（v3.5.0+）：
 `export_templates` / `export_realtime_rules` / `export_run_logs`
@@ -193,6 +241,10 @@
 **`backend/models/auth_models.py` 5 张**（v3.10.0+ 用户系统）：
 `users` / `roles` / `user_roles` / `session_tokens` / `api_keys`
 
+**`backend/models/plugin_models.py` 2+ 张**（v3.13+ 插件系统）：
+`plugins` / `plugin_audit_logs` (实际表数依插件平台细节, 见 `plugin_system/registry.py`)
+
+> ⚠️ **v3.13.1 起 `detection_cycles` 加 3 列**: `channel_group_id` (FK → `channel_groups.id`, SET NULL) / `group_settled_with: JSON` / `group_settle_result: VARCHAR(8)`. 同时 `step_records` 加 `plugin_data: JSON` 字段, `projects` 等 JSON 字段约定 `plugin_data.<customer_code>` 命名空间.
 > ⚠️ **v3.10.0 起 `operators` 表已 DROP**（启动迁移自动执行 `DROP TABLE IF EXISTS operators`）；`detection_sessions.operator_id` 字段保留但语义改为指向 `users.id`，FK 加 `ondelete=SET NULL`。
 > ⚠️ 产品交接手册 v2.4.0 说"22 张表"是**严重过时的**，以代码为准。
 > ⚠️ ORM 类名是 `Model`（**不**是 `MLModel`）；表名是 `models`（**不**是 `ml_models`）。
@@ -744,6 +796,11 @@
 | `pipeline_config.per_item.require_exact_count` (v3.12.0+) | bool | 严格等量周期触发：每帧检出数 == expected_count + 次步同步 ≥ 各自 expected_count 才开周期。治"漏件被算 NG" | `source_per_item_mixin.py: _per_item_should_start_cycle` |
 | `pipeline_config.per_item.disable_auto_settle` (v3.12.0+) | bool | 关掉所有自动收尾，仅 `/api/v1/source/detection/per-item-control` 的 `settle` / `force_start` 才动周期 | `source_per_item_mixin.py` + `source_routes.py: per-item-control` |
 | `steps_config[i].per_item.box_max_width / box_max_height` (v3.12.0+) | float (0-1 归一化) | post-YOLO 守门：检测框宽高超上限直接过滤，治"整个料盒/操作员手臂被识别成巨型螺丝" | `source_detect_runners_mixin.py: _passes_box_size_limit` |
+| `channel_groups` 表 + Coordinator (v3.13.1+) | 表 + 单例 | **工位组**: 跨通道 NG 联动 / synchronized_any_ng/all_ok / threading.Timer 超时 / 报警链路直驱; CRUD: `GET POST PUT DELETE /api/v1/channel-groups/*` + `system.channel_group.view/manage` 权限位; 跨机 cluster 自动透传 `cycle_context.channel_group.settle_result` | `models/models.py:ChannelGroup` / `services/channel_group_coordinator.py` / `api/channel_groups.py` |
+| `workpiece_flow_*` 表 + Coordinator (v3.14.0+) | 2 表 + 单例 | **串行流水线** (RFC 11): 单机内多工位**串行**结算; 3 种 trigger (time_window FIFO / scan / physical GPIO); 5 态状态机 (CREATED→STATION_RUNNING→…→COMPLETED/SHORT_CIRCUITED/TIMEOUT); FIFO 上限 + threading.Timer 超时; 与 ChannelGroup 同工位互斥; CRUD: `GET POST PUT DELETE /api/v1/workpiece-flows/*` + `system.workpiece_flow.view/manage` 权限; 5 个 hook + 2 个 PluginHost API (需 `runtime.workpiece_flow_observe` capability) | `models/mes_models.py:WorkpieceFlow{Config,Run}` / `services/workpiece_flow_coordinator.py` / `services/flow_triggers/*.py` / `api/workpiece_flows.py` |
+| 插件 returnable hook (v3.13.1+) | 函数 | **10 个 hook 点 + 10 个 PluginHost 主动 API**: `pre_cycle_end / step_change / event_fire` 可改业务字段 (suppress_alarm / is_good override / warn_label); `trigger_alarm / mes_push / write_plugin_step_field / list_channel_groups / broadcast_to_channel_group` 等带 capability 守门 + audit log | `plugin_system/{registry,manager,hook_dispatch}.py` |
+| `<TjSlot>` UI 槽位 (v3.13.1+) | 全局 Vue 组件 | **7 个主程序 slot**: `settings.tab.* / project.tab.* / cycle-result.indicator / monitor.step-cell.{duration,status} / monitor.layout.{body,footer}`; manifest `frontend.ui_hidden` 隐藏槽; `registry.slots.register / tabs.register` 编程式注入; 没插件时 `layoutBodyOverride === null` 走原 DOM 字节级零差异 | `frontend/src/components/TjSlot.vue` / `store/usePluginThemeStore.js` |
+| `plugin_data` JSON 命名空间 (v3.13.1+) | JSON 子树 | **Project / StepRecord / SystemConfig 三处可挂插件命名空间**, 卸载 `?purge_data=true` 自动清理 `plugin_<customer_code>_` 前缀 (SQL LIKE ESCAPE 转义 `_/%`); `PUT /api/v1/projects/{id}/plugin-data` 精准 patch `plugin_data.<customer_code>` 子树 | `models/models.py` / `api/{projects,plugins}.py` / `plugin_system/registry.py:write_plugin_step_field` |
 
 ---
 
@@ -909,6 +966,9 @@ docs/
 
 | 版本 | 日期 | 主要变更 |
 |---|---|---|
+| v3.14.0 | 2026-05-29 | **RFC 11 串行流水线结算 (Workpiece Flow Coordinator)** — M0-M8 一次性闭环. 新增「单机内多工位**串行**流水线」原生能力 (同一工件依次走 N 个工位, 全过才合格), 与 v3.13.1 工位组 (并行) / cluster (跨机) 完全独立同工位互斥. 2 张新表 (`workpiece_flow_configs/_runs`) + Coordinator 单例 (5 态状态机 + FIFO + Timer 超时) + 3 种触发器 (TimeWindowTrigger / ScanTrigger 与 scan_pair 互斥 / PhysicalTrigger 接 GPIO/Modbus) + REST API 8 端点 + 5 hook + 2 PluginHost API + Settings Tab + Monitor indicator slot. 77 测试零回归 (单元 73 + BDD 4), 福建金龙现场无扫码场景跑通 demo. |
+| v3.13.1 | 2026-05-29 | **RFC 09 插件平台升级 + RFC 10 工位组主程序原生** — 跳过 v3.13.0 骨架直接发完整闭环. M1 业务流程双向打通(10 hooks 含 returnable + 10 PluginHost APIs + capabilities + audit), M2 UI 平台化(TjSlot + 7 主程序 slot 全接入: settings/project tab + cycle-result.indicator + step-cell.duration/status + layout.body/footer), M3 配置扩展(plugin_data 命名空间 + 卸载清理 + tab 注入). RFC 10 工位组(`channel_groups` 表 + Coordinator + synchronized_any_ng/all_ok + threading.Timer 超时 + 报警链路联动直驱 alarm_router + cluster 互操作透传 cycle_context). 395 测试零回归 (plugin_system 328 + channel_group 67), 未装插件场景字节级零差异. |
+| v3.12.1 | 2026-05-29 | splash 双路径修复 (关闭手势动画时恢复 v3.8.1 旧版简单 splash + legacySplashWindow + 后端 ready 才放行主窗) + 启动动画手势相机 Todesk 错配修复 (device_label 反查 splash 端真实 deviceId, 治 webContents origin 隔离) + per_item 开周期门槛解耦/虚拟漏件 NG/工件离场互斥/中心点判定 xywh 坐标修复 + Navbar 加最小化到任务栏菜单. 内容随 v3.13.x→v3.14.0 主线合并交付, 未单独发包 |
 | **v3.12.0** | **2026-05-27** | **合并 chore/feature-verify + feat/per-item-enhance 两条主线**（跳过 v3.11.x）+ **per_item v3.12 增强四件套**：严格等量周期触发（`require_exact_count`，治漏件 NG）/ 手动结算模式（`disable_auto_settle` + `/per-item-control` API，师傅按按钮控制）/ Box 尺寸过滤（步骤级 `box_max_width/height`，治整个料盒被识别成巨型螺丝）/ per_item 检测短路放行（跟 synthetic 同等待遇）+ **SOP 卡片"图永不空"**（步骤缩略图按 label 跨周期继承，治灰白闪一下的视觉跳变）+ 5 类历史测试失败修复（conftest auth_models / MagicMock 自动属性 / 字段名漂移 / 模板英文化 / jsonschema 装依赖） |
 | v3.10.2 | 2026-05-26 | **紧急修复 machineId 多机撞 ID 漏洞**（v3.10.1 之前所有版本受影响，现场出现 7-8 台机器同 ID）+ 5 强 2 弱多源指纹 + 黑名单过滤占位值 + 强度守门 + 现场诊断脚本 + IPC 暴露指纹诊断报告 |
 | v3.10.1 | 2026-05-26 | PT 多段策略"仅首段"显示 0.0s/`--` 修复 + 严格顺序 PT 负 interval 修复 + 防重复结算开关 UI 落库 + PT/CT B 方案 v2（帧号锚跟视频源解耦客户机解码速度）+ Splash 默认关闭 + 窗口模式默认带标题栏 |
@@ -940,8 +1000,9 @@ docs/
 
 ## 十三、当前在做的事（动态，看 git log 和分支名）
 
-- 主分支 `main`：稳定版，**v3.12.0 已发布**（GitHub Action 跑了 47 分钟，安装包在中转仓库 `17373531860/tianjun-releases` v3.12.0 release，分卷 5 个文件含 `merge_installer.bat`）
-- 分支 `feat/plugin-system`：**多客户定制插件系统 + 数据库迁 PG**（在做，长期分支）
+- 主分支 `main`：刚合入 `test/v3.12.0`（**插件系统 v3.13 + 工位组 RFC10 + 串行流水线结算 RFC11/v3.14.0**），同时含 v3.12.1 客户反馈修复（splash 双路径 / Todesk 相机错配 / per_item 四件套 / 最小化菜单）
+- 主线最新能力：v3.14.0 串行流水线（Workpiece Flow）+ v3.13.1 插件平台 + 工位组
+- 分支 `feat/plugin-system`：**多客户定制插件系统 + 数据库迁 PG**（长期分支，v3.13 阶段大部分能力已合入主干）
   - 决策已敲定：迁 PG / 三档插件全做 / 签名机制 / 不做沙箱
 
 ---
@@ -956,6 +1017,6 @@ docs/
 
 ---
 
-**本文件最后更新**：2026-05-27（v3.12.0 发版同步：per_item v3.12 增强四件套 + SOP 图永不空 + 5 类测试基础设施修复）
+**本文件最后更新**：2026-05-31（test/v3.12.0 合入主干同步：插件系统 v3.13 + 工位组 RFC10 + 串行流水线结算 RFC11/v3.14.0 + v3.12.1 客户反馈修复 splash/Todesk/per_item/最小化菜单）
 **维护者**：项目主作者 + AI agents
 **事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）+ v3.9.0/v3.10.0 实测代码反推（`source_settlement_mixin.py` 1320 行 / `source_per_item_mixin.py` ~960 行 / v3.10 用户系统 ~841 行 core + 5 张新表 + 12 个 UAT 全过）

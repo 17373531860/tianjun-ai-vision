@@ -251,9 +251,13 @@ class CaptureLoopMixin:
                     elif self.source_type == 'video' and self.video_path:
                         print("[Video] 视频播放完毕，已停止")
                         self.video_ended = True
+                        _before_running, _before_detecting = True, self.is_detecting
                         self.is_running = False
                         if self.is_detecting:
                             self.stop_detection()
+                        self._fire_source_status_change(
+                            _before_running, _before_detecting, "capture_loop_video_ended"
+                        )
                         break
                     else:
                         time.sleep(0.01)
@@ -347,10 +351,22 @@ class CaptureLoopMixin:
                                     consecutive_errors = 0
                                 else:
                                     print("[捕获线程] 视频重新打开失败，停止运行")
+                                    _before_running_ce = self.is_running
+                                    _before_detecting_ce = self.is_detecting
                                     self.is_running = False
+                                    self._fire_source_status_change(
+                                        _before_running_ce, _before_detecting_ce,
+                                        "capture_loop_reopen_failed",
+                                    )
                     except Exception as recover_error:
                         print(f"[捕获线程] 恢复失败: {recover_error}")
+                        _before_running_re = self.is_running
+                        _before_detecting_re = self.is_detecting
                         self.is_running = False
+                        self._fire_source_status_change(
+                            _before_running_re, _before_detecting_re,
+                            "capture_loop_recover_failed",
+                        )
                 
                 time.sleep(0.1)  # 错误后短暂等待
         

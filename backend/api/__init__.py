@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 from backend.api import projects, models, cameras, tasks, reports, alarm
 from backend.api import system_display, export_custom, export_realtime, export_scheduled
+from backend.api import channel_groups  # v3.13 RFC 10 工位组
+from backend.api import workpiece_flows  # v3.14 RFC 11 串行流水线
 
 api_router = APIRouter()
 
@@ -14,3 +16,7 @@ api_router.include_router(system_display.router, prefix="/system", tags=["system
 api_router.include_router(export_custom.router, prefix="/export", tags=["export"])
 api_router.include_router(export_realtime.router, prefix="/export", tags=["export-realtime"])
 api_router.include_router(export_scheduled.router, prefix="/export", tags=["export-scheduled"])
+# v3.13 RFC 10: 工位组 CRUD (单机内多通道结算联动)
+api_router.include_router(channel_groups.router, prefix="/channel-groups", tags=["channel-groups"])
+# v3.14 RFC 11: 串行流水线 CRUD + 历史 run
+api_router.include_router(workpiece_flows.router, prefix="/workpiece-flows", tags=["workpiece-flows"])

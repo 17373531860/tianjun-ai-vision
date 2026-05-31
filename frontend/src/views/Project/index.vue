@@ -1024,7 +1024,8 @@
                   <div class="bg-slate-900 rounded p-3 space-y-2">
                     <div v-for="(seqStep, idx) in activeProject.sequence_order" :key="idx" class="flex items-center gap-2 bg-slate-800 p-2 rounded">
                       <span class="text-cyan-400 font-bold w-8">{{ idx + 1 }}.</span>
-                      <el-select v-model="seqStep.step_id" size="small" class="flex-1" placeholder="选择步骤">
+                      <el-select v-model="seqStep.step_id" size="small" class="flex-1" placeholder="选择步骤"
+                        @change="(val) => onSequenceStepPick(idx, val, 'sequence_order')">
                         <el-option 
                           v-for="s in nonBackupSteps" 
                           :key="s.id" 
@@ -1084,7 +1085,8 @@
                     <div class="space-y-2">
                       <div v-for="(item, idx) in (activeProject.custom_sequence_order || [])" :key="idx" class="flex items-center gap-2">
                         <span class="text-gray-400 text-xs w-6">{{ idx + 1 }}.</span>
-                        <el-select v-model="item.step_id" size="small" class="flex-1" placeholder="选择步骤">
+                        <el-select v-model="item.step_id" size="small" class="flex-1" placeholder="选择步骤"
+                          @change="(val) => onSequenceStepPick(idx, val, 'custom_sequence_order')">
                           <el-option v-for="step in nonBackupSteps" :key="step.id" :label="step.displayLabel || step.label" :value="step.id" />
                         </el-select>
                         <el-button type="danger" size="small" link @click="removeCustomSequenceStep(idx)">删除</el-button>
@@ -2181,6 +2183,29 @@
               </el-card>
             </div>
           </el-tab-pane>
+
+          <!-- v3.13 M2.2b: 客户插件可注入项目配置 Tab -->
+          <el-tab-pane
+            v-for="tab in pluginProjectTabs"
+            :key="tab.key"
+            :label="tab.label"
+            :name="`plugin-${tab.key}`"
+          >
+            <TjSlot
+              :name="`project.tab.${tab.key}`"
+              :tab="tab"
+              :project="activeProject"
+            >
+              <component
+                v-if="tab.component"
+                :is="tab.component"
+                :project="activeProject"
+              />
+              <div v-else class="text-gray-400 p-4">
+                插件未提供 Tab 组件
+              </div>
+            </TjSlot>
+          </el-tab-pane>
         </el-tabs>
       </div>
       
@@ -2234,7 +2259,9 @@
             <p class="font-bold">{{ model.name }}<span v-if="model.version" class="text-gray-400 font-normal ml-2">v{{ model.version }}</span></p>
             <p class="text-xs text-gray-400">{{ model.framework }} - {{ (model.file_size / 1024 / 1024).toFixed(2) }} MB - {{ getLabelsCount(model.labels) }} 个类别</p>
           </div>
-          <el-tag v-if="activeProject?.default_model_id === model.id" type="success">当前</el-tag>
+          <el-tag v-if="extraModelSelectingIdx >= 0
+            ? activeProject?.extra_models?.[extraModelSelectingIdx]?.model_id === model.id
+            : activeProject?.default_model_id === model.id" type="success">当前</el-tag>
         </div>
         <div v-if="modelList.length === 0" class="text-center text-gray-500 py-8">
           暂无可用模型，请先上传模型
@@ -2331,6 +2358,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, Loading, Warning, QuestionFilled } from '@element-plus/icons-vue';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
+import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjects, getProjectDetail, createProject, updateProject, deleteProject, activateProject } from '@/api/project';
 import { getModels, getAvailableFormats, convertModel, getConversionStatus, getFormatDiagnosis } from '@/api/model';
@@ -2339,6 +2367,10 @@ import { setProjectConfig } from '@/api/detection';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
+const pluginThemeStore = usePluginThemeStore();
+
+// v3.13 M2.2b: 客户插件注入的项目配置 Tab 列表
+const pluginProjectTabs = computed(() => pluginThemeStore.projectTabs || []);
 const searchQuery = ref('');
 const activeProject = ref(null);
 const activeTab = ref('basic');
@@ -2922,6 +2954,20 @@ const initProjectDefaults = (project) => {
   if (project.sequence_order === undefined) {
     project.sequence_order = pipelineConfig.sequence_order || [];
   }
+  // v3.14.x: API/脚本创建的项目常缺 sequence_order → 结算步识别失败, 严格顺序/单次接受开关不禁用
+  if (project.logic_mode === 'sequential' && (!project.sequence_order || project.sequence_order.length === 0)) {
+    const enabled = (project.steps_config || []).filter(s => s.enabled !== false && !s.is_backup && !s.backup_for);
+    if (enabled.length > 0) {
+      project.sequence_order = enabled.map(s => ({ step_id: s.id }));
+    }
+  }
+  if (project.logic_mode === 'custom' && project.custom_based_on === 'sequential'
+      && (!project.custom_sequence_order || project.custom_sequence_order.length === 0)) {
+    const enabled = (project.steps_config || []).filter(s => s.enabled !== false && !s.is_backup && !s.backup_for);
+    if (enabled.length > 0) {
+      project.custom_sequence_order = enabled.map(s => ({ step_id: s.id }));
+    }
+  }
   if (project.detection_steps === undefined) {
     project.detection_steps = pipelineConfig.detection_steps || [];
   }
@@ -3009,6 +3055,56 @@ const initProjectDefaults = (project) => {
   // v3.8.x: 严格顺序模式 - "等待结算步骤时遇到首步立刻开新周期" 开关 (默认 false)
   if (project.first_step_aborts_pending_settle === undefined) {
     project.first_step_aborts_pending_settle = pipelineConfig.first_step_aborts_pending_settle === true;
+  }
+  // 加载后同步结算步约束（与 watch(settlement_mode) 一致，避免开关仍可编辑/值为 true）
+  const canSeqSettle = project.logic_mode === 'sequential'
+    || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential');
+  if (canSeqSettle && project.steps_config?.length) {
+    if (project.settlement_mode === 'last_first') {
+      for (const step of project.steps_config) {
+        step.strict_order = false;
+      }
+      if (project.first_step_aborts_pending_settle) {
+        project.first_step_aborts_pending_settle = false;
+      }
+    } else if (project.settlement_mode === 'last_step' || project.settlement_mode === 'first_step') {
+      let seq = (project.logic_mode === 'custom' && project.custom_based_on === 'sequential')
+        ? (project.custom_sequence_order || [])
+        : (project.sequence_order || []);
+      if (!seq.length) {
+        seq = (project.steps_config || [])
+          .filter(s => s.enabled !== false && !s.is_backup && !s.backup_for)
+          .map(s => ({ step_id: s.id }));
+      }
+      const enabledIds = new Set(
+        (project.steps_config || []).filter(s => s.enabled !== false).map(s => s.id)
+      );
+      let settleId = null;
+      if (project.settlement_mode === 'last_step') {
+        for (let i = seq.length - 1; i >= 0; i--) {
+          const sid = seq[i]?.step_id;
+          if (sid != null && enabledIds.has(sid)) {
+            settleId = sid;
+            break;
+          }
+        }
+      } else {
+        for (const item of seq) {
+          const sid = item?.step_id;
+          if (sid != null && enabledIds.has(sid)) {
+            settleId = sid;
+            break;
+          }
+        }
+      }
+      const settleStep = settleId != null
+        ? project.steps_config.find(s => s.id === settleId)
+        : null;
+      if (settleStep) {
+        settleStep.strict_order = false;
+        settleStep.accept_once = false;
+      }
+    }
   }
   // Tracking mode
   if (project.tracking_cycle_strategy === undefined) {
@@ -3591,6 +3687,49 @@ const handleDeleteProject = async () => {
   }
 };
 
+// 顺序/自定义顺序: 同一 step_id 只保留最新一行, 避免下拉选新值后旧行仍占位
+const onSequenceStepPick = (rowIdx, stepId, field = 'sequence_order') => {
+  if (stepId == null || !activeProject.value) return;
+  const seq = field === 'custom_sequence_order'
+    ? activeProject.value.custom_sequence_order
+    : activeProject.value.sequence_order;
+  if (!Array.isArray(seq)) return;
+  seq.forEach((item, i) => {
+    if (i !== rowIdx && item?.step_id === stepId) {
+      item.step_id = null;
+    }
+  });
+};
+
+const _nextStepId = (stepsConfig) => {
+  let maxNum = 0;
+  for (const s of stepsConfig || []) {
+    const id = s?.id;
+    if (typeof id === 'number' && Number.isFinite(id)) {
+      maxNum = Math.max(maxNum, id);
+    } else if (typeof id === 'string') {
+      const m = id.match(/^s(\d+)$/i);
+      if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+    }
+  }
+  if (maxNum <= 0) return 1;
+  const hasStringId = (stepsConfig || []).some(s => typeof s?.id === 'string' && /^s\d+$/i.test(s.id));
+  return hasStringId ? `s${maxNum + 1}` : maxNum + 1;
+};
+
+/** 清理某副模型 slot 写入 steps_config 的步骤 (换选/删除副模型时用) */
+const _purgeStepsByFromModel = (slotName) => {
+  if (!slotName || !activeProject.value?.steps_config) return 0;
+  const orphanSteps = activeProject.value.steps_config.filter(s => s && s.from_model === slotName);
+  if (orphanSteps.length === 0) return 0;
+  for (const step of orphanSteps) {
+    try { onStepEnabledChange(step, false); } catch (_e) { /* continue */ }
+  }
+  const orphanIds = new Set(orphanSteps.map(s => s.id));
+  activeProject.value.steps_config = activeProject.value.steps_config.filter(s => !orphanIds.has(s.id));
+  return orphanSteps.length;
+};
+
 // 选择模型
 const selectModel = (model) => {
   // Step 8: 副模型选择分支 (extraModelSelectingIdx >= 0)
@@ -3598,9 +3737,12 @@ const selectModel = (model) => {
     const idx = extraModelSelectingIdx.value;
     const slot = activeProject.value?.extra_models?.[idx];
     if (slot) {
+      // v3.14.x: 同 slot 换选副模型时先清旧标签, 再写入新模型标签 (之前只 append 不删, 旧标签残留)
+      const removed = _purgeStepsByFromModel(slot.name);
       slot.model_id = model.id;
       slot.model_name = model.name;
       slot.model_version = model.version || '';
+      slot.class_filter = [];
       // d2: 选完副模型, 把 model.labels 解出存到 slot.available_labels
       // 让 class_filter 下拉能显示候选 (留空 + allow-create 仍兼容).
       let labels = [];
@@ -3624,12 +3766,11 @@ const selectModel = (model) => {
       if (slot.available_labels.length && Array.isArray(activeProject.value?.steps_config)) {
         const sc = activeProject.value.steps_config;
         const existing = new Set(sc.map(s => s && s.label).filter(Boolean));
-        const usedIds = sc.map(s => s && s.id).filter(Number.isFinite);
-        let nextId = (usedIds.length ? Math.max(...usedIds) : 0) + 1;
+        let nextId = _nextStepId(sc);
         for (const lbl of slot.available_labels) {
           if (!lbl || existing.has(lbl)) continue;
           sc.push({
-            id: nextId++,
+            id: nextId,
             label: lbl,
             displayLabel: lbl,
             enabled: true,
@@ -3655,14 +3796,16 @@ const selectModel = (model) => {
             box_max_width: 0,
             box_max_height: 0,
           });
+          nextId = typeof nextId === 'number' ? nextId + 1 : _nextStepId(sc);
           appended += 1;
         }
       }
       const appendHint = appended > 0
-        ? `, 已把 ${appended} 个新标签加进「步骤设置」`
+        ? `, 已写入 ${appended} 个新标签`
         : (slot.available_labels.length ? ', 标签均已在步骤里' : '');
+      const removedHint = removed > 0 ? ` (已替换 ${removed} 个旧标签)` : '';
       ElMessage.success(
-        `副模型 [${slot.name}] 已选: ${model.name}${labelHint}${appendHint}`
+        `副模型 [${slot.name}] 已选: ${model.name}${labelHint}${appendHint}${removedHint}`
       );
     }
     extraModelSelectingIdx.value = -1;
@@ -3685,7 +3828,10 @@ const selectModel = (model) => {
   
   if (labels && labels.length > 0) {
     activeProject.value.model_labels = labels;
-    activeProject.value.steps_config = labels.map((label, idx) => ({
+    const extraSteps = (activeProject.value.steps_config || []).filter(
+      s => s && s.from_model && s.from_model !== 'main'
+    );
+    const mainSteps = labels.map((label, idx) => ({
       id: idx + 1,
       label: label,
       displayLabel: label,
@@ -3712,10 +3858,17 @@ const selectModel = (model) => {
       box_max_width: 0,
       box_max_height: 0,
     }));
-    
-    // 自动初始化顺序
-    activeProject.value.sequence_order = labels.map((_, idx) => ({ step_id: idx + 1 }));
-    activeProject.value.detection_steps = labels.map((_, idx) => idx + 1);
+    activeProject.value.steps_config = [...mainSteps, ...extraSteps];
+
+    // 自动初始化顺序: 主模型步骤 + 仍启用的副模型步骤
+    activeProject.value.sequence_order = [
+      ...mainSteps.map(s => ({ step_id: s.id })),
+      ...extraSteps.filter(s => s.enabled !== false).map(s => ({ step_id: s.id })),
+    ];
+    activeProject.value.detection_steps = [
+      ...mainSteps.map(s => s.id),
+      ...extraSteps.filter(s => s.enabled !== false).map(s => s.id),
+    ];
     
     ElMessage.success(`已选择模型: ${model.name}，识别到 ${labels.length} 个类别 (记得点右上角"保存配置"落库)`);
   } else {
@@ -3786,10 +3939,6 @@ const removeExtraModel = async (idx) => {
   const slot = activeProject.value.extra_models[idx];
   if (!slot) return;
 
-  // v3.7.x (FIX): 删 slot 时同步清理它在 steps_config 里带进来的 label.
-  // 之前只 splice extra_models, 副模型的 step (from_model === slot.name) 仍留在
-  // 步骤详情, 客户感知"副模型删了, 标签还在", 还可能因为这些孤儿 step 残留在
-  // sequence_order 里干扰检测判定 (例如把"压墨"当结算步骤).
   const slotName = slot.name;
   const orphanSteps = (activeProject.value.steps_config || [])
     .filter(s => s && s.from_model === slotName);
@@ -3810,19 +3959,9 @@ const removeExtraModel = async (idx) => {
         }
       );
     } catch (_e) {
-      return;  // 用户取消
+      return;
     }
-
-    const orphanIds = new Set(orphanSteps.map(s => s.id));
-    // 复用 onStepEnabledChange 的"禁用清理" — 走 sequence_order / detection_steps /
-    // custom_sequence_order / custom_detection_steps / custom_conditions.sequence
-    // 全套清理, 避免漏一处导致 sequence_order 里 step_id 找不到对应 step (鬼步骤).
-    for (const step of orphanSteps) {
-      try { onStepEnabledChange(step, false); } catch (_e) { /* 单条失败继续 */ }
-    }
-    // 再从 steps_config 里彻底删除 (onStepEnabledChange 只动序列, 不删步骤本身)
-    activeProject.value.steps_config = (activeProject.value.steps_config || [])
-      .filter(s => !orphanIds.has(s.id));
+    _purgeStepsByFromModel(slotName);
   }
 
   activeProject.value.extra_models.splice(idx, 1);
@@ -4103,13 +4242,44 @@ const removeSequenceStep = (idx) => {
 // "压墨怎么算最后一步".
 // 修复: 与后端 _sequence_order() 对齐 — custom + custom_based_on=sequential
 // 时读 custom_sequence_order, 其余走 sequence_order.
+const _buildDefaultSequenceOrder = (stepsConfig) => (
+  (stepsConfig || [])
+    .filter(s => s.enabled !== false && !s.is_backup && !s.backup_for)
+    .map(s => ({ step_id: s.id }))
+);
+
 const _activeSequenceOrder = () => {
   const ap = activeProject.value;
   if (!ap) return [];
   if (ap.logic_mode === 'custom' && ap.custom_based_on === 'sequential') {
-    return ap.custom_sequence_order || [];
+    const seq = ap.custom_sequence_order || [];
+    return seq.length > 0 ? seq : _buildDefaultSequenceOrder(ap.steps_config);
   }
-  return ap.sequence_order || [];
+  const seq = ap.sequence_order || [];
+  return seq.length > 0 ? seq : _buildDefaultSequenceOrder(ap.steps_config);
+};
+
+/** 与后端 get_first/last_step_label 对齐: 在序列里找第一个/最后一个仍启用的 step_id */
+const _getSettlementStepId = (mode) => {
+  const ap = activeProject.value;
+  if (!ap) return null;
+  const seqOrder = _activeSequenceOrder();
+  if (seqOrder.length === 0) return null;
+  const enabledIds = new Set(
+    (ap.steps_config || []).filter(s => s.enabled !== false).map(s => s.id)
+  );
+  if (mode === 'last_step') {
+    for (let i = seqOrder.length - 1; i >= 0; i--) {
+      const sid = seqOrder[i]?.step_id;
+      if (sid != null && enabledIds.has(sid)) return sid;
+    }
+  } else if (mode === 'first_step') {
+    for (const item of seqOrder) {
+      const sid = item?.step_id;
+      if (sid != null && enabledIds.has(sid)) return sid;
+    }
+  }
+  return null;
 };
 
 const isSettlementStep = (step) => {
@@ -4118,17 +4288,11 @@ const isSettlementStep = (step) => {
   if (logicMode !== 'sequential' && !(logicMode === 'custom' && activeProject.value?.custom_based_on === 'sequential')) {
     return false;
   }
-  const seqOrder = _activeSequenceOrder();
-  if (seqOrder.length === 0) return false;
-  if (mode === 'first_step') {
-    return step.id === seqOrder[0]?.step_id;
-  } else if (mode === 'last_step') {
-    return step.id === seqOrder[seqOrder.length - 1]?.step_id;
-  } else if (mode === 'last_first') {
-    // v3.8.x last_first 模式: 全部步骤都不允许严格顺序
+  if (mode === 'last_first') {
     return true;
   }
-  return false;
+  const settleId = _getSettlementStepId(mode);
+  return settleId != null && step.id === settleId;
 };
 
 watch(() => activeProject.value?.logic_mode, (mode) => {
@@ -4142,7 +4306,6 @@ watch(() => activeProject.value?.logic_mode, (mode) => {
 
 watch(() => activeProject.value?.settlement_mode, (mode) => {
   if (!activeProject.value?.steps_config) return;
-  // v3.8.x last_first 模式: 批量关闭所有步骤的严格顺序 + 关闭 first_step_aborts_pending_settle
   if (mode === 'last_first') {
     let cleared = 0;
     for (const step of activeProject.value.steps_config) {
@@ -4159,15 +4322,12 @@ watch(() => activeProject.value?.settlement_mode, (mode) => {
     }
     return;
   }
-  const seqOrder = activeProject.value?.sequence_order || [];
-  if (seqOrder.length === 0) return;
-  const settlementStepId = mode === 'last_step'
-    ? seqOrder[seqOrder.length - 1]?.step_id
-    : seqOrder[0]?.step_id;
+  const settlementStepId = _getSettlementStepId(mode);
+  if (settlementStepId == null) return;
   const step = activeProject.value.steps_config.find(s => s.id === settlementStepId);
-  if (step && step.strict_order) {
-    step.strict_order = false;
-  }
+  if (!step) return;
+  if (step.strict_order) step.strict_order = false;
+  if (step.accept_once) step.accept_once = false;
 });
 
 const moveStepUp = (idx) => {

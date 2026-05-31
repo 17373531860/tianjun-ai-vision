@@ -379,8 +379,32 @@ plugins/{customer_code}/
 | **export.renderer.{name}** | 注册自定义 renderer | `export.renderers` |
 | **export.trigger.{name}** | 注册自定义实时 trigger | `export.triggers` |
 | **runtime.gpu** | 需要 GPU | `requires.gpu` |
+| **runtime.alarm_trigger** | 调用 `PluginHost.trigger_alarm` 触发主程序报警 | (运行时声明, 见 §3.4.1) |
+| **runtime.mes_push** | 调用 `PluginHost.mes_push` 走 MES Gateway 外推 | (运行时声明, 见 §3.4.1) |
+| **runtime.system_config_write** | 调用 `PluginHost.write_system_config` 写 KV 配置 | (运行时声明, 见 §3.4.1) |
+| **runtime.step_field_write** | 调用 `PluginHost.write_plugin_step_field` 写 `step_records.plugin_data` JSON 字段 | (运行时声明, 见 §3.4.1) |
 
 **未来扩展**：新加能力时**不删旧的**，老 manifest 保持兼容。
+
+#### 3.4.1 `runtime.*` 主动 API capabilities（v3.13 M1.3a 新增）
+
+这一组与 §3.4 其他 capability 不同：**不与 manifest 字段绑定**，而是声明插件代码在运行时
+将调用 `PluginHost` 的某个高危主动 API。`PluginHost` 在调用前对照 `manifest.capabilities`
+强制校验，未声明 → 抛 `PluginRuntimeError` + 写 audit log。
+
+| capability | 启用的 API | 说明 |
+|---|---|---|
+| `runtime.alarm_trigger` | `host.trigger_alarm(channel_id, event_type, reason)` | 触发主程序 `AlarmRouter`（灯柱/蜂鸣器） |
+| `runtime.mes_push` | `host.mes_push(event_type, payload, channel_id)` | 走主程序 `MESGateway.dispatch` 外推（`event_type` 必须 `plugin_<cc>_` 前缀） |
+| `runtime.system_config_write` | `host.write_system_config(key, value, description)` | 写 `system_configs` 表（`key` 必须 `plugin_<cc>_` 前缀） |
+| `runtime.step_field_write` | `host.write_plugin_step_field(step_record_id, key, value)` | JSON 合并写入 `step_records.plugin_data`（`key` 必须 `plugin_<cc>_` 前缀，`value` 必须可 JSON 序列化）— v3.13 M3.3 |
+| `runtime.channel_group_broadcast` | `host.broadcast_to_channel_group(group_id, message)` | 给工位组成员 fire `plugin_broadcast_received` hook（`message` 必须 dict + 可 JSON 序列化）— v3.13 RFC 10 CG.7 |
+| `runtime.workpiece_flow_observe` | `host.list_workpiece_flows()` / `host.query_workpiece_flow_state(flow_id)` | 查 v3.14 RFC 11 串行流水线配置 + 当前 in-flight 工件状态。只读, 但因为涉及客户产线敏感数据, 声明性能力位以备审计 |
+
+**注意**：
+- `host.read_system_config(...)` **不**需要声明 capability（只读无副作用，跨插件查主程序状态是合理需求）
+- 这三个 capability 是 **运行时声明**，validator 不强制 `backend.routers` / `backend.hooks` 等 manifest 字段必须存在
+- 一个 `runtime.*` capability 写在 `capabilities` 数组里就够了，没有更细的子字段
 
 ### 3.5 `frontend` 子对象（档位 1/2/3）
 
@@ -515,6 +539,20 @@ plugins/{customer_code}/
 - **典型场景**：客户单机部署不需要"集群"菜单
 - **限制**：不能隐藏 `/monitor`（核心视图，不允许隐藏）
 - **错误**：`MANIFEST_HIDDEN_MENU_FORBIDDEN`
+
+#### `frontend.ui_hidden`（array<string>，档位 2/3 可有，v3.13 M2.2a 新增）
+
+```json
+"ui_hidden": ["monitor.step-cell.status", "cycle-result.indicator"]
+```
+
+- **作用**：隐藏主程序 `<TjSlot name="...">` 槽（连默认内容都不渲染）
+- **典型场景**：客户要求"隐藏步骤级红色 NG 指示，只保留 cycle 级"
+- **与 `frontend.hidden_menus` 的区别**：
+  * `hidden_menus` 是隐藏导航菜单项（按 path）
+  * `ui_hidden` 是隐藏 slot（按 slot name）
+- **slot name 词汇表**：见 RFC 09 §5.3 的 7 个槽位定义；新加 slot 由主程序在 `.vue` 文件中显式声明
+- **生效时机**：主程序启动时 `usePluginThemeStore.apply()` 拉 manifest → 应用到 `store.uiHidden` → `<TjSlot>` 内部 computed 自动响应
 
 #### `frontend.stores`（array<object>，档位 2 可有）
 

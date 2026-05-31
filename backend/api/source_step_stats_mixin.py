@@ -252,6 +252,11 @@ class StepStatsMixin:
         _is_seq_like = (_logic_mode_for_sort == 'sequential' or
                         (_logic_mode_for_sort == 'custom' and _pipeline_for_sort.get('custom_based_on') == 'sequential'))
 
+        # v3.15 RFC 12: 步骤进行中计时广播 (通用基础设施, 节流 1Hz, 无插件时早退).
+        # 主程序只广播 elapsed_sec + 步骤身份, 阈值/分档/实时报警策略全交给插件.
+        # 见本类 _broadcast_step_ticks.
+        self._broadcast_step_ticks(current_time)
+
         for label in list(detected_labels):
             if label not in self.step_start_time:
                 continue
@@ -472,3 +477,58 @@ class StepStatsMixin:
                     self._settle_sequential_cycle()
                 elif _lm == 'detection':
                     self._settle_detection_cycle()
+
+    # ==================== v3.15 RFC 12: 步骤进行中计时广播 ====================
+
+    def _broadcast_step_ticks(self, current_time: float):
+        """对当前正在计时的每个步骤, 按 ~1Hz 节流广播已持续时长.
+
+        客户级 "步骤耗时分档 / 实时警告 / 实时超时报警" 需求的平台基础设施:
+          - 主程序**不内嵌**任何阈值策略, 只广播 ``elapsed_sec`` + 步骤身份;
+          - 阈值判定、分档颜色、实时报警动作全部交给插件 (插件经
+            ``PluginHost.trigger_alarm`` 自行联动报警, 经 ``pre_cycle_end`` 改写结算);
+          - 这是**只读 observe hook** (不在 ``RETURNABLE_HOOK_FIELDS`` 白名单),
+            handler 返回值一律丢弃, 不影响主程序状态机.
+
+        节流: 每个步骤 label 最多 1Hz, 避免每帧 fire 拖慢推理热路径; 无 active 插件
+        时 ``fire_plugin_hook`` 自身 O(1) 早退. ctx 字段集合是契约 (改字段 = 升 SDK),
+        见 tests/plugin_system/test_step_tick_hook.py.
+        """
+        last_map = getattr(self, '_step_tick_last', None)
+        if last_map is None:
+            if not self.step_start_time:
+                return  # 快路径: 从未计时过且当前无步骤, 不建 dict
+            last_map = {}
+            self._step_tick_last = last_map
+
+        # 清理已结束步骤的节流记录, 防止 dict 随 label 残留 (即使本帧无活动步骤也清).
+        if last_map:
+            for stale in [k for k in last_map if k not in self.step_start_time]:
+                del last_map[stale]
+
+        if not self.step_start_time:
+            return
+
+        try:
+            from backend.plugin_system.hook_dispatch import fire_plugin_hook
+        except Exception:
+            return
+
+        for label, start in list(self.step_start_time.items()):
+            if current_time - last_map.get(label, 0.0) < 1.0:
+                continue
+            last_map[label] = current_time
+            time_cfg = self.step_time_config.get(label, {})
+            try:
+                fire_plugin_hook("step_tick", "step_in_progress", "post", {
+                    "channel_id": self.channel_id,
+                    "cycle_id": getattr(self, 'current_cycle_id', None),
+                    "step_label": label,
+                    "step_name": self.step_display_names.get(label, label),
+                    "elapsed_sec": round(current_time - start, 3),
+                    "min_duration": time_cfg.get('min_duration'),
+                    "max_duration": time_cfg.get('max_duration'),
+                })
+            except Exception as e:
+                # fire_plugin_hook 内部已 swallow, 这里兜 import/属性层异常, 绝不抛回热路径
+                print(f"[Plugin] step_tick hook 触发异常 (已隔离, 主流程继续): {e}")

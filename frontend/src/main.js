@@ -130,6 +130,12 @@ for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component)
 }
 
+// v3.13 M2.2a: 全局注册 TjSlot 组件, 让主程序 .vue 文件能用 <TjSlot name="..."> 暴露
+// 插件可覆盖的 UI 位置. 默认渲染 default slot (主程序原生内容); 插件用
+// registry.slots.register(name, component) 覆盖时改渲染插件组件 + 透传主程序 props.
+import TjSlot from './components/TjSlot.vue';
+app.component('TjSlot', TjSlot);
+
 try {
   app.mount('#app');
   console.log(`[⬛ Boot] ✓ Vue 挂载成功 ${new Date().toLocaleTimeString()}`);

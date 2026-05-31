@@ -54,6 +54,8 @@
 | [06_tier3_fullstack.md](./design/06_tier3_fullstack.md) | 1518 | 全栈包（PluginManager / 8 Hook / 5 层错误隔离 / **F1~F15 前置改造**） |
 | [07_distribution.md](./design/07_distribution.md) | 1592 | 7 个 CLI 工具 / `.tjvplugin` 格式 / CI / dev mode |
 | [08_examples.md](./design/08_examples.md) | 1395 | 三档 demo / 客户操作单页 / 作者上手 / FAQ |
+| [09_v3_13_platform_upgrade_rfc.md](./design/09_v3_13_platform_upgrade_rfc.md) | 749 | **v3.13 插件平台升级 RFC**：M1（业务流程双向打通：6 新 hook + Returnable + 主动 API）/ M2（UI slot 化平台）/ M3（配置扩展系统）+ 工位组 hook 留口 + 7 个附录（PluginHost.frontend / 依赖图 / AC 反向表 / slot 文件级定位 / 风险 / 测试金字塔）|
+| [10_channel_group_rfc.md](./design/10_channel_group_rfc.md) | 410 | **工位组主程序原生 RFC**：单机内多通道联动结算 / 4 种 settle_strategy / 与 cluster 跨机聋齐正交 / 与 RFC 09 hook 衔接 |
 
 ### 📋 评审与运维资产
 

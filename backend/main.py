@@ -12,9 +12,14 @@ from backend.db.database import engine, Base
 # v3.5.0 自定义导出系统：必须在 create_all 之前 import 让表注册到 Base.metadata
 from backend.models import export_models  # noqa: F401
 from backend.models import plugin_models  # noqa: F401
+# v3.13 RFC 10: ChannelGroup 表 (单机内多通道结算联动); ChannelGroup ORM 在 models.py 中
+from backend.models import models as _models  # noqa: F401  (兜底显式 import, 与 export_models 等保持一致风格)
 # v3.10.0 用户系统: User/Role/UserRole/SessionToken 四张表
 # 必须在 create_all 之前 import 让表注册到 Base.metadata
 from backend.models import auth_models  # noqa: F401
+# v3.14 RFC 11: WorkpieceFlow 表 (流水线串行结算). mes_models 已被其他路径间接 import,
+# 这里显式声明仅为可读性与启动顺序一致.
+from backend.models import mes_models as _mes_models  # noqa: F401
 from backend.api import api_router
 from backend.api.source import router as source_router, get_video_manager
 from backend.api.channel_manager import router as workstation_router
@@ -67,6 +72,12 @@ def migrate_database():
     migrations = [
         # (表名, 列名, 列类型)
         ("step_records", "interval_to_next", "FLOAT"),
+        # v3.13 M3.3: 插件命名空间字段 (PluginHost.write_plugin_step_field 落地点)
+        ("step_records", "plugin_data", "JSON"),
+        # v3.13 RFC 10: 工位组联动字段 (老库升级时补列, 默认 NULL = 独立结算)
+        ("detection_cycles", "channel_group_id", "INTEGER"),
+        ("detection_cycles", "group_settled_with", "JSON"),
+        ("detection_cycles", "group_settle_result", "VARCHAR(8)"),
         ("detection_cycles", "interval_to_next", "FLOAT"),
         ("data_export_settings", "record_cycle_interval", "BOOLEAN DEFAULT 1"),
         ("data_export_settings", "export_step_duration", "BOOLEAN DEFAULT 1"),
@@ -608,6 +619,41 @@ def auto_load_active_project():
 
 if not os.environ.get("BACKEND_SKIP_INIT"):
     auto_load_active_project()
+
+# v3.13 RFC 10: 启动时加载工位组配置到 Coordinator. 客户场景 (双工位联动)
+# 才会有配置, 没有配置时返回 0 也无副作用 — 与 v3.12 零差异.
+if not os.environ.get("BACKEND_SKIP_INIT"):
+    try:
+        from backend.services.channel_group_coordinator import get_coordinator as _get_cg_coord
+        from backend.db.database import SessionLocal as _SessionLocal
+        _db = _SessionLocal()
+        try:
+            _n = _get_cg_coord().reload_groups(_db)
+            if _n > 0:
+                print(f"[启动] ChannelGroupCoordinator 加载 {_n} 个工位组配置")
+        finally:
+            _db.close()
+    except Exception as _e:
+        print(f"[启动] ChannelGroupCoordinator 加载失败 (隔离, 不影响主流程): {_e}")
+
+# v3.14 RFC 11: 启动时加载流水线串行配置 + 把上次进程留下的 in_progress 全部 abort.
+# 客户场景 (流水线串行) 才会有配置, 没有时返回 0 也无副作用 — 与 v3.13 零差异.
+if not os.environ.get("BACKEND_SKIP_INIT"):
+    try:
+        from backend.services.workpiece_flow_coordinator import get_coordinator as _get_wfc_coord
+        from backend.db.database import SessionLocal as _SessionLocal2
+        _db2 = _SessionLocal2()
+        try:
+            _aborted = _get_wfc_coord().abort_in_progress_on_startup(_db2)
+            if _aborted > 0:
+                print(f"[启动] WorkpieceFlow 把上次进程留下的 {_aborted} 个 in-flight run 标 aborted")
+            _n2 = _get_wfc_coord().reload_flows(_db2)
+            if _n2 > 0:
+                print(f"[启动] WorkpieceFlowCoordinator 加载 {_n2} 个串行流水线配置")
+        finally:
+            _db2.close()
+    except Exception as _e:
+        print(f"[启动] WorkpieceFlowCoordinator 加载失败 (隔离, 不影响主流程): {_e}")
 
 
 def auto_restore_video_sources():

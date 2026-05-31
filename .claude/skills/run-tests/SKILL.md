@@ -333,6 +333,65 @@ project_name = f"__e2e_pt_合并档_测试_{uuid.uuid4().hex[:8]}"
 
 ---
 
+## 真实测试资产清单 (本机绝对路径)
+
+> 当需要用真实视频 + 真实模型跑端到端（不走 synthetic mock）时, 用这里登记的资产, **不要再现编路径**或猜测试目录。
+> 这部分内容是 agent 跑真实推理 UAT 时的事实清单, 路径以本机为准 (Linux qianqian 工作机).
+
+### 顺序模式 (sequential) — 金龙串行流水线 (RFC 11 v3.14.0 demo 数据)
+
+真实客户现场两工位串行流水线场景, **唯一一组**可以用来跑「串行流水线 (Workpiece Flow)」端到端的真实视频+模型组合.
+
+**目录结构**:
+```
+/home/qianqian/1.py/output/金龙/
+├── GW1/
+│   ├── video/064b34b762c1b4e75ad338c6e519030c.mp4   # 1280x720 30fps 84s
+│   └── model/bestGW1.pt                              # YOLO 7 类
+└── GW2/
+    ├── video/a4b8088d80fa2d7f42ada3e74220d878.mp4   # 960x544 29fps 135s
+    └── model/bestGW2.pt                              # YOLO 2 类
+```
+
+**模型标签 (model.names)**:
+- **GW1 (工位 1)** 7 类: `热水槽 / 下料 / 热水浸泡 / 浸泡结束 / 甩干 / 甩干结束 / 吹干`
+- **GW2 (工位 2)** 2 类: `吹干 / 接触产品`
+
+**为何是串行流水线的完美 demo 数据**:
+- GW1 末步 `吹干` 和 GW2 首步 `吹干` 重叠 — 工件在 GW1 经过整套热水处理→甩干→吹干, 然后传到 GW2 继续吹干+接触产品检测.
+- pipeline_config 自然按 sequential 顺序模式跑: GW1 上 7 步走完一个 cycle → 物料传到 GW2 → GW2 上 2 步走完一个 cycle → WorkpieceFlowCoordinator 把两个 cycle 串成同一工件流转记录.
+- **强烈推荐**用 `WorkpieceFlowConfig.trigger_mode = "time_window"` (无扫码 FIFO 自动入队), 因为这俩视频也没扫码.
+
+**典型用法**:
+```python
+GW1_VIDEO = "/home/qianqian/1.py/output/金龙/GW1/video/064b34b762c1b4e75ad338c6e519030c.mp4"
+GW1_MODEL = "/home/qianqian/1.py/output/金龙/GW1/model/bestGW1.pt"
+GW2_VIDEO = "/home/qianqian/1.py/output/金龙/GW2/video/a4b8088d80fa2d7f42ada3e74220d878.mp4"
+GW2_MODEL = "/home/qianqian/1.py/output/金龙/GW2/model/bestGW2.pt"
+
+# 配两个项目:
+#   project_gw1: steps_config = 7 步, label 严格按 GW1.names 顺序
+#   project_gw2: steps_config = 2 步, label 严格按 GW2.names 顺序
+# 通道 0 跑 GW1, 通道 1 跑 GW2
+# 创建 WorkpieceFlow: station_channel_ids=[0,1], trigger_mode=time_window
+```
+
+### 其他真实资产位置 (历史项目, 非串行流水线场景)
+
+- 当前仓库 `backend/uploads/`: 只有 `放置、压墨-标注 (1).avi` + 2 个 `.pt` (OPPO 项目), **不适用串行流水线**
+- 副本仓库 `/home/qianqian/桌面/word/tianjun副本/backend/uploads/`: 9+ 视频 + 多个模型 (QG_holder / QG_tuhei / 各种 best), 主要是 OPPO 单工位场景
+- 测试 fixture `tests/test_real_video_smoke.py`: 硬编码引用副本仓库的视频 (跨仓库引用), 跑 `@slow` mark 时用
+
+### 真实推理测试的写法约定
+
+1. **永远用 `@pytest.mark.slow` 标记** — 默认不跑, 避免 CI / 单元测试套件被卡
+2. **路径常量放文件顶部** — 不要散在函数里
+3. **路径不存在时 `pytest.skip`** — 别人机器上没这些资产时不算 fail
+4. **GPU 推理用 `RUNTIME_MODE=test` + 真实模型加载** — 不要走 synthetic mock, 否则没意义
+5. **录视频 + 截图三件套** — 真实推理 UAT 必须有 `record_video_dir` + 关键步骤 `page.screenshot`
+
+---
+
 ## 路径 C：端到端冒烟（启动后端 + 前端）
 
 适用：用户说"启动起来看看通不通"、"页面能不能用"，或要跑路径 A 中的浏览器 E2E。
@@ -1181,6 +1240,8 @@ skill 触发后**先看 git diff 头部**，按下表给用户列推荐清单（
 | Playwright 截图全黑 / DOM 空 | 没等 `networkidle`；viewport 为 0 | 用 `tests/playwright_demo/synthetic_demo.py` 的模板（已处理） |
 | 前端 Monitor 不显示检测框 | synthetic 走非项目配置路径，`current_detections` 有但无 `display_id`；与 tracking 模式不兼容 | 对纯展示验证够用；如要 tracking 校验，需在剧本对应项目里设 `logic_mode=detection` |
 | pytest 测试结束打印 `[MES] Hook 管理器已停止` | conftest 默认设 `RUNTIME_MODE=test`，MES 子系统也启动 | 可接受副作用；CI 慢时可改成 fixture 级别按需打开 |
+| 插件双工位 UI 有视频、步骤统计在动，但画面上没有检测框 | **Tier 2 `monitor.layout.body` 接管后**，原生 Monitor 的 canvas overlay 不在 DOM；插件 VideoCell 只用 `<img>` 吃 MJPEG（后端流不含 baked-in 框），且未调用主程序 `renderDetectionOverlay` | 插件 v1.1.4+ 在 `<img>` 上叠 canvas + 调 `layoutBodyActions.renderDetectionOverlay` / `setFrameNaturalSize`；**UAT 必测**：装插件 + 开检测 → 两工位 canvas 非空或 DOM 有 `.fjjl-det-overlay` 且框可见 |
+| 项目页选了「最后一步结算」但末步仍能开严格顺序/单次接受 | **API/脚本建项目**只传 `steps_config`、不传 `pipeline_config.sequence_order`；检测能跑（引擎读 steps_config）但项目页 UI 识别不出结算步；金龙 UAT 2026-05-31 踩坑 | ① 创建/更新项目 API 自动补全 `sequence_order`（`project_config_normalize.py`）② 项目页加载兜底 ③ **UAT 必测**：`POST /projects` 不带 sequence_order → 项目页选 last_step → 末步两个 switch 必须 disabled；回归 `tests/uat/uat_20260531_settlement_step_switches.py` + `tests/test_project_sequence_order_normalize.py` |
 
 ### G.5b 进阶：Export / Cluster / Tracking 三块功能契约怎么验
 

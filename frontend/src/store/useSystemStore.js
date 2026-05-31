@@ -303,19 +303,43 @@ export const useSystemStore = defineStore('system', {
     getChannelDetection(channelId) {
       return this.channelDetections[channelId] || this.detection;
     },
-    // 保存检测框设置到项目
+    // 保存检测框设置到项目.
+    // v3.14.x 修复: 多工位 (含插件 layout.body 模式) 下, 设置页只有一份全局检测框配置,
+    // 但每个工位绑各自项目, 提示框位置/颜色等是从"工位绑定项目的 detection_config"读的.
+    // 老逻辑只写 currentProjectId 一个项目 → 客户改右上角, 其它工位读自己项目的旧值,
+    // 表现为"怎么改都没用". 现在多工位时把同一份配置写进所有在用工位绑定的项目,
+    // 并同步刷新内存里每个通道的检测配置, 改一次两个工位即时生效, 不用重启/切项目.
     async saveDetectionSettings() {
-      if (this.currentProjectId) {
-        try {
-          await updateProject(this.currentProjectId, {
-            detection_config: this.detection
-          });
-        } catch (e) {
-          console.error('保存检测框设置到项目失败:', e);
-        }
-      }
       // 同时保存到 localStorage 作为备份/默认值
       localStorage.setItem('detection_settings', JSON.stringify(this.detection));
+
+      const targetProjectIds = new Set();
+      if (this.currentProjectId) targetProjectIds.add(this.currentProjectId);
+
+      try {
+        const { getWorkstations } = await import('@/api/detection');
+        const res = await getWorkstations();
+        const count = res.data?.channel_count || 1;
+        if (count > 1) {
+          const sources = res.data?.source_configs || {};
+          for (const [chStr, cfg] of Object.entries(sources)) {
+            const pid = cfg?.project_id;
+            if (pid) targetProjectIds.add(pid);
+            // 内存里该通道检测配置一并刷新, 检测页无需重载即可生效
+            this.loadDetectionForChannel(parseInt(chStr), this.detection);
+          }
+        }
+      } catch (e) {
+        console.warn('[useSystemStore] 读取工位绑定失败, 退回仅保存当前项目:', e?.message);
+      }
+
+      for (const pid of targetProjectIds) {
+        try {
+          await updateProject(pid, { detection_config: this.detection });
+        } catch (e) {
+          console.error(`保存检测框设置到项目 ${pid} 失败:`, e);
+        }
+      }
     },
     // 设置上次输入源
     setLastSource(type, value) {

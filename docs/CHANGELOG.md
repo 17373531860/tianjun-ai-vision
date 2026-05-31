@@ -1,8 +1,47 @@
 # Changelog
 
+## v3.14.0 (2026-05-29)
+
+> RFC 11「串行流水线结算」一次性闭环 (M0-M8 全部交付)。新增「单机内多工位串行流水线」原生能力: 同一工件依次走过 N 个摄像头工位, 全过才算合格。架构上与已有 ChannelGroup (并行) / cluster (跨机汇总) 完全独立、不冲突, 同工位互斥。三种触发模式 (扫码 / 时间窗 FIFO / 物理 GPIO) 配齐, 福建金龙现场无扫码流水线场景跑通。详细 changelog 见 `docs/plugin-system/design/11_workpiece_flow_rfc.md`。
+
+- [FEAT-001] **WorkpieceFlowConfig + WorkpieceFlowRun ORM** — 2 张新表 + `Base.metadata.create_all` 自动注册 + 启动迁移把上次进程残留的 in_progress run 自动标 aborted。
+- [FEAT-002] **WorkpieceFlowCoordinator 单例 + 状态机** — `CREATED → STATION_RUNNING → STATION_DONE → COMPLETED/SHORT_CIRCUITED/TIMEOUT` 五态闭环, FIFO 队列 + max_in_flight 守门 + threading.Timer 超时, 失败完全隔离 (db/alarm/hooks/mes 异常永远不打断主流程)。
+- [FEAT-003] **3 种触发器策略** — `TimeWindowTrigger` 监听入口 cycle_start 自动 FIFO 入队 (适合无扫码节拍稳定场景); `ScanTrigger` 复用 mes_hooks.on_scan_received + `entry` / `each_station` 两种绑定策略 + scan_pair 互斥; `PhysicalTrigger` 接 external_device GPIO/Modbus 信号 + dedup 去抖 + 自动序号生成。
+- [FEAT-004] **REST API + Pydantic schema + 权限** — `/api/v1/workpiece-flows/` 8 个端点 (列表/CRUD/state/runs/run详情), `system.workpiece_flow.view` + `system.workpiece_flow.manage` 两个新权限, 创建/启用时与 ChannelGroup 互斥校验, 启用状态下禁止删除 / 改 stations。
+- [FEAT-005] **5 个插件 hook + 2 个 PluginHost 主动 API** — `workpiece_flow_enter` / `_station_done` / `_completed` (returnable `override_final_result`) / `_timeout` (returnable `override_timeout_action`) / `_short_circuit`; PluginHost 新增 `list_workpiece_flows` / `query_workpiece_flow_state` (需 manifest 声明 `runtime.workpiece_flow_observe` capability)。
+- [FEAT-006] **Monitor + Settings UI** — Monitor 加 `monitor.workpiece-flow.indicator` slot (默认实现展示 in-flight 工件列表, 客户插件可全覆盖); Settings 加「流水线串行」Tab (3 种 trigger_mode 表单切换 + 启用前预检 + 运行时 state 查看对话框)。
+- [FEAT-007] **集成现有事件管线** — VSM `start_cycle` / `end_cycle` 接 Coordinator.on_cycle_started/settled; mes_hooks.\_handle_scan 在 channel 属于 flow 时短路给 Coordinator.on_scan_received (与 scan_pair 严格互斥); channel_manager.set_channel_count 减少通道时清理 Coordinator 内 channel_to_flow 残留。
+- [TEST-001] **77 个测试零回归** — `tests/workpiece_flow/` 73 (TimeWindow 18 + Scan 15 + API 19 + Hook 8 + Physical 13) + `tests/step_defs/test_workpiece_flow_v314.py` 4 个 BDD 场景 (福建金龙 demo + 短路 + 删除前必须禁用 + 与工位组互斥), 全部 14 秒内跑完。
+- [DOC-001] **完整 RFC + plugin manifest 文档更新** — `docs/plugin-system/design/11_workpiece_flow_rfc.md` 落 RFC 全文; `01_manifest_schema.md` 加 `runtime.workpiece_flow_observe` capability。
+
+已知边界 (留待 v3.14.1+): Flow → cluster Box 联动 (工件流完成后挂到 box_serial 汇总); 工件返工流程 (Workpiece.status='rework' 重走 flow); 多 worker / 多机 Coordinator (状态搬 Redis); WorkpieceFlowRun 软删 + 数据保留策略。
+
+---
+
+## v3.13.1 (2026-05-29)
+
+> 跳过 v3.13.0 骨架直接发完整闭环 (与 v3.12.0 跳过 v3.11 风格一致)。一次性落 `RFC 09 插件平台 v3.13 升级` (M1 业务 / M2 UI / M3 配置) 与 `RFC 10 工位组` 两大主线, 把客户「双工位 A NG → B NG 联动」「步骤耗时三档显示」「双工位左右半屏 + 共用底栏」「隐藏步骤级红色」四大需求一次性闭环。无破坏性改动, 老项目 JSON / DB / 接口、未装插件场景字节级零差异。详细 changelog 见 `docs/changelog/v3.13.1_2026-05-29.md`。
+
+- [FEAT-001] **工位组 ChannelGroup ORM + CRUD API** — 新表 `channel_groups` + `detection_cycles` 加 3 列, 5 个 CRUD endpoint, 启动迁移自动 ALTER TABLE。
+- [FEAT-002] **ChannelGroupCoordinator 单例 + 4 种结算策略** — `synchronized_any_ng` 即时广播 + 直驱 alarm_router, `synchronized_all_ok` 用 threading.Timer 等齐超时, `timeout_action` 支持 `fallback_independent` / `force_ng`, VSM `end_cycle` 用 take-once pending_override 强制改写 is_good。
+- [FEAT-003] **工位组与 cluster 互操作** — `build_context_from_cycle` 输出加顶层 `channel_group` + cycle 子树便利字段, 跨机透传到 `BoxSummary.aggregated_context.stations[i].channel_group`, 客户 MES 模板可直接引用 `{channel_group.settle_result}`。
+- [FEAT-004] **M1 插件业务流程双向打通** — 10 个新 hook 点 (含 returnable hook) + 10 个 PluginHost 主动 API (trigger_alarm / mes_push / write_plugin_step_field / list_channel_groups 等), 每个都带 capability 守门 + audit log。
+- [FEAT-005] **M2 UI 扩展平台化** — TjSlot 全局组件 + 7 个主程序 slot 全接入 (settings.tab.* / project.tab.* / cycle-result.indicator / monitor.step-cell.duration / monitor.step-cell.status / monitor.layout.body / monitor.layout.footer), 没插件时字节级零差异。
+- [FEAT-006] **M3 配置扩展系统** — Project / SystemConfig / StepRecord 加 plugin_data 命名空间, 卸载支持 `?purge_data=true` 清理, `registry.tabs.register` 编程式注入配置面板 Tab。
+- [BUG-001] **SQLite JSON.contains substring match 误报** — `_check_member_uniqueness` 改 Python 应用层校验, 避开 SQLite JSON 文本子串匹配 bug。
+- [BUG-002] **PUT 端点漏 cross-group 唯一性校验** — PUT 时 `member_channel_ids` / `enabled` 改动必调唯一性校验, 含 `exclude_group_id=self`。
+- [DOC-001] **完整设计文档** — RFC 09 + RFC 10 + AGENTS.md 产品决策原则 + feature-placement skill。
+- [TEST-001] **新增 395 测试零回归** — `tests/plugin_system/` 328 + `tests/channel_group/` 67 全过零回归 (vs v3.12.x baseline)。
+
+已知边界 (留待真实客户驱动): BDD e2e 场景 / 工位组 Settings 前端 Tab / channel_group_ng 自定义事件 / 多 active 插件并存。
+
+Skill 更新: 新增 `feature-placement` skill 操作化产品决策原则; `debug-channel` / `debug-mes` / `add-event-type` 各加 v3.13 章节同步工位组 + 插件 hook 新能力。
+
+---
+
 ## v3.12.1 (2026-05-29)
 
-> v3.12.0 客户使用反馈快速修复 + per_item 业务场景四件套补丁。无破坏性改动, 老配置 / DB / 接口全部兼容。详细 changelog 见 `docs/changelog/v3.12.1_2026-05-29.md`。
+> v3.12.0 客户使用反馈快速修复 + per_item 业务场景四件套补丁。无破坏性改动, 老配置 / DB / 接口全部兼容。详细 changelog 见 `docs/changelog/v3.12.1_2026-05-29.md`。（注: 本版修复内容已随 v3.13.x → v3.14.0 主线合并一并交付, 未单独发布安装包。）
 
 - [BUG-001] **关闭手势启动动画后, 主窗 UI 在后端就绪前就显示, API 全部 404** — `splash.enabled=false` 时 `splashFinishedByRenderer=true` 被立刻设, 主窗 ready-to-show 立刻 show 而后端还在装 24 个模型。恢复 v3.8.1 旧版简单 splash + 加 `legacySplashWindow` + 后端 ready 后才放行主窗。
 - [BUG-002] **启动动画手势相机 specific 模式选 OBS 实际拿到 Todesk 虚拟相机** — Chromium 按 origin 哈希 deviceId, 主前端 webContents 跟 splash webContents 是不同 origin → deviceId 不通。splash 改用 `device_label` 反查 splash 端真实 deviceId 再 `exact` 锁定 (老 deviceId 匹配作 fallback)。
@@ -17,7 +56,7 @@
 
 已知问题: BUG-002 修复需 Windows 工控机打包验证 (Linux dev 环境模拟不了 Chromium webContents 隔离); 旧版 splash 透明背景在 Win10 1803 之前版本可能掉色; v3.12.0 提到的 9 个测试串污染未修。
 
-Skill 更新延后: `debug-electron` / `debug-per-item` / `modify-source` / `modify-frontend` (后续补 v3.12.1 章节)。
+---
 
 ## v3.12.0 (2026-05-27)
 

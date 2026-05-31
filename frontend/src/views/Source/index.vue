@@ -37,7 +37,8 @@
           <el-form label-position="top" size="small">
             <!-- Source type selector per workstation -->
             <el-form-item label="输入源">
-              <el-radio-group v-model="wsConfigs[ch - 1].sourceType" size="small">
+              <el-radio-group v-model="wsConfigs[ch - 1].sourceType" size="small"
+                @change="(val) => onWsSourceTypeChange(ch - 1, val)">
                 <el-radio-button value="camera">摄像头</el-radio-button>
                 <el-radio-button value="hcnetsdk">海康SDK</el-radio-button>
                 <el-radio-button value="rtsp">RTSP</el-radio-button>
@@ -105,7 +106,10 @@
             <!-- Video file selector -->
             <el-form-item v-if="wsConfigs[ch - 1].sourceType === 'video'" label="视频文件">
               <el-upload drag action="#" :auto-upload="false" :limit="1" accept=".mp4,.avi,.mov,.mkv"
-                :on-change="(f) => wsConfigs[ch - 1].videoFile = f.raw" class="w-full">
+                :ref="(el) => bindWsUploadRef(ch - 1, 'video', el)"
+                :on-change="(f, fl) => handleWsVideoChange(ch - 1, f, fl)"
+                :on-exceed="(files) => handleWsFileExceed(ch - 1, 'video', files)"
+                class="w-full">
                 <div class="text-xs text-gray-400 py-2">拖拽或点击选择视频</div>
               </el-upload>
               <p v-if="wsConfigs[ch - 1].videoFile" class="text-xs text-green-400 mt-1">{{ wsConfigs[ch - 1].videoFile.name }}</p>
@@ -114,7 +118,10 @@
             <!-- Image file selector -->
             <el-form-item v-if="wsConfigs[ch - 1].sourceType === 'image'" label="图片文件">
               <el-upload drag action="#" :auto-upload="false" :limit="1" accept=".jpg,.jpeg,.png,.bmp"
-                :on-change="(f) => wsConfigs[ch - 1].imageFile = f.raw" class="w-full">
+                :ref="(el) => bindWsUploadRef(ch - 1, 'image', el)"
+                :on-change="(f, fl) => handleWsImageChange(ch - 1, f, fl)"
+                :on-exceed="(files) => handleWsFileExceed(ch - 1, 'image', files)"
+                class="w-full">
                 <div class="text-xs text-gray-400 py-2">拖拽或点击选择图片</div>
               </el-upload>
               <p v-if="wsConfigs[ch - 1].imageFile" class="text-xs text-green-400 mt-1">{{ wsConfigs[ch - 1].imageFile.name }}</p>
@@ -442,6 +449,7 @@
             action="#"
             :auto-upload="false"
             :on-change="handleVideoChange"
+            :on-exceed="handleVideoExceed"
             :limit="1"
             accept=".mp4,.avi,.mov,.mkv"
           >
@@ -498,6 +506,7 @@
             action="#"
             :auto-upload="false"
             :on-change="handleImageChange"
+            :on-exceed="handleImageExceed"
             :limit="1"
             accept=".jpg,.jpeg,.png,.bmp"
           >
@@ -619,6 +628,57 @@ const wsConfigured = (idx) => {
   return false;
 };
 const wsConfigs = reactive([makeDefaultWsConfig(), makeDefaultWsConfig(), makeDefaultWsConfig(), makeDefaultWsConfig()]);
+const wsUploadRefs = { video: {}, image: {} };
+
+const bindWsUploadRef = (idx, kind, el) => {
+  if (el) wsUploadRefs[kind][idx] = el;
+  else delete wsUploadRefs[kind][idx];
+};
+
+/** 多工位切换输入源类型时清掉其它类型的残留配置 */
+const onWsSourceTypeChange = (idx, newType) => {
+  const cfg = wsConfigs[idx];
+  if (!cfg) return;
+  if (newType !== 'video') {
+    cfg.videoFile = null;
+    cfg._videoFilePath = null;
+    wsUploadRefs.video[idx]?.clearFiles?.();
+  }
+  if (newType !== 'image') {
+    cfg.imageFile = null;
+    wsUploadRefs.image[idx]?.clearFiles?.();
+  }
+  if (newType !== 'camera') cfg.cameraId = '';
+  if (newType !== 'rtsp') cfg.rtspUrl = '';
+  if (newType !== 'hcnetsdk') {
+    cfg.hcnetIp = '';
+    cfg.hcnetPassword = '';
+  }
+};
+
+const replaceUploadFile = (uploadRef, file) => {
+  if (!uploadRef || !file) return;
+  uploadRef.clearFiles();
+  uploadRef.handleStart(file);
+};
+
+const handleWsFileExceed = (idx, kind, files) => {
+  const raw = files?.[0];
+  if (!raw) return;
+  replaceUploadFile(wsUploadRefs[kind][idx], raw);
+  if (kind === 'video') wsConfigs[idx].videoFile = raw;
+  else wsConfigs[idx].imageFile = raw;
+};
+
+const handleWsVideoChange = (idx, file, fileList) => {
+  wsConfigs[idx].videoFile = file?.raw || null;
+  if (fileList?.length > 1) replaceUploadFile(wsUploadRefs.video[idx], file);
+};
+
+const handleWsImageChange = (idx, file, fileList) => {
+  wsConfigs[idx].imageFile = file?.raw || null;
+  if (fileList?.length > 1) replaceUploadFile(wsUploadRefs.image[idx], file);
+};
 
 const projectList = ref([]);
 const fetchProjectList = async () => {
@@ -647,6 +707,11 @@ const saveAndStartMulti = async () => {
     for (let ch = 0; ch < workstationMode.value; ch++) {
       const cfg = wsConfigs[ch];
       if (!wsConfigured(ch)) continue;
+
+      // 换源前先停该通道旧流
+      for (const ep of ['camera/stop', 'video/stop', 'hcnetsdk/stop', 'hikvision/stop']) {
+        try { await api.post(`/source/${ep}?channel=${ch}`); } catch (_e) { /* ignore */ }
+      }
 
       if (cfg.sourceType === 'camera') {
         const cam = allCameras.value.find(c => c.id === cfg.cameraId);
@@ -942,10 +1007,19 @@ const refreshAllCameras = async () => {
   }
 };
 
-// 处理视频文件选择
-const handleVideoChange = (file) => {
-  videoFile.value = file.raw;
-  lastVideoFileName.value = null;  // 选择新文件后清除上次记录
+// 处理视频文件选择 — limit=1 时第二次选择走 on-exceed, 此处同步最新文件
+const handleVideoChange = (file, fileList) => {
+  videoFile.value = file?.raw || null;
+  lastVideoFileName.value = null;
+  if (fileList?.length > 1) replaceUploadFile(videoUploadRef.value, file);
+};
+
+const handleVideoExceed = (files) => {
+  const raw = files?.[0];
+  if (!raw) return;
+  replaceUploadFile(videoUploadRef.value, raw);
+  videoFile.value = raw;
+  lastVideoFileName.value = null;
 };
 
 // 使用上次的视频文件
@@ -987,9 +1061,18 @@ const useLastVideo = async () => {
 };
 
 // 处理图片文件选择
-const handleImageChange = (file) => {
-  imageFile.value = file.raw;
-  lastImageFileName.value = null;  // 选择新文件后清除上次记录
+const handleImageChange = (file, fileList) => {
+  imageFile.value = file?.raw || null;
+  lastImageFileName.value = null;
+  if (fileList?.length > 1) replaceUploadFile(imageUploadRef.value, file);
+};
+
+const handleImageExceed = (files) => {
+  const raw = files?.[0];
+  if (!raw) return;
+  replaceUploadFile(imageUploadRef.value, raw);
+  imageFile.value = raw;
+  lastImageFileName.value = null;
 };
 
 // 使用上次的图片文件
@@ -1028,9 +1111,12 @@ const useLastImage = async () => {
 
 // 处理源类型变化
 const handleSourceTypeChange = () => {
-  // 清空文件选择
   videoFile.value = null;
   imageFile.value = null;
+  lastVideoFileName.value = null;
+  lastImageFileName.value = null;
+  videoUploadRef.value?.clearFiles?.();
+  imageUploadRef.value?.clearFiles?.();
 };
 
 // 保存并启动
@@ -1038,10 +1124,10 @@ const saveAndStart = async () => {
   saving.value = true;
   
   try {
-    // 先停止现有流
-    try {
-      await api.post('/source/camera/stop');
-    } catch (e) {}
+    // 先停止现有流（各类型都尝试停，避免换源后旧流仍占用）
+    for (const ep of ['/source/camera/stop', '/source/video/stop', '/source/hcnetsdk/stop', '/source/hikvision/stop']) {
+      try { await api.post(ep); } catch (_e) { /* ignore */ }
+    }
     
     if (sourceType.value === 'camera') {
       // 检查是否选择了摄像头
