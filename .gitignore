@@ -38,6 +38,9 @@ backend/recordings/
 # v3.8.x 定时导出运行时产物 (用户数据, 不入版本库)
 backend/exports/
 
+# v3.13+ 插件安装副本 (上传 .tjvplugin 后落地的运行时副本, 不入版本库)
+backend/plugins/
+
 # 调参运行时配置 (检测框 Kalman 平滑, 客户机现场调出来的, 不入版本库)
 backend/kalman_config.json
 

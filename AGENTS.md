@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | v3.14.0（2026-05-29 发包 — RFC 11 串行流水线结算 M0-M8 全部闭环） |
+| 当前线上版本 | v3.15.0（2026-05-31 — RFC 12 step_tick 计时广播 + host.api 鉴权 axios + 福建金龙双工位插件 v1.1.8 配套；含 RFC 11 串行流水线结算） |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -966,6 +966,7 @@ docs/
 
 | 版本 | 日期 | 主要变更 |
 |---|---|---|
+| v3.15.0 | 2026-05-31 | **RFC 12 步骤进行中计时广播 + 前端 host.api + 福建金龙插件配套** — 平台新增 `step_tick` 只读 observe hook (推理热路径 ~1Hz 节流 fire, ctx 带 `elapsed_sec` + 步骤身份 + min/max_duration 只读参考), "步骤耗时三档实时报警"策略全挂插件侧 (阈值判定 + trigger_alarm + 经 pre_cycle_end 改 NG, 主程序不内嵌阈值). 前端 `host.api` 暴露已鉴权 axios 实例 (插件前端调自有后端路由复用登录 token). 版本 bump 3.14.0→3.15.0 与福建金龙双工位插件 v1.1.8 声明的 `main_version_min=3.15.0` 对齐 (低于此版本被插件版本校验硬拒绝). |
 | v3.14.0 | 2026-05-29 | **RFC 11 串行流水线结算 (Workpiece Flow Coordinator)** — M0-M8 一次性闭环. 新增「单机内多工位**串行**流水线」原生能力 (同一工件依次走 N 个工位, 全过才合格), 与 v3.13.1 工位组 (并行) / cluster (跨机) 完全独立同工位互斥. 2 张新表 (`workpiece_flow_configs/_runs`) + Coordinator 单例 (5 态状态机 + FIFO + Timer 超时) + 3 种触发器 (TimeWindowTrigger / ScanTrigger 与 scan_pair 互斥 / PhysicalTrigger 接 GPIO/Modbus) + REST API 8 端点 + 5 hook + 2 PluginHost API + Settings Tab + Monitor indicator slot. 77 测试零回归 (单元 73 + BDD 4), 福建金龙现场无扫码场景跑通 demo. |
 | v3.13.1 | 2026-05-29 | **RFC 09 插件平台升级 + RFC 10 工位组主程序原生** — 跳过 v3.13.0 骨架直接发完整闭环. M1 业务流程双向打通(10 hooks 含 returnable + 10 PluginHost APIs + capabilities + audit), M2 UI 平台化(TjSlot + 7 主程序 slot 全接入: settings/project tab + cycle-result.indicator + step-cell.duration/status + layout.body/footer), M3 配置扩展(plugin_data 命名空间 + 卸载清理 + tab 注入). RFC 10 工位组(`channel_groups` 表 + Coordinator + synchronized_any_ng/all_ok + threading.Timer 超时 + 报警链路联动直驱 alarm_router + cluster 互操作透传 cycle_context). 395 测试零回归 (plugin_system 328 + channel_group 67), 未装插件场景字节级零差异. |
 | v3.12.1 | 2026-05-29 | splash 双路径修复 (关闭手势动画时恢复 v3.8.1 旧版简单 splash + legacySplashWindow + 后端 ready 才放行主窗) + 启动动画手势相机 Todesk 错配修复 (device_label 反查 splash 端真实 deviceId, 治 webContents origin 隔离) + per_item 开周期门槛解耦/虚拟漏件 NG/工件离场互斥/中心点判定 xywh 坐标修复 + Navbar 加最小化到任务栏菜单. 内容随 v3.13.x→v3.14.0 主线合并交付, 未单独发包 |
@@ -1000,8 +1001,8 @@ docs/
 
 ## 十三、当前在做的事（动态，看 git log 和分支名）
 
-- 主分支 `main`：刚合入 `test/v3.12.0`（**插件系统 v3.13 + 工位组 RFC10 + 串行流水线结算 RFC11/v3.14.0**），同时含 v3.12.1 客户反馈修复（splash 双路径 / Todesk 相机错配 / per_item 四件套 / 最小化菜单）
-- 主线最新能力：v3.14.0 串行流水线（Workpiece Flow）+ v3.13.1 插件平台 + 工位组
+- 主分支 `main`：刚合入 `test/v3.12.0`（**插件系统 v3.13 + 工位组 RFC10 + 串行流水线结算 RFC11/v3.14.0 + RFC12 step_tick/host.api**），同时含 v3.12.1 客户反馈修复（splash 双路径 / Todesk 相机错配 / per_item 四件套 / 最小化菜单），版本 bump 至 v3.15.0
+- 主线最新能力：v3.15.0 step_tick 计时广播 + host.api 鉴权 axios（福建金龙双工位插件 v1.1.8 配套）+ v3.14.0 串行流水线（Workpiece Flow）+ v3.13.1 插件平台 + 工位组
 - 分支 `feat/plugin-system`：**多客户定制插件系统 + 数据库迁 PG**（长期分支，v3.13 阶段大部分能力已合入主干）
   - 决策已敲定：迁 PG / 三档插件全做 / 签名机制 / 不做沙箱
 
@@ -1017,6 +1018,6 @@ docs/
 
 ---
 
-**本文件最后更新**：2026-05-31（test/v3.12.0 合入主干同步：插件系统 v3.13 + 工位组 RFC10 + 串行流水线结算 RFC11/v3.14.0 + v3.12.1 客户反馈修复 splash/Todesk/per_item/最小化菜单）
+**本文件最后更新**：2026-05-31（v3.15.0 发版：版本 bump 至 3.15.0 与福建金龙插件 main_version_min 对齐 + RFC12 step_tick/host.api 记入里程碑；含 test/v3.12.0 合入主干同步：插件系统 v3.13 + 工位组 RFC10 + 串行流水线结算 RFC11/v3.14.0 + v3.12.1 客户反馈修复 splash/Todesk/per_item/最小化菜单）
 **维护者**：项目主作者 + AI agents
 **事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）+ v3.9.0/v3.10.0 实测代码反推（`source_settlement_mixin.py` 1320 行 / `source_per_item_mixin.py` ~960 行 / v3.10 用户系统 ~841 行 core + 5 张新表 + 12 个 UAT 全过）

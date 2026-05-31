@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.15.0 (2026-05-31)
+
+> RFC 12「步骤进行中计时广播」平台能力 + 前端 `host.api` 已鉴权 axios 暴露, 为「步骤耗时三档实时报警」类插件铺基础设施。同步把主程序版本 bump 到 3.15.0 (与福建金龙双工位插件 v1.1.8 声明的 `main_version_min=3.15.0` 对齐 — 低于此版本的主程序会被插件版本校验硬拒绝加载)。无破坏性改动, 未装插件场景字节级零差异。
+
+- [FEAT-001] **RFC 12 `step_tick` 计时广播 hook** — 主程序在推理热路径里对每个正在计时的步骤按 ~1Hz 节流 fire, ctx 携带 `elapsed_sec` + 步骤身份 + 主程序侧 `min/max_duration` (只读参考)。**只读 observe hook**, 主程序不内嵌任何阈值策略; "步骤进行中实时警告/超时报警"完全挂插件侧 (阈值判定 + trigger_alarm + 经 pre_cycle_end 改写 NG)。ctx 字段契约见 `tests/plugin_system/test_step_tick_hook.py`。
+- [FEAT-002] **前端 `host.api` 暴露已鉴权 axios 实例** — 插件前端可直接调自有后端路由 (复用主程序登录 token / baseURL), 不必自己拼鉴权头。
+- [FEAT-003] **福建金龙双工位插件 v1.1.8 配套** — 三档耗时 (未达最短 / 超警告 / 超最长) 步骤进行中当场报警 + 判 NG; 检测页 OK/NG 卡改用插件权威 live-stats (按库内 `is_good` 重算), 被插件判废周期不再被错记成合格。纯插件不动主程序。
+- [CHORE-001] **版本号 bump 3.14.0 → 3.15.0** — `electron/package.json` 唯一权威源, 后端 `backend/_version.py` 运行时读取供插件 `main_version_min/max` 校验。
+
+---
+
 ## v3.14.0 (2026-05-29)
 
 > RFC 11「串行流水线结算」一次性闭环 (M0-M8 全部交付)。新增「单机内多工位串行流水线」原生能力: 同一工件依次走过 N 个摄像头工位, 全过才算合格。架构上与已有 ChannelGroup (并行) / cluster (跨机汇总) 完全独立、不冲突, 同工位互斥。三种触发模式 (扫码 / 时间窗 FIFO / 物理 GPIO) 配齐, 福建金龙现场无扫码流水线场景跑通。详细 changelog 见 `docs/plugin-system/design/11_workpiece_flow_rfc.md`。

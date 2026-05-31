@@ -1,0 +1,79 @@
+{
+  "version": "3.15.0",
+  "date": "2026-05-31",
+  "previous_version": "3.14.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "RFC 12 step_tick 步骤进行中计时广播 hook",
+      "symptom": "客户需要步骤耗时三档(未达最短/超警告/超最长)在步骤进行中当场报警并判NG",
+      "root_cause": "主程序原本只在步骤结束时结算, 缺少步骤进行中的实时计时回调点",
+      "fix": "主程序在推理热路径里对每个正在计时的步骤按~1Hz节流fire step_tick(只读observe hook), ctx携带elapsed_sec+步骤身份+min/max_duration; 阈值判定+报警+经pre_cycle_end改NG全在插件侧, 主程序不内嵌阈值策略",
+      "files": ["backend/api/source_step_stats_mixin.py", "backend/plugin_system/hook_dispatch.py"],
+      "keywords": ["step_tick", "RFC12", "计时广播", "步骤耗时三档", "实时报警", "observe hook", "推理热路径", "节流"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "前端 host.api 暴露已鉴权 axios 实例",
+      "symptom": "插件前端要调自有后端路由但需自己拼登录token和baseURL",
+      "root_cause": "插件前端无法复用主程序登录态访问后端",
+      "fix": "宿主把已鉴权axios实例通过PluginHost暴露给插件前端, 复用主程序登录token+baseURL",
+      "files": ["frontend/src/store/usePluginThemeStore.js", "backend/plugin_system/registry.py"],
+      "keywords": ["host.api", "已鉴权axios", "插件前端", "PluginHost", "登录token", "baseURL"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "福建金龙双工位插件 v1.1.8 端到端验证",
+      "symptom": "客户现场专属双工位检测主页插件需确认能装能加载能跑",
+      "root_cause": "插件依赖RFC12计时广播+库内权威统计重算, 需主程序>=3.15.0",
+      "fix": "端到端验证: 安装(RSA验签+客户绑定HMAC+版本校验)->激活->重启加载(注册cycle_start/step_tick/step_change/pre_cycle_end 4 hook+挂载自有后端路由)->runtime loaded/health ok; 前端ESM加载+slot注册+theme应用全通; 布局覆盖仅双工位channelCount===2启用",
+      "files": [],
+      "keywords": ["福建金龙", "fujian-jinlong", "双工位", "插件加载", "tjvplugin", "internal-demo", "step_tick", "monitor.layout.body", "客户绑定", "main_version_min"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CHORE-001",
+      "title": "版本号 bump 3.14.0 -> 3.15.0",
+      "symptom": "福建金龙插件声明main_version_min=3.15.0, 主程序3.14.0会被版本校验硬拒绝加载",
+      "root_cause": "test/v3.12.0收尾commit明确3.15.0 bump属发版步骤待合并/发版时定, RFC12平台能力已落地但版本号未跟上",
+      "fix": "electron/package.json version改3.15.0(版本号唯一权威源, 后端backend/_version.py运行时读取供插件版本校验)",
+      "files": ["electron/package.json"],
+      "keywords": ["版本号", "version bump", "3.15.0", "main_version_min", "package.json", "_version.py", "插件版本校验"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": ".gitignore 漏忽略插件安装副本目录",
+      "symptom": "上传过.tjvplugin的开发机/客户机, backend/plugins/运行时安装副本会被git当待提交文件可能误入库",
+      "root_cause": "合并test/v3.12.0时收尾commit声称backend/plugins安装副本不入库, 但.gitignore实际没有这条规则",
+      "fix": ".gitignore补backend/plugins/忽略规则",
+      "files": [".gitignore"],
+      "keywords": ["gitignore", "backend/plugins", "插件安装副本", "运行时产物", "误入库"],
+      "breaking": false
+    }
+  ],
+  "merged_from": {
+    "branch": "test/v3.12.0",
+    "includes": [
+      "插件系统 v3.13 (RFC09): 10 hook含returnable + 10 PluginHost API + capability守门 + audit + 7个TjSlot槽位 + plugin_data命名空间 + 签名/客户绑定/版本三重守门",
+      "工位组 RFC10: channel_groups表 + Coordinator + synchronized_any_ng/all_ok + Timer超时 + 报警直驱 + cluster透传 (单机内多工位并行联动)",
+      "串行流水线 RFC11/v3.14.0: workpiece_flow_configs/_runs 2表 + Coordinator 5态状态机 + 3触发器(time_window/scan/physical) + REST 8端点 + 5 hook (单机内多工位串行结算, 与工位组同工位互斥)",
+      "v3.12.1客户反馈修复: splash双路径 + Todesk相机错配 + per_item四件套 + Navbar最小化菜单"
+    ]
+  },
+  "skills_updated": [],
+  "files_changed": ["electron/package.json", "docs/CHANGELOG.md", "AGENTS.md", ".gitignore", "docs/changelog/v3.15.0_2026-05-31.md", "docs/changelog/v3.15.0_2026-05-31.json"],
+  "known_issues": [
+    "RFC11 monitor.workpiece-flow.indicator槽位TjSlot写slot-name而非name产生非致命prop警告(未配流水线不显示, 不影响功能)",
+    "福建金龙双工位布局仅channelCount===2展现, 单工位走原生布局(主程序v-if守门设计非bug)",
+    "v3.12.0提到的9个测试串污染未修",
+    "BUG-002 Todesk相机错配修复需Windows工控机打包验证"
+  ]
+}
