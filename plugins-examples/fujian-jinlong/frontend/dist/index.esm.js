@@ -27,6 +27,7 @@
  */
 
 let _registeredSlot = null;
+let _registeredDurSlot = null;
 
 // ==================== 工位状态徽章 ====================
 function buildStatusInfo(chData) {
@@ -997,6 +998,97 @@ function buildDualStationMonitor(host) {
   });
 }
 
+// ==================== 步骤耗时三档 配置单元格 (R1/R2) ====================
+// 客户需求(郑经理): 每个检测步骤设 最短/警告/最长 三档秒数, 后端 step_tick/
+// step_change/pre_cycle_end 实时判定 (未达最短→报警+NG / 超警告→只报警 / 超最长→
+// 报警+NG). 配置按 step label 存插件后端 SystemConfig, 经 /durations/step-durations
+// 读写. 本单元格注册到主程序步骤设置表的 <TjSlot name="project.step-cell.durations">,
+// 每行一个实例共享同一份 reactive config; 失焦(onChange) debounce 800ms 整体 PUT.
+let _durCfg = null;
+let _durLoaded = false;
+let _durSaveTimer = null;
+
+function _ensureDurCfg(host) {
+  if (_durCfg) return _durCfg;
+  _durCfg = host.vue.reactive({
+    enabled: true,
+    default: { min_sec: 0, warn_sec: 0, max_sec: 0 },
+    steps: {},
+    alarm_event: { warn: "event2", ng: "event2" },
+  });
+  if (!_durLoaded) {
+    _durLoaded = true;
+    host.api.get("/plugins/internal-demo/durations/step-durations").then(({ data }) => {
+      if (data && typeof data === "object") {
+        _durCfg.enabled = data.enabled !== false;
+        if (data.default) Object.assign(_durCfg.default, data.default);
+        if (data.steps && typeof data.steps === "object") _durCfg.steps = data.steps;
+        if (data.alarm_event) Object.assign(_durCfg.alarm_event, data.alarm_event);
+      }
+      console.log("[fujian-jinlong] 步骤耗时三档配置已加载");
+    }).catch((e) => {
+      console.warn("[fujian-jinlong] 读步骤耗时配置失败(走默认):", e && e.message);
+    });
+  }
+  return _durCfg;
+}
+
+function _scheduleDurSave(host) {
+  if (_durSaveTimer) clearTimeout(_durSaveTimer);
+  _durSaveTimer = setTimeout(() => {
+    let payload;
+    try { payload = JSON.parse(JSON.stringify(_durCfg)); } catch (e) { return; }
+    host.api.put("/plugins/internal-demo/durations/step-durations", payload)
+      .then(() => console.log("[fujian-jinlong] 步骤耗时三档已保存"))
+      .catch((e) => console.warn("[fujian-jinlong] 保存步骤耗时配置失败:", e && e.message));
+  }, 800);
+}
+
+function buildDurationCell(host) {
+  const { h, defineComponent } = host.vue;
+  return defineComponent({
+    name: "JinlongStepDurationCell",
+    props: { step: { type: Object, default: () => ({}) } },
+    setup(props) {
+      const cfg = _ensureDurCfg(host);
+      const entryOf = () => {
+        const l = props.step && props.step.label;
+        if (!l) return null;
+        if (!cfg.steps[l]) cfg.steps[l] = { min_sec: 0, warn_sec: 0, max_sec: 0 };
+        return cfg.steps[l];
+      };
+      const onChange = (field, ev) => {
+        const e = entryOf();
+        if (!e) return;
+        const raw = ev && ev.target ? ev.target.value : ev;
+        const v = parseFloat(raw);
+        e[field] = (isNaN(v) || v < 0) ? 0 : v;
+        _scheduleDurSave(host);
+      };
+      const fieldEl = (key, label, color) =>
+        h("label", { style: "display:flex;flex-direction:column;align-items:center;gap:1px;" }, [
+          h("span", { style: "font-size:9px;color:" + color + ";" }, label),
+          h("input", {
+            type: "number", min: "0", step: "0.5",
+            style: "width:46px;font-size:11px;padding:1px 3px;background:#1e293b;border:1px solid #334155;border-radius:3px;color:#e2e8f0;text-align:center;",
+            value: (entryOf() || {})[key] || 0,
+            onChange: (ev) => onChange(key, ev),
+          }),
+        ]);
+      return () => {
+        if (!(props.step && props.step.label)) {
+          return h("span", { style: "font-size:10px;color:#64748b;" }, "--");
+        }
+        return h("div", { style: "display:flex;gap:4px;align-items:flex-end;" }, [
+          fieldEl("min_sec", "最短", "#f59e0b"),
+          fieldEl("warn_sec", "警告", "#eab308"),
+          fieldEl("max_sec", "最长", "#ef4444"),
+        ]);
+      };
+    },
+  });
+}
+
 // ==================== 插件入口 ====================
 export default {
   async register({ host, registry }) {
@@ -1005,6 +1097,14 @@ export default {
       registry.slots.register("monitor.layout.body", DualStationMonitor);
       _registeredSlot = "monitor.layout.body";
       console.log("[fujian-jinlong] monitor.layout.body slot 已注册 (v3 layout, echarts=" + !!host.echarts + ")");
+      // R1/R2: 步骤设置表「步骤耗时三档」配置单元格
+      try {
+        registry.slots.register("project.step-cell.durations", buildDurationCell(host));
+        _registeredDurSlot = "project.step-cell.durations";
+        console.log("[fujian-jinlong] project.step-cell.durations slot 已注册 (步骤耗时三档配置 R1/R2)");
+      } catch (e) {
+        console.warn("[fujian-jinlong] 注册步骤耗时配置单元格失败:", e && e.message);
+      }
     } else {
       console.warn("[fujian-jinlong] registry.slots 不可用, 主程序可能 < v3.13.1");
       return { loaded: false, reason: "slots-api-missing" };
@@ -1016,6 +1116,10 @@ export default {
     if (_registeredSlot && registry?.slots?.unregister) {
       registry.slots.unregister(_registeredSlot);
       _registeredSlot = null;
+    }
+    if (_registeredDurSlot && registry?.slots?.unregister) {
+      registry.slots.unregister(_registeredDurSlot);
+      _registeredDurSlot = null;
     }
   },
 };

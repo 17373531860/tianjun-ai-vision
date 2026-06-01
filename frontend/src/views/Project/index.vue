@@ -503,8 +503,8 @@
                 </div>
               </div>
 
-              <div class="flex-1 overflow-y-auto custom-scrollbar min-h-0 pb-20">
-                <table class="w-full text-left text-xs text-gray-300 border-collapse">
+              <div class="flex-1 overflow-auto custom-scrollbar min-h-0 pb-20">
+                <table class="min-w-full w-max text-left text-xs text-gray-300 border-collapse whitespace-nowrap">
                   <thead class="bg-slate-800 text-gray-400 sticky top-0 z-10">
                     <tr class="border-b border-slate-700">
                       <th class="p-2">原始标签</th>
@@ -533,6 +533,21 @@
                             </div>
                           </template>
                           <span class="cursor-help border-b border-dashed border-gray-500">Box尺寸上限</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-44">
+                        <el-tooltip placement="top">
+                          <template #content>
+                            <div style="max-width: 340px; line-height: 1.5">
+                              <b>步骤耗时三档</b>（插件功能 · 单位秒 · 0 = 不启用该档）<br/>
+                              最短 / 警告 / 最长，进行中实时判定：<br/>
+                              · 走完未达<b>最短</b> → 报警 + 判 NG<br/>
+                              · 进行中超<b>警告</b>（最短与最长之间）→ 只报警，不判 NG<br/>
+                              · 进行中超<b>最长</b> → 报警 + 判 NG<br/>
+                              需激活对应客户插件后此列才出现输入框（用插件管自管阈值时，项目原生「最短/最大持续」请留空）。
+                            </div>
+                          </template>
+                          <span class="cursor-help border-b border-dashed border-gray-500">步骤耗时三档</span>
                         </el-tooltip>
                       </th>
                       <th class="p-2 w-36">
@@ -705,6 +720,11 @@
                             placeholder="0"
                           />
                         </div>
+                      </td>
+                      <td class="p-2">
+                        <TjSlot name="project.step-cell.durations" :step="step" :project="activeProject">
+                          <span class="text-[0.625rem] text-gray-600">需插件</span>
+                        </TjSlot>
                       </td>
                       <td class="p-2 align-top">
                         <div class="flex flex-col gap-1 min-w-[7rem]">
