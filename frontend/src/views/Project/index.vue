@@ -535,7 +535,7 @@
                           <span class="cursor-help border-b border-dashed border-gray-500">Box尺寸上限</span>
                         </el-tooltip>
                       </th>
-                      <th class="p-2 w-44">
+                      <th v-if="hasDurationsSlot" class="p-2 w-44">
                         <el-tooltip placement="top">
                           <template #content>
                             <div style="max-width: 340px; line-height: 1.5">
@@ -721,7 +721,7 @@
                           />
                         </div>
                       </td>
-                      <td class="p-2">
+                      <td v-if="hasDurationsSlot" class="p-2">
                         <TjSlot name="project.step-cell.durations" :step="step" :project="activeProject">
                           <span class="text-[0.625rem] text-gray-600">需插件</span>
                         </TjSlot>
@@ -2391,6 +2391,9 @@ const pluginThemeStore = usePluginThemeStore();
 
 // v3.13 M2.2b: 客户插件注入的项目配置 Tab 列表
 const pluginProjectTabs = computed(() => pluginThemeStore.projectTabs || []);
+// 步骤耗时三档是插件功能：仅当有插件注册了对应挂载点时, 整列(表头+单元格)才渲染,
+// 未装插件的客户完全看不到这列, 做到字节级零差异(不留"需插件"占位列)。
+const hasDurationsSlot = computed(() => !!pluginThemeStore.getSlotComponent('project.step-cell.durations'));
 const searchQuery = ref('');
 const activeProject = ref(null);
 const activeTab = ref('basic');

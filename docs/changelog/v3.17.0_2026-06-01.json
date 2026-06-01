@@ -1,0 +1,55 @@
+{
+  "version": "3.17.0",
+  "date": "2026-06-01",
+  "previous_version": "3.16.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "「步骤耗时三档」配置列按插件存在条件渲染",
+      "symptom": "v3.16.0 无条件渲染该列，没装福建金龙插件的客户也看到一列空的「需插件」占位，体验缺陷",
+      "root_cause": "项目步骤设置表的表头与单元格未对插件存在性做条件判断",
+      "fix": "新增 hasDurationsSlot 计算属性探测 project.step-cell.durations 插槽是否注册，th/td 同加 v-if=hasDurationsSlot；未装插件整列不渲染，字节级零差异",
+      "files": ["frontend/src/views/Project/index.vue"],
+      "keywords": ["步骤耗时三档", "hasDurationsSlot", "TjSlot", "project.step-cell.durations", "条件渲染", "零差异", "插件UI插槽", "福建金龙"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "R1-R5 全功能 E2E/BDD/可见浏览器 UAT 矩阵",
+      "symptom": "客户反复怀疑功能后端写好但前端没效果、UI 没配；需虚拟数据驱动真前端逐一验证",
+      "root_cause": "前序验证多停留在后端契约层，缺少有界面功能的前端闭环与开关组合矩阵",
+      "fix": "新增 6 个 UAT 脚本：三档配置 UI 闭环(填写→保存→后端核对→刷新回填)、三档 10 组合×多段数据判定矩阵、开关开/关前端对照、双工位虚拟检测前端实测、工位组互通端到端联动；插件 L1 单测 361/361 通过",
+      "files": ["tests/uat/uat_20260601_dur_config_ui.py", "tests/uat/uat_20260601_dur_matrix.py", "tests/uat/uat_20260601_dur_switch_frontend.py", "tests/uat/uat_20260601_jinlong_dual_synthetic.py", "tests/uat/uat_20260601_jinlong_dual_layout.py", "tests/uat/uat_20260601_group_interop.py"],
+      "keywords": ["UAT", "E2E", "BDD", "synthetic", "虚拟检测", "可见浏览器", "三档矩阵", "工位组联动", "synchronized_any_ng", "双工位", "数字填进去不显示"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-002",
+      "title": "修复 returnable hook 白名单过时断言",
+      "symptom": "test_returnable_hook.py 断言只有 3 个可返回 hook，批量跑测试时失败",
+      "root_cause": "v3.14 新增 workpiece_flow hook 后契约扩到 8 个，测试断言未同步",
+      "fix": "函数更名 test_returnable_whitelist_hooks_match_contract，断言更新为当前全部 8 个可返回 hook",
+      "files": ["tests/plugin_system/test_returnable_hook.py"],
+      "keywords": ["returnable hook", "白名单", "workpiece_flow", "测试修复", "契约"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "electron/package.json",
+    "frontend/src/views/Project/index.vue",
+    "tests/plugin_system/test_returnable_hook.py",
+    "tests/uat/uat_20260601_dur_config_ui.py",
+    "tests/uat/uat_20260601_dur_matrix.py",
+    "tests/uat/uat_20260601_dur_switch_frontend.py",
+    "tests/uat/uat_20260601_jinlong_dual_synthetic.py",
+    "tests/uat/uat_20260601_jinlong_dual_layout.py",
+    "tests/uat/uat_20260601_group_interop.py",
+    "docs/changelog/v3.17.0_2026-06-01.md",
+    "docs/changelog/v3.17.0_2026-06-01.json",
+    "docs/CHANGELOG.md"
+  ]
+}
