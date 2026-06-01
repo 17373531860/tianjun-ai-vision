@@ -122,11 +122,12 @@ begin
   end;
 end;
 
-{ v3.15.4: 覆盖安装前清掉旧的前端产物目录.
-  前端 assets 用 content-hash 命名 (index-xxxx.js), 升级后新文件名不同, Inno 的
-  ignoreversion 只覆盖同名文件 → 旧 hash 文件永远残留, 新旧 bundle 混叠 (现场出现
-  5/7 + 5/31 两批文件同存). app/dist 是纯静态可完全重建, 不含任何用户数据 (用户数据
-  在 {userappdata}), 安装时 Electron 已关闭不占用, 删了由本次安装重新铺. }
+// v3.15.4: 覆盖安装前清掉旧的前端产物目录.
+// 前端 assets 用 content-hash 命名 (index-xxxx.js), 升级后新文件名不同, Inno 的
+// ignoreversion 只覆盖同名文件, 旧 hash 文件永远残留, 新旧 bundle 混叠 (现场出现
+// 5/7 + 5/31 两批文件同存). app/dist 是纯静态可完全重建, 不含任何用户数据
+// (用户数据在 userappdata 目录), 安装时 Electron 已关闭不占用, 删了由本次安装重新铺.
+// 注意: Inno 的 { } 块注释不支持内部再出现花括号, 故此处用 // 行注释, 文字里不写花括号常量.
 procedure CleanStaleFrontend;
 var
   DistDir: String;
