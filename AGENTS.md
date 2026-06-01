@@ -819,6 +819,7 @@
 9. **bat 热补丁必须 CRLF 换行符**（LF 在 Windows 上闪退）
 10. **不要在 `OPENCV_FFMPEG_CAPTURE_OPTIONS` 之前 import cv2**（顺序敏感）
 11. **改 `source_settlement_mixin.py` 时不要把 `_process_last_first_mode` / `_process_cross_cycle_groups` 之间的守门去掉**（v3.9.0 起两个状态机都依赖 `settlement_mode == 'last_first'` / `cross_cycle == true` 严格守门，否则会污染其他模式的 cycle_steps）— 修改前必读 `debug-source` skill 第十二·七节
+12. **前端插件代码动态加载不能只依赖 `import(blob:...)`**（v3.15.4 血泪教训）：打包后主窗口走 `file://`，Chromium 拦 `file://` 源下的 blob 动态 import，导致插件 ESM 静默加载失败、前端定制完全不生效，而本地 `http://localhost` 开发不复现。`frontend/src/composables/usePluginLoader.js` 必须保留 **blob → data:URL → 后端 http URL** 三级兜底；插件相关 store 里给 Vue Component 标 `markRaw` 必须用**顶部静态 import**，不能用 `import('vue').then()`（同样在 `file://` 下不稳）。前端插件加载有任何疑问先看后端日志（前端已通过 `POST /api/v1/plugins/client-log` 把每步回传，进终端 + 落盘），不要再开 F12。
 
 ---
 

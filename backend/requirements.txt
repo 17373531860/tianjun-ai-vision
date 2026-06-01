@@ -57,3 +57,8 @@ tzlocal>=5.0.0           # APScheduler 时区支持
 # v3.10.0 用户系统 - 登录鉴权 + 密码哈希
 # 直接用 bcrypt 库 (不走 passlib, 后者与 bcrypt 5.x 有 __about__ 兼容警告)
 bcrypt>=4.0.0
+
+# v3.13.0 插件系统 - 验签 (RSA-PSS / 公钥指纹) + manifest schema 校验
+# ⚠️ 缺 cryptography 时插件验签会 import 失败, 被 try/except 吞成 "签名校验失败" 假象 (v3.15.x 现场事故)
+cryptography>=42.0.0
+jsonschema>=4.0.0

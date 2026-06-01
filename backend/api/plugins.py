@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import os
 import shutil
@@ -8,7 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,10 @@ from backend.plugin_system.verifier import (
 
 
 router = APIRouter(prefix="/plugins", tags=["Plugins"])
+
+# 与 PluginManager 同源 logger, 保证前端回传日志和后端加载日志在同一命名空间下,
+# 统一进启动终端 [Backend] 行 + 落盘插件日志, 便于现场一处查全链路.
+log = logging.getLogger("tianjun.plugin")
 
 
 def _audit(db: Session, customer_code: Optional[str], action: str, status: str, message: str) -> None:
@@ -93,6 +98,37 @@ def list_plugins(db: Session = Depends(get_db)) -> Dict[str, Any]:
         "items": [_serialize(row, states.get(row.customer_code)) for row in rows],
         "active_customer_code": next((row.customer_code for row in rows if row.is_active), None),
     }
+
+
+@router.post("/client-log")
+def client_log(payload: Dict[str, Any] = Body(default=None)) -> Dict[str, str]:
+    """接收前端插件加载器 (usePluginLoader) 的诊断日志, 统一打到后端 logger.
+
+    ⚠️ v3.15.4 现场事故复盘的核心诊断通道:
+      打包后主窗口走 file://, 浏览器 console 既进不了启动终端 (除非 Electron 转发),
+      工业机又开不了 F12 → 前端插件加载全程黑盒, 排障靠转发补丁 + 敲命令折腾整夜.
+      此接口让前端把每一步加载状态回传, 后端 log 出来 → 进终端 [Backend] 行 + 落盘
+      插件日志文件. 从此前端插件问题在后端日志里一目了然, 无需任何客户端操作.
+
+    不挂鉴权: 前端启动早期可能尚无 token, 且仅写日志无副作用; detail 截断防滥用.
+    """
+    try:
+        data = payload or {}
+        level = str(data.get("level", "info")).lower()
+        source = str(data.get("source", "frontend"))[:50]
+        stage = str(data.get("stage", ""))[:300]
+        detail = str(data.get("detail", ""))[:4000]
+        msg = f"[ClientLog][{source}] {stage}" + (f" :: {detail}" if detail else "")
+        if level == "error":
+            log.error(msg)
+        elif level in ("warn", "warning"):
+            log.warning(msg)
+        else:
+            log.info(msg)
+    except Exception:
+        # 日志通道自身永远不能影响前端主流程
+        pass
+    return {"status": "ok"}
 
 
 @router.post("/install",

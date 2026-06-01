@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -27,8 +28,17 @@ _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?$")
 def get_main_version() -> str:
     """返回主程序版本号字符串，例如 ``"3.12.0"``。
 
-    失败回退 ``"0.0.0"``，让插件 ``main_version_min`` 校验天然不通过。
+    取值优先级 (与 export_context._read_app_info 对齐):
+    1. 环境变量 ``TIANJUN_APP_VERSION`` —— Electron 启动后端时注入 (backend-manager.js).
+       **正式安装包必走这条**: 打包后 package.json 进了 app.asar, Python fs 读不到,
+       只能靠 env 传. 之前漏读此 env 导致客户机插件版本校验恒为 0.0.0 而误拒.
+    2. 回退读 ``electron/package.json`` 文件 —— 仅开发模式直接 uvicorn 启动时命中.
+    3. 都失败回退 ``"0.0.0"``，让插件 ``main_version_min`` 校验天然不通过。
     """
+    env_ver = os.environ.get("TIANJUN_APP_VERSION", "").strip()
+    if _VERSION_RE.match(env_ver):
+        return env_ver
+
     try:
         if not _PACKAGE_JSON.exists():
             return _FALLBACK

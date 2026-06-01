@@ -3,6 +3,18 @@
        客户插件用于双工位左右半屏 + 共用底栏等深度重排. 默认走原 layout, 字节级零差异.
        v3.13.2 补丁: 加 :actions 透传开始/停止/待机/清零四个控制方法,
        让 layout.body 插件能完整重排控制按钮 (项目/模型解析等复杂前置都在 Monitor 内做了). -->
+  <!-- v3.15.4: 插件注册了定制监控界面但当前不是双工位时, 给明确可见提示.
+       防止"插件像没装"误判 — 客户装了双工位定制插件却忘切工位数, 老坑. -->
+  <div
+    v-if="layoutBodyOverride && channelCount !== 2"
+    style="margin: 8px 12px; padding: 10px 14px; border-radius: 8px;
+           background: rgba(255, 184, 0, 0.12); border: 1px solid rgba(255, 184, 0, 0.5);
+           color: #d48806; font-size: 13px; line-height: 1.6;"
+  >
+    ⚠ 当前已激活的插件提供了定制监控界面，但需在「双工位」模式下才生效（当前为
+    {{ channelCount }} 工位）。请到「设置 → 工位数」切换为 2 后刷新页面。
+  </div>
+
   <!-- layout.body 插件: 仅双工位启用; 全局 Toast / 人工确认 / 录像异常由宿主渲染, 避免插件漏功能 -->
   <div
     v-if="layoutBodyOverride && channelCount === 2"

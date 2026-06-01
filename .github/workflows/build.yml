@@ -148,6 +148,9 @@ jobs:
           except ImportError:
             print('WARNING: TensorRT not available (non-fatal on CI without GPU)')"
           python -c "import scipy; print(f'SciPy: {scipy.__version__}')"
+          echo "Verifying plugin-system crypto deps (v3.15.x 现场缺 cryptography 导致验签假性失败)..."
+          python -c "import cryptography; print(f'cryptography: {cryptography.__version__}')"
+          python -c "import jsonschema; print(f'jsonschema: {jsonschema.__version__}')"
           echo "Checking opencv packages..."
           pip list | grep -i opencv
           echo "Checking inference engine packages..."

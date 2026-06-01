@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import { markRaw } from 'vue';
 import api from '@/api/index';
 
 /**
@@ -159,9 +160,12 @@ export const usePluginThemeStore = defineStore('plugin-theme', {
       if (!name || !component) return;
       // markRaw 避免 Pinia 把 Vue Component 当 reactive data 来代理
       // (Component 引用本身是不变的, 不需要 deep watch)
-      import('vue').then(({ markRaw }) => {
-        this.pluginSlots[name] = markRaw(component);
-      });
+      // ⚠️ v3.15.4: 必须用顶部静态 import 的 markRaw — 之前用 import('vue').then()
+      // 异步动态导入, 在 file:// 打包环境下动态 import 不稳, 会让插槽永远设不上
+      // (插件 register 已成功调到这里, 但 slot 还是空 → 双工位 UI 不显示的元凶之一).
+      // 新增 key 触发 Vue3 reactive, getSlotComponent getter 会重算 → Monitor 的
+      // layoutBodyOverride computed 自动更新.
+      this.pluginSlots[name] = markRaw(component);
     },
 
     removePluginSlot(name) {
@@ -183,19 +187,12 @@ export const usePluginThemeStore = defineStore('plugin-theme', {
         component: tab.component || null,
       };
       // 把 component 标 raw 避免 Pinia reactive 代理 Vue Component
+      // ⚠️ v3.15.4: 同 addPluginSlot, 用静态 import 的 markRaw (不再 import('vue').then)
       if (payload.component) {
-        import('vue').then(({ markRaw }) => {
-          payload.component = markRaw(payload.component);
-          if (idx >= 0) {
-            target.splice(idx, 1, payload);
-          } else {
-            target.push(payload);
-          }
-        });
-      } else {
-        if (idx >= 0) target.splice(idx, 1, payload);
-        else target.push(payload);
+        payload.component = markRaw(payload.component);
       }
+      if (idx >= 0) target.splice(idx, 1, payload);
+      else target.push(payload);
     },
 
     removePluginTab(scope, key) {

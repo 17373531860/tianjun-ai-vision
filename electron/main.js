@@ -375,11 +375,17 @@ function createWindow(opts = {}) {
     console.error(`[App] ✗ 页面加载失败: ${validatedURL}, 错误: ${errorDescription} (${errorCode})`);
   });
 
+  // 渲染进程 console 转发到主进程终端.
+  // v3.15.4: 扩展匹配 — 除了带 [⬛ 标记的主程序埋点, 额外转发所有含 Plugin /
+  // PluginLoader / RendererDiag 的日志. 打包后主窗口走 file://, 前端 console 默认
+  // 进不了启动终端 + 工业机开不了 F12, 这条转发是前端插件加载排障的命脉, 必须够宽.
   mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
-    if (message.includes('[⬛')) {
-      const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
-      console.log(`[Renderer:${levels[level] || level}] ${message}`);
-    }
+    try {
+      if (message.includes('[⬛') || /Plugin|PluginLoader|RendererDiag/i.test(message)) {
+        const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+        console.log(`[Renderer:${levels[level] || level}] ${message}`);
+      }
+    } catch (e) { /* 转发失败不影响渲染进程 */ }
   });
   
   // 拦截窗口关闭事件

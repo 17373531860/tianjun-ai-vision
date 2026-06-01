@@ -51,6 +51,12 @@ class PluginManager:
         # 主程序版本号: 默认从 electron/package.json 读 (唯一权威源).
         # 显式传值仅用于测试场景 (mock 不同版本验证 main_version_min/max 行为).
         effective_version = main_version if main_version is not None else get_main_version()
+        # v3.15.4: 显式打印生效版本号 — 之前 0.0.0 误拒事故的直接定位点
+        # (0.0.0 = 没读到 TIANJUN_APP_VERSION env, 打包后 package.json 进了 asar).
+        log.info(
+            "[Plugin][%s] 开始 startup_load: 主程序版本=%s, install_path=%s",
+            record.customer_code, effective_version, record.install_path,
+        )
 
         try:
             manifest = json.loads(record.manifest_json)

@@ -11,15 +11,20 @@
  * 设计:
  *   - 拉 active manifest, 拿 frontend.entry 路径
  *   - fetch /api/v1/plugins/active/assets/{entry} 拿 ESM 文本
- *   - new Blob → URL.createObjectURL → dynamic import
+ *   - 动态 import 该 ESM (三级兜底: blob → data → http, 见下)
  *   - 调 module.default.register({ host, registry })
  *     - host = { vue, pinia, router, i18n, echarts }   ← 让插件不需要 import "vue" / "echarts"
- *     - registry = {
- *         routes: { add(routeOpts), remove(name) }   → vue-router 4 addRoute/removeRoute
- *         menus:  { add(menuOpts), remove(path) }    → usePluginThemeStore.pluginMenus
- *         stores: { register(id, factory) }          → 调一次 factory 让 Pinia 自然挂载
- *       }
+ *     - registry = { routes / menus / stores / slots / tabs }
  *   - 失败静默 fallback, 主程序不崩
+ *
+ * ⚠️ v3.15.4 关键修复 (现场事故复盘):
+ *   打包后主窗口走 file:// 协议, Chromium 对 file:// 源下 `import(blob:...)` 动态导入
+ *   有安全限制 → 插件 ESM 加载静默失败 → 双工位 UI 等前端定制完全不生效, 而本地
+ *   开发是 http://localhost 不复现. 修法:
+ *     1. import 改成「三级兜底」: blob → data:URL → 后端 http URL, 任一成功即用.
+ *     2. 全过程日志双通道输出: console (带 ⬛ 前缀, Electron 主进程转发进终端) +
+ *        POST /plugins/client-log 回传后端 logger (终端可见 + 落盘 plugin 日志文件).
+ *        从此前端插件加载问题无需开 DevTools / 不再黑盒.
  *
  * 局限 (留给后续 PR):
  *   - 没做 SES sandbox / iframe 隔离 — 插件代码有完全 host 访问权
@@ -39,60 +44,127 @@ export function setPluginLoaderI18n(i18n) {
   _i18nInstance = i18n;
 }
 
+// ==================== 诊断日志双通道 ====================
+// 现场没法开 DevTools, 所以每一步都:
+//   1) console.log 带 [⬛ 前缀 → Electron 主进程 console-message 钩子转发进启动终端
+//   2) POST /plugins/client-log → 后端 logger 打印 (终端 [Backend] 行) + 落盘
+// 任一通道挂掉都不影响主流程 (全 try 包住).
+function _safeStr(v) {
+  if (v === undefined || v === null) return "";
+  if (typeof v === "string") return v;
+  try { return JSON.stringify(v); } catch (e) { return String(v); }
+}
+
+function plog(stage, detail, level) {
+  const d = _safeStr(detail);
+  const line = `[⬛ PluginLoader] ${stage}${d ? " :: " + d : ""}`;
+  try {
+    // eslint-disable-next-line no-console
+    (level === "error" ? console.error : level === "warn" ? console.warn : console.log)(line);
+  } catch (e) { /* ignore */ }
+  try {
+    api.post("/plugins/client-log", {
+      source: "plugin-loader",
+      level: level || "info",
+      stage,
+      detail: d,
+      ts: Date.now(),
+    }).catch(() => {});
+  } catch (e) { /* ignore */ }
+}
+
 /**
  * 主入口 — main.js 在 Vue mount 前调一次.
  * @param {import('vue-router').Router} router
  */
 export async function loadActivePluginFrontend(router) {
+  plog("开始加载前端插件", { protocol: (typeof location !== "undefined" ? location.protocol : "?") });
+
   let manifest;
   try {
     const { data } = await api.get("/plugins/active/manifest");
     manifest = data;
   } catch (e) {
-    console.warn("[PluginLoader] 拉 active manifest 失败:", e?.message);
+    plog("拉 active manifest 失败", e?.message, "warn");
     return { loaded: false, reason: "manifest-fetch-failed" };
   }
 
   if (!manifest || !manifest.customer_code) {
+    plog("无 active 插件 (manifest 空)", null, "warn");
     return { loaded: false, reason: "no-active-plugin" };
   }
+  plog("active 插件", { customer_code: manifest.customer_code, version: manifest.plugin_version, tier: manifest.tier });
 
   const entry = manifest?.frontend?.entry;
   if (!entry) {
+    plog("manifest 无 frontend.entry, 此包不含前端 UI", null, "warn");
     return { loaded: false, reason: "no-frontend-entry" };
   }
 
   const themeStore = usePluginThemeStore();
   const url = `${api.defaults.baseURL}/plugins/active/assets/${entry}`;
+  plog("准备拉取 ESM", url);
 
   let text;
   try {
     const resp = await fetch(url, { credentials: "omit" });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     text = await resp.text();
+    plog("ESM 文本已拉到", { bytes: text.length });
   } catch (e) {
-    console.warn("[PluginLoader] 拉 ESM entry 失败:", e?.message);
-    return { loaded: false, reason: "entry-fetch-failed" };
+    plog("拉 ESM entry 失败", e?.message, "error");
+    return { loaded: false, reason: "entry-fetch-failed", error: e?.message };
   }
 
-  let mod;
-  let blobUrl;
-  try {
-    const blob = new Blob([text], { type: "application/javascript" });
-    blobUrl = URL.createObjectURL(blob);
-    _loadedBlobUrls.add(blobUrl);
-    mod = await import(/* @vite-ignore */ blobUrl);
-  } catch (e) {
-    console.warn("[PluginLoader] dynamic import 失败:", e);
-    if (blobUrl) URL.revokeObjectURL(blobUrl);
-    return { loaded: false, reason: "import-failed", error: e?.message };
+  // ===== 三级兜底动态 import (修 file:// 下 blob import 被拦) =====
+  // 数据驱动避免 if/else 分支堆叠: 依次尝试 blob → data → http, 谁先成功用谁.
+  const strategies = [
+    {
+      name: "blob",
+      make: () => {
+        const blob = new Blob([text], { type: "application/javascript" });
+        const u = URL.createObjectURL(blob);
+        _loadedBlobUrls.add(u);
+        return u;
+      },
+    },
+    {
+      name: "data",
+      make: () => "data:text/javascript;charset=utf-8," + encodeURIComponent(text),
+    },
+    {
+      // 直接 import 后端真实 http URL. Electron 主窗口 webSecurity:false,
+      // 允许 file:// 页面跨源 import http://localhost:8001 的 module.
+      name: "http",
+      make: () => url,
+    },
+  ];
+
+  let mod = null;
+  let usedStrategy = null;
+  for (const st of strategies) {
+    try {
+      const importUrl = st.make();
+      // eslint-disable-next-line no-unsanitized/method
+      mod = await import(/* @vite-ignore */ importUrl);
+      usedStrategy = st.name;
+      plog(`import 成功`, { strategy: st.name });
+      break;
+    } catch (e) {
+      plog(`import 策略失败`, { strategy: st.name, error: e?.message, name: e?.name }, "warn");
+    }
+  }
+  if (!mod) {
+    plog("三级 import 全部失败 — 前端插件无法加载", null, "error");
+    return { loaded: false, reason: "import-failed" };
   }
 
   const exported = mod?.default ?? mod;
   if (!exported || typeof exported.register !== "function") {
-    console.warn("[PluginLoader] entry 没导出 register():", entry);
+    plog("entry 没导出 register()", { entry, exportKeys: exported ? Object.keys(exported) : null }, "error");
     return { loaded: false, reason: "no-register-export" };
   }
+  plog("拿到 register(), 准备注册", { strategy: usedStrategy });
 
   const host = {
     vue: Vue,
@@ -115,9 +187,9 @@ export async function loadActivePluginFrontend(router) {
         try {
           router.addRoute(finalRoute);
           themeStore.addPluginRoute(finalRoute);
-          console.log(`[PluginLoader] route added: ${finalRoute.path} (${finalRoute.name})`);
+          plog("route added", { path: finalRoute.path, name: finalRoute.name });
         } catch (e) {
-          console.warn(`[PluginLoader] route add 失败 ${finalRoute.path}:`, e);
+          plog("route add 失败", { path: finalRoute.path, error: e?.message }, "warn");
         }
       },
       remove(name) {
@@ -125,7 +197,7 @@ export async function loadActivePluginFrontend(router) {
           router.removeRoute(name);
           themeStore.removePluginRoute(name);
         } catch (e) {
-          console.warn(`[PluginLoader] route remove 失败 ${name}:`, e);
+          plog("route remove 失败", { name, error: e?.message }, "warn");
         }
       },
     },
@@ -133,9 +205,9 @@ export async function loadActivePluginFrontend(router) {
       add(menuOpts) {
         try {
           themeStore.addPluginMenu(menuOpts);
-          console.log(`[PluginLoader] menu added: ${menuOpts.path} (${menuOpts.label})`);
+          plog("menu added", { path: menuOpts.path, label: menuOpts.label });
         } catch (e) {
-          console.warn("[PluginLoader] menu add 失败:", e);
+          plog("menu add 失败", e?.message, "warn");
         }
       },
       remove(path) {
@@ -147,10 +219,10 @@ export async function loadActivePluginFrontend(router) {
         try {
           if (typeof useStoreFn === "function") {
             useStoreFn();
-            console.log(`[PluginLoader] store registered: ${id}`);
+            plog("store registered", id);
           }
         } catch (e) {
-          console.warn(`[PluginLoader] store register 失败 ${id}:`, e);
+          plog("store register 失败", { id, error: e?.message }, "warn");
         }
       },
     },
@@ -161,25 +233,25 @@ export async function loadActivePluginFrontend(router) {
     slots: {
       register(slotName, component) {
         if (!slotName) {
-          console.warn("[PluginLoader] slot register 失败: slotName 必填");
+          plog("slot register 失败: slotName 必填", null, "warn");
           return;
         }
         if (!component) {
-          console.warn(`[PluginLoader] slot register 失败 ${slotName}: component 必填`);
+          plog("slot register 失败: component 必填", slotName, "warn");
           return;
         }
         try {
           themeStore.addPluginSlot(slotName, component);
-          console.log(`[PluginLoader] slot registered: ${slotName}`);
+          plog("slot registered", slotName);
         } catch (e) {
-          console.warn(`[PluginLoader] slot register 失败 ${slotName}:`, e);
+          plog("slot register 失败", { slotName, error: e?.message }, "warn");
         }
       },
       unregister(slotName) {
         try {
           themeStore.removePluginSlot(slotName);
         } catch (e) {
-          console.warn(`[PluginLoader] slot unregister 失败 ${slotName}:`, e);
+          plog("slot unregister 失败", { slotName, error: e?.message }, "warn");
         }
       },
     },
@@ -189,25 +261,25 @@ export async function loadActivePluginFrontend(router) {
     tabs: {
       register(scope, tab) {
         if (!scope || !tab || !tab.key || !tab.label) {
-          console.warn("[PluginLoader] tab register 失败: scope/key/label 必填", { scope, tab });
+          plog("tab register 失败: scope/key/label 必填", { scope, tab }, "warn");
           return;
         }
         if (scope !== "settings" && scope !== "project") {
-          console.warn(`[PluginLoader] tab register 失败: scope 必须是 settings/project (got ${scope})`);
+          plog("tab register 失败: scope 必须是 settings/project", scope, "warn");
           return;
         }
         try {
           themeStore.addPluginTab(scope, tab);
-          console.log(`[PluginLoader] ${scope} tab registered: ${tab.key} (${tab.label})`);
+          plog(`${scope} tab registered`, { key: tab.key, label: tab.label });
         } catch (e) {
-          console.warn(`[PluginLoader] tab register 失败 ${tab.key}:`, e);
+          plog("tab register 失败", { key: tab.key, error: e?.message }, "warn");
         }
       },
       unregister(scope, key) {
         try {
           themeStore.removePluginTab(scope, key);
         } catch (e) {
-          console.warn(`[PluginLoader] tab unregister 失败 ${scope}.${key}:`, e);
+          plog("tab unregister 失败", { scope, key, error: e?.message }, "warn");
         }
       },
     },
@@ -215,9 +287,10 @@ export async function loadActivePluginFrontend(router) {
 
   try {
     const result = await exported.register({ host, registry });
+    plog("register() 完成, 前端插件加载成功", { customer_code: manifest.customer_code, result });
     return { loaded: true, customerCode: manifest.customer_code, result };
   } catch (e) {
-    console.warn("[PluginLoader] register() 抛错:", e);
+    plog("register() 抛错", { error: e?.message, stack: e?.stack }, "error");
     return { loaded: false, reason: "register-threw", error: e?.message };
   }
 }

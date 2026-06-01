@@ -122,10 +122,28 @@ begin
   end;
 end;
 
+{ v3.15.4: 覆盖安装前清掉旧的前端产物目录.
+  前端 assets 用 content-hash 命名 (index-xxxx.js), 升级后新文件名不同, Inno 的
+  ignoreversion 只覆盖同名文件 → 旧 hash 文件永远残留, 新旧 bundle 混叠 (现场出现
+  5/7 + 5/31 两批文件同存). app/dist 是纯静态可完全重建, 不含任何用户数据 (用户数据
+  在 {userappdata}), 安装时 Electron 已关闭不占用, 删了由本次安装重新铺. }
+procedure CleanStaleFrontend;
+var
+  DistDir: String;
+begin
+  DistDir := ExpandConstant('{app}\resources\app\dist');
+  if DirExists(DistDir) then
+  begin
+    DelTree(DistDir, True, True, True);
+    Log('Stale frontend dist removed before reinstall: ' + DistDir);
+  end;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   BackupLicenseFiles;
   BackupUserData;
+  CleanStaleFrontend;
   Result := '';
 end;
 
