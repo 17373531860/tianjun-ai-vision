@@ -503,7 +503,7 @@
                 </div>
               </div>
 
-              <div class="flex-1 overflow-auto custom-scrollbar min-h-0 pb-20">
+              <div class="flex-1 overflow-auto custom-scrollbar step-table-scroll min-h-0">
                 <table class="min-w-full w-max text-left text-xs text-gray-300 border-collapse whitespace-nowrap">
                   <thead class="bg-slate-800 text-gray-400 sticky top-0 z-10">
                     <tr class="border-b border-slate-700">
@@ -4633,6 +4633,26 @@ const addEventAction = (event) => {
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #64748b;
+}
+
+/* 步骤设置表: 横向滚动条加粗高亮 + 底部外边距把可视底边推回视口内,
+   修复工控机矮屏下横向滚动条沉到视口外/被底部状态栏遮挡导致"划不动"的问题 */
+.step-table-scroll {
+  margin-bottom: 52px;
+}
+.step-table-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 14px;
+}
+.step-table-scroll::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+.step-table-scroll::-webkit-scrollbar-thumb {
+  background: #06b6d4;
+  border-radius: 7px;
+}
+.step-table-scroll::-webkit-scrollbar-thumb:hover {
+  background: #22d3ee;
 }
 
 :deep(.project-tabs) {
