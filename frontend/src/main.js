@@ -101,8 +101,40 @@ try {
 
 // G3 + G2: active 插件主题 + Tier2/3 ESM loader — 在 Vue mount 前 fire-and-forget
 // (失败静默 fallback, 主程序继续走默认外观与默认路由表)
+//
+// ⚠️ v3.15.5 关键修复 (现场事故复盘):
+//   前端页面加载远早于后端就绪 (后端要 CUDA 预热 + 模型加载好几秒). 旧逻辑一上来就拉
+//   插件清单 → Network Error → 一次性放弃 → 插件前端定制全程不加载 (现场日志精准抓到
+//   "[⬛ PluginLoader] 拿 active manifest 失败 :: Network Error"). 修法: 先轮询探活
+//   等后端就绪再拉, 拉不到就重试, 覆盖后端冷启动窗口.
 (async () => {
+  const api = (await import('./api/index')).default;
+
+  // 用插件清单端点探活 (无 active 插件也返回 200), 轮询直到后端就绪, 最多等 90s.
+  // 90s 覆盖工控机冷启动 + CUDA 预热 + 大模型加载的最坏情况.
+  async function waitBackendReady(maxWaitMs = 90000, intervalMs = 1000) {
+    const start = Date.now();
+    let attempt = 0;
+    while (Date.now() - start < maxWaitMs) {
+      attempt += 1;
+      try {
+        await api.get('/plugins/active/manifest');
+        console.log(`[⬛ PluginBootstrap] 后端就绪 (探测#${attempt}, 耗时 ${Date.now() - start}ms)`);
+        return true;
+      } catch (e) {
+        if (attempt === 1 || attempt % 5 === 0) {
+          console.log(`[⬛ PluginBootstrap] 等后端就绪... 探测#${attempt} (${e?.message || e})`);
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    }
+    console.warn(`[⬛ PluginBootstrap] 等后端就绪超时 ${maxWaitMs}ms, 仍尝试加载插件 (可能 Network Error)`);
+    return false;
+  }
+
   try {
+    await waitBackendReady();
+
     const { usePluginThemeStore } = await import('./store/usePluginThemeStore.js');
     const themeStore = usePluginThemeStore();
     await themeStore.apply();

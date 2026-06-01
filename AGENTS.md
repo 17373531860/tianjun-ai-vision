@@ -820,6 +820,7 @@
 10. **不要在 `OPENCV_FFMPEG_CAPTURE_OPTIONS` 之前 import cv2**（顺序敏感）
 11. **改 `source_settlement_mixin.py` 时不要把 `_process_last_first_mode` / `_process_cross_cycle_groups` 之间的守门去掉**（v3.9.0 起两个状态机都依赖 `settlement_mode == 'last_first'` / `cross_cycle == true` 严格守门，否则会污染其他模式的 cycle_steps）— 修改前必读 `debug-source` skill 第十二·七节
 12. **前端插件代码动态加载不能只依赖 `import(blob:...)`**（v3.15.4 血泪教训）：打包后主窗口走 `file://`，Chromium 拦 `file://` 源下的 blob 动态 import，导致插件 ESM 静默加载失败、前端定制完全不生效，而本地 `http://localhost` 开发不复现。`frontend/src/composables/usePluginLoader.js` 必须保留 **blob → data:URL → 后端 http URL** 三级兜底；插件相关 store 里给 Vue Component 标 `markRaw` 必须用**顶部静态 import**，不能用 `import('vue').then()`（同样在 `file://` 下不稳）。前端插件加载有任何疑问先看后端日志（前端已通过 `POST /api/v1/plugins/client-log` 把每步回传，进终端 + 落盘），不要再开 F12。
+13. **前端插件 bootstrap 必须先等后端就绪再拉清单**（v3.15.5 血泪教训）：打包后前端 `file://` 页面加载远早于后端冷启动完成（后端要 CUDA 预热 + 大模型加载，实测 Backend ready 在前端页面加载之后好几秒）。`frontend/src/main.js` 的插件 bootstrap **不能**裸调 `themeStore.apply()` / `loadActivePluginFrontend()`——必须先 `waitBackendReady()` 轮询探活（用 `/plugins/active/manifest`，无 active 插件也返回 200）等后端起来、最多 90s，否则一上来就 `Network Error` 一次性放弃、插件前端定制全程不加载（现场会在后端 `Application startup complete` 之前看到 `[⬛ PluginLoader] 拿 active manifest 失败 :: Network Error`）。这是比第 12 条 `file://` import 更靠前的一环。
 
 ---
 
