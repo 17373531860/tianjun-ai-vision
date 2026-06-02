@@ -1021,18 +1021,6 @@
                     <el-input-number v-model="activeProject.cycle_max_duration" size="small" :min="0" :step="5" :precision="2" />
                     <span class="text-xs text-gray-500">周期总时长超过此值直接判定NG（0=不启用）</span>
                   </div>
-                  <!-- v3.8.x: 严格顺序模式专属 — 等待结算步骤时遇到首步立刻开新周期; last_first 已自带此能力, 隐藏开关 -->
-                  <div v-if="activeProject.settlement_mode !== 'last_first' && (activeProject.logic_mode === 'sequential' || (activeProject.logic_mode === 'custom' && activeProject.custom_based_on === 'sequential'))"
-                       class="flex items-start gap-3 pt-2 border-t border-slate-700">
-                    <el-switch v-model="activeProject.first_step_aborts_pending_settle" size="default" />
-                    <div class="flex-1">
-                      <p class="text-gray-300 text-xs">等待结算步骤时遇到首步立刻开新周期</p>
-                      <p class="text-[0.65rem] text-gray-500 mt-1">
-                        ★ 场景: 严格顺序 A→B→C→D, 客户做完 ABC 等不到 D 就直接重做 ABCD。
-                        开启后旧周期判 NG (缺末步), 本次首步开启新周期。仅在"前置步骤都齐、只差结算步骤"时触发, 其他场景仍走步骤回退。
-                      </p>
-                    </div>
-                  </div>
                 </div>
               </el-card>
 
@@ -3075,10 +3063,6 @@ const initProjectDefaults = (project) => {
   if (project.cycle_max_duration === undefined) {
     project.cycle_max_duration = pipelineConfig.cycle_max_duration || 0;
   }
-  // v3.8.x: 严格顺序模式 - "等待结算步骤时遇到首步立刻开新周期" 开关 (默认 false)
-  if (project.first_step_aborts_pending_settle === undefined) {
-    project.first_step_aborts_pending_settle = pipelineConfig.first_step_aborts_pending_settle === true;
-  }
   // 加载后同步结算步约束（与 watch(settlement_mode) 一致，避免开关仍可编辑/值为 true）
   const canSeqSettle = project.logic_mode === 'sequential'
     || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential');
@@ -3086,9 +3070,6 @@ const initProjectDefaults = (project) => {
     if (project.settlement_mode === 'last_first') {
       for (const step of project.steps_config) {
         step.strict_order = false;
-      }
-      if (project.first_step_aborts_pending_settle) {
-        project.first_step_aborts_pending_settle = false;
       }
     } else if (project.settlement_mode === 'last_step' || project.settlement_mode === 'first_step') {
       let seq = (project.logic_mode === 'custom' && project.custom_based_on === 'sequential')
@@ -3307,7 +3288,6 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.settlement_mode = project.settlement_mode || 'first_step';
   project.pipeline_config.idle_timeout_seconds = project.idle_timeout_seconds || 0;
   project.pipeline_config.cycle_max_duration = project.cycle_max_duration || 0;
-  project.pipeline_config.first_step_aborts_pending_settle = project.first_step_aborts_pending_settle === true;
   project.pipeline_config.periodic_actions = project.periodic_actions;
   
   return project;
@@ -3525,7 +3505,6 @@ const handleSaveProject = async () => {
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,
-        first_step_aborts_pending_settle: activeProject.value.first_step_aborts_pending_settle === true,  // v3.8.x
         rod_companion_filter: _sanitizeCompanionFilter(activeProject.value.rod_companion_filter),
         rod_session_gate: _sanitizeSessionGate(activeProject.value.rod_session_gate),
         hide_boxes_outside_step_roi: !!activeProject.value.pipeline_config?.hide_boxes_outside_step_roi,
@@ -4336,9 +4315,6 @@ watch(() => activeProject.value?.settlement_mode, (mode) => {
         step.strict_order = false;
         cleared++;
       }
-    }
-    if (activeProject.value.first_step_aborts_pending_settle) {
-      activeProject.value.first_step_aborts_pending_settle = false;
     }
     if (cleared > 0) {
       ElMessage.info(`已自动关闭 ${cleared} 个步骤的严格顺序（last_first 模式约束）`);

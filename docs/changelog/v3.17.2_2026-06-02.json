@@ -1,0 +1,57 @@
+{
+  "version": "3.17.2",
+  "date": "2026-06-02",
+  "previous_version": "3.17.1",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "删除「等待结算步骤时遇到首步立刻开新周期」开关",
+      "symptom": "该开关与 last_first 双锚结算能力重叠；其守门块「首步重入放行」例外不检查结算模式，在末步结算下让首步重现绕过「严格顺序+单次接受」拦截，造成顺序模式步骤重复误判的干扰",
+      "root_cause": "守门首步例外无条件放行首步重入；_should_abort_for_new_cycle_signal 仅由该开关驱动",
+      "fix": "前端删 UI 开关 + 加载/保存/watch 三处；后端删守门首步例外（首步重现统一受严格+单次守门）、删 _should_abort_for_new_cycle_signal 方法及调用分支、删 last_first 互斥覆盖；净行为不变（首步重现由下游单次接受兜底）",
+      "files": ["frontend/src/views/Project/index.vue", "backend/api/source_settlement_mixin.py", "backend/api/source_project_config_apply.py"],
+      "keywords": ["first_step_aborts_pending_settle", "等待结算步骤时遇到首步立刻开新周期", "守门", "严格顺序", "单次接受", "strict_order", "accept_once", "末步结算", "last_step", "顺序模式重复误判", "_should_abort_for_new_cycle_signal"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "金龙 GW1 末步结算「重复步骤」误判 NG（根因定位+配置解法）",
+      "symptom": "浸泡结束/热水浸泡等工序步骤反复进出画面，整周期被判 NG+1；客户称已开严格顺序+单次接受仍 NG",
+      "root_cause": "守门拦截要求 strict_order 与 accept_once 同时为真；JLGW1 热水浸泡/浸泡结束两步库内 accept_once=0（只开了严格顺序），守门不触发，重现进周期判回退 NG。客户自述开了单次接受实际未保存生效",
+      "fix": "配置层修复：给热水浸泡/浸泡结束补开单次接受。用真实模型 bestGW1.pt + 真实现场视频端到端验证（单次接受关→NG，开→OK）+ 状态机回归剧本归档",
+      "files": ["tests/test_jlgw1_settlement_repro.py", "tests/test_strict_once_first_step_guard.py"],
+      "keywords": ["JLGW1", "金龙GW1", "末步结算", "last_step", "重复步骤", "步骤回退", "误判NG", "单次接受没开", "accept_once", "热水浸泡", "浸泡结束", "甩干", "端到端验证"],
+      "breaking": false
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-001",
+      "title": "更新 modify-project-config / debug-source",
+      "symptom": "skill 文档残留已删开关的描述",
+      "root_cause": "开关删除后文档未同步",
+      "fix": "移除已删开关在 last_first 互斥项中的描述",
+      "files": [".claude/skills/modify-project-config/SKILL.md", ".claude/skills/debug-source/SKILL.md"],
+      "keywords": ["skill", "modify-project-config", "debug-source", "last_first", "互斥项"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["modify-project-config", "debug-source"],
+  "files_changed": [
+    "frontend/src/views/Project/index.vue",
+    "backend/api/source_settlement_mixin.py",
+    "backend/api/source_project_config_apply.py",
+    "tests/test_jlgw1_settlement_repro.py",
+    "tests/test_strict_once_first_step_guard.py",
+    ".claude/skills/modify-project-config/SKILL.md",
+    ".claude/skills/debug-source/SKILL.md"
+  ],
+  "known_issues": [
+    {
+      "title": "客户机 TensorRT 转换 EXPLICIT_BATCH 不兼容",
+      "detail": "客户机旧版 ultralytics 配新版 TensorRT(11.x) 环境错配；解法=重装最新安装包对齐版本，或临时用 PyTorch FP16；客户机显存仅余约 808MB 也需先关占用 GPU 程序",
+      "keywords": ["TensorRT", "EXPLICIT_BATCH", "NetworkDefinitionCreationFlag", "ultralytics", "版本错配", "PyTorch FP16", "显存不足"]
+    }
+  ]
+}

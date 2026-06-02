@@ -708,7 +708,6 @@ mixin 改动就是源码裸跑（IP 漏出去），但行为对得上。
 | 任意 step.strict_order=true | 前端 watch + 保存校验 | `_apply_pipeline_config` 强清空 `step_strict_order` |
 | 跨周期同时出现组（cross_cycle=True） | 前端保存校验 | 复用 `_blocked_labels` 不会两边同时写 |
 | pipeline_config.per_item.enabled=true | 前端保存校验 | per_item 走独立路径，不会触发 last_first |
-| pipeline_config.first_step_aborts_pending_settle=true | 前端 watch + UI 隐藏开关 | `_apply_pipeline_config` 强制覆盖为 false |
 | logic_mode = detection / tracking | 守门内 `is_seq_like` 直接返空 | — |
 
 ### 排查模板

@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.17.2 (2026-06-02)
+
+> 删除「等待结算步骤时遇到首步立刻开新周期」开关（与末步结算双锚能力重叠，且其首步重入例外会在末步结算下绕过「严格+单次」拦截，是顺序模式重复误判的干扰项），首步重现统一由守门接管、净行为不变。配套定位金龙 GW1「开了严格+单次仍 NG」根因 = 单次接受实际未开（库内为 0），真实模型+真实视频端到端验证补开后 NG→OK。
+
+- [FEAT-001] 删除: 「等待结算步骤时遇到首步立刻开新周期」开关 — 前端删 UI/加载/保存/watch，后端删守门首步例外 + `_should_abort_for_new_cycle_signal` 方法 + last_first 互斥覆盖；首步重现统一受「严格顺序+单次接受」守门，净行为不变（`frontend/src/views/Project/index.vue`, `backend/api/source_settlement_mixin.py`, `backend/api/source_project_config_apply.py`）
+- [BUG-001] 定位: 金龙 GW1 末步结算「重复步骤」误判 NG — 根因是守门要求严格顺序+单次接受同时为真，而该项目两关键步只开了严格、`accept_once=0` 致守门不触发；配置层补开单次接受即解，真实模型+现场视频端到端验证（关→NG / 开→OK），归档回归剧本 `tests/test_jlgw1_settlement_repro.py` + `tests/test_strict_once_first_step_guard.py`
+- [SKILL-001] 更新: modify-project-config / debug-source 移除已删开关描述
+- 已知问题: 客户机 TensorRT 转换报 `EXPLICIT_BATCH` 不兼容 — 旧 ultralytics 配新 TensorRT(11.x) 环境错配，解法=重装最新安装包对齐版本 / 临时用 PyTorch FP16（当前打包环境 ultralytics 8.4.16 + TensorRT 10.16 不受影响）
+
+---
+
 ## v3.17.1 (2026-06-02)
 
 > 福建金龙定制收尾：修复项目「步骤设置」表在工控机矮屏下横向滚动条沉到视口外划不动；配套插件 v1.3.0（警告/NG 框提示框由开关升级为可选内置/系统预设/自定义，自绘套用显示设置样式，单独发客户）。
