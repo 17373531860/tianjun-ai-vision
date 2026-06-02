@@ -1,0 +1,20 @@
+{
+  "version": "3.17.3",
+  "date": "2026-06-02",
+  "previous_version": "3.17.2",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "插件前端资源被 Electron 打包环境 HTTP 缓存焊死，换包/升级永不生效",
+      "symptom": "客户机金龙插件升到 1.3.0 后步骤设置表三档耗时配置列始终不出现；卸载/重装/重启软件/换不同版本包反复折腾都没用；开发机正常。客户机日志 register() 只注册 monitor.layout.body，没有 project.step-cell.durations 三档槽。",
+      "root_cause": "前端插件加载器 fetch ESM 未禁用缓存，后端 FileResponse 也未设禁缓存响应头。打包后主窗口 file:// 跨源拉 http://localhost:8001 资源，Chromium 激进缓存把第一次装的旧 ESM 焊死；磁盘文件已换新版(53039字节含三档)，但 fetch 始终命中缓存返回旧文件(字符数39104不含三档)，三档槽注册不上。开发机走 vite 开发服务器不缓存，故不复现。日志 bytes 字段实为 text.length(字符数)非字节数，曾误导排查。",
+      "fix": "前端 fetch 加 cache:no-store；后端 FileResponse 加 Cache-Control:no-store,no-cache,must-revalidate,max-age=0 + Pragma/Expires。每次回源读磁盘最新文件。现场止血=退出软件后删 Electron 缓存目录(%APPDATA%/tianjun-ai-vision/{Cache,Code Cache,GPUCache})再启动，已验证清缓存后三档槽注册成功。",
+      "files": ["frontend/src/composables/usePluginLoader.js", "backend/api/plugins.py"],
+      "keywords": ["插件缓存", "plugin cache", "no-store", "Cache-Control", "Electron 打包缓存", "file://", "fetch 缓存", "FileResponse", "三档不显示", "project.step-cell.durations", "插件升级不生效", "换包没用", "开发机好客户机坏", "ESM 加载", "usePluginLoader", "Code Cache", "GPUCache"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-electron"],
+  "files_changed": ["frontend/src/composables/usePluginLoader.js", "backend/api/plugins.py", "electron/package.json", "docs/CHANGELOG.md", "docs/changelog/v3.17.3_2026-06-02.md", "docs/changelog/v3.17.3_2026-06-02.json", ".claude/skills/debug-electron/SKILL.md"]
+}

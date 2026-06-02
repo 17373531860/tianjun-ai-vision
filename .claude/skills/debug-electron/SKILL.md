@@ -351,3 +351,27 @@ echo %APPDATA%\tianjun-ai-vision\workstation_config.json
 - 前端 GPU 列表查询在**页面自动加载**时失败静默重试 2 次再提示；手动点刷新保持立即提示。
 
 > **不要**为这个去把健康检查改成「等 GPU 就绪」——那会拖慢每次启动。预热 + 前端容错是更对的解法。
+
+### 陷阱三：插件前端资源被打包环境 HTTP 缓存焊死（v3.17.3）
+
+**症状**：客户机插件升级后新 UI（如金龙「步骤三档配置列」）始终不出现；卸载、重装、重启软件、换不同版本的包反复折腾都没用；**开发机一切正常**。客户机加载日志里 `register()` 只注册出旧槽（如只有 `monitor.layout.body`），缺新槽（如 `project.step-cell.durations`）。
+
+**致命误导**：加载日志 `ESM 文本已拉到 {"bytes": N}` 的 `N` 是 `text.length`（字符数，中文按 1 算），**不是字节数**。排查时别拿它跟磁盘文件字节数直接比，会得出「文件不一样」的错误结论。要确认磁盘真实文件，用 PowerShell `(Get-Item '...index.esm.js').Length` 看字节数。
+
+**根因链**：
+1. 前端 `usePluginLoader.js` 拉 ESM 的 `fetch` 未禁缓存，后端 `plugins.py` 的 `get_active_asset` 发资源的 `FileResponse` 也未设禁缓存头。
+2. 打包后主窗口走 `file://`，跨源拉 `http://localhost:8001/api/v1/plugins/active/assets/...`，**Chromium 缓存极其激进**，把第一次装上的旧 ESM 焊死在 disk cache。
+3. 之后客户换包/升级，磁盘文件**确实被成功替换**（安装没问题、不是文件锁），但 fetch 始终命中缓存返回最早那份旧文件 → 旧 `register()` 注册不出新槽 → 新 UI 永不出现。
+4. 开发机走 vite 开发服务器默认不缓存，故**永远不复现**——典型「开发机好、客户机坏」的打包环境专属陷阱。
+
+**修复（v3.17.3）**：
+- 前端 `fetch(url, { credentials: "omit", cache: "no-store" })`。
+- 后端 `FileResponse(..., headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache", "Expires": "0"})`。
+
+**现场止血（不发新版也能救）**：完全退出软件（确认 `python.exe` 进程已结束）→ 删 Electron 缓存目录 → 重启：
+```
+powershell "Remove-Item -Recurse -Force '%APPDATA%\tianjun-ai-vision\Cache','%APPDATA%\tianjun-ai-vision\Code Cache','%APPDATA%\tianjun-ai-vision\GPUCache' -ErrorAction SilentlyContinue"
+```
+重启后看 `ESM 文本已拉到` 的数字变化 + 是否多出新槽 `slot registered`，即可确认缓存被清、读到真文件。
+
+> **排查口诀**：插件「换包不生效 / 升级看不到新功能」且开发机正常 → 先怀疑缓存（清 Electron 缓存验证），**别**先怀疑用户装错或文件锁。

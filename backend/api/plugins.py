@@ -213,7 +213,18 @@ def get_active_asset(asset_path: str, db: Session = Depends(get_db)) -> FileResp
     if not str(target).startswith(str(root) + os.sep) or not target.is_file():
         raise HTTPException(status_code=404, detail="资源不存在")
     media_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-    return FileResponse(target, media_type=media_type)
+    # 插件资源在客户机 Electron 打包环境下会被 HTTP 缓存焊死: 第一次装上的旧
+    # ESM 被缓存后, 后续换包 / 升级磁盘文件已更新, 但 fetch 仍命中缓存拿旧文件,
+    # 表现为"怎么重装都加载旧插件". 强制 no-store, 每次回源读磁盘最新文件.
+    return FileResponse(
+        target,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @router.post("/{customer_code}/activate",
