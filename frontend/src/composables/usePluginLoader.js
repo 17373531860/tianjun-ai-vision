@@ -107,10 +107,13 @@ export async function loadActivePluginFrontend(router) {
 
   let text;
   try {
-    const resp = await fetch(url, { credentials: "omit" });
+    // cache: "no-store" — 打包后 Electron 对 file:// 页面拉 http 资源会激进缓存,
+    // 第一次装的旧 ESM 被焊死, 后续换包/升级永远加载旧文件. 必须禁缓存每次回源.
+    const resp = await fetch(url, { credentials: "omit", cache: "no-store" });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     text = await resp.text();
-    plog("ESM 文本已拉到", { bytes: text.length });
+    // 注意: text.length 是字符数(中文按 1 算), 不是字节数; 字段名沿用 bytes 仅为兼容旧日志
+    plog("ESM 文本已拉到", { bytes: text.length, chars: text.length });
   } catch (e) {
     plog("拉 ESM entry 失败", e?.message, "error");
     return { loaded: false, reason: "entry-fetch-failed", error: e?.message };

@@ -290,10 +290,6 @@ def _apply_pipeline_config(h, config, pipeline_config):
             cleared_once = list(h.step_accept_once.keys())
             h.step_accept_once = {}
             print(f"[last_first 模式] 自动清空全部步骤的单次接受 ({cleared_once})")
-        # 与 first_step_aborts_pending_settle 互斥 (功能重叠, last_first 自带 R3 fallback)
-        if pipeline_config.get('first_step_aborts_pending_settle'):
-            print("[last_first 模式] 检测到 first_step_aborts_pending_settle=True, 强制覆盖为 False (已被 last_first R3 取代)")
-            pipeline_config['first_step_aborts_pending_settle'] = False
         # last_first 也意味着 _pending_first_step 重置 (新项目从干净状态开始)
         if hasattr(h, '_pending_first_step'):
             h._pending_first_step = False

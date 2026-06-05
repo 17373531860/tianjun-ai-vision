@@ -1551,6 +1551,10 @@
         <WorkpieceFlowPanel />
       </el-tab-pane>
 
+      <el-tab-pane label="工位组互通">
+        <ChannelGroupPanel />
+      </el-tab-pane>
+
       <!-- v3.13 M2.2b: 客户插件可注入 Tab. 通过 manifest.frontend.settings_tabs 声明 -->
       <el-tab-pane
         v-for="tab in pluginSettingsTabs"
@@ -1585,6 +1589,7 @@ import { getProjectDetail } from '@/api/project';
 import api from '@/api/index';
 import AuthPanel from './AuthPanel.vue';
 import WorkpieceFlowPanel from './WorkpieceFlowPanel.vue';
+import ChannelGroupPanel from './ChannelGroupPanel.vue';
 
 const store = useSystemStore();
 const projectStore = useProjectStore();

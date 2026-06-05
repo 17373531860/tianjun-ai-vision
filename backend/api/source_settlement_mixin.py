@@ -1130,16 +1130,9 @@ class SettlementMixin:
                 and self.step_strict_order.get(label)
                 and self.step_accept_once.get(label)
                 and not self._is_legitimate_next_in_sequence(label)):
-            expected_labels = self._get_expected_sequence_labels()
-            _is_first_step_reentry = (
-                len(self.current_cycle_steps) > 0
-                and bool(expected_labels)
-                and label == expected_labels[0]
-            )
-            if not _is_first_step_reentry:
-                print(f"[严格+单次守门] '{label}' 多余位置的新出现, 拒绝计时 "
-                      f"(current={list(self.current_cycle_steps)})")
-                return
+            print(f"[严格+单次守门] '{label}' 多余位置的新出现, 拒绝计时 "
+                  f"(current={list(self.current_cycle_steps)})")
+            return
 
         # ── accept_once 拦截 ──
         # 在 first_step 结算模式下，第一步即使设了 accept_once，真正消失后重现
@@ -1288,29 +1281,6 @@ class SettlementMixin:
                             self.last_added_step = label
                             self._last_step_added_time = current_time
                             print(f"[期望重复] {label} 是期望序列里的合法重复 (当前序列: {self.current_cycle_steps})")
-                        elif self._should_abort_for_new_cycle_signal(label):
-                            # v3.8.x 新增 (默认关, 由 pipeline_config.first_step_aborts_pending_settle 开关控制):
-                            # 严格顺序模式下, "前置步骤都齐了 + 只差结算步骤"时遇到首步, 视为
-                            # 客户已经放弃当前周期、直接开启下一件的信号. 旧周期立即按缺末步 NG
-                            # 结算, 然后用本次 label 开启新周期. 客户场景: ABC 等不到 D, 不愿白等
-                            # 直接重做 ABCD — 老逻辑会把"ABC-ABCD"算成一个回退 NG 周期, 新逻辑切成
-                            # 两个独立周期 (ABC=NG + ABCD=OK).
-                            print(f"[新周期信号] 期待结算步骤时收到首步 '{label}', 旧周期判 NG 并以本次开新周期 "
-                                  f"(当前序列: {self.current_cycle_steps})")
-                            _logic = self.project_config.get('logic_mode') if self.project_config else 'sequential'
-                            _pc = self.project_config.get('pipeline_config', {}) if self.project_config else {}
-                            if _logic == 'custom' and _pc.get('custom_based_on') == 'sequential':
-                                self._settle_custom_cycle()
-                            else:
-                                self._settle_sequential_cycle()
-                            # settle 内部已清掉 current_cycle_steps / last_added_step / step_* 各种状态.
-                            # 现在用本次 label 当新周期首步.
-                            self.cycle_start_time = current_time
-                            self.cycle_start_frame_pos = self._video_frame_pos()
-                            self.start_cycle()
-                            self.current_cycle_steps.append(label)
-                            self.last_added_step = label
-                            self._last_step_added_time = current_time
                         else:
                             self._cycle_regression = True
                             self.current_cycle_steps.append(label)
@@ -1327,53 +1297,6 @@ class SettlementMixin:
                         self.last_added_step = label
                         self._last_step_added_time = current_time
     
-    def _should_abort_for_new_cycle_signal(self, label: str) -> bool:
-        """v3.8.x: 判定当前 label 是否应被识别为"客户开启下一周期"的信号 —
-        触发后会立刻把当前周期按 NG 结算 + 用本次 label 开启新周期.
-
-        必须**全部满足**才返回 True (设计偏保守, 避免误触):
-        1. 配置开关 pipeline_config.first_step_aborts_pending_settle = True (默认关)
-        2. logic_mode 是 sequential, 或 custom-based-on-sequential
-        3. label 正好是期望序列的首步 (第一个步骤标签)
-        4. 当前周期 current_cycle_steps == expected[:-1]
-           — 严格 list 匹配, 既保证顺序对又兼容期望序列含重复元素 (如 A-B-C-B-D)
-        5. 期望末步还没出现在当前周期里
-
-        其他场景 (顺序错乱已标 regression / 刚做了一两步就回头 / 末步已到)
-        都不会触发新周期信号, 走原回退路径.
-        """
-        if not self.project_config:
-            return False
-        pipeline_config = self.project_config.get('pipeline_config', {}) or {}
-        if not pipeline_config.get('first_step_aborts_pending_settle', False):
-            return False
-
-        logic_mode = self.project_config.get('logic_mode', 'sequential')
-        if logic_mode == 'sequential':
-            pass
-        elif logic_mode == 'custom' and pipeline_config.get('custom_based_on') == 'sequential':
-            pass
-        else:
-            return False
-
-        expected = self._get_expected_sequence_labels() or []
-        if len(expected) < 2:
-            return False  # 至少要 2 步才有 "末步" 概念
-
-        first_step = expected[0]
-        last_step = expected[-1]
-        if label != first_step:
-            return False
-
-        current = list(self.current_cycle_steps or [])
-        # 严格 list 匹配前缀: 必须正好做完前 N-1 步 (顺序也对) 且没做末步
-        if current != list(expected[:-1]):
-            return False
-        if last_step in current:
-            return False  # 末步已经做了, 不该触发 (理论上前一条已排除, 此处保险)
-
-        return True
-
     def _inject_backup_steps(self, this_cycle: list, expected_labels: list) -> list:
         """Inject primary step labels into this_cycle when their backup was seen but
         the primary itself is missing. Returns a new list with injections applied."""

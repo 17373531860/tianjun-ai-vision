@@ -27,6 +27,7 @@
  */
 
 let _registeredSlot = null;
+let _registeredDurSlot = null;
 
 // ==================== 工位状态徽章 ====================
 function buildStatusInfo(chData) {
@@ -997,14 +998,351 @@ function buildDualStationMonitor(host) {
   });
 }
 
+// ==================== 步骤耗时三档 配置单元格 (R1/R2) ====================
+// 客户需求(郑经理): 每个检测步骤设 最短/警告/最长 三档秒数, 后端 step_tick/
+// step_change/pre_cycle_end 实时判定 (未达最短→报警+NG / 超警告→只报警 / 超最长→
+// 报警+NG). 配置按 step label 存插件后端 SystemConfig, 经 /durations/step-durations
+// 读写. 本单元格注册到主程序步骤设置表的 <TjSlot name="project.step-cell.durations">,
+// 每行一个实例共享同一份 reactive config; 失焦(onChange) debounce 800ms 整体 PUT.
+let _durCfg = null;
+let _durLoaded = false;
+let _durSaveTimer = null;
+
+// 提示框定义表 (key -> {name,color,position,text,subText,duration,fontSize}), 供:
+//  (1) 单元格下拉列出可选提示框  (2) 全局轮询自绘时按 key 取样式.
+// 数据源: 当前项目 detection_config.toasts(系统预设) + customToasts(自定义). 单元格挂载时填充.
+// 内置 __warn__/__ng__ 不入此表, 由 _showDurationToast 兜底橙/红.
+let _toastDefs = {};
+let _toastOptions = null;  // reactive: [{key,label}] 给下拉
+const _TOAST_SYS_NAMES = { ok: "系统·合格框", ng: "系统·NG框", scan: "系统·扫码框", warn_no_barcode: "系统·未绑码框" };
+
+function _rebuildToastDefs(host, project) {
+  const dc = (project && project.detection_config) || {};
+  const sys = dc.toasts || {};
+  const customs = Array.isArray(dc.customToasts) ? dc.customToasts : [];
+  const defs = {};
+  const opts = [
+    { key: "", label: "不弹提示框" },
+    { key: "__warn__", label: "内置警告框(橙)" },
+    { key: "__ng__", label: "内置NG框(红)" },
+  ];
+  Object.keys(_TOAST_SYS_NAMES).forEach((k) => {
+    if (sys[k] && typeof sys[k] === "object") {
+      defs[k] = Object.assign({ name: _TOAST_SYS_NAMES[k] }, sys[k]);
+      opts.push({ key: k, label: _TOAST_SYS_NAMES[k] });
+    }
+  });
+  customs.forEach((c) => {
+    if (c && c.id) {
+      defs[c.id] = {
+        name: c.name || "自定义", color: c.color, position: c.position,
+        text: c.text, subText: c.subText, duration: c.duration, fontSize: c.fontSize,
+      };
+      opts.push({ key: c.id, label: "自定义·" + (c.name || c.id) });
+    }
+  });
+  _toastDefs = defs;
+  if (_toastOptions) _toastOptions.splice(0, _toastOptions.length, ...opts);
+  else _toastOptions = host.vue.reactive(opts);
+  return _toastOptions;
+}
+
+// 确保提示框下拉选项就绪 (拿当前项目的 detection_config 构建); 每次进单元格用最新项目刷新.
+function _ensureToastOptions(host, project) {
+  if (!_toastOptions || (project && project.detection_config)) {
+    try { _rebuildToastDefs(host, project); }
+    catch (e) { console.warn("[fujian-jinlong] 构建提示框列表失败:", e && e.message); }
+  }
+  return _toastOptions || host.vue.reactive([{ key: "", label: "不弹提示框" }]);
+}
+
+// 报警事件列表 (主程序报警灯页配的 eventN + 名字), 给每步「触发事件」下拉用.
+// 数据源: GET /alarm/status?channel=0 → config.triggers. 只拉一次, 全单元格共享.
+let _alarmEvents = null;
+let _alarmEventsLoaded = false;
+function _ensureAlarmEvents(host) {
+  if (_alarmEvents) return _alarmEvents;
+  _alarmEvents = host.vue.reactive([{ id: "event1", name: "事件1" }, { id: "event2", name: "事件2" }]);
+  if (!_alarmEventsLoaded) {
+    _alarmEventsLoaded = true;
+    host.api.get("/alarm/status", { params: { channel: 0 } }).then(({ data }) => {
+      const trig = data && data.config && data.config.triggers ? data.config.triggers : null;
+      if (trig && typeof trig === "object") {
+        const list = Object.keys(trig).map((id) => ({ id, name: (trig[id] && trig[id].name) || id }));
+        if (list.length) _alarmEvents.splice(0, _alarmEvents.length, ...list);
+      }
+      console.log("[fujian-jinlong] 报警事件列表已加载:", _alarmEvents.length);
+    }).catch((e) => {
+      console.warn("[fujian-jinlong] 读报警事件列表失败(走默认 event1/event2):", e && e.message);
+    });
+  }
+  return _alarmEvents;
+}
+
+function _ensureDurCfg(host) {
+  if (_durCfg) return _durCfg;
+  _durCfg = host.vue.reactive({
+    enabled: true,
+    default: {
+      min_sec: 0, warn_sec: 0, max_sec: 0,
+      warn_event: "event2", ng_event: "event2", warn_toast: "__warn__", ng_toast: "__ng__",
+    },
+    steps: {},
+    alarm_event: { warn: "event2", ng: "event2" },
+  });
+  if (!_durLoaded) {
+    _durLoaded = true;
+    host.api.get("/plugins/internal-demo/durations/step-durations").then(({ data }) => {
+      if (data && typeof data === "object") {
+        _durCfg.enabled = data.enabled !== false;
+        if (data.default) Object.assign(_durCfg.default, data.default);
+        if (data.steps && typeof data.steps === "object") _durCfg.steps = data.steps;
+        if (data.alarm_event) Object.assign(_durCfg.alarm_event, data.alarm_event);
+      }
+      console.log("[fujian-jinlong] 步骤耗时三档配置已加载");
+    }).catch((e) => {
+      console.warn("[fujian-jinlong] 读步骤耗时配置失败(走默认):", e && e.message);
+    });
+  }
+  return _durCfg;
+}
+
+function _scheduleDurSave(host) {
+  if (_durSaveTimer) clearTimeout(_durSaveTimer);
+  _durSaveTimer = setTimeout(() => {
+    let payload;
+    try { payload = JSON.parse(JSON.stringify(_durCfg)); } catch (e) { return; }
+    host.api.put("/plugins/internal-demo/durations/step-durations", payload)
+      .then(() => console.log("[fujian-jinlong] 步骤耗时三档已保存"))
+      .catch((e) => console.warn("[fujian-jinlong] 保存步骤耗时配置失败:", e && e.message));
+  }, 800);
+}
+
+function buildDurationCell(host) {
+  const { h, defineComponent } = host.vue;
+  return defineComponent({
+    name: "JinlongStepDurationCell",
+    props: {
+      step: { type: Object, default: () => ({}) },
+      project: { type: Object, default: () => ({}) },
+    },
+    setup(props) {
+      const cfg = _ensureDurCfg(host);
+      const events = _ensureAlarmEvents(host);
+      // 拿当前项目「显示设置」里的提示框列表 (系统预设 + 自定义), 给提示框下拉用
+      const toastOpts = _ensureToastOptions(host, props.project);
+      const entryOf = () => {
+        const l = props.step && props.step.label;
+        if (!l) return null;
+        if (!cfg.steps[l]) {
+          const d = cfg.default || {};
+          cfg.steps[l] = {
+            min_sec: 0, warn_sec: 0, max_sec: 0,
+            warn_event: d.warn_event || "event2",
+            ng_event: d.ng_event || "event2",
+            warn_toast: "__warn__", ng_toast: "__ng__",
+          };
+        }
+        return cfg.steps[l];
+      };
+      // 数字档 (最短/警告/最长 秒)
+      const onChangeNum = (field, ev) => {
+        const e = entryOf();
+        if (!e) return;
+        const raw = ev && ev.target ? ev.target.value : ev;
+        const v = parseFloat(raw);
+        e[field] = (isNaN(v) || v < 0) ? 0 : v;
+        _scheduleDurSave(host);
+      };
+      // 字符串档 (触发事件下拉)
+      const onChangeStr = (field, ev) => {
+        const e = entryOf();
+        if (!e) return;
+        e[field] = ev && ev.target ? ev.target.value : ev;
+        _scheduleDurSave(host);
+      };
+      // 布尔档 (提示框开关)
+      const onChangeBool = (field, ev) => {
+        const e = entryOf();
+        if (!e) return;
+        e[field] = !!(ev && ev.target ? ev.target.checked : ev);
+        _scheduleDurSave(host);
+      };
+      const fieldEl = (key, label, color) =>
+        h("label", { style: "display:flex;flex-direction:column;align-items:center;gap:1px;" }, [
+          h("span", { style: "font-size:9px;color:" + color + ";" }, label),
+          h("input", {
+            type: "number", min: "0", step: "0.5",
+            style: "width:46px;font-size:11px;padding:1px 3px;background:#1e293b;border:1px solid #334155;border-radius:3px;color:#e2e8f0;text-align:center;",
+            value: (entryOf() || {})[key] || 0,
+            onChange: (ev) => onChangeNum(key, ev),
+          }),
+        ]);
+      // 把 toast 字段值规整成下拉可选的 string (兼容旧 bool)
+      const toastValOf = (raw, dflt) => {
+        if (raw === true) return dflt;
+        if (raw === false) return "";
+        if (raw == null) return dflt;
+        return String(raw);
+      };
+      // 一档的「触发事件 + 提示框」行 (警告 / NG 各一行)
+      const eventRow = (label, color, evKey, toastKey, dfltToast) => {
+        const e = entryOf() || {};
+        return h("div", { style: "display:flex;gap:3px;align-items:center;" }, [
+          h("span", { style: "font-size:9px;width:24px;color:" + color + ";flex:none;" }, label),
+          h("select", {
+            title: "越线触发哪个报警事件(驱动报警灯)",
+            style: "font-size:10px;padding:0 2px;height:18px;background:#1e293b;border:1px solid #334155;border-radius:3px;color:#e2e8f0;max-width:70px;",
+            value: e[evKey] || "event2",
+            onChange: (ev) => onChangeStr(evKey, ev),
+          }, (events.length ? events : [{ id: "event2", name: "event2" }]).map((it) =>
+            h("option", { value: it.id }, it.name)
+          )),
+          h("select", {
+            title: "弹哪个提示框(显示设置里配的系统/自定义提示框)",
+            style: "font-size:10px;padding:0 2px;height:18px;background:#1e293b;border:1px solid " + color + ";border-radius:3px;color:#e2e8f0;max-width:96px;",
+            value: toastValOf(e[toastKey], dfltToast),
+            onChange: (ev) => onChangeStr(toastKey, ev),
+          }, (toastOpts && toastOpts.length ? toastOpts : [{ key: dfltToast, label: "默认框" }]).map((it) =>
+            h("option", { value: it.key }, it.label)
+          )),
+        ]);
+      };
+      return () => {
+        if (!(props.step && props.step.label)) {
+          return h("span", { style: "font-size:10px;color:#64748b;" }, "--");
+        }
+        return h("div", { style: "display:flex;flex-direction:column;gap:3px;" }, [
+          h("div", { style: "display:flex;gap:4px;align-items:flex-end;" }, [
+            fieldEl("min_sec", "最短", "#f59e0b"),
+            fieldEl("warn_sec", "警告", "#eab308"),
+            fieldEl("max_sec", "最长", "#ef4444"),
+          ]),
+          eventRow("警告", "#eab308", "warn_event", "warn_toast", "__warn__"),
+          eventRow("NG", "#ef4444", "ng_event", "ng_toast", "__ng__"),
+        ]);
+      };
+    },
+  });
+}
+
+// ==================== 全局提示框 (方案B: 轮询 pending-toasts 自绘, 不依赖任何 slot) ====================
+// 警告/NG 越线时后端把待提示塞进队列, 这里全局轮询取走, 用原生 DOM 在右上角弹出.
+// 单工位/双工位/任意页面都生效 (不挂在 monitor.layout.body slot 上, 故停在别的页也能弹).
+let _toastWatcherStarted = false;
+const _toastContainers = {};  // position -> 容器 DOM
+
+function _tjEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+// 按提示框位置 (显示设置 position 字段) 返回/创建对应的固定容器
+function _ensureToastContainer(position) {
+  const pos = position || "top-right";
+  if (_toastContainers[pos] && document.body && document.body.contains(_toastContainers[pos])) return _toastContainers[pos];
+  const base = "position:fixed;z-index:99999;display:flex;flex-direction:column;gap:8px;pointer-events:none;";
+  const posCss = {
+    "top-right": "top:64px;right:16px;",
+    "top-left": "top:64px;left:16px;",
+    "bottom-right": "bottom:16px;right:16px;flex-direction:column-reverse;",
+    "bottom-left": "bottom:16px;left:16px;flex-direction:column-reverse;",
+    "center": "top:64px;left:50%;transform:translateX(-50%);align-items:center;",
+  }[pos] || "top:64px;right:16px;";
+  const c = document.createElement("div");
+  c.style.cssText = base + posCss;
+  if (document.body) document.body.appendChild(c);
+  _toastContainers[pos] = c;
+  return c;
+}
+
+function _showDurationToast(t) {
+  try {
+    const key = t && t.toast_key;
+    const isNg = t && t.level === "ng";
+    // 非内置 key → 去显示设置取样式; 内置 __warn__/__ng__ 或取不到 → 橙/红兜底
+    let def = null;
+    if (key && key !== "__warn__" && key !== "__ng__" && _toastDefs) def = _toastDefs[key];
+    const chTxt = "工位" + (((t && t.channel) | 0) + 1);
+    let bg, borderCss, title, body, fontSize, durationMs, position;
+    if (def) {
+      bg = def.color || (isNg ? "#dc2626" : "#d97706");
+      borderCss = "";
+      title = (def.text || def.name || (isNg ? "不合格" : "警告")) + " · " + chTxt;
+      body = def.subText ? def.subText : ("步骤[" + (t && t.step) + "] " + (t && t.reason));
+      fontSize = (def.fontSize && def.fontSize > 0) ? def.fontSize : 13;
+      durationMs = (def.duration && def.duration > 0) ? def.duration * 1000 : 4500;
+      position = def.position || "top-right";
+    } else {
+      bg = isNg ? "#dc2626" : "#d97706";
+      borderCss = "border-left:4px solid " + (isNg ? "#7f1d1d" : "#92400e") + ";";
+      title = (isNg ? "⛔ 不合格 (NG)" : "⚠ 警告") + " · " + chTxt;
+      body = "步骤[" + (t && t.step) + "] " + (t && t.reason);
+      fontSize = 13; durationMs = 4500; position = "top-right";
+    }
+    const c = _ensureToastContainer(position);
+    const el = document.createElement("div");
+    el.style.cssText =
+      "min-width:240px;max-width:360px;padding:10px 14px;border-radius:8px;color:#fff;font-size:" + fontSize + "px;" +
+      "box-shadow:0 6px 20px rgba(0,0,0,.35);pointer-events:auto;opacity:0;transform:translateY(-8px);" +
+      "transition:opacity .25s ease,transform .25s ease;background:" + bg + ";" + borderCss;
+    el.innerHTML =
+      '<div style="font-weight:700;margin-bottom:2px;">' + _tjEsc(title) + "</div>" +
+      '<div style="line-height:1.4;">' + _tjEsc(body) + "</div>";
+    c.appendChild(el);
+    requestAnimationFrame(() => { el.style.opacity = "1"; el.style.transform = "translateY(0)"; });
+    setTimeout(() => {
+      el.style.opacity = "0"; el.style.transform = "translateY(-8px)";
+      setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 300);
+    }, durationMs);
+  } catch (e) { /* 提示框失败不影响主流程 */ }
+}
+
+// 运行时(没开配置页)也要能按所选提示框样式弹: 懒加载激活项目的显示设置填充 _toastDefs.
+// 配置页的 _ensureToastOptions 会用最新项目覆盖, 此处只在缓存空时补一次.
+let _toastDefsLoading = false;
+let _toastDefsLoadedOnce = false;
+function _ensureToastDefsLoaded(host) {
+  if (_toastDefsLoadedOnce || _toastDefsLoading) return;
+  if (Object.keys(_toastDefs).length) { _toastDefsLoadedOnce = true; return; }
+  _toastDefsLoading = true;
+  host.api.get("/projects/active/current").then(({ data }) => {
+    if (data) _rebuildToastDefs(host, data);
+    _toastDefsLoadedOnce = true;
+  }).catch(() => { /* 静默 */ }).finally(() => { _toastDefsLoading = false; });
+}
+
+function _startToastWatcher(host) {
+  if (_toastWatcherStarted) return;
+  _toastWatcherStarted = true;
+  setInterval(() => {
+    if (!host.api || typeof host.api.get !== "function") return;
+    _ensureToastDefsLoaded(host);
+    host.api.get("/plugins/internal-demo/durations/pending-toasts").then(({ data }) => {
+      const arr = data && Array.isArray(data.toasts) ? data.toasts : [];
+      arr.forEach(_showDurationToast);
+    }).catch(() => { /* 后端没起/路由缺失 → 静默 */ });
+  }, 1200);
+  console.log("[fujian-jinlong] 步骤耗时提示框轮询已启动 (方案B)");
+}
+
 // ==================== 插件入口 ====================
 export default {
   async register({ host, registry }) {
+    _startToastWatcher(host);
     const DualStationMonitor = buildDualStationMonitor(host);
     if (registry.slots && typeof registry.slots.register === "function") {
       registry.slots.register("monitor.layout.body", DualStationMonitor);
       _registeredSlot = "monitor.layout.body";
       console.log("[fujian-jinlong] monitor.layout.body slot 已注册 (v3 layout, echarts=" + !!host.echarts + ")");
+      // R1/R2: 步骤设置表「步骤耗时三档」配置单元格
+      try {
+        registry.slots.register("project.step-cell.durations", buildDurationCell(host));
+        _registeredDurSlot = "project.step-cell.durations";
+        console.log("[fujian-jinlong] project.step-cell.durations slot 已注册 (步骤耗时三档配置 R1/R2)");
+      } catch (e) {
+        console.warn("[fujian-jinlong] 注册步骤耗时配置单元格失败:", e && e.message);
+      }
     } else {
       console.warn("[fujian-jinlong] registry.slots 不可用, 主程序可能 < v3.13.1");
       return { loaded: false, reason: "slots-api-missing" };
@@ -1016,6 +1354,10 @@ export default {
     if (_registeredSlot && registry?.slots?.unregister) {
       registry.slots.unregister(_registeredSlot);
       _registeredSlot = null;
+    }
+    if (_registeredDurSlot && registry?.slots?.unregister) {
+      registry.slots.unregister(_registeredDurSlot);
+      _registeredDurSlot = null;
     }
   },
 };

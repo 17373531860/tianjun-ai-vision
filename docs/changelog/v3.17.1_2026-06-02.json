@@ -1,0 +1,41 @@
+{
+  "version": "3.17.1",
+  "date": "2026-06-02",
+  "previous_version": "3.17.0",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "步骤设置表横向滚动条矮屏不可见、无法左右滑动",
+      "symptom": "工控机矮屏(如1366x680)下项目「步骤设置」表格列很宽需横向滚动,但底部横向滚动条沉到视口外/被底部状态栏遮挡,表现为滑块不见、固定住划不动",
+      "root_cause": "步骤表滚动容器是flex撑满高度,底部padding把容器实际底边顶到视口下方约12px,横向滚动条落在不可见区域",
+      "fix": "滚动容器加.step-table-scroll,margin-bottom:52px把可视底边推回视口内(避开底部状态栏);横向滚动条加粗到14px、改青色高亮(#06b6d4)更易抓取;纯CSS改动",
+      "files": ["frontend/src/views/Project/index.vue"],
+      "keywords": ["横向滚动条", "滑块不见", "划不动", "矮屏", "工控机", "步骤设置表", "step-table-scroll", "margin-bottom", "scrollbar", "Project配置页"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "插件v1.3.0:警告框/NG框提示框由开关升级为可选(内置/系统预设/自定义)",
+      "symptom": "客户希望警告档/NG档触发时除插件内置橙红框外,还能选用主程序显示设置里的系统预设框或自定义提示框",
+      "root_cause": "原警告/NG提示框只是布尔开关,只能弹插件内置橙/红框",
+      "fix": "单元格提示框配置改为下拉(不弹/内置橙/内置红/系统预设/自定义);前端轮询自绘按所选提示框标识取显示设置的颜色/位置/文字/时长渲染;后端字段布尔升级为提示框标识字符串,兼容旧布尔(True内置/False不弹)",
+      "files": ["plugins-examples/fujian-jinlong/backend/__init__.py", "plugins-examples/fujian-jinlong/frontend/dist/index.esm.js", "plugins-examples/fujian-jinlong/plugin.json"],
+      "keywords": ["插件", "福建金龙", "警告框", "NG框", "提示框", "系统预设", "自定义提示框", "warn_toast", "ng_toast", "toast_key", "显示设置", "v1.3.0", "向后兼容"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "frontend/src/views/Project/index.vue",
+    "plugins-examples/fujian-jinlong/backend/__init__.py",
+    "plugins-examples/fujian-jinlong/frontend/dist/index.esm.js",
+    "plugins-examples/fujian-jinlong/plugin.json",
+    "plugins-examples/fujian-jinlong/signature.bin",
+    "electron/package.json",
+    "docs/changelog/v3.17.1_2026-06-02.md",
+    "docs/changelog/v3.17.1_2026-06-02.json",
+    "docs/CHANGELOG.md"
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "version": "3.16.0",
+  "date": "2026-06-01",
+  "previous_version": "3.15.5",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "步骤设置表「步骤耗时三档」配置 UI (R1/R2)",
+      "symptom": "客户要在步骤设置里配最短/警告/最长三档时间(警告档只报警不判NG, 未达最短或超最长报警+判NG), 但界面上找不到入口, 误以为功能没做",
+      "root_cause": "v3.15.5 插件后端已实现三档判定(cycle_start/step_tick/step_change/pre_cycle_end hook)+ GET/PUT /durations/step-durations 读写接口, 但从未做配置 UI, 客户无法设阈值",
+      "fix": "主程序 Project 步骤表新增「步骤耗时三档」列并留插槽 project.step-cell.durations(无插件显示需插件占位); 插件 v1.1.9 注册该插槽的三输入框配置单元格, 去抖 PUT 到 /durations/step-durations 落库",
+      "files": ["frontend/src/views/Project/index.vue", "plugins-examples/fujian-jinlong/frontend/dist/index.esm.js", "plugins-examples/fujian-jinlong/plugin.json"],
+      "keywords": ["步骤耗时三档", "最短检测时间", "警告时间", "最长检测时间", "step-durations", "min_sec", "warn_sec", "max_sec", "TjSlot", "project.step-cell.durations", "插件插槽", "警告档不判NG"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "设置页「工位组互通」配置面板 (R4)",
+      "symptom": "双工位作为一道完整工序需检测逻辑互通(一起结算), 但客户无法在界面创建/编辑工位组、选成员工位与互通策略",
+      "root_cause": "v3.15.5 后端已落地工位组(/channel-groups 路由 + ORM 表 + channel_group_coordinator 协调器 + 结算联动), 但没有前端配置入口",
+      "fix": "新增工位组 CRUD axios 封装 + 工位组管理面板(列表+新建/编辑对话框, 可选成员工位/互通策略/启用开关) + 设置页集成为工位组互通 Tab",
+      "files": ["frontend/src/api/channel_group.js", "frontend/src/views/Settings/ChannelGroupPanel.vue", "frontend/src/views/Settings/index.vue"],
+      "keywords": ["工位组", "工位组互通", "双工位互通", "channel-groups", "channel_group", "ChannelGroupPanel", "synchronized_any_ng", "synchronized_all_ok", "independent", "一起结算"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "PLUGIN-001",
+      "title": "福建金龙双工位检测主页插件 v1.1.8 → v1.1.9",
+      "symptom": "插件需新增三档配置单元格以配合 FEAT-001 的主程序插槽",
+      "root_cause": "三档判定与读写接口在 v1.1.8 后端已具备, 但前端没有填充 project.step-cell.durations 插槽的组件",
+      "fix": "插件前端 index.esm.js 注册三档配置单元格组件(读写 /durations/step-durations); 后端/双工位布局/权威统计不变; 重新打包并用主签名私钥重签(指纹 d1f2fcb6 与客户机白名单一致), 后端验签器走客户机同款环境验证 5/5 全通过; 插件不随安装包内置, 客户需单独上传",
+      "files": ["plugins-examples/fujian-jinlong/frontend/dist/index.esm.js", "plugins-examples/fujian-jinlong/plugin.json"],
+      "keywords": ["插件重签", "d1f2fcb6", "tjvplugin", "internal-demo", "fujian-jinlong", "v1.1.9", "插件不随包内置", "界面上传插件"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["modify-frontend"],
+  "files_changed": [
+    "electron/package.json",
+    "frontend/src/views/Project/index.vue",
+    "frontend/src/views/Settings/index.vue",
+    "frontend/src/views/Settings/ChannelGroupPanel.vue",
+    "frontend/src/api/channel_group.js",
+    "plugins-examples/fujian-jinlong/frontend/dist/index.esm.js",
+    "plugins-examples/fujian-jinlong/plugin.json",
+    "docs/changelog/v3.16.0_2026-06-01.md",
+    "docs/changelog/v3.16.0_2026-06-01.json",
+    "docs/CHANGELOG.md",
+    "AGENTS.md"
+  ],
+  "notes": [
+    "R3(双工位布局)/R5(权威OK/NG统计) 在 v3.15.5+插件v1.1.x 已实现, 本版无改动, 靠 v3.15.5 加载抢跑修复重启即显示",
+    "客户验证 R1-R5 需两步: 装 v3.16.0 主程序 + 界面单独上传 v1.1.9 插件签名包",
+    "发版安装包 extraResources 不含 .tjvplugin, CI 不碰插件签名"
+  ]
+}

@@ -73,15 +73,25 @@ def test_returnable_hook_fields_whitelist_event_fire():
     )
 
 
-def test_only_three_hooks_in_returnable_whitelist():
-    """首批 returnable 白名单只覆盖 3 个 hook — 其它都是只读 hook."""
+def test_returnable_whitelist_hooks_match_contract():
+    """returnable 白名单 hook 集合契约守门 — 改白名单必须同步 RFC 09 + 本测试.
+
+    首批 3 个 (M1.2c): pre_cycle_end / step_change / event_fire.
+    v3.14 RFC 11 串行流水线追加 5 个:
+      workpiece_flow_{enter, station_done, completed, timeout, short_circuit}.
+    """
     from backend.plugin_system.hook_dispatch import RETURNABLE_HOOK_FIELDS
 
     assert set(RETURNABLE_HOOK_FIELDS.keys()) == {
         "pre_cycle_end",
         "step_change",
         "event_fire",
-    }, "首批 returnable 白名单 hook 集合变了, 同步更新 RFC 09 + 本测试"
+        "workpiece_flow_enter",
+        "workpiece_flow_station_done",
+        "workpiece_flow_completed",
+        "workpiece_flow_timeout",
+        "workpiece_flow_short_circuit",
+    }, "returnable 白名单 hook 集合变了, 同步更新 RFC 09 + 本测试"
 
 
 # ============================================================

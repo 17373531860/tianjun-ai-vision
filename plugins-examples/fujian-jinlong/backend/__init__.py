@@ -35,7 +35,7 @@ import json
 import threading
 import time
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -51,11 +51,22 @@ CONFIG_TTL_SEC = 3.0
 # ============================================================
 _DEFAULT_CONFIG: Dict[str, Any] = {
     "enabled": True,
-    # 缺省档: 没在 steps 里单独配的步骤都用这个
-    "default": {"min_sec": 0, "warn_sec": 0, "max_sec": 0},
-    # 每个步骤 label 单独配 {min_sec, warn_sec, max_sec}; 任一项为 0/缺失 = 该档不启用
+    # 缺省档: 没在 steps 里单独配的步骤都用这个.
+    #   min_sec/warn_sec/max_sec  三档秒数 (0/缺失 = 该档不启用)
+    #   warn_event/ng_event       该档越线时触发哪个主程序报警事件 (eventN, 控制报警灯)
+    #   warn_toast/ng_toast       该档越线时弹哪个提示框 (方案B: 插件前端自绘):
+    #                             "" = 不弹; "__warn__"/"__ng__" = 插件内置橙/红框;
+    #                             "ok"/"ng"/"scan"/"warn_no_barcode" = 主程序显示设置系统预设框;
+    #                             其它 = 主程序显示设置「自定义提示框」的 id.
+    #                             (兼容旧值: bool True→内置框, False→不弹)
+    "default": {
+        "min_sec": 0, "warn_sec": 0, "max_sec": 0,
+        "warn_event": "event2", "ng_event": "event2",
+        "warn_toast": "__warn__", "ng_toast": "__ng__",
+    },
+    # 每个步骤 label 单独配 (步骤级覆盖缺省级): 同上字段, 仅存显式覆盖项
     "steps": {},
-    # 报警事件类型 (必须是主程序 alarm.config 已配置的字符串)
+    # 全局兜底 (老配置 / 步骤与缺省都没配事件时用); 新逻辑优先用 default/steps 的 warn_event/ng_event
     "alarm_event": {"warn": "event2", "ng": "event2"},
 }
 
@@ -63,7 +74,8 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
 # 模块级运行时 (插件加载时由 register_plugin 注入 host)
 # ============================================================
 _HOST = None                      # PluginHost
-_LOCK = threading.Lock()
+# 可重入锁: on_step_tick 持锁时会调 _push_toast (亦需锁), 非重入锁会自死锁.
+_LOCK = threading.RLock()
 
 # (channel_id, cycle_id) -> {"ng": bool, "alarmed": {label: set("warn"/"max")}}
 # 按"通道+周期"键 (而非仅通道): 避免新周期的 cycle_start 抢先清掉上一周期还没结算
@@ -79,6 +91,27 @@ _cfg_cache: Dict[str, Any] = {"value": None, "ts": 0.0}
 # ============================================================
 # 配置加载 (TTL 缓存, 缺失走默认)
 # ============================================================
+def _clean_tier(v: Dict[str, Any], base: Dict[str, Any]) -> Dict[str, Any]:
+    """规整单档配置: 三档秒数 + 每档报警事件 + 提示框开关. base 提供缺省底 (default 用完整
+    默认, step 用空 dict → 仅保留显式覆盖项, 合并交给 _thresholds_for)."""
+    out = dict(base)
+    for k in ("min_sec", "warn_sec", "max_sec"):
+        if v.get(k) is not None:
+            out[k] = v.get(k) or 0
+    for k in ("warn_event", "ng_event"):
+        if v.get(k):
+            out[k] = str(v[k])
+    for k in ("warn_toast", "ng_toast"):
+        if v.get(k) is not None:
+            raw = v[k]
+            if isinstance(raw, bool):
+                # 兼容旧 bool: True→插件内置框, False→不弹
+                out[k] = ("__warn__" if k == "warn_toast" else "__ng__") if raw else ""
+            else:
+                out[k] = str(raw)
+    return out
+
+
 def _normalize_config(raw: Any) -> Dict[str, Any]:
     """把任意输入规整成完整 config dict (容错: 类型不对就退默认)."""
     cfg = json.loads(json.dumps(_DEFAULT_CONFIG))  # deep copy
@@ -86,17 +119,12 @@ def _normalize_config(raw: Any) -> Dict[str, Any]:
         return cfg
     cfg["enabled"] = bool(raw.get("enabled", True))
     if isinstance(raw.get("default"), dict):
-        cfg["default"].update({k: raw["default"].get(k) for k in ("min_sec", "warn_sec", "max_sec")
-                               if raw["default"].get(k) is not None})
+        cfg["default"] = _clean_tier(raw["default"], cfg["default"])
     if isinstance(raw.get("steps"), dict):
         clean_steps = {}
         for label, v in raw["steps"].items():
             if isinstance(v, dict):
-                clean_steps[str(label)] = {
-                    "min_sec": v.get("min_sec") or 0,
-                    "warn_sec": v.get("warn_sec") or 0,
-                    "max_sec": v.get("max_sec") or 0,
-                }
+                clean_steps[str(label)] = _clean_tier(v, {})  # 步骤级仅存覆盖项
         cfg["steps"] = clean_steps
     if isinstance(raw.get("alarm_event"), dict):
         cfg["alarm_event"].update({
@@ -124,19 +152,41 @@ def _load_config(force: bool = False) -> Dict[str, Any]:
     return cfg
 
 
-def _thresholds_for(cfg: Dict[str, Any], label: str) -> Dict[str, float]:
-    """取某步骤的三档阈值 (步骤级覆盖缺省级)."""
-    t = dict(cfg.get("default") or {})
+def _coerce_toast(val: Any, dflt: str) -> str:
+    """把 toast 字段统一成提示框标识字符串. 兼容旧 bool (True→内置框 dflt, False→不弹)."""
+    if val is None:
+        return dflt
+    if isinstance(val, bool):
+        return dflt if val else ""
+    return str(val)
+
+
+def _thresholds_for(cfg: Dict[str, Any], label: str) -> Dict[str, Any]:
+    """取某步骤的三档阈值 + 每档报警事件 + 提示框开关 (步骤级覆盖缺省级)."""
+    d = cfg.get("default") or {}
+    ae = cfg.get("alarm_event") or {}
+    t = {
+        "min_sec": float(d.get("min_sec") or 0),
+        "warn_sec": float(d.get("warn_sec") or 0),
+        "max_sec": float(d.get("max_sec") or 0),
+        # 事件: 缺省级 → 全局 alarm_event 兜底 → 字面 event2
+        "warn_event": d.get("warn_event") or ae.get("warn") or "event2",
+        "ng_event": d.get("ng_event") or ae.get("ng") or "event2",
+        "warn_toast": _coerce_toast(d.get("warn_toast"), "__warn__"),
+        "ng_toast": _coerce_toast(d.get("ng_toast"), "__ng__"),
+    }
     step_t = (cfg.get("steps") or {}).get(label)
     if isinstance(step_t, dict):
         for k in ("min_sec", "warn_sec", "max_sec"):
             if step_t.get(k):
-                t[k] = step_t[k]
-    return {
-        "min_sec": float(t.get("min_sec") or 0),
-        "warn_sec": float(t.get("warn_sec") or 0),
-        "max_sec": float(t.get("max_sec") or 0),
-    }
+                t[k] = float(step_t[k])
+        for k in ("warn_event", "ng_event"):
+            if step_t.get(k):
+                t[k] = str(step_t[k])
+        for k, dflt in (("warn_toast", "__warn__"), ("ng_toast", "__ng__")):
+            if step_t.get(k) is not None:
+                t[k] = _coerce_toast(step_t[k], dflt)
+    return t
 
 
 # ============================================================
@@ -158,14 +208,49 @@ def _state_for(channel_id: int, cycle_id: Optional[int]) -> Dict[str, Any]:
     return st
 
 
-def _fire_alarm(channel_id: int, kind: str, reason: str, cfg: Dict[str, Any]) -> None:
-    if _HOST is None:
+# (channel_id) -> [{level, step, reason, ts}]  待前端轮询消费的提示框队列 (方案B: 插件自绘)
+_PENDING_TOASTS: Dict[int, list] = {}
+_TOAST_MAX = 50
+
+
+def _fire_alarm(channel_id: int, event_type: str, reason: str) -> None:
+    """触发主程序报警事件 (驱动报警灯页给该事件配的灯/蜂鸣). event_type 由步骤配置给定."""
+    if _HOST is None or not event_type:
         return
-    event_type = (cfg.get("alarm_event") or {}).get(kind) or "event2"
     try:
         _HOST.trigger_alarm(channel_id=channel_id, event_type=event_type, reason=reason)
     except Exception as e:
         log.warning("[Plugin][%s] trigger_alarm 失败 (隔离): %s", CUSTOMER_CODE, e)
+
+
+def _push_toast(channel_id: int, level: str, toast_key: str, step_name: str, reason: str) -> None:
+    """方案B: 把一条待提示塞进队列, 前端轮询 /pending-toasts 取走自绘提示框 (不依赖主程序事件链).
+
+    toast_key: 用哪个提示框样式 (空=不弹; __warn__/__ng__=插件内置; ok/ng/scan/warn_no_barcode=系统预设;
+    其它=自定义提示框 id). 前端按 key 去当前项目显示设置取 颜色/位置/文字/时长 自绘.
+    """
+    if not toast_key:
+        return
+    try:
+        with _LOCK:
+            q = _PENDING_TOASTS.setdefault(int(channel_id), [])
+            q.append({"level": level, "toast_key": toast_key, "step": step_name,
+                      "reason": reason, "ts": time.time()})
+            if len(q) > _TOAST_MAX:
+                del q[:-_TOAST_MAX]
+    except Exception:
+        pass
+
+
+def _drain_toasts() -> list:
+    """取走所有通道的待提示并清空 (消费即清, 避免重复弹)."""
+    out = []
+    with _LOCK:
+        for ch, q in _PENDING_TOASTS.items():
+            for item in q:
+                out.append({"channel": ch, **item})
+            q.clear()
+    return out
 
 
 # ============================================================
@@ -214,15 +299,17 @@ def on_step_tick(ctx: Dict[str, Any]) -> None:
                 done.add("max")
                 done.add("warn")  # 抑制后续警告重复
                 st["ng"] = True
-                _fire_alarm(ch, "ng", f"步骤[{name}]超过最长时间 ({elapsed:.1f}s≥{max_sec:.1f}s)", cfg)
-                log.info("[Plugin][%s] ch%s 步骤[%s] 超最长 %.1fs≥%.1fs → 报警+NG",
-                         CUSTOMER_CODE, ch, name, elapsed, max_sec)
+                _fire_alarm(ch, th["ng_event"], f"步骤[{name}]超过最长时间 ({elapsed:.1f}s≥{max_sec:.1f}s)")
+                _push_toast(ch, "ng", th["ng_toast"], name, f"超过最长时间 {elapsed:.1f}s ≥ {max_sec:.1f}s")
+                log.info("[Plugin][%s] ch%s 步骤[%s] 超最长 %.1fs≥%.1fs → 报警(%s)+NG",
+                         CUSTOMER_CODE, ch, name, elapsed, max_sec, th["ng_event"])
                 return
             if warn_sec > 0 and elapsed >= warn_sec and "warn" not in done:
                 done.add("warn")
-                _fire_alarm(ch, "warn", f"步骤[{name}]超过警告时间 ({elapsed:.1f}s≥{warn_sec:.1f}s)", cfg)
-                log.info("[Plugin][%s] ch%s 步骤[%s] 超警告 %.1fs≥%.1fs → 仅报警",
-                         CUSTOMER_CODE, ch, name, elapsed, warn_sec)
+                _fire_alarm(ch, th["warn_event"], f"步骤[{name}]超过警告时间 ({elapsed:.1f}s≥{warn_sec:.1f}s)")
+                _push_toast(ch, "warn", th["warn_toast"], name, f"超过警告时间 {elapsed:.1f}s ≥ {warn_sec:.1f}s")
+                log.info("[Plugin][%s] ch%s 步骤[%s] 超警告 %.1fs≥%.1fs → 仅报警(%s)",
+                         CUSTOMER_CODE, ch, name, elapsed, warn_sec, th["warn_event"])
     except Exception as e:
         log.warning("[Plugin][%s] on_step_tick 异常 (隔离): %s", CUSTOMER_CODE, e)
 
@@ -245,9 +332,10 @@ def on_step_change(ctx: Dict[str, Any]) -> None:
             with _LOCK:
                 st = _state_for(ch, ctx.get("cycle_id"))
                 st["ng"] = True
-            _fire_alarm(ch, "ng", f"步骤[{name}]未达最短时间 ({float(duration):.1f}s<{min_sec:.1f}s)", cfg)
-            log.info("[Plugin][%s] ch%s 步骤[%s] 未达最短 %.1fs<%.1fs → 报警+NG",
-                     CUSTOMER_CODE, ch, name, float(duration), min_sec)
+            _fire_alarm(ch, th["ng_event"], f"步骤[{name}]未达最短时间 ({float(duration):.1f}s<{min_sec:.1f}s)")
+            _push_toast(ch, "ng", th["ng_toast"], name, f"未达最短时间 {float(duration):.1f}s < {min_sec:.1f}s")
+            log.info("[Plugin][%s] ch%s 步骤[%s] 未达最短 %.1fs<%.1fs → 报警(%s)+NG",
+                     CUSTOMER_CODE, ch, name, float(duration), min_sec, th["ng_event"])
     except Exception as e:
         log.warning("[Plugin][%s] on_step_change 异常 (隔离): %s", CUSTOMER_CODE, e)
 
@@ -279,6 +367,13 @@ class _StepThreshold(BaseModel):
     min_sec: float = 0
     warn_sec: float = 0
     max_sec: float = 0
+    # 每档触发的报警事件 + 弹哪个提示框 (None = 不覆盖, 沿用缺省级/全局兜底)
+    # toast: 提示框标识字符串 ("" 不弹 / __warn__/__ng__ 内置 / ok/ng/scan/warn_no_barcode 系统预设 / 自定义id);
+    #        兼容旧 bool (True→内置框, False→不弹)
+    warn_event: Optional[str] = None
+    ng_event: Optional[str] = None
+    warn_toast: Optional[Union[str, bool]] = None
+    ng_toast: Optional[Union[str, bool]] = None
 
 
 class _DurationConfig(BaseModel):
@@ -307,6 +402,12 @@ def _build_router() -> APIRouter:
             )
         _load_config(force=True)
         return {"saved": ok, "config": norm}
+
+    @router.get("/pending-toasts")
+    def pending_toasts():
+        """方案B: 前端轮询取走待提示 (警告/NG 越线时由 hook 塞入), 消费即清.
+        返回: {"toasts": [{channel, level("warn"/"ng"), step, reason, ts}, ...]}"""
+        return {"toasts": _drain_toasts()}
 
     @router.get("/live-stats")
     def live_stats():

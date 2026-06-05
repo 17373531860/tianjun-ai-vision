@@ -394,3 +394,33 @@ display.monitor.defaultCounters.{ showTotal, showGood, showBad, showNgSteps }
 - `h()` 渲染字符串组件名 → 显式 import 组件对象（第 9 节）
 - `el-select` 单选 v-model 绑 boolean → 改 string / 用 el-switch（第 9 节）
 - `display_settings` 直接覆盖 vs 深合并 → Navbar.vue:477 老路径用直接覆盖，改默认值时注意老 key 丢失
+
+## 17. 插件 UI 插槽 + 设置页面板新增模式（v3.16.0）
+
+> 本节记录两类高复用前端扩展套路，源自 v3.16.0 补齐福建金龙 R1–R5 配置 UI。
+
+### 17.1 给主程序加「插件可填充」的插槽（TjSlot）
+
+主程序只留**插槽位**、不含业务逻辑；插件激活后注册组件填进来，未激活显示占位默认内容。
+
+```vue
+<TjSlot name="project.step-cell.durations" :step="step" :project="activeProject">
+  <span class="text-[0.625rem] text-gray-600">需插件</span>
+</TjSlot>
+```
+
+- 插槽 `name` 命名 `<view>.<位置>.<语义>`，与插件 `registry.slots.register(name, comp)` 对齐
+- 默认 slot 内容 = 无插件时的占位，主程序保持零业务
+- 插件侧组件用 `host.vue.reactive` 管本地态、`host.api.get/put` 调自有后端路由（已带登录 token）
+- ⚠️ 7 个主程序 slot 接入点见 v3.13.1（settings/project tab、cycle-result.indicator、step-cell.duration/status、layout.body/footer）
+
+### 17.2 设置页新增一个 Tab 配置面板
+
+仿 `WorkpieceFlowPanel.vue` / `ChannelGroupPanel.vue` 三件套：
+
+1. `frontend/src/api/<name>.js` — CRUD axios 封装（`import api from './index'`）
+2. `frontend/src/views/Settings/<Name>Panel.vue` — 列表 + 新建/编辑 `el-dialog`（成员多选/策略 `el-select`/启用 `el-switch`）
+3. `frontend/src/views/Settings/index.vue` — `import` 面板 + 加 `<el-tab-pane label="..."><XxxPanel /></el-tab-pane>`
+
+- 后端路由可能早已存在（如「工位组互通」R4 的 `/channel-groups` 在 v3.13.1/v3.15.5 已有），只是缺前端入口——**先确认后端有没有，别重造**
+- `el-select` 单选别绑 boolean（见第 9 节）；对话框关闭重置表单避免脏数据残留

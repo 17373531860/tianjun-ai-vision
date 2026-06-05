@@ -504,8 +504,8 @@
                 </div>
               </div>
 
-              <div class="flex-1 overflow-y-auto custom-scrollbar min-h-0 pb-20">
-                <table class="w-full text-left text-xs text-gray-300 border-collapse">
+              <div class="flex-1 overflow-auto custom-scrollbar step-table-scroll min-h-0">
+                <table class="min-w-full w-max text-left text-xs text-gray-300 border-collapse whitespace-nowrap">
                   <thead class="bg-slate-800 text-gray-400 sticky top-0 z-10">
                     <tr class="border-b border-slate-700">
                       <th class="p-2">原始标签</th>
@@ -534,6 +534,21 @@
                             </div>
                           </template>
                           <span class="cursor-help border-b border-dashed border-gray-500">Box尺寸上限</span>
+                        </el-tooltip>
+                      </th>
+                      <th v-if="hasDurationsSlot" class="p-2 w-44">
+                        <el-tooltip placement="top">
+                          <template #content>
+                            <div style="max-width: 340px; line-height: 1.5">
+                              <b>步骤耗时三档</b>（插件功能 · 单位秒 · 0 = 不启用该档）<br/>
+                              最短 / 警告 / 最长，进行中实时判定：<br/>
+                              · 走完未达<b>最短</b> → 报警 + 判 NG<br/>
+                              · 进行中超<b>警告</b>（最短与最长之间）→ 只报警，不判 NG<br/>
+                              · 进行中超<b>最长</b> → 报警 + 判 NG<br/>
+                              需激活对应客户插件后此列才出现输入框（用插件管自管阈值时，项目原生「最短/最大持续」请留空）。
+                            </div>
+                          </template>
+                          <span class="cursor-help border-b border-dashed border-gray-500">步骤耗时三档</span>
                         </el-tooltip>
                       </th>
                       <th class="p-2 w-36">
@@ -706,6 +721,11 @@
                             placeholder="0"
                           />
                         </div>
+                      </td>
+                      <td v-if="hasDurationsSlot" class="p-2">
+                        <TjSlot name="project.step-cell.durations" :step="step" :project="activeProject">
+                          <span class="text-[0.625rem] text-gray-600">需插件</span>
+                        </TjSlot>
                       </td>
                       <td class="p-2 align-top">
                         <div class="flex flex-col gap-1 min-w-[7rem]">
@@ -1001,18 +1021,6 @@
                     <span class="text-gray-400 text-xs whitespace-nowrap">周期超时(秒)</span>
                     <el-input-number v-model="activeProject.cycle_max_duration" size="small" :min="0" :step="5" :precision="2" />
                     <span class="text-xs text-gray-500">周期总时长超过此值直接判定NG（0=不启用）</span>
-                  </div>
-                  <!-- v3.8.x: 严格顺序模式专属 — 等待结算步骤时遇到首步立刻开新周期; last_first 已自带此能力, 隐藏开关 -->
-                  <div v-if="activeProject.settlement_mode !== 'last_first' && (activeProject.logic_mode === 'sequential' || (activeProject.logic_mode === 'custom' && activeProject.custom_based_on === 'sequential'))"
-                       class="flex items-start gap-3 pt-2 border-t border-slate-700">
-                    <el-switch v-model="activeProject.first_step_aborts_pending_settle" size="default" />
-                    <div class="flex-1">
-                      <p class="text-gray-300 text-xs">等待结算步骤时遇到首步立刻开新周期</p>
-                      <p class="text-[0.65rem] text-gray-500 mt-1">
-                        ★ 场景: 严格顺序 A→B→C→D, 客户做完 ABC 等不到 D 就直接重做 ABCD。
-                        开启后旧周期判 NG (缺末步), 本次首步开启新周期。仅在"前置步骤都齐、只差结算步骤"时触发, 其他场景仍走步骤回退。
-                      </p>
-                    </div>
                   </div>
                 </div>
               </el-card>
@@ -2374,6 +2382,9 @@ const pluginThemeStore = usePluginThemeStore();
 
 // v3.13 M2.2b: 客户插件注入的项目配置 Tab 列表
 const pluginProjectTabs = computed(() => pluginThemeStore.projectTabs || []);
+// 步骤耗时三档是插件功能：仅当有插件注册了对应挂载点时, 整列(表头+单元格)才渲染,
+// 未装插件的客户完全看不到这列, 做到字节级零差异(不留"需插件"占位列)。
+const hasDurationsSlot = computed(() => !!pluginThemeStore.getSlotComponent('project.step-cell.durations'));
 const searchQuery = ref('');
 const activeProject = ref(null);
 const activeTab = ref('basic');
@@ -3055,10 +3066,6 @@ const initProjectDefaults = (project) => {
   if (project.cycle_max_duration === undefined) {
     project.cycle_max_duration = pipelineConfig.cycle_max_duration || 0;
   }
-  // v3.8.x: 严格顺序模式 - "等待结算步骤时遇到首步立刻开新周期" 开关 (默认 false)
-  if (project.first_step_aborts_pending_settle === undefined) {
-    project.first_step_aborts_pending_settle = pipelineConfig.first_step_aborts_pending_settle === true;
-  }
   // 加载后同步结算步约束（与 watch(settlement_mode) 一致，避免开关仍可编辑/值为 true）
   const canSeqSettle = project.logic_mode === 'sequential'
     || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential');
@@ -3066,9 +3073,6 @@ const initProjectDefaults = (project) => {
     if (project.settlement_mode === 'last_first') {
       for (const step of project.steps_config) {
         step.strict_order = false;
-      }
-      if (project.first_step_aborts_pending_settle) {
-        project.first_step_aborts_pending_settle = false;
       }
     } else if (project.settlement_mode === 'last_step' || project.settlement_mode === 'first_step') {
       let seq = (project.logic_mode === 'custom' && project.custom_based_on === 'sequential')
@@ -3287,7 +3291,6 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.settlement_mode = project.settlement_mode || 'first_step';
   project.pipeline_config.idle_timeout_seconds = project.idle_timeout_seconds || 0;
   project.pipeline_config.cycle_max_duration = project.cycle_max_duration || 0;
-  project.pipeline_config.first_step_aborts_pending_settle = project.first_step_aborts_pending_settle === true;
   project.pipeline_config.periodic_actions = project.periodic_actions;
   
   return project;
@@ -3505,7 +3508,6 @@ const handleSaveProject = async () => {
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,
-        first_step_aborts_pending_settle: activeProject.value.first_step_aborts_pending_settle === true,  // v3.8.x
         rod_companion_filter: _sanitizeCompanionFilter(activeProject.value.rod_companion_filter),
         rod_session_gate: _sanitizeSessionGate(activeProject.value.rod_session_gate),
         hide_boxes_outside_step_roi: !!activeProject.value.pipeline_config?.hide_boxes_outside_step_roi,
@@ -4317,9 +4319,6 @@ watch(() => activeProject.value?.settlement_mode, (mode) => {
         cleared++;
       }
     }
-    if (activeProject.value.first_step_aborts_pending_settle) {
-      activeProject.value.first_step_aborts_pending_settle = false;
-    }
     if (cleared > 0) {
       ElMessage.info(`已自动关闭 ${cleared} 个步骤的严格顺序（last_first 模式约束）`);
     }
@@ -4613,6 +4612,26 @@ const addEventAction = (event) => {
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #64748b;
+}
+
+/* 步骤设置表: 横向滚动条加粗高亮 + 底部外边距把可视底边推回视口内,
+   修复工控机矮屏下横向滚动条沉到视口外/被底部状态栏遮挡导致"划不动"的问题 */
+.step-table-scroll {
+  margin-bottom: 52px;
+}
+.step-table-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 14px;
+}
+.step-table-scroll::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+.step-table-scroll::-webkit-scrollbar-thumb {
+  background: #06b6d4;
+  border-radius: 7px;
+}
+.step-table-scroll::-webkit-scrollbar-thumb:hover {
+  background: #22d3ee;
 }
 
 :deep(.project-tabs) {
