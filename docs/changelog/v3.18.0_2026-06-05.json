@@ -1,0 +1,38 @@
+{
+  "version": "3.18.0",
+  "date": "2026-06-05",
+  "previous_version": "3.17.3",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "RFC12 全页面整页覆盖框架：整页覆盖能力从仅 Monitor 扩展到全部 8 个主视图",
+      "symptom": "客户级整套 UI 重设计此前只能在 Monitor 整页覆盖(且强约束双工位)，其余 7 页只能加 Tab/新路由，无法替换整页主体。",
+      "root_cause": "需求驱动：客户整套界面定制需纯插件落地、主程序保持精简零差异。",
+      "fix": "Monitor/Project/Settings/Source/Model/Data/Alarm/MES 各加 <TjSlot name=*.layout.body> 整页挂载点；无插件注册时回退默认内容(原生页面)，零差异；与既有局部 slot(金龙三档 project.step-cell.durations)正交共存。",
+      "files": ["frontend/src/views/Monitor/index.vue", "frontend/src/views/Project/index.vue", "frontend/src/views/Settings/index.vue", "frontend/src/views/Source/index.vue", "frontend/src/views/Model/index.vue", "frontend/src/views/Data/index.vue", "frontend/src/views/Alarm/index.vue", "frontend/src/views/MES/index.vue", "docs/plugin-system/design/12_full_page_override_rfc.md"],
+      "keywords": ["RFC12", "整页覆盖", "full-page override", "layout.body", "TjSlot", "插件 UI", "整套界面定制", "零差异默认", "8 视图挂载点"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "天军展会全应用定制插件(showcase, Tier2, 主作者签名)",
+      "symptom": "展会需要一整套高科技重设计界面演示。",
+      "root_cause": "展示需求。",
+      "fix": "iframe 承载 8 页整应用整页覆盖原型，真数据驱动(设备状态/节拍/雷达评分/良品/NG TOP3/预警 + 天气IP定位 + /auth/me 身份 + 数字孪生3D工位)；后端新增 showcase_stats 只读统计(挂 /data) + system_display 系统状态采集(CPU/内存/GPU, try/except 降级)；RSA-PSS+HMAC 签名产出生产可装 .tjvplugin。",
+      "files": ["backend/api/showcase_stats.py", "backend/api/system_display.py", "backend/api/__init__.py", "plugins-examples/tianjun-showcase", "plugins/showcase", "scripts/plugin/dev-activate-showcase.py"],
+      "keywords": ["showcase", "展会插件", "整页覆盖", "RFC12", "showcase_stats", "system_display", "GPU 状态", "数字孪生", "主作者签名", "RSA-PSS", "HMAC", "tjvplugin"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["modify-frontend"],
+  "files_changed": ["electron/package.json", "docs/CHANGELOG.md", "docs/changelog/v3.18.0_2026-06-05.md", "docs/changelog/v3.18.0_2026-06-05.json", ".claude/skills/modify-frontend/SKILL.md"],
+  "merge_info": {
+    "merged_branch": "feat/plugin-dev",
+    "merge_commit": "3e19159",
+    "strategy": "--no-ff",
+    "conflicts": "none",
+    "verified": "语义复核(三档+整页覆盖共存) + 后端 import + 前端 build 全过"
+  }
+}

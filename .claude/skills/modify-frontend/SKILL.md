@@ -413,6 +413,7 @@ display.monitor.defaultCounters.{ showTotal, showGood, showBad, showNgSteps }
 - 默认 slot 内容 = 无插件时的占位，主程序保持零业务
 - 插件侧组件用 `host.vue.reactive` 管本地态、`host.api.get/put` 调自有后端路由（已带登录 token）
 - ⚠️ 7 个主程序 slot 接入点见 v3.13.1（settings/project tab、cycle-result.indicator、step-cell.duration/status、layout.body/footer）
+- ⚠️ **v3.18.0 (RFC12 整页覆盖)**：`*.layout.body` 整页覆盖挂载点已从「仅 Monitor」扩展到**全部 8 个主视图**（Monitor/Project/Settings/Source/Model/Data/Alarm/MES 各有 `<TjSlot name="<view>.layout.body">` 包住整个页面 body）。无插件注册时 TjSlot 回退默认内容=原生整页，**零差异**；与局部 slot（如 `project.step-cell.durations` 三档列）**正交共存**——单 active 插件设计下，整页覆盖型插件（如 showcase）与局部增强型插件（如金龙三档）不会同时生效，不互相干扰。改这 8 个视图的最外层模板结构时，注意别破坏 `*.layout.body` TjSlot 的开闭包裹（详见 `docs/plugin-system/design/12_full_page_override_rfc.md`）。
 
 ### 17.2 设置页新增一个 Tab 配置面板
 

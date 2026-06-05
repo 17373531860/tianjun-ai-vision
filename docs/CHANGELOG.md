@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.18.0 (2026-06-05)
+
+> 合入 `feat/plugin-dev`：RFC12「全页面整页覆盖」插件框架（整页覆盖能力从仅 Monitor 扩展到全部 8 个主视图）+ 天军展会全应用定制插件（showcase, Tier2, 主作者签名）。分支先吸收主线 v3.16~v3.17.3，金龙三档 UI 与整页覆盖共存复核 + 冒烟全过，`--no-ff` 合入。
+
+- [FEAT-001] 新增: RFC12 全页面整页覆盖框架 — Monitor/Project/Settings/Source/Model/Data/Alarm/MES 各加 `<TjSlot name="*.layout.body">` 整页挂载点，无插件时回退原生页面零差异，与金龙三档局部 slot 正交共存
+- [FEAT-002] 新增: 天军展会全应用定制插件（showcase）— iframe 承载 8 页高科技重设计原型，真数据驱动 + 后端 `showcase_stats` 统计端点 + `system_display` 系统状态采集 + RSA-PSS/HMAC 主作者签名
+- [SKILL-001] 更新: modify-frontend 补 RFC12 整页覆盖 slot 覆盖全 8 视图说明
+
+---
+
 ## v3.17.3 (2026-06-02)
 
 > 修复客户机金龙插件三档配置列「怎么换包/升级/重启都不出现」的顽疾。根因不是文件锁、不是装错包，而是打包后 Electron 对 `file://` 页面跨源拉 `http://localhost` 插件资源的缓存极其激进，把第一次装的旧 ESM 焊死，磁盘文件虽已换新但 fetch 永远命中缓存旧文件。前端 fetch + 后端 FileResponse 双双加禁缓存，每次回源。开发机 vite 不缓存故从不复现。
