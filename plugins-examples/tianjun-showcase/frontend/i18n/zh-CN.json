@@ -1,0 +1,14 @@
+{
+  "plugin": {
+    "showcase": {
+      "title": "AI 视觉行为分析防错检测系统",
+      "monitor": "检测中心",
+      "behaviorScore": "AI 行为分析评分",
+      "beat": "节拍分析",
+      "device": "设备状态",
+      "twin": "工位 3D 预览",
+      "yieldTrend": "合格率趋势",
+      "alerts": "实时预警"
+    }
+  }
+}

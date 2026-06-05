@@ -56,6 +56,7 @@ D. 内部用前缀 internal-*
 | `default`  | 保留 | 内置示例 / 占位 | 2026-05-08 | tianjun-ai-master | 出厂自带 demo 插件用，不发给真实客户 |
 | `internal-test` | 内部 | CI / 集成测试 | 2026-05-08 | tianjun-ai-master | 仅 dev mode 加载，不发布 |
 | `internal-demo` | 内部 | 三档示例插件 | 2026-05-08 | tianjun-ai-master | plugins-examples/ 用，发版前替换为真实客户码 |
+| `showcase` | 内部 | 展会全应用定制界面 | 2026-06-03 | tianjun-ai-master | plugins-examples/tianjun-showcase，RFC12 全页面整页覆盖演示，不发真实客户 |
 
 > ⚠️ `default` / `internal-*` 三个前缀**保留给主作者**，不分配给真实客户。
 
@@ -71,6 +72,7 @@ D. 内部用前缀 internal-*
 
 ```
 2026-05-08  初始化，加 default / internal-test / internal-demo 三个保留码
+2026-06-03  加 showcase（展会全应用定制界面，RFC12 整页覆盖演示）
 ```
 
 ## 5. customer_code 查询小工具

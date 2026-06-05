@@ -1,0 +1,14 @@
+{
+  "plugin": {
+    "showcase": {
+      "title": "AI Vision Behavior Error-Proofing System",
+      "monitor": "Monitor",
+      "behaviorScore": "AI Behavior Score",
+      "beat": "Cycle Rhythm",
+      "device": "Device Status",
+      "twin": "Workstation 3D",
+      "yieldTrend": "Yield Trend",
+      "alerts": "Live Alerts"
+    }
+  }
+}

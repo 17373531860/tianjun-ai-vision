@@ -1,4 +1,5 @@
 <template>
+  <TjSlot name="settings.layout.body">
   <div class="p-6 h-full overflow-y-auto">
     <h2 class="text-2xl font-bold mb-6 border-l-4 border-tech-blue pl-3 text-white">系统设置</h2>
 
@@ -1572,9 +1573,11 @@
       </el-tab-pane>
     </el-tabs>
   </div>
+  </TjSlot>
 </template>
 
 <script setup>
+import TjSlot from '@/components/TjSlot.vue';
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';

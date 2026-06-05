@@ -96,6 +96,122 @@ def put_display(payload: DisplayPayload,
     return {"status": "ok", "updated": updated}
 
 
+# ==================== RFC12 展会: 设备/系统实时状态 ====================
+# 给"设备状态"高科技面板提供真实数据 (GPU 温度/利用率/显存 + CPU/内存/磁盘).
+# 全部 try/except 降级: 缺 psutil / pynvml / cuda 不可用时返回 None, 不报错.
+
+def _collect_cpu_mem_disk() -> Dict[str, Any]:
+    out = {"cpu": None, "memory": None, "disk": None}
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return out
+    try:
+        freq = psutil.cpu_freq()
+        out["cpu"] = {
+            "percent": psutil.cpu_percent(interval=None),
+            "cores": psutil.cpu_count(logical=True),
+            "freq_mhz": round(freq.current, 0) if freq else None,
+        }
+    except Exception:
+        pass
+    try:
+        vm = psutil.virtual_memory()
+        out["memory"] = {
+            "total_mb": round(vm.total / 1024 ** 2, 0),
+            "used_mb": round(vm.used / 1024 ** 2, 0),
+            "percent": vm.percent,
+        }
+    except Exception:
+        pass
+    try:
+        du = psutil.disk_usage("/")
+        out["disk"] = {
+            "total_gb": round(du.total / 1024 ** 3, 1),
+            "used_gb": round(du.used / 1024 ** 3, 1),
+            "percent": du.percent,
+        }
+    except Exception:
+        pass
+    return out
+
+
+def _collect_gpus() -> Dict[str, Any]:
+    """优先 pynvml 拿温度/利用率; 退化到 torch.cuda 拿名称/显存."""
+    gpus = []
+    cuda_available = False
+    # pynvml 路径 (温度/利用率最全)
+    try:
+        import pynvml  # type: ignore
+        pynvml.nvmlInit()
+        count = pynvml.nvmlDeviceGetCount()
+        for i in range(count):
+            h = pynvml.nvmlDeviceGetHandleByIndex(i)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(h)
+            try:
+                util = pynvml.nvmlDeviceGetUtilizationRates(h).gpu
+            except Exception:
+                util = None
+            try:
+                temp = pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU)
+            except Exception:
+                temp = None
+            name = pynvml.nvmlDeviceGetName(h)
+            if isinstance(name, bytes):
+                name = name.decode("utf-8", "ignore")
+            gpus.append({
+                "index": i,
+                "name": name,
+                "mem_total_mb": round(mem.total / 1024 ** 2, 0),
+                "mem_used_mb": round(mem.used / 1024 ** 2, 0),
+                "util_percent": util,
+                "temperature_c": temp,
+            })
+        pynvml.nvmlShutdown()
+        cuda_available = count > 0
+        return {"gpus": gpus, "cuda_available": cuda_available}
+    except Exception:
+        pass
+    # torch.cuda 退化路径 (无温度/利用率)
+    try:
+        import torch  # type: ignore
+        if torch.cuda.is_available():
+            cuda_available = True
+            for i in range(torch.cuda.device_count()):
+                props = torch.cuda.get_device_properties(i)
+                gpus.append({
+                    "index": i,
+                    "name": torch.cuda.get_device_name(i),
+                    "mem_total_mb": round(props.total_memory / 1024 ** 2, 0),
+                    "mem_used_mb": round(torch.cuda.memory_allocated(i) / 1024 ** 2, 0),
+                    "util_percent": None,
+                    "temperature_c": None,
+                })
+    except Exception:
+        pass
+    return {"gpus": gpus, "cuda_available": cuda_available}
+
+
+@router.get("/device-status")
+def get_device_status() -> Dict[str, Any]:
+    """RFC12: 设备/系统实时状态. 供监控页"设备状态"面板真实数据驱动.
+
+    无 psutil/pynvml/cuda 时各字段降级为 None, 接口仍 200, 前端按缺省渲染.
+    """
+    import time as _time
+    sysinfo = _collect_cpu_mem_disk()
+    gpuinfo = _collect_gpus()
+    return {
+        "ok": True,
+        "ts": int(_time.time() * 1000),
+        "cpu": sysinfo["cpu"],
+        "memory": sysinfo["memory"],
+        "disk": sysinfo["disk"],
+        "gpus": gpuinfo["gpus"],
+        "cuda_available": gpuinfo["cuda_available"],
+    }
+
+
 @router.get("/license-cache")
 def get_license_cache(db: Session = Depends(get_db)) -> Dict[str, Any]:
     """读后端缓存的 License 信息（实时规则触发导出时使用）

@@ -3,21 +3,10 @@
        客户插件用于双工位左右半屏 + 共用底栏等深度重排. 默认走原 layout, 字节级零差异.
        v3.13.2 补丁: 加 :actions 透传开始/停止/待机/清零四个控制方法,
        让 layout.body 插件能完整重排控制按钮 (项目/模型解析等复杂前置都在 Monitor 内做了). -->
-  <!-- v3.15.4: 插件注册了定制监控界面但当前不是双工位时, 给明确可见提示.
-       防止"插件像没装"误判 — 客户装了双工位定制插件却忘切工位数, 老坑. -->
+  <!-- RFC12: 整页覆盖不再限制工位数. 任意工位数都挂载插件, 插件据 channel-count 自适应单/多工位布局.
+       全局 Toast / 人工确认 / 录像异常仍由宿主渲染, 避免插件漏功能. -->
   <div
-    v-if="layoutBodyOverride && channelCount !== 2"
-    style="margin: 8px 12px; padding: 10px 14px; border-radius: 8px;
-           background: rgba(255, 184, 0, 0.12); border: 1px solid rgba(255, 184, 0, 0.5);
-           color: #d48806; font-size: 13px; line-height: 1.6;"
-  >
-    ⚠ 当前已激活的插件提供了定制监控界面，但需在「双工位」模式下才生效（当前为
-    {{ channelCount }} 工位）。请到「设置 → 工位数」切换为 2 后刷新页面。
-  </div>
-
-  <!-- layout.body 插件: 仅双工位启用; 全局 Toast / 人工确认 / 录像异常由宿主渲染, 避免插件漏功能 -->
-  <div
-    v-if="layoutBodyOverride && channelCount === 2"
+    v-if="layoutBodyOverride"
     class="relative h-[calc(100vh-7.25rem)] min-h-0 overflow-hidden"
   >
     <component
@@ -32,8 +21,9 @@
       @update:selected-channel="selectedChannel = $event"
     />
 
-    <!-- 双工位列级 OK/NG Toast (与原生双工位同结构, 保留 cycle-result.indicator slot) -->
-    <div class="pointer-events-none absolute inset-0 z-[45] grid grid-cols-2 gap-2 p-2">
+    <!-- 双工位列级 OK/NG Toast (与原生双工位同结构, 保留 cycle-result.indicator slot).
+         RFC12: 仅双工位时宿主渲染列级 Toast; 其它工位数由插件自行用 cycle-result.indicator slot 摆位. -->
+    <div v-if="channelCount === 2" class="pointer-events-none absolute inset-0 z-[45] grid grid-cols-2 gap-2 p-2">
       <div v-for="ch in 2" :key="'plugin-toast-' + ch" class="relative min-h-0">
         <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
           <div class="absolute z-50 pointer-events-none flex flex-col gap-2" :class="getMultiPositionClass(position)">
@@ -1447,7 +1437,7 @@
        主程序默认实现: 横幅式列表 (max 3 个, FIFO 上限). 客户插件可覆盖整段展示.
        后端 /api/v1/workpiece-flows/{id}/state 提供轮询数据源. -->
   <TjSlot
-    slot-name="monitor.workpiece-flow.indicator"
+    name="monitor.workpiece-flow.indicator"
     :channel-count="channelCount"
     :selected-channel="selectedChannel"
   />

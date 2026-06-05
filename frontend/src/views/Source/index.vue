@@ -1,4 +1,5 @@
 <template>
+  <TjSlot name="source.layout.body">
   <div class="p-6 h-full overflow-y-auto">
     <h2 class="text-2xl font-bold mb-6 border-l-4 border-tech-blue pl-3 text-white">输入源设置</h2>
 
@@ -593,9 +594,11 @@
       </div>
     </div>
   </div>
+  </TjSlot>
 </template>
 
 <script setup>
+import TjSlot from '@/components/TjSlot.vue';
 import { ref, computed, onMounted, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { 

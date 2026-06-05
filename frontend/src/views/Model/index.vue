@@ -1,4 +1,5 @@
 <template>
+  <TjSlot name="model.layout.body">
   <div class="p-6 space-y-6">
     <div class="flex justify-between items-center">
       <h2 class="text-2xl font-bold border-l-4 border-tech-blue pl-3">模型仓库 (Model Repository)</h2>
@@ -141,9 +142,11 @@
       </template>
     </el-dialog>
   </div>
+  </TjSlot>
 </template>
 
 <script setup>
+import TjSlot from '@/components/TjSlot.vue';
 import { ref, onMounted } from 'vue';
 import { ElMessageBox, ElMessage } from 'element-plus';
 import { UploadFilled, Cpu, Upload } from '@element-plus/icons-vue';
