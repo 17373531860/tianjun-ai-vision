@@ -1,4 +1,5 @@
 <template>
+  <TjSlot name="project.layout.body">
   <div class="h-[calc(100vh-7rem)] flex flex-col gap-4">
     <!-- Header -->
     <div class="flex justify-between items-center bg-slate-900/80 p-4 rounded-lg border border-slate-700 shrink-0">
@@ -2351,9 +2352,11 @@
     </el-dialog>
 
   </div>
+  </TjSlot>
 </template>
 
 <script setup>
+import TjSlot from '@/components/TjSlot.vue';
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, Loading, Warning, QuestionFilled } from '@element-plus/icons-vue';
 import { useProjectStore } from '@/store/useProjectStore';

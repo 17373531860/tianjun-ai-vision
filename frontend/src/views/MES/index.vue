@@ -1,4 +1,5 @@
 <template>
+  <TjSlot name="mes.layout.body">
   <div class="mes-container h-full flex flex-col bg-[#0a0e1a] text-white overflow-hidden">
     <!-- 顶部标签页 -->
     <div class="flex items-center px-4 pt-3 pb-1 gap-2 border-b border-cyan-900/50">
@@ -50,9 +51,11 @@
       </template>
     </div>
   </div>
+  </TjSlot>
 </template>
 
 <script setup>
+import TjSlot from '@/components/TjSlot.vue';
 import { ref } from 'vue'
 import OrderPanel from './OrderPanel.vue'
 import WorkpiecePanel from './WorkpiecePanel.vue'

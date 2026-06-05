@@ -1,4 +1,5 @@
 <template>
+  <TjSlot name="alarm.layout.body">
   <div class="p-6 h-full overflow-y-auto">
     <h2 class="text-2xl font-bold mb-6 border-l-4 border-tech-blue pl-3 text-white">报警设置</h2>
 
@@ -503,9 +504,11 @@
       </el-card>
     </div>
   </div>
+  </TjSlot>
 </template>
 
 <script setup>
+import TjSlot from '@/components/TjSlot.vue';
 import { ref, reactive, onMounted, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { 

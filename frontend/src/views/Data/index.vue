@@ -1,4 +1,5 @@
 <template>
+  <TjSlot name="data.layout.body">
   <div class="data-page p-5 h-full overflow-y-auto">
     <!-- 页面头部 -->
     <div class="flex justify-between items-center mb-5">
@@ -714,9 +715,11 @@
     <!-- v3.8.x: 定时导出规则管理对话框 -->
     <ScheduledRulesDialog v-model="scheduledRulesVisible" />
   </div>
+  </TjSlot>
 </template>
 
 <script setup>
+import TjSlot from '@/components/TjSlot.vue';
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useSystemStore } from '@/store/useSystemStore';
