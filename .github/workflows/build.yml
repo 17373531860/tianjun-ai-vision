@@ -95,6 +95,11 @@ jobs:
           conda config --set remote_read_timeout_secs 120
           conda config --set remote_max_retries 5
           conda config --show
+          # 2026-06-11 (v3.19.0): defaults 渠道元数据漂移把 openssl 解到 3.0.18,
+          # 与 python-3.10.20 该 build 的 _ssl 不匹配 (ImportError: SSL module is
+          # not available → pip 全挂). 钉回 3.5.x (v3.18.0 成功组合是 3.5.6).
+          conda install -n tianjun -y "openssl>=3.5"
+          conda run -n tianjun python -c "import ssl; print('SSL OK:', ssl.OPENSSL_VERSION)"
       
       - name: Install Python dependencies
         shell: bash -l {0}
