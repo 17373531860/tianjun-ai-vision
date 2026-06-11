@@ -20,6 +20,7 @@ from backend.db.database import SessionLocal
 from backend.models.mes_models import (
     ClusterConfig, BoxAggregation, BoxSummary,
 )
+from backend.core import debug_center
 
 import logging
 logger = logging.getLogger(__name__)
@@ -254,6 +255,8 @@ class ClusterCollector:
                 "last_seen": now,
                 "first_seen": self._connected_slaves.get(station_id, {}).get("first_seen", now),
             }
+        if debug_center.is_on("backend.cluster"):
+            debug_center.dbg("backend.cluster", "副机心跳收到", f"station={station_id or '-'} ip={ip or '-'} detecting={detecting} channels={channel_count}")
         return {"success": True}
 
     def get_connected_slaves(self) -> list:
@@ -273,6 +276,8 @@ class ClusterCollector:
                     })
             for sid in expired:
                 del self._connected_slaves[sid]
+        if expired and debug_center.is_on("backend.cluster"):
+            debug_center.dbg("backend.cluster", "副机心跳超时剔除", f"stations={expired} timeout={self._slave_timeout}s")
         return result
 
     def receive_station_report(self, station_id: str, box_serial: str,
@@ -298,6 +303,8 @@ class ClusterCollector:
     def _receive_station_report_locked(
             self, station_id, box_serial, cycle_context,
             source_address, channel_id, is_good, event_name):
+        if debug_center.is_on("backend.cluster"):
+            debug_center.dbg("backend.cluster", "station report 接收", f"station={station_id or '-'} box={box_serial or '-'} is_good={is_good} src={source_address or '-'}")
         db = SessionLocal()
         try:
             def build_upsert(db):
@@ -456,13 +463,17 @@ class ClusterCollector:
             resp = requests.post(url, json=payload, timeout=10)
             if resp.status_code == 200:
                 logger.info("[Cluster] 上报主机成功: %s -> %s", box_serial, master_url)
+                if debug_center.is_on("backend.cluster"):
+                    debug_center.dbg("backend.cluster", "副机上报主机成功", f"box={box_serial or '-'} station={station_id or '-'} master={master_url or '-'}")
                 return {"success": True, "response": resp.json()}
             else:
                 logger.error("[Cluster] 上报主机失败: HTTP %d %s",
                              resp.status_code, resp.text[:200])
+                debug_center.dbg("backend.cluster", "副机上报主机失败", f"box={box_serial or '-'} status={resp.status_code}")
                 return {"success": False, "error": f"HTTP {resp.status_code}"}
         except Exception as e:
             logger.error("[Cluster] 上报主机异常: %s", e)
+            debug_center.dbg("backend.cluster", "副机上报主机异常", f"box={box_serial or '-'} err={e}")
             return {"success": False, "error": str(e)}
 
     @staticmethod
@@ -525,6 +536,8 @@ class ClusterCollector:
             self._match_records_to_expected(expected, all_records)
 
         if missing:
+            if debug_center.is_on("backend.cluster"):
+                debug_center.dbg("backend.cluster", "box 未聚齐,继续等", f"box={box_serial or '-'} received={sorted(received_stations)} missing={list(missing)}")
             return {
                 "dispatched": False,
                 "received": list(received_stations),
@@ -682,6 +695,8 @@ class ClusterCollector:
         try:
             from backend.services.mes_gateway import get_mes_gateway
             gw = get_mes_gateway()
+            if debug_center.is_on("backend.cluster"):
+                debug_center.dbg("backend.cluster", "box 聚齐,推送 box_complete", f"box={box_serial or '-'} overall={'OK' if overall_good else 'NG'} stations={len(matched_expected)}/{len(expected)} recovery={state.get('is_recovery', False)}")
             gw.dispatch("box_complete", aggregated, channel_id=None)
 
             # v3.13: box_complete 插件 hook — 集群所有工位齐发 + MES Gateway 推送后,
@@ -728,6 +743,7 @@ class ClusterCollector:
                 logger.info("[Cluster] 箱子 %s 汇总推送完成 (%s)", box_serial,
                             "OK" if overall_good else "NG")
         except Exception as e:
+            debug_center.dbg("backend.cluster", "box_complete 推送异常", f"box={box_serial or '-'} err={e}")
             logger.error("[Cluster] 箱子 %s MES 推送失败: %s\n%s",
                          box_serial, e, traceback.format_exc())
 
@@ -1029,6 +1045,8 @@ class ClusterCollector:
                             box_serial, elapsed, timeout_sec,
                             list(received), list(missing)
                         )
+                        if debug_center.is_on("backend.cluster"):
+                            debug_center.dbg("backend.cluster", "box 超时策略触发", f"box={box_serial or '-'} elapsed={elapsed:.0f}s missing={list(missing)} timeout_push={timeout_push}")
 
                         if timeout_push:
                             self._push_timeout_result(db, box_serial, records,

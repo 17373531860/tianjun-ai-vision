@@ -2,6 +2,7 @@
   <div class="flex gap-4">
     <!-- 左：设备管理 -->
     <div class="flex-1">
+      <div class="text-xs text-gray-500 mb-2">外部设备（称重器等）为设备级配置，按工位绑定，不随当前项目切换。</div>
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-cyan-300 font-semibold">外部设备</h3>
         <div class="flex gap-2">
@@ -424,6 +425,7 @@ import {
 } from '@/api/external_device'
 import { getWorkstations } from '@/api/detection'
 import { useSystemStore } from '@/store/useSystemStore'
+import { dbg, dbgErr } from '@/utils/debug'
 
 const systemStore = useSystemStore()
 const devices = ref([])
@@ -579,6 +581,7 @@ const buildFormData = () => {
 }
 
 const openAdd = () => {
+  dbg('mes.external', '点击「新建外设」')
   editingId.value = null
   form.value = defaultForm()
   splitDelimiter.value = ','
@@ -594,6 +597,7 @@ const openAdd = () => {
 }
 
 const editDev = (dev) => {
+  dbg('mes.external', '点击「编辑外设」', `id=${dev?.id} name=${dev?.name || ''} protocol=${dev?.protocol || ''}`)
   editingId.value = dev.id
   form.value = { ...defaultForm(), ...dev }
   if (!form.value.pairing_mode) form.value.pairing_mode = 'stable'
@@ -663,6 +667,7 @@ const applyPreset = (preset) => {
 }
 
 const handleSave = async () => {
+  dbg('mes.external', editingId.value ? '点击「保存编辑外设」' : '点击「保存新建外设」', `id=${editingId.value ?? ''} name=${form.value?.name || ''} protocol=${form.value?.protocol || ''}`)
   if (!form.value.name) { ElMessage.warning('请填写名称'); return }
   saving.value = true
   try {
@@ -683,6 +688,7 @@ const handleSave = async () => {
     loadDevices()
     refreshStatus()
   } catch (e) {
+    dbgErr('mes.external', '保存外设', e)
     console.error('[ExtDev] save failed:', e, e?.response)
     let detail = ''
     if (e?.response) {
@@ -701,6 +707,7 @@ const handleSave = async () => {
 }
 
 const handleDelete = async (dev) => {
+  dbg('mes.external', '点击「删除外设」', `id=${dev?.id} name=${dev?.name || ''}`)
   try {
     await ElMessageBox.confirm(`确定删除 ${dev.name}？`, '确认')
     await deleteExternalDevice(dev.id)
@@ -708,11 +715,13 @@ const handleDelete = async (dev) => {
     loadDevices()
     refreshStatus()
   } catch (e) {
+    if (e !== 'cancel' && e !== 'close') dbgErr('mes.external', '删除外设', e)
     if (e !== 'cancel' && e !== 'close') ElMessage.error('删除失败')
   }
 }
 
 const testDev = async (dev) => {
+  dbg('mes.external', '点击「测试连接」', `id=${dev?.id} name=${dev?.name || ''} protocol=${dev?.protocol || ''}`)
   testingDeviceId.value = dev.id
   try {
     const res = await testExternalDevice({
@@ -723,6 +732,7 @@ const testDev = async (dev) => {
     if (res.data.success) ElMessage.success(res.data.message)
     else ElMessage.error(res.data.message)
   } catch (e) {
+    dbgErr('mes.external', '测试连接', e)
     ElMessage.error('测试失败: ' + (e.response?.data?.detail || e.message || '网络错误'))
   } finally {
     testingDeviceId.value = null
@@ -730,6 +740,7 @@ const testDev = async (dev) => {
 }
 
 const submitSimulateData = async () => {
+  dbg('mes.external', '点击「模拟数据注入」', `device_id=${simulateForm.value?.device_id ?? ''} raw=${simulateForm.value?.raw_data || ''}`)
   const raw = (simulateForm.value.raw_data || '').trim()
   if (!raw) {
     ElMessage.warning('请填写模拟原始数据')
@@ -749,6 +760,7 @@ const submitSimulateData = async () => {
     showSimulate.value = false
     await Promise.all([refreshStatus(), loadLogs()])
   } catch (e) {
+    dbgErr('mes.external', '模拟数据注入', e)
     ElMessage.error('模拟数据失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
   } finally {
     simulating.value = false
@@ -757,7 +769,7 @@ const submitSimulateData = async () => {
 
 const loadDevices = async () => {
   try { devices.value = (await getExternalDevices()).data || [] }
-  catch (e) { ElMessage.error('加载设备列表失败: ' + (e.response?.data?.detail || e.message || '网络错误')) }
+  catch (e) { dbgErr('mes.external', '加载外设列表', e); ElMessage.error('加载设备列表失败: ' + (e.response?.data?.detail || e.message || '网络错误')) }
 }
 const refreshStatus = async () => {
   try {

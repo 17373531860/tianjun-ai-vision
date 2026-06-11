@@ -22,6 +22,7 @@ from datetime import datetime
 from backend.db.database import SessionLocal
 from backend.models.mes_models import ScannerDevice
 from backend.services.barcode_parser import BarcodeParser, ParseResult
+from backend.core import debug_center
 
 logger = logging.getLogger(__name__)
 
@@ -1378,6 +1379,8 @@ class ScannerService:
                 conn.status = "connected"
                 conn.last_error = ""
                 conn_start = time.time()
+                if debug_center.is_on("backend.scanner"):
+                    debug_center.dbg("backend.scanner", "扫码器连接成功", f"name={conn.name} addr={conn.ip}:{conn.port} type={conn.device_type}")
 
                 if conn.device_type == "text_lon":
                     print(f"[Scanner] {conn.name} ({conn.ip}:{conn.port}) 已连接 (LON/LOFF 模式)")
@@ -1417,6 +1420,8 @@ class ScannerService:
             except Exception as e:
                 conn.last_error = str(e)
                 conn.status = "error"
+                if debug_center.is_on("backend.scanner"):
+                    debug_center.dbg("backend.scanner", "监听循环异常", f"name={conn.name} addr={conn.ip}:{conn.port} err={e}")
                 if _is_expected_connection_error(e):
                     logger.warning("[Scanner] %s 连接失败，将继续重试: %s", conn.name, e)
                 else:
@@ -1437,6 +1442,8 @@ class ScannerService:
                 retry_delay = 1.0
             logger.info("[Scanner] %s 已断开 (status=%s, held=%.0fs, next_retry=%.0fs)",
                         conn.name, conn.status, connected_duration, retry_delay)
+            if debug_center.is_on("backend.scanner"):
+                debug_center.dbg("backend.scanner", "扫码器断开,等待重连", f"name={conn.name} status={conn.status} held={connected_duration:.0f}s next_retry={retry_delay:.0f}s")
             if not conn._stop_event.is_set():
                 conn._stop_event.wait(timeout=retry_delay)
                 retry_delay = min(retry_delay * 2, max_delay)
@@ -1722,6 +1729,8 @@ class ScannerService:
         # v2.7.16: 关键节点全部 print, 不依赖 log-level (uvicorn 默认 warning 过滤 INFO).
         print(f"[Scanner/recv] {conn.name} 原始数据: '{raw_data}' ({len(raw_data)}B)",
               flush=True)
+        if debug_center.is_on("backend.scanner"):
+            debug_center.dbg("backend.scanner", "收到条码", f"device={conn.device_id} name={conn.name} barcode={raw_data or '-'}")
 
         # 测试期间任何途径(listener / WMax RPT 注入)收到的码都丢弃,
         # 不要让"测试连通性"的 LON 误触发工件登记.
@@ -1753,6 +1762,8 @@ class ScannerService:
             print(f"[Scanner/recv] {conn.name} 解析失败: {result.error} "
                   f"(原始: '{raw_data}', parse_config={conn.parse_config})",
                   flush=True)
+            if debug_center.is_on("backend.scanner"):
+                debug_center.dbg("backend.scanner", "条码解析失败", f"name={conn.name} barcode={raw_data or '-'} err={getattr(result, 'error', None) or '-'}")
             return
         print(f"[Scanner/recv] {conn.name} 解析成功 → serial_no='{result.serial_no}'",
               flush=True)
@@ -1792,6 +1803,8 @@ class ScannerService:
             print(f"[Scanner/recv] {conn.name} → MES.on_scan_received "
                   f"(ch={ch_id}, serial={result.serial_no}, project={project_id})",
                   flush=True)
+            if debug_center.is_on("backend.scanner"):
+                debug_center.dbg("backend.scanner", "条码注入 MES", f"channel={ch_id} serial={result.serial_no or '-'} project={project_id} device={conn.device_id}")
             self._mes_hook.on_scan_received(
                 channel_id=ch_id,
                 serial_no=result.serial_no,
@@ -1853,6 +1866,8 @@ class ScannerService:
             if injected:
                 logger.info("[Scanner] %s: 条码 %s → 注入外部设备: %s (分组=%s)",
                             conn.name, serial_no, injected, scanner_group or f"ch:{target_channel}")
+                if debug_center.is_on("backend.scanner"):
+                    debug_center.dbg("backend.scanner", "条码注入外部设备", f"name={conn.name} serial={serial_no or '-'} devices={injected}")
         except Exception as e:
             logger.debug("[Scanner] 注入外部设备条码失败: %s", e)
 
@@ -1897,6 +1912,8 @@ class ScannerService:
 
     def inject_scan_result(self, ip: str, barcode: str, _retry_once: bool = False):
         """外部注入扫码结果（WMax RPT 端口转发用）"""
+        if debug_center.is_on("backend.scanner"):
+            debug_center.dbg("backend.scanner", "WMax RPT 注入条码", f"ip={ip or '-'} barcode={barcode or '-'} retry={_retry_once}")
         conn = None
         for c in self._connections.values():
             if c.ip == ip:

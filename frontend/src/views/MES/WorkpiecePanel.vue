@@ -29,6 +29,10 @@
                  @click="handleBatchDelete">
         批量删除{{ selected.length > 0 ? `(${selected.length})` : '' }}
       </el-button>
+      <div class="flex items-center gap-1 ml-auto">
+        <el-switch v-model="onlyCurrentProject" size="small" @change="handleProjectScopeChange" />
+        <span class="text-xs text-gray-400">仅当前项目<template v-if="onlyCurrentProject && projectStore.currentProjectName">（{{ projectStore.currentProjectName }}）</template></span>
+      </div>
     </div>
 
     <div class="flex gap-4 h-[calc(100vh-240px)]">
@@ -118,10 +122,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getWorkpieces, getWorkpieceTrace, workpieceAction, deleteWorkpiece } from '@/api/mes'
+import { useProjectStore } from '@/store/useProjectStore'
+import { dbg, dbgErr } from '@/utils/debug'
 
+const projectStore = useProjectStore()
+const onlyCurrentProject = ref(true)
 const items = ref([])
 const total = ref(0)
 const currentPage = ref(1)
@@ -158,26 +166,33 @@ const loadList = async () => {
       params.date_from = dateRange.value[0]
       params.date_to = dateRange.value[1] + ' 23:59:59'
     }
+    if (onlyCurrentProject.value && projectStore.currentProjectId) {
+      params.project_id = projectStore.currentProjectId
+    }
     const res = await getWorkpieces(params)
     items.value = res.data.items || []
     total.value = res.data.total || 0
   } catch (e) {
+    dbgErr('mes.workpiece', '查询工件列表', e)
     ElMessage.error('加载工件列表失败')
   }
 }
 
 const handleSelect = async (row) => {
   if (!row) { traceData.value = null; return }
+  dbg('mes.workpiece', '点击「工件详情/追溯」', `id=${row?.id} serial_no=${row?.serial_no || ''}`)
   try {
     const res = await getWorkpieceTrace(row.id)
     traceData.value = res.data
   } catch (e) {
+    dbgErr('mes.workpiece', '加载追溯详情', e)
     ElMessage.error('加载追溯详情失败')
   }
 }
 
 const doAction = async (row, action) => {
   const labels = { rework: '标记返工', scrap: '标记报废' }
+  dbg('mes.workpiece', `点击「${labels[action] || action}」`, `id=${row?.id} serial_no=${row?.serial_no || ''}`)
   try {
     await ElMessageBox.confirm(`确定对 ${row.serial_no} 执行「${labels[action]}」？`, '确认')
     await workpieceAction(row.id, { action })
@@ -185,12 +200,14 @@ const doAction = async (row, action) => {
     loadList()
     if (traceData.value?.workpiece?.id === row.id) handleSelect(row)
   } catch (e) {
+    if (e !== 'cancel' && e !== 'close') dbgErr('mes.workpiece', '手动判定操作', e)
     if (e !== 'cancel' && e !== 'close')
       ElMessage.error('操作失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
   }
 }
 
 const handleDelete = async (row) => {
+  dbg('mes.workpiece', '点击「删除工件」', `id=${row?.id} serial_no=${row?.serial_no || ''}`)
   try {
     await ElMessageBox.confirm(
       `确定删除工件 ${row.serial_no} ？\n\n会同时清掉它的全部检测关联和缺陷记录, 不可撤销。`,
@@ -201,6 +218,7 @@ const handleDelete = async (row) => {
     if (traceData.value?.workpiece?.id === row.id) traceData.value = null
     loadList()
   } catch (e) {
+    if (e !== 'cancel' && e !== 'close') dbgErr('mes.workpiece', '删除工件', e)
     if (e !== 'cancel' && e !== 'close')
       ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
   }
@@ -209,6 +227,7 @@ const handleDelete = async (row) => {
 const handleBatchDelete = async () => {
   if (selected.value.length === 0) return
   const n = selected.value.length
+  dbg('mes.workpiece', '点击「批量删除工件」', `count=${n}`)
   try {
     await ElMessageBox.confirm(
       `确定批量删除 ${n} 个工件？\n\n会同时清掉这些工件的全部检测关联和缺陷记录, 不可撤销。`,
@@ -228,10 +247,16 @@ const handleBatchDelete = async () => {
     selected.value = []
     loadList()
   } catch (e) {
+    if (e !== 'cancel' && e !== 'close') dbgErr('mes.workpiece', '批量删除工件', e)
     if (e !== 'cancel' && e !== 'close')
       ElMessage.error('批量删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
   }
 }
+
+const handleProjectScopeChange = () => { currentPage.value = 1; loadList() }
+watch(() => projectStore.currentProjectId, () => {
+  if (onlyCurrentProject.value) { currentPage.value = 1; loadList() }
+})
 
 onMounted(loadList)
 </script>

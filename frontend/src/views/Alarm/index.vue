@@ -520,6 +520,7 @@ import { getProjectDetail, updateProject } from '@/api/project';
 import { getWorkstations } from '@/api/detection';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
+import { dbg, dbgErr } from '@/utils/debug';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
@@ -664,6 +665,7 @@ const saveSharingConfig = async () => {
     return;
   }
   savingSharing.value = true;
+  dbg('alarm.ops', '保存共享报警灯配置', `shared_with=${(sharing.sharedWith || []).join(',')}`);
   try {
     // 共享配置永远写到 ch0（owner）
     await api.post(`/alarm/config?channel=0`, {
@@ -684,6 +686,7 @@ const saveSharingConfig = async () => {
     await loadChannelCount();
     await loadChannelStatus();
   } catch (err) {
+    dbgErr('alarm.ops', '保存共享报警灯配置', err);
     ElMessage.error(err.response?.data?.detail || '保存共享配置失败');
   } finally {
     savingSharing.value = false;
@@ -691,6 +694,7 @@ const saveSharingConfig = async () => {
 };
 
 const refreshPorts = async () => {
+  dbg('alarm.ops', '点击「刷新设备列表」', `ch=${activeChannel.value}`);
   loadingPorts.value = true;
   try {
     const res = await api.get(`/alarm/ports${chParam()}`);
@@ -727,6 +731,7 @@ const loadStatus = async () => {
 
 const connect = async () => {
   connecting.value = true;
+  dbg('alarm.ops', '点击「连接串口」', `ch=${activeChannel.value} port=${selectedPort.value ?? ''} baud=${baudrate.value ?? ''}`);
   try {
     await api.post(`/alarm/connect${chParam()}`, {
       port: selectedPort.value,
@@ -736,6 +741,7 @@ const connect = async () => {
     ElMessage.success(`工位 ${activeChannel.value + 1} 连接成功`);
     saveConfig();
   } catch (err) {
+    dbgErr('alarm.ops', '连接串口', err);
     ElMessage.error(err.response?.data?.detail || '连接失败');
   } finally {
     connecting.value = false;
@@ -743,16 +749,19 @@ const connect = async () => {
 };
 
 const disconnect = async () => {
+  dbg('alarm.ops', '点击「断开串口」', `ch=${activeChannel.value} port=${selectedPort.value ?? ''}`);
   try {
     await api.post(`/alarm/disconnect${chParam()}`);
     isConnected.value = false;
     ElMessage.success(`工位 ${activeChannel.value + 1} 已断开连接`);
   } catch (err) {
+    dbgErr('alarm.ops', '断开串口', err);
     ElMessage.error('断开失败');
   }
 };
 
 const saveConfig = async () => {
+  dbg('alarm.ops', '保存报警规则配置', `ch=${activeChannel.value} enabled=${config?.enabled} protocol=${config?.protocol ?? ''}`);
   try {
     await api.post(`/alarm/config${chParam()}`, {
       enabled: config.enabled,
@@ -778,6 +787,7 @@ const saveConfig = async () => {
       });
     }
   } catch (err) {
+    dbgErr('alarm.ops', '保存报警规则配置', err);
     ElMessage.error('保存配置失败');
     console.error(err);
   }
@@ -785,10 +795,12 @@ const saveConfig = async () => {
 
 const testAction = async (action) => {
   testing.value = action;
+  dbg('alarm.ops', '点击测试动作', `ch=${activeChannel.value} action=${action ?? ''}`);
   try {
     await api.post(`/alarm/test${chParam()}`, { action });
     ElMessage.success(`已发送: ${action}`);
   } catch (err) {
+    dbgErr('alarm.ops', '测试动作', err);
     ElMessage.error(err.response?.data?.detail || '测试失败');
   } finally {
     testing.value = '';
@@ -796,15 +808,18 @@ const testAction = async (action) => {
 };
 
 const triggerAlarm = async (eventType) => {
+  dbg('alarm.ops', '点击触发测试报警', `ch=${activeChannel.value} event=${eventType ?? ''}`);
   try {
     await api.post(`/alarm/trigger/${eventType}${chParam()}`);
     ElMessage.success(`工位 ${activeChannel.value + 1} 已触发 ${eventType} 报警`);
   } catch (err) {
+    dbgErr('alarm.ops', '触发测试报警', err);
     ElMessage.error('触发失败');
   }
 };
 
 const stopAlarm = async () => {
+  dbg('alarm.ops', '点击「停止报警」', `ch=${activeChannel.value}`);
   try {
     await api.post(`/alarm/stop${chParam()}`);
     ElMessage.success('已停止报警');

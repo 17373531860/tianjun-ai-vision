@@ -14,13 +14,15 @@ from backend.models.models import DetectionSession, DetectionCycle, StepRecord
 router = APIRouter()
 
 
-def _filter_cycle_ids_by_scope(db: Session, session_id, date, start_date, end_date):
+def _filter_cycle_ids_by_scope(db: Session, session_id, date, start_date, end_date, project_id=None):
     if session_id:
         rows = db.query(DetectionCycle.id).filter(DetectionCycle.session_id == session_id).all()
         return [r.id for r in rows]
     if not (date or start_date or end_date):
         return None  # no filter
     sq = db.query(DetectionSession.id)
+    if project_id:
+        sq = sq.filter(DetectionSession.project_id == project_id)
     if date:
         sq = sq.filter(func.date(DetectionSession.start_time) == date)
     if start_date:
@@ -32,7 +34,7 @@ def _filter_cycle_ids_by_scope(db: Session, session_id, date, start_date, end_da
     return [r.id for r in rows]
 
 
-def _good_cycle_ids(db: Session, session_id, date, start_date, end_date):
+def _good_cycle_ids(db: Session, session_id, date, start_date, end_date, project_id=None):
     if session_id:
         rows = db.query(DetectionCycle.id).filter(
             DetectionCycle.session_id == session_id,
@@ -42,6 +44,8 @@ def _good_cycle_ids(db: Session, session_id, date, start_date, end_date):
     if not (date or start_date or end_date):
         return set()
     sq = db.query(DetectionSession.id)
+    if project_id:
+        sq = sq.filter(DetectionSession.project_id == project_id)
     if date:
         sq = sq.filter(func.date(DetectionSession.start_time) == date)
     if start_date:
@@ -62,18 +66,22 @@ def get_step_averages(
     date: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    project_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
-    """步骤平均耗时和间隔。间隔仅统计正常周期 (is_good=True)。"""
+    """步骤平均耗时和间隔。间隔仅统计正常周期 (is_good=True)。
+
+    v3.18.x: 新增 project_id 过滤 — 多项目同一天生产时, 避免步骤耗时混入其它项目数据。
+    """
     from backend.api.sessions import _get_step_order_map
 
     query = db.query(StepRecord)
-    cycle_ids = _filter_cycle_ids_by_scope(db, session_id, date, start_date, end_date)
+    cycle_ids = _filter_cycle_ids_by_scope(db, session_id, date, start_date, end_date, project_id)
     if cycle_ids is not None:
         query = query.filter(StepRecord.cycle_id.in_(cycle_ids))
 
     steps = query.all()
-    good_cycle_ids = _good_cycle_ids(db, session_id, date, start_date, end_date)
+    good_cycle_ids = _good_cycle_ids(db, session_id, date, start_date, end_date, project_id)
 
     step_stats = {}
     for step in steps:
@@ -105,6 +113,8 @@ def get_step_averages(
     order_map = {}
     if session_id:
         order_map = _get_step_order_map(db, session_id=session_id)
+    elif project_id:
+        order_map = _get_step_order_map(db, project_id=project_id)
     elif date or start_date or end_date:
         sq = db.query(DetectionSession)
         if date:
@@ -152,14 +162,17 @@ def get_cycle_averages(
     date: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    project_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
-    """周期平均耗时统计"""
+    """周期平均耗时统计。v3.18.x: 新增 project_id 过滤。"""
     query = db.query(DetectionCycle)
     if session_id:
         query = query.filter(DetectionCycle.session_id == session_id)
-    elif date or start_date or end_date:
+    elif date or start_date or end_date or project_id:
         sq = db.query(DetectionSession.id)
+        if project_id:
+            sq = sq.filter(DetectionSession.project_id == project_id)
         if date:
             sq = sq.filter(func.date(DetectionSession.start_time) == date)
         if start_date:

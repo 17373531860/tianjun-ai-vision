@@ -45,6 +45,7 @@ from backend.api.source_sdk_loader import (
     MVCC_INTVALUE,
     MvCamera,
 )
+from backend.core import debug_center
 
 
 class LifecycleMixin:
@@ -128,6 +129,7 @@ class LifecycleMixin:
     def pause(self):
         """暂停：停止画面更新和检测，但保持当前帧"""
         _before_running, _before_detecting = self.is_running, self.is_detecting
+        debug_center.dbg("backend.source", "pause 入口", f"channel={self.channel_id} source_type={self.source_type} running={_before_running}→False detecting={_before_detecting}→False")
         self.is_running = False
         self.is_detecting = False
         # v2.7.3: 暂停也必须熄灭工作指示灯，前端 Monitor 的"停止"按钮调的是 pause
@@ -157,6 +159,7 @@ class LifecycleMixin:
                 self.capture.release()
             except Exception as e:
                 print(f"[pause] release camera failed: {e}")
+                debug_center.dbg("backend.source", "pause 释放摄像头异常", f"channel={self.channel_id} err={e}")
             self.capture = None
             print("已暂停：摄像头已释放，保留模型和画面")
         elif self.source_type == 'hikvision':
@@ -189,6 +192,7 @@ class LifecycleMixin:
             return True
         except Exception as e:
             print(f"[resume] 重新打开摄像头失败: {e}")
+            debug_center.dbg("backend.source", "resume 重开摄像头异常", f"channel={self.channel_id} index={self.camera_index} err={e}")
             return False
 
     def _reopen_hik_camera(self):
@@ -231,12 +235,14 @@ class LifecycleMixin:
             return True
         except Exception as e:
             print(f"[resume] 重新打开海康相机失败: {e}")
+            debug_center.dbg("backend.source", "resume 重开海康相机异常", f"channel={self.channel_id} index={self.hik_device_index} err={e}")
             self._release_hik_camera()
             return False
 
     def resume(self):
         """恢复：从暂停状态恢复，重新启动视频流和推理"""
         _before_running, _before_detecting = self.is_running, self.is_detecting
+        debug_center.dbg("backend.source", "resume 入口", f"channel={self.channel_id} source_type={self.source_type} running={_before_running} detecting={_before_detecting}")
         # Re-open camera if it was released during pause
         if self.capture is None and self.source_type == 'camera':
             if not self._reopen_camera():
@@ -250,6 +256,7 @@ class LifecycleMixin:
 
         if self.capture is None and self.source_type not in ('hikvision', 'image', 'synthetic'):
             print("无法恢复：没有可用的视频源")
+            debug_center.dbg("backend.source", "resume 失败", f"channel={self.channel_id} source_type={self.source_type} 无可用视频源")
             self._fire_source_status_change(_before_running, _before_detecting, "resume_failed")
             return False
 
@@ -260,6 +267,7 @@ class LifecycleMixin:
 
         self.is_running = True
         self.is_detecting = True
+        debug_center.dbg("backend.source", "resume 状态翻转", f"channel={self.channel_id} running/detecting → True")
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
 
@@ -298,6 +306,7 @@ class LifecycleMixin:
     def standby(self):
         """Standby: stop inference but keep the video capture thread running."""
         _before_running, _before_detecting = self.is_running, self.is_detecting
+        debug_center.dbg("backend.source", "standby 入口", f"channel={self.channel_id} source_type={self.source_type} detecting={_before_detecting}→False")
         self.is_detecting = False
         # v2.7.3: 待机时也熄灭工作指示灯（语义上"不在检测"就不应该亮工作灯）
         try:
@@ -326,6 +335,7 @@ class LifecycleMixin:
     def resume_inference(self):
         """Resume inference from standby (capture thread already running)."""
         _before_running, _before_detecting = self.is_running, self.is_detecting
+        debug_center.dbg("backend.source", "resume_inference 入口", f"channel={self.channel_id} source_type={self.source_type} running={_before_running} detecting={_before_detecting}→True")
         if not self.is_running:
             print("[resume_inference] 视频流未运行，无法恢复推理")
             self._fire_source_status_change(_before_running, _before_detecting, "resume_inference_failed")
@@ -377,6 +387,7 @@ class LifecycleMixin:
                            after switching input sources.
         """
         _before_running, _before_detecting = self.is_running, self.is_detecting
+        debug_center.dbg("backend.source", "stop 入口", f"channel={self.channel_id} source_type={self.source_type} release_model={release_model} running={_before_running}→False")
         self.is_running = False
         self.is_detecting = False
         

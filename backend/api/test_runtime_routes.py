@@ -39,23 +39,43 @@ def _collect_labels_from_timeline(timeline) -> list:
 
 
 def _build_min_project_config(labels: list, logic_mode: str = "sequential") -> dict:
+    # 必须带 id: 结算步序解析 (source_sequence_labels._sequence_order) 的
+    # steps_config 兜底只认有 id 的步骤, 缺 id → 首步标签解析不出 → 周期永不结算
     steps = [
         {
+            "id": f"synth-{idx + 1}",
             "label": label,
             "threshold": 0.3,
             "min_frames": 1,
             "color": "#1976d2",
         }
-        for label in labels
+        for idx, label in enumerate(labels)
+    ]
+    # sequence_order 必须显式给: _settle_sequential_cycle 直接读它 (无 steps_config
+    # 兜底), 缺了会在结算时静默丢弃周期, 永远不出 OK/NG (2026-06-11 排查实锤)
+    pipeline_config = {
+        "sequence_order": [{"step_id": s["id"]} for s in steps],
+    }
+    # 让 OK/NG 真正落计数器与周期记录: 挂最小 events_config (id 1=OK, 2=NG 是
+    # _trigger_event 的内置约定; 缺事件定义会"事件未找到"早退, 周期变孤儿)
+    events_config = [
+        {"id": 1, "name": "合格(OK)", "actions": [
+            {"counter_name": "合格总数", "delta": 1},
+            {"counter_name": "总产量", "delta": 1},
+        ]},
+        {"id": 2, "name": "不合格(NG)", "actions": [
+            {"counter_name": "不良总数", "delta": 1},
+            {"counter_name": "总产量", "delta": 1},
+        ]},
     ]
     return {
         "id": -1,  # synthetic 占位 id；让 start_detection 能创建 DetectionSession
         "name": "__synthetic__",
         "task_type": "detect",
         "logic_mode": logic_mode,
-        "pipeline_config": {},
+        "pipeline_config": pipeline_config,
         "steps_config": steps,
-        "events_config": [],
+        "events_config": events_config,
         "periodic_actions": [],
         "alarm_config": {},
     }

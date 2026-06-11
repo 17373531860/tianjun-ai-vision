@@ -38,6 +38,7 @@ from backend.services.export_renderer import (
     latest_input_filename, latest_input_text,
 )
 from backend.services.export_snapshot import lookup_snapshot_from_cycle
+from backend.core import debug_center
 
 
 # v3.7.2 异步重试线程池. 用于"去重命中重名 → 等下一份新文件"的轮询.
@@ -91,6 +92,7 @@ def dispatch_cycle_end_export(db: Session,
 
     if not rules:
         return results
+    debug_center.dbg("backend.export", "实时规则触发 cycle_end", f"cycle={cycle_id} channel={channel_id} project={project_id} rules={len(rules)}")
 
     # 共享 ctx — 多条规则用同一个 cycle，避免重复 build
     ctx = None
@@ -175,6 +177,7 @@ def dispatch_session_end_export(db: Session,
 
     if not rules:
         return results
+    debug_center.dbg("backend.export", "实时规则触发 session_end", f"session={session_id} channel={channel_id} project={project_id} rules={len(rules)}")
 
     ctx = None
     ctx_err = None
@@ -371,6 +374,7 @@ def _execute_rule(db: Session,
 
     _inject_export_ctx(ctx, rule, filename, text)
 
+    debug_center.dbg("backend.export", "模板渲染开始", f"rule={rule.name!r} template_id={rule.template_id} fmt={fmt} output_dir={rule.output_dir!r}")
     try:
         result = render_to_file(
             template_content=template.content or "",
@@ -387,11 +391,13 @@ def _execute_rule(db: Session,
             template_file_path=template.template_file_path,
         )
     except Exception as e:
+        debug_center.dbg("backend.export", "模板渲染异常", f"rule={rule.name!r} fmt={fmt} err={type(e).__name__}: {e}")
         result = RenderResult(
             status="failed",
             error_msg=f"{type(e).__name__}: {e}\n{traceback.format_exc()}",
             duration_ms=int((time.perf_counter() - t0) * 1000),
         )
+    debug_center.dbg("backend.export", f"模板渲染结果 {result.status}", f"rule={rule.name!r} fmt={fmt} output={result.output_path!r} err={result.error_msg or ''}"[:500])
 
     # 成功落盘 → 把 filename 写回 rule.last_used_input_filename, 给下一周期去重用
     if result.status == "success" and filename and rule.dedupe_same_filename:
@@ -589,6 +595,7 @@ def _write_log_from_result(db: Session,
     except Exception as e:
         # 日志写失败不能反向影响主流程
         db.rollback()
+        debug_center.dbg("backend.export", "ExportRunLog 写库失败", f"rule#{rule.id} {rule.name!r} err={type(e).__name__}: {e}")
         print(f"[ExportRealtime] 写日志失败 rule#{rule.id}: {e}", flush=True)
 
 

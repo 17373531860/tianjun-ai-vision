@@ -14,6 +14,7 @@ import json
 import os
 from backend.core.auth_deps import require_perm
 from backend.core.config import DATA_DIR
+from backend.core import debug_center
 
 router = APIRouter()
 
@@ -194,11 +195,13 @@ class AlarmManager:
             self.config['port'] = port
             self.config['baudrate'] = baudrate
             print(f"报警器已连接: {port} @ {baudrate}")
+            debug_center.dbg("backend.alarm", "串口连接成功", f"port={port} baudrate={baudrate}")
             return {"ok": True, "msg": f"已连接 {port}"}
         except PermissionError:
             hint = self._try_fix_permission(port)
             msg = f"串口权限不足: {port}。{hint}"
             print(f"连接报警器失败(权限): {msg}")
+            debug_center.dbg("backend.alarm", "串口连接失败", msg)
             return {"ok": False, "msg": msg}
         except serial.SerialException as e:
             err = str(e)
@@ -210,10 +213,12 @@ class AlarmManager:
             else:
                 msg = f"串口打开失败: {err}"
             print(f"连接报警器失败: {msg}")
+            debug_center.dbg("backend.alarm", "串口连接失败", msg)
             return {"ok": False, "msg": msg}
         except Exception as e:
             msg = f"连接异常: {e}"
             print(f"连接报警器失败: {msg}")
+            debug_center.dbg("backend.alarm", "串口连接失败", msg)
             return {"ok": False, "msg": msg}
 
     @staticmethod
@@ -247,6 +252,7 @@ class AlarmManager:
             return True
         except Exception as e:
             print(f"发送命令失败: {e}")
+            debug_center.dbg("backend.alarm", "串口写指令异常", f"port={self.port_name} cmd={command.hex() if command else ''} err={e}")
             return False
 
     def _get_command(self, action: str) -> bytes:
@@ -292,6 +298,7 @@ class AlarmManager:
         - 非共享模式：与旧版完全一致，立即驱动灯，duration 后回到 idle。
         - 共享模式：按 channel 写入事件，按优先级合成；duration 到期重算。
         """
+        debug_center.dbg("backend.alarm", "触发报警入口", f"channel={channel_id} event={event_type} enabled={bool(self.config.get('enabled'))} shared={self.is_shared()}")
         if not self.config.get('enabled'):
             return
         trigger_config = self.config.get('triggers', {}).get(event_type, {})
@@ -384,6 +391,7 @@ class AlarmManager:
         t.start()
 
     def stop_alarm(self):
+        debug_center.dbg("backend.alarm", "停止报警", f"port={self.port_name} shared={self.is_shared()} idle_active={self._idle_light_active}")
         self._alarm_stop_event.set()
         if self._alarm_thread and self._alarm_thread.is_alive():
             self._alarm_thread.join(timeout=1)
@@ -477,6 +485,8 @@ class AlarmManager:
 
     def _recompose_and_apply(self):
         """根据所有通道当前状态合成最终视觉。须在持锁状态下调用。"""
+        if debug_center.is_on("backend.alarm"):
+            debug_center.dbg("backend.alarm", "共享灯柱重算合成入口", f"channels={sorted(self._shared_channels)} states={ {ch: (st.get('event'), st.get('category'), st.get('is_idle')) for ch, st in self._channel_states.items()} }")
         now = time.time()
         active_events = []
         any_idle = False

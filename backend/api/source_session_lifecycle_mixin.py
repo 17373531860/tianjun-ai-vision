@@ -29,6 +29,8 @@ from backend.db.database import SessionLocal
 from backend.models.models import DetectionSession, DetectionCycle, StepRecord, DataExportSetting
 from sqlalchemy import func
 
+from backend.core import debug_center
+
 
 # ============================================================
 # v3.13 M1.2b: 业务侧消费 returnable hook 返回值的纯函数辅助
@@ -189,6 +191,7 @@ class SessionLifecycleMixin:
             project_id: 项目 ID
             name: 客户自定义会话标识 (可选, 用于文件名/筛选). 不填则为 None.
         """
+        debug_center.dbg("backend.session", "start_session 入口", f"channel={self.channel_id} project_id={project_id} name={name}")
         db = None
         try:
             db = self._get_db_session()
@@ -261,6 +264,7 @@ class SessionLifecycleMixin:
             }
         except Exception as e:
             print(f"创建会话失败: {e}")
+            debug_center.dbg("backend.session", "start_session 异常", f"channel={self.channel_id} project_id={project_id} err={e}")
             return None
         finally:
             if db:
@@ -275,6 +279,7 @@ class SessionLifecycleMixin:
         session_id = self.current_session_id
         session_uuid = self.current_session_uuid
         print(f"end_session: 正在结束会话 {session_uuid} (ID: {session_id})")
+        debug_center.dbg("backend.session", "end_session 入口", f"channel={self.channel_id} session_id={session_id} uuid={session_uuid}")
         
         # Discard any open (unsettled) cycle before closing the session
         if self.current_cycle_id:
@@ -368,6 +373,7 @@ class SessionLifecycleMixin:
                     print(f"[MES] session_end hook 异常: {e}")
         except Exception as e:
             print(f"结束会话失败: {e}")
+            debug_center.dbg("backend.session", "end_session 异常", f"channel={self.channel_id} session_id={session_id} err={e}")
             import traceback
             traceback.print_exc()
         finally:
@@ -418,6 +424,8 @@ class SessionLifecycleMixin:
         v3.8.x: 统一调清空函数, 把"静态触发标记 / 同时出现组缓冲 / pending 队列"
         这三项以前漏清的字段一起清掉.
         """
+        if debug_center.is_on("backend.settlement"):
+            debug_center.dbg("backend.settlement", "超时强制 NG", f"channel={self.channel_id} 原因={reason} 已做步骤={self.current_cycle_steps}")
         self._trigger_event(2, reason)
         if hasattr(self, '_clear_step_runtime_state'):
             self._clear_step_runtime_state()
@@ -512,6 +520,8 @@ class SessionLifecycleMixin:
 
             db.close()
             print(f"新周期开始: #{self.current_cycle_number} ({cycle_uuid})")
+            if debug_center.is_on("backend.session"):
+                debug_center.dbg("backend.session", "cycle 开始写库", f"channel={self.channel_id} cycle_id={self.current_cycle_id} number={self.current_cycle_number}")
 
             # v2.7.17: once_per_cycle 死锁兜底 - 如果上一轮扫码发生在 cycle 间隙
             # (扫码器 LOFF 了但当时已经没有进行中的 cycle, end_cycle 的 resume 是 no-op),
@@ -571,6 +581,8 @@ class SessionLifecycleMixin:
             self.start_cycle_recording()
         except Exception as e:
             print(f"创建周期失败: {e}")
+            if debug_center.is_on("backend.session"):
+                debug_center.dbg("backend.session", "start_cycle 异常", f"channel={self.channel_id} err={e}")
     
     def _flush_active_steps_pt(self):
         """v3.8.x: 周期结算前，把还在画面里的、已被本周期接纳的步骤的 PT 主动写入累计字典。
@@ -731,6 +743,8 @@ class SessionLifecycleMixin:
                 
                 db.commit()
                 print(f"周期结束: #{self.current_cycle_number}, 结果: {'OK' if final_is_good else 'NG'}, 耗时: {cycle.duration:.2f}s")
+                if debug_center.is_on("backend.session"):
+                    debug_center.dbg("backend.session", "cycle 结束写库", f"channel={self.channel_id} cycle_id={self.current_cycle_id} is_good={final_is_good} event={event_name}")
                 
                 # MES Hook: Cycle 结束 — M1.2b: 走 final_*
                 if self._mes_hook:
@@ -852,6 +866,8 @@ class SessionLifecycleMixin:
             db.close()
         except Exception as e:
             print(f"结束周期失败: {e}")
+            if debug_center.is_on("backend.session"):
+                debug_center.dbg("backend.session", "end_cycle 异常", f"channel={self.channel_id} cycle_id={self.current_cycle_id} err={e}")
         finally:
             # v3.5.x: 把当前周期的 step SUM 快照到 history（供 PT 合并档"最近一轮"/"平均"使用）。
             # 仅在 cycle 真正结束时执行；_discard_empty_cycle 不快照（周期作废，数据不进入历史）。
@@ -1083,6 +1099,8 @@ class SessionLifecycleMixin:
             )
             db.add(record)
             db.commit()
+            if debug_center.is_on("backend.session"):
+                debug_center.dbg("backend.session", "step record 写库", f"channel={self.channel_id} cycle_id={self.current_cycle_id} label={step_label} dur={duration}")
             
             # 保存到本地记录用于间隔计算
             self.cycle_step_records.append({
@@ -1137,6 +1155,8 @@ class SessionLifecycleMixin:
                 )
         except Exception as e:
             print(f"记录步骤失败: {e}")
+            if debug_center.is_on("backend.session"):
+                debug_center.dbg("backend.session", "record_step 异常", f"channel={self.channel_id} label={step_label} err={e}")
             import traceback
             traceback.print_exc()
         finally:

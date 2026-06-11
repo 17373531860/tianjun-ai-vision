@@ -28,6 +28,7 @@ from jinja2.sandbox import SandboxedEnvironment
 from jinja2 import StrictUndefined, ChainableUndefined, TemplateError, pass_context
 
 from backend.core.config import BASE_DIR
+from backend.core import debug_center
 
 
 # ============================================================
@@ -617,6 +618,7 @@ def render_to_file(template_content: str,
         )
 
     except (TemplateError, FileNotFoundError, ValueError) as e:
+        debug_center.dbg("backend.export", "render_to_file 渲染失败", f"fmt={fmt} output_dir={output_dir!r} err={type(e).__name__}: {e}")
         return RenderResult(
             status="failed",
             error_msg=f"{type(e).__name__}: {e}",
@@ -624,6 +626,7 @@ def render_to_file(template_content: str,
         )
     except Exception as e:
         import traceback
+        debug_center.dbg("backend.export", "render_to_file 未知异常", f"fmt={fmt} output_dir={output_dir!r} err={type(e).__name__}: {e}")
         return RenderResult(
             status="failed",
             error_msg=f"{type(e).__name__}: {e}\n{traceback.format_exc()}",

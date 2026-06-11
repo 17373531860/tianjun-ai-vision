@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 import Layout from '@/layout/index.vue';
+import { dbg } from '@/utils/debug';
 
 const routes = [
   {
@@ -141,6 +142,7 @@ router.beforeEach(async (to, from) => {
         const authStore = useAuthStore();
         if (authStore.requiresLogin()) {
           console.log('[⬛ Router] 匿名兜底已关, 强制跳登录页');
+          dbg('auth.ops', '匿名访问被拦截 → 跳登录页', `target=${to.fullPath}`);
           return { name: 'Login', query: { redirect: to.fullPath } };
         }
       } catch (e) {
@@ -174,8 +176,10 @@ router.beforeEach(async (to, from) => {
   }
 });
 
-router.afterEach((to) => {
+router.afterEach((to, from) => {
   console.log(`[⬛ Router] ✓ 导航完成: ${to.fullPath}`);
+  // 调试设置 'page.nav': 每次页面切换留痕 (开关关闭时零开销)
+  dbg('page.nav', `页面切换 ${from.fullPath} → ${to.fullPath}`, `name=${String(to.name || '')}`);
   // 只记可恢复的页面
   if (to.name && REMEMBERABLE_NAMES.has(to.name)) {
     try {

@@ -7,10 +7,69 @@ v2.7.10 清理时把它们挪到这里独立成模块.
 接口列表:
   GET  /debug/channels             — 看每个通道的 source_type / 运行状态
   POST /debug/test_cluster_flow    — 用真实 cycle_id 端到端回放 mes_gateway → cluster
+  GET  /debug/flags                — 调试中心类别开关 + 类别目录 (调试设置页渲染用)
+  PUT  /debug/flags                — 批量写开关 (内存态, 重启归零)
+  GET  /debug/logs                 — 增量拉取调试日志环形缓冲 (1s 轮询)
+  POST /debug/logs/clear           — 清空缓冲
+  POST /debug/client-log           — 前端埋点回传 (无鉴权, 前端开关自行守门)
+
+鉴权说明: 调试端点与既有 /debug/* 保持一致不挂 require_perm —
+入口 UI 在开发者模式门控之后, 且开关默认全关、重启归零, 无业务副作用.
 """
-from fastapi import APIRouter, Query
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter, Body, Query
+
+from backend.core import debug_center
 
 router = APIRouter()
+
+
+# ==================== 调试中心: 开关 / 日志 ====================
+
+@router.get("/debug/flags")
+def get_debug_flags():
+    """返回当前开关状态 + 类别目录(label/group), 前端开关矩阵据此渲染"""
+    return {
+        "flags": debug_center.get_flags(),
+        "catalog": debug_center.BACKEND_CATEGORIES,
+    }
+
+
+@router.put("/debug/flags")
+def set_debug_flags(payload: Dict[str, Any] = Body(default=None)):
+    """批量写开关: {"flags": {"backend.mes": true, ...}}; 未注册类别忽略"""
+    flags = (payload or {}).get("flags") or {}
+    return {"flags": debug_center.set_flags(flags)}
+
+
+@router.get("/debug/logs")
+def get_debug_logs(since_seq: int = Query(0), categories: Optional[str] = Query(None), limit: int = Query(500, le=2000)):
+    """增量拉取: since_seq 之后的日志; categories 逗号分隔可选过滤"""
+    cats = [c for c in categories.split(",") if c] if categories else None
+    return debug_center.get_logs(since_seq=since_seq, categories=cats, limit=limit)
+
+
+@router.post("/debug/logs/clear")
+def clear_debug_logs():
+    debug_center.clear_logs()
+    return {"status": "success"}
+
+
+@router.post("/debug/client-log")
+def debug_client_log(payload: Dict[str, Any] = Body(default=None)):
+    """前端埋点回传: 前端开关开启时才会调, 这里直接入缓冲+落盘.
+    不挂鉴权 (与 /plugins/client-log 同理由): 仅写日志无副作用, 字段已截断."""
+    data = payload or {}
+    try:
+        debug_center.ingest_client(
+            category=str(data.get("category", "frontend")),
+            action=str(data.get("action", "")),
+            detail=str(data.get("detail", "")),
+        )
+    except Exception:
+        pass
+    return {"status": "ok"}
 
 
 @router.get("/debug/channels")

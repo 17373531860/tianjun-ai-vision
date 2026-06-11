@@ -1,5 +1,6 @@
 <template>
   <div class="space-y-4">
+    <div class="text-xs text-gray-500">集群主从配置为整机级全局设置，不随当前项目切换。</div>
     <!-- 集群配置 -->
     <div class="bg-slate-800/60 rounded-lg border border-slate-700 p-5">
       <div class="flex items-center justify-between mb-4">
@@ -382,6 +383,7 @@ import {
   sendHeartbeat, getConnectedSlaves,
   deleteBox, clearBoxes,
 } from '@/api/cluster'
+import { dbg, dbgErr } from '@/utils/debug'
 
 const config = ref({
   role: 'standalone',
@@ -610,16 +612,19 @@ const loadConfig = async () => {
       .sort((a, b) => Number(a) - Number(b))
       .map(k => ({ channel: k, station: map[k] }))
   } catch (e) {
+    dbgErr('mes.cluster', '加载集群配置', e)
     ElMessage.error('加载集群配置失败: ' + (e.response?.data?.detail || e.message || '网络错误'))
   }
 }
 
 const saveConfig = async () => {
+  dbg('mes.cluster', '保存集群配置', `role=${config.value?.role || ''} enabled=${config.value?.enabled} station=${config.value?.station_id || ''}`)
   try {
     const res = await updateClusterConfig(config.value)
     config.value = { ...config.value, ...res.data }
     ElMessage.success('集群配置已保存')
   } catch (e) {
+    dbgErr('mes.cluster', '保存集群配置', e)
     ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message))
   }
 }
@@ -648,6 +653,7 @@ const showBoxDetail = async (boxSerial) => {
     return
   }
 
+  dbg('mes.cluster', '点击「box 明细」', `box_serial=${boxSerial ?? ''}`)
   showDetail.value = true
   detailLoading.value = true
   detailData.value = null
@@ -655,6 +661,7 @@ const showBoxDetail = async (boxSerial) => {
     const res = await getBoxDetail(boxSerial)
     detailData.value = res.data
   } catch (e) {
+    dbgErr('mes.cluster', '加载 box 明细', e)
     ElMessage.error('加载明细失败: ' + (e.response?.data?.detail || e.message || '网络错误'))
     showDetail.value = false
   } finally {
@@ -663,6 +670,7 @@ const showBoxDetail = async (boxSerial) => {
 }
 
 const confirmDeleteBox = async (boxSerial) => {
+  dbg('mes.cluster', '点击「删除 box」', `box_serial=${boxSerial ?? ''}`)
   // 前端 Mock 条目（box_serial 以 SN-2026 开头且未来自服务器）直接本地清掉，不发后端
   const inMockPending = pendingBoxes.value.some(b =>
     b.box_serial === boxSerial && boxSerial.startsWith('SN-2026'))
@@ -691,11 +699,13 @@ const confirmDeleteBox = async (boxSerial) => {
       showDetail.value = false
     }
   } catch (e) {
+    dbgErr('mes.cluster', '删除 box', e)
     ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message))
   }
 }
 
 const confirmClearScope = async (scope) => {
+  dbg('mes.cluster', '点击「批量清空 box」', `scope=${scope ?? ''}`)
   const text = scope === 'pending' ? '所有待汇总目标'
              : scope === 'recent'  ? '所有已完成记录'
              : scope === 'all'     ? '全部集群汇总记录（待汇总 + 已完成）'
@@ -714,6 +724,7 @@ const confirmClearScope = async (scope) => {
     recentPage.value = 1
     await loadBoxes()
   } catch (e) {
+    dbgErr('mes.cluster', '批量清空 box', e)
     ElMessage.error('清空失败: ' + (e.response?.data?.detail || e.message))
   }
 }
@@ -759,6 +770,7 @@ const handleBatchClearCommand = (command) => {
 }
 
 const testMaster = async () => {
+  dbg('mes.cluster', '点击「测试主机连接」', `master_url=${config.value?.master_url || ''}`)
   testing.value = true
   testResult.value = null
   try {
@@ -774,6 +786,7 @@ const testMaster = async () => {
       testResult.value = { ok: false, message: `HTTP ${res.status}` }
     }
   } catch (e) {
+    dbgErr('mes.cluster', '测试主机连接', e)
     testResult.value = { ok: false, message: `连接失败: ${e.message}` }
   } finally {
     testing.value = false

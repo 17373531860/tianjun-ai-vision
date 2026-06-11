@@ -36,6 +36,8 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+from backend.core import debug_center
+
 if TYPE_CHECKING:
     from backend.api.source_inference_router import ModelInstance
 
@@ -66,6 +68,7 @@ class ModelLoadMixin:
         main slot, 让新链路 (Step 4 起的 DetectRunnersMixin / InferenceLoopMixin)
         可以从 mi 读到等价状态。
         """
+        debug_center.dbg("backend.detection", "load_model 开始", f"path={model_path} original_pt={original_pt_path}")
         try:
             from ultralytics import YOLO
             import torch
@@ -85,6 +88,7 @@ class ModelLoadMixin:
             except Exception as e:
                 if self._original_pt_path and model_path != self._original_pt_path:
                     print(f"[模型加载] 转换模型加载失败 ({e}), 回退到原始模型: {self._original_pt_path}")
+                    debug_center.dbg("backend.detection", "转换模型加载失败回退", f"path={model_path} err={e} → {self._original_pt_path}")
                     self.model = YOLO(self._original_pt_path)
                     model_path = self._original_pt_path
                 else:
@@ -138,6 +142,7 @@ class ModelLoadMixin:
             if (not warmup_ok) and (not is_native_pytorch) \
                     and self._original_pt_path and model_path != self._original_pt_path:
                 print(f"[模型加载] 转换模型预热失败 ({model_path}), 自动 fallback 到原始 PyTorch 模型: {self._original_pt_path}")
+                debug_center.dbg("backend.detection", "预热失败 fallback", f"path={model_path} → {self._original_pt_path}")
                 try:
                     self._release_model()
                 except Exception as _e:
@@ -165,9 +170,11 @@ class ModelLoadMixin:
 
             # Step 3: 把 host 状态镜像到 main slot, 让 router/mi 能读到等价值
             self._mirror_host_to_main()
+            debug_center.dbg("backend.detection", "load_model 成功", f"path={model_path} device={self.current_device_info} imgsz={self._model_imgsz}")
             return True
         except Exception as e:
             print(f"模型加载失败: {e}")
+            debug_center.dbg("backend.detection", "load_model 失败", f"path={model_path} err={e}")
             traceback.print_exc()
             self.model = None
             self.current_device_info = None
@@ -392,6 +399,7 @@ class ModelLoadMixin:
         original_pt_path: Optional[str] = None,
     ) -> bool:
         """把模型加载到指定 ModelInstance, 副模型加载入口."""
+        debug_center.dbg("backend.detection", "slot 模型加载开始", f"slot={mi.name} path={model_path}")
         try:
             from ultralytics import YOLO
             import torch
@@ -455,9 +463,11 @@ class ModelLoadMixin:
                 print(f"[模型加载] [{mi.name}] AutoBackend 权威 imgsz={authoritative} (修正 {mi._model_imgsz} → {authoritative})")
                 mi._model_imgsz = authoritative
 
+            debug_center.dbg("backend.detection", "slot 模型加载成功", f"slot={mi.name} path={model_path} imgsz={mi._model_imgsz}")
             return True
         except Exception as e:
             print(f"[模型加载] [{mi.name}] 失败: {e}")
+            debug_center.dbg("backend.detection", "slot 模型加载失败", f"slot={mi.name} path={model_path} err={e}")
             traceback.print_exc()
             mi.model = None
             mi.current_device_info = None
@@ -549,6 +559,7 @@ class ModelLoadMixin:
                     detected_imgsz = raw if isinstance(raw, int) else max(raw)
         except Exception as e:
             print(f"[模型加载] 检测 imgsz 失败, 使用默认 640: {e}")
+        debug_center.dbg("backend.detection", "imgsz 探测结果", f"path={model_path} imgsz={detected_imgsz} engine_imgsz={engine_imgsz}")
         return detected_imgsz
 
     def _warmup_model_cuda(self, model, device: str, imgsz: int, use_half: bool,
@@ -590,6 +601,7 @@ class ModelLoadMixin:
             if m:
                 correct_sz = max(int(m.group(1)), int(m.group(2)))
                 print(f"[模型预热] {log_tag} TensorRT 引擎实际需要 imgsz={correct_sz}, 自动修正")
+                debug_center.dbg("backend.detection", "TRT imgsz 自动修正", f"{log_tag} {imgsz} → {correct_sz}")
                 if update_imgsz_cb:
                     update_imgsz_cb(correct_sz)
                 try:

@@ -27,6 +27,7 @@ from backend.db.database import SessionLocal
 from backend.services.work_order import WorkOrderService
 from backend.services.workpiece import WorkpieceService
 from backend.services.defect import DefectService
+from backend.core import debug_center
 
 
 class MESHookManager:
@@ -240,10 +241,13 @@ class MESHookManager:
             db = SessionLocal()
             try:
                 func, args, kwargs = task
+                if debug_center.is_on("backend.mes"):
+                    debug_center.dbg("backend.mes", "hook 队列出队", f"handler={getattr(func, '__name__', '?')} qsize={self._task_queue.qsize()}")
                 func(db, *args, **kwargs)
                 db.commit()
             except Exception as e:
                 db.rollback()
+                debug_center.dbg("backend.mes", "worker 任务异常", f"handler={getattr(task[0], '__name__', '?') if task else '?'} err={e}")
                 print(f"[MES] Hook 任务执行失败: {e}", flush=True)
                 traceback.print_exc()
             finally:
@@ -372,6 +376,7 @@ class MESHookManager:
             if critical:
                 spilled = self._spill_task(func, args, kwargs)
             self._queue_drop_count += 1
+            debug_center.dbg("backend.mes", "hook 队列满丢任务", f"handler={getattr(func, '__name__', '?')} critical={critical} spilled={spilled} dropped={self._queue_drop_count}")
             print(f"[MES] 任务队列已满, 任务被丢弃 "
                   f"(critical={critical}, spilled={spilled}, dropped={self._queue_drop_count}, qsize={self._task_queue.qsize()})",
                   flush=True)
@@ -406,6 +411,8 @@ class MESHookManager:
                      result_reason: str = None, duration: float = None,
                      step_sequence: list = None, project_id: int = None):
         """source.py end_cycle() commit 成功后调用"""
+        if debug_center.is_on("backend.mes"):
+            debug_center.dbg("backend.mes", "cycle_end 入队", f"channel={channel_id} cycle={cycle_id} is_good={is_good} event={event_name or '-'}")
         self._enqueue(
             self._handle_cycle_end, channel_id, cycle_id,
             is_good, event_name, result_reason, duration,
@@ -673,6 +680,8 @@ class MESHookManager:
                 f"(开始码={entry.get('serial_no')})",
                 flush=True,
             )
+            if debug_center.is_on("backend.mes"):
+                debug_center.dbg("backend.mes", "scan_pair 超时翻转→强制NG", f"channel={channel_id} serial={entry.get('serial_no') or '-'}")
             self._dispatch_scan_pair_settle(channel_id, force_ng=True,
                                             reason="scan_pair_timeout")
         except Exception as e:
@@ -806,6 +815,8 @@ class MESHookManager:
             f"工位={broadcast_chs})",
             flush=True,
         )
+        if debug_center.is_on("backend.mes"):
+            debug_center.dbg("backend.mes", "scan_pair 起新窗口", f"serial={serial_no or '-'} wp={wp_id} channels={broadcast_chs} settled={triggered_settle}")
 
         # 主 ch 自己也要 promote pending → inspecting (兄弟 ch 各自已 promote)
         self._scan_pair_promote_pending(db, channel_id, wp_id, serial_no)
@@ -1221,12 +1232,16 @@ class MESHookManager:
                 db.flush()
 
         print(f"[MES] Cycle#{cycle_id} 关联工件#{wp_id}", flush=True)
+        if debug_center.is_on("backend.mes"):
+            debug_center.dbg("backend.mes", "工件绑定成功", f"channel={channel_id} cycle={cycle_id} wp={wp_id} order={self._active_orders.get(channel_id) or '-'}")
 
     def _handle_cycle_end(self, db, channel_id: int, cycle_id: int,
                           is_good: bool, event_name: str, result_reason: str,
                           duration: float, step_sequence: list,
                           project_id: int):
         """Cycle 结束: 更新工件状态, 记录缺陷, 更新工单"""
+        if debug_center.is_on("backend.mes"):
+            debug_center.dbg("backend.mes", "_handle_cycle_end 入口", f"channel={channel_id} cycle={cycle_id} is_good={is_good} event={event_name or '-'} project={project_id or '-'}")
         # v3.4.2 hotfix-2: ScanPair 模式下, settle_for_scan_pair 触发 end_cycle
         # 是同步链, 但本方法被丢进 worker queue 异步跑. 等 worker 拿到 _inspecting
         # 时, _handle_scan_pair_event 已经 promote 把 _inspecting 改成"新码 wp"
@@ -1303,6 +1318,8 @@ class MESHookManager:
                             print(f"[MES] 迟到补绑: 工件#{wp_id} -> Cycle#{cycle_id} "
                                   f"(scan 距 cycle_end {delay:+.2f}s, 窗口{window}s, ch{channel_id})",
                                   flush=True)
+                            if debug_center.is_on("backend.mes"):
+                                debug_center.dbg("backend.mes", "迟到扫码补绑成功", f"channel={channel_id} cycle={cycle_id} wp={wp_id} delay={delay:+.2f}s")
                 except Exception as e:
                     print(f"[MES] 迟到补绑检查异常 ch{channel_id}: {e}", flush=True)
 
@@ -1316,6 +1333,8 @@ class MESHookManager:
                 # 不破坏现有行为: 有 wp_id 的路径完全不变 (扫码客户继续按工件维度推送)。
                 print(f"[MES] Cycle#{cycle_id} ch{channel_id} 结束但未绑定工件 "
                       f"(无扫码场景) → 仍按 cycle 实时推送 MES, 跳过 workpiece 写操作", flush=True)
+                if debug_center.is_on("backend.mes"):
+                    debug_center.dbg("backend.mes", "工件绑定缺失(无码周期)", f"channel={channel_id} cycle={cycle_id} pending={self._pending_workpiece.get(channel_id) or '-'}")
 
         if wp_id:
             self._workpiece_svc.set_result(db, wp_id, is_good, cycle_id)
@@ -1388,8 +1407,11 @@ class MESHookManager:
 
             if not skip_cycle_push:
                 gw.dispatch("cycle_end", ctx, channel_id)
+            if debug_center.is_on("backend.mes"):
+                debug_center.dbg("backend.mes", "_handle_cycle_end 完成", f"channel={channel_id} cycle={cycle_id} wp={wp_id or '-'} skip_cycle_push={skip_cycle_push}")
         except Exception as e:
             import traceback
+            debug_center.dbg("backend.mes", "cycle_end 外部推送异常", f"channel={channel_id} cycle={cycle_id} err={e}")
             print(f"[MES] 外部推送(cycle_end)失败: {e}\n{traceback.format_exc()}",
                   flush=True)
 

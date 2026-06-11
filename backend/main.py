@@ -45,6 +45,7 @@ import atexit
 import signal
 import threading
 from sqlalchemy import text
+from backend.core import debug_center
 
 # ===== Startup diagnostics =====
 from backend.core.config import BASE_DIR, DATA_DIR
@@ -978,6 +979,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ==================== 调试中心: API 异常统一记录 ====================
+# 纯观测插桩 — 异常原样 raise 不吞、响应不改; 开关关闭时开销 = 每请求一次 dict 查询
+@app.middleware("http")
+async def _debug_api_exception_middleware(request, call_next):
+    try:
+        response = await call_next(request)
+    except Exception:
+        if debug_center.is_on("backend.api"):
+            import traceback as _tb
+            debug_center.dbg("backend.api", f"未捕获异常 {request.method} {request.url.path}", _tb.format_exc()[-1500:])
+        raise
+    if debug_center.is_on("backend.api") and response.status_code >= 500:
+        debug_center.dbg("backend.api", f"5xx 响应 {request.method} {request.url.path}", f"status={response.status_code}")
+    return response
 
 # Include API routers
 app.include_router(api_router, prefix=settings.API_V1_STR)

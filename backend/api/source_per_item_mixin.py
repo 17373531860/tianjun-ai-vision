@@ -60,6 +60,8 @@ import time
 from collections import deque
 from typing import Optional
 
+from backend.core import debug_center
+
 
 # ==================== 几何工具 ====================
 def _bbox_iou(a, b) -> float:
@@ -628,6 +630,8 @@ class PerItemMixin:
                     sess.all_done_first_at = current_time
                 elif (current_time - sess.all_done_first_at) >= settle_after_all_done:
                     print(f"[per_item] 所有步骤完成已保持 {settle_after_all_done:.1f}s, 立即结算 OK")
+                    if debug_center.is_on("backend.per_item"):
+                        debug_center.dbg("backend.per_item", "结算触发: 全部完成", f"channel={self.channel_id} 保持{settle_after_all_done:.1f}s后自动结算")
                     self._per_item_settle_cycle(current_time)
                     return
             else:
@@ -639,6 +643,8 @@ class PerItemMixin:
             cycle_elapsed = current_time - sess.cycle_start_time
             if cycle_elapsed > cycle_max:
                 print(f"[per_item] 周期总时长超时 {cycle_elapsed:.1f}s > {cycle_max}s, 强制结算")
+                if debug_center.is_on("backend.per_item"):
+                    debug_center.dbg("backend.per_item", "结算触发: 周期超时", f"channel={self.channel_id} 已运行{cycle_elapsed:.1f}s > 上限{cycle_max}s, 未完成步骤将判 NG")
                 self._per_item_settle_cycle(current_time)
                 return
 
@@ -650,6 +656,8 @@ class PerItemMixin:
             idle_elapsed = current_time - sess.last_activity_time
             if idle_elapsed > idle_timeout:
                 print(f"[per_item] 空闲 {idle_elapsed:.1f}s > {idle_timeout}s, 强制结算")
+                if debug_center.is_on("backend.per_item"):
+                    debug_center.dbg("backend.per_item", "结算触发: 空闲超时", f"channel={self.channel_id} 无操作{idle_elapsed:.1f}s > 上限{idle_timeout}s, 未完成步骤将判 NG")
                 self._per_item_settle_cycle(current_time)
                 return
 
@@ -692,6 +700,8 @@ class PerItemMixin:
                 )
                 if sess.finish_label_consec_frames >= cfg['finish_sustain_frames']:
                     print(f"[per_item][DEBUG] >>> finish_label 触发结算 <<<")
+                    if debug_center.is_on("backend.per_item"):
+                        debug_center.dbg("backend.per_item", "结算触发: 收尾标签", f"channel={self.channel_id} '{finish_label}' 连续{sess.finish_label_consec_frames}帧确认")
                     self._per_item_settle_cycle(current_time)
         else:
             if sess.finish_label_consec_frames > 0:
@@ -700,6 +710,16 @@ class PerItemMixin:
                     f"(连续 {sess.finish_label_consec_frames} 帧后断了)"
                 )
             sess.finish_label_consec_frames = 0
+
+    # ──── 调试: 周期不开始原因 (1s 节流, 答"为什么周期一直不开始") ────
+    def _per_item_dbg_reject(self, current_time: float, reason: str):
+        if not debug_center.is_on("backend.per_item"):
+            return
+        last = getattr(self, '_per_item_dbg_reject_ts', 0.0)
+        if current_time - last < 1.0:
+            return
+        self._per_item_dbg_reject_ts = current_time
+        debug_center.dbg("backend.per_item", "周期未开始", f"channel={self.channel_id} {reason}")
 
     # ──── 周期开始: 稳定窗口判定 ────
     def _per_item_try_start_cycle(self, boxes_by_label, current_time: float):
@@ -751,6 +771,8 @@ class PerItemMixin:
 
             # 窗口里每帧首步检出数都要 ≥ first_required
             if any(len(fr) < first_required for fr in window_frames):
+                _worst = min(len(fr) for fr in window_frames)
+                self._per_item_dbg_reject(current_time, f"首步检出不足: 窗口最低{_worst}个 < 要求{first_required}个 (期望{target})")
                 return
 
             if require_exact:
@@ -760,6 +782,7 @@ class PerItemMixin:
                         other_required = _required_for(other_step.expected_count)
                         other_now = self._collect_item_boxes(boxes_by_label, other_step.item_label)
                         if len(other_now) < other_required:
+                            self._per_item_dbg_reject(current_time, f"严格等量未满足: 步骤[{other_step.step_label}]检出{len(other_now)}个 < 要求{other_required}个")
                             return
 
             # 锁定时挑窗口里"检出最多"的那一帧 (最接近真实数量), 截到 target 封顶
@@ -770,6 +793,8 @@ class PerItemMixin:
             # ──── 路径 B: auto 模式 (老路径) ────
             counts = [len(b) for b in sess.stability_buffer]
             if len(set(counts)) != 1:
+                if max(counts) > 0:
+                    self._per_item_dbg_reject(current_time, f"检出数量不恒定: 窗口内数量在{min(counts)}~{max(counts)}间跳动")
                 return
             item_count = counts[0]
             if item_count <= 0:
@@ -778,12 +803,14 @@ class PerItemMixin:
             prev = list(sess.stability_buffer[0])
             for fr in list(sess.stability_buffer)[1:]:
                 if not self._per_item_frames_position_stable(prev, fr, cfg['stability_iou_threshold']):
+                    self._per_item_dbg_reject(current_time, f"位置不稳定: 相邻帧 IoU 低于{cfg['stability_iou_threshold']} (画面抖动或目标在动)")
                     return
                 prev = list(fr)
             # min_item_count 校验
             min_required = first_step.min_item_count
             if min_required != 'auto' and isinstance(min_required, int):
                 if item_count < min_required:
+                    self._per_item_dbg_reject(current_time, f"检出{item_count}个 < 最少要求{min_required}个")
                     return
             latest_boxes = list(sess.stability_buffer[-1])
 
@@ -819,6 +846,9 @@ class PerItemMixin:
             f"[per_item] 周期开始: 锁定首步个体数={item_count}, frame_id={sess.frame_id}, "
             f"路径={'expected_count' if first_step.expected_count > 0 else 'auto'}"
         )
+        if debug_center.is_on("backend.per_item"):
+            _locks = ", ".join(f"{s.step_label}={len(s.items)}/{s.expected_count if s.expected_count > 0 else 'auto'}" for s in self._per_item_steps)
+            debug_center.dbg("backend.per_item", "周期开始", f"channel={self.channel_id} 锁定首步个体={item_count} 各步锁定[{_locks}] — 锁定数低于期望即埋下虚拟漏件NG")
         for s in self._per_item_steps:
             print(
                 f"  · 步骤 [{s.step_label}]: 锁定={len(s.items)} "
@@ -1025,6 +1055,8 @@ class PerItemMixin:
 
         if ok:
             print(f"[per_item] 周期结算 OK: 步骤数={len(self._per_item_steps)}, 耗时{cycle_duration:.2f}s")
+            if debug_center.is_on("backend.per_item"):
+                debug_center.dbg("backend.per_item", "周期结算 OK", f"channel={self.channel_id} 步骤数={len(self._per_item_steps)} 耗时={cycle_duration:.2f}s 全部个体已覆盖")
             try:
                 self._trigger_event(1, '逐件覆盖全部完成')
             except Exception as _e:
@@ -1034,6 +1066,9 @@ class PerItemMixin:
         else:
             reason = '; '.join(ng_reasons) or '逐件覆盖未完成'
             print(f"[per_item] 周期结算 NG: {reason}")
+            if debug_center.is_on("backend.per_item"):
+                _miss = sum(len(d.get('missing_item_ids') or []) for d in ng_details)
+                debug_center.dbg("backend.per_item", "周期结算 NG", f"channel={self.channel_id} 原因={reason} 共漏{_miss}件 耗时={cycle_duration:.2f}s")
             # 结构化 NG 详情 (前端 PerItemPanel 用 reason_summary / missing_total / steps_failed 组合展示)
             missing_total = sum(len(d.get('missing_item_ids') or []) for d in ng_details)
             self._per_item_last_ng_detail = {

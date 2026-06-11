@@ -24,20 +24,31 @@ from ctypes import POINTER, cast
 from datetime import datetime
 
 # ========== 调试日志开关 ==========
-HIK_DEBUG = False  # 海康SDK详细日志（仅调试时开启）
-FREEZE_DEBUG = True  # 卡死调试日志
+# v3.17.x: 改由调试中心 (backend/core/debug_center.py) 统一管理 —
+# 设置页「调试设置」(开发者模式) 可运行时开关, 不再需要改源码常量重启.
+# 旧常量保留作兼容 shim (历史代码/热补丁可能引用), 但不再是判定主路径.
+HIK_DEBUG = False     # 兼容 shim: 真实开关 = debug_center 'backend.hik'
+FREEZE_DEBUG = False  # 兼容 shim: 真实开关 = debug_center 'backend.detection'
+                      # (原默认 True 致终端被采集/推理日志刷屏, 现默认静默)
+
+
+from backend.core import debug_center
 
 
 def debug_log(msg, category="MAIN"):
-    """调试日志 - 默认关闭，需要时手动开启 FREEZE_DEBUG"""
-    if FREEZE_DEBUG:
+    """检测热路径调试日志 — 由调试设置页 'backend.detection' 开关控制"""
+    if debug_center.is_on("backend.detection"):
+        debug_center.dbg("backend.detection", f"[{category}] {msg}")
+    elif FREEZE_DEBUG:
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         print(f"[{timestamp}] [DEBUG/{category}] {msg}", flush=True)
 
 
 def hik_log(msg, level="INFO"):
-    """海康相机调试日志 - 默认关闭，需要时手动开启 HIK_DEBUG"""
-    if HIK_DEBUG or level in ("ERROR", "WARN", "SUCCESS"):
+    """海康相机调试日志 — 由调试设置页 'backend.hik' 开关控制; ERROR/WARN/SUCCESS 始终输出"""
+    if debug_center.is_on("backend.hik"):
+        debug_center.dbg("backend.hik", f"[{level}] {msg}")
+    elif HIK_DEBUG or level in ("ERROR", "WARN", "SUCCESS"):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         print(f"[{timestamp}] [海康SDK/{level}] {msg}", flush=True)
 

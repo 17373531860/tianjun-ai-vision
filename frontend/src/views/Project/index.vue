@@ -2375,6 +2375,7 @@ import { getProjects, getProjectDetail, createProject, updateProject, deleteProj
 import { getModels, getAvailableFormats, convertModel, getConversionStatus, getFormatDiagnosis } from '@/api/model';
 import { getBackendHost } from '@/api/index';
 import { setProjectConfig } from '@/api/detection';
+import { dbg, dbgErr } from '@/utils/debug';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
@@ -2757,6 +2758,7 @@ const roiRedraw = () => {
 
 const roiSave = async () => {
   if (!activeProject.value || roiPoints.value.length < 3) return;
+  dbg('project.config', '点击「保存 ROI」', `points=${roiPoints.value?.length} 目标=${extraModelRoiEditingIdx.value >= 0 ? `副模型#${extraModelRoiEditingIdx.value}` : (stepRoiEditingStepId.value != null ? `步骤#${stepRoiEditingStepId.value}` : '全局tracking')}`);
   const canvas = roiEditorCanvas.value;
   const w = canvas?.width || 1;
   const h = canvas?.height || 1;
@@ -3310,6 +3312,7 @@ const selectProject = async (item) => {
 // 激活项目
 const handleActivateProject = async () => {
   if (!activeProject.value) return;
+  dbg('project.crud', '点击「激活项目」', `name=${activeProject.value?.name} id=${activeProject.value?.id}`);
   try {
     await activateProject(activeProject.value.id);
     projectStore.setCurrentProject(activeProject.value);
@@ -3318,9 +3321,11 @@ const handleActivateProject = async () => {
     // 重启就回默认. 现在激活项目立刻把绑定补上.
     systemStore.setCurrentProjectId(activeProject.value.id);
     systemStore.loadDetectionFromProject(activeProject.value.detection_config, activeProject.value.id);
+    dbg('project.crud', '激活项目成功', `id=${activeProject.value?.id}`);
     ElMessage.success(`已激活项目: ${activeProject.value.name}`);
     loadProjects();
   } catch (err) {
+    dbgErr('project.crud', '激活项目', err);
     ElMessage.error('激活项目失败');
   }
 };
@@ -3337,6 +3342,7 @@ const handleCreateProject = async () => {
     ElMessage.warning('请输入项目名称');
     return;
   }
+  dbg('project.crud', '点击「创建项目」', `name=${newProjectForm.value?.name} mode=${newProjectForm.value?.logic_mode}`);
   creating.value = true;
   try {
     const data = {
@@ -3361,8 +3367,10 @@ const handleCreateProject = async () => {
     projects.value.push(res.data);
     createDialogVisible.value = false;
     activeProject.value = initProjectDefaults(res.data);
+    dbg('project.crud', '创建项目成功', `id=${res.data?.id} name=${res.data?.name}`);
     ElMessage.success('项目创建成功');
   } catch (err) {
+    dbgErr('project.crud', '创建项目', err);
     ElMessage.error('创建项目失败: ' + (err.response?.data?.detail || err.message));
   } finally {
     creating.value = false;
@@ -3372,6 +3380,7 @@ const handleCreateProject = async () => {
 // 保存项目
 const handleSaveProject = async () => {
   if (!activeProject.value) return;
+  dbg('project.crud', '点击「保存项目」', `name=${activeProject.value?.name} id=${activeProject.value?.id} steps=${activeProject.value?.steps_config?.length ?? 0}`);
 
   // v3.8.x last_first 模式互斥校验
   // 1. 不能与跨周期同时出现组共存
@@ -3654,8 +3663,10 @@ const handleSaveProject = async () => {
       }
     }
 
+    dbg('project.crud', '保存项目成功', `id=${activeProject.value?.id}`);
     ElMessage.success('配置已保存');
   } catch (err) {
+    dbgErr('project.crud', '保存项目', err);
     ElMessage.error('保存失败: ' + (err.response?.data?.detail || err.message));
   } finally {
     saving.value = false;
@@ -3665,6 +3676,7 @@ const handleSaveProject = async () => {
 // 删除项目
 const handleDeleteProject = async () => {
   if (!activeProject.value) return;
+  dbg('project.crud', '点击「删除项目」', `name=${activeProject.value?.name} id=${activeProject.value?.id}`);
   try {
     await ElMessageBox.confirm('确认删除该项目吗? 此操作无法撤销。', '警告', {
       confirmButtonText: '删除',
@@ -3684,9 +3696,11 @@ const handleDeleteProject = async () => {
     }
     
     activeProject.value = null;
+    dbg('project.crud', '删除项目成功');
     ElMessage.success('项目已删除');
   } catch (err) {
     if (err !== 'cancel') {
+      dbgErr('project.crud', '删除项目', err);
       ElMessage.error('删除失败');
     }
   }
@@ -4109,6 +4123,7 @@ const _getConvertModelId = () => {
 const selectFormat = async (fmt) => {
   if (!fmt.available) return;
   const key = fmt.key;
+  dbg('model.convert', '点击选择推理格式', `format=${key} 项目=${activeProject.value?.name}`);
 
   if (key === 'pytorch_fp32') {
     _writeFormat(key);
@@ -4139,9 +4154,11 @@ const selectFormat = async (fmt) => {
       return;
     }
 
+    dbg('model.convert', '发起模型转换', `conversion_id=${conv?.id} format=${key}`);
     conversionId.value = conv.id;
     startConversionPolling(key);
   } catch (e) {
+    dbgErr('model.convert', '发起模型转换', e);
     convertingFormat.value = null;
     ElMessage.error('转换请求失败: ' + (e.response?.data?.detail || e.message));
   }
@@ -4154,12 +4171,14 @@ const startConversionPolling = (fmtKey) => {
       const res = await getConversionStatus(conversionId.value);
       const s = res.data;
       if (s.status === 'ready') {
+        dbg('model.convert', '转换完成', `format=${fmtKey} conversion_id=${conversionId.value}`);
         stopConversionPolling();
         convertingFormat.value = null;
         _writeFormat(fmtKey);  // v3.7.x: 主/副模型分流写回
         showFormatSelect.value = false;
         ElMessage.success(`${getFormatDisplayName(fmtKey)} 转换完成`);
       } else if (s.status === 'failed') {
+        dbg('model.convert', '转换失败', `format=${fmtKey} error=${s?.error_msg || '未知错误'}`);
         stopConversionPolling();
         convertingFormat.value = null;
         const errMsg = s.error_msg || '未知错误';
@@ -4231,11 +4250,13 @@ const showDiagnosis = async () => {
 
 // 顺序模式 - 步骤操作
 const addSequenceStep = () => {
+  dbg('project.config', '点击「添加顺序步骤」', `当前行数=${activeProject.value?.sequence_order?.length ?? 0}`);
   if (!activeProject.value.sequence_order) activeProject.value.sequence_order = [];
   activeProject.value.sequence_order.push({ step_id: null });
 };
 
 const removeSequenceStep = (idx) => {
+  dbg('project.config', '点击「删除顺序步骤」', `idx=${idx} step_id=${activeProject.value?.sequence_order?.[idx]?.step_id}`);
   activeProject.value.sequence_order.splice(idx, 1);
 };
 
@@ -4558,6 +4579,7 @@ const onStepEnabledChange = (step, enabled) => {
 
 // 计数器操作
 const addCounter = () => {
+  dbg('project.config', '点击「添加计数器」', `当前数量=${activeProject.value?.counters_config?.length ?? 0}`);
   if (!activeProject.value.counters_config) activeProject.value.counters_config = [];
   // v3.8.x: 新增自定义计数器默认 show_in_monitor=false (Monitor 页统计板块不显示),
   // 客户在事件配置/逻辑里用计数器, 不必全部都堆在监控页上。需要时手动勾"显示"。
@@ -4565,11 +4587,13 @@ const addCounter = () => {
 };
 
 const removeCounter = (idx) => {
+  dbg('project.config', '点击「删除计数器」', `idx=${idx} name=${activeProject.value?.counters_config?.[idx]?.name}`);
   activeProject.value.counters_config.splice(idx, 1);
 };
 
 // 事件操作
 const addEvent = () => {
+  dbg('project.config', '点击「添加事件」', `当前数量=${activeProject.value?.events_config?.length ?? 0}`);
   if (!activeProject.value.events_config) activeProject.value.events_config = [];
   const newId = Date.now();
   activeProject.value.events_config.push({
@@ -4586,6 +4610,7 @@ const addEvent = () => {
 };
 
 const removeEvent = (idx) => {
+  dbg('project.config', '点击「删除事件」', `idx=${idx} name=${activeProject.value?.events_config?.[idx]?.name}`);
   activeProject.value.events_config.splice(idx, 1);
 };
 

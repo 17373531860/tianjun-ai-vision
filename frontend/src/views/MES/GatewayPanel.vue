@@ -1,5 +1,6 @@
 <template>
   <div>
+    <div class="text-xs text-gray-500 mb-3">MES 网关连接为全局配置，所有项目共用，不随当前项目切换。</div>
     <!-- 工具栏 -->
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
@@ -531,6 +532,7 @@ import {
   getConnections, createConnection, updateConnection, deleteConnection,
   testConnection, getGatewayLogs
 } from '@/api/gateway'
+import { dbg, dbgErr } from '@/utils/debug'
 
 const eventLabels = {
   cycle_end: '周期结束',
@@ -721,11 +723,13 @@ async function loadConnections() {
     const { data } = await getConnections()
     connections.value = (data || []).map(c => ({ ...c, _testing: false }))
   } catch (e) {
+    dbgErr('mes.gateway', '加载连接列表', e)
     ElMessage.error('加载连接列表失败')
   }
 }
 
 function openCreate() {
+  dbg('mes.gateway', '点击「新建连接」')
   editing.value = null
   form.name = ''
   form.adapter_type = 'rest'
@@ -774,6 +778,7 @@ function openCreate() {
 }
 
 function openEdit(row) {
+  dbg('mes.gateway', '点击「编辑连接」', `id=${row?.id} name=${row?.name || ''} adapter=${row?.adapter_type || ''}`)
   editing.value = row
   form.name = row.name
   form.adapter_type = row.adapter_type
@@ -944,6 +949,7 @@ function buildConfig() {
 }
 
 async function doSave() {
+  dbg('mes.gateway', editing.value ? '点击「保存编辑连接」' : '点击「保存新建连接」', `id=${editing.value?.id ?? ''} name=${form?.name || ''} adapter=${form?.adapter_type || ''}`)
   if (!form.name.trim()) {
     ElMessage.warning('请输入连接名称')
     return
@@ -974,6 +980,7 @@ async function doSave() {
     showEditor.value = false
     loadConnections()
   } catch (e) {
+    dbgErr('mes.gateway', '保存连接', e)
     ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message))
   } finally {
     saving.value = false
@@ -981,26 +988,31 @@ async function doSave() {
 }
 
 async function toggleEnabled(row) {
+  dbg('mes.gateway', '切换「连接启停」', `id=${row?.id} name=${row?.name || ''} enabled=${row?.enabled}`)
   try {
     await updateConnection(row.id, { enabled: row.enabled })
     ElMessage.success(row.enabled ? '已启用' : '已禁用')
-  } catch {
+  } catch (e) {
+    dbgErr('mes.gateway', '切换连接启停', e)
     row.enabled = !row.enabled
     ElMessage.error('操作失败')
   }
 }
 
 async function doDelete(row) {
+  dbg('mes.gateway', '点击「删除连接」', `id=${row?.id} name=${row?.name || ''}`)
   try {
     await deleteConnection(row.id)
     ElMessage.success('已删除')
     loadConnections()
-  } catch {
+  } catch (e) {
+    dbgErr('mes.gateway', '删除连接', e)
     ElMessage.error('删除失败')
   }
 }
 
 async function doTest(row) {
+  dbg('mes.gateway', '点击「测试推送」', `id=${row?.id} name=${row?.name || ''} event=${testEventType.value || row?.push_events?.[0] || 'cycle_end'}`)
   row._testing = true
   try {
     // 按 push_events 里第一个事件选测试 context, 默认 cycle_end
@@ -1011,6 +1023,7 @@ async function doTest(row) {
     testResult.value = data
     showTestResult.value = true
   } catch (e) {
+    dbgErr('mes.gateway', '测试推送', e)
     ElMessage.error('测试请求失败: ' + (e.response?.data?.detail || e.message))
   } finally {
     row._testing = false

@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | v3.15.2（2026-06-01 — 紧急热修 v3.15.1 现场 P0：所有 Windows 客户装插件报「插件文件摘要不一致」，`files_digest` 按 Path 对象排序在 Windows 大小写不敏感致摘要漂移，改 POSIX 字符串排序键；并根治手动 cmd 启动日志乱码（`chcp 65001`）。配套热补丁可不重装修复。底座仍 RFC 12 step_tick + host.api + RFC 11 串行流水线） |
+| 当前线上版本 | v3.19.0（2026-06-11 — 全局调试中心：`backend/core/debug_center.py` 分类开关 + 环形缓冲 + UTF-8 旋转落盘，设置页「调试设置」Tab（开发者模式）实时日志查看器；NG 原因可解释性埋点（settlement 缺步清单 / per_item 周期不开始原因+漏件明细 / step_stats 置信度·ROI 拒收原因）；showcase 展会插件 v1.2.2 重签名；底座 RFC 12 整页覆盖 + step_tick + host.api + RFC 11 串行流水线） |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -968,6 +968,8 @@ docs/
 
 | 版本 | 日期 | 主要变更 |
 |---|---|---|
+| **v3.19.0** | **2026-06-11** | **全局调试日志系统 + NG 原因可解释性** — (1) **调试中心**：`backend/core/debug_center.py`（约 20 个分类开关 + 3000 条环形缓冲 + UTF-8 旋转落盘，默认全关零开销）+ `/api/v1/debug/*`（开关/日志增量拉取/前端日志回传）+ `main.py` 5xx 中间件 + 全后端（alarm/mes_hooks/scanner/gateway/cluster/export/model_load/source 生命周期/HIK SDK）与前端（路由/axios 拦截器/核心视图交互）埋点 + Electron UTF-8 落盘与 `chcp 65001`；设置页「调试设置」Tab（开发者模式专属：开关矩阵 + 实时日志查看器，过滤/搜索/暂停/导出）；(2) **NG 原因埋点**：settlement 缺步清单（`缺少=['step_b']`）/ 超时 NG 原因 / per_item 周期不开始原因+漏件明细（`backend.per_item` 新分类）/ step_stats 置信度·ROI 拒收具体数值 / events_check 残留跳过，热路径 1-2s 节流；配套修 synthetic 最小项目缺步骤 id 致顺序结算**静默丢周期**；功能测试 4 用例 + 可见浏览器 UAT 7/7；(3) showcase 展会插件 v1.2.2（logo 圆角化 + 顶栏布局 + v1.2.x 真实化收口）重签名（指纹 `d1f2fcb6`）+ 桌面图标圆角化 + 统计接口加项目过滤 |
+| **v3.18.0** | **2026-06-05** | **RFC12 全页面整页覆盖框架 + 天军展会定制插件(showcase)合入主干** — 整页覆盖能力从仅 Monitor 扩展到全部 8 个主视图（各加 `<TjSlot name="*.layout.body">`，无插件零差异）；showcase Tier2 插件 iframe 承载 8 页高科技重设计，真数据驱动 + `showcase_stats` 统计端点，RSA-PSS/HMAC 主作者签名 |
 | **v3.17.0** | **2026-06-01** | **福建金龙 R1–R5 全功能完整验证发布** — (1) 「步骤耗时三档」配置列改为**按插件存在条件渲染**（`hasDurationsSlot` 探测 `project.step-cell.durations` 插槽，表头+单元格同加 `v-if`，未装插件字节级零差异，**修 v3.16.0 给所有客户显示空「需插件」占位列的体验缺陷**）；(2) **R1–R5 全功能 E2E/BDD/可见浏览器 UAT 矩阵**（虚拟数据驱动真前端）：三档配置 UI 闭环(填写→保存→后端核对→刷新回填，治客户最早报的"数字填进去不显示") + 三档 10 组合×多段数据判定矩阵(四档+开关关+各档归零+步骤级覆盖，报警数值精确) + 开关开/关前端对照(同段超时数据 NG 0%↔OK 100%) + 双工位虚拟检测前端实测(双检测框+独立统计卡+SOP 双分组) + 工位组互通端到端(`synchronized_any_ng` A 站 NG→B 站联动 NG)，插件 L1 单测 361/361；(3) 修 `returnable hook` 白名单过时断言(v3.14 起 workpiece_flow 扩到 8 个可返回 hook) |
 | **v3.16.0** | **2026-06-01** | **补齐福建金龙双工位 R1–R5 缺失的配置 UI**（后端能力 v3.15.5 已具备，缺前端入口致客户找不到、误以为没做）— (1) **步骤耗时三档配置 UI**：主程序 Project 步骤表加「步骤耗时三档」列并留插槽 `project.step-cell.durations`（无插件显示占位），插件 v1.1.9 注册三输入框 cell 写后端 `/durations/step-durations`，判定逻辑 v3.15.0 已有；(2) **工位组互通配置面板**：工位组 CRUD 封装 + 管理面板 + 设置页 Tab，后端 `/channel-groups`（v3.13.1 表/协调器 + v3.15.5）已有补前端入口；(3) 福建金龙插件 v1.1.8→v1.1.9（仅前端增量三档 cell），重打包 + 主签名私钥重签（指纹 `d1f2fcb6` 与客户机白名单一致），后端验签器客户机同款环境验 5/5 全通过；R3 双工位布局/R5 权威 OK/NG 统计 v3.15.5+插件已实现本版无改；**插件不随安装包内置**，客户验证需装 v3.16.0 主程序 + 界面单独上传 v1.1.9 包 |
 | v3.15.5 | 2026-06-01 | **修前端插件加载抢跑后端就绪致 Network Error 一次性放弃（P0）** — `main.js` 插件 bootstrap fire-and-forget 既不等后端就绪也不重试，而 `file://` 页面加载远早于后端冷启动（CUDA 预热+模型加载好几秒），一上来拉清单就 Network Error 然后放弃，插件前端定制全程不加载；修法：先 `waitBackendReady()` 轮询探活（`/plugins/active/manifest` 无插件也 200）等就绪最多 90s 再加载，全程 `[⬛ PluginBootstrap]` 日志 |
@@ -1028,6 +1030,6 @@ docs/
 
 ---
 
-**本文件最后更新**：2026-06-01（v3.15.2 紧急热修发版：插件 `files_digest` 跨平台排序漂移修复（POSIX 字符串排序键）+ 手动 cmd 启动日志乱码根治（chcp 65001）+ 跨平台摘要排序回归测试 + 配套热补丁 patch_v3.15.2a）
+**本文件最后更新**：2026-06-11（v3.19.0 发版：全局调试中心 + NG 原因可解释性埋点 + showcase 插件 v1.2.2 重签名 + 桌面图标圆角化）
 **维护者**：项目主作者 + AI agents
 **事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）+ v3.9.0/v3.10.0 实测代码反推（`source_settlement_mixin.py` 1320 行 / `source_per_item_mixin.py` ~960 行 / v3.10 用户系统 ~841 行 core + 5 张新表 + 12 个 UAT 全过）

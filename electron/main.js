@@ -22,29 +22,62 @@ Menu.setApplicationMenu(null);
 let licenseManager = null;
 let isLicensed = false;
 
-// ===== 文件日志：把 console.error / console.warn 复制一份到磁盘 =====
-// 解决"出错只在控制台、客户机器没有保留任何痕迹"的痛点。
-// 单文件最大 10MB，超出则滚动一次（.1.log → 删除，当前 → .1.log）。
-function setupFileLogger() {
-  try {
-    const logDir = path.join(app.getPath('userData'), 'logs');
-    fs.mkdirSync(logDir, { recursive: true });
-    const logPath = path.join(logDir, 'electron.log');
+// ===== 文件日志：主进程全量日志 + 后端 stdout 全量日志落盘 =====
+// 痛点根治：打包后双击启动看不到任何日志，客户机排障必须从 cmd 重启。
+// 现在 console.log/warn/error 全量进 electron.log，后端 stdout/stderr 全量进
+// backend.log（均 UTF-8 写入，绕开 Windows 控制台 GBK 乱码），出问题直接取文件。
+// 单文件最大 10MB，超出滚动一次（.1.log → 删除，当前 → .1.log）。
+let _logDir = null;
+function getLogDir() {
+  if (!_logDir) {
+    _logDir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(_logDir, { recursive: true });
+  }
+  return _logDir;
+}
 
-    // 启动时检查滚动
+// 通用滚动写文件器: electron.log / backend.log 共用一套实现
+function makeRotatingWriter(fileName) {
+  let stream = null;
+  let written = 0;
+  const MAX = 10 * 1024 * 1024;
+  const open = () => {
+    const logPath = path.join(getLogDir(), fileName);
     try {
       const st = fs.statSync(logPath);
-      if (st.size > 10 * 1024 * 1024) {
-        const old = path.join(logDir, 'electron.1.log');
+      if (st.size > MAX) {
+        const old = path.join(getLogDir(), fileName.replace(/\.log$/, '.1.log'));
         try { fs.unlinkSync(old); } catch (_e) { /* 不存在 */ }
         try { fs.renameSync(logPath, old); } catch (_e) { /* 重命名失败也不致命 */ }
       }
-    } catch (_e) { /* 文件不存在，首次运行 */ }
+      written = (fs.existsSync(logPath) && fs.statSync(logPath).size) || 0;
+    } catch (_e) { written = 0; /* 文件不存在，首次运行 */ }
+    stream = fs.createWriteStream(logPath, { flags: 'a', encoding: 'utf-8' });
+  };
+  return (line) => {
+    try {
+      if (!stream) open();
+      const buf = `[${new Date().toISOString()}] ${line}\n`;
+      stream.write(buf);
+      written += Buffer.byteLength(buf);
+      if (written > MAX) { try { stream.end(); } catch (_e) {} stream = null; }
+    } catch (_e) { /* 日志写入失败静默，不能反过来 console.error 造成无限递归 */ }
+  };
+}
 
-    const stream = fs.createWriteStream(logPath, { flags: 'a' });
+let _backendLogWrite = null;
+function backendLog(streamName, msg) {
+  try {
+    if (!_backendLogWrite) _backendLogWrite = makeRotatingWriter('backend.log');
+    _backendLogWrite(`${streamName === 'stderr' ? 'ERR' : 'OUT'} ${msg}`);
+  } catch (_e) { /* 静默 */ }
+}
+
+function setupFileLogger() {
+  try {
+    const writeRaw = makeRotatingWriter('electron.log');
     const writeLine = (level, args) => {
       try {
-        const ts = new Date().toISOString();
         const line = args.map(a => {
           if (a instanceof Error) return a.stack || a.message;
           if (typeof a === 'object') {
@@ -52,11 +85,18 @@ function setupFileLogger() {
           }
           return String(a);
         }).join(' ');
-        stream.write(`[${ts}] ${level} ${line}\n`);
-      } catch (_e) { /* 日志写入失败时静默，不能反过来再 console.error 造成无限递归 */ }
+        writeRaw(`${level} ${line}`);
+      } catch (_e) { /* 静默 */ }
     };
+    const origLog = console.log.bind(console);
     const origError = console.error.bind(console);
     const origWarn = console.warn.bind(console);
+    // console.log 也落盘: [Backend] 行已单独进 backend.log, 这里跳过避免双写撑爆 electron.log
+    console.log = (...args) => {
+      const first = typeof args[0] === 'string' ? args[0] : '';
+      if (!first.startsWith('[Backend]')) writeLine('INFO ', args);
+      origLog(...args);
+    };
     console.error = (...args) => { writeLine('ERROR', args); origError(...args); };
     console.warn = (...args) => { writeLine('WARN ', args); origWarn(...args); };
     writeLine('INFO ', [`Electron 启动 (pid=${process.pid}, version=${app.getVersion()})`]);
@@ -229,6 +269,11 @@ function initBackendManager() {
   backendManager.on('ready', () => {
     console.log('[App] Backend is ready');
   });
+
+  // 后端 stdout/stderr 全量落盘 backend.log (UTF-8): 双击启动也能事后取到完整后端日志,
+  // 不再需要"关软件从 cmd 重启"来抓现场
+  backendManager.on('stdout', (msg) => backendLog('stdout', msg));
+  backendManager.on('stderr', (msg) => backendLog('stderr', msg));
   
   backendManager.on('error', (err) => {
     console.error('[App] Backend error:', err.message);
@@ -381,7 +426,8 @@ function createWindow(opts = {}) {
   // 进不了启动终端 + 工业机开不了 F12, 这条转发是前端插件加载排障的命脉, 必须够宽.
   mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
     try {
-      if (message.includes('[⬛') || /Plugin|PluginLoader|RendererDiag/i.test(message)) {
+      // error 级(level=3)无条件转发落盘 — 前端任何报错客户机都留痕; 其余按埋点标记过滤
+      if (level === 3 || message.includes('[⬛') || /Plugin|PluginLoader|RendererDiag/i.test(message)) {
         const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
         console.log(`[Renderer:${levels[level] || level}] ${message}`);
       }
@@ -922,6 +968,17 @@ ipcMain.handle('get-app-info', () => {
 
 ipcMain.handle('get-backend-url', () => {
   return `http://${CONFIG.backendHost}:${CONFIG.backendPort}`;
+});
+
+// 调试设置页"打开日志目录"按钮: 直接弹文件管理器到 logs/ (electron.log + backend.log)
+ipcMain.handle('app:open-logs-dir', async () => {
+  try {
+    const dir = getLogDir();
+    const err = await require('electron').shell.openPath(dir);
+    return { ok: !err, dir, error: err || undefined };
+  } catch (e) {
+    return { ok: false, error: e && e.message };
+  }
 });
 
 ipcMain.handle('get-license-status', () => {

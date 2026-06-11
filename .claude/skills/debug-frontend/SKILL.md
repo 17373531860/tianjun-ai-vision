@@ -309,6 +309,14 @@ v3.7.3 起 IoU / 优先级 / FP16 收进"高级参数 ▾"折叠区（默认收�
 
 ---
 
+## 8.5 调试中心 (v3.19.0+) — 前端排障首选入口
+
+- 入口：设置页「调试设置」Tab（需开发者模式，`localStorage.developer_mode`），实时日志查看器支持分类过滤/关键词搜索/暂停/导出
+- 前端埋点工具：`frontend/src/utils/debug.js`（`dbg(category, title, detail)`），日志批量回传后端 `POST /api/v1/debug/client-log`，与后端日志统一进环形缓冲 + 落盘
+- 已埋点位置：路由跳转与鉴权守卫（`router/index.js`）、axios 请求/响应/错误拦截器（`api/index.js`）、Monitor 等核心视图按钮交互
+- 前端开关存 Pinia `useDebugStore`，后端开关经 `/api/v1/debug/flags` 读写；默认全关零差异
+- 给新组件加埋点：import `dbg` → 在交互处理器里 `dbg('frontend.xxx', '动作', '细节')`，分类需在 debug_center 的目录里注册才会出现在面板
+
 ## 9. 改前端时配套读什么 skill
 
 - 改 Vue 组件 / Pinia store → `modify-frontend`

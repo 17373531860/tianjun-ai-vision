@@ -1555,6 +1555,11 @@
         <ChannelGroupPanel />
       </el-tab-pane>
 
+      <!-- 调试设置 Tab: 仅开发者模式可见 (Navbar 齿轮 → 开发者模式 → 密码), 与多工位同款门控 -->
+      <el-tab-pane v-if="store.developerMode" label="调试设置">
+        <DebugPanel />
+      </el-tab-pane>
+
       <!-- v3.13 M2.2b: 客户插件可注入 Tab. 通过 manifest.frontend.settings_tabs 声明 -->
       <el-tab-pane
         v-for="tab in pluginSettingsTabs"
@@ -1578,7 +1583,7 @@
 
 <script setup>
 import TjSlot from '@/components/TjSlot.vue';
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
 import { usePluginStore } from '@/store/usePluginStore';
@@ -1590,6 +1595,8 @@ import api from '@/api/index';
 import AuthPanel from './AuthPanel.vue';
 import WorkpieceFlowPanel from './WorkpieceFlowPanel.vue';
 import ChannelGroupPanel from './ChannelGroupPanel.vue';
+import DebugPanel from './DebugPanel.vue';
+import { dbg, dbgErr } from '@/utils/debug';
 
 const store = useSystemStore();
 const projectStore = useProjectStore();
@@ -1631,19 +1638,23 @@ async function loadPlugins() {
 async function onPluginFileChange(uploadFile) {
   const raw = uploadFile?.raw;
   if (!raw) return;
+  dbg('settings.ops', '上传安装插件', `file=${raw?.name ?? ''}`);
   try {
     await pluginStore.install(raw);
     ElMessage.success('插件安装成功，激活后重启生效');
   } catch {
+    dbg('settings.ops', '上传安装插件 [失败]', `${pluginStore.lastError ?? '未知错误'}`);
     ElMessage.error(`插件安装失败：${pluginStore.lastError || '未知错误'}`);
   }
 }
 
 async function activateInstalledPlugin(row) {
+  dbg('settings.ops', '激活插件', `code=${row?.customer_code ?? ''}`);
   try {
     await pluginStore.activate(row.customer_code);
     ElMessage.success('插件已激活，重启后生效');
   } catch (e) {
+    dbgErr('settings.ops', '激活插件', e);
     ElMessage.error('激活失败：' + (e?.response?.data?.detail?.message || e?.message || ''));
   }
 }
@@ -1672,10 +1683,12 @@ async function removeInstalledPlugin(row) {
 }
 
 const saveDisplaySettings = () => {
+  dbg('settings.ops', '保存显示设置', `brand=${store.display?.brandName ?? ''}`);
   localStorage.setItem('display_settings', JSON.stringify(store.display));
 };
 
 const saveDetectionSettings = () => {
+  dbg('settings.ops', '保存检测显示设置');
   store.saveDetectionSettings();
 };
 
@@ -1705,6 +1718,7 @@ const removeCustomToast = (idx) => {
 
 // 保存性能设置
 const savePerformanceSettings = async () => {
+  dbg('settings.ops', '保存性能设置', `mediapipe=${store.performance?.mediapipeEnabled} half=${store.performance?.halfPrecision}`);
   store.savePerformanceSettings();
   try {
     await api.post('/source/stream/config', {
@@ -1730,6 +1744,7 @@ const savePerformanceSettings = async () => {
     // 保存后立即刷新二段状态（让徽章动）
     await refreshMediaPipeStatus();
   } catch (e) {
+    dbgErr('settings.ops', '保存性能设置', e);
     console.error('同步性能设置到后端失败:', e);
   }
 };
@@ -1873,6 +1888,7 @@ const loadCurrentDevice = async () => {
 // 切换推理设备
 const changeDevice = async (device) => {
   changingDevice.value = true;
+  dbg('settings.ops', '切换推理设备', `device=${device ?? ''}`);
   try {
     const res = await api.post('/source/gpu/set', { device });
     if (res.data) {
@@ -1893,6 +1909,7 @@ const changeDevice = async (device) => {
       }
     }
   } catch (e) {
+    dbgErr('settings.ops', '切换推理设备', e);
     console.error('切换设备失败:', e);
     ElMessage.error('切换设备失败');
   } finally {
@@ -1916,6 +1933,7 @@ const loadKalmanConfig = async () => {
 };
 
 const saveKalmanConfig = async () => {
+  dbg('settings.ops', '保存卡尔曼滤波参数', `enabled=${kalmanConfig?.enabled}`);
   try {
     await api.post('/source/kalman/config', {
       enabled: kalmanConfig.enabled,
@@ -1925,6 +1943,7 @@ const saveKalmanConfig = async () => {
     });
     ElMessage.success('滤波参数已更新');
   } catch (e) {
+    dbgErr('settings.ops', '保存卡尔曼滤波参数', e);
     console.error('保存卡尔曼配置失败:', e);
     ElMessage.error('保存失败');
   }
@@ -1986,6 +2005,7 @@ async function loadTransformConfig() {
 
 async function saveTransformConfig() {
   transformSaving.value = true;
+  dbg('settings.ops', '保存画面变换', `ch=${transformChannel.value} rotation=${transformForm?.rotation ?? 0}`);
   try {
     await api.post(`/source/transform/config?channel=${transformChannel.value}`, {
       rotation: transformForm.rotation || 0,
@@ -1994,6 +2014,7 @@ async function saveTransformConfig() {
     });
     ElMessage.success(`工位 ${transformChannel.value + 1} 画面变换已保存并生效`);
   } catch (e) {
+    dbgErr('settings.ops', '保存画面变换', e);
     ElMessage.error('保存失败: ' + (e?.response?.data?.detail || e?.message || ''));
   } finally {
     transformSaving.value = false;
@@ -2076,6 +2097,7 @@ async function loadWindowConfig() {
 }
 
 async function onWindowFullscreenChange(val) {
+  dbg('settings.ops', '切换窗口模式', `fullscreen=${!!val}`);
   try {
     // 1. 持久化让下次启动生效
     await api.put('/workstations/window-config', { fullscreen: !!val });
@@ -2169,22 +2191,11 @@ const confirmSplashCameraPick = () => {
   ElMessage.success(`已锁定: ${pick.label || pick.deviceId.slice(0, 16) + '...'}`);
 };
 
-onMounted(async () => {
-  store.loadSettings();
-  loadPerformanceSettings();
-  refreshGpuList({ retries: 2 });
-  loadCurrentDevice();
-  loadKalmanConfig();
-  loadPlugins();
-  loadTransformTotalChannels();
-  loadTransformConfig();
-  loadSplashCameraConfig();
-  loadWindowConfig();   // v3.10.x: 主窗口模式
-  
-  // 从当前项目加载检测配置（包括自定义提示框）
-  // v3.8.x: 不再守 `if (res.data?.detection_config)` — DB null 也要进 store,
-  // store 内部会用 localStorage 兜底 + 自动回写 DB. 设置页是改这些配置的主入口,
-  // 必须确保 currentProjectId 被绑定, 否则用户改的颜色/线宽全进不了 DB.
+// 从当前项目加载检测配置（包括自定义提示框）
+// v3.8.x: 不再守 `if (res.data?.detection_config)` — DB null 也要进 store,
+// store 内部会用 localStorage 兜底 + 自动回写 DB. 设置页是改这些配置的主入口,
+// 必须确保 currentProjectId 被绑定, 否则用户改的颜色/线宽全进不了 DB.
+const loadProjectDetection = async () => {
   if (projectStore.currentProjectId) {
     try {
       const res = await getProjectDetail(projectStore.currentProjectId);
@@ -2197,5 +2208,22 @@ onMounted(async () => {
     // 没有项目时也走 store, 它内部读 localStorage; 无 projectId 不会回写 DB
     store.loadDetectionFromProject(null);
   }
+};
+
+onMounted(async () => {
+  store.loadSettings();
+  loadPerformanceSettings();
+  refreshGpuList({ retries: 2 });
+  loadCurrentDevice();
+  loadKalmanConfig();
+  loadPlugins();
+  loadTransformTotalChannels();
+  loadTransformConfig();
+  loadSplashCameraConfig();
+  loadWindowConfig();   // v3.10.x: 主窗口模式
+  await loadProjectDetection();
 });
+
+// 切项目热刷新: 停在设置页时 Navbar 切项目, 检测框/提示框配置实时跟随当前项目
+watch(() => projectStore.currentProjectId, () => { loadProjectDetection(); });
 </script>

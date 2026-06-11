@@ -1,5 +1,6 @@
 <template>
   <div>
+    <div class="text-xs text-gray-500 mb-3">扫码器为设备级配置，按工位/广播通道绑定，多项目共享，不随当前项目切换。</div>
     <!-- Tab 切换: 基本管理 / WMax 高级（仅检测到 WMax 设备时显示） -->
     <el-tabs v-model="activeTab" class="scanner-tabs mb-4">
       <el-tab-pane label="设备管理" name="basic" />
@@ -559,6 +560,7 @@ import {
 } from '@/api/wmax'
 import WMaxPanel from './WMaxPanel.vue'
 import { useSystemStore } from '@/store/useSystemStore'
+import { dbg, dbgErr } from '@/utils/debug'
 
 const systemStore = useSystemStore()
 
@@ -1006,6 +1008,7 @@ const onSettleModeChange = async (val) => {
 const quickDedup = ref(2)
 
 const handleManualAdd = () => {
+  dbg('mes.scanner', '点击「新建扫码器」')
   editingId.value = null
   form.value = defaultForm()
   showAdd.value = true
@@ -1089,6 +1092,7 @@ const quickAddDiscovered = async (d) => {
 }
 
 const retryConnect = async (d) => {
+  dbg('mes.scanner', '点击「连接 WMax 设备」', `ip=${d?.ip || ''}:${d?.port ?? ''}`)
   try {
     const res = await connectWMaxDevice(d.ip, d.port)
     if (res.data.success) {
@@ -1099,6 +1103,7 @@ const retryConnect = async (d) => {
       ElMessage.error(res.data.message)
     }
   } catch (e) {
+    dbgErr('mes.scanner', '连接 WMax 设备', e)
     ElMessage.error('连接失败')
   }
 }
@@ -1253,6 +1258,7 @@ const handleClearLogs = async () => {
 }
 
 const testDevice = async (dev) => {
+  dbg('mes.scanner', '点击「测试连接」', `id=${dev?.id} ip=${dev?.ip || ''}:${dev?.port ?? ''}`)
   testingDeviceId.value = dev.id
   try {
     // 把当前配置的 device_type 传给后端, 让 text_lon 模式只走 LON/LOFF, 不打开视频流
@@ -1265,6 +1271,7 @@ const testDevice = async (dev) => {
     }
     refreshStatus()
   } catch (e) {
+    dbgErr('mes.scanner', '测试连接', e)
     ElMessage.error('测试失败: ' + (e.response?.data?.detail || e.message || '网络错误'))
   } finally {
     testingDeviceId.value = null
@@ -1272,6 +1279,7 @@ const testDevice = async (dev) => {
 }
 
 const submitSimulateScan = async () => {
+  dbg('mes.scanner', '点击「模拟扫码」', `barcode=${simulateForm.value?.barcode || ''} channel=${simulateForm.value?.channel_id ?? ''}`)
   const barcode = (simulateForm.value.barcode || '').trim()
   if (!barcode) {
     ElMessage.warning('请填写模拟条码')
@@ -1289,6 +1297,7 @@ const submitSimulateScan = async () => {
     showSimulate.value = false
     await Promise.all([refreshStatus(), loadLogs()])
   } catch (e) {
+    dbgErr('mes.scanner', '模拟扫码', e)
     ElMessage.error('模拟扫码失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
   } finally {
     simulating.value = false
@@ -1296,6 +1305,7 @@ const submitSimulateScan = async () => {
 }
 
 const handleSave = async () => {
+  dbg('mes.scanner', editingId.value ? '点击「保存编辑扫码器」' : '点击「保存新建扫码器」', `id=${editingId.value ?? ''} name=${form.value?.name || ''} ip=${form.value?.ip || ''} enabled=${form.value?.enabled}`)
   if (!form.value.name || !form.value.ip) {
     ElMessage.warning('请填写名称和IP地址')
     return
@@ -1327,17 +1337,19 @@ const handleSave = async () => {
     showAdd.value = false
     loadDevices()
     refreshStatus()
-  } catch (e) { ElMessage.error(e.response?.data?.detail || '保存失败') }
+  } catch (e) { dbgErr('mes.scanner', '保存扫码器', e); ElMessage.error(e.response?.data?.detail || '保存失败') }
   finally { saving.value = false }
 }
 
 const editDevice = (dev) => {
+  dbg('mes.scanner', '点击「编辑扫码器」', `id=${dev?.id} name=${dev?.name || ''}`)
   editingId.value = dev.id
   form.value = { ...defaultForm(), ...dev }
   showAdd.value = true
 }
 
 const handleDelete = async (dev) => {
+  dbg('mes.scanner', '点击「删除扫码器」', `id=${dev?.id} name=${dev?.name || ''}`)
   try {
     await ElMessageBox.confirm(`确定删除设备 ${dev.name}？`, '确认')
     await deleteScannerDevice(dev.id)
@@ -1346,6 +1358,7 @@ const handleDelete = async (dev) => {
     refreshStatus()
   } catch (e) {
     if (e !== 'cancel' && e !== 'close') {
+      dbgErr('mes.scanner', '删除扫码器', e)
       ElMessage.error(`删除失败: ${e?.response?.data?.detail || e?.message || e}`)
     }
   }

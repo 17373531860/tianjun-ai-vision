@@ -37,9 +37,24 @@ import cv2
 import numpy as np
 
 from backend.api.source_roi import is_normalized_bbox_center_in_polygon
+from backend.core import debug_center
 
 
 class StepStatsMixin:
+    # ──── 调试: 步骤被拒原因 (每 label 2s 节流, 答"为什么这一步一直没记上") ────
+    def _dbg_step_rejected(self, label: str, reason: str):
+        if not debug_center.is_on("backend.settlement"):
+            return
+        now = time.time()
+        last_map = getattr(self, '_dbg_step_reject_ts', None)
+        if last_map is None:
+            last_map = {}
+            self._dbg_step_reject_ts = last_map
+        if now - last_map.get(label, 0.0) < 2.0:
+            return
+        last_map[label] = now
+        debug_center.dbg("backend.settlement", "步骤检出被拒",
+                         f"channel={self.channel_id} 步骤[{label}] {reason} → 该步骤不计入周期")
     def _update_step_stats(self, detections: list, original_frame: np.ndarray):
         """更新步骤统计和截图
         
@@ -90,6 +105,7 @@ class StepStatsMixin:
             if self.step_conf_thresholds:
                 threshold = self.step_conf_thresholds.get(label)
                 if threshold is not None and confidence < threshold:
+                    self._dbg_step_rejected(label, f"置信度{confidence:.2f} < 步骤阈值{threshold}")
                     continue
 
             # 逐步骤 ROI: 仅框中心在配置多边形内才计入该步骤 (顺序/检测/自定义/共用路径)
@@ -97,6 +113,7 @@ class StepStatsMixin:
             _poly = _poly_map.get(label)
             if _poly and len(_poly) >= 3:
                 if not is_normalized_bbox_center_in_polygon(det, _poly):
+                    self._dbg_step_rejected(label, "检测框中心在该步骤 ROI 区域外")
                     continue
 
             frame_detected_labels.add(label)

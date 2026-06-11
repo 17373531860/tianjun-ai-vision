@@ -4,12 +4,20 @@ import traceback
 import cv2
 import numpy as np
 
+from backend.core import debug_center
+
 
 class EventsCheckMixin:
     def _check_events(self, completed_step: str):
         """检查是否触发事件"""
         if not self.project_config:
             return
+
+        def _dbg_skip_stale():
+            # 答"末步明明做完了为什么不结算": 该步骤不在当前周期里, 被当作上一周期残留跳过
+            if debug_center.is_on("backend.settlement"):
+                debug_center.dbg("backend.settlement", "结算跳过(残留步骤)",
+                                 f"channel={self.channel_id} 步骤[{completed_step}]不在当前周期, 按上一周期残留跳过 当前周期={self.current_cycle_steps}")
         
         events_config = self.project_config.get('events_config', [])
         logic_mode = self.project_config.get('logic_mode', 'detection')
@@ -80,11 +88,13 @@ class EventsCheckMixin:
                         self._check_custom_sequential_mode(pipeline_config, id_to_label)
                     else:
                         print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
+                        _dbg_skip_stale()
             elif custom_based_on == 'detection':
                 if completed_step in self.current_cycle_steps:
                     self._check_custom_detection_mode(pipeline_config, id_to_label, enabled_step_labels)
                 else:
                     print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
+                    _dbg_skip_stale()
         
         # 顺序模式
         elif logic_mode == 'sequential':
@@ -96,6 +106,7 @@ class EventsCheckMixin:
                         self._check_sequential_mode(pipeline_config, id_to_label)
                     else:
                         print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
+                        _dbg_skip_stale()
         
         # 检测模式 (last_first 不适用于 detection 模式, 互斥校验已阻止此组合)
         elif logic_mode == 'detection':
@@ -106,6 +117,7 @@ class EventsCheckMixin:
                         self._settle_detection_cycle()
                     else:
                         print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
+                        _dbg_skip_stale()
         
         # 检查步骤特定事件
         for step in steps_config:

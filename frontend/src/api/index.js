@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { dbg, dbgOn } from '@/utils/debug';
 
 // 后端默认地址（当环境变量未配置时使用）
 const DEFAULT_BACKEND_HOST = 'http://localhost:8001';
@@ -89,6 +90,12 @@ function clearToken() {
   } catch {}
 }
 
+// 调试设置 'api.request': 高频轮询端点开了开关也跳过, 否则日志全被轮询刷屏
+const DBG_SKIP_URLS = ['/source/detection/results', '/source/status', '/debug/logs', '/debug/flags', '/debug/client-log', '/system/device-status'];
+function dbgSkip(url) {
+  return DBG_SKIP_URLS.some(u => (url || '').includes(u));
+}
+
 // 请求拦截器: 有 token 就加 Authorization header
 api.interceptors.request.use(
   (config) => {
@@ -97,6 +104,12 @@ api.interceptors.request.use(
       config.headers = config.headers || {};
       config.headers.Authorization = `Bearer ${token}`;
     }
+    // 调试埋点: 记录请求发出时刻 (响应侧算耗时)
+    if (dbgOn('api.request') && !dbgSkip(config.url)) {
+      config.__dbgT0 = Date.now();
+      const params = config.params ? ` params=${JSON.stringify(config.params).slice(0, 200)}` : '';
+      dbg('api.request', `→ ${String(config.method || 'get').toUpperCase()} ${config.url}`, params.trim());
+    }
     return config;
   },
   (error) => Promise.reject(error)
@@ -104,8 +117,23 @@ api.interceptors.request.use(
 
 // 响应拦截器: 401 = token 失效, 清掉 + 跳 /login (D3 启用状态下)
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const cfg = response.config || {};
+    if (cfg.__dbgT0) {
+      dbg('api.request', `← ${response.status} ${cfg.url}`, `${Date.now() - cfg.__dbgT0}ms`);
+    }
+    return response;
+  },
   (error) => {
+    // 调试埋点: 失败请求无论哪个开关都按 api.request 记 (这是排障最常用的信息)
+    if (dbgOn('api.request')) {
+      const cfg = (error.config || (error.response && error.response.config)) || {};
+      if (!dbgSkip(cfg.url)) {
+        const st = error.response ? error.response.status : 'NETWORK';
+        const detail = error.response ? JSON.stringify(error.response.data).slice(0, 300) : error.message;
+        dbg('api.request', `✗ ${st} ${cfg.url}`, detail);
+      }
+    }
     if (error.response) {
       const { status, data, config } = error.response;
       console.error(`API Error ${status}:`, data);

@@ -950,6 +950,20 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 9. `backend/api/channel_manager.py`（如涉及多通道）
 10. `backend/services/mes_hooks.py`（如涉及 MES，但具体诊断走 `debug-mes` skill）
 
+## 调试中心 (v3.19.0+) — 排查状态机问题的首选入口
+
+排查「为什么一直 NG / 周期不开始 / 步骤不被接受」时，**先开调试中心拿原因，再翻代码**：
+
+- 入口：设置页「调试设置」Tab（需开发者模式），或 API `PUT /api/v1/debug/flags`
+- 相关分类：
+  - `backend.settlement` — 周期判定/OK-NG 结算：顺序结算 NG 会输出**缺失步骤清单**（`缺少=['step_b']`）、超时强制 NG 原因 + 已完成步骤、残留步骤跳过、序列为空静默丢周期留痕
+  - `backend.per_item` — 逐件覆盖：周期不开始原因（首步检出不足/数量不恒定/位置不稳/严格等量未满足）、锁定/覆盖进度、结算漏件明细
+  - `backend.source` — 视频源生命周期（启动/停止/暂停/待机/恢复）
+  - `backend.session` — Session/Cycle/Step 写库
+- 拉日志：`GET /api/v1/debug/logs?category=backend.settlement&keyword=NG`（增量游标 + 过滤）
+- 默认全关零开销；热路径埋点带 1-2 秒节流，常开也不会刷屏
+- 实现：`backend/core/debug_center.py`；埋点分布在 settlement/per_item/step_stats/events_check/session_lifecycle 五个 mixin
+
 排查问题前**必须**先确定问题属于：source 状态机 / 推理 / 视频 / MES / 通道 / 报警 ——
 对应 skill 不一样：
 - `debug-source` ← 你在这里

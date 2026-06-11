@@ -20,6 +20,8 @@ import traceback
 import cv2
 import numpy as np
 
+from backend.core import debug_center
+
 
 class SettlementMixin:
     def _settle_custom_cycle(self):
@@ -52,6 +54,8 @@ class SettlementMixin:
         self._reorder_simultaneous_groups_in_cycle()
         
         print(f"自定义模式结算: 当前序列={self.current_cycle_steps}")
+        if debug_center.is_on("backend.settlement"):
+            debug_center.dbg("backend.settlement", "自定义模式结算入口", f"channel={self.channel_id} steps={self.current_cycle_steps}")
         
         if not self.current_cycle_steps:
             self._discard_empty_cycle()
@@ -82,6 +86,8 @@ class SettlementMixin:
                 
                 if self.current_cycle_steps == cond_labels:
                     print(f"  → 条件匹配！触发事件 {cond_event_id}")
+                    if debug_center.is_on("backend.settlement"):
+                        debug_center.dbg("backend.settlement", "自定义条件匹配结算", f"event_id={cond_event_id} seq={cond_labels}")
                     self._reconcile_step_records()
                     self._trigger_event(cond_event_id, f'自定义条件匹配: {cond_labels}')
                     self.current_cycle_steps = []
@@ -313,6 +319,8 @@ class SettlementMixin:
             ng_reasons.append(f'重复步骤: {duplicated}')
         
         print(f"检测模式结算: 需要={detection_labels}, 本周期={self.current_cycle_steps}, 缺少={missing}, 重复={duplicated}")
+        if debug_center.is_on("backend.settlement"):
+            debug_center.dbg("backend.settlement", "检测模式结算", f"channel={self.channel_id} is_good={not ng_reasons} missing={missing} duplicated={duplicated}")
         
         if not ng_reasons:
             print(f"  → 全部检测到，无重复 → OK")
@@ -363,6 +371,11 @@ class SettlementMixin:
         sequence_order = pipeline_config.get('sequence_order', [])
         
         if not sequence_order or not steps_config:
+            # 静默丢弃周期的高危分支: 项目缺 sequence_order 时周期无 OK/NG 直接蒸发,
+            # 客户感知"做完一圈什么都没发生" — 至少让调试日志说出原因
+            if debug_center.is_on("backend.settlement"):
+                debug_center.dbg("backend.settlement", "顺序模式结算被跳过",
+                                 f"channel={self.channel_id} 项目缺 sequence_order 配置(或无步骤), 周期 {self.current_cycle_steps} 被静默丢弃, 不产生 OK/NG")
             self.current_cycle_steps = []
             self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None
@@ -413,6 +426,8 @@ class SettlementMixin:
         self._reconcile_step_records()
         
         print(f"顺序模式结算: 期望={expected_labels}, 实际={self.current_cycle_steps}, 回退={self._cycle_regression}")
+        if debug_center.is_on("backend.settlement"):
+            debug_center.dbg("backend.settlement", "顺序模式结算入口", f"channel={self.channel_id} expected={expected_labels} actual={self.current_cycle_steps}")
         
         from collections import Counter
         expected_set = set(expected_labels)
@@ -440,6 +455,8 @@ class SettlementMixin:
                 reasons.append(f'重复步骤: {duplicated}')
             reason_str = ', '.join(reasons)
             print(f"  → {reason_str} → NG")
+            if debug_center.is_on("backend.settlement"):
+                debug_center.dbg("backend.settlement", "顺序模式结算 NG", f"is_good=False reason={reason_str}")
             self._trigger_event(2, reason_str)
             self._cycle_regression = False
             self.current_cycle_steps = []
@@ -454,6 +471,8 @@ class SettlementMixin:
 
         if missing:
             print(f"  → 周期不完整，缺少: {missing} → NG")
+            if debug_center.is_on("backend.settlement"):
+                debug_center.dbg("backend.settlement", "顺序模式结算 NG", f"is_good=False 缺少={missing}")
             self._trigger_event(2, f'周期不完整，缺少: {missing}')
             self._cycle_regression = False
             self.current_cycle_steps = []
@@ -471,6 +490,8 @@ class SettlementMixin:
         # 直接逐位比较即可. 旧实现用 unique_steps.index() 总返首次位置,
         # 在 sequence_order 含重复元素时 (例 A-B-C-B-D 里 B×2)
         # 会把"完全正确的序列"误判为"顺序错误", 客户感知为 0% OK.
+        if debug_center.is_on("backend.settlement"):
+            debug_center.dbg("backend.settlement", "顺序模式结算判定", f"is_good={self.current_cycle_steps == expected_labels}")
         if self.current_cycle_steps == expected_labels:
             print(f"  → 顺序正确 → OK")
             self._trigger_event(1, '顺序正确完成')
@@ -735,6 +756,8 @@ class SettlementMixin:
         logic_mode = self.project_config.get('logic_mode', 'detection')
         pipeline_config = self.project_config.get('pipeline_config', {})
         custom_based_on = pipeline_config.get('custom_based_on')
+        if debug_center.is_on("backend.settlement"):
+            debug_center.dbg("backend.settlement", "结算分发", f"channel={self.channel_id} logic_mode={logic_mode} based_on={custom_based_on} steps={self.current_cycle_steps}")
         if logic_mode == 'custom' and custom_based_on == 'sequential':
             self._settle_custom_cycle()
         elif logic_mode == 'sequential':
@@ -821,6 +844,8 @@ class SettlementMixin:
             self._blocked_labels.add(last_label)
             consumed.add(last_label)
             _r1_triggered = True
+            if debug_center.is_on("backend.settlement"):
+                debug_center.dbg("backend.settlement", "last_first R1 末步锚结算", f"channel={self.channel_id} last={last_label}")
             # _settle 内部已清空 cycle_steps + step_last_seen + step_start_time
 
         # ─── R3: D 缺位 fallback ───
@@ -852,6 +877,8 @@ class SettlementMixin:
             self.step_frame_confirmed[first_label] = True
             self._pending_first_step = False
             consumed.add(first_label)
+            if debug_center.is_on("backend.settlement"):
+                debug_center.dbg("backend.settlement", "last_first R3 末步缺位fallback", f"channel={self.channel_id} first={first_label} last={last_label}")
             print(f"[last_first R3] D 缺位 fallback: 上周期结算 NG (缺末步) → 新周期 [{first_label}]")
             return consumed
 

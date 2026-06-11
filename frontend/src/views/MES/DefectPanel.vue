@@ -21,6 +21,10 @@
                      @click="handleBatchDeleteDefect">
             批量删除{{ selected.length > 0 ? `(${selected.length})` : '' }}
           </el-button>
+          <div class="flex items-center gap-1 ml-auto">
+            <el-switch v-model="onlyCurrentProject" size="small" @change="handleProjectScopeChange" />
+            <span class="text-xs text-gray-400">仅当前项目<template v-if="onlyCurrentProject && projectStore.currentProjectName">（{{ projectStore.currentProjectName }}）</template></span>
+          </div>
         </div>
 
         <el-table :data="defects" stripe size="small" class="mes-table" max-height="calc(100vh - 320px)"
@@ -134,7 +138,11 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getDefects, getPareto, getDefectCodes, createDefectCode, deleteDefectCode, deleteDefect } from '@/api/mes'
+import { useProjectStore } from '@/store/useProjectStore'
+import { dbg, dbgErr } from '@/utils/debug'
 
+const projectStore = useProjectStore()
+const onlyCurrentProject = ref(true)
 const defects = ref([])
 const total = ref(0)
 const currentPage = ref(1)
@@ -154,38 +162,49 @@ const handleSelectionChange = (rows) => { selected.value = rows || [] }
 
 const formatTime = (t) => t ? t.replace('T', ' ').substring(0, 19) : '-'
 
+const _scopeProjectId = () => (onlyCurrentProject.value && projectStore.currentProjectId) ? projectStore.currentProjectId : undefined
+
 const loadDefects = async () => {
   try {
     const res = await getDefects({
       category: filterCategory.value || undefined,
       severity: filterSeverity.value || undefined,
+      project_id: _scopeProjectId(),
       skip: (currentPage.value - 1) * pageSize.value,
       limit: pageSize.value,
     })
     defects.value = res.data.items || []
     total.value = res.data.total || 0
-  } catch { ElMessage.error('加载缺陷列表失败') }
+  } catch (e) { dbgErr('mes.defect', '查询缺陷记录', e); ElMessage.error('加载缺陷列表失败') }
 }
 
 const loadPareto = async () => {
   try {
-    const res = await getPareto({})
+    const res = await getPareto({ project_id: _scopeProjectId() })
     paretoData.value = res.data || []
   } catch (e) {
+    dbgErr('mes.defect', '加载 Pareto 数据', e)
     ElMessage.error('加载 Pareto 数据失败')
   }
 }
+
+const handleProjectScopeChange = () => { currentPage.value = 1; loadDefects(); loadPareto() }
+watch(() => projectStore.currentProjectId, () => {
+  if (onlyCurrentProject.value) { currentPage.value = 1; loadDefects(); loadPareto() }
+})
 
 const loadCodes = async () => {
   try {
     const res = await getDefectCodes({})
     codes.value = res.data || []
   } catch (e) {
+    dbgErr('mes.defect', '加载缺陷代码列表', e)
     ElMessage.error('加载缺陷代码失败')
   }
 }
 
 const handleAddCode = async () => {
+  dbg('mes.defect', '点击「新建缺陷代码」', `code=${codeForm.value?.code || ''} name=${codeForm.value?.name || ''}`)
   if (!codeForm.value.code || !codeForm.value.name) {
     ElMessage.warning('请填写代码和名称')
     return
@@ -199,22 +218,25 @@ const handleAddCode = async () => {
     showAddCode.value = false
     codeForm.value = { code: '', name: '', category: 'other', severity: 'minor', labelsStr: '' }
     loadCodes()
-  } catch (e) { ElMessage.error(e.response?.data?.detail || '创建失败') }
+  } catch (e) { dbgErr('mes.defect', '新建缺陷代码', e); ElMessage.error(e.response?.data?.detail || '创建失败') }
 }
 
 const handleDeleteCode = async (row) => {
+  dbg('mes.defect', '点击「删除缺陷代码」', `id=${row?.id} code=${row?.code || ''}`)
   try {
     await ElMessageBox.confirm(`确定删除缺陷代码 ${row.code}？`, '确认')
     await deleteDefectCode(row.id)
     ElMessage.success('已删除')
     loadCodes()
   } catch (e) {
+    if (e !== 'cancel' && e !== 'close') dbgErr('mes.defect', '删除缺陷代码', e)
     if (e !== 'cancel' && e !== 'close')
       ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
   }
 }
 
 const handleDeleteDefect = async (row) => {
+  dbg('mes.defect', '点击「删除缺陷记录」', `id=${row?.id} code=${row?.defect_code || ''}`)
   try {
     await ElMessageBox.confirm(
       `确定删除缺陷记录 ${row.defect_code || row.defect_name || ''} ？此操作不可撤销。`,
@@ -225,6 +247,7 @@ const handleDeleteDefect = async (row) => {
     loadDefects()
     loadPareto()
   } catch (e) {
+    if (e !== 'cancel' && e !== 'close') dbgErr('mes.defect', '删除缺陷记录', e)
     if (e !== 'cancel' && e !== 'close')
       ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
   }
@@ -233,6 +256,7 @@ const handleDeleteDefect = async (row) => {
 const handleBatchDeleteDefect = async () => {
   if (selected.value.length === 0) return
   const n = selected.value.length
+  dbg('mes.defect', '点击「批量删除缺陷记录」', `count=${n}`)
   try {
     await ElMessageBox.confirm(
       `确定批量删除 ${n} 条缺陷记录？此操作不可撤销。`,

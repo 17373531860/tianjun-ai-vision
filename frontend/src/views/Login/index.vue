@@ -87,6 +87,7 @@ import { useRouter, useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { User, Lock, UserFilled } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/useAuthStore';
+import { dbg, dbgErr } from '@/utils/debug';
 
 const router = useRouter();
 const route = useRoute();
@@ -138,11 +139,14 @@ async function onSubmit() {
     return;
   }
   submitting.value = true;
+  dbg('auth.ops', '点击「登录」提交', `username=${form.username ?? ''}`);
   try {
     await authStore.login(form.username, form.password);
+    dbg('auth.ops', '登录成功', `username=${authStore.currentUser?.username ?? ''} roles=${(authStore.currentUser?.roles || []).join(',')}`);
     ElMessage.success(`欢迎, ${authStore.currentUser.display_name || authStore.currentUser.username}`);
     goHome();
   } catch (err) {
+    dbgErr('auth.ops', '登录', err);
     const detail = err?.response?.data?.detail || err?.message || '登录失败';
     errorMessage.value = detail;
   } finally {

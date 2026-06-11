@@ -612,6 +612,7 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { setWorkstationMode, getWorkstations, setProjectConfig as apiSetProjectConfig, startDetection as apiStartDetection, setChannelGpu } from '@/api/detection';
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import { getProjects } from '@/api/project';
+import { dbg, dbgErr } from '@/utils/debug';
 
 const router = useRouter();
 const sourceStore = useSourceStore();
@@ -640,6 +641,7 @@ const bindWsUploadRef = (idx, kind, el) => {
 
 /** 多工位切换输入源类型时清掉其它类型的残留配置 */
 const onWsSourceTypeChange = (idx, newType) => {
+  dbg('source.workstation', '工位切换输入源类型', `ch=${idx} type=${newType ?? ''}`);
   const cfg = wsConfigs[idx];
   if (!cfg) return;
   if (newType !== 'video') {
@@ -692,11 +694,13 @@ const fetchProjectList = async () => {
 };
 
 const handleWorkstationModeChange = async (count) => {
+  dbg('source.workstation', '切换工位数', `count=${count ?? ''}`);
   try {
     await setWorkstationMode(count);
     const modeNames = { 1: '单工位', 2: '双工位', 3: '三工位', 4: '四工位' };
     ElMessage.success(`已切换到 ${modeNames[count] || count + '工位'} 模式`);
   } catch (e) {
+    dbgErr('source.workstation', '切换工位数', e);
     ElMessage.error('切换模式失败: ' + (e.message || ''));
     workstationMode.value = 1;
   }
@@ -704,6 +708,7 @@ const handleWorkstationModeChange = async (count) => {
 
 const saveAndStartMulti = async () => {
   saving.value = true;
+  dbg('source.workstation', '点击「保存并启动所有工位」', `count=${workstationMode.value}`);
   try {
     await setWorkstationMode(workstationMode.value);
 
@@ -819,9 +824,11 @@ const saveAndStartMulti = async () => {
         }
       }
     }
+    dbg('source.workstation', '保存并启动所有工位成功', `count=${workstationMode.value}`);
     ElMessage.success('所有工位已启动，正在跳转...');
     setTimeout(() => router.push('/monitor'), 500);
   } catch (e) {
+    dbgErr('source.workstation', '保存并启动所有工位', e);
     const detail = e.response?.data?.detail || e.message || '未知错误';
     ElMessage.error('启动失败: ' + detail);
     console.error('[saveAndStartMulti] 错误详情:', detail, e);
@@ -961,6 +968,7 @@ const tryPersistUsbDeviceId = async (channelId, deviceIndex, deviceLabel = '') =
 
 // 刷新所有摄像头列表（USB + 海康）
 const refreshAllCameras = async () => {
+  dbg('source.ops', '点击「刷新设备列表」');
   loadingCameras.value = true;
   
   // 并行获取 USB 和海康摄像头
@@ -1032,6 +1040,7 @@ const useLastVideo = async () => {
     return;
   }
   
+  dbg('source.ops', '点击「使用上次视频」', `file=${lastVideoFileName.value ?? ''}`);
   saving.value = true;
   try {
     // 先停止现有流
@@ -1056,6 +1065,7 @@ const useLastVideo = async () => {
       router.push('/monitor');
     }, 500);
   } catch (err) {
+    dbgErr('source.ops', '使用上次视频', err);
     console.error('启动视频失败:', err);
     ElMessage.error('启动失败: ' + (err.response?.data?.detail || err.message));
   } finally {
@@ -1085,6 +1095,7 @@ const useLastImage = async () => {
     return;
   }
   
+  dbg('source.ops', '点击「使用上次图片」', `file=${lastImageFileName.value ?? ''}`);
   saving.value = true;
   try {
     // 先停止现有流
@@ -1105,6 +1116,7 @@ const useLastImage = async () => {
       router.push('/monitor');
     }, 500);
   } catch (err) {
+    dbgErr('source.ops', '使用上次图片', err);
     console.error('设置图片失败:', err);
     ElMessage.error('设置失败: ' + (err.response?.data?.detail || err.message));
   } finally {
@@ -1114,6 +1126,7 @@ const useLastImage = async () => {
 
 // 处理源类型变化
 const handleSourceTypeChange = () => {
+  dbg('source.ops', '切换输入源类型', `type=${sourceType.value ?? ''}`);
   videoFile.value = null;
   imageFile.value = null;
   lastVideoFileName.value = null;
@@ -1125,6 +1138,7 @@ const handleSourceTypeChange = () => {
 // 保存并启动
 const saveAndStart = async () => {
   saving.value = true;
+  dbg('source.ops', '点击「保存并启动检测」', `type=${sourceType.value ?? ''}`);
   
   try {
     // 先停止现有流（各类型都尝试停，避免换源后旧流仍占用）
@@ -1323,6 +1337,7 @@ const saveAndStart = async () => {
       }
     }
     
+    dbg('source.ops', '保存并启动成功', `type=${sourceType.value ?? ''}`);
     ElMessage.success('输入源已配置，正在跳转到检测中心...');
     
     // 跳转到检测中心页面
@@ -1331,6 +1346,7 @@ const saveAndStart = async () => {
     }, 500);
     
   } catch (err) {
+    dbgErr('source.ops', '保存并启动', err);
     console.error('启动输入源失败:', err);
     ElMessage.error('启动失败: ' + (err.response?.data?.detail || err.message));
   } finally {

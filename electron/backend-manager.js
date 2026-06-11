@@ -139,6 +139,8 @@ class BackendManager extends EventEmitter {
     env.PYTHONIOENCODING = 'utf-8';
     env.PYTHONLEGACYWINDOWSSTDIO = '0';
     env.PYTHONUTF8 = '1';
+    // stdout 不缓冲: 日志实时刷出, 否则崩溃瞬间 backend.log 缺最后几行关键现场
+    env.PYTHONUNBUFFERED = '1';
 
     // v3.7.x: 把 Electron 端 package.json 的 app 元数据注入到 Python 后端.
     // 后端 export_context._read_app_info() 优先读这些 env, 拿不到才回退到

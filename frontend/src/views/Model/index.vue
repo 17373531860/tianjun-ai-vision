@@ -7,6 +7,7 @@
         <el-icon class="mr-1"><Upload /></el-icon> 上传新模型
       </el-button>
     </div>
+    <div class="text-xs text-gray-500 -mt-3">模型仓库为全局资源，跨项目共享；上传的模型可被任意项目引用，不随当前项目切换。</div>
 
     <div v-loading="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
       <div v-if="modelList.length === 0 && !loading" class="col-span-4 text-center text-gray-500 py-16">
@@ -151,6 +152,7 @@ import { ref, onMounted } from 'vue';
 import { ElMessageBox, ElMessage } from 'element-plus';
 import { UploadFilled, Cpu, Upload } from '@element-plus/icons-vue';
 import { getModels, uploadModel, updateModel, deleteModel } from '@/api/model';
+import { dbg, dbgErr } from '@/utils/debug';
 
 const modelList = ref([]);
 const loading = ref(false);
@@ -173,11 +175,13 @@ const uploadForm = ref({
 
 // 加载模型列表
 const loadModels = async () => {
+  dbg('model.manage', '刷新模型列表');
   loading.value = true;
   try {
     const res = await getModels();
     modelList.value = res.data.items || [];
   } catch (err) {
+    dbgErr('model.manage', '刷新模型列表', err);
     console.error('加载模型列表失败:', err);
     ElMessage.error('加载模型列表失败');
   } finally {
@@ -217,6 +221,7 @@ const formatDateTime = (dateStr) => {
 };
 
 const handleFileChange = (file) => {
+  dbg('model.upload', '选择模型文件', `name=${file?.name} size=${file?.size}`);
   selectedFile.value = file.raw;
   // 自动从文件名提取模型名称
   if (!uploadForm.value.name && file.name) {
@@ -226,6 +231,7 @@ const handleFileChange = (file) => {
 
 // 超出文件数量限制时，用新文件替换旧文件
 const handleExceed = (files) => {
+  dbg('model.upload', '重复选择文件(替换旧文件)', `name=${files?.[0]?.name}`);
   if (uploadRef.value) {
     uploadRef.value.clearFiles();
   }
@@ -258,6 +264,7 @@ const startUpload = async () => {
   formData.append('framework', uploadForm.value.framework);
   formData.append('description', uploadForm.value.description || '');
   
+  dbg('model.upload', '点击「开始上传」', `name=${uploadForm.value?.name} framework=${uploadForm.value?.framework} file=${selectedFile.value?.name}`);
   isUploading.value = true;
   uploadProgress.value = 0;
   
@@ -265,6 +272,7 @@ const startUpload = async () => {
     await uploadModel(formData, (progress) => {
       uploadProgress.value = progress;
     });
+    dbg('model.upload', '模型上传成功', `name=${uploadForm.value?.name}`);
     ElMessage.success('模型上传成功');
     uploadDialogVisible.value = false;
     
@@ -278,6 +286,7 @@ const startUpload = async () => {
     // 重新加载列表
     loadModels();
   } catch (err) {
+    dbgErr('model.upload', '模型上传', err);
     ElMessage.error('上传失败: ' + (err.response?.data?.detail || err.message));
   } finally {
     isUploading.value = false;
@@ -286,6 +295,7 @@ const startUpload = async () => {
 };
 
 const handleEdit = (model) => {
+  dbg('model.manage', '点击「编辑模型」', `id=${model?.id} name=${model?.name}`);
   currentModel.value = model;
   editForm.value = {
     name: model.name || '',
@@ -301,6 +311,7 @@ const saveModel = async () => {
     ElMessage.warning('模型名称不能为空');
     return;
   }
+  dbg('model.manage', '点击「保存模型信息」', `id=${currentModel.value?.id} name=${editForm.value?.name}`);
   isSaving.value = true;
   try {
     await updateModel(currentModel.value.id, {
@@ -312,6 +323,7 @@ const saveModel = async () => {
     detailDialogVisible.value = false;
     loadModels();
   } catch (err) {
+    dbgErr('model.manage', '保存模型信息', err);
     ElMessage.error('更新失败: ' + (err.response?.data?.detail || err.message));
   } finally {
     isSaving.value = false;
@@ -319,6 +331,7 @@ const saveModel = async () => {
 };
 
 const confirmDelete = async (model) => {
+  dbg('model.manage', '点击「删除模型」', `id=${model?.id} name=${model?.name}`);
   try {
     await ElMessageBox.confirm(
       `确认删除模型 "${model.name}" 吗? 此操作无法撤销。`,
@@ -335,6 +348,7 @@ const confirmDelete = async (model) => {
     loadModels();
   } catch (err) {
     if (err !== 'cancel') {
+      dbgErr('model.manage', '删除模型', err);
       ElMessage.error('删除失败');
     }
   }

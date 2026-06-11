@@ -22,6 +22,7 @@ import {
   login as apiLogin,
   logout as apiLogout,
 } from '@/api/auth';
+import { dbg, dbgErr } from '@/utils/debug';
 
 const TOKEN_KEY = 'tianjun:auth_token';
 
@@ -190,6 +191,7 @@ export const useAuthStore = defineStore('auth', {
      * 登录 — 调 /auth/login, 拿到 token 后写 store + localStorage, 然后刷新身份
      */
     async login(username, password) {
+      dbg('auth.ops', '发起登录请求', `username=${username ?? ''}`);
       const res = await apiLogin(username, password);
       const token = res.data?.token || '';
       if (!token) throw new Error('登录响应缺少 token');
@@ -209,9 +211,11 @@ export const useAuthStore = defineStore('auth', {
      * 登出 — 调 /auth/logout, 清 token, 回到匿名状态
      */
     async logout() {
+      dbg('auth.ops', '发起登出', `username=${this.currentUser?.username ?? ''}`);
       try {
         await apiLogout();
       } catch (e) {
+        dbgErr('auth.ops', '登出 (后端调用)', e);
         // 即使后端登出失败, 前端也要清干净
         console.warn('[useAuthStore] logout 后端调用失败, 仍清前端 token:', e?.message);
       }

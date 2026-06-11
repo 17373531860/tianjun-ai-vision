@@ -1,16 +1,19 @@
 {
   "name": "ng_missing_step",
-  "description": "顺序模式 NG 周期：step_a 与 step_c 出现，step_b 全程不出现，预期一个 NG cycle。",
+  "description": "顺序模式 NG 周期：step_a 与 step_c 出现，step_b 全程不出现；尾部 step_a 重现触发 first_step 结算 → 预期一个 NG cycle（原因=缺少 step_b）。",
   "fps": 60,
   "expected": {
     "ok_cycle_increment": 0,
-    "ng_cycle_increment": 1
+    "ng_cycle_increment": 1,
+    "ng_reason_contains": "step_b"
   },
   "timeline": [
     { "from": 0,   "to": 9,   "detections": [] },
     { "from": 10,  "to": 39,  "detections": [{ "label": "step_a", "confidence": 0.95, "bbox": [0.10, 0.10, 0.20, 0.20] }] },
     { "from": 40,  "to": 89,  "detections": [] },
     { "from": 90,  "to": 119, "detections": [{ "label": "step_c", "confidence": 0.94, "bbox": [0.70, 0.10, 0.20, 0.20] }] },
-    { "from": 120, "to": 200, "detections": [] }
+    { "from": 120, "to": 149, "detections": [] },
+    { "from": 150, "to": 200, "detections": [{ "label": "step_a", "confidence": 0.95, "bbox": [0.10, 0.10, 0.20, 0.20] }] },
+    { "from": 201, "to": 360, "detections": [] }
   ]
 }

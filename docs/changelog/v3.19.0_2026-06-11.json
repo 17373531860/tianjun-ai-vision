@@ -1,0 +1,86 @@
+{
+  "version": "3.19.0",
+  "date": "2026-06-11",
+  "previous_version": "3.18.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "全局调试日志系统（调试中心）",
+      "symptom": "现场排障要关软件开终端重启、Windows cmd 乱码、终端信息混杂无法按模块过滤",
+      "root_cause": "缺少统一的分类调试设施，日志只进终端不落盘，无应用内查看入口",
+      "fix": "后端 debug_center（分类开关+环形缓冲+UTF-8旋转落盘+默认全关零开销）+ /debug/* API + HTTP 5xx 中间件 + 全后端/前端/Electron 埋点 + 系统设置「调试设置」Tab（开发者模式专属，开关矩阵+实时日志查看器）",
+      "files": ["backend/core/debug_center.py", "backend/api/debug.py", "backend/main.py", "frontend/src/views/Settings/DebugPanel.vue", "frontend/src/store/useDebugStore.js", "frontend/src/utils/debug.js", "electron/main.js", "electron/backend-manager.js"],
+      "keywords": ["调试中心", "debug center", "调试设置", "实时日志", "开发者模式", "ring buffer", "分类开关", "零开销", "日志落盘", "rotating log"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "NG 原因可解释性埋点",
+      "symptom": "某模式持续 NG 时无法定位原因：缺哪步、为什么不开周期、为什么步骤被拒收",
+      "root_cause": "结算/逐件覆盖/步骤判定的拒绝分支大多静默 return 或仅 print，无结构化原因输出",
+      "fix": "per_item 周期不开始原因+漏件明细、step_stats 置信度/ROI 拒收原因、顺序结算缺步清单、超时强制 NG 原因、残留步骤跳过留痕；热路径 1-2 秒节流",
+      "files": ["backend/api/source_per_item_mixin.py", "backend/api/source_settlement_mixin.py", "backend/api/source_step_stats_mixin.py", "backend/api/source_events_check_mixin.py", "backend/api/source_session_lifecycle_mixin.py"],
+      "keywords": ["NG原因", "为什么NG", "周期不开始", "置信度拒收", "ROI过滤", "漏件", "缺少步骤", "per_item", "settlement", "可解释性"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "showcase 展会插件 v1.2.2 重打包重签名",
+      "symptom": "插件 v1.2.1 打包后又改了 logo 与顶栏布局，目录摘要与清单不一致无法安装",
+      "root_cause": "logo 替换等改动落在源目录但未重新打包签名，files_digest 漂移",
+      "fix": "bump 1.2.2 → pack-plugin 重算摘要 → 主作者私钥重签（指纹 d1f2fcb6）→ 主程序验签器 5/5 通过 → 签名态同步回源目录与示例目录",
+      "files": ["plugins/showcase/plugin.json", "plugins/showcase/signature.bin", "plugins-examples/tianjun-showcase/plugin.json", "dist-plugin/signed/天军_展会_全应用定制界面-1.2.2-showcase.tjvplugin"],
+      "keywords": ["showcase", "展会插件", "重签名", "files_digest", "logo", "1.2.2", "tjvplugin"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "桌面图标圆角化",
+      "symptom": "安装包图标四角生硬",
+      "root_cause": "原图标为直角矩形",
+      "fix": "icon.ico/png 及全尺寸 icons 重新生成，圆角烘进 PNG alpha",
+      "files": ["electron/build/icon.ico", "electron/build/icon.png", "electron/build/icons/"],
+      "keywords": ["图标", "icon", "圆角", "logo"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "统计接口支持按项目过滤",
+      "symptom": "多项目同一天生产时步骤耗时/置信度统计混入其它项目数据",
+      "root_cause": "统计端点圈定周期范围时只按日期/会话过滤，无项目维度",
+      "fix": "步骤平均/周期平均端点新增项目过滤参数",
+      "files": ["backend/api/sessions_stats.py"],
+      "keywords": ["统计", "step_averages", "project_id", "多项目", "数据混淆"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "虚拟测试源最小项目配置缺步骤 ID 致周期静默丢弃",
+      "symptom": "synthetic 剧本跑顺序模式 NG 场景，周期不出 OK/NG 也无日志（孤儿周期）",
+      "root_cause": "测试运行时生成的最小项目步骤无 id、无序列定义，顺序结算在序列为空时直接丢弃周期且不留痕",
+      "fix": "最小项目配置补步骤 id + 序列定义 + 事件计数器；静默丢弃分支补调试日志",
+      "files": ["backend/api/test_runtime_routes.py", "backend/api/source_settlement_mixin.py"],
+      "keywords": ["synthetic", "孤儿周期", "静默丢弃", "sequence_order", "步骤id", "虚拟检测"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "Windows 手动 cmd 启动日志乱码（彻底版）",
+      "symptom": "客户机 cmd 启动软件终端全乱码，排障需反复重启",
+      "root_cause": "cmd 默认 GBK 码页错解码 UTF-8 中文日志，且日志只进终端不落盘",
+      "fix": "主进程最早 chcp 65001 + 全日志 UTF-8 旋转落盘 + 应用内调试面板直看",
+      "files": ["electron/main.js", "electron/backend-manager.js"],
+      "keywords": ["乱码", "chcp 65001", "GBK", "日志落盘", "cmd", "Windows"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-frontend", "debug-source"],
+  "files_changed": ["backend/core/debug_center.py", "backend/api/debug.py", "backend/main.py", "backend/api/source_per_item_mixin.py", "backend/api/source_settlement_mixin.py", "backend/api/source_step_stats_mixin.py", "backend/api/source_events_check_mixin.py", "backend/api/source_session_lifecycle_mixin.py", "backend/api/test_runtime_routes.py", "backend/api/sessions_stats.py", "frontend/src/views/Settings/DebugPanel.vue", "frontend/src/store/useDebugStore.js", "frontend/src/utils/debug.js", "electron/main.js", "electron/backend-manager.js", "plugins/showcase/", "tests/test_debug_ng_reason.py", "tests/uat/uat_20260611_ng_reason_debug.py"]
+}

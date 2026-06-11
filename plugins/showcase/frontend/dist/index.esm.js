@@ -27,7 +27,8 @@ export function register(ctx) {
   const { h, defineComponent, ref, onMounted, onBeforeUnmount } = vue;
   const api = host.api;
   const base = ((api && api.defaults && api.defaults.baseURL) || "/api/v1").replace(/\/$/, "");
-  const appUrl = base + "/plugins/active/assets/frontend/dist/showcase-app.html";
+  // 带时间戳防 HTTP 缓存: 浏览器/Electron 会缓存旧版 HTML, 升级插件后按钮绑定停留在旧代码
+  const appUrl = base + "/plugins/active/assets/frontend/dist/showcase-app.html?v=" + Date.now();
 
   // ==================== 双向桥: 通用 REST 代理 ====================
   // iframe 内通过 postMessage 发 {__tjscAction:true, id, action:'api', payload:{method,url,params,data}}
@@ -37,10 +38,10 @@ export function register(ctx) {
     window.__tjscBridgeReady = true;
     window.addEventListener("message", async (ev) => {
       const d = ev && ev.data;
-      if (!d || d.__tjscAction !== true || d.action !== "api") return;
+      if (!d || d.__tjscAction !== true) return;
+      if (d.action !== "api" && d.action !== "upload" && d.action !== "download") return;
       const id = d.id;
       const p = d.payload || {};
-      const method = String(p.method || "get").toLowerCase();
       const reply = (ok, data, error, status) => {
         try {
           ev.source && ev.source.postMessage(
@@ -48,12 +49,67 @@ export function register(ctx) {
           );
         } catch (e) { /* iframe 已卸载等情况静默 */ }
       };
+      // ==================== 文件上传分支 ====================
+      // iframe 把 File 对象 (postMessage 结构化克隆可传) 发上来, 父层包成
+      // FormData 走 multipart; JSON 桥传不了文件, 故单列。超时放大到 5 分钟。
+      if (d.action === "upload") {
+        try {
+          const fd = new FormData();
+          const fname = p.filename || (p.file && p.file.name) || "upload.bin";
+          fd.append("file", p.file, fname);
+          const fields = p.fields || {};
+          Object.keys(fields).forEach((k) => {
+            if (fields[k] != null && fields[k] !== "") fd.append(k, fields[k]);
+          });
+          // host.api 实例默认 Content-Type 是 application/json, 不覆盖的话
+          // FormData 体会顶着 JSON 头发出去, 后端表单解析失败 422 (file/name 全丢)。
+          const res = await api.post(p.url, fd, {
+            params: p.params || undefined,
+            timeout: 300000,
+            headers: { "Content-Type": "multipart/form-data" },
+          });
+          reply(true, res && res.data, null, res && res.status);
+        } catch (err) {
+          const r = err && err.response;
+          reply(false, r && r.data, (err && err.message) || "上传失败", r && r.status);
+        }
+        return;
+      }
+      // ==================== 二进制下载分支 ====================
+      // CSV 导出 / 自定义渲染 / 数据库备份等返回文件流, JSON 桥拿不到,
+      // 父层以 blob 取回 (Blob 可结构化克隆) 连同文件名回传 iframe 触发保存。
+      if (d.action === "download") {
+        try {
+          const m = String(p.method || "get").toLowerCase();
+          const cfg = { params: p.params || undefined, responseType: "blob", timeout: 300000 };
+          const res = m === "get"
+            ? await api.get(p.url, cfg)
+            : await api[m](p.url, p.data || {}, cfg);
+          let fname = p.filename || "download.bin";
+          const cd = res.headers && (res.headers["content-disposition"] || res.headers["Content-Disposition"]);
+          if (cd) {
+            const mm = /filename\*?=(?:UTF-8'')?"?([^";]+)/i.exec(cd);
+            if (mm) { try { fname = decodeURIComponent(mm[1]); } catch (e) { fname = mm[1]; } }
+          }
+          reply(true, { blob: res.data, filename: fname }, null, res && res.status);
+        } catch (err) {
+          const r = err && err.response;
+          reply(false, null, (err && err.message) || "下载失败", r && r.status);
+        }
+        return;
+      }
+      const method = String(p.method || "get").toLowerCase();
       try {
         let res;
-        if (method === "get" || method === "delete") {
-          res = await api[method](p.url, { params: p.params || undefined });
+        // headers 透传: 插件侧登录后可带自己的 Authorization (宿主无 token 时生效)
+        const cfg = { params: p.params || undefined, headers: p.headers || undefined };
+        if (method === "get") {
+          res = await api.get(p.url, cfg);
+        } else if (method === "delete") {
+          // axios delete 的 body 走 config.data (后端部分 DELETE 端点要请求体)
+          res = await api.delete(p.url, { ...cfg, data: p.data || undefined });
         } else {
-          res = await api[method](p.url, p.data || {}, { params: p.params || undefined });
+          res = await api[method](p.url, p.data || {}, cfg);
         }
         reply(true, res && res.data, null, res && res.status);
       } catch (err) {
@@ -68,6 +124,7 @@ export function register(ctx) {
     setup() {
       const frame = ref(null);
       let timer = null;
+      let detTimer = null;
 
       // ==================== 真实数据泵 ====================
       // 轮询关键接口, 把真值 postMessage 给 iframe。iframe 内 __tjsc 接收器消费。
@@ -100,12 +157,29 @@ export function register(ctx) {
         } catch (e) { /* 跨域/未就绪时静默 */ }
       }
 
+      // 检测结果单独高频轮询: 视频 MJPEG 实时, 检测框/OK-NG 提示靠这条数据驱动,
+      // 跟 1.5s 的设备/评分轮询分开, 否则框一跳一跳很卡
+      async function pumpDetection() {
+        if (!api) return;
+        const win = frame.value && frame.value.contentWindow;
+        if (!win) return;
+        try {
+          const r = await api.get("/source/detection/results", { params: { channel: 0 } });
+          win.postMessage({ __tjsc: true, detection: r && r.data }, "*");
+        } catch (e) { /* 未就绪静默 */ }
+      }
+
       onMounted(() => {
         // 首拍延迟到 iframe 内脚本就绪后再发
         timer = setInterval(pump, 1500);
         setTimeout(pump, 1200);
+        detTimer = setInterval(pumpDetection, 400);
+        setTimeout(pumpDetection, 700);
       });
-      onBeforeUnmount(() => { if (timer) clearInterval(timer); });
+      onBeforeUnmount(() => {
+        if (timer) clearInterval(timer);
+        if (detTimer) clearInterval(detTimer);
+      });
 
       return () => h("iframe", {
         ref: frame,

@@ -355,6 +355,32 @@ def _reset_cycle_state(h):
     h.step_start_time = {}
 
 
+def _reset_cumulative_step_stats(h):
+    """项目切换时清空累计统计 (步骤计数/截图/耗时/PT 分段/周期节拍).
+
+    背景: 这些字段按设计归 reset_stats 管 (用户手动"清零"才触发), 但"切换激活项目"
+    这条路径两边都不清 —— step_counts 等 dict 以步骤 label 为 key, 旧项目的标签会
+    一直挂在 detection/results 返回里, Monitor 步骤统计表持续显示上一个项目的步骤名;
+    cycle_times 同理会把两个项目的节拍混在一起拉歪均值。
+    只在项目身份变化 (id 不同) 时调用; 同一项目运行中保存配置不走这里, 当天统计不丢。
+    线程安全: 与 _reset_step_state_dicts 同款"整体重新赋值"模式 (单写多读, 引用替换)。
+    """
+    h.step_counts = {}
+    h.step_screenshots = {}
+    h.step_detection_times = {}
+    h.step_durations = {}
+    h.step_intervals = {}
+    h.step_durations_history = {}
+    h.step_cycle_durations = {}
+    h.step_cycle_durations_history = {}
+    h.step_cycle_segments = {}
+    if hasattr(h, 'step_visible_seconds'):
+        h.step_visible_seconds = {}
+    h.cycle_times = []
+    h.ng_cycle_times = []
+    h.last_step_completed_time = None
+
+
 def _apply_tracking_mode(h, config, pipeline_config):
     """tracking 模式: 重置计数 + 生成 custom tracker yaml + container 配置"""
     if config.get('logic_mode') != 'tracking':
@@ -398,6 +424,9 @@ def _print_summary(h, config, steps_config, pipeline_config):
 # ============================================================
 def apply_project_config(h, config: dict):
     """应用项目配置 → 重置全部步骤/周期状态 + 计数器"""
+    # 项目身份变化检测必须在覆盖 h.project_config 之前取旧 id
+    _old_project_id = (h.project_config or {}).get('id') if hasattr(h, 'project_config') else None
+    _new_project_id = config.get('id')
     h.project_config = config
 
     _apply_rod_filter(h, config)
@@ -413,6 +442,13 @@ def apply_project_config(h, config: dict):
 
     _apply_counters(h, config)
     _reset_cycle_state(h)
+
+    # v3.17.x: 切换到不同项目时清空累计统计, 防止旧项目标签残留在步骤统计表
+    # (同一项目重复应用配置 —— 如运行中保存阈值 —— 不清, 保住当天统计)
+    if _old_project_id is not None and _new_project_id is not None \
+            and _old_project_id != _new_project_id:
+        _reset_cumulative_step_stats(h)
+        print(f"[项目切换] {_old_project_id} → {_new_project_id}, 累计步骤统计已清零")
 
     # v3.8.x: 切换项目后统一清空步骤运行时状态.
     # _reset_step_state_dicts / _reset_cycle_state 只重建了"配置类字典 + 周期序列",

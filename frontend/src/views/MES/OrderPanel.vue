@@ -13,6 +13,10 @@
           <el-option label="已取消" value="cancelled" />
         </el-select>
         <el-button size="small" type="primary" @click="loadOrders">查询</el-button>
+        <div class="flex items-center gap-1">
+          <el-switch v-model="onlyCurrentProject" size="small" @change="handleProjectScopeChange" />
+          <span class="text-xs text-gray-400">仅当前项目<template v-if="onlyCurrentProject && projectStore.currentProjectName">（{{ projectStore.currentProjectName }}）</template></span>
+        </div>
       </div>
       <div class="flex items-center gap-2">
         <el-switch v-model="autoRefresh" size="small" active-text="自动刷新" @change="toggleAutoRefresh" />
@@ -317,7 +321,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, h } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, h } from 'vue'
 import {
   ElMessage, ElMessageBox,
   ElInput, ElInputNumber, ElDatePicker, ElTimePicker,
@@ -327,6 +331,11 @@ import { Close } from '@element-plus/icons-vue'
 import { getOrders, createOrder, updateOrder, changeOrderStatus, deleteOrder, updateOrderExtraData } from '@/api/mes'
 import { getProjects } from '@/api/project'
 import { getClusterConfig } from '@/api/cluster'
+import { useProjectStore } from '@/store/useProjectStore'
+import { dbg, dbgErr } from '@/utils/debug'
+
+const projectStore = useProjectStore()
+const onlyCurrentProject = ref(true)
 
 // ========== 模板常量 ==========
 const TEMPLATE_KEY = 'mes_order_form_template_v1'
@@ -772,6 +781,7 @@ const loadOrders = async () => {
     const res = await getOrders({
       keyword: keyword.value || undefined,
       status: filterStatus.value || undefined,
+      project_id: (onlyCurrentProject.value && projectStore.currentProjectId) ? projectStore.currentProjectId : undefined,
       skip: (currentPage.value - 1) * pageSize.value,
       limit: pageSize.value,
     })
@@ -780,9 +790,15 @@ const loadOrders = async () => {
     const serverTotal = res.data.total || 0
     total.value = Math.max(0, serverTotal - archivedOrderIds.value.size)
   } catch (e) {
+    dbgErr('mes.order', '加载工单列表', e)
     ElMessage.error('加载工单失败')
   }
 }
+
+const handleProjectScopeChange = () => { currentPage.value = 1; loadOrders() }
+watch(() => projectStore.currentProjectId, () => {
+  if (onlyCurrentProject.value) { currentPage.value = 1; loadOrders() }
+})
 
 const toggleAutoRefresh = (val) => {
   if (val) {
@@ -816,6 +832,7 @@ const loadBindingOptions = async () => {
 }
 
 const openCreate = async () => {
+  dbg('mes.order', '点击「新建工单」')
   editingId.value = null
   _editingExtraOriginal.value = {}
   presetValues.value = {}
@@ -830,6 +847,7 @@ const openCreate = async () => {
 }
 
 const editOrder = async (row) => {
+  dbg('mes.order', '点击「编辑工单」', `id=${row?.id} order_no=${row?.order_no || ''}`)
   editingId.value = row.id
   const extra = row.extra_data || {}
   _editingExtraOriginal.value = JSON.parse(JSON.stringify(extra))
@@ -863,6 +881,7 @@ function defaultValueFor(it) {
 
 // ========== 保存工单 ==========
 const handleSave = async () => {
+  dbg('mes.order', editingId.value ? '点击「保存编辑工单」' : '点击「保存新建工单」', `id=${editingId.value ?? ''} order_no=${presetValues.value?.order_no || ''}`)
   // 1) 必填校验：按模板中 required=true 的字段检查
   for (const it of formItems.value) {
     const v = it.preset ? presetValues.value[it.key] : customValues.value[it.key]
@@ -922,9 +941,11 @@ const handleSave = async () => {
       await createOrder(payload)
       ElMessage.success('工单已创建')
     }
+    dbg('mes.order', editingId.value ? '工单更新成功' : '工单创建成功', `scope=${bf?.scope || ''} order_no=${payload?.order_no || ''}`)
     showCreate.value = false
     loadOrders()
   } catch (e) {
+    dbgErr('mes.order', '保存工单', e)
     ElMessage.error(e.response?.data?.detail || '保存失败')
   } finally {
     saving.value = false
@@ -933,16 +954,19 @@ const handleSave = async () => {
 
 // ========== 状态/删除 ==========
 const changeStatus = async (row, status) => {
+  dbg('mes.order', '点击「工单状态流转」', `id=${row?.id} order_no=${row?.order_no || ''} ${row?.status || ''} -> ${status}`)
   try {
     await changeOrderStatus(row.id, { status })
     ElMessage.success(`工单 ${row.order_no} 状态已变更为 ${statusLabel(status)}`)
     loadOrders()
   } catch (e) {
+    dbgErr('mes.order', '工单状态流转', e)
     ElMessage.error(e.response?.data?.detail || '状态变更失败')
   }
 }
 
 const handleDelete = async (row) => {
+  dbg('mes.order', '点击「删除工单」', `id=${row?.id} order_no=${row?.order_no || ''} status=${row?.status || ''}`)
   try {
     if (['draft', 'cancelled'].includes(row.status)) {
       await ElMessageBox.confirm(`确定删除工单 ${row.order_no}？此操作不可恢复。`, '确认')
@@ -962,6 +986,7 @@ const handleDelete = async (row) => {
     ElMessage.success('工单已归档隐藏')
     loadOrders()
   } catch (e) {
+    if (e !== 'cancel' && e !== 'close') dbgErr('mes.order', '删除工单', e)
     if (e !== 'cancel' && e !== 'close')
       ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
   }

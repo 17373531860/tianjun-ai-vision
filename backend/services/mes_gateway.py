@@ -16,6 +16,7 @@ from typing import Optional
 from backend.db.database import SessionLocal
 from backend.models.mes_models import MESConnection, MESCommLog
 from backend.services.mes_adapters import get_adapter
+from backend.core import debug_center
 
 
 class MESGateway:
@@ -43,6 +44,8 @@ class MESGateway:
                 .filter(MESConnection.enabled == True)
                 .all()
             )
+            if debug_center.is_on("backend.gateway"):
+                debug_center.dbg("backend.gateway", "dispatch 入口", f"event={event_type} channel={channel_id if channel_id is not None else '-'} enabled_conns={len(connections)}")
             for conn in connections:
                 events = conn.push_events or []
                 if event_type not in events:
@@ -54,6 +57,7 @@ class MESGateway:
             db.commit()
         except Exception as e:
             db.rollback()
+            debug_center.dbg("backend.gateway", "dispatch 异常(含 payload 构建)", f"event={event_type} channel={channel_id if channel_id is not None else '-'} err={e}")
             print(f"[MES Gateway] 分发失败: {e}", flush=True)
             traceback.print_exc()
         finally:
@@ -113,6 +117,7 @@ class MESGateway:
         try:
             adapter = get_adapter(conn.adapter_type)
         except ValueError as e:
+            debug_center.dbg("backend.gateway", "适配器不存在,推送中止", f"conn={getattr(conn, 'name', None) or conn.id} adapter={getattr(conn, 'adapter_type', '-')} err={e}")
             self._log(db, conn.id, event_type, "push",
                       error_msg=str(e), success=False)
             return
@@ -124,10 +129,14 @@ class MESGateway:
         retry_interval = conn.retry_interval_sec or 5
         last_result = None
 
+        if debug_center.is_on("backend.gateway"):
+            debug_center.dbg("backend.gateway", "推送发起", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} adapter={getattr(conn, 'adapter_type', '-')} retry_max={retry_count}")
         for attempt in range(1 + retry_count):
             if attempt > 0:
                 time.sleep(retry_interval)
                 print(f"[MES Gateway] 重试 {attempt}/{retry_count}: {conn.name}", flush=True)
+                if debug_center.is_on("backend.gateway"):
+                    debug_center.dbg("backend.gateway", "推送重试", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} attempt={attempt}/{retry_count}")
 
             result = adapter.send(payload, effective_config)
             last_result = result
@@ -148,6 +157,8 @@ class MESGateway:
                 conn.last_sync_at = datetime.now()
                 db.flush()
                 print(f"[MES Gateway] 推送成功: {conn.name} ({event_type})", flush=True)
+                if debug_center.is_on("backend.gateway"):
+                    debug_center.dbg("backend.gateway", "推送成功", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} status={result.get('status_code') or '-'} attempt={attempt} duration_ms={result.get('duration_ms') or '-'}")
                 return
 
         error_msg = last_result.get("error") if last_result else "未知错误"
@@ -166,6 +177,7 @@ class MESGateway:
             error_msg=error_msg,
         )
         print(f"[MES Gateway] 推送失败: {conn.name} ({event_type}) - {error_msg}", flush=True)
+        debug_center.dbg("backend.gateway", "推送失败(重试耗尽)", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} attempts={1 + retry_count} status={(last_result or {}).get('status_code') or '-'} err={error_msg or '-'}")
 
     @staticmethod
     def _apply_auth_to_headers(config: dict) -> dict:

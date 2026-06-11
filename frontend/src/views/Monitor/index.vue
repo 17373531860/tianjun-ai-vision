@@ -1460,6 +1460,7 @@ import api, { getBackendHost } from '@/api/index';
 import { getExtraFieldsSchema, setExtraFields } from '@/api/gateway';
 import PerItemPanel from './PerItemPanel.vue';
 import TjSlot from '@/components/TjSlot.vue';
+import { dbg, dbgErr } from '@/utils/debug';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
@@ -2352,7 +2353,7 @@ const startMultiPolling = () => {
         promises.push(
           getDetectionResults(ch)
             .then(res => processChannelResult(ch, res.data))
-            .catch(() => {})
+            .catch((e) => { dbgErr('monitor.poll', `工位${ch + 1} 结果轮询`, e); })
         );
         if (multiChannelData.value[ch]?.sourceType === 'video' && !multiDraggingProgress.value[ch]) {
           promises.push(
@@ -2524,7 +2525,9 @@ const _resolveModelPath = async (modelId, modelFormat = 'pytorch_fp32') => {
 
 const startDetectionForChannel = async (ch) => {
   const chProj = multiChannelData.value[ch]?.project || currentProject.value;
+  dbg('monitor.control', `点击「开始」(工位${ch + 1})`, `project=${chProj?.name || '无'}`);
   if (!chProj) {
+    dbg('monitor.control', `工位${ch + 1} 开始被拒: 未绑定项目`);
     ElMessage.warning(`工位 ${ch + 1} 未绑定项目`);
     return;
   }
@@ -2589,14 +2592,17 @@ const startDetectionForChannel = async (ch) => {
         ElMessage.warning(`副模型路径解析失败已跳过: ${failedSlots.join(', ')}`);
       }
       await apiStartDetection({ models: specs }, undefined, undefined, ch, _sessionId);
+      dbg('monitor.control', `工位${ch + 1} 启动成功 (多模型 ${specs.length})`);
       ElMessage.success(
         `工位 ${ch + 1} 检测已启动 (主 + ${specs.length - 1} 个副模型)`
       );
     } else {
       await apiStartDetection(mainPath, 0.25, 0.45, ch, _sessionId);
+      dbg('monitor.control', `工位${ch + 1} 启动成功`);
       ElMessage.success(`工位 ${ch + 1} 检测已启动`);
     }
   } catch (e) {
+    dbgErr('monitor.control', `工位${ch + 1} 启动`, e);
     ElMessage.error(`工位 ${ch + 1} 启动失败: ${e.message}`);
   }
 };
@@ -2649,25 +2655,31 @@ const confirmScanPairBeforeStop = async (ch) => {
 };
 
 const stopDetectionForChannel = async (ch) => {
-  if (!(await confirmScanPairBeforeStop(ch))) return;
+  dbg('monitor.control', `点击「停止」(工位${ch + 1})`);
+  if (!(await confirmScanPairBeforeStop(ch))) { dbg('monitor.control', `工位${ch + 1} 停止被取消: scan_pair 确认未通过`); return; }
   try {
     await pauseDetection(ch);
     if (multiChannelData.value[ch]) multiChannelData.value[ch].isDetecting = false;
     updateGlobalDetectingState();
+    dbg('monitor.control', `工位${ch + 1} 停止成功`);
     ElMessage.info(`工位 ${ch + 1} 已停止`);
   } catch (e) {
+    dbgErr('monitor.control', `工位${ch + 1} 停止`, e);
     ElMessage.error(`工位 ${ch + 1} 停止失败`);
   }
 };
 
 const standbyForChannel = async (ch) => {
-  if (!(await confirmScanPairBeforeStop(ch))) return;
+  dbg('monitor.control', `点击「待机」(工位${ch + 1})`);
+  if (!(await confirmScanPairBeforeStop(ch))) { dbg('monitor.control', `工位${ch + 1} 待机被取消: scan_pair 确认未通过`); return; }
   try {
     await standbyDetection(ch);
     if (multiChannelData.value[ch]) multiChannelData.value[ch].isDetecting = false;
     updateGlobalDetectingState();
+    dbg('monitor.control', `工位${ch + 1} 待机成功`);
     ElMessage.info(`工位 ${ch + 1} 已待机`);
   } catch (e) {
+    dbgErr('monitor.control', `工位${ch + 1} 待机`, e);
     ElMessage.error(`工位 ${ch + 1} 待机失败`);
   }
 };
@@ -2758,6 +2770,7 @@ const armStreamWatchdog = (timeoutMs) => {
     }
     streamConnectAttempts++;
     console.warn(`[MJPEG] watchdog 第 ${streamConnectAttempts} 次强制重连: ${timeoutMs}ms 内未收到帧, 重建 <img> DOM`);
+    dbg('monitor.video', `watchdog 强制重连 (第${streamConnectAttempts}次)`, `${timeoutMs}ms 内未收到帧`);
     isStreaming.value = false;
     streamSrc0.value = '';
     streamSrc1.value = '';
@@ -2774,6 +2787,7 @@ const armStreamWatchdog = (timeoutMs) => {
 const connectStream = () => {
   // 先清两个 img 的 src + 重建 DOM, 让浏览器关掉潜在旧 socket;
   // nextTick 后再设新 url, 配合 watchdog 形成完整的"破 socket 复用"信号。
+  dbg('monitor.video', '连接视频流', `channel=${selectedChannel.value || 0}`);
   streamSrc0.value = '';
   streamSrc1.value = '';
   isStreaming.value = false;
@@ -2789,6 +2803,7 @@ const connectStream = () => {
 };
 
 const disconnectStream = () => {
+  dbg('monitor.video', '断开视频流');
   if (streamWatchdogTimer) {
     clearTimeout(streamWatchdogTimer);
     streamWatchdogTimer = null;
@@ -2843,6 +2858,7 @@ const onStreamError = (idx) => {
   // (uvicorn 日志同一秒内建 3 次 /video_feed 长连接 → 闭环已确认.)
   if (idx !== activeStream.value) return;
   streamErrorCount++;
+  dbg('monitor.video', `视频流错误 (第${streamErrorCount}次)`, `img=${idx}`);
   if (streamErrorCount > 50) return;
   const delay = Math.min(streamErrorCount * 300, 3000);
   if (streamReconnectTimer) {
@@ -3149,6 +3165,7 @@ const speak = (text, ch = null) => {
 
 // 显示提示框（新版：根据 toast_id 获取配置）
 const showToastById = (toastId, eventName, reason = '') => {
+  dbg('monitor.events', `事件提示 [${toastId}] ${eventName || ''}`, reason || '');
   const config = getToastConfig(toastId);
   
   const icons = {
@@ -4012,11 +4029,13 @@ const syncProjectConfig = async (channel = 0, explicitProject = null) => {
 };
 
 const startDetection = async () => {
+  dbg('monitor.control', '点击「开始检测」', `project=${currentProject.value?.name || '无'} running=${isRunning.value} detecting=${isDetecting.value} paused=${isPaused.value}`);
   if (!currentProject.value) {
+    dbg('monitor.control', '开始检测被拒: 未选择项目');
     ElMessage.warning('请先选择项目');
     return;
   }
-  if (isOperating.value) return;
+  if (isOperating.value) { dbg('monitor.control', '开始检测被拒: 操作进行中'); return; }
   isOperating.value = true;
   
   try {
@@ -4037,6 +4056,7 @@ const startDetection = async () => {
         await resumeInference();
         isDetecting.value = true;
         projectStore.setRunningStatus(true);
+        dbg('monitor.control', '开始检测成功 (待机快速恢复)');
         ElMessage.success('已从待机恢复检测');
         startPolling();
         return;
@@ -4055,6 +4075,7 @@ const startDetection = async () => {
         isDetecting.value = true;
         projectStore.setRunningStatus(true);
         forceReconnectStream();
+        dbg('monitor.control', '开始检测成功 (暂停快速恢复)');
         ElMessage.success('检测已恢复');
         startPolling();
         return;
@@ -4159,6 +4180,7 @@ const startDetection = async () => {
       isPaused.value = false;
       projectStore.setRunningStatus(true);
       forceReconnectStream();
+      dbg('monitor.control', `开始检测成功 (多模型 ${specs.length})`, `session=${_sessionId || '自动'}`);
       ElMessage.success(`检测已开始 (主 + ${specs.length - 1} 个副模型)`);
       startPolling();
       return;
@@ -4170,11 +4192,13 @@ const startDetection = async () => {
     isPaused.value = false;
     projectStore.setRunningStatus(true);
     forceReconnectStream();
+    dbg('monitor.control', '开始检测成功 (完整启动)', `session=${_sessionId || '自动'}`);
     ElMessage.success(sessionName.value ? `检测已开始（会话 ID: ${sessionName.value}）` : '检测已开始');
     startPolling();
     
   } catch (err) {
     console.error('启动检测失败:', err);
+    dbgErr('monitor.control', '开始检测', err);
     ElMessage.error('启动检测失败: ' + (err.response?.data?.detail || err.message));
   } finally {
     isOperating.value = false;
@@ -4182,9 +4206,10 @@ const startDetection = async () => {
 };
 
 const stopDetectionHandler = async () => {
-  if (isOperating.value) return;
+  dbg('monitor.control', '点击「停止」', `running=${isRunning.value} detecting=${isDetecting.value}`);
+  if (isOperating.value) { dbg('monitor.control', '停止被拒: 操作进行中'); return; }
   // v3.3.0 码-码闭环: 单工位 stop 也走同一确认流程; 多工位时仅检查当前选中
-  if (!(await confirmScanPairBeforeStop(selectedChannel.value || 0))) return;
+  if (!(await confirmScanPairBeforeStop(selectedChannel.value || 0))) { dbg('monitor.control', '停止被取消: scan_pair 确认未通过'); return; }
   isOperating.value = true;
   try {
     await pauseDetection();
@@ -4194,9 +4219,11 @@ const stopDetectionHandler = async () => {
     projectStore.setRunningStatus(false);
     stopPolling();
     disconnectStream();
+    dbg('monitor.control', '停止成功: 画面与检测已暂停');
     ElMessage.info('已停止：画面和检测都已暂停');
   } catch (err) {
     console.error('停止检测失败:', err);
+    dbgErr('monitor.control', '停止', err);
     ElMessage.error('停止失败: ' + (err.response?.data?.detail || err.message));
   } finally {
     isOperating.value = false;
@@ -4506,7 +4533,8 @@ const startPolling = () => {
         connectStream();
       }
     } catch (err) {
-      // 静默处理轮询错误
+      // 静默处理轮询错误 (调试开关开启时可见)
+      dbgErr('monitor.poll', '检测结果轮询', err);
     } finally {
       pollingInProgress = false;
     }
@@ -5009,8 +5037,9 @@ const stopPolling = () => {
 };
 
 const standbyHandler = async () => {
-  if (isOperating.value) return;
-  if (!(await confirmScanPairBeforeStop(selectedChannel.value || 0))) return;
+  dbg('monitor.control', '点击「待机」', `running=${isRunning.value} detecting=${isDetecting.value}`);
+  if (isOperating.value) { dbg('monitor.control', '待机被拒: 操作进行中'); return; }
+  if (!(await confirmScanPairBeforeStop(selectedChannel.value || 0))) { dbg('monitor.control', '待机被取消: scan_pair 确认未通过'); return; }
   isOperating.value = true;
   try {
     await standbyDetection();
@@ -5027,9 +5056,11 @@ const standbyHandler = async () => {
     if (!pollingTimer) {
       startPolling();
     }
+    dbg('monitor.control', '待机成功: 检测停止, 画面继续');
     ElMessage.info('已待机：检测停止，画面继续');
   } catch (err) {
     console.error('待机失败:', err);
+    dbgErr('monitor.control', '待机', err);
     ElMessage.error('待机失败: ' + (err.response?.data?.detail || err.message));
   } finally {
     isOperating.value = false;
@@ -5037,13 +5068,15 @@ const standbyHandler = async () => {
 };
 
 const resetCounters = async () => {
-  if (!currentProject.value?.counters_config) return;
+  dbg('monitor.control', '点击「清零」', `project=${currentProject.value?.name || '无'}`);
+  if (!currentProject.value?.counters_config) { dbg('monitor.control', '清零跳过: 无计数器配置'); return; }
   
   // 先重置后端统计数据（关键！必须先重置后端，否则轮询会覆盖前端数据）
   try {
     await resetDetectionStats();
   } catch (e) {
     console.error('重置后端统计失败:', e);
+    dbgErr('monitor.control', '清零-后端统计重置', e);
   }
   
   // 重置所有计数器
@@ -5100,10 +5133,12 @@ const resetCounters = async () => {
 };
 
 const resetCountersForChannel = async (ch) => {
+  dbg('monitor.control', `点击「清零」(工位${ch + 1})`);
   try {
     await resetDetectionStats(ch);
   } catch (e) {
     console.error(`Ch${ch} 重置后端统计失败:`, e);
+    dbgErr('monitor.control', `工位${ch + 1} 清零-后端统计重置`, e);
   }
   const chData = multiChannelData.value[ch];
   if (chData) {

@@ -755,6 +755,7 @@ import {
   getStorageInfo
 } from '@/api/data';
 import { getProjectDetail, updateProject } from '@/api/project';
+import { dbg, dbgErr } from '@/utils/debug';
 
 const router = useRouter();
 const store = useSystemStore();
@@ -953,6 +954,7 @@ function openCustomExportDialog() {
     customExportInitialDateRange.value = null;
   }
   customExportInitialCycleId.value = null;
+  dbg('data.export', '发起自定义导出', `scope=${customExportInitialScope.value ?? ''}`);
   customExportVisible.value = true;
 }
 
@@ -1171,6 +1173,7 @@ const handleDateChange = async (date) => {
   }
   
   loadingSessions.value = true;
+  dbg('data.query', '选择日期查询', `date=${date ?? ''} ch=${channelFilter.value ?? 'all'} shift=${shiftType.value ?? ''}`);
   try {
     const { start, end } = getShiftHours();
     const dc = projectStore.currentProject?.data_config || {};
@@ -1227,6 +1230,7 @@ const selectSession = async (session) => {
     serialSearchInput.value = '';
     serialSearchActive.value = '';
   }
+  dbg('data.query', '查看会话详情', `session_id=${session?.id ?? ''} uuid=${session?.session_uuid ?? ''}`);
   selectedSession.value = session;
   loadingOverview.value = true;
   expandedRows.value = [];
@@ -1271,6 +1275,7 @@ const loadCycles = async (sessionId) => {
 };
 
 const handleCyclePageChange = (page) => {
+  dbg('data.query', '周期列表翻页', `page=${page ?? ''} search=${searchActive.value ? '1' : '0'}`);
   cyclePage.value = page;
   expandedRows.value = [];
   cycleStepsMap.value = {};
@@ -1288,6 +1293,7 @@ const runSerialSearch = async () => {
     ElMessage.info('请输入工件码');
     return;
   }
+  dbg('data.query', '工件码搜索', `q=${q}`);
   serialSearchActive.value = q;
   selectedSession.value = null;
   cyclePage.value = 1;
@@ -1311,6 +1317,7 @@ const loadSerialSearchPage = async () => {
       ElMessage.warning(`未找到与 "${serialSearchActive.value}" 关联的检测周期`);
     }
   } catch (e) {
+    dbgErr('data.query', '工件码搜索', e);
     console.error('工件码搜索失败:', e);
     ElMessage.error('工件码搜索失败');
     cycles.value = [];
@@ -1371,6 +1378,7 @@ const playStepVideo = (step) => {
 
 // 播放周期视频
 const playCycleVideo = (cycle) => {
+  dbg('data.query', '回放周期视频', `cycle_id=${cycle?.id ?? ''} video_id=${cycle?.video_id ?? '无'}`);
   if (cycle.video_id) {
     currentVideoUrl.value = getVideoUrl(cycle.video_id);
     videoDialogVisible.value = true;
@@ -1433,12 +1441,14 @@ const exportSessionData = async () => {
   if (!selectedSession.value) return;
   
   exporting.value = true;
+  dbg('data.export', '点击「导出当前会话」', `session_id=${selectedSession.value?.id ?? ''}`);
   try {
     const res = await exportSessionCsv(selectedSession.value.id);
     const filename = `session_${selectedSession.value.session_uuid}_${selectedDate.value}.csv`;
     downloadBlob(res.data, filename);
     ElMessage.success(`已导出到下载文件夹: ${filename}`);
   } catch (e) {
+    dbgErr('data.export', '导出当前会话', e);
     console.error('导出失败:', e);
     ElMessage.error('导出失败: ' + (e.message || '未知错误'));
   } finally {
@@ -1474,6 +1484,7 @@ const exportByDate = async () => {
   }
 
   exporting.value = true;
+  dbg('data.export', '点击「导出当日数据」', `date=${selectedDate.value ?? ''} fmt=${exportOutputFormat.value ?? 'csv'}`);
   try {
     const { start: sh, end: eh } = getExportShiftHours();
     const { projectId, channelId, ptMode, ctMode } = resolveExportScopeParams();
@@ -1485,6 +1496,7 @@ const exportByDate = async () => {
     downloadBlob(res.data, filename);
     ElMessage.success(`已导出到下载文件夹: ${filename}`);
   } catch (e) {
+    dbgErr('data.export', '导出当日数据', e);
     console.error('导出失败:', e);
     ElMessage.error('导出失败: ' + (e.message || '未知错误'));
   } finally {
@@ -1494,6 +1506,7 @@ const exportByDate = async () => {
 
 // 显示导出弹窗
 const showExportDialog = (type) => {
+  dbg('data.export', '打开快捷导出弹窗', `type=${type ?? ''}`);
   exportDialogType.value = type;
   // 清空之前的选择
   exportWeek.value = '';
@@ -1506,6 +1519,7 @@ const showExportDialog = (type) => {
 // 执行导出 (v3.8.x: 加 outputFormat 支持)
 const handleExport = async () => {
   exporting.value = true;
+  dbg('data.export', '执行快捷导出', `type=${exportDialogType.value ?? ''} fmt=${exportOutputFormat.value ?? 'csv'}`);
   try {
     let res, filename;
 
@@ -1532,6 +1546,7 @@ const handleExport = async () => {
     ElMessage.success(`已导出到下载文件夹: ${filename}`);
     exportDialogVisible.value = false;
   } catch (e) {
+    dbgErr('data.export', '执行快捷导出', e);
     console.error('导出失败:', e);
     ElMessage.error('导出失败: ' + (e.message || '未知错误'));
   } finally {
@@ -1603,6 +1618,7 @@ const saveExportSettings = async () => {
 
 // 备份数据库
 const handleBackup = () => {
+  dbg('data.maintain', '点击「备份数据库」');
   try {
     backupDatabase();
     ElMessage.success('数据库备份文件已开始下载');
@@ -1626,6 +1642,7 @@ const handleClearData = async () => {
     );
     
     clearing.value = true;
+    dbg('data.maintain', '确认清空所有数据');
     const res = await clearAllData();
     const deleted = res.data.deleted;
     ElMessage.success(`清理完成：${deleted.sessions}个会话, ${deleted.cycles}个周期, ${deleted.steps}条步骤, ${deleted.files}个视频文件`);
@@ -1636,6 +1653,7 @@ const handleClearData = async () => {
     cycles.value = [];
   } catch (err) {
     if (err !== 'cancel') {
+      dbgErr('data.maintain', '清空所有数据', err);
       ElMessage.error('清理失败: ' + (err.response?.data?.detail || err.message));
     }
   } finally {
@@ -1678,6 +1696,7 @@ const handleRunCleanup = async () => {
       { confirmButtonText: '确定清理', cancelButtonText: '取消', type: 'warning' }
     );
     runningCleanup.value = true;
+    dbg('data.maintain', '确认手动清理', `retention_days=${cleanupSettings?.retention_days ?? ''}`);
     await runCleanupNow();
     ElMessage.success('清理已完成');
     loadAvailableDates();
@@ -1702,6 +1721,7 @@ const handleClearRange = async () => {
       { confirmButtonText: '确定删除', cancelButtonText: '取消', type: 'warning' }
     );
     clearingRange.value = true;
+    dbg('data.maintain', '确认按范围删除', `range=${start ?? ''}~${end ?? ''}`);
     const res = await clearDataByRange(start, end);
     const d = res.data.deleted;
     ElMessage.success(`清理完成：${d.sessions}个会话, ${d.cycles}个周期, ${d.steps}条步骤, ${d.files}个文件`);
