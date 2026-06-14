@@ -253,11 +253,16 @@ def _init_event_counter_state(h):
 
 
 def _init_stack_state(h):
-    """v2.7.4 Stack 模式 (堆叠模式) 状态"""
+    """v2.7.4 Stack 模式 (堆叠模式) 状态; v3.19.x 批层语义扩展"""
     h._stack_state = {}
     h._stack_counters = {}
     h._stack_disappeared_at = {}
     h._stack_visible_frames = {}
+    # v3.19.x 批层语义 (layer_min_count): 层内达标连续帧 / 本层已闩锁 / 层内峰值 / 未达标层明细
+    h._stack_sat_frames = {}
+    h._stack_latched = {}
+    h._stack_phase_peak = {}
+    h._stack_partials = {}
 
 
 def _init_container_state(h):

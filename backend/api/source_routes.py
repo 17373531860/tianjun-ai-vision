@@ -1403,6 +1403,15 @@ def get_detection_results(channel: int = Query(0)):
         print(f"[API] /detection/results 取 per_item_state 失败: {_e}")
         result['per_item_state'] = None
 
+    # v3.19.x: 自定义模式混合子状态机运行时状态 (物品计数/唯一ID统计).
+    # 未启用混合时返回 None, 前端按 None 处理即可.
+    try:
+        _mix = getattr(mgr, '_custom_mix', None)
+        result['custom_mix_state'] = _mix.to_state() if _mix is not None else None
+    except Exception as _e:
+        print(f"[API] /detection/results 取 custom_mix_state 失败: {_e}")
+        result['custom_mix_state'] = None
+
     # 多通道场景下前端不能用 currentProject (顶部下拉框单一值) 兜底,
     # 必须每帧带上 tracking 过滤所需的字段, 否则容器模式表格里"箱子"行
     # 过滤不掉 (前端 Monitor/index.vue 的 _trkExpectedLabels 依赖这里).

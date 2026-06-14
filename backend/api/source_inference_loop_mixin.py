@@ -68,7 +68,16 @@ class InferenceLoopMixin:
         is_tracking = (_logic_mode == 'tracking')
         is_seg = (_task_type == 'segmentation')
 
-        detections = self._run_models_for_frame(frame, t_start, is_tracking, is_seg)
+        # v3.19.x: 自定义模式混合跟踪 (custom_mixed_with='tracking') 时,
+        # runner 仍走 _detect_and_track 让 detections 带 track_id (物品唯一计数用),
+        # 但 is_tracking 保持 False — 下游统计/发布仍走 _update_step_stats 步骤路径。
+        _runner_tracking = is_tracking
+        if not is_tracking and _logic_mode == 'custom' and self.project_config:
+            _pipeline = self.project_config.get('pipeline_config', {}) or {}
+            if _pipeline.get('custom_mixed_with') == 'tracking':
+                _runner_tracking = True
+
+        detections = self._run_models_for_frame(frame, t_start, _runner_tracking, is_seg)
 
         detect_time = (time.time() - t_start) * 1000
         if detect_time > 200:

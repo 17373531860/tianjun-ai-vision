@@ -9,7 +9,7 @@
       <!-- 头部 bar (对齐 tracking 风格) -->
     <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0 flex justify-between items-center">
       <div class="flex items-center gap-2">
-        <span class="text-cyan-400 text-lg font-bold">逐件覆盖</span>
+        <span class="text-cyan-400 text-lg font-bold">{{ mix ? '物品校验 · 逐件覆盖' : '逐件覆盖' }}</span>
         <!-- 手动结算模式标记 -->
         <span v-if="state?.config?.disable_auto_settle"
               class="bg-amber-500/20 text-amber-300 text-[0.625rem] px-1.5 py-0.5 rounded font-mono border border-amber-500/40"
@@ -30,7 +30,7 @@
         </span>
         <span v-else
               class="bg-slate-700 text-gray-400 text-[0.625rem] px-1.5 py-0.5 rounded">
-          等待场景稳定 ({{ stabilityWindow }} 帧{{ state?.config?.require_exact_count ? ' · 严格等量' : '' }})
+          {{ mix ? '等待周期开始（由步骤驱动）' : `等待场景稳定 (${stabilityWindow} 帧${state?.config?.require_exact_count ? ' · 严格等量' : ''})` }}
         </span>
       </div>
       <div class="flex items-center gap-3">
@@ -166,7 +166,7 @@
                   识别 {{ step.item_label }} 中…
                 </div>
                 <div v-else>
-                  等待场景稳定后开始
+                  {{ mix ? '等待周期开始（由步骤驱动）' : '等待场景稳定后开始' }}
                 </div>
               </div>
             </div>
@@ -194,7 +194,7 @@
         <!-- 全空态 -->
         <div v-if="(state?.steps?.length ?? 0) === 0"
              class="flex items-center justify-center text-gray-500 text-sm w-full">
-          请在「项目配置 → 逻辑设置」启用至少一个 per_item 步骤
+          {{ mix ? '请在「项目配置 → 步骤设置」把标签角色切为「物品」并配好目标⟶动作配对' : '请在「项目配置 → 逻辑设置」启用至少一个 per_item 步骤' }}
         </div>
       </div>
     </div>
@@ -221,6 +221,12 @@ const props = defineProps({
   channel: {
     type: Number,
     default: 0,
+  },
+  // v3.19.x 自定义混合逐件复用本面板: 周期主权在步骤侧, 文案随之切换
+  // (state.config 为 null → 手动结算按钮 / 收尾标签卡片自然隐藏)
+  mix: {
+    type: Boolean,
+    default: false,
   },
 })
 

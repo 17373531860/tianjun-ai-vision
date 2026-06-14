@@ -182,6 +182,13 @@ class SyntheticMixin:
                             item["class_id"] = 0
                     else:
                         item["class_id"] = 0
+                    # v3.19.x: 透传 track_id, 支持剧本驱动 "自定义混合跟踪" 的唯一个体计数
+                    tid = d.get("track_id")
+                    if tid is not None:
+                        try:
+                            item["track_id"] = int(tid)
+                        except (TypeError, ValueError):
+                            pass
                     out.append(item)
                 break
         return out

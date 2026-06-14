@@ -880,6 +880,51 @@
         </div>
       </div>
 
+      <!-- v3.19.x 自定义混合模式物品校验面板 (与上方 SOP 并存: 步骤看 SOP, 物品看这里) -->
+      <PerItemPanel
+        v-if="customMixPerItemState"
+        :state="customMixPerItemState"
+        :channel="selectedChannel"
+        mix
+      />
+      <div v-else-if="customMixState && customMixState.mix_type === 'tracking'"
+        class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
+        <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0 flex justify-between items-center">
+          <span class="text-cyan-400 text-lg font-bold">物品校验 · 跟踪清点</span>
+          <div class="flex items-center gap-2">
+            <span v-if="customMixState.cycle_active" class="text-xs text-green-400 animate-pulse">周期中...</span>
+            <span v-else class="text-xs text-gray-500">等待周期开始（由步骤驱动）</span>
+          </div>
+        </div>
+        <div class="flex-1 p-2 overflow-x-auto">
+          <!-- 复用独立跟踪模式的物品清单数据 (后端 _rebuild_checklist 同一来源) -->
+          <div class="flex items-stretch h-full gap-3">
+            <div v-for="(info, cls) in trackingChecklist" :key="cls"
+              class="flex-shrink-0 w-36 bg-slate-800 rounded-lg border p-2 flex flex-col justify-between transition-all"
+              :class="info.counted >= info.expected && info.expected > 0 ? 'border-green-500/70' : info.counted > info.expected && info.expected > 0 ? 'border-red-500/70' : 'border-slate-700'"
+            >
+              <div class="text-xs text-gray-400 truncate">{{ info.display_name || cls }}</div>
+              <div class="text-center my-1">
+                <span class="text-3xl font-bold font-mono"
+                  :class="info.counted >= info.expected && info.expected > 0 ? 'text-green-400' : 'text-white'"
+                >{{ info.counted }}</span>
+                <span v-if="info.expected > 0" class="text-sm text-gray-500"> / {{ info.expected }}</span>
+              </div>
+              <div v-if="(customMixItemByLabel[cls]?.partials || []).length"
+                class="text-[0.625rem] text-red-400 text-center truncate"
+                :title="customMixItemByLabel[cls].partials.map(p => `${p.peak}/${p.required}`).join(', ')">
+                缺件批次: {{ customMixItemByLabel[cls].partials.map(p => `${p.peak}/${p.required}`).join(', ') }}
+              </div>
+              <div v-else class="text-[0.625rem] text-gray-500 text-center">{{ info.prefix }}1 ~ {{ info.prefix }}{{ info.counted || '?' }}</div>
+            </div>
+            <div v-if="Object.keys(trackingChecklist).length === 0"
+              class="flex items-center justify-center text-gray-500 text-sm w-full">
+              等待物品出现...
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- v3.5.0: 周期性强制动作进度（独立链，与上方 SOP/Tracking 不冲突） -->
       <div v-if="periodicActions.length > 0" class="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
         <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex items-center justify-between">
@@ -1679,6 +1724,14 @@ const channelModelStats = ref({});
 // v3.8+: per_item 逐件模式运行时状态, 来自 /detection/results 的 per_item_state 字段.
 // 非 per_item 模式或后端尚未启用时为 null. PerItemPanel 直接消费该结构.
 const perItemState = ref(null);
+// v3.19.x 自定义混合模式物品校验 (detection/results.custom_mix_state)
+const customMixState = ref(null);
+// 混合跟踪卡片用: 按标签索引物品行状态 (堆叠批层的"缺件批次"明细显示)
+const customMixItemByLabel = computed(() => {
+  const map = {};
+  for (const it of (customMixState.value?.items || [])) map[it.label] = it;
+  return map;
+});
 const cycleTime = ref(0);
 const cycleTimeWithNg = ref(0);
 const lastCycleTime = ref(0);
@@ -2878,6 +2931,21 @@ const currentProject = computed(() => projectStore.currentProject);
 const isTrackingMode = computed(() => currentProject.value?.logic_mode === 'tracking');
 // v3.8+: 逐件模式 — 视频下方专属面板, 排他 SOP/Tracking
 const isPerItemMode = computed(() => currentProject.value?.logic_mode === 'per_item');
+
+// v3.19.x 自定义混合逐件: 把 custom_mix_state 适配成 PerItemPanel 的 state 形状
+// (steps 与独立模式 per_item_state.steps 同形; config=null 自动隐藏手动按钮/收尾卡片)
+const customMixPerItemState = computed(() => {
+  const s = customMixState.value;
+  if (!s || s.mix_type !== 'per_item') return null;
+  return {
+    enabled: true,
+    cycle_active: !!s.cycle_active,
+    cycle_start_time: null,
+    config: null,
+    steps: s.steps || [],
+    last_ng_detail: s.last_ng_detail || null,
+  };
+});
 
 // v3.8+: per_item 派生统计 (右栏「逐件实时反馈」卡片用)
 // 聚合所有 per_item 步骤的 items 数据, 给"还差几颗"+"漏哪几颗"两个核心展示供数据.
@@ -4333,6 +4401,8 @@ const startPolling = () => {
       modelStats.value = Array.isArray(data.models) ? data.models : [];
       // v3.8+: 逐件模式状态 (非 per_item 项目时后端返回 null, 这里原样转交 PerItemPanel)
       perItemState.value = data.per_item_state || null;
+      // v3.19.x: 自定义混合模式物品校验状态 (未启用混合时后端返回 null)
+      customMixState.value = data.custom_mix_state || null;
       cycleTime.value = data.average_cycle_time || 0;
       cycleTimeWithNg.value = data.average_cycle_time_with_ng || 0;
       lastCycleTime.value = data.last_cycle_time || 0;

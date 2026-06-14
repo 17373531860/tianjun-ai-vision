@@ -226,10 +226,31 @@ class ChecklistMixin:
         merged_counters = dict(self._tracking_class_counters)
         for cls_name, cnt in self._event_counters.items():
             merged_counters[cls_name] = merged_counters.get(cls_name, 0) + cnt
-        
+        # 堆叠批层计数 (re-ID 合并场景下 tracking 计数会停在单盘数, 用 max 取回堆叠累计)
+        for cls_name, cnt in (getattr(self, '_stack_counters', {}) or {}).items():
+            merged_counters[cls_name] = max(merged_counters.get(cls_name, 0), cnt)
+
+        # 满盘门标签集合: 只验"每盘是否数满", 不卡累计总数 (盘数辅助)
+        gate_only_labels = {}
+        try:
+            _stack_cfg = self._tracking_load_step_config({})['stack_steps']
+            gate_only_labels = {
+                lbl: c.get('layer_min_count', 0)
+                for lbl, c in _stack_cfg.items() if c.get('gate_only')
+            }
+        except Exception:
+            gate_only_labels = {}
+
         missing = []
         extra = []
         for cls_name, exp in expected_items.items():
+            if cls_name in gate_only_labels:
+                # 满盘门: 任一盘短即 NG, 不参与总数 missing/extra 判定
+                partials = self._stack_collect_partials(cls_name, gate_only_labels[cls_name])
+                if partials:
+                    detail = ', '.join(f"{p['peak']}/{p['required']}" for p in partials)
+                    missing.append(f"{cls_name} 有未数满的盘: {detail}")
+                continue
             actual = merged_counters.get(cls_name, 0)
             if actual < exp:
                 missing.append(f"{cls_name}: {actual}/{exp}")

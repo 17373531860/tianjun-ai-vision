@@ -5,9 +5,27 @@ import cv2
 import numpy as np
 
 from backend.core import debug_center
+from backend.api.source_custom_mix import compose_settle_event
 
 
 class EventsCheckMixin:
+    def _last_step_repeat_quota_reached(self, last_label: str) -> bool:
+        """v3.19.x: 末步消失结算的重复次数守门.
+
+        期望序列支持连续相同步骤后, 末步本身也可能重复 (如 [..., D, D]).
+        此时第一次 D 的消失不代表周期走完 — 只有周期内 D 已凑满期望次数,
+        末步消失才是"真正的末步完成"信号. 末步只出现一次时恒为 True (老行为).
+        """
+        try:
+            expected = self._get_expected_sequence_labels() or []
+            need = expected.count(last_label)
+            if need <= 1:
+                return True
+            return self.current_cycle_steps.count(last_label) >= need
+        except Exception as e:
+            print(f"[末步重复守门] 查询失败, 按老行为放行: {e}")
+            return True
+
     def _check_events(self, completed_step: str):
         """检查是否触发事件"""
         if not self.project_config:
@@ -34,9 +52,11 @@ class EventsCheckMixin:
                 id_to_label[step_id] = label
                 label_to_id[label] = step_id
         
-        # 获取启用的步骤标签和ID集合
-        enabled_step_labels = [s.get('label') for s in steps_config if s.get('enabled', True)]
-        enabled_step_ids = {s.get('id') for s in steps_config if s.get('enabled', True)}
+        # 获取启用的步骤标签和ID集合 (v3.19.x: 物品行归混合子状态机, 不算步骤)
+        enabled_step_labels = [s.get('label') for s in steps_config
+                               if s.get('enabled', True) and s.get('detect_role') != 'item']
+        enabled_step_ids = {s.get('id') for s in steps_config
+                            if s.get('enabled', True) and s.get('detect_role') != 'item'}
         
         # 自定义模式
         if logic_mode == 'custom':
@@ -69,7 +89,8 @@ class EventsCheckMixin:
                     # 检查是否完全匹配（数量和顺序都要相同）
                     if self.current_cycle_steps == cond_labels:
                         print(f"  → 条件匹配！触发事件 {cond_event_id}")
-                        self._trigger_event(cond_event_id, f'自定义条件匹配: {cond_labels}')
+                        self._trigger_event(*compose_settle_event(
+                            self, cond_event_id, f'自定义条件匹配: {cond_labels}'))
                         self.current_cycle_steps = []
                         self.backup_steps_seen_in_cycle = set()
                         self.last_added_step = None
@@ -85,7 +106,12 @@ class EventsCheckMixin:
                 last_step_label = self._get_last_sequence_step_label()
                 if last_step_label and completed_step == last_step_label:
                     if completed_step in self.current_cycle_steps:
-                        self._check_custom_sequential_mode(pipeline_config, id_to_label)
+                        # v3.19.x: 末步在期望序列中可连续重复 (如 ...D,D) —
+                        # 周期内凑满期望次数才结算, 否则是中间的某次重复, 继续等
+                        if self._last_step_repeat_quota_reached(completed_step):
+                            self._check_custom_sequential_mode(pipeline_config, id_to_label)
+                        else:
+                            print(f"  → 末步 [{completed_step}] 期望重复次数未满，暂不结算 (当前周期={self.current_cycle_steps})")
                     else:
                         print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
                         _dbg_skip_stale()
@@ -103,7 +129,11 @@ class EventsCheckMixin:
                 last_step_label = self._get_last_sequence_step_label()
                 if last_step_label and completed_step == last_step_label:
                     if completed_step in self.current_cycle_steps:
-                        self._check_sequential_mode(pipeline_config, id_to_label)
+                        # v3.19.x: 末步可连续重复, 凑满期望次数才结算 (同 custom 分支)
+                        if self._last_step_repeat_quota_reached(completed_step):
+                            self._check_sequential_mode(pipeline_config, id_to_label)
+                        else:
+                            print(f"  → 末步 [{completed_step}] 期望重复次数未满，暂不结算 (当前周期={self.current_cycle_steps})")
                     else:
                         print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
                         _dbg_skip_stale()

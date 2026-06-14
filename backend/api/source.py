@@ -925,11 +925,15 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self._event_first_seen.clear()
         self._event_last_seen.clear()
 
-        # v2.7.4: Stack mode reset
+        # v2.7.4: Stack mode reset (v3.19.x 批层状态一并清)
         self._stack_state.clear()
         self._stack_counters.clear()
         self._stack_disappeared_at.clear()
         self._stack_visible_frames.clear()
+        self._stack_sat_frames.clear()
+        self._stack_latched.clear()
+        self._stack_phase_peak.clear()
+        self._stack_partials.clear()
         
         # Container mode reset
         self._box_objects.clear()
