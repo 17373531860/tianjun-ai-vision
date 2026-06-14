@@ -70,6 +70,12 @@ def _make_per_item_project(name: str, *, require_exact: bool = False,
     }
     if require_exact:
         pipeline["per_item"]["require_exact_count"] = True
+        # v3.12+ 起开周期阈值与 require_exact_count 解耦: 每步达标用 ratio/tolerance
+        # 折算 (默认 ratio=0.85 → 6颗期望只需 5 颗即可开周期). 想要"严格等量、少 1
+        # 颗就不开"必须显式 ratio=1.0 + tolerance=0 (见 source_per_item_mixin
+        # _required_for). 本测试意在验证严格等量, 故补齐这两项配置.
+        pipeline["per_item"]["stability_count_ratio"] = 1.0
+        pipeline["per_item"]["stability_count_tolerance"] = 0
     if disable_auto:
         pipeline["per_item"]["disable_auto_settle"] = True
 

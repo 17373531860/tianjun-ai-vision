@@ -62,6 +62,9 @@ def _make_host(events_config=None, with_router=True, settle_dedup=False):
         _discard_empty_cycle=lambda: None,
         end_cycle=lambda **kwargs: None,
         _persist_counters=lambda: None,
+        # v3.13 M1.2c: alarm 触发抽到 _dispatch_event_alarm, 本测试只验 router hook
+        # 不验报警 (报警有独立 baseline 测试守护), 给 no-op 桩.
+        _dispatch_event_alarm=lambda *a, **k: None,
     )
     if with_router:
         router = InferenceRouter()
