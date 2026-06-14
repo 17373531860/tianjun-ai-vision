@@ -1,0 +1,41 @@
+{
+  "manifest_version": 1,
+  "tier": 3,
+  "name": "传感器清洁工序",
+  "customer_code": "sensor-clean",
+  "plugin_version": "1.0.0",
+  "author": "tianjun-ai-master",
+  "description": "传感器清洁工序定制 — 棉签寿命约束（一根棉签擦满 K 个产品后锁定计数）+ 跨视角联动（视角2 检出更换棉签自动解锁）+ 双视角监控面板 + 一键应用对齐 demo 的项目配置模板。检测推理复用主程序引擎，产品计数由插件挂 detection_frame 帧级钩子按 demo ProductCounter 算法逐帧自计算，逐件复刻 demo 计数精度。",
+  "main_version_min": "3.15.0",
+  "main_version_max": "3.x",
+  "capabilities": [
+    "frontend.i18n",
+    "frontend.stores",
+    "backend.hooks",
+    "backend.routers",
+    "runtime.alarm_trigger",
+    "runtime.system_config_write"
+  ],
+  "frontend": {
+    "entry": "frontend/dist/index.esm.js",
+    "static_dir": "frontend/dist",
+    "i18n": {
+      "zh-CN": "frontend/i18n/zh-CN.json",
+      "en-US": "frontend/i18n/en-US.json"
+    }
+  },
+  "requires": {
+    "gpu": false,
+    "python_packages": []
+  },
+  "runtime": {
+    "background_thread_max_count": 0,
+    "cpu_threshold_warn_pct": 5,
+    "max_hook_duration_ms": 1000,
+    "memory_threshold_warn_mb": 80
+  },
+  "metadata": {
+    "doc": "plugins-examples/sensor-clean/README.md",
+    "example": true
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "plugin": {
+    "sensor-clean": {
+      "title": "Sensor Cleaning Process",
+      "view1": "View 1 · Inspect / Wipe",
+      "view2": "View 2 · Swab Change Verify",
+      "productTotal": "Total Products",
+      "swabUsed": "Swab Used",
+      "remaining": "Remaining",
+      "max": "Limit",
+      "statusNormal": "Status: Normal",
+      "statusLocked": "Swab exhausted, please replace! (counting locked)",
+      "resetSwab": "Replace Swab (Reset)",
+      "applyTemplate": "Apply demo-aligned project config",
+      "waitingSwapView2": "Waiting for View 2 to detect swab change to unlock…"
+    }
+  }
+}
