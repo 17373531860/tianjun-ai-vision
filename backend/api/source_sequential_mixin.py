@@ -4,6 +4,25 @@ import traceback
 import cv2
 import numpy as np
 
+from backend.api.source_custom_mix import compose_settle_event
+
+
+def _split_cycle_at_last_label(cycle_steps: list, last_label: str, expected_count: int):
+    """以末步第 N 次出现为界切分周期 (N = 期望序列里末步的总次数).
+
+    v3.19.x: 期望序列支持连续相同步骤后, 末步本身可能重复 (如 [..., D, D]),
+    旧实现固定按"末步首次出现" (list.index) 切分, 会把第二个 D 切进下周期残留.
+    凑不满 N 次时按"末步未到"处理 (整个列表都算本周期, 无残留), 与旧行为一致.
+    """
+    need = max(1, expected_count)
+    seen = 0
+    for i, s in enumerate(cycle_steps):
+        if s == last_label:
+            seen += 1
+            if seen >= need:
+                return cycle_steps[:i + 1], cycle_steps[i + 1:]
+    return list(cycle_steps), []
+
 
 class SequentialMixin:
     def _check_sequential_mode(self, pipeline_config: dict, id_to_label: dict):
@@ -25,9 +44,10 @@ class SequentialMixin:
             self.last_step_completed_time = None
             return
         
-        # 获取启用的步骤ID集合
+        # 获取启用的步骤ID集合 (v3.19.x: 物品行归混合子状态机, 不算步骤)
         steps_config = self.project_config.get('steps_config', []) if self.project_config else []
-        enabled_step_ids = {s.get('id') for s in steps_config if s.get('enabled', True)}
+        enabled_step_ids = {s.get('id') for s in steps_config
+                            if s.get('enabled', True) and s.get('detect_role') != 'item'}
         
         # 将步骤ID转换为标签名（只包含启用的步骤）
         expected_labels = []
@@ -50,14 +70,10 @@ class SequentialMixin:
         
         last_step_label = expected_labels[-1]
         
-        # Split at last_step's first occurrence: before = this cycle, after = carry to next
-        if last_step_label in self.current_cycle_steps:
-            split_idx = self.current_cycle_steps.index(last_step_label)
-            this_cycle = self.current_cycle_steps[:split_idx + 1]
-            next_carry = self.current_cycle_steps[split_idx + 1:]
-        else:
-            this_cycle = list(self.current_cycle_steps)
-            next_carry = []
+        # v3.19.x: 以末步第 N 次出现为界切分 (N=期望次数), 支持末步连续重复
+        this_cycle, next_carry = _split_cycle_at_last_label(
+            self.current_cycle_steps, last_step_label,
+            expected_labels.count(last_step_label))
         
         this_cycle = self._inject_backup_steps(this_cycle, expected_labels)
         this_cycle = self._filter_cycle_by_duration(this_cycle)
@@ -222,9 +238,10 @@ class SequentialMixin:
             self.last_step_completed_time = None
             return
         
-        # 获取启用的步骤ID集合
+        # 获取启用的步骤ID集合 (v3.19.x: 物品行归混合子状态机, 不算步骤)
         steps_config = self.project_config.get('steps_config', []) if self.project_config else []
-        enabled_step_ids = {s.get('id') for s in steps_config if s.get('enabled', True)}
+        enabled_step_ids = {s.get('id') for s in steps_config
+                            if s.get('enabled', True) and s.get('detect_role') != 'item'}
         
         # 将步骤ID转换为标签名（只包含启用的步骤）
         expected_labels = []
@@ -246,14 +263,10 @@ class SequentialMixin:
         
         last_step_label = expected_labels[-1]
         
-        # Split at last_step's first occurrence: before = this cycle, after = carry to next
-        if last_step_label in self.current_cycle_steps:
-            split_idx = self.current_cycle_steps.index(last_step_label)
-            this_cycle = self.current_cycle_steps[:split_idx + 1]
-            next_carry = self.current_cycle_steps[split_idx + 1:]
-        else:
-            this_cycle = list(self.current_cycle_steps)
-            next_carry = []
+        # v3.19.x: 以末步第 N 次出现为界切分 (N=期望次数), 支持末步连续重复
+        this_cycle, next_carry = _split_cycle_at_last_label(
+            self.current_cycle_steps, last_step_label,
+            expected_labels.count(last_step_label))
         
         this_cycle = self._inject_backup_steps(this_cycle, expected_labels)
         this_cycle = self._filter_cycle_by_duration(this_cycle)
@@ -295,15 +308,15 @@ class SequentialMixin:
             if duplicated:
                 reasons.append(f'重复步骤: {duplicated}')
             print(f"  → {', '.join(reasons)} → NG")
-            self._trigger_event(2, ', '.join(reasons))
+            self._trigger_event(*compose_settle_event(self, 2, ', '.join(reasons)))
         elif missing:
             print(f"  → 周期不完整，缺少: {missing} → NG")
-            self._trigger_event(2, f'周期不完整，缺少: {missing}')
+            self._trigger_event(*compose_settle_event(self, 2, f'周期不完整，缺少: {missing}'))
         else:
             # v3.7.x: 同上, 直接逐位比较, 修 sequence_order 含重复元素时的误判.
             if this_cycle == expected_labels:
                 print(f"  → 顺序正确 → OK")
-                self._trigger_event(1, '顺序正确完成')
+                self._trigger_event(*compose_settle_event(self, 1, '顺序正确完成'))
             else:
                 mismatch_idx = -1
                 for k in range(min(len(this_cycle), len(expected_labels))):
@@ -315,7 +328,8 @@ class SequentialMixin:
                 else:
                     order_error_labels = ['?', '?']
                 print(f"  → 顺序错误 → NG: {order_error_labels}")
-                self._trigger_event(2, f'顺序错误，期望[{order_error_labels[0]}]在前 实际[{order_error_labels[1]}]在前')
+                self._trigger_event(*compose_settle_event(
+                    self, 2, f'顺序错误，期望[{order_error_labels[0]}]在前 实际[{order_error_labels[1]}]在前'))
         
         # ── 补计：对本周期中尚未被计数的步骤进行补计 ──
         for label in this_cycle:
@@ -404,7 +418,7 @@ class SequentialMixin:
         print(f"自定义模式（基于检测）检查: 需要={detection_labels}, 当前周期={self.current_cycle_steps}")
         
         if all(label in self.current_cycle_steps for label in detection_labels):
-            self._trigger_event(1, '检测完成')  # 事件1: 合格
+            self._trigger_event(*compose_settle_event(self, 1, '检测完成'))  # 事件1: 合格
             self.current_cycle_steps = []
             self.backup_steps_seen_in_cycle = set()
             self.last_added_step = None

@@ -310,6 +310,25 @@ def _apply_pipeline_config(h, config, pipeline_config):
             del h.step_accept_once[settle_label]
             print(f"[{h.settlement_mode}模式] 自动移除结算步骤 [{settle_label}] 的单次接受")
 
+    # v3.19.x: 期望序列中"连续重复"的步骤强制消失等待时间=0 (前端校验 + 后端兜底).
+    # 连续 A→A 的辨认信号是"上一次出现已立刻走完消失结算后重现", 若设了等待时间,
+    # 两次衔接快于等待时长时第二次会被当成第一次的延续 → 直接漏计.
+    logic_mode = config.get('logic_mode', 'detection')
+    is_seq_like = logic_mode == 'sequential' or (
+        logic_mode == 'custom' and pipeline_config.get('custom_based_on') == 'sequential')
+    if is_seq_like:
+        try:
+            expected_seq = h._get_expected_sequence_labels() or []
+            consecutive_dup = {expected_seq[i] for i in range(1, len(expected_seq))
+                               if expected_seq[i] == expected_seq[i - 1]}
+            for dup_label in consecutive_dup:
+                tc = h.step_time_config.get(dup_label)
+                if tc and tc.get('disappear_delay'):
+                    print(f"[连续重复步骤] [{dup_label}] 消失等待时间 {tc['disappear_delay']}s 强制清 0")
+                    tc['disappear_delay'] = 0
+        except Exception as e:
+            print(f"[连续重复步骤] 消失等待时间兜底清理失败: {e}")
+
 
 def _apply_counters(h, config):
     """初始化计数器 + 从通道专属文件恢复持久化值"""
@@ -382,11 +401,25 @@ def _reset_cumulative_step_stats(h):
 
 
 def _apply_tracking_mode(h, config, pipeline_config):
-    """tracking 模式: 重置计数 + 生成 custom tracker yaml + container 配置"""
-    if config.get('logic_mode') != 'tracking':
+    """tracking 模式: 重置计数 + 生成 custom tracker yaml + container 配置
+
+    v3.19.x: 自定义混合跟踪 (custom + custom_mixed_with='tracking') 同样要
+    重置计数状态 + 生成 tracker yaml (遮挡容忍/匹配阈值才能生效, 且不被
+    上一个独立跟踪项目的旧 yaml 污染); 但容器分组归周期结算管, 混合下
+    周期主权在步骤侧, 强制关闭。
+    """
+    is_tracking = config.get('logic_mode') == 'tracking'
+    is_mixed_tracking = (
+        config.get('logic_mode') == 'custom'
+        and pipeline_config.get('custom_mixed_with') == 'tracking')
+    if not (is_tracking or is_mixed_tracking):
         return
     h._reset_counting_cycle()
     h._generate_custom_tracker_yaml(pipeline_config)
+    if is_mixed_tracking:
+        h._container_label = ''
+        h._container_mode = False
+        return
     clabel = pipeline_config.get('tracking_container_label', '')
     is_container_strategy = pipeline_config.get('tracking_cycle_strategy') == 'container'
     h._container_label = clabel if is_container_strategy else ''
@@ -475,5 +508,18 @@ def apply_project_config(h, config: dict):
             print(f"[per_item] 应用配置失败: {e}")
             import traceback
             traceback.print_exc()
+
+    # v3.19.x: 自定义模式混合子状态机 (custom_mixed_with = per_item/tracking)
+    # 每次应用配置都重建 — 非 custom / 未混合 / 无物品行时为 None (零差异)
+    try:
+        from backend.api.source_custom_mix import build_custom_mix
+        h._custom_mix = build_custom_mix(config)
+    except Exception as e:
+        h._custom_mix = None
+        print(f"[CustomMix] 构建混合子状态机失败: {e}")
+    # 混合跟踪: 周期主权归步骤侧, 真跟踪机械的自动开周期被此标志守门跳过。
+    # 独立 tracking 项目恒为 False — 行为零差异。
+    h._tracking_external_cycle = bool(
+        h._custom_mix is not None and h._custom_mix.mix_type == 'tracking')
 
     _print_summary(h, config, steps_config, pipeline_config)

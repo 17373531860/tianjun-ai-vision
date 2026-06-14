@@ -21,6 +21,7 @@ import cv2
 import numpy as np
 
 from backend.core import debug_center
+from backend.api.source_custom_mix import compose_settle_event
 
 
 class SettlementMixin:
@@ -34,6 +35,7 @@ class SettlementMixin:
         custom_based_on = pipeline_config.get('custom_based_on')
         
         # 创建步骤ID到标签的映射，并获取启用的步骤ID集合
+        # v3.19.x: 物品行 (detect_role='item') 归混合子状态机管, 永不算步骤
         id_to_label = {}
         enabled_step_ids = set()
         for step in steps_config:
@@ -41,11 +43,12 @@ class SettlementMixin:
             label = step.get('label', '')
             if step_id and label:
                 id_to_label[step_id] = label
-                if step.get('enabled', True):
+                if step.get('enabled', True) and step.get('detect_role') != 'item':
                     enabled_step_ids.add(step_id)
         
         # 获取启用的步骤标签
-        enabled_step_labels = [s.get('label') for s in steps_config if s.get('enabled', True)]
+        enabled_step_labels = [s.get('label') for s in steps_config
+                               if s.get('enabled', True) and s.get('detect_role') != 'item']
         
         self._supplement_step_durations()
         
@@ -89,7 +92,8 @@ class SettlementMixin:
                     if debug_center.is_on("backend.settlement"):
                         debug_center.dbg("backend.settlement", "自定义条件匹配结算", f"event_id={cond_event_id} seq={cond_labels}")
                     self._reconcile_step_records()
-                    self._trigger_event(cond_event_id, f'自定义条件匹配: {cond_labels}')
+                    self._trigger_event(*compose_settle_event(
+                        self, cond_event_id, f'自定义条件匹配: {cond_labels}'))
                     self.current_cycle_steps = []
                     self.backup_steps_seen_in_cycle = set()
                     self.last_added_step = None
@@ -181,14 +185,14 @@ class SettlementMixin:
                     reasons.append(f'重复步骤: {duplicated}')
                 reason_str = ', '.join(reasons)
                 print(f"  → {reason_str} → NG")
-                self._trigger_event(2, reason_str)
+                self._trigger_event(*compose_settle_event(self, 2, reason_str))
             elif self.current_cycle_steps == expected_labels:
                 print(f"  → 序列完全匹配 → OK")
-                self._trigger_event(1, '顺序正确完成')
+                self._trigger_event(*compose_settle_event(self, 1, '顺序正确完成'))
             elif len(self.current_cycle_steps) < len(expected_labels):
                 missing = [l for l in expected_labels if l not in self.current_cycle_steps]
                 print(f"  → 周期不完整，缺少: {missing} → NG")
-                self._trigger_event(2, f'周期不完整，缺少: {missing}')
+                self._trigger_event(*compose_settle_event(self, 2, f'周期不完整，缺少: {missing}'))
             else:
                 # v3.7.x: actual 与 expected multiset 相同 (前面 unexpected/duplicated 都已 NG),
                 # 直接逐位比较. 旧实现用 unique_steps + zip 截断, 在 sequence_order
@@ -200,10 +204,10 @@ class SettlementMixin:
                         break
                 if mismatch_idx >= 0:
                     print(f"  → 第{mismatch_idx+1}步顺序错误: 期望[{expected_labels[mismatch_idx]}], 实际[{self.current_cycle_steps[mismatch_idx]}] → NG")
-                    self._trigger_event(2, f'第{mismatch_idx+1}步顺序错误')
+                    self._trigger_event(*compose_settle_event(self, 2, f'第{mismatch_idx+1}步顺序错误'))
                 else:
                     print(f"  → 顺序错误 → NG")
-                    self._trigger_event(2, '顺序错误')
+                    self._trigger_event(*compose_settle_event(self, 2, '顺序错误'))
         
         elif custom_based_on == 'detection':
             detection_step_ids = pipeline_config.get('custom_detection_steps', [])
@@ -240,11 +244,11 @@ class SettlementMixin:
             
             if not ng_reasons:
                 print(f"  → 全部检测到，无重复 → OK")
-                self._trigger_event(1, '检测完成')
+                self._trigger_event(*compose_settle_event(self, 1, '检测完成'))
             else:
                 reason = '；'.join(ng_reasons)
                 print(f"  → {reason} → NG")
-                self._trigger_event(2, reason)
+                self._trigger_event(*compose_settle_event(self, 2, reason))
         
         # 重置周期
         self._cycle_regression = False
@@ -1200,9 +1204,13 @@ class SettlementMixin:
                 return
         
         # ── 第一步重现结算（仅 first_step 结算模式） ──
+        # v3.19.x: 若该 label 的本次重现恰好是期望序列的下一位 (首步在序列中
+        # 合法重复, 如 [A,A,B] 的第二个 A), 这不是"新周期开始"的信号, 跳过结算
+        # 让它走下方 append 路径作为期望重复入周期.
         _just_settled_by_first_step = False
         if self.settlement_mode == 'first_step' and is_seq_like \
-                and label in self.current_cycle_steps and len(self.current_cycle_steps) > 1:
+                and label in self.current_cycle_steps and len(self.current_cycle_steps) > 1 \
+                and not self._is_legitimate_next_in_sequence(label):
             first_step_label = self._get_first_sequence_step_label()
             if first_step_label and label == first_step_label:
                 first_start = self.step_start_time.get(label) or getattr(self, '_step_raw_start', {}).get(label)
@@ -1295,7 +1303,18 @@ class SettlementMixin:
                     if len(self.current_cycle_steps) == 0:
                         self._cycle_regression = False
                     if self.last_added_step == label:
-                        pass
+                        # v3.19.x: 期望序列支持"连续相同步骤" (如 放托盘×4).
+                        # 走到这里说明 is_new_appearance=True, 即上一次出现已经
+                        # 走完消失结算 (step_last_seen 被删) 后重现 — 不是同一次
+                        # 出现的延续. 若期望序列下一位正是该 label, 这是合法的
+                        # 连续重复, 必须入周期; 否则维持 A-A 去重硬规则.
+                        if self._is_legitimate_next_in_sequence(label):
+                            self.current_cycle_steps.append(label)
+                            self.last_added_step = label
+                            self._last_step_added_time = current_time
+                            print(f"[期望连续重复] {label} 是期望序列里的合法连续重复 (当前序列: {self.current_cycle_steps})")
+                        else:
+                            pass
                     elif label in self.current_cycle_steps:
                         # v3.7.0 客户反馈: 期望序列里允许同一 label 多次出现
                         # (例如 A-B-C-B-D 里 B 出现 2 次)。

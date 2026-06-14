@@ -35,6 +35,8 @@ class SequenceLabels:
     # ============================================================
     @staticmethod
     def _index_steps(steps_config: list):
+        # v3.19.x: 物品行 (detect_role='item') 归自定义混合子状态机管,
+        # 永远不参与序列/检测步骤判定 (不进 enabled_ids)
         id_to_label = {}
         enabled_ids = set()
         for step in steps_config or []:
@@ -42,7 +44,7 @@ class SequenceLabels:
             label = step.get('label', '')
             if sid and label:
                 id_to_label[sid] = label
-                if step.get('enabled', True):
+                if step.get('enabled', True) and step.get('detect_role') != 'item':
                     enabled_ids.add(sid)
         return id_to_label, enabled_ids
 

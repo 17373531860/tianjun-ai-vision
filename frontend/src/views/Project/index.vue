@@ -504,38 +504,160 @@
                 </div>
               </div>
 
-              <div class="flex-1 overflow-auto custom-scrollbar step-table-scroll min-h-0">
-                <table class="min-w-full w-max text-left text-xs text-gray-300 border-collapse whitespace-nowrap">
+              <div class="flex-1 overflow-y-auto custom-scrollbar min-h-0 space-y-4 pb-8">
+                <!-- ============ 表A: 标签与检测属性 (所有模式通用) ============ -->
+                <div class="border border-slate-700 rounded">
+                  <div class="px-3 py-2 bg-slate-800 border-b border-slate-700 flex items-center gap-2 flex-wrap">
+                    <span class="font-bold text-white text-sm">标签与检测属性</span>
+                    <span class="text-xs text-gray-500">所有模式通用 — 置信度阈值与步骤ROI是检测层守门，对步骤判定与物品计数一并生效</span>
+                  </div>
+                  <div class="overflow-x-auto custom-scrollbar step-table-scroll">
+                    <table class="min-w-full w-max text-left text-xs text-gray-300 border-collapse whitespace-nowrap">
+                      <thead class="bg-slate-800 text-gray-400 sticky top-0 z-10">
+                        <tr class="border-b border-slate-700">
+                          <th class="p-2">原始标签</th>
+                          <th class="p-2 w-16">启用</th>
+                          <th class="p-2 w-28">置信度阈值</th>
+                          <th class="p-2 w-28">显示名称</th>
+                          <th v-if="isCustomMixed" class="p-2 w-24">
+                            <el-tooltip content="自定义混合模式专用：「步骤」参与序列/检测/条件判定；「物品」不参与步骤序列，由混合子状态机做数量校验（周期结算时两边都合格才算合格），参数在下方「物品校验参数」表配置" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">角色</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-20">
+                            <el-tooltip content="开启后，此物品在检测画面、SOP流程卡片、步骤详情中均不显示（仅视觉隐藏）；YOLO 检测、OK/NG 判定、报警、数据记录、MES 上报等均不受影响。常用于隐藏箱子/泡沫槽等辅助类别" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">隐藏标注框</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-20">
+                            <el-tooltip content="该标签的检测框单独配色（任何模式都生效）。留空 = 副模型沿用其默认识别色 / 主模型沿用全局 OK/NG 颜色。设了颜色就以这里为准，副模型默认色让位。" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">检测框颜色</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-40">
+                            <el-tooltip placement="top">
+                              <template #content>
+                                <div style="max-width: 320px; line-height: 1.5">
+                                  <b>Box 尺寸上限</b>（归一化 0~1, <b>0 = 关闭</b>，默认关闭）<br/>
+                                  检测框宽 / 高 超过比例时直接丢弃该 detection。<br/>
+                                  用途：模型把"工件整体形态"误识别为某个 label 时（如 box 宽 ≈ 整张画面），<br/>
+                                  用 W≤0.85 即可滤掉，而真正的局部动作 box（≤80%）不受影响。<br/>
+                                  该过滤在所有逻辑模式下生效。
+                                </div>
+                              </template>
+                              <span class="cursor-help border-b border-dashed border-gray-500">Box尺寸上限</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-36">
+                            <el-tooltip content="归一化多边形区域。设置后：仅当检测框中心落在该区域内时，该步骤/标签才计入 SOP 与周期（顺序、检测、自定义、跟踪模式均生效，混合模式的物品计数同样遵守）。不设置则不限区域。" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">步骤ROI</span>
+                            </el-tooltip>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="step in (activeProject.steps_config || [])" :key="step.id" class="border-b border-slate-700 hover:bg-slate-700/30">
+                          <td class="p-2 font-mono text-cyan-400">
+                            <div class="flex items-center gap-1.5 flex-wrap">
+                              <span>{{ step.label }}</span>
+                              <el-tag
+                                v-if="activeProject.logic_mode === 'per_item'"
+                                size="small"
+                                :type="(step.per_item && step.per_item.action_label) ? 'success' : 'info'"
+                                effect="plain"
+                                class="!h-5 !leading-5"
+                              >
+                                {{ (step.per_item && step.per_item.action_label) ? '动作' : '目标' }}
+                              </el-tag>
+                              <el-tag v-if="step.from_model && step.from_model !== 'main'" size="small" type="warning" effect="plain" class="!h-5 !leading-5">
+                                {{ step.from_model }}
+                              </el-tag>
+                            </div>
+                          </td>
+                          <td class="p-2"><el-switch v-model="step.enabled" size="small" @change="(val) => onStepEnabledChange(step, val)" /></td>
+                          <td class="p-2">
+                            <div class="flex items-center gap-1">
+                              <el-slider v-model="step.threshold" :min="0" size="small" class="flex-1" />
+                              <span class="text-xs w-8">{{ step.threshold }}%</span>
+                            </div>
+                          </td>
+                          <td class="p-2">
+                            <el-input v-model="step.displayLabel" size="small" placeholder="显示名称" />
+                          </td>
+                          <td v-if="isCustomMixed" class="p-2">
+                            <el-select :model-value="step.detect_role || 'step'" size="small" class="w-full"
+                              @update:model-value="(val) => onDetectRoleChange(step, val)">
+                              <el-option label="步骤" value="step" />
+                              <el-option label="物品" value="item" />
+                            </el-select>
+                          </td>
+                          <td class="p-2 text-center">
+                            <el-switch v-model="step.hide_in_view" size="small" />
+                          </td>
+                          <td class="p-2 text-center">
+                            <el-color-picker v-model="step.box_color" size="small" :predefine="['#10b981','#ef4444','#f59e0b','#3b82f6','#a78bfa','#ec4899','#06b6d4','#84cc16']" />
+                          </td>
+                          <td class="p-2">
+                            <div class="flex items-center gap-1 text-[10px] text-gray-400">
+                              <span>W≤</span>
+                              <el-input-number
+                                v-model="step.box_max_width"
+                                :min="0" :max="1" :step="0.05" :precision="2"
+                                size="small" controls-position="right"
+                                style="width: 68px"
+                                placeholder="0"
+                              />
+                              <span class="ml-1">H≤</span>
+                              <el-input-number
+                                v-model="step.box_max_height"
+                                :min="0" :max="1" :step="0.05" :precision="2"
+                                size="small" controls-position="right"
+                                style="width: 68px"
+                                placeholder="0"
+                              />
+                            </div>
+                          </td>
+                          <td class="p-2 align-top">
+                            <div class="flex flex-col gap-1 min-w-[7rem]">
+                              <div class="flex flex-wrap gap-1">
+                                <el-button size="small" type="primary" plain @click="openStepRoiEditor(step)">
+                                  {{ step.roi && step.roi.length >= 3 ? '重绘' : '设置' }}
+                                </el-button>
+                                <el-button v-if="step.roi && step.roi.length >= 3" size="small" type="danger" plain @click="clearStepRoi(step)">清除</el-button>
+                              </div>
+                              <svg v-if="step.roi && step.roi.length >= 3" width="72" height="40" viewBox="0 0 1 1" preserveAspectRatio="none"
+                                class="border border-slate-700 bg-slate-950 rounded">
+                                <polygon
+                                  :points="step.roi.map(p => `${p[0]},${p[1]}`).join(' ')"
+                                  fill="rgba(167,139,250,0.25)" stroke="#a78bfa" stroke-width="0.008" stroke-linejoin="round" />
+                              </svg>
+                              <span v-else class="text-[0.625rem] text-gray-500">未限制</span>
+                            </div>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <div v-if="!activeProject.steps_config || activeProject.steps_config.length === 0" class="text-center text-gray-500 py-8">
+                      暂无步骤配置，请先在"基础设置"中选择模型
+                    </div>
+                  </div>
+                </div>
+
+                <!-- ============ 表B: 模式行为参数 (随逻辑模式切换, 相互独立) ============ -->
+                <div class="border border-slate-700 rounded">
+                  <div class="px-3 py-2 bg-slate-800 border-b border-slate-700 flex items-center gap-2 flex-wrap">
+                    <span class="font-bold text-white text-sm">
+                      {{ activeProject.logic_mode === 'tracking' ? '物品行为参数 · 跟踪模式' : `步骤行为参数 · ${logicModeLabel}` }}
+                    </span>
+                    <span class="text-xs text-gray-500">
+                      仅展示已启用的{{ activeProject.logic_mode === 'tracking' ? '物品' : '步骤' }}{{ isCustomMixed ? '；角色为「物品」的标签在下方「物品校验参数」表配置' : '' }}
+                    </span>
+                  </div>
+                  <div class="overflow-x-auto custom-scrollbar step-table-scroll">
+                    <table class="min-w-full w-max text-left text-xs text-gray-300 border-collapse whitespace-nowrap">
                   <thead class="bg-slate-800 text-gray-400 sticky top-0 z-10">
                     <tr class="border-b border-slate-700">
-                      <th class="p-2">原始标签</th>
-                      <th class="p-2 w-16">启用</th>
-                      <th class="p-2 w-28">置信度阈值</th>
-                      <th class="p-2 w-28">显示名称</th>
-                      <th class="p-2 w-20">
-                        <el-tooltip content="开启后，此物品在检测画面、SOP流程卡片、步骤详情中均不显示（仅视觉隐藏）；YOLO 检测、OK/NG 判定、报警、数据记录、MES 上报等均不受影响。常用于隐藏箱子/泡沫槽等辅助类别" placement="top">
-                          <span class="cursor-help border-b border-dashed border-gray-500">隐藏标注框</span>
-                        </el-tooltip>
-                      </th>
-                      <th class="p-2 w-20">
-                        <el-tooltip content="该标签的检测框单独配色（任何模式都生效）。留空 = 副模型沿用其默认识别色 / 主模型沿用全局 OK/NG 颜色。设了颜色就以这里为准，副模型默认色让位。" placement="top">
-                          <span class="cursor-help border-b border-dashed border-gray-500">检测框颜色</span>
-                        </el-tooltip>
-                      </th>
-                      <th class="p-2 w-40">
-                        <el-tooltip placement="top">
-                          <template #content>
-                            <div style="max-width: 320px; line-height: 1.5">
-                              <b>Box 尺寸上限</b>（归一化 0~1, <b>0 = 关闭</b>，默认关闭）<br/>
-                              检测框宽 / 高 超过比例时直接丢弃该 detection。<br/>
-                              用途：模型把"工件整体形态"误识别为某个 label 时（如 box 宽 ≈ 整张画面），<br/>
-                              用 W≤0.85 即可滤掉，而真正的局部动作 box（≤80%）不受影响。<br/>
-                              该过滤在所有逻辑模式下生效。
-                            </div>
-                          </template>
-                          <span class="cursor-help border-b border-dashed border-gray-500">Box尺寸上限</span>
-                        </el-tooltip>
-                      </th>
+                      <th class="p-2 min-w-[8rem]">标签</th>
                       <th v-if="hasDurationsSlot" class="p-2 w-44">
                         <el-tooltip placement="top">
                           <template #content>
@@ -549,11 +671,6 @@
                             </div>
                           </template>
                           <span class="cursor-help border-b border-dashed border-gray-500">步骤耗时三档</span>
-                        </el-tooltip>
-                      </th>
-                      <th class="p-2 w-36">
-                        <el-tooltip content="归一化多边形区域。设置后：仅当检测框中心落在该区域内时，该步骤/标签才计入 SOP 与周期（顺序、检测、自定义、跟踪模式均生效）。不设置则不限区域。" placement="top">
-                          <span class="cursor-help border-b border-dashed border-gray-500">步骤ROI</span>
                         </el-tooltip>
                       </th>
                       <template v-if="activeProject.logic_mode === 'tracking'">
@@ -593,8 +710,23 @@
                         </el-tooltip>
                       </th>
                       <th class="p-2 w-20">
-                        <el-tooltip content="堆叠模式下期望的堆叠层数，达到此数即认为该步骤完成（默认2）" placement="top">
-                          <span class="cursor-help border-b border-dashed border-gray-500">堆叠层数</span>
+                        <el-tooltip content="堆叠模式累计达到此数即认为该步骤完成。「每层个数」=1 时即层数；>1 时为各层个数之和（例：4 层 × 每层 24 = 96）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">堆叠总数</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="每层/每批必须同帧数到的最少个数，达标才计入这一层（默认1=出现即算一层）。适用于整盘/整批同进同出的场景" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">每层个数</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-20">
+                        <el-tooltip content="每层个数需连续满足多少帧才闩锁计数（默认1帧；调大可抑制误检瞬时凑数）" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">每层确认帧</span>
+                        </el-tooltip>
+                      </th>
+                      <th class="p-2 w-16">
+                        <el-tooltip content="满盘门：只验「每盘/每批是否数满『每层个数』」，任一盘短一个即判NG，不卡「堆叠总数」（盘数当辅助计数）。适用于连续供料、盘数难干净计但每盘必须满的场景" placement="top">
+                          <span class="cursor-help border-b border-dashed border-gray-500">满盘门</span>
                         </el-tooltip>
                       </th>
                       <th class="p-2 w-24">
@@ -668,81 +800,15 @@
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="step in (activeProject.steps_config || [])" :key="step.id" class="border-b border-slate-700 hover:bg-slate-700/30">
+                    <tr v-for="step in stepBehaviorRows" :key="step.id" class="border-b border-slate-700 hover:bg-slate-700/30">
                       <td class="p-2 font-mono text-cyan-400">
-                        <div class="flex items-center gap-1.5 flex-wrap">
-                          <span>{{ step.label }}</span>
-                          <el-tag
-                            v-if="activeProject.logic_mode === 'per_item'"
-                            size="small"
-                            :type="(step.per_item && step.per_item.action_label) ? 'success' : 'info'"
-                            effect="plain"
-                            class="!h-5 !leading-5"
-                          >
-                            {{ (step.per_item && step.per_item.action_label) ? '动作' : '目标' }}
-                          </el-tag>
-                          <el-tag v-if="step.from_model && step.from_model !== 'main'" size="small" type="warning" effect="plain" class="!h-5 !leading-5">
-                            {{ step.from_model }}
-                          </el-tag>
-                        </div>
-                      </td>
-                      <td class="p-2"><el-switch v-model="step.enabled" size="small" @change="(val) => onStepEnabledChange(step, val)" /></td>
-                      <td class="p-2">
-                        <div class="flex items-center gap-1">
-                          <el-slider v-model="step.threshold" :min="0" size="small" class="flex-1" />
-                          <span class="text-xs w-8">{{ step.threshold }}%</span>
-                        </div>
-                      </td>
-                      <td class="p-2">
-                        <el-input v-model="step.displayLabel" size="small" placeholder="显示名称" />
-                      </td>
-                      <td class="p-2 text-center">
-                        <el-switch v-model="step.hide_in_view" size="small" />
-                      </td>
-                      <td class="p-2 text-center">
-                        <el-color-picker v-model="step.box_color" size="small" :predefine="['#10b981','#ef4444','#f59e0b','#3b82f6','#a78bfa','#ec4899','#06b6d4','#84cc16']" />
-                      </td>
-                      <td class="p-2">
-                        <div class="flex items-center gap-1 text-[10px] text-gray-400">
-                          <span>W≤</span>
-                          <el-input-number
-                            v-model="step.box_max_width"
-                            :min="0" :max="1" :step="0.05" :precision="2"
-                            size="small" controls-position="right"
-                            style="width: 68px"
-                            placeholder="0"
-                          />
-                          <span class="ml-1">H≤</span>
-                          <el-input-number
-                            v-model="step.box_max_height"
-                            :min="0" :max="1" :step="0.05" :precision="2"
-                            size="small" controls-position="right"
-                            style="width: 68px"
-                            placeholder="0"
-                          />
-                        </div>
+                        {{ step.displayLabel || step.label }}
+                        <span v-if="step.displayLabel && step.displayLabel !== step.label" class="text-gray-500 ml-1">({{ step.label }})</span>
                       </td>
                       <td v-if="hasDurationsSlot" class="p-2">
                         <TjSlot name="project.step-cell.durations" :step="step" :project="activeProject">
                           <span class="text-[0.625rem] text-gray-600">需插件</span>
                         </TjSlot>
-                      </td>
-                      <td class="p-2 align-top">
-                        <div class="flex flex-col gap-1 min-w-[7rem]">
-                          <div class="flex flex-wrap gap-1">
-                            <el-button size="small" type="primary" plain @click="openStepRoiEditor(step)">
-                              {{ step.roi && step.roi.length >= 3 ? '重绘' : '设置' }}
-                            </el-button>
-                            <el-button v-if="step.roi && step.roi.length >= 3" size="small" type="danger" plain @click="clearStepRoi(step)">清除</el-button>
-                          </div>
-                          <svg v-if="step.roi && step.roi.length >= 3" width="72" height="40" viewBox="0 0 1 1" preserveAspectRatio="none"
-                            class="border border-slate-700 bg-slate-950 rounded">
-                            <polygon
-                              :points="step.roi.map(p => `${p[0]},${p[1]}`).join(' ')"
-                              fill="rgba(167,139,250,0.25)" stroke="#a78bfa" stroke-width="0.008" stroke-linejoin="round" />
-                          </svg>
-                          <span v-else class="text-[0.625rem] text-gray-500">未限制</span>
-                        </div>
                       </td>
                       <template v-if="activeProject.logic_mode === 'tracking'">
                       <td class="p-2">
@@ -827,6 +893,39 @@
                       </td>
                       <td class="p-2">
                         <el-input-number
+                          v-model="step.stack_layer_min_count"
+                          size="small"
+                          :min="1"
+                          :step="1"
+                          :precision="0"
+                          :controls="false"
+                          :disabled="!step.stack_enabled || step.count_mode !== 'track'"
+                          placeholder="1"
+                          class="w-full"
+                        />
+                      </td>
+                      <td class="p-2">
+                        <el-input-number
+                          v-model="step.stack_layer_min_frames"
+                          size="small"
+                          :min="1"
+                          :step="1"
+                          :precision="0"
+                          :controls="false"
+                          :disabled="!step.stack_enabled || step.count_mode !== 'track'"
+                          placeholder="1"
+                          class="w-full"
+                        />
+                      </td>
+                      <td class="p-2 text-center">
+                        <el-switch
+                          v-model="step.stack_gate_only"
+                          size="small"
+                          :disabled="!step.stack_enabled || step.count_mode !== 'track'"
+                        />
+                      </td>
+                      <td class="p-2">
+                        <el-input-number
                           v-model="step.max_recognized"
                           size="small"
                           :min="0"
@@ -868,16 +967,20 @@
                         <el-switch v-model="step.timeout_ng" size="small" :disabled="!step.max_duration" />
                       </td>
                       <td class="p-2">
-                        <el-input-number 
-                          v-model="step.disappear_delay" 
-                          size="small" 
-                          :min="0" 
-                          :step="0.1"
-                          :precision="2"
-                          :controls="false"
-                          placeholder="默认0秒"
-                          class="w-full"
-                        />
+                        <el-tooltip :disabled="!consecutiveDupStepIds.has(step.id)"
+                          content="该步骤在序列中连续重复出现，消失等待时间固定为0：每次消失立即结算，下一次出现才能被识别为新的一次" placement="top">
+                          <el-input-number 
+                            v-model="step.disappear_delay" 
+                            size="small" 
+                            :min="0" 
+                            :step="0.1"
+                            :precision="2"
+                            :controls="false"
+                            :disabled="consecutiveDupStepIds.has(step.id)"
+                            placeholder="默认0秒"
+                            class="w-full"
+                          />
+                        </el-tooltip>
                       </td>
                       <td class="p-2">
                         <el-input-number 
@@ -975,8 +1078,294 @@
                     </tr>
                   </tbody>
                 </table>
-                <div v-if="!activeProject.steps_config || activeProject.steps_config.length === 0" class="text-center text-gray-500 py-8">
-                  暂无步骤配置，请先在"基础设置"中选择模型
+                    <div v-if="stepBehaviorRows.length === 0" class="text-center text-gray-500 py-6 text-xs">
+                      暂无已启用的{{ activeProject.logic_mode === 'tracking' ? '物品' : '步骤' }} — 请先在上方「标签与检测属性」表中启用
+                    </div>
+                  </div>
+                </div>
+
+                <!-- ============ 表C: 物品校验参数 (仅自定义混合模式, 两套原生词汇) ============ -->
+                <div v-if="isCustomMixed" class="border border-slate-700 rounded">
+                  <div class="px-3 py-2 bg-slate-800 border-b border-slate-700 flex items-center gap-2 flex-wrap">
+                    <span class="font-bold text-white text-sm">物品校验参数 · {{ activeProject.custom_mixed_with === 'per_item' ? '混合逐件覆盖' : '混合跟踪清点' }}</span>
+                    <span class="text-xs text-gray-500">
+                      {{ activeProject.custom_mixed_with === 'per_item'
+                        ? '角色为「物品」的行 = 一条「目标 ⟶ 覆盖动作」配对，参数与独立逐件模式完全一致；周期何时开始/结算由上方步骤决定'
+                        : '角色为「物品」的标签按独立跟踪模式的同一套机制清点（唯一ID/动作计数/堆叠），周期何时开始/结算由上方步骤决定' }}
+                    </span>
+                  </div>
+
+                  <!-- 混合跟踪: 原生跟踪行为列 + 期望数量 -->
+                  <div v-if="activeProject.custom_mixed_with === 'tracking'" class="overflow-x-auto custom-scrollbar step-table-scroll">
+                    <table class="min-w-full w-max text-left text-xs text-gray-300 border-collapse whitespace-nowrap">
+                      <thead class="bg-slate-800 text-gray-400 sticky top-0 z-10">
+                        <tr class="border-b border-slate-700">
+                          <th class="p-2 min-w-[8rem]">物品</th>
+                          <th class="p-2 w-28">
+                            <el-tooltip content="一个周期内应清点到的个体总数（跟踪计数=唯一ID去重；动作计数/堆叠模式此列自动失效，以各自「需要次数/堆叠层数」为准）。0 = 只展示不判定" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">期望数量</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-28">
+                            <el-tooltip content="物品被短暂遮挡后仍算在场的最长时间，在此时间内不会被判定为消失（留空默认 5 秒）" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">遮挡容忍(秒)</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-20">
+                            <el-tooltip content="开启后，物品放下后按位置锁定ID，不受ByteTrack的ID交换影响，适用于静止物品" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">位置注册</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-28">
+                            <el-tooltip content="跟踪计数：按唯一物品ID计数；动作计数：按物品出现-消失次数计数（适用于堆叠遮挡场景）" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">计数模式</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-24">
+                            <el-tooltip content="动作计数模式下，需要检测到多少次放入动作才算达标（仅动作计数模式有效）" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">需要次数</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-24">
+                            <el-tooltip content="动作计数模式下，物品消失多少帧后确认为一次完成的动作（默认8帧）" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">消失确认帧</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-20">
+                            <el-tooltip content="堆叠模式：同一物品已放好但被堆叠/遮挡时，画面消失再次出现算下一个。仅跟踪计数模式生效" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">堆叠模式</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-24">
+                            <el-tooltip content="堆叠模式下，物品消失多少秒后再次出现算作下一个（默认1.0秒；建议大于「遮挡容忍」）" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">重现间隔(秒)</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-20">
+                            <el-tooltip content="堆叠模式累计达到此数即达标。「每层个数」=1 时即层数；>1 时为各层个数之和（例：4 盘 × 每盘 24 = 96）" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">堆叠总数</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-20">
+                            <el-tooltip content="每层/每批必须同帧数到的最少个数，达标才计入这一层（默认1=出现即算一层）。适用于整盘进出上料位的场景" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">每层个数</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-20">
+                            <el-tooltip content="每层个数需连续满足多少帧才闩锁计数（默认1帧；调大可抑制误检瞬时凑数）" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">每层确认帧</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-16">
+                            <el-tooltip content="满盘门：只验「每盘/每批是否数满『每层个数』」，任一盘短一个即判NG，不卡「堆叠总数」（盘数当辅助计数）。适用于连续供料、盘数难干净计但每盘必须满的场景" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">满盘门</span>
+                            </el-tooltip>
+                          </th>
+                          <th class="p-2 w-24">
+                            <el-tooltip content="同时最多识别几个该物品；填0=无上限。设为1即不论同时检测到多少个都视为同一个ID。仅跟踪计数模式生效" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">最大识别数</span>
+                            </el-tooltip>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="step in mixItemRows" :key="step.id" class="border-b border-slate-700 hover:bg-slate-700/30">
+                          <td class="p-2 font-mono text-cyan-400">
+                            {{ step.displayLabel || step.label }}
+                            <span v-if="step.displayLabel && step.displayLabel !== step.label" class="text-gray-500 ml-1">({{ step.label }})</span>
+                          </td>
+                          <td class="p-2">
+                            <el-input-number v-model="step.expected_count"
+                              :min="0" :step="1" :precision="0" size="small" :controls="false"
+                              :disabled="step.count_mode === 'event' || step.stack_enabled"
+                              placeholder="0=只展示" class="w-full" />
+                          </td>
+                          <td class="p-2">
+                            <el-input-number v-model="step.tracking_max_lost_seconds"
+                              :min="0" :step="0.5" :precision="2" size="small" :controls="false"
+                              placeholder="5.0" class="w-full" />
+                          </td>
+                          <td class="p-2 text-center">
+                            <el-switch v-model="step.tracking_position_lock" size="small" />
+                          </td>
+                          <td class="p-2">
+                            <el-select v-model="step.count_mode" size="small" class="w-full">
+                              <el-option label="跟踪计数" value="track" />
+                              <el-option label="动作计数" value="event" />
+                            </el-select>
+                          </td>
+                          <td class="p-2">
+                            <el-input-number v-model="step.event_required_count"
+                              :min="0" :step="1" :precision="0" size="small" :controls="false"
+                              :disabled="step.count_mode !== 'event'" placeholder="1" class="w-full" />
+                          </td>
+                          <td class="p-2">
+                            <el-input-number v-model="step.event_gone_frames"
+                              :min="0" :step="1" :precision="0" size="small" :controls="false"
+                              :disabled="step.count_mode !== 'event'" placeholder="8" class="w-full" />
+                          </td>
+                          <td class="p-2 text-center">
+                            <el-switch v-model="step.stack_enabled" size="small"
+                              :disabled="step.count_mode !== 'track'" />
+                          </td>
+                          <td class="p-2">
+                            <el-input-number v-model="step.stack_reappear_seconds"
+                              :min="0.1" :step="0.1" :precision="2" size="small" :controls="false"
+                              :disabled="!step.stack_enabled || step.count_mode !== 'track'"
+                              placeholder="1.0" class="w-full" />
+                          </td>
+                          <td class="p-2">
+                            <el-input-number v-model="step.stack_required_count"
+                              :min="2" :step="1" :precision="0" size="small" :controls="false"
+                              :disabled="!step.stack_enabled || step.count_mode !== 'track'"
+                              placeholder="2" class="w-full" />
+                          </td>
+                          <td class="p-2">
+                            <el-input-number v-model="step.stack_layer_min_count"
+                              :min="1" :step="1" :precision="0" size="small" :controls="false"
+                              :disabled="!step.stack_enabled || step.count_mode !== 'track'"
+                              placeholder="1" class="w-full" />
+                          </td>
+                          <td class="p-2">
+                            <el-input-number v-model="step.stack_layer_min_frames"
+                              :min="1" :step="1" :precision="0" size="small" :controls="false"
+                              :disabled="!step.stack_enabled || step.count_mode !== 'track'"
+                              placeholder="1" class="w-full" />
+                          </td>
+                          <td class="p-2 text-center">
+                            <el-switch v-model="step.stack_gate_only" size="small"
+                              :disabled="!step.stack_enabled || step.count_mode !== 'track'" />
+                          </td>
+                          <td class="p-2">
+                            <el-input-number v-model="step.max_recognized"
+                              :min="0" :step="1" :precision="0" size="small" :controls="false"
+                              :disabled="step.count_mode !== 'track'" placeholder="无上限" class="w-full" />
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <div v-if="mixItemRows.length === 0" class="text-center text-gray-500 py-6 text-xs">
+                      暂无物品 — 在上方「标签与检测属性」表把对应标签的角色切换为「物品」
+                    </div>
+                    <!-- 抗闪烁全局开关 (与独立跟踪模式同一组字段) -->
+                    <div v-if="mixItemRows.length > 0" class="px-3 py-2 border-t border-slate-700 flex items-center gap-5 text-xs flex-wrap">
+                      <span class="text-gray-500">抗闪烁（全局，与独立跟踪模式同义）:</span>
+                      <div class="flex items-center gap-1.5">
+                        <el-tooltip content="两个物品ID在相邻帧位置互换时自动纠正（ByteTrack 偶发ID交换）" placement="top">
+                          <span class="text-gray-400 cursor-help">ID交换检测</span>
+                        </el-tooltip>
+                        <el-switch v-model="activeProject.tracking_swap_detection" size="small" />
+                      </div>
+                      <div class="flex items-center gap-1.5">
+                        <el-tooltip content="用颜色直方图辅助再识别，减少短暂遮挡后的ID漂移" placement="top">
+                          <span class="text-gray-400 cursor-help">外观特征辅助</span>
+                        </el-tooltip>
+                        <el-switch v-model="activeProject.tracking_appearance_match" size="small" />
+                      </div>
+                      <div class="flex items-center gap-1.5">
+                        <el-tooltip content="物品稳定 N 帧后锁定其ID不再变化" placement="top">
+                          <span class="text-gray-400 cursor-help">ID锁定</span>
+                        </el-tooltip>
+                        <el-switch v-model="activeProject.tracking_id_lock" size="small" />
+                      </div>
+                      <div v-if="activeProject.tracking_id_lock" class="flex items-center gap-1.5">
+                        <span class="text-gray-400">锁定帧数</span>
+                        <el-input-number v-model="activeProject.tracking_id_lock_frames" :min="0" :step="5" :precision="0" size="small" class="!w-24" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 混合逐件: 原生「目标 ⟶ 覆盖动作」配对卡片 (与独立逐件模式同一套字段) -->
+                  <div v-else class="p-3 space-y-3">
+                    <div
+                      v-for="step in mixItemRows"
+                      :key="'mixpi-'+step.id"
+                      class="border border-slate-700 rounded p-3 bg-slate-900/40">
+                      <div class="flex items-center gap-2 mb-3">
+                        <span class="text-cyan-400 font-bold">{{ step.displayLabel || step.label }}</span>
+                        <span v-if="step.displayLabel && step.displayLabel !== step.label" class="text-gray-500 text-xs">({{ step.label }})</span>
+                        <span class="text-[10px] text-gray-500 ml-auto">目标 ⟶ 覆盖动作 配对</span>
+                      </div>
+                      <div v-if="step.per_item" class="grid grid-cols-2 gap-3">
+                        <div>
+                          <div class="text-[11px] text-gray-400 mb-1">要被覆盖的目标标签 <span class="text-amber-400">(可多选 = "或")</span></div>
+                          <el-select
+                            :model-value="_pi_itemLabelToArray(step.per_item.item_label)"
+                            @update:model-value="(v) => { step.per_item.item_label = _pi_itemLabelFromArray(v); }"
+                            size="small" multiple filterable allow-create default-first-option
+                            collapse-tags collapse-tags-tooltip
+                            :placeholder="(activeProject.model_labels || []).length ? '从模型类别里选' : '先选主模型才能列出类别'"
+                            class="!w-full">
+                            <el-option
+                              v-for="lbl in (activeProject.model_labels || [])"
+                              :key="lbl" :label="lbl" :value="lbl" />
+                          </el-select>
+                          <div class="text-[10px] text-gray-500 mt-1">画面里出现任一标签都算"目标"；目标标签不参与上方步骤序列</div>
+                        </div>
+                        <div>
+                          <div class="text-[11px] text-gray-400 mb-1">用哪个标签作为"覆盖动作"？</div>
+                          <el-select
+                            v-model="step.per_item.action_label"
+                            size="small" filterable allow-create default-first-option
+                            :placeholder="(activeProject.model_labels || []).length ? '从模型类别里选' : '先选主模型才能列出类别'"
+                            class="!w-full">
+                            <el-option
+                              v-for="lbl in (activeProject.model_labels || [])"
+                              :key="lbl" :label="lbl" :value="lbl" />
+                          </el-select>
+                          <div class="text-[10px] text-gray-500 mt-1">持续与目标重叠 → 该目标算"被覆盖"；若它同时是上方某个步骤，两边共享互不干扰</div>
+                        </div>
+                        <div>
+                          <div class="text-[11px] text-gray-400 mb-1">每周期已知有几件目标？</div>
+                          <el-input-number
+                            v-model="step.per_item.expected_count"
+                            size="small" :min="0" :step="1" :precision="0" class="!w-full" placeholder="0 = 自动" />
+                          <div class="text-[10px] text-gray-500 mt-1">填已知数量 → 锁定封顶、少件判 NG（虚拟漏件）；填 0 = 周期内随见随建</div>
+                        </div>
+                        <div>
+                          <div class="text-[11px] text-gray-400 mb-1">同件跨帧匹配松紧</div>
+                          <el-input-number
+                            v-model="step.per_item.item_tracking_iou"
+                            size="small" :min="0.1" :max="0.95" :step="0.05" :precision="2" class="!w-full" />
+                          <div class="text-[10px] text-gray-500 mt-1">越大越严, 防止把相邻两件认成同一件; 默认 0.3</div>
+                        </div>
+                        <div>
+                          <div class="text-[11px] text-gray-400 mb-1">动作框与目标框的重合度</div>
+                          <el-input-number
+                            v-model="step.per_item.coverage_iou"
+                            size="small" :min="0.1" :max="0.95" :step="0.05" :precision="2" class="!w-full" />
+                          <div class="text-[10px] text-gray-500 mt-1">重合度 ≥ 此值才计入"覆盖"; 默认 0.3, 动作大可调低如 0.2</div>
+                        </div>
+                        <div>
+                          <div class="text-[11px] text-gray-400 mb-1">需连续多少帧才算覆盖</div>
+                          <el-input-number
+                            v-model="step.per_item.sustain_frames"
+                            size="small" :min="1" :step="1" :precision="0" class="!w-full" />
+                          <div class="text-[10px] text-gray-500 mt-1">动作框与目标重叠连续达到 N 帧, 才确认"已覆盖"; 默认 5</div>
+                        </div>
+                        <div class="col-span-2 px-2 py-1.5 bg-slate-900/60 border border-slate-700 rounded">
+                          <div class="flex items-center justify-between gap-3">
+                            <div class="flex-1">
+                              <div class="text-[11px] font-bold text-cyan-300">小物件场景: 用"中心点"判定覆盖</div>
+                              <div class="text-[10px] text-gray-500 mt-0.5">
+                                适用 <span class="text-amber-300">涂黑 / 喷漆 / 扫码贴标</span> 这类"动作框远大于目标"的场景<br/>
+                                开启: 目标中心点落在动作框内即算覆盖 (上方"重合度"自动忽略)
+                              </div>
+                            </div>
+                            <el-switch v-model="step.per_item.coverage_use_center"
+                              active-text="中心点" inactive-text="重合度" inline-prompt size="default" />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-if="mixItemRows.length === 0" class="text-center text-gray-500 py-6 text-xs">
+                      暂无物品 — 在上方「标签与检测属性」表把对应标签的角色切换为「物品」
+                    </div>
+                    <div v-if="mixItemRows.length > 0" class="text-[10px] text-gray-500">
+                      ※ 周期由上方步骤侧驱动：周期开始时个体清零重新锁定，步骤侧结算时检查"目标是否全部被覆盖 + 件数是否达期望"，任一不满足整周期降级 NG<br/>
+                      ※ 独立逐件模式的"收尾标签 / 稳定窗口 / 双超时 / 手动结算"在混合下不生效（周期主权在步骤侧）
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1085,6 +1474,18 @@
                         <el-option label="基于检测模式" value="detection" />
                       </el-select>
                       <p class="text-xs text-gray-500 mt-1">选择后将继承该模式的逻辑，自定义条件优先级更高</p>
+                    </el-form-item>
+                    <el-form-item label="混合模式（可选）">
+                      <el-select v-model="activeProject.custom_mixed_with" class="w-full" clearable
+                        placeholder="不混合（与原自定义模式完全一致）" @change="onCustomMixTypeChange">
+                        <el-option label="混合逐件覆盖（目标⟶动作配对，每件个体都要被覆盖到）" value="per_item" />
+                        <el-option label="混合跟踪清点（唯一个体ID累积/动作计数/堆叠，与独立跟踪模式同机制）" value="tracking" />
+                      </el-select>
+                      <p class="text-xs text-gray-500 mt-1">
+                        选择后，可在「步骤设置」中把某些标签标记为「物品」：物品不参与步骤序列，
+                        由所选独立模式的同一套引擎校验（参数也在「步骤设置 → 物品校验参数」用该模式的原生词汇配置）。
+                        周期何时开始/结算仍由步骤侧决定，结算时步骤和物品都合格才算合格。
+                      </p>
                     </el-form-item>
                   </el-form>
 
@@ -2425,12 +2826,80 @@ const newProjectForm = ref({
 // 计算启用的步骤
 const enabledSteps = computed(() => {
   if (!activeProject.value?.steps_config) return [];
-  return activeProject.value.steps_config.filter(s => s.enabled);
+  // v3.19.x: 物品行 (detect_role='item') 归自定义混合子状态机管，
+  // 不参与任何"步骤选择"场景（序列/检测/条件/触发器等），与后端守门一致
+  return activeProject.value.steps_config.filter(s => s.enabled && s.detect_role !== 'item');
 });
 
 const nonBackupSteps = computed(() => {
   return enabledSteps.value.filter(s => !s.backup_for);
 });
+
+// v3.19.x: 自定义混合模式（逐件/跟踪子状态机）是否启用 —— 控制步骤表"角色/物品参数"列
+const isCustomMixed = computed(() => {
+  const p = activeProject.value;
+  return !!(p && p.logic_mode === 'custom'
+    && (p.custom_mixed_with === 'per_item' || p.custom_mixed_with === 'tracking'));
+});
+
+// 角色切换：切到"物品"时按混合类型初始化原生字段；切回"步骤"保留参数（再切回来不丢配置）
+const _ensureMixItemDefaults = (step) => {
+  const mixType = activeProject.value?.custom_mixed_with;
+  if (mixType === 'tracking') {
+    // 原生跟踪行字段 (与独立跟踪模式同名同义)
+    if (step.count_mode === undefined) step.count_mode = 'track';
+    if (step.expected_count === undefined) {
+      step.expected_count = step.mix_item?.expected_count ?? 1;  // 旧存储兜底
+    }
+  } else if (mixType === 'per_item') {
+    // 原生逐件配对字段 (与独立逐件模式 steps_config[i].per_item 同名同义)
+    if (!step.per_item) {
+      step.per_item = {
+        item_label: step.label || '',
+        action_label: '',
+        item_tracking_iou: 0.3,
+        coverage_iou: 0.3,
+        coverage_use_center: false,
+        sustain_frames: 5,
+        expected_count: 0,
+        completion: 'all_covered',
+      };
+    }
+  }
+};
+const onDetectRoleChange = (step, val) => {
+  step.detect_role = val;
+  if (val === 'item') _ensureMixItemDefaults(step);
+};
+
+// 切换混合类型时，给已有物品行补齐新类型的原生字段（旧类型字段保留，切回不丢）
+const onCustomMixTypeChange = () => {
+  (activeProject.value?.steps_config || []).forEach(s => {
+    if (s.detect_role === 'item') _ensureMixItemDefaults(s);
+  });
+};
+
+// ==================== 步骤设置页三表拆分（标签通用属性 / 模式行为 / 物品校验） ====================
+// 表B行：已启用步骤；混合模式下排除物品行（物品归表C）。跟踪模式同样走此表（物品行为列）
+const stepBehaviorRows = computed(() => {
+  const steps = activeProject.value?.steps_config || [];
+  return steps.filter(s => s.enabled && !(isCustomMixed.value && s.detect_role === 'item'));
+});
+
+// 表C行：混合模式下角色为"物品"的已启用标签
+const mixItemRows = computed(() => {
+  if (!isCustomMixed.value) return [];
+  const steps = activeProject.value?.steps_config || [];
+  return steps.filter(s => s.enabled && s.detect_role === 'item');
+});
+
+const logicModeLabel = computed(() => ({
+  sequential: '顺序模式',
+  detection: '检测模式',
+  custom: '自定义模式',
+  tracking: '跟踪模式',
+  per_item: '逐件覆盖模式',
+}[activeProject.value?.logic_mode] || activeProject.value?.logic_mode || ''));
 
 const countableSteps = computed(() => {
   const trigger = activeProject.value?.tracking_trigger_label || '';
@@ -2886,6 +3355,8 @@ const initProjectDefaults = (project) => {
     // v3.10+ Box 尺寸上限 (归一化 0~1, 0 = 关闭过滤)
     if (step.box_max_width === undefined) step.box_max_width = 0;
     if (step.box_max_height === undefined) step.box_max_height = 0;
+    // v3.19.x 满盘门: 堆叠模式只验每盘是否数满 (默认关 = 历史"卡总数"行为)
+    if (step.stack_gate_only === undefined) step.stack_gate_only = false;
   });
 
   // v3.7.x (FIX): 清理孤儿步骤 — from_model 既不是 'main' 也对不上当前 extra_models slot.
@@ -3022,6 +3493,26 @@ const initProjectDefaults = (project) => {
   if (project.custom_based_on === undefined) {
     project.custom_based_on = pipelineConfig.custom_based_on || null;  // 默认不选择
   }
+  // v3.19.x: 自定义混合模式（不填 = 现状，零差异）
+  if (project.custom_mixed_with === undefined) {
+    project.custom_mixed_with = pipelineConfig.custom_mixed_with || null;
+  }
+  // 物品行原生字段兜底：老数据/手改 JSON 可能缺字段，表C输入框依赖它们存在
+  (project.steps_config || []).forEach(s => {
+    if (s.detect_role !== 'item') return;
+    if (project.custom_mixed_with === 'tracking') {
+      if (s.count_mode === undefined) s.count_mode = 'track';
+      if (s.expected_count === undefined) {
+        s.expected_count = s.mix_item?.expected_count ?? 1;  // 旧 mix_item 存储兜底
+      }
+    } else if (project.custom_mixed_with === 'per_item' && !s.per_item) {
+      s.per_item = {
+        item_label: s.label || '', action_label: '',
+        item_tracking_iou: 0.3, coverage_iou: 0.3, coverage_use_center: false,
+        sustain_frames: 5, expected_count: 0, completion: 'all_covered',
+      };
+    }
+  });
   
   // 自定义模式独立的配置（与顺序模式/检测模式分开）
   if (project.custom_sequence_order === undefined) {
@@ -3284,6 +3775,7 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.detection_steps = project.detection_steps;
   project.pipeline_config.custom_conditions = project.custom_conditions;
   project.pipeline_config.custom_based_on = project.custom_based_on;
+  project.pipeline_config.custom_mixed_with = project.custom_mixed_with;
   project.pipeline_config.custom_sequence_order = project.custom_sequence_order;
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
@@ -3429,6 +3921,9 @@ const handleSaveProject = async () => {
     }
   }
 
+  // v3.19.x: 连续重复步骤的消失等待时间保存前强制清 0（后端 apply 还有一层兜底）
+  syncDupDisappearDelay();
+
   saving.value = true;
   try {
     const data = {
@@ -3445,6 +3940,7 @@ const handleSaveProject = async () => {
         detection_steps: activeProject.value.detection_steps,
         custom_conditions: activeProject.value.custom_conditions,
         custom_based_on: activeProject.value.custom_based_on,
+        custom_mixed_with: activeProject.value.custom_mixed_with || null,
         custom_sequence_order: activeProject.value.custom_sequence_order,
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,
@@ -3706,19 +4202,46 @@ const handleDeleteProject = async () => {
   }
 };
 
-// 顺序/自定义顺序: 同一 step_id 只保留最新一行, 避免下拉选新值后旧行仍占位
-const onSequenceStepPick = (rowIdx, stepId, field = 'sequence_order') => {
-  if (stepId == null || !activeProject.value) return;
-  const seq = field === 'custom_sequence_order'
-    ? activeProject.value.custom_sequence_order
-    : activeProject.value.sequence_order;
-  if (!Array.isArray(seq)) return;
-  seq.forEach((item, i) => {
-    if (i !== rowIdx && item?.step_id === stepId) {
-      item.step_id = null;
-    }
-  });
+// v3.19.x: 序列允许重复选择同一步骤（含连续重复, 如 放托盘×4）。
+// 旧版"同一 step_id 只保留最新一行"的去重已删除 — 后端 v3.7.0 起支持非连续
+// 重复, v3.19.x 起支持连续重复, UI 不再拦截。
+const onSequenceStepPick = () => {
+  syncDupDisappearDelay();
 };
+
+// 当前生效序列里"连续重复"的步骤 id 集合（顺序模式 / 自定义-基于顺序）
+const consecutiveDupStepIds = computed(() => {
+  const p = activeProject.value;
+  const dup = new Set();
+  if (!p) return dup;
+  let seq = null;
+  if (p.logic_mode === 'sequential') seq = p.sequence_order;
+  else if (p.logic_mode === 'custom' && p.custom_based_on === 'sequential') seq = p.custom_sequence_order;
+  if (!Array.isArray(seq)) return dup;
+  for (let i = 1; i < seq.length; i++) {
+    const a = seq[i - 1]?.step_id;
+    const b = seq[i]?.step_id;
+    if (a != null && a === b) dup.add(a);
+  }
+  return dup;
+});
+
+// 连续重复步骤的消失等待时间强制清 0（与后端 _apply_pipeline_config 兜底联动）：
+// 连续 A→A 的辨认依赖"上一次出现立即走完消失结算"，等待时间会把第二次出现
+// 当成第一次的延续导致漏计。
+const syncDupDisappearDelay = () => {
+  const p = activeProject.value;
+  if (!p?.steps_config) return;
+  const dup = consecutiveDupStepIds.value;
+  if (dup.size === 0) return;
+  for (const s of p.steps_config) {
+    if (dup.has(s.id) && s.disappear_delay) {
+      s.disappear_delay = 0;
+    }
+  }
+};
+
+watch(consecutiveDupStepIds, () => syncDupDisappearDelay());
 
 const _nextStepId = (stepsConfig) => {
   let maxNum = 0;

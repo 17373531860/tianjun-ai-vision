@@ -181,11 +181,13 @@ class StepStatsMixin:
                     self._check_static_step_conditions(label)
         
         # 获取启用的步骤标签
+        # v3.19.x: 物品行 (detect_role='item') 永不算步骤 —— 即使混合子状态机
+        # 未启用 (如配置残留), 物品标签也不进入 _process_single_step / 周期序列
         enabled_labels = set()
         if self.project_config:
             steps_config = self.project_config.get('steps_config', [])
             for step in steps_config:
-                if step.get('enabled', True):
+                if step.get('enabled', True) and step.get('detect_role') != 'item':
                     step_label = step.get('label', '')
                     if step_label:
                         enabled_labels.add(step_label)
@@ -216,6 +218,20 @@ class StepStatsMixin:
             for _lbl in detected_labels:
                 self.step_visible_seconds[_lbl] = self.step_visible_seconds.get(_lbl, 0.0) + _dt
         self._last_frame_ts_for_visible = current_time
+
+        # v3.19.x: 自定义模式混合子状态机 — 物品标签分流。
+        # 物品标签由子状态机独占消费 (计数/唯一ID统计), 这里剥离后不再进入
+        # 跨周期组 / last_first / 同时组 / _process_single_step / 消失检测,
+        # 保证物品永远不会被当成步骤参与周期序列。
+        _custom_mix = getattr(self, '_custom_mix', None)
+        if _custom_mix is not None:
+            try:
+                _custom_mix.feed(self, detections, current_time, original_frame)
+            except Exception as _mix_e:
+                print(f"[CustomMix] feed 失败: {_mix_e}")
+            detected_labels -= _custom_mix.item_labels
+            frame_detected_labels -= _custom_mix.item_labels
+            just_confirmed_labels -= _custom_mix.item_labels
 
         # v3.8.x (类二): 跨周期同时出现组路由
         # 顺序:

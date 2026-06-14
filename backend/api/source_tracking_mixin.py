@@ -81,7 +81,15 @@ class TrackingMixin:
                         stack_steps[lbl] = {
                             'reappear_seconds': float(step.get('stack_reappear_seconds', 1.0) or 1.0),
                             'required_count': max(2, int(step.get('stack_required_count', 2) or 2)),
-                        }
+                        # v3.19.x 批层语义: 每层同帧最少个数 + 达标持续帧数
+                        # (默认 1/1 = 历史"出现即计一层"行为, 字节级零差异)
+                        'layer_min_count': max(1, int(step.get('stack_layer_min_count', 1) or 1)),
+                        'layer_min_frames': max(1, int(step.get('stack_layer_min_frames', 1) or 1)),
+                        # v3.19.x 满盘门: True = 只验"每盘是否数满 layer_min_count",
+                        # 任一盘短即 NG, 不卡累计总数 (盘数辅助); 用于连续供料、
+                        # 盘数无法干净计数但每盘必须满的场景 (如包装线逐盘装箱)
+                        'gate_only': bool(step.get('stack_gate_only', False)),
+                    }
                     except (TypeError, ValueError):
                         pass
                 try:
@@ -513,7 +521,9 @@ class TrackingMixin:
                         'stable_frames': 1, 'order_idx': self._tracking_order_seq,
                     }
 
-                if not self._tracking_cycle_active and label in expected_items:
+                # v3.19.x: 自定义混合跟踪时周期主权在步骤侧, 真机械不自动开周期
+                if (not getattr(self, '_tracking_external_cycle', False)
+                        and not self._tracking_cycle_active and label in expected_items):
                     self._tracking_cycle_active = True
                     self.cycle_start_time = current_time
                     self.cycle_start_frame_pos = self._video_frame_pos()
@@ -693,7 +703,9 @@ class TrackingMixin:
                     self._event_visible_frames[label] = 1
                     if label not in self._event_first_seen:
                         self._event_first_seen[label] = current_time
-                    if not self._tracking_cycle_active:
+                    # v3.19.x: 混合跟踪时周期主权在步骤侧, 不自动开周期
+                    if (not self._tracking_cycle_active
+                            and not getattr(self, '_tracking_external_cycle', False)):
                         self._tracking_cycle_active = True
                         self.cycle_start_time = current_time
                         self.cycle_start_frame_pos = self._video_frame_pos()
@@ -726,45 +738,80 @@ class TrackingMixin:
     def _tracking_run_stack_fsm(self, stack_steps, detections, current_time):
         """Stack mode FSM (堆叠计数, v2.7.4): idle → visible → disappeared → visible 循环。
 
-        - 第一次 idle→visible 直接计 1 (第一层)
-        - visible → disappeared: 记下消失时刻, 等再次出现
-        - disappeared → visible 且消失 >= reappear_seconds: 计 +1 (新一层)
-        - 否则只重回 visible 不计数
+        v3.19.x 批层语义 (layer_min_count / layer_min_frames, 默认 1/1 = 历史行为零差异):
+        - 每个"在场段"是一层/一批; 层内同帧可见数 >= layer_min_count
+          连续 layer_min_frames 帧 → 本层闩锁, 计数器一次性 += layer_min_count
+        - 闩锁后层内遮挡闪断 (< reappear_seconds) 重现不重复计数
+        - 消失 >= reappear_seconds 后重现 = 新一层, 重新闩锁
+        - 未闩锁就离场的层记入 _stack_partials (NG 原因可解释性: "这批只数到 23/24")
+        - 默认 1/1 时: 出现首帧即闩锁 +1, 与历史"出现即计一层"完全一致
 
         注: stack_counters 不直接覆盖 _tracking_class_counters (避免影响 ByteTrack display_id 分配),
         在 _rebuild_checklist 中用 max 策略合并。仅在 logic_mode=tracking + count_mode=track 下生效。
         """
         if not stack_steps:
             return
-        stack_label_visible = {lbl: False for lbl in stack_steps}
+        stack_label_count = {lbl: 0 for lbl in stack_steps}
         for _det in detections:
             _lbl = _det.get('label', '')
             if _lbl in stack_steps and self._det_passes_roi_for_label(_det, _lbl):
-                stack_label_visible[_lbl] = True
+                stack_label_count[_lbl] += 1
+
+        def _enter_phase(label, count, min_count):
+            """进入新的在场段: 达标连续帧/闩锁/峰值全部重置"""
+            self._stack_state[label] = 'visible'
+            self._stack_visible_frames[label] = 1
+            self._stack_sat_frames[label] = 1 if count >= min_count else 0
+            self._stack_latched[label] = False
+            self._stack_phase_peak[label] = count
+
+        def _try_latch(label, cfg):
+            """层内达标持续帧数足够 → 闩锁本层并计数"""
+            if self._stack_latched.get(label):
+                return
+            if self._stack_sat_frames.get(label, 0) < cfg['layer_min_frames']:
+                return
+            self._stack_latched[label] = True
+            inc = cfg['layer_min_count']
+            self._stack_counters[label] = self._stack_counters.get(label, 0) + inc
+            layer_no = self._stack_counters[label] // inc if inc else 0
+            print(f"[Stack] {label} layer #{layer_no} 闩锁 +{inc} "
+                  f"(累计 {self._stack_counters[label]}/{cfg['required_count']})")
+            # v3.19.x: 混合跟踪时周期主权在步骤侧, 不自动开周期
+            if (not self._tracking_cycle_active
+                    and not getattr(self, '_tracking_external_cycle', False)):
+                self._tracking_cycle_active = True
+                self.cycle_start_time = current_time
+                self.cycle_start_frame_pos = self._video_frame_pos()
+                try:
+                    self.start_cycle()
+                except Exception:
+                    pass
+
         for label, cfg in stack_steps.items():
             if label not in self._stack_state:
                 self._stack_state[label] = 'idle'
                 self._stack_counters[label] = 0
                 self._stack_visible_frames[label] = 0
             state = self._stack_state[label]
-            is_visible = stack_label_visible[label]
+            count = stack_label_count[label]
+            min_count = cfg['layer_min_count']
+            is_visible = count > 0
+
             if state == 'idle':
                 if is_visible:
-                    self._stack_state[label] = 'visible'
-                    self._stack_visible_frames[label] = 1
-                    self._stack_counters[label] = self._stack_counters.get(label, 0) + 1
-                    if not self._tracking_cycle_active:
-                        self._tracking_cycle_active = True
-                        self.cycle_start_time = current_time
-                        self.cycle_start_frame_pos = self._video_frame_pos()
-                        try:
-                            self.start_cycle()
-                        except Exception:
-                            pass
-                    print(f"[Stack] {label} layer #{self._stack_counters[label]}/{cfg['required_count']} (initial)")
+                    _enter_phase(label, count, min_count)
+                    _try_latch(label, cfg)
             elif state == 'visible':
                 if is_visible:
                     self._stack_visible_frames[label] += 1
+                    self._stack_phase_peak[label] = max(
+                        self._stack_phase_peak.get(label, 0), count)
+                    if count >= min_count:
+                        self._stack_sat_frames[label] = self._stack_sat_frames.get(label, 0) + 1
+                    else:
+                        self._stack_sat_frames[label] = 0
+                    _try_latch(label, cfg)
                 else:
                     self._stack_state[label] = 'disappeared'
                     self._stack_disappeared_at[label] = current_time
@@ -772,10 +819,44 @@ class TrackingMixin:
                 if is_visible:
                     disappeared_for = current_time - self._stack_disappeared_at.get(label, current_time)
                     if disappeared_for >= cfg['reappear_seconds']:
-                        self._stack_counters[label] = self._stack_counters.get(label, 0) + 1
-                        print(f"[Stack] {label} layer #{self._stack_counters[label]}/{cfg['required_count']} (reappeared after {disappeared_for:.2f}s)")
-                    self._stack_state[label] = 'visible'
-                    self._stack_visible_frames[label] = 1
+                        # 新一层开始; 上一层若未闩锁, 记入不完整批次明细
+                        if not self._stack_latched.get(label, False):
+                            peak = self._stack_phase_peak.get(label, 0)
+                            self._stack_partials.setdefault(label, []).append(
+                                {'peak': peak, 'required': min_count})
+                            print(f"[Stack] {label} 上一批未达标离场 "
+                                  f"(峰值 {peak}/{min_count}), 记入不完整批次")
+                        _enter_phase(label, count, min_count)
+                        _try_latch(label, cfg)
+                    else:
+                        # 短暂闪断重回, 仍是同一层 (闩锁状态保留, 达标连续帧重新累)
+                        self._stack_state[label] = 'visible'
+                        self._stack_visible_frames[label] = 1
+                        self._stack_phase_peak[label] = max(
+                            self._stack_phase_peak.get(label, 0), count)
+                        self._stack_sat_frames[label] = 1 if count >= min_count else 0
+                        _try_latch(label, cfg)
+
+    def _stack_collect_partials(self, label, min_count=0):
+        """收集某标签的"未数满批次": 已落账的不完整批 + 当前在场/刚离场但还没
+        闩锁的批 (满盘门裁决用; 与 _TrackingMixEngine 同一口径, 单点维护)。
+
+        返回 [{'peak': 峰值, 'required': 应达数}, ...]; 空列表 = 没有短盘。
+        """
+        partials = list((getattr(self, '_stack_partials', {}) or {}).get(label) or [])
+        state = (getattr(self, '_stack_state', {}) or {}).get(label)
+        latched = (getattr(self, '_stack_latched', {}) or {}).get(label, False)
+        peak = (getattr(self, '_stack_phase_peak', {}) or {}).get(label, 0)
+        if state in ('visible', 'disappeared') and not latched and peak > 0:
+            required = min_count
+            if not required:
+                try:
+                    cfg = self._tracking_load_step_config({})
+                    required = (cfg['stack_steps'].get(label) or {}).get('layer_min_count', 0)
+                except Exception:
+                    required = 0
+            partials.append({'peak': peak, 'required': required or peak})
+        return partials
 
     def _tracking_capture_screenshots(self, seen_track_ids, original_frame):
         """为当前帧中可见的跟踪对象生成步骤截图 (限频每秒最多 1 次)。"""
