@@ -1255,6 +1255,12 @@ class ScannerService:
 
     def _start_device(self, dev: ScannerDevice):
         raw_type = (getattr(dev, 'device_type', None) or 'text_lon').strip() or 'text_lon'
+        # USB 键盘式扫码枪 (usb_hid): 插上即键盘, 由前端全局键盘捕获处理。后端不建网络
+        # 连接、不起监听线程, 仅作为设备表记录存在 (用途/工位/连接配置在 parse_config.usb),
+        # 供前端读取。放在最前面 return, 避免走下面的 socket 连接逻辑 (它没有 IP)。
+        if raw_type == 'usb_hid':
+            logger.info("[Scanner] %s 为 USB 键盘扫码枪, 后端跳过网络连接", dev.name)
+            return
         # v2.7.8: 协议选择交还给用户。前端"扫码器编辑"表单上有"协议"下拉,
         #   - text_lon: 走 55256 LON/LOFF 文本协议(默认,省电模式)
         #              检测开始时发 LON,设备亮灯扫码;停止时发 LOFF,设备灭灯

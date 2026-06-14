@@ -114,6 +114,10 @@ def migrate_database():
         ("external_devices", "pairing_group", "VARCHAR(32)"),
         ("cluster_config", "channel_station_map", "JSON"),
         ("mes_connections", "bound_channels", "JSON"),
+        # v3.20: 外部 MES 工单主动拉取 — 复用连接表, 拉取专属配置全存 config.pull JSON.
+        # 这两列 ORM 早有声明("第三期预留")但历史迁移漏补, 老库升级时补上(默认关).
+        ("mes_connections", "pull_enabled", "BOOLEAN DEFAULT 0"),
+        ("mes_connections", "pull_interval_sec", "INTEGER DEFAULT 60"),
         ("cluster_config", "timeout_push", "BOOLEAN DEFAULT 0"),
         # v2.7.5: 外部设备稳定值判定与有重无码告警
         ("external_devices", "stable_enabled", "BOOLEAN DEFAULT 1"),
@@ -798,7 +802,11 @@ def _init_mes_services():
         extdev_svc = get_external_device_service()
         extdev_svc.start_all()
 
-        print("[MES] 服务初始化完成（含集群汇总、外部设备）")
+        # v3.20: 外部 MES 工单定时拉取调度器 (按 config.pull.triggers 轮询, 无配置则空转)
+        from backend.services.mes_puller import get_pull_scheduler
+        get_pull_scheduler().start()
+
+        print("[MES] 服务初始化完成（含集群汇总、外部设备、工单拉取调度）")
     except Exception as e:
         print(f"[MES] 服务初始化失败（非致命）: {e}")
 

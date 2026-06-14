@@ -60,6 +60,17 @@ class ExtraFieldsUpdate(BaseModel):
     channel_id: int = 0
     fields: dict
 
+class PullTest(BaseModel):
+    """测试拉取: 直接拿编辑中的 config.pull 试一次, 不依赖已保存的连接。"""
+    pull_config: dict
+    job_no: str = ""
+
+class PullRun(BaseModel):
+    """执行拉取: dry_run=True + max_items=1 即"试同步 1 条看看"; dry_run=False 正式入库。"""
+    job_no: str = ""
+    dry_run: bool = False
+    max_items: Optional[int] = None
+
 
 def _serialize_conn(c):
     return {
@@ -375,6 +386,51 @@ def manual_push(conn_id: int, body: ManualPush):
 
         result = gw.manual_push(conn_id, body.event_type, context, body.channel_id)
         return result
+    finally:
+        db.close()
+
+
+# ============================================================
+# 工单主动拉取 (v3.20: 反向对接外部 MES, 把工单拉回来落库)
+# ============================================================
+
+@router.post("/pull-test",
+              dependencies=[Depends(require_perm("mes.gateway.edit"))])
+def pull_test(body: PullTest):
+    """测试拉取连接: 发一次请求, 自动识别返回结构 (数组路径+字段候选), 不落库.
+
+    给前端"测试连接"用 —— 编辑中尚未保存也能测, 拉回真实样本供点选映射。
+    """
+    from backend.services.mes_puller import get_mes_puller
+    return get_mes_puller().test_connection(body.pull_config or {}, job_no=body.job_no)
+
+
+@router.post("/connections/{conn_id}/pull",
+              dependencies=[Depends(require_perm("mes.gateway.edit"))])
+def pull_orders(conn_id: int, body: PullRun = None):
+    """按某条连接的 config.pull 执行一次工单拉取.
+
+    dry_run=True (+max_items=1) = "试同步看看"(解析映射但不入库);
+    dry_run=False = "立即同步"(按 import_mode upsert 工单)。
+    """
+    from backend.services.mes_puller import get_mes_puller
+    db = SessionLocal()
+    try:
+        conn = db.query(MESConnection).filter(MESConnection.id == conn_id).first()
+        if not conn:
+            raise HTTPException(404, "连接不存在")
+        body = body or PullRun()
+        result = get_mes_puller().pull_for_connection(
+            db, conn, job_no=body.job_no,
+            dry_run=body.dry_run, max_items=body.max_items,
+        )
+        db.commit()
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
     finally:
         db.close()
 

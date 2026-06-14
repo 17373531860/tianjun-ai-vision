@@ -40,6 +40,11 @@
         <GatewayPanel />
       </template>
 
+      <!-- 工单拉取 -->
+      <template v-if="activeTab === 'order-pull'">
+        <OrderPullPanel />
+      </template>
+
       <!-- 外部设备 -->
       <template v-if="activeTab === 'external'">
         <ExternalDevicePanel />
@@ -62,6 +67,7 @@ import WorkpiecePanel from './WorkpiecePanel.vue'
 import DefectPanel from './DefectPanel.vue'
 import ScannerPanel from './ScannerPanel.vue'
 import GatewayPanel from './GatewayPanel.vue'
+import OrderPullPanel from './OrderPullPanel.vue'
 import ExternalDevicePanel from './ExternalDevicePanel.vue'
 import ClusterPanel from './ClusterPanel.vue'
 
@@ -72,6 +78,7 @@ const tabs = [
   { key: 'defects', label: '缺陷分析' },
   { key: 'scanner', label: '扫码器' },
   { key: 'gateway', label: '外部对接' },
+  { key: 'order-pull', label: '工单拉取' },
   { key: 'external', label: '外部设备' },
   { key: 'cluster', label: '集群汇总' },
 ]

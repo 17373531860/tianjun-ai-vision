@@ -596,4 +596,40 @@ curl http://localhost:8001/api/v1/cluster/slaves
 
 ---
 
+## 第 14 节：外部 MES 工单主动拉取（v3.20.0+）
+
+**做什么**：与 MES Gateway 推送相反方向——**主动去外部 MES 查询工单**回填本地。通用可配置，已对接上银 HIWIN（工单数组埋在 `response.resultData` 两层嵌套）。
+
+**关键文件**：
+- `backend/services/mes_puller.py` — `MESPuller`：`test_connection`（自动识别结构）/ `_pull_with_config`（核心流程）/ `_http_request`（发请求+重试+复用网关鉴权）/ `_extract_array` / `_map_fields` / upsert
+- `backend/api/mes_gateway.py` — `/mes/gateway/pull-test`、`/mes/gateway/connections/{id}/pull`
+- `backend/main.py` — `PullScheduler` 后台守护线程（定时同步）
+- `frontend/src/views/MES/OrderPullPanel.vue` — 配置面板（小白点选 + 高级参数）
+
+**配置位**（存在 `MESConnection.config.pull`）：`url / method / request_body_template（{job_no} 占位）/ success_path / success_value / array_path / field_mapping / import_mode(upsert) / retry_count / triggers(manual/scheduled+interval)`。
+
+**常见故障**：
+- 拉取失败只看到「HTTP 500」无详情 → v3.20.0 已修：非 2xx 时通用探测返回体 `error.errorInfo`/`message`/`msg`/`detail` 拼进错误信息。若仍无详情，看外部 MES 返回体结构是否用了非常见错误字段名
+- 拉到数据但工单数为 0 → `array_path` 没对准（上银是 `response.resultData` 两层）。用 pull-test 看 `structure_guess.array_path` 自动识别值
+- 字段全空 → `field_mapping` 的源字段名与返回体不符。pull-test 的 `structure_guess.fields` 给候选
+- 排障开调试中心 `backend.pull` 开关（拉取发起/HTTP/解析/入库每步）+ 前端 `mes.pull`
+
+## 第 15 节：USB 键盘扫码枪（v3.20.0+）
+
+**做什么**：USB 键盘式扫码枪（NT-1202W 等）即插即用。**做成扫码器设备的一种**（`device_type=usb_hid`），不是独立子系统。
+
+**架构关键**：
+- 插上即键盘 → **前端全局键盘捕获**（`frontend/src/composables/useScanGun.js`），速度启发式（字符间隔 `CHAR_GAP_MS` / 段最大时长 `SEG_MAX_MS` / 最小长度 `MIN_LEN`）区分扫码枪与手输
+- 按用途路由：`pull`（扫码拉工单，调 pullOrders）/ `bind`（扫码绑工件，调 `POST /scanner/simulate` 注入 scan_pair 绑定）/ `both`（按 order_pattern 正则判断）
+- **后端 `usb_hid` 设备不建网络连接**（`scanner.py:_start_device` 最前 return）、**不参与 IP:Port 唯一校验**（`api/scanner.py` create/update 跳过，否则多把枪撞 `:0`），仅作设备表记录供前端读
+- 配置归入扫码器面板（`UsbScanGunDialog.vue`），不是独立 Tab；设备卡片隐藏网络枪的「测试/高级控制」，改「测试扫码」按用途真跑一次
+
+**常见故障**：
+- 扫码无反应 → 前端键盘监听是否启动（`layout/index.vue` 调 `startScanGun`）+ 设备表是否有启用的 usb_hid 设备（`useScanGun` 从设备表拉配置缓存）
+- 手输被当扫码 → 调速度启发式阈值
+- 多把枪只保存一把/报「地址 :0 已被占用」→ 确认 create/update 跳过了 usb_hid 地址校验
+- 排障开 `mes.scanner` 调试分类（扫到码/路由决策/拉取或绑定结果）
+
+---
+
 **改动 MES 子系统前必读**：本 skill 第 3/5/8/11 节 + AGENTS.md 第六节 6.2、第八节不变量 1/4/6。

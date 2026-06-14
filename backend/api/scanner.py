@@ -170,19 +170,22 @@ def create_device(body: ScannerCreate):
     try:
         # v2.7.3: 同 IP+port 去重，避免一个物理扫码器在列表中出现多条
         # （现场常见：自动发现保存了一次，又点"保存到设备列表"再保存一次）
-        existing = db.query(ScannerDevice).filter(
-            ScannerDevice.ip == body.ip,
-            ScannerDevice.port == body.port,
-        ).first()
-        if existing:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"该地址 {body.ip}:{body.port} 已被设备 "
-                    f"\"{existing.name}\" (ID={existing.id}) 占用，"
-                    f"请改用其他地址，或编辑/删除已有设备"
-                ),
-            )
+        # USB 键盘扫码枪 (usb_hid) 无网络地址 (ip=''/port=0), 不参与地址唯一校验,
+        # 否则多把 USB 枪会互相撞 ":0"。
+        if body.device_type != 'usb_hid':
+            existing = db.query(ScannerDevice).filter(
+                ScannerDevice.ip == body.ip,
+                ScannerDevice.port == body.port,
+            ).first()
+            if existing:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"该地址 {body.ip}:{body.port} 已被设备 "
+                        f"\"{existing.name}\" (ID={existing.id}) 占用，"
+                        f"请改用其他地址，或编辑/删除已有设备"
+                    ),
+                )
 
         dev = ScannerDevice(**body.model_dump())
         db.add(dev)
@@ -217,7 +220,7 @@ def update_device(device_id: int, body: ScannerUpdate):
         # v2.7.3: 改 IP/port 时检查目标地址是否已被其他设备占用
         new_ip = data.get('ip', dev.ip)
         new_port = data.get('port', dev.port)
-        if (new_ip, new_port) != (dev.ip, dev.port):
+        if dev.device_type != 'usb_hid' and (new_ip, new_port) != (dev.ip, dev.port):
             conflict = db.query(ScannerDevice).filter(
                 ScannerDevice.ip == new_ip,
                 ScannerDevice.port == new_port,

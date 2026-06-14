@@ -1,0 +1,91 @@
+{
+  "version": "3.20.0",
+  "date": "2026-06-15",
+  "previous_version": "3.19.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "外部 MES 工单主动拉取（通用可配置）",
+      "symptom": "对接上银 HIWIN 等外部 MES 时，本地只能等对方推送工单；对方不主动推就拿不到工单，产线无法开工",
+      "root_cause": "原 MES Gateway 只做单向推送（把检测结果推给外部 MES），没有反向主动查询能力",
+      "fix": "新增 MESPuller 服务：通用可配置拉取（地址/方法/请求体模板/成功判定路径/数组路径/字段映射/导入模式），复用 MESConnection 连接表，支持 pull-test 自动识别返回结构（含上银 response.resultData 两层嵌套）+ 立即同步/试同步(dry_run)+ 工单 upsert 幂等。前端 OrderPullPanel 面向小白的点选式配置 + 高级参数",
+      "files": ["backend/services/mes_puller.py", "backend/api/mes_gateway.py", "frontend/src/views/MES/OrderPullPanel.vue", "frontend/src/views/MES/index.vue", "frontend/src/api/gateway.js"],
+      "keywords": ["工单拉取", "主动查询", "外部MES", "上银", "HIWIN", "pull", "MESPuller", "字段映射", "数组路径", "结构识别", "dry_run", "试同步", "upsert", "幂等"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "工单拉取定时自动同步",
+      "symptom": "每次都要人工点「立即同步」才拉工单，无法无人值守",
+      "root_cause": "拉取只有手动触发入口",
+      "fix": "PullScheduler 后台守护线程：按各拉取连接配置的间隔周期轮询拉取，相对独立、失败不影响主流程，随后端启停",
+      "files": ["backend/main.py", "backend/services/mes_puller.py"],
+      "keywords": ["定时同步", "自动同步", "后台线程", "PullScheduler", "轮询", "无人值守", "scheduled"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "USB 键盘扫码枪（即插即用）",
+      "symptom": "现场用 NT-1202W 等 USB 键盘式扫码枪扫码查工单/绑工件，但原扫码器体系只支持网络扫码器（LON/WMax），USB 枪没法接",
+      "root_cause": "扫码器抽象假定都有 IP+端口走网络连接；USB 键盘枪插上即键盘，无网络地址",
+      "fix": "把 USB 枪做成扫码器设备的一种（device_type=usb_hid）：前端全局键盘捕获 + 速度启发式区分扫码与手输，按用途路由（拉工单/绑工件/both）；后端跳过网络连接、跳过 IP:Port 唯一校验（多把枪不再撞 ':0'），仅作设备表记录；配置归入扫码器面板（UsbScanGunDialog），不再是独立子面板",
+      "files": ["frontend/src/composables/useScanGun.js", "frontend/src/views/MES/UsbScanGunDialog.vue", "frontend/src/views/MES/ScannerPanel.vue", "frontend/src/layout/index.vue", "backend/services/scanner.py", "backend/api/scanner.py"],
+      "keywords": ["USB扫码枪", "键盘扫码枪", "即插即用", "usb_hid", "NT-1202W", "全局键盘捕获", "速度启发式", "拉工单", "绑工件", "both", "地址唯一校验"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "工单拉取 + USB 扫码枪调试埋点",
+      "symptom": "新功能现场排障无日志，工单拉取/扫码失败无从定位",
+      "root_cause": "新增链路未接入 v3.19 调试中心",
+      "fix": "新增 backend.pull（拉取发起/HTTP/解析/入库）与 mes.pull（测试连接/试同步/立即同步）调试分类，关开关零开销、开开关产出 job_no/url/HTTP状态/耗时/统计明细；useScanGun 与 OrderPullPanel 接入前端埋点",
+      "files": ["backend/core/debug_center.py", "frontend/src/utils/debug.js", "backend/services/mes_puller.py", "frontend/src/composables/useScanGun.js", "frontend/src/views/MES/OrderPullPanel.vue"],
+      "keywords": ["调试埋点", "backend.pull", "mes.pull", "调试中心", "工单拉取日志", "扫码枪日志"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "外部 MES 返回非 2xx 时丢失返回体错误详情",
+      "symptom": "拉取失败时前端只看到「HTTP 500」，上银把真实原因（如某列字段有歧义）写在返回体里却被丢掉，现场无从排查",
+      "root_cause": "_http_request 非 2xx 分支只把错误信息记成 `HTTP {status}`，不读返回体",
+      "fix": "非 2xx 时通用探测返回体常见错误字段（error.errorInfo / message / msg / detail，纯字符串则截断）拼进错误信息，不硬编码任何厂商；BDD 先红后绿验证",
+      "files": ["backend/services/mes_puller.py"],
+      "keywords": ["HTTP 500", "errorInfo", "错误详情", "拉取失败", "上银", "返回体", "排查"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "工单拉取 + USB 扫码枪三层测试覆盖",
+      "symptom": "新功能仅有单测/UAT，缺 BDD 行为层",
+      "root_cause": "BDD .feature 未补",
+      "fix": "新增 order_pull.feature(6) + usb_scan_gun.feature(5) BDD + test_mes_pull.py(9) 单测 + uat_mes_pull/uat_scan_gun 可见浏览器 UAT；全套 BDD 141 passed 零回归",
+      "files": ["tests/features/order_pull.feature", "tests/features/usb_scan_gun.feature", "tests/step_defs/test_order_pull_bdd.py", "tests/step_defs/test_usb_scan_gun_bdd.py", "tests/test_mes_pull.py", "tests/uat/uat_mes_pull.py", "tests/uat/uat_scan_gun.py"],
+      "keywords": ["BDD", "工单拉取测试", "USB扫码枪测试", "回归", "先红后绿", "UAT"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes"],
+  "files_changed": [
+    "backend/services/mes_puller.py",
+    "backend/api/mes_gateway.py",
+    "backend/api/scanner.py",
+    "backend/services/scanner.py",
+    "backend/core/debug_center.py",
+    "backend/main.py",
+    "frontend/src/views/MES/OrderPullPanel.vue",
+    "frontend/src/views/MES/UsbScanGunDialog.vue",
+    "frontend/src/views/MES/ScannerPanel.vue",
+    "frontend/src/views/MES/index.vue",
+    "frontend/src/composables/useScanGun.js",
+    "frontend/src/api/gateway.js",
+    "frontend/src/utils/debug.js",
+    "frontend/src/layout/index.vue",
+    "electron/package.json"
+  ]
+}

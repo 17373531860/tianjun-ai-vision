@@ -81,17 +81,24 @@
 <script setup>
 import Navbar from './Navbar.vue';
 import BottomBar from './BottomBar.vue';
-import { ref } from 'vue';
+import { ref, onMounted } from 'vue';
 import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu, Tickets, DataAnalysis } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { ElMessage } from 'element-plus';
+import { startScanGun } from '@/composables/useScanGun';
 
 const systemStore = useSystemStore();
 const pluginTheme = usePluginThemeStore();
 const authStore = useAuthStore();
 const sidebarOpen = ref(false);
+
+// USB 扫码枪: 全局挂键盘监听, 这样在任何页面 (含全屏检测页) 扫码都能按用途处理
+// (拉工单/绑工件)。关/开与用途由 扫码器→USB 扫码枪 Tab 控制 (本监听内部实时读配置)。
+onMounted(() => {
+  startScanGun();
+});
 
 // 菜单可见 = 插件主题未隐藏 AND 当前账号有路由权限.
 // 两层门各自独立: 插件主题是客户定制层 (按 brand 隐藏), 权限层是账号层 (按角色隐藏).

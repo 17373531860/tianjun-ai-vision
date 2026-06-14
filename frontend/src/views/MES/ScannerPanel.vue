@@ -10,6 +10,9 @@
     <!-- WMax 高级面板 -->
     <WMaxPanel v-if="activeTab === 'wmax' && hasWmaxDevice" :wmax-ip="firstWmaxIp" :wmax-port="firstWmaxPort" />
 
+    <!-- USB 键盘扫码枪精简编辑框 (新建/编辑 device_type=usb_hid 的扫码器) -->
+    <UsbScanGunDialog v-model="showUsbDialog" :edit-dev="usbEditDev" @saved="loadDevices" />
+
     <!-- 基本设备管理面板 -->
     <div v-show="activeTab === 'basic'" class="flex gap-4">
       <!-- 左: 设备管理 -->
@@ -22,6 +25,7 @@
               搜索设备
             </el-button>
             <el-button size="small" type="success" @click="handleManualAdd">手动添加</el-button>
+            <el-button size="small" type="success" plain @click="openUsbDialog(null)">添加 USB 扫码枪</el-button>
             <el-button v-if="!hasWmaxDevice" size="small" type="warning" @click="createVirtualWmax">
               创建虚拟 WMax
             </el-button>
@@ -74,18 +78,31 @@
               <span class="font-medium">{{ dev.name }}</span>
               <div class="flex items-center gap-1">
                 <el-tag
-                  :type="dev.device_type === 'text_lon' ? 'success' : 'primary'"
+                  :type="dev.device_type === 'usb_hid' ? 'warning' : dev.device_type === 'text_lon' ? 'success' : 'primary'"
                   size="small" effect="dark">
-                  {{ dev.device_type === 'text_lon' ? 'LON模式' : 'WMax三端口' }}
+                  {{ dev.device_type === 'usb_hid' ? 'USB扫码枪' : dev.device_type === 'text_lon' ? 'LON模式' : 'WMax三端口' }}
                 </el-tag>
                 <el-tag v-if="dev.external_only" type="warning" size="small" effect="dark">只喂外设</el-tag>
                 <el-tag v-if="dev.pairing_group" type="info" size="small" effect="dark">分组: {{ dev.pairing_group }}</el-tag>
-                <el-tag :type="getDevStatus(dev.id) === 'connected' ? 'success' : getDevStatus(dev.id) === 'connecting' ? 'warning' : 'danger'" size="small">
+                <el-tag v-if="dev.device_type === 'usb_hid'"
+                        :type="dev.enabled ? 'success' : 'info'" size="small">
+                  {{ dev.enabled ? '已启用' : '已停用' }}
+                </el-tag>
+                <el-tag v-else :type="getDevStatus(dev.id) === 'connected' ? 'success' : getDevStatus(dev.id) === 'connecting' ? 'warning' : 'danger'" size="small">
                   {{ { connected: '已连接', connecting: '连接中', disconnected: '断开', error: '错误' }[getDevStatus(dev.id)] || '未知' }}
                 </el-tag>
               </div>
             </div>
-            <div class="text-xs text-gray-400 space-y-1">
+            <!-- USB 键盘扫码枪: 无 IP, 显示接入方式 + 用途 -->
+            <div v-if="dev.device_type === 'usb_hid'" class="text-xs text-gray-400 space-y-1">
+              <div>接入：本机 USB（即插即用）</div>
+              <div>用途：{{ usbUsageLabel(dev) }}</div>
+              <div v-if="(dev.parse_config && dev.parse_config.usb && dev.parse_config.usb.usage) !== 'pull'">
+                {{ channelLabel(dev.channel_id) }}
+              </div>
+            </div>
+            <!-- 网络扫码器 -->
+            <div v-else class="text-xs text-gray-400 space-y-1">
               <div>IP: {{ dev.ip }}:{{ dev.port }}</div>
               <div>{{ channelLabel(dev.channel_id) }}
                 <span v-if="dev.broadcast_channels && dev.broadcast_channels.length > 1" class="text-yellow-400 ml-1">
@@ -98,7 +115,8 @@
               </div>
             </div>
             <div class="flex gap-1 mt-3">
-            <el-button size="small" @click="testDevice(dev)" :loading="testingDeviceId === dev.id">测试</el-button>
+            <el-button v-if="dev.device_type !== 'usb_hid'" size="small" @click="testDevice(dev)" :loading="testingDeviceId === dev.id">测试</el-button>
+              <el-button v-if="dev.device_type === 'usb_hid'" size="small" @click="testUsbScan(dev)">测试扫码</el-button>
               <el-button size="small" type="primary" @click="editDevice(dev)">编辑</el-button>
               <el-button
                 v-if="dev.device_type === 'auto' || dev.device_type === 'wmax' || getDevType(dev.id) === 'wmax'"
@@ -559,6 +577,9 @@ import {
   connectWMaxDevice
 } from '@/api/wmax'
 import WMaxPanel from './WMaxPanel.vue'
+import UsbScanGunDialog from './UsbScanGunDialog.vue'
+import { pullOrders } from '@/api/gateway'
+import { routeCode } from '@/composables/useScanGun'
 import { useSystemStore } from '@/store/useSystemStore'
 import { dbg, dbgErr } from '@/utils/debug'
 
@@ -1343,9 +1364,52 @@ const handleSave = async () => {
 
 const editDevice = (dev) => {
   dbg('mes.scanner', '点击「编辑扫码器」', `id=${dev?.id} name=${dev?.name || ''}`)
+  // USB 键盘扫码枪走它自己的精简编辑框 (网络枪那几十个字段对它无意义)
+  if (dev.device_type === 'usb_hid') { openUsbDialog(dev); return }
   editingId.value = dev.id
   form.value = { ...defaultForm(), ...dev }
   showAdd.value = true
+}
+
+// ---- USB 扫码枪精简编辑框 ----
+const showUsbDialog = ref(false)
+const usbEditDev = ref(null)
+function openUsbDialog(dev) {
+  usbEditDev.value = dev
+  showUsbDialog.value = true
+}
+function usbUsageLabel(dev) {
+  const u = (dev.parse_config && dev.parse_config.usb && dev.parse_config.usb.usage) || 'pull'
+  return { pull: '扫码拉工单', bind: '扫码绑工件', both: '拉工单 + 绑工件' }[u] || u
+}
+// 现场调试: 不用真扫码枪, 输一个码按该 USB 枪的用途真跑一次 (拉工单 / 绑工件)
+async function testUsbScan(dev) {
+  const u = (dev.parse_config && dev.parse_config.usb) || {}
+  let code
+  try {
+    const r = await ElMessageBox.prompt('输入一个条码模拟扫码（按用途自动路由）', `测试扫码 - ${dev.name}`, {
+      confirmButtonText: '真跑一次', cancelButtonText: '取消',
+      inputPlaceholder: '如 JOB260500444-136 或工件码',
+    })
+    code = (r.value || '').trim()
+  } catch { return }
+  if (!code) return
+  const route = routeCode({ usage: u.usage || 'pull', orderPattern: u.order_pattern }, code)
+  try {
+    if (route === 'pull') {
+      if (!u.pull_conn_id) { ElMessage.warning('该 USB 枪未配拉取连接，去编辑里选一条'); return }
+      const resp = await pullOrders(u.pull_conn_id, { job_no: code, dry_run: false })
+      const res = resp?.data ?? resp
+      res?.success
+        ? ElMessage.success(`扫码拉工单成功：新建 ${res.created || 0} / 更新 ${res.updated || 0}`)
+        : ElMessage.error('扫码拉工单失败：' + (res?.error || '未知'))
+    } else {
+      await simulateScannerScan({ barcode: code, channel_id: dev.channel_id || 0 })
+      ElMessage.success(`已注入绑定链路（工位${(dev.channel_id || 0) + 1}）：${code}`)
+    }
+  } catch (e) {
+    ElMessage.error('测试异常：' + (e?.response?.data?.detail || e.message))
+  }
 }
 
 const handleDelete = async (dev) => {

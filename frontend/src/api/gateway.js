@@ -16,5 +16,11 @@ export const setExtraFields = (data) => api.post('/mes/gateway/extra-fields', da
 export const getExtraFields = (channelId = 0) => api.get('/mes/gateway/extra-fields', { params: { channel_id: channelId } })
 export const getExtraFieldsSchema = () => api.get('/mes/gateway/extra-fields-schema')
 
+// ---- 工单拉取 (v3.20: 反向对接外部 MES, 主动查询工单回填) ----
+// pullTest: 拿编辑中的 config.pull 试一次, 返回结构识别结果 (不依赖已保存连接)
+export const pullTest = (data) => api.post('/mes/gateway/pull-test', data)
+// pullOrders: 按连接执行同步; dry_run=true 为试同步(不落库), false 为立即同步
+export const pullOrders = (id, data) => api.post(`/mes/gateway/connections/${id}/pull`, data || {})
+
 // ---- 通讯日志 ----
 export const getGatewayLogs = (params) => api.get('/mes/gateway/logs', { params })

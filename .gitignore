@@ -179,3 +179,6 @@ dev_keys/
 PLUGIN_SECRET.txt
 !docs/**/*.pem.example
 !tests/**/fixtures/**/*.pem
+
+# License 生成工具 (独立工具, 含 license 签名私钥 + 503MB 打包产物 — 不随主仓发布)
+tools/license-tool/
