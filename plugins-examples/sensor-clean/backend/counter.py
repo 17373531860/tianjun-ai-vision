@@ -1,27 +1,35 @@
-"""逐帧产品计数器 —— 照搬 demo (detect（视角1用）.py) 的 ProductCounter 算法。
+"""逐帧产品计数器 —— 复刻 detect6.py 的自适应轨迹追踪算法（现场实测更准）。
 
-与主程序的"步骤/周期结算"不同, 本模块复刻 demo 的逐帧生命周期跟踪:
-锚动作框「进入→稳定→离开」= 处理完 1 件, 在它离开时计数一次;
-移动阈值 + 空间锁 + 时间锁防止同一件被重复计数。
+与早期 demo（detect（视角1用）.py 的"进入→稳定→离开, 离开才计数"）不同,
+detect6 的核心是「移动即计数 + 帧级硬锁」:
 
-坐标改造: demo 用像素坐标 + 像素阈值 (MOVE=20px / LOCK_SPATIAL=35px @ 640 宽),
-本模块拿到的是主程序归一化坐标 (0-1), 故阈值改用归一化值
-(20/640≈0.031, 35/640≈0.055), 由配置覆盖。时间锁仍走真实时钟 (与 demo 一致)。
+1. 锚动作框一出现就建跟踪, 记首次中心。
+2. 跟踪中只要「首尾直线位移 >= move_threshold」且「连续 move_confirm_frames 帧
+   都超阈值」(防抖动), 立刻计 1 件 —— 不等它离开。
+3. 计数瞬间: 记录计数位置/时间 → 进入 force_lock_frames 帧「强制锁定期」
+   (这段帧无视一切检测) → 销毁当前跟踪, 强制等下一个新产品。
+4. 位置锁: 若与上次计数位置过近(< lock_spatial) 且时间过短(< lock_time), 跳过本次。
+5. 锚框消失累计 lost_frame_thresh 帧才确认产品离开(抗间歇性漏检)。
+
+为什么更准: 帧级硬锁对实时丢帧天然鲁棒 —— 计数后那段帧任何抖动/丢帧/重检都被
+忽略, 不像"离开才计数"在产品离开瞬间容易被丢帧带偏(并件 → 漏计)。
+
+坐标改造: detect6 用像素坐标 + 像素阈值 (MOVE=20px / LOCK_SPATIAL=25px @1728 宽),
+本模块拿到的是主程序归一化坐标 (0-1), 故移动/位置阈值改用归一化值
+(20/1728≈0.0116, 25/1728≈0.0145), 由配置覆盖。时间锁走真实时钟 (与 detect6 一致),
+帧数类参数 (move_confirm / lost / force_lock) 按帧计数不依赖分辨率。
 """
 from __future__ import annotations
 
 import math
 
-# ==================== 默认参数 (归一化, 对齐 demo @640 宽) ====================
-DEFAULT_MOVE_THRESHOLD = 0.03      # 产品移动判定阈值 (demo 20px / 640)
-DEFAULT_LOCK_SPATIAL = 0.055       # 位置锁范围 (demo 35px / 640)
-DEFAULT_LOCK_TIME = 2.0            # 位置锁 / 计数冷却时间 (秒, 同 demo)
-DEFAULT_ENTER_FRAMES = 2           # 进入确认帧数 (同 demo)
-DEFAULT_LEAVE_FRAMES = 3           # 离开确认帧数 (同 demo)
-# 短暂消失容忍: 锚框消失但在 N 帧内重现, 视为仍在画面 (不进入"离开"判定),
-# 用于抵抗主程序实时推理丢帧把一件产品的生命周期切碎成多次计数 (demo 离线
-# 逐帧不丢帧, 故默认 0 = 完全复刻 demo; 实时管线丢帧场景调大此值压重复计数)。
-DEFAULT_DISAPPEAR_TOLERANCE = 0
+# ==================== 默认参数 (detect6 原值, 阈值归一化 @1728 宽) ====================
+DEFAULT_MOVE_THRESHOLD = 0.0116       # 移动判定阈值 (detect6 20px / 1728)
+DEFAULT_LOCK_SPATIAL = 0.0145         # 位置锁范围 (detect6 25px / 1728)
+DEFAULT_LOCK_TIME = 3.0               # 位置锁 / 计数冷却 (秒, detect6 LOCK_TIME)
+DEFAULT_MOVE_CONFIRM_FRAMES = 3       # 连续 N 帧位移超阈值才确认移动 (detect6)
+DEFAULT_LOST_FRAME_THRESH = 5         # 连续丢失 N 帧确认产品离开 (detect6)
+DEFAULT_FORCE_LOCK_FRAMES = 40        # 计数后强制锁定帧数 (detect6 FORCE_LOCK_TOTAL)
 
 
 def _center(det):
@@ -33,57 +41,8 @@ def _dist(a, b):
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
 
 
-class ProductTracker:
-    """单个产品的完整生命周期 (照搬 demo ProductTracker, 中心点归一化)。"""
-
-    STATUS_ENTERING = 0
-    STATUS_STABLE = 1
-    STATUS_LEAVING = 2
-    STATUS_LEFT = 3
-
-    def __init__(self, center, timestamp, enter_frames, leave_frames):
-        self.center = center
-        self.last_center = center
-        self.trajectory = [center]
-        self.timestamp = timestamp
-        self.status = self.STATUS_ENTERING
-        self.enter_frames = 1
-        self.leave_frames = 0
-        self._enter_need = enter_frames
-        self._leave_need = leave_frames
-
-    def update(self, center, timestamp):
-        self.center = center
-        self.last_center = center
-        self.trajectory.append(center)
-        self.timestamp = timestamp
-        if self.status == self.STATUS_ENTERING:
-            self.enter_frames += 1
-            if self.enter_frames >= self._enter_need:
-                self.status = self.STATUS_STABLE
-
-    def mark_leaving(self):
-        if self.status == self.STATUS_STABLE:
-            self.status = self.STATUS_LEAVING
-            self.leave_frames = 1
-
-    def update_leaving(self):
-        if self.status == self.STATUS_LEAVING:
-            self.leave_frames += 1
-            if self.leave_frames >= self._leave_need:
-                self.status = self.STATUS_LEFT
-
-    def total_movement(self):
-        if len(self.trajectory) < 2:
-            return 0.0
-        total = 0.0
-        for i in range(1, len(self.trajectory)):
-            total += _dist(self.trajectory[i], self.trajectory[i - 1])
-        return total
-
-
 class ProductCounter:
-    """逐帧产品计数器 (照搬 demo ProductCounter)。
+    """逐帧产品计数器 (复刻 detect6 移动即计数 + 帧硬锁算法)。
 
     用法: 每帧调 update(anchor_det, now, paused) — anchor_det 为本帧锚动作框
     (无则 None)。返回本帧是否新计了一件产品。
@@ -91,83 +50,71 @@ class ProductCounter:
 
     def __init__(self, move_threshold=DEFAULT_MOVE_THRESHOLD,
                  lock_spatial=DEFAULT_LOCK_SPATIAL, lock_time=DEFAULT_LOCK_TIME,
-                 enter_frames=DEFAULT_ENTER_FRAMES, leave_frames=DEFAULT_LEAVE_FRAMES,
-                 disappear_tolerance=DEFAULT_DISAPPEAR_TOLERANCE):
+                 move_confirm_frames=DEFAULT_MOVE_CONFIRM_FRAMES,
+                 lost_frame_thresh=DEFAULT_LOST_FRAME_THRESH,
+                 force_lock_frames=DEFAULT_FORCE_LOCK_FRAMES):
         self.move_threshold = move_threshold
         self.lock_spatial = lock_spatial
         self.lock_time = lock_time
-        self.enter_frames = enter_frames
-        self.leave_frames = leave_frames
-        self.disappear_tolerance = disappear_tolerance
+        self.move_confirm_frames = int(move_confirm_frames)
+        self.lost_frame_thresh = int(lost_frame_thresh)
+        self.force_lock_frames = int(force_lock_frames)
         self.reset()
 
     def reset(self):
         self.total = 0
-        self.current = None
-        self.has_counted = False
-        self.last_count_time = 0.0
-        self.lock_center = None
-        self.lock_timestamp = 0.0
-        self._miss = 0
-
-    def _can_count(self, center, now):
-        if now - self.last_count_time < self.lock_time:
-            return False
-        if self.lock_center is not None:
-            if _dist(center, self.lock_center) < self.lock_spatial and \
-               (now - self.lock_timestamp) < self.lock_time:
-                return False
-        return True
-
-    def _commit(self, center, now):
-        self.total += 1
-        self.last_count_time = now
-        self.lock_center = center
-        self.lock_timestamp = now
+        self._tracker = None          # {first, center, lost, counted, mc}
+        self._last_count_center = None
+        self._last_count_time = 0.0
+        self._force_lock = 0
 
     def update(self, anchor_det, now, paused=False):
-        if anchor_det is not None:
-            self._miss = 0
-            center = _center(anchor_det)
-            if self.current is None:
-                self.current = ProductTracker(center, now, self.enter_frames, self.leave_frames)
-                self.has_counted = False
-            else:
-                self.current.update(center, now)
+        # 强制锁定期: 计数后锁定 N 帧, 无视一切检测 (防漏检导致跟踪器重建+重复计数)
+        if self._force_lock > 0:
+            self._force_lock -= 1
             return False
 
-        # 锚动作消失
-        if self.current is None:
+        # 棉签满锁定: 冻结计数 (产品照过但不累加, 等换棉签解锁)
+        if paused:
             return False
 
-        # 短暂消失容忍: N 帧内重现视为仍在画面, 不进入离开判定 (抗实时丢帧切碎生命周期)
-        if self.current.status == ProductTracker.STATUS_STABLE:
-            self._miss += 1
-            if self._miss <= self.disappear_tolerance:
+        center = _center(anchor_det) if anchor_det is not None else None
+
+        if center is not None:
+            if self._tracker is None:
+                self._tracker = {"first": center, "center": center,
+                                 "lost": 0, "counted": False, "mc": 0}
                 return False
+            self._tracker["center"] = center
+            self._tracker["lost"] = 0
+            if self._tracker["counted"]:
+                return False
+            disp = _dist(center, self._tracker["first"])
+            if disp < self.move_threshold:
+                self._tracker["mc"] = 0
+                return False
+            self._tracker["mc"] += 1
+            if self._tracker["mc"] < self.move_confirm_frames:
+                return False
+            # 位置锁: 与上次计数过近且过短 → 跳过
+            if self._last_count_center is not None \
+                    and _dist(center, self._last_count_center) < self.lock_spatial \
+                    and (now - self._last_count_time) < self.lock_time:
+                return False
+            # 计数 + 进入强制锁定 + 销毁跟踪
+            self.total += 1
+            self._last_count_center = center
+            self._last_count_time = now
+            self._force_lock = self.force_lock_frames
+            self._tracker = None
+            return True
 
-        # 还没稳定就消失 → 噪声丢弃
-        if self.current.status == ProductTracker.STATUS_ENTERING:
-            self.current = None
-            self.has_counted = False
-            return False
-
-        self.current.mark_leaving()
-        self.current.update_leaving()
-        if self.current.status != ProductTracker.STATUS_LEFT:
-            return False
-
-        # 完整离开: 满足移动 + 防重复 + 未暂停才计数
-        counted = False
-        center = self.current.last_center
-        if (not self.has_counted and not paused
-                and self.current.total_movement() >= self.move_threshold
-                and self._can_count(center, now)):
-            self._commit(center, now)
-            counted = True
-        self.current = None
-        self.has_counted = False
-        return counted
+        # 锚框消失: 累计丢失帧, 超阈值确认离开
+        if self._tracker is not None:
+            self._tracker["lost"] += 1
+            if self._tracker["lost"] >= self.lost_frame_thresh:
+                self._tracker = None
+        return False
 
 
 class SwabChangeWindow:

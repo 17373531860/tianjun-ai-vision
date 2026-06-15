@@ -59,21 +59,24 @@ VIEW2_PROJECT = {
     "data_config": {},
 }
 
-# 插件耗材约束 + 逐帧计数默认配置（demo 素材实测调优值，激活即用、全可改）
+# 插件耗材约束 + 逐帧计数默认配置（detect6 算法参数，激活即用、全可改）
 SWAB_CONFIG = {
     "count_channels": [0],                     # 视角1 计数通道
-    "count_anchor_label": "查看产品有无脏污",    # 视角1 锚动作标签（demo cls0）
+    "count_anchor_label": "查看产品有无脏污",    # 视角1 锚动作标签（detect6 cls0）
     "swap_channel": 1,                         # 视角2 换棉签通道
     "swap_label": "更换棉签",                   # 视角2 换棉签动作标签
-    "max_uses_per_swab": 11,                   # 一根棉签擦满 K 个产品后锁定（demo K=11）
+    "max_uses_per_swab": 11,                   # 一根棉签擦满 K 个产品后锁定（K）
     "alarm_event": "",                         # 锁定时触发的报警事件类型（空=不触发）
-    # —— 逐帧计数参数（demo 1728 宽视频实测值）——
-    "move_threshold": 0.0116,                  # 移动阈值 = demo 20px / 1728
-    "lock_spatial": 0.0203,                    # 位置锁 = demo 35px / 1728
-    "lock_time": 2.0,                          # 时间锁 / 计数冷却（秒）
-    "enter_frames": 2,                         # 进入确认帧数
-    "leave_frames": 3,                         # 离开确认帧数
-    "disappear_tolerance": 20,                 # 短暂消失容忍（抗实时丢帧重复计数）
+    # —— detect6 逐帧计数参数（移动即计数 + 帧硬锁；阈值 = detect6 像素值 / 1728 宽）——
+    "move_threshold": 0.0116,                  # 移动判定 = detect6 20px / 1728
+    "lock_spatial": 0.0145,                    # 位置锁 = detect6 25px / 1728
+    "lock_time": 3.0,                          # 位置锁 / 计数冷却（秒，detect6）
+    "move_confirm_frames": 3,                  # 连续 N 帧位移超阈值才确认移动（detect6）
+    "lost_frame_thresh": 5,                    # 连续丢失 N 帧确认产品离开（detect6）
+    # 计数后强制锁定帧数（detect6 原值 40）。detect6 基准 44 已确认；当源帧率 <= 主程序
+    # 推理速度(约 56fps)时几乎不丢帧、实时时钟=视频时间, 40 即对齐 44。
+    # 若视频源帧率高于推理速度(如 60fps test.mp4)会丢帧, 需按现场丢帧率调大本值。
+    "force_lock_frames": 40,
 }
 
 
