@@ -278,6 +278,23 @@ class InferenceLoopMixin:
                 # 发布 confirmed 结果
                 self._inference_publish_detections(detections, is_tracking)
 
+                # 帧级检测钩子 (observe-only): 把本帧检测框逐帧广播给插件,
+                # 让需要"逐帧生命周期计数"的插件 (如耗材约束按 demo ProductCounter
+                # 算法自计数) 拿到原始检测框。不在 RETURNABLE_HOOK_FIELDS 白名单,
+                # 返回值丢弃, 不改主程序状态机。无 active 插件时 fire_plugin_hook
+                # O(1) 早退 (热路径零开销); tracking 路径自带计数, 不走本钩子。
+                if not is_tracking:
+                    try:
+                        from backend.plugin_system.hook_dispatch import fire_plugin_hook
+                        fire_plugin_hook("detection_frame", "post_inference", "post", {
+                            "channel_id": self.channel_id,
+                            "frame_seq": frame_count,
+                            "timestamp": loop_start,
+                            "detections": detections or [],
+                        })
+                    except Exception as _e:
+                        debug_log(f"!!! detection_frame hook 触发异常 (已隔离): {_e}", "INFERENCE")
+
                 # 推理节流: 每帧至少 5ms, 防止推理线程吃满 CPU
                 loop_elapsed = time.time() - loop_start
                 min_inference_interval = 0.005

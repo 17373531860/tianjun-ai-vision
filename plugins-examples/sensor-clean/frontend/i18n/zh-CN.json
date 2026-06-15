@@ -1,0 +1,18 @@
+{
+  "plugin": {
+    "sensor-clean": {
+      "title": "传感器清洁工序",
+      "view1": "视角1 · 查看脏污 / 擦拭产品",
+      "view2": "视角2 · 更换棉签核验",
+      "productTotal": "产品总数",
+      "swabUsed": "棉签已用",
+      "remaining": "剩余",
+      "max": "上限",
+      "statusNormal": "状态：正常",
+      "statusLocked": "棉签已用满，请更换棉签！（计数已锁定）",
+      "resetSwab": "更换棉签（重置）",
+      "applyTemplate": "一键应用对齐 demo 的项目配置",
+      "waitingSwapView2": "等待视角2 检测到更换棉签动作以解锁…"
+    }
+  }
+}
