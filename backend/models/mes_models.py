@@ -695,3 +695,131 @@ class WorkpieceFlowRun(Base):
 
     flow_config = relationship("WorkpieceFlowConfig")
     workpiece = relationship("Workpiece")
+
+
+# ============================================================
+# 包装箱结算 (v3.21+, 上银包装线场景)
+# ============================================================
+
+class PackagingFlowConfig(Base):
+    """包装箱结算配置 — 扫码驱动的"工单 → 箱 → 托盘"三层结算.
+
+    一台机器可有 0~N 个配置. 不启用 / 通道不绑定时, 协调器不挂任何钩子,
+    与不配置时字节级零差异 (隔离底线). 所有歧义点做成可配置, "上银包装线"
+    只是一组预设默认值.
+    """
+    __tablename__ = "packaging_flow_configs"
+    __table_args__ = (
+        Index("ix_packaging_flow_enabled", "enabled"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(64), nullable=False, unique=True)
+    enabled = Column(Boolean, default=False)
+
+    # 绑定的检测工位 (这条线数托盘滑块用的通道)
+    channel_id = Column(Integer, default=0)
+    # 绑定的扫码器设备 (扫工单 / 箱标签). 可空 = 用全局 USB 扫码枪
+    scan_device_id = Column(
+        Integer,
+        ForeignKey("scanner_devices.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # 拉工单用的 MES 连接 id (复用 v3.20 mes_connections, 不设 FK 避免耦合)
+    pull_conn_id = Column(Integer, nullable=True)
+
+    # --- 组① 工单与箱数 ---
+    # box_count_source: field=直接取 MES 某字段 / formula=某字段 ÷ 每箱数量
+    box_count_source = Column(String(16), default="field")
+    box_count_field = Column(String(64), default="dispatch_qty")
+
+    # --- 组② 数量规格 ---
+    # 每托盘标准滑块数: fixed=固定值 / by_spec=按物料规格查表
+    tray_qty_mode = Column(String(16), default="fixed")
+    tray_qty_fixed = Column(Integer, default=0)
+    tray_qty_table = Column(JSON, nullable=True)        # by_spec: {spec: qty}
+    # 每箱托盘数: fixed=固定值(默认4) / by_spec=按物料规格查表
+    trays_per_box_mode = Column(String(16), default="fixed")
+    trays_per_box_fixed = Column(Integer, default=4)
+    trays_per_box_table = Column(JSON, nullable=True)
+
+    # --- 组③ 标签校验 ---
+    # 比对方式: exact=精确 / strip_hyphen=去连字符 / digits_only=只取数字
+    label_match = Column(String(16), default="strip_hyphen")
+    label_len = Column(Integer, default=0)              # 0=不限长 / N=固定 N 位
+    hyphen_template = Column(String(32), nullable=True)  # 显示用连字符模板, 可空
+
+    # --- 组④ 异常策略 ---
+    on_mes_fail = Column(String(16), default="block")          # block=阻断重扫 / offline=允许离线
+    on_label_mismatch = Column(String(16), default="warn")     # block=阻断 / warn=仅提示
+    on_short_box = Column(String(16), default="redo")          # redo=允许补做 / void=工单作废
+    on_forced_stop_partial = Column(String(8), default="fail")  # pass=未满箱算合格 / fail=算不合格
+
+    # --- 组⑤ 收尾与回推 (M3, 全可选) ---
+    # 停止/待机时进行中工单怎么处置:
+    #   settle=按 on_forced_stop_partial 收尾结算并完成工单 / abort=直接作废 / keep=保留进行中(待恢复)
+    on_forced_stop = Column(String(8), default="settle")
+    # 待机是否也触发上面的收尾 (有的现场待机只是暂停画面, 不该结算)
+    forced_settle_on_standby = Column(Boolean, default=True)
+    # 工单完成是否回推 MES (默认不推; 现场需 MES 接收完成回执时才开)
+    push_on_complete = Column(Boolean, default=False)
+    # 回推用的事件名 — 现场在某条 MES 连接的"推送事件"里加这个名 + 配 endpoint/模板即可
+    push_event_type = Column(String(32), default="packaging_complete")
+
+    # --- 组⑥ 异常 → 项目事件映射 (全可选, 留空=走默认通用报警) ---
+    # 每种包装异常触发哪个「项目事件设置」里的事件 id (复用其报警/语音/Toast/计数,
+    # 不打断托盘检测周期). 留空 (None) = 退回默认通用报警, 不静默以免漏报.
+    event_short_box = Column(Integer, nullable=True)       # 漏箱
+    event_over_box = Column(Integer, nullable=True)        # 多箱
+    event_tray_ng = Column(Integer, nullable=True)         # 单个托盘检测 NG
+    event_box_ng = Column(Integer, nullable=True)          # 封箱时托盘数不足→整箱 NG
+    event_label_mismatch = Column(Integer, nullable=True)  # 箱标签与工单不符
+    event_label_len = Column(Integer, nullable=True)       # 标签长度异常
+    event_mes_fail = Column(Integer, nullable=True)        # 拉单失败
+
+    plugin_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PackagingFlowRun(Base):
+    """包装结算运行记录 — 一张工单一次生产一行 (断电恢复 + 历史回溯)."""
+    __tablename__ = "packaging_flow_runs"
+    __table_args__ = (
+        Index("ix_pkg_run_config", "flow_config_id"),
+        Index("ix_pkg_run_status", "status"),
+        Index("ix_pkg_run_order", "order_no"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    flow_config_id = Column(
+        Integer,
+        ForeignKey("packaging_flow_configs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    run_uuid = Column(String(32), unique=True, nullable=False, index=True)
+    order_no = Column(String(128), nullable=True, index=True)   # 扫到的工单号
+    spec = Column(String(256), nullable=True)                   # MES 返回的物料规格
+    box_total = Column(Integer, default=0)     # MES 给的应做箱数
+    box_done = Column(Integer, default=0)      # 已结算箱数
+    box_ng = Column(Integer, default=0)        # NG 箱数
+
+    # 状态机: order_loaded → running → completed / aborted / short
+    status = Column(String(16), nullable=False, default="order_loaded")
+
+    # 当前箱进度 (内存为主, 落库供断电恢复)
+    current_box_index = Column(Integer, default=0)   # 第几箱 (1-based, 0=还没开箱)
+    current_box_trays = Column(Integer, default=0)   # 当前箱已放合格托盘数
+
+    # 各箱明细 (JSON list, 例 [{"box":1,"trays":4,"result":"OK"}, ...])
+    box_details = Column(JSON, nullable=True)
+
+    final_result = Column(String(8), nullable=True)   # OK / NG / NULL=进行中
+    mes_pushed = Column(Boolean, default=False)
+
+    started_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    flow_config = relationship("PackagingFlowConfig")

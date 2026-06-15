@@ -1,0 +1,18 @@
+{
+  "name": "packaging_tray_two_rounds",
+  "description": "包装结算 UAT 用: 两轮完整 A-B-C 顺序周期, 第二轮首步出现时 first_step 模式结算第一轮 OK 周期, 用于经真检测路径触发包装协调器 on_cycle_settled 托盘计数",
+  "fps": 60,
+  "logic_mode": "sequential",
+  "expected": { "ok_cycle_increment": 1, "ng_cycle_increment": 0 },
+  "timeline": [
+    { "from": 0, "to": 9, "detections": [] },
+    { "from": 10, "to": 39, "detections": [{ "label": "step_a", "confidence": 0.95, "bbox": [0.4, 0.4, 0.1, 0.1] }] },
+    { "from": 40, "to": 49, "detections": [] },
+    { "from": 50, "to": 79, "detections": [{ "label": "step_b", "confidence": 0.95, "bbox": [0.4, 0.4, 0.1, 0.1] }] },
+    { "from": 80, "to": 89, "detections": [] },
+    { "from": 90, "to": 119, "detections": [{ "label": "step_c", "confidence": 0.95, "bbox": [0.4, 0.4, 0.1, 0.1] }] },
+    { "from": 120, "to": 139, "detections": [] },
+    { "from": 140, "to": 169, "detections": [{ "label": "step_a", "confidence": 0.95, "bbox": [0.4, 0.4, 0.1, 0.1] }] },
+    { "from": 170, "to": 400, "detections": [] }
+  ]
+}

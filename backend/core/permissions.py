@@ -76,6 +76,8 @@ BUILTIN_ROLES = {
             "settings.view",
             "settings.operators.*",
             "system.view",
+            "system.packaging_flow.view",
+            "system.packaging_flow.manage",
         ],
     },
     "operator": {
@@ -178,3 +180,5 @@ register_permission("system.channel_group.view", "查看工位组配置", "系�
 register_permission("system.channel_group.manage", "管理工位组 (创建 / 编辑 / 删除)", "系统")
 register_permission("system.workpiece_flow.view", "查看流水线串行配置与历史", "系统")
 register_permission("system.workpiece_flow.manage", "管理流水线串行 (创建 / 编辑 / 删除)", "系统")
+register_permission("system.packaging_flow.view", "查看包装箱结算配置与进度", "系统")
+register_permission("system.packaging_flow.manage", "管理包装箱结算 (创建 / 编辑 / 删除)", "系统")

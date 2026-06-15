@@ -1,0 +1,518 @@
+<template>
+  <div class="packaging-flow-panel p-4">
+    <div class="header flex justify-between items-center mb-4">
+      <h2 class="text-lg text-white font-bold">包装箱结算配置 (v3.21)</h2>
+      <el-button type="primary" size="small" @click="openCreate">新建配置</el-button>
+    </div>
+
+    <div class="text-gray-400 text-xs mb-3 leading-relaxed">
+      扫码驱动的"工单 → 箱 → 托盘"三层结算: 扫工单拉箱数 → 每箱依次放 N 个合格托盘 → 扫下一标签封上一箱.
+      漏箱 / 多箱 / 托盘不达标 / 标签错都会报警. 不启用任何配置时与不配置时完全一致 (零差异).
+    </div>
+
+    <el-table :data="flows" stripe size="small" empty-text="尚未创建任何包装结算配置" class="w-full">
+      <el-table-column prop="id" label="ID" width="60" />
+      <el-table-column prop="name" label="名称" min-width="120" />
+      <el-table-column label="检测工位" width="90">
+        <template #default="{ row }">
+          <span class="font-mono text-cyan-400">ch{{ row.channel_id }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="箱数来源" min-width="140">
+        <template #default="{ row }">
+          <span class="text-xs">
+            {{ row.box_count_source === 'formula' ? '公式换算' : 'MES 字段' }}
+            <span class="text-gray-400">({{ row.box_count_field }})</span>
+          </span>
+        </template>
+      </el-table-column>
+      <el-table-column label="回推" width="70">
+        <template #default="{ row }">
+          <el-tag size="small" :type="row.push_on_complete ? 'success' : 'info'">
+            {{ row.push_on_complete ? '开' : '关' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="启用" width="80">
+        <template #default="{ row }">
+          <el-switch :model-value="row.enabled" @change="toggleEnabled(row, $event)" />
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="190" align="center">
+        <template #default="{ row }">
+          <el-button size="small" @click="openEdit(row)">编辑</el-button>
+          <el-button size="small" type="info" @click="viewState(row)">查看</el-button>
+          <el-button size="small" type="danger" :disabled="row.enabled" @click="del(row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <!-- 创建/编辑对话框 -->
+    <el-dialog
+      v-model="dialogVisible"
+      :title="form.id ? '编辑包装结算配置' : '新建包装结算配置'"
+      width="680px"
+      :close-on-click-modal="false"
+      top="5vh"
+    >
+      <div class="preset-bar mb-3">
+        <el-button type="warning" plain size="small" @click="applyHiwinPreset">
+          一键套用「上银包装线」预设
+        </el-button>
+        <span class="text-xs text-gray-400 ml-2">先套预设再按现场微调, 不确定的高级项保持默认即可</span>
+      </div>
+
+      <el-form :model="form" label-width="150px" size="small">
+        <!-- ===== 基础区 (小白必填) ===== -->
+        <el-divider content-position="left">基础</el-divider>
+        <el-form-item label="配置名称">
+          <el-input v-model="form.name" placeholder="上银包装线-1" :disabled="!!form.id" />
+        </el-form-item>
+        <el-form-item label="检测工位 (channel)">
+          <el-input-number v-model="form.channel_id" :min="0" :max="3" />
+          <span class="text-xs text-gray-400 ml-2">数托盘滑块用的那个摄像头工位</span>
+        </el-form-item>
+        <el-form-item label="扫码器 ID">
+          <el-input v-model="scanDeviceIdStr" placeholder="留空 = 用全局 USB 扫码枪" />
+          <span class="text-xs text-gray-400 ml-2">扫工单 / 箱标签的设备; 不确定就留空</span>
+        </el-form-item>
+        <el-form-item label="拉单 MES 连接 ID">
+          <el-input v-model="pullConnIdStr" placeholder="留空 = 不拉单 (离线/手填)" />
+          <span class="text-xs text-gray-400 ml-2">扫工单后向哪条 MES 连接查箱数 (在 MES 网关页配)</span>
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="form.enabled" />
+        </el-form-item>
+
+        <!-- ===== 高级 5 组 (折叠, 默认不展开) ===== -->
+        <el-collapse v-model="activeGroups" class="mt-2">
+          <!-- 组① 工单与箱数 -->
+          <el-collapse-item title="① 工单与箱数 — 这张工单一共做几箱怎么算" name="g1">
+            <el-form-item label="箱数来源">
+              <el-radio-group v-model="form.box_count_source">
+                <el-radio value="field">直接取 MES 字段</el-radio>
+                <el-radio value="formula">字段 ÷ 每箱数量 换算</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="MES 箱数/数量字段">
+              <el-input v-model="form.box_count_field" placeholder="dispatch_qty" />
+              <div class="text-xs text-gray-400 mt-1">
+                field 模式: 这个字段就是箱数; formula 模式: 这个字段是总数量, 除以每箱托盘数×每托盘数量得箱数.
+              </div>
+            </el-form-item>
+          </el-collapse-item>
+
+          <!-- 组② 数量规格 -->
+          <el-collapse-item title="② 数量规格 — 每箱几托盘 / 每托盘几件" name="g2">
+            <el-form-item label="每箱托盘数模式">
+              <el-radio-group v-model="form.trays_per_box_mode">
+                <el-radio value="fixed">固定</el-radio>
+                <el-radio value="by_spec">按规格查表</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="每箱托盘数 (固定)" v-if="form.trays_per_box_mode === 'fixed'">
+              <el-input-number v-model="form.trays_per_box_fixed" :min="1" :max="50" />
+            </el-form-item>
+            <el-form-item label="每箱托盘数表 (JSON)" v-else>
+              <el-input type="textarea" v-model="traysPerBoxTableJson" :rows="2"
+                        placeholder='{"规格A": 4, "规格B": 6}' />
+            </el-form-item>
+
+            <el-form-item label="每托盘数量模式">
+              <el-radio-group v-model="form.tray_qty_mode">
+                <el-radio value="fixed">固定</el-radio>
+                <el-radio value="by_spec">按规格查表</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="每托盘数量 (固定)" v-if="form.tray_qty_mode === 'fixed'">
+              <el-input-number v-model="form.tray_qty_fixed" :min="0" :max="999" />
+              <span class="text-xs text-gray-400 ml-2">仅"公式换算箱数"时用到; 托盘合格与否由检测层判定</span>
+            </el-form-item>
+            <el-form-item label="每托盘数量表 (JSON)" v-else>
+              <el-input type="textarea" v-model="trayQtyTableJson" :rows="2"
+                        placeholder='{"规格A": 20, "规格B": 30}' />
+            </el-form-item>
+          </el-collapse-item>
+
+          <!-- 组③ 标签校验 -->
+          <el-collapse-item title="③ 标签校验 — 工单号与箱标签怎么比对" name="g3">
+            <el-form-item label="比对方式">
+              <el-select v-model="form.label_match" class="w-full">
+                <el-option label="精确比对" value="exact" />
+                <el-option label="去掉连字符再比 (推荐)" value="strip_hyphen" />
+                <el-option label="只取数字再比" value="digits_only" />
+              </el-select>
+              <div class="text-xs text-gray-400 mt-1">
+                扫码枪读到 15 位纯数字、工单显示带连字符时, 选"去掉连字符".
+              </div>
+            </el-form-item>
+            <el-form-item label="标签固定长度">
+              <el-input-number v-model="form.label_len" :min="0" :max="64" />
+              <span class="text-xs text-gray-400 ml-2">0 = 不限长; 填 N = 不是 N 位就报警</span>
+            </el-form-item>
+          </el-collapse-item>
+
+          <!-- 组④ 异常策略 -->
+          <el-collapse-item title="④ 异常策略 — 出问题时怎么处理" name="g4">
+            <el-form-item label="拉单失败时">
+              <el-radio-group v-model="form.on_mes_fail">
+                <el-radio value="block">阻断 (重扫)</el-radio>
+                <el-radio value="offline">允许离线继续</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="箱标签不符时">
+              <el-radio-group v-model="form.on_label_mismatch">
+                <el-radio value="off">不判 (扫不同号直接当换工单)</el-radio>
+                <el-radio value="warn">报警但仍切新工单</el-radio>
+                <el-radio value="block">报警且不切 (等扫回正确标签)</el-radio>
+              </el-radio-group>
+              <div class="text-xs text-gray-400 mt-1">
+                开工后第一个箱标签就与工单号不符时的处理 (疑似贴错标签).
+              </div>
+            </el-form-item>
+            <el-form-item label="漏箱时 (没做满就扫新标签)">
+              <el-radio-group v-model="form.on_short_box">
+                <el-radio value="redo">报警 + 允许补做</el-radio>
+                <el-radio value="void">工单作废</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="强停时未满箱判定">
+              <el-radio-group v-model="form.on_forced_stop_partial">
+                <el-radio value="fail">算不合格</el-radio>
+                <el-radio value="pass">算合格</el-radio>
+              </el-radio-group>
+            </el-form-item>
+          </el-collapse-item>
+
+          <!-- 组⑤ 收尾与回推 -->
+          <el-collapse-item title="⑤ 收尾与回推 — 停止/待机怎么收尾, 完成要不要回推 MES" name="g5">
+            <el-form-item label="停止/待机处置">
+              <el-select v-model="form.on_forced_stop" class="w-full">
+                <el-option label="收尾结算并完成工单" value="settle" />
+                <el-option label="直接作废" value="abort" />
+                <el-option label="保留进行中 (待恢复)" value="keep" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="待机也收尾">
+              <el-switch v-model="form.forced_settle_on_standby" />
+              <span class="text-xs text-gray-400 ml-2">关 = 待机只暂停不结算, 仅停止才收尾</span>
+            </el-form-item>
+            <el-form-item label="完成回推 MES">
+              <el-switch v-model="form.push_on_complete" />
+              <span class="text-xs text-gray-400 ml-2">开 = 工单做完把结果推回 MES (需现场确认)</span>
+            </el-form-item>
+            <el-form-item label="回推事件名" v-if="form.push_on_complete">
+              <el-input v-model="form.push_event_type" placeholder="packaging_complete" />
+              <div class="text-xs text-gray-400 mt-1">
+                在 MES 网关页某条连接的"推送事件"里加这个名 + 配地址/模板才会真正发出.
+              </div>
+            </el-form-item>
+          </el-collapse-item>
+
+          <!-- 组⑥ 异常事件映射 -->
+          <el-collapse-item title="⑥ 异常报警 — 每种异常触发哪个项目事件" name="g6">
+            <div class="text-xs text-gray-400 mb-2 leading-relaxed">
+              每种异常可挑一个"项目-事件设置"里建好的事件去触发, 复用它配好的报警(灯/蜂鸣)、语音、Toast、计数;
+              <b>留空 = 走默认通用报警</b>. 触发包装异常不会打断正在跑的托盘检测.
+              <span v-if="!eventOptions.length" class="text-yellow-400">
+                (当前没拉到事件 — 请先到「项目」页的事件设置里建事件, 或保持留空走默认报警)
+              </span>
+            </div>
+            <el-form-item v-for="opt in EVENT_FIELDS" :key="opt.field" :label="opt.label">
+              <el-select v-model="form[opt.field]" class="w-full" clearable
+                         placeholder="默认通用报警" filterable>
+                <el-option v-for="ev in eventOptions" :key="ev.value"
+                           :label="ev.label" :value="ev.value" />
+              </el-select>
+            </el-form-item>
+          </el-collapse-item>
+        </el-collapse>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submit">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 运行时状态对话框 -->
+    <el-dialog v-model="stateDialogVisible" :title="`运行进度: ${stateData?.config?.name || ''}`" width="560px">
+      <div v-if="stateData">
+        <div v-if="stateData.state">
+          <el-descriptions :column="2" border size="small">
+            <el-descriptions-item label="当前工单">{{ stateData.state.order_no }}</el-descriptions-item>
+            <el-descriptions-item label="应做箱数">{{ stateData.state.box_total || '未知' }}</el-descriptions-item>
+            <el-descriptions-item label="已结算箱">{{ stateData.state.box_done }}</el-descriptions-item>
+            <el-descriptions-item label="NG 箱">{{ stateData.state.box_ng }}</el-descriptions-item>
+            <el-descriptions-item label="当前第几箱">{{ stateData.state.current_box_index }}</el-descriptions-item>
+            <el-descriptions-item label="当前箱托盘">{{ stateData.state.current_box_trays }}</el-descriptions-item>
+            <el-descriptions-item label="状态">{{ stateData.state.status }}</el-descriptions-item>
+            <el-descriptions-item label="规格">{{ stateData.state.spec || '-' }}</el-descriptions-item>
+          </el-descriptions>
+          <div class="mt-3 text-gray-300 text-xs">各箱明细:</div>
+          <el-table :data="stateData.state.box_details || []" size="small" class="mt-1"
+                    empty-text="还没结算任何箱">
+            <el-table-column prop="box" label="箱号" width="70" />
+            <el-table-column prop="trays" label="托盘数" width="80" />
+            <el-table-column prop="need" label="需要" width="70" />
+            <el-table-column prop="result" label="结果" />
+          </el-table>
+        </div>
+        <div v-else class="text-gray-400 text-sm py-4 text-center">
+          当前没有进行中的工单 (还没扫工单 / 已完成)
+        </div>
+      </div>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, onMounted } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import {
+  listPackagingFlows,
+  createPackagingFlow,
+  updatePackagingFlow,
+  deletePackagingFlow,
+  getPackagingFlowState,
+} from '@/api/packaging_flow';
+import { getProjects } from '@/api/project';
+
+const flows = ref([]);
+const dialogVisible = ref(false);
+const stateDialogVisible = ref(false);
+const stateData = ref(null);
+const activeGroups = ref([]);
+
+// 组⑥ 异常 → 事件映射的 7 个字段 (与后端 _KIND_TO_EVENT_FIELD 对应)
+const EVENT_FIELDS = [
+  { field: 'event_short_box', label: '漏箱' },
+  { field: 'event_over_box', label: '多箱' },
+  { field: 'event_tray_ng', label: '单托盘检测 NG' },
+  { field: 'event_box_ng', label: '整箱托盘数不足 NG' },
+  { field: 'event_label_mismatch', label: '箱标签与工单不符' },
+  { field: 'event_label_len', label: '标签长度异常' },
+  { field: 'event_mes_fail', label: '拉单失败' },
+];
+
+// 从所有项目的事件设置聚合出候选事件 (跨项目去重 by id+name)
+const eventOptions = ref([]);
+const loadEventOptions = async () => {
+  try {
+    const { data } = await getProjects();
+    const projects = data?.items || data || [];
+    const opts = [];
+    const seen = new Set();
+    for (const p of projects) {
+      for (const ev of (p?.events_config || [])) {
+        if (ev?.id == null) continue;
+        const key = `${ev.id}__${ev.name || ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        opts.push({ value: ev.id, label: `${ev.name || '事件'} (id=${ev.id})` });
+      }
+    }
+    eventOptions.value = opts;
+  } catch (e) {
+    // 静默: 拉不到事件不阻塞, 留空走默认报警即可
+  }
+};
+
+const _newForm = () => ({
+  id: null,
+  name: '',
+  enabled: false,
+  channel_id: 0,
+  scan_device_id: null,
+  pull_conn_id: null,
+  box_count_source: 'field',
+  box_count_field: 'dispatch_qty',
+  tray_qty_mode: 'fixed',
+  tray_qty_fixed: 0,
+  tray_qty_table: null,
+  trays_per_box_mode: 'fixed',
+  trays_per_box_fixed: 4,
+  trays_per_box_table: null,
+  label_match: 'strip_hyphen',
+  label_len: 0,
+  hyphen_template: null,
+  on_mes_fail: 'block',
+  on_label_mismatch: 'warn',
+  on_short_box: 'redo',
+  on_forced_stop_partial: 'fail',
+  on_forced_stop: 'settle',
+  forced_settle_on_standby: true,
+  push_on_complete: false,
+  push_event_type: 'packaging_complete',
+  // 组⑥ 异常 → 项目事件映射 (null = 默认通用报警)
+  event_short_box: null,
+  event_over_box: null,
+  event_tray_ng: null,
+  event_box_ng: null,
+  event_label_mismatch: null,
+  event_label_len: null,
+  event_mes_fail: null,
+});
+
+const form = reactive(_newForm());
+const scanDeviceIdStr = ref('');
+const pullConnIdStr = ref('');
+const trayQtyTableJson = ref('');
+const traysPerBoxTableJson = ref('');
+
+const loadList = async () => {
+  try {
+    const { data } = await listPackagingFlows();
+    flows.value = data.items || [];
+  } catch (e) {
+    ElMessage.error('加载包装结算列表失败: ' + (e?.response?.data?.detail || e.message));
+  }
+};
+
+const _syncStrFields = () => {
+  scanDeviceIdStr.value = form.scan_device_id == null ? '' : String(form.scan_device_id);
+  pullConnIdStr.value = form.pull_conn_id == null ? '' : String(form.pull_conn_id);
+  trayQtyTableJson.value = form.tray_qty_table ? JSON.stringify(form.tray_qty_table) : '';
+  traysPerBoxTableJson.value = form.trays_per_box_table ? JSON.stringify(form.trays_per_box_table) : '';
+};
+
+const openCreate = () => {
+  Object.assign(form, _newForm());
+  _syncStrFields();
+  activeGroups.value = [];
+  dialogVisible.value = true;
+};
+
+const openEdit = (row) => {
+  Object.assign(form, _newForm(), row);
+  _syncStrFields();
+  activeGroups.value = [];
+  dialogVisible.value = true;
+};
+
+const applyHiwinPreset = () => {
+  Object.assign(form, {
+    box_count_source: 'field',
+    box_count_field: 'dispatch_qty',
+    trays_per_box_mode: 'fixed',
+    trays_per_box_fixed: 4,
+    tray_qty_mode: 'fixed',
+    tray_qty_fixed: 0,
+    label_match: 'strip_hyphen',
+    label_len: 15,
+    on_mes_fail: 'block',
+    on_label_mismatch: 'warn',
+    on_short_box: 'redo',
+    on_forced_stop_partial: 'fail',
+    on_forced_stop: 'settle',
+    forced_settle_on_standby: true,
+    push_on_complete: false,
+    push_event_type: 'packaging_complete',
+  });
+  _syncStrFields();
+  ElMessage.success('已套用上银包装线预设, 请按现场核对工位/扫码器/MES 连接');
+};
+
+const _parseIntOrNull = (s) => {
+  const t = (s || '').trim();
+  if (!t) return null;
+  const n = parseInt(t, 10);
+  return Number.isNaN(n) ? null : n;
+};
+
+const submit = async () => {
+  if (!form.name.trim()) {
+    ElMessage.error('配置名称不能为空');
+    return;
+  }
+  form.scan_device_id = _parseIntOrNull(scanDeviceIdStr.value);
+  form.pull_conn_id = _parseIntOrNull(pullConnIdStr.value);
+
+  // by_spec 表 JSON 解析
+  if (form.trays_per_box_mode === 'by_spec' && traysPerBoxTableJson.value.trim()) {
+    try {
+      form.trays_per_box_table = JSON.parse(traysPerBoxTableJson.value);
+    } catch (e) {
+      ElMessage.error('每箱托盘数表 JSON 解析失败: ' + e.message);
+      return;
+    }
+  } else {
+    form.trays_per_box_table = null;
+  }
+  if (form.tray_qty_mode === 'by_spec' && trayQtyTableJson.value.trim()) {
+    try {
+      form.tray_qty_table = JSON.parse(trayQtyTableJson.value);
+    } catch (e) {
+      ElMessage.error('每托盘数量表 JSON 解析失败: ' + e.message);
+      return;
+    }
+  } else {
+    form.tray_qty_table = null;
+  }
+
+  try {
+    if (form.id) {
+      await updatePackagingFlow(form.id, form);
+      ElMessage.success('配置已更新');
+    } else {
+      const { id, ...payload } = form;
+      await createPackagingFlow(payload);
+      ElMessage.success('配置已创建');
+    }
+    dialogVisible.value = false;
+    loadList();
+  } catch (e) {
+    ElMessage.error('保存失败: ' + (e?.response?.data?.detail || e.message));
+  }
+};
+
+const toggleEnabled = async (row, val) => {
+  try {
+    await updatePackagingFlow(row.id, { enabled: val });
+    ElMessage.success(val ? '已启用' : '已禁用');
+    loadList();
+  } catch (e) {
+    ElMessage.error('切换失败: ' + (e?.response?.data?.detail || e.message));
+    loadList();
+  }
+};
+
+const del = async (row) => {
+  try {
+    await ElMessageBox.confirm(`确认删除配置 "${row.name}"?`, '提示', { type: 'warning' });
+    await deletePackagingFlow(row.id);
+    ElMessage.success('已删除');
+    loadList();
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error('删除失败: ' + (e?.response?.data?.detail || e.message));
+    }
+  }
+};
+
+const viewState = async (row) => {
+  try {
+    const { data } = await getPackagingFlowState(row.id);
+    stateData.value = data;
+    stateDialogVisible.value = true;
+  } catch (e) {
+    ElMessage.error('查询状态失败: ' + (e?.response?.data?.detail || e.message));
+  }
+};
+
+onMounted(() => {
+  loadList();
+  loadEventOptions();
+});
+</script>
+
+<style scoped>
+.packaging-flow-panel {
+  color: white;
+}
+.preset-bar {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+}
+</style>

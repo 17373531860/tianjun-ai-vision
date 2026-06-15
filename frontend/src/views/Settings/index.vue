@@ -1555,6 +1555,10 @@
         <ChannelGroupPanel />
       </el-tab-pane>
 
+      <el-tab-pane label="包装箱结算">
+        <PackagingFlowPanel />
+      </el-tab-pane>
+
       <!-- 调试设置 Tab: 仅开发者模式可见 (Navbar 齿轮 → 开发者模式 → 密码), 与多工位同款门控 -->
       <el-tab-pane v-if="store.developerMode" label="调试设置">
         <DebugPanel />
@@ -1595,6 +1599,7 @@ import api from '@/api/index';
 import AuthPanel from './AuthPanel.vue';
 import WorkpieceFlowPanel from './WorkpieceFlowPanel.vue';
 import ChannelGroupPanel from './ChannelGroupPanel.vue';
+import PackagingFlowPanel from './PackagingFlowPanel.vue';
 import DebugPanel from './DebugPanel.vue';
 import { dbg, dbgErr } from '@/utils/debug';
 

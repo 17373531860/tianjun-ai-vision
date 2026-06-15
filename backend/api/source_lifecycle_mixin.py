@@ -323,6 +323,19 @@ class LifecycleMixin:
         except Exception as _e:
             print(f"[Scanner/Source] standby stop_scanning 失败: {_e}")
 
+        # v3.21: 包装结算 — 待机时按策略收尾 (受 forced_settle_on_standby 控制,
+        # 有的现场待机只是暂停画面不该结算). 无配置/无进行中工单时静默, 零差异.
+        try:
+            from backend.services.packaging_flow_coordinator import get_coordinator as _pkg_coord
+            from backend.db.database import SessionLocal as _PkgSession
+            _pkg_db = _PkgSession()
+            try:
+                _pkg_coord().on_forced_settle_by_channel(self.channel_id, _pkg_db, is_standby=True)
+            finally:
+                _pkg_db.close()
+        except Exception as _e:
+            print(f"[PackagingFlow/Source] standby 收尾失败 (隔离): {_e}")
+
         self._stop_inference_thread()
         self._stop_recording_thread()
         self._close_all_writers()

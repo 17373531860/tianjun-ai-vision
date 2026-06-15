@@ -13,6 +13,29 @@
     <!-- USB 键盘扫码枪精简编辑框 (新建/编辑 device_type=usb_hid 的扫码器) -->
     <UsbScanGunDialog v-model="showUsbDialog" :edit-dev="usbEditDev" @saved="loadDevices" />
 
+    <!-- USB 扫码枪真机测试: 拿真枪扫一下, 回显原始码 (不拉单/不绑件) -->
+    <el-dialog v-model="showUsbTest" :title="`测试扫码 - ${usbTestDev?.name || ''}`" width="540px" @closed="stopUsbTest">
+      <div class="text-xs text-gray-400 mb-3 leading-5">
+        拿这把 USB 扫码枪对着条码扫一下，下面会显示扫到的原始码（只回显，不拉单 / 不绑件）。<br>
+        注意：扫的时候本窗口要处于激活状态，焦点别点进输入框里。
+      </div>
+      <div class="mb-3 flex items-center">
+        <el-button v-if="!usbTesting" type="success" @click="startUsbTest">开始监听</el-button>
+        <el-button v-else type="danger" @click="stopUsbTest">停止监听</el-button>
+        <span v-if="usbTesting" class="text-xs text-green-400 ml-3">● 监听中…现在扫一下</span>
+      </div>
+      <div v-if="usbCaptured.length" class="bg-black/30 rounded p-2 max-h-60 overflow-auto">
+        <div v-for="(c, i) in usbCaptured" :key="i" class="text-xs py-1 flex items-center gap-2">
+          <el-tag size="small" type="success" effect="dark">{{ c.time }}</el-tag>
+          <span class="font-mono text-cyan-300">{{ c.code }}</span>
+          <span class="text-gray-500">({{ c.len }}位)</span>
+          <el-tag size="small" :type="c.route === 'pull' ? 'warning' : 'primary'">→ {{ c.route === 'pull' ? '拉工单' : '绑工件' }}</el-tag>
+        </div>
+      </div>
+      <div v-else-if="usbTesting" class="text-xs text-gray-500">等待扫码…</div>
+      <template #footer><el-button @click="showUsbTest = false">关闭</el-button></template>
+    </el-dialog>
+
     <!-- 基本设备管理面板 -->
     <div v-show="activeTab === 'basic'" class="flex gap-4">
       <!-- 左: 设备管理 -->
@@ -579,7 +602,7 @@ import {
 import WMaxPanel from './WMaxPanel.vue'
 import UsbScanGunDialog from './UsbScanGunDialog.vue'
 import { pullOrders } from '@/api/gateway'
-import { routeCode } from '@/composables/useScanGun'
+import { routeCode, setScanTestCapture } from '@/composables/useScanGun'
 import { useSystemStore } from '@/store/useSystemStore'
 import { dbg, dbgErr } from '@/utils/debug'
 
@@ -1382,34 +1405,38 @@ function usbUsageLabel(dev) {
   const u = (dev.parse_config && dev.parse_config.usb && dev.parse_config.usb.usage) || 'pull'
   return { pull: '扫码拉工单', bind: '扫码绑工件', both: '拉工单 + 绑工件' }[u] || u
 }
-// 现场调试: 不用真扫码枪, 输一个码按该 USB 枪的用途真跑一次 (拉工单 / 绑工件)
-async function testUsbScan(dev) {
-  const u = (dev.parse_config && dev.parse_config.usb) || {}
-  let code
-  try {
-    const r = await ElMessageBox.prompt('输入一个条码模拟扫码（按用途自动路由）', `测试扫码 - ${dev.name}`, {
-      confirmButtonText: '真跑一次', cancelButtonText: '取消',
-      inputPlaceholder: '如 JOB260500444-136 或工件码',
+// 真机测试: 点「测试扫码」直接进监听, 拿真枪扫一下回显原始码 (不拉单/不绑件)
+const showUsbTest = ref(false)
+const usbTestDev = ref(null)
+const usbTesting = ref(false)
+const usbCaptured = ref([])
+
+function testUsbScan(dev) {
+  usbTestDev.value = dev
+  usbCaptured.value = []
+  showUsbTest.value = true
+  startUsbTest()
+}
+
+function startUsbTest() {
+  usbTesting.value = true
+  // 焦点离开输入框, 避免扫码字符被填进表单
+  try { document.activeElement && document.activeElement.blur() } catch (_) {}
+  const u = (usbTestDev.value?.parse_config && usbTestDev.value.parse_config.usb) || {}
+  setScanTestCapture((code) => {
+    usbCaptured.value.unshift({
+      code,
+      len: code.length,
+      time: new Date().toLocaleTimeString(),
+      route: routeCode({ usage: u.usage || 'pull', orderPattern: u.order_pattern }, code),
     })
-    code = (r.value || '').trim()
-  } catch { return }
-  if (!code) return
-  const route = routeCode({ usage: u.usage || 'pull', orderPattern: u.order_pattern }, code)
-  try {
-    if (route === 'pull') {
-      if (!u.pull_conn_id) { ElMessage.warning('该 USB 枪未配拉取连接，去编辑里选一条'); return }
-      const resp = await pullOrders(u.pull_conn_id, { job_no: code, dry_run: false })
-      const res = resp?.data ?? resp
-      res?.success
-        ? ElMessage.success(`扫码拉工单成功：新建 ${res.created || 0} / 更新 ${res.updated || 0}`)
-        : ElMessage.error('扫码拉工单失败：' + (res?.error || '未知'))
-    } else {
-      await simulateScannerScan({ barcode: code, channel_id: dev.channel_id || 0 })
-      ElMessage.success(`已注入绑定链路（工位${(dev.channel_id || 0) + 1}）：${code}`)
-    }
-  } catch (e) {
-    ElMessage.error('测试异常：' + (e?.response?.data?.detail || e.message))
-  }
+    if (usbCaptured.value.length > 20) usbCaptured.value.pop()
+  })
+}
+
+function stopUsbTest() {
+  usbTesting.value = false
+  setScanTestCapture(null)
 }
 
 const handleDelete = async (dev) => {
@@ -1445,7 +1472,10 @@ onMounted(() => {
   loadLogs()
   statusTimer = setInterval(() => { refreshStatus(); loadLogs() }, 5000)
 })
-onUnmounted(() => { if (statusTimer) clearInterval(statusTimer) })
+onUnmounted(() => {
+  if (statusTimer) clearInterval(statusTimer)
+  stopUsbTest()  // 测试窗开着直接切走时, 强制摘掉测试回调, 否则检测页扫码会被吞
+})
 </script>
 
 <style scoped>

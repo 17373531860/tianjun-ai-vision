@@ -925,6 +925,13 @@
         </div>
       </div>
 
+      <!-- v3.21: 包装箱结算进度 (仅当前工位有启用配置才显示, 否则不渲染/不轮询, 零差异) -->
+      <PackagingFlowCard
+        v-if="packagingCfgForChannel"
+        :config="packagingCfgForChannel"
+        :state="packagingState"
+      />
+
       <!-- v3.5.0: 周期性强制动作进度（独立链，与上方 SOP/Tracking 不冲突） -->
       <div v-if="periodicActions.length > 0" class="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
         <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex items-center justify-between">
@@ -1504,6 +1511,8 @@ import { getProjectDetail } from '@/api/project';
 import api, { getBackendHost } from '@/api/index';
 import { getExtraFieldsSchema, setExtraFields } from '@/api/gateway';
 import PerItemPanel from './PerItemPanel.vue';
+import PackagingFlowCard from './PackagingFlowCard.vue';
+import { listPackagingFlows, getPackagingFlowState } from '@/api/packaging_flow';
 import TjSlot from '@/components/TjSlot.vue';
 import { dbg, dbgErr } from '@/utils/debug';
 
@@ -1724,6 +1733,53 @@ const channelModelStats = ref({});
 // v3.8+: per_item 逐件模式运行时状态, 来自 /detection/results 的 per_item_state 字段.
 // 非 per_item 模式或后端尚未启用时为 null. PerItemPanel 直接消费该结构.
 const perItemState = ref(null);
+
+// v3.21: 包装箱结算进度. 仅当前工位有启用配置才显示 + 轮询, 否则不渲染/不请求 (零差异).
+const packagingConfigs = ref([]);   // 已启用的包装配置 (进 Monitor 时探测一次)
+const packagingState = ref(null);   // 当前工位进行中工单的运行快照
+let packagingTimer = null;
+
+const packagingCfgForChannel = computed(() =>
+  packagingConfigs.value.find(c => c.enabled && c.channel_id === selectedChannel.value) || null
+);
+
+const loadPackagingConfigs = async () => {
+  try {
+    const { data } = await listPackagingFlows();
+    packagingConfigs.value = (data.items || []).filter(c => c.enabled);
+  } catch (_) {
+    packagingConfigs.value = [];
+  }
+};
+
+const pollPackagingState = async () => {
+  const cfg = packagingCfgForChannel.value;
+  if (!cfg) {
+    packagingState.value = null;
+    return;
+  }
+  try {
+    const { data } = await getPackagingFlowState(cfg.id);
+    packagingState.value = data.state || null;
+  } catch (_) {
+    // 静默: 进度查询失败不影响主页面
+  }
+};
+
+onMounted(async () => {
+  await loadPackagingConfigs();
+  if (packagingConfigs.value.length > 0) {
+    pollPackagingState();
+    packagingTimer = setInterval(pollPackagingState, 1500);
+  }
+});
+
+onUnmounted(() => {
+  if (packagingTimer) {
+    clearInterval(packagingTimer);
+    packagingTimer = null;
+  }
+});
 // v3.19.x 自定义混合模式物品校验 (detection/results.custom_mix_state)
 const customMixState = ref(null);
 // 混合跟踪卡片用: 按标签索引物品行状态 (堆叠批层的"缺件批次"明细显示)

@@ -170,6 +170,23 @@ def migrate_database():
          "INTEGER DEFAULT 100"),
         ("export_realtime_rules", "last_used_input_filename",
          "VARCHAR(256)"),
+        # v3.21 M3 包装结算 — 组⑤ 收尾与回推 (老库已建该表但缺新列时补上)
+        ("packaging_flow_configs", "on_forced_stop",
+         "VARCHAR(8) DEFAULT 'settle'"),
+        ("packaging_flow_configs", "forced_settle_on_standby",
+         "BOOLEAN DEFAULT 1"),
+        ("packaging_flow_configs", "push_on_complete",
+         "BOOLEAN DEFAULT 0"),
+        ("packaging_flow_configs", "push_event_type",
+         "VARCHAR(32) DEFAULT 'packaging_complete'"),
+        # v3.21 M6 包装结算 — 组⑥ 异常 → 项目事件映射 (全可选, NULL=默认通用报警)
+        ("packaging_flow_configs", "event_short_box", "INTEGER"),
+        ("packaging_flow_configs", "event_over_box", "INTEGER"),
+        ("packaging_flow_configs", "event_tray_ng", "INTEGER"),
+        ("packaging_flow_configs", "event_box_ng", "INTEGER"),
+        ("packaging_flow_configs", "event_label_mismatch", "INTEGER"),
+        ("packaging_flow_configs", "event_label_len", "INTEGER"),
+        ("packaging_flow_configs", "event_mes_fail", "INTEGER"),
     ]
     
     from sqlalchemy import inspect
@@ -676,6 +693,29 @@ if not os.environ.get("BACKEND_SKIP_INIT"):
             _db2.close()
     except Exception as _e:
         print(f"[启动] WorkpieceFlowCoordinator 加载失败 (隔离, 不影响主流程): {_e}")
+
+# v3.21: 启动时加载包装箱结算配置 + 把上次进程留下的进行中工单标 aborted.
+# 客户场景 (上银包装线) 才会有配置, 没有时返回 0 也无副作用 — 与不配置时零差异.
+if not os.environ.get("BACKEND_SKIP_INIT"):
+    try:
+        from backend.services.packaging_flow_coordinator import (
+            get_coordinator as _get_pkg_coord,
+            wire_real_hooks as _wire_pkg_hooks,
+        )
+        from backend.db.database import SessionLocal as _SessionLocal3
+        _wire_pkg_hooks()  # 注入真实拉单 + 报警钩子
+        _db3 = _SessionLocal3()
+        try:
+            _aborted_pkg = _get_pkg_coord().abort_in_progress_on_startup(_db3)
+            if _aborted_pkg > 0:
+                print(f"[启动] PackagingFlow 把上次进程留下的 {_aborted_pkg} 个进行中工单标 aborted")
+            _n3 = _get_pkg_coord().reload_configs(_db3)
+            if _n3 > 0:
+                print(f"[启动] PackagingFlowCoordinator 加载 {_n3} 个包装结算配置")
+        finally:
+            _db3.close()
+    except Exception as _e:
+        print(f"[启动] PackagingFlowCoordinator 加载失败 (隔离, 不影响主流程): {_e}")
 
 
 def auto_restore_video_sources():

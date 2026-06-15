@@ -72,6 +72,7 @@ export function routeCode(cfg, code) {
 // 全局键盘捕获 (扫码枪特征: 极快连续字符 + Enter 结尾)
 // ============================================================
 let started = false
+let testCapture = null   // 非空 = 真机测试模式, 捕获到的码只回显给它, 不拉工单不绑工件
 let buffer = ''
 let segStart = 0
 let lastTime = 0
@@ -82,7 +83,8 @@ const SEG_MAX_MS = 800    // 整段(首字符→回车)超此值 = 不是扫码�
 const MIN_LEN = 3         // 条码至少这么长才认 (防误触)
 
 async function onKeydown(e) {
-  if (!cached.enabled) return
+  // 测试模式下即使设备没启用也要捕获 (现场常常还没保存就想先扫一下验枪)
+  if (!cached.enabled && !testCapture) return
   const now = Date.now()
 
   if (e.key === 'Enter') {
@@ -92,6 +94,8 @@ async function onKeydown(e) {
     if (fast) {
       e.preventDefault()
       e.stopPropagation()
+      // 真机测试: 捕获到的码只回显给测试钩子, 不拉工单不绑工件
+      if (testCapture) { try { testCapture(code) } catch (_) {} ; return }
       await dispatch(cached, code)
     }
     return
@@ -166,4 +170,13 @@ export function stopScanGun() {
   if (!started) return
   started = false
   window.removeEventListener('keydown', onKeydown, true)
+}
+
+/**
+ * 真机扫码测试: 设一个回调, 拿真扫码枪扫到的码只回显给它 (不拉工单/不绑工件)。
+ * 传 null 关闭测试。激活时确保全局键盘监听已挂, 且不依赖设备是否已启用。
+ */
+export function setScanTestCapture(fn) {
+  testCapture = fn
+  if (fn) startScanGun()
 }

@@ -373,6 +373,67 @@ class EventTriggerMixin:
 
         return True
 
+    def fire_external_event_response(self, event_id, reason: str,
+                                     source: str = "external") -> bool:
+        """外部子系统 (如包装箱结算) 借用一次"事件响应"——复用该事件配好的
+        报警 (灯/蜂鸣) + 语音/Toast + 计数器联动, 但**不结束检测周期、不动 OK/NG
+        周期统计、不进人工确认阻塞态、不走防重复结算守门**.
+
+        与 ``_trigger_event`` 的本质区别: ``_trigger_event`` 代表"一个检测周期判定完了"
+        (会 end_cycle 写库); 本方法只借事件的"响应面", 不打断正在跑的托盘检测.
+
+        返回 True = 找到事件并已联动; False = 无项目配置 / 事件未找到.
+        """
+        if not self.project_config:
+            return False
+        events_config = self.project_config.get('events_config', []) or []
+        event = None
+        for e in events_config:
+            eid = e.get('id')
+            if eid == event_id or str(eid) == str(event_id):
+                event = e
+                break
+        if not event:
+            print(f"[fire_external_event] 事件未找到: {event_id} (source={source}, reason={reason})")
+            return False
+
+        current_event_id = event.get('id')
+
+        # 计数器联动 (复用事件 actions)
+        counters_changed = False
+        for action in event.get('actions', []) or []:
+            counter_name = action.get('counter_name', '')
+            value = action.get('delta', action.get('value', 1))
+            if counter_name in self.counters:
+                self.counters[counter_name] += value
+                counters_changed = True
+        if counters_changed:
+            try:
+                self._persist_counters()
+            except Exception:
+                pass
+
+        # 事件日志 (前端读 → 弹 Toast + 语音播报); 标 source 便于前端区分来源
+        self._event_seq += 1
+        self.events_log.append({
+            'seq': self._event_seq,
+            'event_id': str(current_event_id),
+            'event_name': event.get('name', ''),
+            'reason': reason,
+            'timestamp': time.time(),
+            'show_notification': event.get('show_notification', False),
+            'toast_id': event.get('toast_id', 'ng'),
+            'had_workpiece': False,
+            'should_warn_no_barcode': False,
+            'require_ack': False,
+            'ack_timeout_sec': 0,
+            'source': source,
+        })
+
+        # 物理报警联动 (复用本通道 alarm 配置, 与检测 NG 共用 eventN 配置)
+        self._dispatch_event_alarm(current_event_id)
+        return True
+
     def _dispatch_event_alarm(self, current_event_id) -> None:
         """触发本通道 alarm (v3.13 M1.2c 抽出).
 

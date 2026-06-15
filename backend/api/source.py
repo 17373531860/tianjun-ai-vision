@@ -1462,7 +1462,20 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             alarm_router.stop_idle_light(channel_id=self.channel_id)
         except Exception as _e:
             print(f"[Alarm/Source] stop_idle_light 失败: {_e}")
-        
+
+        # v3.21: 包装结算 — 停止检测时按策略收尾进行中工单.
+        # 无包装配置 / 通道未参与 / 无进行中工单时静默返回, 与不配置时零差异.
+        try:
+            from backend.services.packaging_flow_coordinator import get_coordinator as _pkg_coord
+            from backend.db.database import SessionLocal as _PkgSession
+            _pkg_db = _PkgSession()
+            try:
+                _pkg_coord().on_forced_settle_by_channel(self.channel_id, _pkg_db, is_standby=False)
+            finally:
+                _pkg_db.close()
+        except Exception as _e:
+            print(f"[PackagingFlow/Source] stop 收尾失败 (隔离): {_e}")
+
         # 停止推理线程
         self._stop_inference_thread()
         

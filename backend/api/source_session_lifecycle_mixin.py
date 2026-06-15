@@ -829,6 +829,19 @@ class SessionLifecycleMixin:
                 except Exception as _e:
                     print(f"[WorkpieceFlow] on_cycle_settled 异常 (隔离, 不影响主流程): {_e}")
 
+                # v3.21: 通知 PackagingFlowCoordinator 本次托盘结算 (包装箱"工单→箱→托盘"三层结算).
+                # 通道不在任何启用配置时直接 return, 零差异; 任何异常都隔离, 不影响主流程.
+                try:
+                    from backend.services.packaging_flow_coordinator import get_coordinator as _get_pkg_coord
+                    _get_pkg_coord().on_cycle_settled(
+                        channel_id=self.channel_id,
+                        cycle_id=cycle.id,
+                        is_good=bool(final_is_good),
+                        db=db,
+                    )
+                except Exception as _e:
+                    print(f"[PackagingFlow] on_cycle_settled 异常 (隔离, 不影响主流程): {_e}")
+
                 # v2.7.16: once_per_cycle 模式下, 周期结束 (无论 OK/NG) 都让扫码器
                 # 恢复扫描, 等下一个工件的码. 模式不匹配时是 no-op, 不需要额外判断.
                 try:
