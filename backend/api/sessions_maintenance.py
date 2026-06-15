@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from backend.core.auth_deps import require_perm
@@ -23,79 +23,218 @@ from backend.models.models import (
 
 router = APIRouter()
 
+_DEFAULT_RETENTION = 30
+_DEFAULT_OK_DAYS = 7
+_DEFAULT_NG_DAYS = 180
+
 
 # ---- internal helpers (also used by main.py 启动时调用) ----
 
+def _read_cleanup_settings(db):
+    """从数据库读取清理设置（复用传入的 db，不自开关）。返回 dict。
+
+    - retention_days / auto_cleanup: 全局保留天数 + 自动清理开关（原有）
+    - video_split_ok_ng: 周期录像是否按 OK/NG 分别保留（新增，默认 False = 关）
+    - video_ok_retention_days / video_ng_retention_days: 开启后 OK/NG 各自保留天数
+    """
+    def _val(key):
+        row = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+        return row.value if row else None
+
+    def _int(key, default):
+        v = _val(key)
+        try:
+            return int(v) if v not in (None, "") else default
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "retention_days": _int("retention_days", _DEFAULT_RETENTION),
+        "auto_cleanup": (_val("auto_cleanup") != "false"),  # 无配置 / 非 false → True（同原行为）
+        "video_split_ok_ng": (_val("video_split_ok_ng") == "true"),  # 默认 False
+        "video_ok_retention_days": _int("video_ok_retention_days", _DEFAULT_OK_DAYS),
+        "video_ng_retention_days": _int("video_ng_retention_days", _DEFAULT_NG_DAYS),
+    }
+
+
 def _get_cleanup_settings_from_db():
-    """从数据库读取清理设置"""
+    """兼容旧签名：仅返回 (retention_days, auto_cleanup)。"""
     db = SessionLocal()
     try:
-        retention_row = db.query(SystemConfig).filter(SystemConfig.key == "retention_days").first()
-        auto_row = db.query(SystemConfig).filter(SystemConfig.key == "auto_cleanup").first()
-        retention_days = int(retention_row.value) if retention_row and retention_row.value else 30
-        auto_cleanup = (auto_row.value == "true") if auto_row else True
-        return retention_days, auto_cleanup
+        cfg = _read_cleanup_settings(db)
+        return cfg["retention_days"], cfg["auto_cleanup"]
     except Exception:
-        return 30, True
+        return _DEFAULT_RETENTION, True
     finally:
         db.close()
 
 
+def _delete_cycles_by_filter(db, cycle_filter):
+    """删除满足 cycle_filter 的周期：连同其步骤记录、周期/步骤录像文件与录像记录一起删。
+
+    以"周期"为归属单位删，避免历史"录像按独立时间删 → 周期记录删了录像还在 / 录像记录指向
+    已删周期"的孤儿问题。返回 (cycle_count, step_count, video_count, deleted_files)。
+    """
+    cids = [row[0] for row in db.query(DetectionCycle.id).filter(cycle_filter).all()]
+    if not cids:
+        return 0, 0, 0, 0
+
+    deleted_files = 0
+    step_ids = [row[0] for row in db.query(StepRecord.id).filter(
+        StepRecord.cycle_id.in_(cids)
+    ).all()]
+
+    # 周期录像 + 步骤录像的物理文件
+    vid_q = db.query(VideoClip).filter(or_(
+        and_(VideoClip.clip_type == 'cycle', VideoClip.related_id.in_(cids)),
+        and_(VideoClip.clip_type == 'step', VideoClip.related_id.in_(step_ids)) if step_ids else False,
+    ))
+    for v in vid_q.all():
+        if v.file_path and os.path.isfile(v.file_path):
+            try:
+                os.remove(v.file_path)
+                deleted_files += 1
+            except Exception as e:
+                print(f"[自动清理] 删除录像文件失败: {v.file_path}, {e}")
+
+    video_count = vid_q.delete(synchronize_session=False)
+    step_count = db.query(StepRecord).filter(
+        StepRecord.cycle_id.in_(cids)
+    ).delete(synchronize_session=False)
+    cycle_count = db.query(DetectionCycle).filter(
+        DetectionCycle.id.in_(cids)
+    ).delete(synchronize_session=False)
+    return cycle_count, step_count, video_count, deleted_files
+
+
 def _perform_auto_cleanup():
-    """按保留天数自动清理：DB记录 + 录制文件 + 孤儿文件 + 缓存 + 过期上传视频。"""
-    retention_days, auto_cleanup = _get_cleanup_settings_from_db()
-    if not auto_cleanup or retention_days <= 0:
-        return
+    """按保留期自动清理：周期(可按 OK/NG 分别保留) + 会话/步骤记录 + 录像文件 + 孤儿 + 缓存 + 过期上传视频。
 
-    cutoff = datetime.now() - timedelta(days=retention_days)
-    cutoff_ts = cutoff.timestamp()
-    print(f"[自动清理] 开始清理 {retention_days} 天前的数据 (截止: {cutoff.strftime('%Y-%m-%d %H:%M:%S')})")
-
+    以"周期"为基本归属单位：一个周期过期 → 连同它的步骤记录、录像文件、录像记录一起删，
+    彻底杜绝"周期记录删了、录像还在"的孤儿（修历史口径不一致 bug）。
+    开启 OK/NG 分开存时，OK / NG 周期各用自己的保留期；无结果标记的旧周期走全局保留天数。
+    会话仅在其名下已无剩余周期且自身已过全局保留期时才删——这样 NG 周期长留时，承载它的
+    会话（回放需要的父记录）也会被保住。
+    """
     db = SessionLocal()
     try:
-        # 1. DB 记录 + 关联视频文件
-        old_sessions = db.query(DetectionSession).filter(
-            DetectionSession.start_time < cutoff
-        ).all()
+        cfg = _read_cleanup_settings(db)
+        if not cfg["auto_cleanup"] or cfg["retention_days"] <= 0:
+            return
+
+        now = datetime.now()
+        retention_days = cfg["retention_days"]
+        base_cutoff = now - timedelta(days=retention_days)
+        cutoff_ts = base_cutoff.timestamp()
+        split = cfg["video_split_ok_ng"]
+        ok_days = max(cfg["video_ok_retention_days"], 0)
+        ng_days = max(cfg["video_ng_retention_days"], 0)
+
+        if split:
+            print(f"[自动清理] 开始清理 (OK/NG 录像分开存: OK {ok_days}天 / "
+                  f"NG {ng_days}天; 数据记录及其余 {retention_days}天)")
+        else:
+            print(f"[自动清理] 开始清理 {retention_days} 天前的数据 (截止: {base_cutoff.strftime('%Y-%m-%d %H:%M:%S')})")
 
         session_count = cycle_count = step_count = video_count = deleted_files = 0
 
-        if old_sessions:
-            old_sids = [s.id for s in old_sessions]
-            old_cycles = db.query(DetectionCycle).filter(
-                DetectionCycle.session_id.in_(old_sids)
-            ).all()
-            old_cids = [c.id for c in old_cycles]
+        # 1. 周期"数据记录"清理（归属单位：周期 + 其步骤 + 其录像一起删）。
+        #    语义边界（关键）：OK/NG 分开存只决定"录像文件"保留多久，**数据记录**至少保留全局
+        #    retention_days；当某结果的录像保留期更长（如 NG 180>30），其数据记录跟着延长，
+        #    以免录像还在却没有可回放的父记录。OK 录像若更短（7<30）只在步骤 1b 单删录像、
+        #    数据记录仍按全局保留，绝不提前删。无录像标记（result 为空）的旧周期一律走全局保留期。
+        ok_cids_sub = db.query(VideoClip.related_id).filter(
+            VideoClip.clip_type == 'cycle', VideoClip.result == 'OK')
+        ng_cids_sub = db.query(VideoClip.related_id).filter(
+            VideoClip.clip_type == 'cycle', VideoClip.result == 'NG')
 
-            old_videos = db.query(VideoClip).filter(VideoClip.created_at < cutoff).all()
-            for v in old_videos:
+        if not split:
+            cycle_filters = [DetectionCycle.start_time < base_cutoff]
+        else:
+            ok_data_cutoff = now - timedelta(days=max(retention_days, ok_days))
+            ng_data_cutoff = now - timedelta(days=max(retention_days, ng_days))
+            cycle_filters = [
+                # OK 录像周期：数据记录保留 max(全局, OK录像保留)
+                and_(DetectionCycle.start_time < ok_data_cutoff,
+                     DetectionCycle.id.in_(ok_cids_sub)),
+                # NG 录像周期：数据记录保留 max(全局, NG录像保留)
+                and_(DetectionCycle.start_time < ng_data_cutoff,
+                     DetectionCycle.id.in_(ng_cids_sub)),
+                # 无录像标记的旧周期：全局保留
+                and_(DetectionCycle.start_time < base_cutoff,
+                     ~DetectionCycle.id.in_(ok_cids_sub),
+                     ~DetectionCycle.id.in_(ng_cids_sub)),
+            ]
+
+        for cf in cycle_filters:
+            cc, sc, vc, df = _delete_cycles_by_filter(db, cf)
+            cycle_count += cc
+            step_count += sc
+            video_count += vc
+            deleted_files += df
+        db.commit()
+
+        # 1b. 录像文件单独清理：某结果的录像保留期 < 其数据记录保留期时（常见于 OK 7<全局30），
+        #     录像先过期删除，但保留周期数据记录（统计仍在，仅回放文件已清，回放引用一并置空）。
+        if split:
+            for result, vdays in (('OK', ok_days), ('NG', ng_days)):
+                if vdays >= retention_days:
+                    continue  # 录像保留 >= 数据保留 → 已在步骤 1 随周期删除
+                vcut = now - timedelta(days=vdays)
+                vq = db.query(VideoClip).filter(
+                    VideoClip.clip_type == 'cycle',
+                    VideoClip.result == result,
+                    VideoClip.created_at < vcut,
+                )
+                rows = vq.all()
+                if not rows:
+                    continue
+                stale_cids = [v.related_id for v in rows if v.related_id]
+                for v in rows:
+                    if v.file_path and os.path.isfile(v.file_path):
+                        try:
+                            os.remove(v.file_path)
+                            deleted_files += 1
+                        except Exception as e:
+                            print(f"[自动清理] 删除过期{result}录像失败: {v.file_path}, {e}")
+                video_count += vq.delete(synchronize_session=False)
+                if stale_cids:
+                    db.query(DetectionCycle).filter(
+                        DetectionCycle.id.in_(stale_cids)
+                    ).update(
+                        {DetectionCycle.video_path: None, DetectionCycle.video_id: None},
+                        synchronize_session=False,
+                    )
+            db.commit()
+
+        # 2. 会话级清理：过了全局保留期、且名下已无剩余周期的会话才删（连带会话录像）。
+        old_sessions = db.query(DetectionSession).filter(
+            DetectionSession.start_time < base_cutoff
+        ).all()
+        for s in old_sessions:
+            has_cycle = db.query(DetectionCycle.id).filter(
+                DetectionCycle.session_id == s.id
+            ).first()
+            if has_cycle:
+                continue  # 仍挂着未过期周期（如长留 NG）→ 保住父会话以便回放
+            svids = db.query(VideoClip).filter(
+                VideoClip.clip_type == 'session', VideoClip.related_id == s.id
+            )
+            for v in svids.all():
                 if v.file_path and os.path.isfile(v.file_path):
                     try:
                         os.remove(v.file_path)
                         deleted_files += 1
                     except Exception as e:
-                        print(f"[自动清理] 删除文件失败: {v.file_path}, {e}")
-
-            if old_cids:
-                step_count = db.query(StepRecord).filter(
-                    StepRecord.cycle_id.in_(old_cids)
-                ).delete(synchronize_session=False)
-
-            video_count = db.query(VideoClip).filter(
-                VideoClip.created_at < cutoff
-            ).delete(synchronize_session=False)
-            cycle_count = db.query(DetectionCycle).filter(
-                DetectionCycle.session_id.in_(old_sids)
-            ).delete(synchronize_session=False)
-            session_count = db.query(DetectionSession).filter(
-                DetectionSession.id.in_(old_sids)
-            ).delete(synchronize_session=False)
-
-            db.commit()
+                        print(f"[自动清理] 删除会话录像失败: {v.file_path}, {e}")
+            video_count += svids.delete(synchronize_session=False)
+            db.delete(s)
+            session_count += 1
+        db.commit()
 
         print(f"[自动清理] 数据库: {session_count}个会话, {cycle_count}个周期, {step_count}条步骤, {video_count}个视频记录, {deleted_files}个关联文件")
 
-        # 2. 录制目录孤儿文件
+        # 2b. 录制目录孤儿文件
         known_paths = set()
         for (fp,) in db.query(VideoClip.file_path).all():
             if fp:
@@ -318,17 +457,23 @@ def clear_data_by_range(req: DateRangeCleanup, db: Session = Depends(get_db)):
 class CleanupSettingsUpdate(BaseModel):
     retention_days: Optional[int] = None
     auto_cleanup: Optional[bool] = None
+    video_split_ok_ng: Optional[bool] = None
+    video_ok_retention_days: Optional[int] = None
+    video_ng_retention_days: Optional[int] = None
+
+
+def _set_system_config(db, key: str, value: str, desc: str):
+    row = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+    if row:
+        row.value = value
+    else:
+        db.add(SystemConfig(key=key, value=value, description=desc))
 
 
 @router.get("/cleanup-settings")
 def get_cleanup_settings(db: Session = Depends(get_db)):
-    """获取数据清理设置"""
-    rr = db.query(SystemConfig).filter(SystemConfig.key == "retention_days").first()
-    ar = db.query(SystemConfig).filter(SystemConfig.key == "auto_cleanup").first()
-    return {
-        "retention_days": int(rr.value) if rr and rr.value else 30,
-        "auto_cleanup": (ar.value == "true") if ar else True,
-    }
+    """获取数据清理设置（含 OK/NG 录像分开存策略）"""
+    return _read_cleanup_settings(db)
 
 
 @router.put("/cleanup-settings",
@@ -336,26 +481,17 @@ def get_cleanup_settings(db: Session = Depends(get_db)):
 def update_cleanup_settings(req: CleanupSettingsUpdate, db: Session = Depends(get_db)):
     """更新数据清理设置"""
     if req.retention_days is not None:
-        row = db.query(SystemConfig).filter(SystemConfig.key == "retention_days").first()
-        if row:
-            row.value = str(req.retention_days)
-        else:
-            db.add(SystemConfig(key="retention_days", value=str(req.retention_days), description="数据保留天数"))
+        _set_system_config(db, "retention_days", str(req.retention_days), "数据保留天数")
     if req.auto_cleanup is not None:
-        row = db.query(SystemConfig).filter(SystemConfig.key == "auto_cleanup").first()
-        v = "true" if req.auto_cleanup else "false"
-        if row:
-            row.value = v
-        else:
-            db.add(SystemConfig(key="auto_cleanup", value=v, description="是否启用自动清理"))
+        _set_system_config(db, "auto_cleanup", "true" if req.auto_cleanup else "false", "是否启用自动清理")
+    if req.video_split_ok_ng is not None:
+        _set_system_config(db, "video_split_ok_ng", "true" if req.video_split_ok_ng else "false", "录像按OK/NG分开保留")
+    if req.video_ok_retention_days is not None:
+        _set_system_config(db, "video_ok_retention_days", str(req.video_ok_retention_days), "OK录像保留天数")
+    if req.video_ng_retention_days is not None:
+        _set_system_config(db, "video_ng_retention_days", str(req.video_ng_retention_days), "NG录像保留天数")
     db.commit()
-
-    rr = db.query(SystemConfig).filter(SystemConfig.key == "retention_days").first()
-    ar = db.query(SystemConfig).filter(SystemConfig.key == "auto_cleanup").first()
-    return {
-        "retention_days": int(rr.value) if rr and rr.value else 30,
-        "auto_cleanup": (ar.value == "true") if ar else True,
-    }
+    return _read_cleanup_settings(db)
 
 
 @router.get("/storage-info")

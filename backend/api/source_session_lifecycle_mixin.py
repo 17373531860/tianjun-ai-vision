@@ -26,7 +26,7 @@ from typing import Any, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 
 from backend.db.database import SessionLocal
-from backend.models.models import DetectionSession, DetectionCycle, StepRecord, DataExportSetting
+from backend.models.models import DetectionSession, DetectionCycle, StepRecord, DataExportSetting, VideoClip
 from sqlalchemy import func
 
 from backend.core import debug_center
@@ -737,7 +737,22 @@ class SessionLifecycleMixin:
                 cycle.event_name = event_name
                 cycle.result_reason = final_reason
                 cycle.step_sequence = self.current_cycle_steps.copy()
-                
+
+                # 把本周期 OK/NG 结果回写到关联录像记录, 供"OK/NG 分开存 + 分别保留期"
+                # 清理用。无条件回写 (一次 UPDATE, 开销极小, 让录像记录数据完整);
+                # 是否按结果分别保留由清理设置决定, 不开则该字段不被使用 (零差异)。
+                if cycle.video_id:
+                    try:
+                        db.query(VideoClip).filter(
+                            VideoClip.video_uuid == cycle.video_id,
+                            VideoClip.clip_type == 'cycle',
+                        ).update(
+                            {VideoClip.result: 'OK' if final_is_good else 'NG'},
+                            synchronize_session=False,
+                        )
+                    except Exception as _e:
+                        print(f"[录制] 回写录像 OK/NG 标记失败 (已忽略): {_e}")
+
                 # 记录周期结束时间，用于计算下一周期的间隔
                 self.last_cycle_end_time = cycle.end_time
                 

@@ -154,6 +154,12 @@ def fire_plugin_hook(
                      实时警告/超时报警"策略挂这里 — 阈值判定 + trigger_alarm + NG 改写
                      (经 pre_cycle_end) 全在插件侧, 主程序不内嵌任何阈值策略.
                      ctx 字段契约见 tests/plugin_system/test_step_tick_hook.py.
+                   - ``"detection_frame"``: 推理循环每帧 (非 tracking 路径) 把本帧
+                     检测框广播给插件; ctx 携带 channel_id / frame_seq / timestamp /
+                     detections. **只读 observe hook** (不在 RETURNABLE_HOOK_FIELDS),
+                     返回值丢弃, 不改主程序检测/计数/录像/状态机. sensor-clean 插件靠
+                     它逐帧自计数 (复刻 detect6 精度). ctx 字段契约见
+                     tests/plugin_system/test_detection_frame_hook.py.
 
                    M1.1 末项 (v3.13, 2026-05-28 落地):
                    - ``"source_status_change"``: 5 个 lifecycle 公共方法 (pause / resume /

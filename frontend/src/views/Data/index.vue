@@ -637,6 +637,23 @@
                       <div class="text-xs text-gray-600 pl-1">
                         超过 {{ cleanupSettings.retention_days }} 天的数据将被自动清理
                       </div>
+                      <div class="setting-row">
+                        <span>OK/NG 录像分开存</span>
+                        <el-switch v-model="cleanupSettings.video_split_ok_ng" @change="saveCleanupSettings" size="small" />
+                      </div>
+                      <template v-if="cleanupSettings.video_split_ok_ng">
+                        <div class="setting-row">
+                          <span>OK 录像保留天数</span>
+                          <el-input-number v-model="cleanupSettings.video_ok_retention_days" :min="0" :precision="0" size="small" controls-position="right" style="width: 100px" @change="saveCleanupSettings" />
+                        </div>
+                        <div class="setting-row">
+                          <span>NG 录像保留天数</span>
+                          <el-input-number v-model="cleanupSettings.video_ng_retention_days" :min="0" :precision="0" size="small" controls-position="right" style="width: 100px" @change="saveCleanupSettings" />
+                        </div>
+                        <div class="text-xs text-gray-600 pl-1">
+                          仅作用于周期录像文件。数据记录仍至少保留上方天数；NG 录像更久时其周期记录会同步保留以便回放。
+                        </div>
+                      </template>
                     </div>
                     <el-button type="warning" plain size="small" class="w-full mt-3" @click="handleRunCleanup" :loading="runningCleanup">
                       立即执行清理
@@ -1000,7 +1017,10 @@ const currentVideoUrl = ref('');
 // 清理设置
 const cleanupSettings = reactive({
   retention_days: 30,
-  auto_cleanup: true
+  auto_cleanup: true,
+  video_split_ok_ng: false,
+  video_ok_retention_days: 7,
+  video_ng_retention_days: 180
 });
 const savingCleanupSettings = ref(false);
 const runningCleanup = ref(false);
@@ -1668,6 +1688,9 @@ const loadCleanupSettings = async () => {
     const res = await getCleanupSettings();
     cleanupSettings.retention_days = res.data.retention_days;
     cleanupSettings.auto_cleanup = res.data.auto_cleanup;
+    cleanupSettings.video_split_ok_ng = res.data.video_split_ok_ng;
+    cleanupSettings.video_ok_retention_days = res.data.video_ok_retention_days;
+    cleanupSettings.video_ng_retention_days = res.data.video_ng_retention_days;
   } catch (e) {
     console.error('加载清理设置失败:', e);
   }
@@ -1678,7 +1701,10 @@ const saveCleanupSettings = async () => {
   try {
     await updateCleanupSettings({
       retention_days: cleanupSettings.retention_days,
-      auto_cleanup: cleanupSettings.auto_cleanup
+      auto_cleanup: cleanupSettings.auto_cleanup,
+      video_split_ok_ng: cleanupSettings.video_split_ok_ng,
+      video_ok_retention_days: cleanupSettings.video_ok_retention_days,
+      video_ng_retention_days: cleanupSettings.video_ng_retention_days
     });
     ElMessage.success('清理设置已保存');
   } catch (e) {

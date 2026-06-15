@@ -327,6 +327,10 @@ class VideoClip(Base):
     
     clip_type = Column(String(20), nullable=False)  # session, cycle, step
     related_id = Column(Integer, nullable=True)  # 关联的记录ID
+
+    # 周期录像的合格结果 (OK / NG / None)。周期结束写库时回写，供"OK/NG 分开存 +
+    # 分别保留期"的清理策略使用。session/step 录像无此语义，保持 None。
+    result = Column(String(8), nullable=True)
     
     file_path = Column(String(500), nullable=False)  # 文件路径
     file_name = Column(String(200), nullable=True)  # 文件名

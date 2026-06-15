@@ -1,0 +1,76 @@
+{
+  "version": "3.21.0",
+  "date": "2026-06-16",
+  "previous_version": "3.20.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "包装箱结算通用模式（上银包装线，主程序原生）",
+      "symptom": "上银包装线需要工单→箱→托盘多层结算流程，扫码驱动，箱标签号与工单号一致，漏箱/多扫要报警",
+      "root_cause": "属基础设施性质的多层结算需求，定为主程序原生通用能力而非客户插件",
+      "fix": "独立 PackagingFlowCoordinator 单例三层事件驱动状态机，与核心检测解耦；扫码事件 + on_cycle_settled 真检测挂接触发托盘结算；可配置扫码源/匹配/去连字符/尾箱/期望箱数；7 个异常类型映射项目事件设置触发报警，经 fire_external_event_response 轻量响应不打断检测周期；Monitor 包装卡启用显示禁用零差异",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/api/packaging_flows.py", "backend/models/mes_models.py", "backend/api/source_session_lifecycle_mixin.py", "backend/api/source_event_trigger_mixin.py", "backend/main.py"],
+      "keywords": ["包装箱结算", "packaging flow", "上银", "HIWIN", "工单", "托盘", "tray", "box", "扫码驱动", "三层状态机", "漏箱报警", "去连字符", "fire_external_event_response", "通用配置"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "sensor-clean 传感器清洁插件 + detection_frame 帧级钩子（平台能力）",
+      "symptom": "传感器清洁工序要逐件复刻 detect6 计数精度（基准44件）+ 棉签寿命约束 + 双视角联动，主程序周期结算无法逐件对齐 detect6 逐帧锚动作生命周期计数",
+      "root_cause": "主程序缺帧级检测广播能力，插件拿不到每帧原始检测框无法自计数",
+      "fix": "平台新增 detection_frame observe-only 帧钩子（每帧非tracking路径广播检测框，不在returnable白名单返回值丢弃，无插件O(1)早退热路径零开销，异常隔离）；插件用 detect6 同款 ProductCounter 自适应轨迹追踪（移动即计数+帧硬锁+lost抗丢检）逐帧自计数。离线比对 detect6=44 插件=45（<3%一致，差异源于归一化各向异性可配置微调）",
+      "files": ["backend/api/source_inference_loop_mixin.py", "backend/plugin_system/hook_dispatch.py", "plugins-examples/sensor-clean/backend/__init__.py", "plugins-examples/sensor-clean/backend/counter.py", "plugins-examples/sensor-clean/backend/hooks.py"],
+      "keywords": ["detection_frame", "帧级钩子", "observe-only", "sensor-clean", "传感器清洁", "ProductCounter", "detect6", "逐帧计数", "自适应轨迹追踪", "移动即计数", "帧硬锁", "棉签寿命", "双视角"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "OK/NG 录像分开保留 + 分别保留期",
+      "symptom": "客户希望周期录像按结果分开存，合格录像短存（如7天）不良录像长存（如180天）",
+      "root_cause": "原录像清理只有全局统一保留期，无法按 OK/NG 区分",
+      "fix": "VideoClip 加 result 列，周期结算回写 OK/NG；清理两阶段重构——数据记录至少全局保留期且不短于其录像保留期（防回放孤儿），录像文件按 OK/NG 各自保留期删除并置空引用；不开分开存等价旧全局行为零差异；Data页存储与清理加开关+条件渲染天数",
+      "files": ["backend/models/models.py", "backend/api/source_session_lifecycle_mixin.py", "backend/api/sessions_maintenance.py", "backend/main.py", "frontend/src/views/Data/index.vue"],
+      "keywords": ["录像分开存", "OK/NG", "保留期", "retention", "video_split_ok_ng", "周期录像", "防孤儿", "自动清理", "数据维护"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "fujian-jinlong 插件 pydantic 2.12 _StepThreshold not fully defined（预存真bug）",
+      "symptom": "fujian-jinlong 客户插件后端模块加载即抛 PydanticUserError，13+ 集成测试全 error",
+      "root_cause": "from __future__ import annotations 让注解变字符串 pydantic 2.12 延迟构建 schema，而 _DurationConfig 类体内 default=_StepThreshold() 在类定义期实例化时 validator 还是占位",
+      "fix": "_StepThreshold / _DurationConfig 类定义后各显式 model_rebuild() 把 schema 落定再实例化。先红复现后绿 5/5 集成 + 13+ 单测全pass",
+      "files": ["plugins-examples/fujian-jinlong/backend/__init__.py"],
+      "keywords": ["pydantic", "model_rebuild", "_StepThreshold", "not fully defined", "from __future__ annotations", "fujian-jinlong", "插件加载失败"],
+      "breaking": false
+    }
+  ],
+  "tests": {
+    "detection_frame_contract": "7/7",
+    "video_retention_unit_matrix": "6 cases + API roundtrip",
+    "video_retention_bdd": "3/3",
+    "packaging_backend": "85 passed (api+coordinator+bdd+fire_event)",
+    "uat_packaging_visible_browser": "9/9",
+    "uat_video_retention_visible_browser": "4/4",
+    "regression_L1": "836 passed (19 known single-run-green pollution)",
+    "regression_L2_plugin": "361 passed"
+  },
+  "skills_updated": [],
+  "files_changed": [
+    "backend/api/sessions_maintenance.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/main.py",
+    "backend/models/models.py",
+    "backend/plugin_system/hook_dispatch.py",
+    "frontend/src/views/Data/index.vue",
+    "plugins-examples/fujian-jinlong/backend/__init__.py",
+    "tests/uat/uat_20260616_packaging_flow.py",
+    "tests/features/video_retention.feature",
+    "tests/plugin_system/test_detection_frame_hook.py",
+    "tests/step_defs/test_video_retention.py",
+    "tests/test_video_retention_cleanup.py"
+  ]
+}

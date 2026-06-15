@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.21.0 (2026-06-16)
+
+> 三大主线合入主干：(1) 包装箱结算通用模式（上银包装线，主程序原生）— 工单→箱→托盘三层扫码驱动状态机，全流程可配置，不启用零差异；(2) sensor-clean 传感器清洁插件 + detection_frame 帧级钩子（平台 observe-only 帧检测广播能力，插件按 detect6 自适应轨迹追踪逐帧自计数，离线比对 44→45 <3% 一致）；(3) OK/NG 录像分开保留（合格短存/不良长存，数据记录防孤儿）。修 fujian-jinlong 插件 pydantic 2.12 真 bug。三层测试全绿：L1 836 + L2 361 passed，包装 UAT 9/9 + 视频分开存 UAT 4/4。
+
+- [FEAT-001] 新增: 包装箱结算通用模式 — 独立 PackagingFlowCoordinator 三层事件驱动状态机，扫码 + on_cycle_settled 真检测挂接触发托盘结算，可配置去连字符/尾箱/期望箱数，7 个异常类型映射项目事件设置经 fire_external_event_response 轻量响应，Monitor 包装卡启用显示禁用零差异
+- [FEAT-002] 新增: sensor-clean 插件 + detection_frame 帧级 observe-only 钩子 — 每帧广播检测框（不在 returnable 白名单返回值丢弃，无插件早退热路径零开销，异常隔离），插件用 detect6 同款 ProductCounter 逐帧自计数；离线比对 detect6=44 / 插件=45（<3% 一致）
+- [FEAT-003] 新增: OK/NG 录像分开保留 — VideoClip.result 列 + 周期回写，清理两阶段（数据记录至少全局且不短于录像保留期防孤儿），不开分开存等价旧行为零差异，Data 页开关+条件渲染天数
+- [BUG-001] 修复: fujian-jinlong 插件 pydantic 2.12 `_StepThreshold not fully defined`（预存真 bug，13+ 测试全 error）— 类定义后 model_rebuild() 落定 schema（先红后绿）
+- [TEST-001] 新增: detection_frame 契约 7/7 + 视频分开存单测矩阵+BDD 3/3 + 包装后端 85 + 可见浏览器 UAT（包装 9/9 + 视频 4/4）；全量回归 L1 836 + L2 361 零真失败
+
+---
+
 ## v3.20.0 (2026-06-15)
 
 > 外部 MES 双向打通：原有「检测结果推送外部 MES」之外，新增「主动去外部 MES 拉工单」（通用可配置，已对接上银 HIWIN 两层嵌套结构）+ 定时自动同步。USB 键盘式扫码枪即插即用（NT-1202W 等），归入扫码器面板统一管理，支持扫码拉工单/绑工件。全链路接入调试中心。三层测试（单元+BDD+可见浏览器 UAT）全绿，141 BDD 零回归。

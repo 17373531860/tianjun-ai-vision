@@ -155,9 +155,9 @@ def phase_b(cid):
 
         # B1 启用配置 → Monitor 应显示包装进度卡
         page.goto(f"{FRONTEND}/#/monitor")
-        page.wait_for_load_state("networkidle")
-        time.sleep(2.5)  # 给 Monitor onMounted 拉配置 + polling 留时间
-        page.screenshot(path=f"{SHOTS}/B1_monitor_with_card.png", full_page=True)
+        page.wait_for_load_state("domcontentloaded")
+        time.sleep(3.5)  # 给 Monitor onMounted 拉配置 + polling 留时间
+        page.screenshot(path=f"{SHOTS}/B1_monitor_with_card.png", full_page=False)
         body1 = page.evaluate("document.body.innerText")
         has_card = page.locator(".packaging-card").count() > 0
         step("B1 启用时 Monitor 显示包装结算卡",
@@ -168,9 +168,9 @@ def phase_b(cid):
         requests.put(f"{API}/api/v1/packaging-flows/{cid}",
                      json={"enabled": False}, timeout=10)
         page.reload()
-        page.wait_for_load_state("networkidle")
-        time.sleep(2.5)
-        page.screenshot(path=f"{SHOTS}/B2_monitor_no_card.png", full_page=True)
+        page.wait_for_load_state("domcontentloaded")
+        time.sleep(3.5)
+        page.screenshot(path=f"{SHOTS}/B2_monitor_no_card.png", full_page=False)
         no_card = page.locator(".packaging-card").count() == 0
         step("B2 禁用后刷新卡消失 (零差异)",
              no_card, f"card_count={page.locator('.packaging-card').count()}")

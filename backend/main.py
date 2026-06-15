@@ -75,6 +75,8 @@ def migrate_database():
         ("step_records", "interval_to_next", "FLOAT"),
         # v3.13 M3.3: 插件命名空间字段 (PluginHost.write_plugin_step_field 落地点)
         ("step_records", "plugin_data", "JSON"),
+        # 周期录像 OK/NG 标记 (供"OK/NG 分开存 + 分别保留期"清理用, 老库补列默认 NULL)
+        ("video_clips", "result", "VARCHAR(8)"),
         # v3.13 RFC 10: 工位组联动字段 (老库升级时补列, 默认 NULL = 独立结算)
         ("detection_cycles", "channel_group_id", "INTEGER"),
         ("detection_cycles", "group_settled_with", "JSON"),

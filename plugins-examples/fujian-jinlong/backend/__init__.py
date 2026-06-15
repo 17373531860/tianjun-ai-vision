@@ -376,11 +376,21 @@ class _StepThreshold(BaseModel):
     ng_toast: Optional[Union[str, bool]] = None
 
 
+# 本文件头部 `from __future__ import annotations` 让所有注解变字符串, pydantic 2.12
+# 默认延迟构建 schema; 而下方 _DurationConfig 类体内 `default: _StepThreshold()` 在类
+# 定义期就实例化, 此刻 validator 还是 mock → 报 "not fully defined". 先显式 rebuild
+# 把 schema 落定, 实例化才有真 validator。
+_StepThreshold.model_rebuild()
+
+
 class _DurationConfig(BaseModel):
     enabled: bool = True
     default: _StepThreshold = _StepThreshold()
     steps: Dict[str, _StepThreshold] = {}
     alarm_event: Dict[str, str] = {"warn": "event2", "ng": "event2"}
+
+
+_DurationConfig.model_rebuild()
 
 
 def _build_router() -> APIRouter:
