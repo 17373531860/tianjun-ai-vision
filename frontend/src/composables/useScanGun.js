@@ -19,6 +19,7 @@
 import { ElNotification } from 'element-plus'
 import { pullOrders } from '@/api/gateway'
 import { getScannerDevices, simulateScannerScan } from '@/api/scanner'
+import { packagingScan } from '@/api/packaging_flow'
 import { dbg } from '@/utils/debug'
 
 const DEFAULT_CFG = {
@@ -116,6 +117,9 @@ async function dispatch(cfg, code) {
   if (busy) return
   busy = true
   try {
+    // v3.22: 包装结算优先 — 当前工位归属某个启用的包装结算配置时, 扫码全走它 (工单/换单);
+    // 没有任何启用配置或工位不匹配时后端返回 handled=false, 回退默认 pull/bind, 零差异。
+    if (await tryPackaging(cfg, code)) return
     const route = routeCode(cfg, code)
     dbg('mes.scanner', 'USB 扫码枪扫到码', `code=${code} 用途=${cfg.usage} → 路由=${route}`)
     if (route === 'pull') await doPull(cfg, code)
@@ -123,6 +127,29 @@ async function dispatch(cfg, code) {
   } finally {
     busy = false
   }
+}
+
+async function tryPackaging(cfg, code) {
+  try {
+    const resp = await packagingScan({ code, channel_id: cfg.bindChannelId ?? 0 })
+    const r = resp?.data ?? resp
+    if (r && r.handled) {
+      const st = r.state || {}
+      const extra = st.box_total ? ` · 共 ${st.box_total} 箱` : ''
+      dbg('mes.scanner', 'USB 扫码枪 → 包装结算', `code=${code} 已被包装结算处理${extra}`)
+      ElNotification.success({
+        title: '包装结算扫码',
+        message: `工单 ${code}${extra}`,
+        duration: 2500,
+      })
+      return true
+    }
+  } catch (err) {
+    // 包装结算探测异常不能吞掉码: 回退默认 pull/bind
+    dbg('mes.scanner', '包装结算扫码探测异常, 回退默认路由',
+        `${code}: ${err?.response?.data?.detail || err?.message || err}`)
+  }
+  return false
 }
 
 async function doPull(cfg, code) {

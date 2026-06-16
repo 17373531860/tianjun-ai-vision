@@ -777,6 +777,23 @@ class PackagingFlowConfig(Base):
     event_label_len = Column(Integer, nullable=True)       # 标签长度异常
     event_mes_fail = Column(Integer, nullable=True)        # 拉单失败
 
+    # --- 组⑦ 滑块口径 + 尾箱 + 自动切项目 + 塞工单 gate (上银 MES 闭环, v3.22, 全可选默认关) ---
+    # 计数单位: trays=按托盘数判满 (默认, 原 v3.21 行为字节级零差异) / sliders=按每箱滑块总数判满
+    count_unit = Column(String(8), default="trays")
+    # 每箱滑块数来源: project=读激活项目容器目标 (pipeline_config.custom_mix_container_item_target)
+    #               / config=用下面 items_per_box_fixed 固定值
+    items_per_box_source = Column(String(8), default="project")
+    items_per_box_fixed = Column(Integer, default=0)
+    # 从 MES 取"滑块总数"的字段名 (上银 = 排产量). sliders 模式算箱数 / 尾箱余数用
+    slider_total_field = Column(String(64), default="dispatch_qty")
+    # 按物料规格自动激活对应项目 (默认关). spec_to_project: {规格: 项目id}
+    auto_switch_project = Column(Boolean, default=False)
+    spec_to_project = Column(JSON, nullable=True)
+    # 尾箱塞工单视觉 gate (默认关): 尾箱结算前"放工单"步骤必须 covered, 否则不收尾 + 报警
+    tail_paper_order_required = Column(Boolean, default=False)
+    tail_paper_step_label = Column(String(64), nullable=True)
+    event_missing_paper = Column(Integer, nullable=True)   # 尾箱缺工单异常事件
+
     plugin_data = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -812,6 +829,14 @@ class PackagingFlowRun(Base):
     # 当前箱进度 (内存为主, 落库供断电恢复)
     current_box_index = Column(Integer, default=0)   # 第几箱 (1-based, 0=还没开箱)
     current_box_trays = Column(Integer, default=0)   # 当前箱已放合格托盘数
+
+    # --- 滑块口径 + 尾箱运行态 (count_unit=sliders 时填; trays 模式保持 0 不影响原行为) ---
+    count_unit = Column(String(8), default="trays")   # 本次运行口径留痕
+    slider_total = Column(Integer, default=0)         # MES 给的滑块总数
+    items_per_box = Column(Integer, default=0)        # 每箱滑块数 (普通箱目标)
+    tail_target = Column(Integer, default=0)          # 尾箱滑块目标 (余数; 整除时 = 每箱数)
+    current_box_sliders = Column(Integer, default=0)  # 当前箱已累计进箱滑块数
+    paper_order_done = Column(Boolean, default=False)  # 尾箱是否已检测到塞工单动作
 
     # 各箱明细 (JSON list, 例 [{"box":1,"trays":4,"result":"OK"}, ...])
     box_details = Column(JSON, nullable=True)

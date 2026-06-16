@@ -1,0 +1,122 @@
+{
+  "version": "3.22.0",
+  "date": "2026-06-17",
+  "previous_version": "3.21.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "包装结算按每箱滑块总数判满 (count_unit=sliders)",
+      "symptom": "上银场景需要按进箱滑块总数判满而非托盘数, 满箱用检测周期(封箱)驱动",
+      "root_cause": "v3.21 仅支持按托盘数结算, 缺滑块口径",
+      "fix": "PackagingFlowConfig 加 count_unit; on_cycle_settled 带 slider_count; sliders 模式一周期=一箱, 进箱滑块数与当前箱目标双重核对判 OK/NG; 每箱数读激活项目容器目标或配置固定值",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/api/source_session_lifecycle_mixin.py", "backend/api/source_custom_mix.py", "backend/models/mes_models.py"],
+      "keywords": ["上银", "HIWIN", "包装线", "滑块", "sliders", "count_unit", "每箱滑块总数", "封箱结算", "packaging flow"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "尾箱算法 + 运行时动态切目标",
+      "symptom": "滑块总数除每箱数非整除时最后一箱是余数; 整除时最后一箱也算尾箱",
+      "root_cause": "缺尾箱计算与运行时目标切换, 容器累加器固定目标会误判尾箱",
+      "fix": "compute_box_plan(总数,每箱)->(box_total,tail_target); 每开一箱把当前箱目标(含尾数)反向设回容器累加器 set_item_target; Run 表加 6 列 + migrate_database 补 ALTER",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/models/mes_models.py", "backend/main.py", "backend/api/source_custom_mix.py"],
+      "keywords": ["尾箱", "tail box", "tail_target", "compute_box_plan", "ceil", "余数", "运行时切目标", "set_item_target", "迁移", "ALTER TABLE"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "规格→自动激活项目开关 (默认关)",
+      "symptom": "扫工单拿到产品规格后需自动切到以型号命名的对应项目",
+      "root_cause": "每箱滑块数预配在各型号项目里, 需按规格切项目",
+      "fix": "配置加规格→项目id映射; _open_order_sliders 按规格经注入钩子激活项目, 失败兜底报警+用当前项目继续",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/api/packaging_flows.py"],
+      "keywords": ["规格", "spec", "自动切项目", "auto_switch_project", "spec_to_project", "型号命名项目"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "尾箱塞工单视觉 gate 开关 (默认关)",
+      "symptom": "工单纸需放进尾箱, 要 AI 检测到放工单动作才算尾箱完成",
+      "root_cause": "缺尾箱收尾前的视觉前置条件",
+      "fix": "尾箱结算前经注入探测钩子查放工单步骤是否 covered, 未做不收尾+报警 missing_paper; 无探测器退化不阻断",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/api/source.py"],
+      "keywords": ["塞工单", "放工单", "paper order", "tail_paper_order_required", "missing_paper", "视觉 gate", "is_packaging_paper_order_covered"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "USB 扫码枪接入包装结算",
+      "symptom": "现场 USB 扫码枪扫工单/箱标签驱动包装流程",
+      "root_cause": "扫码入口 API 已写好但前端未接",
+      "fix": "useScanGun 扫码先试 POST /packaging-flows/scan, handled=true 接管, 否则回退原 pull/bind 零差异",
+      "files": ["frontend/src/composables/useScanGun.js", "frontend/src/api/packaging_flow.js"],
+      "keywords": ["USB 扫码枪", "useScanGun", "packagingScan", "扫码路由", "pull bind 回退"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "异常对齐 + 报警事件映射",
+      "symptom": "缺料/数量错/漏箱/多箱/标签错/MES失败/尾箱缺工单需触发项目里配的特定事件",
+      "root_cause": "异常需映射到项目事件设置",
+      "fix": "协调器异常类型->项目事件字段映射(box_ng/over_box/short_box/label_mismatch/label_len/mes_fail/missing_paper); 数量错复用报警, 托盘重放不阻断状态机",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/api/packaging_flows.py"],
+      "keywords": ["异常对齐", "缺料", "漏油嘴", "数量错", "漏箱", "多箱", "标签错", "事件映射", "报警"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-007",
+      "title": "前端配置面板 + Monitor 卡按滑块口径展示",
+      "symptom": "需配置新开关并在 Monitor 实时看本箱滑块进度与尾箱",
+      "root_cause": "前端未暴露 sliders 口径配置与展示",
+      "fix": "PackagingFlowPanel 加组⑦配置项; 状态对话框 sliders 显示滑块总数/每箱/尾箱目标/各箱滑块明细; Monitor 卡按 count_unit 切滑块进度+尾箱标记, trays 保持原样",
+      "files": ["frontend/src/views/Settings/PackagingFlowPanel.vue", "frontend/src/views/Monitor/PackagingFlowCard.vue"],
+      "keywords": ["前端配置", "PackagingFlowPanel", "Monitor 卡", "PackagingFlowCard", "滑块进度", "尾箱标记", "sliders 渲染"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CI-001",
+      "title": "CI 锁 TensorRT <11",
+      "symptom": "TRT 11.x 删除 EXPLICIT_BATCH, 与 ultralytics<=8.4.16 导出不兼容, 客户机转换崩",
+      "root_cause": "pip 默认装最新 TRT 11.x",
+      "fix": "build.yml 装 tensorrt>=10.0,<11 + 启动自检断言主版本==10",
+      "files": [".github/workflows/build.yml"],
+      "keywords": ["TensorRT", "TRT", "EXPLICIT_BATCH", "ultralytics", "CI", "版本锁"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/services/packaging_flow_coordinator.py",
+    "backend/api/packaging_flows.py",
+    "backend/api/source.py",
+    "backend/api/source_custom_mix.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/models.py",
+    "backend/models/mes_models.py",
+    "backend/main.py",
+    "frontend/src/composables/useScanGun.js",
+    "frontend/src/api/packaging_flow.js",
+    "frontend/src/views/Settings/PackagingFlowPanel.vue",
+    "frontend/src/views/Monitor/PackagingFlowCard.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Project/index.vue",
+    "tools/mes_mock.py",
+    "tests/test_packaging_flow_coordinator.py",
+    "tests/test_packaging_flow_api.py",
+    "tests/test_packaging_sliders_e2e.py",
+    "tests/test_custom_mix_unit.py",
+    "tests/step_defs/test_packaging_flow.py",
+    "tests/features/packaging_flow.feature",
+    "tests/e2e_browser/test_packaging_flow_panel.py",
+    "tests/uat/uat_20260617_packaging_sliders.py",
+    ".github/workflows/build.yml"
+  ]
+}

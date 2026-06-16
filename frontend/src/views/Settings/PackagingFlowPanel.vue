@@ -226,6 +226,59 @@
               </el-select>
             </el-form-item>
           </el-collapse-item>
+
+          <!-- 组⑦ 滑块口径 + 尾箱 + 自动切项目 + 塞工单 (v3.22 上银 MES 闭环, 默认关) -->
+          <el-collapse-item title="⑦ 滑块口径 + 尾箱 (上银 MES 闭环, 默认按托盘)" name="g7">
+            <el-form-item label="计数单位">
+              <el-radio-group v-model="form.count_unit">
+                <el-radio value="trays">按托盘数判满 (默认)</el-radio>
+                <el-radio value="sliders">按每箱滑块总数判满</el-radio>
+              </el-radio-group>
+              <div class="text-xs text-gray-400 mt-1">
+                sliders: 一个检测周期 = 一个箱; 扫工单从 MES 拿滑块总数 → 自动算箱数 + 尾箱余数,
+                每箱滑块数读你在项目里配的容器整箱目标 (如 96).
+              </div>
+            </el-form-item>
+            <template v-if="form.count_unit === 'sliders'">
+              <el-form-item label="每箱滑块数来源">
+                <el-radio-group v-model="form.items_per_box_source">
+                  <el-radio value="project">读激活项目容器目标</el-radio>
+                  <el-radio value="config">下面固定值</el-radio>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item label="每箱滑块数 (固定)" v-if="form.items_per_box_source === 'config'">
+                <el-input-number v-model="form.items_per_box_fixed" :min="0" :max="9999" />
+              </el-form-item>
+              <el-form-item label="MES 滑块总数字段">
+                <el-input v-model="form.slider_total_field" placeholder="dispatch_qty" />
+                <span class="text-xs text-gray-400 ml-2">上银 = 排产量字段</span>
+              </el-form-item>
+              <el-form-item label="按规格自动切项目">
+                <el-switch v-model="form.auto_switch_project" />
+                <span class="text-xs text-gray-400 ml-2">扫工单拿到规格后自动激活对应项目</span>
+              </el-form-item>
+              <el-form-item label="规格→项目映射 (JSON)" v-if="form.auto_switch_project">
+                <el-input type="textarea" v-model="specToProjectJson" :rows="2"
+                          placeholder='{"HGH20": 3, "HGW15": 4}' />
+                <div class="text-xs text-gray-400 mt-1">键 = MES 返回的产品规格, 值 = 项目 ID</div>
+              </el-form-item>
+              <el-form-item label="尾箱必须塞工单">
+                <el-switch v-model="form.tail_paper_order_required" />
+                <span class="text-xs text-gray-400 ml-2">开 = 尾箱结算前必须检测到"放工单"动作, 否则不收尾并报警</span>
+              </el-form-item>
+              <el-form-item label="放工单步骤标签" v-if="form.tail_paper_order_required">
+                <el-input v-model="form.tail_paper_step_label" placeholder="put_paper" />
+                <span class="text-xs text-gray-400 ml-2">项目里"放工单"那一步的检测标签</span>
+              </el-form-item>
+              <el-form-item label="缺工单触发事件">
+                <el-select v-model="form.event_missing_paper" class="w-full" clearable
+                           placeholder="默认通用报警" filterable>
+                  <el-option v-for="ev in eventOptions" :key="ev.value"
+                             :label="ev.label" :value="ev.value" />
+                </el-select>
+              </el-form-item>
+            </template>
+          </el-collapse-item>
         </el-collapse>
       </el-form>
 
@@ -245,12 +298,36 @@
             <el-descriptions-item label="已结算箱">{{ stateData.state.box_done }}</el-descriptions-item>
             <el-descriptions-item label="NG 箱">{{ stateData.state.box_ng }}</el-descriptions-item>
             <el-descriptions-item label="当前第几箱">{{ stateData.state.current_box_index }}</el-descriptions-item>
-            <el-descriptions-item label="当前箱托盘">{{ stateData.state.current_box_trays }}</el-descriptions-item>
+            <el-descriptions-item
+              :label="stateData.state.count_unit === 'sliders' ? '当前箱滑块' : '当前箱托盘'">
+              {{ stateData.state.count_unit === 'sliders'
+                  ? stateData.state.current_box_sliders : stateData.state.current_box_trays }}
+            </el-descriptions-item>
             <el-descriptions-item label="状态">{{ stateData.state.status }}</el-descriptions-item>
             <el-descriptions-item label="规格">{{ stateData.state.spec || '-' }}</el-descriptions-item>
+            <template v-if="stateData.state.count_unit === 'sliders'">
+              <el-descriptions-item label="滑块总数">{{ stateData.state.slider_total }}</el-descriptions-item>
+              <el-descriptions-item label="每箱滑块">{{ stateData.state.items_per_box }}</el-descriptions-item>
+              <el-descriptions-item label="尾箱目标">{{ stateData.state.tail_target }}</el-descriptions-item>
+              <el-descriptions-item label="尾箱已塞工单">
+                {{ stateData.state.paper_order_done ? '是' : '否' }}
+              </el-descriptions-item>
+            </template>
           </el-descriptions>
           <div class="mt-3 text-gray-300 text-xs">各箱明细:</div>
-          <el-table :data="stateData.state.box_details || []" size="small" class="mt-1"
+          <!-- sliders 口径: 显示滑块数/目标; trays 口径: 显示托盘数/需要 -->
+          <el-table v-if="stateData.state.count_unit === 'sliders'"
+                    :data="stateData.state.box_details || []" size="small" class="mt-1"
+                    empty-text="还没结算任何箱">
+            <el-table-column prop="box" label="箱号" width="70" />
+            <el-table-column prop="sliders" label="滑块数" width="80" />
+            <el-table-column prop="target" label="目标" width="70" />
+            <el-table-column label="尾箱" width="60">
+              <template #default="{ row }">{{ row.is_tail ? '尾' : '' }}</template>
+            </el-table-column>
+            <el-table-column prop="result" label="结果" />
+          </el-table>
+          <el-table v-else :data="stateData.state.box_details || []" size="small" class="mt-1"
                     empty-text="还没结算任何箱">
             <el-table-column prop="box" label="箱号" width="70" />
             <el-table-column prop="trays" label="托盘数" width="80" />
@@ -352,6 +429,16 @@ const _newForm = () => ({
   event_label_mismatch: null,
   event_label_len: null,
   event_mes_fail: null,
+  // 组⑦ 滑块口径 + 尾箱 + 自动切项目 + 塞工单 gate (v3.22, 默认关/trays)
+  count_unit: 'trays',
+  items_per_box_source: 'project',
+  items_per_box_fixed: 0,
+  slider_total_field: 'dispatch_qty',
+  auto_switch_project: false,
+  spec_to_project: null,
+  tail_paper_order_required: false,
+  tail_paper_step_label: null,
+  event_missing_paper: null,
 });
 
 const form = reactive(_newForm());
@@ -359,6 +446,7 @@ const scanDeviceIdStr = ref('');
 const pullConnIdStr = ref('');
 const trayQtyTableJson = ref('');
 const traysPerBoxTableJson = ref('');
+const specToProjectJson = ref('');
 
 const loadList = async () => {
   try {
@@ -374,6 +462,7 @@ const _syncStrFields = () => {
   pullConnIdStr.value = form.pull_conn_id == null ? '' : String(form.pull_conn_id);
   trayQtyTableJson.value = form.tray_qty_table ? JSON.stringify(form.tray_qty_table) : '';
   traysPerBoxTableJson.value = form.trays_per_box_table ? JSON.stringify(form.trays_per_box_table) : '';
+  specToProjectJson.value = form.spec_to_project ? JSON.stringify(form.spec_to_project) : '';
 };
 
 const openCreate = () => {
@@ -448,6 +537,18 @@ const submit = async () => {
     }
   } else {
     form.tray_qty_table = null;
+  }
+
+  // 组⑦ 规格→项目映射 JSON 解析 (仅 sliders + 自动切项目时)
+  if (form.count_unit === 'sliders' && form.auto_switch_project && specToProjectJson.value.trim()) {
+    try {
+      form.spec_to_project = JSON.parse(specToProjectJson.value);
+    } catch (e) {
+      ElMessage.error('规格→项目映射 JSON 解析失败: ' + e.message);
+      return;
+    }
+  } else {
+    form.spec_to_project = null;
   }
 
   try {

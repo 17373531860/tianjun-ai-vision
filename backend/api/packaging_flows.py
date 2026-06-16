@@ -79,6 +79,16 @@ class PackagingFlowConfigBase(BaseModel):
     event_label_mismatch: Optional[int] = None
     event_label_len: Optional[int] = None
     event_mes_fail: Optional[int] = None
+    # 组⑦ 滑块口径 + 尾箱 + 自动切项目 + 塞工单 gate (v3.22, 全可选默认关)
+    count_unit: str = "trays"
+    items_per_box_source: str = "project"
+    items_per_box_fixed: int = 0
+    slider_total_field: str = "dispatch_qty"
+    auto_switch_project: bool = False
+    spec_to_project: Optional[Dict[str, int]] = None
+    tail_paper_order_required: bool = False
+    tail_paper_step_label: Optional[str] = None
+    event_missing_paper: Optional[int] = None
 
 
 class PackagingFlowConfigCreate(PackagingFlowConfigBase):
@@ -117,6 +127,15 @@ class PackagingFlowConfigUpdate(BaseModel):
     event_label_mismatch: Optional[int] = None
     event_label_len: Optional[int] = None
     event_mes_fail: Optional[int] = None
+    count_unit: Optional[str] = None
+    items_per_box_source: Optional[str] = None
+    items_per_box_fixed: Optional[int] = None
+    slider_total_field: Optional[str] = None
+    auto_switch_project: Optional[bool] = None
+    spec_to_project: Optional[Dict[str, int]] = None
+    tail_paper_order_required: Optional[bool] = None
+    tail_paper_step_label: Optional[str] = None
+    event_missing_paper: Optional[int] = None
 
 
 class PackagingFlowConfigResponse(PackagingFlowConfigBase):
@@ -140,6 +159,8 @@ _ENUMS = {
     "on_short_box": {"redo", "void"},
     "on_forced_stop_partial": {"pass", "fail"},
     "on_forced_stop": {"settle", "abort", "keep"},
+    "count_unit": {"trays", "sliders"},
+    "items_per_box_source": {"project", "config"},
 }
 
 
@@ -218,6 +239,15 @@ def _serialize(row: PackagingFlowConfig) -> PackagingFlowConfigResponse:
         event_label_mismatch=row.event_label_mismatch,
         event_label_len=row.event_label_len,
         event_mes_fail=row.event_mes_fail,
+        count_unit=getattr(row, "count_unit", None) or "trays",
+        items_per_box_source=getattr(row, "items_per_box_source", None) or "project",
+        items_per_box_fixed=int(getattr(row, "items_per_box_fixed", 0) or 0),
+        slider_total_field=getattr(row, "slider_total_field", None) or "dispatch_qty",
+        auto_switch_project=bool(getattr(row, "auto_switch_project", False)),
+        spec_to_project=getattr(row, "spec_to_project", None),
+        tail_paper_order_required=bool(getattr(row, "tail_paper_order_required", False)),
+        tail_paper_step_label=getattr(row, "tail_paper_step_label", None),
+        event_missing_paper=getattr(row, "event_missing_paper", None),
     )
 
 

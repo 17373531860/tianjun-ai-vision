@@ -1094,14 +1094,40 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             return list(detections) if detections else []
         if (self.project_config or {}).get('logic_mode') == 'per_item':
             return list(detections) if detections else []
+        # 自定义混合模式的"物品标签"(如滑块) 由 _custom_mix 子状态机独占消费,
+        # 在 _update_step_stats 里被从 detected_labels 剥离, 永远不进 step_frame_confirmed.
+        # 老逻辑会把它们全部滤掉 → 前端永远画不出物品框 (用户报"数到 24 却没看到框")。
+        # 这里直接放行物品标签的原始检测, 让画面框与容器计数走同一份数据、肉眼可核对。
+        _mix = getattr(self, '_custom_mix', None)
+        _item_labels = getattr(_mix, 'item_labels', None) if _mix is not None else None
         confirmed = []
         for det in detections:
             label = det['label']
+            if _item_labels and label in _item_labels:
+                confirmed.append(det)
+                continue
             # 只有已确认的标签才加入
             if self.step_frame_confirmed.get(label, False):
                 confirmed.append(det)
         return confirmed
     
+    def is_packaging_paper_order_covered(self, step_label):
+        """尾箱塞工单 gate 探测 (v3.22): 指定"放工单"步骤本周期是否已检出 (covered).
+
+        只读查询, 不改任何状态. 优先读结算时缓存的本周期步骤集 (end_cycle 后
+        current_cycle_steps 会清空); 缓存缺失时兜底查实时步骤集.
+        step_label 为空 → 无法判定, 返回 False (gate 守住, 等真正放了工单再放行).
+        """
+        if not step_label:
+            return False
+        try:
+            cached = getattr(self, '_last_cycle_steps', None)
+            if cached:
+                return step_label in cached
+            return step_label in (getattr(self, 'current_cycle_steps', None) or [])
+        except Exception:
+            return False
+
     def set_video_speed(self, speed: float):
         """设置视频播放倍速"""
         if speed < 0.25 or speed > 16:
@@ -1629,7 +1655,16 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # Tracking-mode (counting) state
         if hasattr(self, '_tracking_objects'):
             self._reset_counting_cycle()
-        
+
+        # 自定义混合子状态机 (逐件/跟踪容器累加器) 同步复位 —
+        # 否则点「清零」后滑块/已进箱总数不归零 (轮询会把旧账本刷回前端)
+        _mix = getattr(self, '_custom_mix', None)
+        if _mix is not None:
+            try:
+                _mix.reset()
+            except Exception as _e:
+                print(f"[CustomMix] reset_stats 复位失败: {_e}")
+
         gc.collect()
         
         print("统计数据已完全重置（含所有检测状态）")

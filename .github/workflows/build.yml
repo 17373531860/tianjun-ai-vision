@@ -118,8 +118,8 @@ jobs:
           echo "Installing ONNX Runtime GPU..."
           pip install --retries 5 --timeout 60 onnxruntime-gpu
           
-          echo "Installing TensorRT..."
-          pip install --retries 5 --timeout 120 tensorrt --extra-index-url https://pypi.nvidia.com
+          echo "Installing TensorRT (锁 <11: TRT 11.x 删除 EXPLICIT_BATCH 标志, 与 ultralytics<=8.4.16 导出代码不兼容; 10.x 已实测可转)..."
+          pip install --retries 5 --timeout 120 "tensorrt>=10.0,<11" --extra-index-url https://pypi.nvidia.com
           
           echo "Installing scipy (ultralytics dependency)..."
           pip install --retries 5 --timeout 60 "scipy>=1.10.0"
@@ -149,7 +149,7 @@ jobs:
           python -c "import mediapipe; print(f'MediaPipe: {mediapipe.__version__}')"
           python -c "import onnxruntime; print(f'ONNX Runtime: {onnxruntime.__version__}, providers: {onnxruntime.get_available_providers()}')"
           python -c "try:
-            import tensorrt; print(f'TensorRT: {tensorrt.__version__}')
+            import tensorrt as t; v=t.__version__; print(f'TensorRT: {v}'); assert int(v.split('.')[0])==10, f'FATAL: TensorRT {v} 非 10.x — 11.x 删除 EXPLICIT_BATCH 与 ultralytics<=8.4.16 导出不兼容, 客户机转换必崩'
           except ImportError:
             print('WARNING: TensorRT not available (non-fatal on CI without GPU)')"
           python -c "import scipy; print(f'SciPy: {scipy.__version__}')"

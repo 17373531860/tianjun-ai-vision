@@ -189,6 +189,23 @@ def migrate_database():
         ("packaging_flow_configs", "event_label_mismatch", "INTEGER"),
         ("packaging_flow_configs", "event_label_len", "INTEGER"),
         ("packaging_flow_configs", "event_mes_fail", "INTEGER"),
+        # v3.22 上银 MES 闭环 — 组⑦ 滑块口径 + 尾箱 + 自动切项目 + 塞工单 gate (全可选默认关)
+        ("packaging_flow_configs", "count_unit", "VARCHAR(8) DEFAULT 'trays'"),
+        ("packaging_flow_configs", "items_per_box_source", "VARCHAR(8) DEFAULT 'project'"),
+        ("packaging_flow_configs", "items_per_box_fixed", "INTEGER DEFAULT 0"),
+        ("packaging_flow_configs", "slider_total_field", "VARCHAR(64) DEFAULT 'dispatch_qty'"),
+        ("packaging_flow_configs", "auto_switch_project", "BOOLEAN DEFAULT 0"),
+        ("packaging_flow_configs", "spec_to_project", "JSON"),
+        ("packaging_flow_configs", "tail_paper_order_required", "BOOLEAN DEFAULT 0"),
+        ("packaging_flow_configs", "tail_paper_step_label", "VARCHAR(64)"),
+        ("packaging_flow_configs", "event_missing_paper", "INTEGER"),
+        # v3.22 PackagingFlowRun 滑块口径 + 尾箱运行态
+        ("packaging_flow_runs", "count_unit", "VARCHAR(8) DEFAULT 'trays'"),
+        ("packaging_flow_runs", "slider_total", "INTEGER DEFAULT 0"),
+        ("packaging_flow_runs", "items_per_box", "INTEGER DEFAULT 0"),
+        ("packaging_flow_runs", "tail_target", "INTEGER DEFAULT 0"),
+        ("packaging_flow_runs", "current_box_sliders", "INTEGER DEFAULT 0"),
+        ("packaging_flow_runs", "paper_order_done", "BOOLEAN DEFAULT 0"),
     ]
     
     from sqlalchemy import inspect

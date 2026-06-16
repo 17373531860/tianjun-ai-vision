@@ -853,6 +853,8 @@ class SessionLifecycleMixin:
                         cycle_id=cycle.id,
                         is_good=bool(final_is_good),
                         db=db,
+                        # v3.22 sliders 口径: 带本周期进箱滑块数 (容器混合在结算时缓存; 其它模式 None)
+                        slider_count=getattr(self, '_last_container_item_total', None),
                     )
                 except Exception as _e:
                     print(f"[PackagingFlow] on_cycle_settled 异常 (隔离, 不影响主流程): {_e}")

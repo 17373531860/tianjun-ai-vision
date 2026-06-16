@@ -176,7 +176,21 @@ def _get_trt_diagnosis() -> dict:
         trt_major = int(trt.__version__.split(".")[0])
         cuda_major = int(info["cuda_version"].split(".")[0]) if info["cuda_version"] else 0
 
-        if trt_major >= 10 and cuda_major < 12:
+        # TensorRT 11.x 删除了 NetworkDefinitionCreationFlag.EXPLICIT_BATCH，
+        # 而 ultralytics(<=8.4.16) 的 TRT 导出仍引用该标志 → export 必崩。
+        # 直接探测标志是否存在（比硬编码版本号更鲁棒，TRT 12+ 同样兜得住），
+        # 缺失即判不兼容并引导用户改走 PyTorch FP16，避免转到一半才报错。
+        _ndcf = getattr(trt, "NetworkDefinitionCreationFlag", None)
+        has_explicit_batch = hasattr(_ndcf, "EXPLICIT_BATCH")
+
+        if not has_explicit_batch:
+            info["tensorrt_compatible"] = False
+            info["issues"].append(
+                f"TensorRT {trt.__version__} 与当前导出库不兼容"
+                f"(缺少 EXPLICIT_BATCH 标志，TRT 11+ 已移除)。"
+                f"请改用 PyTorch FP16 格式，或重装最新安装包对齐 TensorRT 版本"
+            )
+        elif trt_major >= 10 and cuda_major < 12:
             info["tensorrt_compatible"] = False
             info["issues"].append(
                 f"TensorRT {trt.__version__} 需要 CUDA 12.x，"

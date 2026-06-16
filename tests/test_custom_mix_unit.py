@@ -757,3 +757,295 @@ def test_compose_resets_machine():
     vsm = _ready_vsm(ok=True)
     compose_settle_event(vsm, 1, "ok")
     assert len(vsm._custom_mix._engine.steps[0].items) == 0
+
+
+# ==================== 托盘容器累加器 (_ContainerAccumulator) ====================
+# 场景: 托盘=容器, 滑块=容器内物品, 每托盘 24, 一箱 4 托盘, FIFO 逐个装箱。
+# 周期主权归封箱步骤 — 累加器只"记账", 封箱时整箱裁决。
+from backend.api.source_custom_mix import _ContainerAccumulator
+
+
+def _tray(x, w=0.45, y=0.0, h=1.0):
+    return {"x": x, "y": y, "w": w, "h": h}
+
+
+def _tray_items(n, x0, x1, label="滑块", y=0.5):
+    """在 [x0,x1] 区间均匀放 n 个物品对象 (模拟 host._tracking_objects 值)."""
+    objs = []
+    span = max(1, n)
+    for i in range(n):
+        cx = x0 + (x1 - x0) * (i + 0.5) / span
+        objs.append({"class_name": label,
+                     "bbox": {"x": cx - 0.002, "y": y, "w": 0.004, "h": 0.004}})
+    return objs
+
+
+def test_container_single_tray_fill_and_record():
+    """单托盘装满 24 → 当前数=24/峰值=24; 托盘消失够确认帧 → 记进已装清单."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3)
+    tray, items = _tray(0.0), _tray_items(24, 0.0, 0.45)
+    for _ in range(3):
+        acc.update([tray], items, 0.0)
+    assert acc._cur_counts.get("滑块") == 24
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 24
+    for _ in range(3):           # 托盘进箱 (消失)
+        acc.update([], [], 0.1)
+    assert acc._done == [{"滑块": 24}]
+    assert acc._primary is None
+
+
+def test_container_fifo_primary_only_counts_current():
+    """两托盘同框: 主托盘=最早出现的那个; 只数主托盘自己的滑块 (不混入第二盘)."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=2)
+    t1, t1_items = _tray(0.0), _tray_items(24, 0.0, 0.45)
+    acc.update([t1], t1_items, 0.0)          # t1 先出现 → primary=t1
+    p1 = acc._primary
+    t2, t2_items = _tray(0.5), _tray_items(24, 0.5, 0.95)
+    acc.update([t1, t2], t1_items + t2_items, 0.1)  # 两盘同框
+    assert acc._primary == p1                # FIFO: 主托盘仍是 t1
+    assert acc._cur_counts["滑块"] == 24      # 只数 t1 的 24, 没把 t2 的也算进来
+
+
+def test_container_peak_survives_transient_drop():
+    """托盘瞬时漏检 (gone < gone_frames): 主托盘不切、峰值不清零 (治"峰值闪 0")."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=30)
+    t1, t1_items = _tray(0.0), _tray_items(24, 0.0, 0.45)
+    acc.update([t1], t1_items, 0.0)          # 峰值升到 24
+    p1 = acc._primary
+    assert acc._trays[p1]["peak"]["滑块"] == 24
+    # 连续 5 帧托盘+物品全漏检 (远小于 gone_frames=30)
+    for i in range(5):
+        acc.update([], [], 0.1 + i * 0.01)
+        assert acc._primary == p1            # 主托盘没切
+        peak = acc._trays.get(acc._primary, {}).get("peak", {})
+        assert peak.get("滑块") == 24         # 峰值保持 24, 没被清
+    # to_state 下发的峰值也稳在 24
+    st = acc.to_state({"滑块": "滑块"})
+    assert st["current_tray_items"][0]["peak_count"] == 24
+
+
+def test_container_fifo_switch_after_box():
+    """主托盘进箱后, 画面里第二盘自动升级为新主托盘."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=2)
+    t1, t1_items = _tray(0.0), _tray_items(24, 0.0, 0.45)
+    t2, t2_items = _tray(0.5), _tray_items(24, 0.5, 0.95)
+    acc.update([t1], t1_items, 0.0)
+    p1 = acc._primary
+    acc.update([t1, t2], t1_items + t2_items, 0.1)
+    for _ in range(2):                       # t1 端走进箱, 只剩 t2
+        acc.update([t2], t2_items, 0.2)
+    assert len(acc._done) == 1
+    assert acc._primary is not None and acc._primary != p1
+
+
+def _run_box(acc, counts, gone_frames=2):
+    """依次装 len(counts) 盘, 每盘 counts[k] 个滑块, 逐个进箱."""
+    for k, c in enumerate(counts):
+        tray, items = _tray(0.0), _tray_items(c, 0.0, 0.45)
+        for _ in range(gone_frames):
+            acc.update([tray], items, float(k))
+        for _ in range(gone_frames):
+            acc.update([], [], float(k) + 0.5)
+
+
+def test_container_verdict_box_ok():
+    """4 盘各 24 → 整箱 OK."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=2)
+    _run_box(acc, [24, 24, 24, 24])
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert ok, reasons
+    assert len(acc._done) == 4
+
+
+def test_container_verdict_insufficient_trays():
+    """只装 3 盘就封箱 → NG (托盘数不足)."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=2)
+    _run_box(acc, [24, 24, 24])
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert not ok
+    assert any("托盘数不足" in r for r in reasons)
+
+
+def test_container_verdict_one_tray_short():
+    """某一盘只有 20 个 → NG, 原因点名第几盘不足."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=2)
+    _run_box(acc, [24, 24, 20, 24])
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert not ok
+    assert any("第3盘" in r and "不足" in r for r in reasons)
+
+
+def test_container_verdict_folds_in_current_tray():
+    """封箱时最后一盘还在主托盘位 (未 gone-confirm) → 也折进裁决, 凑够 4 盘 OK."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3)
+    _run_box(acc, [24, 24, 24], gone_frames=3)   # 前 3 盘已进箱
+    tray, items = _tray(0.0), _tray_items(24, 0.0, 0.45)
+    for _ in range(2):                   # 第 4 盘装满但还没进箱
+        acc.update([tray], items, 9.0)
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert ok, reasons
+
+
+# ---- 总数模式 (items_total): 不计盘数, 累加进箱滑块总数, 整箱判正好 96 ----
+
+def test_container_items_total_exact_ok():
+    """4 盘各 24, 进箱总数 96 → OK."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=0, gone_frames=2,
+                                count_mode="items_total", item_target=96)
+    _run_box(acc, [24, 24, 24, 24])
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert ok, reasons
+
+
+def test_container_items_total_short_ng():
+    """进箱总数 95 (<96) → NG 不足."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=0, gone_frames=2,
+                                count_mode="items_total", item_target=96)
+    _run_box(acc, [24, 24, 24, 23])
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert not ok
+    assert any("不足" in r and "95/96" in r for r in reasons)
+
+
+def test_container_items_total_over_ng():
+    """进箱总数 100 (>96) → NG 超出 (多装也算异常)."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=0, gone_frames=2,
+                                count_mode="items_total", item_target=96)
+    _run_box(acc, [24, 24, 24, 28])
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert not ok
+    assert any("超出" in r and "100/96" in r for r in reasons)
+
+
+def test_container_items_total_uneven_ok():
+    """每盘不均 (30/20/26/20=96) 但总数正好 96 → OK (不卡每盘/盘数)."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=0, gone_frames=2,
+                                count_mode="items_total", item_target=96)
+    _run_box(acc, [30, 20, 26, 20])
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert ok, reasons
+
+
+def test_container_items_total_folds_in_current():
+    """封箱时最后一盘还在位 (未进箱), 也折进总数凑够 96 → OK."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=0, gone_frames=3,
+                                count_mode="items_total", item_target=96)
+    _run_box(acc, [24, 24, 24], gone_frames=3)   # 前 3 盘 = 72 已进箱
+    tray, items = _tray(0.0), _tray_items(24, 0.0, 0.45)
+    for _ in range(2):                            # 第 4 盘 24 个在位未进箱
+        acc.update([tray], items, 9.0)
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert ok, reasons
+
+
+def test_container_items_total_next_tray_not_overcounted():
+    """已装够 96 后下一箱第一盘已上桌在位: 不能把它算进本箱 (治现场 120/96 误判超出)."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=0, gone_frames=3,
+                                count_mode="items_total", item_target=96)
+    _run_box(acc, [24, 24, 24, 24], gone_frames=3)   # 4 盘进箱 = 96 已装够
+    tray, items = _tray(0.0), _tray_items(24, 0.0, 0.45)
+    for _ in range(2):                               # 下一箱第 1 盘 24 个已上桌在位
+        acc.update([tray], items, 9.0)
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert ok, reasons                               # 仍判 96 OK, 不是 120 超出
+
+
+def test_container_items_total_to_state():
+    """总数模式 to_state: 输出 count_mode + 已进箱滑块总数 + 整箱目标."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=0, gone_frames=2,
+                                count_mode="items_total", item_target=96)
+    _run_box(acc, [24, 24])                       # 2 盘进箱 = 48
+    st = acc.to_state({"滑块": "滑块", "托盘": "托盘"})
+    assert st["count_mode"] == "items_total"
+    assert st["item_target"] == 96
+    assert st["item_total_done"].get("滑块") == 48
+
+
+def test_container_to_state_shape():
+    """to_state 给前端: 已装托盘数 + 当前托盘实时滑块数/每盘期望."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3)
+    tray, items = _tray(0.0), _tray_items(18, 0.0, 0.45)
+    acc.update([tray], items, 0.0)
+    st = acc.to_state({"滑块": "滑块", "托盘": "托盘"})
+    assert st["enabled"] and st["box_count"] == 4 and st["trays_done"] == 0
+    cur = st["current_tray_items"][0]
+    assert cur["current_count"] == 18 and cur["expected_per_tray"] == 24
+
+
+def test_build_tracking_with_container():
+    """配了容器标签 → 引擎挂上容器累加器, 期望/每箱托盘数正确装配."""
+    cfg = _base_config(mixed_with="tracking")
+    cfg["steps_config"][2]["expected_count"] = 24
+    cfg["pipeline_config"]["custom_mix_container_label"] = "托盘"
+    cfg["pipeline_config"]["custom_mix_container_box_count"] = 4
+    m = build_custom_mix(cfg)
+    assert m._engine._container is not None
+    assert m._engine._container.box_count == 4
+    assert m._engine._container.item_expected == {"滑块": 24}
+
+
+def test_build_tracking_without_container_is_zero_diff():
+    """不配容器标签 → 容器累加器为 None, 走原满盘门/计数路径 (零差异)."""
+    m = build_custom_mix(_base_config(mixed_with="tracking"))
+    assert m._engine._container is None
+
+
+def _make_container_vsm(box_count=2, per_tray=3, gone_frames=2):
+    vsm = VideoSourceManager(channel_id=0)
+    vsm.set_project_config({
+        "id": 99421, "name": "混合容器单测",
+        "logic_mode": "custom",
+        "pipeline_config": {
+            "custom_based_on": "sequential",
+            "custom_mixed_with": "tracking",
+            "custom_sequence_order": [{"step_id": "s1"}, {"step_id": "s2"}],
+            "custom_mix_container_label": "托盘",
+            "custom_mix_container_box_count": box_count,
+            "custom_mix_container_gone_frames": gone_frames,
+        },
+        "steps_config": [
+            {"id": "s1", "label": "贴标", "enabled": True},
+            {"id": "s2", "label": "封箱", "enabled": True},
+            {"id": "s3", "label": "滑块", "enabled": True,
+             "detect_role": "item", "count_mode": "track",
+             "expected_count": per_tray},
+        ],
+        "events_config": [], "counters_config": [], "data_config": {},
+    })
+    assert vsm._custom_mix is not None
+    assert vsm._custom_mix._engine._container is not None
+    return vsm
+
+
+def test_container_integration_via_vsm():
+    """真 VSM 喂帧: 托盘框被累加器消费 (隔离物品流), to_state 暴露 container."""
+    vsm = _make_container_vsm(box_count=2, per_tray=3, gone_frames=2)
+    m = vsm._custom_mix
+    vsm.current_cycle_uuid = "c1"
+    tray = {"label": "托盘", "confidence": 0.95, "x": 0.0, "y": 0.0, "w": 0.6, "h": 1.0}
+    sliders = [{"label": "滑块", "confidence": 0.95, "track_id": 11 + i,
+                "x": 0.1 + i * 0.12, "y": 0.5, "w": 0.05, "h": 0.05} for i in range(3)]
+    for _ in range(5):
+        m.feed(vsm, [tray] + sliders, 0.0)
+    st = m.to_state()
+    assert "container" in st
+    assert st["container"]["box_count"] == 2
+    cur = st["container"]["current_tray_items"][0]
+    assert cur["current_count"] == 3
+
+
+def test_container_integration_verdict_routes_through_container():
+    """容器模式下 verdict 走整箱裁决 (而非全局累计); 装满 2 盘各 3 → 经合成 OK."""
+    vsm = _make_container_vsm(box_count=2, per_tray=3, gone_frames=2)
+    m = vsm._custom_mix
+    vsm.current_cycle_uuid = "c1"
+    tray = {"label": "托盘", "confidence": 0.95, "x": 0.0, "y": 0.0, "w": 0.6, "h": 1.0}
+    sliders = [{"label": "滑块", "confidence": 0.95, "track_id": 11 + i,
+                "x": 0.1 + i * 0.12, "y": 0.5, "w": 0.05, "h": 0.05} for i in range(3)]
+    for box in range(2):                       # 2 盘逐个装满进箱
+        for _ in range(2):
+            m.feed(vsm, [tray] + sliders, float(box))
+        for _ in range(2):
+            m.feed(vsm, [], float(box) + 0.5)
+    ok, reasons = m.verdict()
+    assert ok, reasons

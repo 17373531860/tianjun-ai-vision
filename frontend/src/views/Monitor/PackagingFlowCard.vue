@@ -27,23 +27,30 @@
         </div>
       </div>
 
-      <!-- 当前箱托盘进度 -->
+      <!-- 当前箱进度 (滑块口径显示滑块数/目标 + 尾箱标记; 否则托盘数/每箱) -->
       <div class="current-box bg-slate-800/60 rounded px-3 py-2 mb-3">
         <div class="flex items-center justify-between">
           <span class="text-gray-300 text-sm">
             正在装第 <span class="text-cyan-400 font-bold">{{ state.current_box_index || '-' }}</span> 箱
+            <span v-if="isSliders && isTailBox"
+                  class="ml-1 text-xs px-1 rounded bg-amber-600/40 text-amber-300">尾箱</span>
           </span>
-          <span class="text-sm">
+          <span v-if="isSliders" class="text-sm">
+            滑块
+            <span class="text-green-400 font-bold text-lg">{{ state.current_box_sliders }}</span>
+            <span class="text-gray-500"> / {{ currentBoxTarget }}</span>
+          </span>
+          <span v-else class="text-sm">
             托盘
             <span class="text-green-400 font-bold text-lg">{{ state.current_box_trays }}</span>
             <span class="text-gray-500"> / {{ traysPerBox }}</span>
           </span>
         </div>
         <el-progress
-          :percentage="trayPercent"
+          :percentage="boxPercent"
           :stroke-width="8"
           :show-text="false"
-          :color="trayPercent >= 100 ? '#22c55e' : '#06b6d4'"
+          :color="boxPercent >= 100 ? '#22c55e' : '#06b6d4'"
           class="mt-1"
         />
       </div>
@@ -55,9 +62,12 @@
           :key="b.box"
           class="box-chip text-xs px-2 py-0.5 rounded font-mono"
           :class="b.result === 'OK' ? 'bg-green-700/40 text-green-300' : 'bg-red-700/40 text-red-300'"
-          :title="`第 ${b.box} 箱: ${b.trays}/${b.need} 托盘 → ${b.result}`"
+          :title="isSliders
+            ? `第 ${b.box} 箱${b.is_tail ? '(尾箱)' : ''}: ${b.sliders}/${b.target} 滑块 → ${b.result}`
+            : `第 ${b.box} 箱: ${b.trays}/${b.need} 托盘 → ${b.result}`"
         >
-          #{{ b.box }} {{ b.trays }}/{{ b.need }} {{ b.result }}
+          <template v-if="isSliders">#{{ b.box }}{{ b.is_tail ? '尾' : '' }} {{ b.sliders }}/{{ b.target }} {{ b.result }}</template>
+          <template v-else>#{{ b.box }} {{ b.trays }}/{{ b.need }} {{ b.result }}</template>
         </span>
       </div>
     </div>
@@ -74,10 +84,29 @@ const props = defineProps({
 
 const traysPerBox = computed(() => props.config?.trays_per_box_fixed || 4);
 
-const trayPercent = computed(() => {
-  if (!props.state || !traysPerBox.value) return 0;
-  const p = Math.round((props.state.current_box_trays / traysPerBox.value) * 100);
-  return Math.min(100, Math.max(0, p));
+// v3.22 滑块口径: 当前箱目标 = 普通箱每箱数 / 尾箱余数
+const isSliders = computed(() => props.state?.count_unit === 'sliders');
+
+const isTailBox = computed(() =>
+  !!props.state && props.state.box_total > 0
+  && props.state.current_box_index >= props.state.box_total);
+
+const currentBoxTarget = computed(() => {
+  if (!props.state) return 0;
+  return isTailBox.value && props.state.tail_target > 0
+    ? props.state.tail_target
+    : (props.state.items_per_box || 0);
+});
+
+const boxPercent = computed(() => {
+  if (!props.state) return 0;
+  if (isSliders.value) {
+    const tgt = currentBoxTarget.value;
+    if (!tgt) return 0;
+    return Math.min(100, Math.max(0, Math.round((props.state.current_box_sliders / tgt) * 100)));
+  }
+  if (!traysPerBox.value) return 0;
+  return Math.min(100, Math.max(0, Math.round((props.state.current_box_trays / traysPerBox.value) * 100)));
 });
 
 const statusLabel = computed(() => ({

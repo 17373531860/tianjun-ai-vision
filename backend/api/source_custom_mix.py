@@ -50,6 +50,241 @@ from backend.api.source_roi import is_normalized_bbox_center_in_polygon
 
 MIX_TYPES = ('per_item', 'tracking')
 
+
+# ============================================================
+# 混合跟踪 · 托盘容器累加器 (周期主权外移 — 不结算只记账)
+# ============================================================
+
+
+class _ContainerAccumulator:
+    """混合跟踪专用容器累加器: 物品按"当前主托盘"分组, 托盘进箱只记账。
+
+    与独立容器模式 (_update_container_grouping) 的本质区别 — 周期主权归步骤侧:
+      - 不调 _settle_box / _trigger_event / end_cycle (整箱结算听封箱步骤)
+      - 托盘消失 (gone-confirm) 只 append 到本周期"已装托盘清单", 绝不开/关周期
+      - 主托盘 = 未结算托盘里 first_seen 最早且仍在场的那个 (先进先出, 用户敲定)
+
+    托盘身份独立轻量跟踪 (IoU 跨帧关联 + first_seen), 与宿主物品跟踪机械隔离,
+    永不污染物品判定 / 步骤侧状态机。坐标全程归一化 [0,1]。
+    """
+
+    def __init__(self, container_label: str, item_expected: dict,
+                 box_count: int, gone_frames: int, iou_match: float = 0.3,
+                 count_mode: str = 'trays', item_target: int = 0):
+        self.container_label = container_label
+        self.item_expected = {k: int(v) for k, v in (item_expected or {}).items()}
+        self.box_count = int(box_count or 0)
+        self.gone_frames = max(1, int(gone_frames or 30))
+        self.iou_match = float(iou_match)
+        # 计数模式: 'trays' = 计托盘数 + 每盘门槛; 'items_total' = 累加进箱滑块总数, 整箱判目标
+        self.count_mode = count_mode if count_mode in ('trays', 'items_total') else 'trays'
+        self.item_target = int(item_target or 0)   # items_total 模式整箱滑块目标 (如 96)
+        self.reset()
+
+    def reset(self):
+        self._trays = {}        # tid -> {bbox, first_seen, last_seen, gone, peak:{label:cnt}}
+        self._seq = 0
+        self._primary = None    # 当前主托盘 tid
+        self._done = []         # [{label:peak}, ...] 本周期已装托盘
+        self._cur_counts = {}   # 当前主托盘实时物品数 {label:cnt}
+
+    def update(self, tray_dets: list, item_objs: list, current_time: float):
+        from backend.api.source_per_item_mixin import _bbox_iou
+
+        # 1) 托盘检测框关联到已有托盘 (IoU 最高), 否则新建身份
+        matched = set()
+        for det in tray_dets:
+            box = (det['x'], det['y'], det['w'], det['h'])
+            best_tid, best_iou = None, self.iou_match
+            for tid, t in self._trays.items():
+                if tid in matched:
+                    continue
+                tb = t['bbox']
+                iou = _bbox_iou(box, (tb['x'], tb['y'], tb['w'], tb['h']))
+                if iou >= best_iou:
+                    best_iou, best_tid = iou, tid
+            bbox = {'x': det['x'], 'y': det['y'], 'w': det['w'], 'h': det['h']}
+            if best_tid is not None:
+                t = self._trays[best_tid]
+                t['bbox'] = bbox
+                t['last_seen'] = current_time
+                t['gone'] = 0
+                matched.add(best_tid)
+            else:
+                self._seq += 1
+                self._trays[self._seq] = {
+                    'bbox': bbox, 'first_seen': current_time,
+                    'last_seen': current_time, 'gone': 0, 'peak': {},
+                }
+                matched.add(self._seq)
+
+        # 2) 本帧未出现的托盘累加消失帧
+        for tid, t in self._trays.items():
+            if tid not in matched:
+                t['gone'] += 1
+
+        # 3) 主托盘选取: 当前主托盘只要还在累积器里 (没被 gone-confirm 移除) 就一直保持,
+        #    抗瞬时漏检 / 托盘ID抖动 —— 漏检一两帧不切主、不清峰值, 等真正进箱 (step5
+        #    移除) 才按 FIFO 重选下一盘。只有从未选出 / 主托盘已被移除时才重新挑。
+        #    重选时优先在场 (gone==0) 的最早托盘; 若全在短暂遮挡也允许挑 gone 最小者顶上。
+        if self._primary is None or self._primary not in self._trays:
+            in_place = [(t['first_seen'], tid)
+                        for tid, t in self._trays.items() if t['gone'] == 0]
+            if in_place:
+                self._primary = min(in_place)[1]
+            elif self._trays:
+                self._primary = min(self._trays.items(),
+                                    key=lambda kv: (kv[1]['gone'], kv[1]['first_seen']))[0]
+            else:
+                self._primary = None
+
+        # 4) 主托盘内物品计数 (中心包含), 刷新 peak (峰值保持, 抗瞬时漏检)
+        cur = {}
+        if self._primary is not None:
+            pb = self._trays[self._primary]['bbox']
+            px1, py1 = pb['x'], pb['y']
+            px2, py2 = px1 + pb['w'], py1 + pb['h']
+            for obj in item_objs:
+                lbl = obj.get('class_name', '')
+                if lbl not in self.item_expected:
+                    continue
+                b = obj.get('bbox') or {}
+                cx = b.get('x', 0) + b.get('w', 0) / 2.0
+                cy = b.get('y', 0) + b.get('h', 0) / 2.0
+                if px1 <= cx <= px2 and py1 <= cy <= py2:
+                    cur[lbl] = cur.get(lbl, 0) + 1
+            peak = self._trays[self._primary]['peak']
+            for lbl, c in cur.items():
+                if c > peak.get(lbl, 0):
+                    peak[lbl] = c
+        self._cur_counts = cur
+
+        # 5) 托盘 gone-confirm → 进箱记账 (只记曾累计过 peak 的真托盘, 跳过幽灵)
+        for tid in list(self._trays.keys()):
+            t = self._trays[tid]
+            if t['gone'] >= self.gone_frames:
+                if t['peak']:
+                    self._done.append(dict(t['peak']))
+                    print(f"[MixContainer] 托盘进箱: {dict(t['peak'])}, "
+                          f"已装 {len(self._done)}/{self.box_count or '?'}")
+                del self._trays[tid]
+                if self._primary == tid:
+                    self._primary = None
+
+        # 5b) 主托盘刚进箱被清空 → 本帧立即把下一盘 (FIFO 最早在场) 顶上,
+        #     避免进箱当帧主托盘空窗一帧导致峰值闪 0。
+        if self._primary is None:
+            in_place = [(t['first_seen'], tid)
+                        for tid, t in self._trays.items() if t['gone'] == 0]
+            if in_place:
+                self._primary = min(in_place)[1]
+
+    def _trays_for_verdict(self):
+        """封箱裁决用的托盘全集: 已装清单 + 当前主托盘 (最后一盘可能还没 gone-confirm)。"""
+        trays = list(self._done)
+        if self._primary is not None:
+            peak = self._trays.get(self._primary, {}).get('peak')
+            if peak:
+                trays.append(dict(peak))
+        return trays
+
+    def verdict(self, display_map: dict):
+        dm = display_map or {}
+        reasons = []
+        # 总数模式: 不卡盘数/每盘, 只判进箱滑块总数是否正好等于整箱目标。
+        # 关键: 进箱总数 = 已 gone-confirm 进箱的各盘 (self._done)。
+        # 当前在位主托盘"是否计入本箱"取决于本箱有没有装够:
+        #   - 还没装够 (done_total < target): 末盘可能刚进箱还没确认, 把在位这盘补进来凑数;
+        #   - 已经装够 (done_total >= target): 在位的是"下一箱"的第一盘, 绝不计入本箱,
+        #     否则会把下一盘也算进来误判超出 (治现场"4盘96+下一盘已上桌→120 NG")。
+        if self.count_mode == 'items_total':
+            cur_peak = {}
+            if self._primary is not None:
+                cur_peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
+            for lbl in self.item_expected.keys():
+                target = self.item_target
+                done_total = sum(t.get(lbl, 0) for t in self._done)
+                total = done_total
+                if target > 0 and done_total < target:
+                    total += cur_peak.get(lbl, 0)
+                if target > 0 and total != target:
+                    rel = '不足' if total < target else '超出'
+                    reasons.append(f'箱内{dm.get(lbl, lbl)}{rel} {total}/{target}')
+            return (not reasons), reasons
+        # 盘计数模式 (现状): 盘数够 + 每盘达每盘门槛
+        trays = self._trays_for_verdict()
+        if self.box_count > 0 and len(trays) < self.box_count:
+            reasons.append(f'托盘数不足 {len(trays)}/{self.box_count} 盘')
+        for idx, tray in enumerate(trays, 1):
+            for lbl, exp in self.item_expected.items():
+                got = tray.get(lbl, 0)
+                if got < exp:
+                    reasons.append(f'第{idx}盘 {dm.get(lbl, lbl)} 不足 {got}/{exp}')
+        return (not reasons), reasons
+
+    def set_item_target(self, target: int):
+        """外部 (包装结算协调器) 反向设"当前箱滑块目标" — 普通箱=每箱数 / 尾箱=余数。
+
+        让 verdict 始终用当前箱的真实目标判合格 (尾箱不再被按整箱数误判 NG)。
+        仅 items_total 模式有意义; trays 模式调了也无副作用。
+        """
+        self.item_target = max(0, int(target or 0))
+
+    def settled_item_total(self) -> int:
+        """本周期已进箱滑块总数 (跨标签求和), 口径与 verdict 完全一致。
+
+        供包装结算协调器在周期结算时读取 (= 这一箱实际进了多少滑块)。
+        与 verdict 同源: 已 gone-confirm 进箱各盘峰值之和; 若本箱还没装够,
+        把在位主托盘 (可能末盘还没确认) 也补进来凑数。
+        """
+        total = 0
+        cur_peak = {}
+        if self._primary is not None:
+            cur_peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
+        for lbl in self.item_expected.keys():
+            done_total = sum(t.get(lbl, 0) for t in self._done)
+            sub = done_total
+            if self.item_target <= 0 or done_total < self.item_target:
+                sub += cur_peak.get(lbl, 0)
+            total += sub
+        return total
+
+    def to_state(self, display_map: dict):
+        dm = display_map or {}
+        cur = self._cur_counts or {}
+        # 实时卡 = 当帧真实检测数 (检到几个显示几个, 没检到就掉, 不 hold);
+        # 当前主托盘的峰值仅作参考下发, 真正"记峰值"发生在进箱那一刻 (见 update step5)。
+        peak = {}
+        if self._primary is not None:
+            peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
+        cur_items = [{
+            'label': lbl,
+            'display_name': dm.get(lbl, lbl),
+            'current_count': cur.get(lbl, 0),     # 当帧实时数 (展示主数字)
+            'peak_count': peak.get(lbl, 0),       # 当前托盘在位峰值 (= 进箱将记的值, 参考)
+            'expected_per_tray': exp,
+        } for lbl, exp in self.item_expected.items()]
+        state = {
+            'enabled': True,
+            'count_mode': self.count_mode,
+            'container_label': self.container_label,
+            'container_display': dm.get(self.container_label, self.container_label),
+            'box_count': self.box_count,
+            'trays_done': len(self._done),
+            'current_tray_items': cur_items,
+            'done_detail': self._done,
+        }
+        if self.count_mode == 'items_total':
+            # 已进箱滑块总数 (按 label 累加各盘峰值) + 整箱目标
+            totals = {}
+            for t in self._done:
+                for lbl, c in t.items():
+                    totals[lbl] = totals.get(lbl, 0) + c
+            state['item_total_done'] = totals
+            state['item_target'] = self.item_target
+        return state
+
+
 # ============================================================
 # 混合跟踪: 真跟踪引擎 (周期主权外移)
 # ============================================================
@@ -67,11 +302,23 @@ class _TrackingMixEngine:
       - 自动开周期由 host._tracking_external_cycle 在真机械内守门跳过
     """
 
-    def __init__(self, item_cfgs: list):
+    def __init__(self, item_cfgs: list, container_cfg: dict = None):
         self.items = {}
         for cfg in item_cfgs:
             self.items[cfg['label']] = cfg
         self.item_labels = frozenset(self.items.keys())
+        # 托盘容器累加器 (可选): 配了容器标签才启用, 否则 None = 走原满盘门/计数路径 (零差异)
+        self._container = None
+        if container_cfg and container_cfg.get('label'):
+            self._container = _ContainerAccumulator(
+                container_label=container_cfg['label'],
+                item_expected=container_cfg.get('item_expected', {}),
+                box_count=container_cfg.get('box_count', 0),
+                gone_frames=container_cfg.get('gone_frames', 30),
+                iou_match=container_cfg.get('iou_match', 0.3),
+                count_mode=container_cfg.get('count_mode', 'trays'),
+                item_target=container_cfg.get('item_target', 0),
+            )
         # 静态期望清单 (verdict 用, 不依赖喂帧): 与真 loader 的注入规则一致 —
         # event 行 → event_required_count; 堆叠行 → stack_required_count;
         # 普通跟踪计数行 → expected_count (0 = 只展示不判定)
@@ -110,6 +357,8 @@ class _TrackingMixEngine:
                 d.clear()
         host._tracking_letter_idx = 0
         host._tracking_order_seq = 0
+        if self._container is not None:
+            self._container.reset()
 
     def feed(self, host, detections: list, current_time: float, original_frame=None):
         # 幂等声明: 周期主权在外部 — 真机械内的自动开周期一律跳过
@@ -119,8 +368,19 @@ class _TrackingMixEngine:
         # 逐行 ROI 守门交给真机械内部的 _det_passes_roi_for_label
         conf_map = getattr(host, 'step_conf_thresholds', None) or {}
         dets = []
+        tray_dets = []  # 容器累加器用: 托盘检测框 (与物品流隔离, 不进跟踪机械)
+        container_label = self._container.container_label if self._container else None
         for det in detections or []:
             label = det.get('label', '')
+            if container_label and label == container_label:
+                threshold = conf_map.get(label)
+                if threshold is not None and det.get('confidence', 0) < threshold:
+                    continue
+                tray_dets.append({
+                    'x': float(det.get('x', 0)), 'y': float(det.get('y', 0)),
+                    'w': float(det.get('w', 0)), 'h': float(det.get('h', 0)),
+                })
+                continue
             if label not in self.item_labels:
                 continue
             threshold = conf_map.get(label)
@@ -187,6 +447,20 @@ class _TrackingMixEngine:
         # 11) 清单重建 (前端"物品清点"展示直接复用)
         host._rebuild_checklist(expected)
 
+        # 12) 托盘容器累加: 物品按主托盘分组 + 托盘进箱记账 (不碰周期主权)
+        #     用「当前帧原始检测框」计数 (= 同帧同时出现的滑块数), 取在位峰值;
+        #     不用 _tracking_objects — 唯一ID跟踪在 24 个密集小目标上会塌缩成
+        #     个位数 (ByteTrack 只保住几个稳定 ID), 与"同时最多那帧的数量"不是一回事。
+        if self._container is not None:
+            item_dets_for_container = [{
+                'class_name': d.get('label', ''),
+                'bbox': {
+                    'x': float(d.get('x', 0)), 'y': float(d.get('y', 0)),
+                    'w': float(d.get('w', 0)), 'h': float(d.get('h', 0)),
+                },
+            } for d in dets]
+            self._container.update(tray_dets, item_dets_for_container, current_time)
+
     # ---- 合并计数: 与独立模式 _rebuild_checklist 同一公式 ----
     @staticmethod
     def _merged_counters(host):
@@ -202,8 +476,11 @@ class _TrackingMixEngine:
     def verdict(self, host):
         if host is None:
             return True, []
-        merged = self._merged_counters(host)
         display_map = getattr(host, 'step_display_names', {}) or {}
+        # 容器模式: 裁决改为"每托盘是否数满 + 整箱托盘数是否够", 不卡全局累计总数
+        if self._container is not None:
+            return self._container.verdict(display_map)
+        merged = self._merged_counters(host)
         reasons = []
         for label, exp in self.expected_items.items():
             cfg = self.items.get(label, {})
@@ -227,6 +504,17 @@ class _TrackingMixEngine:
             elif actual > exp:
                 reasons.append(f'[{display}] 数量超出期望 ({actual} > {exp})')
         return (not reasons), reasons
+
+    def set_container_item_target(self, target):
+        """供包装结算反向设当前箱滑块目标 (无容器时 no-op)。"""
+        if self._container is not None:
+            self._container.set_item_target(target)
+
+    def container_settled_item_total(self):
+        """本周期已进箱滑块总数 (无容器时 None)。"""
+        if self._container is not None:
+            return self._container.settled_item_total()
+        return None
 
     @staticmethod
     def _stack_partials_with_live(host, label):
@@ -259,7 +547,10 @@ class _TrackingMixEngine:
         checklist = {}
         if host is not None:
             checklist = dict(getattr(host, '_tracking_item_checklist', {}) or {})
-        return {'mix_type': 'tracking', 'items': items, 'checklist': checklist}
+        state = {'mix_type': 'tracking', 'items': items, 'checklist': checklist}
+        if self._container is not None:
+            state['container'] = self._container.to_state(display_map)
+        return state
 
 
 # ============================================================
@@ -417,12 +708,12 @@ class CustomMixMachine:
 
     def __init__(self, mix_type: str, item_cfgs: list, *,
                  item_timeout_seconds: float = 3.0, step_labels=(),
-                 extra_item_labels=()):
+                 extra_item_labels=(), container_cfg=None):
         self.mix_type = mix_type
         self._cycle_token = '__init__'
         self._host = None
         if mix_type == 'tracking':
-            self._engine = _TrackingMixEngine(item_cfgs)
+            self._engine = _TrackingMixEngine(item_cfgs, container_cfg)
             # 跟踪混合: 物品行标签全部由本组件独占消费
             self.item_labels = self._engine.item_labels
         else:
@@ -452,6 +743,17 @@ class CustomMixMachine:
     def verdict(self):
         """合成裁决: 所有物品都 OK 才 OK, NG 原因合并。"""
         return self._engine.verdict(self._host)
+
+    def set_container_item_target(self, target):
+        """包装结算反向设当前箱滑块目标 (透传跟踪引擎; 非容器/逐件混合 no-op)。"""
+        fn = getattr(self._engine, 'set_container_item_target', None)
+        if fn is not None:
+            fn(target)
+
+    def container_settled_item_total(self):
+        """本周期已进箱滑块总数 (供包装结算累加; 非容器混合返回 None)。"""
+        fn = getattr(self._engine, 'container_settled_item_total', None)
+        return fn() if fn is not None else None
 
     def to_state(self):
         state = self._engine.to_state(self._host)
@@ -511,10 +813,40 @@ def build_custom_mix(config: dict):
         print(f"[CustomMix] custom_mixed_with={mix_type} 但没有任何启用的物品行, 混合不生效")
         return None
     item_timeout = float(((pipeline.get('per_item') or {}).get('item_timeout_seconds', 3.0)) or 0.0)
+
+    # 托盘容器累加器配置 (仅 tracking 混合 + 配了容器标签才启用; 否则 None = 零差异)
+    container_cfg = None
+    if mix_type == 'tracking':
+        clabel = (pipeline.get('custom_mix_container_label') or '').strip()
+        if clabel:
+            item_expected = {}
+            for ic in item_cfgs:
+                lbl = ic.get('label')
+                exp = int(ic.get('expected_count') or 0)
+                if lbl and lbl != clabel and exp > 0:
+                    item_expected[lbl] = exp
+            count_mode = pipeline.get('custom_mix_container_count_mode', 'trays')
+            container_cfg = {
+                'label': clabel,
+                'item_expected': item_expected,
+                'box_count': int(pipeline.get('custom_mix_container_box_count', 0) or 0),
+                'gone_frames': int(pipeline.get('custom_mix_container_gone_frames', 30) or 30),
+                'iou_match': float(pipeline.get('custom_mix_container_iou_match', 0.3) or 0.3),
+                'count_mode': count_mode,
+                'item_target': int(pipeline.get('custom_mix_container_item_target', 0) or 0),
+            }
+            if count_mode == 'items_total':
+                print(f"[CustomMix] 托盘容器累加器[总数模式]: 容器={clabel} "
+                      f"整箱滑块目标={container_cfg['item_target']} 消失确认={container_cfg['gone_frames']}帧")
+            else:
+                print(f"[CustomMix] 托盘容器累加器[盘计数]: 容器={clabel} 每盘期望={item_expected} "
+                      f"每箱={container_cfg['box_count']}盘 消失确认={container_cfg['gone_frames']}帧")
+
     machine = CustomMixMachine(mix_type, item_cfgs,
                                item_timeout_seconds=item_timeout,
                                step_labels=step_labels,
-                               extra_item_labels=skipped_item_labels)
+                               extra_item_labels=skipped_item_labels,
+                               container_cfg=container_cfg)
     print(f"[CustomMix] 混合子状态机就绪: mix={mix_type} 物品={sorted(machine.item_labels)}")
     return machine
 
@@ -534,6 +866,14 @@ def compose_settle_event(host, event_id, reason):
         return event_id, reason
     try:
         ok, mix_reasons = mix.verdict()
+        # 在 reset 前抓本周期进箱滑块总数, 缓存给包装结算协调器 (reset 后就归零).
+        # 仅容器混合有值; 其它模式 None — on_cycle_settled 只在 sliders 口径读它.
+        try:
+            host._last_container_item_total = mix.container_settled_item_total()
+            # 缓存本周期已检出步骤集 (尾箱塞工单 gate 探测用; end_cycle 后 current_cycle_steps 会清)
+            host._last_cycle_steps = list(getattr(host, 'current_cycle_steps', []) or [])
+        except Exception:
+            host._last_container_item_total = None
         mix.reset()
     except Exception as e:
         print(f"[CustomMix] 裁决合成失败, 按步骤侧原判放行: {e}")

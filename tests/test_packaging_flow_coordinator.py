@@ -434,3 +434,190 @@ def test_real_alarm_sink_falls_back_to_default(monkeypatch):
     cfg = {"channel_id": 0}   # 未配任何 event 字段
     pkg._real_alarm_sink(cfg, "short_box", "漏箱")
     assert triggered == [("event2", 0)]
+
+
+# =============================================================
+# v3.22 上银 MES 闭环: sliders 计数口径 + 尾箱 + 反向目标 + 塞工单 gate + 自动切项目
+# =============================================================
+
+def test_compute_box_plan_pure():
+    """尾箱纯算法: 非整除取余数 / 整除也标尾箱(目标=每箱数) / 单箱 / 非法兜底."""
+    from backend.services.packaging_flow_coordinator import compute_box_plan
+    assert compute_box_plan(250, 96) == (3, 58)    # 非整除 → 尾箱余数
+    assert compute_box_plan(240, 24) == (10, 24)   # 整除 → 10 箱, 尾箱仍 24
+    assert compute_box_plan(96, 96) == (1, 96)      # 单箱
+    assert compute_box_plan(30, 24) == (2, 6)        # 尾箱 6
+    assert compute_box_plan(0, 96) == (0, 0)         # 滑块总数缺失兜底
+    assert compute_box_plan(96, 0) == (0, 0)         # 每箱数缺失兜底
+
+
+def test_sliders_box_plan_and_open_first_box(client):
+    """sliders 口径扫工单: 拉滑块总数 → 算箱数/尾箱, 立即开第 1 箱, 字段落库."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             slider_total_field="dispatch_qty")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 250})   # 250/24 → 11 箱, 尾箱 10
+    coord.set_alarm_sink(lambda c, k, m: None)
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    state = coord.get_state(cid)
+    assert state["count_unit"] == "sliders"
+    assert state["box_total"] == 11
+    assert state["tail_target"] == 10
+    assert state["items_per_box"] == 24
+    assert state["current_box_index"] == 1            # 立即开第 1 箱
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.count_unit == "sliders"
+    assert row.slider_total == 250 and row.tail_target == 10 and row.items_per_box == 24
+
+
+def test_sliders_normal_complete_and_box_target_hook(client):
+    """sliders 两箱全做满 → completed/OK; 反向钩子按"普通箱→尾箱"依次设当前箱目标."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})    # 2 箱, 尾箱 24
+    coord.set_alarm_sink(lambda c, k, m: None)
+    targets = []
+    coord.set_box_target_setter(lambda ch, t: targets.append((ch, t)))
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)                     # 开箱1, 设目标24
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 箱1满 → 开箱2(尾箱)设目标24
+    coord.on_cycle_settled(0, 2, True, db, slider_count=24)     # 尾箱满 → 完成
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "OK"
+    assert row.box_done == 2 and row.box_ng == 0
+    assert targets == [(0, 24), (0, 24)]              # 普通箱24 → 尾箱24
+
+
+def test_sliders_tail_uses_remainder_target(client):
+    """尾箱目标 = 余数: 总数30/每箱24 → 尾箱目标6, 反向钩子设到6, 进箱6判OK."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 30})    # 2 箱, 尾箱 6
+    coord.set_alarm_sink(lambda c, k, m: None)
+    targets = []
+    coord.set_box_target_setter(lambda ch, t: targets.append(t))
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 箱1普通满 → 开尾箱设目标6
+    coord.on_cycle_settled(0, 2, True, db, slider_count=6)      # 尾箱进6 = 目标6 → OK
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "OK" and row.box_ng == 0
+    assert targets == [24, 6]
+
+
+def test_sliders_box_ng_on_wrong_slider_count(client):
+    """进箱滑块数 ≠ 当前箱目标 → 该箱判 NG + box_ng 报警."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})    # 1 箱(=尾箱), 目标24
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=20)     # 20 ≠ 24 → NG
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.box_done == 1
+    assert row.box_ng == 1 and row.final_result == "NG"
+    assert "box_ng" in alarms
+
+
+def test_sliders_box_ng_on_step_fail(client):
+    """滑块数对但检测步骤 NG (is_good=False) → 该箱仍判 NG."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, False, db, slider_count=24)    # 步骤 NG
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.box_ng == 1 and row.final_result == "NG"
+    assert "box_ng" in alarms
+
+
+def test_sliders_short_box_redo_keeps_order(client):
+    """sliders 漏箱: 应做3箱只做1箱就扫新工单 → 漏箱报警, redo 不切单."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             on_short_box="redo")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 72})    # 3 箱
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 箱1满 → 开箱2
+    coord.on_scan("ORD2", db, channel_id=0)                     # box_done=1<3 → 漏箱
+
+    assert "short_box" in alarms
+    state = coord.get_state(cid)
+    assert state is not None and state["order_no"] == "ORD1"    # redo 不切单
+
+
+def test_sliders_tail_paper_order_gate(client):
+    """尾箱塞工单 gate: 没检测到放工单 → 不收尾 + missing_paper; 放了工单再来 → 收尾完成."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})    # 1 箱(=尾箱)
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    paper = {"covered": False}
+    coord.set_paper_order_probe(lambda ch, lbl: paper["covered"])
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # gate 未过 → 不收尾
+    assert "missing_paper" in alarms
+    state = coord.get_state(cid)
+    assert state is not None and state["box_done"] == 0         # 没收尾
+
+    paper["covered"] = True
+    coord.on_cycle_settled(0, 2, True, db, slider_count=24)     # 放了工单 → 收尾完成
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.box_done == 1
+    assert row.paper_order_done is True
+
+
+def test_sliders_auto_switch_project_invoked(client):
+    """auto_switch_project + 拿到规格 → 调 project_activator 切项目."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             auto_switch_project=True,
+                             spec_to_project={"S1": 5})
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24, "spec": "S1"})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    switched = []
+    coord.set_project_activator(lambda spec, cfg: (switched.append(spec), True)[1])
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    assert switched == ["S1"]
+
+
+def test_sliders_auto_switch_project_fail_continues(client):
+    """切项目失败 → 报警但仍开工单 (用当前项目继续)."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             auto_switch_project=True,
+                             spec_to_project={"S1": 5})
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24, "spec": "S1"})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    coord.set_project_activator(lambda spec, cfg: False)        # 切失败
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    assert "mes_fail" in alarms                                 # 报警
+    assert coord.get_state(cid) is not None                    # 仍开了工单

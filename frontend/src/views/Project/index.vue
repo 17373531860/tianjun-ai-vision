@@ -1487,6 +1487,46 @@
                         周期何时开始/结算仍由步骤侧决定，结算时步骤和物品都合格才算合格。
                       </p>
                     </el-form-item>
+
+                    <!-- 容器装箱清点（仅混合跟踪）：把某类标签当容器，物品归当前主容器，容器进箱(消失)时记账 -->
+                    <el-form-item v-if="activeProject.custom_mixed_with === 'tracking'" label="容器装箱清点">
+                      <div class="w-full">
+                        <div class="flex items-center gap-2">
+                          <el-switch v-model="activeProject.custom_mix_container_enabled" />
+                          <span class="text-xs text-gray-400">开启后，物品按「当前主容器」分组，容器进箱(消失确认)即记账；封箱(末步)时整箱裁决</span>
+                        </div>
+                        <div v-if="activeProject.custom_mix_container_enabled"
+                          class="mt-2 border border-slate-600 rounded p-3 bg-slate-900/50 space-y-3">
+                          <div class="flex items-center gap-2 flex-wrap text-xs">
+                            <span class="text-gray-400 shrink-0">容器标签</span>
+                            <el-select v-model="activeProject.custom_mix_container_label" size="small" class="!w-40" placeholder="选择容器标签">
+                              <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
+                            </el-select>
+                            <span class="text-gray-400 shrink-0 ml-2">消失确认帧</span>
+                            <el-input-number v-model="activeProject.custom_mix_container_gone_frames" :min="1" :step="5" size="small" class="!w-28" />
+                            <span class="text-gray-400 shrink-0 ml-2">容器匹配IoU</span>
+                            <el-input-number v-model="activeProject.custom_mix_container_iou_match" :min="0.05" :max="0.95" :step="0.05" :precision="2" size="small" class="!w-28" />
+                          </div>
+                          <div class="flex items-center gap-2 text-xs">
+                            <span class="text-gray-400 shrink-0">计数方式</span>
+                            <el-radio-group v-model="activeProject.custom_mix_container_count_mode" size="small">
+                              <el-radio-button label="trays">盘计数（计容器数 × 每盘门槛）</el-radio-button>
+                              <el-radio-button label="items_total">滑块总数（累加进箱物品总数）</el-radio-button>
+                            </el-radio-group>
+                          </div>
+                          <div v-if="activeProject.custom_mix_container_count_mode === 'trays'" class="flex items-center gap-2 text-xs">
+                            <span class="text-gray-400 shrink-0">每箱容器数</span>
+                            <el-input-number v-model="activeProject.custom_mix_container_box_count" :min="0" :step="1" size="small" class="!w-28" />
+                            <span class="text-gray-500">每盘物品期望在「步骤设置 → 物品校验参数」每个物品的期望数量里配置</span>
+                          </div>
+                          <div v-else class="flex items-center gap-2 text-xs">
+                            <span class="text-gray-400 shrink-0">整箱物品总目标</span>
+                            <el-input-number v-model="activeProject.custom_mix_container_item_target" :min="0" :step="1" size="small" class="!w-28" />
+                            <span class="text-gray-500">进箱物品总数正好等于此值才合格（少了/多了均 NG）；不卡每盘数量与容器数</span>
+                          </div>
+                        </div>
+                      </div>
+                    </el-form-item>
                   </el-form>
 
                   <!-- 自定义模式独立的基础模式配置 -->
@@ -3497,6 +3537,28 @@ const initProjectDefaults = (project) => {
   if (project.custom_mixed_with === undefined) {
     project.custom_mixed_with = pipelineConfig.custom_mixed_with || null;
   }
+  // 自定义混合-容器装箱清点（不填容器标签 = 不启用，零差异）
+  if (project.custom_mix_container_label === undefined) {
+    project.custom_mix_container_label = pipelineConfig.custom_mix_container_label || '';
+  }
+  if (project.custom_mix_container_count_mode === undefined) {
+    project.custom_mix_container_count_mode = pipelineConfig.custom_mix_container_count_mode || 'trays';
+  }
+  if (project.custom_mix_container_box_count === undefined) {
+    project.custom_mix_container_box_count = pipelineConfig.custom_mix_container_box_count || 0;
+  }
+  if (project.custom_mix_container_item_target === undefined) {
+    project.custom_mix_container_item_target = pipelineConfig.custom_mix_container_item_target || 0;
+  }
+  if (project.custom_mix_container_gone_frames === undefined) {
+    project.custom_mix_container_gone_frames = pipelineConfig.custom_mix_container_gone_frames || 30;
+  }
+  if (project.custom_mix_container_iou_match === undefined) {
+    project.custom_mix_container_iou_match = pipelineConfig.custom_mix_container_iou_match ?? 0.3;
+  }
+  if (project.custom_mix_container_enabled === undefined) {
+    project.custom_mix_container_enabled = !!project.custom_mix_container_label;
+  }
   // 物品行原生字段兜底：老数据/手改 JSON 可能缺字段，表C输入框依赖它们存在
   (project.steps_config || []).forEach(s => {
     if (s.detect_role !== 'item') return;
@@ -3776,6 +3838,13 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_conditions = project.custom_conditions;
   project.pipeline_config.custom_based_on = project.custom_based_on;
   project.pipeline_config.custom_mixed_with = project.custom_mixed_with;
+  project.pipeline_config.custom_mix_container_label = (project.custom_mixed_with === 'tracking' && project.custom_mix_container_enabled)
+    ? (project.custom_mix_container_label || '') : '';
+  project.pipeline_config.custom_mix_container_count_mode = project.custom_mix_container_count_mode || 'trays';
+  project.pipeline_config.custom_mix_container_box_count = project.custom_mix_container_box_count || 0;
+  project.pipeline_config.custom_mix_container_item_target = project.custom_mix_container_item_target || 0;
+  project.pipeline_config.custom_mix_container_gone_frames = project.custom_mix_container_gone_frames || 30;
+  project.pipeline_config.custom_mix_container_iou_match = project.custom_mix_container_iou_match ?? 0.3;
   project.pipeline_config.custom_sequence_order = project.custom_sequence_order;
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
@@ -3941,6 +4010,17 @@ const handleSaveProject = async () => {
         custom_conditions: activeProject.value.custom_conditions,
         custom_based_on: activeProject.value.custom_based_on,
         custom_mixed_with: activeProject.value.custom_mixed_with || null,
+        // 自定义混合-容器装箱清点（仅混合跟踪 + 开关开 时落容器标签；否则空 = 不启用，零差异）
+        custom_mix_container_label: (activeProject.value.custom_mixed_with === 'tracking' && activeProject.value.custom_mix_container_enabled)
+          ? (activeProject.value.custom_mix_container_label || '') : '',
+        custom_mix_container_count_mode: activeProject.value.custom_mix_container_count_mode || 'trays',
+        custom_mix_container_box_count: Number(activeProject.value.custom_mix_container_box_count) || 0,
+        custom_mix_container_item_target: Number(activeProject.value.custom_mix_container_item_target) || 0,
+        custom_mix_container_gone_frames: Number(activeProject.value.custom_mix_container_gone_frames) || 30,
+        custom_mix_container_iou_match: (() => {
+          const v = Number(activeProject.value.custom_mix_container_iou_match);
+          return Number.isFinite(v) && v > 0 ? Math.min(0.99, v) : 0.3;
+        })(),
         custom_sequence_order: activeProject.value.custom_sequence_order,
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,
