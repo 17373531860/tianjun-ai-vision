@@ -1786,6 +1786,7 @@ const perItemState = ref(null);
 const packagingConfigs = ref([]);   // 已启用的包装配置 (进 Monitor 时探测一次)
 const packagingState = ref(null);   // 当前工位进行中工单的运行快照
 let packagingTimer = null;
+let packagingStateSnap = '';
 
 const packagingCfgForChannel = computed(() =>
   packagingConfigs.value.find(c => c.enabled && c.channel_id === selectedChannel.value) || null
@@ -1809,6 +1810,14 @@ const pollPackagingState = async () => {
   try {
     const { data } = await getPackagingFlowState(cfg.id);
     packagingState.value = data.state || null;
+    const st = packagingState.value;
+    const snap = st
+      ? `${st.order_no}|${st.box_done}/${st.box_total}|idx=${st.current_box_index}|sl=${st.current_box_sliders}/${st.items_per_box || st.tail_target || '?'}`
+      : 'none';
+    if (snap !== packagingStateSnap) {
+      packagingStateSnap = snap;
+      dbg('mes.packaging', 'Monitor 包装卡状态', `cfg=${cfg.name} ch=${cfg.channel_id} ${snap}`);
+    }
   } catch (_) {
     // 静默: 进度查询失败不影响主页面
   }

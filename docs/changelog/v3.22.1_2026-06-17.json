@@ -1,0 +1,44 @@
+{
+  "version": "3.22.1",
+  "date": "2026-06-17",
+  "previous_version": "3.22.0",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "包装结算调试埋点导入写错, 开关打开也永远不出日志",
+      "symptom": "系统设置→调试设置里打开包装相关开关, 实时日志流一条 backend.packaging 都不出; 看代码埋点都在, 实际全是哑的",
+      "root_cause": "埋点处写成 from backend.core.debug_center import debug_center (想导一个不存在的对象; 全项目正确写法是 from backend.core import debug_center 把模块当 debug_center 用), 导入每次抛 ImportError 被外层 try/except 静默吞掉; v3.22.0 原有那处包装报警埋点也是同样错误写法, 自发版起从未生效",
+      "fix": "5 处统一改为 from backend.core import debug_center; 加运行时自检 (开关打开驱动滑块闭环确认 15 条关键日志真落缓冲, 关态零开销不落任何日志)",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/api/source_custom_mix.py", "backend/api/packaging_flows.py"],
+      "keywords": ["调试设置", "调试中心", "debug_center", "埋点失效", "ImportError", "from backend.core import", "backend.packaging", "可观测性", "包装结算"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "补全包装箱结算调试分类 + 全链路埋点",
+      "symptom": "v3.22.0 上银包装/MES 闭环核心环节没进调试中心, 现场排查算箱/尾箱/切项目时调试设置里开什么都看不到",
+      "root_cause": "v3.22.0 发版漏掉了包装结算的调试可观测性",
+      "fix": "注册 backend.packaging (后端) + mes.packaging (前端) 调试分类; 协调器加 _pkg_dbg 助手 (is_on 守门零开销) 埋点条码正常化/扫码入口/MES拉单/切项目/开工单算箱尾箱/设箱目标/逐箱结算/塞工单gate/开下一箱收尾/完成作废/报警 + trays 开箱结箱对称埋点; 容器累加器埋点设箱目标/托盘进箱/封箱进箱总数 (非每帧节点+守门); 扫码API入口日志; 前端配置增删启停/USB扫码命中包装/Monitor卡状态变化埋点",
+      "files": ["backend/core/debug_center.py", "backend/services/packaging_flow_coordinator.py", "backend/api/source_custom_mix.py", "backend/api/packaging_flows.py", "frontend/src/utils/debug.js", "frontend/src/composables/useScanGun.js", "frontend/src/views/Settings/PackagingFlowPanel.vue", "frontend/src/views/Monitor/index.vue"],
+      "keywords": ["调试设置", "调试中心", "backend.packaging", "mes.packaging", "包装结算", "埋点", "可观测性", "扫码开单", "算箱", "尾箱", "切项目", "塞工单gate", "托盘进箱", "滑块"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "electron/package.json",
+    "backend/core/debug_center.py",
+    "backend/services/packaging_flow_coordinator.py",
+    "backend/api/source_custom_mix.py",
+    "backend/api/packaging_flows.py",
+    "frontend/src/utils/debug.js",
+    "frontend/src/composables/useScanGun.js",
+    "frontend/src/views/Settings/PackagingFlowPanel.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "docs/changelog/v3.22.1_2026-06-17.md",
+    "docs/changelog/v3.22.1_2026-06-17.json",
+    "docs/CHANGELOG.md"
+  ]
+}

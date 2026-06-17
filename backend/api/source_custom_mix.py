@@ -167,6 +167,15 @@ class _ContainerAccumulator:
                     self._done.append(dict(t['peak']))
                     print(f"[MixContainer] 托盘进箱: {dict(t['peak'])}, "
                           f"已装 {len(self._done)}/{self.box_count or '?'}")
+                    try:
+                        from backend.core import debug_center
+                        if debug_center.is_on("backend.packaging"):
+                            debug_center.dbg(
+                                "backend.packaging", "托盘进箱记账",
+                                f"peak={dict(t['peak'])} done_trays={len(self._done)} "
+                                f"item_target={self.item_target}")
+                    except Exception:
+                        pass
                 del self._trays[tid]
                 if self._primary == tid:
                     self._primary = None
@@ -229,6 +238,13 @@ class _ContainerAccumulator:
         仅 items_total 模式有意义; trays 模式调了也无副作用。
         """
         self.item_target = max(0, int(target or 0))
+        try:
+            from backend.core import debug_center
+            if debug_center.is_on("backend.packaging"):
+                debug_center.dbg("backend.packaging", "容器累加器设箱目标",
+                                 f"item_target={self.item_target} mode={self.count_mode}")
+        except Exception:
+            pass
 
     def settled_item_total(self) -> int:
         """本周期已进箱滑块总数 (跨标签求和), 口径与 verdict 完全一致。
@@ -872,6 +888,17 @@ def compose_settle_event(host, event_id, reason):
             host._last_container_item_total = mix.container_settled_item_total()
             # 缓存本周期已检出步骤集 (尾箱塞工单 gate 探测用; end_cycle 后 current_cycle_steps 会清)
             host._last_cycle_steps = list(getattr(host, 'current_cycle_steps', []) or [])
+            try:
+                from backend.core import debug_center
+                if debug_center.is_on("backend.packaging"):
+                    cont = getattr(mix, '_container', None)
+                    tgt = getattr(cont, 'item_target', None) if cont else None
+                    debug_center.dbg(
+                        "backend.packaging", "封箱周期进箱滑块总数",
+                        f"ch={getattr(host, 'channel_id', '-')} total={host._last_container_item_total} "
+                        f"target={tgt} steps={host._last_cycle_steps}")
+            except Exception:
+                pass
         except Exception:
             host._last_container_item_total = None
         mix.reset()

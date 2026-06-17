@@ -34,6 +34,7 @@ export const FRONTEND_CATEGORIES = {
   'mes.scanner':        { label: '扫码器 (CRUD/连接/模拟/禁用)', group: 'MES' },
   'mes.gateway':        { label: '推送网关 (连接配置/测试/字段)', group: 'MES' },
   'mes.pull':           { label: '工单拉取 (测试连接/试同步/立即同步)', group: 'MES' },
+  'mes.packaging':      { label: '包装箱结算 (配置保存/Monitor卡/扫码路由)', group: 'MES' },
   'mes.cluster':        { label: '集群 (主从配置/心跳/box)', group: 'MES' },
   'mes.external':       { label: '外部设备 (称重器/串口外设)', group: 'MES' },
   'alarm.ops':          { label: '报警设置 (串口连接/测试/规则保存)', group: '报警' },

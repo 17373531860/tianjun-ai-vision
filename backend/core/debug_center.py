@@ -31,6 +31,7 @@ BACKEND_CATEGORIES = {
     "backend.scanner":    {"label": "扫码器 (连接/收码/注入/LON-WMax)", "group": "MES"},
     "backend.gateway":    {"label": "MES 推送网关 (payload/重试/失败)", "group": "MES"},
     "backend.pull":       {"label": "工单拉取 (主动查询/HTTP/解析/入库)", "group": "MES"},
+    "backend.packaging":  {"label": "包装箱结算 (扫码开单/算箱/滑块结算/尾箱/切项目)", "group": "MES"},
     "backend.cluster":    {"label": "集群主从 (心跳/box 聚齐/上报)", "group": "MES"},
     "backend.alarm":      {"label": "报警系统 (串口指令/灯塔/蜂鸣)", "group": "系统"},
     "backend.export":     {"label": "自定义导出 (模板渲染/落盘/实时规则)", "group": "系统"},

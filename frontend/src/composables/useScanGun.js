@@ -136,7 +136,8 @@ async function tryPackaging(cfg, code) {
     if (r && r.handled) {
       const st = r.state || {}
       const extra = st.box_total ? ` · 共 ${st.box_total} 箱` : ''
-      dbg('mes.scanner', 'USB 扫码枪 → 包装结算', `code=${code} 已被包装结算处理${extra}`)
+      dbg('mes.packaging', 'USB 扫码枪 → 包装结算',
+          `code=${code} order=${st.order_no || '-'} box=${st.box_done || 0}/${st.box_total || '?'}${extra}`)
       ElNotification.success({
         title: '包装结算扫码',
         message: `工单 ${code}${extra}`,
@@ -146,7 +147,7 @@ async function tryPackaging(cfg, code) {
     }
   } catch (err) {
     // 包装结算探测异常不能吞掉码: 回退默认 pull/bind
-    dbg('mes.scanner', '包装结算扫码探测异常, 回退默认路由',
+    dbg('mes.packaging', '包装结算扫码探测异常, 回退默认路由',
         `${code}: ${err?.response?.data?.detail || err?.message || err}`)
   }
   return false

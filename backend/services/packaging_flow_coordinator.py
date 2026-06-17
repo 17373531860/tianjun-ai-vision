@@ -55,6 +55,16 @@ _singleton: Optional["PackagingFlowCoordinator"] = None
 _singleton_lock = threading.Lock()
 
 
+def _pkg_dbg(action: str, detail: str = "") -> None:
+    """包装结算调试埋点 (类别 backend.packaging, 默认关零开销)."""
+    try:
+        from backend.core import debug_center
+        if debug_center.is_on("backend.packaging"):
+            debug_center.dbg("backend.packaging", action, detail)
+    except Exception:
+        pass
+
+
 def get_coordinator() -> "PackagingFlowCoordinator":
     """获取单例 (惰性初始化, 进程内一份)."""
     global _singleton
@@ -221,8 +231,11 @@ class PackagingFlowCoordinator:
             pos = int(cfg.get("hyphen_pos") or 0)
             base = s.replace(ch, "")
             if 0 < pos < len(base):
-                return base[:pos] + ch + base[pos:]
-            return base
+                out = base[:pos] + ch + base[pos:]
+            else:
+                out = base
+            _pkg_dbg("条码正常化 insert_char", f"raw={s!r} pos={pos} ch={ch!r} → {out!r}")
+            return out
         if mode == "strip_hyphen":
             return s.replace("-", "")
         if mode == "digits_only":
@@ -258,6 +271,7 @@ class PackagingFlowCoordinator:
     # =============================================================
 
     def _raise_alarm(self, cfg: Dict[str, Any], kind: str, msg: str) -> None:
+        _pkg_dbg(f"报警[{kind}]", msg)
         try:
             if self._alarm_sink:
                 self._alarm_sink(cfg, kind, msg)
@@ -305,6 +319,9 @@ class PackagingFlowCoordinator:
             if not norm:
                 return
             run = self._runs.get(config_id)
+            _pkg_dbg("扫码入口",
+                     f"cfg={cfg.get('name')} ch={channel_id} raw={code!r} norm={norm!r} "
+                     f"unit={cfg.get('count_unit', 'trays')} has_run={run is not None}")
 
             if run is None:
                 # 第 1 次扫 = 开工单
@@ -366,6 +383,7 @@ class PackagingFlowCoordinator:
         """sliders 口径扫码: 箱由检测周期驱动, 扫码只在工单层动作 (开 / 换 / 漏箱)."""
         if norm == run["order_no"]:
             # 中途扫同号: 不开 / 不结箱 (上银扫码仅为开工单), 仅刷新落库
+            _pkg_dbg("扫码同号刷新", f"order={norm} box_done={run.get('box_done')}/{run.get('box_total')}")
             self._persist_run(run, db)
             return
         # 不同号 = 新工单. 旧工单还在 (= 没做满) → 漏箱处置
@@ -412,6 +430,9 @@ class PackagingFlowCoordinator:
                 self._on_cycle_settled_sliders(cfg, run, cycle_id, bool(is_good),
                                                slider_count, db)
                 return
+            _pkg_dbg("周期结算 trays",
+                     f"order={run.get('order_no')} box={run.get('current_box_index')} "
+                     f"cycle={cycle_id} is_good={is_good}")
             # trays 默认口径 (v3.21 原行为, 零差异)
             if run["current_box_index"] == 0:
                 return  # 没开箱时来的托盘 → 忽略
@@ -483,9 +504,12 @@ class PackagingFlowCoordinator:
         if mes_data is None:
             self._raise_alarm(cfg, "mes_fail", f"拉取工单 {norm} 失败")
             if cfg.get("on_mes_fail") == "block":
+                _pkg_dbg("开工单阻断", f"order={norm} MES拉单失败 on_mes_fail=block")
                 return  # 阻断: 不开工单
             mes_data = {}  # offline: 继续, 箱数未知 (0)
         spec = mes_data.get("spec")
+        _pkg_dbg("MES拉单成功",
+                 f"order={norm} spec={spec!r} keys={list(mes_data.keys())[:8]}")
         if cfg.get("count_unit") == "sliders":
             self._open_order_sliders(config_id, cfg, norm, raw, spec, mes_data, db)
             return
@@ -506,7 +530,9 @@ class PackagingFlowCoordinator:
                             raw: str, spec: Optional[str], mes_data: Dict[str, Any], db) -> None:
         # 1) 按规格自动激活对应项目 (开关默认关). 失败兜底: 报警但用当前项目继续.
         if cfg.get("auto_switch_project") and spec:
-            if not self._activate_project_by_spec(spec, cfg):
+            switched = self._activate_project_by_spec(spec, cfg)
+            _pkg_dbg("按规格切项目", f"spec={spec!r} ok={switched}")
+            if not switched:
                 self._raise_alarm(cfg, "mes_fail",
                                   f"规格 {spec} 自动切项目失败, 用当前激活项目继续")
         # 2) 每箱滑块数 (project=读激活项目容器目标 / config=固定值)
@@ -526,6 +552,9 @@ class PackagingFlowCoordinator:
         run["tail_target"] = tail_target
         self._persist_run(run, db, create=True)
         self._runs[config_id] = run
+        _pkg_dbg("开工单 sliders",
+                 f"order={norm} spec={spec!r} slider_total={slider_total} "
+                 f"items_per_box={items_per_box} box_total={box_total} tail_target={tail_target}")
         # 5) 立即开第 1 箱并把当前箱目标设回检测层 (不依赖第 2 次扫码)
         self._open_box_sliders(run, cfg, db)
 
@@ -574,6 +603,7 @@ class PackagingFlowCoordinator:
             return
         try:
             self._box_target_setter(int(cfg.get("channel_id", 0) or 0), int(target))
+            _pkg_dbg("设当前箱滑块目标", f"ch={cfg.get('channel_id')} target={target}")
         except Exception as e:
             print(f"[PackagingFlow] 设当前箱目标异常 (隔离): {e}")
 
@@ -613,14 +643,20 @@ class PackagingFlowCoordinator:
         run["current_box_sliders"] = sc
         is_tail = run["box_total"] > 0 and run["current_box_index"] >= run["box_total"]
         target = self._current_box_target(run)
+        _pkg_dbg("周期结算 sliders",
+                 f"order={run.get('order_no')} box={run.get('current_box_index')}/"
+                 f"{run.get('box_total')} cycle={cycle_id} sliders={sc}/{target} "
+                 f"is_good={is_good} is_tail={is_tail}")
         # 尾箱塞工单视觉 gate (开关默认关): 没检测到放工单动作 → 暂不收尾, 报警, 等补做
         if is_tail and cfg.get("tail_paper_order_required"):
             if not self._probe_paper_order(cfg, run):
                 self._raise_alarm(cfg, "missing_paper",
                                   f"工单 {run['order_no']} 尾箱未检测到放工单动作, 暂不收尾 (等放工单)")
+                _pkg_dbg("尾箱塞工单 gate 未过", f"order={run.get('order_no')} 暂不收尾")
                 self._persist_run(run, db)
                 return
             run["paper_order_done"] = True
+            _pkg_dbg("尾箱塞工单 gate 通过", f"order={run.get('order_no')}")
         # 本箱合格: 进箱滑块数正好达目标 + 检测步骤齐 (is_good 由检测层按当前箱目标判过)
         ok = bool(is_good) and (target <= 0 or sc == target)
         run["box_done"] += 1
@@ -636,8 +672,12 @@ class PackagingFlowCoordinator:
         })
         # 做满 → 完成工单; 否则开下一箱 (更新目标, 尾箱会切到尾数)
         if run["box_total"] > 0 and run["box_done"] >= run["box_total"]:
+            _pkg_dbg("本箱结算完成→工单收尾",
+                     f"order={run.get('order_no')} result={result} box_done={run['box_done']}")
             self._complete_order(run, cfg, db)
         else:
+            _pkg_dbg("本箱结算→开下一箱",
+                     f"order={run.get('order_no')} result={result} next_box={run['box_done'] + 1}")
             self._open_box_sliders(run, cfg, db)
 
     def _open_box(self, run: Dict[str, Any], cfg: Dict[str, Any], db) -> None:
@@ -649,6 +689,8 @@ class PackagingFlowCoordinator:
         run["current_box_index"] = run["box_done"] + 1
         run["current_box_trays"] = 0
         run["status"] = "running"
+        _pkg_dbg("开箱 trays",
+                 f"order={run.get('order_no')} box={run['current_box_index']}/{run.get('box_total')}")
         self._persist_run(run, db)
 
     def _settle_current_box(self, run: Dict[str, Any], cfg: Dict[str, Any], db,
@@ -671,6 +713,9 @@ class PackagingFlowCoordinator:
         run["box_details"].append({
             "box": run["current_box_index"], "trays": trays, "need": need, "result": result,
         })
+        _pkg_dbg("结箱 trays",
+                 f"order={run.get('order_no')} box={run['current_box_index']} "
+                 f"trays={trays}/{need} result={result} force_partial={force_partial}")
         self._persist_run(run, db)
 
     def _complete_order(self, run: Dict[str, Any], cfg: Dict[str, Any], db, forced: bool = False) -> None:
@@ -686,6 +731,9 @@ class PackagingFlowCoordinator:
             final = "NG"  # 漏箱
         run["final_result"] = final
         run["status"] = "completed"
+        _pkg_dbg("工单完成",
+                 f"order={run.get('order_no')} final={final} box_done={run.get('box_done')}/"
+                 f"{run.get('box_total')} box_ng={run.get('box_ng')} forced={forced}")
         # 工单完成回推 MES (可选, 默认关). 推成功才置 mes_pushed, 落库留痕.
         if self._push_mes(cfg, run):
             run["mes_pushed"] = True
@@ -693,6 +741,7 @@ class PackagingFlowCoordinator:
         self._runs.pop(run["config_id"], None)
 
     def _abort_order(self, run: Dict[str, Any], db) -> None:
+        _pkg_dbg("工单作废", f"order={run.get('order_no')} box_done={run.get('box_done')}")
         run["status"] = "aborted"
         run["final_result"] = "NG"
         self._persist_run(run, db)
@@ -913,11 +962,6 @@ def _real_alarm_sink(cfg: Dict[str, Any], kind: str, msg: str) -> None:
     ``fire_external_event_response`` 联动报警+语音+Toast+计数 (不结算检测周期).
     未配置 / 事件没找到 / 拿不到工位 → 退回默认通用报警 (event2), 不静默以免漏报.
     """
-    try:
-        from backend.core.debug_center import debug_center
-        debug_center.dbg("backend.packaging", f"报警[{kind}]", msg)
-    except Exception:
-        pass
     ch = int(cfg.get("channel_id", 0) or 0)
     try:
         event_id = cfg.get(_KIND_TO_EVENT_FIELD.get(kind, ""))

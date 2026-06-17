@@ -389,6 +389,7 @@ import {
   getPackagingFlowState,
 } from '@/api/packaging_flow';
 import { getProjects } from '@/api/project';
+import { dbg } from '@/utils/debug';
 
 const flows = ref([]);
 const dialogVisible = ref(false);
@@ -608,10 +609,12 @@ const submit = async () => {
   try {
     if (form.id) {
       await updatePackagingFlow(form.id, form);
+      dbg('mes.packaging', '更新包装配置', `id=${form.id} name=${form.name} unit=${form.count_unit} enabled=${form.enabled}`);
       ElMessage.success('配置已更新');
     } else {
       const { id, ...payload } = form;
       await createPackagingFlow(payload);
+      dbg('mes.packaging', '创建包装配置', `name=${form.name} unit=${form.count_unit} ch=${form.channel_id}`);
       ElMessage.success('配置已创建');
     }
     dialogVisible.value = false;
@@ -624,6 +627,7 @@ const submit = async () => {
 const toggleEnabled = async (row, val) => {
   try {
     await updatePackagingFlow(row.id, { enabled: val });
+    dbg('mes.packaging', val ? '启用包装配置' : '禁用包装配置', `id=${row.id} name=${row.name}`);
     ElMessage.success(val ? '已启用' : '已禁用');
     loadList();
   } catch (e) {

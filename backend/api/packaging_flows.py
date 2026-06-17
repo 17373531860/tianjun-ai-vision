@@ -403,4 +403,15 @@ def packaging_scan(payload: ScanInput, db: Session = Depends(get_db)):
     config_id = coord.resolve_config_id(payload.channel_id, payload.scan_device_id)
     if config_id is None:
         return {"handled": False, "reason": "no_matching_config"}
-    return {"handled": True, "config_id": config_id, "state": coord.get_state(config_id)}
+    state = coord.get_state(config_id)
+    try:
+        from backend.core import debug_center
+        if debug_center.is_on("backend.packaging"):
+            st = state or {}
+            debug_center.dbg(
+                "backend.packaging", "HTTP扫码入口",
+                f"code={code!r} ch={payload.channel_id} cfg_id={config_id} "
+                f"order={st.get('order_no')} box_done={st.get('box_done')}/{st.get('box_total')}")
+    except Exception:
+        pass
+    return {"handled": True, "config_id": config_id, "state": state}
