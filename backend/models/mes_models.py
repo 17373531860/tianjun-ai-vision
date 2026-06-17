@@ -747,7 +747,11 @@ class PackagingFlowConfig(Base):
     # 比对方式: exact=精确 / strip_hyphen=去连字符 / digits_only=只取数字
     label_match = Column(String(16), default="strip_hyphen")
     label_len = Column(Integer, default=0)              # 0=不限长 / N=固定 N 位
-    hyphen_template = Column(String(32), nullable=True)  # 显示用连字符模板, 可空
+    # insert_char 模式用: 扫码枪扫不出特殊符号(如 '-')时, 把符号补回去.
+    # hyphen_template = 要补回的符号(默认 '-'); hyphen_pos = 补在第几位字符之后(主单号长度).
+    # 例: 扫到 JOB1507001141, 符号='-' 位置=12 → 还原成 JOB150700114-1 (序号位数不限).
+    hyphen_template = Column(String(32), nullable=True)  # 要补回的特殊符号 (insert_char 模式)
+    hyphen_pos = Column(Integer, default=0)              # 补在第几位字符之后 (0=不补)
 
     # --- 组④ 异常策略 ---
     on_mes_fail = Column(String(16), default="block")          # block=阻断重扫 / offline=允许离线

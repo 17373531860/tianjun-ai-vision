@@ -61,6 +61,7 @@ class PackagingFlowConfigBase(BaseModel):
     label_match: str = "strip_hyphen"
     label_len: int = 0
     hyphen_template: Optional[str] = None
+    hyphen_pos: int = 0
     # 组④ 异常策略
     on_mes_fail: str = "block"
     on_label_mismatch: str = "warn"
@@ -112,6 +113,7 @@ class PackagingFlowConfigUpdate(BaseModel):
     label_match: Optional[str] = None
     label_len: Optional[int] = None
     hyphen_template: Optional[str] = None
+    hyphen_pos: Optional[int] = None
     on_mes_fail: Optional[str] = None
     on_label_mismatch: Optional[str] = None
     on_short_box: Optional[str] = None
@@ -153,7 +155,7 @@ _ENUMS = {
     "box_count_source": {"field", "formula"},
     "tray_qty_mode": {"fixed", "by_spec"},
     "trays_per_box_mode": {"fixed", "by_spec"},
-    "label_match": {"exact", "strip_hyphen", "digits_only"},
+    "label_match": {"exact", "strip_hyphen", "digits_only", "insert_char"},
     "on_mes_fail": {"block", "offline"},
     "on_label_mismatch": {"off", "block", "warn"},
     "on_short_box": {"redo", "void"},
@@ -223,6 +225,7 @@ def _serialize(row: PackagingFlowConfig) -> PackagingFlowConfigResponse:
         label_match=row.label_match or "strip_hyphen",
         label_len=int(row.label_len or 0),
         hyphen_template=row.hyphen_template,
+        hyphen_pos=int(getattr(row, "hyphen_pos", 0) or 0),
         on_mes_fail=row.on_mes_fail or "block",
         on_label_mismatch=row.on_label_mismatch or "warn",
         on_short_box=row.on_short_box or "redo",

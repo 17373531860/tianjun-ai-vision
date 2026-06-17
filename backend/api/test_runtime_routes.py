@@ -156,6 +156,81 @@ def synthetic_state(channel: int = 0):
     return mgr.get_synthetic_debug_state()
 
 
+class PackagingSettleBody(BaseModel):
+    """仅测试态: 模拟检测层结算一个箱 (等价检测周期 cycle_end 调包装协调器).
+
+    生产里这一跳由检测层 source_session_lifecycle_mixin 自动调,
+    slider_count 来自容器累加器峰值. 开发机无相机, 用本端点直接喂数, 走完全相同的
+    协调器逐箱状态机, 让 Monitor 包装卡能用虚拟数据可见地逐箱推进.
+    """
+    channel_id: int = 0
+    cycle_id: int = 1
+    is_good: bool = True
+    slider_count: Optional[int] = None
+    paper_done: Optional[bool] = None  # 控制尾箱"塞工单"探测结果 (None=用真实探测)
+
+
+@router.post("/packaging-settle")
+def packaging_settle(body: PackagingSettleBody):
+    _require_test_mode()
+    from backend.services.packaging_flow_coordinator import (
+        get_coordinator, _real_paper_order_probe)
+    from backend.db.database import SessionLocal
+
+    coord = get_coordinator()
+    if body.paper_done is not None:
+        coord.set_paper_order_probe(lambda c, l, _v=bool(body.paper_done): _v)
+    db = SessionLocal()
+    try:
+        cid = coord.resolve_config_id(body.channel_id, None)
+        coord.on_cycle_settled(int(body.channel_id), int(body.cycle_id),
+                               bool(body.is_good), db, slider_count=body.slider_count)
+        cid = cid if cid is not None else coord.resolve_config_id(body.channel_id, None)
+        state = coord.get_state(cid) if cid is not None else None
+        # 完成/中止后 run 已从内存弹出 → state=None; 回查 DB 最近一条运行记录, 让完成态可观测
+        last_run = None
+        if cid is not None:
+            from backend.models.mes_models import PackagingFlowRun
+            row = (db.query(PackagingFlowRun)
+                   .filter(PackagingFlowRun.flow_config_id == cid)
+                   .order_by(PackagingFlowRun.id.desc()).first())
+            if row is not None:
+                last_run = {
+                    "order_no": row.order_no, "status": row.status,
+                    "final_result": row.final_result, "box_total": row.box_total,
+                    "box_done": row.box_done, "box_ng": row.box_ng,
+                    "count_unit": row.count_unit, "tail_target": row.tail_target,
+                }
+        return {"status": "ok", "config_id": cid, "state": state, "last_run": last_run}
+    finally:
+        db.close()
+        if body.paper_done is not None:
+            coord.set_paper_order_probe(_real_paper_order_probe)  # 复位, 不污染后续
+
+
+@router.post("/packaging-reset")
+def packaging_reset():
+    """仅测试态: 清空包装协调器内存在途运行 + 重接真实钩子 + 重载配置.
+
+    后端长驻进程跨 UAT 脚本运行时, 协调器 _runs 会残留上轮在途工单 → 污染下一轮.
+    UAT setup 清完 DB 配置后调一次本端点, 拿到干净的协调器内存.
+    """
+    _require_test_mode()
+    from backend.services.packaging_flow_coordinator import (
+        get_coordinator, wire_real_hooks)
+    from backend.db.database import SessionLocal
+
+    coord = get_coordinator()
+    coord.cleanup_for_testing()        # 清 _runs / _configs + 复位钩子
+    wire_real_hooks(coord)             # 重接真实拉单/报警/箱目标/切项目/塞工单探测
+    db = SessionLocal()
+    try:
+        coord.reload_configs(db)       # 按当前 DB 里 enabled 的配置重建 _configs
+    finally:
+        db.close()
+    return {"status": "ok", "loaded": coord.list_loaded_config_ids()}
+
+
 @router.post("/fire-plugin-cycle-end")
 def fire_plugin_cycle_end_hook(channel: int = 0, cycle_id: int = 999, is_good: bool = False):
     """G1.5 调试端点 — 直接触发一次 cycle_end/post_cycle/post hook (仅 RUNTIME_MODE=test).

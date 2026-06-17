@@ -184,6 +184,54 @@ def test_label_exact_keeps_hyphen_distinct(client):
     assert state["current_box_index"] == 0           # 新工单刚开, 还没开箱
 
 
+def test_label_insert_char_reinserts_hyphen(client):
+    """上银 insert_char: 扫码枪丢 '-' 扫成 'JOB1507001141', 配置符号='-' 位置=12,
+    归一化补回 → 记录的 order_no = 完整 'JOB150700114-1' (查 MES 也用这个值)."""
+    coord, cid = _setup_flow(client, label_match="insert_char",
+                             hyphen_template="-", hyphen_pos=12)
+    queried = []
+    coord.set_mes_fetcher(lambda c, o: (queried.append(o), {"dispatch_qty": 2})[1])
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    db = SessionLocal()
+
+    coord.on_scan("JOB1507001141", db, channel_id=0)     # 丢符号码 → norm=JOB150700114-1 开工单
+    state = coord.get_state(cid)
+    assert state["order_no"] == "JOB150700114-1"          # 记录的是补回的完整值
+    assert queried == ["JOB150700114-1"]                  # 查 MES 用完整值
+
+
+def test_label_insert_char_idempotent_same_order(client):
+    """insert_char 幂等: 扫到丢符号码 'JOB1507001141' 与扫到带符号码 'JOB150700114-1'
+    归一化结果相同 → 视为同号 → 第二次扫开箱而非切单/报警."""
+    coord, cid = _setup_flow(client, label_match="insert_char",
+                             hyphen_template="-", hyphen_pos=12)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 2})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    db = SessionLocal()
+
+    coord.on_scan("JOB1507001141", db, channel_id=0)     # 丢符号 → JOB150700114-1 开工单
+    coord.on_scan("JOB150700114-1", db, channel_id=0)    # 带符号 → 同样 JOB150700114-1 → 开箱1
+    state = coord.get_state(cid)
+    assert state["order_no"] == "JOB150700114-1"
+    assert state["current_box_index"] == 1
+    assert "label_mismatch" not in alarms
+
+
+def test_label_insert_char_varlen_serial(client):
+    """insert_char 对序号位数不固定鲁棒: 主单号定长 12, 序号 3 位 → 补在 12 位后还原."""
+    coord, cid = _setup_flow(client, label_match="insert_char",
+                             hyphen_template="-", hyphen_pos=12)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 1})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    db = SessionLocal()
+
+    coord.on_scan("JOB150700114111", db, channel_id=0)   # 序号 111 (3 位) → JOB150700114-111
+    state = coord.get_state(cid)
+    assert state["order_no"] == "JOB150700114-111"
+
+
 def test_label_digits_only_same_order(client):
     """digits_only 模式: 'AB-12' 与 '12' 只留数字均=12 → 同号 → 第二次扫开箱."""
     coord, cid = _setup_flow(client, label_match="digits_only")

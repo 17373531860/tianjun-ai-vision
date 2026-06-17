@@ -199,6 +199,8 @@ def migrate_database():
         ("packaging_flow_configs", "tail_paper_order_required", "BOOLEAN DEFAULT 0"),
         ("packaging_flow_configs", "tail_paper_step_label", "VARCHAR(64)"),
         ("packaging_flow_configs", "event_missing_paper", "INTEGER"),
+        # v3.22 insert_char 模式: 扫码枪丢符号时把 '-' 等补回固定位置
+        ("packaging_flow_configs", "hyphen_pos", "INTEGER DEFAULT 0"),
         # v3.22 PackagingFlowRun 滑块口径 + 尾箱运行态
         ("packaging_flow_runs", "count_unit", "VARCHAR(8) DEFAULT 'trays'"),
         ("packaging_flow_runs", "slider_total", "INTEGER DEFAULT 0"),

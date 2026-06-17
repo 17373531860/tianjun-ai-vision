@@ -5,11 +5,14 @@
   查 MES → 拿滑块总数 + 产品规格"那一跳, 让整条包装结算闭环 (尾箱算法 / 自动切
   项目 / 塞工单 gate) 能在开发机端到端跑通.
 
-接法:
-  在「包装结算」拉单 MES 连接里把拉取地址指到本服务:
-      url        = http://127.0.0.1:9100/mes/work-order
-      array_path = data
-      字段       = dispatch_qty (滑块总数) / spec (产品规格)
+接法 (两套返回格式任选, 对应不同 pull_cfg):
+  A. 简易格式 (旧, 给在线 e2e 单测用):
+      url=http://127.0.0.1:9100/mes/work-order  array_path=data  success_path=code success_value=0
+  B. 上银真实格式 (推荐, 与客户工控机部署完全一致):
+      url=http://127.0.0.1:9100/hiwin/webcn/ai_error_prevention_job_info/query
+      method=POST  request_body_template={"api":"...","parameters":{"job_no":"{job_no}"}}
+      success_path=statusCode  success_value=200  array_path=response.resultData
+      字段 dispatch_qty (滑块总数) / spec (产品规格)
   上银工控机部署时换成真 MES 地址即可, 主程序代码零改动.
 
 启动:
@@ -20,14 +23,16 @@
       ORD-NONEXACT  非整除尾箱   250 滑块 / 规格 HGH20  (每箱96 → 3箱, 尾箱58)
       ORD-EXACT     整除尾箱     240 滑块 / 规格 HGW15  (每箱24 → 10箱, 尾箱满24)
       ORD-SINGLE    单箱         50  滑块 / 规格 HGH20  (每箱96 → 1箱, 尾箱50)
-      ORD-SPEC2     多型号       192 滑块 / 规格 EGH15  (自动切另一项目)
-      其它工单号    查不到 (空数组) → 触发 on_mes_fail 策略测试
+      ORD-SPEC2     多型号       192 滑块 / 规格 EGH15  (自动切另一项目, 每箱64 → 3箱整除)
+      JOB-ERR       API 错误     上银格式返回 statusCode=500 + error (模拟系统异常)
+      其它工单号    查不到 (statusCode=200 + resultData 空) → 触发 on_mes_fail 策略测试
 """
 import os
 from typing import Any, Dict, List
 
 try:
     from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
     import uvicorn
 except ImportError as e:  # pragma: no cover
     raise SystemExit(f"缺少依赖 fastapi/uvicorn, 在 tianjun 环境跑: {e}")
@@ -73,6 +78,61 @@ async def work_order(request: Request):
         except Exception:
             job_no = None
     return {"code": 0, "msg": "ok", "data": lookup(job_no or "")}
+
+
+def _extract_job_no(request: "Request", body: Any) -> str:
+    job_no = (request.query_params.get("job_no")
+              or request.query_params.get("jobNo")
+              or request.query_params.get("order_no"))
+    if not job_no and isinstance(body, dict):
+        # 上银: {"api": "...", "parameters": {"job_no": "..."}}
+        params = body.get("parameters") if isinstance(body.get("parameters"), dict) else {}
+        job_no = (body.get("job_no") or body.get("jobNo") or body.get("order_no")
+                  or params.get("job_no") or params.get("jobNo") or params.get("order_no"))
+    return job_no or ""
+
+
+@app.api_route("/hiwin/webcn/ai_error_prevention_job_info/query",
+               methods=["GET", "POST"])
+async def hiwin_query(request: Request):
+    """上银真实返回格式 (与客户 D1 确认的契约一致).
+
+    - 工单存在     → statusCode=200 + response.resultData=[{job_no,dispatch_qty,spec}]
+    - 工单不存在   → statusCode=200 + response.resultData=[]  (客户: 据此判查无此单)
+    - JOB-ERR/异常 → statusCode=500 + error{errorCode,errorInfo,detail_message} (HTTP 500)
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    job_no = _extract_job_no(request, body)
+
+    if _norm(job_no) == _norm("JOB-ERR"):
+        err_payload = {
+            "error": {
+                "errorCode": 1,
+                "errorInfo": "SYSTEM ERROR~~~~",
+                "detail_message": "ERROR: column reference \"last_update_dt\" is ambiguous",
+            },
+            "statusCode": 500,
+            "response": None,
+            "success": False,
+            "locale": "zh-CN",
+        }
+        return JSONResponse(status_code=500, content=err_payload)
+
+    return {
+        "error": None,
+        "statusCode": 200,
+        "response": {
+            "pageNo": 1,
+            "numberOfPerPage": 200,
+            "resultData": lookup(job_no),
+            "i18nInfo": None,
+        },
+        "success": True,
+        "locale": "zh-CN",
+    }
 
 
 @app.get("/health")

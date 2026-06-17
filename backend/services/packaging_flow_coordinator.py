@@ -171,6 +171,7 @@ class PackagingFlowCoordinator:
             "label_match": row.label_match or "strip_hyphen",
             "label_len": int(row.label_len or 0),
             "hyphen_template": row.hyphen_template,
+            "hyphen_pos": int(getattr(row, "hyphen_pos", 0) or 0),
             "on_mes_fail": row.on_mes_fail or "block",
             "on_label_mismatch": row.on_label_mismatch or "warn",
             "on_short_box": row.on_short_box or "redo",
@@ -211,6 +212,17 @@ class PackagingFlowCoordinator:
         """按配置把扫码原始串归一化, 用于工单/箱标签比对."""
         s = str(code or "").strip()
         mode = cfg.get("label_match", "strip_hyphen")
+        if mode == "insert_char":
+            # 上银: 标签是 JOB150700114-1, 但扫码枪丢了 '-' 扫成 JOB1507001141 (序号仍在).
+            # 把符号补回固定位置 → 还原成 JOB150700114-1, 之后记录/查 MES 永远用这个完整值.
+            # 主单号定长(如 JOB+9位=12), 补在第 12 位之后, 序号 1~3 位都适配.
+            # 先去掉已有同种符号再插, 保证扫到带符号的码也归一到同一结果(幂等).
+            ch = cfg.get("hyphen_template") or "-"
+            pos = int(cfg.get("hyphen_pos") or 0)
+            base = s.replace(ch, "")
+            if 0 < pos < len(base):
+                return base[:pos] + ch + base[pos:]
+            return base
         if mode == "strip_hyphen":
             return s.replace("-", "")
         if mode == "digits_only":

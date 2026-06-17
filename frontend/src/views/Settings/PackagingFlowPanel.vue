@@ -139,16 +139,51 @@
             <el-form-item label="比对方式">
               <el-select v-model="form.label_match" class="w-full">
                 <el-option label="精确比对" value="exact" />
-                <el-option label="去掉连字符再比 (推荐)" value="strip_hyphen" />
+                <el-option label="补回特殊符号 (上银推荐)" value="insert_char" />
+                <el-option label="去掉连字符再比" value="strip_hyphen" />
                 <el-option label="只取数字再比" value="digits_only" />
               </el-select>
               <div class="text-xs text-gray-400 mt-1">
-                扫码枪读到 15 位纯数字、工单显示带连字符时, 选"去掉连字符".
+                上银: 标签是 JOB150700114-1, 但扫码枪丢了"-"扫成 JOB1507001141 (序号还在).
+                选"补回特殊符号", 把"-"补回固定位置 → 还原成 JOB150700114-1,
+                之后记录、查 MES 永远用这个完整值 (JOB1507001141 只在扫码转换前一瞬出现).
               </div>
             </el-form-item>
+            <template v-if="form.label_match === 'insert_char'">
+              <el-form-item label="要补回的符号">
+                <el-input v-model="form.hyphen_template" placeholder="-" style="width: 120px" maxlength="8" />
+                <span class="text-xs text-gray-400 ml-2">默认 "-"</span>
+              </el-form-item>
+              <el-form-item label="补在第几位后">
+                <el-input-number v-model="form.hyphen_pos" :min="0" :max="64" />
+                <span class="text-xs text-gray-400 ml-2">
+                  主单号长度 (如 JOB+9 位 = 12); 补在第 12 位字符之后, 序号 1~3 位都适配; 0 = 不补
+                </span>
+              </el-form-item>
+              <el-form-item label="效果预览">
+                <div class="w-full">
+                  <el-input v-model="hyphenPreviewInput" placeholder="粘贴扫码枪扫到的样例码, 如 JOB1507001141"
+                            clearable>
+                    <template #prepend>扫到</template>
+                  </el-input>
+                  <div class="text-sm mt-2 flex items-center gap-2">
+                    <span class="text-gray-400">补回后 →</span>
+                    <span class="font-mono px-2 py-0.5 rounded"
+                          :class="hyphenPreviewResult ? 'bg-green-700/40 text-green-300' : 'text-gray-500'">
+                      {{ hyphenPreviewResult || '(输入样例码看效果)' }}
+                    </span>
+                  </div>
+                  <div class="text-xs text-gray-400 mt-1">
+                    这就是系统记录、查 MES 实际使用的工单号; 调上面的位置/符号会实时变化.
+                  </div>
+                </div>
+              </el-form-item>
+            </template>
             <el-form-item label="标签固定长度">
               <el-input-number v-model="form.label_len" :min="0" :max="64" />
-              <span class="text-xs text-gray-400 ml-2">0 = 不限长; 填 N = 不是 N 位就报警</span>
+              <span class="text-xs text-gray-400 ml-2">
+                0 = 不限长; 填 N = 不是 N 位就报警 (上银序号位数不固定, 应保持 0)
+              </span>
             </el-form-item>
           </el-collapse-item>
 
@@ -344,7 +379,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, computed } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   listPackagingFlows,
@@ -413,6 +448,7 @@ const _newForm = () => ({
   label_match: 'strip_hyphen',
   label_len: 0,
   hyphen_template: null,
+  hyphen_pos: 0,
   on_mes_fail: 'block',
   on_label_mismatch: 'warn',
   on_short_box: 'redo',
@@ -447,6 +483,20 @@ const pullConnIdStr = ref('');
 const trayQtyTableJson = ref('');
 const traysPerBoxTableJson = ref('');
 const specToProjectJson = ref('');
+
+// insert_char 效果预览: 前端镜像后端 _normalize 的 insert_char 逻辑 (先去符号再补回固定位置)
+const hyphenPreviewInput = ref('JOB1507001141');
+const hyphenPreviewResult = computed(() => {
+  const s = String(hyphenPreviewInput.value || '').trim();
+  if (!s) return '';
+  const ch = form.hyphen_template || '-';
+  const pos = Number(form.hyphen_pos || 0);
+  const base = s.split(ch).join('');
+  if (pos > 0 && pos < base.length) {
+    return base.slice(0, pos) + ch + base.slice(pos);
+  }
+  return base;
+});
 
 const loadList = async () => {
   try {
@@ -487,8 +537,12 @@ const applyHiwinPreset = () => {
     trays_per_box_fixed: 4,
     tray_qty_mode: 'fixed',
     tray_qty_fixed: 0,
-    label_match: 'strip_hyphen',
-    label_len: 15,
+    // 上银: 扫码枪丢 "-" (JOB150700114-1 → JOB1507001141), 补回主单号(JOB+9位=12)后;
+    // 序号 1~3 位不固定, 长度校验关 (0).
+    label_match: 'insert_char',
+    hyphen_template: '-',
+    hyphen_pos: 12,
+    label_len: 0,
     on_mes_fail: 'block',
     on_label_mismatch: 'warn',
     on_short_box: 'redo',
