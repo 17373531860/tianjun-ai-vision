@@ -62,11 +62,13 @@ export const resetDetection = (channel = 0) => api.post(`/detection/reset?channe
 export const resetDetectionStats = (channel = 0) => api.post(`/source/detection/reset-stats?channel=${channel}`);
 
 // v3.9.x 工人确认重做 — 解除 require_ack 触发的阻塞态
-export const ackPendingEvent = (channel = 0) => api.post(`/source/detection/ack-event?channel=${channel}`);
+// v3.23 action: 缺步骤延迟落账挂起时 supplement_step(补步骤判OK) / confirm_ng(认NG) / redo(缺省)
+export const ackPendingEvent = (channel = 0, action = null) =>
+  api.post(`/source/detection/ack-event?channel=${channel}${action ? `&action=${action}` : ''}`);
 
 // v3.23 借密码提权确认 — 操作员无 ack 权限时, 借管理员账密授权一次, 不改当前登录身份
-export const ackPendingEventElevated = (channel = 0, username = '', password = '') =>
-  api.post(`/source/detection/ack-event-elevated?channel=${channel}`, { username, password });
+export const ackPendingEventElevated = (channel = 0, username = '', password = '', action = null) =>
+  api.post(`/source/detection/ack-event-elevated?channel=${channel}`, { username, password, action });
 
 // v3.10.2+ per_item 手动周期时机控制
 //   只代替"时机判定", 不代替"结果判定". 不可伪造 OK/NG.

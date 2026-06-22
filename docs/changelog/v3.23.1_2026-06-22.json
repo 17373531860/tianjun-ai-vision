@@ -1,0 +1,49 @@
+{
+  "version": "3.23.1",
+  "date": "2026-06-22",
+  "previous_version": "3.23.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "任意模式缺步骤 NG 延迟落账（通用补做核心）",
+      "symptom": "顺序/检测模式下漏某个步骤判 NG 后只能整周期重做，无法人工就地补做判合格",
+      "root_cause": "v3.23.0 只在包装补滑块落地延迟落账，缺步骤路径未接入；NG 事件在 _trigger_event 立即 end_cycle/计数/推 MES",
+      "fix": "在 _trigger_event 加唯一守门：NG 且缺步骤且开了 ng_remediation.allow_step 时挂起(_pending_remediation 快照)，不落账；resolve_step_remediation 三态(supplement_step 判OK / confirm_ng 经 _remediation_bypass 重发落账 / redo 丢弃)；_parse_missing_steps 兼容两种文案+回退推算；默认关零差异",
+      "files": [
+        "backend/api/source_event_trigger_mixin.py",
+        "backend/api/source_state_init.py",
+        "backend/api/source_routes.py"
+      ],
+      "keywords": ["NG补做", "缺步骤", "延迟落账", "deferred settlement", "remediation", "_pending_remediation", "resolve_step_remediation", "supplement_step", "confirm_ng", "_trigger_event"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "人工确认弹窗扩展三态处置（缺步骤补做）",
+      "symptom": "缺步骤挂起后操作员只能确认重做，无法选补步骤判合格或认 NG",
+      "root_cause": "人工确认弹窗只有单一重做动作，未透传补做 action；后端 ack 未路由到补做处置",
+      "fix": "检测结果暴露 pending_remediation；前端遮罩挂起态展示缺项+三按钮(补步骤判合格/认NG/重做)，普通+提权两路径透传 action；后端 _do_ack_pending 挂起态路由 resolve_step_remediation 缺省 redo",
+      "files": [
+        "backend/api/source_routes.py",
+        "frontend/src/api/detection.js",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": ["人工确认", "ack", "pending_remediation", "三按钮", "补步骤", "提权确认", "elevated"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-source"],
+  "files_changed": [
+    "backend/api/source_event_trigger_mixin.py",
+    "backend/api/source_state_init.py",
+    "backend/api/source_routes.py",
+    "frontend/src/api/detection.js",
+    "frontend/src/views/Monitor/index.vue",
+    "electron/package.json",
+    "docs/CHANGELOG.md",
+    "tests/test_ng_remediation_step_v323.py",
+    "tests/test_ack_remediation_routing_v323.py"
+  ]
+}

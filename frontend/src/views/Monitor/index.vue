@@ -79,8 +79,29 @@
               <span class="text-amber-300 font-mono">{{ pendingAckRemainSec }} 秒后自动确认</span>
             </template>
           </div>
+          <!-- v3.23 缺步骤延迟落账挂起: 展示缺项明细 -->
+          <div v-if="pendingAckDisplay.remediation" class="flex gap-2 items-start pt-2 border-t border-slate-700">
+            <span class="text-gray-400 flex-shrink-0">缺步骤:</span>
+            <span class="text-rose-300 font-bold break-all">
+              {{ (pendingAckDisplay.remediation.missing || []).join('、') || '（未解析出具体步骤）' }}
+            </span>
+          </div>
         </div>
-        <div class="flex items-center justify-center gap-3">
+        <!-- v3.23 挂起态: 补步骤/认NG/重做 三选一; 普通确认: 单"重做"按钮 -->
+        <template v-if="pendingAckDisplay.remediation">
+          <div class="text-xs text-gray-400 text-center">
+            工人补做缺的步骤后点「补步骤」直接判合格（不重置周期）；确认确实漏做点「认 NG」；想整件重做点「重做」。
+          </div>
+          <div class="flex items-center justify-center gap-2 flex-wrap">
+            <el-button type="success" size="large" :loading="pendingAckDisplay.acking"
+              @click="ackPendingForChannel(pendingAckDisplay.channel, 'supplement_step')">补步骤 — 判合格</el-button>
+            <el-button type="danger" size="large" plain :loading="pendingAckDisplay.acking"
+              @click="ackPendingForChannel(pendingAckDisplay.channel, 'confirm_ng')">认 NG</el-button>
+            <el-button size="large" :loading="pendingAckDisplay.acking"
+              @click="ackPendingForChannel(pendingAckDisplay.channel, 'redo')">重做本件</el-button>
+          </div>
+        </template>
+        <div v-else class="flex items-center justify-center gap-3">
           <span v-if="pendingAckDisplay.acking" class="text-xs text-gray-400">提交中...</span>
           <el-button
             type="warning"
@@ -1456,14 +1477,36 @@
               <span class="text-amber-300 font-mono">{{ pendingAckRemainSec }} 秒后自动确认</span>
             </template>
           </div>
+          <!-- v3.23 缺步骤延迟落账挂起: 缺项明细 -->
+          <div v-if="pendingAckDisplay.remediation" class="flex items-start gap-3">
+            <span class="text-gray-400 w-20 shrink-0">缺步骤</span>
+            <span class="text-rose-300 font-bold break-all">
+              {{ (pendingAckDisplay.remediation.missing || []).join('、') || '（未解析出具体步骤）' }}
+            </span>
+          </div>
           <div class="text-xs text-gray-500 bg-slate-950/60 rounded p-2 border-l-2 border-amber-700/50 leading-relaxed">
-            确认后清当前周期运行时（步骤序列、识别状态），<span class="text-amber-300">合格 / 不合格 / 自定义计数器累计值不变动</span>。如果有多个工位都在等确认，这里会按顺序依次显示。
+            <template v-if="pendingAckDisplay.remediation">
+              本件缺步骤被<span class="text-amber-300">延迟落账</span>（还没记 OK/NG）。工人补做后点「补步骤」直接判合格；确认确实漏做点「认 NG」落账；想整件重做点「重做」。
+            </template>
+            <template v-else>
+              确认后清当前周期运行时（步骤序列、识别状态），<span class="text-amber-300">合格 / 不合格 / 自定义计数器累计值不变动</span>。如果有多个工位都在等确认，这里会按顺序依次显示。
+            </template>
           </div>
         </div>
 
-        <div class="px-5 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-3">
+        <!-- v3.23 挂起态: 补步骤/认NG/重做 三选一; 普通确认: 单"重做"按钮 -->
+        <div class="px-5 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-3 flex-wrap">
           <span v-if="pendingAckDisplay.acking" class="text-xs text-gray-400">提交中...</span>
+          <template v-if="pendingAckDisplay.remediation">
+            <el-button size="large" :loading="pendingAckDisplay.acking"
+              @click="ackPendingForChannel(pendingAckDisplay.channel, 'redo')">重做本件</el-button>
+            <el-button type="danger" size="large" plain :loading="pendingAckDisplay.acking"
+              @click="ackPendingForChannel(pendingAckDisplay.channel, 'confirm_ng')">认 NG</el-button>
+            <el-button type="success" size="large" :loading="pendingAckDisplay.acking"
+              @click="ackPendingForChannel(pendingAckDisplay.channel, 'supplement_step')">补步骤 — 判合格</el-button>
+          </template>
           <el-button
+            v-else
             type="warning"
             size="large"
             :loading="pendingAckDisplay.acking"
@@ -2361,6 +2404,8 @@ const processChannelResult = (ch, d) => {
   chData.recentEvents = d.recent_events || [];
   // v3.9.x 事件人工确认阻塞态 (后端透出, 前端 modal 直接读)
   chData.pendingAck = d.pending_ack || { active: false };
+  // v3.23 缺步骤延迟落账挂起明细 (None=无挂起; 有值时 ack 窗展示缺项 + "补步骤"按钮)
+  chData.pendingRemediation = d.pending_remediation || null;
   if (d.tracking) chData.tracking = d.tracking;
 
   // MES 实时数据 — 每个工位各自显示，不限 selectedChannel
@@ -4768,6 +4813,7 @@ const startPolling = () => {
       // 不写到 multiChannelData[0].pendingAck 的话, 全屏覆盖层 computed 永远拿不到, 弹不出
       if (!multiChannelData.value[0]) multiChannelData.value[0] = {};
       multiChannelData.value[0].pendingAck = data.pending_ack || { active: false };
+      multiChannelData.value[0].pendingRemediation = data.pending_remediation || null;
       multiChannelData.value[0].recentEvents = data.recent_events || [];
       
       if (isVideoSource.value && !isDraggingProgress.value) {
@@ -5646,6 +5692,8 @@ const pendingAckChannelStates = computed(() => {
           .filter(e => e.require_ack)
           .slice(-1)[0]?.reason || '',
         acking: !!multiChannelData.value[ch]?.pendingAckSubmitting,
+        // v3.23 缺步骤延迟落账挂起 (有值 → ack 窗展示缺项 + "补步骤/认NG/重做"三按钮)
+        remediation: multiChannelData.value[ch]?.pendingRemediation || null,
       });
     }
   }
@@ -5672,23 +5720,28 @@ const pendingAckRemainSec = computed(() => {
   return Math.max(0, d.timeoutSec - pendingAckWaitedSec.value);
 });
 
-const ackPendingForChannel = async (ch) => {
+// v3.23 action: null/redo=重做 / supplement_step=补步骤判OK / confirm_ng=认NG落账
+const ackPendingForChannel = async (ch, action = null) => {
   const chData = multiChannelData.value[ch];
   if (!chData || !chData.pendingAck?.active) return;
   if (chData.pendingAckSubmitting) return;
   chData.pendingAckSubmitting = true;
   try {
-    const res = await ackPendingEvent(ch);
+    const res = await ackPendingEvent(ch, action);
     if (res?.data?.acked) {
-      ElMessage.success(`工位 ${ch + 1} 确认成功，已重置当前周期`);
+      const msg = action === 'supplement_step' ? '已补步骤判合格'
+        : action === 'confirm_ng' ? '已确认 NG'
+        : '已确认，重置当前周期';
+      ElMessage.success(`工位 ${ch + 1} ${msg}`);
     } else {
       ElMessage.info(`工位 ${ch + 1} 当前没有待确认事件`);
     }
     chData.pendingAck = { active: false };
+    chData.pendingRemediation = null;
   } catch (e) {
-    // 403 = 当前登录账号没有"人工确认"权限 (常见: 操作员) → 弹借管理员密码提权窗
+    // 403 = 当前登录账号没有"人工确认"权限 (常见: 操作员) → 弹借管理员密码提权窗 (携带本次动作)
     if (e?.response?.status === 403) {
-      openElevateDialog(ch);
+      openElevateDialog(ch, action);
     } else {
       console.error('[ackPendingForChannel] failed', e);
       ElMessage.error('确认失败：' + (e?.message || '未知错误'));
@@ -5700,10 +5753,10 @@ const ackPendingForChannel = async (ch) => {
 
 // v3.23 借密码提权确认: 操作员无 ack 权限时, 输入管理员账密授权一次, 不改当前登录身份.
 // 确认完仍是该操作员的会话 (后端 ack-event-elevated 只校验一次账密 + 权限, 不发 token).
-const elevateDialog = ref({ visible: false, channel: 0, username: '', password: '', submitting: false });
+const elevateDialog = ref({ visible: false, channel: 0, username: '', password: '', submitting: false, action: null });
 
-const openElevateDialog = (ch) => {
-  elevateDialog.value = { visible: true, channel: ch, username: '', password: '', submitting: false };
+const openElevateDialog = (ch, action = null) => {
+  elevateDialog.value = { visible: true, channel: ch, username: '', password: '', submitting: false, action };
 };
 
 const submitElevatedAck = async () => {
@@ -5714,12 +5767,12 @@ const submitElevatedAck = async () => {
   }
   d.submitting = true;
   try {
-    const res = await ackPendingEventElevated(d.channel, d.username, d.password);
+    const res = await ackPendingEventElevated(d.channel, d.username, d.password, d.action);
     if (res?.data?.acked) {
       const ch = d.channel;
       ElMessage.success(`已由 ${res.data.authorized_by || d.username} 授权，工位 ${ch + 1} 确认成功`);
       const chData = multiChannelData.value[ch];
-      if (chData) chData.pendingAck = { active: false };
+      if (chData) { chData.pendingAck = { active: false }; chData.pendingRemediation = null; }
     } else {
       ElMessage.info('当前没有待确认事件');
     }

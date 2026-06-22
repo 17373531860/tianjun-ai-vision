@@ -973,3 +973,24 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 - `debug-mes` MES 数据 / 扫码 / Hook
 - `debug-alarm` 报警串口
 - `debug-session` 数据记录 (Session/Cycle/Step DB 行) 异常
+
+---
+
+## NG 补做：缺步骤延迟落账（v3.23.1+）
+
+**触发条件**：项目 `pipeline_config.ng_remediation.enabled=true` 且 `allow_step=true`，本周期判 NG 且 NG 原因含「缺步骤」（缺少 / 缺少步骤 / 周期不完整）。默认 `enabled=false` → 整套逻辑不触发，行为与 v3.23.0 前严格一致。
+
+**唯一收口点**：`source_event_trigger_mixin.py: _trigger_event` 顶部守门。命中即：不 `end_cycle` / 不计数 / 不推 MES，改为挂起（报警提示工人），写 `_pending_remediation` 快照（缺项清单 / 原因 / event_id / cycle_id），`return False`。
+
+**三态处置**：`resolve_step_remediation(action, operator)`
+- `supplement_step` → 信任补做，直接判 OK 落账（不重发 NG）。
+- `confirm_ng` → 置一次性旁路标志 `_remediation_bypass=True` 后重发 NG 事件，此刻才真正落账（旁路防守门自锁）。
+- `redo`（缺省）→ `_discard_empty_cycle` 丢弃在制周期重检。
+
+**前端入口**：检测结果暴露 `pending_remediation`（None=无挂起）；监控页全局人工确认遮罩挂起态展示缺步骤清单 + 三按钮，普通确认与提权确认（借管理员密码）两路径都透传 `action`。后端 `_do_ack_pending` 检测到挂起态时路由到 `resolve_step_remediation`，缺省 redo（保留老「确认重做」语义且不留孤儿在制行）。
+
+**排查要点**：
+- 挂起但前端没弹三按钮 → 查检测结果 `pending_remediation` 是否为 None；查 `_ng_remediation` 是否真解析进 VSM（`source_project_config_apply.py`）。
+- 缺项清单为空 → `_parse_missing_steps` 文案不匹配；已兼容「缺少:」「缺少步骤:」+ 回退用 `steps_config` 对比 `current_cycle_steps` 推算。
+- 认 NG 后又被挂起（自锁）→ `_remediation_bypass` 没置或被提前清。
+- 包装少装的「补滑块」是另一条线（`packaging_flow_coordinator` 的 `pending_remediation` 箱挂起），与这里的「缺步骤」检测层延迟落账正交，别混。

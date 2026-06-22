@@ -127,7 +127,18 @@ class EventTriggerMixin:
         # 判断是否为合格事件（事件ID为1或者名称包含"合格"）
         current_event_id = event.get('id')
         is_good = current_event_id == 1
-        
+
+        # v3.23 NG 补做 — 缺步骤延迟落账守门 (唯一收口点, 默认关=零差异):
+        # 本周期判 NG 且原因是"缺步骤", 且项目开了补步骤策略 → 不 end_cycle / 不计数 /
+        # 不推 MES, 改为挂起 (报警提示工人), 等人工补步骤(判OK) / 认NG(落账) / 重做(丢弃).
+        # _remediation_bypass: confirm_ng 重发 NG 时一次性旁路, 防自锁.
+        if (current_event_id == 2
+                and getattr(self, 'current_cycle_id', None)
+                and not getattr(self, '_remediation_bypass', False)
+                and self._should_defer_for_remediation(reason)):
+            self._enter_step_remediation_hold(event, reason)
+            return False
+
         # Record cycle time for both OK and NG cycles
         if self.cycle_start_time is not None:
             # v3.10.x B方案v2: 视频源用帧号差/fps 算 CT, 跟客户机解码速度解耦
@@ -471,3 +482,140 @@ class EventTriggerMixin:
             alarm_router.trigger_alarm(event_type, channel_id=self.channel_id)
         except Exception as e:
             print(f"触发报警失败: {e}")
+
+    # ============================================================
+    # v3.23 NG 补做 (缺步骤延迟落账) — 守门 / 解析 / 挂起 / 解析
+    # ============================================================
+
+    def _should_defer_for_remediation(self, reason: str) -> bool:
+        """本次 NG 是否应走"缺步骤延迟落账"挂起 (而非立刻落 NG).
+
+        条件: 项目开了补步骤策略 (_ng_remediation.enabled and allow_step) 且 NG 原因
+        是"缺步骤" (reason 含 '缺少' 或 '周期不完整'). 默认关 → 永远返回 False = 零差异.
+        """
+        rem = getattr(self, '_ng_remediation', None) or {}
+        if not (rem.get('enabled') and rem.get('allow_step')):
+            return False
+        r = reason or ''
+        return ('缺少' in r) or ('周期不完整' in r)
+
+    def _parse_missing_steps(self, reason: str) -> list:
+        """从 NG 原因里抠出缺的步骤标签列表.
+
+        兼容两种文案: 顺序模式 "周期不完整，缺少: ['B']" / 检测模式 "缺少步骤: ['B']".
+        正则抠不到时兜底用 "期望步骤 − 本周期已出现步骤" 反推 (与 NG TOP3 fallback 同口径),
+        保证弹窗缺项明细 + 补步骤落库不空.
+        """
+        import re
+        r = reason or ''
+        out = []
+        m = re.search(r'缺少(?:步骤)?[：:]\s*\[?([^\]]+)\]?', r)
+        if m:
+            for s in re.split(r'[,，]', m.group(1)):
+                n = s.strip().strip("'\" ")
+                if n:
+                    out.append(n)
+        if out:
+            return out
+        # 兜底: steps_config 期望步骤 (非替补) - 本周期已出现步骤, 保留 steps_config 顺序
+        try:
+            steps_config = (self.project_config or {}).get('steps_config', []) or []
+            actual = set(getattr(self, 'current_cycle_steps', []) or [])
+            return [s.get('label') for s in steps_config
+                    if s.get('label') and not s.get('is_backup') and s.get('label') not in actual]
+        except Exception:
+            return []
+
+    def _enter_step_remediation_hold(self, event, reason: str) -> None:
+        """缺步骤 NG 挂起: 报警 + 事件日志提示工人, 但不 end_cycle / 不计数 / 不推 MES.
+
+        复用 _pending_ack 字段进阻塞态 (整条检测线定格 + 前端弹确认窗); 额外写
+        _pending_remediation 快照供前端展示缺项明细 + 后续 resolve_step_remediation 用.
+        """
+        current_event_id = event.get('id')
+        missing = self._parse_missing_steps(reason)
+        ack_timeout_sec = max(0, int(event.get('ack_timeout_sec', 0) or 0))
+
+        self._pending_remediation = {
+            'kind': 'missing_step',
+            'missing': missing,
+            'reason': reason,
+            'event_id': str(current_event_id),
+            'event_name': event.get('name', ''),
+            'cycle_id': self.current_cycle_id,
+            'created_at': time.time(),
+        }
+        # 进阻塞态 (复用人工确认字段, 前端 ack 窗据此弹出)
+        self._pending_ack = True
+        self._pending_ack_started_at = time.time()
+        self._pending_ack_event_id = str(current_event_id)
+        self._pending_ack_event_name = event.get('name', '')
+        self._pending_ack_timeout_sec = ack_timeout_sec
+
+        # 事件日志 (Toast / 语音提示工人来处理) — 标 remediation 让前端区分
+        self._event_seq += 1
+        self.events_log.append({
+            'seq': self._event_seq,
+            'event_id': str(current_event_id),
+            'event_name': event.get('name', ''),
+            'reason': reason,
+            'timestamp': time.time(),
+            'show_notification': event.get('show_notification', False),
+            'toast_id': event.get('toast_id', 'ng'),
+            'had_workpiece': False,
+            'should_warn_no_barcode': False,
+            'require_ack': True,
+            'ack_timeout_sec': ack_timeout_sec,
+            'remediation': True,
+        })
+        # 物理报警照常 (现场需要被提示有件待处理), 但落账 (DB cycle / 计数 / MES) 全延迟
+        self._dispatch_event_alarm(current_event_id)
+        print(f"[补做] 缺步骤 NG 延迟落账挂起: missing={missing} reason={reason!r} "
+              f"(channel_id={self.channel_id}) 等待 补步骤/认NG/重做")
+
+    def resolve_step_remediation(self, action: str, operator: str = None) -> dict:
+        """解析缺步骤挂起 (供 ack 端点调用).
+
+        action:
+          - 'supplement_step': 信任人工补做, 把缺的步骤补进本周期序列 → 判 OK 落账
+          - 'confirm_ng'     : 认这个 NG → 现在才落账 NG (绕 defer 守门一次)
+          - 'redo'           : 丢弃在制周期, 等下一检测周期重检 (不留 NG 记录)
+        返回 {resolved: bool, action: str, ...}
+        """
+        pend = getattr(self, '_pending_remediation', None)
+        if not pend:
+            return {"resolved": False, "reason": "no pending remediation"}
+        missing = list(pend.get('missing') or [])
+        reason = pend.get('reason') or ''
+
+        # 先清挂起 + 阻塞态 (否则 _trigger_event 入口被 _pending_ack / _pending_remediation 拦)
+        self._pending_remediation = None
+        self._pending_ack = False
+        self._pending_ack_started_at = None
+        self._pending_ack_event_id = None
+        self._pending_ack_event_name = None
+        self._pending_ack_timeout_sec = 0
+
+        if action == 'supplement_step':
+            for lbl in missing:
+                if lbl not in self.current_cycle_steps:
+                    self.current_cycle_steps.append(lbl)
+            op = f" by {operator}" if operator else ""
+            self._trigger_event(1, f"补步骤{missing}后合格{op}")
+            print(f"[补做] 补步骤完成判 OK: missing={missing} operator={operator}")
+            return {"resolved": True, "action": "supplement_step", "missing": missing}
+
+        if action == 'confirm_ng':
+            self._remediation_bypass = True
+            try:
+                self._trigger_event(2, reason)
+            finally:
+                self._remediation_bypass = False
+            print(f"[补做] 认 NG 落账: reason={reason!r} operator={operator}")
+            return {"resolved": True, "action": "confirm_ng"}
+
+        # redo: 丢弃在制周期 (删行 + 清运行时), 等下一周期重检
+        self._discard_empty_cycle()
+        self._clear_step_runtime_state()
+        print(f"[补做] 重做丢弃在制周期 operator={operator}")
+        return {"resolved": True, "action": "redo"}

@@ -205,6 +205,17 @@ def _init_event_and_cycle_state(h):
     h._pending_ack_event_name = None
     h._pending_ack_timeout_sec = 0
 
+    # v3.23 NG 补做 (缺步骤延迟落账):
+    #   缺步骤 NG 且项目开了 _ng_remediation.allow_step 时, 不立刻 end_cycle / 计数 /
+    #   推 MES, 而是把"本该 NG 的这个周期"挂起 (报警+提示工人), 等人工:
+    #     - 补步骤 (resolve_step_remediation('supplement_step')) → 信任补做, 直接判 OK 落账
+    #     - 认 NG  (resolve_step_remediation('confirm_ng'))      → 现在才落账 NG
+    #     - 重做   (resolve_step_remediation('redo'))            → 丢弃在制周期重检
+    #   _pending_remediation: None=无挂起; dict={kind/missing/reason/event_id/cycle_id/...}
+    #   _remediation_bypass : 一次性旁路标志, confirm_ng 重发 NG 事件时绕开 defer 守门防自锁
+    h._pending_remediation = None
+    h._remediation_bypass = False
+
 
 def _init_tracking_state(h):
     """Tracking 模式 (物品清点) 全部状态"""

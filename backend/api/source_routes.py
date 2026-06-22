@@ -31,7 +31,7 @@ from fastapi import Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.core.auth_deps import require_perm
+from backend.core.auth_deps import require_perm, get_current_user, CurrentUser
 from backend.core.config import settings
 from backend.db.database import get_db
 
@@ -1098,7 +1098,8 @@ def reset_detection_stats(channel: int = Query(0)):
     return {"status": "success", "message": "统计数据已重置"}
 
 
-def _do_ack_pending(mgr, channel: int) -> dict:
+def _do_ack_pending(mgr, channel: int, action: Optional[str] = None,
+                    operator: Optional[str] = None) -> dict:
     """人工确认解除阻塞的核心逻辑 (供普通确认 + 借密码提权确认复用)。
 
     使用场景:
@@ -1114,6 +1115,14 @@ def _do_ack_pending(mgr, channel: int) -> dict:
     """
     if not getattr(mgr, '_pending_ack', False):
         return {"status": "success", "acked": False, "reason": "no pending ack"}
+
+    # v3.23 缺步骤延迟落账挂起: 走 resolve_step_remediation.
+    #   action='supplement_step' 补做缺步→判OK / 'confirm_ng' 认NG落账 / 'redo'(缺省) 丢弃重做.
+    # 缺省 redo 保持老"确认重做"按钮语义 + 避免清掉 _pending_ack 却漏清挂起快照 / 留孤儿在制行.
+    if getattr(mgr, '_pending_remediation', None):
+        res = mgr.resolve_step_remediation(action or 'redo', operator=operator)
+        return {"status": "success", "acked": True, "remediation": res}
+
     ev_name = getattr(mgr, '_pending_ack_event_name', '?') or '?'
     ev_id = getattr(mgr, '_pending_ack_event_id', '') or ''
     started = getattr(mgr, '_pending_ack_started_at', 0) or 0
@@ -1164,14 +1173,27 @@ def _do_ack_pending(mgr, channel: int) -> dict:
 # 角色设置给 operator 勾上 monitor.detection.ack 即可。engineer/admin 默认就有 (monitor.*)。
 @router.post("/detection/ack-event",
              dependencies=[Depends(require_perm("monitor.detection.ack"))])
-def ack_pending_event(channel: int = Query(0)):
-    """工人确认重做 — 解除 require_ack 触发的阻塞态 (需 monitor.detection.ack 权限)。"""
-    return _do_ack_pending(_get_mgr(channel), channel)
+def ack_pending_event(channel: int = Query(0),
+                      action: Optional[str] = Query(
+                          None,
+                          description="缺步骤挂起时的解析动作: supplement_step / confirm_ng / redo(缺省)"),
+                      user: CurrentUser = Depends(get_current_user)):
+    """工人确认 — 解除 require_ack 触发的阻塞态 (需 monitor.detection.ack 权限)。
+
+    v3.23: 若本次是"缺步骤延迟落账"挂起 (pending_remediation), action 决定怎么收尾:
+      - supplement_step: 信任补做, 缺的步骤补进序列 → 判 OK 落账
+      - confirm_ng     : 认这个 NG → 现在才落账 NG
+      - redo (缺省)    : 丢弃在制周期重检 (= 老"确认重做"语义)
+    普通 require_ack 事件 (无 remediation) action 被忽略, 行为与改前一致。
+    """
+    return _do_ack_pending(_get_mgr(channel), channel, action=action,
+                           operator=getattr(user, 'username', None))
 
 
 class _ElevatedAckInput(BaseModel):
     username: str
     password: str
+    action: Optional[str] = None  # v3.23 缺步骤挂起解析动作 (借权时同样可选补步骤/认NG/重做)
 
 
 # 运行时借权确认: 操作员无 ack 权限时, 输入管理员账号密码"借权一次"解除阻塞。
@@ -1204,9 +1226,10 @@ def ack_pending_event_elevated(body: _ElevatedAckInput, channel: int = Query(0),
             detail=f"账号 {username} 没有人工确认 NG 的权限",
         )
 
-    result = _do_ack_pending(_get_mgr(channel), channel)
+    result = _do_ack_pending(_get_mgr(channel), channel,
+                             action=body.action, operator=username)
     result["authorized_by"] = username
-    print(f"[ack] 借权确认: 由 {username} 授权解除 (channel_id={channel})")
+    print(f"[ack] 借权确认: 由 {username} 授权解除 (channel_id={channel}, action={body.action or 'redo'})")
     return result
 
 
@@ -1431,6 +1454,8 @@ def get_detection_results(channel: int = Query(0)):
         # v3.23 NG 补做策略 (前端确认弹窗据此决定是否展示"补步骤/补数量"按钮)
         "ng_remediation": getattr(mgr, '_ng_remediation', None)
         or {'enabled': False, 'allow_step': True, 'allow_count': True},
+        # v3.23 缺步骤延迟落账挂起明细 (None=无挂起; 前端 ack 窗据此展示缺项 + "补步骤"按钮)
+        "pending_remediation": getattr(mgr, '_pending_remediation', None),
     }
 
     result['model_task'] = getattr(mgr, 'model_task', 'detect')
