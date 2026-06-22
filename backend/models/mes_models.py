@@ -798,6 +798,12 @@ class PackagingFlowConfig(Base):
     tail_paper_step_label = Column(String(64), nullable=True)
     event_missing_paper = Column(Integer, nullable=True)   # 尾箱缺工单异常事件
 
+    # 缺油嘴视觉 gate (默认关): 每箱封箱结算前"放油嘴"步骤必须 covered, 否则不收尾 + 报警.
+    # 与塞工单 gate 同机制 (复用 is_packaging_paper_order_covered 探测), 区别: 每箱都查 (非仅尾箱).
+    oil_nozzle_required = Column(Boolean, default=False)
+    oil_nozzle_step_label = Column(String(64), nullable=True)
+    event_missing_nozzle = Column(Integer, nullable=True)  # 缺油嘴异常事件
+
     plugin_data = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -847,6 +853,10 @@ class PackagingFlowRun(Base):
 
     final_result = Column(String(8), nullable=True)   # OK / NG / NULL=进行中
     mes_pushed = Column(Boolean, default=False)
+
+    # 强制结案留痕 (管理员/主管手动强制收尾时填; 正常完成为空) — 审计用
+    forced_reason = Column(String(512), nullable=True)  # 必填理由
+    forced_by = Column(String(64), nullable=True)       # 授权账号 (当前登录用户)
 
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import math
 import threading
+import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -211,6 +212,10 @@ class PackagingFlowCoordinator:
             "tail_paper_order_required": bool(getattr(row, "tail_paper_order_required", False)),
             "tail_paper_step_label": getattr(row, "tail_paper_step_label", None),
             "event_missing_paper": getattr(row, "event_missing_paper", None),
+            # v3.23 缺油嘴 gate (每箱查, 默认关零差异)
+            "oil_nozzle_required": bool(getattr(row, "oil_nozzle_required", False)),
+            "oil_nozzle_step_label": getattr(row, "oil_nozzle_step_label", None),
+            "event_missing_nozzle": getattr(row, "event_missing_nozzle", None),
         }
 
     # =============================================================
@@ -386,7 +391,17 @@ class PackagingFlowCoordinator:
             _pkg_dbg("扫码同号刷新", f"order={norm} box_done={run.get('box_done')}/{run.get('box_total')}")
             self._persist_run(run, db)
             return
-        # 不同号 = 新工单. 旧工单还在 (= 没做满) → 漏箱处置
+        # 不同号, 但一箱都还没做完 (box_done==0): 更可能是"首个箱标签贴错"而非换工单
+        # (一箱都没做谈不上漏箱). 走标签错判定 — block=报警不切等扫回正确标签 / warn=报警后换单.
+        if run["box_done"] == 0 and cfg.get("on_label_mismatch", "warn") != "off":
+            self._raise_alarm(cfg, "label_mismatch",
+                              f"工单 {run['order_no']} 箱标签 {norm} 与工单号不符 (疑似贴错标签)")
+            if cfg.get("on_label_mismatch") == "block":
+                self._persist_run(run, db)
+                return
+            self._open_order(config_id, cfg, norm, code, db)  # warn: 报警后换单
+            return
+        # 不同号 + 已做过箱 = 新工单. 旧工单还在 (= 没做满) → 漏箱处置
         if run["box_total"] > 0 and run["box_done"] < run["box_total"]:
             self._raise_alarm(cfg, "short_box",
                               f"工单 {run['order_no']} 应做 {run['box_total']} 箱, "
@@ -416,7 +431,8 @@ class PackagingFlowCoordinator:
     # =============================================================
 
     def on_cycle_settled(self, channel_id: int, cycle_id: int, is_good: bool, db,
-                         slider_count: Optional[int] = None) -> None:
+                         slider_count: Optional[int] = None,
+                         remediation: Optional[Dict[str, Any]] = None) -> None:
         with self._lock:
             config_id = self._channel_to_config.get(channel_id)
             if config_id is None:
@@ -425,10 +441,14 @@ class PackagingFlowCoordinator:
             run = self._runs.get(config_id)
             if cfg is None or run is None:
                 return  # 没开工单 → 忽略
+            # v3.23: 已挂起等补做时, 检测层又来一个周期 → 忽略, 由人工补做/重做接口推进,
+            # 避免阻塞态被新周期覆盖.
+            if run.get("status") == "pending_remediation":
+                return
             if cfg.get("count_unit") == "sliders":
                 # sliders 口径: 一个检测周期 = 一个箱 (即便没开箱也会自动开第 1 箱)
                 self._on_cycle_settled_sliders(cfg, run, cycle_id, bool(is_good),
-                                               slider_count, db)
+                                               slider_count, db, remediation)
                 return
             _pkg_dbg("周期结算 trays",
                      f"order={run.get('order_no')} box={run.get('current_box_index')} "
@@ -448,24 +468,35 @@ class PackagingFlowCoordinator:
     # 强制停止 / 待机结算 (M3 接停止/待机事件挂接点)
     # =============================================================
 
-    def on_forced_settle(self, config_id: int, db) -> None:
-        """强制停止 / 待机: 按 on_forced_stop 策略处置进行中工单.
+    def on_forced_settle(self, config_id: int, db,
+                         reason: Optional[str] = None,
+                         operator: Optional[str] = None,
+                         strategy_override: Optional[str] = None) -> bool:
+        """强制停止 / 待机 / 管理员手动强制结案: 处置进行中工单.
 
         settle = 收尾结算 (未满箱按 on_forced_stop_partial 判合格性) + 完成工单
         abort  = 直接作废 (不结算, 标 aborted)
         keep   = 原样保留进行中 (待恢复继续, 不动状态)
+
+        reason/operator: 管理员手动「强制结案」时填的必填理由 + 授权账号, 落库审计.
+        strategy_override: 手动强制结案时强制走 settle (不受配置 keep/abort 影响) — 传 "settle".
+        返回 True = 真的动了工单 (结算/作废); False = 无工单 / keep 未动.
         """
         with self._lock:
             cfg = self._configs.get(config_id)
             run = self._runs.get(config_id)
             if cfg is None or run is None:
-                return
-            strategy = cfg.get("on_forced_stop", "settle")
+                return False
+            strategy = strategy_override or cfg.get("on_forced_stop", "settle")
             if strategy == "keep":
-                return
+                return False
+            if reason:
+                run["forced_reason"] = reason
+            if operator:
+                run["forced_by"] = operator
             if strategy == "abort":
                 self._abort_order(run, db)
-                return
+                return True
             # settle: 结算当前未结算的箱 + 完成工单.
             # sliders 口径箱已逐周期即时结算, 半箱 (开了没结算) 直接丢弃, 不走托盘口径结算.
             if (cfg.get("count_unit") != "sliders"
@@ -473,6 +504,16 @@ class PackagingFlowCoordinator:
                 self._settle_current_box(run, cfg, db,
                                          force_partial=cfg.get("on_forced_stop_partial", "fail"))
             self._complete_order(run, cfg, db, forced=True)
+            return True
+
+    def force_settle_manual(self, config_id: int, db, reason: str,
+                            operator: Optional[str] = None) -> bool:
+        """管理员/主管「强制结案」: 必带理由, 强制走 settle 收尾 (忽略配置 keep/abort).
+
+        返回 True = 已结案; False = 该配置当前无进行中工单.
+        """
+        return self.on_forced_settle(config_id, db, reason=reason,
+                                     operator=operator, strategy_override="settle")
 
     def on_forced_settle_by_channel(self, channel_id: int, db,
                                     is_standby: bool = False) -> None:
@@ -490,6 +531,68 @@ class PackagingFlowCoordinator:
             if is_standby and not cfg.get("forced_settle_on_standby", True):
                 return
             self.on_forced_settle(config_id, db)  # RLock 可重入
+
+    # =============================================================
+    # v3.23 NG 补做: 少装挂起后人工补做 (补滑块) / 重做
+    # =============================================================
+
+    def supplement_sliders(self, config_id: int, db,
+                           target_count: Optional[int] = None,
+                           operator: Optional[str] = None,
+                           reason: Optional[str] = None) -> bool:
+        """对挂起中的少装箱「补滑块」: 补齐数量后直接落账, 不重置周期.
+
+        target_count: None=自动补齐到目标; 传值=操作员手动指定最终数 (clamp 到 [0, 目标]).
+        operator/reason: 审计留痕 (谁补的 / 理由), 写进 box_details[].remediated.
+        返回 True=补做成功落账; False=当前无挂起箱.
+        """
+        with self._lock:
+            cfg = self._configs.get(config_id)
+            run = self._runs.get(config_id)
+            if cfg is None or run is None:
+                return False
+            pend = run.get("pending_box")
+            if not pend or run.get("status") != "pending_remediation":
+                return False
+            target = int(pend.get("target") or 0)
+            orig = int(pend.get("sliders") or 0)
+            if target_count is None:
+                final_sc = target
+            else:
+                final_sc = max(0, min(int(target_count), target))
+            ok = (target <= 0 or final_sc == target)
+            remediated = {
+                "by": operator or "未知", "from": orig, "to": final_sc,
+                "reason": (reason or "补滑块"), "ts": time.time(),
+            }
+            is_tail = bool(pend.get("is_tail"))
+            cycle_id = pend.get("cycle")
+            run["pending_box"] = None
+            run["status"] = "running"
+            _pkg_dbg("补滑块落账",
+                     f"order={run.get('order_no')} box={run.get('current_box_index')} "
+                     f"{orig}->{final_sc}/{target} by={operator}")
+            self._finalize_box_sliders(run, cfg, db, final_sc, ok, is_tail,
+                                       cycle_id, target, remediated=remediated)
+            return True
+
+    def redo_pending(self, config_id: int, db,
+                     operator: Optional[str] = None) -> bool:
+        """对挂起中的少装箱「重做」: 丢弃本箱, 保持同一箱号等下一检测周期重新结算.
+
+        返回 True=已转回进行中等重测; False=当前无挂起箱.
+        """
+        with self._lock:
+            run = self._runs.get(config_id)
+            if run is None or run.get("status") != "pending_remediation":
+                return False
+            run["pending_box"] = None
+            run["current_box_sliders"] = 0
+            run["status"] = "running"
+            _pkg_dbg("少装重做",
+                     f"order={run.get('order_no')} box={run.get('current_box_index')} by={operator}")
+            self._persist_run(run, db)
+            return True
 
     # =============================================================
     # 状态机内部步骤
@@ -516,6 +619,7 @@ class PackagingFlowCoordinator:
         # trays 默认路径 (v3.21 原行为, 零差异)
         box_total = self._resolve_box_total(cfg, mes_data, spec)
         run = self._new_run_dict(config_id, norm, raw, spec, box_total)
+        run["cust_name"] = mes_data.get("cust_name")
         self._persist_run(run, db, create=True)
         self._runs[config_id] = run
 
@@ -546,6 +650,7 @@ class PackagingFlowCoordinator:
         # 4) 箱数 + 尾箱目标
         box_total, tail_target = compute_box_plan(slider_total, items_per_box)
         run = self._new_run_dict(config_id, norm, raw, spec, box_total)
+        run["cust_name"] = mes_data.get("cust_name")
         run["count_unit"] = "sliders"
         run["slider_total"] = slider_total
         run["items_per_box"] = items_per_box
@@ -631,9 +736,27 @@ class PackagingFlowCoordinator:
             print(f"[PackagingFlow] 塞工单探测异常 (隔离): {e}")
             return True
 
+    def _probe_oil_nozzle(self, cfg: Dict[str, Any]) -> bool:
+        """探测本周期"放油嘴"步骤是否已 covered (每箱缺油嘴 gate, 复用塞工单同款步骤探测钩子).
+
+        与塞工单 gate 区别: 每箱都重判 (不缓存 paper_order_done), 且无探测器 / 没配步骤标签时
+        返回 True (不阻断) —— 每箱 gate 若误卡会卡死整条线, 故未配置时退化为放行.
+        """
+        if self._paper_order_probe is None:
+            return True
+        label = cfg.get("oil_nozzle_step_label")
+        if not label:
+            return True
+        try:
+            return bool(self._paper_order_probe(int(cfg.get("channel_id", 0) or 0), label))
+        except Exception as e:
+            print(f"[PackagingFlow] 缺油嘴探测异常 (隔离): {e}")
+            return True
+
     def _on_cycle_settled_sliders(self, cfg: Dict[str, Any], run: Dict[str, Any],
                                   cycle_id: int, is_good: bool,
-                                  slider_count: Optional[int], db) -> None:
+                                  slider_count: Optional[int], db,
+                                  remediation: Optional[Dict[str, Any]] = None) -> None:
         # 没开箱 → 自动开第 1 箱 (鲁棒: 扫工单后第一个检测周期来即开箱)
         if run["current_box_index"] == 0:
             self._open_box_sliders(run, cfg, db)
@@ -647,6 +770,17 @@ class PackagingFlowCoordinator:
                  f"order={run.get('order_no')} box={run.get('current_box_index')}/"
                  f"{run.get('box_total')} cycle={cycle_id} sliders={sc}/{target} "
                  f"is_good={is_good} is_tail={is_tail}")
+        # v3.23 缺油嘴 gate (每箱查, 开关默认关): 封箱前没检测到放油嘴 → 暂不收尾, 报警, 等补放
+        if cfg.get("oil_nozzle_required"):
+            if not self._probe_oil_nozzle(cfg):
+                self._raise_alarm(cfg, "missing_nozzle",
+                                  f"工单 {run['order_no']} 第 {run['current_box_index']} 箱未检测到放油嘴动作, 暂不收尾 (等放油嘴)")
+                _pkg_dbg("缺油嘴 gate 未过",
+                         f"order={run.get('order_no')} box={run.get('current_box_index')} 暂不收尾")
+                self._persist_run(run, db)
+                return
+            _pkg_dbg("缺油嘴 gate 通过",
+                     f"order={run.get('order_no')} box={run.get('current_box_index')}")
         # 尾箱塞工单视觉 gate (开关默认关): 没检测到放工单动作 → 暂不收尾, 报警, 等补做
         if is_tail and cfg.get("tail_paper_order_required"):
             if not self._probe_paper_order(cfg, run):
@@ -659,6 +793,32 @@ class PackagingFlowCoordinator:
             _pkg_dbg("尾箱塞工单 gate 通过", f"order={run.get('order_no')}")
         # 本箱合格: 进箱滑块数正好达目标 + 检测步骤齐 (is_good 由检测层按当前箱目标判过)
         ok = bool(is_good) and (target <= 0 or sc == target)
+        # v3.23 补滑块: 仅"少装"(检测步骤齐, 仅滑块数不足) 且项目开了"补数量"策略时, 挂起本箱
+        # 等人工补做 (延迟落账), 不立即记 NG. 多装 / 检测步骤不齐 / 没开策略 → 走原行为立即结算.
+        rem = remediation or {}
+        if (not ok and bool(is_good) and target > 0 and sc < target
+                and rem.get("enabled") and rem.get("allow_count")):
+            run["pending_box"] = {
+                "box": run["current_box_index"], "sliders": sc, "target": target,
+                "is_tail": is_tail, "cycle": cycle_id, "reason": "short_sliders",
+            }
+            run["status"] = "pending_remediation"
+            self._raise_alarm(cfg, "box_ng",
+                              f"工单 {run['order_no']} 第 {run['current_box_index']} 箱滑块 {sc}/{target} "
+                              f"少装, 等补做 / 人工确认")
+            _pkg_dbg("少装挂起等补做",
+                     f"order={run.get('order_no')} box={run.get('current_box_index')} "
+                     f"sliders={sc}/{target}")
+            self._persist_run(run, db)
+            return
+        self._finalize_box_sliders(run, cfg, db, sc, ok, is_tail, cycle_id, target)
+
+    def _finalize_box_sliders(self, run: Dict[str, Any], cfg: Dict[str, Any], db,
+                              sc: int, ok: bool, is_tail: bool, cycle_id,
+                              target: int,
+                              remediated: Optional[Dict[str, Any]] = None) -> None:
+        """落账一个 sliders 口径箱 (正常结算 / 补做后结算共用), 并推进到下一箱或工单收尾."""
+        run["current_box_sliders"] = sc
         run["box_done"] += 1
         result = "OK" if ok else "NG"
         if not ok:
@@ -666,10 +826,13 @@ class PackagingFlowCoordinator:
             self._raise_alarm(cfg, "box_ng",
                               f"工单 {run['order_no']} 第 {run['current_box_index']} 箱滑块 {sc}/{target} "
                               f"或检测步骤不合格, 判 NG")
-        run["box_details"].append({
+        detail = {
             "box": run["current_box_index"], "sliders": sc, "target": target,
             "is_tail": is_tail, "result": result, "cycle": cycle_id,
-        })
+        }
+        if remediated:
+            detail["remediated"] = remediated  # 补做留痕: 谁补的 / 从几补到几 / 理由
+        run["box_details"].append(detail)
         # 做满 → 完成工单; 否则开下一箱 (更新目标, 尾箱会切到尾数)
         if run["box_total"] > 0 and run["box_done"] >= run["box_total"]:
             _pkg_dbg("本箱结算完成→工单收尾",
@@ -756,6 +919,7 @@ class PackagingFlowCoordinator:
             "order_no": norm,
             "order_raw": raw,
             "spec": spec,
+            "cust_name": None,  # MES 客户名 (扫工单后回显进度卡, 仅内存不落库)
             "box_total": int(box_total or 0),
             "box_done": 0,
             "box_ng": 0,
@@ -772,6 +936,10 @@ class PackagingFlowCoordinator:
             "tail_target": 0,
             "current_box_sliders": 0,
             "paper_order_done": False,
+            "forced_reason": None,  # 强制结案理由 (管理员手动收尾时填, 审计)
+            "forced_by": None,      # 强制结案授权账号
+            # v3.23 少装挂起等补做的箱快照 (None=无挂起); status=pending_remediation 时有值
+            "pending_box": None,
         }
 
     def _persist_run(self, run: Dict[str, Any], db, create: bool = False) -> None:
@@ -810,6 +978,8 @@ class PackagingFlowCoordinator:
             row.box_details = list(run["box_details"])
             row.final_result = run.get("final_result")
             row.mes_pushed = bool(run.get("mes_pushed"))
+            row.forced_reason = run.get("forced_reason")
+            row.forced_by = run.get("forced_by")
             # v3.22 sliders 口径运行态落库 (断电恢复 + 历史)
             row.count_unit = run.get("count_unit", "trays")
             row.slider_total = int(run.get("slider_total", 0) or 0)
@@ -952,6 +1122,7 @@ _KIND_TO_EVENT_FIELD = {
     "label_len": "event_label_len",
     "mes_fail": "event_mes_fail",
     "missing_paper": "event_missing_paper",
+    "missing_nozzle": "event_missing_nozzle",
 }
 
 

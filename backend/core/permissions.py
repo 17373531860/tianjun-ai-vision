@@ -78,6 +78,7 @@ BUILTIN_ROLES = {
             "system.view",
             "system.packaging_flow.view",
             "system.packaging_flow.manage",
+            "system.packaging_flow.force_settle",
         ],
     },
     "operator": {
@@ -116,6 +117,11 @@ register_permission("monitor.detection.control", "启停检测 / 待机", "监�
 register_permission(
     "monitor.detection.advanced",
     "清零计数 / 重置周期性动作 (高级操作, 工程师起步)",
+    "监控",
+)
+register_permission(
+    "monitor.detection.ack",
+    "确认 / 解除人工确认 NG (默认仅工程师 / 管理员; 操作员需借密码提权)",
     "监控",
 )
 
@@ -182,3 +188,8 @@ register_permission("system.workpiece_flow.view", "查看流水线串行配置�
 register_permission("system.workpiece_flow.manage", "管理流水线串行 (创建 / 编辑 / 删除)", "系统")
 register_permission("system.packaging_flow.view", "查看包装箱结算配置与进度", "系统")
 register_permission("system.packaging_flow.manage", "管理包装箱结算 (创建 / 编辑 / 删除)", "系统")
+register_permission(
+    "system.packaging_flow.force_settle",
+    "强制结案进行中工单 (管理员 / 主管; 需填理由)",
+    "系统",
+)

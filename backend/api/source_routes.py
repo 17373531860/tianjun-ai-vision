@@ -29,9 +29,11 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from backend.core.auth_deps import require_perm
 from backend.core.config import settings
+from backend.db.database import get_db
 
 # 复用 source.py 已经创建的 router 实例 + VideoSourceManager 相关符号
 # 注意：这里产生 "subordinate" 循环引用——source.py 末尾才 import 本模块，
@@ -1096,33 +1098,27 @@ def reset_detection_stats(channel: int = Query(0)):
     return {"status": "success", "message": "统计数据已重置"}
 
 
-# v3.9.x 工人确认 ack-event — operator/engineer/admin 都能确认事件 (产线上谁都可能按)
-# 跟开始/停止/待机同权限级别 monitor.detection.control, 不要求 advanced (清零计数才要 advanced).
-@router.post("/detection/ack-event",
-             dependencies=[Depends(require_perm("monitor.detection.control"))])
-def ack_pending_event(channel: int = Query(0)):
-    """v3.9.x 工人确认重做 — 解除 require_ack 触发的阻塞态。
+def _do_ack_pending(mgr, channel: int) -> dict:
+    """人工确认解除阻塞的核心逻辑 (供普通确认 + 借密码提权确认复用)。
 
     使用场景:
         触发了 require_ack=True 的 NG / 自定义事件后, 状态机 + 推流被守门拦下,
-        画面定格在事件触发瞬间. 工人在监控页点"确认重做"按钮 → 调本接口:
+        画面定格在事件触发瞬间. 工人在监控页点"确认重做" → 走到这里:
             1. 清阻塞态字段 (_pending_ack 等)
             2. 调 _clear_step_runtime_state 清当前周期运行时 (步骤识别 / 周期序列
                / 同时组缓冲 / 跨周期屏蔽集 / last_first 屏蔽集)
             3. 计数器 / 累计统计 / 已上报的 MES 工件 不动 (语义: 已判 NG 入库,
                工人重做这一件, 不是回滚记录)
 
-    幂等:
-        不在阻塞态时调用直接返回 {acked: False, reason: "no pending ack"}
+    幂等: 不在阻塞态时直接返回 {acked: False, reason: "no pending ack"}
     """
-    mgr = _get_mgr(channel)
     if not getattr(mgr, '_pending_ack', False):
         return {"status": "success", "acked": False, "reason": "no pending ack"}
     ev_name = getattr(mgr, '_pending_ack_event_name', '?') or '?'
     ev_id = getattr(mgr, '_pending_ack_event_id', '') or ''
     started = getattr(mgr, '_pending_ack_started_at', 0) or 0
     waited = round(time.time() - started, 2) if started else 0
-    print(f"[ack] 收到工人确认: event={ev_name} 已等待 {waited}s, 清运行时 (channel_id={channel})")
+    print(f"[ack] 收到人工确认: event={ev_name} 已等待 {waited}s, 清运行时 (channel_id={channel})")
 
     # v3.9.x: 事件级开关 ack_resets_periodic — 默认 false (仅消除阻塞), 开了之后
     # 确认按钮等价于工人在产线上做了一次该规则配的"完成动作", 把对应的周期性强制
@@ -1160,6 +1156,58 @@ def ack_pending_event(channel: int = Query(0)):
         "waited_sec": waited,
         "reset_rules": reset_rules,
     }
+
+
+# v3.23: 人工确认 NG 拆出独立权限 monitor.detection.ack。
+# 默认 operator 不含该权限 → 一线操作员确认时被 403, 前端弹"借管理员密码授权一次"
+# 提权窗 (走下方 ack-event-elevated)。要让某条产线的操作员也能直接确认, 管理员到
+# 角色设置给 operator 勾上 monitor.detection.ack 即可。engineer/admin 默认就有 (monitor.*)。
+@router.post("/detection/ack-event",
+             dependencies=[Depends(require_perm("monitor.detection.ack"))])
+def ack_pending_event(channel: int = Query(0)):
+    """工人确认重做 — 解除 require_ack 触发的阻塞态 (需 monitor.detection.ack 权限)。"""
+    return _do_ack_pending(_get_mgr(channel), channel)
+
+
+class _ElevatedAckInput(BaseModel):
+    username: str
+    password: str
+
+
+# 运行时借权确认: 操作员无 ack 权限时, 输入管理员账号密码"借权一次"解除阻塞。
+# 只验证这一次账密 + 权限, 不创建登录会话、不改当前登录身份 (确认完仍是该操作员)。
+# 发起本接口只需 monitor.detection.control —— 操作员就能发起提权请求。
+@router.post("/detection/ack-event-elevated",
+             dependencies=[Depends(require_perm("monitor.detection.control"))])
+def ack_pending_event_elevated(body: _ElevatedAckInput, channel: int = Query(0),
+                               db: Session = Depends(get_db)):
+    from backend.core.auth import verify_password
+    from backend.core.permissions import match_permission
+    from backend.models.auth_models import User
+
+    username = (body.username or "").strip()
+    user = db.query(User).filter(
+        User.username == username, User.active == True  # noqa: E712
+    ).first()
+    if not user or not verify_password(body.password or "", user.password_hash):
+        raise HTTPException(status_code=401, detail="账号或密码错误")
+
+    perms: list = []
+    for ur in user.user_roles:
+        if ur.role:
+            for p in (ur.role.permissions or []):
+                if p and p not in perms:
+                    perms.append(p)
+    if not match_permission("monitor.detection.ack", perms):
+        raise HTTPException(
+            status_code=403,
+            detail=f"账号 {username} 没有人工确认 NG 的权限",
+        )
+
+    result = _do_ack_pending(_get_mgr(channel), channel)
+    result["authorized_by"] = username
+    print(f"[ack] 借权确认: 由 {username} 授权解除 (channel_id={channel})")
+    return result
 
 
 @router.post("/detection/reset-periodic",
@@ -1380,6 +1428,9 @@ def get_detection_results(channel: int = Query(0)):
             "started_at": getattr(mgr, '_pending_ack_started_at', None),
             "timeout_sec": int(getattr(mgr, '_pending_ack_timeout_sec', 0) or 0),
         },
+        # v3.23 NG 补做策略 (前端确认弹窗据此决定是否展示"补步骤/补数量"按钮)
+        "ng_remediation": getattr(mgr, '_ng_remediation', None)
+        or {'enabled': False, 'allow_step': True, 'allow_count': True},
     }
 
     result['model_task'] = getattr(mgr, 'model_task', 'detect')
@@ -1580,8 +1631,11 @@ def get_detection_results(channel: int = Query(0)):
     return result
 
 
+# 把项目配置推到运行时 VSM, 是"开始检测"流程的必经前置(前端 startDetection 每次都调),
+# 不修改/激活项目本身。故权限与启停检测一致(monitor.detection.control), 而非 project.activate
+# —— 否则只有启停权限的操作员一点"开始检测"就在这步 403, 检测根本起不来。
 @router.post("/detection/set-project",
-              dependencies=[Depends(require_perm("project.activate"))])
+              dependencies=[Depends(require_perm("monitor.detection.control"))])
 def set_project_config(req: ProjectConfigRequest, channel: int = Query(0)):
     """设置项目配置"""
     try:

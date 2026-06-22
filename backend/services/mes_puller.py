@@ -253,6 +253,12 @@ class MESPuller:
         verify = pull_cfg.get("verify_ssl", True)
         retry_count = pull_cfg.get("retry_count", 1) or 0
         retry_interval = pull_cfg.get("retry_interval_sec", 2) or 0
+        # 默认绕过系统代理: 工控机 / 开发机常开 clash 等全局代理, 会把发往
+        # MES 内网地址(如 10.x.x.x)的请求劫持到外网导致连不上。MES 对接绝大多数是
+        # 内网直连, 故默认 proxies 显式置空(覆盖环境变量代理)。确需走代理的可在
+        # 配置里设 use_proxy=true 恢复"跟随系统代理"。
+        use_proxy = bool(pull_cfg.get("use_proxy", False))
+        proxies = None if use_proxy else {"http": None, "https": None}
 
         # 鉴权: 复用推送网关那套 (bearer/api_key/custom_header → headers)
         eff = MESGateway._apply_auth_to_headers(pull_cfg)
@@ -275,6 +281,7 @@ class MESPuller:
                     data=None if is_json else payload,
                     params=payload if (is_json and method == "GET") else None,
                     headers=headers, auth=auth, timeout=timeout, verify=verify,
+                    proxies=proxies,
                 )
                 elapsed = int((time.time() - start) * 1000)
                 try:

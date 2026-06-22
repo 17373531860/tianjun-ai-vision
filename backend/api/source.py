@@ -1426,6 +1426,12 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self.is_detecting = True
 
         try:
+            from backend.api.channel_manager import channel_manager
+            channel_manager.persist_was_detecting(self.channel_id, True)
+        except Exception as _e:
+            print(f"[ChannelManager] 落盘 was_detecting 失败: {_e}")
+
+        try:
             from backend.services.scanner import get_scanner_service
             print(f"[Scanner/Source] start_detection ch={self.channel_id} → start_scanning")
             get_scanner_service().start_scanning(channel_id=self.channel_id)
@@ -1464,8 +1470,12 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         print("检测已启动")
         return True
     
-    def stop_detection(self):
-        """停止检测"""
+    def stop_detection(self, *, persist_was_detecting: bool = True):
+        """停止检测
+
+        persist_was_detecting: 是否把 was_detecting=false 写入 workstation_config.
+        优雅关机 / atexit 清理路径在 stop 前已手动落盘 true, 须传 False 避免覆盖.
+        """
         self.is_detecting = False
         
         # 停止检测 → 重置 RodSessionGate，避免下次开机复用残留记忆
@@ -1521,6 +1531,13 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # 症状：停止→切换工位/模型→重新开始后，Monitor 同时弹出历史 OK+NG+未扫码 toast
         self.events_log = []
         self._event_seq = 0
+
+        if persist_was_detecting:
+            try:
+                from backend.api.channel_manager import channel_manager
+                channel_manager.persist_was_detecting(self.channel_id, False)
+            except Exception as _e:
+                print(f"[ChannelManager] 落盘 was_detecting 失败: {_e}")
         
         print("检测已停止")
     

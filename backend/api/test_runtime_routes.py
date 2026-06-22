@@ -168,6 +168,9 @@ class PackagingSettleBody(BaseModel):
     is_good: bool = True
     slider_count: Optional[int] = None
     paper_done: Optional[bool] = None  # 控制尾箱"塞工单"探测结果 (None=用真实探测)
+    # 按步骤标签分别控制视觉探测结果, 用于独立测"放油嘴包"/"放工单"两个 gate.
+    # 例: {"放油嘴包": False, "放工单": True} → 缺油嘴 gate 不过、塞工单 gate 过. 未列标签默认 True.
+    probe_labels: Optional[Dict[str, bool]] = None
 
 
 @router.post("/packaging-settle")
@@ -178,8 +181,14 @@ def packaging_settle(body: PackagingSettleBody):
     from backend.db.database import SessionLocal
 
     coord = get_coordinator()
-    if body.paper_done is not None:
+    _probe_overridden = False
+    if body.probe_labels is not None:
+        _m = {str(k): bool(v) for k, v in body.probe_labels.items()}
+        coord.set_paper_order_probe(lambda c, l, _mm=_m: bool(_mm.get(str(l), True)))
+        _probe_overridden = True
+    elif body.paper_done is not None:
         coord.set_paper_order_probe(lambda c, l, _v=bool(body.paper_done): _v)
+        _probe_overridden = True
     db = SessionLocal()
     try:
         cid = coord.resolve_config_id(body.channel_id, None)
@@ -204,7 +213,7 @@ def packaging_settle(body: PackagingSettleBody):
         return {"status": "ok", "config_id": cid, "state": state, "last_run": last_run}
     finally:
         db.close()
-        if body.paper_done is not None:
+        if _probe_overridden:
             coord.set_paper_order_probe(_real_paper_order_probe)  # 复位, 不污染后续
 
 

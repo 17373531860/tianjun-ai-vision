@@ -437,6 +437,83 @@ def activate_project(project_id: int, db: Session = Depends(get_db)):
         model_labels=model_labels
     )
 
+@router.post("/{project_id}/duplicate", response_model=ProjectResponse,
+              status_code=status.HTTP_201_CREATED,
+              dependencies=[Depends(require_perm("project.create"))])
+def duplicate_project(project_id: int, db: Session = Depends(get_db)):
+    """复制项目：把一个项目的全部配置克隆成一个新副本.
+
+    克隆范围: 任务类型 / 逻辑模式 / 默认模型 + 推理格式 + 7 个 JSON 配置字段
+    (pipeline / steps / events / counters / alarm / detection / data).
+    副本默认 **不激活**, 名称自动加「副本」后缀防重名, 客户复制后可改名继续编辑.
+
+    JSON 字段全部 deepcopy, 避免新旧项目共享同一引用导致改一个动另一个.
+    """
+    import copy
+
+    src = db.query(Project).filter(Project.id == project_id).first()
+    if not src:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # 生成唯一副本名: "原名 副本" / "原名 副本2" / "原名 副本3" ...
+    base_name = f"{src.name} 副本"
+    new_name = base_name
+    n = 2
+    while db.query(Project).filter(Project.name == new_name).first():
+        new_name = f"{base_name}{n}"
+        n += 1
+
+    db_project = Project(
+        name=new_name,
+        task_type=src.task_type,
+        pipeline_config=copy.deepcopy(src.pipeline_config),
+        default_model_id=src.default_model_id,
+        model_format=src.model_format or "pytorch_fp32",
+        logic_mode=src.logic_mode,
+        steps_config=copy.deepcopy(src.steps_config),
+        events_config=copy.deepcopy(src.events_config),
+        counters_config=copy.deepcopy(src.counters_config),
+        alarm_config=copy.deepcopy(src.alarm_config),
+        detection_config=copy.deepcopy(src.detection_config),
+        data_config=copy.deepcopy(src.data_config),
+    )
+    db.add(db_project)
+    db.commit()
+    db.refresh(db_project)
+
+    model_name = None
+    model_version = None
+    model_labels = None
+    if db_project.default_model_id:
+        model = db.query(Model).filter(Model.id == db_project.default_model_id).first()
+        if model:
+            model_name = model.name
+            model_version = model.version
+            model_labels = model.labels or []
+
+    return ProjectResponse(
+        id=db_project.id,
+        name=db_project.name,
+        task_type=db_project.task_type,
+        pipeline_config=db_project.pipeline_config,
+        logic_mode=db_project.logic_mode,
+        steps_config=db_project.steps_config,
+        events_config=db_project.events_config,
+        counters_config=db_project.counters_config,
+        alarm_config=db_project.alarm_config,
+        detection_config=db_project.detection_config,
+        data_config=db_project.data_config,
+        default_model_id=db_project.default_model_id,
+        model_format=db_project.model_format or "pytorch_fp32",
+        is_active=db_project.is_active,
+        created_at=db_project.created_at,
+        updated_at=db_project.updated_at,
+        model_name=model_name,
+        model_version=model_version,
+        model_labels=model_labels
+    )
+
+
 _SCOPE_DICT_FIELDS = {
     "pipeline_config",
     "alarm_config",

@@ -239,6 +239,35 @@
             </div>
           </el-card>
 
+          <!-- v3.22.x: 开机自动恢复检测开关 -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-cyan-400"><Refresh /></el-icon>
+                <span class="font-bold text-white">开机自动恢复检测</span>
+              </div>
+            </template>
+            <div class="mb-3 text-xs text-gray-500">
+              软件启动时是否自动开始检测。<br>
+              开启（默认）= 开机后自动恢复上次的项目 + 视频源，并<b>无条件自动开始检测</b>（不管上次是否在检测），工人无需手动点开始；<br>
+              关闭 = 开机只恢复项目 + 视频源，停在待机，由工人确认后手动点「开始」。<br>
+              修改后<b>下次启动</b>生效。
+            </div>
+            <div class="space-y-2">
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">开机自动开始检测</span>
+                  <span class="text-[10px] text-gray-500">关闭后开机停在待机，需工人手动点开始</span>
+                </div>
+                <el-switch
+                  v-model="autoResumeEnabled"
+                  data-testid="auto-resume-switch"
+                  @change="onAutoResumeChange"
+                />
+              </div>
+            </div>
+          </el-card>
+
           <!-- v3.10.x: 窗口模式 (主窗口全屏 / 窗口 + 最小化) -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
@@ -2088,6 +2117,30 @@ async function saveSplashCameraConfig() {
   }
 }
 
+// ========== v3.22.x: 开机自动恢复检测开关 ==========
+// 落盘 workstation_config.json 顶层 auto_resume 段, 下次后端启动时读。
+const autoResumeEnabled = ref(true);   // 默认开 (老行为: 开机自动恢复检测)
+
+async function loadAutoResumeConfig() {
+  try {
+    const res = await api.get('/workstations/auto-resume');
+    autoResumeEnabled.value = res?.data?.enabled !== false;
+  } catch (e) {
+    console.warn('加载开机自动恢复检测配置失败:', e?.message);
+  }
+}
+
+async function onAutoResumeChange(val) {
+  dbg('settings.ops', '切换开机自动恢复检测', `enabled=${!!val}`);
+  try {
+    await api.put('/workstations/auto-resume', { enabled: !!val });
+    ElMessage.success(val ? '已开启开机自动恢复检测 (下次启动生效)' : '已关闭, 开机将停在待机');
+  } catch (e) {
+    ElMessage.error('保存开机自动恢复检测配置失败: ' + (e?.response?.data?.detail || e?.message || ''));
+    autoResumeEnabled.value = !val;
+  }
+}
+
 // ========== v3.10.x: 主窗口模式 (Electron) ==========
 const windowFullscreen = ref(false);
 const isElectronEnv = computed(() => !!(typeof window !== 'undefined' && window.electronAPI?.isElectron));
@@ -2226,6 +2279,7 @@ onMounted(async () => {
   loadTransformConfig();
   loadSplashCameraConfig();
   loadWindowConfig();   // v3.10.x: 主窗口模式
+  loadAutoResumeConfig();  // v3.22.x: 开机自动恢复检测开关
   await loadProjectDetection();
 });
 

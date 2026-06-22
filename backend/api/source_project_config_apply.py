@@ -274,6 +274,18 @@ def _apply_pipeline_config(h, config, pipeline_config):
     h.settlement_mode = pipeline_config.get('settlement_mode', 'first_step')
     h.idle_timeout_seconds = pipeline_config.get('idle_timeout_seconds', 0)
     h.cycle_max_duration = pipeline_config.get('cycle_max_duration', 0)
+
+    # v3.23 NG 补做策略 (与 logic_mode 无关的全局可选项): 缺步 / 少装 NG 经人工确认后,
+    # 允许"补做缺的那步 / 补齐少装的数量"修正成 OK 而不重置整个周期. 默认全关 = 零差异.
+    _rem = pipeline_config.get('ng_remediation', {}) or {}
+    h._ng_remediation = {
+        'enabled': bool(_rem.get('enabled', False)),
+        'allow_step': bool(_rem.get('allow_step', True)),
+        'allow_count': bool(_rem.get('allow_count', True)),
+    }
+    if h._ng_remediation['enabled']:
+        print(f"NG 补做策略: 开启 (补步骤={h._ng_remediation['allow_step']} "
+              f"补数量={h._ng_remediation['allow_count']})")
     print(
         f"结算模式: {h.settlement_mode}, 空闲超时: {h.idle_timeout_seconds}s, "
         f"周期超时: {h.cycle_max_duration}s"

@@ -376,11 +376,16 @@ class EventTriggerMixin:
     def fire_external_event_response(self, event_id, reason: str,
                                      source: str = "external") -> bool:
         """外部子系统 (如包装箱结算) 借用一次"事件响应"——复用该事件配好的
-        报警 (灯/蜂鸣) + 语音/Toast + 计数器联动, 但**不结束检测周期、不动 OK/NG
-        周期统计、不进人工确认阻塞态、不走防重复结算守门**.
+        报警 (灯/蜂鸣) + 语音/Toast + 计数器联动, **不结束检测周期、不动 OK/NG
+        周期统计、不走防重复结算守门**.
 
         与 ``_trigger_event`` 的本质区别: ``_trigger_event`` 代表"一个检测周期判定完了"
         (会 end_cycle 写库); 本方法只借事件的"响应面", 不打断正在跑的托盘检测.
+
+        v3.22: 若映射到的事件在「项目事件设置」里标了 ``require_ack=True`` (需人工确认),
+        则外部触发 (如包装漏箱 / 多装 / 缺油嘴 / 缺工单) 也会进入人工确认阻塞态 —— 整条
+        检测线定格, 直到操作员 (或借管理员密码提权) 主动确认才解除. 默认 (require_ack=False)
+        行为与改前严格一致 (只报警不定格).
 
         返回 True = 找到事件并已联动; False = 无项目配置 / 事件未找到.
         """
@@ -398,6 +403,8 @@ class EventTriggerMixin:
             return False
 
         current_event_id = event.get('id')
+        require_ack = bool(event.get('require_ack', False))
+        ack_timeout_sec = max(0, int(event.get('ack_timeout_sec', 0) or 0))
 
         # 计数器联动 (复用事件 actions)
         counters_changed = False
@@ -425,13 +432,25 @@ class EventTriggerMixin:
             'toast_id': event.get('toast_id', 'ng'),
             'had_workpiece': False,
             'should_warn_no_barcode': False,
-            'require_ack': False,
-            'ack_timeout_sec': 0,
+            'require_ack': require_ack,
+            'ack_timeout_sec': ack_timeout_sec,
             'source': source,
         })
 
         # 物理报警联动 (复用本通道 alarm 配置, 与检测 NG 共用 eventN 配置)
         self._dispatch_event_alarm(current_event_id)
+
+        # v3.22: 事件标了"需人工确认" → 外部触发也进入阻塞态 (整条检测线定格).
+        # 已在阻塞态则不重置 (保留首个触发事件), 避免后续异常刷掉原始原因.
+        if require_ack and not getattr(self, '_pending_ack', False):
+            self._pending_ack = True
+            self._pending_ack_started_at = time.time()
+            self._pending_ack_event_id = str(current_event_id)
+            self._pending_ack_event_name = event.get('name', '')
+            self._pending_ack_timeout_sec = ack_timeout_sec
+            print(f"[ack] (外部/{source}) 进入人工确认阻塞态: "
+                  f"event={event.get('name', '')} (id={current_event_id}, "
+                  f"timeout={ack_timeout_sec}s, channel_id={self.channel_id})")
         return True
 
     def _dispatch_event_alarm(self, current_event_id) -> None:

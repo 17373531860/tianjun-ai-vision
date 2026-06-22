@@ -855,6 +855,8 @@ class SessionLifecycleMixin:
                         db=db,
                         # v3.22 sliders 口径: 带本周期进箱滑块数 (容器混合在结算时缓存; 其它模式 None)
                         slider_count=getattr(self, '_last_container_item_total', None),
+                        # v3.23 NG 补做策略 (项目级): 少装时据此决定是否挂起等补滑块
+                        remediation=getattr(self, '_ng_remediation', None),
                     )
                 except Exception as _e:
                     print(f"[PackagingFlow] on_cycle_settled 异常 (隔离, 不影响主流程): {_e}")

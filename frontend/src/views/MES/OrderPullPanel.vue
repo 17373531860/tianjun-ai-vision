@@ -21,6 +21,7 @@
 
     <!-- 配置列表 -->
     <el-table :data="pullConns" stripe size="small" class="mes-table" max-height="calc(100vh - 300px)">
+      <el-table-column prop="id" label="连接ID" width="70" />
       <el-table-column prop="name" label="配置名称" width="160" />
       <el-table-column label="接口地址" min-width="220">
         <template #default="{ row }">

@@ -119,6 +119,8 @@ def _init_step_state(h):
     h.settlement_mode = 'first_step'  # 'first_step' / 'last_step' / 'last_first'(v3.8.x)
     h.idle_timeout_seconds = 0
     h.cycle_max_duration = 0
+    # v3.23 NG 补做策略 (默认全关 = 零差异); 由 _apply_pipeline_config 按项目配置覆盖
+    h._ng_remediation = {'enabled': False, 'allow_step': True, 'allow_count': True}
     h.step_conf_thresholds = {}
     # v3.10+ 步骤级 box 尺寸过滤: {label: (max_w, max_h)} 归一化比例
     # 0 / 缺省 = 关闭过滤; 用途见 source_detect_runners_mixin._passes_box_size_limit

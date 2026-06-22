@@ -669,3 +669,194 @@ def test_sliders_auto_switch_project_fail_continues(client):
     coord.on_scan("ORD1", db, channel_id=0)
     assert "mes_fail" in alarms                                 # 报警
     assert coord.get_state(cid) is not None                    # 仍开了工单
+
+
+# =============================================================
+# 强制结案 (管理员/主管手动收尾) + 待机不结算
+# =============================================================
+
+def test_force_settle_manual_records_reason(client):
+    """强制结案: 收尾未满箱 + 完成工单, 理由/授权人落库审计."""
+    coord, cid = _setup_flow(client)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 2})
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)      # 开工单 box_total=2
+    coord.on_scan("ORD1", db, channel_id=0)      # 开箱1
+    coord.on_cycle_settled(0, 1, True, db)       # 箱1 仅 1/2 托盘 (没满)
+
+    ok = coord.force_settle_manual(cid, db, reason="产线临时停线收工", operator="supervisor_li")
+    assert ok is True
+    assert coord.get_state(cid) is None          # 工单已结案弹出内存
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed"
+    assert row.forced_reason == "产线临时停线收工"
+    assert row.forced_by == "supervisor_li"
+
+
+def test_force_settle_manual_overrides_keep(client):
+    """配置 on_forced_stop=keep 时, 自动收尾不动工单; 但手动强制结案仍强制收尾."""
+    coord, cid = _setup_flow(client, on_forced_stop="keep")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 2})
+    db = SessionLocal()
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_scan("ORD1", db, channel_id=0)
+
+    # 自动收尾 (keep) → 不动
+    assert coord.on_forced_settle(cid, db) is False
+    assert coord.get_state(cid) is not None
+
+    # 手动强制结案 → 忽略 keep, 仍收尾
+    assert coord.force_settle_manual(cid, db, reason="卡单强收", operator="admin") is True
+    assert coord.get_state(cid) is None
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.forced_reason == "卡单强收"
+
+
+def test_force_settle_no_active_order_returns_false(client):
+    """无进行中工单时强制结案返回 False (API 会转 409)."""
+    coord, cid = _setup_flow(client)
+    db = SessionLocal()
+    assert coord.force_settle_manual(cid, db, reason="x", operator="admin") is False
+
+
+def test_standby_no_settle_when_disabled(client):
+    """待机也收尾=关: 待机不收尾 (工单保留); 停止才收尾."""
+    coord, cid = _setup_flow(client, forced_settle_on_standby=False)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 2})
+    db = SessionLocal()
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_scan("ORD1", db, channel_id=0)      # 开箱1
+
+    # 待机 → 不结算, 工单仍在
+    coord.on_forced_settle_by_channel(0, db, is_standby=True)
+    assert coord.get_state(cid) is not None
+
+    # 停止 (非待机) → 按策略收尾
+    coord.on_forced_settle_by_channel(0, db, is_standby=False)
+    assert coord.get_state(cid) is None
+
+
+def test_standby_settles_when_enabled(client):
+    """待机也收尾=开 (默认): 待机即收尾工单."""
+    coord, cid = _setup_flow(client, forced_settle_on_standby=True)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 2})
+    db = SessionLocal()
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_scan("ORD1", db, channel_id=0)
+
+    coord.on_forced_settle_by_channel(0, db, is_standby=True)
+    assert coord.get_state(cid) is None          # 待机已收尾
+
+
+# =============================================================
+# v3.23 NG 补做: 少装挂起 + 补滑块 / 重做
+# =============================================================
+
+_REM_ON = {"enabled": True, "allow_step": True, "allow_count": True}
+
+
+def test_short_sliders_holds_when_remediation_on(client):
+    """开了补数量策略: 少装(步骤齐) → 挂起 pending_remediation, 不立即落账 NG."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})   # 1 箱, 目标 24
+    db = SessionLocal()
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=20, remediation=_REM_ON)
+
+    st = coord.get_state(cid)
+    assert st is not None                                       # 工单未收尾
+    assert st["status"] == "pending_remediation"
+    assert st["box_done"] == 0 and st["box_ng"] == 0           # 未落账
+    assert st["pending_box"]["sliders"] == 20 and st["pending_box"]["target"] == 24
+
+
+def test_short_sliders_legacy_ng_when_remediation_off(client):
+    """没开策略(默认): 少装 → 原行为立即判 NG, 零差异."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    db = SessionLocal()
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=20)    # 不带 remediation
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.box_ng == 1 and row.final_result == "NG"
+
+
+def test_supplement_auto_completes_to_target(client):
+    """补滑块(自动): 补齐到目标 → 本箱 OK 落账, 工单 completed/OK."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    db = SessionLocal()
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=20, remediation=_REM_ON)
+
+    ok = coord.supplement_sliders(cid, db, target_count=None, operator="admin")
+    assert ok is True
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.box_done == 1
+    assert row.box_ng == 0 and row.final_result == "OK"
+
+
+def test_supplement_manual_count_below_target_still_ng(client):
+    """补滑块(手动指定仍不足目标): 落账但本箱 NG (诚实记录实际数)."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    db = SessionLocal()
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=20, remediation=_REM_ON)
+
+    ok = coord.supplement_sliders(cid, db, target_count=22, operator="op1")
+    assert ok is True
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.box_ng == 1 and row.final_result == "NG"
+
+
+def test_supplement_no_pending_returns_false(client):
+    """无挂起箱时补滑块 → False (接口层据此回 409)."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    db = SessionLocal()
+    coord.on_scan("ORD1", db, channel_id=0)
+    assert coord.supplement_sliders(cid, db) is False
+
+
+def test_redo_pending_back_to_running(client):
+    """重做挂起箱: 转回 running 等下一周期, 同一箱号重测后可补做成 OK."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    db = SessionLocal()
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=20, remediation=_REM_ON)
+
+    assert coord.redo_pending(cid, db, operator="admin") is True
+    st = coord.get_state(cid)
+    assert st["status"] == "running" and st["pending_box"] is None
+    assert st["box_done"] == 0 and st["current_box_index"] == 1   # 同一箱等重测
+
+    # 重测这次刚好 24 → 直接 OK 完成
+    coord.on_cycle_settled(0, 2, True, db, slider_count=24, remediation=_REM_ON)
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "OK" and row.box_ng == 0
+
+
+def test_pending_ignores_new_cycle(client):
+    """挂起期间又来检测周期 → 忽略, 不覆盖挂起态 (由人工补做/重做推进)."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    db = SessionLocal()
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=20, remediation=_REM_ON)
+    coord.on_cycle_settled(0, 2, True, db, slider_count=24, remediation=_REM_ON)  # 应被忽略
+
+    st = coord.get_state(cid)
+    assert st["status"] == "pending_remediation"
+    assert st["pending_box"]["sliders"] == 20                  # 仍是第一次的快照

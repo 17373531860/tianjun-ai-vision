@@ -146,7 +146,11 @@ class _ContainerAccumulator:
             px2, py2 = px1 + pb['w'], py1 + pb['h']
             for obj in item_objs:
                 lbl = obj.get('class_name', '')
-                if lbl not in self.item_expected:
+                if not lbl:
+                    continue
+                # 盘计数模式: 只数配了每盘期望的物品; 总数模式: 整箱只看进箱总数,
+                # 所有物品标签都计 (每盘期望可留空, 不再用 item_expected 当"是否计数"开关)
+                if self.count_mode != 'items_total' and lbl not in self.item_expected:
                     continue
                 b = obj.get('bbox') or {}
                 cx = b.get('x', 0) + b.get('w', 0) / 2.0
@@ -207,18 +211,16 @@ class _ContainerAccumulator:
         #   - 已经装够 (done_total >= target): 在位的是"下一箱"的第一盘, 绝不计入本箱,
         #     否则会把下一盘也算进来误判超出 (治现场"4盘96+下一盘已上桌→120 NG")。
         if self.count_mode == 'items_total':
-            cur_peak = {}
-            if self._primary is not None:
+            # 整箱只看进箱总数 = 各盘峰值跨所有物品标签求和 (与每盘期望 item_expected 无关)。
+            target = self.item_target
+            done_total = sum(sum(t.values()) for t in self._done)
+            total = done_total
+            if target > 0 and done_total < target and self._primary is not None:
                 cur_peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
-            for lbl in self.item_expected.keys():
-                target = self.item_target
-                done_total = sum(t.get(lbl, 0) for t in self._done)
-                total = done_total
-                if target > 0 and done_total < target:
-                    total += cur_peak.get(lbl, 0)
-                if target > 0 and total != target:
-                    rel = '不足' if total < target else '超出'
-                    reasons.append(f'箱内{dm.get(lbl, lbl)}{rel} {total}/{target}')
+                total += sum(cur_peak.values())
+            if target > 0 and total != target:
+                rel = '不足' if total < target else '超出'
+                reasons.append(f'箱内总数{rel} {total}/{target}')
             return (not reasons), reasons
         # 盘计数模式 (现状): 盘数够 + 每盘达每盘门槛
         trays = self._trays_for_verdict()
@@ -253,16 +255,14 @@ class _ContainerAccumulator:
         与 verdict 同源: 已 gone-confirm 进箱各盘峰值之和; 若本箱还没装够,
         把在位主托盘 (可能末盘还没确认) 也补进来凑数。
         """
-        total = 0
-        cur_peak = {}
-        if self._primary is not None:
-            cur_peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
-        for lbl in self.item_expected.keys():
-            done_total = sum(t.get(lbl, 0) for t in self._done)
-            sub = done_total
-            if self.item_target <= 0 or done_total < self.item_target:
-                sub += cur_peak.get(lbl, 0)
-            total += sub
+        # 跨所有物品标签求和 (与 verdict 同源, 不依赖每盘期望 item_expected)
+        done_total = sum(sum(t.values()) for t in self._done)
+        total = done_total
+        if self.item_target <= 0 or done_total < self.item_target:
+            cur_peak = {}
+            if self._primary is not None:
+                cur_peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
+            total += sum(cur_peak.values())
         return total
 
     def to_state(self, display_map: dict):
@@ -273,13 +273,24 @@ class _ContainerAccumulator:
         peak = {}
         if self._primary is not None:
             peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
+        # 展示标签集: 盘计数模式沿用每盘期望清单 (零差异);
+        # 总数模式期望可留空, 改取实际计到的物品标签 (实时/峰值/已进箱)
+        disp_labels = list(self.item_expected.keys())
+        if self.count_mode == 'items_total':
+            for lbl in list(cur.keys()) + list(peak.keys()):
+                if lbl and lbl not in disp_labels:
+                    disp_labels.append(lbl)
+            for t in self._done:
+                for lbl in t.keys():
+                    if lbl and lbl not in disp_labels:
+                        disp_labels.append(lbl)
         cur_items = [{
             'label': lbl,
             'display_name': dm.get(lbl, lbl),
             'current_count': cur.get(lbl, 0),     # 当帧实时数 (展示主数字)
             'peak_count': peak.get(lbl, 0),       # 当前托盘在位峰值 (= 进箱将记的值, 参考)
-            'expected_per_tray': exp,
-        } for lbl, exp in self.item_expected.items()]
+            'expected_per_tray': self.item_expected.get(lbl, 0),
+        } for lbl in disp_labels]
         state = {
             'enabled': True,
             'count_mode': self.count_mode,

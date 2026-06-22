@@ -84,10 +84,23 @@
           <el-switch v-model="form.enabled" />
         </el-form-item>
 
+        <el-form-item label="计数口径">
+          <el-radio-group v-model="form.count_unit">
+            <el-radio value="sliders">按滑块 (上银)</el-radio>
+            <el-radio value="trays">按托盘 (三层)</el-radio>
+          </el-radio-group>
+          <div class="text-xs text-gray-400 mt-1">
+            按滑块: 扫工单从 MES 拿滑块总数 ÷ 每箱滑块数(从项目读,如96) = 箱数 + 尾箱余数, 只数每箱滑块总数 →
+            托盘那两组(①②)会自动隐藏, 只配 ⑦ 滑块设置。<br/>
+            按托盘: 三层 工单→箱→托盘, 配 ①② 每箱几托盘/每托盘几件。
+          </div>
+        </el-form-item>
+
         <!-- ===== 高级 5 组 (折叠, 默认不展开) ===== -->
         <el-collapse v-model="activeGroups" class="mt-2">
-          <!-- 组① 工单与箱数 -->
-          <el-collapse-item title="① 工单与箱数 — 这张工单一共做几箱怎么算" name="g1">
+          <!-- 组① 工单与箱数 (仅托盘口径; 滑块口径箱数由 ⑦ 滑块总数÷每箱数 算出) -->
+          <el-collapse-item v-if="form.count_unit !== 'sliders'"
+                            title="① 工单与箱数 — 这张工单一共做几箱怎么算" name="g1">
             <el-form-item label="箱数来源">
               <el-radio-group v-model="form.box_count_source">
                 <el-radio value="field">直接取 MES 字段</el-radio>
@@ -102,8 +115,9 @@
             </el-form-item>
           </el-collapse-item>
 
-          <!-- 组② 数量规格 -->
-          <el-collapse-item title="② 数量规格 — 每箱几托盘 / 每托盘几件" name="g2">
+          <!-- 组② 数量规格 (仅托盘口径; 滑块口径不用托盘概念) -->
+          <el-collapse-item v-if="form.count_unit !== 'sliders'"
+                            title="② 数量规格 — 每箱几托盘 / 每托盘几件" name="g2">
             <el-form-item label="每箱托盘数模式">
               <el-radio-group v-model="form.trays_per_box_mode">
                 <el-radio value="fixed">固定</el-radio>
@@ -262,19 +276,9 @@
             </el-form-item>
           </el-collapse-item>
 
-          <!-- 组⑦ 滑块口径 + 尾箱 + 自动切项目 + 塞工单 (v3.22 上银 MES 闭环, 默认关) -->
-          <el-collapse-item title="⑦ 滑块口径 + 尾箱 (上银 MES 闭环, 默认按托盘)" name="g7">
-            <el-form-item label="计数单位">
-              <el-radio-group v-model="form.count_unit">
-                <el-radio value="trays">按托盘数判满 (默认)</el-radio>
-                <el-radio value="sliders">按每箱滑块总数判满</el-radio>
-              </el-radio-group>
-              <div class="text-xs text-gray-400 mt-1">
-                sliders: 一个检测周期 = 一个箱; 扫工单从 MES 拿滑块总数 → 自动算箱数 + 尾箱余数,
-                每箱滑块数读你在项目里配的容器整箱目标 (如 96).
-              </div>
-            </el-form-item>
-            <template v-if="form.count_unit === 'sliders'">
+          <!-- 组⑦ 滑块口径 + 尾箱 + 自动切项目 + 塞工单 (v3.22 上银 MES 闭环, 仅滑块口径显示) -->
+          <el-collapse-item v-if="form.count_unit === 'sliders'"
+                            title="⑦ 滑块口径设置 — 每箱滑块数 / 尾箱 / 塞工单 / 缺油嘴" name="g7">
               <el-form-item label="每箱滑块数来源">
                 <el-radio-group v-model="form.items_per_box_source">
                   <el-radio value="project">读激活项目容器目标</el-radio>
@@ -312,7 +316,21 @@
                              :label="ev.label" :value="ev.value" />
                 </el-select>
               </el-form-item>
-            </template>
+              <el-form-item label="每箱必须放油嘴">
+                <el-switch v-model="form.oil_nozzle_required" />
+                <span class="text-xs text-gray-400 ml-2">开 = 每箱封箱结算前必须检测到"放油嘴"动作, 否则不收尾并报警(等补放)</span>
+              </el-form-item>
+              <el-form-item label="放油嘴步骤标签" v-if="form.oil_nozzle_required">
+                <el-input v-model="form.oil_nozzle_step_label" placeholder="put_nozzle" />
+                <span class="text-xs text-gray-400 ml-2">项目里"放油嘴"那一步的检测标签</span>
+              </el-form-item>
+              <el-form-item label="缺油嘴触发事件" v-if="form.oil_nozzle_required">
+                <el-select v-model="form.event_missing_nozzle" class="w-full" clearable
+                           placeholder="默认通用报警" filterable>
+                  <el-option v-for="ev in eventOptions" :key="ev.value"
+                             :label="ev.label" :value="ev.value" />
+                </el-select>
+              </el-form-item>
           </el-collapse-item>
         </el-collapse>
       </el-form>
@@ -476,6 +494,10 @@ const _newForm = () => ({
   tail_paper_order_required: false,
   tail_paper_step_label: null,
   event_missing_paper: null,
+  // 缺油嘴 gate (v3.23, 每箱查, 默认关)
+  oil_nozzle_required: false,
+  oil_nozzle_step_label: null,
+  event_missing_nozzle: null,
 });
 
 const form = reactive(_newForm());
@@ -532,29 +554,38 @@ const openEdit = (row) => {
 
 const applyHiwinPreset = () => {
   Object.assign(form, {
+    // 上银 SY: 滑块口径 — MES 排产量(滑块总数) ÷ 每箱96(从项目读) = 箱数 + 尾箱余数
+    count_unit: 'sliders',
+    items_per_box_source: 'project',
+    items_per_box_fixed: 96,
+    slider_total_field: 'dispatch_qty',
     box_count_source: 'field',
     box_count_field: 'dispatch_qty',
-    trays_per_box_mode: 'fixed',
-    trays_per_box_fixed: 4,
-    tray_qty_mode: 'fixed',
-    tray_qty_fixed: 0,
-    // 上银: 扫码枪丢 "-" (JOB150700114-1 → JOB1507001141), 补回主单号(JOB+9位=12)后;
-    // 序号 1~3 位不固定, 长度校验关 (0).
+    // 上银: 扫码枪丢 "-" (JOB1503000213 → 第12位补回 → JOB150300021-3);
+    // 主单号 JOB+9位=12, 序号 1~3 位不固定, 长度校验关 (0).
     label_match: 'insert_char',
     hyphen_template: '-',
     hyphen_pos: 12,
     label_len: 0,
+    // 异常: 拉单失败 / 标签不符 → 阻断等管理员解除; 漏箱 → 重做补满
     on_mes_fail: 'block',
-    on_label_mismatch: 'warn',
+    on_label_mismatch: 'block',
     on_short_box: 'redo',
     on_forced_stop_partial: 'fail',
+    // 停止才收尾; 待机只暂停画面不结算 (可恢复继续)
     on_forced_stop: 'settle',
-    forced_settle_on_standby: true,
+    forced_settle_on_standby: false,
+    // 每箱必检"放油嘴" + 尾箱封箱前必检"放工单"
+    oil_nozzle_required: true,
+    oil_nozzle_step_label: '放油嘴包',
+    tail_paper_order_required: true,
+    tail_paper_step_label: '放工单',
+    auto_switch_project: false,
     push_on_complete: false,
     push_event_type: 'packaging_complete',
   });
   _syncStrFields();
-  ElMessage.success('已套用上银包装线预设, 请按现场核对工位/扫码器/MES 连接');
+  ElMessage.success('已套用上银 SY 滑块口径预设; 请核对工位/扫码器/拉单连接, 并到⑥把各异常指向"需人工确认"事件');
 };
 
 const _parseIntOrNull = (s) => {

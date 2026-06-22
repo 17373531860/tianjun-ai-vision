@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | v3.20.0（2026-06-15 — 外部 MES 双向打通：新增「主动拉工单」(`backend/services/mes_puller.py` 通用可配置 + `PullScheduler` 定时同步，已对接上银 HIWIN 两层嵌套结构) + USB 键盘扫码枪即插即用(`device_type=usb_hid`，前端全局键盘捕获 + 速度启发式，归入扫码器面板，拉工单/绑工件/both)；新增 `backend.pull`/`mes.pull` 调试分类；修外部 MES 非 2xx 丢失返回体错误详情；三层测试全绿 141 BDD 零回归。上一版 v3.19.0：全局调试中心 + NG 原因可解释性埋点） |
+| 当前线上版本 | v3.23.0（2026-06-22 — 上银包装线现场闭环增强 + 通用 NG 补做：外部触发事件（漏箱/多装/缺油嘴/缺工单）支持「需人工确认」定格整条检测线 + 管理员/主管「强制结案」(`system.packaging_flow.force_settle` + 理由审计) + 待机维持检测不结算 + 每箱缺油嘴视觉 gate + 通用「NG 补做策略」(`pipeline_config.ng_remediation`，任意模式，缺步骤/少装人工确认就地补做不重置周期，延迟落账) + 包装补滑块落地 + 开机自动恢复检测开关 + 项目一键复制 + 虚拟扫码枪；默认全关零差异；包装单测 48/48，全量非浏览器 1277 passed（19 失败为已知批跑串污染单跑全绿）。中间版本 v3.21.0/v3.22.x：包装箱结算协调器 + 上银滑块口径 MES 闭环。详见 `debug-mes` skill 第十六节） |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -59,6 +59,7 @@
 - ✅ **一次只做一件事，做完汇报再接下一件。** 不要闷头连干 3-5 个改动让用户审一堆。
 
 ### 隐含约定
+- **多 worktree 纪律**：本机长期并存 `tianjun-main` / `tianjun副本` / `tianjun-se9` 三棵树，同名文件各一份。用户说"主程序/main"就**必须**在 `tianjun-main` 操作——动手前 `pwd` + 核文件路径前缀，别因为副本在手边就顺手改副本（真实事故：被要求改 main 却改了副本，白干一轮）。端口归属以用户**本次**指令为准，不照默认表想当然。详见 `start-dev-servers` skill 第一节铁律 + 故障 I/J
 - 商业项目客户在用，**主线改动要先做影响分析**（用 modify-* 系列 skill）
 - **不要主动 commit / push**，等用户明确指令
 - **破坏性操作必须先问**：`rm -rf`、`drop table`、`force push`、改 schema、删 commit 历史
@@ -968,6 +969,7 @@ docs/
 
 | 版本 | 日期 | 主要变更 |
 |---|---|---|
+| **v3.23.0** | **2026-06-22** | **上银包装线现场闭环增强 + 通用 NG 补做** — (1) **外部触发事件人工确认定格**：漏箱/多装/缺油嘴/缺工单经事件映射且标 `require_ack` 时也进入检测层 `_pending_ack` 阻塞态、整线定格，操作员可走 `ack-event-elevated` 借管理员密码提权确认（`source_event_trigger_mixin.py`）；(2) **强制结案**：新权限 `system.packaging_flow.force_settle`（admin/engineer，操作员 403）+ `PackagingFlowRun.forced_reason/forced_by` 审计 + `force_settle_manual` 强制收尾 + 监控卡片按钮；(3) **待机不结算**：`forced_settle_on_standby` 开关，关掉后待机只暂停可恢复继续；(4) **缺油嘴 gate**：每箱封箱前 `_probe_oil_nozzle` 判放油嘴步骤 covered，未过暂不收尾+报警，未配置退化放行；(5) **通用 NG 补做策略**：`pipeline_config.ng_remediation`（enabled/allow_step/allow_count，任意 logic_mode，延迟落账，默认全关零差异）；(6) **包装补滑块**：仅「步骤齐+少装」挂起 `pending_remediation` 不落账→补齐到目标/手动指定/重做本箱→直接判结果，`supplement-sliders`/`remediation-redo` 端点（需 `monitor.detection.ack`）；(7) **开机自动恢复检测开关** `auto_resume`；(8) **项目一键复制** `POST /projects/{id}/duplicate`；(9) **虚拟扫码枪**。包装单测 48/48；全量非浏览器 1277 passed（19 失败为已知批跑串污染）。详见 `debug-mes` 第十六节 + `modify-project-config` §7.6 |
 | **v3.20.0** | **2026-06-15** | **外部 MES 工单主动拉取 + USB 键盘扫码枪 + 调试埋点** — (1) **工单主动拉取**：`backend/services/mes_puller.py` 通用可配置（地址/方法/请求体模板/成功判定路径/数组路径/字段映射/导入模式），复用 `MESConnection` 连接表；`pull-test` 自动识别返回结构（含上银 HIWIN `response.resultData` 两层嵌套）+ 立即同步/试同步(dry_run)+ upsert 幂等；`PullScheduler` 后台守护线程定时同步；前端 `OrderPullPanel.vue` 小白点选式配置。端点 `POST /mes/gateway/pull-test`、`/mes/gateway/connections/{id}/pull`；(2) **USB 键盘扫码枪**：做成扫码器设备一种（`device_type=usb_hid`），前端 `useScanGun.js` 全局键盘捕获 + 速度启发式区分手输，按用途路由（拉工单/绑工件/both），后端跳过网络连接 + 跳过 IP:Port 唯一校验（多枪不撞 `:0`），配置归入扫码器面板 `UsbScanGunDialog.vue`；(3) **调试埋点** `backend.pull`/`mes.pull` 分类；(4) **修** 外部 MES 返回非 2xx 只回「HTTP 500」丢失返回体真实错误原因 → 通用探测返回体错误字段（先红后绿）；(5) 三层测试：BDD 11（order_pull 6 + usb_scan_gun 5）+ 单测 9 + 可见浏览器 UAT，**全套 BDD 141 passed 零回归**。详见 `debug-mes` skill 第 14/15 节 |
 | **v3.19.0** | **2026-06-11** | **全局调试日志系统 + NG 原因可解释性** — (1) **调试中心**：`backend/core/debug_center.py`（约 20 个分类开关 + 3000 条环形缓冲 + UTF-8 旋转落盘，默认全关零开销）+ `/api/v1/debug/*`（开关/日志增量拉取/前端日志回传）+ `main.py` 5xx 中间件 + 全后端（alarm/mes_hooks/scanner/gateway/cluster/export/model_load/source 生命周期/HIK SDK）与前端（路由/axios 拦截器/核心视图交互）埋点 + Electron UTF-8 落盘与 `chcp 65001`；设置页「调试设置」Tab（开发者模式专属：开关矩阵 + 实时日志查看器，过滤/搜索/暂停/导出）；(2) **NG 原因埋点**：settlement 缺步清单（`缺少=['step_b']`）/ 超时 NG 原因 / per_item 周期不开始原因+漏件明细（`backend.per_item` 新分类）/ step_stats 置信度·ROI 拒收具体数值 / events_check 残留跳过，热路径 1-2s 节流；配套修 synthetic 最小项目缺步骤 id 致顺序结算**静默丢周期**；功能测试 4 用例 + 可见浏览器 UAT 7/7；(3) showcase 展会插件 v1.2.2（logo 圆角化 + 顶栏布局 + v1.2.x 真实化收口）重签名（指纹 `d1f2fcb6`）+ 桌面图标圆角化 + 统计接口加项目过滤 |
 | **v3.18.0** | **2026-06-05** | **RFC12 全页面整页覆盖框架 + 天军展会定制插件(showcase)合入主干** — 整页覆盖能力从仅 Monitor 扩展到全部 8 个主视图（各加 `<TjSlot name="*.layout.body">`，无插件零差异）；showcase Tier2 插件 iframe 承载 8 页高科技重设计，真数据驱动 + `showcase_stats` 统计端点，RSA-PSS/HMAC 主作者签名 |
@@ -1031,6 +1033,6 @@ docs/
 
 ---
 
-**本文件最后更新**：2026-06-15（v3.20.0 发版：外部 MES 工单主动拉取 + 定时同步 + USB 键盘扫码枪即插即用 + backend.pull/mes.pull 调试埋点 + 外部 MES 错误详情回传修复）
+**本文件最后更新**：2026-06-22（v3.23.0 发版：外部事件人工确认定格 + 强制结案审计 + 待机不结算 + 缺油嘴 gate + 通用 NG 补做策略 + 包装补滑块 + 开机自动恢复检测开关 + 项目复制 + 虚拟扫码枪）
 **维护者**：项目主作者 + AI agents
 **事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）+ v3.9.0/v3.10.0 实测代码反推（`source_settlement_mixin.py` 1320 行 / `source_per_item_mixin.py` ~960 行 / v3.10 用户系统 ~841 行 core + 5 张新表 + 12 个 UAT 全过）

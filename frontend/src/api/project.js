@@ -16,6 +16,9 @@ export const updateProject = (id, data) => api.put(`/projects/${id}`, data);
 // 删除项目
 export const deleteProject = (id) => api.delete(`/projects/${id}`);
 
+// 复制项目 (克隆全部配置为一个新副本)
+export const duplicateProject = (id) => api.post(`/projects/${id}/duplicate`);
+
 // 激活项目
 export const activateProject = (id) => api.post(`/projects/${id}/activate`);
 

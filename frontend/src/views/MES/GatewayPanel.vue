@@ -24,6 +24,7 @@
 
     <!-- 连接列表 -->
     <el-table :data="connections" stripe size="small" class="mes-table" max-height="calc(100vh - 300px)">
+      <el-table-column prop="id" label="ID" width="60" />
       <el-table-column prop="name" label="连接名称" width="140" />
       <el-table-column prop="adapter_type" label="类型" width="120">
         <template #default="{ row }">

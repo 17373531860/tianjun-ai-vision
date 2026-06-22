@@ -632,4 +632,50 @@ curl http://localhost:8001/api/v1/cluster/slaves
 
 ---
 
+## 十六、包装箱结算协调器（v3.21+ / v3.22 滑块口径 / v3.23 现场处置）
+
+**做什么**：上银等包装线「工单 → 箱 → 滑块/托盘」三层结算。扫工单查 MES 拿滑块总数+规格 →
+算箱数（含尾箱）→ 逐检测周期按进箱数判满 → 收尾回推 MES。单例，per channel/config。
+
+**关键文件**：`backend/services/packaging_flow_coordinator.py`（状态机）+ `backend/api/packaging_flows.py`
+（CRUD + 扫码 + 处置端点）+ `backend/models/mes_models.py: PackagingFlowConfig / PackagingFlowRun` +
+`frontend/src/views/Settings/PackagingFlowPanel.vue`（配置）+ `frontend/src/views/Monitor/PackagingFlowCard.vue`（监控卡）。
+
+**两种计数口径**：`count_unit='trays'`（v3.21 原行为）/ `'sliders'`（v3.22，一个检测周期=一个箱，
+进箱滑块数由检测层 `slider_count` 带入）。`get_state(config_id)` 直接返回内存 run dict，run 里加什么字段前端就能看到什么。
+
+**run.status 状态**：`order_loaded` / `running` / `pending_remediation`（v3.23 少装挂起）/ `completed` / `aborted`。
+
+### v3.23 现场处置三件套
+
+| 能力 | 入口 / 权限 | 行为 | 关键点 |
+|---|---|---|---|
+| 强制结案 | `POST /packaging-flows/{id}/force-settle`，权限 `system.packaging_flow.force_settle`（admin/engineer，操作员 403）| `force_settle_manual` 强制走 settle 收尾（忽略配置 keep/abort），必填理由 | `forced_reason`/`forced_by` 落 `PackagingFlowRun` 审计 |
+| 待机不结算 | 配置 `forced_settle_on_standby`（默认开）| 关掉后 `on_forced_settle_by_channel(is_standby=True)` 直接 return，工单保留可恢复 | 停止（非待机）才收尾 |
+| 缺油嘴 gate | 配置 `oil_nozzle_required`+`oil_nozzle_step_label`+`event_missing_nozzle`| 每箱结算前 `_probe_oil_nozzle` 判放油嘴步骤是否 covered，未过暂不收尾+报警 | 未配置/无探测器退化放行（每箱 gate 误卡会卡死线）|
+
+### v3.23 NG 补做之「补滑块」（延迟落账）
+
+- **触发**：仅当「检测步骤齐（is_good=True）+ 仅滑块数不足（sc<target）」且项目开了
+  `pipeline_config.ng_remediation.{enabled,allow_count}` 时，本箱进 `pending_remediation` 挂起，
+  **不立即记 NG、不推进 box_done**，只报警。多装 / 步骤不齐 / 没开策略 → 原行为立即判 NG（零差异）。
+- **策略来源**：cycle_end 由 `source_session_lifecycle_mixin.py` 把 VSM 的 `_ng_remediation` 传进
+  `on_cycle_settled(..., remediation=)`。
+- **推进**：`POST /packaging-flows/{id}/supplement-sliders`（补滑块，target_count 空=自动补齐到目标，
+  传值=手动指定封顶不超目标）/ `POST /packaging-flows/{id}/remediation-redo`（重做本箱，丢弃等下一周期重测），
+  均需 `monitor.detection.ack` 权限。补做留痕写进 `box_details[].remediated`。挂起期间新周期被忽略。
+- **常见故障**：
+  - 少装没挂起立即 NG → 项目没开 ng_remediation 或没开 allow_count；或多装/步骤不齐（不在挂起条件内）。
+  - 补滑块 409「没有等待补做的少装箱」→ run.status 不是 pending_remediation 或 pending_box 为空。
+  - 监控卡看不到补做按钮 → 当前账号无 `monitor.detection.ack`（提示提权）。
+  - 排障开 `backend.packaging` 调试分类（少装挂起 / 补滑块落账 / 强制结案）。
+
+### v3.23 外部触发事件人工确认定格
+
+外部触发（包装漏箱/多装/缺油嘴/缺工单经事件映射）的事件若在「项目事件设置」标 `require_ack=True`，
+也进入检测层人工确认阻塞态（`_pending_ack`，整线定格），由 `source_event_trigger_mixin.py` 处理；
+操作员可走 `ack-event-elevated`（`source_routes.py`）借管理员密码提权确认。默认 `require_ack=False` 零差异。
+
+---
+
 **改动 MES 子系统前必读**：本 skill 第 3/5/8/11 节 + AGENTS.md 第六节 6.2、第八节不变量 1/4/6。

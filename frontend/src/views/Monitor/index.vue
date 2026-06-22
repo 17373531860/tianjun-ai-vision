@@ -980,6 +980,12 @@
         :state="packagingState"
       />
 
+      <!-- 虚拟扫码枪测试台 (仅当存在启用的包装结算配置时出现, 默认折叠; 无包装客户零差异) -->
+      <VirtualScanGun
+        v-if="packagingConfigs.length > 0"
+        :channel-id="selectedChannel"
+      />
+
       <!-- v3.5.0: 周期性强制动作进度（独立链，与上方 SOP/Tracking 不冲突） -->
       <div v-if="periodicActions.length > 0" class="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
         <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex items-center justify-between">
@@ -1469,6 +1475,62 @@
       </div>
     </div>
 
+    <!-- v3.23 借管理员密码授权确认: 无 ack 权限的操作员点确认被 403 → 弹此窗 -->
+    <!-- 只校验一次管理员账密 + 权限解除阻塞, 不创建登录会话、不改当前登录身份 -->
+    <!-- 取消 = 关本窗回到上面的人工确认覆盖层 (pendingAck 未清, 覆盖层仍在) -->
+    <div
+      v-if="elevateDialog.visible"
+      class="absolute inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+      @click.stop
+    >
+      <div class="w-full max-w-md bg-slate-900 border-2 border-cyan-500 rounded-xl shadow-2xl flex flex-col overflow-hidden">
+        <div class="px-5 py-3 bg-gradient-to-r from-cyan-700 to-cyan-900 flex items-center gap-3">
+          <el-icon :size="26" class="text-cyan-100"><Lock /></el-icon>
+          <div class="flex-1">
+            <div class="text-white font-bold text-lg">借管理员密码授权确认</div>
+            <div class="text-cyan-100 text-xs">当前账号无人工确认权限，请管理员授权本次确认（不改变当前登录身份）</div>
+          </div>
+          <span class="bg-slate-900/60 px-2 py-0.5 rounded text-cyan-100 text-xs font-bold">
+            工位 {{ elevateDialog.channel + 1 }}
+          </span>
+        </div>
+
+        <div class="px-5 py-4 space-y-3">
+          <el-input
+            v-model="elevateDialog.username"
+            placeholder="管理员账号"
+            size="large"
+            clearable
+            @keyup.enter="submitElevatedAck"
+          >
+            <template #prefix><el-icon><User /></el-icon></template>
+          </el-input>
+          <el-input
+            v-model="elevateDialog.password"
+            type="password"
+            placeholder="管理员密码"
+            size="large"
+            show-password
+            @keyup.enter="submitElevatedAck"
+          >
+            <template #prefix><el-icon><Lock /></el-icon></template>
+          </el-input>
+        </div>
+
+        <div class="px-5 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-3">
+          <el-button size="large" @click="elevateDialog.visible = false">取消</el-button>
+          <el-button
+            type="primary"
+            size="large"
+            :loading="elevateDialog.submitting"
+            @click="submitElevatedAck"
+          >
+            授权并确认
+          </el-button>
+        </div>
+      </div>
+    </div>
+
     <button
       v-if="totalRecordingFailureCount > 0"
       class="absolute right-2 bottom-2 z-40 bg-amber-600/90 hover:bg-amber-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1"
@@ -1551,15 +1613,16 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useScannerDisableStore } from '@/store/useScannerDisableStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
-import { Check, Folder, Picture, CircleCheck, CircleClose, Warning } from '@element-plus/icons-vue';
+import { Check, Folder, Picture, CircleCheck, CircleClose, Warning, Lock, User } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, resetPeriodicAction, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getScanPairActive, settleScanPairForStop, ackPendingEvent } from '@/api/detection';
+import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, resetPeriodicAction, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getScanPairActive, settleScanPairForStop, ackPendingEvent, ackPendingEventElevated } from '@/api/detection';
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import { getProjectDetail } from '@/api/project';
 import api, { getBackendHost } from '@/api/index';
 import { getExtraFieldsSchema, setExtraFields } from '@/api/gateway';
 import PerItemPanel from './PerItemPanel.vue';
 import PackagingFlowCard from './PackagingFlowCard.vue';
+import VirtualScanGun from './VirtualScanGun.vue';
 import { listPackagingFlows, getPackagingFlowState } from '@/api/packaging_flow';
 import TjSlot from '@/components/TjSlot.vue';
 import { dbg, dbgErr } from '@/utils/debug';
@@ -2875,7 +2938,11 @@ const fetchChannelCount = async () => {
     }
     if (count > 1) {
       initMultiChannelData(count);
-      startMultiStreams(count);
+      // 整页覆盖插件 (monitor.layout.body) 自己用 <img> 吃 /video_feed?channel=N,
+      // 原生双缓冲取流会和插件 <img> 抢同一通道的 MJPEG 连接 (后端每通道只保留最新
+      // 一条连接, 旧连接主动让位), 先连的被踢断 → 画面冻在第一帧、而检测框叠加层走
+      // 独立轮询照常更新。覆盖生效时跳过原生取流, 仅保留轮询 (叠加层画框/计数都靠它)。
+      if (!layoutBodyOverride.value) startMultiStreams(count);
       startMultiPolling();
       loadPerChannelDetectionSettings(res.data.source_configs || {});
     } else {
@@ -5619,10 +5686,56 @@ const ackPendingForChannel = async (ch) => {
     }
     chData.pendingAck = { active: false };
   } catch (e) {
-    console.error('[ackPendingForChannel] failed', e);
-    ElMessage.error('确认失败：' + (e?.message || '未知错误'));
+    // 403 = 当前登录账号没有"人工确认"权限 (常见: 操作员) → 弹借管理员密码提权窗
+    if (e?.response?.status === 403) {
+      openElevateDialog(ch);
+    } else {
+      console.error('[ackPendingForChannel] failed', e);
+      ElMessage.error('确认失败：' + (e?.message || '未知错误'));
+    }
   } finally {
     chData.pendingAckSubmitting = false;
+  }
+};
+
+// v3.23 借密码提权确认: 操作员无 ack 权限时, 输入管理员账密授权一次, 不改当前登录身份.
+// 确认完仍是该操作员的会话 (后端 ack-event-elevated 只校验一次账密 + 权限, 不发 token).
+const elevateDialog = ref({ visible: false, channel: 0, username: '', password: '', submitting: false });
+
+const openElevateDialog = (ch) => {
+  elevateDialog.value = { visible: true, channel: ch, username: '', password: '', submitting: false };
+};
+
+const submitElevatedAck = async () => {
+  const d = elevateDialog.value;
+  if (!d.username || !d.password) {
+    ElMessage.warning('请输入管理员账号和密码');
+    return;
+  }
+  d.submitting = true;
+  try {
+    const res = await ackPendingEventElevated(d.channel, d.username, d.password);
+    if (res?.data?.acked) {
+      const ch = d.channel;
+      ElMessage.success(`已由 ${res.data.authorized_by || d.username} 授权，工位 ${ch + 1} 确认成功`);
+      const chData = multiChannelData.value[ch];
+      if (chData) chData.pendingAck = { active: false };
+    } else {
+      ElMessage.info('当前没有待确认事件');
+    }
+    elevateDialog.value.visible = false;
+  } catch (e) {
+    const status = e?.response?.status;
+    const detail = e?.response?.data?.detail || e?.message || '未知错误';
+    if (status === 401) {
+      ElMessage.error('账号或密码错误');
+    } else if (status === 403) {
+      ElMessage.error(detail);
+    } else {
+      ElMessage.error('授权失败：' + detail);
+    }
+  } finally {
+    elevateDialog.value.submitting = false;
   }
 };
 // ==============================================================

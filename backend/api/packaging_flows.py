@@ -28,7 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from backend.core.auth_deps import require_perm
+from backend.core.auth_deps import require_perm, get_current_user, CurrentUser
 from backend.db.database import get_db
 from backend.models.mes_models import PackagingFlowConfig, PackagingFlowRun
 
@@ -90,6 +90,10 @@ class PackagingFlowConfigBase(BaseModel):
     tail_paper_order_required: bool = False
     tail_paper_step_label: Optional[str] = None
     event_missing_paper: Optional[int] = None
+    # 缺油嘴 gate (v3.23, 每箱查, 默认关)
+    oil_nozzle_required: bool = False
+    oil_nozzle_step_label: Optional[str] = None
+    event_missing_nozzle: Optional[int] = None
 
 
 class PackagingFlowConfigCreate(PackagingFlowConfigBase):
@@ -138,6 +142,9 @@ class PackagingFlowConfigUpdate(BaseModel):
     tail_paper_order_required: Optional[bool] = None
     tail_paper_step_label: Optional[str] = None
     event_missing_paper: Optional[int] = None
+    oil_nozzle_required: Optional[bool] = None
+    oil_nozzle_step_label: Optional[str] = None
+    event_missing_nozzle: Optional[int] = None
 
 
 class PackagingFlowConfigResponse(PackagingFlowConfigBase):
@@ -251,6 +258,9 @@ def _serialize(row: PackagingFlowConfig) -> PackagingFlowConfigResponse:
         tail_paper_order_required=bool(getattr(row, "tail_paper_order_required", False)),
         tail_paper_step_label=getattr(row, "tail_paper_step_label", None),
         event_missing_paper=getattr(row, "event_missing_paper", None),
+        oil_nozzle_required=bool(getattr(row, "oil_nozzle_required", False)),
+        oil_nozzle_step_label=getattr(row, "oil_nozzle_step_label", None),
+        event_missing_nozzle=getattr(row, "event_missing_nozzle", None),
     )
 
 
@@ -415,3 +425,108 @@ def packaging_scan(payload: ScanInput, db: Session = Depends(get_db)):
     except Exception:
         pass
     return {"handled": True, "config_id": config_id, "state": state}
+
+
+class ForceSettleInput(BaseModel):
+    reason: str
+    channel_id: Optional[int] = None
+
+
+@router.post("/{config_id}/force-settle",
+             dependencies=[Depends(require_perm("system.packaging_flow.force_settle"))])
+def packaging_force_settle(config_id: int, payload: ForceSettleInput,
+                           db: Session = Depends(get_db),
+                           user: CurrentUser = Depends(get_current_user)):
+    """管理员 / 主管「强制结案」当前进行中工单 (必填理由, 审计留痕).
+
+    现场异常 (卡单 / 工单提前收尾 / 漏箱要硬收) 时由有权限者手动收尾, 不靠停止/待机.
+    强制走 settle 收尾 (忽略配置 keep/abort), 未满箱按 on_forced_stop_partial 判合格性.
+    需 system.packaging_flow.force_settle 权限 (admin / engineer; 操作员无 → 403).
+    """
+    reason = (payload.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="强制结案必须填写理由")
+    from backend.services.packaging_flow_coordinator import get_coordinator
+    coord = get_coordinator()
+    if config_id not in coord.list_loaded_config_ids():
+        raise HTTPException(status_code=404, detail="包装结算配置不存在或未启用")
+    operator = (getattr(user, "username", None) or getattr(user, "display_name", None) or "未知")
+    settled = coord.force_settle_manual(config_id, db, reason=reason, operator=operator)
+    if not settled:
+        raise HTTPException(status_code=409, detail="当前没有进行中的工单可结案")
+
+    last_run = None
+    row = (db.query(PackagingFlowRun)
+           .filter(PackagingFlowRun.flow_config_id == config_id)
+           .order_by(PackagingFlowRun.id.desc()).first())
+    if row is not None:
+        last_run = {
+            "order_no": row.order_no, "status": row.status,
+            "final_result": row.final_result, "box_total": row.box_total,
+            "box_done": row.box_done, "box_ng": row.box_ng,
+            "forced_reason": row.forced_reason, "forced_by": row.forced_by,
+        }
+    try:
+        from backend.core import debug_center
+        debug_center.dbg("backend.packaging", "强制结案",
+                         f"cfg_id={config_id} by={operator} reason={reason!r} "
+                         f"final={last_run.get('final_result') if last_run else '?'}")
+    except Exception:
+        pass
+    return {"success": True, "config_id": config_id, "forced_by": operator,
+            "reason": reason, "last_run": last_run}
+
+
+class SupplementInput(BaseModel):
+    target_count: Optional[int] = None   # None=自动补齐到目标; 传值=手动指定最终数
+    reason: Optional[str] = None
+    channel_id: Optional[int] = None
+
+
+@router.post("/{config_id}/supplement-sliders",
+             dependencies=[Depends(require_perm("monitor.detection.ack"))])
+def packaging_supplement_sliders(config_id: int, payload: SupplementInput,
+                                 db: Session = Depends(get_db),
+                                 user: CurrentUser = Depends(get_current_user)):
+    """对挂起中的「少装」箱补滑块: 补齐数量直接落账, 不重置周期 (需 monitor.detection.ack 权限).
+
+    需项目开启 NG 补做策略(补数量); 少装时本箱会进入 pending_remediation 挂起态, 由此接口推进.
+    """
+    from backend.services.packaging_flow_coordinator import get_coordinator
+    coord = get_coordinator()
+    if config_id not in coord.list_loaded_config_ids():
+        raise HTTPException(status_code=404, detail="包装结算配置不存在或未启用")
+    operator = (getattr(user, "username", None) or getattr(user, "display_name", None) or "未知")
+    ok = coord.supplement_sliders(config_id, db, target_count=payload.target_count,
+                                  operator=operator, reason=payload.reason)
+    if not ok:
+        raise HTTPException(status_code=409, detail="当前没有等待补做的少装箱")
+    try:
+        from backend.core import debug_center
+        debug_center.dbg("backend.packaging", "补滑块",
+                         f"cfg_id={config_id} by={operator} target={payload.target_count}")
+    except Exception:
+        pass
+    return {"success": True, "config_id": config_id, "supplemented_by": operator,
+            "state": coord.get_state(config_id)}
+
+
+class RemediationRedoInput(BaseModel):
+    channel_id: Optional[int] = None
+
+
+@router.post("/{config_id}/remediation-redo",
+             dependencies=[Depends(require_perm("monitor.detection.ack"))])
+def packaging_remediation_redo(config_id: int, payload: RemediationRedoInput,
+                               db: Session = Depends(get_db),
+                               user: CurrentUser = Depends(get_current_user)):
+    """对挂起中的少装箱「重做」: 丢弃本箱, 等下一检测周期重新结算 (需 monitor.detection.ack 权限)."""
+    from backend.services.packaging_flow_coordinator import get_coordinator
+    coord = get_coordinator()
+    if config_id not in coord.list_loaded_config_ids():
+        raise HTTPException(status_code=404, detail="包装结算配置不存在或未启用")
+    operator = (getattr(user, "username", None) or getattr(user, "display_name", None) or "未知")
+    ok = coord.redo_pending(config_id, db, operator=operator)
+    if not ok:
+        raise HTTPException(status_code=409, detail="当前没有等待补做的少装箱")
+    return {"success": True, "config_id": config_id, "state": coord.get_state(config_id)}

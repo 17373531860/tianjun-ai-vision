@@ -833,8 +833,10 @@ def get_model_conversions(model_id: int, db: Session = Depends(get_db)):
     return convs
 
 
+# 只读解析"按格式应加载哪个模型文件", 检测启动时调。权限随启动检测链路
+# (monitor.detection.control), 不该要"上传模型"权限 —— 否则操作员启动检测时解析路径 403。
 @router.post("/{model_id}/resolve-path",
-              dependencies=[Depends(require_perm("model.upload"))])
+              dependencies=[Depends(require_perm("monitor.detection.control"))])
 def resolve_model_path(
     model_id: int,
     format: str = "pytorch_fp32",

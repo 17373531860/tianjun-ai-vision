@@ -40,12 +40,30 @@ except ImportError as e:  # pragma: no cover
 
 app = FastAPI(title="MES Mock (上银包装线)")
 
-# 内置工单 → {滑块总数(排产量), 产品规格}. 覆盖整除/非整除/单箱/多型号.
+# 内置工单 → {客户名, 滑块总数(排产量), 产品规格}. 覆盖整除/非整除/单箱/多型号.
+#
+# 键 = 规范工单号 (带连字符), 与"扫码去 - → 软件补 - 后"的查询值一致.
+#   扫码枪读到 JOB1503000213 (无 -) → 软件第 12 位后补 - → JOB150300021-3 → 查 MES.
+#   _norm 会去 - 大小写不敏感, 所以带不带 - 都能命中, 真实流程是带 - 来查.
+#
+# 上银 SY 九条工单 (规格统一 SY = 96 滑块/箱, 公司各异, 排产量各异):
+#   覆盖刚好满箱 / 带尾箱 / 多装(排产<实检) / 整数倍多箱 等组合.
 ORDERS: Dict[str, Dict[str, Any]] = {
-    "ORD-NONEXACT": {"dispatch_qty": 250, "spec": "HGH20"},
-    "ORD-EXACT": {"dispatch_qty": 240, "spec": "HGW15"},
-    "ORD-SINGLE": {"dispatch_qty": 50, "spec": "HGH20"},
-    "ORD-SPEC2": {"dispatch_qty": 192, "spec": "EGH15"},
+    # --- 上银 SY 九条 (UAT 主场景) ---
+    "JOB150300021-3":   {"cust_name": "上银科技(苏州)有限公司",   "dispatch_qty": 96,  "spec": "SY"},  # 刚好 1 箱满
+    "JOB150300021-31":  {"cust_name": "上银精密机械(嘉兴)有限公司", "dispatch_qty": 100, "spec": "SY"},  # 1 满箱 + 尾箱 4
+    "JOB150300021-313": {"cust_name": "大银微系统股份有限公司",     "dispatch_qty": 48,  "spec": "SY"},  # 排产 48 但实检 96 → 多装
+    "JOB202605132-1":   {"cust_name": "台湾上银科技股份有限公司",   "dispatch_qty": 192, "spec": "SY"},  # 整 2 箱
+    "JOB202605132-12":  {"cust_name": "上银智能装备(常州)有限公司", "dispatch_qty": 200, "spec": "SY"},  # 2 满箱 + 尾箱 8
+    "JOB202605132-123": {"cust_name": "广东上银传动科技有限公司",   "dispatch_qty": 96,  "spec": "SY"},  # 刚好 1 箱满 (另一客户)
+    "JOB202406221-2":   {"cust_name": "上银光电(深圳)有限公司",     "dispatch_qty": 288, "spec": "SY"},  # 整 3 箱
+    "JOB202406221-21":  {"cust_name": "上银自动化(东莞)有限公司",   "dispatch_qty": 50,  "spec": "SY"},  # 单箱尾箱 50
+    "JOB202406221-213": {"cust_name": "上银机器人(上海)有限公司",   "dispatch_qty": 96,  "spec": "SY"},  # 刚好 1 箱满
+    # --- 历史测试单 (保留, 勿删: 在线 e2e 单测依赖) ---
+    "ORD-NONEXACT": {"cust_name": "通用客户A", "dispatch_qty": 250, "spec": "HGH20"},
+    "ORD-EXACT":    {"cust_name": "通用客户B", "dispatch_qty": 240, "spec": "HGW15"},
+    "ORD-SINGLE":   {"cust_name": "通用客户C", "dispatch_qty": 50,  "spec": "HGH20"},
+    "ORD-SPEC2":    {"cust_name": "通用客户D", "dispatch_qty": 192, "spec": "EGH15"},
 }
 
 
@@ -53,15 +71,22 @@ def _norm(s: str) -> str:
     return (s or "").strip().replace("-", "").upper()
 
 
-_NORM_ORDERS = {_norm(k): v for k, v in ORDERS.items()}
+# 规范号映射: 去-大写 → (规范工单号, 记录). 命中后回带 - 的规范号给前端显示.
+_NORM_ORDERS = {_norm(k): (k, v) for k, v in ORDERS.items()}
 
 
 def lookup(job_no: str) -> List[Dict[str, Any]]:
     """按工单号查; 未知工单返回空数组 (模拟 MES 查不到)."""
-    rec = _NORM_ORDERS.get(_norm(job_no))
-    if rec is None:
+    hit = _NORM_ORDERS.get(_norm(job_no))
+    if hit is None:
         return []
-    return [{"job_no": job_no, "dispatch_qty": rec["dispatch_qty"], "spec": rec["spec"]}]
+    canon, rec = hit
+    return [{
+        "job_no": canon,                    # 回带连字符的规范号 (前端显示用)
+        "cust_name": rec.get("cust_name", ""),
+        "dispatch_qty": rec["dispatch_qty"],
+        "spec": rec["spec"],
+    }]
 
 
 @app.api_route("/mes/work-order", methods=["GET", "POST"])

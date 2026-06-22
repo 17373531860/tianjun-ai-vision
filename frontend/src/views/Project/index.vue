@@ -160,6 +160,7 @@
           </h2>
           <div class="flex gap-2">
             <el-button type="danger" size="small" plain @click="handleDeleteProject">删除</el-button>
+            <el-button size="small" plain @click="handleDuplicateProject" :loading="duplicating">复制</el-button>
             <el-button type="primary" size="small" @click="handleSaveProject" :loading="saving">保存配置</el-button>
           </div>
         </div>
@@ -1374,7 +1375,34 @@
           <!-- Tab 3: Logic Settings -->
           <el-tab-pane label="逻辑设置" name="logic">
             <div class="h-full overflow-y-auto p-4 pb-32 custom-scrollbar space-y-6">
-              
+
+              <!-- v3.23 NG 补做策略 (任意检测模式通用) -->
+              <el-card v-if="activeProject.pipeline_config && activeProject.pipeline_config.ng_remediation" shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header>
+                  <div class="flex items-center justify-between">
+                    <span class="font-bold text-white">NG 补做策略</span>
+                    <el-switch v-model="activeProject.pipeline_config.ng_remediation.enabled" active-text="开启" inactive-text="关闭" />
+                  </div>
+                </template>
+                <div class="space-y-3 text-sm text-gray-300">
+                  <p class="text-xs text-gray-400">
+                    开启后：缺步骤 / 少装数量导致的 NG 经人工确认时，操作员可选择「补做缺的那步 / 补齐少装的数量」直接修正为合格，无需重置整个周期。结果延迟落账（补做成功直接记 OK，不先记 NG 再改）。默认关闭 = 行为零差异。
+                  </p>
+                  <div class="flex items-center gap-6 pt-2 border-t border-slate-700" :class="{ 'opacity-40 pointer-events-none': !activeProject.pipeline_config.ng_remediation.enabled }">
+                    <label class="flex items-center gap-2">
+                      <el-switch v-model="activeProject.pipeline_config.ng_remediation.allow_step" />
+                      <span class="text-gray-300">允许补步骤</span>
+                      <span class="text-xs text-gray-500">— 缺某一步时补做该步</span>
+                    </label>
+                    <label class="flex items-center gap-2">
+                      <el-switch v-model="activeProject.pipeline_config.ng_remediation.allow_count" />
+                      <span class="text-gray-300">允许补数量</span>
+                      <span class="text-xs text-gray-500">— 少装时补齐到目标数（如包装滑块）</span>
+                    </label>
+                  </div>
+                </div>
+              </el-card>
+
               <!-- Settlement Mode (sequential / custom-sequential) -->
               <el-card v-if="activeProject.logic_mode === 'sequential' || (activeProject.logic_mode === 'custom' && activeProject.custom_based_on === 'sequential')" shadow="never" class="bg-slate-800 border-slate-700">
                 <template #header><span class="font-bold text-white">结算方式</span></template>
@@ -2812,7 +2840,7 @@ import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { getProjects, getProjectDetail, createProject, updateProject, deleteProject, activateProject } from '@/api/project';
+import { getProjects, getProjectDetail, createProject, updateProject, deleteProject, duplicateProject, activateProject } from '@/api/project';
 import { getModels, getAvailableFormats, convertModel, getConversionStatus, getFormatDiagnosis } from '@/api/model';
 import { getBackendHost } from '@/api/index';
 import { setProjectConfig } from '@/api/detection';
@@ -2854,6 +2882,7 @@ const projects = ref([]);
 const modelList = ref([]);
 const loading = ref(false);
 const saving = ref(false);
+const duplicating = ref(false);
 const creating = ref(false);
 const loadingModels = ref(false);
 
@@ -3765,6 +3794,17 @@ const initProjectDefaults = (project) => {
     }
   }
 
+  // v3.23 NG 补做策略 (任意 logic_mode 通用): 缺步/少装 NG 人工确认后可补做不重置周期
+  // 默认全关 = 行为零差异; 嵌套在 pipeline_config.ng_remediation 不拍平到顶层
+  if (!project.pipeline_config.ng_remediation
+      || typeof project.pipeline_config.ng_remediation !== 'object') {
+    project.pipeline_config.ng_remediation = {};
+  }
+  const remCfg = project.pipeline_config.ng_remediation;
+  if (remCfg.enabled === undefined) remCfg.enabled = false;
+  if (remCfg.allow_step === undefined) remCfg.allow_step = true;
+  if (remCfg.allow_count === undefined) remCfg.allow_count = true;
+
   // Step 8 (feat/multi-model-roi-link): 反序列化附加模型 (副 slot, 主模型由
   // default_model_id/model_format 管理). 来源 pipeline_config.models[]
   // 中所有 name !== 'main' 的项, 缺字段时用安全默认值.
@@ -4093,6 +4133,15 @@ const handleSaveProject = async () => {
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,
+        // v3.23 NG 补做策略 (任意模式通用, 嵌套对象直接序列化)
+        ng_remediation: (() => {
+          const src = activeProject.value.pipeline_config?.ng_remediation || {};
+          return {
+            enabled: src.enabled === true,
+            allow_step: src.allow_step !== false,
+            allow_count: src.allow_count !== false,
+          };
+        })(),
         rod_companion_filter: _sanitizeCompanionFilter(activeProject.value.rod_companion_filter),
         rod_session_gate: _sanitizeSessionGate(activeProject.value.rod_session_gate),
         hide_boxes_outside_step_roi: !!activeProject.value.pipeline_config?.hide_boxes_outside_step_roi,
@@ -4279,6 +4328,26 @@ const handleDeleteProject = async () => {
       dbgErr('project.crud', '删除项目', err);
       ElMessage.error('删除失败');
     }
+  }
+};
+
+// 复制项目：克隆当前项目全部配置为一个新副本, 复制后自动切到新副本继续编辑
+const handleDuplicateProject = async () => {
+  if (!activeProject.value) return;
+  dbg('project.crud', '点击「复制项目」', `name=${activeProject.value?.name} id=${activeProject.value?.id}`);
+  duplicating.value = true;
+  try {
+    const res = await duplicateProject(activeProject.value.id);
+    const newProject = res.data;
+    projects.value.push(newProject);
+    await selectProject(newProject);
+    dbg('project.crud', '复制项目成功', `newId=${newProject?.id} newName=${newProject?.name}`);
+    ElMessage.success(`已复制为「${newProject.name}」`);
+  } catch (err) {
+    dbgErr('project.crud', '复制项目', err);
+    ElMessage.error('复制项目失败');
+  } finally {
+    duplicating.value = false;
   }
 };
 

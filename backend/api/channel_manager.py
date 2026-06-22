@@ -354,6 +354,10 @@ class ChannelManager:
         except Exception as e:
             print(f"[ChannelManager] 保存 ch{channel_id} 源配置失败: {e}")
 
+    def persist_was_detecting(self, channel_id: int, was_detecting: bool):
+        """落盘「上次退出时是否在检测」— 供下次启动 auto_restore 自动恢复检测."""
+        self.save_channel_source(channel_id, {"was_detecting": bool(was_detecting)}, merge=True)
+
     def get_channel_sources(self) -> dict:
         """读取所有工位的持久化源配置"""
         try:
@@ -497,6 +501,44 @@ class ChannelManager:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"[ChannelManager] 保存 window 配置失败: {e}")
+
+    # ------------------------------------------------------------------
+    # v3.22.x: 开机自动恢复检测开关
+    # ------------------------------------------------------------------
+    # 背景: 后端启动 auto_restore_video_sources() 会按每通道 was_detecting 自动
+    #   start_detection, 让工控机开机即恢复上次的检测状态 (项目+源已另行恢复)。
+    # 客户诉求: 有的产线希望开机直接接着干 (默认 enabled=true); 有的希望开机停在
+    #   待机, 由工人确认后手动点开始。做成开关, 默认开。
+    # 放 workstation_config.json 顶层 auto_resume 段, 与 splash/window 兄弟字段一致。
+    def get_auto_resume_config(self) -> dict:
+        """读 workstation_config.json 顶层 auto_resume 段, 不存在返回默认 (enabled=true)."""
+        try:
+            if os.path.exists(_CONFIG_FILE):
+                with open(_CONFIG_FILE, 'r') as f:
+                    data = json.load(f)
+                ar = data.get("auto_resume") or {}
+                # 字段缺失 → 默认 true (保持老行为: 开机自动恢复检测)
+                return {"enabled": bool(ar.get("enabled", True))}
+        except Exception as e:
+            print(f"[ChannelManager] 读取 auto_resume 配置失败: {e}")
+        return {"enabled": True}
+
+    def set_auto_resume_config(self, enabled: bool):
+        """写 workstation_config.json 顶层 auto_resume 段; 仅替换该段."""
+        try:
+            os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
+            data = {}
+            if os.path.exists(_CONFIG_FILE):
+                try:
+                    with open(_CONFIG_FILE, 'r') as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            data["auto_resume"] = {"enabled": bool(enabled)}
+            with open(_CONFIG_FILE, 'w') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[ChannelManager] 保存 auto_resume 配置失败: {e}")
 
     def _load_config(self):
         try:
@@ -679,6 +721,28 @@ def set_window_config(req: WindowConfigRequest):
     """写主窗口模式; 立即落盘. 前端调用后再走 Electron IPC 通知主进程热切窗口模式."""
     channel_manager.set_window_config(req.fullscreen)
     return {"status": "success", **channel_manager.get_window_config()}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v3.22.x: 开机自动恢复检测开关
+# ─────────────────────────────────────────────────────────────────────
+class AutoResumeConfigRequest(BaseModel):
+    """开机自动恢复检测开关请求体。"""
+    enabled: bool = Field(True, description="True=开机自动接着上次检测 (默认); False=停在待机由工人手动开始")
+
+
+@router.get("/auto-resume")
+def get_auto_resume_config():
+    """读开机自动恢复检测开关。"""
+    return channel_manager.get_auto_resume_config()
+
+
+@router.put("/auto-resume",
+            dependencies=[Depends(require_perm("settings.edit"))])
+def set_auto_resume_config(req: AutoResumeConfigRequest):
+    """写开机自动恢复检测开关; 立即落盘, 下次后端启动生效。"""
+    channel_manager.set_auto_resume_config(req.enabled)
+    return {"status": "success", **channel_manager.get_auto_resume_config()}
 
 
 class UsbDeviceBindRequest(BaseModel):

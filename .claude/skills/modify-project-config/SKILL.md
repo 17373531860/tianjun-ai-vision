@@ -566,6 +566,33 @@ pytest tests/test_per_item_v310_features.py -v
 #   - SOP 字段 step_screenshot 在检测结果里如约暴露
 ```
 
+### 7.6 `pipeline_config.ng_remediation`（v3.23 通用 NG 补做策略, 任意 logic_mode）
+
+任意检测模式通用的「缺步骤 / 少装数量 NG 经人工确认后就地补做、不重置周期」开关。**嵌套在
+pipeline_config 内, 不拍平到顶层**, 因此不动 ORM / Pydantic schema / projects.py / Navbar。
+
+```jsonc
+"ng_remediation": {
+  "enabled": false,      // 总开关 (默认关 = 行为零差异)
+  "allow_step": true,    // 允许补步骤 (缺某步时补做该步)
+  "allow_count": true    // 允许补数量 (少装时补齐到目标, 如包装滑块)
+}
+```
+
+| 链路环节 | 触点 |
+|---|---|
+| 前端 UI | 项目管理 → 逻辑设置 Tab 顶部「NG 补做策略」卡片 (所有模式可见) |
+| 前端默认值 | `Project/index.vue: initProjectDefaults` 兜底建对象 |
+| 前端保存 | `Project/index.vue: handleSaveProject` 写回 `pipeline_config.ng_remediation` |
+| Monitor 透传 | `syncProjectConfig` 整 pipeline_config 展开自动带上 (无需单独发) |
+| 后端解析 | `source_project_config_apply.py: _apply_pipeline_config` → `h._ng_remediation` |
+| 状态初始化 | `source_state_init.py` 默认 `{enabled:False, allow_step:True, allow_count:True}` |
+| 结果暴露 | `source_routes.py` 检测结果 `ng_remediation` 字段 (前端确认弹窗据此显示补做按钮) |
+| 包装消费 | `source_session_lifecycle_mixin.py` cycle_end 把 `_ng_remediation` 传给包装协调器 |
+
+> 注意: 此开关只是「策略位」。包装「补滑块」消费它 (见 debug-mes); 检测「补步骤」消费它的
+> 实现在后续版本 (延迟落账点改核心状态机)。没开 = 任何模式行为零差异。
+
 ### 7.5 改 per_item 配置前的必读检查
 
 1. **前端 UI 改了吗？** 不改的话客户只能手动 PUT JSON

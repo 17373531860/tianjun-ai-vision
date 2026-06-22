@@ -1,0 +1,132 @@
+{
+  "version": "3.23.0",
+  "date": "2026-06-22",
+  "previous_version": "3.22.1",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "外部触发事件支持需人工确认定格整条检测线",
+      "symptom": "包装漏箱/多装/缺油嘴/缺工单等外部触发的异常只报警不阻断, 工人继续干导致连环错",
+      "root_cause": "人工确认阻塞态此前只在检测层 NG 路径触发, 外部事件触发路径不进入定格",
+      "fix": "事件标 require_ack=True 后外部触发也进入 _pending_ack 阻塞态, 整线定格直到确认/提权; 已在阻塞态不重置保留首因; 默认 false 零差异",
+      "files": ["backend/api/source_event_trigger_mixin.py", "backend/api/source_routes.py", "frontend/src/api/detection.js", "frontend/src/views/Monitor/index.vue"],
+      "keywords": ["人工确认", "require_ack", "外部事件", "定格", "ack-event-elevated", "提权", "external event"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "管理员/主管强制结案进行中工单 (必填理由+审计)",
+      "symptom": "现场卡单/工单提前收尾/漏箱要硬收时, 没有手动收尾入口, 只能靠停止/待机",
+      "root_cause": "包装结算缺少手动强制收尾通道与审计留痕字段",
+      "fix": "新增 system.packaging_flow.force_settle 权限; PackagingFlowRun 加 forced_reason/forced_by; force_settle_manual 强制走 settle; POST /packaging-flows/{id}/force-settle; 监控卡片强制结案按钮",
+      "files": ["backend/core/permissions.py", "backend/models/mes_models.py", "backend/main.py", "backend/services/packaging_flow_coordinator.py", "backend/api/packaging_flows.py", "frontend/src/api/packaging_flow.js", "frontend/src/views/Monitor/PackagingFlowCard.vue"],
+      "keywords": ["强制结案", "force-settle", "审计留痕", "forced_reason", "forced_by", "权限"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "待机维持检测不结算工单 (可恢复继续)",
+      "symptom": "待机即收尾工单, 进行中进度丢失无法恢复继续",
+      "root_cause": "待机收尾未提供开关, 一律按停止处理",
+      "fix": "包装配置加 forced_settle_on_standby (默认开=老行为); 关掉后待机只暂停不结算, 停止才收尾",
+      "files": ["backend/services/packaging_flow_coordinator.py", "frontend/src/views/Settings/PackagingFlowPanel.vue"],
+      "keywords": ["待机", "forced_settle_on_standby", "不结算", "恢复"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "每箱缺油嘴视觉 gate",
+      "symptom": "封箱前漏放油嘴属不良, 但软件不拦",
+      "root_cause": "缺少每箱封箱前放油嘴动作的视觉守门",
+      "fix": "配置加 oil_nozzle_required/oil_nozzle_step_label/event_missing_nozzle; sliders 每箱结算前复用步骤探测钩子判放油嘴是否 covered, 未过暂不收尾+报警; 未配置退化放行",
+      "files": ["backend/main.py", "backend/services/packaging_flow_coordinator.py", "frontend/src/views/Settings/PackagingFlowPanel.vue"],
+      "keywords": ["缺油嘴", "oil_nozzle", "视觉 gate", "封箱", "包装"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "通用 NG 补做策略项目可选项 (任意检测模式)",
+      "symptom": "缺步骤/少装导致 NG 后只能重置整个周期, 无法就地补做修正",
+      "root_cause": "无项目级补做策略配置, 也无延迟落账机制",
+      "fix": "pipeline_config.ng_remediation (enabled/allow_step/allow_count); 后端 apply 解析+状态初始化+检测结果暴露; 项目逻辑设置 Tab 新增卡片; 延迟落账模型; 默认全关零差异",
+      "files": ["backend/api/source_project_config_apply.py", "backend/api/source_state_init.py", "backend/api/source_routes.py", "frontend/src/views/Project/index.vue"],
+      "keywords": ["NG 补做", "ng_remediation", "补步骤", "补数量", "延迟落账", "项目配置", "任意模式"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "包装补滑块落地 (NG 补做的包装实现)",
+      "symptom": "包装少装 NG 后无法补齐数量直接判合格",
+      "root_cause": "包装协调器少装立即落账 NG, 无挂起/对账路径",
+      "fix": "仅对步骤齐+滑块不足的少装箱挂起 pending_remediation 不落账; 补滑块(自动补齐/手动指定封顶不超目标)+重做本箱; 补做留痕写箱明细; 挂起期间忽略新周期; 多装/步骤不齐/没开策略保持原行为; supplement-sliders/remediation-redo 端点 (monitor.detection.ack)",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/api/packaging_flows.py", "backend/api/source_session_lifecycle_mixin.py", "frontend/src/api/packaging_flow.js", "frontend/src/views/Monitor/PackagingFlowCard.vue"],
+      "keywords": ["补滑块", "supplement-sliders", "少装", "挂起", "pending_remediation", "重做", "对账", "包装"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-007",
+      "title": "开机自动恢复检测开关 auto_resume",
+      "symptom": "有产线想开机即检测, 有产线想停在待机手动开始, 无开关",
+      "root_cause": "开机恢复检测行为写死, 无配置位",
+      "fix": "workstation_config.json 顶层 auto_resume (默认 enabled=true); 开时启动无条件自动开始检测(源在跑+模型就绪, 3s 重试一轮); 关时只恢复项目+源停待机; 设置页开关 UI",
+      "files": ["backend/api/channel_manager.py", "backend/main.py", "frontend/src/views/Settings/index.vue"],
+      "keywords": ["开机自动恢复", "auto_resume", "待机", "工控机开机", "was_detecting"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-008",
+      "title": "项目一键复制",
+      "symptom": "以现有项目为模板新建项目需逐项重配, 太慢",
+      "root_cause": "无项目克隆能力",
+      "fix": "POST /projects/{id}/duplicate 深拷贝 7 个 JSON + 任务类型/逻辑模式/默认模型+格式; 默认不激活, 名称加副本后缀防重名",
+      "files": ["backend/api/projects.py", "frontend/src/views/Project/index.vue"],
+      "keywords": ["项目复制", "duplicate", "克隆", "deepcopy"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-009",
+      "title": "虚拟扫码枪 (现场/测试用)",
+      "symptom": "无实体扫码枪时无法驱动包装结算状态机做演示/联调",
+      "root_cause": "缺少软件侧扫码注入入口与模拟器",
+      "fix": "监控页虚拟扫码枪组件 + 独立 USB 扫码枪模拟器工具 (PySide6+键盘注入)",
+      "files": ["frontend/src/views/Monitor/VirtualScanGun.vue", "tools/usb_scanner_sim/"],
+      "keywords": ["虚拟扫码枪", "USB 扫码枪模拟器", "PySide6", "pynput", "演示"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes", "modify-project-config"],
+  "files_changed": [
+    "backend/core/permissions.py",
+    "backend/models/mes_models.py",
+    "backend/main.py",
+    "backend/services/packaging_flow_coordinator.py",
+    "backend/api/packaging_flows.py",
+    "backend/api/source_project_config_apply.py",
+    "backend/api/source_state_init.py",
+    "backend/api/source_routes.py",
+    "backend/api/source_event_trigger_mixin.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/channel_manager.py",
+    "backend/api/projects.py",
+    "backend/api/source_custom_mix.py",
+    "frontend/src/views/Project/index.vue",
+    "frontend/src/views/Monitor/PackagingFlowCard.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Monitor/VirtualScanGun.vue",
+    "frontend/src/views/Settings/index.vue",
+    "frontend/src/views/Settings/PackagingFlowPanel.vue",
+    "frontend/src/api/packaging_flow.js",
+    "frontend/src/api/detection.js",
+    "frontend/src/api/project.js",
+    "tools/usb_scanner_sim/"
+  ]
+}

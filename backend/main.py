@@ -199,6 +199,10 @@ def migrate_database():
         ("packaging_flow_configs", "tail_paper_order_required", "BOOLEAN DEFAULT 0"),
         ("packaging_flow_configs", "tail_paper_step_label", "VARCHAR(64)"),
         ("packaging_flow_configs", "event_missing_paper", "INTEGER"),
+        # v3.23 缺油嘴视觉 gate: 每箱封箱前"放油嘴"步骤必须 covered
+        ("packaging_flow_configs", "oil_nozzle_required", "BOOLEAN DEFAULT 0"),
+        ("packaging_flow_configs", "oil_nozzle_step_label", "VARCHAR(64)"),
+        ("packaging_flow_configs", "event_missing_nozzle", "INTEGER"),
         # v3.22 insert_char 模式: 扫码枪丢符号时把 '-' 等补回固定位置
         ("packaging_flow_configs", "hyphen_pos", "INTEGER DEFAULT 0"),
         # v3.22 PackagingFlowRun 滑块口径 + 尾箱运行态
@@ -208,6 +212,9 @@ def migrate_database():
         ("packaging_flow_runs", "tail_target", "INTEGER DEFAULT 0"),
         ("packaging_flow_runs", "current_box_sliders", "INTEGER DEFAULT 0"),
         ("packaging_flow_runs", "paper_order_done", "BOOLEAN DEFAULT 0"),
+        # v3.23 强制结案审计留痕 (管理员/主管手动强制收尾)
+        ("packaging_flow_runs", "forced_reason", "VARCHAR(512)"),
+        ("packaging_flow_runs", "forced_by", "VARCHAR(64)"),
     ]
     
     from sqlalchemy import inspect
@@ -803,20 +810,36 @@ def auto_restore_video_sources():
             except Exception as e:
                 print(f"[启动] ch{ch_id} 视频源恢复失败: {e}")
 
+        # v3.22.x: 开机自动恢复检测开关 (默认 true). 关掉时只恢复项目+视频源,
+        # 停在待机, 由工人手动点开始 — 项目/源恢复不受影响。
+        if not channel_manager.get_auto_resume_config().get("enabled", True):
+            print("[启动] 开机自动恢复检测开关=关闭, 跳过自动开始检测 (项目+视频源已恢复, 停在待机)")
+            return
+
         import time
         time.sleep(0.5)
-        for ch_str, ch_cfg in sources.items():
-            ch_id = int(ch_str)
-            if not ch_cfg.get("was_detecting"):
-                continue
-            mgr = channel_manager.channels.get(ch_id)
-            if not mgr or not mgr.is_running or mgr.model is None:
-                continue
-            try:
-                mgr.start_detection()
-                print(f"[启动] ch{ch_id} 自动恢复检测状态")
-            except Exception as e:
-                print(f"[启动] ch{ch_id} 恢复检测失败: {e}")
+
+        def _restore_detection_pass(label: str):
+            # v3.22.x: 开关开启时【无条件】自动开始检测 — 不再看上次是否在检测
+            # (was_detecting)。只要该通道视频源已恢复运行 + 模型已就绪, 就自动开始,
+            # 让工人开机即接着干、不用手动点。门槛仅剩"源在跑 + 模型就绪"两条物理前提。
+            for ch_str, ch_cfg in sources.items():
+                ch_id = int(ch_str)
+                mgr = channel_manager.channels.get(ch_id)
+                if not mgr or not mgr.is_running or mgr.model is None:
+                    continue
+                if mgr.is_detecting:
+                    continue
+                try:
+                    mgr.start_detection()
+                    print(f"[启动] ch{ch_id} 开机自动开始检测 ({label})")
+                except Exception as e:
+                    print(f"[启动] ch{ch_id} 自动开始检测失败 ({label}): {e}")
+
+        _restore_detection_pass("首轮")
+        # 工控机模型加载慢时, 0.5s 后模型可能仍未就绪 — 3s 后再试一轮
+        time.sleep(3.0)
+        _restore_detection_pass("重试")
 
     except Exception as e:
         print(f"[启动] 视频源自动恢复整体失败: {e}")
@@ -949,7 +972,7 @@ def cleanup_on_exit():
                     mgr.end_session()
                     print(f"[退出钩子] ch{ch_id} 会话已结束")
                 if mgr.is_detecting:
-                    mgr.stop_detection()
+                    mgr.stop_detection(persist_was_detecting=False)
                 if mgr.is_running:
                     mgr.stop()
             except Exception as ch_e:
@@ -1186,7 +1209,9 @@ def shutdown_step(step: str):
                 for ch_id, mgr in list(channel_manager.channels.items()):
                     try:
                         if mgr.is_detecting:
-                            mgr.stop_detection()
+                            # v3.22.x: 关机前先落盘 was_detecting=true, 否则下次启动无法自动恢复检测
+                            channel_manager.persist_was_detecting(ch_id, True)
+                            mgr.stop_detection(persist_was_detecting=False)
                         else:
                             # 即使没在检测，也兜底熄灯（防止 idle_light 残留）
                             try:
@@ -1199,8 +1224,13 @@ def shutdown_step(step: str):
             except Exception as e:
                 # 兜底：旧版兼容路径
                 print(f"[关闭步骤] 多通道清理失败，回退到 ch0: {e}")
-                if video_manager.is_detecting:
-                    video_manager.stop_detection()
+                try:
+                    from backend.api.channel_manager import channel_manager
+                    if video_manager.is_detecting:
+                        channel_manager.persist_was_detecting(0, True)
+                        video_manager.stop_detection(persist_was_detecting=False)
+                except Exception as _e2:
+                    print(f"[关闭步骤] ch0 兜底 stop_detection 失败: {_e2}")
             return {"status": "success", "step": step}
         
         elif step == "save_counters":

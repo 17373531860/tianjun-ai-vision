@@ -68,3 +68,38 @@ def test_fire_external_event_no_project_config_returns_false():
     vsm = _FakeVSM()
     vsm.project_config = None
     assert vsm.fire_external_event_response(3, "x") is False
+
+
+def test_fire_external_event_default_does_not_freeze():
+    """默认事件 (未标 require_ack) 外部触发只报警不进阻塞态 — 改前行为字节级保持."""
+    vsm = _FakeVSM()
+    vsm._pending_ack = False
+    vsm.fire_external_event_response(3, "漏箱", source="packaging")
+    assert vsm._pending_ack is False
+    assert vsm.events_log[0]["require_ack"] is False
+
+
+def test_fire_external_event_require_ack_enters_block():
+    """v3.22: 事件标了'需人工确认' → 外部 (包装漏箱/多装) 触发也进入阻塞态."""
+    vsm = _FakeVSM()
+    vsm.channel_id = 0
+    vsm._pending_ack = False
+    vsm.project_config["events_config"][0]["require_ack"] = True
+    vsm.project_config["events_config"][0]["ack_timeout_sec"] = 0
+    ok = vsm.fire_external_event_response(3, "第2箱漏箱", source="packaging")
+    assert ok is True
+    assert vsm._pending_ack is True                       # 进入定格
+    assert vsm._pending_ack_event_id == "3"
+    assert vsm._pending_ack_event_name == "漏箱报警"
+    assert vsm.events_log[0]["require_ack"] is True
+
+
+def test_fire_external_event_require_ack_no_double_reset():
+    """已在阻塞态时再触发 → 不刷掉首个原因 (保留最先的人工确认事件)."""
+    vsm = _FakeVSM()
+    vsm.channel_id = 0
+    vsm._pending_ack = True
+    vsm._pending_ack_event_id = "first"
+    vsm.project_config["events_config"][0]["require_ack"] = True
+    vsm.fire_external_event_response(3, "后续异常", source="packaging")
+    assert vsm._pending_ack_event_id == "first"           # 没被覆盖

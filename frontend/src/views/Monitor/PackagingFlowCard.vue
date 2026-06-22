@@ -2,7 +2,19 @@
   <div class="packaging-card bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
     <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex justify-between items-center">
       <span class="text-cyan-400 text-lg font-bold">包装箱结算 · {{ config.name }}</span>
-      <span class="text-xs" :class="statusColor">{{ statusLabel }}</span>
+      <div class="flex items-center gap-2">
+        <button
+          v-if="canForceSettle"
+          @click="onForceSettle"
+          :disabled="forcing"
+          class="text-xs px-2 py-0.5 rounded bg-rose-700/70 hover:bg-rose-600 disabled:opacity-50
+                 text-rose-100 font-bold transition-colors"
+          title="管理员/主管手动收尾当前进行中工单 (需填理由)"
+        >
+          强制结案
+        </button>
+        <span class="text-xs" :class="statusColor">{{ statusLabel }}</span>
+      </div>
     </div>
 
     <!-- 没有进行中工单 -->
@@ -16,6 +28,12 @@
         <div>
           <span class="text-gray-400 text-xs">当前工单</span>
           <div class="font-mono text-white text-base">{{ state.order_no || '-' }}</div>
+          <div v-if="state.cust_name" class="text-xs text-amber-300 mt-0.5 truncate max-w-[12rem]" :title="state.cust_name">
+            客户：{{ state.cust_name }}
+          </div>
+          <div v-if="state.spec" class="text-xs text-gray-400">
+            规格：{{ state.spec }}<span v-if="state.slider_total > 0"> · 滑块总数 {{ state.slider_total }}</span>
+          </div>
         </div>
         <div class="text-right">
           <span class="text-gray-400 text-xs">箱进度</span>
@@ -55,6 +73,31 @@
         />
       </div>
 
+      <!-- v3.23 少装挂起等补做横幅 -->
+      <div v-if="pendingBox" class="mb-3 rounded border border-amber-600/60 bg-amber-900/30 px-3 py-2">
+        <div class="text-amber-300 text-sm font-bold mb-1">
+          ⚠ 第 {{ pendingBox.box }} 箱少装：滑块 {{ pendingBox.sliders }} / {{ pendingBox.target }}
+        </div>
+        <div class="text-xs text-amber-200/80 mb-2">
+          人工确认后可「补齐」直接判合格（延迟落账，不重置周期），或「重做」本箱。
+        </div>
+        <div v-if="canRemediate" class="flex items-center gap-2 flex-wrap">
+          <button @click="onSupplement(true)" :disabled="remediating"
+            class="text-xs px-2 py-1 rounded bg-green-700/70 hover:bg-green-600 disabled:opacity-50 text-green-100 font-bold transition-colors">
+            补齐到 {{ pendingBox.target }}
+          </button>
+          <button @click="onSupplement(false)" :disabled="remediating"
+            class="text-xs px-2 py-1 rounded bg-cyan-700/70 hover:bg-cyan-600 disabled:opacity-50 text-cyan-100 font-bold transition-colors">
+            手动输入实际数
+          </button>
+          <button @click="onRedo" :disabled="remediating"
+            class="text-xs px-2 py-1 rounded bg-slate-600/70 hover:bg-slate-500 disabled:opacity-50 text-slate-100 font-bold transition-colors">
+            重做本箱
+          </button>
+        </div>
+        <div v-else class="text-xs text-rose-300">无补做权限（需 monitor.detection.ack；操作员请联系管理员授权或提权）</div>
+      </div>
+
       <!-- 各箱明细 -->
       <div v-if="(state.box_details || []).length" class="boxes flex flex-wrap gap-1">
         <span
@@ -75,12 +118,121 @@
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { useAuthStore } from '@/store/useAuthStore';
+import { forcePackagingSettle, supplementPackagingSliders, redoPackagingBox } from '@/api/packaging_flow';
 
 const props = defineProps({
   config: { type: Object, required: true },
   state: { type: Object, default: null },
 });
+
+const authStore = useAuthStore();
+const forcing = ref(false);
+const remediating = ref(false);
+
+// v3.23 少装挂起箱 + 补做权限 (鉴权关时人人=超管, 始终可补)
+const pendingBox = computed(() =>
+  props.state && props.state.status === 'pending_remediation' ? props.state.pending_box : null);
+const canRemediate = computed(() => authStore.hasPermission('monitor.detection.ack'));
+
+async function onSupplement(auto) {
+  if (!props.config?.id || !pendingBox.value) return;
+  let targetCount = null;
+  if (!auto) {
+    try {
+      const r = await ElMessageBox.prompt(
+        `第 ${pendingBox.value.box} 箱实际滑块数（目标 ${pendingBox.value.target}）`,
+        '补滑块 · 手动输入实际数',
+        {
+          confirmButtonText: '确认补做',
+          cancelButtonText: '取消',
+          inputType: 'number',
+          inputValue: String(pendingBox.value.target),
+          inputValidator: (v) => {
+            const n = Number(v);
+            if (!Number.isFinite(n) || n < 0) return '请输入有效数量';
+            if (n > pendingBox.value.target) return `不能超过目标 ${pendingBox.value.target}（超出属多装，需现场处置）`;
+            return true;
+          },
+        });
+      targetCount = Math.floor(Number(r.value));
+    } catch { return; }
+  }
+  remediating.value = true;
+  try {
+    await supplementPackagingSliders(props.config.id, targetCount);
+    ElMessage.success(`已补做第 ${pendingBox.value?.box} 箱`);
+  } catch (e) {
+    const status = e?.response?.status;
+    const detail = e?.response?.data?.detail || e?.message || '未知错误';
+    if (status === 403) ElMessage.error('无补做权限（需 monitor.detection.ack）');
+    else if (status === 409) ElMessage.warning('当前没有等待补做的少装箱');
+    else ElMessage.error('补做失败：' + detail);
+  } finally {
+    remediating.value = false;
+  }
+}
+
+async function onRedo() {
+  if (!props.config?.id) return;
+  remediating.value = true;
+  try {
+    await redoPackagingBox(props.config.id);
+    ElMessage.success('已转回重做，等下一周期重新结算本箱');
+  } catch (e) {
+    const status = e?.response?.status;
+    const detail = e?.response?.data?.detail || e?.message || '未知错误';
+    if (status === 403) ElMessage.error('无补做权限（需 monitor.detection.ack）');
+    else if (status === 409) ElMessage.warning('当前没有等待补做的少装箱');
+    else ElMessage.error('重做失败：' + detail);
+  } finally {
+    remediating.value = false;
+  }
+}
+
+// 强制结案按钮: 有进行中工单 + 当前账号有权限才出现 (鉴权关时人人=超管, 始终可见)
+const canForceSettle = computed(() =>
+  !!props.state
+  && ['order_loaded', 'running'].includes(props.state.status)
+  && authStore.hasPermission('system.packaging_flow.force_settle'));
+
+async function onForceSettle() {
+  if (!props.config?.id) return;
+  let reason;
+  try {
+    const r = await ElMessageBox.prompt(
+      `强制结案当前工单「${props.state?.order_no || '-'}」？将立即收尾未完成的箱并完成工单，理由会留痕审计。`,
+      '强制结案 (管理员/主管)',
+      {
+        confirmButtonText: '确认强制结案',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputPlaceholder: '请输入强制结案理由（必填）',
+        inputValidator: (v) => (v && v.trim() ? true : '理由不能为空'),
+        confirmButtonClass: 'el-button--danger',
+      });
+    reason = (r.value || '').trim();
+  } catch {
+    return; // 用户取消
+  }
+  forcing.value = true;
+  try {
+    const { data } = await forcePackagingSettle(props.config.id, reason);
+    const lr = data?.last_run || {};
+    ElMessage.success(`已强制结案 ${lr.order_no || ''}：${lr.final_result || '完成'}`
+      + (data?.forced_by ? `（授权人 ${data.forced_by}）` : ''));
+  } catch (e) {
+    const status = e?.response?.status;
+    const detail = e?.response?.data?.detail || e?.message || '未知错误';
+    if (status === 403) ElMessage.error('无强制结案权限（需管理员 / 主管）');
+    else if (status === 409) ElMessage.warning('当前没有进行中的工单可结案');
+    else ElMessage.error('强制结案失败：' + detail);
+  } finally {
+    forcing.value = false;
+  }
+}
 
 const traysPerBox = computed(() => props.config?.trays_per_box_fixed || 4);
 
@@ -112,12 +264,14 @@ const boxPercent = computed(() => {
 const statusLabel = computed(() => ({
   order_loaded: '工单已开',
   running: '装箱中',
+  pending_remediation: '少装·等补做',
   completed: '已完成',
   aborted: '已作废',
 }[props.state?.status] || (props.state ? props.state.status : '空闲')));
 
 const statusColor = computed(() => ({
   running: 'text-green-400',
+  pending_remediation: 'text-amber-400',
   completed: 'text-cyan-400',
   aborted: 'text-red-400',
 }[props.state?.status] || 'text-gray-400'));

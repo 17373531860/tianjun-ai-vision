@@ -961,6 +961,32 @@ def test_container_items_total_to_state():
     assert st["item_total_done"].get("滑块") == 48
 
 
+def test_container_items_total_expected_blank_still_counts():
+    """期望留空 (item_expected={}) + 总数模式: 滑块照样按总数计/判.
+    锁死上银现场 bug — 此前每盘期望填 0 → item_expected 空 → 滑块完全不计、整箱永远 OK."""
+    acc = _ContainerAccumulator("托盘", {}, box_count=0, gone_frames=2,
+                                count_mode="items_total", item_target=96)
+    _run_box(acc, [24, 24, 24, 24])
+    assert acc._done == [{"滑块": 24}] * 4      # 滑块进箱被记账 (此前为空)
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert ok, reasons
+    assert acc.settled_item_total() == 96
+    # to_state 也要能展示出滑块行 (期望留空显示 0)
+    _run_box(acc, [24])                          # 再装一盘让 _done 含滑块
+    st = acc.to_state({"滑块": "滑块"})
+    assert any(it["label"] == "滑块" for it in st["current_tray_items"])
+
+
+def test_container_items_total_expected_blank_short_ng():
+    """期望留空 + 总数模式: 不够整箱目标 → NG (此前会误判 OK)."""
+    acc = _ContainerAccumulator("托盘", {}, box_count=0, gone_frames=2,
+                                count_mode="items_total", item_target=96)
+    _run_box(acc, [24, 24, 24])                  # 只 72
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert not ok
+    assert acc.settled_item_total() == 72
+
+
 def test_container_to_state_shape():
     """to_state 给前端: 已装托盘数 + 当前托盘实时滑块数/每盘期望."""
     acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3)
