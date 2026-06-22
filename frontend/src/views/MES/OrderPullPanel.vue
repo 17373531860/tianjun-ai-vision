@@ -326,7 +326,7 @@ function applyTemplate(kind) {
       name: '上银 HIWIN MES',
       url: 'https://itweb.hiwin.cn/java_demo_test/api',
       request_body_template: JSON.stringify(
-        { api: 'hiwin/webcn/ai_error prevention_job_info/query', parameters: { job_no: '{job_no}' } },
+        { api: 'hiwin/webcn/ai_error_prevention_job_info/query', parameters: { job_no: '{job_no}' } },
         null, 2,
       ),
       success_path: 'statusCode', success_value: '200', array_path: 'response.resultData',

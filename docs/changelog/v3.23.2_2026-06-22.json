@@ -1,0 +1,50 @@
+{
+  "version": "3.23.2",
+  "date": "2026-06-22",
+  "previous_version": "3.23.1",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "工单拉取「上银 HIWIN」一键预设 api 字段带空格 → 拉单 404「请求的服务器不存在」",
+      "symptom": "现场点工单拉取→预设模板→上银 HIWIN 一键导入后，扫码拉工单报「外部MES返回非成功（statusCode=404）:请求的服务器不存在」，但网络通、工单也存在",
+      "root_cause": "上银 MES 单网关地址+请求体 api 字段选服务结构；前端上银预设把客户文档笔误照抄，api 写成带空格的 'hiwin/webcn/ai_error prevention_job_info/query'，网关按此值找不到服务返回业务码 404。全仓仅此一处带空格，mock 与 UAT 脚本均直填正确下划线串，测试全程绕过该预设从未暴露",
+      "fix": "预设 api 值空格改下划线 'hiwin/webcn/ai_error_prevention_job_info/query'。现场已存旧配置不自动变，需手动把请求体模板里空格改下划线后重测",
+      "files": ["frontend/src/views/MES/OrderPullPanel.vue"],
+      "keywords": ["工单拉取", "上银", "HIWIN", "一键预设", "api 字段", "ai_error_prevention", "空格", "下划线", "404", "请求的服务器不存在", "statusCode", "外部MES返回非成功", "拉单失败", "order pull", "mes puller", "request body template", "测试盲区"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "DBG-001",
+      "title": "NG 补做（缺步骤延迟落账）补「结算状态机」调试埋点",
+      "symptom": "v3.23.1 新增的缺步骤延迟落账逻辑（挂起/补步骤/认NG/重做）一条调试日志都没打，现场出问题无法追溯",
+      "root_cause": "新逻辑在事件触发器收口处只有 print，未接入调试中心；客户机调试设置页需开发者模式才显示（齿轮→开发者模式→密码 tianjunKEJI），属设计如此",
+      "fix": "延迟落账收口处补 4 个埋点，归调试中心 backend.settlement 分类（缺步骤NG延迟落账挂起/补步骤判OK落账/认NG落账/重做丢弃在制周期），lazy import 轻量 helper 默认关零开销",
+      "files": ["backend/api/source_event_trigger_mixin.py"],
+      "keywords": ["NG 补做", "缺步骤", "延迟落账", "调试埋点", "调试中心", "backend.settlement", "结算状态机", "调试设置", "开发者模式", "remediation", "debug center", "可观测性"],
+      "breaking": false
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-001",
+      "title": "debug-mes 增补工单拉取 api 字段路由 404 排查",
+      "symptom": "工单拉取 404「请求的服务器不存在」缺排查记录",
+      "root_cause": "单网关+请求体 api 字段选服务结构未在 skill 记录",
+      "fix": "debug-mes 工单拉取章节增补：api 值错（空格/路径）非网络问题；statusCode 是返回体业务码；工单不存在返回 200 空数组",
+      "files": [".claude/skills/debug-mes/SKILL.md"],
+      "keywords": ["debug-mes", "工单拉取", "api 字段", "404", "请求的服务器不存在", "排查"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes"],
+  "files_changed": [
+    "frontend/src/views/MES/OrderPullPanel.vue",
+    "backend/api/source_event_trigger_mixin.py",
+    ".claude/skills/debug-mes/SKILL.md",
+    "electron/package.json",
+    "docs/CHANGELOG.md",
+    "docs/changelog/v3.23.2_2026-06-22.md",
+    "docs/changelog/v3.23.2_2026-06-22.json"
+  ]
+}

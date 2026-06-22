@@ -22,6 +22,19 @@ import traceback
 from typing import Any
 
 
+def _rem_dbg(action: str, detail: str = "") -> None:
+    """NG 补做 (缺步骤延迟落账) 调试埋点 → 调试中心「结算状态机」分类.
+
+    缺步骤延迟落账本质是结算状态机的新分支, 归 backend.settlement; 类别未开时
+    debug_center.dbg 一次 dict 查询即返回, 零开销. lazy import 防调试设施反噬主流程.
+    """
+    try:
+        from backend.core import debug_center
+        debug_center.dbg("backend.settlement", action, detail)
+    except Exception:
+        pass
+
+
 # ============================================================
 # v3.13 M1.2c: 业务侧消费 event_fire returnable 的纯函数辅助
 # 抽成纯函数让测试可独立验证消费契约 (不需要起完整 VideoSourceManager).
@@ -570,6 +583,9 @@ class EventTriggerMixin:
         })
         # 物理报警照常 (现场需要被提示有件待处理), 但落账 (DB cycle / 计数 / MES) 全延迟
         self._dispatch_event_alarm(current_event_id)
+        _rem_dbg("缺步骤NG延迟落账挂起",
+                 f"ch={getattr(self, 'channel_id', '?')} cycle={self.current_cycle_id} "
+                 f"missing={missing} reason={reason!r} 等待:补步骤/认NG/重做")
         print(f"[补做] 缺步骤 NG 延迟落账挂起: missing={missing} reason={reason!r} "
               f"(channel_id={self.channel_id}) 等待 补步骤/认NG/重做")
 
@@ -601,11 +617,15 @@ class EventTriggerMixin:
                 if lbl not in self.current_cycle_steps:
                     self.current_cycle_steps.append(lbl)
             op = f" by {operator}" if operator else ""
+            _rem_dbg("补步骤判OK落账",
+                     f"ch={getattr(self, 'channel_id', '?')} missing={missing} operator={operator}")
             self._trigger_event(1, f"补步骤{missing}后合格{op}")
             print(f"[补做] 补步骤完成判 OK: missing={missing} operator={operator}")
             return {"resolved": True, "action": "supplement_step", "missing": missing}
 
         if action == 'confirm_ng':
+            _rem_dbg("认NG落账",
+                     f"ch={getattr(self, 'channel_id', '?')} reason={reason!r} operator={operator}")
             self._remediation_bypass = True
             try:
                 self._trigger_event(2, reason)
@@ -615,6 +635,8 @@ class EventTriggerMixin:
             return {"resolved": True, "action": "confirm_ng"}
 
         # redo: 丢弃在制周期 (删行 + 清运行时), 等下一周期重检
+        _rem_dbg("重做丢弃在制周期",
+                 f"ch={getattr(self, 'channel_id', '?')} missing={missing} operator={operator}")
         self._discard_empty_cycle()
         self._clear_step_runtime_state()
         print(f"[补做] 重做丢弃在制周期 operator={operator}")

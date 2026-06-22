@@ -612,7 +612,8 @@ curl http://localhost:8001/api/v1/cluster/slaves
 - 拉取失败只看到「HTTP 500」无详情 → v3.20.0 已修：非 2xx 时通用探测返回体 `error.errorInfo`/`message`/`msg`/`detail` 拼进错误信息。若仍无详情，看外部 MES 返回体结构是否用了非常见错误字段名
 - 拉到数据但工单数为 0 → `array_path` 没对准（上银是 `response.resultData` 两层）。用 pull-test 看 `structure_guess.array_path` 自动识别值
 - 字段全空 → `field_mapping` 的源字段名与返回体不符。pull-test 的 `structure_guess.fields` 给候选
-- 排障开调试中心 `backend.pull` 开关（拉取发起/HTTP/解析/入库每步）+ 前端 `mes.pull`
+- **报「外部MES返回非成功（statusCode=404）:请求的服务器不存在」→ 不是网络问题**（v3.23.2 现场）：上银这类 MES 是「单网关地址 + 请求体 `api` 字段选服务」结构，目标服务由 `request_body_template` 里的 `api` 值决定。能拿到带 `statusCode` 字段的返回体 = HTTP 已通（这个 `statusCode` 是**返回体业务码不是 HTTP 码**，代码 `success_path` 读的是 body 字段）。404「请求的服务器不存在」= `api` 值错（网关路由不到服务），多为**路径写错或带了空格**。注意上银官方文档示例本身有笔误：一处 `ai_error_prevention_job_info`（下划线）、另一处 `ai_error prevention_job_info`（空格），正确是全下划线。v3.23.2 前前端「上银 HIWIN」一键预设照抄了空格版 → 谁点一键导入谁中招；mock/UAT 都直填下划线串故测试盲区从未暴露。**另：工单不存在 ≠ 报错**，上银查无单返回 `statusCode=200` + `resultData=[]` 空数组，所以 404 绝不是「工单查不到」
+- 排障开调试中心 `backend.pull` 开关（拉取发起/HTTP/解析/入库每步）+ 前端 `mes.pull`；pull-test 弹框回显实际发出的请求体 + 对方返回体片段，拿去对客户 API 文档
 
 ## 第 15 节：USB 键盘扫码枪（v3.20.0+）
 
