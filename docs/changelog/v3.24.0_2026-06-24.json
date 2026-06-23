@@ -1,0 +1,275 @@
+{
+  "version": "3.24.0",
+  "date": "2026-06-24",
+  "previous_version": "3.23.2",
+  "theme": "自动清理可感知 + 长稳健性整治（后端累积/视频推理GPU/前端长跑泄漏）",
+  "changes": [
+    {
+      "type": "bugfix", "id": "BUG-A1",
+      "title": "自动清理只在重启触发且不知几点清",
+      "symptom": "设了自动删除1天但磁盘不变、保留期外仍有旧数据、只有重启才清",
+      "root_cause": "清理只在启动迁移后跑一次，无定时调度",
+      "fix": "新增固定时间每日调度(cleanup_daily_time)+启动算下次触发+并发锁，避免与手动/启动清理叠跑",
+      "files": ["backend/api/sessions_maintenance.py", "backend/main.py"],
+      "keywords": ["自动清理", "定时调度", "cleanup_daily_time", "并发锁", "auto cleanup schedule"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-A2",
+      "title": "删数据后DB文件不缩小",
+      "symptom": "清理后 sql_app.db 文件大小不降",
+      "root_cause": "SQLite删行不归还磁盘+WAL模式主库不截断",
+      "fix": "新增手动数据库收缩端点(VACUUM,带锁)，VACUUM前后各做WAL checkpoint(TRUNCATE)",
+      "files": ["backend/api/sessions_maintenance.py"],
+      "keywords": ["VACUUM", "WAL checkpoint", "数据库收缩", "磁盘回收", "shrink db"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-A3",
+      "title": "WAL文件持续增大",
+      "symptom": "WAL文件不回收",
+      "root_cause": "清理后未做checkpoint",
+      "fix": "每次自动清理后做WAL checkpoint回收空间",
+      "files": ["backend/api/sessions_maintenance.py"],
+      "keywords": ["WAL", "checkpoint", "清理"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-A4",
+      "title": "过程日志表无人清",
+      "symptom": "扫码/MES通信/外设日志无限增长",
+      "root_cause": "清理范围未覆盖过程日志",
+      "fix": "清理纳入扫码日志/MES通信日志/外设日志三类(按保留期)",
+      "files": ["backend/api/sessions_maintenance.py"],
+      "keywords": ["过程日志", "scan_logs", "mes_comm_logs", "external_device_logs", "保留期"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-A5",
+      "title": "导出文件清理误删/改路径清不到",
+      "symptom": "客户改了导出路径就清不到，或担心误删",
+      "root_cause": "无台账精确清理+无集中登记目录",
+      "fix": "三层兜底:台账(ExportRunLog)精确清理+数据中心集中登记导出目录+黑名单守护兜底扫描(仅清白名单扩展名)",
+      "files": ["backend/api/sessions_maintenance.py"],
+      "keywords": ["导出清理", "ExportRunLog", "台账", "黑名单守护", "导出目录登记"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-A7",
+      "title": "清理无可见反馈",
+      "symptom": "看不到清理是否执行/释放多少",
+      "root_cause": "未记录清理状态",
+      "fix": "记录并暴露上次清理时间/各项删除计数/释放字节数 (GET /api/v1/data/cleanup/status)",
+      "files": ["backend/api/sessions_maintenance.py"],
+      "keywords": ["清理状态", "cleanup status", "释放空间", "可见反馈"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-B1",
+      "title": "MES回传队列满阻塞结算线程(第一步)",
+      "symptom": "外部MES慢时结算线程被反压卡住",
+      "root_cause": "关键任务阻塞put(timeout)反压到结算线程",
+      "fix": "关键任务改非阻塞入队(立即落盘补偿或丢弃)，结算线程永不被队列卡住",
+      "files": ["backend/services/mes_hooks.py"],
+      "keywords": ["MES回传", "队列阻塞", "结算线程", "落盘补偿", "非阻塞入队"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-B2",
+      "title": "称重稳定中日志刷屏",
+      "symptom": "稳定中过渡态日志高频刷屏",
+      "root_cause": "过渡态日志未节流",
+      "fix": "仅对稳定中过渡态日志按~1/秒节流；已稳定态保持不节流(v2.7.9既定行为)",
+      "files": ["backend/services/external_device_pipeline.py"],
+      "keywords": ["称重", "日志节流", "stabilizing", "外设"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-B4",
+      "title": "报警定时器叠加未取消",
+      "symptom": "熄灯/共享过期定时器叠加",
+      "root_cause": "重设定时器前未取消旧的",
+      "fix": "重设前先取消旧定时器；stop_alarm取消所有挂起定时器",
+      "files": ["backend/api/alarm.py"],
+      "keywords": ["报警", "定时器", "Timer", "熄灯", "共享灯柱"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-B5",
+      "title": "待绑码队列无上限",
+      "symptom": "待绑码队列无界增长",
+      "root_cause": "队列无maxsize",
+      "fix": "待绑码队列加上限500+FIFO淘汰",
+      "files": ["backend/services/mes_hooks.py"],
+      "keywords": ["待绑码", "队列上限", "FIFO", "pending queue"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-B7",
+      "title": "模型转换队列无上限",
+      "symptom": "转换队列无界增长",
+      "root_cause": "队列无maxsize",
+      "fix": "转换队列加上限20+入队前容量校验",
+      "files": ["backend/api/models.py"],
+      "keywords": ["模型转换", "队列上限", "conversion queue"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-B8",
+      "title": "过期登录token不清理",
+      "symptom": "过期token在内存/磁盘累积",
+      "root_cause": "无定时清理",
+      "fix": "每小时+启动时清理过期token(内存池+磁盘)，不动不过期token",
+      "files": ["backend/core/auth.py", "backend/main.py"],
+      "keywords": ["token", "session_tokens", "过期清理", "purge"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-C1",
+      "title": "推理超时只在连续上限才重建池",
+      "symptom": "单次超时不恢复，需连续超时才处理",
+      "root_cause": "重建池只在连续超时上限触发",
+      "fix": "抽出统一超时处理，每次超时即重建推理池；连续超时升级GPU紧急重置",
+      "files": ["backend/api/source_detect_runners_mixin.py"],
+      "keywords": ["推理超时", "线程池重建", "FuturesTimeout", "GPU重置"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-C2",
+      "title": "GPU紧急重置后未重载模型",
+      "symptom": "重置后推理空转",
+      "root_cause": "重置后缺模型重载",
+      "fix": "紧急重置后补一次load_model()",
+      "files": ["backend/api/source.py"],
+      "keywords": ["GPU重置", "模型重载", "emergency_gpu_reset"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-C3",
+      "title": "推理线程假死无告警",
+      "symptom": "推理线程卡死无感知",
+      "root_cause": "join超时无计数无告警",
+      "fix": "join超时加计数+结构化告警埋点(backend.source)",
+      "files": ["backend/api/source.py", "backend/api/source_inference_loop_mixin.py", "backend/api/source_capture_loop_mixin.py", "backend/core/debug_center.py"],
+      "keywords": ["推理线程", "假死", "join超时", "debug_center", "埋点"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-C6",
+      "title": "周期录像延迟释放叠多个FFmpeg",
+      "symptom": "并发延迟释放叠加FFmpeg子进程",
+      "root_cause": "无并发释放监控",
+      "fix": "并发延迟释放计数+超阈值告警(监控版)",
+      "files": ["backend/api/source_recording_api_mixin.py"],
+      "keywords": ["录像", "FFmpeg", "延迟释放", "draining"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-C7",
+      "title": "跟踪字典/堆叠列表无界增长",
+      "symptom": "tracking字典与堆叠列表内存增长",
+      "root_cause": "track过期未清+堆叠无上限",
+      "fix": "track过期时同步清理跟踪字典；堆叠列表每周期容量限制",
+      "files": ["backend/api/source_tracking_mixin.py"],
+      "keywords": ["tracking", "track过期", "堆叠列表", "容量限制", "内存泄漏"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-C8",
+      "title": "NVR停止预览与原生回调竞态",
+      "symptom": "停止预览时回调访问已释放资源",
+      "root_cause": "回调无存活保护",
+      "fix": "HCNetSDK包装加_alive标志，停止预览置False，实时数据/解码回调进入即检查提前返回",
+      "files": ["backend/hcnetsdk/wrapper.py"],
+      "keywords": ["NVR", "HCNetSDK", "回调竞态", "_alive", "stop_preview"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-D2",
+      "title": "双工位启动竞态画面冻结",
+      "symptom": "双工位机偶发画面冻在第一帧",
+      "root_cause": "onMounted工位数查询与状态查询并发，状态查询在工位数还是1时误起单工位流",
+      "fix": "工位数设为唯一真相源，先await工位数再取流；进多工位前显式停单工位流+轮询",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["双工位", "启动竞态", "channelCount", "唯一真相源", "MJPEG"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-D3",
+      "title": "多工位仍叠单工位预览流",
+      "symptom": "多工位下多占带宽/解码",
+      "root_cause": "单工位取流未加守门",
+      "fix": "单工位取流统一加channelCount<=1守门",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["多工位", "预览流", "守门", "带宽"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-D4",
+      "title": "多工位结果整对象替换增GC(第一步)",
+      "symptom": "高频整对象重建增加GC压力",
+      "root_cause": "整对象spread替换",
+      "fix": "改就地更新多工位数据",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["多工位", "GC", "就地更新", "multiChannelData"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-D5",
+      "title": "语音播报队列无界+重复",
+      "symptom": "语音队列堆积+重复播报",
+      "root_cause": "无上限无合并",
+      "fix": "语音队列上限20+合并相邻相同播报",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["语音播报", "speechQueue", "队列上限", "去重"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-D6",
+      "title": "工件倒计时定时器卸载未清",
+      "symptom": "切工位/卸载定时器泄漏",
+      "root_cause": "未清理各通道定时器",
+      "fix": "卸载与切工位时clearAllWorkpieceTimers",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["倒计时", "定时器泄漏", "onUnmounted", "切工位"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix", "id": "BUG-D7",
+      "title": "订单面板自动刷新定时器叠加",
+      "symptom": "刷新定时器叠加",
+      "root_cause": "重设前未清旧",
+      "fix": "重设刷新定时器前先clearInterval",
+      "files": ["frontend/src/views/MES/OrderPanel.vue"],
+      "keywords": ["订单面板", "自动刷新", "定时器", "refreshTimer"],
+      "breaking": false
+    },
+    {
+      "type": "feature", "id": "FEAT-B6",
+      "title": "检测结果轮询截图按内容哈希去重(默认关)",
+      "symptom": "/detection/results每~150ms重发相同base64缩略图大字符串",
+      "root_cause": "无去重，整包重发",
+      "fix": "前端把已持有指纹(label:md5)经known_shots上报，后端省略未变截图(前端合并保留旧图)，始终回传指纹；开关默认关=字节级一致",
+      "files": ["backend/api/source_routes.py", "frontend/src/api/detection.js", "frontend/src/store/useSystemStore.js", "frontend/src/views/Monitor/index.vue"],
+      "keywords": ["截图去重", "known_shots", "screenshotDedup", "内容哈希", "轮询包体"],
+      "breaking": false
+    }
+  ],
+  "deferred": [
+    {"id": "B1-2", "title": "外部MES推送/导出并发化", "reason": "改变推往客户外部MES的时序(工件可能乱序)，需现场真实MES验证；卡顿主因已由B1①根治"},
+    {"id": "D1", "title": "多工位取流重写(createImageBitmap+背压)", "reason": "对客户监控画面风险最高，需双工位真机UAT"},
+    {"id": "C4", "title": "模型加载后显存监控埋点", "reason": "与未完成的启动就绪门槛特性交织同一文件，待解耦后单独提交"}
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/api/sessions_maintenance.py", "backend/main.py", "backend/services/mes_hooks.py",
+    "backend/api/models.py", "backend/core/auth.py", "backend/api/source_recording_api_mixin.py",
+    "backend/api/source.py", "backend/core/debug_center.py", "backend/api/source_detect_runners_mixin.py",
+    "backend/api/source_inference_loop_mixin.py", "backend/api/source_capture_loop_mixin.py",
+    "backend/services/external_device_pipeline.py", "backend/api/alarm.py", "backend/hcnetsdk/wrapper.py",
+    "backend/api/source_tracking_mixin.py", "backend/api/source_routes.py",
+    "frontend/src/views/Monitor/index.vue", "frontend/src/views/MES/OrderPanel.vue",
+    "frontend/src/api/detection.js", "frontend/src/store/useSystemStore.js",
+    "tests/conftest.py", "electron/package.json"
+  ]
+}

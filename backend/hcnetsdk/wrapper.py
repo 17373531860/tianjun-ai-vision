@@ -55,6 +55,10 @@ class HCNetSession:
         self._real_data_cb_ref = None
         self._decode_cb_ref = None
 
+        # C8: 存活标志。stop_preview 一进来先置 False, native SDK 线程上仍在飞的
+        #     解码/实时数据回调据此提前返回, 不再碰已释放的 play port(防 stop 后竞态崩溃)。
+        self._alive = False
+
         self._device_info: NET_DVR_DEVICEINFO_V30 | None = None
         self._start_chan = 0
 
@@ -247,9 +251,12 @@ class HCNetSession:
             self._free_play_port()
             raise RuntimeError(f"RealPlay failed, error={err}")
 
+        self._alive = True  # C8: 预览成功后才放行回调处理
         _log(f"Preview started: handle={self._play_handle}, ch={channel}")
 
     def stop_preview(self):
+        # C8: 先置死, 让仍在 native 线程上飞的回调提前返回, 再去停流/放端口
+        self._alive = False
         if self._play_handle >= 0:
             self._sdk_dll.NET_DVR_StopRealPlay(self._play_handle)
             self._play_handle = -1
@@ -291,6 +298,8 @@ class HCNetSession:
     # ------------------------------------------------------------------
 
     def _on_real_data(self, play_handle, data_type, p_buffer, buf_size, p_user):
+        if not self._alive:  # C8: stop 后到达的回调直接丢弃, 不碰已释放端口
+            return
         try:
             if data_type == NET_DVR_SYSHEAD:
                 self._play_dll.PlayM4_SetStreamOpenMode(self._play_port, 0)
@@ -317,6 +326,8 @@ class HCNetSession:
             _log(f"real_data callback error: {e}", "ERROR")
 
     def _on_decode(self, port, p_buf, size, p_frame_info, user, reserved):
+        if not self._alive:  # C8: stop 后到达的解码回调直接丢弃
+            return
         try:
             fi = p_frame_info.contents
             w, h, frame_type = fi.nWidth, fi.nHeight, fi.nType

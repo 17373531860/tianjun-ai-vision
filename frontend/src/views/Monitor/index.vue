@@ -2045,6 +2045,7 @@ const clearMonitorPendingTimers = () => {
   if (streamWatchdogTimer) { clearTimeout(streamWatchdogTimer); streamWatchdogTimer = null; }
   if (resultHoldTimer) { clearTimeout(resultHoldTimer); resultHoldTimer = null; }
   resultHoldActive = false;
+  clearAllWorkpieceTimers();  // D6: 连带清掉所有工位的工件结果倒计时
 };
 
 // v3.9.x A 方案: 结果展示期 (单工位) — 周期刚结算到下一周期开始之间, 强制保留
@@ -2113,6 +2114,7 @@ const resetMultiRuntimeState = (clearChannelData = false) => {
   multiActiveToasts.value = {};
   Object.keys(multiLastSeenSeq).forEach((k) => delete multiLastSeenSeq[k]);
   Object.keys(multiFrameNaturalSize).forEach((k) => delete multiFrameNaturalSize[k]);
+  clearAllWorkpieceTimers();  // D6: 切工位/重置时清掉所有工位的工件结果倒计时
   if (clearChannelData) {
     multiChannelData.value = {};
   }
@@ -2591,7 +2593,12 @@ const processChannelResult = (ch, d) => {
     });
   }
 
-  multiChannelData.value[ch] = { ...chData };
+  // D4①: 原地更新降 GC。chData 已是 multiChannelData.value[ch] 的响应式引用,
+  // 上面所有 chData.xxx= 都已被 Vue3 深响应追踪; 不再每 150ms×N 工位整对象 spread
+  // 重建(那样每 tick 都丢一个旧对象 + 建一个新对象, 长跑 GC 抖动)。首次创建才赋值。
+  if (!multiChannelData.value[ch]) {
+    multiChannelData.value[ch] = chData;
+  }
 
   const pollCfg = d.project_config || null;
   const dets = d.detections || [];
@@ -2982,6 +2989,12 @@ const fetchChannelCount = async () => {
       selectedChannel.value = 0;
     }
     if (count > 1) {
+      // D2 启动竞态修复: 工位数是唯一真相源。进入多工位前必须显式停掉单工位那套
+      // (单工位轮询 + 单工位 MJPEG 流), 否则 onMounted 里 getSourceStatus 若先于本函数
+      // 解析、彼时 channelCount 仍是默认 1 → 误起单工位流, 随后本函数又起多工位流,
+      // 两套并存抢同一通道 MJPEG → 画面冻结 / 双重轮询。"起新套前先停旧套"。
+      stopPolling();
+      disconnectStream();
       initMultiChannelData(count);
       // 整页覆盖插件 (monitor.layout.body) 自己用 <img> 吃 /video_feed?channel=N,
       // 原生双缓冲取流会和插件 <img> 抢同一通道的 MJPEG 连接 (后端每通道只保留最新
@@ -3127,6 +3140,7 @@ const onStreamReady = (idx) => {
   streamConnectAttempts = 0;
   isStreaming.value = true;
   streamBackendMismatchSince = 0;
+  dbg('monitor.video', '视频流首帧到达', `img=${idx} channel=${selectedChannel.value || 0} (接管为active并重置画布)`);
   // 首帧成功 -> 取消首帧 watchdog。multipart/x-mixed-replace 后续帧不
   // 触发 onload, 不能用心跳 watchdog 重置, 中途卡死改由 polling 路径检测。
   if (streamWatchdogTimer) {
@@ -3222,6 +3236,20 @@ const workpieceOverridesByCh = ref({});
 const workpieceOverrideTimers = {};   // {ch: timeoutId} for OK/NG hold
 const workpieceHideTimers = {};       // {ch: timeoutId} for hide-after-hold
 const WORKPIECE_RESULT_HOLD_MS = 3500;  // 结果 OK/NG 标签保留时长
+
+// D6: 卸载/切工位时清掉所有工位的工件结果倒计时定时器。原来只清了
+// selectedChannel 的 legacy timer, 非当前工位的 per-channel timer 会泄漏,
+// 长跑(主窗常年不关) + 频繁切工位会堆积。这里把两张按工位的 timer 表全清。
+const clearAllWorkpieceTimers = () => {
+  for (const k of Object.keys(workpieceOverrideTimers)) {
+    if (workpieceOverrideTimers[k]) clearTimeout(workpieceOverrideTimers[k]);
+    workpieceOverrideTimers[k] = null;
+  }
+  for (const k of Object.keys(workpieceHideTimers)) {
+    if (workpieceHideTimers[k]) clearTimeout(workpieceHideTimers[k]);
+    workpieceHideTimers[k] = null;
+  }
+};
 
 const workpieceOverride = computed({
   get: () => {
@@ -3452,6 +3480,9 @@ const toastPositionClass = computed(() => {
 // TTS voice announcement — queue mode: voices play sequentially, never cancel each other
 const speechQueue = [];
 let isSpeaking = false;
+// D5: 语音队列上限。TTS 卡住/语速慢时队列会越堆越多, 高 NG 率刷屏更明显。
+// 设 20 远高于正常节拍(正常队列 0~1); 到顶丢最旧, 且合并连续相同播报。
+const MAX_SPEECH_QUEUE = 20;
 const _playNext = () => {
   if (!speechQueue.length) { isSpeaking = false; return; }
   isSpeaking = true;
@@ -3467,6 +3498,11 @@ const _playNext = () => {
 const speak = (text, ch = null) => {
   const det = (ch != null && channelCount.value > 1) ? systemStore.getChannelDetection(ch) : systemStore.detection;
   if (!det.voiceEnabled || !window.speechSynthesis) return;
+  // 合并连续相同播报(常见: 连续 NG 刷屏), 队尾相同就不重复入队
+  const last = speechQueue[speechQueue.length - 1];
+  if (last && last.text === text) return;
+  // 上限保护: 队列积压(TTS 卡住)时丢最旧, 防无限涨
+  if (speechQueue.length >= MAX_SPEECH_QUEUE) speechQueue.shift();
   speechQueue.push({ text, volume: det.voiceVolume ?? 1.0 });
   if (!isSpeaking) _playNext();
 };
@@ -3865,6 +3901,13 @@ const handleSyncModeChange = async (enabled) => {
 
 
 // 调整 canvas 大小
+// 叠加层闪烁诊断: 记"画布尺寸重置"和"有框/空结果"边沿 (调试设置「视频流」开关)
+let _ovlResizeWxH = '';
+let _ovlHadBoxes = false;
+// 状态轮询诊断: 摘要节流 + 人工确认阻塞边沿 (调试设置「状态轮询」开关)
+let _pollLastSummary = 0;
+let _pollLastAck = false;
+
 const resizeCanvas = () => {
   if (!videoElement.value || !detectionCanvas.value) return;
   
@@ -3873,6 +3916,12 @@ const resizeCanvas = () => {
   
   canvas.width = video.offsetWidth;
   canvas.height = video.offsetHeight;
+
+  const _wh = `${canvas.width}x${canvas.height}`;
+  if (_wh !== _ovlResizeWxH) {
+    dbg('monitor.video', '画布尺寸重置', `${_ovlResizeWxH || '初始'}→${_wh} (重置会清空叠加框→闪一下没框)`);
+    _ovlResizeWxH = _wh;
+  }
 };
 
 // 绘制检测框
@@ -3883,7 +3932,15 @@ const drawDetections = (detections) => {
   const ctx = canvas.getContext('2d');
   
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  
+
+  // 闪烁边沿: 有框↔空结果切换才记一条 (6.7Hz 轮询, 不能逐帧打)
+  const _has = !!(detections && detections.length);
+  if (_has !== _ovlHadBoxes) {
+    dbg('monitor.video', _has ? '叠加层恢复画框' : '叠加层清空(空结果)',
+        `检出=${detections ? detections.length : 0} (空结果清框=画面闪烁直接元凶, 看推理是否间歇空)`);
+    _ovlHadBoxes = _has;
+  }
+
   if (!detections || detections.length === 0) return;
   
   // 获取启用的步骤标签列表
@@ -4540,6 +4597,9 @@ const stopDetectionHandler = async () => {
 
 // 步骤截图
 const stepScreenshots = ref({});
+// B6 截图去重（默认关）：本地已持有的步骤截图内容指纹 { label: md5 }，
+// 仅在 systemStore.performance.screenshotDedup 开启时随轮询上报，后端据此省略未变截图。
+const stepScreenshotHashes = ref({});
 
 // 步骤检测时间
 const stepDetectionTimes = ref({});
@@ -4610,8 +4670,19 @@ const startPolling = () => {
       swapStream();
     }
     try {
-      const res = await getDetectionResults();
+      // B6 截图去重（默认关）：开启时把本地已持有的步骤截图指纹上报，后端省略未变截图。
+      let knownShots = null;
+      if (systemStore.performance?.screenshotDedup) {
+        const h = stepScreenshotHashes.value;
+        const parts = Object.keys(h).map((k) => `${k}:${h[k]}`);
+        if (parts.length) knownShots = parts.join(',');
+      }
+      const res = await getDetectionResults(0, knownShots);
       const data = res.data;
+      // 后端回传的截图指纹（仅去重开启时存在）→ 更新本地，供下次轮询比对。
+      if (data.step_screenshot_hashes) {
+        stepScreenshotHashes.value = data.step_screenshot_hashes;
+      }
       
       if (data.source_type) {
         sourceStore.setSourceType(data.source_type);
@@ -4815,6 +4886,21 @@ const startPolling = () => {
       multiChannelData.value[0].pendingAck = data.pending_ack || { active: false };
       multiChannelData.value[0].pendingRemediation = data.pending_remediation || null;
       multiChannelData.value[0].recentEvents = data.recent_events || [];
+
+      // ── monitor.poll 诊断: 人工确认阻塞边沿 + 每 3s 轮询摘要 ──
+      const _ackActive = !!(data.pending_ack && data.pending_ack.active);
+      if (_ackActive !== _pollLastAck) {
+        dbg('monitor.poll', _ackActive ? '进入人工确认阻塞(画面定格)' : '解除人工确认阻塞',
+            `channel=${selectedChannel.value || 0} (阻塞期间帧序号不推进=正常定格, 非闪烁)`);
+        _pollLastAck = _ackActive;
+      }
+      if (now - _pollLastSummary >= 3000) {
+        _pollLastSummary = now;
+        dbg('monitor.poll', '轮询摘要',
+            `检出=${(data.detections || []).length} 采集=${data.fps_actual ?? '?'}fps `
+            + `推理=${data.fps_inference ?? '?'}fps cycle步骤=${(data.current_cycle_steps || []).length} `
+            + `运行=${isRunning.value} 阻塞=${_ackActive}`);
+      }
       
       if (isVideoSource.value && !isDraggingProgress.value) {
         try {
@@ -5412,6 +5498,7 @@ const resetCounters = async () => {
   
   // 清空步骤截图缓存、PT/间隔缓存和NG排名
   stepScreenshots.value = {};
+  stepScreenshotHashes.value = {};  // B6: 截图清空时同步清掉指纹，避免下次去重误省略
   stepDurations.value = {};
   avgStepDurations.value = {};
   // v3.5.x: PT 合并档同步清空
@@ -5793,10 +5880,14 @@ const submitElevatedAck = async () => {
 };
 // ==============================================================
 
-onMounted(() => {
+onMounted(async () => {
   monitorMounted = true;
   systemStore.loadSettings();
-  fetchChannelCount();
+  // D2 启动竞态修复: 先 await 工位数 (唯一真相源) 再走下面依赖 channelCount 的取流分支,
+  // 避免 getSourceStatus 在 channelCount 还是默认 1 时误起单工位流 (双工位机器上会和
+  // 多工位流并存抢 MJPEG)。fetchChannelCount 内部已对单/多两套做"起新套前停旧套"。
+  await fetchChannelCount();
+  if (!monitorMounted) return;
   loadExtraFieldsSchema();
   scannerDisableStore.loadStatus();
 
@@ -5837,14 +5928,16 @@ onMounted(() => {
 
     if (!res.data.is_detecting && res.data.source_type && res.data.model_loaded) {
       isPaused.value = true;
-      forceReconnectStream();
+      // D3: 多工位时不拉单工位预览流(多工位由 startMultiStreams 负责),
+      //     否则双工位仍会叠一路单工位流, 白占带宽/解码。
+      if (channelCount.value <= 1) forceReconnectStream();
     }
     
     if (!res.data.source_type) {
       await autoRestoreSource();
       if (!monitorMounted) return;
     } else if (res.data.source_type && !res.data.is_running) {
-      forceReconnectStream();
+      if (channelCount.value <= 1) forceReconnectStream();  // D3: 同上, 多工位不拉单工位流
     }
   }).catch(() => {
   });

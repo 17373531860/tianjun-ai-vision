@@ -157,6 +157,10 @@ export const useSystemStore = defineStore('system', {
     performance: {
       frameLimitEnabled: false,  // 帧率限制开关（默认禁用，本地应用无需节流）
       targetStreamFps: 30,       // 目标流帧率
+      // B6 截图去重（默认关）：开启后检测结果轮询携带本地已持有的步骤截图指纹，
+      // 后端对内容未变的截图省略不传（前端合并保留旧图），减小高频轮询包体。
+      // 关 = 行为与旧版字节级一致。
+      screenshotDedup: false,
       halfPrecision: false,      // FP16 半精度推理（默认关闭）
       mediapipeEnabled: false,   // MediaPipe 骨架叠加（默认关闭）
       mediapipePose: true,       // 显示姿态骨架

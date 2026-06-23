@@ -644,6 +644,14 @@ class TrackingMixin:
             if reg_did not in active_dids and reg_did not in lost_dids:
                 del self._tracking_registered_positions[reg_did]
 
+        # C7: 外观特征字典(HSV 直方图)同步清理。display_id 既不在场也不在 recently_lost
+        #     即已彻底离场, 否则长时间跟踪 display_id 只增不减, 字典无限涨吃内存。
+        appearance = getattr(self, '_tracking_appearance', None)
+        if appearance:
+            for ap_did in list(appearance.keys()):
+                if ap_did not in active_dids and ap_did not in lost_dids:
+                    del appearance[ap_did]
+
         # 失帧累加 → 移到 recently_lost
         for tid in list(self._tracking_lost_frames.keys()):
             if tid not in seen_track_ids and tid in self._tracking_objects:
@@ -822,8 +830,12 @@ class TrackingMixin:
                         # 新一层开始; 上一层若未闩锁, 记入不完整批次明细
                         if not self._stack_latched.get(label, False):
                             peak = self._stack_phase_peak.get(label, 0)
-                            self._stack_partials.setdefault(label, []).append(
-                                {'peak': peak, 'required': min_count})
+                            _partials = self._stack_partials.setdefault(label, [])
+                            _partials.append({'peak': peak, 'required': min_count})
+                            # C7: 防御性上限。正常每周期 reset 会清空; 万一某模式漏清,
+                            #     也不让不完整批次明细无限堆积(只留最近 200 条)。
+                            if len(_partials) > 200:
+                                del _partials[:-200]
                             print(f"[Stack] {label} 上一批未达标离场 "
                                   f"(峰值 {peak}/{min_count}), 记入不完整批次")
                         _enter_phase(label, count, min_count)

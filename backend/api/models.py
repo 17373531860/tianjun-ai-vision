@@ -226,6 +226,20 @@ _convert_queue: queue.Queue = queue.Queue()
 _convert_lock = threading.Lock()
 _convert_thread: Optional[threading.Thread] = None
 
+# B7: 模型转换队列上限。转换是串行重活(单 worker), 正常没人会一次排几十个;
+#     无上限时误操作/脚本狂点会把队列堆爆吃内存。设 20 远高于正常用量,
+#     到顶拒绝入队并提示, 正常路径永不触发。
+_MAX_CONVERSION_QUEUE = 20
+
+
+def _check_conversion_queue_capacity():
+    """B7: 转换队列到顶时拒绝入队(429), 防无限堆积。"""
+    if _convert_queue.qsize() >= _MAX_CONVERSION_QUEUE:
+        raise HTTPException(
+            status_code=429,
+            detail=f"模型转换队列已满({_MAX_CONVERSION_QUEUE})，请等待当前转换完成后再试",
+        )
+
 
 def _conversion_worker():
     """Background thread that processes conversions one at a time."""
@@ -801,10 +815,12 @@ def convert_model(model_id: int, req: ConversionRequest, db: Session = Depends(g
             existing.error_msg = None
             db.commit()
 
+        _check_conversion_queue_capacity()
         _ensure_worker()
         _convert_queue.put((existing.id, db_model.file_path, fmt_key))
         return existing
 
+    _check_conversion_queue_capacity()
     conv = ModelConversion(
         model_id=model_id,
         format=fmt_key,

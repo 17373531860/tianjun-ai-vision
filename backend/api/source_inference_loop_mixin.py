@@ -205,6 +205,11 @@ class InferenceLoopMixin:
         last_log_time = time.time()
         log_interval = 10.0              # 每 10 秒打印诊断状态
         last_debug_time = time.time()    # 每 5 秒打印 debug log
+        # backend.detection 逐帧性能摘要 (每 2s): 推理fps vs 采集fps / 空结果占比 / 跳帧
+        perf_win_start = time.time()
+        perf_frames = 0          # 本窗口实际推理帧数
+        perf_empty = 0           # 本窗口检测结果为空的帧数 (前端叠加层会清框 → 闪烁元凶)
+        perf_grab_miss = 0       # 本窗口"无新帧可推"的空转次数 (推理快于采集)
         # v3.7.4: 周期性强制动作的"时间维度"触发节流 — 每 5 秒检查一次,
         # 即使生产停了 (没有新 cycle_end), 只要 detection 在跑就会主动报警.
         last_periodic_time_check = time.time()
@@ -247,9 +252,28 @@ class InferenceLoopMixin:
                     self._gpu_deep_cleanup()
                     last_gpu_cleanup_time = loop_start
 
+                # backend.detection 逐帧性能摘要 (每 2s 节流, 关闭时仅 dict 查询)
+                if loop_start - perf_win_start >= 2.0:
+                    from backend.core import debug_center as _dc
+                    if _dc.is_on("backend.detection"):
+                        _win = loop_start - perf_win_start
+                        _infer_fps = perf_frames / _win if _win > 0 else 0
+                        _empty_pct = (perf_empty / perf_frames * 100) if perf_frames else 0
+                        debug_log(
+                            f"性能摘要: 推理={_infer_fps:.1f}fps 采集={getattr(self, 'fps_actual', '?')}fps "
+                            f"空结果={perf_empty}/{perf_frames}帧({_empty_pct:.0f}%) "
+                            f"无新帧空转={perf_grab_miss}次 "
+                            f"(推理<<采集 或 空结果高 → 前端叠加层频繁清框 = 画面闪烁)",
+                            "PERF")
+                    perf_win_start = loop_start
+                    perf_frames = 0
+                    perf_empty = 0
+                    perf_grab_miss = 0
+
                 # 取最新帧 + 去重
                 frame, display_small, frame_id = self._inference_grab_latest_frame(last_frame_id)
                 if frame is None:
+                    perf_grab_miss += 1
                     time.sleep(0.001)
                     continue
                 last_frame_id = frame_id
@@ -262,6 +286,9 @@ class InferenceLoopMixin:
 
                 # 推理 + 坐标系映射
                 detections, is_tracking, _is_seg, t_detect_start = self._inference_select_and_run_model(frame)
+                perf_frames += 1
+                if not detections:
+                    perf_empty += 1
 
                 # 更新步骤/跟踪统计 (original_frame 已是 display_small, 与 detections 坐标系一致)
                 t5 = time.time()

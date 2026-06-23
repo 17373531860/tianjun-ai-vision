@@ -21,8 +21,10 @@ from datetime import datetime
 # ==================== 类别目录 (后端) ====================
 # key 命名: backend.<module>; label/group 供调试设置页渲染分组卡片
 BACKEND_CATEGORIES = {
-    "backend.detection":  {"label": "检测推理 (模型加载/推理循环/卡顿)", "group": "检测核心"},
+    "backend.detection":  {"label": "检测推理 (模型加载/推理循环/卡顿/逐帧FPS)", "group": "检测核心"},
     "backend.source":     {"label": "视频源生命周期 (启动/停止/暂停/待机/恢复)", "group": "检测核心"},
+    "backend.capture":    {"label": "采集循环 (读帧耗时/帧序号推进/各锁耗时/丢帧)", "group": "检测核心"},
+    "backend.stream":     {"label": "视频推流 (MJPEG 连接/让位/推帧FPS/编码耗时/画面停滞)", "group": "检测核心"},
     "backend.settlement": {"label": "结算状态机 (周期判定/OK-NG 结算)", "group": "检测核心"},
     "backend.per_item":   {"label": "逐件覆盖 (周期锁定/覆盖进度/漏件NG原因)", "group": "检测核心"},
     "backend.session":    {"label": "数据记录 (Session/Cycle/Step 写库)", "group": "检测核心"},

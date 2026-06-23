@@ -134,6 +134,26 @@ class _NoopContext:
 
 
 class DetectRunnersMixin:
+    def _handle_inference_timeout(self, model_name: str):
+        """C1: 推理超时统一处理。每次超时都重建推理池, 连续超时升级 GPU 重置+重载模型。
+
+        卡死的 worker 线程留在旧池里被丢弃, 下一帧 _get_inference_executor() 会建
+        一个全新单线程池, 不会再排在卡死任务后面级联超时。只在"本来就超时丢帧"的
+        异常路径触发, 正常推理一次都不进, 高收益低风险。
+        """
+        self._inference_timeout_count += 1
+        debug_log(f"!!! [{model_name}] 推理超时 ({self._inference_timeout}秒), 连续超时次数: {self._inference_timeout_count}", "DETECT")
+        print(f"[警告] [{model_name}] 推理超时 ({self._inference_timeout}秒), 连续超时次数: {self._inference_timeout_count}")
+
+        # C1: 每次超时都重建推理池(丢弃卡死 worker)
+        self._shutdown_inference_executor()
+
+        if self._inference_timeout_count >= self._max_consecutive_timeouts:
+            debug_log(f"!!! [{model_name}] 连续 {self._max_consecutive_timeouts} 次推理超时, 尝试重置 GPU...", "DETECT")
+            print(f"[错误] [{model_name}] 连续 {self._max_consecutive_timeouts} 次推理超时, 尝试重置 GPU...")
+            self._emergency_gpu_reset()
+            self._inference_timeout_count = 0
+
     def _detect_only(self, frame: np.ndarray, mi: Optional["ModelInstance"] = None) -> list:
         """只执行检测 (predict, 无 tracking, 无 segmentation).
 
@@ -191,17 +211,7 @@ class DetectRunnersMixin:
                 self._consecutive_detect_errors = 0
                 self._last_successful_inference = time.time()
             except FuturesTimeoutError:
-                self._inference_timeout_count += 1
-                debug_log(f"!!! [{params['model_name']}] 推理超时 ({self._inference_timeout}秒), 连续超时次数: {self._inference_timeout_count}", "DETECT")
-                print(f"[警告] [{params['model_name']}] 推理超时 ({self._inference_timeout}秒), 连续超时次数: {self._inference_timeout_count}")
-
-                if self._inference_timeout_count >= self._max_consecutive_timeouts:
-                    debug_log(f"!!! [{params['model_name']}] 连续 {self._max_consecutive_timeouts} 次推理超时, 尝试重置 GPU...", "DETECT")
-                    print(f"[错误] [{params['model_name']}] 连续 {self._max_consecutive_timeouts} 次推理超时, 尝试重置 GPU...")
-                    self._shutdown_inference_executor()
-                    self._emergency_gpu_reset()
-                    self._inference_timeout_count = 0
-
+                self._handle_inference_timeout(params['model_name'])
                 return []
             finally:
                 del future

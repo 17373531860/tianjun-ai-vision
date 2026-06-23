@@ -19,6 +19,7 @@ import traceback
 import cv2
 
 from backend.api.source_sdk_loader import debug_log
+from backend.core import debug_center
 
 
 class CaptureLoopMixin:
@@ -38,6 +39,11 @@ class CaptureLoopMixin:
         last_heartbeat_log = time.time()
         loop_count = 0  # 循环计数
         last_debug_time = time.time()  # 上次调试日志时间
+        # backend.capture 采集摘要 (每 2s): 采集fps / 帧序号推进 / 读帧均耗时 / 推流冻结
+        cap_win_start = time.time()
+        cap_frames = 0           # 本窗口成功采集帧数
+        cap_read_total = 0.0     # 读帧累计耗时 (ms), 仅开关开时累计
+        cap_read_n = 0
         
         # 如果正在检测且模型已加载，启动推理线程
         if self.is_detecting and (self.model is not None or getattr(self, 'source_type', None) == 'synthetic'):
@@ -55,7 +61,26 @@ class CaptureLoopMixin:
                 
                 if loop_start - last_debug_time > 5.0:
                     last_debug_time = loop_start
-                
+
+                # backend.capture 采集摘要 (每 2s 节流, 关闭时仅 dict 查询)
+                if loop_start - cap_win_start >= 2.0:
+                    if debug_center.is_on("backend.capture"):
+                        _win = loop_start - cap_win_start
+                        _cap_fps = cap_frames / _win if _win > 0 else 0
+                        _read_avg = (cap_read_total / cap_read_n) if cap_read_n else -1
+                        _frozen = getattr(self, '_pending_ack', False)
+                        debug_center.dbg(
+                            "backend.capture", "采集摘要",
+                            f"channel={getattr(self, 'channel_id', '?')} 采集={_cap_fps:.1f}fps "
+                            f"帧序号={getattr(self, '_frame_seq', '?')} 读帧均耗="
+                            f"{('%.1fms' % _read_avg) if _read_avg >= 0 else 'n/a'} "
+                            f"推流冻结(人工确认)={_frozen} "
+                            f"(采集fps骤降/帧序号不推进 → 画面卡住或闪)")
+                    cap_win_start = loop_start
+                    cap_frames = 0
+                    cap_read_total = 0.0
+                    cap_read_n = 0
+
                 # 更新捕获线程心跳
                 self._last_capture_heartbeat = time.time()
                 
@@ -101,11 +126,15 @@ class CaptureLoopMixin:
                         read_time = (t_read_end - t_read_start) * 1000
                         if read_time > 200:
                             debug_log(f"!!! 帧读取慢: {read_time:.1f}ms", "CAPTURE")
+                        if debug_center.is_on("backend.capture"):
+                            cap_read_total += read_time
+                            cap_read_n += 1
                     except Exception as e:
                         debug_log(f"帧读取异常: {e}", "CAPTURE")
                         ret = False
                 
                 if ret and frame is not None:
+                    cap_frames += 1
                     # Single copy from OpenCV's internal buffer (which may be
                     # reused on the next capture.read()).  This copy is then
                     # shared read-only across inference, streaming, and recording

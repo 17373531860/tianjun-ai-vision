@@ -899,13 +899,14 @@ if not os.environ.get("BACKEND_SKIP_INIT"):
 
 # ========== 后台自动清理定时任务 ==========
 _cleanup_timer = None
+_daily_cleanup_timer = None
 
 def _schedule_auto_cleanup():
     """后台定时执行数据清理（每24小时一次）"""
     global _cleanup_timer
     try:
-        from backend.api.sessions_maintenance import _perform_auto_cleanup
-        _perform_auto_cleanup()
+        from backend.api.sessions_maintenance import _perform_auto_cleanup_safe
+        _perform_auto_cleanup_safe()
     except Exception as e:
         print(f"[定时清理] 执行失败: {e}")
     _cleanup_timer = threading.Timer(86400, _schedule_auto_cleanup)
@@ -918,6 +919,67 @@ def _start_auto_cleanup():
     _schedule_auto_cleanup()
 
 threading.Thread(target=_start_auto_cleanup, daemon=True).start()
+
+
+# A1: 每天固定时点清理。工控机日常关机/重启时, 24h 定时器几乎等不到第二次触发,
+#     固定时点(如凌晨 3 点)保证每天到点清一次。配置 cleanup_daily_time="HH:MM",
+#     空 = 不启用(只保留开机 + 24h 旧行为)。与上面的 24h 定时器并存, 由清理互斥锁
+#     保证不会并发删库。
+def _seconds_until_next_daily(hhmm):
+    """从现在到下一个 HH:MM 的秒数; 解析失败返回 None。"""
+    try:
+        h, m = hhmm.strip().split(":")
+        h, m = int(h), int(m)
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            return None
+        from datetime import datetime as _dt, timedelta as _td
+        now = _dt.now()
+        target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if target <= now:
+            target += _td(days=1)
+        return max((target - now).total_seconds(), 1)
+    except Exception:
+        return None
+
+def _get_daily_cleanup_time():
+    try:
+        from backend.db.database import SessionLocal
+        from backend.models.models import SystemConfig
+        db = SessionLocal()
+        try:
+            row = db.query(SystemConfig).filter(
+                SystemConfig.key == "cleanup_daily_time").first()
+            return (row.value or "").strip() if row else ""
+        finally:
+            db.close()
+    except Exception:
+        return ""
+
+def _schedule_daily_cleanup():
+    global _daily_cleanup_timer
+    hhmm = _get_daily_cleanup_time()
+    secs = _seconds_until_next_daily(hhmm) if hhmm else None
+    if secs is None:
+        # 未配置或非法: 1 小时后重新看配置(允许客户运行中开启, 无需重启)
+        _daily_cleanup_timer = threading.Timer(3600, _schedule_daily_cleanup)
+        _daily_cleanup_timer.daemon = True
+        _daily_cleanup_timer.start()
+        return
+
+    def _run():
+        try:
+            from backend.api.sessions_maintenance import _perform_auto_cleanup_safe
+            print(f"[定时清理] 到达每日固定时点 {hhmm}, 执行清理...")
+            _perform_auto_cleanup_safe()
+        except Exception as e:
+            print(f"[定时清理] 固定时点执行失败: {e}")
+        _schedule_daily_cleanup()  # 排下一天
+
+    _daily_cleanup_timer = threading.Timer(secs, _run)
+    _daily_cleanup_timer.daemon = True
+    _daily_cleanup_timer.start()
+
+threading.Thread(target=_schedule_daily_cleanup, daemon=True).start()
 
 
 # v2.7.9: 外设日志每小时清理一次（保留已绑定扫码的记录）
@@ -942,6 +1004,25 @@ def _start_extdev_log_cleanup():
     _schedule_extdev_log_cleanup()
 
 threading.Thread(target=_start_extdev_log_cleanup, daemon=True).start()
+
+
+# B8: 每小时清理一次过期登录 token（内存缓存 + 落盘表）。
+# 当前持久登录默认不设过期, 此任务多为 no-op; 一旦启用带过期会话, 防止过期
+# token 在内存/库里无限堆积。只删已过期, 不动有效/无过期 token。
+_token_purge_timer = None
+
+def _schedule_token_purge():
+    global _token_purge_timer
+    try:
+        from backend.core.auth import purge_expired_tokens
+        purge_expired_tokens()
+    except Exception as e:
+        print(f"[Auth 定时清理] 过期 token 清理失败: {e}")
+    _token_purge_timer = threading.Timer(3600, _schedule_token_purge)
+    _token_purge_timer.daemon = True
+    _token_purge_timer.start()
+
+threading.Thread(target=_schedule_token_purge, daemon=True).start()
 
 # 清理状态标志（防止重复清理）
 _cleanup_done = False
@@ -1077,15 +1158,29 @@ app.add_middleware(
 # 纯观测插桩 — 异常原样 raise 不吞、响应不改; 开关关闭时开销 = 每请求一次 dict 查询
 @app.middleware("http")
 async def _debug_api_exception_middleware(request, call_next):
+    import time as _t
+    _t0 = _t.time()
     try:
         response = await call_next(request)
     except Exception:
         if debug_center.is_on("backend.api"):
             import traceback as _tb
-            debug_center.dbg("backend.api", f"未捕获异常 {request.method} {request.url.path}", _tb.format_exc()[-1500:])
+            _q = ("?" + request.url.query) if request.url.query else ""
+            debug_center.dbg("backend.api", f"未捕获异常 {request.method} {request.url.path}{_q}",
+                             _tb.format_exc()[-1500:])
         raise
-    if debug_center.is_on("backend.api") and response.status_code >= 500:
-        debug_center.dbg("backend.api", f"5xx 响应 {request.method} {request.url.path}", f"status={response.status_code}")
+    if debug_center.is_on("backend.api"):
+        _dur = (_t.time() - _t0) * 1000
+        _q = ("?" + request.url.query) if request.url.query else ""
+        # 4xx/5xx 统一记录 (含入参 query + 耗时); 401/403 鉴权噪声不记 (冷启动会刷屏)
+        if response.status_code >= 400 and response.status_code not in (401, 403):
+            _lvl = "5xx 响应" if response.status_code >= 500 else "4xx 响应"
+            debug_center.dbg("backend.api", f"{_lvl} {request.method} {request.url.path}{_q}",
+                             f"status={response.status_code} 耗时={_dur:.0f}ms")
+        elif _dur > 2000:
+            # 慢请求 (>2s): 排查"某接口拖慢前端/冷启动卡顿"
+            debug_center.dbg("backend.api", f"慢请求 {request.method} {request.url.path}{_q}",
+                             f"status={response.status_code} 耗时={_dur:.0f}ms")
     return response
 
 # Include API routers

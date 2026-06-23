@@ -70,28 +70,32 @@ class RecordingApiMixin:
                 self.video_writer = writer
             print(f"开始录制会话视频: {filepath}")
             
-            # 记录到数据库
+            # 记录到数据库 (完整 uuid 防唯一约束撞号; try/finally 兜底关连接防泄漏)
+            video_uuid = uuid.uuid4().hex
             db = self._get_db_session()
-            video_uuid = str(uuid.uuid4())[:8]
-            video = VideoClip(
-                video_uuid=video_uuid,
-                clip_type='session',
-                related_id=self.current_session_id,
-                file_path=filepath,
-                file_name=filename,
-                start_time=datetime.now()
-            )
-            db.add(video)
-            db.commit()
-            
-            # 更新会话的视频ID
-            session = db.query(DetectionSession).filter(DetectionSession.id == self.current_session_id).first()
-            if session:
-                session.video_id = video_uuid
-                session.video_path = filepath
+            try:
+                video = VideoClip(
+                    video_uuid=video_uuid,
+                    clip_type='session',
+                    related_id=self.current_session_id,
+                    file_path=filepath,
+                    file_name=filename,
+                    start_time=datetime.now()
+                )
+                db.add(video)
                 db.commit()
-            
-            db.close()
+
+                # 更新会话的视频ID
+                session = db.query(DetectionSession).filter(DetectionSession.id == self.current_session_id).first()
+                if session:
+                    session.video_id = video_uuid
+                    session.video_path = filepath
+                    db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
         except Exception as e:
             print(f"开始会话录制失败: {e}")
             self._append_recording_failure("session", "open_exception", error=str(e))
@@ -116,15 +120,20 @@ class RecordingApiMixin:
                     w.release()
                     print("会话视频录制已停止(排空释放)")
                     db = self._get_db_session()
-                    session = db.query(DetectionSession).filter(DetectionSession.id == sid).first()
-                    if session and session.video_path:
-                        video = db.query(VideoClip).filter(VideoClip.file_path == session.video_path).first()
-                        if video:
-                            video.end_time = datetime.now()
-                            if os.path.exists(session.video_path):
-                                video.file_size = os.path.getsize(session.video_path)
-                            db.commit()
-                    db.close()
+                    try:
+                        session = db.query(DetectionSession).filter(DetectionSession.id == sid).first()
+                        if session and session.video_path:
+                            video = db.query(VideoClip).filter(VideoClip.file_path == session.video_path).first()
+                            if video:
+                                video.end_time = datetime.now()
+                                if os.path.exists(session.video_path):
+                                    video.file_size = os.path.getsize(session.video_path)
+                                db.commit()
+                    except Exception:
+                        db.rollback()
+                        raise
+                    finally:
+                        db.close()
                 except Exception as e:
                     print(f"停止会话录制失败: {e}")
 
@@ -167,28 +176,32 @@ class RecordingApiMixin:
                 self.cycle_video_writer = writer
             print(f"开始录制周期视频: {filename}")
             
-            # 记录到数据库
+            # 记录到数据库 (完整 uuid 防唯一约束撞号; try/finally 兜底关连接防泄漏)
+            video_uuid = uuid.uuid4().hex
             db = self._get_db_session()
-            video_uuid = str(uuid.uuid4())[:8]
-            video = VideoClip(
-                video_uuid=video_uuid,
-                clip_type='cycle',
-                related_id=self.current_cycle_id,
-                file_path=filepath,
-                file_name=filename,
-                start_time=datetime.now()
-            )
-            db.add(video)
-            db.commit()
-            
-            # 更新周期的视频ID
-            cycle = db.query(DetectionCycle).filter(DetectionCycle.id == self.current_cycle_id).first()
-            if cycle:
-                cycle.video_id = video_uuid
-                cycle.video_path = filepath
+            try:
+                video = VideoClip(
+                    video_uuid=video_uuid,
+                    clip_type='cycle',
+                    related_id=self.current_cycle_id,
+                    file_path=filepath,
+                    file_name=filename,
+                    start_time=datetime.now()
+                )
+                db.add(video)
                 db.commit()
-            
-            db.close()
+
+                # 更新周期的视频ID
+                cycle = db.query(DetectionCycle).filter(DetectionCycle.id == self.current_cycle_id).first()
+                if cycle:
+                    cycle.video_id = video_uuid
+                    cycle.video_path = filepath
+                    db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
         except Exception as e:
             print(f"开始周期录制失败: {e}")
             self._append_recording_failure("cycle", "open_exception", error=str(e))
@@ -212,8 +225,24 @@ class RecordingApiMixin:
                     print("周期视频录制已停止(排空释放)")
                 except Exception as e:
                     print(f"停止周期录制失败: {e}")
+                finally:
+                    # C6 监控: 释放完成, 存活延迟释放计数 -1
+                    with self._writer_lock:
+                        self._draining_release_count = max(
+                            0, getattr(self, '_draining_release_count', 1) - 1)
 
             import threading
+            # C6 监控版(零风险, 不改释放逻辑): 统计同时存活的延迟释放线程,
+            # 每个都持着一个 cv2/FFmpeg writer 子进程, 快节拍周期会叠加。
+            # 只在叠加超阈值时告警, 帮现场定位"多个 FFmpeg 子进程堆积"。
+            with self._writer_lock:
+                self._draining_release_count = getattr(
+                    self, '_draining_release_count', 0) + 1
+                _draining_n = self._draining_release_count
+            if _draining_n > 5:
+                print(f"[录像监控] ⚠️ 周期录像延迟释放叠加 {_draining_n} 个"
+                      f"(可能快节拍周期堆积 FFmpeg 子进程, 通道"
+                      f"{getattr(self, 'channel_id', '?')})", flush=True)
             threading.Thread(target=_delayed_release, args=(writer,), daemon=True).start()
     
     def start_step_recording(self, step_label: str):
@@ -236,7 +265,7 @@ class RecordingApiMixin:
                     print(f"[录制警告] 步骤视频录制已达上限(1)，跳过: {step_label}")
                     return None
                 
-                video_uuid = str(uuid.uuid4())[:8]
+                video_uuid = uuid.uuid4().hex  # 完整 uuid 防唯一约束撞号
                 # 使用 .mp4 格式
                 filename = f"step_{step_label}_{video_uuid}_{datetime.now().strftime('%H%M%S')}.mp4"
                 filepath = os.path.join(settings.STEP_VIDEO_DIR, filename)
@@ -292,20 +321,25 @@ class RecordingApiMixin:
             if writer:
                 writer.release()
             
-            # 保存视频信息到数据库
+            # 保存视频信息到数据库 (try/finally 兜底关连接防泄漏)
             db = self._get_db_session()
-            video = VideoClip(
-                video_uuid=step_video['video_uuid'],
-                clip_type='step',
-                related_id=self.current_cycle_id,
-                file_path=step_video['filepath'],
-                file_name=step_video['filename'],
-                start_time=step_video['start_time'],
-                end_time=datetime.now()
-            )
-            db.add(video)
-            db.commit()
-            db.close()
+            try:
+                video = VideoClip(
+                    video_uuid=step_video['video_uuid'],
+                    clip_type='step',
+                    related_id=self.current_cycle_id,
+                    file_path=step_video['filepath'],
+                    file_name=step_video['filename'],
+                    start_time=step_video['start_time'],
+                    end_time=datetime.now()
+                )
+                db.add(video)
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
             
             print(f"[调试] 步骤视频录制已停止: {step_label}")
             return {

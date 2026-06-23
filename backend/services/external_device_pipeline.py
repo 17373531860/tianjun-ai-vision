@@ -122,7 +122,7 @@ class ExternalDevicePipelineMixin:
         if len(conn._stable_samples) < conn.stable_count:
             if conn._stable_state != "stabilizing":
                 conn._stable_state = "stabilizing"
-            self._log_data(conn, raw, parsed, True, f"stabilizing ({len(conn._stable_samples)}/{conn.stable_count})", None)
+            self._log_data_sampled(conn, raw, parsed, True, f"stabilizing ({len(conn._stable_samples)}/{conn.stable_count})", None)
             return False
 
         window = conn._stable_samples[-conn.stable_count:]
@@ -131,7 +131,7 @@ class ExternalDevicePipelineMixin:
         if spread > conn.stable_delta:
             # 仍在抖动
             conn._stable_state = "stabilizing"
-            self._log_data(conn, raw, parsed, True, f"stabilizing spread={spread:.4f}", None)
+            self._log_data_sampled(conn, raw, parsed, True, f"stabilizing spread={spread:.4f}", None)
             return False
 
         # 稳定 → 取中位数作为"最稳定代表值"
@@ -149,6 +149,7 @@ class ExternalDevicePipelineMixin:
         if (conn._last_reported_value is not None
                 and abs(parsed["weight"] - conn._last_reported_value) <= conn.stable_delta
                 and not first_stable):
+            # v2.7.9 决策保留: 静置 stable 日志每帧照写, 方便前端实时观察(不节流)
             self._log_data(conn, raw, parsed, True, "stable", None)
             return False
 
@@ -394,6 +395,22 @@ class ExternalDevicePipelineMixin:
                         conn.name, ch, parsed)
         except Exception as e:
             logger.error("[ExtDev] %s extra_fields 注入失败: %s", conn.name, e)
+
+    def _log_data_sampled(self, conn: DeviceConnection, raw: str, parsed: dict,
+                          is_valid: bool, error: str = None, barcode: str = None,
+                          min_interval: float = 1.0):
+        """B2: 称重"稳定中/稳定静置"阶段的过程日志按秒采样写, 不再每帧落库。
+
+        称重器每秒推多帧, 原本每帧写一条 external_device_logs, 高频抢 SQLite 锁
+        拖慢检测引擎写库。这里只对"过程噪声"(stabilizing / 静置 stable)节流到
+        ~1 条/秒, 业务记录(稳定首报走主路径 line 63 / 空载 / 绑定)一律不节流、照常写。
+        """
+        now = time.time()
+        last = getattr(conn, "_last_proc_log_ts", 0.0)
+        if now - last < min_interval:
+            return
+        conn._last_proc_log_ts = now
+        self._log_data(conn, raw, parsed, is_valid, error, barcode)
 
     def _log_data(self, conn: DeviceConnection, raw: str, parsed: dict,
                   is_valid: bool, error: str = None, barcode: str = None):

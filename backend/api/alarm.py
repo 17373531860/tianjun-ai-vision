@@ -147,6 +147,9 @@ class AlarmManager:
         self._current_visual = None
         # 状态/串口 重入锁
         self._state_lock = threading.RLock()
+        # B4: 报警关灯定时器引用, 新报警前先取消旧的, 防高 NG 率下 Timer 线程堆积。
+        self._solo_off_timer = None          # solo 模式的延迟关灯 timer
+        self._shared_expire_timers: dict = {}  # {channel_id: Timer} 共享模式过期 timer
 
     # ===================== 共享模式入口 ===================== #
 
@@ -249,6 +252,10 @@ class AlarmManager:
         try:
             self.serial_port.write(command)
             self.serial_port.flush()
+            if debug_center.is_on("backend.alarm"):
+                debug_center.dbg("backend.alarm", "串口写指令成功",
+                                 f"port={self.port_name} cmd={command.hex(' ') if command else '(空)'} "
+                                 f"len={len(command) if command else 0}B")
             return True
         except Exception as e:
             print(f"发送命令失败: {e}")
@@ -354,8 +361,17 @@ class AlarmManager:
 
             # 用 threading.Timer 替代 Thread+sleep：内部走 Event.wait，可被 cancel，
             # 关停时也更可控（避免悬挂的 sleep 线程）
+            # B4: 起新关灯 timer 前先取消上一个, 防止高 NG 率连续触发时 Timer 堆积。
+            #     语义等价: 最新一次报警的关灯时刻为准(本就是后到覆盖)。
+            old = self._solo_off_timer
+            if old is not None:
+                try:
+                    old.cancel()
+                except Exception:
+                    pass
             t = threading.Timer(duration, delayed_off)
             t.daemon = True
+            self._solo_off_timer = t
             t.start()
 
         except Exception as e:
@@ -386,8 +402,17 @@ class AlarmManager:
                     cur['expire_at'] = 0.0
                     self._recompose_and_apply()
 
-        t = threading.Timer(duration, expire)
-        t.daemon = True
+        # B4: 同一通道起新过期 timer 前先取消旧的, 防止该通道连续触发时 Timer 堆积。
+        with self._state_lock:
+            old = self._shared_expire_timers.get(channel_id)
+            if old is not None:
+                try:
+                    old.cancel()
+                except Exception:
+                    pass
+            t = threading.Timer(duration, expire)
+            t.daemon = True
+            self._shared_expire_timers[channel_id] = t
         t.start()
 
     def stop_alarm(self):
@@ -395,6 +420,20 @@ class AlarmManager:
         self._alarm_stop_event.set()
         if self._alarm_thread and self._alarm_thread.is_alive():
             self._alarm_thread.join(timeout=1)
+        # B4: 停报警时取消所有挂起的关灯/过期 timer, 不留悬挂线程
+        with self._state_lock:
+            if self._solo_off_timer is not None:
+                try:
+                    self._solo_off_timer.cancel()
+                except Exception:
+                    pass
+                self._solo_off_timer = None
+            for _t in self._shared_expire_timers.values():
+                try:
+                    _t.cancel()
+                except Exception:
+                    pass
+            self._shared_expire_timers.clear()
         if self.is_shared():
             # 共享模式：清掉所有通道的瞬时事件，重算
             with self._state_lock:

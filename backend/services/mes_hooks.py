@@ -32,6 +32,23 @@ from backend.core import debug_center
 
 class MESHookManager:
 
+    _MAX_PENDING_QUEUE = 500  # B5 queue 模式待绑队列上限(远高于正常节拍)
+
+    def _enqueue_pending(self, channel_id, workpiece_id):
+        """B5: 把工件压入 queue 模式待绑队列, 带 FIFO 上限保护。
+
+        队列到顶(异常: 扫码一直来但检测不消费)时丢最旧 + 告警, 防内存无限涨。
+        正常节拍(扫一件检一件)队列基本 0~1, 永不触发上限。
+        """
+        q = self._pending_queue.setdefault(channel_id, [])
+        if len(q) >= self._MAX_PENDING_QUEUE:
+            dropped = q.pop(0)
+            print(f"[MES] ⚠️ 待绑队列已达上限{self._MAX_PENDING_QUEUE}, "
+                  f"丢弃最旧工件#{dropped} (工位{channel_id}); "
+                  f"检查检测是否停止/绑定是否卡死", flush=True)
+        q.append(workpiece_id)
+        return q
+
     def __init__(self):
         self.enabled = False
         self._work_order_svc = WorkOrderService()
@@ -42,6 +59,10 @@ class MESHookManager:
         self._pending_workpiece: dict[int, int] = {}
         # channel_id -> [workpiece_id, ...] (queue 模式下的待检队列)
         self._pending_queue: dict[int, list] = {}
+        # B5: queue 模式待绑队列上限。正常节拍下扫一件检一件, 队列基本是 0~1;
+        #     设 500 远高于任何正常积压, 只有"扫码一直来但检测一直不消费"
+        #     (异常: 检测停了没停扫码 / 绑定卡死) 时才会到顶, 到顶丢最旧并告警,
+        #     防止队列无限涨吃内存。正常路径永不触发。
         # channel_id -> order_id (当前活跃工单)
         self._active_orders: dict[int, int] = {}
         # channel_id -> workpiece_id (当前正在检测的工件)
@@ -361,17 +382,12 @@ class MESHookManager:
         try:
             self._task_queue.put_nowait((func, args, kwargs))
         except queue.Full:
+            # B1①: 队列满时绝不阻塞调用方(结算/检测热路径)。
+            # 原来 critical 会 put(timeout=0.8) 阻塞最多 0.8s, 队列长期满时
+            # 每个周期都卡 0.8s, 直接拖垮结算节拍。改为: 关键任务立刻落盘
+            # (后台 worker 恢复后回放, 不丢业务), 非关键直接丢弃, 都只计数, 立即返回。
             if critical:
-                # 关键事件不直接丢弃：短暂阻塞等待一次，降低追溯断链概率
-                try:
-                    self._queue_block_count += 1
-                    self._task_queue.put((func, args, kwargs), timeout=0.8)
-                    print(f"[MES] 任务队列拥塞，关键任务等待入队成功 "
-                          f"(blocked={self._queue_block_count}, qsize={self._task_queue.qsize()})",
-                          flush=True)
-                    return
-                except queue.Full:
-                    pass
+                self._queue_block_count += 1  # 复用为"满队列遭遇次数"计数
             spilled = False
             if critical:
                 spilled = self._spill_task(func, args, kwargs)
@@ -1127,9 +1143,7 @@ class MESHookManager:
         db.add(scan_log)
 
         if action == "queue":
-            if channel_id not in self._pending_queue:
-                self._pending_queue[channel_id] = []
-            self._pending_queue[channel_id].append(wp.id)
+            self._enqueue_pending(channel_id, wp.id)
             if channel_id not in self._pending_workpiece:
                 self._pending_workpiece[channel_id] = wp.id
             print(f"[MES] 扫码入队: {serial_no} -> 工件#{wp.id} (工位{channel_id}, 队列长度{len(self._pending_queue[channel_id])})", flush=True)

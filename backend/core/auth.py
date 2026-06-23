@@ -155,6 +155,42 @@ def delete_token(token: str) -> None:
         db.close()
 
 
+def purge_expired_tokens() -> int:
+    """B8: 清理已过期的 token (内存缓存 + 落盘表)。
+
+    只删 expires_at 已过去的 token, **绝不动**没有过期时间(None, 当前持久登录
+    默认)或还在有效期内的 token。当前登录默认不设过期, 此函数对它们是 no-op,
+    纯防御性: 一旦未来启用了带过期的会话, 过期 token 不会在内存/库里无限堆积。
+
+    返回清理掉的条数。
+    """
+    now = _now_utc()
+    removed = 0
+    db = SessionLocal()
+    try:
+        rows = db.query(SessionToken).filter(
+            SessionToken.expires_at.isnot(None),
+            SessionToken.expires_at < now,
+        ).all()
+        for r in rows:
+            uncache_token(r.token)
+        removed = len(rows)
+        if removed:
+            db.query(SessionToken).filter(
+                SessionToken.expires_at.isnot(None),
+                SessionToken.expires_at < now,
+            ).delete(synchronize_session=False)
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[Auth] 过期 token 清理失败 (忽略): {e}")
+    finally:
+        db.close()
+    if removed:
+        print(f"[Auth] 清理过期 token {removed} 个")
+    return removed
+
+
 def delete_all_tokens_for_user(user_id: int) -> None:
     """删除某个用户的所有 token (改密码 / 禁用账号时调)"""
     if user_id is None:

@@ -20,6 +20,7 @@ from datetime import datetime
 from ctypes import *
 from PIL import Image, ImageDraw, ImageFont
 from backend.core.config import settings, DATA_DIR
+from backend.core import debug_center
 import json as _json
 from backend.db.database import SessionLocal
 from backend.models.models import DetectionSession, DetectionCycle, StepRecord, VideoClip, DataExportSetting, Project
@@ -1046,7 +1047,20 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 torch.cuda.reset_peak_memory_stats(current_device)
                 
             print("[GPU重置] 紧急 GPU 重置完成")
-            
+
+            # C2: 重置后重载主模型。GPU 卡死后旧模型对象可能已不可恢复,
+            #     只清缓存不重载会陷入"重置→还是卡→再重置"的周期性抖动。
+            #     重载耗时数秒, 但优于持续掉帧。仅重载主模型(self.model_path),
+            #     多模型 slot 不在此动刀。异常路径触发, 正常推理一次都不进。
+            mp = getattr(self, 'model_path', None)
+            if mp:
+                try:
+                    print(f"[GPU重置] 重载主模型: {mp}")
+                    self.load_model(mp, getattr(self, '_original_pt_path', None))
+                    print("[GPU重置] 主模型重载完成")
+                except Exception as re:
+                    print(f"[GPU重置] 主模型重载失败: {re}")
+
         except Exception as e:
             print(f"[GPU重置] 重置失败: {e}")
     
@@ -1069,7 +1083,23 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         if thread is not None:
             thread.join(timeout=2.0)
             if thread.is_alive():
-                print("[警告] 推理线程未能在超时内结束，可能存在死锁")
+                # C3 监控版(零风险, 不改"放弃旧线程"行为): 推理线程 join 超时 =
+                # 它卡在某帧推理出不来(GPU/驱动假死)。这里只做看门狗告警 + 计数,
+                # 强制重建留作带开关的第二步。计数累积可在现场判断是否反复假死。
+                self._inference_stuck_count = getattr(
+                    self, '_inference_stuck_count', 0) + 1
+                print(f"[推理监控] ⚠️ 推理线程未能在 2s 内结束(疑似假死), "
+                      f"通道{getattr(self, 'channel_id', '?')}, "
+                      f"累计第 {self._inference_stuck_count} 次; "
+                      f"旧线程被放弃, 新线程将接管", flush=True)
+                try:
+                    from backend.core import debug_center
+                    debug_center.dbg(
+                        "backend.source", "推理线程假死",
+                        f"ch={getattr(self, 'channel_id', '?')} "
+                        f"count={self._inference_stuck_count}")
+                except Exception:
+                    pass
         self._inference_thread = None
         
         # CUDA 同步确保所有 GPU 操作完成
@@ -1740,6 +1770,13 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         last_seq = -1
         ch_label = getattr(self, 'channel_index', '?')
 
+        # ── backend.stream 推流诊断埋点 (零开销: 计数恒做, 字符串拼接仅 is_on 时) ──
+        _dbg_yields = 0                  # 本统计窗口内成功 yield 的帧数 → 推帧 FPS
+        _dbg_enc_total = 0.0             # 编码累计耗时 (ms), 仅 is_on 时累计
+        _dbg_win_start = time.time()     # 统计窗口起点
+        _dbg_last_seq_change = time.time()
+        _dbg_stall_logged = False        # 画面停滞只报一次, 恢复后复位
+
         # v3.7.x 分配 connection id, 同 channel 后来者上位
         self._mjpeg_next_conn_id = getattr(self, '_mjpeg_next_conn_id', 0) + 1
         my_conn_id = self._mjpeg_next_conn_id
@@ -1748,6 +1785,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         try:
             self._mjpeg_active_streams = getattr(self, '_mjpeg_active_streams', 0) + 1
             print(f"[MJPEG] 新连接 #{my_conn_id} ch={ch_label}, 活跃连接={self._mjpeg_active_streams}", flush=True)
+            if debug_center.is_on("backend.stream"):
+                debug_center.dbg("backend.stream", "推流新连接",
+                                 f"conn#{my_conn_id} ch={ch_label} 活跃连接={self._mjpeg_active_streams}")
         except Exception:
             pass
 
@@ -1756,7 +1796,13 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 # 旧连接让位: 同 channel 有更新的 id 进来 -> 主动退出
                 if getattr(self, '_mjpeg_active_conn_id', my_conn_id) != my_conn_id:
                     print(f"[MJPEG] 连接 #{my_conn_id} ch={ch_label} 让位给 #{self._mjpeg_active_conn_id}, 主动退出", flush=True)
+                    if debug_center.is_on("backend.stream"):
+                        debug_center.dbg("backend.stream", "推流连接让位退出",
+                                         f"conn#{my_conn_id} ch={ch_label} 让位给 #{self._mjpeg_active_conn_id} "
+                                         f"(频繁让位=前端反复重连)")
                     break
+
+                _dbg_on = debug_center.is_on("backend.stream")
 
                 if self.is_running:
                     idle_count = 0
@@ -1768,13 +1814,44 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                             last_seq = seq
 
                     if frame is None:
+                        # seq 未变 = 采集线程没出新帧 (或人工确认定格). 画面停滞 >2s 报一次.
+                        if _dbg_on and not _dbg_stall_logged and (time.time() - _dbg_last_seq_change) > 2.0:
+                            _dbg_stall_logged = True
+                            _frozen = getattr(self, '_pending_ack', False)
+                            debug_center.dbg("backend.stream", "推流画面停滞",
+                                             f"conn#{my_conn_id} ch={ch_label} seq={last_seq} 已停 "
+                                             f"{time.time() - _dbg_last_seq_change:.1f}s "
+                                             f"人工确认定格={_frozen} (非定格则采集线程卡住/视频结束)")
                         time.sleep(0.005)
                         continue
 
-                    chunk = self._encode_and_yield(frame)
+                    # 拿到新帧: 复位停滞标记, 记录帧序号推进时刻
+                    _dbg_last_seq_change = time.time()
+                    _dbg_stall_logged = False
+
+                    if _dbg_on:
+                        _t_enc = time.time()
+                        chunk = self._encode_and_yield(frame)
+                        _dbg_enc_total += (time.time() - _t_enc) * 1000
+                    else:
+                        chunk = self._encode_and_yield(frame)
                     del frame
                     if chunk:
                         yield chunk
+                        _dbg_yields += 1
+
+                    # 每 2s 汇总一次推帧 FPS + 平均编码耗时
+                    if _dbg_on and (time.time() - _dbg_win_start) >= 2.0:
+                        _elapsed = time.time() - _dbg_win_start
+                        _push_fps = _dbg_yields / _elapsed if _elapsed > 0 else 0
+                        _enc_avg = _dbg_enc_total / _dbg_yields if _dbg_yields else 0
+                        debug_center.dbg("backend.stream", "推流吞吐",
+                                         f"conn#{my_conn_id} ch={ch_label} 推帧={_push_fps:.1f}fps "
+                                         f"编码均耗={_enc_avg:.1f}ms 采集fps={getattr(self, 'fps_actual', '?')} "
+                                         f"推理fps={getattr(self, 'fps_inference', '?')}")
+                        _dbg_yields = 0
+                        _dbg_enc_total = 0.0
+                        _dbg_win_start = time.time()
 
                     if self.frame_limit_enabled:
                         time.sleep(max(min_interval, target_interval))
@@ -1806,6 +1883,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             try:
                 self._mjpeg_active_streams = max(0, getattr(self, '_mjpeg_active_streams', 1) - 1)
                 print(f"[MJPEG] 连接 #{my_conn_id} 关闭 ch={ch_label}, 活跃连接={self._mjpeg_active_streams}", flush=True)
+                if debug_center.is_on("backend.stream"):
+                    debug_center.dbg("backend.stream", "推流连接关闭",
+                                     f"conn#{my_conn_id} ch={ch_label} 剩余活跃连接={self._mjpeg_active_streams}")
             except Exception:
                 pass
     

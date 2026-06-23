@@ -52,6 +52,45 @@ from backend.api.source import (
 import cv2  # noqa: E402
 
 
+# ==================== B6 步骤截图按内容哈希去重 (默认关) ====================
+def _apply_screenshot_dedup(result: dict, known_shots: str) -> None:
+    """对 /detection/results 的 step_screenshots 做内容指纹去重 (原地修改 result)。
+
+    痛点: 该接口每 ~150ms 轮询都把每步 base64 缩略图整包回传, 而截图只在步骤切换时
+          才变, 绝大多数轮询是在重发完全相同的大字符串。
+    机制: 前端把它已持有的指纹以 'label:md5,label:md5' 形式经 known_shots 传入 —
+          内容与客户端一致的截图从 step_screenshots 省略 (前端 Object.assign 合并会
+          保留旧图), 始终回传 step_screenshot_hashes 让前端更新本地指纹。
+    安全: 纯优化, 任何异常都回退为"原样不动 result", 绝不影响主数据。
+    仅当路由收到 known_shots (非 None) 才调用本函数; 不传 = 与旧版字节级一致。
+    """
+    try:
+        import hashlib
+        shots = result.get('step_screenshots') or {}
+        cur_hashes = {
+            lbl: hashlib.md5(
+                (b64 if isinstance(b64, str) else str(b64)).encode('utf-8')
+            ).hexdigest()
+            for lbl, b64 in shots.items()
+            if b64
+        }
+        client_known = {}
+        for pair in known_shots.split(','):
+            if ':' in pair:
+                k, _, v = pair.partition(':')
+                k, v = k.strip(), v.strip()
+                if k:
+                    client_known[k] = v
+        result['step_screenshots'] = {
+            lbl: b64
+            for lbl, b64 in shots.items()
+            if b64 and cur_hashes.get(lbl) != client_known.get(lbl)
+        }
+        result['step_screenshot_hashes'] = cur_hashes
+    except Exception as _e:
+        print(f"[API] /detection/results 截图去重失败(已回退全量): {_e}")
+
+
 # ============================================================
 # Pydantic Request 模型
 # ============================================================
@@ -1251,7 +1290,18 @@ def reset_periodic_action(
 
 
 @router.get("/detection/results")
-def get_detection_results(channel: int = Query(0)):
+def get_detection_results(
+    channel: int = Query(0),
+    known_shots: Optional[str] = Query(
+        None,
+        description=(
+            "B6 截图去重(默认关): 前端已持有的步骤截图指纹, 形如 "
+            "'label1:hash1,label2:hash2'. 传入即开启去重: 后端对内容未变的"
+            "截图从 step_screenshots 中省略(前端走 Object.assign 合并保留旧图), "
+            "并始终回传 step_screenshot_hashes 供前端更新。不传 = 行为与旧版字节级一致。"
+        ),
+    ),
+):
     """获取检测结果（含 MES/操作员/tracking 等聚合信息）"""
     mgr = _get_mgr(channel)
     recent_events = []
@@ -1652,6 +1702,10 @@ def get_detection_results(channel: int = Query(0)):
                 _db.close()
     except Exception:
         pass
+
+    # B6 截图按内容哈希去重 (默认关, 仅当前端传 known_shots 时启用; 不传则 result 原样返回)
+    if known_shots is not None:
+        _apply_screenshot_dedup(result, known_shots)
 
     return result
 

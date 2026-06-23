@@ -801,11 +801,10 @@ watch(() => projectStore.currentProjectId, () => {
 })
 
 const toggleAutoRefresh = (val) => {
+  // D7: 开启前先清旧定时器, 防止重复开启叠加多个 interval(长跑泄漏)
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
   if (val) {
     refreshTimer = setInterval(loadOrders, 10000)
-  } else {
-    if (refreshTimer) clearInterval(refreshTimer)
-    refreshTimer = null
   }
 }
 

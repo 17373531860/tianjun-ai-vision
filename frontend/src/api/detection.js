@@ -49,7 +49,12 @@ export const standbyDetection = (channel = 0) => api.post(`/source/detection/sta
 
 export const resumeInference = (channel = 0) => api.post(`/source/detection/resume-inference?channel=${channel}`);
 
-export const getDetectionResults = (channel = 0) => api.get(`/source/detection/results?channel=${channel}`);
+export const getDetectionResults = (channel = 0, knownShots = null) => {
+  let url = `/source/detection/results?channel=${channel}`;
+  // B6 截图去重（默认关）：仅当传入已持有指纹时附带 known_shots，后端据此省略未变截图。
+  if (knownShots) url += `&known_shots=${encodeURIComponent(knownShots)}`;
+  return api.get(url);
+};
 
 export const getSourceStatus = (channel = 0) => api.get(`/source/status?channel=${channel}`);
 
