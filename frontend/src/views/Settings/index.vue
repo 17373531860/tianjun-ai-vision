@@ -297,6 +297,35 @@
             </div>
           </el-card>
 
+          <!-- B1②: MES 外推并发派发 (默认关) -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-cyan-400"><Lightning /></el-icon>
+                <span class="font-bold text-white">MES 外推并发派发</span>
+              </div>
+            </template>
+            <div class="mb-3 text-xs text-gray-500">
+              控制把检测结果推送给外部 MES 系统的方式。<br>
+              关闭（默认）= 在统一队列里<b>顺序推送</b>，与旧版一致；若客户 MES 系统响应慢或断连，重试期间会拖慢扫码配对等其它处理。<br>
+              开启 = 每个工位<b>独立线程推送</b>，同工位严格保序，<b>某个工位的 MES 慢/断连不再拖累其它工位和扫码流程</b>；适合多工位且 MES 偶发卡顿的现场。<br>
+              修改后<b>立即生效</b>。
+            </div>
+            <div class="space-y-2">
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">每工位独立线程推送外部 MES</span>
+                  <span class="text-[10px] text-gray-500">关闭 = 统一队列顺序推；开启 = 慢 MES 不拖累其它工位</span>
+                </div>
+                <el-switch
+                  v-model="mesAsyncDispatchEnabled"
+                  data-testid="mes-async-dispatch-switch"
+                  @change="onMesAsyncDispatchChange"
+                />
+              </div>
+            </div>
+          </el-card>
+
           <!-- v3.10.x: 窗口模式 (主窗口全屏 / 窗口 + 最小化) -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
@@ -2194,6 +2223,30 @@ async function onStartupReadyGateChange(val) {
   }
 }
 
+// ========== B1②: MES 外推并发派发开关 (默认关) ==========
+// 后端 SystemConfig(mes_async_dispatch) 为准, 立即生效。
+const mesAsyncDispatchEnabled = ref(false);
+
+async function loadMesAsyncDispatchConfig() {
+  try {
+    const res = await api.get('/mes/gateway/async-dispatch');
+    mesAsyncDispatchEnabled.value = res?.data?.enabled === true;
+  } catch (e) {
+    console.warn('加载 MES 外推并发派发配置失败:', e?.message);
+  }
+}
+
+async function onMesAsyncDispatchChange(val) {
+  dbg('settings.ops', '切换 MES 外推并发派发', `enabled=${!!val}`);
+  try {
+    await api.put('/mes/gateway/async-dispatch', { enabled: !!val });
+    ElMessage.success(val ? '已开启, 每工位独立线程推送 (慢 MES 不拖累其它工位)' : '已关闭, 恢复统一队列顺序推送');
+  } catch (e) {
+    ElMessage.error('保存 MES 外推并发派发配置失败: ' + (e?.response?.data?.detail || e?.message || ''));
+    mesAsyncDispatchEnabled.value = !val;
+  }
+}
+
 // ========== v3.10.x: 主窗口模式 (Electron) ==========
 const windowFullscreen = ref(false);
 const isElectronEnv = computed(() => !!(typeof window !== 'undefined' && window.electronAPI?.isElectron));
@@ -2334,6 +2387,7 @@ onMounted(async () => {
   loadWindowConfig();   // v3.10.x: 主窗口模式
   loadAutoResumeConfig();  // v3.22.x: 开机自动恢复检测开关
   loadStartupReadyGateConfig();  // v3.23.x: 加深启动就绪门槛开关
+  loadMesAsyncDispatchConfig();  // B1②: MES 外推并发派发开关
   await loadProjectDetection();
 });
 

@@ -72,6 +72,27 @@ class PullRun(BaseModel):
     max_items: Optional[int] = None
 
 
+class AsyncDispatchToggle(BaseModel):
+    enabled: bool = False
+
+
+# ==================== B1②: 外部 MES 推送并发派发开关 (默认关) ====================
+# 开 → cycle_end 外推甩到"每工位一条"的执行器, 慢/挂的客户 MES 不再堵住整个 hook 队列;
+# 关(默认) → 原内联派发, 与旧版一致。开关存 SystemConfig(mes_async_dispatch), 即时生效。
+@router.get("/async-dispatch")
+def get_async_dispatch():
+    from backend.services.mes_hooks import get_mes_hook
+    return {"enabled": get_mes_hook().get_async_dispatch()}
+
+
+@router.put("/async-dispatch", dependencies=[Depends(require_perm("settings.edit"))])
+def set_async_dispatch(body: AsyncDispatchToggle):
+    from backend.services.mes_hooks import get_mes_hook
+    hook = get_mes_hook()
+    hook.set_async_dispatch(body.enabled)
+    return {"status": "success", "enabled": hook.get_async_dispatch()}
+
+
 def _serialize_conn(c):
     return {
         "id": c.id, "name": c.name,

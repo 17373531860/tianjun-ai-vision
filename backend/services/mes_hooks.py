@@ -19,6 +19,7 @@ import time
 import traceback
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional
 
@@ -91,6 +92,20 @@ class MESHookManager:
         self._spill_write_count = 0
         self._spill_replay_count = 0
 
+        # B1②: 外部 MES 推送并发派发 (默认关). 背景: cycle_end 的外推
+        #   gw.dispatch() 自带阻塞式重试 (time.sleep(retry_interval)×retry_count),
+        #   跑在单条 mes-hook-worker 线程上; 客户 MES 慢/挂时这一下就把整个 hook 队列
+        #   (扫码配对/绑工件/...) 全堵住。开关开 → 把外推甩到"每工位一条"的独立执行器:
+        #   同工位推送仍 FIFO 严格保序, 但慢工位不再拖垮 worker / 其他工位; 每工位设
+        #   积压上限, 超了丢最新一条 + 告警 (MES 长时间不通时的背压, 防内存涨爆)。
+        #   默认关时走原内联路径, 字节级一致。开关存 SystemConfig(mes_async_dispatch),
+        #   start() 时读, set_async_dispatch() 实时改运行态。
+        self._async_dispatch_enabled = False
+        self._gateway_executors: dict = {}          # channel_id -> ThreadPoolExecutor(1)
+        self._gateway_pending: dict = {}            # channel_id -> 在途+排队任务数
+        self._gateway_exec_lock = threading.Lock()
+        self._GATEWAY_MAX_PENDING = 200             # 每工位外推积压上限 (正常 0~1)
+
         # v3.4.2 "禁用扫码"全局开关 (按工位粒度).
         #   _disabled_channels 里的工位:
         #     • on_scan_received 直接丢码 (扫码器物理已 LOFF, 这里再防御一道)
@@ -111,6 +126,7 @@ class MESHookManager:
         self.enabled = True
         self._stop_event.clear()
         self._load_disabled_state_from_disk()
+        self._load_async_dispatch_config()
         self._worker_thread = threading.Thread(
             target=self._worker_loop, daemon=True, name="mes-hook-worker"
         )
@@ -123,7 +139,108 @@ class MESHookManager:
         self._stop_event.set()
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=5)
+        # B1②: 关停所有每工位外推执行器 (不等在途慢推送, 进程退出本就要走)
+        with self._gateway_exec_lock:
+            execs = list(self._gateway_executors.values())
+            self._gateway_executors.clear()
+            self._gateway_pending.clear()
+        for ex in execs:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
         print("[MES] Hook 管理器已停止", flush=True)
+
+    # ==================== B1②: 外部 MES 推送并发派发 (默认关) ====================
+
+    def _load_async_dispatch_config(self):
+        """启动时从 SystemConfig(mes_async_dispatch) 读开关; 缺省/异常 → 关。"""
+        try:
+            db = SessionLocal()
+            try:
+                from backend.models.models import SystemConfig
+                row = db.query(SystemConfig).filter(
+                    SystemConfig.key == "mes_async_dispatch").first()
+                self._async_dispatch_enabled = bool(
+                    row and str(row.value).strip().lower() in ("1", "true", "yes", "on"))
+            finally:
+                db.close()
+        except Exception as e:
+            self._async_dispatch_enabled = False
+            print(f"[MES] 读取外推并发开关失败(默认关): {e}", flush=True)
+        print(f"[MES] 外部推送并发派发: {'开' if self._async_dispatch_enabled else '关(默认)'}",
+              flush=True)
+
+    def get_async_dispatch(self) -> bool:
+        return bool(self._async_dispatch_enabled)
+
+    def set_async_dispatch(self, enabled: bool):
+        """实时改运行态 + 落盘 SystemConfig。关时不主动拆已建执行器(空转无害, stop 统一收)。"""
+        self._async_dispatch_enabled = bool(enabled)
+        try:
+            db = SessionLocal()
+            try:
+                from backend.models.models import SystemConfig
+                row = db.query(SystemConfig).filter(
+                    SystemConfig.key == "mes_async_dispatch").first()
+                if row is None:
+                    row = SystemConfig(key="mes_async_dispatch",
+                                       description="外部MES推送并发派发(默认关)")
+                    db.add(row)
+                row.value = "true" if enabled else "false"
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[MES] 持久化外推并发开关失败: {e}", flush=True)
+        print(f"[MES] 外部推送并发派发已切换: {'开' if enabled else '关'}", flush=True)
+
+    def _submit_gateway_dispatch(self, event_type: str, ctx: dict, channel_id):
+        """把一次外部 MES 推送甩到"每工位一条"的执行器, 同工位严格保序, 慢工位不拖累他人。
+        每工位积压超上限 → 丢最新一条 + 告警 (MES 长时间不通的背压)。"""
+        cid = int(channel_id) if channel_id is not None else -1
+        with self._gateway_exec_lock:
+            pending = self._gateway_pending.get(cid, 0)
+            if pending >= self._GATEWAY_MAX_PENDING:
+                print(f"[MES] ⚠️ 工位{cid}外推积压达上限{self._GATEWAY_MAX_PENDING}, "
+                      f"丢弃本次{event_type}推送(MES可能长时间不通)", flush=True)
+                debug_center.dbg("backend.mes", "外推积压丢弃",
+                                 f"ch={cid} event={event_type} pending={pending}")
+                return
+            ex = self._gateway_executors.get(cid)
+            if ex is None:
+                ex = ThreadPoolExecutor(max_workers=1,
+                                        thread_name_prefix=f"mes-gw-ch{cid}")
+                self._gateway_executors[cid] = ex
+            self._gateway_pending[cid] = pending + 1
+
+        def _run():
+            try:
+                from backend.services.mes_gateway import get_mes_gateway
+                get_mes_gateway().dispatch(
+                    event_type, ctx, cid if cid >= 0 else None)
+            except Exception as e:
+                print(f"[MES] 异步外推失败 ch={cid} event={event_type}: {e}", flush=True)
+                debug_center.dbg("backend.mes", "异步外推异常",
+                                 f"ch={cid} event={event_type} err={e}")
+            finally:
+                with self._gateway_exec_lock:
+                    self._gateway_pending[cid] = max(
+                        0, self._gateway_pending.get(cid, 1) - 1)
+
+        try:
+            ex.submit(_run)
+        except Exception as e:
+            with self._gateway_exec_lock:
+                self._gateway_pending[cid] = max(
+                    0, self._gateway_pending.get(cid, 1) - 1)
+            print(f"[MES] 外推提交失败, 回退内联 ch={cid}: {e}", flush=True)
+            try:
+                from backend.services.mes_gateway import get_mes_gateway
+                get_mes_gateway().dispatch(
+                    event_type, ctx, cid if cid >= 0 else None)
+            except Exception:
+                pass
 
     # ==================== v3.4.2 "禁用扫码"按工位开关 ====================
 
@@ -1420,7 +1537,11 @@ class MESHookManager:
             )
 
             if not skip_cycle_push:
-                gw.dispatch("cycle_end", ctx, channel_id)
+                # B1②: 开关开 → 甩到每工位执行器(慢 MES 不堵 worker); 默认关 → 内联(字节级一致)
+                if self._async_dispatch_enabled:
+                    self._submit_gateway_dispatch("cycle_end", ctx, channel_id)
+                else:
+                    gw.dispatch("cycle_end", ctx, channel_id)
             if debug_center.is_on("backend.mes"):
                 debug_center.dbg("backend.mes", "_handle_cycle_end 完成", f"channel={channel_id} cycle={cycle_id} wp={wp_id or '-'} skip_cycle_push={skip_cycle_push}")
         except Exception as e:
