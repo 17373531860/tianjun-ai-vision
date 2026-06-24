@@ -161,6 +161,10 @@ export const useSystemStore = defineStore('system', {
       // 后端对内容未变的截图省略不传（前端合并保留旧图），减小高频轮询包体。
       // 关 = 行为与旧版字节级一致。
       screenshotDedup: false,
+      // D1 多通道视频解码背压（默认关）：开启后多工位画面改用 createImageBitmap 解码 +
+      // "每工位同时只解一帧、跟不上就丢旧留最新"的背压策略，长时间多工位运行不再因
+      // 解码积压导致内存/GC 压力升高。关 = 走原 new Image() 逐帧解码路径，字节级一致。
+      multiChannelBitmapDecode: false,
       halfPrecision: false,      // FP16 半精度推理（默认关闭）
       mediapipeEnabled: false,   // MediaPipe 骨架叠加（默认关闭）
       mediapipePose: true,       // 显示姿态骨架

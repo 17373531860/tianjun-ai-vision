@@ -1666,6 +1666,7 @@ import { getExtraFieldsSchema, setExtraFields } from '@/api/gateway';
 import PerItemPanel from './PerItemPanel.vue';
 import PackagingFlowCard from './PackagingFlowCard.vue';
 import VirtualScanGun from './VirtualScanGun.vue';
+import { createFramePump } from './framePump';
 import { listPackagingFlows, getPackagingFlowState } from '@/api/packaging_flow';
 import TjSlot from '@/components/TjSlot.vue';
 import { dbg, dbgErr } from '@/utils/debug';
@@ -2307,38 +2308,72 @@ const findBytes = (buf, str, offset = 0) => {
   return -1;
 };
 
-const drawFrameToCanvas = (ch, jpegData) => {
+// 把一张解出的位图 (HTMLImageElement 或 ImageBitmap) 等比居中绘到工位画布
+const paintToCanvas = (ch, src, natW, natH) => {
+  const canvas = multiVideoCanvasRefs[ch];
+  if (!canvas) return;
+  const parent = canvas.parentElement;
+  if (parent) {
+    canvas.width = parent.clientWidth;
+    canvas.height = parent.clientHeight;
+  }
+  multiFrameNaturalSize[ch] = { w: natW, h: natH };
+  const ctx = canvas.getContext('2d');
+  const cw = canvas.width, ch2 = canvas.height;
+  const scale = Math.min(cw / natW, ch2 / natH);
+  const dw = natW * scale;
+  const dh = natH * scale;
+  const dx = (cw - dw) / 2;
+  const dy = (ch2 - dh) / 2;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, cw, ch2);
+  ctx.drawImage(src, dx, dy, dw, dh);
+};
+
+// 旧路径 (默认): new Image() 逐帧解码, 行为与历史字节级一致
+const drawFrameLegacy = (ch, jpegData) => {
   const canvas = multiVideoCanvasRefs[ch];
   if (!canvas) return;
   const blob = new Blob([jpegData], { type: 'image/jpeg' });
   const url = URL.createObjectURL(blob);
   const img = new Image();
   img.onload = () => {
-    const parent = canvas.parentElement;
-    if (parent) {
-      canvas.width = parent.clientWidth;
-      canvas.height = parent.clientHeight;
-    }
-    multiFrameNaturalSize[ch] = { w: img.naturalWidth, h: img.naturalHeight };
-    const ctx = canvas.getContext('2d');
-    const cw = canvas.width, ch2 = canvas.height;
-    const scale = Math.min(cw / img.naturalWidth, ch2 / img.naturalHeight);
-    const dw = img.naturalWidth * scale;
-    const dh = img.naturalHeight * scale;
-    const dx = (cw - dw) / 2;
-    const dy = (ch2 - dh) / 2;
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, cw, ch2);
-    ctx.drawImage(img, dx, dy, dw, dh);
+    paintToCanvas(ch, img, img.naturalWidth, img.naturalHeight);
     URL.revokeObjectURL(url);
   };
+  img.onerror = () => { try { URL.revokeObjectURL(url); } catch {} };
   img.src = url;
+};
+
+// D1 新路径 (开关开): createImageBitmap + 背压. 返回 Promise 供 framePump 判定在途。
+const decodeFrameBitmap = (ch, jpegData) => {
+  if (!multiVideoCanvasRefs[ch]) return Promise.resolve();
+  const blob = new Blob([jpegData], { type: 'image/jpeg' });
+  return createImageBitmap(blob)
+    .then((bitmap) => {
+      try {
+        if (multiStreamRunning) paintToCanvas(ch, bitmap, bitmap.width, bitmap.height);
+      } finally {
+        bitmap.close();   // 立即释放解码像素, 不等 GC
+      }
+    });
+};
+
+const multiFramePump = createFramePump(decodeFrameBitmap);
+
+const drawFrameToCanvas = (ch, jpegData) => {
+  if (systemStore.performance?.multiChannelBitmapDecode) {
+    multiFramePump.push(ch, jpegData);   // 背压: 每工位只解最新一帧
+  } else {
+    drawFrameLegacy(ch, jpegData);
+  }
 };
 
 const stopMultiStreams = () => {
   multiStreamRunning = false;
   Object.values(multiStreamAborts).forEach(a => { try { a.abort(); } catch {} });
   Object.keys(multiStreamAborts).forEach(k => delete multiStreamAborts[k]);
+  multiFramePump.reset();
 };
 
 const processChannelResult = (ch, d) => {

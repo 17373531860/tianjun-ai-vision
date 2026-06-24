@@ -985,6 +985,21 @@
                   </div>
                 </template>
               </el-alert>
+              <!-- D1: 多通道视频解码背压 (默认关) -->
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div>
+                  <span class="text-gray-300">多工位视频解码背压</span>
+                  <div class="text-xs text-gray-500 mt-1">
+                    多工位画面改用 createImageBitmap 解码 + "每工位同时只解一帧、跟不上就丢旧留最新"。<br>
+                    长时间多工位运行不再因解码积压导致内存/GC 压力升高；关闭=旧版逐帧解码，行为一致。
+                  </div>
+                </div>
+                <el-switch
+                  v-model="store.performance.multiChannelBitmapDecode"
+                  data-testid="multi-bitmap-decode-switch"
+                  @change="savePerformanceSettings"
+                />
+              </div>
             </div>
           </el-card>
 
