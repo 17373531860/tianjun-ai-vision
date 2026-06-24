@@ -1,0 +1,141 @@
+{
+  "version": "3.26.0",
+  "date": "2026-06-25",
+  "previous_version": "3.25.0",
+  "release_type": "minor",
+  "summary": "主程序原生『外部生产管控系统入站对接』REST API（外部系统主动 POST 开工/完工任务，配置驱动响应 + JSON/XML + 可选来源校验，默认 M2M 无鉴权）+ 后端控制台日志全面 ASCII 化 + 启动强制 UTF-8 终端（根治 Windows GBK 控制台中文乱码）+ 录像按日期分目录与空目录回收 + 录像 DB session 泄漏修复。",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "外部生产管控系统『入站对接』REST API（主程序原生）",
+      "symptom": "部分客户 MES/生产管控系统是『主动推』模型——它来调我们的接口下发开工/完工任务，而不是我们去拉；既有能力只有出站推送(mes_gateway)与主动拉取(mes_puller)，缺『被动接收』入口",
+      "root_cause": "面向所有客户的基础设施缺口：没有标准化的入站接收端点 + 配置驱动响应 + 来源校验 + 通讯日志",
+      "fix": "新增 /api/v1/mes/inbound/* 端点：POST/GET /task(外部推任务，无鉴权 M2M，配置驱动响应体) + GET/PUT /config(前端读写入站配置) + GET /logs(入站通讯日志)；响应按 response.format 组装 JSON 或 XML(可配 xml_root/xml_declaration)；来源校验支持共享密钥头 + IP 白名单(默认全关)；落 MESCommLog(复用既有表，无新表/无 schema 迁移)；前端新增『入站对接』面板 OrderInboundPanel.vue 挂进 MES 视图",
+      "files": [
+        "backend/api/mes_inbound.py",
+        "backend/services/mes_inbound.py",
+        "backend/main.py",
+        "frontend/src/views/MES/OrderInboundPanel.vue",
+        "frontend/src/views/MES/index.vue",
+        "frontend/src/api/gateway.js"
+      ],
+      "keywords": ["MES 入站对接", "inbound", "外部系统主动推", "mes_inbound", "开工任务接收", "配置驱动响应", "XML 响应", "共享密钥校验", "IP 白名单", "M2M 无鉴权", "MESCommLog", "OrderInboundPanel"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "HARDEN-001",
+      "title": "后端控制台日志全面 ASCII 化 + 启动强制 UTF-8 终端",
+      "symptom": "现场手动从 cmd 启动后端 / 日志重定向到文件时，中文 print 在 Windows GBK 控制台整屏乱码(澶╁啗...)，定位现场问题困难；Electron 路径已 chcp 65001 但裸 cmd / 重定向路径没覆盖",
+      "root_cause": "Windows 控制台默认 GBK(936)，UTF-8 字节被错误解码；裸 cmd / 日志重定向启动路径未做编码兜底；后端大量 print 用中文文案",
+      "fix": "(1) backend/main.py 启动最早处对 Windows 执行 chcp 65001 + stdout/stderr reconfigure(encoding='utf-8') 作为任意启动路径底线；(2) mes_hooks/scanner/alarm/channel_manager/source 各 mixin/mes_gateway/mes_puller 等模块 print 日志文案由中文统一改写为 ASCII 英文；纯日志文案变更，不改业务逻辑",
+      "files": [
+        "backend/main.py",
+        "backend/services/mes_hooks.py",
+        "backend/services/scanner.py",
+        "backend/services/mes_gateway.py",
+        "backend/services/mes_puller.py",
+        "backend/api/alarm.py",
+        "backend/api/channel_manager.py",
+        "backend/api/source.py",
+        "backend/api/source_capture_loop_mixin.py",
+        "backend/api/source_event_trigger_mixin.py",
+        "backend/api/source_lifecycle_mixin.py",
+        "backend/api/source_model_load_mixin.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/source_settlement_mixin.py",
+        "backend/api/source_streaming_mixin.py",
+        "backend/api/projects.py"
+      ],
+      "keywords": ["控制台乱码", "GBK", "chcp 65001", "UTF-8 终端", "reconfigure", "日志 ASCII 化", "mojibake", "澶╁啗", "手动 cmd 启动", "日志重定向"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "录像按日期分子目录 + 自动清理回收空日期目录",
+      "symptom": "录像文件全平铺在录像根目录，长跑后目录巨大；自动清理删完当天录像后留下大量空日期子目录无人回收",
+      "root_cause": "录像写入未按日期分目录；自动清理只删文件不递归回收空目录",
+      "fix": "录像写入按 YYYY-MM-DD 分子目录(_ensure_dated_dir)；自动清理递归扫描日期子目录删孤儿文件 + 整天清完后回收空日期目录(_prune_empty_dated_dirs)，兼容老的平铺录像",
+      "files": [
+        "backend/api/source_recording_api_mixin.py",
+        "backend/api/source_recording_thread_mixin.py",
+        "backend/api/sessions_maintenance.py"
+      ],
+      "keywords": ["录像分日期目录", "_ensure_dated_dir", "_prune_empty_dated_dirs", "空目录回收", "自动清理孤儿录像", "dated subdirs"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "录像器 DB session 泄漏修复",
+      "symptom": "长时间运行后数据库连接/会话累积(录像相关写库未及时归还 session)",
+      "root_cause": "录像线程/接口写 VideoClip 等记录时 DB session 生命周期管理不严",
+      "fix": "收紧录像相关 DB session 开闭，停止时统一关闭所有录像器([Recording] all recorders closed)",
+      "files": [
+        "backend/api/source_recording_thread_mixin.py",
+        "backend/api/source_recording_api_mixin.py"
+      ],
+      "keywords": ["录像 DB 泄漏", "recording db leak", "session 泄漏", "all recorders closed", "VideoClip session"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["run-tests"],
+  "config_changes": {
+    "electron/package.json": "version 3.25.0 -> 3.26.0",
+    "mes_inbound_config": "新增入站对接配置(response.format/xml_root/auth.shared_secret/ip_whitelist 等)，默认无鉴权 + JSON 响应，存 KV(无新表)"
+  },
+  "files_changed": [
+    "backend/main.py",
+    "backend/api/mes_inbound.py",
+    "backend/services/mes_inbound.py",
+    "backend/api/alarm.py",
+    "backend/api/channel_manager.py",
+    "backend/api/projects.py",
+    "backend/api/sessions_maintenance.py",
+    "backend/api/source.py",
+    "backend/api/source_capture_loop_mixin.py",
+    "backend/api/source_event_trigger_mixin.py",
+    "backend/api/source_lifecycle_mixin.py",
+    "backend/api/source_model_load_mixin.py",
+    "backend/api/source_recording_api_mixin.py",
+    "backend/api/source_recording_thread_mixin.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/source_settlement_mixin.py",
+    "backend/api/source_streaming_mixin.py",
+    "backend/services/mes_gateway.py",
+    "backend/services/mes_hooks.py",
+    "backend/services/mes_puller.py",
+    "backend/services/scanner.py",
+    "frontend/src/api/gateway.js",
+    "frontend/src/views/Data/index.vue",
+    "frontend/src/views/MES/index.vue",
+    "frontend/src/views/MES/OrderInboundPanel.vue",
+    "tests/test_mes_inbound_api.py",
+    "tests/test_mes_inbound_auth.py",
+    "tests/test_mes_inbound_formats.py",
+    "tests/test_mes_inbound_http_status.py",
+    "tests/test_mes_inbound_m3.py",
+    "tests/test_mes_inbound_m4.py",
+    "tests/test_mes_inbound_response.py",
+    "tests/test_mes_inbound_unit.py",
+    "tests/test_mes_inbound_xml.py",
+    "tests/test_mes_gateway_snapshot.py",
+    "tests/test_recording_db_leak.py",
+    "tests/test_cleanup_dated_subdirs.py",
+    "tests/features/mes_inbound_supersede.feature",
+    "tests/step_defs/test_mes_inbound_supersede.py",
+    "tests/e2e_browser/test_mes_inbound_panel.py",
+    ".claude/skills/run-tests/SKILL.md",
+    "AGENTS.md",
+    "electron/package.json",
+    "docs/CHANGELOG.md",
+    "docs/changelog/v3.26.0_2026-06-25.md",
+    "docs/changelog/v3.26.0_2026-06-25.json"
+  ],
+  "known_issues": [
+    "前端 MES 入站面板的可见浏览器 UAT 由前序开发会话产出，本次发版以后端单测冒烟为准",
+    "CI 历史长期红灯: Virtual Functional Tests (cryptography) / DB Matrix (PostgreSQL dialect) 自 v3.7.4 起持续，不影响安装包构建产出"
+  ]
+}

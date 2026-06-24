@@ -80,14 +80,14 @@ class ModelLoadMixin:
 
             # 先释放旧模型
             if self.model is not None:
-                print(f"[模型加载] 释放旧模型: {self.model_path}")
+                print(f"[ModelLoad] releasing old model: {self.model_path}")
                 self._release_model()
 
             try:
                 self.model = YOLO(model_path)
             except Exception as e:
                 if self._original_pt_path and model_path != self._original_pt_path:
-                    print(f"[模型加载] 转换模型加载失败 ({e}), 回退到原始模型: {self._original_pt_path}")
+                    print(f"[ModelLoad] converted model load failed ({e}), fallback to original model: {self._original_pt_path}")
                     debug_center.dbg("backend.detection", "转换模型加载失败回退", f"path={model_path} err={e} → {self._original_pt_path}")
                     self.model = YOLO(self._original_pt_path)
                     model_path = self._original_pt_path
@@ -114,18 +114,18 @@ class ModelLoadMixin:
                 gpu_idx = int(device.split(':')[1]) if ':' in device else 0
                 gpu_name = torch.cuda.get_device_name(gpu_idx)
                 self.current_device_info = {'type': 'GPU', 'name': gpu_name, 'device': device}
-                print(f"模型加载成功: {model_path} -> GPU: {gpu_name}")
+                print(f"[ModelLoad] success: {model_path} -> GPU: {gpu_name}")
             else:
                 self.current_device_info = {'type': 'CPU', 'name': 'CPU', 'device': 'cpu'}
-                print(f"模型加载成功: {model_path} -> CPU")
+                print(f"[ModelLoad] success: {model_path} -> CPU")
 
             if hasattr(self.model, 'names'):
-                print(f"类别: {list(self.model.names.values())}")
-            print(f"模型任务类型: {self.model_task}")
+                print(f"[ModelLoad] classes: {list(self.model.names.values())}")
+            print(f"[ModelLoad] task type: {self.model_task}")
 
             # imgsz 多路径检测
             self._model_imgsz = self._detect_model_imgsz(self.model, model_path, is_native_pytorch)
-            print(f"[模型加载] 推理分辨率 imgsz={self._model_imgsz}")
+            print(f"[ModelLoad] inference resolution imgsz={self._model_imgsz}")
 
             # CUDA warm-up (Step 3: 走 router.warmup_lock 串行)
             warmup_ok = True
@@ -141,12 +141,12 @@ class ModelLoadMixin:
             # 新行为: 检测到失败 + 有原始 .pt 路径 → 释放当前坏模型, 重新加载 .pt 走 PyTorch 推理.
             if (not warmup_ok) and (not is_native_pytorch) \
                     and self._original_pt_path and model_path != self._original_pt_path:
-                print(f"[模型加载] 转换模型预热失败 ({model_path}), 自动 fallback 到原始 PyTorch 模型: {self._original_pt_path}")
+                print(f"[ModelLoad] converted model warm-up failed ({model_path}), auto fallback to original PyTorch model: {self._original_pt_path}")
                 debug_center.dbg("backend.detection", "预热失败 fallback", f"path={model_path} → {self._original_pt_path}")
                 try:
                     self._release_model()
                 except Exception as _e:
-                    print(f"[模型加载] fallback 前释放坏模型出错 (忽略): {_e}")
+                    print(f"[ModelLoad] release bad model before fallback error (ignored): {_e}")
                 self.model = YOLO(self._original_pt_path)
                 model_path = self._original_pt_path
                 self.model_path = model_path
@@ -155,7 +155,7 @@ class ModelLoadMixin:
                 self._is_native_pytorch = True
                 self.model.to(device)
                 self._model_imgsz = self._detect_model_imgsz(self.model, model_path, True)
-                print(f"[模型加载] fallback 后 imgsz={self._model_imgsz}")
+                print(f"[ModelLoad] after fallback imgsz={self._model_imgsz}")
                 if device.startswith('cuda'):
                     self._warmup_model_cuda(self.model, device, self._model_imgsz,
                                             self.use_half, True,
@@ -165,7 +165,7 @@ class ModelLoadMixin:
             # warm-up 之后 AutoBackend 已实例化, 用权威 imgsz 做最终修正
             authoritative = self._read_authoritative_imgsz(self.model)
             if authoritative and authoritative > 0 and authoritative != self._model_imgsz:
-                print(f"[模型加载] AutoBackend 权威 imgsz={authoritative} (修正 {self._model_imgsz} → {authoritative})")
+                print(f"[ModelLoad] AutoBackend authoritative imgsz={authoritative} (corrected {self._model_imgsz} -> {authoritative})")
                 self._model_imgsz = authoritative
 
             # Step 3: 把 host 状态镜像到 main slot, 让 router/mi 能读到等价值
@@ -173,7 +173,7 @@ class ModelLoadMixin:
             debug_center.dbg("backend.detection", "load_model 成功", f"path={model_path} device={self.current_device_info} imgsz={self._model_imgsz}")
             return True
         except Exception as e:
-            print(f"模型加载失败: {e}")
+            print(f"[ModelLoad] failed: {e}")
             debug_center.dbg("backend.detection", "load_model 失败", f"path={model_path} err={e}")
             traceback.print_exc()
             self.model = None
@@ -196,7 +196,7 @@ class ModelLoadMixin:
             self._shutdown_inference_executor()
 
             if self.model is not None:
-                print("[资源释放] 开始释放模型资源...")
+                print("[ModelRelease] releasing model resources...")
 
                 # 1. 等待 CUDA 操作完成
                 if torch.cuda.is_available():
@@ -214,11 +214,11 @@ class ModelLoadMixin:
                     torch.cuda.empty_cache()
                     allocated = torch.cuda.memory_allocated() / 1024**2
                     cached = torch.cuda.memory_reserved() / 1024**2
-                    print(f"[资源释放] 显存状态: 已分配={allocated:.1f}MB, 缓存={cached:.1f}MB")
+                    print(f"[ModelRelease] VRAM: allocated={allocated:.1f}MB, cached={cached:.1f}MB")
 
-                print("[资源释放] 模型资源已释放")
+                print("[ModelRelease] model resources released")
         except Exception as e:
-            print(f"[资源释放] 释放模型时出错: {e}")
+            print(f"[ModelRelease] error releasing model: {e}")
         finally:
             # Step 3: 把 host 清空状态镜像到 main, 让 router 数据一致
             self._mirror_host_to_main()
@@ -303,7 +303,7 @@ class ModelLoadMixin:
 
             if mi.model is None:
                 return
-            print(f"[资源释放] [{mi.name}] 开始释放模型资源...")
+            print(f"[ModelRelease] [{mi.name}] releasing model resources...")
 
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
@@ -319,9 +319,9 @@ class ModelLoadMixin:
                 torch.cuda.empty_cache()
                 allocated = torch.cuda.memory_allocated() / 1024**2
                 cached = torch.cuda.memory_reserved() / 1024**2
-                print(f"[资源释放] [{mi.name}] 显存: 已分配={allocated:.1f}MB 缓存={cached:.1f}MB")
+                print(f"[ModelRelease] [{mi.name}] VRAM: allocated={allocated:.1f}MB cached={cached:.1f}MB")
 
-            print(f"[资源释放] [{mi.name}] 模型资源已释放")
+            print(f"[ModelRelease] [{mi.name}] model resources released")
 
             # main slot 释放完, 同步到 host 老字段
             if mi.name == 'main':
@@ -341,7 +341,7 @@ class ModelLoadMixin:
                 self._release_model_from(mi)
             self._mirror_main_to_host()
         except Exception as e:
-            print(f"[资源释放] release_all_models 出错: {e}")
+            print(f"[ModelRelease] release_all_models error: {e}")
 
     # ============================================================
     # 双向同步桥 (Step 3 关键): host ↔ main slot
@@ -410,14 +410,14 @@ class ModelLoadMixin:
                 mi._original_pt_path = model_path
 
             if mi.model is not None:
-                print(f"[模型加载] [{mi.name}] 释放旧模型: {mi.model_path}")
+                print(f"[ModelLoad] [{mi.name}] releasing old model: {mi.model_path}")
                 self._release_model_from(mi)
 
             try:
                 mi.model = YOLO(model_path)
             except Exception as e:
                 if mi._original_pt_path and model_path != mi._original_pt_path:
-                    print(f"[模型加载] [{mi.name}] 转换模型加载失败 ({e}), 回退: {mi._original_pt_path}")
+                    print(f"[ModelLoad] [{mi.name}] converted model load failed ({e}), fallback: {mi._original_pt_path}")
                     mi.model = YOLO(mi._original_pt_path)
                     model_path = mi._original_pt_path
                 else:
@@ -439,17 +439,17 @@ class ModelLoadMixin:
                 gpu_idx = int(resolved_device.split(':')[1]) if ':' in resolved_device else 0
                 gpu_name = torch.cuda.get_device_name(gpu_idx)
                 mi.current_device_info = {'type': 'GPU', 'name': gpu_name, 'device': resolved_device}
-                print(f"[模型加载] [{mi.name}] 加载成功: {model_path} -> GPU: {gpu_name}")
+                print(f"[ModelLoad] [{mi.name}] success: {model_path} -> GPU: {gpu_name}")
             else:
                 mi.current_device_info = {'type': 'CPU', 'name': 'CPU', 'device': 'cpu'}
-                print(f"[模型加载] [{mi.name}] 加载成功: {model_path} -> CPU")
+                print(f"[ModelLoad] [{mi.name}] success: {model_path} -> CPU")
 
             if hasattr(mi.model, 'names'):
-                print(f"[模型加载] [{mi.name}] 类别: {list(mi.model.names.values())}")
-            print(f"[模型加载] [{mi.name}] 任务类型: {mi.model_task}")
+                print(f"[ModelLoad] [{mi.name}] classes: {list(mi.model.names.values())}")
+            print(f"[ModelLoad] [{mi.name}] task type: {mi.model_task}")
 
             mi._model_imgsz = self._detect_model_imgsz(mi.model, model_path, mi._is_native_pytorch)
-            print(f"[模型加载] [{mi.name}] 推理分辨率 imgsz={mi._model_imgsz}")
+            print(f"[ModelLoad] [{mi.name}] inference resolution imgsz={mi._model_imgsz}")
 
             if resolved_device.startswith('cuda'):
                 self._warmup_model_cuda(
@@ -460,13 +460,13 @@ class ModelLoadMixin:
 
             authoritative = self._read_authoritative_imgsz(mi.model)
             if authoritative and authoritative > 0 and authoritative != mi._model_imgsz:
-                print(f"[模型加载] [{mi.name}] AutoBackend 权威 imgsz={authoritative} (修正 {mi._model_imgsz} → {authoritative})")
+                print(f"[ModelLoad] [{mi.name}] AutoBackend authoritative imgsz={authoritative} (corrected {mi._model_imgsz} -> {authoritative})")
                 mi._model_imgsz = authoritative
 
             debug_center.dbg("backend.detection", "slot 模型加载成功", f"slot={mi.name} path={model_path} imgsz={mi._model_imgsz}")
             return True
         except Exception as e:
-            print(f"[模型加载] [{mi.name}] 失败: {e}")
+            print(f"[ModelLoad] [{mi.name}] failed: {e}")
             debug_center.dbg("backend.detection", "slot 模型加载失败", f"slot={mi.name} path={model_path} err={e}")
             traceback.print_exc()
             mi.model = None
@@ -495,9 +495,9 @@ class ModelLoadMixin:
                 _read_engine_metadata_imgsz = _get_engine_metadata_imgsz_reader()
                 engine_imgsz = _read_engine_metadata_imgsz(model_path)
                 if engine_imgsz:
-                    print(f"[模型加载] 从 engine 文件头 metadata 检测到 imgsz={engine_imgsz}")
+                    print(f"[ModelLoad] detected imgsz from engine header metadata={engine_imgsz}")
             except Exception as e:
-                print(f"[模型加载] engine metadata 解析失败: {e}")
+                print(f"[ModelLoad] engine metadata parse failed: {e}")
 
         try:
             if engine_imgsz is None and not is_native_pytorch and hasattr(model, 'model'):
@@ -509,23 +509,23 @@ class ModelLoadMixin:
                         shape = getattr(b, 'shape', None)
                         if shape and len(shape) == 4:
                             engine_imgsz = max(shape[2], shape[3])
-                            print(f"[模型加载] 从引擎 bindings 检测到 imgsz={engine_imgsz}")
+                            print(f"[ModelLoad] detected imgsz from engine bindings={engine_imgsz}")
                             break
                 # 方法2: 从 input_shape 读取
                 if engine_imgsz is None and hasattr(inner, 'input_shape'):
                     s = inner.input_shape
                     if isinstance(s, (list, tuple)) and len(s) >= 3:
                         engine_imgsz = max(s[-2], s[-1])
-                        print(f"[模型加载] 从 input_shape 检测到 imgsz={engine_imgsz}")
+                        print(f"[ModelLoad] detected imgsz from input_shape={engine_imgsz}")
                 # 方法3: AutoBackend 已读取的 imgsz 属性
                 if engine_imgsz is None and hasattr(inner, 'imgsz'):
                     s = inner.imgsz
                     if isinstance(s, (list, tuple)) and len(s) >= 1:
                         engine_imgsz = max(s)
-                        print(f"[模型加载] 从 AutoBackend.imgsz 检测到 imgsz={engine_imgsz}")
+                        print(f"[ModelLoad] detected imgsz from AutoBackend.imgsz={engine_imgsz}")
                     elif isinstance(s, int):
                         engine_imgsz = s
-                        print(f"[模型加载] 从 AutoBackend.imgsz 检测到 imgsz={engine_imgsz}")
+                        print(f"[ModelLoad] detected imgsz from AutoBackend.imgsz={engine_imgsz}")
                 # 方法4: TensorRT context/engine 读取 binding shape
                 if engine_imgsz is None:
                     for attr_name in ('context', 'engine', 'runtime'):
@@ -541,7 +541,7 @@ class ModelLoadMixin:
                                     s = ctx.get_tensor_shape(name)
                                     if len(s) == 4 and s[1] == 3:
                                         engine_imgsz = max(s[2], s[3])
-                                        print(f"[模型加载] 从 TRT {attr_name}.get_tensor_shape 检测到 imgsz={engine_imgsz}")
+                                        print(f"[ModelLoad] detected imgsz from TRT {attr_name}.get_tensor_shape={engine_imgsz}")
                                         break
                             except Exception:
                                 pass
@@ -558,7 +558,7 @@ class ModelLoadMixin:
                     raw = args['imgsz']
                     detected_imgsz = raw if isinstance(raw, int) else max(raw)
         except Exception as e:
-            print(f"[模型加载] 检测 imgsz 失败, 使用默认 640: {e}")
+            print(f"[ModelLoad] detect imgsz failed, using default 640: {e}")
         debug_center.dbg("backend.detection", "imgsz 探测结果", f"path={model_path} imgsz={detected_imgsz} engine_imgsz={engine_imgsz}")
         return detected_imgsz
 
@@ -581,7 +581,7 @@ class ModelLoadMixin:
 
         def _do_warmup(_imgsz: int):
             _half = use_half if is_native_pytorch else False
-            print(f"[模型预热] {log_tag} CUDA warm-up (half={_half}, imgsz={_imgsz})...")
+            print(f"[ModelWarmup] {log_tag} CUDA warm-up (half={_half}, imgsz={_imgsz})...")
             model.predict(
                 np.zeros((_imgsz, _imgsz, 3), dtype=np.uint8),
                 conf=0.5, imgsz=_imgsz, verbose=False, device=device, half=_half
@@ -593,14 +593,14 @@ class ModelLoadMixin:
                     _do_warmup(imgsz)
             else:
                 _do_warmup(imgsz)
-            print(f"[模型预热] {log_tag} warm-up done")
+            print(f"[ModelWarmup] {log_tag} warm-up done")
             return True
         except AssertionError as ae:
             import re
             m = re.search(r'model size \(1, 3, (\d+), (\d+)\)', str(ae))
             if m:
                 correct_sz = max(int(m.group(1)), int(m.group(2)))
-                print(f"[模型预热] {log_tag} TensorRT 引擎实际需要 imgsz={correct_sz}, 自动修正")
+                print(f"[ModelWarmup] {log_tag} TensorRT engine actually needs imgsz={correct_sz}, auto-correcting")
                 debug_center.dbg("backend.detection", "TRT imgsz 自动修正", f"{log_tag} {imgsz} → {correct_sz}")
                 if update_imgsz_cb:
                     update_imgsz_cb(correct_sz)
@@ -610,16 +610,16 @@ class ModelLoadMixin:
                             _do_warmup(correct_sz)
                     else:
                         _do_warmup(correct_sz)
-                    print(f"[模型预热] {log_tag} warm-up done (修正后)")
+                    print(f"[ModelWarmup] {log_tag} warm-up done (corrected)")
                     return True
                 except Exception as e2:
-                    print(f"[模型预热] {log_tag} 修正后 warm-up 仍失败: {e2}")
+                    print(f"[ModelWarmup] {log_tag} warm-up still failed after correction: {e2}")
                     return False
             else:
-                print(f"[模型预热] {log_tag} warm-up failed: {ae}")
+                print(f"[ModelWarmup] {log_tag} warm-up failed: {ae}")
                 return False
         except Exception as e:
-            print(f"[模型预热] {log_tag} warm-up failed: {e}")
+            print(f"[ModelWarmup] {log_tag} warm-up failed: {e}")
             return False
 
     @staticmethod
@@ -648,5 +648,5 @@ class ModelLoadMixin:
                     if shape and len(shape) == 4 and shape[1] == 3:
                         return max(shape[2], shape[3])
         except Exception as e:
-            print(f"[模型加载] 读取 AutoBackend 权威 imgsz 失败: {e}")
+            print(f"[ModelLoad] read AutoBackend authoritative imgsz failed: {e}")
         return None

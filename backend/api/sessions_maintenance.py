@@ -48,6 +48,28 @@ def _norm_cleanup_dir(p: str) -> str:
     return s or "/"
 
 
+def _prune_empty_dated_dirs(base_dir: str):
+    """回收 base_dir 下空的(日期)子目录, 只删一层、绝不删 base_dir 本身。
+
+    录像按 YYYY-MM-DD 分目录后, 整天数据清完会留下空目录; 这里把空子目录删掉,
+    避免目录树越积越多。错误隔离: 任一子目录删失败不影响其余。
+    """
+    try:
+        if not os.path.isdir(base_dir):
+            return
+        for name in os.listdir(base_dir):
+            sub = os.path.join(base_dir, name)
+            if not os.path.isdir(sub):
+                continue
+            try:
+                if not os.listdir(sub):
+                    os.rmdir(sub)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 # ---- internal helpers (also used by main.py 启动时调用) ----
 
 def _read_cleanup_settings(db):
@@ -440,18 +462,22 @@ def _perform_auto_cleanup():
         for rec_dir in [settings.SESSION_VIDEO_DIR, settings.CYCLE_VIDEO_DIR, settings.STEP_VIDEO_DIR]:
             if not os.path.isdir(rec_dir):
                 continue
-            for fname in os.listdir(rec_dir):
-                fpath = os.path.join(rec_dir, fname)
-                if not os.path.isfile(fpath):
-                    continue
-                if os.path.abspath(fpath) in known_paths:
-                    continue
-                try:
-                    if os.path.getmtime(fpath) < cutoff_ts:
-                        os.remove(fpath)
-                        orphan_deleted += 1
-                except Exception as e:
-                    print(f"[自动清理] 删除孤儿文件失败: {fpath}, {e}")
+            # 录像已按 YYYY-MM-DD 分子目录存放, 故递归扫描(同时兼容老的平铺录像)。
+            for dirpath, _dirs, fnames in os.walk(rec_dir):
+                for fname in fnames:
+                    fpath = os.path.join(dirpath, fname)
+                    if not os.path.isfile(fpath):
+                        continue
+                    if os.path.abspath(fpath) in known_paths:
+                        continue
+                    try:
+                        if os.path.getmtime(fpath) < cutoff_ts:
+                            os.remove(fpath)
+                            orphan_deleted += 1
+                    except Exception as e:
+                        print(f"[自动清理] 删除孤儿文件失败: {fpath}, {e}")
+            # 整天清完后回收空的日期子目录(无论文件是随周期删还是按孤儿删)
+            _prune_empty_dated_dirs(rec_dir)
         if orphan_deleted:
             print(f"[自动清理] 孤儿录制文件: 删除 {orphan_deleted} 个")
 
@@ -552,14 +578,17 @@ def clear_all_data(db: Session = Depends(get_db)):
         deleted_files = 0
         for vd in [settings.SESSION_VIDEO_DIR, settings.CYCLE_VIDEO_DIR, settings.STEP_VIDEO_DIR]:
             if os.path.isdir(vd):
-                for fn in os.listdir(vd):
-                    fp = os.path.join(vd, fn)
-                    try:
-                        if os.path.isfile(fp):
-                            os.remove(fp)
-                            deleted_files += 1
-                    except Exception as e:
-                        print(f"删除视频文件失败: {fp}, {e}")
+                # 递归删(录像按日期分子目录), 再回收空的日期目录
+                for dirpath, _dirs, fnames in os.walk(vd):
+                    for fn in fnames:
+                        fp = os.path.join(dirpath, fn)
+                        try:
+                            if os.path.isfile(fp):
+                                os.remove(fp)
+                                deleted_files += 1
+                        except Exception as e:
+                            print(f"删除视频文件失败: {fp}, {e}")
+                _prune_empty_dated_dirs(vd)
 
         cache_dir = os.path.join(settings.RECORDING_DIR, "cache")
         if os.path.isdir(cache_dir):
@@ -662,6 +691,8 @@ def clear_data_by_range(req: DateRangeCleanup, db: Session = Depends(get_db)):
         ).delete(synchronize_session=False)
         db.commit()
         _checkpoint_wal()  # A3: 范围清理后收缩 WAL
+        for vd in [settings.SESSION_VIDEO_DIR, settings.CYCLE_VIDEO_DIR, settings.STEP_VIDEO_DIR]:
+            _prune_empty_dated_dirs(vd)
 
         return {
             "success": True,

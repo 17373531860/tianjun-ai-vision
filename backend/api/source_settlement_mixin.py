@@ -56,7 +56,7 @@ class SettlementMixin:
         # v3.8.x: 结算前对同时出现组成员按优先顺序兜底重排
         self._reorder_simultaneous_groups_in_cycle()
         
-        print(f"自定义模式结算: 当前序列={self.current_cycle_steps}")
+        print(f"[Settle/Custom] current sequence={self.current_cycle_steps}")
         if debug_center.is_on("backend.settlement"):
             debug_center.dbg("backend.settlement", "自定义模式结算入口", f"channel={self.channel_id} steps={self.current_cycle_steps}")
         
@@ -88,7 +88,7 @@ class SettlementMixin:
                 cond_labels = [id_to_label.get(sid) for sid in cond_sequence if sid in id_to_label and sid in enabled_step_ids]
                 
                 if self.current_cycle_steps == cond_labels:
-                    print(f"  → 条件匹配！触发事件 {cond_event_id}")
+                    print(f"  -> condition matched! trigger event {cond_event_id}")
                     if debug_center.is_on("backend.settlement"):
                         debug_center.dbg("backend.settlement", "自定义条件匹配结算", f"event_id={cond_event_id} seq={cond_labels}")
                     self._reconcile_step_records()
@@ -163,8 +163,8 @@ class SettlementMixin:
             
             self._reconcile_step_records()
             
-            print(f"  期望序列({len(expected_labels)}步): {expected_labels}")
-            print(f"  实际序列({len(self.current_cycle_steps)}步): {self.current_cycle_steps}")
+            print(f"  expected sequence ({len(expected_labels)} steps): {expected_labels}")
+            print(f"  actual sequence ({len(self.current_cycle_steps)} steps): {self.current_cycle_steps}")
             
             from collections import Counter
             expected_set = set(expected_labels)
@@ -187,11 +187,11 @@ class SettlementMixin:
                 print(f"  → {reason_str} → NG")
                 self._trigger_event(*compose_settle_event(self, 2, reason_str))
             elif self.current_cycle_steps == expected_labels:
-                print(f"  → 序列完全匹配 → OK")
+                print("  -> sequence fully matched -> OK")
                 self._trigger_event(*compose_settle_event(self, 1, '顺序正确完成'))
             elif len(self.current_cycle_steps) < len(expected_labels):
                 missing = [l for l in expected_labels if l not in self.current_cycle_steps]
-                print(f"  → 周期不完整，缺少: {missing} → NG")
+                print(f"  -> cycle incomplete, missing: {missing} -> NG")
                 self._trigger_event(*compose_settle_event(self, 2, f'周期不完整，缺少: {missing}'))
             else:
                 # v3.7.x: actual 与 expected multiset 相同 (前面 unexpected/duplicated 都已 NG),
@@ -203,10 +203,10 @@ class SettlementMixin:
                         mismatch_idx = k
                         break
                 if mismatch_idx >= 0:
-                    print(f"  → 第{mismatch_idx+1}步顺序错误: 期望[{expected_labels[mismatch_idx]}], 实际[{self.current_cycle_steps[mismatch_idx]}] → NG")
+                    print(f"  -> step {mismatch_idx+1} order error: expected[{expected_labels[mismatch_idx]}], actual[{self.current_cycle_steps[mismatch_idx]}] -> NG")
                     self._trigger_event(*compose_settle_event(self, 2, f'第{mismatch_idx+1}步顺序错误'))
                 else:
-                    print(f"  → 顺序错误 → NG")
+                    print("  -> order error -> NG")
                     self._trigger_event(*compose_settle_event(self, 2, '顺序错误'))
         
         elif custom_based_on == 'detection':
@@ -240,10 +240,10 @@ class SettlementMixin:
             if duplicated:
                 ng_reasons.append(f'重复步骤: {duplicated}')
             
-            print(f"  自定义(基于检测)结算: 需要={detection_labels}, 本周期={self.current_cycle_steps}, 缺少={missing}, 重复={duplicated}")
+            print(f"  [Settle/Custom-Detection] required={detection_labels}, this_cycle={self.current_cycle_steps}, missing={missing}, duplicated={duplicated}")
             
             if not ng_reasons:
-                print(f"  → 全部检测到，无重复 → OK")
+                print("  -> all detected, no duplicates -> OK")
                 self._trigger_event(*compose_settle_event(self, 1, '检测完成'))
             else:
                 reason = '；'.join(ng_reasons)
@@ -322,12 +322,12 @@ class SettlementMixin:
         if duplicated:
             ng_reasons.append(f'重复步骤: {duplicated}')
         
-        print(f"检测模式结算: 需要={detection_labels}, 本周期={self.current_cycle_steps}, 缺少={missing}, 重复={duplicated}")
+        print(f"[Settle/Detection] required={detection_labels}, this_cycle={self.current_cycle_steps}, missing={missing}, duplicated={duplicated}")
         if debug_center.is_on("backend.settlement"):
             debug_center.dbg("backend.settlement", "检测模式结算", f"channel={self.channel_id} is_good={not ng_reasons} missing={missing} duplicated={duplicated}")
         
         if not ng_reasons:
-            print(f"  → 全部检测到，无重复 → OK")
+            print("  -> all detected, no duplicates -> OK")
             self._trigger_event(1, '检测完成')
         else:
             reason = '；'.join(ng_reasons)
@@ -429,7 +429,7 @@ class SettlementMixin:
         
         self._reconcile_step_records()
         
-        print(f"顺序模式结算: 期望={expected_labels}, 实际={self.current_cycle_steps}, 回退={self._cycle_regression}")
+        print(f"[Settle/Sequential] expected={expected_labels}, actual={self.current_cycle_steps}, regression={self._cycle_regression}")
         if debug_center.is_on("backend.settlement"):
             debug_center.dbg("backend.settlement", "顺序模式结算入口", f"channel={self.channel_id} expected={expected_labels} actual={self.current_cycle_steps}")
         
@@ -474,7 +474,7 @@ class SettlementMixin:
             return
 
         if missing:
-            print(f"  → 周期不完整，缺少: {missing} → NG")
+            print(f"  -> cycle incomplete, missing: {missing} -> NG")
             if debug_center.is_on("backend.settlement"):
                 debug_center.dbg("backend.settlement", "顺序模式结算 NG", f"is_good=False 缺少={missing}")
             self._trigger_event(2, f'周期不完整，缺少: {missing}')
@@ -497,7 +497,7 @@ class SettlementMixin:
         if debug_center.is_on("backend.settlement"):
             debug_center.dbg("backend.settlement", "顺序模式结算判定", f"is_good={self.current_cycle_steps == expected_labels}")
         if self.current_cycle_steps == expected_labels:
-            print(f"  → 顺序正确 → OK")
+            print("  -> order correct -> OK")
             self._trigger_event(1, '顺序正确完成')
         else:
             mismatch_idx = -1
@@ -510,7 +510,7 @@ class SettlementMixin:
                                       self.current_cycle_steps[mismatch_idx]]
             else:
                 order_error_labels = ['?', '?']
-            print(f"  → 顺序错误 → NG: 第{mismatch_idx+1}步 期望[{order_error_labels[0]}] 实际[{order_error_labels[1]}]")
+            print(f"  -> order error -> NG: step {mismatch_idx+1} expected[{order_error_labels[0]}] actual[{order_error_labels[1]}]")
             self._trigger_event(2, f'顺序错误，期望[{order_error_labels[0]}]在前 实际[{order_error_labels[1]}]在前')
         
         # 重置周期
@@ -542,7 +542,7 @@ class SettlementMixin:
                 cross_cycle_members.update(group.get('labels', []))
         # 本帧有非跨周期组成员的有意义步骤 → 解除屏蔽
         if detected_labels - cross_cycle_members:
-            print(f"[跨周期屏蔽解除] 本帧出现组外步骤, 清空被屏蔽集合: {self._blocked_labels}")
+            print(f"[CrossCycle/Unblock] out-of-group step this frame, clearing blocked set: {self._blocked_labels}")
             self._blocked_labels = set()
 
     def _process_cross_cycle_groups(self, frame_detected_labels: set, detected_labels: set, current_time: float):
@@ -649,7 +649,7 @@ class SettlementMixin:
                             self.step_start_frame_pos[first_member] = self._video_frame_pos()
                         self.step_last_seen[first_member] = current_time
                         self.step_last_frame_pos[first_member] = self._video_frame_pos()
-                        print(f"[跨周期等待] 上周期成员 {first_member} 到达, 加入 cycle_steps "
+                        print(f"[CrossCycle/Wait] prev-cycle member {first_member} arrived, adding to cycle_steps "
                               f"(当前序列: {self.current_cycle_steps}), 进入等待")
                 elif first_role == 'next':
                     # next 成员先到的等待: 必须 cycle_steps 里已经含至少一个 prev 成员,
@@ -663,7 +663,7 @@ class SettlementMixin:
                         # cycle_steps 里还没有任何 prev 成员 = 上一周期没完成 = 不是真正
                         # 跨周期场景, 让 next 成员走正常主循环 (例如它本身就是本周期首步)
                         continue
-                    print(f"[跨周期等待] 下周期成员 {first_member} 到达, 暂不写入 cycle_steps "
+                    print(f"[CrossCycle/Wait] next-cycle member {first_member} arrived, not yet adding to cycle_steps "
                           f"(等上周期成员)")
                     # 仅更新 step_last_seen 让 disappear 路径正常工作
                     self.step_last_seen[first_member] = current_time
@@ -695,7 +695,7 @@ class SettlementMixin:
             if other_arrived:
                 # 路径 1: 另一侧成员到达 → 结算上周期 + 启动下周期 + 屏蔽所有组员
                 arrived_label = next(iter(other_arrived))
-                print(f"[跨周期等待终止·组合到齐] 先到 {first_member}({first_role}) + "
+                print(f"[CrossCycle/End-combo-complete] first {first_member}({first_role}) + "
                       f"另一侧 {arrived_label} → 结算上周期 + 启动下周期")
                 self._settle_for_cross_cycle()
 
@@ -727,7 +727,7 @@ class SettlementMixin:
 
             if other_meaningful:
                 # 路径 2: 出现组外有意义步骤 → 立即结算上周期 + 屏蔽组员
-                print(f"[跨周期等待终止·组外步骤] 先到 {first_member}({first_role}), "
+                print(f"[CrossCycle/End-out-of-group] first {first_member}({first_role}), "
                       f"组外步骤 {other_meaningful} 到达 → 结算上周期 + 让组外步骤走正常路径")
                 self._settle_for_cross_cycle()
                 self._blocked_labels |= group_labels
@@ -738,7 +738,7 @@ class SettlementMixin:
 
             if elapsed > time_window:
                 # 路径 3: 等待超时 → 自动结算上周期 + 屏蔽组员
-                print(f"[跨周期等待终止·超时] 先到 {first_member}({first_role}), "
+                print(f"[CrossCycle/End-timeout] first {first_member}({first_role}), "
                       f"等待 {elapsed:.2f}s > {time_window}s → 自动结算上周期")
                 self._settle_for_cross_cycle()
                 self._blocked_labels |= group_labels
@@ -869,7 +869,7 @@ class SettlementMixin:
             try:
                 self.start_cycle()
             except Exception as _e:
-                print(f"[last_first R3] start_cycle 异常: {_e}")
+                print(f"[last_first R3] start_cycle error: {_e}")
             self.step_last_seen[first_label] = current_time
             self.step_last_frame_pos[first_label] = self._video_frame_pos()
             self.step_start_time[first_label] = current_time
@@ -883,7 +883,7 @@ class SettlementMixin:
             consumed.add(first_label)
             if debug_center.is_on("backend.settlement"):
                 debug_center.dbg("backend.settlement", "last_first R3 末步缺位fallback", f"channel={self.channel_id} first={first_label} last={last_label}")
-            print(f"[last_first R3] D 缺位 fallback: 上周期结算 NG (缺末步) → 新周期 [{first_label}]")
+            print(f"[last_first R3] D missing fallback: prev cycle settled NG (missing last step) -> new cycle [{first_label}]")
             return consumed
 
         # ─── R2: pending 状态 + 首步正常开周期 ───
@@ -905,7 +905,7 @@ class SettlementMixin:
                 if lbl in detected_labels and lbl not in consumed:
                     # 让主循环正常处理 lbl, 它会写入 cycle_steps
                     self._pending_first_step = False
-                    print(f"[last_first R4] 首步 {first_label} 缺位, {lbl} 顶替开新周期")
+                    print(f"[last_first R4] first step {first_label} missing, {lbl} supersedes to start new cycle")
                     break
 
         return consumed
@@ -1041,7 +1041,7 @@ class SettlementMixin:
                         elif present_members >= group_labels:
                             ordered = [l for l in priority_order if l in group_labels]
                             ready_ordered.extend(ordered)
-                            print(f"[同时出现组 {idx}] 全员同帧到齐, 按序输出: {ordered}")
+                            print(f"[SimultaneousGroup {idx}] all arrived same frame, output in order: {ordered}")
                         else:
                             buf['collecting'] = True
                             buf['start_time'] = current_time
@@ -1057,7 +1057,7 @@ class SettlementMixin:
                     buf['collecting'] = False
                     buf['start_time'] = None
                     buf['collected_labels'] = set()
-                    print(f"[同时出现组 {idx}] 全员在 {elapsed:.2f}s 内到齐, 按序输出: {ordered}")
+                    print(f"[SimultaneousGroup {idx}] all arrived within {elapsed:.2f}s, output in order: {ordered}")
                 elif other_meaningful:
                     # v3.8.x 新增: 缓冲中出现非组内有意义步骤 → 立即释放
                     # 客户已经推进到组外步骤, 不再等组内剩余成员; 已收集的按优先顺序
@@ -1079,7 +1079,7 @@ class SettlementMixin:
                     buf['collecting'] = False
                     buf['start_time'] = None
                     buf['collected_labels'] = set()
-                    print(f"[同时出现组 {idx}] 超时 {elapsed:.2f}s, 输出已收集: {ordered}")
+                    print(f"[SimultaneousGroup {idx}] timeout {elapsed:.2f}s, output collected: {ordered}")
                 else:
                     pending_labels.update(buf['collected_labels'])
 
@@ -1161,8 +1161,20 @@ class SettlementMixin:
                 and self.step_strict_order.get(label)
                 and self.step_accept_once.get(label)
                 and not self._is_legitimate_next_in_sequence(label)):
-            print(f"[严格+单次守门] '{label}' 多余位置的新出现, 拒绝计时 "
-                  f"(current={list(self.current_cycle_steps)})")
+            # Throttle: this gate fires every frame the surplus label is seen and
+            # used to flood the log (thousands of identical lines/min, drowning real
+            # errors + wasting CPU/IO). Only log once per (label, cycle-state) every 5s.
+            _gate_throttle = getattr(self, "_strict_gate_log_throttle", None)
+            if _gate_throttle is None:
+                _gate_throttle = {}
+                self._strict_gate_log_throttle = _gate_throttle
+            _gate_key = (label, tuple(self.current_cycle_steps))
+            _now = time.monotonic()
+            _last = _gate_throttle.get(_gate_key, 0.0)
+            if _now - _last >= 5.0:
+                _gate_throttle[_gate_key] = _now
+                print(f"[Gate/StrictOnce] '{label}' rejected: new appearance at wrong "
+                      f"position (current={list(self.current_cycle_steps)})")
             return
 
         # ── accept_once 拦截 ──
@@ -1217,7 +1229,7 @@ class SettlementMixin:
                 first_min_dur = (self.step_time_config.get(label, {}).get('min_duration')) or 0
                 first_duration = (current_time - first_start) if first_start else 0
                 if first_duration >= first_min_dur:
-                    print(f"[第一步结算] [{label}] 再次检测到 (持续{first_duration:.2f}s >= {first_min_dur}s)，结算当前周期 (步骤数={len(self.current_cycle_steps)})")
+                    print(f"[FirstStepSettle] [{label}] detected again (held {first_duration:.2f}s >= {first_min_dur}s), settling current cycle (steps={len(self.current_cycle_steps)})")
                     if logic_mode == 'custom' and custom_based_on == 'sequential':
                         self._settle_custom_cycle()
                     elif logic_mode == 'sequential':
@@ -1238,7 +1250,7 @@ class SettlementMixin:
                 first_min_dur = (self.step_time_config.get(label, {}).get('min_duration')) or 0
                 first_duration = (current_time - first_start) if first_start else 0
                 if first_duration >= first_min_dur:
-                    print(f"[检测模式结算] [{label}] 第一步再次出现 (持续{first_duration:.2f}s >= {first_min_dur}s)，结算当前周期 (步骤={self.current_cycle_steps})")
+                    print(f"[Settle/Detection] [{label}] first step reappeared (held {first_duration:.2f}s >= {first_min_dur}s), settling current cycle (steps={self.current_cycle_steps})")
                     self._settle_detection_cycle()
                     old_last_seen = None
                     _just_settled_by_first_step = True
@@ -1260,7 +1272,7 @@ class SettlementMixin:
             try:
                 self._observe_periodic_trigger(label)
             except Exception as _e:
-                print(f"[PeriodicActions] _observe_periodic_trigger 失败: {_e}")
+                print(f"[PeriodicActions] _observe_periodic_trigger failed: {_e}")
 
             # v3.7.2 (FIX-381): 顺序 / 自定义-基于顺序 模式下,
             # 仅"勾进序列"的步骤参与周期生命周期 (开 cycle / 入 cycle 累计).
@@ -1312,7 +1324,7 @@ class SettlementMixin:
                             self.current_cycle_steps.append(label)
                             self.last_added_step = label
                             self._last_step_added_time = current_time
-                            print(f"[期望连续重复] {label} 是期望序列里的合法连续重复 (当前序列: {self.current_cycle_steps})")
+                            print(f"[ExpectedConsecutiveRepeat] {label} is a legal consecutive repeat in expected sequence (current: {self.current_cycle_steps})")
                         else:
                             pass
                     elif label in self.current_cycle_steps:
@@ -1326,13 +1338,13 @@ class SettlementMixin:
                             self.current_cycle_steps.append(label)
                             self.last_added_step = label
                             self._last_step_added_time = current_time
-                            print(f"[期望重复] {label} 是期望序列里的合法重复 (当前序列: {self.current_cycle_steps})")
+                            print(f"[ExpectedRepeat] {label} is a legal repeat in expected sequence (current: {self.current_cycle_steps})")
                         else:
                             self._cycle_regression = True
                             self.current_cycle_steps.append(label)
                             self.last_added_step = label
                             self._last_step_added_time = current_time
-                            print(f"[步骤回退] {label} 已在周期中出现过且非期望重复，标记回退 (当前序列: {self.current_cycle_steps})")
+                            print(f"[StepRegression] {label} already appeared in cycle and not an expected repeat, marking regression (current: {self.current_cycle_steps})")
                     else:
                         self.current_cycle_steps.append(label)
                         self.last_added_step = label
@@ -1359,7 +1371,7 @@ class SettlementMixin:
                     if lbl in expected_labels and expected_labels.index(lbl) < expected_idx:
                         insert_pos = i + 1
                 this_cycle.insert(insert_pos, primary_label)
-                print(f"替补注入: {backup_label} -> {primary_label} at position {insert_pos}")
+                print(f"[BackupInject] {backup_label} -> {primary_label} at position {insert_pos}")
         
         return this_cycle
     
@@ -1450,7 +1462,7 @@ class SettlementMixin:
         
         self.current_cycle_steps = self._filter_cycle_by_duration(self.current_cycle_steps)
         
-        print(f"检查静态步骤 [{static_label}] 的自定义条件...")
+        print(f"[Settle] checking custom conditions for static step [{static_label}]...")
         
         # 按优先级排序自定义条件
         sorted_conditions = sorted(custom_conditions, key=lambda c: c.get('priority', 999))
@@ -1472,18 +1484,18 @@ class SettlementMixin:
             # 2. 条件的最后一个步骤是这个静态步骤（用于组合条件）
             if len(cond_labels) == 1 and cond_labels[0] == static_label:
                 # 单步骤条件，直接触发
-                print(f"  → 匹配单步骤自定义条件: [{static_label}]，触发事件 ID: {cond_event_id}")
+                print(f"  -> matched single-step custom condition: [{static_label}], trigger event ID: {cond_event_id}")
                 self._trigger_event(cond_event_id, f'静态步骤自定义条件触发: {static_label}')
                 return  # 匹配后不再检查其他条件
             elif cond_labels and cond_labels[-1] == static_label:
                 # 组合条件，检查前面的步骤是否都在当前周期中
                 prefix_labels = cond_labels[:-1]
                 if all(pl in self.current_cycle_steps for pl in prefix_labels):
-                    print(f"  → 匹配组合自定义条件: {cond_labels}，触发事件 ID: {cond_event_id}")
+                    print(f"  -> matched combo custom condition: {cond_labels}, trigger event ID: {cond_event_id}")
                     self._trigger_event(cond_event_id, f'静态步骤自定义条件触发: {static_label}')
                     return  # 匹配后不再检查其他条件
         
-        print(f"  → 未找到匹配的自定义条件")
+        print("  -> no matching custom condition found")
     
     # ================================================================
     # Counting Mode (物品清点模式) — stats / cycle logic

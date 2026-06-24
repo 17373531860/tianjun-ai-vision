@@ -45,6 +45,11 @@
         <OrderPullPanel />
       </template>
 
+      <!-- 工单接收 (入站对接) -->
+      <template v-if="activeTab === 'order-inbound'">
+        <OrderInboundPanel />
+      </template>
+
       <!-- 外部设备 -->
       <template v-if="activeTab === 'external'">
         <ExternalDevicePanel />
@@ -68,6 +73,7 @@ import DefectPanel from './DefectPanel.vue'
 import ScannerPanel from './ScannerPanel.vue'
 import GatewayPanel from './GatewayPanel.vue'
 import OrderPullPanel from './OrderPullPanel.vue'
+import OrderInboundPanel from './OrderInboundPanel.vue'
 import ExternalDevicePanel from './ExternalDevicePanel.vue'
 import ClusterPanel from './ClusterPanel.vue'
 
@@ -79,6 +85,7 @@ const tabs = [
   { key: 'scanner', label: '扫码器' },
   { key: 'gateway', label: '外部对接' },
   { key: 'order-pull', label: '工单拉取' },
+  { key: 'order-inbound', label: '工单接收' },
   { key: 'external', label: '外部设备' },
   { key: 'cluster', label: '集群汇总' },
 ]

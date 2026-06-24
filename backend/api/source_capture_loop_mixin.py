@@ -32,7 +32,7 @@ class CaptureLoopMixin:
         - 推理线程：推理 → 帧计数 → 步骤判断 → 事件触发（独立运行）
         """
         debug_log("========== 捕获线程开始 ==========", "CAPTURE")
-        print("[捕获线程] 开始运行")
+        print("[Capture] thread started")
         frame_start_time = time.time()
         consecutive_errors = 0  # 连续错误计数
         max_consecutive_errors = 10  # 最大连续错误次数
@@ -259,7 +259,7 @@ class CaptureLoopMixin:
                     if self.source_type == 'rtsp':
                         consecutive_errors += 1
                         if consecutive_errors >= 5:
-                            print(f"[RTSP] 连续 {consecutive_errors} 帧失败，尝试重连...")
+                            print(f"[RTSP] {consecutive_errors} consecutive frame failures, reconnecting...")
                             try:
                                 if self.capture is not None:
                                     self.capture.release()
@@ -267,18 +267,18 @@ class CaptureLoopMixin:
                                 self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
                                 self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                                 if self.capture.isOpened():
-                                    print("[RTSP] 重连成功")
+                                    print("[RTSP] reconnect ok")
                                     consecutive_errors = 0
                                 else:
-                                    print("[RTSP] 重连失败，等待后再试...")
+                                    print("[RTSP] reconnect failed, retrying later...")
                                     time.sleep(3.0)
                             except Exception as e:
-                                print(f"[RTSP] 重连异常: {e}")
+                                print(f"[RTSP] reconnect error: {e}")
                                 time.sleep(3.0)
                         else:
                             time.sleep(0.05)
                     elif self.source_type == 'video' and self.video_path:
-                        print("[Video] 视频播放完毕，已停止")
+                        print("[Video] playback finished, stopped")
                         self.video_ended = True
                         _before_running, _before_detecting = True, self.is_detecting
                         self.is_running = False
@@ -304,18 +304,18 @@ class CaptureLoopMixin:
                 
                 # 定期打印心跳日志（每30秒）
                 if time.time() - last_heartbeat_log > 30:
-                    print(f"[捕获线程心跳] 运行中, FPS={self.fps_actual}, 源={self.source_type}")
+                    print(f"[Capture/Heartbeat] running, FPS={self.fps_actual}, source={self.source_type}")
                     last_heartbeat_log = time.time()
                     
             except Exception as e:
                 consecutive_errors += 1
-                print(f"[捕获线程] 错误 ({consecutive_errors}/{max_consecutive_errors}): {e}")
+                print(f"[Capture] error ({consecutive_errors}/{max_consecutive_errors}): {e}")
                 import traceback
                 traceback.print_exc()
                 
                 # 如果连续错误太多，尝试恢复
                 if consecutive_errors >= max_consecutive_errors:
-                    print(f"[捕获线程] 连续 {max_consecutive_errors} 次错误，尝试恢复...")
+                    print(f"[Capture] {max_consecutive_errors} consecutive errors, attempting recovery...")
                     try:
                         if self.source_type == 'hcnetsdk':
                             print("[HCNetSDK] reconnecting...")
@@ -339,23 +339,23 @@ class CaptureLoopMixin:
                                     height=self.height,
                                     fps=self.fps
                                 )
-                                print("[捕获线程] 海康相机重新连接成功")
+                                print("[Capture] Hikvision camera reconnect ok")
                                 consecutive_errors = 0
                             except:
-                                print("[捕获线程] 海康相机重新连接失败")
+                                print("[Capture] Hikvision camera reconnect failed")
                         else:
                             if self.capture is not None:
                                 self.capture.release()
                             if self.source_type == 'rtsp':
-                                print("[RTSP] 尝试重连...")
+                                print("[RTSP] attempting reconnect...")
                                 time.sleep(2.0)
                                 self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
                                 self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                                 if self.capture.isOpened():
-                                    print("[RTSP] 重连成功")
+                                    print("[RTSP] reconnect ok")
                                     consecutive_errors = 0
                                 else:
-                                    print("[RTSP] 重连失败")
+                                    print("[RTSP] reconnect failed")
                             elif self.source_type == 'camera':
                                 backend = getattr(self, '_camera_backend', None)
                                 if backend is not None:
@@ -369,17 +369,17 @@ class CaptureLoopMixin:
                                     self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                                     self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                                     self.capture.set(cv2.CAP_PROP_FPS, self.fps)
-                                    print(f"[捕获线程] 摄像头重新打开成功 (backend={backend})")
+                                    print(f"[Capture] camera reopened ok (backend={backend})")
                                     consecutive_errors = 0
                                 else:
-                                    print("[捕获线程] 摄像头重新打开失败")
+                                    print("[Capture] camera reopen failed")
                             elif self.source_type == 'video' and self.video_path:
                                 self.capture = cv2.VideoCapture(self.video_path)
                                 if self.capture.isOpened():
-                                    print("[捕获线程] 视频重新打开成功")
+                                    print("[Capture] video reopened ok")
                                     consecutive_errors = 0
                                 else:
-                                    print("[捕获线程] 视频重新打开失败，停止运行")
+                                    print("[Capture] video reopen failed, stopping")
                                     _before_running_ce = self.is_running
                                     _before_detecting_ce = self.is_detecting
                                     self.is_running = False
@@ -388,7 +388,7 @@ class CaptureLoopMixin:
                                         "capture_loop_reopen_failed",
                                     )
                     except Exception as recover_error:
-                        print(f"[捕获线程] 恢复失败: {recover_error}")
+                        print(f"[Capture] recovery failed: {recover_error}")
                         _before_running_re = self.is_running
                         _before_detecting_re = self.is_detecting
                         self.is_running = False
@@ -399,7 +399,7 @@ class CaptureLoopMixin:
                 
                 time.sleep(0.1)  # 错误后短暂等待
         
-        print("[捕获线程] 结束运行")
+        print("[Capture] thread stopped")
         # 停止推理线程
         self._stop_inference_thread()
         # 停止录制线程

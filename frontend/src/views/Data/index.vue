@@ -660,6 +660,59 @@
                     </el-button>
                   </div>
                   <div class="border-t border-slate-800 pt-4">
+                    <div class="text-xs text-gray-500 font-medium mb-3 uppercase tracking-wider">导出与日志清理</div>
+                    <div class="space-y-2">
+                      <div class="setting-row">
+                        <span>每日固定清理时点</span>
+                        <el-time-picker
+                          v-model="cleanupSettings.cleanup_daily_time"
+                          format="HH:mm"
+                          value-format="HH:mm"
+                          placeholder="不设=开机后清理"
+                          size="small"
+                          style="width: 140px"
+                          @change="saveCleanupSettings"
+                        />
+                      </div>
+                      <div class="text-xs text-gray-600 pl-1">
+                        留空 = 仅开机及每 24 小时清理；设定后每天到点再清一次。
+                      </div>
+                      <div class="setting-row">
+                        <span>导出文件保留天数</span>
+                        <el-input-number v-model="cleanupSettings.export_retention_days" :min="0" :precision="0" size="small" controls-position="right" style="width: 100px" @change="saveCleanupSettings" />
+                      </div>
+                      <div class="setting-row">
+                        <span>过程日志保留天数</span>
+                        <el-input-number v-model="cleanupSettings.log_retention_days" :min="0" :precision="0" size="small" controls-position="right" style="width: 100px" @change="saveCleanupSettings" />
+                      </div>
+                      <div class="text-xs text-gray-600 pl-1">
+                        0 = 跟随上方保留天数。过程日志指扫码 / MES 通讯 / 外设流水，不含工单等业务数据。
+                      </div>
+                    </div>
+                  </div>
+                  <div class="border-t border-slate-800 pt-4">
+                    <div class="text-xs text-gray-500 font-medium mb-3 uppercase tracking-wider">自定义导出目录</div>
+                    <div class="space-y-2">
+                      <div class="text-xs text-gray-600 pl-1 mb-1">
+                        登记导出文件的落地目录后，可对其做托底扫描清理（仅删 txt/csv/docx/xlsx/pdf 文件、不删子目录，系统盘 / 盘根目录禁止登记）。
+                      </div>
+                      <el-input
+                        v-model="cleanupSettings.export_cleanup_dir"
+                        placeholder="如 D:\导出 或 /data/export"
+                        size="small"
+                        clearable
+                        @change="saveCleanupSettings"
+                      />
+                      <div class="setting-row">
+                        <span>对该目录做托底扫描清理</span>
+                        <el-switch v-model="cleanupSettings.export_cleanup_scan_dir" @change="saveCleanupSettings" size="small" :disabled="!cleanupSettings.export_cleanup_dir" />
+                      </div>
+                      <div class="text-xs text-gray-600 pl-1">
+                        不开启时只按导出台账精准清理我方产出文件；开启后才会扫描该目录兜底（仍受上述护栏限制）。
+                      </div>
+                    </div>
+                  </div>
+                  <div class="border-t border-slate-800 pt-4">
                     <div class="text-xs text-gray-500 font-medium mb-3 uppercase tracking-wider">按日期删除</div>
                     <el-date-picker
                       v-model="clearDateRange"
@@ -1020,7 +1073,12 @@ const cleanupSettings = reactive({
   auto_cleanup: true,
   video_split_ok_ng: false,
   video_ok_retention_days: 7,
-  video_ng_retention_days: 180
+  video_ng_retention_days: 180,
+  log_retention_days: 0,
+  export_retention_days: 0,
+  export_cleanup_dir: '',
+  export_cleanup_scan_dir: false,
+  cleanup_daily_time: ''
 });
 const savingCleanupSettings = ref(false);
 const runningCleanup = ref(false);
@@ -1691,6 +1749,11 @@ const loadCleanupSettings = async () => {
     cleanupSettings.video_split_ok_ng = res.data.video_split_ok_ng;
     cleanupSettings.video_ok_retention_days = res.data.video_ok_retention_days;
     cleanupSettings.video_ng_retention_days = res.data.video_ng_retention_days;
+    cleanupSettings.log_retention_days = res.data.log_retention_days ?? 0;
+    cleanupSettings.export_retention_days = res.data.export_retention_days ?? 0;
+    cleanupSettings.export_cleanup_dir = res.data.export_cleanup_dir || '';
+    cleanupSettings.export_cleanup_scan_dir = !!res.data.export_cleanup_scan_dir;
+    cleanupSettings.cleanup_daily_time = res.data.cleanup_daily_time || '';
   } catch (e) {
     console.error('加载清理设置失败:', e);
   }
@@ -1704,11 +1767,16 @@ const saveCleanupSettings = async () => {
       auto_cleanup: cleanupSettings.auto_cleanup,
       video_split_ok_ng: cleanupSettings.video_split_ok_ng,
       video_ok_retention_days: cleanupSettings.video_ok_retention_days,
-      video_ng_retention_days: cleanupSettings.video_ng_retention_days
+      video_ng_retention_days: cleanupSettings.video_ng_retention_days,
+      log_retention_days: cleanupSettings.log_retention_days,
+      export_retention_days: cleanupSettings.export_retention_days,
+      export_cleanup_dir: cleanupSettings.export_cleanup_dir || '',
+      export_cleanup_scan_dir: cleanupSettings.export_cleanup_scan_dir,
+      cleanup_daily_time: cleanupSettings.cleanup_daily_time || ''
     });
     ElMessage.success('清理设置已保存');
   } catch (e) {
-    ElMessage.error('保存清理设置失败');
+    ElMessage.error(e?.response?.data?.detail || '保存清理设置失败');
   } finally {
     savingCleanupSettings.value = false;
   }

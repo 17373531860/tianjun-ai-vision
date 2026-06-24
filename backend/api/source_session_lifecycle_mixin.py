@@ -161,7 +161,7 @@ class SessionLifecycleMixin:
             }
             db.close()
         except Exception as e:
-            print(f"加载导出设置失败: {e}")
+            print(f"[ExportSettings] load failed: {e}")
             self.export_settings = {
                 'record_step_duration': True,
                 'record_step_interval': True,
@@ -181,7 +181,7 @@ class SessionLifecycleMixin:
         project_id = self.project_config.get('id') if self.project_config else None
         if not project_id:
             return
-        print(f"[自动会话] 检测到项目已加载但无活跃会话，自动创建会话 (project_id={project_id})")
+        print(f"[AutoSession] project loaded but no active session, auto-creating (project_id={project_id})")
         self.start_session(project_id)
 
     def start_session(self, project_id: int, name: str = None) -> dict:
@@ -223,13 +223,13 @@ class SessionLifecycleMixin:
             self._session_start_date = datetime.now().date()
             self._session_start_shift = current_shift
             
-            print(f"检测会话已创建: uuid={session_uuid} name={cleaned_name or '<未设置>'}")
+            print(f"[Session] created: uuid={session_uuid} name={cleaned_name or '<unset>'}")
 
             # 后续步骤按“尽力执行”处理，避免出现 DB 已创建成功却返回失败
             try:
                 self._load_export_settings()
             except Exception as e:
-                print(f"[session] 加载导出设置失败（不影响会话）: {e}")
+                print(f"[Session] load export settings failed (non-fatal): {e}")
 
             # MES Hook: Session 开始
             if self._mes_hook:
@@ -242,20 +242,20 @@ class SessionLifecycleMixin:
                             project_id=hook_project_id,
                         )
                 except Exception as e:
-                    print(f"[MES] session_start hook 异常: {e}")
+                    print(f"[MES] session_start hook error: {e}")
             
             # 启动录制线程（独立于 CUDA）
             if self.is_detecting:
                 try:
                     self._start_recording_thread()
                 except Exception as e:
-                    print(f"[session] 启动录制线程失败（不影响会话）: {e}")
+                    print(f"[Session] start recording thread failed (non-fatal): {e}")
             
             # 开始会话视频录制
             try:
                 self.start_session_recording()
             except Exception as e:
-                print(f"[session] 启动会话录制失败（不影响会话）: {e}")
+                print(f"[Session] start session recording failed (non-fatal): {e}")
             
             return {
                 "session_id": session.id,
@@ -263,7 +263,7 @@ class SessionLifecycleMixin:
                 "session_name": cleaned_name,
             }
         except Exception as e:
-            print(f"创建会话失败: {e}")
+            print(f"[Session] create failed: {e}")
             debug_center.dbg("backend.session", "start_session 异常", f"channel={self.channel_id} project_id={project_id} err={e}")
             return None
         finally:
@@ -273,12 +273,12 @@ class SessionLifecycleMixin:
     def end_session(self):
         """结束当前检测会话"""
         if not self.current_session_id:
-            print("end_session: 没有活动的会话")
+            print("end_session: no active session")
             return
         
         session_id = self.current_session_id
         session_uuid = self.current_session_uuid
-        print(f"end_session: 正在结束会话 {session_uuid} (ID: {session_id})")
+        print(f"end_session: ending session {session_uuid} (ID: {session_id})")
         debug_center.dbg("backend.session", "end_session 入口", f"channel={self.channel_id} session_id={session_id} uuid={session_uuid}")
         
         # Discard any open (unsettled) cycle before closing the session
@@ -302,7 +302,7 @@ class SessionLifecycleMixin:
                     DetectionCycle.end_time != None
                 ).all()
                 
-                print(f"end_session: 找到 {len(cycles)} 个已结算周期")
+                print(f"end_session: found {len(cycles)} settled cycles")
                 
                 if cycles:
                     session.total_cycles = len(cycles)
@@ -329,12 +329,12 @@ class SessionLifecycleMixin:
                 # 保存计数器快照
                 session.counters_snapshot = self.counters.copy() if self.counters else {}
                 
-                print(f"end_session: 保存数据 - 周期数: {session.total_cycles}, 合格: {session.good_cycles}, 不良: {session.ng_cycles}, 计数器: {session.counters_snapshot}")
+                print(f"end_session: saving - cycles: {session.total_cycles}, good: {session.good_cycles}, ng: {session.ng_cycles}, counters: {session.counters_snapshot}")
                 
                 db.commit()
-                print(f"会话已结束: {session_uuid}, 周期数: {session.total_cycles}")
+                print(f"[Session] ended: {session_uuid}, cycles: {session.total_cycles}")
             else:
-                print(f"end_session: 未找到会话 ID={session_id}")
+                print(f"end_session: session not found ID={session_id}")
             
             # v3.13: session_end 插件 hook — session 已写库 + 统计已聚合, db 即将关闭.
             # 在 MES Hook 之前触发, 让插件能拿到完整统计快照 (与 cycle_end 时序对齐).
@@ -358,7 +358,7 @@ class SessionLifecycleMixin:
                     "project_id": self.project_config.get("id") if self.project_config else None,
                 })
             except Exception as e:
-                print(f"[Plugin] session_end hook 触发异常 (已隔离, 主流程继续): {e}")
+                print(f"[Plugin] session_end hook error (isolated, main flow continues): {e}")
 
             db.close()
             
@@ -370,9 +370,9 @@ class SessionLifecycleMixin:
                         session_id=session_id,
                     )
                 except Exception as e:
-                    print(f"[MES] session_end hook 异常: {e}")
+                    print(f"[MES] session_end hook error: {e}")
         except Exception as e:
-            print(f"结束会话失败: {e}")
+            print(f"[Session] end failed: {e}")
             debug_center.dbg("backend.session", "end_session 异常", f"channel={self.channel_id} session_id={session_id} err={e}")
             import traceback
             traceback.print_exc()
@@ -412,11 +412,11 @@ class SessionLifecycleMixin:
         project_id = self.project_config.get('id') if self.project_config else None
         if not project_id:
             return
-        print(f"[自动拆分] {reason}，自动结束旧会话 {self.current_session_uuid}")
+        print(f"[AutoSplit] {reason}, auto-ending old session {self.current_session_uuid}")
         self.end_session()
         new_info = self.start_session(project_id)
         if new_info:
-            print(f"[自动拆分] 新会话已创建: {new_info.get('session_uuid')}")
+            print(f"[AutoSplit] new session created: {new_info.get('session_uuid')}")
     
     def _force_timeout_ng(self, reason: str):
         """超时强制NG：触发NG事件并清理当前周期状态.
@@ -437,7 +437,7 @@ class SessionLifecycleMixin:
         
         if self._mes_hook and self._mes_hook.is_scan_required(self.channel_id):
             if not self._mes_hook.has_pending_workpiece(self.channel_id):
-                print(f"[扫码绑定] 工位{self.channel_id} 要求先扫码，当前无待检工件，跳过开周期")
+                print(f"[ScanBind] channel {self.channel_id} requires scan first, no pending workpiece, skip cycle start")
                 return
         
         if self._session_start_date and datetime.now().date() != self._session_start_date:
@@ -468,7 +468,7 @@ class SessionLifecycleMixin:
                 if last_cycle:
                     last_cycle.interval_to_next = round(interval_from_last, 2)
                     db.commit()
-                    print(f"上一周期间隔: {interval_from_last:.2f}s")
+                    print(f"[Cycle] interval from last: {interval_from_last:.2f}s")
             
             # v3.10+ 阶段 4: cycle.operator_id 改写当前登录 user_id (字段名保留)
             from backend.core.auth import get_current_user_id
@@ -519,7 +519,7 @@ class SessionLifecycleMixin:
                     pass
 
             db.close()
-            print(f"新周期开始: #{self.current_cycle_number} ({cycle_uuid})")
+            print(f"[Cycle] start: #{self.current_cycle_number} ({cycle_uuid})")
             if debug_center.is_on("backend.session"):
                 debug_center.dbg("backend.session", "cycle 开始写库", f"channel={self.channel_id} cycle_id={self.current_cycle_id} number={self.current_cycle_number}")
 
@@ -530,7 +530,7 @@ class SessionLifecycleMixin:
                 from backend.services.scanner import get_scanner_service
                 get_scanner_service().resume_after_cycle(self.channel_id)
             except Exception as e:
-                print(f"[Scanner] cycle_start resume 异常 (ch={self.channel_id}): {e}",
+                print(f"[Scanner] cycle_start resume error (ch={self.channel_id}): {e}",
                       flush=True)
 
             # MES Hook: Cycle 开始
@@ -545,7 +545,7 @@ class SessionLifecycleMixin:
                             project_id=project_id,
                         )
                 except Exception as e:
-                    print(f"[MES] cycle_start hook 异常: {e}")
+                    print(f"[MES] cycle_start hook error: {e}")
 
             # v3.13 M1.1: cycle_start 插件 hook — cycle 已落库 + MES Hook 已通知, 此时
             # "新周期开始"事件已完整发生; 录像启动放在 hook 之后 (录像失败不影响 cycle 已开始).
@@ -575,12 +575,12 @@ class SessionLifecycleMixin:
                 finally:
                     _wfc_db.close()
             except Exception as _e_wfc:
-                print(f"[WorkpieceFlow] on_cycle_started 异常 (隔离, 不影响主流程): {_e_wfc}")
+                print(f"[WorkpieceFlow] on_cycle_started error (isolated, non-fatal): {_e_wfc}")
 
             # 开始周期视频录制
             self.start_cycle_recording()
         except Exception as e:
-            print(f"创建周期失败: {e}")
+            print(f"[Cycle] create failed: {e}")
             if debug_center.is_on("backend.session"):
                 debug_center.dbg("backend.session", "start_cycle 异常", f"channel={self.channel_id} err={e}")
     
@@ -624,9 +624,9 @@ class SessionLifecycleMixin:
                 del last_seen[label]
                 if label in start_map:
                     del start_map[label]
-                print(f"[flush] 结算前补写 {label} PT={rounded}s（避免 D 步骤直接结算时 PT 缺失）")
+                print(f"[flush] backfill {label} PT={rounded}s before settle (avoid missing PT when D-step settles directly)")
         except Exception as e:
-            print(f"[flush] _flush_active_steps_pt 异常: {e}")
+            print(f"[flush] _flush_active_steps_pt error: {e}")
 
     def end_cycle(self, is_good: bool, event_id: int = None, event_name: str = None, reason: str = None):
         """结束当前检测周期"""
@@ -664,7 +664,7 @@ class SessionLifecycleMixin:
                     )
                     is_good = _override_is_good
         except Exception as _e:
-            print(f"[ChannelGroup] get_pending_override 异常 (隔离, 不影响主流程): {_e}")
+            print(f"[ChannelGroup] get_pending_override error (isolated, non-fatal): {_e}")
 
         # v3.13 M1.2b: pre_cycle_end 插件 hook — 结算结果已定 (is_good 入参), 但写库 +
         # 副作用 (PT flush / 录像收尾 / MES 推送 / 报警联动) 都还没发生. M1.2a 起返回的
@@ -711,7 +711,7 @@ class SessionLifecycleMixin:
                     flush=True,
                 )
         except Exception as e:
-            print(f"[Plugin] pre_cycle_end hook 触发异常 (已隔离, 主流程继续): {e}")
+            print(f"[Plugin] pre_cycle_end hook error (isolated, main flow continues): {e}")
 
         # v3.8.x: 在 stop_recording / history 快照 之前，把还在画面里的步骤 PT 主动写入累计字典。
         # 解决 NG 周期下 D 步骤直接结算时 PT 显示 '--' 的客户报障（详见 _flush_active_steps_pt 注释）。
@@ -751,13 +751,13 @@ class SessionLifecycleMixin:
                             synchronize_session=False,
                         )
                     except Exception as _e:
-                        print(f"[录制] 回写录像 OK/NG 标记失败 (已忽略): {_e}")
+                        print(f"[Recording] write-back OK/NG mark failed (ignored): {_e}")
 
                 # 记录周期结束时间，用于计算下一周期的间隔
                 self.last_cycle_end_time = cycle.end_time
                 
                 db.commit()
-                print(f"周期结束: #{self.current_cycle_number}, 结果: {'OK' if final_is_good else 'NG'}, 耗时: {cycle.duration:.2f}s")
+                print(f"[Cycle] end: #{self.current_cycle_number}, result: {'OK' if final_is_good else 'NG'}, duration: {cycle.duration:.2f}s")
                 if debug_center.is_on("backend.session"):
                     debug_center.dbg("backend.session", "cycle 结束写库", f"channel={self.channel_id} cycle_id={self.current_cycle_id} is_good={final_is_good} event={event_name}")
                 
@@ -776,7 +776,7 @@ class SessionLifecycleMixin:
                             project_id=project_id,
                         )
                     except Exception as e:
-                        print(f"[MES] cycle_end hook 异常: {e}")
+                        print(f"[MES] cycle_end hook error: {e}")
 
                 # v3.5.0: 周期性强制动作判定（每 N 轮做 E）— M1.2b: 走 final_is_good
                 # 独立 try/except，不影响 MES Hook / Scanner resume / Container 清理
@@ -786,7 +786,7 @@ class SessionLifecycleMixin:
                             cycle.step_sequence or [], bool(final_is_good)
                         )
                 except Exception as e:
-                    print(f"[PeriodicActions] cycle_end 判定异常: {e}")
+                    print(f"[PeriodicActions] cycle_end check error: {e}")
 
                 # v3.7 / G1.5: 触发 active 插件的 cycle_end/post_cycle/post hook.
                 # 独立 try/except — 插件抛错绝不影响主程序后续步骤 (Scanner resume / Container 清理 / 多工位联动).
@@ -814,7 +814,7 @@ class SessionLifecycleMixin:
                             "cycle_end", "post_cycle", "post", plugin_ctx
                         )
                 except Exception as e:
-                    print(f"[Plugin] cycle_end hook 触发异常 (已隔离, 主流程继续): {e}")
+                    print(f"[Plugin] cycle_end hook error (isolated, main flow continues): {e}")
 
                 # v3.13 RFC 10: 通知 ChannelGroupCoordinator 本次结算.
                 # 触发同组联动 (synchronized_any_ng: NG → 其它成员设 pending override).
@@ -828,7 +828,7 @@ class SessionLifecycleMixin:
                         db=db,
                     )
                 except Exception as _e:
-                    print(f"[ChannelGroup] on_cycle_settled 异常 (隔离, 不影响主流程): {_e}")
+                    print(f"[ChannelGroup] on_cycle_settled error (isolated, non-fatal): {_e}")
 
                 # v3.14 RFC 11: 通知 WorkpieceFlowCoordinator 本次结算.
                 # 推进串行流水线状态机 (最后一站 → COMPLETED; 任一 NG + short_circuit → SHORT_CIRCUITED).
@@ -842,7 +842,7 @@ class SessionLifecycleMixin:
                         db=db,
                     )
                 except Exception as _e:
-                    print(f"[WorkpieceFlow] on_cycle_settled 异常 (隔离, 不影响主流程): {_e}")
+                    print(f"[WorkpieceFlow] on_cycle_settled error (isolated, non-fatal): {_e}")
 
                 # v3.21: 通知 PackagingFlowCoordinator 本次托盘结算 (包装箱"工单→箱→托盘"三层结算).
                 # 通道不在任何启用配置时直接 return, 零差异; 任何异常都隔离, 不影响主流程.
@@ -859,7 +859,7 @@ class SessionLifecycleMixin:
                         remediation=getattr(self, '_ng_remediation', None),
                     )
                 except Exception as _e:
-                    print(f"[PackagingFlow] on_cycle_settled 异常 (隔离, 不影响主流程): {_e}")
+                    print(f"[PackagingFlow] on_cycle_settled error (isolated, non-fatal): {_e}")
 
                 # v2.7.16: once_per_cycle 模式下, 周期结束 (无论 OK/NG) 都让扫码器
                 # 恢复扫描, 等下一个工件的码. 模式不匹配时是 no-op, 不需要额外判断.
@@ -867,7 +867,7 @@ class SessionLifecycleMixin:
                     from backend.services.scanner import get_scanner_service
                     get_scanner_service().resume_after_cycle(self.channel_id)
                 except Exception as e:
-                    print(f"[Scanner] resume_after_cycle 异常 (ch={self.channel_id}): {e}",
+                    print(f"[Scanner] resume_after_cycle error (ch={self.channel_id}): {e}",
                           flush=True)
 
                 # v2.7.17: 容器模式杠"野生 settle" - cycle 已经结束, 任何残留在
@@ -880,10 +880,10 @@ class SessionLifecycleMixin:
                         dropped = list(self._box_objects.keys())
                         self._box_objects.clear()
                         if dropped:
-                            print(f"[Container] cycle_end 清残留 box: {dropped} "
+                            print(f"[Container] cycle_end clearing leftover box: {dropped} "
                                   f"(避免野生 settle 重复计数)", flush=True)
                 except Exception as e:
-                    print(f"[Container] cycle_end 清 _box_objects 异常: {e}", flush=True)
+                    print(f"[Container] cycle_end clear _box_objects error: {e}", flush=True)
 
                 # v3.1.2 多工位广播结算联动: 主工位结算时带动其他广播工位强制结算.
                 # 仅当本次 end_cycle 不是"被联动"触发的, 才向外通知 (防止循环).
@@ -892,12 +892,12 @@ class SessionLifecycleMixin:
                         from backend.services.scanner import get_scanner_service
                         get_scanner_service().notify_cycle_settled(self.channel_id)
                     except Exception as e:
-                        print(f"[Scanner] notify_cycle_settled 异常 (ch={self.channel_id}): {e}",
+                        print(f"[Scanner] notify_cycle_settled error (ch={self.channel_id}): {e}",
                               flush=True)
 
             db.close()
         except Exception as e:
-            print(f"结束周期失败: {e}")
+            print(f"[Cycle] end failed: {e}")
             if debug_center.is_on("backend.session"):
                 debug_center.dbg("backend.session", "end_cycle 异常", f"channel={self.channel_id} cycle_id={self.current_cycle_id} err={e}")
         finally:
@@ -916,7 +916,7 @@ class SessionLifecycleMixin:
                         if _total > 0:
                             self.step_cycle_durations_history.setdefault(_lbl, []).append(round(_total, 2))
             except Exception as _e:
-                print(f"[PT-Sum] 周期 SUM 快照异常: {_e}")
+                print(f"[PT-Sum] cycle SUM snapshot error: {_e}")
             self.current_cycle_id = None
             self.current_cycle_uuid = None
     
@@ -1186,7 +1186,7 @@ class SessionLifecycleMixin:
                     flush=True,
                 )
         except Exception as e:
-            print(f"记录步骤失败: {e}")
+            print(f"[Step] record failed: {e}")
             if debug_center.is_on("backend.session"):
                 debug_center.dbg("backend.session", "record_step 异常", f"channel={self.channel_id} label={step_label} err={e}")
             import traceback
@@ -1369,7 +1369,7 @@ class SessionLifecycleMixin:
                 )
                 db.commit()
             except Exception as e:
-                print(f"[ScanPairSettle] link_to_cycle 失败: {e}", flush=True)
+                print(f"[ScanPairSettle] link_to_cycle failed: {e}", flush=True)
 
             db.close()
             print(
@@ -1379,7 +1379,7 @@ class SessionLifecycleMixin:
             )
             return True
         except Exception as e:
-            print(f"[ScanPairSettle] _ensure_cycle 异常: {e}\n{traceback.format_exc()}",
+            print(f"[ScanPairSettle] _ensure_cycle error: {e}\n{traceback.format_exc()}",
                   flush=True)
             return False
 

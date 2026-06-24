@@ -512,7 +512,7 @@ class PullScheduler:
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="mes-pull-scheduler")
         self._thread.start()
-        print("[MES-Pull] 定时拉取调度器已启动", flush=True)
+        print("[MES-Pull] scheduled pull scheduler started", flush=True)
 
     def stop(self):
         self._stop.set()
@@ -552,7 +552,7 @@ class PullScheduler:
                 self._last_run[conn.id] = now
                 puller.pull_for_connection(db, conn, job_no="", dry_run=False)
                 db.commit()
-                print(f"[MES-Pull] 定时拉取完成: {conn.name}", flush=True)
+                print(f"[MES-Pull] scheduled pull done: {conn.name}", flush=True)
             except Exception as e:
                 db.rollback()
                 debug_center.dbg("backend.gateway", "定时拉取单连接失败",

@@ -7,6 +7,7 @@ MES 外部对接网关
 3. 失败重试 (retry_count × retry_interval_sec)
 4. 记录每次通讯到 MESCommLog
 """
+import base64
 import json
 import time
 import traceback
@@ -58,7 +59,7 @@ class MESGateway:
         except Exception as e:
             db.rollback()
             debug_center.dbg("backend.gateway", "dispatch 异常(含 payload 构建)", f"event={event_type} channel={channel_id if channel_id is not None else '-'} err={e}")
-            print(f"[MES Gateway] 分发失败: {e}", flush=True)
+            print(f"[MES Gateway] dispatch failed: {e}", flush=True)
             traceback.print_exc()
         finally:
             db.close()
@@ -100,6 +101,21 @@ class MESGateway:
                           success=True)
                 return
 
+        # 出站附带"当前画面截图": 仅当连接配置 attach_snapshot=true 时, 抓该工位当前帧转 base64
+        # 注入上下文, 供模板引用 {snapshot.image_base64} / {snapshot.image_data_uri}.
+        # 放在 push_on 过滤之后, 被过滤掉的推送不浪费抓帧; 抓帧失败静默跳过, 绝不阻断推送.
+        # 默认关 → full_context 无 snapshot 字段, 与历史字节级一致.
+        if config.get("attach_snapshot"):
+            img_b64 = self._capture_snapshot_base64(channel_id, config)
+            if img_b64:
+                snap = full_context.get("snapshot")
+                if not isinstance(snap, dict):
+                    snap = {}
+                snap["image_base64"] = img_b64
+                if config.get("snapshot_data_uri"):
+                    snap["image_data_uri"] = f"data:image/jpeg;base64,{img_b64}"
+                full_context["snapshot"] = snap
+
         # 物料名称映射: 把 ng_items 里的中文步骤名替换成客户 MES 的物料代码.
         # mode=replace (默认): 直接替换原数组;
         # mode=keep_both: 原数组保留, 新增 ng_items_mapped 字段.
@@ -134,7 +150,7 @@ class MESGateway:
         for attempt in range(1 + retry_count):
             if attempt > 0:
                 time.sleep(retry_interval)
-                print(f"[MES Gateway] 重试 {attempt}/{retry_count}: {conn.name}", flush=True)
+                print(f"[MES Gateway] retry {attempt}/{retry_count}: {conn.name}", flush=True)
                 if debug_center.is_on("backend.gateway"):
                     debug_center.dbg("backend.gateway", "推送重试", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} attempt={attempt}/{retry_count}")
 
@@ -156,7 +172,7 @@ class MESGateway:
                 )
                 conn.last_sync_at = datetime.now()
                 db.flush()
-                print(f"[MES Gateway] 推送成功: {conn.name} ({event_type})", flush=True)
+                print(f"[MES Gateway] push success: {conn.name} ({event_type})", flush=True)
                 if debug_center.is_on("backend.gateway"):
                     debug_center.dbg("backend.gateway", "推送成功", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} status={result.get('status_code') or '-'} attempt={attempt} duration_ms={result.get('duration_ms') or '-'}")
                 return
@@ -176,8 +192,38 @@ class MESGateway:
             success=False,
             error_msg=error_msg,
         )
-        print(f"[MES Gateway] 推送失败: {conn.name} ({event_type}) - {error_msg}", flush=True)
+        print(f"[MES Gateway] push failed: {conn.name} ({event_type}) - {error_msg}", flush=True)
         debug_center.dbg("backend.gateway", "推送失败(重试耗尽)", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} attempts={1 + retry_count} status={(last_result or {}).get('status_code') or '-'} err={error_msg or '-'}")
+
+    @staticmethod
+    def _capture_snapshot_base64(channel_id, config: dict) -> Optional[str]:
+        """抓指定工位当前画面 → JPEG → base64 字符串.
+
+        gated 调用: 仅在连接 config.attach_snapshot=true 时才走这里.
+        - channel_id 为 None 时回落工位 0
+        - 工位未配置 / 无帧 / 编码失败 → 返回 None (静默, 调用方据此不注入)
+        - config.snapshot_max_bytes>0 且 JPEG 超限 → 返回 None
+          (客户 MES 常有 413 请求体上限, 超大截图直接放弃而不是发了被拒)
+        """
+        try:
+            from backend.api.channel_manager import get_channel_manager
+            cid = channel_id if channel_id is not None else 0
+            mgr = get_channel_manager().get(cid)
+            if mgr is None:
+                return None
+            jpeg = mgr.get_snapshot()
+            if not jpeg:
+                return None
+            max_bytes = config.get("snapshot_max_bytes")
+            if isinstance(max_bytes, int) and max_bytes > 0 and len(jpeg) > max_bytes:
+                debug_center.dbg("backend.gateway", "截图超限跳过",
+                                 f"channel={cid} bytes={len(jpeg)} max={max_bytes}")
+                return None
+            return base64.b64encode(jpeg).decode("ascii")
+        except Exception as e:
+            debug_center.dbg("backend.gateway", "截图入上下文失败",
+                             f"channel={channel_id} err={e}")
+            return None
 
     @staticmethod
     def _apply_auth_to_headers(config: dict) -> dict:

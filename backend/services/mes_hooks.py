@@ -44,9 +44,9 @@ class MESHookManager:
         q = self._pending_queue.setdefault(channel_id, [])
         if len(q) >= self._MAX_PENDING_QUEUE:
             dropped = q.pop(0)
-            print(f"[MES] ⚠️ 待绑队列已达上限{self._MAX_PENDING_QUEUE}, "
-                  f"丢弃最旧工件#{dropped} (工位{channel_id}); "
-                  f"检查检测是否停止/绑定是否卡死", flush=True)
+            print(f"[MES] WARN pending-bind queue reached limit {self._MAX_PENDING_QUEUE}, "
+                  f"dropping oldest workpiece#{dropped} (ch{channel_id}); "
+                  f"check if detection stopped / binding stuck", flush=True)
         q.append(workpiece_id)
         return q
 
@@ -131,7 +131,7 @@ class MESHookManager:
             target=self._worker_loop, daemon=True, name="mes-hook-worker"
         )
         self._worker_thread.start()
-        print("[MES] Hook 管理器已启动", flush=True)
+        print("[MES] Hook manager started", flush=True)
 
     def stop(self):
         """停止后台工作线程"""
@@ -149,7 +149,7 @@ class MESHookManager:
                 ex.shutdown(wait=False, cancel_futures=True)
             except Exception:
                 pass
-        print("[MES] Hook 管理器已停止", flush=True)
+        print("[MES] Hook manager stopped", flush=True)
 
     # ==================== B1②: 外部 MES 推送并发派发 (默认关) ====================
 
@@ -167,8 +167,8 @@ class MESHookManager:
                 db.close()
         except Exception as e:
             self._async_dispatch_enabled = False
-            print(f"[MES] 读取外推并发开关失败(默认关): {e}", flush=True)
-        print(f"[MES] 外部推送并发派发: {'开' if self._async_dispatch_enabled else '关(默认)'}",
+            print(f"[MES] read async-dispatch switch failed (default off): {e}", flush=True)
+        print(f"[MES] external push async dispatch: {'ON' if self._async_dispatch_enabled else 'OFF(default)'}",
               flush=True)
 
     def get_async_dispatch(self) -> bool:
@@ -192,8 +192,8 @@ class MESHookManager:
             finally:
                 db.close()
         except Exception as e:
-            print(f"[MES] 持久化外推并发开关失败: {e}", flush=True)
-        print(f"[MES] 外部推送并发派发已切换: {'开' if enabled else '关'}", flush=True)
+            print(f"[MES] persist async-dispatch switch failed: {e}", flush=True)
+        print(f"[MES] external push async dispatch toggled: {'ON' if enabled else 'OFF'}", flush=True)
 
     def _submit_gateway_dispatch(self, event_type: str, ctx: dict, channel_id):
         """把一次外部 MES 推送甩到"每工位一条"的执行器, 同工位严格保序, 慢工位不拖累他人。
@@ -202,8 +202,8 @@ class MESHookManager:
         with self._gateway_exec_lock:
             pending = self._gateway_pending.get(cid, 0)
             if pending >= self._GATEWAY_MAX_PENDING:
-                print(f"[MES] ⚠️ 工位{cid}外推积压达上限{self._GATEWAY_MAX_PENDING}, "
-                      f"丢弃本次{event_type}推送(MES可能长时间不通)", flush=True)
+                print(f"[MES] WARN channel {cid} external-push backlog reached limit {self._GATEWAY_MAX_PENDING}, "
+                      f"dropping this {event_type} push (MES may be down for long)", flush=True)
                 debug_center.dbg("backend.mes", "外推积压丢弃",
                                  f"ch={cid} event={event_type} pending={pending}")
                 return
@@ -220,7 +220,7 @@ class MESHookManager:
                 get_mes_gateway().dispatch(
                     event_type, ctx, cid if cid >= 0 else None)
             except Exception as e:
-                print(f"[MES] 异步外推失败 ch={cid} event={event_type}: {e}", flush=True)
+                print(f"[MES] async external push failed ch={cid} event={event_type}: {e}", flush=True)
                 debug_center.dbg("backend.mes", "异步外推异常",
                                  f"ch={cid} event={event_type} err={e}")
             finally:
@@ -234,7 +234,7 @@ class MESHookManager:
             with self._gateway_exec_lock:
                 self._gateway_pending[cid] = max(
                     0, self._gateway_pending.get(cid, 1) - 1)
-            print(f"[MES] 外推提交失败, 回退内联 ch={cid}: {e}", flush=True)
+            print(f"[MES] external-push submit failed, fallback inline ch={cid}: {e}", flush=True)
             try:
                 from backend.services.mes_gateway import get_mes_gateway
                 get_mes_gateway().dispatch(
@@ -258,10 +258,10 @@ class MESHookManager:
                     int(x) for x in chs if isinstance(x, (int, str))
                     and str(x).lstrip("-").isdigit()
                 }
-            print(f"[ScannerDisable] 从 {self._disable_state_file} 恢复禁用工位: "
+            print(f"[ScannerDisable] restored disabled channels from {self._disable_state_file}: "
                   f"{sorted(self._disabled_channels)}", flush=True)
         except Exception as e:
-            print(f"[ScannerDisable] 加载禁用状态失败: {e}", flush=True)
+            print(f"[ScannerDisable] load disable state failed: {e}", flush=True)
 
     def _save_disabled_state_to_disk(self):
         """把当前 _disabled_channels 写到磁盘. 调用方需保证已持锁."""
@@ -271,7 +271,7 @@ class MESHookManager:
             with open(self._disable_state_file, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[ScannerDisable] 持久化失败: {e}", flush=True)
+            print(f"[ScannerDisable] persist failed: {e}", flush=True)
 
     def is_channel_scan_disabled(self, channel_id: int) -> bool:
         """守门点: 该工位是否已被用户手动禁用扫码."""
@@ -304,7 +304,7 @@ class MESHookManager:
                 if channel_id in chs:
                     linked.update(int(x) for x in chs)
         except Exception as e:
-            print(f"[ScannerDisable] 计算联动工位异常 ch={channel_id}: {e}",
+            print(f"[ScannerDisable] compute linked channels error ch={channel_id}: {e}",
                   flush=True)
         return linked
 
@@ -355,10 +355,10 @@ class MESHookManager:
             svc = get_scanner_service()
             svc.apply_channel_disable_change(linked, disabled)
         except Exception as e:
-            print(f"[ScannerDisable] 通知 ScannerService 失败: {e}", flush=True)
+            print(f"[ScannerDisable] notify ScannerService failed: {e}", flush=True)
 
-        print(f"[ScannerDisable] ch{ch} → {'禁用' if disabled else '启用'} "
-              f"(联动 {sorted(linked)}, 全集 {snapshot}, changed={changed})",
+        print(f"[ScannerDisable] ch{ch} -> {'disabled' if disabled else 'enabled'} "
+              f"(linked {sorted(linked)}, full_set {snapshot}, changed={changed})",
               flush=True)
         return {
             "disabled_channels": snapshot,
@@ -386,7 +386,7 @@ class MESHookManager:
             except Exception as e:
                 db.rollback()
                 debug_center.dbg("backend.mes", "worker 任务异常", f"handler={getattr(task[0], '__name__', '?') if task else '?'} err={e}")
-                print(f"[MES] Hook 任务执行失败: {e}", flush=True)
+                print(f"[MES] Hook task execution failed: {e}", flush=True)
                 traceback.print_exc()
             finally:
                 db.close()
@@ -419,7 +419,7 @@ class MESHookManager:
                 self._spill_write_count += 1
             return True
         except Exception as e:
-            print(f"[MES] 关键任务落盘失败: {e}", flush=True)
+            print(f"[MES] critical task persist failed: {e}", flush=True)
             return False
 
     def _drain_spill_once(self, max_items: int = 20):
@@ -483,7 +483,7 @@ class MESHookManager:
 
             if replayed:
                 self._spill_replay_count += replayed
-                print(f"[MES] 已回放落盘关键任务 {replayed} 条 "
+                print(f"[MES] replayed {replayed} persisted critical tasks "
                       f"(replayed_total={self._spill_replay_count}, left={len(kept_lines)})",
                       flush=True)
 
@@ -510,7 +510,7 @@ class MESHookManager:
                 spilled = self._spill_task(func, args, kwargs)
             self._queue_drop_count += 1
             debug_center.dbg("backend.mes", "hook 队列满丢任务", f"handler={getattr(func, '__name__', '?')} critical={critical} spilled={spilled} dropped={self._queue_drop_count}")
-            print(f"[MES] 任务队列已满, 任务被丢弃 "
+            print(f"[MES] task queue full, task dropped "
                   f"(critical={critical}, spilled={spilled}, dropped={self._queue_drop_count}, qsize={self._task_queue.qsize()})",
                   flush=True)
 
@@ -523,7 +523,7 @@ class MESHookManager:
         # v3.4.2 守门点: 该工位被用户手动禁用扫码 → 直接丢码 (扫码器物理已 LOFF,
         # 这里再防御一道, 防止串口残留字节意外触发).
         if self.is_channel_scan_disabled(channel_id):
-            print(f"[ScannerDisable] ch{channel_id} 已禁用, 丢弃扫码 "
+            print(f"[ScannerDisable] ch{channel_id} disabled, dropping scan "
                   f"(serial={serial_no})", flush=True)
             return
         self._enqueue(
@@ -585,7 +585,7 @@ class MESHookManager:
         # v3.3.0 关闭遗留的 scan_pair 超时定时器
         self._cancel_scan_pair_timer(channel_id)
         if removed:
-            print(f"[MES] ch{channel_id} 被移除，已清理残留: {removed}", flush=True)
+            print(f"[MES] ch{channel_id} removed, cleaned residuals: {removed}", flush=True)
 
     # ====== 获取当前状态 (供 get_detection_results 使用, 需线程安全) ======
 
@@ -614,7 +614,7 @@ class MESHookManager:
                 if self._conn_serves_channel(conn, channel_id) and conn.scan_required:
                     return True
         except Exception as e:
-            print(f"[MES] is_scan_required 异常: {e}", flush=True)
+            print(f"[MES] is_scan_required error: {e}", flush=True)
         return False
 
     def is_warn_no_barcode(self, channel_id: int) -> bool:
@@ -632,7 +632,7 @@ class MESHookManager:
                 if self._conn_serves_channel(conn, channel_id) and conn.warn_no_barcode:
                     return True
         except Exception as e:
-            print(f"[MES] is_warn_no_barcode 异常: {e}", flush=True)
+            print(f"[MES] is_warn_no_barcode error: {e}", flush=True)
         return False
 
     def has_any_scanner_present(self) -> bool:
@@ -649,7 +649,7 @@ class MESHookManager:
             svc = get_scanner_service()
             return bool(svc._connections)
         except Exception as e:
-            print(f"[MES] has_any_scanner_present 异常: {e}", flush=True)
+            print(f"[MES] has_any_scanner_present error: {e}", flush=True)
             # 出现异常时保守地认为"有扫码器"，维持原有提示行为，避免误屏蔽
             return True
 
@@ -681,7 +681,7 @@ class MESHookManager:
             }
         except Exception as e:
             # 轮询路径：若工件真的存在却查失败，说明 DB/ORM 有问题，要能看到
-            print(f"[MES] get_current_workpiece(ch{channel_id}, wp={wp_id}) 失败: {e}",
+            print(f"[MES] get_current_workpiece(ch{channel_id}, wp={wp_id}) failed: {e}",
                   flush=True)
             return None
         finally:
@@ -696,7 +696,7 @@ class MESHookManager:
         try:
             return self._work_order_svc.get_order_summary(db, order_id)
         except Exception as e:
-            print(f"[MES] get_active_order(ch{channel_id}, order={order_id}) 失败: {e}",
+            print(f"[MES] get_active_order(ch{channel_id}, order={order_id}) failed: {e}",
                   flush=True)
             return None
         finally:
@@ -809,8 +809,8 @@ class MESHookManager:
                 entry = self._scan_pair_active.pop(channel_id)
             self._scan_pair_timeout_timers.pop(channel_id, None)
             print(
-                f"[ScanPair] ch{channel_id} 超时未扫下一码, 强制 NG 结算 "
-                f"(开始码={entry.get('serial_no')})",
+                f"[ScanPair] ch{channel_id} timeout waiting next scan, force NG settle "
+                f"(start_code={entry.get('serial_no')})",
                 flush=True,
             )
             if debug_center.is_on("backend.mes"):
@@ -818,7 +818,7 @@ class MESHookManager:
             self._dispatch_scan_pair_settle(channel_id, force_ng=True,
                                             reason="scan_pair_timeout")
         except Exception as e:
-            print(f"[ScanPair] 超时处理异常 ch={channel_id}: {e}", flush=True)
+            print(f"[ScanPair] timeout handling error ch={channel_id}: {e}", flush=True)
 
     def _dispatch_scan_pair_settle(self, channel_id: int, *,
                                     force_ng: bool = False,
@@ -833,19 +833,19 @@ class MESHookManager:
             from backend.api.channel_manager import channel_manager
             mgr = channel_manager.get(channel_id)
         except Exception as e:
-            print(f"[ScanPair] dispatch import 失败 ch={channel_id}: {e}", flush=True)
+            print(f"[ScanPair] dispatch import failed ch={channel_id}: {e}", flush=True)
             return 0
         if mgr is None:
             return 0
         fn = getattr(mgr, "settle_for_scan_pair", None)
         if not callable(fn):
-            print(f"[ScanPair] ch{channel_id} 后端没有 settle_for_scan_pair 方法",
+            print(f"[ScanPair] ch{channel_id} backend has no settle_for_scan_pair method",
                   flush=True)
             return 0
         try:
             return int(fn(force_ng=force_ng, reason=reason) or 0)
         except Exception as e:
-            print(f"[ScanPair] settle_for_scan_pair 异常 ch={channel_id}: {e}",
+            print(f"[ScanPair] settle_for_scan_pair error ch={channel_id}: {e}",
                   flush=True)
             return 0
 
@@ -863,7 +863,7 @@ class MESHookManager:
             return 0
         if discard:
             print(
-                f"[ScanPair] ch{channel_id} 停止/待机, 用户选择丢弃最后一码 "
+                f"[ScanPair] ch{channel_id} stop/standby, user discarded last scan "
                 f"(serial={entry.get('serial_no')})",
                 flush=True,
             )
@@ -910,8 +910,8 @@ class MESHookManager:
 
         if same_code_dup:
             print(
-                f"[ScanPair] ch{channel_id} 同码二次扫 (serial={serial_no}), "
-                f"软忽略, 等待新码",
+                f"[ScanPair] ch{channel_id} duplicate scan (serial={serial_no}), "
+                f"soft-ignored, waiting new code",
                 flush=True,
             )
             for ch in broadcast_chs:
@@ -944,8 +944,8 @@ class MESHookManager:
         for ch in broadcast_chs:
             self._arm_scan_pair_timer(ch)
         print(
-            f"[ScanPair] 起新窗口 (开始码={serial_no}, wp#{wp_id}, "
-            f"工位={broadcast_chs})",
+            f"[ScanPair] open new window (start_code={serial_no}, wp#{wp_id}, "
+            f"channels={broadcast_chs})",
             flush=True,
         )
         if debug_center.is_on("backend.mes"):
@@ -976,7 +976,7 @@ class MESHookManager:
         try:
             self._workpiece_svc.mark_inspecting(db, pending_id)
         except Exception as e:
-            print(f"[ScanPair] mark_inspecting 异常 ch={channel_id} "
+            print(f"[ScanPair] mark_inspecting error ch={channel_id} "
                   f"wp#{pending_id}: {e}", flush=True)
         print(f"[ScanPair] ch{channel_id} promote: wp#{pending_id} "
               f"(serial={serial_no}) → inspecting "
@@ -1131,7 +1131,7 @@ class MESHookManager:
                 except Exception as e:
                     if owns_db:
                         local_db.rollback()
-                    print(f"[MES] clear_pending_scan(force) 回退失败 ch{channel_id} wp{inspecting_id}: {e}",
+                    print(f"[MES] clear_pending_scan(force) rollback failed ch{channel_id} wp{inspecting_id}: {e}",
                           flush=True)
                 finally:
                     if owns_db:
@@ -1144,7 +1144,7 @@ class MESHookManager:
                 or cleared.get("last_scan_event") \
                 or cleared.get("force_canceled_inspecting") \
                 or cleared.get("force_race_lost"):
-            print(f"[MES] 清除 ch{channel_id} 扫码状态 (force={force}): {cleared}",
+            print(f"[MES] cleared ch{channel_id} scan state (force={force}): {cleared}",
                   flush=True)
         return cleared
 
@@ -1164,7 +1164,7 @@ class MESHookManager:
                     wp.status = "queued"
                     db.commit()
                 self._pending_workpiece[channel_id] = wp_id
-                print(f"[MES] 手动重绑: 工件#{wp_id} 放回待检", flush=True)
+                print(f"[MES] manual rebind: workpiece#{wp_id} back to pending", flush=True)
             finally:
                 db.close()
 
@@ -1201,7 +1201,7 @@ class MESHookManager:
                     pass
                 return  # 互斥: 不再走原 scan_pair 路径
         except Exception as _e_wfc_scan:
-            print(f"[WorkpieceFlow] on_scan_received 异常 (隔离, 回退到 scan_pair): {_e_wfc_scan}")
+            print(f"[WorkpieceFlow] on_scan_received error (isolated, fallback to scan_pair): {_e_wfc_scan}")
 
         # 同码二次扫抑制：上次检测合格 & 距完成时间 < 冷却秒数 → 静默丢弃
         # 用于过滤搬运过程中扫码器误扫到已合格工件的情况，避免脏数据。
@@ -1219,15 +1219,15 @@ class MESHookManager:
                         error_msg=f"OK冷却期内重复扫码忽略 ({elapsed:.1f}s/{cooldown}s)",
                     )
                     db.add(scan_log)
-                    print(f"[MES] 扫码冷却过滤: {serial_no} 工件#{existing.id} "
-                          f"OK后{elapsed:.1f}s (冷却{cooldown}s, 工位{channel_id})",
+                    print(f"[MES] scan cooldown filter: {serial_no} workpiece#{existing.id} "
+                          f"{elapsed:.1f}s after OK (cooldown {cooldown}s, ch{channel_id})",
                           flush=True)
                     return
 
         action = self._get_duplicate_scan_action(channel_id)
 
         if action == "reject" and channel_id in self._pending_workpiece:
-            print(f"[MES] 扫码拒绝(已有待检工件): {serial_no} (工位{channel_id})", flush=True)
+            print(f"[MES] scan rejected (pending workpiece exists): {serial_no} (ch{channel_id})", flush=True)
             scan_log = ScanLog(
                 device_id=device_id, channel_id=channel_id,
                 raw_data=raw_data, parsed_serial=serial_no,
@@ -1263,10 +1263,10 @@ class MESHookManager:
             self._enqueue_pending(channel_id, wp.id)
             if channel_id not in self._pending_workpiece:
                 self._pending_workpiece[channel_id] = wp.id
-            print(f"[MES] 扫码入队: {serial_no} -> 工件#{wp.id} (工位{channel_id}, 队列长度{len(self._pending_queue[channel_id])})", flush=True)
+            print(f"[MES] scan enqueued: {serial_no} -> workpiece#{wp.id} (ch{channel_id}, queue_len={len(self._pending_queue[channel_id])})", flush=True)
         else:
             self._pending_workpiece[channel_id] = wp.id
-            print(f"[MES] 扫码登记: {serial_no} -> 工件#{wp.id} (工位{channel_id})", flush=True)
+            print(f"[MES] scan registered: {serial_no} -> workpiece#{wp.id} (ch{channel_id})", flush=True)
 
         self._last_scan_event[channel_id] = {
             "serial_no": serial_no,
@@ -1282,7 +1282,7 @@ class MESHookManager:
             if _mgr is not None and hasattr(_mgr, 'scan_d_on_scan_received'):
                 _mgr.scan_d_on_scan_received()
         except Exception as _e:
-            print(f"[ScanD] scan_d_on_scan_received 异常 ch={channel_id}: {_e}", flush=True)
+            print(f"[ScanD] scan_d_on_scan_received error ch={channel_id}: {_e}", flush=True)
 
         # v3.3.0 scan_pair (码-码闭环) 模式: 扫码 A 触发结算上一窗口 + 起新窗口.
         # 这里 hijack 后续的 mid_cycle / cycle_start 路径, 由 scan_pair 单独管理
@@ -1314,7 +1314,7 @@ class MESHookManager:
                             q.remove(consumed_id)
                             if q:
                                 self._pending_workpiece[channel_id] = q[0]
-                        print(f"[MES] 中途绑定: 工件#{consumed_id} -> Cycle#{current_cid} (工位{channel_id})", flush=True)
+                        print(f"[MES] mid-cycle bind: workpiece#{consumed_id} -> Cycle#{current_cid} (ch{channel_id})", flush=True)
 
     def _handle_cycle_start(self, db, channel_id: int, cycle_id: int,
                             session_id: int, project_id: int):
@@ -1330,7 +1330,7 @@ class MESHookManager:
                 project_id=project_id,
             )
         except Exception as e:
-            print(f"[MES] cycle_start snapshot 异常 ch{channel_id} "
+            print(f"[MES] cycle_start snapshot error ch{channel_id} "
                   f"cycle#{cycle_id}: {e}", flush=True)
 
         wp_id = self._pending_workpiece.pop(channel_id, None)
@@ -1362,7 +1362,7 @@ class MESHookManager:
                 cycle.order_id = order_id
                 db.flush()
 
-        print(f"[MES] Cycle#{cycle_id} 关联工件#{wp_id}", flush=True)
+        print(f"[MES] Cycle#{cycle_id} linked workpiece#{wp_id}", flush=True)
         if debug_center.is_on("backend.mes"):
             debug_center.dbg("backend.mes", "工件绑定成功", f"channel={channel_id} cycle={cycle_id} wp={wp_id} order={self._active_orders.get(channel_id) or '-'}")
 
@@ -1400,7 +1400,7 @@ class MESHookManager:
                 if cur_insp == wp_id:
                     self._inspecting_workpiece.pop(channel_id, None)
         except Exception as e:
-            print(f"[MES] cycle_end 反查 wp_id 异常 ch{channel_id} "
+            print(f"[MES] cycle_end reverse-lookup wp_id error ch{channel_id} "
                   f"cycle#{cycle_id}: {e}", flush=True)
 
         if wp_id is None:
@@ -1446,13 +1446,13 @@ class MESHookManager:
                                 if q:
                                     self._pending_workpiece[channel_id] = q[0]
                             delay = scan_ts - cyc_end_ts
-                            print(f"[MES] 迟到补绑: 工件#{wp_id} -> Cycle#{cycle_id} "
+                            print(f"[MES] late bind: workpiece#{wp_id} -> Cycle#{cycle_id} "
                                   f"(scan 距 cycle_end {delay:+.2f}s, 窗口{window}s, ch{channel_id})",
                                   flush=True)
                             if debug_center.is_on("backend.mes"):
                                 debug_center.dbg("backend.mes", "迟到扫码补绑成功", f"channel={channel_id} cycle={cycle_id} wp={wp_id} delay={delay:+.2f}s")
                 except Exception as e:
-                    print(f"[MES] 迟到补绑检查异常 ch{channel_id}: {e}", flush=True)
+                    print(f"[MES] late-bind check error ch{channel_id}: {e}", flush=True)
 
             if not wp_id:
                 # v3.7.0: 客户反馈 "MES 数据不是实时上传"。
@@ -1462,7 +1462,7 @@ class MESHookManager:
                 # 仅跳过 workpiece-related 子操作 (workpiece_svc.set_result / defect.auto_record),
                 # 因为没工件 ID 这些写操作没意义。
                 # 不破坏现有行为: 有 wp_id 的路径完全不变 (扫码客户继续按工件维度推送)。
-                print(f"[MES] Cycle#{cycle_id} ch{channel_id} 结束但未绑定工件 "
+                print(f"[MES] Cycle#{cycle_id} ch{channel_id} ended without bound workpiece "
                       f"(无扫码场景) → 仍按 cycle 实时推送 MES, 跳过 workpiece 写操作", flush=True)
                 if debug_center.is_on("backend.mes"):
                     debug_center.dbg("backend.mes", "工件绑定缺失(无码周期)", f"channel={channel_id} cycle={cycle_id} pending={self._pending_workpiece.get(channel_id) or '-'}")
@@ -1499,9 +1499,9 @@ class MESHookManager:
             self._work_order_svc.increment_completed(db, order_id, is_good)
             if self._work_order_svc.check_completion(db, order_id):
                 self._work_order_svc.change_status(db, order_id, "completed")
-                print(f"[MES] 工单#{order_id} 已自动完成", flush=True)
+                print(f"[MES] work order#{order_id} auto-completed", flush=True)
 
-        print(f"[MES] Cycle#{cycle_id} 结束: {'OK' if is_good else 'NG'} "
+        print(f"[MES] Cycle#{cycle_id} ended: {'OK' if is_good else 'NG'} "
               f"(工件#{wp_id if wp_id else '无绑定'})",
               flush=True)
 
@@ -1547,7 +1547,7 @@ class MESHookManager:
         except Exception as e:
             import traceback
             debug_center.dbg("backend.mes", "cycle_end 外部推送异常", f"channel={channel_id} cycle={cycle_id} err={e}")
-            print(f"[MES] 外部推送(cycle_end)失败: {e}\n{traceback.format_exc()}",
+            print(f"[MES] external push (cycle_end) failed: {e}\n{traceback.format_exc()}",
                   flush=True)
 
         # v3.5.0: 自定义导出实时规则触发（独立 try/except，不影响 MES 推送）
@@ -1560,7 +1560,7 @@ class MESHookManager:
             )
         except Exception as e:
             import traceback
-            print(f"[ExportRealtime] cycle_end 触发失败: {e}\n{traceback.format_exc()}",
+            print(f"[ExportRealtime] cycle_end trigger failed: {e}\n{traceback.format_exc()}",
                   flush=True)
 
         # rebind 操作仅在有 wp_id 时才有意义 (没工件无从重绑)
@@ -1573,14 +1573,14 @@ class MESHookManager:
                     wp_obj.status = "queued"
                     db.commit()
                 self._pending_workpiece[channel_id] = wp_id
-                print(f"[MES] 自动重绑: 工件#{wp_id} 放回待检 (auto_rebind)", flush=True)
+                print(f"[MES] auto rebind: workpiece#{wp_id} back to pending (auto_rebind)", flush=True)
             elif rebind == "manual" and not is_good:
                 self._rebind_prompt[channel_id] = {
                     "workpiece_id": wp_id,
                     "cycle_id": cycle_id,
                     "timestamp": time.time(),
                 }
-                print(f"[MES] 等待手动选择: 工件#{wp_id} (manual)", flush=True)
+                print(f"[MES] waiting manual selection: workpiece#{wp_id} (manual)", flush=True)
 
     def _cluster_dispatch(self, db, cycle_context: dict, channel_id: int,
                           is_good: bool, event_name: str) -> bool:
@@ -1593,13 +1593,13 @@ class MESHookManager:
             config = collector.get_config(db)
 
             if not config.get("enabled"):
-                print(f"[Cluster/Dispatch] ch{channel_id} 跳过: 集群未启用", flush=True)
+                print(f"[Cluster/Dispatch] ch{channel_id} skip: cluster disabled", flush=True)
                 return False
 
             box_serial = cycle_context.get("workpiece", {}).get("serial_no")
             if not box_serial:
                 wp_preview = cycle_context.get("workpiece", {})
-                print(f"[Cluster/Dispatch] ch{channel_id} 跳过: cycle_context 里没有 workpiece.serial_no "
+                print(f"[Cluster/Dispatch] ch{channel_id} skip: no workpiece.serial_no in cycle_context "
                       f"(workpiece={wp_preview})", flush=True)
                 return False
 
@@ -1631,12 +1631,12 @@ class MESHookManager:
                     is_good=is_good,
                     event_name=event_name,
                 )
-                print(f"[Cluster/Dispatch] master 本地入库结果: {result}", flush=True)
+                print(f"[Cluster/Dispatch] master local store result: {result}", flush=True)
                 return sync_mode == "wait_all"
             elif role == "slave":
                 master_url = config.get("master_url")
                 if not master_url:
-                    print("[Cluster/Dispatch] slave 跳过上报: master_url 为空", flush=True)
+                    print("[Cluster/Dispatch] slave skip report: master_url empty", flush=True)
                     return False
                 result = collector.report_to_master(
                     cycle_context=cycle_context,
@@ -1646,13 +1646,13 @@ class MESHookManager:
                     is_good=is_good,
                     event_name=event_name,
                 )
-                print(f"[Cluster/Dispatch] slave 上报 {master_url} 结果: {result}", flush=True)
+                print(f"[Cluster/Dispatch] slave report to {master_url} result: {result}", flush=True)
                 return sync_mode == "wait_all"
             else:
-                print(f"[Cluster/Dispatch] ch{channel_id} 未识别 role={role}，跳过", flush=True)
+                print(f"[Cluster/Dispatch] ch{channel_id} unknown role={role}, skip", flush=True)
         except Exception as e:
             import traceback
-            print(f"[Cluster/Dispatch] ch{channel_id} 集群分发异常: {e}\n{traceback.format_exc()}",
+            print(f"[Cluster/Dispatch] ch{channel_id} cluster dispatch error: {e}\n{traceback.format_exc()}",
                   flush=True)
         return False
 
@@ -1676,7 +1676,7 @@ class MESHookManager:
             if session and hasattr(session, 'order_id'):
                 session.order_id = order.id
                 db.flush()
-            print(f"[MES] Session#{session_id} 关联工单 {order.order_no} "
+            print(f"[MES] Session#{session_id} linked work order {order.order_no} "
                   f"(scope={order.binding_scope}, ch={channel_id})", flush=True)
         else:
             # v3.1.0: 静默处理 — cluster-only 部署下这条日志会一直刷, 没有诊断价值.
@@ -1690,7 +1690,7 @@ class MESHookManager:
         self._pending_workpiece.pop(channel_id, None)
         self._pending_queue.pop(channel_id, None)
         self._inspecting_workpiece.pop(channel_id, None)
-        print(f"[MES] Session#{session_id} 结束, 清理工位{channel_id}状态 "
+        print(f"[MES] Session#{session_id} ended, cleaning ch{channel_id} state "
               f"(order={cleared_order_id})", flush=True)
 
         # 外部 MES 推送
@@ -1701,7 +1701,7 @@ class MESHookManager:
             gw.dispatch("session_end", ctx, channel_id)
         except Exception as e:
             import traceback
-            print(f"[MES] 外部推送(session_end)失败: {e}\n{traceback.format_exc()}",
+            print(f"[MES] external push (session_end) failed: {e}\n{traceback.format_exc()}",
                   flush=True)
 
         # v3.6.2: 自定义导出实时规则 — session_end 触发器接通
@@ -1724,7 +1724,7 @@ class MESHookManager:
             )
         except Exception as e:
             import traceback
-            print(f"[ExportRealtime] session_end 触发失败: {e}\n{traceback.format_exc()}",
+            print(f"[ExportRealtime] session_end trigger failed: {e}\n{traceback.format_exc()}",
                   flush=True)
 
 

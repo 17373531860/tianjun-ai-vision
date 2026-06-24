@@ -24,3 +24,8 @@ export const pullOrders = (id, data) => api.post(`/mes/gateway/connections/${id}
 
 // ---- 通讯日志 ----
 export const getGatewayLogs = (params) => api.get('/mes/gateway/logs', { params })
+
+// ---- 入站对接 (外部系统主动 POST 开工/完工任务过来, 我们接收) ----
+export const getInboundConfig = () => api.get('/mes/inbound/config')
+export const saveInboundConfig = (data) => api.put('/mes/inbound/config', data)
+export const getInboundLogs = (params) => api.get('/mes/inbound/logs', { params })

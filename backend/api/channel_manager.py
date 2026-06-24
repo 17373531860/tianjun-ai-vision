@@ -73,7 +73,7 @@ class ChannelManager:
                 router_obj.warmup_lock = self._global_warmup_lock
         except Exception as e:
             ch_id = getattr(mgr, 'channel_id', '?')
-            print(f"[ChannelManager] 注入全局 warmup_lock 失败 (ch{ch_id}): {e}")
+            print(f"[ChannelManager] inject global warmup_lock failed (ch{ch_id}): {e}")
 
     # ------------------------------------------------------------------
     # Channel access
@@ -190,7 +190,7 @@ class ChannelManager:
                 if not ok:
                     all_ok = False
                     label = f"slot[{name}]" if name else "main"
-                    print(f"[ChannelManager] ch{cid} 独立模型加载失败 ({label}): {model_path}")
+                    print(f"[ChannelManager] ch{cid} independent model load failed ({label}): {model_path}")
             return all_ok
 
     def load_model_for_channel(
@@ -241,7 +241,7 @@ class ChannelManager:
         if mgr is None:
             return False
         if not hasattr(mgr, 'load_model_into_slot'):
-            print(f"[ChannelManager] ch{channel_id} 不支持 load_model_into_slot, 回退到 load_model")
+            print(f"[ChannelManager] ch{channel_id} does not support load_model_into_slot, fallback to load_model")
             return self._load_model_for_channel_locked(channel_id, model_path, device)
 
         resolved_device = self._resolve_device(device)
@@ -251,7 +251,7 @@ class ChannelManager:
                 name=name, model_path=model_path, device=resolved_device, **slot_kwargs
             )
         except TypeError as e:
-            print(f"[ChannelManager] ch{channel_id} load_model_into_slot 参数错误: {e}")
+            print(f"[ChannelManager] ch{channel_id} load_model_into_slot bad args: {e}")
             return False
         if success:
             print(
@@ -277,13 +277,13 @@ class ChannelManager:
                         mgr._release_model()
                         return True
                     except Exception as e:
-                        print(f"[ChannelManager] ch{channel_id} _release_model 失败: {e}")
+                        print(f"[ChannelManager] ch{channel_id} _release_model failed: {e}")
                 return False
             try:
                 mgr.release_all_models()
                 return True
             except Exception as e:
-                print(f"[ChannelManager] ch{channel_id} release_all_models 失败: {e}")
+                print(f"[ChannelManager] ch{channel_id} release_all_models failed: {e}")
                 return False
 
     def _propagate_model(self, channel_id: int):
@@ -308,7 +308,7 @@ class ChannelManager:
             msg = (f"[显存监控] {context} 已用 {used_mb:.0f}MB / 共 {total_mb:.0f}MB, "
                    f"空闲 {free_mb:.0f}MB, 工位数 {n_ch}")
             if free_mb < 800:
-                print(f"{msg} ⚠️ 空闲显存偏低, 多工位同卡可能抢显存/OOM", flush=True)
+                print(f"{msg} WARN low free VRAM, multi-channel same GPU may contend/OOM", flush=True)
             else:
                 print(msg, flush=True)
             try:
@@ -383,7 +383,7 @@ class ChannelManager:
             with open(_CONFIG_FILE, 'w') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[ChannelManager] 保存 ch{channel_id} 源配置失败: {e}")
+            print(f"[ChannelManager] save ch{channel_id} source config failed: {e}")
 
     def persist_was_detecting(self, channel_id: int, was_detecting: bool):
         """落盘「上次退出时是否在检测」— 供下次启动 auto_restore 自动恢复检测."""
@@ -397,7 +397,7 @@ class ChannelManager:
                     data = json.load(f)
                 return data.get("channels", {})
         except Exception as e:
-            print(f"[ChannelManager] 读取源配置失败: {e}")
+            print(f"[ChannelManager] read source config failed: {e}")
         return {}
 
     # ------------------------------------------------------------------
@@ -447,7 +447,7 @@ class ChannelManager:
                     "idle_timeout_sec": timeout_int,
                 }
         except Exception as e:
-            print(f"[ChannelManager] 读取 splash 配置失败: {e}")
+            print(f"[ChannelManager] read splash config failed: {e}")
         return {
             "enabled":          False,
             "camera_mode":      "auto",
@@ -491,7 +491,7 @@ class ChannelManager:
             with open(_CONFIG_FILE, 'w') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[ChannelManager] 保存 splash 配置失败: {e}")
+            print(f"[ChannelManager] save splash config failed: {e}")
 
     # ------------------------------------------------------------------
     # v3.10.x: 窗口模式 (Electron 主窗口 fullscreen / windowed)
@@ -513,7 +513,7 @@ class ChannelManager:
                     "fullscreen": bool(window.get("fullscreen", False)),
                 }
         except Exception as e:
-            print(f"[ChannelManager] 读取 window 配置失败: {e}")
+            print(f"[ChannelManager] read window config failed: {e}")
         return {"fullscreen": False}
 
     def set_window_config(self, fullscreen: bool):
@@ -531,7 +531,7 @@ class ChannelManager:
             with open(_CONFIG_FILE, 'w') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[ChannelManager] 保存 window 配置失败: {e}")
+            print(f"[ChannelManager] save window config failed: {e}")
 
     # ------------------------------------------------------------------
     # v3.22.x: 开机自动恢复检测开关
@@ -551,7 +551,7 @@ class ChannelManager:
                 # 字段缺失 → 默认 true (保持老行为: 开机自动恢复检测)
                 return {"enabled": bool(ar.get("enabled", True))}
         except Exception as e:
-            print(f"[ChannelManager] 读取 auto_resume 配置失败: {e}")
+            print(f"[ChannelManager] read auto_resume config failed: {e}")
         return {"enabled": True}
 
     def set_auto_resume_config(self, enabled: bool):
@@ -569,7 +569,7 @@ class ChannelManager:
             with open(_CONFIG_FILE, 'w') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[ChannelManager] 保存 auto_resume 配置失败: {e}")
+            print(f"[ChannelManager] save auto_resume config failed: {e}")
 
     # ------------------------------------------------------------------
     # v3.23.x: 加深启动就绪门槛开关 (默认关)
@@ -591,7 +591,7 @@ class ChannelManager:
                 g = data.get("startup_ready_gate") or {}
                 return {"enabled": bool(g.get("enabled", False))}
         except Exception as e:
-            print(f"[ChannelManager] 读取 startup_ready_gate 配置失败: {e}")
+            print(f"[ChannelManager] read startup_ready_gate config failed: {e}")
         return {"enabled": False}
 
     def set_startup_ready_gate_config(self, enabled: bool):
@@ -609,20 +609,20 @@ class ChannelManager:
             with open(_CONFIG_FILE, 'w') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[ChannelManager] 保存 startup_ready_gate 配置失败: {e}")
+            print(f"[ChannelManager] save startup_ready_gate config failed: {e}")
 
     def _load_config(self):
         try:
-            print(f"[ChannelManager] 配置文件路径: {_CONFIG_FILE}, 存在: {os.path.exists(_CONFIG_FILE)}")
+            print(f"[ChannelManager] config file path: {_CONFIG_FILE}, exists: {os.path.exists(_CONFIG_FILE)}")
             if os.path.exists(_CONFIG_FILE):
                 with open(_CONFIG_FILE, 'r') as f:
                     data = json.load(f)
                 count = data.get("channel_count", 1)
-                print(f"[ChannelManager] 加载配置: channel_count={count}")
+                print(f"[ChannelManager] loaded config: channel_count={count}")
                 if 1 <= count <= MAX_CHANNELS and count != self.channel_count:
                     self.set_channel_count(count)
             else:
-                print("[ChannelManager] 配置文件不存在，使用默认 channel_count=1")
+                print("[ChannelManager] config file not found, using default channel_count=1")
         except Exception as e:
             print(f"[ChannelManager] Failed to load config: {e}")
 

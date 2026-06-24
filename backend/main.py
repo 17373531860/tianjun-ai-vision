@@ -3,6 +3,22 @@ import os as _bootstrap_os
 # 防止视频文件回放偶发的 libavcodec pthread_frame.c:175 断言把 worker 整个 abort 掉
 _bootstrap_os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "threads;1")
 
+# Force UTF-8 terminal output so any launch path (Electron / manual cmd / redirect)
+# stays consistent and avoids Windows GBK-console garbling UTF-8 bytes.
+# Electron already sets chcp 65001 + PYTHONIOENCODING; this is the bottom-line guard
+# for the manual-cmd / log-redirect case the field hit (logs showed mojibake).
+import sys as _bootstrap_sys
+if _bootstrap_os.name == "nt":
+    try:
+        _bootstrap_os.system("chcp 65001 >nul 2>&1")
+    except Exception:
+        pass
+for _bootstrap_stream in (_bootstrap_sys.stdout, _bootstrap_sys.stderr):
+    try:
+        _bootstrap_stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +44,7 @@ from backend.api.mes import router as mes_router
 from backend.api.scanner import router as scanner_router
 from backend.api.wmax import router as wmax_router
 from backend.api.mes_gateway import router as mes_gateway_router
+from backend.api.mes_inbound import router as mes_inbound_router
 from backend.api.operators import router as operators_router
 from backend.api.cluster import router as cluster_router
 from backend.api.external_device import router as extdev_router
@@ -1202,6 +1219,7 @@ app.include_router(mes_router, prefix=f"{settings.API_V1_STR}", tags=["MES"])
 app.include_router(scanner_router, prefix=f"{settings.API_V1_STR}", tags=["Scanner"])
 app.include_router(wmax_router, prefix=f"{settings.API_V1_STR}", tags=["WMax Scanner"])
 app.include_router(mes_gateway_router, prefix=f"{settings.API_V1_STR}", tags=["MES-Gateway"])
+app.include_router(mes_inbound_router, prefix=f"{settings.API_V1_STR}", tags=["MES-Inbound"])
 app.include_router(operators_router, prefix=f"{settings.API_V1_STR}", tags=["Operators"])
 app.include_router(cluster_router, prefix=f"{settings.API_V1_STR}", tags=["Cluster"])
 app.include_router(extdev_router, prefix=f"{settings.API_V1_STR}", tags=["External Devices"])

@@ -71,7 +71,7 @@ class EventTriggerMixin:
         # 主循环守门拦下, 不应该再触发新事件 (即使被某条边路触发到, 计数 / MES Hook /
         # 报警的二次叠加都没意义, 反而会引起重复推送).
         if getattr(self, '_pending_ack', False):
-            print(f"[_trigger_event] 阻塞中 (等待人工确认), 丢弃事件 event={event_id}, reason={reason}")
+            print(f"[_trigger_event] blocked (waiting manual ack), dropping event event={event_id}, reason={reason}")
             return False
 
         # v3.10.x: 防重复结算 - 时间窗口冷却
@@ -87,7 +87,7 @@ class EventTriggerMixin:
             if dedup_window > 0:
                 last_event = float(getattr(self, '_last_event_time', 0.0) or 0.0)
                 if last_event and (current_time - last_event) < dedup_window:
-                    print(f"[_trigger_event] 防重复结算: 距上次事件 {current_time - last_event:.2f}s < {dedup_window:.2f}s, 抑制 (event={event_id}, reason={reason})")
+                    print(f"[_trigger_event] dedup settle: {current_time - last_event:.2f}s since last event < {dedup_window:.2f}s, suppressed (event={event_id}, reason={reason})")
                     self._discard_empty_cycle()
                     return False
 
@@ -99,7 +99,7 @@ class EventTriggerMixin:
             if ng_protect_sec > 0:
                 last_ng = getattr(self, '_last_ng_time', 0)
                 if last_ng and (current_time - last_ng) < ng_protect_sec:
-                    print(f"NG保护: 距上次NG仅{current_time - last_ng:.1f}s < {ng_protect_sec}s，抑制本次NG ({reason})")
+                    print(f"NG protect: only {current_time - last_ng:.1f}s since last NG < {ng_protect_sec}s, suppress this NG ({reason})")
                     self._discard_empty_cycle()
                     return False
             self._last_ng_time = current_time
@@ -125,7 +125,7 @@ class EventTriggerMixin:
                     pass
         
         if not event:
-            print(f"事件未找到: {event_id}")
+            print(f"event not found: {event_id}")
             return False
         
         if settle_dedup:
@@ -135,7 +135,7 @@ class EventTriggerMixin:
             print(f"触发事件: {event.get('name', event_id)} - {reason} "
                   f"[cycle_id={self.current_cycle_id}, caller={caller_info}]")
         else:
-            print(f"触发事件: {event.get('name', event_id)} - {reason}")
+            print(f"[Event] trigger: {event.get('name', event_id)} - {reason}")
         
         # 判断是否为合格事件（事件ID为1或者名称包含"合格"）
         current_event_id = event.get('id')
@@ -166,12 +166,12 @@ class EventTriggerMixin:
                 self.cycle_times.append(cycle_time)
                 if len(self.cycle_times) > 100:
                     self.cycle_times = self.cycle_times[-100:]
-                print(f"  周期时间(OK): {cycle_time:.2f}s, 平均: {sum(self.cycle_times)/len(self.cycle_times):.2f}s")
+                print(f"  cycle time(OK): {cycle_time:.2f}s, avg: {sum(self.cycle_times)/len(self.cycle_times):.2f}s")
             else:
                 self.ng_cycle_times.append(cycle_time)
                 if len(self.ng_cycle_times) > 100:
                     self.ng_cycle_times = self.ng_cycle_times[-100:]
-                print(f"  周期时间(NG): {cycle_time:.2f}s")
+                print(f"  cycle time(NG): {cycle_time:.2f}s")
         
         had_workpiece = False
         if self._mes_hook:
@@ -230,7 +230,7 @@ class EventTriggerMixin:
                         ng_step_count = 1  # 默认 +1
                     
                     self.counters['NG步骤'] += ng_step_count
-                    print(f"  NG步骤计数 += {ng_step_count} => {self.counters['NG步骤']} (原因: {reason})")
+                    print(f"  NG step count += {ng_step_count} => {self.counters['NG步骤']} (reason: {reason})")
                     self._persist_counters()
         
         # NG TOP3: count unique cycles per step (each step counted at most once per NG cycle)
@@ -285,7 +285,7 @@ class EventTriggerMixin:
             if counter_name in self.counters:
                 self.counters[counter_name] += value
                 counters_changed = True
-                print(f"  计数器 {counter_name} += {value} => {self.counters[counter_name]}")
+                print(f"  counter {counter_name} += {value} => {self.counters[counter_name]}")
         if counters_changed:
             self._persist_counters()
         
@@ -323,7 +323,7 @@ class EventTriggerMixin:
             self._pending_ack_event_id = str(event.get('id', event_id))
             self._pending_ack_event_name = event.get('name', '')
             self._pending_ack_timeout_sec = ack_timeout_sec
-            print(f"[ack] 进入人工确认阻塞态: event={self._pending_ack_event_name} "
+            print(f"[ack] entering manual-ack blocked state: event={self._pending_ack_event_name} "
                   f"(id={self._pending_ack_event_id}, timeout={ack_timeout_sec}s, "
                   f"channel_id={self.channel_id})")
         
@@ -365,7 +365,7 @@ class EventTriggerMixin:
         except Exception as e:
             # fire_plugin_hook 自身已 swallow, 这里兜一层 import 层异常.
             # 异常路径下 suppress_alarm 维持初值 False — alarm 照常触发 (安全侧默认).
-            print(f"[Plugin] event_fire hook 触发异常 (已隔离, 主流程继续): {e}")
+            print(f"[Plugin] event_fire hook error (isolated, main flow continues): {e}")
 
         # M1.2c: 触发报警器 (按 suppress_alarm 决定). 抽到 _dispatch_event_alarm 让
         # 测试可静态扫描 + 单独覆盖 alarm 触发逻辑.
@@ -387,7 +387,7 @@ class EventTriggerMixin:
                 if event_name:
                     router.trigger_event(str(event_name))
         except Exception as e:
-            print(f"router.trigger_event 失败: {e}")
+            print(f"router.trigger_event failed: {e}")
 
         # v3.10.x: 防重复结算时间窗口锚 - 仅在事件实际触发成功后记录,
         # 抑制路径 (settle_dedup / ng_protect / _pending_ack / event 未找到) 不更新,
@@ -423,7 +423,7 @@ class EventTriggerMixin:
                 event = e
                 break
         if not event:
-            print(f"[fire_external_event] 事件未找到: {event_id} (source={source}, reason={reason})")
+            print(f"[fire_external_event] event not found: {event_id} (source={source}, reason={reason})")
             return False
 
         current_event_id = event.get('id')
@@ -472,7 +472,7 @@ class EventTriggerMixin:
             self._pending_ack_event_id = str(current_event_id)
             self._pending_ack_event_name = event.get('name', '')
             self._pending_ack_timeout_sec = ack_timeout_sec
-            print(f"[ack] (外部/{source}) 进入人工确认阻塞态: "
+            print(f"[ack] (external/{source}) entering manual-ack blocked state: "
                   f"event={event.get('name', '')} (id={current_event_id}, "
                   f"timeout={ack_timeout_sec}s, channel_id={self.channel_id})")
         return True
@@ -494,7 +494,7 @@ class EventTriggerMixin:
             event_type = f'event{current_event_id}'
             alarm_router.trigger_alarm(event_type, channel_id=self.channel_id)
         except Exception as e:
-            print(f"触发报警失败: {e}")
+            print(f"trigger alarm failed: {e}")
 
     # ============================================================
     # v3.23 NG 补做 (缺步骤延迟落账) — 守门 / 解析 / 挂起 / 解析
@@ -586,7 +586,7 @@ class EventTriggerMixin:
         _rem_dbg("缺步骤NG延迟落账挂起",
                  f"ch={getattr(self, 'channel_id', '?')} cycle={self.current_cycle_id} "
                  f"missing={missing} reason={reason!r} 等待:补步骤/认NG/重做")
-        print(f"[补做] 缺步骤 NG 延迟落账挂起: missing={missing} reason={reason!r} "
+        print(f"[Rework] missing-step NG deferred pending: missing={missing} reason={reason!r} "
               f"(channel_id={self.channel_id}) 等待 补步骤/认NG/重做")
 
     def resolve_step_remediation(self, action: str, operator: str = None) -> dict:
@@ -620,7 +620,7 @@ class EventTriggerMixin:
             _rem_dbg("补步骤判OK落账",
                      f"ch={getattr(self, 'channel_id', '?')} missing={missing} operator={operator}")
             self._trigger_event(1, f"补步骤{missing}后合格{op}")
-            print(f"[补做] 补步骤完成判 OK: missing={missing} operator={operator}")
+            print(f"[Rework] missing step completed -> OK: missing={missing} operator={operator}")
             return {"resolved": True, "action": "supplement_step", "missing": missing}
 
         if action == 'confirm_ng':
@@ -631,7 +631,7 @@ class EventTriggerMixin:
                 self._trigger_event(2, reason)
             finally:
                 self._remediation_bypass = False
-            print(f"[补做] 认 NG 落账: reason={reason!r} operator={operator}")
+            print(f"[Rework] accept NG recorded: reason={reason!r} operator={operator}")
             return {"resolved": True, "action": "confirm_ng"}
 
         # redo: 丢弃在制周期 (删行 + 清运行时), 等下一周期重检
@@ -639,5 +639,5 @@ class EventTriggerMixin:
                  f"ch={getattr(self, 'channel_id', '?')} missing={missing} operator={operator}")
         self._discard_empty_cycle()
         self._clear_step_runtime_state()
-        print(f"[补做] 重做丢弃在制周期 operator={operator}")
+        print(f"[Rework] redo discards in-progress cycle operator={operator}")
         return {"resolved": True, "action": "redo"}

@@ -336,18 +336,22 @@ def _reload_model_for_active_project(db: Session, project: Project) -> None:
         print(f"[激活项目] 多通道独立实例加载结果: channels={remaining}, all_ok={all_ok}")
 
 
-@router.post("/{project_id}/activate", response_model=ProjectResponse,
-              dependencies=[Depends(require_perm("project.activate"))])
-def activate_project(project_id: int, db: Session = Depends(get_db)):
-    """激活项目（设为当前运行项目）"""
+def activate_project_core(db: Session, project_id: int):
+    """激活项目的可复用核心: 设激活态 → 重载模型 → 同步配置 → 清 MES pending → 触发插件 hook。
+
+    供 HTTP 端点 (activate_project) 与外部入站对接 (mes_inbound 按产品码切项目) 共用,
+    保证两条路径行为完全一致, 避免逻辑漂移。
+
+    返回 (db_project, model_name, model_version, model_labels)。项目不存在抛 HTTPException 404。
+    """
     # 先取消所有项目的激活状态
     db.query(Project).update({Project.is_active: False})
-    
+
     # 激活指定项目
     db_project = db.query(Project).filter(Project.id == project_id).first()
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     db_project.is_active = True
     db.commit()
     db.refresh(db_project)
@@ -414,6 +418,15 @@ def activate_project(project_id: int, db: Session = Depends(get_db)):
         })
     except Exception as e:
         print(f"[Plugin] project_activated hook 触发异常 (已隔离, 主流程继续): {e}")
+
+    return db_project, model_name, model_version, model_labels
+
+
+@router.post("/{project_id}/activate", response_model=ProjectResponse,
+              dependencies=[Depends(require_perm("project.activate"))])
+def activate_project(project_id: int, db: Session = Depends(get_db)):
+    """激活项目（设为当前运行项目）"""
+    db_project, model_name, model_version, model_labels = activate_project_core(db, project_id)
 
     return ProjectResponse(
         id=db_project.id,

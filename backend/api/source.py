@@ -136,11 +136,11 @@ def get_ffmpeg_path():
     # 检查打包路径
     for path in possible_paths:
         if os.path.isfile(path):
-            print(f"[FFmpeg] 使用打包的 FFmpeg: {path}")
+            print(f"[FFmpeg] using bundled FFmpeg: {path}")
             return path
     
     # 回退到系统 PATH
-    print("[FFmpeg] 使用系统 FFmpeg")
+    print("[FFmpeg] using system FFmpeg")
     return 'ffmpeg'
 
 # 缓存 FFmpeg 路径
@@ -442,12 +442,12 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                     self.video_flip_h = bool(per_ch.get('flip_h', False))
                     self.video_flip_v = bool(per_ch.get('flip_v', False))
 
-                    print(f"已加载设备配置: 设备={self.device}, 帧率限制={self.frame_limit_enabled}, "
+                    print(f"[DeviceConfig] loaded: device={self.device}, frame_limit={self.frame_limit_enabled}, "
                           f"FP16={self.use_half}, MediaPipe={self.mediapipe_enabled}, "
                           f"ch{self.channel_id} rot={self.video_rotation} "
                           f"flip_h={self.video_flip_h} flip_v={self.video_flip_v}")
         except Exception as e:
-            print(f"加载设备配置失败: {e}")
+            print(f"[DeviceConfig] load failed: {e}")
 
     def _save_device_config(self):
         """保存设备配置到文件（保留其它通道的 per_channel 设置不被覆盖）"""
@@ -496,9 +496,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             }
             with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
-            print(f"设备配置已保存: {config}")
+            print(f"[DeviceConfig] saved: {config}")
         except Exception as e:
-            print(f"保存设备配置失败: {e}")
+            print(f"[DeviceConfig] save failed: {e}")
 
     # _apply_frame_transform / _has_display_transform / _map_bbox_original_to_display /
     # _map_detections_original_to_display 已迁至 source_video_transform.py (P7 第四刀)
@@ -775,7 +775,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                     step_order=next_order)
                 next_order += 1
         except Exception as e:
-            print(f"补写步骤记录失败: {e}")
+            print(f"backfill step record failed: {e}")
             import traceback
             traceback.print_exc()
     
@@ -1027,7 +1027,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             import torch
             import gc
             
-            print("[GPU重置] 开始紧急 GPU 重置...")
+            print("[GPUReset] starting emergency GPU reset...")
             
             # 1. 同步 CUDA
             if torch.cuda.is_available():
@@ -1046,7 +1046,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 # 重置设备
                 torch.cuda.reset_peak_memory_stats(current_device)
                 
-            print("[GPU重置] 紧急 GPU 重置完成")
+            print("[GPUReset] emergency GPU reset done")
 
             # C2: 重置后重载主模型。GPU 卡死后旧模型对象可能已不可恢复,
             #     只清缓存不重载会陷入"重置→还是卡→再重置"的周期性抖动。
@@ -1055,14 +1055,14 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             mp = getattr(self, 'model_path', None)
             if mp:
                 try:
-                    print(f"[GPU重置] 重载主模型: {mp}")
+                    print(f"[GPUReset] reloading main model: {mp}")
                     self.load_model(mp, getattr(self, '_original_pt_path', None))
-                    print("[GPU重置] 主模型重载完成")
+                    print("[GPUReset] main model reloaded")
                 except Exception as re:
-                    print(f"[GPU重置] 主模型重载失败: {re}")
+                    print(f"[GPUReset] main model reload failed: {re}")
 
         except Exception as e:
-            print(f"[GPU重置] 重置失败: {e}")
+            print(f"[GPUReset] reset failed: {e}")
     
     # ========== 推理线程相关方法 ==========
     
@@ -1074,7 +1074,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self._inference_running = True
         self._inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self._inference_thread.start()
-        print("[推理线程] 已启动")
+        print("[InferThread] started")
     
     def _stop_inference_thread(self):
         """停止推理线程"""
@@ -1088,7 +1088,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 # 强制重建留作带开关的第二步。计数累积可在现场判断是否反复假死。
                 self._inference_stuck_count = getattr(
                     self, '_inference_stuck_count', 0) + 1
-                print(f"[推理监控] ⚠️ 推理线程未能在 2s 内结束(疑似假死), "
+                print(f"[InferMonitor] WARN inference thread did not end within 2s (suspected hang), "
                       f"通道{getattr(self, 'channel_id', '?')}, "
                       f"累计第 {self._inference_stuck_count} 次; "
                       f"旧线程被放弃, 新线程将接管", flush=True)
@@ -1108,9 +1108,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
         except Exception as e:
-            print(f"[警告] CUDA 同步失败: {e}")
+            print(f"[WARN] CUDA sync failed: {e}")
         
-        print("[推理线程] 已停止")
+        print("[InferThread] stopped")
     
     def _get_confirmed_detections(self, detections):
         """
@@ -1163,7 +1163,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         if speed < 0.25 or speed > 16:
             raise ValueError("倍速必须在 0.25 到 16 之间")
         self.video_speed = speed
-        print(f"[Video] 倍速已设置为: {speed}x")
+        print(f"[Video] speed set to: {speed}x")
     
     def set_video_progress(self, progress: float):
         """设置视频播放进度 (0-1) - 修复版：记住最新请求"""
@@ -1242,7 +1242,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 self.is_detecting = True
                 self._start_inference_thread()
 
-        print(f"[Video] 进度: {progress*100:.1f}%, was_running={was_running}, was_detecting={was_detecting}")
+        print(f"[Video] progress: {progress*100:.1f}%, was_running={was_running}, was_detecting={was_detecting}")
     
     def get_video_info(self):
         """获取视频播放信息"""
@@ -1325,9 +1325,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             with self._confirmed_detections_lock:
                 self._confirmed_detections = confirmed
             
-            print(f"[Image] 图片推理完成, 检测到 {len(confirmed)} 个目标")
+            print(f"[Image] image inference done, detected {len(confirmed)} targets")
         except Exception as e:
-            print(f"[Image] 图片推理失败: {e}")
+            print(f"[Image] image inference failed: {e}")
             import traceback; traceback.print_exc()
 
     def _clear_step_runtime_state(self):
@@ -1424,7 +1424,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             (self.source_type == 'hikvision' and self.hik_camera is not None) or
             (self.source_type == 'hcnetsdk' and self.hcnet_session is not None)
         ):
-            print("[自动恢复] 检测到暂停的视频源，自动恢复播放")
+            print("[AutoResume] detected paused video source, auto-resuming playback")
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=1.0)
             if self.source_type == 'video':
@@ -1459,7 +1459,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             from backend.api.channel_manager import channel_manager
             channel_manager.persist_was_detecting(self.channel_id, True)
         except Exception as _e:
-            print(f"[ChannelManager] 落盘 was_detecting 失败: {_e}")
+            print(f"[ChannelManager] persist was_detecting failed: {_e}")
 
         try:
             from backend.services.scanner import get_scanner_service
@@ -1467,19 +1467,19 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             get_scanner_service().start_scanning(channel_id=self.channel_id)
         except Exception as _e:
             import traceback as _tb
-            print(f"[Scanner/Source] start_scanning 失败: {_e}\n{_tb.format_exc()}")
+            print(f"[Scanner/Source] start_scanning failed: {_e}\n{_tb.format_exc()}")
         
         try:
             from backend.api.alarm import alarm_router
             alarm_router.start_idle_light(channel_id=self.channel_id)
         except Exception as _e:
-            print(f"[Alarm/Source] start_idle_light 失败: {_e}")
+            print(f"[Alarm/Source] start_idle_light failed: {_e}")
         
         if self.source_type == 'image':
             frame = self.get_frame()
             if frame is not None and self.model is not None:
                 self._run_image_inference(frame)
-            print("图片检测已启动")
+            print("[Image] image detection started")
             return True
         
         if self.is_running and (self.model is not None or self.source_type == 'synthetic'):
@@ -1495,9 +1495,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             if hasattr(self, '_run_periodic_actions_on_start'):
                 self._run_periodic_actions_on_start()
         except Exception as _e:
-            print(f"[PeriodicActions] run_on_start 触发失败: {_e}")
+            print(f"[PeriodicActions] run_on_start trigger failed: {_e}")
 
-        print("检测已启动")
+        print("[Detection] started")
         return True
     
     def stop_detection(self, *, persist_was_detecting: bool = True):
@@ -1521,13 +1521,13 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             get_scanner_service().stop_scanning(channel_id=self.channel_id)
         except Exception as _e:
             import traceback as _tb
-            print(f"[Scanner/Source] stop_scanning 失败: {_e}\n{_tb.format_exc()}")
+            print(f"[Scanner/Source] stop_scanning failed: {_e}\n{_tb.format_exc()}")
         
         try:
             from backend.api.alarm import alarm_router
             alarm_router.stop_idle_light(channel_id=self.channel_id)
         except Exception as _e:
-            print(f"[Alarm/Source] stop_idle_light 失败: {_e}")
+            print(f"[Alarm/Source] stop_idle_light failed: {_e}")
 
         # v3.21: 包装结算 — 停止检测时按策略收尾进行中工单.
         # 无包装配置 / 通道未参与 / 无进行中工单时静默返回, 与不配置时零差异.
@@ -1540,7 +1540,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             finally:
                 _pkg_db.close()
         except Exception as _e:
-            print(f"[PackagingFlow/Source] stop 收尾失败 (隔离): {_e}")
+            print(f"[PackagingFlow/Source] stop cleanup failed (isolated): {_e}")
 
         # 停止推理线程
         self._stop_inference_thread()
@@ -1567,9 +1567,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 from backend.api.channel_manager import channel_manager
                 channel_manager.persist_was_detecting(self.channel_id, False)
             except Exception as _e:
-                print(f"[ChannelManager] 落盘 was_detecting 失败: {_e}")
+                print(f"[ChannelManager] persist was_detecting failed: {_e}")
         
-        print("检测已停止")
+        print("[Detection] stopped")
     
     def _clear_inference_caches(self):
         """清理推理相关缓存 - 停止检测时调用"""
@@ -1607,7 +1607,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         except:
             pass
         
-        print("[缓存清理] 推理缓存已清理")
+        print("[CacheClean] inference cache cleared")
     
     def reset_stats(self):
         """Full detection state reset (everything except video source, model and project config)."""
@@ -1645,7 +1645,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 if hasattr(self, '_persist_periodic_counters'):
                     self._persist_periodic_counters()
             except Exception as _e:
-                print(f"[PeriodicActions] reset_stats 持久化失败: {_e}")
+                print(f"[PeriodicActions] reset_stats persist failed: {_e}")
         # v3.5.2: 清空开机首检 pending 集合 (防止历史 pending 影响新一轮 start)
         if hasattr(self, '_run_on_start_pending') and isinstance(self._run_on_start_pending, set):
             self._run_on_start_pending.clear()
@@ -1710,11 +1710,11 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             try:
                 _mix.reset()
             except Exception as _e:
-                print(f"[CustomMix] reset_stats 复位失败: {_e}")
+                print(f"[CustomMix] reset_stats reset failed: {_e}")
 
         gc.collect()
         
-        print("统计数据已完全重置（含所有检测状态）")
+        print("[Stats] fully reset (including all detection states)")
     
     def get_frame(self):
         """获取当前帧"""
@@ -1784,7 +1784,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
 
         try:
             self._mjpeg_active_streams = getattr(self, '_mjpeg_active_streams', 0) + 1
-            print(f"[MJPEG] 新连接 #{my_conn_id} ch={ch_label}, 活跃连接={self._mjpeg_active_streams}", flush=True)
+            print(f"[MJPEG] new connection #{my_conn_id} ch={ch_label}, active={self._mjpeg_active_streams}", flush=True)
             if debug_center.is_on("backend.stream"):
                 debug_center.dbg("backend.stream", "推流新连接",
                                  f"conn#{my_conn_id} ch={ch_label} 活跃连接={self._mjpeg_active_streams}")
@@ -1795,7 +1795,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             while True:
                 # 旧连接让位: 同 channel 有更新的 id 进来 -> 主动退出
                 if getattr(self, '_mjpeg_active_conn_id', my_conn_id) != my_conn_id:
-                    print(f"[MJPEG] 连接 #{my_conn_id} ch={ch_label} 让位给 #{self._mjpeg_active_conn_id}, 主动退出", flush=True)
+                    print(f"[MJPEG] connection #{my_conn_id} ch={ch_label} yielding to #{self._mjpeg_active_conn_id}, exiting", flush=True)
                     if debug_center.is_on("backend.stream"):
                         debug_center.dbg("backend.stream", "推流连接让位退出",
                                          f"conn#{my_conn_id} ch={ch_label} 让位给 #{self._mjpeg_active_conn_id} "
@@ -1878,11 +1878,11 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             # 客户端断开, 正常退出
             pass
         except Exception as e:
-            print(f"[MJPEG] generator #{my_conn_id} 异常退出 ch={ch_label}: {e}", flush=True)
+            print(f"[MJPEG] generator #{my_conn_id} abnormal exit ch={ch_label}: {e}", flush=True)
         finally:
             try:
                 self._mjpeg_active_streams = max(0, getattr(self, '_mjpeg_active_streams', 1) - 1)
-                print(f"[MJPEG] 连接 #{my_conn_id} 关闭 ch={ch_label}, 活跃连接={self._mjpeg_active_streams}", flush=True)
+                print(f"[MJPEG] connection #{my_conn_id} closed ch={ch_label}, active={self._mjpeg_active_streams}", flush=True)
                 if debug_center.is_on("backend.stream"):
                     debug_center.dbg("backend.stream", "推流连接关闭",
                                      f"conn#{my_conn_id} ch={ch_label} 剩余活跃连接={self._mjpeg_active_streams}")

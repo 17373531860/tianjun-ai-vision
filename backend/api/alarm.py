@@ -167,7 +167,7 @@ class AlarmManager:
             if event_priority_map:
                 self._event_priority_map = dict(event_priority_map)
             if not os.environ.get("BACKEND_SKIP_INIT"):
-                print(f"[报警] 共享模式启用: 服务工位 {sorted(self._shared_channels)}, "
+                print(f"[Alarm] shared mode enabled: serving channels {sorted(self._shared_channels)}, "
                       f"优先级={self._priority_order}", flush=True)
 
     def is_shared(self) -> bool:
@@ -197,13 +197,13 @@ class AlarmManager:
             self.port_name = port
             self.config['port'] = port
             self.config['baudrate'] = baudrate
-            print(f"报警器已连接: {port} @ {baudrate}")
+            print(f"[Alarm] alarm device connected: {port} @ {baudrate}")
             debug_center.dbg("backend.alarm", "串口连接成功", f"port={port} baudrate={baudrate}")
             return {"ok": True, "msg": f"已连接 {port}"}
         except PermissionError:
             hint = self._try_fix_permission(port)
             msg = f"串口权限不足: {port}。{hint}"
-            print(f"连接报警器失败(权限): {msg}")
+            print(f"[Alarm] connect alarm device failed (permission): {msg}")
             debug_center.dbg("backend.alarm", "串口连接失败", msg)
             return {"ok": False, "msg": msg}
         except serial.SerialException as e:
@@ -215,12 +215,12 @@ class AlarmManager:
                 msg = f"串口权限不足: {port}。{hint}"
             else:
                 msg = f"串口打开失败: {err}"
-            print(f"连接报警器失败: {msg}")
+            print(f"[Alarm] connect alarm device failed: {msg}")
             debug_center.dbg("backend.alarm", "串口连接失败", msg)
             return {"ok": False, "msg": msg}
         except Exception as e:
             msg = f"连接异常: {e}"
-            print(f"连接报警器失败: {msg}")
+            print(f"[Alarm] connect alarm device failed: {msg}")
             debug_center.dbg("backend.alarm", "串口连接失败", msg)
             return {"ok": False, "msg": msg}
 
@@ -258,7 +258,7 @@ class AlarmManager:
                                  f"len={len(command) if command else 0}B")
             return True
         except Exception as e:
-            print(f"发送命令失败: {e}")
+            print(f"[Alarm] send command failed: {e}")
             debug_center.dbg("backend.alarm", "串口写指令异常", f"port={self.port_name} cmd={command.hex() if command else ''} err={e}")
             return False
 
@@ -275,7 +275,7 @@ class AlarmManager:
                     else:
                         return cmd_str.encode()
                 except Exception as _e:
-                    print(f"[Alarm] 命令编码失败，按原文回退: {_e}", flush=True)
+                    print(f"[Alarm] command encode failed, fallback to raw: {_e}", flush=True)
                     return cmd_str.encode()
             return b''
         else:
@@ -375,7 +375,7 @@ class AlarmManager:
             t.start()
 
         except Exception as e:
-            print(f"报警执行失败: {e}")
+            print(f"[Alarm] execution failed: {e}")
 
     def _trigger_alarm_shared(self, event_type: str, trigger_config: dict, channel_id: int):
         """共享模式：写入通道事件，按优先级合成。"""
@@ -388,7 +388,7 @@ class AlarmManager:
             state['event'] = event_type
             state['category'] = category
             state['expire_at'] = time.time() + duration
-            print(f"[报警·共享] ch{channel_id} 触发 {event_type}({category}), "
+            print(f"[Alarm/Shared] ch{channel_id} trigger {event_type}({category}), "
                   f"持续 {duration}s", flush=True)
             self._recompose_and_apply()
 
@@ -452,21 +452,21 @@ class AlarmManager:
         # v2.7.3: 静默 return 都改为打印原因，方便现场排查为什么"开始检测但灯不亮"
         idle_cfg = self.config.get('idle_light', {})
         if not idle_cfg.get('enabled'):
-            print("[报警] 工作指示灯未启用（idle_light.enabled=False）→ 不亮。"
+            print("[Alarm] work indicator light disabled (idle_light.enabled=False) -> off. "
                   "请到「报警配置」页底部勾选「启用空闲常亮」并保存。")
             return
         if not self.config.get('enabled'):
-            print("[报警] 报警器未启用（enabled=False）→ 工作指示灯不亮。"
+            print("[Alarm] alarm device disabled (enabled=False) -> work light off. "
                   "请到「报警配置」页勾选「启用报警」并连接串口。")
             return
         if not self.is_connected():
-            print(f"[报警] 串口未连接（port={self.config.get('port', '')}）→ 工作指示灯不亮。"
+            print(f"[Alarm] serial not connected (port={self.config.get('port', '')}) -> work light off. "
                   f"请到「报警配置」页点击「连接」按钮。")
             return
         color = idle_cfg.get('color', 'blue')
         cmd = self._get_command(f'{color}_on')
         if not cmd:
-            print(f"[报警] 当前协议 {self.config.get('protocol')} 不支持颜色 '{color}' → "
+            print(f"[Alarm] current protocol {self.config.get('protocol')} does not support color '{color}' -> "
                   f"灯不亮。请在「报警配置」改成支持该颜色的协议（如 modbus_4color），"
                   f"或换一个颜色。")
             return
@@ -478,20 +478,20 @@ class AlarmManager:
                 })
                 state['is_idle'] = True
                 self._idle_light_active = True
-                print(f"[报警·共享] ch{channel_id} idle=True; 重算合成", flush=True)
+                print(f"[Alarm/Shared] ch{channel_id} idle=True; recompose", flush=True)
                 self._recompose_and_apply()
             return
 
         # 非共享模式：原行为
         if not self._send_command(self._get_command('all_off')):
-            print("[报警] 发送 all_off 失败（串口写入异常）→ 工作指示灯不亮")
+            print("[Alarm] send all_off failed (serial write error) -> work light off")
             return
         time.sleep(0.05)
         if self._send_command(cmd):
             self._idle_light_active = True
-            print(f"[报警] 工作指示灯已亮: {color}")
+            print(f"[Alarm] work light on: {color}")
         else:
-            print(f"[报警] 发送 {color}_on 失败（串口写入异常）→ 工作指示灯不亮")
+            print(f"[Alarm] send {color}_on failed (serial write error) -> work light off")
 
     def stop_idle_light(self, channel_id: int = 0):
         if self.is_shared():
@@ -503,13 +503,13 @@ class AlarmManager:
                 any_idle = any(s.get('is_idle') for s in self._channel_states.values())
                 if not any_idle:
                     self._idle_light_active = False
-                print(f"[报警·共享] ch{channel_id} idle=False; "
+                print(f"[Alarm/Shared] ch{channel_id} idle=False; "
                       f"还有 idle? {any_idle}; 重算合成", flush=True)
                 self._recompose_and_apply()
             return
         self._idle_light_active = False
         self.all_off()
-        print("[报警] 工作指示灯已关")
+        print("[Alarm] work light off")
 
     def restore_idle_light(self):
         if not self._idle_light_active:
@@ -562,13 +562,13 @@ class AlarmManager:
         if target_key[0] == 'event':
             _tag, ch, event_type = target_key
             self._apply_event_visual(event_type)
-            print(f"[报警·共享] 显示 ch{ch} 的 {event_type}", flush=True)
+            print(f"[Alarm/Shared] showing ch{ch} {event_type}", flush=True)
         elif target_key[0] == 'idle':
             self._apply_idle_visual()
-            print("[报警·共享] 回退到 idle 灯", flush=True)
+            print("[Alarm/Shared] fallback to idle light", flush=True)
         else:
             self._send_command(self._get_command('all_off'))
-            print("[报警·共享] 全灯熄灭", flush=True)
+            print("[Alarm/Shared] all lights off", flush=True)
 
     def _apply_event_visual(self, event_type: str):
         """从 trigger_solo 抽出的"发命令"部分，用于共享模式立即应用。"""
@@ -601,7 +601,7 @@ class AlarmManager:
                 if use_buzzer:
                     self.buzzer_on()
         except Exception as e:
-            print(f"[报警·共享] 应用事件视觉失败: {e}")
+            print(f"[Alarm/Shared] apply event visual failed: {e}")
 
     def _apply_idle_visual(self):
         idle_cfg = self.config.get('idle_light', {})
@@ -614,7 +614,7 @@ class AlarmManager:
             time.sleep(0.05)
             self._send_command(cmd)
         except Exception as e:
-            print(f"[报警·共享] 应用 idle 视觉失败: {e}")
+            print(f"[Alarm/Shared] apply idle visual failed: {e}")
 
 
 class AlarmRouter:
@@ -670,7 +670,7 @@ class AlarmRouter:
                 self.managers[ch] = owner_mgr
                 self._owner_for[ch] = owner_ch
             if not os.environ.get("BACKEND_SKIP_INIT"):
-                print(f"[报警] 共享组: owner=ch{owner_ch}, 服务={all_chs}", flush=True)
+                print(f"[Alarm] shared group: owner=ch{owner_ch}, serving={all_chs}", flush=True)
 
         # 自动连接（每个物理 manager 只连一次）
         # 测试环境（BACKEND_SKIP_INIT=1）跳过串口连接，避免日志刷屏 + 串口被占
@@ -685,11 +685,11 @@ class AlarmRouter:
                 try:
                     result = mgr.connect(mgr.config['port'], mgr.config.get('baudrate', 9600))
                     if result["ok"]:
-                        print(f"[报警] ch{ch_id} 自动连接成功: {mgr.config['port']}")
+                        print(f"[Alarm] ch{ch_id} auto-connect success: {mgr.config['port']}")
                     else:
-                        print(f"[报警] ch{ch_id} 自动连接失败: {result['msg']}")
+                        print(f"[Alarm] ch{ch_id} auto-connect failed: {result['msg']}")
                 except Exception as e:
-                    print(f"[报警] ch{ch_id} 自动连接异常: {e}")
+                    print(f"[Alarm] ch{ch_id} auto-connect error: {e}")
 
     def _read_file(self) -> dict:
         try:
@@ -698,7 +698,7 @@ class AlarmRouter:
                 with open(ALARM_CONFIG_FILE, 'r', encoding='utf-8') as f:
                     return json.load(f)
         except Exception as e:
-            print(f"加载报警配置失败: {e}")
+            print(f"[Alarm] load config failed: {e}")
         return {}
 
     def _save_all(self):
@@ -717,7 +717,7 @@ class AlarmRouter:
             with open(ALARM_CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"保存报警配置失败: {e}")
+            print(f"[Alarm] save config failed: {e}")
 
     def get(self, channel_id: int = 0) -> AlarmManager:
         if channel_id not in self.managers:
@@ -771,7 +771,7 @@ class AlarmRouter:
         self.managers.clear()
         self._owner_for.clear()
         self._load_all()
-        print("[报警] 配置已重新加载", flush=True)
+        print("[Alarm] config reloaded", flush=True)
 
     def on_channel_removed(self, channel_id: int):
         """工位被移除（降工位）时调用：停止报警、熄灭灯塔、释放串口、移除 manager。
@@ -795,12 +795,12 @@ class AlarmRouter:
                 try:
                     mgr._recompose_and_apply()
                 except Exception as e:
-                    print(f"[报警] ch{channel_id} 共享摘除后合成失败: {e}")
+                    print(f"[Alarm] ch{channel_id} recompose after shared-removal failed: {e}")
                 remaining = sorted(mgr._shared_channels)
         if in_shared:
             self.managers.pop(channel_id, None)
             self._owner_for.pop(channel_id, None)
-            print(f"[报警] ch{channel_id} 从共享组摘除，物理设备保留服务剩余工位 "
+            print(f"[Alarm] ch{channel_id} removed from shared group, physical device keeps serving remaining channels "
                   f"{remaining}", flush=True)
             return
 
@@ -810,17 +810,17 @@ class AlarmRouter:
         try:
             mgr.stop_alarm()
         except Exception as e:
-            print(f"[报警] ch{channel_id} stop_alarm 失败: {e}")
+            print(f"[Alarm] ch{channel_id} stop_alarm failed: {e}")
         try:
             mgr._idle_light_active = False
             mgr.all_off()
         except Exception as e:
-            print(f"[报警] ch{channel_id} all_off 失败: {e}")
+            print(f"[Alarm] ch{channel_id} all_off failed: {e}")
         try:
             mgr.disconnect()
         except Exception as e:
-            print(f"[报警] ch{channel_id} disconnect 失败: {e}")
-        print(f"[报警] ch{channel_id} 被移除，已停报警+熄灯+断串口", flush=True)
+            print(f"[Alarm] ch{channel_id} disconnect failed: {e}")
+        print(f"[Alarm] ch{channel_id} removed: alarm stopped + light off + serial disconnected", flush=True)
 
     @staticmethod
     def list_ports() -> List[dict]:
@@ -979,7 +979,7 @@ async def save_config(req: ConfigRequest, channel: int = Query(0, description="�
             alarm_router.reload_config_from_disk()
             reloaded = True
         except Exception as e:
-            print(f"[报警] 共享配置生效失败: {e}")
+            print(f"[Alarm] apply shared config failed: {e}")
 
     return {
         "success": True,

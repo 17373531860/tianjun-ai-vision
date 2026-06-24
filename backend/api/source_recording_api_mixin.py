@@ -31,6 +31,22 @@ from backend.models.models import (  # noqa: F401
 from backend.api.source_recorder import FFmpegRecorder
 
 
+def _ensure_dated_dir(base_dir):
+    """在 base_dir 下按当天日期建子目录 (YYYY-MM-DD) 并返回其完整路径。
+
+    录像物理上按天分目录存放, 便于按日期定位与清理回收空目录; DB 仍存完整
+    file_path, 回放/转码读 file_path 不受影响, 老的平铺录像也照常被扫到。
+    建目录失败时回退到 base_dir 本身——绝不因建子目录失败而丢录像。
+    """
+    day = datetime.now().strftime('%Y-%m-%d')
+    dated = os.path.join(base_dir, day)
+    try:
+        os.makedirs(dated, exist_ok=True)
+        return dated
+    except Exception:
+        return base_dir
+
+
 class RecordingApiMixin:
     # ========== 视频录制功能 ==========
     
@@ -49,7 +65,7 @@ class RecordingApiMixin:
         
         try:
             filename = f"session_{self.current_session_uuid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-            filepath = os.path.join(settings.SESSION_VIDEO_DIR, filename)
+            filepath = os.path.join(_ensure_dated_dir(settings.SESSION_VIDEO_DIR), filename)
             
             fps = min(self.export_settings.get('video_fps', 30), 25)
             
@@ -58,7 +74,7 @@ class RecordingApiMixin:
             
             writer = FFmpegRecorder(filepath, width, height, fps)
             if not writer.open():
-                print(f"[录制警告] 无法创建会话视频录制器")
+                print("[Recording/Warn] failed to create session video recorder")
                 self._append_recording_failure(
                     "session",
                     "open_failed",
@@ -68,7 +84,7 @@ class RecordingApiMixin:
                 return
             with self._writer_lock:
                 self.video_writer = writer
-            print(f"开始录制会话视频: {filepath}")
+            print(f"[Recording] session video started: {filepath}")
             
             # 记录到数据库 (完整 uuid 防唯一约束撞号; try/finally 兜底关连接防泄漏)
             video_uuid = uuid.uuid4().hex
@@ -97,7 +113,7 @@ class RecordingApiMixin:
             finally:
                 db.close()
         except Exception as e:
-            print(f"开始会话录制失败: {e}")
+            print(f"[Recording] start session recording failed: {e}")
             self._append_recording_failure("session", "open_exception", error=str(e))
     
     def stop_session_recording(self):
@@ -118,7 +134,7 @@ class RecordingApiMixin:
                         self._draining_session_writer = None
                 try:
                     w.release()
-                    print("会话视频录制已停止(排空释放)")
+                    print("[Recording] session video stopped (drained)")
                     db = self._get_db_session()
                     try:
                         session = db.query(DetectionSession).filter(DetectionSession.id == sid).first()
@@ -135,7 +151,7 @@ class RecordingApiMixin:
                     finally:
                         db.close()
                 except Exception as e:
-                    print(f"停止会话录制失败: {e}")
+                    print(f"[Recording] stop session recording failed: {e}")
 
             import threading
             threading.Thread(target=_delayed_release, args=(writer, session_id), daemon=True).start()
@@ -155,7 +171,7 @@ class RecordingApiMixin:
         
         try:
             filename = f"cycle_{self.current_cycle_uuid}_{datetime.now().strftime('%H%M%S')}.mp4"
-            filepath = os.path.join(settings.CYCLE_VIDEO_DIR, filename)
+            filepath = os.path.join(_ensure_dated_dir(settings.CYCLE_VIDEO_DIR), filename)
             
             fps = min(self.export_settings.get('video_fps', 30), 25)
             
@@ -164,7 +180,7 @@ class RecordingApiMixin:
             
             writer = FFmpegRecorder(filepath, width, height, fps)
             if not writer.open():
-                print(f"[录制警告] 无法创建周期视频录制器")
+                print("[Recording/Warn] failed to create cycle video recorder")
                 self._append_recording_failure(
                     "cycle",
                     "open_failed",
@@ -174,7 +190,7 @@ class RecordingApiMixin:
                 return
             with self._writer_lock:
                 self.cycle_video_writer = writer
-            print(f"开始录制周期视频: {filename}")
+            print(f"[Recording] cycle video started: {filename}")
             
             # 记录到数据库 (完整 uuid 防唯一约束撞号; try/finally 兜底关连接防泄漏)
             video_uuid = uuid.uuid4().hex
@@ -203,7 +219,7 @@ class RecordingApiMixin:
             finally:
                 db.close()
         except Exception as e:
-            print(f"开始周期录制失败: {e}")
+            print(f"[Recording] start cycle recording failed: {e}")
             self._append_recording_failure("cycle", "open_exception", error=str(e))
     
     def stop_cycle_recording(self):
@@ -222,9 +238,9 @@ class RecordingApiMixin:
                         self._draining_cycle_writer = None
                 try:
                     w.release()
-                    print("周期视频录制已停止(排空释放)")
+                    print("[Recording] cycle video stopped (drained)")
                 except Exception as e:
-                    print(f"停止周期录制失败: {e}")
+                    print(f"[Recording] stop cycle recording failed: {e}")
                 finally:
                     # C6 监控: 释放完成, 存活延迟释放计数 -1
                     with self._writer_lock:
@@ -240,8 +256,8 @@ class RecordingApiMixin:
                     self, '_draining_release_count', 0) + 1
                 _draining_n = self._draining_release_count
             if _draining_n > 5:
-                print(f"[录像监控] ⚠️ 周期录像延迟释放叠加 {_draining_n} 个"
-                      f"(可能快节拍周期堆积 FFmpeg 子进程, 通道"
+                print(f"[Recording/Monitor] cycle recording delayed-release backlog {_draining_n} "
+                      f"(fast-cadence cycles may pile up FFmpeg subprocesses, channel "
                       f"{getattr(self, 'channel_id', '?')})", flush=True)
             threading.Thread(target=_delayed_release, args=(writer,), daemon=True).start()
     
@@ -262,13 +278,13 @@ class RecordingApiMixin:
                             pass
                 
                 if len(self.step_video_writers) >= 1:
-                    print(f"[录制警告] 步骤视频录制已达上限(1)，跳过: {step_label}")
+                    print(f"[Recording/Warn] step recording at limit(1), skipped: {step_label}")
                     return None
                 
                 video_uuid = uuid.uuid4().hex  # 完整 uuid 防唯一约束撞号
                 # 使用 .mp4 格式
                 filename = f"step_{step_label}_{video_uuid}_{datetime.now().strftime('%H%M%S')}.mp4"
-                filepath = os.path.join(settings.STEP_VIDEO_DIR, filename)
+                filepath = os.path.join(_ensure_dated_dir(settings.STEP_VIDEO_DIR), filename)
                 
                 fps = min(self.export_settings.get('video_fps', 30), 25)  # 限制FPS
                 
@@ -279,7 +295,7 @@ class RecordingApiMixin:
                 # 使用 FFmpegRecorder
                 writer = FFmpegRecorder(filepath, width, height, fps)
                 if not writer.open():
-                    print(f"[录制警告] 无法创建步骤视频录制器: {step_label}")
+                    print(f"[Recording/Warn] failed to create step video recorder: {step_label}")
                     self._append_recording_failure(
                         "step",
                         "open_failed",
@@ -296,10 +312,10 @@ class RecordingApiMixin:
                     'start_time': datetime.now(),
                     'frame_size': (width, height)
                 }
-                print(f"[调试] 开始录制步骤视频: {step_label} -> {filename}")
+                print(f"[Recording] step video started: {step_label} -> {filename}")
                 return video_uuid
         except Exception as e:
-            print(f"开始步骤录制失败: {e}")
+            print(f"[Recording] start step recording failed: {e}")
             self._append_recording_failure("step", "open_exception", error=f"{step_label}: {e}")
             import traceback
             traceback.print_exc()
@@ -341,13 +357,13 @@ class RecordingApiMixin:
             finally:
                 db.close()
             
-            print(f"[调试] 步骤视频录制已停止: {step_label}")
+            print(f"[Recording] step video stopped: {step_label}")
             return {
                 'video_uuid': step_video['video_uuid'],
                 'filepath': step_video['filepath']
             }
         except Exception as e:
-            print(f"停止步骤录制失败: {e}")
+            print(f"[Recording] stop step recording failed: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -383,5 +399,5 @@ class RecordingApiMixin:
                 except:
                     pass
             self.step_video_writers.clear()
-        print("[资源清理] 所有录制器已关闭")
+        print("[Recording] all recorders closed")
     

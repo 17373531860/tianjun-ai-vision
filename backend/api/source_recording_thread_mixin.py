@@ -75,7 +75,7 @@ class RecordingThreadMixin:
         self._recording_drop_count = 0
         self._recording_thread = threading.Thread(target=self._recording_loop, daemon=True)
         self._recording_thread.start()
-        print("[录制线程] 已启动")
+        print("[RecThread] started")
     
     def _stop_recording_thread(self):
         """停止录制线程（线程安全，可被并发调用）"""
@@ -86,7 +86,7 @@ class RecordingThreadMixin:
             self._recording_thread = None
             thread.join(timeout=5.0)
             if thread.is_alive():
-                print("[警告] 录制线程未能在超时内结束")
+                print("[RecThread/Warn] thread did not finish within timeout")
         
         # 安全清空队列残留帧，防止线程卡住时内存泄漏
         dropped = 0
@@ -98,19 +98,19 @@ class RecordingThreadMixin:
                 break
         
         if dropped > 0:
-            print(f"[录制线程] 清理了队列中 {dropped} 帧残留数据")
+            print(f"[RecThread] cleared {dropped} leftover frames in queue")
         
         if self._recording_drop_count > 0:
-            print(f"[录制线程] 本次录制共丢弃 {self._recording_drop_count} 帧（队列满）")
+            print(f"[RecThread] dropped {self._recording_drop_count} frames total (queue full)")
         
-        print("[录制线程] 已停止")
+        print("[RecThread] stopped")
     
     def _recording_loop(self):
         """
         独立录制线程 - 从队列取帧写入 VideoWriter
         与 CUDA/推理完全隔离，避免段错误
         """
-        print("[录制线程] 开始运行")
+        print("[RecThread] run loop started")
         frame_count = 0
         last_log_time = time.time()
         last_heartbeat_time = time.time()
@@ -124,7 +124,7 @@ class RecordingThreadMixin:
                     queue_size = self._recording_queue.qsize()
                     with self._step_writers_lock:
                         step_count = len(self.step_video_writers)
-                    print(f"[录制线程心跳] 帧={frame_count}, 队列={queue_size}, 步骤录制={step_count}, 丢帧={self._recording_drop_count}")
+                    print(f"[RecThread/Heartbeat] frames={frame_count}, queue={queue_size}, step_rec={step_count}, dropped={self._recording_drop_count}")
                     last_heartbeat_time = current_time
                 
                 # 从队列取帧（带超时，避免阻塞）
@@ -144,16 +144,16 @@ class RecordingThreadMixin:
                 # 每30秒打印一次详细状态
                 if current_time - last_log_time > 30:
                     queue_size = self._recording_queue.qsize()
-                    print(f"[录制线程] 已写入 {frame_count} 帧, 队列积压: {queue_size}, 丢帧: {self._recording_drop_count}")
+                    print(f"[RecThread] written {frame_count} frames, queue_backlog={queue_size}, dropped={self._recording_drop_count}")
                     last_log_time = current_time
                     
             except Exception as e:
-                print(f"[录制线程] 写入错误: {e}")
+                print(f"[RecThread] write error: {e}")
                 import traceback
                 traceback.print_exc()
                 time.sleep(0.01)
         
-        print(f"[录制线程] 结束运行, 共写入 {frame_count} 帧")
+        print(f"[RecThread] run loop ended, {frame_count} frames written total")
     
     def _enqueue_frame_for_recording(self, frame):
         """
@@ -176,7 +176,7 @@ class RecordingThreadMixin:
                 small_frame = frame
         except Exception as e:
             if not getattr(self, "_recording_prep_warned", False):
-                print(f"[录制线程] 帧预处理失败 (后续不再重复打印): {type(e).__name__}: {e}")
+                print(f"[RecThread] frame preprocess failed (won't repeat): {type(e).__name__}: {e}")
                 self._recording_prep_warned = True
             self._recording_drop_count += 1
             return
@@ -195,7 +195,7 @@ class RecordingThreadMixin:
             self._recording_drop_count += 1
         except Exception as e:
             if not getattr(self, "_recording_queue_warned", False):
-                print(f"[录制线程] 入队异常 (后续不再重复打印): {type(e).__name__}: {e}")
+                print(f"[RecThread] enqueue error (won't repeat): {type(e).__name__}: {e}")
                 self._recording_queue_warned = True
             self._recording_drop_count += 1
     
@@ -229,7 +229,7 @@ class RecordingThreadMixin:
                         if not ok:
                             raise RuntimeError(getattr(session_w, "last_error", "write_failed"))
                 except Exception as e:
-                    print(f"[录制警告] 写入会话视频失败: {e}")
+                    print(f"[RecThread/Warn] write session video failed: {e}")
                     self._append_recording_failure("session", "write_failed", writer=session_w, error=str(e))
                     with self._writer_lock:
                         if self.video_writer is session_w:
@@ -246,7 +246,7 @@ class RecordingThreadMixin:
                         if not ok:
                             raise RuntimeError(getattr(cycle_w, "last_error", "write_failed"))
                 except Exception as e:
-                    print(f"[录制警告] 写入周期视频失败: {e}")
+                    print(f"[RecThread/Warn] write cycle video failed: {e}")
                     self._append_recording_failure("cycle", "write_failed", writer=cycle_w, error=str(e))
                     with self._writer_lock:
                         if self.cycle_video_writer is cycle_w:
@@ -281,7 +281,7 @@ class RecordingThreadMixin:
                             if not ok:
                                 raise RuntimeError(getattr(writer, "last_error", "write_failed"))
                     except Exception as e:
-                        print(f"[录制警告] 写入步骤视频 {step_label} 失败: {e}")
+                        print(f"[RecThread/Warn] write step video {step_label} failed: {e}")
                         self._append_recording_failure(
                             "step",
                             "write_failed",
@@ -300,6 +300,6 @@ class RecordingThreadMixin:
                         pass
                     
         except Exception as e:
-            print(f"[录制线程] 写入帧异常: {e}")
+            print(f"[RecThread] write frame error: {e}")
     
     

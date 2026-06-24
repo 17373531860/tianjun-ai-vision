@@ -103,7 +103,7 @@ class LifecycleMixin:
                 "source_type": self.source_type,
             })
         except Exception as e:
-            print(f"[Plugin] source_status_change hook 触发异常 (已隔离, 主流程继续): {e}")
+            print(f"[Plugin] source_status_change hook error (isolated, main flow continues): {e}")
 
     @contextmanager
     def _track_status_change(self, reason: str):
@@ -161,15 +161,15 @@ class LifecycleMixin:
                 print(f"[pause] release camera failed: {e}")
                 debug_center.dbg("backend.source", "pause 释放摄像头异常", f"channel={self.channel_id} err={e}")
             self.capture = None
-            print("已暂停：摄像头已释放，保留模型和画面")
+            print("[Pause] camera released, keeping model and frame")
         elif self.source_type == 'hikvision':
             self._release_hik_camera()
-            print("已暂停：海康相机已释放，保留模型和画面")
+            print("[Pause] Hikvision camera released, keeping model and frame")
         elif self.source_type == 'hcnetsdk':
             self._release_hcnet_session()
             print("[pause] HCNetSDK released, model kept")
         else:
-            print("已暂停：画面和检测都停止")
+            print("[Pause] frame and detection both stopped")
         self._fire_source_status_change(_before_running, _before_detecting, "pause")
     
     def _reopen_camera(self):
@@ -181,24 +181,24 @@ class LifecycleMixin:
             else:
                 self.capture = cv2.VideoCapture(self.camera_index)
             if not self.capture.isOpened():
-                print(f"[resume] 摄像头 {self.camera_index} 打开失败")
+                print(f"[resume] camera {self.camera_index} open failed")
                 self.capture = None
                 return False
             self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
             self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
             self.capture.set(cv2.CAP_PROP_FPS, self.fps)
-            print(f"[resume] 摄像头已重新打开 (MJPG): index={self.camera_index}")
+            print(f"[resume] camera reopened (MJPG): index={self.camera_index}")
             return True
         except Exception as e:
-            print(f"[resume] 重新打开摄像头失败: {e}")
+            print(f"[resume] reopen camera failed: {e}")
             debug_center.dbg("backend.source", "resume 重开摄像头异常", f"channel={self.channel_id} index={self.camera_index} err={e}")
             return False
 
     def _reopen_hik_camera(self):
         """Re-open Hikvision camera that was released during pause (preserves model)"""
         if not HIK_SDK_AVAILABLE:
-            print("[resume] 海康 SDK 不可用")
+            print("[resume] Hikvision SDK unavailable")
             return False
         try:
             self.hik_camera = MvCamera()
@@ -231,10 +231,10 @@ class LifecycleMixin:
             self.hik_data_buf = (c_ubyte * self.hik_payload_size)()
             self.hik_frame_info = MV_FRAME_OUT_INFO_EX()
             memset(byref(self.hik_frame_info), 0, sizeof(MV_FRAME_OUT_INFO_EX))
-            print(f"[resume] 海康相机已重新打开: index={self.hik_device_index}")
+            print(f"[resume] Hikvision camera reopened: index={self.hik_device_index}")
             return True
         except Exception as e:
-            print(f"[resume] 重新打开海康相机失败: {e}")
+            print(f"[resume] reopen Hikvision camera failed: {e}")
             debug_center.dbg("backend.source", "resume 重开海康相机异常", f"channel={self.channel_id} index={self.hik_device_index} err={e}")
             self._release_hik_camera()
             return False
@@ -255,7 +255,7 @@ class LifecycleMixin:
                 return False
 
         if self.capture is None and self.source_type not in ('hikvision', 'image', 'synthetic'):
-            print("无法恢复：没有可用的视频源")
+            print("[resume] cannot resume: no available video source")
             debug_center.dbg("backend.source", "resume 失败", f"channel={self.channel_id} source_type={self.source_type} 无可用视频源")
             self._fire_source_status_change(_before_running, _before_detecting, "resume_failed")
             return False
@@ -281,7 +281,7 @@ class LifecycleMixin:
             from backend.api.alarm import alarm_router
             alarm_router.start_idle_light(channel_id=self.channel_id)
         except Exception as _e:
-            print(f"[Alarm/Source] resume start_idle_light 失败: {_e}")
+            print(f"[Alarm/Source] resume start_idle_light failed: {_e}")
 
         # v2.7.5b: 从暂停恢复时同步唤醒扫码器（原代码仅在 start_detection 里调过，导致 resume 漏发 LON）
         try:
@@ -290,16 +290,16 @@ class LifecycleMixin:
             get_scanner_service().start_scanning(channel_id=self.channel_id)
         except Exception as _e:
             import traceback as _tb
-            print(f"[Scanner/Source] resume start_scanning 失败: {_e}\n{_tb.format_exc()}")
+            print(f"[Scanner/Source] resume start_scanning failed: {_e}\n{_tb.format_exc()}")
 
         # v3.5.2: 周期性强制动作 — 开机首检规则在每次"开始/恢复检测"时触发
         try:
             if hasattr(self, '_run_periodic_actions_on_start'):
                 self._run_periodic_actions_on_start()
         except Exception as _e:
-            print(f"[PeriodicActions] resume run_on_start 触发失败: {_e}")
+            print(f"[PeriodicActions] resume run_on_start trigger failed: {_e}")
 
-        print("已恢复：视频流和推理重新启动")
+        print("[resume] resumed: video stream and inference restarted")
         self._fire_source_status_change(_before_running, _before_detecting, "resume")
         return True
     
@@ -313,7 +313,7 @@ class LifecycleMixin:
             from backend.api.alarm import alarm_router
             alarm_router.stop_idle_light(channel_id=self.channel_id)
         except Exception as _e:
-            print(f"[Alarm/Source] standby stop_idle_light 失败: {_e}")
+            print(f"[Alarm/Source] standby stop_idle_light failed: {_e}")
 
         # v2.7.5b: 待机时关闭扫码器 LON
         try:
@@ -321,7 +321,7 @@ class LifecycleMixin:
             print(f"[Scanner/Source] standby ch={self.channel_id} → stop_scanning")
             get_scanner_service().stop_scanning(channel_id=self.channel_id)
         except Exception as _e:
-            print(f"[Scanner/Source] standby stop_scanning 失败: {_e}")
+            print(f"[Scanner/Source] standby stop_scanning failed: {_e}")
 
         # v3.21: 包装结算 — 待机时按策略收尾 (受 forced_settle_on_standby 控制,
         # 有的现场待机只是暂停画面不该结算). 无配置/无进行中工单时静默, 零差异.
@@ -334,7 +334,7 @@ class LifecycleMixin:
             finally:
                 _pkg_db.close()
         except Exception as _e:
-            print(f"[PackagingFlow/Source] standby 收尾失败 (隔离): {_e}")
+            print(f"[PackagingFlow/Source] standby cleanup failed (isolated): {_e}")
 
         self._stop_inference_thread()
         self._stop_recording_thread()
@@ -342,7 +342,7 @@ class LifecycleMixin:
         with self.detection_lock:
             self.current_detections = []
         self._clear_inference_caches()
-        print("已待机：检测停止，画面继续")
+        print("[standby] detection stopped, frame continues")
         self._fire_source_status_change(_before_running, _before_detecting, "standby")
 
     def resume_inference(self):
@@ -350,11 +350,11 @@ class LifecycleMixin:
         _before_running, _before_detecting = self.is_running, self.is_detecting
         debug_center.dbg("backend.source", "resume_inference 入口", f"channel={self.channel_id} source_type={self.source_type} running={_before_running} detecting={_before_detecting}→True")
         if not self.is_running:
-            print("[resume_inference] 视频流未运行，无法恢复推理")
+            print("[resume_inference] video stream not running, cannot resume inference")
             self._fire_source_status_change(_before_running, _before_detecting, "resume_inference_failed")
             return False
         if self.model is None and self.source_type != 'synthetic':
-            print("[resume_inference] 模型未加载，无法恢复推理")
+            print("[resume_inference] model not loaded, cannot resume inference")
             self._fire_source_status_change(_before_running, _before_detecting, "resume_inference_failed")
             return False
         self.is_detecting = True
@@ -371,7 +371,7 @@ class LifecycleMixin:
             from backend.api.alarm import alarm_router
             alarm_router.start_idle_light(channel_id=self.channel_id)
         except Exception as _e:
-            print(f"[Alarm/Source] resume_inference start_idle_light 失败: {_e}")
+            print(f"[Alarm/Source] resume_inference start_idle_light failed: {_e}")
 
         # v2.7.5b: 从待机恢复时同步唤醒扫码器（关键修复——之前走 resume_inference 的路径永远不发 LON）
         try:
@@ -380,16 +380,16 @@ class LifecycleMixin:
             get_scanner_service().start_scanning(channel_id=self.channel_id)
         except Exception as _e:
             import traceback as _tb
-            print(f"[Scanner/Source] resume_inference start_scanning 失败: {_e}\n{_tb.format_exc()}")
+            print(f"[Scanner/Source] resume_inference start_scanning failed: {_e}\n{_tb.format_exc()}")
 
         # v3.5.2: 周期性强制动作 — 开机首检规则在每次"开始/恢复检测"时触发
         try:
             if hasattr(self, '_run_periodic_actions_on_start'):
                 self._run_periodic_actions_on_start()
         except Exception as _e:
-            print(f"[PeriodicActions] resume_inference run_on_start 触发失败: {_e}")
+            print(f"[PeriodicActions] resume_inference run_on_start trigger failed: {_e}")
 
-        print("已从待机恢复推理")
+        print("[resume_inference] resumed inference from standby")
         self._fire_source_status_change(_before_running, _before_detecting, "resume_inference")
     
     def stop(self, release_model: bool = True):
@@ -418,7 +418,7 @@ class LifecycleMixin:
             self._thread.join(timeout=2.0)
             # 如果线程还在运行，再等待一次
             if self._thread.is_alive():
-                print("[警告] 捕获线程第一次超时，再次等待...")
+                print("[WARN] capture thread first timeout, waiting again...")
                 self._thread.join(timeout=2.0)
             # 如果还是没有结束，记录警告
             if self._thread.is_alive():
@@ -437,14 +437,14 @@ class LifecycleMixin:
             try:
                 self.capture.release()
             except Exception as e:
-                print(f"[警告] 释放摄像头时出错: {e}")
+                print(f"[WARN] error releasing camera: {e}")
             self.capture = None
         
         if release_model:
             self._release_model()
         else:
             self._shutdown_inference_executor()
-            print("[VideoManager] 保留模型，仅停止输入源")
+            print("[VideoManager] keeping model, only stopping input source")
         
         # 等待一小段时间确保资源被系统释放
         time.sleep(0.3)
@@ -458,14 +458,14 @@ class LifecycleMixin:
         # 清理所有内存缓存
         self._clear_all_caches()
         
-        print("[VideoManager] 已完全停止并释放资源")
+        print("[VideoManager] fully stopped and released resources")
         self._fire_source_status_change(_before_running, _before_detecting, "stop")
     
     def _clear_all_caches(self):
         """清理所有内存缓存 - 防止内存泄漏"""
         import gc
         
-        print("[缓存清理] 开始清理内存缓存...")
+        print("[CacheClean] starting memory cache cleanup...")
         
         # 1. 清理卡尔曼滤波器缓存
         self._kalman_filters.clear()
@@ -517,11 +517,11 @@ class LifecycleMixin:
                 torch.cuda.empty_cache()
                 allocated = torch.cuda.memory_allocated() / 1024**2
                 cached = torch.cuda.memory_reserved() / 1024**2
-                print(f"[缓存清理] GPU显存: 已分配={allocated:.1f}MB, 缓存={cached:.1f}MB")
+                print(f"[CacheClean] GPU VRAM: allocated={allocated:.1f}MB, cached={cached:.1f}MB")
         except Exception as e:
-            print(f"[缓存清理] 清理 CUDA 缓存时出错: {e}")
+            print(f"[CacheClean] error clearing CUDA cache: {e}")
         
-        print(f"[缓存清理] 完成 - 清理了 {screenshot_count} 张截图缓存")
+        print(f"[CacheClean] done - cleared {screenshot_count} screenshot caches")
     
     # _save_counters_snapshot 已迁至 source_counters.py (P7 第三刀)
     # 历史调用 self._save_counters_snapshot() 通过 VSM.__getattr__ 转发
@@ -544,11 +544,11 @@ class LifecycleMixin:
                 freed = before_cached - after_cached
                 
                 if freed > 1:
-                    print(f"[GPU清理] 释放显存: {freed:.1f}MB (分配: {after_alloc:.1f}MB, 缓存: {after_cached:.1f}MB)")
+                    print(f"[GPUClean] freed VRAM: {freed:.1f}MB (allocated: {after_alloc:.1f}MB, cached: {after_cached:.1f}MB)")
             else:
                 gc.collect()
         except Exception as e:
-            print(f"[GPU清理] 清理失败: {e}")
+            print(f"[GPUClean] cleanup failed: {e}")
     
     def _periodic_cache_cleanup(self):
         """周期性缓存清理 - 在检测循环中定期调用"""
@@ -557,14 +557,14 @@ class LifecycleMixin:
         # 1. 限制事件日志大小
         if len(self.events_log) > 1000:
             self.events_log = self.events_log[-500:]
-            print("[缓存清理] 事件日志已裁剪至500条")
+            print("[CacheClean] event log trimmed to 500 entries")
         
         # 2. 限制截图缓存（每个步骤只保留最新截图，这里额外检查总数）
         if len(self.step_screenshots) > 100:
             # 保留最后添加的50个
             keys = list(self.step_screenshots.keys())[-50:]
             self.step_screenshots = {k: self.step_screenshots[k] for k in keys}
-            print("[缓存清理] 截图缓存已裁剪至50张")
+            print("[CacheClean] screenshot cache trimmed to 50")
         
         # 3. 清理长时间未更新的卡尔曼滤波器
         current_time = time.time()

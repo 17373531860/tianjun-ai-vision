@@ -76,16 +76,16 @@ def _activate_rpt_once(dev, ip: str, cause: str = ""):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                print(f"[Scanner/WMax] {ip} 激活 RPT 上报 (cause={cause}) ...",
+                print(f"[Scanner/WMax] {ip} activating RPT reporting (cause={cause}) ...",
                       flush=True)
                 ok = loop.run_until_complete(dev.activate_rpt_reporting())
-                print(f"[Scanner/WMax] {ip} activate_rpt_reporting 返回 {ok} "
+                print(f"[Scanner/WMax] {ip} activate_rpt_reporting returned {ok} "
                       f"(True=成功, False=扫码器未响应 TurnOnOffVideo)",
                       flush=True)
             finally:
                 loop.close()
         except Exception as e:
-            print(f"[Scanner/WMax] {ip} activate_rpt_reporting 异常: "
+            print(f"[Scanner/WMax] {ip} activate_rpt_reporting error: "
                   f"{e}\n{traceback.format_exc()}", flush=True)
             with _rpt_activate_lock:
                 _rpt_activated_devs.discard(key)
@@ -110,18 +110,18 @@ def _ensure_wmax_connected(ip: str, cause: str = ""):
             _activate_rpt_once(dev, ip, cause=f"{cause}/already_connected")
             return dev
 
-        print(f"[Scanner/WMax] {ip} 未连接 (cause={cause}), 尝试重连...", flush=True)
+        print(f"[Scanner/WMax] {ip} not connected (cause={cause}), reconnecting...", flush=True)
         result = mgr.connect(ip, WMAX_CMD_PORT)
         if result.get("success"):
             dev = mgr.get_device(ip, WMAX_CMD_PORT)
             if dev is not None and getattr(dev.state, "connected", False):
-                print(f"[Scanner/WMax] {ip} 重连成功", flush=True)
+                print(f"[Scanner/WMax] {ip} reconnect success", flush=True)
                 _activate_rpt_once(dev, ip, cause=f"{cause}/reconnect")
                 return dev
-        print(f"[Scanner/WMax] {ip} 重连失败: {result}", flush=True)
+        print(f"[Scanner/WMax] {ip} reconnect failed: {result}", flush=True)
         return None
     except Exception as e:
-        print(f"[Scanner/WMax] {ip} 重连异常: {e}", flush=True)
+        print(f"[Scanner/WMax] {ip} reconnect error: {e}", flush=True)
         return None
 
 
@@ -250,7 +250,7 @@ class ScannerService:
         if has_wmax:
             self._auto_discover_wmax_bg()
         else:
-            print("[Scanner] 所有设备均为 LON/LOFF 模式，跳过 WMax 自动发现")
+            print("[Scanner] all devices in LON/LOFF mode, skip WMax auto-discovery")
 
     def _trigger_wmax_discover_once(self):
         """合并并发触发: 2 秒内只跑一次 _auto_discover_wmax_bg.
@@ -267,9 +267,9 @@ class ScannerService:
             time.sleep(2.0)
             try:
                 self._auto_discover_wmax_bg()
-                print("[Scanner] 已触发 WMax 三端口自动发现 (来自 text_lon 升级)", flush=True)
+                print("[Scanner] triggered WMax 3-port auto-discovery (from text_lon upgrade)", flush=True)
             except Exception as e:
-                print(f"[Scanner] 触发 WMax 发现失败: {e}", flush=True)
+                print(f"[Scanner] trigger WMax discovery failed: {e}", flush=True)
             finally:
                 with self._wmax_discover_pending["lock"]:
                     self._wmax_discover_pending["flag"] = False
@@ -281,7 +281,7 @@ class ScannerService:
         """后台线程: UDP 自动发现 + 数据库已知 IP 直连 WMax 管理端口"""
         def _run():
             time.sleep(2)
-            print("[Scanner] 开始自动发现 WMax 设备...")
+            print("[Scanner] starting WMax device auto-discovery...")
             try:
                 from backend.services.wmax.manager import get_wmax_manager
                 from backend.services.wmax.device import DEFAULT_PORT as WMAX_CMD_PORT
@@ -299,7 +299,7 @@ class ScannerService:
                     if r.get("action") in ("connected", "already_connected"):
                         connected_mgmt_ips.add(r["ip"])
 
-                print(f"[Scanner] WMax UDP 发现 {len(results)} 台, 已连接 {len(connected_mgmt_ips)} 台")
+                print(f"[Scanner] WMax UDP discovered {len(results)}, connected {len(connected_mgmt_ips)}")
 
                 db_ips = set()
                 for conn in self._connections.values():
@@ -320,11 +320,11 @@ class ScannerService:
                 for ip in db_scanner_ips:
                     if ip in connected_mgmt_ips:
                         continue
-                    print(f"[Scanner] 数据库设备 {ip} 未被 UDP 发现，尝试直连 WMax 管理端口 {WMAX_CMD_PORT}")
+                    print(f"[Scanner] DB device {ip} not found via UDP, trying direct WMax mgmt port {WMAX_CMD_PORT}")
                     try:
                         result = mgr.connect(ip, WMAX_CMD_PORT)
                         if result.get("success"):
-                            print(f"[Scanner] {ip}:{WMAX_CMD_PORT} 直连成功")
+                            print(f"[Scanner] {ip}:{WMAX_CMD_PORT} direct connect success")
                             connected_mgmt_ips.add(ip)
                             # v2.7.7c 合并: mgr.connect 是同步 API, 不会自动激活 RPT.
                             # 这里手动激活一次, 让扫码器进入常开上报状态 (与官方 IDManager 一致).
@@ -337,13 +337,13 @@ class ScannerService:
                                     c.status = "connected"
                                     c.last_error = ""
                         else:
-                            print(f"[Scanner] {ip}:{WMAX_CMD_PORT} 直连失败: {result.get('message', '')}")
+                            print(f"[Scanner] {ip}:{WMAX_CMD_PORT} direct connect failed: {result.get('message', '')}")
                             for c in self._connections.values():
                                 if c.ip == ip and c.device_type in ("auto", "wmax"):
                                     c.status = "error"
                                     c.last_error = result.get("message", "WMax 连接失败")
                     except Exception as e:
-                        print(f"[Scanner] {ip}:{WMAX_CMD_PORT} 直连异常: {e}")
+                        print(f"[Scanner] {ip}:{WMAX_CMD_PORT} direct connect error: {e}")
                         for c in self._connections.values():
                             if c.ip == ip and c.device_type in ("auto", "wmax"):
                                 c.status = "error"
@@ -391,11 +391,11 @@ class ScannerService:
                     logger.info("[Scanner] 自动注入 WMax 扫码: %s → id=%d (55256文本模式)",
                                 scan_key, auto_id)
 
-                print(f"[Scanner] WMax 自动发现完成: 总管理连接 {len(connected_mgmt_ips)} 台")
+                print(f"[Scanner] WMax auto-discovery done: total mgmt connections {len(connected_mgmt_ips)}")
 
             except Exception as e:
                 import traceback as tb
-                print(f"[Scanner] WMax 自动发现异常: {e}\n{tb.format_exc()}")
+                print(f"[Scanner] WMax auto-discovery error: {e}\n{tb.format_exc()}")
 
         t = threading.Thread(target=_run, daemon=True, name="wmax-auto-discover")
         t.start()
@@ -489,7 +489,7 @@ class ScannerService:
         """
         sock = conn._socket
         if sock is None:
-            print(f"[Scanner/text_lon] {conn.name} {label} 未发送: socket 为空 "
+            print(f"[Scanner/text_lon] {conn.name} {label} not sent: socket is empty "
                   f"(status={conn.status})", flush=True)
             return False
         try:
@@ -498,11 +498,11 @@ class ScannerService:
             fd = -1
         try:
             sock.sendall(payload)
-            print(f"[Scanner/text_lon] {conn.name} {label} 已发送 "
+            print(f"[Scanner/text_lon] {conn.name} {label} sent "
                   f"({len(payload)}B → fd={fd})", flush=True)
             return True
         except OSError as e:
-            print(f"[Scanner/text_lon] {conn.name} {label} 发送失败: {e} (fd={fd})",
+            print(f"[Scanner/text_lon] {conn.name} {label} send failed: {e} (fd={fd})",
                   flush=True)
             return False
 
@@ -573,7 +573,7 @@ class ScannerService:
         if _mh is not None:
             for _b in bound:
                 if _mh.is_channel_scan_disabled(_b):
-                    print(f"[Scanner] catch-up 跳过 {conn.name}: "
+                    print(f"[Scanner] catch-up skip {conn.name}: "
                           f"ch={_b} 已被用户禁用扫码", flush=True)
                     return
         for cid in list(getattr(cm, 'channels', {}).keys()):
@@ -594,7 +594,7 @@ class ScannerService:
                     print(f"[Scanner] catch-up LON: {conn.name} ch={cid} "
                           f"在 detecting 中, 补发 LON", flush=True)
             except Exception as e:
-                print(f"[Scanner] catch-up LON 异常 ch={cid}: {e}", flush=True)
+                print(f"[Scanner] catch-up LON error ch={cid}: {e}", flush=True)
 
     def apply_channel_disable_change(self, channels, disabled: bool):
         """v3.4.2 由 mes_hooks.set_channel_disabled 调用.
@@ -631,7 +631,7 @@ class ScannerService:
                             "LOFF [scanner-disabled]",
                         )
                     except Exception as _e:
-                        print(f"[ScannerDisable] LOFF 失败 {conn.name}: {_e}",
+                        print(f"[ScannerDisable] LOFF failed {conn.name}: {_e}",
                               flush=True)
                 else:
                     try:
@@ -646,14 +646,14 @@ class ScannerService:
                     affected_on_chs.append(ch)
 
         if disabled and affected_off:
-            print(f"[ScannerDisable] 已 LOFF: {affected_off} (channels={sorted(chset)})",
+            print(f"[ScannerDisable] LOFF done: {affected_off} (channels={sorted(chset)})",
                   flush=True)
         if not disabled and affected_on_chs:
             for ch in sorted(set(affected_on_chs)):
                 try:
                     self.start_scanning(ch)
                 except Exception as e:
-                    print(f"[ScannerDisable] start_scanning(ch={ch}) 异常: {e}",
+                    print(f"[ScannerDisable] start_scanning(ch={ch}) error: {e}",
                           flush=True)
 
     def start_scanning(self, channel_id: int = None):
@@ -666,7 +666,7 @@ class ScannerService:
             _mh = None
         if (channel_id is not None and _mh is not None
                 and _mh.is_channel_scan_disabled(channel_id)):
-            print(f"[Scanner] start_scanning(ch={channel_id}) 已禁用扫码, 跳过",
+            print(f"[Scanner] start_scanning(ch={channel_id}) scanning disabled, skip",
                   flush=True)
             return
 
@@ -713,7 +713,7 @@ class ScannerService:
             names = [f"{c.name}[type={c.device_type}]" for c in targets]
             print(f"[Scanner] start_scanning(ch={channel_id}) → {names}")
         else:
-            print(f"[Scanner] start_scanning(ch={channel_id}) 无匹配设备, 已跳过: {skipped}")
+            print(f"[Scanner] start_scanning(ch={channel_id}) no matching device, skipped: {skipped}")
 
     def send_lon_for_channel(self, channel_id: int, reason: str = "") -> int:
         """v3.4.0 D 模式 (容器跨线/区域触发) 专用: 主动发 LON 给绑定该工位的所有
@@ -884,10 +884,10 @@ class ScannerService:
                 mgr = get_wmax_manager()
                 dev = mgr.get_device(conn.ip, WMAX_CMD_PORT)
                 if dev is None or not dev.state.connected:
-                    print(f"[Scanner] {conn.name} WMax 未连接, 无法触发")
+                    print(f"[Scanner] {conn.name} WMax not connected, cannot trigger")
                     return
                 dev.trigger_on()
-                print(f"[Scanner] {conn.name} WMax 触发 LON")
+                print(f"[Scanner] {conn.name} WMax trigger LON")
                 scan_before = conn.last_scan_time
                 deadline = time.time() + 10
                 while time.time() < deadline:
@@ -897,13 +897,13 @@ class ScannerService:
                 try:
                     dev.trigger_off()
                 except Exception as e:
-                    print(f"[Scanner] {conn.name} LOFF 失败: {e}")
+                    print(f"[Scanner] {conn.name} LOFF failed: {e}")
                 if conn.last_scan_time > scan_before:
-                    print(f"[Scanner] {conn.name} WMax 触发: 扫到 {conn.last_scan}, LOFF 已发")
+                    print(f"[Scanner] {conn.name} WMax trigger: scanned {conn.last_scan}, LOFF sent")
                 else:
-                    print(f"[Scanner] {conn.name} WMax 触发: 10秒超时, LOFF 已发")
+                    print(f"[Scanner] {conn.name} WMax trigger: 10s timeout, LOFF sent")
             except Exception as e:
-                print(f"[Scanner] {conn.name} WMax 触发异常: {e}")
+                print(f"[Scanner] {conn.name} WMax trigger error: {e}")
         threading.Thread(target=_run, daemon=True, name=f"trigger-wmax-{conn.device_id}").start()
 
     def _do_trigger_once(self, conn: ScannerConnection):
@@ -911,9 +911,9 @@ class ScannerService:
         def _run():
             try:
                 conn._socket.sendall(b"LON\r\n")
-                print(f"[Scanner] {conn.name} 手动触发 LON")
+                print(f"[Scanner] {conn.name} manual trigger LON")
             except OSError as e:
-                print(f"[Scanner] {conn.name} 手动 LON 失败: {e}")
+                print(f"[Scanner] {conn.name} manual LON failed: {e}")
                 return
             scan_before = conn.last_scan_time
             deadline = time.time() + 10
@@ -924,9 +924,9 @@ class ScannerService:
             try:
                 conn._socket.sendall(b"LOFF\r\n")
                 if conn.last_scan_time > scan_before:
-                    print(f"[Scanner] {conn.name} 手动触发: 扫到码, LOFF 已发送")
+                    print(f"[Scanner] {conn.name} manual trigger: scanned, LOFF sent")
                 else:
-                    print(f"[Scanner] {conn.name} 手动触发: 10秒超时, LOFF 已发送")
+                    print(f"[Scanner] {conn.name} manual trigger: 10s timeout, LOFF sent")
             except OSError:
                 pass
         threading.Thread(target=_run, daemon=True, name=f"trigger-{conn.device_id}").start()
@@ -1013,7 +1013,7 @@ class ScannerService:
         try:
             from backend.api.channel_manager import get_channel_manager
         except Exception as e:
-            print(f"[Scanner] notify_cycle_settled: import ChannelManager 失败: {e}", flush=True)
+            print(f"[Scanner] notify_cycle_settled: import ChannelManager failed: {e}", flush=True)
             return False
 
         try:
@@ -1030,7 +1030,7 @@ class ScannerService:
         try:
             triggered = force_fn(min_items=min_items, reason=f"primary_ch{source_channel}_via_{scanner_name}")
         except Exception as e:
-            print(f"[Scanner] force_settle_pending_cycle ch={target_channel} 失败: {e}", flush=True)
+            print(f"[Scanner] force_settle_pending_cycle ch={target_channel} failed: {e}", flush=True)
             return False
 
         if triggered:
@@ -1085,7 +1085,7 @@ class ScannerService:
         try:
             dev = _ensure_wmax_connected(ip, cause="test_connection")
             if dev is None:
-                print(f"[Scanner/WMax] test_connection({ip}) → WMax 路径不通, 降级文本 LON/LOFF",
+                print(f"[Scanner/WMax] test_connection({ip}) -> WMax path down, fallback text LON/LOFF",
                       flush=True)
             else:
                 print(f"[Scanner/WMax] test_connection({ip}) → "
@@ -1139,7 +1139,7 @@ class ScannerService:
                         pass
                     loop.close()
 
-                print(f"[Scanner/WMax] test_connection({ip}) 收码结束, "
+                print(f"[Scanner/WMax] test_connection({ip}) scan receive ended, "
                       f"采集 {len(collected)} 条码", flush=True)
                 wmax_path_done = True
                 if collected:
@@ -1164,7 +1164,7 @@ class ScannerService:
             with self._testing_ips_lock:
                 self._testing_ips.discard(ip)
             if wmax_path_done:
-                print(f"[Scanner/Test] {ip} WMax 测试结束, 已恢复正常入码", flush=True)
+                print(f"[Scanner/Test] {ip} WMax test ended, normal scan input restored", flush=True)
 
         # 2) 文本模式降级: 走老 LON/LOFF (仅对真正的 55256 文本模式扫码器有效)
         return self._test_text_lon(ip, port, timeout)
@@ -1199,7 +1199,7 @@ class ScannerService:
                     time.sleep(0.5)
                     with self._testing_ips_lock:
                         self._testing_ips.discard(ip)
-                    print(f"[Scanner/Test] {ip} 测试结束, 已恢复正常入码", flush=True)
+                    print(f"[Scanner/Test] {ip} test ended, normal scan input restored", flush=True)
 
             threading.Thread(target=_flash_and_stop, daemon=True,
                              name=f"scanner-test-{ip}").start()
@@ -1332,7 +1332,7 @@ class ScannerService:
                     _activate_rpt_once(existing_dev, conn.ip,
                                        cause="start_device/upgraded")
             except Exception as e:
-                print(f"[Scanner] 同步 '{conn.name}' conn.status 失败 "
+                print(f"[Scanner] sync '{conn.name}' conn.status failed "
                       f"(不影响后续发现): {e}", flush=True)
             # 触发一次 WMax 自动发现 (合并并发触发)
             self._trigger_wmax_discover_once()
@@ -1389,7 +1389,7 @@ class ScannerService:
                     debug_center.dbg("backend.scanner", "扫码器连接成功", f"name={conn.name} addr={conn.ip}:{conn.port} type={conn.device_type}")
 
                 if conn.device_type == "text_lon":
-                    print(f"[Scanner] {conn.name} ({conn.ip}:{conn.port}) 已连接 (LON/LOFF 模式)")
+                    print(f"[Scanner] {conn.name} ({conn.ip}:{conn.port}) connected (LON/LOFF mode)")
                     # v3.4.2: 修 reload 时序 bug. 后端 reload 时 ChannelManager
                     # 自动恢复 detecting 状态会先调 start_scanning, 但那时
                     # ScannerService 还没连上扫码器 → "无匹配设备已跳过", 扫码器
@@ -1398,7 +1398,7 @@ class ScannerService:
                     try:
                         self._catch_up_lon_for_detecting_channels(conn)
                     except Exception as _e:
-                        print(f"[Scanner] catch-up LON 异常: {_e}", flush=True)
+                        print(f"[Scanner] catch-up LON error: {_e}", flush=True)
                     self._text_lon_listen_loop(conn, sock)
                 elif conn.device_type == "wmax_scan":
                     logger.info("[Scanner] %s (%s:%d) WMax 扫码数据端口，被动监听",
@@ -1484,7 +1484,7 @@ class ScannerService:
                     print(f"[Scanner/text_lon] {conn.name} {tag}: "
                           f"扫到码后已 LOFF, 等周期结束再开扫", flush=True)
                 except OSError as e:
-                    print(f"[Scanner/text_lon] {conn.name} {tag} LOFF 失败: {e}",
+                    print(f"[Scanner/text_lon] {conn.name} {tag} LOFF failed: {e}",
                           flush=True)
                 conn._lon_sent = False
                 conn._wait_cycle_resume = True
@@ -1516,7 +1516,7 @@ class ScannerService:
                 else:
                     conn._next_lon_after = 0.0
                 conn._lon_sent = False
-                print(f"[Scanner/text_lon] {conn.name} 收到 ERROR (本轮无码, "
+                print(f"[Scanner/text_lon] {conn.name} received ERROR (no code this round, "
                       f"将自动续发 LON, mode={mode})", flush=True)
                 return
             self._on_data_received(conn, text)
@@ -1540,10 +1540,10 @@ class ScannerService:
                     sock.sendall(b"LON\r\n")
                     conn._lon_sent = True
                     mode = getattr(conn, 'scan_mode', 'continuous') or 'continuous'
-                    print(f"[Scanner/text_lon] {conn.name} LON 续发 (mode={mode})",
+                    print(f"[Scanner/text_lon] {conn.name} LON re-sent (mode={mode})",
                           flush=True)
                 except OSError as e:
-                    print(f"[Scanner/text_lon] {conn.name} LON 续发失败: {e}",
+                    print(f"[Scanner/text_lon] {conn.name} LON re-send failed: {e}",
                           flush=True)
                     break
 
@@ -1733,7 +1733,7 @@ class ScannerService:
         """收到扫码数据的处理"""
         now = time.time()
         # v2.7.16: 关键节点全部 print, 不依赖 log-level (uvicorn 默认 warning 过滤 INFO).
-        print(f"[Scanner/recv] {conn.name} 原始数据: '{raw_data}' ({len(raw_data)}B)",
+        print(f"[Scanner/recv] {conn.name} raw data: '{raw_data}' ({len(raw_data)}B)",
               flush=True)
         if debug_center.is_on("backend.scanner"):
             debug_center.dbg("backend.scanner", "收到条码", f"device={conn.device_id} name={conn.name} barcode={raw_data or '-'}")
@@ -1742,7 +1742,7 @@ class ScannerService:
         # 不要让"测试连通性"的 LON 误触发工件登记.
         with self._testing_ips_lock:
             if conn.ip in self._testing_ips:
-                print(f"[Scanner/recv] {conn.name} 测试期间, 已忽略 (不进 MES)",
+                print(f"[Scanner/recv] {conn.name} during test, ignored (not into MES)",
                       flush=True)
                 return
         if (raw_data == conn.last_scan
@@ -1750,7 +1750,7 @@ class ScannerService:
             # v2.7.16: dedup 命中时打印日志, 让用户能区分"扫码器没扫到"和
             # "扫到了被去重". 之前静默 return → 用户以为扫码器没工作.
             elapsed = now - conn.last_scan_time
-            print(f"[Scanner/recv] {conn.name} 同码去重: '{raw_data}' "
+            print(f"[Scanner/recv] {conn.name} duplicate dedup: '{raw_data}' "
                   f"(距上次 {elapsed:.1f}s < dedup {conn.dedup_interval_sec}s, 已忽略). "
                   f"如需强制重扫, 点前端 [清除本次扫码] 按钮.", flush=True)
             # v2.7.16: dedup 命中时**滑动**时间戳, 否则同码一直在视野里的话,
@@ -1765,13 +1765,13 @@ class ScannerService:
 
         result: ParseResult = self._parser.parse(raw_data, conn.parse_config)
         if not result.success:
-            print(f"[Scanner/recv] {conn.name} 解析失败: {result.error} "
+            print(f"[Scanner/recv] {conn.name} parse failed: {result.error} "
                   f"(原始: '{raw_data}', parse_config={conn.parse_config})",
                   flush=True)
             if debug_center.is_on("backend.scanner"):
                 debug_center.dbg("backend.scanner", "条码解析失败", f"name={conn.name} barcode={raw_data or '-'} err={getattr(result, 'error', None) or '-'}")
             return
-        print(f"[Scanner/recv] {conn.name} 解析成功 → serial_no='{result.serial_no}'",
+        print(f"[Scanner/recv] {conn.name} parse success -> serial_no='{result.serial_no}'",
               flush=True)
 
         # external_only=True 时扫码只用来喂外部设备（秤等），不触发任何视觉 cycle。
@@ -1790,15 +1790,15 @@ class ScannerService:
                 try:
                     project_id = self._project_id_getter(ch_id)
                 except Exception as _e:
-                    print(f"[Scanner/recv] {conn.name} 获取 ch{ch_id} project_id 异常: {_e}",
+                    print(f"[Scanner/recv] {conn.name} get ch{ch_id} project_id error: {_e}",
                           flush=True)
 
             if not project_id:
-                print(f"[Scanner/recv] {conn.name} ch{ch_id}: project_id 为空, "
+                print(f"[Scanner/recv] {conn.name} ch{ch_id}: project_id empty, "
                       f"前端不会显示扫码成功 (检查工位是否激活了项目)", flush=True)
                 continue
             if not self._mes_hook:
-                print(f"[Scanner/recv] {conn.name} ch{ch_id}: MES Hook 未启用, "
+                print(f"[Scanner/recv] {conn.name} ch{ch_id}: MES Hook not enabled, "
                       f"扫码不进 MES (检查 MES 配置)", flush=True)
                 continue
             if not conn.auto_create_workpiece:
@@ -1822,10 +1822,10 @@ class ScannerService:
         self._inject_barcode_to_external_devices(conn, result.serial_no)
 
         if len(channels) > 1:
-            print(f"[Scanner] {conn.name}: 扫码 → {result.serial_no} "
+            print(f"[Scanner] {conn.name}: scan -> {result.serial_no} "
                   f"(广播到 channels {channels})", flush=True)
         else:
-            print(f"[Scanner] {conn.name}: 扫码 → {result.serial_no}", flush=True)
+            print(f"[Scanner] {conn.name}: scan -> {result.serial_no}", flush=True)
 
         # v3.13 M1.1: scan_received 插件 hook — 主路径已完成 (MES on_scan_received 已广播
         # 给所有目标通道 + 外部设备已注入条码). dedup/解析失败/external_only/test 等早返回
@@ -1841,7 +1841,7 @@ class ScannerService:
                 "broadcast_channel_ids": list(channels),
             })
         except Exception as e:
-            print(f"[Plugin] scan_received hook 触发异常 (已隔离, 主流程继续): {e}")
+            print(f"[Plugin] scan_received hook error (isolated, main flow continues): {e}")
 
     def _inject_barcode_to_external_devices(self, conn: ScannerConnection, serial_no: str):
         """扫码后把条码注入给和扫码枪配对的外部设备（如称重器）。

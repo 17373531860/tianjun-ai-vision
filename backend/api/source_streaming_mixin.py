@@ -69,6 +69,9 @@ class StreamingMixin:
         max_idle = 600
         last_seq = -1
         ch_label = getattr(self, 'channel_index', '?')
+        # Push-side throughput stats (real display fluidity, see yield site below)
+        _push_t0 = time.monotonic()
+        _push_frames = 0
 
         # v3.7.x 分配 connection id, 同 channel 后来者上位
         self._mjpeg_next_conn_id = getattr(self, '_mjpeg_next_conn_id', 0) + 1
@@ -77,7 +80,7 @@ class StreamingMixin:
 
         try:
             self._mjpeg_active_streams = getattr(self, '_mjpeg_active_streams', 0) + 1
-            print(f"[MJPEG] 新连接 #{my_conn_id} ch={ch_label}, 活跃连接={self._mjpeg_active_streams}")
+            print(f"[MJPEG] new connection #{my_conn_id} ch={ch_label}, active={self._mjpeg_active_streams}")
         except Exception:
             pass
 
@@ -85,7 +88,7 @@ class StreamingMixin:
             while True:
                 # 旧连接让位: 同 channel 有更新的 id 进来 -> 主动退出
                 if getattr(self, '_mjpeg_active_conn_id', my_conn_id) != my_conn_id:
-                    print(f"[MJPEG] 连接 #{my_conn_id} ch={ch_label} 让位给 #{self._mjpeg_active_conn_id}, 主动退出")
+                    print(f"[MJPEG] connection #{my_conn_id} ch={ch_label} yields to #{self._mjpeg_active_conn_id}, exiting")
                     break
 
                 if self.is_running:
@@ -105,6 +108,19 @@ class StreamingMixin:
                     del frame
                     if chunk:
                         yield chunk
+                        # Push-side throughput: counts only real frames actually sent
+                        # to the browser -> the true display fluidity that the
+                        # inference-latency log cannot show. Logged every 5s.
+                        _push_frames += 1
+                        _push_now = time.monotonic()
+                        if _push_now - _push_t0 >= 5.0:
+                            _push_el = _push_now - _push_t0
+                            _push_fps = _push_frames / _push_el if _push_el > 0 else 0.0
+                            print(f"[MJPEG/Push] #{my_conn_id} ch={ch_label} "
+                                  f"push_fps={_push_fps:.1f} frames={_push_frames}/{_push_el:.1f}s "
+                                  f"target={self.target_stream_fps}")
+                            _push_t0 = _push_now
+                            _push_frames = 0
 
                     if self.frame_limit_enabled:
                         time.sleep(max(min_interval, target_interval))
@@ -131,11 +147,11 @@ class StreamingMixin:
             # 客户端断开, 正常退出
             pass
         except Exception as e:
-            print(f"[MJPEG] generator #{my_conn_id} 异常退出 ch={ch_label}: {e}")
+            print(f"[MJPEG] generator #{my_conn_id} abnormal exit ch={ch_label}: {e}")
         finally:
             try:
                 self._mjpeg_active_streams = max(0, getattr(self, '_mjpeg_active_streams', 1) - 1)
-                print(f"[MJPEG] 连接 #{my_conn_id} 关闭 ch={ch_label}, 活跃连接={self._mjpeg_active_streams}")
+                print(f"[MJPEG] connection #{my_conn_id} closed ch={ch_label}, active={self._mjpeg_active_streams}")
             except Exception:
                 pass
 
