@@ -44,12 +44,22 @@ class BackendManager extends EventEmitter {
       resourcesPath: options.resourcesPath || '',
       appPath: options.appPath || '',
       userDataPath: options.userDataPath || '',
+      // v3.23.x: 加深启动就绪门槛 (默认关). 开 → 就绪探针改用深度探针
+      // (/system/startup-ready, 真查数据库+项目), 确保放主窗进来时一切就绪。
+      deepReadyGate: options.deepReadyGate === true,
     };
     
     this.process = null;
     this.isRunning = false;
     this.healthCheckTimer = null;
     this.startTime = null;
+    // v3.23.x: 加深门槛降级保护 — uvicorn 已起(浅探 200)但深探(查 DB)持续失败
+    // 超过此阈值, 说明数据库异常/损坏, 干等也没用 → 降级放主窗进来 + 通知一次,
+    // 让前端照常显示(再靠错误提示/重试), 而不是无限卡在启动动画到 5 分钟超时退出。
+    this._deepDowngradeMs = 30000;       // 浅就绪后再多等 30s DB; 超了就降级
+    this._shallowUpSince = null;          // 首次"浅就绪但深未就绪"的时刻
+    this.deepDowngraded = false;          // 已降级标记 (只通知一次)
+    this._startupResolved = false;        // 启动就绪阶段是否已结束 (降级判定只在启动期生效)
   }
   
   /**
@@ -162,28 +172,68 @@ class BackendManager extends EventEmitter {
   }
   
   /**
-   * 检查后端健康状态
+   * 底层探测: 给定路径 GET 一次, 200 即 true。
    */
-  checkHealth() {
+  _probe(path) {
     return new Promise((resolve) => {
       const req = http.request({
         hostname: '127.0.0.1',  // 强制使用 IPv4，避免 localhost 解析为 IPv6
         port: this.options.port,
-        path: '/api/v1/source/status',
+        path,
         method: 'GET',
         timeout: 10000,  // 增加到 10 秒
       }, (res) => {
         resolve(res.statusCode === 200);
       });
-      
+
       req.on('error', () => resolve(false));
       req.on('timeout', () => {
         req.destroy();
         resolve(false);
       });
-      
+
       req.end();
     });
+  }
+
+  /**
+   * 检查后端健康状态
+   *
+   * 门槛关 (默认): 探 /source/status, uvicorn 起来即 200。
+   * 门槛开: 探 /system/startup-ready (真查数据库+项目), 进来即一切就绪。
+   *   + 降级保护: 若浅探(/source/status)已 200 即 uvicorn 起来了, 但深探持续
+   *     失败超过 _deepDowngradeMs, 判定数据库异常 (干等无意义), 降级当就绪放行
+   *     并 emit('deep-gate-downgraded') 通知一次。冷启动期(连浅探都没起)不计时,
+   *     正常等待, 不误降级。
+   */
+  async checkHealth() {
+    // 门槛关, 或启动就绪阶段已结束(降级/正常放行后的运行期监控): 一律浅探。
+    // 降级判定只在启动等待期生效, 避免运行中 DB 短暂卡顿误弹"启动降级"提示。
+    if (!this.options.deepReadyGate || this._startupResolved) {
+      return this._probe('/api/v1/source/status');
+    }
+    const deepOk = await this._probe('/api/v1/system/startup-ready');
+    if (deepOk) {
+      this._shallowUpSince = null;  // 深就绪, 清降级时钟
+      return true;
+    }
+    const shallowOk = await this._probe('/api/v1/source/status');
+    if (!shallowOk) {
+      // uvicorn 还没起 → 正常冷启动, 继续等, 不启动降级时钟
+      this._shallowUpSince = null;
+      return false;
+    }
+    // uvicorn 起来了但深探不行 → DB 还没好 / 异常. 起降级时钟
+    if (this._shallowUpSince === null) this._shallowUpSince = Date.now();
+    if (Date.now() - this._shallowUpSince >= this._deepDowngradeMs) {
+      if (!this.deepDowngraded) {
+        this.deepDowngraded = true;
+        console.warn('[BackendManager] 加深就绪门槛降级: uvicorn 已起但数据库探测持续失败, 放行主窗 (DB 可能异常)');
+        this.emit('deep-gate-downgraded');
+      }
+      return true;  // 降级放行
+    }
+    return false;  // 再给 DB 一点时间
   }
   
   /**
@@ -471,6 +521,7 @@ class BackendManager extends EventEmitter {
       
       // 等待后端就绪
       this.waitForStartup().then((ready) => {
+        this._startupResolved = true;  // 启动期结束, 之后健康检查只浅探, 不再降级判定
         if (ready) {
           this.isRunning = true;
           this.startHealthCheck();

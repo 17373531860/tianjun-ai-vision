@@ -268,6 +268,35 @@
             </div>
           </el-card>
 
+          <!-- v3.23.x: 加深启动就绪门槛 (默认关) -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-cyan-400"><Loading /></el-icon>
+                <span class="font-bold text-white">加深启动就绪门槛</span>
+              </div>
+            </template>
+            <div class="mb-3 text-xs text-gray-500">
+              控制开机时「启动动画放主界面进来」的时机。<br>
+              关闭（默认）= 主界面尽快出现，首屏数据若撞上后端冷启动会<b>自动重试补齐</b>，不会空白；<br>
+              开启 = 一直等到后端<b>深度就绪（数据库 + 项目能查到）</b>再放主界面进来，进来即一切就绪、连那一两秒重试都省；代价是开机要<b>多等几秒</b>动画。<br>
+              修改后<b>下次开机</b>由启动程序读取生效。
+            </div>
+            <div class="space-y-2">
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">开机等后端深度就绪再进主界面</span>
+                  <span class="text-[10px] text-gray-500">关闭 = 尽快进入 + 首屏失败自动重试；开启 = 多等几秒但进来即满</span>
+                </div>
+                <el-switch
+                  v-model="startupReadyGateEnabled"
+                  data-testid="startup-ready-gate-switch"
+                  @change="onStartupReadyGateChange"
+                />
+              </div>
+            </div>
+          </el-card>
+
           <!-- v3.10.x: 窗口模式 (主窗口全屏 / 窗口 + 最小化) -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
@@ -1621,7 +1650,7 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
 import { usePluginStore } from '@/store/usePluginStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
-import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close, Minus } from '@element-plus/icons-vue';
+import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close, Minus, Loading } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjectDetail } from '@/api/project';
 import api from '@/api/index';
@@ -2141,6 +2170,30 @@ async function onAutoResumeChange(val) {
   }
 }
 
+// ========== v3.23.x: 加深启动就绪门槛开关 ==========
+// 落盘 workstation_config.json 顶层 startup_ready_gate 段, 下次开机由 Electron 读。
+const startupReadyGateEnabled = ref(false);   // 默认关 (首屏失败自动重试已是保底)
+
+async function loadStartupReadyGateConfig() {
+  try {
+    const res = await api.get('/workstations/startup-ready-gate');
+    startupReadyGateEnabled.value = res?.data?.enabled === true;
+  } catch (e) {
+    console.warn('加载加深启动就绪门槛配置失败:', e?.message);
+  }
+}
+
+async function onStartupReadyGateChange(val) {
+  dbg('settings.ops', '切换加深启动就绪门槛', `enabled=${!!val}`);
+  try {
+    await api.put('/workstations/startup-ready-gate', { enabled: !!val });
+    ElMessage.success(val ? '已开启, 下次开机等后端深度就绪再进主界面 (多等几秒)' : '已关闭, 下次开机尽快进入 + 首屏失败自动重试');
+  } catch (e) {
+    ElMessage.error('保存加深启动就绪门槛配置失败: ' + (e?.response?.data?.detail || e?.message || ''));
+    startupReadyGateEnabled.value = !val;
+  }
+}
+
 // ========== v3.10.x: 主窗口模式 (Electron) ==========
 const windowFullscreen = ref(false);
 const isElectronEnv = computed(() => !!(typeof window !== 'undefined' && window.electronAPI?.isElectron));
@@ -2280,6 +2333,7 @@ onMounted(async () => {
   loadSplashCameraConfig();
   loadWindowConfig();   // v3.10.x: 主窗口模式
   loadAutoResumeConfig();  // v3.22.x: 开机自动恢复检测开关
+  loadStartupReadyGateConfig();  // v3.23.x: 加深启动就绪门槛开关
   await loadProjectDetection();
 });
 

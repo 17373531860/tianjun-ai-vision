@@ -152,7 +152,25 @@ let unresponsiveReloadTimer = null;
 let gpuCrashReloadTimer = null;
 let splashCloseTimer = null;
 let splashFinishedByRenderer = false;   // v3.8.2: splash 端是否已通过 IPC 通知"播完了"
+let deepReadyGate = false;              // v3.23.x: 加深启动就绪门槛 (默认关), 启动早期从 workstation_config.json 读
+let deepGateDowngradePending = false;   // v3.23.x: 加深门槛降级待通知 (后端起了但 DB 探测超时降级放行)
+let deepGateDowngradeNotified = false;  // v3.23.x: 降级已通知前端 (只弹一次)
 const managedTimeouts = new Set();
+
+// v3.23.x: 把"加深就绪门槛降级"提示推给前端 (主窗就绪后弹一次 ElMessage)。
+// 事件可能在主窗建好前就来, 故置 pending, 主窗 did-finish-load 时再 flush。
+function flushDeepGateDowngradeNotice() {
+  if (!deepGateDowngradePending || deepGateDowngradeNotified) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const wc = mainWindow.webContents;
+  if (!wc || wc.isLoading()) return;
+  try {
+    wc.send('startup:deep-gate-downgraded');
+    deepGateDowngradeNotified = true;
+  } catch (e) {
+    console.warn('[App] 推送加深门槛降级提示失败:', e.message);
+  }
+}
 
 function setManagedTimeout(callback, delayMs) {
   const timer = setTimeout(() => {
@@ -263,6 +281,7 @@ function initBackendManager() {
     resourcesPath: CONFIG.isDev ? path.join(__dirname, '..') : process.resourcesPath,
     appPath: path.join(__dirname, '..'),
     userDataPath: app.getPath('userData'),
+    deepReadyGate,  // v3.23.x: 加深就绪门槛 (默认关), 决定就绪探针用浅探还是深探
   });
   
   // 监听后端事件
@@ -295,7 +314,14 @@ function initBackendManager() {
   backendManager.on('unhealthy', () => {
     console.warn('[App] Backend health check failed');
   });
-  
+
+  // v3.23.x: 加深门槛降级 (uvicorn 起了但 DB 探测超时) → 标记待通知, 主窗就绪后弹一次
+  backendManager.on('deep-gate-downgraded', () => {
+    console.warn('[App] 加深就绪门槛降级放行, 将提示前端');
+    deepGateDowngradePending = true;
+    flushDeepGateDowngradeNotice();
+  });
+
   return backendManager;
 }
 
@@ -383,6 +409,11 @@ function createWindow(opts = {}) {
   // 这样后端启动 / 前端 Vue 加载 都在 splash 后台进行, 用户看到的是连贯过场。
   mainWindow.once('ready-to-show', () => {
     maybeShowMainWindow();
+  });
+
+  // v3.23.x: 前端加载完后, 若加深门槛已降级, 补推一次提示
+  mainWindow.webContents.on('did-finish-load', () => {
+    flushDeepGateDowngradeNotice();
   });
 
   // Renderer crash recovery: auto-reload when the Chromium renderer dies
@@ -750,7 +781,8 @@ app.whenReady().then(async () => {
   const winCfg = (wsCfg && wsCfg.window) || {};
   const splashEnabled = splashCfg.enabled === true;  // 默认 false
   const windowFullscreen = winCfg.fullscreen === true;  // 默认 false
-  console.log(`[App] 启动配置: splash.enabled=${splashEnabled}, window.fullscreen=${windowFullscreen}`);
+  deepReadyGate = ((wsCfg && wsCfg.startup_ready_gate) || {}).enabled === true;  // 默认 false
+  console.log(`[App] 启动配置: splash.enabled=${splashEnabled}, window.fullscreen=${windowFullscreen}, startup_ready_gate=${deepReadyGate}`);
 
   if (!isLicensed) {
     createWindow({ fullscreen: windowFullscreen });
@@ -765,13 +797,21 @@ app.whenReady().then(async () => {
   if (!splashEnabled) {
     console.log('[App] splash.enabled=false, 启用旧版简单 splash (等待后端 ready)');
     legacySplashWindow = createLegacySplashWindow();
-    // 主窗后台创建 + 后台加载前端 (createWindow 默认 show:false), 暂不显示;
+    // 默认 (门槛关): 主窗后台创建 + 后台加载前端 (createWindow 默认 show:false), 暂不显示;
+    //   前端首屏请求会撞冷启动, 但 axios 层会自动退避重试补齐, 不空白。
+    // 加深门槛开: 暂不创建主窗, 等后端深度就绪后再 createWindow, 让前端首屏请求直接
+    //   打到已就绪后端 (进来即满, 连重试那一两秒都省)。代价: 主窗出现更晚。
     // splashFinishedByRenderer 保持 false 卡住 maybeShowMainWindow, 等后端 ready 才放行.
-    createWindow({ fullscreen: windowFullscreen });
+    if (!deepReadyGate) {
+      createWindow({ fullscreen: windowFullscreen });
+    }
     initBackendManager();
     try {
       await startBackend();
-      // 后端 ready: 关 legacy splash → 放行 maybeShowMainWindow → show 主窗
+      // 后端 ready: (加深门槛时此刻才加载前端) 关 legacy splash → 放行 → show 主窗
+      if (deepReadyGate && !mainWindow) {
+        createWindow({ fullscreen: windowFullscreen });
+      }
       if (legacySplashWindow && !legacySplashWindow.isDestroyed()) {
         try { legacySplashWindow.close(); } catch (e) { console.warn('[App] 关 legacy splash 失败:', e.message); }
       }

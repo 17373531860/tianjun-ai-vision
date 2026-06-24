@@ -23,10 +23,23 @@ from sqlalchemy.orm import Session
 from backend.core.api_key import require_api_key
 from backend.core.auth_deps import require_perm
 from backend.db.database import get_db
-from backend.models.models import SystemConfig
+from backend.models.models import Project, SystemConfig
 
 
 router = APIRouter()
+
+
+# ==================== v3.23.x: 深度就绪探针 (不鉴权) ====================
+# 给 Electron"加深启动就绪门槛"开关用 (默认关)。比 /source/status 更进一步:
+# /source/status 200 只代表 uvicorn 起来了; 本探针真跑一次 ORM 查询确认
+# "数据库 + 项目表能查得到", 查得到才算深度就绪。DB 没准备好时查询抛错 →
+# 非 200 → Electron 继续等。刻意不挂 require_perm: 健康探针需匿名可达
+# (鉴权开了也不能把开机探活挡在 401 外)。
+@router.get("/startup-ready")
+def get_startup_ready(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """深度就绪: 数据库 + 项目表可查则返回 {ready:true, projects:N}。"""
+    n = db.query(Project).count()
+    return {"ready": True, "projects": n}
 
 DISPLAY_FIELDS = [
     "brand_name", "app_name",

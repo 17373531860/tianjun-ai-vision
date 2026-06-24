@@ -225,6 +225,7 @@ class ChannelManager:
         success = mgr.load_model(model_path)
         if success:
             print(f"[ChannelManager] ch{channel_id} loaded model instance on {resolved_device}: {os.path.basename(model_path)}")
+            self._report_gpu_memory(f"ch{channel_id} 主模型加载后")
         return success
 
     def _load_into_slot_for_channel_locked(
@@ -257,6 +258,7 @@ class ChannelManager:
                 f"[ChannelManager] ch{channel_id} loaded slot[{name}] on "
                 f"{resolved_device}: {os.path.basename(model_path)}"
             )
+            self._report_gpu_memory(f"ch{channel_id} slot[{name}] 加载后")
         return success
 
     def release_all_models_for_channel(self, channel_id: int) -> bool:
@@ -287,6 +289,35 @@ class ChannelManager:
     def _propagate_model(self, channel_id: int):
         """No-op: model instances are no longer propagated/shared across channels."""
         return
+
+    def _report_gpu_memory(self, context: str = ""):
+        """C4 监控版(零风险, 不改"每工位各持一份模型"的现状): 多工位同卡时
+        各自加载完整模型会抢显存。这里只在模型加载后报告一次显存占用,
+        空闲不足时告警, 帮现场判断是否因显存压力导致抖动/OOM。
+        跨通道共享模型是历史串扰雷区, 不在此动刀。
+        """
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                return
+            free_b, total_b = torch.cuda.mem_get_info()
+            used_mb = (total_b - free_b) / 1024 / 1024
+            free_mb = free_b / 1024 / 1024
+            total_mb = total_b / 1024 / 1024
+            n_ch = len(self.channels)
+            msg = (f"[显存监控] {context} 已用 {used_mb:.0f}MB / 共 {total_mb:.0f}MB, "
+                   f"空闲 {free_mb:.0f}MB, 工位数 {n_ch}")
+            if free_mb < 800:
+                print(f"{msg} ⚠️ 空闲显存偏低, 多工位同卡可能抢显存/OOM", flush=True)
+            else:
+                print(msg, flush=True)
+            try:
+                from backend.core import debug_center
+                debug_center.dbg("backend.detection", "显存监控", msg)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     @staticmethod
     def _resolve_device(device: str) -> str:
@@ -540,6 +571,46 @@ class ChannelManager:
         except Exception as e:
             print(f"[ChannelManager] 保存 auto_resume 配置失败: {e}")
 
+    # ------------------------------------------------------------------
+    # v3.23.x: 加深启动就绪门槛开关 (默认关)
+    # ------------------------------------------------------------------
+    # 背景: 工控机开机时前端页面加载远早于后端就绪 (CUDA 预热 + 大模型加载几十秒)。
+    #   默认行为 (开关关): 前端落地的首屏请求撞冷启动会自动退避重试 (见 api/index.js),
+    #   后端一就绪就自动补齐, 不空白 —— 这已是默认保底。
+    #   可选行为 (开关开): 让 Electron 把"放主窗进来"的门槛加深到后端深度就绪
+    #   (数据库 + 项目能查得到), 进来即一切就绪、连首屏重试的那一两秒都省了;
+    #   代价是开机白等那几秒动画。
+    # 放 workstation_config.json 顶层 startup_ready_gate 段, 与 auto_resume 兄弟。
+    # Electron 主进程启动早期直读此 JSON 决策 (比前端先, 重启生效)。
+    def get_startup_ready_gate_config(self) -> dict:
+        """读 workstation_config.json 顶层 startup_ready_gate 段, 不存在返回默认 (enabled=false)."""
+        try:
+            if os.path.exists(_CONFIG_FILE):
+                with open(_CONFIG_FILE, 'r') as f:
+                    data = json.load(f)
+                g = data.get("startup_ready_gate") or {}
+                return {"enabled": bool(g.get("enabled", False))}
+        except Exception as e:
+            print(f"[ChannelManager] 读取 startup_ready_gate 配置失败: {e}")
+        return {"enabled": False}
+
+    def set_startup_ready_gate_config(self, enabled: bool):
+        """写 workstation_config.json 顶层 startup_ready_gate 段; 仅替换该段."""
+        try:
+            os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
+            data = {}
+            if os.path.exists(_CONFIG_FILE):
+                try:
+                    with open(_CONFIG_FILE, 'r') as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            data["startup_ready_gate"] = {"enabled": bool(enabled)}
+            with open(_CONFIG_FILE, 'w') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[ChannelManager] 保存 startup_ready_gate 配置失败: {e}")
+
     def _load_config(self):
         try:
             print(f"[ChannelManager] 配置文件路径: {_CONFIG_FILE}, 存在: {os.path.exists(_CONFIG_FILE)}")
@@ -743,6 +814,24 @@ def set_auto_resume_config(req: AutoResumeConfigRequest):
     """写开机自动恢复检测开关; 立即落盘, 下次后端启动生效。"""
     channel_manager.set_auto_resume_config(req.enabled)
     return {"status": "success", **channel_manager.get_auto_resume_config()}
+
+
+class StartupReadyGateRequest(BaseModel):
+    enabled: bool = Field(False, description="True=开机等后端深度就绪(DB+项目可查)再放主窗进来; False=默认(前端首屏失败自动重试补齐)")
+
+
+@router.get("/startup-ready-gate")
+def get_startup_ready_gate_config():
+    """读加深启动就绪门槛开关。"""
+    return channel_manager.get_startup_ready_gate_config()
+
+
+@router.put("/startup-ready-gate",
+            dependencies=[Depends(require_perm("settings.edit"))])
+def set_startup_ready_gate_config(req: StartupReadyGateRequest):
+    """写加深启动就绪门槛开关; 立即落盘, 下次开机由 Electron 读取生效。"""
+    channel_manager.set_startup_ready_gate_config(req.enabled)
+    return {"status": "success", **channel_manager.get_startup_ready_gate_config()}
 
 
 class UsbDeviceBindRequest(BaseModel):

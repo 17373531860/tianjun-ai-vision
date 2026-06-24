@@ -24,6 +24,7 @@ class SyntheticStartBody(BaseModel):
     project_steps: Optional[list] = None
     logic_mode: str = "sequential"
     project_id: Optional[int] = None  # 显式注入项目 id (测试场景: 用真项目 id, 让 session 关联到该项目)
+    ng_remediation: Optional[Dict[str, Any]] = None  # 测试 NG 补做: 注入 pipeline_config.ng_remediation
 
 
 def _collect_labels_from_timeline(timeline) -> list:
@@ -38,7 +39,8 @@ def _collect_labels_from_timeline(timeline) -> list:
     return labels
 
 
-def _build_min_project_config(labels: list, logic_mode: str = "sequential") -> dict:
+def _build_min_project_config(labels: list, logic_mode: str = "sequential",
+                              ng_remediation: dict = None) -> dict:
     # 必须带 id: 结算步序解析 (source_sequence_labels._sequence_order) 的
     # steps_config 兜底只认有 id 的步骤, 缺 id → 首步标签解析不出 → 周期永不结算
     steps = [
@@ -55,7 +57,12 @@ def _build_min_project_config(labels: list, logic_mode: str = "sequential") -> d
     # 兜底), 缺了会在结算时静默丢弃周期, 永远不出 OK/NG (2026-06-11 排查实锤)
     pipeline_config = {
         "sequence_order": [{"step_id": s["id"]} for s in steps],
+        # first_step 结算: 首步重现触发上一周期结算 (缺步 → NG). 不显式给则周期不收 (实测).
+        "settlement_mode": "first_step",
+        "settle_dedup": False,
     }
+    if ng_remediation:
+        pipeline_config["ng_remediation"] = ng_remediation
     # 让 OK/NG 真正落计数器与周期记录: 挂最小 events_config (id 1=OK, 2=NG 是
     # _trigger_event 的内置约定; 缺事件定义会"事件未找到"早退, 周期变孤儿)
     events_config = [
@@ -106,7 +113,7 @@ def synthetic_start(body: SyntheticStartBody):
     if body.with_project:
         labels = body.project_steps or _collect_labels_from_timeline(spec.get("timeline", []))
         if labels:
-            cfg = _build_min_project_config(labels, body.logic_mode)
+            cfg = _build_min_project_config(labels, body.logic_mode, body.ng_remediation)
             # 优先级: body.project_id > mgr 已有 project_config.id > -1
             # 让 synthetic 创建的 session.project_id 落到指定项目，Data 页按项目过滤时也能看到。
             if isinstance(body.project_id, int) and body.project_id > 0:
