@@ -45,28 +45,24 @@ if _PROJECT_ROOT not in sys.path:
 
 # ============================================================
 # Step 2: import 后端依赖（顺序敏感）
+# 容错: 轻量测试环境(只装 pytest/jsonschema/cryptography, 无 fastapi/backend)下优雅降级,
+# 让不依赖后端的子目录测试(如 tests/plugin_system/)不被根 conftest 顶层重依赖连坐。
+# 装了后端 → 照常 import + 后面守卫块建表 seed; 没装 → _BACKEND_AVAILABLE=False 整段跳过。
 # ============================================================
 import pytest  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
 
-from backend.core.config import DATA_DIR, settings  # noqa: E402  必须先 import 让 DATA_DIR 锁定
-
-# config.py 的 _migrate_old_data 会把生产 DB 复制到临时目录，把它清掉换成空的
-_test_db = os.path.join(_TEST_DATA_DIR, "sql_app.db")
-if os.path.exists(_test_db):
-    os.remove(_test_db)
-# 同时清空 counters 等持久化目录（避免测试间串扰）
-for _sub in ("counters", "uploads", "recordings", "exports"):
-    _p = os.path.join(_TEST_DATA_DIR, _sub)
-    if os.path.exists(_p):
-        shutil.rmtree(_p, ignore_errors=True)
-
-from backend.db.database import Base, engine, SessionLocal  # noqa: E402
-from backend.models import models as _orm_models  # noqa: F401, E402
-from backend.models import mes_models as _mes_models  # noqa: F401, E402  MES/扫码/外设/日志表
-from backend.models import export_models as _export_models  # noqa: F401, E402
-from backend.models import plugin_models as _plugin_models  # noqa: F401, E402
-from backend.models import auth_models as _auth_models  # noqa: F401, E402
+try:
+    from fastapi.testclient import TestClient  # noqa: E402, F401
+    from backend.core.config import DATA_DIR, settings  # noqa: E402, F401  必须先 import 让 DATA_DIR 锁定
+    from backend.db.database import Base, engine, SessionLocal  # noqa: E402
+    from backend.models import models as _orm_models  # noqa: F401, E402
+    from backend.models import mes_models as _mes_models  # noqa: F401, E402  MES/扫码/外设/日志表
+    from backend.models import export_models as _export_models  # noqa: F401, E402
+    from backend.models import plugin_models as _plugin_models  # noqa: F401, E402
+    from backend.models import auth_models as _auth_models  # noqa: F401, E402
+    _BACKEND_AVAILABLE = True
+except ImportError:
+    _BACKEND_AVAILABLE = False
 
 
 def _pg_reset_schema() -> None:
@@ -92,10 +88,7 @@ def _pg_reset_schema() -> None:
     engine.dispose()
 
 
-_pg_reset_schema()
-
-# 建表（在干净的临时 DB 上 / PG 测试 schema 上）
-Base.metadata.create_all(bind=engine)
+# (移到文件后 _BACKEND_AVAILABLE 守卫块统一执行: 清理临时 DB + _pg_reset_schema + 建表 + seed)
 
 
 def _seed_dummy_project() -> None:
@@ -129,7 +122,24 @@ def _seed_dummy_project() -> None:
         session.close()
 
 
-_seed_dummy_project()
+# ============================================================
+# 仅在后端可用时执行: 清理临时 DB + PG schema 重置 + 建表 + seed
+# (轻量测试环境 _BACKEND_AVAILABLE=False 时整段跳过, 完全不碰 backend)
+# ============================================================
+if _BACKEND_AVAILABLE:
+    # config.py 的 _migrate_old_data 会把生产 DB 复制到临时目录，把它清掉换成空的
+    _test_db = os.path.join(_TEST_DATA_DIR, "sql_app.db")
+    if os.path.exists(_test_db):
+        os.remove(_test_db)
+    # 同时清空 counters 等持久化目录（避免测试间串扰）
+    for _sub in ("counters", "uploads", "recordings", "exports"):
+        _p = os.path.join(_TEST_DATA_DIR, _sub)
+        if os.path.exists(_p):
+            shutil.rmtree(_p, ignore_errors=True)
+    _pg_reset_schema()
+    # 建表（在干净的临时 DB 上 / PG 测试 schema 上）
+    Base.metadata.create_all(bind=engine)
+    _seed_dummy_project()
 
 
 # ============================================================
@@ -151,6 +161,7 @@ def app():
 @pytest.fixture(scope="session")
 def client(app):
     """共享的 TestClient — 所有 HTTP scenarios 都走它"""
+    from fastapi.testclient import TestClient  # 惰性: 仅请求该 fixture 的 HTTP 测试才需要 fastapi
     return TestClient(app)
 
 

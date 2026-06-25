@@ -77,8 +77,10 @@ jobs:
       - name: Lint plugin documentation
         run: python scripts/plugin/lint-plugin-docs.py
 
-      - name: Run plugin unit tests (cryptography stack)
-        run: python -m pytest tests/plugin_system/ -q
+      # 注: 插件单测 tests/plugin_system/ 已移到下方 bdd-plugin job 跑。
+      # 原因: 32 个测试文件里 22 个 import backend/fastapi(hook/registry/M1/M3 等集成测试),
+      # 不属于"只装 pytest+jsonschema+cryptography"的轻量静态检查范畴,
+      # 放这里只会因缺后端依赖收集失败(历史 exit code 4)。此 job 保持纯静态轻量。
 
       - name: Pack example plugins (unsigned)
         run: |
@@ -268,6 +270,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
           pip install pytest pytest-bdd httpx jsonschema cryptography
+
+      # 分两次独立 pytest 调用(各自独立 session): plugin_system 与 step_defs BDD
+      # 合在同一 session 跑会触发已知批跑串污染(module 级单例/DB 残留),
+      # 单跑全绿、合跑 BDD 侧 sqlite 库状态被搞坏。分开跑即规避。
+      - name: Run plugin_system unit tests (独立 session)
+        run: |
+          python -m pytest tests/plugin_system/ \
+            -q --junitxml=test-results/plugin-unit.xml
 
       - name: Run plugin BDD (install API + signing + CLI)
         run: |
