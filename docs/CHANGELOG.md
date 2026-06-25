@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.27.0 (2026-06-25)
+
+> 主题：**插件平台新增「插件主动触发主程序事件」桥接能力 + 传感器清洁插件 v1.1.0 三判定接入主程序事件体系**。给插件平台补 `PluginHost.trigger_event`（`runtime.event_trigger`），让插件借用主程序事件响应面（报警+计数器+Toast+主页）而不结算检测周期；sensor-clean 升级 v1.1.0，把假擦拭/棉签寿命超限/操作员离开三判定做成可配置事件，用户全程用主程序原生 UI 配置。
+
+- [FEAT-001] 新增: 插件平台 `PluginHost.trigger_event(channel_id, event_id, reason)` 主动 API（`runtime.event_trigger` 能力 + audit + 错误隔离），内部走 `fire_external_event_response` 不结算周期
+- [FEAT-002] 新增: sensor-clean 插件 v1.1.0 三判定（假擦拭 / 棉签寿命超限 / 操作员离开超时，去掉假换棉签）接入主程序事件，命中调 `host.trigger_event` 联动报警/计数器/Toast/主页；前端配置 Tab 选判定→事件 + 阈值
+- 测试: 平台契约 6 + 端到端集成 3 + 插件三判定 14，全量 plugin_system + fire_external_event **398 passed 零回归**
+
+---
+
 ## v3.26.0 (2026-06-25)
 
 > 主题：**主程序原生「外部生产管控系统入站对接」能力 + 后端控制台日志全面 ASCII 化（根治 Windows 控制台中文乱码）**。入站对接让外部 MES 能主动 POST 开工/完工任务进来，与既有「主动拉取」(mes_puller) 形成入站/出站完整闭环；同时把后端中文 print 日志统一改 ASCII + 启动强制 UTF-8 终端，彻底解决裸 cmd / 日志重定向场景的 GBK 乱码。

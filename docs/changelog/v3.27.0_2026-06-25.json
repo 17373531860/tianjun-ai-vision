@@ -1,0 +1,45 @@
+{
+  "version": "3.27.0",
+  "date": "2026-06-25",
+  "previous_version": "3.26.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "插件平台新增 PluginHost.trigger_event 主动 API",
+      "symptom": "插件平台只有 trigger_alarm(仅报警), 缺一个借用主程序完整事件响应面(报警+计数器+Toast+主页)的口子; 客户过程判定需要联动这些但不能结算周期污染良率",
+      "root_cause": "v3.21 已有 VideoSourceManager.fire_external_event_response(借用事件响应面不结算周期), 但插件平台没暴露调用它的主动 API",
+      "fix": "仿 trigger_alarm 新增 trigger_event(channel_id, event_id, reason), 内部调 channel_manager.channels[channel_id].fire_external_event_response; 能力守门 runtime.event_trigger + audit log + 错误隔离(通道未注册/事件未找到/异常均返 False 不抛); event_id 主程序级不强制 plugin_ 前缀",
+      "files": ["backend/plugin_system/registry.py", "docs/plugin-system/design/01_manifest_schema.md", "docs/plugin-system/plugin.schema.json", "tests/plugin_system/test_active_apis.py", "tests/plugin_system/test_trigger_event_integration.py"],
+      "keywords": ["trigger_event", "runtime.event_trigger", "PluginHost", "fire_external_event_response", "插件触发事件", "事件响应面", "不结算周期", "plugin active api", "event bridge"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "sensor-clean 插件 v1.1.0 三判定接入主程序事件体系",
+      "symptom": "客户 detect7(1) 版本新增假擦拭/操作员离开两条过程判定, 连同既有棉签寿命超限, 希望都做成可配置事件(选连什么事件/事件连报警/连计数器/新计数器上主页), 明确不做假换棉签",
+      "root_cause": "插件原本超限只能 trigger_alarm(纯报警), 无法联动主程序计数器/Toast/主页; 假擦拭/操作员离开两条判定缺失",
+      "fix": "counter.py 加 StillFakeActionDetector(复刻 dirty_tracker 静止假动作)+AbsentCountdown(复刻周期性强制纯帧级倒计时); hooks.py 三判定命中调 host.trigger_event(假擦拭追踪擦拭产品框/棉签超限改触发事件兼容老 alarm_event/操作员离开默认关); 新增 event_id 映射+阈值配置项+GET/POST /swab/config; preset 项目模板默认带 OK/NG 事件+show_in_monitor 告警计数器; 前端配置 Tab 加三判定->事件下拉(host.api 拉 events_config)+阈值; manifest capabilities 加 runtime.event_trigger, 版本 1.1.0, main_version_min 3.27.0",
+      "files": ["plugins-examples/sensor-clean/backend/counter.py", "plugins-examples/sensor-clean/backend/hooks.py", "plugins-examples/sensor-clean/backend/routes.py", "plugins-examples/sensor-clean/backend/preset.py", "plugins-examples/sensor-clean/frontend/dist/index.esm.js", "plugins-examples/sensor-clean/plugin.json", "tests/plugin_system/test_sensor_clean_judgments.py"],
+      "keywords": ["sensor-clean", "传感器清洁", "假擦拭", "棉签寿命超限", "操作员离开超时", "三判定", "fake_wipe", "swab_over_limit", "operator_absent", "StillFakeActionDetector", "AbsentCountdown", "detect7", "host.trigger_event"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/plugin_system/registry.py",
+    "docs/plugin-system/design/01_manifest_schema.md",
+    "docs/plugin-system/plugin.schema.json",
+    "tests/plugin_system/test_active_apis.py",
+    "tests/plugin_system/test_trigger_event_integration.py",
+    "tests/plugin_system/test_sensor_clean_judgments.py",
+    "plugins-examples/sensor-clean/backend/counter.py",
+    "plugins-examples/sensor-clean/backend/hooks.py",
+    "plugins-examples/sensor-clean/backend/routes.py",
+    "plugins-examples/sensor-clean/backend/preset.py",
+    "plugins-examples/sensor-clean/frontend/dist/index.esm.js",
+    "plugins-examples/sensor-clean/plugin.json",
+    "electron/package.json"
+  ]
+}

@@ -15,7 +15,12 @@ import logging
 import os
 import threading
 
-from .counter import ProductCounter, SwabChangeWindow
+from .counter import (
+    ProductCounter,
+    SwabChangeWindow,
+    StillFakeActionDetector,
+    AbsentCountdown,
+)
 
 # 调参基础设施: 设 SENSOR_RECORD_FRAMES=<path> 时, 视角1 每帧锚框情况追加到该文件,
 # 供离线快速试不同计数参数 (默认关闭, 不影响生产)。
@@ -34,15 +39,31 @@ DEFAULT_CONFIG = {
     "swap_channel": 1,                        # 视角2 换棉签通道
     "swap_label": "更换棉签",                  # 视角2 换棉签动作标签
     "max_uses_per_swab": 11,                  # 一根棉签最多擦几个产品 (K)
-    "alarm_event": "",                        # 锁定时触发的报警事件类型 (空=不触发)
+    # 视角2 换棉签解锁判定 (独立于视角1 计数; 不用 detect7 移动即计数 — 真值统计证明它
+    # 对小幅换棉签动作严重漏检, 改用"出现稳定 + 持续时长"判定, 更贴真实换棉签次数)
+    "swab_lock_time": 2.0,                    # 两次解锁最小间隔(秒), 防一次动作重复解锁
+    "swab_min_sustain_sec": 0.0,             # 动作段最短持续(秒), 默认0=照搬 demo 不防抖; 现场要滤瞬时误检调大(如0.12), 用秒跨帧率鲁棒
+    "swab_gap_sec": 0.2,                      # 动作段内允许的丢框间隔(秒), 超过算新段
+    "alarm_event": "",                        # (兼容老配置) 锁定时直接触发的报警事件类型 (空=不触发)
+    # —— v1.1.0 三判定 → 主程序事件 (走 host.trigger_event, 报警/计数器/Toast 全由主程序联动) ——
+    # event_id 指向「对应通道激活项目」events_config 里已配好的事件 (1=合格 / 2=NG / 其它自定义);
+    # 默认 2=系统 NG。设 0/空 = 关掉该判定 (默认假擦拭/超限开、操作员离开关, 保持零差异)。
+    "swab_over_limit_event_id": 2,            # 判定1: 棉签寿命超限 → 触发的事件 id
+    "fake_wipe_event_id": 2,                  # 判定2: 假擦拭 → 触发的事件 id
+    "fake_wipe_label": "擦拭产品",             # 假擦拭追踪的标签 (视角1 cid1)
+    "fake_wipe_still_time": 2.0,              # 静止超时秒 (detect7(1) SWAB_STILL_TIME)
+    "fake_wipe_still_disp": 0.0058,           # 位移阈值 归一化 (detect7(1) 10px / 1728)
+    "operator_absent_enabled": False,         # 判定3 开关 (默认关, 不误报)
+    "operator_absent_event_id": 2,            # 判定3: 操作员离开超时 → 触发的事件 id
+    "operator_absent_timeout_sec": 600,       # 离开超时秒 (detect7(1) 默认 600=10min)
     # detect6 逐帧计数参数 (移动即计数 + 帧硬锁; 阈值 = detect6 像素值 / 1728 宽)
     "move_threshold": 0.0116,                 # 移动判定 (detect6 20px / 1728)
     "lock_spatial": 0.0145,                   # 位置锁范围 (detect6 25px / 1728)
     "lock_time": 3.0,                         # 位置锁 / 计数冷却 (秒, detect6)
     "move_confirm_frames": 3,                 # 连续 N 帧位移超阈值才确认移动 (detect6)
     "lost_frame_thresh": 5,                   # 连续丢失 N 帧确认产品离开 (detect6)
-    # 计数后强制锁定帧数 (detect6 原值 40)。源帧率 <= 推理速度(约56fps)时不丢帧、
-    # 实时时钟=视频时间, 40 即对齐基准 44; 高帧率源(如60fps test.mp4)丢帧需调大。
+    # 计数后强制锁定帧数 (detect7(1) 原值 40)。源帧率 <= 推理速度(约56fps)时不丢帧、
+    # 实时时钟=视频时间, 40 即对齐基准; 高帧率源(如60fps test.mp4)丢帧需调大。
     "force_lock_frames": 40,
 }
 
@@ -51,12 +72,15 @@ _HOST = None
 _LOCK = threading.Lock()
 
 # 棉签状态（内存单组；多工位扩展见二期）
-_state = {"swab_used": 0, "locked": False}
+# absent_remaining: 操作员离开倒计时剩余秒 (-1=未启用/未知), 供前端面板显示
+_state = {"swab_used": 0, "locked": False, "absent_remaining": -1}
 _config_cache = None
 
-# per-channel 逐帧计数器实例（lazy 建）
-_counters = {}        # {channel_id: ProductCounter}
-_swab_windows = {}    # {channel_id: SwabChangeWindow}
+# per-channel 逐帧判定器实例（lazy 建）
+_counters = {}            # {channel_id: ProductCounter}
+_swab_windows = {}        # {channel_id: SwabChangeWindow}
+_fake_wipe_detectors = {} # {channel_id: StillFakeActionDetector} 视角1 假擦拭
+_absent_countdowns = {}   # {channel_id: AbsentCountdown} 视角2 操作员离开
 
 
 def set_host(host):
@@ -83,9 +107,11 @@ def _load_config():
 def reload_config():
     global _config_cache
     _config_cache = None
-    # 配置变了 → 计数器参数可能变, 清掉实例下次按新参数重建
+    # 配置变了 → 判定器参数可能变, 清掉实例下次按新参数重建
     _counters.clear()
     _swab_windows.clear()
+    _fake_wipe_detectors.clear()
+    _absent_countdowns.clear()
     return _load_config()
 
 
@@ -99,6 +125,7 @@ def get_state():
             "max_uses_per_swab": k,
             "remaining": max(0, k - used),
             "locked": _state["locked"],
+            "absent_remaining": _state.get("absent_remaining", -1),
         }
 
 
@@ -141,6 +168,32 @@ def apply_preset_config():
     }
 
 
+def get_config():
+    """返回当前完整插件配置（前端配置面板预填用）。"""
+    return dict(_load_config())
+
+
+def save_config(patch):
+    """合并写入插件配置（system_config）+ 热加载。
+
+    patch 为前端提交的配置增量（三判定事件映射 / 阈值 / 计数参数等），
+    与当前配置合并后整体写库，再 reload 让判定器按新参数重建。
+    """
+    cfg = dict(_load_config())
+    if isinstance(patch, dict):
+        cfg.update(patch)
+    if _HOST is not None:
+        try:
+            _HOST.write_system_config(
+                CONFIG_KEY,
+                json.dumps(cfg, ensure_ascii=False),
+                description="传感器清洁插件 配置（三判定事件映射 + 阈值 + 计数参数）",
+            )
+        except Exception as e:
+            log.warning("[%s] 写配置失败(隔离): %s", CUSTOMER_CODE, e)
+    return reload_config()
+
+
 def _get_counter(cfg, channel_id):
     c = _counters.get(channel_id)
     if c is None:
@@ -159,22 +212,64 @@ def _get_counter(cfg, channel_id):
 def _get_swab_window(cfg, channel_id):
     w = _swab_windows.get(channel_id)
     if w is None:
-        w = SwabChangeWindow(lock_time=cfg["lock_time"])
+        w = SwabChangeWindow(
+            lock_time=float(cfg.get("swab_lock_time", 2.0)),
+            min_sustain_sec=float(cfg.get("swab_min_sustain_sec", 0.0)),
+            gap_sec=float(cfg.get("swab_gap_sec", 0.2)),
+        )
         _swab_windows[channel_id] = w
     return w
 
 
-def _trigger_lock_alarm(cfg, channel_id):
-    if _HOST is None or not cfg.get("alarm_event"):
+def _get_fake_wipe_detector(cfg, channel_id):
+    d = _fake_wipe_detectors.get(channel_id)
+    if d is None:
+        d = StillFakeActionDetector(
+            still_time=cfg.get("fake_wipe_still_time", 2.0),
+            still_disp=cfg.get("fake_wipe_still_disp", 0.0058),
+            lost_frame_thresh=int(cfg.get("lost_frame_thresh", 5)),
+        )
+        _fake_wipe_detectors[channel_id] = d
+    return d
+
+
+def _get_absent_countdown(cfg, channel_id):
+    c = _absent_countdowns.get(channel_id)
+    if c is None:
+        c = AbsentCountdown(timeout_sec=cfg.get("operator_absent_timeout_sec", 600))
+        _absent_countdowns[channel_id] = c
+    return c
+
+
+def _fire_event(channel_id, event_id, reason):
+    """三判定命中 → 借主程序事件响应面 (报警+计数器+Toast, 不结算周期)。
+
+    event_id 为 0/空 = 该判定关闭, 直接跳过 (错误隔离, 不影响检测)。
+    """
+    if _HOST is None or not event_id:
         return
     try:
-        _HOST.trigger_alarm(
-            channel_id=channel_id,
-            event_type=cfg["alarm_event"],
-            reason=f"棉签已用满 {cfg['max_uses_per_swab']} 个产品, 请更换棉签",
-        )
+        ok = _HOST.trigger_event(
+            channel_id=channel_id, event_id=int(event_id), reason=reason)
+        if not ok:
+            log.warning(
+                "[%s] trigger_event 未联动 (通道未注册或事件 id=%s 不在该项目): %s",
+                CUSTOMER_CODE, event_id, reason)
     except Exception as e:
-        log.warning("[%s] trigger_alarm 失败(隔离): %s", CUSTOMER_CODE, e)
+        log.warning("[%s] trigger_event 失败(隔离): %s", CUSTOMER_CODE, e)
+
+
+def _trigger_swab_over_limit(cfg, channel_id):
+    """判定1 棉签寿命超限: 优先走主程序事件; 兼容老配置里直配的 alarm_event。"""
+    reason = f"棉签已用满 {cfg['max_uses_per_swab']} 个产品, 请更换棉签"
+    _fire_event(channel_id, cfg.get("swab_over_limit_event_id"), reason)
+    # 向后兼容: 老配置直接配了 alarm_event 字符串的, 仍触发硬件报警
+    if _HOST is not None and cfg.get("alarm_event"):
+        try:
+            _HOST.trigger_alarm(
+                channel_id=channel_id, event_type=cfg["alarm_event"], reason=reason)
+        except Exception as e:
+            log.warning("[%s] trigger_alarm 失败(隔离): %s", CUSTOMER_CODE, e)
 
 
 def on_detection_frame(ctx):
@@ -185,8 +280,23 @@ def on_detection_frame(ctx):
         now = ctx.get("timestamp") or 0.0
         detections = ctx.get("detections") or []
 
-        # 视角2：换棉签稳定窗口 → 解锁清零
+        # 视角2：操作员离开超时 + 换棉签稳定窗口 → 解锁清零
         if channel_id == cfg["swap_channel"]:
+            # 判定3: 操作员离开超时 (帧级倒计时, 无后台线程)。无任何检测目标视为离岗,
+            # 持续超 timeout → 触发事件; 再检测到人自动解除。
+            if cfg.get("operator_absent_enabled"):
+                present = len(detections) > 0
+                hit, remaining = _get_absent_countdown(cfg, channel_id).feed(present, now)
+                with _LOCK:
+                    _state["absent_remaining"] = remaining
+                if hit:
+                    log.info("[%s] 视角2 操作员离开超 %ss → 触发事件 %s",
+                             CUSTOMER_CODE, cfg.get("operator_absent_timeout_sec"),
+                             cfg.get("operator_absent_event_id"))
+                    _fire_event(
+                        channel_id, cfg.get("operator_absent_event_id"),
+                        f"操作员离开岗位超过 {cfg.get('operator_absent_timeout_sec')} 秒")
+
             swap_label = cfg["swap_label"]
             has_change = any(d.get("label") == swap_label for d in detections)
             if _get_swab_window(cfg, channel_id).feed(has_change, now):
@@ -201,6 +311,19 @@ def on_detection_frame(ctx):
         # 视角1：逐帧跑锚动作生命周期 → 离开计 1 件
         if channel_id in cfg["count_channels"]:
             anchor_label = cfg["count_anchor_label"]
+            # 判定2: 假擦拭 — 追踪"擦拭产品"框, 停留超时但几乎未移动 → 触发事件。
+            if cfg.get("fake_wipe_event_id"):
+                wipe_label = cfg.get("fake_wipe_label", "擦拭产品")
+                wipe_det = None
+                for d in detections:
+                    if d.get("label") == wipe_label:
+                        if wipe_det is None or d.get("confidence", 0) > wipe_det.get("confidence", 0):
+                            wipe_det = d
+                if _get_fake_wipe_detector(cfg, channel_id).update(wipe_det, now):
+                    log.info("[%s] 视角1 假擦拭命中 (擦拭框停留超时位移过小) → 触发事件 %s",
+                             CUSTOMER_CODE, cfg.get("fake_wipe_event_id"))
+                    _fire_event(channel_id, cfg.get("fake_wipe_event_id"),
+                                "假擦拭: 擦拭产品框停留超时但几乎未移动")
             # 取本帧锚动作框 (取置信度最高的一个; demo 单锚)
             anchor = None
             for d in detections:
@@ -234,7 +357,7 @@ def on_detection_frame(ctx):
                 log.info("[%s] 产品计数 %d/%d", CUSTOMER_CODE, used, k)
                 if just_locked:
                     log.info("[%s] 棉签擦满 → 锁定计数, 等待更换棉签", CUSTOMER_CODE)
-                    _trigger_lock_alarm(cfg, channel_id)
+                    _trigger_swab_over_limit(cfg, channel_id)
         return None
     except Exception as e:
         log.warning("[%s] on_detection_frame 异常(隔离): %s", CUSTOMER_CODE, e)

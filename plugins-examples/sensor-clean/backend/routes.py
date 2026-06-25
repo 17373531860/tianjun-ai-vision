@@ -2,9 +2,16 @@
 
 挂在 /api/v1/plugins/sensor-clean/swab/* 下（register_plugin 里 subpath="swab"）。
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 
-from .hooks import get_state, reset_swab, reload_config, apply_preset_config
+from .hooks import (
+    get_state,
+    reset_swab,
+    reload_config,
+    apply_preset_config,
+    get_config,
+    save_config,
+)
 from .preset import get_templates
 
 router = APIRouter()
@@ -26,6 +33,18 @@ def swab_reset():
 def swab_reload_config():
     """改了系统配置后重新加载插件配置。"""
     return reload_config()
+
+
+@router.get("/config")
+def swab_get_config():
+    """获取当前完整插件配置（前端配置面板预填：三判定事件映射 + 阈值 + 计数参数）。"""
+    return get_config()
+
+
+@router.post("/config")
+def swab_save_config(patch: dict = Body(...)):
+    """保存插件配置（合并写库 + 热加载）。前端配置 Tab 保存走此接口。"""
+    return save_config(patch)
 
 
 @router.get("/templates")

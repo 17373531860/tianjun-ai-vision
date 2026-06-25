@@ -86,6 +86,7 @@ def host_full_caps(isolated_db):
         main_version="3.13.0",
         capabilities=[
             "runtime.alarm_trigger",
+            "runtime.event_trigger",
             "runtime.mes_push",
             "runtime.system_config_write",
             "runtime.step_field_write",
@@ -222,6 +223,101 @@ def test_trigger_alarm_calls_alarm_router(host_full_caps, isolated_db, monkeypat
     ret = host_full_caps.trigger_alarm(channel_id=2, event_type="event2", reason="NG超时")
     assert ret is True
     assert called == [("event2", 2)]
+
+
+# ============================================================
+# D2. trigger_event (v3.24: 借用主程序事件响应面, 不结算周期)
+# ============================================================
+
+
+class _FakeVSM:
+    """伪 VideoSourceManager — 只实现 fire_external_event_response."""
+
+    def __init__(self, ret=True):
+        self._ret = ret
+        self.calls = []
+
+    def fire_external_event_response(self, event_id, reason, source=None):
+        self.calls.append((event_id, reason, source))
+        return self._ret
+
+
+def test_trigger_event_rejects_when_capability_not_declared(host_no_caps, isolated_db):
+    """没声明 runtime.event_trigger → 调 trigger_event 抛 PluginRuntimeError."""
+    from backend.plugin_system.registry import PluginRuntimeError
+    with pytest.raises(PluginRuntimeError, match="runtime.event_trigger"):
+        host_no_caps.trigger_event(channel_id=0, event_id=2, reason="假擦拭")
+
+
+def test_trigger_event_calls_fire_external_event_response(host_full_caps, isolated_db, monkeypatch):
+    """trigger_event 转发到目标通道 VSM.fire_external_event_response, source 带 customer_code."""
+    from backend.api import channel_manager as cm_mod
+    fake = _FakeVSM(ret=True)
+    monkeypatch.setattr(cm_mod.channel_manager, "channels", {1: fake})
+    ret = host_full_caps.trigger_event(channel_id=1, event_id=2, reason="假擦拭")
+    assert ret is True
+    assert fake.calls == [(2, "假擦拭", "plugin:acme")]
+
+
+def test_trigger_event_channel_not_registered_returns_false(host_full_caps, isolated_db, monkeypatch):
+    """目标通道未注册 → 返 False, audit failed, 不抛."""
+    from backend.api import channel_manager as cm_mod
+    monkeypatch.setattr(cm_mod.channel_manager, "channels", {})
+    ret = host_full_caps.trigger_event(channel_id=3, event_id=2, reason="x")
+    assert ret is False
+
+    rows = _audit_rows(isolated_db)
+    assert len(rows) == 1
+    assert rows[0].action == "trigger_event"
+    assert rows[0].status == "failed"
+    assert "未注册" in rows[0].message
+
+
+def test_trigger_event_event_not_found_returns_false(host_full_caps, isolated_db, monkeypatch):
+    """事件 id 在项目里不存在 (VSM 返 False) → trigger_event 返 False, audit rejected."""
+    from backend.api import channel_manager as cm_mod
+    fake = _FakeVSM(ret=False)
+    monkeypatch.setattr(cm_mod.channel_manager, "channels", {0: fake})
+    ret = host_full_caps.trigger_event(channel_id=0, event_id=999, reason="x")
+    assert ret is False
+
+    rows = _audit_rows(isolated_db)
+    assert len(rows) == 1
+    assert rows[0].action == "trigger_event"
+    assert rows[0].status == "rejected"
+    assert "matched=False" in rows[0].message
+
+
+def test_trigger_event_writes_audit_success(host_full_caps, isolated_db, monkeypatch):
+    """成功联动 → audit success, message 带 channel_id + event_id."""
+    from backend.api import channel_manager as cm_mod
+    monkeypatch.setattr(cm_mod.channel_manager, "channels", {2: _FakeVSM(ret=True)})
+    host_full_caps.trigger_event(channel_id=2, event_id=5, reason="操作员离开")
+
+    rows = _audit_rows(isolated_db)
+    assert len(rows) == 1
+    assert rows[0].action == "trigger_event"
+    assert rows[0].status == "success"
+    assert "channel_id=2" in rows[0].message
+    assert "event_id=5" in rows[0].message
+
+
+def test_trigger_event_swallow_exception_returns_false(host_full_caps, isolated_db, monkeypatch):
+    """VSM 内部抛 → trigger_event 返 False, audit failed, 不上抛 (错误隔离)."""
+    from backend.api import channel_manager as cm_mod
+
+    class BoomVSM:
+        def fire_external_event_response(self, event_id, reason, source=None):
+            raise RuntimeError("simulated settlement failure")
+
+    monkeypatch.setattr(cm_mod.channel_manager, "channels", {0: BoomVSM()})
+    ret = host_full_caps.trigger_event(channel_id=0, event_id=2, reason="x")
+    assert ret is False
+
+    rows = _audit_rows(isolated_db)
+    assert len(rows) == 1
+    assert rows[0].status == "failed"
+    assert "simulated settlement failure" in rows[0].message
 
 
 def test_mes_push_calls_gateway_dispatch(host_full_caps, isolated_db, monkeypatch):

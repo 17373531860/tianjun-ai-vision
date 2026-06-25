@@ -316,6 +316,8 @@ class PluginHost:
 
     v3.13 M1.3a 起新增主动 API (插件 → 主程序方向):
     - trigger_alarm(channel_id, event_type, reason):  调用主程序 AlarmRouter
+    - trigger_event(channel_id, event_id, reason):    借用主程序事件响应面 (报警+
+                                       计数器+Toast, 不结算周期), 需 'runtime.event_trigger'
     - mes_push(event_type, payload, channel_id):      走主程序 MES Gateway 推送
     - read_system_config(key):                        读主程序 SystemConfig 表
     - write_system_config(key, value, description):   写主程序 SystemConfig 表
@@ -631,6 +633,64 @@ class PluginHost:
             )
             log.warning(
                 "[Plugin][%s] trigger_alarm 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return False
+
+    def trigger_event(self, channel_id: int, event_id, reason: str = "") -> bool:
+        """触发主程序"事件响应" (走 VideoSourceManager.fire_external_event_response).
+
+        借用目标通道已激活项目 events_config 里某个事件的"响应面":
+        复用该事件配好的报警 (灯/蜂鸣) + Toast/语音 + 计数器联动,
+        **但不结束检测周期、不动 OK/NG 周期统计** —— 适合过程告警类判定
+        (如假擦拭 / 操作员离开 / 耗材超限), 而非"一个产品检完合不合格".
+
+        参数:
+            channel_id: 工位通道号 (0 起), 必须是 ChannelManager 已注册的通道.
+            event_id:   目标事件 id, 必须是该通道激活项目 events_config 里已存在的
+                        事件 (1=合格 / 2=NG / 其它自定义). 报警 / 计数器 / Toast
+                        全部按该事件在主程序里配好的来.
+            reason:     原因字符串, 进 events_log (前端 Toast/语音文案) + audit.
+
+        返回:
+            True  = 找到通道 + 事件并已联动.
+            False = 通道未注册 / 事件未找到 / 异常 (audit 已写, 不抛, hook 继续).
+
+        安全约束:
+            - 需要 manifest.capabilities 声明 'runtime.event_trigger'.
+            - event_id **不**强制 plugin_ 前缀 — 事件是主程序级 (项目配置),
+              插件只能复用用户配好的事件, 不能凭空定义新事件语义.
+        """
+        self._require_capability("runtime.event_trigger")
+        try:
+            from backend.api.channel_manager import channel_manager
+            mgr = channel_manager.channels.get(channel_id)
+            if mgr is None:
+                self._audit_log(
+                    action="trigger_event",
+                    status="failed",
+                    message=f"channel_id={channel_id} 未注册, event_id={event_id}",
+                )
+                return False
+            ok = mgr.fire_external_event_response(
+                event_id, reason, source=f"plugin:{self.customer_code}")
+            self._audit_log(
+                action="trigger_event",
+                status="success" if ok else "rejected",
+                message=(
+                    f"channel_id={channel_id} event_id={event_id} "
+                    f"reason={reason!r} matched={ok}"
+                ),
+            )
+            return bool(ok)
+        except Exception as exc:
+            self._audit_log(
+                action="trigger_event",
+                status="failed",
+                message=f"channel_id={channel_id} event_id={event_id} err={exc}",
+            )
+            log.warning(
+                "[Plugin][%s] trigger_event 异常 (已 swallow): %s",
                 self.customer_code, exc,
             )
             return False

@@ -30,7 +30,7 @@ export default {
     project: '项目管理',
     model: '模型仓库',
     data: '数据管理',
-    settings: '显示设置'
+    settings: '系统设置'
   },
   mode: {
     sequential: '顺序模式',
