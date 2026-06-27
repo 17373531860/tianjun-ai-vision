@@ -2,8 +2,8 @@
 
 > **给 AI 助手（Claude Code / Cursor / 其他 LLM agent）的项目说明书**
 >
-> 这份文档是 **地图 + 守则 + 不变量**：让你立刻明白"项目是什么 / 模块在哪 / 改动应该读哪个 skill"。
-> **细节流程**在 `.claude/skills/<name>/SKILL.md`，按需读取。
+> 这份文档只做三件事：**地图（项目是什么 / 模块在哪）+ 守则（怎么干活）+ 不变量（不能违反什么）**。
+> **细节一律不进本文件**——模块详解在对应 `.claude/skills/<name>/SKILL.md`，版本历史在 `docs/changelog/`，插件资料在 `docs/plugin-system/`，按需读取。
 >
 > 阅读顺序：第一节 → 第三节工作守则 → 第四节 skill 指针表 → 任务相关章节。
 
@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | v3.23.0（2026-06-22 — 上银包装线现场闭环增强 + 通用 NG 补做：外部触发事件（漏箱/多装/缺油嘴/缺工单）支持「需人工确认」定格整条检测线 + 管理员/主管「强制结案」(`system.packaging_flow.force_settle` + 理由审计) + 待机维持检测不结算 + 每箱缺油嘴视觉 gate + 通用「NG 补做策略」(`pipeline_config.ng_remediation`，任意模式，缺步骤/少装人工确认就地补做不重置周期，延迟落账) + 包装补滑块落地 + 开机自动恢复检测开关 + 项目一键复制 + 虚拟扫码枪；默认全关零差异；包装单测 48/48，全量非浏览器 1277 passed（19 失败为已知批跑串污染单跑全绿）。中间版本 v3.21.0/v3.22.x：包装箱结算协调器 + 上银滑块口径 MES 闭环。详见 `debug-mes` skill 第十六节） |
+| 当前线上版本 | **v3.28.0**（2026-06-27）— 逐件覆盖模式「工件离场快照判定 + 漏打挂起待补态 + 判定/结算时机解耦」+ 插件配置统一保存接入主程序保存按钮 + 传感器清洁插件 v1.2.0（选择性抑制提示框 + 棉签使用记录数据页）。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -29,7 +29,7 @@
 ### 后端
 - **Python 3.10**（Anaconda 环境 `tianjun`）
 - **FastAPI**（`uvicorn` runtime）+ **SQLAlchemy ORM**
-- **SQLite**（单文件 `sql_app.db`，开 WAL + busy_timeout=15s；**计划迁 PostgreSQL** — 见模块 18）
+- **SQLite**（单文件 `sql_app.db`，开 WAL + busy_timeout=15s；**计划迁 PostgreSQL**）
 - **OpenCV** + **PyTorch（CUDA）** + **Ultralytics YOLO**
 - **Jinja2 SandboxedEnvironment**（仅用于自定义导出渲染；MES Gateway **不**用 Jinja2）
 - 视频编解码：FFmpeg（GPL Win64）
@@ -45,7 +45,7 @@
 - **Electron** 32+ + 8 步关机流程 + Splash + License 验证 + 三层崩溃恢复
 
 ### 编译/打包
-- **Nuitka** 把 8 个核心 `.py` 编成 `.pyd`（CI 用 `--module`，按白名单替换源码）
+- **Nuitka** 把核心 `.py` 编成 `.pyd`（CI 用 `--module`，按白名单替换源码）
 - **conda-pack** 打 Python 环境
 - **Inno Setup**（Windows 安装包）
 - **GitHub Actions** CI（`.github/workflows/build.yml`）→ GitHub Release → Gitee Release（客户下载）
@@ -118,35 +118,20 @@
 - ❌ "这功能小众但通用，主程序加个开关默认关" — 默认关的开关也是污染。改插件
 - ✅ "插件平台缺 X 能力 → 先给平台补 X（基础设施）→ 客户插件用 X 实现需求" — **正解**
 
-**例外**：
+**例外**：主程序底层架构本身确实需要演进（新概念、新表、新状态机分支）→ 走主程序原生，但**同时**给插件平台留对应 hook，让以后这个新架构的客户级变种也能走插件。
 
-- 主程序底层架构本身确实需要演进（新概念、新表、新状态机分支） → 走主程序原生，但**同时**给插件平台留对应 hook，**让以后这个新架构的客户级变种也能走插件**
-
-**这条原则的目的**：让主程序保持精简、稳定、面向所有客户；让插件平台承担"客户百花齐放"的成本。
-
-**实操工作流**（接到任何"加功能"诉求时，**按这个顺序走**）：
-
-1. **判定归位**：用上面的细则表判断"基础设施 / 客户变种 / 客户 IT 对接 / 底层架构 / UI 个性化"
-2. **查现有能力面**：
-   - 基础设施 → 看 modify-* / add-* 系列 skill 能不能直接接住
-   - 客户变种 → 看插件平台当前的 hook / 主动 API / slot 是否够用（参 `docs/plugin-system/design/`）
-3. **如果现有能力面够用** → 直接立项实施（用对应 skill）
-4. **如果现有能力面不够** → **先升级平台能力面**（写 RFC 或扩展现有 RFC），再做客户实施
-5. **绝不允许**："客户先要这个功能我们先在主程序临时加，后面再迁移" — 永远说不
-6. **决策必须留痕**：每个非平凡功能立项前，至少在 commit message / PR description / RFC 里写一句话说明"为什么归这一档"
-
-详细决策流程见 `.claude/skills/feature-placement/SKILL.md`。
+**这条原则的目的**：让主程序保持精简、稳定、面向所有客户；让插件平台承担"客户百花齐放"的成本。详细决策流程见 `.claude/skills/feature-placement/SKILL.md`。
 
 ---
 
 ## 四、必读 skill 触发表（核心导航）
 
-**这是 AGENTS.md 最重要的一节**。看到对应场景，**先读对应 skill 再动手**。
+**这是 AGENTS.md 最重要的一节**。看到对应场景，**先读对应 skill 再动手**。各模块的详细说明（文件清单、踩坑、扩展点）都在对应 skill 里，不在本文件。
 
 | 场景 | 必读 skill |
 |---|---|
 | 改 `backend/api/source.py` 或任意 `source_*_mixin.py` / has-a 组件 | `modify-source` |
-| 改 ORM 模型 / 加表 / 改字段 | `modify-model` |
+| 改 ORM 模型 / 加表 / 改字段（含全部数据库表清单与字段） | `modify-model` |
 | 改后端 API 端点（路由、Schema、参数）| `modify-api` |
 | 改前端 Vue 组件 / Pinia store | `modify-frontend` |
 | 改项目配置结构（pipeline_config / steps_config / events_config）| `modify-project-config` |
@@ -155,18 +140,18 @@
 | 新增检测模式 | `add-detection-mode` |
 | 新增事件类型（OK/NG/警告之外）| `add-event-type` |
 | 排查检测异常（不出目标 / FPS 低 / 置信度问题）| `debug-detection` |
-| 排查 source 状态机问题 | `debug-source` |
+| 排查 source 状态机问题（Cycle/Step 生命周期、结算模式）| `debug-source` |
 | 排查多通道异常（GPU、ChannelManager、串扰）| `debug-channel` |
-| 排查视频采集 / 推流问题 | `debug-video` |
+| 排查视频采集 / 推流 / 录像问题 | `debug-video` |
 | 排查报警不响应 | `debug-alarm` |
-| 排查 MES 异常（工单 / 工件 / 缺陷 / 扫码器 / Hook / Gateway）| `debug-mes` |
+| 排查 MES 异常（工单 / 工件 / 缺陷 / 扫码器 / Hook / Gateway / 外设）| `debug-mes` |
 | 排查集群主从（box 不齐 / 副机心跳 / box_complete 不推 MES）| `debug-cluster` |
 | 排查 Session/Cycle/Step 数据问题 | `debug-session` |
 | 排查 Electron 桌面壳问题 | `debug-electron` |
 | 排查前端问题 | `debug-frontend` |
 | 排查自定义导出 / 实时规则 / 模板 / 字段中央仓库（v3.5.0+）| `debug-export` |
-| 排查用户系统 / License 授权（machineId / RSA 验签 / 当前登录用户落盘 / token 鉴权 / 权限不通过 / API Key）| `debug-operator-license` |
-| 排查 per_item 逐件覆盖模式（打螺丝场景 / 周期不开始 / 漏件不报 / PerItemPanel 空白 / mock 注入失败 / 严格等量不触发 / 手动结算 API / box 尺寸过滤误检）（v3.8.0+ / v3.12.0 增强）| `debug-per-item` |
+| 排查用户系统 / License 授权（machineId / RSA 验签 / token 鉴权 / 权限 / API Key）| `debug-operator-license` |
+| 排查 per_item 逐件覆盖模式（打螺丝场景 / 周期不开始 / 漏件不报 / 严格等量 / 手动结算 / box 尺寸过滤）| `debug-per-item` |
 | 数据问题修复 | `fix-data` |
 | 前后端 API 对齐检查 | `api-sync` |
 | 调参（视频 + 模型）| `tune-params` |
@@ -178,6 +163,7 @@
 | 给客户出热补丁 | `create-hotfix` |
 | 分支合并 / 多 agent 并行协作 / 解决合并冲突 | `merge-branch` |
 | 接到新功能诉求 / 评估"这是主程序还是插件" / 立项前归位决策 | `feature-placement` |
+| 开发客户插件 / 找扩展点 / 插件平台能力 | `docs/plugin-system/`（非 skill，整套设计+实现+清单在此） |
 
 ---
 
@@ -185,647 +171,85 @@
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│  Electron 桌面壳 (electron/main.js, 737 行)                     │
+│  Electron 桌面壳 (electron/main.js)                              │
 │  - spawn python uvicorn 后端 → 健康检查 → 加载前端 → Splash 撤场 │
-│  - License 验证（RSA SHA256 + machineId）                        │
-│  - 8 步关机 / 三层崩溃恢复                                        │
+│  - License 验证（RSA SHA256 + machineId） / 8 步关机 / 三层崩溃恢复│
 └──────────────┬───────────────────────────────────┬─────────────┘
-               │                                   │
        ┌───────▼────────┐                  ┌──────▼──────────┐
        │ Vue3 前端       │  HTTP /api/v1   │ FastAPI 后端     │
        │ (Vite dev:5173) │ ◄─────────────► │ (端口 8001)      │
        │                │   MJPEG 流       │                 │
-       │ 10 个视图模块    │                  │ 25 个 API 文件   │
-       │ + 4 个 Store    │                  │ + 22 个 service  │
-       │ (Pinia)        │                  │ + 35 source mixin │
        └────────────────┘                  └──────┬──────────┘
-                                                 │
                           ┌──────────────────────┼─────────────────────┐
-                          │                      │                     │
                    ┌──────▼──────┐        ┌──────▼─────┐        ┌──────▼──────┐
                    │  SQLite     │        │ 视频源/推理  │        │ MES / 扫码 │
                    │ sql_app.db  │        │ Source/Det  │        │ Gateway   │
-                   │ 31 张表     │        │ 多通道+集群  │        │ 5 种适配器 │
-                   │ (WAL)       │        │              │        │           │
-                   └─────────────┘        └─────────────┘        └─────────────┘
-                                                 │
-                                          ┌──────▼─────────────────────────┐
-                                          │ 硬件 IO                          │
-                                          │ - 摄像头 (USB/RTSP/海康/视频文件)│
-                                          │ - PyTorch GPU 推理              │
-                                          │ - 报警串口 (Modbus 灯塔/蜂鸣)    │
-                                          │ - 扫码器 (LON/WMax/虚拟)        │
-                                          │ - 称重设备等外部设备             │
-                                          └────────────────────────────────┘
+                   │ (WAL)       │        │ 多通道+集群  │        │ 5 种适配器 │
+                   └─────────────┘        └─────────────┘        └─────┬───────┘
+                                                              ┌────────▼─────────┐
+                                                              │ 硬件 IO           │
+                                                              │ 摄像头/GPU推理/   │
+                                                              │ 报警串口/扫码器/  │
+                                                              │ 称重等外部设备     │
+                                                              └──────────────────┘
 ```
 
-### 后端真实路由前缀（**全部** `/api/v1/` 下，19 组）
+> Hub 集成关系（VideoSourceManager → MESHookManager → WorkOrder/Workpiece/Defect/Cluster/Gateway/Scanner）的详细图见 `debug-mes` skill；数据库 37+ 张表的逐表字段见 `modify-model` skill。
+
+### 后端真实路由前缀（**全部** `/api/v1/` 下）
 
 | 前缀 | 文件 | 一句话 |
 |---|---|---|
-| `/source/*` | `source_routes.py` (1279 ⚠️) | **视频源 + 检测核心** |
-| `/data/*` | `sessions*.py` (4 个文件 / ~2086 行) | session/cycle/step 记录 + 导出 |
-| `/projects/*` | `projects.py` (335) | 项目 CRUD + 激活 |
-| `/models/*` | `models.py` (793) | 模型上传/转换/标签 |
-| `/tasks/*` | `tasks.py` (193) | 离线推理任务 |
-| `/reports/*` | `reports.py` (~340) | 趋势/日报/导出 |
-| `/cameras/*` | `cameras.py` (152) | **旧式相机表**（与 `/source/*` 并存，**注意不要混淆为主路径**）|
-| `/system/*` | `system_display.py` (136) | KV 配置 + license 缓存（v3.5.0） |
-| `/alarm/*` | `alarm.py` (1009 ⚠️) | 灯塔/蜂鸣器/共享灯柱 |
-| `/workstations/*` | `channel_manager.py` (374) | 多工位 + GPU 分配 |
-| `/scanner/*` | `scanner.py` (533) | 扫码器 CRUD + scan_pair + 禁用 |
-| `/scanner/wmax/*` | `wmax.py` (673 ⚠️) | WMax 协议（35+ endpoint） |
-| `/external-devices/*` | `external_device.py` (366) | 称重器/串口外设 |
-| `/cluster/*` | `cluster.py` (296) | 集群主从 + 副机心跳 |
-| `/mes/*` | `mes.py` (673 ⚠️) | 工单/工件/缺陷/缺陷码 |
-| `/mes/gateway/*` | `mes_gateway.py` (450) | MES 推送连接 + 测试 |
-| `/auth/*` | `auth.py` (274) | **v3.10.0** 登录/登出/启用-关闭鉴权/me/权限目录 |
-| `/users/*` | `users.py` (186) | **v3.10.0** 用户 CRUD + 角色绑定 |
-| `/roles/*` | `roles.py` (136) | **v3.10.0** 角色 CRUD + 权限编辑 |
-| `/api-keys/*` | `api_keys.py` (143) | **v3.10.0** M2M API Key 管理（SHA256 哈希 + scope） |
-| `/operators/*` | `operators.py` (74) | ⚠️ **v3.10.0 已废弃** — 全部 410 Gone，重定向 `X-Deprecated-Replacement: /api/v1/users` |
+| `/source/*` | `source_routes.py` ⚠️ | **视频源 + 检测核心** |
+| `/data/*` | `sessions*.py`（4 个文件） | session/cycle/step 记录 + 导出 |
+| `/projects/*` | `projects.py` | 项目 CRUD + 激活 |
+| `/models/*` | `models.py` | 模型上传/转换/标签 |
+| `/tasks/*` | `tasks.py` | 离线推理任务 |
+| `/reports/*` | `reports.py` | 趋势/日报/导出 |
+| `/cameras/*` | `cameras.py` | **旧式相机表**（与 `/source/*` 并存，**勿混淆为主路径**）|
+| `/system/*` | `system_display.py` | KV 配置 + license 缓存 |
+| `/alarm/*` | `alarm.py` ⚠️ | 灯塔/蜂鸣器/共享灯柱 |
+| `/workstations/*` | `channel_manager.py` | 多工位 + GPU 分配 |
+| `/scanner/*` | `scanner.py` | 扫码器 CRUD + scan_pair + 禁用 |
+| `/scanner/wmax/*` | `wmax.py` ⚠️ | WMax 协议（35+ endpoint） |
+| `/external-devices/*` | `external_device.py` | 称重器/串口外设 |
+| `/cluster/*` | `cluster.py` | 集群主从 + 副机心跳 |
+| `/mes/*` | `mes.py` ⚠️ | 工单/工件/缺陷/缺陷码 |
+| `/mes/gateway/*` | `mes_gateway.py` | MES 推送连接 + 测试 + 工单拉取 |
+| `/auth/*` | `auth.py` | v3.10.0 登录/登出/启用-关闭鉴权/me/权限目录 |
+| `/users/*` | `users.py` | v3.10.0 用户 CRUD + 角色绑定 |
+| `/roles/*` | `roles.py` | v3.10.0 角色 CRUD + 权限编辑 |
+| `/api-keys/*` | `api_keys.py` | v3.10.0 M2M API Key 管理（SHA256 + scope） |
+| `/operators/*` | `operators.py` | ⚠️ **v3.10.0 已废弃** — 全部 410 Gone，重定向 `/api/v1/users` |
 | `/export/*` | `export_custom.py` + `export_realtime.py` | v3.5.0 自定义导出（共用前缀） |
-| `/channel-groups/*` | `channel_groups.py` | **v3.13.1** 单机内多工位**并行**联动 (RFC 10) |
-| `/workpiece-flows/*` | `workpiece_flows.py` | **v3.14.0** 单机内多工位**串行**结算 (RFC 11) |
-| `/debug/*` | `debug.py` (118) | 通道诊断 |
+| `/channel-groups/*` | `channel_groups.py` | v3.13.1 单机内多工位**并行**联动 (RFC 10) |
+| `/workpiece-flows/*` | `workpiece_flows.py` | v3.14.0 单机内多工位**串行**结算 (RFC 11) |
+| `/plugins/*` | `plugins.py` | 插件安装/激活/清单/client-log |
+| `/debug/*` | `debug.py` | 通道诊断 + 调试日志中心 |
 
-> **常见误解**：路径前缀是**`/api/v1/`** 不是 `/api/`；旧手册写的 `/api/detection/*` 已删，等价端点在 `/api/v1/source/detection/*`。
-
-### 37+ 张数据库表（v3.14.0+；仅速查，详细字段见 modify-model skill）
-
-**`backend/models/models.py` 13 张**（核心检测）：
-`projects` / `models` / `model_conversions` / `tasks` / `cameras` / `daily_stats` / `system_configs` / `detection_sessions` / `detection_cycles` / `step_records` / `video_clips` / `data_export_settings` / `channel_groups` (v3.13.1 新增, 见模块 5b 工位组)
-
-**`backend/models/mes_models.py` 17 张**（MES + 串行流水线）：
-`work_orders` / `batches` / `workpieces` / `workpiece_inspections` / `defect_records` / `defect_codes` / `scanner_devices` / `scan_logs` / `mes_connections` / `mes_comm_logs` / `cluster_config` / `box_aggregations` / `external_devices` / `external_device_logs` / `box_summaries` / `workpiece_flow_configs` / `workpiece_flow_runs` (v3.14.0 新增 2 张, 见模块 5c 串行流水线)
-
-**`backend/models/export_models.py` 3 张**（v3.5.0+）：
-`export_templates` / `export_realtime_rules` / `export_run_logs`
-
-**`backend/models/auth_models.py` 5 张**（v3.10.0+ 用户系统）：
-`users` / `roles` / `user_roles` / `session_tokens` / `api_keys`
-
-**`backend/models/plugin_models.py` 2+ 张**（v3.13+ 插件系统）：
-`plugins` / `plugin_audit_logs` (实际表数依插件平台细节, 见 `plugin_system/registry.py`)
-
-> ⚠️ **v3.13.1 起 `detection_cycles` 加 3 列**: `channel_group_id` (FK → `channel_groups.id`, SET NULL) / `group_settled_with: JSON` / `group_settle_result: VARCHAR(8)`. 同时 `step_records` 加 `plugin_data: JSON` 字段, `projects` 等 JSON 字段约定 `plugin_data.<customer_code>` 命名空间.
-> ⚠️ **v3.10.0 起 `operators` 表已 DROP**（启动迁移自动执行 `DROP TABLE IF EXISTS operators`）；`detection_sessions.operator_id` 字段保留但语义改为指向 `users.id`，FK 加 `ondelete=SET NULL`。
-> ⚠️ 产品交接手册 v2.4.0 说"22 张表"是**严重过时的**，以代码为准。
-> ⚠️ ORM 类名是 `Model`（**不**是 `MLModel`）；表名是 `models`（**不**是 `ml_models`）。
-
-### Hub 关系图（最大集成中心）
-
-```
-                   ┌──────────────────────────────────┐
-                   │  VideoSourceManager (per channel) │   ← 15 mixin + 6 has-a
-                   └─────────────┬────────────────────┘
-                                 │ on_cycle_*/on_session_*
-                                 ▼
-                  ┌─────────────────────────────────┐
-                  │  MESHookManager (singleton)     │  ← 项目最大 Hub
-                  │  + 后台 mes-hook-worker 线程     │  ← 队列 + 独立 DB session
-                  │  + scan_pair 状态机 (v3.3.0)    │
-                  │  + _disabled_channels 落盘 JSON │  ← v3.4.2
-                  └─┬───────┬───────┬───────┬───────┘
-                    │       │       │       │
-          ┌─────────┘       │       │       └──────────────────┐
-          ▼                 ▼       ▼                          ▼
-┌──────────────────┐  ┌──────────┐ ┌──────────┐ ┌──────────────────────┐
-│ WorkOrderService │  │Workpiece │ │ Defect   │ │ ClusterCollector     │
-│ (binding_scope)  │  │Service   │ │ Service  │ │ (心跳/超时/box聚齐)   │
-└──────────────────┘  └──────────┘ └──────────┘ └──────────────────────┘
-                                                      │
-                                                      ▼
-                  ┌─────────────────────────────────┐
-                  │  MESGateway (推送外部 MES)       │
-                  │  └─ build_payload (非 Jinja2!)   │  ← 自研 {key.path}
-                  │  └─ _apply_auth_to_headers       │
-                  │  └─ retry (1+retry_count)        │
-                  └────────────────┬────────────────┘
-                                   ▼
-                5 个适配器（注册名）：
-                rest / form-data / form-urlencoded / query-string / modbus_rtu
-
-       ┌──────────────────┐         _on_data_received
-       │ ScannerService   │ ───────────────┐
-       │ + _listen_loop/  │                ▼
-       │   _text_lon_*    │         MESHook.on_scan_received
-       │ + WMax 后台线程   │                │
-       └────────┬─────────┘                │
-                │ _inject_barcode          │
-                ▼                          │
-       ┌──────────────────────┐            │
-       │ ExternalDeviceService│ ←──────────┘
-       │ + Pipeline Mixin     │
-       │ + 称重 idle/stable   │
-       │ + 有重无码 → alarm   │
-       └──────────────────────┘
-                ↓
-       cycle_end → mes_hooks._handle_cycle_end → dispatch_cycle_end_export
-                                                      │
-                                                      ▼
-                                          export_context.build_cycle_context
-                                          export_renderer.render_to_file
-                                          ExportRunLog 写库
-```
+> **常见误解**：路径前缀是 **`/api/v1/`** 不是 `/api/`；旧手册写的 `/api/detection/*` 已删，等价端点在 `/api/v1/source/detection/*`。
+> **ORM 提醒**：类名是 `Model`（**不**是 `MLModel`）；表名是 `models`（**不**是 `ml_models`）。
 
 ---
 
-## 六、模块详解（20 个）
+## 六、模块详解
 
-### 6.1 业务核心
-
-#### 模块 1：视频源采集 (Source)
-
-**做什么**：6 种视频源（USB / RTSP / 视频文件 / 海康工业相机 MvCamera / 海康 NVR HCNetSDK / 单图）的统一采集，作为 ChannelManager 的输入。
-
-**关键文件**：`backend/api/source.py`（1573 行主类）+ **15 个继承式 mixin** + **6 个 has-a 组件** + 工具模块。详见 `modify-source` skill。
-
-**对外接口**：`/api/v1/source/*`。
-
-**改动它必读**：`modify-source` + `debug-source`
-
-**已知架构事实**（详细踩坑见 `debug-video` / `debug-source`）：
-- `OPENCV_FFMPEG_CAPTURE_OPTIONS=threads;1` **必须在 cv2 import 前 setdefault**（v3.1.3 起）
-- `source_camera_start_mixin.py` 与 `source_industrial_camera_mixin.py` **同名方法（`start_hcnetsdk` / `start_hikvision_camera`）共存**，依赖 MRO 决出实际生效方
-- `source_recording_mixin.py` (546) 与 `source_recording_thread_mixin.py + source_recording_api_mixin.py` **能力重叠**，历史拆分残留
+> 已下放。每个业务模块的"做什么 / 关键文件 / 踩坑 / 扩展点"都在**第四节触发表**对应的 skill 里。不要再在本文件维护模块详解——那是 skill 的职责，避免双份维护漂移。
+>
+> 速记主线：视频源采集(Source) → 检测推理(Detection) → 项目配置(Project 7 个 JSON 字段) → 周期/步骤/事件状态机(5 种 logic_mode × 4 种 settlement_mode) → 多通道(ChannelManager) → MES 子系统(工单/工件/缺陷/扫码器/Gateway/集群) → 数据记录与导出 → 报警/录像/系统设置 → Electron 桌面壳 → 用户系统+License。任一模块要动手，先查上表进对应 skill。
 
 ---
 
-#### 模块 2：检测推理 (Detection / Model)
-
-**做什么**：YOLO 系列模型加载 + 推理，3 种 runner（纯检测、检测+跟踪、分割），支持 PyTorch FP32/FP16 / TensorRT 引擎切换。
-
-**关键文件**：
-- `backend/api/source_model_load_mixin.py` — 模型加载（含 TRT engine `imgsz` 多级探测）
-- `backend/api/source_inference_executor.py` — 单线程推理池
-- `backend/api/source_inference_loop_mixin.py` — 推理循环 + FPS 统计
-- `backend/api/source_detect_runners_mixin.py` — 3 种 runner 路径（含 `clip_bbox_normalized`）
-- `backend/api/source_drawer.py` — Drawer 组件（Kalman 平滑 + 中文字体 + 赛博朋克框）
-- `backend/api/source_geometry.py` — IoU / 归一化 / 字体缓存
-- `backend/api/models.py` — 模型管理 API
-- `backend/services/defect.py` — NG 后缺陷分类
-
-**改动它必读**：`modify-source` + `debug-detection`
-
----
-
-#### 模块 3：项目配置 (Project)
-
-**做什么**：每个客户项目（一组检测目标 + 一套步骤逻辑 + 一组事件 + 一组报警 + 一组数据导出）的全部配置。是整个系统的"客户脚本"。
-
-**关键文件**：
-- `backend/models/models.py: Project` 表（所有 7 个 JSON 字段）
-- `backend/api/projects.py` — CRUD API
-- `backend/api/source_project_config_apply.py` — 把 Project 应用到 VSM
-- `frontend/src/views/Project/index.vue` (2925 ⚠️)
-- `frontend/src/store/useProjectStore.js`
-
-**Project 的 7 个 JSON 配置字段**：
-- `pipeline_config` — 步骤序列、推理模式、容器分组、周期性强制动作
-- `steps_config` — 每步的标签、最长/最短帧数、置信度阈值
-- `events_config` — 自定义 OK/NG/警告事件
-- `counters_config` — 计数器
-- `alarm_config` — 报警规则
-- `detection_config` — 检测框样式、语音、Toast
-- `data_config` — 数据导出开关
-
-**改动它必读**：`modify-project-config`（**必读，全链路影响**）
-
-**关键扩展点**：所有 7 个字段都是 JSON，**新增需求优先往 JSON 加键**而不是新加 Column。
-
----
-
-#### 模块 4：周期/步骤/事件 状态机
-
-**做什么**：Cycle（一次完整生产周期）→ Step（步骤序列内的每一步）→ Event（每步触发的 OK/NG/自定义事件）。业务执行核心。
-
-**关键文件**：
-- `source_session_lifecycle_mixin.py` (1111 ⚠️) — Session/Cycle 生命周期 + scan_pair settle
-- `source_check_modes_mixin.py` — 检查模式聚合器（仅 MRO）
-- `source_settlement_mixin.py` (1320 ⚠️⚠️) — 8 种结算逻辑 + **v3.9.0 `_process_last_first_mode` (双锚状态机 R1-R6) + `_process_cross_cycle_groups` (跨周期组类二独立状态机)**
-- `source_sequential_mixin.py` — 顺序模式
-- `source_step_stats_mixin.py` — 步骤统计聚合（v3.9.0 加 last_first / cross_cycle 前置路由钩子）
-- `source_event_trigger_mixin.py` — `_trigger_event()` 中心 hook
-- `source_events_check_mixin.py` — 旧的"基于消失"结算路径，v3.9.0 起 `last_first` / `first_step` 模式跳过
-- `source_periodic_actions_mixin.py` — v3.5.0 周期性强制动作
-- `source_per_item_mixin.py` (869, v3.9.0 加五补丁) — **v3.8.0 逐件覆盖模式**（独立路径，与其他 4 种模式正交）
-- `source_project_config_apply.py` — 应用 Project 配置；v3.9.0 加 last_first 自动清空 strict_order 兜底
-- `models/models.py` — `DetectionSession` / `DetectionCycle` / `StepRecord`
-
-**对外接口**：`/api/v1/source/detection/results`（实时状态全集，含 PT/CT raw 数据 + `per_item_state`）
-
-**改动它必读**：`modify-source` + `debug-source` + `add-event-type`（如果新增事件类型） + `debug-per-item`（若涉及 per_item 模式）
-
-**5 种 logic_mode 速查**：
-
-| logic_mode | 行为 | 主要文件 |
-|---|---|---|
-| `sequential` | 顺序模式：步骤按 index 递增 | `source_sequential_mixin.py` |
-| `detection` | 无序检测模式：检查 cycle_steps 完成度 | `source_step_stats_mixin.py` |
-| `custom` | 自定义优先级匹配 + base_mode 兜底 | `source_check_modes_mixin.py` |
-| `tracking` | 跟踪模式：tracked_items 字典 + ID 跟踪 + container_mode | `source_step_stats_mixin.py` |
-| `per_item` | **v3.8.0 新增** 逐件覆盖：N 个个体逐件被工序覆盖 → 收尾标签结算 | `source_per_item_mixin.py` |
-
-**4 种 settlement_mode 速查**（与 logic_mode **正交**，前者决定"何时算一个周期完"）：
-
-| settlement_mode | 何时结算 | 何时开新周期 | 适用 |
-|---|---|---|---|
-| `first_step` | 首步**重新出现**（第一次再来） | 同上 | 默认；首尾相接的工序流（标准模式）|
-| `last_step` | 末步**消失**（最后一步走完） | 任意有意义步骤回来 | 末步消失型（少用）|
-| `no_anchor` | 周期超时 / 空闲超时 | 任意有意义步骤回来 | 不规则节拍场景 |
-| `last_first` | **v3.9.0 新增** — 末步**出现**立刻结算（不等消失） | 首步**出现**立刻开新周期；首步缺位时由序列其他步骤顶替（R4），末步缺位时由首步重出触发 NG fallback（R3）| 打螺丝/装配等"末步即出值 + 跳末步即放弃"的双锚场景 |
-
-> ⚠️ `last_first` 与以下配置**严格互斥**（前后端双层校验，前端拒绝保存 + 后端 `_apply_pipeline_config` 兜底覆盖）：`strict_mode` / 跨周期组 `cross_cycle` / `per_item` 模式 / `detection`/`tracking` logic_mode / `custom` 模式 base 不为 `sequential`。详见 `debug-source` skill。
-
-**关键扩展点**：
-- `_trigger_event` 是中心 hook，所有事件都从这里发出，插件可挂事件后处理
-- `events_config` JSON 已支持自定义事件，新增需求优先扩此 JSON
-- `pipeline_config.per_item` / `steps_config[i].per_item` — v3.8.0 新增逐件覆盖配置位
-- `pipeline_config.settlement_mode = 'last_first'` — v3.9.0 新增双锚结算位
-- `pipeline_config.simultaneous_groups[].cross_cycle = true` — v3.9.0 类二跨周期组配置位（独立状态机，与类一同帧组完全分离）
-
----
-
-#### 模块 5：多通道管理 (ChannelManager)
-
-**做什么**：多工位（最多 4 个）独立运行，各通道自带 Project / 视频源 / 模型 / 周期，互不干扰。GPU 槽位分配 + 共享模型权重。
-
-**关键文件**：
-- `backend/api/channel_manager.py` — `ChannelManager` 单例（374 行）
-- `backend/api/source.py` — 每个通道一个 `VideoSourceManager` 实例
-
-**对外接口**：`/api/v1/workstations/*`
-
-**改动它必读**：`debug-channel`
-
-**关键不变量**：`channel_manager.set_channel_count(count)` 时**必须**调用 `mes_hook.on_channel_removed(cid)` + `alarm_router.on_channel_removed(cid)`，否则 MES dict 残留 + 报警串口未释放。
-
----
-
-### 6.2 MES 子系统
-
-#### 模块 6：MES 工单 / 工件 / 缺陷
-
-**做什么**：完整 MES 业务模型：工单（生产任务）→ 工件（每个被检测的物理件）→ 缺陷（不良项）。
-
-**关键文件**：
-- `backend/api/mes.py` (673 ⚠️) — 工单/工件/缺陷 API
-- `backend/services/work_order.py` (357) — 工单业务（含 `binding_scope`：project/channels/cluster）
-- `backend/services/workpiece.py` (235) — 工件业务（含 `mark_inspecting` / `set_result`）
-- `backend/services/defect.py` (243) — 缺陷分类
-- `backend/services/mes_hooks.py` (1505 ⚠️) — **项目最大 Hub**，详见 `debug-mes`
-- `backend/models/mes_models.py` (577) — 15 张 MES 表
-- `frontend/src/views/MES/OrderPanel.vue` / `WorkpiecePanel.vue` / `DefectPanel.vue`
-
-**改动它必读**：`debug-mes`（debug-mes 含 61 条历史 bug，覆盖此模块大半）
-
-**关键扩展点**：`_handle_cycle_end` hook 已经联动 MES + 实时导出 + 报警 — 插件挂在此处即可。
-
----
-
-#### 模块 7：扫码器 (Scanner)
-
-**做什么**：3 大类扫码器：
-- **LON 文本协议**（55256，4 种 scan_mode：A/B/C/D）
-- **WMax 三端口协议**（55266+55276+55286，逆向）
-- **虚拟扫码器**（device_id=-999，无硬件演示用）
-
-**关键文件**：
-- `backend/api/scanner.py` (533) — 扫码器 CRUD + scan_pair + 禁用
-- `backend/api/wmax.py` (673 ⚠️) — WMax 35+ endpoint
-- `backend/services/scanner.py` (1964 ⚠️⚠️ 项目第二大文件) — `ScannerService` + `ScannerConnection` + `_text_lon_listen_loop`
-- `backend/services/wmax/` — WMax 协议子模块
-- `backend/services/barcode_parser.py` (99) — 解析（**无 DataLen 校验**）
-- `frontend/src/views/MES/ScannerPanel.vue` (1381 ⚠️) / `WMaxPanel.vue`
-
-**改动它必读**：`debug-mes`
-
-**关键扩展点**：
-- `is_warn_no_barcode()` / `has_any_scanner_present()`（v3.5.2 加："没扫码器就静默"）
-- LON 4 种扫描模式 (A/B/C/D)，**D 模式支持容器跨线/进区追踪**
-- Scan-to-Scan 闭环（`scan_pair` 状态机）
-
----
-
-#### 模块 8：MES Gateway + 外部设备
-
-**做什么**：把检测结果推送给客户的 MES 系统。**5 种适配器**（注册名 → 类）：
-
-| 注册名 | 类 | 协议 |
-|---|---|---|
-| `rest` | `RESTAdapter` | HTTP JSON |
-| `form-data` | `FormDataAdapter` | 整 payload 序列化进 form 字段 |
-| `form-urlencoded` | `FormUrlencodedAdapter` | 顶层键值展平 |
-| `query-string` | `QueryStringAdapter` | 全部走 URL query |
-| `modbus_rtu` | `ModbusRTUAdapter` | RTU/TCP 写 Holding（pymodbus 3.13+） |
-
-**关键文件**：
-- `backend/api/mes_gateway.py` (450) — Gateway API
-- `backend/services/mes_gateway.py` (432) — `MESGateway` + 重试 + 鉴权
-- `backend/services/mes_adapters/` — 5 个适配器 + `base.py`
-- `backend/api/external_device.py` (366) — 外部设备 API
-- `backend/services/external_device*.py` (5 个文件) — 实现 + 称重稳定状态机
-- `frontend/src/views/MES/GatewayPanel.vue` (1073 ⚠️)
-
-**改动它必读**：`debug-mes`
-
-**关键架构事实**：
-- payload 模板**不是 Jinja2**，是自研 `{key.path}` 替换 + `_array_source` 数组展开（在 `mes_adapters/base.py:render_template`）
-- **重试在 `MESGateway._send_to_connection`**（不是 adapter 层），test endpoint 不重试
-- 鉴权类型 5 种：`none` / `basic` / `bearer` / `api_key` / `custom_header`
-
----
-
-#### 模块 9：集群汇总 (Cluster)
-
-**做什么**：多机集群（standalone / host / slave）。slave 上报 host，host 按 `box_serial` 聚齐后推 MES。
-
-**关键文件**：
-- `backend/api/cluster.py` (296) — 集群 API
-- `backend/services/cluster_collector.py` (1122 ⚠️) — host 汇总（含 timeout / heartbeat 后台线程）
-- `backend/models/mes_models.py: ClusterConfig / BoxAggregations / BoxSummaries`
-- `frontend/src/views/MES/ClusterPanel.vue`
-
-**改动它必读**：`debug-cluster`（主从配置 / 心跳 / box 聚齐） + `debug-mes`（box_complete → Gateway 推送链路）
-
----
-
-#### 模块 10：用户系统 + License（v3.10.0+）
-
-**做什么**：完整的多角色账号系统（基于 token 的鉴权 + 端点级细粒度权限 + 角色 RBAC + M2M API Key）+ 软件激活 / License 验证。
-
-> ⚠️ **v3.10.0 重大变更**：彻底删除旧 `operators` 系统（表 + API + UI + utils 全清），用 `users` + `roles` + `user_roles` + `session_tokens` + `api_keys` 5 张新表全面替换。前端"当前作业员"显示语义改为"当前登录用户"。**总开关默认关闭**（`auth.enabled=false`），客户体验**零差异**：未启用时所有人=隐式超级管理员。
-
-**核心设计 4 大不变量**：
-1. **零差异默认**：`auth_enabled=false` 时所有 `require_perm` 依赖全放行，相当于隐式 superuser。客户不开鉴权，体验完全和 v3.9 一致。
-2. **启用即创建超管**：通过 `POST /auth/enable-auth` 同时启用 + 创建第一个超级管理员，没有预置默认账户。
-3. **匿名 = 操作员**：启用后无 token 的访问被识别为匿名操作员，仅允许 `monitor.detection.control`（开始/停止/待机 3 个按钮）。
-4. **数据归属重定向**：`DetectionSession.operator_id` / `DetectionCycle.operator_id` 字段名保留但 FK 改指 `users.id`；导出模板和 MES payload 的 `{operator.*}` 字段名保留但语义改为"当前登录用户"。
-
-**关键文件**（按职责分组）：
-
-> **数据模型 / 内核**
-- `backend/models/auth_models.py` (174) — 5 张表 ORM 定义（User/Role/UserRole/SessionToken/APIKey）
-- `backend/core/auth.py` (226) — 密码哈希 (bcrypt) + token 内存池 + 磁盘持久化 (`current_user.json` / `session_tokens.json`)
-- `backend/core/auth_deps.py` (247) — FastAPI 依赖（`get_current_user` / `require_perm` / `require_role`）
-- `backend/core/api_key.py` (193) — M2M API Key 依赖（`require_api_key` + scope 校验）
-- `backend/core/permissions.py` (175) — 权限目录 + 通配符匹配引擎
-
-> **API 路由层**
-- `backend/api/auth.py` (274) — `/auth/*` 登录/登出/启用/me/权限目录
-- `backend/api/users.py` (186) — `/users/*` 用户 CRUD + 角色绑定
-- `backend/api/roles.py` (136) — `/roles/*` 角色 CRUD + 权限编辑
-- `backend/api/api_keys.py` (143) — `/api-keys/*` M2M API Key 管理
-- `backend/api/operators.py` (74) — ⚠️ **v3.10.0 仅留 410 Gone 骨架**，所有端点重定向 `/users/*`
-
-> **License（与 v3.9 一致）**
-- `backend/scripts/generate_license.py` — License 生成（私钥签名）
-- `electron/license-manager.js` (203) — License 验证（RSA SHA256 + machineId）
-- `frontend/src/views/Activation/`
-
-> **前端**
-- `frontend/src/store/useAuthStore.js` — Pinia 用户系统 store
-- `frontend/src/views/Login/index.vue` — 登录页
-- `frontend/src/views/Settings/AuthPanel.vue` — 账号鉴权管理面板（启用/用户/角色/API Key）
-- `frontend/src/layout/Navbar.vue` / `BottomBar.vue` — 身份显示按鉴权状态切换（v3.10.0 阶段 6）
-- `frontend/src/router/index.js` — `beforeEach` 守卫调 `authStore.canAccessRoute`
-
-**改动它必读**：`debug-operator-license`（machineId / 验签 / 当前用户落盘） + `debug-electron`（Electron 主进程通用问题）
-
-**3 个内置角色 + 权限速查**：
-
-| 角色 | 权限 | 用途 |
-|---|---|---|
-| `admin` | `["*"]` | 超级管理员，全权 |
-| `engineer` | `monitor.*` / `project.*` / `source.*` / `model.*` / `alarm.*` / `data.*` / `mes.*` / `settings.view` / `system.apikey.manage` 等约 30 条 | 工程师，除"账号鉴权 Tab"外全开 |
-| `operator` | `monitor.view` / `monitor.detection.control` | 操作员，仅 3 个按钮 |
-
-**权限 key 命名规则**：`<module>.<action>` 两段式（如 `monitor.detection.advanced`），通配符 `*` / `module.*` 支持。
-
-**Token 算法（速查）**：
-1. 登录验证密码 (bcrypt.checkpw) → 生成 UUID4 token
-2. token 同时写内存池 (`_token_cache`) + 磁盘 (`session_tokens.json`)
-3. 客户端 header `Authorization: Bearer <token>` 传递
-4. 后端 `get_current_user` 解析 → 命中 → 查 user + roles + permissions
-5. 登录方同时落 `current_user.json` 给后台无 token 进程（session_lifecycle_mixin / mes_gateway / export_context）查"当前登录人"
-
-**M2M API Key 算法（速查）**：
-1. 创建时生成原始 token `tj_<scope>_<32_random>`，仅返回一次
-2. DB 存 SHA256(token) + scope，原文不落盘
-3. 调用方 header `X-API-Key: <token>`
-4. 后端 `require_api_key(required_scope)` 校验 SHA256 哈希 + scope 匹配
-5. 用于副机 → 主机心跳 / MES 接收 / license 缓存推送等 M2M 端点
-
-**License 算法（速查，与 v3.9 一致）**：
-1. machineId = SHA256(stableFp) → `TJ-` + 12 位大写 hex
-2. license.lic = JSON `{ data: stringPayload, signature: base64 }`
-3. RSA + SHA256 验签（公钥嵌在 license-manager.js）
-4. 校验 machineId + expiresAt
-
----
-
-### 6.3 数据 / 导出
-
-#### 模块 11：Session/Cycle/Step 数据记录
-
-**做什么**：每次开机一个 Session，每次生产周期一个 Cycle，每个 Cycle 含多个 StepRecord。
-
-**关键文件**：
-- `backend/models/models.py: DetectionSession / DetectionCycle / StepRecord / VideoClip`
-- `backend/api/sessions.py` (1005) — 数据 API（已分拆，含子路由挂载）
-- `backend/api/sessions_stats.py` — 聚合统计（v3.5.0 置信度聚合）
-- `backend/api/sessions_maintenance.py` (404) — 数据维护 / 清理
-- `backend/api/sessions_export.py` (528) — CSV 导出实现
-- `frontend/src/views/Data/index.vue` (~1715 ⚠️)
-
-**对外接口**：`/api/v1/data/*`（含 `/export/csv?pt_mode=avg&ct_mode=avg`）
-
-**改动它必读**：`debug-session` / `fix-data` / `modify-model`（改 schema 时）
-
----
-
-#### 模块 12：自定义导出 (v3.5.0)
-
-**做什么**：客户级"导出脚本"。5 种格式（txt/csv/docx/xlsx/pdf）+ Jinja2 模板 + 实时规则。
-
-**关键文件**：
-- `backend/models/export_models.py` (190) — 3 张表
-- `backend/api/export_custom.py` (526) — 模板 CRUD
-- `backend/api/export_realtime.py` (305) — 实时规则
-- `backend/services/export_field_registry.py` (815 ⚠️) — **`ALL_FIELDS = 308 字段**
-- `backend/services/export_context.py` (1131 ⚠️) — Jinja2 上下文构建
-- `backend/services/export_renderer*.py` (4 个) — txt/csv/docx/xlsx/pdf 渲染
-- `backend/services/export_seed.py` — 内置模板 seed
-- `frontend/src/views/Data/components/CustomExportDialog.vue`
-
-**对外接口**：`/api/v1/export/templates/*`、`/api/v1/export/realtime-rules/*`
-
-**改动它必读**：`debug-export`（模板 / 渲染 / 字段中央仓库 / 实时规则） + `modify-model`（改 export_models.py 三张表）
-
-**关键架构事实**（**给插件系统看**）：
-- 字段注册表 308 字段是"系统数据全集" — 插件想做数据回写都靠这套（**注意**：`export_context.py` 模块注释写"302 字段骨架"是过时的）
-- Jinja2 SandboxedEnvironment 已隔离 — 客户写模板不会污染主程序
-- **实时规则 `trigger_event` 仅 3 种**：`cycle_end` / `session_end` / `box_complete`，**目前只有 `cycle_end` 实际接入**，其余 2 种在 `export_realtime.py:13` 标 `[todo]`
-
----
-
-#### 模块 13：CSV 导出 / 备份
-
-**做什么**：4 个快捷导出按钮（按日 / 按周 / 按月 / 日期范围）+ 自定义条件。备份是文件级（拷 `sql_app.db`）。
-
-**v3.5.2 联动**：4 个快捷按钮都支持 `pt_mode` / `ct_mode`，`avg` 模式加"耗时(平均/秒)"列。
-
----
-
-### 6.4 系统级
-
-#### 模块 14：报警系统
-
-**做什么**：事件触发后联动硬件：灯塔（Modbus 串口）+ 蜂鸣器 + 自定义动作。**支持多工位共享同一灯柱**（`shared_with` 配置）。
-
-**关键文件**：
-- `backend/api/alarm.py` (1009 ⚠️) — `AlarmManager` + `AlarmRouter`
-- `frontend/src/views/Alarm/index.vue` (~670)
-
-**改动它必读**：`debug-alarm`
-
-**关键架构**：`AlarmRouter._load_all` 把 `shared_with` 列表合并进 `AlarmManager.set_shared_mode`，**多工位共享时所有 trigger_alarm/idle_light 都带 channel_id，由 `_recompose_and_apply` 按优先级合成单路串口输出**。
-
----
-
-#### 模块 15：录像 (Recording)
-
-**做什么**：每个 Cycle 关联 VideoClip，FFmpeg 后台进程编码。前端在 Data 页回放。
-
-**关键文件**：
-- `backend/api/source_recorder.py` — `FFmpegRecorder` + `KalmanFilter2D`
-- `backend/api/source_recording_thread_mixin.py` + `source_recording_api_mixin.py` — 录制线程 + API
-- `backend/api/source_recording_mixin.py` — **历史合并版（546 行，与上两者重叠）**
-- `backend/models/models.py: VideoClip`
-
-**改动它必读**：`debug-video`（含录像）
-
----
-
-#### 模块 16：系统设置 (SystemConfig KV)
-
-**做什么**：全局键值配置（display.monitor.ptMode / brand_name / inspector_name / license-cache 等）。
-
-**关键文件**：
-- `backend/api/system_display.py` (136)
-- `backend/models/models.py: SystemConfig`
-- `frontend/src/store/useSystemStore.js` (277)
-- `frontend/src/views/Settings/index.vue` (1441 ⚠️)
-
-**对外接口**：`/api/v1/system/*`
-
-**关键扩展点**（**给插件系统看**）：这是**最适合存"客户级配置"的地方**，比 Project 配置粒度更全局。
-
----
-
-#### 模块 17：Electron 桌面壳
-
-**做什么**：主进程 = Electron。spawn 后端 → 等就绪 → 加载前端 → Splash 撤场。8 步关机 + 三层崩溃恢复。
-
-**关键文件**：
-- `electron/main.js` (737 ⚠️) — 主进程入口
-- `electron/backend-manager.js` (616 ⚠️) — `python -m uvicorn backend.main:app`，**唯一启动方式**
-- `electron/license-manager.js` (203) — License 验证
-- `electron/preload.js` (13) — IPC 桥
-- `electron/splash.html` / `shutdown.html`
-- `electron/package.json` — **版本号唯一权威源**
-- `electron/build/installer.iss` (145) — Inno Setup
-
-**改动它必读**：`debug-electron`
-
-**Electron IPC channel 速查**：
-- `invoke`: `get-app-info` / `get-backend-url` / `get-license-status` / `import-license`
-- `on`: `license-activated`
-- 关机：`shutdown-progress` / `shutdown-error` / `shutdown-complete`（→ render）+ `shutdown-cancel` / `shutdown-force` / `shutdown-window-ready`（→ main）
-
----
-
-### 6.5 工程基础
-
-#### 模块 18：数据库 + 迁移
-
-**做什么**：SQLite 单文件 + SQLAlchemy ORM + 简单 ALTER TABLE 迁移。
-
-**关键文件**：
-- `backend/db/database.py` (41) — engine + WAL + busy_timeout=15s
-- `backend/main.py: migrate_database()` — 启动时 60+ ALTER TABLE
-- `backend/models/*.py` — 31 张表
-
-**改动它必读**：`modify-model`
-
-**未来计划（feat/migrate-pg 分支）**：迁 PostgreSQL（已敲定）
-
----
-
-#### 模块 19：打包发版
-
-**关键文件**：
-- `.github/workflows/build.yml` — 主 CI（Nuitka + conda-pack + Inno Setup）
-- `.github/workflows/gitee-upload.yml` — Gitee 中转
-- `electron/build/installer.iss` — Inno Setup
-- `electron/package.json` — **版本号唯一权威源**
-
-**改动它必读**：`build-release` + `update-release`
-
-**Inno Setup 安装包关键参数**：
-- AppId: `com.tianjun.ai-vision`
-- 默认目录: `%ProgramFiles%\tianjun-ai-vision`
-- 用户数据: `%APPDATA%\tianjun-ai-vision`
-- 输出: `TianJun-AI-Vision-{version}-Setup.exe`
-
----
-
-#### 模块 20：热补丁机制
-
-**关键文件**：
-- `.claude/skills/create-hotfix/SKILL.md` — 操作流程
-
-**改动它必读**：`create-hotfix`
-
----
-
-## 七、关键扩展点速查（给插件系统看）
-
-> **如果你在做插件系统 / 客户定制 / 加新功能**，先看这一节：很多地方现有代码已"配置化"，应**复用**而不是重造。
-
-| 扩展点 | 类型 | 用途 | 文件 |
-|---|---|---|---|
-| `Project.pipeline_config` | JSON | 步骤序列、推理模式 | `models/models.py` |
-| `Project.steps_config` | JSON | 每步阈值/帧数 | 同上 |
-| `Project.events_config` | JSON | 自定义 OK/NG/警告 | 同上 |
-| `Project.alarm_config` | JSON | 报警规则 | 同上 |
-| `Project.data_config` | JSON | 数据导出开关 | 同上 |
-| `SystemConfig` 表 | KV | 全局配置（最适合插件用）| 同上 |
-| `_trigger_event` hook | 函数 | 所有事件中心触发点 | `source_event_trigger_mixin.py` |
-| `_handle_cycle_end` hook | 函数 | cycle 结束中心 hook | `services/mes_hooks.py` |
-| MES 适配器注册 | `_REGISTRY` | 5 种推送协议 | `services/mes_adapters/__init__.py` |
-| 自定义导出字段注册表 | `ALL_FIELDS` | **308 个字段** | `services/export_field_registry.py` |
-| 实时导出规则 | JSON 配置 | 按工位/项目过滤 | `models/export_models.py` |
-| 周期性强制动作 (v3.5.0) | JSON | 每 N 轮做 X | `source_periodic_actions_mixin.py` |
-| 用户系统 (v3.10.0+) | 5 张表 | 多角色账号 + token 鉴权 + 端点级权限 + M2M API Key；数据归属字段 `operator_id` 改指 `users.id` | `models/auth_models.py` / `api/{auth,users,roles,api_keys}.py` |
-| `require_perm("<perm.key>")` 依赖 (v3.10.0+) | FastAPI 依赖 | 端点级细粒度权限标记，`auth_enabled=false` 时自动放行 | `core/auth_deps.py` |
-| 内置角色 + 权限目录 (v3.10.0+) | 常量 | 三档角色（admin/engineer/operator）+ 完整权限目录，UI 渲染权限树用 | `core/permissions.py` / 启动时 `main.py:_seed_builtin_roles` |
-| Scanner `broadcast_channels` | JSON | 一扫码器服务多工位 | `models/mes_models.py:ScannerDevice` |
-| `pipeline_config.per_item` (v3.8.0+ / v3.12.0 增强) | JSON | 逐件覆盖项目级参数（稳定窗口/收尾标签等） | `source_per_item_mixin.py` |
-| `steps_config[i].per_item` (v3.8.0+ / v3.12.0 增强) | JSON | 逐件覆盖步骤级参数（item_label/action_label/sustain_frames 等） | 同上 |
-| `pipeline_config.settlement_mode = 'last_first'` (v3.9.0+) | enum | **末步结算 + 首步开周期** 双锚状态机（R1-R6），与其他模式严格互斥 | `source_settlement_mixin.py: _process_last_first_mode` |
-| `pipeline_config.simultaneous_groups[].cross_cycle = true` (v3.9.0+) | JSON | 类二跨周期组，独立状态机处理上下周期成员 + 屏蔽集合 + 等待超时 | `source_settlement_mixin.py: _process_cross_cycle_groups` |
-| `pipeline_config.per_item.expected_count` / `lock_lookahead` / `settle_after_all_done_sec` (v3.9.0+) | int / sec | per_item 五补丁配置（固定数量 + 周期内补锁定 + 立即 OK 等） | `source_per_item_mixin.py` |
-| `pipeline_config.per_item.require_exact_count` (v3.12.0+) | bool | 严格等量周期触发：每帧检出数 == expected_count + 次步同步 ≥ 各自 expected_count 才开周期。治"漏件被算 NG" | `source_per_item_mixin.py: _per_item_should_start_cycle` |
-| `pipeline_config.per_item.disable_auto_settle` (v3.12.0+) | bool | 关掉所有自动收尾，仅 `/api/v1/source/detection/per-item-control` 的 `settle` / `force_start` 才动周期 | `source_per_item_mixin.py` + `source_routes.py: per-item-control` |
-| `steps_config[i].per_item.box_max_width / box_max_height` (v3.12.0+) | float (0-1 归一化) | post-YOLO 守门：检测框宽高超上限直接过滤，治"整个料盒/操作员手臂被识别成巨型螺丝" | `source_detect_runners_mixin.py: _passes_box_size_limit` |
-| `channel_groups` 表 + Coordinator (v3.13.1+) | 表 + 单例 | **工位组**: 跨通道 NG 联动 / synchronized_any_ng/all_ok / threading.Timer 超时 / 报警链路直驱; CRUD: `GET POST PUT DELETE /api/v1/channel-groups/*` + `system.channel_group.view/manage` 权限位; 跨机 cluster 自动透传 `cycle_context.channel_group.settle_result` | `models/models.py:ChannelGroup` / `services/channel_group_coordinator.py` / `api/channel_groups.py` |
-| `workpiece_flow_*` 表 + Coordinator (v3.14.0+) | 2 表 + 单例 | **串行流水线** (RFC 11): 单机内多工位**串行**结算; 3 种 trigger (time_window FIFO / scan / physical GPIO); 5 态状态机 (CREATED→STATION_RUNNING→…→COMPLETED/SHORT_CIRCUITED/TIMEOUT); FIFO 上限 + threading.Timer 超时; 与 ChannelGroup 同工位互斥; CRUD: `GET POST PUT DELETE /api/v1/workpiece-flows/*` + `system.workpiece_flow.view/manage` 权限; 5 个 hook + 2 个 PluginHost API (需 `runtime.workpiece_flow_observe` capability) | `models/mes_models.py:WorkpieceFlow{Config,Run}` / `services/workpiece_flow_coordinator.py` / `services/flow_triggers/*.py` / `api/workpiece_flows.py` |
-| `host.trigger_event` 主动 API (v3.27+) | 函数 | 插件借主程序某事件的「响应面」(报警 eventN + 计数器 actions + Toast/语音 + 主页计数) 触发, **不结算周期、不动良率**; 需 `runtime.event_trigger` capability; 内部走 `VideoSourceManager.fire_external_event_response`; 治"过程告警类判定"(假擦拭/离岗/耗材超限) | `plugin_system/registry.py: trigger_event` |
-| 插件 returnable hook (v3.13.1+) | 函数 | **10 个 hook 点 + 10 个 PluginHost 主动 API**: `pre_cycle_end / step_change / event_fire` 可改业务字段 (suppress_alarm / is_good override / warn_label); `trigger_alarm / mes_push / write_plugin_step_field / list_channel_groups / broadcast_to_channel_group` 等带 capability 守门 + audit log | `plugin_system/{registry,manager,hook_dispatch}.py` |
-| `<TjSlot>` UI 槽位 (v3.13.1+) | 全局 Vue 组件 | **7 个主程序 slot**: `settings.tab.* / project.tab.* / cycle-result.indicator / monitor.step-cell.{duration,status} / monitor.layout.{body,footer}`; manifest `frontend.ui_hidden` 隐藏槽; `registry.slots.register / tabs.register` 编程式注入; 没插件时 `layoutBodyOverride === null` 走原 DOM 字节级零差异 | `frontend/src/components/TjSlot.vue` / `store/usePluginThemeStore.js` |
-| `plugin_data` JSON 命名空间 (v3.13.1+) | JSON 子树 | **Project / StepRecord / SystemConfig 三处可挂插件命名空间**, 卸载 `?purge_data=true` 自动清理 `plugin_<customer_code>_` 前缀 (SQL LIKE ESCAPE 转义 `_/%`); `PUT /api/v1/projects/{id}/plugin-data` 精准 patch `plugin_data.<customer_code>` 子树 | `models/models.py` / `api/{projects,plugins}.py` / `plugin_system/registry.py:write_plugin_step_field` |
+## 七、关键扩展点（给插件系统 / 加新功能看）
+
+> **全量扩展点清单已下放**到 `docs/plugin-system/inventory/03_extension_points.md`（含每个扩展点的类型/用途/所在文件）。做插件或加功能前先读那里 + `feature-placement` skill，**复用现有配置化能力，不要重造**。
+
+最高频的几个扩展点（速记，细节进上面的清单）：
+- `Project` 的 7 个 JSON 配置字段（`pipeline_config` / `steps_config` / `events_config` / `alarm_config` / `data_config` / `counters_config` / `detection_config`）——新增需求**优先往 JSON 加键**，不要新加 Column
+- `SystemConfig` KV 表——最适合存"客户级全局配置"
+- `_trigger_event` hook（所有事件中心触发点）/ `_handle_cycle_end` hook（cycle 结束中心）——插件挂这里
+- MES 适配器注册表（5 种推送协议）/ 自定义导出字段注册表（308 字段）
+- 插件平台：10 个 hook（含 returnable）+ 10 个 PluginHost 主动 API + `<TjSlot>` UI 槽位 + `plugin_data` JSON 命名空间（详见 `docs/plugin-system/`）
 
 ---
 
@@ -836,48 +260,28 @@
 1. **API 前缀必须 `/api/v1/`**（不是 `/api/`）
 2. **`OPENCV_FFMPEG_CAPTURE_OPTIONS=threads;1` 必须在 cv2 import 前 setdefault**（`backend/main.py:line 4`，v3.1.3 关键修复，否则 libavcodec 断言）
 3. **修改 `source.py` 主类前必须看 `__getattr__/setattr__` 兼容层**（在 `source.py` 内）— 老代码访问 `self._kalman_enabled` 等会被路由到 has-a 组件
-4. **`channel_manager.set_channel_count` 必须调用 `mes_hook.on_channel_removed` + `alarm_router.on_channel_removed`**，否则 MES dict / 报警串口残留
+4. **`channel_manager.set_channel_count` 必须调用 `mes_hook.on_channel_removed` + `alarm_router.on_channel_removed`**，否则 MES dict 残留 + 报警串口未释放
 5. **测试 fixture 必须独立 DB / unique uuid，不要 reload uvicorn**（v3.5.0 BDD 框架痛过）
-6. **修改 `mes_hooks.py` / `services/scanner.py` 前先读对应 changelog**（debug-mes 61 条历史 bug 是项目最大踩坑区）
+6. **修改 `mes_hooks.py` / `services/scanner.py` 前先读对应 changelog**（debug-mes 是项目最大踩坑区）
 7. **改前端 `views/Monitor` 前**：双缓冲 MJPEG + 多通道 state 隔离（v2.6.0 / v3.0.0 / v3.1.3 多次修过）
 8. **改 ORM Schema 后必须在 `backend/main.py:migrate_database()` 加 ALTER TABLE**（老 SQLite 升级路径）
 9. **bat 热补丁必须 CRLF 换行符**（LF 在 Windows 上闪退）
 10. **不要在 `OPENCV_FFMPEG_CAPTURE_OPTIONS` 之前 import cv2**（顺序敏感）
-11. **改 `source_settlement_mixin.py` 时不要把 `_process_last_first_mode` / `_process_cross_cycle_groups` 之间的守门去掉**（v3.9.0 起两个状态机都依赖 `settlement_mode == 'last_first'` / `cross_cycle == true` 严格守门，否则会污染其他模式的 cycle_steps）— 修改前必读 `debug-source` skill 第十二·七节
-12. **前端插件代码动态加载不能只依赖 `import(blob:...)`**（v3.15.4 血泪教训）：打包后主窗口走 `file://`，Chromium 拦 `file://` 源下的 blob 动态 import，导致插件 ESM 静默加载失败、前端定制完全不生效，而本地 `http://localhost` 开发不复现。`frontend/src/composables/usePluginLoader.js` 必须保留 **blob → data:URL → 后端 http URL** 三级兜底；插件相关 store 里给 Vue Component 标 `markRaw` 必须用**顶部静态 import**，不能用 `import('vue').then()`（同样在 `file://` 下不稳）。前端插件加载有任何疑问先看后端日志（前端已通过 `POST /api/v1/plugins/client-log` 把每步回传，进终端 + 落盘），不要再开 F12。
-13. **前端插件 bootstrap 必须先等后端就绪再拉清单**（v3.15.5 血泪教训）：打包后前端 `file://` 页面加载远早于后端冷启动完成（后端要 CUDA 预热 + 大模型加载，实测 Backend ready 在前端页面加载之后好几秒）。`frontend/src/main.js` 的插件 bootstrap **不能**裸调 `themeStore.apply()` / `loadActivePluginFrontend()`——必须先 `waitBackendReady()` 轮询探活（用 `/plugins/active/manifest`，无 active 插件也返回 200）等后端起来、最多 90s，否则一上来就 `Network Error` 一次性放弃、插件前端定制全程不加载（现场会在后端 `Application startup complete` 之前看到 `[⬛ PluginLoader] 拿 active manifest 失败 :: Network Error`）。这是比第 12 条 `file://` import 更靠前的一环。
+11. **改 `source_settlement_mixin.py` 时不要把 `_process_last_first_mode` / `_process_cross_cycle_groups` 之间的守门去掉**（v3.9.0 起两个状态机都依赖 `settlement_mode == 'last_first'` / `cross_cycle == true` 严格守门，否则污染其他模式的 cycle_steps）— 修改前必读 `debug-source` skill
+12. **前端插件代码动态加载不能只依赖 `import(blob:...)`**（v3.15.4 血泪教训）：打包后主窗口走 `file://`，Chromium 拦 `file://` 源下的 blob 动态 import → 插件 ESM 静默加载失败、前端定制完全不生效，本地 `http://localhost` 不复现。`usePluginLoader.js` 必须保留 **blob → data:URL → 后端 http URL** 三级兜底；`markRaw` 标记 Vue Component 用**顶部静态 import**。前端插件加载有疑问先看后端日志（已通过 `POST /api/v1/plugins/client-log` 回传），不要开 F12
+13. **前端插件 bootstrap 必须先等后端就绪再拉清单**（v3.15.5 血泪教训）：打包后 `file://` 页面加载远早于后端冷启动（CUDA 预热+模型加载好几秒）。`main.js` 插件 bootstrap **不能**裸调 `themeStore.apply()`——必须先 `waitBackendReady()` 轮询探活（`/plugins/active/manifest` 无插件也返回 200）最多 90s，否则一上来 `Network Error` 一次性放弃、插件前端定制全程不加载。这是比第 12 条更靠前的一环
 
 ---
 
-## 九、已知架构 bug / 死代码索引
+## 九、已知架构 bug / 死代码
 
-> 这些是已确认存在但还没修的事实。新 PR 不要复活、不要扩展。
+> **完整索引（71 项，带 ID / 严重度 / 工时估）已下放**到 `docs/plugin-system/inventory/05_tech_debt.md`。新 PR 不要复活、不要扩展这些已知坑。
 
-### 真 bug（应被修）
-
-| 位置 | 描述 | 影响 |
-|---|---|---|
-| `backend/core/config.py: _fix_db_paths` | SQL 用错表名 `ml_models`（实际叫 `models`） | DB 路径迁移逻辑对模型文件**永远不生效** |
-| `.github/workflows/build.yml: CORE_FILES` | 11 个文件中 3 个不存在（`api/detection.py` / `api/websocket.py` / `services/detector.py`） | CI 实际只编译 8 个文件，跳过的会 WARNING 但不报错（潜在 IP 泄漏：很多 source_*_mixin 没被 .pyd 保护） |
-| `source_recording_mixin.py` (546) | 与 `source_recording_thread_mixin.py + source_recording_api_mixin.py` **能力重叠** | 历史拆分残留，需决定保留哪份 |
-| `source_camera_start_mixin.py` 与 `source_industrial_camera_mixin.py` | 都定义 `start_hcnetsdk` / `start_hikvision_camera` | 同名职责分裂，依赖 MRO 决出胜者 |
-
-### 死代码（可清理）
-
-| 文件 | 状态 |
-|---|---|
-| `frontend/src/views/Report/index.vue` (299) | **路由未注册**，但 `frontend/src/api/report.js` 仍部分被使用 |
-| `frontend/src/api/task.js` (26) | 全前端**无 import** |
-| `frontend/src/api/camera.js` (26) | 全前端**无 import** |
-| `frontend/src/api/report.js` 中的 `getRecords` / `getTrend` / `exportPdfReport` | 局部死代码 |
-
-### 文档不同步
-
-| 位置 | 说 | 真相 |
-|---|---|---|
-| `frontend/src/api/export.js` 注释 | `fmt: 'txt'\|'csv'` | 后端允许 `txt/csv/docx/xlsx/pdf` |
-| `backend/services/export_context.py` 模块注释 | "302 字段骨架" | `ALL_FIELDS = 308` |
-| `backend/services/mes_gateway.py` 注释 | 提及 "Jinja" 过滤器 | 实际不是 Jinja2，是自研 `{key.path}` |
+最该留意的几条（细节进上面的技术债文档）：
+- 🔴 `core/config.py:_fix_db_paths` 用错表名 `ml_models`（实际 `models`）→ 换安装目录时模型路径修正永不生效
+- 🟠 CI `build.yml: CORE_FILES` 列了 11 个文件、3 个不存在 → 实际只编译 8 个，**很多 `source_*_mixin` 源码未被 .pyd 保护（IP 泄漏风险）**
+- 🟠 `source_recording_mixin.py` 与拆分后两个 mixin 能力重叠 / `source_camera_start_mixin` 与 `source_industrial_camera_mixin` 同名方法靠 MRO 决胜
+- 🟢 死代码：`views/Report/index.vue`（路由未注册）、`api/task.js` / `api/camera.js`（无 import）
 
 ---
 
@@ -895,169 +299,47 @@
 | `VITE_API_BASE_URL` | `http://localhost:8001/api/v1` | 前端 axios baseURL |
 | `CONDA_PREFIX` | `~/anaconda3/envs/tianjun` | 开发模式 Python 路径 |
 
----
-
-## 十一、文件路径速查
-
-### 后端（29 个 api / 22 个 services / 5 个 core，v3.10.0+）
-```
-backend/
-├── main.py                        # FastAPI 入口 + 启动迁移 (v3.10 自动 DROP operators)
-├── core/                          # ⭐ v3.10 内核扩展
-│   ├── config.py                  # 配置 (DATA_DIR, BASE_DIR 等)
-│   ├── auth.py (226)              # v3.10 密码哈希 + token 池 + current_user.json 持久化
-│   ├── auth_deps.py (247)         # v3.10 require_perm / get_current_user / 路由依赖
-│   ├── api_key.py (193)           # v3.10 M2M API Key 依赖 + scope 校验
-│   └── permissions.py (175)       # v3.10 权限目录 + 通配符匹配
-├── db/database.py                 # SQLAlchemy engine + WAL
-├── models/                        # ORM (4 文件 35 表)
-│   ├── models.py                  # 12 张核心检测 (operators 表 v3.10 已 DROP)
-│   ├── mes_models.py              # 15 张 MES
-│   ├── export_models.py           # 3 张自定义导出 (v3.5.0)
-│   └── auth_models.py (174)       # ⭐ v3.10 用户系统 5 张表
-├── api/                           # 29 个文件
-│   ├── source.py + 35 个 source_* (mixin/组件/工具/路由)
-│   │   └── source_per_item_mixin.py (869)    # v3.8.0 逐件覆盖模式 + v3.9.0 五补丁 (独立路径)
-│   ├── projects.py / models.py / sessions*.py (4 个) / cameras.py
-│   ├── tasks.py / reports.py / system_display.py / alarm.py
-│   ├── channel_manager.py / debug.py / rod_filter.py
-│   ├── scanner.py / wmax.py / mes.py / mes_gateway.py / cluster.py / external_device.py
-│   ├── export_custom.py / export_realtime.py    # v3.5.0
-│   ├── auth.py (274) / users.py (186) / roles.py (136) / api_keys.py (143)   # ⭐ v3.10 用户系统
-│   ├── operators.py (74)          # ⚠️ v3.10 已废弃, 仅留 410 Gone 骨架
-│   └── __init__.py (api_router 聚合)
-├── services/                      # 22 个文件
-│   ├── scanner.py (1964) / mes_hooks.py (1505) / mes_gateway.py
-│   ├── work_order.py / workpiece.py / defect.py
-│   ├── mes_adapters/  (5 个适配器 + base + __init__)
-│   ├── external_device*.py (5 个)
-│   ├── cluster_collector.py (1122)
-│   ├── export_*.py (8 个，含 docx/pdf/xlsx renderer + field_registry + context + seed)
-│   └── barcode_parser.py
-└── scripts/generate_license.py
-```
-
-### 前端（4 store / 16 api / 12 view / 3 layout）
-```
-frontend/src/
-├── views/    (13 个 .vue, v3.10.0+)
-│   ├── Activation/   Source/   Project/   Model/
-│   ├── Monitor/      ⭐ 检测中心 (4051 行 ⚠️ 项目最大 .vue)
-│   │   └── PerItemPanel.vue  # v3.8.0 逐件覆盖面板 (视频下方全宽, 仿 tracking)
-│   ├── Login/        # ⭐ v3.10.0 用户系统登录页
-│   ├── Data/         ⭐ 数据中心 + 自定义导出
-│   ├── MES/          ⭐ 5 个子 Panel (Order / Workpiece / Defect / Scanner / Gateway)
-│   ├── Alarm/        Settings/  Report/ ❌ 死代码
-│   └── Settings/AuthPanel.vue  # ⭐ v3.10.0 账号鉴权 Tab (启用/用户/角色/API Key)
-├── store/  (5 个 Pinia store, v3.10.0+)
-│   ├── useSystemStore (277 行) / useProjectStore / useSourceStore / useScannerDisableStore
-│   └── useAuthStore   # ⭐ v3.10.0 用户系统 (token / currentUser / authEnabled / canAccessRoute)
-├── api/    (17 个 axios 封装, v3.10.0+ 加 auth.js, task.js / camera.js 死代码)
-├── layout/ (3 个：index.vue / Navbar.vue / BottomBar.vue)
-│   # v3.10.0 阶段 6: 顶/底栏"作业员"位置随鉴权状态切换为登录用户名 + 角色徽章
-├── locales/ (5 种语言 zh-CN/zh-TW/en-US/ja-JP/ko-KR)
-└── router/index.js   # ⭐ v3.10.0 加 beforeEach 守卫调 authStore.canAccessRoute
-```
-
-### Electron（双进程）
-```
-electron/
-├── main.js                  # 入口 (737 行 ⚠️)
-├── backend-manager.js       # spawn python uvicorn (616 行 ⚠️)
-├── license-manager.js       # RSA SHA256 验签 (203)
-├── preload.js               # IPC 桥 (13)
-├── package.json             # ⭐ 版本号唯一权威源
-├── splash.html / shutdown.html
-└── build/installer.iss      # Inno Setup (145)
-```
-
-### CI / 文档
-```
-.github/workflows/
-├── build.yml                # 主 CI (Nuitka + conda-pack + Inno Setup)
-└── gitee-upload.yml         # Gitee 中转
-
-.claude/skills/  (29 个本项目 skill)
-
-docs/
-├── 软件操作手册.md / .html / .pdf  # 客户用户手册
-├── CHANGELOG.md
-├── changelog/  (33 个历版 .md + .json)
-├── 产品交接手册.md (⚠️ v2.4.0 已过时，参考要谨慎)
-└── tuning/   (调参案例)
-```
+> 文件路径速查（后端/前端/Electron 目录树）已删除——直接看仓库或问对应 skill，避免目录树与代码漂移。
 
 ---
 
-## 十二、版本里程碑（最近）
+## 十一、版本里程碑
 
-| 版本 | 日期 | 主要变更 |
+> **逐版完整变更已下放**到 `docs/changelog/`（每版 `.md` + `.json`）。本文件**只记最近几版一句话定位**，发版时不再往这里堆 changelog。
+
+| 版本 | 日期 | 一句话 |
 |---|---|---|
-| **v3.27.0** | **2026-06-25** | **插件平台「插件主动触发主程序事件」桥接 + 传感器清洁插件 v1.1.0 三判定接入事件体系** — (1) 插件平台新增 `PluginHost.trigger_event(channel_id, event_id, reason)` 主动 API（能力 `runtime.event_trigger` + audit + 错误隔离），内部调目标通道 `fire_external_event_response`（v3.21 既有，借事件响应面：报警+计数器+Toast+主页，**不结算周期、不动良率**），专治"过程告警类判定"；(2) sensor-clean 插件 v1.1.0：把三判定（① 假擦拭=视角1 擦拭产品框停留超时位移小 ② 棉签寿命超限 ③ 操作员离开超时=视角2 空帧倒计时，默认关；**去掉"假换棉签"**）做成可配置事件，命中调 `host.trigger_event`，用户全程用主程序原生 UI（项目页配事件/计数器、报警页配灯柱、插件 Tab 选判定→事件 + 阈值）；新增 `counter.py` 静止假动作判定器 + 帧级离岗倒计时、`/swab/config` 读写、preset 模板默认带 OK/NG 事件 + show_in_monitor 告警计数器；前端配置 Tab + 网络改 `host.api`；manifest 版本 1.1.0 / `main_version_min` 3.27.0。测试：平台契约 6 + 端到端集成 3 + 三判定 14，plugin_system 全量 **398 passed 零回归**。插件未签名包 `dist-plugin/...-1.1.0-...-uns.tjvplugin` 待主作者私钥签名。详见 changelog v3.27.0（⚠️ 本表 v3.24–3.26 段缺，以 `docs/changelog/` 为准） |
-| **v3.23.0** | **2026-06-22** | **上银包装线现场闭环增强 + 通用 NG 补做** — (1) **外部触发事件人工确认定格**：漏箱/多装/缺油嘴/缺工单经事件映射且标 `require_ack` 时也进入检测层 `_pending_ack` 阻塞态、整线定格，操作员可走 `ack-event-elevated` 借管理员密码提权确认（`source_event_trigger_mixin.py`）；(2) **强制结案**：新权限 `system.packaging_flow.force_settle`（admin/engineer，操作员 403）+ `PackagingFlowRun.forced_reason/forced_by` 审计 + `force_settle_manual` 强制收尾 + 监控卡片按钮；(3) **待机不结算**：`forced_settle_on_standby` 开关，关掉后待机只暂停可恢复继续；(4) **缺油嘴 gate**：每箱封箱前 `_probe_oil_nozzle` 判放油嘴步骤 covered，未过暂不收尾+报警，未配置退化放行；(5) **通用 NG 补做策略**：`pipeline_config.ng_remediation`（enabled/allow_step/allow_count，任意 logic_mode，延迟落账，默认全关零差异）；(6) **包装补滑块**：仅「步骤齐+少装」挂起 `pending_remediation` 不落账→补齐到目标/手动指定/重做本箱→直接判结果，`supplement-sliders`/`remediation-redo` 端点（需 `monitor.detection.ack`）；(7) **开机自动恢复检测开关** `auto_resume`；(8) **项目一键复制** `POST /projects/{id}/duplicate`；(9) **虚拟扫码枪**。包装单测 48/48；全量非浏览器 1277 passed（19 失败为已知批跑串污染）。详见 `debug-mes` 第十六节 + `modify-project-config` §7.6 |
-| **v3.20.0** | **2026-06-15** | **外部 MES 工单主动拉取 + USB 键盘扫码枪 + 调试埋点** — (1) **工单主动拉取**：`backend/services/mes_puller.py` 通用可配置（地址/方法/请求体模板/成功判定路径/数组路径/字段映射/导入模式），复用 `MESConnection` 连接表；`pull-test` 自动识别返回结构（含上银 HIWIN `response.resultData` 两层嵌套）+ 立即同步/试同步(dry_run)+ upsert 幂等；`PullScheduler` 后台守护线程定时同步；前端 `OrderPullPanel.vue` 小白点选式配置。端点 `POST /mes/gateway/pull-test`、`/mes/gateway/connections/{id}/pull`；(2) **USB 键盘扫码枪**：做成扫码器设备一种（`device_type=usb_hid`），前端 `useScanGun.js` 全局键盘捕获 + 速度启发式区分手输，按用途路由（拉工单/绑工件/both），后端跳过网络连接 + 跳过 IP:Port 唯一校验（多枪不撞 `:0`），配置归入扫码器面板 `UsbScanGunDialog.vue`；(3) **调试埋点** `backend.pull`/`mes.pull` 分类；(4) **修** 外部 MES 返回非 2xx 只回「HTTP 500」丢失返回体真实错误原因 → 通用探测返回体错误字段（先红后绿）；(5) 三层测试：BDD 11（order_pull 6 + usb_scan_gun 5）+ 单测 9 + 可见浏览器 UAT，**全套 BDD 141 passed 零回归**。详见 `debug-mes` skill 第 14/15 节 |
-| **v3.19.0** | **2026-06-11** | **全局调试日志系统 + NG 原因可解释性** — (1) **调试中心**：`backend/core/debug_center.py`（约 20 个分类开关 + 3000 条环形缓冲 + UTF-8 旋转落盘，默认全关零开销）+ `/api/v1/debug/*`（开关/日志增量拉取/前端日志回传）+ `main.py` 5xx 中间件 + 全后端（alarm/mes_hooks/scanner/gateway/cluster/export/model_load/source 生命周期/HIK SDK）与前端（路由/axios 拦截器/核心视图交互）埋点 + Electron UTF-8 落盘与 `chcp 65001`；设置页「调试设置」Tab（开发者模式专属：开关矩阵 + 实时日志查看器，过滤/搜索/暂停/导出）；(2) **NG 原因埋点**：settlement 缺步清单（`缺少=['step_b']`）/ 超时 NG 原因 / per_item 周期不开始原因+漏件明细（`backend.per_item` 新分类）/ step_stats 置信度·ROI 拒收具体数值 / events_check 残留跳过，热路径 1-2s 节流；配套修 synthetic 最小项目缺步骤 id 致顺序结算**静默丢周期**；功能测试 4 用例 + 可见浏览器 UAT 7/7；(3) showcase 展会插件 v1.2.2（logo 圆角化 + 顶栏布局 + v1.2.x 真实化收口）重签名（指纹 `d1f2fcb6`）+ 桌面图标圆角化 + 统计接口加项目过滤 |
-| **v3.18.0** | **2026-06-05** | **RFC12 全页面整页覆盖框架 + 天军展会定制插件(showcase)合入主干** — 整页覆盖能力从仅 Monitor 扩展到全部 8 个主视图（各加 `<TjSlot name="*.layout.body">`，无插件零差异）；showcase Tier2 插件 iframe 承载 8 页高科技重设计，真数据驱动 + `showcase_stats` 统计端点，RSA-PSS/HMAC 主作者签名 |
-| **v3.17.0** | **2026-06-01** | **福建金龙 R1–R5 全功能完整验证发布** — (1) 「步骤耗时三档」配置列改为**按插件存在条件渲染**（`hasDurationsSlot` 探测 `project.step-cell.durations` 插槽，表头+单元格同加 `v-if`，未装插件字节级零差异，**修 v3.16.0 给所有客户显示空「需插件」占位列的体验缺陷**）；(2) **R1–R5 全功能 E2E/BDD/可见浏览器 UAT 矩阵**（虚拟数据驱动真前端）：三档配置 UI 闭环(填写→保存→后端核对→刷新回填，治客户最早报的"数字填进去不显示") + 三档 10 组合×多段数据判定矩阵(四档+开关关+各档归零+步骤级覆盖，报警数值精确) + 开关开/关前端对照(同段超时数据 NG 0%↔OK 100%) + 双工位虚拟检测前端实测(双检测框+独立统计卡+SOP 双分组) + 工位组互通端到端(`synchronized_any_ng` A 站 NG→B 站联动 NG)，插件 L1 单测 361/361；(3) 修 `returnable hook` 白名单过时断言(v3.14 起 workpiece_flow 扩到 8 个可返回 hook) |
-| **v3.16.0** | **2026-06-01** | **补齐福建金龙双工位 R1–R5 缺失的配置 UI**（后端能力 v3.15.5 已具备，缺前端入口致客户找不到、误以为没做）— (1) **步骤耗时三档配置 UI**：主程序 Project 步骤表加「步骤耗时三档」列并留插槽 `project.step-cell.durations`（无插件显示占位），插件 v1.1.9 注册三输入框 cell 写后端 `/durations/step-durations`，判定逻辑 v3.15.0 已有；(2) **工位组互通配置面板**：工位组 CRUD 封装 + 管理面板 + 设置页 Tab，后端 `/channel-groups`（v3.13.1 表/协调器 + v3.15.5）已有补前端入口；(3) 福建金龙插件 v1.1.8→v1.1.9（仅前端增量三档 cell），重打包 + 主签名私钥重签（指纹 `d1f2fcb6` 与客户机白名单一致），后端验签器客户机同款环境验 5/5 全通过；R3 双工位布局/R5 权威 OK/NG 统计 v3.15.5+插件已实现本版无改；**插件不随安装包内置**，客户验证需装 v3.16.0 主程序 + 界面单独上传 v1.1.9 包 |
-| v3.15.5 | 2026-06-01 | **修前端插件加载抢跑后端就绪致 Network Error 一次性放弃（P0）** — `main.js` 插件 bootstrap fire-and-forget 既不等后端就绪也不重试，而 `file://` 页面加载远早于后端冷启动（CUDA 预热+模型加载好几秒），一上来拉清单就 Network Error 然后放弃，插件前端定制全程不加载；修法：先 `waitBackendReady()` 轮询探活（`/plugins/active/manifest` 无插件也 200）等就绪最多 90s 再加载，全程 `[⬛ PluginBootstrap]` 日志 |
-| v3.15.4 | 2026-06-01 | **根治 `file://` 环境前端插件 ESM 动态加载失败（P0）** — 打包后浏览器拦 blob 动态 import 致插件 ESM 静默失败、双工位定制 UI 全不生效（本地 http 不复现）；import 改 blob→data→http 三级兜底 + 插槽注册 `markRaw` 静态 import + 插件加载诊断日志双通道（终端+落盘，`POST /plugins/client-log`）+ 验签每步打期望 vs 实际 + 安装器覆盖装清旧前端产物 + v3.15.x 热补丁全固化进源码 |
-| v3.15.2 | 2026-06-01 | **紧急热修 v3.15.1 现场 P0 (插件装不上) + 日志乱码** — (1) **P0** 所有 Windows 客户装插件报 `PLUGIN_FILES_DIGEST_FAIL`「插件文件摘要不一致」: `files_digest` 计算用 `sorted(root.rglob("*"))` 即按 **Path 对象**排序, Windows `WindowsPath` 大小写不敏感把 `README.md` 当 `readme.md` 排末尾、Linux `PosixPath` 大小写敏感排最前, 两平台文件顺序不同 → 摘要按序拼接哈希漂移 → 插件在开发端(POSIX 顺序)签名、Windows 客户机重算顺序错位摘要比对失败 (开发机 Linux 自测永远过, 只在 Windows 暴露; 与 v3.15.1 CI 自检反斜杠误判**同根**). 修复: 排序键改相对路径 POSIX 字符串 `as_posix()`, 与 `calc_files_digest_in_zip` 的 `sorted(namelist())`、打包端对齐. (2) 手动从 cmd 启动日志整屏乱码 (`澶╁啗...`): cmd 默认 GBK(936), Electron 主进程 console.log 中文+转发后端 UTF-8 日志被错解码, 主进程启动最早 `chcp 65001` 切控制台 UTF-8 (双击图标无控制台静默无副作用). (3) 加跨平台摘要排序回归测试 (`PureWindowsPath` 模拟两平台分裂, 钉死排序键 POSIX 字符串). **配套热补丁 `patch_v3.15.2a`**: 插件系统不在 Nuitka 白名单, `_plugin_common.py` 源码部署, 替换该文件重启即修, 现存 v3.15.1 客户**无需重装** (仅修 P0; 编码修复在 asar 内需重装). |
-| v3.15.1 | 2026-05-31 | **热修 v3.15.0 现场三问题 + CI 打包资源自检** — (1) 插件装不上 `PLUGIN_MANIFEST_SCHEMA_FAIL`: `plugin.schema.json`+`customer-codes.md` 没打包(backend 打包过滤器只含 `.py` 等, `docs/` 不在清单), extraResources 加 `docs/plugin-system → resources/docs/plugin-system`; (2) 启动无任何动画: 根目录 `splash.html` 漏进 files 白名单, 旧版 splash 窗口 `transparent:true` 加载失败成全透明空窗肉眼不可见, 白名单补 `splash.html`; (3) 偶发"获取GPU列表失败": 就绪健康检查只探 `/source/status`(不碰 torch)+项目未激活时 CUDA 全程冷, 进设置页 onMounted 并发撞 `torch.cuda` 冷初始化(实测约5秒), 后端启动后台线程**预热 CUDA**(移到 splash 期)+前端 GPU 查询失败**静默重试2次**; (4) 插件安装 `unlink` WinError32 掩盖真错, 包 try/except. **新增 CI 打包资源自检 step**(electron-builder 后硬验证 schema/customer-codes/main.py/splash.html 在产物, 缺则红灯阻断发版). 客户两段现场视频实证. |
-| v3.15.0 | 2026-05-31 | **RFC 12 步骤进行中计时广播 + 前端 host.api + 福建金龙插件配套** — 平台新增 `step_tick` 只读 observe hook (推理热路径 ~1Hz 节流 fire, ctx 带 `elapsed_sec` + 步骤身份 + min/max_duration 只读参考), "步骤耗时三档实时报警"策略全挂插件侧 (阈值判定 + trigger_alarm + 经 pre_cycle_end 改 NG, 主程序不内嵌阈值). 前端 `host.api` 暴露已鉴权 axios 实例 (插件前端调自有后端路由复用登录 token). 版本 bump 3.14.0→3.15.0 与福建金龙双工位插件 v1.1.8 声明的 `main_version_min=3.15.0` 对齐 (低于此版本被插件版本校验硬拒绝). |
-| v3.14.0 | 2026-05-29 | **RFC 11 串行流水线结算 (Workpiece Flow Coordinator)** — M0-M8 一次性闭环. 新增「单机内多工位**串行**流水线」原生能力 (同一工件依次走 N 个工位, 全过才合格), 与 v3.13.1 工位组 (并行) / cluster (跨机) 完全独立同工位互斥. 2 张新表 (`workpiece_flow_configs/_runs`) + Coordinator 单例 (5 态状态机 + FIFO + Timer 超时) + 3 种触发器 (TimeWindowTrigger / ScanTrigger 与 scan_pair 互斥 / PhysicalTrigger 接 GPIO/Modbus) + REST API 8 端点 + 5 hook + 2 PluginHost API + Settings Tab + Monitor indicator slot. 77 测试零回归 (单元 73 + BDD 4), 福建金龙现场无扫码场景跑通 demo. |
-| v3.13.1 | 2026-05-29 | **RFC 09 插件平台升级 + RFC 10 工位组主程序原生** — 跳过 v3.13.0 骨架直接发完整闭环. M1 业务流程双向打通(10 hooks 含 returnable + 10 PluginHost APIs + capabilities + audit), M2 UI 平台化(TjSlot + 7 主程序 slot 全接入: settings/project tab + cycle-result.indicator + step-cell.duration/status + layout.body/footer), M3 配置扩展(plugin_data 命名空间 + 卸载清理 + tab 注入). RFC 10 工位组(`channel_groups` 表 + Coordinator + synchronized_any_ng/all_ok + threading.Timer 超时 + 报警链路联动直驱 alarm_router + cluster 互操作透传 cycle_context). 395 测试零回归 (plugin_system 328 + channel_group 67), 未装插件场景字节级零差异. |
-| v3.12.1 | 2026-05-29 | splash 双路径修复 (关闭手势动画时恢复 v3.8.1 旧版简单 splash + legacySplashWindow + 后端 ready 才放行主窗) + 启动动画手势相机 Todesk 错配修复 (device_label 反查 splash 端真实 deviceId, 治 webContents origin 隔离) + per_item 开周期门槛解耦/虚拟漏件 NG/工件离场互斥/中心点判定 xywh 坐标修复 + Navbar 加最小化到任务栏菜单. 内容随 v3.13.x→v3.14.0 主线合并交付, 未单独发包 |
-| **v3.12.0** | **2026-05-27** | **合并 chore/feature-verify + feat/per-item-enhance 两条主线**（跳过 v3.11.x）+ **per_item v3.12 增强四件套**：严格等量周期触发（`require_exact_count`，治漏件 NG）/ 手动结算模式（`disable_auto_settle` + `/per-item-control` API，师傅按按钮控制）/ Box 尺寸过滤（步骤级 `box_max_width/height`，治整个料盒被识别成巨型螺丝）/ per_item 检测短路放行（跟 synthetic 同等待遇）+ **SOP 卡片"图永不空"**（步骤缩略图按 label 跨周期继承，治灰白闪一下的视觉跳变）+ 5 类历史测试失败修复（conftest auth_models / MagicMock 自动属性 / 字段名漂移 / 模板英文化 / jsonschema 装依赖） |
-| v3.10.2 | 2026-05-26 | **紧急修复 machineId 多机撞 ID 漏洞**（v3.10.1 之前所有版本受影响，现场出现 7-8 台机器同 ID）+ 5 强 2 弱多源指纹 + 黑名单过滤占位值 + 强度守门 + 现场诊断脚本 + IPC 暴露指纹诊断报告 |
-| v3.10.1 | 2026-05-26 | PT 多段策略"仅首段"显示 0.0s/`--` 修复 + 严格顺序 PT 负 interval 修复 + 防重复结算开关 UI 落库 + PT/CT B 方案 v2（帧号锚跟视频源解耦客户机解码速度）+ Splash 默认关闭 + 窗口模式默认带标题栏 |
-| v3.10.0 | 2026-05-25 | **用户系统完整闭环**：多角色账号（admin/engineer/operator）+ token 鉴权 + 端点级权限（约 160 个端点 require_perm）+ M2M API Key + 总开关默认关闭零差异 + 彻底清除旧 operators 系统（表+API+UI+utils 全删，5 阶段渐进式 strangle）+ Navbar/BottomBar 身份显示按鉴权状态切换 |
-| v3.9.0 | 2026-05-23 | **last_first 结算模式（末步结算 + 首步开周期）**（双锚状态机 R1-R6）+ **跨周期组类二 `cross_cycle` 独立状态机**（解决 D 余像 + A 新周期同帧时序）+ **per_item v3.9 五补丁**（expected_count / lock_lookahead / settle_after_all_done_sec / cleanup_stale_items 锁定模式不清 / item_label 多标签 OR）+ UAT 4 阶段 31/31 通过 |
-| v3.8.2 | 2026-05-22 | Cyber Splash 启动界面 + 实时后端日志驱动进度 + 工业全屏无边框 + IPC 优雅退出 + USB 摄像头 deviceId 持久化 + MediaPipe 完美骨架配置化 + 二段管线集成框架 + train-hand-detector skill |
-| v3.8.1 | 2026-05-22 | PT 守门/模型回退/Monitor 同步 + 步骤统计列可隐藏 + CI 磁盘清理（hotfix 累积） |
-| v3.8.0 | 2026-05-19 | **per_item 逐件覆盖模式**（打螺丝场景）+ PerItemPanel 全宽面板 + ENABLE_DEV_MOCKS 守门 + Project 配置 UI 扩展 |
-| v3.5.1 | 2026-05-06 | PT/CT 三档显示 + CSV 导出联动 + 操作手册补完 |
-| v3.5.0 | 2026-05-04 | 自定义导出 + 实时规则 + 周期性强制动作 + 完整测试框架 |
-| v3.4.2 | hotfix | 禁用扫码守门 + reload 时序 + ERROR 不续 LON |
-| v3.4.1 | hotfix | D 模式扫码器灯一直闪 + 校验工位拿错 |
-| v3.4.0 | 2026-04-30 | LON D 模式 + 容器跨线追踪 |
-| v3.3.0 | 2026-04-26 | scan_pair 状态机 |
-| v3.1.3 | 2026-04-29 | FFmpeg 单线程强制（保命修复） |
-| v2.7.16 | 2026-04-21 | source.py P5b 拆分（mixin 化起点） |
-| v2.7.12 | 2026-04-22 | 版本号源改 package.json |
+| v3.28.0 | 2026-06-27 | 逐件覆盖模式离场快照判定+漏打挂起待补+判定时机解耦 + 插件配置统一保存 + 传感器清洁插件 v1.2.0（选择性抑制提示框+棉签使用记录数据页） |
+| v3.27.0 | 2026-06-25 | 插件平台「插件主动触发主程序事件」桥接 + 传感器清洁插件三判定接入事件体系 |
+| v3.23.0 | 2026-06-22 | 上银包装线现场闭环增强 + 通用 NG 补做策略（人工确认定格 / 强制结案审计 / 缺油嘴 gate） |
+| v3.20.0 | 2026-06-15 | 外部 MES 工单主动拉取 + USB 键盘扫码枪 + 调试埋点 |
+| v3.19.0 | 2026-06-11 | 全局调试日志系统 + NG 原因可解释性 |
+| v3.14.0 | 2026-05-29 | RFC 11 串行流水线结算（Workpiece Flow Coordinator） |
+| v3.13.1 | 2026-05-29 | RFC 09 插件平台升级 + RFC 10 工位组主程序原生 |
+| v3.10.0 | 2026-05-25 | 用户系统完整闭环（多角色账号 + token 鉴权 + 端点级权限 + M2M API Key） |
 
-主线最新（已合并到 v3.12.0，已发版）：
-- `f0801ad` release: v3.12.0 — per_item 严格等量+手动结算+box 尺寸过滤 + SOP 图永不空 + 测试基础设施修复
-
-下次 tag 进度：
-- v3.12.x 整理 9 个测试串污染（synthetic / per_item_v310 / custom_export 系统预设，单跑全绿、批跑 fail，根因 module-level 单例 reset 缺失）
-- 长期分支 `feat/plugin-system` 在做（多客户定制插件系统 + DB 迁 PG）
-
-> **历史 bug 全档**：33 个 changelog × 184 条 BUG/FEAT/HOTFIX 已分类到 24 个旧 skill 内"历史踩坑"章节。统计：`debug-mes` 61 条 / `modify-frontend` 45 / `modify-source` 40 / `debug-source` 24 / `add-api-endpoint` 22 / `debug-video` 19。新增 3 个 skill（`debug-export` / `debug-cluster` / `debug-operator-license`）由 v3.5.x 真实代码反推编写，未追溯历史 changelog。
+（更早版本见 `docs/changelog/`）
 
 ---
 
-## 十三、当前在做的事（动态，看 git log 和分支名）
+## 十二、当前在做的事（动态，看 git log 和分支名）
 
-- 主分支 `main`：刚合入 `test/v3.12.0`（**插件系统 v3.13 + 工位组 RFC10 + 串行流水线结算 RFC11/v3.14.0 + RFC12 step_tick/host.api**），同时含 v3.12.1 客户反馈修复（splash 双路径 / Todesk 相机错配 / per_item 四件套 / 最小化菜单），版本 bump 至 v3.15.0
-- 主线最新能力：v3.15.0 step_tick 计时广播 + host.api 鉴权 axios（福建金龙双工位插件 v1.1.8 配套）+ v3.14.0 串行流水线（Workpiece Flow）+ v3.13.1 插件平台 + 工位组
-- **v3.15.2 热修**：v3.15.1 现场 P0 — 所有 Windows 客户装插件报「插件文件摘要不一致」（`files_digest` 按 Path 对象排序，Windows 大小写不敏感致 `README.md` 排序漂移），改 POSIX 字符串排序键根治；+ 手动 cmd 启动日志乱码（`chcp 65001` 切控制台 UTF-8）+ 跨平台排序回归测试 + **配套热补丁 `patch_v3.15.2a`** 让现存 v3.15.1 客户不重装即修
-- **v3.15.1 热修**：v3.15.0 安装包三个现场问题（插件 `plugin.schema.json`/`splash.html` 漏打包 + GPU 列表偶发失败）+ 插件安装清理健壮性 + **CI 打包资源自检 step 防漏打包复发**（客户两段视频实证）
-- 分支 `feat/plugin-system`：**多客户定制插件系统 + 数据库迁 PG**（长期分支，v3.13 阶段大部分能力已合入主干）
-  - 决策已敲定：迁 PG / 三档插件全做 / 签名机制 / 不做沙箱
+- 主分支 `main`：已发版到 **v3.27.0**（插件平台 + 工位组 RFC10 + 串行流水线 RFC11 + RFC12 step_tick/host.api + 插件主动触发事件桥接）
+- 长期分支 `feat/plugin-system`：**多客户定制插件系统 + 数据库迁 PG**（决策已敲定：迁 PG / 三档插件全做 / 签名机制 / 不做沙箱）
+- 待整理：测试批跑串污染（synthetic / per_item / custom_export 系统预设，单跑全绿、批跑 fail，根因 module-level 单例 reset 缺失）
 
 ---
 
-## 十四、遇到不一致时的优先级
+## 十三、遇到不一致时的优先级
 
-当 AGENTS.md / 产品交接手册 / changelog / 代码注释 互相矛盾时：
+当 AGENTS.md / changelog / 代码注释 互相矛盾时：
 
-1. **代码 > 注释 > changelog > AGENTS.md > 产品交接手册**
+1. **代码 > 注释 > changelog > AGENTS.md**
 2. 发现矛盾**立刻通知主作者**并提议更新 AGENTS.md
-3. 永远**不要**信任 `docs/产品交接手册.md`（v2.4.0，已严重过时：表数 22 / `MLModel`类名 / API 前缀 `/api` 全错）
+3. skill 文档与代码冲突时同样以代码为准，并回头修 skill
 
 ---
 
-**本文件最后更新**：2026-06-22（v3.23.0 发版：外部事件人工确认定格 + 强制结案审计 + 待机不结算 + 缺油嘴 gate + 通用 NG 补做策略 + 包装补滑块 + 开机自动恢复检测开关 + 项目复制 + 虚拟扫码枪）
+**本文件最后更新**：2026-06-27（发版 v3.28.0：逐件覆盖离场判定/待补态/判定时机解耦 + 插件统一保存 + 传感器清洁插件 v1.2.0；版本号对齐 v3.28.0）
 **维护者**：项目主作者 + AI agents
-**事实校验**：本版基于 33 个 changelog（184 条记录）+ 8 个 explore subagent 并行扫描的全盘扫描报告（`.tmp_audit/stage3_full_scan_report.md`）+ v3.9.0/v3.10.0 实测代码反推（`source_settlement_mixin.py` 1320 行 / `source_per_item_mixin.py` ~960 行 / v3.10 用户系统 ~841 行 core + 5 张新表 + 12 个 UAT 全过）
+**维护铁律**：本文件只放"地图 + 守则 + 不变量"。模块细节进 skill，版本变更进 `docs/changelog/`，扩展点/技术债进 `docs/plugin-system/inventory/`。**发版时务必同步更新本文件第一节版本号 + 文件尾日期**（详见 `update-release` skill）。

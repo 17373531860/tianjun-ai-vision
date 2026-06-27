@@ -261,6 +261,7 @@ export async function loadActivePluginFrontend(router) {
     // v3.13 M2.2b/M3.4: 配置面板 tab 注入 API
     //   registry.tabs.register('settings', { key: 'customer-rule', label: '客户规则', component: MyComp })
     //   scope: 'settings' | 'project'
+    //   v3.27.x: project tab 可多传 onSave 异步处理器, 主程序「保存配置」会一并调用 (插件免自带保存按钮)
     tabs: {
       register(scope, tab) {
         if (!scope || !tab || !tab.key || !tab.label) {

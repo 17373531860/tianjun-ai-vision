@@ -2036,43 +2036,7 @@
                     </div>
                   </div>
 
-                  <!-- 收尾标签 (可选,例: 翻面) -->
-                  <div class="grid grid-cols-2 gap-4">
-                    <div>
-                      <div class="text-xs text-gray-400 mb-1.5">收尾动作 / 信号标签 (可选)</div>
-                      <el-select
-                        v-model="activeProject.pipeline_config.per_item.finish_label"
-                        size="small" class="!w-full" placeholder="留空 → 全部覆盖完就自动结算" clearable>
-                        <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
-                      </el-select>
-                      <div class="text-[10px] text-gray-500 mt-1">这是「<span class="text-amber-300">纯动作</span>」/「<span class="text-amber-300">信号</span>」: 出现即结算周期, <span class="text-amber-400">不参与覆盖判定</span> (例: 放置、翻面)。跟下方步骤卡片的「覆盖动作」是<span class="text-amber-400">两套独立机制</span>, 不冲突。</div>
-                    </div>
-                    <div>
-                      <div class="text-xs text-gray-400 mb-1.5">收尾动作连续多少帧才确认</div>
-                      <el-input-number
-                        v-model="activeProject.pipeline_config.per_item.finish_sustain_frames"
-                        size="small" :min="1" :step="1" :precision="0" class="!w-full"
-                        :disabled="!activeProject.pipeline_config.per_item.finish_label" />
-                      <div class="text-[10px] text-gray-500 mt-1">收尾动作需连续出现多少帧才确认</div>
-                    </div>
-                  </div>
-
-                  <!-- v3.12+ 工件离场互斥 (避免工人扭螺丝时拿取手势误触发结算) -->
-                  <div class="mt-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded"
-                       v-if="activeProject.pipeline_config.per_item.finish_label">
-                    <div class="flex items-center justify-between gap-3">
-                      <div class="flex-1">
-                        <div class="text-[12px] font-bold text-cyan-300">工件离场才算结算 (互斥校验)</div>
-                        <div class="text-[10px] text-gray-500 mt-0.5">
-                          开启: "收尾动作"出现的同帧, 如果画面里<span class="text-amber-300">还有任何工件标签</span>(5N螺丝/7N螺丝等) → 这一帧<span class="text-amber-300">不算结算</span> (拿取手势误识别)<br/>
-                          关闭 (默认): 老行为, 只看"收尾动作"是否连续出现, 不管桌面是否有工件
-                        </div>
-                      </div>
-                      <el-switch
-                        v-model="activeProject.pipeline_config.per_item.finish_requires_no_items"
-                        active-text="工件离场" inactive-text="不校验" inline-prompt size="default" />
-                    </div>
-                  </div>
+                  <!-- 收尾标签 / 双条件 已迁入下方「结算触发方式」唯一入口, 此处不再重复 -->
 
                   <!-- v3.9+ 新增: 稳定性进阶 -->
                   <div class="border-t border-slate-700 pt-3 mt-3">
@@ -2145,35 +2109,263 @@
                       </div>
                     </div>
 
-                    <div class="grid grid-cols-3 gap-4">
-                      <div>
-                        <div class="text-[11px] text-gray-400 mb-1">全部完成后等几秒自动 OK</div>
-                        <el-input-number
-                          v-model="activeProject.pipeline_config.per_item.settle_after_all_done_sec"
-                          size="small" :min="0" :step="0.5" :precision="2" class="!w-full"
-                          :disabled="activeProject.pipeline_config.per_item.disable_auto_settle" />
-                        <div class="text-[10px] text-gray-500 mt-1">所有步骤覆盖完后保持 N 秒 → 自动 OK 结算; 0 = 必须等"收尾动作"<span v-if="activeProject.pipeline_config.per_item.disable_auto_settle" class="text-amber-400"> · 手动模式下忽略</span></div>
+                    <!-- 结算触发方式: 唯一的结算选择入口 (C 全部完成 与 A/B 信号 互斥; A/B 可叠加=双条件) -->
+                    <div class="mb-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+                      <div class="text-[12px] font-bold text-cyan-300 mb-2">结算触发方式
+                        <span class="text-gray-500 font-normal text-[10px]">— 选一种; "信号触发"下勾两个 = 双条件结算</span>
                       </div>
+                      <el-radio-group
+                        v-model="activeProject.pipeline_config.per_item._settle_mode"
+                        :disabled="activeProject.pipeline_config.per_item.disable_auto_settle">
+                        <div class="flex flex-col gap-1.5 w-full">
+                          <!-- C: 全部覆盖完成即 OK -->
+                          <el-radio label="alldone">全部覆盖完成即结算 <span class="text-gray-500 text-[10px]">(所有件打完就判 OK, 不等任何信号)</span></el-radio>
+                          <div class="ml-6 mb-1 flex items-center gap-2"
+                               v-if="activeProject.pipeline_config.per_item._settle_mode === 'alldone'">
+                            <span class="text-[11px] text-gray-400">全部打完后保持</span>
+                            <el-input-number
+                              v-model="activeProject.pipeline_config.per_item.settle_after_all_done_sec"
+                              size="small" :min="0.5" :step="0.5" :precision="2" class="!w-28"
+                              :disabled="activeProject.pipeline_config.per_item.disable_auto_settle" />
+                            <span class="text-[11px] text-gray-400">秒 → 自动 OK</span>
+                          </div>
+                          <!-- A/B: 信号触发 -->
+                          <el-radio label="signal">信号触发结算 <span class="text-gray-500 text-[10px]">(下方两项可单选或都选)</span></el-radio>
+                          <div class="ml-6 flex flex-col gap-2"
+                               v-if="activeProject.pipeline_config.per_item._settle_mode === 'signal'">
+                            <!-- B 步骤标签结算 -->
+                            <div class="flex items-center gap-2 flex-wrap">
+                              <el-checkbox
+                                v-model="activeProject.pipeline_config.per_item._settle_by_step"
+                                :disabled="activeProject.pipeline_config.per_item.disable_auto_settle">步骤标签结算</el-checkbox>
+                              <el-select
+                                v-model="activeProject.pipeline_config.per_item._finish_label_choice"
+                                size="small" class="!w-44" placeholder="选结算标签" clearable
+                                :disabled="!activeProject.pipeline_config.per_item._settle_by_step || activeProject.pipeline_config.per_item.disable_auto_settle">
+                                <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
+                              </el-select>
+                              <span class="text-[11px] text-gray-400">连续</span>
+                              <el-input-number
+                                v-model="activeProject.pipeline_config.per_item.finish_sustain_frames"
+                                size="small" :min="1" :step="1" :precision="0" class="!w-24"
+                                :disabled="!activeProject.pipeline_config.per_item._settle_by_step || activeProject.pipeline_config.per_item.disable_auto_settle" />
+                              <span class="text-[11px] text-gray-400">帧确认</span>
+                            </div>
+                            <!-- A 物品标签消失结算 -->
+                            <div class="flex items-center gap-2 flex-wrap">
+                              <el-checkbox
+                                v-model="activeProject.pipeline_config.per_item._settle_by_item"
+                                :disabled="activeProject.pipeline_config.per_item.disable_auto_settle">物品标签消失结算</el-checkbox>
+                              <span class="text-[11px] text-gray-400">离场确认</span>
+                              <el-input-number
+                                v-model="activeProject.pipeline_config.per_item.leave_confirm_frames"
+                                size="small" :min="1" :step="5" :precision="0" class="!w-24"
+                                :disabled="!activeProject.pipeline_config.per_item._settle_by_item || activeProject.pipeline_config.per_item.disable_auto_settle" />
+                              <span class="text-[11px] text-gray-400">帧</span>
+                            </div>
+                            <div class="text-[10px] text-amber-300/80">两个都勾 = 双条件: 必须"标签出现"且"工件离场"才结算 (防遮挡/停顿误判提前结算)</div>
+                          </div>
+                        </div>
+                      </el-radio-group>
+                    </div>
+
+                    <!-- 兜底 NG 安全网 (防卡死, 与结算方式独立) -->
+                    <div class="grid grid-cols-2 gap-4">
                       <div>
                         <div class="text-[11px] text-gray-400 mb-1">无动作多少秒判 NG</div>
                         <el-input-number
                           v-model="activeProject.pipeline_config.per_item.idle_timeout_sec"
                           size="small" :min="0" :step="1" :precision="0" class="!w-full"
                           :disabled="activeProject.pipeline_config.per_item.disable_auto_settle" />
-                        <div class="text-[10px] text-gray-500 mt-1">工人停手 N 秒无任何动作 → 强制 NG 结算; 0 = 不限 (本场景建议 8 秒)<span v-if="activeProject.pipeline_config.per_item.disable_auto_settle" class="text-amber-400"> · 手动模式下忽略</span></div>
+                        <div class="text-[10px] text-gray-500 mt-1">工人停手 N 秒无任何动作 → 强制 NG; 0 = 不限<span v-if="activeProject.pipeline_config.per_item.disable_auto_settle" class="text-amber-400"> · 手动模式下忽略</span></div>
                       </div>
                       <div>
-                        <div class="text-[11px] text-gray-400 mb-1">单周期最长几秒</div>
+                        <div class="text-[11px] text-gray-400 mb-1">单周期最长几秒 (兜底)</div>
                         <el-input-number
                           v-model="activeProject.pipeline_config.per_item.cycle_max_duration_sec"
                           size="small" :min="0" :step="10" :precision="0" class="!w-full"
                           :disabled="activeProject.pipeline_config.per_item.disable_auto_settle" />
-                        <div class="text-[10px] text-gray-500 mt-1">周期开始后超过 N 秒未结算 → 强制 NG; 0 = 不限 (推荐 300 秒)<span v-if="activeProject.pipeline_config.per_item.disable_auto_settle" class="text-amber-400"> · 手动模式下忽略</span></div>
+                        <div class="text-[10px] text-gray-500 mt-1">周期开始后超 N 秒未结算 → 强制 NG 防卡死; 0 = 不限<span v-if="activeProject.pipeline_config.per_item.disable_auto_settle" class="text-amber-400"> · 手动模式下忽略</span></div>
                       </div>
                     </div>
                     <div class="text-[10px] text-gray-500 mt-2">
-                      ※ 这三项只在"逐件覆盖"模式生效, 跟其他模式(顺序/检测/跟踪)的同名参数完全独立<br/>
-                      ※ 手动模式下"收尾动作"标签 (上方下拉) 也不再触发自动结算, 但仍允许保留配置 (作为元信息)
+                      ※ 结算方式与兜底只在"逐件覆盖"模式生效, 跟其他模式(顺序/检测/跟踪)同名参数完全独立<br/>
+                      ※ 开"手动结算模式"后以上全部禁用, 只能去 Monitor 页点「手动结算」
+                    </div>
+                  </div>
+
+                  <!-- v3.28+ 判定时机 (与"结算时机"解耦, 默认 = 结算时判 = 老项目零差异) -->
+                  <div class="border-t border-slate-700 pt-3 mt-3">
+                    <div class="text-xs text-gray-400 mb-2 font-bold">判定时机
+                      <span class="text-amber-400 font-normal">(给工人看的"绿/红灯"什么时候亮; 默认 = 跟结算同一刻)</span>
+                    </div>
+                    <div class="px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+                      <el-radio-group v-model="activeProject.pipeline_config.per_item.judge_timing">
+                        <div class="flex flex-col gap-1.5 w-full">
+                          <el-radio label="on_settle">结算时判定 <span class="text-gray-500 text-[10px]">(默认: 不单设, 取走/收尾那刻一次性判 OK/NG)</span></el-radio>
+                          <el-radio label="all_done">全部覆盖完成时判定 <span class="text-gray-500 text-[10px]">(所有件打完即亮绿合格, 保持到取走才落账; 漏件红灯仍由结算那刻给)</span></el-radio>
+                          <div class="ml-6 mb-1 flex items-center gap-2"
+                               v-if="activeProject.pipeline_config.per_item.judge_timing === 'all_done'">
+                            <span class="text-[11px] text-gray-400">全部打完后保持</span>
+                            <el-input-number
+                              v-model="activeProject.pipeline_config.per_item.judge_all_done_sec"
+                              size="small" :min="0" :step="0.5" :precision="2" class="!w-24" />
+                            <span class="text-[11px] text-gray-400">秒 → 亮绿</span>
+                          </div>
+                          <el-radio label="label">指定动作标签出现时判定 <span class="text-gray-500 text-[10px]">(出现该标签即拍快照: 全覆盖亮绿 / 有漏亮红+漏点, 补满翻绿)</span></el-radio>
+                          <el-radio label="manual">手动点击判定 <span class="text-gray-500 text-[10px]">(检测主页「手动判定」按钮触发拍快照; 不自动判, 全靠操作员点)</span></el-radio>
+                          <div class="ml-6 flex items-center gap-2 flex-wrap"
+                               v-if="activeProject.pipeline_config.per_item.judge_timing === 'label'">
+                            <span class="text-[11px] text-gray-400">判定标签</span>
+                            <el-select
+                              v-model="activeProject.pipeline_config.per_item.judge_label"
+                              size="small" class="!w-44" placeholder="选判定触发标签" clearable>
+                              <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
+                            </el-select>
+                            <span class="text-[11px] text-gray-400">连续</span>
+                            <el-input-number
+                              v-model="activeProject.pipeline_config.per_item.judge_label_frames"
+                              size="small" :min="1" :step="1" :precision="0" class="!w-20" />
+                            <span class="text-[11px] text-gray-400">帧确认</span>
+                          </div>
+                        </div>
+                      </el-radio-group>
+                      <!-- 判定合格(绿灯)事件: 与落账"合格"事件分开 -->
+                      <div class="mt-2 flex items-center gap-2 flex-wrap"
+                           v-if="activeProject.pipeline_config.per_item.judge_timing !== 'on_settle'">
+                        <span class="text-[11px] text-gray-400">判定合格亮绿事件</span>
+                        <el-select
+                          v-model="activeProject.pipeline_config.per_item.judge_ok_event_id"
+                          size="small" class="!w-56" clearable placeholder="可选 — 判合格时触发(亮绿灯)">
+                          <el-option v-for="ev in (activeProject.events_config || [])"
+                                     :key="ev.id" :label="`${ev.name} (id=${ev.id})`" :value="ev.id" />
+                        </el-select>
+                        <span class="text-[10px] text-gray-500">去「报警配置」把此事件映射到绿灯; 留空=不主动亮绿。红灯/漏点复用下方「漏打补做」的待补提示事件</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- v3.27+ 漏打补做 / 框色高亮 (打螺丝漏打场景专用, 默认全关 = 老项目零差异; 离场触发已迁至上方"结算触发方式") -->
+                  <div class="border-t border-slate-700 pt-3 mt-3">
+                    <div class="text-xs text-gray-400 mb-2 font-bold">漏打补做 · 框色高亮 <span class="text-amber-400 font-normal">(打螺丝漏打场景, 默认全关; 离场触发去上方「结算触发方式」)</span></div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                      <div>
+                        <div class="text-[11px] text-gray-400 mb-1">待补超时(秒)</div>
+                        <el-input-number
+                          v-model="activeProject.pipeline_config.per_item.remediation_timeout_sec"
+                          size="small" :min="0" :step="1" :precision="0" class="!w-full"
+                          :disabled="!activeProject.pipeline_config.per_item.ng_hold_for_remediation" />
+                        <div class="text-[10px] text-gray-500 mt-1">待补态超过 N 秒没补满 → 自动按 NG 落账; 0 = 不限, 只能补满或人工确认</div>
+                      </div>
+                      <div>
+                        <div class="text-[11px] text-gray-400 mb-1">待补提示事件 (点哪盏灯/响不响)</div>
+                        <el-select
+                          v-model="activeProject.pipeline_config.per_item.remediation_event_id"
+                          size="small" class="!w-full" clearable placeholder="可选 — 进入待补时触发"
+                          :disabled="!activeProject.pipeline_config.per_item.ng_hold_for_remediation">
+                          <el-option v-for="ev in (activeProject.events_config || [])"
+                                     :key="ev.id" :label="`${ev.name} (id=${ev.id})`" :value="ev.id" />
+                        </el-select>
+                        <div class="text-[10px] text-gray-500 mt-1">进入"还有没扭螺丝"待补态时触发该事件; 灯色/蜂鸣去「报警配置」把此事件映射到红灯。留空=不主动点灯</div>
+                      </div>
+                    </div>
+
+                    <!-- 漏打挂起待补开关 -->
+                    <div class="mt-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+                      <div class="flex items-center justify-between gap-3">
+                        <div class="flex-1">
+                          <div class="text-[12px] font-bold text-amber-300">漏打挂起待补 (NG 保护)</div>
+                          <div class="text-[10px] text-gray-500 mt-0.5">
+                            开启后: 离场时若有漏打, <b class="text-amber-400">不立即记 NG</b>, 先进"待补"态点灯提示漏哪颗 —— 工人放回补满则转 OK; 否则超时/人工点「确认 NG」才落账<br/>
+                            关闭 (默认): 离场时漏打直接记 NG
+                          </div>
+                        </div>
+                        <el-switch
+                          v-model="activeProject.pipeline_config.per_item.ng_hold_for_remediation"
+                          active-text="挂起待补" inactive-text="直接NG" inline-prompt size="default"
+                          :disabled="!(activeProject.pipeline_config.per_item._settle_mode === 'signal' && activeProject.pipeline_config.per_item._settle_by_item)" />
+                      </div>
+                    </div>
+
+                    <!-- 红灯内取件算 NG -->
+                    <div class="mt-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+                      <div class="flex items-center justify-between gap-3">
+                        <div class="flex-1">
+                          <div class="text-[12px] font-bold text-amber-300">红灯内取件算 NG</div>
+                          <div class="text-[10px] text-gray-500 mt-0.5">
+                            开启后: 待补态(红灯)期间工人<b class="text-amber-400">没补满就再次拿取(出现收尾标签)把件带走 → 自动按 NG 落账</b><br/>
+                            关闭 (默认): 待补态只能靠补满转 OK / 超时 / 人工「确认 NG」落账
+                          </div>
+                        </div>
+                        <el-switch
+                          v-model="activeProject.pipeline_config.per_item.remediation_takeaway_ng"
+                          active-text="取件即NG" inactive-text="不处理" inline-prompt size="default"
+                          :disabled="!activeProject.pipeline_config.per_item.ng_hold_for_remediation" />
+                      </div>
+                    </div>
+
+                    <!-- 待补报警形式: 单次 / 持续 -->
+                    <div class="mt-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+                      <div class="flex items-center justify-between gap-3 mb-2">
+                        <div class="flex-1">
+                          <div class="text-[12px] font-bold text-amber-300">待补报警形式</div>
+                          <div class="text-[10px] text-gray-500 mt-0.5">
+                            单次: 进入待补态只触发一次报警事件; 持续: 按下方间隔重复触发, 直到补满/确认。撤报警靠 OK/NG 事件去「报警配置」联动
+                          </div>
+                        </div>
+                        <el-radio-group
+                          v-model="activeProject.pipeline_config.per_item.remediation_alarm_mode"
+                          size="small"
+                          :disabled="!activeProject.pipeline_config.per_item.ng_hold_for_remediation">
+                          <el-radio-button label="once">单次触发</el-radio-button>
+                          <el-radio-button label="sustained">持续触发</el-radio-button>
+                        </el-radio-group>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <span class="text-[11px] text-gray-400">持续间隔(秒)</span>
+                        <el-input-number
+                          v-model="activeProject.pipeline_config.per_item.remediation_alarm_interval_sec"
+                          size="small" :min="0.5" :step="0.5" :precision="1" class="!w-40"
+                          :disabled="!activeProject.pipeline_config.per_item.ng_hold_for_remediation || activeProject.pipeline_config.per_item.remediation_alarm_mode !== 'sustained'" />
+                        <span class="text-[10px] text-gray-500">每隔 N 秒重复触发一次 (持续模式生效, 推荐 2~5)</span>
+                      </div>
+                    </div>
+
+                    <!-- 框色高亮 -->
+                    <div class="mt-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+                      <div class="flex items-center justify-between gap-3 mb-2">
+                        <div class="flex-1">
+                          <div class="text-[12px] font-bold text-cyan-300">检测框按覆盖态上色</div>
+                          <div class="text-[10px] text-gray-500 mt-0.5">开启后 Monitor 画面里每颗螺丝的框: 已扭→绿 / 未扭→红, 一眼看出漏哪颗。关闭 (默认) 走全局 OK/NG 色</div>
+                        </div>
+                        <el-switch v-model="activeProject.pipeline_config.per_item.color_by_coverage"
+                          active-text="按覆盖" inactive-text="全局色" inline-prompt size="default" />
+                      </div>
+                      <div class="grid grid-cols-2 gap-4">
+                        <div class="flex items-center gap-2">
+                          <span class="text-[11px] text-gray-400">已覆盖(已扭)</span>
+                          <el-color-picker v-model="activeProject.pipeline_config.per_item.box_color_covered"
+                            size="small" :disabled="!activeProject.pipeline_config.per_item.color_by_coverage" />
+                          <span class="text-[10px] text-gray-500">留空=绿</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span class="text-[11px] text-gray-400">未覆盖(未扭)</span>
+                          <el-color-picker v-model="activeProject.pipeline_config.per_item.box_color_uncovered"
+                            size="small" :disabled="!activeProject.pipeline_config.per_item.color_by_coverage" />
+                          <span class="text-[10px] text-gray-500">留空=红</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- v3.28+ 显示螺丝编号 -->
+                    <div class="mt-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded flex items-center justify-between gap-3">
+                      <div class="flex-1">
+                        <div class="text-[12px] font-bold text-cyan-300">显示螺丝编号</div>
+                        <div class="text-[10px] text-gray-500 mt-0.5">开启后 Monitor 画面里每颗螺丝框上叠"#编号"(按空间序: 上→下、左→右)。不同标签各自从 #1 起 (如 5N螺丝#3 / 7N螺丝#1)。关闭=不显示</div>
+                      </div>
+                      <el-switch v-model="activeProject.pipeline_config.per_item.show_item_numbers"
+                        active-text="显示" inactive-text="不显示" inline-prompt size="default" />
                     </div>
                   </div>
                 </div>
@@ -3787,6 +3979,50 @@ const initProjectDefaults = (project) => {
   // 老 per_item 项目: 若专属字段未配, 后端会自动从项目级老字段回落, 这里前端只兜底 0
   if (piCfg.cycle_max_duration_sec === undefined) piCfg.cycle_max_duration_sec = 0;
   if (piCfg.idle_timeout_sec === undefined) piCfg.idle_timeout_sec = 0;
+  // v3.27+ 离场判定 / 漏打补做 / 框色高亮 (全部默认关 = 老项目零差异)
+  if (piCfg.judge_on_workpiece_leave === undefined) piCfg.judge_on_workpiece_leave = false;
+  if (piCfg.leave_confirm_frames === undefined) piCfg.leave_confirm_frames = 25;
+  if (piCfg.ng_hold_for_remediation === undefined) piCfg.ng_hold_for_remediation = false;
+  if (piCfg.remediation_timeout_sec === undefined) piCfg.remediation_timeout_sec = 0;
+  if (piCfg.remediation_event_id === undefined) piCfg.remediation_event_id = null;
+  if (piCfg.remediation_takeaway_ng === undefined) piCfg.remediation_takeaway_ng = false;
+  if (piCfg.remediation_alarm_mode === undefined) piCfg.remediation_alarm_mode = 'once';
+  if (piCfg.remediation_alarm_interval_sec === undefined) piCfg.remediation_alarm_interval_sec = 2.0;
+  if (piCfg.color_by_coverage === undefined) piCfg.color_by_coverage = false;
+  if (piCfg.show_item_numbers === undefined) piCfg.show_item_numbers = false;
+  if (piCfg.box_color_covered === undefined) piCfg.box_color_covered = '';
+  if (piCfg.box_color_uncovered === undefined) piCfg.box_color_uncovered = '';
+  // ── 判定时机 (与结算时机解耦, 默认 on_settle = 结算时判 = 老项目零差异) ──
+  if (piCfg.judge_timing === undefined) piCfg.judge_timing = 'on_settle';
+  if (piCfg.judge_label === undefined) piCfg.judge_label = '';
+  if (piCfg.judge_all_done_sec === undefined) piCfg.judge_all_done_sec = 0;
+  if (piCfg.judge_label_frames === undefined) piCfg.judge_label_frames = 3;
+  if (piCfg.judge_ok_event_id === undefined) piCfg.judge_ok_event_id = null;
+
+  // ── 结算触发方式: 唯一入口的 UI 助手字段 (从底层标志反推, 不持久化为权威; 保存时再换算回标志) ──
+  // 底层标志才是后端权威: judge_on_workpiece_leave(物品消失) / finish_label(步骤标签) /
+  //   finish_requires_no_items(双条件门) / settle_after_all_done_sec(全部完成OK).
+  // _settle_mode='alldone'(全部完成即OK, 与信号互斥) | 'signal'(步骤标签/物品消失, 可叠加=双条件)
+  {
+    const _leave = piCfg.judge_on_workpiece_leave === true;
+    const _dual = piCfg.finish_requires_no_items === true;
+    const _hasLabel = !!piCfg.finish_label;
+    const _allDone = (Number(piCfg.settle_after_all_done_sec) || 0) > 0;
+    piCfg._finish_label_choice = piCfg._finish_label_choice || piCfg.finish_label || '';   // 保留标签, 切模式不丢
+    if (_leave || _hasLabel) {
+      piCfg._settle_mode = 'signal';
+      piCfg._settle_by_item = _leave;
+      piCfg._settle_by_step = _leave ? _dual : _hasLabel;
+    } else if (_allDone) {
+      piCfg._settle_mode = 'alldone';
+      piCfg._settle_by_item = false;
+      piCfg._settle_by_step = false;
+    } else {
+      piCfg._settle_mode = 'signal';
+      piCfg._settle_by_item = true;   // 缺省偏向"物品消失"(打螺丝场景常用)
+      piCfg._settle_by_step = false;
+    }
+  }
   // 步骤级 expected_count 默认值 (老项目 step.per_item 内可能没这字段)
   for (const s of (project.steps_config || [])) {
     if (s && s.per_item && typeof s.per_item === 'object') {
@@ -4149,19 +4385,35 @@ const handleSaveProject = async () => {
         // 注意: 只在 logic_mode === 'per_item' 时写入,其他模式即使有残留字段也清空,避免污染
         per_item: activeProject.value.logic_mode === 'per_item' ? (() => {
           const src = activeProject.value.pipeline_config?.per_item || {};
-          const finishLabel = String(src.finish_label || '').trim();
+          // ── 结算触发方式: 从唯一入口的 UI 助手字段换算回后端权威标志 ──
+          // C(全部完成即OK) 与 A/B(信号触发) 互斥; A+B 都勾 = 双条件.
+          const _mode = src._settle_mode === 'alldone' ? 'alldone' : 'signal';
+          const _byStep = src._settle_by_step === true;
+          const _byItem = src._settle_by_item === true;
+          const _labelChoice = String(src._finish_label_choice || src.finish_label || '').trim();
+          let _judgeLeave, _dual, finishLabel, _allDoneSec;
+          if (_mode === 'alldone') {
+            _judgeLeave = false; _dual = false; finishLabel = '';
+            _allDoneSec = Math.max(0.5, Number(src.settle_after_all_done_sec) || 2);
+          } else {
+            _allDoneSec = 0;                       // 信号模式禁用"全部完成OK"路径
+            _judgeLeave = _byItem;
+            _dual = (_byStep && _byItem);          // 仅两者都勾 = 双条件门
+            finishLabel = _byStep ? _labelChoice : '';
+          }
           return {
             stability_window_frames: Math.max(1, Math.floor(Number(src.stability_window_frames) || 10)),
             stability_iou_threshold: Math.max(0.1, Math.min(0.99, Number(src.stability_iou_threshold) || 0.6)),
             item_timeout_seconds: Math.max(0, Number(src.item_timeout_seconds) || 0),
             lock_count_on_start: src.lock_count_on_start !== false,
             finish_label: finishLabel,
+            _finish_label_choice: _labelChoice,    // UI 记忆: 切到"全部完成"模式时不丢标签
             finish_sustain_frames: Math.max(1, Math.floor(Number(src.finish_sustain_frames) || 3)),
-            finish_requires_no_items: src.finish_requires_no_items === true,
+            finish_requires_no_items: _dual,
             // v3.9+ 新增字段
             stability_count_tolerance: Math.max(0, Math.floor(Number(src.stability_count_tolerance) || 0)),
             stability_count_ratio: Math.max(0.1, Math.min(1.0, Number(src.stability_count_ratio) || 0.85)),
-            settle_after_all_done_sec: Math.max(0, Number(src.settle_after_all_done_sec) || 0),
+            settle_after_all_done_sec: _allDoneSec,
             lock_lookahead_seconds: Math.max(0, Number(src.lock_lookahead_seconds) || 0),
             // v3.10.2+ 严格等量触发开关
             require_exact_count: src.require_exact_count === true,
@@ -4170,6 +4422,25 @@ const handleSaveProject = async () => {
             // v3.9+ per_item 专属超时 (与其他模式隔离)
             cycle_max_duration_sec: Math.max(0, Math.floor(Number(src.cycle_max_duration_sec) || 0)),
             idle_timeout_sec: Math.max(0, Math.floor(Number(src.idle_timeout_sec) || 0)),
+            // v3.27+ 离场判定 / 漏打补做 / 框色高亮 (默认全关, 老项目零差异)
+            judge_on_workpiece_leave: _judgeLeave,
+            leave_confirm_frames: Math.max(1, Math.floor(Number(src.leave_confirm_frames) || 25)),
+            ng_hold_for_remediation: src.ng_hold_for_remediation === true,
+            remediation_timeout_sec: Math.max(0, Number(src.remediation_timeout_sec) || 0),
+            remediation_event_id: Math.max(0, Math.floor(Number(src.remediation_event_id) || 0)),
+            remediation_takeaway_ng: src.remediation_takeaway_ng === true,
+            remediation_alarm_mode: src.remediation_alarm_mode === 'sustained' ? 'sustained' : 'once',
+            remediation_alarm_interval_sec: Math.max(0.5, Number(src.remediation_alarm_interval_sec) || 2.0),
+            color_by_coverage: src.color_by_coverage === true,
+            show_item_numbers: src.show_item_numbers === true,
+            box_color_covered: String(src.box_color_covered || '').trim(),
+            box_color_uncovered: String(src.box_color_uncovered || '').trim(),
+            // 判定时机 (与结算时机解耦)
+            judge_timing: ['all_done', 'label', 'manual'].includes(src.judge_timing) ? src.judge_timing : 'on_settle',
+            judge_label: String(src.judge_label || '').trim(),
+            judge_all_done_sec: Math.max(0, Number(src.judge_all_done_sec) || 0),
+            judge_label_frames: Math.max(1, Math.floor(Number(src.judge_label_frames) || 3)),
+            judge_ok_event_id: Math.max(0, Math.floor(Number(src.judge_ok_event_id) || 0)),
           };
         })() : {},
         periodic_actions: (activeProject.value.periodic_actions || []).map(rule => ({
@@ -4285,6 +4556,19 @@ const handleSaveProject = async () => {
         // 同步失败不影响主保存流程, 但提醒用户重启检测
         console.warn('[保存] 热同步到 mgr 失败:', syncErr);
         ElMessage.warning('配置已保存, 但同步给运行中的检测引擎失败, 请停止后重新启动检测以生效');
+      }
+    }
+
+    // v3.27.x: 客户插件项目 Tab 注册的保存处理器随主保存一并触发 (插件不再单独放保存按钮)。
+    // 通用遍历, 不认识具体插件; 单个插件保存失败做隔离, 不影响项目保存结果。
+    for (const tab of (pluginProjectTabs.value || [])) {
+      if (typeof tab.onSave === 'function') {
+        try {
+          await tab.onSave();
+        } catch (e) {
+          console.warn('[保存] 插件 Tab 保存失败:', tab.key, e);
+          ElMessage.warning(`插件「${tab.label}」配置保存失败`);
+        }
       }
     }
 

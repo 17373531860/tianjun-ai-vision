@@ -185,6 +185,9 @@ export const usePluginThemeStore = defineStore('plugin-theme', {
         key: tab.key,
         label: tab.label,
         component: tab.component || null,
+        // v3.27.x: 可选保存处理器。主程序「保存配置」成功后会通用地调用各 Tab 的 onSave,
+        // 让插件配置随项目保存一并落库, 插件无需自带保存按钮 (函数不被 reactive 代理, 直接存)。
+        onSave: typeof tab.onSave === 'function' ? tab.onSave : null,
       };
       // 把 component 标 raw 避免 Pinia reactive 代理 Vue Component
       // ⚠️ v3.15.4: 同 addPluginSlot, 用静态 import 的 markRaw (不再 import('vue').then)

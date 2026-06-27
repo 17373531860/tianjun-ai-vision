@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import threading
+import time
 
 from .counter import (
     ProductCounter,
@@ -56,6 +57,10 @@ DEFAULT_CONFIG = {
     "operator_absent_enabled": False,         # 判定3 开关 (默认关, 不误报)
     "operator_absent_event_id": 2,            # 判定3: 操作员离开超时 → 触发的事件 id
     "operator_absent_timeout_sec": 600,       # 离开超时秒 (detect7(1) 默认 600=10min)
+    # 正常计件 → 主程序事件 (0/空=仅插件看板计数, 不联动灯/Toast/主页计数器)
+    "normal_count_event_id": 1,               # 默认 1=合格 OK; 可改为 2=NG 或自定义事件 id
+    # 主程序检测模式周期结算仍并行跑, 但插件已接管计件 → 默认抑制其塔灯 (只留三判定+计件事件)
+    "suppress_main_settle_alarm": True,
     # detect6 逐帧计数参数 (移动即计数 + 帧硬锁; 阈值 = detect6 像素值 / 1728 宽)
     "move_threshold": 0.0116,                 # 移动判定 (detect6 20px / 1728)
     "lock_spatial": 0.0145,                   # 位置锁范围 (detect6 25px / 1728)
@@ -72,8 +77,20 @@ _HOST = None
 _LOCK = threading.Lock()
 
 # 棉签状态（内存单组；多工位扩展见二期）
-# absent_remaining: 操作员离开倒计时剩余秒 (-1=未启用/未知), 供前端面板显示
-_state = {"swab_used": 0, "locked": False, "absent_remaining": -1}
+# total_products / ng_count / over_limit: 监控看板统计（v1.0.2 语义，擦满 K 后继续擦记 NG）
+# absent_remaining: 操作员离开倒计时剩余秒 (-1=未启用/未知)
+_state = {
+    "swab_used": 0,
+    "total_products": 0,
+    "ng_count": 0,
+    "over_limit": False,
+    "last_alarm_ts": 0.0,
+    "absent_remaining": -1,
+    # 当前在用棉签累加器: None=未开始; 否则 {seq,start_ts,products,ng,over_limit_hit,channel}
+    # 清零(换棉签/手动/整批)时定稿落库一条, 见棉签记录持久化小节。
+    "cur_swab": None,
+}
+_ALARM_REPEAT_SEC = 2.0
 _config_cache = None
 
 # per-channel 逐帧判定器实例（lazy 建）
@@ -86,6 +103,24 @@ _absent_countdowns = {}   # {channel_id: AbsentCountdown} 视角2 操作员离�
 def set_host(host):
     global _HOST
     _HOST = host
+    # 启动即建表 + 恢复棉签序号 (失败不影响主流程, 后续惰性重试)
+    try:
+        _ensure_records_table()
+    except Exception as e:
+        log.warning("[%s] set_host 阶段建表失败(隔离, 后续惰性重试): %s", CUSTOMER_CODE, e)
+
+
+def _as_bool(val, default=False):
+    """把库里的开关值规范成 bool（兼容历史脏数据: 1/'true'/'1' 等）。"""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    if isinstance(val, str):
+        return val.strip().lower() in ("1", "true", "yes", "on")
+    return bool(val)
 
 
 def _load_config():
@@ -100,6 +135,9 @@ def _load_config():
                 cfg.update(json.loads(raw) if isinstance(raw, str) else raw)
         except Exception as e:
             log.warning("[%s] 读配置失败, 用默认: %s", CUSTOMER_CODE, e)
+    cfg["operator_absent_enabled"] = _as_bool(
+        cfg.get("operator_absent_enabled"), DEFAULT_CONFIG["operator_absent_enabled"]
+    )
     _config_cache = cfg
     return cfg
 
@@ -120,22 +158,175 @@ def get_state():
         cfg = _load_config()
         used = _state["swab_used"]
         k = int(cfg["max_uses_per_swab"])
+        over = _state["over_limit"]
         return {
             "swab_used": used,
             "max_uses_per_swab": k,
             "remaining": max(0, k - used),
-            "locked": _state["locked"],
+            "over_limit": over,
+            "total_products": _state["total_products"],
+            "ng_count": _state["ng_count"],
+            "locked": over,
             "absent_remaining": _state.get("absent_remaining", -1),
+            # 供看板显示离岗状态: 启用态 + (remaining==0 → 已离岗告警中)
+            "operator_absent_enabled": _as_bool(cfg.get("operator_absent_enabled"), False),
+            "operator_absent_timeout_sec": int(cfg.get("operator_absent_timeout_sec", 600) or 600),
         }
 
 
 def reset_swab():
-    """手动更换棉签（等同视角2 检出换棉签）。"""
+    """手动更换棉签：本根棉签计数清零、解除超限报警（总产量/不良不清）。"""
     with _LOCK:
         _state["swab_used"] = 0
-        _state["locked"] = False
-    log.info("[%s] 手动重置棉签 → 解锁清零", CUSTOMER_CODE)
+        _state["over_limit"] = False
+        _state["last_alarm_ts"] = 0.0
+    log.info("[%s] 手动更换棉签 → 本根计数清零、解除超限报警", CUSTOMER_CODE)
+    _finalize_current_swab("manual")
     return get_state()
+
+
+def reset_counts():
+    """整批重置：总产量 / 不良 / 棉签全部清零（新班次 / 看板重置按钮）。"""
+    with _LOCK:
+        _state["swab_used"] = 0
+        _state["total_products"] = 0
+        _state["ng_count"] = 0
+        _state["over_limit"] = False
+        _state["last_alarm_ts"] = 0.0
+    log.info("[%s] 整批重置 → 总产量/不良/棉签全部清零", CUSTOMER_CODE)
+    _finalize_current_swab("batch_reset")
+    return get_state()
+
+
+# ==================== 棉签记录持久化（插件自有表，主程序 schema 零污染）====================
+# 一根棉签 = 从擦第 1 件起，到本根清零(检出换棉签 / 手动重置 / 整批重置)止。
+# 清零那一刻把这根定稿落库一条；列表/图表/导出都读这张表。表名遵循插件命名规范 p_<code>_<table>。
+_RECORDS_TABLE = "p_sensor_clean_swab_records"
+_records_ready = False
+_swab_seq = 0
+
+
+def _ensure_records_table():
+    """惰性建表 + 从库里恢复棉签序号（幂等）。返回是否就绪。"""
+    global _records_ready, _swab_seq
+    if _records_ready or _HOST is None:
+        return _records_ready
+    try:
+        from sqlalchemy import text
+        db = _HOST.get_db_session()
+        try:
+            db.execute(text(
+                f"CREATE TABLE IF NOT EXISTS {_RECORDS_TABLE} ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "swab_seq INTEGER, channel INTEGER, "
+                "start_ts REAL, end_ts REAL, duration_sec REAL, "
+                "products INTEGER, ng INTEGER, over_limit INTEGER, "
+                "end_reason TEXT, created_at REAL)"
+            ))
+            db.commit()
+            row = db.execute(text(f"SELECT MAX(swab_seq) FROM {_RECORDS_TABLE}")).first()
+            _swab_seq = int(row[0]) if row and row[0] is not None else 0
+            _records_ready = True
+        finally:
+            db.close()
+    except Exception as e:
+        log.warning("[%s] 棉签记录表初始化失败(隔离, 不落库): %s", CUSTOMER_CODE, e)
+    return _records_ready
+
+
+def _swab_touch(channel_id, now_wall, is_ng, over):
+    """计件命中时累加当前棉签（调用方须已持 _LOCK）。"""
+    global _swab_seq
+    cur = _state.get("cur_swab")
+    if cur is None:
+        _swab_seq += 1
+        cur = {"seq": _swab_seq, "start_ts": now_wall, "products": 0,
+               "ng": 0, "over_limit_hit": False, "channel": channel_id}
+        _state["cur_swab"] = cur
+    cur["products"] += 1
+    if is_ng:
+        cur["ng"] += 1
+    if over:
+        cur["over_limit_hit"] = True
+
+
+def _finalize_current_swab(end_reason):
+    """清零点定稿：把当前棉签落库一条并清空累加器（有产品才落，错误隔离）。"""
+    now_wall = time.time()
+    with _LOCK:
+        cur = _state.get("cur_swab")
+        _state["cur_swab"] = None
+    if not cur or cur.get("products", 0) <= 0:
+        return
+    if not _ensure_records_table():
+        return
+    try:
+        from sqlalchemy import text
+        db = _HOST.get_db_session()
+        try:
+            db.execute(text(
+                f"INSERT INTO {_RECORDS_TABLE} "
+                "(swab_seq, channel, start_ts, end_ts, duration_sec, products, ng, over_limit, end_reason, created_at) "
+                "VALUES (:seq,:ch,:st,:et,:dur,:p,:ng,:ov,:rs,:ca)"),
+                {"seq": cur["seq"], "ch": cur["channel"], "st": cur["start_ts"],
+                 "et": now_wall, "dur": max(0.0, now_wall - cur["start_ts"]),
+                 "p": cur["products"], "ng": cur["ng"],
+                 "ov": 1 if cur["over_limit_hit"] else 0, "rs": end_reason, "ca": now_wall})
+            db.commit()
+        finally:
+            db.close()
+        log.info("[%s] 棉签#%d 定稿落库: 产品=%d 不良=%d 超限=%s 原因=%s",
+                 CUSTOMER_CODE, cur["seq"], cur["products"], cur["ng"],
+                 cur["over_limit_hit"], end_reason)
+    except Exception as e:
+        log.warning("[%s] 棉签记录落库失败(隔离): %s", CUSTOMER_CODE, e)
+
+
+def get_swab_records(limit=300, since=None, until=None, channel=None):
+    """查询棉签记录 + 汇总，供数据页列表/图表/导出共用。"""
+    empty = {"records": [], "summary": {
+        "swab_count": 0, "total_products": 0, "total_ng": 0,
+        "over_limit_count": 0, "avg_products": 0, "avg_duration_sec": 0}}
+    if not _ensure_records_table():
+        return empty
+    try:
+        from sqlalchemy import text
+        db = _HOST.get_db_session()
+        try:
+            where, params = [], {}
+            if since is not None:
+                where.append("end_ts >= :since"); params["since"] = float(since)
+            if until is not None:
+                where.append("end_ts <= :until"); params["until"] = float(until)
+            if channel is not None:
+                where.append("channel = :ch"); params["ch"] = int(channel)
+            wsql = (" WHERE " + " AND ".join(where)) if where else ""
+            cols = ["id", "swab_seq", "channel", "start_ts", "end_ts",
+                    "duration_sec", "products", "ng", "over_limit", "end_reason"]
+            qp = dict(params); qp["lim"] = int(limit)
+            rows = db.execute(text(
+                f"SELECT {','.join(cols)} FROM {_RECORDS_TABLE}{wsql} "
+                f"ORDER BY id DESC LIMIT :lim"), qp).fetchall()
+            records = [dict(zip(cols, r)) for r in rows]
+            agg = db.execute(text(
+                "SELECT COUNT(*),COALESCE(SUM(products),0),COALESCE(SUM(ng),0),"
+                "COALESCE(SUM(over_limit),0),COALESCE(AVG(products),0),"
+                f"COALESCE(AVG(duration_sec),0) FROM {_RECORDS_TABLE}{wsql}"), params).first()
+            summary = {
+                "swab_count": int(agg[0] or 0),
+                "total_products": int(agg[1] or 0),
+                "total_ng": int(agg[2] or 0),
+                "over_limit_count": int(agg[3] or 0),
+                "avg_products": round(float(agg[4] or 0), 2),
+                "avg_duration_sec": round(float(agg[5] or 0), 1),
+            }
+            return {"records": records, "summary": summary}
+        finally:
+            db.close()
+    except Exception as e:
+        log.warning("[%s] 查询棉签记录失败(隔离): %s", CUSTOMER_CODE, e)
+        out = dict(empty); out["error"] = str(e)
+        return out
 
 
 def apply_preset_config():
@@ -174,24 +365,139 @@ def get_config():
 
 
 def save_config(patch):
-    """合并写入插件配置（system_config）+ 热加载。
-
-    patch 为前端提交的配置增量（三判定事件映射 / 阈值 / 计数参数等），
-    与当前配置合并后整体写库，再 reload 让判定器按新参数重建。
-    """
-    cfg = dict(_load_config())
+    """合并写入插件配置（system_config）+ 热加载。"""
+    cur = dict(_load_config())
     if isinstance(patch, dict):
-        cfg.update(patch)
+        cur.update(patch)
+    saved = False
     if _HOST is not None:
         try:
             _HOST.write_system_config(
                 CONFIG_KEY,
-                json.dumps(cfg, ensure_ascii=False),
+                json.dumps(cur, ensure_ascii=False),
                 description="传感器清洁插件 配置（三判定事件映射 + 阈值 + 计数参数）",
             )
+            saved = True
         except Exception as e:
             log.warning("[%s] 写配置失败(隔离): %s", CUSTOMER_CODE, e)
-    return reload_config()
+    cfg = reload_config()
+    return {"saved": saved, "config": cfg}
+
+
+def _project_config_dict(proj, tpl):
+    """把项目 ORM + 模板拼成 VSM set_project_config 需要的 dict。"""
+    return {
+        "id": proj.id, "name": proj.name, "task_type": "detection",
+        "logic_mode": "detection", "steps_config": tpl["steps_config"],
+        "pipeline_config": tpl.get("pipeline_config", {}) or {},
+        "events_config": {}, "counters_config": {}, "data_config": {},
+    }
+
+
+def import_demo_projects():
+    """一键导入传感器清洁双工位项目（幂等可重复点）。"""
+    import os
+    from .preset import VIEW1_PROJECT, VIEW2_PROJECT, SWAB_CONFIG
+
+    if _HOST is None:
+        return {"ok": False, "msg": "host 不可用 (插件未正确加载)"}
+
+    result = {"ok": False, "projects": [], "channels": []}
+    db = _HOST.get_db_session()
+    try:
+        from backend.models.models import Project, Model
+        from backend.api.channel_manager import channel_manager
+
+        try:
+            channel_manager.set_channel_count(2)
+        except Exception as e:
+            log.warning("[%s] set_channel_count(2) 失败(继续): %s", CUSTOMER_CODE, e)
+
+        for ch_id, tpl in [(0, VIEW1_PROJECT), (1, VIEW2_PROJECT)]:
+            entry = {"ch": ch_id, "name": tpl["name"]}
+            try:
+                mp = tpl["model_path"]
+                if not os.path.exists(mp):
+                    entry.update(ok=False, msg=f"模型文件不存在: {mp}")
+                    result["channels"].append(entry)
+                    continue
+                model = db.query(Model).filter(Model.file_path == mp).first()
+                if model is None:
+                    model = Model(
+                        name=os.path.splitext(os.path.basename(mp))[0],
+                        file_path=mp,
+                        file_name=os.path.basename(mp),
+                        file_size=os.path.getsize(mp),
+                        framework="PyTorch",
+                        labels=[s["label"] for s in tpl["steps_config"]],
+                        status="idle",
+                    )
+                    db.add(model)
+                    db.flush()
+                proj = db.query(Project).filter(Project.name == tpl["name"]).first()
+                if proj is None:
+                    proj = Project(name=tpl["name"])
+                    db.add(proj)
+                proj.task_type = "detection"
+                proj.logic_mode = "detection"
+                proj.pipeline_config = tpl.get("pipeline_config", {}) or {}
+                proj.steps_config = tpl["steps_config"]
+                proj.default_model_id = model.id
+                db.flush()
+                loaded = channel_manager.load_model_for_channel(ch_id, mp, "auto")
+                try:
+                    channel_manager.save_channel_source(
+                        ch_id, {"project_id": proj.id}, merge=True)
+                except Exception as e:
+                    log.warning("[%s] ch%d 绑 project_id 失败(忽略): %s",
+                                CUSTOMER_CODE, ch_id, e)
+                mgr = channel_manager.channels.get(ch_id)
+                if mgr is not None:
+                    mgr.set_project_config(_project_config_dict(proj, tpl))
+                entry.update(ok=True, project_id=proj.id, model_loaded=bool(loaded))
+            except Exception as e:
+                entry.update(ok=False, msg=str(e))
+                log.warning("[%s] ch%d 导入失败(隔离): %s", CUSTOMER_CODE, ch_id, e)
+            result["channels"].append(entry)
+            if entry.get("ok"):
+                result["projects"].append({"name": entry["name"],
+                                           "id": entry.get("project_id")})
+
+        db.commit()
+        result["ok"] = any(c.get("ok") for c in result["channels"])
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        result["msg"] = str(e)
+        log.warning("[%s] import_demo_projects 失败(已回滚): %s", CUSTOMER_CODE, e)
+    finally:
+        db.close()
+
+    try:
+        if _HOST is not None:
+            # 合并写: 以 SWAB_CONFIG 为默认底, 叠加用户已保存的覆盖值再写回。
+            # 避免「一键导入」把现场调好的离岗超时/阈值等清回默认 ——
+            # 这是客户反馈「保存退出后又恢复」的根因之一 (重复导入会 clobber 配置)。
+            merged = dict(SWAB_CONFIG)
+            try:
+                raw = _HOST.read_system_config(CONFIG_KEY)
+                if raw:
+                    saved = json.loads(raw) if isinstance(raw, str) else raw
+                    if isinstance(saved, dict):
+                        merged.update(saved)
+            except Exception:
+                pass
+            _HOST.write_system_config(
+                CONFIG_KEY, json.dumps(merged, ensure_ascii=False),
+                description="传感器清洁插件 计数/耗材参数（一键导入随项目下发，保留已存覆盖）")
+            reload_config()
+    except Exception as e:
+        log.warning("[%s] 写计数配置失败(忽略): %s", CUSTOMER_CODE, e)
+
+    result["state"] = get_state()
+    return result
 
 
 def _get_counter(cfg, channel_id):
@@ -241,6 +547,48 @@ def _get_absent_countdown(cfg, channel_id):
     return c
 
 
+# 主程序 _trigger_event 周期结算常见 reason 片段 (非插件 trigger_event 路径)
+_MAIN_SETTLE_REASON_MARKERS = (
+    "检测完成",
+    "顺序正确完成",
+    "缺少步骤",
+    "重复步骤",
+    "顺序错误",
+    "周期不完整",
+)
+
+
+def _is_main_cycle_settle_reason(reason: str) -> bool:
+    """是否为主程序检测/顺序模式周期结算触发的 reason (非插件三判定/计件)."""
+    if not reason:
+        return False
+    return any(m in reason for m in _MAIN_SETTLE_REASON_MARKERS)
+
+
+def on_event_fire(ctx):
+    """抑制主程序并行周期结算的塔灯 — 计件与三判定仍走插件 trigger_event."""
+    try:
+        cfg = _load_config()
+        if not _as_bool(cfg.get("suppress_main_settle_alarm"), True):
+            return None
+        channel_id = ctx.get("channel_id")
+        count_chs = set(cfg.get("count_channels") or [0])
+        swap_ch = cfg.get("swap_channel")
+        if channel_id not in count_chs and channel_id != swap_ch:
+            return None
+        reason = ctx.get("reason") or ""
+        if not _is_main_cycle_settle_reason(reason):
+            return None
+        log.debug(
+            "[%s] 抑制主程序周期结算塔灯 ch=%s event=%s reason=%r",
+            CUSTOMER_CODE, channel_id, ctx.get("event_id"), reason,
+        )
+        return {"suppress_alarm": True}
+    except Exception as e:
+        log.warning("[%s] on_event_fire 异常(隔离): %s", CUSTOMER_CODE, e)
+        return None
+
+
 def _fire_event(channel_id, event_id, reason):
     """三判定命中 → 借主程序事件响应面 (报警+计数器+Toast, 不结算周期)。
 
@@ -259,17 +607,32 @@ def _fire_event(channel_id, event_id, reason):
         log.warning("[%s] trigger_event 失败(隔离): %s", CUSTOMER_CODE, e)
 
 
-def _trigger_swab_over_limit(cfg, channel_id):
-    """判定1 棉签寿命超限: 优先走主程序事件; 兼容老配置里直配的 alarm_event。"""
-    reason = f"棉签已用满 {cfg['max_uses_per_swab']} 个产品, 请更换棉签"
-    _fire_event(channel_id, cfg.get("swab_over_limit_event_id"), reason)
-    # 向后兼容: 老配置直接配了 alarm_event 字符串的, 仍触发硬件报警
-    if _HOST is not None and cfg.get("alarm_event"):
-        try:
-            _HOST.trigger_alarm(
-                channel_id=channel_id, event_type=cfg["alarm_event"], reason=reason)
-        except Exception as e:
-            log.warning("[%s] trigger_alarm 失败(隔离): %s", CUSTOMER_CODE, e)
+def _swab_over_limit_alarm(cfg, channel_id, now, force=False):
+    """棉签擦满/超限期间触发硬件报警（红灯+蜂鸣），节流，不计数、不结算周期。
+
+    报警事件优先取「棉签超限·连接事件」对应的 event{id}（与该事件在报警页配的
+    灯/蜂鸣联动）；兼容老配置直接写 alarm_event 字符串。force=True 时忽略节流
+    （棉签刚擦满那一下立即响一次），否则按 _ALARM_REPEAT_SEC 节流持续响。
+    """
+    if _HOST is None:
+        return
+    legacy = cfg.get("alarm_event")
+    ev_id = cfg.get("swab_over_limit_event_id")
+    event_type = legacy or (f"event{int(ev_id)}" if ev_id else None)
+    if not event_type:
+        return
+    with _LOCK:
+        if not force and now - _state["last_alarm_ts"] < _ALARM_REPEAT_SEC:
+            return
+        _state["last_alarm_ts"] = now
+    try:
+        _HOST.trigger_alarm(
+            channel_id=channel_id,
+            event_type=event_type,
+            reason=f"棉签已用满 {cfg['max_uses_per_swab']} 个产品, 请立即更换棉签",
+        )
+    except Exception as e:
+        log.warning("[%s] trigger_alarm 失败(隔离): %s", CUSTOMER_CODE, e)
 
 
 def on_detection_frame(ctx):
@@ -301,14 +664,17 @@ def on_detection_frame(ctx):
             has_change = any(d.get("label") == swap_label for d in detections)
             if _get_swab_window(cfg, channel_id).feed(has_change, now):
                 with _LOCK:
-                    was_locked = _state["locked"]
+                    was_over = _state["over_limit"]
                     _state["swab_used"] = 0
-                    _state["locked"] = False
+                    _state["over_limit"] = False
+                    _state["last_alarm_ts"] = 0.0
                 log.info("[%s] 视角2 检出更换棉签 → %s", CUSTOMER_CODE,
-                         "解锁并清零" if was_locked else "计数清零")
+                         "解除超限报警并清零本根棉签" if was_over else "本根棉签计数清零")
+                # 检出换棉签 = 本根结束, 定稿落库 (锁外调用, _finalize 自持 _LOCK)
+                _finalize_current_swab("change")
             return None
 
-        # 视角1：逐帧跑锚动作生命周期 → 离开计 1 件
+        # 视角1：逐帧跑锚动作生命周期 → 离开计 1 件（擦满 K 后继续擦记 NG，不暂停）
         if channel_id in cfg["count_channels"]:
             anchor_label = cfg["count_anchor_label"]
             # 判定2: 假擦拭 — 追踪"擦拭产品"框, 停留超时但几乎未移动 → 触发事件。
@@ -340,24 +706,44 @@ def on_detection_frame(ctx):
                         _f.write(json.dumps(rec) + "\n")
                 except Exception:
                     pass
-            with _LOCK:
-                paused = _state["locked"]
             counter = _get_counter(cfg, channel_id)
-            counted = counter.update(anchor, now, paused=paused)
+            counted = counter.update(anchor, now, paused=False)
             if counted:
-                just_locked = False
+                k = int(cfg["max_uses_per_swab"])
                 with _LOCK:
-                    if not _state["locked"]:
-                        _state["swab_used"] += 1
-                        used = _state["swab_used"]
-                        k = int(cfg["max_uses_per_swab"])
-                        if used >= k:
-                            _state["locked"] = True
-                            just_locked = True
-                log.info("[%s] 产品计数 %d/%d", CUSTOMER_CODE, used, k)
-                if just_locked:
-                    log.info("[%s] 棉签擦满 → 锁定计数, 等待更换棉签", CUSTOMER_CODE)
-                    _trigger_swab_over_limit(cfg, channel_id)
+                    prev_used = _state["swab_used"]
+                    _state["total_products"] += 1
+                    _state["swab_used"] += 1
+                    used = _state["swab_used"]
+                    total = _state["total_products"]
+                    # used==k: 棉签擦满 (这件仍合格); used>k: 满了还擦 = 不良
+                    just_hit_limit = prev_used < k and used >= k
+                    is_ng = used > k
+                    if used >= k:
+                        _state["over_limit"] = True   # 擦满即亮红 banner + 持续报警
+                    if is_ng:
+                        _state["ng_count"] += 1
+                    ng = _state["ng_count"]
+                    # 累加当前棉签 (落库在清零点定稿; 此处仅内存累加, 已持 _LOCK)
+                    _swab_touch(channel_id, time.time(), is_ng, used >= k)
+                log.info("[%s] 计数 总产量=%d 本根棉签=%d/%d NG=%d",
+                         CUSTOMER_CODE, total, used, k, ng)
+                if is_ng:
+                    # 超限后继续擦 = 不良: 每件触发 NG 事件 → 红灯+蜂鸣+不良计数
+                    _fire_event(channel_id, cfg.get("swab_over_limit_event_id"),
+                                f"棉签超限仍擦拭, 本根第 {used} 件(上限 {k}) → 不良")
+                else:
+                    # 合格件 → 正常计件事件 (默认 OK 绿灯; 设 0 则只计看板不联动)
+                    _fire_event(channel_id, cfg.get("normal_count_event_id"),
+                                "正常计件: 产品计数 +1")
+                if just_hit_limit:
+                    # 棉签刚擦满 K: 立即点灯/蜂鸣提示换棉签 (硬件报警, 这件仍按合格计)
+                    _swab_over_limit_alarm(cfg, channel_id, now, force=True)
+            # 超限持续期间: 节流硬件报警 (红灯/蜂鸣), 不重复计数 (产品停了也持续响)
+            with _LOCK:
+                over = _state["over_limit"]
+            if over:
+                _swab_over_limit_alarm(cfg, channel_id, now)
         return None
     except Exception as e:
         log.warning("[%s] on_detection_frame 异常(隔离): %s", CUSTOMER_CODE, e)

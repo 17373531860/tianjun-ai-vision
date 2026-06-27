@@ -12,7 +12,7 @@
   机制不同, 无法逐件对齐, 故改为插件接管计数）。
 - 配套一键应用「对齐 demo」的项目配置模板（见 routes / preset）。
 """
-from .hooks import on_detection_frame, set_host
+from .hooks import on_detection_frame, on_event_fire, set_host
 from .routes import router
 
 
@@ -28,6 +28,14 @@ def register_plugin(app, registry, license_payload, host):
         when="post",
         priority=100,
         handler=on_detection_frame,
+    )
+    # 主程序检测模式周期结算与插件计件并行; 抑制前者塔灯, 只留三判定 + 计件事件
+    registry.hooks.register(
+        hook_type="event_fire",
+        phase="post_event",
+        when="post",
+        priority=100,
+        handler=on_event_fire,
     )
     return {
         "name": "sensor-clean",

@@ -17,7 +17,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 - **没有 alembic / 没有迁移工具**：纯手写 ALTER TABLE，集中在 `backend/main.py::migrate_database()`
 - 数据库是单文件 SQLite (`sql_app.db`)，开 WAL + busy_timeout=15s
 - 启动时序：`Base.metadata.create_all()` 建新表 → `migrate_database()` 给老库补列 → `fix_orphan_*()` 清孤儿
-- **产品交接手册 v2.4.0 写的"22 张表 / `MLModel` 类名 / 表名 `ml_models`"全是过时信息，以代码为准**
+- **旧版交接文档写的"22 张表 / `MLModel` 类名 / 表名 `ml_models`"全是过时信息，以代码为准**（该手册已于 2026-06-26 删除）
 
 ## 1. 三个 models 文件的 31 张表清单
 

@@ -55,6 +55,16 @@
             title="手动触发结算 (替代 finish_label 那一刻; OK/NG 由真实覆盖状态判定)"
             @click="handleControl('settle')">手动结算</button>
         </div>
+        <!-- v3.28+ 手动判定 (判定时机=manual 时显示): 点一下拍快照亮绿/红, 不落账 -->
+        <button
+          v-if="state?.config?.judge_timing === 'manual' && state?.cycle_active"
+          class="px-2 py-0.5 text-[0.625rem] font-bold rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          :class="state?.judged && state?.judged_ok
+            ? 'bg-green-600 text-white'
+            : 'bg-emerald-600 hover:bg-emerald-500 text-white ring-2 ring-emerald-300/50 animate-pulse'"
+          :disabled="busy || (state?.judged && state?.judged_ok)"
+          title="手动判定: 立刻按当前真实覆盖拍快照, 全覆盖亮绿 / 有漏亮红+漏点. 不落账, 结算仍由结算时机触发."
+          @click="handleControl('judge')">{{ state?.judged && state?.judged_ok ? '已判合格' : '手动判定' }}</button>
         <!-- 全局进度条 (cycle 激活后才显示) -->
         <div v-if="state?.cycle_active && overallDisplayTotal > 0" class="w-32 h-1.5 bg-slate-900 rounded-full overflow-hidden">
           <div class="h-full transition-all duration-300 rounded-full"
@@ -67,6 +77,22 @@
           <span v-else class="text-gray-600">○</span>
         </div>
       </div>
+    </div>
+
+    <!-- 待补态横幅 (离场判 NG + ng_hold_for_remediation 开启时): 红条提示漏点 + 确认NG -->
+    <div v-if="state?.awaiting_remediation"
+         class="bg-red-900/70 border-y-2 border-red-500 px-3 py-1.5 flex-shrink-0 flex items-center justify-between gap-3 animate-pulse">
+      <div class="flex items-center gap-2 min-w-0">
+        <span class="text-red-300 text-base font-bold whitespace-nowrap">⚠ 待补打</span>
+        <span class="text-red-200 text-xs truncate">
+          仍有 <span class="font-mono font-bold text-white">{{ remediationMissingTotal }}</span> 颗未拧紧{{ remediationMissingHint }} · 请补打 (自动撤红转 OK) 或点「确认NG」
+        </span>
+      </div>
+      <button
+        class="px-3 py-0.5 text-xs font-bold rounded bg-red-600 hover:bg-red-500 text-white whitespace-nowrap transition-colors disabled:opacity-40"
+        :disabled="busy"
+        title="放弃补打, 按当前真实覆盖状态把本件判为 NG 落账 (= 触发事件人工确认)"
+        @click="handleControl('confirm_ng')">确认 NG</button>
     </div>
 
     <!-- 主体: 横向滚动 / 每步一卡片 (对齐 tracking 容器模式风格) -->
@@ -120,6 +146,7 @@
                 <div v-for="item in step.items" :key="item.id"
                      class="aspect-square rounded text-[9px] flex items-center justify-center font-bold border transition-colors"
                      :class="itemClass(item)"
+                     :style="itemStyle(item)"
                      :title="itemTitle(item)">
                   {{ item.id }}
                 </div>
@@ -241,6 +268,10 @@ const handleControl = async (action) => {
     const msg = data?.result?.msg || data?.action || '操作完成'
     if (action === 'force_start') ElMessage.success(`▶ ${msg}`)
     else if (action === 'settle') ElMessage.info(`⏹ ${msg}`)
+    else if (action === 'judge') {
+      if (data?.result?.judged_ok === false) ElMessage.warning(`🔴 ${msg}`)
+      else ElMessage.success(`🟢 ${msg}`)
+    }
     else ElMessage.success(msg)
   } catch (err) {
     const detail = err?.response?.data?.detail || err?.message || '操作失败'
@@ -290,15 +321,42 @@ const colsForItems = (n) => {
   return 8
 }
 
-// ──── 个体色块样式 ────
+// ──── 待补态展示 (横幅) ────
+const remediationMissingTotal = computed(() => {
+  const nd = props.state?.last_ng_detail
+  return (nd && typeof nd.missing_total === 'number') ? nd.missing_total : 0
+})
+const remediationMissingHint = computed(() => {
+  const nd = props.state?.last_ng_detail
+  const steps = (nd && Array.isArray(nd.steps_failed)) ? nd.steps_failed : []
+  const parts = steps.map((s) => {
+    const label = s.display_label || s.step_label || '?'
+    const ids = (s.missing_item_ids || []).slice(0, 4)
+    return ids.length ? `${label} #${ids.join('/')}` : label
+  })
+  return parts.length ? ` (${parts.join(' · ')})` : ''
+})
+
+// ──── 个体色块样式 (颜色可配: state.config.box_color_covered / box_color_uncovered) ────
+const coveredColor = computed(() => props.state?.config?.box_color_covered || '#22c55e')
+const uncoveredColor = computed(() => props.state?.config?.box_color_uncovered || '#ef4444')
+// 自定义色时走内联 style; 留空时回退原 tailwind class (零视觉差异)
 const itemClass = (item) => {
+  if (props.state?.config?.box_color_covered || props.state?.config?.box_color_uncovered) {
+    return 'border'
+  }
   if (item.covered) {
     return 'bg-green-600/30 border-green-500 text-green-200'
   }
   return 'bg-red-950/40 border-red-700/60 text-red-300'
 }
-const itemFillColor = (item) => (item.covered ? '#22c55e' : '#ef4444')
-const itemStrokeColor = (item) => (item.covered ? '#86efac' : '#fca5a5')
+const itemStyle = (item) => {
+  if (!props.state?.config?.box_color_covered && !props.state?.config?.box_color_uncovered) return {}
+  const c = item.covered ? coveredColor.value : uncoveredColor.value
+  return { backgroundColor: c + '4d', borderColor: c, color: '#fff' }
+}
+const itemFillColor = (item) => (item.covered ? coveredColor.value : uncoveredColor.value)
+const itemStrokeColor = (item) => (item.covered ? coveredColor.value : uncoveredColor.value)
 
 const itemTitle = (item) => {
   const lines = [`物件 #${item.id}`]

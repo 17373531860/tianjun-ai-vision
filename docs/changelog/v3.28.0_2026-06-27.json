@@ -1,0 +1,92 @@
+{
+  "version": "3.28.0",
+  "date": "2026-06-27",
+  "previous_version": "3.27.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "逐件覆盖模式：工件离场快照判定 + 漏打挂起待补态",
+      "symptom": "打螺丝逐颗覆盖场景，工人未扭完拿走工件被直接判NG，没有补打缓冲；离场判定缺稳定时机",
+      "root_cause": "逐件覆盖模式只在拿取/收尾/全完成保持时结算，无离场触发，也无NG挂起待补能力",
+      "fix": "新增离场触发结算(工件标签持续消失，可与拿取动作组双条件)；新增漏打挂起待补(NG保护)：离场漏打不立即记NG，进待补态点灯提示漏点，补满转OK，超时/人工确认NG才落账；待补报警once/sustained + 待补超时 + 红灯内取件算NG + 框色高亮",
+      "files": ["backend/api/source_per_item_mixin.py", "backend/api/source_routes.py", "frontend/src/views/Project/index.vue", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Monitor/PerItemPanel.vue"],
+      "keywords": ["per_item", "逐件覆盖", "工件离场", "离场判定", "漏打补做", "待补态", "remediation", "ng_hold_for_remediation", "打螺丝", "漏打", "confirm_ng", "待补超时", "框色高亮"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "逐件覆盖模式：判定时机与结算时机解耦(判定层)",
+      "symptom": "老逻辑只在结算那刻一次性判OK/NG，无法打完即亮绿/取走才落账，也无法手动判定",
+      "root_cause": "判定与结算耦合在同一时机",
+      "fix": "新增judge_timing(on_settle默认/all_done/label/manual)；判定层只拍快照亮绿红不落账，落账仍由结算时机负责；判定合格绿灯走可配judge_ok_event_id；检测主页新增手动判定按钮(per-item-control action=judge)",
+      "files": ["backend/api/source_per_item_mixin.py", "backend/api/source_routes.py", "frontend/src/views/Project/index.vue", "frontend/src/views/Monitor/PerItemPanel.vue"],
+      "keywords": ["judge_timing", "判定时机", "结算时机", "判定层", "all_done", "manual判定", "judge_ok_event_id", "per_item_judge_now"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "插件平台：项目Tab onSave 统一保存能力",
+      "symptom": "插件项目配置Tab自带保存按钮与主程序保存按钮并存(双按钮)，且插件保存后常回弹",
+      "root_cause": "插件配置保存走独立按钮/独立请求，与主程序项目保存不同步",
+      "fix": "项目Tab注册时可传onSave异步处理器，主程序保存配置成功后通用调用各Tab onSave，插件配置随项目一并落库，免插件自带保存按钮",
+      "files": ["frontend/src/composables/usePluginLoader.js", "frontend/src/store/usePluginThemeStore.js", "frontend/src/views/Project/index.vue"],
+      "keywords": ["插件统一保存", "onSave", "project tab", "保存配置", "保存回弹", "PluginThemeStore"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "传感器清洁插件v1.2.0：选择性抑制提示框",
+      "symptom": "插件整页覆盖连带抑制全部提示框，客户希望只盖系统自带OK/NG，其他自定义事件提示框仍展示有效",
+      "root_cause": "插件无差别覆盖，且event_id后端按字符串记、前端按数字比较导致误抑制",
+      "fix": "插件前端只抑制系统自带OK/NG提示框，自定义事件透传；修正event_id用Number()归一比较",
+      "files": ["plugins-examples/sensor-clean/frontend/dist/index.esm.js", "plugins-examples/sensor-clean/plugin.json"],
+      "keywords": ["选择性抑制", "提示框", "toast", "OK/NG", "event_id", "类型比较", "sensor-clean", "1.2.0"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "传感器清洁插件v1.2.0：棉签使用记录数据页",
+      "symptom": "插件缺与主程序数据中心对齐的棉签生命周期数据页",
+      "root_cause": "插件原仅有监控页与配置页，无数据中心覆盖",
+      "fix": "整页覆盖数据中心(data.layout.body)，独立SQLite表p_sensor_clean_swab_records，换签/超限/手动复位三点定稿落库；前端统计卡+柱状图+明细表+筛选+CSV导出；新增/swab/records查询接口",
+      "files": ["plugins-examples/sensor-clean/backend/hooks.py", "plugins-examples/sensor-clean/backend/routes.py", "plugins-examples/sensor-clean/backend/preset.py", "plugins-examples/sensor-clean/backend/__init__.py", "plugins-examples/sensor-clean/frontend/dist/index.esm.js"],
+      "keywords": ["棉签使用记录", "数据页", "数据中心", "swab_records", "data.layout.body", "CSV导出", "p_sensor_clean_swab_records", "整页覆盖"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "逐件覆盖：清零后待补横幅/逐颗覆盖/上次NG详情残留",
+      "symptom": "点清零后前端轮询get_per_item_state把待补横幅和逐颗覆盖数刷回来",
+      "root_cause": "reset_stats未联动复位逐件模式运行时状态",
+      "fix": "reset_stats增加_per_item_reset_runtime()调用，清零真正清掉待补态/逐颗覆盖/last_ng_detail",
+      "files": ["backend/api/source.py", "backend/api/source_per_item_mixin.py"],
+      "keywords": ["清零", "reset_stats", "待补横幅残留", "per_item_reset_runtime", "逐颗覆盖"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes", "modify-model", "update-release"],
+  "files_changed": [
+    "backend/api/source.py",
+    "backend/api/source_per_item_mixin.py",
+    "backend/api/source_routes.py",
+    "frontend/src/composables/usePluginLoader.js",
+    "frontend/src/store/usePluginThemeStore.js",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Monitor/PerItemPanel.vue",
+    "frontend/src/views/Project/index.vue",
+    "plugins-examples/sensor-clean/backend/__init__.py",
+    "plugins-examples/sensor-clean/backend/hooks.py",
+    "plugins-examples/sensor-clean/backend/preset.py",
+    "plugins-examples/sensor-clean/backend/routes.py",
+    "plugins-examples/sensor-clean/frontend/dist/index.esm.js",
+    "plugins-examples/sensor-clean/plugin.json",
+    "electron/package.json",
+    "AGENTS.md"
+  ]
+}

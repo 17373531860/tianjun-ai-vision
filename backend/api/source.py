@@ -1712,6 +1712,14 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             except Exception as _e:
                 print(f"[CustomMix] reset_stats reset failed: {_e}")
 
+        # 逐件模式运行时状态同步复位 — 否则点「清零」后待补态/逐颗覆盖/上次NG详情
+        # 仍残留, 前端轮询 get_per_item_state 会把待补横幅和 14/18 覆盖刷回来.
+        if hasattr(self, '_per_item_reset_runtime'):
+            try:
+                self._per_item_reset_runtime()
+            except Exception as _e:
+                print(f"[per_item] reset_stats runtime reset failed: {_e}")
+
         gc.collect()
         
         print("[Stats] fully reset (including all detection states)")

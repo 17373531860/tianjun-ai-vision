@@ -1763,7 +1763,8 @@ def inject_per_item_mock(channel: int = Query(0),
                          ng_count: int = Query(3),
                          inject_stats: bool = Query(True),
                          inject_ng: bool = Query(False),
-                         ng_cycle_duration: float = Query(9.3)):
+                         ng_cycle_duration: float = Query(9.3),
+                         awaiting: bool = Query(False)):
     """开发用: 给当前 mgr 注入一个激活态 per_item_state + 配套统计 mock.
 
     ⚠ 必须用 ENABLE_DEV_MOCKS=1 启动后端, 否则端点 403.
@@ -1834,6 +1835,11 @@ def inject_per_item_mock(channel: int = Query(0),
         sess.cycle_start_frame_id = 60
         sess.frame_id = 120
         sess.stability_buffer.clear() if hasattr(sess.stability_buffer, 'clear') else None
+        # 待补态注入 (dev 调样: 把"离场判 NG 挂起待补"这一态点亮给前端看)
+        if awaiting:
+            sess.awaiting_remediation = True
+            sess.await_since = now
+            inject_ng = True  # 待补横幅靠 last_ng_detail 的 missing_total/漏点展示
 
     # ──── 配套统计 mock (右上角计数器 / 饼图 / 仪表盘 / 历史 cycle 时间) ────
     stats_injected = {}
@@ -1893,6 +1899,7 @@ def inject_per_item_mock(channel: int = Query(0),
             'settled_at': now,
             'missing_total': missing_total,
             'steps_failed': steps_failed,
+            'awaiting_remediation': bool(awaiting),
         }
         ng_injected = {
             'missing_total': missing_total,
@@ -1928,12 +1935,16 @@ def inject_per_item_mock(channel: int = Query(0),
 # ============================================================
 @router.post("/detection/per-item-control")
 def per_item_control(channel: int = Query(0),
-                     action: str = Query(..., description="settle | force_start")):
+                     action: str = Query(..., description="settle | force_start | confirm_ng | judge")):
     """手动控制 per_item 周期时机.
 
     action:
         settle       手动触发当前周期结算; OK/NG 由系统按真实覆盖状态判
         force_start  强制开启一个新周期 (用于自动稳定判定迟迟不成时)
+        confirm_ng   人工确认当前待补态 NG 落账 (离场判 NG 后的待补/待确认态);
+                     仍按真实覆盖状态判, 不伪造结果
+        judge        手动判定 (判定时机=manual 时用): 立刻拍覆盖快照亮绿/红, 不落账;
+                     OK/NG 由真实覆盖判定, 落账仍由结算时机触发
     """
     mgr = _get_mgr(channel)
     if not getattr(mgr, '_per_item_config', None):
@@ -1944,8 +1955,12 @@ def per_item_control(channel: int = Query(0),
         ret = mgr.per_item_manual_settle()
     elif action == 'force_start':
         ret = mgr.per_item_manual_force_start()
+    elif action == 'confirm_ng':
+        ret = mgr.per_item_confirm_ng()
+    elif action == 'judge':
+        ret = mgr.per_item_judge_now()
     else:
-        raise HTTPException(status_code=400, detail=f"未知 action: {action} (允许: settle | force_start)")
+        raise HTTPException(status_code=400, detail=f"未知 action: {action} (允许: settle | force_start | confirm_ng | judge)")
 
     if not ret.get('ok'):
         raise HTTPException(status_code=400, detail=ret.get('msg', '操作失败'))

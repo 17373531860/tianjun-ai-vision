@@ -114,7 +114,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__se
 / `mes_comm_logs` / `cluster_config` / `box_aggregations` / `external_devices`
 / `external_device_logs` / `box_summaries`
 
-> ⚠️ 旧版 SKILL/产品交接手册写"10 张"是过时数据。
+> ⚠️ 旧版 SKILL 写"10 张"是过时数据，以代码为准。
 
 ---
 

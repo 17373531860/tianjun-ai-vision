@@ -220,30 +220,57 @@ def test_fake_wipe_no_event_when_moving(sc):
     assert host.events == []
 
 
-def test_swab_over_limit_fires_event(sc):
-    """棉签寿命超限: 计满 K 件 → trigger_event(0, swab_over_limit_event_id)."""
+def _count_one(sc, host, ch, t0):
+    """驱动一次计件 (建跟踪 + 移动确认), 用 move_confirm_frames=1 时两帧即计一件."""
+    _frame(sc, ch, t0, [_box("查看产品有无脏污", 0.5, 0.5)])
+    _frame(sc, ch, t0 + 0.1, [_box("查看产品有无脏污", 0.7, 0.5)])
+
+
+def test_swab_hit_limit_alarms_via_hardware(sc):
+    """棉签刚擦满 K (used==k): 立即硬件报警提示换棉签, 这件仍按合格计 (不进不良)."""
     host = _setup(sc, {
         "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
         "max_uses_per_swab": 1, "move_confirm_frames": 1,
-        "swab_over_limit_event_id": 7, "fake_wipe_event_id": 0,  # 关假擦拭干扰
-        "move_threshold": 0.0116,
+        "normal_count_event_id": 1, "swab_over_limit_event_id": 7,
+        "fake_wipe_event_id": 0, "move_threshold": 0.0116, "force_lock_frames": 0,
     })
-    _frame(sc, 0, 0.0, [_box("查看产品有无脏污", 0.5, 0.5)])   # 建跟踪
-    _frame(sc, 0, 0.1, [_box("查看产品有无脏污", 0.7, 0.5)])   # 移动确认 → 计 1 件 = K → 锁定
-    assert any(e[0] == 0 and e[1] == 7 for e in host.events)
-    assert sc.get_state()["locked"] is True
+    _count_one(sc, host, 0, 0.0)               # used=1=K
+    st = sc.get_state()
+    assert st["swab_used"] == 1
+    assert st["over_limit"] is True            # 擦满即点亮 banner/报警
+    assert st["ng_count"] == 0                 # K 件本身仍合格
+    assert any(e[1] == 1 for e in host.events)  # 合格件 → OK 事件
+    assert any(a[1] == "event7" for a in host.alarms)  # 硬件报警 event{超限事件id}
+
+
+def test_swab_over_limit_each_ng_fires_event(sc):
+    """超限后继续擦, 每件都触发 NG 事件 (红灯+蜂鸣+不良计数)."""
+    host = _setup(sc, {
+        "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
+        "max_uses_per_swab": 1, "move_confirm_frames": 1,
+        "normal_count_event_id": 1, "swab_over_limit_event_id": 2,
+        "fake_wipe_event_id": 0, "move_threshold": 0.0116, "force_lock_frames": 0,
+        "lock_time": 0.0, "lock_spatial": 0.0,  # 关位置/时间锁, 让连续计件
+    })
+    _count_one(sc, host, 0, 0.0)    # used=1=K (合格)
+    _count_one(sc, host, 0, 1.0)    # used=2>K → 不良
+    _count_one(sc, host, 0, 2.0)    # used=3>K → 不良
+    st = sc.get_state()
+    assert st["ng_count"] == 2
+    # 两件超限 NG 各触发一次 swab_over_limit_event(=2)
+    ng_events = [e for e in host.events if e[1] == 2 and "不良" in e[2]]
+    assert len(ng_events) == 2
 
 
 def test_swab_over_limit_backward_compat_alarm(sc):
-    """老配置直配 alarm_event 时, 超限仍触发硬件报警 (向后兼容)."""
+    """老配置直配 alarm_event 时, 擦满/超限仍触发硬件报警 (向后兼容, 优先 legacy)."""
     host = _setup(sc, {
         "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
         "max_uses_per_swab": 1, "move_confirm_frames": 1,
         "swab_over_limit_event_id": 2, "fake_wipe_event_id": 0,
-        "alarm_event": "event2",
+        "alarm_event": "event2", "force_lock_frames": 0,
     })
-    _frame(sc, 0, 0.0, [_box("查看产品有无脏污", 0.5, 0.5)])
-    _frame(sc, 0, 0.1, [_box("查看产品有无脏污", 0.7, 0.5)])
+    _count_one(sc, host, 0, 0.0)
     assert any(a[1] == "event2" for a in host.alarms)
 
 
@@ -323,3 +350,128 @@ def test_save_and_get_config_roundtrip(sc):
     assert cfg["operator_absent_timeout_sec"] == 300
     # 未提交的字段保留默认
     assert cfg["max_uses_per_swab"] == 11
+
+
+def test_operator_absent_enabled_bool_roundtrip(sc):
+    """操作员离开开关 true 写库后 get_config 必须仍是 bool True (不能丢成默认 False)."""
+    host = _setup(sc, {})
+    sc.save_config({"operator_absent_enabled": True, "operator_absent_event_id": 2})
+    assert sc.get_config()["operator_absent_enabled"] is True
+    sc.reload_config()
+    assert sc.get_config()["operator_absent_enabled"] is True
+    # 模拟历史脏数据: 字符串 '1' / 'true' 也应读成 True
+    host._raw = host._raw.replace('"operator_absent_enabled": true', '"operator_absent_enabled": "1"')
+    sc.reload_config()
+    assert sc.get_config()["operator_absent_enabled"] is True
+
+
+def test_operator_absent_timeout_roundtrip(sc):
+    """离岗超时秒数保存后必须持久 (客户反馈'改不了/保存后回退'回归守护)."""
+    _setup(sc, {})
+    sc.save_config({"operator_absent_timeout_sec": 30})
+    assert sc.get_config()["operator_absent_timeout_sec"] == 30
+    sc.reload_config()
+    assert sc.get_config()["operator_absent_timeout_sec"] == 30
+
+
+# ============================================================
+# D. v1.1.2 正常计件事件 + 抑制主程序周期结算塔灯
+# ============================================================
+
+
+def test_normal_count_fires_configured_ok_event(sc):
+    """正常计件默认连合格 OK (event_id=1)."""
+    host = _setup(sc, {
+        "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
+        "normal_count_event_id": 1, "move_confirm_frames": 1,
+        "swab_over_limit_event_id": 0, "fake_wipe_event_id": 0,
+        "max_uses_per_swab": 99, "move_threshold": 0.0116,
+    })
+    _frame(sc, 0, 0.0, [_box("查看产品有无脏污", 0.5, 0.5)])
+    _frame(sc, 0, 0.1, [_box("查看产品有无脏污", 0.7, 0.5)])
+    assert any(e[0] == 0 and e[1] == 1 for e in host.events)
+    assert any("正常计件" in e[2] for e in host.events)
+
+
+def test_normal_count_can_fire_ng_event(sc):
+    """正常计件可配置连不良 NG."""
+    host = _setup(sc, {
+        "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
+        "normal_count_event_id": 2, "move_confirm_frames": 1,
+        "swab_over_limit_event_id": 0, "fake_wipe_event_id": 0,
+        "max_uses_per_swab": 99, "move_threshold": 0.0116,
+    })
+    _frame(sc, 0, 0.0, [_box("查看产品有无脏污", 0.5, 0.5)])
+    _frame(sc, 0, 0.1, [_box("查看产品有无脏污", 0.7, 0.5)])
+    assert any(e[0] == 0 and e[1] == 2 for e in host.events)
+
+
+def test_normal_count_disabled_when_event_id_zero(sc):
+    """normal_count_event_id=0 → 计件不触发主程序事件."""
+    host = _setup(sc, {
+        "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
+        "normal_count_event_id": 0, "move_confirm_frames": 1,
+        "swab_over_limit_event_id": 0, "fake_wipe_event_id": 0,
+        "max_uses_per_swab": 99, "move_threshold": 0.0116,
+    })
+    _frame(sc, 0, 0.0, [_box("查看产品有无脏污", 0.5, 0.5)])
+    _frame(sc, 0, 0.1, [_box("查看产品有无脏污", 0.7, 0.5)])
+    assert host.events == []
+    assert sc.get_state()["total_products"] == 1
+
+
+def test_event_fire_suppresses_main_settle_ng_alarm(sc):
+    """主程序周期结算 NG reason → suppress_alarm (默认开)."""
+    _setup(sc, {"suppress_main_settle_alarm": True, "count_channels": [0], "swap_channel": 1})
+    ret = sc.on_event_fire({
+        "channel_id": 0,
+        "event_id": 2,
+        "event_kind": "NG",
+        "reason": "缺少步骤: ['查看产品有无脏污']",
+    })
+    assert ret == {"suppress_alarm": True}
+
+
+def test_event_fire_suppresses_main_settle_ok_alarm(sc):
+    """主程序周期结算 OK reason → 同样抑制塔灯 (避免并行 OK 抢插件计件)."""
+    _setup(sc, {"suppress_main_settle_alarm": True, "count_channels": [0]})
+    ret = sc.on_event_fire({
+        "channel_id": 0,
+        "event_id": 1,
+        "event_kind": "OK",
+        "reason": "检测完成",
+    })
+    assert ret == {"suppress_alarm": True}
+
+
+def test_event_fire_does_not_suppress_unrelated_reason(sc):
+    """非周期结算 reason 不抑制 (插件三判定走 trigger_event, 不经 event_fire)."""
+    _setup(sc, {"suppress_main_settle_alarm": True, "count_channels": [0]})
+    assert sc.on_event_fire({
+        "channel_id": 0, "event_id": 2, "reason": "人工强制结案",
+    }) is None
+
+
+def test_event_fire_suppress_disabled_by_config(sc):
+    """suppress_main_settle_alarm=False → 不抑制."""
+    _setup(sc, {"suppress_main_settle_alarm": False, "count_channels": [0]})
+    assert sc.on_event_fire({
+        "channel_id": 0, "event_id": 2, "reason": "缺少步骤: ['x']",
+    }) is None
+
+
+def test_event_fire_suppress_only_on_plugin_channels(sc):
+    """非插件管辖通道不抑制."""
+    _setup(sc, {"suppress_main_settle_alarm": True, "count_channels": [0], "swap_channel": 1})
+    assert sc.on_event_fire({
+        "channel_id": 5, "event_id": 2, "reason": "缺少步骤: ['x']",
+    }) is None
+
+
+def test_get_state_exposes_absent_enabled(sc):
+    """看板状态须带离岗启用态 + 超时秒数 (前端离岗告警条依赖)."""
+    _setup(sc, {"operator_absent_enabled": True, "operator_absent_timeout_sec": 45})
+    st = sc.get_state()
+    assert st["operator_absent_enabled"] is True
+    assert st["operator_absent_timeout_sec"] == 45
+    assert "absent_remaining" in st

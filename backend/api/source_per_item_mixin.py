@@ -87,6 +87,28 @@ def _bbox_center(b):
     return (x + w / 2.0, y + h / 2.0)
 
 
+def _spatial_sort_boxes(boxes):
+    """把 boxes 按"从上到下、从左到右"空间顺序排序, 用于稳定编号 (#1..#N).
+
+    box=(x,y,w,h) 左上+宽高(归一化). 先按行分带(行高×1.5 容差, 避免同排螺丝因
+    y 微抖被打乱), 同一行内再按中心 x 从左到右. 固定工装下 #5 永远是同一个位置点.
+    """
+    boxes = list(boxes)
+    if len(boxes) <= 1:
+        return boxes
+    hs = [b[3] for b in boxes if len(b) >= 4 and b[3] > 0]
+    band = (sum(hs) / len(hs) * 1.5) if hs else 0.05
+    if band <= 0:
+        band = 0.05
+
+    def _key(b):
+        cx = b[0] + b[2] / 2.0
+        cy = b[1] + b[3] / 2.0
+        return (int(cy / band), cx)
+
+    return sorted(boxes, key=_key)
+
+
 # ==================== 个体状态 ====================
 class _PerItemItemState:
     """单个个体在某一步骤里的状态"""
@@ -179,10 +201,10 @@ class _PerItemStep:
 
     # ──── 锁定个体表 ────
     def lock_items_from_boxes(self, boxes, frame_id: int, ts: float):
-        """周期开始时一次性锁定个体表"""
+        """周期开始时一次性锁定个体表 (按空间顺序编号: 上→下、左→右)"""
         self.items.clear()
         self.next_item_id = 1
-        for bbox in boxes:
+        for bbox in _spatial_sort_boxes(boxes):
             iid = self.next_item_id
             self.next_item_id += 1
             self.items[iid] = _PerItemItemState(iid, bbox, frame_id, ts)
@@ -354,6 +376,17 @@ class _PerItemSession:
         'last_activity_time',           # 最近一次看到 item/action 标签的时刻 (空闲超时用)
         'all_done_first_at',            # 所有步骤首次全 completed 的时刻 (完成即结算用)
         'lock_lookahead_deadline',      # 周期开始后补锁定窗口的截止时刻
+        # ── v3.x 工件离场快照判定 + 待补/待确认态 (打螺丝漏打场景) ──
+        'awaiting_remediation',         # True = 离场判 NG 后挂起, 等补打/人工确认, 周期不结案
+        'leave_consec_frames',          # 工件标签连续消失帧数 (离场确认计数)
+        'await_since',                  # 进入待补态的时刻 (待补超时用)
+        'leave_finish_seen',            # 本周期内是否出现过拿取结算动作 (双条件离场 latch)
+        'last_remediation_alarm_at',    # 上次触发待补报警的时刻 (持续报警节流用)
+        # ── 判定层 (判定时机 ≠ 结算时机, 默认 on_settle 不启用 = 老项目零差异) ──
+        'judged',                       # 本周期是否已由"判定层"判过 (绿/红已亮)
+        'judged_ok',                    # 判定层暂存的合格结果 (True=绿灯待取走, False=红灯待补)
+        'judge_done_first_at',          # all_done 判定: 首次全完成时刻 (确认保持秒数用)
+        'judge_label_consec',           # label 判定: 判定标签连续出现帧数
     )
 
     def __init__(self):
@@ -367,6 +400,15 @@ class _PerItemSession:
         self.last_activity_time: Optional[float] = None
         self.all_done_first_at: Optional[float] = None
         self.lock_lookahead_deadline: Optional[float] = None
+        self.awaiting_remediation = False
+        self.leave_consec_frames = 0
+        self.await_since: Optional[float] = None
+        self.leave_finish_seen = False
+        self.last_remediation_alarm_at: Optional[float] = None
+        self.judged = False
+        self.judged_ok = False
+        self.judge_done_first_at: Optional[float] = None
+        self.judge_label_consec = 0
 
     def reset_after_cycle(self):
         self.cycle_active = False
@@ -378,6 +420,15 @@ class _PerItemSession:
         self.last_activity_time = None
         self.all_done_first_at = None
         self.lock_lookahead_deadline = None
+        self.awaiting_remediation = False
+        self.leave_consec_frames = 0
+        self.await_since = None
+        self.leave_finish_seen = False
+        self.last_remediation_alarm_at = None
+        self.judged = False
+        self.judged_ok = False
+        self.judge_done_first_at = None
+        self.judge_label_consec = 0
 
 
 # ==================== 主 Mixin ====================
@@ -466,6 +517,66 @@ class PerItemMixin:
         # False : (默认) 老行为, 只看 finish_label 是否连续出现, 不管桌面是否还有工件
         finish_requires_no_items = bool(per_item_cfg.get('finish_requires_no_items', False))
 
+        # ── 工件离场快照判定 + 待补/待确认态 (打螺丝漏打场景, 默认全关 = 老项目零差异) ──
+        # judge_on_workpiece_leave=True 时:
+        #   - 判定时机从"停手/收尾标签/全完成保持"改为"工件标签持续消失 (离场)"
+        #   - 离场瞬间取覆盖快照 (覆盖单调, 即周期累积结果) 判 OK/NG
+        #   - 全程实时看板靠 get_per_item_state 已有逐颗 covered, 前端展示
+        #   - 开启后, settle_after_all_done / finish_label / idle_timeout 自动结算路径全部绕开
+        #     (cycle_max_duration_sec 仍作超时兜底)
+        judge_on_workpiece_leave = bool(per_item_cfg.get('judge_on_workpiece_leave', False))
+        leave_confirm_frames = int(per_item_cfg.get('leave_confirm_frames', 10))
+        # ng_hold_for_remediation=True 时, 离场判 NG 不立即落账, 进入待补/待确认态:
+        #   提示漏点 → 工件放回补满则转 OK; 人工确认/超时则按 NG 落账
+        ng_hold_for_remediation = bool(per_item_cfg.get('ng_hold_for_remediation', False))
+        remediation_timeout_sec = float(per_item_cfg.get('remediation_timeout_sec', 0.0))
+        # remediation_event_id: "场上还有没扭的螺丝"(待补态) 触发哪个事件的报警.
+        #   灯做成事件 — 不写死, 由用户在报警配置里把该事件映射到红灯/蜂鸣等.
+        #   0 = 不主动触发 (纯用待补状态, 由前端/用户自行联动). OK/NG 仍走标准事件 1/2.
+        remediation_event_id = int(per_item_cfg.get('remediation_event_id', 0) or 0)
+        # ── 待补态增强 (可选, 默认全关 = 老项目零差异) ──
+        # 注: "离场判定双条件(拿取动作 + 工件离场)" 复用上面的 finish_requires_no_items 开关,
+        #   不再单设字段 — 一个开关同时管"收尾标签结算"和"工件离场判定"两条路径, 避免重复按钮.
+        # remediation_takeaway_ng=True 时: 待补态(红灯)期间若再次出现拿取结算动作却未补满,
+        #   自动按 NG 落账 ("红灯内取件算 NG", 工人没补就把件带走 → 计 NG).
+        remediation_takeaway_ng = bool(per_item_cfg.get('remediation_takeaway_ng', False))
+        # remediation_alarm_mode: 待补报警触发形式. 'once'=进待补只触发一次;
+        #   'sustained'=按 remediation_alarm_interval_sec 间隔持续重复触发, 直到补满/确认.
+        #   撤报警靠 OK/NG 标准事件 (1/2) 由用户在报警配置里联动, 这里不写死灭灯.
+        remediation_alarm_mode = str(per_item_cfg.get('remediation_alarm_mode', 'once') or 'once')
+        if remediation_alarm_mode not in ('once', 'sustained'):
+            remediation_alarm_mode = 'once'
+        remediation_alarm_interval_sec = float(per_item_cfg.get('remediation_alarm_interval_sec', 2.0))
+
+        # ── 视频检测框按"扭完/未扭"覆盖态上色 (打螺丝漏打场景, 默认关 = 老项目零差异) ──
+        # color_by_coverage=True 时: 前端把 item_label 的检测框按逐颗覆盖态重新上色
+        #   (已扭→box_color_covered, 未扭→box_color_uncovered). 颜色留空则回退全局 OK/NG 色.
+        #   纯前端绘制行为, 不动后端检测/结算逻辑.
+        color_by_coverage = bool(per_item_cfg.get('color_by_coverage', False))
+        box_color_covered = str(per_item_cfg.get('box_color_covered', '') or '')
+        box_color_uncovered = str(per_item_cfg.get('box_color_uncovered', '') or '')
+        # show_item_numbers=True 时: 前端在每颗个体检测框上叠"#编号"(按空间序), 不同标签各自从 #1 起.
+        #   纯前端绘制, 不动后端检测/结算. 编号 = 锁定时按空间排序分配的 item_id.
+        show_item_numbers = bool(per_item_cfg.get('show_item_numbers', False))
+
+        # ── 判定时机 (与"结算时机"解耦, 默认 'on_settle' = 结算那刻一次性判 = 老项目零差异) ──
+        # judge_timing:
+        #   'on_settle' (默认): 不单设判定, 取走/收尾/全完成那刻才判 OK/NG (老行为)
+        #   'all_done'        : 所有件覆盖完(可+judge_all_done_sec确认) → 判定层亮绿(合格事件);
+        #                       此后保持, 等"结算时机"(离场/收尾)才落账. 漏件时此触发不亮(全完成才触发),
+        #                       漏件的红灯仍由结算那刻判 NG / 待补给出.
+        #   'label'           : 指定 judge_label 标签连续出现 → 判定层拍快照: 全覆盖亮绿 / 有漏亮红+漏点,
+        #                       工人补满→翻绿; 结算时机到了再落账.
+        # 绿灯走可配 judge_ok_event_id (与落账"合格"事件 1 分开: 判定时亮绿, 落账时另算).
+        # 红灯复用 remediation_event_id + ng_hold_for_remediation (与离场待补同一套).
+        judge_timing = str(per_item_cfg.get('judge_timing', 'on_settle') or 'on_settle')
+        if judge_timing not in ('on_settle', 'all_done', 'label', 'manual'):
+            judge_timing = 'on_settle'
+        judge_label = str(per_item_cfg.get('judge_label', '') or '')
+        judge_all_done_sec = float(per_item_cfg.get('judge_all_done_sec', 0.0) or 0.0)
+        judge_label_frames = int(per_item_cfg.get('judge_label_frames', 3) or 3)
+        judge_ok_event_id = int(per_item_cfg.get('judge_ok_event_id', 0) or 0)
+
         self._per_item_config = {
             'stability_window_frames': max(1, stability_window),
             'stability_iou_threshold': stability_iou,
@@ -482,6 +593,23 @@ class PerItemMixin:
             'lock_lookahead_seconds': max(0.0, lock_lookahead),
             'cycle_max_duration_sec': max(0.0, cycle_max_sec),
             'idle_timeout_sec': max(0.0, idle_timeout_sec),
+            'judge_on_workpiece_leave': judge_on_workpiece_leave,
+            'leave_confirm_frames': max(1, leave_confirm_frames),
+            'ng_hold_for_remediation': ng_hold_for_remediation,
+            'remediation_timeout_sec': max(0.0, remediation_timeout_sec),
+            'remediation_event_id': max(0, remediation_event_id),
+            'remediation_takeaway_ng': remediation_takeaway_ng,
+            'remediation_alarm_mode': remediation_alarm_mode,
+            'remediation_alarm_interval_sec': max(0.5, remediation_alarm_interval_sec),
+            'color_by_coverage': color_by_coverage,
+            'box_color_covered': box_color_covered,
+            'box_color_uncovered': box_color_uncovered,
+            'show_item_numbers': show_item_numbers,
+            'judge_timing': judge_timing,
+            'judge_label': judge_label,
+            'judge_all_done_sec': max(0.0, judge_all_done_sec),
+            'judge_label_frames': max(1, judge_label_frames),
+            'judge_ok_event_id': max(0, judge_ok_event_id),
         }
 
         # ── 步骤级解析 ──
@@ -619,6 +747,19 @@ class PerItemMixin:
 
         # v3.10.2+ 手动结算模式: 所有自动结算路径全部禁用, 只能靠 manual_settle API 结算
         disable_auto_settle = cfg.get('disable_auto_settle', False)
+
+        # ──── 3.8 判定层 (判定时机 ≠ 结算时机时启用) ────
+        # 在结算之前先跑判定: 到判定时机就拍快照亮绿/红, 但不落账; 落账仍由下面 3.9-7 的结算时机负责.
+        # judge_timing='on_settle' (默认) 时本调用直接返回, 老行为零差异.
+        if cfg.get('judge_timing', 'on_settle') != 'on_settle':
+            self._per_item_judge_layer_tick(boxes_by_label, current_time)
+
+        # ──── 3.9 工件离场快照判定模式 (打螺丝漏打场景) ────
+        # 开启后完全接管结算时机: 工件离场 → 取快照判 OK/NG; NG 可挂起待补.
+        # 绕开下面 4/5/6/7 全部老结算路径 (cycle_max 在本分支内自带兜底).
+        if cfg.get('judge_on_workpiece_leave', False):
+            self._per_item_leave_mode_tick(boxes_by_label, current_time)
+            return
 
         # ──── 4. 完成即结算 (OK 路径, 无需收尾标签) ────
         # 所有 per_item 步骤都 completed → 保持 settle_after_all_done_sec 秒 → 立即结算 OK
@@ -1027,17 +1168,16 @@ class PerItemMixin:
         }
 
     # ──── 周期结算 ────
-    def _per_item_settle_cycle(self, current_time: float):
-        """收尾标签稳定出现 → 检查所有 per_item 步骤完成情况 → OK/NG"""
-        sess = self._per_item_session
-        if not sess.cycle_active:
-            return
+    # ──── 结果计算 (settle / 离场判定 / 待补态共用) ────
+    def _per_item_compute_result(self):
+        """按当前所有步骤真实覆盖状态算结果.
 
-        cycle_duration = current_time - (sess.cycle_start_time or current_time)
-
+        返回 (ok: bool, reason: str, ng_details: list[dict]).
+        覆盖单调 (false→true 不可回滚), 所以任意时刻调用都是"截至当前的累积结果".
+        """
         ok = True
         ng_reasons = []
-        ng_details = []      # 给前端的"未覆盖个体清单"
+        ng_details = []
         for step in self._per_item_steps:
             if not step.completed:
                 ok = False
@@ -1052,6 +1192,17 @@ class PerItemMixin:
                     'total': len(step.items),
                     'missing_item_ids': missing,
                 })
+        reason = '; '.join(ng_reasons) or '逐件覆盖未完成'
+        return ok, reason, ng_details
+
+    def _per_item_settle_cycle(self, current_time: float):
+        """收尾标签稳定出现 → 检查所有 per_item 步骤完成情况 → OK/NG"""
+        sess = self._per_item_session
+        if not sess.cycle_active:
+            return
+
+        cycle_duration = current_time - (sess.cycle_start_time or current_time)
+        ok, reason, ng_details = self._per_item_compute_result()
 
         if ok:
             print(f"[per_item] 周期结算 OK: 步骤数={len(self._per_item_steps)}, 耗时{cycle_duration:.2f}s")
@@ -1064,7 +1215,6 @@ class PerItemMixin:
             # OK 时清掉上次 NG 详情, 避免前端误以为还在 NG 状态
             self._per_item_last_ng_detail = None
         else:
-            reason = '; '.join(ng_reasons) or '逐件覆盖未完成'
             print(f"[per_item] 周期结算 NG: {reason}")
             if debug_center.is_on("backend.per_item"):
                 _miss = sum(len(d.get('missing_item_ids') or []) for d in ng_details)
@@ -1093,6 +1243,326 @@ class PerItemMixin:
         except Exception:
             pass
 
+    # ════════════════════════════════════════════════════════════════
+    # 工件离场快照判定 + 待补/待确认态 (打螺丝漏打场景)
+    # ════════════════════════════════════════════════════════════════
+
+    def _per_item_any_item_present(self, boxes_by_label: dict) -> bool:
+        """本帧画面里是否还有任何工件标签 (各 step.item_label 之一)."""
+        seen = set()
+        for step in self._per_item_steps:
+            for ilbl in step.item_label:
+                if ilbl in seen:
+                    continue
+                seen.add(ilbl)
+                if boxes_by_label.get(ilbl):
+                    return True
+        return False
+
+    def _per_item_fire_remediation_alarm(self):
+        """进待补态时触发"还有没扭螺丝"事件的报警 (只点灯, 不落账 — 落账等补打/人工确认).
+
+        灯做成事件: 触发的是可配 remediation_event_id 对应事件的报警映射,
+        不写死红灯 — 由用户在报警配置里决定该事件亮什么灯/响不响蜂鸣.
+        remediation_event_id=0 时不主动触发 (纯靠待补状态联动).
+        """
+        cfg = self._per_item_config or {}
+        eid = int(cfg.get('remediation_event_id', 0) or 0)
+        if eid <= 0:
+            return
+        try:
+            from backend.api.alarm import alarm_router
+            alarm_router.trigger_alarm(f'event{eid}', channel_id=self.channel_id)
+        except Exception as e:
+            print(f"[per_item] 触发待补报警事件 event{eid} 失败: {e}")
+
+    def _per_item_fire_judge_ok_event(self):
+        """判定层判合格时点"绿灯"——触发可配 judge_ok_event_id 对应事件的报警映射.
+
+        与落账"合格"事件(_trigger_event(1)) 分开: 这里只是"判定时亮绿"预告,
+        不带结算语义(不落账/不计数). 灯色由用户在报警配置里把该事件映射到绿灯.
+        judge_ok_event_id=0 时不主动触发.
+        """
+        cfg = self._per_item_config or {}
+        eid = int(cfg.get('judge_ok_event_id', 0) or 0)
+        if eid <= 0:
+            return
+        try:
+            from backend.api.alarm import alarm_router
+            alarm_router.trigger_alarm(f'event{eid}', channel_id=self.channel_id)
+        except Exception as e:
+            print(f"[per_item] 触发判定合格事件 event{eid} 失败: {e}")
+
+    def _per_item_judge_layer_tick(self, boxes_by_label: dict, current_time: float):
+        """判定层: 在结算之前, 到"判定时机"就拍覆盖快照亮绿/红, 但不落账.
+
+        判定时机与结算时机解耦 (judge_timing != 'on_settle' 时才被调用):
+          - all_done: 全部覆盖完(可+judge_all_done_sec确认) → 判合格亮绿(judge_ok_event), 保持等结算.
+                      (漏件时此触发不亮 → 漏件红灯仍由结算那刻判 NG / 待补给出)
+          - label   : judge_label 连续出现 judge_label_frames 帧 → 拍快照:
+                      全覆盖→亮绿; 有漏→亮红+暴露漏点(复用 ng_hold 待补), 补满→翻绿.
+          - manual  : 不自动触发, 只由检测主页"手动判定"按钮 (per_item_judge_now) 触发;
+                      本 tick 仅维持"补满翻绿"状态机.
+        落账 (计数/进下一轮) 仍由下面的结算时机 (离场/收尾/全完成) 负责.
+        """
+        sess = self._per_item_session
+        cfg = self._per_item_config
+        timing = cfg.get('judge_timing', 'on_settle')
+
+        # 已判合格(绿灯保持): 覆盖单调不会回退, 不重复判
+        if sess.judged and sess.judged_ok:
+            return
+
+        # 红灯待补中: 工人补满 → 翻绿 (不落账, 等结算)
+        if sess.judged and not sess.judged_ok:
+            if self._per_item_steps and all(s.completed for s in self._per_item_steps):
+                sess.judged_ok = True
+                sess.awaiting_remediation = False
+                self._per_item_last_ng_detail = None
+                self._per_item_fire_judge_ok_event()
+                print("[per_item] 判定层: 漏件补满, 翻绿(等取走落账)")
+                if debug_center.is_on("backend.per_item"):
+                    debug_center.dbg("backend.per_item", "判定层翻绿", f"channel={self.channel_id} 漏件补满, 亮绿等结算")
+            return
+
+        # 尚未判定 → 检查自动判定触发条件 (manual 模式不在此触发, 只走手动按钮)
+        triggered = False
+        if timing == 'all_done':
+            if self._per_item_steps and all(s.completed for s in self._per_item_steps):
+                if sess.judge_done_first_at is None:
+                    sess.judge_done_first_at = current_time
+                elif (current_time - sess.judge_done_first_at) >= cfg.get('judge_all_done_sec', 0.0):
+                    triggered = True
+            else:
+                sess.judge_done_first_at = None
+        elif timing == 'label':
+            jl = cfg.get('judge_label') or ''
+            if jl and boxes_by_label.get(jl):
+                sess.judge_label_consec += 1
+                if sess.judge_label_consec >= cfg.get('judge_label_frames', 3):
+                    triggered = True
+            else:
+                sess.judge_label_consec = 0
+
+        if triggered:
+            self._per_item_perform_judge(current_time)
+
+    def _per_item_perform_judge(self, current_time: float):
+        """拍覆盖快照判定: 全覆盖→亮绿(judge_ok_event); 有漏→亮红+暴露漏点(可挂起待补).
+
+        判定层自动触发与"手动判定"按钮共用本方法 — 只代替"判定时机", 不代替"结果"
+        (结果永远按真实覆盖快照算, 不伪造). 不落账.
+        """
+        sess = self._per_item_session
+        cfg = self._per_item_config
+        ok, reason, ng_details = self._per_item_compute_result()
+        sess.judged = True
+        sess.judged_ok = ok
+        if ok:
+            self._per_item_last_ng_detail = None
+            self._per_item_fire_judge_ok_event()
+            print("[per_item] 判定层: 判合格, 亮绿等取走结算")
+            if debug_center.is_on("backend.per_item"):
+                debug_center.dbg("backend.per_item", "判定层判合格", f"channel={self.channel_id} 亮绿等结算")
+        else:
+            missing_total = sum(len(d.get('missing_item_ids') or []) for d in ng_details)
+            cycle_duration = current_time - (sess.cycle_start_time or current_time)
+            self._per_item_last_ng_detail = {
+                'reason_summary': reason,
+                'cycle_duration_sec': round(cycle_duration, 2),
+                'settled_at': current_time,
+                'missing_total': missing_total,
+                'steps_failed': ng_details,
+                'awaiting_remediation': bool(cfg.get('ng_hold_for_remediation', False)),
+            }
+            if cfg.get('ng_hold_for_remediation', False):
+                sess.awaiting_remediation = True
+                sess.await_since = current_time
+                sess.last_remediation_alarm_at = current_time
+            self._per_item_fire_remediation_alarm()
+            print(f"[per_item] 判定层: 判 NG, 亮红提示漏{missing_total}件 (等补打/结算)")
+            if debug_center.is_on("backend.per_item"):
+                debug_center.dbg("backend.per_item", "判定层判NG", f"channel={self.channel_id} {reason} 漏{missing_total}件, 亮红")
+
+    def per_item_judge_now(self) -> dict:
+        """手动判定: 检测主页"手动判定"按钮触发, 立刻拍覆盖快照亮绿/红 (不落账).
+
+        设计同 manual_settle: 只代替"判定时机", 不代替"结果". 结果按真实覆盖算.
+        重复点 (已判过) 不重复触发; 已判合格保持绿; 待补中点等同"再看一眼"(补满则翻绿).
+        """
+        sess = getattr(self, '_per_item_session', None)
+        if sess is None:
+            return {"ok": False, "msg": "未启用 per_item 模式"}
+        if not sess.cycle_active:
+            return {"ok": False, "msg": "当前没有 active 周期可判定"}
+        if sess.judged and sess.judged_ok:
+            return {"ok": True, "msg": "本周期已判合格(绿灯保持)"}
+        # 待补中再点: 走补满翻绿检查 (不强制改结果)
+        if sess.judged and not sess.judged_ok:
+            if self._per_item_steps and all(s.completed for s in self._per_item_steps):
+                sess.judged_ok = True
+                sess.awaiting_remediation = False
+                self._per_item_last_ng_detail = None
+                self._per_item_fire_judge_ok_event()
+                return {"ok": True, "msg": "漏件已补满, 翻绿(等取走结算)"}
+            return {"ok": True, "msg": "仍有漏件未补满, 维持红灯待补"}
+        self._per_item_perform_judge(time.time())
+        return {
+            "ok": True,
+            "msg": "已手动判定 (OK/NG 由真实覆盖判定; 落账仍由结算时机触发)",
+            "judged_ok": sess.judged_ok,
+        }
+
+    def _per_item_leave_mode_tick(self, boxes_by_label: dict, current_time: float):
+        """工件离场判定模式每帧 tick. 接管全部结算时机.
+
+        running 态: 工件标签持续消失 leave_confirm_frames 帧 → 取快照判定.
+        await 态  : section 3 已重算覆盖, 补满则撤红转 OK; 超时则按 NG 落账;
+                    人工确认走 per_item_confirm_ng.
+        """
+        sess = self._per_item_session
+        cfg = self._per_item_config
+        any_item = self._per_item_any_item_present(boxes_by_label)
+
+        finish_label = cfg.get('finish_label') or ''
+        finish_present = bool(finish_label and boxes_by_label.get(finish_label))
+
+        # ── 待补/待确认态 ──
+        if sess.awaiting_remediation:
+            # 补满 (工件放回后补打 → 覆盖单调翻 true) → 撤红转 OK
+            if self._per_item_steps and all(s.completed for s in self._per_item_steps):
+                print("[per_item] 待补态补满, 撤红转 OK")
+                if debug_center.is_on("backend.per_item"):
+                    debug_center.dbg("backend.per_item", "待补完成", f"channel={self.channel_id} 漏件已补满, 撤红转 OK")
+                self._per_item_settle_cycle(current_time)   # 全完成 → 判 OK + reset
+                return
+            # 红灯内取件算 NG (可选): 待补期间再次出现拿取结算动作却未补满 → 自动 NG 落账
+            if cfg.get('remediation_takeaway_ng', False) and finish_present:
+                print("[per_item] 待补态再次拿取且未补满, 按 NG 落账 (红灯内取件算 NG)")
+                if debug_center.is_on("backend.per_item"):
+                    debug_center.dbg("backend.per_item", "待补取件NG", f"channel={self.channel_id} 红灯内再次拿取未补满, 按 NG 落账")
+                self._per_item_settle_cycle(current_time)
+                return
+            # 超时按 NG 落账 (可选)
+            rem_timeout = cfg.get('remediation_timeout_sec', 0)
+            if rem_timeout > 0 and sess.await_since is not None and (current_time - sess.await_since) > rem_timeout:
+                print(f"[per_item] 待补态超时 {rem_timeout}s, 按 NG 落账")
+                if debug_center.is_on("backend.per_item"):
+                    debug_center.dbg("backend.per_item", "待补超时", f"channel={self.channel_id} 超时{rem_timeout}s 未补满, 按 NG 落账")
+                self._per_item_settle_cycle(current_time)
+                return
+            # 持续报警 (可选): 'sustained' 模式按间隔重复触发待补报警事件, 直到补满/确认
+            if cfg.get('remediation_alarm_mode', 'once') == 'sustained':
+                interval = cfg.get('remediation_alarm_interval_sec', 2.0)
+                last = sess.last_remediation_alarm_at
+                if last is None or (current_time - last) >= interval:
+                    self._per_item_fire_remediation_alarm()
+                    sess.last_remediation_alarm_at = current_time
+            return
+
+        # ── running 态: 检测工件离场 (可选叠加"拿取结算动作"双条件) ──
+        # 双条件复用 finish_requires_no_items 开关 (与"收尾标签结算"路径同一个开关):
+        #   开启且配了 finish_label 时, 要求本周期出现过拿取结算动作 + 工件离场, 缺一不算离场.
+        #   防"手大面积遮挡/工件被短暂移动 → 螺丝瞬间全消失"被误判为离场.
+        # 本周期内出现过拿取结算动作 → latch (拿取动作可能早于工件完全离场几帧).
+        if finish_present:
+            sess.leave_finish_seen = True
+
+        leave_gate = (not any_item)
+        if cfg.get('finish_requires_no_items', False) and finish_label:
+            leave_gate = leave_gate and sess.leave_finish_seen
+
+        if leave_gate:
+            sess.leave_consec_frames += 1
+            if sess.leave_consec_frames >= cfg.get('leave_confirm_frames', 10):
+                self._per_item_judge_on_leave(current_time)
+                return
+        else:
+            sess.leave_consec_frames = 0
+
+        # 周期超时兜底 (离场模式下仍保留, 防工件长期不离场卡死)
+        cycle_max = cfg.get('cycle_max_duration_sec', 0)
+        if cycle_max > 0 and sess.cycle_start_time is not None and (current_time - sess.cycle_start_time) > cycle_max:
+            print(f"[per_item] (离场模式) 周期超时 {cycle_max}s, 强制判定")
+            if debug_center.is_on("backend.per_item"):
+                debug_center.dbg("backend.per_item", "离场模式周期超时", f"channel={self.channel_id} 超时{cycle_max}s 强制判定")
+            self._per_item_judge_on_leave(current_time)
+
+    def _per_item_judge_on_leave(self, current_time: float):
+        """工件离场瞬间取覆盖快照判定. 全覆盖→OK; 有漏→NG (可挂起待补)."""
+        sess = self._per_item_session
+        cfg = self._per_item_config
+        ok, reason, ng_details = self._per_item_compute_result()
+
+        if ok:
+            print(f"[per_item] 工件离场, 快照判 OK")
+            if debug_center.is_on("backend.per_item"):
+                debug_center.dbg("backend.per_item", "离场判定 OK", f"channel={self.channel_id} 全部覆盖")
+            self._per_item_settle_cycle(current_time)       # 判 OK + reset
+            return
+
+        # 有漏
+        if cfg.get('ng_hold_for_remediation', False):
+            # 进待补/待确认态: 不落账, 只点红灯 + 暴露漏点给前端
+            cycle_duration = current_time - (sess.cycle_start_time or current_time)
+            missing_total = sum(len(d.get('missing_item_ids') or []) for d in ng_details)
+            sess.awaiting_remediation = True
+            sess.await_since = current_time
+            sess.last_remediation_alarm_at = current_time   # 持续报警节流起点 (进待补已响一次)
+            self._per_item_last_ng_detail = {
+                'reason_summary': reason,
+                'cycle_duration_sec': round(cycle_duration, 2),
+                'settled_at': current_time,
+                'missing_total': missing_total,
+                'steps_failed': ng_details,
+                'awaiting_remediation': True,
+            }
+            self._per_item_fire_remediation_alarm()
+            print(f"[per_item] 工件离场判 NG, 进入待补态: {reason} (漏{missing_total}件)")
+            if debug_center.is_on("backend.per_item"):
+                debug_center.dbg("backend.per_item", "离场判定 NG 待补", f"channel={self.channel_id} {reason} 漏{missing_total}件, 红灯提示等补打/确认")
+        else:
+            # 不挂起 → 直接 NG 落账
+            print(f"[per_item] 工件离场, 快照判 NG (不挂起): {reason}")
+            self._per_item_settle_cycle(current_time)
+
+    def per_item_confirm_ng(self) -> dict:
+        """人工确认当前待补态为 NG, 按真实覆盖状态落账 (不伪造结果).
+
+        设计同 manual_settle: 只代替"时机", 不代替"结果". 若此刻工人其实已补满,
+        则落账为 OK (不强制 NG).
+        """
+        sess = getattr(self, '_per_item_session', None)
+        if sess is None:
+            return {"ok": False, "msg": "未启用 per_item 模式"}
+        if not getattr(sess, 'awaiting_remediation', False):
+            return {"ok": False, "msg": "当前不在待补/待确认状态"}
+        self._per_item_settle_cycle(time.time())
+        return {"ok": True, "msg": "已确认并按真实覆盖状态落账"}
+
+    def _per_item_reset_runtime(self):
+        """整体复位 per_item 运行时状态 (用户点「清零」时调用).
+
+        清: 逐颗覆盖 / 周期态 / 待补态(awaiting_remediation) / 上次 NG 详情.
+        不清: 项目配置 (_per_item_config) 与步骤定义 (步骤的 item_label/期望数等保留,
+              只把本周期的覆盖与个体表清空). 非 per_item 项目静默跳过.
+        """
+        steps = getattr(self, '_per_item_steps', None)
+        if not steps:
+            return
+        for step in steps:
+            try:
+                step.reset_for_new_cycle()
+            except Exception:
+                pass
+        sess = getattr(self, '_per_item_session', None)
+        if sess is not None:
+            try:
+                sess.reset_after_cycle()
+            except Exception:
+                pass
+        self._per_item_last_ng_detail = None
+
     # ──── 给 detection/results 用的 state 快照 ────
     def get_per_item_state(self) -> Optional[dict]:
         """返回当前 per_item 模式的运行时状态. 非 per_item 模式返回 None.
@@ -1110,6 +1580,9 @@ class PerItemMixin:
         return {
             'enabled': True,
             'cycle_active': bool(sess.cycle_active) if sess else False,
+            'awaiting_remediation': bool(getattr(sess, 'awaiting_remediation', False)) if sess else False,
+            'judged': bool(getattr(sess, 'judged', False)) if sess else False,
+            'judged_ok': bool(getattr(sess, 'judged_ok', False)) if sess else False,
             'cycle_start_time': sess.cycle_start_time if sess else None,
             'frame_id': sess.frame_id if sess else 0,
             'config': {
@@ -1128,6 +1601,20 @@ class PerItemMixin:
                 # per_item 专属超时 (与其他模式隔离)
                 'cycle_max_duration_sec': cfg.get('cycle_max_duration_sec', 0.0),
                 'idle_timeout_sec': cfg.get('idle_timeout_sec', 0.0),
+                # 工件离场快照判定 + 待补态
+                'judge_on_workpiece_leave': cfg.get('judge_on_workpiece_leave', False),
+                'leave_confirm_frames': cfg.get('leave_confirm_frames', 10),
+                'ng_hold_for_remediation': cfg.get('ng_hold_for_remediation', False),
+                'remediation_timeout_sec': cfg.get('remediation_timeout_sec', 0.0),
+                'remediation_event_id': cfg.get('remediation_event_id', 0),
+                'remediation_takeaway_ng': cfg.get('remediation_takeaway_ng', False),
+                'remediation_alarm_mode': cfg.get('remediation_alarm_mode', 'once'),
+                'remediation_alarm_interval_sec': cfg.get('remediation_alarm_interval_sec', 2.0),
+                'color_by_coverage': cfg.get('color_by_coverage', False),
+                'box_color_covered': cfg.get('box_color_covered', ''),
+                'box_color_uncovered': cfg.get('box_color_uncovered', ''),
+                'show_item_numbers': cfg.get('show_item_numbers', False),
+                'judge_timing': cfg.get('judge_timing', 'on_settle'),
             },
             'steps': steps_state,
             'last_ng_detail': getattr(self, '_per_item_last_ng_detail', None),

@@ -2435,6 +2435,7 @@ const processChannelResult = (ch, d) => {
   chData.stepVisibleSeconds = d.step_visible_seconds || {};
   chData.detections = d.detections || [];
   chData._pollProjectConfig = d.project_config || null;
+  chData.perItemState = d.per_item_state || null;   // v3.28: 多工位画框贴螺丝编号用
   chData.currentCycleSteps = d.current_cycle_steps || [];
   chData.backupCoveredLabels = d.backup_covered_labels || [];
   chData.stepCounts = d.step_counts || {};
@@ -2612,7 +2613,7 @@ const processChannelResult = (ch, d) => {
     newEvents.forEach(event => {
       multiLastSeenSeq[ch] = Math.max(multiLastSeenSeq[ch], event.seq);
       const toastId = event.toast_id || (event.event_id === 1 ? 'ok' : event.event_id === 2 ? 'ng' : 'ok');
-      showMultiToast(ch, toastId, event.event_name, event.reason);
+      showMultiToast(ch, toastId, event.event_name, event.reason, event.event_id);
 
       const warnCfg = systemStore.detection.toasts?.warn_no_barcode;
       // v3.5.2: 直接读后端权威判定, 不再做客户端守门 (避免索引错位/缓存竞态).
@@ -2798,6 +2799,44 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollPr
   const fontSizeMulti = (Number(chDet.labelFontSize) || 11) * (window.__uiScale || 1);
   const showConfMulti = chDet.showConfidence !== false;
 
+  // v3.28+ per_item: 按覆盖态上色 + 显示螺丝编号 (复用单工位同一套个体配对)
+  const piStateMulti = multiChannelData.value[ch]?.perItemState || null;
+  const piCfgMulti = piStateMulti?.config;
+  const colorByCovMulti = !!piCfgMulti?.color_by_coverage;
+  const showNumMulti = !!piCfgMulti?.show_item_numbers;
+  let coverByLabelMulti = null;
+  let covOnMulti = okColorMulti, covOffMulti = ngColorMulti;
+  if ((colorByCovMulti || showNumMulti) && Array.isArray(piStateMulti?.steps)) {
+    coverByLabelMulti = new Map();
+    for (const st of piStateMulti.steps) {
+      if (!st || !st.item_label || !Array.isArray(st.items)) continue;
+      let arr = coverByLabelMulti.get(st.item_label);
+      if (!arr) { arr = []; coverByLabelMulti.set(st.item_label, arr); }
+      for (const it of st.items) {
+        if (Array.isArray(it.bbox) && it.bbox.length === 4) arr.push(it);
+      }
+    }
+    if (coverByLabelMulti.size === 0) coverByLabelMulti = null;
+    covOnMulti = piCfgMulti.box_color_covered || okColorMulti;
+    covOffMulti = piCfgMulti.box_color_uncovered || ngColorMulti;
+  }
+  const piHitMulti = (det, cb) => {
+    if (!coverByLabelMulti) return null;
+    const items = coverByLabelMulti.get(det.label);
+    if (!items || !items.length) return null;
+    let best = 0.3, hit = null;
+    for (const it of items) {
+      const b = it.bbox;
+      const ix1 = Math.max(cb.x, b[0]), iy1 = Math.max(cb.y, b[1]);
+      const ix2 = Math.min(cb.x + cb.w, b[0] + b[2]), iy2 = Math.min(cb.y + cb.h, b[1] + b[3]);
+      const iw = Math.max(0, ix2 - ix1), ih = Math.max(0, iy2 - iy1);
+      const inter = iw * ih, uni = cb.w * cb.h + b[2] * b[3] - inter;
+      const iou = uni > 0 ? inter / uni : 0;
+      if (iou > best) { best = iou; hit = it; }
+    }
+    return hit;
+  };
+
   detections.forEach(det => {
     if (det.hidden) return;
     if (hiddenLabels && det.label && hiddenLabels.has(det.label)) return;
@@ -2805,7 +2844,10 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollPr
     const cb = clipNormalizedBox(det);
     const x = cb.x * dw + dx, y = cb.y * dh + dy;
     const w = cb.w * dw, h = cb.h * dh;
-    const color = pickDetColor(det, stepsConfMulti, okColorMulti, ngColorMulti);
+    const hitMulti = (colorByCovMulti || showNumMulti) ? piHitMulti(det, cb) : null;
+    const color = (colorByCovMulti && hitMulti)
+      ? (hitMulti.covered ? covOnMulti : covOffMulti)
+      : pickDetColor(det, stepsConfMulti, okColorMulti, ngColorMulti);
     if (det.mask && Array.isArray(det.mask) && det.mask.length > 2) {
       ctx.beginPath();
       det.mask.forEach((pt, i) => {
@@ -2830,6 +2872,7 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollPr
     }
     ctx.font = `bold ${fontSizeMulti}px Arial`;
     let label = det.display_id || det.display_name || det.label || '';
+    if (showNumMulti && hitMulti) label = `${det.label || ''}#${hitMulti.id}`;
     if (showConfMulti && det.confidence) label += ` ${(det.confidence * 100).toFixed(0)}%`;
     const lh = Math.max(12, fontSizeMulti + 2);
     ctx.fillStyle = color;
@@ -3634,7 +3677,7 @@ const getMultiPositionClass = (position) => {
   }
 };
 
-const showMultiToast = (ch, toastId, eventName, reason = '') => {
+const showMultiToast = (ch, toastId, eventName, reason = '', eventId = null) => {
   const det = systemStore.getChannelDetection(ch);
   const config = getToastConfig(toastId, ch);
   const icons = { ok: CircleCheck, ng: CircleClose, custom: Warning };
@@ -3647,6 +3690,9 @@ const showMultiToast = (ch, toastId, eventName, reason = '') => {
   const toast = {
     id: ++toastIdCounter,
     toastId,
+    // 原始事件编号(1=合格OK / 2=不良NG / 其它=自定义事件)，透传给 cycle-result.indicator 插槽，
+    // 让整页覆盖型插件能按事件身份决定"内置OK/NG交给自绘横幅、自定义事件仍弹标准提示框"。
+    eventId,
     title: config.text || eventName,
     subtitle,
     color: config.color,
@@ -4015,6 +4061,51 @@ const drawDetections = (detections) => {
 
   const pipeCfg = currentProject.value?.pipeline_config || {};
 
+  // v3.x per_item: 按"扭完/未扭"覆盖态给 item_label 检测框上色.
+  // 默认关 (color_by_coverage=false) → 零行为变化; 颜色留空回退全局 OK/NG 色.
+  const piState = perItemState.value;
+  const piCfg = piState?.config;
+  const colorByCoverage = isPerItemMode.value && !!piCfg?.color_by_coverage;
+  const showItemNumbers = isPerItemMode.value && !!piCfg?.show_item_numbers;
+  let coverByLabel = null;
+  let covColorOn = boxColor;
+  let covColorOff = ngColor;
+  if ((colorByCoverage || showItemNumbers) && Array.isArray(piState?.steps)) {
+    coverByLabel = new Map();
+    for (const st of piState.steps) {
+      if (!st || !st.item_label || !Array.isArray(st.items)) continue;
+      let arr = coverByLabel.get(st.item_label);
+      if (!arr) { arr = []; coverByLabel.set(st.item_label, arr); }
+      for (const it of st.items) {
+        if (Array.isArray(it.bbox) && it.bbox.length === 4) arr.push(it);
+      }
+    }
+    if (coverByLabel.size === 0) coverByLabel = null;
+    covColorOn = piCfg.box_color_covered || boxColor;
+    covColorOff = piCfg.box_color_uncovered || ngColor;
+  }
+  const _iouNorm = (ax, ay, aw, ah, bx, by, bw, bh) => {
+    const ix1 = Math.max(ax, bx), iy1 = Math.max(ay, by);
+    const ix2 = Math.min(ax + aw, bx + bw), iy2 = Math.min(ay + ah, by + bh);
+    const iw = Math.max(0, ix2 - ix1), ih = Math.max(0, iy2 - iy1);
+    const inter = iw * ih;
+    const uni = aw * ah + bw * bh - inter;
+    return uni > 0 ? inter / uni : 0;
+  };
+  // 把检测框配到对应个体 (返回该个体: 含 id + covered), 编号/上色共用
+  const perItemHitFor = (det, cb) => {
+    if (!coverByLabel) return null;
+    const items = coverByLabel.get(det.label);
+    if (!items || !items.length) return null;
+    let best = 0.3, hit = null;
+    for (const it of items) {
+      const b = it.bbox;
+      const iou = _iouNorm(cb.x, cb.y, cb.w, cb.h, b[0], b[1], b[2], b[3]);
+      if (iou > best) { best = iou; hit = it; }
+    }
+    return hit;
+  };
+
   detections.forEach(det => {
     if (!enabledLabels.has(det.label)) return;
     if (det.hidden) return;
@@ -4029,7 +4120,11 @@ const drawDetections = (detections) => {
     // v3.7.5: 颜色优先级 步骤 box_color > 副模型 display_color > OK/NG 兜底.
     // (v3.7.2 FIX-381-B 原先把副模型色放最高, 但客户在步骤列表配的颜色被覆盖,
     // 与 tooltip 文案"任何模式都生效"矛盾, 现翻转优先级让用户配置说了算.)
-    const color = pickDetColor(det, stepsConfig, boxColor, ngColor);
+    // v3.x per_item: color_by_coverage 开启时, item_label 框按覆盖态优先上色.
+    const piHit = (colorByCoverage || showItemNumbers) ? perItemHitFor(det, cb) : null;
+    const color = (colorByCoverage && piHit)
+      ? (piHit.covered ? covColorOn : covColorOff)
+      : pickDetColor(det, stepsConfig, boxColor, ngColor);
 
     // Render polygon mask if available (segmentation model)
     if (det.mask && Array.isArray(det.mask) && det.mask.length > 2) {
@@ -4061,6 +4156,10 @@ const drawDetections = (detections) => {
     
     // In tracking mode, show display_id (A1, B2, etc.) as the label
     let label = det.display_id || det.display_name || det.label || 'Unknown';
+    // v3.28+ per_item: 显示螺丝编号 → 同标签各自从 #1 起 (如 5N螺丝#3 / 7N螺丝#1)
+    if (showItemNumbers && piHit) {
+      label = `${det.label || ''}#${piHit.id}`;
+    }
     if (showConf && det.confidence) {
       label += ` ${(det.confidence * 100).toFixed(0)}%`;
     }
@@ -5698,8 +5797,11 @@ const triggerEvent = (eventId) => {
   // 显示提示框 — 多工位时用 showMultiToast 显示到对应工位
   if (event.show_notification) {
     const toastId = event.id === 'event_1' ? 'ok' : event.id === 'event_2' ? 'ng' : 'ok';
+    // 事件编号归一为数字(event_1→1 / event_2→2 / 其它→解析尾号)，供插件按身份分流提示框
+    const numEventId = event.id === 'event_1' ? 1 : event.id === 'event_2' ? 2
+      : (parseInt(String(event.id || '').replace(/\D/g, ''), 10) || null);
     if (channelCount.value > 1) {
-      showMultiToast(selectedChannel.value, toastId, event.name, event.custom_text);
+      showMultiToast(selectedChannel.value, toastId, event.name, event.custom_text, numEventId);
     } else {
       showToast(toastId === 'ok' ? 'ok' : 'ng', event.name, event.custom_text);
     }

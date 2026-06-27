@@ -110,6 +110,8 @@ SWAB_CONFIG = {
     "operator_absent_enabled": False,          # 判定3 开关（默认关，不误报）
     "operator_absent_event_id": 2,             # 判定3: 操作员离开超时 → 事件 id
     "operator_absent_timeout_sec": 600,        # 离开超时秒（detect7(1) 默认 600=10min）
+    "normal_count_event_id": 1,                # 正常计件 → 合格 OK（可改 NG 或 0 关闭）
+    "suppress_main_settle_alarm": True,        # 抑制主程序并行周期结算塔灯
     # —— detect6 逐帧计数参数（移动即计数 + 帧硬锁；阈值 = detect6 像素值 / 1728 宽）——
     "move_threshold": 0.0116,                  # 移动判定 = detect6 20px / 1728
     "lock_spatial": 0.0145,                    # 位置锁 = detect6 25px / 1728

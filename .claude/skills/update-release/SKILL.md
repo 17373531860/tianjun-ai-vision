@@ -113,11 +113,15 @@ electron/package.json → "version" 字段
 - ...
 ```
 
-## 第5步: 更新版本号
+## 第5步: 更新版本号（含 AGENTS.md — 不可漏！）
 
 更新以下文件中的版本号：
-- `electron/package.json` → `"version"` 字段
+- `electron/package.json` → `"version"` 字段（**版本号唯一权威源**）
 - `electron/splash.html` → 版本显示文本（如果存在）
+- `AGENTS.md` → 第一节"当前线上版本"那一格 + 文件尾"最后更新"日期
+
+> ⚠️ **发版版本对齐铁律（历史教训）**：曾经发版只 bump `package.json`、忘了同步 `AGENTS.md`，导致 AGENTS 长期落后好几个版本（线上 v3.27 而 AGENTS 还写 v3.23），误导后续 AI 拿到错误的"当前版本"。
+> **凡是写了版本号 / 版本日期的地方都必须在发版时一次性对齐**：`electron/package.json` / `electron/splash.html` / `AGENTS.md`（第一节 + 文件尾）/ 任何 skill 里标了"当前版本 / 适用版本"的位置。不允许只改一处。
 
 ## 第5.5步: 强制检查并更新 Skill（不可跳过！）
 
