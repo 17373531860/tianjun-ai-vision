@@ -1097,6 +1097,13 @@ def cleanup_on_exit():
         except Exception as _e:
             print(f"[Shutdown] 停止定时导出调度器异常（已忽略）: {_e}", flush=True)
 
+        # A2 停止出站健康探测调度器
+        try:
+            from backend.services.mes_health_probe import stop_health_probe
+            stop_health_probe()
+        except Exception as _e:
+            print(f"[Shutdown] 停止健康探测调度器异常（已忽略）: {_e}", flush=True)
+
         # v2.7.3: 兜底熄灭所有通道报警灯并断开串口，避免主进程被 KILL 时灯塔残留
         try:
             from backend.api.alarm import alarm_router
@@ -1275,6 +1282,20 @@ def _load_active_plugin_after_app():
 _load_active_plugin_after_app()
 
 
+# 入站接收路径别名: 启动时按配置动态注册根路径接收 URL (客户自定义 /warning/clear 等)。
+def _register_inbound_aliases_after_app():
+    if os.environ.get("BACKEND_SKIP_INIT"):
+        return
+    try:
+        from backend.api.mes_inbound import register_inbound_aliases
+        register_inbound_aliases(app)
+    except Exception as e:
+        print(f"[MES-Inbound] 入站路径别名注册失败（已隔离, 主程序继续）: {e}")
+
+
+_register_inbound_aliases_after_app()
+
+
 # v3.8.x: 定时导出 — APScheduler 后台线程在主进程启动时启动,
 # 在 lifespan shutdown 时停掉 (Electron 8 步关机会调 /shutdown/complete)。
 def _start_scheduled_export():
@@ -1290,6 +1311,20 @@ def _start_scheduled_export():
 
 
 _start_scheduled_export()
+
+
+# 出站 MES 连接主动健康探测调度器 (A2): 后台周期探活, 配置驱动 (默认全关零开销)。
+def _start_mes_health_probe():
+    if os.environ.get("BACKEND_SKIP_INIT"):
+        return
+    try:
+        from backend.services.mes_health_probe import start_health_probe
+        start_health_probe()
+    except Exception as e:
+        print(f"[MES-Health] 健康探测启动失败 (已隔离, 主程序继续): {e}")
+
+
+_start_mes_health_probe()
 
 
 @app.get("/")

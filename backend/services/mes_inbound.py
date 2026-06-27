@@ -35,6 +35,10 @@ from backend.core import debug_center
 
 CONFIG_KEY = "mes_inbound_config"
 
+# 完工信号默认"真值"词表 (complete_true_words 留空时使用)
+DEFAULT_TRUE_WORDS = frozenset((
+    "1", "true", "yes", "y", "t", "是", "完工", "complete", "completed"))
+
 # 默认配置: enabled 默认关 → 接收端点对未配置环境直接回"未启用", 零副作用
 DEFAULT_INBOUND_CONFIG = {
     "enabled": False,
@@ -66,7 +70,13 @@ DEFAULT_INBOUND_CONFIG = {
             "internal_error": 40006,
             "disabled": 40006,
             "unauthorized": 40007,
+            # 报警消除: 未找到对应在途报警 (川南 v4 约定 40007)
+            "alarm_not_found": 40007,
         },
+        # 各 code_key → 固定响应文案覆盖。空 = 用代码内置默认文案 (含动态内容如缺失字段名)。
+        # 键同 codes (success/bad_request/missing_field/duplicate/unknown_product/
+        #            activate_failed/internal_error/disabled/unauthorized/alarm_not_found)。
+        "messages": {},
     },
     # 入站来源校验 (默认关 = 内网无校验)。开后校验共享密钥头 / IP 白名单。
     "auth": {
@@ -87,6 +97,9 @@ DEFAULT_INBOUND_CONFIG = {
     # 关 = 仅接收登记不切项目。
     "switch_project_on_task": False,
     "product_project_map": {},     # 产品代号 → 检测项目 id (可填对照表)
+    # 对照表无匹配时, 兜底按"检测项目名 == 产品代号"自动匹配 (川南 v4: 命名完全一致)。
+    # 默认开 → 客户项目直接命名为产品代号即可零配置切换; 关 = 仅认 product_project_map。
+    "match_project_by_name": True,
     # 开工即建/激活工单 (order_no = task_no), 让检测周期绑到该任务、出站报文自带工单号。默认关。
     "create_work_order_on_task": False,
     # 工单绑定方式: project (默认, 绑当前激活项目) / channel (按 channel_field 绑到指定工位)。
@@ -101,6 +114,9 @@ DEFAULT_INBOUND_CONFIG = {
     # 完工信号字段 (已映射字段名, 如 is_complete): 该字段为真时按"完工"收工单, 不再当开工处理。
     # 空 = 不识别完工信号 (只处理开工)。
     "complete_field": "",
+    # 完工信号"真值"词表 (命中其一即视为完工)。空 = 用内置默认词表。
+    # 大小写不敏感; 布尔 true / 非零数字恒为真。
+    "complete_true_words": [],
     # 完工时用哪个映射字段的值去找工单 (默认 task_no), 配合 complete_match_column。
     "complete_match_field": "task_no",
     # 按工单的哪个列匹配: order_no (默认, 即 task_no=工单号) / product_code (完工报文只带产品码时, 取该产品最新在产单)。
@@ -114,11 +130,61 @@ DEFAULT_INBOUND_CONFIG = {
     "report_complete_on_supersede": True,
     # 完工回传的出站事件名 (出站连接 push_events 订阅它即推 task/complete)。
     "complete_event_type": "task_complete",
+    # 额外入站接收路径别名 (除内置 /api/v1/mes/inbound/* 外, 客户可在根路径自定义接收 URL)。
+    # 每项: {"path": "/warning/clear", "action": "alarm_clear", "methods": ["POST","GET"]}
+    # action ∈ task_start / alarm_clear / health。启动时动态注册; 改后即时生效 (增删改全支持)。
+    # path 必须以 / 开头, 不允许 /api/ 前缀 (防劫持主程序 API)。
+    "receive_paths": [],
     # 业务结果 → HTTP 状态码映射。默认空 = 一律 200 (业务码在响应体里)。
     # 有的客户要求失败回非 2xx, 如 {"missing_field": 400, "internal_error": 500}。
     # 键用 code_key: success/bad_request/missing_field/duplicate/unknown_product/
-    #               activate_failed/internal_error/disabled。
+    #               activate_failed/internal_error/disabled/alarm_not_found。
     "http_status_map": {},
+    # 产品代号未匹配到检测项目时的返回文案 (川南 v4 第 1 条要求固定话术)。
+    "unknown_product_message": "未查询到当前产品代号检测模型",
+    # ── 报警消除 / 在途报警台账 (默认惰性: alarm_event_name 为空时网关不登记任何台账) ──
+    # 出站推送时, 哪个事件名视为"报警事件" → 成功推出后登记一条在途报警 (空 = 不登记)。
+    # 支持单个 (如 "cycle_end") 或多个 (["cycle_end","box_timeout"] / "cycle_end,box_timeout")。
+    # 任何经网关分发的事件源都能当报警源: cycle_end / session_end / box_complete /
+    # box_timeout / weight_no_barcode / 插件主动触发 / 包装结算 …… 全配置驱动, 不改代码。
+    "alarm_event_name": "",
+    # 登记台账的结果过滤: 仅当事件结果在此列表内才登记 (默认只登 NG, 避免 OK 周期误当报警)。
+    # 空列表 = 不过滤 (任何结果都登记)。结果取自 context: cycle.result / overall_result / result。
+    "alarm_record_on_results": ["NG"],
+    # 出站报警事件的 context → 台账字段映射 (我们字段 ← context 点路径)。默认对齐 cycle_end 上下文:
+    # 任务号/产品号取自激活工单 (开工时入站建的), 工序工步/操作员取自工单留痕, 报警原因取 NG 原因。
+    "alarm_ledger_field_map": {
+        "task_no": "order.order_no",
+        "product_code": "order.product_code",
+        "step_code": "order.extra_data.inbound.step_code",
+        "operator": "order.extra_data.inbound.operator",
+        "warning_text": "cycle.ng_reason",
+    },
+    # 报警去重窗口 (秒): 同唯一键报警在该窗口内只登记一次。客户可配 (川南 v4 第 4 条)。0 = 不去重。
+    "alarm_dedup_sec": 5,
+    # 报警消除按哪几个字段匹配在途报警 (川南 v4: 任务号_产品号_工序工步_操作员)。
+    "alarm_clear_match_fields": ["task_no", "product_code", "step_code", "operator"],
+    # 监控页"在途报警持续横幅"的外观/行为配置 (前端 ExternalAlarmBanner 读取, 全可配)。
+    "alarm_banner": {
+        "enabled": True,            # 总开关: 关 → 监控页不显示横幅 (即使有在途报警)
+        "position": "top",          # top / bottom: 横幅停靠位置
+        "color": "#dc2626",         # 主色 (背景渐变基色), 客户可换品牌色
+        "poll_interval_sec": 3,     # 轮询在途报警间隔 (秒)
+        "show_task_no": True,       # 横幅每条是否展示 任务号
+        "show_product_code": True,  # ... 产品号
+        "show_step_code": True,     # ... 工序工步
+        "show_operator": True,      # ... 操作员
+        "show_time": True,          # ... 报警时间
+    },
+    # 监控页"开工后主界面任务信息条"的逐要素显示开关 (前端 Monitor 读取)。
+    # 默认全关 = 维持原界面, 信息条不追加任何标签; 客户按需逐项打开 (川南 v1 第 1 条:
+    # 开工后界面持续显示 任务号/产品代号/工序工步/操作员)。数据取活跃工单 extra_data.inbound。
+    "task_info_display": {
+        "show_task_no": False,       # 信息条追加"任务号"标签
+        "show_product_code": False,  # ... 产品代号
+        "show_step_code": False,     # ... 工序工步
+        "show_operator": False,      # ... 操作员
+    },
 }
 
 
@@ -258,6 +324,14 @@ class MESInbound:
         auth = dict(DEFAULT_INBOUND_CONFIG["auth"])
         auth.update((cfg or {}).get("auth") or {})
         out["auth"] = auth
+        # alarm_banner 深合并 (客户只改部分外观项也能保留其余默认)
+        banner = dict(DEFAULT_INBOUND_CONFIG["alarm_banner"])
+        banner.update((cfg or {}).get("alarm_banner") or {})
+        out["alarm_banner"] = banner
+        # task_info_display 深合并 (客户只开部分要素也能保留其余默认)
+        tinfo = dict(DEFAULT_INBOUND_CONFIG["task_info_display"])
+        tinfo.update((cfg or {}).get("task_info_display") or {})
+        out["task_info_display"] = tinfo
         return out
 
     # ============================================================
@@ -270,12 +344,17 @@ class MESInbound:
               "code_key": str, "mapped": {...}}。
         """
         if not cfg.get("enabled"):
+            debug_center.dbg("backend.mes", "入站开工被拒", "入站对接未启用 (enabled=false)")
             return self._result(cfg, "disabled", "入站对接未启用")
 
         mapped = self._map_fields(body, cfg.get("field_map") or {})
+        debug_center.dbg("backend.mes", "收到入站开工",
+                         f"task_no={mapped.get('task_no')} product={mapped.get('product_code')} "
+                         f"step={mapped.get('step_code')} operator={mapped.get('operator')}")
 
         missing = [f for f in (cfg.get("required_fields") or []) if not mapped.get(f)]
         if missing:
+            debug_center.dbg("backend.mes", "入站开工缺必填字段", f"缺: {', '.join(missing)}")
             return self._result(cfg, "missing_field",
                                 f"缺少必填字段: {', '.join(missing)}", mapped=mapped)
 
@@ -286,11 +365,48 @@ class MESInbound:
             return self._result(cfg, "internal_error", f"内部处理异常: {e}", mapped=mapped)
 
         if not ok:
+            debug_center.dbg("backend.mes", "入站开工处理失败",
+                             f"code={err_key} msg={msg} task_no={mapped.get('task_no')}")
             return self._result(cfg, err_key or "internal_error",
                                 msg or "处理失败", mapped=mapped)
 
+        debug_center.dbg("backend.mes", "入站开工完成", f"{msg} (task_no={mapped.get('task_no')})")
         success_msg = (cfg.get("response") or {}).get("success_message") or "OK"
         return self._result(cfg, "success", success_msg, mapped=mapped, success=True)
+
+    def handle_alarm_clear(self, db, body: dict, cfg: dict) -> dict:
+        """处理一条入站"报警消除命令": 按唯一键匹配在途报警并消除。
+
+        匹配字段由 alarm_clear_match_fields 配置 (默认四要素)。匹配不到 → alarm_not_found
+        (川南 v4 约定 40007)。复用 field_map 把外部字段映射成我们的字段。
+        """
+        if not cfg.get("enabled"):
+            return self._result(cfg, "disabled", "入站对接未启用")
+
+        mapped = self._map_fields(body, cfg.get("field_map") or {})
+
+        from backend.services.external_alarm import clear_alarms
+        match_fields = cfg.get("alarm_clear_match_fields") or None
+        debug_center.dbg("backend.mes", "收到入站报警消除",
+                         f"匹配字段={match_fields or '默认四要素'} "
+                         f"取值={ {k: mapped.get(k) for k in (match_fields or [])} if match_fields else mapped}")
+        try:
+            res = clear_alarms(db, mapped, match_fields=match_fields, clear_source="external")
+        except Exception as e:
+            debug_center.dbg("backend.mes", "报警消除处理异常", f"mapped={mapped} err={e}")
+            return self._result(cfg, "internal_error", f"内部处理异常: {e}", mapped=mapped)
+
+        if not res.get("matched"):
+            debug_center.dbg("backend.mes", "报警消除未命中", "按匹配字段未找到在途报警, 回 alarm_not_found")
+            return self._result(cfg, "alarm_not_found",
+                                "未找到对应报警记录，无法消除", mapped=mapped)
+
+        debug_center.dbg("backend.mes", "报警消除命中", f"已消除 {res.get('cleared', 0)} 条在途报警")
+
+        success_msg = (cfg.get("response") or {}).get("success_message") or "OK"
+        return self._result(cfg, "success",
+                            f"{success_msg} (已消除 {res.get('cleared', 0)} 条报警)",
+                            mapped=mapped, success=True)
 
     def _apply_task_action(self, db, mapped: dict, cfg: dict):
         """开工任务的实际处理 (编排)。返回 (ok, error_key, message)。
@@ -301,7 +417,8 @@ class MESInbound:
           - create_work_order_on_task: 建/激活工单 (order_no=task_no), 让周期绑该任务
         """
         complete_field = cfg.get("complete_field")
-        if complete_field and self._truthy(mapped.get(complete_field)):
+        if complete_field and self._truthy(mapped.get(complete_field),
+                                           cfg.get("complete_true_words")):
             return self._complete_work_order(db, mapped, cfg)
 
         # 拒绝重复任务 (可选): 同 task_no 已在产则回 duplicate
@@ -331,23 +448,38 @@ class MESInbound:
 
     def _switch_project(self, db, mapped: dict, cfg: dict):
         """按产品代号切检测项目, 复用 projects.activate_project_core (与手动激活一致)。"""
+        # 产品代号无匹配时的返回文案 (川南 v4 第 1 条要求固定话术)
+        unknown_msg = cfg.get("unknown_product_message") or "未查询到当前产品代号检测模型"
         product_code = str(mapped.get("product_code") or "").strip()
         if not product_code:
             return (False, "unknown_product", "缺少产品代号, 无法匹配检测项目")
 
+        from backend.models.models import Project
+
+        # 取项目: ① 先查手填对照表 (产品码→项目id); ② 兜底按"项目名==产品码"自动匹配
+        # (川南 v4 第 1 条: 产品代号与检测项目命名完全一致, 以推理软件命名为准匹配)。
         pmap = cfg.get("product_project_map") or {}
         project_id = pmap.get(product_code)
+        hit_by = "对照表" if project_id is not None else None
+        if project_id is None and cfg.get("match_project_by_name", True):
+            proj = (db.query(Project)
+                    .filter(Project.name == product_code)
+                    .order_by(Project.id.desc()).first())
+            if proj is not None:
+                project_id = proj.id
+                hit_by = "项目名匹配"
         if project_id is None:
-            return (False, "unknown_product",
-                    f"产品代号 {product_code} 未配置对应检测项目")
+            debug_center.dbg("backend.mes", "切项目未命中产品码",
+                             f"product={product_code} 对照表/同名项目均无 → 回 unknown_product")
+            return (False, "unknown_product", unknown_msg)
+        debug_center.dbg("backend.mes", "切项目命中",
+                         f"product={product_code} → 项目#{project_id} (经{hit_by})")
         try:
             project_id = int(project_id)
         except Exception:
-            return (False, "unknown_product",
-                    f"产品代号 {product_code} 映射的项目 id 非法: {project_id}")
+            return (False, "unknown_product", unknown_msg)
 
         # 已经是激活项目 → 跳过重载, 避免无谓切模型打断正在跑的产线
-        from backend.models.models import Project
         active = db.query(Project).filter(Project.is_active == True).first()
         if active and active.id == project_id:
             return (True, None, f"产品 {product_code} 对应项目#{project_id} 已激活")
@@ -358,8 +490,7 @@ class MESInbound:
         except Exception as e:
             # activate_project_core 项目不存在抛 HTTPException(404)
             if getattr(e, "status_code", None) == 404:
-                return (False, "unknown_product",
-                        f"产品 {product_code} 映射的检测项目#{project_id} 不存在")
+                return (False, "unknown_product", unknown_msg)
             return (False, "activate_failed", f"切换检测项目失败: {e}")
 
         return (True, None, f"已切换到产品 {product_code} 的检测项目#{project_id}")
@@ -402,6 +533,12 @@ class MESInbound:
                 order = svc.create_order(db, data)
             except Exception as e:
                 return (False, "internal_error", f"建工单失败: {e}")
+            debug_center.dbg("backend.mes", "建工单+四要素留痕",
+                             f"task_no={task_no} product={mapped.get('product_code')} "
+                             f"step={mapped.get('step_code')} operator={mapped.get('operator')} "
+                             f"绑定={data.get('binding_scope')}")
+        else:
+            debug_center.dbg("backend.mes", "复用已有工单", f"task_no={task_no} status={order.status}")
 
         self._ensure_in_progress(svc, db, order)
 
@@ -409,6 +546,9 @@ class MESInbound:
         superseded = 0
         if cfg.get("supersede_previous_task", False):
             superseded = self._supersede_previous_tasks(db, order, cfg)
+            if superseded:
+                debug_center.dbg("backend.mes", "最新开工顶替旧任务",
+                                 f"new={order.order_no} 顶替并回推完工 {superseded} 个")
 
         suffix = f", 顶替旧任务 {superseded} 个" if superseded else ""
         return (True, None, f"工单 {task_no} 已就绪{suffix}")
@@ -545,13 +685,19 @@ class MESInbound:
             return None
 
     @staticmethod
-    def _truthy(v) -> bool:
+    def _truthy(v, words=None) -> bool:
         if isinstance(v, bool):
             return v
         if v is None:
             return False
-        return str(v).strip().lower() in (
-            "1", "true", "yes", "y", "t", "是", "完工", "complete", "completed")
+        # 非零数字恒为真 (兼容 1/1.0)
+        if isinstance(v, (int, float)):
+            return v != 0
+        if words:
+            table = {str(w).strip().lower() for w in words if str(w).strip()}
+        else:
+            table = DEFAULT_TRUE_WORDS
+        return str(v).strip().lower() in table
 
     # ============================================================
     # 子步骤
@@ -614,6 +760,11 @@ class MESInbound:
             code = rc.get("success_code", 0)
         else:
             code = codes.get(code_key, codes.get("internal_error", 40006))
+
+        # 固定文案覆盖: 配了 messages[code_key] 就用客户文案 (替代代码内置默认)
+        override = (rc.get("messages") or {}).get(code_key)
+        if override is not None and str(override) != "":
+            message = str(override)
 
         template = rc.get("template")
         if template:

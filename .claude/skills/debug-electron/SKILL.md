@@ -375,3 +375,19 @@ powershell "Remove-Item -Recurse -Force '%APPDATA%\tianjun-ai-vision\Cache','%AP
 重启后看 `ESM 文本已拉到` 的数字变化 + 是否多出新槽 `slot registered`，即可确认缓存被清、读到真文件。
 
 > **排查口诀**：插件「换包不生效 / 升级看不到新功能」且开发机正常 → 先怀疑缓存（清 Electron 缓存验证），**别**先怀疑用户装错或文件锁。
+
+---
+
+## 后端崩溃自愈看门狗（v3.29.0）
+
+`electron/backend-manager.js` 内置看门狗：后端进程**就绪后**（`_everReady=true`）意外退出（非主动 `stop()`）会自动拉起。
+
+- **退避 + 限流**：`_restartBackoffMs=[1000,2000,4000]`（按窗内第几次取，封顶 4s）；`restartWindowMs=60000` 窗内最多 `maxRestarts=3` 次，超限判定崩溃死循环 → `emit('restart-failed')`，不再自动拉起
+- **只在就绪后崩溃才接管**：初次启动期（未就绪过）的退出仍走原"启动失败"流程，不在此重启
+- **事件链**：`restarting({attempt,delay})` → `restarted({attempt})` | `restart-failed({code,signal})`；`main.js` 转成 IPC 发渲染进程，`preload.js` 暴露 `onBackendRecovered`，`App.vue` 收到弹常驻 toast（恢复后是全新后端进程、不在检测态，需手动重新「开始」）
+
+**排查**：后端反复重启又起不来 → 看 Electron 主进程 console（backend.log）的看门狗 `console.error`，确认是真崩溃死循环还是端口占用/依赖缺失（崩溃根因通常在 python 后端日志，看门狗只兜重启）。
+
+## 开机自启（v3.29.0，安装器可选）
+
+`electron/build/installer.iss` 新增「开机自动启动」可选项（写系统启动项），**默认不勾**。勾了之后开机自动起软件；配合系统设置「开机自动恢复检测」即"通电→起软件→自动开检测"。客户反馈"开机没自动起"→ 先确认安装时是否勾选 + 启动项是否被安全软件拦。

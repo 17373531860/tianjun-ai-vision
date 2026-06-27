@@ -109,6 +109,108 @@ def put_display(payload: DisplayPayload,
     return {"status": "ok", "updated": updated}
 
 
+# ==================== B3 前端管理面板轮询间隔 (毫秒, 当前值作默认) ====================
+# 键 polling.<panel>; 客户可调各管理面板数据刷新频率。核心检测循环/时钟不在此列。
+POLLING_DEFAULTS = {
+    "cluster_boxes": 5000,
+    "cluster_slaves": 5000,
+    "cluster_heartbeat": 10000,
+    "gateway_health": 15000,
+    "order_list": 10000,
+    "scanner_status": 5000,
+    "external_device": 5000,
+    "wmax_status": 5000,
+}
+_POLLING_MIN_MS = 500   # 下限保护: 太频繁会压垮后端
+
+
+@router.get("/polling")
+def get_polling(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """读各管理面板轮询间隔(ms), 缺省回落默认。前端启动时加载一次。"""
+    out = dict(POLLING_DEFAULTS)
+    rows = db.query(SystemConfig).filter(SystemConfig.key.like("polling.%")).all()
+    for r in rows:
+        k = r.key.split(".", 1)[1] if "." in r.key else r.key
+        if k in out:
+            try:
+                v = int(float(r.value))
+                if v >= _POLLING_MIN_MS:
+                    out[k] = v
+            except Exception:
+                pass
+    return out
+
+
+@router.put("/polling",
+            dependencies=[Depends(require_perm("settings.edit"))])
+def put_polling(payload: dict, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """更新管理面板轮询间隔(ms)。仅认白名单键, 低于下限或非法值忽略。"""
+    updated = []
+    for k, v in (payload or {}).items():
+        if k not in POLLING_DEFAULTS:
+            continue
+        try:
+            iv = int(float(v))
+        except Exception:
+            continue
+        if iv < _POLLING_MIN_MS:
+            continue
+        _set_kv(db, f"polling.{k}", iv, desc="frontend panel polling interval(ms)")
+        updated.append(k)
+    db.commit()
+    return {"status": "ok", "updated": updated, "config": get_polling(db)}
+
+
+# ==================== 日志显示条数可配 ====================
+# 键 loglimit.<panel>; 客户可调各管理面板「最近日志」一次拉取/显示的条数, 不写死 20/30/50。
+LOG_LIMIT_DEFAULTS = {
+    "scanner": 30,
+    "external_device": 30,
+    "inbound": 50,
+    "gateway": 50,
+    "cluster": 20,
+}
+_LOG_LIMIT_MIN = 1
+_LOG_LIMIT_MAX = 500
+
+
+@router.get("/log-limits")
+def get_log_limits(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """读各管理面板日志显示条数, 缺省回落默认。前端启动时加载一次。"""
+    out = dict(LOG_LIMIT_DEFAULTS)
+    rows = db.query(SystemConfig).filter(SystemConfig.key.like("loglimit.%")).all()
+    for r in rows:
+        k = r.key.split(".", 1)[1] if "." in r.key else r.key
+        if k in out:
+            try:
+                v = int(float(r.value))
+                if _LOG_LIMIT_MIN <= v <= _LOG_LIMIT_MAX:
+                    out[k] = v
+            except Exception:
+                pass
+    return out
+
+
+@router.put("/log-limits",
+            dependencies=[Depends(require_perm("settings.edit"))])
+def put_log_limits(payload: dict, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """更新管理面板日志显示条数。仅认白名单键, 越界值忽略。"""
+    updated = []
+    for k, v in (payload or {}).items():
+        if k not in LOG_LIMIT_DEFAULTS:
+            continue
+        try:
+            iv = int(float(v))
+        except Exception:
+            continue
+        if not (_LOG_LIMIT_MIN <= iv <= _LOG_LIMIT_MAX):
+            continue
+        _set_kv(db, f"loglimit.{k}", iv, desc="frontend panel log display count")
+        updated.append(k)
+    db.commit()
+    return {"status": "ok", "updated": updated, "config": get_log_limits(db)}
+
+
 # ==================== RFC12 展会: 设备/系统实时状态 ====================
 # 给"设备状态"高科技面板提供真实数据 (GPU 温度/利用率/显存 + CPU/内存/磁盘).
 # 全部 try/except 降级: 缺 psutil / pynvml / cuda 不可用时返回 None, 不报错.

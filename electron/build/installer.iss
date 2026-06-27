@@ -31,12 +31,19 @@ DisableProgramGroupPage=yes
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Tasks]
+; 开机自启 (可选, 默认不勾选). 工控机/无人值守场景勾上, 普通安装保持原样不污染.
+Name: "autostart"; Description: "Auto-start on Windows boot (recommended for industrial PC)"; GroupDescription: "Startup options:"; Flags: unchecked
+
 [Files]
 Source: "..\dist\win-unpacked\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\TianJun AI Vision"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\TianJun AI Vision"; Filename: "{app}\{#MyAppExeName}"
+; 勾选"开机自启"时, 在全体用户的启动文件夹放快捷方式 (装机为管理员权限, 可写 commonstartup).
+; 工控机自动登录单账号场景: 登录后即拉起. 卸载随安装目录清理.
+Name: "{commonstartup}\TianJun AI Vision"; Filename: "{app}\{#MyAppExeName}"; Tasks: autostart
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch application"; Flags: nowait postinstall skipifsilent

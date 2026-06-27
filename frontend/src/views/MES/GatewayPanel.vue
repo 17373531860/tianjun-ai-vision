@@ -68,11 +68,22 @@
           {{ row.last_sync_at ? formatTime(row.last_sync_at) : '-' }}
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="260" fixed="right">
+      <el-table-column label="健康" width="120">
+        <template #default="{ row }">
+          <el-tooltip v-if="healthStatus[row.id]" :content="healthTooltip(row.id)" placement="top">
+            <el-tag size="small" :type="healthStatus[row.id].ok ? 'success' : 'danger'">
+              {{ healthStatus[row.id].ok ? '在线' : '离线' }}
+            </el-tag>
+          </el-tooltip>
+          <span v-else class="text-xs text-gray-500">未探测</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="320" fixed="right">
         <template #default="{ row }">
           <div class="flex gap-1">
             <el-button size="small" @click="openEdit(row)">编辑</el-button>
             <el-button size="small" type="primary" @click="doTest(row)" :loading="row._testing">测试</el-button>
+            <el-button size="small" @click="doProbe(row)" :loading="row._probing">探测</el-button>
             <el-button size="small" type="info" @click="openLogs(row)">日志</el-button>
             <el-popconfirm title="确认删除?" @confirm="doDelete(row)">
               <template #reference>
@@ -319,12 +330,11 @@
           <span v-else class="text-xs text-gray-400">单工位模式，无需绑定</span>
         </el-form-item>
         <el-form-item label="推送时机">
-          <el-checkbox-group v-model="form.push_events">
-            <el-checkbox value="cycle_end" label="检测周期结束" />
-            <el-checkbox value="session_end" label="检测会话结束" />
-            <el-checkbox value="box_complete" label="集群汇总完成" />
-            <el-checkbox value="box_timeout" label="集群超时推送" />
-          </el-checkbox-group>
+          <el-select v-model="form.push_events" multiple filterable allow-create default-first-option
+            placeholder="订阅哪些事件触发推送 (可输入插件自定义事件名/别名)" class="w-full">
+            <el-option v-for="e in eventOptions" :key="e.value" :label="e.label" :value="e.value" />
+          </el-select>
+          <span class="text-xs text-gray-500 ml-1">除下拉内置事件外，可直接输入任意事件名（如插件主动触发的自定义事件、完工回传 task_complete、称重无码 weight_no_barcode、包装结算 packaging_complete）</span>
         </el-form-item>
         <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="按结果过滤">
           <el-checkbox-group v-model="pushOnResult">
@@ -333,12 +343,104 @@
           </el-checkbox-group>
           <div class="text-xs text-gray-500">两项都选 = 全推; 只选 NG = 仅不合格才推, 适合客户只关心不良的场景</div>
         </el-form-item>
+        <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="附带截图">
+          <el-switch v-model="attachSnapshot" />
+          <span class="text-xs text-gray-500 ml-2">
+            开 → 推送时抓该工位当前画面, 模板里用 <code>{snapshot.image_base64}</code> 引用 (纯 Base64, 报警上报必开)
+          </span>
+        </el-form-item>
+        <el-form-item v-if="form.adapter_type !== 'modbus_rtu' && attachSnapshot" label="截图上限(字节)">
+          <el-input-number v-model="snapshotMaxBytes" :min="0" :step="100000" class="w-44" />
+          <span class="text-xs text-gray-500 ml-2">超限自动逐级降质/缩边压到限内再传 (避免对方 413)；0 = 不限</span>
+        </el-form-item>
+        <el-form-item v-if="form.adapter_type !== 'modbus_rtu' && attachSnapshot" label="图像质量">
+          <el-input-number v-model="snapshotQuality" :min="0" :max="100" :step="5" class="w-36" />
+          <span class="text-xs text-gray-500 ml-2">1~100 直接控制 JPEG 质量；0 = 用源默认(约70)不重编码</span>
+        </el-form-item>
+        <el-form-item v-if="form.adapter_type !== 'modbus_rtu' && attachSnapshot" label="高级压缩参数">
+          <el-collapse class="w-full">
+            <el-collapse-item title="超限压缩阶梯/缩放 (默认沿用历史值，一般无需改)">
+              <div class="flex flex-col gap-2">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-gray-400 w-28">降质阶梯</span>
+                  <el-input v-model="snapshotQualityLadder" placeholder="如 60,45,30,20,12" class="w-60" />
+                  <span class="text-xs text-gray-500">原尺寸逐级尝试的质量(逗号分隔)</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-gray-400 w-28">缩放比例</span>
+                  <el-input-number v-model="snapshotScaleFactor" :min="0.1" :max="0.95" :step="0.05" :precision="2" class="w-32" />
+                  <span class="text-xs text-gray-400 w-20">缩放轮数</span>
+                  <el-input-number v-model="snapshotScaleRounds" :min="0" :max="10" :step="1" class="w-28" />
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-gray-400 w-28">最小边长</span>
+                  <el-input-number v-model="snapshotMinEdge" :min="1" :max="4096" :step="8" class="w-32" />
+                  <span class="text-xs text-gray-400 w-20">缩图质量</span>
+                  <el-input-number v-model="snapshotScaledQuality" :min="1" :max="100" :step="5" class="w-28" />
+                </div>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+        </el-form-item>
+        <el-form-item v-if="form.adapter_type !== 'modbus_rtu' && attachSnapshot" label="带 dataURI 前缀">
+          <el-switch v-model="snapshotDataUri" />
+          <span class="text-xs text-gray-500 ml-2">
+            额外提供 <code>{snapshot.image_data_uri}</code>(带 data:image/jpeg;base64, 前缀)；川南要求纯 Base64, 保持关
+          </span>
+        </el-form-item>
         <el-form-item label="重试次数">
           <el-input-number v-model="form.retry_count" :min="0" :precision="0" />
         </el-form-item>
         <el-form-item label="重试间隔(秒)">
           <el-input-number v-model="form.retry_interval_sec" :min="0" :precision="2" />
         </el-form-item>
+        <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="重试退避">
+          <el-radio-group v-model="form.retry_backoff">
+            <el-radio value="fixed">固定间隔</el-radio>
+            <el-radio value="exponential">指数退避(×2)</el-radio>
+          </el-radio-group>
+          <span class="text-xs text-gray-500 ml-2">指数退避：间隔×2 递增（间隔设 1 即 1→2→4 秒，川南 §5.1）</span>
+        </el-form-item>
+        <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="4xx 是否重试">
+          <el-switch v-model="form.retry_on_4xx" />
+          <span class="text-xs text-gray-500 ml-2">关 = 仅对 5xx / 网络超时重试，4xx(客户端错误)不重试（川南 §5.1）</span>
+        </el-form-item>
+        <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="请求超时(秒)">
+          <el-input-number v-model="requestTimeout" :min="1" :precision="1" class="w-32" />
+          <span class="text-xs text-gray-500 ml-2">单值总超时；仅当下方连接/读取留空时生效（默认 30s）</span>
+        </el-form-item>
+        <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="连接/读取超时(秒)">
+          <el-input-number v-model="connectTimeout" :min="0" :precision="1" placeholder="连接" class="w-32" />
+          <span class="mx-1 text-gray-400">/</span>
+          <el-input-number v-model="readTimeout" :min="0" :precision="1" placeholder="读取" class="w-32" />
+          <span class="text-xs text-gray-500 ml-2">填了就用 (连接,读取) 分离超时，覆盖上面的单值；川南 §5.1 连接 5 / 读取 10(含图建议 30)</span>
+        </el-form-item>
+
+        <!-- 主动健康探测 (A2) -->
+        <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="主动健康探测">
+          <el-switch v-model="healthProbeEnabled" />
+          <span class="text-xs text-gray-500 ml-2">开 → 后台周期探活对端，列表显示在线/离线徽标（默认关，零开销）</span>
+        </el-form-item>
+        <template v-if="form.adapter_type !== 'modbus_rtu' && healthProbeEnabled">
+          <el-form-item label="探测间隔(秒)">
+            <el-input-number v-model="healthProbeInterval" :min="5" :step="5" class="w-32" />
+            <span class="text-xs text-gray-400 ml-2">最小 5 秒</span>
+          </el-form-item>
+          <el-form-item label="探测地址">
+            <el-input v-model="healthProbeUrl" placeholder="留空=用推送地址；如 http://mes/health" class="w-full" />
+          </el-form-item>
+          <el-form-item label="探测方法/超时">
+            <el-select v-model="healthProbeMethod" class="w-28">
+              <el-option label="GET" value="GET" />
+              <el-option label="POST" value="POST" />
+              <el-option label="HEAD" value="HEAD" />
+            </el-select>
+            <span class="text-xs text-gray-400 mx-2">超时(秒)</span>
+            <el-input-number v-model="healthProbeTimeout" :min="1" :step="1" class="w-28" />
+            <span class="text-xs text-gray-400 mx-2">期望状态码</span>
+            <el-input-number v-model="healthProbeExpect" :min="0" :step="1" placeholder="空=2xx" class="w-32" />
+          </el-form-item>
+        </template>
 
         <!-- REST/Form-Data 专属配置 -->
         <template v-if="form.adapter_type !== 'modbus_rtu'">
@@ -504,7 +606,7 @@
       <div class="flex justify-center mt-3">
         <el-pagination
           v-model:current-page="logPage"
-          :page-size="20"
+          :page-size="pollingStore.logLimit('gateway', 20)"
           :total="logTotal"
           layout="prev, pager, next"
           small
@@ -526,21 +628,38 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Close } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
   getConnections, createConnection, updateConnection, deleteConnection,
-  testConnection, getGatewayLogs
+  testConnection, getGatewayLogs, getHealthStatus, probeNow
 } from '@/api/gateway'
 import { dbg, dbgErr } from '@/utils/debug'
+import { usePollingStore } from '@/store/usePollingStore'
+
+const pollingStore = usePollingStore()
 
 const eventLabels = {
   cycle_end: '周期结束',
   session_end: '会话结束',
   box_complete: '集群汇总',
   box_timeout: '集群超时',
+  weight_no_barcode: '称重无码',
+  packaging_complete: '包装结算完成',
+  task_complete: '工单完工回传',
 }
+
+// 内置事件下拉项 (allow-create 仍可输入插件自定义事件名/别名)
+const eventOptions = [
+  { value: 'cycle_end', label: 'cycle_end (检测周期结束)' },
+  { value: 'session_end', label: 'session_end (检测会话结束)' },
+  { value: 'box_complete', label: 'box_complete (集群汇总完成)' },
+  { value: 'box_timeout', label: 'box_timeout (集群超时推送)' },
+  { value: 'weight_no_barcode', label: 'weight_no_barcode (称重有重无码)' },
+  { value: 'packaging_complete', label: 'packaging_complete (包装结算完成)' },
+  { value: 'task_complete', label: 'task_complete (完工回传)' },
+]
 
 const connections = ref([])
 const showEditor = ref(false)
@@ -563,6 +682,8 @@ const form = reactive({
   push_events: [],
   retry_count: 3,
   retry_interval_sec: 5,
+  retry_backoff: 'fixed',
+  retry_on_4xx: true,
   bound_channels: [],
 })
 
@@ -595,6 +716,26 @@ const authApiKeyValue = ref('')
 const authCustomHeaders = ref([])
 const extraHeaders = ref([])
 const pushOnResult = ref(['OK', 'NG'])
+const attachSnapshot = ref(false)
+const snapshotMaxBytes = ref(0)
+const snapshotDataUri = ref(false)
+const snapshotQuality = ref(0)            // 0=源默认不重编码; 1~100=直接控制质量
+const snapshotQualityLadder = ref('')     // 逗号分隔降质阶梯, 空=后端默认
+const snapshotScaleFactor = ref(0.75)
+const snapshotScaleRounds = ref(4)
+const snapshotMinEdge = ref(32)
+const snapshotScaledQuality = ref(35)
+// 出站主动健康探测 (A2)
+const healthProbeEnabled = ref(false)
+const healthProbeInterval = ref(60)
+const healthProbeUrl = ref('')
+const healthProbeMethod = ref('GET')
+const healthProbeTimeout = ref(5)
+const healthProbeExpect = ref(null)
+const healthStatus = ref({})              // {conn_id: {ok, checked_at, latency_ms, ...}}
+const requestTimeout = ref(30)     // 单值总超时(秒), 仅连接/读取留空时生效
+const connectTimeout = ref(null)   // 连接超时(秒), null=用默认单值超时
+const readTimeout = ref(null)      // 读取超时(秒), null=用默认
 const labelMappings = ref([])
 const labelMappingMode = ref('replace')
 const testEventType = ref('')
@@ -635,6 +776,51 @@ const PRESET_TEMPLATES = {
       duration: '{cycle.duration}',
     },
   },
+  cycle_end_chuannan_alarm: {
+    label: 'cycle_end · 川南报警上报 /warning/report (含截图)',
+    event: 'cycle_end',
+    pushOnResult: ['NG'],
+    attachSnapshot: true,
+    successField: 'code',
+    successExpect: 0,
+    retryCount: 3,
+    retryInterval: 1,
+    retryBackoff: 'exponential',
+    retryOn4xx: false,
+    connectTimeout: 5,
+    readTimeout: 30,
+    template: {
+      TaskNo: '{order.order_no}',
+      ProductCode: '{order.product_code}',
+      StepCode: '{order.extra_data.inbound.step_code}',
+      Operator: '{order.extra_data.inbound.operator}',
+      WarningText: '{cycle.ng_reason}',
+      Image: '{snapshot.image_base64}',
+      BeginTime: '{timestamp}',
+    },
+  },
+  cycle_end_chuannan_complete: {
+    label: 'cycle_end · 川南完工上报 /task/complete',
+    event: 'cycle_end',
+    pushOnResult: ['OK', 'NG'],   // 每件装配完成都上报完工 (不分良/不良)
+    attachSnapshot: false,
+    successField: 'code',
+    successExpect: 0,
+    retryCount: 3,
+    retryInterval: 1,
+    retryBackoff: 'exponential',
+    retryOn4xx: false,
+    connectTimeout: 5,
+    readTimeout: 10,
+    template: {
+      TaskNo: '{order.order_no}',
+      ProductCode: '{order.product_code}',
+      StepCode: '{order.extra_data.inbound.step_code}',
+      Operator: '{order.extra_data.inbound.operator}',
+      IsComplete: true,
+      BeginTime: '{timestamp}',
+    },
+  },
   cycle_end_with_steps: {
     label: 'cycle_end · 含步骤明细',
     event: 'cycle_end',
@@ -663,6 +849,16 @@ function applyPresetTemplate() {
   if (preset.event && !form.push_events.includes(preset.event)) {
     form.push_events = [...form.push_events, preset.event]
   }
+  if (Array.isArray(preset.pushOnResult)) pushOnResult.value = [...preset.pushOnResult]
+  if (typeof preset.attachSnapshot === 'boolean') attachSnapshot.value = preset.attachSnapshot
+  if (preset.successField) successField.value = preset.successField
+  if (preset.successExpect !== undefined) successExpect.value = preset.successExpect
+  if (preset.retryCount !== undefined) form.retry_count = preset.retryCount
+  if (preset.retryInterval !== undefined) form.retry_interval_sec = preset.retryInterval
+  if (preset.retryBackoff) form.retry_backoff = preset.retryBackoff
+  if (typeof preset.retryOn4xx === 'boolean') form.retry_on_4xx = preset.retryOn4xx
+  if (preset.connectTimeout !== undefined) connectTimeout.value = preset.connectTimeout
+  if (preset.readTimeout !== undefined) readTimeout.value = preset.readTimeout
   templateError.value = ''
   ElMessage.success(`已填入模板: ${preset.label}`)
   presetTemplateKey.value = ''
@@ -722,10 +918,42 @@ function formatJSON(v) {
 async function loadConnections() {
   try {
     const { data } = await getConnections()
-    connections.value = (data || []).map(c => ({ ...c, _testing: false }))
+    connections.value = (data || []).map(c => ({ ...c, _testing: false, _probing: false }))
   } catch (e) {
     dbgErr('mes.gateway', '加载连接列表', e)
     ElMessage.error('加载连接列表失败')
+  }
+}
+
+async function loadHealthStatus() {
+  try {
+    const { data } = await getHealthStatus()
+    healthStatus.value = data || {}
+  } catch (e) {
+    dbgErr('mes.gateway', '加载健康状态', e)
+  }
+}
+
+function healthTooltip(id) {
+  const s = healthStatus.value[id]
+  if (!s) return ''
+  const parts = [`检查时间: ${formatTime(s.checked_at)}`, `延迟: ${s.latency_ms}ms`]
+  if (s.status_code) parts.push(`状态码: ${s.status_code}`)
+  if (s.error) parts.push(`错误: ${s.error}`)
+  return parts.join('  ')
+}
+
+async function doProbe(row) {
+  row._probing = true
+  try {
+    const { data } = await probeNow(row.id)
+    healthStatus.value = { ...healthStatus.value, [row.id]: data }
+    ElMessage[data.ok ? 'success' : 'warning'](data.ok ? '探测在线' : `探测离线: ${data.error || ''}`)
+  } catch (e) {
+    dbgErr('mes.gateway', '立即探测', e)
+    ElMessage.error('探测请求失败')
+  } finally {
+    row._probing = false
   }
 }
 
@@ -737,12 +965,17 @@ function openCreate() {
   form.push_events = []
   form.retry_count = 3
   form.retry_interval_sec = 5
+  form.retry_backoff = 'fixed'
+  form.retry_on_4xx = true
   form.bound_channels = []
   configUrl.value = ''
   configMethod.value = 'POST'
   configFormKey.value = 'param'
   templateJson.value = '{}'
   templateError.value = ''
+  requestTimeout.value = 30
+  connectTimeout.value = null
+  readTimeout.value = null
   successField.value = 'success'
   successExpect.value = true
   staticFields.value = []
@@ -756,6 +989,21 @@ function openCreate() {
   authCustomHeaders.value = []
   extraHeaders.value = []
   pushOnResult.value = ['OK', 'NG']
+  attachSnapshot.value = false
+  snapshotMaxBytes.value = 0
+  snapshotDataUri.value = false
+  snapshotQuality.value = 0
+  snapshotQualityLadder.value = ''
+  snapshotScaleFactor.value = 0.75
+  snapshotScaleRounds.value = 4
+  snapshotMinEdge.value = 32
+  snapshotScaledQuality.value = 35
+  healthProbeEnabled.value = false
+  healthProbeInterval.value = 60
+  healthProbeUrl.value = ''
+  healthProbeMethod.value = 'GET'
+  healthProbeTimeout.value = 5
+  healthProbeExpect.value = null
   labelMappings.value = []
   labelMappingMode.value = 'replace'
   modbusTransport.value = 'rtu'
@@ -789,6 +1037,11 @@ function openEdit(row) {
   form.bound_channels = [...(row.bound_channels || [])]
 
   const cfg = row.config || {}
+  form.retry_backoff = cfg.retry_backoff || 'fixed'
+  form.retry_on_4xx = cfg.retry_on_4xx !== false
+  requestTimeout.value = cfg.timeout ?? 30
+  connectTimeout.value = cfg.connect_timeout ?? null
+  readTimeout.value = cfg.read_timeout ?? null
   configUrl.value = cfg.url || ''
   configMethod.value = cfg.method || 'POST'
   configFormKey.value = cfg.form_key || 'param'
@@ -822,6 +1075,23 @@ function openEdit(row) {
     ? [...cfg.push_on_result]
     : ['OK', 'NG']
 
+  attachSnapshot.value = !!cfg.attach_snapshot
+  snapshotMaxBytes.value = cfg.snapshot_max_bytes || 0
+  snapshotDataUri.value = !!cfg.snapshot_data_uri
+  snapshotQuality.value = cfg.snapshot_quality || 0
+  snapshotQualityLadder.value = Array.isArray(cfg.snapshot_quality_ladder)
+    ? cfg.snapshot_quality_ladder.join(',') : ''
+  snapshotScaleFactor.value = cfg.snapshot_scale_factor != null ? cfg.snapshot_scale_factor : 0.75
+  snapshotScaleRounds.value = cfg.snapshot_scale_rounds != null ? cfg.snapshot_scale_rounds : 4
+  snapshotMinEdge.value = cfg.snapshot_min_edge != null ? cfg.snapshot_min_edge : 32
+  snapshotScaledQuality.value = cfg.snapshot_scaled_quality != null ? cfg.snapshot_scaled_quality : 35
+  healthProbeEnabled.value = !!cfg.health_probe_enabled
+  healthProbeInterval.value = cfg.health_probe_interval_sec || 60
+  healthProbeUrl.value = cfg.health_probe_url || ''
+  healthProbeMethod.value = cfg.health_probe_method || 'GET'
+  healthProbeTimeout.value = cfg.health_probe_timeout_sec || 5
+  healthProbeExpect.value = cfg.health_probe_expect_status != null ? cfg.health_probe_expect_status : null
+
   const lm = cfg.label_mapping || {}
   labelMappings.value = Object.entries(lm).map(([key, value]) => ({ key, value: String(value) }))
   labelMappingMode.value = cfg.label_mapping_mode || 'replace'
@@ -849,6 +1119,15 @@ function openEdit(row) {
   }
 
   showEditor.value = true
+}
+
+// 解析"60,45,30"为合法质量数组(1~100); 空/全非法返回 undefined(后端用默认阶梯)
+function parseQualityLadder(raw) {
+  if (!raw || !String(raw).trim()) return undefined
+  const arr = String(raw).split(',')
+    .map(s => parseInt(String(s).trim(), 10))
+    .filter(n => Number.isInteger(n) && n >= 1 && n <= 100)
+  return arr.length ? arr : undefined
 }
 
 function buildConfig() {
@@ -938,6 +1217,26 @@ function buildConfig() {
     push_on_result: pushOnResult.value.length && pushOnResult.value.length < 2
       ? [...pushOnResult.value]
       : null,
+    attach_snapshot: attachSnapshot.value,
+    snapshot_max_bytes: attachSnapshot.value ? (snapshotMaxBytes.value || 0) : 0,
+    snapshot_data_uri: attachSnapshot.value ? snapshotDataUri.value : false,
+    snapshot_quality: attachSnapshot.value && snapshotQuality.value ? snapshotQuality.value : undefined,
+    snapshot_quality_ladder: attachSnapshot.value ? parseQualityLadder(snapshotQualityLadder.value) : undefined,
+    snapshot_scale_factor: attachSnapshot.value ? snapshotScaleFactor.value : undefined,
+    snapshot_scale_rounds: attachSnapshot.value ? snapshotScaleRounds.value : undefined,
+    snapshot_min_edge: attachSnapshot.value ? snapshotMinEdge.value : undefined,
+    snapshot_scaled_quality: attachSnapshot.value ? snapshotScaledQuality.value : undefined,
+    health_probe_enabled: healthProbeEnabled.value,
+    health_probe_interval_sec: healthProbeEnabled.value ? (healthProbeInterval.value || 60) : undefined,
+    health_probe_url: healthProbeEnabled.value && healthProbeUrl.value ? healthProbeUrl.value : undefined,
+    health_probe_method: healthProbeEnabled.value ? (healthProbeMethod.value || 'GET') : undefined,
+    health_probe_timeout_sec: healthProbeEnabled.value ? (healthProbeTimeout.value || 5) : undefined,
+    health_probe_expect_status: healthProbeEnabled.value && healthProbeExpect.value ? healthProbeExpect.value : undefined,
+    retry_backoff: form.retry_backoff || 'fixed',
+    retry_on_4xx: form.retry_on_4xx !== false,
+    timeout: requestTimeout.value || 30,
+    connect_timeout: connectTimeout.value != null ? connectTimeout.value : undefined,
+    read_timeout: readTimeout.value != null ? readTimeout.value : undefined,
     label_mapping: Object.keys(label_mapping).length ? label_mapping : null,
     label_mapping_mode: labelMappingMode.value,
     static_fields: sf,
@@ -1049,9 +1348,10 @@ function openAllLogs() {
 
 async function loadLogs() {
   try {
+    const pageSize = pollingStore.logLimit('gateway', 20)
     const params = {
-      skip: (logPage.value - 1) * 20,
-      limit: 20,
+      skip: (logPage.value - 1) * pageSize,
+      limit: pageSize,
     }
     if (logConnId.value) params.connection_id = logConnId.value
     if (logFilter.success !== null && logFilter.success !== '') {
@@ -1070,9 +1370,17 @@ function showLogDetail(row) {
   showDetail.value = true
 }
 
-onMounted(() => {
+let _healthTimer = null
+onMounted(async () => {
+  await pollingStore.load()
   loadConnections()
   loadChannelCount()
+  loadHealthStatus()
+  _healthTimer = setInterval(loadHealthStatus, pollingStore.get('gateway_health', 15000))
+})
+
+onBeforeUnmount(() => {
+  if (_healthTimer) { clearInterval(_healthTimer); _healthTimer = null }
 })
 </script>
 

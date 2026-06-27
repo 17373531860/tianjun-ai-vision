@@ -47,12 +47,22 @@ class BackendManager extends EventEmitter {
       // v3.23.x: 加深启动就绪门槛 (默认关). 开 → 就绪探针改用深度探针
       // (/system/startup-ready, 真查数据库+项目), 确保放主窗进来时一切就绪。
       deepReadyGate: options.deepReadyGate === true,
+      // v3.29.0 看门狗: 后端进程意外退出时自动拉起 (限流兜底, 防崩溃死循环)。
+      // 仅在"已成功就绪过一次"后才生效; 初次启动失败仍走原启动失败流程。
+      maxRestarts: options.maxRestarts ?? 3,            // 限流时间窗内最大自动重启次数
+      restartWindowMs: options.restartWindowMs ?? 60000, // 限流时间窗 (ms)
     };
     
     this.process = null;
     this.isRunning = false;
     this.healthCheckTimer = null;
     this.startTime = null;
+    // v3.29.0 看门狗状态
+    this._intentionalStop = false;        // stop() 主动停止标志, 置位时看门狗让路
+    this._everReady = false;              // 是否成功就绪过 (只有就绪过后崩溃才自动拉起)
+    this._restartTimestamps = [];         // 限流时间窗内的重启时刻
+    this._restartBackoffMs = [1000, 2000, 4000];  // 退避间隔 (按窗内第几次取, 封顶 4s)
+    this._restartTimer = null;
     // v3.23.x: 加深门槛降级保护 — uvicorn 已起(浅探 200)但深探(查 DB)持续失败
     // 超过此阈值, 说明数据库异常/损坏, 干等也没用 → 降级放主窗进来 + 通知一次,
     // 让前端照常显示(再靠错误提示/重试), 而不是无限卡在启动动画到 5 分钟超时退出。
@@ -428,6 +438,8 @@ class BackendManager extends EventEmitter {
       console.log('[BackendManager] Backend is already running');
       return true;
     }
+    // 新一轮启动: 清主动停止标志, 让看门狗在本轮进程崩溃时能接管
+    this._intentionalStop = false;
     
     // 先清理可能残留的后端进程
     await this.cleanupStaleProcesses();
@@ -517,6 +529,11 @@ class BackendManager extends EventEmitter {
         this.isRunning = false;
         this.stopHealthCheck();
         this.emit('exit', { code, signal });
+        // v3.29.0 看门狗: 已就绪过 + 非主动停止 → 后端进程意外死亡, 自动拉起。
+        // 初次启动期(未就绪过)的退出交给原启动失败流程处理, 不在此重启。
+        if (this._everReady && !this._intentionalStop) {
+          this._scheduleRestart(code, signal);
+        }
       });
       
       // 等待后端就绪
@@ -524,6 +541,7 @@ class BackendManager extends EventEmitter {
         this._startupResolved = true;  // 启动期结束, 之后健康检查只浅探, 不再降级判定
         if (ready) {
           this.isRunning = true;
+          this._everReady = true;  // 标记已就绪过, 之后崩溃才触发看门狗自动拉起
           this.startHealthCheck();
           console.log('[BackendManager] Backend is ready');
           this.emit('ready');
@@ -538,9 +556,66 @@ class BackendManager extends EventEmitter {
   }
   
   /**
+   * v3.29.0 看门狗: 编排"后端进程意外死亡 → 退避后自动拉起"。
+   *
+   * 限流兜底: restartWindowMs 时间窗内最多重启 maxRestarts 次; 超出判定为
+   * 稳定性故障 (崩溃死循环), 放弃自动恢复并 emit('restart-failed'), 交由主进程
+   * 回退到"弹错误框 + 退出"的老行为。退避间隔 1s→2s→4s, 避免端口/资源未释放即重拉。
+   *
+   * 事件: restarting({attempt,delay}) → (拉起中) → restarted({attempt}) | restart-failed({code,signal})
+   */
+  _scheduleRestart(code, signal) {
+    const now = Date.now();
+    // 清理时间窗外的历史重启记录
+    this._restartTimestamps = this._restartTimestamps.filter(
+      t => now - t < this.options.restartWindowMs
+    );
+    if (this._restartTimestamps.length >= this.options.maxRestarts) {
+      console.error(
+        `[BackendManager] 看门狗: ${this.options.restartWindowMs / 1000}s 内已自动重启 ` +
+        `${this._restartTimestamps.length} 次仍未稳定, 判定稳定性故障, 放弃自动恢复`
+      );
+      this.emit('restart-failed', { code, signal });
+      return;
+    }
+    const attempt = this._restartTimestamps.length + 1;
+    this._restartTimestamps.push(now);
+    const delay = this._restartBackoffMs[
+      Math.min(attempt - 1, this._restartBackoffMs.length - 1)
+    ];
+    console.warn(
+      `[BackendManager] 看门狗: 后端意外退出 (code=${code}, signal=${signal}), ` +
+      `${delay}ms 后第 ${attempt} 次自动拉起`
+    );
+    this.emit('restarting', { attempt, delay });
+    this._restartTimer = setTimeout(() => {
+      this._restartTimer = null;
+      this.process = null;
+      this.isRunning = false;
+      this.start()
+        .then(() => {
+          console.log('[BackendManager] 看门狗: 后端已自动恢复');
+          this.emit('restarted', { attempt });
+        })
+        .catch((err) => {
+          console.error('[BackendManager] 看门狗: 自动拉起失败:', err.message);
+          // start() 失败时其内部已 stop()(置主动停止), 不会再触发 exit 重启,
+          // 故在此显式再调度一次, 直到命中限流上限。
+          this._scheduleRestart(code, signal);
+        });
+    }, delay);
+  }
+
+  /**
    * 停止后端服务 - 优雅关闭
    */
   async stop() {
+    // 看门狗让路: 主动停止 (关机/换版) 不触发自动重启, 并清掉待执行的重启
+    this._intentionalStop = true;
+    if (this._restartTimer) {
+      clearTimeout(this._restartTimer);
+      this._restartTimer = null;
+    }
     this.stopHealthCheck();
     
     if (!this.process) {

@@ -20,6 +20,104 @@ from backend.services.mes_adapters import get_adapter
 from backend.core import debug_center
 
 
+# 截图压缩默认参数 (客户可在连接配置覆盖, 默认沿用历史行为)
+_SNAPSHOT_DEFAULTS = {
+    "quality_ladder": [60, 45, 30, 20, 12],  # 原尺寸逐级降质阶梯
+    "scale_factor": 0.75,                     # 每轮缩边比例
+    "scale_rounds": 4,                        # 最多缩几轮
+    "min_edge": 32,                           # 缩到此边长以下放弃
+    "scaled_quality": 35,                     # 缩图后用的质量
+}
+
+
+def _snapshot_compress_params(config: Optional[dict]) -> dict:
+    """从连接配置取截图压缩参数, 缺省回落历史默认, 非法值忽略。"""
+    cfg = config or {}
+    out = dict(_SNAPSHOT_DEFAULTS)
+    ladder = cfg.get("snapshot_quality_ladder")
+    if isinstance(ladder, (list, tuple)) and ladder:
+        clean = [int(q) for q in ladder if isinstance(q, (int, float)) and 1 <= int(q) <= 100]
+        if clean:
+            out["quality_ladder"] = clean
+    for key, cfgkey, lo, hi, cast in (
+        ("scale_factor", "snapshot_scale_factor", 0.1, 0.95, float),
+        ("scale_rounds", "snapshot_scale_rounds", 0, 10, int),
+        ("min_edge", "snapshot_min_edge", 1, 4096, int),
+        ("scaled_quality", "snapshot_scaled_quality", 1, 100, int),
+    ):
+        v = cfg.get(cfgkey)
+        if v is not None:
+            try:
+                cv = cast(v)
+                if lo <= cv <= hi:
+                    out[key] = cv
+            except Exception:
+                pass
+    return out
+
+
+def _recompress_jpeg_under(jpeg_bytes: bytes, max_bytes: int,
+                           params: Optional[dict] = None) -> Optional[bytes]:
+    """把一张 JPEG 压到 max_bytes 以内: 先逐级降质, 再逐级缩边长。
+
+    压缩阶梯/缩放比例/最小边长/缩图质量可由 params 配置 (连接配置驱动), 缺省沿用历史值。
+    都压不下去返回 None (调用方据此放弃)。无 cv2/numpy 或解码失败也返回 None。
+    """
+    p = params or _SNAPSHOT_DEFAULTS
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return None
+    try:
+        arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return None
+        # ① 逐级降质 (原尺寸)
+        for q in p.get("quality_ladder") or _SNAPSHOT_DEFAULTS["quality_ladder"]:
+            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, int(q)])
+            if ok and len(buf) <= max_bytes:
+                return buf.tobytes()
+        # ② 仍超限 → 逐级缩边长 (每轮 ×scale_factor) 配合缩图质量
+        factor = p.get("scale_factor", 0.75)
+        rounds = p.get("scale_rounds", 4)
+        min_edge = p.get("min_edge", 32)
+        sq = int(p.get("scaled_quality", 35))
+        h, w = img.shape[:2]
+        for _ in range(int(rounds)):
+            w = int(w * factor)
+            h = int(h * factor)
+            if w < min_edge or h < min_edge:
+                break
+            small = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
+            ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, sq])
+            if ok and len(buf) <= max_bytes:
+                return buf.tobytes()
+        return None
+    except Exception:
+        return None
+
+
+def _reencode_jpeg_quality(jpeg_bytes: bytes, quality: int) -> Optional[bytes]:
+    """按指定质量重编码一张 JPEG (客户直接控制图像质量)。失败返回 None。"""
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return None
+    try:
+        arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return None
+        ok, buf = cv2.imencode(".jpg", img,
+                               [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+        return buf.tobytes() if ok else None
+    except Exception:
+        return None
+
+
 class MESGateway:
 
     def __init__(self):
@@ -40,6 +138,13 @@ class MESGateway:
 
         db = SessionLocal()
         try:
+            # 报警事件"同任务同标签 N 秒去重": 窗口内同唯一键报警不重复推送给外部
+            # (川南 v4 第 4 条; 默认惰性: 仅 alarm_event_name 配置 + dedup_sec>0 时生效)。
+            if self._alarm_dedup_should_skip(db, event_type, context):
+                if debug_center.is_on("backend.gateway"):
+                    debug_center.dbg("backend.gateway", "报警去重跳过推送",
+                                     f"event={event_type}")
+                return
             connections = (
                 db.query(MESConnection)
                 .filter(MESConnection.enabled == True)
@@ -47,6 +152,7 @@ class MESGateway:
             )
             if debug_center.is_on("backend.gateway"):
                 debug_center.dbg("backend.gateway", "dispatch 入口", f"event={event_type} channel={channel_id if channel_id is not None else '-'} enabled_conns={len(connections)}")
+            sent_any = False
             for conn in connections:
                 events = conn.push_events or []
                 if event_type not in events:
@@ -54,7 +160,13 @@ class MESGateway:
                 bound = conn.bound_channels
                 if bound and channel_id is not None and channel_id not in bound:
                     continue
-                self._send_to_connection(db, conn, event_type, context, channel_id)
+                # 只有真正投递成功 (非被 push_on_result 过滤 / 非失败) 才算"推出去过"
+                if self._send_to_connection(db, conn, event_type, context, channel_id):
+                    sent_any = True
+            # 在途报警台账: 报警类事件成功推给外部后登记一条, 供外部"报警消除"命令匹配 + 监控页横幅。
+            # 惰性: 仅当入站配置指定了 alarm_event_name 且本次确实成功推送过才登记 (默认全关零开销)。
+            if sent_any:
+                self._record_active_alarm_if_alarm(db, event_type, context, channel_id)
             db.commit()
         except Exception as e:
             db.rollback()
@@ -64,9 +176,85 @@ class MESGateway:
         finally:
             db.close()
 
+    @staticmethod
+    def _resolve_alarm_event(db, event_type: str, context: dict):
+        """判断本次事件是否为配置的"报警事件"。
+
+        是 → 返回 (fields<台账字段>, dedup_sec); 否 → (None, 0)。
+        默认惰性: 入站配置 alarm_event_name 为空 → 视为非报警, 零副作用。
+        登记 (record) 与去重 (dedup) 两处共用本判定, 避免逻辑漂移。
+        """
+        from backend.services.mes_inbound import get_mes_inbound
+        from backend.services.mes_adapters.base import _get_nested
+
+        cfg = get_mes_inbound().get_config(db)
+        # alarm_event_name 支持单个字符串或列表 (多事件源都可当报警源)
+        names = cfg.get("alarm_event_name") or ""
+        allowed = [str(n).strip() for n in names] if isinstance(names, list) \
+            else [s.strip() for s in str(names).split(",")]
+        allowed = [n for n in allowed if n]
+        if not allowed or event_type not in allowed:
+            return None, 0
+
+        # 结果过滤: 默认只认报警类结果 (NG), 避免 OK 周期被当报警 (空列表 = 不过滤)
+        record_on = cfg.get("alarm_record_on_results")
+        if record_on is None:
+            record_on = ["NG"]
+        if record_on:
+            result = (_get_nested(context, "cycle.result")
+                      or context.get("overall_result")
+                      or context.get("result") or "")
+            if str(result).upper() not in [str(x).upper() for x in record_on]:
+                return None, 0
+
+        field_map = cfg.get("alarm_ledger_field_map") or {}
+        fields = {}
+        for our_field, path in field_map.items():
+            if not path:
+                continue
+            val = _get_nested(context, path)
+            if val is not None:
+                fields[our_field] = val
+        # 去重/登记的唯一键字段与消除口径共用同一份配置, 避免漂移
+        match_fields = cfg.get("alarm_clear_match_fields") or None
+        return fields, int(cfg.get("alarm_dedup_sec") or 0), match_fields
+
+    def _alarm_dedup_should_skip(self, db, event_type: str, context: dict) -> bool:
+        """报警事件在去重窗口内已报过 → True (跳过整次推送)。错误一律放行 (返回 False)。"""
+        try:
+            fields, dedup_sec, match_fields = self._resolve_alarm_event(
+                db, event_type, context)
+            if fields is None or dedup_sec <= 0:
+                return False
+            from backend.services.external_alarm import find_recent_active_alarm
+            return find_recent_active_alarm(
+                db, fields, dedup_sec, match_fields=match_fields) is not None
+        except Exception as e:
+            debug_center.dbg("backend.gateway", "报警去重判断异常(放行推送)", str(e))
+            return False
+
+    def _record_active_alarm_if_alarm(self, db, event_type: str,
+                                      context: dict, channel_id=None):
+        """若本次事件是配置的"报警事件", 登记一条在途报警 (全程错误隔离, 失败不影响推送)。
+
+        默认惰性: 入站配置 alarm_event_name 为空 → 直接返回, 零副作用。
+        """
+        try:
+            from backend.services.external_alarm import record_active_alarm
+            fields, dedup_sec, match_fields = self._resolve_alarm_event(
+                db, event_type, context)
+            if fields is None:
+                return
+            record_active_alarm(
+                db, fields, event_type=event_type, channel_id=channel_id,
+                dedup_sec=dedup_sec, match_fields=match_fields,
+            )
+        except Exception as e:
+            debug_center.dbg("backend.gateway", "在途报警登记失败(已忽略)", str(e))
+
     def _send_to_connection(self, db, conn: MESConnection,
-                            event_type: str, context: dict, channel_id: int = None):
-        """向单个连接发送数据, 含重试"""
+                            event_type: str, context: dict, channel_id: int = None) -> bool:
+        """向单个连接发送数据, 含重试。返回 True=真正投递成功; False=被结果过滤/适配器缺失/重试耗尽失败。"""
         config = conn.config or {}
         static = config.get("static_fields", {})
         extra = self._extra_fields.get(channel_id or 0, {})
@@ -99,7 +287,7 @@ class MESGateway:
                           url=config.get("url"),
                           error_msg=f"skipped by push_on_result={allowed}, result={r}",
                           success=True)
-                return
+                return False
 
         # 出站附带"当前画面截图": 仅当连接配置 attach_snapshot=true 时, 抓该工位当前帧转 base64
         # 注入上下文, 供模板引用 {snapshot.image_base64} / {snapshot.image_data_uri}.
@@ -136,27 +324,43 @@ class MESGateway:
             debug_center.dbg("backend.gateway", "适配器不存在,推送中止", f"conn={getattr(conn, 'name', None) or conn.id} adapter={getattr(conn, 'adapter_type', '-')} err={e}")
             self._log(db, conn.id, event_type, "push",
                       error_msg=str(e), success=False)
-            return
+            return False
 
         payload = adapter.build_payload(full_context, effective_config)
         request_body = json.dumps(payload, ensure_ascii=False, default=str)
 
         retry_count = conn.retry_count or 0
         retry_interval = conn.retry_interval_sec or 5
+        # 重试退避策略 (可配, 默认 fixed = 历史行为不变):
+        #   fixed       : 每次固定 retry_interval 秒
+        #   exponential : retry_interval × 2^(attempt-1) (川南 §5.1 要 1→2→4, 设 interval=1)
+        retry_backoff = str(config.get("retry_backoff") or "fixed").lower()
+        # 是否对 4xx 重试 (默认 True = 历史行为; 川南 §5.1 要求仅 5xx/超时重试 → 设 False)
+        retry_on_4xx = config.get("retry_on_4xx", True)
         last_result = None
 
         if debug_center.is_on("backend.gateway"):
-            debug_center.dbg("backend.gateway", "推送发起", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} adapter={getattr(conn, 'adapter_type', '-')} retry_max={retry_count}")
+            debug_center.dbg("backend.gateway", "推送发起", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} adapter={getattr(conn, 'adapter_type', '-')} retry_max={retry_count} backoff={retry_backoff} retry4xx={retry_on_4xx}")
         for attempt in range(1 + retry_count):
             if attempt > 0:
-                time.sleep(retry_interval)
+                delay = retry_interval * (2 ** (attempt - 1)) \
+                    if retry_backoff == "exponential" else retry_interval
+                time.sleep(delay)
                 print(f"[MES Gateway] retry {attempt}/{retry_count}: {conn.name}", flush=True)
                 if debug_center.is_on("backend.gateway"):
-                    debug_center.dbg("backend.gateway", "推送重试", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} attempt={attempt}/{retry_count}")
+                    debug_center.dbg("backend.gateway", "推送重试", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} attempt={attempt}/{retry_count} delay={delay}s")
 
             result = adapter.send(payload, effective_config)
             last_result = result
             is_ok = adapter.check_response(result, effective_config)
+
+            if not is_ok and not retry_on_4xx:
+                # 仅 5xx / 网络超时重试; 4xx (客户端错误) 不重试, 直接收场
+                sc = (result or {}).get("status_code") or 0
+                if 400 <= sc < 500:
+                    if debug_center.is_on("backend.gateway"):
+                        debug_center.dbg("backend.gateway", "4xx 不重试", f"conn={getattr(conn, 'name', None) or conn.id} status={sc}")
+                    break
 
             if is_ok:
                 self._log(
@@ -175,7 +379,7 @@ class MESGateway:
                 print(f"[MES Gateway] push success: {conn.name} ({event_type})", flush=True)
                 if debug_center.is_on("backend.gateway"):
                     debug_center.dbg("backend.gateway", "推送成功", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} status={result.get('status_code') or '-'} attempt={attempt} duration_ms={result.get('duration_ms') or '-'}")
-                return
+                return True
 
         error_msg = last_result.get("error") if last_result else "未知错误"
         if not error_msg and last_result:
@@ -194,6 +398,7 @@ class MESGateway:
         )
         print(f"[MES Gateway] push failed: {conn.name} ({event_type}) - {error_msg}", flush=True)
         debug_center.dbg("backend.gateway", "推送失败(重试耗尽)", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} attempts={1 + retry_count} status={(last_result or {}).get('status_code') or '-'} err={error_msg or '-'}")
+        return False
 
     @staticmethod
     def _capture_snapshot_base64(channel_id, config: dict) -> Optional[str]:
@@ -214,11 +419,24 @@ class MESGateway:
             jpeg = mgr.get_snapshot()
             if not jpeg:
                 return None
+            # 客户直接控制图像质量: 配了 snapshot_quality 就按该质量重编码 (源默认 70)
+            q = config.get("snapshot_quality")
+            if isinstance(q, (int, float)) and 1 <= int(q) <= 100:
+                requ = _reencode_jpeg_quality(jpeg, int(q))
+                if requ is not None:
+                    jpeg = requ
             max_bytes = config.get("snapshot_max_bytes")
             if isinstance(max_bytes, int) and max_bytes > 0 and len(jpeg) > max_bytes:
-                debug_center.dbg("backend.gateway", "截图超限跳过",
-                                 f"channel={cid} bytes={len(jpeg)} max={max_bytes}")
-                return None
+                # 超限: 逐级降质重压再传 (兑现"自动压缩"承诺), 连最低质量也超才放弃
+                params = _snapshot_compress_params(config)
+                shrunk = _recompress_jpeg_under(jpeg, max_bytes, params)
+                if shrunk is None:
+                    debug_center.dbg("backend.gateway", "截图压到最低仍超限,放弃",
+                                     f"channel={cid} bytes={len(jpeg)} max={max_bytes}")
+                    return None
+                debug_center.dbg("backend.gateway", "截图超限已自动压缩",
+                                 f"channel={cid} {len(jpeg)}→{len(shrunk)} max={max_bytes}")
+                jpeg = shrunk
             return base64.b64encode(jpeg).decode("ascii")
         except Exception as e:
             debug_center.dbg("backend.gateway", "截图入上下文失败",

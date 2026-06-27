@@ -605,6 +605,9 @@ import { pullOrders } from '@/api/gateway'
 import { routeCode, setScanTestCapture } from '@/composables/useScanGun'
 import { useSystemStore } from '@/store/useSystemStore'
 import { dbg, dbgErr } from '@/utils/debug'
+import { usePollingStore } from '@/store/usePollingStore'
+
+const pollingStore = usePollingStore()
 
 const systemStore = useSystemStore()
 
@@ -1262,7 +1265,7 @@ const mergeAutoDevices = () => {
 const loadLogs = async (showFeedback = false) => {
   if (showFeedback) logsLoading.value = true
   try {
-    const res = await getScanLogs({ limit: 30 })
+    const res = await getScanLogs({ limit: pollingStore.logLimit('scanner', 30) })
     logs.value = res.data.items || []
     if (showFeedback) ElMessage.success('扫码记录已刷新')
   } catch (e) {
@@ -1464,13 +1467,14 @@ const loadChannelCount = async () => {
     channelCount.value = 1
   }
 }
-onMounted(() => {
+onMounted(async () => {
+  await pollingStore.load()
   form.value = defaultForm()
   loadChannelCount()
   loadDevices()
   refreshStatus()
   loadLogs()
-  statusTimer = setInterval(() => { refreshStatus(); loadLogs() }, 5000)
+  statusTimer = setInterval(() => { refreshStatus(); loadLogs() }, pollingStore.get('scanner_status', 5000))
 })
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer)

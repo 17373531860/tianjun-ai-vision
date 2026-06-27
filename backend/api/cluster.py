@@ -29,6 +29,10 @@ class ClusterConfigUpdate(BaseModel):
     enabled: Optional[bool] = None
     channel_station_map: Optional[dict] = None
     station_result_strategy: Optional[str] = None
+    # 计时参数 (存 SystemConfig KV, 非 ClusterConfig 列): 心跳间隔/离线超时/box扫描间隔
+    heartbeat_interval_sec: Optional[int] = None
+    slave_timeout_sec: Optional[int] = None
+    box_scan_interval_sec: Optional[int] = None
 
 
 class StationReport(BaseModel):
@@ -66,12 +70,18 @@ def update_config(body: ClusterConfigUpdate):
             cfg = ClusterConfig(id=1)
             db.add(cfg)
 
+        # 计时参数走 SystemConfig KV, 不是 ClusterConfig 列, 单独剥离
+        timing_fields = {"heartbeat_interval_sec", "slave_timeout_sec",
+                         "box_scan_interval_sec"}
         data = {k: v for k, v in body.model_dump().items() if v is not None}
+        timing_vals = {k: data.pop(k) for k in list(data) if k in timing_fields}
         for k, v in data.items():
             setattr(cfg, k, v)
-        db.commit()
 
         collector = get_cluster_collector()
+        if timing_vals:
+            collector.save_timing_config(db, timing_vals)
+        db.commit()
         collector.invalidate_config_cache()
 
         return collector.get_config(db)

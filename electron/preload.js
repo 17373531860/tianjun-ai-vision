@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onLicenseActivated: (callback) => ipcRenderer.on('license-activated', callback),
   // v3.23.x: 加深启动就绪门槛降级提示 (后端起了但数据库探测超时, 已降级放主窗进来)
   onDeepGateDowngraded: (callback) => ipcRenderer.on('startup:deep-gate-downgraded', callback),
+  // v3.29.0 看门狗: 后端进程崩溃被自动拉起后, 提示操作员重新开始检测
+  onBackendRecovered: (callback) => ipcRenderer.on('backend:recovered', callback),
   // v3.8.2: 全屏 + 无边框模式下没有窗口×按钮, 前端 Navbar 的"退出"按钮走这里
   // 触发主进程 mainWindow.close → 已注册的 startGracefulShutdown 8 步关机流程
   gracefulQuit: () => ipcRenderer.invoke('app:graceful-quit'),

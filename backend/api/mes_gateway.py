@@ -412,6 +412,25 @@ def manual_push(conn_id: int, body: ManualPush):
 
 
 # ============================================================
+# 出站主动健康探测 (A2: 后台周期探活 + 状态查询 + 立即探测)
+# ============================================================
+
+@router.get("/health-status")
+def get_health_status():
+    """所有出站连接的主动健康探测状态 (供前端轮询显示在线/离线徽标)。不鉴权: 仅读状态。"""
+    from backend.services.mes_health_probe import get_health_status as _ghs
+    return _ghs()
+
+
+@router.post("/connections/{conn_id}/probe-now",
+             dependencies=[Depends(require_perm("mes.gateway.edit"))])
+def probe_now(conn_id: int):
+    """立即对指定连接发一次健康探测 (界面"立即探测"按钮)。"""
+    from backend.services.mes_health_probe import probe_now as _pn
+    return _pn(conn_id)
+
+
+# ============================================================
 # 工单主动拉取 (v3.20: 反向对接外部 MES, 把工单拉回来落库)
 # ============================================================
 

@@ -14,6 +14,7 @@ export const FRONTEND_CATEGORIES = {
   'page.nav':           { label: '页面切换 (进入/离开每个页面)', group: '全局' },
   'api.request':        { label: 'API 请求 (URL/参数/耗时/状态码/报错)', group: '全局' },
   'auth.ops':           { label: '登录鉴权 (登录/登出/权限拒绝)', group: '全局' },
+  'app.lifecycle':      { label: '应用生命周期 (后端崩溃自愈/自动恢复)', group: '全局' },
   'monitor.control':    { label: '检测控制按钮 (开始/停止/待机/清零)', group: '实时监控' },
   'monitor.poll':       { label: '状态轮询 (检测结果/状态同步异常)', group: '实时监控' },
   'monitor.video':      { label: '视频流 (MJPEG 连接/断开/重连)', group: '实时监控' },

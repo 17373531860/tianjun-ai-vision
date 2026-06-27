@@ -40,10 +40,17 @@
       </el-form-item>
 
       <el-form-item v-if="form.usage !== 'pull'" label="绑工件到工位">
-        <el-select v-model="form.bindChannelId" class="w-40">
+        <el-select v-model="channelSelect" class="w-40">
           <el-option v-for="n in 4" :key="n - 1" :label="`工位 ${n}`" :value="n - 1" />
+          <el-option label="自定义…" :value="CUSTOM_CH" />
         </el-select>
-        <span class="text-xs text-gray-500 ml-2">单工位选工位 1 即可</span>
+        <el-input-number
+          v-if="channelSelect === CUSTOM_CH"
+          v-model="customStation" :min="1" :precision="0" controls-position="right"
+          class="w-32 ml-2"
+        />
+        <span v-if="channelSelect === CUSTOM_CH" class="text-xs text-gray-500 ml-2">手填工位号（≥1）</span>
+        <span v-else class="text-xs text-gray-500 ml-2">单工位选工位 1 即可</span>
       </el-form-item>
 
       <el-form-item v-if="form.usage === 'both'" label="工单号识别规则">
@@ -93,22 +100,56 @@ const saving = ref(false)
 const pullConns = computed(() => connections.value.filter(c => c.config?.pull?.url))
 const testRoute = computed(() => routeCode(form.value, testCode.value))
 
+// ==================== 绑定工位: 内置下拉 + 自定义手填 ====================
+// 下拉保留 工位1-4; 选"自定义"切到手填任意工位号 (现场超 4 工位时不被写死卡住)
+const CUSTOM_CH = -999
+const customMode = ref(false)      // 是否处于自定义手填态
+const customStation = ref(1)       // 手填工位号 (1-based 显示, 落库转 0-based)
+const channelSelect = computed({
+  get() {
+    if (customMode.value) return CUSTOM_CH
+    const c = form.value.bindChannelId || 0
+    return (c >= 0 && c <= 3) ? c : CUSTOM_CH   // 落库值超内置范围也回显自定义
+  },
+  set(v) {
+    if (v === CUSTOM_CH) {
+      customMode.value = true
+      customStation.value = (form.value.bindChannelId || 0) + 1
+    } else {
+      customMode.value = false
+      form.value.bindChannelId = v
+    }
+  },
+})
+watch(customStation, (v) => {
+  if (customMode.value) form.value.bindChannelId = Math.max(0, (Number(v) || 1) - 1)
+})
+
 function emptyForm() {
   return { name: '', enabled: true, usage: 'pull', pullConnId: null, bindChannelId: 0, orderPattern: '^(JOB|ORD)' }
 }
 const form = ref(emptyForm())
 
 function loadFromDev(dev) {
-  if (!dev) { form.value = emptyForm(); return }
+  if (!dev) {
+    form.value = emptyForm()
+    customMode.value = false
+    customStation.value = 1
+    return
+  }
   const u = (dev.parse_config || {}).usb || {}
+  const ch = dev.channel_id || 0
   form.value = {
     name: dev.name || '',
     enabled: dev.enabled !== false,
     usage: u.usage || 'pull',
     pullConnId: u.pull_conn_id ?? null,
-    bindChannelId: dev.channel_id || 0,
+    bindChannelId: ch,
     orderPattern: u.order_pattern || '^(JOB|ORD)',
   }
+  // 落库工位号超内置 1-4 → 自动进自定义态回填
+  customMode.value = ch > 3
+  customStation.value = ch + 1
 }
 
 // 对话框每次打开时回填

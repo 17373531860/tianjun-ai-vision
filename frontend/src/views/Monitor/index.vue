@@ -229,6 +229,13 @@
           <span class="text-white truncate max-w-[80px]" :title="getMesDataFor(ch - 1).order.order_no">{{ getMesDataFor(ch - 1).order.order_no }}</span>
           <span class="text-gray-400">{{ getMesDataFor(ch - 1).order.completed_qty }}/{{ getMesDataFor(ch - 1).order.planned_qty }}</span>
         </div>
+        <!-- 开工任务要素 (按入站配置逐项显示; 全关时无任何标签) -->
+        <div v-if="getTaskInfoItemsFor(ch - 1).length" class="flex items-center gap-1 text-[0.625rem] pl-2 border-l border-cyan-800/40">
+          <template v-for="it in getTaskInfoItemsFor(ch - 1)" :key="it.label">
+            <span class="text-cyan-400">{{ it.label }}:</span>
+            <span class="text-white truncate max-w-[72px]" :title="it.value">{{ it.value }}</span>
+          </template>
+        </div>
         <el-tooltip
           v-if="!isScanDisabledFor(ch - 1)"
           :content="getDisplayWorkpieceFor(ch - 1) && getDisplayWorkpieceFor(ch - 1).status === 'inspecting'
@@ -1126,6 +1133,11 @@
             良率 {{ mesData.order.yield_rate ?? '-' }}%
           </span>
         </div>
+        <!-- 开工任务要素 (按入站配置 task_info_display 逐项显示; 全关时无任何标签) -->
+        <div v-for="it in getTaskInfoItemsFor(selectedChannel)" :key="it.label" class="flex items-center gap-2">
+          <span class="text-cyan-400 font-bold">{{ it.label }}:</span>
+          <span class="text-white truncate max-w-[160px]" :title="it.value">{{ it.value }}</span>
+        </div>
         <div v-if="!isScanDisabledFor(selectedChannel) && hasScannerFor(selectedChannel) && mesData.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-2 bg-yellow-600/30 border border-yellow-500 rounded px-3 py-1">
           <span class="text-yellow-300 font-bold text-base">⚠ 未绑码</span>
           <span class="text-yellow-200 text-sm">请扫描工件条码</span>
@@ -1646,6 +1658,10 @@
     :channel-count="channelCount"
     :selected-channel="selectedChannel"
   />
+
+  <!-- 外部生产管控系统「在途报警」持续横幅: 报警推给中控后一直挂屏顶, 中控回推消除命令即自动撤.
+       惰性: 后端未配报警台账 → 无数据 → 永不出现 (字节级零打扰)。 -->
+  <ExternalAlarmBanner />
 </template>
 
 <script setup>
@@ -1662,10 +1678,11 @@ import { startDetection as apiStartDetection, stopDetection as apiStopDetection,
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import { getProjectDetail } from '@/api/project';
 import api, { getBackendHost } from '@/api/index';
-import { getExtraFieldsSchema, setExtraFields } from '@/api/gateway';
+import { getExtraFieldsSchema, setExtraFields, getInboundConfig } from '@/api/gateway';
 import PerItemPanel from './PerItemPanel.vue';
 import PackagingFlowCard from './PackagingFlowCard.vue';
 import VirtualScanGun from './VirtualScanGun.vue';
+import ExternalAlarmBanner from './ExternalAlarmBanner.vue';
 import { createFramePump } from './framePump';
 import { listPackagingFlows, getPackagingFlowState } from '@/api/packaging_flow';
 import TjSlot from '@/components/TjSlot.vue';
@@ -1734,6 +1751,7 @@ const layoutBodyActions = computed(() => ({
   shouldShowMesBarFor: (ch) => shouldShowMesBarFor(ch),
   getDisplayWorkpieceFor: (ch) => getDisplayWorkpieceFor(ch),
   getMesDataFor: (ch) => getMesDataFor(ch),
+  getTaskInfoItemsFor: (ch) => getTaskInfoItemsFor(ch),
   hasScannerFor: (ch) => hasScannerFor(ch),
   isScanDisabledFor: (ch) => isScanDisabledFor(ch),
   clearPendingScan: (ch) => clearPendingScan(ch),
@@ -1931,6 +1949,7 @@ const pollPackagingState = async () => {
 };
 
 onMounted(async () => {
+  loadTaskInfoDisplay();
   await loadPackagingConfigs();
   if (packagingConfigs.value.length > 0) {
     pollPackagingState();
@@ -3348,6 +3367,53 @@ const workpieceOverride = computed({
 // 仍然只代理 selectedChannel 的 timer (旧代码路径 = 单工位, 等价语义不变).
 let workpieceOverrideTimer = null;
 let workpieceHideTimer = null;
+
+// 监控页"任务信息条"逐要素显示开关 (后端入站配置 task_info_display; 默认全关 = 原界面)
+const taskInfoDisplay = ref({
+  show_task_no: false,
+  show_product_code: false,
+  show_step_code: false,
+  show_operator: false,
+});
+// 任一要素打开才需要渲染追加标签
+const taskInfoAnyOn = computed(() =>
+  taskInfoDisplay.value.show_task_no ||
+  taskInfoDisplay.value.show_product_code ||
+  taskInfoDisplay.value.show_step_code ||
+  taskInfoDisplay.value.show_operator
+);
+async function loadTaskInfoDisplay() {
+  try {
+    const cfg = (await getInboundConfig())?.data || {};
+    const t = cfg.task_info_display || {};
+    taskInfoDisplay.value = {
+      show_task_no: t.show_task_no === true,
+      show_product_code: t.show_product_code === true,
+      show_step_code: t.show_step_code === true,
+      show_operator: t.show_operator === true,
+    };
+  } catch (e) {
+    // 取不到配置时维持默认全关, 不影响原界面
+  }
+}
+// 从某工位活跃工单提取要按开关显示的任务要素 [{label, value}]
+function getTaskInfoItemsFor(ch) {
+  if (!taskInfoAnyOn.value) return [];
+  const order = getMesDataFor(ch)?.order;
+  if (!order) return [];
+  const inbound = order.extra_data?.inbound || {};
+  const t = taskInfoDisplay.value;
+  const items = [];
+  if (t.show_task_no && (order.order_no || inbound.task_no))
+    items.push({ label: '任务号', value: order.order_no || inbound.task_no });
+  if (t.show_product_code && (order.product_code || inbound.product_code))
+    items.push({ label: '产品代号', value: order.product_code || inbound.product_code });
+  if (t.show_step_code && inbound.step_code)
+    items.push({ label: '工序工步', value: inbound.step_code });
+  if (t.show_operator && (inbound.operator || order.created_by))
+    items.push({ label: '操作员', value: inbound.operator || order.created_by });
+  return items;
+}
 
 // per-channel 工件展示 helper (双工位/4 工位每个 ch 用各自的数据)
 function getMesDataFor(ch) {

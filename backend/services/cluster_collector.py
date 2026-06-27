@@ -147,8 +147,9 @@ class ClusterCollector:
         self._config_cache: Optional[dict] = None
         self._config_ts: float = 0
         self._connected_slaves: dict = {}  # station_id -> {info}
-        self._slave_timeout = 20  # 超过20秒没心跳视为离线
-        self._heartbeat_interval = 5  # 副机 5 秒发一次心跳
+        self._slave_timeout = 20  # 超过20秒没心跳视为离线 (默认; get_config 按 KV 刷新)
+        self._heartbeat_interval = 5  # 副机 5 秒发一次心跳 (默认; get_config 按 KV 刷新)
+        self._box_scan_interval = 30  # box 超时扫描间隔秒 (默认; get_config 按 KV 刷新)
         # per-box 进程内锁：同箱号的 receive_station_report 串行化，
         # 避免 MES box_complete 被多线程重复推送、UNIQUE/IntegrityError 冲突。
         # SQLite 不支持 SELECT FOR UPDATE，这是最稳妥的进程内串行手段。
@@ -227,6 +228,12 @@ class ClusterCollector:
                     "channel_station_map": getattr(cfg, 'channel_station_map', None) or {},
                     "station_result_strategy": (getattr(cfg, 'station_result_strategy', None) or 'latest'),
                 }
+            # 计时参数 (心跳间隔/离线超时/box扫描间隔): 存 SystemConfig KV, 当前值作默认。
+            timing = self._read_timing_config(db)
+            result.update(timing)
+            self._slave_timeout = timing["slave_timeout_sec"]
+            self._heartbeat_interval = timing["heartbeat_interval_sec"]
+            self._box_scan_interval = timing["box_scan_interval_sec"]
             self._config_cache = result
             self._config_ts = now
             return result
@@ -237,6 +244,54 @@ class ClusterCollector:
     def invalidate_config_cache(self):
         self._config_cache = None
         self._config_ts = 0
+
+    # 计时参数的 SystemConfig KV 键名 (客户级全局配置, 免迁移; 当前值作默认)
+    _TIMING_KEYS = {
+        "heartbeat_interval_sec": ("cluster.heartbeat_interval_sec", 5, 1, 3600),
+        "slave_timeout_sec": ("cluster.slave_timeout_sec", 20, 2, 86400),
+        "box_scan_interval_sec": ("cluster.box_scan_interval_sec", 30, 1, 3600),
+    }
+
+    def _read_timing_config(self, db) -> dict:
+        """从 SystemConfig 读三个计时参数, 缺省回落当前默认, 越界忽略。"""
+        from backend.models.models import SystemConfig
+        out = {}
+        for field, (key, default, lo, hi) in self._TIMING_KEYS.items():
+            val = default
+            try:
+                row = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+                if row and row.value is not None and str(row.value).strip() != "":
+                    v = int(float(row.value))
+                    if lo <= v <= hi:
+                        val = v
+            except Exception:
+                pass
+            out[field] = val
+        return out
+
+    def save_timing_config(self, db, values: dict) -> dict:
+        """写入计时参数到 SystemConfig KV (仅认白名单字段, 越界忽略), 返回最终生效值。"""
+        from backend.models.models import SystemConfig
+        for field, (key, default, lo, hi) in self._TIMING_KEYS.items():
+            if field not in (values or {}):
+                continue
+            raw = values.get(field)
+            if raw is None or str(raw).strip() == "":
+                continue
+            try:
+                v = int(float(raw))
+            except Exception:
+                continue
+            if not (lo <= v <= hi):
+                continue
+            row = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+            if row:
+                row.value = str(v)
+            else:
+                db.add(SystemConfig(key=key, value=str(v)))
+        db.flush()  # SessionLocal autoflush=False, 新增行需手动 flush 才能立即读到
+        self.invalidate_config_cache()
+        return self._read_timing_config(db)
 
     def register_slave(self, station_id: str, ip: str, port: int = 8001,
                        hostname: str = "", project: str = "",
@@ -985,7 +1040,8 @@ class ClusterCollector:
     def _timeout_checker(self):
         """后台线程：检查超时未齐的箱子"""
         while not self._stop_event.is_set():
-            self._stop_event.wait(timeout=30)
+            # 扫描间隔可配 (cluster.box_scan_interval_sec); 由上轮 get_config 刷新, 默认 30
+            self._stop_event.wait(timeout=max(1, int(self._box_scan_interval or 30)))
             if self._stop_event.is_set():
                 break
             try:

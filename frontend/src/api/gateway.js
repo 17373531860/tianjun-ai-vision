@@ -11,6 +11,10 @@ export const deleteConnection = (id) => api.delete(`/mes/gateway/connections/${i
 export const testConnection = (id, data) => api.post(`/mes/gateway/connections/${id}/test`, data || {})
 export const manualPush = (id, data) => api.post(`/mes/gateway/connections/${id}/push`, data)
 
+// ---- 出站主动健康探测 (A2) ----
+export const getHealthStatus = () => api.get('/mes/gateway/health-status')
+export const probeNow = (id) => api.post(`/mes/gateway/connections/${id}/probe-now`)
+
 // ---- 额外字段 ----
 export const setExtraFields = (data) => api.post('/mes/gateway/extra-fields', data)
 export const getExtraFields = (channelId = 0) => api.get('/mes/gateway/extra-fields', { params: { channel_id: channelId } })
@@ -29,3 +33,6 @@ export const getGatewayLogs = (params) => api.get('/mes/gateway/logs', { params 
 export const getInboundConfig = () => api.get('/mes/inbound/config')
 export const saveInboundConfig = (data) => api.put('/mes/inbound/config', data)
 export const getInboundLogs = (params) => api.get('/mes/inbound/logs', { params })
+
+// ---- 在途报警台账 (外部系统已收到的报警, 待其回推消除; 监控页持续横幅轮询用) ----
+export const getActiveAlarms = (params) => api.get('/mes/inbound/active-alarms', { params })

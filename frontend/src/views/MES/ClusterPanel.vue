@@ -81,6 +81,31 @@
           </div>
         </div>
 
+        <!-- B2 计时参数 (心跳/离线/扫描间隔, 默认即现状) -->
+        <div v-if="config.role !== 'standalone'" class="mt-3 pt-3 border-t border-slate-700/50">
+          <div class="text-xs text-gray-400 mb-2">高级计时（默认即现状，一般无需改）</div>
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">副机心跳间隔(秒)</div>
+              <el-input-number v-model="config.heartbeat_interval_sec" :min="1" :max="3600"
+                               size="small" class="!w-full" controls-position="right"
+                               @change="saveConfig" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">副机离线超时(秒)</div>
+              <el-input-number v-model="config.slave_timeout_sec" :min="2" :max="86400"
+                               size="small" class="!w-full" controls-position="right"
+                               @change="saveConfig" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">box扫描间隔(秒)</div>
+              <el-input-number v-model="config.box_scan_interval_sec" :min="1" :max="3600"
+                               size="small" class="!w-full" controls-position="right"
+                               @change="saveConfig" />
+            </div>
+          </div>
+        </div>
+
         <!-- v3.1.2 站点结果合并策略 -->
         <div v-if="config.role === 'master'" class="mt-3">
           <div class="text-xs text-gray-400 mb-1">站点结果合并策略</div>
@@ -375,7 +400,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getClusterConfig, updateClusterConfig,
@@ -384,6 +409,9 @@ import {
   deleteBox, clearBoxes,
 } from '@/api/cluster'
 import { dbg, dbgErr } from '@/utils/debug'
+import { usePollingStore } from '@/store/usePollingStore'
+
+const pollingStore = usePollingStore()
 
 const config = ref({
   role: 'standalone',
@@ -396,6 +424,9 @@ const config = ref({
   enabled: false,
   channel_station_map: {},
   station_result_strategy: 'latest',
+  heartbeat_interval_sec: 5,
+  slave_timeout_sec: 20,
+  box_scan_interval_sec: 30,
 })
 
 // 本机多通道场景下，每个视觉通道各自归属哪个站点。
@@ -427,7 +458,7 @@ const pendingBoxes = ref([])
 const recentSummaries = ref([])
 const recentTotal = ref(0)
 const recentPage = ref(1)
-const recentPageSize = 20
+const recentPageSize = computed(() => pollingStore.logLimit('cluster', 20))
 const testing = ref(false)
 const testResult = ref(null)
 const presetStations = ['A', 'B', 'C', 'D']
@@ -632,8 +663,8 @@ const saveConfig = async () => {
 const loadBoxes = async () => {
   try {
     const res = await getClusterBoxes({
-      skip: (recentPage.value - 1) * recentPageSize,
-      limit: recentPageSize,
+      skip: (recentPage.value - 1) * recentPageSize.value,
+      limit: recentPageSize.value,
     })
     pendingBoxes.value = res.data.pending || []
     recentSummaries.value = res.data.recent || []
@@ -824,15 +855,16 @@ const doHeartbeat = async () => {
 let refreshTimer = null
 let heartbeatTimer = null
 let slaveTimer = null
-onMounted(() => {
+onMounted(async () => {
+  await pollingStore.load()
   loadConfig().then(() => {
     doHeartbeat()
     loadSlaves()
   })
   loadBoxes()
-  refreshTimer = setInterval(loadBoxes, 5000)
-  heartbeatTimer = setInterval(doHeartbeat, 10000)
-  slaveTimer = setInterval(loadSlaves, 5000)
+  refreshTimer = setInterval(loadBoxes, pollingStore.get('cluster_boxes', 5000))
+  heartbeatTimer = setInterval(doHeartbeat, pollingStore.get('cluster_heartbeat', 10000))
+  slaveTimer = setInterval(loadSlaves, pollingStore.get('cluster_slaves', 5000))
 })
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)

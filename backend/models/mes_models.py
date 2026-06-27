@@ -394,6 +394,45 @@ class MESConnection(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class ExternalActiveAlarm(Base):
+    """外部对接「在途报警台账」— 已上报给外部生产管控系统、尚未被消除的报警。
+
+    通用能力, 零客户特异分支: 出站网关推送"报警事件"时按配置登记一条;
+    外部系统回推"报警消除命令"(入站 /mes/inbound/alarm/clear)时按唯一键匹配并消除;
+    监控页可轮询本表把"未消除报警"做成持续横幅。
+
+    唯一区分键参照客户约定 = task_no + product_code + step_code + operator (+ warning_text)。
+    具体用哪几个字段匹配由入站配置 alarm_clear_match_fields 决定。
+    """
+    __tablename__ = "external_active_alarms"
+    __table_args__ = (
+        Index("ix_ext_alarm_status", "status"),
+        Index("ix_ext_alarm_key", "task_no", "product_code", "step_code", "operator"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_no = Column(String(128), nullable=True, index=True)
+    product_code = Column(String(64), nullable=True)
+    step_code = Column(String(64), nullable=True)
+    operator = Column(String(64), nullable=True)
+    warning_text = Column(Text, nullable=True)
+
+    channel_id = Column(Integer, nullable=True)
+    event_type = Column(String(64), nullable=True)
+
+    # active = 在途未消除 / cleared = 已消除
+    status = Column(String(16), nullable=False, default="active", index=True)
+    # 消除来源: external(外部回推) / manual(界面手动) / auto(系统自动)
+    clear_source = Column(String(20), nullable=True)
+
+    raised_at = Column(DateTime(timezone=True), server_default=func.now())
+    cleared_at = Column(DateTime(timezone=True), nullable=True)
+
+    extra_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class MESCommLog(Base):
     """MES 通讯日志表"""
     __tablename__ = "mes_comm_logs"

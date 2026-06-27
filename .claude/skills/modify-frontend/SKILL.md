@@ -425,3 +425,10 @@ display.monitor.defaultCounters.{ showTotal, showGood, showBad, showNgSteps }
 
 - 后端路由可能早已存在（如「工位组互通」R4 的 `/channel-groups` 在 v3.13.1/v3.15.5 已有），只是缺前端入口——**先确认后端有没有，别重造**
 - `el-select` 单选别绑 boolean（见第 9 节）；对话框关闭重置表单避免脏数据残留
+
+## v3.29.0 新增前端要点（外部 MES 双向对接 + 可配置化）
+
+- **监控页开工四要素上屏**（`Monitor/index.vue`）：信息条扩展四要素 chip（任务号/产品代号/工序工步/操作员），数据来自 `/source/detection/results` 的 `mes.order.extra_data.inbound`；逐项显隐开关在入站对接面板（`OrderInboundPanel.vue` 的 `task_info_display`），**默认全关 = 维持原界面不追加任何标签**——改 Monitor 信息条务必保持"未开即原样"
+- **在途报警横幅**（`Monitor/ExternalAlarmBanner.vue`，独立组件）：轮询 `/mes/inbound/active-alarms` 取未消除报警持续显示，外观/行为全可配（显隐/停靠/主色/刷新间隔/字段）；外部消除后下一轮轮询自动消失。**横幅现场点不掉是设计**（只能外部系统消除）
+- **管理面板轮询间隔/日志条数可配**（`Settings/index.vue` 新增「轮询间隔」Tab + `store/usePollingStore.js`）：各 MES 面板（Cluster/Order/Scanner/ExternalDevice/WMax/UsbScanGun）的刷新频率与"最近日志"条数不再写死，统一读 store；新加管理面板时**别再写死轮询间隔/日志条数常量**，接入 `usePollingStore` 即可
+- **后端自愈提示**（`App.vue`）：监听 `electronAPI.onBackendRecovered` 弹常驻 toast + 记 `app.lifecycle` 调试类别

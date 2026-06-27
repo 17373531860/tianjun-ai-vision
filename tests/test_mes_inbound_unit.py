@@ -114,3 +114,59 @@ def test_echo_fields_appended():
     cfg = _cfg(enabled=True, switch_project_on_task=False, echo_fields=["task_no"])
     res = svc.handle_task_start(None, {"TaskNo": "T7", "ProductCode": "P1"}, cfg)
     assert res["response"]["task_no"] == "T7"
+
+
+# ==================== 完工真值词表 (A7) ====================
+def test_truthy_default_words():
+    assert MESInbound._truthy("完工") is True
+    assert MESInbound._truthy("YES") is True       # 大小写不敏感
+    assert MESInbound._truthy("done") is False     # 不在默认表
+
+
+def test_truthy_bool_and_number():
+    assert MESInbound._truthy(True) is True
+    assert MESInbound._truthy(1) is True
+    assert MESInbound._truthy(0) is False
+    assert MESInbound._truthy(None) is False
+
+
+def test_truthy_custom_words():
+    words = ["done", "结束"]
+    assert MESInbound._truthy("done", words) is True
+    assert MESInbound._truthy("结束", words) is True
+    # 自定义表后默认词不再命中
+    assert MESInbound._truthy("完工", words) is False
+    assert MESInbound._truthy("yes", words) is False
+
+
+def test_truthy_empty_words_falls_back():
+    # 空表 → 回落默认
+    assert MESInbound._truthy("完工", []) is True
+
+
+# ==================== 响应文案覆盖 (A6) ====================
+def test_response_message_override():
+    cfg = _cfg()
+    cfg["response"]["messages"] = {"missing_field": "自定义缺字段提示"}
+    resp = MESInbound.build_response(cfg, "missing_field", "缺少必填字段: a")
+    assert resp["message"] == "自定义缺字段提示"
+
+
+def test_response_message_no_override_keeps_default():
+    cfg = _cfg()
+    resp = MESInbound.build_response(cfg, "missing_field", "缺少必填字段: a")
+    assert resp["message"] == "缺少必填字段: a"
+
+
+def test_response_message_empty_override_ignored():
+    cfg = _cfg()
+    cfg["response"]["messages"] = {"missing_field": ""}
+    resp = MESInbound.build_response(cfg, "missing_field", "缺少必填字段: a")
+    assert resp["message"] == "缺少必填字段: a"  # 空覆盖忽略, 用默认
+
+
+def test_response_success_message_override():
+    cfg = _cfg()
+    cfg["response"]["messages"] = {"success": "已受理"}
+    resp = MESInbound.build_response(cfg, "success", "ok")
+    assert resp["message"] == "已受理"

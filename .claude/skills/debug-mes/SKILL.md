@@ -679,4 +679,29 @@ curl http://localhost:8001/api/v1/cluster/slaves
 
 ---
 
+## 外部 MES/中控「主动推」型双向对接全闭环（v3.29.0，川南火工范式）
+
+针对"中控来推开工、我们把报警与完工推回去"的双向场景，主程序原生可配，**全部默认关 = 老项目零差异**。一进一出两块面板：入站对接（`backend/api/mes_inbound.py` + `backend/services/mes_inbound.py`）、出站网关（`backend/services/mes_gateway.py`）。
+
+**入站链路关键决策点**（`mes_inbound.py`，开 `backend.mes` 调试类别能看到全程人话日志）：
+- `handle_task_start` → `_apply_task_action`：完工信号优先 → 拒绝重复(可选) → `_switch_project`(按产品代号切检测项目：先查对照表 `product_project_map`，再兜底"项目名==产品代号") → `_ensure_work_order`(建工单 + 四要素留痕到 `extra_data.inbound`) → `_supersede_previous_tasks`(最新开工顶替 + 对被顶替单回推完工)
+- `handle_alarm_clear`：按 `alarm_clear_match_fields`（默认四要素）匹配在途报警消除，匹配不到回 `alarm_not_found`(40007)
+- 错误码：`disabled`/`missing_field`(40004)/`unknown_product`(40002)/`duplicate`(40001)/`alarm_not_found`(40007)，话术可配
+
+**在途报警台账**（`backend/services/external_alarm.py` + 表 `external_active_alarms`）：
+- `record_active_alarm`：出站成功推送报警后登记（出站侧 `mes_gateway._record_active_alarm_if_alarm` 调用）；`dedup_sec` 去重窗口
+- `clear_alarms`：按唯一键匹配消除；`list_active_alarms`：监控页横幅轮询取未消除
+- 匹配维度：5 个原生列（task_no/product_code/step_code/operator/warning_text）+ 任意自定义维度（存 `extra_data.ext`，走 `json_extract`）——**去重口径与消除口径共用同一套 `match_fields`，必须一致**
+- 健康探测：`backend/services/mes_health_probe.py`（`backend.gateway` 类别，仅在线↔离线翻转打日志）
+
+**排查口诀**：
+- 横幅"等待消除"撤不掉 → 查中控消除报文的匹配字段是否与登记时一致（开 `backend.mes` 看"报警消除未命中"）
+- 报警重复登记 → 看去重窗口 `dedup_sec` 配没配 + 匹配字段是否稳定
+- 开工不切项目 → 看"切项目未命中产品码"，确认项目名==产品代号或对照表
+- 顶替没回推完工 → 看 `report_complete_on_supersede` + 出站完工连接是否建
+
+> 完整 14 场景 BDD：`tests/features/chuannan_mes_integration.feature`；可见浏览器全链路 UAT + 模拟中控：`tests/uat/uat_20260627_chuannan_full_loop.py` + `tests/uat/mock_chuannan_mcs.py`。
+
+---
+
 **改动 MES 子系统前必读**：本 skill 第 3/5/8/11 节 + AGENTS.md 第六节 6.2、第八节不变量 1/4/6。

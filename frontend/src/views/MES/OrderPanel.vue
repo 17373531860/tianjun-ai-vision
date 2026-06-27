@@ -333,6 +333,9 @@ import { getProjects } from '@/api/project'
 import { getClusterConfig } from '@/api/cluster'
 import { useProjectStore } from '@/store/useProjectStore'
 import { dbg, dbgErr } from '@/utils/debug'
+import { usePollingStore } from '@/store/usePollingStore'
+
+const pollingStore = usePollingStore()
 
 const projectStore = useProjectStore()
 const onlyCurrentProject = ref(true)
@@ -804,7 +807,7 @@ const toggleAutoRefresh = (val) => {
   // D7: 开启前先清旧定时器, 防止重复开启叠加多个 interval(长跑泄漏)
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
   if (val) {
-    refreshTimer = setInterval(loadOrders, 10000)
+    refreshTimer = setInterval(loadOrders, pollingStore.get('order_list', 10000))
   }
 }
 
@@ -1172,6 +1175,7 @@ const saveTemplate = () => {
 }
 
 onMounted(() => {
+  pollingStore.load()
   loadArchivedOrderIds()
   loadTemplate()
   loadOrders()

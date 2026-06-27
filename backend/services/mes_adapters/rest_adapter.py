@@ -16,7 +16,15 @@ class RESTAdapter(BaseAdapter):
         url = config.get("url", "")
         method = config.get("method", "POST").upper()
         headers = {**config.get("headers", {})}
-        timeout = config.get("timeout", 30)
+        # 超时: 支持连接/读取分离 (川南协议 §5.1 连接 5s / 读取 10s, 含图建议放大)。
+        # 配了 connect_timeout / read_timeout 任一 → 用 (connect, read) 元组; 否则单值 timeout。
+        ct = config.get("connect_timeout")
+        rt = config.get("read_timeout")
+        if ct is not None or rt is not None:
+            timeout = (float(ct) if ct is not None else 5.0,
+                       float(rt) if rt is not None else 30.0)
+        else:
+            timeout = config.get("timeout", 30)
 
         if "Content-Type" not in headers:
             headers["Content-Type"] = "application/json"
@@ -49,7 +57,7 @@ class RESTAdapter(BaseAdapter):
         except requests.Timeout:
             return {
                 "status_code": 0, "body": None, "success": False,
-                "error": f"请求超时 ({timeout}s)",
+                "error": f"请求超时 (timeout={timeout})",
                 "duration_ms": int((time.time() - start) * 1000),
             }
         except requests.ConnectionError as e:

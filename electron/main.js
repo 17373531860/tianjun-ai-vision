@@ -298,17 +298,38 @@ function initBackendManager() {
     console.error('[App] Backend error:', err.message);
   });
   
+  // v3.29.0 看门狗: 后端进程意外退出不再直接退应用, 交由 BackendManager 自动拉起。
+  // 仅当看门狗放弃 (restart-failed) 时, 才回退到"弹错误框 + 退出"的老行为。
   backendManager.on('exit', ({ code, signal }) => {
-    // 只有在非正常退出流程中才显示错误
-    if (!isQuitting && code !== 0 && code !== null) {
-      dialog.showErrorBox('后端服务错误', `后端服务意外退出 (code: ${code})`);
-      // 后端崩溃了，直接退出应用
-      isQuitting = true;
-      if (shutdownWindow && !shutdownWindow.isDestroyed()) {
-        shutdownWindow.close();
-      }
-      app.exit(1);
+    if (!isQuitting) {
+      console.warn(`[App] 后端进程退出 (code: ${code}, signal: ${signal}), 看门狗接管`);
     }
+  });
+
+  backendManager.on('restarting', ({ attempt, delay }) => {
+    console.warn(`[App] 看门狗: 后端异常, ${delay}ms 后第 ${attempt} 次自动恢复`);
+  });
+
+  backendManager.on('restarted', ({ attempt }) => {
+    console.log(`[App] 看门狗: 后端已自动恢复 (第 ${attempt} 次), 通知前端`);
+    // 轻提示前端"已恢复, 请重新开始检测" (恢复后是全新后端进程, 不在检测态)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const wc = mainWindow.webContents;
+      if (wc && !wc.isLoading()) {
+        try { wc.send('backend:recovered'); } catch (e) { /* 忽略 */ }
+      }
+    }
+  });
+
+  backendManager.on('restart-failed', ({ code }) => {
+    if (isQuitting) return;
+    dialog.showErrorBox('后端服务错误',
+      `后端服务多次异常退出, 自动恢复失败 (code: ${code})。\n应用将退出, 请重启软件。`);
+    isQuitting = true;
+    if (shutdownWindow && !shutdownWindow.isDestroyed()) {
+      shutdownWindow.close();
+    }
+    app.exit(1);
   });
   
   backendManager.on('unhealthy', () => {

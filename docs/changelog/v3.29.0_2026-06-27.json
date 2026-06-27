@@ -1,0 +1,128 @@
+{
+  "version": "3.29.0",
+  "date": "2026-06-27",
+  "previous_version": "3.28.0",
+  "theme": "外部 MES/中控主动推型双向对接全闭环（川南火工范式）+ 去硬编码可配置化 + 后端崩溃自愈/开机自启 + 调试日志完善",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "外部 MES/中控双向对接全闭环（川南火工范式）",
+      "symptom": "主动推型中控下发开工后期望我们把报警/完工推回去，接口路径/字段/话术需客户自配不能写死",
+      "root_cause": "入站对接此前只接收登记，缺自动切项目/四要素留痕/顶替回推/报警闭环/自定义路径等闭环能力",
+      "fix": "入站扩为完整双向闭环：按产品代号自动切项目(对照表+同名兜底)/开工建工单留四要素/最新开工顶替旧任务并回推完工/完工真值词表可配/响应文案可覆盖/产品码未知话术可配/自定义接收路径/健康检查端点，全部默认关",
+      "files": ["backend/api/mes_inbound.py", "backend/services/mes_inbound.py"],
+      "keywords": ["川南火工", "MES inbound", "入站对接", "双向闭环", "自动切项目", "四要素", "完工回推", "顶替", "OrderInbound", "task_start", "supersede"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "在途报警闭环（外部报警台账，通用能力）",
+      "symptom": "报警推中控后要等消除才闭环，期间要持续可见且不能重复推/重复登记，匹配维度需可配",
+      "root_cause": "缺在途报警台账与去重/消除/匹配机制",
+      "fix": "新增 ExternalActiveAlarm 表 + external_alarm 服务：推送成功后登记在途报警，外部回推消除按唯一键撤销，监控页横幅同步；去重窗口/只登NG/消除匹配字段可配；除5原生列外支持自定义维度(extra_data.ext + json_extract)，无客户硬编码",
+      "files": ["backend/services/external_alarm.py", "backend/models/mes_models.py", "backend/services/mes_gateway.py", "backend/api/mes_inbound.py", "backend/main.py"],
+      "keywords": ["在途报警", "报警台账", "external_active_alarms", "去重", "消除", "alarm_clear", "json_extract", "报警闭环", "dedup"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "监控页开工四要素上屏 + 在途报警横幅（逐项可配、默认全关）",
+      "symptom": "开工后主界面需常驻显示任务四要素且逐项可开关；有未消除报警需主界面醒目提醒",
+      "root_cause": "监控页无任务四要素常驻显示，无外部报警横幅",
+      "fix": "监控页信息条扩四要素chip(逐项勾选默认全关)；新增外部报警横幅组件(显隐/停靠/主色/刷新间隔/字段全可配，外部消除自动撤)，不开时维持原界面",
+      "files": ["frontend/src/views/Monitor/index.vue", "frontend/src/views/Monitor/ExternalAlarmBanner.vue", "frontend/src/views/MES/OrderInboundPanel.vue"],
+      "keywords": ["四要素上屏", "任务信息条", "报警横幅", "ExternalAlarmBanner", "task_info_display", "alarm_banner", "监控页"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "出站网关川南字段预设 + 健康定时探测",
+      "symptom": "报警上报报文需川南字段一键预设；需定时探活中控是否在线且频率可配",
+      "root_cause": "无川南报文预设，无主动健康探测调度",
+      "fix": "网关模板新增川南报警预设(TaskNo/ProductCode/StepCode/Operator/WarningText/Image)；新增健康探测调度器按连接配置定时探活，仅在线↔离线翻转记日志",
+      "files": ["backend/services/mes_gateway.py", "backend/api/mes_gateway.py", "backend/services/mes_health_probe.py", "backend/services/mes_adapters/rest_adapter.py", "frontend/src/views/MES/GatewayPanel.vue", "frontend/src/api/gateway.js"],
+      "keywords": ["川南预设", "健康探测", "health_probe", "网关", "Gateway", "定时探活", "render_template"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "FEAT-005",
+      "title": "去硬编码：集群计时参数 + 管理面板刷新间隔/日志条数可配",
+      "symptom": "集群心跳/离线/扫描间隔、各管理面板刷新频率与日志条数写死，违反通用可配原则",
+      "root_cause": "这些参数原为代码常量",
+      "fix": "集群三计时参数改存SystemConfig KV(当前值作默认免迁移)；系统设置新增「轮询间隔」Tab集中配各面板刷新间隔(下限500ms)与日志条数(1-500)，白名单校验越界回落",
+      "files": ["backend/services/cluster_collector.py", "backend/api/cluster.py", "backend/api/system_display.py", "frontend/src/views/Settings/index.vue", "frontend/src/store/usePollingStore.js", "frontend/src/views/MES/ClusterPanel.vue", "frontend/src/views/MES/OrderPanel.vue", "frontend/src/views/MES/ScannerPanel.vue", "frontend/src/views/MES/ExternalDevicePanel.vue", "frontend/src/views/MES/WMaxPanel.vue", "frontend/src/views/MES/UsbScanGunDialog.vue"],
+      "keywords": ["去硬编码", "可配置", "轮询间隔", "日志条数", "polling", "loglimit", "集群计时参数", "SystemConfig"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "桌面壳后端崩溃自愈（看门狗）",
+      "symptom": "现场后端进程偶发崩溃需人工重开",
+      "root_cause": "无自动拉起机制",
+      "fix": "backend-manager 内置看门狗：就绪后意外退出自动按1s/2s/4s退避重启，60s内最多3次，超限提示人工介入；IPC通知前端重启中/已恢复/失败",
+      "files": ["electron/backend-manager.js", "electron/main.js", "electron/preload.js", "frontend/src/App.vue"],
+      "keywords": ["看门狗", "watchdog", "崩溃自愈", "自动重启", "backend-manager", "退避", "限流", "onBackendRecovered"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-007",
+      "title": "安装时可选开机自启",
+      "symptom": "部分产线希望工控机上电自动起软件",
+      "root_cause": "安装器无开机自启选项",
+      "fix": "安装向导新增「开机自动启动」可选项(写系统启动项)，默认不勾；配合开机自动恢复检测即全自动",
+      "files": ["electron/build/installer.iss"],
+      "keywords": ["开机自启", "autostart", "installer", "启动项", "Inno Setup"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-008",
+      "title": "调试日志完善：入站/报警台账/健康探测/看门狗新链路补全埋点",
+      "symptom": "新子系统此前只在出错时打日志，调试中心看不到正常决策叙事",
+      "root_cause": "happy-path 决策点缺埋点",
+      "fix": "入站补收到开工(四要素)/缺字段/切项目命中或未命中/建单留痕/复用工单/最新顶替/收到消除+命中或未命中(backend.mes)；报警台账补登记/去重跳过(backend.mes)；健康探测仅翻转打日志(backend.gateway)；前端新增 app.lifecycle 类别记看门狗自愈",
+      "files": ["backend/services/mes_inbound.py", "backend/services/external_alarm.py", "backend/services/mes_health_probe.py", "frontend/src/utils/debug.js", "frontend/src/App.vue"],
+      "keywords": ["调试日志", "调试中心", "debug_center", "埋点", "backend.mes", "backend.gateway", "app.lifecycle"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "DOC-001",
+      "title": "软件操作手册 + 川南从零配置手册更新",
+      "symptom": "新功能无文档；客户配置手册有空白页",
+      "root_cause": "手册未覆盖 v3.29 新能力；PDF 排版留白",
+      "fix": "软件操作手册补 4.8.9/4.8.5/4.7 + 配方M + FAQ Q24/Q25 并重生成PDF；川南从零配置手册消空白页、图宽收敛至13页",
+      "files": ["docs/软件操作手册.md", "docs/软件操作手册.pdf", "docs/川南火工对接_配置操作手册.pdf", "gen_chuannan_config_guide.py"],
+      "keywords": ["软件操作手册", "川南配置手册", "文档", "PDF", "配方M"],
+      "breaking": false
+    }
+  ],
+  "tests": [
+    {"id": "TEST-001", "title": "川南双向对接14场景BDD", "result": "14/14 passed", "files": ["tests/features/chuannan_mes_integration.feature", "tests/step_defs/test_chuannan_mes_integration.py"]},
+    {"id": "TEST-002", "title": "可见浏览器全链路UAT(真模拟中控)", "result": "20/20 passed", "files": ["tests/uat/uat_20260627_chuannan_full_loop.py", "tests/uat/mock_chuannan_mcs.py"]}
+  ],
+  "db_changes": ["新增表 external_active_alarms (在途报警台账); main.py migrate_database 已加迁移"],
+  "skills_updated": ["debug-mes", "modify-frontend", "debug-electron"],
+  "files_changed": [
+    "backend/api/mes_inbound.py", "backend/services/mes_inbound.py", "backend/services/external_alarm.py",
+    "backend/services/mes_health_probe.py", "backend/services/mes_gateway.py", "backend/api/mes_gateway.py",
+    "backend/services/mes_adapters/rest_adapter.py", "backend/api/system_display.py", "backend/models/mes_models.py",
+    "backend/api/cluster.py", "backend/services/cluster_collector.py", "backend/main.py",
+    "electron/backend-manager.js", "electron/main.js", "electron/preload.js", "electron/build/installer.iss",
+    "frontend/src/App.vue", "frontend/src/api/gateway.js", "frontend/src/utils/debug.js",
+    "frontend/src/store/usePollingStore.js", "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Monitor/ExternalAlarmBanner.vue", "frontend/src/views/MES/OrderInboundPanel.vue",
+    "frontend/src/views/MES/GatewayPanel.vue", "frontend/src/views/Settings/index.vue",
+    "frontend/src/views/MES/ClusterPanel.vue", "frontend/src/views/MES/OrderPanel.vue",
+    "frontend/src/views/MES/ScannerPanel.vue", "frontend/src/views/MES/ExternalDevicePanel.vue",
+    "frontend/src/views/MES/WMaxPanel.vue", "frontend/src/views/MES/UsbScanGunDialog.vue",
+    "docs/软件操作手册.md", "docs/软件操作手册.pdf", "docs/川南火工对接_配置操作手册.pdf"
+  ]
+}

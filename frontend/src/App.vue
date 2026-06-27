@@ -2,6 +2,7 @@
 import { onMounted, onErrorCaptured } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
+import { dbg } from '@/utils/debug';
 
 const router = useRouter();
 
@@ -17,6 +18,20 @@ onMounted(() => {
         type: 'warning',
         message: '后端已启动但数据库就绪检测超时, 已降级进入界面。若项目/数据显示异常, 请检查数据库状态。',
         duration: 8000,
+        showClose: true,
+      });
+    });
+  }
+
+  // v3.29.0 看门狗: 后端进程崩溃被自动拉起后, 提示操作员重新开始检测
+  // (恢复后是全新后端进程, 不在检测态, 需手动再点"开始")
+  if (typeof window !== 'undefined' && window.electronAPI?.onBackendRecovered) {
+    window.electronAPI.onBackendRecovered(() => {
+      dbg('app.lifecycle', '后端被看门狗自动恢复', '后端进程崩溃后已自动拉起, 检测态已重置, 需手动重新开始');
+      ElMessage({
+        type: 'warning',
+        message: '后端服务异常后已自动恢复, 检测已停止, 请重新点击"开始检测"。',
+        duration: 0,
         showClose: true,
       });
     });

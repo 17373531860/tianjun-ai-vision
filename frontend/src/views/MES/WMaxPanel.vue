@@ -412,6 +412,9 @@ import {
   wmaxStartReadRate, wmaxStopReadRate, wmaxGetReadRate,
   wmaxSetOutputConfig, wmaxSetIndicatorConfig,
 } from '@/api/wmax'
+import { usePollingStore } from '@/store/usePollingStore'
+
+const pollingStore = usePollingStore()
 
 const Param = defineComponent({
   props: { label: String },
@@ -860,6 +863,7 @@ const resetDevice = async () => {
 
 // ── 生命周期 ─────────────────────────────────────────────
 onMounted(async () => {
+  await pollingStore.load()
   await refreshWmaxStatus()
   if (props.wmaxIp) {
     selectedIp.value = props.wmaxIp
@@ -870,7 +874,7 @@ onMounted(async () => {
     selectedPort.value = first.port || 55266
   }
   if (selectedIp.value) await loadConfig()
-  pollingTimer = setInterval(refreshWmaxStatus, 5000)
+  pollingTimer = setInterval(refreshWmaxStatus, pollingStore.get('wmax_status', 5000))
 })
 onUnmounted(() => {
   if (pollingTimer) clearInterval(pollingTimer)

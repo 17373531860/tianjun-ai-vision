@@ -426,6 +426,9 @@ import {
 import { getWorkstations } from '@/api/detection'
 import { useSystemStore } from '@/store/useSystemStore'
 import { dbg, dbgErr } from '@/utils/debug'
+import { usePollingStore } from '@/store/usePollingStore'
+
+const pollingStore = usePollingStore()
 
 const systemStore = useSystemStore()
 const devices = ref([])
@@ -782,7 +785,7 @@ const refreshStatus = async () => {
 const loadLogs = async (showFeedback = false) => {
   if (showFeedback) logsLoading.value = true
   try {
-    logs.value = (await getExternalDeviceLogs({ limit: 30 })).data.items || []
+    logs.value = (await getExternalDeviceLogs({ limit: pollingStore.logLimit('external_device', 30) })).data.items || []
     if (showFeedback) ElMessage.success('外部设备日志已刷新')
   } catch (e) {
     const msg = e.response?.data?.detail || e.message || '网络错误'
@@ -828,10 +831,11 @@ const loadChannelCount = async () => {
     channelCount.value = 1
   }
 }
-onMounted(() => {
+onMounted(async () => {
+  await pollingStore.load()
   loadChannelCount()
   loadDevices(); refreshStatus(); loadLogs()
-  timer = setInterval(() => { refreshStatus(); loadLogs() }, 5000)
+  timer = setInterval(() => { refreshStatus(); loadLogs() }, pollingStore.get('external_device', 5000))
 })
 onUnmounted(() => { if (timer) clearInterval(timer) })
 </script>
