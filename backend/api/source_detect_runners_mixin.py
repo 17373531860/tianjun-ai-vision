@@ -249,6 +249,13 @@ class DetectRunnersMixin:
                     if enabled_labels and class_name not in enabled_labels:
                         continue
 
+                    # 频闪诊断: 记录通过类别/启用过滤的原始最高置信度 (步骤阈值过滤前),
+                    # 供事后区分"框被阈值过滤"(边界抖) vs "模型真没框"(丢检)。_diag_raw_conf
+                    # 由推理循环每帧重置, 不存在(老路径)则不记录, 零副作用。
+                    _draw = getattr(self, '_diag_raw_conf', None)
+                    if _draw is not None and confidence > _draw.get(class_name, 0):
+                        _draw[class_name] = confidence
+
                     # 步骤特定置信度阈值
                     if self.step_conf_thresholds:
                         step_threshold = self.step_conf_thresholds.get(class_name)
@@ -365,6 +372,11 @@ class DetectRunnersMixin:
                         continue
                     if enabled_labels and class_name not in enabled_labels:
                         continue
+                    # 频闪诊断侧信道 (步骤阈值过滤前记原始最高置信度; 详见 _detect_only)
+                    _draw = getattr(self, '_diag_raw_conf', None)
+                    if _draw is not None and confidence > _draw.get(class_name, 0):
+                        _draw[class_name] = confidence
+
                     if self.step_conf_thresholds:
                         thr = self.step_conf_thresholds.get(class_name)
                         if thr is not None and confidence < thr:

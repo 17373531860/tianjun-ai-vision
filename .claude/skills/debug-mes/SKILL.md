@@ -700,6 +700,15 @@ curl http://localhost:8001/api/v1/cluster/slaves
 - 开工不切项目 → 看"切项目未命中产品码"，确认项目名==产品代号或对照表
 - 顶替没回推完工 → 看 `report_complete_on_supersede` + 出站完工连接是否建
 
+**规格/产品码 → 检测项目 统一匹配器（v3.30.0+，入站与上银包装共用）**：
+- 单一入口 `backend/services/project_match.py: resolve_project_id_by_spec(db, spec, mapping, match_by_name, strict_boundary)`，取项目三级兜底：
+  1. **对照表精确**：`mapping[spec]`（入站 = `product_project_map`，包装 = `spec_to_project`）
+  2. **对照表通配符**：键含 `*`/`?` 走 `fnmatch`，取最长键（最具体）→ 吃下前缀变 `*-X` / 后缀变 `X-*` / 中间固定 `*X*` / 任意或无分隔符
+  3. **自动同名子串**：`match_by_name=True` 时，项目名是 spec 的子串即命中，取最长项目名（不误吞短名）；`strict_boundary=True` 要求命中处贴串首/尾或分隔符（防 HG 吞 HGH20，但无分隔符场景会落空）
+- 两个消费方：入站 `mes_inbound._switch_project`、包装 `packaging_flow_coordinator._real_project_activator`，**口径完全一致**（后期合并就靠这层）
+- ⚠️ `match_by_name` / `strict_boundary` 默认全 **关**（存量客户零差异，要的人显式开）。包装侧落 `packaging_flow_configs.name_match_strict_boundary` 列；入站存 SystemConfig JSON
+- 排查"规格切不对项目"：先确认开关是否打开 → 看日志"切项目命中/未命中"里的"经XX"（对照表/通配符对照表/项目名精确/项目名子串）判断走了哪级；回归看 `tests/test_project_match.py` + `tests/step_defs/test_spec_project_switch.py` + `tests/test_e2e_spec_project_switch.py`
+
 > 完整 14 场景 BDD：`tests/features/chuannan_mes_integration.feature`；可见浏览器全链路 UAT + 模拟中控：`tests/uat/uat_20260627_chuannan_full_loop.py` + `tests/uat/mock_chuannan_mcs.py`。
 
 ---

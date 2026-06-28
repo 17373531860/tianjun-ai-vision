@@ -209,6 +209,8 @@ class PackagingFlowCoordinator:
             "slider_total_field": getattr(row, "slider_total_field", None) or "dispatch_qty",
             "auto_switch_project": bool(getattr(row, "auto_switch_project", False)),
             "spec_to_project": getattr(row, "spec_to_project", None) or {},
+            "match_project_by_name": bool(getattr(row, "match_project_by_name", False)),
+            "name_match_strict_boundary": bool(getattr(row, "name_match_strict_boundary", False)),
             "tail_paper_order_required": bool(getattr(row, "tail_paper_order_required", False)),
             "tail_paper_step_label": getattr(row, "tail_paper_step_label", None),
             "event_missing_paper": getattr(row, "event_missing_paper", None),
@@ -1193,27 +1195,32 @@ def _real_box_target_setter(channel_id: int, target: int) -> None:
 
 
 def _real_project_activator(spec: str, cfg: Dict[str, Any]) -> bool:
-    """按规格查 spec_to_project 映射, 激活对应项目 (复用 projects 重载 + 配置同步).
+    """按规格激活对应项目。取项目口径见 services.project_match.resolve_project_id_by_spec
+    (对照表精确 → 通配符 → 自动同名子串, 与 MES 入站完全一致)。
 
-    映射缺该规格 / 项目不存在 → False (上层报警兜底, 用当前项目继续).
+    均未命中 → False (上层报警兜底, 用当前项目继续).
     """
     try:
-        mapping = cfg.get("spec_to_project") or {}
-        pid = mapping.get(str(spec))
-        if pid is None:
-            pid = mapping.get(spec)
-        if not pid:
-            return False
         from backend.db.database import SessionLocal
         from backend.models.models import Project
+        from backend.services.project_match import resolve_project_id_by_spec
         from backend.api.projects import (
             _reload_model_for_active_project, _sync_project_config_to_channels)
 
         db = SessionLocal()
         try:
+            pid, hit_by = resolve_project_id_by_spec(
+                db, spec, cfg.get("spec_to_project") or {},
+                match_by_name=cfg.get("match_project_by_name", False),
+                strict_boundary=cfg.get("name_match_strict_boundary", False))
+            if pid is None:
+                _pkg_dbg("切项目未命中", f"spec={spec!r} 对照表/通配符/同名项目均无")
+                return False
             proj = db.query(Project).filter(Project.id == int(pid)).first()
             if proj is None:
+                _pkg_dbg("切项目未命中", f"spec={spec!r} 命中 id#{pid} 但项目不存在")
                 return False
+            _pkg_dbg("切项目命中", f"spec={spec!r} → 项目#{proj.id} (经{hit_by})")
             db.query(Project).update({Project.is_active: False})
             proj.is_active = True
             db.commit()

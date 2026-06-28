@@ -296,10 +296,18 @@
                 <el-switch v-model="form.auto_switch_project" />
                 <span class="text-xs text-gray-400 ml-2">扫工单拿到规格后自动激活对应项目</span>
               </el-form-item>
+              <el-form-item label="项目名匹配规格 兜底" v-if="form.auto_switch_project">
+                <el-switch v-model="form.match_project_by_name" />
+                <span class="text-xs text-gray-400 ml-2">开 = 映射表没命中时, 按"项目名是规格的一段"自动匹配 (项目名贴在规格里即可, 免维护映射表)</span>
+              </el-form-item>
+              <el-form-item label="严格边界" v-if="form.auto_switch_project && form.match_project_by_name">
+                <el-switch v-model="form.name_match_strict_boundary" />
+                <span class="text-xs text-gray-400 ml-2">开 = 项目名须贴规格首/尾或分隔符(防短名误吞); 关 = 取最长命中压歧义, 能覆盖无分隔符场景</span>
+              </el-form-item>
               <el-form-item label="规格→项目映射 (JSON)" v-if="form.auto_switch_project">
                 <el-input type="textarea" v-model="specToProjectJson" :rows="2"
-                          placeholder='{"HGH20": 3, "HGW15": 4}' />
-                <div class="text-xs text-gray-400 mt-1">键 = MES 返回的产品规格, 值 = 项目 ID</div>
+                          placeholder='{"HGH20-*": 3, "*-HGW15": 4}' />
+                <div class="text-xs text-gray-400 mt-1">键 = 规格(支持通配符 * ?, 如 HGH20-* / *-HGW15 / *ABC*), 值 = 项目 ID; 优先于"项目名兜底", 全靠命名匹配可留空</div>
               </el-form-item>
               <el-form-item label="尾箱必须塞工单">
                 <el-switch v-model="form.tail_paper_order_required" />
@@ -491,6 +499,8 @@ const _newForm = () => ({
   slider_total_field: 'dispatch_qty',
   auto_switch_project: false,
   spec_to_project: null,
+  match_project_by_name: false,
+  name_match_strict_boundary: false,
   tail_paper_order_required: false,
   tail_paper_step_label: null,
   event_missing_paper: null,

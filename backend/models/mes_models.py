@@ -832,6 +832,13 @@ class PackagingFlowConfig(Base):
     # 按物料规格自动激活对应项目 (默认关). spec_to_project: {规格: 项目id}
     auto_switch_project = Column(Boolean, default=False)
     spec_to_project = Column(JSON, nullable=True)
+    # 规格未命中对照表时, 兜底"项目名==规格"自动匹配 (与 MES 入站 match_project_by_name
+    # 口径一致)。默认关 = 新功能不影响存量客户(维持"仅对照表"老行为); 开 = 项目直接以
+    # 规格命名即可零配置切换。仅 auto_switch_project 开时生效。
+    match_project_by_name = Column(Boolean, default=False)
+    # 自动同名匹配的"严格边界"档 (默认关): 开 = 项目名命中处须贴串首/尾或分隔符(防 HG 误吞 HGH20);
+    # 关 = 仅靠"取最长命中"压歧义, 但能覆盖无分隔符场景。仅 match_project_by_name 开时生效。
+    name_match_strict_boundary = Column(Boolean, default=False)
     # 尾箱塞工单视觉 gate (默认关): 尾箱结算前"放工单"步骤必须 covered, 否则不收尾 + 报警
     tail_paper_order_required = Column(Boolean, default=False)
     tail_paper_step_label = Column(String(64), nullable=True)

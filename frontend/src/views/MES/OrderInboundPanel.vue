@@ -62,12 +62,16 @@
       </el-form-item>
       <el-form-item v-if="form.switch_project_on_task" label="按项目名自动匹配">
         <el-switch v-model="form.match_project_by_name" />
-        <span class="text-xs text-gray-500 ml-2">下方对照表无匹配时，自动按「检测项目名 == 产品代号」匹配（项目直接命名为产品代号即可零配置，默认开）</span>
+        <span class="text-xs text-gray-500 ml-2">下方对照表无匹配时，自动按「检测项目名是产品代号的一段」匹配（项目名贴在产品码里即可，免维护对照表，默认关）</span>
+      </el-form-item>
+      <el-form-item v-if="form.switch_project_on_task && form.match_project_by_name" label="严格边界">
+        <el-switch v-model="form.name_match_strict_boundary" />
+        <span class="text-xs text-gray-500 ml-2">开 = 项目名须贴产品码首/尾或分隔符（防短名误吞）；关 = 取最长命中压歧义，能覆盖无分隔符场景</span>
       </el-form-item>
       <el-form-item v-if="form.switch_project_on_task" label="产品代号 → 项目">
         <div class="flex flex-col gap-2 w-full">
           <div v-for="(row, i) in form.mapRows" :key="i" class="flex items-center gap-2">
-            <el-input v-model="row.code" placeholder="产品代号(外部传来的)" class="w-52" />
+            <el-input v-model="row.code" placeholder="产品代号(支持通配符 * ?, 如 HGH20-*)" class="w-52" />
             <span class="text-gray-500">→</span>
             <el-select v-model="row.project_id" filterable placeholder="选检测项目" class="w-60">
               <el-option v-for="p in projects" :key="p.id" :label="`#${p.id} ${p.name}`" :value="p.id" />
@@ -444,7 +448,8 @@ function emptyForm() {
     merge_query_params: true,
     echo_fields: [],
     switch_project_on_task: false,
-    match_project_by_name: true,
+    match_project_by_name: false,
+    name_match_strict_boundary: false,
     mapRows: [],
     create_work_order_on_task: false,
     order_binding: 'project',
@@ -549,7 +554,8 @@ function applyConfig(cfg) {
   f.merge_query_params = cfg.merge_query_params !== false
   f.echo_fields = Array.isArray(cfg.echo_fields) ? [...cfg.echo_fields] : []
   f.switch_project_on_task = !!cfg.switch_project_on_task
-  f.match_project_by_name = cfg.match_project_by_name !== false
+  f.match_project_by_name = cfg.match_project_by_name === true
+  f.name_match_strict_boundary = cfg.name_match_strict_boundary === true
   f.mapRows = Object.entries(cfg.product_project_map || {}).map(([code, pid]) => ({
     code, project_id: typeof pid === 'number' ? pid : (parseInt(pid, 10) || null),
   }))
@@ -666,6 +672,7 @@ function buildConfig() {
     echo_fields: form.echo_fields,
     switch_project_on_task: form.switch_project_on_task,
     match_project_by_name: form.match_project_by_name,
+    name_match_strict_boundary: form.name_match_strict_boundary,
     product_project_map,
     create_work_order_on_task: form.create_work_order_on_task,
     order_binding: form.order_binding || 'project',

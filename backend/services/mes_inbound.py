@@ -98,8 +98,11 @@ DEFAULT_INBOUND_CONFIG = {
     "switch_project_on_task": False,
     "product_project_map": {},     # 产品代号 → 检测项目 id (可填对照表)
     # 对照表无匹配时, 兜底按"检测项目名 == 产品代号"自动匹配 (川南 v4: 命名完全一致)。
-    # 默认开 → 客户项目直接命名为产品代号即可零配置切换; 关 = 仅认 product_project_map。
-    "match_project_by_name": True,
+    # 默认关 (新功能不影响存量客户, 仅认 product_project_map); 开 = 项目直接以产品代号命名即可零配置切换。
+    "match_project_by_name": False,
+    # 自动同名匹配的"严格边界"档: 开 = 项目名命中处须贴串首/尾或分隔符 (防 HG 误吞 HGH20);
+    # 关(默认) = 仅靠"取最长命中"压歧义, 但能覆盖无分隔符场景(HGH20001 命中 HGH20)。仅 match_project_by_name 开时生效。
+    "name_match_strict_boundary": False,
     # 开工即建/激活工单 (order_no = task_no), 让检测周期绑到该任务、出站报文自带工单号。默认关。
     "create_work_order_on_task": False,
     # 工单绑定方式: project (默认, 绑当前激活项目) / channel (按 channel_field 绑到指定工位)。
@@ -455,19 +458,14 @@ class MESInbound:
             return (False, "unknown_product", "缺少产品代号, 无法匹配检测项目")
 
         from backend.models.models import Project
+        from backend.services.project_match import resolve_project_id_by_spec
 
-        # 取项目: ① 先查手填对照表 (产品码→项目id); ② 兜底按"项目名==产品码"自动匹配
-        # (川南 v4 第 1 条: 产品代号与检测项目命名完全一致, 以推理软件命名为准匹配)。
-        pmap = cfg.get("product_project_map") or {}
-        project_id = pmap.get(product_code)
-        hit_by = "对照表" if project_id is not None else None
-        if project_id is None and cfg.get("match_project_by_name", True):
-            proj = (db.query(Project)
-                    .filter(Project.name == product_code)
-                    .order_by(Project.id.desc()).first())
-            if proj is not None:
-                project_id = proj.id
-                hit_by = "项目名匹配"
+        # 取项目口径见 services.project_match.resolve_project_id_by_spec
+        # (对照表精确 → 通配符 → 自动同名子串, 与上银包装线完全一致)。
+        project_id, hit_by = resolve_project_id_by_spec(
+            db, product_code, cfg.get("product_project_map") or {},
+            match_by_name=cfg.get("match_project_by_name", False),
+            strict_boundary=cfg.get("name_match_strict_boundary", False))
         if project_id is None:
             debug_center.dbg("backend.mes", "切项目未命中产品码",
                              f"product={product_code} 对照表/同名项目均无 → 回 unknown_product")

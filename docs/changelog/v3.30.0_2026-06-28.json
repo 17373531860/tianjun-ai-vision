@@ -1,0 +1,106 @@
+{
+  "version": "3.30.0",
+  "date": "2026-06-28",
+  "previous_version": "3.29.0",
+  "theme": "规格→检测项目自动切换升级为位置/分隔符无关的统一匹配器（入站与包装共用）+ custom_mix 容器进箱确认多方式增强 + 频闪根因修复与诊断",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "规格→项目统一匹配器（入站与包装共用，与位置/分隔符解耦）",
+      "symptom": "现场规格命名千变万化（xxxx-xxx 后缀变/前缀变/中间固定/分隔符非-/无分隔符），旧的项目名==规格精确匹配只命中固定写法",
+      "root_cause": "入站与包装各自一份'项目名==规格'精确匹配，无法吃下规格里变化的部分，且两处口径分散",
+      "fix": "新增共享函数 resolve_project_id_by_spec：① 对照表精确 ② 对照表通配符(键含*/?，取最长键) ③ 自动同名子串(项目名是规格的一段，取最长命中)。入站_switch_project与包装_real_project_activator改调它，口径一致",
+      "files": ["backend/services/project_match.py", "backend/services/mes_inbound.py", "backend/services/packaging_flow_coordinator.py"],
+      "keywords": ["规格匹配", "spec_to_project", "通配符", "fnmatch", "项目名子串", "自动切项目", "match_project_by_name", "resolve_project_id_by_spec", "入站", "上银包装"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "自动同名匹配新增严格边界可选档（默认关）",
+      "symptom": "自动子串匹配存在短名误吞（HG 命中 HGH20-001）",
+      "root_cause": "纯子串匹配无边界约束",
+      "fix": "开启后要求项目名命中处贴串首/尾或分隔符防误吞；关(默认)仅靠取最长命中压歧义但覆盖无分隔符场景。包装新增 name_match_strict_boundary 列+迁移，入站存 SystemConfig JSON 自动带默认",
+      "files": ["backend/models/mes_models.py", "backend/main.py", "backend/api/packaging_flows.py", "backend/services/mes_inbound.py", "frontend/src/views/MES/OrderInboundPanel.vue", "frontend/src/views/Settings/PackagingFlowPanel.vue"],
+      "keywords": ["严格边界", "name_match_strict_boundary", "短名误吞", "边界匹配", "包装结算配置"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "custom_mix 容器进箱确认多方式增强（上银包装线）",
+      "symptom": "只靠托盘消失满N帧判进箱不可靠（工人拿托盘有快有慢）",
+      "root_cause": "进箱确认仅有消失帧一种方式，无法用放托盘动作辅助/组合",
+      "fix": "容器累加器支持四种进箱确认(仅帧/仅动作/OR/AND)+放托盘动作状态机+屏蔽窗口(锁主托盘不数下一盘防串算)，默认仅消失满帧=老行为零差异；前端标签动作确认通用命名+消失确认帧条件显示",
+      "files": ["backend/api/source_custom_mix.py", "frontend/src/views/Project/index.vue"],
+      "keywords": ["容器累加器", "进箱确认", "放托盘动作", "屏蔽窗口", "custom_mix", "container", "confirm_by_action", "confirm_combine", "标签动作确认"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "频闪诊断系统（环形快照+原始置信度侧信道+自动转储）",
+      "symptom": "现场偶发标签频闪/步骤反复刷完成，需复现时抓真实根因",
+      "root_cause": "缺逐帧在场态/置信度采样手段，无法区分漏帧与阈值过滤",
+      "fix": "每帧采样标签在场态/置信度/原始置信度写环形缓冲，某标签2秒内翻转>=8次自动转储JSON到DATA_DIR/diag_flicker/；runner在阈值过滤前记录原始置信度侧信道",
+      "files": ["backend/api/source_step_stats_mixin.py", "backend/api/source_detect_runners_mixin.py", "backend/api/source_inference_loop_mixin.py"],
+      "keywords": ["频闪", "诊断", "环形缓冲", "原始置信度", "diag_flicker", "_diag_raw_conf", "侧信道"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "包装自动切项目函数缩进语法错导致整模块import失败",
+      "symptom": "上银包装线按规格自动切项目实际不生效",
+      "root_cause": "_real_project_activator 内 if 与 body 同级缩进(IndentationError)，packaging_flow_coordinator 整模块无法import",
+      "fix": "重写该函数改调共享匹配器、缩进修正；新增护栏测试断言模块可正常import",
+      "files": ["backend/services/packaging_flow_coordinator.py"],
+      "keywords": ["IndentationError", "缩进", "import失败", "packaging_flow_coordinator", "_real_project_activator"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "custom_mix 容器/动作标签被当普通步骤反复刷完成致频闪",
+      "symptom": "检测中心托盘/滑块标签频闪，终端不停打印'步骤完成: 托盘'",
+      "root_cause": "'托盘'既是容器标签又被配成普通步骤，模型短暂漏检即触发步骤完成",
+      "fix": "步骤机剥离集由 item_labels 扩成 strip_labels(物品+容器+动作标签)，容器/动作标签由累加器独占消费，不再驱动普通步骤完成",
+      "files": ["backend/api/source_custom_mix.py", "backend/api/source_step_stats_mixin.py"],
+      "keywords": ["频闪", "步骤完成", "strip_labels", "容器标签", "动作标签", "custom_mix"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CFG-001",
+      "title": "按名匹配规格默认由开改为关",
+      "symptom": "新功能默认开会影响存量客户行为",
+      "root_cause": "match_project_by_name 历史默认 True",
+      "fix": "入站与包装的 match_project_by_name 默认改为 False；新增 name_match_strict_boundary 默认 False。要的人显式开，存量零差异",
+      "files": ["backend/services/mes_inbound.py", "backend/models/mes_models.py", "backend/main.py", "backend/api/packaging_flows.py", "frontend/src/views/MES/OrderInboundPanel.vue", "frontend/src/views/Settings/PackagingFlowPanel.vue"],
+      "keywords": ["默认关", "match_project_by_name", "存量客户零差异", "行为变更"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes", "modify-model"],
+  "files_changed": [
+    "backend/services/project_match.py",
+    "backend/services/mes_inbound.py",
+    "backend/services/packaging_flow_coordinator.py",
+    "backend/api/packaging_flows.py",
+    "backend/api/source_custom_mix.py",
+    "backend/api/source_step_stats_mixin.py",
+    "backend/api/source_detect_runners_mixin.py",
+    "backend/api/source_inference_loop_mixin.py",
+    "backend/models/mes_models.py",
+    "backend/main.py",
+    "frontend/src/views/MES/OrderInboundPanel.vue",
+    "frontend/src/views/Settings/PackagingFlowPanel.vue",
+    "frontend/src/views/Project/index.vue",
+    "tests/test_project_match.py",
+    "tests/test_e2e_spec_project_switch.py",
+    "tests/features/spec_project_switch.feature",
+    "tests/step_defs/test_spec_project_switch.py",
+    "tests/test_external_alarm.py"
+  ]
+}

@@ -229,9 +229,19 @@ class StepStatsMixin:
                 _custom_mix.feed(self, detections, current_time, original_frame)
             except Exception as _mix_e:
                 print(f"[CustomMix] feed 失败: {_mix_e}")
-            detected_labels -= _custom_mix.item_labels
-            frame_detected_labels -= _custom_mix.item_labels
-            just_confirmed_labels -= _custom_mix.item_labels
+            # v3.29.x: 剥离集 = 物品标签 + 容器标签 + (启用时)动作标签。
+            # 容器标签由累加器独占消费, 不再当普通步骤刷"完成"/频闪 (见 strip_labels)。
+            _strip = getattr(_custom_mix, 'strip_labels', None) or _custom_mix.item_labels
+            detected_labels -= _strip
+            frame_detected_labels -= _strip
+            just_confirmed_labels -= _strip
+
+            # 频闪诊断 (常驻低开销 + 出事自动抓现场): 记录监视标签每帧在场/置信度,
+            # 某标签 2s 内在场翻转过频 → 自动转储最近现场到文件, 供事后定位真因。
+            try:
+                self._diag_flicker_tick(det_by_label, detections, current_time)
+            except Exception:
+                pass
 
         # v3.8.x (类二): 跨周期同时出现组路由
         # 顺序:
@@ -510,6 +520,114 @@ class StepStatsMixin:
                     self._settle_sequential_cycle()
                 elif _lm == 'detection':
                     self._settle_detection_cycle()
+
+    # ==================== 频闪诊断 (常驻低开销 + 出事自动抓现场) ====================
+    # 背景: SY 容器项目偶发"托盘/滑块标签频闪 + 步骤完成刷屏", 同一视频时有时无,
+    # 人不可能正好盯着。这里常驻一个低开销环形缓冲, 每帧记录监视标签(容器/物品/动作)
+    # 的 在场/步骤后置信度/原始置信度(步骤阈值过滤前)/track_id; 一旦某标签 2s 内在场
+    # 状态翻转过频(频闪特征), 自动把最近 ~8s 现场转储到文件 + 打 WARN, 供事后一锤定音:
+    #   - 原始框出现 >> 在场 → 框存在但被步骤阈值/尺寸/ROI 过滤(边界抖) → 调阈值/迟滞
+    #   - 原始框 ≈ 在场 且都低 → 模型真丢检(运动模糊/遮挡) → 提模型稳定性/迟滞
+    #   - 推理fps << 采集fps → 推理跟不上采集(跳帧) → 降 imgsz/换格式/降采集
+
+    def _diag_flicker_tick(self, det_by_label, detections, current_time):
+        """每帧采样监视标签到环形缓冲, 并做频闪自动转储判定 (仅 custom_mix 项目)。"""
+        mix = getattr(self, '_custom_mix', None)
+        if mix is None:
+            return
+        # 监视标签 = 物品 + 容器 + 动作 (随 mix 实例变化重算)
+        if getattr(self, '_diag_watched_token', None) is not id(mix):
+            w = set(getattr(mix, 'item_labels', set()) or set())
+            eng = getattr(mix, '_engine', None)
+            cont = getattr(eng, '_container', None)
+            if cont is not None:
+                if getattr(cont, 'container_label', ''):
+                    w.add(cont.container_label)
+                if getattr(cont, 'action_label', ''):
+                    w.add(cont.action_label)
+            self._diag_watched = w
+            self._diag_watched_token = id(mix)
+        watched = getattr(self, '_diag_watched', None)
+        if not watched:
+            return
+        from collections import deque
+        if not hasattr(self, '_diag_ring'):
+            self._diag_ring = deque(maxlen=200)     # ~8s @ 25fps
+            self._diag_seq = 0
+            self._diag_last_present = {}
+            self._diag_flips = {}
+            self._diag_last_dump = {}
+        self._diag_seq += 1
+        raw = getattr(self, '_diag_raw_conf', None) or {}
+        lab = {}
+        for L in watched:
+            info = det_by_label.get(L)
+            present = info is not None
+            lab[L] = [
+                1 if present else 0,
+                round(float(info.get('confidence', 0)), 3) if info else None,
+                (round(float(raw.get(L, 0)), 3) or None),
+                (info.get('track_id') if info else None),
+            ]
+            prev = self._diag_last_present.get(L)
+            if prev is not None and prev != present:
+                fl = self._diag_flips.setdefault(L, deque())
+                fl.append(current_time)
+                while fl and current_time - fl[0] > 2.0:
+                    fl.popleft()
+            self._diag_last_present[L] = present
+        self._diag_ring.append({
+            'seq': self._diag_seq,
+            't': round(current_time, 3),
+            'fps_i': round(float(getattr(self, 'fps_inference', 0) or 0), 1),
+            'fps_a': round(float(getattr(self, 'fps_actual', 0) or 0), 1),
+            'lat': int(getattr(self, 'latency', 0) or 0),
+            'n_det': len(detections) if detections else 0,
+            'L': lab,
+        })
+        # 频闪判定: 2s 内在场翻转 >= 8 次 (>=4 亮灭循环) → 转储 (每标签 30s 节流)
+        for L, fl in self._diag_flips.items():
+            if len(fl) >= 8 and (current_time - self._diag_last_dump.get(L, 0)) > 30.0:
+                self._diag_last_dump[L] = current_time
+                try:
+                    self._diag_flicker_dump(L, current_time, f"2s内在场翻转{len(fl)}次")
+                except Exception as _e:
+                    print(f"[FLICKER] 转储失败(已隔离): {_e}")
+
+    def _diag_flicker_dump(self, label, current_time, reason):
+        """把环形缓冲现场写文件 + 打 WARN + 进调试中心, 供事后定位频闪真因。"""
+        import os
+        import json
+        import time as _t
+        from backend.core.config import DATA_DIR
+        d = os.path.join(DATA_DIR, 'diag_flicker')
+        os.makedirs(d, exist_ok=True)
+        ch = getattr(self, 'channel_id', 0)
+        ts = _t.strftime('%Y%m%d_%H%M%S')
+        fn = os.path.join(d, f"flicker_ch{ch}_{label}_{ts}.json")
+        ring = list(getattr(self, '_diag_ring', []))
+        fps_i = round(float(getattr(self, 'fps_inference', 0) or 0), 1)
+        fps_a = round(float(getattr(self, 'fps_actual', 0) or 0), 1)
+        proj = (self.project_config or {}).get('name') if getattr(self, 'project_config', None) else None
+        with open(fn, 'w', encoding='utf-8') as f:
+            json.dump({
+                'channel_id': ch, 'label': label, 'reason': reason, 'wall_time': ts,
+                'project': proj, 'fps_inference': fps_i, 'fps_actual': fps_a,
+                'watched': sorted(getattr(self, '_diag_watched', []) or []),
+                'legend': 'L[label]=[present(0/1), filtered_conf, raw_conf(步骤阈值过滤前), track_id]',
+                'frames': ring,
+            }, f, ensure_ascii=False, indent=1)
+        recent = ring[-50:]
+        on = sum(1 for r in recent if (r['L'].get(label) or [0])[0])
+        raw_seen = sum(1 for r in recent if (r['L'].get(label) or [0, None, None])[2])
+        msg = (f"[FLICKER] ch{ch} 标签[{label}] {reason}; 近{len(recent)}帧: 在场{on} "
+               f"原始框出现{raw_seen} 推理{fps_i}fps 采集{fps_a}fps → 现场已存 {fn}")
+        print(msg)
+        try:
+            from backend.core import debug_center
+            debug_center.dbg('backend.detection', '频闪自动转储', msg)
+        except Exception:
+            pass
 
     # ==================== v3.15 RFC 12: 步骤进行中计时广播 ====================
 

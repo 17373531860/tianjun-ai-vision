@@ -70,7 +70,10 @@ class _ContainerAccumulator:
 
     def __init__(self, container_label: str, item_expected: dict,
                  box_count: int, gone_frames: int, iou_match: float = 0.3,
-                 count_mode: str = 'trays', item_target: int = 0):
+                 count_mode: str = 'trays', item_target: int = 0,
+                 confirm_by_frames: bool = True, confirm_by_action: bool = False,
+                 action_label: str = '', confirm_combine: str = 'or',
+                 action_min_frames: int = 3, action_gone_frames: int = 8):
         self.container_label = container_label
         self.item_expected = {k: int(v) for k, v in (item_expected or {}).items()}
         self.box_count = int(box_count or 0)
@@ -79,6 +82,15 @@ class _ContainerAccumulator:
         # 计数模式: 'trays' = 计托盘数 + 每盘门槛; 'items_total' = 累加进箱滑块总数, 整箱判目标
         self.count_mode = count_mode if count_mode in ('trays', 'items_total') else 'trays'
         self.item_target = int(item_target or 0)   # items_total 模式整箱滑块目标 (如 96)
+        # 进箱确认方式: 消失满 N 帧 / 识别到"放托盘"动作 / 两者组合 (or|and)。
+        # 默认仅"消失满帧"=老行为零差异; 配了动作标签且开了动作确认才进入动作判定路径。
+        self.action_label = (action_label or '').strip()
+        self.confirm_by_action = bool(confirm_by_action) and bool(self.action_label)
+        # 至少留一个确认条件: 若动作确认没生效(没配标签), 强制回落到消失满帧, 避免永不进箱
+        self.confirm_by_frames = bool(confirm_by_frames) or not self.confirm_by_action
+        self.confirm_combine = 'and' if str(confirm_combine).lower() == 'and' else 'or'
+        self.action_min_frames = max(1, int(action_min_frames or 1))   # 放托盘标签连续出现满此帧 = 动作成立(进行中)
+        self.action_gone_frames = max(1, int(action_gone_frames or 1))  # 动作中标签消失满此帧 = 动作结束
         self.reset()
 
     def reset(self):
@@ -87,9 +99,62 @@ class _ContainerAccumulator:
         self._primary = None    # 当前主托盘 tid
         self._done = []         # [{label:peak}, ...] 本周期已装托盘
         self._cur_counts = {}   # 当前主托盘实时物品数 {label:cnt}
+        # ---- 放托盘动作状态机 + 进箱确认标志 ----
+        self._action_seen = 0          # 放托盘标签连续在场帧
+        self._action_gone = 0          # 动作中标签连续消失帧
+        self._action_in_progress = False   # 动作进行中 = 屏蔽窗口(锁主托盘 + 不数下一盘滑块)
+        self._action_done_pending = False  # 一次放托盘动作已完成、待与进箱判定配对
+        self._primary_frames_ok = False    # 当前主托盘是否已"消失满帧"(AND 组合用标志位记忆)
 
-    def update(self, tray_dets: list, item_objs: list, current_time: float):
+    def _update_action_fsm(self, action_present: bool):
+        """放托盘动作状态机: 标签连续在场满 action_min_frames 帧 → 动作成立(进行中,
+        开启屏蔽窗口); 进行中标签消失满 action_gone_frames 帧 → 动作结束(置 pending)。
+        仅 confirm_by_action 时驱动; 否则全程 no-op (屏蔽窗口永不开, 老行为零差异)。
+        """
+        if not self.confirm_by_action:
+            return
+        if action_present:
+            self._action_seen += 1
+            self._action_gone = 0
+            if self._action_seen >= self.action_min_frames:
+                self._action_in_progress = True
+        else:
+            if self._action_in_progress:
+                self._action_gone += 1
+                if self._action_gone >= self.action_gone_frames:
+                    # 动作结束 → 待配对进箱; 复位帧计数等待下一次动作
+                    self._action_in_progress = False
+                    self._action_done_pending = True
+                    self._action_seen = 0
+                    self._action_gone = 0
+                    try:
+                        from backend.core import debug_center
+                        if debug_center.is_on("backend.packaging"):
+                            debug_center.dbg("backend.packaging", "放托盘动作完成",
+                                             f"action_label={self.action_label}")
+                    except Exception:
+                        pass
+            else:
+                # 还没成立就消失 = 误检闪现, 不算一次动作
+                self._action_seen = 0
+
+    def _should_settle_primary(self) -> bool:
+        """当前主托盘是否满足进箱条件 (按配置的确认方式组合)。"""
+        fb, ab = self.confirm_by_frames, self.confirm_by_action
+        if fb and ab:
+            if self.confirm_combine == 'and':
+                return self._primary_frames_ok and self._action_done_pending
+            return self._primary_frames_ok or self._action_done_pending
+        if ab:
+            return self._action_done_pending
+        return self._primary_frames_ok
+
+    def update(self, tray_dets: list, item_objs: list, current_time: float,
+               action_present: bool = False):
         from backend.api.source_per_item_mixin import _bbox_iou
+
+        # 0) 放托盘动作状态机 (仅 confirm_by_action 生效): 驱动屏蔽窗口 + 进箱脉冲
+        self._update_action_fsm(action_present)
 
         # 1) 托盘检测框关联到已有托盘 (IoU 最高), 否则新建身份
         matched = set()
@@ -127,7 +192,9 @@ class _ContainerAccumulator:
         #    抗瞬时漏检 / 托盘ID抖动 —— 漏检一两帧不切主、不清峰值, 等真正进箱 (step5
         #    移除) 才按 FIFO 重选下一盘。只有从未选出 / 主托盘已被移除时才重新挑。
         #    重选时优先在场 (gone==0) 的最早托盘; 若全在短暂遮挡也允许挑 gone 最小者顶上。
-        if self._primary is None or self._primary not in self._trays:
+        # 动作进行中(屏蔽窗口)绝不重选主托盘 — 锁定当前盘, 杜绝放托盘期间被下一盘抢主。
+        if (self._primary is None or self._primary not in self._trays) \
+                and not self._action_in_progress:
             in_place = [(t['first_seen'], tid)
                         for tid, t in self._trays.items() if t['gone'] == 0]
             if in_place:
@@ -139,8 +206,10 @@ class _ContainerAccumulator:
                 self._primary = None
 
         # 4) 主托盘内物品计数 (中心包含), 刷新 peak (峰值保持, 抗瞬时漏检)
+        #    动作进行中(屏蔽窗口): 不数任何滑块 — 当前主托盘 peak 已定格, 下一盘滑块
+        #    即便露出来也一律不计, 防放托盘期间交叉串算。
         cur = {}
-        if self._primary is not None:
+        if self._primary is not None and not self._action_in_progress:
             pb = self._trays[self._primary]['bbox']
             px1, py1 = pb['x'], pb['y']
             px2, py2 = px1 + pb['w'], py1 + pb['h']
@@ -163,34 +232,53 @@ class _ContainerAccumulator:
                     peak[lbl] = c
         self._cur_counts = cur
 
-        # 5) 托盘 gone-confirm → 进箱记账 (只记曾累计过 peak 的真托盘, 跳过幽灵)
-        for tid in list(self._trays.keys()):
-            t = self._trays[tid]
-            if t['gone'] >= self.gone_frames:
-                if t['peak']:
-                    self._done.append(dict(t['peak']))
-                    print(f"[MixContainer] 托盘进箱: {dict(t['peak'])}, "
+        # 5) 进箱判定 — 主托盘按"确认方式"决定进箱; 非主托盘只做幽灵清理。
+        #    仅消失满帧(默认)时与改前等价: 主盘 gone>=N → frames_ok → 进箱。
+        #    动作确认 / OR / AND 组合见 _should_settle_primary。
+        if self._primary is not None:
+            pt = self._trays[self._primary]
+            if pt['gone'] >= self.gone_frames:
+                self._primary_frames_ok = True
+            if self._should_settle_primary():
+                if pt['peak']:
+                    self._done.append(dict(pt['peak']))
+                    print(f"[MixContainer] 托盘进箱: {dict(pt['peak'])}, "
                           f"已装 {len(self._done)}/{self.box_count or '?'}")
                     try:
                         from backend.core import debug_center
                         if debug_center.is_on("backend.packaging"):
                             debug_center.dbg(
                                 "backend.packaging", "托盘进箱记账",
-                                f"peak={dict(t['peak'])} done_trays={len(self._done)} "
-                                f"item_target={self.item_target}")
+                                f"peak={dict(pt['peak'])} done_trays={len(self._done)} "
+                                f"item_target={self.item_target} "
+                                f"by_frames={self._primary_frames_ok} "
+                                f"by_action={self._action_done_pending}")
                     except Exception:
                         pass
-                del self._trays[tid]
-                if self._primary == tid:
-                    self._primary = None
+                del self._trays[self._primary]
+                self._primary = None
+                self._primary_frames_ok = False
+                self._action_done_pending = False
 
-        # 5b) 主托盘刚进箱被清空 → 本帧立即把下一盘 (FIFO 最早在场) 顶上,
-        #     避免进箱当帧主托盘空窗一帧导致峰值闪 0。
-        if self._primary is None:
+        # 5b) 非主托盘幽灵清理: 消失满帧且从未累计滑块(peak 空)的杂框丢弃。
+        #     真盘滑块只在"主托盘"位累计, 故非主盘 peak 必为空; 主盘进箱只走 5)。
+        for tid in list(self._trays.keys()):
+            if tid == self._primary:
+                continue
+            if self._trays[tid]['gone'] >= self.gone_frames and not self._trays[tid]['peak']:
+                del self._trays[tid]
+
+        # 5c) 主托盘刚进箱被清空 → 把下一盘(FIFO 最早在场)顶上, 避免空窗一帧峰值闪 0。
+        #     动作进行中(屏蔽窗口)绝不切主, 等动作结束本盘进箱后再让下一盘上位。
+        if self._primary is None and not self._action_in_progress:
             in_place = [(t['first_seen'], tid)
                         for tid, t in self._trays.items() if t['gone'] == 0]
             if in_place:
                 self._primary = min(in_place)[1]
+
+        # 5d) 动作脉冲无主托盘可配对(空动作 / 盘尚未上位) → 丢弃, 防残留误触下一盘秒进箱
+        if self._primary is None and self._action_done_pending and not self._action_in_progress:
+            self._action_done_pending = False
 
     def _trays_for_verdict(self):
         """封箱裁决用的托盘全集: 已装清单 + 当前主托盘 (最后一盘可能还没 gone-confirm)。"""
@@ -345,6 +433,12 @@ class _TrackingMixEngine:
                 iou_match=container_cfg.get('iou_match', 0.3),
                 count_mode=container_cfg.get('count_mode', 'trays'),
                 item_target=container_cfg.get('item_target', 0),
+                confirm_by_frames=container_cfg.get('confirm_by_frames', True),
+                confirm_by_action=container_cfg.get('confirm_by_action', False),
+                action_label=container_cfg.get('action_label', ''),
+                confirm_combine=container_cfg.get('confirm_combine', 'or'),
+                action_min_frames=container_cfg.get('action_min_frames', 3),
+                action_gone_frames=container_cfg.get('action_gone_frames', 8),
             )
         # 静态期望清单 (verdict 用, 不依赖喂帧): 与真 loader 的注入规则一致 —
         # event 行 → event_required_count; 堆叠行 → stack_required_count;
@@ -397,6 +491,8 @@ class _TrackingMixEngine:
         dets = []
         tray_dets = []  # 容器累加器用: 托盘检测框 (与物品流隔离, 不进跟踪机械)
         container_label = self._container.container_label if self._container else None
+        action_label = getattr(self._container, 'action_label', '') if self._container else ''
+        action_present = False  # 本帧"放托盘"动作标签是否在场 → 驱动动作状态机
         for det in detections or []:
             label = det.get('label', '')
             if container_label and label == container_label:
@@ -407,6 +503,12 @@ class _TrackingMixEngine:
                     'x': float(det.get('x', 0)), 'y': float(det.get('y', 0)),
                     'w': float(det.get('w', 0)), 'h': float(det.get('h', 0)),
                 })
+                continue
+            if action_label and label == action_label:
+                # 放托盘动作标签: 仅作"本帧在场"信号, 不进物品流/跟踪机械
+                threshold = conf_map.get(label)
+                if threshold is None or det.get('confidence', 0) >= threshold:
+                    action_present = True
                 continue
             if label not in self.item_labels:
                 continue
@@ -486,7 +588,8 @@ class _TrackingMixEngine:
                     'w': float(d.get('w', 0)), 'h': float(d.get('h', 0)),
                 },
             } for d in dets]
-            self._container.update(tray_dets, item_dets_for_container, current_time)
+            self._container.update(tray_dets, item_dets_for_container, current_time,
+                                   action_present=action_present)
 
     # ---- 合并计数: 与独立模式 _rebuild_checklist 同一公式 ----
     @staticmethod
@@ -753,6 +856,26 @@ class CustomMixMachine:
                 (self._engine.watch_labels | set(extra_item_labels or ()))
                 - set(step_labels or ()))
 
+    @property
+    def strip_labels(self):
+        """从步骤侧状态机剥离的标签集 = 物品标签 + 容器标签 + (启用动作确认时)动作标签。
+
+        容器标签 (如"托盘") 由容器累加器独占消费, **不应**再作为普通检测步骤参与
+        "出现→消失→完成"判定 —— 否则模型在换盘/遮挡窗口偶发丢检, 步骤机会每帧刷
+        "步骤完成"+ 标签频闪 (容器累加器本身有消失确认帧/IoU 峰值保持, 稳得多)。
+        动作确认标签同理 (仅 confirm_by_action 生效时)。
+        注意: 仅剥离"步骤侧"视图; 容器/动作标签仍正常检测/画框/喂累加器 (feed 在剥离前)。
+        """
+        labels = set(self.item_labels)
+        eng = self._engine
+        cont = getattr(eng, '_container', None)
+        if cont is not None:
+            if getattr(cont, 'container_label', ''):
+                labels.add(cont.container_label)
+            if getattr(cont, 'confirm_by_action', False) and getattr(cont, 'action_label', ''):
+                labels.add(cont.action_label)
+        return frozenset(labels)
+
     def reset(self):
         if self._host is not None:
             self._engine.reset_host_state(self._host)
@@ -853,6 +976,22 @@ def build_custom_mix(config: dict):
                 if lbl and lbl != clabel and exp > 0:
                     item_expected[lbl] = exp
             count_mode = pipeline.get('custom_mix_container_count_mode', 'trays')
+            # 进箱确认方式 (默认仅"消失满帧"= 老行为零差异)
+            confirm_by_frames = bool(pipeline.get('custom_mix_container_confirm_by_frames', True))
+            confirm_by_action = bool(pipeline.get('custom_mix_container_confirm_by_action', False))
+            action_label = (pipeline.get('custom_mix_container_action_label') or '').strip()
+            confirm_combine = pipeline.get('custom_mix_container_confirm_combine', 'or')
+            # 放托盘动作门槛: 复用"放托盘"步骤自身配置 (最短出现帧 min_frames + 消失确认帧),
+            # 落实"动作要走步骤那套门槛"; 缺省给宽松默认避免漏配卡死。
+            action_min_frames, action_gone_frames = 3, 8
+            if action_label:
+                for s in config.get('steps_config', []) or []:
+                    if s.get('label') == action_label:
+                        action_min_frames = int(s.get('min_frames') or 3)
+                        action_gone_frames = int(
+                            s.get('tracking_gone_confirm_frames')
+                            or s.get('event_gone_frames') or 8)
+                        break
             container_cfg = {
                 'label': clabel,
                 'item_expected': item_expected,
@@ -861,13 +1000,25 @@ def build_custom_mix(config: dict):
                 'iou_match': float(pipeline.get('custom_mix_container_iou_match', 0.3) or 0.3),
                 'count_mode': count_mode,
                 'item_target': int(pipeline.get('custom_mix_container_item_target', 0) or 0),
+                'confirm_by_frames': confirm_by_frames,
+                'confirm_by_action': confirm_by_action,
+                'action_label': action_label,
+                'confirm_combine': confirm_combine,
+                'action_min_frames': action_min_frames,
+                'action_gone_frames': action_gone_frames,
             }
+            confirm_desc = []
+            if confirm_by_frames:
+                confirm_desc.append(f"消失满{container_cfg['gone_frames']}帧")
+            if confirm_by_action and action_label:
+                confirm_desc.append(f"放托盘动作[{action_label}](出现≥{action_min_frames}帧/消失≥{action_gone_frames}帧)")
+            confirm_str = f" 进箱确认={('+' + confirm_combine.upper() + '+').join(confirm_desc) if len(confirm_desc) > 1 else (confirm_desc[0] if confirm_desc else '消失满帧')}"
             if count_mode == 'items_total':
                 print(f"[CustomMix] 托盘容器累加器[总数模式]: 容器={clabel} "
-                      f"整箱滑块目标={container_cfg['item_target']} 消失确认={container_cfg['gone_frames']}帧")
+                      f"整箱滑块目标={container_cfg['item_target']}{confirm_str}")
             else:
                 print(f"[CustomMix] 托盘容器累加器[盘计数]: 容器={clabel} 每盘期望={item_expected} "
-                      f"每箱={container_cfg['box_count']}盘 消失确认={container_cfg['gone_frames']}帧")
+                      f"每箱={container_cfg['box_count']}盘{confirm_str}")
 
     machine = CustomMixMachine(mix_type, item_cfgs,
                                item_timeout_seconds=item_timeout,

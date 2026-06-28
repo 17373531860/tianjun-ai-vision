@@ -213,6 +213,8 @@ def migrate_database():
         ("packaging_flow_configs", "slider_total_field", "VARCHAR(64) DEFAULT 'dispatch_qty'"),
         ("packaging_flow_configs", "auto_switch_project", "BOOLEAN DEFAULT 0"),
         ("packaging_flow_configs", "spec_to_project", "JSON"),
+        ("packaging_flow_configs", "match_project_by_name", "BOOLEAN DEFAULT 0"),
+        ("packaging_flow_configs", "name_match_strict_boundary", "BOOLEAN DEFAULT 0"),
         ("packaging_flow_configs", "tail_paper_order_required", "BOOLEAN DEFAULT 0"),
         ("packaging_flow_configs", "tail_paper_step_label", "VARCHAR(64)"),
         ("packaging_flow_configs", "event_missing_paper", "INTEGER"),

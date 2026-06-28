@@ -87,6 +87,8 @@ class PackagingFlowConfigBase(BaseModel):
     slider_total_field: str = "dispatch_qty"
     auto_switch_project: bool = False
     spec_to_project: Optional[Dict[str, int]] = None
+    match_project_by_name: bool = False
+    name_match_strict_boundary: bool = False
     tail_paper_order_required: bool = False
     tail_paper_step_label: Optional[str] = None
     event_missing_paper: Optional[int] = None
@@ -139,6 +141,8 @@ class PackagingFlowConfigUpdate(BaseModel):
     slider_total_field: Optional[str] = None
     auto_switch_project: Optional[bool] = None
     spec_to_project: Optional[Dict[str, int]] = None
+    match_project_by_name: Optional[bool] = None
+    name_match_strict_boundary: Optional[bool] = None
     tail_paper_order_required: Optional[bool] = None
     tail_paper_step_label: Optional[str] = None
     event_missing_paper: Optional[int] = None
@@ -255,6 +259,8 @@ def _serialize(row: PackagingFlowConfig) -> PackagingFlowConfigResponse:
         slider_total_field=getattr(row, "slider_total_field", None) or "dispatch_qty",
         auto_switch_project=bool(getattr(row, "auto_switch_project", False)),
         spec_to_project=getattr(row, "spec_to_project", None),
+        match_project_by_name=bool(getattr(row, "match_project_by_name", False)),
+        name_match_strict_boundary=bool(getattr(row, "name_match_strict_boundary", False)),
         tail_paper_order_required=bool(getattr(row, "tail_paper_order_required", False)),
         tail_paper_step_label=getattr(row, "tail_paper_step_label", None),
         event_missing_paper=getattr(row, "event_missing_paper", None),

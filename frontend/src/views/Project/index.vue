@@ -1530,8 +1530,10 @@
                             <el-select v-model="activeProject.custom_mix_container_label" size="small" class="!w-40" placeholder="选择容器标签">
                               <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
                             </el-select>
-                            <span class="text-gray-400 shrink-0 ml-2">消失确认帧</span>
-                            <el-input-number v-model="activeProject.custom_mix_container_gone_frames" :min="1" :step="5" size="small" class="!w-28" />
+                            <template v-if="activeProject.custom_mix_container_confirm_by_frames">
+                              <span class="text-gray-400 shrink-0 ml-2">消失确认帧</span>
+                              <el-input-number v-model="activeProject.custom_mix_container_gone_frames" :min="1" :step="5" size="small" class="!w-28" />
+                            </template>
                             <span class="text-gray-400 shrink-0 ml-2">容器匹配IoU</span>
                             <el-input-number v-model="activeProject.custom_mix_container_iou_match" :min="0.05" :max="0.95" :step="0.05" :precision="2" size="small" class="!w-28" />
                           </div>
@@ -1551,6 +1553,31 @@
                             <span class="text-gray-400 shrink-0">整箱物品总目标</span>
                             <el-input-number v-model="activeProject.custom_mix_container_item_target" :min="0" :step="1" size="small" class="!w-28" />
                             <span class="text-gray-500">进箱物品总数正好等于此值才合格（少了/多了均 NG）；不卡每盘数量与容器数</span>
+                          </div>
+                          <!-- 进箱确认方式：消失满帧 / 标签动作，可二选一或组合(OR/AND) -->
+                          <div class="flex items-start gap-2 text-xs pt-2 border-t border-slate-700">
+                            <span class="text-gray-400 shrink-0 mt-1">进箱确认方式</span>
+                            <div class="flex flex-col gap-2">
+                              <div class="flex items-center gap-4">
+                                <el-checkbox v-model="activeProject.custom_mix_container_confirm_by_frames" size="small">消失满帧确认</el-checkbox>
+                                <el-checkbox v-model="activeProject.custom_mix_container_confirm_by_action" size="small">标签动作确认</el-checkbox>
+                              </div>
+                              <div v-if="activeProject.custom_mix_container_confirm_by_action" class="flex items-center gap-2 flex-wrap">
+                                <span class="text-gray-400 shrink-0">动作标签</span>
+                                <el-select v-model="activeProject.custom_mix_container_action_label" size="small" class="!w-40" placeholder="选择动作标签">
+                                  <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
+                                </el-select>
+                                <span class="text-gray-500">动作门槛复用该步骤的「最短出现帧 / 消失确认帧」配置</span>
+                              </div>
+                              <div v-if="activeProject.custom_mix_container_confirm_by_frames && activeProject.custom_mix_container_confirm_by_action"
+                                class="flex items-center gap-2">
+                                <span class="text-gray-400 shrink-0">组合逻辑</span>
+                                <el-radio-group v-model="activeProject.custom_mix_container_confirm_combine" size="small">
+                                  <el-radio-button label="or">OR（满足其一即进箱）</el-radio-button>
+                                  <el-radio-button label="and">AND（两者都满足才进箱）</el-radio-button>
+                                </el-radio-group>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -3780,6 +3807,19 @@ const initProjectDefaults = (project) => {
   if (project.custom_mix_container_enabled === undefined) {
     project.custom_mix_container_enabled = !!project.custom_mix_container_label;
   }
+  // 进箱确认方式（默认仅"消失满帧"= 老行为零差异）
+  if (project.custom_mix_container_confirm_by_frames === undefined) {
+    project.custom_mix_container_confirm_by_frames = pipelineConfig.custom_mix_container_confirm_by_frames !== false;
+  }
+  if (project.custom_mix_container_confirm_by_action === undefined) {
+    project.custom_mix_container_confirm_by_action = !!pipelineConfig.custom_mix_container_confirm_by_action;
+  }
+  if (project.custom_mix_container_action_label === undefined) {
+    project.custom_mix_container_action_label = pipelineConfig.custom_mix_container_action_label || '';
+  }
+  if (project.custom_mix_container_confirm_combine === undefined) {
+    project.custom_mix_container_confirm_combine = pipelineConfig.custom_mix_container_confirm_combine || 'or';
+  }
   // 物品行原生字段兜底：老数据/手改 JSON 可能缺字段，表C输入框依赖它们存在
   (project.steps_config || []).forEach(s => {
     if (s.detect_role !== 'item') return;
@@ -4121,6 +4161,11 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_mix_container_item_target = project.custom_mix_container_item_target || 0;
   project.pipeline_config.custom_mix_container_gone_frames = project.custom_mix_container_gone_frames || 30;
   project.pipeline_config.custom_mix_container_iou_match = project.custom_mix_container_iou_match ?? 0.3;
+  project.pipeline_config.custom_mix_container_confirm_by_frames = project.custom_mix_container_confirm_by_frames !== false;
+  project.pipeline_config.custom_mix_container_confirm_by_action = !!project.custom_mix_container_confirm_by_action;
+  project.pipeline_config.custom_mix_container_action_label = project.custom_mix_container_confirm_by_action
+    ? (project.custom_mix_container_action_label || '') : '';
+  project.pipeline_config.custom_mix_container_confirm_combine = project.custom_mix_container_confirm_combine || 'or';
   project.pipeline_config.custom_sequence_order = project.custom_sequence_order;
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
@@ -4297,6 +4342,12 @@ const handleSaveProject = async () => {
           const v = Number(activeProject.value.custom_mix_container_iou_match);
           return Number.isFinite(v) && v > 0 ? Math.min(0.99, v) : 0.3;
         })(),
+        // 进箱确认方式（默认仅"消失满帧"= 老行为零差异；动作确认需配放托盘标签才落值）
+        custom_mix_container_confirm_by_frames: activeProject.value.custom_mix_container_confirm_by_frames !== false,
+        custom_mix_container_confirm_by_action: !!activeProject.value.custom_mix_container_confirm_by_action,
+        custom_mix_container_action_label: activeProject.value.custom_mix_container_confirm_by_action
+          ? (activeProject.value.custom_mix_container_action_label || '') : '',
+        custom_mix_container_confirm_combine: activeProject.value.custom_mix_container_confirm_combine || 'or',
         custom_sequence_order: activeProject.value.custom_sequence_order,
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,

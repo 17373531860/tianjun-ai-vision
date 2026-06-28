@@ -117,6 +117,8 @@ class ScannerDevice(Base):
 - **必须有默认值或允许 NULL**（SQLite ALTER TABLE 不允许加 `NOT NULL` 而无默认值的列）
 - **新建库**走 ORM 定义；**老客户库**走 migrate_database 的 ALTER → 默认值在两处都要一致
 
+> 近期 schema 变更样例（v3.30.0）：`packaging_flow_configs` 新增 `name_match_strict_boundary BOOLEAN DEFAULT 0`（规格→项目自动同名匹配的"严格边界"开关；ORM `mes_models.py` 默认 `False` + `main.py` migrate ALTER `DEFAULT 0` 两处对齐）。`match_project_by_name` 同期默认由开改关。
+
 ### 步骤 B：`backend/main.py: migrate_database()` 加 ALTER
 
 ```python

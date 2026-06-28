@@ -365,9 +365,11 @@ def _mk_project(db, name, active=False):
 
 def test_switch_project_by_name_match(db):
     # 项目命名 == 产品代号 + 已激活 → 按名匹配命中 (早返回, 不触发重载)
+    # 按名匹配默认关 (v3.29.x: 新功能不影响存量客户), 要的人显式开。
     _mk_project(db, "PROD-X9", active=True)
     svc = MESInbound()
-    cfg = _cfg(switch_project_on_task=True, product_project_map={})
+    cfg = _cfg(switch_project_on_task=True, product_project_map={},
+               match_project_by_name=True)
     ok, key, msg = svc._switch_project(db, {"product_code": "PROD-X9"}, cfg)
     assert ok is True
     assert "已激活" in msg
@@ -375,7 +377,8 @@ def test_switch_project_by_name_match(db):
 
 def test_switch_project_name_no_match_returns_message(db):
     svc = MESInbound()
-    cfg = _cfg(switch_project_on_task=True, product_project_map={})
+    cfg = _cfg(switch_project_on_task=True, product_project_map={},
+               match_project_by_name=True)
     ok, key, msg = svc._switch_project(db, {"product_code": "PROD-NONE"}, cfg)
     assert ok is False
     assert key == "unknown_product"

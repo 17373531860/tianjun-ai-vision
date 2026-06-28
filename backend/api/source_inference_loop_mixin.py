@@ -51,6 +51,8 @@ class InferenceLoopMixin:
             中同步为 main.fps_inference (老 UI/导出兼容)
         """
         t_start = time.time()
+        # 频闪诊断: 每帧重置原始置信度侧信道 (runner 在步骤阈值过滤前往里写最高 conf)
+        self._diag_raw_conf = {}
         if getattr(self, 'source_type', None) == 'synthetic':
             idx = int(getattr(self, '_latest_synthetic_inference_idx', -1))
             detections = self._synthetic_detections_for_frame_index(idx)
