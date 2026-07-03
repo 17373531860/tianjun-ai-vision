@@ -380,7 +380,7 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 | 文件 | 行数 | 类型 | 重构难度 | 重构建议 |
 |---|---|---|---|---|
-| `frontend/src/views/Monitor/index.vue` | **5905** | Vue | 极高 | 拆 panel 子组件（RFC 同 Project 页）。M-1 录像异常遮罩 4 处同构块 → `RecordingFailureOverlay.vue`（2026-07-03，6293→6091 行）；M-2 单工位 SOP 流程卡片条 → `SopStepPanel.vue`（2026-07-03，6091→6002 行，滚动驱动走 defineExpose）；M-3 混合物品校验看板 → `CustomMixItemPanel.vue`（2026-07-03，6002→5905 行，三形态+computed 随迁）。待做 M-4 单通道视频卡片（高危压轴，双缓冲+多通道隔离雷区） |
+| `frontend/src/views/Monitor/index.vue` | **5867** | Vue | 极高 | 拆 panel 子组件（RFC 同 Project 页）。M-1 录像异常遮罩 4 处同构块 → `RecordingFailureOverlay.vue`（2026-07-03，6293→6091 行）；M-2 单工位 SOP 流程卡片条 → `SopStepPanel.vue`（2026-07-03，6091→6002 行，滚动驱动走 defineExpose）；M-3 混合物品校验看板 → `CustomMixItemPanel.vue`（2026-07-03，6002→5905 行，三形态+computed 随迁）；M-4 多通道视频卡片壳 → `ChannelVideoCard.vue`（2026-07-03，5905→5867 行，流机制/framePump/画框全留父级，canvas 走函数 props 回注，真流 UAT 验证通道不串台，⚠️ 待主作者复核）。M 系列四批全部完成；后续瘦身空间在单工位模板与轮询处理函数（另立批次再议） |
 | `frontend/src/views/Project/index.vue` | **2704** | Vue | ✅ 拆分完成 | 逐批拆 Tab（RFC: docs/rfc/Monitor_Project巨型视图拆分_立项方案.md）。P-1 称重配置 Tab → `WeighingConfigTab.vue`；P-2 四对话框 → `CreateProjectDialog` / `ModelSelectDialog` / `FormatSelectDialog` / `RoiEditorDialog` + `modelFormats.js`；P-3 事件设置 Tab → `EventsConfigTab.vue`；P-4 逻辑设置 Tab → `LogicConfigTab.vue` + `perItemLabel.js`；P-5 步骤/物品设置 Tab → `StepsConfigTab.vue` + `mixItemDefaults.js` / `stepEnabled.js`（均 2026-07-03，累计 5971→2704 行，P-1~P-5 全部完成）。剩余 2704 行为基础设置 Tab + 保存/加载/模型编排等父级职责，暂不再拆 |
 | `frontend/src/views/Settings/index.vue` | 2617 | Vue | 中 | 8 个 tab 拆成子组件 |
 | `frontend/src/views/Data/index.vue` | 2258 | Vue | 高 | 表格 / 导出对话框拆 |

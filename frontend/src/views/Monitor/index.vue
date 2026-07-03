@@ -126,38 +126,17 @@
   <!-- ===== DUAL WORKSTATION MODE (2 channels) ===== -->
   <div v-else-if="channelCount === 2" class="grid grid-cols-2 gap-2 h-[calc(100vh-7.25rem)] p-2 relative">
     <div v-for="ch in 2" :key="ch - 1" class="flex flex-col gap-1.5 min-h-0 overflow-hidden relative">
-      <!-- Video panel (70% height) -->
-      <div class="relative bg-black border-2 rounded-lg overflow-hidden min-h-0"
+      <!-- Video panel (70% height)（M-4 外置 ChannelVideoCard, 流/绘制机制留父级） -->
+      <ChannelVideoCard
         style="flex: 7 1 0%;"
-        :class="selectedChannel === (ch - 1) ? 'border-cyan-500' : 'border-slate-700'"
-        @click="selectedChannel = ch - 1">
-        <canvas :ref="el => { if (el) multiVideoCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full"></canvas>
-        <canvas :ref="el => { if (el) multiCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
-        <div class="absolute top-1.5 left-1.5 bg-slate-900/80 text-white px-2 py-0.5 rounded text-xs font-bold">
-          工位 {{ ch }}
-          <span v-if="multiChannelData[ch - 1]?.projectName" class="text-cyan-400 ml-1">{{ multiChannelData[ch - 1].projectName }}</span>
-        </div>
-        <div class="absolute top-1.5 right-1.5 px-2 py-0.5 rounded text-[0.625rem] font-bold"
-          :class="multiChannelData[ch - 1]?.isDetecting ? 'bg-green-600/90 text-white animate-pulse' : multiChannelData[ch - 1]?.isRunning ? 'bg-yellow-600/90 text-white' : 'bg-gray-600/90 text-white'">
-          {{ multiChannelData[ch - 1]?.isDetecting ? '检测中' : multiChannelData[ch - 1]?.isRunning ? '待机' : '停止' }}
-        </div>
-        <div class="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm px-2 py-1 flex gap-3 text-xs items-center">
-          <span class="text-white font-mono">总: <span class="text-cyan-400 font-bold">{{ multiChannelData[ch - 1]?.total ?? 0 }}</span></span>
-          <span class="text-white font-mono">OK: <span class="text-green-400 font-bold">{{ multiChannelData[ch - 1]?.ok ?? 0 }}</span></span>
-          <span class="text-white font-mono">NG: <span class="text-red-400 font-bold">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</span></span>
-          <!-- feat/multi-model-roi-link b1: 多通道副模型 fps 快照 (>=2 个 slot 时显示) -->
-          <template v-if="(channelModelStats[ch - 1] || []).length >= 2">
-            <span class="text-gray-500">|</span>
-            <span v-for="m in channelModelStats[ch - 1]" :key="m.name"
-                  class="flex items-center gap-1 text-[0.6875rem]" :title="`${m.name} (${m.model_loaded ? '已加载' : '未加载'})`">
-              <span class="w-2 h-2 rounded-sm flex-shrink-0" :style="{ backgroundColor: m.display_color || '#10b981' }"></span>
-              <span class="text-gray-400">{{ m.name }}</span>
-              <span class="text-cyan-400 font-mono">{{ m.fps_inference || 0 }}</span>
-            </span>
-          </template>
-          <span class="ml-auto text-gray-400">FPS: {{ multiChannelData[ch - 1]?.fps ?? 0 }}</span>
-        </div>
-      </div>
+        :ch="ch - 1"
+        :ch-data="multiChannelData[ch - 1]"
+        :model-stats="channelModelStats[ch - 1]"
+        :selected="selectedChannel === (ch - 1)"
+        :register-video-canvas="el => { multiVideoCanvasRefs[ch - 1] = el }"
+        :register-overlay-canvas="el => { multiCanvasRefs[ch - 1] = el }"
+        @select="selectedChannel = ch - 1"
+      />
       <!-- v3.1.3: per-channel MES 信息条 (工件号 / 未绑码警告 / 等待扫码 / 清除按钮) -->
       <div v-if="shouldShowMesBarFor(ch - 1)"
            class="bg-slate-900 border border-cyan-800/50 rounded-lg px-2 py-1 flex items-center gap-3 text-xs flex-shrink-0">
@@ -333,35 +312,17 @@
   <div v-else-if="channelCount > 2" class="flex flex-col h-[calc(100vh-7.25rem)] p-2 gap-2 relative">
     <!-- 2x2 video grid -->
     <div class="flex-1 grid grid-cols-2 grid-rows-2 gap-2 min-h-0">
-      <div v-for="ch in channelCount" :key="ch - 1"
-        class="relative bg-black border-2 rounded-lg overflow-hidden cursor-pointer transition-all min-h-0"
-        :class="selectedChannel === (ch - 1) ? 'border-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.4)]' : 'border-slate-700 hover:border-slate-500'"
-        @click="selectedChannel = ch - 1">
-        <canvas :ref="el => { if (el) multiVideoCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full"></canvas>
-        <canvas :ref="el => { if (el) multiCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
-        <div class="absolute top-1 left-1 bg-slate-900/80 text-white px-2 py-0.5 rounded text-[0.625rem] font-bold">
-          工位{{ ch }}
-          <span v-if="multiChannelData[ch - 1]?.projectName" class="text-cyan-400 ml-0.5">{{ multiChannelData[ch - 1].projectName }}</span>
-        </div>
-        <div class="absolute top-1 right-1 px-1.5 py-0.5 rounded text-[0.625rem] font-bold"
-          :class="multiChannelData[ch - 1]?.isDetecting ? 'bg-green-600/90 text-white animate-pulse' : multiChannelData[ch - 1]?.isRunning ? 'bg-yellow-600/90 text-white' : 'bg-gray-600/90 text-white'">
-          {{ multiChannelData[ch - 1]?.isDetecting ? '检测中' : multiChannelData[ch - 1]?.isRunning ? '待机' : '停止' }}
-        </div>
-        <div class="absolute bottom-0 left-0 right-0 bg-black/70 px-2 py-1 flex gap-3 text-[0.625rem] items-center">
-          <span class="text-white font-mono">总:<span class="text-cyan-400 font-bold">{{ multiChannelData[ch - 1]?.total ?? 0 }}</span></span>
-          <span class="text-white font-mono">OK:<span class="text-green-400 font-bold">{{ multiChannelData[ch - 1]?.ok ?? 0 }}</span></span>
-          <span class="text-white font-mono">NG:<span class="text-red-400 font-bold">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</span></span>
-          <!-- feat/multi-model-roi-link b1: 4 工位空间紧, 仅色块+fps 数字 -->
-          <template v-if="(channelModelStats[ch - 1] || []).length >= 2">
-            <span v-for="m in channelModelStats[ch - 1]" :key="m.name"
-                  class="flex items-center gap-0.5 text-[0.5625rem]"
-                  :title="`${m.name} ${m.fps_inference || 0}fps ${m.model_loaded ? '' : '(未加载)'}`">
-              <span class="w-1.5 h-1.5 rounded-sm flex-shrink-0" :style="{ backgroundColor: m.display_color || '#10b981' }"></span>
-              <span class="text-cyan-400 font-mono">{{ m.fps_inference || 0 }}</span>
-            </span>
-          </template>
-          <span class="ml-auto text-gray-400">FPS:{{ multiChannelData[ch - 1]?.fps ?? 0 }}</span>
-        </div>
+      <ChannelVideoCard
+        v-for="ch in channelCount" :key="ch - 1"
+        class="cursor-pointer transition-all"
+        compact
+        :ch="ch - 1"
+        :ch-data="multiChannelData[ch - 1]"
+        :model-stats="channelModelStats[ch - 1]"
+        :selected="selectedChannel === (ch - 1)"
+        :register-video-canvas="el => { multiVideoCanvasRefs[ch - 1] = el }"
+        :register-overlay-canvas="el => { multiCanvasRefs[ch - 1] = el }"
+        @select="selectedChannel = ch - 1">
         <!-- v3.1.3: 4 工位每个小卡片在视频上沿额外显示一行 工件号 / 未绑码 / 等待扫码 -->
         <div v-if="shouldShowMesBarFor(ch - 1)"
              class="absolute top-7 left-1 right-1 bg-slate-900/85 border border-cyan-800/50 rounded px-1.5 py-0.5 flex items-center gap-1.5 text-[0.625rem] z-10">
@@ -394,7 +355,7 @@
             </transition-group>
           </div>
         </template>
-      </div>
+      </ChannelVideoCard>
     </div>
     <!-- Selected channel detail panel -->
     <div class="h-64 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col flex-shrink-0">
@@ -1388,6 +1349,7 @@ import ExternalAlarmBanner from './ExternalAlarmBanner.vue';
 import RecordingFailureOverlay from './RecordingFailureOverlay.vue';
 import SopStepPanel from './SopStepPanel.vue';
 import CustomMixItemPanel from './CustomMixItemPanel.vue';
+import ChannelVideoCard from './ChannelVideoCard.vue';
 import { createFramePump } from './framePump';
 import { listPackagingFlows, getPackagingFlowState } from '@/api/packaging_flow';
 import TjSlot from '@/components/TjSlot.vue';
