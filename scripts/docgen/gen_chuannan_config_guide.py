@@ -13,8 +13,8 @@ import os
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SHOTS = os.path.join(ROOT, "tests", "uat", "evidence_chuannan_guide")
 SHOTS_FALLBACK = "/tmp/uat_shots"
-OUT_HTML = os.path.join(ROOT, "docs", "川南火工对接_配置操作手册.html")
-OUT_PDF = os.path.join(ROOT, "docs", "川南火工对接_配置操作手册.pdf")
+OUT_HTML = os.path.join(ROOT, "docs", "customers", "川南", "川南火工对接_配置操作手册.html")
+OUT_PDF = os.path.join(ROOT, "docs", "customers", "川南", "川南火工对接_配置操作手册.pdf")
 
 
 def img(name):

@@ -164,6 +164,7 @@ tools/test_scan_pair_*.py
 
 # HTML intermediate artifact for manual (PDF is the released form)
 docs/*.html
+docs/**/*.html
 
 # External skill vendor trees (`npx skills add`, symlink targets)
 /.agents/
