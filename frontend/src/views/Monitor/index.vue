@@ -742,91 +742,12 @@
         :channel="selectedChannel"
         mix
       />
-      <div v-else-if="customMixState && customMixState.mix_type === 'tracking'"
-        class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
-        <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0 flex justify-between items-center">
-          <span class="text-cyan-400 text-lg font-bold">
-            {{ customMixContainer ? `物品校验 · ${customMixContainer.container_display || '容器'}装箱` : '物品校验 · 跟踪清点' }}
-          </span>
-          <div class="flex items-center gap-3">
-            <!-- 总数模式: 已进箱滑块总数 N/目标 -->
-            <span v-if="customMixItemTotal" class="text-sm font-bold"
-              :class="customMixItemTotal.target > 0 && customMixItemTotal.done === customMixItemTotal.target ? 'text-green-400' : 'text-amber-400'">
-              已进箱{{ customMixItemTotal.display || '滑块' }}
-              {{ customMixItemTotal.done }}<template v-if="customMixItemTotal.target > 0"> / {{ customMixItemTotal.target }}</template>
-            </span>
-            <!-- 盘计数模式: 已装托盘累计 N/每箱 -->
-            <span v-else-if="customMixContainer" class="text-sm font-bold"
-              :class="customMixContainer.box_count > 0 && customMixContainer.trays_done >= customMixContainer.box_count ? 'text-green-400' : 'text-amber-400'">
-              已装{{ customMixContainer.container_display || '托盘' }}
-              {{ customMixContainer.trays_done }}<template v-if="customMixContainer.box_count > 0"> / {{ customMixContainer.box_count }}</template>
-            </span>
-            <span v-if="customMixState.cycle_active" class="text-xs text-green-400 animate-pulse">周期中...</span>
-            <span v-else class="text-xs text-gray-500">等待周期开始（由步骤驱动）</span>
-          </div>
-        </div>
-        <!-- 容器模式: 显示"当前正在装的托盘"实时滑块数 + 已装托盘进度 -->
-        <div v-if="customMixContainer" class="flex-1 p-2 overflow-x-auto">
-          <div class="flex items-stretch h-full gap-3">
-            <div v-for="it in customMixContainer.current_tray_items" :key="it.label"
-              class="flex-shrink-0 w-44 bg-slate-800 rounded-lg border p-2 flex flex-col justify-between"
-              :class="!customMixItemTotal && it.expected_per_tray > 0 && (it.peak_count ?? 0) >= it.expected_per_tray ? 'border-green-500/70' : 'border-amber-500/50'">
-              <div class="text-xs text-gray-400 truncate">当前{{ customMixContainer.container_display || '托盘' }}峰值 · {{ it.display_name || it.label }}</div>
-              <div class="text-center my-1">
-                <span class="text-4xl font-bold font-mono"
-                  :class="!customMixItemTotal && it.expected_per_tray > 0 && (it.peak_count ?? 0) >= it.expected_per_tray ? 'text-green-400' : 'text-white'"
-                >{{ it.peak_count ?? 0 }}</span>
-                <span v-if="!customMixItemTotal && it.expected_per_tray > 0" class="text-base text-gray-500"> / {{ it.expected_per_tray }}</span>
-              </div>
-              <div class="text-[0.625rem] text-gray-400 text-center">
-                实时 <span class="text-cyan-400 font-bold">{{ it.current_count }}</span> · 进箱记峰值
-              </div>
-            </div>
-            <!-- 已装托盘明细 (每盘装了多少) -->
-            <div v-if="(customMixContainer.done_detail || []).length"
-              class="flex-shrink-0 min-w-32 bg-slate-800/60 rounded-lg border border-slate-700 p-2 flex flex-col">
-              <div class="text-xs text-gray-400 mb-1">已装明细</div>
-              <div class="flex-1 overflow-y-auto space-y-0.5">
-                <div v-for="(tray, idx) in customMixContainer.done_detail" :key="idx"
-                  class="text-[0.7rem] text-gray-300 font-mono">
-                  第{{ idx + 1 }}盘: {{ Object.values(tray).join('/') }}
-                </div>
-              </div>
-            </div>
-            <div v-if="!customMixContainer.current_tray_items.length"
-              class="flex items-center justify-center text-gray-500 text-sm w-full">
-              等待{{ customMixContainer.container_display || '托盘' }}出现...
-            </div>
-          </div>
-        </div>
-        <div v-else class="flex-1 p-2 overflow-x-auto">
-          <!-- 复用独立跟踪模式的物品清单数据 (后端 _rebuild_checklist 同一来源) -->
-          <div class="flex items-stretch h-full gap-3">
-            <div v-for="(info, cls) in trackingChecklist" :key="cls"
-              class="flex-shrink-0 w-36 bg-slate-800 rounded-lg border p-2 flex flex-col justify-between transition-all"
-              :class="info.counted >= info.expected && info.expected > 0 ? 'border-green-500/70' : info.counted > info.expected && info.expected > 0 ? 'border-red-500/70' : 'border-slate-700'"
-            >
-              <div class="text-xs text-gray-400 truncate">{{ info.display_name || cls }}</div>
-              <div class="text-center my-1">
-                <span class="text-3xl font-bold font-mono"
-                  :class="info.counted >= info.expected && info.expected > 0 ? 'text-green-400' : 'text-white'"
-                >{{ info.counted }}</span>
-                <span v-if="info.expected > 0" class="text-sm text-gray-500"> / {{ info.expected }}</span>
-              </div>
-              <div v-if="(customMixItemByLabel[cls]?.partials || []).length"
-                class="text-[0.625rem] text-red-400 text-center truncate"
-                :title="customMixItemByLabel[cls].partials.map(p => `${p.peak}/${p.required}`).join(', ')">
-                缺件批次: {{ customMixItemByLabel[cls].partials.map(p => `${p.peak}/${p.required}`).join(', ') }}
-              </div>
-              <div v-else class="text-[0.625rem] text-gray-500 text-center">{{ info.prefix }}1 ~ {{ info.prefix }}{{ info.counted || '?' }}</div>
-            </div>
-            <div v-if="Object.keys(trackingChecklist).length === 0"
-              class="flex items-center justify-center text-gray-500 text-sm w-full">
-              等待物品出现...
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- 混合类型=tracking 物品校验看板（M-3 外置 CustomMixItemPanel） -->
+      <CustomMixItemPanel
+        v-else-if="customMixState && customMixState.mix_type === 'tracking'"
+        :state="customMixState"
+        :tracking-checklist="trackingChecklist"
+      />
 
       <!-- v3.21: 包装箱结算进度 (仅当前工位有启用配置才显示, 否则不渲染/不轮询, 零差异) -->
       <PackagingFlowCard
@@ -1466,6 +1387,7 @@ import VirtualScanGun from './VirtualScanGun.vue';
 import ExternalAlarmBanner from './ExternalAlarmBanner.vue';
 import RecordingFailureOverlay from './RecordingFailureOverlay.vue';
 import SopStepPanel from './SopStepPanel.vue';
+import CustomMixItemPanel from './CustomMixItemPanel.vue';
 import { createFramePump } from './framePump';
 import { listPackagingFlows, getPackagingFlowState } from '@/api/packaging_flow';
 import TjSlot from '@/components/TjSlot.vue';
@@ -1746,28 +1668,9 @@ onUnmounted(() => {
   }
 });
 // v3.19.x 自定义混合模式物品校验 (detection/results.custom_mix_state)
+// 展示侧三个 computed(按标签索引/容器累加器/总数模式)已随面板外置到 CustomMixItemPanel.vue（M-3）,
+// 本 ref 留父级: 轮询写入 + customMixPerItemState 适配 + 面板 props 数据源。
 const customMixState = ref(null);
-// 混合跟踪卡片用: 按标签索引物品行状态 (堆叠批层的"缺件批次"明细显示)
-const customMixItemByLabel = computed(() => {
-  const map = {};
-  for (const it of (customMixState.value?.items || [])) map[it.label] = it;
-  return map;
-});
-// 托盘容器累加器状态 (混合跟踪 + 配了容器标签时后端才下发; 否则 null = 走原扁平清单)
-const customMixContainer = computed(() => {
-  const c = customMixState.value?.container;
-  return (c && c.enabled) ? c : null;
-});
-// 总数模式 (items_total): 累加进箱滑块总数 / 整箱目标, 取首个被计数物品标签
-const customMixItemTotal = computed(() => {
-  const c = customMixContainer.value;
-  if (!c || c.count_mode !== 'items_total') return null;
-  const totals = c.item_total_done || {};
-  const label = Object.keys(totals)[0] || (c.current_tray_items?.[0]?.label) || '';
-  const done = Object.values(totals).reduce((a, b) => a + (b || 0), 0);
-  const disp = c.current_tray_items?.find(i => i.label === label)?.display_name || label;
-  return { done, target: c.item_target || 0, display: disp };
-});
 const cycleTime = ref(0);
 const cycleTimeWithNg = ref(0);
 const lastCycleTime = ref(0);
