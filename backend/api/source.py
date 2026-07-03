@@ -359,6 +359,12 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self.mediapipe_hand_detector_class = -1     # -1 = 所有类, 否则只保留该类 id
         self.mediapipe_hand_roi_pad = 0.3
         self.mediapipe_landmarker_task_path = ""    # 空 = 用内置 backend/data/models/hand_landmarker.task
+        # v3.32.0 自定义纯色骨架样式 (默认关 = 保持 MediaPipe 官方花色, 老客户零影响)
+        self.mediapipe_custom_style = False
+        self.mediapipe_pose_color = "#00FF00"       # 姿态骨架颜色 (#RRGGBB)
+        self.mediapipe_pose_thickness = 2           # 姿态骨架线宽 (1-10)
+        self.mediapipe_hands_color = "#00FF00"      # 手部骨架颜色 (#RRGGBB)
+        self.mediapipe_hands_thickness = 2          # 手部骨架线宽 (1-10)
         # 8 个内部 _mp_* 状态字段移至组件, __getattr__/__setattr__ 透明转发
         self.mp_overlay = MediaPipeOverlay(host=self)
         
@@ -435,6 +441,12 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                     self.mediapipe_hand_detector_class = int(config.get('mediapipe_hand_detector_class', -1))
                     self.mediapipe_hand_roi_pad = float(config.get('mediapipe_hand_roi_pad', 0.3))
                     self.mediapipe_landmarker_task_path = config.get('mediapipe_landmarker_task_path', '') or ''
+                    # v3.32.0 自定义纯色骨架样式 (向后兼容: 缺省 = 关, 走官方花色)
+                    self.mediapipe_custom_style = bool(config.get('mediapipe_custom_style', False))
+                    self.mediapipe_pose_color = config.get('mediapipe_pose_color', '#00FF00') or '#00FF00'
+                    self.mediapipe_pose_thickness = int(config.get('mediapipe_pose_thickness', 2))
+                    self.mediapipe_hands_color = config.get('mediapipe_hands_color', '#00FF00') or '#00FF00'
+                    self.mediapipe_hands_thickness = int(config.get('mediapipe_hands_thickness', 2))
 
                     per_ch = (config.get('per_channel') or {}).get(str(self.channel_id), {})
                     rot = per_ch.get('rotation', 0)
@@ -492,6 +504,12 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 'mediapipe_hand_detector_class': int(getattr(self, 'mediapipe_hand_detector_class', -1)),
                 'mediapipe_hand_roi_pad': float(getattr(self, 'mediapipe_hand_roi_pad', 0.3)),
                 'mediapipe_landmarker_task_path': getattr(self, 'mediapipe_landmarker_task_path', '') or '',
+                # v3.32.0 自定义纯色骨架样式
+                'mediapipe_custom_style': bool(getattr(self, 'mediapipe_custom_style', False)),
+                'mediapipe_pose_color': getattr(self, 'mediapipe_pose_color', '#00FF00') or '#00FF00',
+                'mediapipe_pose_thickness': int(getattr(self, 'mediapipe_pose_thickness', 2)),
+                'mediapipe_hands_color': getattr(self, 'mediapipe_hands_color', '#00FF00') or '#00FF00',
+                'mediapipe_hands_thickness': int(getattr(self, 'mediapipe_hands_thickness', 2)),
                 'per_channel': per_channel,
             }
             with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:

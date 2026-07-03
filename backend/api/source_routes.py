@@ -171,6 +171,12 @@ class StreamConfigRequest(BaseModel):
     mediapipe_hand_detector_class: Optional[int] = -1
     mediapipe_hand_roi_pad: Optional[float] = 0.3
     mediapipe_landmarker_task_path: Optional[str] = ""
+    # v3.32.0 自定义纯色骨架样式 (default None: 老前端不带字段时保留 host 当前值)
+    mediapipe_custom_style: Optional[bool] = None
+    mediapipe_pose_color: Optional[str] = None
+    mediapipe_pose_thickness: Optional[int] = None
+    mediapipe_hands_color: Optional[str] = None
+    mediapipe_hands_thickness: Optional[int] = None
 
 
 class DeviceConfigRequest(BaseModel):
@@ -537,9 +543,27 @@ def get_stream_config():
         "mediapipe_hand_detector_class": int(getattr(video_manager, "mediapipe_hand_detector_class", -1)),
         "mediapipe_hand_roi_pad": float(getattr(video_manager, "mediapipe_hand_roi_pad", 0.3)),
         "mediapipe_landmarker_task_path": getattr(video_manager, "mediapipe_landmarker_task_path", "") or "",
+        # v3.32.0 自定义纯色骨架样式
+        "mediapipe_custom_style": bool(getattr(video_manager, "mediapipe_custom_style", False)),
+        "mediapipe_pose_color": getattr(video_manager, "mediapipe_pose_color", "#00FF00") or "#00FF00",
+        "mediapipe_pose_thickness": int(getattr(video_manager, "mediapipe_pose_thickness", 2)),
+        "mediapipe_hands_color": getattr(video_manager, "mediapipe_hands_color", "#00FF00") or "#00FF00",
+        "mediapipe_hands_thickness": int(getattr(video_manager, "mediapipe_hands_thickness", 2)),
         # v3.8.0 二段管线运行时状态: 给前端显示"基础模式 / 已启用 / 路径无效 / 加载失败"
         "mediapipe_two_stage_status": _compute_two_stage_status(video_manager),
     }
+
+
+def _sanitize_hex_color(value: str, fallback: str) -> str:
+    """校验 '#RRGGBB' 格式颜色, 非法时保留原值."""
+    s = (value or "").strip()
+    if len(s) == 7 and s.startswith("#"):
+        try:
+            int(s[1:], 16)
+            return s.upper()
+        except ValueError:
+            pass
+    return fallback
 
 
 def _compute_two_stage_status(vm) -> Dict[str, Any]:
@@ -597,6 +621,20 @@ def set_stream_config(req: StreamConfigRequest):
     video_manager.mediapipe_hand_detector_class = int(req.mediapipe_hand_detector_class if req.mediapipe_hand_detector_class is not None else -1)
     video_manager.mediapipe_hand_roi_pad = max(0.0, min(2.0, float(req.mediapipe_hand_roi_pad or 0.3)))
     video_manager.mediapipe_landmarker_task_path = (req.mediapipe_landmarker_task_path or "").strip()
+    # v3.32.0 自定义纯色骨架样式 (画帧时才读取, 改完即时生效, 不需要重载模型;
+    # None = 老前端不带字段, 保留当前值)
+    if req.mediapipe_custom_style is not None:
+        video_manager.mediapipe_custom_style = bool(req.mediapipe_custom_style)
+    if req.mediapipe_pose_color is not None:
+        video_manager.mediapipe_pose_color = _sanitize_hex_color(
+            req.mediapipe_pose_color, video_manager.mediapipe_pose_color)
+    if req.mediapipe_pose_thickness is not None:
+        video_manager.mediapipe_pose_thickness = max(1, min(10, int(req.mediapipe_pose_thickness)))
+    if req.mediapipe_hands_color is not None:
+        video_manager.mediapipe_hands_color = _sanitize_hex_color(
+            req.mediapipe_hands_color, video_manager.mediapipe_hands_color)
+    if req.mediapipe_hands_thickness is not None:
+        video_manager.mediapipe_hands_thickness = max(1, min(10, int(req.mediapipe_hands_thickness)))
 
     conf_changed = abs(video_manager.mediapipe_confidence - old_conf) > 0.01
     complexity_changed = video_manager.mediapipe_model_complexity != old_complexity
@@ -629,6 +667,11 @@ def set_stream_config(req: StreamConfigRequest):
         "mediapipe_hand_detector_class": video_manager.mediapipe_hand_detector_class,
         "mediapipe_hand_roi_pad": video_manager.mediapipe_hand_roi_pad,
         "mediapipe_landmarker_task_path": video_manager.mediapipe_landmarker_task_path,
+        "mediapipe_custom_style": video_manager.mediapipe_custom_style,
+        "mediapipe_pose_color": video_manager.mediapipe_pose_color,
+        "mediapipe_pose_thickness": video_manager.mediapipe_pose_thickness,
+        "mediapipe_hands_color": video_manager.mediapipe_hands_color,
+        "mediapipe_hands_thickness": video_manager.mediapipe_hands_thickness,
     }
 
 

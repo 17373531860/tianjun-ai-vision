@@ -1064,6 +1064,63 @@
                   <el-switch v-model="store.performance.mediapipeHands" :disabled="!store.performance.mediapipeEnabled" @change="savePerformanceSettings" />
                 </div>
               </div>
+
+              <!-- v3.32.0: 自定义纯色骨架样式 -->
+              <div class="p-3 bg-slate-900 rounded border border-slate-800 space-y-3">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <span class="text-gray-300">自定义骨架样式</span>
+                    <div class="text-xs text-gray-500 mt-1">开启后骨架用纯色绘制，颜色和线条粗细可自选；关闭 = MediaPipe 默认多彩配色</div>
+                  </div>
+                  <el-switch v-model="store.performance.mediapipeCustomStyle" :disabled="!store.performance.mediapipeEnabled" @change="savePerformanceSettings" />
+                </div>
+                <div v-if="store.performance.mediapipeCustomStyle" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div class="flex items-center justify-between p-2 bg-slate-800 rounded border border-slate-700">
+                    <span class="text-gray-400 text-sm">姿态骨架颜色</span>
+                    <el-color-picker
+                      v-model="store.performance.mediapipePoseColor"
+                      :disabled="!store.performance.mediapipeEnabled"
+                      @change="v => { if (!v) store.performance.mediapipePoseColor = '#00FF00'; savePerformanceSettings(); }"
+                    />
+                  </div>
+                  <div class="flex items-center justify-between p-2 bg-slate-800 rounded border border-slate-700">
+                    <span class="text-gray-400 text-sm">姿态线条粗细</span>
+                    <el-input-number
+                      v-model="store.performance.mediapipePoseThickness"
+                      size="small"
+                      :min="1"
+                      :max="10"
+                      :precision="0"
+                      :step="1"
+                      :disabled="!store.performance.mediapipeEnabled"
+                      @change="savePerformanceSettings"
+                      style="width: 100px"
+                    />
+                  </div>
+                  <div class="flex items-center justify-between p-2 bg-slate-800 rounded border border-slate-700">
+                    <span class="text-gray-400 text-sm">手部骨架颜色</span>
+                    <el-color-picker
+                      v-model="store.performance.mediapipeHandsColor"
+                      :disabled="!store.performance.mediapipeEnabled"
+                      @change="v => { if (!v) store.performance.mediapipeHandsColor = '#00FF00'; savePerformanceSettings(); }"
+                    />
+                  </div>
+                  <div class="flex items-center justify-between p-2 bg-slate-800 rounded border border-slate-700">
+                    <span class="text-gray-400 text-sm">手部线条粗细</span>
+                    <el-input-number
+                      v-model="store.performance.mediapipeHandsThickness"
+                      size="small"
+                      :min="1"
+                      :max="10"
+                      :precision="0"
+                      :step="1"
+                      :disabled="!store.performance.mediapipeEnabled"
+                      @change="savePerformanceSettings"
+                      style="width: 100px"
+                    />
+                  </div>
+                </div>
+              </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <div>
                   <span class="text-gray-300">检测置信度</span>
@@ -1971,7 +2028,13 @@ const savePerformanceSettings = async () => {
       mediapipe_hand_detector_conf: store.performance.mediapipeHandDetectorConf,
       mediapipe_hand_detector_iou: store.performance.mediapipeHandDetectorIou,
       mediapipe_hand_detector_imgsz: store.performance.mediapipeHandDetectorImgsz,
-      mediapipe_hand_roi_pad: store.performance.mediapipeHandRoiPad
+      mediapipe_hand_roi_pad: store.performance.mediapipeHandRoiPad,
+      // v3.32.0 自定义纯色骨架样式
+      mediapipe_custom_style: store.performance.mediapipeCustomStyle,
+      mediapipe_pose_color: store.performance.mediapipePoseColor,
+      mediapipe_pose_thickness: store.performance.mediapipePoseThickness,
+      mediapipe_hands_color: store.performance.mediapipeHandsColor,
+      mediapipe_hands_thickness: store.performance.mediapipeHandsThickness
     });
     ElMessage.success('性能设置已保存');
     // 保存后立即刷新二段状态（让徽章动）
@@ -2031,6 +2094,22 @@ const loadPerformanceSettings = async () => {
       }
       if (res.data.mediapipe_hand_roi_pad !== undefined) {
         store.performance.mediapipeHandRoiPad = res.data.mediapipe_hand_roi_pad;
+      }
+      // v3.32.0 自定义纯色骨架样式
+      if (res.data.mediapipe_custom_style !== undefined) {
+        store.performance.mediapipeCustomStyle = res.data.mediapipe_custom_style;
+      }
+      if (res.data.mediapipe_pose_color !== undefined) {
+        store.performance.mediapipePoseColor = res.data.mediapipe_pose_color || '#00FF00';
+      }
+      if (res.data.mediapipe_pose_thickness !== undefined) {
+        store.performance.mediapipePoseThickness = res.data.mediapipe_pose_thickness;
+      }
+      if (res.data.mediapipe_hands_color !== undefined) {
+        store.performance.mediapipeHandsColor = res.data.mediapipe_hands_color || '#00FF00';
+      }
+      if (res.data.mediapipe_hands_thickness !== undefined) {
+        store.performance.mediapipeHandsThickness = res.data.mediapipe_hands_thickness;
       }
       // v3.8.0 二段管线状态
       if (res.data.mediapipe_two_stage_status) {

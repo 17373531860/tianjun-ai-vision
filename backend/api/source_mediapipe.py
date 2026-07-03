@@ -13,7 +13,12 @@ v3.8.0 二段 pipeline 升级 (feat/hand-skeleton):
     - 配 hand_detector 但加载失败 -> 自动回退原 baseline, 不阻塞推理
     - hand-detector kind: 'v8'(ultralytics) / 'v5'(legacy, monkeypatch torch.load)
 
-字段所有权 (8 + 5 个内部状态):
+v3.32.0 异步推理升级:
+    - 推理不再内联在采集循环: apply_overlay 只投递帧副本(单槽位) + 画上一次缓存结果,
+      后台 worker 线程负责 lazy init / 热重载 / 推理, 采集帧率不再被手部模型拖垮.
+    - 代价: 骨架相对画面滞后一次推理周期 (视觉基本无感).
+
+字段所有权 (8 + 5 + 5 个内部状态):
   老 baseline:
     _mp_pose / _mp_hands / _mp_landmarker_tasks  : lazy-loaded 模型句柄
     _mp_draw / _mp_draw_styles                   : drawing utils
@@ -24,6 +29,9 @@ v3.8.0 二段 pipeline 升级 (feat/hand-skeleton):
     _hand_detector_path_loaded           : 已加载的路径 (热更新检测)
     _hand_detector_kind_loaded           : 已加载的 kind
     _last_two_stage_landmarks            : 帧间复用的 ROI 关键点 [(roi_offset, roi_size, landmarks), ...]
+  v3.32.0 新增 (异步推理):
+    _worker_thread / _worker_running     : 后台推理线程
+    _pending_lock / _pending_cond / _pending_frame : 单槽位帧投递
 
 用户配置 (公共字段保留在 VSM, 通过 __setattr__ 转发):
   老 4 个: mediapipe_enabled / mediapipe_pose / mediapipe_hands / mediapipe_confidence
@@ -54,6 +62,18 @@ HAND_CONNECTIONS_21 = [
     (13, 17), (17, 18), (18, 19), (19, 20),
     (0, 17),
 ]
+
+
+def _hex_to_bgr(hex_color: str, fallback: Tuple[int, int, int]) -> Tuple[int, int, int]:
+    """'#RRGGBB' -> BGR tuple (cv2/mediapipe DrawingSpec 都吃 BGR). 解析失败回退."""
+    try:
+        s = (hex_color or "").strip().lstrip("#")
+        if len(s) != 6:
+            return fallback
+        r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+        return (b, g, r)
+    except Exception:
+        return fallback
 
 
 # ==================== 二段 pipeline: hand-detector 适配器 ====================
@@ -247,6 +267,17 @@ class MediaPipeOverlay:
         self._two_stage_active = False
         self._init_lock = threading.Lock()
 
+        # ---------- v3.32.0 异步推理线程 ----------
+        # 历史问题: 推理原先内联在采集循环里, 手部模型 (尤其 complexity=1 +
+        # interval=1) 单帧 30-40ms, 直接把采集帧率从 40+ 拖到十几帧、视频源慢放.
+        # 现在: apply_overlay 只画上一次算好的结果 (1-2ms), 帧提交到单槽位,
+        # 后台线程按自己的节奏跑推理; 模型加载/热重载也在后台线程做, 不再卡采集.
+        self._worker_thread: Optional[threading.Thread] = None
+        self._worker_running = False
+        self._pending_lock = threading.Lock()
+        self._pending_cond = threading.Condition(self._pending_lock)
+        self._pending_frame = None
+
     # ---------------- 公共 API ----------------
 
     def init(self):
@@ -283,7 +314,17 @@ class MediaPipeOverlay:
                 host.mediapipe_enabled = False
 
     def release(self):
-        """释放所有资源, 重置缓存."""
+        """释放所有资源, 重置缓存. 先停后台推理线程再关模型, 避免关到一半还在用."""
+        self._worker_running = False
+        with self._pending_lock:
+            self._pending_frame = None
+            self._pending_cond.notify_all()
+        if self._worker_thread is not None:
+            try:
+                self._worker_thread.join(timeout=3.0)
+            except Exception:
+                pass
+            self._worker_thread = None
         if self._mp_pose is not None:
             try:
                 self._mp_pose.close()
@@ -314,40 +355,54 @@ class MediaPipeOverlay:
         print("[MediaPipe] 资源已释放")
 
     def apply_overlay(self, frame):
-        """在帧上画 pose + hands 骨架. 二段或 baseline 自动选择."""
+        """在帧上画 pose + hands 骨架 (v3.32.0 异步化).
+
+        本方法跑在采集线程, 只做两件轻活:
+          1. 按处理间隔把当前帧副本投递给后台推理线程 (单槽位, 忙时跳过不排队)
+          2. 把后台线程上一次算好的骨架画到本帧 (1-2ms)
+        模型 lazy 加载 / 热重载 / 推理全在后台线程, 不阻塞采集.
+        """
         host = self._host
         if not host.mediapipe_enabled:
             return frame
 
-        if self._mp_draw is None:
-            self.init()
-            if not host.mediapipe_enabled:
-                return frame
+        self._ensure_worker()
 
-        # 配置热更新: hand-detector 路径变了, 重新初始化
-        cur_path = (getattr(host, "mediapipe_hand_detector_path", "") or "").strip()
-        cur_kind = (getattr(host, "mediapipe_hand_detector_kind", "v8") or "v8").strip()
-        if cur_path != (self._hand_detector_path_loaded or "") or \
-           cur_kind != (self._hand_detector_kind_loaded or ""):
-            self._reload_hands_pipeline()
-
+        # ---------- 投递帧 (按间隔; latest-wins: 覆盖旧帧, 后台永远算最新画面) ----------
+        # 不做"忙时跳过": 跳过会让后台消费到一帧 20-40ms 前的旧画面,
+        # 快速动作下骨架滞后被放大一个推理周期. 覆盖的代价只是一次帧拷贝 (<1ms).
         self._mp_frame_counter += 1
         should_process = (self._mp_frame_counter %
                           max(self._mp_process_interval, 1)) == 0
-
         if should_process:
-            self._run_inference(frame)
+            with self._pending_lock:
+                self._pending_frame = frame.copy()
+                self._pending_cond.notify()
 
-        # ---------- 渲染 ----------
-        # pose (baseline 共用)
-        if self._mp_last_pose_results and self._mp_last_pose_results.pose_landmarks:
+        # ---------- 渲染缓存结果 (init 未完成时先原样返回) ----------
+        if self._mp_draw is None:
+            return frame
+
+        # 取本地引用, 后台线程整体替换结果对象, 不原地修改 → 无需加锁
+        pose_results = self._mp_last_pose_results
+        if pose_results and pose_results.pose_landmarks:
             import mediapipe as mp
-            self._mp_draw.draw_landmarks(
-                frame,
-                self._mp_last_pose_results.pose_landmarks,
-                mp.solutions.pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=self._mp_draw_styles.get_default_pose_landmarks_style(),
-            )
+            pose_specs = self._custom_draw_specs("pose")
+            if pose_specs is not None:
+                self._mp_draw.draw_landmarks(
+                    frame,
+                    pose_results.pose_landmarks,
+                    mp.solutions.pose.POSE_CONNECTIONS,
+                    landmark_drawing_spec=pose_specs[0],
+                    connection_drawing_spec=pose_specs[1],
+                )
+            else:
+                self._mp_draw.draw_landmarks(
+                    frame,
+                    pose_results.pose_landmarks,
+                    mp.solutions.pose.POSE_CONNECTIONS,
+                    landmark_drawing_spec=self._mp_draw_styles.get_default_pose_landmarks_style(),
+                )
 
         # hands: 二段或 baseline 不同渲染路径
         if self._two_stage_active:
@@ -357,7 +412,73 @@ class MediaPipeOverlay:
 
         return frame
 
+    # ---------------- 后台推理线程 ----------------
+
+    def _ensure_worker(self):
+        """确保后台推理线程在跑 (幂等, 双检)."""
+        if self._worker_thread is not None and self._worker_thread.is_alive():
+            return
+        with self._init_lock:
+            if self._worker_thread is not None and self._worker_thread.is_alive():
+                return
+            self._worker_running = True
+            self._worker_thread = threading.Thread(
+                target=self._worker_loop,
+                name=f"mp-overlay-worker-ch{getattr(self._host, 'channel_id', '?')}",
+                daemon=True,
+            )
+            self._worker_thread.start()
+
+    def _worker_loop(self):
+        """后台推理循环: 等帧 → (首帧 lazy init / 热重载) → 推理 → 写结果缓存."""
+        while self._worker_running:
+            with self._pending_lock:
+                while self._pending_frame is None and self._worker_running:
+                    self._pending_cond.wait(timeout=0.5)
+                frame = self._pending_frame
+                self._pending_frame = None
+            if frame is None or not self._worker_running:
+                continue
+            try:
+                if self._mp_draw is None:
+                    self.init()
+                    if self._mp_draw is None or not self._host.mediapipe_enabled:
+                        continue  # init 失败 (未安装等), enabled 已被置 False
+                self._check_hot_reload()
+                self._run_inference(frame)
+            except Exception as e:
+                print(f"[MediaPipe] 后台推理异常: {e}", file=sys.stderr)
+
+    def _check_hot_reload(self):
+        """hand-detector 路径/类型变了 → 后台线程内重载 (模型加载不卡采集)."""
+        host = self._host
+        cur_path = (getattr(host, "mediapipe_hand_detector_path", "") or "").strip()
+        cur_kind = (getattr(host, "mediapipe_hand_detector_kind", "v8") or "v8").strip()
+        if cur_path != (self._hand_detector_path_loaded or "") or \
+           cur_kind != (self._hand_detector_kind_loaded or ""):
+            self._reload_hands_pipeline()
+
     # ---------------- 内部方法 ----------------
+
+    def _custom_draw_specs(self, kind: str):
+        """自定义纯色骨架样式 (v3.32.0).
+
+        开关关闭时返回 None (走 MediaPipe 默认花色样式, 与老版本行为一致);
+        开启时返回 (landmark_spec, connection_spec), 姿态/手部各用各的颜色+粗细.
+        """
+        host = self._host
+        if not getattr(host, "mediapipe_custom_style", False):
+            return None
+        if kind == "pose":
+            color = _hex_to_bgr(getattr(host, "mediapipe_pose_color", "#00FF00"), (0, 255, 0))
+            thickness = int(getattr(host, "mediapipe_pose_thickness", 2))
+        else:
+            color = _hex_to_bgr(getattr(host, "mediapipe_hands_color", "#00FF00"), (0, 255, 0))
+            thickness = int(getattr(host, "mediapipe_hands_thickness", 2))
+        thickness = max(1, min(10, thickness))
+        spec = self._mp_draw.DrawingSpec(
+            color=color, thickness=thickness, circle_radius=max(2, thickness + 1))
+        return spec, spec
 
     def _init_hands_pipeline(self, conf: float):
         """根据 host.mediapipe_hand_detector_path 决定走 baseline 还是二段."""
@@ -537,19 +658,37 @@ class MediaPipeOverlay:
         if not getattr(self._mp_last_hands_results, "multi_hand_landmarks", None):
             return
         import mediapipe as mp
+        hand_specs = self._custom_draw_specs("hands")
         for hand_lm in self._mp_last_hands_results.multi_hand_landmarks:
-            self._mp_draw.draw_landmarks(
-                frame,
-                hand_lm,
-                mp.solutions.hands.HAND_CONNECTIONS,
-                self._mp_draw_styles.get_default_hand_landmarks_style(),
-                self._mp_draw_styles.get_default_hand_connections_style(),
-            )
+            if hand_specs is not None:
+                self._mp_draw.draw_landmarks(
+                    frame,
+                    hand_lm,
+                    mp.solutions.hands.HAND_CONNECTIONS,
+                    hand_specs[0],
+                    hand_specs[1],
+                )
+            else:
+                self._mp_draw.draw_landmarks(
+                    frame,
+                    hand_lm,
+                    mp.solutions.hands.HAND_CONNECTIONS,
+                    self._mp_draw_styles.get_default_hand_landmarks_style(),
+                    self._mp_draw_styles.get_default_hand_connections_style(),
+                )
 
     def _draw_two_stage_hands(self, frame):
         """二段 pipeline 渲染: 把 ROI 内归一化关键点变回全帧坐标后画."""
         if not self._last_two_stage_results:
             return
+        # 自定义纯色样式: 连线/关节点同色; 未开启保持老配色 (蓝线 + 黄点)
+        hand_specs = self._custom_draw_specs("hands")
+        if hand_specs is not None:
+            line_color = point_color = hand_specs[0].color
+            thickness = hand_specs[0].thickness
+            radius = hand_specs[0].circle_radius
+        else:
+            line_color, point_color, thickness, radius = (255, 100, 0), (0, 255, 255), 2, 3
         for (offset, roi_size, landmarks) in self._last_two_stage_results:
             ox, oy = offset
             rw, rh = roi_size
@@ -560,6 +699,6 @@ class MediaPipeOverlay:
                 pts.append((x, y))
             for a, b in HAND_CONNECTIONS_21:
                 if a < len(pts) and b < len(pts):
-                    cv2.line(frame, pts[a], pts[b], (255, 100, 0), 2, cv2.LINE_AA)
+                    cv2.line(frame, pts[a], pts[b], line_color, thickness, cv2.LINE_AA)
             for (x, y) in pts:
-                cv2.circle(frame, (x, y), 3, (0, 255, 255), -1, cv2.LINE_AA)
+                cv2.circle(frame, (x, y), radius, point_color, -1, cv2.LINE_AA)
