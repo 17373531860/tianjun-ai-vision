@@ -32,7 +32,7 @@
 | P-1 ✅（2026-07-03 完成） | `WeighingConfigTab.vue`（称重投料 Tab） | ~1385-1554 行，5 张卡片 | 低：v3.31 新增、自包含、边界清晰，当模板批次。实测 index.vue 5971→5756 行；UAT 10/10 + CI E2E `test_weighing_config_tab.py` 3 用例绿 |
 | P-2 ✅（2026-07-03 完成） | 四个对话框各自成组件（`CreateProjectDialog` / `ModelSelectDialog` / `FormatSelectDialog` / `RoiEditorDialog`）+ 格式显示名共用模块 `modelFormats.js` | ~3098 行起 | 低-中：ROI 编辑器带 canvas 交互。实测 index.vue 5756→5468 行；UAT 11/11 + CI E2E `test_project_dialogs.py` 3 用例绿 + Project 页既有 13 用例回归绿。RoiEditorDialog 通过 load(通道, 已有多边形) 由父级驱动, 保存路由（副模型/步骤/全局）留在父级 |
 | P-3 ✅（2026-07-03 完成） | `EventsConfigTab.vue`（事件设置 Tab） | 事件 FSM 配置 | 中。实测 index.vue 5468→5355 行；UAT 9/9 + CI E2E `test_events_config_tab.py` 2 用例绿 + Project 页既有 16 用例回归绿。计数器候选 computed 留父级传 props（与基础设置 Tab 共用）；addEventAndBindToRule 属逻辑 Tab 链路留父级 |
-| P-4 | `LogicConfigTab.vue`（逻辑设置 Tab） | ~1556-3000 行，按 logic_mode 条件渲染的十几张卡片 | 中-高：五种模式分支都要回归 |
+| P-4 ✅（2026-07-03 完成） | `LogicConfigTab.vue`（逻辑设置 Tab）+ per_item 标签换算共用模块 `perItemLabel.js` | ~1400 行模板 + 20 个编辑函数 + 4 个步骤候选 computed + ROI 预览画布整体平移 | 中-高：五种模式分支全回归。实测 index.vue 5355→3707 行；UAT 10/10（五模式卡片渲染 + sequential 序列落库 + custom 周期规则/快捷建事件落库 + tracking ROI emit 链路）+ CI E2E `test_logic_config_tab.py` 3 用例绿 + Project 页既有 18 用例回归绿。父级保留三个上下文回调（sequence-step-pick / mix-type-change / open-roi-editor 走 emit）；ROI 预览小画布随卡片进子组件, 内部 deep watch 自动重绘 |
 | P-5 | `StepsConfigTab.vue`（步骤/物品设置 Tab，含表 A/B/C） | ~489-1381 行 | 高：表 B 随模式切换、custom_mix 表 C，放最后 |
 
 ### Monitor/index.vue（后做——视频流+多通道地雷区，6293 → 目标 <2000 行）
