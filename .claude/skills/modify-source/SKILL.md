@@ -100,9 +100,11 @@ backend/api/source.py (~2050L)              -- VSM 类骨架 + __init__ + __geta
 │   ├─ source_sdk_loader.py             HCNetSDK + MvCamera + debug_log re-export
 │   └─ rod_filter.py                    传动杆同伴过滤 + RodSessionGate (源外, 但深度集成)
 │
-└─ ⚠ 4 个孤立 mixin 文件 (定义了类但 VSM 没继承, 历史拆分残留 — 见 AGENTS.md 第九节)
-    source_render_mixin.py / source_streaming_mixin.py / source_recording_mixin.py / source_industrial_camera_mixin.py
+└─ ⚠ 孤立 mixin 文件 (定义了类但 VSM 没继承, 历史拆分残留 — 见 AGENTS.md 第九节)
+    source_render_mixin.py / source_streaming_mixin.py
     动这些前先 grep 是否真的有人用; 大概率是死代码, 修复期间不要扩展它们.
+    （source_recording_mixin.py 546 行 / source_industrial_camera_mixin.py 438 行
+      已于 2026-07 全仓核实无 import 后删除, 同批跑绿录像/ROI/路由回归 37 项）
 ```
 
 > **注**：以 `source.py:188` 的 class 行为准 = **17 个继承式 mixin**（v3.5.x P7 重构 15 个 + SyntheticMixin + v3.8 PerItemMixin）。行号/数量以代码为准。
@@ -210,15 +212,16 @@ backend/services/detector.py                — ❌ 已删
 
 如果在某个 mixin 里看到这些路径的注释或 import，**直接删干净**，不要复活。
 
-### 4.4 同名方法冲突区（v3.5.x 仍存在）
+### 4.4 同名方法冲突区（✅ 2026-07 已解除）
 
-| 方法名 | 文件 A | 文件 B | 谁生效 |
-|---|---|---|---|
-| `start_hcnetsdk` | `source_camera_start_mixin.py` | `source_industrial_camera_mixin.py` | A（B 没继承） |
-| `start_hikvision_camera` | 同上 | 同上 | 同上 |
-| 录像相关方法 | `source_recording_mixin.py` (孤立) | `source_recording_thread_mixin.py + source_recording_api_mixin.py`（生效） | B/C |
+历史上有两组同名方法冲突，随孤儿 mixin 删除已消失：
 
-**修这两组任意一边时**：先用 `grep -n "def start_hcnetsdk" backend/api/` 确认重复实现，决定保留哪份再动。
+| 方法名 | 生效实现（唯一存留） | 已删的重复副本 |
+|---|---|---|
+| `start_hcnetsdk` / `start_hikvision_camera` | `source_camera_start_mixin.py` | ~~`source_industrial_camera_mixin.py`~~（2026-07 删） |
+| 录像相关方法 | `source_recording_thread_mixin.py` + `source_recording_api_mixin.py` | ~~`source_recording_mixin.py`~~（2026-07 删） |
+
+现在每个方法只有一份实现；若再看到重复定义属回归，先 `grep -n "def start_hcnetsdk" backend/api/` 查清再动。
 
 ---
 

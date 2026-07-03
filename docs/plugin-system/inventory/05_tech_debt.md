@@ -43,8 +43,8 @@
 | ID | 名称 | 影响 | 工时估 |
 |---|---|---|---|
 | BUG-2 | CI `CORE_FILES` 列了 11 个文件，3 个不存在 | 实际只编译 8 个，潜在 IP 泄漏（很多 source_*_mixin 没被 .pyd 保护） | 0.5 天 |
-| BUG-3 | 🟢 **降级（2026-07）**：`source_industrial_camera_mixin.py` 已确认为孤儿文件（source.py 不再 import），同名方法无 MRO 冲突，转死代码清退 | grep 双命中误导新人 | 0.5 天（删文件） |
-| BUG-4 | `source_recording_mixin.py` (546 行) 与拆分后的两个 mixin 能力重叠 | 历史拆分残留，潜在死代码 | 0.5 天 |
+| BUG-3 | ✅ **已清退（2026-07）**：`source_industrial_camera_mixin.py` 孤儿文件已删除（全仓无 import，无 MRO 冲突，见 DEAD-10） | — | — |
+| BUG-4 | ✅ **已清退（2026-07）**：`source_recording_mixin.py` (546 行) 孤儿文件已删除（见 DEAD-8），录像能力唯一归属拆分后两个 mixin | — | — |
 | OVERLAP-1 | ~~主类继承链不含 `IndustrialCameraMixin`，但被 import~~ 已随 BUG-3 复核关闭（import 已不存在） | — | — |
 | OVERLAP-2 | `_inspecting` 字典在 scan_pair race（v3.4.2 hotfix 后）可能仍有 cornercase | 工件结果错写到下一码 | 1 天（监控+测试） |
 | OVERLAP-3 | API 路由两条挂载路径并存（`api_router` 聚合 9 + main.py 直挂 10） | 插件加路由时不知道走哪条 | 0.5 天（统一） |
@@ -208,7 +208,8 @@ class VideoSourceManager(
 |---|---|---|---|---|
 | DEAD-5 | `backend/api/cameras.py` 8 个端点 | 152 行 | `api/camera.js` 死 → 全前端无调 | ⚠️ 第三方 / 测试可能用 |
 | DEAD-6 | `backend/api/tasks.py` 7 个端点 | 193 行 | 部分死 | ⚠️ `record` 可能仍用 |
-| DEAD-8 | `backend/api/source_recording_mixin.py` | 546 行 | MRO 不含 | ⚠️ 确认无 import |
+| DEAD-8 | `backend/api/source_recording_mixin.py` | 546 行 | ✅ **2026-07 已删除**（全仓无 import，import 冒烟 + 37 项录像/ROI/路由回归绿） | — |
+| DEAD-10 | `backend/api/source_industrial_camera_mixin.py`（原 BUG-3 降级） | 438 行 | ✅ **2026-07 已删除**（同批核实删除，`start_hcnetsdk` 唯一实现归 `source_camera_start_mixin`） | — |
 
 ### CI 死代码
 
@@ -223,11 +224,11 @@ class VideoSourceManager(
 
 ---
 
-## 五、重叠 mixin / 同名方法冲突（3 项）
+## 五、重叠 mixin / 同名方法冲突（2 项在册，1 项已关闭）
 
 | ID | 位置 | 现象 |
 |---|---|---|
-| OVERLAP-1 | `IndustrialCameraMixin` import 但不继承 | 已在 BUG-3 |
+| OVERLAP-1 | ✅ 已关闭：`IndustrialCameraMixin` 孤儿文件 2026-07 已删（原 BUG-3/DEAD-10） | — |
 | OVERLAP-2 | `_inspecting` 字典 race | scan_pair 模式 v3.4.2 hotfix 修了一波，但仍可能 cornercase |
 | OVERLAP-3 | API 双挂载路径 | `api_router` 聚合 9 + `main.py` 直挂 10 |
 

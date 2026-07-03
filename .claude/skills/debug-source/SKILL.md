@@ -34,8 +34,8 @@ backend/api/source.py (~1573 行)         主类 VideoSourceManager
 │   ├── source_inference_loop_mixin.py   _inference_loop 推理线程 + fps_inference
 │   ├── source_lifecycle_mixin.py        pause/resume/standby/resume_inference/stop
 │   ├── source_camera_start_mixin.py     start_camera/rtsp/video/image
-│   ├── source_industrial_camera_mixin.py  start_hcnetsdk/start_hikvision_camera
-│   │   （⚠ 与 camera_start_mixin 同名方法共存，依赖 MRO）
+│   │                                     + start_hcnetsdk/start_hikvision_camera（唯一实现，
+│   │                                       同名孤儿副本 industrial_camera_mixin 2026-07 已删）
 │   └── source_session_lifecycle_mixin.py  start/end_session, start/end_cycle,
 │                                           record_step, _force_timeout_ng,
 │                                           _discard_empty_cycle, _reconcile_step_records
@@ -59,8 +59,8 @@ backend/api/source.py (~1573 行)         主类 VideoSourceManager
 │   └── source_tracking_mixin.py         tracking 模式 _update_tracking_stats
 │
 ├── 录像 mixin
-│   ├── source_recording_thread_mixin.py + source_recording_api_mixin.py
-│   └── source_recording_mixin.py        （历史合并版 546 行，与上两者重叠）
+│   └── source_recording_thread_mixin.py + source_recording_api_mixin.py
+│       （历史合并版 source_recording_mixin.py 546 行为孤儿文件，2026-07 已删）
 │
 └── source_routes.py (1279 ⚠️)           /api/v1/source/* 路由
 ```
@@ -499,8 +499,9 @@ mixin 改动就是源码裸跑（IP 漏出去），但行为对得上。
 - `_init_inference_vars` 初始化~100 个变量，加新字段必须同步进 `reset_stats`
 - 跟踪模式秒→帧换算必须用 `max(self.fps_inference, 10)`，不能用 `fps_actual`
   （v2.7.13 钉死的规则；fps_actual=采集，跟踪/事件帧数累加在推理线程）
-- 同名方法 MRO 陷阱：`source_camera_start_mixin` 与 `source_industrial_camera_mixin`
-  的 `start_hcnetsdk / start_hikvision_camera` 同名共存，改前先 `import inspect; print(inspect.getmro(VideoSourceManager))`
+- 同名方法 MRO 陷阱已解除（2026-07 删除孤儿 `source_industrial_camera_mixin`），
+  `start_hcnetsdk / start_hikvision_camera` 唯一实现在 `source_camera_start_mixin`；
+  怀疑 MRO 时用 `import inspect; print(inspect.getmro(VideoSourceManager))` 核
 - `mes_hooks.py` 内部 import 必须 `from services.xxx` 不是 `from backend.services.xxx`，
   否则 ImportError 被静默吞掉
 

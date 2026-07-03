@@ -282,8 +282,7 @@
 
 最该留意的几条（细节进上面的技术债文档）：
 - 🟠 CI `build.yml: CORE_FILES` 列了 11 个文件、3 个不存在 → 实际只编译 8 个，**很多 `source_*_mixin` 源码未被 .pyd 保护（IP 泄漏风险）**
-- 🟢 孤儿 mixin 待清退：`source_recording_mixin.py`（546 行）、`source_industrial_camera_mixin.py`（438 行，2026-07 复核确认无 import 无 MRO 冲突）
-- ✅ 已修销账：`_fix_db_paths` 用错表名 `ml_models`（现已用真实表名 `models` + `video_clips`）；前端死代码四文件（`views/Report/index.vue`、`api/task.js` / `camera.js` / `report.js`）已于 2026-07 删除
+- ✅ 已修销账（2026-07 治理批次）：`_fix_db_paths` 表名 bug 已修；前端死代码四文件（`views/Report/index.vue`、`api/task.js` / `camera.js` / `report.js`）已删；孤儿 mixin 两文件（`source_recording_mixin.py` 546 行、`source_industrial_camera_mixin.py` 438 行）已删，同名方法 MRO 冲突随之解除
 
 ---
 
