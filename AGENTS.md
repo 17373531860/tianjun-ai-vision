@@ -213,6 +213,7 @@
 | `/scanner/*` | `scanner.py` | 扫码器 CRUD + scan_pair + 禁用 |
 | `/scanner/wmax/*` | `wmax.py` ⚠️ | WMax 协议（35+ endpoint） |
 | `/external-devices/*` | `external_device.py` | 称重器/串口外设 |
+| `/weighing/*` | `weighing.py` | v3.31.0 称重投料模式（前置选择/扫码/去皮/逐件记录/虚拟喂重） |
 | `/cluster/*` | `cluster.py` | 集群主从 + 副机心跳 |
 | `/mes/*` | `mes.py` ⚠️ | 工单/工件/缺陷/缺陷码 |
 | `/mes/gateway/*` | `mes_gateway.py` | MES 推送连接 + 测试 + 工单拉取 |
@@ -221,9 +222,11 @@
 | `/roles/*` | `roles.py` | v3.10.0 角色 CRUD + 权限编辑 |
 | `/api-keys/*` | `api_keys.py` | v3.10.0 M2M API Key 管理（SHA256 + scope） |
 | `/operators/*` | `operators.py` | ⚠️ **v3.10.0 已废弃** — 全部 410 Gone，重定向 `/api/v1/users` |
-| `/export/*` | `export_custom.py` + `export_realtime.py` | v3.5.0 自定义导出（共用前缀） |
+| `/export/*` | `export_custom.py` + `export_realtime.py` + `export_scheduled.py` | v3.5.0 自定义导出 + v3.8 定时导出（共用前缀） |
 | `/channel-groups/*` | `channel_groups.py` | v3.13.1 单机内多工位**并行**联动 (RFC 10) |
 | `/workpiece-flows/*` | `workpiece_flows.py` | v3.14.0 单机内多工位**串行**结算 (RFC 11) |
+| `/packaging-flows/*` | `packaging_flows.py` | v3.21+ 包装箱结算（上银包装线） |
+| `/mes/inbound/*` | `mes_inbound.py` | v3.26+ 外部生产管控系统入站 REST（开工/完工/报警） |
 | `/plugins/*` | `plugins.py` | 插件安装/激活/清单/client-log |
 | `/debug/*` | `debug.py` | 通道诊断 + 调试日志中心 |
 
@@ -275,13 +278,13 @@
 
 ## 九、已知架构 bug / 死代码
 
-> **完整索引（71 项，带 ID / 严重度 / 工时估）已下放**到 `docs/plugin-system/inventory/05_tech_debt.md`。新 PR 不要复活、不要扩展这些已知坑。
+> **完整索引（带 ID / 严重度 / 工时估，2026-07 销账刷新）已下放**到 `docs/plugin-system/inventory/05_tech_debt.md`。新 PR 不要复活、不要扩展这些已知坑。
 
 最该留意的几条（细节进上面的技术债文档）：
-- 🔴 `core/config.py:_fix_db_paths` 用错表名 `ml_models`（实际 `models`）→ 换安装目录时模型路径修正永不生效
 - 🟠 CI `build.yml: CORE_FILES` 列了 11 个文件、3 个不存在 → 实际只编译 8 个，**很多 `source_*_mixin` 源码未被 .pyd 保护（IP 泄漏风险）**
-- 🟠 `source_recording_mixin.py` 与拆分后两个 mixin 能力重叠 / `source_camera_start_mixin` 与 `source_industrial_camera_mixin` 同名方法靠 MRO 决胜
+- 🟢 孤儿 mixin 待清退：`source_recording_mixin.py`（546 行）、`source_industrial_camera_mixin.py`（438 行，2026-07 复核确认无 import 无 MRO 冲突）
 - 🟢 死代码：`views/Report/index.vue`（路由未注册）、`api/task.js` / `api/camera.js`（无 import）
+- ✅ 已修销账：`_fix_db_paths` 用错表名 `ml_models`（现已用真实表名 `models` + `video_clips`）
 
 ---
 

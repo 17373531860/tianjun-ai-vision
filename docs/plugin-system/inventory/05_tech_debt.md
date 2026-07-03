@@ -1,6 +1,6 @@
 # 05 — 技术债 / 痛点完整索引
 
-> 适用版本：v3.6.0（HEAD `5c97791`）
+> 适用版本：v3.31.0（2026-07 销账刷新：BUG-1 已修、BUG-3 降级孤儿文件、第九节行数实测重排）
 > 本文目的：把 **AGENTS.md 第九节 + 01~04 文档发现的所有 ⚠️ ❌ + 已知历史踩坑 + 测试盲区**集中索引到一处。这是插件系统设计前必须正视的"现实地图"——很多地方现状是可工作的但脆弱，碰多了主程序会塌。
 >
 > 阅读顺序：第二节"按严重度分级总表" → 按需要查具体类别 → 第十二节"先做哪些再做插件"。
@@ -13,18 +13,18 @@
 
 | 类别 | 项数 | 严重度分布 |
 |---|---|---|
-| 真 bug（应被修） | **6** | 🔴 1 / 🟠 4 / 🟡 1 |
-| 死代码 / 半死代码 | **9** | 🟢 全可清 |
-| 重叠 mixin / 同名方法冲突 | **3** | 🟠 |
+| 真 bug（应被修） | **5**（原 6，BUG-1 已修销账） | 🟠 4 / 🟡 1 |
+| 死代码 / 半死代码 | **10**（BUG-3 降级并入） | 🟢 全可清 |
+| 重叠 mixin / 同名方法冲突 | **2**（原 3，BUG-3 移出） | 🟠 |
 | 现状无 registry（先重构再做插件） | **8** | 🟠 |
 | API 路径不一致 / 命名歧义 | **5** | 🟡 |
 | 文档过时不同步 | **5** | 🟡 |
-| 文件过大需重构（> 1000 行 .py / .vue） | **9** | 🟡 |
+| 文件过大需重构（> 1000 行 .py / .vue） | **15**（2026-07 实测重排） | 🟡 |
 | SQLite → PG 迁移痛点 | **7** | 🟠 |
 | 测试覆盖盲区 | **5** | 🟠 |
 | 历史 bug 高发模块 | **6** | 信息性 |
 | 隐式约定 / 缺乏护栏 | **8** | 🟡 |
-| **合计** | **71** | — |
+| **合计** | **76**（含已销账项按现分类计） | — |
 
 🔴 严重（影响主程序稳定）/ 🟠 中（影响插件系统设计）/ 🟡 轻（妨碍维护）/ 🟢 可清理
 
@@ -36,16 +36,16 @@
 
 | ID | 名称 | 影响 | 工时估 |
 |---|---|---|---|
-| BUG-1 | `core/config.py:_fix_db_paths` 用错表名 `ml_models`（实际叫 `models`） | DB 路径迁移逻辑对模型文件**永远不生效** | 0.1 天 |
+| ~~BUG-1~~ | ✅ **已修销账（2026-07）**：`core/config.py:_fix_db_paths` 已改用真实表名 `models`（+`video_clips`），详见第三节 BUG-1 | — | — |
 
 ### 🟠 中（影响插件系统设计）
 
 | ID | 名称 | 影响 | 工时估 |
 |---|---|---|---|
 | BUG-2 | CI `CORE_FILES` 列了 11 个文件，3 个不存在 | 实际只编译 8 个，潜在 IP 泄漏（很多 source_*_mixin 没被 .pyd 保护） | 0.5 天 |
-| BUG-3 | `source_camera_start_mixin` 与 `source_industrial_camera_mixin` 同名方法冲突 | 依赖 MRO 决出实际胜者，行为不可预测 | 1 天 |
+| BUG-3 | 🟢 **降级（2026-07）**：`source_industrial_camera_mixin.py` 已确认为孤儿文件（source.py 不再 import），同名方法无 MRO 冲突，转死代码清退 | grep 双命中误导新人 | 0.5 天（删文件） |
 | BUG-4 | `source_recording_mixin.py` (546 行) 与拆分后的两个 mixin 能力重叠 | 历史拆分残留，潜在死代码 | 0.5 天 |
-| OVERLAP-1 | 主类继承链不含 `IndustrialCameraMixin`，但被 import | MRO 不生效，方法覆盖关系靠"恰好" | （含在 BUG-3） |
+| OVERLAP-1 | ~~主类继承链不含 `IndustrialCameraMixin`，但被 import~~ 已随 BUG-3 复核关闭（import 已不存在） | — | — |
 | OVERLAP-2 | `_inspecting` 字典在 scan_pair race（v3.4.2 hotfix 后）可能仍有 cornercase | 工件结果错写到下一码 | 1 天（监控+测试） |
 | OVERLAP-3 | API 路由两条挂载路径并存（`api_router` 聚合 9 + main.py 直挂 10） | 插件加路由时不知道走哪条 | 0.5 天（统一） |
 | MIG-1 | SQLite → PG: 7 处 raw SQL 用 `PRAGMA / sqlite_master` | PG 不支持 → 必须改条件分支 | 1 天 |
@@ -84,29 +84,18 @@
 
 ## 三、真 bug 详情（6 个）
 
-### BUG-1 🔴 `_fix_db_paths` 用错表名
+### BUG-1 ✅ 已修（2026-07 销账） `_fix_db_paths` 用错表名
 
 **位置**：`backend/core/config.py: _fix_db_paths`
 
-**现象**：函数遍历 `models` 表的 `file_path` 字段做绝对路径迁移，但 SQL 里写成了 `ml_models`：
+**原现象**：函数做模型文件绝对路径迁移时 SQL 写成了不存在的 `ml_models` 表，外层
+try/except 兜底导致迁移静默失效，升级客户须手动重选模型。
 
-```python
-# 错误代码
-conn.execute("SELECT id, name, file_path FROM ml_models")  # ❌ 表不存在
-```
+**现状（已核实代码）**：`_fix_db_paths` 已改为遍历 `('models', 'video_clips')` 两张
+真实表，带表存在性探针 + 正/反斜杠双路径替换，源码内留有指回本条目的注释。
+**本条销账保留 ID 供历史引用，不再是待修项。**
 
-**影响**：
-- 老客户机从旧版升级时，模型文件路径迁移**永远走不到这段**
-- 但因为外层 `try/except` 兜底，迁移**不报错**只是默默失效
-- 用户看到的现象：升级后模型路径 404 → 必须手动重选模型
-
-**修复**：把 `ml_models` 改成 `models`（同时检查迁移函数是否还有别处用错）
-
-**为什么至今没修**：
-- 只在升级路径触发，绝大多数客户首次安装就是新版（不走升级）
-- 出问题时业务现场修复路径是"重选模型"，没人追究根因
-
-**插件系统相关**：插件如果模仿这套迁移机制，**别复制错误**。
+**插件系统相关**：插件如果模仿这套迁移机制，直接抄现版代码即可（表名已正确）。
 
 ---
 
@@ -134,35 +123,20 @@ CI 跳过这 3 个文件**只 WARNING 不报错**，所以一直没被发现。
 
 ---
 
-### BUG-3 🟠 同名方法冲突
+### BUG-3 🟢 降级：孤儿文件（2026-07 复核）同名方法"冲突"实为死文件
 
 **位置**：
-- `backend/api/source_camera_start_mixin.py: start_hcnetsdk / start_hikvision_camera`
-- `backend/api/source_industrial_camera_mixin.py: start_hcnetsdk / start_hikvision_camera`
+- `backend/api/source_camera_start_mixin.py: start_hcnetsdk / start_hikvision_camera`（**生效版**）
+- `backend/api/source_industrial_camera_mixin.py`：同名方法的历史旧版
 
-**现象**：两个 mixin 定义了**同名方法**。`source.py:185` 的继承链是：
+**复核结论（2026-07）**：`source.py` 已**不再 import** `IndustrialCameraMixin`（grep 0 命中），
+继承链里也没有它——不存在 MRO 决胜问题，实际生效的一直是 `CameraStartMixin`。
+该文件是历史拆分残留的**纯孤儿文件**（438 行），与 DEAD-8（`source_recording_mixin.py`）同类。
 
-```python
-class VideoSourceManager(
-    TrackingMixin, InferenceLoopMixin, ..., CameraStartMixin, ...
-    SessionLifecycleMixin, ...
-)
-# 注意: IndustrialCameraMixin 不在继承链里, 但 source.py 顶部有 import 它
-```
+**残余影响**：grep 两个方法名仍会命中两份实现，新人可能改错文件。
 
-由于 `IndustrialCameraMixin` 不在继承链中，**当前实际生效的是 `CameraStartMixin` 的版本**——但 import 一个不被继承的 mixin 文件意味着两件事：
-
-1. 它要么是被准备替换的旧版（待删）
-2. 它要么是被设计为"运行时动态切换"（实际没切换逻辑）
-
-**可能的真相**：历史代码迁移过程中没删干净。
-
-**影响**：
-- 任何人 grep 这两个方法名都会同时命中两份实现
-- 修了一份没修另一份，行为不一致
-- 新人改错地方
-
-**修复**：审计 IndustrialCameraMixin 是否真有用，决定保留哪份。
+**修复**：清退孤儿文件即可（走 `modify-source` skill 影响分析后删除），从"行为不可预测"
+降级为"死代码待删"。
 
 **插件系统相关**：插件加自定义视频源（add-source-type skill）时**先确认 MRO 顺序**，否则插件方法可能被覆盖。
 
@@ -404,25 +378,27 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ---
 
-## 九、文件过大需重构（9 个）
+## 九、文件过大需重构（行数 2026-07 实测刷新）
 
-按行数排序（>= 1000 行）：
+按行数排序（>= 1000 行；旧表行数普遍低估 40-60%，本次全部重测）：
 
 | 文件 | 行数 | 类型 | 重构难度 | 重构建议 |
 |---|---|---|---|---|
-| `frontend/src/views/Monitor/index.vue` | **4051** | Vue | 极高 | 拆 1-2 个 panel 子组件先减负 |
-| `frontend/src/views/Project/index.vue` | 2925 | Vue | 高 | Steps / Events 拆出来 |
-| `backend/services/scanner.py` | 1964 | Py | 高 | LON/WMax/Virtual 拆 protocol 子模块（同时做 REG-2） |
-| `backend/api/source.py` | 1573 | Py | 极高 | 已 mixin 化但主类还在 |
-| `backend/services/mes_hooks.py` | 1505 | Py | 高 | phase 拆分（做 03 文档 C3） |
-| `frontend/src/views/Settings/index.vue` | 1441 | Vue | 中 | 8 个 tab 拆成子组件 |
-| `frontend/src/views/MES/ScannerPanel.vue` | 1381 | Vue | 中 | LON / WMax 拆开 |
-| `backend/services/cluster_collector.py` | 1122 | Py | 中 | host / slave 路径拆分 |
-| `backend/api/source_session_lifecycle_mixin.py` | 1111 | Py | 中 | 16 个生命周期方法可分组 |
-| `frontend/src/views/Data/index.vue` | ~1715 | Vue | 高 | 表格 / 导出对话框拆 |
-| `backend/api/alarm.py` | 1009 | Py | 中 | AlarmManager / AlarmRouter 拆分 |
-| `frontend/src/views/MES/GatewayPanel.vue` | 1073 | Vue | 中 | adapter 配置 form 拆 |
-| `backend/api/sessions.py` | 1005 | Py | 低 | 已经在拆（已含子 router 挂载） |
+| `frontend/src/views/Monitor/index.vue` | **6293** | Vue | 极高 | 拆 panel 子组件（WeighingPanel v3.31 已是独立组件，照此模式继续） |
+| `frontend/src/views/Project/index.vue` | **5971** | Vue | 极高 | Steps / Events / Weighing 配置区拆出来 |
+| `frontend/src/views/Settings/index.vue` | 2617 | Vue | 中 | 8 个 tab 拆成子组件 |
+| `frontend/src/views/Data/index.vue` | 2258 | Vue | 高 | 表格 / 导出对话框拆 |
+| `backend/api/source_routes.py` | 2178 | Py | 高 | 按端点域分组拆文件 |
+| `backend/api/source.py` | 2054 | Py | 极高 | 已 mixin 化但主类还在 |
+| `backend/services/scanner.py` | 2003 | Py | 高 | LON/WMax/Virtual 拆 protocol 子模块（同时做 REG-2） |
+| `backend/services/mes_hooks.py` | 1739 | Py | 高 | phase 拆分（做 03 文档 C3） |
+| `backend/api/source_per_item_mixin.py` | 1621 | Py | 高 | v3.8+ 逐件覆盖，判定/挂起/结算可分组 |
+| `backend/api/source_session_lifecycle_mixin.py` | 1608 | Py | 中 | 16 个生命周期方法可分组 |
+| `frontend/src/views/MES/ScannerPanel.vue` | 1492 | Vue | 中 | LON / WMax 拆开 |
+| `frontend/src/views/MES/GatewayPanel.vue` | 1395 | Vue | 中 | adapter 配置 form 拆 |
+| `backend/services/cluster_collector.py` | 1205 | Py | 中 | host / slave 路径拆分 |
+| `backend/api/sessions.py` | 1071 | Py | 低 | 已经在拆（已含子 router 挂载） |
+| `backend/api/alarm.py` | 1067 | Py | 中 | AlarmManager / AlarmRouter 拆分 |
 
 **插件系统视角**：
 - 插件**不要直接改这些大文件**
