@@ -29,7 +29,7 @@
 
 | 批次 | 拆出组件 | 大致范围 | 风险 |
 |---|---|---|---|
-| P-1 | `WeighingConfigTab.vue`（称重投料 Tab） | ~1385-1554 行，5 张卡片 | 低：v3.31 新增、自包含、边界清晰，当模板批次 |
+| P-1 ✅（2026-07-03 完成） | `WeighingConfigTab.vue`（称重投料 Tab） | ~1385-1554 行，5 张卡片 | 低：v3.31 新增、自包含、边界清晰，当模板批次。实测 index.vue 5971→5756 行；UAT 10/10 + CI E2E `test_weighing_config_tab.py` 3 用例绿 |
 | P-2 | 四个对话框各自成组件（`CreateProjectDialog` / `ModelSelectDialog` / `FormatSelectDialog` / `RoiEditorDialog`） | ~3098 行起 | 低-中：ROI 编辑器带 canvas 交互，单独一批 |
 | P-3 | `EventsConfigTab.vue`（事件设置 Tab） | 事件 FSM 配置 | 中 |
 | P-4 | `LogicConfigTab.vue`（逻辑设置 Tab） | ~1556-3000 行，按 logic_mode 条件渲染的十几张卡片 | 中-高：五种模式分支都要回归 |
