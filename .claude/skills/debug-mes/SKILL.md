@@ -398,6 +398,20 @@ idle ──首次有效数据──> stabilizing
 
 Windows `PermissionError(13)` 端口拒绝访问（`ser.close()` 释放有毫秒延迟 + 测试按钮 vs 连接线程并发）→ `max_retries=3, retry_delay=1.0`。`test_connection` 故意不重试避免 UI 卡顿。
 
+### 8.5 ⚠ 两套"称重"别混淆（v3.31 起）
+
+| | 外设层称重稳态（本节 8.2/8.3） | 原生称重投料引擎（v3.31） |
+|---|---|---|
+| 位置 | `external_device_pipeline.py: _handle_weight_stability` | `backend/services/weighing_engine.py` |
+| 职责 | 读数稳定判定 + 有重无码告警 + dispatch | 配料防错业务状态机（去皮→投料→对比标准量→判定落库）|
+| 归属 | 所有 `device_role=weight` 外设通用 | 仅 `logic_mode='weighing'` 项目，配置在 `pipeline_config.weighing` |
+| 数据出口 | gateway dispatch / 插件 `external_device_data` 只读 hook | `weighing_records` 表 + `/api/v1/weighing/*` + Monitor WeighingPanel |
+
+排查链路：秤读数不进来 → 查本节外设层（协议/串口/稳态机）；读数进来但投料判定不动 →
+查引擎侧（通道是否登记：切项目后 `set_channel_config` 日志；型号/料别标准量是否配置）。
+外设层还提供 `send_command`（串口指令应答协议，软件去皮 'T'/置零 'Z'）——引擎和插件
+`send_device_command` API 都走它。mock_weight 无硬件模拟见 `tests/test_mock_weight_source.py`。
+
 ---
 
 ## 九、常见排查场景（按现象索引）
