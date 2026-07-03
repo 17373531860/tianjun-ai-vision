@@ -14,9 +14,9 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 ## 0. 一眼看懂当前的数据库（v3.31.0 真相）
 
 - **47 张表 = 13 + 20 + 4 + 5 + 4 + 1**，分布在 **六个** ORM 文件（models / mes_models / export_models / auth_models / plugin_models / weighing_models）
-- **没有 alembic / 没有迁移工具**：纯手写 ALTER TABLE，集中在 `backend/main.py::migrate_database()`
+- **迁移已版本化（2026-07 治理）**：运行时迁移在 `backend/db/migrations/`（注册表 + runner + `schema_migrations` 记账表）；alembic 仅服务 PG 工程（db-matrix CI），不进客户机运行时
 - 数据库是单文件 SQLite (`sql_app.db`)，开 WAL + busy_timeout=15s
-- 启动时序：`Base.metadata.create_all()` 建新表 → `migrate_database()` 给老库补列 → `fix_orphan_*()` 清孤儿
+- 启动时序：`Base.metadata.create_all()` 建新表 → `apply_pending(engine)` 按序应用迁移（老库补列在 m0000 基线里） → `fix_orphan_*()` 清孤儿
 - **旧版交接文档写的"22 张表 / `MLModel` 类名 / 表名 `ml_models`"全是过时信息，以代码为准**（该手册已于 2026-06-26 删除）
 - `Operator`/`operators` 表已随 v3.10.0 用户系统移除（端点 410 Gone），别再引用
 
@@ -106,33 +106,26 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 - 7 个 JSON 字段都在 `Project`：`pipeline_config / steps_config / events_config / counters_config / alarm_config / detection_config / data_config`
 - 字段类型用 `Column(JSON, nullable=True)`，**不要**用 `Text` 然后自己 `json.loads/dumps`（旧代码有少量这种历史，新加字段一律用 `JSON`）
 
-## 3. 手动迁移机制（探针式 try/except）
+## 3. 版本化迁移机制（2026-07 起，替代旧 migrate_database 大列表）
 
-**没有 alembic，全部集中在 `backend/main.py::migrate_database()`**：
+**运行时迁移在 `backend/db/migrations/` 包**（RFC：`docs/rfc/DB迁移版本化治理_设计方案_RFC.md`）：
 
-```python
-def migrate_database():
-    migrations = [
-        ("step_records", "interval_to_next", "FLOAT"),
-        ("projects", "alarm_config", "JSON"),
-        ("scanner_devices", "scan_pair_max_wait_sec", "INTEGER DEFAULT 0"),
-        # ... 60+ 条
-    ]
-    with engine.connect() as conn:
-        for table, column, col_type in migrations:
-            try:
-                conn.execute(text(f"SELECT {column} FROM {table} LIMIT 1"))
-            except Exception:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
-                conn.commit()
+```
+backend/db/migrations/
+├── __init__.py       # _MIGRATION_MODULES 显式注册表 + apply_pending(engine) runner
+├── m0000_legacy.py   # 存量 109 条补列 + operators 清理，已冻结 ⚠️ 不许再往里加
+└── m0001_xxx.py ...  # 从 v3.32 起每个 schema 变更一个文件
 ```
 
 要点：
 
-1. **每条 migration 是一个 (table, column, col_type) 三元组**，不要写完整 SQL
-2. 探针 `SELECT col FROM table LIMIT 1` 失败 → 视为列不存在 → ALTER TABLE 加列；这就是项目里所谓的"IF NOT EXISTS 模式"——**SQLite 不支持原生 `ADD COLUMN IF NOT EXISTS`，是用 try/except 模拟的幂等**
-3. 整体外层还有一个 `try/except` 兜底，单条迁移失败不会中断启动
-4. **新加的表不写在这里**：因为 `Base.metadata.create_all(bind=engine)` 已经会自动创建任何注册到 `Base` 的新表（见下一节）
+1. **m0000 永远幂等重跑**（不看记账）：inspector 逐列探查缺列才 ALTER，保证任意历史版本老库（v3.1 起跳都行）升级安全；**m0001 起走 `schema_migrations` 记账跳过**，不再每次启动全量探查
+2. **新增 schema 变更三步**：改 ORM → 新建 `mXXXX_语义名.py` 暴露 `MIGRATION_ID` + `apply(engine)` → 模块名追加进 `_MIGRATION_MODULES`（显式注册，无目录扫描，兼容 Nuitka 编译）
+3. 迁移模块里能写任意操作（补列 / 建索引 / 回填数据 / 删表）——特例不再塞 main.py
+4. 容错语义：记账表建失败 → 降级只跑 m0000；某迁移失败 → 事务回滚、停止后续、不阻断启动
+5. **新加的表不用写迁移**：`Base.metadata.create_all(bind=engine)` 自动创建注册到 `Base` 的新表（见下一节）
+6. `main.py::migrate_database()` 已改为断言桩（调用即 RuntimeError），**别再往那里塞 ALTER**
+7. 方言归一（PG 的 `BOOLEAN DEFAULT 1→TRUE`、`JSON→JSONB`）在 m0000 内；新迁移写 DDL 时同样要过 `get_dialect()` 判断
 
 ## 4. 改字段（最常见操作）— 必须四步全做
 
@@ -147,17 +140,29 @@ class ScannerDevice(Base):
 约束：
 
 - **必须有默认值或允许 NULL**（SQLite ALTER TABLE 不允许加 `NOT NULL` 而无默认值的列）
-- **新建库**走 ORM 定义；**老客户库**走 migrate_database 的 ALTER → 默认值在两处都要一致
+- **新建库**走 ORM 定义；**老客户库**走迁移模块的 ALTER → 默认值在两处都要一致
 
-> 近期 schema 变更样例（v3.30.0）：`packaging_flow_configs` 新增 `name_match_strict_boundary BOOLEAN DEFAULT 0`（规格→项目自动同名匹配的"严格边界"开关；ORM `mes_models.py` 默认 `False` + `main.py` migrate ALTER `DEFAULT 0` 两处对齐）。`match_project_by_name` 同期默认由开改关。
+> 近期 schema 变更样例（v3.30.0）：`packaging_flow_configs` 新增 `name_match_strict_boundary BOOLEAN DEFAULT 0`（规格→项目自动同名匹配的"严格边界"开关；ORM 默认 `False` + 迁移 ALTER `DEFAULT 0` 两处对齐）。
 
-### 步骤 B：`backend/main.py: migrate_database()` 加 ALTER
+### 步骤 B：`backend/db/migrations/` 新建迁移文件
 
 ```python
-("scanner_devices", "new_field", "INTEGER DEFAULT 0"),
+# backend/db/migrations/m0001_scanner_new_field.py
+from sqlalchemy import inspect, text
+
+MIGRATION_ID = "m0001_scanner_new_field"
+
+def apply(engine):
+    insp = inspect(engine)
+    if "new_field" in {c["name"] for c in insp.get_columns("scanner_devices")}:
+        return
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE scanner_devices ADD COLUMN new_field INTEGER DEFAULT 0"))
+        conn.commit()
 ```
 
-老客户的 SQLite 库靠这一行才能加上列。**忘了这一步 = 升级即崩**。
+再把 `"m0001_scanner_new_field"` 追加进 `migrations/__init__.py::_MIGRATION_MODULES`。
+老客户的 SQLite 库靠这一步才能加上列。**忘了这一步 = 升级即崩**。
 
 ### 步骤 C：序列化对齐
 
@@ -202,7 +207,7 @@ Base.metadata.create_all(bind=engine)
 
 ### 步骤 B：什么都不用做，启动时 `create_all` 自动建
 
-`migrate_database()` **不需要**给新表加任何东西 —— 它只管"老表加新列"。
+迁移模块**不需要**给新表加任何东西 —— 迁移只管"老表加新列/数据修正"。
 
 ### 步骤 C（可选）：种子数据
 
@@ -307,7 +312,7 @@ rg "<驼峰字段名>|<下划线字段名>" frontend/src
 ```
 
 ### 第 5 步：写迁移
-- 加列 → `backend/main.py: migrate_database()` 增一行
+- 加列 → `backend/db/migrations/` 新建 `mXXXX_*.py` + 注册（见第 3 节）
 - 加表 → 确保 `backend/main.py` 已 import 该 models 文件
 - 不动老列
 

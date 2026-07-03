@@ -267,7 +267,7 @@
 5. **测试 fixture 必须独立 DB / unique uuid，不要 reload uvicorn**（v3.5.0 BDD 框架痛过）
 6. **修改 `mes_hooks.py` / `services/scanner.py` 前先读对应 changelog**（debug-mes 是项目最大踩坑区）
 7. **改前端 `views/Monitor` 前**：双缓冲 MJPEG + 多通道 state 隔离（v2.6.0 / v3.0.0 / v3.1.3 多次修过）
-8. **改 ORM Schema 后必须在 `backend/main.py:migrate_database()` 加 ALTER TABLE**（老 SQLite 升级路径）
+8. **改 ORM Schema 后必须在 `backend/db/migrations/` 新建 `mXXXX_*.py` 迁移并注册**（2026-07 起版本化，老 SQLite 升级路径；旧 `migrate_database()` 已是断言桩，别再往里塞 ALTER，详见 `modify-model` skill 第 3 节）
 9. **bat 热补丁必须 CRLF 换行符**（LF 在 Windows 上闪退）
 10. **不要在 `OPENCV_FFMPEG_CAPTURE_OPTIONS` 之前 import cv2**（顺序敏感）
 11. **改 `source_settlement_mixin.py` 时不要把 `_process_last_first_mode` / `_process_cross_cycle_groups` 之间的守门去掉**（v3.9.0 起两个状态机都依赖 `settlement_mode == 'last_first'` / `cross_cycle == true` 严格守门，否则污染其他模式的 cycle_steps）— 修改前必读 `debug-source` skill
