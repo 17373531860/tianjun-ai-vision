@@ -94,6 +94,32 @@ class Project(Base):
                             "rod_label": "", "companion_labels": [] },
   "rod_session_gate":     { "enabled": false, "rod_label": "", "gate_labels": [] },
 
+  // ★ v3.31.0 新增：称重投料模式（logic_mode='weighing' 专用，设备读数驱动）
+  // apply 点不在 source.py：source_project_config_apply.py 末尾按 logic_mode
+  // 登记/注销通道到 weighing_engine（改键后要看引擎 set_channel_config 日志）
+  "weighing": {
+    "weight_device_id": 1,                  // 绑定的外设 id（external_devices 表）
+    "station_name": "",
+    "require_operator": true,               // 前置：必须先选人员
+    "require_model": true,                  // 前置：必须先选型号
+    "materials": ["钢帽水泥", "钢脚水泥"],   // 料别顺序
+    "models": {                             // 型号 → 料别 → 标准量/公差 (kg)
+      "XX-1": { "钢帽水泥": { "standard": 0.5, "low_tol": 0.02, "high_tol": 0.02 } }
+    },
+    "tare_mode": "auto_stable",             // 放件自动去皮 / manual
+    "tare_trigger_weight": 0.05,            // 触发去皮的放件重量阈值
+    "tare_settle_samples": 3,
+    "stable_min_samples": 3,                // 稳定读数判定样本数
+    "stable_tol": 0.003,                    // 稳定读数容差
+    "measure_min_weight": 0.005,            // 投料最小有效重量
+    "material_check": "sequence|visual",    // 料别判定：按顺序 / 视觉标签
+    "auto_zero_after_done": true,
+    "alarm_event_shortage": null,           // 缺料/超量/错料/前置未选 → 事件 id
+    "alarm_event_over": null,
+    "alarm_event_wrong": null,
+    "alarm_event_precheck": null
+  },
+
   // ★ v3.5.0 新增：周期性强制动作（每 N 轮做 E）
   // ★ v3.5.2 新增：每条规则的 run_on_start（开机首检）
   // ★ v3.7.4 新增：time_interval_seconds（按时间触发，与 interval OR 关系）
@@ -410,7 +436,8 @@ class Project(Base):
 3. **默认值同步 4 处**：
    `initProjectDefaults` + `handleSaveProject` 写回 + `Navbar.handleProjectChange` + `apply_project_config`。
 4. **threshold 单位**：前端百分比 (10-100)，后端 `_apply_steps_config` 自动 `/ 100`。**不要在前端手动除**。
-5. **logic_mode 不在 JSON 里**：是顶层 String 列，新加值要在 `source_events_check_mixin.py` 的分发处加分支。
+5. **logic_mode 不在 JSON 里**：是顶层 String 列，帧驱动新值要在 `source_events_check_mixin.py` 的分发处加分支；
+   设备驱动模式（如 v3.31 `weighing`）例外——分发点在 `source_project_config_apply.py` 末尾的引擎登记段，帧循环不感知。
 6. **跨字段引用 by id**：`events_config[*].id`、`steps_config[*].id`、`periodic_actions[*].id` 都是稳定字符串/整数，
    修改时不要重新分配 id，否则 `_trigger_event` 找不到。
 7. **新状态变量必须进 reset_stats**（v3.5.2 `_periodic_counters / _run_on_start_pending` 就是这么补上的）。
