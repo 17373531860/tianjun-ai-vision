@@ -335,7 +335,7 @@ end_cycle commit 后
 
 ## 七、检测模式状态机
 
-四种 logic_mode 在 `source_check_modes_mixin.py` 通过 MRO 聚合，实际逻辑分散：
+帧驱动的四种 logic_mode 在 `source_check_modes_mixin.py` 通过 MRO 聚合，实际逻辑分散：
 
 | 模式 | 主文件 | 关键状态变量 |
 |---|---|---|
@@ -346,6 +346,14 @@ end_cycle commit 后
 
 详见 `source_settlement_mixin.py` 头注释。tracking 模式的**堆叠子模式**和**最大识别数子模式**
 （v2.7.4）见 `source_tracking_mixin._tracking_run_stack_fsm` / `_tracking_apply_max_recognized`。
+
+**第 5 种 `weighing`（v3.31）不在这套帧循环里**：设备读数驱动，状态机在
+`backend/services/weighing_engine.py`（进程级单例，每通道独立状态机，吃外设管线
+广播的稳定读数）。source 侧唯一交点是 `source_project_config_apply.py` 末尾——
+按 `logic_mode == 'weighing'` 把通道登记进引擎（携 `pipeline_config.weighing`），
+非 weighing 项目注销通道零残留。排查 weighing 周期不推进时：先查外设读数是否进来
+（`/api/v1/external-devices/*` 日志），再查引擎通道登记（切项目后是否 set_channel_config），
+最后才看引擎状态机本身；帧循环的 cycle/step 排查手段对它不适用。
 
 ## 八、线程安全（哪些方法只能在哪条线程调）
 
