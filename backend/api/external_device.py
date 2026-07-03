@@ -87,6 +87,11 @@ class BarcodeInject(BaseModel):
     barcode: str
 
 
+class CommandRequest(BaseModel):
+    device_id: int
+    command: str
+
+
 class SimulateData(BaseModel):
     raw_data: str
     device_id: Optional[int] = None
@@ -198,6 +203,14 @@ def inject_barcode(body: BarcodeInject):
     svc = get_external_device_service()
     svc.set_barcode(body.device_id, body.barcode)
     return {"success": True, "device_id": body.device_id, "barcode": body.barcode}
+
+
+@router.post("/command",
+              dependencies=[Depends(require_perm("mes.external.edit"))])
+def send_command(body: CommandRequest):
+    """向「串口指令应答」称重器下发控制指令（去皮 T / 置零 Z / 读数 R 等）。"""
+    svc = get_external_device_service()
+    return svc.send_command(body.device_id, body.command)
 
 
 @router.post("/simulate",

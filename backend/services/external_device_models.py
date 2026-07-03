@@ -1,5 +1,6 @@
 """DeviceConnection 数据类 (从 external_device.py 抽出, 供 mixin 共用避免循环 import)。"""
 import threading
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -43,6 +44,10 @@ class DeviceConnection:
     last_error: str = ""
     _thread: Optional[threading.Thread] = field(default=None, repr=False)
     _stop_event: threading.Event = field(default_factory=threading.Event, repr=False)
+
+    # v3.31 串口指令应答模式: 外部(去皮/置零等)控制指令排入此队列，
+    # 由设备线程在下一轮轮询时取出发送，避免多线程并发写同一串口。
+    _command_queue: deque = field(default_factory=deque, repr=False)
 
     # v2.7.5 稳定判定运行时状态
     _stable_samples: list = field(default_factory=list, repr=False)

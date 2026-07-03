@@ -24,6 +24,28 @@ class ExternalDevicePipelineMixin:
             self._log_data(conn, raw, None, False, "解析失败")
             return
 
+        # v3.31: 把称重/外设读数广播给插件 (observe-only, 错误隔离)。
+        # 让客户插件能逐帧拿到读数自行判定, 不改主程序状态机。
+        self._fire_external_device_hook(conn, parsed, raw)
+
+        # 原生称重投料模式喂入: 只有 logic_mode='weighing' 的通道会被引擎消费, 其它通道
+        # 直接忽略 (零影响)。引擎自己做稳定判定, 故喂原始每帧(不经下方稳定门控)。
+        if conn.device_role == "weight":
+            try:
+                w = parsed.get("weight")
+                if w is None:
+                    w = parsed.get("_raw_value")
+                if w is not None:
+                    from backend.services.weighing_engine import get_weighing_engine
+                    eng = get_weighing_engine()
+                    ch = conn.channel_id if conn.channel_id is not None else 0
+                    if eng.is_weighing_channel(ch):
+                        eng.feed_weight(ch, float(w),
+                                        timestamp=conn.last_data_time,
+                                        device_id=conn.device_id)
+            except Exception:
+                pass
+
         # v3.1.1: instant 模式 —— 不走稳定状态机, 也不主动每帧 dispatch.
         # 只更新 last_parsed (供 set_barcode 取最新读数), 仅在 buffer 里有
         # 待消费条码时才派发一次然后清掉; 这是"扫码先到, 称重后到"的兜底通道.
@@ -64,6 +86,34 @@ class ExternalDevicePipelineMixin:
         if not is_valid:
             logger.warning("[ExtDev] %s 校验失败（仍发送）: %s", conn.name, error)
         self._dispatch(conn, parsed, barcode)
+
+    def _fire_external_device_hook(self, conn: DeviceConnection, parsed: dict, raw: str):
+        """把一帧外设(称重器等)读数广播给插件 (observe-only)。
+
+        非 RETURNABLE hook —— 返回值丢弃, 不改主程序流程。任何异常 swallow,
+        插件挂了不能影响外设数据主链路。
+        """
+        try:
+            from backend.plugin_system.hook_dispatch import fire_plugin_hook
+            weight = parsed.get("weight")
+            if weight is None:
+                weight = parsed.get("_raw_value")
+            fire_plugin_hook("external_device_data", "post_extdev_data", "post", {
+                "device_id": conn.device_id,
+                "device_name": conn.name,
+                "device_role": conn.device_role,
+                "channel_id": conn.channel_id,
+                "station_id": conn.station_id,
+                "protocol": conn.protocol,
+                "weight": weight,
+                "parsed": dict(parsed),
+                "raw": raw,
+                "barcode": self._barcode_buffer.get(conn.device_id),
+                "stable_state": conn._stable_state,
+                "timestamp": conn.last_data_time,
+            })
+        except Exception:
+            pass
 
     def _extract_weight(self, parsed: dict) -> Optional[float]:
         """从 parsed 里取出称重值，兼容 direct/regex/split/json_path 各种 parse_mode"""

@@ -97,6 +97,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "drivers/PL2303",
+        "to": "drivers/PL2303",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {

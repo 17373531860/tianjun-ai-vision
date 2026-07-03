@@ -12,6 +12,7 @@
               <el-dropdown-menu>
                 <el-dropdown-item command="weighing_modbus">称重器 - Modbus ASCII</el-dropdown-item>
                 <el-dropdown-item command="weighing_continuous">称重器 - 连续接收</el-dropdown-item>
+                <el-dropdown-item command="weighing_anheng">称重器 - 安衡指令应答</el-dropdown-item>
                 <el-dropdown-item command="tcp_sensor">TCP 传感器</el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -51,8 +52,16 @@
               最近: {{ getLastData(dev.id) }}
             </div>
           </div>
-          <div class="flex gap-1 mt-3">
+          <div class="flex gap-1 mt-3 flex-wrap">
             <el-button size="small" @click="testDev(dev)" :loading="testingDeviceId === dev.id">测试</el-button>
+            <template v-if="dev.protocol === 'serial_command'">
+              <el-button size="small" type="warning" plain @click="sendCmd(dev, dev.protocol_config?.tare_command || 'T')">去皮</el-button>
+              <el-button size="small" type="warning" plain @click="sendCmd(dev, dev.protocol_config?.zero_command || 'Z')">置零</el-button>
+            </template>
+            <template v-if="dev.protocol === 'mock_weight'">
+              <el-button size="small" type="warning" plain @click="sendCmd(dev, 'T')">去皮</el-button>
+              <el-button size="small" type="warning" plain @click="sendCmd(dev, 'Z')">置零</el-button>
+            </template>
             <el-button size="small" type="primary" @click="editDev(dev)">编辑</el-button>
             <el-button size="small" type="danger" @click="handleDelete(dev)">删除</el-button>
           </div>
@@ -111,7 +120,9 @@
               <el-option label="串口 (RS232/485)" value="serial" />
               <el-option label="串口 Modbus ASCII" value="serial_modbus_ascii" />
               <el-option label="串口连续接收" value="serial_continuous" />
+              <el-option label="串口指令应答 (发R读数/T去皮)" value="serial_command" />
               <el-option label="HTTP 轮询" value="http_poll" />
+              <el-option label="模拟称重 (无硬件测试)" value="mock_weight" />
             </el-select>
           </el-form-item>
         </div>
@@ -217,6 +228,69 @@
               <div class="text-xs text-gray-500 mb-1">行分隔符</div>
               <el-input v-model="continuousDelimiter" size="small" placeholder="\r\n" />
             </div>
+          </div>
+        </div>
+
+        <!-- 串口指令应答参数 -->
+        <div v-if="form.protocol === 'serial_command'" class="bg-slate-900/50 rounded p-3 mb-3">
+          <div class="text-xs text-gray-400 mb-2">指令应答模式（上位机发指令、仪表回一帧；适配安衡等台秤）</div>
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">查询指令(读重量)</div>
+              <el-input v-model="cmdQuery" size="small" placeholder="R" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">去皮指令</div>
+              <el-input v-model="cmdTare" size="small" placeholder="T" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">置零指令</div>
+              <el-input v-model="cmdZero" size="small" placeholder="Z" />
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-2 mt-2">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">指令结尾符</div>
+              <el-input v-model="cmdSuffix" size="small" placeholder="\r\n" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">轮询间隔 (秒)</div>
+              <el-input-number v-model="cmdPollInterval" :min="0.1" :step="0.5" :precision="2" size="small" class="!w-full" controls-position="right" />
+            </div>
+          </div>
+          <div class="text-xs text-gray-500 mt-2">
+            保存后可在设备卡片上点「去皮 / 置零」主动下发指令。安衡默认：读=R、去皮=T、置零=Z。
+          </div>
+        </div>
+
+        <!-- 模拟称重参数（无硬件测试） -->
+        <div v-if="form.protocol === 'mock_weight'" class="bg-slate-900/50 rounded p-3 mb-3">
+          <div class="text-xs text-gray-400 mb-2">模拟称重（不连真秤，按脚本生成重量数据流，用于无硬件时测试整条链路）</div>
+          <div class="grid grid-cols-3 gap-2 mb-2">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">出数间隔(秒)</div>
+              <el-input-number v-model="mockInterval" :min="0.1" :step="0.1" :precision="2" size="small" class="!w-full" controls-position="right" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">小数位</div>
+              <el-input-number v-model="mockDecimals" :min="0" :max="4" size="small" class="!w-full" controls-position="right" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">循环播放</div>
+              <el-switch v-model="mockLoop" />
+            </div>
+          </div>
+          <div class="mb-2">
+            <div class="text-xs text-gray-500 mb-1">输出格式（{value}=去皮后净重, {gross}=毛重）</div>
+            <el-input v-model="mockFormat" size="small" placeholder="{value} 或 ST,NT,{value}kg" />
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 mb-1">投料脚本（JSON：weight=毛重kg, hold=持续秒，按序播放）</div>
+            <el-input v-model="mockScriptText" type="textarea" :rows="6" size="small"
+                      placeholder='[{"weight":0.0,"hold":2},{"weight":0.5,"hold":4}]' />
+          </div>
+          <div class="text-xs text-gray-500 mt-2">
+            保存并启用后，设备会像真秤一样持续吐数，右侧数据日志/卡片「最近」可见；点卡片「去皮/置零」可测软件控制。
           </div>
         </div>
 
@@ -421,7 +495,8 @@ import { QuestionFilled } from '@element-plus/icons-vue'
 import {
   getExternalDevices, createExternalDevice, updateExternalDevice,
   deleteExternalDevice, getExternalDeviceStatus, testExternalDevice,
-  getExternalDeviceLogs, clearExternalDeviceLogs, simulateExternalDeviceData
+  getExternalDeviceLogs, clearExternalDeviceLogs, simulateExternalDeviceData,
+  sendExternalDeviceCommand
 } from '@/api/external_device'
 import { getWorkstations } from '@/api/detection'
 import { useSystemStore } from '@/store/useSystemStore'
@@ -489,13 +564,34 @@ const modbusPollInterval = ref(0.5)
 const continuousDataFormat = ref('ascii')
 const continuousDelimiter = ref('\\r\\n')
 
+// 串口指令应答参数
+const cmdQuery = ref('R')
+const cmdTare = ref('T')
+const cmdZero = ref('Z')
+const cmdSuffix = ref('\\r\\n')
+const cmdPollInterval = ref(1.0)
+
+// 模拟称重参数（无硬件测试）
+const DEFAULT_MOCK_SCRIPT = JSON.stringify(
+  [
+    { weight: 0.0, hold: 2.0 },
+    { weight: 0.2, hold: 3.0 },
+    { weight: 0.35, hold: 1.5 },
+    { weight: 0.5, hold: 4.0 },
+  ], null, 2)
+const mockScriptText = ref(DEFAULT_MOCK_SCRIPT)
+const mockFormat = ref('{value}')
+const mockInterval = ref(0.5)
+const mockDecimals = ref(3)
+const mockLoop = ref(true)
+
 // 串口通用参数（所有 serial_* 协议共用）
 const serialBytesize = ref(8)
 const serialParity = ref('N')
 const serialStopbits = ref(1)
 
 const isSerialProtocol = computed(() =>
-  ['serial', 'serial_modbus_ascii', 'serial_continuous'].includes(form.value.protocol)
+  ['serial', 'serial_modbus_ascii', 'serial_continuous', 'serial_command'].includes(form.value.protocol)
 )
 
 const onProtocolChange = (val) => {
@@ -503,6 +599,12 @@ const onProtocolChange = (val) => {
     form.value.parse_mode = 'direct'
     form.value.device_role = 'weight'
   } else if (val === 'serial_continuous') {
+    form.value.parse_mode = 'direct'
+    form.value.device_role = 'weight'
+  } else if (val === 'serial_command') {
+    form.value.parse_mode = 'direct'
+    form.value.device_role = 'weight'
+  } else if (val === 'mock_weight') {
     form.value.parse_mode = 'direct'
     form.value.device_role = 'weight'
   }
@@ -560,6 +662,28 @@ const buildFormData = () => {
       data_scale: modbusScale.value,
     }
   }
+  if (data.protocol === 'serial_command') {
+    data.protocol_config = {
+      ...data.protocol_config,
+      query_command: (cmdQuery.value || 'R').trim(),
+      tare_command: (cmdTare.value || 'T').trim(),
+      zero_command: (cmdZero.value || 'Z').trim(),
+      command_suffix: cmdSuffix.value,
+      poll_interval: cmdPollInterval.value,
+    }
+  }
+  if (data.protocol === 'mock_weight') {
+    let script = []
+    try { script = JSON.parse(mockScriptText.value) } catch (e) { script = [] }
+    data.protocol_config = {
+      ...data.protocol_config,
+      mock_script: script,
+      mock_format: mockFormat.value,
+      poll_interval: mockInterval.value,
+      decimals: mockDecimals.value,
+      loop: mockLoop.value,
+    }
+  }
   // 所有串口协议统一注入 bytesize/parity/stopbits
   if (isSerialProtocol.value) {
     data.protocol_config = {
@@ -596,6 +720,16 @@ const openAdd = () => {
   serialBytesize.value = 8
   serialParity.value = 'N'
   serialStopbits.value = 1
+  cmdQuery.value = 'R'
+  cmdTare.value = 'T'
+  cmdZero.value = 'Z'
+  cmdSuffix.value = '\\r\\n'
+  cmdPollInterval.value = 1.0
+  mockScriptText.value = DEFAULT_MOCK_SCRIPT
+  mockFormat.value = '{value}'
+  mockInterval.value = 0.5
+  mockDecimals.value = 3
+  mockLoop.value = true
   showDialog.value = true
 }
 
@@ -626,8 +760,22 @@ const editDev = (dev) => {
     modbusByteOrder.value = pcfg.byte_order ?? 'H4H3L2L1'
     modbusScale.value = pcfg.data_scale ?? 1.0
   }
+  if (dev.protocol === 'serial_command') {
+    cmdQuery.value = pcfg.query_command ?? 'R'
+    cmdTare.value = pcfg.tare_command ?? 'T'
+    cmdZero.value = pcfg.zero_command ?? 'Z'
+    cmdSuffix.value = pcfg.command_suffix ?? '\\r\\n'
+    cmdPollInterval.value = pcfg.poll_interval ?? 1.0
+  }
+  if (dev.protocol === 'mock_weight') {
+    mockScriptText.value = pcfg.mock_script ? JSON.stringify(pcfg.mock_script, null, 2) : DEFAULT_MOCK_SCRIPT
+    mockFormat.value = pcfg.mock_format ?? '{value}'
+    mockInterval.value = pcfg.poll_interval ?? 0.5
+    mockDecimals.value = pcfg.decimals ?? 3
+    mockLoop.value = pcfg.loop ?? true
+  }
   // 串口通用参数回填（所有 serial_* 协议）
-  if (['serial', 'serial_modbus_ascii', 'serial_continuous'].includes(dev.protocol)) {
+  if (['serial', 'serial_modbus_ascii', 'serial_continuous', 'serial_command'].includes(dev.protocol)) {
     serialBytesize.value = pcfg.bytesize ?? 8
     serialParity.value = pcfg.parity ?? 'N'
     serialStopbits.value = pcfg.stopbits ?? 1
@@ -661,6 +809,20 @@ const applyPreset = (preset) => {
     form.value.parse_mode = 'direct'
     continuousDataFormat.value = 'ascii'
     continuousDelimiter.value = '\\r\\n'
+  } else if (preset === 'weighing_anheng') {
+    form.value.name = '称重器 (安衡)'
+    form.value.device_role = 'weight'
+    form.value.protocol = 'serial_command'
+    form.value.serial_baud = 9600
+    form.value.parse_mode = 'direct'
+    serialBytesize.value = 8
+    serialParity.value = 'N'
+    serialStopbits.value = 1
+    cmdQuery.value = 'R'
+    cmdTare.value = 'T'
+    cmdZero.value = 'Z'
+    cmdSuffix.value = '\\r\\n'
+    cmdPollInterval.value = 1.0
   } else if (preset === 'tcp_sensor') {
     form.value.name = '传感器'
     form.value.device_role = 'sensor'
@@ -739,6 +901,18 @@ const testDev = async (dev) => {
     ElMessage.error('测试失败: ' + (e.response?.data?.detail || e.message || '网络错误'))
   } finally {
     testingDeviceId.value = null
+  }
+}
+
+const sendCmd = async (dev, command) => {
+  dbg('mes.external', '点击「下发控制指令」', `id=${dev?.id} name=${dev?.name || ''} cmd=${command}`)
+  try {
+    const { data } = await sendExternalDeviceCommand(dev.id, command)
+    if (data.success) ElMessage.success(data.message || `指令 ${command} 已下发`)
+    else ElMessage.error(data.message || '指令下发失败')
+  } catch (e) {
+    dbgErr('mes.external', '下发控制指令', e)
+    ElMessage.error('指令下发失败: ' + (e.response?.data?.detail || e.message || '网络错误'))
   }
 }
 

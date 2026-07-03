@@ -893,6 +893,12 @@
         </div>
       </div>
 
+      <!-- 原生称重投料模式专属看板 (与 SOP/Tracking/PerItem 排他, 占视频下方核心展示位) -->
+      <WeighingPanel
+        v-else-if="isWeighingMode"
+        :channel="selectedChannel"
+      />
+
       <!-- v3.8+ 逐件模式专属面板 (与 SOP/Tracking 排他, 占视频下方核心展示位) -->
       <PerItemPanel
         v-else-if="isPerItemMode"
@@ -1681,6 +1687,7 @@ import api, { getBackendHost } from '@/api/index';
 import { getExtraFieldsSchema, setExtraFields, getInboundConfig } from '@/api/gateway';
 import PerItemPanel from './PerItemPanel.vue';
 import PackagingFlowCard from './PackagingFlowCard.vue';
+import WeighingPanel from './WeighingPanel.vue';
 import VirtualScanGun from './VirtualScanGun.vue';
 import ExternalAlarmBanner from './ExternalAlarmBanner.vue';
 import { createFramePump } from './framePump';
@@ -3282,6 +3289,8 @@ const currentProject = computed(() => projectStore.currentProject);
 const isTrackingMode = computed(() => currentProject.value?.logic_mode === 'tracking');
 // v3.8+: 逐件模式 — 视频下方专属面板, 排他 SOP/Tracking
 const isPerItemMode = computed(() => currentProject.value?.logic_mode === 'per_item');
+// 原生称重投料模式 — 视频下方专属看板 (人员/型号/各料投料进度/本件结论)
+const isWeighingMode = computed(() => currentProject.value?.logic_mode === 'weighing');
 
 // v3.19.x 自定义混合逐件: 把 custom_mix_state 适配成 PerItemPanel 的 state 形状
 // (steps 与独立模式 per_item_state.steps 同形; config=null 自动隐藏手动按钮/收尾卡片)

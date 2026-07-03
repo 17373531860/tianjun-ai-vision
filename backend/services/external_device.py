@@ -7,6 +7,7 @@
 - serial: 串口监听（RS232/RS485/USB转串口）
 - serial_modbus_ascii: 串口 Modbus ASCII 主从模式（定时发请求读取寄存器）
 - serial_continuous: 串口连续接收模式（设备主动推送数据，被动接收）
+- serial_command: 串口指令应答模式（发 ASCII 指令 R 读数 / T 去皮 / Z 置零，适配安衡等台秤）
 - http_poll: HTTP 轮询外部 API
 
 数据流向:
@@ -244,6 +245,24 @@ class ExternalDeviceService(
         except Exception as e:
             logger.error("[ExtDev] %s instant 派发失败: %s", conn.name, e)
 
+    def send_command(self, device_id: int, command: str) -> dict:
+        """向「串口指令应答」设备主动下发一条控制指令(去皮 T / 置零 Z 等)。
+
+        指令排入设备线程的命令队列, 由线程在下一轮轮询时发送, 避免多线程
+        并发写同一串口。serial_command(真秤) 与 mock_weight(模拟测试) 均支持。
+        """
+        conn = self._connections.get(device_id)
+        if conn is None:
+            return {"success": False, "message": "设备未连接或未启用"}
+        if conn.protocol not in ("serial_command", "mock_weight"):
+            return {"success": False, "message": "仅「串口指令应答」/「模拟称重」设备支持主动发指令"}
+        command = (command or "").strip()
+        if not command:
+            return {"success": False, "message": "指令不能为空"}
+        conn._command_queue.append(command)
+        return {"success": True, "message": f"指令 '{command}' 已排入发送队列",
+                "device_id": device_id}
+
     def test_connection(self, protocol: str, ip: str = None, port: int = None,
                         serial_port: str = None, serial_baud: int = 9600,
                         protocol_config: dict = None,
@@ -257,6 +276,9 @@ class ExternalDeviceService(
         elif protocol in ("serial_modbus_ascii", "serial_continuous"):
             return self._test_serial_modbus(serial_port, serial_baud,
                                             protocol_config or {}, protocol, timeout)
+        elif protocol == "serial_command":
+            return self._test_serial_command(serial_port, serial_baud,
+                                             protocol_config or {}, timeout)
         elif protocol == "http_poll":
             return self._test_http(protocol_config or {}, timeout)
         return {"success": False, "message": f"未知协议: {protocol}"}

@@ -112,6 +112,14 @@
                   <span class="text-xs text-gray-400 block mt-1">画面里有 N 个固定位置的同类物件，每件都要被某个动作覆盖一次（例：每颗螺丝都要被打/划过）。全部覆盖→事件1，超时未覆盖→事件2</span>
                 </div>
               </label>
+
+              <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
+                <input type="radio" v-model="activeProject.logic_mode" value="weighing" class="mt-1 accent-cyan-500">
+                <div class="ml-3 flex-1">
+                  <span class="font-bold text-white block">称重投料模式</span>
+                  <span class="text-xs text-gray-400 block mt-1">连接电子秤，按型号给每道料(如钢帽/钢脚水泥)设标准量。放件自动去皮→投料→对比标准量，缺料/超量报警，逐件记录。需先选人员/型号。配置在「称重配置」页签</span>
+                </div>
+              </label>
             </div>
           </div>
         </div>
@@ -1373,6 +1381,178 @@
           </el-tab-pane>
 
           <!-- Tab 3: Logic Settings -->
+          <!-- ==================== 称重投料模式专属配置 ==================== -->
+          <el-tab-pane
+            v-if="activeProject.logic_mode === 'weighing'"
+            label="称重配置"
+            name="weighing">
+            <div v-if="activeProject.pipeline_config && activeProject.pipeline_config.weighing"
+                 class="h-full overflow-y-auto p-4 pb-32 custom-scrollbar space-y-6">
+
+              <!-- 前置要求 -->
+              <el-card shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header><span class="font-bold text-white">前置要求</span></template>
+                <div class="space-y-3 text-sm text-gray-200">
+                  <div class="flex items-center justify-between">
+                    <span>开始前必须先选操作人员</span>
+                    <el-switch v-model="activeProject.pipeline_config.weighing.require_operator" />
+                  </div>
+                  <div class="flex items-center justify-between">
+                    <span>开始前必须先选水泥型号</span>
+                    <el-switch v-model="activeProject.pipeline_config.weighing.require_model" />
+                  </div>
+                  <div class="flex items-center justify-between">
+                    <span>本件完成后自动给秤置零</span>
+                    <el-switch v-model="activeProject.pipeline_config.weighing.auto_zero_after_done" />
+                  </div>
+                </div>
+              </el-card>
+
+              <!-- 料别顺序 -->
+              <el-card shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header>
+                  <div class="flex items-center justify-between">
+                    <span class="font-bold text-white">料别（投料顺序）</span>
+                    <span class="text-xs text-gray-400">按顺序投放，每道料分别去皮+称量+判定</span>
+                  </div>
+                </template>
+                <div class="flex flex-wrap gap-2 items-center">
+                  <el-tag
+                    v-for="(mat, idx) in activeProject.pipeline_config.weighing.materials"
+                    :key="idx"
+                    closable
+                    type="info"
+                    @close="removeWeighingMaterial(idx)">
+                    {{ idx + 1 }}. {{ mat }}
+                  </el-tag>
+                  <el-input
+                    v-model="newWeighingMaterial"
+                    size="small"
+                    style="width: 160px"
+                    placeholder="新料别名"
+                    @keyup.enter="addWeighingMaterial" />
+                  <el-button size="small" type="primary" @click="addWeighingMaterial">添加料别</el-button>
+                </div>
+              </el-card>
+
+              <!-- 型号标准量表 -->
+              <el-card shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header>
+                  <div class="flex items-center justify-between">
+                    <span class="font-bold text-white">型号标准量表（kg）</span>
+                    <div class="flex items-center gap-2">
+                      <el-input v-model="newWeighingModel" size="small" style="width: 160px" placeholder="新型号名" @keyup.enter="addWeighingModel" />
+                      <el-button size="small" type="primary" @click="addWeighingModel">添加型号</el-button>
+                    </div>
+                  </div>
+                </template>
+                <div v-if="!weighingModelNames.length" class="text-gray-400 text-sm py-4 text-center">
+                  还没有型号。每个型号 = 一种水泥规格（可用视觉模型自动识别后切换），为它的每道料设置标准量与上下公差。
+                </div>
+                <div v-for="mname in weighingModelNames" :key="mname" class="mb-4 p-3 rounded bg-slate-900 border border-slate-700">
+                  <div class="flex items-center justify-between mb-2">
+                    <span class="font-bold text-cyan-400">{{ mname }}</span>
+                    <el-button size="small" type="danger" plain @click="removeWeighingModel(mname)">删除型号</el-button>
+                  </div>
+                  <table class="w-full text-sm text-gray-200">
+                    <thead>
+                      <tr class="text-gray-400 text-xs">
+                        <th class="text-left py-1">料别</th>
+                        <th class="py-1">标准量</th>
+                        <th class="py-1">下公差(允许少)</th>
+                        <th class="py-1">上公差(允许多)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="mat in activeProject.pipeline_config.weighing.materials" :key="mat">
+                        <td class="py-1">{{ mat }}</td>
+                        <td class="py-1 px-1"><el-input-number v-model="activeProject.pipeline_config.weighing.models[mname][mat].standard" :min="0" :step="0.001" :precision="3" size="small" controls-position="right" style="width: 120px" /></td>
+                        <td class="py-1 px-1"><el-input-number v-model="activeProject.pipeline_config.weighing.models[mname][mat].low_tol" :min="0" :step="0.001" :precision="3" size="small" controls-position="right" style="width: 120px" /></td>
+                        <td class="py-1 px-1"><el-input-number v-model="activeProject.pipeline_config.weighing.models[mname][mat].high_tol" :min="0" :step="0.001" :precision="3" size="small" controls-position="right" style="width: 120px" /></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </el-card>
+
+              <!-- 去皮 / 稳定判定 -->
+              <el-card shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header><span class="font-bold text-white">去皮与稳定判定</span></template>
+                <div class="grid grid-cols-2 gap-4 text-sm text-gray-200">
+                  <div>
+                    <label class="block text-gray-400 text-xs mb-1">去皮方式</label>
+                    <el-select v-model="activeProject.pipeline_config.weighing.tare_mode" size="small" style="width: 100%">
+                      <el-option label="放件后自动去皮(稳定即去)" value="auto_stable" />
+                      <el-option label="仅手动去皮" value="manual" />
+                    </el-select>
+                  </div>
+                  <div>
+                    <label class="block text-gray-400 text-xs mb-1">自动去皮触发重量(kg)：放件超过此值才去皮</label>
+                    <el-input-number v-model="activeProject.pipeline_config.weighing.tare_trigger_weight" :min="0" :step="0.01" :precision="3" size="small" style="width: 100%" controls-position="right" />
+                  </div>
+                  <div>
+                    <label class="block text-gray-400 text-xs mb-1">稳定容差(kg)：连续读数波动小于此值算稳</label>
+                    <el-input-number v-model="activeProject.pipeline_config.weighing.stable_tol" :min="0" :step="0.001" :precision="3" size="small" style="width: 100%" controls-position="right" />
+                  </div>
+                  <div>
+                    <label class="block text-gray-400 text-xs mb-1">稳定所需连续帧数</label>
+                    <el-input-number v-model="activeProject.pipeline_config.weighing.stable_min_samples" :min="1" :step="1" size="small" style="width: 100%" controls-position="right" />
+                  </div>
+                  <div>
+                    <label class="block text-gray-400 text-xs mb-1">最小有效投料量(kg)：低于此值不算一次投料</label>
+                    <el-input-number v-model="activeProject.pipeline_config.weighing.measure_min_weight" :min="0" :step="0.001" :precision="3" size="small" style="width: 100%" controls-position="right" />
+                  </div>
+                  <div>
+                    <label class="block text-gray-400 text-xs mb-1">去皮稳定采样帧数</label>
+                    <el-input-number v-model="activeProject.pipeline_config.weighing.tare_settle_samples" :min="1" :step="1" size="small" style="width: 100%" controls-position="right" />
+                  </div>
+                </div>
+              </el-card>
+
+              <!-- 料别/视觉校验 + 报警事件映射 -->
+              <el-card shadow="never" class="bg-slate-800 border-slate-700">
+                <template #header><span class="font-bold text-white">校验与报警</span></template>
+                <div class="space-y-4 text-sm text-gray-200">
+                  <div>
+                    <label class="block text-gray-400 text-xs mb-1">料别校验方式</label>
+                    <el-select v-model="activeProject.pipeline_config.weighing.material_check" size="small" style="width: 100%">
+                      <el-option label="按投料顺序自动推进（不校验料别）" value="sequence" />
+                      <el-option label="视觉识别料别（模型/外部上报标签校验）" value="visual" />
+                      <el-option label="关闭料别校验" value="off" />
+                    </el-select>
+                  </div>
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label class="block text-gray-400 text-xs mb-1">缺料 → 触发事件</label>
+                      <el-select v-model="activeProject.pipeline_config.weighing.alarm_event_shortage" size="small" style="width: 100%">
+                        <el-option v-for="ev in activeProject.events_config" :key="ev.id" :label="ev.name" :value="ev.id" />
+                      </el-select>
+                    </div>
+                    <div>
+                      <label class="block text-gray-400 text-xs mb-1">超量 → 触发事件</label>
+                      <el-select v-model="activeProject.pipeline_config.weighing.alarm_event_over" size="small" style="width: 100%">
+                        <el-option v-for="ev in activeProject.events_config" :key="ev.id" :label="ev.name" :value="ev.id" />
+                      </el-select>
+                    </div>
+                    <div>
+                      <label class="block text-gray-400 text-xs mb-1">料别错 → 触发事件</label>
+                      <el-select v-model="activeProject.pipeline_config.weighing.alarm_event_wrong" size="small" style="width: 100%">
+                        <el-option v-for="ev in activeProject.events_config" :key="ev.id" :label="ev.name" :value="ev.id" />
+                      </el-select>
+                    </div>
+                    <div>
+                      <label class="block text-gray-400 text-xs mb-1">前置未满足 → 触发事件</label>
+                      <el-select v-model="activeProject.pipeline_config.weighing.alarm_event_precheck" size="small" style="width: 100%">
+                        <el-option v-for="ev in activeProject.events_config" :key="ev.id" :label="ev.name" :value="ev.id" />
+                      </el-select>
+                    </div>
+                  </div>
+                </div>
+              </el-card>
+
+            </div>
+          </el-tab-pane>
+
           <el-tab-pane label="逻辑设置" name="logic">
             <div class="h-full overflow-y-auto p-4 pb-32 custom-scrollbar space-y-6">
 
@@ -2933,6 +3113,7 @@
             <el-option label="自定义模式" value="custom" />
             <el-option label="跟踪模式" value="tracking" />
             <el-option label="逐件模式" value="per_item" />
+            <el-option label="称重投料模式" value="weighing" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -3630,6 +3811,100 @@ const _sanitizeSessionGate = (gt) => {
 };
 
 // 初始化项目默认配置
+// ==================== 称重投料模式配置编辑 ====================
+const newWeighingMaterial = ref('');
+const newWeighingModel = ref('');
+
+const weighingModelNames = computed(() => {
+  const w = activeProject.value?.pipeline_config?.weighing;
+  return w && w.models ? Object.keys(w.models) : [];
+});
+
+// 规整: 保证每个型号对每道料都有 spec 对象, 否则模板 v-model 取不到会报错
+const normalizeWeighingSpecs = () => {
+  const w = activeProject.value?.pipeline_config?.weighing;
+  if (!w) return;
+  if (!Array.isArray(w.materials)) w.materials = [];
+  if (!w.models || typeof w.models !== 'object') w.models = {};
+  Object.keys(w.models).forEach(mname => {
+    if (!w.models[mname] || typeof w.models[mname] !== 'object') w.models[mname] = {};
+    w.materials.forEach(mat => {
+      if (!w.models[mname][mat]) {
+        w.models[mname][mat] = { standard: 0, low_tol: 0.05, high_tol: 0.05 };
+      }
+    });
+  });
+};
+
+const addWeighingMaterial = () => {
+  const name = (newWeighingMaterial.value || '').trim();
+  if (!name) return;
+  const w = activeProject.value.pipeline_config.weighing;
+  if (w.materials.includes(name)) { ElMessage.warning('料别已存在'); return; }
+  w.materials.push(name);
+  newWeighingMaterial.value = '';
+  normalizeWeighingSpecs();
+};
+
+const removeWeighingMaterial = (idx) => {
+  const w = activeProject.value.pipeline_config.weighing;
+  w.materials.splice(idx, 1);
+};
+
+const addWeighingModel = () => {
+  const name = (newWeighingModel.value || '').trim();
+  if (!name) return;
+  const w = activeProject.value.pipeline_config.weighing;
+  if (w.models[name]) { ElMessage.warning('型号已存在'); return; }
+  w.models[name] = {};
+  newWeighingModel.value = '';
+  normalizeWeighingSpecs();
+};
+
+const removeWeighingModel = (name) => {
+  const w = activeProject.value.pipeline_config.weighing;
+  delete w.models[name];
+};
+
+// 只在称重模式才往项目里注入 weighing 默认配置。非称重项目绝不碰其 pipeline_config，零污染。
+const ensureWeighingDefaults = (project) => {
+  if (!project) return;
+  if (!project.pipeline_config) project.pipeline_config = {};
+  const w = project.pipeline_config.weighing || {};
+  project.pipeline_config.weighing = {
+    materials: Array.isArray(w.materials) && w.materials.length ? w.materials : ['钢帽水泥', '钢脚水泥'],
+    models: (w.models && typeof w.models === 'object') ? w.models : {},
+    tare_mode: w.tare_mode || 'auto_stable',
+    tare_trigger_weight: w.tare_trigger_weight ?? 0.05,
+    tare_settle_samples: w.tare_settle_samples ?? 3,
+    stable_tol: w.stable_tol ?? 0.003,
+    stable_min_samples: w.stable_min_samples ?? 3,
+    measure_min_weight: w.measure_min_weight ?? 0.005,
+    require_operator: w.require_operator !== false,
+    require_model: w.require_model !== false,
+    material_check: w.material_check || 'sequence',
+    auto_zero_after_done: w.auto_zero_after_done !== false,
+    alarm_event_shortage: w.alarm_event_shortage ?? 2,
+    alarm_event_over: w.alarm_event_over ?? 2,
+    alarm_event_wrong: w.alarm_event_wrong ?? 2,
+    alarm_event_precheck: w.alarm_event_precheck ?? 2,
+  };
+  const ww = project.pipeline_config.weighing;
+  Object.keys(ww.models).forEach(mname => {
+    if (!ww.models[mname] || typeof ww.models[mname] !== 'object') ww.models[mname] = {};
+    ww.materials.forEach(mat => {
+      if (!ww.models[mname][mat]) ww.models[mname][mat] = { standard: 0, low_tol: 0.05, high_tol: 0.05 };
+    });
+  });
+};
+
+// 运行时把项目逻辑模式切到称重 → 才补默认配置 (切回别的模式不删, 但存库时 handleSaveProject 已守门丢弃)
+watch(() => activeProject.value?.logic_mode, (mode) => {
+  if (mode === 'weighing' && activeProject.value && !activeProject.value.pipeline_config?.weighing) {
+    ensureWeighingDefaults(activeProject.value);
+  }
+});
+
 const initProjectDefaults = (project) => {
   if (!project.model_format) project.model_format = 'pytorch_fp32';
   if (!project.steps_config) project.steps_config = [];
@@ -3723,6 +3998,10 @@ const initProjectDefaults = (project) => {
   }
   if (project.pipeline_config.hide_boxes_outside_step_roi === undefined) {
     project.pipeline_config.hide_boxes_outside_step_roi = !!pipelineConfig.hide_boxes_outside_step_roi;
+  }
+  // 原生称重投料模式: 仅 weighing 项目才注入默认配置, 非称重项目不碰 (零污染)
+  if (project.logic_mode === 'weighing') {
+    ensureWeighingDefaults(project);
   }
   
   // 使用 pipeline_config 中的值，如果没有则使用默认值
@@ -4420,6 +4699,10 @@ const handleSaveProject = async () => {
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,
+        // 原生称重投料模式配置 (仅 weighing 模式写入, 其他模式不污染)
+        weighing: activeProject.value.logic_mode === 'weighing'
+          ? (activeProject.value.pipeline_config?.weighing || {})
+          : undefined,
         // v3.23 NG 补做策略 (任意模式通用, 嵌套对象直接序列化)
         ng_remediation: (() => {
           const src = activeProject.value.pipeline_config?.ng_remediation || {};

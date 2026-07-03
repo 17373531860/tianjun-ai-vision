@@ -101,6 +101,45 @@ class ExternalDeviceTestMixin:
             ser.close()
             return {"success": False, "message": f"通信失败: {e}"}
 
+    def _test_serial_command(self, serial_port, baud, config, timeout):
+        """测试串口「指令应答」：发一次查询指令，看仪表是否回一帧。"""
+        try:
+            import serial
+        except ImportError:
+            return {"success": False, "message": "pyserial 未安装"}
+        try:
+            ser = serial.Serial(
+                port=serial_port, baudrate=baud,
+                bytesize=config.get("bytesize", 8),
+                parity=config.get("parity", "N"),
+                stopbits=config.get("stopbits", 1),
+                timeout=timeout,
+            )
+        except Exception as e:
+            return {"success": False, "message": f"串口打开失败: {e}"}
+
+        query_cmd = config.get("query_command", "R")
+        suffix = self._decode_escape(config.get("command_suffix", "\r\n"))
+        try:
+            ser.reset_input_buffer()
+            ser.write((str(query_cmd) + suffix).encode("ascii", errors="ignore"))
+            time.sleep(0.3)
+            response = ser.read(256)
+            ser.close()
+            if response:
+                text = response.decode("utf-8", errors="ignore").strip()
+                return {"success": True,
+                        "message": f"指令应答测试成功，发 '{query_cmd}' 收到: {text[:80]}"}
+            return {"success": True,
+                    "message": f"串口 {serial_port} 打开成功，但发 '{query_cmd}' 后无响应"
+                               f"（检查仪表是否设为应答模式 / 指令字符是否正确）"}
+        except Exception as e:
+            try:
+                ser.close()
+            except Exception:
+                pass
+            return {"success": False, "message": f"通信失败: {e}"}
+
     def _test_http(self, config, timeout):
         try:
             import requests as req

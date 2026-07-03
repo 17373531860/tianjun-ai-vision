@@ -129,6 +129,61 @@ begin
   end;
 end;
 
+// PL2303 (Prolific USB 转串口) 驱动预装. 电子秤多走 RS232, 客户用 PL2303 转 USB 接机.
+// 两条路 (放哪种文件就走哪条, 全静默, 客户零操作):
+//   路 1 (优先, 最干净): 目录有 *.inf -> pnputil /add-driver /install 把驱动灌进系统驱动库,
+//          客户插上即自动绑定. 不写死 INF 名 (厂商不同批次命名不一), 枚举目录全部 *.inf 逐个装.
+//   路 2 (兜底): 没有 INF (或 pnputil 全失败) 且目录有 *.exe -> 跑厂商官方安装器静默安装.
+//          Prolific 官方安装器支持 /s 静默 (官网明示), 装完同样预装进驱动库.
+// 目录为空 (未放任何驱动文件) 时整段 no-op, 不影响主程序安装.
+procedure InstallPL2303Driver;
+var
+  ResultCode: Integer;
+  DriverDir: String;
+  FindRec: TFindRec;
+  InfPath: String;
+  ExePath: String;
+  Installed: Boolean;
+begin
+  DriverDir := ExpandConstant('{app}\resources\drivers\PL2303');
+  if not DirExists(DriverDir) then
+    Exit;
+  Installed := False;
+  // 路 1: pnputil 预装所有 INF
+  if FindFirst(DriverDir + '\*.inf', FindRec) then
+  begin
+    try
+      repeat
+        InfPath := DriverDir + '\' + FindRec.Name;
+        if Exec('pnputil', '/add-driver "' + InfPath + '" /install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+        begin
+          Log('PL2303 pnputil ' + FindRec.Name + ' -> ' + IntToStr(ResultCode));
+          if ResultCode = 0 then
+            Installed := True;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+  // 路 2: 没装上则跑厂商官方安装器静默安装 (/s)
+  if not Installed then
+  begin
+    if FindFirst(DriverDir + '\*.exe', FindRec) then
+    begin
+      try
+        repeat
+          ExePath := DriverDir + '\' + FindRec.Name;
+          Log('PL2303 跑厂商安装器静默装: ' + FindRec.Name);
+          Exec(ExePath, '/s', DriverDir, SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        until not FindNext(FindRec);
+      finally
+        FindClose(FindRec);
+      end;
+    end;
+  end;
+end;
+
 // v3.15.4: 覆盖安装前清掉旧的前端产物目录.
 // 前端 assets 用 content-hash 命名 (index-xxxx.js), 升级后新文件名不同, Inno 的
 // ignoreversion 只覆盖同名文件, 旧 hash 文件永远残留, 新旧 bundle 混叠 (现场出现
@@ -161,6 +216,7 @@ begin
   begin
     RestoreLicenseFiles;
     InstallCH341Driver;
+    InstallPL2303Driver;
   end;
 end;
 

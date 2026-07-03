@@ -534,4 +534,16 @@ def apply_project_config(h, config: dict):
     h._tracking_external_cycle = bool(
         h._custom_mix is not None and h._custom_mix.mix_type == 'tracking')
 
+    # 原生称重投料模式 (logic_mode='weighing'): 设备驱动, 登记/注销本通道到称重引擎。
+    # 非 weighing 项目时注销, 切回别的模式零残留。引擎按通道吃称重器读数推进状态机。
+    try:
+        from backend.services.weighing_engine import get_weighing_engine
+        ch_id = getattr(h, 'channel_id', 0)
+        if config.get('logic_mode') == 'weighing':
+            get_weighing_engine().set_channel_config(ch_id, pipeline_config.get('weighing') or {})
+        else:
+            get_weighing_engine().set_channel_config(ch_id, None)
+    except Exception as e:
+        print(f"[Weighing] 登记通道配置失败: {e}")
+
     _print_summary(h, config, steps_config, pipeline_config)

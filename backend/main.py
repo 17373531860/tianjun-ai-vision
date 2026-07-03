@@ -36,6 +36,8 @@ from backend.models import auth_models  # noqa: F401
 # v3.14 RFC 11: WorkpieceFlow 表 (流水线串行结算). mes_models 已被其他路径间接 import,
 # 这里显式声明仅为可读性与启动顺序一致.
 from backend.models import mes_models as _mes_models  # noqa: F401
+# 原生称重投料模式逐件记录表 (6.1 台账持久化, 重启不丢)
+from backend.models import weighing_models as _weighing_models  # noqa: F401
 from backend.api import api_router
 from backend.api.source import router as source_router, get_video_manager
 from backend.api.channel_manager import router as workstation_router
@@ -1232,6 +1234,8 @@ app.include_router(mes_inbound_router, prefix=f"{settings.API_V1_STR}", tags=["M
 app.include_router(operators_router, prefix=f"{settings.API_V1_STR}", tags=["Operators"])
 app.include_router(cluster_router, prefix=f"{settings.API_V1_STR}", tags=["Cluster"])
 app.include_router(extdev_router, prefix=f"{settings.API_V1_STR}", tags=["External Devices"])
+from backend.api.weighing import router as weighing_router
+app.include_router(weighing_router, prefix=f"{settings.API_V1_STR}", tags=["Weighing"])
 app.include_router(debug_router, prefix=f"{settings.API_V1_STR}", tags=["Debug"])
 app.include_router(plugins_router, prefix=settings.API_V1_STR, tags=["Plugins"])
 

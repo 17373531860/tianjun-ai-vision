@@ -936,6 +936,51 @@ class PluginHost:
             )
             return False
 
+    # ---------- v3.31: 外部设备控制 API (称重器去皮/置零等) ----------
+
+    def send_device_command(self, device_id: int, command: str) -> bool:
+        """向「串口指令应答」外部设备(称重器等)下发控制指令(去皮 T / 置零 Z 等)。
+
+        v3.31 落地 —— 配合外设「串口指令应答」协议, 让客户插件(如百斯特投料防错)
+        能在合适时机软件触发去皮/置零, 而非靠人工按秤上的按键。
+
+        参数:
+            device_id: external_devices.id (外部设备配置 id)。
+            command:   要下发的 ASCII 指令字符 (如 'T' 去皮 / 'Z' 置零 / 'R' 读数)。
+
+        返回:
+            True  = 指令已排入该设备线程的发送队列 (实际发送由设备线程下一轮轮询执行)。
+            False = 设备未连接 / 非「串口指令应答」协议 / 指令为空 / 异常被 swallow。
+
+        安全约束:
+            - 需要 manifest.capabilities 声明 'runtime.device_command'。
+            - 仅对 serial_command 协议设备有效 (内部 send_command 自校验)。
+            - 走审计 (plugin_audit_log)。
+        """
+        self._require_capability("runtime.device_command")
+        try:
+            from backend.services.external_device import get_external_device_service
+            svc = get_external_device_service()
+            res = svc.send_command(device_id, command)
+            ok = bool(res.get("success"))
+            self._audit_log(
+                action="send_device_command",
+                status="success" if ok else "rejected",
+                message=f"device_id={device_id} command={command!r} -> {res.get('message')}",
+            )
+            return ok
+        except Exception as exc:
+            self._audit_log(
+                action="send_device_command",
+                status="failed",
+                message=f"device_id={device_id} command={command!r} err={exc}",
+            )
+            log.warning(
+                "[Plugin][%s] send_device_command 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return False
+
     # ---------- M1.3b: 工位组主动 API (RFC 10 落地后真实现) ----------
 
     def list_channel_groups(self) -> List[Dict[str, Any]]:
