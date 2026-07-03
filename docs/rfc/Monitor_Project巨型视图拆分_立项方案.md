@@ -1,0 +1,60 @@
+# 立项方案：Monitor / Project 巨型视图拆分（逐 panel）
+
+- 状态：**立项待批（批准后按批次单独排期执行，本期不动代码）**
+- 日期：2026-07-03
+- 关联：第五期治理计划第 5 项；技术债 `05_tech_debt.md` 第九节过大文件表
+- 铁律：**碰 `.vue` 强制走 T4（真浏览器）/ T5（落库双向验证）/ T6（CI E2E），每批只拆一个 panel，拆完即验收即提交**
+
+---
+
+## 1. 现状
+
+| 文件 | 行数 | 结构摸底 |
+|---|---|---|
+| `views/Monitor/index.vue` | 6293 | 多通道视频卡片（双缓冲 MJPEG）× 状态面板 × 控制条，同构块重复多份（如录像失败遮罩出现 4 处）；**已有拆分先例**：`WeighingPanel` / `PerItemPanel` / `PackagingFlowCard` / `ExternalAlarmBanner` / `VirtualScanGun` / `framePump.js` 六件已外置 |
+| `views/Project/index.vue` | 5971 | 五个配置 Tab（基础/步骤/称重/逻辑/事件）+ 四个对话框（新建项目/模型选择/推理格式/ROI 编辑器），Tab 之间靠 `activeProject` 单一数据源联动 |
+
+**为什么要拆**：单文件超 6000 行后，任何客户需求都要在同一文件改，diff 审查困难、AI/人定位慢、合并冲突高发（多 agent 并行时最痛）；且 v3.31 称重、v3.8 逐件等新模式都已经证明"panel 外置"模式可行。
+
+## 2. 拆分原则（对齐既有先例，不发明新模式）
+
+1. **子组件放同目录**（`views/Monitor/XxxPanel.vue`、`views/Project/XxxTab.vue`），不建深层目录。
+2. **数据流单向**：父传 `props`（通常是 `activeProject` / 通道状态对象），子发 `emit`；**不许**子组件自己另起轮询或直连 store 写状态（Monitor 多通道 state 隔离是 v2.6.0/v3.0.0/v3.1.3 三修的地雷，见 AGENTS 不变量 7）。
+3. **只搬不改**：每批次纯移动 template + 相关 script/样式，禁止顺手重构逻辑；行为差异 = 验收不通过。
+4. **插件槽位不动**：`<TjSlot>`（如 `monitor.layout.footer`）保持在父级原位，拆分不得改变槽位挂载层级（插件视图覆盖依赖它）。
+
+## 3. 批次清单与顺序（风险从低到高，每批一个独立发版窗口）
+
+### Project/index.vue（先做——纯配置表单，无视频流地雷，5971 → 目标 <1500 行）
+
+| 批次 | 拆出组件 | 大致范围 | 风险 |
+|---|---|---|---|
+| P-1 | `WeighingConfigTab.vue`（称重投料 Tab） | ~1385-1554 行，5 张卡片 | 低：v3.31 新增、自包含、边界清晰，当模板批次 |
+| P-2 | 四个对话框各自成组件（`CreateProjectDialog` / `ModelSelectDialog` / `FormatSelectDialog` / `RoiEditorDialog`） | ~3098 行起 | 低-中：ROI 编辑器带 canvas 交互，单独一批 |
+| P-3 | `EventsConfigTab.vue`（事件设置 Tab） | 事件 FSM 配置 | 中 |
+| P-4 | `LogicConfigTab.vue`（逻辑设置 Tab） | ~1556-3000 行，按 logic_mode 条件渲染的十几张卡片 | 中-高：五种模式分支都要回归 |
+| P-5 | `StepsConfigTab.vue`（步骤/物品设置 Tab，含表 A/B/C） | ~489-1381 行 | 高：表 B 随模式切换、custom_mix 表 C，放最后 |
+
+### Monitor/index.vue（后做——视频流+多通道地雷区，6293 → 目标 <2000 行）
+
+| 批次 | 拆出组件 | 说明 | 风险 |
+|---|---|---|---|
+| M-1 | `RecordingFailureOverlay.vue` | 同构遮罩在文件里重复 4 处，合一消重复（唯一允许"消重"的批次，因为是复制粘贴块） | 低 |
+| M-2 | `SopStepPanel.vue`（步骤/SOP 展示面板） | 与已外置的 PerItemPanel 对等地位 | 中 |
+| M-3 | `CustomMixItemPanel.vue`（v3.19 物品校验面板） | ~917 行起 | 中 |
+| M-4 | `ChannelVideoCard.vue`（单通道视频卡片=双缓冲 MJPEG+状态角标） | **最后做**：直接踩不变量 7（双缓冲、多通道 state 隔离、framePump），需主作者亲自复核 | 高 |
+
+## 4. 每批次统一验收协议（不可裁剪）
+
+1. T2：lint 0 错误 + `npm run build` 绿。
+2. T4：`headless=False` 真浏览器过该 panel 全部交互路径 + 截图（用 `tests/uat/_common.py`）。
+3. T5：改一项配置 → GET 接口/查 DB 确认落库；Monitor 批次加"双通道各自独立不串台"检查。
+4. T6：补/改 `tests/e2e_browser/` 对应用例跑绿（Project 批次至少覆盖"改配置→保存→重进页面值还在"）。
+5. 提交粒度：一批一 commit；`05_tech_debt.md` 第九节行数表同批刷新。
+
+## 5. 工作量与开放问题
+
+- 估算：P-1/P-2/M-1 各 0.5 天；其余各 1 天；合计约 7 天，**分散在多个发版窗口执行，不集中突击**。
+- 开放问题（批准时定）：
+  - Project 五 Tab 全拆后 `activeProject` 是否下沉为 provide/inject（倾向不做，保持 props 显式传递）；
+  - M-4 是否与"Monitor 支持 >4 通道布局"需求合并做（若近期有该需求则合并，避免拆两次）。
