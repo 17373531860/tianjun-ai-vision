@@ -381,7 +381,7 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 | 文件 | 行数 | 类型 | 重构难度 | 重构建议 |
 |---|---|---|---|---|
 | `frontend/src/views/Monitor/index.vue` | **6293** | Vue | 极高 | 拆 panel 子组件（WeighingPanel v3.31 已是独立组件，照此模式继续） |
-| `frontend/src/views/Project/index.vue` | **5756** | Vue | 极高 | 逐批拆 Tab（RFC: docs/rfc/Monitor_Project巨型视图拆分_立项方案.md）。P-1 已完成：称重配置 Tab 外置 `WeighingConfigTab.vue`（2026-07-03, -214 行），后续 P-2~P-5 待做 |
+| `frontend/src/views/Project/index.vue` | **5468** | Vue | 极高 | 逐批拆 Tab（RFC: docs/rfc/Monitor_Project巨型视图拆分_立项方案.md）。P-1 已完成：称重配置 Tab 外置 `WeighingConfigTab.vue`（2026-07-03, -214 行）；P-2 已完成：四对话框外置 `CreateProjectDialog` / `ModelSelectDialog` / `FormatSelectDialog` / `RoiEditorDialog` + `modelFormats.js`（2026-07-03, -288 行），后续 P-3~P-5 待做 |
 | `frontend/src/views/Settings/index.vue` | 2617 | Vue | 中 | 8 个 tab 拆成子组件 |
 | `frontend/src/views/Data/index.vue` | 2258 | Vue | 高 | 表格 / 导出对话框拆 |
 | `backend/api/source_routes.py` | 2178 | Py | 高 | 按端点域分组拆文件 |

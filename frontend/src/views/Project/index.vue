@@ -2931,138 +2931,40 @@
     </div>
 
     <!-- Create Dialog -->
-    <el-dialog v-model="createDialogVisible" title="新建项目" width="500px" destroy-on-close>
-      <el-form label-position="top">
-        <el-form-item label="项目名称" required>
-          <el-input v-model="newProjectForm.name" placeholder="例如: 手机壳外观检测" />
-        </el-form-item>
-        <el-form-item label="任务类型">
-          <el-select v-model="newProjectForm.task_type" class="w-full">
-            <el-option label="目标检测 (Object Detection)" value="detection" />
-            <el-option label="语义分割" value="segmentation" disabled />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="逻辑模式">
-          <el-select v-model="newProjectForm.logic_mode" class="w-full">
-            <el-option label="顺序模式" value="sequential" />
-            <el-option label="检测模式" value="detection" />
-            <el-option label="自定义模式" value="custom" />
-            <el-option label="跟踪模式" value="tracking" />
-            <el-option label="逐件模式" value="per_item" />
-            <el-option label="称重投料模式" value="weighing" />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleCreateProject" :loading="creating" :disabled="!newProjectForm.name">创建</el-button>
-      </template>
-    </el-dialog>
+    <!-- 四个对话框已外置为独立组件（2026-07 拆分批次 P-2） -->
+    <CreateProjectDialog
+      v-model:visible="createDialogVisible"
+      :form="newProjectForm"
+      :creating="creating"
+      @create="handleCreateProject" />
 
-    <!-- Model Select Dialog -->
-    <el-dialog v-model="showModelSelect"
-      :title="extraModelSelectingIdx >= 0
-        ? `选择副模型 [${activeProject?.extra_models?.[extraModelSelectingIdx]?.name || ''}]`
-        : '选择模型'"
-      width="600px" @close="extraModelSelectingIdx = -1">
-      <div v-loading="loadingModels" class="space-y-2 max-h-96 overflow-y-auto">
-        <div v-for="model in modelList" :key="model.id" 
-          @click="selectModel(model)"
-          class="p-3 bg-slate-800 rounded cursor-pointer hover:bg-slate-700 flex justify-between items-center">
-          <div>
-            <p class="font-bold">{{ model.name }}<span v-if="model.version" class="text-gray-400 font-normal ml-2">v{{ model.version }}</span></p>
-            <p class="text-xs text-gray-400">{{ model.framework }} - {{ (model.file_size / 1024 / 1024).toFixed(2) }} MB - {{ getLabelsCount(model.labels) }} 个类别</p>
-          </div>
-          <el-tag v-if="extraModelSelectingIdx >= 0
-            ? activeProject?.extra_models?.[extraModelSelectingIdx]?.model_id === model.id
-            : activeProject?.default_model_id === model.id" type="success">当前</el-tag>
-        </div>
-        <div v-if="modelList.length === 0" class="text-center text-gray-500 py-8">
-          暂无可用模型，请先上传模型
-        </div>
-      </div>
-    </el-dialog>
+    <ModelSelectDialog
+      v-model:visible="showModelSelect"
+      :project="activeProject"
+      :extra-idx="extraModelSelectingIdx"
+      :models="modelList"
+      :loading="loadingModels"
+      @select="selectModel"
+      @close="extraModelSelectingIdx = -1" />
 
-    <!-- Format Select Dialog -->
-    <el-dialog v-model="showFormatSelect"
-      :title="formatSelectingExtraIdx !== null
-        ? `选择推理格式 [副模型: ${activeProject?.extra_models?.[formatSelectingExtraIdx]?.name || ''}]`
-        : '选择推理格式 [主模型]'"
-      width="640px" :close-on-click-modal="!convertingFormat" @close="cancelFormatSelect">
-      <div v-if="convertingFormat" class="text-center py-12">
-        <el-icon class="is-loading text-4xl text-blue-400 mb-4"><Loading /></el-icon>
-        <p class="text-white text-lg mb-2">正在转换为 {{ getFormatDisplayName(convertingFormat) }}...</p>
-        <p class="text-gray-400 text-sm">预计需要 2-10 分钟，请勿关闭此窗口</p>
-        <el-button class="mt-6" @click="cancelFormatSelect">取消并使用原始格式</el-button>
-      </div>
-      <div v-else class="space-y-2 max-h-[28rem] overflow-y-auto pr-1">
-        <div class="flex items-center justify-between mb-3">
-          <p v-if="gpuName" class="text-xs text-gray-400">当前显卡: {{ gpuName }}</p>
-          <el-button size="small" text type="info" @click="showDiagnosis">
-            <el-icon class="mr-1"><Warning /></el-icon>环境诊断
-          </el-button>
-        </div>
-        <div v-for="fmt in formatList" :key="fmt.key"
-          @click="selectFormat(fmt)"
-          :class="[
-            'p-3 rounded border transition-all',
-            fmt.available
-              ? 'cursor-pointer hover:border-blue-500 bg-slate-800 border-slate-700'
-              : 'cursor-not-allowed opacity-50 bg-slate-900 border-slate-800',
-            (formatSelectingExtraIdx !== null
-              ? (activeProject?.extra_models?.[formatSelectingExtraIdx]?.model_format || 'pytorch_fp32')
-              : (activeProject.model_format || 'pytorch_fp32')) === fmt.key
-              ? 'border-blue-500 bg-slate-700'
-              : ''
-          ]">
-          <div class="flex justify-between items-start">
-            <div>
-              <span class="text-white font-bold">{{ fmt.name }}</span>
-              <span class="text-gray-500 text-xs ml-2">({{ fmt.extension }})</span>
-            </div>
-            <div class="flex gap-1.5">
-              <el-tag v-if="fmt.tag" size="small" :type="fmt.tag === '最快' ? 'success' : fmt.tag === '实验性' ? 'warning' : 'info'">{{ fmt.tag }}</el-tag>
-              <el-tag v-if="recommendedFormat === fmt.key" size="small" type="success">推荐</el-tag>
-              <el-tag v-if="(formatSelectingExtraIdx !== null
-                ? (activeProject?.extra_models?.[formatSelectingExtraIdx]?.model_format || 'pytorch_fp32')
-                : (activeProject.model_format || 'pytorch_fp32')) === fmt.key" size="small">当前</el-tag>
-            </div>
-          </div>
-          <p class="text-xs text-gray-400 mt-1">{{ fmt.description }}</p>
-          <p v-if="!fmt.available" class="text-xs text-red-400 mt-1">{{ fmt.unavailable_reason }}</p>
-          <p v-if="fmt.key.startsWith('tensorrt') && fmt.available" class="text-xs text-amber-400 mt-1">此格式仅在当前显卡上有效，更换显卡后需重新转换</p>
-        </div>
-      </div>
-    </el-dialog>
+    <FormatSelectDialog
+      v-model:visible="showFormatSelect"
+      :project="activeProject"
+      :extra-idx="formatSelectingExtraIdx"
+      :converting="convertingFormat"
+      :formats="formatList"
+      :gpu-name="gpuName"
+      :recommended="recommendedFormat"
+      @select="selectFormat"
+      @cancel="cancelFormatSelect"
+      @diagnose="showDiagnosis" />
 
-    <!-- ROI Polygon Editor Dialog -->
-    <el-dialog v-model="roiEditorVisible"
+    <RoiEditorDialog
+      ref="roiEditorDialogRef"
+      v-model:visible="roiEditorVisible"
       :title="roiEditorDialogTitle"
-      width="80%" :close-on-click-modal="false" destroy-on-close
-      class="roi-editor-dialog"
-      @close="resetRoiEditorTargets">
-      <div class="space-y-3">
-        <div class="flex items-center gap-3 text-sm">
-          <span class="text-gray-400">单击添加顶点，点击<b class="text-amber-400">第一个点</b>闭合多边形（靠近时会变绿）。闭合后再次单击可重新绘制</span>
-          <div class="flex-1"></div>
-          <el-button size="small" @click="roiUndoPoint" :disabled="roiPoints.length === 0">撤销上一点</el-button>
-          <el-button size="small" type="warning" @click="roiClearPoints" :disabled="roiPoints.length === 0">清除全部</el-button>
-          <el-button size="small" type="success" @click="roiFinishPolygon" :disabled="roiPoints.length < 3">完成绘制</el-button>
-        </div>
-        <div class="relative bg-black rounded overflow-hidden flex justify-center" style="max-height: 70vh;">
-          <canvas ref="roiEditorCanvas" class="cursor-crosshair" style="max-width: 100%; max-height: 70vh; object-fit: contain;"
-            @click="roiCanvasClick" @dblclick="roiCanvasDblClick" @mousemove="roiCanvasMouseMove"></canvas>
-        </div>
-        <div class="flex items-center gap-2 text-xs text-gray-500">
-          <span>顶点数: {{ roiPoints.length }}</span>
-          <span v-if="roiPolygonClosed" class="text-green-400 font-bold">多边形已闭合</span>
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="roiEditorVisible = false">取消</el-button>
-        <el-button type="primary" @click="roiSave" :disabled="roiPoints.length < 3">保存 ROI</el-button>
-      </template>
-    </el-dialog>
+      @save="handleRoiSave"
+      @close="resetRoiEditorTargets" />
 
   </div>
   </TjSlot>
@@ -3071,8 +2973,13 @@
 <script setup>
 import TjSlot from '@/components/TjSlot.vue';
 import WeighingConfigTab from './WeighingConfigTab.vue';
+import CreateProjectDialog from './CreateProjectDialog.vue';
+import ModelSelectDialog from './ModelSelectDialog.vue';
+import FormatSelectDialog from './FormatSelectDialog.vue';
+import RoiEditorDialog from './RoiEditorDialog.vue';
+import { getFormatDisplayName } from './modelFormats';
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
-import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, Loading, Warning, QuestionFilled } from '@element-plus/icons-vue';
+import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, QuestionFilled } from '@element-plus/icons-vue';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
@@ -3312,22 +3219,14 @@ const formatDate = (dateStr) => {
   return date.toLocaleDateString();
 };
 
-const getLabelsCount = (labels) => {
-  if (!labels) return 0;
-  try {
-    const parsed = typeof labels === 'string' ? JSON.parse(labels) : labels;
-    return Array.isArray(parsed) ? parsed.length : 0;
-  } catch {
-    return 0;
-  }
-};
+// getLabelsCount 已随模型选择对话框外置到 ModelSelectDialog.vue（P-2）
 
 // ======================== ROI Polygon Editor ========================
+// 画布交互（取快照/画点/闭合/重绘）已外置到 RoiEditorDialog.vue（2026-07 拆分批次 P-2）；
+// 父级只保留「编辑目标路由」：打开时解析通道 + 预加载已有多边形，保存时按目标写回。
 const roiEditorVisible = ref(false);
-const roiEditorCanvas = ref(null);
+const roiEditorDialogRef = ref(null);
 const roiPreviewCanvas = ref(null);
-const roiPoints = ref([]);
-const roiPolygonClosed = ref(false);
 
 // Step 8 (feat/multi-model-roi-link): 模型选择 / ROI 编辑 的目标 idx.
 // = -1 表示主模型 (写到 default_model_id / tracking_roi_polygon, 老路径)
@@ -3336,8 +3235,6 @@ const extraModelSelectingIdx = ref(-1);
 const extraModelRoiEditingIdx = ref(-1);
 // 步骤 ROI 编辑: 指向 steps_config 中某项的 id (与副模型/全局 tracking_roi 互斥)
 const stepRoiEditingStepId = ref(null);
-let roiImage = null;
-let roiMousePos = null;
 
 const resetRoiEditorTargets = () => {
   extraModelRoiEditingIdx.value = -1;
@@ -3357,14 +3254,17 @@ const roiEditorDialogTitle = computed(() => {
   return '绘制 ROI 检测区域';
 });
 
+// 统一打开入口: 设目标 → 开对话框 → 等 canvas 挂载 → 子组件取快照并预加载已有多边形
+const _openRoiDialog = async (existingPolygon = null) => {
+  roiEditorVisible.value = true;
+  await nextTick();  // 等 dialog DOM 挂载, 子组件 canvas ref 就绪
+  const channel = await resolveRoiSnapshotChannel();
+  await roiEditorDialogRef.value?.load(channel, existingPolygon);
+};
+
 const openRoiEditor = async () => {
   resetRoiEditorTargets();
-  roiPoints.value = [];
-  roiPolygonClosed.value = false;
-  roiMousePos = null;
-  roiEditorVisible.value = true;
-  await nextTick();
-  setTimeout(() => loadRoiSnapshot(), 200);
+  await _openRoiDialog();
 };
 
 // 2026-07 缺陷 A 修复: ROI 底图不再写死 0 号通道 —— 多工位时按「当前项目绑定在哪个通道」
@@ -3391,181 +3291,10 @@ const resolveRoiSnapshotChannel = async () => {
   return 0;
 };
 
-// d1: 改为 Promise-based, 让调用方 await 图片加载完再画 polygon (替代裸 setTimeout 时序坑).
-const loadRoiSnapshot = async () => {
-  const channel = await resolveRoiSnapshotChannel();
-  return new Promise((resolve) => {
-    const canvas = roiEditorCanvas.value;
-    if (!canvas) { resolve(false); return; }
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    const host = getBackendHost();
-    img.src = `${host}/snapshot?channel=${channel}&t=${Date.now()}`;
-    img.onload = () => {
-      roiImage = img;
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      roiRedraw();
-      resolve(true);
-    };
-    img.onerror = () => {
-      const ctx = canvas.getContext('2d');
-      canvas.width = 640;
-      canvas.height = 480;
-      ctx.fillStyle = '#1e293b';
-      ctx.fillRect(0, 0, 640, 480);
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '16px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('无法获取摄像头画面，请确保摄像头已连接', 320, 240);
-      roiImage = null;
-      resolve(false);
-    };
-  });
-};
-
-const roiGetCanvasXY = (e) => {
-  const canvas = roiEditorCanvas.value;
-  if (!canvas) return null;
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  return {
-    x: (e.clientX - rect.left) * scaleX,
-    y: (e.clientY - rect.top) * scaleY
-  };
-};
-
-const ROI_CLOSE_RADIUS = 15;
-
-const roiCanvasClick = (e) => {
-  if (roiPolygonClosed.value) {
-    roiPoints.value = [];
-    roiPolygonClosed.value = false;
-    roiRedraw();
-    return;
-  }
-  const pt = roiGetCanvasXY(e);
-  if (!pt) return;
-
-  if (roiPoints.value.length >= 3) {
-    const first = roiPoints.value[0];
-    const canvas = roiEditorCanvas.value;
-    const rect = canvas.getBoundingClientRect();
-    const scale = canvas.width / rect.width;
-    const dist = Math.sqrt((pt.x - first.x) ** 2 + (pt.y - first.y) ** 2);
-    if (dist < ROI_CLOSE_RADIUS * scale) {
-      roiPolygonClosed.value = true;
-      roiRedraw();
-      return;
-    }
-  }
-
-  roiPoints.value.push(pt);
-  roiRedraw();
-};
-
-const roiCanvasDblClick = (e) => {
-  e.preventDefault();
-  if (roiPoints.value.length >= 3 && !roiPolygonClosed.value) {
-    roiPolygonClosed.value = true;
-    roiRedraw();
-  }
-};
-
-const roiCanvasMouseMove = (e) => {
-  if (roiPolygonClosed.value) return;
-  roiMousePos = roiGetCanvasXY(e);
-  roiRedraw();
-};
-
-const roiUndoPoint = () => {
-  if (roiPolygonClosed.value) {
-    roiPolygonClosed.value = false;
-  } else {
-    roiPoints.value.pop();
-  }
-  roiRedraw();
-};
-
-const roiClearPoints = () => {
-  roiPoints.value = [];
-  roiPolygonClosed.value = false;
-  roiMousePos = null;
-  roiRedraw();
-};
-
-const roiFinishPolygon = () => {
-  if (roiPoints.value.length >= 3) {
-    roiPolygonClosed.value = true;
-    roiRedraw();
-  }
-};
-
-const roiRedraw = () => {
-  const canvas = roiEditorCanvas.value;
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  if (roiImage) {
-    ctx.drawImage(roiImage, 0, 0);
-  }
-
-  const pts = roiPoints.value;
-  if (pts.length === 0) return;
-
-  if (roiPolygonClosed.value && pts.length >= 3) {
-    ctx.fillStyle = 'rgba(0, 200, 255, 0.15)';
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  ctx.strokeStyle = '#00c8ff';
-  ctx.lineWidth = 2;
-  ctx.setLineDash(roiPolygonClosed.value ? [] : [6, 4]);
-  ctx.beginPath();
-  ctx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-  if (roiPolygonClosed.value) ctx.closePath();
-  else if (roiMousePos) ctx.lineTo(roiMousePos.x, roiMousePos.y);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  const nearFirst = !roiPolygonClosed.value && pts.length >= 3 && roiMousePos &&
-    Math.sqrt((roiMousePos.x - pts[0].x) ** 2 + (roiMousePos.y - pts[0].y) ** 2) < ROI_CLOSE_RADIUS * (canvas.width / (canvas.getBoundingClientRect().width || 1));
-
-  pts.forEach((pt, i) => {
-    const isFirst = i === 0;
-    const radius = isFirst && nearFirst ? 10 : 5;
-    ctx.fillStyle = isFirst ? (nearFirst ? '#22c55e' : '#f59e0b') : '#00c8ff';
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
-    ctx.fill();
-    if (isFirst && nearFirst) {
-      ctx.strokeStyle = '#22c55e';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-    ctx.fillStyle = 'white';
-    ctx.font = 'bold 11px Arial';
-    ctx.fillText(isFirst && nearFirst ? '点击闭合' : `${i + 1}`, pt.x + 8, pt.y - 4);
-  });
-};
-
-const roiSave = async () => {
-  if (!activeProject.value || roiPoints.value.length < 3) return;
-  dbg('project.config', '点击「保存 ROI」', `points=${roiPoints.value?.length} 目标=${extraModelRoiEditingIdx.value >= 0 ? `副模型#${extraModelRoiEditingIdx.value}` : (stepRoiEditingStepId.value != null ? `步骤#${stepRoiEditingStepId.value}` : '全局tracking')}`);
-  const canvas = roiEditorCanvas.value;
-  const w = canvas?.width || 1;
-  const h = canvas?.height || 1;
-  const polygon = roiPoints.value.map(pt => [
-    Math.round((pt.x / w) * 10000) / 10000,
-    Math.round((pt.y / h) * 10000) / 10000
-  ]);
+// 子组件点「保存 ROI」后回传归一化多边形, 这里按编辑目标路由写回
+const handleRoiSave = async (polygon) => {
+  if (!activeProject.value || !Array.isArray(polygon) || polygon.length < 3) return;
+  dbg('project.config', '点击「保存 ROI」', `points=${polygon.length} 目标=${extraModelRoiEditingIdx.value >= 0 ? `副模型#${extraModelRoiEditingIdx.value}` : (stepRoiEditingStepId.value != null ? `步骤#${stepRoiEditingStepId.value}` : '全局tracking')}`);
 
   // Step 8: 副模型 ROI 编辑模式
   if (extraModelRoiEditingIdx.value >= 0) {
@@ -5096,28 +4825,11 @@ const openExtraModelSelect = (idx) => {
   showModelSelect.value = true;
 };
 
-// d1: 改用 nextTick + await loadRoiSnapshot, 取代裸 setTimeout(200) + setTimeout(250) 嵌套.
-// 慢机器/慢摄像头快照下也能保证 polygon 在 image 加载完成后立刻被画.
+// 复用主 ROI 编辑器: 把当前副模型的 roi 作为初始 polygon 交给子组件预加载
 const openExtraModelRoiEditor = async (idx) => {
   stepRoiEditingStepId.value = null;
   extraModelRoiEditingIdx.value = idx;
-  // 复用主 ROI 编辑器: 把当前副模型的 roi 加载为初始 polygon
-  roiPoints.value = [];
-  roiPolygonClosed.value = false;
-  roiMousePos = null;
-  roiEditorVisible.value = true;
-  await nextTick();  // 等 dialog DOM 挂载, canvas ref 就绪
-  const ok = await loadRoiSnapshot();  // 真正等到 image.onload (或 onerror 兜底)
-  if (!ok) return;  // 快照加载失败时画兜底文字, polygon 没意义不画
-  const slot = activeProject.value?.extra_models?.[idx];
-  const existing = slot?.roi;
-  if (Array.isArray(existing) && existing.length >= 3 && roiEditorCanvas.value) {
-    const w = roiEditorCanvas.value.width || 1;
-    const h = roiEditorCanvas.value.height || 1;
-    roiPoints.value = existing.map(([nx, ny]) => ({ x: nx * w, y: ny * h }));
-    roiPolygonClosed.value = true;
-    roiRedraw();
-  }
+  await _openRoiDialog(activeProject.value?.extra_models?.[idx]?.roi);
 };
 
 const clearExtraModelRoi = (idx) => {
@@ -5128,38 +4840,14 @@ const clearExtraModelRoi = (idx) => {
 const openStepRoiEditor = async (step) => {
   extraModelRoiEditingIdx.value = -1;
   stepRoiEditingStepId.value = step.id;
-  roiPoints.value = [];
-  roiPolygonClosed.value = false;
-  roiMousePos = null;
-  roiEditorVisible.value = true;
-  await nextTick();
-  const ok = await loadRoiSnapshot();
-  if (!ok) return;
-  const existing = step.roi;
-  if (Array.isArray(existing) && existing.length >= 3 && roiEditorCanvas.value) {
-    const w = roiEditorCanvas.value.width || 1;
-    const h = roiEditorCanvas.value.height || 1;
-    roiPoints.value = existing.map(([nx, ny]) => ({ x: nx * w, y: ny * h }));
-    roiPolygonClosed.value = true;
-    roiRedraw();
-  }
+  await _openRoiDialog(step.roi);
 };
 
 const clearStepRoi = (step) => {
   if (step) step.roi = null;
 };
 
-const FORMAT_DISPLAY_NAMES = {
-  'pytorch_fp32': 'PyTorch FP32',
-  'pytorch_fp16': 'PyTorch FP16',
-  'onnx': 'ONNX',
-  'torchscript': 'TorchScript',
-  'tensorrt_fp32': 'TensorRT FP32',
-  'tensorrt_fp16': 'TensorRT FP16',
-  'tensorrt_int8': 'TensorRT INT8',
-};
-
-const getFormatDisplayName = (key) => FORMAT_DISPLAY_NAMES[key] || key;
+// FORMAT_DISPLAY_NAMES / getFormatDisplayName 已外置 ./modelFormats.js（P-2, 与 FormatSelectDialog 共用）
 
 const openFormatSelect = async () => {
   formatSelectingExtraIdx.value = null;  // v3.7.x: 主模型上下文
