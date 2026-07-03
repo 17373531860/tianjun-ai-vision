@@ -221,6 +221,7 @@ def _apply_models_config(h, pipeline_config):
             mi._roi_mask_cache = None
             mi._roi_mask_shape = None
             mi._roi_polygon_pixels = None
+            mi._roi_mask_transform_sig = None
         if 'schedule' in m_cfg and m_cfg.get('schedule'):
             sch = m_cfg['schedule']
             if isinstance(sch, dict):

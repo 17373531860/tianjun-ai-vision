@@ -61,6 +61,28 @@ class VideoTransform:
             or self.video_flip_v
         )
 
+    def map_point_display_to_original(self, nx: float, ny: float):
+        """把单个归一化点从显示坐标系反变换回原图坐标系 (map_bbox_to_display 的逆).
+
+        用途 (2026-07 ROI 偏差修复): ROI 多边形是在显示帧快照上画的 (显示坐标),
+        但模型级 ROI 遮罩套在未变换的原图推理帧上——遮罩前必须先把顶点反变换回原图.
+        正变换顺序是 旋转→水平镜像→垂直镜像, 逆变换按相反顺序逐一撤销.
+        """
+        if self.video_flip_v:
+            ny = 1.0 - ny
+        if self.video_flip_h:
+            nx = 1.0 - nx
+        rot = (self.video_rotation or 0) % 360
+        if rot == 90:
+            # 正: (x,y) → (1-y, x)；逆: (X,Y) → (Y, 1-X)
+            return ny, 1.0 - nx
+        if rot == 180:
+            return 1.0 - nx, 1.0 - ny
+        if rot == 270:
+            # 正: (x,y) → (y, 1-x)；逆: (X,Y) → (1-Y, X)
+            return 1.0 - ny, nx
+        return nx, ny
+
     def map_bbox_to_display(self, x: float, y: float, w: float, h: float):
         """把单个归一化 bbox 从原图坐标系映射到显示坐标系.
 

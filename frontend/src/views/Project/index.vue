@@ -3080,7 +3080,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjects, getProjectDetail, createProject, updateProject, deleteProject, duplicateProject, activateProject } from '@/api/project';
 import { getModels, getAvailableFormats, convertModel, getConversionStatus, getFormatDiagnosis } from '@/api/model';
 import { getBackendHost } from '@/api/index';
-import { setProjectConfig } from '@/api/detection';
+import { setProjectConfig, getWorkstations } from '@/api/detection';
 import { dbg, dbgErr } from '@/utils/debug';
 
 const projectStore = useProjectStore();
@@ -3367,15 +3367,40 @@ const openRoiEditor = async () => {
   setTimeout(() => loadRoiSnapshot(), 200);
 };
 
+// 2026-07 缺陷 A 修复: ROI 底图不再写死 0 号通道 —— 多工位时按「当前项目绑定在哪个通道」
+// 解析快照来源, 否则对着别的相机画 ROI, 画的区域和实际检测画面天然有出入。
+// 解析不到绑定 (单工位 / 项目未绑定 / 接口异常) 时回退 0 号, 与历史行为一致。
+const resolveRoiSnapshotChannel = async () => {
+  try {
+    const res = await getWorkstations();
+    const cfgs = res.data?.source_configs || {};
+    // 只认当前真实存在的通道: 绑定配置可能残留已缩减掉的通道(如单工位模式下残留通道1)
+    const alive = new Set((res.data?.channels || []).map(c => c.channel_id));
+    const pid = activeProject.value?.id;
+    if (pid != null) {
+      for (const [ch, cfg] of Object.entries(cfgs)) {
+        const n = Number(ch);
+        if (cfg && cfg.project_id === pid && alive.has(n)) {
+          return n;
+        }
+      }
+    }
+  } catch (e) {
+    dbgErr('project.config', 'ROI 快照通道解析', e);
+  }
+  return 0;
+};
+
 // d1: 改为 Promise-based, 让调用方 await 图片加载完再画 polygon (替代裸 setTimeout 时序坑).
-const loadRoiSnapshot = () => {
+const loadRoiSnapshot = async () => {
+  const channel = await resolveRoiSnapshotChannel();
   return new Promise((resolve) => {
     const canvas = roiEditorCanvas.value;
     if (!canvas) { resolve(false); return; }
     const img = new Image();
     img.crossOrigin = 'anonymous';
     const host = getBackendHost();
-    img.src = `${host}/snapshot?channel=0&t=${Date.now()}`;
+    img.src = `${host}/snapshot?channel=${channel}&t=${Date.now()}`;
     img.onload = () => {
       roiImage = img;
       canvas.width = img.naturalWidth;
