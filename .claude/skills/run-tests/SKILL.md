@@ -1466,20 +1466,21 @@ def moving_target_scenario():
 
 ### H.2 一份 UAT 脚本的固定 5 段结构
 
+> **v3.31 起：样板代码一律用共用库 `tests/uat/_common.py`，不要再复制粘贴。**
+> 提供 `UatRun`（step 记录 + 安全截图 + 三件套证据目录 + run.json 汇总 + 退出码）、
+> `launch_browser`（headless=False 金标准参数 + 视频录制 + 控制台 error 收集）、
+> `filter_console_errors`（剔除视频流噪声）、`login`（v3.10.0 账号鉴权登录页）。
+> 存量 90+ 个 `uat_*.py` 不回改；新脚本示例见 `_common.py` 文件头 docstring。
+
 ```python
-"""UAT 脚本骨架（参考 /tmp/uat_v2_functional.py / /tmp/uat_v3_advanced.py）"""
+"""UAT 脚本骨架（新脚本用 _common；下面展开等价逻辑便于理解）"""
 import requests, time, uuid
 from playwright.sync_api import sync_playwright
+from _common import UatRun, launch_browser, filter_console_errors  # tests/uat/ 下运行
 
 API = "http://127.0.0.1:8011"   # 用非默认端口避免和客户机的 8001 撞
-SHOTS = "/tmp/uat_shots"
-VIDEO = "/tmp/uat_video"
-
-steps_log = []
-def step(label, ok, detail=""):
-    rec = {"idx": len(steps_log)+1, "label": label, "ok": ok, "detail": detail}
-    steps_log.append(rec)
-    print(f"[{'OK' if ok else '!!'}] {rec['idx']:02d}. {label}  {detail}")
+run = UatRun("my_feature")       # 证据统一落 tests/uat/evidence_<日期>_my_feature/
+step = run.step                  # 老脚本的 step()/safe_shot() 均由 _common 提供
 
 # ──────── 第 1 段：环境准备 ────────
 def setup():

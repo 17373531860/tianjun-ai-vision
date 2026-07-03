@@ -1,18 +1,28 @@
 # GitHub Actions Workflows 一览
 
-本目录下共 4 个 workflow，彼此正交：
+本目录下共 5 个 workflow，彼此正交：
 
 | 文件 | 触发条件 | 关键职责 | 失败意味着什么 |
 |---|---|---|---|
+| `build.yml` | push tag `v*` / push 到 main、master / 手动 | Windows 安装包全链：Nuitka 编译白名单 `.pyd` → conda-pack → 前端 build → Electron 打包 → Inno Setup → GitHub Release（约 4 小时）。**tag 触发时先过 `test-gate` job（复用 test-virtual 的 pytest+BDD 虚拟集），红了不进打包** | 发版链断（客户拿不到安装包）；`test-gate` 红 = 带回归的版本被拦下 |
 | `plugin-tooling.yml` | push/PR 触碰 `scripts/plugin/`, `docs/plugin-system/`, `plugins-examples/`, `tests/plugin_system/`, `tests/step_defs/test_plugin_*.py`, `backend/plugin_system/`, `backend/api/plugins.py` | 插件系统全栈：schema、CLI 单测、`pack→sign→verify→install` 端到端、上传/激活/停用 BDD | 插件发布/分发链路被破坏（不可发版） |
 | `db-matrix.yml` | push/PR 触碰 `backend/`, `alembic/`, `scripts/db/`, `tests/`, `docs/database-migration/` | SQLite + PostgreSQL 双库矩阵跑同一套单元 + BDD；PG 端额外跑 Alembic baseline upgrade 和数据搬迁脚本 dry-run | 数据库 dialect 兼容性回归（影响多客户/PG 部署） |
-| `test-virtual.yml` | push 到 main / 任意 PR | 虚拟剧本源 `synthetic` 路径下的 BDD + Playwright E2E（无 GPU/无摄像头/无模型） | 业务主链路（检测、Session、Cycle、MES）被破坏 |
-| `gitee-upload.yml` | release 发布 | 把发布产物推到 Gitee 镜像 | 国内镜像下载断 |
+| `test-virtual.yml` | push 到 main（触碰 backend/tests 等路径）/ 任意 PR / 手动 | 虚拟剧本源 `synthetic` 路径下的 BDD + Playwright E2E（无 GPU/无摄像头/无模型） | 业务主链路（检测、Session、Cycle、MES）被破坏 |
+| `gitee-upload.yml` | 仅手动（workflow_dispatch，必填 version 如 `v2.0.2`） | 从 GitHub Release（`17373531860/tianjun-releases`）取产物推到 Gitee 双镜像仓（客户下载走 Gitee） | 国内镜像下载断 |
+
+## 触发矩阵速查（谁在什么时候跑）
+
+| 事件 | build | test-virtual | db-matrix | plugin-tooling | gitee-upload |
+|---|---|---|---|---|---|
+| push tag `v*` | ✅（先 test-gate 再打包） | — | — | — | — |
+| push 到 main | ✅ | ✅（触碰对应路径时） | ✅（触碰对应路径时） | ✅（触碰对应路径时） | — |
+| PR 到 main | — | ✅ | ✅（触碰对应路径时） | ✅（触碰对应路径时） | — |
+| 手动 workflow_dispatch | ✅ | ✅ | — | — | ✅（必填 version） |
 
 ## 必跑 / 选跑
 
 - **每次 PR 必跑**：`plugin-tooling`（如改插件相关）、`db-matrix`（如改后端/测试）、`test-virtual`（任何 PR）。
-- **release 触发**：`gitee-upload`。
+- **发版链**：临时 public → push tag → `build.yml`（test-gate → 打包 → GitHub Release）→ 手动触发 `gitee-upload` 推国内镜像 → 用 `scripts/ci/watch_and_private.sh` 盯盘并自动切回 private（见 `update-release` skill 第 8 步）。
 
 ## 本地复刻 CI
 
