@@ -19,11 +19,12 @@ import tempfile
 
 import markdown
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+# 脚本已归位 scripts/docgen/, 仓库根 = 上两级
+BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MD = os.path.join(BASE, 'docs', '软件操作手册.md')
 PDF = os.path.join(BASE, 'docs', '软件操作手册.pdf')
 
-VERSION = 'v3.30.0'
+VERSION = 'v3.31.0'
 UPDATED = '2026 年 6 月'
 
 

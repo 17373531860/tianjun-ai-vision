@@ -9,7 +9,8 @@
 import base64
 import os
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+# 脚本已归位 scripts/docgen/, 仓库根 = 上两级
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SHOTS = os.path.join(ROOT, "tests", "uat", "evidence_chuannan_guide")
 SHOTS_FALLBACK = "/tmp/uat_shots"
 OUT_HTML = os.path.join(ROOT, "docs", "川南火工对接_配置操作手册.html")
