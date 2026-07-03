@@ -11,15 +11,16 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 修改 ORM 前先读这一份。计划修改：$ARGUMENTS
 
-## 0. 一眼看懂当前的数据库（v3.5.x 真相）
+## 0. 一眼看懂当前的数据库（v3.31.0 真相）
 
-- **31 张表 = 13 + 15 + 3**，分布在 **三个** ORM 文件
+- **47 张表 = 13 + 20 + 4 + 5 + 4 + 1**，分布在 **六个** ORM 文件（models / mes_models / export_models / auth_models / plugin_models / weighing_models）
 - **没有 alembic / 没有迁移工具**：纯手写 ALTER TABLE，集中在 `backend/main.py::migrate_database()`
 - 数据库是单文件 SQLite (`sql_app.db`)，开 WAL + busy_timeout=15s
 - 启动时序：`Base.metadata.create_all()` 建新表 → `migrate_database()` 给老库补列 → `fix_orphan_*()` 清孤儿
 - **旧版交接文档写的"22 张表 / `MLModel` 类名 / 表名 `ml_models`"全是过时信息，以代码为准**（该手册已于 2026-06-26 删除）
+- `Operator`/`operators` 表已随 v3.10.0 用户系统移除（端点 410 Gone），别再引用
 
-## 1. 三个 models 文件的 31 张表清单
+## 1. 六个 models 文件的 47 张表清单
 
 ### 1.1 `backend/models/models.py`（13 张，核心检测）
 
@@ -32,14 +33,14 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `Camera` | `cameras` | 旧式相机表，与 `/source/*` 并存 |
 | `DailyStat` | `daily_stats` | 每日统计汇总（写入路径已废）|
 | `SystemConfig` | `system_configs` | 全局 KV 配置（v3.5.0 加 license-cache）|
-| `Operator` | `operators` | 操作员（无 token，落盘 `current_operator.json`）|
+| `ChannelGroup` | `channel_groups` | v3.13.1 工位组（RFC 10 单机多工位并行联动）|
 | `DetectionSession` | `detection_sessions` | 一次开机=一个 Session，含 `channel_id` `shift_label` `order_id` |
 | `DetectionCycle` | `detection_cycles` | 一次生产周期，关联 Session/Order |
 | `StepRecord` | `step_records` | Cycle 内每个步骤的检测记录 |
 | `VideoClip` | `video_clips` | 录像文件元信息（`clip_type=session/cycle/step`）|
 | `DataExportSetting` | `data_export_settings` | CSV 导出/录像开关单行配置 |
 
-### 1.2 `backend/models/mes_models.py`（15 张，MES + 集群 + 外设）
+### 1.2 `backend/models/mes_models.py`（20 张，MES + 集群 + 外设 + 流水线）
 
 | ORM 类 | 表名 | 一句话 |
 |---|---|---|
@@ -53,19 +54,50 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `ScanLog` | `scan_logs` | 扫码记录 |
 | `MESConnection` | `mes_connections` | 外部 MES 推送连接配置 |
 | `MESCommLog` | `mes_comm_logs` | MES 推送通讯日志 |
+| `ExternalActiveAlarm` | `external_active_alarms` | v3.29 外部 MES 入站在途报警台账（川南范式）|
 | `ClusterConfig` | `cluster_config` | 集群配置（id 固定为 1，单行表）|
 | `BoxAggregation` | `box_aggregations` | 集群按 `box_serial` 聚齐的临时表 |
 | `BoxSummary` | `box_summaries` | 箱子最终汇总结果 |
 | `ExternalDevice` | `external_devices` | 外部设备（称重/PLC/传感器等）|
 | `ExternalDeviceLog` | `external_device_logs` | 外设原始数据日志 |
+| `WorkpieceFlowConfig` | `workpiece_flow_configs` | v3.14 RFC 11 串行流水线结算配置 |
+| `WorkpieceFlowRun` | `workpiece_flow_runs` | v3.14 串行流水线单件运行实例 |
+| `PackagingFlowConfig` | `packaging_flow_configs` | v3.21+ 包装线闭环配置（含 v3.30 `name_match_strict_boundary`）|
+| `PackagingFlowRun` | `packaging_flow_runs` | 包装线单箱运行实例 |
 
-### 1.3 `backend/models/export_models.py`（3 张，v3.5.0+ 自定义导出）
+### 1.3 `backend/models/export_models.py`（4 张，v3.5.0+ 自定义导出）
 
 | ORM 类 | 表名 | 一句话 |
 |---|---|---|
 | `ExportTemplate` | `export_templates` | 模板中央仓库（`is_system` 区分内置/用户）|
 | `ExportRealtimeRule` | `export_realtime_rules` | 实时导出规则（每个 cycle 自动写文件）|
 | `ExportRunLog` | `export_run_logs` | 实时/批量导出运行日志（成功/失败/跳过原因）|
+| `ExportScheduledRule` | `export_scheduled_rules` | v3.8.x 定时导出规则 |
+
+### 1.4 `backend/models/auth_models.py`（5 张，v3.10.0 用户系统）
+
+| ORM 类 | 表名 | 一句话 |
+|---|---|---|
+| `User` | `users` | 多角色账号（替代已废弃 operators）|
+| `Role` | `roles` | 角色 + 权限 JSON |
+| `UserRole` | `user_roles` | 用户 ↔ 角色多对多 |
+| `SessionToken` | `session_tokens` | 登录 token（Bearer 鉴权）|
+| `ApiKey` | `api_keys` | M2M API Key（SHA256 + scope）|
+
+### 1.5 `backend/models/plugin_models.py`（4 张，v3.13+ 插件平台）
+
+| ORM 类 | 表名 | 一句话 |
+|---|---|---|
+| `PluginRecord` | `plugins` | 已安装插件清单（签名/版本/激活状态）|
+| `PluginState` | `plugin_state` | 插件 `plugin_data` JSON 命名空间持久化 |
+| `PluginAuditLog` | `plugin_audit_log` | 插件主动 API 调用审计 |
+| `PluginConfigVersion` | `plugin_config_versions` | v3.28 插件配置版本化统一保存 |
+
+### 1.6 `backend/models/weighing_models.py`（1 张，v3.31.0 称重投料模式）
+
+| ORM 类 | 表名 | 一句话 |
+|---|---|---|
+| `WeighingRecord` | `weighing_records` | 逐件逐料称重台账：一行 = 一件产品的一道料一次称量（channel_id / product_sn / model_name / operator / material / standard / initial / net / verdict(ok・shortage・over・no_spec) / ts）；字段与 `weighing_engine.py` 产出的 result dict 对齐，新表走 create_all 无需 ALTER；`main.py` 已显式 import `weighing_models` |
 
 ## 2. 关键命名陷阱（别再写错了）
 
@@ -318,5 +350,12 @@ JSON 子键链: <set_project_config + 视图 + Navbar 默认值> （仅 JSON）
 | v3.3.0 | `ScannerDevice.scan_pair_max_wait_sec`（码-码闭环）|
 | v3.4.0 | `ScannerDevice` 加 D 模式几何字段 `scan_d_geometry / scan_d_line / scan_d_zone / scan_d_gone_confirm_frames` |
 | v3.5.0 | 新文件 `export_models.py` + 3 张表 + `SystemConfig` 接入 license-cache JSON |
+| v3.10.0 | 新文件 `auth_models.py` 5 张表（用户系统）；`Operator`/`operators` 废弃移除 |
+| v3.13.x | 新文件 `plugin_models.py` 4 张表；`models.py` 加 `ChannelGroup`（RFC 10）|
+| v3.14.0 | `mes_models.py` 加 `workpiece_flow_configs/runs`（RFC 11 串行流水线）|
+| v3.21+ | `mes_models.py` 加 `packaging_flow_configs/runs`（包装线闭环）|
+| v3.29.0 | `mes_models.py` 加 `external_active_alarms`（入站在途报警台账）|
+| v3.30.0 | `packaging_flow_configs` 加 `name_match_strict_boundary BOOLEAN DEFAULT 0` |
+| v3.31.0 | 新文件 `weighing_models.py` + `weighing_records` 表（称重投料逐件台账，`main.py` 显式 import + create_all，无 ALTER）|
 
 > 完整 changelog 在 `docs/changelog/` 下，每个 .md 都标了 BUG/FEAT/HOTFIX。
