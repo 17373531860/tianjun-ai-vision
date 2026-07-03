@@ -42,9 +42,9 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/data/*` | `sessions.py` + `sessions_export.py` + `sessions_stats.py` + `sessions_maintenance.py`（+ `showcase_stats.py` 只读统计共用前缀） | `data.js` | session/cycle/step + CSV 导出 + 数据维护 |
 | `/projects/*` | `projects.py` | `project.js` | 项目 CRUD + 激活 + `/active/current` |
 | `/models/*` | `models.py` | `model.js` | 模型上传/转换/标签解析 |
-| `/tasks/*` | `tasks.py` | `task.js` **dead** | 离线推理任务 |
-| `/reports/*` | `reports.py` | `report.js` **半 dead** | 趋势/日报/导出（Report 视图路由未注册） |
-| `/cameras/*` | `cameras.py` | `camera.js` **dead** | **旧式相机表**，新代码不要往这写 |
+| `/tasks/*` | `tasks.py` | 无（`task.js` 已删） | 离线推理任务（前端无入口，仅 API 在线） |
+| `/reports/*` | `reports.py` | 无（`report.js` 已删） | 趋势/日报/导出（报表展示由 Data 页接管） |
+| `/cameras/*` | `cameras.py` | 无（`camera.js` 已删） | **旧式相机表**，新代码不要往这写 |
 | `/system/*` | `system_display.py` | 无封装（`useSystemStore` 直调） | KV 配置 + license 缓存 |
 | `/alarm/*` | `alarm.py` | 无封装（Alarm 视图直调） | 灯塔 / 蜂鸣器 / 共享灯柱 |
 | `/workstations/*` | `channel_manager.py` | `detection.js`（混在其中） | 多工位 + GPU 分配 |
@@ -91,12 +91,10 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `plugins.js` / `channel_group.js` / `packaging_flow.js` | 在用 |
 | `export.js` | 在用（v3.5.0 自定义导出 + 实时规则） |
 | `operators.js` | ⚠ 后端全 410 Gone（v3.10.0 废弃），新代码禁用 |
-| `report.js` | **半 dead**：`getSummary`、`getDailyStats`、`exportCsvReport` 仅 dead 视图 `views/Report/index.vue` 引用（路由未注册）；其余函数全前端无引用 |
-| `task.js` / `camera.js` | **dead**，全前端无 import（保留以防外部脚本使用） |
+| ~~`report.js` / `task.js` / `camera.js`~~ | **已于 2026-07 死代码清理中删除**（连同 `views/Report/index.vue`；全仓核实无引用 + build 绿）。别再复活 |
 
-清理建议（只做不删）：
+清理建议：
 
-- 不要主动删 `task.js` / `camera.js`：可能被某些客户脚本或 hotfix 拽过去。但**新代码不要 import 它们**。
 - `detection.js:29` 的 `resetDetection` → `/detection/reset` 是真死链，建议下次清理时**删该函数**或改路由到 `/source/detection/reset-stats`。当前 Monitor 视图 `import` 了它但没调用（line 1054 import / line 3670+3725 只用 `resetDetectionStats`）。
 
 ---

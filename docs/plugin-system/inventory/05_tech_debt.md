@@ -14,7 +14,7 @@
 | 类别 | 项数 | 严重度分布 |
 |---|---|---|
 | 真 bug（应被修） | **5**（原 6，BUG-1 已修销账） | 🟠 4 / 🟡 1 |
-| 死代码 / 半死代码 | **10**（BUG-3 降级并入） | 🟢 全可清 |
+| 死代码 / 半死代码 | **10**（BUG-3 降级并入；其中 DEAD-1~4 前端四文件 2026-07 已删） | 🟢 全可清 |
 | 重叠 mixin / 同名方法冲突 | **2**（原 3，BUG-3 移出） | 🟠 |
 | 现状无 registry（先重构再做插件） | **8** | 🟠 |
 | API 路径不一致 / 命名歧义 | **5** | 🟡 |
@@ -197,10 +197,10 @@ class VideoSourceManager(
 
 | 项 | 位置 | 大小 | 状态 | 清理风险 |
 |---|---|---|---|---|
-| DEAD-1 | `frontend/src/views/Report/index.vue` | 299 行 | 路由未注册 | ✅ 删除安全 |
-| DEAD-2 | `frontend/src/api/task.js` | 26 行 | 全前端无 import | ✅ |
-| DEAD-3 | `frontend/src/api/camera.js` | 26 行 | 全前端无 import | ✅ |
-| DEAD-4 | `api/report.js` 内 `getRecords / getTrend / exportPdfReport` | ~15 行 | 仅死视图 Report 用 | ⚠️ 删 Report 后才能删 |
+| DEAD-1 | `frontend/src/views/Report/index.vue` | 299 行 | ✅ **2026-07 已删除** | 全仓核实无引用 + build 绿 |
+| DEAD-2 | `frontend/src/api/task.js` | 26 行 | ✅ **2026-07 已删除** | 同上 |
+| DEAD-3 | `frontend/src/api/camera.js` | 26 行 | ✅ **2026-07 已删除** | 同上 |
+| DEAD-4 | `frontend/src/api/report.js`（整文件） | ~60 行 | ✅ **2026-07 已删除**（唯一消费者 DEAD-1 同批删） | 同上 |
 
 ### 后端死代码
 
