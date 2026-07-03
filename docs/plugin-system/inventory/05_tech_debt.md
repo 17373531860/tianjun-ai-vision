@@ -18,13 +18,13 @@
 | 重叠 mixin / 同名方法冲突 | **3** | 🟠 |
 | 现状无 registry（先重构再做插件） | **8** | 🟠 |
 | API 路径不一致 / 命名歧义 | **5** | 🟡 |
-| 文档过时不同步 | **6** | 🟡 |
+| 文档过时不同步 | **5** | 🟡 |
 | 文件过大需重构（> 1000 行 .py / .vue） | **9** | 🟡 |
 | SQLite → PG 迁移痛点 | **7** | 🟠 |
 | 测试覆盖盲区 | **5** | 🟠 |
 | 历史 bug 高发模块 | **6** | 信息性 |
 | 隐式约定 / 缺乏护栏 | **8** | 🟡 |
-| **合计** | **72** | — |
+| **合计** | **71** | — |
 
 🔴 严重（影响主程序稳定）/ 🟠 中（影响插件系统设计）/ 🟡 轻（妨碍维护）/ 🟢 可清理
 
@@ -385,20 +385,20 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ---
 
-## 八、文档过时不同步（6 项）
+## 八、文档过时不同步（5 项）
 
 | ID | 位置 | 说什么 | 真相 |
 |---|---|---|---|
 | DOC-1 | `frontend/src/api/export.js` 注释 | `fmt: 'txt'\|'csv'` | 后端允许 5 种 (`txt/csv/docx/xlsx/pdf`) |
 | DOC-2 | `backend/services/export_context.py` 模块注释 | "302 字段骨架" | `ALL_FIELDS = 308` |
 | DOC-3 | `backend/services/mes_gateway.py` 注释 | 提及 "Jinja" 过滤器 | 实际不是 Jinja2，是自研 `{key.path}` |
-| DOC-4 | `docs/产品交接手册.md` v2.4.0 | "22 张表 / `MLModel` 类 / `/api/` 前缀" | **全错**（详见 AGENTS.md 第十四节） |
 | DOC-5 | `AGENTS.md` 第七节 | "`MES Adapter 注册`" 部分 | 已注释明确是 `_REGISTRY`，但没说 `register_adapter` 函数已暴露 |
 | DOC-6 | brief 给 AI 的交接说明 | 23 个 skill | 实际 27 个（详见首轮分歧汇报） |
 
+> 注：原 DOC-4（指向 `docs/产品交接手册.md` 与「AGENTS.md 第十四节」）已于 2026-06-26 移除——该手册已删除、AGENTS.md 瘦身后无第十四节，债项不复存在。ID 不重排以免破坏外部引用。
+
 **修复建议**：
 - DOC-1 / DOC-2 / DOC-3：commit 时顺手改注释
-- DOC-4：手册标"过时"或重写
 - DOC-5：03 文档已修正（B1 写明）
 - DOC-6：本系列文档已校对
 
