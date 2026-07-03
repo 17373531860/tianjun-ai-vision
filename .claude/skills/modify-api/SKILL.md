@@ -21,8 +21,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 **所有业务端点全部挂在 `/api/v1/` 下**（不是 `/api/`）。前端 axios 实例在 `frontend/src/api/index.js` 里把 baseURL 设为 `${BACKEND_HOST}/api/v1`，所以前端 `api.get('/projects')` 实际打到 `/api/v1/projects`。**前端硬编码 `/api/...` 不带 v1 是 bug**。
 
 挂载源头：
-- 19 组业务路由：`backend/main.py` 用 `app.include_router(..., prefix=f"{settings.API_V1_STR}/<sub>")` 或 `prefix=settings.API_V1_STR` 注册（`API_V1_STR = "/api/v1"`）
-- 内层聚合：`backend/api/__init__.py` 的 `api_router` 把 8 个常规模块拼到 `/api/v1` 下
+- 30 组业务路由：`backend/main.py` 用 `app.include_router(..., prefix=f"{settings.API_V1_STR}/<sub>")` 或 `prefix=settings.API_V1_STR` 注册（`API_V1_STR = "/api/v1"`）
+- 内层聚合：`backend/api/__init__.py` 的 `api_router` 把常规模块拼到 `/api/v1` 下
 - 不在 `/api/v1/` 下的特殊端点（**改路径要单独处理**）：
   - `GET /` 欢迎页
   - `GET /health` 健康检查
@@ -34,29 +34,17 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 ---
 
-## 二、19 组路由前缀全表
+## 二、路由前缀全表（→ 单点化，看 api-sync skill §1）
 
-| 前缀（统一带 `/api/v1` 前缀） | 后端文件 | 前端 API client | 主要使用视图 |
-|---|---|---|---|
-| `/source/*` | `api/source.py` + `api/source_routes.py` + 35 个 `source_*` mixin/组件 | `api/detection.js` | Monitor、Source |
-| `/data/*` | `api/sessions.py` + `sessions_export.py` / `sessions_stats.py` / `sessions_maintenance.py`（统一 sessions_router） | `api/data.js` | Data |
-| `/projects/*` | `api/projects.py` | `api/project.js` | Project、Navbar |
-| `/models/*` | `api/models.py` | `api/model.js` | Model、Project、Monitor |
-| `/tasks/*` | `api/tasks.py` | `api/task.js` **死代码** | 无视图使用 |
-| `/reports/*` | `api/reports.py` | `api/report.js`（部分死代码） | Report **路由未注册** |
-| `/cameras/*` | `api/cameras.py` | `api/camera.js` **死代码** | 无视图使用（仅 `getDefaultStreamUrl` 还在用，且它打的是 `/video_feed` 不是 `/cameras/*`） |
-| `/system/*` | `api/system_display.py` | **无 api/*.js 封装** | 仅由后端 export 模板 / Electron IPC / BDD 测试访问 |
-| `/alarm/*` | `api/alarm.py` | **无 api/*.js**（Alarm/index.vue 直接 `api.get('/alarm/...')`） | Alarm |
-| `/workstations/*` | `api/channel_manager.py` | `api/detection.js`（混在 detection.js 里） | Source、Monitor |
-| `/scanner/*` | `api/scanner.py` | `api/scanner.js` | MES/ScannerPanel |
-| `/scanner/wmax/*` | `api/wmax.py` | `api/wmax.js` | MES/WMaxPanel |
-| `/external-devices/*` | `api/external_device.py` | `api/external_device.js` | MES/ExternalDevicePanel |
-| `/cluster/*` | `api/cluster.py` | `api/cluster.js` | MES/ClusterPanel |
-| `/mes/*` | `api/mes.py` | `api/mes.js` | MES/OrderPanel/WorkpiecePanel/DefectPanel |
-| `/mes/gateway/*` | `api/mes_gateway.py` | `api/gateway.js` | MES/GatewayPanel |
-| `/operators/*` | `api/operators.py` | `api/operators.js` | Settings、Monitor、Navbar、Data |
-| `/export/*` | `api/export_custom.py` + `api/export_realtime.py`（**两个文件共用前缀**） | `api/export.js` | Data/CustomExportDialog |
-| `/debug/*` | `api/debug.py` | **无 api/*.js**（仅手测用） | 无 |
+**完整 30 组「前缀 ↔ 后端文件 ↔ 前端 client」明细表已单点化到 `api-sync` skill 第 1 节（全仓唯一事实源），本 skill 不再维护副本。** 动手前先去那里对准目标模块。
+
+本 skill 只保留改端点时最易踩的归属提醒：
+
+- `/source/*` 端点实现在 `source_routes.py`（`source.py` 只是 router 容器）；前端封装在 `detection.js`（**没有 source.js**）
+- `/data/*` 分散在 4 个 `sessions*.py` + `showcase_stats.py`，共用一个前缀
+- `/export/*` 三个文件共用前缀（custom / realtime / scheduled）
+- `/operators/*` v3.10.0 起全 410 Gone，改动需求一律去 `/users`
+- v3.31 新增 `/weighing/*`（`weighing.py`，router 无自带 prefix、路径写在端点装饰器里）
 
 > 已删（不要复活）：旧的 `/api/detection/*`（`detection_router`）已在 v2.7.x 下线，等价端点全在 `/api/v1/source/detection/*`。
 > 已删：`backend/api/websocket.py` / `services/detector.py` 不存在；前端 `api/websocket.js` 也无人 import。

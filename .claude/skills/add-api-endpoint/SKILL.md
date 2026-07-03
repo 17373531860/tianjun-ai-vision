@@ -17,30 +17,15 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write, mcp__context7"
 
 ### 第1步: 确定归属模块
 
-| 功能领域 | 后端文件（行数 / 端点数） | 路由前缀 | 前端 API |
-|----------|----------|----------|---------|
-| 视频源 + 检测控制 | `api/source_routes.py` (1279) + 14 个 `source_*_mixin.py` | `/api/v1/source` | `scanner.js` / `detection.js` |
-| 会话列表/详情 | `api/sessions.py` | `/api/v1/data` | `data.js` |
-| 会话导出 (CSV) | `api/sessions_export.py` | `/api/v1/data` | `data.js` |
-| 会话统计 | `api/sessions_stats.py` | `/api/v1/data` | `data.js` |
-| 数据维护 (清理/备份) | `api/sessions_maintenance.py` | `/api/v1/data` | `data.js` |
-| 项目管理 | `api/projects.py` (334 / 7) | `/api/v1/projects` | `project.js` |
-| 模型管理 | `api/models.py` (792 / 14) | `/api/v1/models` | `model.js` |
-| 离线推理任务 | `api/tasks.py` (192 / 7) | `/api/v1/tasks` | `task.js` (dead) |
-| 报表（已部分弃用） | `api/reports.py` (344 / 5) | `/api/v1/reports` | `report.js` (dead) |
-| 旧式相机表 | `api/cameras.py` (156 / 8) | `/api/v1/cameras` | `camera.js` (dead, 与 source 并存别误用) |
-| 报警 | `api/alarm.py` (1008 / 12) | `/api/v1/alarm` | Alarm/index.vue 直接 axios |
-| 多工位 / 通道 | `api/channel_manager.py` (373 / 6) | `/api/v1/workstations` | `scanner.js` |
-| MES 管理 | `api/mes.py` (673 / 26) | `/api/v1/mes` | `mes.js` |
-| 扫码器 | `api/scanner.py` (532 / 17) | `/api/v1/scanner` | `scanner.js` |
-| WMax 扫码器协议 | `api/wmax.py` (672 / 36 ⚠️ 最大) | `/api/v1/scanner/wmax` | `wmax.js` |
-| 外部设备 | `api/external_device.py` (365 / 10) | `/api/v1/external-devices` | `external_device.js` |
-| 集群（主从汇总） | `api/cluster.py` (295 / 10) | `/api/v1/cluster` | `cluster.js` |
-| MES 网关 | `api/mes_gateway.py` (450) | `/api/v1/mes/gateway` | `gateway.js` |
-| 操作员 | `api/operators.py` (213 / 6) | `/api/v1/operators` | `operators.js` |
-| 系统显示设置 + License 缓存 | `api/system_display.py` (135 / 4) | `/api/v1/system` | `useSystemStore.js` |
-| 自定义导出（v3.5.0） | `api/export_custom.py` + `api/export_realtime.py` | `/api/v1/export` | `data.js` |
-| 通道诊断 | `api/debug.py` (118 / 2) | `/api/v1/debug` | 调试用 |
+**完整 30 组「前缀 ↔ 后端文件 ↔ 前端 client」明细表已单点化到 `api-sync` skill 第 1 节（全仓唯一事实源），先去那里选定归属模块，本 skill 不再维护副本。**
+
+选归属时的判定要点：
+
+- 与视频源/检测状态机相关 → `/source/*`（实现写 `source_routes.py`，前端封装 `detection.js`）
+- 与 session/cycle/step 数据相关 → `/data/*`（4 个 `sessions*.py` 按职责选文件）
+- 与外设读数/协议相关 → `/external-devices/*`；与称重投料业务相关 → `/weighing/*`（v3.31）
+- 用户/权限/API Key → `/auth` `/users` `/roles` `/api-keys`（v3.10.0，前端统一 `auth.js`）
+- 找不到合适前缀才新建路由组（在 `main.py` 或 `api/__init__.py` 挂载，并**同步更新 api-sync §1 + AGENTS.md 第五节**）
 
 **❌ 已删除归属（不要往这些文件加）：**
 - `api/detection.py` — 死路由，v2.7.x 删除（前端不再调用，等价端点已迁到 `/api/v1/source/`）
