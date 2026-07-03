@@ -13,7 +13,7 @@
 
 | 类别 | 项数 | 严重度分布 |
 |---|---|---|
-| 真 bug（应被修） | **5**（原 6，BUG-1 已修销账） | 🟠 4 / 🟡 1 |
+| 真 bug（应被修） | **2**（原 6：BUG-1/BUG-2 已修，BUG-3/BUG-4 随孤儿 mixin 清退关闭，剩 BUG-5/6 文档类） | 🟡 2 |
 | 死代码 / 半死代码 | **10**（BUG-3 降级并入；其中 DEAD-1~4 前端四文件 2026-07 已删） | 🟢 全可清 |
 | 重叠 mixin / 同名方法冲突 | **2**（原 3，BUG-3 移出） | 🟠 |
 | 现状无 registry（先重构再做插件） | **8** | 🟠 |
@@ -42,7 +42,7 @@
 
 | ID | 名称 | 影响 | 工时估 |
 |---|---|---|---|
-| BUG-2 | CI `CORE_FILES` 列了 11 个文件，3 个不存在 | 实际只编译 8 个，潜在 IP 泄漏（很多 source_*_mixin 没被 .pyd 保护） | 0.5 天 |
+| BUG-2 | ✅ **已修（2026-07）**：CORE_FILES 白名单重审——剔除 3 个失效项、扩到 17 项（source_routes + Top5 mixin + scanner/mes_hooks/weighing_engine）、缺失文件改为硬 fail | — | — |
 | BUG-3 | ✅ **已清退（2026-07）**：`source_industrial_camera_mixin.py` 孤儿文件已删除（全仓无 import，无 MRO 冲突，见 DEAD-10） | — | — |
 | BUG-4 | ✅ **已清退（2026-07）**：`source_recording_mixin.py` (546 行) 孤儿文件已删除（见 DEAD-8），录像能力唯一归属拆分后两个 mixin | — | — |
 | OVERLAP-1 | ~~主类继承链不含 `IndustrialCameraMixin`，但被 import~~ 已随 BUG-3 复核关闭（import 已不存在） | — | — |
@@ -99,25 +99,20 @@ try/except 兜底导致迁移静默失效，升级客户须手动重选模型。
 
 ---
 
-### BUG-2 🟠 CI `CORE_FILES` 不存在的文件
+### BUG-2 ✅ 已修（2026-07 白名单重审）：CI `CORE_FILES` 不存在的文件
 
 **位置**：`.github/workflows/build.yml: CORE_FILES`
 
-**现象**：CI 在 build 阶段把 `CORE_FILES` 列表里的 .py 编成 .pyd，列表里有：
-```
-backend/api/detection.py        ← ❌ 不存在
-backend/api/websocket.py        ← ❌ 不存在
-backend/services/detector.py    ← ❌ 不存在
-```
+**原现象**：列表 11 项里 3 项不存在（`api/detection.py` / `api/websocket.py` / `services/detector.py`），
+CI 静默跳过只 WARNING，实际只编译 8 个 .pyd，大量核心逻辑明文出厂。
 
-CI 跳过这 3 个文件**只 WARNING 不报错**，所以一直没被发现。
-
-**影响**：
-- 实际只编译 8 个核心文件成 .pyd
-- 35 个 `source_*_mixin/has-a` **没被 .pyd 保护** → 装到客户机上 IP 暴露
-- 客户拿到的"编译版"实际有大量 .py 源码可见
-
-**修复**：重新审计 `CORE_FILES`，列出真实存在的文件 + 必要时把更多核心 mixin 加入。
+**2026-07 修复内容**：
+- 剔除 3 个失效项；白名单扩到 17 项：新纳入 `source_routes.py`、Top5 大 mixin
+  （per_item / session_lifecycle / settlement / tracking / periodic_actions）、
+  `services/scanner.py`、`services/mes_hooks.py`、`services/weighing_engine.py`
+- 白名单文件缺失从"静默跳过"改为 **`::error` + exit 1 直接 fail**（改名/删文件必须同步 build.yml）
+- 残余风险：其余小 mixin / has-a 组件 / `export_*.py` 仍源码出厂，按需扩列
+- ⚠️ 待第一次 tag 构建验证：Nuitka 编译大 mixin 若失败会降级保留 .py（看 build 日志确认 .pyd 生成）
 
 **插件系统相关**：插件代码默认走 .py 形态分发（不强制编译），但如果客户需要 .pyd 加密，需要复用 CI 流程。
 
