@@ -39,7 +39,7 @@
 
 | 批次 | 拆出组件 | 说明 | 风险 |
 |---|---|---|---|
-| M-1 | `RecordingFailureOverlay.vue` | 同构遮罩在文件里重复 4 处，合一消重复（唯一允许"消重"的批次，因为是复制粘贴块） | 低 |
+| M-1 ✅（2026-07-03 完成） | `RecordingFailureOverlay.vue` | 同构遮罩在文件里重复 4 处，合一消重复（唯一允许"消重"的批次，因为是复制粘贴块）。实测 index.vue 6293→6091 行；4 处调用点=插件覆盖布局(elevated 抬 z-index 压列级 Toast)/双工位(每列一份, 保持原语义)/四工位/单工位；时间与原因文案格式化随组件下沉, 清空动作走 clear emit 留父级(API+轮询数据写回)。UAT 9/9（网络拦截往真实轮询响应注入 mes.recording_failures 走前端真实通路: 无异常不出按钮/双通道聚合计数/面板行按通道标注不串台/原因映射/清空 API 每通道各发一次/单工位负验证/console 零错误）+ CI E2E `test_recording_failure_overlay.py` 1 用例 + Monitor 页存量 3 用例回归绿 | 低 |
 | M-2 | `SopStepPanel.vue`（步骤/SOP 展示面板） | 与已外置的 PerItemPanel 对等地位 | 中 |
 | M-3 | `CustomMixItemPanel.vue`（v3.19 物品校验面板） | ~917 行起 | 中 |
 | M-4 | `ChannelVideoCard.vue`（单通道视频卡片=双缓冲 MJPEG+状态角标） | **最后做**：直接踩不变量 7（双缓冲、多通道 state 隔离、framePump），需主作者亲自复核 | 高 |
