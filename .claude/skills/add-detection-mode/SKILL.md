@@ -13,14 +13,22 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write, mcp__context7, mcp__
 
 需求: $ARGUMENTS
 
-## 现有4种模式的实现位置
+## 现有5种模式的实现位置
 
-| 模式 | pipeline_config.logic_mode | source.py 关键代码 |
+| 模式 | pipeline_config.logic_mode | 关键代码 |
 |------|---------------------------|-------------------|
-| 顺序 | `sequential` | current_step_index 递增, _get_expected_sequence_labels() |
-| 检测 | `detection` | 无序检查 current_cycle_steps 完成度 |
-| 自定义 | `custom` | custom_conditions 优先级匹配 + base_mode |
-| 追踪 | `tracking` | tracked_items 字典, ID跟踪, container_mode |
+| 顺序 | `sequential` | source.py: current_step_index 递增, _get_expected_sequence_labels() |
+| 检测 | `detection` | source.py: 无序检查 current_cycle_steps 完成度 |
+| 自定义 | `custom` | source.py: custom_conditions 优先级匹配 + base_mode |
+| 追踪 | `tracking` | source.py: tracked_items 字典, ID跟踪, container_mode |
+| 称重投料 | `weighing` (v3.31) | **不走帧循环**：`backend/services/weighing_engine.py` 设备读数驱动状态机；`source_project_config_apply.py` 末尾按 logic_mode 登记/注销通道；配置进 `pipeline_config.weighing` |
+
+## 两条实现路径（先选路径再动手）
+
+新模式动手前先判定驱动源：
+
+- **视觉帧驱动**（检测结果推进状态机）→ 走下面"全链路"章节，核心在 source.py 帧循环加分支
+- **设备读数驱动**（电子秤/传感器等外设读数推进）→ 参考 v3.31 weighing 范式：独立引擎服务（`weighing_engine.py` 单例 + 每通道状态机）吃外设管线读数（`external_device_pipeline` 广播），`source_project_config_apply.py` 只负责按 `logic_mode` 登记/注销通道到引擎；专属 API 路由（`/api/v1/weighing/*`）+ 专属 Monitor 面板（`WeighingPanel.vue`，与 SOP/Tracking/PerItem 排他占位）；逐件记录单独建表（见 `modify-model` 1.6 节 `weighing_records`）
 
 ## 新增检测模式需要修改的位置（全链路）
 
