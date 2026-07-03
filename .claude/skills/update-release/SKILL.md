@@ -123,6 +123,13 @@ electron/package.json → "version" 字段
 > ⚠️ **发版版本对齐铁律（历史教训）**：曾经发版只 bump `package.json`、忘了同步 `AGENTS.md`，导致 AGENTS 长期落后好几个版本（线上 v3.27 而 AGENTS 还写 v3.23），误导后续 AI 拿到错误的"当前版本"。
 > **凡是写了版本号 / 版本日期的地方都必须在发版时一次性对齐**：`electron/package.json` / `electron/splash.html` / `AGENTS.md`（第一节 + 文件尾）/ 任何 skill 里标了"当前版本 / 适用版本"的位置。不允许只改一处。
 
+**更新完必须跑自检脚本**（v3.31 起，package.json / AGENTS / changelog / tag 四处一致性）：
+
+```bash
+python scripts/ci/check_version_alignment.py --expect vX.X.X
+# 退出码非 0 = 有地方没对齐, 修完再进下一步; tag 落后属正常（最后才打）
+```
+
 ## 第5.5步: 强制检查并更新 Skill（不可跳过！）
 
 **为什么这步是强制的：** v2.3.0 发版时漏掉了 skill 更新，导致后续 AI 操作缺乏 MES 上下文。
