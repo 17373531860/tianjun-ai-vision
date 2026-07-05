@@ -149,8 +149,20 @@ class MESHookManager:
 | `on_session_end(ch, session_id)` | 同上 | `_handle_session_end` |
 | `on_channel_removed(ch)` | channel_manager.set_channel_count | 同步清理 6 个 dict + 取消 timer |
 
-**`_enqueue` 设计**：critical=True 拒绝丢弃（队列满则阻塞 `block=True, timeout`），非 critical 才丢；
-丢弃 / 阻塞时增 `_queue_drop_count` / `_queue_block_count`，可经 `_spill_task` 落盘续命。
+**`_enqueue` 设计**（B1① 修订后，AGENTS.md 不变量 #15）：队列满时**绝不阻塞调用方**（旧版
+critical 会 `put(timeout=0.8)`，队列长期满时每周期卡 0.8s 拖垮结算节拍，已废弃）。现行为：
+- `critical=True`（scan/cycle/session 五个核心 hook 的现有调用点全部是）→ 满时经 `_spill_task`
+  落盘 `mes_hook_spool.jsonl`，worker 恢复后 `_drain_spill_once` 回放，业务不丢
+- `critical=False` → 满时直接丢弃（当前无调用点，纯预留档）
+- 两者都只计数（`_queue_drop_count` / `_queue_block_count`）并立即返回
+- 新增 hook 事件若关系业务数据完整性：必须 critical=True **且**把 handler 名加进
+  `_is_spillable_handler` 白名单（否则满时既不落盘也不回放）；纯 UI 通知类才可用 False
+
+**`_inspecting_workpiece` 取-放配对铁律**（AGENTS.md 不变量 #14）：放入仅 2 处（cycle 绑定
+`_handle_cycle_start` / scan_pair promote），取出仅 5 处（scan_pair settle / cycle_end /
+session_end / on_channel_removed / 人工强制作废 force=True）。放取两侧必须严格配对——
+多加一处 pop 会导致工件绑错周期、前端"当前工件"卡住或漏绑（v2.7.16 迟到扫码补绑 /
+v3.4.2 promote 均为此修过补丁）。
 
 ### 3.3 `_handle_cycle_end` 是项目最大 Hub
 

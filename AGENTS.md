@@ -273,10 +273,10 @@
 11. **改 `source_settlement_mixin.py` 时不要把 `_process_last_first_mode` / `_process_cross_cycle_groups` 之间的守门去掉**（v3.9.0 起两个状态机都依赖 `settlement_mode == 'last_first'` / `cross_cycle == true` 严格守门，否则污染其他模式的 cycle_steps）— 修改前必读 `debug-source` skill
 12. **前端插件代码动态加载不能只依赖 `import(blob:...)`**（v3.15.4 血泪教训）：打包后主窗口走 `file://`，Chromium 拦 `file://` 源下的 blob 动态 import → 插件 ESM 静默加载失败、前端定制完全不生效，本地 `http://localhost` 不复现。`usePluginLoader.js` 必须保留 **blob → data:URL → 后端 http URL** 三级兜底；`markRaw` 标记 Vue Component 用**顶部静态 import**。前端插件加载有疑问先看后端日志（已通过 `POST /api/v1/plugins/client-log` 回传），不要开 F12
 13. **前端插件 bootstrap 必须先等后端就绪再拉清单**（v3.15.5 血泪教训）：打包后 `file://` 页面加载远早于后端冷启动（CUDA 预热+模型加载好几秒）。`main.js` 插件 bootstrap **不能**裸调 `themeStore.apply()`——必须先 `waitBackendReady()` 轮询探活（`/plugins/active/manifest` 无插件也返回 200）最多 90s，否则一上来 `Network Error` 一次性放弃、插件前端定制全程不加载。这是比第 12 条更靠前的一环
-14. **"当前在检工件"映射的取-放时序不许乱动**（`mes_hooks.py` 内 `_inspecting_workpiece[channel_id]`）：放入只在 cycle 绑定 / scan_pair promote 两处，取出只在结算完成 / cycle_end / session_end / 通道移除 / 人工强制作废五处，**放入方和取出方必须严格配对**。多加一处 pop 会导致工件绑错周期、前端"当前工件"卡住或漏绑（v2.7.16 / v3.4.2 均为此修过补丁），改前必读 `debug-mes` skill 与 `docs/plugin-system/inventory/02_data_flow.md` 第十二节
-15. **MES Hook 队列的 critical 语义**（`mes_hooks.py:_enqueue`）：`critical=True`（scan/cycle/session 五个核心业务事件，全部现有调用点都是）队列满时**落盘补偿文件、worker 恢复后回放，业务不丢**；`critical=False` 队列满时直接丢弃。两条铁律：① 队列满时**绝不允许阻塞调用方**（结算/检测热路径，v3.x B1 修过"每周期卡 0.8s"）；② 新增 hook 事件若关系业务数据完整性必须走 critical=True 且把 handler 加进可落盘白名单，纯 UI 通知类才可用 False
-16. **共享灯柱的事件优先级是可配置的合成算法**（`alarm.py:_recompose_and_apply`）：多工位共用一个物理报警灯时，各通道状态按优先级序 `['ng','warn','ok','idle']`（默认，事件→类别映射默认 event1=ok/event2=ng/event3=event4=warn，均可按报警器配置覆盖）合成最终显示，取优先级最高的活跃事件；视觉无变化不重发串口指令。新增事件类型必须归入这四个类别之一，别绕过合成器直接写串口
-17. **`workstation_config.json` 各段写入权独占**：`channel_count` 只由 `set_channel_count()` 写；`channels.<id>` 只由 `save_channel_source()` 写（`merge=False` 时**整段替换该通道配置**，调用方必须传完整配置而不是增量）；顶层 `splash` / `window` / `auto_resume` 段各有专属读写函数、只替换自己的段。任何新代码**禁止手写整个 JSON 文件**——旁路写入会把别段的 key 静默抹掉（该文件无 schema 校验，丢 key 无报错）
+14. **`_inspecting_workpiece[channel_id]` 的放入/取出必须严格配对**，多加一处 pop 会工件绑错周期、前端"当前工件"卡住（v2.7.16 / v3.4.2 修过）——取放点清单见 `debug-mes` skill 第三节
+15. **MES Hook 队列满时绝不允许阻塞调用方**（结算/检测热路径，修过"每周期卡 0.8s"）：critical 任务落盘回放不丢业务、非关键直接丢——critical 语义与落盘白名单见 `debug-mes` skill 第三节
+16. **新增报警事件必须归入共享灯柱四类优先级（ng/warn/ok/idle）之一，禁止绕过合成器直写串口**——合成算法见 `debug-alarm` skill 第六节
+17. **`workstation_config.json` 各段写入权独占，禁止任何代码整写该 JSON**（无 schema 校验，旁路写会静默抹掉别段 key）——分段写入清单见 `debug-channel` skill 第七节
 
 ---
 
@@ -340,6 +340,6 @@
 
 ---
 
-**本文件最后更新**：2026-07-05（技术债 HIDDEN-1~8 隐式约定文档化：第八节不变量 2/4/7/9/10 条补插件视角与细节，新增 14~17 条——在检工件映射取放时序 / MES Hook 队列 critical 语义 / 共享灯柱优先级合成 / workstation_config.json 分段写入权。上次发版更新 2026-06-29 v3.31.0）
+**本文件最后更新**：2026-07-05（技术债 HIDDEN-1~8 隐式约定文档化：第八节不变量 2/4/7/9/10 条补插件视角，新增 14~17 条一行红线（细节分别下放 debug-mes / debug-alarm / debug-channel skill）。上次发版更新 2026-06-29 v3.31.0）
 **维护者**：项目主作者 + AI agents
 **维护铁律**：本文件只放"地图 + 守则 + 不变量"。模块细节进 skill，版本变更进 `docs/changelog/`，扩展点/技术债进 `docs/plugin-system/inventory/`。**发版时务必同步更新本文件第一节版本号 + 文件尾日期**（详见 `update-release` skill）。

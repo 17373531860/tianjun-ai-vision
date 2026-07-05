@@ -476,8 +476,10 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 ## 十三、隐式约定 / 缺乏护栏（8 项 — ✅ 2026-07-05 全部文档化销账）
 
 这一节列出"AGENTS.md 第八节'关键不变量'**没全部覆盖**"的隐式约定。
-**2026-07-05 处理完毕**：HIDDEN-1/2/3/5 以补充说明并入既有不变量第 10/4/9/7 条，
-HIDDEN-4/6/7/8 新增为不变量第 14/15/16/17 条。以下保留原始条目供历史引用。
+**2026-07-05 处理完毕**：HIDDEN-1/2/3/5 以补充说明并入既有不变量第 10/4/9/7 条；
+HIDDEN-4/6/7/8 新增为不变量第 14/15/16/17 条（AGENTS.md 只留一行红线 + skill 指针，
+细节分别落 `debug-mes` 第三节 / `debug-alarm` 第六节 / `debug-channel` 第七节——
+AGENTS.md 常驻上下文，模块细节不进主文件）。以下保留原始条目供历史引用。
 
 ### HIDDEN-1：`OPENCV_FFMPEG_CAPTURE_OPTIONS` 必须在 cv2 import 前
 

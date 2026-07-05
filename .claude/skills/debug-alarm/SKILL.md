@@ -128,6 +128,10 @@ backend/data/alarm_config.json  →  AlarmRouter._load_all()
 
 > 共享模式启用条件：`is_shared() == len(_shared_channels) > 1`。单 ch 走 `_trigger_alarm_solo` 老路径，**不进合成**。
 
+**扩展铁律（AGENTS.md 不变量 #16）**：新增报警事件类型必须经 `event_priority_map` 归入
+`ng/warn/ok/idle` 四类之一（`priority_order` / `event_priority_map` 均可按报警器配置覆盖），
+**禁止绕过合成器直接写串口**——旁路写会与 `_current_visual` 缓存撕裂，出现灯态错乱且不自愈。
+
 ---
 
 ## 七、配置文件 `backend/data/alarm_config.json`
