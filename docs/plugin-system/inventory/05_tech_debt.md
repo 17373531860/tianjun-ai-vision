@@ -47,7 +47,7 @@
 | BUG-4 | ✅ **已清退（2026-07）**：`source_recording_mixin.py` (546 行) 孤儿文件已删除（见 DEAD-8），录像能力唯一归属拆分后两个 mixin | — | — |
 | OVERLAP-1 | ~~主类继承链不含 `IndustrialCameraMixin`，但被 import~~ 已随 BUG-3 复核关闭（import 已不存在） | — | — |
 | OVERLAP-2 | `_inspecting` 字典在 scan_pair race（v3.4.2 hotfix 后）可能仍有 cornercase | 工件结果错写到下一码 | 1 天（监控+测试） |
-| OVERLAP-3 | API 路由两条挂载路径并存（`api_router` 聚合 9 + main.py 直挂 10） | 插件加路由时不知道走哪条 | 0.5 天（统一） |
+| ~~OVERLAP-3~~ | ✅ 已修（2026-07-05）：全部主程序路由统一到 `backend/api/router_manifest.py` 唯一登记处，main.py 只调一次；插件路由走 RoutesRegistry | — | — |
 | MIG-1 | SQLite → PG: 7 处 raw SQL 用 `PRAGMA / sqlite_master` | PG 不支持 → 必须改条件分支 | 1 天 |
 | MIG-2 | `BOOLEAN DEFAULT 1` 在 PG 要改成 `DEFAULT TRUE` | 60+ ALTER TABLE 都要改 | 1 天 |
 | MIG-3 | Inno Setup 内嵌 PG 静默安装 | 主包变大 + 安装时间增加 | 3 天 |
@@ -221,9 +221,11 @@ BUG-5 一并销账。
 |---|---|---|
 | OVERLAP-1 | ✅ 已关闭：`IndustrialCameraMixin` 孤儿文件 2026-07 已删（原 BUG-3/DEAD-10） | — |
 | OVERLAP-2 | `_inspecting` 字典 race | scan_pair 模式 v3.4.2 hotfix 修了一波，但仍可能 cornercase |
-| OVERLAP-3 | API 双挂载路径 | `api_router` 聚合 9 + `main.py` 直挂 10 |
+| ~~OVERLAP-3~~ | ✅ 已修（2026-07-05） | 统一到 `router_manifest.py`，见下方销账注 |
 
-**OVERLAP-3 详细**：
+**OVERLAP-3 详细**（✅ 2026-07-05 已修：33 组路由全部集中到 `backend/api/router_manifest.py:mount_all_routers()`，
+`api/__init__.py` 清空、`main.py` 只调一次；改前后路由表 diff 零差异（407 条），
+workpiece_flow + channel_group 140 测试、plugin_system 408 测试全绿。以下为历史原文）：
 ```python
 # 路径 A: backend/api/__init__.py
 api_router.include_router(projects.router, prefix="/projects")
@@ -580,7 +582,7 @@ AGENTS.md 常驻上下文，模块细节不进主文件）。以下保留原始�
 - [x] ~~死代码集中清理~~ — 2026-07 前端四文件已删（后端 DEAD-5/6 待核实第三方调用后另议）
 - [x] ~~INCONSIST-2 紧急确认~~ — 2026-05-09 已验证为误报
 - [x] ~~5 个文档过时点修正~~ — 2026-07-05 DOC-1/2/3 注释已修，DOC-5/6 此前已校正
-- [ ] OVERLAP-3 路由统一（0.5 天，与插件系统 P3.5 同步）
+- [x] ~~OVERLAP-3 路由统一~~ — 2026-07-05 已修（`router_manifest.py` 唯一登记处）
 - [x] ~~HIDDEN-* 8 项隐式约定文档化~~ — 2026-07-05 已全部写进 AGENTS.md 第八节（详见第十三节销账注）
 - [ ] 插件系统设计阶段就写 TEST-2 测试套（与代码同步）
 

@@ -38,25 +38,9 @@ from backend.models import auth_models  # noqa: F401
 from backend.models import mes_models as _mes_models  # noqa: F401
 # 原生称重投料模式逐件记录表 (6.1 台账持久化, 重启不丢)
 from backend.models import weighing_models as _weighing_models  # noqa: F401
-from backend.api import api_router
-from backend.api.source import router as source_router, get_video_manager
-from backend.api.channel_manager import router as workstation_router
-from backend.api.sessions import router as sessions_router
-from backend.api.mes import router as mes_router
-from backend.api.scanner import router as scanner_router
-from backend.api.wmax import router as wmax_router
-from backend.api.mes_gateway import router as mes_gateway_router
-from backend.api.mes_inbound import router as mes_inbound_router
-from backend.api.operators import router as operators_router
-from backend.api.cluster import router as cluster_router
-from backend.api.external_device import router as extdev_router
-from backend.api.debug import router as debug_router
-from backend.api.plugins import router as plugins_router
-# v3.10.0 用户系统: 登录 / 账号 / 角色 三组路由
-from backend.api.auth import router as auth_router
-from backend.api.users import router as users_router
-from backend.api.roles import router as roles_router
-from backend.api.api_keys import router as api_keys_router
+# 路由挂载统一走 router_manifest（OVERLAP-3 治理）; 这里只保留非路由用途的 import
+from backend.api.router_manifest import mount_all_routers
+from backend.api.source import get_video_manager
 # Import models to ensure they are registered
 import os
 import cv2
@@ -1022,56 +1006,9 @@ async def _debug_api_exception_middleware(request, call_next):
                              f"status={response.status_code} 耗时={_dur:.0f}ms")
     return response
 
-# Include API routers
-app.include_router(api_router, prefix=settings.API_V1_STR)
-
-# Include Source router
-app.include_router(source_router, prefix=f"{settings.API_V1_STR}/source", tags=["source"])
-
-# Detection router 已删除 (走 /source/detection/* 即 source_routes.py, 前端只用这套)
-
-# Include Sessions router (数据管理)
-app.include_router(sessions_router, prefix=f"{settings.API_V1_STR}/data", tags=["data"])
-
-# Include Workstation/Channel router (多工位管理)
-app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["workstations"])
-
-# MES & Scanner
-app.include_router(mes_router, prefix=f"{settings.API_V1_STR}", tags=["MES"])
-app.include_router(scanner_router, prefix=f"{settings.API_V1_STR}", tags=["Scanner"])
-app.include_router(wmax_router, prefix=f"{settings.API_V1_STR}", tags=["WMax Scanner"])
-app.include_router(mes_gateway_router, prefix=f"{settings.API_V1_STR}", tags=["MES-Gateway"])
-app.include_router(mes_inbound_router, prefix=f"{settings.API_V1_STR}", tags=["MES-Inbound"])
-app.include_router(operators_router, prefix=f"{settings.API_V1_STR}", tags=["Operators"])
-app.include_router(cluster_router, prefix=f"{settings.API_V1_STR}", tags=["Cluster"])
-app.include_router(extdev_router, prefix=f"{settings.API_V1_STR}", tags=["External Devices"])
-from backend.api.weighing import router as weighing_router
-app.include_router(weighing_router, prefix=f"{settings.API_V1_STR}", tags=["Weighing"])
-app.include_router(debug_router, prefix=f"{settings.API_V1_STR}", tags=["Debug"])
-app.include_router(plugins_router, prefix=settings.API_V1_STR, tags=["Plugins"])
-
-# v3.10.0 用户系统: 登录 / 账号 / 角色
-app.include_router(auth_router, prefix=settings.API_V1_STR, tags=["Auth"])
-app.include_router(users_router, prefix=settings.API_V1_STR, tags=["Users"])
-app.include_router(roles_router, prefix=settings.API_V1_STR, tags=["Roles"])
-app.include_router(api_keys_router, prefix=settings.API_V1_STR, tags=["API Keys"])
-
-if os.environ.get("RUNTIME_MODE") == "test":
-    from backend.api.test_runtime_routes import router as test_synthetic_router
-    from backend.api.test_compat_routes import router as test_compat_router
-
-    app.include_router(
-        test_synthetic_router,
-        prefix=f"{settings.API_V1_STR}/test/synthetic",
-        tags=["test-synthetic"],
-    )
-    app.include_router(
-        test_compat_router,
-        prefix=settings.API_V1_STR,
-        tags=["test-compat"],
-    )
-    print("[RUNTIME_MODE=test] mounted /api/v1/test/synthetic/* (virtual detection scenarios)")
-    print("[RUNTIME_MODE=test] mounted test-compat shim routes (mes/alarm/sessions/source legacy paths)")
+# ==================== 路由挂载（唯一登记处: backend/api/router_manifest.py） ====================
+# 新增主程序路由去 router_manifest 登记, 不要在这里 include_router (OVERLAP-3 治理)
+mount_all_routers(app)
 
 # Mount static files for uploads (images, etc.)
 if os.path.exists(settings.UPLOAD_DIR):

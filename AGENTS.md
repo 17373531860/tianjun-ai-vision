@@ -198,6 +198,8 @@
 
 ### 后端真实路由前缀（**全部** `/api/v1/` 下）
 
+> 挂载唯一登记处：`backend/api/router_manifest.py`（OVERLAP-3 治理，2026-07）。新增路由去那里登记，别在 `main.py` 直挂、别往 `api/__init__.py` 塞聚合。
+
 | 前缀 | 文件 | 一句话 |
 |---|---|---|
 | `/source/*` | `source_routes.py` ⚠️ | **视频源 + 检测核心** |

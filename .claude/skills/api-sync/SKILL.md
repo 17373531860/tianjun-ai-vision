@@ -34,7 +34,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 > `modify-api` / `add-api-endpoint` / AGENTS.md 第五节只保留速查或指回这里，**不要再复制整表**。
 > 新增/下线路由组时只改本表 + AGENTS.md 第五节一行速查。
 
-挂载源头两处：`backend/api/__init__.py` 的 `api_router` 聚合常规模块；`backend/main.py` 末尾直接 `include_router` 其余各组。前缀全部在 `/api/v1/` 下。
+挂载源头**一处**（OVERLAP-3 治理，2026-07）：`backend/api/router_manifest.py` 的 `mount_all_routers(app)` 是全部主程序路由的唯一登记处，`main.py` 只调它一次（`api/__init__.py` 刻意留空）。前缀全部在 `/api/v1/` 下；挂载顺序即匹配顺序（`/data` 前缀 showcase_stats 与 sessions 真实重叠，勿乱序）。插件路由不进 manifest，走 plugin_system RoutesRegistry（`/api/v1/plugins/{customer_code}/*`）。
 
 | `/api/v1/` 后的前缀 | 后端文件 | 前端 client（`frontend/src/api/`） | 一句话 |
 |---|---|---|---|

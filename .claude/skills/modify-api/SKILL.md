@@ -20,9 +20,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 **所有业务端点全部挂在 `/api/v1/` 下**（不是 `/api/`）。前端 axios 实例在 `frontend/src/api/index.js` 里把 baseURL 设为 `${BACKEND_HOST}/api/v1`，所以前端 `api.get('/projects')` 实际打到 `/api/v1/projects`。**前端硬编码 `/api/...` 不带 v1 是 bug**。
 
-挂载源头：
-- 30 组业务路由：`backend/main.py` 用 `app.include_router(..., prefix=f"{settings.API_V1_STR}/<sub>")` 或 `prefix=settings.API_V1_STR` 注册（`API_V1_STR = "/api/v1"`）
-- 内层聚合：`backend/api/__init__.py` 的 `api_router` 把常规模块拼到 `/api/v1` 下
+挂载源头（OVERLAP-3 治理后**只有一处**）：
+- 全部 30+ 组业务路由集中在 **`backend/api/router_manifest.py` 的 `mount_all_routers(app)`** 登记（`main.py` 只调它一次；`api/__init__.py` 刻意留空；挂载顺序即匹配顺序，`/data` 前缀有真实重叠勿乱序）
 - 不在 `/api/v1/` 下的特殊端点（**改路径要单独处理**）：
   - `GET /` 欢迎页
   - `GET /health` 健康检查
@@ -140,7 +139,7 @@ DB 影响:   [是 / 否；具体 ORM 模型 + ALTER TABLE]
 
 如果你要改路径（包括前缀、版本、子段、动态参数）：
 
-1. **`backend/main.py` 的 `app.include_router(...)` prefix**（或 `backend/api/__init__.py` 里的 `api_router.include_router`）
+1. **`backend/api/router_manifest.py` 里对应 `app.include_router(...)` 的 prefix**
 2. **`backend/api/<module>.py`** 里的 `@router.<method>("/...")` 路径
 3. **前端 `api/*.js`** 里所有 `api.<method>('/...')` / 模板字符串
 4. **视图 / store** 里直接 `api.get('/xxx')`（绕过 `api/*.js`，主要在 `Alarm/index.vue`）
@@ -162,7 +161,7 @@ DB 影响:   [是 / 否；具体 ORM 模型 + ALTER TABLE]
 
 ## 六、常见坑（按发生频率排）
 
-1. **加了端点忘了 `app.include_router(...)`**：新模块文件里 `router = APIRouter()` 写完了，但 `main.py` / `api/__init__.py` 没挂——访问 404。所有路由必须经过这两个文件之一注册。
+1. **加了端点忘了 `app.include_router(...)`**：新模块文件里 `router = APIRouter()` 写完了，但 `backend/api/router_manifest.py` 没登记——访问 404。所有主程序路由必须经 manifest 注册（唯一登记处）。
 2. **Schema 缺字段 / 多字段 / `Optional` 漏写**：
    - 漏写 `Optional`：老客户端少传字段会 422
    - 多字段没 `Optional`：新前端不传旧字段也 422
@@ -201,7 +200,7 @@ DB 影响:   [是 / 否；具体 ORM 模型 + ALTER TABLE]
 
 ## 八、上线前自检清单
 
-- [ ] `backend/main.py` 或 `api/__init__.py` 里 `include_router` 挂上了
+- [ ] `backend/api/router_manifest.py` 里 `include_router` 挂上了
 - [ ] 前缀确实是 `/api/v1/<sub>`（不是 `/api/<sub>`）
 - [ ] 路由声明顺序：具体 path 在动态 path 之前
 - [ ] Schema：新增字段都是 `Optional[...]` + 默认值；删字段确认无前端引用

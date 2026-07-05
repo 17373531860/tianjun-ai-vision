@@ -25,7 +25,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write, mcp__context7"
 - 与 session/cycle/step 数据相关 → `/data/*`（4 个 `sessions*.py` 按职责选文件）
 - 与外设读数/协议相关 → `/external-devices/*`；与称重投料业务相关 → `/weighing/*`（v3.31）
 - 用户/权限/API Key → `/auth` `/users` `/roles` `/api-keys`（v3.10.0，前端统一 `auth.js`）
-- 找不到合适前缀才新建路由组（在 `main.py` 或 `api/__init__.py` 挂载，并**同步更新 api-sync §1 + AGENTS.md 第五节**）
+- 找不到合适前缀才新建路由组（在 `backend/api/router_manifest.py` 登记挂载，并**同步更新 api-sync §1 + AGENTS.md 第五节**）
 
 **❌ 已删除归属（不要往这些文件加）：**
 - `api/detection.py` — 死路由，v2.7.x 删除（前端不再调用，等价端点已迁到 `/api/v1/source/`）
@@ -82,17 +82,16 @@ def your_endpoint(
 
 检查路由是否已自动注册:
 - 如果端点加在**已有router**的文件中 → 自动生效
-- 如果创建**新文件** → 需要在 `api/__init__.py` 或 `main.py` 中注册
+- 如果创建**新文件** → 在 **`backend/api/router_manifest.py`** 的 `mount_all_routers()` 里登记
+  （OVERLAP-3 治理后的唯一挂载登记处；`api/__init__.py` 刻意留空，`main.py` 只调它一次）
 
 ```python
-# api/__init__.py (用于标准CRUD模块)
+# backend/api/router_manifest.py 的 mount_all_routers() 内（import 放函数体内）
 from backend.api.new_module import router as new_router
-api_router.include_router(new_router, prefix="/new-module", tags=["new-module"])
-
-# 或 main.py (用于特殊路由前缀)
-from backend.api.new_module import router as new_router
-app.include_router(new_router, prefix="/api/v1/new-prefix")
+app.include_router(new_router, prefix=f"{v1}/new-module", tags=["new-module"])
 ```
+
+注意：挂载顺序即 FastAPI 匹配顺序（`/data` 前缀存在真实重叠），新路由**追加在对应分段末尾**，别乱插。
 
 ### 第5步: 前端API封装
 

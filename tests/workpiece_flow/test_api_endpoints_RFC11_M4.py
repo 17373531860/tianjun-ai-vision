@@ -62,12 +62,14 @@ def client(monkeypatch, tmp_path):
     from backend.models import plugin_models as _p  # noqa: F401
     Base.metadata.create_all(bind=engine)
 
-    # 构造 FastAPI app
+    # 构造 FastAPI app（OVERLAP-3 后 api_router 聚合已退役, 按需直挂被测路由,
+    # 前缀与 router_manifest 登记保持一致）
     from fastapi import FastAPI
-    from backend.api import api_router
+    from backend.api import workpiece_flows, channel_groups
 
     app = FastAPI()
-    app.include_router(api_router, prefix="/api/v1")
+    app.include_router(workpiece_flows.router, prefix="/api/v1/workpiece-flows")
+    app.include_router(channel_groups.router, prefix="/api/v1/channel-groups")
 
     # 替换 get_db 依赖
     def _override_get_db():
