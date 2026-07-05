@@ -618,7 +618,8 @@ class MESGateway:
                 "end_time": s.end_time.isoformat() if s.end_time else None,
             })
 
-        # 便利字段：让 MES 端不写 Jinja 过滤器即可直接拿到 NG 步骤明细
+        # 便利字段：让模板端不写取值/过滤逻辑即可直接拿到 NG 步骤明细
+        # （Gateway 模板是自研 {key.path} 占位符替换，不是 Jinja2）
         # ng_steps = 所有 is_good=False 的步骤；missing_step_count = 缺失步骤数
         context["ng_steps"] = [s for s in context["steps"] if s.get("is_good") is False]
         completed = context["cycle"].get("completed_steps")

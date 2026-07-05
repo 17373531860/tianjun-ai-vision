@@ -69,7 +69,7 @@ export const cloneExportTemplate = (id, newName = null) => {
  *   template_content?: string,    // 模板源（与 template_id 二选一）
  *   template_id?: number,
  *   filename_template?: string,   // 文件名模板
- *   fmt?: 'txt'|'csv',
+ *   fmt?: 'txt'|'csv'|'docx'|'xlsx'|'pdf',
  *   cycle_id?: number,            // 单 cycle 上下文
  *   session_id?: number,          // session 范围上下文
  *   start_date?: string,          // 日期范围

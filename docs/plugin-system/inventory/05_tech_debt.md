@@ -62,7 +62,7 @@
 | ~~BUG-5~~ | ✅ 销账（2026-07）：错写类名的产品交接手册已于 2026-06-26 删除（随 DOC-4），正确口径（类名 `Model` / 表名 `models`）已进 AGENTS.md 第五节 ORM 提醒 | — |
 | ~~BUG-6~~ | ✅ 销账（2026-07）：同上，错误表数出处已删除；现行表清单以 `modify-model` skill 为准（47 张） | — |
 | INCONSIST-* | API 路径 5 处不一致 | 插件 prefix 选择需小心 |
-| DOC-* | 文档过时 5 处 | 误导新人 |
+| ~~DOC-*~~ | ✅ 文档过时 5 处全部处理完（2026-07-05：DOC-1/2/3 注释已修，DOC-5/6 此前已校正） | — |
 | SIZE-* | 9 个文件 > 1000 行 | 修改成本高 |
 | HIDDEN-* | 8 处隐式约定（永久不变量没全部文档化） | 新人踩坑 |
 
@@ -355,16 +355,16 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 | ID | 位置 | 说什么 | 真相 |
 |---|---|---|---|
-| DOC-1 | `frontend/src/api/export.js` 注释 | `fmt: 'txt'\|'csv'` | 后端允许 5 种 (`txt/csv/docx/xlsx/pdf`) |
-| DOC-2 | `backend/services/export_context.py` 模块注释 | "302 字段骨架" | `ALL_FIELDS = 308` |
-| DOC-3 | `backend/services/mes_gateway.py` 注释 | 提及 "Jinja" 过滤器 | 实际不是 Jinja2，是自研 `{key.path}` |
+| ~~DOC-1~~ | ✅ 已修（2026-07-05）：`frontend/src/api/export.js` 注释 | ~~`fmt: 'txt'\|'csv'`~~ | 已补全 5 种 (`txt/csv/docx/xlsx/pdf`) |
+| ~~DOC-2~~ | ✅ 已修（2026-07-05）：`backend/services/export_context.py` 5 处注释 | ~~"302 字段骨架"~~ | 硬编码数字移除，改为指向 `export_field_registry.ALL_FIELDS`（v3.31 实测 308） |
+| ~~DOC-3~~ | ✅ 已修（2026-07-05）：`backend/services/mes_gateway.py` 注释 | ~~提及 "Jinja" 过滤器~~ | 已注明 Gateway 模板是自研 `{key.path}` 占位符替换、非 Jinja2 |
 | DOC-5 | `AGENTS.md` 第七节 | "`MES Adapter 注册`" 部分 | 已注释明确是 `_REGISTRY`，但没说 `register_adapter` 函数已暴露 |
 | DOC-6 | brief 给 AI 的交接说明 | 23 个 skill | 实际 27 个（详见首轮分歧汇报） |
 
 > 注：原 DOC-4（指向 `docs/产品交接手册.md` 与「AGENTS.md 第十四节」）已于 2026-06-26 移除——该手册已删除、AGENTS.md 瘦身后无第十四节，债项不复存在。ID 不重排以免破坏外部引用。
 
 **修复建议**：
-- DOC-1 / DOC-2 / DOC-3：commit 时顺手改注释
+- ~~DOC-1 / DOC-2 / DOC-3~~：✅ 2026-07-05 注释已修
 - DOC-5：03 文档已修正（B1 写明）
 - DOC-6：本系列文档已校对
 
@@ -575,7 +575,7 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 - [x] ~~决定 BUG-3 / BUG-4 mixin 重叠的处置方案~~ — 2026-07 两个孤儿 mixin 已清退
 - [x] ~~死代码集中清理~~ — 2026-07 前端四文件已删（后端 DEAD-5/6 待核实第三方调用后另议）
 - [x] ~~INCONSIST-2 紧急确认~~ — 2026-05-09 已验证为误报
-- [ ] 5 个文档过时点修正（0.3 天）
+- [x] ~~5 个文档过时点修正~~ — 2026-07-05 DOC-1/2/3 注释已修，DOC-5/6 此前已校正
 - [ ] OVERLAP-3 路由统一（0.5 天，与插件系统 P3.5 同步）
 - [ ] HIDDEN-* 8 项隐式约定文档化（写进 AGENTS.md 第八节）
 - [ ] 插件系统设计阶段就写 TEST-2 测试套（与代码同步）
