@@ -46,14 +46,14 @@
 | BUG-3 | ✅ **已清退（2026-07）**：`source_industrial_camera_mixin.py` 孤儿文件已删除（全仓无 import，无 MRO 冲突，见 DEAD-10） | — | — |
 | BUG-4 | ✅ **已清退（2026-07）**：`source_recording_mixin.py` (546 行) 孤儿文件已删除（见 DEAD-8），录像能力唯一归属拆分后两个 mixin | — | — |
 | OVERLAP-1 | ~~主类继承链不含 `IndustrialCameraMixin`，但被 import~~ 已随 BUG-3 复核关闭（import 已不存在） | — | — |
-| OVERLAP-2 | `_inspecting` 字典在 scan_pair race（v3.4.2 hotfix 后）可能仍有 cornercase | 工件结果错写到下一码 | 1 天（监控+测试） |
+| OVERLAP-2 | ✅ **收敛（2026-07-05）**：窗口轮转可观测契约钉进回归 `tests/test_scan_pair_window_rotation.py`（5 例：开窗 promote / 换码先 settle 后 promote / 同码软忽略 / 残留强制清防御线 / 降工位清理）；scan_pair 路径已有 debug_center 埋点。真线程竞态无现场复现报告，出现再深挖 | — | — |
 | ~~OVERLAP-3~~ | ✅ 已修（2026-07-05）：全部主程序路由统一到 `backend/api/router_manifest.py` 唯一登记处，main.py 只调一次；插件路由走 RoutesRegistry | — | — |
-| MIG-1 | SQLite → PG: 7 处 raw SQL 用 `PRAGMA / sqlite_master` | PG 不支持 → 必须改条件分支 | 1 天 |
-| MIG-2 | `BOOLEAN DEFAULT 1` 在 PG 要改成 `DEFAULT TRUE` | 60+ ALTER TABLE 都要改 | 1 天 |
-| MIG-3 | Inno Setup 内嵌 PG 静默安装 | 主包变大 + 安装时间增加 | 3 天 |
-| REG-* | 8 处现状无 registry（B2/B3/B4/B6/C1/C2/C5/C7/C8） | 插件做扩展前必须先重构 | 见第六节 |
-| TEST-1 | `BACKEND_SKIP_INIT=1` 测试 fixture 缺少独立 DB 隔离 | 测试可能污染开发库 | 1 天 |
-| TEST-2 | 没有插件系统的回归测试套 | 插件 1.0 上线前必须搭 | 2 天 |
+| MIG-1 | SQLite → PG: 7 处 raw SQL 用 `PRAGMA / sqlite_master` | ⏸️ 随 PG 迁移专项（独立立项，不在债务清理批次） | 1 天 |
+| MIG-2 | `BOOLEAN DEFAULT 1` 在 PG 要改成 `DEFAULT TRUE` | ⏸️ 同上 | 1 天 |
+| MIG-3 | Inno Setup 内嵌 PG 静默安装 | ⏸️ 同上 | 3 天 |
+| REG-* | 8 处现状无 registry | REG-5 ✅ 已由插件平台实现；REG-6 ⏸️ 暂缓（无需求）；REG-1/2/3/4/7/8 ⏸️ 需求驱动（见第六节） | 见第六节 |
+| ~~TEST-1~~ | ✅ 已修（核实销账 2026-07-05）：conftest 在 import backend 前把数据目录指到临时目录，测试 DB 完全隔离 | — | — |
+| ~~TEST-2~~ | ✅ 已修（核实销账 2026-07-05）：`tests/plugin_system/` 33 文件 408 用例覆盖 manifest/签名/registry/hook/端到端 | — | — |
 
 ### 🟡 轻（影响维护，不影响功能）
 
@@ -61,7 +61,7 @@
 |---|---|---|
 | ~~BUG-5~~ | ✅ 销账（2026-07）：错写类名的产品交接手册已于 2026-06-26 删除（随 DOC-4），正确口径（类名 `Model` / 表名 `models`）已进 AGENTS.md 第五节 ORM 提醒 | — |
 | ~~BUG-6~~ | ✅ 销账（2026-07）：同上，错误表数出处已删除；现行表清单以 `modify-model` skill 为准（47 张） | — |
-| INCONSIST-* | API 路径 5 处不一致 | 插件 prefix 选择需小心 |
+| ~~INCONSIST-*~~ | ✅ 全部处置完（2026-07-05）：INCONSIST-1 已过时销账（workstations 前缀早已显式）、2 早前误报撤销、3/4/5 归档不修（改名破坏已部署客户 API 兼容，备忘保留） | — |
 | ~~DOC-*~~ | ✅ 文档过时 5 处全部处理完（2026-07-05：DOC-1/2/3 注释已修，DOC-5/6 此前已校正） | — |
 | SIZE-* | 9 个文件 > 1000 行 | 修改成本高 |
 | ~~HIDDEN-*~~ | ✅ 8 处隐式约定 2026-07-05 全部文档化进 AGENTS.md 第八节（1/2/3/5 补充既有条目，4/6/7/8 新增第 14~17 条不变量） | — |
@@ -74,8 +74,8 @@
 | DEAD-2 | `frontend/src/api/task.js` 全前端无 import | ✅ 完全可删 |
 | DEAD-3 | `frontend/src/api/camera.js` 全前端无 import | ✅ 完全可删 |
 | DEAD-4 | `api/report.js: getRecords / getTrend / exportPdfReport` 局部死代码 | ✅ 可删 |
-| DEAD-5 | `/api/v1/cameras/*` 8 个后端端点 | ⚠️ 删要确认无第三方调用 |
-| DEAD-6 | `/api/v1/tasks/*` 7 个端点（？） | ⚠️ 需检查 record API 是否仍用 |
+| DEAD-5 | `/api/v1/cameras/*` 8 个后端端点 | 🔎 2026-07-05 审计完成：全链无消费者（camera.js 已删；Source 页走的是 `/source/cameras` 另一套；仅权限矩阵 UAT 脚本引用）。**删除对外 API 需用户拍板** |
+| DEAD-6 | `/api/v1/tasks/*` 7 个端点 | 🔎 2026-07-05 审计完成：`tasks.py` + `reports.py` + `Task` 表构成整条死子系统——Task 表只有 tasks.py 自己写、无人调；reports 无任何前端消费者（report.js 已删）。**删除对外 API 需用户拍板** |
 | DEAD-7 | `views/Report` 内的 `views/Report/index.vue` 子调用 | ✅ 随 DEAD-1 一起 |
 | DEAD-8 | `source_recording_mixin.py` 546 行（历史拆分残留） | ⚠️ 确认 MRO 后删 |
 | DEAD-9 | CI `CORE_FILES` 中 3 个不存在的文件 | ✅ 删行 |
@@ -197,8 +197,8 @@ BUG-5 一并销账。
 
 | 项 | 位置 | 大小 | 状态 | 清理风险 |
 |---|---|---|---|---|
-| DEAD-5 | `backend/api/cameras.py` 8 个端点 | 152 行 | `api/camera.js` 死 → 全前端无调 | ⚠️ 第三方 / 测试可能用 |
-| DEAD-6 | `backend/api/tasks.py` 7 个端点 | 193 行 | 部分死 | ⚠️ `record` 可能仍用 |
+| DEAD-5 | `backend/api/cameras.py` 8 个端点 | 152 行 | 🔎 审计完成（2026-07-05）：前端/Electron/插件/后端内部零消费者，仅 `tests/uat/uat_20260525_perm_r3.py` 当权限探针用 | 删除对外 API 需用户拍板 |
+| DEAD-6 | `backend/api/tasks.py` 7 个端点 | 193 行 | 🔎 审计完成（2026-07-05）：`record` **无人用**——全仓无 `/tasks` 调用方；`Task` 表只被 tasks.py 写、被 reports.py 读，而 `/reports/*` 也无前端消费者（report.js 已删）→ tasks+reports+Task 表是整条死子系统 | 删除对外 API 需用户拍板 |
 | DEAD-8 | `backend/api/source_recording_mixin.py` | 546 行 | ✅ **2026-07 已删除**（全仓无 import，import 冒烟 + 37 项录像/ROI/路由回归绿） | — |
 | DEAD-10 | `backend/api/source_industrial_camera_mixin.py`（原 BUG-3 降级） | 438 行 | ✅ **2026-07 已删除**（同批核实删除，`start_hcnetsdk` 唯一实现归 `source_camera_start_mixin`） | — |
 
@@ -220,7 +220,7 @@ BUG-5 一并销账。
 | ID | 位置 | 现象 |
 |---|---|---|
 | OVERLAP-1 | ✅ 已关闭：`IndustrialCameraMixin` 孤儿文件 2026-07 已删（原 BUG-3/DEAD-10） | — |
-| OVERLAP-2 | `_inspecting` 字典 race | scan_pair 模式 v3.4.2 hotfix 修了一波，但仍可能 cornercase |
+| OVERLAP-2 | ✅ 收敛（2026-07-05） | 契约回归 5 例见 `tests/test_scan_pair_window_rotation.py`；竞态现场无复现报告，出现再深挖 |
 | ~~OVERLAP-3~~ | ✅ 已修（2026-07-05） | 统一到 `router_manifest.py`，见下方销账注 |
 
 **OVERLAP-3 详细**（✅ 2026-07-05 已修：33 组路由全部集中到 `backend/api/router_manifest.py:mount_all_routers()`，
@@ -256,13 +256,13 @@ app.include_router(channel_manager_router, prefix="/api/v1", tags=["workstations
 | REG-2 | Scanner 协议 (LON/WMax/Virtual) | 硬编码 | 2 天 | 客户用其他扫码枪时必须 |
 | REG-3 | External Device 协议 | 半硬编码 | 1 天 | 客户加新外设时需要 |
 | REG-4 | Export Renderer (5 格式) | 硬编码 if/elif | 0.5 天 | 客户加 ESC/POS 等格式时 |
-| REG-5 | `_trigger_event` listener | 无 listener | 0.5 天 | 业务流挂载点 #1，**强烈推荐做** |
-| REG-6 | MES Hook 入队前 filter | 无 | 0.5 天 | 测试期 / 调试期需要 |
+| ~~REG-5~~ | `_trigger_event` listener | ✅ **已由插件平台实现**（v3.13 M1.2c）：`event_fire` hook 在 `_trigger_event` 内、报警之前 fire，带 `suppress_alarm` returnable 字段（`source_event_trigger_mixin.py:344`） | — | 销账（2026-07-05 核实） |
+| REG-6 | MES Hook 入队前 filter | 无 | 0.5 天 | ⏸️ 暂缓（2026-07-05 评估）：插件平台 10 hook 上线 15+ 个版本无此需求，`scan_received` post hook + 按通道禁扫已覆盖常见场景；有真实调试需求再做 |
 | REG-7 | `alarm_router.trigger_alarm` 拦截 | 无 | 0.5 天 | 客户加钉钉 / 微信报警时 |
 | REG-8 | Scanner `_on_data_received` 后置 hook | 无 | 0.3 天 | 极少需要 |
 
-**优先级建议**：
-- **必做**（插件 1.0 同时做）：REG-5 / REG-6
+**优先级建议**（2026-07-05 复核更新）：
+- ~~必做：REG-5 / REG-6~~ → REG-5 ✅ 已由插件平台 `event_fire` hook 实现；REG-6 ⏸️ 暂缓（平台上线 15+ 版本无此需求，需求驱动再做）
 - **应做**（如果有客户具体需求）：REG-1 / REG-2 / REG-7
 - **可推迟**：REG-3 / REG-4 / REG-8
 
@@ -270,7 +270,7 @@ app.include_router(channel_manager_router, prefix="/api/v1", tags=["workstations
 
 ## 七、API 路径不一致 / 命名歧义（5 项）
 
-### INCONSIST-1：`/api/v1/workstations/*` 实际是顶层 `/api/v1/`
+### ~~INCONSIST-1~~ ✅ 已过时销账（2026-07-05 核实）：`channel_manager.py:17` 现为 `APIRouter(prefix="/workstations")`，实际路径就是 `/api/v1/workstations/*`（路由表快照核对），与 AGENTS.md 一致。以下为历史原文：
 
 ```python
 # main.py:
@@ -315,7 +315,7 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ---
 
-### INCONSIST-3：API 命名不规则
+### INCONSIST-3：API 命名不规则 ⏸️ 归档不修（2026-07-05 处置：改名 = 破坏已部署客户与老前端的 API 兼容，违反 modify-api skill 硬性原则"不可删/改名"。作为风格备忘保留，新路由遵守短横风格即可）
 
 | 路径 | 风格 |
 |---|---|
@@ -329,7 +329,7 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ---
 
-### INCONSIST-4：MJPEG / snapshot 不在 `/api/v1` 下
+### INCONSIST-4：MJPEG / snapshot 不在 `/api/v1` 下 ⏸️ 归档不修（2026-07-05 处置：`/video_feed` `/snapshot` 在 Electron 与前端多处写死（modify-api skill §五），迁移收益为零、破坏面大。作为事实备忘保留）
 
 ```
 /video_feed?channel=N    ← 直接挂在 root, 历史原因
@@ -343,7 +343,7 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ---
 
-### INCONSIST-5：前端 `api/detection.js` 命名与后端 `/source/*` 路径不对应
+### INCONSIST-5：前端 `api/detection.js` 命名与后端 `/source/*` 路径不对应 ⏸️ 归档不修（2026-07-05 处置：纯文件名历史遗留，重命名要动全部 import 无行为收益；api-sync skill §1 真相表已标注"⚠ 没有 source.js"防误导）
 
 - 前端 `api/detection.js` 调的是 `/api/v1/source/detection/*`
 - 命名"detection" 但路径是 "source/detection"
@@ -423,20 +423,18 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ## 十一、测试覆盖盲区（5 项）
 
-### TEST-1 🟠 测试 fixture 未独立 DB
+### ~~TEST-1~~ ✅ 已修（2026-07-05 核实销账）
 
-**现象**：v3.5.0 加了 BDD 测试框架，但 fixture 直接用 `sql_app.db` 跑 → 测试可能污染开发库。
+原现象：BDD fixture 直接用 `sql_app.db` → 可能污染开发库。
+现状：`tests/conftest.py` 在 import 任何 backend 模块之前把 `TIANJUN_DATA_DIR`
+指到临时目录（文件头即为此约定），测试 DB 与开发库完全隔离。AGENTS.md 不变量 #5 同源。
 
-**修复**：fixture 用独立 DB（`tmpdir/test.db`），每个 fixture 用 unique uuid。
+### ~~TEST-2~~ ✅ 已修（2026-07-05 核实销账）
 
-### TEST-2 🟠 没有插件系统的回归测试
-
-**现象**：当前测试覆盖率不明（应跑 coverage），但**插件系统的边界测试 0 行**——因为还没做。
-
-**修复**：插件 1.0 上线前必须有：
-- 单元：插件 manifest 解析 / 签名验证 / registry 注册
-- 集成：插件加载/卸载/启停
-- 端到端：1 个示例插件覆盖档位 1/2/3
+原现象：插件系统边界测试 0 行（当时还没做插件平台）。
+现状：`tests/plugin_system/` 33 个测试文件 / 408 条用例全绿，覆盖 manifest 解析、
+签名验签（HMAC/公钥指纹/往返）、registry 注册、hook 派发（含 returnable 白名单契约）、
+PluginHost API、端到端示例插件（福建金龙/传感器清洁）。
 
 ### TEST-3 🟠 关机 8 步流程没自动化测试
 
@@ -584,9 +582,9 @@ AGENTS.md 常驻上下文，模块细节不进主文件）。以下保留原始�
 - [x] ~~5 个文档过时点修正~~ — 2026-07-05 DOC-1/2/3 注释已修，DOC-5/6 此前已校正
 - [x] ~~OVERLAP-3 路由统一~~ — 2026-07-05 已修（`router_manifest.py` 唯一登记处）
 - [x] ~~HIDDEN-* 8 项隐式约定文档化~~ — 2026-07-05 已全部写进 AGENTS.md 第八节（详见第十三节销账注）
-- [ ] 插件系统设计阶段就写 TEST-2 测试套（与代码同步）
+- [x] ~~插件系统设计阶段就写 TEST-2 测试套~~ — 已实现：`tests/plugin_system/` 408 用例（2026-07-05 核实销账）
 
 ---
 
-**本文最后更新**：2026-07-05（BUG-5/6 随产品交接手册删除销账，真 bug 类全部清零；此前 2026-07 销账刷新见文首注）
+**本文最后更新**：2026-07-05（债务集中清理批次收尾：DOC/HIDDEN/OVERLAP-2/OVERLAP-3/REG-5/TEST-1/TEST-2/INCONSIST 全部销账或归档；REG-6 与 REG-1~8 余项需求驱动暂缓；MIG-* 随 PG 迁移专项；DEAD-5/6 审计完成待用户拍板删除；TEST-3/4/5 为余下开放项）
 **事实校验**：基于 v3.6.0 源码全量扫描 + AGENTS.md 第九节 + 01~04 文档发现 + brief 给的工时基线；2026-07 局部复核到 v3.31.0
