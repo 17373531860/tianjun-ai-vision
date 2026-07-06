@@ -276,6 +276,18 @@ def _apply_pipeline_config(h, config, pipeline_config):
     h.idle_timeout_seconds = pipeline_config.get('idle_timeout_seconds', 0)
     h.cycle_max_duration = pipeline_config.get('cycle_max_duration', 0)
 
+    # v3.32 严格顺序违序即时事件: 严格步骤在错误时机出现时, 除了照旧拦截不计入,
+    # 还当场触发所配事件(报警/语音/弹窗走事件体系), 不必等周期结算才报"顺序错误"。
+    # None/0 = 关(零差异)。触发点在 source_settlement_mixin 的两处严格守门。
+    try:
+        _sve = pipeline_config.get('strict_order_violation_event_id')
+        h.strict_order_violation_event_id = int(_sve) if _sve else None
+    except (TypeError, ValueError):
+        h.strict_order_violation_event_id = None
+    h._strict_violation_throttle = {}
+    if h.strict_order_violation_event_id:
+        print(f"严格顺序违序即时事件: event_id={h.strict_order_violation_event_id}")
+
     # v3.23 NG 补做策略 (与 logic_mode 无关的全局可选项): 缺步 / 少装 NG 经人工确认后,
     # 允许"补做缺的那步 / 补齐少装的数量"修正成 OK 而不重置整个周期. 默认全关 = 零差异.
     _rem = pipeline_config.get('ng_remediation', {}) or {}
@@ -341,6 +353,68 @@ def _apply_pipeline_config(h, config, pipeline_config):
                     tc['disappear_delay'] = 0
         except Exception as e:
             print(f"[连续重复步骤] 消失等待时间兜底清理失败: {e}")
+
+
+def _apply_label_splits(h, pipeline_config):
+    """同标签区域拆分 + 工件就位提示 (v3.32, RFC 同标签区域拆分).
+
+    注意调用顺序: 必须在 _apply_steps_config 之后 (引擎要拿虚拟步骤的
+    display_name 映射)。无配置时引擎/状态为 None, 热路径零开销。
+    """
+    from backend.api.source_label_split import (
+        parse_label_splits, parse_placement_guide,
+        LabelSplitEngine, PlacementGuideState,
+    )
+    try:
+        rules = parse_label_splits(pipeline_config)
+        h._label_split_engine = (
+            LabelSplitEngine(rules, display_names=dict(h.step_display_names))
+            if rules else None
+        )
+        if rules:
+            summary = {r.source_label: [n for n, _ in r.regions] for r in rules}
+            print(f"[LabelSplit] 拆分规则已应用: {summary}")
+    except Exception as e:
+        h._label_split_engine = None
+        print(f"[LabelSplit] 解析拆分规则失败: {e}")
+    try:
+        guide_cfg = parse_placement_guide(pipeline_config)
+        h._placement_guide_state = PlacementGuideState(guide_cfg) if guide_cfg else None
+        if guide_cfg:
+            print(f"[PlacementGuide] 就位提示已启用: 锚点={guide_cfg['anchor_label']} 档位={guide_cfg['mode']}")
+    except Exception as e:
+        h._placement_guide_state = None
+        print(f"[PlacementGuide] 解析就位提示失败: {e}")
+
+
+def _apply_region_events(h, config, pipeline_config):
+    """区域事件模式 (logic_mode='region_events'): 重建判定引擎。
+
+    非该模式 / 无有效规则 / 配置非法时引擎置 None (热路径零开销);
+    引擎整体重建 (引用替换), 与 label_split 同款线程安全模式。
+    """
+    from backend.api.source_region_events import parse_region_events, RegionEventEngine
+    if config.get('logic_mode') != 'region_events':
+        h._region_event_engine = None
+        return
+    try:
+        cfg = parse_region_events(pipeline_config)
+        h._region_event_engine = RegionEventEngine(cfg) if cfg else None
+        if h._region_event_engine is not None:
+            # 引擎是本模式唯一判定门: 清掉步骤级 conf/ROI 二次过滤, 防止
+            # 模型标签自动生成的步骤(默认阈值 50%)在检测出口误杀低阈值小目标
+            # (如 conf=0.25 的测硬度笔)。每类置信度由 region_events.class_conf 管。
+            h.step_conf_thresholds = {}
+            h.step_roi_polygons = {}
+        if cfg:
+            print(f"[RegionEvents] 引擎已应用: 规则={[r.name for r in cfg.rules]}, "
+                  f"每类conf={cfg.class_conf}, 中断容忍={cfg.gap_tolerance}帧, "
+                  f"顺序校验={'开' if cfg.seq_enabled else '关'}")
+        else:
+            print("[RegionEvents] logic_mode=region_events 但无有效规则配置, 引擎未启用")
+    except Exception as e:
+        h._region_event_engine = None
+        print(f"[RegionEvents] 解析配置失败, 引擎未启用: {e}")
 
 
 def _apply_counters(h, config):
@@ -485,6 +559,8 @@ def apply_project_config(h, config: dict):
     pipeline_config = config.get('pipeline_config', {})
     _apply_pipeline_config(h, config, pipeline_config)
     _apply_models_config(h, pipeline_config)
+    _apply_label_splits(h, pipeline_config)
+    _apply_region_events(h, config, pipeline_config)
 
     _apply_counters(h, config)
     _reset_cycle_state(h)

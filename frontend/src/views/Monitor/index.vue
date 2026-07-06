@@ -2087,6 +2087,8 @@ const processChannelResult = (ch, d) => {
   chData.detections = d.detections || [];
   chData._pollProjectConfig = d.project_config || null;
   chData.perItemState = d.per_item_state || null;   // v3.28: 多工位画框贴螺丝编号用
+  chData.placementGuide = d.placement_guide || null;  // v3.32: 就位引导框运行态(已就位/未就位)
+  chData.labelSplitRounds = d.label_split_rounds || null;  // v3.32: 多轮次拆分当前轮次
   chData.currentCycleSteps = d.current_cycle_steps || [];
   chData.backupCoveredLabels = d.backup_covered_labels || [];
   chData.stepCounts = d.step_counts || {};
@@ -2198,8 +2200,9 @@ const processChannelResult = (ch, d) => {
     const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
     const stMap = {};
     stepsConf.forEach(s => { stMap[s.label] = s; });
+    // v3.31.x 语义收窄: hide_in_view 只隐藏画面检测框, SOP/步骤详情照常显示 (过滤条件不再含 hide_in_view)
     const td = stepsConf
-      .filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view && _trkAllow(s.label))
+      .filter(s => s.enabled !== false && !s.is_backup && _trkAllow(s.label))
       .map((s) => {
         const inCycle = chData.currentCycleSteps.includes(s.label);
         const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
@@ -2228,7 +2231,7 @@ const processChannelResult = (ch, d) => {
       (chData.steps || []).map(s => [s.label, s.screenshot])
     );
     const sopSteps = stepsConf
-      .filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view && _trkAllow(s.label))
+      .filter(s => s.enabled !== false && !s.is_backup && _trkAllow(s.label))
       .map(s => {
         const inCycle = chData.currentCycleSteps.includes(s.label);
         const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
@@ -2247,7 +2250,7 @@ const processChannelResult = (ch, d) => {
     chData.steps = sopSteps;
   }
   // v2.7.4: 收集"项目配置中标记隐藏标注框"的 label 集合，drawMultiDetections 据此跳过画框
-  // 仅影响 Monitor 画面 + SOP 卡片 + 步骤详情，不影响检测/数据/报警/MES
+  // v3.31.x 语义收窄: 仅影响实时画面的检测框, SOP 卡片/步骤详情照常显示; 检测/数据/报警/MES 一如既往不受影响
   {
     const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
     chData._hiddenLabels = new Set(
@@ -2290,10 +2293,14 @@ const processChannelResult = (ch, d) => {
   const pollCfg = d.project_config || null;
   const dets = d.detections || [];
   const hidden = chData._hiddenLabels;
+  // v3.32: 配了拆分区域/就位引导框时, 空检测帧也要走 draw 保住叠加层 (否则区域一闪一闪)
+  const _pcOverlay = pollCfg?.pipeline_config || {};
+  const hasSplitOverlay = (Array.isArray(_pcOverlay.label_splits) && _pcOverlay.label_splits.length > 0)
+    || !!(_pcOverlay.placement_guide && _pcOverlay.placement_guide.enabled);
 
   const canvas = multiCanvasRefs[ch];
   if (canvas) {
-    if (dets.length) {
+    if (dets.length || hasSplitOverlay) {
       drawMultiDetections(ch, canvas, dets, hidden, pollCfg);
     } else {
       const ctx = canvas.getContext('2d');
@@ -2309,7 +2316,7 @@ const processChannelResult = (ch, d) => {
       const pluginCanvas = overlays[ch];
       if (!pluginCanvas?.parentElement) return;
       if (pluginCanvas.parentElement.offsetWidth < 2) return;
-      if (dets.length) {
+      if (dets.length || hasSplitOverlay) {
         drawMultiDetections(ch, pluginCanvas, dets, hidden, pollCfg);
       } else {
         const ctx = pluginCanvas.getContext('2d');
@@ -2419,6 +2426,151 @@ const shouldDrawDetWithStepRoi = (det, stepsConfig, pipelineConfig) => {
   return pointInPolygonNorm(cx, cy, step.roi);
 };
 
+// ==================== v3.32 同标签区域拆分 / 工件就位提示 画布叠加 ====================
+// 单工位 drawDetections 与多工位 drawMultiDetections 共用。坐标映射由调用方传入
+// (dx,dy = letterbox 偏移, dw,dh = 实际渲染尺寸)。
+// - 拆分区域: fixed 直接画; anchor 用「当前帧锚点框 vs 标定框」平移缩放后画,
+//   本帧没检出锚点就不画 (后端引擎有 hold 缓存, 前端叠加层只做可视化, 缺帧可接受)
+// - 就位引导框: 已就位=绿实线, 未就位/锚点不可见=黄虚线 + 顶部提示文字
+const SPLIT_REGION_FALLBACK_COLORS = ['#f97316', '#22d3ee', '#a78bfa', '#84cc16', '#ec4899', '#facc15'];
+
+const drawLabelSplitOverlay = (ctx, pipeCfg, detections, guideState, dx, dy, dw, dh, roundsState = null) => {
+  const pc = pipeCfg || {};
+  const rules = Array.isArray(pc.label_splits) ? pc.label_splits : [];
+  const mapX = (nx) => dx + nx * dw;
+  const mapY = (ny) => dy + ny * dh;
+
+  const drawPolygon = (poly, color, name, dashed = false, alpha = 0.10) => {
+    if (!Array.isArray(poly) || poly.length < 3) return;
+    ctx.save();
+    ctx.beginPath();
+    poly.forEach((p, i) => {
+      const x = mapX(Number(p[0]) || 0), y = mapY(Number(p[1]) || 0);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    if (alpha > 0) {
+      ctx.fillStyle = color;
+      ctx.globalAlpha = alpha;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    if (dashed) ctx.setLineDash([8, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (name) {
+      const cx = poly.reduce((s, p) => s + (Number(p[0]) || 0), 0) / poly.length;
+      const cy = poly.reduce((s, p) => s + (Number(p[1]) || 0), 0) / poly.length;
+      const fs = 13 * (window.__uiScale || 1);
+      ctx.font = `bold ${fs}px Arial`;
+      const tw = ctx.measureText(name).width;
+      const tx = mapX(cx) - tw / 2, ty = mapY(cy);
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(tx - 3, ty - fs, tw + 6, fs + 6);
+      ctx.fillStyle = color;
+      ctx.fillText(name, tx, ty);
+    }
+    ctx.restore();
+  };
+
+  for (const rule of rules) {
+    if (!rule || rule.enabled === false || !Array.isArray(rule.regions)) continue;
+    let transform = null;
+    if (rule.mode === 'anchor') {
+      const ref = rule.anchor_ref;
+      if (!ref || !(ref.w > 0) || !(ref.h > 0)) continue;
+      let cur = null;
+      for (const det of (detections || [])) {
+        if (det.label === rule.anchor_label && !det.hidden) {
+          if (!cur || (det.confidence || 0) > (cur.confidence || 0)) cur = det;
+        }
+      }
+      if (!cur) continue;  // 锚点本帧不可见 → 区域位置未知, 不画
+      const sx = (Number(cur.w) || 0) / ref.w;
+      const sy = (Number(cur.h) || 0) / ref.h;
+      transform = ([px, py]) => [
+        (Number(cur.x) || 0) + (px - ref.x) * sx,
+        (Number(cur.y) || 0) + (py - ref.y) * sy,
+      ];
+    }
+    // v3.32 多轮次: 区域名前挂当前轮前缀 (运行态来自 /detection/results.label_split_rounds;
+    // 检测未跑/轮次未开始时按第 1 轮前缀兜底, 与后端引擎同语义)
+    let roundPrefix = '';
+    let roundBadge = '';
+    let regionsToDraw = rule.regions;
+    if (rule.rounds && rule.rounds.enabled && Array.isArray(rule.rounds.prefixes) && rule.rounds.prefixes.length) {
+      const rt = roundsState && roundsState[rule.source_label];
+      roundPrefix = (rt && rt.prefix) || rule.rounds.prefixes[0] || '';
+      const cur = rt && rt.round > 0 ? rt.round : 0;
+      roundBadge = cur > 0
+        ? `第${cur}/${rule.rounds.count}轮 · ${roundPrefix}`
+        : `等待${rule.rounds.trigger_label || '切换标签'}开第1轮`;
+      // 每轮独立区域: 当前轮配了 override 就画 override 的那批 (未开始按第1轮, 与后端引擎同语义)
+      const ov = rule.rounds.region_overrides?.[String(cur > 0 ? cur : 1)];
+      if (Array.isArray(ov) && ov.length) regionsToDraw = ov;
+    }
+    let badgeAnchor = null;
+    regionsToDraw.forEach((region, i) => {
+      if (!region || !Array.isArray(region.polygon) || region.polygon.length < 3) return;
+      const poly = transform ? region.polygon.map(transform) : region.polygon;
+      drawPolygon(poly, region.color || SPLIT_REGION_FALLBACK_COLORS[i % SPLIT_REGION_FALLBACK_COLORS.length],
+        `${roundPrefix}${region.name || ''}`);
+      if (!badgeAnchor) {
+        for (const p of poly) {
+          const px = Number(p[0]) || 0, py = Number(p[1]) || 0;
+          if (!badgeAnchor || py < badgeAnchor[1]) badgeAnchor = [px, py];
+        }
+      }
+    });
+    if (roundBadge && badgeAnchor) {
+      const fs = 13 * (window.__uiScale || 1);
+      ctx.save();
+      ctx.font = `bold ${fs}px Arial`;
+      const tw = ctx.measureText(roundBadge).width;
+      const tx = mapX(badgeAnchor[0]);
+      const ty = Math.max(fs + 4, mapY(badgeAnchor[1]) - 8);
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(tx - 4, ty - fs - 3, tw + 8, fs + 8);
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillText(roundBadge, tx, ty);
+      ctx.restore();
+    }
+  }
+
+  // 就位引导框 (独立功能): 后端 /detection/results 的 placement_guide 运行态驱动颜色
+  const pg = pc.placement_guide;
+  if (pg && pg.enabled && Array.isArray(pg.polygon) && pg.polygon.length >= 3) {
+    const inPos = !!(guideState && guideState.in_position);
+    // 就位后显示策略 (未就位时永远完整显示): always=常驻 | fade_on_ready=淡化细框 | hide_on_ready=隐藏
+    const display = pg.display || 'always';
+    if (inPos && display === 'hide_on_ready') return;
+    const faded = inPos && display === 'fade_on_ready';
+    const color = inPos ? (faded ? 'rgba(34,197,94,0.35)' : '#22c55e') : '#facc15';
+    drawPolygon(pg.polygon, color, '', !inPos, faded ? 0 : (inPos ? 0.06 : 0.10));
+    if (faded) return;  // 淡化档: 只留半透明细框, 不挂文字
+    // 提示文字挂在引导框最高点上方
+    let topX = 0.5, topY = 1;
+    for (const p of pg.polygon) {
+      if ((Number(p[1]) || 0) < topY) { topY = Number(p[1]) || 0; topX = Number(p[0]) || 0; }
+    }
+    const msg = inPos ? '工件已就位'
+      : (guideState && guideState.anchor_visible ? '请将工件放入引导框' : `等待工件（${pg.anchor_label || '锚点'}）就位`);
+    const fs = 14 * (window.__uiScale || 1);
+    ctx.save();
+    ctx.font = `bold ${fs}px Arial`;
+    const tw = ctx.measureText(msg).width;
+    const tx = mapX(topX) - tw / 2;
+    const ty = Math.max(fs + 6, mapY(topY) - 10);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(tx - 5, ty - fs - 3, tw + 10, fs + 8);
+    ctx.fillStyle = color;
+    ctx.fillText(msg, tx, ty);
+    ctx.restore();
+  }
+};
+
 const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollProjectConfig = null) => {
   if (!canvas) return;
   const parent = canvas.parentElement;
@@ -2439,6 +2591,10 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollPr
 
   const stepsConfMulti = pollProjectConfig?.steps_config || currentProject.value?.steps_config || [];
   const pipeMulti = pollProjectConfig?.pipeline_config || currentProject.value?.pipeline_config || {};
+
+  // v3.32: 拆分区域 / 就位引导框 叠加层 (画在检测框底下)
+  drawLabelSplitOverlay(ctx, pipeMulti, detections, multiChannelData.value[ch]?.placementGuide, dx, dy, dw, dh,
+    multiChannelData.value[ch]?.labelSplitRounds);
 
   // v3.8.x: 多工位画框也读用户配置 (老逻辑硬编码 #10b981/#ef4444、线宽2、字号11,
   // 客户在设置页改的检测框颜色/线宽/字号在多工位下全部失效).
@@ -3671,6 +3827,21 @@ const drawDetections = (detections) => {
     _ovlHadBoxes = _has;
   }
 
+  // v3.32: 拆分区域/就位引导框常驻叠加层 — 在检测框之前画(垫底), 且空结果帧也要画
+  {
+    const img0 = videoElement.value;
+    let ox = 0, oy = 0, rw = canvas.width, rh = canvas.height;
+    if (img0 && img0.naturalWidth && img0.naturalHeight) {
+      const ia = img0.naturalWidth / img0.naturalHeight;
+      const ca = canvas.width / canvas.height;
+      if (ia > ca) { rw = canvas.width; rh = canvas.width / ia; oy = (canvas.height - rh) / 2; }
+      else { rh = canvas.height; rw = canvas.height * ia; ox = (canvas.width - rw) / 2; }
+    }
+    drawLabelSplitOverlay(ctx, currentProject.value?.pipeline_config,
+      detections, multiChannelData.value[0]?.placementGuide, ox, oy, rw, rh,
+      multiChannelData.value[0]?.labelSplitRounds);
+  }
+
   if (!detections || detections.length === 0) return;
   
   // 获取启用的步骤标签列表
@@ -3972,6 +4143,12 @@ watch(() => currentProject.value, (newProject, oldProject) => {
         stepsToShow = stepsConfig.filter(s => s.enabled);
       }
     }
+  } else if (logicMode === 'region_events') {
+    // v3.32+ 区域事件模式: 步骤统计按"事件规则名"展示 (后端 step_counts 以规则名为键),
+    // 不展示模型原始类别 (工件/手/工具本身不是流程步骤)
+    stepsToShow = (pipelineConfig.region_events?.rules || [])
+      .filter(r => r && r.name)
+      .map((r, i) => ({ id: `re_${r.id || i}`, label: r.name, displayLabel: r.name, enabled: true }));
   } else {
     stepsToShow = stepsConfig.filter(s => s.enabled);
   }
@@ -4002,8 +4179,8 @@ watch(() => currentProject.value, (newProject, oldProject) => {
     }
   }
 
-  // v2.7.4: 过滤掉 backup_for 和 hide_in_view 步骤（仅视觉隐藏，不影响检测/数据）
-  stepsToShow = stepsToShow.filter(s => !s.backup_for && !s.hide_in_view);
+  // v2.7.4: 过滤掉 backup_for 步骤; v3.31.x 语义收窄: hide_in_view 只隐藏画面检测框, 不再从 SOP/步骤统计剔除
+  stepsToShow = stepsToShow.filter(s => !s.backup_for);
 
   // 更新步骤条 - 同时保存 label 用于后端匹配
   // v3.10.x: SOP 卡片"图永不空"策略 — 重建步骤数组时按 label 从旧数组继承缩略图.
@@ -4669,6 +4846,10 @@ const startPolling = () => {
       multiChannelData.value[0].pendingAck = data.pending_ack || { active: false };
       multiChannelData.value[0].pendingRemediation = data.pending_remediation || null;
       multiChannelData.value[0].recentEvents = data.recent_events || [];
+      // v3.32: 就位引导框运行态 (drawDetections 叠加层按它决定绿/黄)
+      multiChannelData.value[0].placementGuide = data.placement_guide || null;
+      // v3.32: 多轮次拆分当前轮次 (叠加层区域名前缀 + 轮次角标)
+      multiChannelData.value[0].labelSplitRounds = data.label_split_rounds || null;
 
       // ── monitor.poll 诊断: 人工确认阻塞边沿 + 每 3s 轮询摘要 ──
       const _ackActive = !!(data.pending_ack && data.pending_ack.active);

@@ -62,6 +62,8 @@ class InferenceLoopMixin:
             if detections:
                 detections = self._map_detections_original_to_display(detections)
             # 剧本注入固定走非跟踪 / 非分割路径（与 _update_step_stats 对齐）
+            # v3.32: synthetic 也过标签区域拆分层 → 全链路可用剧本回归
+            detections = self._apply_label_splits(detections)
             return (detections, False, False, t_start)
 
         # 主模型的 task_type / logic_mode (对副模型不适用)
@@ -90,7 +92,39 @@ class InferenceLoopMixin:
         if detections:
             detections = self._map_detections_original_to_display(detections)
 
+        # v3.32: 同标签区域拆分（虚拟步骤）——在显示坐标系上按区域改写标签,
+        # 下游状态机/画框/MES 全部见到的是虚拟步骤标签
+        detections = self._apply_label_splits(detections)
+
         return (detections, is_tracking, is_seg, t_start)
+
+    def _apply_label_splits(self, detections):
+        """v3.32 检测出口标签改写层: 同标签区域拆分 + 工件就位状态刷新.
+
+        引擎/状态由 apply_project_config 按 pipeline_config.label_splits /
+        placement_guide 构建; 未配置时均为 None → 一次 getattr 早退零开销。
+        详见 backend/api/source_label_split.py 与对应 RFC。
+        """
+        guide = getattr(self, '_placement_guide_state', None)
+        engine = getattr(self, '_label_split_engine', None)
+        if guide is None and engine is None:
+            return detections
+        now = time.time()
+        if guide is not None:
+            try:
+                guide.update(detections, now)
+            except Exception as e:
+                debug_log(f"!!! placement_guide 更新失败: {e}", "INFERENCE")
+        if engine is None:
+            return detections
+        try:
+            # cycle_len: 周期已结算且切换标签离场时轮次归零(下一工件从第1轮起)
+            cycle_len = len(getattr(self, 'current_cycle_steps', None) or [])
+            return engine.apply(detections, now, cycle_len=cycle_len)
+        except Exception as e:
+            # 拆分层故障不允许拖垮检测主链路: 打日志后原样放行
+            debug_log(f"!!! label_split 改写失败: {e}", "INFERENCE")
+            return detections
 
     def _run_models_for_frame(self, frame, loop_start: float,
                                main_is_tracking: bool, main_is_seg: bool) -> list:
@@ -296,6 +330,9 @@ class InferenceLoopMixin:
                 t5 = time.time()
                 if is_tracking:
                     self._update_tracking_stats(detections, original_frame)
+                elif getattr(self, '_region_event_engine', None) is not None:
+                    # 区域事件模式: 时序+空间规则引擎替代步骤状态机
+                    self._update_region_events(detections)
                 else:
                     self._update_step_stats(detections, original_frame)
                 update_time = (time.time() - t5) * 1000

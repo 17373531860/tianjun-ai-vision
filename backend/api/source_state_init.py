@@ -155,6 +155,16 @@ def _init_step_state(h):
     h.step_accept_once = {}
     # steps_config[].roi (归一化多边形): 该标签仅在 ROI 内才算检测到 (全模式 + tracking)
     h.step_roi_polygons = {}
+    # v3.32 同标签区域拆分 + 工件就位提示 (pipeline_config.label_splits / placement_guide)
+    # None = 未配置 → 推理热路径一次 getattr 早退, 零开销
+    h._label_split_engine = None
+    h._placement_guide_state = None
+    # 区域事件模式判定引擎 (pipeline_config.region_events, logic_mode='region_events')
+    # None = 非该模式 → 推理热路径一次 getattr 早退, 零开销
+    h._region_event_engine = None
+    # v3.32 严格顺序违序即时事件 (pipeline_config.strict_order_violation_event_id)
+    h.strict_order_violation_event_id = None
+    h._strict_violation_throttle = {}
 
 
 def _init_event_and_cycle_state(h):

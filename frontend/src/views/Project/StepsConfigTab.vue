@@ -47,7 +47,7 @@
                     </el-tooltip>
                   </th>
                   <th class="p-2 w-20">
-                    <el-tooltip content="开启后，此物品在检测画面、SOP流程卡片、步骤详情中均不显示（仅视觉隐藏）；YOLO 检测、OK/NG 判定、报警、数据记录、MES 上报等均不受影响。常用于隐藏箱子/泡沫槽等辅助类别" placement="top">
+                    <el-tooltip content="开启后，仅在检测画面上不绘制此标签的检测框；SOP流程卡片、步骤详情照常显示与统计，YOLO 检测、OK/NG 判定、报警、数据记录、MES 上报等均不受影响。常用于隐藏箱子/泡沫槽等辅助类别的框" placement="top">
                       <span class="cursor-help border-b border-dashed border-gray-500">隐藏标注框</span>
                     </el-tooltip>
                   </th>
@@ -94,6 +94,9 @@
                       <el-tag v-if="step.from_model && step.from_model !== 'main'" size="small" type="warning" effect="plain" class="!h-5 !leading-5">
                         {{ step.from_model }}
                       </el-tag>
+                      <el-tooltip v-if="step.split_origin" content="由「同标签区域拆分」规则自动生成的虚拟步骤：检测框中心落进对应区域时，原始标签会被改写成这个步骤名。删除/改名请在下方拆分规则卡片操作" placement="top">
+                        <el-tag size="small" type="primary" effect="plain" class="!h-5 !leading-5">拆分</el-tag>
+                      </el-tooltip>
                     </div>
                   </td>
                   <td class="p-2"><el-switch v-model="step.enabled" size="small" @change="(val) => onStepEnabledChange(step, val)" /></td>
@@ -161,6 +164,128 @@
             </table>
             <div v-if="!project.steps_config || project.steps_config.length === 0" class="text-center text-gray-500 py-8">
               暂无步骤配置，请先在"基础设置"中选择模型
+            </div>
+          </div>
+        </div>
+
+        <!-- ============ 同标签区域拆分 (v3.32): 一个原始标签 × 多区域 = 多个虚拟步骤 ============ -->
+        <div v-if="project.logic_mode !== 'weighing'" class="border border-slate-700 rounded">
+          <div class="px-3 py-2 bg-slate-800 border-b border-slate-700 flex items-center gap-2 flex-wrap">
+            <span class="font-bold text-white text-sm">同标签区域拆分</span>
+            <el-tooltip placement="top">
+              <template #content>
+                <div style="max-width: 360px; line-height: 1.5">
+                  模型只能输出一个动作标签（如「打螺丝」）、但同一动作在<b>不同位置</b>发生代表<b>不同步骤</b>时用这个：
+                  按检测框中心命中的区域，把原始标签改写成区域名对应的<b>虚拟步骤</b>（螺丝1~4），
+                  下游顺序判定 / 事件 / 计数 / MES 全部按普通步骤工作。
+                  区域支持「固定画面」和「锚点跟随」两种定位方式。
+                </div>
+              </template>
+              <span class="cursor-help border-b border-dashed border-gray-500 text-xs text-gray-400">这是什么</span>
+            </el-tooltip>
+            <div class="flex-1"></div>
+            <el-button size="small" type="primary" plain @click="$emit('open-label-split-editor', null)">新建拆分规则</el-button>
+          </div>
+          <div class="p-2">
+            <table v-if="labelSplitRules.length" class="min-w-full text-left text-xs text-gray-300 border-collapse">
+              <thead class="text-gray-400">
+                <tr class="border-b border-slate-700">
+                  <th class="p-2">原始标签</th>
+                  <th class="p-2 w-24">定位方式</th>
+                  <th class="p-2">虚拟步骤（区域名）</th>
+                  <th class="p-2 w-32">未命中处理</th>
+                  <th class="p-2 w-16">启用</th>
+                  <th class="p-2 w-32">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="ruleItem in labelSplitRules" :key="ruleItem.id" class="border-b border-slate-700 hover:bg-slate-700/30">
+                  <td class="p-2 font-mono text-cyan-400">{{ ruleItem.source_label || '(未设)' }}</td>
+                  <td class="p-2">
+                    <div>{{ ruleItem.mode === 'anchor' ? `锚点跟随(${ruleItem.anchor_label || '?'})` : '固定画面' }}</div>
+                    <div v-if="ruleItem.rounds && ruleItem.rounds.enabled" class="text-[10px] text-amber-400">
+                      {{ ruleItem.rounds.count }}轮 · 切换={{ ruleItem.rounds.trigger_label || '?' }}
+                      <span v-if="roundOverrideDesc(ruleItem)" class="text-cyan-400">· {{ roundOverrideDesc(ruleItem) }}</span>
+                    </div>
+                  </td>
+                  <td class="p-2">
+                    <template v-if="ruleItem.rounds && ruleItem.rounds.enabled">
+                      <el-tag v-for="name in splitRuleStepNames(ruleItem)" :key="name" size="small" effect="plain"
+                        class="!h-5 !leading-5 mr-1 mb-0.5">
+                        {{ name }}
+                      </el-tag>
+                    </template>
+                    <template v-else>
+                      <el-tag v-for="region in (ruleItem.regions || [])" :key="region.name" size="small" effect="plain"
+                        class="!h-5 !leading-5 mr-1" :style="{ borderColor: region.color, color: region.color }">
+                        {{ region.name }}
+                      </el-tag>
+                    </template>
+                  </td>
+                  <td class="p-2 text-gray-400">
+                    {{ ruleItem.unmatched === 'keep' ? '保留原标签' : (ruleItem.unmatched === 'map' ? `改写→${ruleItem.unmatched_label || '?'}` : '丢弃') }}
+                  </td>
+                  <td class="p-2"><el-switch v-model="ruleItem.enabled" size="small" /></td>
+                  <td class="p-2">
+                    <el-button size="small" type="primary" plain @click="$emit('open-label-split-editor', ruleItem)">编辑</el-button>
+                    <el-button size="small" type="danger" plain @click="$emit('delete-label-split', ruleItem)">删除</el-button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-else class="text-center text-gray-500 text-xs py-4">
+              未配置 — 用于「同一动作标签按发生位置拆成多个步骤」的场景（多穴位锁付 / 对角打螺丝 / 左右半区分工位等）
+            </div>
+            <div v-if="labelSplitRules.length" class="text-[10px] text-gray-500 px-2 pt-1">
+              ※ 区域名会自动生成同名虚拟步骤（步骤表带「拆分」徽标），阈值/时长/顺序在步骤表和逻辑设置里配；保存配置时自动同步
+            </div>
+          </div>
+        </div>
+
+        <!-- ============ 工件就位提示 (v3.32, 与拆分正交的独立小功能) ============ -->
+        <div v-if="project.logic_mode !== 'weighing'" class="border border-slate-700 rounded">
+          <div class="px-3 py-2 bg-slate-800 border-b border-slate-700 flex items-center gap-2 flex-wrap">
+            <span class="font-bold text-white text-sm">工件就位提示</span>
+            <el-tooltip placement="top"
+              content="在监控画面上画一个引导框，要求工人把工件放进框里再作业：锚点目标（如前罩）中心在框内 = 绿框「已就位」，否则黄虚线提示。一期仅提示不拦截判定。常与「固定画面」的区域拆分配合使用。">
+              <span class="cursor-help border-b border-dashed border-gray-500 text-xs text-gray-400">这是什么</span>
+            </el-tooltip>
+            <div class="flex-1"></div>
+            <el-switch v-model="placementGuide.enabled" size="small" />
+          </div>
+          <div v-if="placementGuide.enabled" class="p-3 flex items-start gap-4 flex-wrap text-xs text-gray-300">
+            <div class="w-64">
+              <div class="text-gray-400 mb-1">用哪个标签判断工件位置（锚点）</div>
+              <el-select v-model="placementGuide.anchor_label" size="small" filterable allow-create default-first-option
+                :placeholder="(project.model_labels || []).length ? '从模型类别里选' : '先选主模型'" class="!w-full">
+                <el-option v-for="lbl in (project.model_labels || [])" :key="lbl" :label="lbl" :value="lbl" />
+              </el-select>
+            </div>
+            <div class="flex flex-col gap-1">
+              <div class="text-gray-400">引导框区域</div>
+              <div class="flex items-center gap-2">
+                <el-button size="small" type="primary" plain @click="$emit('open-placement-guide-editor')">
+                  {{ placementGuide.polygon && placementGuide.polygon.length >= 3 ? '重绘引导框' : '绘制引导框' }}
+                </el-button>
+                <el-button v-if="placementGuide.polygon && placementGuide.polygon.length >= 3"
+                  size="small" type="danger" plain @click="placementGuide.polygon = null">清除</el-button>
+              </div>
+              <svg v-if="placementGuide.polygon && placementGuide.polygon.length >= 3" width="96" height="54" viewBox="0 0 1 1"
+                preserveAspectRatio="none" class="border border-slate-700 bg-slate-950 rounded">
+                <polygon :points="placementGuide.polygon.map(p => `${p[0]},${p[1]}`).join(' ')"
+                  fill="rgba(34,197,94,0.2)" stroke="#22c55e" stroke-width="0.01" stroke-linejoin="round" />
+              </svg>
+            </div>
+            <div class="w-48">
+              <div class="text-gray-400 mb-1">就位后引导框怎么显示</div>
+              <el-select v-model="placementGuide.display" size="small" class="!w-full">
+                <el-option label="常驻显示（就位变绿）" value="always" />
+                <el-option label="就位后淡化（只留细框）" value="fade_on_ready" />
+                <el-option label="就位后隐藏" value="hide_on_ready" />
+              </el-select>
+            </div>
+            <div class="text-[10px] text-gray-500 max-w-xs leading-relaxed">
+              未就位时始终黄色虚线提醒；就位后按左侧策略显示。仅提示，不改变 OK/NG 判定。
             </div>
           </div>
         </div>
@@ -909,6 +1034,7 @@ import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { _pi_itemLabelToArray, _pi_itemLabelFromArray } from './perItemLabel';
 import { ensureMixItemDefaults } from './mixItemDefaults';
 import { applyStepEnabledChange } from './stepEnabled';
+import { splitRuleStepNames } from './labelSplit';
 
 const props = defineProps({
   project: { type: Object, required: true },
@@ -917,7 +1043,31 @@ const props = defineProps({
   // (step) => boolean: 结算步骤判定（父级与 settlement_mode watch 共用同一实现）
   isSettlementStep: { type: Function, default: () => false },
 });
-defineEmits(['open-step-roi-editor']);
+defineEmits(['open-step-roi-editor', 'open-label-split-editor', 'delete-label-split', 'open-placement-guide-editor']);
+
+// ==================== 同标签区域拆分 + 工件就位提示 (v3.32) ====================
+// 数据都挂在 pipeline_config 下, 与父级 initProjectDefaults 注入的默认值同源;
+// 规则的新建/编辑走 LabelSplitDialog(父级编排), 本表只做列表展示 + 启停 + 删除入口。
+const labelSplitRules = computed(() => props.project?.pipeline_config?.label_splits || []);
+
+// 多轮次规则配了每轮独立区域时的表格提示（如 "第2轮独立区域"）
+const roundOverrideDesc = (ruleItem) => {
+  const ov = ruleItem?.rounds?.region_overrides;
+  if (!ov || typeof ov !== 'object') return '';
+  const rnds = Object.keys(ov).filter(k => Array.isArray(ov[k]) && ov[k].length).sort();
+  return rnds.length ? `第${rnds.join('/')}轮独立区域` : '';
+};
+const placementGuide = computed(() => {
+  const pc = props.project?.pipeline_config;
+  if (pc && !pc.placement_guide) {
+    pc.placement_guide = { enabled: false, anchor_label: '', polygon: null, mode: 'hint', display: 'always' };
+  }
+  // 老配置无 display 字段 → 补默认"常驻"(与 v3.32 首发行为一致)
+  if (pc?.placement_guide && !pc.placement_guide.display) {
+    pc.placement_guide.display = 'always';
+  }
+  return pc?.placement_guide || { enabled: false, anchor_label: '', polygon: null, mode: 'hint', display: 'always' };
+});
 
 // v3.13 M2.2b: 插件可注入"耗时统计"列（project.step-cell.durations 槽位）
 const pluginThemeStore = usePluginThemeStore();

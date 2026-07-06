@@ -101,7 +101,14 @@ class StepStatsMixin:
             confidence = det.get('confidence', 0)
             if not label:
                 continue
-            
+
+            # v3.32 守门: 项目已配步骤时, 非步骤标签不进入步骤统计/录像。
+            # 历史上 runner 层按 enabled_labels 过滤保证了这里只见步骤标签;
+            # 同标签区域拆分引入后, 锚点标签 / unmatched=keep 保留的原始标签
+            # 会流到这里, 必须在状态机入口还原这条不变量。
+            if self.step_conf_thresholds and label not in self.step_conf_thresholds:
+                continue
+
             if self.step_conf_thresholds:
                 threshold = self.step_conf_thresholds.get(label)
                 if threshold is not None and confidence < threshold:

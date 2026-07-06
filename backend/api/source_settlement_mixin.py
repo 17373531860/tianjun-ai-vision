@@ -1087,6 +1087,36 @@ class SettlementMixin:
 
         return pending_labels, ready_ordered
     
+    def _fire_strict_order_violation(self, label, reason: str):
+        """v3.32 严格顺序违序即时事件: 违序动作被守门拦下的同时当场触发所配事件。
+
+        - 配置来源 pipeline_config.strict_order_violation_event_id (None=关, 零差异)
+        - 守门每帧都会打到这里 (被拦步骤不记 last_seen → 每帧都算新出现),
+          必须节流: 同一 (标签, 周期进度) 5 秒内只触发一次, 周期推进后可再报
+        - 建议配警告/自定义类事件; 配 NG 类事件会走完整 NG 计数/推送, 慎用
+        """
+        event_id = getattr(self, 'strict_order_violation_event_id', None)
+        if not event_id:
+            return
+        throttle = getattr(self, '_strict_violation_throttle', None)
+        if throttle is None:
+            throttle = {}
+            self._strict_violation_throttle = throttle
+        key = (label, tuple(self.current_cycle_steps))
+        now_mono = time.monotonic()
+        if now_mono - throttle.get(key, 0.0) < 5.0:
+            return
+        throttle[key] = now_mono
+        # 防止 dict 无限膨胀 (周期状态组合有限但保险起见)
+        if len(throttle) > 256:
+            throttle.clear()
+            throttle[key] = now_mono
+        try:
+            self._trigger_event(event_id, reason)
+            print(f"[StrictOrder] 违序即时事件已触发: event_id={event_id} {reason}")
+        except Exception as e:
+            print(f"[StrictOrder] 违序即时事件触发失败: {e}")
+
     def _process_single_step(self, label, current_time, enabled_labels, is_seq_like,
                              should_update_screenshot, original_frame, det_info,
                              just_confirmed_labels=None):
@@ -1111,6 +1141,10 @@ class SettlementMixin:
                     backup = self.step_primary_to_backup.get(pred)
                     if backup and backup in self.backup_steps_seen_in_cycle:
                         continue
+                    # v3.32: 拦截照旧, 但支持当场报违序 (工人打错对角顺序立即报警,
+                    # 不必等周期结算)。未配置事件时零差异。
+                    self._fire_strict_order_violation(
+                        label, f'违反严格顺序: [{label}] 过早出现, 前置步骤 [{pred}] 未完成')
                     return
         
         logic_mode = self.project_config.get('logic_mode') if self.project_config else 'detection'
@@ -1175,6 +1209,9 @@ class SettlementMixin:
                 _gate_throttle[_gate_key] = _now
                 print(f"[Gate/StrictOnce] '{label}' rejected: new appearance at wrong "
                       f"position (current={list(self.current_cycle_steps)})")
+            # v3.32: 严格+单次守门同样支持当场报违序 (见 _fire_strict_order_violation)
+            self._fire_strict_order_violation(
+                label, f'违反严格顺序: [{label}] 在错误位置出现')
             return
 
         # ── accept_once 拦截 ──

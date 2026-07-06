@@ -120,6 +120,14 @@
                   <span class="text-xs text-gray-400 block mt-1">连接电子秤，按型号给每道料(如钢帽/钢脚水泥)设标准量。放件自动去皮→投料→对比标准量，缺料/超量报警，逐件记录。需先选人员/型号。配置在「称重配置」页签</span>
                 </div>
               </label>
+
+              <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
+                <input type="radio" v-model="activeProject.logic_mode" value="region_events" class="mt-1 accent-cyan-500">
+                <div class="ml-3 flex-1">
+                  <span class="font-bold text-white block">区域事件模式</span>
+                  <span class="text-xs text-gray-400 block mt-1">模型只检测"物"（工具/工件/手），动作由时序规则判定：工具与工件重叠 N 帧→事件（如测硬度/扫码），对象出区消失→结算周期（如下工件）。规则在「逻辑设置」页签配置</span>
+                </div>
+              </label>
             </div>
           </div>
         </div>
@@ -492,7 +500,10 @@
               :project="activeProject"
               :consecutive-dup-step-ids="consecutiveDupStepIds"
               :is-settlement-step="isSettlementStep"
-              @open-step-roi-editor="openStepRoiEditor" />
+              @open-step-roi-editor="openStepRoiEditor"
+              @open-label-split-editor="openLabelSplitEditor"
+              @delete-label-split="handleDeleteLabelSplit"
+              @open-placement-guide-editor="openPlacementGuideEditor" />
           </el-tab-pane>
 
           <!-- Tab 3: Logic Settings -->
@@ -510,7 +521,8 @@
               :project="activeProject"
               @sequence-step-pick="onSequenceStepPick"
               @mix-type-change="onCustomMixTypeChange"
-              @open-roi-editor="openRoiEditor" />
+              @open-roi-editor="openRoiEditor"
+              @open-region-roi-editor="openRegionRoiEditor" />
           </el-tab-pane>
 
           <!-- Tab 4: Events Settings -->
@@ -591,6 +603,12 @@
       @save="handleRoiSave"
       @close="resetRoiEditorTargets" />
 
+    <LabelSplitDialog
+      ref="labelSplitDialogRef"
+      v-model:visible="labelSplitDialogVisible"
+      :model-labels="activeProject?.model_labels || []"
+      @save="handleLabelSplitSave" />
+
   </div>
   </TjSlot>
 </template>
@@ -607,6 +625,8 @@ import CreateProjectDialog from './CreateProjectDialog.vue';
 import ModelSelectDialog from './ModelSelectDialog.vue';
 import FormatSelectDialog from './FormatSelectDialog.vue';
 import RoiEditorDialog from './RoiEditorDialog.vue';
+import LabelSplitDialog from './LabelSplitDialog.vue';
+import { createDefaultSplitRule, validateSplitRules, syncSplitVirtualSteps } from './labelSplit';
 import { getFormatDisplayName } from './modelFormats';
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, QuestionFilled } from '@element-plus/icons-vue';
@@ -768,10 +788,16 @@ const extraModelSelectingIdx = ref(-1);
 const extraModelRoiEditingIdx = ref(-1);
 // 步骤 ROI 编辑: 指向 steps_config 中某项的 id (与副模型/全局 tracking_roi 互斥)
 const stepRoiEditingStepId = ref(null);
+// v3.32 工件就位提示: 引导框多边形复用同一个 ROI 编辑器 (与上面两个目标互斥)
+const placementGuideEditing = ref(false);
+// v3.32+ 区域事件模式: 规则判定区域, 指向 pipeline_config.region_events.rules 下标 (同样互斥)
+const regionRuleEditingIdx = ref(-1);
 
 const resetRoiEditorTargets = () => {
   extraModelRoiEditingIdx.value = -1;
   stepRoiEditingStepId.value = null;
+  placementGuideEditing.value = false;
+  regionRuleEditingIdx.value = -1;
 };
 
 const roiEditorDialogTitle = computed(() => {
@@ -783,6 +809,13 @@ const roiEditorDialogTitle = computed(() => {
   if (stepRoiEditingStepId.value != null) {
     const st = ap?.steps_config?.find(s => s.id === stepRoiEditingStepId.value);
     return `绘制步骤 [${st?.displayLabel || st?.label || ''}] ROI（框中心须在区域内才算该步骤）`;
+  }
+  if (placementGuideEditing.value) {
+    return '绘制工件就位引导框（锚点目标中心进框 = 已就位）';
+  }
+  if (regionRuleEditingIdx.value >= 0) {
+    const rule = ap?.pipeline_config?.region_events?.rules?.[regionRuleEditingIdx.value];
+    return `绘制区域事件规则 [${rule?.name || `规则 ${regionRuleEditingIdx.value + 1}`}] 的判定区域`;
   }
   return '绘制 ROI 检测区域';
 });
@@ -855,6 +888,31 @@ const handleRoiSave = async (polygon) => {
     return;
   }
 
+  // v3.32+ 区域事件规则判定区域: 写入 pipeline_config.region_events.rules[idx].region
+  if (regionRuleEditingIdx.value >= 0) {
+    const rule = activeProject.value?.pipeline_config?.region_events?.rules?.[regionRuleEditingIdx.value];
+    if (rule) {
+      rule.region = polygon;
+      ElMessage.success(`规则 [${rule.name || `规则 ${regionRuleEditingIdx.value + 1}`}] 判定区域已保存 (${polygon.length} 个顶点)，记得点右上角"保存配置"落库`);
+    }
+    resetRoiEditorTargets();
+    roiEditorVisible.value = false;
+    return;
+  }
+
+  // v3.32 工件就位提示引导框: 写入 pipeline_config.placement_guide.polygon
+  if (placementGuideEditing.value) {
+    if (!activeProject.value.pipeline_config) activeProject.value.pipeline_config = {};
+    if (!activeProject.value.pipeline_config.placement_guide) {
+      activeProject.value.pipeline_config.placement_guide = { enabled: true, anchor_label: '', polygon: null, mode: 'hint' };
+    }
+    activeProject.value.pipeline_config.placement_guide.polygon = polygon;
+    ElMessage.success(`就位引导框已保存 (${polygon.length} 个顶点)，记得点右上角"保存配置"落库`);
+    resetRoiEditorTargets();
+    roiEditorVisible.value = false;
+    return;
+  }
+
   activeProject.value.tracking_roi_polygon = polygon;
   roiEditorVisible.value = false;
   // 预览小画布已随逻辑设置 Tab 外置到 LogicConfigTab.vue（P-4）,
@@ -894,6 +952,97 @@ const _sanitizeSessionGate = (gt) => {
     enabled: enabled && !!rod && labels.length > 0,
     rod_label: rod,
     gate_labels: labels
+  };
+};
+
+// v3.32+ 区域事件模式: 存库前收敛 (丢空规则 / 数值钳位; 后端 parse_region_events 是最终裁判)
+const _sanitizeRegionEvents = (re) => {
+  const src = re || {};
+  const rules = (Array.isArray(src.rules) ? src.rules : [])
+    .filter(r => r && (r.name || '').trim() && (r.subject_label || '').trim())
+    .map((r, i) => {
+      const type = ['region_exit', 'region_enter'].includes(r.type) ? r.type : 'overlap';
+      const region = Array.isArray(r.region) && r.region.length >= 3 ? r.region : null;
+      const out = {
+        id: r.id || `r${i + 1}`,
+        name: r.name.trim(),
+        type,
+        subject_label: r.subject_label.trim(),
+        region,
+        settle: !!r.settle,
+        min_frames: Math.max(1, Math.floor(Number(r.min_frames) || (type === 'overlap' ? 10 : 3))),
+        event_id: r.event_id ?? null,
+      };
+      if (type === 'overlap') {
+        out.object_label = (r.object_label || '').trim();
+        out.region_mode = r.region_mode === 'or' ? 'or' : 'and';
+        out.min_iou = Math.max(0, Math.min(0.95, Number(r.min_iou) || 0));
+        out.min_overlap_ratio = Math.max(0, Math.min(1, Number(r.min_overlap_ratio) || 0));
+        out.require_label = (r.require_label || '').trim() || null;
+      } else if (type === 'region_enter') {
+        out.require_label = (r.require_label || '').trim() || null;
+      } else {
+        out.gone_frames = Math.max(1, Math.floor(Number(r.gone_frames) || 8));
+        out.match_iou = Math.max(0.05, Math.min(0.95, Number(r.match_iou) || 0.3));
+      }
+      // 消失确认秒数 / 位移门槛 (overlap/enter 可选): >0 才落库
+      if (type !== 'region_exit') {
+        const gs = Number(r.gone_seconds);
+        if (Number.isFinite(gs) && gs > 0) out.gone_seconds = Math.min(30, gs);
+        const mm = Number(r.min_move);
+        if (Number.isFinite(mm) && mm > 0) out.min_move = Math.min(1, mm);
+      }
+      // 区域锚点跟随 (可选): 锚点类别 + 标定框齐全才落库, 半截配置直接丢弃
+      const a = r.anchor || {};
+      if (a.enabled && String(a.label || '').trim() && a.ref && Number(a.ref.w) > 0 && Number(a.ref.h) > 0) {
+        out.anchor = {
+          enabled: true,
+          label: String(a.label).trim(),
+          ref: { x: Number(a.ref.x) || 0, y: Number(a.ref.y) || 0, w: Number(a.ref.w), h: Number(a.ref.h) },
+          hold_seconds: (() => {
+            const v = Number(a.hold_seconds);
+            return Number.isFinite(v) && v >= 0 ? Math.min(60, v) : 3.0;
+          })(),
+        };
+      }
+      return out;
+    });
+  const class_conf = {};
+  Object.entries(src.class_conf || {}).forEach(([label, conf]) => {
+    const v = Number(conf);
+    if ((label || '').trim() && Number.isFinite(v) && v > 0) class_conf[label.trim()] = Math.min(1, v);
+  });
+  const ruleNames = new Set(rules.map(r => r.name));
+  const seqSrc = src.sequence_check || {};
+  const order = (Array.isArray(seqSrc.order) ? seqSrc.order : []).filter(n => ruleNames.has(n));
+  // 结算判定: 顺序即优先级; 引用了不存在事件名/缺触发事件的行直接剔除
+  const settlement_rules = (Array.isArray(src.settlement_rules) ? src.settlement_rules : [])
+    .filter(sr => sr && ['exact', 'missing', 'repeated', 'always'].includes(sr.match) && sr.event_id != null)
+    .map(sr => {
+      if (sr.match === 'exact') {
+        const sequence = (Array.isArray(sr.sequence) ? sr.sequence : []).filter(n => ruleNames.has(n));
+        return sequence.length ? { match: 'exact', sequence, event_id: sr.event_id } : null;
+      }
+      if (sr.match === 'always') return { match: 'always', event_id: sr.event_id };
+      const target = String(sr.target || '').trim();
+      if (!ruleNames.has(target)) return null;
+      const out = { match: sr.match, target, event_id: sr.event_id };
+      if (sr.match === 'repeated') out.min_count = Math.max(2, Math.floor(Number(sr.min_count) || 2));
+      return out;
+    })
+    .filter(Boolean);
+  return {
+    enabled: src.enabled !== false,
+    class_conf,
+    gap_tolerance_frames: Math.max(0, Math.floor(Number(src.gap_tolerance_frames) || 0)),
+    dedup_consecutive: src.dedup_consecutive !== false,
+    rules,
+    settlement_rules,
+    sequence_check: {
+      enabled: !!seqSrc.enabled && order.length > 0,
+      order,
+      event_id: seqSrc.event_id ?? null,
+    },
   };
 };
 
@@ -938,7 +1087,48 @@ watch(() => activeProject.value?.logic_mode, (mode) => {
   if (mode === 'weighing' && activeProject.value && !activeProject.value.pipeline_config?.weighing) {
     ensureWeighingDefaults(activeProject.value);
   }
+  if (mode === 'region_events' && activeProject.value) {
+    ensureRegionEventsDefaults(activeProject.value);
+  }
 });
+
+// v3.32+ 区域事件模式: 补齐 pipeline_config.region_events 骨架 (字段与后端 parse_region_events 对齐)
+const ensureRegionEventsDefaults = (project) => {
+  if (!project.pipeline_config) project.pipeline_config = {};
+  const re = project.pipeline_config.region_events;
+  if (!re || typeof re !== 'object') {
+    project.pipeline_config.region_events = {
+      enabled: true,
+      class_conf: {},
+      gap_tolerance_frames: 3,
+      dedup_consecutive: true,
+      rules: [],
+      sequence_check: { enabled: false, order: [], event_id: null },
+      settlement_rules: [],
+    };
+    return;
+  }
+  if (re.enabled === undefined) re.enabled = true;
+  if (!re.class_conf || typeof re.class_conf !== 'object') re.class_conf = {};
+  if (re.gap_tolerance_frames === undefined) re.gap_tolerance_frames = 3;
+  if (re.dedup_consecutive === undefined) re.dedup_consecutive = true;
+  if (!Array.isArray(re.rules)) re.rules = [];
+  re.rules.forEach(r => {
+    if (r && typeof r === 'object' && r.type !== 'region_exit') {
+      if (r.min_move === undefined) r.min_move = 0;
+      if (r.gone_seconds === undefined) r.gone_seconds = null;
+      if (r.type === 'overlap' && r.min_overlap_ratio === undefined) r.min_overlap_ratio = 0;
+    }
+  });
+  if (!re.sequence_check || typeof re.sequence_check !== 'object') {
+    re.sequence_check = { enabled: false, order: [], event_id: null };
+  } else {
+    if (re.sequence_check.enabled === undefined) re.sequence_check.enabled = false;
+    if (!Array.isArray(re.sequence_check.order)) re.sequence_check.order = [];
+    if (re.sequence_check.event_id === undefined) re.sequence_check.event_id = null;
+  }
+  if (!Array.isArray(re.settlement_rules)) re.settlement_rules = [];
+};
 
 const initProjectDefaults = (project) => {
   if (!project.model_format) project.model_format = 'pytorch_fp32';
@@ -1034,9 +1224,24 @@ const initProjectDefaults = (project) => {
   if (project.pipeline_config.hide_boxes_outside_step_roi === undefined) {
     project.pipeline_config.hide_boxes_outside_step_roi = !!pipelineConfig.hide_boxes_outside_step_roi;
   }
+  // v3.32 同标签区域拆分 + 工件就位提示 (未配置 = 空数组/关, 行为零差异)
+  if (!Array.isArray(project.pipeline_config.label_splits)) {
+    project.pipeline_config.label_splits = Array.isArray(pipelineConfig.label_splits)
+      ? pipelineConfig.label_splits : [];
+  }
+  if (!project.pipeline_config.placement_guide || typeof project.pipeline_config.placement_guide !== 'object') {
+    const pg = pipelineConfig.placement_guide;
+    project.pipeline_config.placement_guide = (pg && typeof pg === 'object')
+      ? { enabled: !!pg.enabled, anchor_label: pg.anchor_label || '', polygon: pg.polygon || null, mode: pg.mode || 'hint' }
+      : { enabled: false, anchor_label: '', polygon: null, mode: 'hint' };
+  }
   // 原生称重投料模式: 仅 weighing 项目才注入默认配置, 非称重项目不碰 (零污染)
   if (project.logic_mode === 'weighing') {
     ensureWeighingDefaults(project);
+  }
+  // v3.32+ 区域事件模式: 同款零污染策略
+  if (project.logic_mode === 'region_events') {
+    ensureRegionEventsDefaults(project);
   }
   
   // 使用 pipeline_config 中的值，如果没有则使用默认值
@@ -1195,6 +1400,10 @@ const initProjectDefaults = (project) => {
   }
   if (project.cycle_max_duration === undefined) {
     project.cycle_max_duration = pipelineConfig.cycle_max_duration || 0;
+  }
+  // v3.32 严格顺序违序即时事件 (null = 关)
+  if (project.strict_order_violation_event_id === undefined) {
+    project.strict_order_violation_event_id = pipelineConfig.strict_order_violation_event_id || null;
   }
   // 加载后同步结算步约束（与 watch(settlement_mode) 一致，避免开关仍可编辑/值为 true）
   const canSeqSettle = project.logic_mode === 'sequential'
@@ -1489,6 +1698,7 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.settlement_mode = project.settlement_mode || 'first_step';
   project.pipeline_config.idle_timeout_seconds = project.idle_timeout_seconds || 0;
   project.pipeline_config.cycle_max_duration = project.cycle_max_duration || 0;
+  project.pipeline_config.strict_order_violation_event_id = project.strict_order_violation_event_id || null;
   project.pipeline_config.periodic_actions = project.periodic_actions;
   
   return project;
@@ -1628,6 +1838,16 @@ const handleSaveProject = async () => {
   // v3.19.x: 连续重复步骤的消失等待时间保存前强制清 0（后端 apply 还有一层兜底）
   syncDupDisappearDelay();
 
+  // v3.32 同标签区域拆分: 保存前校验规则 + 幂等同步虚拟步骤（区域名 ⇄ steps_config）
+  {
+    const splitErr = validateSplitRules(activeProject.value);
+    if (splitErr) {
+      ElMessage.error(`同标签区域拆分配置有误: ${splitErr}`);
+      return;
+    }
+    syncSplitVirtualSteps(activeProject.value);
+  }
+
   saving.value = true;
   try {
     const data = {
@@ -1734,9 +1954,16 @@ const handleSaveProject = async () => {
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,
+        // v3.32 严格顺序违序即时事件 (null=关; last_first 模式严格顺序被强制清空, 一并置空)
+        strict_order_violation_event_id: activeProject.value.settlement_mode === 'last_first'
+          ? null : (activeProject.value.strict_order_violation_event_id || null),
         // 原生称重投料模式配置 (仅 weighing 模式写入, 其他模式不污染)
         weighing: activeProject.value.logic_mode === 'weighing'
           ? (activeProject.value.pipeline_config?.weighing || {})
+          : undefined,
+        // v3.32+ 区域事件模式配置 (仅 region_events 模式写入, 字段与后端 parse_region_events 对齐)
+        region_events: activeProject.value.logic_mode === 'region_events'
+          ? _sanitizeRegionEvents(activeProject.value.pipeline_config?.region_events)
           : undefined,
         // v3.23 NG 补做策略 (任意模式通用, 嵌套对象直接序列化)
         ng_remediation: (() => {
@@ -1750,6 +1977,64 @@ const handleSaveProject = async () => {
         rod_companion_filter: _sanitizeCompanionFilter(activeProject.value.rod_companion_filter),
         rod_session_gate: _sanitizeSessionGate(activeProject.value.rod_session_gate),
         hide_boxes_outside_step_roi: !!activeProject.value.pipeline_config?.hide_boxes_outside_step_roi,
+        // v3.32 同标签区域拆分 + 工件就位提示 (结构定义见对应 RFC; 后端 parse_label_splits 二次校验)
+        label_splits: (activeProject.value.pipeline_config?.label_splits || []).map(r => ({
+          id: r.id,
+          enabled: r.enabled !== false,
+          source_label: String(r.source_label || '').trim(),
+          mode: r.mode === 'anchor' ? 'anchor' : 'fixed',
+          anchor_label: r.mode === 'anchor' ? String(r.anchor_label || '').trim() : '',
+          anchor_ref: r.mode === 'anchor' ? (r.anchor_ref || null) : null,
+          anchor_hold_seconds: (() => {
+            const v = Number(r.anchor_hold_seconds);
+            return Number.isFinite(v) && v >= 0 ? Math.min(60, v) : 3.0;
+          })(),
+          unmatched: ['drop', 'keep', 'map'].includes(r.unmatched) ? r.unmatched : 'drop',
+          unmatched_label: r.unmatched === 'map' ? String(r.unmatched_label || '').trim() : '',
+          regions: (r.regions || [])
+            .filter(g => g && String(g.name || '').trim() && Array.isArray(g.polygon) && g.polygon.length >= 3)
+            .map(g => ({ name: String(g.name).trim(), polygon: g.polygon, color: g.color || '' })),
+          // v3.32 多轮次: 同一批区域按轮次映射不同虚拟步骤 (前缀+区域名)
+          rounds: (() => {
+            const rd = r.rounds || {};
+            if (!rd.enabled) return { enabled: false };
+            const cnt = Math.max(2, Math.min(8, Math.floor(Number(rd.count) || 2)));
+            return {
+              enabled: true,
+              trigger_label: String(rd.trigger_label || '').trim(),
+              count: cnt,
+              prefixes: (rd.prefixes || []).slice(0, cnt).map(p => String(p || '').trim()),
+              trigger_gap_seconds: (() => {
+                const v = Number(rd.trigger_gap_seconds);
+                return Number.isFinite(v) && v >= 0.5 ? Math.min(60, v) : 3.0;
+              })(),
+              // 每轮独立区域(可选): 只收编轮次在界内、画完整的; 空轮不落库(该轮回退共享区域)
+              region_overrides: (() => {
+                const out = {};
+                for (const [key, list] of Object.entries(rd.region_overrides || {})) {
+                  const rnd = Math.floor(Number(key));
+                  if (!(rnd >= 1 && rnd <= cnt) || !Array.isArray(list)) continue;
+                  const valid = list
+                    .filter(g => g && String(g.name || '').trim() && Array.isArray(g.polygon) && g.polygon.length >= 3)
+                    .map(g => ({ name: String(g.name).trim(), polygon: g.polygon, color: g.color || '' }));
+                  if (valid.length) out[String(rnd)] = valid;
+                }
+                return out;
+              })(),
+            };
+          })(),
+        })),
+        placement_guide: (() => {
+          const pg = activeProject.value.pipeline_config?.placement_guide || {};
+          return {
+            enabled: !!pg.enabled,
+            anchor_label: String(pg.anchor_label || '').trim(),
+            polygon: Array.isArray(pg.polygon) && pg.polygon.length >= 3 ? pg.polygon : null,
+            mode: pg.mode === 'gate' ? 'gate' : 'hint',
+            // 就位后引导框显示策略 (仅前端渲染用): always=常驻 | fade_on_ready=淡化 | hide_on_ready=隐藏
+            display: ['fade_on_ready', 'hide_on_ready'].includes(pg.display) ? pg.display : 'always',
+          };
+        })(),
         // v3.8: per_item 项目级配置 (嵌套对象,无拍平,直接序列化)
         // 注意: 只在 logic_mode === 'per_item' 时写入,其他模式即使有残留字段也清空,避免污染
         per_item: activeProject.value.logic_mode === 'per_item' ? (() => {
@@ -2172,8 +2457,9 @@ const selectModel = (model) => {
   
   if (labels && labels.length > 0) {
     activeProject.value.model_labels = labels;
+    // v3.32: 换模型重建步骤时保留副模型步骤 + 拆分虚拟步骤 (拆分规则不随模型选择清除)
     const extraSteps = (activeProject.value.steps_config || []).filter(
-      s => s && s.from_model && s.from_model !== 'main'
+      s => s && ((s.from_model && s.from_model !== 'main') || s.split_origin)
     );
     const mainSteps = labels.map((label, idx) => ({
       id: idx + 1,
@@ -2340,6 +2626,78 @@ const openStepRoiEditor = async (step) => {
 };
 
 // clearStepRoi 已随步骤设置 Tab 外置到 StepsConfigTab.vue（P-5）。
+
+// ==================== v3.32 同标签区域拆分 + 工件就位提示 编排 ====================
+// 规则数组挂 pipeline_config.label_splits; 编辑器 (LabelSplitDialog) 操作深拷贝,
+// 点保存回写数组并立即同步虚拟步骤 (steps_config 带 split_origin 标记); 落库随主「保存配置」。
+const labelSplitDialogVisible = ref(false);
+const labelSplitDialogRef = ref(null);
+
+const openLabelSplitEditor = async (ruleOrNull) => {
+  if (!activeProject.value) return;
+  const src = ruleOrNull || createDefaultSplitRule();
+  const copy = JSON.parse(JSON.stringify(src));
+  labelSplitDialogVisible.value = true;
+  await nextTick();
+  const channel = await resolveRoiSnapshotChannel();
+  await labelSplitDialogRef.value?.load(channel, copy);
+};
+
+const handleLabelSplitSave = (savedRule) => {
+  const ap = activeProject.value;
+  if (!ap) return;
+  if (!ap.pipeline_config) ap.pipeline_config = {};
+  if (!Array.isArray(ap.pipeline_config.label_splits)) ap.pipeline_config.label_splits = [];
+  const list = ap.pipeline_config.label_splits;
+  // 同一原始标签只允许一条启用规则 (与后端解析语义一致), 前端在入口就拦
+  if (savedRule.enabled !== false) {
+    const dup = list.find(r => r && r.id !== savedRule.id && r.enabled !== false
+      && r.source_label === savedRule.source_label);
+    if (dup) {
+      ElMessage.error(`原始标签「${savedRule.source_label}」已有启用的拆分规则, 请先停用/删除旧规则`);
+      return;
+    }
+  }
+  const idx = list.findIndex(r => r && r.id === savedRule.id);
+  if (idx >= 0) list.splice(idx, 1, savedRule); else list.push(savedRule);
+  const { added, removed } = syncSplitVirtualSteps(ap);
+  labelSplitDialogVisible.value = false;
+  const parts = [`拆分规则「${savedRule.source_label}」已更新`];
+  if (added.length) parts.push(`新增虚拟步骤: ${added.join('、')}`);
+  if (removed.length) parts.push(`移除虚拟步骤: ${removed.join('、')}`);
+  parts.push('记得点右上角"保存配置"落库');
+  ElMessage.success(parts.join('；'));
+  dbg('project.config', '保存拆分规则', `source=${savedRule.source_label} regions=${(savedRule.regions || []).length} +${added.length}步骤 -${removed.length}步骤`);
+};
+
+const handleDeleteLabelSplit = async (rule) => {
+  const ap = activeProject.value;
+  if (!ap?.pipeline_config?.label_splits) return;
+  try {
+    await ElMessageBox.confirm(
+      `删除拆分规则「${rule.source_label || rule.id}」将级联移除它生成的虚拟步骤（${(rule.regions || []).map(r => r.name).join('、') || '无'}）及其序列引用，确认删除？`,
+      '删除拆分规则', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    );
+  } catch { return; }
+  const list = ap.pipeline_config.label_splits;
+  const idx = list.findIndex(r => r && r.id === rule.id);
+  if (idx >= 0) list.splice(idx, 1);
+  const { removed } = syncSplitVirtualSteps(ap);
+  ElMessage.success(removed.length ? `规则已删除, 虚拟步骤已移除: ${removed.join('、')}（记得保存配置）` : '规则已删除（记得保存配置）');
+};
+
+const openPlacementGuideEditor = async () => {
+  resetRoiEditorTargets();
+  placementGuideEditing.value = true;
+  await _openRoiDialog(activeProject.value?.pipeline_config?.placement_guide?.polygon);
+};
+
+// v3.32+ 区域事件模式: 规则判定区域复用同一个 ROI 编辑器
+const openRegionRoiEditor = async (ruleIdx) => {
+  resetRoiEditorTargets();
+  regionRuleEditingIdx.value = ruleIdx;
+  await _openRoiDialog(activeProject.value?.pipeline_config?.region_events?.rules?.[ruleIdx]?.region);
+};
 
 // FORMAT_DISPLAY_NAMES / getFormatDisplayName 已外置 ./modelFormats.js（P-2, 与 FormatSelectDialog 共用）
 

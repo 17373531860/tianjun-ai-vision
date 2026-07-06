@@ -1581,6 +1581,23 @@ def get_detection_results(
         print(f"[API] /detection/results 取 custom_mix_state 失败: {_e}")
         result['custom_mix_state'] = None
 
+    # v3.32: 工件就位提示运行态 (Monitor 提示条 + 引导框着色用).
+    # 未启用时返回 None, 前端按 None 处理即可.
+    try:
+        _pg = getattr(mgr, '_placement_guide_state', None)
+        result['placement_guide'] = _pg.snapshot() if _pg is not None else None
+    except Exception as _e:
+        print(f"[API] /detection/results 取 placement_guide 失败: {_e}")
+        result['placement_guide'] = None
+
+    # v3.32: 多轮次拆分当前轮次 (Monitor 轮次角标 + 区域名前缀用). 无多轮规则为 None.
+    try:
+        _ls = getattr(mgr, '_label_split_engine', None)
+        result['label_split_rounds'] = _ls.snapshot_rounds() if _ls is not None else None
+    except Exception as _e:
+        print(f"[API] /detection/results 取 label_split_rounds 失败: {_e}")
+        result['label_split_rounds'] = None
+
     # 多通道场景下前端不能用 currentProject (顶部下拉框单一值) 兜底,
     # 必须每帧带上 tracking 过滤所需的字段, 否则容器模式表格里"箱子"行
     # 过滤不掉 (前端 Monitor/index.vue 的 _trkExpectedLabels 依赖这里).
@@ -1594,6 +1611,10 @@ def get_detection_results(
         'pipeline_config': {
             'counting_expected_items': _pcfg.get('counting_expected_items', {}),
             'tracking_container_label': _pcfg.get('tracking_container_label', ''),
+            # v3.32: 多工位 Monitor 画拆分区域/引导框叠加层用 (每通道独立项目配置)
+            'label_splits': _pcfg.get('label_splits', []),
+            'placement_guide': _pcfg.get('placement_guide', {}),
+            'hide_boxes_outside_step_roi': _pcfg.get('hide_boxes_outside_step_roi', False),
         },
     }
 

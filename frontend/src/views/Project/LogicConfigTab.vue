@@ -65,6 +65,18 @@
             <el-input-number v-model="project.cycle_max_duration" size="small" :min="0" :step="5" :precision="2" />
             <span class="text-xs text-gray-500">周期总时长超过此值直接判定NG（0=不启用）</span>
           </div>
+          <!-- v3.32 严格顺序违序即时事件: 严格步骤在错误时机出现 → 当场触发所配事件, 不必等结算 -->
+          <div v-if="project.settlement_mode !== 'last_first'" class="flex items-center gap-3 pt-2 border-t border-slate-700">
+            <span class="text-gray-400 text-xs whitespace-nowrap">违反严格顺序时立即触发</span>
+            <el-select :model-value="project.strict_order_violation_event_id ?? null" size="small" class="!w-48"
+              placeholder="不触发（默认）" clearable
+              @update:model-value="project.strict_order_violation_event_id = $event || null">
+              <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
+            </el-select>
+            <span class="text-xs text-gray-500">
+              勾了「严格顺序」的步骤在错误时机出现时当场报（建议配警告/自定义事件；照旧拦截不计入周期）
+            </span>
+          </div>
         </div>
       </el-card>
 
@@ -1199,7 +1211,251 @@
       </el-card>
 
       <!-- Simultaneous Groups Config (不适用于跟踪模式) -->
-      <el-card v-if="project.logic_mode !== 'tracking'" shadow="never" class="bg-slate-800 border-slate-700">
+      <!-- v3.32+ 区域事件模式 (TP 工位流程监测): 判定规则 + 每类置信度 + 顺序校验 -->
+      <el-card v-if="project.logic_mode === 'region_events' && regionEventsCfg" shadow="never" class="bg-slate-800 border-slate-700">
+        <template #header>
+          <div class="flex justify-between items-center">
+            <span class="font-bold text-white">区域事件模式 - 动作规则</span>
+            <el-button type="primary" size="small" link @click="addRegionRule">+ 新增动作</el-button>
+          </div>
+        </template>
+        <div class="space-y-4 text-sm text-gray-300">
+          <p class="text-xs text-gray-400">
+            模型只检测"物"（工具/工件/手），动作由时序规则产出，每条规则 = 一种动作流水。
+            「工具作用」= 主体框与目标框重叠（可组合判定区域）连续 N 帧；「出区消失」= 对象进入区域后消失 N 帧（默认结算周期，一个工位循环 = 一个检测周期）。
+            所有阈值与区域运行时可调，不需要重训模型。
+          </p>
+
+          <div v-for="(rule, rIdx) in regionEventsCfg.rules" :key="rule.id || rIdx" class="bg-slate-900 p-3 rounded border border-slate-700 space-y-3">
+            <div class="flex items-center gap-3">
+              <span class="text-cyan-400 font-bold whitespace-nowrap">动作 {{ rIdx + 1 }}</span>
+              <el-input v-model="rule.name" size="small" placeholder="动作名（如 测硬度）" class="!w-40" />
+              <el-select v-model="rule.type" size="small" class="!w-44" @change="onRegionRuleTypeChange(rule)">
+                <el-option label="工具作用（框重叠）" value="overlap" />
+                <el-option label="进区/驻留（进入区域）" value="region_enter" />
+                <el-option label="出区消失（下料）" value="region_exit" />
+              </el-select>
+              <label class="flex items-center gap-1 text-xs text-gray-400">
+                <el-switch v-model="rule.settle" size="small" />
+                结算周期
+              </label>
+              <div class="flex-1"></div>
+              <el-button type="danger" size="small" link @click="removeRegionRule(rIdx)">删除</el-button>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+              <div>
+                <label class="block text-gray-400 mb-1">{{ rule.type === 'overlap' ? '主体类别（工具）' : rule.type === 'region_enter' ? '主体类别（对象）' : '跟踪对象类别' }}</label>
+                <el-select v-model="rule.subject_label" size="small" filterable allow-create default-first-option class="w-full" placeholder="如 测硬度笔">
+                  <el-option v-for="lbl in regionLabelOptions" :key="lbl" :label="lbl" :value="lbl" />
+                </el-select>
+              </div>
+              <div v-if="rule.type === 'overlap'">
+                <label class="block text-gray-400 mb-1">目标类别（被作用）</label>
+                <el-select v-model="rule.object_label" size="small" filterable allow-create default-first-option class="w-full" placeholder="如 工件">
+                  <el-option v-for="lbl in regionLabelOptions" :key="lbl" :label="lbl" :value="lbl" />
+                </el-select>
+              </div>
+              <div v-if="rule.type === 'overlap'">
+                <label class="block text-gray-400 mb-1">区域组合方式</label>
+                <el-select v-model="rule.region_mode" size="small" class="w-full">
+                  <el-option label="且：重叠 且 主体中心在区域内" value="and" />
+                  <el-option label="或：重叠 或 主体中心在区域内" value="or" />
+                </el-select>
+              </div>
+              <div v-if="rule.type !== 'region_exit'">
+                <label class="block text-gray-400 mb-1">辅助约束类别（主体须与其相交，可空）</label>
+                <el-select :model-value="rule.require_label ?? null" size="small" clearable filterable class="w-full" placeholder="如 手（压误报）"
+                  @update:model-value="rule.require_label = $event || null">
+                  <el-option v-for="lbl in regionLabelOptions" :key="lbl" :label="lbl" :value="lbl" />
+                </el-select>
+              </div>
+              <div>
+                <label class="block text-gray-400 mb-1">{{ rule.type === 'region_exit' ? '区域内最少观察帧数' : '连续满足帧数 N' }}</label>
+                <el-input-number v-model="rule.min_frames" size="small" :min="1" :max="600" class="w-full" />
+              </div>
+              <div v-if="rule.type === 'region_exit'">
+                <label class="block text-gray-400 mb-1">消失确认帧数</label>
+                <el-input-number v-model="rule.gone_frames" size="small" :min="1" :max="600" class="w-full" />
+              </div>
+              <div v-if="rule.type === 'region_exit'">
+                <label class="block text-gray-400 mb-1">帧间关联 IoU 下限</label>
+                <el-input-number v-model="rule.match_iou" size="small" :min="0.05" :max="0.95" :step="0.05" class="w-full" />
+              </div>
+              <div v-if="rule.type === 'overlap'">
+                <label class="block text-gray-400 mb-1">重叠 IoU 下限（0=任意相交）</label>
+                <el-input-number v-model="rule.min_iou" size="small" :min="0" :max="0.95" :step="0.05" class="w-full" />
+              </div>
+              <div v-if="rule.type === 'overlap'">
+                <label class="block text-gray-400 mb-1" title="交叠面积占主体(工具)框面积的比例。静置工具贴在工件边上时深度接近0，真动作(工具压在工件上)深度明显——用来压掉搁在台面上的工具误触发">
+                  重叠深度下限（0=贴边即算）
+                </label>
+                <el-input-number v-model="rule.min_overlap_ratio" size="small" :min="0" :max="1" :step="0.05" class="w-full" />
+              </div>
+              <div v-if="rule.type !== 'region_exit'">
+                <label class="block text-gray-400 mb-1" title="动作确认前，主体(工具)在本段时间内必须移动过的最小距离（画面宽高归一化，如0.04≈画面4%）。工具搁在原地不动只有检测抖动(约0.01)，真动作要拿起来挪动——用来压掉静置工具的误触发。0=不要求移动">
+                  位移门槛（0=不要求移动）
+                </label>
+                <el-input-number v-model="rule.min_move" size="small" :min="0" :max="1" :step="0.01" :precision="2" class="w-full" />
+              </div>
+              <div v-if="rule.type !== 'region_exit'">
+                <label class="block text-gray-400 mb-1" title="动作条件消失超过该秒数才算结束。真动作中途被手/身体遮挡零点几秒不会被切成两段、重复计数。0=不启用，沿用全局漏检容忍帧数">
+                  消失确认（秒，0=用全局容忍）
+                </label>
+                <el-input-number :model-value="rule.gone_seconds ?? 0" size="small" :min="0" :max="30" :step="0.5" :precision="1" class="w-full"
+                  @update:model-value="rule.gone_seconds = ($event && $event > 0) ? $event : null" />
+              </div>
+              <div>
+                <label class="block text-gray-400 mb-1">附加触发事件（可空，不结算）</label>
+                <el-select :model-value="rule.event_id ?? null" size="small" clearable class="w-full" placeholder="不触发"
+                  @update:model-value="rule.event_id = ($event === '' || $event == null) ? null : $event">
+                  <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
+                </el-select>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-3 pt-2 border-t border-slate-800 text-xs">
+              <span class="text-gray-400">判定区域：</span>
+              <span :class="(rule.region || []).length >= 3 ? 'text-emerald-400' : 'text-gray-500'">
+                {{ (rule.region || []).length >= 3 ? `已标定 (${rule.region.length} 个顶点)` : (rule.type === 'overlap' ? '未标定（不限区域）' : '未标定（该类型规则必须标定）') }}
+              </span>
+              <el-button type="primary" size="small" plain @click="$emit('open-region-roi-editor', rIdx)">绘制区域</el-button>
+              <el-button v-if="(rule.region || []).length" size="small" link type="danger" @click="rule.region = null">清除</el-button>
+              <span v-if="rule.type === 'region_enter'" class="text-gray-500">提示：帧数给小 = 进区即触发；给大 + 挂警告事件 = 驻留超时告警</span>
+            </div>
+
+            <!-- 区域锚点跟随 (可选): 区域随锚点类别当前位置平移+缩放 -->
+            <div class="flex items-center gap-3 pt-2 border-t border-slate-800 text-xs flex-wrap">
+              <label class="flex items-center gap-1 text-gray-400 whitespace-nowrap">
+                <el-switch :model-value="!!(rule.anchor && rule.anchor.enabled)" size="small" @update:model-value="toggleRegionAnchor(rule, $event)" />
+                区域跟随锚点
+              </label>
+              <template v-if="rule.anchor && rule.anchor.enabled">
+                <el-select v-model="rule.anchor.label" size="small" filterable allow-create default-first-option class="!w-32" placeholder="锚点类别">
+                  <el-option v-for="lbl in regionLabelOptions" :key="lbl" :label="lbl" :value="lbl" />
+                </el-select>
+                <el-button size="small" type="primary" plain :loading="grabbingAnchorIdx === rIdx" @click="grabRegionAnchor(rule, rIdx)">从当前画面抓取锚点框</el-button>
+                <span v-if="rule.anchor.ref && rule.anchor.ref.w > 0" class="text-emerald-400">
+                  已标定 x={{ Number(rule.anchor.ref.x).toFixed(2) }} y={{ Number(rule.anchor.ref.y).toFixed(2) }}
+                </span>
+                <span v-else class="text-amber-400">未标定（保存时会被忽略）</span>
+                <span class="text-gray-400 whitespace-nowrap">锚点丢失沿用最近位置(秒)</span>
+                <el-input-number v-model="rule.anchor.hold_seconds" size="small" :min="0" :max="60" :step="0.5" :precision="1" class="!w-24" />
+              </template>
+              <span v-else class="text-gray-500">区域固定在画面上；开启后区域随锚点类别（如工件/夹具）平移缩放</span>
+            </div>
+          </div>
+
+          <div v-if="!regionEventsCfg.rules.length" class="text-gray-500 text-center py-4 border border-dashed border-slate-700 rounded">
+            暂无规则。典型配置：测硬度（工具作用：笔×工件，且中心在台面区，15 帧）、扫码（工具作用：枪×工件，或中心在操作区，10 帧）、下工件（出区消失：工件×出口区，观察 3 帧 / 消失 8 帧，结算）
+          </div>
+
+          <!-- 全局参数 -->
+          <div class="bg-slate-900 p-3 rounded border border-slate-700 space-y-3">
+            <div class="flex items-center gap-3">
+              <span class="text-gray-400 text-xs whitespace-nowrap">漏检容忍帧数 M</span>
+              <el-input-number v-model="regionEventsCfg.gap_tolerance_frames" size="small" :min="0" :max="30" />
+              <span class="text-xs text-gray-500">连续计数时容忍 ≤M 帧漏检不清零（照顾小目标，如测硬度笔）</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-gray-400 text-xs whitespace-nowrap">连续同动作去重</span>
+              <el-switch :model-value="regionEventsCfg.dedup_consecutive !== false" size="small"
+                @update:model-value="regionEventsCfg.dedup_consecutive = $event" />
+              <span class="text-xs text-gray-500">同一动作紧接着再次确认时静默合并，被下一个动作隔开后才重新计（防同一动作被遮挡切成两段算两次；关掉则逐段计数）</span>
+            </div>
+            <div>
+              <p class="text-xs text-gray-400 mb-2">每类置信度阈值（留空 = 不额外过滤，只受启动检测的全局阈值约束；小目标可单独放低）</p>
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div v-for="lbl in regionLabelOptions" :key="lbl" class="flex items-center gap-2">
+                  <span class="text-xs text-gray-300 w-16 truncate" :title="lbl">{{ lbl }}</span>
+                  <el-input-number :model-value="regionEventsCfg.class_conf[lbl] ?? null" size="small" :min="0" :max="1" :step="0.05"
+                    class="flex-1" @update:model-value="setRegionClassConf(lbl, $event)" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 流程顺序校验 -->
+          <div class="bg-slate-900 p-3 rounded border border-slate-700 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-gray-300 text-xs font-bold">流程顺序校验（乱序只记录，不拦截结算）</span>
+              <el-switch v-model="regionEventsCfg.sequence_check.enabled" size="small" />
+            </div>
+            <div v-if="regionEventsCfg.sequence_check.enabled" class="space-y-2 text-xs">
+              <div class="flex items-center gap-3">
+                <span class="text-gray-400 whitespace-nowrap">期望顺序（按点选顺序，含结算动作，可重复）</span>
+                <div class="flex items-center gap-1 flex-wrap flex-1">
+                  <el-tag v-for="(n, ni) in (regionEventsCfg.sequence_check.order || [])" :key="`${n}-${ni}`" size="small" closable type="info"
+                    @close="regionEventsCfg.sequence_check.order.splice(ni, 1)">{{ ni + 1 }}.{{ n }}</el-tag>
+                  <span v-if="!(regionEventsCfg.sequence_check.order || []).length" class="text-gray-500">点右侧动作名依次追加 →</span>
+                  <el-button v-for="r in regionEventsCfg.rules.filter(x => x.name)" :key="r.name" size="small" plain
+                    @click="appendSeqName(regionEventsCfg.sequence_check, 'order', r.name)">+{{ r.name }}</el-button>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="text-gray-400 whitespace-nowrap">乱序时触发事件</span>
+                <el-select :model-value="regionEventsCfg.sequence_check.event_id ?? null" size="small" clearable class="!w-48" placeholder="只记日志"
+                  @update:model-value="regionEventsCfg.sequence_check.event_id = ($event === '' || $event == null) ? null : $event">
+                  <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
+                </el-select>
+                <span class="text-gray-500">建议配"警告/自定义"类事件；是否报警由该事件的动作决定</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 结算判定 (自定义模式同款语义: 从上到下先匹配先赢) -->
+          <div class="bg-slate-900 p-3 rounded border border-slate-700 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-gray-300 text-xs font-bold">结算判定（周期收口时按动作序列决定结算事件，从上到下先匹配先赢）</span>
+              <el-button type="primary" size="small" link @click="addSettlementRule">+ 新增判定</el-button>
+            </div>
+            <p class="text-xs text-gray-500">
+              不配置 = 全部按"合格"结算（老行为）。典型配置：① 序列匹配 标准流程→合格 ② 缺"测硬度"→不合格 ③ "扫码"重复≥2次→不合格。全不命中时回退默认。
+            </p>
+            <div v-for="(sr, sIdx) in (regionEventsCfg.settlement_rules || [])" :key="sIdx"
+              class="flex items-center gap-2 flex-wrap bg-slate-800 rounded px-2 py-1.5 text-xs">
+              <span class="text-cyan-400 font-bold whitespace-nowrap">判定 {{ sIdx + 1 }}</span>
+              <el-select v-model="sr.match" size="small" class="!w-36" @change="onSettlementMatchChange(sr)">
+                <el-option label="序列完全匹配" value="exact" />
+                <el-option label="缺某动作" value="missing" />
+                <el-option label="某动作重复" value="repeated" />
+                <el-option label="其余全部（兜底）" value="always" />
+              </el-select>
+              <template v-if="sr.match === 'exact'">
+                <!-- 序列可含重复动作（如 测硬度→扫码→扫码→下工件），多选下拉点第二次会取消，改用点击追加 -->
+                <div class="flex items-center gap-1 flex-wrap flex-1 min-w-48">
+                  <el-tag v-for="(n, ni) in (sr.sequence || [])" :key="`${n}-${ni}`" size="small" closable type="info"
+                    @close="sr.sequence.splice(ni, 1)">{{ ni + 1 }}.{{ n }}</el-tag>
+                  <span v-if="!(sr.sequence || []).length" class="text-gray-500">点右侧动作名依次追加（同一动作可点多次）→</span>
+                  <el-button v-for="r in regionEventsCfg.rules.filter(x => x.name)" :key="r.name" size="small" plain
+                    @click="appendSeqName(sr, 'sequence', r.name)">+{{ r.name }}</el-button>
+                </div>
+              </template>
+              <template v-else-if="sr.match === 'missing' || sr.match === 'repeated'">
+                <el-select v-model="sr.target" size="small" class="!w-32" placeholder="目标动作">
+                  <el-option v-for="r in regionEventsCfg.rules.filter(x => x.name)" :key="r.name" :label="r.name" :value="r.name" />
+                </el-select>
+                <template v-if="sr.match === 'repeated'">
+                  <span class="text-gray-400 whitespace-nowrap">出现≥</span>
+                  <el-input-number v-model="sr.min_count" size="small" :min="2" :max="20" class="!w-20" />
+                  <span class="text-gray-400">次</span>
+                </template>
+              </template>
+              <span v-else class="text-gray-500">上面全不命中时走这条（放最后）</span>
+              <span class="text-gray-400 whitespace-nowrap">→ 结算为</span>
+              <el-select :model-value="sr.event_id ?? null" size="small" class="!w-36" placeholder="选择事件"
+                @update:model-value="sr.event_id = ($event === '' || $event == null) ? null : $event">
+                <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
+              </el-select>
+              <el-button size="small" link :disabled="sIdx === 0" @click="moveSettlementRule(sIdx, -1)">上移</el-button>
+              <el-button size="small" link :disabled="sIdx === (regionEventsCfg.settlement_rules || []).length - 1" @click="moveSettlementRule(sIdx, 1)">下移</el-button>
+              <el-button type="danger" size="small" link @click="regionEventsCfg.settlement_rules.splice(sIdx, 1)">删除</el-button>
+            </div>
+          </div>
+        </div>
+      </el-card>
+
+      <el-card v-if="project.logic_mode !== 'tracking' && project.logic_mode !== 'region_events'" shadow="never" class="bg-slate-800 border-slate-700">
         <template #header>
           <div class="flex justify-between items-center">
             <span class="font-bold text-white">同时出现组</span>
@@ -1423,12 +1679,13 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Delete } from '@element-plus/icons-vue';
 import { dbg } from '@/utils/debug';
+import { getDetectionResults } from '@/api/detection';
 import { _pi_itemLabelToArray, _pi_itemLabelFromArray } from './perItemLabel';
 
 const props = defineProps({
   project: { type: Object, required: true },
 });
-defineEmits(['sequence-step-pick', 'mix-type-change', 'open-roi-editor']);
+defineEmits(['sequence-step-pick', 'mix-type-change', 'open-roi-editor', 'open-region-roi-editor']);
 
 // ---------- 步骤候选（自 index.vue 平移, 仅本 Tab 使用） ----------
 // 计算启用的步骤
@@ -1459,6 +1716,152 @@ const availableLabels = computed(() => {
   });
   return Array.from(set);
 });
+
+// ---------- v3.32+ 区域事件模式（TP 工位流程监测） ----------
+// pipeline_config.region_events 的存在性由父级 index.vue 在模式切换时兜底补全，
+// 这里只做原位编辑；字段名与后端 source_region_events.parse_region_events 严格对齐。
+const regionEventsCfg = computed(() => {
+  if (props.project?.logic_mode !== 'region_events') return null;
+  return props.project?.pipeline_config?.region_events || null;
+});
+
+// 类别候选 = 步骤表里的模型标签 ∪ 规则/置信度表里已引用的标签（防手输标签丢选项）
+const regionLabelOptions = computed(() => {
+  const set = new Set(availableLabels.value);
+  const cfg = regionEventsCfg.value;
+  if (cfg) {
+    (cfg.rules || []).forEach(r => {
+      [r.subject_label, r.object_label, r.require_label].forEach(l => { if (l) set.add(l); });
+    });
+    Object.keys(cfg.class_conf || {}).forEach(l => set.add(l));
+  }
+  return Array.from(set);
+});
+
+const addRegionRule = () => {
+  const cfg = regionEventsCfg.value;
+  if (!cfg) return;
+  if (!Array.isArray(cfg.rules)) cfg.rules = [];
+  const nextNum = cfg.rules.reduce((mx, r) => {
+    const m = /^r(\d+)$/.exec(r.id || '');
+    return m ? Math.max(mx, parseInt(m[1], 10)) : mx;
+  }, 0) + 1;
+  cfg.rules.push({
+    id: `r${nextNum}`,
+    name: '',
+    type: 'overlap',
+    subject_label: '',
+    object_label: '',
+    region: null,
+    region_mode: 'and',
+    min_frames: 10,
+    min_iou: 0,
+    min_overlap_ratio: 0,
+    min_move: 0,
+    gone_seconds: null,
+    require_label: null,
+    gone_frames: 8,
+    match_iou: 0.3,
+    settle: false,
+    event_id: null,
+  });
+};
+
+const removeRegionRule = (idx) => {
+  regionEventsCfg.value?.rules?.splice(idx, 1);
+};
+
+// 切规则类型时回填该类型的推荐默认值（后端解析侧同款缺省）
+const onRegionRuleTypeChange = (rule) => {
+  if (rule.type === 'region_exit') {
+    rule.min_frames = 3;
+    rule.settle = true;
+  } else if (rule.type === 'region_enter') {
+    rule.min_frames = 3;
+    rule.settle = false;
+  } else {
+    rule.min_frames = 10;
+    rule.settle = false;
+  }
+};
+
+// ---------- 区域锚点跟随 ----------
+const grabbingAnchorIdx = ref(-1);
+
+const toggleRegionAnchor = (rule, on) => {
+  if (on) {
+    if (!rule.anchor || typeof rule.anchor !== 'object') {
+      rule.anchor = { enabled: true, label: '', ref: null, hold_seconds: 3.0 };
+    } else {
+      rule.anchor.enabled = true;
+      if (rule.anchor.hold_seconds === undefined) rule.anchor.hold_seconds = 3.0;
+    }
+  } else if (rule.anchor) {
+    rule.anchor.enabled = false;
+  }
+};
+
+const grabRegionAnchor = async (rule, rIdx) => {
+  const lbl = String(rule.anchor?.label || '').trim();
+  if (!lbl) { ElMessage.warning('先选择锚点类别'); return; }
+  grabbingAnchorIdx.value = rIdx;
+  try {
+    const res = await getDetectionResults(0);
+    const dets = (res.data?.detections || []).filter(d => d.label === lbl);
+    if (!dets.length) {
+      ElMessage.error(`当前画面没有检测到「${lbl}」— 请先在监控页启动检测并把对象放到标准位置`);
+      return;
+    }
+    const best = dets.reduce((a, b) => ((b.confidence || 0) > (a.confidence || 0) ? b : a));
+    rule.anchor.ref = {
+      x: Number(best.x) || 0, y: Number(best.y) || 0,
+      w: Number(best.w) || 0, h: Number(best.h) || 0,
+    };
+    ElMessage.success(`已标定锚点框（置信度 ${((best.confidence || 0) * 100).toFixed(0)}%），请保持对象位置不动再画区域`);
+  } catch (e) {
+    ElMessage.error('抓取失败: ' + (e.message || e));
+  } finally {
+    grabbingAnchorIdx.value = -1;
+  }
+};
+
+// ---------- 结算判定 ----------
+const addSettlementRule = () => {
+  const cfg = regionEventsCfg.value;
+  if (!cfg) return;
+  if (!Array.isArray(cfg.settlement_rules)) cfg.settlement_rules = [];
+  cfg.settlement_rules.push({ match: 'missing', sequence: [], target: '', min_count: 2, event_id: null });
+};
+
+const onSettlementMatchChange = (sr) => {
+  if (sr.match === 'exact' && !Array.isArray(sr.sequence)) sr.sequence = [];
+  if (sr.match === 'repeated' && !(Number(sr.min_count) >= 2)) sr.min_count = 2;
+};
+
+// 序列编辑器共用: 点击事件名按钮往数组尾部追加（允许重复, 多选下拉做不到）
+const appendSeqName = (obj, key, name) => {
+  if (!Array.isArray(obj[key])) obj[key] = [];
+  obj[key].push(name);
+};
+
+const moveSettlementRule = (idx, delta) => {
+  const list = regionEventsCfg.value?.settlement_rules;
+  if (!list) return;
+  const to = idx + delta;
+  if (to < 0 || to >= list.length) return;
+  [list[idx], list[to]] = [list[to], list[idx]];
+};
+
+const setRegionClassConf = (label, val) => {
+  const cfg = regionEventsCfg.value;
+  if (!cfg) return;
+  if (!cfg.class_conf) cfg.class_conf = {};
+  if (val == null || val === '') {
+    delete cfg.class_conf[label];
+  } else {
+    cfg.class_conf[label] = val;
+  }
+};
 
 // ---------- 跟踪模式 ROI 预览小画布（编辑器本体在 RoiEditorDialog, 由父级编排） ----------
 const roiPreviewCanvas = ref(null);

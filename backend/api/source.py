@@ -177,6 +177,7 @@ from backend.api.source_lifecycle_mixin import LifecycleMixin  # noqa: E402  P6 
 from backend.api.source_periodic_actions_mixin import PeriodicActionsMixin  # noqa: E402  v3.5.0: 周期性强制动作 (每 N 轮做 E)
 from backend.api.source_synthetic_mixin import SyntheticMixin  # noqa: E402  v3.6.x: 虚拟剧本源（功能测试）
 from backend.api.source_per_item_mixin import PerItemMixin  # noqa: E402  v3.6.x: 逐件覆盖模式 (logic_mode='per_item')
+from backend.api.source_region_events_mixin import RegionEventsMixin  # noqa: E402  v3.32+: 区域事件模式 (logic_mode='region_events', TP 工位流程监测)
 from backend.api.source_drawer import Drawer  # noqa: E402  P7 阶段一第一刀: DrawMixin 重构为 has-a 组合 (自持 kalman 状态)
 from backend.api.source_mediapipe import MediaPipeOverlay  # noqa: E402  P7 第二刀: MediaPipe 子系统改组合 (自持 _mp_* 状态)
 from backend.api.source_counters import Counters  # noqa: E402  P7 第三刀: 计数器子系统改组合 (自持 counters dict + 持久化)
@@ -185,7 +186,7 @@ from backend.api.source_inference_executor import InferenceExecutor  # noqa: E40
 from backend.api.source_sequence_labels import SequenceLabels  # noqa: E402  P7 第九刀: 步骤标签查询改组合 (无状态, 仅依赖 project_config)
 
 
-class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, RecordingApiMixin, LifecycleMixin, SyntheticMixin, PeriodicActionsMixin, PerItemMixin):
+class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, RecordingApiMixin, LifecycleMixin, SyntheticMixin, PeriodicActionsMixin, PerItemMixin, RegionEventsMixin):
     """主管理器 (P7 进行中: DrawMixin 已改组合 → self.drawer)"""
 
     # ===== P7 兼容层: 把已迁移到组件的属性/方法名映射回组件实例 =====
@@ -1029,7 +1030,12 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         return detections
 
     def _get_enabled_labels(self) -> set:
-        """Helper: collect enabled step labels from project config."""
+        """Helper: collect enabled step labels from project config.
+
+        v3.32: 追加同标签区域拆分的原始标签/锚点标签 + 就位提示锚点标签 ——
+        它们不是步骤 label, 但 runner 层按本集合过滤, 不加进来的话原始标签
+        (如「打螺丝」) 在检测出口就被丢弃, 拆分层永远收不到。
+        """
         labels = set()
         if self.project_config:
             for step in self.project_config.get('steps_config', []):
@@ -1037,6 +1043,22 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                     lbl = step.get('label', '')
                     if lbl:
                         labels.add(lbl)
+            pipeline = self.project_config.get('pipeline_config', {}) or {}
+            for rule in pipeline.get('label_splits') or []:
+                if not isinstance(rule, dict) or rule.get('enabled') is False:
+                    continue
+                if rule.get('source_label'):
+                    labels.add(rule['source_label'])
+                if rule.get('mode') == 'anchor' and rule.get('anchor_label'):
+                    labels.add(rule['anchor_label'])
+                # 多轮次切换标签(如「盖罩」)同理: 不是步骤也要过 runner 过滤,
+                # 否则引擎收不到、轮次永远不切
+                rounds = rule.get('rounds') or {}
+                if isinstance(rounds, dict) and rounds.get('enabled') and rounds.get('trigger_label'):
+                    labels.add(rounds['trigger_label'])
+            guide = pipeline.get('placement_guide') or {}
+            if isinstance(guide, dict) and guide.get('enabled') and guide.get('anchor_label'):
+                labels.add(guide['anchor_label'])
         return labels
     
     def _emergency_gpu_reset(self):
@@ -1137,10 +1159,14 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         注意: per_item 模式走 source_per_item_mixin 路径, 不维护 step_frame_confirmed,
         若仍走老的 confirm 过滤会把所有 detections 滤空 → 前端永远看不到框。
         所以 per_item 模式直接放行 raw detections, 由 per_item 逻辑自己消化。
+        region_events 模式同理 (v3.32 踩坑复刻): 步骤确认由区域事件引擎按
+        "动作规则"维护, _update_step_stats 不跑 → step_frame_confirmed 恒空
+        → 客户报"没开隐藏标注框也看不见框"。原样放行, 让画面框与引擎
+        吃到的检测数据肉眼可核对。
         """
         if getattr(self, "source_type", None) == "synthetic":
             return list(detections) if detections else []
-        if (self.project_config or {}).get('logic_mode') == 'per_item':
+        if (self.project_config or {}).get('logic_mode') in ('per_item', 'region_events'):
             return list(detections) if detections else []
         # 自定义混合模式的"物品标签"(如滑块) 由 _custom_mix 子状态机独占消费,
         # 在 _update_step_stats 里被从 detected_labels 剥离, 永远不进 step_frame_confirmed.
@@ -1399,6 +1425,11 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # v3.8.x last_first 结算模式: 等待首步标记
         if hasattr(self, '_pending_first_step'):
             self._pending_first_step = False
+
+        # 区域事件模式引擎: episode/轨迹/顺序序列一并清零, 防止停止-启动接续旧半截事件
+        _re_engine = getattr(self, '_region_event_engine', None)
+        if _re_engine is not None:
+            _re_engine.reset()
 
         # v3.9.x 事件人工确认阻塞态:
         # 清理函数被 start_detection / stop_detection / apply_project_config /
