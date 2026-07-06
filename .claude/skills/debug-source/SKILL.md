@@ -1,11 +1,14 @@
 ---
 name: debug-source
-description: "诊断 source.py VideoSourceManager 的问题：检测状态机、Cycle/Step 生命周期、_trigger_event 中心 hook、v3.5.x 周期性强制动作、ghost cycle、线程安全。当遇到检测逻辑异常、步骤判定错误、周期不结束、计数器不对时使用。"
+description: "诊断 source.py VideoSourceManager 的问题：检测状态机、Cycle/Step 生命周期、_trigger_event 中心 hook、v3.5.x 周期性强制动作、ghost cycle、线程安全、v3.32 同标签区域拆分（虚拟步骤/多轮次/违序即时事件）。当遇到检测逻辑异常、步骤判定错误、周期不结束、计数器不对、拆分区域不生效、轮次不切换时使用。"
 argument-hint: "[问题描述]"
 model: opus
 effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__sentry, mcp__context7"
 ---
+
+> **设计深潜**：`docs/dev/internals/source-state-machine.md`（logic_mode×settlement_mode 档案卡 + 分发点）  
+> 本 skill = how-to/debug。
 
 # debug-source: VideoSourceManager 诊断（v3.5.x 主线）
 
@@ -1003,3 +1006,15 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 - 缺项清单为空 → `_parse_missing_steps` 文案不匹配；已兼容「缺少:」「缺少步骤:」+ 回退用 `steps_config` 对比 `current_cycle_steps` 推算。
 - 认 NG 后又被挂起（自锁）→ `_remediation_bypass` 没置或被提前清。
 - 包装少装的「补滑块」是另一条线（`packaging_flow_coordinator` 的 `pending_remediation` 箱挂起），与这里的「缺步骤」检测层延迟落账正交，别混。
+
+## 同标签区域拆分：状态机上游的标签改写层（v3.32+）
+
+**排查步骤判定问题前先确认这一层**：项目若配了 `pipeline_config.label_splits`，检测结果在进 `_update_step_stats` **之前**就被改写过——原始标签（如「打螺丝」）按检测框中心落点映射成虚拟步骤名（如「螺丝1」），未落进任何区域的框默认**丢弃**。所以"步骤不计数 / 标签对不上 steps_config"先查这层，别直奔状态机。
+
+- 代码位置：`backend/api/source_label_split.py` → `LabelSplitEngine.apply`；挂点 `source_inference_loop_mixin.py: _apply_label_splits`（帧循环出口）；配置解析 `source_project_config_apply.py: _apply_label_splits`。
+- 两种定位：`fixed` 区域钉死画面；`anchor` 区域随锚点框平移缩放（锚点丢失沿用最近位置）。
+- 多轮次：`rounds` 启用时虚拟步骤名 = 当轮前缀 + 区域名，轮次由「切换标签消失超 `trigger_gap_seconds` 后重新出现」推进，满轮回绕；**周期结算且切换标签离场后归零**。轮次卡住先查剧本/现场里切换标签的离场间隔够不够。`region_overrides` 可给某轮换独立区域，缺省轮沿用共享区域。
+- 运行态透出：`/detection/results` 的 `label_split_rounds`（当前轮次）与 `placement_guide`（就位状态）。**Monitor 页每次加载会重新下发项目配置 → 引擎重建 → 轮次回到第 1 轮**，排查"轮次显示不对"先想这条。
+- 严格顺序违序即时事件：`pipeline_config.strict_order_violation_event_id`（null=关），收口在 `source_settlement_mixin.py: _fire_strict_order_violation`（同一标签+周期进度 5s 节流；照旧拦截不计入）。
+- 零差异保证：不配 `label_splits` / `rounds` / 违序事件 → 引擎为 None，行为与 v3.31 完全一致；回归见 `tests/test_label_split.py`（零差异组）+ `tests/features/label_split_matrix.feature`。
+- 配置结构与字段：`docs/dev/reference/config-dict.md`；设计取舍：`docs/rfc/同标签区域拆分_虚拟步骤_设计方案_RFC.md`（已归档）。

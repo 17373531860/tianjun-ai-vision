@@ -149,13 +149,12 @@ DB 影响:   [是 / 否；具体 ORM 模型 + ALTER TABLE]
    - `frontend/src/views/MES/ScannerPanel.vue` 用 `${host}/snapshot?channel=...`
    - `frontend/src/store/useSourceStore.js` 含 `streamUrl: '/video_feed'`
    - `frontend/src/api/data.js: getVideoUrl()` 拼 `${host}/api/v1/data/videos/${id}`
-   - `frontend/src/api/camera.js: getDefaultStreamUrl()` 拼 `${host}/video_feed`
    - `frontend/src/api/export.js: getTemplateFileDownloadUrl()` 拼 `${host}/api/v1/export/templates/...`
 6. **Electron 关机流程**：`electron/backend-manager.js` 直接拼 `/api/v1/source/shutdown/step/<name>` 与 `/api/v1/source/shutdown/complete`，改路径必须同步改
 7. **License 缓存写回**：Electron 把 license payload POST 给 `/api/v1/system/license-cache`（写在 `electron/license-manager.js` 一类文件里）
 8. **环境变量**：`VITE_API_BASE_URL` 默认 `http://localhost:8001/api/v1`，**不要把 v1 写进路径段**
 
-> 当前没有 WebSocket 路由（`ws_router` / `websocket.py` 已废）。如果你要新增 WS，前端 `api/websocket.js` 是死代码可以重写。
+> 当前没有 WebSocket 路由（`ws_router` / `websocket.py` 已废，前端 `api/websocket.js` 也已删）。要新增 WS 从零写。
 
 ---
 
@@ -177,11 +176,7 @@ DB 影响:   [是 / 否；具体 ORM 模型 + ALTER TABLE]
 7. **`/scanner/*` 与 `/scanner/wmax/*`**：两个 router 都挂 `/scanner` 前缀，子路径**不能撞**
 8. **`/mes/*` 与 `/mes/gateway/*`**：同上，新增 `/mes/<x>` 前必须查 `mes_gateway.py` 是否已经占用
 9. **`/export/*` 双 router**：`export_custom.py`（模板 / 渲染）+ `export_realtime.py`（实时规则）共用前缀，新增子路径要看两边
-10. **死代码引用**：以下文件有路径但**没人用**——改时不必跟，留时不要再扩
-    - `frontend/src/api/task.js`：全工程**无 import**，可整文件删
-    - `frontend/src/api/camera.js`：除 `getDefaultStreamUrl()` 外**无视图 import**
-    - `frontend/src/api/report.js`：`getRecords` / `getTrend` / `exportPdfReport` 局部死代码（`Report/index.vue` 路由未注册）
-    - `frontend/src/api/websocket.js`：无人 import
+10. **死代码引用**：task.js / camera.js / report.js / websocket.js 及 Report 视图**已于 2026-07 死代码清理中删除**，别复活；仍残留的：
     - `detection.js: resetDetection`（路径 `/detection/reset` 已无对应后端，老前端兼容残留）
 
 ---

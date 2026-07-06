@@ -48,7 +48,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__playwright, mcp__context7"
 | `Model/index.vue` | `Model` | 339 | 模型仓库（**单数 `Model`**，不是 `Models`） |
 | `Alarm/index.vue` | `Alarm` | 921 | 报警设置 |
 | `Settings/index.vue` | `Settings` | 1441 ⚠️ | 系统设置（含画面变换、操作员管理） |
-| `Report/index.vue` | — | 299 | **死代码：路由未注册**（见第 8 节） |
+| `Report/index.vue` | — | — | **已删**（2026-07 死代码清理，报表展示由 Data 页接管） |
 
 Layout：`frontend/src/layout/index.vue`(117) + `Navbar.vue`(549 ⚠️) + `BottomBar.vue`(69)。
 
@@ -146,11 +146,11 @@ actions:
 | `model.js` | 52 | `/models/*` | OK |
 | `operators.js` | 8 | `/operators/*` | OK |
 | `project.js` | 25 | `/projects/*` | OK |
-| `report.js` | 25 | `/reports/*` | **部分死代码**（getRecords / getTrend / exportPdfReport 仅 Report 组件用，组件本身路由未注册） |
+| `report.js` | — | `/reports/*` | **已删**（2026-07 死代码清理） |
 | `scanner.js` | 25 | `/scanner/*` | OK |
 | `wmax.js` | 84 | `/scanner/wmax/*` | OK |
-| `task.js` | 25 | `/tasks/*` | **死代码：全前端无 import** |
-| `camera.js` | 25 | `/cameras/*` | **死代码：全前端无 import**（旧式相机表，与 `/source/*` 并存） |
+| `task.js` | — | `/tasks/*` | **已删**（2026-07 死代码清理） |
+| `camera.js` | — | `/cameras/*` | **已删**（2026-07 死代码清理；旧式相机表后端仍在） |
 
 后端 baseURL：默认 `http://localhost:8001/api/v1`，可被 `VITE_API_BASE_URL` 覆盖。
 
@@ -214,11 +214,8 @@ App.vue
 
 | 位置 | 状态 | 说明 |
 |---|---|---|
-| `frontend/src/views/Report/index.vue` (299) | 路由未注册 | 仍 import `api/report.js`，但路由表里没有 `/report`，不会被加载 |
-| `frontend/src/api/task.js` | 全前端无 import | 整文件死代码 |
-| `frontend/src/api/camera.js` | 全前端无 import | 整文件死代码（旧式相机表前端入口） |
-| `frontend/src/api/report.js` 中 `getRecords / getTrend / exportPdfReport` | 局部死代码 | 仅 `Report/index.vue` 用，但视图本身死了 |
-| `frontend/src/api/export.js` 顶部注释 | 文档过时 | 写 `fmt: 'txt'\|'csv'`，实际后端支持 `txt/csv/docx/xlsx/pdf` 5 种 |
+| ~~Report 视图 + task/camera/report 三个 api 文件~~ | **已删**（2026-07 死代码清理） | 全仓核实无引用 + build 绿后删除，别复活 |
+| `frontend/src/api/export.js` 顶部注释 | 已修正 | fmt 注释已补齐 `txt/csv/docx/xlsx/pdf` 5 种 |
 | `useSystemStore.display.brandName / appName / inspectorName / deviceNumber` | 默认值 | 真实显示走 `display.navbar.*` 开关 + 用户输入 |
 | `Navbar.vue` 自动恢复 vs Settings 修改 | 时序坑 | Navbar 用 `JSON.parse` 直接覆盖 `store.display`，而非深合并 |
 | `WMaxPanel.vue` | 不在 MES tab 直接挂载 | 由 `ScannerPanel.vue:10` 通过 `v-if="activeTab==='wmax' && hasWmaxDevice"` 间接挂 |

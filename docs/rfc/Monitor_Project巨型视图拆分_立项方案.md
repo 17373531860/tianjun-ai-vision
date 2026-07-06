@@ -1,6 +1,10 @@
 # 立项方案：Monitor / Project 巨型视图拆分（逐 panel）
 
-- 状态：**立项待批（批准后按批次单独排期执行，本期不动代码）**
+> ⚠️ **本文已归档（2026-07-04 全部落地）**：P-1~P-5（Project 页五批）与 M-1~M-4（Monitor 页四批）
+> 已按本方案执行完毕并逐批过 T4/T5/T6 验收（commit 2404bcd…6f01c28）。
+> 现状以 `frontend/src/views/Monitor/`、`frontend/src/views/Project/` 目录结构与 `modify-frontend` skill 为准，本文仅供决策考古。
+
+- 状态：**已实施（原文保留如下）**
 - 日期：2026-07-03
 - 关联：第五期治理计划第 5 项；技术债 `05_tech_debt.md` 第九节过大文件表
 - 铁律：**碰 `.vue` 强制走 T4（真浏览器）/ T5（落库双向验证）/ T6（CI E2E），每批只拆一个 panel，拆完即验收即提交**

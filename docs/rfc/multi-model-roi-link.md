@@ -1,6 +1,10 @@
 # 多模型 + ROI 联动使用指南 (feat/multi-model-roi-link)
 
-> 适用分支：`feat/multi-model-roi-link`
+> ⚠️ **本文已归档**：该功能分支已并入主线（多模型 slot 路径见
+> `backend/api/source_project_config_apply.py`，端到端回归见 `tests/test_e2e_multi_model.py`），
+> `feat/multi-model-roi-link` 分支已不存在。现状以代码为准，本文仅供决策考古。
+
+> 适用分支：`feat/multi-model-roi-link`（已合并删除）
 > 主线版本基线：v3.6.0
 > 最后更新：2026-05-08
 

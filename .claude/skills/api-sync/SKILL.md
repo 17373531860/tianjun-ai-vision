@@ -174,9 +174,9 @@ export function getBackendHost() {
 | `backend/api/detection.py` | **已删**（v2.7.x） | `source_routes.py` 内 `/source/detection/*` |
 | `backend/services/detector.py` | **已删** | `VideoSourceManager` 内置推理 |
 | `POST /api/v1/detection/reset` | **404**（路由不存在） | `POST /api/v1/source/detection/reset-stats` |
-| `frontend/src/api/task.js` | dead | 离线任务已不在前端入口；只剩 `/tasks/*` 后端在线 |
-| `frontend/src/api/camera.js` | dead | 视频源 CRUD 走 `/source/*` 和 sourceStore（前端 `useSourceStore.js`） |
-| `frontend/src/views/Report/index.vue` | 路由未挂载 | `views/Data/index.vue` 接管报表展示 |
+| `frontend/src/api/task.js` | **已删**（2026-07 死代码清理） | 离线任务已不在前端入口；只剩 `/tasks/*` 后端在线 |
+| `frontend/src/api/camera.js` | **已删**（2026-07 死代码清理） | 视频源 CRUD 走 `/source/*` 和 sourceStore（前端 `useSourceStore.js`） |
+| `frontend/src/views/Report/index.vue` | **已删**（2026-07 死代码清理） | `views/Data/index.vue` 接管报表展示 |
 
 ---
 

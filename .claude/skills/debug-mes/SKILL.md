@@ -7,6 +7,9 @@ effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__sentry"
 ---
 
+> **设计深潜（为什么这样设计）**：`docs/dev/internals/mes-hook-pipeline.md` + `docs/dev/internals/cluster-collector.md`  
+> 本 skill = how-to/debug；深潜 = explanation。冲突以代码为准。
+
 # debug-mes: MES 子系统诊断（v3.5.x 主线）
 
 > 阅前先看 `AGENTS.md` 第六节 6.2（模块 6/7/8/9）+ 第七节扩展点表 + 第八节不变量 1/4/6。

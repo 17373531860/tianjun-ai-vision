@@ -1,8 +1,12 @@
 # 逐件漏打检测 · 实时看板 + 离场快照方案（内部 RFC）
 
+> ⚠️ **本文已归档（v3.28.0 落地，2026-06-27）**：离场快照判定 + 漏打挂起待补已实现于
+> `backend/api/source_per_item_mixin.py`（默认全关，老项目零差异）。
+> 现状以代码与 `debug-per-item` skill 为准，本文仅供决策考古。
+
 > 面向：项目主作者 / 后端 / 前端开发
 > 归位：**主程序原生**（多客户通用的逐件模式能力补强，扩展点 #2）
-> 状态：方案待评审，未动手
+> 状态：已实施（原文保留如下）
 > 关联代码：`backend/api/source_per_item_mixin.py`、`backend/api/source_event_trigger_mixin.py`
 > 关联客户文档：`docs/逐件漏打检测_方案说明_客户版.md`
 

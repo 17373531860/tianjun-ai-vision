@@ -5,6 +5,9 @@ argument-hint: "[要修改的配置项]"
 allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7, mcp__sequential-thinking"
 ---
 
+> **配置字段字典（生成物）**：`docs/dev/reference/config-dict.md`  
+> 本 skill = 改配置时的全链路影响分析（how-to）。
+
 # modify-project-config: 项目配置安全修改分析（v3.5.x）
 
 你正在帮用户安全修改项目配置结构。Project 是天军系统的"客户脚本"，
@@ -119,6 +122,49 @@ class Project(Base):
     "alarm_event_wrong": null,
     "alarm_event_precheck": null
   },
+
+  // ★ v3.32 新增：同标签区域拆分（虚拟步骤）+ 工件就位提示
+  // apply 在 source_project_config_apply._apply_label_splits →
+  // 引擎 backend/api/source_label_split.py，挂点 = 推理出口 _apply_label_splits
+  // （改写后下游状态机/画框/MES 只见虚拟步骤标签）；区域名 = steps_config 里
+  // split_origin=<rule.id> 的虚拟步骤（前端 labelSplit.js syncSplitVirtualSteps 同步）。
+  // 详见 docs/rfc/同标签区域拆分_虚拟步骤_设计方案_RFC.md
+  "label_splits": [
+    {
+      "id": "ls_xxx", "enabled": true,
+      "source_label": "打螺丝",               // 被拆分的模型原始标签
+      "mode": "fixed|anchor",                 // 固定画面 / 锚点跟随
+      "anchor_label": "前罩",                 // anchor 模式：跟随哪个检测目标
+      "anchor_ref": {"x":0,"y":0,"w":0,"h":0},// anchor 模式：标定时锚点框（归一化）
+      "anchor_hold_seconds": 3.0,             // 锚点丢失沿用最近位置秒数
+      "unmatched": "drop|keep|map",           // 未命中区域的原始标签处理
+      "unmatched_label": "",                  // map 时改写成的标签
+      "regions": [ {"name": "螺丝1", "polygon": [[0.1,0.1],...], "color": "#f97316"} ],
+      "rounds": {                             // ★ 多轮次：同一批位置按工序轮次映射不同虚拟步骤
+        "enabled": false,                     //   （前罩/后罩各打4颗、打的位置在画面重叠的场景）
+        "trigger_label": "盖罩",              // 切换标签"重新出现"(离场>gap 后再入画)→ 下一轮
+        "count": 2,                           // 总轮数 2~8，满轮后回绕第1轮
+        "prefixes": ["前罩", "后罩"],          // 每轮前缀，虚拟步骤名 = 前缀+区域名
+        "trigger_gap_seconds": 3.0,           // 离场判定窗口（防短暂遮挡误切轮）
+        "region_overrides": {}                // 每轮独立区域(可选): {"2": [{name,polygon,color}]}
+        //   翻面后位置不重叠时给某轮换一批区域，缺省轮沿用共享 regions；
+        //   某轮 override 全部非法 → 该轮回退共享区域（不整体禁用轮次）
+        // 周期已结算且切换标签离场 → 轮次归零；当前轮次经
+        // GET /source/detection/results 的 label_split_rounds 透出给 Monitor 角标
+      }
+    }
+  ],
+  "placement_guide": {                        // 工件就位提示（与拆分正交的独立小功能）
+    "enabled": false, "anchor_label": "", "polygon": [], "mode": "hint",
+    "display": "always"                       // 就位后显示策略: always 常驻(变绿) |
+    //   fade_on_ready 淡化(半透明细框无文字) | hide_on_ready 隐藏。未就位永远完整显示。
+    //   纯前端渲染策略, 后端 parse 不消费; 运行态经 GET /source/detection/results 透出
+  },
+  // ★ v3.32：严格顺序违序即时事件（null=关）。严格步骤在错误时机出现时照旧拦截
+  // 不计入周期，同时当场 _trigger_event 所配事件（建议配警告/自定义类，配 NG 会走
+  // 完整 NG 计数+推送慎用）。同一(标签,周期进度) 5s 节流。触发点=source_settlement_mixin
+  // 的两处严格守门(_fire_strict_order_violation)。last_first 模式下严格顺序被强制清空→无效。
+  "strict_order_violation_event_id": null,
 
   // ★ v3.5.0 新增：周期性强制动作（每 N 轮做 E）
   // ★ v3.5.2 新增：每条规则的 run_on_start（开机首检）

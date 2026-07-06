@@ -32,8 +32,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write, mcp__context7"
 - `services/detector.py` — 死实现类，v2.7.x 删除
 - `api/websocket.py` — 不存在（CI build.yml 列了但实际没有，是已知 CI bug）
 
-**⚠️ Dead 前端 API 客户端（不要参考）：**
-- `frontend/src/api/task.js` / `camera.js` / `report.js` — 前端已没视图调用，仅文件保留
+**⚠️ Dead 前端 API 客户端（不要参考、不要复活）：**
+- `frontend/src/api/task.js` / `camera.js` / `report.js` — 已于 2026-07 死代码清理中删除
 
 ### 第2步: 定义 Schema（如需要）
 

@@ -228,8 +228,7 @@ git status 看冲突文件分类
 
 | 文件 | 状态 |
 |---|---|
-| `frontend/src/views/Report/index.vue` | 死代码，路由未注册 |
-| `frontend/src/api/task.js` / `camera.js` | 死代码，无 import |
+| ~~Report 视图 + task/camera/report api~~ | **已删**（2026-07 死代码清理）——分支若带回这些文件，合并时直接丢弃 |
 
 ---
 
@@ -359,7 +358,7 @@ revert(merge): 撤销 #abc123，导致 cycle_end hook 失效
 
 1. **真实冲突案例库**：每次踩到的合并冲突案例（哪些文件、什么场景、怎么解的）
 2. **多 agent 协调表**：建一个 `docs/agent-coordination.md` 记录"哪个 agent 在动哪些文件"，避免冲突
-3. **自动化预检脚本**：`scripts/pre-merge-check.sh`，跑完输出"动到 N 个地雷文件，需要人类复核"
+3. **自动化预检脚本**：新建 `scripts/pre-merge-check.sh`，跑完输出"动到 N 个地雷文件，需要人类复核"
 4. **PG 迁移期的特殊合并规则**：`feat/migrate-pg` 分支引入后，ORM 双轨期的合并要怎么走
 5. **CI 与合并联动**：何时让 CI 跑 merge 候选、何时直接合本地
 

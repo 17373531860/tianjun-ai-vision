@@ -151,6 +151,29 @@ python scripts/ci/check_version_alignment.py --expect vX.X.X
 
 **完成标志：** changelog 的 `skills_updated` 字段包含所有更新/新增的 skill 名称。
 
+## 第5.6步: 开发文档查漏补缺（2026-07 起强制，不可跳过！）
+
+**为什么这步是强制的：** 2026-07 建立了 `docs/dev/` 开发者文档体系（架构总览/深潜/参考生成物），文档 CI 会拦欠账——发版前不对账，CI 红或文档腐烂。
+
+对本轮全部变更逐条过下面的表：
+
+| 变更类型 | 要更新的文档 |
+|---|---|
+| 新增/修改 API 端点 | 端点必须有 summary + response_model + docstring（`docs/dev/conventions/端点文档军规.md`；缺了端点门禁直接红，**不要**往 `scripts/ci/doc_endpoint_baseline.json` 加豁免） |
+| 改 ORM 模型/表 | 重跑 `python scripts/docgen/gen_db_schema.py` |
+| 改 Project 7 个 JSON 配置字段 | 重跑 `python scripts/docgen/gen_config_dict.py` |
+| 任何路由/Schema 变更 | 重跑 `python scripts/docgen/gen_openapi_snapshot.py` |
+| 改了状态机/MES 链路/集群/插件加载的**设计** | 同步更新 `docs/dev/internals/` 对应深潜篇 |
+| 架构级变更（分层/容器/依赖规则变了） | 同步更新 `docs/dev/architecture/` 对应篇 |
+| 插件 hook/PluginHost 能力面变更 | 更新 `docs/dev/reference/plugin-sdk.md` + `docs/plugin-system/` |
+
+**完成标志（必须真跑，不许口头绿）：**
+
+```bash
+~/anaconda3/envs/tianjun/bin/python -m pytest tests/test_doc_ci.py -q
+# 6 passed 才能进第6步 Git Commit
+```
+
 ## 第6步: Git Commit
 
 ```bash

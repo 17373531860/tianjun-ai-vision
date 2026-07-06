@@ -7,6 +7,9 @@ effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__sentry"
 ---
 
+> **设计深潜**：`docs/dev/internals/cluster-collector.md`（集群主从聚齐/心跳/超时）  
+> 本 skill = 多工位/通道隔离 how-to/debug。
+
 # debug-channel: 多工位/多通道诊断（v3.5.x）
 
 你正在诊断天军 AI 视觉检测系统的 **多通道管理模块（ChannelManager）**。
