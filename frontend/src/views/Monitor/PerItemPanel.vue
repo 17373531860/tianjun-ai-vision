@@ -4,7 +4,8 @@
     数据源: detection/results.per_item_state (来自 source_per_item_mixin.get_per_item_state).
     位置: 视频下方横条 (h-44), 与 SOP 流程卡片 / 跟踪清单 互斥.
   -->
-  <div class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
+  <div class="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col"
+       :style="{ height: panelHeight }">
 
       <!-- 头部 bar (对齐 tracking 风格) -->
     <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0 flex justify-between items-center">
@@ -93,6 +94,13 @@
         :disabled="busy"
         title="放弃补打, 按当前真实覆盖状态把本件判为 NG 落账 (= 触发事件人工确认)"
         @click="handleControl('confirm_ng')">确认 NG</button>
+    </div>
+
+    <!-- 重复打警告横幅 (duplicate_screw_alarm 开启且检出回头重打时): 黄条提示 + 报警灯已响 -->
+    <div v-if="duplicateWarning"
+         class="bg-amber-900/70 border-y-2 border-amber-500 px-3 py-1.5 flex-shrink-0 flex items-center gap-2 animate-pulse">
+      <span class="text-amber-300 text-base font-bold whitespace-nowrap">⚠ 重复打</span>
+      <span class="text-amber-100 text-xs truncate">{{ duplicateWarnText }} · 请勿重复打同一颗螺丝</span>
     </div>
 
     <!-- 主体: 横向滚动 / 每步一卡片 (对齐 tracking 容器模式风格) -->
@@ -236,7 +244,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { perItemControl } from '@/api/detection'
 
@@ -337,18 +345,60 @@ const remediationMissingHint = computed(() => {
   return parts.length ? ` (${parts.join(' · ')})` : ''
 })
 
+// ──── 重复打警告 (last_warning 有时才显示黄条; 报警灯已由后端复用 event2 触发) ────
+// 前端自己按配置时间倒计时撤下横幅, 不依赖后端持续送帧清空 (视频停/暂停时后端不再清,
+// 若只靠后端会一直挂着). 只在"出现新警告"(ts 变化) 时重置计时器; 后端反复送同一条
+// (ts 不变) 不会刷新计时, 到点就撤. display_sec=0 → 不自动撤, 等后端清 (ts 变 null).
+const shownWarning = ref(null)
+let _warnHideTimer = null
+const _clearWarnTimer = () => {
+  if (_warnHideTimer) { clearTimeout(_warnHideTimer); _warnHideTimer = null }
+}
+watch(
+  () => props.state?.last_warning?.ts,
+  (ts) => {
+    _clearWarnTimer()
+    if (!ts) { shownWarning.value = null; return }   // 后端已清 → 撤下
+    shownWarning.value = props.state.last_warning
+    const disp = Number(props.state?.config?.duplicate_warning_display_sec ?? 0)
+    if (disp > 0) {
+      _warnHideTimer = setTimeout(() => { shownWarning.value = null }, disp * 1000)
+    }
+  },
+  { immediate: true },
+)
+onBeforeUnmount(_clearWarnTimer)
+
+const duplicateWarning = computed(() => shownWarning.value)
+const duplicateWarnText = computed(() => {
+  const w = duplicateWarning.value
+  return w ? (w.reason_summary || '检测到重复打同一颗螺丝') : ''
+})
+
+// ──── 面板高度: 基础 11rem, 每出现一条横幅 (待补红条 / 重复打黄条) 就整体加高一截 ────
+// 这样横幅弹出时是"把框拉长", 而不是压缩中间步骤卡片区域 (flex-1 高度保持不变).
+const bannerCount = computed(() => {
+  let n = 0
+  if (props.state?.awaiting_remediation) n++
+  if (duplicateWarning.value) n++
+  return n
+})
+const panelHeight = computed(() => `${11 + bannerCount.value * 2.75}rem`)
+
 // ──── 个体色块样式 (颜色可配: state.config.box_color_covered / box_color_uncovered) ────
 const coveredColor = computed(() => props.state?.config?.box_color_covered || '#22c55e')
 const uncoveredColor = computed(() => props.state?.config?.box_color_uncovered || '#ef4444')
 // 自定义色时走内联 style; 留空时回退原 tailwind class (零视觉差异)
 const itemClass = (item) => {
+  // 本周期被重复打过 (item.dup > 0) → 叠一圈琥珀色环, 一眼看出哪颗被重打
+  const dupRing = item.dup > 0 ? ' ring-2 ring-amber-400' : ''
   if (props.state?.config?.box_color_covered || props.state?.config?.box_color_uncovered) {
-    return 'border'
+    return 'border' + dupRing
   }
   if (item.covered) {
-    return 'bg-green-600/30 border-green-500 text-green-200'
+    return 'bg-green-600/30 border-green-500 text-green-200' + dupRing
   }
-  return 'bg-red-950/40 border-red-700/60 text-red-300'
+  return 'bg-red-950/40 border-red-700/60 text-red-300' + dupRing
 }
 const itemStyle = (item) => {
   if (!props.state?.config?.box_color_covered && !props.state?.config?.box_color_uncovered) return {}
@@ -365,6 +415,7 @@ const itemTitle = (item) => {
     const dt = new Date(item.covered_at * 1000)
     lines.push(`完成时间: ${dt.toLocaleTimeString()}`)
   }
+  if (item.dup > 0) lines.push(`⚠ 重复打 ${item.dup} 次`)
   return lines.join('\n')
 }
 

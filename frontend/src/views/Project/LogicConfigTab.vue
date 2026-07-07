@@ -852,6 +852,14 @@
                   :disabled="project.pipeline_config.per_item.disable_auto_settle" />
                 <div class="text-[10px] text-gray-500 mt-1">周期开始后超 N 秒未结算 → 强制 NG 防卡死; 0 = 不限<span v-if="project.pipeline_config.per_item.disable_auto_settle" class="text-amber-400"> · 手动模式下忽略</span></div>
               </div>
+              <div>
+                <div class="text-[11px] text-gray-400 mb-1">换板兜底: 工件整体消失几帧</div>
+                <el-input-number
+                  v-model="project.pipeline_config.per_item.workpiece_absent_settle_frames"
+                  size="small" :min="0" :step="1" :precision="0" class="!w-full"
+                  :disabled="project.pipeline_config.per_item.disable_auto_settle" />
+                <div class="text-[10px] text-gray-500 mt-1">全部工件标签连续消失 N 帧 → 判已取走/换板, 按真实覆盖兜底结算并重锁, 防上一板覆盖态泄漏到新板 (未打却变绿); 0 = 关<span v-if="project.pipeline_config.per_item.disable_auto_settle" class="text-amber-400"> · 手动模式下忽略</span></div>
+              </div>
             </div>
             <div class="text-[10px] text-gray-500 mt-2">
               ※ 结算方式与兜底只在"逐件覆盖"模式生效, 跟其他模式(顺序/检测/跟踪)同名参数完全独立<br/>
@@ -1031,6 +1039,55 @@
               </div>
               <el-switch v-model="project.pipeline_config.per_item.show_item_numbers"
                 active-text="显示" inactive-text="不显示" inline-prompt size="default" />
+            </div>
+
+            <!-- 重复打同一颗螺丝防护 -->
+            <div class="mt-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex-1">
+                  <div class="text-[12px] font-bold text-amber-300">防止重复打同一颗螺丝</div>
+                  <div class="text-[10px] text-gray-500 mt-0.5">
+                    开启后: 一颗螺丝已打过 (已覆盖), 若螺丝刀<b class="text-amber-400">移开后又压回来重打这颗</b> → 报警灯响 (复用 NG 报警) + 画面黄条提示。<b class="text-amber-400">待补态也生效</b> (回头重打已打的螺丝照样报, 补打漏掉的不报)<br/>
+                    关闭 (默认): 打过的螺丝再打不做任何处理
+                  </div>
+                </div>
+                <el-switch v-model="project.pipeline_config.per_item.duplicate_screw_alarm"
+                  active-text="防重复打" inactive-text="不处理" inline-prompt size="default" />
+              </div>
+              <div class="grid grid-cols-2 gap-4 mt-2">
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-gray-400">移开确认帧数</span>
+                  <el-input-number
+                    v-model="project.pipeline_config.per_item.duplicate_release_frames"
+                    size="small" :min="1" :step="1" :precision="0" class="!w-32"
+                    :disabled="!project.pipeline_config.per_item.duplicate_screw_alarm" />
+                  <span class="text-[10px] text-gray-500">螺丝刀要连续离开几帧才算真移开 (大=不易误报, 治拔枪卡顿, 推荐 8)</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-gray-400">重压确认帧数</span>
+                  <el-input-number
+                    v-model="project.pipeline_config.per_item.duplicate_sustain_frames"
+                    size="small" :min="1" :step="1" :precision="0" class="!w-32"
+                    :disabled="!project.pipeline_config.per_item.duplicate_screw_alarm" />
+                  <span class="text-[10px] text-gray-500">真移开后压回连续几帧算重复 (小=灵敏, 推荐 2)</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-gray-400">报警节流(秒)</span>
+                  <el-input-number
+                    v-model="project.pipeline_config.per_item.duplicate_alarm_interval_sec"
+                    size="small" :min="0" :step="0.5" :precision="1" class="!w-32"
+                    :disabled="!project.pipeline_config.per_item.duplicate_screw_alarm" />
+                  <span class="text-[10px] text-gray-500">两次报警最小间隔, 防连响 (推荐 2)</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-gray-400">提示存在时间(秒)</span>
+                  <el-input-number
+                    v-model="project.pipeline_config.per_item.duplicate_warning_display_sec"
+                    size="small" :min="0" :step="0.5" :precision="1" class="!w-32"
+                    :disabled="!project.pipeline_config.per_item.duplicate_screw_alarm" />
+                  <span class="text-[10px] text-gray-500">黄条提示显示多久后自动撤下 (0=持续到周期结束/下次刷新, 推荐 3)</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
