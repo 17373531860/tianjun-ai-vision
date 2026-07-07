@@ -210,3 +210,9 @@ tests/_ar_*.txt
 
 # 压测结果 (运行时产物)
 stress_test_result.json
+
+# 频闪逐帧诊断现场转储 (运行时产物, v3.32 diag_flicker)
+backend/diag_flicker/
+
+# pack-plugin.py 默认输出目录 (发布物走 dist-plugins/ 归档)
+/dist/

@@ -538,7 +538,7 @@ class StepStatsMixin:
     #   - 推理fps << 采集fps → 推理跟不上采集(跳帧) → 降 imgsz/换格式/降采集
 
     def _diag_flicker_tick(self, det_by_label, detections, current_time):
-        """每帧采样监视标签到环形缓冲, 并做频闪自动转储判定 (仅 custom_mix 项目)。"""
+        """每帧采样监视标签到环形缓冲, 并做频闪自动转储判定 (custom_mix 项目)。"""
         mix = getattr(self, '_custom_mix', None)
         if mix is None:
             return
@@ -557,6 +557,10 @@ class StepStatsMixin:
         watched = getattr(self, '_diag_watched', None)
         if not watched:
             return
+        self._diag_flicker_sample(watched, det_by_label, detections, current_time)
+
+    def _diag_flicker_sample(self, watched, det_by_label, detections, current_time):
+        """频闪诊断公共采样体 (custom_mix 与 region_events 共用)。"""
         from collections import deque
         if not hasattr(self, '_diag_ring'):
             self._diag_ring = deque(maxlen=200)     # ~8s @ 25fps

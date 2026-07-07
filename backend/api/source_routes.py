@@ -174,8 +174,11 @@ class StreamConfigRequest(BaseModel):
     # v3.32.0 自定义纯色骨架样式 (default None: 老前端不带字段时保留 host 当前值)
     mediapipe_custom_style: Optional[bool] = None
     mediapipe_pose_color: Optional[str] = None
+    # 关键点颜色与连线颜色分开配 ('' = 跟随连线颜色)
+    mediapipe_pose_point_color: Optional[str] = None
     mediapipe_pose_thickness: Optional[int] = None
     mediapipe_hands_color: Optional[str] = None
+    mediapipe_hands_point_color: Optional[str] = None
     mediapipe_hands_thickness: Optional[int] = None
 
 
@@ -546,8 +549,10 @@ def get_stream_config():
         # v3.32.0 自定义纯色骨架样式
         "mediapipe_custom_style": bool(getattr(video_manager, "mediapipe_custom_style", False)),
         "mediapipe_pose_color": getattr(video_manager, "mediapipe_pose_color", "#00FF00") or "#00FF00",
+        "mediapipe_pose_point_color": getattr(video_manager, "mediapipe_pose_point_color", "") or "",
         "mediapipe_pose_thickness": int(getattr(video_manager, "mediapipe_pose_thickness", 2)),
         "mediapipe_hands_color": getattr(video_manager, "mediapipe_hands_color", "#00FF00") or "#00FF00",
+        "mediapipe_hands_point_color": getattr(video_manager, "mediapipe_hands_point_color", "") or "",
         "mediapipe_hands_thickness": int(getattr(video_manager, "mediapipe_hands_thickness", 2)),
         # v3.8.0 二段管线运行时状态: 给前端显示"基础模式 / 已启用 / 路径无效 / 加载失败"
         "mediapipe_two_stage_status": _compute_two_stage_status(video_manager),
@@ -564,6 +569,14 @@ def _sanitize_hex_color(value: str, fallback: str) -> str:
         except ValueError:
             pass
     return fallback
+
+
+def _sanitize_optional_hex_color(value: str, fallback: str) -> str:
+    """同 _sanitize_hex_color, 但允许空串 ('' = 关键点跟随连线颜色)."""
+    s = (value or "").strip()
+    if s == "":
+        return ""
+    return _sanitize_hex_color(s, fallback)
 
 
 def _compute_two_stage_status(vm) -> Dict[str, Any]:
@@ -628,11 +641,19 @@ def set_stream_config(req: StreamConfigRequest):
     if req.mediapipe_pose_color is not None:
         video_manager.mediapipe_pose_color = _sanitize_hex_color(
             req.mediapipe_pose_color, video_manager.mediapipe_pose_color)
+    if req.mediapipe_pose_point_color is not None:
+        video_manager.mediapipe_pose_point_color = _sanitize_optional_hex_color(
+            req.mediapipe_pose_point_color,
+            getattr(video_manager, "mediapipe_pose_point_color", ""))
     if req.mediapipe_pose_thickness is not None:
         video_manager.mediapipe_pose_thickness = max(1, min(10, int(req.mediapipe_pose_thickness)))
     if req.mediapipe_hands_color is not None:
         video_manager.mediapipe_hands_color = _sanitize_hex_color(
             req.mediapipe_hands_color, video_manager.mediapipe_hands_color)
+    if req.mediapipe_hands_point_color is not None:
+        video_manager.mediapipe_hands_point_color = _sanitize_optional_hex_color(
+            req.mediapipe_hands_point_color,
+            getattr(video_manager, "mediapipe_hands_point_color", ""))
     if req.mediapipe_hands_thickness is not None:
         video_manager.mediapipe_hands_thickness = max(1, min(10, int(req.mediapipe_hands_thickness)))
 
@@ -669,8 +690,10 @@ def set_stream_config(req: StreamConfigRequest):
         "mediapipe_landmarker_task_path": video_manager.mediapipe_landmarker_task_path,
         "mediapipe_custom_style": video_manager.mediapipe_custom_style,
         "mediapipe_pose_color": video_manager.mediapipe_pose_color,
+        "mediapipe_pose_point_color": getattr(video_manager, "mediapipe_pose_point_color", "") or "",
         "mediapipe_pose_thickness": video_manager.mediapipe_pose_thickness,
         "mediapipe_hands_color": video_manager.mediapipe_hands_color,
+        "mediapipe_hands_point_color": getattr(video_manager, "mediapipe_hands_point_color", "") or "",
         "mediapipe_hands_thickness": video_manager.mediapipe_hands_thickness,
     }
 
@@ -1442,6 +1465,25 @@ def get_detection_results(
     except Exception as _e:
         print(f"[API] in-flight PT 收集异常 (ch{channel}): {_e}")
 
+    # v3.32: 区域事件模式的 in-flight ── 该模式不走 step_last_seen/step_start_time
+    # (那是步骤状态机的字典), "动作进行中"以引擎 episode 为准: 命中累计中即在场,
+    # 时长 = now - episode 起点。不设 current_cycle_steps 门槛: 动作确认前
+    # (min_frames 累计期) 就该让前端点亮"进行中", 与顺序模式"步骤刚进画面即 active"对齐。
+    _region_snapshot = None
+    _region_engine = getattr(mgr, '_region_event_engine', None)
+    if _region_engine is not None:
+        try:
+            _region_snapshot = _region_engine.snapshot()
+            _now_ts = time.time()
+            for _r in _region_snapshot.get('rules', []):
+                _ep_start = _r.get('episode_start_ts')
+                if _r.get('in_progress') and _ep_start:
+                    _live_dur = _now_ts - _ep_start
+                    if _live_dur > 0:
+                        step_inflight_durations[_r['name']] = round(_live_dur, 2)
+        except Exception as _e:
+            print(f"[API] region_events in-flight 收集异常 (ch{channel}): {_e}")
+
     last_cycle_time = mgr.cycle_times[-1] if mgr.cycle_times else 0
     last_cycle_time_with_ng = 0
     _all_ct_for_last = []
@@ -1581,6 +1623,10 @@ def get_detection_results(
         print(f"[API] /detection/results 取 custom_mix_state 失败: {_e}")
         result['custom_mix_state'] = None
 
+    # v3.32: 区域事件引擎快照 (Monitor 步骤面板 in-flight 佐证 + 调试用).
+    # 非该模式返回 None. 快照在上方 in-flight 收集时已取, 这里直接复用.
+    result['region_events'] = _region_snapshot
+
     # v3.32: 工件就位提示运行态 (Monitor 提示条 + 引导框着色用).
     # 未启用时返回 None, 前端按 None 处理即可.
     try:
@@ -1615,6 +1661,14 @@ def get_detection_results(
             'label_splits': _pcfg.get('label_splits', []),
             'placement_guide': _pcfg.get('placement_guide', {}),
             'hide_boxes_outside_step_roi': _pcfg.get('hide_boxes_outside_step_roi', False),
+            # v3.32: 区域事件模式多工位建步骤行用 (只带规则身份, 不带区域多边形等重载字段)
+            'region_events': {
+                'rules': [
+                    {'id': _rr.get('id'), 'name': _rr.get('name')}
+                    for _rr in ((_pcfg.get('region_events') or {}).get('rules') or [])
+                    if isinstance(_rr, dict)
+                ],
+            } if _pcfg.get('region_events') else {},
         },
     }
 

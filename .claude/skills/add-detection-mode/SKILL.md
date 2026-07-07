@@ -13,7 +13,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write, mcp__context7, mcp__
 
 需求: $ARGUMENTS
 
-## 现有5种模式的实现位置
+## 现有6种模式的实现位置
 
 | 模式 | pipeline_config.logic_mode | 关键代码 |
 |------|---------------------------|-------------------|
@@ -22,6 +22,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, Edit, Write, mcp__context7, mcp__
 | 自定义 | `custom` | source.py: custom_conditions 优先级匹配 + base_mode |
 | 追踪 | `tracking` | source.py: tracked_items 字典, ID跟踪, container_mode |
 | 称重投料 | `weighing` (v3.31) | **不走帧循环**：`backend/services/weighing_engine.py` 设备读数驱动状态机；`source_project_config_apply.py` 末尾按 logic_mode 登记/注销通道；配置进 `pipeline_config.weighing` |
+| 区域事件 | `region_events` (v3.32) | **帧驱动但步骤=动作**：`source_region_events.py` 纯逻辑引擎（规则解析 + episode 状态）+ `source_region_events_mixin.py` 帧循环接线；三种规则类型（overlap 工具作用 / region_enter 进区驻留 / region_exit 出区消失），min_frames 确认 + gone_seconds 闭合 + 确认序列结算；配置进 `pipeline_config.region_events`（rules/class_conf/sequence_check/settlement_rules）；Monitor 步骤面板由 in-flight 快照驱动"进行中" |
 
 ## 两条实现路径（先选路径再动手）
 

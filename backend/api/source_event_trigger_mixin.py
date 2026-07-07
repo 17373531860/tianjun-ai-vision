@@ -264,9 +264,24 @@ class EventTriggerMixin:
                         n = s.strip().strip("'\" ")
                         if n:
                             involved.add(n)
+            # v3.32 区域事件模式结算判定文案: "(缺事件 X)" / "(事件 X 重复≥N次)"
+            m_miss_ev = re.search(r'缺事件\s*([^\s,，)）]+)', reason)
+            if m_miss_ev:
+                involved.add(m_miss_ev.group(1))
+            m_rep_ev = re.search(r'事件\s*([^\s,，)）]+)\s*重复', reason)
+            if m_rep_ev:
+                involved.add(m_rep_ev.group(1))
             if not involved:
-                steps_config = self.project_config.get('steps_config', []) if self.project_config else []
-                expected = set(s.get('label') for s in steps_config if s.get('label') and not s.get('is_backup'))
+                # 兜底: 期望全集 - 本周期实际 = 缺失者。
+                # v3.32: 区域事件模式的"步骤"是动作规则名, steps_config 里是模型类别
+                # (测硬度笔/工件/手) —— 拿类别当期望会把标签全记进 NG TOP3 (客户报障
+                # "TOP3 出现的不是步骤而是标签"), 该模式期望集必须取引擎规则名。
+                _re_engine = getattr(self, '_region_event_engine', None)
+                if _re_engine is not None:
+                    expected = {r.name for r in _re_engine.cfg.rules}
+                else:
+                    steps_config = self.project_config.get('steps_config', []) if self.project_config else []
+                    expected = set(s.get('label') for s in steps_config if s.get('label') and not s.get('is_backup'))
                 actual = set(self.current_cycle_steps)
                 missing = expected - actual
                 if missing:

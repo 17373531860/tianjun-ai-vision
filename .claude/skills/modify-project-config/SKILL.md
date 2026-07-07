@@ -166,6 +166,42 @@ class Project(Base):
   // 的两处严格守门(_fire_strict_order_violation)。last_first 模式下严格顺序被强制清空→无效。
   "strict_order_violation_event_id": null,
 
+  // ★ v3.32 新增：区域事件模式（logic_mode='region_events' 专用，TP 工位流程监测）
+  // apply 在 source_project_config_apply → source_region_events.parse_region_events；
+  // 引擎 RegionEventEngine 挂帧循环（source_region_events_mixin），步骤=动作规则名。
+  // 前端编辑 UI 在 LogicConfigTab.vue（字段名与 parse 严格对齐，改键两头一起改）。
+  "region_events": {
+    "rules": [
+      {
+        "id": "re_xxx", "name": "测硬度",       // 动作名 = 步骤名（Monitor 面板/结算序列用它）
+        "type": "overlap|region_enter|region_exit",
+        "subject_label": "测硬度笔",            // 主体类别（工具/对象）
+        "object_label": "工件",                 // overlap 专用：被作用目标
+        "region": [[0.1,0.1], ...],             // 判定区域多边形（overlap 可空=不限区域）
+        "region_mode": "and|or",                // overlap：重叠 且/或 主体中心在区域内
+        "require_label": null,                  // 辅助约束：主体须与其相交（如"手"，压误报）
+        "min_frames": 10,                       // 连续满足帧数（region_exit 为最少观察帧数）
+        "gone_frames": 10, "match_iou": 0.3,    // region_exit：消失确认帧数/帧间关联 IoU
+        "min_iou": 0.0,                         // overlap：重叠 IoU 下限（0=任意相交）
+        "min_overlap_ratio": 0.0,               // overlap：重叠深度下限（压静置工具贴边）
+        "min_move": 0.0,                        // 位移门槛（归一化，0=不要求；中心 5 帧中位数平滑后进包络）
+        "gone_seconds": null,                   // 消失确认秒（null=用全局 gap_tolerance_frames）
+        "event_id": null,                       // 动作确认附加触发事件（不结算）
+        "settle": false,                        // true = 该动作确认即结算周期
+        "anchor": { "enabled": false, "label": "", "ref": {...}, "hold_seconds": 3.0 } // 区域跟随锚点
+      }
+    ],
+    "gap_tolerance_frames": 5,                  // 全局漏检容忍
+    "dedup_consecutive": true,                  // 连续相同动作去重
+    "class_conf": { "测硬度笔": 0.5 },          // 每类置信度覆盖
+    "sequence_check": { "enabled": true, "order": ["测硬度","扫码","下工件"], "event_id": null },
+    "settlement_rules": [                       // 可选：特定确认序列 → 指定判定（复检序列合法化）
+      { "sequence": ["测硬度","扫码","测硬度","扫码","下工件"], "result": "ok" }
+    ]
+    // 内建常开：动作互斥打断（一个动作确认瞬间其他 in-progress episode 立即收尾，
+    // 防 gone_seconds 桥接复检两段命中）。排查问题读 debug-source skill 区域事件节
+  },
+
   // ★ v3.5.0 新增：周期性强制动作（每 N 轮做 E）
   // ★ v3.5.2 新增：每条规则的 run_on_start（开机首检）
   // ★ v3.7.4 新增：time_interval_seconds（按时间触发，与 interval OR 关系）

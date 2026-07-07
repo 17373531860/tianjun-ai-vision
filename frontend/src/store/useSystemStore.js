@@ -183,9 +183,11 @@ export const useSystemStore = defineStore('system', {
       mediapipeHandRoiPad: 0.3,         // ROI 外扩比例（手指容易被框边切到 → 外扩）
       // v3.32.0 自定义纯色骨架样式（默认关 = MediaPipe 官方花色，老行为不变）
       mediapipeCustomStyle: false,
-      mediapipePoseColor: '#00FF00',    // 姿态骨架颜色
+      mediapipePoseColor: '#00FF00',    // 姿态连线颜色
+      mediapipePosePointColor: '',      // 姿态关键点颜色（空 = 跟随连线颜色）
       mediapipePoseThickness: 2,        // 姿态骨架线宽 (1-10)
-      mediapipeHandsColor: '#00FF00',   // 手部骨架颜色
+      mediapipeHandsColor: '#00FF00',   // 手部连线颜色
+      mediapipeHandsPointColor: '',     // 手部关键点颜色（空 = 跟随连线颜色）
       mediapipeHandsThickness: 2        // 手部骨架线宽 (1-10)
     }
   }),

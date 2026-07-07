@@ -32,15 +32,27 @@ def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
+def _host_port(url: str, default_port: int) -> tuple[str, int]:
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    return parsed.hostname or "localhost", parsed.port or default_port
+
+
 def pytest_collection_modifyitems(config, items):
-    """如果 backend/frontend 没启动，全部跳过 e2e 测试"""
-    if not _port_open("localhost", 8001):
-        skip = pytest.mark.skip(reason="backend (8001) 未启动")
+    """如果 backend/frontend 没启动，全部跳过 e2e 测试。
+
+    端口取自 E2E_API_URL / E2E_BASE_URL（默认 8001/6001），
+    隔离环境跑 8002/6002 时门卫跟着环境变量走，不再写死。
+    """
+    api_host, api_port = _host_port(API_URL, 8001)
+    if not _port_open(api_host, api_port):
+        skip = pytest.mark.skip(reason=f"backend ({api_host}:{api_port}) 未启动")
         for item in items:
             item.add_marker(skip)
         return
-    if not _port_open("localhost", 6001):
-        skip = pytest.mark.skip(reason="frontend (6001) 未启动")
+    front_host, front_port = _host_port(BASE_URL, 6001)
+    if not _port_open(front_host, front_port):
+        skip = pytest.mark.skip(reason=f"frontend ({front_host}:{front_port}) 未启动")
         for item in items:
             item.add_marker(skip)
 

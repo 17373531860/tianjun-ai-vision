@@ -176,6 +176,36 @@ def test_confirmed_detections_passthrough_region_events():
     assert VideoSourceManager._get_confirmed_detections(fake, dets) == []
 
 
+def test_region_flicker_diag_autodump():
+    """频闪诊断覆盖 region_events: 监视标签 2s 内在场高频翻转 → 自动转储现场。
+
+    背景: custom_mix 的频闪埋点 (v3.30) 只在 _custom_mix 存在时生效,
+    region_events 走独立入口 _update_region_events, 频闪时无人抓现场。
+    """
+    from backend.api.source_region_events import parse_region_events, RegionEventEngine
+    from backend.api.source_region_events_mixin import RegionEventsMixin
+    from backend.api.source_step_stats_mixin import StepStatsMixin
+
+    class _Host(RegionEventsMixin, StepStatsMixin):
+        pass
+
+    host = _Host()
+    dumps = []
+    host._diag_flicker_dump = lambda label, t, reason: dumps.append((label, reason))
+    engine = RegionEventEngine(parse_region_events(
+        _project_config()["pipeline_config"]))
+
+    gun = [{"label": "扫码枪", "confidence": 0.9, "x": 0.6, "y": 0.55, "w": 0.1, "h": 0.1}]
+    t = 100.0  # 须 > 30s 转储节流窗 (生产传 time.time(), 恒满足)
+    for i in range(40):  # 每帧亮灭交替 = 频闪特征
+        host._diag_region_flicker(engine, gun if i % 2 == 0 else [], t)
+        t += 0.05
+    assert dumps, "频闪未触发自动转储"
+    assert dumps[0][0] == "扫码枪"
+    # 环形缓冲已积累现场帧 (present/conf 序列)
+    assert len(host._diag_ring) == 40
+
+
 def test_full_cycle_three_events_and_ok_settle(client, tp_channel):
     """三事件全部产出 + 结算 1 个 OK 周期 + 正序不涨乱序计数。"""
     base_c, base_sc = _counters_baseline(client, tp_channel)
@@ -197,6 +227,69 @@ def test_full_cycle_three_events_and_ok_settle(client, tp_channel):
         f"不应出 NG: counters={counters}"
     assert counters.get("乱序次数", 0) == base_c.get("乱序次数", 0), \
         f"正序不该涨乱序计数: counters={counters}"
+
+    # v3.32 Monitor 步骤面板打通回归: 该模式此前不喂这些字段 → SOP 卡片/步骤统计
+    # 全程空白 (客户报障)。结算后必须有: PT 合并档历史 + 动作间隔 + 引擎快照键。
+    lcs = body.get("last_cycle_sum_step_durations") or {}
+    assert lcs.get("测硬度", 0) > 0, f"测硬度 PT 合并档缺失: {lcs}"
+    assert lcs.get("扫码", 0) > 0, f"扫码 PT 合并档缺失: {lcs}"
+    intervals = body.get("step_intervals") or {}
+    assert "测硬度" in intervals and "扫码" in intervals, \
+        f"动作间隔缺失: {intervals}"
+    shots = body.get("step_screenshots") or {}
+    assert "测硬度" in shots and "扫码" in shots, \
+        f"步骤截图缺失 (SOP 卡片缩略图): {list(shots)}"
+    assert body.get("region_events"), "引擎快照键缺失"
+    assert (body.get("project_config") or {}).get("pipeline_config", {}) \
+        .get("region_events", {}).get("rules"), "项目配置快照缺区域事件规则清单"
+
+
+def test_ng_top3_counts_rule_names_not_labels(client):
+    """NG TOP3 记"动作规则名"而非模型类别名 (v3.32 客户报障:
+    "NG步骤TOP3 出现的不是步骤而是标签")。
+
+    缺扫码 → 结算判定 missing 命中 NG → ng_step_cycle_counts 键必须是
+    规则名 扫码, 不允许出现 steps_config 里的模型类别 (测硬度笔/扫码枪/工件)。
+    """
+    # 无扫码的循环: 测硬度 → 工件进 C 区 → 消失结算
+    tl = [
+        {"from": 0, "to": 9, "detections": [WORK_ON_TABLE]},
+        {"from": 10, "to": 39, "detections": [WORK_ON_TABLE, PEN_ON_WORK]},
+        {"from": 40, "to": 49, "detections": [WORK_ON_TABLE]},
+        {"from": 50, "to": 59, "detections": [WORK_IN_C]},
+        {"from": 60, "to": 900, "detections": []},
+    ]
+    scenario = {"name": "region_events_missing_scan", "fps": 60, "timeline": tl}
+    cfg = _project_config()
+    cfg["pipeline_config"]["region_events"]["settlement_rules"] = [
+        {"match": "missing", "target": "扫码", "event_id": 2},
+    ]
+
+    client.post(f"/api/v1/source/detection/stop?channel={CH}")
+    client.post(f"/api/v1/test/synthetic/stop?channel={CH}")
+    r = client.post("/api/v1/test/synthetic/start", json={
+        "scenario_json": scenario, "channel": CH, "with_project": False,
+    })
+    assert r.status_code == 200, r.text[:300]
+    r = client.post(f"/api/v1/source/detection/set-project?channel={CH}", json=cfg)
+    assert r.status_code == 200, r.text[:300]
+    r = client.post(f"/api/v1/source/detection/start?channel={CH}",
+                    json={"conf": 0.2, "iou": 0.45})
+    assert r.status_code == 200, r.text[:300]
+    try:
+        base_c, _ = _counters_baseline(client, CH)
+        body = _poll(client, CH, lambda b: (
+            (b.get("counters") or {}).get("不良总数", 0)
+            >= base_c.get("不良总数", 0) + 1), timeout=30.0)
+        counters = (body or {}).get("counters") or {}
+        assert counters.get("不良总数", 0) >= base_c.get("不良总数", 0) + 1, \
+            f"缺扫码未结算 NG: counters={counters}"
+        ng_map = (body or {}).get("ng_step_cycle_counts") or {}
+        assert ng_map.get("扫码", 0) >= 1, f"NG TOP3 未按规则名计数: {ng_map}"
+        forbidden = {"测硬度笔", "扫码枪", "工件", "手"} & set(ng_map)
+        assert not forbidden, f"NG TOP3 混入模型类别标签: {ng_map}"
+    finally:
+        _stop(client)
 
 
 def test_out_of_order_fires_violation_but_still_settles(client, tp_channel_out_of_order):

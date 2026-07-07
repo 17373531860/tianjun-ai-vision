@@ -1,0 +1,146 @@
+{
+  "version": "3.32.0",
+  "date": "2026-07-07",
+  "previous_version": "3.31.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "同标签区域拆分（虚拟步骤/多轮次/违序即时事件）",
+      "symptom": "同一模型标签在画面不同区域代表不同工序步骤（电机装配对角打螺丝），旧版无法按落点区分参与顺序判定",
+      "root_cause": "步骤状态机以模型类别为最小单元，无区域维度",
+      "fix": "steps_config 每步可配命名拆分区域+轮次，检测框按中心点落区映射为虚拟步骤进入状态机；严格顺序违反可绑事件即时触发；SOP/步骤统计按虚拟步骤展示",
+      "files": ["backend/api/source.py", "backend/api/source_step_stats_mixin.py", "frontend/src/views/Monitor/index.vue"],
+      "keywords": ["同标签区域拆分", "虚拟步骤", "多轮次", "对角打螺丝", "label split", "virtual step", "违序即时事件", "strict order violation event", "工件就位提示"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "区域事件模式 region_events（TP 工位流程监测）",
+      "symptom": "人工工位的步骤是'主体与目标区域的一段持续交互动作'（测硬度→扫码→下工件），五种旧逻辑模式都表达不了",
+      "root_cause": "缺少以动作规则（主体标签×目标区域×持续帧数×位移门槛）为步骤的逻辑模式",
+      "fix": "新增第 6 种 logic_mode='region_events'：episode 引擎 min_frames 确认+消失秒数闭合+序列比对结算；in-flight 快照驱动步骤面板进行中；TP 实测三处打磨：中心 5 帧中位数平滑进位移包络、动作互斥打断防桥接、前端不做重复/乱序 NG 推断",
+      "files": ["backend/api/source_region_events.py", "backend/api/source_region_events_mixin.py", "backend/api/source_routes.py", "backend/api/source_event_trigger_mixin.py", "backend/api/source_state_init.py", "frontend/src/views/Monitor/index.vue"],
+      "keywords": ["区域事件", "region_events", "动作规则", "episode", "TP", "测硬度", "扫码", "下工件", "工位流程监测", "位移门槛", "中位数平滑", "动作互斥", "复检", "in-flight"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "MediaPipe 自定义纯色骨架样式（连线/关键点颜色分离）",
+      "symptom": "骨架叠加默认绿线红点观感差，无法融入现场投屏/定制界面配色",
+      "root_cause": "骨架绘制颜色线宽硬编码",
+      "fix": "性能设置新增自定义骨架样式开关+姿态/手部连线色、关键点色（空=跟随连线）、线宽 7 字段，流配置端点持久化；二段 pipeline 渲染复用同款样式",
+      "files": ["backend/api/source_mediapipe.py", "backend/api/source_routes.py", "frontend/src/views/Settings/index.vue", "frontend/src/store/useSystemStore.js"],
+      "keywords": ["mediapipe", "骨架样式", "skeleton style", "关键点颜色", "point color", "连线颜色", "线宽", "custom style", "手部", "姿态", "HUD"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "频闪逐帧自动诊断转储 diag_flicker",
+      "symptom": "现场反馈'检测框一闪一闪'无法凭口述定位",
+      "root_cause": "缺少自动抓取逐帧在场/原始框/fps 证据的机制",
+      "fix": "每帧采样监视标签进环形缓冲，2 秒翻转超阈值自动落 JSON 到 backend/diag_flicker/（已 gitignore）；采样体公共化供 custom_mix 与 region_events 共用",
+      "files": ["backend/api/source_inference_loop_mixin.py", "backend/api/source.py", ".gitignore"],
+      "keywords": ["频闪", "flicker", "诊断转储", "逐帧", "diag_flicker", "环形缓冲", "检测框闪烁"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "DB 迁移版本化治理（RFC 方案 B）",
+      "symptom": "旧 migrate_database() 手工 ALTER 堆叠无版本无幂等，升级路径不可审计",
+      "root_cause": "无迁移框架",
+      "fix": "backend/db/migrations/ mXXXX_*.py 版本化迁移+注册表，旧函数改断言桩；AGENTS 第八节不变量 8 固化",
+      "files": ["backend/db/migrations/", "backend/database.py"],
+      "keywords": ["数据库迁移", "migration", "版本化", "schema", "ALTER", "断言桩"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "推理线程单例守护（加锁+代数）",
+      "symptom": "快速停止/启动或切项目竞态下两条推理线程并存，帧结果交错 CPU 翻倍",
+      "root_cause": "启动推理线程无互斥，旧线程退出靠布尔标志，交叠窗口新旧并存",
+      "fix": "启动加锁+线程代数标记，循环内代数不匹配立即自退；新增单测 test_inference_thread_singleton.py",
+      "files": ["backend/api/source.py", "backend/api/source_inference_loop_mixin.py", "tests/test_inference_thread_singleton.py"],
+      "keywords": ["推理线程", "单例", "竞态", "inference thread", "generation", "线程泄漏", "双线程"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "ROI 画区与实际检测区偏差修复",
+      "symptom": "前端画的 ROI 与后端实际裁剪检测区域可见偏移",
+      "root_cause": "快照通道与推理帧尺寸不一致 + 旋转/翻转链路归一化坐标系错位",
+      "fix": "快照走推理同源帧 + 坐标系统一换算",
+      "files": ["backend/api/source_routes.py"],
+      "keywords": ["ROI", "偏移", "坐标系", "快照", "旋转", "翻转", "画区"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "e2e 门卫端口跟随环境变量",
+      "symptom": "隔离环境 8002/6002 跑 e2e_browser 全量误跳过",
+      "root_cause": "conftest 探活端口写死 8001/6001",
+      "fix": "端口从 E2E_API_URL / E2E_BASE_URL 解析",
+      "files": ["tests/e2e_browser/conftest.py"],
+      "keywords": ["e2e", "conftest", "端口", "门卫", "E2E_API_URL"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "REF-001",
+      "title": "工程治理批次：巨型视图拆分九批 + 路由统一登记 + 死代码清退 + CI 强化 + 开发者文档体系",
+      "symptom": "Monitor/Project 单文件 6000+ 行难维护；路由散挂；CI 白名单失效项；开发者文档缺失",
+      "root_cause": "历史欠账",
+      "fix": "P1~P5/M1~M4 组件外置；router_manifest 唯一登记；孤儿 mixin/前端死代码清退；CORE_FILES 重审+tag 测试 gate+watch_and_private.sh+版本对齐自检；docs/dev 体系+文档 CI 六项门禁",
+      "files": ["frontend/src/views/Monitor/", "frontend/src/views/Project/", "backend/api/router_manifest.py", "scripts/ci/", "docs/dev/"],
+      "keywords": ["巨型视图拆分", "router_manifest", "死代码", "CORE_FILES", "文档 CI", "技术债"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "PLUGIN-001",
+      "title": "showcase 展会插件 v1.3.1：对齐 v3.31/v3.32 全功能面 + 七轮验收修正",
+      "symptom": "插件基线 v3.19，缺 12 个版本的功能面；七轮现场验收提出时间轴/提示框可配/导航抽屉/扫码枪门控/画面恢复/播放控制/无源占位/骨架样式等修正",
+      "root_cause": "插件长期未随主程序升级",
+      "fix": "监控页 7 逻辑模式+称重看板+区域事件 SOP 时间轴+覆盖层全家桶+MES 入站/包装 Tab+称重台账；七轮修正全部落地并 UAT 存证",
+      "files": ["plugins-examples/tianjun-showcase/", "plugins/showcase/", "dist-plugins/"],
+      "keywords": ["showcase", "展会插件", "1.3.1", "HUD", "时间轴", "虚拟扫码枪", "无源占位", "播放控制条", "骨架样式预设"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "PLUGIN-002",
+      "title": "sensor-clean 插件 v1.3.0：计数伴随标签（同帧双类别门槛）",
+      "symptom": "新模型标签体系（查看产品/清洁产品）下锚框单独在场会误进计数",
+      "root_cause": "计数跟踪只看锚标签",
+      "fix": "count_require_label 非空时本帧须同时检出伴随标签锚框才进跟踪，留空零差异",
+      "files": ["plugins-examples/sensor-clean/backend/hooks.py", "plugins-examples/sensor-clean/backend/preset.py"],
+      "keywords": ["sensor-clean", "传感器清洁", "伴随标签", "count_require_label", "detect9", "双类别"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-source", "api-sync", "run-tests", "modify-source", "modify-project-config", "add-detection-mode", "debug-mes", "modify-model", "debug-alarm", "debug-channel"],
+  "files_changed": [
+    "backend/api/source.py",
+    "backend/api/source_region_events.py",
+    "backend/api/source_region_events_mixin.py",
+    "backend/api/source_routes.py",
+    "backend/api/source_event_trigger_mixin.py",
+    "backend/api/source_inference_loop_mixin.py",
+    "backend/api/source_mediapipe.py",
+    "backend/api/source_state_init.py",
+    "backend/api/source_step_stats_mixin.py",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Settings/index.vue",
+    "frontend/src/store/useSystemStore.js",
+    "plugins-examples/tianjun-showcase/",
+    "plugins-examples/sensor-clean/",
+    "tests/"
+  ]
+}

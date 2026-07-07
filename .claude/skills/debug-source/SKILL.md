@@ -1,6 +1,6 @@
 ---
 name: debug-source
-description: "诊断 source.py VideoSourceManager 的问题：检测状态机、Cycle/Step 生命周期、_trigger_event 中心 hook、v3.5.x 周期性强制动作、ghost cycle、线程安全、v3.32 同标签区域拆分（虚拟步骤/多轮次/违序即时事件）。当遇到检测逻辑异常、步骤判定错误、周期不结束、计数器不对、拆分区域不生效、轮次不切换时使用。"
+description: "诊断 source.py VideoSourceManager 的问题：检测状态机、Cycle/Step 生命周期、_trigger_event 中心 hook、v3.5.x 周期性强制动作、ghost cycle、线程安全、v3.32 同标签区域拆分（虚拟步骤/多轮次/违序即时事件）、v3.32 区域事件模式（动作规则/episode/序列结算/位移门槛/动作互斥）。当遇到检测逻辑异常、步骤判定错误、周期不结束、计数器不对、拆分区域不生效、轮次不切换、动作不确认/误确认/复检误NG时使用。"
 argument-hint: "[问题描述]"
 model: opus
 effort: high
@@ -1018,3 +1018,15 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 - 严格顺序违序即时事件：`pipeline_config.strict_order_violation_event_id`（null=关），收口在 `source_settlement_mixin.py: _fire_strict_order_violation`（同一标签+周期进度 5s 节流；照旧拦截不计入）。
 - 零差异保证：不配 `label_splits` / `rounds` / 违序事件 → 引擎为 None，行为与 v3.31 完全一致；回归见 `tests/test_label_split.py`（零差异组）+ `tests/features/label_split_matrix.feature`。
 - 配置结构与字段：`docs/dev/reference/config-dict.md`；设计取舍：`docs/rfc/同标签区域拆分_虚拟步骤_设计方案_RFC.md`（已归档）。
+
+## 区域事件模式：动作规则引擎（v3.32+，logic_mode='region_events'）
+
+**这是第 6 种逻辑模式**：步骤不是"模型类别在场"而是"一段持续动作"。三种规则类型：`overlap`（主体框与目标框持续重叠，工具作用）/ `region_enter`（主体进区驻留）/ `region_exit`（区域内观察到后消失，下料，可勾 `settle` 结算周期）。周期结算 = 确认序列与 `sequence_check.order` / `settlement_rules` 比对，NG 文案输出"(缺事件 X)/(事件 X 重复≥N 次)"。
+
+- 代码位置：`backend/api/source_region_events.py`（`parse_region_events` 配置解析 + `RegionEventEngine` 纯逻辑引擎，episode 状态机可单测）；`source_region_events_mixin.py`（帧循环接线 + 结算触发）；配置进 `pipeline_config.region_events`（rules / gap_tolerance_frames / dedup_consecutive / class_conf / sequence_check / settlement_rules）。
+- **步骤面板"进行中"不看 detectingLabels**：区域事件的步骤名是动作规则名（测硬度），画面检测框是模型类别名（测硬度笔），永远对不上——前端 Monitor 用 `/detection/results` 透出的引擎 in-flight 快照（episode 命中累计中即点亮，确认前就亮，与顺序模式对齐）。前端也**不做**"重复/乱序=NG"推断（复检序列合法性由后端结算规则说了算）。
+- 误报压制四件套（都在规则字段里）：`min_iou` 重叠下限 / `min_overlap_ratio` 重叠深度（压静置工具贴边）/ `min_move` 位移门槛 / `require_label` 辅助约束（如必须同时与"手"相交）。
+- **内建两条防误判（常开非配置，2026-07 TP 实测教训）**：① 位移包络对检测框中心做 5 帧中位数平滑再进包络——手划过遮挡把框"切"小的单帧中心跳变（~0.06）不算位移；② 动作互斥打断——一个动作确认瞬间其他进行中 episode 立即收尾（已确认的闭合、半截命中作废），否则 `gone_seconds` 会把复检场景"测硬度→扫码→测硬度→扫码"两段扫码桥接成一次，序列少步误落兜底 NG。
+- 中途遮挡断裂 → 调大规则的 `gone_seconds`（消失确认秒数，0=用全局 gap_tolerance_frames）；区域可配 `anchor` 跟随锚点类别平移缩放（与 label_splits 的 anchor 同构）。
+- 频闪自动诊断：该模式与 custom_mix 共用 `_diag_flicker_sample` 采样体，翻转超阈值自动落 `backend/diag_flicker/*.json`（已 gitignore），排"检测框一闪一闪"先看转储。
+- 回归：`tests/test_region_events.py`（引擎单测）+ `tests/test_region_events_pipeline.py`（管线）+ `tests/e2e_browser/test_region_events_monitor.py`（UI）。

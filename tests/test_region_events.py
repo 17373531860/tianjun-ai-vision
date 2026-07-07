@@ -255,6 +255,91 @@ def test_min_move_gate():
     assert [e['action'] for _, e in events] == ['confirmed']
 
 
+def test_interrupt_on_other_action_splits_episodes():
+    """动作互斥打断 (TP 复检场景 82~90s 实测复刻): 测硬度→扫码→测硬度→扫码,
+    两次扫码断开间隔 < 消失确认秒数, 不打断会被桥接成一次 → 序列少一步 →
+    复检误判 NG。另一动作确认必须立即切断进行中的 episode。
+    """
+    pen = det('测硬度笔', 0.7, 0.7, w=0.04, h=0.04)
+    gun = det('扫码枪', 0.62, 0.55, w=0.1, h=0.1)
+    work = det('工件', 0.7, 0.7, w=0.2, h=0.2)
+    frames = (
+        [[work, pen]] * 20        # 测硬度#1 (min_frames=15)
+        + [[work, gun]] * 12      # 扫码#1 (min_frames=10)
+        + [[work, pen]] * 20      # 测硬度#2 — 其间扫码断开 0.8s < gone_seconds 1.5s
+        + [[work, gun]] * 12      # 扫码#2 — 不打断会并进扫码#1 的 episode
+        + [[work]] * 30
+    )
+    eng = build([hardness_rule(gone_seconds=1.5), scan_rule(gone_seconds=1.5)],
+                dedup_consecutive=True)
+    confirmed = [e['rule_name'] for _, e in feed(eng, frames)
+                 if e['action'] == 'confirmed']
+    assert confirmed == ['测硬度', '扫码', '测硬度', '扫码'], confirmed
+
+
+def test_interrupt_closes_confirmed_episode_with_true_span():
+    """打断时已确认的 episode 要产出闭合动作 (步骤落库), 起止时间取真实命中区间。"""
+    pen = det('测硬度笔', 0.7, 0.7, w=0.04, h=0.04)
+    gun = det('扫码枪', 0.62, 0.55, w=0.1, h=0.1)
+    work = det('工件', 0.7, 0.7, w=0.2, h=0.2)
+    # 扫码先确认, 随后测硬度确认 → 扫码被打断闭合
+    frames = [[work, gun]] * 12 + [[work, gun, pen]] * 20
+    eng = build([hardness_rule(), scan_rule()])
+    closed = [(i, e) for i, e in feed(eng, frames) if e['action'] == 'closed']
+    assert len(closed) == 1
+    i, ev = closed[0]
+    assert ev['rule_name'] == '扫码'
+    assert ev['end_ts'] >= ev['start_ts']
+    # 闭合动作发生在测硬度确认帧 (12+15-1=26), 而不是等消失容忍超时
+    assert i == 26
+
+
+def test_snapshot_exposes_in_progress_episode():
+    """快照给 Monitor 步骤面板驱动"进行中"高亮 (v3.32): 命中累计中即在场,
+    带 episode 起点 (in-flight PT 计算基准); 消失确认后复位。"""
+    engine = build([hardness_rule(min_frames=10)])
+    for i in range(4):
+        engine.process_frame(PEN_ON_WORK, i * 0.04)
+    r = engine.snapshot()['rules'][0]
+    assert r['in_progress'] is True
+    assert r['episode_start_ts'] == 0.0
+    assert r['confirmed'] is False
+    # 消失超过容忍帧 → episode 复位, 进行中态归零
+    for i in range(4, 12):
+        engine.process_frame(WORK_ONLY, i * 0.04)
+    r = engine.snapshot()['rules'][0]
+    assert r['in_progress'] is False
+    assert r['episode_start_ts'] is None
+
+
+def test_confirmed_event_carries_subject_bbox():
+    """确认动作携带主体框 (执行层裁 SOP 卡片缩略图用, v3.32)。"""
+    events = feed(build([hardness_rule(min_frames=5)]), [PEN_ON_WORK] * 6)
+    confirmed = [e for _, e in events if e['action'] == 'confirmed']
+    assert len(confirmed) == 1
+    subj = confirmed[0]['subject']
+    assert subj is not None and subj['label'] == '测硬度笔'
+    assert all(k in subj for k in ('x', 'y', 'w', 'h'))
+
+
+def test_min_move_immune_to_occlusion_jump():
+    """遮挡形变免疫 (TP 现场 25.75s 实测复刻): 手划过静置工具, 检测框被切小
+    → 框中心单帧跳变 0.06 → 不能算位移 (中位数平滑吸收瞬态)。
+
+    对照组: 同样幅度的位移持续多帧 (真拿起挪动) → 正常确认。
+    """
+    def pen_at(cx, cy=0.7):
+        return [det('测硬度笔', cx, cy, w=0.04, h=0.04),
+                det('工件', 0.7, 0.7, w=0.2, h=0.2)]
+    # 静置 20 帧 + 遮挡瞬态跳变 2 帧 + 回位 20 帧 → 平滑后包络不动, 不确认
+    occluded = [pen_at(0.7)] * 20 + [pen_at(0.76)] * 2 + [pen_at(0.7)] * 20
+    assert feed(build([hardness_rule(min_move=0.04)]), occluded) == []
+    # 同样跳到 0.76 但持续 10 帧 (真挪过去了) → 中位数跟上 → 确认
+    moved = [pen_at(0.7)] * 20 + [pen_at(0.76)] * 10
+    events = feed(build([hardness_rule(min_move=0.04)]), moved)
+    assert [e['action'] for _, e in events] == ['confirmed']
+
+
 def test_dedup_consecutive_default_on():
     """连续同动作去重 (默认开): 同名动作紧接着再次确认被静默吸收,
     被另一动作隔开后允许重计 (交错重做的复检场景不受影响)。"""

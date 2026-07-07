@@ -5035,6 +5035,14 @@ const processedEventIds = new Set();
 // 从后端数据更新步骤状态
 const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, recentEvents, shouldUpdateCharts = true) => {
   const detectingLabels = new Set(currentDetections.map(d => d.label));
+  // v3.32 区域事件模式: 步骤行是"动作规则名"(测硬度), 画面检测框是"模型类别名"(测硬度笔),
+  // 两者永远对不上 → "进行中"判定不能看 detectingLabels, 改看后端 in-flight PT
+  // (动作 episode 命中累计中即有值)。结果列语义也不同: 周期好坏由后端结算判定说了算
+  // (复检序列里同动作出现两次是合法的), 前端不做"重复/乱序/漏做 = NG"的顺序推断。
+  const isRegionEventsMode = (currentProject.value?.logic_mode === 'region_events');
+  const stepIsLive = (label) => isRegionEventsMode
+    ? ((stepInflightDurations.value[label] || 0) > 0)
+    : detectingLabels.has(label);
   
   // 获取后端的当前周期步骤列表
   const currentCycleSteps = backendCounters?._currentCycleSteps || [];
@@ -5189,7 +5197,7 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
 
       // 后续期望位置已有步骤进 cycle → 本位置视为"已走过", 不因画面里再次识别回退到 active/NG 闪动
       const _passedThisStep = maxCompletedIdx > idx && thisPosCompleted;
-      const _inFrame = detectingLabels.has(label);
+      const _inFrame = stepIsLive(label);
       const _leftFrame = !_inFrame;
 
       const _isLastStep = expectedLabels.length > 0 && idx === expectedLabels.length - 1;
@@ -5200,7 +5208,11 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
           : (_hasTimedPT && (_leftFrame || _passedThisStep))
       );
 
-      if (cycleCount > expCnt && _posDone) {
+      if (isRegionEventsMode) {
+        // 区域事件: 动作确认即 OK, 不做重复/乱序/漏做的 NG 推断
+        // (复检等合法序列由后端结算判定, 前端标红会与结算结果打架)
+        step.cycleResult = _posDone ? 'ok' : null;
+      } else if (cycleCount > expCnt && _posDone) {
         step.cycleResult = 'ng';
       } else if (_posDone) {
         step.cycleResult = outOfOrderIdx.has(idx) ? 'ng' : 'ok';
@@ -5275,9 +5287,9 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       const label = step.label || step.name;
       const count = stepCounts[label] || 0;
 
-      if (detectingLabels.has(label)) {
+      if (stepIsLive(label)) {
         // 新一轮第一个步骤刚进画面 → 立刻显示 active (此时 cycle_id 可能还是 null,
-        // 但 detectingLabels 已经有内容了)
+        // 但 detectingLabels / 区域事件 in-flight 已经有内容了)
         step.status = 'active';
         if (tableData.value[idx]) {
           tableData.value[idx].status = 'active';

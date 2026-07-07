@@ -36,6 +36,12 @@ def _init_inference_threading(h):
     """推理双线程架构相关字段"""
     h._inference_thread = None
     h._inference_running = False
+    # 2026-07 TP 频闪真因修复: 推理线程唯一性保障。
+    # start 的"检查-启动"两步间无锁, 恢复播放时采集自启 + resume 两路并发调用
+    # 会各起一条线程, 交替发布"有结果/空结果" → 前端标注框逐帧频闪;
+    # 代数 (generation) 则兜住"假死被放弃的旧线程因运行标志重新置真而复活"。
+    h._inference_start_lock = threading.Lock()
+    h._inference_generation = 0
     h._latest_frame_for_inference = None
     h._latest_frame_original_size = None
     # v2.7.14: 推理用原图, stats/screenshot 用显示帧 → 两份分开存

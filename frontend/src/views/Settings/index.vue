@@ -1076,11 +1076,22 @@
                 </div>
                 <div v-if="store.performance.mediapipeCustomStyle" class="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div class="flex items-center justify-between p-2 bg-slate-800 rounded border border-slate-700">
-                    <span class="text-gray-400 text-sm">姿态骨架颜色</span>
+                    <span class="text-gray-400 text-sm">姿态连线颜色</span>
                     <el-color-picker
                       v-model="store.performance.mediapipePoseColor"
                       :disabled="!store.performance.mediapipeEnabled"
                       @change="v => { if (!v) store.performance.mediapipePoseColor = '#00FF00'; savePerformanceSettings(); }"
+                    />
+                  </div>
+                  <div class="flex items-center justify-between p-2 bg-slate-800 rounded border border-slate-700">
+                    <div>
+                      <span class="text-gray-400 text-sm">姿态关键点颜色</span>
+                      <div class="text-xs text-gray-600">清空 = 跟随连线颜色</div>
+                    </div>
+                    <el-color-picker
+                      v-model="store.performance.mediapipePosePointColor"
+                      :disabled="!store.performance.mediapipeEnabled"
+                      @change="v => { if (!v) store.performance.mediapipePosePointColor = ''; savePerformanceSettings(); }"
                     />
                   </div>
                   <div class="flex items-center justify-between p-2 bg-slate-800 rounded border border-slate-700">
@@ -1098,11 +1109,22 @@
                     />
                   </div>
                   <div class="flex items-center justify-between p-2 bg-slate-800 rounded border border-slate-700">
-                    <span class="text-gray-400 text-sm">手部骨架颜色</span>
+                    <span class="text-gray-400 text-sm">手部连线颜色</span>
                     <el-color-picker
                       v-model="store.performance.mediapipeHandsColor"
                       :disabled="!store.performance.mediapipeEnabled"
                       @change="v => { if (!v) store.performance.mediapipeHandsColor = '#00FF00'; savePerformanceSettings(); }"
+                    />
+                  </div>
+                  <div class="flex items-center justify-between p-2 bg-slate-800 rounded border border-slate-700">
+                    <div>
+                      <span class="text-gray-400 text-sm">手部关键点颜色</span>
+                      <div class="text-xs text-gray-600">清空 = 跟随连线颜色</div>
+                    </div>
+                    <el-color-picker
+                      v-model="store.performance.mediapipeHandsPointColor"
+                      :disabled="!store.performance.mediapipeEnabled"
+                      @change="v => { if (!v) store.performance.mediapipeHandsPointColor = ''; savePerformanceSettings(); }"
                     />
                   </div>
                   <div class="flex items-center justify-between p-2 bg-slate-800 rounded border border-slate-700">
@@ -2032,8 +2054,10 @@ const savePerformanceSettings = async () => {
       // v3.32.0 自定义纯色骨架样式
       mediapipe_custom_style: store.performance.mediapipeCustomStyle,
       mediapipe_pose_color: store.performance.mediapipePoseColor,
+      mediapipe_pose_point_color: store.performance.mediapipePosePointColor || '',
       mediapipe_pose_thickness: store.performance.mediapipePoseThickness,
       mediapipe_hands_color: store.performance.mediapipeHandsColor,
+      mediapipe_hands_point_color: store.performance.mediapipeHandsPointColor || '',
       mediapipe_hands_thickness: store.performance.mediapipeHandsThickness
     });
     ElMessage.success('性能设置已保存');
@@ -2102,11 +2126,17 @@ const loadPerformanceSettings = async () => {
       if (res.data.mediapipe_pose_color !== undefined) {
         store.performance.mediapipePoseColor = res.data.mediapipe_pose_color || '#00FF00';
       }
+      if (res.data.mediapipe_pose_point_color !== undefined) {
+        store.performance.mediapipePosePointColor = res.data.mediapipe_pose_point_color || '';
+      }
       if (res.data.mediapipe_pose_thickness !== undefined) {
         store.performance.mediapipePoseThickness = res.data.mediapipe_pose_thickness;
       }
       if (res.data.mediapipe_hands_color !== undefined) {
         store.performance.mediapipeHandsColor = res.data.mediapipe_hands_color || '#00FF00';
+      }
+      if (res.data.mediapipe_hands_point_color !== undefined) {
+        store.performance.mediapipeHandsPointColor = res.data.mediapipe_hands_point_color || '';
       }
       if (res.data.mediapipe_hands_thickness !== undefined) {
         store.performance.mediapipeHandsThickness = res.data.mediapipe_hands_thickness;

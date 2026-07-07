@@ -224,14 +224,18 @@ class InferenceLoopMixin:
             self._fps_inference_counter = 0
             self._fps_inference_time = loop_start
 
-    def _inference_loop(self):
+    def _inference_loop(self, my_gen: int = None):
         """独立推理线程 (v2.7.16 P5b 拆分版)。
 
         包含: 取帧 → 推理 → 帧计数验证 → 步骤判断 → 事件触发。
         本方法只剩调度骨架 + 周期清理 + 心跳, 实际工作分摊在 4 个辅助方法。
+
+        my_gen: 本线程的代数 (2026-07 频闪修复)。与宿主当前代数对不上时自行退出,
+                保证任意时刻至多一条推理线程在发布结果 — 双线程交替发布
+                "有结果/空结果"就是前端标注框频闪的真因。None = 兼容旧调用方。
         """
         debug_log("========== 推理线程开始 ==========", "INFERENCE")
-        print("[推理线程] 开始运行")
+        print(f"[推理线程] 开始运行 (gen={my_gen})")
         last_frame_id = None
         frame_count = 0
         last_cleanup_time = time.time()
@@ -255,6 +259,9 @@ class InferenceLoopMixin:
         periodic_time_check_interval = 1.0
 
         while self._inference_running and self.is_detecting:
+            if my_gen is not None and my_gen != getattr(self, '_inference_generation', my_gen):
+                print(f"[推理线程] 代数过期退出 (gen={my_gen}, 当前={self._inference_generation})")
+                return
             try:
                 loop_start = time.time()
                 self._last_inference_heartbeat = loop_start
@@ -332,7 +339,7 @@ class InferenceLoopMixin:
                     self._update_tracking_stats(detections, original_frame)
                 elif getattr(self, '_region_event_engine', None) is not None:
                     # 区域事件模式: 时序+空间规则引擎替代步骤状态机
-                    self._update_region_events(detections)
+                    self._update_region_events(detections, original_frame)
                 else:
                     self._update_step_stats(detections, original_frame)
                 update_time = (time.time() - t5) * 1000

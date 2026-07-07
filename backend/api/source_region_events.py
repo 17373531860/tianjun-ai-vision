@@ -41,6 +41,12 @@
 模式"下个步骤打断上个步骤"的语义, 治"一个真动作被遮挡切成两段确认两次"。
 关掉则回到逐段确认的老语义 (连续重复也逐次计入, repeated 判定按次数抓)。
 
+动作互斥打断 (常开, 非配置): 一个动作确认的瞬间, 其他规则进行中的 episode
+立即收尾——已确认的产出闭合动作 (真实起止时间落步骤), 未确认的半截命中作废。
+没有它, 消失确认秒数会把"断开 < N 秒"的两段命中桥接成一次动作: TP 复检场景
+(测硬度→扫码→测硬度→扫码) 两次扫码中间夹着测硬度、断开仅 ~1 秒, 曾被并成
+一次导致序列少一步, 复检误落兜底 NG (2026-07 实测)。
+
 设计原则 (对齐 weighing_engine / source_label_split 范式):
   - 本层不做任何主程序副作用 (开周期/记步骤/触发事件/落库), 只吃逐帧检测框、
     推进状态、返回事件动作列表; 副作用由 VSM 侧执行层翻译。
@@ -386,7 +392,7 @@ class _OverlapState:
     """overlap 规则的 episode 状态: 连续命中计数 + 中断容忍 + 确认标记。"""
 
     __slots__ = ('hit', 'miss', 'start_ts', 'last_hit_ts', 'confirmed', 'total',
-                 'suppressed', 'ext')
+                 'suppressed', 'ext', 'centers')
 
     def __init__(self):
         self.hit = 0            # 本 episode 累计命中帧
@@ -396,8 +402,9 @@ class _OverlapState:
         self.confirmed = False  # 本 episode 是否已产出确认事件
         self.total = 0          # 累计确认次数 (快照展示用)
         self.suppressed = False  # 本 episode 确认被连续去重吸收 (静默, 不落步骤)
-        self.ext = None         # 主体中心轨迹包络 [min_x,min_y,max_x,max_y]
+        self.ext = None         # 平滑后中心轨迹包络 [min_x,min_y,max_x,max_y]
         #                         (min_move 位移门槛用; 未开门槛不维护)
+        self.centers = []       # 最近 5 帧原始中心 (中位数平滑用)
 
     def reset_episode(self):
         self.hit = 0
@@ -407,6 +414,7 @@ class _OverlapState:
         self.confirmed = False
         self.suppressed = False
         self.ext = None
+        self.centers = []
 
 
 class _Track:
@@ -518,16 +526,24 @@ class RegionEventEngine:
         self.__init__(self.cfg)
 
     def snapshot(self) -> dict:
-        """当前各规则状态摘要 (Monitor/调试用)。"""
+        """当前各规则状态摘要 (Monitor/调试用)。
+
+        in_progress / episode_start_ts / suppressed 给 Monitor 步骤面板驱动
+        "进行中"高亮与 in-flight PT (v3.32 SOP 卡片打通)。
+        """
         rules = []
         for r in self.cfg.rules:
             if r.rule_type in ('overlap', 'region_enter'):
                 st = self._overlap_states[r.rule_id]
                 rules.append({'name': r.name, 'type': r.rule_type, 'total': st.total,
-                              'hit_frames': st.hit, 'confirmed': st.confirmed})
+                              'hit_frames': st.hit, 'confirmed': st.confirmed,
+                              'in_progress': st.hit > 0,
+                              'suppressed': st.suppressed,
+                              'episode_start_ts': st.start_ts if st.hit > 0 else None})
             else:
                 st = self._exit_states[r.rule_id]
                 rules.append({'name': r.name, 'type': r.rule_type, 'total': st.total,
+                              'in_progress': False,
                               'active_tracks': len(st.tracks),
                               'entered_tracks': sum(1 for t in st.tracks if t.entered)})
         return {'rules': rules, 'pending_sequence': list(self._confirmed_seq)}
@@ -588,8 +604,34 @@ class RegionEventEngine:
         return _intersect_area(s, o) / area >= rule.min_overlap_ratio
 
     @staticmethod
+    def _track_motion(st: _OverlapState, subject: dict):
+        """维护位移门槛的轨迹包络: 对原始中心做 5 帧中位数平滑后再进包络。
+
+        为什么要平滑 (TP 现场 2026-07 实测教训): 手从静置的枪前划过时, 遮挡
+        会把检测框"切"小 → 框中心单帧跳变 ~0.06, 直接进包络就是一次假位移,
+        位移门槛形同虚设。中位数对 1~2 帧的瞬态跳变完全免疫; 真动作 (拿起
+        工具持续挪动) 的位移会持续多帧, 平滑后照样进包络。
+        """
+        st.centers.append(_bbox_center(subject))
+        if len(st.centers) > 5:
+            st.centers.pop(0)
+        if len(st.centers) < 3:
+            return  # 样本不足不进包络 (episode 头两帧, 等平滑窗口成形)
+        xs = sorted(c[0] for c in st.centers)
+        ys = sorted(c[1] for c in st.centers)
+        cx, cy = xs[len(xs) // 2], ys[len(ys) // 2]
+        if st.ext is None:
+            st.ext = [cx, cy, cx, cy]
+        else:
+            e = st.ext
+            if cx < e[0]: e[0] = cx
+            if cy < e[1]: e[1] = cy
+            if cx > e[2]: e[2] = cx
+            if cy > e[3]: e[3] = cy
+
+    @staticmethod
     def _moved_enough(rule: RegionEventRule, st: _OverlapState) -> bool:
-        """位移门槛: episode 内主体中心轨迹包络对角线 ≥ min_move 才允许确认。
+        """位移门槛: episode 内 (平滑后) 主体中心轨迹包络对角线 ≥ min_move 才确认。
 
         用包络跨度而非逐帧位移累加——静置工具的检测抖动逐帧累加会攒出假位移,
         包络跨度只看"真的到过多远的地方", 静置时恒小 (~0.01), 真动作拿起/
@@ -620,15 +662,7 @@ class RegionEventEngine:
             st.miss = 0
             st.last_hit_ts = ts
             if rule.min_move > 0:
-                cx, cy = _bbox_center(subject)
-                if st.ext is None:
-                    st.ext = [cx, cy, cx, cy]
-                else:
-                    e = st.ext
-                    if cx < e[0]: e[0] = cx
-                    if cy < e[1]: e[1] = cy
-                    if cx > e[2]: e[2] = cx
-                    if cy > e[3]: e[3] = cy
+                self._track_motion(st, subject)
             if (not st.confirmed and st.hit >= rule.min_frames
                     and self._moved_enough(rule, st)):
                 st.confirmed = True
@@ -636,7 +670,8 @@ class RegionEventEngine:
                     st.suppressed = True  # 连续同动作: 静默吸收本 episode
                 else:
                     st.total += 1
-                    self._emit_confirmed(rule, st.start_ts, ts, events)
+                    self._emit_confirmed(rule, st.start_ts, ts, events,
+                                         subject=subject)
             return
         if st.hit == 0:
             return
@@ -688,7 +723,8 @@ class RegionEventEngine:
                 if self._dedup_hit(rule):
                     continue  # 连续同动作去重: 静默吸收
                 st.total += 1
-                self._emit_confirmed(rule, track.first_ts, ts, events)
+                self._emit_confirmed(rule, track.first_ts, ts, events,
+                                     subject=dict(track.bbox) if track.bbox else None)
         st.tracks = survivors
 
     def _track_update(self, rule, track, det, ts, region):
@@ -714,6 +750,30 @@ class RegionEventEngine:
                 and bool(self._confirmed_seq)
                 and self._confirmed_seq[-1] == rule.name)
 
+    def _interrupt_others(self, confirming_rule, events):
+        """动作互斥打断: 一个动作确认时, 其他进行中的 episode 立即收尾。
+
+        为什么必须打断 (TP 现场 2026-07 教训): 消失确认秒数会把"断开 < N 秒"
+        的两段命中桥接成同一次动作。复检场景 (测硬度→扫码→测硬度→扫码) 里两次
+        扫码只隔 1 秒多, 中间还夹着一次测硬度 —— 不打断的话两次扫码被并成一次,
+        序列少一步, 结算从"复检"错落到兜底 NG。与其他模式"下个步骤到来即打断
+        上个步骤"的语义对齐:
+          - 已确认的 episode → 产出闭合动作 (步骤落库带真实起止时间)
+          - 未确认的半截命中 → 作废 (人已切到下个动作, 残段不是有效动作)
+        """
+        for r in self.cfg.rules:
+            if r.rule_type == 'region_exit' or r.rule_id == confirming_rule.rule_id:
+                continue
+            st = self._overlap_states[r.rule_id]
+            if st.hit == 0:
+                continue
+            if st.confirmed and not st.suppressed:
+                events.append({
+                    'action': 'closed', 'rule_id': r.rule_id, 'rule_name': r.name,
+                    'start_ts': st.start_ts, 'end_ts': st.last_hit_ts, 'frames': st.hit,
+                })
+            st.reset_episode()
+
     def _flush_open_episodes(self, events):
         """结算前冲账: 已确认但未闭合的 overlap episode 立即产出闭合动作。
 
@@ -732,14 +792,18 @@ class RegionEventEngine:
             if st.hit:
                 st.reset_episode()
 
-    def _emit_confirmed(self, rule, start_ts, ts, events):
+    def _emit_confirmed(self, rule, start_ts, ts, events, subject=None):
         if rule.settle:
             self._flush_open_episodes(events)
+        else:
+            self._interrupt_others(rule, events)
         self._confirmed_seq.append(rule.name)
         action = {
             'action': 'confirmed', 'rule_id': rule.rule_id, 'rule_name': rule.name,
             'start_ts': start_ts, 'ts': ts, 'settle': rule.settle,
             'event_id': rule.event_id,
+            # 确认瞬间的主体框 (归一化 x/y/w/h) —— 执行层裁步骤截图用, 可为 None
+            'subject': subject,
         }
         if rule.settle and self.cfg.settlement_rules:
             hit = self._match_settlement(self._confirmed_seq)

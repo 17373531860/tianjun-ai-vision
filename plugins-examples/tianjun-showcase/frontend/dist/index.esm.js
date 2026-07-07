@@ -39,6 +39,28 @@ export function register(ctx) {
     window.addEventListener("message", async (ev) => {
       const d = ev && ev.data;
       if (!d || d.__tjscAction !== true) return;
+      // ==================== 扫码键盘转发 (v1.3.0) ====================
+      // 全屏 iframe 抢走焦点后, USB 扫码枪的键盘流打在 iframe 里, 宿主 useScanGun
+      // (window keydown capture) 收不到 → 扫码链路断。iframe 把键盘流转发上来,
+      // 父层在宿主 window 上重放合成 KeyboardEvent, useScanGun 按原速度特征识别。
+      // scan-key: 单键实时重放 (物理枪打进 iframe); scan-keys: 整串+回车 (虚拟扫码枪)。
+      if (d.action === "scan-key") {
+        try {
+          const k = (d.payload || {}).key;
+          if (k) window.dispatchEvent(new KeyboardEvent("keydown", { key: k, code: (d.payload || {}).code || "", bubbles: true }));
+        } catch (e) { /* 静默 */ }
+        return;
+      }
+      if (d.action === "scan-keys") {
+        try {
+          const text = String((d.payload || {}).text || "");
+          for (const ch of text) {
+            window.dispatchEvent(new KeyboardEvent("keydown", { key: ch, bubbles: true }));
+          }
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        } catch (e) { /* 静默 */ }
+        return;
+      }
       if (d.action !== "api" && d.action !== "upload" && d.action !== "download") return;
       const id = d.id;
       const p = d.payload || {};

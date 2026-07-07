@@ -92,6 +92,10 @@ VIEW2_PROJECT = {
 SWAB_CONFIG = {
     "count_channels": [0],                     # 视角1 计数通道
     "count_anchor_label": "查看产品有无脏污",    # 视角1 锚动作标签（detect6 cls0）
+    # v1.3.0 同帧双类别门槛（detect9）：非空时本帧须同时检出该伴随标签才计数；
+    # 空 = 不启用（与 v1.2.0 行为一致）。新模型标签体系（查看产品/清洁产品）
+    # 的现场把锚标签配"查看产品"、本键配"清洁产品"。
+    "count_require_label": "",
     "swap_channel": 1,                         # 视角2 换棉签通道
     "swap_label": "更换棉签",                   # 视角2 换棉签动作标签
     "max_uses_per_swab": 11,                   # 一根棉签擦满 K 个产品后锁定（K）

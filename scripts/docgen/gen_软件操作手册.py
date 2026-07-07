@@ -24,8 +24,8 @@ BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 MD = os.path.join(BASE, 'docs', '软件操作手册.md')
 PDF = os.path.join(BASE, 'docs', '软件操作手册.pdf')
 
-VERSION = 'v3.31.0'
-UPDATED = '2026 年 6 月'
+VERSION = 'v3.32.0'
+UPDATED = '2026 年 7 月'
 
 
 # ── GitHub 风格锚点（让 md 里手写的目录内链在 PDF 中可跳转）──────────────────

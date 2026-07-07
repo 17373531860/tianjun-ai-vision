@@ -362,9 +362,11 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self.mediapipe_landmarker_task_path = ""    # 空 = 用内置 backend/data/models/hand_landmarker.task
         # v3.32.0 自定义纯色骨架样式 (默认关 = 保持 MediaPipe 官方花色, 老客户零影响)
         self.mediapipe_custom_style = False
-        self.mediapipe_pose_color = "#00FF00"       # 姿态骨架颜色 (#RRGGBB)
+        self.mediapipe_pose_color = "#00FF00"       # 姿态连线颜色 (#RRGGBB)
+        self.mediapipe_pose_point_color = ""        # 姿态关键点颜色 (空 = 跟随连线颜色)
         self.mediapipe_pose_thickness = 2           # 姿态骨架线宽 (1-10)
-        self.mediapipe_hands_color = "#00FF00"      # 手部骨架颜色 (#RRGGBB)
+        self.mediapipe_hands_color = "#00FF00"      # 手部连线颜色 (#RRGGBB)
+        self.mediapipe_hands_point_color = ""       # 手部关键点颜色 (空 = 跟随连线颜色)
         self.mediapipe_hands_thickness = 2          # 手部骨架线宽 (1-10)
         # 8 个内部 _mp_* 状态字段移至组件, __getattr__/__setattr__ 透明转发
         self.mp_overlay = MediaPipeOverlay(host=self)
@@ -445,8 +447,10 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                     # v3.32.0 自定义纯色骨架样式 (向后兼容: 缺省 = 关, 走官方花色)
                     self.mediapipe_custom_style = bool(config.get('mediapipe_custom_style', False))
                     self.mediapipe_pose_color = config.get('mediapipe_pose_color', '#00FF00') or '#00FF00'
+                    self.mediapipe_pose_point_color = config.get('mediapipe_pose_point_color', '') or ''
                     self.mediapipe_pose_thickness = int(config.get('mediapipe_pose_thickness', 2))
                     self.mediapipe_hands_color = config.get('mediapipe_hands_color', '#00FF00') or '#00FF00'
+                    self.mediapipe_hands_point_color = config.get('mediapipe_hands_point_color', '') or ''
                     self.mediapipe_hands_thickness = int(config.get('mediapipe_hands_thickness', 2))
 
                     per_ch = (config.get('per_channel') or {}).get(str(self.channel_id), {})
@@ -508,8 +512,10 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 # v3.32.0 自定义纯色骨架样式
                 'mediapipe_custom_style': bool(getattr(self, 'mediapipe_custom_style', False)),
                 'mediapipe_pose_color': getattr(self, 'mediapipe_pose_color', '#00FF00') or '#00FF00',
+                'mediapipe_pose_point_color': getattr(self, 'mediapipe_pose_point_color', '') or '',
                 'mediapipe_pose_thickness': int(getattr(self, 'mediapipe_pose_thickness', 2)),
                 'mediapipe_hands_color': getattr(self, 'mediapipe_hands_color', '#00FF00') or '#00FF00',
+                'mediapipe_hands_point_color': getattr(self, 'mediapipe_hands_point_color', '') or '',
                 'mediapipe_hands_thickness': int(getattr(self, 'mediapipe_hands_thickness', 2)),
                 'per_channel': per_channel,
             }
@@ -1107,17 +1113,33 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
     # ========== 推理线程相关方法 ==========
     
     def _start_inference_thread(self):
-        """启动独立推理线程"""
-        if self._inference_thread is not None and self._inference_thread.is_alive():
-            return  # 已在运行
-        
-        self._inference_running = True
-        self._inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
-        self._inference_thread.start()
-        print("[InferThread] started")
-    
+        """启动独立推理线程 (加锁 + 代数, 保证任意时刻至多一条存活)。
+
+        2026-07 TP 频闪真因: 无锁的"检查-启动"两步被并发调用 (采集线程自启 +
+        resume 恢复) 会各起一条线程, 一条正常出结果、一条抢不到新帧发布空结果,
+        交替覆盖 → 前端标注框逐帧频闪。代数写进线程本体的循环条件, 旧线程
+        (含假死后被放弃又因运行标志复活的僵尸) 在下一次迭代自行退出。
+        """
+        lock = getattr(self, '_inference_start_lock', None)
+        if lock is None:  # 老实例热升级兜底
+            import threading as _th
+            lock = self._inference_start_lock = _th.Lock()
+        with lock:
+            if self._inference_thread is not None and self._inference_thread.is_alive():
+                return  # 已在运行
+            self._inference_generation = getattr(self, '_inference_generation', 0) + 1
+            gen = self._inference_generation
+            self._inference_running = True
+            self._inference_thread = threading.Thread(
+                target=self._inference_loop, args=(gen,), daemon=True)
+            self._inference_thread.start()
+            print(f"[InferThread] started (gen={gen})")
+
     def _stop_inference_thread(self):
         """停止推理线程"""
+        # 先作废代数再放倒运行标志: 即使随后有新 start 把运行标志重新置真,
+        # 老线程的代数已对不上, 不会复活成第二条线程
+        self._inference_generation = getattr(self, '_inference_generation', 0) + 1
         self._inference_running = False
         thread = self._inference_thread
         if thread is not None:

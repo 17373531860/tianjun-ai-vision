@@ -53,16 +53,6 @@ import cv2
 # HandLandmarker .task 默认路径 (跟项目同级分发, 客户可换)
 DEFAULT_TASK_MODEL_REL = "backend/data/models/hand_landmarker.task"
 
-# MediaPipe 标准 21 关键点连接表 (用于 Tasks API 渲染)
-HAND_CONNECTIONS_21 = [
-    (0, 1), (1, 2), (2, 3), (3, 4),
-    (0, 5), (5, 6), (6, 7), (7, 8),
-    (5, 9), (9, 10), (10, 11), (11, 12),
-    (9, 13), (13, 14), (14, 15), (15, 16),
-    (13, 17), (17, 18), (18, 19), (19, 20),
-    (0, 17),
-]
-
 
 def _hex_to_bgr(hex_color: str, fallback: Tuple[int, int, int]) -> Tuple[int, int, int]:
     """'#RRGGBB' -> BGR tuple (cv2/mediapipe DrawingSpec 都吃 BGR). 解析失败回退."""
@@ -461,24 +451,32 @@ class MediaPipeOverlay:
     # ---------------- 内部方法 ----------------
 
     def _custom_draw_specs(self, kind: str):
-        """自定义纯色骨架样式 (v3.32.0).
+        """自定义纯色骨架样式 (v3.32.0; 关键点/连线颜色可分开配).
 
         开关关闭时返回 None (走 MediaPipe 默认花色样式, 与老版本行为一致);
         开启时返回 (landmark_spec, connection_spec), 姿态/手部各用各的颜色+粗细.
+        关键点颜色字段缺省/为空时跟随线条颜色 (老配置升级视觉不变).
         """
         host = self._host
         if not getattr(host, "mediapipe_custom_style", False):
             return None
         if kind == "pose":
-            color = _hex_to_bgr(getattr(host, "mediapipe_pose_color", "#00FF00"), (0, 255, 0))
+            line_hex = getattr(host, "mediapipe_pose_color", "#00FF00")
+            point_hex = getattr(host, "mediapipe_pose_point_color", "") or line_hex
             thickness = int(getattr(host, "mediapipe_pose_thickness", 2))
         else:
-            color = _hex_to_bgr(getattr(host, "mediapipe_hands_color", "#00FF00"), (0, 255, 0))
+            line_hex = getattr(host, "mediapipe_hands_color", "#00FF00")
+            point_hex = getattr(host, "mediapipe_hands_point_color", "") or line_hex
             thickness = int(getattr(host, "mediapipe_hands_thickness", 2))
+        line_color = _hex_to_bgr(line_hex, (0, 255, 0))
+        point_color = _hex_to_bgr(point_hex, line_color)
         thickness = max(1, min(10, thickness))
-        spec = self._mp_draw.DrawingSpec(
-            color=color, thickness=thickness, circle_radius=max(2, thickness + 1))
-        return spec, spec
+        radius = max(2, thickness + 1)
+        landmark_spec = self._mp_draw.DrawingSpec(
+            color=point_color, thickness=thickness, circle_radius=radius)
+        connection_spec = self._mp_draw.DrawingSpec(
+            color=line_color, thickness=thickness, circle_radius=radius)
+        return landmark_spec, connection_spec
 
     def _init_hands_pipeline(self, conf: float):
         """根据 host.mediapipe_hand_detector_path 决定走 baseline 还是二段."""
@@ -678,27 +676,45 @@ class MediaPipeOverlay:
                 )
 
     def _draw_two_stage_hands(self, frame):
-        """二段 pipeline 渲染: 把 ROI 内归一化关键点变回全帧坐标后画."""
+        """二段 pipeline 渲染: ROI 归一化关键点 → 全帧归一化坐标 → 复用 baseline 同款绘制.
+
+        把 Tasks API 输出转成 NormalizedLandmarkList 后走 mp draw_landmarks,
+        默认多彩配色 / 自定义纯色两条路都与 baseline 完全一致 (老版蓝线黄点手工渲染已废弃).
+        """
         if not self._last_two_stage_results:
             return
-        # 自定义纯色样式: 连线/关节点同色; 未开启保持老配色 (蓝线 + 黄点)
+        import mediapipe as mp
+        from mediapipe.framework.formats import landmark_pb2
+        # 直调本方法的工具/测试可能未走 init(), 就地补齐绘图句柄
+        if self._mp_draw is None:
+            self._mp_draw = mp.solutions.drawing_utils
+            self._mp_draw_styles = mp.solutions.drawing_styles
+        fh, fw = frame.shape[:2]
         hand_specs = self._custom_draw_specs("hands")
-        if hand_specs is not None:
-            line_color = point_color = hand_specs[0].color
-            thickness = hand_specs[0].thickness
-            radius = hand_specs[0].circle_radius
-        else:
-            line_color, point_color, thickness, radius = (255, 100, 0), (0, 255, 255), 2, 3
         for (offset, roi_size, landmarks) in self._last_two_stage_results:
             ox, oy = offset
             rw, rh = roi_size
-            pts = []
-            for lm in landmarks:
-                x = ox + int(lm.x * rw)
-                y = oy + int(lm.y * rh)
-                pts.append((x, y))
-            for a, b in HAND_CONNECTIONS_21:
-                if a < len(pts) and b < len(pts):
-                    cv2.line(frame, pts[a], pts[b], line_color, thickness, cv2.LINE_AA)
-            for (x, y) in pts:
-                cv2.circle(frame, (x, y), radius, point_color, -1, cv2.LINE_AA)
+            lm_list = landmark_pb2.NormalizedLandmarkList(landmark=[
+                landmark_pb2.NormalizedLandmark(
+                    x=(ox + lm.x * rw) / fw,
+                    y=(oy + lm.y * rh) / fh,
+                    z=getattr(lm, "z", 0.0),
+                )
+                for lm in landmarks
+            ])
+            if hand_specs is not None:
+                self._mp_draw.draw_landmarks(
+                    frame,
+                    lm_list,
+                    mp.solutions.hands.HAND_CONNECTIONS,
+                    hand_specs[0],
+                    hand_specs[1],
+                )
+            else:
+                self._mp_draw.draw_landmarks(
+                    frame,
+                    lm_list,
+                    mp.solutions.hands.HAND_CONNECTIONS,
+                    self._mp_draw_styles.get_default_hand_landmarks_style(),
+                    self._mp_draw_styles.get_default_hand_connections_style(),
+                )
