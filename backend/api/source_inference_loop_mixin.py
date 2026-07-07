@@ -298,6 +298,8 @@ class InferenceLoopMixin:
                     self._update_tracking_stats(detections, original_frame)
                 else:
                     self._update_step_stats(detections, original_frame)
+                    if hasattr(self, '_check_screw_repeat_guard'):
+                        self._check_screw_repeat_guard(detections, loop_start)
                 update_time = (time.time() - t5) * 1000
                 if update_time > 100:
                     debug_log(f"!!! 步骤统计耗时: {update_time:.1f}ms", "INFERENCE")

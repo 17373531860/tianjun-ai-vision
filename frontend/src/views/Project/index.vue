@@ -2394,6 +2394,55 @@
                       <el-switch v-model="activeProject.pipeline_config.per_item.show_item_numbers"
                         active-text="显示" inactive-text="不显示" inline-prompt size="default" />
                     </div>
+
+                    <!-- 重复打同一颗螺丝防护 -->
+                    <div class="mt-3 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+                      <div class="flex items-center justify-between gap-3">
+                        <div class="flex-1">
+                          <div class="text-[12px] font-bold text-amber-300">防止重复打同一颗螺丝</div>
+                          <div class="text-[10px] text-gray-500 mt-0.5">
+                            开启后: 一颗螺丝已打过 (已覆盖), 若螺丝刀<b class="text-amber-400">移开后又压回来重打这颗</b> → 报警灯响 (复用 NG 报警) + 画面黄条提示。<b class="text-amber-400">待补态也生效</b> (回头重打已打的螺丝照样报, 补打漏掉的不报)<br/>
+                            关闭 (默认): 打过的螺丝再打不做任何处理
+                          </div>
+                        </div>
+                        <el-switch v-model="activeProject.pipeline_config.per_item.duplicate_screw_alarm"
+                          active-text="防重复打" inactive-text="不处理" inline-prompt size="default" />
+                      </div>
+                      <div class="grid grid-cols-2 gap-4 mt-2">
+                        <div class="flex items-center gap-2">
+                          <span class="text-[11px] text-gray-400">移开确认帧数</span>
+                          <el-input-number
+                            v-model="activeProject.pipeline_config.per_item.duplicate_release_frames"
+                            size="small" :min="1" :step="1" :precision="0" class="!w-32"
+                            :disabled="!activeProject.pipeline_config.per_item.duplicate_screw_alarm" />
+                          <span class="text-[10px] text-gray-500">螺丝刀要连续离开几帧才算真移开 (大=不易误报, 治拔枪卡顿, 推荐 8)</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span class="text-[11px] text-gray-400">重压确认帧数</span>
+                          <el-input-number
+                            v-model="activeProject.pipeline_config.per_item.duplicate_sustain_frames"
+                            size="small" :min="1" :step="1" :precision="0" class="!w-32"
+                            :disabled="!activeProject.pipeline_config.per_item.duplicate_screw_alarm" />
+                          <span class="text-[10px] text-gray-500">真移开后压回连续几帧算重复 (小=灵敏, 推荐 2)</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span class="text-[11px] text-gray-400">报警节流(秒)</span>
+                          <el-input-number
+                            v-model="activeProject.pipeline_config.per_item.duplicate_alarm_interval_sec"
+                            size="small" :min="0" :step="0.5" :precision="1" class="!w-32"
+                            :disabled="!activeProject.pipeline_config.per_item.duplicate_screw_alarm" />
+                          <span class="text-[10px] text-gray-500">两次报警最小间隔, 防连发 (推荐 2)</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span class="text-[11px] text-gray-400">提示存在时间(秒)</span>
+                          <el-input-number
+                            v-model="activeProject.pipeline_config.per_item.duplicate_warning_display_sec"
+                            size="small" :min="0" :step="0.5" :precision="1" class="!w-32"
+                            :disabled="!activeProject.pipeline_config.per_item.duplicate_screw_alarm" />
+                          <span class="text-[10px] text-gray-500">黄条提示显示多久后自动撤下 (0=持续到周期结束/下次刷新, 推荐 3)</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </el-card>
@@ -4038,6 +4087,12 @@ const initProjectDefaults = (project) => {
   if (piCfg.judge_all_done_sec === undefined) piCfg.judge_all_done_sec = 0;
   if (piCfg.judge_label_frames === undefined) piCfg.judge_label_frames = 3;
   if (piCfg.judge_ok_event_id === undefined) piCfg.judge_ok_event_id = null;
+  // 重复打同一颗螺丝防护 (默认关 = 老项目零差异)
+  if (piCfg.duplicate_screw_alarm === undefined) piCfg.duplicate_screw_alarm = false;
+  if (piCfg.duplicate_sustain_frames === undefined) piCfg.duplicate_sustain_frames = 2;
+  if (piCfg.duplicate_release_frames === undefined) piCfg.duplicate_release_frames = 8;
+  if (piCfg.duplicate_alarm_interval_sec === undefined) piCfg.duplicate_alarm_interval_sec = 2.0;
+  if (piCfg.duplicate_warning_display_sec === undefined) piCfg.duplicate_warning_display_sec = 3.0;
 
   // ── 结算触发方式: 唯一入口的 UI 助手字段 (从底层标志反推, 不持久化为权威; 保存时再换算回标志) ──
   // 底层标志才是后端权威: judge_on_workpiece_leave(物品消失) / finish_label(步骤标签) /
@@ -4492,6 +4547,12 @@ const handleSaveProject = async () => {
             judge_all_done_sec: Math.max(0, Number(src.judge_all_done_sec) || 0),
             judge_label_frames: Math.max(1, Math.floor(Number(src.judge_label_frames) || 3)),
             judge_ok_event_id: Math.max(0, Math.floor(Number(src.judge_ok_event_id) || 0)),
+            // 重复打同一颗螺丝防护 (默认关 = 老项目零差异)
+            duplicate_screw_alarm: src.duplicate_screw_alarm === true,
+            duplicate_sustain_frames: Math.max(1, Math.floor(Number(src.duplicate_sustain_frames) || 2)),
+            duplicate_release_frames: Math.max(1, Math.floor(Number(src.duplicate_release_frames) || 8)),
+            duplicate_alarm_interval_sec: Math.max(0, Number(src.duplicate_alarm_interval_sec) || 0),
+            duplicate_warning_display_sec: Math.max(0, Number(src.duplicate_warning_display_sec) || 0),
           };
         })() : {},
         periodic_actions: (activeProject.value.periodic_actions || []).map(rule => ({

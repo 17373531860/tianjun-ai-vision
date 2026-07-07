@@ -115,6 +115,12 @@ class _PerItemItemState:
     __slots__ = (
         'item_id', 'bbox', 'last_seen_frame', 'last_seen_time',
         'covered', 'consecutive_overlap_frames', 'first_covered_at',
+        # ── 重复打同一颗螺丝防护 (covered 之后才用到, 默认全零 = 老行为) ──
+        'released_after_cover',        # covered 后是否已"真正移开"过 (区分首次打 vs 回头重打)
+        'post_cover_away_frames',      # covered 后动作框"连续离开"的帧数 (够久才算真正移开, 滤拔枪卡顿/闪断)
+        'redup_overlap_frames',        # 真正移开后重新压回来的连续帧数
+        'redup_warned',                # 本次"压回来"回合是否已报过 (再移开再压 → 复位可再报)
+        'redup_count',                 # 本周期内被重复打的次数 (供前端标记/统计)
     )
 
     def __init__(self, item_id: int, bbox, frame_id: int, ts: float):
@@ -125,6 +131,11 @@ class _PerItemItemState:
         self.covered = False
         self.consecutive_overlap_frames = 0
         self.first_covered_at: Optional[float] = None
+        self.released_after_cover = False
+        self.post_cover_away_frames = 0
+        self.redup_overlap_frames = 0
+        self.redup_warned = False
+        self.redup_count = 0
 
     def to_dict(self):
         return {
@@ -132,6 +143,7 @@ class _PerItemItemState:
             'bbox': list(self.bbox),
             'covered': self.covered,
             'covered_at': self.first_covered_at,
+            'dup': self.redup_count,               # >0 表示本周期被重复打过 (前端可高亮)
         }
 
 
@@ -250,7 +262,9 @@ class _PerItemStep:
                 self.items[iid] = _PerItemItemState(iid, bbox, frame_id, ts)
 
     # ──── 应用工序覆盖 ────
-    def apply_coverage(self, action_boxes, frame_id: int, ts: float):
+    def apply_coverage(self, action_boxes, frame_id: int, ts: float,
+                       dup_detect: bool = False, dup_sustain: int = 0,
+                       dup_release: int = 1):
         """用本帧 action_label box 推进个体覆盖状态.
 
         默认逻辑 (IoU):
@@ -262,6 +276,15 @@ class _PerItemStep:
 
         被覆盖的个体: 连续重叠帧数 +1; 反之归零.
         累积达到 sustain_frames 那一刻翻转 covered=true.
+
+        重复打防护 (dup_detect=True):
+            个体已 covered 之后, 必须先观察到"动作框真正移开"(released), 再压回来并持续
+            dup_sustain 帧 → 判定这颗被"重复打", 加入返回列表.
+            "真正移开" = 动作框连续离开 dup_release 帧 (不是单帧). 这样拔枪卡顿 /
+            检测框单帧闪断 (离开一两帧又压回) 不会误开门, 避免把拔枪尾程当成回头重打.
+            release 门是区分 "首次打完的余帧" 与 "回头重打" 的唯一物理信号, 不可省.
+            每个"压回来"回合只报一次, 再真正移开可再报.
+        返回: 本帧新判定为"重复打"的 item_id 列表 (dup_detect=False 时恒为空).
         """
         # 1. 标记本帧哪些个体被某个 action box 覆盖到
         # 注意: bbox 是 xywh 格式 (左上角 + 宽高), 看 _bbox_iou 注释和 _bbox_center 实现.
@@ -287,14 +310,34 @@ class _PerItemStep:
                     overlapping_ids.add(best_iid)
 
         # 2. 推进/归零各个体的连续重叠帧数
+        reoccur_ids = []
         for iid, st in self.items.items():
             if iid in overlapping_ids:
                 st.consecutive_overlap_frames += 1
                 if (not st.covered) and st.consecutive_overlap_frames >= self.sustain_frames:
                     st.covered = True
                     st.first_covered_at = ts
+                elif st.covered and dup_detect:
+                    # 已打过: 任何接触都清"连续离开"计数 (拔枪卡顿/单帧闪断不算移开)
+                    st.post_cover_away_frames = 0
+                    if st.released_after_cover:
+                        # 真正移开过 + 又压回来 → 重复打候选
+                        st.redup_overlap_frames += 1
+                        if st.redup_overlap_frames >= max(1, dup_sustain) and not st.redup_warned:
+                            st.redup_warned = True
+                            st.redup_count += 1
+                            reoccur_ids.append(iid)
             else:
                 st.consecutive_overlap_frames = 0
+                if st.covered and dup_detect:
+                    st.post_cover_away_frames += 1
+                    st.redup_overlap_frames = 0
+                    # 动作框"连续离开"够久才算真正移开 → 打开"下次压回来可再判"的门.
+                    # 单帧闪断/拔枪卡顿 (离开不足 dup_release 帧) 不开门, 从根上防误报.
+                    if st.post_cover_away_frames >= max(1, dup_release):
+                        st.released_after_cover = True
+                        st.redup_warned = False
+        return reoccur_ids
 
     # ──── 个体超时清理 ────
     def cleanup_stale_items(self, ts: float, timeout_sec: float, lock_count_on_start: bool):
@@ -577,6 +620,20 @@ class PerItemMixin:
         judge_label_frames = int(per_item_cfg.get('judge_label_frames', 3) or 3)
         judge_ok_event_id = int(per_item_cfg.get('judge_ok_event_id', 0) or 0)
 
+        # ── 重复打同一颗螺丝防护 (打螺丝漏打的反面, 默认关 = 老项目零差异) ──
+        # 语义: 螺丝已 covered 后, 动作框"曾移开再压回来"并持续 duplicate_sustain_frames
+        #   帧 → 判"重复打", 复用 NG 事件 (event2) 点报警灯 + PerItemPanel 黄条提示,
+        #   不落账 / 不结束周期 / 不动覆盖状态 (覆盖单调).
+        # 待补态天然覆盖: 待补时 cycle_active 仍 True, 已打的螺丝逻辑不变 → 待补态里回头
+        #   重打已打的螺丝照样报, 而补打漏掉的 (covered=False) 螺丝是合法补打不报.
+        duplicate_screw_alarm = bool(per_item_cfg.get('duplicate_screw_alarm', False))
+        duplicate_sustain_frames = int(per_item_cfg.get('duplicate_sustain_frames', 2) or 2)
+        # 动作框要"连续离开"够久才算真正移开 (滤拔枪卡顿/单帧闪断, 防误报). 默认 8 帧.
+        duplicate_release_frames = int(per_item_cfg.get('duplicate_release_frames', 8) or 8)
+        duplicate_alarm_interval_sec = float(per_item_cfg.get('duplicate_alarm_interval_sec', 2.0) or 0.0)
+        # 重复打提示横幅在前端的存在时间 (秒). 0 = 不自动撤 (持续到周期结束/下次重复打刷新).
+        duplicate_warning_display_sec = float(per_item_cfg.get('duplicate_warning_display_sec', 3.0) or 0.0)
+
         self._per_item_config = {
             'stability_window_frames': max(1, stability_window),
             'stability_iou_threshold': stability_iou,
@@ -610,6 +667,11 @@ class PerItemMixin:
             'judge_all_done_sec': max(0.0, judge_all_done_sec),
             'judge_label_frames': max(1, judge_label_frames),
             'judge_ok_event_id': max(0, judge_ok_event_id),
+            'duplicate_screw_alarm': duplicate_screw_alarm,
+            'duplicate_sustain_frames': max(1, duplicate_sustain_frames),
+            'duplicate_release_frames': max(1, duplicate_release_frames),
+            'duplicate_alarm_interval_sec': max(0.0, duplicate_alarm_interval_sec),
+            'duplicate_warning_display_sec': max(0.0, duplicate_warning_display_sec),
         }
 
         # ── 步骤级解析 ──
@@ -658,6 +720,15 @@ class PerItemMixin:
         cfg = self._per_item_config
         sess.frame_id += 1
         current_time = time.time()
+
+        # ──── 0. 重复打提示横幅到期自动撤下 ────
+        # duplicate_warning_display_sec > 0 时, 横幅只存在配置的秒数 (方便现场调试报警框停留时长);
+        # 0 = 不自动撤 (维持到周期结束 / 下次重复打刷新). 报警灯的亮灯时长另由 alarm 配置的 duration 管.
+        _warn = getattr(self, '_per_item_last_warning', None)
+        if _warn:
+            _disp = cfg.get('duplicate_warning_display_sec', 0)
+            if _disp > 0 and (current_time - (_warn.get('ts') or current_time)) > _disp:
+                self._per_item_last_warning = None
 
         # ──── 1. 按 label 分组本帧检测 ────
         boxes_by_label: dict[str, list] = {}
@@ -715,7 +786,15 @@ class PerItemMixin:
             action_boxes = boxes_by_label.get(step.action_label, [])
             if action_boxes:
                 any_action_this_frame = True
-            step.apply_coverage(action_boxes, sess.frame_id, current_time)
+            _dup_on = cfg.get('duplicate_screw_alarm', False)
+            reoccur_ids = step.apply_coverage(
+                action_boxes, sess.frame_id, current_time,
+                dup_detect=_dup_on,
+                dup_sustain=cfg.get('duplicate_sustain_frames', 2),
+                dup_release=cfg.get('duplicate_release_frames', 8),
+            )
+            if _dup_on and reoccur_ids:
+                self._per_item_fire_duplicate_alarm(step, reoccur_ids, current_time)
             # 3c. 超时清理 (锁定模式下已是 no-op)
             step.cleanup_stale_items(
                 current_time, cfg['item_timeout_seconds'],
@@ -1237,6 +1316,9 @@ class PerItemMixin:
         for step in self._per_item_steps:
             step.reset_for_new_cycle()
         sess.reset_after_cycle()
+        # 清重复打警告 (新周期从零开始; 个体表 reset 已连带清各颗 dup 状态)
+        self._per_item_last_warning = None
+        self._per_item_last_dup_alarm_at = 0.0
         try:
             self.current_cycle_steps = []
             self.cycle_start_time = None
@@ -1260,21 +1342,55 @@ class PerItemMixin:
         return False
 
     def _per_item_fire_remediation_alarm(self):
-        """进待补态时触发"还有没扭螺丝"事件的报警 (只点灯, 不落账 — 落账等补打/人工确认).
+        """进待补态时触发 NG 报警响应 (只点灯, 不落账 — 落账等补打/人工确认).
 
-        灯做成事件: 触发的是可配 remediation_event_id 对应事件的报警映射,
+        灯做成事件: 优先触发可配 remediation_event_id 对应事件的报警映射,
         不写死红灯 — 由用户在报警配置里决定该事件亮什么灯/响不响蜂鸣.
-        remediation_event_id=0 时不主动触发 (纯靠待补状态联动).
+        remediation_event_id=0 时回退到标准 NG 事件 event2，避免现场必须等人工确认
+        NG 落账后报警灯才响应。
         """
         cfg = self._per_item_config or {}
         eid = int(cfg.get('remediation_event_id', 0) or 0)
         if eid <= 0:
-            return
+            eid = 2
         try:
             from backend.api.alarm import alarm_router
             alarm_router.trigger_alarm(f'event{eid}', channel_id=self.channel_id)
         except Exception as e:
             print(f"[per_item] 触发待补报警事件 event{eid} 失败: {e}")
+
+    def _per_item_fire_duplicate_alarm(self, step, item_ids, current_time: float):
+        """重复打同一颗螺丝: 复用 NG 事件 (event2) 点报警灯 + 置 PerItemPanel 黄条警告.
+
+        只报警 + 提示, 不落账 / 不结束周期 / 不动覆盖状态 (覆盖单调). 物理报警按
+        duplicate_alarm_interval_sec 节流, 避免连发; 前端警告横幅每次都刷新最新漏点.
+        """
+        cfg = self._per_item_config or {}
+        ids_str = "/".join(f"#{i}" for i in item_ids)
+        reason = f"[{step.display_label}] 重复打螺丝 {ids_str}"
+
+        # 警告横幅 (前端 PerItemPanel 读 last_warning 显示黄条; 不落账 / 不弹 toast / 不播语音)
+        self._per_item_last_warning = {
+            'reason_summary': reason,
+            'step_label': step.step_label,
+            'display_label': step.display_label,
+            'item_ids': list(item_ids),
+            'ts': current_time,
+        }
+        print(f"[per_item] 重复打警告: {reason}")
+        if debug_center.is_on("backend.per_item"):
+            debug_center.dbg("backend.per_item", "重复打螺丝", f"channel={self.channel_id} {reason}")
+
+        # 物理报警灯 (复用 NG event2), 按间隔节流
+        interval = cfg.get('duplicate_alarm_interval_sec', 2.0)
+        last = getattr(self, '_per_item_last_dup_alarm_at', 0.0) or 0.0
+        if interval <= 0 or (current_time - last) >= interval:
+            self._per_item_last_dup_alarm_at = current_time
+            try:
+                from backend.api.alarm import alarm_router
+                alarm_router.trigger_alarm('event2', channel_id=self.channel_id)
+            except Exception as e:
+                print(f"[per_item] 触发重复打报警 event2 失败: {e}")
 
     def _per_item_fire_judge_ok_event(self):
         """判定层判合格时点"绿灯"——触发可配 judge_ok_event_id 对应事件的报警映射.
@@ -1562,6 +1678,8 @@ class PerItemMixin:
             except Exception:
                 pass
         self._per_item_last_ng_detail = None
+        self._per_item_last_warning = None
+        self._per_item_last_dup_alarm_at = 0.0
 
     # ──── 给 detection/results 用的 state 快照 ────
     def get_per_item_state(self) -> Optional[dict]:
@@ -1615,7 +1733,14 @@ class PerItemMixin:
                 'box_color_uncovered': cfg.get('box_color_uncovered', ''),
                 'show_item_numbers': cfg.get('show_item_numbers', False),
                 'judge_timing': cfg.get('judge_timing', 'on_settle'),
+                # 重复打同一颗螺丝防护
+                'duplicate_screw_alarm': cfg.get('duplicate_screw_alarm', False),
+                'duplicate_sustain_frames': cfg.get('duplicate_sustain_frames', 2),
+                'duplicate_release_frames': cfg.get('duplicate_release_frames', 8),
+                'duplicate_alarm_interval_sec': cfg.get('duplicate_alarm_interval_sec', 2.0),
+                'duplicate_warning_display_sec': cfg.get('duplicate_warning_display_sec', 3.0),
             },
             'steps': steps_state,
             'last_ng_detail': getattr(self, '_per_item_last_ng_detail', None),
+            'last_warning': getattr(self, '_per_item_last_warning', None),
         }
