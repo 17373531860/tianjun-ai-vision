@@ -132,6 +132,9 @@ def given_cfg_count(ctx, k):
         "max_uses_per_swab": k, "move_confirm_frames": 1,
         "move_threshold": 0.0116, "force_lock_frames": 0,
         "lock_time": 0.0, "lock_spatial": 0.0,   # 关位置/时间锁, 让连续计件
+        # v1.4.0 起计数器新增时间制强锁/离场 (默认 1.6s/0.15s), 同样要清零,
+        # 否则第二件落在强锁期内不计数, 超限 NG 场景永远触发不了
+        "force_lock_sec": 0.0, "lost_gone_sec": 0.0,
         "normal_count_event_id": 1, "swab_over_limit_event_id": 2,
         "fake_wipe_event_id": 0, "operator_absent_enabled": False,
     })
