@@ -7,6 +7,9 @@ effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__sentry"
 ---
 
+> **设计深潜（为什么这样设计）**：`docs/dev/internals/mes-hook-pipeline.md` + `docs/dev/internals/cluster-collector.md`  
+> 本 skill = how-to/debug；深潜 = explanation。冲突以代码为准。
+
 # debug-mes: MES 子系统诊断（v3.5.x 主线）
 
 > 阅前先看 `AGENTS.md` 第六节 6.2（模块 6/7/8/9）+ 第七节扩展点表 + 第八节不变量 1/4/6。
@@ -149,8 +152,20 @@ class MESHookManager:
 | `on_session_end(ch, session_id)` | 同上 | `_handle_session_end` |
 | `on_channel_removed(ch)` | channel_manager.set_channel_count | 同步清理 6 个 dict + 取消 timer |
 
-**`_enqueue` 设计**：critical=True 拒绝丢弃（队列满则阻塞 `block=True, timeout`），非 critical 才丢；
-丢弃 / 阻塞时增 `_queue_drop_count` / `_queue_block_count`，可经 `_spill_task` 落盘续命。
+**`_enqueue` 设计**（B1① 修订后，AGENTS.md 不变量 #15）：队列满时**绝不阻塞调用方**（旧版
+critical 会 `put(timeout=0.8)`，队列长期满时每周期卡 0.8s 拖垮结算节拍，已废弃）。现行为：
+- `critical=True`（scan/cycle/session 五个核心 hook 的现有调用点全部是）→ 满时经 `_spill_task`
+  落盘 `mes_hook_spool.jsonl`，worker 恢复后 `_drain_spill_once` 回放，业务不丢
+- `critical=False` → 满时直接丢弃（当前无调用点，纯预留档）
+- 两者都只计数（`_queue_drop_count` / `_queue_block_count`）并立即返回
+- 新增 hook 事件若关系业务数据完整性：必须 critical=True **且**把 handler 名加进
+  `_is_spillable_handler` 白名单（否则满时既不落盘也不回放）；纯 UI 通知类才可用 False
+
+**`_inspecting_workpiece` 取-放配对铁律**（AGENTS.md 不变量 #14）：放入仅 2 处（cycle 绑定
+`_handle_cycle_start` / scan_pair promote），取出仅 5 处（scan_pair settle / cycle_end /
+session_end / on_channel_removed / 人工强制作废 force=True）。放取两侧必须严格配对——
+多加一处 pop 会导致工件绑错周期、前端"当前工件"卡住或漏绑（v2.7.16 迟到扫码补绑 /
+v3.4.2 promote 均为此修过补丁）。
 
 ### 3.3 `_handle_cycle_end` 是项目最大 Hub
 
@@ -397,6 +412,20 @@ idle ──首次有效数据──> stabilizing
 ### 8.4 `_open_serial_with_retry`（v2.7.8）
 
 Windows `PermissionError(13)` 端口拒绝访问（`ser.close()` 释放有毫秒延迟 + 测试按钮 vs 连接线程并发）→ `max_retries=3, retry_delay=1.0`。`test_connection` 故意不重试避免 UI 卡顿。
+
+### 8.5 ⚠ 两套"称重"别混淆（v3.31 起）
+
+| | 外设层称重稳态（本节 8.2/8.3） | 原生称重投料引擎（v3.31） |
+|---|---|---|
+| 位置 | `external_device_pipeline.py: _handle_weight_stability` | `backend/services/weighing_engine.py` |
+| 职责 | 读数稳定判定 + 有重无码告警 + dispatch | 配料防错业务状态机（去皮→投料→对比标准量→判定落库）|
+| 归属 | 所有 `device_role=weight` 外设通用 | 仅 `logic_mode='weighing'` 项目，配置在 `pipeline_config.weighing` |
+| 数据出口 | gateway dispatch / 插件 `external_device_data` 只读 hook | `weighing_records` 表 + `/api/v1/weighing/*` + Monitor WeighingPanel |
+
+排查链路：秤读数不进来 → 查本节外设层（协议/串口/稳态机）；读数进来但投料判定不动 →
+查引擎侧（通道是否登记：切项目后 `set_channel_config` 日志；型号/料别标准量是否配置）。
+外设层还提供 `send_command`（串口指令应答协议，软件去皮 'T'/置零 'Z'）——引擎和插件
+`send_device_command` API 都走它。mock_weight 无硬件模拟见 `tests/test_mock_weight_source.py`。
 
 ---
 

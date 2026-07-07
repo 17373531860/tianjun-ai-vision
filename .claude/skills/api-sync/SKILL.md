@@ -1,16 +1,16 @@
 ---
 name: api-sync
-description: "前后端 API 对齐检查（v3.5.x 主线）：19 组 /api/v1/* 路由前缀、前端 16 个 axios 客户端、字段命名、已知不一致与修复流程。怀疑前后端数据不通或新增 API 后必读。"
+description: "前后端 API 对齐检查（v3.31 主线）：30 组 /api/v1/* 路由前缀真相表（全仓唯一事实源）、前端 21 个 axios 客户端、字段命名、已知不一致与修复流程。怀疑前后端数据不通或新增 API 后必读。"
 argument-hint: "[具体的 API 对齐问题，或 'full-check' 做全量检查]"
 model: opus
 effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 ---
 
-# api-sync — 前后端 API 对齐（v3.5.x）
+# api-sync — 前后端 API 对齐（v3.31）
 
-事实源：`AGENTS.md` 第五节（19 组路由前缀）+ `backend/main.py` 末尾的 `app.include_router(...)` 块 + `frontend/src/api/*.js`。
-本 skill 只列**真相**，不要凭记忆改路径。
+事实源优先级：代码（`backend/main.py` 末尾 `include_router` 块 + `backend/api/__init__.py` + `frontend/src/api/*.js`）> 本 skill §1 真相表 > AGENTS.md 第五节速查。
+本 skill §1 是路由明细的**唯一维护点**，不要凭记忆改路径。
 
 需求：$ARGUMENTS
 
@@ -24,66 +24,77 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 2. **前端 axios 实例在 `frontend/src/api/index.js`**：`baseURL = http://localhost:8001/api/v1`。
    所有 `api.get('/foo')` 实际打 `http://localhost:8001/api/v1/foo`，**前端写路径时不要再加 `/api/v1`**。
 3. **MJPEG / 备份下载走 `getBackendHost()`**（不带 `/api/v1`）：例如 `${getBackendHost()}/video_feed`、`${getBackendHost()}/api/v1/data/videos/{id}`。
-4. **新增端点必须挂到下面 19 组前缀之一**；如果没有合适的，先回到 `add-api-endpoint` skill 决定挂哪儿。
+4. **新增端点必须挂到下面 30 组前缀之一**；如果没有合适的，先回到 `add-api-endpoint` skill 决定挂哪儿。
 
 ---
 
-## 1. 19 组路由前缀（v3.5.x 真相表）
+## 1. 路由前缀真相表（★ 全仓唯一事实源 · v3.31.0 · 30 组）
 
-`backend/main.py` 第 772–793 行直接 `include_router`；`backend/api/__init__.py` 通过 `api_router` 聚合 9 个子模块。前缀全部在 `/api/v1/` 下。
+> **单点维护约定**：本表是路由前缀 ↔ 后端文件 ↔ 前端 client 对应关系的**唯一**明细表。
+> `modify-api` / `add-api-endpoint` / AGENTS.md 第五节只保留速查或指回这里，**不要再复制整表**。
+> 新增/下线路由组时只改本表 + AGENTS.md 第五节一行速查。
 
-| `/api/v1/` 后的前缀 | 后端文件 | 行数 | 一句话 |
+挂载源头**一处**（OVERLAP-3 治理，2026-07）：`backend/api/router_manifest.py` 的 `mount_all_routers(app)` 是全部主程序路由的唯一登记处，`main.py` 只调它一次（`api/__init__.py` 刻意留空）。前缀全部在 `/api/v1/` 下；挂载顺序即匹配顺序（`/data` 前缀 showcase_stats 与 sessions 真实重叠，勿乱序）。插件路由不进 manifest，走 plugin_system RoutesRegistry（`/api/v1/plugins/{customer_code}/*`）。
+
+| `/api/v1/` 后的前缀 | 后端文件 | 前端 client（`frontend/src/api/`） | 一句话 |
 |---|---|---|---|
-| `/source/*` | `backend/api/source.py`（router 容器）+ `source_routes.py` | 1573 + **1279** | 视频源采集 + 推理状态机的核心 API（42 个端点） |
-| `/data/*` | `sessions.py` + `sessions_export.py` + `sessions_stats.py` + `sessions_maintenance.py` | 1004+527+185+403 ≈ **2119** | session/cycle/step + CSV 导出 + 数据维护 |
-| `/projects/*` | `projects.py` | **334** | 项目 CRUD + 激活 + `/active/current` |
-| `/models/*` | `models.py` | **792** | 模型上传/转换/标签解析 |
-| `/tasks/*` | `tasks.py` | **192** | 离线推理任务（前端 `task.js` 已 dead，见 §3） |
-| `/reports/*` | `reports.py` | **344** | 趋势/日报/导出（前端 `report.js` 仅在 dead 视图引用） |
-| `/cameras/*` | `cameras.py` | **156** | **旧式相机表**，与 `/source/*` 并存；新代码不要往这写 |
-| `/system/*` | `system_display.py` | **135** | KV 配置 + license 缓存（`/display`、`/license-cache`） |
-| `/alarm/*` | `alarm.py` | **1008** | 灯塔 / 蜂鸣器 / 共享灯柱（`AlarmRouter`） |
-| `/workstations/*` | `channel_manager.py` | **373** | 多工位 + GPU 分配 + `channel-config` |
-| `/scanner/*` | `scanner.py` | **532** | 扫码器 CRUD + scan_pair + disable-toggle |
-| `/scanner/wmax/*` | `wmax.py` | **672** | WMax 三端口协议（35+ 端点） |
-| `/external-devices/*` | `external_device.py` | **365** | 称重器/串口外设（注意尾部斜杠） |
-| `/cluster/*` | `cluster.py` | **295** | 集群主从 + 心跳 + box 聚合 |
-| `/mes/*` | `mes.py` | **673** | 工单/工件/缺陷/缺陷码 |
-| `/mes/gateway/*` | `mes_gateway.py` | **450** | 外部 MES 推送连接 + 测试 + 额外字段 |
-| `/operators/*` | `operators.py` | **213** | 操作员（无 token，落盘 `current_operator.json`） |
-| `/export/*` | `export_custom.py` + `export_realtime.py` | 526+305 ≈ **831** | v3.5.0 自定义导出（模板 + 实时规则共用前缀） |
-| `/debug/*` | `debug.py` | **118** | 通道诊断 / 集群流测试 |
+| `/source/*` | `source.py`（router 容器）+ `source_routes.py` | `detection.js` | 视频源采集 + 推理状态机核心 API（⚠ 没有 source.js） |
+| `/data/*` | `sessions.py` + `sessions_export.py` + `sessions_stats.py` + `sessions_maintenance.py`（+ `showcase_stats.py` 只读统计共用前缀） | `data.js` | session/cycle/step + CSV 导出 + 数据维护 |
+| `/projects/*` | `projects.py` | `project.js` | 项目 CRUD + 激活 + `/active/current` |
+| `/models/*` | `models.py` | `model.js` | 模型上传/转换/标签解析 |
+| `/tasks/*` | `tasks.py` | 无（`task.js` 已删） | 离线推理任务（前端无入口，仅 API 在线） |
+| `/reports/*` | `reports.py` | 无（`report.js` 已删） | 趋势/日报/导出（报表展示由 Data 页接管） |
+| `/cameras/*` | `cameras.py` | 无（`camera.js` 已删） | **旧式相机表**，新代码不要往这写 |
+| `/system/*` | `system_display.py` | 无封装（`useSystemStore` 直调） | KV 配置 + license 缓存 |
+| `/alarm/*` | `alarm.py` | 无封装（Alarm 视图直调） | 灯塔 / 蜂鸣器 / 共享灯柱 |
+| `/workstations/*` | `channel_manager.py` | `detection.js`（混在其中） | 多工位 + GPU 分配 |
+| `/scanner/*` | `scanner.py` | `scanner.js` | 扫码器 CRUD + scan_pair + disable-toggle |
+| `/scanner/wmax/*` | `wmax.py` | `wmax.js` | WMax 三端口协议（35+ 端点） |
+| `/external-devices/*` | `external_device.py` | `external_device.js` | 称重器/串口外设（list/create **要尾斜杠**） |
+| `/cluster/*` | `cluster.py` | `cluster.js` | 集群主从 + 心跳 + box 聚合 |
+| `/mes/*` | `mes.py` | `mes.js` | 工单/工件/缺陷/缺陷码 |
+| `/mes/gateway/*` | `mes_gateway.py` | `gateway.js` | 外部 MES 推送连接 + 工单拉取 |
+| `/mes/inbound/*` | `mes_inbound.py` | —（外部系统入站调用） | v3.26+ 外部生产管控系统入站 REST（开工/完工/报警） |
+| `/operators/*` | `operators.py` | `operators.js` | ⚠ **v3.10.0 已废弃**：全部 410 Gone，改用 `/users` |
+| `/auth/*` | `auth.py` | `auth.js` | v3.10.0 登录/登出/me/权限目录 |
+| `/users/*` | `users.py` | `auth.js`（同文件封装） | v3.10.0 用户 CRUD + 角色绑定 |
+| `/roles/*` | `roles.py` | `auth.js`（同文件封装） | v3.10.0 角色 CRUD + 权限编辑 |
+| `/api-keys/*` | `api_keys.py` | `auth.js`（同文件封装） | v3.10.0 M2M API Key（SHA256 + scope） |
+| `/export/*` | `export_custom.py` + `export_realtime.py` + `export_scheduled.py`（**三文件共用前缀**） | `export.js` | v3.5.0 自定义导出 + 实时规则 + v3.8 定时导出 |
+| `/channel-groups/*` | `channel_groups.py` | `channel_group.js` | v3.13.1 工位组（RFC 10 并行联动） |
+| `/workpiece-flows/*` | `workpiece_flows.py` | —（Project 视图直调） | v3.14 串行流水线结算（RFC 11） |
+| `/packaging-flows/*` | `packaging_flows.py` | `packaging_flow.js` | v3.21+ 包装箱结算（上银包装线） |
+| `/weighing/*` | `weighing.py` | `weighing.js` | ★ v3.31 称重投料模式（前置选择/扫码/去皮/记录查询/虚拟喂重） |
+| `/plugins/*` | `plugins.py` | `plugins.js` | 插件安装/激活/清单/client-log |
+| `/debug/*` | `debug.py` | 无封装（手测用） | 通道诊断 + 调试日志中心 |
+| `/test/synthetic/*` | `test_runtime_routes.py` | —（测试专用） | 仅 `RUNTIME_MODE=test` 挂载：虚拟剧本源 |
 
-> 注：`source.py` 自身只声明 `router = APIRouter()`，所有 42 个端点在 `source_routes.py` 里挂载（`from .source import router`）。对外仍是 `/api/v1/source/*`。
+> 注 1：`source.py` 自身只声明 `router = APIRouter()`，端点在 `source_routes.py` 里挂载。对外仍是 `/api/v1/source/*`。
+> 注 2：`weighing.py` / `debug.py` 的 router 无自带 prefix，路径写在各端点装饰器里（`/weighing/...`）。
+> 注 3：不在 `/api/v1/` 下的特殊端点：`GET /`、`/health`、`/video_feed`、`/snapshot`、`/uploads/*`、`/recordings/*`；`/api/v1/source/shutdown/step/{n}` 与 `/complete` 直接挂 `app`（Electron 8 步关机调用，改路径必同改 Electron）。
 
 ---
 
 ## 2. 前端 API 客户端清单（`frontend/src/api/`）
 
-16 个文件，**14 个对应后端前缀**，**2 个 dead**。所有文件统一 `import api from './index'`，`api.get('/xxx')` 自动加 `/api/v1` 前缀。
+21 个文件（v3.31.0）。前缀对应关系**看 §1 真相表第三列**，此处只记状态与坑。所有文件统一 `import api from './index'`，`api.get('/xxx')` 自动加 `/api/v1` 前缀。
 
-| 前端文件 | 行 | 对应后端前缀 | 状态 |
-|---|---|---|---|
-| `index.js` | 102 | (axios 实例 + `getBackendHost`) | 基础设施，不要乱改 |
-| `detection.js` | 48 | `/source/*` + `/workstations/*` + `/scanner/scan-pair/*` | 在用，**含 1 处 dead 调用**：`resetDetection` 仍打 `/detection/reset`（已废弃，应删） |
-| `data.js` | 223 | `/data/*` | 在用（含 v3.4.3 `/data/cycles/by-serial`、v3.5.x `pt_mode/ct_mode`） |
-| `project.js` | 25 | `/projects/*`（+ `/models` 下拉） | 在用 |
-| `model.js` | 52 | `/models/*` | 在用 |
-| `scanner.js` | 25 | `/scanner/*` | 在用（含 v3.4.0 `check-container-mode` / v3.4.2 `disable-status` `disable-toggle`） |
-| `wmax.js` | 84 | `/scanner/wmax/*` | 在用 |
-| `mes.js` | 36 | `/mes/*` | 在用 |
-| `gateway.js` | 20 | `/mes/gateway/*` | 在用 |
-| `cluster.js` | 23 | `/cluster/*` | 在用 |
-| `external_device.js` | 14 | `/external-devices/*` | 在用（注意 list/create 端点 **要尾斜杠** `/external-devices/`） |
-| `operators.js` | 8 | `/operators/*` | 在用 |
-| `export.js` | 160 | `/export/*` | 在用（v3.5.0 自定义导出 + 实时规则） |
-| `report.js` | 25 | `/reports/*` | **半 dead**：`getSummary`、`getDailyStats`、`exportCsvReport` 仅 `views/Report/index.vue` 引用，而 `Report` 路由在 `router/index.js` 中**未注册**；其余三个函数（`getRecords`/`getTrend`/`exportPdfReport`）全前端无引用 |
-| `task.js` | 25 | `/tasks/*` | **dead**，全前端无 import（保留以防外部脚本使用） |
-| `camera.js` | 25 | `/cameras/*` | **dead**，全前端无 import |
+| 前端文件 | 状态 / 坑 |
+|---|---|
+| `index.js` | axios 实例 + `getBackendHost`，基础设施不要乱改 |
+| `detection.js` | 在用，**含 1 处 dead 调用**：`resetDetection` 仍打 `/detection/reset`（已废弃，应删）；`/workstations/*`、`/scanner/scan-pair/*` 也混在这里 |
+| `data.js` | 在用（含 v3.4.3 `/data/cycles/by-serial`、v3.5.x `pt_mode/ct_mode`） |
+| `project.js` / `model.js` / `scanner.js` / `wmax.js` / `mes.js` / `gateway.js` / `cluster.js` | 在用 |
+| `external_device.js` | 在用（list/create 端点**要尾斜杠** `/external-devices/`） |
+| `weighing.js` | ★ v3.31 在用（WeighingPanel / Data 称重记录页） |
+| `auth.js` | 在用（一个文件封装 `/auth` `/users` `/roles` `/api-keys` 四组） |
+| `plugins.js` / `channel_group.js` / `packaging_flow.js` | 在用 |
+| `export.js` | 在用（v3.5.0 自定义导出 + 实时规则） |
+| `operators.js` | ⚠ 后端全 410 Gone（v3.10.0 废弃），新代码禁用 |
+| ~~`report.js` / `task.js` / `camera.js`~~ | **已于 2026-07 死代码清理中删除**（连同 `views/Report/index.vue`；全仓核实无引用 + build 绿）。别再复活 |
 
-清理建议（只做不删）：
+清理建议：
 
-- 不要主动删 `task.js` / `camera.js`：可能被某些客户脚本或 hotfix 拽过去。但**新代码不要 import 它们**。
 - `detection.js:29` 的 `resetDetection` → `/detection/reset` 是真死链，建议下次清理时**删该函数**或改路由到 `/source/detection/reset-stats`。当前 Monitor 视图 `import` 了它但没调用（line 1054 import / line 3670+3725 只用 `resetDetectionStats`）。
 
 ---
@@ -163,9 +174,9 @@ export function getBackendHost() {
 | `backend/api/detection.py` | **已删**（v2.7.x） | `source_routes.py` 内 `/source/detection/*` |
 | `backend/services/detector.py` | **已删** | `VideoSourceManager` 内置推理 |
 | `POST /api/v1/detection/reset` | **404**（路由不存在） | `POST /api/v1/source/detection/reset-stats` |
-| `frontend/src/api/task.js` | dead | 离线任务已不在前端入口；只剩 `/tasks/*` 后端在线 |
-| `frontend/src/api/camera.js` | dead | 视频源 CRUD 走 `/source/*` 和 sourceStore（前端 `useSourceStore.js`） |
-| `frontend/src/views/Report/index.vue` | 路由未挂载 | `views/Data/index.vue` 接管报表展示 |
+| `frontend/src/api/task.js` | **已删**（2026-07 死代码清理） | 离线任务已不在前端入口；只剩 `/tasks/*` 后端在线 |
+| `frontend/src/api/camera.js` | **已删**（2026-07 死代码清理） | 视频源 CRUD 走 `/source/*` 和 sourceStore（前端 `useSourceStore.js`） |
+| `frontend/src/views/Report/index.vue` | **已删**（2026-07 死代码清理） | `views/Data/index.vue` 接管报表展示 |
 
 ---
 

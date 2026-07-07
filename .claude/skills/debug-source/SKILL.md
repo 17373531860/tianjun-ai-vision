@@ -1,11 +1,14 @@
 ---
 name: debug-source
-description: "诊断 source.py VideoSourceManager 的问题：检测状态机、Cycle/Step 生命周期、_trigger_event 中心 hook、v3.5.x 周期性强制动作、ghost cycle、线程安全。当遇到检测逻辑异常、步骤判定错误、周期不结束、计数器不对时使用。"
+description: "诊断 source.py VideoSourceManager 的问题：检测状态机、Cycle/Step 生命周期、_trigger_event 中心 hook、v3.5.x 周期性强制动作、ghost cycle、线程安全、v3.32 同标签区域拆分（虚拟步骤/多轮次/违序即时事件）、v3.32 区域事件模式（动作规则/episode/序列结算/位移门槛/动作互斥）。当遇到检测逻辑异常、步骤判定错误、周期不结束、计数器不对、拆分区域不生效、轮次不切换、动作不确认/误确认/复检误NG时使用。"
 argument-hint: "[问题描述]"
 model: opus
 effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__sentry, mcp__context7"
 ---
+
+> **设计深潜**：`docs/dev/internals/source-state-machine.md`（logic_mode×settlement_mode 档案卡 + 分发点）  
+> 本 skill = how-to/debug。
 
 # debug-source: VideoSourceManager 诊断（v3.5.x 主线）
 
@@ -34,8 +37,8 @@ backend/api/source.py (~1573 行)         主类 VideoSourceManager
 │   ├── source_inference_loop_mixin.py   _inference_loop 推理线程 + fps_inference
 │   ├── source_lifecycle_mixin.py        pause/resume/standby/resume_inference/stop
 │   ├── source_camera_start_mixin.py     start_camera/rtsp/video/image
-│   ├── source_industrial_camera_mixin.py  start_hcnetsdk/start_hikvision_camera
-│   │   （⚠ 与 camera_start_mixin 同名方法共存，依赖 MRO）
+│   │                                     + start_hcnetsdk/start_hikvision_camera（唯一实现，
+│   │                                       同名孤儿副本 industrial_camera_mixin 2026-07 已删）
 │   └── source_session_lifecycle_mixin.py  start/end_session, start/end_cycle,
 │                                           record_step, _force_timeout_ng,
 │                                           _discard_empty_cycle, _reconcile_step_records
@@ -59,8 +62,8 @@ backend/api/source.py (~1573 行)         主类 VideoSourceManager
 │   └── source_tracking_mixin.py         tracking 模式 _update_tracking_stats
 │
 ├── 录像 mixin
-│   ├── source_recording_thread_mixin.py + source_recording_api_mixin.py
-│   └── source_recording_mixin.py        （历史合并版 546 行，与上两者重叠）
+│   └── source_recording_thread_mixin.py + source_recording_api_mixin.py
+│       （历史合并版 source_recording_mixin.py 546 行为孤儿文件，2026-07 已删）
 │
 └── source_routes.py (1279 ⚠️)           /api/v1/source/* 路由
 ```
@@ -335,7 +338,7 @@ end_cycle commit 后
 
 ## 七、检测模式状态机
 
-四种 logic_mode 在 `source_check_modes_mixin.py` 通过 MRO 聚合，实际逻辑分散：
+帧驱动的四种 logic_mode 在 `source_check_modes_mixin.py` 通过 MRO 聚合，实际逻辑分散：
 
 | 模式 | 主文件 | 关键状态变量 |
 |---|---|---|
@@ -346,6 +349,14 @@ end_cycle commit 后
 
 详见 `source_settlement_mixin.py` 头注释。tracking 模式的**堆叠子模式**和**最大识别数子模式**
 （v2.7.4）见 `source_tracking_mixin._tracking_run_stack_fsm` / `_tracking_apply_max_recognized`。
+
+**第 5 种 `weighing`（v3.31）不在这套帧循环里**：设备读数驱动，状态机在
+`backend/services/weighing_engine.py`（进程级单例，每通道独立状态机，吃外设管线
+广播的稳定读数）。source 侧唯一交点是 `source_project_config_apply.py` 末尾——
+按 `logic_mode == 'weighing'` 把通道登记进引擎（携 `pipeline_config.weighing`），
+非 weighing 项目注销通道零残留。排查 weighing 周期不推进时：先查外设读数是否进来
+（`/api/v1/external-devices/*` 日志），再查引擎通道登记（切项目后是否 set_channel_config），
+最后才看引擎状态机本身；帧循环的 cycle/step 排查手段对它不适用。
 
 ## 八、线程安全（哪些方法只能在哪条线程调）
 
@@ -491,8 +502,9 @@ mixin 改动就是源码裸跑（IP 漏出去），但行为对得上。
 - `_init_inference_vars` 初始化~100 个变量，加新字段必须同步进 `reset_stats`
 - 跟踪模式秒→帧换算必须用 `max(self.fps_inference, 10)`，不能用 `fps_actual`
   （v2.7.13 钉死的规则；fps_actual=采集，跟踪/事件帧数累加在推理线程）
-- 同名方法 MRO 陷阱：`source_camera_start_mixin` 与 `source_industrial_camera_mixin`
-  的 `start_hcnetsdk / start_hikvision_camera` 同名共存，改前先 `import inspect; print(inspect.getmro(VideoSourceManager))`
+- 同名方法 MRO 陷阱已解除（2026-07 删除孤儿 `source_industrial_camera_mixin`），
+  `start_hcnetsdk / start_hikvision_camera` 唯一实现在 `source_camera_start_mixin`；
+  怀疑 MRO 时用 `import inspect; print(inspect.getmro(VideoSourceManager))` 核
 - `mes_hooks.py` 内部 import 必须 `from services.xxx` 不是 `from backend.services.xxx`，
   否则 ImportError 被静默吞掉
 
@@ -994,3 +1006,27 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 - 缺项清单为空 → `_parse_missing_steps` 文案不匹配；已兼容「缺少:」「缺少步骤:」+ 回退用 `steps_config` 对比 `current_cycle_steps` 推算。
 - 认 NG 后又被挂起（自锁）→ `_remediation_bypass` 没置或被提前清。
 - 包装少装的「补滑块」是另一条线（`packaging_flow_coordinator` 的 `pending_remediation` 箱挂起），与这里的「缺步骤」检测层延迟落账正交，别混。
+
+## 同标签区域拆分：状态机上游的标签改写层（v3.32+）
+
+**排查步骤判定问题前先确认这一层**：项目若配了 `pipeline_config.label_splits`，检测结果在进 `_update_step_stats` **之前**就被改写过——原始标签（如「打螺丝」）按检测框中心落点映射成虚拟步骤名（如「螺丝1」），未落进任何区域的框默认**丢弃**。所以"步骤不计数 / 标签对不上 steps_config"先查这层，别直奔状态机。
+
+- 代码位置：`backend/api/source_label_split.py` → `LabelSplitEngine.apply`；挂点 `source_inference_loop_mixin.py: _apply_label_splits`（帧循环出口）；配置解析 `source_project_config_apply.py: _apply_label_splits`。
+- 两种定位：`fixed` 区域钉死画面；`anchor` 区域随锚点框平移缩放（锚点丢失沿用最近位置）。
+- 多轮次：`rounds` 启用时虚拟步骤名 = 当轮前缀 + 区域名，轮次由「切换标签消失超 `trigger_gap_seconds` 后重新出现」推进，满轮回绕；**周期结算且切换标签离场后归零**。轮次卡住先查剧本/现场里切换标签的离场间隔够不够。`region_overrides` 可给某轮换独立区域，缺省轮沿用共享区域。
+- 运行态透出：`/detection/results` 的 `label_split_rounds`（当前轮次）与 `placement_guide`（就位状态）。**Monitor 页每次加载会重新下发项目配置 → 引擎重建 → 轮次回到第 1 轮**，排查"轮次显示不对"先想这条。
+- 严格顺序违序即时事件：`pipeline_config.strict_order_violation_event_id`（null=关），收口在 `source_settlement_mixin.py: _fire_strict_order_violation`（同一标签+周期进度 5s 节流；照旧拦截不计入）。
+- 零差异保证：不配 `label_splits` / `rounds` / 违序事件 → 引擎为 None，行为与 v3.31 完全一致；回归见 `tests/test_label_split.py`（零差异组）+ `tests/features/label_split_matrix.feature`。
+- 配置结构与字段：`docs/dev/reference/config-dict.md`；设计取舍：`docs/rfc/同标签区域拆分_虚拟步骤_设计方案_RFC.md`（已归档）。
+
+## 区域事件模式：动作规则引擎（v3.32+，logic_mode='region_events'）
+
+**这是第 6 种逻辑模式**：步骤不是"模型类别在场"而是"一段持续动作"。三种规则类型：`overlap`（主体框与目标框持续重叠，工具作用）/ `region_enter`（主体进区驻留）/ `region_exit`（区域内观察到后消失，下料，可勾 `settle` 结算周期）。周期结算 = 确认序列与 `sequence_check.order` / `settlement_rules` 比对，NG 文案输出"(缺事件 X)/(事件 X 重复≥N 次)"。
+
+- 代码位置：`backend/api/source_region_events.py`（`parse_region_events` 配置解析 + `RegionEventEngine` 纯逻辑引擎，episode 状态机可单测）；`source_region_events_mixin.py`（帧循环接线 + 结算触发）；配置进 `pipeline_config.region_events`（rules / gap_tolerance_frames / dedup_consecutive / class_conf / sequence_check / settlement_rules）。
+- **步骤面板"进行中"不看 detectingLabels**：区域事件的步骤名是动作规则名（测硬度），画面检测框是模型类别名（测硬度笔），永远对不上——前端 Monitor 用 `/detection/results` 透出的引擎 in-flight 快照（episode 命中累计中即点亮，确认前就亮，与顺序模式对齐）。前端也**不做**"重复/乱序=NG"推断（复检序列合法性由后端结算规则说了算）。
+- 误报压制四件套（都在规则字段里）：`min_iou` 重叠下限 / `min_overlap_ratio` 重叠深度（压静置工具贴边）/ `min_move` 位移门槛 / `require_label` 辅助约束（如必须同时与"手"相交）。
+- **内建两条防误判（常开非配置，2026-07 TP 实测教训）**：① 位移包络对检测框中心做 5 帧中位数平滑再进包络——手划过遮挡把框"切"小的单帧中心跳变（~0.06）不算位移；② 动作互斥打断——一个动作确认瞬间其他进行中 episode 立即收尾（已确认的闭合、半截命中作废），否则 `gone_seconds` 会把复检场景"测硬度→扫码→测硬度→扫码"两段扫码桥接成一次，序列少步误落兜底 NG。
+- 中途遮挡断裂 → 调大规则的 `gone_seconds`（消失确认秒数，0=用全局 gap_tolerance_frames）；区域可配 `anchor` 跟随锚点类别平移缩放（与 label_splits 的 anchor 同构）。
+- 频闪自动诊断：该模式与 custom_mix 共用 `_diag_flicker_sample` 采样体，翻转超阈值自动落 `backend/diag_flicker/*.json`（已 gitignore），排"检测框一闪一闪"先看转储。
+- 回归：`tests/test_region_events.py`（引擎单测）+ `tests/test_region_events_pipeline.py`（管线）+ `tests/e2e_browser/test_region_events_monitor.py`（UI）。

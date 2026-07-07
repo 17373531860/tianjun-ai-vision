@@ -1,6 +1,6 @@
 # 05 — 技术债 / 痛点完整索引
 
-> 适用版本：v3.6.0（HEAD `5c97791`）
+> 适用版本：v3.31.0（2026-07 销账刷新：BUG-1 已修、BUG-3 降级孤儿文件、第九节行数实测重排）
 > 本文目的：把 **AGENTS.md 第九节 + 01~04 文档发现的所有 ⚠️ ❌ + 已知历史踩坑 + 测试盲区**集中索引到一处。这是插件系统设计前必须正视的"现实地图"——很多地方现状是可工作的但脆弱，碰多了主程序会塌。
 >
 > 阅读顺序：第二节"按严重度分级总表" → 按需要查具体类别 → 第十二节"先做哪些再做插件"。
@@ -13,18 +13,18 @@
 
 | 类别 | 项数 | 严重度分布 |
 |---|---|---|
-| 真 bug（应被修） | **6** | 🔴 1 / 🟠 4 / 🟡 1 |
-| 死代码 / 半死代码 | **9** | 🟢 全可清 |
-| 重叠 mixin / 同名方法冲突 | **3** | 🟠 |
+| 真 bug（应被修） | **0**（原 6：BUG-1/BUG-2 已修，BUG-3/BUG-4 随孤儿 mixin 清退关闭，BUG-5/6 随产品交接手册删除销账） | ✅ 全部销账 |
+| 死代码 / 半死代码 | **10**（BUG-3 降级并入；其中 DEAD-1~4 前端四文件 2026-07 已删） | 🟢 全可清 |
+| 重叠 mixin / 同名方法冲突 | **2**（原 3，BUG-3 移出） | 🟠 |
 | 现状无 registry（先重构再做插件） | **8** | 🟠 |
 | API 路径不一致 / 命名歧义 | **5** | 🟡 |
-| 文档过时不同步 | **6** | 🟡 |
-| 文件过大需重构（> 1000 行 .py / .vue） | **9** | 🟡 |
+| 文档过时不同步 | **5** | 🟡 |
+| 文件过大需重构（> 1000 行 .py / .vue） | **15**（2026-07 实测重排） | 🟡 |
 | SQLite → PG 迁移痛点 | **7** | 🟠 |
 | 测试覆盖盲区 | **5** | 🟠 |
 | 历史 bug 高发模块 | **6** | 信息性 |
 | 隐式约定 / 缺乏护栏 | **8** | 🟡 |
-| **合计** | **72** | — |
+| **合计** | **76**（含已销账项按现分类计） | — |
 
 🔴 严重（影响主程序稳定）/ 🟠 中（影响插件系统设计）/ 🟡 轻（妨碍维护）/ 🟢 可清理
 
@@ -36,35 +36,35 @@
 
 | ID | 名称 | 影响 | 工时估 |
 |---|---|---|---|
-| BUG-1 | `core/config.py:_fix_db_paths` 用错表名 `ml_models`（实际叫 `models`） | DB 路径迁移逻辑对模型文件**永远不生效** | 0.1 天 |
+| ~~BUG-1~~ | ✅ **已修销账（2026-07）**：`core/config.py:_fix_db_paths` 已改用真实表名 `models`（+`video_clips`），详见第三节 BUG-1 | — | — |
 
 ### 🟠 中（影响插件系统设计）
 
 | ID | 名称 | 影响 | 工时估 |
 |---|---|---|---|
-| BUG-2 | CI `CORE_FILES` 列了 11 个文件，3 个不存在 | 实际只编译 8 个，潜在 IP 泄漏（很多 source_*_mixin 没被 .pyd 保护） | 0.5 天 |
-| BUG-3 | `source_camera_start_mixin` 与 `source_industrial_camera_mixin` 同名方法冲突 | 依赖 MRO 决出实际胜者，行为不可预测 | 1 天 |
-| BUG-4 | `source_recording_mixin.py` (546 行) 与拆分后的两个 mixin 能力重叠 | 历史拆分残留，潜在死代码 | 0.5 天 |
-| OVERLAP-1 | 主类继承链不含 `IndustrialCameraMixin`，但被 import | MRO 不生效，方法覆盖关系靠"恰好" | （含在 BUG-3） |
-| OVERLAP-2 | `_inspecting` 字典在 scan_pair race（v3.4.2 hotfix 后）可能仍有 cornercase | 工件结果错写到下一码 | 1 天（监控+测试） |
-| OVERLAP-3 | API 路由两条挂载路径并存（`api_router` 聚合 9 + main.py 直挂 10） | 插件加路由时不知道走哪条 | 0.5 天（统一） |
-| MIG-1 | SQLite → PG: 7 处 raw SQL 用 `PRAGMA / sqlite_master` | PG 不支持 → 必须改条件分支 | 1 天 |
-| MIG-2 | `BOOLEAN DEFAULT 1` 在 PG 要改成 `DEFAULT TRUE` | 60+ ALTER TABLE 都要改 | 1 天 |
-| MIG-3 | Inno Setup 内嵌 PG 静默安装 | 主包变大 + 安装时间增加 | 3 天 |
-| REG-* | 8 处现状无 registry（B2/B3/B4/B6/C1/C2/C5/C7/C8） | 插件做扩展前必须先重构 | 见第六节 |
-| TEST-1 | `BACKEND_SKIP_INIT=1` 测试 fixture 缺少独立 DB 隔离 | 测试可能污染开发库 | 1 天 |
-| TEST-2 | 没有插件系统的回归测试套 | 插件 1.0 上线前必须搭 | 2 天 |
+| BUG-2 | ✅ **已修（2026-07）**：CORE_FILES 白名单重审——剔除 3 个失效项、扩到 17 项（source_routes + Top5 mixin + scanner/mes_hooks/weighing_engine）、缺失文件改为硬 fail | — | — |
+| BUG-3 | ✅ **已清退（2026-07）**：`source_industrial_camera_mixin.py` 孤儿文件已删除（全仓无 import，无 MRO 冲突，见 DEAD-10） | — | — |
+| BUG-4 | ✅ **已清退（2026-07）**：`source_recording_mixin.py` (546 行) 孤儿文件已删除（见 DEAD-8），录像能力唯一归属拆分后两个 mixin | — | — |
+| OVERLAP-1 | ~~主类继承链不含 `IndustrialCameraMixin`，但被 import~~ 已随 BUG-3 复核关闭（import 已不存在） | — | — |
+| OVERLAP-2 | ✅ **收敛（2026-07-05）**：窗口轮转可观测契约钉进回归 `tests/test_scan_pair_window_rotation.py`（5 例：开窗 promote / 换码先 settle 后 promote / 同码软忽略 / 残留强制清防御线 / 降工位清理）；scan_pair 路径已有 debug_center 埋点。真线程竞态无现场复现报告，出现再深挖 | — | — |
+| ~~OVERLAP-3~~ | ✅ 已修（2026-07-05）：全部主程序路由统一到 `backend/api/router_manifest.py` 唯一登记处，main.py 只调一次；插件路由走 RoutesRegistry | — | — |
+| MIG-1 | SQLite → PG: 7 处 raw SQL 用 `PRAGMA / sqlite_master` | ⏸️ 随 PG 迁移专项（独立立项，不在债务清理批次） | 1 天 |
+| MIG-2 | `BOOLEAN DEFAULT 1` 在 PG 要改成 `DEFAULT TRUE` | ⏸️ 同上 | 1 天 |
+| MIG-3 | Inno Setup 内嵌 PG 静默安装 | ⏸️ 同上 | 3 天 |
+| REG-* | 8 处现状无 registry | REG-5 ✅ 已由插件平台实现；REG-6 ⏸️ 暂缓（无需求）；REG-1/2/3/4/7/8 ⏸️ 需求驱动（见第六节） | 见第六节 |
+| ~~TEST-1~~ | ✅ 已修（核实销账 2026-07-05）：conftest 在 import backend 前把数据目录指到临时目录，测试 DB 完全隔离 | — | — |
+| ~~TEST-2~~ | ✅ 已修（核实销账 2026-07-05）：`tests/plugin_system/` 33 文件 408 用例覆盖 manifest/签名/registry/hook/端到端 | — | — |
 
 ### 🟡 轻（影响维护，不影响功能）
 
 | ID | 名称 | 影响 |
 |---|---|---|
-| BUG-5 | ⚠️ 类名 `Model` 而非 `MLModel`（产品交接手册写错） | 文档误导 |
-| BUG-6 | 表名 `models` 而非 `ml_models`（同上） | 文档误导 |
-| INCONSIST-* | API 路径 5 处不一致 | 插件 prefix 选择需小心 |
-| DOC-* | 文档过时 6 处 | 误导新人 |
+| ~~BUG-5~~ | ✅ 销账（2026-07）：错写类名的产品交接手册已于 2026-06-26 删除（随 DOC-4），正确口径（类名 `Model` / 表名 `models`）已进 AGENTS.md 第五节 ORM 提醒 | — |
+| ~~BUG-6~~ | ✅ 销账（2026-07）：同上，错误表数出处已删除；现行表清单以 `modify-model` skill 为准（47 张） | — |
+| ~~INCONSIST-*~~ | ✅ 全部处置完（2026-07-05）：INCONSIST-1 已过时销账（workstations 前缀早已显式）、2 早前误报撤销、3/4/5 归档不修（改名破坏已部署客户 API 兼容，备忘保留） | — |
+| ~~DOC-*~~ | ✅ 文档过时 5 处全部处理完（2026-07-05：DOC-1/2/3 注释已修，DOC-5/6 此前已校正） | — |
 | SIZE-* | 9 个文件 > 1000 行 | 修改成本高 |
-| HIDDEN-* | 8 处隐式约定（永久不变量没全部文档化） | 新人踩坑 |
+| ~~HIDDEN-*~~ | ✅ 8 处隐式约定 2026-07-05 全部文档化进 AGENTS.md 第八节（1/2/3/5 补充既有条目，4/6/7/8 新增第 14~17 条不变量） | — |
 
 ### 🟢 死代码（可直接清）
 
@@ -74,95 +74,64 @@
 | DEAD-2 | `frontend/src/api/task.js` 全前端无 import | ✅ 完全可删 |
 | DEAD-3 | `frontend/src/api/camera.js` 全前端无 import | ✅ 完全可删 |
 | DEAD-4 | `api/report.js: getRecords / getTrend / exportPdfReport` 局部死代码 | ✅ 可删 |
-| DEAD-5 | `/api/v1/cameras/*` 8 个后端端点 | ⚠️ 删要确认无第三方调用 |
-| DEAD-6 | `/api/v1/tasks/*` 7 个端点（？） | ⚠️ 需检查 record API 是否仍用 |
+| DEAD-5 | `/api/v1/cameras/*` 8 个后端端点 | 🔎 2026-07-05 审计完成：全链无消费者（camera.js 已删；Source 页走的是 `/source/cameras` 另一套；仅权限矩阵 UAT 脚本引用）。**删除对外 API 需用户拍板** |
+| DEAD-6 | `/api/v1/tasks/*` 7 个端点 | 🔎 2026-07-05 审计完成：`tasks.py` + `reports.py` + `Task` 表构成整条死子系统——Task 表只有 tasks.py 自己写、无人调；reports 无任何前端消费者（report.js 已删）。**删除对外 API 需用户拍板** |
 | DEAD-7 | `views/Report` 内的 `views/Report/index.vue` 子调用 | ✅ 随 DEAD-1 一起 |
 | DEAD-8 | `source_recording_mixin.py` 546 行（历史拆分残留） | ⚠️ 确认 MRO 后删 |
 | DEAD-9 | CI `CORE_FILES` 中 3 个不存在的文件 | ✅ 删行 |
 
 ---
 
-## 三、真 bug 详情（6 个）
+## 三、真 bug 详情（6 个，2026-07 全部销账/关闭）
 
-### BUG-1 🔴 `_fix_db_paths` 用错表名
+### BUG-1 ✅ 已修（2026-07 销账） `_fix_db_paths` 用错表名
 
 **位置**：`backend/core/config.py: _fix_db_paths`
 
-**现象**：函数遍历 `models` 表的 `file_path` 字段做绝对路径迁移，但 SQL 里写成了 `ml_models`：
+**原现象**：函数做模型文件绝对路径迁移时 SQL 写成了不存在的 `ml_models` 表，外层
+try/except 兜底导致迁移静默失效，升级客户须手动重选模型。
 
-```python
-# 错误代码
-conn.execute("SELECT id, name, file_path FROM ml_models")  # ❌ 表不存在
-```
+**现状（已核实代码）**：`_fix_db_paths` 已改为遍历 `('models', 'video_clips')` 两张
+真实表，带表存在性探针 + 正/反斜杠双路径替换，源码内留有指回本条目的注释。
+**本条销账保留 ID 供历史引用，不再是待修项。**
 
-**影响**：
-- 老客户机从旧版升级时，模型文件路径迁移**永远走不到这段**
-- 但因为外层 `try/except` 兜底，迁移**不报错**只是默默失效
-- 用户看到的现象：升级后模型路径 404 → 必须手动重选模型
-
-**修复**：把 `ml_models` 改成 `models`（同时检查迁移函数是否还有别处用错）
-
-**为什么至今没修**：
-- 只在升级路径触发，绝大多数客户首次安装就是新版（不走升级）
-- 出问题时业务现场修复路径是"重选模型"，没人追究根因
-
-**插件系统相关**：插件如果模仿这套迁移机制，**别复制错误**。
+**插件系统相关**：插件如果模仿这套迁移机制，直接抄现版代码即可（表名已正确）。
 
 ---
 
-### BUG-2 🟠 CI `CORE_FILES` 不存在的文件
+### BUG-2 ✅ 已修（2026-07 白名单重审）：CI `CORE_FILES` 不存在的文件
 
 **位置**：`.github/workflows/build.yml: CORE_FILES`
 
-**现象**：CI 在 build 阶段把 `CORE_FILES` 列表里的 .py 编成 .pyd，列表里有：
-```
-backend/api/detection.py        ← ❌ 不存在
-backend/api/websocket.py        ← ❌ 不存在
-backend/services/detector.py    ← ❌ 不存在
-```
+**原现象**：列表 11 项里 3 项不存在（`api/detection.py` / `api/websocket.py` / `services/detector.py`），
+CI 静默跳过只 WARNING，实际只编译 8 个 .pyd，大量核心逻辑明文出厂。
 
-CI 跳过这 3 个文件**只 WARNING 不报错**，所以一直没被发现。
-
-**影响**：
-- 实际只编译 8 个核心文件成 .pyd
-- 35 个 `source_*_mixin/has-a` **没被 .pyd 保护** → 装到客户机上 IP 暴露
-- 客户拿到的"编译版"实际有大量 .py 源码可见
-
-**修复**：重新审计 `CORE_FILES`，列出真实存在的文件 + 必要时把更多核心 mixin 加入。
+**2026-07 修复内容**：
+- 剔除 3 个失效项；白名单扩到 17 项：新纳入 `source_routes.py`、Top5 大 mixin
+  （per_item / session_lifecycle / settlement / tracking / periodic_actions）、
+  `services/scanner.py`、`services/mes_hooks.py`、`services/weighing_engine.py`
+- 白名单文件缺失从"静默跳过"改为 **`::error` + exit 1 直接 fail**（改名/删文件必须同步 build.yml）
+- 残余风险：其余小 mixin / has-a 组件 / `export_*.py` 仍源码出厂，按需扩列
+- ⚠️ 待第一次 tag 构建验证：Nuitka 编译大 mixin 若失败会降级保留 .py（看 build 日志确认 .pyd 生成）
 
 **插件系统相关**：插件代码默认走 .py 形态分发（不强制编译），但如果客户需要 .pyd 加密，需要复用 CI 流程。
 
 ---
 
-### BUG-3 🟠 同名方法冲突
+### BUG-3 🟢 降级：孤儿文件（2026-07 复核）同名方法"冲突"实为死文件
 
 **位置**：
-- `backend/api/source_camera_start_mixin.py: start_hcnetsdk / start_hikvision_camera`
-- `backend/api/source_industrial_camera_mixin.py: start_hcnetsdk / start_hikvision_camera`
+- `backend/api/source_camera_start_mixin.py: start_hcnetsdk / start_hikvision_camera`（**生效版**）
+- `backend/api/source_industrial_camera_mixin.py`：同名方法的历史旧版
 
-**现象**：两个 mixin 定义了**同名方法**。`source.py:185` 的继承链是：
+**复核结论（2026-07）**：`source.py` 已**不再 import** `IndustrialCameraMixin`（grep 0 命中），
+继承链里也没有它——不存在 MRO 决胜问题，实际生效的一直是 `CameraStartMixin`。
+该文件是历史拆分残留的**纯孤儿文件**（438 行），与 DEAD-8（`source_recording_mixin.py`）同类。
 
-```python
-class VideoSourceManager(
-    TrackingMixin, InferenceLoopMixin, ..., CameraStartMixin, ...
-    SessionLifecycleMixin, ...
-)
-# 注意: IndustrialCameraMixin 不在继承链里, 但 source.py 顶部有 import 它
-```
+**残余影响**：grep 两个方法名仍会命中两份实现，新人可能改错文件。
 
-由于 `IndustrialCameraMixin` 不在继承链中，**当前实际生效的是 `CameraStartMixin` 的版本**——但 import 一个不被继承的 mixin 文件意味着两件事：
-
-1. 它要么是被准备替换的旧版（待删）
-2. 它要么是被设计为"运行时动态切换"（实际没切换逻辑）
-
-**可能的真相**：历史代码迁移过程中没删干净。
-
-**影响**：
-- 任何人 grep 这两个方法名都会同时命中两份实现
-- 修了一份没修另一份，行为不一致
-- 新人改错地方
-
-**修复**：审计 IndustrialCameraMixin 是否真有用，决定保留哪份。
+**修复**：清退孤儿文件即可（走 `modify-source` skill 影响分析后删除），从"行为不可预测"
+降级为"死代码待删"。
 
 **插件系统相关**：插件加自定义视频源（add-source-type skill）时**先确认 MRO 顺序**，否则插件方法可能被覆盖。
 
@@ -197,23 +166,19 @@ class VideoSourceManager(
 
 ---
 
-### BUG-5 🟡 文档错误：类名 `Model` 不是 `MLModel`
+### BUG-5 ✅ 已销账（2026-07）：类名错写的出处已删除
 
-`docs/产品交接手册.md` v2.4.0 写"`MLModel` 类 `ml_models` 表"。**实际**：
-- `backend/models/models.py:31` 是 `class Model(Base)`，表名 `models`
-- 这与 BUG-1 是同一根源
-
-**影响**：误导，已在 AGENTS.md 第十四节标"不要信此手册"。
+原指 `docs/产品交接手册.md` v2.4.0 错写"`MLModel` 类 `ml_models` 表"。该手册已于
+2026-06-26 删除（见 DOC-4 撤销注），错误出处不复存在。正确口径（类名 `Model`、
+表名 `models`）已固化在 AGENTS.md 第五节"ORM 提醒"，本条保留 ID 供历史引用。
 
 ---
 
-### BUG-6 🟡 文档错误：22 张表
+### BUG-6 ✅ 已销账（2026-07）：表数错写的出处已删除
 
-`docs/产品交接手册.md` v2.4.0 说"22 张数据库表"。**实际**：
-- `backend/models/models.py` 13 张
-- `backend/models/mes_models.py` 15 张
-- `backend/models/export_models.py` 3 张
-- 合计 **31 张**
+原指同一手册错写"22 张数据库表"。手册已删除；现行权威表清单在 `modify-model`
+skill（2026-07 校正为 6 个 ORM 文件共 **47 张**，含 `weighing_records`），本条随
+BUG-5 一并销账。
 
 ---
 
@@ -223,18 +188,19 @@ class VideoSourceManager(
 
 | 项 | 位置 | 大小 | 状态 | 清理风险 |
 |---|---|---|---|---|
-| DEAD-1 | `frontend/src/views/Report/index.vue` | 299 行 | 路由未注册 | ✅ 删除安全 |
-| DEAD-2 | `frontend/src/api/task.js` | 26 行 | 全前端无 import | ✅ |
-| DEAD-3 | `frontend/src/api/camera.js` | 26 行 | 全前端无 import | ✅ |
-| DEAD-4 | `api/report.js` 内 `getRecords / getTrend / exportPdfReport` | ~15 行 | 仅死视图 Report 用 | ⚠️ 删 Report 后才能删 |
+| DEAD-1 | `frontend/src/views/Report/index.vue` | 299 行 | ✅ **2026-07 已删除** | 全仓核实无引用 + build 绿 |
+| DEAD-2 | `frontend/src/api/task.js` | 26 行 | ✅ **2026-07 已删除** | 同上 |
+| DEAD-3 | `frontend/src/api/camera.js` | 26 行 | ✅ **2026-07 已删除** | 同上 |
+| DEAD-4 | `frontend/src/api/report.js`（整文件） | ~60 行 | ✅ **2026-07 已删除**（唯一消费者 DEAD-1 同批删） | 同上 |
 
 ### 后端死代码
 
 | 项 | 位置 | 大小 | 状态 | 清理风险 |
 |---|---|---|---|---|
-| DEAD-5 | `backend/api/cameras.py` 8 个端点 | 152 行 | `api/camera.js` 死 → 全前端无调 | ⚠️ 第三方 / 测试可能用 |
-| DEAD-6 | `backend/api/tasks.py` 7 个端点 | 193 行 | 部分死 | ⚠️ `record` 可能仍用 |
-| DEAD-8 | `backend/api/source_recording_mixin.py` | 546 行 | MRO 不含 | ⚠️ 确认无 import |
+| DEAD-5 | `backend/api/cameras.py` 8 个端点 | 152 行 | 🔎 审计完成（2026-07-05）：前端/Electron/插件/后端内部零消费者，仅 `tests/uat/uat_20260525_perm_r3.py` 当权限探针用 | 删除对外 API 需用户拍板 |
+| DEAD-6 | `backend/api/tasks.py` 7 个端点 | 193 行 | 🔎 审计完成（2026-07-05）：`record` **无人用**——全仓无 `/tasks` 调用方；`Task` 表只被 tasks.py 写、被 reports.py 读，而 `/reports/*` 也无前端消费者（report.js 已删）→ tasks+reports+Task 表是整条死子系统 | 删除对外 API 需用户拍板 |
+| DEAD-8 | `backend/api/source_recording_mixin.py` | 546 行 | ✅ **2026-07 已删除**（全仓无 import，import 冒烟 + 37 项录像/ROI/路由回归绿） | — |
+| DEAD-10 | `backend/api/source_industrial_camera_mixin.py`（原 BUG-3 降级） | 438 行 | ✅ **2026-07 已删除**（同批核实删除，`start_hcnetsdk` 唯一实现归 `source_camera_start_mixin`） | — |
 
 ### CI 死代码
 
@@ -249,15 +215,17 @@ class VideoSourceManager(
 
 ---
 
-## 五、重叠 mixin / 同名方法冲突（3 项）
+## 五、重叠 mixin / 同名方法冲突（2 项在册，1 项已关闭）
 
 | ID | 位置 | 现象 |
 |---|---|---|
-| OVERLAP-1 | `IndustrialCameraMixin` import 但不继承 | 已在 BUG-3 |
-| OVERLAP-2 | `_inspecting` 字典 race | scan_pair 模式 v3.4.2 hotfix 修了一波，但仍可能 cornercase |
-| OVERLAP-3 | API 双挂载路径 | `api_router` 聚合 9 + `main.py` 直挂 10 |
+| OVERLAP-1 | ✅ 已关闭：`IndustrialCameraMixin` 孤儿文件 2026-07 已删（原 BUG-3/DEAD-10） | — |
+| OVERLAP-2 | ✅ 收敛（2026-07-05） | 契约回归 5 例见 `tests/test_scan_pair_window_rotation.py`；竞态现场无复现报告，出现再深挖 |
+| ~~OVERLAP-3~~ | ✅ 已修（2026-07-05） | 统一到 `router_manifest.py`，见下方销账注 |
 
-**OVERLAP-3 详细**：
+**OVERLAP-3 详细**（✅ 2026-07-05 已修：33 组路由全部集中到 `backend/api/router_manifest.py:mount_all_routers()`，
+`api/__init__.py` 清空、`main.py` 只调一次；改前后路由表 diff 零差异（407 条），
+workpiece_flow + channel_group 140 测试、plugin_system 408 测试全绿。以下为历史原文）：
 ```python
 # 路径 A: backend/api/__init__.py
 api_router.include_router(projects.router, prefix="/projects")
@@ -288,13 +256,13 @@ app.include_router(channel_manager_router, prefix="/api/v1", tags=["workstations
 | REG-2 | Scanner 协议 (LON/WMax/Virtual) | 硬编码 | 2 天 | 客户用其他扫码枪时必须 |
 | REG-3 | External Device 协议 | 半硬编码 | 1 天 | 客户加新外设时需要 |
 | REG-4 | Export Renderer (5 格式) | 硬编码 if/elif | 0.5 天 | 客户加 ESC/POS 等格式时 |
-| REG-5 | `_trigger_event` listener | 无 listener | 0.5 天 | 业务流挂载点 #1，**强烈推荐做** |
-| REG-6 | MES Hook 入队前 filter | 无 | 0.5 天 | 测试期 / 调试期需要 |
+| ~~REG-5~~ | `_trigger_event` listener | ✅ **已由插件平台实现**（v3.13 M1.2c）：`event_fire` hook 在 `_trigger_event` 内、报警之前 fire，带 `suppress_alarm` returnable 字段（`source_event_trigger_mixin.py:344`） | — | 销账（2026-07-05 核实） |
+| REG-6 | MES Hook 入队前 filter | 无 | 0.5 天 | ⏸️ 暂缓（2026-07-05 评估）：插件平台 10 hook 上线 15+ 个版本无此需求，`scan_received` post hook + 按通道禁扫已覆盖常见场景；有真实调试需求再做 |
 | REG-7 | `alarm_router.trigger_alarm` 拦截 | 无 | 0.5 天 | 客户加钉钉 / 微信报警时 |
 | REG-8 | Scanner `_on_data_received` 后置 hook | 无 | 0.3 天 | 极少需要 |
 
-**优先级建议**：
-- **必做**（插件 1.0 同时做）：REG-5 / REG-6
+**优先级建议**（2026-07-05 复核更新）：
+- ~~必做：REG-5 / REG-6~~ → REG-5 ✅ 已由插件平台 `event_fire` hook 实现；REG-6 ⏸️ 暂缓（平台上线 15+ 版本无此需求，需求驱动再做）
 - **应做**（如果有客户具体需求）：REG-1 / REG-2 / REG-7
 - **可推迟**：REG-3 / REG-4 / REG-8
 
@@ -302,7 +270,7 @@ app.include_router(channel_manager_router, prefix="/api/v1", tags=["workstations
 
 ## 七、API 路径不一致 / 命名歧义（5 项）
 
-### INCONSIST-1：`/api/v1/workstations/*` 实际是顶层 `/api/v1/`
+### ~~INCONSIST-1~~ ✅ 已过时销账（2026-07-05 核实）：`channel_manager.py:17` 现为 `APIRouter(prefix="/workstations")`，实际路径就是 `/api/v1/workstations/*`（路由表快照核对），与 AGENTS.md 一致。以下为历史原文：
 
 ```python
 # main.py:
@@ -347,7 +315,7 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ---
 
-### INCONSIST-3：API 命名不规则
+### INCONSIST-3：API 命名不规则 ⏸️ 归档不修（2026-07-05 处置：改名 = 破坏已部署客户与老前端的 API 兼容，违反 modify-api skill 硬性原则"不可删/改名"。作为风格备忘保留，新路由遵守短横风格即可）
 
 | 路径 | 风格 |
 |---|---|
@@ -361,7 +329,7 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ---
 
-### INCONSIST-4：MJPEG / snapshot 不在 `/api/v1` 下
+### INCONSIST-4：MJPEG / snapshot 不在 `/api/v1` 下 ⏸️ 归档不修（2026-07-05 处置：`/video_feed` `/snapshot` 在 Electron 与前端多处写死（modify-api skill §五），迁移收益为零、破坏面大。作为事实备忘保留）
 
 ```
 /video_feed?channel=N    ← 直接挂在 root, 历史原因
@@ -375,7 +343,7 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ---
 
-### INCONSIST-5：前端 `api/detection.js` 命名与后端 `/source/*` 路径不对应
+### INCONSIST-5：前端 `api/detection.js` 命名与后端 `/source/*` 路径不对应 ⏸️ 归档不修（2026-07-05 处置：纯文件名历史遗留，重命名要动全部 import 无行为收益；api-sync skill §1 真相表已标注"⚠ 没有 source.js"防误导）
 
 - 前端 `api/detection.js` 调的是 `/api/v1/source/detection/*`
 - 命名"detection" 但路径是 "source/detection"
@@ -385,44 +353,46 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ---
 
-## 八、文档过时不同步（6 项）
+## 八、文档过时不同步（5 项）
 
 | ID | 位置 | 说什么 | 真相 |
 |---|---|---|---|
-| DOC-1 | `frontend/src/api/export.js` 注释 | `fmt: 'txt'\|'csv'` | 后端允许 5 种 (`txt/csv/docx/xlsx/pdf`) |
-| DOC-2 | `backend/services/export_context.py` 模块注释 | "302 字段骨架" | `ALL_FIELDS = 308` |
-| DOC-3 | `backend/services/mes_gateway.py` 注释 | 提及 "Jinja" 过滤器 | 实际不是 Jinja2，是自研 `{key.path}` |
-| DOC-4 | `docs/产品交接手册.md` v2.4.0 | "22 张表 / `MLModel` 类 / `/api/` 前缀" | **全错**（详见 AGENTS.md 第十四节） |
+| ~~DOC-1~~ | ✅ 已修（2026-07-05）：`frontend/src/api/export.js` 注释 | ~~`fmt: 'txt'\|'csv'`~~ | 已补全 5 种 (`txt/csv/docx/xlsx/pdf`) |
+| ~~DOC-2~~ | ✅ 已修（2026-07-05）：`backend/services/export_context.py` 5 处注释 | ~~"302 字段骨架"~~ | 硬编码数字移除，改为指向 `export_field_registry.ALL_FIELDS`（v3.31 实测 308） |
+| ~~DOC-3~~ | ✅ 已修（2026-07-05）：`backend/services/mes_gateway.py` 注释 | ~~提及 "Jinja" 过滤器~~ | 已注明 Gateway 模板是自研 `{key.path}` 占位符替换、非 Jinja2 |
 | DOC-5 | `AGENTS.md` 第七节 | "`MES Adapter 注册`" 部分 | 已注释明确是 `_REGISTRY`，但没说 `register_adapter` 函数已暴露 |
 | DOC-6 | brief 给 AI 的交接说明 | 23 个 skill | 实际 27 个（详见首轮分歧汇报） |
 
+> 注：原 DOC-4（指向 `docs/产品交接手册.md` 与「AGENTS.md 第十四节」）已于 2026-06-26 移除——该手册已删除、AGENTS.md 瘦身后无第十四节，债项不复存在。ID 不重排以免破坏外部引用。
+
 **修复建议**：
-- DOC-1 / DOC-2 / DOC-3：commit 时顺手改注释
-- DOC-4：手册标"过时"或重写
+- ~~DOC-1 / DOC-2 / DOC-3~~：✅ 2026-07-05 注释已修
 - DOC-5：03 文档已修正（B1 写明）
 - DOC-6：本系列文档已校对
 
 ---
 
-## 九、文件过大需重构（9 个）
+## 九、文件过大需重构（行数 2026-07 实测刷新）
 
-按行数排序（>= 1000 行）：
+按行数排序（>= 1000 行；旧表行数普遍低估 40-60%，本次全部重测）：
 
 | 文件 | 行数 | 类型 | 重构难度 | 重构建议 |
 |---|---|---|---|---|
-| `frontend/src/views/Monitor/index.vue` | **4051** | Vue | 极高 | 拆 1-2 个 panel 子组件先减负 |
-| `frontend/src/views/Project/index.vue` | 2925 | Vue | 高 | Steps / Events 拆出来 |
-| `backend/services/scanner.py` | 1964 | Py | 高 | LON/WMax/Virtual 拆 protocol 子模块（同时做 REG-2） |
-| `backend/api/source.py` | 1573 | Py | 极高 | 已 mixin 化但主类还在 |
-| `backend/services/mes_hooks.py` | 1505 | Py | 高 | phase 拆分（做 03 文档 C3） |
-| `frontend/src/views/Settings/index.vue` | 1441 | Vue | 中 | 8 个 tab 拆成子组件 |
-| `frontend/src/views/MES/ScannerPanel.vue` | 1381 | Vue | 中 | LON / WMax 拆开 |
-| `backend/services/cluster_collector.py` | 1122 | Py | 中 | host / slave 路径拆分 |
-| `backend/api/source_session_lifecycle_mixin.py` | 1111 | Py | 中 | 16 个生命周期方法可分组 |
-| `frontend/src/views/Data/index.vue` | ~1715 | Vue | 高 | 表格 / 导出对话框拆 |
-| `backend/api/alarm.py` | 1009 | Py | 中 | AlarmManager / AlarmRouter 拆分 |
-| `frontend/src/views/MES/GatewayPanel.vue` | 1073 | Vue | 中 | adapter 配置 form 拆 |
-| `backend/api/sessions.py` | 1005 | Py | 低 | 已经在拆（已含子 router 挂载） |
+| `frontend/src/views/Monitor/index.vue` | **5867** | Vue | 极高 | 拆 panel 子组件（RFC 同 Project 页）。M-1 录像异常遮罩 4 处同构块 → `RecordingFailureOverlay.vue`（2026-07-03，6293→6091 行）；M-2 单工位 SOP 流程卡片条 → `SopStepPanel.vue`（2026-07-03，6091→6002 行，滚动驱动走 defineExpose）；M-3 混合物品校验看板 → `CustomMixItemPanel.vue`（2026-07-03，6002→5905 行，三形态+computed 随迁）；M-4 多通道视频卡片壳 → `ChannelVideoCard.vue`（2026-07-03，5905→5867 行，流机制/framePump/画框全留父级，canvas 走函数 props 回注，真流 UAT 验证通道不串台，⚠️ 待主作者复核）。M 系列四批全部完成；后续瘦身空间在单工位模板与轮询处理函数（另立批次再议） |
+| `frontend/src/views/Project/index.vue` | **2704** | Vue | ✅ 拆分完成 | 逐批拆 Tab（RFC: docs/rfc/Monitor_Project巨型视图拆分_立项方案.md）。P-1 称重配置 Tab → `WeighingConfigTab.vue`；P-2 四对话框 → `CreateProjectDialog` / `ModelSelectDialog` / `FormatSelectDialog` / `RoiEditorDialog` + `modelFormats.js`；P-3 事件设置 Tab → `EventsConfigTab.vue`；P-4 逻辑设置 Tab → `LogicConfigTab.vue` + `perItemLabel.js`；P-5 步骤/物品设置 Tab → `StepsConfigTab.vue` + `mixItemDefaults.js` / `stepEnabled.js`（均 2026-07-03，累计 5971→2704 行，P-1~P-5 全部完成）。剩余 2704 行为基础设置 Tab + 保存/加载/模型编排等父级职责，暂不再拆 |
+| `frontend/src/views/Settings/index.vue` | 2617 | Vue | 中 | 8 个 tab 拆成子组件 |
+| `frontend/src/views/Data/index.vue` | 2258 | Vue | 高 | 表格 / 导出对话框拆 |
+| `backend/api/source_routes.py` | 2178 | Py | 高 | 按端点域分组拆文件 |
+| `backend/api/source.py` | 2054 | Py | 极高 | 已 mixin 化但主类还在 |
+| `backend/services/scanner.py` | 2003 | Py | 高 | LON/WMax/Virtual 拆 protocol 子模块（同时做 REG-2） |
+| `backend/services/mes_hooks.py` | 1739 | Py | 高 | phase 拆分（做 03 文档 C3） |
+| `backend/api/source_per_item_mixin.py` | 1621 | Py | 高 | v3.8+ 逐件覆盖，判定/挂起/结算可分组 |
+| `backend/api/source_session_lifecycle_mixin.py` | 1608 | Py | 中 | 16 个生命周期方法可分组 |
+| `frontend/src/views/MES/ScannerPanel.vue` | 1492 | Vue | 中 | LON / WMax 拆开 |
+| `frontend/src/views/MES/GatewayPanel.vue` | 1395 | Vue | 中 | adapter 配置 form 拆 |
+| `backend/services/cluster_collector.py` | 1205 | Py | 中 | host / slave 路径拆分 |
+| `backend/api/sessions.py` | 1071 | Py | 低 | 已经在拆（已含子 router 挂载） |
+| `backend/api/alarm.py` | 1067 | Py | 中 | AlarmManager / AlarmRouter 拆分 |
 
 **插件系统视角**：
 - 插件**不要直接改这些大文件**
@@ -453,20 +423,18 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ## 十一、测试覆盖盲区（5 项）
 
-### TEST-1 🟠 测试 fixture 未独立 DB
+### ~~TEST-1~~ ✅ 已修（2026-07-05 核实销账）
 
-**现象**：v3.5.0 加了 BDD 测试框架，但 fixture 直接用 `sql_app.db` 跑 → 测试可能污染开发库。
+原现象：BDD fixture 直接用 `sql_app.db` → 可能污染开发库。
+现状：`tests/conftest.py` 在 import 任何 backend 模块之前把 `TIANJUN_DATA_DIR`
+指到临时目录（文件头即为此约定），测试 DB 与开发库完全隔离。AGENTS.md 不变量 #5 同源。
 
-**修复**：fixture 用独立 DB（`tmpdir/test.db`），每个 fixture 用 unique uuid。
+### ~~TEST-2~~ ✅ 已修（2026-07-05 核实销账）
 
-### TEST-2 🟠 没有插件系统的回归测试
-
-**现象**：当前测试覆盖率不明（应跑 coverage），但**插件系统的边界测试 0 行**——因为还没做。
-
-**修复**：插件 1.0 上线前必须有：
-- 单元：插件 manifest 解析 / 签名验证 / registry 注册
-- 集成：插件加载/卸载/启停
-- 端到端：1 个示例插件覆盖档位 1/2/3
+原现象：插件系统边界测试 0 行（当时还没做插件平台）。
+现状：`tests/plugin_system/` 33 个测试文件 / 408 条用例全绿，覆盖 manifest 解析、
+签名验签（HMAC/公钥指纹/往返）、registry 注册、hook 派发（含 returnable 白名单契约）、
+PluginHost API、端到端示例插件（福建金龙/传感器清洁）。
 
 ### TEST-3 🟠 关机 8 步流程没自动化测试
 
@@ -505,9 +473,13 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ---
 
-## 十三、隐式约定 / 缺乏护栏（8 项）
+## 十三、隐式约定 / 缺乏护栏（8 项 — ✅ 2026-07-05 全部文档化销账）
 
-这一节列出"AGENTS.md 第八节'关键不变量'**没全部覆盖**"的隐式约定——文档化它们能减少新人踩坑。
+这一节列出"AGENTS.md 第八节'关键不变量'**没全部覆盖**"的隐式约定。
+**2026-07-05 处理完毕**：HIDDEN-1/2/3/5 以补充说明并入既有不变量第 10/4/9/7 条；
+HIDDEN-4/6/7/8 新增为不变量第 14/15/16/17 条（AGENTS.md 只留一行红线 + skill 指针，
+细节分别落 `debug-mes` 第三节 / `debug-alarm` 第六节 / `debug-channel` 第七节——
+AGENTS.md 常驻上下文，模块细节不进主文件）。以下保留原始条目供历史引用。
 
 ### HIDDEN-1：`OPENCV_FFMPEG_CAPTURE_OPTIONS` 必须在 cv2 import 前
 
@@ -602,17 +574,17 @@ app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["w
 
 ## 十六、TODO 给主作者的（如果接受本文档）
 
-- [ ] BUG-1 修复（0.1 天）
-- [ ] 重新审计 BUG-2 CI CORE_FILES（0.5 天）
-- [ ] 决定 BUG-3 / BUG-4 mixin 重叠的处置方案（讨论）
-- [ ] 死代码集中清理（0.5 天）
+- [x] ~~BUG-1 修复~~ — 2026-07 已修（`_fix_db_paths` 真实表名）
+- [x] ~~重新审计 BUG-2 CI CORE_FILES~~ — 2026-07 白名单重审完成（17 项 + 缺失硬 fail）
+- [x] ~~决定 BUG-3 / BUG-4 mixin 重叠的处置方案~~ — 2026-07 两个孤儿 mixin 已清退
+- [x] ~~死代码集中清理~~ — 2026-07 前端四文件已删（后端 DEAD-5/6 待核实第三方调用后另议）
 - [x] ~~INCONSIST-2 紧急确认~~ — 2026-05-09 已验证为误报
-- [ ] 6 个文档过时点修正（0.3 天）
-- [ ] OVERLAP-3 路由统一（0.5 天，与插件系统 P3.5 同步）
-- [ ] HIDDEN-* 8 项隐式约定文档化（写进 AGENTS.md 第八节）
-- [ ] 插件系统设计阶段就写 TEST-2 测试套（与代码同步）
+- [x] ~~5 个文档过时点修正~~ — 2026-07-05 DOC-1/2/3 注释已修，DOC-5/6 此前已校正
+- [x] ~~OVERLAP-3 路由统一~~ — 2026-07-05 已修（`router_manifest.py` 唯一登记处）
+- [x] ~~HIDDEN-* 8 项隐式约定文档化~~ — 2026-07-05 已全部写进 AGENTS.md 第八节（详见第十三节销账注）
+- [x] ~~插件系统设计阶段就写 TEST-2 测试套~~ — 已实现：`tests/plugin_system/` 408 用例（2026-07-05 核实销账）
 
 ---
 
-**本文最后更新**：2026-05-08
-**事实校验**：基于 v3.6.0 源码全量扫描 + AGENTS.md 第九节 + 01~04 文档发现 + brief 给的工时基线
+**本文最后更新**：2026-07-05（债务集中清理批次收尾：DOC/HIDDEN/OVERLAP-2/OVERLAP-3/REG-5/TEST-1/TEST-2/INCONSIST 全部销账或归档；REG-6 与 REG-1~8 余项需求驱动暂缓；MIG-* 随 PG 迁移专项；DEAD-5/6 审计完成待用户拍板删除；TEST-3/4/5 为余下开放项）
+**事实校验**：基于 v3.6.0 源码全量扫描 + AGENTS.md 第九节 + 01~04 文档发现 + brief 给的工时基线；2026-07 局部复核到 v3.31.0

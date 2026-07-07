@@ -17,7 +17,50 @@ permissions:
   contents: write
 
 jobs:
+  # ==================== tag 构建前的测试 gate ====================
+  # 只在 tag 触发时跑（main push 已有 test-virtual.yml 并行回归）。
+  # 复用 test-virtual 的 pytest+BDD 虚拟测试集：红了就不进入 4 小时打包，
+  # 避免把带回归的版本发给客户。
+  test-gate:
+    name: Test gate (tag only)
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RUNTIME_MODE: test
+      TIANJUN_TEST_MODE: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+
+      - name: Install system deps for opencv
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libsm6 libxext6 libxrender1
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-bdd httpx
+
+      - name: Run pytest end-to-end (TestClient, no real ports)
+        run: |
+          python -m pytest \
+            tests/test_synthetic_full_flow.py \
+            tests/step_defs/ \
+            -v --tb=short --maxfail=10
+
   build-windows:
+    # tag 构建必须先过 test-gate；main push / 手动触发时 gate 被 skip，直接放行
+    needs: test-gate
+    if: always() && (needs.test-gate.result == 'success' || needs.test-gate.result == 'skipped')
     runs-on: windows-latest
     timeout-minutes: 300
     
@@ -171,35 +214,51 @@ jobs:
           
           echo "=== Compiling core backend files to .pyd ==="
           
-          # Core business logic files
+          # Core business logic files（2026-07 白名单重审：
+          #   剔除 3 个已不存在的历史项 detection.py / websocket.py / services/detector.py；
+          #   纳入 source_routes + Top5 大 mixin + scanner/mes_hooks/weighing_engine，
+          #   否则这些核心 IP 以明文源码出厂）
           CORE_FILES=(
             "backend/api/source.py"
-            "backend/api/detection.py"
+            "backend/api/source_routes.py"
+            "backend/api/source_per_item_mixin.py"
+            "backend/api/source_session_lifecycle_mixin.py"
+            "backend/api/source_settlement_mixin.py"
+            "backend/api/source_tracking_mixin.py"
+            "backend/api/source_periodic_actions_mixin.py"
             "backend/api/sessions.py"
             "backend/api/projects.py"
             "backend/api/cameras.py"
             "backend/api/alarm.py"
             "backend/api/reports.py"
             "backend/api/tasks.py"
-            "backend/api/websocket.py"
             "backend/api/models.py"
-            "backend/services/detector.py"
+            "backend/services/scanner.py"
+            "backend/services/mes_hooks.py"
+            "backend/services/weighing_engine.py"
           )
           
+          # 白名单文件缺失 = 有人改名/删文件没同步白名单 → 直接 fail，
+          # 不再静默跳过（历史上 3 个失效项静默跳了几十个版本才被发现）
           for pyfile in "${CORE_FILES[@]}"; do
-            if [ -f "$pyfile" ]; then
-              dir=$(dirname "$pyfile")
-              filename=$(basename "$pyfile" .py)
-              echo "Compiling $pyfile ..."
-              python -m nuitka --module "$pyfile" --output-dir="$dir" --remove-output 2>&1 || echo "WARNING: Failed to compile $pyfile, keeping source"
-              
-              # If .pyd was generated, remove the .py source
-              if ls "$dir"/${filename}*.pyd 1>/dev/null 2>&1; then
-                echo "  -> Compiled successfully, removing source: $pyfile"
-                rm -f "$pyfile"
-              else
-                echo "  -> Compilation failed, keeping source: $pyfile"
-              fi
+            if [ ! -f "$pyfile" ]; then
+              echo "::error::CORE_FILES 白名单文件不存在: $pyfile （改名/删除后请同步 build.yml）"
+              exit 1
+            fi
+          done
+          
+          for pyfile in "${CORE_FILES[@]}"; do
+            dir=$(dirname "$pyfile")
+            filename=$(basename "$pyfile" .py)
+            echo "Compiling $pyfile ..."
+            python -m nuitka --module "$pyfile" --output-dir="$dir" --remove-output 2>&1 || echo "WARNING: Failed to compile $pyfile, keeping source"
+            
+            # If .pyd was generated, remove the .py source
+            if ls "$dir"/${filename}*.pyd 1>/dev/null 2>&1; then
+              echo "  -> Compiled successfully, removing source: $pyfile"
+              rm -f "$pyfile"
+            else
+              echo "  -> Compilation failed, keeping source: $pyfile"
             fi
           done
           

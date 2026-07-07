@@ -15,7 +15,8 @@ v3.5.0 自定义导出系统 — 数据上下文构造
    仅系统级（无周期数据）。比如导出"软件信息卡片"时用。
 
 设计契约：
-- 三个函数都返回完整 302 字段骨架，缺失值置 None / [] / {} 但 key 必有
+- 三个函数都返回完整字段骨架（字段清单以 export_field_registry.ALL_FIELDS 为准，
+  v3.31 共 308 个注册字段），缺失值置 None / [] / {} 但 key 必有
 - Jinja2 模板用 {{ x | default('-') }} 兜底，不会因为字段缺失炸渲染
 - 实时模式下若没传 live_state，live.* 全为 None；批量模式下 live.* 一律 None
 
@@ -291,7 +292,7 @@ def _now_dict() -> Dict[str, Any]:
 
 
 # ============================================================
-# 完整骨架（保证 302 字段都有 key）
+# 完整骨架（保证注册表内所有字段都有 key，清单见 export_field_registry）
 # ============================================================
 
 def _empty_steps_item() -> Dict[str, Any]:
@@ -526,7 +527,7 @@ def _empty_aggregations_section() -> Dict[str, Any]:
 
 
 def _empty_context() -> Dict[str, Any]:
-    """完整 302 字段骨架 — 所有构造函数都从这里出发"""
+    """完整字段骨架 — 所有构造函数都从这里出发（字段清单以 export_field_registry 为准）"""
     ctx: Dict[str, Any] = {}
     ctx.update(_now_dict())            # 时间字段顶层平铺
     ctx["app"] = _empty_app_section()
@@ -949,7 +950,7 @@ def build_cycle_context(db: DBSession, cycle_id: int,
                     实时模式下传入以填充 live.* 子树（包括 tracking）
         license_payload: 可选 — 前端 IPC 解析到的 license 信息
 
-    返回完整 302 字段 dict
+    返回完整字段骨架 dict
     """
     ctx = _empty_context()
 
@@ -1020,7 +1021,7 @@ def build_range_context(db: DBSession,
 
     include_cycles=True 时把全部 cycle 序列化进 stats.cycles （范围大时慎用）
 
-    返回完整 302 字段 dict (cycle.* / steps 留空，业务实体取 session 内首条做代表)
+    返回完整字段骨架 dict (cycle.* / steps 留空，业务实体取 session 内首条做代表)
     """
     from backend.models.models import DetectionSession, DetectionCycle, StepRecord
     from sqlalchemy import func as sa_func

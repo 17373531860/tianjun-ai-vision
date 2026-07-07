@@ -475,6 +475,8 @@ curl -sI http://127.0.0.1:6001/ | head -1
 | `backend/api/sessions_export.py` 或任何 CSV 导出 | `tests/test_csv_export_pt_ct_modes.py` |
 | `backend/services/scanner.py` / `wmax.py` / `mes_hooks.py` | 暂无单元测试覆盖 — **必须**手测路径 C，或写新 BDD scenario 覆盖 |
 | `backend/models/*.py`（ORM 模型） | **全部 mock fixture 都要扫一遍**（grep `MagicMock` + 改的字段名）；`tests/test_*_exposure.py` 全跑 |
+| `backend/services/weighing_engine.py` / `backend/api/weighing.py` / `pipeline_config.weighing` 相关 | `tests/test_weighing_engine.py`（13 例：状态机/去皮/判定/落库）+ `tests/test_mock_weight_source.py`（无硬件模拟源） |
+| `backend/services/external_device*.py`（外设协议/管线/稳态机） | `tests/test_weight_stabilizing_throttle_b2.py` + `tests/test_mock_weight_source.py` + `tests/test_fire_external_event.py`；碰称重业务再加跑上一行 |
 | 前端 `Settings/index.vue` 或 `useSystemStore.js` | 暂无单元测试 — 跑 `tests/e2e_browser/test_monitor_page.py` 看用户配置变更是否被前端正确读取 |
 | 前端 `Monitor/index.vue` | `tests/e2e_browser/test_monitor_page.py` |
 | 前端 `Data/index.vue` 或导出对话框 | `tests/e2e_browser/test_data_export_dialog.py` + `tests/e2e_browser/test_realtime_rules.py` |
@@ -1464,20 +1466,21 @@ def moving_target_scenario():
 
 ### H.2 一份 UAT 脚本的固定 5 段结构
 
+> **v3.31 起：样板代码一律用共用库 `tests/uat/_common.py`，不要再复制粘贴。**
+> 提供 `UatRun`（step 记录 + 安全截图 + 三件套证据目录 + run.json 汇总 + 退出码）、
+> `launch_browser`（headless=False 金标准参数 + 视频录制 + 控制台 error 收集）、
+> `filter_console_errors`（剔除视频流噪声）、`login`（v3.10.0 账号鉴权登录页）。
+> 存量 90+ 个 `uat_*.py` 不回改；新脚本示例见 `_common.py` 文件头 docstring。
+
 ```python
-"""UAT 脚本骨架（参考 /tmp/uat_v2_functional.py / /tmp/uat_v3_advanced.py）"""
+"""UAT 脚本骨架（新脚本用 _common；下面展开等价逻辑便于理解）"""
 import requests, time, uuid
 from playwright.sync_api import sync_playwright
+from _common import UatRun, launch_browser, filter_console_errors  # tests/uat/ 下运行
 
 API = "http://127.0.0.1:8011"   # 用非默认端口避免和客户机的 8001 撞
-SHOTS = "/tmp/uat_shots"
-VIDEO = "/tmp/uat_video"
-
-steps_log = []
-def step(label, ok, detail=""):
-    rec = {"idx": len(steps_log)+1, "label": label, "ok": ok, "detail": detail}
-    steps_log.append(rec)
-    print(f"[{'OK' if ok else '!!'}] {rec['idx']:02d}. {label}  {detail}")
+run = UatRun("my_feature")       # 证据统一落 tests/uat/evidence_<日期>_my_feature/
+step = run.step                  # 老脚本的 step()/safe_shot() 均由 _common 提供
 
 # ──────── 第 1 段：环境准备 ────────
 def setup():

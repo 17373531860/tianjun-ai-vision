@@ -11,15 +11,16 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 修改 ORM 前先读这一份。计划修改：$ARGUMENTS
 
-## 0. 一眼看懂当前的数据库（v3.5.x 真相）
+## 0. 一眼看懂当前的数据库（v3.31.0 真相）
 
-- **31 张表 = 13 + 15 + 3**，分布在 **三个** ORM 文件
-- **没有 alembic / 没有迁移工具**：纯手写 ALTER TABLE，集中在 `backend/main.py::migrate_database()`
+- **47 张表 = 13 + 20 + 4 + 5 + 4 + 1**，分布在 **六个** ORM 文件（models / mes_models / export_models / auth_models / plugin_models / weighing_models）
+- **迁移已版本化（2026-07 治理）**：运行时迁移在 `backend/db/migrations/`（注册表 + runner + `schema_migrations` 记账表）；alembic 仅服务 PG 工程（db-matrix CI），不进客户机运行时
 - 数据库是单文件 SQLite (`sql_app.db`)，开 WAL + busy_timeout=15s
-- 启动时序：`Base.metadata.create_all()` 建新表 → `migrate_database()` 给老库补列 → `fix_orphan_*()` 清孤儿
+- 启动时序：`Base.metadata.create_all()` 建新表 → `apply_pending(engine)` 按序应用迁移（老库补列在 m0000 基线里） → `fix_orphan_*()` 清孤儿
 - **旧版交接文档写的"22 张表 / `MLModel` 类名 / 表名 `ml_models`"全是过时信息，以代码为准**（该手册已于 2026-06-26 删除）
+- `Operator`/`operators` 表已随 v3.10.0 用户系统移除（端点 410 Gone），别再引用
 
-## 1. 三个 models 文件的 31 张表清单
+## 1. 六个 models 文件的 47 张表清单
 
 ### 1.1 `backend/models/models.py`（13 张，核心检测）
 
@@ -32,14 +33,14 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `Camera` | `cameras` | 旧式相机表，与 `/source/*` 并存 |
 | `DailyStat` | `daily_stats` | 每日统计汇总（写入路径已废）|
 | `SystemConfig` | `system_configs` | 全局 KV 配置（v3.5.0 加 license-cache）|
-| `Operator` | `operators` | 操作员（无 token，落盘 `current_operator.json`）|
+| `ChannelGroup` | `channel_groups` | v3.13.1 工位组（RFC 10 单机多工位并行联动）|
 | `DetectionSession` | `detection_sessions` | 一次开机=一个 Session，含 `channel_id` `shift_label` `order_id` |
 | `DetectionCycle` | `detection_cycles` | 一次生产周期，关联 Session/Order |
 | `StepRecord` | `step_records` | Cycle 内每个步骤的检测记录 |
 | `VideoClip` | `video_clips` | 录像文件元信息（`clip_type=session/cycle/step`）|
 | `DataExportSetting` | `data_export_settings` | CSV 导出/录像开关单行配置 |
 
-### 1.2 `backend/models/mes_models.py`（15 张，MES + 集群 + 外设）
+### 1.2 `backend/models/mes_models.py`（20 张，MES + 集群 + 外设 + 流水线）
 
 | ORM 类 | 表名 | 一句话 |
 |---|---|---|
@@ -53,19 +54,50 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `ScanLog` | `scan_logs` | 扫码记录 |
 | `MESConnection` | `mes_connections` | 外部 MES 推送连接配置 |
 | `MESCommLog` | `mes_comm_logs` | MES 推送通讯日志 |
+| `ExternalActiveAlarm` | `external_active_alarms` | v3.29 外部 MES 入站在途报警台账（川南范式）|
 | `ClusterConfig` | `cluster_config` | 集群配置（id 固定为 1，单行表）|
 | `BoxAggregation` | `box_aggregations` | 集群按 `box_serial` 聚齐的临时表 |
 | `BoxSummary` | `box_summaries` | 箱子最终汇总结果 |
 | `ExternalDevice` | `external_devices` | 外部设备（称重/PLC/传感器等）|
 | `ExternalDeviceLog` | `external_device_logs` | 外设原始数据日志 |
+| `WorkpieceFlowConfig` | `workpiece_flow_configs` | v3.14 RFC 11 串行流水线结算配置 |
+| `WorkpieceFlowRun` | `workpiece_flow_runs` | v3.14 串行流水线单件运行实例 |
+| `PackagingFlowConfig` | `packaging_flow_configs` | v3.21+ 包装线闭环配置（含 v3.30 `name_match_strict_boundary`）|
+| `PackagingFlowRun` | `packaging_flow_runs` | 包装线单箱运行实例 |
 
-### 1.3 `backend/models/export_models.py`（3 张，v3.5.0+ 自定义导出）
+### 1.3 `backend/models/export_models.py`（4 张，v3.5.0+ 自定义导出）
 
 | ORM 类 | 表名 | 一句话 |
 |---|---|---|
 | `ExportTemplate` | `export_templates` | 模板中央仓库（`is_system` 区分内置/用户）|
 | `ExportRealtimeRule` | `export_realtime_rules` | 实时导出规则（每个 cycle 自动写文件）|
 | `ExportRunLog` | `export_run_logs` | 实时/批量导出运行日志（成功/失败/跳过原因）|
+| `ExportScheduledRule` | `export_scheduled_rules` | v3.8.x 定时导出规则 |
+
+### 1.4 `backend/models/auth_models.py`（5 张，v3.10.0 用户系统）
+
+| ORM 类 | 表名 | 一句话 |
+|---|---|---|
+| `User` | `users` | 多角色账号（替代已废弃 operators）|
+| `Role` | `roles` | 角色 + 权限 JSON |
+| `UserRole` | `user_roles` | 用户 ↔ 角色多对多 |
+| `SessionToken` | `session_tokens` | 登录 token（Bearer 鉴权）|
+| `ApiKey` | `api_keys` | M2M API Key（SHA256 + scope）|
+
+### 1.5 `backend/models/plugin_models.py`（4 张，v3.13+ 插件平台）
+
+| ORM 类 | 表名 | 一句话 |
+|---|---|---|
+| `PluginRecord` | `plugins` | 已安装插件清单（签名/版本/激活状态）|
+| `PluginState` | `plugin_state` | 插件 `plugin_data` JSON 命名空间持久化 |
+| `PluginAuditLog` | `plugin_audit_log` | 插件主动 API 调用审计 |
+| `PluginConfigVersion` | `plugin_config_versions` | v3.28 插件配置版本化统一保存 |
+
+### 1.6 `backend/models/weighing_models.py`（1 张，v3.31.0 称重投料模式）
+
+| ORM 类 | 表名 | 一句话 |
+|---|---|---|
+| `WeighingRecord` | `weighing_records` | 逐件逐料称重台账：一行 = 一件产品的一道料一次称量（channel_id / product_sn / model_name / operator / material / standard / initial / net / verdict(ok・shortage・over・no_spec) / ts）；字段与 `weighing_engine.py` 产出的 result dict 对齐，新表走 create_all 无需 ALTER；`main.py` 已显式 import `weighing_models` |
 
 ## 2. 关键命名陷阱（别再写错了）
 
@@ -74,33 +106,26 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 - 7 个 JSON 字段都在 `Project`：`pipeline_config / steps_config / events_config / counters_config / alarm_config / detection_config / data_config`
 - 字段类型用 `Column(JSON, nullable=True)`，**不要**用 `Text` 然后自己 `json.loads/dumps`（旧代码有少量这种历史，新加字段一律用 `JSON`）
 
-## 3. 手动迁移机制（探针式 try/except）
+## 3. 版本化迁移机制（2026-07 起，替代旧 migrate_database 大列表）
 
-**没有 alembic，全部集中在 `backend/main.py::migrate_database()`**：
+**运行时迁移在 `backend/db/migrations/` 包**（RFC：`docs/rfc/DB迁移版本化治理_设计方案_RFC.md`）：
 
-```python
-def migrate_database():
-    migrations = [
-        ("step_records", "interval_to_next", "FLOAT"),
-        ("projects", "alarm_config", "JSON"),
-        ("scanner_devices", "scan_pair_max_wait_sec", "INTEGER DEFAULT 0"),
-        # ... 60+ 条
-    ]
-    with engine.connect() as conn:
-        for table, column, col_type in migrations:
-            try:
-                conn.execute(text(f"SELECT {column} FROM {table} LIMIT 1"))
-            except Exception:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
-                conn.commit()
+```
+backend/db/migrations/
+├── __init__.py       # _MIGRATION_MODULES 显式注册表 + apply_pending(engine) runner
+├── m0000_legacy.py   # 存量 109 条补列 + operators 清理，已冻结 ⚠️ 不许再往里加
+└── m0001_xxx.py ...  # 从 v3.32 起每个 schema 变更一个文件
 ```
 
 要点：
 
-1. **每条 migration 是一个 (table, column, col_type) 三元组**，不要写完整 SQL
-2. 探针 `SELECT col FROM table LIMIT 1` 失败 → 视为列不存在 → ALTER TABLE 加列；这就是项目里所谓的"IF NOT EXISTS 模式"——**SQLite 不支持原生 `ADD COLUMN IF NOT EXISTS`，是用 try/except 模拟的幂等**
-3. 整体外层还有一个 `try/except` 兜底，单条迁移失败不会中断启动
-4. **新加的表不写在这里**：因为 `Base.metadata.create_all(bind=engine)` 已经会自动创建任何注册到 `Base` 的新表（见下一节）
+1. **m0000 永远幂等重跑**（不看记账）：inspector 逐列探查缺列才 ALTER，保证任意历史版本老库（v3.1 起跳都行）升级安全；**m0001 起走 `schema_migrations` 记账跳过**，不再每次启动全量探查
+2. **新增 schema 变更三步**：改 ORM → 新建 `mXXXX_语义名.py` 暴露 `MIGRATION_ID` + `apply(engine)` → 模块名追加进 `_MIGRATION_MODULES`（显式注册，无目录扫描，兼容 Nuitka 编译）
+3. 迁移模块里能写任意操作（补列 / 建索引 / 回填数据 / 删表）——特例不再塞 main.py
+4. 容错语义：记账表建失败 → 降级只跑 m0000；某迁移失败 → 事务回滚、停止后续、不阻断启动
+5. **新加的表不用写迁移**：`Base.metadata.create_all(bind=engine)` 自动创建注册到 `Base` 的新表（见下一节）
+6. `main.py::migrate_database()` 已改为断言桩（调用即 RuntimeError），**别再往那里塞 ALTER**
+7. 方言归一（PG 的 `BOOLEAN DEFAULT 1→TRUE`、`JSON→JSONB`）在 m0000 内；新迁移写 DDL 时同样要过 `get_dialect()` 判断
 
 ## 4. 改字段（最常见操作）— 必须四步全做
 
@@ -115,17 +140,29 @@ class ScannerDevice(Base):
 约束：
 
 - **必须有默认值或允许 NULL**（SQLite ALTER TABLE 不允许加 `NOT NULL` 而无默认值的列）
-- **新建库**走 ORM 定义；**老客户库**走 migrate_database 的 ALTER → 默认值在两处都要一致
+- **新建库**走 ORM 定义；**老客户库**走迁移模块的 ALTER → 默认值在两处都要一致
 
-> 近期 schema 变更样例（v3.30.0）：`packaging_flow_configs` 新增 `name_match_strict_boundary BOOLEAN DEFAULT 0`（规格→项目自动同名匹配的"严格边界"开关；ORM `mes_models.py` 默认 `False` + `main.py` migrate ALTER `DEFAULT 0` 两处对齐）。`match_project_by_name` 同期默认由开改关。
+> 近期 schema 变更样例（v3.30.0）：`packaging_flow_configs` 新增 `name_match_strict_boundary BOOLEAN DEFAULT 0`（规格→项目自动同名匹配的"严格边界"开关；ORM 默认 `False` + 迁移 ALTER `DEFAULT 0` 两处对齐）。
 
-### 步骤 B：`backend/main.py: migrate_database()` 加 ALTER
+### 步骤 B：`backend/db/migrations/` 新建迁移文件
 
 ```python
-("scanner_devices", "new_field", "INTEGER DEFAULT 0"),
+# backend/db/migrations/m0001_scanner_new_field.py
+from sqlalchemy import inspect, text
+
+MIGRATION_ID = "m0001_scanner_new_field"
+
+def apply(engine):
+    insp = inspect(engine)
+    if "new_field" in {c["name"] for c in insp.get_columns("scanner_devices")}:
+        return
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE scanner_devices ADD COLUMN new_field INTEGER DEFAULT 0"))
+        conn.commit()
 ```
 
-老客户的 SQLite 库靠这一行才能加上列。**忘了这一步 = 升级即崩**。
+再把 `"m0001_scanner_new_field"` 追加进 `migrations/__init__.py::_MIGRATION_MODULES`。
+老客户的 SQLite 库靠这一步才能加上列。**忘了这一步 = 升级即崩**。
 
 ### 步骤 C：序列化对齐
 
@@ -170,7 +207,7 @@ Base.metadata.create_all(bind=engine)
 
 ### 步骤 B：什么都不用做，启动时 `create_all` 自动建
 
-`migrate_database()` **不需要**给新表加任何东西 —— 它只管"老表加新列"。
+迁移模块**不需要**给新表加任何东西 —— 迁移只管"老表加新列/数据修正"。
 
 ### 步骤 C（可选）：种子数据
 
@@ -275,7 +312,7 @@ rg "<驼峰字段名>|<下划线字段名>" frontend/src
 ```
 
 ### 第 5 步：写迁移
-- 加列 → `backend/main.py: migrate_database()` 增一行
+- 加列 → `backend/db/migrations/` 新建 `mXXXX_*.py` + 注册（见第 3 节）
 - 加表 → 确保 `backend/main.py` 已 import 该 models 文件
 - 不动老列
 
@@ -318,5 +355,12 @@ JSON 子键链: <set_project_config + 视图 + Navbar 默认值> （仅 JSON）
 | v3.3.0 | `ScannerDevice.scan_pair_max_wait_sec`（码-码闭环）|
 | v3.4.0 | `ScannerDevice` 加 D 模式几何字段 `scan_d_geometry / scan_d_line / scan_d_zone / scan_d_gone_confirm_frames` |
 | v3.5.0 | 新文件 `export_models.py` + 3 张表 + `SystemConfig` 接入 license-cache JSON |
+| v3.10.0 | 新文件 `auth_models.py` 5 张表（用户系统）；`Operator`/`operators` 废弃移除 |
+| v3.13.x | 新文件 `plugin_models.py` 4 张表；`models.py` 加 `ChannelGroup`（RFC 10）|
+| v3.14.0 | `mes_models.py` 加 `workpiece_flow_configs/runs`（RFC 11 串行流水线）|
+| v3.21+ | `mes_models.py` 加 `packaging_flow_configs/runs`（包装线闭环）|
+| v3.29.0 | `mes_models.py` 加 `external_active_alarms`（入站在途报警台账）|
+| v3.30.0 | `packaging_flow_configs` 加 `name_match_strict_boundary BOOLEAN DEFAULT 0` |
+| v3.31.0 | 新文件 `weighing_models.py` + `weighing_records` 表（称重投料逐件台账，`main.py` 显式 import + create_all，无 ALTER）|
 
 > 完整 changelog 在 `docs/changelog/` 下，每个 .md 都标了 BUG/FEAT/HOTFIX。

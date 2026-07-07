@@ -123,6 +123,13 @@ electron/package.json → "version" 字段
 > ⚠️ **发版版本对齐铁律（历史教训）**：曾经发版只 bump `package.json`、忘了同步 `AGENTS.md`，导致 AGENTS 长期落后好几个版本（线上 v3.27 而 AGENTS 还写 v3.23），误导后续 AI 拿到错误的"当前版本"。
 > **凡是写了版本号 / 版本日期的地方都必须在发版时一次性对齐**：`electron/package.json` / `electron/splash.html` / `AGENTS.md`（第一节 + 文件尾）/ 任何 skill 里标了"当前版本 / 适用版本"的位置。不允许只改一处。
 
+**更新完必须跑自检脚本**（v3.31 起，package.json / AGENTS / changelog / tag 四处一致性）：
+
+```bash
+python scripts/ci/check_version_alignment.py --expect vX.X.X
+# 退出码非 0 = 有地方没对齐, 修完再进下一步; tag 落后属正常（最后才打）
+```
+
 ## 第5.5步: 强制检查并更新 Skill（不可跳过！）
 
 **为什么这步是强制的：** v2.3.0 发版时漏掉了 skill 更新，导致后续 AI 操作缺乏 MES 上下文。
@@ -143,6 +150,29 @@ electron/package.json → "version" 字段
 4. 如果有全新子系统 → 用现有 skill 作为模板创建新 skill
 
 **完成标志：** changelog 的 `skills_updated` 字段包含所有更新/新增的 skill 名称。
+
+## 第5.6步: 开发文档查漏补缺（2026-07 起强制，不可跳过！）
+
+**为什么这步是强制的：** 2026-07 建立了 `docs/dev/` 开发者文档体系（架构总览/深潜/参考生成物），文档 CI 会拦欠账——发版前不对账，CI 红或文档腐烂。
+
+对本轮全部变更逐条过下面的表：
+
+| 变更类型 | 要更新的文档 |
+|---|---|
+| 新增/修改 API 端点 | 端点必须有 summary + response_model + docstring（`docs/dev/conventions/端点文档军规.md`；缺了端点门禁直接红，**不要**往 `scripts/ci/doc_endpoint_baseline.json` 加豁免） |
+| 改 ORM 模型/表 | 重跑 `python scripts/docgen/gen_db_schema.py` |
+| 改 Project 7 个 JSON 配置字段 | 重跑 `python scripts/docgen/gen_config_dict.py` |
+| 任何路由/Schema 变更 | 重跑 `python scripts/docgen/gen_openapi_snapshot.py` |
+| 改了状态机/MES 链路/集群/插件加载的**设计** | 同步更新 `docs/dev/internals/` 对应深潜篇 |
+| 架构级变更（分层/容器/依赖规则变了） | 同步更新 `docs/dev/architecture/` 对应篇 |
+| 插件 hook/PluginHost 能力面变更 | 更新 `docs/dev/reference/plugin-sdk.md` + `docs/plugin-system/` |
+
+**完成标志（必须真跑，不许口头绿）：**
+
+```bash
+~/anaconda3/envs/tianjun/bin/python -m pytest tests/test_doc_ci.py -q
+# 6 passed 才能进第6步 Git Commit
+```
 
 ## 第6步: Git Commit
 
@@ -177,12 +207,10 @@ git push origin main
 git tag vX.X.X
 git push origin vX.X.X
 
-# 5. 监控 CI
+# 5. 监控 CI（详见第 8 步，统一走 scripts/ci/watch_and_private.sh）
 gh run list --limit 3
-gh run watch <run_id>  # 实时监控
 
-# 6. CI 完成后设回 private
-gh repo edit --visibility private --accept-visibility-change-consequences
+# 6. CI 完成后设回 private（第 8 步脚本会自动做）
 ```
 
 **重要顺序**: public → push → tag → 等 CI 完 → private
@@ -191,36 +219,27 @@ gh repo edit --visibility private --accept-visibility-change-consequences
 
 **必须执行，不可跳过。** CI 使用 free runner，仅 public repo 可用，构建完必须立即改回 private。
 
+**统一用仓库脚本 `scripts/ci/watch_and_private.sh`**（v3.31 后固定，不要再手写一次性 `_ci_watch_*.sh` 变体丢根目录）：
+
 ```bash
 # 获取 tag 触发的 run ID
 RUN_ID=$(gh run list --limit 1 --json databaseId -q '.[0].databaseId')
 
-# 每 5 分钟轮询一次，直到完成
-while true; do
-  STATUS=$(gh run view $RUN_ID --json status -q '.status')
-  CONCLUSION=$(gh run view $RUN_ID --json conclusion -q '.conclusion')
-  echo "$(date '+%H:%M:%S') status=$STATUS conclusion=$CONCLUSION"
-  if [ "$STATUS" = "completed" ]; then
-    break
-  fi
-  sleep 300
-done
+# 后台守护：轮询所有 in_progress run 直到全部结束，然后自动切回 private
+# 参数: -r run_id  -t 超时小时(默认6)  -i 轮询秒(默认300)  -l 日志(默认 _ci_watch.log)  -n 只盯盘不切private
+nohup scripts/ci/watch_and_private.sh -r "$RUN_ID" >/dev/null 2>&1 &
 
-# CI 完成后立即改回 private
-gh repo edit --visibility private --accept-visibility-change-consequences
-echo "✅ Repo set back to private"
+# 进度随时看日志
+tail -f _ci_watch.log
 
-# 如果 CI 失败，提醒用户
-if [ "$CONCLUSION" != "success" ]; then
-  echo "⚠️ CI failed! Check: gh run view $RUN_ID --log-failed"
-fi
+# 如果 CI 失败，排查
+gh run view "$RUN_ID" --log-failed
 ```
 
-轮询策略：
-- 前 10 分钟每 2 分钟查一次（捕获早期失败）
-- 之后每 5 分钟查一次
-- 上次构建耗时约 4 小时，预期类似
-- 无论成功失败，都必须改回 private
+脚本行为（无须重复手写）：
+- 每 5 分钟轮询本批全部 run（tag 构建 + main push 一起等，避免中途丢 runner）
+- 上次构建耗时约 4 小时；6 小时超时兜底后仍强制切 private
+- **无论成功失败，都自动改回 private**（重试 3 次），日志落 `_ci_watch.log`（已 gitignore）
 
 ## 第9步: 打包发版（如需本地构建）
 

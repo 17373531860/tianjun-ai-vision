@@ -80,10 +80,20 @@
   .header .user .dot { width: 22px; height: 22px; border-radius: 50%; background: linear-gradient(135deg,#2e6bff,#22d3ee); display: grid; place-items: center; font-size: 11px; }
 
   /* ===== Body layout ===== */
-  .body { display: grid; grid-template-columns: 150px 1fr; min-height: 0; }
+  /* 导航对齐主程序: 默认收起 (抽屉式), 顶栏 ☰ 呼出, 点菜单项/遮罩关闭; 主区独占整宽 */
+  .body { display: grid; grid-template-columns: 1fr; min-height: 0; }
 
-  /* ===== Nav ===== */
-  .nav { display: flex; flex-direction: column; padding: 14px 10px; gap: 4px; border-right: 1px solid var(--line); background: linear-gradient(180deg, rgba(10,18,34,.6), rgba(6,10,20,.3)); }
+  /* ===== Nav (抽屉) ===== */
+  .nav { display: flex; flex-direction: column; padding: 14px 10px; gap: 4px; border-right: 1px solid var(--line); background: linear-gradient(180deg, rgba(10,18,34,.98), rgba(6,10,20,.98));
+    position: fixed; left: 0; top: 0; bottom: 0; width: 220px; z-index: 990;
+    transform: translateX(-102%); transition: transform .25s ease; box-shadow: 8px 0 30px rgba(0,0,0,.55); }
+  .nav.open { transform: translateX(0); }
+  #navMask { position: fixed; inset: 0; z-index: 989; background: rgba(0,0,0,.45); display: none; }
+  #navMask.show { display: block; }
+  #navToggle { width: 34px; height: 34px; border-radius: 8px; border: 1px solid rgba(45,155,255,.3);
+    background: rgba(10,24,42,.7); color: var(--cyan-soft); font-size: 16px; cursor: pointer;
+    display: grid; place-items: center; transition: .15s; flex: 0 0 auto; }
+  #navToggle:hover { border-color: rgba(69,230,255,.7); color: #fff; box-shadow: 0 0 12px rgba(45,155,255,.35); }
   .nav .item {
     display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px;
     color: var(--txt2); font-size: 13px; cursor: pointer; position: relative; transition: .15s;
@@ -186,6 +196,47 @@
   .refstd { position:absolute; left:16px; bottom:16px; width:140px; background: rgba(8,14,26,.45); border:1px solid var(--line); border-radius:10px; padding:9px; backdrop-filter: blur(5px); }
   .refstd .lab { font-size:11px; color: var(--txt2); margin-bottom:6px; }
   .refstd .img { height:80px; border:1px solid var(--line-glow); border-radius:6px; background: linear-gradient(160deg,#1a2738,#0c1320); display:grid; place-items:center; font-size:10px; color: var(--txt3); text-align:center; padding:4px; }
+
+  /* v1.3.0 R5: 无输入源 / 已停止 动态占位层 (盖住演示照片与假 HUD, 不透明) */
+  #tjNoSrc{ position:absolute; inset:0; z-index:6; display:none; flex-direction:column;
+    align-items:center; justify-content:center; gap:16px;
+    background: radial-gradient(120% 90% at 50% 32%, rgba(14,40,64,.9), rgba(6,11,20,1) 66%), #060b14; }
+  #tjNoSrc.show{ display:flex; }
+  #tjNoSrc .rings{ position:relative; width:150px; height:150px; }
+  #tjNoSrc .rings i{ position:absolute; inset:0; border:1px solid rgba(46,224,200,.5);
+    border-radius:50%; animation: tjRing 3s ease-out infinite; }
+  #tjNoSrc .rings i:nth-child(2){ animation-delay:1s; }
+  #tjNoSrc .rings i:nth-child(3){ animation-delay:2s; }
+  #tjNoSrc .core{ position:absolute; inset:42px; border-radius:50%;
+    border:1px solid rgba(46,224,200,.85); background:rgba(10,24,38,.7);
+    display:grid; place-items:center; box-shadow:0 0 26px rgba(46,224,200,.35) inset, 0 0 18px rgba(46,224,200,.25); }
+  #tjNoSrc .core svg{ width:30px; height:30px; stroke:var(--cyan); fill:none; stroke-width:1.6;
+    filter: drop-shadow(0 0 6px rgba(46,224,200,.9)); }
+  @keyframes tjRing{ 0%{transform:scale(.4);opacity:.95} 100%{transform:scale(1.18);opacity:0} }
+  #tjNoSrc .t1{ font-size:17px; letter-spacing:6px; color:var(--cyan); text-shadow:0 0 14px rgba(46,224,200,.6); }
+  #tjNoSrc .t2{ font-size:12px; letter-spacing:2px; color:var(--txt3); }
+  #tjNoSrc .scanbar{ width:220px; height:2px; overflow:hidden; border-radius:2px; background:rgba(46,224,200,.12); }
+  #tjNoSrc .scanbar i{ display:block; width:38%; height:100%; background:linear-gradient(90deg,transparent,var(--cyan),transparent);
+    animation: tjScanBar 2.2s ease-in-out infinite; }
+  @keyframes tjScanBar{ 0%{transform:translateX(-100%)} 100%{transform:translateX(320%)} }
+  #tjNoSrcGo{ margin-top:2px; }
+
+  /* v1.3.0 R5: 视频文件源播放控制条 (悬停浮现, 对齐主程序 进度/倍速/逐帧) */
+  #tjVidCtrl{ position:absolute; left:0; right:0; bottom:0; z-index:7; display:none;
+    flex-direction:column; gap:2px; padding:9px 14px 8px;
+    background:linear-gradient(180deg, transparent, rgba(4,10,18,.92) 46%);
+    opacity:0; transition:opacity .25s ease; }
+  .video:hover #tjVidCtrl{ opacity:1; }
+  #tjVidCtrl.show{ display:flex; }
+  #tjVidCtrl .row1{ display:flex; align-items:center; gap:10px; }
+  #tjVidCtrl .vt{ font-size:11px; color:var(--txt2); font-variant-numeric:tabular-nums; min-width:42px; }
+  #tjVidCtrl input[type=range]{ flex:1; height:4px; accent-color:#2ee0c8; cursor:pointer; background:transparent; }
+  #tjVidCtrl input[type=range]:disabled{ opacity:.35; cursor:not-allowed; }
+  #tjVidCtrl select{ width:74px; }
+  #tjVidCtrl .sync{ display:flex; align-items:center; gap:5px; font-size:11px; color:var(--txt2); cursor:pointer; white-space:nowrap; }
+  #tjVidCtrl .sync input{ accent-color:#2ee0c8; cursor:pointer; }
+  #tjVidCtrl .note{ text-align:center; font-size:11px; letter-spacing:2px; }
+  #tjVidCtrl .note.end{ color:#f3b54d; } #tjVidCtrl .note.sync{ color:var(--cyan); display:block; }
 
   /* SOP timeline */
   .sop .track { display:flex; align-items:flex-start; gap:0; padding:14px 16px; overflow-x:auto; }
@@ -482,7 +533,7 @@
     text-shadow:0 0 26px rgba(45,155,255,.30);
   }
   .title .sub{ color:#5f8898; letter-spacing:4px; }
-  .body{ grid-template-columns:156px 1fr; }
+  .body{ grid-template-columns:1fr; }
   .nav{
     padding:16px 10px;
     background:linear-gradient(180deg, rgba(4,18,30,.96), rgba(2,9,18,.92));
@@ -1150,6 +1201,137 @@
   dialog{ border:1px solid rgba(42,168,255,.35); background:#071523; color:var(--txt); padding:18px; min-width:420px; max-width:min(92vw,720px); max-height:88vh; overflow-y:auto; box-shadow:0 22px 80px rgba(0,0,0,.55),0 0 35px rgba(42,168,255,.22); }
   dialog::backdrop{ background:rgba(0,8,18,.72); backdrop-filter:blur(4px); }
   dialog h3{ margin-bottom:12px; color:var(--cyan-soft); }
+
+  /* ==================== v1.3.0 · 称重投料模式（logic_mode=weighing）==================== */
+  .weigh-strip{ display:none; flex-direction:column; padding:0; overflow:hidden; }
+  .main.weighing .sop{ display:none; }
+  .main.weighing .weigh-strip{ display:flex; grid-column:1/2; grid-row:3/4; }
+  .wg-head{ display:flex; align-items:center; gap:14px; padding:8px 16px; border-bottom:1px solid rgba(42,168,255,.16); flex-shrink:0; }
+  .wg-head .wg-title{ font-size:15px; color:var(--cyan-soft); letter-spacing:1px; font-weight:600; }
+  .wg-phase{ font-size:11px; padding:2px 10px; border-radius:10px; border:1px solid rgba(42,168,255,.3); color:var(--txt2); }
+  .wg-phase.idle{ color:var(--txt3); }
+  .wg-phase.tare{ color:#f3b54d; border-color:rgba(243,181,77,.5); animation:blink 1.2s infinite; }
+  .wg-phase.filling{ color:#45e6ff; border-color:rgba(69,230,255,.55); animation:blink 1.4s infinite; }
+  .wg-phase.done{ color:#22e3a0; border-color:rgba(34,227,160,.5); box-shadow:0 0 10px rgba(34,227,160,.25); }
+  .wg-head .wg-sn{ font-size:12px; color:var(--txt2); } .wg-head .wg-sn b{ color:#45e6ff; font-variant-numeric:tabular-nums; }
+  .wg-head .wg-ctl{ margin-left:auto; display:flex; gap:8px; }
+  .wg-head .wg-ctl .proto-btn{ padding:4px 10px; font-size:11px; }
+  .wg-body{ flex:1; display:flex; align-items:stretch; gap:12px; padding:9px 16px; min-height:0; }
+  .wg-ctx{ flex:0 0 168px; display:flex; flex-direction:column; gap:6px; }
+  .wg-ctx .proto-input,.wg-ctx .proto-select{ height:28px; font-size:12px; }
+  .wg-ctx label{ font-size:10px; color:var(--txt3); letter-spacing:1px; }
+  .wg-live{ flex:0 0 auto; min-width:190px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; padding:4px 18px; background:rgba(3,10,20,.5); border:1px solid rgba(42,168,255,.22); border-radius:4px; }
+  .wg-live .wl-num{ font-size:44px; font-weight:800; color:#45e6ff; font-variant-numeric:tabular-nums; text-shadow:0 0 20px rgba(69,230,255,.45); line-height:1.05; }
+  .wg-live .wl-num .u{ font-size:14px; color:var(--txt3); margin-left:4px; font-weight:400; }
+  .wg-live .wl-sub{ font-size:11px; color:var(--txt3); }
+  .wg-live.warn .wl-num{ color:#ff5263; text-shadow:0 0 20px rgba(255,82,99,.5); }
+  .wg-rail{ flex:1; min-width:0; display:flex; gap:8px; overflow-x:auto; align-items:stretch; }
+  .wg-mat{ flex:0 0 auto; min-width:126px; display:flex; flex-direction:column; gap:4px; padding:8px 11px; background:rgba(3,10,20,.5); border:1px solid rgba(42,168,255,.18); border-radius:4px; }
+  .wg-mat .wm-name{ font-size:13px; color:var(--txt); font-weight:600; display:flex; justify-content:space-between; gap:6px; }
+  .wg-mat .wm-std{ font-size:11px; color:var(--txt3); font-variant-numeric:tabular-nums; }
+  .wg-mat .wm-net{ font-size:16px; font-variant-numeric:tabular-nums; color:var(--txt2); } .wg-mat .wm-net b{ font-size:19px; }
+  .wg-mat.cur{ border-color:rgba(69,230,255,.6); box-shadow:0 0 12px rgba(69,230,255,.25); }
+  .wg-mat.cur .wm-net b{ color:#45e6ff; }
+  .wg-mat.ok{ border-color:rgba(34,227,160,.45); } .wg-mat.ok .wm-net b{ color:#22e3a0; }
+  .wg-mat.shortage{ border-color:rgba(243,181,77,.55); } .wg-mat.shortage .wm-net b{ color:#f3b54d; }
+  .wg-mat.over{ border-color:rgba(255,82,99,.55); } .wg-mat.over .wm-net b{ color:#ff5263; }
+  .wg-vchip{ font-size:10px; padding:1px 7px; border-radius:9px; border:1px solid; white-space:nowrap; align-self:flex-start; }
+  .wg-vchip.ok{ color:#22e3a0; border-color:rgba(34,227,160,.45); } .wg-vchip.shortage{ color:#f3b54d; border-color:rgba(243,181,77,.5); }
+  .wg-vchip.over{ color:#ff5263; border-color:rgba(255,82,99,.5); } .wg-vchip.wait{ color:var(--txt3); border-color:rgba(42,168,255,.25); }
+  /* 右栏 NG TOP3 → 称重实时反馈 */
+  .topng-panel .ph-wg{ display:none; } .topng.t-wg{ display:none; }
+  .main.weighing .topng-panel .ph-std{ display:none; } .main.weighing .topng-panel .ph-wg{ display:inline; }
+  .main.weighing .topng.t-std{ display:none; } .main.weighing .topng.t-wg{ display:flex; flex-direction:column; gap:8px; }
+  /* 视频浮层：称重识别结果 */
+  .actions .a-wg{ display:none; } .main.weighing .actions .a-std,.main.weighing .actions .a-trk,.main.weighing .actions .a-pi{ display:none!important; }
+  .main.weighing .actions .a-wg{ display:block; }
+
+  /* ==================== v1.3.0 · 区域事件模式（logic_mode=region_events）==================== */
+  /* 布局沿用 SOP 流程时间轴骨架，仅数据源换成动作规则；以下为增量元素样式 */
+  .step-card .cnt-badge{ position:absolute; right:4px; top:4px; font-size:10px; padding:0 6px; border-radius:8px; color:#45e6ff; border:1px solid rgba(69,230,255,.5); background:rgba(2,8,20,.8); }
+  .step-card{ position:relative; }
+  .step-card .tmr{ display:inline-block; font-variant-numeric:tabular-nums; color:#45e6ff; }
+  .seg .gap-lab{ position:absolute; top:-15px; left:50%; transform:translateX(-50%); font-size:9px; color:var(--txt3); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .seg{ position:relative; }
+  .sop .seq-chips{ display:flex; gap:6px; flex-wrap:wrap; padding:2px 16px 8px; }
+  .sop .seq-chips .sq{ font-size:10px; padding:1px 8px; border-radius:9px; border:1px solid rgba(42,168,255,.3); color:var(--txt2); background:rgba(42,168,255,.06); }
+
+  /* ==================== v1.3.0 · 逐件漏打待补横幅（v3.28）==================== */
+  .pi-remed{ display:none; align-items:center; gap:10px; padding:6px 16px; border-bottom:1px solid rgba(243,181,77,.35); background:rgba(243,181,77,.08); font-size:12px; color:#f3b54d; animation:tjRemedBreath 1.8s ease-in-out infinite; flex-shrink:0; }
+  .pi-remed.show{ display:flex; }
+  .pi-remed .mc{ width:24px; height:20px; display:inline-flex; align-items:center; justify-content:center; font-size:10px; border-radius:3px; border:1px solid rgba(255,82,99,.5); color:#ff5263; background:rgba(255,82,99,.08); }
+  .pi-remed .proto-btn{ margin-left:auto; padding:3px 10px; font-size:11px; }
+  @keyframes tjRemedBreath{ 0%,100%{ background:rgba(243,181,77,.06);} 50%{ background:rgba(243,181,77,.13);} }
+
+  /* ==================== v1.3.0 · 全屏浮层（挂 body，不受 .app 缩放影响）==================== */
+  /* 人工确认阻塞层（宿主的会被本 iframe 盖住 → 自绘） */
+  #tjAckLayer{ position:fixed; inset:0; z-index:900; display:none; align-items:center; justify-content:center; background:rgba(2,6,14,.82); backdrop-filter:blur(3px); font-family:inherit; }
+  #tjAckLayer.show{ display:flex; }
+  .ack-panel{ position:relative; min-width:430px; max-width:560px; padding:26px 34px; background:linear-gradient(160deg,rgba(20,6,10,.96),rgba(8,4,10,.96)); border:1.5px solid rgba(255,82,99,.6); box-shadow:0 0 46px rgba(255,82,99,.35), inset 0 0 30px rgba(255,82,99,.08); color:#ffd7dc; text-align:center; }
+  .ack-panel .corner{ position:absolute; width:14px; height:14px; border-color:rgba(255,120,135,.9); border-style:solid; }
+  .ack-panel .corner.tl{ left:-1px; top:-1px; border-width:2px 0 0 2px; } .ack-panel .corner.tr{ right:-1px; top:-1px; border-width:2px 2px 0 0; }
+  .ack-panel .corner.bl{ left:-1px; bottom:-1px; border-width:0 0 2px 2px; } .ack-panel .corner.br{ right:-1px; bottom:-1px; border-width:0 2px 2px 0; }
+  .ack-panel h2{ font-size:26px; letter-spacing:3px; color:#ff8a96; text-shadow:0 0 16px rgba(255,82,99,.6); }
+  .ack-panel .ack-reason{ margin-top:10px; font-size:13px; color:#f3c5cb; line-height:1.7; }
+  .ack-panel .ack-cd{ margin:12px auto 4px; font-size:13px; color:#f3b54d; font-variant-numeric:tabular-nums; }
+  .ack-panel .ack-btns{ margin-top:16px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+  .ack-panel .proto-btn{ font-size:14px; padding:10px 18px; }
+  .ack-elev{ margin-top:14px; display:none; gap:8px; justify-content:center; align-items:center; flex-wrap:wrap; }
+  .ack-elev.show{ display:flex; }
+  .ack-elev .proto-input{ width:130px; height:32px; }
+  /* 在途报警持续横幅（外部生产管控系统，v3.29） */
+  #tjExtAlarm{ position:fixed; left:50%; transform:translateX(-50%); z-index:910; display:none; min-width:420px; max-width:88vw; padding:9px 16px; border-radius:10px; color:#fff; border:1px solid rgba(255,255,255,.28); }
+  #tjExtAlarm.show{ display:block; }
+  #tjExtAlarm.pos-top{ top:10px; } #tjExtAlarm.pos-bottom{ bottom:10px; }
+  #tjExtAlarm .ea-head{ display:flex; align-items:center; gap:8px; font-weight:700; font-size:14px; }
+  #tjExtAlarm .ea-dot{ width:10px; height:10px; border-radius:50%; background:#fff; animation:tjEaPulse 1.2s infinite; }
+  @keyframes tjEaPulse{ 0%{ box-shadow:0 0 0 0 rgba(255,255,255,.7);} 70%{ box-shadow:0 0 0 8px rgba(255,255,255,0);} 100%{ box-shadow:0 0 0 0 rgba(255,255,255,0);} }
+  #tjExtAlarm .ea-sub{ margin-left:auto; font-weight:400; font-size:11px; opacity:.85; }
+  #tjExtAlarm .ea-list{ margin-top:5px; display:flex; flex-direction:column; gap:4px; max-height:32vh; overflow-y:auto; }
+  #tjExtAlarm .ea-item{ padding:5px 10px; border-radius:7px; background:rgba(0,0,0,.2); font-size:13px; }
+  #tjExtAlarm .ea-meta{ display:flex; flex-wrap:wrap; gap:10px; font-size:11px; opacity:.9; margin-top:2px; }
+  /* 包装箱结算进度卡（v3.21-23 上银包装线） */
+  #tjPackCard{ position:fixed; left:14px; bottom:56px; z-index:880; display:none; min-width:330px; max-width:430px; padding:12px 16px; background:linear-gradient(160deg,rgba(6,16,28,.97),rgba(4,10,20,.97)); border:1px solid rgba(42,168,255,.4); box-shadow:0 8px 30px rgba(0,0,0,.5),0 0 22px rgba(42,168,255,.18); color:#e8f1ff; font-size:12px; border-radius:6px; }
+  #tjPackCard.show{ display:block; }
+  #tjPackCard .pk-head{ display:flex; align-items:center; gap:10px; }
+  #tjPackCard .pk-head .t{ color:var(--cyan-soft); font-weight:700; letter-spacing:1px; }
+  #tjPackCard .pk-head .order{ font-variant-numeric:tabular-nums; color:#e8f1ff; font-weight:600; }
+  #tjPackCard .pk-head .x{ margin-left:auto; cursor:pointer; opacity:.6; padding:0 4px; }
+  #tjPackCard .pk-prog{ display:flex; align-items:baseline; gap:8px; margin-top:8px; }
+  #tjPackCard .pk-prog b{ font-size:26px; color:#45e6ff; font-variant-numeric:tabular-nums; text-shadow:0 0 12px rgba(69,230,255,.4); }
+  #tjPackCard .pk-tail{ font-size:10px; padding:1px 8px; border-radius:9px; color:#f3b54d; border:1px solid rgba(243,181,77,.5); }
+  #tjPackCard .pk-chips{ display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; max-height:56px; overflow-y:auto; }
+  #tjPackCard .pk-chip{ width:24px; height:22px; display:flex; align-items:center; justify-content:center; font-size:10px; border-radius:3px; border:1px solid rgba(42,168,255,.3); color:var(--txt2); }
+  #tjPackCard .pk-chip.ok{ border-color:rgba(34,227,160,.55); color:#22e3a0; background:rgba(34,227,160,.09); }
+  #tjPackCard .pk-chip.ng{ border-color:rgba(255,82,99,.55); color:#ff5263; background:rgba(255,82,99,.09); }
+  #tjPackCard .pk-chip.cur{ border-color:rgba(69,230,255,.6); color:#45e6ff; animation:blink 1.2s infinite; }
+  #tjPackCard .pk-remed{ margin-top:8px; padding:7px 10px; border:1px solid rgba(243,181,77,.45); background:rgba(243,181,77,.08); color:#f3b54d; border-radius:4px; display:flex; align-items:center; gap:8px; animation:tjRemedBreath 1.8s ease-in-out infinite; }
+  #tjPackCard .pk-btns{ margin-top:8px; display:flex; gap:8px; justify-content:flex-end; }
+  #tjPackCard .proto-btn{ padding:4px 10px; font-size:11px; }
+  /* 虚拟扫码枪（展会演示） */
+  /* 虚拟扫码枪: 默认隐藏, 仅存在启用的包装结算配置且在监控页时由 JS 放出 (对齐主程序零差异原则) */
+  #tjScanPill{ position:fixed; left:14px; bottom:14px; z-index:881; display:none; align-items:center; gap:8px; padding:7px 12px; background:rgba(6,16,28,.94); border:1px solid rgba(42,168,255,.4); border-radius:20px; color:var(--cyan-soft); font-size:12px; cursor:pointer; box-shadow:0 4px 18px rgba(0,0,0,.4); }
+  #tjScanPill:hover{ border-color:rgba(42,168,255,.7); }
+  #tjScanPill.show{ display:flex; }
+  #tjScanBox{ position:fixed; left:14px; bottom:52px; z-index:882; display:none; gap:8px; padding:10px 12px; background:rgba(6,16,28,.97); border:1px solid rgba(42,168,255,.45); border-radius:8px; box-shadow:0 8px 26px rgba(0,0,0,.5); }
+  #tjScanBox.show{ display:flex; }
+  #tjScanBox .proto-input{ width:210px; height:32px; }
+  /* 录像异常浮动入口 */
+  #tjRecFailBadge{ position:fixed; right:14px; bottom:14px; z-index:881; display:none; width:40px; height:40px; border-radius:50%; background:rgba(40,8,12,.95); border:1.5px solid rgba(255,82,99,.7); color:#ff8a96; font-size:12px; font-weight:700; align-items:center; justify-content:center; cursor:pointer; box-shadow:0 0 16px rgba(255,82,99,.4); animation:blink 1.6s infinite; }
+  #tjRecFailBadge.show{ display:flex; }
+  #tjRecFailPanel{ position:fixed; right:14px; bottom:62px; z-index:882; display:none; width:430px; max-height:46vh; overflow:auto; padding:12px 14px; background:rgba(10,6,10,.97); border:1px solid rgba(255,82,99,.5); border-radius:6px; color:#f3c5cb; font-size:12px; box-shadow:0 10px 30px rgba(0,0,0,.55); }
+  #tjRecFailPanel.show{ display:block; }
+  #tjRecFailPanel table{ width:100%; border-collapse:collapse; font-size:11px; margin-top:8px; }
+  #tjRecFailPanel th,#tjRecFailPanel td{ padding:5px 8px; text-align:left; border-bottom:1px solid rgba(255,82,99,.15); }
+  /* 顶部条·开工四要素芯片（v3.29 川南） */
+  .strip .tj-taskinfo{ display:inline-flex; gap:6px; align-items:center; }
+  .strip .tj-taskinfo .ti{ font-size:11px; padding:2px 9px; border-radius:9px; border:1px solid rgba(42,168,255,.35); color:#bfe3ff; background:rgba(42,168,255,.08); white-space:nowrap; }
+  .strip .tj-taskinfo .ti b{ color:#45e6ff; font-weight:600; margin-left:3px; font-variant-numeric:tabular-nums; }
+  /* 周期性强制动作进度条（v3.5+，SOP 面板尾部） */
+  .sop .pa-chips{ display:flex; gap:8px; flex-wrap:wrap; padding:0 16px 8px; }
+  .sop .pa-chips .pa{ font-size:10px; padding:2px 9px; border-radius:9px; border:1px solid rgba(42,168,255,.3); color:var(--txt2); }
+  .sop .pa-chips .pa.due{ color:#f3b54d; border-color:rgba(243,181,77,.5); animation:blink 1.4s infinite; }
+  .sop .pa-chips .pa.overdue{ color:#ff5263; border-color:rgba(255,82,99,.55); animation:blink 1s infinite; }
 </style>
 </head>
 <body>
@@ -1157,6 +1339,7 @@
 <div class="app">
   <!-- Header -->
   <div class="header">
+    <button id="navToggle" title="导航菜单">☰</button>
     <div class="brand">
       <img class="logo" src="tyenjun-logo.png" alt="天军 TYENJUN" />
       <div class="name"><span id="scBrand">天军机器人</span><small>TYENJUN ROBOTICS</small></div>
@@ -1177,6 +1360,8 @@
   </div>
 
   <div class="body">
+    <!-- Nav 抽屉遮罩 (对齐主程序: 点遮罩收起) -->
+    <div id="navMask"></div>
     <!-- Nav -->
     <div class="nav">
       <div class="item active" data-route="/monitor" data-page="实时监控"><span class="ic">▦</span>实时监控</div>
@@ -1205,6 +1390,7 @@
         <span class="kv">工位<b id="stripStation">01 号</b></span>
         <span class="sep"></span>
         <span class="kv">班次<b id="stripShift">白班</b></span>
+        <span class="tj-taskinfo" id="tjTaskInfo" style="display:none"></span>
         <span class="beat">平均节拍<b>2.0s</b> &nbsp; 当前节拍 <b>1.53s</b></span>
         <span class="det-ctrl">
           <button class="proto-btn primary" id="detStartBtn" title="按启用项目加载模型并开始推理">▶ 开始</button>
@@ -1249,6 +1435,31 @@
             <div class="detbox" id="detbox"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i><span class="dlabel">装电池 <span id="conf">94%</span></span></div>
             <div class="hud-sweep"></div>
             <div class="feed-note">示意画面 · 待接入现场摄像头</div>
+            <!-- v1.3.0 R5: 无输入源动态占位层 (默认即显示, 避免示例照片闪现; 接到真流后收起) -->
+            <div id="tjNoSrc" class="show">
+              <div class="rings"><i></i><i></i><i></i>
+                <div class="core"><svg viewBox="0 0 24 24"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h9A1.5 1.5 0 0 1 15 7.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 3 16.5z"/><path d="M15 10.2 20 7v10l-5-3.2"/></svg></div>
+              </div>
+              <div class="t1" id="tjNoSrcT1">正在连接检测服务</div>
+              <div class="t2" id="tjNoSrcT2">等待后端画面数据…</div>
+              <div class="scanbar"><i></i></div>
+              <button class="proto-btn primary" id="tjNoSrcGo">接入输入源</button>
+            </div>
+            <!-- v1.3.0 R5: 视频文件源播放控制条 (仅视频源显示, 悬停浮现) -->
+            <div id="tjVidCtrl">
+              <div class="row1">
+                <span class="vt" id="vcCur">00:00</span>
+                <input type="range" id="vcProg" min="0" max="1000" step="1" value="0" />
+                <span class="vt" id="vcDur">00:00</span>
+                <select class="proto-select" id="vcSpeed">
+                  <option value="0.5">0.5x</option><option value="1" selected>1x</option>
+                  <option value="2">2x</option><option value="4">4x</option><option value="8">8x</option>
+                </select>
+                <label class="sync" title="同步模式：逐帧检测，确保每一帧都被处理"><input type="checkbox" id="vcSync" />逐帧</label>
+              </div>
+              <div class="note end" id="vcEnded" style="display:none">视频播放完毕</div>
+              <div class="note sync" id="vcSyncNote" style="display:none">逐帧检测模式：按检测速度播放，确保每帧都被检测</div>
+            </div>
           </div>
           <div class="vtag live">AI检测中</div>
           <div class="vmeta">FPS: 25<br/>分辨率: 1920×1080</div>
@@ -1270,6 +1481,10 @@
               <div class="row cur"><span>垫片</span><span class="p">3/6</span></div>
               <div class="row"><span>弹簧</span><span class="p">2/4</span></div>
               <div class="row warn"><span>端子</span><span class="p">0/2</span></div>
+            </div>
+            <div class="a-set a-wg">
+              <h4>投料识别结果</h4>
+              <div class="row cur"><span>等待秤读数…</span><span class="p">--</span></div>
             </div>
             <div class="a-set a-pi">
               <h4>逐件覆盖结果</h4>
@@ -1303,6 +1518,9 @@
             <div class="seg"></div>
             <div class="endcap end">✓ 结束</div>
           </div>
+          <!-- v3.32 同标签拆分区域轮次 chips + v3.5 周期性强制动作进度（真值驱动，默认空） -->
+          <div class="seq-chips" id="sopRoundChips" style="display:none"></div>
+          <div class="pa-chips" id="sopPaChips" style="display:none"></div>
         </div>
 
         <!-- tracking 清点面板（项目下拉切到跟踪类项目时替换 SOP） -->
@@ -1347,6 +1565,42 @@
                 <span class="pi-item ok">1</span><span class="pi-item ok">2</span><span class="pi-item ok">3</span><span class="pi-item ok">4</span>
                 <span class="pi-item cur">5</span><span class="pi-item">6</span><span class="pi-item">7</span><span class="pi-item">8</span>
               </div>
+            </div>
+          </div>
+          <!-- v3.28 漏打挂起待补横幅（真值驱动: per_item_state.pending_remediation） -->
+          <div class="pi-remed" id="piRemedBar">
+            <span>⚠ 检出漏打，已挂起待补：</span>
+            <span id="piRemedList"></span>
+            <button class="proto-btn" id="piRemedForceBtn">人工确认落账</button>
+          </div>
+        </div>
+
+        <!-- v1.3.0 称重投料看板（logic_mode=weighing 时替换 SOP，真值驱动: /weighing/state） -->
+        <div class="panel weigh-strip">
+          <div class="wg-head">
+            <span class="wg-title">称重投料</span>
+            <span class="wg-phase idle" id="wgPhase">待机</span>
+            <span class="wg-sn">工件 <b id="wgSn">—</b></span>
+            <span class="wg-sn">配方 <b id="wgRecipe">—</b></span>
+            <span class="wg-ctl">
+              <button class="proto-btn" id="wgTareBtn">去皮</button>
+              <button class="proto-btn" id="wgZeroBtn">置零</button>
+              <button class="proto-btn ng" id="wgResetBtn">复位</button>
+            </span>
+          </div>
+          <div class="wg-body">
+            <div class="wg-ctx">
+              <label>型号 / 配方</label>
+              <select class="proto-select" id="wgModelSel"><option value="">— 选择型号 —</option></select>
+              <label>工件条码</label>
+              <input class="proto-input" id="wgSnInput" placeholder="扫码或输入后回车" />
+            </div>
+            <div class="wg-live" id="wgLive">
+              <div class="wl-num"><span id="wgGross">0.0</span><span class="u" id="wgUnit">g</span></div>
+              <div class="wl-sub">实时毛重 · 净重 <b id="wgNet">0.0</b></div>
+            </div>
+            <div class="wg-rail" id="wgRail">
+              <div class="wg-mat"><div class="wm-name">等待配方</div><div class="wm-std">选择型号后显示物料序列</div><div class="wm-net"><b>—</b></div></div>
             </div>
           </div>
         </div>
@@ -1446,7 +1700,7 @@
 
         <div class="rcpair">
           <div class="panel topng-panel" data-sc-toggle="ngTop3">
-            <div class="ph"><span class="ph-std">NG步骤TOP3</span><span class="ph-trk">NG物品 TOP3</span><span class="ph-pi">逐件实时反馈</span><span class="more">更多 ›</span></div>
+            <div class="ph"><span class="ph-std">NG步骤TOP3</span><span class="ph-trk">NG物品 TOP3</span><span class="ph-pi">逐件实时反馈</span><span class="ph-wg">投料实时反馈</span><span class="more">更多 ›</span></div>
             <div class="topng t-std">
               <div class="row"><span class="rk">1</span>装入电池<span class="v">11.1% (1)</span></div>
               <div class="row"><span class="rk b2">2</span>压合确认<span class="v">11.1% (1)</span></div>
@@ -1456,6 +1710,12 @@
               <div class="row"><span class="rk">1</span>垫片 漏装<span class="v">缺 3 片</span></div>
               <div class="row"><span class="rk b2">2</span>弹簧 漏装<span class="v">缺 2 件</span></div>
               <div class="row"><span class="rk b3">3</span>端子 漏装<span class="v">缺 2 件</span></div>
+            </div>
+            <div class="topng t-wg">
+              <div class="pi-fb-big" id="wgFbBig">待机中</div>
+              <div class="pi-fb-row"><span>当前物料</span><b id="wgFbMat">—</b></div>
+              <div class="pi-fb-row"><span>目标 / 实际</span><b id="wgFbTgt">— / —</b></div>
+              <div class="pi-fb-row"><span>已完成物料</span><b id="wgFbDone">— / —</b></div>
             </div>
             <div class="topng t-pi">
               <div class="pi-fb-big">还差 <b>3</b> 颗未拧紧</div>
@@ -1552,6 +1812,8 @@
                 <label class="mode-pill" data-logic-mode="custom"><input type="radio" name="logicMode" /><div><b>自定义模式</b>基于顺序/检测模式添加条件。</div></label>
                 <label class="mode-pill" data-logic-mode="tracking"><input type="radio" name="logicMode" /><div><b>跟踪模式</b>为每个物品分配 ID。</div></label>
                 <label class="mode-pill" data-logic-mode="per_item"><input type="radio" name="logicMode" /><div><b>逐件模式</b>每件都要被动作覆盖一次。</div></label>
+                <label class="mode-pill" data-logic-mode="weighing"><input type="radio" name="logicMode" /><div><b>称重投料</b>电子秤读数驱动，逐料对比标准量防错。</div></label>
+                <label class="mode-pill" data-logic-mode="region_events"><input type="radio" name="logicMode" /><div><b>区域事件</b>按目标进出区域的动作规则判步骤。</div></label>
               </div>
             </div>
             <div class="project-side-panel" data-side-panel="events" data-lg="counters">
@@ -1634,6 +1896,8 @@
             <div class="proto-block" data-logic-show="sequential custom" data-lg="ng"><h4>NG 周期保护</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="all" data-lg="dedup"><h4>防重复结算</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="sequential detection custom per_item" data-lg="sim"><h4>同时出现组</h4><div data-lg-body></div></div>
+            <div class="proto-block" data-logic-show="weighing" data-lg="weighing"><h4>称重投料 — 配置 (v3.31)</h4><div data-lg-body></div></div>
+            <div class="proto-block" data-logic-show="region_events" data-lg="regionEvents"><h4>区域事件 — 动作规则 (v3.32)</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="all" data-lg="filter"><h4>误判过滤（高级）</h4><div data-lg-body></div></div>
           </div>
           <div class="project-work" data-project-panel="events">
@@ -1950,6 +2214,7 @@
               <div class="project-tab active" data-data-tab="record">记录设置</div>
               <div class="project-tab" data-data-tab="export">数据导出</div>
               <div class="project-tab" data-data-tab="cleanup">存储与清理</div>
+              <div class="project-tab" data-data-tab="weighing">称重台账</div>
             </div>
 
             <div data-data-panel="record">
@@ -2015,6 +2280,13 @@
               <div style="display:flex;gap:6px;"><input class="proto-input" type="date" id="cleanRangeStart" /><input class="proto-input" type="date" id="cleanRangeEnd" /><button class="proto-btn ng" id="cleanRangeBtn">删除</button></div>
               <div class="afill aurora"><span class="lab">● 存储健康巡检 · <b>OK</b></span></div>
             </div>
+
+            <!-- v1.3.0 称重台账 (/weighing/records, logic_mode=weighing 的逐件逐料投料记录) -->
+            <div data-data-panel="weighing" style="display:none;">
+              <div class="tiny-note" style="margin:0 0 8px;">称重投料逐件记录：工件码 / 型号 / 各料别实际净重与判定（v3.31+，需激活称重投料项目）。</div>
+              <div class="rowline" style="margin-bottom:8px;"><button class="proto-btn sm" id="wgRecRefresh">刷新</button><span class="tiny-note" id="wgRecCount"></span></div>
+              <div class="mes-scroll" style="max-height:420px;" id="wgRecBox"><div class="tj-empty"><span class="et">暂无投料记录</span><span class="eh">称重投料项目结算后自动落库</span></div></div>
+            </div>
           </div>
         </div>
 
@@ -2052,6 +2324,8 @@
           <div class="mes-tab" data-mes-tab="gateway">外部对接</div>
           <div class="mes-tab" data-mes-tab="external">外部设备</div>
           <div class="mes-tab" data-mes-tab="cluster">集群汇总</div>
+          <div class="mes-tab" data-mes-tab="inbound">生产管控入站</div>
+          <div class="mes-tab" data-mes-tab="packaging">包装结算</div>
         </div>
 
         <div class="mes-body">
@@ -2245,6 +2519,38 @@
                   <div class="tj-empty" data-boxes-empty><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h4l2 3h6l2-3h4"/><path d="M5 13V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v6"/><path d="M5 13v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg></span><span class="et">暂无箱体汇总</span><span class="eh">副机上报后按箱号聚齐显示</span></div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- v1.3.0 生产管控入站 (v3.26+ /mes/inbound/*，外部 MES 主动推开工/完工/报警) -->
+          <div class="mes-panel" data-mes-panel="inbound">
+            <div class="tiny-note" style="margin-bottom:8px;">外部生产管控系统通过 REST 主动下发开工 / 完工 / 报警，本机按规格自动切项目、上屏四要素、维护在途报警台账（v3.26+，只读监视，接收配置在主程序或 API 修改）。</div>
+            <div class="panel" style="padding:12px 14px;">
+              <div class="mes-toolbar"><span class="ph">接收配置</span><span class="grow"></span><span class="badge-sm" id="mibEnableBadge">读取中…</span><button class="proto-btn sm" id="mibRefreshBtn">刷新</button></div>
+              <div class="proto-grid2" id="mibCfgGrid" style="margin-top:8px;"><div class="tj-loading"><span class="ring"></span>加载中</div></div>
+            </div>
+            <div class="mes-2col" style="margin-top:12px;">
+              <div class="panel" style="padding:12px 14px;">
+                <div class="ph" style="margin-bottom:10px;">当前生产任务（四要素）</div>
+                <div class="mes-scroll" id="mibTaskBox"><div class="tj-empty"><span class="et">暂无在途任务</span><span class="eh">外部系统下发开工后显示</span></div></div>
+              </div>
+              <div class="panel" style="padding:12px 14px;">
+                <div class="mes-toolbar" style="margin-bottom:10px;"><div class="ph">在途报警台账</div><span class="grow"></span><span class="badge-sm ng" id="mibAlarmCount" style="display:none">0</span></div>
+                <div class="mes-scroll" id="mibAlarmBox"><div class="tj-empty"><span class="et">暂无在途报警</span><span class="eh">外部系统报警下发后进入台账，处理后闭环消除</span></div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- v1.3.0 包装结算 (v3.21+ /packaging-flows/*，上银包装线) -->
+          <div class="mes-panel" data-mes-panel="packaging">
+            <div class="tiny-note" style="margin-bottom:8px;">包装箱结算流：扫码开箱 → 逐件装箱视觉确认 → 满箱结算推 MES（v3.21+）。支持人工强制结算 / 滑轨补做 / NG 补做重检。</div>
+            <div class="panel" style="padding:12px 14px;">
+              <div class="mes-toolbar"><span class="ph">结算流配置</span><span class="grow"></span><button class="proto-btn sm" id="pkRefreshBtn">刷新</button></div>
+              <div class="mes-scroll" id="pkCfgBox" style="margin-top:8px;"><div class="tj-loading"><span class="ring"></span>加载中</div></div>
+            </div>
+            <div class="panel" style="padding:12px 14px;margin-top:12px;">
+              <div class="mes-toolbar"><span class="ph">运行状态</span><span class="grow"></span><span class="tiny-note">选中左侧配置后展示当前箱进度</span></div>
+              <div id="pkStateBox" style="margin-top:8px;"><div class="tj-empty"><span class="et">未选择结算流</span><span class="eh">点击上方配置行查看当前箱运行状态</span></div></div>
             </div>
           </div>
         </div>
@@ -2451,65 +2757,34 @@
           <!-- ============ 检测框设置 ============ -->
           <div class="set-panel" data-set-panel="box">
             <div class="set-grid">
-              <!-- 检测框外观 -->
+              <!-- 检测框外观（接真: detection_config, 与提示框同一保存按钮; 监控页画框即时吃这些值） -->
               <div class="panel acard">
                 <div class="card-h"><span class="t">检测框外观</span></div>
-                <div class="swrow"><span>正常检测框颜色</span><input class="proto-color" type="color" value="#22d3a0" /></div>
-                <div class="swrow"><span>NG 检测框颜色</span><input class="proto-color" type="color" value="#ef4444" /></div>
-                <div class="afield"><label>检测框线宽</label><input class="arange" type="range" value="40" /></div>
-                <div class="afield"><label>标签字体大小</label><input class="arange" type="range" value="55" /></div>
-                <div class="swrow"><span>显示置信度</span><input class="proto-switch" type="checkbox" checked /></div>
-                <div class="swrow"><span>NG 弹窗显示原因</span><input class="proto-switch" type="checkbox" checked /></div>
+                <div class="swrow"><span>正常检测框颜色</span><input class="proto-color" type="color" value="#00FF00" data-dcf="boxColor" /></div>
+                <div class="swrow"><span>NG 检测框颜色</span><input class="proto-color" type="color" value="#FF0000" data-dcf="boxColorNG" /></div>
+                <div class="form-grid"><div class="filt"><label>检测框线宽（px）</label><input class="proto-input" type="number" min="1" max="10" value="2" data-dcf="boxLineWidth" /></div>
+                <div class="filt"><label>标签字体大小（px）</label><input class="proto-input" type="number" min="8" max="40" value="14" data-dcf="labelFontSize" /></div></div>
+                <div class="swrow"><span>显示置信度</span><input class="proto-switch" type="checkbox" checked data-dcf="showConfidence" /></div>
+                <div class="swrow"><span>NG 提示显示原因</span><input class="proto-switch" type="checkbox" data-dcf="showNgReason" /></div>
+                <div class="swrow"><span>语音播报</span><input class="proto-switch" type="checkbox" data-dcf="voiceEnabled" /></div>
+                <div class="afield"><label>播报音量（0-100）</label><input class="proto-input" type="number" min="0" max="100" value="100" data-dcf="voiceVolume" /></div>
               </div>
               <!-- 效果预览 -->
               <div class="panel acard">
                 <div class="card-h"><span class="t">效果预览</span></div>
                 <div class="afill graph" style="min-height:200px;"><span class="lab">● 检测框 / 提示框 实时预览 <b>LIVE</b></span></div>
               </div>
-              <!-- 系统预设提示框 -->
-              <div class="panel acard span2">
-                <div class="card-h"><span class="t">系统预设提示框</span></div>
-                <div class="set-grid">
-                  <div>
-                    <div class="set-sub" style="margin-top:0;">合格提示框</div>
-                    <div class="swrow"><span>颜色</span><input class="proto-color" type="color" value="#22d3a0" /></div>
-                    <div class="form-grid"><div class="filt"><label>显示时长（秒）</label><input class="arange" type="range" value="50" /></div><div class="filt"><label>字体大小</label><input class="arange" type="range" value="55" /></div></div>
-                    <div class="afield"><label>位置</label><select class="proto-select"><option>右上角</option><option>左上角</option><option>右下角</option><option>左下角</option><option>视频顶部居中</option></select></div>
-                    <div class="form-grid"><div class="filt"><label>主文字</label><input class="proto-input" placeholder="合格" /></div><div class="filt"><label>副文字（可选）</label><input class="proto-input" /></div></div>
-                  </div>
-                  <div>
-                    <div class="set-sub" style="margin-top:0;">NG 提示框</div>
-                    <div class="swrow"><span>颜色</span><input class="proto-color" type="color" value="#ef4444" /></div>
-                    <div class="form-grid"><div class="filt"><label>显示时长（秒）</label><input class="arange" type="range" value="60" /></div><div class="filt"><label>字体大小</label><input class="arange" type="range" value="60" /></div></div>
-                    <div class="afield"><label>位置</label><select class="proto-select"><option>视频顶部居中</option><option>右上角</option><option>左上角</option><option>右下角</option><option>左下角</option></select></div>
-                    <div class="form-grid"><div class="filt"><label>主文字</label><input class="proto-input" placeholder="不合格" /></div><div class="filt"><label>副文字（可选）</label><input class="proto-input" /></div></div>
-                  </div>
-                  <div>
-                    <div class="set-sub" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;">扫码提示框 <input class="proto-switch" type="checkbox" checked /></div>
-                    <div class="swrow"><span>颜色</span><input class="proto-color" type="color" value="#2aa8ff" /></div>
-                    <div class="form-grid"><div class="filt"><label>显示时长（秒）</label><input class="arange" type="range" value="40" /></div><div class="filt"><label>字体大小</label><input class="arange" type="range" value="50" /></div></div>
-                    <div class="afield"><label>位置</label><select class="proto-select"><option>右上角</option><option>左上角</option><option>右下角</option><option>左下角</option><option>视频顶部居中</option></select></div>
-                    <div class="form-grid"><div class="filt"><label>主文字</label><input class="proto-input" placeholder="扫码成功" /></div><div class="filt"><label>副文字（可选）</label><input class="proto-input" placeholder="可显示条码" /></div></div>
-                  </div>
-                  <div>
-                    <div class="set-sub" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;">未绑码提示框 <input class="proto-switch" type="checkbox" /></div>
-                    <div class="swrow"><span>颜色</span><input class="proto-color" type="color" value="#eab308" /></div>
-                    <div class="form-grid"><div class="filt"><label>显示时长（秒）</label><input class="arange" type="range" value="50" /></div><div class="filt"><label>字体大小</label><input class="arange" type="range" value="50" /></div></div>
-                    <div class="afield"><label>位置</label><select class="proto-select"><option>视频顶部居中</option><option>右上角</option><option>左上角</option><option>右下角</option><option>左下角</option></select></div>
-                    <div class="form-grid"><div class="filt"><label>主文字</label><input class="proto-input" placeholder="⚠ 未绑码" /></div><div class="filt"><label>副文字（可选）</label><input class="proto-input" placeholder="本次结算未绑定工件条码" /></div></div>
-                  </div>
+              <!-- 系统预设提示框（接真: 激活项目 detection_config.toasts, 保存写回所有在用工位绑定项目, 对齐主程序 saveDetectionSettings） -->
+              <div class="panel acard span2" id="toastPresetCard">
+                <div class="card-h"><span class="t">系统预设提示框</span><button class="proto-btn primary" id="toastSaveBtn">保存检测框与提示框设置</button></div>
+                <div class="set-grid" id="toastPresetGrid">
+                  <div class="tiny-note" style="grid-column:1/-1;text-align:center;padding:14px 0;">正在读取激活项目的提示框配置…</div>
                 </div>
               </div>
-              <!-- 自定义提示框 -->
-              <div class="panel acard span2">
-                <div class="card-h"><span class="t">自定义提示框</span><button class="proto-btn primary">+ 新建提示框</button></div>
-                <div class="ev-block">
-                  <div class="eh"><input class="proto-input" placeholder="提示框名称" style="max-width:240px;" /><button class="proto-btn ng">删除</button></div>
-                  <div class="swrow"><span>颜色</span><input class="proto-color" type="color" value="#a855f7" /></div>
-                  <div class="form-grid"><div class="filt"><label>显示时长（秒）</label><input class="arange" type="range" value="50" /></div><div class="filt"><label>字体大小</label><input class="arange" type="range" value="55" /></div></div>
-                  <div class="afield"><label>位置</label><select class="proto-select"><option>右上角</option><option>左上角</option><option>右下角</option><option>左下角</option><option>视频顶部居中</option></select></div>
-                  <div class="form-grid"><div class="filt"><label>主文字</label><input class="proto-input" placeholder="显示事件名称" /></div><div class="filt"><label>副文字（可选）</label><input class="proto-input" placeholder="可选的副标题" /></div></div>
-                </div>
+              <!-- 自定义提示框（接真: detection_config.customToasts, 事件配置里可选用） -->
+              <div class="panel acard span2" id="toastCustomCard">
+                <div class="card-h"><span class="t">自定义提示框</span><button class="proto-btn primary" id="toastCustomAddBtn">+ 新建提示框</button></div>
+                <div id="toastCustomList"><div class="tiny-note" style="text-align:center;padding:14px 0;">暂无自定义提示框</div></div>
               </div>
             </div>
           </div>
@@ -2536,6 +2811,17 @@
                   <div class="swrow"><span>启用 MediaPipe 叠加</span><input class="proto-switch" type="checkbox" id="perfMpEnable" /></div>
                   <div class="swrow"><span>姿态骨架</span><input class="proto-switch" type="checkbox" id="perfMpPose" /></div>
                   <div class="swrow"><span>手部关键点</span><input class="proto-switch" type="checkbox" id="perfMpHands" /></div>
+                </div>
+                <!-- v1.3.0 R6: 自定义纯色骨架样式 (对齐主程序 v3.32.0, 走同一 /source/stream/config) -->
+                <div class="set-sub" style="display:flex;justify-content:space-between;align-items:center;">骨架样式 <button class="proto-btn" id="perfMpHudPreset" title="一键套用与本界面同源的 HUD 配色 (青色辉光系)">✦ HUD 风格预设</button></div>
+                <div class="swrow"><span>自定义骨架样式 <span class="tiny-note">开启后骨架用纯色绘制，关闭 = MediaPipe 默认多彩配色</span></span><input class="proto-switch" type="checkbox" id="perfMpStyleEnable" /></div>
+                <div class="form-grid" id="perfMpStyleGrid" style="display:none;margin-top:8px;">
+                  <div class="filt"><label>姿态连线颜色</label><input type="color" class="proto-input" style="height:34px;padding:3px;" id="perfMpPoseColor" value="#00FF00" /></div>
+                  <div class="filt"><label>姿态关键点颜色</label><div style="display:flex;gap:8px;align-items:center;"><input type="color" class="proto-input" style="height:34px;padding:3px;flex:1;" id="perfMpPosePtColor" value="#00FF00" /><label class="tiny-note" style="display:flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer;"><input type="checkbox" id="perfMpPosePtFollow" />跟随连线</label></div></div>
+                  <div class="filt"><label>姿态线条粗细 (1-10)</label><input class="proto-input" type="number" min="1" max="10" step="1" value="2" id="perfMpPoseThick" /></div>
+                  <div class="filt"><label>手部连线颜色</label><input type="color" class="proto-input" style="height:34px;padding:3px;" id="perfMpHandsColor" value="#00FF00" /></div>
+                  <div class="filt"><label>手部关键点颜色</label><div style="display:flex;gap:8px;align-items:center;"><input type="color" class="proto-input" style="height:34px;padding:3px;flex:1;" id="perfMpHandsPtColor" value="#00FF00" /><label class="tiny-note" style="display:flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer;"><input type="checkbox" id="perfMpHandsPtFollow" />跟随连线</label></div></div>
+                  <div class="filt"><label>手部线条粗细 (1-10)</label><input class="proto-input" type="number" min="1" max="10" step="1" value="2" id="perfMpHandsThick" /></div>
                 </div>
                 <div class="form-grid" style="margin-top:8px;">
                   <div class="filt"><label>检测置信度 (0.1-1.0)</label><input class="proto-input" type="number" step="0.05" min="0.1" max="1" value="0.7" id="perfMpConf" /></div>
@@ -2572,6 +2858,14 @@
                 <div class="afield"><label>平滑程度（观测噪声 R）</label><input class="proto-input" type="number" step="0.01" min="0" value="0.1" id="kalR" /></div>
                 <div class="afield"><label>目标消失容忍帧数</label><input class="proto-input" type="number" step="1" min="0" value="5" id="kalMiss" /></div>
                 <div style="display:flex;gap:8px;"><button class="proto-btn" style="flex:1;" data-kal-preset="smooth">🎯 更平滑</button><button class="proto-btn" style="flex:1;" data-kal-preset="balanced">⚖️ 平衡</button><button class="proto-btn" style="flex:1;" data-kal-preset="responsive">⚡ 快响应</button></div>
+              </div>
+              <!-- v1.3.0 轮询与日志条数 (v3.29 去硬编码: /system/polling + /system/log-limits) -->
+              <div class="panel acard span2">
+                <div class="card-h"><span class="t">面板轮询与日志条数</span><div style="display:flex;gap:8px;align-items:center;"><span class="badge-sm">v3.29+</span><button class="proto-btn primary" id="pollSaveBtn">保存</button></div></div>
+                <div class="note-box" style="margin-bottom:10px;">各管理面板的自动刷新间隔（毫秒）与「最近日志」显示条数，改小更实时、改大更省资源。</div>
+                <div class="form-grid" id="pollGrid"><div class="tj-loading"><span class="ring"></span>加载中</div></div>
+                <div class="set-sub">日志显示条数</div>
+                <div class="form-grid" id="logLimitGrid"><div class="tj-loading"><span class="ring"></span>加载中</div></div>
               </div>
             </div>
           </div>
@@ -3018,38 +3312,50 @@
       startBtn.addEventListener('click', async function(){
         var type=window.__tjSrcType||'camera';
         startBtn.disabled=true; var old=startBtn.textContent; startBtn.textContent='启动中...';
+        // v1.3.0 R5: 启动成功的源落本地记忆 (对齐主程序 sourceStore localStorage),
+        // 检测中心打开时若源没在跑, 可按记忆自动接回
+        function remember(endpoint, payload){
+          try{ localStorage.setItem('tj_showcase_last_source', JSON.stringify({endpoint:endpoint, payload:payload})); }catch(e){}
+        }
         try{
           if(type==='video'){
             if(!window.__tjVideoPath){ showProtoToast('请先上传视频文件'); return; }
             var sp=parseFloat((document.getElementById('videoSpeed')||{}).value||'1')||1;
             await tjApi.post('/source/video/start', { file_path:window.__tjVideoPath, speed:sp });
+            remember('/source/video/start', { file_path:window.__tjVideoPath, speed:sp });
             showProtoToast('视频输入源已启动');
           } else if(type==='image'){
             if(!window.__tjImagePath){ showProtoToast('请先上传图片文件'); return; }
             await tjApi.post('/source/image/set', { file_path:window.__tjImagePath });
+            remember('/source/image/set', { file_path:window.__tjImagePath });
             showProtoToast('图片已设为输入源');
           } else if(type==='camera'){
             var idx=parseInt((document.getElementById('camSel')||{}).value,10);
             if(isNaN(idx)){ showProtoToast('未检测到可用摄像头'); return; }
             var res=String((document.getElementById('camResSel')||{}).value||'1280x720').split('x');
             var fps=parseInt((document.getElementById('camFpsSel')||{}).value,10)||10;
-            await tjApi.post('/source/camera/start', { device_index:idx, width:+res[0]||1280, height:+res[1]||720, fps:fps });
+            var camPay={ device_index:idx, width:+res[0]||1280, height:+res[1]||720, fps:fps };
+            await tjApi.post('/source/camera/start', camPay);
+            remember('/source/camera/start', camPay);
             showProtoToast('摄像头已启动');
           } else if(type==='rtsp'){
             var url=((document.getElementById('rtspUrl')||{}).value||'').trim();
             if(!url){ showProtoToast('请填写 RTSP 地址'); return; }
             await tjApi.post('/source/rtsp/start', { url:url });
+            remember('/source/rtsp/start', { url:url });
             showProtoToast('RTSP 拉流已启动');
           } else if(type==='hcnetsdk'){
             var ip=((document.getElementById('hcIp')||{}).value||'').trim();
             if(!ip){ showProtoToast('请填写设备 IP'); return; }
-            await tjApi.post('/source/hcnetsdk/start', {
+            var hcPay={
               ip:ip,
               port:parseInt((document.getElementById('hcPort')||{}).value,10)||8000,
               username:(document.getElementById('hcUser')||{}).value||'admin',
               password:(document.getElementById('hcPwd')||{}).value||'',
               channel:parseInt((document.getElementById('hcChannel')||{}).value,10)||1,
-              stream_type:parseInt((document.getElementById('hcStream')||{}).value,10)||1 });
+              stream_type:parseInt((document.getElementById('hcStream')||{}).value,10)||1 };
+            await tjApi.post('/source/hcnetsdk/start', hcPay);
+            remember('/source/hcnetsdk/start', hcPay);
             showProtoToast('海康 SDK 已连接');
           } else {
             showProtoToast('该输入源类型暂不支持在插件内启动');
@@ -3992,23 +4298,139 @@
         }
       });
     }catch(e){}
-    // 检测框设置按当前激活项目加载 (切项目跟着变)
-    try{
-      var pid=(typeof _tjScopePid==='function')?await _tjScopePid():null;
-      if(pid){
-        var pr=await tjApi.get('/projects/'+pid)||{};
-        var dc=pr.detection_config||{};
-        var boxp=root.querySelector('[data-set-panel="box"]')||root;
-        var cols=boxp.querySelectorAll('input.proto-color');
-        if(cols[0]&&dc.boxColor) cols[0].value=dc.boxColor;
-        if(cols[1]&&dc.boxColorNG) cols[1].value=dc.boxColorNG;
-        var rng=boxp.querySelector('input.arange');
-        if(rng&&dc.boxLineWidth!=null) rng.value=Math.max(0,Math.min(100,(dc.boxLineWidth||2)*20));
-      }
-    }catch(e){}
+    // 检测框外观 + 提示框设置: 按激活项目 detection_config 统一加载 (tjLoadToastCfg 内含)
+    try{ tjLoadToastCfg(); }catch(e){}
     try{ tjLoadXf(); }catch(e){}
   }
   window.tjLoadSettings=tjLoadSettings;
+
+  // ==================== 设置页·提示框设置接真 ====================
+  // 数据源 = 激活项目 detection_config (toasts.{ok,ng,scan,warn_no_barcode} + customToasts);
+  // 保存对齐主程序 saveDetectionSettings: 写回激活项目 + 所有在用工位绑定的项目, 多工位改一次全生效。
+  var _TOAST_DEF={
+    ok:{name:'合格提示框',color:'#10b981',duration:2,fontSize:18,position:'top-right',text:'合格',subText:''},
+    ng:{name:'NG提示框',color:'#ef4444',duration:3,fontSize:18,position:'top-right',text:'不合格',subText:''},
+    scan:{name:'扫码提示框',enabled:true,color:'#0891b2',duration:2,fontSize:18,position:'top-right',text:'扫码成功',subText:''},
+    warn_no_barcode:{name:'未绑码提示框',enabled:true,color:'#f59e0b',duration:5,fontSize:16,position:'top-right',text:'⚠ 未绑码',subText:'本次结算未绑定工件条码'}
+  };
+  var _TOAST_POS=[['top-right','右上角'],['top-left','左上角'],['bottom-right','右下角'],['bottom-left','左下角'],['center','视频顶部居中']];
+  window.__tjToastEdit=null; // {toasts:{...}, customToasts:[...]} 编辑缓冲
+  function _toastFields(tt, t, withEnable, withName){
+    // tt: 'ok'/'ng'/'scan'/'warn_no_barcode' 或 'c0'/'c1'…(自定义索引)
+    function a(f){ return ' data-tt="'+tt+'" data-tf="'+f+'"'; }
+    var posOpts=_TOAST_POS.map(function(p){ return '<option value="'+p[0]+'"'+((t.position||'top-right')===p[0]?' selected':'')+'>'+p[1]+'</option>'; }).join('');
+    return (withName?('<div class="eh"><input class="proto-input" placeholder="提示框名称" value="'+_esc(t.name||'')+'"'+a('name')+' style="max-width:240px;" /><button class="proto-btn ng" data-toast-del="'+tt+'">删除</button></div>'):'')
+      +'<div class="swrow"><span>颜色</span><input class="proto-color" type="color" value="'+(/^#[0-9a-fA-F]{6}$/.test(t.color||'')?t.color:'#2aa8ff')+'"'+a('color')+' /></div>'
+      +(withEnable?('<div class="swrow"><span>启用</span><input class="proto-switch" type="checkbox"'+(t.enabled!==false?' checked':'')+a('enabled')+' /></div>'):'')
+      +'<div class="form-grid"><div class="filt"><label>显示时长（秒）</label><input class="proto-input" type="number" min="1" max="30" value="'+(t.duration!=null?t.duration:3)+'"'+a('duration')+' /></div>'
+      +'<div class="filt"><label>字体大小（px）</label><input class="proto-input" type="number" min="12" max="48" value="'+(t.fontSize!=null?t.fontSize:18)+'"'+a('fontSize')+' /></div></div>'
+      +'<div class="afield"><label>位置</label><select class="proto-select"'+a('position')+'>'+posOpts+'</select></div>'
+      +'<div class="form-grid"><div class="filt"><label>主文字</label><input class="proto-input" value="'+_esc(t.text||'')+'"'+a('text')+' /></div>'
+      +'<div class="filt"><label>副文字（可选）</label><input class="proto-input" value="'+_esc(t.subText||'')+'"'+a('subText')+' /></div></div>';
+  }
+  function _toastRender(){
+    var ed=window.__tjToastEdit; if(!ed) return;
+    var grid=document.getElementById('toastPresetGrid');
+    if(grid){
+      grid.innerHTML=['ok','ng','scan','warn_no_barcode'].map(function(k){
+        var t=ed.toasts[k];
+        return '<div><div class="set-sub" style="margin-top:0;">'+_TOAST_DEF[k].name+'</div>'+_toastFields(k,t,k==='scan'||k==='warn_no_barcode',false)+'</div>';
+      }).join('');
+    }
+    var list=document.getElementById('toastCustomList');
+    if(list){
+      list.innerHTML=ed.customToasts.length
+        ? ed.customToasts.map(function(t,i){ return '<div class="ev-block">'+_toastFields('c'+i,t,false,true)+'</div>'; }).join('')
+        : '<div class="tiny-note" style="text-align:center;padding:14px 0;">暂无自定义提示框（新建后可在项目事件配置里选用）</div>';
+    }
+  }
+  async function tjLoadToastCfg(){
+    var grid=document.getElementById('toastPresetGrid'); if(!grid||!window.tjApi) return;
+    var pid=(typeof _tjScopePid==='function')?await _tjScopePid():null;
+    if(!pid){ grid.innerHTML='<div class="tiny-note" style="grid-column:1/-1;text-align:center;padding:14px 0;">请先启用一个项目，提示框配置存于项目检测配置</div>'; return; }
+    var pr=await tjApi.get('/projects/'+pid)||{};
+    var dc=pr.detection_config||{};
+    window.__tjToastCfgSrc={pid:pid, dc:dc};
+    var toasts={};
+    ['ok','ng','scan','warn_no_barcode'].forEach(function(k){
+      var merged={}; var d=_TOAST_DEF[k]; var u=(dc.toasts||{})[k]||{};
+      for(var f in d) merged[f]=(u[f]!=null&&u[f]!=='')?u[f]:d[f];
+      if(u.enabled===false) merged.enabled=false;
+      merged.id=k; merged.isSystem=true;
+      toasts[k]=merged;
+    });
+    window.__tjToastEdit={toasts:toasts, customToasts:JSON.parse(JSON.stringify(dc.customToasts||[]))};
+    _toastRender();
+    // 检测框外观 + 语音 (同一 detection_config; 音量存 0~1, UI 显示 0~100)
+    var DCF_DEF={boxColor:'#00FF00',boxColorNG:'#FF0000',boxLineWidth:2,labelFontSize:14,
+                 showConfidence:true,showNgReason:false,voiceEnabled:false,voiceVolume:1};
+    window.__tjDcEdit={};
+    document.querySelectorAll('[data-dcf]').forEach(function(el){
+      var k=el.dataset.dcf;
+      var v=(dc[k]!=null&&dc[k]!=='')?dc[k]:DCF_DEF[k];
+      window.__tjDcEdit[k]=v;
+      if(el.type==='checkbox') el.checked=(v!==false);
+      else if(k==='voiceVolume') el.value=Math.round(Number(v)*100);
+      else el.value=v;
+    });
+  }
+  (function bindToastCfg(){
+    document.addEventListener('input', function(ev){
+      var el=ev.target; if(!el||!el.dataset) return;
+      // 检测框外观/语音字段
+      if(el.dataset.dcf && window.__tjDcEdit){
+        var k=el.dataset.dcf;
+        var dv = el.type==='checkbox'?el.checked:el.value;
+        if(k==='boxLineWidth'||k==='labelFontSize'){ dv=parseFloat(dv); if(!isFinite(dv)) return; }
+        if(k==='voiceVolume'){ dv=parseFloat(dv); if(!isFinite(dv)) return; dv=Math.max(0,Math.min(1,dv/100)); }
+        window.__tjDcEdit[k]=dv;
+        return;
+      }
+      if(!el.dataset.tt||!window.__tjToastEdit) return;
+      var ed=window.__tjToastEdit, tt=el.dataset.tt, f=el.dataset.tf;
+      var t = tt.charAt(0)==='c'&&tt.length>1&&!isNaN(+tt.slice(1)) ? ed.customToasts[+tt.slice(1)] : ed.toasts[tt];
+      if(!t) return;
+      var v = el.type==='checkbox'?el.checked:el.value;
+      if(f==='duration'||f==='fontSize'){ v=parseFloat(v); if(!isFinite(v)) return; }
+      t[f]=v;
+    });
+    document.addEventListener('click', async function(ev){
+      var del=ev.target.closest('[data-toast-del]');
+      if(del&&window.__tjToastEdit){
+        var ix=+String(del.dataset.toastDel).slice(1);
+        if(isFinite(ix)){ window.__tjToastEdit.customToasts.splice(ix,1); _toastRender(); }
+        return;
+      }
+      if(ev.target.closest('#toastCustomAddBtn')&&window.__tjToastEdit){
+        window.__tjToastEdit.customToasts.push({id:'custom_'+Date.now(),name:'新提示框',color:'#a855f7',duration:3,fontSize:16,position:'top-right',text:'',subText:''});
+        _toastRender(); return;
+      }
+      if(!ev.target.closest('#toastSaveBtn')) return;
+      var ed=window.__tjToastEdit, src=window.__tjToastCfgSrc;
+      if(!ed||!src){ showProtoToast('提示框配置未加载'); return; }
+      // 合并进原 detection_config: 提示框 + 检测框外观/语音, 其余键原样保留
+      var dc=JSON.parse(JSON.stringify(src.dc||{}));
+      dc.toasts=ed.toasts; dc.customToasts=ed.customToasts;
+      var de=window.__tjDcEdit||{};
+      for(var dk in de) dc[dk]=de[dk];
+      // 对齐主程序: 写激活项目 + 所有在用工位绑定项目
+      var pids={}; pids[src.pid]=1;
+      try{
+        var ws=await tjApi.get('/workstations/');
+        var scs=(ws&&ws.source_configs)||{};
+        Object.keys(scs).forEach(function(ch){ var p=scs[ch]&&scs[ch].project_id; if(p) pids[p]=1; });
+      }catch(e){}
+      var okN=0, failN=0;
+      for(var p in pids){
+        try{ await tjApi.put('/projects/'+p, {detection_config:dc}); okN++; }
+        catch(e){ failN++; }
+      }
+      src.dc=dc;
+      try{ if(window.__tjToastCfgReload) window.__tjToastCfgReload(); }catch(e){}
+      showProtoToast(failN?('检测显示设置保存: 成功 '+okN+' 个项目, 失败 '+failN+' 个'):'检测框与提示框设置已保存'+(okN>1?('（同步 '+okN+' 个项目）'):''));
+    });
+  })();
+  window.tjLoadToastCfg=tjLoadToastCfg;
 
   // ==================== 设置页·画面变换接真 (/source/transform/config?channel=N) ====================
   async function tjLoadXf(){
@@ -4089,6 +4511,22 @@
       if(hs){ var st=(sc.mediapipe_two_stage_status||{}).state||'baseline';
         hs.textContent=_HAND_STATE_TXT[st]||st;
         hs.className='badge-sm '+(st==='active'?'ok':(st==='path_invalid'||st==='load_failed'?'ng':'')); }
+      // v1.3.0 R6: 自定义纯色骨架样式 (对齐主程序 v3.32.0)
+      var se=document.getElementById('perfMpStyleEnable'); if(se) se.checked=sc.mediapipe_custom_style===true;
+      var sg=document.getElementById('perfMpStyleGrid'); if(sg) sg.style.display=sc.mediapipe_custom_style===true?'':'none';
+      var pcl=document.getElementById('perfMpPoseColor'); if(pcl) pcl.value=sc.mediapipe_pose_color||'#00FF00';
+      var hcl=document.getElementById('perfMpHandsColor'); if(hcl) hcl.value=sc.mediapipe_hands_color||'#00FF00';
+      var pth=document.getElementById('perfMpPoseThick'); if(pth&&sc.mediapipe_pose_thickness!=null) pth.value=sc.mediapipe_pose_thickness;
+      var hth=document.getElementById('perfMpHandsThick'); if(hth&&sc.mediapipe_hands_thickness!=null) hth.value=sc.mediapipe_hands_thickness;
+      // 关键点颜色: 后端 '' = 跟随连线颜色 → 勾"跟随"并禁用取色器
+      function _ptColor(colorId, followId, val, lineColor){
+        var c=document.getElementById(colorId), f=document.getElementById(followId);
+        var follow=!val;
+        if(f) f.checked=follow;
+        if(c){ c.value=val||lineColor||'#00FF00'; c.disabled=follow; }
+      }
+      _ptColor('perfMpPosePtColor','perfMpPosePtFollow', sc.mediapipe_pose_point_color||'', sc.mediapipe_pose_color);
+      _ptColor('perfMpHandsPtColor','perfMpHandsPtFollow', sc.mediapipe_hands_point_color||'', sc.mediapipe_hands_color);
     }catch(e){}
     // 2) 推理设备 (真 GPU 信息, 替换写死的 RTX 4090)
     try{
@@ -4131,11 +4569,46 @@
         mediapipe_hand_detector_conf:parseFloat(_pv('perfHandConf')||'0.25'),
         mediapipe_hand_detector_iou:parseFloat(_pv('perfHandIou')||'0.45'),
         mediapipe_hand_detector_imgsz:parseInt(_pv('perfHandImgsz')||'640',10),
-        mediapipe_hand_roi_pad:parseFloat(_pv('perfHandPad')||'0.3') });
+        mediapipe_hand_roi_pad:parseFloat(_pv('perfHandPad')||'0.3'),
+        // v1.3.0 R6: 自定义纯色骨架样式 (勾"跟随连线" = 发空串, 后端语义: 关键点跟随连线颜色)
+        mediapipe_custom_style:_pc('perfMpStyleEnable'),
+        mediapipe_pose_color:_pv('perfMpPoseColor')||'#00FF00',
+        mediapipe_pose_point_color:_pc('perfMpPosePtFollow')?'':(_pv('perfMpPosePtColor')||''),
+        mediapipe_pose_thickness:parseInt(_pv('perfMpPoseThick')||'2',10),
+        mediapipe_hands_color:_pv('perfMpHandsColor')||'#00FF00',
+        mediapipe_hands_point_color:_pc('perfMpHandsPtFollow')?'':(_pv('perfMpHandsPtColor')||''),
+        mediapipe_hands_thickness:parseInt(_pv('perfMpHandsThick')||'2',10) });
       showProtoToast('性能设置已保存');
       tjLoadPerf();
     }catch(e){ showProtoToast('保存失败: '+((e&&e.data&&e.data.detail)||e.message||e)); }
   }
+  (function bindMpStyle(){
+    // HUD 风格预设: 与插件界面同源的青色辉光系 (连线主青 + 关键点近白薄荷, 姿态走 HUD 蓝)
+    document.addEventListener('click', function(evn){
+      if(!evn.target.closest('#perfMpHudPreset')) return;
+      var se=document.getElementById('perfMpStyleEnable');
+      if(se){ se.checked=true; se.dispatchEvent(new Event('change',{bubbles:true})); }
+      function _set(id,v){ var el=document.getElementById(id); if(el) el.value=v; }
+      function _unfollow(fid,cid){ var f=document.getElementById(fid); if(f){ f.checked=false; f.dispatchEvent(new Event('change',{bubbles:true})); } var c=document.getElementById(cid); if(c) c.disabled=false; }
+      _set('perfMpHandsColor','#2EE0C8'); _unfollow('perfMpHandsPtFollow','perfMpHandsPtColor'); _set('perfMpHandsPtColor','#EAF9F6'); _set('perfMpHandsThick','2');
+      _set('perfMpPoseColor','#38B6FF'); _unfollow('perfMpPosePtFollow','perfMpPosePtColor'); _set('perfMpPosePtColor','#EAF3FF'); _set('perfMpPoseThick','2');
+      showProtoToast('已套用 HUD 风格骨架配色，正在保存…');
+      tjPerfSave();
+    });
+    // 骨架样式开关 → 展开/收起配色区; "跟随连线" → 禁用对应关键点取色器 (对齐主程序清空=跟随语义)
+    document.addEventListener('change', function(evn){
+      if(evn.target && evn.target.id==='perfMpStyleEnable'){
+        var sg=document.getElementById('perfMpStyleGrid');
+        if(sg) sg.style.display=evn.target.checked?'':'none';
+      }
+      if(evn.target && evn.target.id==='perfMpPosePtFollow'){
+        var c1=document.getElementById('perfMpPosePtColor'); if(c1) c1.disabled=evn.target.checked;
+      }
+      if(evn.target && evn.target.id==='perfMpHandsPtFollow'){
+        var c2=document.getElementById('perfMpHandsPtColor'); if(c2) c2.disabled=evn.target.checked;
+      }
+    });
+  })();
   (function bindPerf(){
     var KAL_PRESET={ smooth:{q:0.01,r:0.5,m:10}, balanced:{q:0.03,r:0.1,m:5}, responsive:{q:0.1,r:0.05,m:3} };
     document.addEventListener('click', async function(evn){
@@ -4753,7 +5226,7 @@
     }
     if (route === '/mes') { setMesTab('orders'); try { tjWireMesDialogs(); tjLoadMes(); } catch(e){} return; }
     if (route === '/alarm') { try { tjLoadAlarm(); } catch(e){} return; }
-    if (route === '/settings') { setSettingsTab('display'); try { tjLoadSettings(); } catch(e){} return; }
+    if (route === '/settings') { setSettingsTab('display'); try { tjLoadSettings(); } catch(e){} try { tjLoadPollingCfg(); } catch(e){} return; }
     if (route === '/model') { try { tjLoadModels(); } catch(e){} return; }
     if (route === '/source') { try { tjLoadSource(); if(window.tjLoadWorkstations) tjLoadWorkstations(); } catch(e){} return; }
     if (route === '/data') { try { tjLoadData(); tjLoadDataSettings(); } catch(e){} return; }
@@ -4770,6 +5243,19 @@
     document.getElementById('routeRules').innerHTML = cfg.rules.map(x => `<div class="route-row"><span>${x}</span></div>`).join('');
   }
 
+  // 导航抽屉 (对齐主程序: 默认收起, ☰ 呼出, 点菜单项/遮罩自动收回)
+  (function(){
+    var nav=document.querySelector('.nav'), mask=document.getElementById('navMask'), tg=document.getElementById('navToggle');
+    if(!nav||!tg) return;
+    window.__tjNavClose=function(){ nav.classList.remove('open'); if(mask) mask.classList.remove('show'); };
+    tg.addEventListener('click', function(){
+      var open=!nav.classList.contains('open');
+      nav.classList.toggle('open', open);
+      if(mask) mask.classList.toggle('show', open);
+    });
+    if(mask) mask.addEventListener('click', window.__tjNavClose);
+  })();
+
   // 预览页导航：使用主程序真实一级路由，只做视觉切换，不伪造不存在页面
   document.querySelectorAll('.nav .item[data-route]').forEach(item => {
     item.addEventListener('click', () => {
@@ -4782,6 +5268,7 @@
       const appName = window.__tjscAppName || '视觉AI行为分析防错检测系统';
       if (title) title.textContent = name === '实时监控' ? appName : `${name} · ${appName}`;
       renderRoutePage(item.dataset.route);
+      if (window.__tjNavClose) window.__tjNavClose();
     });
   });
 
@@ -4828,7 +5315,7 @@
     applyLogicVisibility(mode);
     // 逻辑模式变化会改变"哪一步是结算步", 同步刷新结算步禁用态 (pe 存在时才动)
     try{ if(window.__tjPE) _tjSyncSettleSteps(); }catch(e){}
-    showProtoToast(`已切换为${({sequential:'顺序模式',detection:'检测模式',custom:'自定义模式',tracking:'跟踪模式',per_item:'逐件模式'}[mode] || '逻辑模式')}`);
+    showProtoToast(`已切换为${({sequential:'顺序模式',detection:'检测模式',custom:'自定义模式',tracking:'跟踪模式',per_item:'逐件模式',weighing:'称重投料模式',region_events:'区域事件模式'}[mode] || '逻辑模式')}`);
   }
 
   function applyLogicVisibility(mode){
@@ -4871,7 +5358,7 @@
   window.__tjProjects = [];
   window.__tjActivePid = null;
   window.__tjSelectedPid = null;
-  function _modeLabel(m){ return ({sequential:'顺序',detection:'检测',custom:'自定义',tracking:'跟踪',per_item:'逐件'}[m]||m||'顺序'); }
+  function _modeLabel(m){ return ({sequential:'顺序',detection:'检测',custom:'自定义',tracking:'跟踪',per_item:'逐件',weighing:'称重',region_events:'区域事件'}[m]||m||'顺序'); }
   function _projCardsBox(){
     var c = document.querySelector('[data-project-card]');
     if (c) return c.closest('.project-list');
@@ -5576,6 +6063,57 @@
       +'<select class="proto-select" multiple data-b="pc.rod_session_gate.gate_labels" data-t="multi">'+_optLabelMulti(gt.gate_labels)+'</select></div>'
       +'</div>';
   };
+  // v1.3.0 称重投料配置 (pipeline_config.weighing, 对齐 weighing_engine DEFAULT_WEIGHING_CONFIG)
+  LG.weighing=function(pe,pc){
+    var w=pc.weighing||{};
+    var mats=Array.isArray(w.materials)?w.materials.join(', '):'';
+    var models=w.models?JSON.stringify(w.models,null,2):'{\n  "型号A": {\n    "钢帽水泥": {"standard": 0.5, "low_tol": 0.02, "high_tol": 0.05}\n  }\n}';
+    return '<div class="tiny-note">电子秤读数驱动的投料防错: 选型号→扫码→放件去皮→逐料投料对比标准量→缺料/超量报警→逐件记录落库。单位统一 kg。</div>'
+      +'<div class="proto-grid2" style="margin-top:8px">'
+      +_lgSel('去皮方式','pc.weighing.tare_mode',[['auto_stable','放件后自动去皮'],['manual','界面按钮手动']],w.tare_mode||'auto_stable')
+      +_lgNum('去皮触发重量 (kg)','pc.weighing.tare_trigger_weight',w.tare_trigger_weight!=null?w.tare_trigger_weight:0.05)
+      +_lgNum('稳定波动阈值 (kg)','pc.weighing.stable_tol',w.stable_tol!=null?w.stable_tol:0.003)
+      +_lgNum('有效投料下限 (kg)','pc.weighing.measure_min_weight',w.measure_min_weight!=null?w.measure_min_weight:0.005)
+      +_lgSel('物料防错','pc.weighing.material_check',[['off','不校验'],['sequence','按料别顺序'],['visual','视觉识别比对']],w.material_check||'sequence')
+      +'</div>'
+      +'<div class="rowline">'+_lgCkInline('必须先选人员','pc.weighing.require_operator',w.require_operator!==false)
+      +_lgCkInline('必须先选型号','pc.weighing.require_model',w.require_model!==false)
+      +_lgCkInline('完成后自动置零','pc.weighing.auto_zero_after_done',w.auto_zero_after_done!==false)+'</div>'
+      +'<div class="proto-field"><label>料别顺序 (逗号分隔)</label><input class="proto-input" data-b="pc.weighing.materials" data-t="strlist" value="'+_esc(mats)+'" placeholder="钢帽水泥, 钢脚水泥" /></div>'
+      +'<div class="proto-field"><label>型号标准量表 (JSON: 型号→料别→standard/low_tol/high_tol)</label>'
+      +'<textarea class="proto-input" data-b="pc.weighing.models" data-t="json" rows="6" style="font-family:monospace;font-size:11px">'+_esc(models)+'</textarea></div>';
+  };
+  // v1.3.0 区域事件规则 (pipeline_config.region_events, 对齐 source_region_events 解析器)
+  LG.regionEvents=function(pe,pc){
+    var re=pc.region_events||{};
+    var rules=Array.isArray(re.rules)?re.rules:[];
+    var h='<div class="tiny-note">目标进出区域/重叠即步骤: overlap=两标签重叠 · region_enter=进区 · region_exit=出区(默认结算)。区域多边形用归一化顶点 JSON, 建议在主程序界面绘制后拷贝。</div>';
+    h+='<div class="rowline">'+_lgCkInline('启用','pc.region_events.enabled',re.enabled!==false)
+      +_lgCkInline('连续同名事件去重','pc.region_events.dedup_consecutive',re.dedup_consecutive!==false)
+      +'<span>中断容忍帧</span><input class="proto-input" type="number" data-b="pc.region_events.gap_tolerance_frames" data-t="int" value="'+(re.gap_tolerance_frames!=null?re.gap_tolerance_frames:3)+'" style="width:70px" /></div>';
+    h+=rules.map(function(r,i){
+      var p='pc.region_events.rules.'+i+'.';
+      var regionJson=r.region?JSON.stringify(r.region):'';
+      return '<div class="proto-block" style="margin-top:8px"><div class="rowline"><b>规则 '+(i+1)+'</b>'
+        +'<button class="proto-btn ng" data-lga="reDel" data-i="'+i+'" style="margin-left:auto">删除</button></div>'
+        +'<div class="proto-grid2">'
+        +'<div class="proto-field"><label>事件名</label><input class="proto-input" data-b="'+p+'name" value="'+_esc(r.name||'')+'" /></div>'
+        +_lgSel('类型',p+'type',[['overlap','重叠 overlap'],['region_enter','进区 region_enter'],['region_exit','出区 region_exit']],r.type||'overlap')
+        +_lgSelRaw('主体标签',p+'subject_label',_optLabel(r.subject_label,true,'选择标签'))
+        +_lgSelRaw('客体标签 (overlap 用)',p+'object_label',_optLabel(r.object_label,true,'无'))
+        +_lgNum('确认帧数',p+'min_frames',r.min_frames!=null?r.min_frames:'','int')
+        +_lgCk('触发即结算 settle',p+'settle',!!r.settle)
+        +'</div>'
+        +'<div class="proto-field"><label>区域多边形 JSON (归一化 [[x,y],...]; overlap 可留空=全画面)</label>'
+        +'<textarea class="proto-input" data-b="'+p+'region" data-t="json" rows="2" style="font-family:monospace;font-size:11px" placeholder="[[0.1,0.1],[0.9,0.1],[0.9,0.9],[0.1,0.9]]">'+_esc(regionJson)+'</textarea></div>'
+        +'</div>';
+    }).join('');
+    h+='<div class="rowline" style="margin-top:8px"><button class="proto-btn" data-lga="reAdd">+ 新增规则</button></div>';
+    var seq=re.sequence_check||{};
+    h+='<div class="rowline" style="margin-top:8px">'+_lgCkInline('顺序校验','pc.region_events.sequence_check.enabled',!!seq.enabled)
+      +'<span>顺序 (事件名逗号分隔)</span><input class="proto-input" data-b="pc.region_events.sequence_check.order" data-t="strlist" value="'+_esc((seq.order||[]).join(', '))+'" style="flex:1" /></div>';
+    return h;
+  };
   var _TJ_DEFAULT_CTRS={'合格总数':1,'不良总数':1,'总产量':1};
   LG.counters=function(pe,pc){
     return (pe.counters_config||[]).map(function(c,i){
@@ -5612,7 +6150,17 @@
         +acts
         +'<div class="rowline"><button class="proto-btn" data-lga="evActAdd" data-i="'+i+'">+ 添加动作</button></div>'
         +'<div class="rowline"><label class="proto-check"><input type="checkbox" data-b="'+p+'show_notification"'+(ev.show_notification?' checked':'')+' />显示提示框</label>'
-        +'<select class="proto-select" data-b="'+p+'toast_id"><option value="ok"'+(ev.toast_id!=='ng'?' selected':'')+'>合格提示框</option><option value="ng"'+(ev.toast_id==='ng'?' selected':'')+'>NG提示框</option></select></div>'
+        +(function(){
+          // 对齐主程序 EventsConfigTab: 系统预设 ok/ng + 本项目 detection_config.customToasts
+          var tid=ev.toast_id||'ok';
+          var opts='<option value="ok"'+(tid==='ok'?' selected':'')+'>合格提示框</option>'
+                  +'<option value="ng"'+(tid==='ng'?' selected':'')+'>NG提示框</option>';
+          ((pe.detection_config||{}).customToasts||[]).forEach(function(ct){
+            if(!ct||!ct.id) return;
+            opts+='<option value="'+_esc(String(ct.id))+'"'+(tid===ct.id?' selected':'')+'>'+_esc(ct.name||'自定义提示框')+'</option>';
+          });
+          return '<select class="proto-select" data-b="'+p+'toast_id">'+opts+'</select>';
+        })()+'</div>'
         +'<div class="rowline"><label class="proto-check"><input type="checkbox" data-b="'+p+'require_ack" data-rr="events"'+(ev.require_ack?' checked':'')+' />需人工确认（重做本周期）</label>'
         +(ev.require_ack?('<span>超时自动确认(秒,0=不超时)</span><input class="proto-input" type="number" data-b="'+p+'ack_timeout_sec" data-t="int" value="'+(ev.ack_timeout_sec||0)+'" style="width:70px" /><label class="proto-check"><input type="checkbox" data-b="'+p+'ack_resets_periodic"'+(ev.ack_resets_periodic?' checked':'')+' />确认时清账周期性强制动作</label>'):'')
         +'</div></div>';
@@ -5698,6 +6246,12 @@
     else if(t==='numOrNull'){ var sn=String(v).trim(); v=sn===''?null:(isFinite(parseFloat(sn))?parseFloat(sn):null); }
     else if(t==='strOrNull'){ v=String(v).trim()===''?null:v; }
     else if(t==='labelStr'){ var la=String(v).split(/[,，|]/).map(function(x){return x.trim();}).filter(Boolean); v=la.length===0?'':(la.length===1?la[0]:la); }
+    else if(t==='strlist'){ v=String(v).split(/[,，|\n]/).map(function(x){return x.trim();}).filter(Boolean); }
+    else if(t==='json'){
+      var js=String(v).trim();
+      if(js===''){ v=null; }
+      else { try{ v=JSON.parse(js); }catch(je){ showProtoToast('JSON 解析失败，未保存该字段'); return; } }
+    }
     _peSet(el.dataset.b, v);
     if(el.dataset.rr) LGRender(el.dataset.rr);
     // 结算模式变更 → 同步关闭结算步的严格顺序/单次接受并重渲步骤表 (对齐主程序 watch)
@@ -5722,6 +6276,11 @@
       case 'condDel': pc.custom_conditions.splice(i,1); LGRender('custom'); break;
       case 'paAdd': pc.periodic_actions.push({id:'pa_'+Date.now(),name:'规则 '+(pc.periodic_actions.length+1),enabled:true,trigger_step_ids:[],interval:20,time_interval_seconds:0,count_basis:'good_only',reset_policy:'always',due_warning_event_id:null,overdue_event_id:null,overdue_repeat:'every_cycle',channel_filter:null,run_on_start:false}); LGRender('periodic'); break;
       case 'paDel': pc.periodic_actions.splice(i,1); LGRender('periodic'); break;
+      case 'reAdd': { if(!pc.region_events||typeof pc.region_events!=='object') pc.region_events={enabled:true,rules:[]};
+        if(!Array.isArray(pc.region_events.rules)) pc.region_events.rules=[];
+        pc.region_events.rules.push({id:'re_'+Date.now(),name:'动作 '+(pc.region_events.rules.length+1),type:'overlap',subject_label:'',object_label:'',min_frames:10,settle:false,region:null});
+        LGRender('regionEvents'); break; }
+      case 'reDel': { if(pc.region_events&&Array.isArray(pc.region_events.rules)){ pc.region_events.rules.splice(i,1); LGRender('regionEvents'); } break; }
       case 'expAdd': pe.__expected.push({label:'',count:1}); LGRender('tracking'); break;
       case 'expDel': pe.__expected.splice(i,1); LGRender('tracking'); break;
       case 'trkRoiDraw': if(window.tjOpenRoiEditor){ window.tjOpenRoiEditor({get:function(){return (pc.tracking_roi||{}).polygon||null;},set:function(poly){ pc.tracking_roi={enabled:(poly||[]).length>=3,polygon:poly||[]}; LGRender('tracking'); }}); } else showProtoToast('ROI 编辑器加载中'); break;
@@ -6124,12 +6683,154 @@
     const name = tab.dataset.dataTab;
     document.querySelectorAll('[data-data-tab]').forEach(t => t.classList.toggle('active', t === tab));
     document.querySelectorAll('[data-data-panel]').forEach(p => p.style.display = p.dataset.dataPanel === name ? '' : 'none');
+    if(name==='weighing'){ try{ tjLoadWeighRecords(); }catch(e){} }
   }));
+  // ==================== v1.3.0 称重台账 (/weighing/records 逐件逐料记录) ====================
+  async function tjLoadWeighRecords(){
+    if(!window.tjApi) return;
+    var box=document.getElementById('wgRecBox'); if(!box) return;
+    try{
+      var r=await tjApi.get('/weighing/records',{channel:0, limit:200});
+      var recs=(r&&r.records)||[];
+      var cnt=document.getElementById('wgRecCount');
+      if(cnt) cnt.textContent=recs.length?('共 '+recs.length+' 条'):'';
+      if(!recs.length){ box.innerHTML=_tjEmptyHTML('暂无投料记录','称重投料项目结算后自动落库'); return; }
+      function vb(v){ v=String(v||'').toLowerCase();
+        if(v==='ok') return '<span class="badge-sm ok">合格</span>';
+        if(v==='low'||v==='under') return '<span class="badge-sm ng">缺料</span>';
+        if(v==='high'||v==='over') return '<span class="badge-sm ng">超量</span>';
+        return '<span class="badge-sm">'+_esc(v||'—')+'</span>'; }
+      box.innerHTML='<table class="data-table"><thead><tr><th>时间</th><th>工件码</th><th>型号</th><th>料别</th><th class="tcen">标准 (kg)</th><th class="tcen">实投净重 (kg)</th><th class="tcen">判定</th><th>操作人</th></tr></thead><tbody>'
+        +recs.slice().reverse().map(function(x){
+          var t=x.ts?new Date(x.ts*1000).toLocaleTimeString('zh-CN',{hour12:false}):'—';
+          return '<tr><td class="tcen">'+t+'</td><td>'+_esc(x.sn||'—')+'</td><td>'+_esc(x.model||'—')+'</td><td>'+_esc(x.material||'—')+'</td><td class="tcen">'+(x.standard!=null?Number(x.standard).toFixed(3):'—')+'</td><td class="tcen"><b>'+(x.net!=null?Number(x.net).toFixed(3):'—')+'</b></td><td class="tcen">'+vb(x.verdict)+'</td><td>'+_esc(x.operator||'—')+'</td></tr>';
+        }).join('')+'</tbody></table>';
+    }catch(e){ box.innerHTML=_tjEmptyHTML('台账读取失败','后端未开启 /weighing 或版本过旧'); }
+  }
+  (function(){ var b=document.getElementById('wgRecRefresh'); if(b) b.addEventListener('click', function(){ tjLoadWeighRecords(); }); })();
+  // ==================== v1.3.0 面板轮询与日志条数 (/system/polling + /system/log-limits) ====================
+  var _TJ_POLL_LABELS={cluster_boxes:'集群箱体列表',cluster_slaves:'集群副机列表',cluster_heartbeat:'副机心跳',gateway_health:'MES 网关健康',order_list:'工单列表',scanner_status:'扫码器状态',external_device:'外部设备',wmax_status:'WMax 状态'};
+  var _TJ_LOGLIMIT_LABELS={scanner:'扫码器日志',external_device:'外设日志',inbound:'入站对接日志',gateway:'MES 推送日志',cluster:'集群日志'};
+  async function tjLoadPollingCfg(){
+    if(!window.tjApi) return;
+    var pg=document.getElementById('pollGrid'), lg=document.getElementById('logLimitGrid');
+    try{
+      var p=await tjApi.get('/system/polling');
+      if(pg) pg.innerHTML=Object.keys(p).map(function(k){
+        return '<div class="filt"><label>'+(_TJ_POLL_LABELS[k]||k)+' (ms)</label><input class="proto-input" type="number" min="500" step="500" data-poll-k="'+k+'" value="'+p[k]+'" /></div>';
+      }).join('');
+    }catch(e){ if(pg) pg.innerHTML='<div class="tiny-note">轮询配置接口不可用（后端版本过旧）</div>'; }
+    try{
+      var l=await tjApi.get('/system/log-limits');
+      if(lg) lg.innerHTML=Object.keys(l).map(function(k){
+        return '<div class="filt"><label>'+(_TJ_LOGLIMIT_LABELS[k]||k)+' (条)</label><input class="proto-input" type="number" min="1" max="500" data-loglimit-k="'+k+'" value="'+l[k]+'" /></div>';
+      }).join('');
+    }catch(e){ if(lg) lg.innerHTML='<div class="tiny-note">日志条数接口不可用（后端版本过旧）</div>'; }
+  }
+  (function(){
+    var b=document.getElementById('pollSaveBtn');
+    if(b) b.addEventListener('click', async function(){
+      if(!window.tjApi) return;
+      var pp={}; document.querySelectorAll('[data-poll-k]').forEach(function(el){ pp[el.dataset.pollK]=Number(el.value)||0; });
+      var ll={}; document.querySelectorAll('[data-loglimit-k]').forEach(function(el){ ll[el.dataset.loglimitK]=Number(el.value)||0; });
+      try{
+        if(Object.keys(pp).length) await tjApi.put('/system/polling', pp);
+        if(Object.keys(ll).length) await tjApi.put('/system/log-limits', ll);
+        showProtoToast('轮询与日志条数已保存'); tjLoadPollingCfg();
+      }catch(e){ showProtoToast('保存失败: '+(e&&e.message||'')); }
+    });
+  })();
   // MES 子 Tab 切换
   window.setMesTab = function(name){
     document.querySelectorAll('[data-mes-tab]').forEach(t => t.classList.toggle('active', t.dataset.mesTab === name));
     document.querySelectorAll('[data-mes-panel]').forEach(p => p.classList.toggle('active', p.dataset.mesPanel === name));
+    if(name==='inbound'){ try{ tjLoadInbound(); }catch(e){} }
+    if(name==='packaging'){ try{ tjLoadPackaging(); }catch(e){} }
   };
+  // ==================== v1.3.0 生产管控入站 (只读监视: /mes/inbound/config + active-alarms) ====================
+  async function tjLoadInbound(){
+    if(!window.tjApi) return;
+    var grid=document.getElementById('mibCfgGrid'), badge=document.getElementById('mibEnableBadge');
+    try{
+      var cfg=await tjApi.get('/mes/inbound/config');
+      var c=cfg&&cfg.config?cfg.config:(cfg||{});
+      if(badge){ var on=c.enabled!==false; badge.textContent=on?'已启用':'未启用'; badge.className='badge-sm '+(on?'ok':''); }
+      if(grid){
+        function fld(l,v){ return '<div class="proto-field"><label>'+l+'</label><div class="proto-input" style="pointer-events:none;opacity:.85">'+_esc(String(v==null||v===''?'—':v))+'</div></div>'; }
+        var sw=c.spec_switch||{}; var ab=c.alarm_banner||{}; var ti=c.task_info_display||{};
+        grid.innerHTML=fld('接收路径前缀',c.path_prefix||'/api/v1/mes/inbound')
+          +fld('鉴权方式',c.auth&&c.auth.mode?c.auth.mode:'无')
+          +fld('规格切项目',(sw.enabled!==false?'开启':'关闭')+' · '+(sw.match_mode||'mapping_first'))
+          +fld('报警横幅',(ab.enabled!==false?'开启':'关闭'))
+          +fld('四要素上屏',(ti.enabled!==false?'开启':'关闭'))
+          +fld('完工回推',(c.completion_report&&c.completion_report.enabled?'开启':'关闭'));
+      }
+      var tb=document.getElementById('mibTaskBox');
+      if(tb){
+        var t=(c.task_info_display&&c.task_info_display.current)||cfg.current_task||null;
+        if(t&&(t.order_no||t.spec||t.batch_no||t.operator)){
+          tb.innerHTML='<div class="proto-grid2">'
+            +'<div class="proto-field"><label>工单号</label><b>'+_esc(t.order_no||'—')+'</b></div>'
+            +'<div class="proto-field"><label>规格</label><b>'+_esc(t.spec||t.spec_name||'—')+'</b></div>'
+            +'<div class="proto-field"><label>批次</label><b>'+_esc(t.batch_no||t.batch||'—')+'</b></div>'
+            +'<div class="proto-field"><label>操作人</label><b>'+_esc(t.operator||t.operator_name||'—')+'</b></div>'
+            +'</div>';
+        }
+      }
+    }catch(e){ if(badge){ badge.textContent='接口不可用'; badge.className='badge-sm ng'; } if(grid) grid.innerHTML=_tjEmptyHTML('入站接口不可用','后端未开启 /mes/inbound 或版本过旧'); }
+    try{
+      var ra=await tjApi.get('/mes/inbound/active-alarms');
+      var alarms=(ra&&ra.items)||(Array.isArray(ra)?ra:[]);
+      var cnt=document.getElementById('mibAlarmCount');
+      if(cnt){ cnt.style.display=alarms.length?'':'none'; cnt.textContent=String(alarms.length); }
+      var box=document.getElementById('mibAlarmBox');
+      if(box&&alarms.length){
+        box.innerHTML='<table class="data-table"><thead><tr><th>报警号</th><th>内容</th><th>级别</th><th>下发时间</th></tr></thead><tbody>'
+          +alarms.map(function(a){ return '<tr><td>'+_esc(a.alarm_id||a.id||'—')+'</td><td>'+_esc(a.message||a.content||'—')+'</td><td class="tcen">'+_esc(a.level||a.severity||'—')+'</td><td class="tcen">'+_esc(String(a.created_at||a.time||'').slice(5,19))+'</td></tr>'; }).join('')
+          +'</tbody></table>';
+      }
+    }catch(e){}
+  }
+  // ==================== v1.3.0 包装结算 (/packaging-flows 配置 + 运行状态) ====================
+  window.__tjPkSel=null;
+  async function tjLoadPackaging(){
+    if(!window.tjApi) return;
+    var box=document.getElementById('pkCfgBox'); if(!box) return;
+    try{
+      var r=await tjApi.get('/packaging-flows');
+      var items=(Array.isArray(r)?r:(r.items||[]));
+      if(!items.length){ box.innerHTML=_tjEmptyHTML('暂无包装结算流','在主程序 MES 页或 API 创建后显示'); return; }
+      box.innerHTML='<table class="data-table"><thead><tr><th>名称</th><th class="tcen">箱容量</th><th class="tcen">扫码开箱</th><th class="tcen">启用</th><th class="tcen">操作</th></tr></thead><tbody>'
+        +items.map(function(f){ return '<tr><td>'+_esc(f.name||('流#'+f.id))+'</td><td class="tcen">'+_tnum(f.box_capacity||f.capacity,0)+'</td><td class="tcen">'+(f.scan_open?'是':'否')+'</td><td class="tcen">'+(f.enabled!==false?'<span class="badge-sm ok">启用</span>':'<span class="badge-sm">停用</span>')+'</td><td class="tcen"><button class="proto-btn sm" data-pk-view="'+f.id+'">查看状态</button></td></tr>'; }).join('')
+        +'</tbody></table>';
+      box.querySelectorAll('[data-pk-view]').forEach(function(b){ b.addEventListener('click', function(){ window.__tjPkSel=Number(b.dataset.pkView); tjLoadPackState(); }); });
+      // 自动预选只挑启用中的流: 停用流不在协调器内存, 查状态必 404
+      if(window.__tjPkSel==null){ var en=items.filter(function(f){return f.enabled!==false;}); if(en.length){ window.__tjPkSel=en[0].id; tjLoadPackState(); } }
+    }catch(e){ box.innerHTML=_tjEmptyHTML('包装结算接口不可用','后端未开启 /packaging-flows 或版本过旧'); }
+  }
+  async function tjLoadPackState(){
+    var sb=document.getElementById('pkStateBox'); if(!sb||window.__tjPkSel==null) return;
+    try{
+      var st=await tjApi.get('/packaging-flows/'+window.__tjPkSel+'/state');
+      var run=st&&st.run?st.run:st||{};
+      var slots=run.slots||run.items||[];
+      var cap=_tnum(run.capacity||run.box_capacity,slots.length);
+      var filled=slots.filter(function(s){return s&&(s.filled||s.status==='filled'||s.serial_no);}).length;
+      sb.innerHTML='<div class="proto-grid2" style="margin-bottom:8px">'
+        +'<div class="proto-field"><label>当前箱号</label><b>'+_esc(run.box_serial||run.box_no||'未开箱')+'</b></div>'
+        +'<div class="proto-field"><label>装箱进度</label><b>'+filled+' / '+(cap||'—')+'</b></div>'
+        +'<div class="proto-field"><label>状态</label><b>'+_esc(run.phase||run.status||'idle')+'</b></div>'
+        +'<div class="proto-field"><label>待补做</label><b>'+((run.pending_remediation&&run.pending_remediation.length)||0)+'</b></div>'
+        +'</div>'
+        +'<div class="rowline"><button class="proto-btn" id="pkForceBtn">强制结算当前箱</button><span class="tiny-note">强制结算会带审计记录推 MES</span></div>';
+      var fb=document.getElementById('pkForceBtn');
+      if(fb) fb.addEventListener('click', async function(){
+        if(!confirm('确认强制结算当前箱？该操作会带审计记录推送 MES。')) return;
+        try{ await tjApi.post('/packaging-flows/'+window.__tjPkSel+'/force-settle',{reason:'展会界面人工强制结算'}); showProtoToast('已发起强制结算'); tjLoadPackState(); }
+        catch(e){ showProtoToast('强制结算失败: '+(e&&e.message||'')); }
+      });
+    }catch(e){ sb.innerHTML=_tjEmptyHTML('状态读取失败','该结算流可能未运行'); }
+  }
   document.querySelectorAll('[data-mes-tab]').forEach(tab => tab.addEventListener('click', () => setMesTab(tab.dataset.mesTab)));
   window.setSettingsTab = function(name){
     document.querySelectorAll('[data-set-tab]').forEach(t => t.classList.toggle('active', t.dataset.setTab === name));
@@ -6556,6 +7257,12 @@
   // SOP 步骤时间轴: 用项目真实步骤 + 当前周期完成态
   function tjscSop(det){
     var pc = det.project_config || {};
+    // 区域事件模式的时间轴由 renderRegionEvents 接管 (同一容器), 这里让位, 避免两个渲染器互相覆盖
+    var _pcfg = pc.pipeline_config || {};
+    var _isRegion = !!(_pcfg.region_events && (_pcfg.region_events.rules||[]).length);
+    var ph = document.querySelector('.sop .ph');
+    if(ph){ var want=_isRegion?'区域动作时间轴':'SOP步骤时间轴'; if(ph.textContent!==want) ph.textContent=want; }
+    if(_isRegion) return;
     var steps = (pc.steps_config||[]).filter(function(s){ return s && s.enabled!==false && s.join_cycle!==false; });
     if(!steps.length) return;
     var flow = document.querySelector('.sop .flow'); if(!flow) return;
@@ -6604,24 +7311,151 @@
     if(sel && pname && !sel.__tjReal){ var opt=sel.options[sel.selectedIndex]; if(opt && opt.text!==pname) opt.text=pname; }
   }
 
-  // 视频区: 注入真实 MJPEG 流, 隐藏假演示层 (检测中才接入)
+  // ==================== v1.3.0 R5: 视频区接管 ====================
+  // 状态机 (对齐主程序 Monitor 语义):
+  //   源在跑 → 注入真实 MJPEG 流, 隐藏假演示层;
+  //   源没跑 → 先尝试一次自动恢复 (后端记忆源 resume → 本地记忆源 start, 同主程序 autoRestoreSource),
+  //             恢复不了才显示"未接入输入源"动态占位, 绝不再露静态示例照片。
   function tjscFeed(det){
     var feed=document.querySelector('.video .feed'); if(!feed) return;
     var running=!!(det.is_running||det.is_detecting);
     var img=document.getElementById('tjFeed');
-    if(running && !img){
-      img=document.createElement('img'); img.id='tjFeed';
-      img.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:2;background:#04121f';
-      img.src='/video_feed?channel=0&t='+Date.now();
-      feed.appendChild(img);
-      ['.feed-grid','.skel','.detbox','.detbox2','.feed-note'].forEach(function(s){ feed.querySelectorAll(s).forEach(function(e){e.style.display='none';}); });
-      feed.querySelectorAll('.kp').forEach(function(e){e.style.display='none';});
-      ['.scanline','.hud-sweep'].forEach(function(s){ var e=feed.querySelector(s); if(e) e.style.zIndex='3'; });
-      // HUD 浮层 (动作识别结果/FPS/步骤/状态标) 提到真实视频之上
-      var panel=feed.closest('.video')||feed.parentElement;
-      ['.actions','.vmeta','.vstep','.vtag'].forEach(function(s){ var e=panel&&panel.querySelector(s); if(e){ e.style.zIndex='5'; e.style.position=e.style.position||'absolute'; } });
+    var ph=document.getElementById('tjNoSrc');
+    if(running){
+      window.__tjscEverRan=true;
+      if(ph) ph.classList.remove('show');
+      if(!img){
+        img=document.createElement('img'); img.id='tjFeed';
+        img.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:2;background:#04121f';
+        img.src='/video_feed?channel=0&t='+Date.now();
+        feed.appendChild(img);
+        ['.feed-grid','.skel','.detbox','.detbox2','.feed-note'].forEach(function(s){ feed.querySelectorAll(s).forEach(function(e){e.style.display='none';}); });
+        feed.querySelectorAll('.kp').forEach(function(e){e.style.display='none';});
+        ['.scanline','.hud-sweep'].forEach(function(s){ var e=feed.querySelector(s); if(e) e.style.zIndex='3'; });
+        // HUD 浮层 (动作识别结果/FPS/步骤/状态标) 提到真实视频之上
+        var panel=feed.closest('.video')||feed.parentElement;
+        ['.actions','.vmeta','.vstep','.vtag'].forEach(function(s){ var e=panel&&panel.querySelector(s); if(e){ e.style.zIndex='5'; e.style.position=e.style.position||'absolute'; } });
+      }
+      return;
     }
+    // ---- 源没在跑 ----
+    if(img){ img.remove(); }                       // 死流不留残影
+    tjscAutoRestore(det, ph);
   }
+
+  // 自动恢复 (每次页面生命周期只试一轮, 对齐主程序挂载时 autoRestoreSource;
+  // 用户手动点「停止」后不再自动接回, 否则停止会被立刻顶掉):
+  //   1) /source/detection/resume — 后端记得上次的源, 画面+检测一起回;
+  //   2) 本地记忆的输入源配置 (输入源设置页启动成功时落 localStorage) — 只重启源不动检测;
+  //   3) 都不行 → 动态占位层。
+  function tjscAutoRestore(det, ph){
+    var st=window.__tjscRestore;
+    if(st==='trying') return;
+    if(st==='tried' || window.__tjscEverRan){       // 已试过 / 本次会话跑过又停了 → 只显示占位
+      var t1=document.getElementById('tjNoSrcT1'), t2=document.getElementById('tjNoSrcT2');
+      if(window.__tjscEverRan){
+        if(t1) t1.textContent='画面已停止';
+        if(t2) t2.textContent='点顶部「开始」恢复画面与检测';
+      }
+      if(ph) ph.classList.add('show');
+      return;
+    }
+    window.__tjscRestore='trying';
+    var e1=document.getElementById('tjNoSrcT1'), e2=document.getElementById('tjNoSrcT2');
+    if(ph){ ph.classList.add('show');
+      if(e1) e1.textContent='正在恢复输入源';
+      if(e2) e2.textContent='尝试接回上次使用的输入源…'; }
+    (async function(){
+      try{
+        await tjApi.post('/source/detection/resume?channel=0', {});
+        window.__tjscRestore='tried';               // 成功: 下一帧 running=true 走接流分支收占位
+        if(ph) ph.classList.remove('show');
+        showProtoToast('已自动恢复上次输入源');
+        return;
+      }catch(e){ /* 后端没有可恢复的源 → 走本地记忆 */ }
+      var saved=null;
+      try{ saved=JSON.parse(localStorage.getItem('tj_showcase_last_source')||'null'); }catch(e){}
+      if(saved && saved.endpoint && saved.payload){
+        try{
+          await tjApi.post(saved.endpoint, saved.payload);
+          window.__tjscRestore='tried';
+          if(ph) ph.classList.remove('show');
+          showProtoToast('已按本地记忆恢复输入源');
+          return;
+        }catch(e){ /* 记忆的源也起不来 (文件被清/设备拔了) */ }
+      }
+      window.__tjscRestore='tried';
+      if(e1) e1.textContent='未接入输入源';
+      if(e2) e2.textContent='前往「输入源设置」接入 摄像头 / 视频 / RTSP / 海康设备';
+    })();
+  }
+  (function bindNoSrcGo(){
+    var b=document.getElementById('tjNoSrcGo');
+    if(b) b.addEventListener('click', function(){
+      var nav=document.querySelector('.nav .item[data-route="/source"]');
+      if(nav) nav.click();
+    });
+  })();
+
+  // ==================== v1.3.0 R5: 视频文件源播放控制条 ====================
+  // 对齐主程序 Monitor: 仅视频源显示; 进度/倍速检测中禁用, 逐帧运行中禁用;
+  // 数据契约 GET /source/video/info { progress, current_time, duration, speed, sync_mode, ended }
+  function _vcFmt(sec){ if(!sec||isNaN(sec)) return '00:00';
+    var m=Math.floor(sec/60), s=Math.floor(sec%60);
+    return ('0'+m).slice(-2)+':'+('0'+s).slice(-2); }
+  function tjscVidCtrl(det){
+    var bar=document.getElementById('tjVidCtrl'); if(!bar) return;
+    var isVideo=det.source_type==='video' && !!det.is_running;
+    bar.classList.toggle('show', isVideo);
+    if(!isVideo) return;
+    var detecting=!!det.is_detecting;
+    var prog=document.getElementById('vcProg'), spd=document.getElementById('vcSpeed'), sync=document.getElementById('vcSync');
+    if(prog) prog.disabled=detecting;
+    if(sync) sync.disabled=!!det.is_running;
+    var now=Date.now();
+    if(now-(window.__tjVcLast||0)<900) return;      // 与主程序一致 ~1s 刷一次
+    window.__tjVcLast=now;
+    if(window.__tjVcBusy) return;                    // 拖动/改速中不让轮询覆盖
+    tjApi.get('/source/video/info').then(function(v){
+      if(!v||v.status!=='success'||window.__tjVcBusy) return;
+      var cur=document.getElementById('vcCur'), dur=document.getElementById('vcDur');
+      if(cur) cur.textContent=_vcFmt(v.current_time);
+      if(dur) dur.textContent=_vcFmt(v.duration);
+      if(prog && !window.__tjVcDrag) prog.value=Math.round((v.progress||0)*1000);
+      if(spd){ spd.value=String(v.speed||1); spd.disabled=detecting||!!v.sync_mode; }
+      if(sync) sync.checked=!!v.sync_mode;
+      var en=document.getElementById('vcEnded'); if(en) en.style.display=v.ended?'block':'none';
+      var sn=document.getElementById('vcSyncNote'); if(sn) sn.style.display=(v.sync_mode&&!v.ended)?'block':'none';
+    }).catch(function(){});
+  }
+  (function bindVidCtrl(){
+    var prog=document.getElementById('vcProg'), spd=document.getElementById('vcSpeed'), sync=document.getElementById('vcSync');
+    if(prog){
+      prog.addEventListener('input', function(){ window.__tjVcDrag=true; });
+      prog.addEventListener('change', async function(){
+        window.__tjVcBusy=true;
+        try{
+          await tjApi.post('/source/video/progress', { progress:(+prog.value||0)/1000 });
+          // 对齐主程序: 跳转后强制重连 MJPEG 流, 立刻看到新位置画面
+          var img=document.getElementById('tjFeed');
+          if(img) setTimeout(function(){ img.src='/video_feed?channel=0&t='+Date.now(); }, 100);
+        }catch(e){ showProtoToast('设置进度失败: '+((e&&e.message)||e)); }
+        finally{ window.__tjVcDrag=false; window.__tjVcBusy=false; }
+      });
+    }
+    if(spd) spd.addEventListener('change', async function(){
+      window.__tjVcBusy=true;
+      try{ await tjApi.post('/source/video/speed', { speed:parseFloat(spd.value)||1 });
+        showProtoToast('播放倍速已设为 '+spd.value+'x');
+      }catch(e){ showProtoToast('设置倍速失败: '+((e&&e.message)||e)); }
+      finally{ setTimeout(function(){ window.__tjVcBusy=false; }, 500); }
+    });
+    if(sync) sync.addEventListener('change', async function(){
+      try{ await tjApi.post('/source/video/sync-mode', { enabled:sync.checked });
+        showProtoToast(sync.checked?'已切换到逐帧检测模式':'已切换到正常播放模式');
+      }catch(e){ sync.checked=!sync.checked; showProtoToast('设置同步模式失败: '+((e&&e.message)||e)); }
+    });
+  })();
 
   // 检测框 canvas 叠加层: 后端 MJPEG 只出原始画面, 检测框坐标走 det.detections (归一化 x/y/w/h),
   // 由前端按 object-fit:contain 换算后画在视频上 (与主程序 Monitor canvas overlay 同一套思路)
@@ -6649,23 +7483,37 @@
     var nw=img.naturalWidth||0, nh=img.naturalHeight||0;
     var dx=0,dy=0,dw=W,dh=H;
     if(nw>0&&nh>0){ var s=Math.min(W/nw,H/nh); dw=nw*s; dh=nh*s; dx=(W-dw)/2; dy=(H-dh)/2; }
-    var OK='#22e0c8', NG='#ff5a6a';
+    // 检测框外观吃用户配置 (对齐主程序 drawDetections: 设置页改颜色/线宽/字号/置信度即时生效);
+    // 取色优先级同主程序 pickDetColor: 步骤级 box_color > 副模型 display_color > is_ng ? NG色 : 正常色
+    var tc=window.__tjToastCfg||{};
+    var OK=tc.boxColor||'#22e0c8', NG=tc.boxColorNG||'#ff5a6a';
+    var lw=tc.boxLineWidth>0?tc.boxLineWidth:2;
+    var fs=tc.labelFontSize>0?tc.labelFontSize:12;
+    var showConf=tc.showConfidence!==false;
+    var steps=(det.project_config&&det.project_config.steps_config)||[];
+    var stepColor={}, hiddenLabels={};
+    steps.forEach(function(st){ if(!st||!st.label) return;
+      if(st.box_color) stepColor[st.label]=st.box_color;
+      if(st.hide_in_view) hiddenLabels[st.label]=1; });
     ctx.textBaseline='top';
-    ctx.font='12px system-ui,-apple-system,sans-serif';
+    ctx.font=fs+'px system-ui,-apple-system,sans-serif';
+    var lh=fs+6;
     dets.forEach(function(b){
       if(b.hidden) return;
+      var lb=String(b.label||'');
+      if(hiddenLabels[lb]) return; // 对齐主程序 hide_in_view: 参与逻辑但不画框
       var x=Math.max(0,Math.min(1,_tnum(b.x,0)));
       var y=Math.max(0,Math.min(1,_tnum(b.y,0)));
       var w=Math.max(0,Math.min(1-x,_tnum(b.w,0)));
       var h=Math.max(0,Math.min(1-y,_tnum(b.h,0)));
       if(w<=0||h<=0) return;
       var px=x*dw+dx, py=y*dh+dy, pw=w*dw, ph=h*dh;
-      var ng=/ng|fail|不良|缺陷|错|不合格/i.test(String(b.label||''));
-      var col=ng?NG:OK;
-      ctx.strokeStyle=col; ctx.lineWidth=2; ctx.strokeRect(px,py,pw,ph);
+      var ng=b.is_ng===true||/ng|fail|不良|缺陷|错|不合格/i.test(lb);
+      var col=stepColor[lb]||(b.model_name&&b.model_name!=='main'&&b.display_color)||(ng?NG:OK);
+      ctx.strokeStyle=col; ctx.lineWidth=lw; ctx.strokeRect(px,py,pw,ph);
       // 赛博朋克角标
       var L=Math.max(6,Math.min(16,pw/3,ph/3));
-      ctx.lineWidth=3; ctx.beginPath();
+      ctx.lineWidth=lw+1; ctx.beginPath();
       ctx.moveTo(px,py+L); ctx.lineTo(px,py); ctx.lineTo(px+L,py);
       ctx.moveTo(px+pw-L,py); ctx.lineTo(px+pw,py); ctx.lineTo(px+pw,py+L);
       ctx.moveTo(px,py+ph-L); ctx.lineTo(px,py+ph); ctx.lineTo(px+L,py+ph);
@@ -6673,58 +7521,151 @@
       ctx.stroke();
       // 标签底 + 文字
       var cf=_tnum(b.confidence!=null?b.confidence:b.conf,0); cf=cf>1?cf:cf*100;
-      var txt=(b.label||'目标')+' '+Math.round(cf)+'%';
+      var txt=showConf?((lb||'目标')+' '+Math.round(cf)+'%'):(lb||'目标');
       var tw=ctx.measureText(txt).width+10;
-      var ty=py>18?py-18:py+2;
-      ctx.fillStyle=ng?'rgba(255,90,106,.88)':'rgba(34,224,200,.88)';
-      ctx.fillRect(px,ty,tw,16);
+      var ty=py>lh+2?py-lh-2:py+2;
+      ctx.fillStyle=_tjHexRgba(col,.88);
+      ctx.fillRect(px,ty,tw,lh);
       ctx.fillStyle='#04121f';
-      ctx.fillText(txt,px+5,ty+2);
+      ctx.fillText(txt,px+5,ty+3);
     });
   }
 
-  // 合格/不合格 大提示框: 按 det.recent_events 的 toast_id(ok/ng) 在视频中央弹出, 1.8s 淡出
-  function _tjVerdictBox(){
-    var feed=document.querySelector('.video .feed'); if(!feed) return null;
-    var v=document.getElementById('tjVerdict');
-    if(!v){
-      v=document.createElement('div'); v.id='tjVerdict';
-      v.style.cssText='position:absolute;left:50%;top:42%;transform:translate(-50%,-50%) scale(.8);z-index:6;pointer-events:none;padding:14px 30px;border-radius:14px;font-weight:800;letter-spacing:2px;opacity:0;transition:opacity .25s,transform .25s;text-align:center;white-space:nowrap';
-      feed.appendChild(v);
-    }
-    return v;
+  // ==================== 事件提示框引擎: 对齐主程序 detection_config.toasts / customToasts ====================
+  // 主程序契约 (Monitor showToastById):
+  //   事件帧 recent_events[] 带 show_notification + toast_id → 勾了"显示提示框"才弹;
+  //   样式取激活项目 detection_config: toasts.{ok,ng,scan,warn_no_barcode} + customToasts[](按 id 匹配),
+  //   字段 = color/duration/fontSize/position/text/subText; NG 副标题在 showNgReason 时显示 reason;
+  //   voiceEnabled 时语音播报 (ok=合格 / ng=不合格+原因 / 自定义=主文字或事件名)。
+  // 外观走本插件 HUD 风格 (深底+事件色描边辉光), 但颜色/文字/时长/字号/位置全部吃用户配置。
+  var _TJ_TOAST_DEFAULTS = {
+    ok:  { color:'#10b981', duration:2, fontSize:18, position:'top-right', text:'合格',   subText:'' },
+    ng:  { color:'#ef4444', duration:3, fontSize:18, position:'top-right', text:'不合格', subText:'' },
+    scan:{ color:'#0891b2', duration:2, fontSize:18, position:'top-right', text:'扫码成功', subText:'' },
+    warn_no_barcode:{ color:'#f59e0b', duration:5, fontSize:16, position:'top-right', text:'⚠ 未绑码', subText:'本次结算未绑定工件条码' }
+  };
+  window.__tjToastCfg = null;    // 激活项目 detection_config 缓存 (提示框 + 检测框外观 + 语音, 与主程序同源)
+  window.__tjToastCfgPid = null;
+  window.__tjToastCfgReload = function(){ window.__tjToastCfgPid = null; }; // 设置页保存后强制重拉
+  function _tjEnsureToastCfg(det){
+    var pid = det.project_config && det.project_config.project_id;
+    if(!pid || !window.tjApi || window.__tjToastCfgPid===pid) return;
+    window.__tjToastCfgPid = pid;
+    tjApi.get('/projects/'+pid).then(function(pr){
+      var dc=(pr&&pr.detection_config)||{};
+      window.__tjToastCfg={ toasts:dc.toasts||{}, customToasts:dc.customToasts||[],
+        showNgReason:dc.showNgReason===true, voiceEnabled:dc.voiceEnabled===true,
+        voiceVolume:(dc.voiceVolume!=null?Number(dc.voiceVolume):1),
+        boxColor:dc.boxColor||'', boxColorNG:dc.boxColorNG||'',
+        boxLineWidth:Number(dc.boxLineWidth)||0, labelFontSize:Number(dc.labelFontSize)||0,
+        showConfidence:dc.showConfidence!==false };
+    }).catch(function(){ window.__tjToastCfgPid=null; });
   }
+  function _tjToastConf(toastId){
+    var cfg=window.__tjToastCfg||{}, ts=cfg.toasts||{};
+    var base=_TJ_TOAST_DEFAULTS[toastId];
+    if(base){
+      var u=ts[toastId]||{}, o={};
+      for(var k in base) o[k]=(u[k]!=null&&u[k]!=='')?u[k]:base[k];
+      if(u.enabled===false) o.enabled=false;
+      return o;
+    }
+    var c=(cfg.customToasts||[]).find(function(t){return t&&t.id===toastId;});
+    if(c) return { color:c.color||'#a855f7', duration:_tnum(c.duration,3)||3, fontSize:_tnum(c.fontSize,16)||16,
+      position:c.position||'top-right', text:c.text||'', subText:c.subText||'' };
+    return _tjToastConf('ok'); // 未知 toast_id → 主程序同款回退 ok
+  }
+  function _tjToastLayer(position){
+    var feed=document.querySelector('.video .feed'); if(!feed) return null;
+    var pos=position||'top-right';
+    var id='tjToastLayer_'+pos.replace(/[^a-z]/g,'');
+    var lay=document.getElementById(id);
+    if(!lay){
+      lay=document.createElement('div'); lay.id=id;
+      var s='position:absolute;z-index:7;display:flex;flex-direction:column;gap:8px;pointer-events:none;max-width:46%;';
+      if(pos==='top-left') s+='top:12px;left:12px;align-items:flex-start;';
+      else if(pos==='bottom-right') s+='bottom:12px;right:12px;align-items:flex-end;';
+      else if(pos==='bottom-left') s+='bottom:12px;left:12px;align-items:flex-start;';
+      else if(pos==='center') s+='top:12px;left:50%;transform:translateX(-50%);align-items:center;';
+      else s+='top:12px;right:12px;align-items:flex-end;';
+      lay.style.cssText=s;
+      feed.appendChild(lay);
+    }
+    return lay;
+  }
+  function _tjHexRgba(hex,a){
+    var m=/^#?([0-9a-f]{6})$/i.exec(String(hex||'').trim());
+    if(!m) return 'rgba(42,168,255,'+a+')';
+    var n=parseInt(m[1],16);
+    return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';
+  }
+  function tjPopToast(toastId, eventName, reason, subOverride){
+    var c=_tjToastConf(toastId);
+    if(c.enabled===false) return;
+    var lay=_tjToastLayer(c.position); if(!lay) return;
+    var ok=toastId==='ok', ng=toastId==='ng';
+    var icon=ok?'✓':(ng?'✕':'⚠');
+    var title=c.text||eventName||(ng?'不合格':'合格');
+    var sub=subOverride||c.subText||'';
+    if(ng && reason && (window.__tjToastCfg||{}).showNgReason) sub=reason;
+    var fs=_tnum(c.fontSize,18)||18;
+    var el=document.createElement('div');
+    el.style.cssText='pointer-events:none;display:flex;align-items:center;gap:10px;padding:9px 16px;'
+      +'background:rgba(4,12,26,.88);border:1px solid '+_tjHexRgba(c.color,.75)+';border-left:3px solid '+c.color+';'
+      +'border-radius:6px;box-shadow:0 0 18px '+_tjHexRgba(c.color,.35)+',inset 0 0 12px '+_tjHexRgba(c.color,.08)+';'
+      +'backdrop-filter:blur(4px);opacity:0;transform:translateY(-6px);transition:opacity .22s,transform .22s;';
+    el.innerHTML='<span style="font-size:'+(fs+6)+'px;line-height:1;color:'+c.color+';text-shadow:0 0 10px '+_tjHexRgba(c.color,.8)+'">'+icon+'</span>'
+      +'<span><span style="display:block;font-size:'+fs+'px;font-weight:700;letter-spacing:1px;color:'+c.color+'">'+_esc(title)+'</span>'
+      +(sub?('<span style="display:block;font-size:'+Math.max(11,fs-6)+'px;color:#9fb6d8;margin-top:2px">'+_esc(sub)+'</span>'):'')+'</span>';
+    lay.appendChild(el);
+    requestAnimationFrame(function(){ el.style.opacity='1'; el.style.transform='translateY(0)'; });
+    while(lay.children.length>4) lay.removeChild(lay.firstChild);
+    setTimeout(function(){ el.style.opacity='0'; el.style.transform='translateY(-6px)';
+      setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); },260);
+    }, Math.max(0.5,_tnum(c.duration,2)||2)*1000);
+    // 语音播报 (对齐主程序; 1.5s 内相同文本去重防刷屏)
+    try{
+      var tc=window.__tjToastCfg||{};
+      if(tc.voiceEnabled && window.speechSynthesis){
+        var vt = ok?'合格':(ng?((sub&&tc.showNgReason)?('不合格，'+sub):'不合格'):(title||'事件触发'));
+        if(window.__tjLastVoice!==vt || (Date.now()-(window.__tjLastVoiceAt||0))>1500){
+          window.__tjLastVoice=vt; window.__tjLastVoiceAt=Date.now();
+          var utr=new SpeechSynthesisUtterance(vt); utr.lang='zh-CN'; utr.rate=1.1;
+          utr.volume=Math.max(0,Math.min(1,tc.voiceVolume!=null?tc.voiceVolume:1));
+          window.speechSynthesis.speak(utr);
+        }
+      }
+    }catch(e){}
+  }
+  window.tjPopToast=tjPopToast;
   function tjscVerdict(det){
+    _tjEnsureToastCfg(det);
     var evs=det.recent_events||[];
     var maxSeq=0; evs.forEach(function(e){ var s=_tnum(e.seq,0); if(s>maxSeq)maxSeq=s; });
     // 首次就绪: 同步已有事件序号 (无近期事件则 0), 不弹历史; 保证之后第一个真实事件也能弹
-    // (空列表也要走到这里 init, 否则页面加载时无历史事件会漏掉生产第一个 OK/NG)
     if(window.__tjscVerdictSeen==null){ window.__tjscVerdictSeen=maxSeq; return; }
     if(!evs.length) return;
     if(maxSeq<window.__tjscVerdictSeen) window.__tjscVerdictSeen=0; // 新会话 seq 回退, 重置
     var fresh=evs.filter(function(e){ return _tnum(e.seq,0)>window.__tjscVerdictSeen; })
                  .sort(function(a,b){ return _tnum(a.seq,0)-_tnum(b.seq,0); });
     window.__tjscVerdictSeen=maxSeq;
-    if(!fresh.length) return;
-    var last=null;
-    for(var i=fresh.length-1;i>=0;i--){
-      var tid=String(fresh[i].toast_id||'').toLowerCase();
-      var nm=String(fresh[i].event_name||'');
-      if(tid==='ok'||tid==='ng'||/ng|不良|不合格|合格|fail|ok/i.test(nm)){ last=fresh[i]; break; }
-    }
-    if(!last) return;
-    var t2=String(last.toast_id||'').toLowerCase();
-    var ng = t2==='ng' || (t2!=='ok' && /ng|不良|不合格|fail/i.test(String(last.event_name||'')));
-    var v=_tjVerdictBox(); if(!v) return;
-    var nm2=last.event_name||(ng?'不合格':'合格');
-    v.style.background=ng?'rgba(40,8,12,.80)':'rgba(6,32,26,.80)';
-    v.style.border=ng?'2px solid #ff5a6a':'2px solid #22e0c8';
-    v.style.color=ng?'#ff8a96':'#5cf0d8';
-    v.style.boxShadow=ng?'0 0 30px rgba(255,90,106,.55)':'0 0 30px rgba(34,224,200,.45)';
-    v.innerHTML='<div style="font-size:34px;line-height:1">'+(ng?'✕':'✓')+'</div><div style="font-size:18px;margin-top:4px">'+_esc(nm2)+'</div>';
-    v.style.opacity='1'; v.style.transform='translate(-50%,-50%) scale(1)';
-    clearTimeout(window.__tjVerdictTimer);
-    window.__tjVerdictTimer=setTimeout(function(){ v.style.opacity='0'; v.style.transform='translate(-50%,-50%) scale(.8)'; }, 1800);
+    // 对齐主程序: 仅勾了"显示提示框"的事件才弹, toast_id 缺省按事件 id 推 (1=ok / 2=ng)
+    fresh.slice(-3).forEach(function(e){
+      if(!e.show_notification) return;
+      var tid=String(e.toast_id||'').toLowerCase();
+      if(!tid) tid = String(e.event_id)==='1'?'ok':(String(e.event_id)==='2'?'ng':'ok');
+      tjPopToast(tid, e.event_name||'', e.reason||'');
+    });
+  }
+  // 扫码成功提示 (对齐主程序 handleScanToast: det.mes.scan_event, 按时间戳去重, 吃 toasts.scan 配置)
+  function tjscScanToast(det){
+    var se=det&&det.mes&&det.mes.scan_event; if(!se) return;
+    var ts=_tnum(se.timestamp,0);
+    if(ts<=(window.__tjscScanToastTs||0)) return;
+    if(window.__tjscScanToastTs==null){ window.__tjscScanToastTs=ts; return; } // 首帧不弹历史
+    window.__tjscScanToastTs=ts;
+    if(se.scan_pair_dup_warning){ showProtoToast('重复扫码: '+(se.serial_no||'')+' — 等待新码'); return; }
+    tjPopToast('scan', '扫码成功', '', se.serial_no||'');
   }
 
   // 动作识别结果浮层: 按项目真实步骤 + 完成态 + 当前帧置信度
@@ -7076,6 +8017,7 @@
     if(window.__tjscNoScanLast && (now-window.__tjscNoScanLast)<8000) return;
     window.__tjscNoScanLast=now;
     window.__tjscAlertLive=true;
+    try{ tjPopToast('warn_no_barcode','未绑码',''); }catch(e){}
     var list=document.querySelector('.alerts .list'); if(!list) return;
     var el=document.createElement('div'); el.className='alert warn';
     el.innerHTML='<span class="tm">'+nowStr()+'</span><span class="msg">⚠ 未绑码 — 本次结算未绑定工件条码</span><span class="tag">警告</span>';
@@ -7108,7 +8050,7 @@
     try{ act=await tjApi.get('/projects/active/current'); }catch(e){}
     if(!act||!act.id){ showProtoToast('请先在项目管理启用一个项目'); return; }
     var proj=await tjApi.get('/projects/'+act.id);
-    // 1. 项目配置推给检测状态机 (与主程序 syncProjectConfig 同构)
+    // 1. 项目配置推给检测状态机 (与主程序 syncProjectConfig 同构, 先于任何启动/恢复路径)
     var pc=proj.pipeline_config||{};
     await tjApi.post('/source/detection/set-project?channel=0', {
       project_id:proj.id, name:proj.name, task_type:proj.task_type||'detection',
@@ -7121,6 +8063,28 @@
         idle_timeout_seconds:pc.idle_timeout_seconds!=null?pc.idle_timeout_seconds:0 }),
       events_config:proj.events_config||[], counters_config:proj.counters_config||[],
       data_config:proj.data_config||{} });
+    // 1.5 视频源守门 (对齐主程序 startDetection 的暂停/待机恢复路径):
+    //     源没在跑 → /detection/resume 让后端重启记忆中的视频源, 恢复不了就提示去输入源设置,
+    //     绝不"无画面空跑检测"(No Source 黑屏); 源在跑+模型已载 → resume-inference 待机快速恢复
+    var st0={}; try{ st0=await tjApi.get('/source/status')||{}; }catch(e){}
+    var _hasExtra=(pc.models||[]).some(function(m){return m&&m.name&&m.name!=='main'&&m.model_id;});
+    if(!st0.is_running){
+      try{
+        await tjApi.post('/source/detection/resume?channel=0', {});
+        showProtoToast('已恢复画面与检测: '+(proj.name||''));
+        return;
+      }catch(e){
+        showProtoToast('没有可用的视频源，请先到「输入源设置」启动摄像头或视频', 4000);
+        return;
+      }
+    }
+    if(!_hasExtra && st0.is_running && !st0.is_detecting && st0.model_loaded){
+      try{
+        await tjApi.post('/source/detection/resume-inference?channel=0', {});
+        showProtoToast('已从待机恢复检测: '+(proj.name||''));
+        return;
+      }catch(e){ /* 快速恢复失败 → 回退完整启动 */ }
+    }
     // 2. 解析模型路径 (按项目格式, 失败回退原始文件)
     if(!proj.default_model_id){ showProtoToast('项目未配置模型，请到模型仓库点「设为项目模型」'); return; }
     async function resolvePath(mid, fmt){
@@ -7395,8 +8359,10 @@
       try{ tjscSop(det); }catch(e){}
       try{ tjscVideo(det); }catch(e){}
       try{ tjscFeed(det); }catch(e){}
+      try{ tjscVidCtrl(det); }catch(e){}
       try{ tjscBoxes(det); }catch(e){}
       try{ tjscVerdict(det); }catch(e){}
+      try{ tjscScanToast(det); }catch(e){}
       try{ tjscActions(det); }catch(e){}
       try{ tjscTrack(det); }catch(e){}
       try{ tjscPerItem(det); }catch(e){}
@@ -7430,6 +8396,590 @@
     if(d.__tjsc !== true) return;
     try{ tjscApply(d); }catch(e){ /* 桥接错误绝不影响展示 */ }
   });
+</script>
+
+<!-- ==================== v1.3.0 全屏浮层（iframe 内自绘：宿主的会被本插件 iframe 盖住） ==================== -->
+<!-- 人工确认阻塞层（v3.23 NG 补做 / 定格确认） -->
+<div id="tjAckLayer">
+  <div class="ack-panel">
+    <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+    <h2 id="ackTitle">检测到 NG</h2>
+    <div class="ack-reason" id="ackReason">—</div>
+    <div class="ack-cd" id="ackCd"></div>
+    <div class="ack-btns" id="ackBtns"></div>
+    <div class="ack-elev" id="ackElev">
+      <span style="font-size:12px;color:#f3c5cb">主管授权：</span>
+      <input class="proto-input" id="ackElevUser" placeholder="账号" />
+      <input class="proto-input" id="ackElevPass" type="password" placeholder="密码" />
+      <button class="proto-btn ng" id="ackElevBtn">授权强制结案</button>
+    </div>
+  </div>
+</div>
+<!-- 在途报警持续横幅（v3.29 外部生产管控系统） -->
+<div id="tjExtAlarm" class="pos-top">
+  <div class="ea-head"><span class="ea-dot"></span><span id="eaTitle">生产管控报警</span><span class="ea-sub" id="eaSub"></span></div>
+  <div class="ea-list" id="eaList"></div>
+</div>
+<!-- 包装箱结算进度卡（v3.21+ 上银包装线） -->
+<div id="tjPackCard">
+  <div class="pk-head"><span class="t">包装结算</span><span class="order" id="pkOrder">—</span><span class="x" id="pkClose">✕</span></div>
+  <div class="pk-prog"><b id="pkNum">0</b><span id="pkTotal">/ 0 件</span><span class="pk-tail" id="pkTail" style="display:none">尾箱</span></div>
+  <div class="pk-chips" id="pkChips"></div>
+  <div class="pk-remed" id="pkRemed" style="display:none"></div>
+  <div class="pk-btns">
+    <button class="proto-btn" id="pkConfirmBtn" style="display:none">确认进箱</button>
+    <button class="proto-btn ng" id="pkForceBtn" style="display:none">强制结箱</button>
+  </div>
+</div>
+<!-- 虚拟扫码枪（展会演示：无 USB 枪时手输条码，走真实 /scanner/scan_pair 链路） -->
+<div id="tjScanPill"><span>▍</span><span>虚拟扫码枪</span></div>
+<div id="tjScanBox">
+  <input class="proto-input" id="tjScanInput" placeholder="输入条码后回车 = 扫码" />
+  <button class="proto-btn primary" id="tjScanSend">扫码</button>
+</div>
+<!-- 录像异常浮动入口（v3.23 recording_failures） -->
+<div id="tjRecFailBadge" title="录像异常">REC</div>
+<div id="tjRecFailPanel">
+  <b style="color:#ff8a96">录像异常记录</b>
+  <table><thead><tr><th>时间</th><th>类型</th><th>说明</th></tr></thead><tbody id="tjRecFailRows"></tbody></table>
+</div>
+
+<script>
+  // ==================== v1.3.0 新真值层：称重 / 区域事件 / 浮层 / 扫码 ====================
+  (function(){
+  'use strict';
+  function $(id){ return document.getElementById(id); }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function num(v,d){ v=Number(v); return isFinite(v)?v:(d||0); }
+  function fmtW(v){ v=num(v,0); return (Math.round(v*10)/10).toLocaleString('en-US',{maximumFractionDigits:1}); }
+
+  // ---------- 模式扩展: weighing / region_events ----------
+  // 原 apply() 只认 seq/trk/box/peritem; 包一层: 称重时钉住 weighing 类,
+  // 且拦截原 tjscMode 每帧用 'seq' 回写导致的抖动 (原逻辑对 weighing 项目会算出 key='seq')
+  var _origApply = window.__tjscApplyLayout;
+  window.__tjscApplyLayout = function(key){
+    var main = document.querySelector('.main'); if(!main) return;
+    var lm = (((window.__tjscLastDet||{}).project_config)||{}).logic_mode;
+    if(key!=='weighing' && lm==='weighing') key='weighing'; // 防原逻辑覆盖
+    main.classList.toggle('weighing', key==='weighing');
+    if(key==='weighing'){
+      main.classList.remove('track-flat','track-box','per-item');
+      var vN=document.querySelector('.vstep .n'), vT=document.querySelector('.vstep .t');
+      if(vN) vN.textContent='投料'; if(vT) vT.textContent='称重投料';
+      return;
+    }
+    // region_events 沿用 SOP 骨架 (= seq 布局)
+    if(_origApply) _origApply(key==='region'?'seq':key);
+  };
+  // 每帧模式判定: 返回 true 表示新模式接管 (weighing / region_events)
+  window.__tjscModePatch = function(det){
+    var lm = ((det.project_config||{}).logic_mode)||'sequential';
+    if(lm==='weighing'){
+      var main=document.querySelector('.main');
+      if(main && !main.classList.contains('weighing')) window.__tjscApplyLayout('weighing');
+      return 'weighing';
+    }
+    if(lm==='region_events') return 'region';
+    return false;
+  };
+
+  // ---------- 称重投料真值层 (对齐 /weighing/state 真实快照) ----------
+  // 快照: {phase:idle|await_tare|filling|done, model_name, product_sn, material_idx,
+  //        materials:[料别名...], results:[{material,standard,net,verdict}], live_weight,
+  //        available_models:[...], model_specs:{料别:{standard,low_tol,high_tol}}, operator}
+  // 单位统一 kg (weighing_engine 约定)
+  function renderWeighing(st){
+    if(!st) return;
+    if(st.stations) st=st.stations[0]||null; // 全通道形态取首工位
+    if(!st) return;
+    var phaseMap={ idle:['待扫码','idle'], await_tare:['待放件/去皮','tare'], filling:['投料中','filling'], done:['本件完成','done'] };
+    var pm=phaseMap[String(st.phase||'idle')]||[String(st.phase),'filling'];
+    var pEl=$('wgPhase'); if(pEl){ pEl.textContent=pm[0]; pEl.className='wg-phase '+pm[1]; }
+    $('wgSn').textContent=st.product_sn||'—';
+    $('wgRecipe').textContent=st.model_name||'—';
+    var lw=st.live_weight;
+    $('wgGross').textContent=lw!=null?fmtW(lw):'—';
+    $('wgNet').textContent=lw!=null?fmtW(lw):'—';
+    // 结果表: 按料别名回填判定
+    var byMat={}; (st.results||[]).forEach(function(r){ byMat[r.material]=r; });
+    var anyBad=(st.results||[]).some(function(r){ return r.verdict==='shortage'||r.verdict==='over'; });
+    var live=$('wgLive'); if(live) live.classList.toggle('warn', anyBad);
+    var mats=st.materials||[];
+    var specs=st.model_specs||{};
+    var rail=$('wgRail');
+    if(rail){
+      if(!mats.length){
+        rail.innerHTML='<div class="wg-mat"><div class="wm-name">'+(st.model_name?'扫码后开始投料':'请先选择型号')+'</div><div class="wm-std">'+esc(st.model_name||'型号未选')+'</div><div class="wm-net"><b>—</b></div></div>';
+      } else {
+        rail.innerHTML=mats.map(function(name,i){
+          var r=byMat[name];
+          var spec=specs[name]||{};
+          var v=r?String(r.verdict):'';
+          var cls='wg-mat', chipCls='wait', chipTxt='待投';
+          if(v==='ok'){ cls+=' ok'; chipCls='ok'; chipTxt='合格'; }
+          else if(v==='shortage'){ cls+=' shortage'; chipCls='shortage'; chipTxt='缺料'; }
+          else if(v==='over'){ cls+=' over'; chipCls='over'; chipTxt='超量'; }
+          else if(v==='no_spec'){ chipCls='wait'; chipTxt='未配标准'; }
+          else if(i===num(st.material_idx,0)&&st.phase!=='idle'&&st.phase!=='done'){ cls+=' cur'; chipTxt='投料中'; }
+          var std=r&&r.standard!=null?r.standard:spec.standard;
+          var tol=(spec.low_tol!=null||spec.high_tol!=null)?(' -'+(spec.low_tol||0)+'/+'+(spec.high_tol||0)):'';
+          return '<div class="'+cls+'"><div class="wm-name">'+esc(name)+'<span class="wg-vchip '+chipCls+'">'+chipTxt+'</span></div>'+
+            '<div class="wm-std">标准 '+(std!=null?(fmtW(std)+'kg'+tol):'未配')+'</div>'+
+            '<div class="wm-net">实投 <b>'+(r?fmtW(r.net):'—')+'</b>'+(r?'kg':'')+'</div></div>';
+        }).join('');
+      }
+    }
+    // 右栏反馈卡 + 视频浮层
+    var curName=mats[num(st.material_idx,0)]||null;
+    var doneN=(st.results||[]).length;
+    var big=$('wgFbBig');
+    if(big){
+      if(st.phase==='done') big.innerHTML='本件投料完成 ✓';
+      else if(st.phase==='filling'&&curName) big.innerHTML='正在投「'+esc(curName)+'」';
+      else if(st.phase==='await_tare'&&curName) big.innerHTML='放件后去皮 →「'+esc(curName)+'」';
+      else big.textContent=pm[0];
+    }
+    $('wgFbMat').textContent=curName||'—';
+    var curSpec=curName?(specs[curName]||{}):{};
+    $('wgFbTgt').textContent=curName?((curSpec.standard!=null?fmtW(curSpec.standard)+'kg':'未配')+' / '+(lw!=null?fmtW(lw)+'kg':'—')):'— / —';
+    $('wgFbDone').textContent=doneN+' / '+(mats.length||0);
+    var aw=document.querySelector('.video .actions .a-wg');
+    if(aw && mats.length){
+      aw.innerHTML='<h4>投料识别结果</h4>'+mats.slice(0,7).map(function(name,i){
+        var r=byMat[name]; var v=r?String(r.verdict):'';
+        var cls2=(v==='ok')?'row done':((v==='shortage'||v==='over')?'row warn':(i===num(st.material_idx,0)?'row cur':'row'));
+        var spec2=specs[name]||{};
+        return '<div class="'+cls2+'"><span>'+esc(name)+'</span><span class="p">'+(r?fmtW(r.net):'--')+'/'+(spec2.standard!=null?fmtW(spec2.standard):'--')+'</span></div>'; }).join('');
+    }
+    // 可选型号下拉 (available_models)
+    var sel=$('wgModelSel');
+    var avail=st.available_models||[];
+    var sig=avail.join('|');
+    if(sel && sig && sel.__sig!==sig){
+      sel.__sig=sig;
+      sel.innerHTML='<option value="">— 选择型号 —</option>'+avail.map(function(m){
+        return '<option value="'+esc(m)+'"'+(m===st.model_name?' selected':'')+'>'+esc(m)+'</option>'; }).join('');
+    }
+  }
+  // 称重操作 (真实契约: POST body {channel_id}, 不是查询参数)
+  function bindWeighCtl(){
+    var sel=$('wgModelSel');
+    if(sel) sel.addEventListener('change', function(){
+      if(!sel.value) return;
+      tjApi.post('/weighing/context', {channel_id:0, model_name:sel.value})
+        .then(function(r){ if(r&&r.ok===false){ showProtoToast(r.message||'选型失败'); } else showProtoToast('已选择型号: '+sel.value); })
+        .catch(function(e){ showProtoToast('选型失败: '+((e.data&&e.data.detail)||e.message)); });
+    });
+    var snI=$('wgSnInput');
+    if(snI) snI.addEventListener('keydown', function(ev){
+      if(ev.key!=='Enter'||!snI.value.trim()) return;
+      tjApi.post('/weighing/scan', {channel_id:0, serial_no:snI.value.trim()})
+        .then(function(r){ if(r&&r.ok===false){ showProtoToast(r.message||'扫码被拦截'); } else { showProtoToast('已开始一件: '+snI.value.trim()); snI.value=''; } })
+        .catch(function(e){ showProtoToast('扫码失败: '+((e.data&&e.data.detail)||e.message)); });
+    });
+    function op(btn, url, tip){ var b=$(btn); if(!b) return;
+      b.addEventListener('click', function(){
+        tjApi.post(url, {channel_id:0}).then(function(r){
+          if(r&&r.ok===false) showProtoToast(r.message||'操作被拒绝'); else showProtoToast(tip);
+        }).catch(function(e){ showProtoToast('操作失败: '+((e.data&&e.data.detail)||e.message)); }); }); }
+    op('wgTareBtn','/weighing/tare','已去皮');
+    op('wgZeroBtn','/weighing/zero','已置零');
+    op('wgResetBtn','/weighing/reset','已复位当前件');
+  }
+  bindWeighCtl();
+  // 称重轮询: 仅 weighing 模式下自轮询 (1s), 不依赖父层数据泵扩展
+  setInterval(function(){
+    var main=document.querySelector('.main');
+    if(!main||!main.classList.contains('weighing')||!window.tjApi) return;
+    tjApi.get('/weighing/state', {channel:0}).then(renderWeighing).catch(function(){});
+  }, 1000);
+
+  // ---------- 区域事件模式：SOP 时间轴换数据源 ----------
+  // 规则身份来自 project_config.pipeline_config.region_events.rules [{id,name}] (与主程序 Monitor 同源);
+  // 完成态 = current_cycle_steps 含规则名; 进行中 = step_inflight_durations[name] > 0;
+  // 触发计数 = region_events.rules[].total (×N 小角标)。
+  // ⚠ 保持插件自己的时间轴卡片风格 (idx/nm/mt + 连接段), 不带主程序的步骤截图卡 —
+  //   截图卡是主程序 Monitor 的样式, 塞进来会把时间轴撑成图片墙 (2026-07-07 用户反馈修复)。
+  function renderRegionEvents(det){
+    var pcfg=(det.project_config&&det.project_config.pipeline_config)||{};
+    var rules=((pcfg.region_events||{}).rules)||[];
+    if(!rules.length) return false;
+    var flow=document.querySelector('.sop .flow'); if(!flow) return false;
+    var done=det.current_cycle_steps||[];
+    var inflight=det.step_inflight_durations||{};
+    var counts={};
+    (((det.region_events)||{}).rules||[]).forEach(function(r){ counts[r.name]=r; });
+    var running=!!(det.is_running||det.is_detecting);
+    var html='<div class="endcap">开始</div>';
+    rules.forEach(function(r,j){
+      var name=r.name||('动作'+(j+1));
+      var isDone=done.indexOf(name)>=0;
+      var inf=inflight[name];
+      var cur=running && !isDone && inf!=null && inf>0;
+      var seg=isDone?'seg done':(cur?'seg cur':'seg');
+      var cls=isDone?'step-card done':(cur?'step-card cur':'step-card');
+      var mt=isDone?'已完成':(cur?('进行中 <span class="tmr">'+Number(inf).toFixed(1)+'s</span>'):'等待中');
+      var rt=counts[name];
+      var badge=(rt&&num(rt.total,0)>0)?('<span class="cnt-badge">×'+rt.total+'</span>'):'';
+      html+='<div class="'+seg+'"></div><div class="'+cls+'">'+badge+'<div class="idx">'+(j+1)+'</div><div class="nm">'+esc(name)+'</div><div class="mt">'+mt+'</div></div>';
+    });
+    html+='<div class="seg"></div><div class="endcap end">✓ 结束</div>';
+    flow.innerHTML=html;
+    var ph=document.querySelector('.sop .ph'); if(ph && ph.textContent!=='区域动作时间轴') ph.textContent='区域动作时间轴';
+    return true;
+  }
+  // v3.32 拆分区域多轮次角标 (label_split_rounds = {srcLabel:{round,count,prefix,trigger_label}})
+  function renderRounds(det){
+    var box=$('sopRoundChips'); if(!box) return;
+    var lr=det.label_split_rounds;
+    var keys=lr?Object.keys(lr):[];
+    if(!keys.length){ box.style.display='none'; return; }
+    box.style.display='flex';
+    box.innerHTML=keys.map(function(k){
+      var r=lr[k]||{};
+      var started=num(r.round,0)>0;
+      return '<span class="sq" style="'+(started?'color:#45e6ff;border-color:rgba(69,230,255,.6)':'')+'">'
+        +esc(k)+' · '+(started?('第 '+r.round+' / '+r.count+' 轮'):'未开始')+'</span>'; }).join('');
+  }
+  // 周期性强制动作 chips (v3.5+; state=ok|due|overdue, counter/interval 次数维度, time_* 时间维度)
+  function renderPeriodic(det){
+    var box=$('sopPaChips'); if(!box) return;
+    var pas=det.periodic_actions||[];
+    if(!pas.length){ box.style.display='none'; return; }
+    box.style.display='flex';
+    box.innerHTML=pas.map(function(p){
+      var st=String(p.state||'').toLowerCase();
+      var cls=st==='overdue'?'pa overdue':(st==='due'?'pa due':'pa');
+      var lab=esc(p.name||'周期动作');
+      var prog=(num(p.interval,0)>0)?(' '+p.counter+'/'+p.interval+'轮'):'';
+      var t=(num(p.time_interval_seconds,0)>0)?(' · '+(num(p.time_remaining_seconds,0)>=0?('剩'+p.time_remaining_seconds+'s'):('超'+(-p.time_remaining_seconds)+'s'))):'';
+      var tail=st==='overdue'?' · 超期':(st==='due'?' · 到期':'');
+      return '<span class="'+cls+'">'+lab+prog+t+tail+'</span>'; }).join('');
+  }
+  // 逐件漏打待补横幅 (v3.28 离场快照判 NG 挂起: per_item_state.awaiting_remediation)
+  function renderRemediation(det){
+    var bar=$('piRemedBar'); if(!bar) return;
+    var ps=det.per_item_state||{};
+    if(!ps.enabled || !ps.awaiting_remediation){ bar.classList.remove('show'); return; }
+    bar.classList.add('show');
+    // 漏点 = 各步骤未覆盖个体序号
+    var list=$('piRemedList');
+    if(list){
+      var mh='';
+      (ps.steps||[]).forEach(function(s){
+        (s.items||[]).forEach(function(it,i){ if(!it.covered && mh.split('mc').length<12) mh+='<span class="mc">#'+(i+1)+'</span>'; });
+      });
+      list.innerHTML = mh || '<span>待补个体见面板红格</span>';
+    }
+  }
+  var remedBtn=$('piRemedForceBtn');
+  if(remedBtn) remedBtn.addEventListener('click', function(){
+    tjApi.post('/source/detection/per-item-control?channel=0&action=confirm_ng', {})
+      .then(function(r){ showProtoToast((r&&r.msg)||'已确认落账'); })
+      .catch(function(e){ showProtoToast('确认失败: '+((e.data&&e.data.detail)||e.message)); });
+  });
+
+  // ---------- 人工确认阻塞层 (det.pending_ack + det.pending_remediation, 对齐主程序 ack-event) ----------
+  // 后端契约: pending_ack{active,event_name,started_at,timeout_sec};
+  //   缺步骤挂起时 pending_remediation{kind:'missing_step',missing[],reason} 非空,
+  //   确认动作 = POST /detection/ack-event?channel&action=supplement_step|confirm_ng|redo (查询参数);
+  //   403 → 借权窗 POST /detection/ack-event-elevated {username,password,action}
+  var ackBusy=false, ackPendingAction=null;
+  function doAck(action){
+    if(ackBusy) return; ackBusy=true; ackPendingAction=action||null;
+    var url='/source/detection/ack-event?channel=0'+(action?('&action='+action):'');
+    tjApi.post(url, {})
+      .then(function(){ showProtoToast('已确认'); $('ackElev').classList.remove('show'); })
+      .catch(function(e){
+        if(e.status===403){ $('ackElev').classList.add('show'); showProtoToast('当前账号无确认权限，请借管理员账号授权'); }
+        else showProtoToast('确认失败: '+((e.data&&e.data.detail)||e.message));
+      }).finally(function(){ ackBusy=false; });
+  }
+  function renderAck(det){
+    var layer=$('tjAckLayer'); if(!layer) return;
+    var pa=det.pending_ack;
+    if(!pa || !pa.active){ layer.classList.remove('show'); layer.__mode=null; return; }
+    layer.classList.add('show');
+    var rem=det.pending_remediation;
+    $('ackTitle').textContent = rem ? '缺步骤 NG · 挂起待补' : ('需要人工确认 · '+(pa.event_name||''));
+    var reason = rem ? (rem.reason||'') : (pa.event_name||'');
+    var missing = (rem&&rem.missing)||[];
+    $('ackReason').innerHTML = esc(reason)+(missing.length?('<br/>缺失步骤: '+missing.map(esc).join('、')):'');
+    var cd=$('ackCd');
+    var waited = pa.started_at ? Math.max(0, Math.round(Date.now()/1000-num(pa.started_at,0))) : 0;
+    if(num(pa.timeout_sec,0)>0){ cd.textContent='已等待 '+waited+'s · '+Math.max(0,num(pa.timeout_sec,0)-waited)+'s 后自动确认'; }
+    else cd.textContent='已等待 '+waited+'s';
+    // 按钮组按是否缺步骤挂起切换
+    var mode = rem ? 'remed' : 'plain';
+    var btns=$('ackBtns');
+    if(layer.__mode!==mode){
+      layer.__mode=mode;
+      var acts = rem
+        ? [ {t:'✓ 已补做，判 OK', act:'supplement_step', cls:'proto-btn ok'},
+            {t:'认 NG 落账', act:'confirm_ng', cls:'proto-btn ng'},
+            {t:'丢弃重做', act:'redo', cls:'proto-btn'} ]
+        : [ {t:'✓ 确认重做', act:'', cls:'proto-btn ok'} ];
+      btns.innerHTML=acts.map(function(a){ return '<button class="'+a.cls+'" data-ack="'+a.act+'">'+a.t+'</button>'; }).join('');
+    }
+  }
+  $('ackBtns').addEventListener('click', function(ev){
+    var b=ev.target.closest('[data-ack]'); if(!b) return;
+    doAck(b.dataset.ack);
+  });
+  var elevBtn=$('ackElevBtn');
+  if(elevBtn) elevBtn.addEventListener('click', function(){
+    var u=$('ackElevUser').value.trim(), p=$('ackElevPass').value;
+    if(!u||!p){ showProtoToast('请输入管理员账号密码'); return; }
+    tjApi.post('/source/detection/ack-event-elevated?channel=0', {username:u, password:p, action:ackPendingAction})
+      .then(function(){ showProtoToast('已借权确认'); $('ackElev').classList.remove('show'); $('ackElevPass').value=''; })
+      .catch(function(e){ showProtoToast('借权失败: '+((e.data&&e.data.detail)||e.message)); });
+  });
+
+  // ---------- 在途报警横幅 (对齐 /mes/inbound 真实契约) ----------
+  // /active-alarms 无鉴权, 返回数组 [{task_no,product_code,step_code,operator,warning_text,raised_at}]
+  // /config 需 mes.gateway.edit 权限 → 拿不到时用默认外观 (顶部红色, 四要素全显)
+  var inbCfg=null;
+  function pollExtAlarmCfg(){
+    tjApi.get('/mes/inbound/config').then(function(c){
+      inbCfg=c||null;
+      var b=(c&&c.alarm_banner)||{};
+      var box=$('tjExtAlarm');
+      if(box) box.className='pos-'+((b.position==='bottom')?'bottom':'top');
+    }).catch(function(){ /* 无权限 → 用默认外观 */ });
+  }
+  function pollExtAlarms(){
+    var b=(inbCfg&&inbCfg.alarm_banner)||{};
+    if(b.enabled===false){ $('tjExtAlarm').classList.remove('show'); return; }
+    tjApi.get('/mes/inbound/active-alarms').then(function(items){
+      items=Array.isArray(items)?items:[];
+      var box=$('tjExtAlarm'); if(!box) return;
+      if(!items.length){ box.classList.remove('show'); return; }
+      box.classList.add('show');
+      box.style.background=b.color||'#dc2626';
+      $('eaSub').textContent='在途 '+items.length+' 条';
+      $('eaList').innerHTML=items.slice(0,6).map(function(a){
+        var meta=[];
+        if(b.show_task_no!==false && a.task_no) meta.push('任务 '+a.task_no);
+        if(b.show_product_code!==false && a.product_code) meta.push('产品 '+a.product_code);
+        if(b.show_step_code!==false && a.step_code) meta.push('工步 '+a.step_code);
+        if(b.show_operator!==false && a.operator) meta.push('人员 '+a.operator);
+        if(b.show_time!==false && a.raised_at) meta.push(String(a.raised_at).slice(11,19));
+        return '<div class="ea-item">'+esc(a.warning_text||'报警')+(meta.length?('<div class="ea-meta">'+meta.map(esc).join(' · ')+'</div>'):'')+'</div>'; }).join('');
+    }).catch(function(){ /* 未启用入站对接 → 静默 */ });
+  }
+  setTimeout(pollExtAlarmCfg, 1200); setInterval(pollExtAlarmCfg, 30000);
+  setTimeout(pollExtAlarms, 1600); setInterval(pollExtAlarms, 5000);
+
+  // ---------- 开工四要素信息条 (det.mes.order.extra_data.inbound; 开关取 config.task_info_display) ----------
+  function renderTaskInfo(det){
+    var el=$('tjTaskInfo'); if(!el) return;
+    var order=det.mes&&det.mes.order;
+    var inb=order&&order.extra_data&&order.extra_data.inbound;
+    if(!inb){ el.style.display='none'; return; }
+    var sw=(inbCfg&&inbCfg.task_info_display)||{show_task_no:true,show_product_code:true,show_step_code:true,show_operator:true};
+    var items=[];
+    if(sw.show_task_no!==false && inb.task_no!=null) items.push(['任务号',inb.task_no]);
+    if(sw.show_product_code!==false && inb.product_code!=null) items.push(['产品',inb.product_code]);
+    if(sw.show_step_code!==false && inb.step_code!=null) items.push(['工序工步',inb.step_code]);
+    if(sw.show_operator!==false && inb.operator!=null) items.push(['操作员',inb.operator]);
+    if(!items.length){ el.style.display='none'; return; }
+    el.style.display='inline-flex';
+    el.innerHTML=items.map(function(x){ return '<span class="ti">'+x[0]+'<b>'+esc(x[1])+'</b></span>'; }).join('');
+  }
+
+  // ---------- 包装箱结算进度卡 (对齐 /packaging-flows 真实契约) ----------
+  // GET /packaging-flows → {items:[{id,enabled,...}]}; GET /{id}/state → {config, state(run)}
+  // run: {order_no,cust_name,box_total,box_done,box_ng,current_box_index,count_unit,
+  //       current_box_sliders,current_box_trays,items_per_box,tail_target,status,pending_box}
+  var pkFlowId=null, pkHidden=false, pkDisabled=false;
+  function pollPackFlows(){
+    if(pkDisabled) return;
+    tjApi.get('/packaging-flows').then(function(r){
+      var flows=(r&&r.items)||[];
+      var act=flows.filter(function(f){ return f.enabled===true; })[0];
+      pkFlowId=act?act.id:null;
+      if(!pkFlowId) $('tjPackCard').classList.remove('show');
+    }).catch(function(e){ pkFlowId=null; if(e&&(e.status===403||e.status===404)) pkDisabled=true; });
+  }
+  function pollPackState(){
+    if(!pkFlowId||pkHidden||pkDisabled) return;
+    tjApi.get('/packaging-flows/'+pkFlowId+'/state').then(function(r){
+      var card=$('tjPackCard'); if(!card) return;
+      var run=r&&r.state, cfg=(r&&r.config)||{};
+      if(!run||run.status==='completed'||run.status==='aborted'){ card.classList.remove('show'); return; }
+      card.classList.add('show');
+      $('pkOrder').textContent=(run.order_no||'—')+(run.cust_name?(' · '+run.cust_name):'');
+      var sliders=(run.count_unit==='sliders');
+      var isTail=run.box_total>0 && run.current_box_index>=run.box_total;
+      var target=sliders?(isTail&&run.tail_target>0?run.tail_target:run.items_per_box):num(cfg.trays_per_box,0);
+      var cnt=sliders?num(run.current_box_sliders,0):num(run.current_box_trays,0);
+      $('pkNum').textContent=cnt;
+      $('pkTotal').textContent='/ '+(target||'—')+(sliders?' 件':' 托')+' · 第 '+run.current_box_index+' / '+(run.box_total||'?')+' 箱';
+      $('pkTail').style.display=isTail?'':'none';
+      // 箱位 chips
+      var chips='';
+      var totalBoxes=Math.min(num(run.box_total,0)||num(run.current_box_index,0), 60);
+      for(var i=1;i<=totalBoxes;i++){
+        var cls='pk-chip';
+        if(i<=run.box_done) cls+=' ok';
+        if(i===run.current_box_index && run.status!=='completed') cls+=' cur';
+        chips+='<span class="'+cls+'">'+i+'</span>';
+      }
+      $('pkChips').innerHTML=chips;
+      // 少装挂起 (v3.23)
+      var pending=(run.status==='pending_remediation');
+      var rEl=$('pkRemed');
+      if(pending){
+        var pb=run.pending_box||{};
+        rEl.style.display='flex';
+        rEl.textContent='⚠ 第 '+run.current_box_index+' 箱少装 ('+(pb.sliders!=null?pb.sliders:cnt)+'/'+(pb.target!=null?pb.target:target)+')，等补做或人工确认';
+        $('pkConfirmBtn').style.display='';
+      } else { rEl.style.display='none'; $('pkConfirmBtn').style.display='none'; }
+      $('pkForceBtn').style.display=(run.status!=='order_loaded'||run.box_done>0)?'':'none';
+    }).catch(function(){});
+  }
+  setTimeout(pollPackFlows, 1500); setInterval(pollPackFlows, 20000);
+  setInterval(pollPackState, 2500);
+  var pkC=$('pkClose'); if(pkC) pkC.addEventListener('click', function(){ pkHidden=true; $('tjPackCard').classList.remove('show'); setTimeout(function(){ pkHidden=false; }, 60000); });
+  var pkCf=$('pkConfirmBtn'); if(pkCf) pkCf.addEventListener('click', function(){
+    // 少装挂起: 补齐落账 (target_count=null 自动补到目标)
+    tjApi.post('/packaging-flows/'+pkFlowId+'/supplement-sliders', {reason:'插件端人工确认补齐'})
+      .then(function(){ showProtoToast('已补齐落账'); pollPackState(); })
+      .catch(function(e){ showProtoToast('补齐失败: '+((e.data&&e.data.detail)||e.message)); }); });
+  var pkFc=$('pkForceBtn'); if(pkFc) pkFc.addEventListener('click', function(){
+    if(!pkFc.__armed){ pkFc.__armed=true; pkFc.textContent='再点确认强制结案'; setTimeout(function(){ pkFc.__armed=false; pkFc.textContent='强制结箱'; }, 3000); return; }
+    pkFc.__armed=false; pkFc.textContent='强制结箱';
+    tjApi.post('/packaging-flows/'+pkFlowId+'/force-settle', {reason:'展会插件端手动强制结案'})
+      .then(function(){ showProtoToast('已强制结案当前工单'); pollPackState(); })
+      .catch(function(e){ showProtoToast('强制结案失败: '+((e.data&&e.data.detail)||e.message)); }); });
+
+  // ---------- 虚拟扫码枪: 键盘事件转发给宿主 useScanGun (合成 KeyboardEvent 由父层 dispatch) ----------
+  var spill=$('tjScanPill'), sbox=$('tjScanBox');
+  if(spill) spill.addEventListener('click', function(){ sbox.classList.toggle('show'); if(sbox.classList.contains('show')) $('tjScanInput').focus(); });
+  // 显隐门控对齐主程序 Monitor: 仅存在"启用中"的包装结算配置才出现 (无包装客户零差异), 且只在监控页显示
+  window.__tjPackGunEnabled=false;
+  (function gateScanPill(){
+    if(!spill) return;
+    function probe(){
+      if(!window.tjApi){ setTimeout(probe, 1500); return; }
+      tjApi.get('/packaging-flows').then(function(r){
+        var items=(r&&(r.items||r))||[];
+        window.__tjPackGunEnabled=Array.isArray(items)&&items.some(function(f){return f&&f.enabled!==false;});
+      }).catch(function(){ window.__tjPackGunEnabled=false; });
+    }
+    probe();
+    setInterval(probe, 30000); // 新启用/停用结算流 30s 内跟上
+    setInterval(function(){
+      var act=document.querySelector('.nav .item.active');
+      var onMonitor=!act || act.dataset.route==='/monitor';
+      var show=window.__tjPackGunEnabled && onMonitor;
+      spill.classList.toggle('show', show);
+      if(!show && sbox) sbox.classList.remove('show');
+    }, 1000);
+  })();
+  // 虚拟扫码路由 (对齐主程序 useScanGun.dispatch 优先级):
+  //   称重模式 → /weighing/scan; 包装结算启用 → /packaging-flows/scan (handled=true 即消费);
+  //   否则 → /scanner/simulate 走 scan_pair 绑工件链路
+  async function sendScan(){
+    var v=$('tjScanInput').value.trim(); if(!v) return;
+    $('tjScanInput').value='';
+    var main=document.querySelector('.main');
+    try{
+      if(main && main.classList.contains('weighing')){
+        var wr=await tjApi.post('/weighing/scan', {channel_id:0, serial_no:v});
+        showProtoToast(wr&&wr.ok===false?(wr.message||'扫码被拦截'):('称重扫码: '+v)); return;
+      }
+      try{
+        var pr=await tjApi.post('/packaging-flows/scan', {code:v, channel_id:0});
+        if(pr && pr.handled){ showProtoToast('包装结算扫码: '+v); return; }
+      }catch(e){ /* 未启用包装结算 → 回退绑工件 */ }
+      var br=await tjApi.post('/scanner/simulate', {barcode:v, channel_id:0});
+      if(br && br.success===false) showProtoToast('绑定失败: '+(br.error_msg||br.message||'未知错误'));
+      else showProtoToast('扫码绑定工件: '+v);
+    }catch(err){ showProtoToast('扫码失败: '+((err.data&&err.data.detail)||err.message||err)); }
+  }
+  var ssend=$('tjScanSend'); if(ssend) ssend.addEventListener('click', sendScan);
+  var sin=$('tjScanInput'); if(sin) sin.addEventListener('keydown', function(ev){ if(ev.key==='Enter') sendScan(); });
+  // 物理 USB 扫码枪打在 iframe 上时同样转发 (iframe 抢焦点场景)
+  window.addEventListener('keydown', function(ev){
+    if(ev.target && /INPUT|TEXTAREA|SELECT/.test(ev.target.tagName)) return;
+    if(ev.key.length!==1 && ev.key!=='Enter') return;
+    try{ parent.postMessage({__tjscAction:true, action:'scan-key', payload:{key:ev.key, code:ev.code}}, '*'); }catch(e){}
+  }, true);
+
+  // ---------- 录像异常入口 (det.mes.recording_failures) ----------
+  function renderRecFail(det){
+    var fails=(det.mes&&det.mes.recording_failures)||[];
+    var badge=$('tjRecFailBadge'); if(!badge) return;
+    if(!fails.length){ badge.classList.remove('show'); $('tjRecFailPanel').classList.remove('show'); return; }
+    badge.classList.add('show');
+    var typeMap={session:'会话录像', cycle:'周期录像', step:'步骤录像'};
+    var reasonMap={open_failed:'打开失败', write_failed:'写入失败', write_exception:'写入异常'};
+    $('tjRecFailRows').innerHTML=fails.slice(-12).reverse().map(function(f){
+      var t=f.timestamp; if(typeof t==='number'){ t=new Date((t<1e12?t*1000:t)).toLocaleTimeString('zh-CN'); }
+      return '<tr><td>'+esc(t||'—')+'</td><td>'+esc(typeMap[f.recorder_type]||f.recorder_type||'—')+'</td><td>'+esc((reasonMap[f.reason]||f.reason||'')+(f.error?(' '+f.error):''))+'</td></tr>'; }).join('');
+  }
+  var rb=$('tjRecFailBadge'); if(rb) rb.addEventListener('click', function(){ $('tjRecFailPanel').classList.toggle('show'); });
+
+  // ---------- 重绑提示 (det.mes.rebind_prompt) + 就位引导 (det.placement_guide) ----------
+  var rebindSeen=null;
+  function renderRebind(det){
+    var rp=det.mes&&det.mes.rebind_prompt;
+    if(!rp) return;
+    var key=String(rp.workpiece_id||'')+':'+String(rp.timestamp||'');
+    if(key===rebindSeen) return; rebindSeen=key;
+    showProtoToast('🔁 工件 #'+(rp.workpiece_id||'?')+' 等待人工重新绑码 (周期 '+(rp.cycle_id||'?')+')', 5000);
+  }
+  function renderPlacement(det){
+    // v3.32 工件就位引导框: 运行态 placement_guide{in_position,anchor_visible},
+    // 多边形取 project_config.pipeline_config.placement_guide.polygon (归一化坐标),
+    // 叠画到检测框 canvas 上 (tjscBoxes 每帧 clear 后画框, 本函数随后追加)
+    var pg=det.placement_guide;
+    if(!pg||!pg.enabled) return;
+    var poly=(((det.project_config||{}).pipeline_config||{}).placement_guide||{}).polygon;
+    if(!Array.isArray(poly)||poly.length<3) return;
+    var cv=document.getElementById('tjBoxCanvas'); if(!cv) return;
+    var ctx=cv.getContext('2d');
+    var W=cv.width,H=cv.height;
+    var img=document.getElementById('tjFeed');
+    var nw=img&&img.naturalWidth||0, nh=img&&img.naturalHeight||0;
+    var dx=0,dy=0,dw=W,dh=H;
+    if(nw>0&&nh>0){ var sc=Math.min(W/nw,H/nh); dw=nw*sc; dh=nh*sc; dx=(W-dw)/2; dy=(H-dh)/2; }
+    var col=pg.in_position?'rgba(34,227,160,.9)':'rgba(243,181,77,.9)';
+    ctx.save(); ctx.setLineDash([7,5]); ctx.lineWidth=2; ctx.strokeStyle=col;
+    ctx.beginPath();
+    poly.forEach(function(p,i){
+      var x=num(p[0]!=null?p[0]:p.x,0)*dw+dx, y=num(p[1]!=null?p[1]:p.y,0)*dh+dy;
+      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    });
+    ctx.closePath(); ctx.stroke();
+    ctx.setLineDash([]); ctx.fillStyle=col; ctx.font='12px system-ui';
+    var p0=poly[0];
+    ctx.fillText(pg.in_position?'✓ 已就位':'请放入引导框 ('+(pg.anchor_label||'工件')+')',
+      num(p0[0]!=null?p0[0]:p0.x,0)*dw+dx+4, num(p0[1]!=null?p0[1]:p0.y,0)*dh+dy+4);
+    ctx.restore();
+  }
+
+  // ---------- 主帧钩子: 挂到原 tjscApply 之后 ----------
+  var _origApplyFrame = window.tjscApply;
+  // tjscApply 是内层函数不可直接覆盖 → 改为监听同一 message 事件 (注册在原监听器之后, 顺序执行)
+  window.addEventListener('message', function(ev){
+    var d=ev&&ev.data; if(!d) return;
+    if(d.__tjsc===true && d.detection){
+      var det=d.detection;
+      try{ var mp=window.__tjscModePatch(det); if(mp==='region') renderRegionEvents(det); }catch(e){}
+      try{ renderRounds(det); }catch(e){}
+      try{ renderPeriodic(det); }catch(e){}
+      try{ renderRemediation(det); }catch(e){}
+      try{ renderAck(det); }catch(e){}
+      try{ renderTaskInfo(det); }catch(e){}
+      try{ renderRecFail(det); }catch(e){}
+      try{ renderRebind(det); }catch(e){}
+      try{ renderPlacement(det); }catch(e){}
+    }
+    if(d.__tjsc===true && d.weighing){ try{ renderWeighing(d.weighing); }catch(e){} }
+  });
+  })();
 </script>
 </body>
 </html>

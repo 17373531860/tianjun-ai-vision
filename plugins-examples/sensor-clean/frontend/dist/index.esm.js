@@ -10,6 +10,7 @@
  *   - monitor.layout.body 整页覆盖「实时监控」→ 双工位左右视频 + 棉签看板
  *   - registry.tabs.register('project', ...) → 「传感器清洁配置」专属 Tab
  *   - v1.1.0 三判定（假擦拭 / 棉签超限 / 操作员离开）在项目 Tab 配置
+ *   - v1.3.0 工位1 计数伴随标签（同帧双类别门槛，detect9 对齐）
  */
 
 // host.api 的 baseURL 已含 /api/v1, 故路径不带前缀; 统一用主程序已鉴权 axios
@@ -526,6 +527,7 @@ export default {
       const body = {
         max_uses_per_swab: Number(cfg.value.max_uses_per_swab) || 11,
         count_anchor_label: cfg.value.count_anchor_label || "",
+        count_require_label: cfg.value.count_require_label || "",
         swap_label: cfg.value.swap_label || "",
         move_threshold: Number(cfg.value.move_threshold),
         lock_spatial: Number(cfg.value.lock_spatial),
@@ -715,6 +717,7 @@ export default {
             ]),
             group("识别标签", [
               txtField("工位1 产品计数标签", "count_anchor_label", "模型输出的产品类别名"),
+              txtField("工位1 计数伴随标签", "count_require_label", "留空=不启用；配置后须同帧同时检出才计数"),
               txtField("工位2 换棉签标签", "swap_label", "模型输出的换棉签类别名"),
             ]),
             group("计数防抖 (决定计数准不准)", [

@@ -9,7 +9,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__co
 
 # modify-source: source.py 安全修改分析（v3.5.x 主线，v3.12.0 增量）
 
-你正在帮用户安全修改 `backend/api/source.py`（**1573 行主类骨架** + 15 个继承式 mixin + 6 个 has-a 组件 + 工具模块）。
+你正在帮用户安全修改 `backend/api/source.py`（**约 2050 行主类骨架** + 17 个继承式 mixin + 6 个 has-a 组件 + 工具模块）。
 **这仍是整个系统最危险的文件，任何修改前必须完成以下分析。**
 
 计划修改: $ARGUMENTS
@@ -53,10 +53,10 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 ## 1. 当前架构（v3.5.x P7 重构之后）
 
 ```
-backend/api/source.py (1573L)               -- VSM 类骨架 + __init__ + __getattr__/__setattr__ + _COMPONENT_ROUTES
+backend/api/source.py (~2050L)              -- VSM 类骨架 + __init__ + __getattr__/__setattr__ + _COMPONENT_ROUTES
                                             -- get_video_manager / _get_mgr 入口 + Pydantic 模型 + 历史 re-export
 │
-├─ 15 个继承式 mixin (源文件名 → 类名 → 一句话职责)
+├─ 17 个继承式 mixin (源文件名 → 类名 → 一句话职责)
 │   1. source_tracking_mixin.py            TrackingMixin            tracking 模式 (物品清点) 12 个 _tracking_* 字段+方法
 │   2. source_inference_loop_mixin.py      InferenceLoopMixin       推理线程主循环 _inference_loop + 4 个 _inference_*
 │   3. source_step_stats_mixin.py          StepStatsMixin           _update_step_stats 步骤计数/时间窗/帧确认聚合
@@ -71,7 +71,9 @@ backend/api/source.py (1573L)               -- VSM 类骨架 + __init__ + __geta
 │  12. source_recording_thread_mixin.py    RecordingThreadMixin     录制后台线程消费 _recording_queue
 │  13. source_recording_api_mixin.py       RecordingApiMixin        录制公共 API (start/stop session/cycle/step recording)
 │  14. source_lifecycle_mixin.py           LifecycleMixin           pause/resume/stop_detection + clear_caches
-│  15. source_periodic_actions_mixin.py    PeriodicActionsMixin     v3.5.0 周期性强制动作 (每 N 轮 NG/OK 触发事件)
+│  15. source_synthetic_mixin.py           SyntheticMixin           虚拟剧本源 (无摄像头/无模型跑真实 pipeline, run-tests skill 用)
+│  16. source_periodic_actions_mixin.py    PeriodicActionsMixin     v3.5.0 周期性强制动作 (每 N 轮 NG/OK 触发事件)
+│  17. source_per_item_mixin.py            PerItemMixin             v3.8.0+ 逐件覆盖模式 (打螺丝/贴标, 1621L ⚠, 见 debug-per-item skill)
 │
 ├─ CheckModesMixin 内部聚合 4 个子 mixin (MRO):
 │   ├─ source_container_grouping_mixin.py  ContainerGroupingMixin   容器分组 + per-box 结算
@@ -98,12 +100,15 @@ backend/api/source.py (1573L)               -- VSM 类骨架 + __init__ + __geta
 │   ├─ source_sdk_loader.py             HCNetSDK + MvCamera + debug_log re-export
 │   └─ rod_filter.py                    传动杆同伴过滤 + RodSessionGate (源外, 但深度集成)
 │
-└─ ⚠ 4 个孤立 mixin 文件 (定义了类但 VSM 没继承, 历史拆分残留 — 见 AGENTS.md 第九节)
-    source_render_mixin.py / source_streaming_mixin.py / source_recording_mixin.py / source_industrial_camera_mixin.py
+└─ ⚠ 孤立 mixin 文件 (定义了类但 VSM 没继承, 历史拆分残留 — 见 AGENTS.md 第九节)
+    source_render_mixin.py / source_streaming_mixin.py
     动这些前先 grep 是否真的有人用; 大概率是死代码, 修复期间不要扩展它们.
+    （source_recording_mixin.py 546 行 / source_industrial_camera_mixin.py 438 行
+      已于 2026-07 全仓核实无 import 后删除, 同批跑绿录像/ROI/路由回归 37 项）
 ```
 
-> **注**：以 `source.py:185` 的 class 行为准 = **15 个 mixin**（v3.5.x P7 重构后）。AGENTS.md 已对齐。
+> **注**：以 `source.py:188` 的 class 行为准 = **17 个继承式 mixin**（v3.5.x P7 重构 15 个 + SyntheticMixin + v3.8 PerItemMixin）。行号/数量以代码为准。
+> **v3.31 补充**：称重投料模式（`logic_mode='weighing'`）**不进 VSM 帧循环**——状态机在 `backend/services/weighing_engine.py`（设备读数驱动），source 侧只有 `source_project_config_apply.py` 末尾的通道登记/注销段。改 VSM 不影响 weighing 引擎，反之亦然。
 
 ---
 
@@ -191,7 +196,7 @@ backend/services/mes_hooks.py               — on_session_start/end + on_cycle_
 backend/api/sessions.py / sessions_*.py     — 数据/导出 (4 个文件), 共用 ffmpeg_path
 backend/services/scanner.py                 — 通过 mes_hooks 间接联动
 backend/services/cluster_collector.py       — 通过 mes_hooks 触发 box 聚齐
-frontend/src/api/source.js                  — axios 封装
+frontend/src/api/detection.js               — axios 封装 (⚠ 没有 source.js, /source/* 端点封装在 detection.js)
 frontend/src/views/Monitor/index.vue        — 检测主页轮询 detection/results
 frontend/src/views/Source/index.vue         — 视频源 CRUD
 ```
@@ -207,15 +212,16 @@ backend/services/detector.py                — ❌ 已删
 
 如果在某个 mixin 里看到这些路径的注释或 import，**直接删干净**，不要复活。
 
-### 4.4 同名方法冲突区（v3.5.x 仍存在）
+### 4.4 同名方法冲突区（✅ 2026-07 已解除）
 
-| 方法名 | 文件 A | 文件 B | 谁生效 |
-|---|---|---|---|
-| `start_hcnetsdk` | `source_camera_start_mixin.py` | `source_industrial_camera_mixin.py` | A（B 没继承） |
-| `start_hikvision_camera` | 同上 | 同上 | 同上 |
-| 录像相关方法 | `source_recording_mixin.py` (孤立) | `source_recording_thread_mixin.py + source_recording_api_mixin.py`（生效） | B/C |
+历史上有两组同名方法冲突，随孤儿 mixin 删除已消失：
 
-**修这两组任意一边时**：先用 `grep -n "def start_hcnetsdk" backend/api/` 确认重复实现，决定保留哪份再动。
+| 方法名 | 生效实现（唯一存留） | 已删的重复副本 |
+|---|---|---|
+| `start_hcnetsdk` / `start_hikvision_camera` | `source_camera_start_mixin.py` | ~~`source_industrial_camera_mixin.py`~~（2026-07 删） |
+| 录像相关方法 | `source_recording_thread_mixin.py` + `source_recording_api_mixin.py` | ~~`source_recording_mixin.py`~~（2026-07 删） |
+
+现在每个方法只有一份实现；若再看到重复定义属回归，先 `grep -n "def start_hcnetsdk" backend/api/` 查清再动。
 
 ---
 

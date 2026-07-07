@@ -20,9 +20,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 **所有业务端点全部挂在 `/api/v1/` 下**（不是 `/api/`）。前端 axios 实例在 `frontend/src/api/index.js` 里把 baseURL 设为 `${BACKEND_HOST}/api/v1`，所以前端 `api.get('/projects')` 实际打到 `/api/v1/projects`。**前端硬编码 `/api/...` 不带 v1 是 bug**。
 
-挂载源头：
-- 19 组业务路由：`backend/main.py` 用 `app.include_router(..., prefix=f"{settings.API_V1_STR}/<sub>")` 或 `prefix=settings.API_V1_STR` 注册（`API_V1_STR = "/api/v1"`）
-- 内层聚合：`backend/api/__init__.py` 的 `api_router` 把 8 个常规模块拼到 `/api/v1` 下
+挂载源头（OVERLAP-3 治理后**只有一处**）：
+- 全部 30+ 组业务路由集中在 **`backend/api/router_manifest.py` 的 `mount_all_routers(app)`** 登记（`main.py` 只调它一次；`api/__init__.py` 刻意留空；挂载顺序即匹配顺序，`/data` 前缀有真实重叠勿乱序）
 - 不在 `/api/v1/` 下的特殊端点（**改路径要单独处理**）：
   - `GET /` 欢迎页
   - `GET /health` 健康检查
@@ -34,29 +33,17 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 ---
 
-## 二、19 组路由前缀全表
+## 二、路由前缀全表（→ 单点化，看 api-sync skill §1）
 
-| 前缀（统一带 `/api/v1` 前缀） | 后端文件 | 前端 API client | 主要使用视图 |
-|---|---|---|---|
-| `/source/*` | `api/source.py` + `api/source_routes.py` + 35 个 `source_*` mixin/组件 | `api/detection.js` | Monitor、Source |
-| `/data/*` | `api/sessions.py` + `sessions_export.py` / `sessions_stats.py` / `sessions_maintenance.py`（统一 sessions_router） | `api/data.js` | Data |
-| `/projects/*` | `api/projects.py` | `api/project.js` | Project、Navbar |
-| `/models/*` | `api/models.py` | `api/model.js` | Model、Project、Monitor |
-| `/tasks/*` | `api/tasks.py` | `api/task.js` **死代码** | 无视图使用 |
-| `/reports/*` | `api/reports.py` | `api/report.js`（部分死代码） | Report **路由未注册** |
-| `/cameras/*` | `api/cameras.py` | `api/camera.js` **死代码** | 无视图使用（仅 `getDefaultStreamUrl` 还在用，且它打的是 `/video_feed` 不是 `/cameras/*`） |
-| `/system/*` | `api/system_display.py` | **无 api/*.js 封装** | 仅由后端 export 模板 / Electron IPC / BDD 测试访问 |
-| `/alarm/*` | `api/alarm.py` | **无 api/*.js**（Alarm/index.vue 直接 `api.get('/alarm/...')`） | Alarm |
-| `/workstations/*` | `api/channel_manager.py` | `api/detection.js`（混在 detection.js 里） | Source、Monitor |
-| `/scanner/*` | `api/scanner.py` | `api/scanner.js` | MES/ScannerPanel |
-| `/scanner/wmax/*` | `api/wmax.py` | `api/wmax.js` | MES/WMaxPanel |
-| `/external-devices/*` | `api/external_device.py` | `api/external_device.js` | MES/ExternalDevicePanel |
-| `/cluster/*` | `api/cluster.py` | `api/cluster.js` | MES/ClusterPanel |
-| `/mes/*` | `api/mes.py` | `api/mes.js` | MES/OrderPanel/WorkpiecePanel/DefectPanel |
-| `/mes/gateway/*` | `api/mes_gateway.py` | `api/gateway.js` | MES/GatewayPanel |
-| `/operators/*` | `api/operators.py` | `api/operators.js` | Settings、Monitor、Navbar、Data |
-| `/export/*` | `api/export_custom.py` + `api/export_realtime.py`（**两个文件共用前缀**） | `api/export.js` | Data/CustomExportDialog |
-| `/debug/*` | `api/debug.py` | **无 api/*.js**（仅手测用） | 无 |
+**完整 30 组「前缀 ↔ 后端文件 ↔ 前端 client」明细表已单点化到 `api-sync` skill 第 1 节（全仓唯一事实源），本 skill 不再维护副本。** 动手前先去那里对准目标模块。
+
+本 skill 只保留改端点时最易踩的归属提醒：
+
+- `/source/*` 端点实现在 `source_routes.py`（`source.py` 只是 router 容器）；前端封装在 `detection.js`（**没有 source.js**）
+- `/data/*` 分散在 4 个 `sessions*.py` + `showcase_stats.py`，共用一个前缀
+- `/export/*` 三个文件共用前缀（custom / realtime / scheduled）
+- `/operators/*` v3.10.0 起全 410 Gone，改动需求一律去 `/users`
+- v3.31 新增 `/weighing/*`（`weighing.py`，router 无自带 prefix、路径写在端点装饰器里）
 
 > 已删（不要复活）：旧的 `/api/detection/*`（`detection_router`）已在 v2.7.x 下线，等价端点全在 `/api/v1/source/detection/*`。
 > 已删：`backend/api/websocket.py` / `services/detector.py` 不存在；前端 `api/websocket.js` 也无人 import。
@@ -152,7 +139,7 @@ DB 影响:   [是 / 否；具体 ORM 模型 + ALTER TABLE]
 
 如果你要改路径（包括前缀、版本、子段、动态参数）：
 
-1. **`backend/main.py` 的 `app.include_router(...)` prefix**（或 `backend/api/__init__.py` 里的 `api_router.include_router`）
+1. **`backend/api/router_manifest.py` 里对应 `app.include_router(...)` 的 prefix**
 2. **`backend/api/<module>.py`** 里的 `@router.<method>("/...")` 路径
 3. **前端 `api/*.js`** 里所有 `api.<method>('/...')` / 模板字符串
 4. **视图 / store** 里直接 `api.get('/xxx')`（绕过 `api/*.js`，主要在 `Alarm/index.vue`）
@@ -162,19 +149,18 @@ DB 影响:   [是 / 否；具体 ORM 模型 + ALTER TABLE]
    - `frontend/src/views/MES/ScannerPanel.vue` 用 `${host}/snapshot?channel=...`
    - `frontend/src/store/useSourceStore.js` 含 `streamUrl: '/video_feed'`
    - `frontend/src/api/data.js: getVideoUrl()` 拼 `${host}/api/v1/data/videos/${id}`
-   - `frontend/src/api/camera.js: getDefaultStreamUrl()` 拼 `${host}/video_feed`
    - `frontend/src/api/export.js: getTemplateFileDownloadUrl()` 拼 `${host}/api/v1/export/templates/...`
 6. **Electron 关机流程**：`electron/backend-manager.js` 直接拼 `/api/v1/source/shutdown/step/<name>` 与 `/api/v1/source/shutdown/complete`，改路径必须同步改
 7. **License 缓存写回**：Electron 把 license payload POST 给 `/api/v1/system/license-cache`（写在 `electron/license-manager.js` 一类文件里）
 8. **环境变量**：`VITE_API_BASE_URL` 默认 `http://localhost:8001/api/v1`，**不要把 v1 写进路径段**
 
-> 当前没有 WebSocket 路由（`ws_router` / `websocket.py` 已废）。如果你要新增 WS，前端 `api/websocket.js` 是死代码可以重写。
+> 当前没有 WebSocket 路由（`ws_router` / `websocket.py` 已废，前端 `api/websocket.js` 也已删）。要新增 WS 从零写。
 
 ---
 
 ## 六、常见坑（按发生频率排）
 
-1. **加了端点忘了 `app.include_router(...)`**：新模块文件里 `router = APIRouter()` 写完了，但 `main.py` / `api/__init__.py` 没挂——访问 404。所有路由必须经过这两个文件之一注册。
+1. **加了端点忘了 `app.include_router(...)`**：新模块文件里 `router = APIRouter()` 写完了，但 `backend/api/router_manifest.py` 没登记——访问 404。所有主程序路由必须经 manifest 注册（唯一登记处）。
 2. **Schema 缺字段 / 多字段 / `Optional` 漏写**：
    - 漏写 `Optional`：老客户端少传字段会 422
    - 多字段没 `Optional`：新前端不传旧字段也 422
@@ -190,11 +176,7 @@ DB 影响:   [是 / 否；具体 ORM 模型 + ALTER TABLE]
 7. **`/scanner/*` 与 `/scanner/wmax/*`**：两个 router 都挂 `/scanner` 前缀，子路径**不能撞**
 8. **`/mes/*` 与 `/mes/gateway/*`**：同上，新增 `/mes/<x>` 前必须查 `mes_gateway.py` 是否已经占用
 9. **`/export/*` 双 router**：`export_custom.py`（模板 / 渲染）+ `export_realtime.py`（实时规则）共用前缀，新增子路径要看两边
-10. **死代码引用**：以下文件有路径但**没人用**——改时不必跟，留时不要再扩
-    - `frontend/src/api/task.js`：全工程**无 import**，可整文件删
-    - `frontend/src/api/camera.js`：除 `getDefaultStreamUrl()` 外**无视图 import**
-    - `frontend/src/api/report.js`：`getRecords` / `getTrend` / `exportPdfReport` 局部死代码（`Report/index.vue` 路由未注册）
-    - `frontend/src/api/websocket.js`：无人 import
+10. **死代码引用**：task.js / camera.js / report.js / websocket.js 及 Report 视图**已于 2026-07 死代码清理中删除**，别复活；仍残留的：
     - `detection.js: resetDetection`（路径 `/detection/reset` 已无对应后端，老前端兼容残留）
 
 ---
@@ -213,7 +195,7 @@ DB 影响:   [是 / 否；具体 ORM 模型 + ALTER TABLE]
 
 ## 八、上线前自检清单
 
-- [ ] `backend/main.py` 或 `api/__init__.py` 里 `include_router` 挂上了
+- [ ] `backend/api/router_manifest.py` 里 `include_router` 挂上了
 - [ ] 前缀确实是 `/api/v1/<sub>`（不是 `/api/<sub>`）
 - [ ] 路由声明顺序：具体 path 在动态 path 之前
 - [ ] Schema：新增字段都是 `Optional[...]` + 默认值；删字段确认无前端引用

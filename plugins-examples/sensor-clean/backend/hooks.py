@@ -37,6 +37,10 @@ CONFIG_KEY = "plugin_sensor_clean_config"
 DEFAULT_CONFIG = {
     "count_channels": [0],                    # 视角1 计数通道
     "count_anchor_label": "查看产品有无脏污",   # 视角1 锚动作标签 (detect6 cls0)
+    # v1.3.0 同帧双类别门槛 (detect9): 非空时, 本帧必须同时检出该伴随标签
+    # (如"清洁产品"), 锚框才进计数跟踪; 否则按锚框不在场处理 (跟踪丢失累计)。
+    # 空串 = 不启用, 行为与 v1.2.0 完全一致 (老现场升级零差异)。
+    "count_require_label": "",
     "swap_channel": 1,                        # 视角2 换棉签通道
     "swap_label": "更换棉签",                  # 视角2 换棉签动作标签
     "max_uses_per_swab": 11,                  # 一根棉签最多擦几个产品 (K)
@@ -696,6 +700,12 @@ def on_detection_frame(ctx):
                 if d.get("label") == anchor_label:
                     if anchor is None or d.get("confidence", 0) > anchor.get("confidence", 0):
                         anchor = d
+            # v1.3.0 同帧双类别门槛 (detect9): 配了伴随标签时, 本帧没同时检出它
+            # → 锚框视为不在场 (跟踪进入丢失累计, 与 detect9 else 分支一致)
+            require_label = cfg.get("count_require_label") or ""
+            if anchor is not None and require_label:
+                if not any(d.get("label") == require_label for d in detections):
+                    anchor = None
             if _RECORD_PATH:
                 try:
                     rec = {"seq": ctx.get("frame_seq"), "ts": now,

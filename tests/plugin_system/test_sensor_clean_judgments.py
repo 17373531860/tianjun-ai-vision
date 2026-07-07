@@ -468,6 +468,65 @@ def test_event_fire_suppress_only_on_plugin_channels(sc):
     }) is None
 
 
+# ============================================================
+# E. v1.3.0 同帧双类别门槛 (detect9 对齐)
+# ============================================================
+
+_GATE_CFG = {
+    "count_channels": [0], "count_anchor_label": "查看产品",
+    "count_require_label": "清洁产品", "move_confirm_frames": 1,
+    "normal_count_event_id": 1, "swab_over_limit_event_id": 0,
+    "fake_wipe_event_id": 0, "max_uses_per_swab": 99,
+    "move_threshold": 0.0116, "force_lock_frames": 0,
+}
+
+
+def test_require_label_blocks_count_without_companion(sc):
+    """门槛开启: 只有锚标签、没伴随标签 → 不建跟踪不计数."""
+    host = _setup(sc, dict(_GATE_CFG))
+    _frame(sc, 0, 0.0, [_box("查看产品", 0.5, 0.5)])
+    _frame(sc, 0, 0.1, [_box("查看产品", 0.7, 0.5)])
+    assert sc.get_state()["total_products"] == 0
+    assert host.events == []
+
+
+def test_require_label_counts_when_both_present(sc):
+    """门槛开启: 同帧双类别都在 → 正常计数 (detect9 主路径)."""
+    host = _setup(sc, dict(_GATE_CFG))
+    _frame(sc, 0, 0.0, [_box("查看产品", 0.5, 0.5), _box("清洁产品", 0.3, 0.3)])
+    _frame(sc, 0, 0.1, [_box("查看产品", 0.7, 0.5), _box("清洁产品", 0.3, 0.3)])
+    assert sc.get_state()["total_products"] == 1
+    assert any(e[1] == 1 for e in host.events)
+
+
+def test_require_label_companion_lost_midway_treated_as_gone(sc):
+    """跟踪中途伴随标签消失 → 锚框按不在场处理 (丢失累计), 不计数."""
+    host = _setup(sc, dict(_GATE_CFG))
+    _frame(sc, 0, 0.0, [_box("查看产品", 0.5, 0.5), _box("清洁产品", 0.3, 0.3)])
+    _frame(sc, 0, 0.1, [_box("查看产品", 0.7, 0.5)])  # 伴随标签掉了
+    assert sc.get_state()["total_products"] == 0
+
+
+def test_require_label_empty_keeps_v120_behavior(sc):
+    """门槛留空 (默认): 仅锚标签即可计数, 与 v1.2.0 零差异."""
+    cfg = dict(_GATE_CFG)
+    cfg["count_require_label"] = ""
+    host = _setup(sc, cfg)
+    _frame(sc, 0, 0.0, [_box("查看产品", 0.5, 0.5)])
+    _frame(sc, 0, 0.1, [_box("查看产品", 0.7, 0.5)])
+    assert sc.get_state()["total_products"] == 1
+
+
+def test_require_label_config_roundtrip(sc):
+    """伴随标签经配置保存/回读闭环 (前端 Tab 字段依赖)."""
+    _setup(sc, {})
+    assert sc.get_config()["count_require_label"] == ""
+    sc.save_config({"count_require_label": "清洁产品"})
+    assert sc.get_config()["count_require_label"] == "清洁产品"
+    sc.reload_config()
+    assert sc.get_config()["count_require_label"] == "清洁产品"
+
+
 def test_get_state_exposes_absent_enabled(sc):
     """看板状态须带离岗启用态 + 超时秒数 (前端离岗告警条依赖)."""
     _setup(sc, {"operator_absent_enabled": True, "operator_absent_timeout_sec": 45})

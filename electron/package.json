@@ -1,6 +1,6 @@
 {
   "name": "tianjun-ai-vision",
-  "version": "3.30.0",
+  "version": "3.32.0",
   "description": "天军科技AI视觉检测系统 - AI-powered machine vision detection system",
   "main": "main.js",
   "author": {
@@ -94,6 +94,13 @@
       {
         "from": "drivers/CH341SER",
         "to": "drivers/CH341SER",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "drivers/PL2303",
+        "to": "drivers/PL2303",
         "filter": [
           "**/*"
         ]

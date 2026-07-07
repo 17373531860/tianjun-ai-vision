@@ -175,6 +175,9 @@ Day 14   ─ 签发  scripts/plugin/sign-plugin.py 签首个    30 min
 ## 🔗 相关文档（外部）
 
 - 主项目地图 `../../AGENTS.md`
+- 开发者文档入口 `../dev/README.md`
+  - 插件加载链深潜 `../dev/internals/plugin-loading-chain.md`（运行时 why）
+  - 插件 SDK 能力速查 `../dev/reference/plugin-sdk.md`
 - 当前 worktree 起点 `../../START_HERE.md`
 - Skills 索引 `../../.claude/skills/*`
   - 修改后端 API 必读 `add-api-endpoint/SKILL.md` / `modify-api/SKILL.md`

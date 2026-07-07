@@ -7,6 +7,9 @@ effort: high
 allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__sentry"
 ---
 
+> **设计深潜**：`docs/dev/internals/cluster-collector.md`（集群主从聚齐/心跳/超时）  
+> 本 skill = 多工位/通道隔离 how-to/debug。
+
 # debug-channel: 多工位/多通道诊断（v3.5.x）
 
 你正在诊断天军 AI 视觉检测系统的 **多通道管理模块（ChannelManager）**。
@@ -154,10 +157,15 @@ class ChannelManager:
 | 触发点 | 写入字段 | 备注 |
 |---|---|---|
 | `set_channel_count(n)` → `_save_config` | `channel_count` | **独占写 channel_count**；保留已有 `channels` 字典 |
-| `save_channel_source(ch, cfg, merge=True)` | `channels.{ch}.*` | merge=True 浅合并；**不写 channel_count** |
+| `save_channel_source(ch, cfg, merge=True)` | `channels.{ch}.*` | merge=True 浅合并；merge=False **整段替换该通道**（调用方必须传完整配置）；**不写 channel_count** |
+| `save_splash_config` / `save_window_config` / `save_auto_resume_config`（v3.9.x+） | 顶层 `splash` / `window` / `auto_resume` 段 | 各自只替换自己的段，不动 channels / channel_count |
 | `cleanup_on_exit`（`backend/main.py:654`） | `channels.{ch}.was_detecting` | 进程退出 atexit 钩子，记录"上次是否在检测" |
 | `auto_restore_video_sources`（启动 `main.py:472`） | 读 channels 还原源 + 模型 + 检测状态 | 仅 `was_detecting=true` 的通道自动 start_detection |
 | `auto_load_active_project`（启动 `main.py:401`） | 按通道 project_id 加载项目 | |
+
+**写入权铁律（AGENTS.md 不变量 #17）**：每段有且只有上表列出的专属写函数，**任何新代码禁止
+自己 `json.dump` 整写该文件**——文件无 schema 校验，旁路整写会把别段 key 静默抹掉且无报错
+（新人常见事故：手写 channels 时把 splash / window 段一起冲掉）。
 
 **v2.7.2 之后的关键修正**：
 - 旧版 `_save_config` 用 `max(file_count, self.channel_count)` 防热重载覆盖，副作用是工位数只能升不能降。

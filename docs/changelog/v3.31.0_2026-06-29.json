@@ -1,0 +1,100 @@
+{
+  "version": "3.31.0",
+  "date": "2026-06-29",
+  "previous_version": "3.30.0",
+  "theme": "主程序原生「称重投料模式」(logic_mode='weighing') 落地——电子秤配料防错全流程 + 逐件记录持久化落库 + PL2303 驱动内置 + mock_weight 模拟 + bestar 示例插件退役",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "原生称重投料检测引擎（设备驱动状态机）",
+      "symptom": "配料产线需放件去皮→投料→对比标准量→缺料/超量判定→逐件记录，区别于 YOLO 视频帧驱动",
+      "root_cause": "主程序无设备读数驱动的检测模式",
+      "fix": "新增 weighing_engine.py，与 sequential/detection/custom/tracking 并列的原生模式。电子秤每帧读数推进 WeighingStation 状态机（去皮/稳定判定/料别校验/判定），状态机纯逻辑可单测，副作用由引擎执行层翻译。配置全来自 pipeline_config.weighing，不新增 ORM 列",
+      "files": ["backend/services/weighing_engine.py", "backend/api/source_project_config_apply.py"],
+      "keywords": ["称重投料", "weighing", "logic_mode", "WeighingStation", "去皮", "标准量", "料别", "百斯特", "配料防错"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "称重模式 REST API + 外设数据管道接入",
+      "symptom": "监控页需选人员/型号/扫码、去皮置零复位控制、实时看板、逐件记录查询",
+      "root_cause": "新模式缺对外接口与读数喂入路径",
+      "fix": "新增 /api/v1/weighing/*（context/scan/tare/zero/reset/feed/state/records）。外设管道对 weight 角色设备在 weighing 模式通道把读数喂给引擎 feed_weight",
+      "files": ["backend/api/weighing.py", "backend/main.py", "backend/services/external_device_pipeline.py"],
+      "keywords": ["weighing API", "feed_weight", "外设管道", "weight 角色", "称重看板"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "逐件逐料记录持久化落库（重启不丢）",
+      "symptom": "终验收要求逐件记录长期可追溯，原内存台账重启即失",
+      "root_cause": "记录仅存内存 deque，无持久层",
+      "fix": "新增 weighing_records 表（create_all 自动建新表），_do_record 写库+内存双写（落库 try/except 隔离不拖垮主链路），get_records 改为优先读库、DB 不可用回退内存。已验证重启后记录仍在",
+      "files": ["backend/models/weighing_models.py", "backend/services/weighing_engine.py", "backend/main.py"],
+      "keywords": ["持久化", "落库", "weighing_records", "重启不丢", "6.1 台账", "WeighingRecord"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "称重投料前端三件套（配置/监控/数据）",
+      "symptom": "需项目配置称重参数、监控页实时看板、数据页逐件台账",
+      "root_cause": "前端无称重模式 UI",
+      "fix": "项目管理新增「称重投料模式」+「称重配置」标签页（料别顺序/型号标准量公差/去皮方式/稳定判定/料别校验/报警映射），配置注入仅 logic_mode='weighing' 时生效不污染其他项目；监控页 WeighingPanel 实时看板；数据页「称重记录」标签（统计磁贴/工位筛选/CSV 导出，工位数取系统级 workstations 修正只显工位1的 bug）",
+      "files": ["frontend/src/views/Project/index.vue", "frontend/src/api/weighing.js", "frontend/src/views/Monitor/WeighingPanel.vue", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Data/index.vue"],
+      "keywords": ["称重配置", "WeighingPanel", "称重记录", "ensureWeighingDefaults", "零影响守门", "工位筛选"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "电子秤接入：PL2303 驱动内置 + mock_weight 模拟",
+      "symptom": "称重器 RS232→USB(Prolific PL2303)，Windows 客户机需免装驱动；无真机时要能先验逻辑",
+      "root_cause": "客户机缺 PL2303 驱动；无硬件无法测逻辑",
+      "fix": "安装包内置 PL2303 驱动（installer.iss 用 pnputil 预装 .inf/静默 .exe，electron-builder extraResources 打包）；外设新增 mock_weight 协议（无硬件流式模拟，支持去皮/置零命令）+ 面板模拟称重选项。Linux 真机经 serial_continuous 端到端验证",
+      "files": ["electron/build/installer.iss", "electron/package.json", "backend/services/external_device_protocols.py", "backend/services/external_device.py", "frontend/src/views/MES/ExternalDevicePanel.vue"],
+      "keywords": ["PL2303", "驱动内置", "pnputil", "mock_weight", "serial_continuous", "电子秤", "Prolific", "RS232"],
+      "breaking": false
+    },
+    {
+      "type": "cleanup",
+      "id": "CLEAN-001",
+      "title": "bestar 示例插件退役删除",
+      "symptom": "称重逻辑已上提主线，插件冗余",
+      "root_cause": "归位原则——通用配料基础设施进主程序而非插件",
+      "fix": "删除 plugins-examples/bestar/ 及单测 tests/test_bestar_feed_state.py，确认无残留引用",
+      "files": ["plugins-examples/bestar", "tests/test_bestar_feed_state.py"],
+      "keywords": ["bestar", "插件退役", "归位", "上提主线"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "backend/services/weighing_engine.py",
+    "backend/api/weighing.py",
+    "backend/api/source_project_config_apply.py",
+    "backend/services/external_device_pipeline.py",
+    "backend/services/external_device_protocols.py",
+    "backend/services/external_device.py",
+    "backend/models/weighing_models.py",
+    "backend/main.py",
+    "frontend/src/views/Project/index.vue",
+    "frontend/src/api/weighing.js",
+    "frontend/src/views/Monitor/WeighingPanel.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Data/index.vue",
+    "frontend/src/views/MES/ExternalDevicePanel.vue",
+    "electron/build/installer.iss",
+    "electron/package.json",
+    "tests/test_weighing_engine.py",
+    "docs/称重检测应用_主程序落地设计_RFC.md",
+    "docs/软件操作手册.md"
+  ],
+  "files_deleted": [
+    "plugins-examples/bestar/",
+    "tests/test_bestar_feed_state.py"
+  ]
+}

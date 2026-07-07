@@ -82,33 +82,37 @@ if ($refName -like "v*" -and $refName.TrimStart("v") -ne $version) {
 
 CI 用 `nuitka --module` 把核心 `.py` 编成 `.pyd`，编译成功后**删除源 .py**（`build.yml` 158-163 行）。Runtime 仍 spawn `python -m uvicorn backend.main:app`，加载 `.pyd` + `.py` 混合包。
 
-### CORE_FILES 列表（`build.yml` 136-148 行）
+### CORE_FILES 列表（2026-07 白名单重审后，共 17 个，全部真实存在）
 
 ```bash
 CORE_FILES=(
-  "backend/api/source.py"        # 存在
-  "backend/api/detection.py"     # 不存在
-  "backend/api/sessions.py"      # 存在
-  "backend/api/projects.py"      # 存在
-  "backend/api/cameras.py"       # 存在
-  "backend/api/alarm.py"         # 存在
-  "backend/api/reports.py"       # 存在
-  "backend/api/tasks.py"         # 存在
-  "backend/api/websocket.py"     # 不存在
-  "backend/api/models.py"        # 存在
-  "backend/services/detector.py" # 不存在
+  "backend/api/source.py"
+  "backend/api/source_routes.py"                    # ★ 2026-07 纳入
+  "backend/api/source_per_item_mixin.py"            # ★ Top5 大 mixin（1621 行）
+  "backend/api/source_session_lifecycle_mixin.py"   # ★（1608 行）
+  "backend/api/source_settlement_mixin.py"          # ★（1503 行）
+  "backend/api/source_tracking_mixin.py"            # ★（1106 行）
+  "backend/api/source_periodic_actions_mixin.py"    # ★（888 行）
+  "backend/api/sessions.py"
+  "backend/api/projects.py"
+  "backend/api/cameras.py"
+  "backend/api/alarm.py"
+  "backend/api/reports.py"
+  "backend/api/tasks.py"
+  "backend/api/models.py"
+  "backend/services/scanner.py"                     # ★ 1964 行 MES 核心
+  "backend/services/mes_hooks.py"                   # ★ 1505 行 MES 核心
+  "backend/services/weighing_engine.py"             # ★ v3.31 称重引擎
 )
 ```
 
-### 已知 BUG / IP 泄露风险（**与 AGENTS.md 第九节登记一致**）
+### 2026-07 白名单重审要点（原 BUG-2 已修）
 
-1. **11 个文件中 3 个根本不存在**：`api/detection.py` / `api/websocket.py` / `services/detector.py` 早被重构掉但 CI 列表没更新。循环里 `if [ -f "$pyfile" ]` 直接跳过，**实际只编译 8 个**，CI 打 `WARNING: Failed to compile ...` 但 build 不 fail。
-
-2. **`backend/api/source_*.py` 共 35 个 mixin/组件/工具文件全部没编译**。`source.py` 主类编译了，但 15 个继承式 mixin（`source_*_mixin.py`）和 6 个 has-a 组件（`source_drawer.py` / `source_recorder.py` / `source_geometry.py` / `source_inference_executor.py` 等等）都是源码部署到客户工控机。**业务核心逻辑约 80% 是源码可读状态**，是项目最大的 IP 泄露点。
-
-3. **`backend/services/` 目录除 `detector.py`（不存在）外完全没编译**。`services/scanner.py`（1964 行）、`services/mes_hooks.py`（1505 行）、`services/cluster_collector.py`（1122 行）、`services/export_*.py`（8 个）等核心 service 全是源码。
-
-> **修这个 BUG 的代价**：CORE_FILES 加几十个文件 → CI 时长可能 30 min → 60 min+；Nuitka 对继承式 mixin 的 `super().__init__` 链有时编译失败需要降级保留 .py。本 skill 只记录现象，**不要主动改 build.yml**，等用户决策。
+1. **3 个不存在的历史项已剔除**：`api/detection.py` / `api/websocket.py` / `services/detector.py`（早被重构掉）。
+2. **缺失文件现在直接 fail**：编译循环前先做存在性检查，白名单里的文件不存在 → `::error` + exit 1（不再静默跳过；改名/删核心文件必须同步 build.yml）。
+3. **编译失败仍降级保留 .py**（Nuitka 对 mixin 的兼容性问题只 WARNING 不 fail）——发版后要看 build 日志确认 .pyd 真的生成了，连续失败要排查。
+4. 剩余未编译的 `source_*` 小 mixin / has-a 组件 / `services/export_*.py` 属已知残余风险，后续按需扩列。
+5. **新增核心大文件（>800 行业务逻辑）时记得同步加进 CORE_FILES**。
 
 ### 编译产物验证（编译完打印的清单）
 ```

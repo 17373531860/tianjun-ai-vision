@@ -173,9 +173,11 @@ class DetectRunnersMixin:
             _half = params['use_half'] and device.startswith('cuda') and params['is_native_pytorch']
 
             # Step 4: ROI 裁剪 (mi.roi 不可用时直接返回原 frame)
+            # 2026-07 缺陷 B: ROI 画在显示帧上, 推理帧是原图 → 传 video_transform 反变换顶点
+            _vt = getattr(self, 'video_transform', None)
             if mi is not None:
-                ensure_roi_mask(mi, frame.shape[:2])  # 缓存 mask + 顶点
-            roi_frame = apply_roi_mask(frame, mi) if mi is not None else frame
+                ensure_roi_mask(mi, frame.shape[:2], transform=_vt)  # 缓存 mask + 顶点
+            roi_frame = apply_roi_mask(frame, mi, transform=_vt) if mi is not None else frame
             _frame = roi_frame if roi_frame.flags['C_CONTIGUOUS'] else np.ascontiguousarray(roi_frame)
 
             def run_inference():
@@ -316,9 +318,10 @@ class DetectRunnersMixin:
             _half = params['use_half'] and device.startswith('cuda') and params['is_native_pytorch']
             _tracker_cfg = self._custom_tracker_yaml or "bytetrack.yaml"
 
+            _vt = getattr(self, 'video_transform', None)
             if mi is not None:
-                ensure_roi_mask(mi, frame.shape[:2])
-            roi_frame = apply_roi_mask(frame, mi) if mi is not None else frame
+                ensure_roi_mask(mi, frame.shape[:2], transform=_vt)
+            roi_frame = apply_roi_mask(frame, mi, transform=_vt) if mi is not None else frame
             _frame = roi_frame if roi_frame.flags['C_CONTIGUOUS'] else np.ascontiguousarray(roi_frame)
 
             def run_tracking():
@@ -428,9 +431,10 @@ class DetectRunnersMixin:
             device = params['device']
             _half = params['use_half'] and device.startswith('cuda') and params['is_native_pytorch']
 
+            _vt = getattr(self, 'video_transform', None)
             if mi is not None:
-                ensure_roi_mask(mi, frame.shape[:2])
-            roi_frame = apply_roi_mask(frame, mi) if mi is not None else frame
+                ensure_roi_mask(mi, frame.shape[:2], transform=_vt)
+            roi_frame = apply_roi_mask(frame, mi, transform=_vt) if mi is not None else frame
             _frame = roi_frame if roi_frame.flags['C_CONTIGUOUS'] else np.ascontiguousarray(roi_frame)
 
             def run_inference():

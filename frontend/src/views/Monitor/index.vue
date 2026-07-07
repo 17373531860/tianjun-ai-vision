@@ -115,96 +115,28 @@
       </div>
     </div>
 
-    <!-- 录像异常 (双工位共用入口) -->
-    <button
-      v-if="totalRecordingFailureCount > 0"
-      class="absolute right-3 bottom-3 z-[50] bg-amber-600/90 hover:bg-amber-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1"
-      @click="showRecordingFailurePanel = true"
-    >
-      <el-icon><Warning /></el-icon>
-      录像异常 {{ totalRecordingFailureCount }}
-    </button>
-    <div v-if="showRecordingFailurePanel" class="absolute inset-0 z-[55] bg-black/50 flex items-center justify-center p-4">
-      <div class="w-full max-w-5xl max-h-[85vh] bg-slate-900 border border-slate-700 rounded-lg flex flex-col">
-        <div class="px-4 py-3 border-b border-slate-700 flex items-center">
-          <span class="text-amber-300 font-bold">录像异常详情</span>
-          <span class="text-xs text-gray-400 ml-3">仅记录最近异常，用于排查</span>
-          <div class="ml-auto flex gap-2">
-            <el-button size="small" type="warning" plain :loading="recordingFailureLoading" @click="clearRecordingFailures">
-              清空列表
-            </el-button>
-            <el-button size="small" @click="showRecordingFailurePanel = false">关闭</el-button>
-          </div>
-        </div>
-        <div class="p-3 overflow-auto">
-          <table class="w-full text-xs text-left">
-            <thead class="text-gray-400 border-b border-slate-700">
-              <tr>
-                <th class="py-1 pr-2">时间</th>
-                <th class="py-1 pr-2">工位</th>
-                <th class="py-1 pr-2">类型</th>
-                <th class="py-1 pr-2">原因</th>
-                <th class="py-1 pr-2">文件</th>
-                <th class="py-1 pr-2">已写帧</th>
-              </tr>
-            </thead>
-            <tbody class="text-gray-200">
-              <tr v-for="(item, idx) in recordingFailureRows" :key="idx" class="border-b border-slate-800">
-                <td class="py-1 pr-2 whitespace-nowrap">{{ formatRecordingFailureTime(item.timestamp) }}</td>
-                <td class="py-1 pr-2">工位{{ item.channel_id + 1 }}</td>
-                <td class="py-1 pr-2">{{ item.recorder_type }}</td>
-                <td class="py-1 pr-2">
-                  <div>{{ getRecordingFailureReasonText(item.reason) }}</div>
-                  <div v-if="item.error" class="text-gray-400 break-all">{{ item.error }}</div>
-                </td>
-                <td class="py-1 pr-2 break-all text-gray-300">{{ item.file_path || '-' }}</td>
-                <td class="py-1 pr-2">{{ item.frame_count ?? '-' }}</td>
-              </tr>
-              <tr v-if="recordingFailureRows.length === 0">
-                <td colspan="6" class="py-4 text-center text-gray-500">暂无录像异常</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+    <!-- 录像异常入口+详情面板（M-1 外置, 原同构块消重） -->
+    <RecordingFailureOverlay
+      v-model:visible="showRecordingFailurePanel"
+      :rows="recordingFailureRows"
+      :loading="recordingFailureLoading" elevated
+      @clear="clearRecordingFailures" />
   </div>
 
   <!-- ===== DUAL WORKSTATION MODE (2 channels) ===== -->
   <div v-else-if="channelCount === 2" class="grid grid-cols-2 gap-2 h-[calc(100vh-7.25rem)] p-2 relative">
     <div v-for="ch in 2" :key="ch - 1" class="flex flex-col gap-1.5 min-h-0 overflow-hidden relative">
-      <!-- Video panel (70% height) -->
-      <div class="relative bg-black border-2 rounded-lg overflow-hidden min-h-0"
+      <!-- Video panel (70% height)（M-4 外置 ChannelVideoCard, 流/绘制机制留父级） -->
+      <ChannelVideoCard
         style="flex: 7 1 0%;"
-        :class="selectedChannel === (ch - 1) ? 'border-cyan-500' : 'border-slate-700'"
-        @click="selectedChannel = ch - 1">
-        <canvas :ref="el => { if (el) multiVideoCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full"></canvas>
-        <canvas :ref="el => { if (el) multiCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
-        <div class="absolute top-1.5 left-1.5 bg-slate-900/80 text-white px-2 py-0.5 rounded text-xs font-bold">
-          工位 {{ ch }}
-          <span v-if="multiChannelData[ch - 1]?.projectName" class="text-cyan-400 ml-1">{{ multiChannelData[ch - 1].projectName }}</span>
-        </div>
-        <div class="absolute top-1.5 right-1.5 px-2 py-0.5 rounded text-[0.625rem] font-bold"
-          :class="multiChannelData[ch - 1]?.isDetecting ? 'bg-green-600/90 text-white animate-pulse' : multiChannelData[ch - 1]?.isRunning ? 'bg-yellow-600/90 text-white' : 'bg-gray-600/90 text-white'">
-          {{ multiChannelData[ch - 1]?.isDetecting ? '检测中' : multiChannelData[ch - 1]?.isRunning ? '待机' : '停止' }}
-        </div>
-        <div class="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm px-2 py-1 flex gap-3 text-xs items-center">
-          <span class="text-white font-mono">总: <span class="text-cyan-400 font-bold">{{ multiChannelData[ch - 1]?.total ?? 0 }}</span></span>
-          <span class="text-white font-mono">OK: <span class="text-green-400 font-bold">{{ multiChannelData[ch - 1]?.ok ?? 0 }}</span></span>
-          <span class="text-white font-mono">NG: <span class="text-red-400 font-bold">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</span></span>
-          <!-- feat/multi-model-roi-link b1: 多通道副模型 fps 快照 (>=2 个 slot 时显示) -->
-          <template v-if="(channelModelStats[ch - 1] || []).length >= 2">
-            <span class="text-gray-500">|</span>
-            <span v-for="m in channelModelStats[ch - 1]" :key="m.name"
-                  class="flex items-center gap-1 text-[0.6875rem]" :title="`${m.name} (${m.model_loaded ? '已加载' : '未加载'})`">
-              <span class="w-2 h-2 rounded-sm flex-shrink-0" :style="{ backgroundColor: m.display_color || '#10b981' }"></span>
-              <span class="text-gray-400">{{ m.name }}</span>
-              <span class="text-cyan-400 font-mono">{{ m.fps_inference || 0 }}</span>
-            </span>
-          </template>
-          <span class="ml-auto text-gray-400">FPS: {{ multiChannelData[ch - 1]?.fps ?? 0 }}</span>
-        </div>
-      </div>
+        :ch="ch - 1"
+        :ch-data="multiChannelData[ch - 1]"
+        :model-stats="channelModelStats[ch - 1]"
+        :selected="selectedChannel === (ch - 1)"
+        :register-video-canvas="el => { multiVideoCanvasRefs[ch - 1] = el }"
+        :register-overlay-canvas="el => { multiCanvasRefs[ch - 1] = el }"
+        @select="selectedChannel = ch - 1"
+      />
       <!-- v3.1.3: per-channel MES 信息条 (工件号 / 未绑码警告 / 等待扫码 / 清除按钮) -->
       <div v-if="shouldShowMesBarFor(ch - 1)"
            class="bg-slate-900 border border-cyan-800/50 rounded-lg px-2 py-1 flex items-center gap-3 text-xs flex-shrink-0">
@@ -367,59 +299,12 @@
         </div>
       </template>
 
-      <button
-        v-if="totalRecordingFailureCount > 0"
-        class="absolute right-2 bottom-2 z-40 bg-amber-600/90 hover:bg-amber-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1"
-        @click="showRecordingFailurePanel = true"
-      >
-        <el-icon><Warning /></el-icon>
-        录像异常 {{ totalRecordingFailureCount }}
-      </button>
-
-      <div v-if="showRecordingFailurePanel" class="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-        <div class="w-full max-w-5xl max-h-[85vh] bg-slate-900 border border-slate-700 rounded-lg flex flex-col">
-          <div class="px-4 py-3 border-b border-slate-700 flex items-center">
-            <span class="text-amber-300 font-bold">录像异常详情</span>
-            <span class="text-xs text-gray-400 ml-3">仅记录最近异常，用于排查</span>
-            <div class="ml-auto flex gap-2">
-              <el-button size="small" type="warning" plain :loading="recordingFailureLoading" @click="clearRecordingFailures">
-                清空列表
-              </el-button>
-              <el-button size="small" @click="showRecordingFailurePanel = false">关闭</el-button>
-            </div>
-          </div>
-          <div class="p-3 overflow-auto">
-            <table class="w-full text-xs text-left">
-              <thead class="text-gray-400 border-b border-slate-700">
-                <tr>
-                  <th class="py-1 pr-2">时间</th>
-                  <th class="py-1 pr-2">工位</th>
-                  <th class="py-1 pr-2">类型</th>
-                  <th class="py-1 pr-2">原因</th>
-                  <th class="py-1 pr-2">文件</th>
-                  <th class="py-1 pr-2">已写帧</th>
-                </tr>
-              </thead>
-              <tbody class="text-gray-200">
-                <tr v-for="(item, idx) in recordingFailureRows" :key="idx" class="border-b border-slate-800">
-                  <td class="py-1 pr-2 whitespace-nowrap">{{ formatRecordingFailureTime(item.timestamp) }}</td>
-                  <td class="py-1 pr-2">工位{{ item.channel_id + 1 }}</td>
-                  <td class="py-1 pr-2">{{ item.recorder_type }}</td>
-                  <td class="py-1 pr-2">
-                    <div>{{ getRecordingFailureReasonText(item.reason) }}</div>
-                    <div v-if="item.error" class="text-gray-400 break-all">{{ item.error }}</div>
-                  </td>
-                  <td class="py-1 pr-2 break-all text-gray-300">{{ item.file_path || '-' }}</td>
-                  <td class="py-1 pr-2">{{ item.frame_count ?? '-' }}</td>
-                </tr>
-                <tr v-if="recordingFailureRows.length === 0">
-                  <td colspan="6" class="py-4 text-center text-gray-500">暂无录像异常</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
+      <!-- 录像异常入口+详情面板（M-1 外置, 原同构块消重） -->
+      <RecordingFailureOverlay
+        v-model:visible="showRecordingFailurePanel"
+        :rows="recordingFailureRows"
+        :loading="recordingFailureLoading"
+        @clear="clearRecordingFailures" />
     </div>
   </div>
 
@@ -427,35 +312,17 @@
   <div v-else-if="channelCount > 2" class="flex flex-col h-[calc(100vh-7.25rem)] p-2 gap-2 relative">
     <!-- 2x2 video grid -->
     <div class="flex-1 grid grid-cols-2 grid-rows-2 gap-2 min-h-0">
-      <div v-for="ch in channelCount" :key="ch - 1"
-        class="relative bg-black border-2 rounded-lg overflow-hidden cursor-pointer transition-all min-h-0"
-        :class="selectedChannel === (ch - 1) ? 'border-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.4)]' : 'border-slate-700 hover:border-slate-500'"
-        @click="selectedChannel = ch - 1">
-        <canvas :ref="el => { if (el) multiVideoCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full"></canvas>
-        <canvas :ref="el => { if (el) multiCanvasRefs[ch - 1] = el }" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
-        <div class="absolute top-1 left-1 bg-slate-900/80 text-white px-2 py-0.5 rounded text-[0.625rem] font-bold">
-          工位{{ ch }}
-          <span v-if="multiChannelData[ch - 1]?.projectName" class="text-cyan-400 ml-0.5">{{ multiChannelData[ch - 1].projectName }}</span>
-        </div>
-        <div class="absolute top-1 right-1 px-1.5 py-0.5 rounded text-[0.625rem] font-bold"
-          :class="multiChannelData[ch - 1]?.isDetecting ? 'bg-green-600/90 text-white animate-pulse' : multiChannelData[ch - 1]?.isRunning ? 'bg-yellow-600/90 text-white' : 'bg-gray-600/90 text-white'">
-          {{ multiChannelData[ch - 1]?.isDetecting ? '检测中' : multiChannelData[ch - 1]?.isRunning ? '待机' : '停止' }}
-        </div>
-        <div class="absolute bottom-0 left-0 right-0 bg-black/70 px-2 py-1 flex gap-3 text-[0.625rem] items-center">
-          <span class="text-white font-mono">总:<span class="text-cyan-400 font-bold">{{ multiChannelData[ch - 1]?.total ?? 0 }}</span></span>
-          <span class="text-white font-mono">OK:<span class="text-green-400 font-bold">{{ multiChannelData[ch - 1]?.ok ?? 0 }}</span></span>
-          <span class="text-white font-mono">NG:<span class="text-red-400 font-bold">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</span></span>
-          <!-- feat/multi-model-roi-link b1: 4 工位空间紧, 仅色块+fps 数字 -->
-          <template v-if="(channelModelStats[ch - 1] || []).length >= 2">
-            <span v-for="m in channelModelStats[ch - 1]" :key="m.name"
-                  class="flex items-center gap-0.5 text-[0.5625rem]"
-                  :title="`${m.name} ${m.fps_inference || 0}fps ${m.model_loaded ? '' : '(未加载)'}`">
-              <span class="w-1.5 h-1.5 rounded-sm flex-shrink-0" :style="{ backgroundColor: m.display_color || '#10b981' }"></span>
-              <span class="text-cyan-400 font-mono">{{ m.fps_inference || 0 }}</span>
-            </span>
-          </template>
-          <span class="ml-auto text-gray-400">FPS:{{ multiChannelData[ch - 1]?.fps ?? 0 }}</span>
-        </div>
+      <ChannelVideoCard
+        v-for="ch in channelCount" :key="ch - 1"
+        class="cursor-pointer transition-all"
+        compact
+        :ch="ch - 1"
+        :ch-data="multiChannelData[ch - 1]"
+        :model-stats="channelModelStats[ch - 1]"
+        :selected="selectedChannel === (ch - 1)"
+        :register-video-canvas="el => { multiVideoCanvasRefs[ch - 1] = el }"
+        :register-overlay-canvas="el => { multiCanvasRefs[ch - 1] = el }"
+        @select="selectedChannel = ch - 1">
         <!-- v3.1.3: 4 工位每个小卡片在视频上沿额外显示一行 工件号 / 未绑码 / 等待扫码 -->
         <div v-if="shouldShowMesBarFor(ch - 1)"
              class="absolute top-7 left-1 right-1 bg-slate-900/85 border border-cyan-800/50 rounded px-1.5 py-0.5 flex items-center gap-1.5 text-[0.625rem] z-10">
@@ -488,7 +355,7 @@
             </transition-group>
           </div>
         </template>
-      </div>
+      </ChannelVideoCard>
     </div>
     <!-- Selected channel detail panel -->
     <div class="h-64 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col flex-shrink-0">
@@ -598,59 +465,12 @@
         </div>
       </div>
 
-      <button
-        v-if="totalRecordingFailureCount > 0"
-        class="absolute right-2 bottom-2 z-40 bg-amber-600/90 hover:bg-amber-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1"
-        @click="showRecordingFailurePanel = true"
-      >
-        <el-icon><Warning /></el-icon>
-        录像异常 {{ totalRecordingFailureCount }}
-      </button>
-
-      <div v-if="showRecordingFailurePanel" class="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-        <div class="w-full max-w-5xl max-h-[85vh] bg-slate-900 border border-slate-700 rounded-lg flex flex-col">
-          <div class="px-4 py-3 border-b border-slate-700 flex items-center">
-            <span class="text-amber-300 font-bold">录像异常详情</span>
-            <span class="text-xs text-gray-400 ml-3">仅记录最近异常，用于排查</span>
-            <div class="ml-auto flex gap-2">
-              <el-button size="small" type="warning" plain :loading="recordingFailureLoading" @click="clearRecordingFailures">
-                清空列表
-              </el-button>
-              <el-button size="small" @click="showRecordingFailurePanel = false">关闭</el-button>
-            </div>
-          </div>
-          <div class="p-3 overflow-auto">
-            <table class="w-full text-xs text-left">
-              <thead class="text-gray-400 border-b border-slate-700">
-                <tr>
-                  <th class="py-1 pr-2">时间</th>
-                  <th class="py-1 pr-2">工位</th>
-                  <th class="py-1 pr-2">类型</th>
-                  <th class="py-1 pr-2">原因</th>
-                  <th class="py-1 pr-2">文件</th>
-                  <th class="py-1 pr-2">已写帧</th>
-                </tr>
-              </thead>
-              <tbody class="text-gray-200">
-                <tr v-for="(item, idx) in recordingFailureRows" :key="idx" class="border-b border-slate-800">
-                  <td class="py-1 pr-2 whitespace-nowrap">{{ formatRecordingFailureTime(item.timestamp) }}</td>
-                  <td class="py-1 pr-2">工位{{ item.channel_id + 1 }}</td>
-                  <td class="py-1 pr-2">{{ item.recorder_type }}</td>
-                  <td class="py-1 pr-2">
-                    <div>{{ getRecordingFailureReasonText(item.reason) }}</div>
-                    <div v-if="item.error" class="text-gray-400 break-all">{{ item.error }}</div>
-                  </td>
-                  <td class="py-1 pr-2 break-all text-gray-300">{{ item.file_path || '-' }}</td>
-                  <td class="py-1 pr-2">{{ item.frame_count ?? '-' }}</td>
-                </tr>
-                <tr v-if="recordingFailureRows.length === 0">
-                  <td colspan="6" class="py-4 text-center text-gray-500">暂无录像异常</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
+      <!-- 录像异常入口+详情面板（M-1 外置, 原同构块消重） -->
+      <RecordingFailureOverlay
+        v-model:visible="showRecordingFailurePanel"
+        :rows="recordingFailureRows"
+        :loading="recordingFailureLoading"
+        @clear="clearRecordingFailures" />
     </div>
   </div>
 
@@ -782,51 +602,13 @@
         </div>
       </div>
 
-      <!-- SOP流程 (Step Indicators) — non-tracking & non-per_item modes -->
-      <div v-if="systemStore.display.monitor.stepStrip && steps.length > 0 && !isTrackingMode && !isPerItemMode" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
-        <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0">
-          <span class="text-cyan-400 text-lg font-bold">SOP流程卡片</span>
-        </div>
-        <div ref="sopScrollContainer" class="flex-1 p-2 overflow-x-auto scroll-smooth">
-          <div class="flex items-center h-full">
-            <template v-for="(step, idx) in steps" :key="idx">
-              <!-- 间隔时间显示 -->
-              <div v-if="idx > 0" class="flex flex-col items-center justify-center px-1 flex-shrink-0">
-                <div class="w-6 h-[2px] bg-slate-600"></div>
-                <div class="text-[0.5625rem] text-yellow-400 font-mono mt-0.5 whitespace-nowrap">
-                  {{ formatInterval(step.label) }}
-                </div>
-                <div class="w-6 h-[2px] bg-slate-600"></div>
-              </div>
-              
-              <!-- 步骤卡片 -->
-              <div
-                :ref="el => { if (el) sopCardRefs[idx] = el }"
-                class="w-32 flex-shrink-0 flex flex-col rounded border transition-all duration-300"
-                :class="getSopCardClass(step)"
-              >
-                <div class="h-7 px-2 flex items-center justify-between text-xs"
-                  :class="getSopHeaderClass(step)"
-                >
-                  <span class="font-bold truncate">{{ step.name }}</span>
-                </div>
-                <div class="h-16 p-1 flex items-center justify-center relative overflow-hidden"
-                  :class="getSopBodyClass(step)"
-                >
-                   <img 
-                     v-if="step.screenshot" 
-                     :src="step.screenshot" 
-                     class="w-full h-full object-cover rounded"
-                   />
-                   <el-icon v-else :size="24" class="text-slate-600"><Picture /></el-icon>
-                   
-                   <div v-if="step.status === 'active'" class="absolute inset-0 border-2 border-cyan-500 animate-pulse"></div>
-                </div>
-              </div>
-            </template>
-          </div>
-        </div>
-      </div>
+      <!-- SOP流程 (Step Indicators) — non-tracking & non-per_item modes（M-2 外置 SopStepPanel） -->
+      <SopStepPanel
+        v-if="systemStore.display.monitor.stepStrip && steps.length > 0 && !isTrackingMode && !isPerItemMode"
+        ref="sopPanelRef"
+        :steps="steps"
+        :step-intervals="stepIntervals"
+      />
 
       <!-- Tracking Mode Checklist Panel -->
       <div v-else-if="isTrackingMode" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
@@ -893,6 +675,12 @@
         </div>
       </div>
 
+      <!-- 原生称重投料模式专属看板 (与 SOP/Tracking/PerItem 排他, 占视频下方核心展示位) -->
+      <WeighingPanel
+        v-else-if="isWeighingMode"
+        :channel="selectedChannel"
+      />
+
       <!-- v3.8+ 逐件模式专属面板 (与 SOP/Tracking 排他, 占视频下方核心展示位) -->
       <PerItemPanel
         v-else-if="isPerItemMode"
@@ -915,91 +703,12 @@
         :channel="selectedChannel"
         mix
       />
-      <div v-else-if="customMixState && customMixState.mix_type === 'tracking'"
-        class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
-        <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0 flex justify-between items-center">
-          <span class="text-cyan-400 text-lg font-bold">
-            {{ customMixContainer ? `物品校验 · ${customMixContainer.container_display || '容器'}装箱` : '物品校验 · 跟踪清点' }}
-          </span>
-          <div class="flex items-center gap-3">
-            <!-- 总数模式: 已进箱滑块总数 N/目标 -->
-            <span v-if="customMixItemTotal" class="text-sm font-bold"
-              :class="customMixItemTotal.target > 0 && customMixItemTotal.done === customMixItemTotal.target ? 'text-green-400' : 'text-amber-400'">
-              已进箱{{ customMixItemTotal.display || '滑块' }}
-              {{ customMixItemTotal.done }}<template v-if="customMixItemTotal.target > 0"> / {{ customMixItemTotal.target }}</template>
-            </span>
-            <!-- 盘计数模式: 已装托盘累计 N/每箱 -->
-            <span v-else-if="customMixContainer" class="text-sm font-bold"
-              :class="customMixContainer.box_count > 0 && customMixContainer.trays_done >= customMixContainer.box_count ? 'text-green-400' : 'text-amber-400'">
-              已装{{ customMixContainer.container_display || '托盘' }}
-              {{ customMixContainer.trays_done }}<template v-if="customMixContainer.box_count > 0"> / {{ customMixContainer.box_count }}</template>
-            </span>
-            <span v-if="customMixState.cycle_active" class="text-xs text-green-400 animate-pulse">周期中...</span>
-            <span v-else class="text-xs text-gray-500">等待周期开始（由步骤驱动）</span>
-          </div>
-        </div>
-        <!-- 容器模式: 显示"当前正在装的托盘"实时滑块数 + 已装托盘进度 -->
-        <div v-if="customMixContainer" class="flex-1 p-2 overflow-x-auto">
-          <div class="flex items-stretch h-full gap-3">
-            <div v-for="it in customMixContainer.current_tray_items" :key="it.label"
-              class="flex-shrink-0 w-44 bg-slate-800 rounded-lg border p-2 flex flex-col justify-between"
-              :class="!customMixItemTotal && it.expected_per_tray > 0 && (it.peak_count ?? 0) >= it.expected_per_tray ? 'border-green-500/70' : 'border-amber-500/50'">
-              <div class="text-xs text-gray-400 truncate">当前{{ customMixContainer.container_display || '托盘' }}峰值 · {{ it.display_name || it.label }}</div>
-              <div class="text-center my-1">
-                <span class="text-4xl font-bold font-mono"
-                  :class="!customMixItemTotal && it.expected_per_tray > 0 && (it.peak_count ?? 0) >= it.expected_per_tray ? 'text-green-400' : 'text-white'"
-                >{{ it.peak_count ?? 0 }}</span>
-                <span v-if="!customMixItemTotal && it.expected_per_tray > 0" class="text-base text-gray-500"> / {{ it.expected_per_tray }}</span>
-              </div>
-              <div class="text-[0.625rem] text-gray-400 text-center">
-                实时 <span class="text-cyan-400 font-bold">{{ it.current_count }}</span> · 进箱记峰值
-              </div>
-            </div>
-            <!-- 已装托盘明细 (每盘装了多少) -->
-            <div v-if="(customMixContainer.done_detail || []).length"
-              class="flex-shrink-0 min-w-32 bg-slate-800/60 rounded-lg border border-slate-700 p-2 flex flex-col">
-              <div class="text-xs text-gray-400 mb-1">已装明细</div>
-              <div class="flex-1 overflow-y-auto space-y-0.5">
-                <div v-for="(tray, idx) in customMixContainer.done_detail" :key="idx"
-                  class="text-[0.7rem] text-gray-300 font-mono">
-                  第{{ idx + 1 }}盘: {{ Object.values(tray).join('/') }}
-                </div>
-              </div>
-            </div>
-            <div v-if="!customMixContainer.current_tray_items.length"
-              class="flex items-center justify-center text-gray-500 text-sm w-full">
-              等待{{ customMixContainer.container_display || '托盘' }}出现...
-            </div>
-          </div>
-        </div>
-        <div v-else class="flex-1 p-2 overflow-x-auto">
-          <!-- 复用独立跟踪模式的物品清单数据 (后端 _rebuild_checklist 同一来源) -->
-          <div class="flex items-stretch h-full gap-3">
-            <div v-for="(info, cls) in trackingChecklist" :key="cls"
-              class="flex-shrink-0 w-36 bg-slate-800 rounded-lg border p-2 flex flex-col justify-between transition-all"
-              :class="info.counted >= info.expected && info.expected > 0 ? 'border-green-500/70' : info.counted > info.expected && info.expected > 0 ? 'border-red-500/70' : 'border-slate-700'"
-            >
-              <div class="text-xs text-gray-400 truncate">{{ info.display_name || cls }}</div>
-              <div class="text-center my-1">
-                <span class="text-3xl font-bold font-mono"
-                  :class="info.counted >= info.expected && info.expected > 0 ? 'text-green-400' : 'text-white'"
-                >{{ info.counted }}</span>
-                <span v-if="info.expected > 0" class="text-sm text-gray-500"> / {{ info.expected }}</span>
-              </div>
-              <div v-if="(customMixItemByLabel[cls]?.partials || []).length"
-                class="text-[0.625rem] text-red-400 text-center truncate"
-                :title="customMixItemByLabel[cls].partials.map(p => `${p.peak}/${p.required}`).join(', ')">
-                缺件批次: {{ customMixItemByLabel[cls].partials.map(p => `${p.peak}/${p.required}`).join(', ') }}
-              </div>
-              <div v-else class="text-[0.625rem] text-gray-500 text-center">{{ info.prefix }}1 ~ {{ info.prefix }}{{ info.counted || '?' }}</div>
-            </div>
-            <div v-if="Object.keys(trackingChecklist).length === 0"
-              class="flex items-center justify-center text-gray-500 text-sm w-full">
-              等待物品出现...
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- 混合类型=tracking 物品校验看板（M-3 外置 CustomMixItemPanel） -->
+      <CustomMixItemPanel
+        v-else-if="customMixState && customMixState.mix_type === 'tracking'"
+        :state="customMixState"
+        :tracking-checklist="trackingChecklist"
+      />
 
       <!-- v3.21: 包装箱结算进度 (仅当前工位有启用配置才显示, 否则不渲染/不轮询, 零差异) -->
       <PackagingFlowCard
@@ -1586,59 +1295,12 @@
       </div>
     </div>
 
-    <button
-      v-if="totalRecordingFailureCount > 0"
-      class="absolute right-2 bottom-2 z-40 bg-amber-600/90 hover:bg-amber-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1"
-      @click="showRecordingFailurePanel = true"
-    >
-      <el-icon><Warning /></el-icon>
-      录像异常 {{ totalRecordingFailureCount }}
-    </button>
-
-    <div v-if="showRecordingFailurePanel" class="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div class="w-full max-w-5xl max-h-[85vh] bg-slate-900 border border-slate-700 rounded-lg flex flex-col">
-        <div class="px-4 py-3 border-b border-slate-700 flex items-center">
-          <span class="text-amber-300 font-bold">录像异常详情</span>
-          <span class="text-xs text-gray-400 ml-3">仅记录最近异常，用于排查</span>
-          <div class="ml-auto flex gap-2">
-            <el-button size="small" type="warning" plain :loading="recordingFailureLoading" @click="clearRecordingFailures">
-              清空列表
-            </el-button>
-            <el-button size="small" @click="showRecordingFailurePanel = false">关闭</el-button>
-          </div>
-        </div>
-        <div class="p-3 overflow-auto">
-          <table class="w-full text-xs text-left">
-            <thead class="text-gray-400 border-b border-slate-700">
-              <tr>
-                <th class="py-1 pr-2">时间</th>
-                <th class="py-1 pr-2">工位</th>
-                <th class="py-1 pr-2">类型</th>
-                <th class="py-1 pr-2">原因</th>
-                <th class="py-1 pr-2">文件</th>
-                <th class="py-1 pr-2">已写帧</th>
-              </tr>
-            </thead>
-            <tbody class="text-gray-200">
-              <tr v-for="(item, idx) in recordingFailureRows" :key="idx" class="border-b border-slate-800">
-                <td class="py-1 pr-2 whitespace-nowrap">{{ formatRecordingFailureTime(item.timestamp) }}</td>
-                <td class="py-1 pr-2">工位{{ item.channel_id + 1 }}</td>
-                <td class="py-1 pr-2">{{ item.recorder_type }}</td>
-                <td class="py-1 pr-2">
-                  <div>{{ getRecordingFailureReasonText(item.reason) }}</div>
-                  <div v-if="item.error" class="text-gray-400 break-all">{{ item.error }}</div>
-                </td>
-                <td class="py-1 pr-2 break-all text-gray-300">{{ item.file_path || '-' }}</td>
-                <td class="py-1 pr-2">{{ item.frame_count ?? '-' }}</td>
-              </tr>
-              <tr v-if="recordingFailureRows.length === 0">
-                <td colspan="6" class="py-4 text-center text-gray-500">暂无录像异常</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+  <!-- 录像异常入口+详情面板（M-1 外置, 原同构块消重） -->
+  <RecordingFailureOverlay
+    v-model:visible="showRecordingFailurePanel"
+    :rows="recordingFailureRows"
+    :loading="recordingFailureLoading"
+    @clear="clearRecordingFailures" />
   </div>
 
   <!-- v3.13 M2.2b: monitor.layout.footer slot — 客户插件可在视频区底部叠加全局状态条 / 通知 / 控制按钮.
@@ -1681,8 +1343,13 @@ import api, { getBackendHost } from '@/api/index';
 import { getExtraFieldsSchema, setExtraFields, getInboundConfig } from '@/api/gateway';
 import PerItemPanel from './PerItemPanel.vue';
 import PackagingFlowCard from './PackagingFlowCard.vue';
+import WeighingPanel from './WeighingPanel.vue';
 import VirtualScanGun from './VirtualScanGun.vue';
 import ExternalAlarmBanner from './ExternalAlarmBanner.vue';
+import RecordingFailureOverlay from './RecordingFailureOverlay.vue';
+import SopStepPanel from './SopStepPanel.vue';
+import CustomMixItemPanel from './CustomMixItemPanel.vue';
+import ChannelVideoCard from './ChannelVideoCard.vue';
 import { createFramePump } from './framePump';
 import { listPackagingFlows, getPackagingFlowState } from '@/api/packaging_flow';
 import TjSlot from '@/components/TjSlot.vue';
@@ -1847,10 +1514,9 @@ const streamImg0 = ref(null);
 const streamImg1 = ref(null);
 const detectionCanvas = ref(null);
 
-// SOP 滚动相关
-const sopScrollContainer = ref(null);
-const sopCardRefs = {};
-let lastScrolledIdx = -1;
+// SOP 面板（M-2 外置 SopStepPanel.vue）: 滚动容器/卡片 ref/滚动游标随组件下沉,
+// 父级轮询经 sopPanelRef 驱动 scrollToCard / resetScroll
+const sopPanelRef = ref(null);
 
 // Chart Refs
 const defectChartRef = ref(null);
@@ -1964,28 +1630,9 @@ onUnmounted(() => {
   }
 });
 // v3.19.x 自定义混合模式物品校验 (detection/results.custom_mix_state)
+// 展示侧三个 computed(按标签索引/容器累加器/总数模式)已随面板外置到 CustomMixItemPanel.vue（M-3）,
+// 本 ref 留父级: 轮询写入 + customMixPerItemState 适配 + 面板 props 数据源。
 const customMixState = ref(null);
-// 混合跟踪卡片用: 按标签索引物品行状态 (堆叠批层的"缺件批次"明细显示)
-const customMixItemByLabel = computed(() => {
-  const map = {};
-  for (const it of (customMixState.value?.items || [])) map[it.label] = it;
-  return map;
-});
-// 托盘容器累加器状态 (混合跟踪 + 配了容器标签时后端才下发; 否则 null = 走原扁平清单)
-const customMixContainer = computed(() => {
-  const c = customMixState.value?.container;
-  return (c && c.enabled) ? c : null;
-});
-// 总数模式 (items_total): 累加进箱滑块总数 / 整箱目标, 取首个被计数物品标签
-const customMixItemTotal = computed(() => {
-  const c = customMixContainer.value;
-  if (!c || c.count_mode !== 'items_total') return null;
-  const totals = c.item_total_done || {};
-  const label = Object.keys(totals)[0] || (c.current_tray_items?.[0]?.label) || '';
-  const done = Object.values(totals).reduce((a, b) => a + (b || 0), 0);
-  const disp = c.current_tray_items?.find(i => i.label === label)?.display_name || label;
-  return { done, target: c.item_target || 0, display: disp };
-});
 const cycleTime = ref(0);
 const cycleTimeWithNg = ref(0);
 const lastCycleTime = ref(0);
@@ -2159,23 +1806,8 @@ const recordingFailureRows = computed(() => {
 
 const totalRecordingFailureCount = computed(() => recordingFailureRows.value.length);
 
-const formatRecordingFailureTime = (ts) => {
-  if (!ts) return '-';
-  const d = new Date(ts * 1000);
-  if (Number.isNaN(d.getTime())) return '-';
-  return `${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
-};
-
-const getRecordingFailureReasonText = (reason) => {
-  const map = {
-    open_failed: '录制器启动失败',
-    open_exception: '录制器启动异常',
-    write_failed: '写入失败/通道失效',
-    write_exception: '写入异常',
-  };
-  return map[reason] || reason || '未知异常';
-};
-
+// 时间/原因文案格式化已随遮罩外置到 RecordingFailureOverlay.vue（M-1）;
+// 清空动作因涉及 API 调用与轮询数据写回, 留父级, 子组件走 clear emit。
 const clearRecordingFailures = async () => {
   recordingFailureLoading.value = true;
   try {
@@ -2455,6 +2087,8 @@ const processChannelResult = (ch, d) => {
   chData.detections = d.detections || [];
   chData._pollProjectConfig = d.project_config || null;
   chData.perItemState = d.per_item_state || null;   // v3.28: 多工位画框贴螺丝编号用
+  chData.placementGuide = d.placement_guide || null;  // v3.32: 就位引导框运行态(已就位/未就位)
+  chData.labelSplitRounds = d.label_split_rounds || null;  // v3.32: 多轮次拆分当前轮次
   chData.currentCycleSteps = d.current_cycle_steps || [];
   chData.backupCoveredLabels = d.backup_covered_labels || [];
   chData.stepCounts = d.step_counts || {};
@@ -2566,8 +2200,9 @@ const processChannelResult = (ch, d) => {
     const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
     const stMap = {};
     stepsConf.forEach(s => { stMap[s.label] = s; });
+    // v3.31.x 语义收窄: hide_in_view 只隐藏画面检测框, SOP/步骤详情照常显示 (过滤条件不再含 hide_in_view)
     const td = stepsConf
-      .filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view && _trkAllow(s.label))
+      .filter(s => s.enabled !== false && !s.is_backup && _trkAllow(s.label))
       .map((s) => {
         const inCycle = chData.currentCycleSteps.includes(s.label);
         const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
@@ -2596,7 +2231,7 @@ const processChannelResult = (ch, d) => {
       (chData.steps || []).map(s => [s.label, s.screenshot])
     );
     const sopSteps = stepsConf
-      .filter(s => s.enabled !== false && !s.is_backup && !s.hide_in_view && _trkAllow(s.label))
+      .filter(s => s.enabled !== false && !s.is_backup && _trkAllow(s.label))
       .map(s => {
         const inCycle = chData.currentCycleSteps.includes(s.label);
         const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
@@ -2615,7 +2250,7 @@ const processChannelResult = (ch, d) => {
     chData.steps = sopSteps;
   }
   // v2.7.4: 收集"项目配置中标记隐藏标注框"的 label 集合，drawMultiDetections 据此跳过画框
-  // 仅影响 Monitor 画面 + SOP 卡片 + 步骤详情，不影响检测/数据/报警/MES
+  // v3.31.x 语义收窄: 仅影响实时画面的检测框, SOP 卡片/步骤详情照常显示; 检测/数据/报警/MES 一如既往不受影响
   {
     const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
     chData._hiddenLabels = new Set(
@@ -2658,10 +2293,14 @@ const processChannelResult = (ch, d) => {
   const pollCfg = d.project_config || null;
   const dets = d.detections || [];
   const hidden = chData._hiddenLabels;
+  // v3.32: 配了拆分区域/就位引导框时, 空检测帧也要走 draw 保住叠加层 (否则区域一闪一闪)
+  const _pcOverlay = pollCfg?.pipeline_config || {};
+  const hasSplitOverlay = (Array.isArray(_pcOverlay.label_splits) && _pcOverlay.label_splits.length > 0)
+    || !!(_pcOverlay.placement_guide && _pcOverlay.placement_guide.enabled);
 
   const canvas = multiCanvasRefs[ch];
   if (canvas) {
-    if (dets.length) {
+    if (dets.length || hasSplitOverlay) {
       drawMultiDetections(ch, canvas, dets, hidden, pollCfg);
     } else {
       const ctx = canvas.getContext('2d');
@@ -2677,7 +2316,7 @@ const processChannelResult = (ch, d) => {
       const pluginCanvas = overlays[ch];
       if (!pluginCanvas?.parentElement) return;
       if (pluginCanvas.parentElement.offsetWidth < 2) return;
-      if (dets.length) {
+      if (dets.length || hasSplitOverlay) {
         drawMultiDetections(ch, pluginCanvas, dets, hidden, pollCfg);
       } else {
         const ctx = pluginCanvas.getContext('2d');
@@ -2787,6 +2426,151 @@ const shouldDrawDetWithStepRoi = (det, stepsConfig, pipelineConfig) => {
   return pointInPolygonNorm(cx, cy, step.roi);
 };
 
+// ==================== v3.32 同标签区域拆分 / 工件就位提示 画布叠加 ====================
+// 单工位 drawDetections 与多工位 drawMultiDetections 共用。坐标映射由调用方传入
+// (dx,dy = letterbox 偏移, dw,dh = 实际渲染尺寸)。
+// - 拆分区域: fixed 直接画; anchor 用「当前帧锚点框 vs 标定框」平移缩放后画,
+//   本帧没检出锚点就不画 (后端引擎有 hold 缓存, 前端叠加层只做可视化, 缺帧可接受)
+// - 就位引导框: 已就位=绿实线, 未就位/锚点不可见=黄虚线 + 顶部提示文字
+const SPLIT_REGION_FALLBACK_COLORS = ['#f97316', '#22d3ee', '#a78bfa', '#84cc16', '#ec4899', '#facc15'];
+
+const drawLabelSplitOverlay = (ctx, pipeCfg, detections, guideState, dx, dy, dw, dh, roundsState = null) => {
+  const pc = pipeCfg || {};
+  const rules = Array.isArray(pc.label_splits) ? pc.label_splits : [];
+  const mapX = (nx) => dx + nx * dw;
+  const mapY = (ny) => dy + ny * dh;
+
+  const drawPolygon = (poly, color, name, dashed = false, alpha = 0.10) => {
+    if (!Array.isArray(poly) || poly.length < 3) return;
+    ctx.save();
+    ctx.beginPath();
+    poly.forEach((p, i) => {
+      const x = mapX(Number(p[0]) || 0), y = mapY(Number(p[1]) || 0);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    if (alpha > 0) {
+      ctx.fillStyle = color;
+      ctx.globalAlpha = alpha;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    if (dashed) ctx.setLineDash([8, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (name) {
+      const cx = poly.reduce((s, p) => s + (Number(p[0]) || 0), 0) / poly.length;
+      const cy = poly.reduce((s, p) => s + (Number(p[1]) || 0), 0) / poly.length;
+      const fs = 13 * (window.__uiScale || 1);
+      ctx.font = `bold ${fs}px Arial`;
+      const tw = ctx.measureText(name).width;
+      const tx = mapX(cx) - tw / 2, ty = mapY(cy);
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(tx - 3, ty - fs, tw + 6, fs + 6);
+      ctx.fillStyle = color;
+      ctx.fillText(name, tx, ty);
+    }
+    ctx.restore();
+  };
+
+  for (const rule of rules) {
+    if (!rule || rule.enabled === false || !Array.isArray(rule.regions)) continue;
+    let transform = null;
+    if (rule.mode === 'anchor') {
+      const ref = rule.anchor_ref;
+      if (!ref || !(ref.w > 0) || !(ref.h > 0)) continue;
+      let cur = null;
+      for (const det of (detections || [])) {
+        if (det.label === rule.anchor_label && !det.hidden) {
+          if (!cur || (det.confidence || 0) > (cur.confidence || 0)) cur = det;
+        }
+      }
+      if (!cur) continue;  // 锚点本帧不可见 → 区域位置未知, 不画
+      const sx = (Number(cur.w) || 0) / ref.w;
+      const sy = (Number(cur.h) || 0) / ref.h;
+      transform = ([px, py]) => [
+        (Number(cur.x) || 0) + (px - ref.x) * sx,
+        (Number(cur.y) || 0) + (py - ref.y) * sy,
+      ];
+    }
+    // v3.32 多轮次: 区域名前挂当前轮前缀 (运行态来自 /detection/results.label_split_rounds;
+    // 检测未跑/轮次未开始时按第 1 轮前缀兜底, 与后端引擎同语义)
+    let roundPrefix = '';
+    let roundBadge = '';
+    let regionsToDraw = rule.regions;
+    if (rule.rounds && rule.rounds.enabled && Array.isArray(rule.rounds.prefixes) && rule.rounds.prefixes.length) {
+      const rt = roundsState && roundsState[rule.source_label];
+      roundPrefix = (rt && rt.prefix) || rule.rounds.prefixes[0] || '';
+      const cur = rt && rt.round > 0 ? rt.round : 0;
+      roundBadge = cur > 0
+        ? `第${cur}/${rule.rounds.count}轮 · ${roundPrefix}`
+        : `等待${rule.rounds.trigger_label || '切换标签'}开第1轮`;
+      // 每轮独立区域: 当前轮配了 override 就画 override 的那批 (未开始按第1轮, 与后端引擎同语义)
+      const ov = rule.rounds.region_overrides?.[String(cur > 0 ? cur : 1)];
+      if (Array.isArray(ov) && ov.length) regionsToDraw = ov;
+    }
+    let badgeAnchor = null;
+    regionsToDraw.forEach((region, i) => {
+      if (!region || !Array.isArray(region.polygon) || region.polygon.length < 3) return;
+      const poly = transform ? region.polygon.map(transform) : region.polygon;
+      drawPolygon(poly, region.color || SPLIT_REGION_FALLBACK_COLORS[i % SPLIT_REGION_FALLBACK_COLORS.length],
+        `${roundPrefix}${region.name || ''}`);
+      if (!badgeAnchor) {
+        for (const p of poly) {
+          const px = Number(p[0]) || 0, py = Number(p[1]) || 0;
+          if (!badgeAnchor || py < badgeAnchor[1]) badgeAnchor = [px, py];
+        }
+      }
+    });
+    if (roundBadge && badgeAnchor) {
+      const fs = 13 * (window.__uiScale || 1);
+      ctx.save();
+      ctx.font = `bold ${fs}px Arial`;
+      const tw = ctx.measureText(roundBadge).width;
+      const tx = mapX(badgeAnchor[0]);
+      const ty = Math.max(fs + 4, mapY(badgeAnchor[1]) - 8);
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(tx - 4, ty - fs - 3, tw + 8, fs + 8);
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillText(roundBadge, tx, ty);
+      ctx.restore();
+    }
+  }
+
+  // 就位引导框 (独立功能): 后端 /detection/results 的 placement_guide 运行态驱动颜色
+  const pg = pc.placement_guide;
+  if (pg && pg.enabled && Array.isArray(pg.polygon) && pg.polygon.length >= 3) {
+    const inPos = !!(guideState && guideState.in_position);
+    // 就位后显示策略 (未就位时永远完整显示): always=常驻 | fade_on_ready=淡化细框 | hide_on_ready=隐藏
+    const display = pg.display || 'always';
+    if (inPos && display === 'hide_on_ready') return;
+    const faded = inPos && display === 'fade_on_ready';
+    const color = inPos ? (faded ? 'rgba(34,197,94,0.35)' : '#22c55e') : '#facc15';
+    drawPolygon(pg.polygon, color, '', !inPos, faded ? 0 : (inPos ? 0.06 : 0.10));
+    if (faded) return;  // 淡化档: 只留半透明细框, 不挂文字
+    // 提示文字挂在引导框最高点上方
+    let topX = 0.5, topY = 1;
+    for (const p of pg.polygon) {
+      if ((Number(p[1]) || 0) < topY) { topY = Number(p[1]) || 0; topX = Number(p[0]) || 0; }
+    }
+    const msg = inPos ? '工件已就位'
+      : (guideState && guideState.anchor_visible ? '请将工件放入引导框' : `等待工件（${pg.anchor_label || '锚点'}）就位`);
+    const fs = 14 * (window.__uiScale || 1);
+    ctx.save();
+    ctx.font = `bold ${fs}px Arial`;
+    const tw = ctx.measureText(msg).width;
+    const tx = mapX(topX) - tw / 2;
+    const ty = Math.max(fs + 6, mapY(topY) - 10);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(tx - 5, ty - fs - 3, tw + 10, fs + 8);
+    ctx.fillStyle = color;
+    ctx.fillText(msg, tx, ty);
+    ctx.restore();
+  }
+};
+
 const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollProjectConfig = null) => {
   if (!canvas) return;
   const parent = canvas.parentElement;
@@ -2807,6 +2591,10 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollPr
 
   const stepsConfMulti = pollProjectConfig?.steps_config || currentProject.value?.steps_config || [];
   const pipeMulti = pollProjectConfig?.pipeline_config || currentProject.value?.pipeline_config || {};
+
+  // v3.32: 拆分区域 / 就位引导框 叠加层 (画在检测框底下)
+  drawLabelSplitOverlay(ctx, pipeMulti, detections, multiChannelData.value[ch]?.placementGuide, dx, dy, dw, dh,
+    multiChannelData.value[ch]?.labelSplitRounds);
 
   // v3.8.x: 多工位画框也读用户配置 (老逻辑硬编码 #10b981/#ef4444、线宽2、字号11,
   // 客户在设置页改的检测框颜色/线宽/字号在多工位下全部失效).
@@ -3282,6 +3070,8 @@ const currentProject = computed(() => projectStore.currentProject);
 const isTrackingMode = computed(() => currentProject.value?.logic_mode === 'tracking');
 // v3.8+: 逐件模式 — 视频下方专属面板, 排他 SOP/Tracking
 const isPerItemMode = computed(() => currentProject.value?.logic_mode === 'per_item');
+// 原生称重投料模式 — 视频下方专属看板 (人员/型号/各料投料进度/本件结论)
+const isWeighingMode = computed(() => currentProject.value?.logic_mode === 'weighing');
 
 // v3.19.x 自定义混合逐件: 把 custom_mix_state 适配成 PerItemPanel 的 state 形状
 // (steps 与独立模式 per_item_state.steps 同形; config=null 自动隐藏手动按钮/收尾卡片)
@@ -3869,12 +3659,7 @@ const formatStepPT = (stepLabel) => {
   return `${duration.toFixed(1)}s`;
 };
 
-// 格式化步骤间隔时间
-const formatInterval = (stepLabel) => {
-  const interval = stepIntervals.value[stepLabel];
-  if (interval === undefined || interval === null || interval === 0) return '--';
-  return `${interval.toFixed(1)}s`;
-};
+// formatInterval（步骤间隔格式化）已随 SOP 面板外置到 SopStepPanel.vue（M-2）。
 
 // CT 取值: 根据 ctMode 三档 + ctIncludeNg 是否含 NG
 //   - current 模式: ctIncludeNg 不影响 (cycle 还没结束分不出 OK/NG, 直接用当前已耗时)
@@ -3919,54 +3704,8 @@ const getStepClass = (step) => {
   }
 };
 
-// SOP卡片整体样式：完成=绿色，漏检/重复=红色
-const getSopCardClass = (step) => {
-  if (step.cycleResult === 'ng') {
-    return 'border-red-500 bg-red-900/30';
-  } else if (step.status === 'completed' || step.cycleResult === 'ok') {
-    return 'border-green-500 bg-green-900/20';
-  } else if (step.status === 'active') {
-    return 'border-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.3)] bg-slate-800';
-  } else {
-    return 'border-slate-700 bg-slate-800 opacity-60';
-  }
-};
-
-const getSopHeaderClass = (step) => {
-  if (step.cycleResult === 'ng') {
-    return 'bg-red-900/60 text-red-200';
-  } else if (step.status === 'completed' || step.cycleResult === 'ok') {
-    return 'bg-green-900/60 text-green-200';
-  } else {
-    return 'bg-slate-950 text-gray-300';
-  }
-};
-
-const getSopBodyClass = (step) => {
-  if (step.cycleResult === 'ng') {
-    return 'bg-red-950/30';
-  } else if (step.status === 'completed' || step.cycleResult === 'ok') {
-    return 'bg-green-950/20';
-  } else {
-    return 'bg-black/20';
-  }
-};
-
-// SOP 卡片自动滚动：将正在变化的卡片滚动到可视区域中间
-const scrollToSopCard = (idx) => {
-  if (idx === lastScrolledIdx || idx < 0) return;
-  const container = sopScrollContainer.value;
-  const card = sopCardRefs[idx];
-  if (!container || !card) return;
-  
-  const containerWidth = container.clientWidth;
-  const cardLeft = card.offsetLeft;
-  const cardWidth = card.offsetWidth;
-  const targetScroll = cardLeft - (containerWidth / 2) + (cardWidth / 2);
-  
-  container.scrollTo({ left: Math.max(0, targetScroll), behavior: 'smooth' });
-  lastScrolledIdx = idx;
-};
+// SOP 卡片样式(getSopCardClass/Header/Body)与自动滚动实现已随 SOP 面板
+// 外置到 SopStepPanel.vue（M-2）, 父级只保留轮询侧的驱动调用。
 
 // 格式化视频时间（秒转 mm:ss）
 const formatVideoTime = (seconds) => {
@@ -4086,6 +3825,21 @@ const drawDetections = (detections) => {
     dbg('monitor.video', _has ? '叠加层恢复画框' : '叠加层清空(空结果)',
         `检出=${detections ? detections.length : 0} (空结果清框=画面闪烁直接元凶, 看推理是否间歇空)`);
     _ovlHadBoxes = _has;
+  }
+
+  // v3.32: 拆分区域/就位引导框常驻叠加层 — 在检测框之前画(垫底), 且空结果帧也要画
+  {
+    const img0 = videoElement.value;
+    let ox = 0, oy = 0, rw = canvas.width, rh = canvas.height;
+    if (img0 && img0.naturalWidth && img0.naturalHeight) {
+      const ia = img0.naturalWidth / img0.naturalHeight;
+      const ca = canvas.width / canvas.height;
+      if (ia > ca) { rw = canvas.width; rh = canvas.width / ia; oy = (canvas.height - rh) / 2; }
+      else { rh = canvas.height; rw = canvas.height * ia; ox = (canvas.width - rw) / 2; }
+    }
+    drawLabelSplitOverlay(ctx, currentProject.value?.pipeline_config,
+      detections, multiChannelData.value[0]?.placementGuide, ox, oy, rw, rh,
+      multiChannelData.value[0]?.labelSplitRounds);
   }
 
   if (!detections || detections.length === 0) return;
@@ -4389,6 +4143,12 @@ watch(() => currentProject.value, (newProject, oldProject) => {
         stepsToShow = stepsConfig.filter(s => s.enabled);
       }
     }
+  } else if (logicMode === 'region_events') {
+    // v3.32+ 区域事件模式: 步骤统计按"事件规则名"展示 (后端 step_counts 以规则名为键),
+    // 不展示模型原始类别 (工件/手/工具本身不是流程步骤)
+    stepsToShow = (pipelineConfig.region_events?.rules || [])
+      .filter(r => r && r.name)
+      .map((r, i) => ({ id: `re_${r.id || i}`, label: r.name, displayLabel: r.name, enabled: true }));
   } else {
     stepsToShow = stepsConfig.filter(s => s.enabled);
   }
@@ -4419,8 +4179,8 @@ watch(() => currentProject.value, (newProject, oldProject) => {
     }
   }
 
-  // v2.7.4: 过滤掉 backup_for 和 hide_in_view 步骤（仅视觉隐藏，不影响检测/数据）
-  stepsToShow = stepsToShow.filter(s => !s.backup_for && !s.hide_in_view);
+  // v2.7.4: 过滤掉 backup_for 步骤; v3.31.x 语义收窄: hide_in_view 只隐藏画面检测框, 不再从 SOP/步骤统计剔除
+  stepsToShow = stepsToShow.filter(s => !s.backup_for);
 
   // 更新步骤条 - 同时保存 label 用于后端匹配
   // v3.10.x: SOP 卡片"图永不空"策略 — 重建步骤数组时按 label 从旧数组继承缩略图.
@@ -4987,7 +4747,7 @@ const startPolling = () => {
               t.cycleResult = null;
             });
             // SOP 卡片栏滚动游标归零, 让新一轮从第一张卡片开始展示
-            lastScrolledIdx = -1;
+            sopPanelRef.value?.resetScroll();
             lastSingleCycleId = _incomingCycleId;
           }
         } else {
@@ -5086,6 +4846,10 @@ const startPolling = () => {
       multiChannelData.value[0].pendingAck = data.pending_ack || { active: false };
       multiChannelData.value[0].pendingRemediation = data.pending_remediation || null;
       multiChannelData.value[0].recentEvents = data.recent_events || [];
+      // v3.32: 就位引导框运行态 (drawDetections 叠加层按它决定绿/黄)
+      multiChannelData.value[0].placementGuide = data.placement_guide || null;
+      // v3.32: 多轮次拆分当前轮次 (叠加层区域名前缀 + 轮次角标)
+      multiChannelData.value[0].labelSplitRounds = data.label_split_rounds || null;
 
       // ── monitor.poll 诊断: 人工确认阻塞边沿 + 每 3s 轮询摘要 ──
       const _ackActive = !!(data.pending_ack && data.pending_ack.active);
@@ -5271,6 +5035,14 @@ const processedEventIds = new Set();
 // 从后端数据更新步骤状态
 const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, recentEvents, shouldUpdateCharts = true) => {
   const detectingLabels = new Set(currentDetections.map(d => d.label));
+  // v3.32 区域事件模式: 步骤行是"动作规则名"(测硬度), 画面检测框是"模型类别名"(测硬度笔),
+  // 两者永远对不上 → "进行中"判定不能看 detectingLabels, 改看后端 in-flight PT
+  // (动作 episode 命中累计中即有值)。结果列语义也不同: 周期好坏由后端结算判定说了算
+  // (复检序列里同动作出现两次是合法的), 前端不做"重复/乱序/漏做 = NG"的顺序推断。
+  const isRegionEventsMode = (currentProject.value?.logic_mode === 'region_events');
+  const stepIsLive = (label) => isRegionEventsMode
+    ? ((stepInflightDurations.value[label] || 0) > 0)
+    : detectingLabels.has(label);
   
   // 获取后端的当前周期步骤列表
   const currentCycleSteps = backendCounters?._currentCycleSteps || [];
@@ -5425,7 +5197,7 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
 
       // 后续期望位置已有步骤进 cycle → 本位置视为"已走过", 不因画面里再次识别回退到 active/NG 闪动
       const _passedThisStep = maxCompletedIdx > idx && thisPosCompleted;
-      const _inFrame = detectingLabels.has(label);
+      const _inFrame = stepIsLive(label);
       const _leftFrame = !_inFrame;
 
       const _isLastStep = expectedLabels.length > 0 && idx === expectedLabels.length - 1;
@@ -5436,7 +5208,11 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
           : (_hasTimedPT && (_leftFrame || _passedThisStep))
       );
 
-      if (cycleCount > expCnt && _posDone) {
+      if (isRegionEventsMode) {
+        // 区域事件: 动作确认即 OK, 不做重复/乱序/漏做的 NG 推断
+        // (复检等合法序列由后端结算判定, 前端标红会与结算结果打架)
+        step.cycleResult = _posDone ? 'ok' : null;
+      } else if (cycleCount > expCnt && _posDone) {
         step.cycleResult = 'ng';
       } else if (_posDone) {
         step.cycleResult = outOfOrderIdx.has(idx) ? 'ng' : 'ok';
@@ -5498,7 +5274,7 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       }
     }
     if (latestChangedIdx >= 0) {
-      scrollToSopCard(latestChangedIdx);
+      sopPanelRef.value?.scrollToCard(latestChangedIdx);
     }
   } else {
     // 周期间隙 (currentCycleSteps 为空) — 不主动修改 status/cycleResult,
@@ -5511,9 +5287,9 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
       const label = step.label || step.name;
       const count = stepCounts[label] || 0;
 
-      if (detectingLabels.has(label)) {
+      if (stepIsLive(label)) {
         // 新一轮第一个步骤刚进画面 → 立刻显示 active (此时 cycle_id 可能还是 null,
-        // 但 detectingLabels 已经有内容了)
+        // 但 detectingLabels / 区域事件 in-flight 已经有内容了)
         step.status = 'active';
         if (tableData.value[idx]) {
           tableData.value[idx].status = 'active';
@@ -5694,7 +5470,7 @@ const resetCounters = async () => {
     t.status = 'pending';
     t.cycleResult = null;
   });
-  lastScrolledIdx = -1;
+  sopPanelRef.value?.resetScroll();
   
   // 清空步骤截图缓存、PT/间隔缓存和NG排名
   stepScreenshots.value = {};

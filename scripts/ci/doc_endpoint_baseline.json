@@ -1,0 +1,1619 @@
+{
+ "DELETE /api/v1/api-keys/{key_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "DELETE /api/v1/cameras/{camera_id}": [
+  "summary"
+ ],
+ "DELETE /api/v1/channel-groups/{group_id}": [
+  "summary",
+  "docstring"
+ ],
+ "DELETE /api/v1/cluster/boxes": [
+  "summary",
+  "response_model"
+ ],
+ "DELETE /api/v1/cluster/boxes/{box_serial}": [
+  "summary",
+  "response_model"
+ ],
+ "DELETE /api/v1/data/clear/all": [
+  "summary",
+  "response_model"
+ ],
+ "DELETE /api/v1/data/clear/range": [
+  "summary",
+  "response_model"
+ ],
+ "DELETE /api/v1/export/realtime-rules/{rule_id}": [
+  "summary",
+  "docstring"
+ ],
+ "DELETE /api/v1/export/scheduled-rules/{rule_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "DELETE /api/v1/export/templates/{template_id}/template-file": [
+  "summary"
+ ],
+ "DELETE /api/v1/export/templates/{tpl_id}": [
+  "summary",
+  "docstring"
+ ],
+ "DELETE /api/v1/external-devices/logs": [
+  "summary",
+  "response_model"
+ ],
+ "DELETE /api/v1/external-devices/{device_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "DELETE /api/v1/mes/defect-codes/{code_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "DELETE /api/v1/mes/defects/{defect_id}": [
+  "summary",
+  "response_model"
+ ],
+ "DELETE /api/v1/mes/gateway/connections/{conn_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "DELETE /api/v1/mes/orders/{order_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "DELETE /api/v1/mes/workpieces/{workpiece_id}": [
+  "summary",
+  "response_model"
+ ],
+ "DELETE /api/v1/models/conversions/{conv_id}": [
+  "summary"
+ ],
+ "DELETE /api/v1/models/{model_id}": [
+  "summary"
+ ],
+ "DELETE /api/v1/operators/{op_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "DELETE /api/v1/packaging-flows/{config_id}": [
+  "summary",
+  "docstring"
+ ],
+ "DELETE /api/v1/plugins/{customer_code}": [
+  "summary"
+ ],
+ "DELETE /api/v1/projects/{project_id}": [
+  "summary"
+ ],
+ "DELETE /api/v1/roles/{role_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "DELETE /api/v1/scanner/devices/{device_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "DELETE /api/v1/scanner/logs": [
+  "summary",
+  "response_model"
+ ],
+ "DELETE /api/v1/tasks/batch/clear": [
+  "summary"
+ ],
+ "DELETE /api/v1/tasks/{task_id}": [
+  "summary"
+ ],
+ "DELETE /api/v1/users/{user_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "DELETE /api/v1/workpiece-flows/{flow_id}": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/alarm/ports": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/alarm/protocols": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/alarm/status": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/api-keys": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/auth/config": [
+  "summary"
+ ],
+ "GET /api/v1/auth/me": [
+  "summary"
+ ],
+ "GET /api/v1/auth/permissions/catalog": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/auth/status": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/cameras": [
+  "summary"
+ ],
+ "GET /api/v1/cameras/default/stream": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/cameras/{camera_id}": [
+  "summary"
+ ],
+ "GET /api/v1/cameras/{camera_id}/stream": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/cameras/{camera_id}/test": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/channel-groups": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/channel-groups/{group_id}": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/channel-groups/{group_id}/state": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/cluster/boxes": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/cluster/boxes/{box_serial}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/cluster/config": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/cluster/health": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/cluster/slaves": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/backup/database": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/cleanup-settings": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/cleanup/status": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/cycles/by-serial/{serial_no}": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/cycles/{cycle_id}": [
+  "summary"
+ ],
+ "GET /api/v1/data/cycles/{cycle_id}/steps": [
+  "summary"
+ ],
+ "GET /api/v1/data/export-settings": [
+  "summary"
+ ],
+ "GET /api/v1/data/export/csv": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/sessions": [
+  "summary"
+ ],
+ "GET /api/v1/data/sessions/by-date/{date}": [
+  "summary"
+ ],
+ "GET /api/v1/data/sessions/dates": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/sessions/{session_id}": [
+  "summary"
+ ],
+ "GET /api/v1/data/sessions/{session_id}/cycles": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/stats/behavior-score": [
+  "summary"
+ ],
+ "GET /api/v1/data/stats/cycle-averages": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/stats/step-averages": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/stats/yield-trend": [
+  "summary"
+ ],
+ "GET /api/v1/data/storage-info": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/videos": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/videos/{video_id}": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/debug/channels": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/debug/flags": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/debug/logs": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/export/fields": [
+  "summary"
+ ],
+ "GET /api/v1/export/realtime-rules": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/export/realtime-rules/{rule_id}": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/export/realtime-rules/{rule_id}/logs": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/export/run-logs": [
+  "summary"
+ ],
+ "GET /api/v1/export/scheduled-rules": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/export/scheduled-rules/_default-output-dir": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/export/scheduled-rules/{rule_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/export/scheduled-rules/{rule_id}/logs": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/export/templates": [
+  "summary"
+ ],
+ "GET /api/v1/export/templates/{template_id}/template-file": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/export/templates/{tpl_id}": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/external-devices/": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/external-devices/logs": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/external-devices/status": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/defect-codes": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/defects": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/defects/pareto": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/gateway/async-dispatch": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/gateway/connections": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/gateway/connections/by-channel": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/mes/gateway/connections/{conn_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/gateway/extra-fields": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/gateway/extra-fields-schema": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/mes/gateway/health-status": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/mes/gateway/logs": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/inbound/active-alarms": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/mes/inbound/alarm/clear": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/inbound/config": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/inbound/health": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/mes/inbound/logs": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/inbound/task": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/orders": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/orders/{order_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/orders/{order_id}/batches": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/orders/{order_id}/summary": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/workpieces": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/workpieces/search/{keyword}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/workpieces/{workpiece_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/mes/workpieces/{workpiece_id}/trace": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/models": [
+  "summary"
+ ],
+ "GET /api/v1/models/conversions/{conv_id}/status": [
+  "summary"
+ ],
+ "GET /api/v1/models/formats/available": [
+  "summary"
+ ],
+ "GET /api/v1/models/formats/diagnosis": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/models/{model_id}": [
+  "summary"
+ ],
+ "GET /api/v1/models/{model_id}/conversions": [
+  "summary"
+ ],
+ "GET /api/v1/operators": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/operators/current": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/packaging-flows": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/packaging-flows/{config_id}": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/packaging-flows/{config_id}/state": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/plugins": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/plugins/active/assets/{asset_path:path}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/plugins/active/manifest": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/plugins/{customer_code}/status": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/projects": [
+  "summary"
+ ],
+ "GET /api/v1/projects/active/current": [
+  "summary"
+ ],
+ "GET /api/v1/projects/{project_id}": [
+  "summary"
+ ],
+ "GET /api/v1/reports/daily-stats": [
+  "summary"
+ ],
+ "GET /api/v1/reports/export": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/reports/records": [
+  "summary"
+ ],
+ "GET /api/v1/reports/summary": [
+  "summary"
+ ],
+ "GET /api/v1/reports/trend": [
+  "summary"
+ ],
+ "GET /api/v1/roles": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/roles/{role_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/scanner/check-container-mode": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/scanner/devices": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/scanner/disable-status": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/scanner/latest/{channel_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/scanner/logs": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/scanner/scan-pair/active": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/scanner/status": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/scanner/wmax/debug-config": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/scanner/wmax/debug/config-raw": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/scanner/wmax/discover": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/scanner/wmax/discovered": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/scanner/wmax/image": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/scanner/wmax/image/raw": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/scanner/wmax/last-code": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/scanner/wmax/read-rate/result": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/scanner/wmax/status": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/scanner/wmax/stream": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/source/cameras": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/source/detection/results": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/source/gpu/current": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/source/gpu/list": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/source/hcnetsdk/status": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/source/health": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/source/hikvision/cameras": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/source/hikvision/status": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/source/kalman/config": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/source/status": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/source/stream/config": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/source/transform/config": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/source/video/info": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/system/device-status": [
+  "summary"
+ ],
+ "GET /api/v1/system/display": [
+  "summary"
+ ],
+ "GET /api/v1/system/license-cache": [
+  "summary"
+ ],
+ "GET /api/v1/system/log-limits": [
+  "summary"
+ ],
+ "GET /api/v1/system/polling": [
+  "summary"
+ ],
+ "GET /api/v1/system/startup-ready": [
+  "summary"
+ ],
+ "GET /api/v1/tasks": [
+  "summary"
+ ],
+ "GET /api/v1/tasks/{task_id}": [
+  "summary"
+ ],
+ "GET /api/v1/users": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/users/{user_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/weighing/records": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/weighing/state": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/workpiece-flows": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/workpiece-flows/runs/{run_id}": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/workpiece-flows/{flow_id}": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/workpiece-flows/{flow_id}/runs": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/workpiece-flows/{flow_id}/state": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/workstations/": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/workstations/auto-resume": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/workstations/gpu-allocation": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/workstations/splash-camera": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/workstations/startup-ready-gate": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/workstations/window-config": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/workstations/{channel_id}/status": [
+  "summary",
+  "response_model"
+ ],
+ "PATCH /api/v1/data/sessions/{session_id}/name": [
+  "summary"
+ ],
+ "POST /api/v1/alarm/config": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/alarm/connect": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/alarm/disconnect": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/alarm/idle-light/start": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/alarm/idle-light/stop": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/alarm/reload": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/alarm/stop": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/alarm/test": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/alarm/trigger/{event_type}": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/api-keys": [
+  "summary",
+  "docstring"
+ ],
+ "POST /api/v1/auth/change-password": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/auth/disable-auth": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/auth/enable-auth": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/auth/login": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/auth/logout": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/cameras": [
+  "summary"
+ ],
+ "POST /api/v1/channel-groups": [
+  "summary",
+  "docstring"
+ ],
+ "POST /api/v1/cluster/heartbeat": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/cluster/report": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/data/cleanup/run": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/data/cleanup/vacuum": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/data/sessions": [
+  "summary"
+ ],
+ "POST /api/v1/debug/client-log": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/debug/logs/clear": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/debug/test_cluster_flow": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/export/preview": [
+  "summary"
+ ],
+ "POST /api/v1/export/realtime-rules": [
+  "summary",
+  "docstring"
+ ],
+ "POST /api/v1/export/realtime-rules/{rule_id}/test-run": [
+  "summary"
+ ],
+ "POST /api/v1/export/realtime-rules/{rule_id}/toggle": [
+  "summary",
+  "docstring"
+ ],
+ "POST /api/v1/export/render": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/export/scheduled-rules": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/export/scheduled-rules/_cron-preview": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/export/scheduled-rules/{rule_id}/test-run": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/export/scheduled-rules/{rule_id}/toggle": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/export/templates": [
+  "summary",
+  "docstring"
+ ],
+ "POST /api/v1/export/templates/{template_id}/upload-template-file": [
+  "summary"
+ ],
+ "POST /api/v1/export/templates/{tpl_id}/clone": [
+  "summary"
+ ],
+ "POST /api/v1/external-devices/": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/external-devices/barcode": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/external-devices/command": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/external-devices/simulate": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/external-devices/test": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/mes/defect-codes": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/mes/defects": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/mes/gateway/connections": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/mes/gateway/connections/{conn_id}/probe-now": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/mes/gateway/connections/{conn_id}/pull": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/mes/gateway/connections/{conn_id}/push": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/mes/gateway/connections/{conn_id}/test": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/mes/gateway/extra-fields": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/mes/gateway/pull-test": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/mes/inbound/alarm/clear": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/mes/inbound/health": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/mes/inbound/task": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/mes/orders": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/mes/orders/receive": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/mes/orders/{order_id}/batches": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/mes/orders/{order_id}/status": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/mes/workpieces": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/mes/workpieces/{workpiece_id}/action": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/models/upload": [
+  "summary"
+ ],
+ "POST /api/v1/models/{model_id}/convert": [
+  "summary"
+ ],
+ "POST /api/v1/models/{model_id}/parse-labels": [
+  "summary"
+ ],
+ "POST /api/v1/models/{model_id}/resolve-path": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/models/{model_id}/set-active": [
+  "summary"
+ ],
+ "POST /api/v1/operators": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/operators/set-current": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/packaging-flows": [
+  "summary",
+  "docstring"
+ ],
+ "POST /api/v1/packaging-flows/scan": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/packaging-flows/{config_id}/force-settle": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/packaging-flows/{config_id}/remediation-redo": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/packaging-flows/{config_id}/supplement-sliders": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/plugins/client-log": [
+  "summary"
+ ],
+ "POST /api/v1/plugins/install": [
+  "summary",
+  "docstring"
+ ],
+ "POST /api/v1/plugins/{customer_code}/activate": [
+  "summary",
+  "docstring"
+ ],
+ "POST /api/v1/plugins/{customer_code}/deactivate": [
+  "summary",
+  "docstring"
+ ],
+ "POST /api/v1/projects": [
+  "summary"
+ ],
+ "POST /api/v1/projects/{project_id}/activate": [
+  "summary"
+ ],
+ "POST /api/v1/projects/{project_id}/duplicate": [
+  "summary"
+ ],
+ "POST /api/v1/roles": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/devices": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/devices/test": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/disable-toggle": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/discover": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/scan-pair/stop": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/simulate": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/trigger": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/wmax/auto-discover": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/wmax/autofocus": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/autotune": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/cancel-tune": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/connect": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/device-features": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/disconnect": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/handshake": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/indicate": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/load-config": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/wmax/preset/load": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/wmax/preset/save": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/wmax/read-rate/start": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/wmax/read-rate/stop": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/wmax/reboot": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/reset": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/save-params": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/wmax/trigger": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/trigger-image": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/video": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scanner/wmax/virtual/create": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/wmax/virtual/delete": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/camera/start": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/camera/stop": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/ack-event": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/ack-event-elevated": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/source/detection/clear_pending_scan": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/pause": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/per-item-control": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/per-item-mock": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/rebind": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/recording-failures/clear": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/reset-periodic": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/reset-stats": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/resume": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/resume-inference": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/set-project": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/standby": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/start": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/detection/stop": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/gpu/set": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/hcnetsdk/start": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/hcnetsdk/stop": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/hikvision/start": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/hikvision/stop": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/image/set": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/image/upload": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/kalman/config": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/rtsp/start": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/stream/config": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/transform/config": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/video/progress": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/video/speed": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/video/start": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/video/stop": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/source/video/upload": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/tasks": [
+  "summary"
+ ],
+ "POST /api/v1/tasks/record": [
+  "summary"
+ ],
+ "POST /api/v1/users": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/weighing/context": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/weighing/feed": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/weighing/material-label": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/weighing/reset": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/weighing/scan": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/weighing/tare": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/weighing/zero": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/workpiece-flows": [
+  "summary",
+  "docstring"
+ ],
+ "POST /api/v1/workstations/mode": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/workstations/{channel_id}/gpu": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/api-keys/{key_id}/toggle": [
+  "summary",
+  "docstring"
+ ],
+ "PUT /api/v1/auth/config": [
+  "summary"
+ ],
+ "PUT /api/v1/cameras/{camera_id}": [
+  "summary"
+ ],
+ "PUT /api/v1/channel-groups/{group_id}": [
+  "summary",
+  "docstring"
+ ],
+ "PUT /api/v1/cluster/config": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/data/cleanup-settings": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/data/export-settings": [
+  "summary"
+ ],
+ "PUT /api/v1/data/sessions/{session_id}/end": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/debug/flags": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/export/realtime-rules/{rule_id}": [
+  "summary",
+  "docstring"
+ ],
+ "PUT /api/v1/export/scheduled-rules/_default-output-dir": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/export/scheduled-rules/{rule_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/export/templates/{tpl_id}": [
+  "summary",
+  "docstring"
+ ],
+ "PUT /api/v1/external-devices/{device_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/mes/defect-codes/{code_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/mes/gateway/async-dispatch": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/mes/gateway/connections/{conn_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/mes/inbound/config": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/mes/orders/{order_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/mes/orders/{order_id}/extra-data": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/models/{model_id}": [
+  "summary"
+ ],
+ "PUT /api/v1/operators/{op_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/packaging-flows/{config_id}": [
+  "summary",
+  "docstring"
+ ],
+ "PUT /api/v1/projects/{project_id}": [
+  "summary"
+ ],
+ "PUT /api/v1/projects/{project_id}/plugin-data": [
+  "summary"
+ ],
+ "PUT /api/v1/roles/{role_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/scanner/devices/{device_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/scanner/wmax/indicator-config": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/scanner/wmax/output-config": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/scanner/wmax/params": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/scanner/wmax/run-mode": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/system/display": [
+  "summary"
+ ],
+ "PUT /api/v1/system/license-cache": [
+  "summary"
+ ],
+ "PUT /api/v1/system/log-limits": [
+  "summary"
+ ],
+ "PUT /api/v1/system/polling": [
+  "summary"
+ ],
+ "PUT /api/v1/tasks/{task_id}": [
+  "summary"
+ ],
+ "PUT /api/v1/users/{user_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/workpiece-flows/{flow_id}": [
+  "summary",
+  "docstring"
+ ],
+ "PUT /api/v1/workstations/auto-resume": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/workstations/channel-config": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/workstations/splash-camera": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/workstations/startup-ready-gate": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/workstations/window-config": [
+  "summary",
+  "response_model"
+ ],
+ "PUT /api/v1/workstations/{channel_id}/usb-device": [
+  "summary",
+  "response_model"
+ ]
+}

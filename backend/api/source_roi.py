@@ -47,27 +47,56 @@ def _validate_roi(roi) -> bool:
     return True
 
 
-def ensure_roi_mask(mi: "ModelInstance", frame_shape: Tuple[int, int]) -> bool:
-    """确保 mi 上的 ROI mask 缓存对当前 frame_shape 有效. mi.roi 不合法时返回 False.
+def _transform_sig(transform) -> Tuple:
+    """视频变换组件的签名 (旋转, 水平镜像, 垂直镜像), 无变换时统一 (0, False, False).
 
+    进 mask 缓存键: 运行时改旋转/镜像必须触发 mask 重建, 否则套旧坐标系的遮罩.
+    """
+    if transform is None:
+        return (0, False, False)
+    return (
+        int(getattr(transform, 'video_rotation', 0) or 0) % 360,
+        bool(getattr(transform, 'video_flip_h', False)),
+        bool(getattr(transform, 'video_flip_v', False)),
+    )
+
+
+def ensure_roi_mask(mi: "ModelInstance", frame_shape: Tuple[int, int],
+                    transform=None) -> bool:
+    """确保 mi 上的 ROI mask 缓存对当前 frame_shape + 视频变换有效.
+
+    mi.roi 不合法时返回 False.
     frame_shape: (h, w) — 通常 frame.shape[:2]
+    transform: 可选 VideoTransform. mi.roi 是在显示帧快照上画的 (显示坐标系),
+        而遮罩套在未变换的原图推理帧上——通道配了旋转/镜像时, 顶点必须先
+        反变换回原图坐标, 否则遮罩位置整体错位 (2026-07 ROI 偏差修复缺陷 B).
     """
     if not _validate_roi(mi.roi):
         # 清缓存防泄漏
         mi._roi_mask_cache = None
         mi._roi_mask_shape = None
         mi._roi_polygon_pixels = None
+        mi._roi_mask_transform_sig = None
         return False
 
     h, w = frame_shape
-    # 缓存命中: ROI 顶点和 frame_shape 都没变就复用
+    sig = _transform_sig(transform)
+    # 缓存命中: ROI 顶点 / frame_shape / 变换签名都没变就复用
     if (mi._roi_mask_shape == (h, w)
+            and mi._roi_mask_transform_sig == sig
             and mi._roi_mask_cache is not None
             and mi._roi_polygon_pixels is not None):
         return True
 
+    # 显示坐标 → 原图坐标 (无变换时为恒等, 零开销)
+    if sig != (0, False, False) and transform is not None:
+        roi_raw = [transform.map_point_display_to_original(float(x), float(y))
+                   for x, y in mi.roi]
+    else:
+        roi_raw = mi.roi
+
     # 重新生成: 归一化顶点 → 像素顶点 → fillPoly
-    pts = np.array([(int(round(x * w)), int(round(y * h))) for x, y in mi.roi],
+    pts = np.array([(int(round(x * w)), int(round(y * h))) for x, y in roi_raw],
                    dtype=np.int32)
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.fillPoly(mask, [pts], 255)
@@ -75,17 +104,20 @@ def ensure_roi_mask(mi: "ModelInstance", frame_shape: Tuple[int, int]) -> bool:
     mi._roi_mask_cache = mask
     mi._roi_mask_shape = (h, w)
     mi._roi_polygon_pixels = pts
+    mi._roi_mask_transform_sig = sig
     return True
 
 
-def apply_roi_mask(frame: np.ndarray, mi: "ModelInstance") -> np.ndarray:
+def apply_roi_mask(frame: np.ndarray, mi: "ModelInstance",
+                   transform=None) -> np.ndarray:
     """把 frame 通过 mi.roi mask 裁剪. 无 ROI 时直接返回原 frame.
 
     返回的 frame 是新 ndarray (cv2.bitwise_and 创建), 不修改输入.
+    transform 语义见 ensure_roi_mask.
     """
     if frame is None or frame.size == 0:
         return frame
-    if not ensure_roi_mask(mi, frame.shape[:2]):
+    if not ensure_roi_mask(mi, frame.shape[:2], transform=transform):
         return frame
     return cv2.bitwise_and(frame, frame, mask=mi._roi_mask_cache)
 

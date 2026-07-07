@@ -36,25 +36,11 @@ from backend.models import auth_models  # noqa: F401
 # v3.14 RFC 11: WorkpieceFlow 表 (流水线串行结算). mes_models 已被其他路径间接 import,
 # 这里显式声明仅为可读性与启动顺序一致.
 from backend.models import mes_models as _mes_models  # noqa: F401
-from backend.api import api_router
-from backend.api.source import router as source_router, get_video_manager
-from backend.api.channel_manager import router as workstation_router
-from backend.api.sessions import router as sessions_router
-from backend.api.mes import router as mes_router
-from backend.api.scanner import router as scanner_router
-from backend.api.wmax import router as wmax_router
-from backend.api.mes_gateway import router as mes_gateway_router
-from backend.api.mes_inbound import router as mes_inbound_router
-from backend.api.operators import router as operators_router
-from backend.api.cluster import router as cluster_router
-from backend.api.external_device import router as extdev_router
-from backend.api.debug import router as debug_router
-from backend.api.plugins import router as plugins_router
-# v3.10.0 用户系统: 登录 / 账号 / 角色 三组路由
-from backend.api.auth import router as auth_router
-from backend.api.users import router as users_router
-from backend.api.roles import router as roles_router
-from backend.api.api_keys import router as api_keys_router
+# 原生称重投料模式逐件记录表 (6.1 台账持久化, 重启不丢)
+from backend.models import weighing_models as _weighing_models  # noqa: F401
+# 路由挂载统一走 router_manifest（OVERLAP-3 治理）; 这里只保留非路由用途的 import
+from backend.api.router_manifest import mount_all_routers
+from backend.api.source import get_video_manager
 # Import models to ensure they are registered
 import os
 import cv2
@@ -84,205 +70,15 @@ if _DIALECT == "sqlite":
 else:
     print("[DIAG] main.py: create_all done")
 
-# 简单的数据库迁移：添加缺失的列
+# ==================== 数据库迁移（2026-07 版本化治理后） ====================
+# 迁移逻辑已平移到 backend/db/migrations/（m0000_legacy = 原 109 条补列 +
+# operators 清理, 逐字冻结; 新 schema 变更逐版本新建 mXXXX_*.py）。
+# 详见 docs/rfc/DB迁移版本化治理_设计方案_RFC.md 与包内 __init__.py 说明。
 def migrate_database():
-    """添加新增的数据库列（如果不存在）"""
-    migrations = [
-        # (表名, 列名, 列类型)
-        ("step_records", "interval_to_next", "FLOAT"),
-        # v3.13 M3.3: 插件命名空间字段 (PluginHost.write_plugin_step_field 落地点)
-        ("step_records", "plugin_data", "JSON"),
-        # 周期录像 OK/NG 标记 (供"OK/NG 分开存 + 分别保留期"清理用, 老库补列默认 NULL)
-        ("video_clips", "result", "VARCHAR(8)"),
-        # v3.13 RFC 10: 工位组联动字段 (老库升级时补列, 默认 NULL = 独立结算)
-        ("detection_cycles", "channel_group_id", "INTEGER"),
-        ("detection_cycles", "group_settled_with", "JSON"),
-        ("detection_cycles", "group_settle_result", "VARCHAR(8)"),
-        ("detection_cycles", "interval_to_next", "FLOAT"),
-        ("data_export_settings", "record_cycle_interval", "BOOLEAN DEFAULT 1"),
-        ("data_export_settings", "export_step_duration", "BOOLEAN DEFAULT 1"),
-        ("data_export_settings", "export_step_interval", "BOOLEAN DEFAULT 1"),
-        ("data_export_settings", "export_step_event", "BOOLEAN DEFAULT 1"),
-        ("data_export_settings", "export_cycle_duration", "BOOLEAN DEFAULT 1"),
-        ("data_export_settings", "export_cycle_interval", "BOOLEAN DEFAULT 1"),
-        ("data_export_settings", "export_cycle_result", "BOOLEAN DEFAULT 1"),
-        ("data_export_settings", "export_counters", "BOOLEAN DEFAULT 1"),
-        ("data_export_settings", "export_session_info", "BOOLEAN DEFAULT 1"),
-        ("projects", "alarm_config", "JSON"),
-        ("projects", "detection_config", "JSON"),
-        ("projects", "data_config", "JSON"),
-        ("detection_sessions", "channel_id", "INTEGER DEFAULT 0"),
-        ("detection_sessions", "shift_label", "VARCHAR(20)"),
-        ("detection_sessions", "name", "VARCHAR(64)"),
-        ("projects", "model_format", "VARCHAR(50) DEFAULT 'pytorch_fp32'"),
-        # MES: 现有表扩展字段 (可空, 安全迁移)
-        ("detection_cycles", "order_id", "INTEGER"),
-        ("detection_sessions", "order_id", "INTEGER"),
-        ("mes_connections", "extra_fields_schema", "JSON"),
-        ("detection_sessions", "operator_id", "INTEGER"),
-        ("detection_cycles", "operator_id", "INTEGER"),
-        ("scanner_devices", "scan_required", "BOOLEAN DEFAULT 0"),
-        ("scanner_devices", "duplicate_scan_action", "VARCHAR(20) DEFAULT 'overwrite'"),
-        ("scanner_devices", "warn_no_barcode", "BOOLEAN DEFAULT 0"),
-        ("scanner_devices", "rebind_mode", "VARCHAR(20) DEFAULT 'rescan'"),
-        ("scanner_devices", "bind_timing", "VARCHAR(20) DEFAULT 'mid_cycle'"),
-        ("scanner_devices", "broadcast_channels", "JSON"),
-        ("scanner_devices", "device_type", "VARCHAR(20) DEFAULT 'auto'"),
-        ("scanner_devices", "external_only", "BOOLEAN DEFAULT 0"),
-        ("scanner_devices", "pairing_group", "VARCHAR(32)"),
-        ("external_devices", "pairing_group", "VARCHAR(32)"),
-        ("cluster_config", "channel_station_map", "JSON"),
-        ("mes_connections", "bound_channels", "JSON"),
-        # v3.20: 外部 MES 工单主动拉取 — 复用连接表, 拉取专属配置全存 config.pull JSON.
-        # 这两列 ORM 早有声明("第三期预留")但历史迁移漏补, 老库升级时补上(默认关).
-        ("mes_connections", "pull_enabled", "BOOLEAN DEFAULT 0"),
-        ("mes_connections", "pull_interval_sec", "INTEGER DEFAULT 60"),
-        ("cluster_config", "timeout_push", "BOOLEAN DEFAULT 0"),
-        # v2.7.5: 外部设备稳定值判定与有重无码告警
-        ("external_devices", "stable_enabled", "BOOLEAN DEFAULT 1"),
-        ("external_devices", "stable_delta", "FLOAT DEFAULT 0.05"),
-        ("external_devices", "stable_count", "INTEGER DEFAULT 5"),
-        ("external_devices", "zero_threshold", "FLOAT DEFAULT 0.05"),
-        ("external_devices", "weight_no_barcode_alarm_enabled", "BOOLEAN DEFAULT 0"),
-        ("external_devices", "weight_no_barcode_alarm_delay_sec", "INTEGER DEFAULT 10"),
-        ("scanner_devices", "ok_rescan_cooldown_sec", "INTEGER DEFAULT 0"),
-        # v2.7.16 迟到扫码补绑窗口（秒），0 关闭
-        ("scanner_devices", "late_scan_bind_window_sec", "INTEGER DEFAULT 3"),
-        # v2.7.16 扫描模式 + B 模式间隔
-        ("scanner_devices", "scan_mode", "VARCHAR(32) DEFAULT 'continuous'"),
-        ("scanner_devices", "throttle_idle_ms", "INTEGER DEFAULT 500"),
-        # v3.1.0 工单绑定范围 (project / channels / cluster)
-        ("work_orders", "binding_scope", "VARCHAR(20) DEFAULT 'project'"),
-        ("work_orders", "target_channels", "TEXT"),
-        ("work_orders", "target_stations", "TEXT"),
-        # v3.1.1 称重器配对模式 (stable / instant)
-        ("external_devices", "pairing_mode", "VARCHAR(16) DEFAULT 'stable'"),
-        # v3.1.2 多工位广播结算联动: 主工位结算时强制带动其他广播工位
-        ("scanner_devices", "broadcast_settle_mode", "VARCHAR(20) DEFAULT 'independent'"),
-        ("scanner_devices", "primary_settle_channel", "INTEGER"),
-        ("scanner_devices", "primary_settle_min_items", "INTEGER DEFAULT 1"),
-        # v3.1.2 集群站点结果合并策略 (latest / ok_lock)
-        ("cluster_config", "station_result_strategy", "VARCHAR(20) DEFAULT 'latest'"),
-        # v3.3.0 码-码闭环结算: bind_timing="scan_pair" 模式下扫 A 后等待扫 B 的最大秒数
-        ("scanner_devices", "scan_pair_max_wait_sec", "INTEGER DEFAULT 0"),
-        # v3.4.0 D 容器跨线/区域触发扫码 (scan_mode='D')
-        ("scanner_devices", "scan_d_geometry", "VARCHAR(8) DEFAULT 'line'"),
-        ("scanner_devices", "scan_d_line", "JSON"),
-        ("scanner_devices", "scan_d_zone", "JSON"),
-        ("scanner_devices", "scan_d_gone_confirm_frames", "INTEGER DEFAULT 30"),
-        # v3.7.2 扫码器旁路 — DetectionCycle 加 external_meta 存 cycle_start 锁定的快照
-        ("detection_cycles", "external_meta", "JSON"),
-        # v3.7.2 模板自带"推荐规则配置" (扫码器旁路等预设带默认 rule 字段)
-        ("export_templates", "default_rule_config", "JSON"),
-        # v3.7.2 扫码器旁路 — ExportRealtimeRule 加策略 + 去重重试
-        ("export_realtime_rules", "latest_file_strategy",
-         "VARCHAR(32) DEFAULT 'cycle_start_snapshot'"),
-        ("export_realtime_rules", "latest_file_wait_stable_ms",
-         "INTEGER DEFAULT 100"),
-        ("export_realtime_rules", "latest_file_max_age_sec",
-         "INTEGER DEFAULT 0"),
-        ("export_realtime_rules", "dedupe_same_filename",
-         "BOOLEAN DEFAULT 0"),
-        ("export_realtime_rules", "dedupe_retry_max_sec",
-         "INTEGER DEFAULT 5"),
-        ("export_realtime_rules", "dedupe_retry_interval_ms",
-         "INTEGER DEFAULT 100"),
-        ("export_realtime_rules", "last_used_input_filename",
-         "VARCHAR(256)"),
-        # v3.21 M3 包装结算 — 组⑤ 收尾与回推 (老库已建该表但缺新列时补上)
-        ("packaging_flow_configs", "on_forced_stop",
-         "VARCHAR(8) DEFAULT 'settle'"),
-        ("packaging_flow_configs", "forced_settle_on_standby",
-         "BOOLEAN DEFAULT 1"),
-        ("packaging_flow_configs", "push_on_complete",
-         "BOOLEAN DEFAULT 0"),
-        ("packaging_flow_configs", "push_event_type",
-         "VARCHAR(32) DEFAULT 'packaging_complete'"),
-        # v3.21 M6 包装结算 — 组⑥ 异常 → 项目事件映射 (全可选, NULL=默认通用报警)
-        ("packaging_flow_configs", "event_short_box", "INTEGER"),
-        ("packaging_flow_configs", "event_over_box", "INTEGER"),
-        ("packaging_flow_configs", "event_tray_ng", "INTEGER"),
-        ("packaging_flow_configs", "event_box_ng", "INTEGER"),
-        ("packaging_flow_configs", "event_label_mismatch", "INTEGER"),
-        ("packaging_flow_configs", "event_label_len", "INTEGER"),
-        ("packaging_flow_configs", "event_mes_fail", "INTEGER"),
-        # v3.22 上银 MES 闭环 — 组⑦ 滑块口径 + 尾箱 + 自动切项目 + 塞工单 gate (全可选默认关)
-        ("packaging_flow_configs", "count_unit", "VARCHAR(8) DEFAULT 'trays'"),
-        ("packaging_flow_configs", "items_per_box_source", "VARCHAR(8) DEFAULT 'project'"),
-        ("packaging_flow_configs", "items_per_box_fixed", "INTEGER DEFAULT 0"),
-        ("packaging_flow_configs", "slider_total_field", "VARCHAR(64) DEFAULT 'dispatch_qty'"),
-        ("packaging_flow_configs", "auto_switch_project", "BOOLEAN DEFAULT 0"),
-        ("packaging_flow_configs", "spec_to_project", "JSON"),
-        ("packaging_flow_configs", "match_project_by_name", "BOOLEAN DEFAULT 0"),
-        ("packaging_flow_configs", "name_match_strict_boundary", "BOOLEAN DEFAULT 0"),
-        ("packaging_flow_configs", "tail_paper_order_required", "BOOLEAN DEFAULT 0"),
-        ("packaging_flow_configs", "tail_paper_step_label", "VARCHAR(64)"),
-        ("packaging_flow_configs", "event_missing_paper", "INTEGER"),
-        # v3.23 缺油嘴视觉 gate: 每箱封箱前"放油嘴"步骤必须 covered
-        ("packaging_flow_configs", "oil_nozzle_required", "BOOLEAN DEFAULT 0"),
-        ("packaging_flow_configs", "oil_nozzle_step_label", "VARCHAR(64)"),
-        ("packaging_flow_configs", "event_missing_nozzle", "INTEGER"),
-        # v3.22 insert_char 模式: 扫码枪丢符号时把 '-' 等补回固定位置
-        ("packaging_flow_configs", "hyphen_pos", "INTEGER DEFAULT 0"),
-        # v3.22 PackagingFlowRun 滑块口径 + 尾箱运行态
-        ("packaging_flow_runs", "count_unit", "VARCHAR(8) DEFAULT 'trays'"),
-        ("packaging_flow_runs", "slider_total", "INTEGER DEFAULT 0"),
-        ("packaging_flow_runs", "items_per_box", "INTEGER DEFAULT 0"),
-        ("packaging_flow_runs", "tail_target", "INTEGER DEFAULT 0"),
-        ("packaging_flow_runs", "current_box_sliders", "INTEGER DEFAULT 0"),
-        ("packaging_flow_runs", "paper_order_done", "BOOLEAN DEFAULT 0"),
-        # v3.23 强制结案审计留痕 (管理员/主管手动强制收尾)
-        ("packaging_flow_runs", "forced_reason", "VARCHAR(512)"),
-        ("packaging_flow_runs", "forced_by", "VARCHAR(64)"),
-    ]
-    
-    from sqlalchemy import inspect
-    from backend.db.database import get_dialect
-
-    dialect = get_dialect()
-
-    def _normalize_type(sql_type: str) -> str:
-        """把 SQLite 风格的列类型翻译成当前 dialect 的合法 DDL。"""
-        t = sql_type.strip()
-        if dialect == "postgresql":
-            t = t.replace("BOOLEAN DEFAULT 1", "BOOLEAN DEFAULT TRUE")
-            t = t.replace("BOOLEAN DEFAULT 0", "BOOLEAN DEFAULT FALSE")
-            if t.upper().startswith("JSON") and not t.upper().startswith("JSONB"):
-                t = "JSONB" + t[4:]
-        return t
-
-    try:
-        insp = inspect(engine)
-        existing_tables = set(insp.get_table_names())
-        with engine.connect() as conn:
-            for table, column, col_type in migrations:
-                if table not in existing_tables:
-                    continue
-                cols = {c["name"] for c in insp.get_columns(table)}
-                if column in cols:
-                    continue
-                ddl = _normalize_type(col_type)
-                print(f"[DB] 添加 {table}.{column} ({ddl}) ...")
-                conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {ddl}'))
-                conn.commit()
-    except Exception as e:
-        print(f"数据库迁移检查: {e}")
-
-    # =====================================================
-    # v3.10+ 阶段 5: 删除旧 operators 表 (用户/角色系统接管)
-    # detection_sessions.operator_id / detection_cycles.operator_id 列保留,
-    # 语义已重定向到 users.id (阶段 4 完成). 历史 operator_id 指向不存在 user 时,
-    # 代码层 (api/sessions.py / services/*) 已做 None 兜底.
-    # =====================================================
-    try:
-        insp = inspect(engine)
-        if "operators" in set(insp.get_table_names()):
-            print("[DB] 阶段 5 清理: DROP TABLE operators (旧操作员表)")
-            with engine.connect() as conn:
-                conn.execute(text("DROP TABLE IF EXISTS operators"))
-                conn.commit()
-    except Exception as e:
-        print(f"[DB] 删除旧 operators 表失败 (忽略): {e}")
+    """断言桩：防止旧习惯回流——不要再往这里塞 ALTER TABLE。"""
+    raise RuntimeError(
+        "migrate_database() 已退役: 迁移逻辑在 backend/db/migrations/, "
+        "新增 schema 变更请新建 mXXXX_*.py 并注册 (AGENTS.md 不变量 8)")
 
 def fix_orphan_sessions():
     """修复孤立的会话（服务器重启后，之前运行中的会话应该标记为已中断）"""
@@ -590,7 +386,8 @@ def _run_startup_init():
     3. 顺序集中可控
     """
     _diag_db_health()
-    migrate_database()
+    from backend.db.migrations import apply_pending
+    apply_pending(engine)
     fix_orphan_sessions()
     cleanup_orphan_inspections()
     _seed_export_builtin_templates()
@@ -1209,54 +1006,9 @@ async def _debug_api_exception_middleware(request, call_next):
                              f"status={response.status_code} 耗时={_dur:.0f}ms")
     return response
 
-# Include API routers
-app.include_router(api_router, prefix=settings.API_V1_STR)
-
-# Include Source router
-app.include_router(source_router, prefix=f"{settings.API_V1_STR}/source", tags=["source"])
-
-# Detection router 已删除 (走 /source/detection/* 即 source_routes.py, 前端只用这套)
-
-# Include Sessions router (数据管理)
-app.include_router(sessions_router, prefix=f"{settings.API_V1_STR}/data", tags=["data"])
-
-# Include Workstation/Channel router (多工位管理)
-app.include_router(workstation_router, prefix=f"{settings.API_V1_STR}", tags=["workstations"])
-
-# MES & Scanner
-app.include_router(mes_router, prefix=f"{settings.API_V1_STR}", tags=["MES"])
-app.include_router(scanner_router, prefix=f"{settings.API_V1_STR}", tags=["Scanner"])
-app.include_router(wmax_router, prefix=f"{settings.API_V1_STR}", tags=["WMax Scanner"])
-app.include_router(mes_gateway_router, prefix=f"{settings.API_V1_STR}", tags=["MES-Gateway"])
-app.include_router(mes_inbound_router, prefix=f"{settings.API_V1_STR}", tags=["MES-Inbound"])
-app.include_router(operators_router, prefix=f"{settings.API_V1_STR}", tags=["Operators"])
-app.include_router(cluster_router, prefix=f"{settings.API_V1_STR}", tags=["Cluster"])
-app.include_router(extdev_router, prefix=f"{settings.API_V1_STR}", tags=["External Devices"])
-app.include_router(debug_router, prefix=f"{settings.API_V1_STR}", tags=["Debug"])
-app.include_router(plugins_router, prefix=settings.API_V1_STR, tags=["Plugins"])
-
-# v3.10.0 用户系统: 登录 / 账号 / 角色
-app.include_router(auth_router, prefix=settings.API_V1_STR, tags=["Auth"])
-app.include_router(users_router, prefix=settings.API_V1_STR, tags=["Users"])
-app.include_router(roles_router, prefix=settings.API_V1_STR, tags=["Roles"])
-app.include_router(api_keys_router, prefix=settings.API_V1_STR, tags=["API Keys"])
-
-if os.environ.get("RUNTIME_MODE") == "test":
-    from backend.api.test_runtime_routes import router as test_synthetic_router
-    from backend.api.test_compat_routes import router as test_compat_router
-
-    app.include_router(
-        test_synthetic_router,
-        prefix=f"{settings.API_V1_STR}/test/synthetic",
-        tags=["test-synthetic"],
-    )
-    app.include_router(
-        test_compat_router,
-        prefix=settings.API_V1_STR,
-        tags=["test-compat"],
-    )
-    print("[RUNTIME_MODE=test] mounted /api/v1/test/synthetic/* (virtual detection scenarios)")
-    print("[RUNTIME_MODE=test] mounted test-compat shim routes (mes/alarm/sessions/source legacy paths)")
+# ==================== 路由挂载（唯一登记处: backend/api/router_manifest.py） ====================
+# 新增主程序路由去 router_manifest 登记, 不要在这里 include_router (OVERLAP-3 治理)
+mount_all_routers(app)
 
 # Mount static files for uploads (images, etc.)
 if os.path.exists(settings.UPLOAD_DIR):

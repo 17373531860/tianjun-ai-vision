@@ -116,7 +116,8 @@ class ModelInstance:
     # 帧大小不变就缓存. roi 变化或 frame_shape 变化时由 _ensure_roi_mask 重建.
     _roi_mask_cache: Any = None                # np.ndarray (h, w) uint8, ROI 内 255 / 外 0
     _roi_mask_shape: Optional[tuple] = None    # 缓存对应的 (h, w)
-    _roi_polygon_pixels: Any = None            # np.ndarray (N, 2) int32, ROI 顶点像素坐标 (cv2.pointPolygonTest 用)
+    _roi_polygon_pixels: Any = None            # np.ndarray (N, 2) int32, ROI 顶点像素坐标·原图坐标系 (cv2.pointPolygonTest 用)
+    _roi_mask_transform_sig: Optional[tuple] = None  # 缓存对应的视频变换签名 (rot, flip_h, flip_v), 2026-07 缺陷 B 修复
 
     def tick_fps(self, loop_start: float) -> None:
         """每跑完一次推理调用一次，每秒聚合一次 fps_inference"""

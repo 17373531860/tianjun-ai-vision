@@ -1,0 +1,500 @@
+# 03 — 数据层 · 导出 · 鉴权 · 插件（读码笔记）
+
+> 阅读范围（2026-07-05）：`backend/models/` 全部 · `backend/api/sessions*.py` · `projects.py` · `export_*` 全套 · `auth/users/roles/api_keys` · `backend/plugin_system/` 全部 · `plugins.py` · `database.py`  
+> 行号锚定当前 `tianjun-main` 工作区源码，后续改动以代码为准。
+
+---
+
+## 一、逐文件档案
+
+### 1.1 数据库基础设施
+
+| 文件 | 行数 | 职责 |
+|---|---:|---|
+| `backend/db/database.py` | 83 | DSN 解析（`DATABASE_URL` 优先，否则 `settings.SQLALCHEMY_DATABASE_URI`）；SQLite 开 WAL + `busy_timeout=15s`（L49–65）；`SessionLocal` / `get_db()` / `Base` |
+
+### 1.2 ORM 模型（`backend/models/`）
+
+| 文件 | 行数 | 表数 | 职责 |
+|---|---:|---:|---|
+| `models.py` | 384 | 13 | 项目/模型/任务/相机/统计/系统 KV/检测 Session-Cycle-Step/工位组/录像/导出设置 |
+| `auth_models.py` | 175 | 5 | 用户/角色/关联/登录 Token/M2M API Key |
+| `export_models.py` | 330 | 4 | 导出模板/实时规则/运行日志/定时规则 |
+| `plugin_models.py` | 69 | 4 | 插件安装元数据/运行状态/审计/配置版本 |
+| `mes_models.py` | 911 | 20 | MES 工单工件缺陷扫码/外部对接/集群/外设/串行流水线/包装箱 |
+| `weighing_models.py` | 33 | 1 | 称重投料逐件记录 |
+
+### 1.3 数据 API（`/api/v1/data/*` 挂载）
+
+| 文件 | 行数 | 职责 |
+|---|---:|---|
+| `backend/api/sessions.py` | 1072 | 主路由：Session/Cycle/Step CRUD、视频、导出设置、CSV 导出入口；L1068–1071 挂载 stats/maintenance 子路由 |
+| `backend/api/sessions_export.py` | 585 | CSV/多格式导出 builder（session/cycle/range 三分支）；`build_csv_string` 供定时导出复用 |
+| `backend/api/sessions_maintenance.py` | 906 | 备份/清空/范围清理/自动清理/VACUUM/存储信息；`_perform_auto_cleanup` 被 `main.py` 启动调用 |
+| `backend/api/sessions_stats.py` | 199 | 步骤/周期平均耗时统计 API |
+| `backend/api/projects.py` | 741 | 项目 CRUD/激活/复制/插件数据 patch；激活时 `fire_plugin_hook("project_activated")`（L411 附近） |
+
+### 1.4 导出 API（`/api/v1/export/*`）
+
+| 文件 | 行数 | 职责 |
+|---|---:|---|
+| `backend/api/export_custom.py` | 548 | 字段树、模板 CRUD、预览/渲染、路线 B 模板文件上传 |
+| `backend/api/export_realtime.py` | 339 | 实时规则 CRUD/toggle/test-run/日志 |
+| `backend/api/export_scheduled.py` | 299 | 定时规则 CRUD/cron 预览/默认输出目录 |
+
+关联服务层（导出链路必读）：`services/export_context.py` · `export_field_registry.py` · `export_renderer*.py` · `export_realtime.py` · `export_scheduled.py` · `export_scheduled_writers.py` · `export_snapshot.py` · `export_seed.py`
+
+### 1.5 鉴权 API + 核心
+
+| 文件 | 行数 | 职责 |
+|---|---:|---|
+| `backend/api/auth.py` | 344 | 登录/登出/启用鉴权/改密/权限目录；`set_current_active_user` 供检测写 operator_id |
+| `backend/api/users.py` | 187 | 账号 CRUD（`system.users.manage`） |
+| `backend/api/roles.py` | 137 | 角色 CRUD；内置三角色禁删 |
+| `backend/api/api_keys.py` | 144 | M2M Key CRUD/toggle |
+| `backend/core/auth_deps.py` | 332 | `get_current_user` / `require_perm` / `require_login`；auth 开关缓存 |
+| `backend/core/auth.py` | — | token 生成/校验/落盘/内存缓存 |
+| `backend/core/permissions.py` | — | 权限通配符匹配 + 内置角色种子 |
+| `backend/core/api_key.py` | — | API Key 生成/sha256/校验 |
+
+### 1.6 插件系统
+
+| 文件 | 行数 | 职责 |
+|---|---:|---|
+| `backend/plugin_system/__init__.py` | 20 | `tianjun.plugin` logger 初始化 |
+| `backend/plugin_system/manager.py` | 227 | `PluginManager.load_active`：版本校验 → import 后端 → `register_plugin` → 写 state/audit |
+| `backend/plugin_system/registry.py` | 1179 | `PluginRegistry`（routes/hooks/tables）+ **`PluginHost` 全部主动/查询 API** |
+| `backend/plugin_system/hook_dispatch.py` | 207 | `fire_plugin_hook` 统一入口 + returnable 白名单聚合 |
+| `backend/plugin_system/verifier.py` | 314 | `.tjvplugin` 验签/解压/安装目录 |
+| `backend/plugin_system/_plugin_common.py` | 424 | digest/RSA/HMAC/manifest 校验（CLI 与后端共用） |
+| `backend/plugin_system/version_check.py` | — | `main_version_min/max` 兼容检查 |
+| `backend/plugin_system/plugin_public_keys.py` | — | 内置公钥指纹表 |
+| `backend/api/plugins.py` | 392 | 安装/激活/停用/卸载/前端 client-log/资源 manifest |
+
+### 1.7 Session 写入热路径（非 API，检测运行时）
+
+| 文件 | 关键方法 | 行号区间 |
+|---|---|---|
+| `backend/api/source_session_lifecycle_mixin.py` | `start_session` / `end_session` / `start_cycle` / `end_cycle` / `record_step` / `_reconcile_step_records` | L187–271 · L273–379 · L430–585 · L631–921 · L1062–1196 · L956–1060 |
+
+---
+
+## 二、全表清单（47 张）
+
+> 格式：**表名** · ORM 类 · 主要字段 · 关系/备注
+
+### 2.1 核心检测与项目（`models.py`）
+
+| 表名 | ORM 类 | 字段概要 | 关系 |
+|---|---|---|---|
+| `projects` | `Project` | id, name, task_type, 7×JSON 配置, logic_mode, default_model_id, model_format, is_active, 时间戳 | → models/tasks/detection_sessions |
+| `models` | `Model` | project_id, file_path, framework, labels, status | → project, conversions, tasks |
+| `model_conversions` | `ModelConversion` | model_id+format+gpu_arch 唯一, file_path, status | → model |
+| `tasks` | `Task` | project_id, model_id, input/result, is_good, duration | → project, model |
+| `cameras` | `Camera` | source, camera_type, resolution, fps, status | 独立（旧式相机表） |
+| `daily_stats` | `DailyStat` | date, project_id, good/bad/total, yield_rate | → project |
+| `system_configs` | `SystemConfig` | key(unique), value, description | KV 全局配置（含 auth.enabled） |
+| `detection_sessions` | `DetectionSession` | session_uuid, name, project_id, 统计字段, channel_id, shift_label, **operator_id→users**, order_id, video | → project, cycles |
+| `detection_cycles` | `DetectionCycle` | cycle_uuid, session_id, 时间/结果, step_sequence, external_meta, channel_group_id, group_settled_with, group_settle_result, **operator_id→users** | → session, step_records |
+| `channel_groups` | `ChannelGroup` | name(unique), member_channel_ids, settle_strategy, timeout_ms/action, plugin_data | RFC10 单机多通道联动 |
+| `step_records` | `StepRecord` | record_uuid, cycle_id, step_label/name/order, 时间/置信度, **plugin_data** | → cycle |
+| `video_clips` | `VideoClip` | video_uuid, clip_type, related_id, result(OK/NG), file_path | 录像索引 |
+| `data_export_settings` | `DataExportSetting` | record_* / export_* / video_* 布尔开关 | 单行全局导出选项 |
+
+### 2.2 鉴权（`auth_models.py`）
+
+| 表名 | ORM 类 | 字段概要 | 关系 |
+|---|---|---|---|
+| `users` | `User` | username(unique), password_hash, display_name, active, must_change_password | ↔ roles via user_roles |
+| `roles` | `Role` | code(unique), name, **permissions JSON**, is_builtin | ↔ users |
+| `user_roles` | `UserRole` | user_id, role_id（唯一对） | → user, role |
+| `session_tokens` | `SessionToken` | token(unique), user_id, expires_at, last_used_at | → user |
+| `api_keys` | `APIKey` | key_prefix, key_hash(unique), name, **scope**, enabled, use_count | M2M，不绑 User |
+
+### 2.3 自定义导出（`export_models.py`）
+
+| 表名 | ORM 类 | 字段概要 | 关系 |
+|---|---|---|---|
+| `export_templates` | `ExportTemplate` | name, format, content, template_file_path, scope, is_system, builtin_id, default_rule_config | 中央模板仓库 |
+| `export_realtime_rules` | `ExportRealtimeRule` | template_id, output_dir, filename_template, input_file_mode, trigger_event, filters, 去重/快照策略, 统计 | → template |
+| `export_run_logs` | `ExportRunLog` | rule_id, template_id, source_type, cycle/session/box 关联, status, output_file | 导出台账 |
+| `export_scheduled_rules` | `ExportScheduledRule` | cron, data_window_*, output_format, use_standard_daily_report, template_id | → template |
+
+### 2.4 插件（`plugin_models.py`）
+
+| 表名 | ORM 类 | 字段概要 |
+|---|---|---|
+| `plugins` | `PluginRecord` | customer_code(unique), tier, status, is_active, install_path, manifest_json, files_digest, 签名信息 |
+| `plugin_state` | `PluginState` | runtime_status, health, hook_success/error_count, last_error_* |
+| `plugin_audit_log` | `PluginAuditLog` | action, status, message |
+| `plugin_config_versions` | `PluginConfigVersion` | plugin_version, config_digest, applied_at |
+
+### 2.5 MES / 集群 / 流水线（`mes_models.py`，20 表）
+
+| 表名 | ORM 类 | 一句话 |
+|---|---|---|
+| `work_orders` | `WorkOrder` | 工单全生命周期 + binding_scope |
+| `batches` | `Batch` | 批次 → order |
+| `workpieces` | `Workpiece` | 工件追溯核心 |
+| `workpiece_inspections` | `WorkpieceInspection` | 工件↔cycle 中间表 |
+| `defect_records` | `DefectRecord` | 缺陷记录 |
+| `defect_codes` | `DefectCode` | 缺陷码字典 |
+| `scanner_devices` | `ScannerDevice` | 扫码器配置（35+ 行为字段） |
+| `scan_logs` | `ScanLog` | 扫码流水 |
+| `mes_connections` | `MESConnection` | 外部 MES 连接 |
+| `external_active_alarms` | `ExternalActiveAlarm` | 在途报警台账 |
+| `mes_comm_logs` | `MESCommLog` | MES 通讯日志 |
+| `cluster_config` | `ClusterConfig` | 集群单行配置 id=1 |
+| `box_aggregations` | `BoxAggregation` | 副机上报聚合 |
+| `external_devices` | `ExternalDevice` | 称重/PLC 等外设 |
+| `external_device_logs` | `ExternalDeviceLog` | 外设数据流水 |
+| `box_summaries` | `BoxSummary` | 箱子汇总结果 |
+| `workpiece_flow_configs` | `WorkpieceFlowConfig` | RFC11 串行流水线配置 |
+| `workpiece_flow_runs` | `WorkpieceFlowRun` | 单次工件流转 |
+| `packaging_flow_configs` | `PackagingFlowConfig` | 包装箱结算配置 |
+| `packaging_flow_runs` | `PackagingFlowRun` | 包装运行记录 |
+
+### 2.6 称重（`weighing_models.py`）
+
+| 表名 | ORM 类 | 字段 |
+|---|---|---|
+| `weighing_records` | `WeighingRecord` | channel_id, product_sn, model_name, material, standard/initial/net, verdict, ts |
+
+---
+
+## 三、Session → Cycle → Step 写入链
+
+### 3.1 总览（运行时主路径）
+
+```
+VideoSourceManager (source_session_lifecycle_mixin)
+  │
+  ├─ start_session (L187)     → INSERT detection_sessions
+  ├─ start_cycle  (L430)      → INSERT detection_cycles + hook cycle_start
+  ├─ record_step  (L1062)     → INSERT step_records（逐步）+ hook step_change
+  ├─ _reconcile_step_records  → 结算前对齐 step 与 current_cycle_steps
+  ├─ end_cycle    (L631)      → pre_cycle_end → UPDATE cycle → hook cycle_end → 协调器/MES/导出
+  └─ end_session  (L273)      → UPDATE session 统计 → hook session_end → MES
+```
+
+Data 页 REST API（`sessions.py`）提供**只读/维护**能力；产线真实写入走 VSM mixin，不经 HTTP。
+
+### 3.2 Session 创建（L187–271）
+
+1. `DetectionSession`：`session_uuid`（8 hex）、`project_id`、`channel_id`、`shift_label`、`operator_id`←`get_current_user_id()`（L201–212）
+2. `db.commit()` 后设内存态 `current_session_id` / `recording_enabled`
+3. 副作用：加载 `DataExportSetting`、MES `on_session_start`、启动录像线程 + session 录像
+
+### 3.3 Cycle 创建（L430–585）
+
+1. `DetectionCycle`：`cycle_uuid`、`session_id`、`cycle_number`、`start_time`、`operator_id`（L430–500 区间）
+2. `db.commit()` → MES `on_cycle_start` → **`fire_plugin_hook("cycle_start")`（L553）**
+3. WorkpieceFlowCoordinator.on_cycle_started → 开始 cycle 录像
+
+### 3.4 Step 写入（两条路径）
+
+| 路径 | 触发 | 写入点 |
+|---|---|---|
+| **实时** | 步骤消失/完成 handler | `record_step`（L1062）：INSERT + 更新上一步 `interval_to_next` + **`step_change` hook（L1152）** |
+| **结算对齐** | `end_cycle` 内 | `_reconcile_step_records`（L956）：keep/delete/create 策略，补缺失步骤 |
+
+`record_step` 受 `export_settings.record_step_duration` 门控（L1074）；结算 reconcile 不受此门控。
+
+### 3.5 Cycle 结束（L631–921，关键顺序）
+
+1. 工位组 pending override 改写 `is_good`（L636–667）
+2. **`pre_cycle_end` hook**（L679）→ 可 returnable 改写 `final_is_good` / reason
+3. `_flush_active_steps_pt` → `stop_cycle_recording`
+4. **UPDATE** `DetectionCycle`：end_time, duration, is_good, step_sequence, 录像 result 回写（L729–758）
+5. `db.commit()`（L759）
+6. MES `on_cycle_end`（L764）
+7. **`registry.hooks.fire("cycle_end")`（L813）** — 注意此处直调 registry，非 `fire_plugin_hook`
+8. ChannelGroup / WorkpieceFlow / PackagingFlow 协调器
+9. 扫码器 resume、容器状态清理等
+
+### 3.6 Session 结束（L273–379）
+
+1. 丢弃未结算 cycle（`_discard_empty_cycle`）
+2. 仅统计 `end_time != NULL` 的 cycle；删除 orphan cycle+step
+3. `counters_snapshot` ← 内存 counters（L330）
+4. **`session_end` hook（L347）** → MES `on_session_end`
+
+### 3.7 operator_id 语义
+
+- 列名保留 `operator_id`，FK 指向 `users.id`（`models.py` L172–173）
+- 写入来源：`get_current_user_id()`（登录用户落盘），非旧 operators 表
+
+---
+
+## 四、导出全链路
+
+### 4.1 三条消费线
+
+```
+                    ┌─────────────────────────────────────┐
+                    │     ExportTemplate 中央仓库          │
+                    │  (export_templates + export_seed)   │
+                    └──────────┬──────────────────────────┘
+                               │
+     ┌─────────────────────────┼─────────────────────────┐
+     ▼                         ▼                         ▼
+ Data 页快捷按钮          实时规则                    定时规则
+ sessions.py              export_realtime.py          export_scheduled.py
+ GET /data/export/csv     trigger: cycle/session/    cron + data_window
+ (L1030)                  box_complete                 → sessions_export builder
+     │                         │                         │
+     └──────── build_csv_string / render_to_file ───────┘
+                               │
+                    export_context.build_*_context
+                    export_renderer (Jinja2 Sandboxed)
+                    export_field_registry (308 字段)
+                               │
+                    ExportRunLog 台账 + 文件落盘
+```
+
+### 4.2 Data 页 CSV/多格式（即时下载）
+
+| 环节 | 位置 | 说明 |
+|---|---|---|
+| HTTP 入口 | `sessions.py` L1030–1065 | `export_type=session/cycle/all` + 日期/班次/项目/工位过滤 |
+| Builder | `sessions_export.py` L474–585 | `_load_export_opts` 读 `DataExportSetting`；三分支 writer |
+| 多格式 | L564–577 | CSV 字符串 → `export_scheduled_writers.csv_string_to_format_bytes` |
+
+### 4.3 自定义导出（模板驱动）
+
+| 环节 | 位置 | 说明 |
+|---|---|---|
+| 字段树 | `export_custom.py` L67–79 | `GET /export/fields` → `export_field_registry` |
+| 模板 CRUD | L139+ | `ExportTemplate`；`is_system=True` 不可删 |
+| 预览/渲染 | `POST /export/preview` · `/render` | `build_cycle_context` / `build_range_context` + `render_string` |
+| 路线 B | L55–57 | 上传 `.docx/.xlsx` 占位符模板 |
+
+### 4.4 实时导出（事件触发）
+
+| 环节 | 位置 | 说明 |
+|---|---|---|
+| 规则表 | `export_models.py` L88–178 | `ExportRealtimeRule` |
+| 调度 | `services/export_realtime.py` L66+ | `dispatch_cycle_end_export` 等 |
+| **触发点** | `mes_hooks._handle_cycle_end` 末尾 | cycle 结算后异步扫描 enabled 规则 |
+| 输入文件策略 | `latest_file_strategy` | `cycle_start_snapshot` 读 `DetectionCycle.external_meta` |
+| 日志 | `ExportRunLog` | rule_id + cycle_id + output_file |
+
+### 4.5 定时导出（cron）
+
+| 环节 | 位置 | 说明 |
+|---|---|---|
+| 规则表 | `export_models.py` L235–324 | `ExportScheduledRule` |
+| 调度服务 | `services/export_scheduled.py` | APScheduler；`next_run_time` 索引 |
+| 数据窗 | `data_window_type` | 复用 `sessions_export` 早晚班/跨日逻辑 |
+| 标准报表 | `use_standard_daily_report=True` | 走 `build_csv_string`，与 Data 页四按钮同代码 |
+
+### 4.6 导出设置与清理
+
+- 读写：`sessions.py` L994–1025 · ORM `DataExportSetting`（单行）
+- 自动清理导出台账：`sessions_maintenance.py` L381–426 · 按 `ExportRunLog` 精准删文件
+
+---
+
+## 五、鉴权链路
+
+### 5.1 身份模型（三种）
+
+| 身份 | 条件 | 权限 |
+|---|---|---|
+| **SUPERUSER** | `auth.enabled=false`（出厂默认） | 全部放行，不读 Authorization |
+| **匿名 operator** | auth 开 + 无 token + `allow_anonymous_operator=true` | 内置 operator 角色权限 |
+| **登录用户** | Bearer token 有效 | 多角色 permissions 并集 |
+
+> 开关存储：`system_configs.auth.enabled`（`auth_deps.py` L32–49）
+
+### 5.2 请求链路
+
+```
+HTTP Request
+  → get_current_user (auth_deps)
+       ├─ auth 关 → CurrentUser(is_superuser=True)
+       ├─ 有 Bearer → resolve_token_cached → User → 聚合 roles.permissions
+       └─ 无 token → 匿名 operator 或 401（allow_anonymous=false）
+  → require_perm("xxx")（可选）
+       └─ match_permission(user.permissions, "xxx")  // 支持通配符 admin=*
+  → 业务 handler
+```
+
+### 5.3 登录/session 持久化
+
+| 步骤 | 文件 | 行号 |
+|---|---|---|
+| 登录 | `auth.py` L202–239 | 生成 token → 内存 cache → 可选落盘 `SessionToken` |
+| 落盘开关 | `auth.session_persist` KV | 默认 true |
+| 当前操作员 | `set_current_active_user` | 供 VSM 写 `operator_id` |
+| 登出 | `auth.py` L242–252 | 删 token + 清空 active user |
+| 改密 | L320–343 | 清该用户全部 token |
+
+### 5.4 API Key（M2M）
+
+| 项 | 说明 |
+|---|---|
+| 表 | `api_keys`（sha256，非 bcrypt） |
+| scope | `*` / `cluster` / `mes.receive` / `license.cache` |
+| 管理 API | `api_keys.py`，需 `system.apikey.manage` |
+| 校验 | `core/api_key.py`，高频路径内存缓存 |
+
+### 5.5 权限门控示例（本笔记范围）
+
+| 端点 | 权限 key |
+|---|---|
+| `PUT /data/export-settings` | `data.export` |
+| `DELETE /data/clear/*` | `data.cleanup` |
+| `POST /plugins/install` | `system.plugin.manage` |
+| `POST /auth/disable-auth` | `system.auth_toggle` |
+| users/roles/api-keys 路由 | 整路由 `Depends(require_perm(...))` |
+
+---
+
+## 六、插件生命周期
+
+### 6.1 状态机
+
+```
+[.tjvplugin 上传]
+  → verify_package_to_temp (verifier.py)
+  → copy_verified_to_install_dir → DATA_DIR/plugins/{customer_code}/
+  → INSERT plugins + plugin_state=installed
+  → POST /plugins/{cc}/activate → is_active=true, status=pending_restart
+  → 重启 backend
+  → load_active_plugin_on_startup (manager.py L213)
+       ├─ check_main_version_compat
+       ├─ import 插件包内 `backend/__init__.py`（非主仓库根目录）→ register_plugin(app, registry, license, host)
+       ├─ mount routes / register hooks / create tables
+       └─ plugin_state=loaded, audit startup_load success
+  → 运行时 hooks.fire / PluginHost API
+  → deactivate / delete (+ 可选 purge_data 清命名空间)
+```
+
+### 6.2 单 active 约束
+
+- `PluginRecord.is_active`：全库至多一条 true（`plugins.py` L234–237）
+- 停用/卸载不影响主程序启动（`main.py` try/except 包裹 `load_active`）
+
+### 6.3 安装/激活 API（`plugins.py`）
+
+| 端点 | 行号 | 行为 |
+|---|---:|---|
+| `POST /install` | L134 | 验签 → 写 DB → audit |
+| `POST /{cc}/activate` | L230 | 切换 active，**需重启** |
+| `POST /{cc}/deactivate` | L246 | is_active=false |
+| `DELETE /{cc}` | L342 | 删目录+记录；`purge_data` 清 SystemConfig/Project.plugin_data |
+| `GET /active/manifest` | L198 | 前端 bootstrap 探活（无插件也 200 `{}`） |
+| `POST /client-log` | L103 | 前端加载诊断回传 |
+
+### 6.4 卸载数据策略（L259–339）
+
+- 清：`system_configs` 中 `plugin_{cc}_*`；Project 七 JSON 字段内 `plugin_data.{cc}`
+- **不清**：`step_records.plugin_data`（历史业务数据）
+
+---
+
+## 七、10 Hook + PluginHost 真实清单
+
+> RFC 09 M1 定义的 **10 个核心 hook** = 原有 4 + M1.1 新增 6。  
+> 另有 RFC 10/11/12/v3.31 扩展 hook；下表分「核心 10」与「扩展」列出，**接入文件与行号均来自源码 grep/read**。
+
+### 7.1 核心 10 Hook（RFC 09）
+
+| # | hook_type | phase / when | 触发位置（文件:行） | returnable 字段 |
+|---|---|---|---|---|
+| 1 | `cycle_end` | post_cycle / post | `source_session_lifecycle_mixin.py:813`（直调 `registry.hooks.fire`） | 无（只读） |
+| 2 | `pre_cycle_end` | pre_cycle / pre | `source_session_lifecycle_mixin.py:679` | `override_result`, `extra_counters` |
+| 3 | `session_end` | post_session / post | `source_session_lifecycle_mixin.py:347` | 无 |
+| 4 | `box_complete` | post_box / post | `cluster_collector.py:762` | 无 |
+| 5 | `cycle_start` | post_cycle_start / post | `source_session_lifecycle_mixin.py:553` | 无 |
+| 6 | `step_change` | post_step / post | `source_session_lifecycle_mixin.py:1152` | `warn_threshold_violated`, `warn_label` |
+| 7 | `event_fire` | post_event / post | `source_event_trigger_mixin.py:344` | `suppress_alarm` |
+| 8 | `scan_received` | post_scan / post | `scanner.py:1835` | 无 |
+| 9 | `source_status_change` | post_status_change / post | `source_lifecycle_mixin.py:92` | 无 |
+| 10 | `project_activated` | post_activate / post | `projects.py:411` | 无 |
+
+**统一入口**：除 #1 外均经 `fire_plugin_hook()`（`hook_dispatch.py:119`）；#1 历史原因直调 `plugin_manager.registry.hooks.fire`，语义等价。
+
+**Returnable 白名单常量**：`hook_dispatch.py` L41–69 `RETURNABLE_HOOK_FIELDS`
+
+### 7.2 扩展 Hook（已实现，非 RFC09 核心十）
+
+| hook_type | 触发位置 |
+|---|---|
+| `step_tick` | `source_step_stats_mixin.py:674` |
+| `detection_frame` | `source_inference_loop_mixin.py:318` |
+| `external_device_data` | `external_device_pipeline.py:101` |
+| `plugin_broadcast_received` | `registry.py:1091`（由 `broadcast_to_channel_group` 触发） |
+| `channel_group_settle_start` | `channel_group_coordinator.py:286` |
+| `channel_group_settle_done` | `channel_group_coordinator.py:366` |
+| `workpiece_flow_enter` 等 5 个 | `workpiece_flow_coordinator.py:1023`（动态 hook_name） |
+
+### 7.3 PluginHost 方法清单（`registry.py` L297–1178）
+
+#### 查询 facade（只读，不需 capability）
+
+| 方法 | 行号 | 返回 |
+|---|---:|---|
+| `get_db_session()` | L367 | ⚠️ 历史 API，新插件禁用 |
+| `query_session(session_id)` | L382 | DetectionSession 快照 dict |
+| `query_cycle(cycle_id)` | L417 | DetectionCycle 快照 |
+| `query_step(step_id)` | L450 | StepRecord 快照 |
+| `query_workpiece(workpiece_id)` | L484 | Workpiece 快照 |
+| `read_system_config(key)` | L753 | SystemConfig.value |
+| `list_channel_groups()` | L986 | 工位组列表 |
+| `query_channel_group(group_id)` | L1012 | 单组配置 |
+| `list_workpiece_flows()` | L1120 | 串行流水线列表 |
+| `query_workpiece_flow_state(flow_id)` | L1146 | in-flight 状态 |
+
+#### 主动 API（需 manifest.capabilities）
+
+| 方法 | capability | 行号 |
+|---|---|---:|
+| `trigger_alarm(channel_id, event_type, reason)` | `runtime.alarm_trigger` | L598 |
+| `trigger_event(channel_id, event_id, reason)` | `runtime.event_trigger` | L640 |
+| `mes_push(event_type, payload, channel_id?)` | `runtime.mes_push` | L698 |
+| `write_system_config(key, value, desc?)` | `runtime.system_config_write` | L786 |
+| `write_plugin_step_field(step_record_id, key, value)` | `runtime.step_field_write` | L849 |
+| `send_device_command(device_id, command)` | `runtime.device_command` | L941 |
+| `broadcast_to_channel_group(group_id, message)` | `runtime.channel_group_broadcast` | L1038 |
+
+**安全契约**（L341–349）：capabilities 门槛 · `plugin_{customer_code}_` 命名空间 · audit 落 `plugin_audit_log` · 异常 swallow 不拖垮主流程
+
+#### 占位 / fail-fast registry（插件 register 时）
+
+| registry | 状态 | 行号 |
+|---|---|---:|
+| `export_templates` | `_UnimplementedRegistry` → 抛 `PluginNotImplementedError` F7 | L272 |
+| `export_fields` | 同上 F8 | L273 |
+| `realtime_triggers` | 同上 F9 | L274 |
+
+### 7.4 HooksRegistry 注册约定（`registry.py` L95–121）
+
+```python
+registry.hooks.register(
+    hook_type="cycle_end",
+    phase="post_cycle",
+    when="post",      # "pre" | "post"
+    priority=100,     # 越小越先执行；returnable 聚合时后者覆盖前者
+    handler=callable,
+)
+```
+
+---
+
+## 八、交叉索引（改代码前先查）
+
+| 我要改… | 先读 |
+|---|---|
+| Session/Cycle/Step 表结构 | `models.py` L136–318 |
+| 产线写库时序 | `source_session_lifecycle_mixin.py` |
+| Data 页 API | `sessions.py` + `sessions_export.py` |
+| 导出模板/实时/定时 | `export_models.py` + `export_custom/realtime/scheduled.py` + `services/export_*` |
+| 登录/权限 | `auth_deps.py` + `auth.py` + `permissions.py` |
+| 插件 hook 接入 | `hook_dispatch.py` + 上表触发点 |
+| 插件安装/激活 | `plugins.py` + `manager.py` + `verifier.py` |
+
+---
+
+*文档生成：读码笔记 03 · 数据+导出+鉴权+插件 · 2026-07-05*

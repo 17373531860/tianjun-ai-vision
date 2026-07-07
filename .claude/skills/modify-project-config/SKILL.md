@@ -5,6 +5,9 @@ argument-hint: "[要修改的配置项]"
 allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7, mcp__sequential-thinking"
 ---
 
+> **配置字段字典（生成物）**：`docs/dev/reference/config-dict.md`  
+> 本 skill = 改配置时的全链路影响分析（how-to）。
+
 # modify-project-config: 项目配置安全修改分析（v3.5.x）
 
 你正在帮用户安全修改项目配置结构。Project 是天军系统的"客户脚本"，
@@ -93,6 +96,111 @@ class Project(Base):
   "rod_companion_filter": { "enabled": false, "iou_threshold": 0.25,
                             "rod_label": "", "companion_labels": [] },
   "rod_session_gate":     { "enabled": false, "rod_label": "", "gate_labels": [] },
+
+  // ★ v3.31.0 新增：称重投料模式（logic_mode='weighing' 专用，设备读数驱动）
+  // apply 点不在 source.py：source_project_config_apply.py 末尾按 logic_mode
+  // 登记/注销通道到 weighing_engine（改键后要看引擎 set_channel_config 日志）
+  "weighing": {
+    "weight_device_id": 1,                  // 绑定的外设 id（external_devices 表）
+    "station_name": "",
+    "require_operator": true,               // 前置：必须先选人员
+    "require_model": true,                  // 前置：必须先选型号
+    "materials": ["钢帽水泥", "钢脚水泥"],   // 料别顺序
+    "models": {                             // 型号 → 料别 → 标准量/公差 (kg)
+      "XX-1": { "钢帽水泥": { "standard": 0.5, "low_tol": 0.02, "high_tol": 0.02 } }
+    },
+    "tare_mode": "auto_stable",             // 放件自动去皮 / manual
+    "tare_trigger_weight": 0.05,            // 触发去皮的放件重量阈值
+    "tare_settle_samples": 3,
+    "stable_min_samples": 3,                // 稳定读数判定样本数
+    "stable_tol": 0.003,                    // 稳定读数容差
+    "measure_min_weight": 0.005,            // 投料最小有效重量
+    "material_check": "sequence|visual",    // 料别判定：按顺序 / 视觉标签
+    "auto_zero_after_done": true,
+    "alarm_event_shortage": null,           // 缺料/超量/错料/前置未选 → 事件 id
+    "alarm_event_over": null,
+    "alarm_event_wrong": null,
+    "alarm_event_precheck": null
+  },
+
+  // ★ v3.32 新增：同标签区域拆分（虚拟步骤）+ 工件就位提示
+  // apply 在 source_project_config_apply._apply_label_splits →
+  // 引擎 backend/api/source_label_split.py，挂点 = 推理出口 _apply_label_splits
+  // （改写后下游状态机/画框/MES 只见虚拟步骤标签）；区域名 = steps_config 里
+  // split_origin=<rule.id> 的虚拟步骤（前端 labelSplit.js syncSplitVirtualSteps 同步）。
+  // 详见 docs/rfc/同标签区域拆分_虚拟步骤_设计方案_RFC.md
+  "label_splits": [
+    {
+      "id": "ls_xxx", "enabled": true,
+      "source_label": "打螺丝",               // 被拆分的模型原始标签
+      "mode": "fixed|anchor",                 // 固定画面 / 锚点跟随
+      "anchor_label": "前罩",                 // anchor 模式：跟随哪个检测目标
+      "anchor_ref": {"x":0,"y":0,"w":0,"h":0},// anchor 模式：标定时锚点框（归一化）
+      "anchor_hold_seconds": 3.0,             // 锚点丢失沿用最近位置秒数
+      "unmatched": "drop|keep|map",           // 未命中区域的原始标签处理
+      "unmatched_label": "",                  // map 时改写成的标签
+      "regions": [ {"name": "螺丝1", "polygon": [[0.1,0.1],...], "color": "#f97316"} ],
+      "rounds": {                             // ★ 多轮次：同一批位置按工序轮次映射不同虚拟步骤
+        "enabled": false,                     //   （前罩/后罩各打4颗、打的位置在画面重叠的场景）
+        "trigger_label": "盖罩",              // 切换标签"重新出现"(离场>gap 后再入画)→ 下一轮
+        "count": 2,                           // 总轮数 2~8，满轮后回绕第1轮
+        "prefixes": ["前罩", "后罩"],          // 每轮前缀，虚拟步骤名 = 前缀+区域名
+        "trigger_gap_seconds": 3.0,           // 离场判定窗口（防短暂遮挡误切轮）
+        "region_overrides": {}                // 每轮独立区域(可选): {"2": [{name,polygon,color}]}
+        //   翻面后位置不重叠时给某轮换一批区域，缺省轮沿用共享 regions；
+        //   某轮 override 全部非法 → 该轮回退共享区域（不整体禁用轮次）
+        // 周期已结算且切换标签离场 → 轮次归零；当前轮次经
+        // GET /source/detection/results 的 label_split_rounds 透出给 Monitor 角标
+      }
+    }
+  ],
+  "placement_guide": {                        // 工件就位提示（与拆分正交的独立小功能）
+    "enabled": false, "anchor_label": "", "polygon": [], "mode": "hint",
+    "display": "always"                       // 就位后显示策略: always 常驻(变绿) |
+    //   fade_on_ready 淡化(半透明细框无文字) | hide_on_ready 隐藏。未就位永远完整显示。
+    //   纯前端渲染策略, 后端 parse 不消费; 运行态经 GET /source/detection/results 透出
+  },
+  // ★ v3.32：严格顺序违序即时事件（null=关）。严格步骤在错误时机出现时照旧拦截
+  // 不计入周期，同时当场 _trigger_event 所配事件（建议配警告/自定义类，配 NG 会走
+  // 完整 NG 计数+推送慎用）。同一(标签,周期进度) 5s 节流。触发点=source_settlement_mixin
+  // 的两处严格守门(_fire_strict_order_violation)。last_first 模式下严格顺序被强制清空→无效。
+  "strict_order_violation_event_id": null,
+
+  // ★ v3.32 新增：区域事件模式（logic_mode='region_events' 专用，TP 工位流程监测）
+  // apply 在 source_project_config_apply → source_region_events.parse_region_events；
+  // 引擎 RegionEventEngine 挂帧循环（source_region_events_mixin），步骤=动作规则名。
+  // 前端编辑 UI 在 LogicConfigTab.vue（字段名与 parse 严格对齐，改键两头一起改）。
+  "region_events": {
+    "rules": [
+      {
+        "id": "re_xxx", "name": "测硬度",       // 动作名 = 步骤名（Monitor 面板/结算序列用它）
+        "type": "overlap|region_enter|region_exit",
+        "subject_label": "测硬度笔",            // 主体类别（工具/对象）
+        "object_label": "工件",                 // overlap 专用：被作用目标
+        "region": [[0.1,0.1], ...],             // 判定区域多边形（overlap 可空=不限区域）
+        "region_mode": "and|or",                // overlap：重叠 且/或 主体中心在区域内
+        "require_label": null,                  // 辅助约束：主体须与其相交（如"手"，压误报）
+        "min_frames": 10,                       // 连续满足帧数（region_exit 为最少观察帧数）
+        "gone_frames": 10, "match_iou": 0.3,    // region_exit：消失确认帧数/帧间关联 IoU
+        "min_iou": 0.0,                         // overlap：重叠 IoU 下限（0=任意相交）
+        "min_overlap_ratio": 0.0,               // overlap：重叠深度下限（压静置工具贴边）
+        "min_move": 0.0,                        // 位移门槛（归一化，0=不要求；中心 5 帧中位数平滑后进包络）
+        "gone_seconds": null,                   // 消失确认秒（null=用全局 gap_tolerance_frames）
+        "event_id": null,                       // 动作确认附加触发事件（不结算）
+        "settle": false,                        // true = 该动作确认即结算周期
+        "anchor": { "enabled": false, "label": "", "ref": {...}, "hold_seconds": 3.0 } // 区域跟随锚点
+      }
+    ],
+    "gap_tolerance_frames": 5,                  // 全局漏检容忍
+    "dedup_consecutive": true,                  // 连续相同动作去重
+    "class_conf": { "测硬度笔": 0.5 },          // 每类置信度覆盖
+    "sequence_check": { "enabled": true, "order": ["测硬度","扫码","下工件"], "event_id": null },
+    "settlement_rules": [                       // 可选：特定确认序列 → 指定判定（复检序列合法化）
+      { "sequence": ["测硬度","扫码","测硬度","扫码","下工件"], "result": "ok" }
+    ]
+    // 内建常开：动作互斥打断（一个动作确认瞬间其他 in-progress episode 立即收尾，
+    // 防 gone_seconds 桥接复检两段命中）。排查问题读 debug-source skill 区域事件节
+  },
 
   // ★ v3.5.0 新增：周期性强制动作（每 N 轮做 E）
   // ★ v3.5.2 新增：每条规则的 run_on_start（开机首检）
@@ -410,7 +518,8 @@ class Project(Base):
 3. **默认值同步 4 处**：
    `initProjectDefaults` + `handleSaveProject` 写回 + `Navbar.handleProjectChange` + `apply_project_config`。
 4. **threshold 单位**：前端百分比 (10-100)，后端 `_apply_steps_config` 自动 `/ 100`。**不要在前端手动除**。
-5. **logic_mode 不在 JSON 里**：是顶层 String 列，新加值要在 `source_events_check_mixin.py` 的分发处加分支。
+5. **logic_mode 不在 JSON 里**：是顶层 String 列，帧驱动新值要在 `source_events_check_mixin.py` 的分发处加分支；
+   设备驱动模式（如 v3.31 `weighing`）例外——分发点在 `source_project_config_apply.py` 末尾的引擎登记段，帧循环不感知。
 6. **跨字段引用 by id**：`events_config[*].id`、`steps_config[*].id`、`periodic_actions[*].id` 都是稳定字符串/整数，
    修改时不要重新分配 id，否则 `_trigger_event` 找不到。
 7. **新状态变量必须进 reset_stats**（v3.5.2 `_periodic_counters / _run_on_start_pending` 就是这么补上的）。

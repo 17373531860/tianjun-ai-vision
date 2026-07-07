@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | **v3.30.0**（2026-06-28）— 规格→检测项目自动切换升级为「位置/分隔符无关」的统一匹配器（对照表精确 → 通配符 → 自动同名子串三级兜底，吃下前缀变/后缀变/中间固定/任意或无分隔符；MES 入站与上银包装线共用同一匹配器，按名匹配默认关=存量零差异，新增"严格边界"可选档）+ custom_mix 容器进箱确认多方式（仅帧/仅动作/OR/AND + 放托盘动作状态机 + 屏蔽窗口防串算）+ 频闪根因修复与逐帧诊断系统。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
+| 当前线上版本 | **v3.32.0**（2026-07-07）— 同标签区域拆分（虚拟步骤/多轮次/违序即时事件）+ 区域事件模式（`logic_mode='region_events'` 第 6 种逻辑模式：动作规则 episode 引擎 + 序列结算，TP 工位流程监测）+ MediaPipe 骨架样式可配（连线/关键点颜色分离）+ 频闪逐帧自动诊断转储 + 推理线程单例守护 + 巨型视图拆分九批/DB 迁移版本化/路由统一登记/开发者文档体系等工程治理 + showcase 插件 v1.3.1 全功能面对齐。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -164,6 +164,9 @@
 | 分支合并 / 多 agent 并行协作 / 解决合并冲突 | `merge-branch` |
 | 接到新功能诉求 / 评估"这是主程序还是插件" / 立项前归位决策 | `feature-placement` |
 | 开发客户插件 / 找扩展点 / 插件平台能力 | `docs/plugin-system/`（非 skill，整套设计+实现+清单在此） |
+| 想弄懂"为什么这样设计"（架构总览 / 状态机·MES·集群·插件加载深潜）/ 查表结构 / 查 API 面 / 新人跑通环境 | `docs/dev/`（开发者文档：受众路由见其 README；表参考与 OpenAPI 快照是生成物） |
+| 找某函数在哪 / 某状态变量谁读谁写 / 行号级源码定位 / 密钥·配置文件落点 | `docs/dev/_reading_notes/`（函数级源码索引，**翻源码前先查这里**，行号漂移以代码为准） |
+| 写/改任何文档、docstring、端点文档 | `docs/dev/conventions/` 三份军规（文档 CI 会按此拦截，端点门禁走基线法） |
 
 ---
 
@@ -198,6 +201,8 @@
 
 ### 后端真实路由前缀（**全部** `/api/v1/` 下）
 
+> 挂载唯一登记处：`backend/api/router_manifest.py`（OVERLAP-3 治理，2026-07）。新增路由去那里登记，别在 `main.py` 直挂、别往 `api/__init__.py` 塞聚合。
+
 | 前缀 | 文件 | 一句话 |
 |---|---|---|
 | `/source/*` | `source_routes.py` ⚠️ | **视频源 + 检测核心** |
@@ -213,6 +218,7 @@
 | `/scanner/*` | `scanner.py` | 扫码器 CRUD + scan_pair + 禁用 |
 | `/scanner/wmax/*` | `wmax.py` ⚠️ | WMax 协议（35+ endpoint） |
 | `/external-devices/*` | `external_device.py` | 称重器/串口外设 |
+| `/weighing/*` | `weighing.py` | v3.31.0 称重投料模式（前置选择/扫码/去皮/逐件记录/虚拟喂重） |
 | `/cluster/*` | `cluster.py` | 集群主从 + 副机心跳 |
 | `/mes/*` | `mes.py` ⚠️ | 工单/工件/缺陷/缺陷码 |
 | `/mes/gateway/*` | `mes_gateway.py` | MES 推送连接 + 测试 + 工单拉取 |
@@ -221,9 +227,11 @@
 | `/roles/*` | `roles.py` | v3.10.0 角色 CRUD + 权限编辑 |
 | `/api-keys/*` | `api_keys.py` | v3.10.0 M2M API Key 管理（SHA256 + scope） |
 | `/operators/*` | `operators.py` | ⚠️ **v3.10.0 已废弃** — 全部 410 Gone，重定向 `/api/v1/users` |
-| `/export/*` | `export_custom.py` + `export_realtime.py` | v3.5.0 自定义导出（共用前缀） |
+| `/export/*` | `export_custom.py` + `export_realtime.py` + `export_scheduled.py` | v3.5.0 自定义导出 + v3.8 定时导出（共用前缀） |
 | `/channel-groups/*` | `channel_groups.py` | v3.13.1 单机内多工位**并行**联动 (RFC 10) |
 | `/workpiece-flows/*` | `workpiece_flows.py` | v3.14.0 单机内多工位**串行**结算 (RFC 11) |
+| `/packaging-flows/*` | `packaging_flows.py` | v3.21+ 包装箱结算（上银包装线） |
+| `/mes/inbound/*` | `mes_inbound.py` | v3.26+ 外部生产管控系统入站 REST（开工/完工/报警） |
 | `/plugins/*` | `plugins.py` | 插件安装/激活/清单/client-log |
 | `/debug/*` | `debug.py` | 通道诊断 + 调试日志中心 |
 
@@ -260,28 +268,30 @@
 1. **API 前缀必须 `/api/v1/`**（不是 `/api/`）
 2. **`OPENCV_FFMPEG_CAPTURE_OPTIONS=threads;1` 必须在 cv2 import 前 setdefault**（`backend/main.py:line 4`，v3.1.3 关键修复，否则 libavcodec 断言）
 3. **修改 `source.py` 主类前必须看 `__getattr__/setattr__` 兼容层**（在 `source.py` 内）— 老代码访问 `self._kalman_enabled` 等会被路由到 has-a 组件
-4. **`channel_manager.set_channel_count` 必须调用 `mes_hook.on_channel_removed` + `alarm_router.on_channel_removed`**，否则 MES dict 残留 + 报警串口未释放
+4. **`channel_manager.set_channel_count` 必须完成全部 4 处 `on_channel_removed` 配套清理**（`mes_hook` / `alarm_router` / channel-group 协调器 / workpiece-flow 协调器），否则 MES dict 残留 + 报警串口未释放 + 协调器幽灵工位。**插件如维护 channel 维度的状态，同样必须挂 `on_channel_removed` 清理**，不能只加不清
 5. **测试 fixture 必须独立 DB / unique uuid，不要 reload uvicorn**（v3.5.0 BDD 框架痛过）
 6. **修改 `mes_hooks.py` / `services/scanner.py` 前先读对应 changelog**（debug-mes 是项目最大踩坑区）
-7. **改前端 `views/Monitor` 前**：双缓冲 MJPEG + 多通道 state 隔离（v2.6.0 / v3.0.0 / v3.1.3 多次修过）
-8. **改 ORM Schema 后必须在 `backend/main.py:migrate_database()` 加 ALTER TABLE**（老 SQLite 升级路径）
-9. **bat 热补丁必须 CRLF 换行符**（LF 在 Windows 上闪退）
-10. **不要在 `OPENCV_FFMPEG_CAPTURE_OPTIONS` 之前 import cv2**（顺序敏感）
+7. **改前端 `views/Monitor` 前**：双缓冲 MJPEG + 多通道 state 隔离（v2.6.0 / v3.0.0 / v3.1.3 多次修过）。其中 `STREAM_SWAP_INTERVAL=600`（600 个 150ms 轮询拍 ≈ 90 秒）的定期换流是为释放 Chromium 原生解码器内存增长，**勿删勿大改间隔**
+8. **改 ORM Schema 后必须在 `backend/db/migrations/` 新建 `mXXXX_*.py` 迁移并注册**（2026-07 起版本化，老 SQLite 升级路径；旧 `migrate_database()` 已是断言桩，别再往里塞 ALTER，详见 `modify-model` skill 第 3 节）
+9. **bat 热补丁必须 CRLF 换行符**（LF 在 Windows 上闪退）。插件分发包同理：包内任何 `.bat` 必须 CRLF；`plugin.json` / manifest 等 JSON 用标准 LF 即可
+10. **不要在 `OPENCV_FFMPEG_CAPTURE_OPTIONS` 之前 import cv2**（顺序敏感）。这条对**插件 backend 模块和测试 conftest.py 同样生效**——任何会间接 import cv2 的代码都不得早于该环境变量设置执行
 11. **改 `source_settlement_mixin.py` 时不要把 `_process_last_first_mode` / `_process_cross_cycle_groups` 之间的守门去掉**（v3.9.0 起两个状态机都依赖 `settlement_mode == 'last_first'` / `cross_cycle == true` 严格守门，否则污染其他模式的 cycle_steps）— 修改前必读 `debug-source` skill
 12. **前端插件代码动态加载不能只依赖 `import(blob:...)`**（v3.15.4 血泪教训）：打包后主窗口走 `file://`，Chromium 拦 `file://` 源下的 blob 动态 import → 插件 ESM 静默加载失败、前端定制完全不生效，本地 `http://localhost` 不复现。`usePluginLoader.js` 必须保留 **blob → data:URL → 后端 http URL** 三级兜底；`markRaw` 标记 Vue Component 用**顶部静态 import**。前端插件加载有疑问先看后端日志（已通过 `POST /api/v1/plugins/client-log` 回传），不要开 F12
 13. **前端插件 bootstrap 必须先等后端就绪再拉清单**（v3.15.5 血泪教训）：打包后 `file://` 页面加载远早于后端冷启动（CUDA 预热+模型加载好几秒）。`main.js` 插件 bootstrap **不能**裸调 `themeStore.apply()`——必须先 `waitBackendReady()` 轮询探活（`/plugins/active/manifest` 无插件也返回 200）最多 90s，否则一上来 `Network Error` 一次性放弃、插件前端定制全程不加载。这是比第 12 条更靠前的一环
+14. **`_inspecting_workpiece[channel_id]` 的放入/取出必须严格配对**，多加一处 pop 会工件绑错周期、前端"当前工件"卡住（v2.7.16 / v3.4.2 修过）——取放点清单见 `debug-mes` skill 第三节
+15. **MES Hook 队列满时绝不允许阻塞调用方**（结算/检测热路径，修过"每周期卡 0.8s"）：critical 任务落盘回放不丢业务、非关键直接丢——critical 语义与落盘白名单见 `debug-mes` skill 第三节
+16. **新增报警事件必须归入共享灯柱四类优先级（ng/warn/ok/idle）之一，禁止绕过合成器直写串口**——合成算法见 `debug-alarm` skill 第六节
+17. **`workstation_config.json` 各段写入权独占，禁止任何代码整写该 JSON**（无 schema 校验，旁路写会静默抹掉别段 key）——分段写入清单见 `debug-channel` skill 第七节
 
 ---
 
 ## 九、已知架构 bug / 死代码
 
-> **完整索引（71 项，带 ID / 严重度 / 工时估）已下放**到 `docs/plugin-system/inventory/05_tech_debt.md`。新 PR 不要复活、不要扩展这些已知坑。
+> **完整索引（带 ID / 严重度 / 工时估，2026-07 销账刷新）已下放**到 `docs/plugin-system/inventory/05_tech_debt.md`。新 PR 不要复活、不要扩展这些已知坑。
 
 最该留意的几条（细节进上面的技术债文档）：
-- 🔴 `core/config.py:_fix_db_paths` 用错表名 `ml_models`（实际 `models`）→ 换安装目录时模型路径修正永不生效
-- 🟠 CI `build.yml: CORE_FILES` 列了 11 个文件、3 个不存在 → 实际只编译 8 个，**很多 `source_*_mixin` 源码未被 .pyd 保护（IP 泄漏风险）**
-- 🟠 `source_recording_mixin.py` 与拆分后两个 mixin 能力重叠 / `source_camera_start_mixin` 与 `source_industrial_camera_mixin` 同名方法靠 MRO 决胜
-- 🟢 死代码：`views/Report/index.vue`（路由未注册）、`api/task.js` / `api/camera.js`（无 import）
+- 🟡 CI 编译白名单 2026-07 重审后扩到 17 项（source_routes + Top5 mixin + scanner/mes_hooks/weighing_engine，缺失文件硬 fail），残余小 mixin / has-a 组件仍源码出厂，按需扩列；**新增 >800 行核心文件记得同步 CORE_FILES**
+- ✅ 已修销账（2026-07 治理批次）：`_fix_db_paths` 表名 bug 已修；CI CORE_FILES 3 个失效项已剔除；前端死代码四文件（`views/Report/index.vue`、`api/task.js` / `camera.js` / `report.js`）已删；孤儿 mixin 两文件（`source_recording_mixin.py` 546 行、`source_industrial_camera_mixin.py` 438 行）已删，同名方法 MRO 冲突随之解除
 
 ---
 
@@ -309,6 +319,8 @@
 
 | 版本 | 日期 | 一句话 |
 |---|---|---|
+| v3.32.0 | 2026-07-07 | 同标签区域拆分（虚拟步骤/多轮次）+ 区域事件模式（第 6 种逻辑模式，动作规则引擎+序列结算）+ MediaPipe 骨架样式可配 + 频闪自动诊断 + 推理线程单例守护 + 工程治理批次（视图拆分/迁移版本化/路由登记/开发者文档体系）+ showcase v1.3.1 / sensor-clean v1.3.0 |
+| v3.31.0 | 2026-06-29 | 主程序原生「称重投料模式」落地（电子秤配料防错全流程：去皮+对比标准量+缺料/超量报警+逐件记录持久化落库）+ 设备读数驱动状态机引擎 + PL2303 驱动内置 + mock_weight 模拟 + bestar 插件退役 |
 | v3.30.0 | 2026-06-28 | 规格→项目自动切换升级为统一匹配器（对照表精确→通配符→自动同名子串，入站与包装共用，与位置/分隔符解耦，按名匹配默认关+严格边界可选档）+ custom_mix 容器进箱确认多方式（仅帧/仅动作/OR/AND+放托盘动作状态机+屏蔽窗口）+ 频闪修复与逐帧诊断 |
 | v3.29.0 | 2026-06-27 | 外部 MES/中控双向对接全闭环（川南火工范式：开工切项目+四要素上屏+在途报警台账闭环+最新开工顶替回推完工+健康检查+自定义接收路径）+ 去硬编码可配置化（集群计时/面板刷新间隔/日志条数）+ 后端崩溃自愈看门狗 + 开机自启可选 |
 | v3.28.0 | 2026-06-27 | 逐件覆盖模式离场快照判定+漏打挂起待补+判定时机解耦 + 插件配置统一保存 + 传感器清洁插件 v1.2.0（选择性抑制提示框+棉签使用记录数据页） |
@@ -324,15 +336,7 @@
 
 ---
 
-## 十二、当前在做的事（动态，看 git log 和分支名）
-
-- 主分支 `main`：已发版到 **v3.27.0**（插件平台 + 工位组 RFC10 + 串行流水线 RFC11 + RFC12 step_tick/host.api + 插件主动触发事件桥接）
-- 长期分支 `feat/plugin-system`：**多客户定制插件系统 + 数据库迁 PG**（决策已敲定：迁 PG / 三档插件全做 / 签名机制 / 不做沙箱）
-- 待整理：测试批跑串污染（synthetic / per_item / custom_export 系统预设，单跑全绿、批跑 fail，根因 module-level 单例 reset 缺失）
-
----
-
-## 十三、遇到不一致时的优先级
+## 十二、遇到不一致时的优先级
 
 当 AGENTS.md / changelog / 代码注释 互相矛盾时：
 
@@ -342,6 +346,6 @@
 
 ---
 
-**本文件最后更新**：2026-06-28（发版 v3.30.0：规格→项目统一匹配器·入站与包装共用 + custom_mix 容器进箱确认多方式 + 频闪修复与诊断；`packaging_flow_configs` 新增 `name_match_strict_boundary` 列；按名匹配默认改关；版本号对齐 v3.30.0）
+**本文件最后更新**：2026-07-07（发版 v3.32.0：同标签区域拆分 + 区域事件模式 + MediaPipe 骨架样式可配 + 工程治理批次；第一节版本号与第十一节里程碑同步）
 **维护者**：项目主作者 + AI agents
 **维护铁律**：本文件只放"地图 + 守则 + 不变量"。模块细节进 skill，版本变更进 `docs/changelog/`，扩展点/技术债进 `docs/plugin-system/inventory/`。**发版时务必同步更新本文件第一节版本号 + 文件尾日期**（详见 `update-release` skill）。

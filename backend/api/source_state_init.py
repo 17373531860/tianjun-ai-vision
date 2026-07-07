@@ -36,6 +36,12 @@ def _init_inference_threading(h):
     """推理双线程架构相关字段"""
     h._inference_thread = None
     h._inference_running = False
+    # 2026-07 TP 频闪真因修复: 推理线程唯一性保障。
+    # start 的"检查-启动"两步间无锁, 恢复播放时采集自启 + resume 两路并发调用
+    # 会各起一条线程, 交替发布"有结果/空结果" → 前端标注框逐帧频闪;
+    # 代数 (generation) 则兜住"假死被放弃的旧线程因运行标志重新置真而复活"。
+    h._inference_start_lock = threading.Lock()
+    h._inference_generation = 0
     h._latest_frame_for_inference = None
     h._latest_frame_original_size = None
     # v2.7.14: 推理用原图, stats/screenshot 用显示帧 → 两份分开存
@@ -155,6 +161,16 @@ def _init_step_state(h):
     h.step_accept_once = {}
     # steps_config[].roi (归一化多边形): 该标签仅在 ROI 内才算检测到 (全模式 + tracking)
     h.step_roi_polygons = {}
+    # v3.32 同标签区域拆分 + 工件就位提示 (pipeline_config.label_splits / placement_guide)
+    # None = 未配置 → 推理热路径一次 getattr 早退, 零开销
+    h._label_split_engine = None
+    h._placement_guide_state = None
+    # 区域事件模式判定引擎 (pipeline_config.region_events, logic_mode='region_events')
+    # None = 非该模式 → 推理热路径一次 getattr 早退, 零开销
+    h._region_event_engine = None
+    # v3.32 严格顺序违序即时事件 (pipeline_config.strict_order_violation_event_id)
+    h.strict_order_violation_event_id = None
+    h._strict_violation_throttle = {}
 
 
 def _init_event_and_cycle_state(h):

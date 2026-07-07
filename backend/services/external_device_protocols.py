@@ -43,8 +43,12 @@ class ExternalDeviceProtocolsMixin:
                     self._serial_modbus_ascii_loop(conn)
                 elif conn.protocol == "serial_continuous":
                     self._serial_continuous_loop(conn)
+                elif conn.protocol == "serial_command":
+                    self._serial_command_loop(conn)
                 elif conn.protocol == "http_poll":
                     self._http_poll_loop(conn)
+                elif conn.protocol == "mock_weight":
+                    self._mock_weight_loop(conn)
                 else:
                     logger.error("[ExtDev] %s 未知协议: %s", conn.name, conn.protocol)
                     break
@@ -541,6 +545,225 @@ class ExternalDeviceProtocolsMixin:
                     break
         finally:
             ser.close()
+
+    @staticmethod
+    def _decode_escape(s: str) -> str:
+        r"""把前端传来的字面 '\r\n' 还原成真正的 CR LF；真实 CRLF 原样返回。"""
+        try:
+            return (s or "").encode().decode("unicode_escape")
+        except Exception:
+            return s or ""
+
+    @staticmethod
+    def _write_serial_command(ser, command: str, suffix: str):
+        """发送一条 ASCII 指令(发前清输入缓冲, 避免上一帧残留串读)。"""
+        ser.reset_input_buffer()
+        ser.write((str(command) + (suffix or "")).encode("ascii", errors="ignore"))
+
+    @staticmethod
+    def _read_serial_frame(ser, delimiter: bytes, timeout: float):
+        """读一帧(到分隔符为止), 超时返回已读到的内容或 None。"""
+        buf = b""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            chunk = ser.read(256)
+            if chunk:
+                buf += chunk
+                if delimiter in buf:
+                    line, _ = buf.split(delimiter, 1)
+                    return line
+            elif buf:
+                break
+        return buf or None
+
+    def _mock_weight_loop(self, conn: DeviceConnection):
+        r"""模拟称重协议 —— 不连真串口, 按脚本生成模拟重量数据流。
+
+        专用于没有真实称重器/真实数据时, 验证称重读数/稳定判定/去皮置零整条链路。
+        复用 _on_raw_data 上报, 下游解析(parse_mode/parse_config)与真秤完全一致。
+
+        protocol_config 配置:
+          mock_script: [{"weight": 毛重kg, "hold": 持续sec}, ...] 时间轴按序播放;
+                       缺省给一段投料全过程(空盘→放盆皮重→投料爬升→到量稳定)。
+          loop:        bool, 播完是否循环(模拟下一件), 默认 True。
+          poll_interval: float, 出数间隔秒, 默认 0.5。
+          mock_format: str, 输出格式模板, 占位符 {value}/{net}=去皮后净重, {gross}=毛重;
+                       缺省 "{value}"。可改成模仿真秤的帧(如 "ST,NT,{value}kg")配合解析配置。
+          decimals:    int, 重量小数位, 默认 3。
+        响应 _command_queue 控制指令(与真秤一致, 供软件去皮/置零联动测试):
+          'T' 去皮 / 'Z' 置零: 把当前毛重设为皮重基准, 之后显示净重(归零)。
+        """
+        cfg = conn.protocol_config or {}
+        script = cfg.get("mock_script") or [
+            {"weight": 0.0, "hold": 2.0},    # 空盘
+            {"weight": 0.20, "hold": 3.0},   # 放空盆(皮重) → 可触发自动去皮
+            {"weight": 0.35, "hold": 1.5},   # 投料爬升
+            {"weight": 0.50, "hold": 4.0},   # 到量并稳定
+        ]
+        loop_play = cfg.get("loop", True)
+        poll_interval = float(cfg.get("poll_interval", 0.5))
+        fmt = cfg.get("mock_format", "{value}")
+        decimals = int(cfg.get("decimals", 3))
+
+        conn.status = "connected"
+        conn.last_error = ""
+        logger.info(f"[{conn.name}] 模拟称重启动 (脚本{len(script)}段, 间隔{poll_interval}s, 循环={loop_play})")
+
+        tare_offset = 0.0  # 去皮/置零基准(毛重)
+
+        def emit(gross: float):
+            nonlocal tare_offset
+            # 先消费待发控制指令(去皮/置零), 与真秤被上位机控制一致
+            while conn._command_queue:
+                ctrl = str(conn._command_queue.popleft()).strip().upper()
+                if ctrl in ("T", "Z"):
+                    tare_offset = gross
+                    logger.info(f"[{conn.name}] 模拟称重收到控制指令 {ctrl} → 去皮基准={tare_offset:.{decimals}f}")
+            net = gross - tare_offset
+            value = f"{net:+.{decimals}f}"
+            try:
+                raw = fmt.format(value=value, net=value, gross=f"{gross:+.{decimals}f}")
+            except Exception:
+                raw = value
+            self._on_raw_data(conn, raw)
+
+        while not conn._stop_event.is_set():
+            for seg in script:
+                if conn._stop_event.is_set():
+                    break
+                try:
+                    gross = float(seg.get("weight", 0.0))
+                    hold = float(seg.get("hold", 1.0))
+                except Exception:
+                    gross, hold = 0.0, 1.0
+                elapsed = 0.0
+                while elapsed < hold and not conn._stop_event.is_set():
+                    emit(gross)
+                    conn._stop_event.wait(timeout=poll_interval)
+                    elapsed += poll_interval
+            if not loop_play:
+                break
+            tare_offset = 0.0  # 一件完成, 复位去皮基准, 准备下一件
+
+    def _serial_command_loop(self, conn: DeviceConnection):
+        r"""串口「指令应答」主从模式 —— 上位机发 ASCII 指令、仪表回一帧。
+
+        适配安衡等台秤的应答协议：
+        - 查询指令(默认 'R') → 仪表回一帧重量(如 'ST,NT,+0.071kg\r\n')
+        - 去皮(默认 'T') / 置零(默认 'Z') 指令由 conn._command_queue 排入，
+          每轮轮询优先发送，仪表回 CR LF 应答(丢弃，不当重量数据)。
+
+        与 serial_modbus_ascii 的区别：发的是厂商自定义 ASCII 字符，不是 Modbus 帧。
+        重连结构沿用 modbus_ascii loop：任何串口致命异常 → 关闭 → backoff 重连。
+        """
+        try:
+            import serial  # noqa: F401  # 仅探测可用性，实际通过 _open_serial_with_retry 调用
+        except ImportError:
+            conn.status = "error"
+            conn.last_error = "pyserial 未安装"
+            logger.error("[ExtDev] %s pyserial 未安装", conn.name)
+            return
+
+        cfg = conn.protocol_config
+        query_cmd = cfg.get("query_command", "R")
+        cmd_suffix = self._decode_escape(cfg.get("command_suffix", "\r\n"))
+        poll_interval = cfg.get("poll_interval", 1.0)
+        delimiter = self._decode_escape(cfg.get("delimiter", "\r\n")).encode()
+        resp_timeout = float(cfg.get("response_timeout", 2.0))
+
+        import errno as _errno
+        reconnect_backoff = 5.0
+        ser = None
+        first_open = True
+
+        try:
+            while not conn._stop_event.is_set():
+                # ---- (re)connect ----
+                if ser is None:
+                    conn.status = "connecting"
+                    try:
+                        ser = self._open_serial_with_retry(
+                            port=conn.serial_port,
+                            baudrate=conn.serial_baud,
+                            bytesize=cfg.get("bytesize", 8),
+                            parity=cfg.get("parity", "N"),
+                            stopbits=cfg.get("stopbits", 1),
+                            timeout=1.0,
+                        )
+                    except Exception as e:
+                        conn.status = "error"
+                        conn.last_error = str(e)
+                        if first_open:
+                            raise
+                        logger.warning("[ExtDev] %s 串口重连失败, %.1fs 后再试: %s",
+                                       conn.name, reconnect_backoff, e)
+                        if conn._stop_event.wait(timeout=reconnect_backoff):
+                            return
+                        continue
+
+                    conn.status = "connected"
+                    conn.last_error = ""
+                    if first_open:
+                        logger.info("[ExtDev] %s 指令应答模式启动 (查询='%s', 间隔=%.2fs)",
+                                    conn.name, query_cmd, poll_interval)
+                    else:
+                        logger.info("[ExtDev] %s 串口已重连: %s", conn.name, conn.serial_port)
+                    first_open = False
+
+                # ---- 一轮: 先发控制指令(去皮/置零), 再发查询指令读重量 ----
+                fatal = False
+                try:
+                    while conn._command_queue:
+                        ctrl = conn._command_queue.popleft()
+                        self._write_serial_command(ser, ctrl, cmd_suffix)
+                        time.sleep(0.1)
+                        ser.read(256)  # 读掉 CR LF 应答, 不作为重量数据
+                        logger.info("[ExtDev] %s 已发送控制指令: %s", conn.name, ctrl)
+
+                    self._write_serial_command(ser, query_cmd, cmd_suffix)
+                    response = self._read_serial_frame(ser, delimiter, resp_timeout)
+                    if response:
+                        text = response.decode("utf-8", errors="ignore").strip()
+                        if text:
+                            self._on_raw_data(conn, text)
+                    else:
+                        logger.debug("[ExtDev] %s 指令 '%s' 无响应", conn.name, query_cmd)
+
+                except OSError as e:
+                    if getattr(e, 'errno', None) in (
+                        _errno.EIO, _errno.ENODEV, _errno.ENXIO,
+                        _errno.EBADF, _errno.EACCES,
+                    ):
+                        logger.error("[ExtDev] %s 串口掉线 (errno=%s), 关闭后重连...",
+                                     conn.name, e.errno)
+                        fatal = True
+                    else:
+                        logger.error("[ExtDev] %s 指令应答通信错误: %s", conn.name, e)
+                except Exception as e:
+                    msg = str(e)
+                    if 'device' in msg.lower() and ('disconnect' in msg.lower() or 'remove' in msg.lower()):
+                        fatal = True
+                    logger.error("[ExtDev] %s 指令应答通信错误: %s", conn.name, e)
+
+                if fatal:
+                    try:
+                        ser.close()
+                    except Exception:
+                        pass
+                    ser = None
+                    conn.status = "error"
+                    conn.last_error = "串口掉线, 等待重连"
+                    if conn._stop_event.wait(timeout=reconnect_backoff):
+                        return
+                    continue
+
+                conn._stop_event.wait(timeout=poll_interval)
+        finally:
+            if ser is not None:
+                try:
+                    ser.close()
+                except Exception:
+                    pass
 
     def _http_poll_loop(self, conn: DeviceConnection):
         import requests as req

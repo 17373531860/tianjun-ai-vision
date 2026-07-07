@@ -161,6 +161,13 @@ def fire_plugin_hook(
                      它逐帧自计数 (复刻 detect6 精度). ctx 字段契约见
                      tests/plugin_system/test_detection_frame_hook.py.
 
+                   v3.31 (外部设备读数广播):
+                   - ``"external_device_data"``: 称重器/传感器等外部设备每帧解析出读数后
+                     广播给插件. ctx 携带 device_id / device_role / channel_id /
+                     station_id / weight / parsed / raw / barcode / stable_state /
+                     timestamp. **只读 observe hook** (不在 RETURNABLE_HOOK_FIELDS),
+                     返回值丢弃, 不改外设数据主链路. 客户"称重投料防错/缺料判定"挂这里.
+
                    M1.1 末项 (v3.13, 2026-05-28 落地):
                    - ``"source_status_change"``: 5 个 lifecycle 公共方法 (pause / resume /
                      standby / resume_inference / stop) + capture_loop 3 处异常中断点都会
