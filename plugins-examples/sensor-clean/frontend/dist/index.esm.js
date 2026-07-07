@@ -1,5 +1,5 @@
 /**
- * sensor-clean 前端 v1.1.1 — 恢复 v1.0.2 监控整页覆盖 + 项目配置 Tab，
+ * sensor-clean 前端 v1.4.0 — 监控整页覆盖 + 项目配置 Tab，
  * 三判定 → 事件配置并入项目 Tab（不再单独占左侧导航）。
  *
  * 主程序 plugin loader 调:
@@ -10,7 +10,9 @@
  *   - monitor.layout.body 整页覆盖「实时监控」→ 双工位左右视频 + 棉签看板
  *   - registry.tabs.register('project', ...) → 「传感器清洁配置」专属 Tab
  *   - v1.1.0 三判定（假擦拭 / 棉签超限 / 操作员离开）在项目 Tab 配置
- *   - v1.3.0 工位1 计数伴随标签（同帧双类别门槛，detect9 对齐）
+ *   - v1.4.0 工位1 计数许可标签（detect9(1) 语义: 许可标签出现过即解锁,
+ *     不必与锚框同帧, 计一件消费一次）+ 按标签 ROI 区域（画面快照上框多边形,
+ *     区域外的检出不算数, 复用主程序 /snapshot 快照与归一化多边形约定）
  */
 
 // host.api 的 baseURL 已含 /api/v1, 故路径不带前缀; 统一用主程序已鉴权 axios
@@ -18,6 +20,19 @@
 // (AGENTS 第 12 条铁律)。_api 在 register() 时由 host.api 注入。
 const API = "/plugins/sensor-clean/swab";
 let _api = null;
+
+// 后端 host 根地址（/snapshot 等非 /api/v1 路径用）。绝对 baseURL 时抽 host；
+// 相对时返回空串 = 同源（dev 下 vite 已代理 /snapshot）。
+function backendHost() {
+  const b = (_api && _api.defaults && _api.defaults.baseURL) || "";
+  if (/^https?:\/\//i.test(b)) {
+    try {
+      const u = new URL(b);
+      return `${u.protocol}//${u.host}`;
+    } catch (e) { /* fallthrough */ }
+  }
+  return "";
+}
 
 async function jget(path) {
   const r = await _api.get(`${API}${path}`);
@@ -34,7 +49,7 @@ const STATION2 = { ch: 1, title: "工位2 · 更换棉签", accent: "#f87171" };
 
 export default {
   async register({ host, registry }) {
-    const { defineComponent, h, ref, onMounted, onUnmounted } = host.vue;
+    const { defineComponent, h, ref, onMounted, onUnmounted, nextTick } = host.vue;
     const api = host.api;
     _api = host.api;
 
@@ -528,6 +543,7 @@ export default {
         max_uses_per_swab: Number(cfg.value.max_uses_per_swab) || 11,
         count_anchor_label: cfg.value.count_anchor_label || "",
         count_require_label: cfg.value.count_require_label || "",
+        label_rois: cfg.value.label_rois || {},
         swap_label: cfg.value.swap_label || "",
         move_threshold: Number(cfg.value.move_threshold),
         lock_spatial: Number(cfg.value.lock_spatial),
@@ -535,6 +551,10 @@ export default {
         move_confirm_frames: Number(cfg.value.move_confirm_frames),
         lost_frame_thresh: Number(cfg.value.lost_frame_thresh),
         force_lock_frames: Number(cfg.value.force_lock_frames),
+        dist_y_weight: Number(cfg.value.dist_y_weight) || 1.0,
+        lost_gone_sec: Number(cfg.value.lost_gone_sec) || 0,
+        force_lock_sec: Number(cfg.value.force_lock_sec) || 0,
+        min_confidence: Number(cfg.value.min_confidence) || 0,
         alarm_event: cfg.value.alarm_event || "",
         swab_over_limit_event_id: Number(cfg.value.swab_over_limit_event_id) || 0,
         fake_wipe_event_id: Number(cfg.value.fake_wipe_event_id) || 0,
@@ -602,6 +622,197 @@ export default {
           load();
           loadEvents();
         });
+
+        // ==================== v1.4.0 按标签 ROI 编辑器 ====================
+        // 画面快照 (主程序 /snapshot) 上单击加顶点画多边形, 归一化坐标存
+        // cfg.label_rois[role], 随右上角「保存配置」一并落库。
+        const ROI_ROLES = [
+          { key: "count_anchor", label: "工位1 产品计数标签", ws: 1 },
+          { key: "count_require", label: "工位1 计数许可标签", ws: 1 },
+          { key: "fake_wipe", label: "工位1 假擦拭标签", ws: 1 },
+          { key: "swap", label: "工位2 换棉签标签", ws: 2 },
+        ];
+        const roiEditing = ref(null);   // 当前编辑的 role 对象, null=关闭
+        const roiPoints = ref([]);      // [[nx,ny],...] 归一化顶点
+        const roiCanvas = ref(null);
+        const roiImgFailed = ref(false);
+        let roiImg = null;
+
+        function roleChannel(role) {
+          if (role.key === "swap") return Number(cfg.value.swap_channel ?? 1);
+          const chs = cfg.value.count_channels;
+          return Number(Array.isArray(chs) && chs.length ? chs[0] : 0);
+        }
+
+        function roiRedraw() {
+          const canvas = roiCanvas.value;
+          if (!canvas) return;
+          const ctx = canvas.getContext("2d");
+          if (roiImg) {
+            ctx.drawImage(roiImg, 0, 0, canvas.width, canvas.height);
+          } else {
+            ctx.fillStyle = "#1e293b";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#94a3b8";
+            ctx.font = "16px sans-serif";
+            ctx.fillText("无画面快照（通道未连接），仍可按比例框区域", 20, 40);
+          }
+          const pts = roiPoints.value;
+          if (!pts.length) return;
+          const px = pts.map((p) => [p[0] * canvas.width, p[1] * canvas.height]);
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = "#22d3ee";
+          ctx.fillStyle = "rgba(34,211,238,0.15)";
+          ctx.beginPath();
+          ctx.moveTo(px[0][0], px[0][1]);
+          for (let i = 1; i < px.length; i++) ctx.lineTo(px[i][0], px[i][1]);
+          if (px.length >= 3) ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          px.forEach(([x, y], i) => {
+            ctx.beginPath();
+            ctx.arc(x, y, 5, 0, Math.PI * 2);
+            ctx.fillStyle = i === 0 ? "#4ade80" : "#22d3ee";
+            ctx.fill();
+          });
+        }
+
+        function roiOpen(role) {
+          roiEditing.value = role;
+          const saved = (cfg.value.label_rois || {})[role.key];
+          roiPoints.value = Array.isArray(saved) ? saved.map((p) => [p[0], p[1]]) : [];
+          roiImg = null;
+          roiImgFailed.value = false;
+          nextTick(() => {
+            const canvas = roiCanvas.value;
+            if (!canvas) return;
+            const img = new Image();
+            img.crossOrigin = "anonymous";
+            img.src = `${backendHost()}/snapshot?channel=${roleChannel(role)}&t=${Date.now()}`;
+            img.onload = () => {
+              roiImg = img;
+              canvas.width = img.naturalWidth;
+              canvas.height = img.naturalHeight;
+              roiRedraw();
+            };
+            img.onerror = () => {
+              roiImgFailed.value = true;
+              canvas.width = 960;
+              canvas.height = 540;
+              roiRedraw();
+            };
+          });
+        }
+
+        function roiClick(ev) {
+          const canvas = roiCanvas.value;
+          if (!canvas) return;
+          const rect = canvas.getBoundingClientRect();
+          const nx = (ev.clientX - rect.left) / rect.width;
+          const ny = (ev.clientY - rect.top) / rect.height;
+          roiPoints.value = [...roiPoints.value,
+            [Math.min(1, Math.max(0, nx)), Math.min(1, Math.max(0, ny))]];
+          roiRedraw();
+        }
+
+        function roiUndo() {
+          roiPoints.value = roiPoints.value.slice(0, -1);
+          roiRedraw();
+        }
+
+        function roiSaveAndClose() {
+          const role = roiEditing.value;
+          if (!role) return;
+          const rois = { ...(cfg.value.label_rois || {}) };
+          if (roiPoints.value.length >= 3) {
+            rois[role.key] = roiPoints.value.map((p) =>
+              [Math.round(p[0] * 10000) / 10000, Math.round(p[1] * 10000) / 10000]);
+          } else {
+            delete rois[role.key];
+          }
+          cfg.value = { ...cfg.value, label_rois: rois };
+          roiEditing.value = null;
+        }
+
+        function roiClearRole(role) {
+          const rois = { ...(cfg.value.label_rois || {}) };
+          delete rois[role.key];
+          cfg.value = { ...cfg.value, label_rois: rois };
+        }
+
+        const roiBtn = (text, onClick, opts = {}) =>
+          h("button", {
+            style: "padding:5px 14px;border-radius:6px;border:1px solid #334155;" +
+              `background:${opts.bg || "#1e293b"};color:${opts.color || "#e2e8f0"};` +
+              "font-size:0.8rem;cursor:pointer;" + (opts.style || ""),
+            disabled: !!opts.disabled,
+            onClick,
+          }, text);
+
+        const roiRow = (role) => {
+          const saved = (cfg.value.label_rois || {})[role.key];
+          const active = Array.isArray(saved) && saved.length >= 3;
+          return h("div", {
+            style: "display:flex;align-items:center;gap:10px;margin-bottom:10px;",
+          }, [
+            h("label", {
+              style: "width:200px;color:#94a3b8;font-size:0.875rem;flex-shrink:0;",
+            }, `${role.label} ROI`),
+            h("span", {
+              style: `font-size:0.8rem;font-weight:bold;color:${active ? "#4ade80" : "#64748b"};` +
+                "width:110px;flex-shrink:0;",
+            }, active ? `已框定 ${saved.length} 点` : "未限制(全画面)"),
+            roiBtn(active ? "重新绘制" : "绘制区域", () => roiOpen(role),
+              { bg: "#1f6feb", color: "#f0f6fc" }),
+            active ? roiBtn("清除", () => roiClearRole(role),
+              { bg: "#3f1d1d", color: "#fca5a5" }) : null,
+          ]);
+        };
+
+        const roiEditorOverlay = () => {
+          const role = roiEditing.value;
+          if (!role) return null;
+          return h("div", {
+            style: "position:fixed;inset:0;z-index:9000;background:rgba(2,6,23,0.85);" +
+              "display:flex;align-items:center;justify-content:center;",
+          }, [
+            h("div", {
+              style: "background:#0f172a;border:1px solid #334155;border-radius:12px;" +
+                "padding:16px;max-width:90vw;max-height:92vh;display:flex;" +
+                "flex-direction:column;gap:10px;",
+            }, [
+              h("div", { style: "display:flex;align-items:center;gap:12px;" }, [
+                h("span", { style: "color:#e2e8f0;font-weight:bold;" },
+                  `绘制「${role.label}」ROI 区域（工位${role.ws} 画面快照）`),
+                h("span", { style: "color:#64748b;font-size:0.78rem;flex:1;" },
+                  "单击添加顶点，至少 3 点；保存后区域外的该标签检出不算数"),
+              ]),
+              roiImgFailed.value
+                ? h("div", { style: "color:#fbbf24;font-size:0.78rem;" },
+                    "快照获取失败（通道未连接视频）— 画布按 16:9 比例，仍可框定归一化区域")
+                : null,
+              h("div", {
+                style: "overflow:auto;max-height:70vh;background:#000;border-radius:8px;",
+              }, [
+                h("canvas", {
+                  ref: roiCanvas,
+                  style: "max-width:86vw;max-height:68vh;cursor:crosshair;display:block;",
+                  onClick: roiClick,
+                }),
+              ]),
+              h("div", { style: "display:flex;gap:10px;justify-content:flex-end;" }, [
+                h("span", { style: "color:#94a3b8;font-size:0.8rem;flex:1;align-self:center;" },
+                  `顶点数: ${roiPoints.value.length}${roiPoints.value.length >= 3 ? "（已可保存）" : ""}`),
+                roiBtn("撤销上一点", roiUndo, { disabled: !roiPoints.value.length }),
+                roiBtn("清空", () => { roiPoints.value = []; roiRedraw(); },
+                  { disabled: !roiPoints.value.length }),
+                roiBtn("取消", () => { roiEditing.value = null; }),
+                roiBtn(roiPoints.value.length >= 3 ? "保存区域" : "保存(不限制)",
+                  roiSaveAndClose, { bg: "#238636", color: "#f0f6fc" }),
+              ]),
+            ]),
+          ]);
+        };
 
         const row = "display:flex;align-items:center;gap:10px;margin-bottom:10px;";
         const lbl = "width:200px;color:#94a3b8;font-size:0.875rem;flex-shrink:0;";
@@ -717,16 +928,23 @@ export default {
             ]),
             group("识别标签", [
               txtField("工位1 产品计数标签", "count_anchor_label", "模型输出的产品类别名"),
-              txtField("工位1 计数伴随标签", "count_require_label", "留空=不启用；配置后须同帧同时检出才计数"),
+              txtField("工位1 计数许可标签", "count_require_label",
+                "留空=不启用；它出现过即解锁计数(不必同帧)，计一件需再见一次"),
               txtField("工位2 换棉签标签", "swap_label", "模型输出的换棉签类别名"),
             ]),
+            group("标签 ROI 区域（区域外的检出不算数；不画=全画面）",
+              ROI_ROLES.map(roiRow)),
             group("计数防抖 (决定计数准不准)", [
               numField("移动判定阈值 (归一化)", "move_threshold", "0.0001"),
               numField("位置锁范围 (归一化)", "lock_spatial", "0.0001"),
               numField("位置锁/冷却 (秒)", "lock_time", "0.1"),
               numField("移动确认帧数", "move_confirm_frames", "1"),
               numField("丢失确认帧数", "lost_frame_thresh", "1"),
-              numField("计数后强制锁定帧", "force_lock_frames", "1", "源帧率高于推理需调大"),
+              numField("计数后强制锁定帧", "force_lock_frames", "1", "源帧率高于推理需调大; 强锁秒>0时本项不生效"),
+              numField("纵向位移权重", "dist_y_weight", "0.0001", "=画面高/宽(1728x1080填0.625, 16:9填0.5625); 1=等权老行为"),
+              numField("离场确认秒", "lost_gone_sec", "0.01", "锚缺席≥N秒确认离开(抗丢帧); 0=按丢失帧数"),
+              numField("计数后强锁秒", "force_lock_sec", "0.1", "计数后锁定N秒防重复(抗丢帧); 0=按锁定帧数"),
+              numField("插件置信度地板", "min_confidence", "0.05", "低于此置信度的检出不进计数/许可/换棉签判定; 0=跟随监控页滑条"),
             ]),
             group("计件 → 事件（正常擦一件联动主程序报警/计数器/Toast）", [
               eventField(
@@ -761,6 +979,7 @@ export default {
               },
               "● 以上参数随页面右上角【保存配置】按钮一并保存，无需单独保存。"
             ),
+            roiEditorOverlay(),
           ]);
       },
     });

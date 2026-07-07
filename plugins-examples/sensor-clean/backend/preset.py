@@ -92,10 +92,14 @@ VIEW2_PROJECT = {
 SWAB_CONFIG = {
     "count_channels": [0],                     # 视角1 计数通道
     "count_anchor_label": "查看产品有无脏污",    # 视角1 锚动作标签（detect6 cls0）
-    # v1.3.0 同帧双类别门槛（detect9）：非空时本帧须同时检出该伴随标签才计数；
-    # 空 = 不启用（与 v1.2.0 行为一致）。新模型标签体系（查看产品/清洁产品）
-    # 的现场把锚标签配"查看产品"、本键配"清洁产品"。
+    # v1.4.0 双类别计数许可（detect9(1) _both_seen 语义）：非空时该标签出现过即
+    # 解锁计数（不必与锚框同帧，两类交替出现也能计）；计到一件/锚跟踪销毁重置，
+    # 下一件需再见许可标签。空 = 不启用（v1.2.0 行为）。新模型标签体系
+    # （正常产品/脏污产品）的现场把锚标签配"正常产品"、本键配"脏污产品"。
     "count_require_label": "",
+    # v1.4.0 按标签 ROI（归一化多边形 [[x,y],...]，中心点在内才算数；空=不限制）
+    # key: count_anchor / count_require / swap / fake_wipe
+    "label_rois": {},
     "swap_channel": 1,                         # 视角2 换棉签通道
     "swap_label": "更换棉签",                   # 视角2 换棉签动作标签
     "max_uses_per_swab": 11,                   # 一根棉签擦满 K 个产品后锁定（K）
@@ -116,16 +120,30 @@ SWAB_CONFIG = {
     "operator_absent_timeout_sec": 600,        # 离开超时秒（detect7(1) 默认 600=10min）
     "normal_count_event_id": 1,                # 正常计件 → 合格 OK（可改 NG 或 0 关闭）
     "suppress_main_settle_alarm": True,        # 抑制主程序并行周期结算塔灯
-    # —— detect6 逐帧计数参数（移动即计数 + 帧硬锁；阈值 = detect6 像素值 / 1728 宽）——
-    "move_threshold": 0.0116,                  # 移动判定 = detect6 20px / 1728
-    "lock_spatial": 0.0145,                    # 位置锁 = detect6 25px / 1728
-    "lock_time": 3.0,                          # 位置锁 / 计数冷却（秒，detect6）
-    "move_confirm_frames": 3,                  # 连续 N 帧位移超阈值才确认移动（detect6）
-    "lost_frame_thresh": 5,                    # 连续丢失 N 帧确认产品离开（detect6）
+    # —— 逐帧计数参数（移动即计数 + 帧硬锁）。v1.4.0 对齐 detect9(1)：demo 在
+    # 960 宽显示帧上算像素距离，折算归一化 = 像素/960。客户视频真值回放
+    # （视角1-正常.mp4 demo=38 件、小幅度移动视频=2 件）逐件对齐。——
+    "move_threshold": 0.02083,                 # 移动判定 = detect9(1) 20px / 960
+    "lock_spatial": 0.02604,                   # 位置锁 = detect9(1) 25px / 960
+    "lock_time": 3.0,                          # 位置锁 / 计数冷却（秒）
+    "move_confirm_frames": 3,                  # 连续 N 帧位移超阈值才确认移动
+    "lost_frame_thresh": 5,                    # 连续丢失 N 帧确认产品离开
+    # 纵向位移权重：demo 像素域欧氏距离折算归一化域时纵向乘（高/宽）。
+    # 1728x1080 现场=0.625（真值标定），16:9 现场=0.5625，1.0=等权老行为
+    "dist_y_weight": 0.625,
     # 计数后强制锁定帧数（detect6 原值 40）。detect6 基准 44 已确认；当源帧率 <= 主程序
     # 推理速度(约 56fps)时几乎不丢帧、实时时钟=视频时间, 40 即对齐 44。
     # 若视频源帧率高于推理速度(如 60fps test.mp4)会丢帧, 需按现场丢帧率调大本值。
     "force_lock_frames": 40,
+    # —— v1.4.0 时间制阈值（>0 启用并替代对应帧数制；0=帧数制老行为）。
+    # 主程序实时推理丢帧时帧数制跟踪存活过久 → 小幅度移动多计（真值 2 实测 4~5）；
+    # 时间制按真实缺席时长判离场，跨帧率语义一致。真值回放 0.15s/1.6s 下
+    # 小幅度视频全帧/丢帧都=2，正常视频 37/36（demo=38）。——
+    "lost_gone_sec": 0.15,                     # 锚缺席 >= N 秒确认离开（0=帧数制）
+    "force_lock_sec": 1.6,                     # 计数后强锁 N 秒（0=帧数制）
+    # 插件内置信度地板（detect9(1) CONF_THRES=0.7）：主程序监控页滑条低于本值时,
+    # 低置信度误检不进计数/许可/换棉签判定；0=不过滤跟随滑条
+    "min_confidence": 0.7,
 }
 
 

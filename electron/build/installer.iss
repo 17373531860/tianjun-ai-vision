@@ -27,6 +27,10 @@ WizardStyle=modern
 ShowLanguageDialog=no
 DisableWelcomePage=no
 DisableProgramGroupPage=yes
+; 升级也永远显示"选择安装位置"页 (客户要求可自选目录).
+; 配合下方 [Code] 的搬家逻辑: 升级时选了新目录 -> 新目录安装 + 旧目录自动清除, 不留双份.
+DisableDirPage=no
+UsePreviousAppDir=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -55,6 +59,21 @@ Filename: "pnputil"; Parameters: "/delete-driver ""{app}\resources\drivers\CH341
 var
   LicenseBackupDir: String;
   AppDataDir: String;
+  // 升级换目录 (搬家) 时待清除的旧安装目录; '' = 本次不搬家
+  OldInstallDirToRemove: String;
+
+// 读上次安装目录. Inno 每次安装都把路径刷进本 AppId 的卸载注册表项,
+// 64 位安装模式下 HKLM 默认映射 64 位视图, 与写入端一致.
+function GetPreviousInstallDir: String;
+var
+  S: String;
+begin
+  Result := '';
+  if RegQueryStringValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{com.tianjun.ai-vision}_is1', 'Inno Setup: App Path', S) then
+    Result := RemoveBackslashUnlessRoot(S)
+  else if RegQueryStringValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{com.tianjun.ai-vision}_is1', 'InstallLocation', S) then
+    Result := RemoveBackslashUnlessRoot(S);
+end;
 
 procedure BackupLicenseFiles;
 begin
@@ -73,18 +92,36 @@ begin
   end;
 end;
 
-procedure BackupUserData;
-var
-  OldInstDir: String;
+// 兼容极老版本把数据库放在安装目录内的情况: 覆盖/搬家前抢救到用户数据目录.
+// 同目录覆盖时旧库在 {app} 下; 搬家时旧库在上次安装目录下, 两处都查.
+procedure BackupUserDataFrom(const InstDir: String);
 begin
   AppDataDir := ExpandConstant('{userappdata}\tianjun-ai-vision');
-  OldInstDir := ExpandConstant('{app}');
-
-  if FileExists(OldInstDir + '\resources\backend\sql_app.db') then
+  if FileExists(InstDir + '\resources\backend\sql_app.db') then
   begin
     ForceDirectories(AppDataDir);
     if not FileExists(AppDataDir + '\sql_app.db') then
-      FileCopy(OldInstDir + '\resources\backend\sql_app.db', AppDataDir + '\sql_app.db', False);
+      FileCopy(InstDir + '\resources\backend\sql_app.db', AppDataDir + '\sql_app.db', False);
+  end;
+end;
+
+// 升级换目录 (搬家) 检测: 上次装在 A, 本次选了 B (A<>B) -> 记下 A, 装完后整目录清除.
+// 只在"确认 A 里躺着我们的主程序 exe"时才敢删, 防止注册表脏值误删无关目录.
+procedure DetectInstallDirMove;
+var
+  PrevDir: String;
+  NewDir: String;
+begin
+  OldInstallDirToRemove := '';
+  PrevDir := GetPreviousInstallDir;
+  NewDir := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
+  if (PrevDir = '') or (CompareText(PrevDir, NewDir) = 0) then
+    Exit;
+  if (Length(PrevDir) > 3) and DirExists(PrevDir)
+     and FileExists(PrevDir + '\' + '{#MyAppExeName}') then
+  begin
+    OldInstallDirToRemove := PrevDir;
+    Log('Install dir moved: ' + PrevDir + ' -> ' + NewDir + ', old dir will be removed after install');
   end;
 end;
 
@@ -205,7 +242,10 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   BackupLicenseFiles;
-  BackupUserData;
+  DetectInstallDirMove;
+  BackupUserDataFrom(ExpandConstant('{app}'));
+  if OldInstallDirToRemove <> '' then
+    BackupUserDataFrom(OldInstallDirToRemove);
   CleanStaleFrontend;
   Result := '';
 end;
@@ -217,6 +257,24 @@ begin
     RestoreLicenseFiles;
     InstallCH341Driver;
     InstallPL2303Driver;
+    // 搬家收尾: 新目录已装好、快捷方式/卸载注册表已指向新目录, 旧目录整体清除.
+    // 用户数据在 userappdata, 不在安装目录, 删旧目录不碰数据.
+    if OldInstallDirToRemove <> '' then
+    begin
+      if DelTree(OldInstallDirToRemove, True, True, True) then
+        Log('Old install dir removed: ' + OldInstallDirToRemove)
+      else
+        Log('WARN: old install dir not fully removed (files in use?): ' + OldInstallDirToRemove);
+      // 老安装勾过"开机自启"但本次没勾 -> 启动快捷方式还指着旧目录, 搬家后会失效.
+      // 存在即按新目录重建 (勾了的话 [Icons] 已重建, 这里重复写一次也无害).
+      if FileExists(ExpandConstant('{commonstartup}\TianJun AI Vision.lnk')) then
+      begin
+        CreateShellLink(ExpandConstant('{commonstartup}\TianJun AI Vision.lnk'),
+          'TianJun AI Vision', ExpandConstant('{app}\{#MyAppExeName}'), '',
+          ExpandConstant('{app}'), '', 0, SW_SHOWNORMAL);
+        Log('Startup shortcut repointed to new install dir');
+      end;
+    end;
   end;
 end;
 

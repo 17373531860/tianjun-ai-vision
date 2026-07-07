@@ -7,7 +7,7 @@
     - 配了伴随标签: 仅锚标签 → 0 计数; 锚+伴随同帧 → 正常计数
   Phase B (可见浏览器):
     - 监控页插件看板: 门槛拦截时总产量不动, 双类别驱动时总产量上涨 (人眼可见)
-    - 项目页插件配置 Tab: 「工位1 计数伴随标签」输入 → 保存配置 → 接口读回落库值
+    - 项目页插件配置 Tab: 「工位1 计数许可标签」输入 → 保存配置 → 接口读回落库值
 
 前置(本脚本不自起服务):
   - 隔离后端 8002 (RUNTIME_MODE=test, ENABLE_DEV_MOCKS=1, TIANJUN_DATA_DIR=/tmp/sc_gate_data,
@@ -183,12 +183,12 @@ with sync_playwright() as p:
         tab.first.click()
         time.sleep(1.5)
     body = page.evaluate("document.body.innerText")
-    step("B4 项目页插件 Tab 渲染伴随标签字段", tab_ok and "工位1 计数伴随标签" in body, "")
+    step("B4 项目页插件 Tab 渲染伴随标签字段", tab_ok and "工位1 计数许可标签" in body, "")
     safe_shot(page, f"{SHOTS}/G4_config_tab_field.png")
 
     saved_ok = False
     if tab_ok:
-        inp = page.locator("div:has(> label:text-is('工位1 计数伴随标签')) > input").first
+        inp = page.locator("div:has(> label:text-is('工位1 计数许可标签')) > input").first
         inp.fill("UAT验证标签")
         time.sleep(0.5)
         page.locator("button:has-text('保存配置')").click()

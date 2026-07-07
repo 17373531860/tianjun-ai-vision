@@ -493,3 +493,41 @@ mgr._per_item_last_ng_detail = {
 **调试线索**:
 - 误开周期 → 在 Monitor 视频流上看"假阳性"框, 量它的归一化宽高
 - 配 box_max 后还误检 → 看 `steps_config[i].per_item` 里字段名是 `box_max_width` 不是 `max_box_width` (顺序)
+
+## 十一、v3.33 增量功能（重复打防护 / 换板兜底结算）
+
+### 11.1 重复打同一颗螺丝防护（duplicate_screw_alarm，默认关）
+
+**位置**: `pipeline_config.per_item.duplicate_screw_alarm`（项目级 bool）+ 4 个配套参数:
+
+| 键 | 默认 | 语义 |
+|---|---|---|
+| `duplicate_release_frames` | 8 | covered 后动作框**连续离开**该帧数才算"真正移开"（滤拔枪卡顿/单帧闪断） |
+| `duplicate_sustain_frames` | 2 | 真正移开后**重新压回**持续该帧数 → 判"重复打" |
+| `duplicate_alarm_interval_sec` | 2.0 | 重复打报警最小间隔 |
+| `duplicate_warning_display_sec` | 3.0 | 前端黄条横幅存在秒数（0=不自动撤） |
+
+**语义要点**（改这块前必读）:
+- 判定后**不落账 / 不结束周期 / 不动覆盖状态**（覆盖单调不破坏）——只复用 NG 事件 (event2) 点报警灯 + PerItemPanel 黄条
+- item state 新增 `released_after_cover` / `post_cover_away_frames` / `redup_overlap_frames` / `redup_warned` / `redup_count` 五字段；快照里 `dup > 0` 表示本周期被重复打过（前端可高亮）
+- "再移开再压回" → `redup_warned` 复位可再报；**待补态天然覆盖**：待补时 cycle_active 仍 True，重打已打螺丝照样报，补打漏掉的（covered=False）是合法补打不报
+
+**调试线索**:
+- 重打不报 → 开关开了吗 + 动作框离开是否够 `duplicate_release_frames` 帧（离开不够久不开门）
+- 误报 → 调大 `duplicate_release_frames`（离开确认更严）或 `duplicate_sustain_frames`（压回确认更严）
+- 单测: `tests/test_per_item_duplicate_screw.py`
+
+### 11.2 换板兜底结算（workpiece_absent_settle_frames，默认 0=关）
+
+**位置**: `pipeline_config.per_item.workpiece_absent_settle_frames`（项目级 int，>0 启用）
+
+**治的 bug**: finish_label 单一结算的项目，换板动作没被模型检出 → 上一板周期永不结算 → 其逐颗 covered 经 `update_item_positions` 按位置**泄漏到新板**（新板未打却变绿、计数 0）。
+
+**语义**: 周期进行中，**所有 item 标签**连续消失该帧数 → 视为工件被拿走/换板 → 按真实覆盖状态自动兜底结算 (OK/NG) 并 reset，新板从零重锁。只在"全部件都不见"才累计（手拧单颗不会全消失，误触发风险极低）。
+
+**互斥**: 离场判定模式（`judge_on_workpiece_leave`）自带离场结算，**不走**此兜底。
+
+**调试线索**:
+- 换板后老板不结算 → 该键 >0 吗 + 换板瞬间是否真有"全标签消失"的帧窗（遮挡下有残检出就不累计）
+- 误结算（工件还在就被结了）→ 调大帧数；跟踪计数字段 `workpiece_absent_frames` 在 item state
+- 单测: `tests/test_per_item_board_swap.py`

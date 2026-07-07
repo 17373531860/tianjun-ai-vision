@@ -42,6 +42,40 @@ def _dist(a, b):
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
 
 
+def point_in_polygon(pt, polygon):
+    """射线法: 归一化点是否在归一化多边形内 (含边界近似)。
+
+    polygon: [[x,y],...] 至少 3 点; 不合法视为「不限制」返回 True —
+    与主程序 ROI 过滤 (source_roi.is_normalized_bbox_center_in_polygon) 语义
+    一致, 但纯 Python 实现, 插件不依赖主程序内部模块 / cv2。
+    """
+    if not polygon or len(polygon) < 3:
+        return True
+    try:
+        px, py = float(pt[0]), float(pt[1])
+        n = len(polygon)
+        inside = False
+        j = n - 1
+        for i in range(n):
+            xi, yi = float(polygon[i][0]), float(polygon[i][1])
+            xj, yj = float(polygon[j][0]), float(polygon[j][1])
+            if (yi > py) != (yj > py):
+                x_cross = (xj - xi) * (py - yi) / (yj - yi) + xi
+                if px < x_cross:
+                    inside = not inside
+            j = i
+        return inside
+    except Exception:
+        return True   # 脏数据视为不限制, 绝不因 ROI 配错拦停计数链路
+
+
+def det_in_roi(det, polygon):
+    """检测框中心点是否落在 ROI 多边形内 (无 ROI = 不限制)。"""
+    if not polygon or len(polygon) < 3:
+        return True
+    return point_in_polygon(_center(det), polygon)
+
+
 class ProductCounter:
     """逐帧产品计数器 (复刻 detect6 移动即计数 + 帧硬锁算法)。
 
@@ -53,25 +87,64 @@ class ProductCounter:
                  lock_spatial=DEFAULT_LOCK_SPATIAL, lock_time=DEFAULT_LOCK_TIME,
                  move_confirm_frames=DEFAULT_MOVE_CONFIRM_FRAMES,
                  lost_frame_thresh=DEFAULT_LOST_FRAME_THRESH,
-                 force_lock_frames=DEFAULT_FORCE_LOCK_FRAMES):
+                 force_lock_frames=DEFAULT_FORCE_LOCK_FRAMES,
+                 dist_y_weight=1.0, lost_gone_sec=0.0, force_lock_sec=0.0):
         self.move_threshold = move_threshold
         self.lock_spatial = lock_spatial
         self.lock_time = lock_time
         self.move_confirm_frames = int(move_confirm_frames)
         self.lost_frame_thresh = int(lost_frame_thresh)
         self.force_lock_frames = int(force_lock_frames)
+        # v1.4.0 时间制阈值 (>0 启用, 替代对应帧数制; 0=沿用帧数制老行为)。
+        # 动机: demo 逐帧同步处理不丢帧, "N 帧"即"N/25 秒"; 主程序实时推理丢帧
+        # (30fps 源 23fps 推理), 同样的真实离场时间覆盖的处理帧更少, 帧数制
+        # 会让跟踪/许可存活过久 → 小幅度视频多计。时间制跨帧率语义一致:
+        # lost_gone_sec = demo 5帧/25fps = 0.2s; force_lock_sec = 40帧/25 = 1.6s。
+        self.lost_gone_sec = float(lost_gone_sec or 0.0)
+        self.force_lock_sec = float(force_lock_sec or 0.0)
+        # v1.4.0 纵向位移权重: demo 在像素域算欧氏距离, 纵向像素 = dy_norm*高,
+        # 折算到归一化域等价于纵向乘 (高/宽)。等权(1.0)会把纵向位移放大 →
+        # 真值回放多计 (1728x1080 视频 demo=38 件, 等权=40, 加权 0.625=38 全对齐)。
+        # 默认 1.0 保持 v1.2.0 零差异, 现场按源宽高比配 (preset 给 0.625)。
+        self.dist_y_weight = float(dist_y_weight)
         self.reset()
+
+    def _wdist(self, a, b):
+        dx = a[0] - b[0]
+        dy = (a[1] - b[1]) * self.dist_y_weight
+        return math.sqrt(dx * dx + dy * dy)
 
     def reset(self):
         self.total = 0
-        self._tracker = None          # {first, center, lost, counted, mc}
+        self._tracker = None          # {first, center, lost, counted, mc, last_seen}
         self._last_count_center = None
         self._last_count_time = 0.0
         self._force_lock = 0
+        self._force_lock_until = 0.0
+        self.tracker_gone = False
+        self._prev_ts = None      # 上一处理帧时间 (估计帧间隔用)
+        self._ema_dt = None       # 处理帧间隔 EMA (回溯离场判定的单帧余量)
 
-    def update(self, anchor_det, now, paused=False):
-        # 强制锁定期: 计数后锁定 N 帧, 无视一切检测 (防漏检导致跟踪器重建+重复计数)
-        if self._force_lock > 0:
+    def update(self, anchor_det, now, paused=False, allow_count=True):
+        """每帧调一次。allow_count=False 时跟踪照常但整个计数块跳过
+        (detect9(1) 双类别许可语义: 许可未解锁, 位移/确认帧都不推进)。
+        计数后调用方可读 tracker_gone 判断本帧跟踪是否因丢失被销毁。
+        """
+        self.tracker_gone = False
+        # 处理帧间隔 EMA: 回溯离场判定要扣掉"重现那一帧本身"的间隔,
+        # 否则缺席 k 帧会被算成 k+1 帧, 比逐帧缺席判定严一帧 → 误杀合法跟踪
+        if self._prev_ts is not None:
+            dt = now - self._prev_ts
+            if 0.0 < dt < 0.5:
+                self._ema_dt = dt if self._ema_dt is None \
+                    else self._ema_dt * 0.9 + dt * 0.1
+        self._prev_ts = now
+        # 强制锁定期: 计数后锁定一段, 无视一切检测 (防漏检导致跟踪器重建+重复计数)
+        # 时间制优先 (丢帧鲁棒), 未启用时按帧数制
+        if self.force_lock_sec > 0:
+            if now < self._force_lock_until:
+                return False
+        elif self._force_lock > 0:
             self._force_lock -= 1
             return False
 
@@ -82,15 +155,28 @@ class ProductCounter:
         center = _center(anchor_det) if anchor_det is not None else None
 
         if center is not None:
+            # 时间制补丁: 锚重现但距上次在场已超离场时长 → 缺席期整段被实时
+            # 丢帧吞掉(缺席帧一帧都没被处理到), 帧数制/缺席帧判定都无感。
+            # 回溯判定为"已离场又回来": 销毁重建跟踪(first 重置)并重置许可。
+            # 扣一帧间隔余量: gap 含"重现帧自身"的间隔, 真实缺席 = gap - dt。
+            if self._tracker is not None and self.lost_gone_sec > 0:
+                gap = now - self._tracker.get("last_seen", now)
+                if gap - (self._ema_dt or 0.0) >= self.lost_gone_sec:
+                    self._tracker = None
+                    self.tracker_gone = True
             if self._tracker is None:
                 self._tracker = {"first": center, "center": center,
-                                 "lost": 0, "counted": False, "mc": 0}
+                                 "lost": 0, "counted": False, "mc": 0,
+                                 "last_seen": now}
                 return False
             self._tracker["center"] = center
             self._tracker["lost"] = 0
+            self._tracker["last_seen"] = now
             if self._tracker["counted"]:
                 return False
-            disp = _dist(center, self._tracker["first"])
+            if not allow_count:
+                return False
+            disp = self._wdist(center, self._tracker["first"])
             if disp < self.move_threshold:
                 self._tracker["mc"] = 0
                 return False
@@ -99,7 +185,7 @@ class ProductCounter:
                 return False
             # 位置锁: 与上次计数过近且过短 → 跳过
             if self._last_count_center is not None \
-                    and _dist(center, self._last_count_center) < self.lock_spatial \
+                    and self._wdist(center, self._last_count_center) < self.lock_spatial \
                     and (now - self._last_count_time) < self.lock_time:
                 return False
             # 计数 + 进入强制锁定 + 销毁跟踪
@@ -107,14 +193,21 @@ class ProductCounter:
             self._last_count_center = center
             self._last_count_time = now
             self._force_lock = self.force_lock_frames
+            self._force_lock_until = now + self.force_lock_sec
             self._tracker = None
             return True
 
-        # 锚框消失: 累计丢失帧, 超阈值确认离开
+        # 锚框消失: 确认离开 → 销毁跟踪。时间制优先 (真实缺席时长, 丢帧鲁棒),
+        # 未启用时按连续丢失帧数制
         if self._tracker is not None:
             self._tracker["lost"] += 1
-            if self._tracker["lost"] >= self.lost_frame_thresh:
+            if self.lost_gone_sec > 0:
+                gone = (now - self._tracker.get("last_seen", now)) >= self.lost_gone_sec
+            else:
+                gone = self._tracker["lost"] >= self.lost_frame_thresh
+            if gone:
                 self._tracker = None
+                self.tracker_gone = True   # detect9(1): 跟踪销毁需重置双类别许可
         return False
 
 

@@ -1,0 +1,77 @@
+{
+  "version": "3.33.0",
+  "date": "2026-07-07",
+  "previous_version": "3.32.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "逐件覆盖模式: 重复打同一颗螺丝防护 (默认关)",
+      "symptom": "工人回头对已打过的螺丝再打一枪, 覆盖状态单调不变, 既不报警也不留痕, 漏检工艺违规",
+      "root_cause": "逐件覆盖语义只关心 0→1 覆盖, covered 之后的再次接触无任何判定",
+      "fix": "per_item.duplicate_screw_alarm 开启后: covered → 动作框连续离开 duplicate_release_frames(默认8)帧算真正移开 → 又压回来持续 duplicate_sustain_frames(默认2)帧 → 判重复打, 复用 NG 事件点报警灯 + PerItemPanel 黄条, 不落账/不结束周期/不动覆盖状态; 单帧闪断不开门防误报; 待补态重打已打螺丝照样报",
+      "files": ["backend/api/source_per_item_mixin.py", "frontend/src/views/Monitor/PerItemPanel.vue", "frontend/src/views/Project/LogicConfigTab.vue", "tests/test_per_item_duplicate_screw.py"],
+      "keywords": ["重复打", "duplicate_screw_alarm", "duplicate_sustain_frames", "duplicate_release_frames", "per_item", "打螺丝", "重打报警", "redup"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "逐件覆盖模式: 换板兜底结算 (工件整体消失确认, 默认关)",
+      "symptom": "finish_label 单一结算项目, 换板动作没被检出时上一板永不结算, 覆盖状态按位置泄漏到新板 (新板未打却变绿, 计数 0)",
+      "root_cause": "周期结算完全依赖 finish_label 检出, 模型漏检换板动作时状态机没有兜底出口",
+      "fix": "per_item.workpiece_absent_settle_frames > 0 时, 周期内所有 item 标签连续消失该帧数 → 视为换板 → 按真实覆盖状态兜底结算 OK/NG 并复位; 只在全部件消失才累计, 手拧单颗不误触发; 离场判定模式自带离场结算不走此兜底",
+      "files": ["backend/api/source_per_item_mixin.py", "frontend/src/views/Project/LogicConfigTab.vue", "frontend/src/views/Project/index.vue", "tests/test_per_item_board_swap.py"],
+      "keywords": ["换板", "兜底结算", "workpiece_absent_settle_frames", "覆盖泄漏", "per_item", "finish_label", "板不结算"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "安装器: 安装目录可选 + 升级搬家自动迁移",
+      "symptom": "客户安装时不能选目录; 升级静默沿用上次目录, 想换盘符只能装出两份",
+      "root_cause": "Inno Setup 默认 DisableDirPage=auto, 检测到已装同 AppId 时跳过目录页",
+      "fix": "DisableDirPage=no + UsePreviousAppDir=yes 升级也显示目录页(默认上次目录); [Code] 搬家逻辑: 从卸载注册表读上次目录, 选了新目录时先抢救旧目录内残留用户数据库, 装完确认旧目录有主程序 exe 才整目录清除, 开机自启快捷方式重指新位置",
+      "files": ["electron/build/installer.iss"],
+      "keywords": ["安装目录", "Inno Setup", "DisableDirPage", "升级搬家", "换盘符", "自选安装路径", "双份安装"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "项目显示启用与工位实际使用重启后错位 (显示与使用必须一致)",
+      "symptom": "项目页显示启用 A 项目, 工位实际跑 B 项目的模型和配置; 重启电脑必现复发, 无法调试",
+      "root_cause": "两套互不同步的持久化: 项目启用写 DB is_active, 工位绑定写 workstation_config.json, 开机恢复优先级绑定>全局; set-project 和 video/start 只改运行时不回写绑定, 重启后旧绑定复活; activate 对已绑定其它项目的工位整体豁免, 单工位部署时启用落不到唯一工位",
+      "fix": "① set-project 成功后同步持久化该工位绑定 (merge 只动 project_id); ② video/start 落盘实际播放视频路径; ③ activate 单工位部署不再被旧绑定豁免, 配置/模型/绑定一起切, 多工位保持绑定优先原语义",
+      "files": ["backend/api/source_routes.py", "backend/api/projects.py"],
+      "keywords": ["显示与使用一致", "重启恢复错位", "workstation_config", "auto_load_active_project", "set-project", "绑定持久化", "单工位激活豁免", "用错模型", "识别不到"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "PLUGIN-001",
+      "title": "传感器清洁插件 v1.4.1: 双类别计数许可 + 按标签 ROI + 时间制离场",
+      "symptom": "v1.3.0 同帧门槛在两类交替出现的现场漏计; 实时推理丢帧时帧数制离场判定让跟踪存活过久多计",
+      "root_cause": "同帧双类别要求过严; 帧数制阈值跨帧率语义漂移",
+      "fix": "双类别计数许可 (许可标签出现过即解锁不必同帧, 计数后重置); 按标签 ROI 归一化多边形 (计数锚/许可/换棉签/假擦拭四角色); 时间制 lost_gone_sec/force_lock_sec 替代帧数制; 纵向位移权重 0.625 对齐 demo 像素域, 真值回放 38 件全对齐",
+      "files": ["plugins-examples/sensor-clean/backend/counter.py", "plugins-examples/sensor-clean/backend/hooks.py", "plugins-examples/sensor-clean/backend/preset.py", "plugins-examples/sensor-clean/frontend/dist/index.esm.js", "plugins-examples/sensor-clean/plugin.json"],
+      "keywords": ["sensor-clean", "双类别计数", "count_require_label", "按标签ROI", "时间制离场", "lost_gone_sec", "多计", "漏计"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-per-item"],
+  "files_changed": [
+    "backend/api/source_per_item_mixin.py",
+    "backend/api/source_routes.py",
+    "backend/api/projects.py",
+    "electron/build/installer.iss",
+    "frontend/src/views/Monitor/PerItemPanel.vue",
+    "frontend/src/views/Project/LogicConfigTab.vue",
+    "frontend/src/views/Project/index.vue",
+    "plugins-examples/sensor-clean/backend/counter.py",
+    "plugins-examples/sensor-clean/backend/hooks.py",
+    "plugins-examples/sensor-clean/backend/preset.py",
+    "plugins-examples/sensor-clean/frontend/dist/index.esm.js",
+    "plugins-examples/sensor-clean/plugin.json"
+  ]
+}

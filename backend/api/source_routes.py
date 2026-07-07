@@ -962,6 +962,15 @@ def start_video(req: VideoStartRequest, channel: int = Query(0)):
     """启动视频播放"""
     try:
         _get_mgr(channel).start_video(req.file_path, req.speed)
+        # v3.32.1: 与 set-project 同理 — 实际播放的视频要落盘, 否则重启后
+        # auto_restore 放回 workstation_config 里的旧视频, 与用户最后用的不一致。
+        try:
+            from backend.api.channel_manager import channel_manager
+            channel_manager.save_channel_source(
+                channel, {"source_type": "video", "video_file": req.file_path},
+                merge=True)
+        except Exception as pe:
+            print(f"[API] video/start ch{channel} 源持久化失败 (不影响播放): {pe}")
         return {"status": "success", "message": f"视频已开始播放 (ch{channel})", "speed": req.speed}
     except HTTPException:
         raise
@@ -1847,6 +1856,18 @@ def set_project_config(req: ProjectConfigRequest, channel: int = Query(0)):
             'counters_config': req.counters_config,
             'data_config': req.data_config,
         })
+        # v3.32.1: 运行时项目与持久化绑定必须同源 — 此前这里只改运行时,
+        # workstation_config.json 里该通道的 project_id 保持旧值, 重启后
+        # auto_load_active_project 按旧绑定恢复"另一个项目+另一个模型",
+        # 用户感知为"显示启用 A 项目, 实际用的是 B 的模型"。
+        # 用 merge=True 只动 project_id 一个键 (分段写入权不变量)。
+        if req.project_id and req.project_id > 0:
+            try:
+                from backend.api.channel_manager import channel_manager
+                channel_manager.save_channel_source(
+                    channel, {"project_id": req.project_id}, merge=True)
+            except Exception as pe:
+                print(f"[API] set-project ch{channel} 绑定持久化失败 (不影响运行时): {pe}")
         return {"status": "success", "message": f"项目配置已设置 (ch{channel})"}
     except HTTPException:
         raise

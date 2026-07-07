@@ -21,6 +21,7 @@ from .counter import (
     SwabChangeWindow,
     StillFakeActionDetector,
     AbsentCountdown,
+    det_in_roi,
 )
 
 # 调参基础设施: 设 SENSOR_RECORD_FRAMES=<path> 时, 视角1 每帧锚框情况追加到该文件,
@@ -36,11 +37,18 @@ CONFIG_KEY = "plugin_sensor_clean_config"
 # 默认配置（detect6 算法参数，阈值归一化 @1728 宽；与 preset.SWAB_CONFIG 保持一致）
 DEFAULT_CONFIG = {
     "count_channels": [0],                    # 视角1 计数通道
-    "count_anchor_label": "查看产品有无脏污",   # 视角1 锚动作标签 (detect6 cls0)
-    # v1.3.0 同帧双类别门槛 (detect9): 非空时, 本帧必须同时检出该伴随标签
-    # (如"清洁产品"), 锚框才进计数跟踪; 否则按锚框不在场处理 (跟踪丢失累计)。
-    # 空串 = 不启用, 行为与 v1.2.0 完全一致 (老现场升级零差异)。
+    "count_anchor_label": "查看产品有无脏污",   # 视角1 锚动作标签 (detect9(1) cls0, 如"正常产品")
+    # v1.4.0 双类别计数许可 (detect9(1) _both_seen 语义, 替换 v1.3.0 同帧门槛):
+    # 非空时该标签作为"计数许可"—— 它出现过(不必与锚框同帧)即解锁, 锚框位移达标
+    # 才计 1 件; 计数后许可立即重置, 下一件需再次见到它; 锚框跟踪丢失销毁也重置。
+    # 现场两类交替出现(先脏污后正常)也能正确计数, 这是与 v1.3.0 同帧门槛的本质区别。
+    # 空串 = 不启用, 仅锚标签移动即计数 (v1.2.0 行为)。
     "count_require_label": "",
+    # v1.4.0 按标签 ROI 区域 (复用主程序归一化多边形约定, [[x,y],...] 0~1 坐标,
+    # 中心点在多边形内才算数; 空/少于3点 = 不限制)。key 对应各判定标签角色:
+    #   count_anchor / count_require → 视角1 计数锚标签 / 许可标签
+    #   swap → 视角2 换棉签标签;  fake_wipe → 视角1 假擦拭标签
+    "label_rois": {},
     "swap_channel": 1,                        # 视角2 换棉签通道
     "swap_label": "更换棉签",                  # 视角2 换棉签动作标签
     "max_uses_per_swab": 11,                  # 一根棉签最多擦几个产品 (K)
@@ -65,15 +73,32 @@ DEFAULT_CONFIG = {
     "normal_count_event_id": 1,               # 默认 1=合格 OK; 可改为 2=NG 或自定义事件 id
     # 主程序检测模式周期结算仍并行跑, 但插件已接管计件 → 默认抑制其塔灯 (只留三判定+计件事件)
     "suppress_main_settle_alarm": True,
-    # detect6 逐帧计数参数 (移动即计数 + 帧硬锁; 阈值 = detect6 像素值 / 1728 宽)
-    "move_threshold": 0.0116,                 # 移动判定 (detect6 20px / 1728)
-    "lock_spatial": 0.0145,                   # 位置锁范围 (detect6 25px / 1728)
-    "lock_time": 3.0,                         # 位置锁 / 计数冷却 (秒, detect6)
-    "move_confirm_frames": 3,                 # 连续 N 帧位移超阈值才确认移动 (detect6)
-    "lost_frame_thresh": 5,                   # 连续丢失 N 帧确认产品离开 (detect6)
+    # 逐帧计数参数 (移动即计数 + 帧硬锁)。v1.4.0 起阈值对齐 detect9(1):
+    # demo 在 960 宽显示帧上算像素距离 (MOVE=20px / LOCK_SPATIAL=25px),
+    # 折算归一化 = 像素/960。客户视频真值回放 (视角1-正常.mp4 38 件) 逐件对齐。
+    "move_threshold": 0.02083,                # 移动判定 (detect9(1) 20px / 960)
+    "lock_spatial": 0.02604,                  # 位置锁范围 (detect9(1) 25px / 960)
+    "lock_time": 3.0,                         # 位置锁 / 计数冷却 (秒)
+    "move_confirm_frames": 3,                 # 连续 N 帧位移超阈值才确认移动
+    "lost_frame_thresh": 5,                   # 连续丢失 N 帧确认产品离开
+    # 纵向位移权重: demo 像素域欧氏距离折算归一化域时纵向要乘 (高/宽),
+    # 1728x1080 与 16:9 现场取 0.625/0.5625; 1.0=等权 (v1.2.0 老行为)
+    "dist_y_weight": 0.625,
     # 计数后强制锁定帧数 (detect7(1) 原值 40)。源帧率 <= 推理速度(约56fps)时不丢帧、
     # 实时时钟=视频时间, 40 即对齐基准; 高帧率源(如60fps test.mp4)丢帧需调大。
     "force_lock_frames": 40,
+    # v1.4.0 时间制阈值 (>0 启用并替代上面对应帧数制; 0=帧数制老行为)。
+    # 主程序实时推理丢帧 (如 30fps 源 23fps 推理), 帧数制会让跟踪存活过久 →
+    # 短暂离场没被确认、重建后位移累积 → 小幅度视频多计 (真值 2 实测 4~5)。
+    # 时间制按真实缺席时长判离场, 跨帧率语义一致。真值回放: 0.15s/1.6s 下
+    # 小幅度视频全帧/丢帧都= 2, 正常视频 37/36 (帧数制 38/37, demo=38)。
+    "lost_gone_sec": 0.15,                    # 锚缺席 >= N 秒确认离开 (0=用帧数制)
+    "force_lock_sec": 1.6,                    # 计数后强锁 N 秒 (0=用帧数制)
+    # v1.4.1 插件内置信度地板 (detect9(1) CONF_THRES=0.7)。主程序把监控页
+    # 置信度滑条以下的框全喂给钩子, 滑条调低 (如 0.25) 时低置信度误检会解锁
+    # 许可 + 抖动跟踪 → 小幅度视频实测多计到 15 件。计数语义不该受滑条摆布,
+    # 在插件内先按本值过滤 (0=不过滤, 完全跟随主程序滑条)。
+    "min_confidence": 0.7,
 }
 
 # 模块级运行时（插件加载时由 register_plugin 调 set_host 注入）
@@ -102,6 +127,9 @@ _counters = {}            # {channel_id: ProductCounter}
 _swab_windows = {}        # {channel_id: SwabChangeWindow}
 _fake_wipe_detectors = {} # {channel_id: StillFakeActionDetector} 视角1 假擦拭
 _absent_countdowns = {}   # {channel_id: AbsentCountdown} 视角2 操作员离开
+# v1.4.0 双类别计数许可 (detect9(1) _both_seen): {channel_id: bool}
+# 许可标签出现 → True; 计数命中 / 锚跟踪销毁 / 重置配置 → False
+_count_permits = {}
 
 
 def set_host(host):
@@ -154,6 +182,7 @@ def reload_config():
     _swab_windows.clear()
     _fake_wipe_detectors.clear()
     _absent_countdowns.clear()
+    _count_permits.clear()
     return _load_config()
 
 
@@ -197,6 +226,9 @@ def reset_counts():
         _state["ng_count"] = 0
         _state["over_limit"] = False
         _state["last_alarm_ts"] = 0.0
+    # detect9(1) reset_counts 同步清跟踪残留: 计数器 + 双类别许可一并归零
+    _counters.clear()
+    _count_permits.clear()
     log.info("[%s] 整批重置 → 总产量/不良/棉签全部清零", CUSTOMER_CODE)
     _finalize_current_swab("batch_reset")
     return get_state()
@@ -514,6 +546,9 @@ def _get_counter(cfg, channel_id):
             move_confirm_frames=int(cfg.get("move_confirm_frames", 3)),
             lost_frame_thresh=int(cfg.get("lost_frame_thresh", 5)),
             force_lock_frames=int(cfg.get("force_lock_frames", 40)),
+            dist_y_weight=float(cfg.get("dist_y_weight", 1.0) or 1.0),
+            lost_gone_sec=float(cfg.get("lost_gone_sec", 0.0) or 0.0),
+            force_lock_sec=float(cfg.get("force_lock_sec", 0.0) or 0.0),
         )
         _counters[channel_id] = c
     return c
@@ -646,6 +681,12 @@ def on_detection_frame(ctx):
         channel_id = ctx.get("channel_id")
         now = ctx.get("timestamp") or 0.0
         detections = ctx.get("detections") or []
+        # v1.4.1 插件内置信度地板 (detect9(1) CONF_THRES): 主程序滑条低于本值时
+        # 把低置信度误检挡在计数/许可/换棉签判定之外
+        _floor = float(cfg.get("min_confidence", 0) or 0)
+        if _floor > 0:
+            detections = [d for d in detections
+                          if (d.get("confidence") or 0) >= _floor]
 
         # 视角2：操作员离开超时 + 换棉签稳定窗口 → 解锁清零
         if channel_id == cfg["swap_channel"]:
@@ -665,7 +706,9 @@ def on_detection_frame(ctx):
                         f"操作员离开岗位超过 {cfg.get('operator_absent_timeout_sec')} 秒")
 
             swap_label = cfg["swap_label"]
-            has_change = any(d.get("label") == swap_label for d in detections)
+            swap_roi = (cfg.get("label_rois") or {}).get("swap")
+            has_change = any(d.get("label") == swap_label and det_in_roi(d, swap_roi)
+                             for d in detections)
             if _get_swab_window(cfg, channel_id).feed(has_change, now):
                 with _LOCK:
                     was_over = _state["over_limit"]
@@ -678,15 +721,17 @@ def on_detection_frame(ctx):
                 _finalize_current_swab("change")
             return None
 
-        # 视角1：逐帧跑锚动作生命周期 → 离开计 1 件（擦满 K 后继续擦记 NG，不暂停）
+        # 视角1：逐帧跑锚动作生命周期 → 移动计 1 件（擦满 K 后继续擦记 NG，不暂停）
         if channel_id in cfg["count_channels"]:
             anchor_label = cfg["count_anchor_label"]
+            rois = cfg.get("label_rois") or {}
             # 判定2: 假擦拭 — 追踪"擦拭产品"框, 停留超时但几乎未移动 → 触发事件。
             if cfg.get("fake_wipe_event_id"):
                 wipe_label = cfg.get("fake_wipe_label", "擦拭产品")
+                wipe_roi = rois.get("fake_wipe")
                 wipe_det = None
                 for d in detections:
-                    if d.get("label") == wipe_label:
+                    if d.get("label") == wipe_label and det_in_roi(d, wipe_roi):
                         if wipe_det is None or d.get("confidence", 0) > wipe_det.get("confidence", 0):
                             wipe_det = d
                 if _get_fake_wipe_detector(cfg, channel_id).update(wipe_det, now):
@@ -694,18 +739,25 @@ def on_detection_frame(ctx):
                              CUSTOMER_CODE, cfg.get("fake_wipe_event_id"))
                     _fire_event(channel_id, cfg.get("fake_wipe_event_id"),
                                 "假擦拭: 擦拭产品框停留超时但几乎未移动")
-            # 取本帧锚动作框 (取置信度最高的一个; demo 单锚)
+            # 取本帧锚动作框 (ROI 内置信度最高的一个; demo 单锚)
+            anchor_roi = rois.get("count_anchor")
             anchor = None
             for d in detections:
-                if d.get("label") == anchor_label:
+                if d.get("label") == anchor_label and det_in_roi(d, anchor_roi):
                     if anchor is None or d.get("confidence", 0) > anchor.get("confidence", 0):
                         anchor = d
-            # v1.3.0 同帧双类别门槛 (detect9): 配了伴随标签时, 本帧没同时检出它
-            # → 锚框视为不在场 (跟踪进入丢失累计, 与 detect9 else 分支一致)
+            # v1.4.0 双类别计数许可 (detect9(1) _both_seen 语义):
+            # 许可标签(如"脏污产品")出现过即解锁 —— 不必与锚框同帧, 两类交替出现
+            # 也能计数; 锚框位移达标且许可已解锁才计件; 计数/跟踪销毁时重置许可。
             require_label = cfg.get("count_require_label") or ""
-            if anchor is not None and require_label:
-                if not any(d.get("label") == require_label for d in detections):
-                    anchor = None
+            if require_label:
+                require_roi = rois.get("count_require")
+                if any(d.get("label") == require_label and det_in_roi(d, require_roi)
+                       for d in detections):
+                    _count_permits[channel_id] = True
+                allow_count = _count_permits.get(channel_id, False)
+            else:
+                allow_count = True
             if _RECORD_PATH:
                 try:
                     rec = {"seq": ctx.get("frame_seq"), "ts": now,
@@ -717,7 +769,10 @@ def on_detection_frame(ctx):
                 except Exception:
                     pass
             counter = _get_counter(cfg, channel_id)
-            counted = counter.update(anchor, now, paused=False)
+            counted = counter.update(anchor, now, paused=False, allow_count=allow_count)
+            if require_label and (counted or counter.tracker_gone):
+                # detect9(1): 计到一件 / 锚跟踪销毁 → 许可清零, 下一件需再见许可标签
+                _count_permits[channel_id] = False
             if counted:
                 k = int(cfg["max_uses_per_swab"])
                 with _LOCK:

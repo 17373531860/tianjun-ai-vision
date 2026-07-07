@@ -246,6 +246,27 @@ def _build_project_config_dict(project: Project) -> dict:
     }
 
 
+def _channels_bound_to_other(channel_manager, sources: dict, project: Project) -> set:
+    """返回"已绑定其它项目、激活时应跳过"的通道集合。
+
+    v3.32.1: 单工位部署 (channels 只有 1 个) 不豁免任何绑定 — 只有一个工位时,
+    "全局启用"就是用户眼里的唯一真相; 残留的旧绑定只会让重启后 auto_load_active_project
+    悄悄恢复另一个项目+另一个模型, 造成"项目页显示启用 A, 工位实际跑 B"。
+    多工位 (>=2) 保持原语义: 各工位自己绑定的项目优先, 全局激活不跨越。
+    """
+    if len(channel_manager.channels) <= 1:
+        return set()
+    bound = set()
+    for ch_str, ch_cfg in sources.items():
+        pid = ch_cfg.get("project_id")
+        if pid and pid != project.id:
+            try:
+                bound.add(int(ch_str))
+            except (TypeError, ValueError):
+                continue
+    return bound
+
+
 def _sync_project_config_to_channels(project: Project) -> None:
     """把项目配置同步到所有未绑定其它项目的 channel 的 mgr.
 
@@ -261,14 +282,7 @@ def _sync_project_config_to_channels(project: Project) -> None:
     from backend.api.channel_manager import channel_manager
 
     sources = channel_manager.get_channel_sources()
-    bound_to_other = set()
-    for ch_str, ch_cfg in sources.items():
-        pid = ch_cfg.get("project_id")
-        if pid and pid != project.id:
-            try:
-                bound_to_other.add(int(ch_str))
-            except (TypeError, ValueError):
-                continue
+    bound_to_other = _channels_bound_to_other(channel_manager, sources, project)
 
     remaining = [cid for cid in channel_manager.channels if cid not in bound_to_other]
     if not remaining:
@@ -288,6 +302,18 @@ def _sync_project_config_to_channels(project: Project) -> None:
         except Exception as e:
             print(f"[激活项目] ch{ch_id} 配置同步失败 (忽略): {e}")
             import traceback; traceback.print_exc()
+            continue
+        # v3.32.1: 同步成功后把该通道的持久化绑定改指本项目 (仅当旧绑定指向别的项目
+        # 时才写) — 否则重启后 auto_load_active_project 按旧绑定恢复旧项目+旧模型,
+        # 出现"项目页显示启用 A, 工位实际跑 B"的持久错位。
+        try:
+            old_pid = (sources.get(str(ch_id)) or {}).get("project_id")
+            if old_pid and old_pid != project.id:
+                channel_manager.save_channel_source(
+                    ch_id, {"project_id": project.id}, merge=True)
+                print(f"[激活项目] ch{ch_id} 持久化绑定改指: {old_pid} -> {project.id}")
+        except Exception as e:
+            print(f"[激活项目] ch{ch_id} 绑定持久化失败 (忽略): {e}")
 
 
 def _reload_model_for_active_project(db: Session, project: Project) -> None:
@@ -312,14 +338,7 @@ def _reload_model_for_active_project(db: Session, project: Project) -> None:
         return
 
     sources = channel_manager.get_channel_sources()
-    bound_to_other = set()
-    for ch_str, ch_cfg in sources.items():
-        pid = ch_cfg.get("project_id")
-        if pid and pid != project.id:
-            try:
-                bound_to_other.add(int(ch_str))
-            except (TypeError, ValueError):
-                continue
+    bound_to_other = _channels_bound_to_other(channel_manager, sources, project)
 
     remaining = [cid for cid in channel_manager.channels if cid not in bound_to_other]
     if not remaining:

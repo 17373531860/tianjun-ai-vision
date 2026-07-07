@@ -251,6 +251,7 @@ def test_swab_over_limit_each_ng_fires_event(sc):
         "normal_count_event_id": 1, "swab_over_limit_event_id": 2,
         "fake_wipe_event_id": 0, "move_threshold": 0.0116, "force_lock_frames": 0,
         "lock_time": 0.0, "lock_spatial": 0.0,  # 关位置/时间锁, 让连续计件
+        "force_lock_sec": 0,                    # 连续计件需关 v1.4.1 时间制强锁
     })
     _count_one(sc, host, 0, 0.0)    # used=1=K (合格)
     _count_one(sc, host, 0, 1.0)    # used=2>K → 不良
@@ -469,62 +470,266 @@ def test_event_fire_suppress_only_on_plugin_channels(sc):
 
 
 # ============================================================
-# E. v1.3.0 同帧双类别门槛 (detect9 对齐)
+# E. v1.4.0 双类别计数许可 (detect9(1) _both_seen 对齐)
 # ============================================================
 
 _GATE_CFG = {
-    "count_channels": [0], "count_anchor_label": "查看产品",
-    "count_require_label": "清洁产品", "move_confirm_frames": 1,
+    "count_channels": [0], "count_anchor_label": "正常产品",
+    "count_require_label": "脏污产品", "move_confirm_frames": 1,
     "normal_count_event_id": 1, "swab_over_limit_event_id": 0,
     "fake_wipe_event_id": 0, "max_uses_per_swab": 99,
     "move_threshold": 0.0116, "force_lock_frames": 0,
+    "lost_frame_thresh": 2,
+    # 本节验证帧数制语义, 显式关掉 v1.4.1 时间制默认值
+    "lost_gone_sec": 0, "force_lock_sec": 0,
 }
 
 
 def test_require_label_blocks_count_without_companion(sc):
-    """门槛开启: 只有锚标签、没伴随标签 → 不建跟踪不计数."""
+    """许可标签从未出现: 只移动锚标签 → 不计数不触发事件 (客户反馈场景)."""
     host = _setup(sc, dict(_GATE_CFG))
-    _frame(sc, 0, 0.0, [_box("查看产品", 0.5, 0.5)])
-    _frame(sc, 0, 0.1, [_box("查看产品", 0.7, 0.5)])
+    _frame(sc, 0, 0.0, [_box("正常产品", 0.5, 0.5)])
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.7, 0.5)])
+    _frame(sc, 0, 0.2, [_box("正常产品", 0.5, 0.5)])
     assert sc.get_state()["total_products"] == 0
     assert host.events == []
 
 
 def test_require_label_counts_when_both_present(sc):
-    """门槛开启: 同帧双类别都在 → 正常计数 (detect9 主路径)."""
+    """同帧双类别都在 → 许可解锁 + 位移达标计 1 件."""
     host = _setup(sc, dict(_GATE_CFG))
-    _frame(sc, 0, 0.0, [_box("查看产品", 0.5, 0.5), _box("清洁产品", 0.3, 0.3)])
-    _frame(sc, 0, 0.1, [_box("查看产品", 0.7, 0.5), _box("清洁产品", 0.3, 0.3)])
+    _frame(sc, 0, 0.0, [_box("正常产品", 0.5, 0.5), _box("脏污产品", 0.3, 0.3)])
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.7, 0.5), _box("脏污产品", 0.3, 0.3)])
     assert sc.get_state()["total_products"] == 1
     assert any(e[1] == 1 for e in host.events)
 
 
-def test_require_label_companion_lost_midway_treated_as_gone(sc):
-    """跟踪中途伴随标签消失 → 锚框按不在场处理 (丢失累计), 不计数."""
+def test_require_label_alternating_classes_counts(sc):
+    """detect9(1) 核心语义: 两类交替出现 (不同帧) 也解锁计数 —
+    先见"脏污产品"(许可解锁), 之后锚标签单独移动 → 正常计 1 件."""
     host = _setup(sc, dict(_GATE_CFG))
-    _frame(sc, 0, 0.0, [_box("查看产品", 0.5, 0.5), _box("清洁产品", 0.3, 0.3)])
-    _frame(sc, 0, 0.1, [_box("查看产品", 0.7, 0.5)])  # 伴随标签掉了
+    _frame(sc, 0, 0.0, [_box("脏污产品", 0.3, 0.3)])          # 许可解锁 (锚不在场)
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.5, 0.5)])          # 锚出现建跟踪
+    _frame(sc, 0, 0.2, [_box("正常产品", 0.7, 0.5)])          # 位移达标 → 计数
+    assert sc.get_state()["total_products"] == 1
+    assert any(e[1] == 1 for e in host.events)
+
+
+def test_require_label_permit_consumed_after_count(sc):
+    """计到一件后许可重置: 不再见许可标签, 第二件只动锚标签 → 不计."""
+    _setup(sc, dict(_GATE_CFG))
+    # 第 1 件: 许可 + 锚移动 → 计数
+    _frame(sc, 0, 0.0, [_box("脏污产品", 0.3, 0.3)])
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.5, 0.5)])
+    _frame(sc, 0, 0.2, [_box("正常产品", 0.7, 0.5)])
+    assert sc.get_state()["total_products"] == 1
+    # 第 2 件: 许可已被消费, 锚标签再动不计
+    _frame(sc, 0, 0.3, [_box("正常产品", 0.4, 0.5)])
+    _frame(sc, 0, 0.4, [_box("正常产品", 0.6, 0.5)])
+    assert sc.get_state()["total_products"] == 1
+    # 许可标签再次出现 → 第 2 件可计
+    _frame(sc, 0, 0.5, [_box("脏污产品", 0.3, 0.3), _box("正常产品", 0.4, 0.5)])
+    _frame(sc, 0, 0.6, [_box("正常产品", 0.62, 0.5)])
+    assert sc.get_state()["total_products"] == 2
+
+
+def test_require_label_permit_reset_on_tracker_gone(sc):
+    """锚跟踪丢失销毁 → 许可同步重置 (detect9(1) tracker 销毁分支)."""
+    _setup(sc, dict(_GATE_CFG))
+    _frame(sc, 0, 0.0, [_box("脏污产品", 0.3, 0.3)])          # 许可解锁
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.5, 0.5)])          # 锚建跟踪
+    _frame(sc, 0, 0.2, [])                                     # 丢 1
+    _frame(sc, 0, 0.3, [])                                     # 丢 2 → 跟踪销毁+许可重置
+    _frame(sc, 0, 0.4, [_box("正常产品", 0.5, 0.5)])          # 新跟踪, 无许可
+    _frame(sc, 0, 0.5, [_box("正常产品", 0.7, 0.5)])
     assert sc.get_state()["total_products"] == 0
 
 
 def test_require_label_empty_keeps_v120_behavior(sc):
-    """门槛留空 (默认): 仅锚标签即可计数, 与 v1.2.0 零差异."""
+    """许可留空 (默认): 仅锚标签即可计数, 与 v1.2.0 零差异."""
     cfg = dict(_GATE_CFG)
     cfg["count_require_label"] = ""
     host = _setup(sc, cfg)
-    _frame(sc, 0, 0.0, [_box("查看产品", 0.5, 0.5)])
-    _frame(sc, 0, 0.1, [_box("查看产品", 0.7, 0.5)])
+    _frame(sc, 0, 0.0, [_box("正常产品", 0.5, 0.5)])
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.7, 0.5)])
     assert sc.get_state()["total_products"] == 1
 
 
 def test_require_label_config_roundtrip(sc):
-    """伴随标签经配置保存/回读闭环 (前端 Tab 字段依赖)."""
+    """许可标签经配置保存/回读闭环 (前端 Tab 字段依赖)."""
     _setup(sc, {})
     assert sc.get_config()["count_require_label"] == ""
-    sc.save_config({"count_require_label": "清洁产品"})
-    assert sc.get_config()["count_require_label"] == "清洁产品"
+    sc.save_config({"count_require_label": "脏污产品"})
+    assert sc.get_config()["count_require_label"] == "脏污产品"
     sc.reload_config()
-    assert sc.get_config()["count_require_label"] == "清洁产品"
+    assert sc.get_config()["count_require_label"] == "脏污产品"
+
+
+# ============================================================
+# F. v1.4.0 按标签 ROI 区域过滤
+# ============================================================
+
+# 左半屏 ROI (归一化多边形)
+_LEFT_ROI = [[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]]
+
+
+def test_roi_filters_anchor_outside(sc):
+    """锚标签 ROI: 框中心在 ROI 外 → 视为不在场, 不计数."""
+    cfg = dict(_GATE_CFG)
+    cfg["count_require_label"] = ""
+    cfg["label_rois"] = {"count_anchor": _LEFT_ROI}
+    _setup(sc, cfg)
+    # 全程在右半屏移动 (ROI 外)
+    _frame(sc, 0, 0.0, [_box("正常产品", 0.7, 0.5)])
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.9, 0.5)])
+    assert sc.get_state()["total_products"] == 0
+
+
+def test_roi_counts_anchor_inside(sc):
+    """锚标签 ROI: 框中心在 ROI 内移动 → 正常计数."""
+    cfg = dict(_GATE_CFG)
+    cfg["count_require_label"] = ""
+    cfg["label_rois"] = {"count_anchor": _LEFT_ROI}
+    _setup(sc, cfg)
+    _frame(sc, 0, 0.0, [_box("正常产品", 0.1, 0.5)])
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.3, 0.5)])
+    assert sc.get_state()["total_products"] == 1
+
+
+def test_roi_filters_require_label_outside(sc):
+    """许可标签 ROI: 许可标签只在 ROI 外出现 → 不解锁, 锚移动不计数."""
+    cfg = dict(_GATE_CFG)
+    cfg["label_rois"] = {"count_require": _LEFT_ROI}
+    _setup(sc, cfg)
+    _frame(sc, 0, 0.0, [_box("脏污产品", 0.8, 0.5)])          # ROI 外, 不解锁
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.5, 0.5)])
+    _frame(sc, 0, 0.2, [_box("正常产品", 0.7, 0.5)])
+    assert sc.get_state()["total_products"] == 0
+    # ROI 内出现 → 解锁可计
+    _frame(sc, 0, 0.3, [_box("脏污产品", 0.2, 0.5)])
+    _frame(sc, 0, 0.4, [_box("正常产品", 0.4, 0.5)])
+    _frame(sc, 0, 0.5, [_box("正常产品", 0.62, 0.5)])
+    assert sc.get_state()["total_products"] == 1
+
+
+def test_roi_filters_swap_label(sc):
+    """换棉签标签 ROI: ROI 外的换棉签动作不解锁清零."""
+    cfg = {"swap_channel": 1, "swap_label": "更换棉签",
+           "label_rois": {"swap": _LEFT_ROI}}
+    _setup(sc, cfg)
+    with sc._LOCK:
+        sc._state["swab_used"] = 5
+    # ROI 外连刷两帧 (稳定窗口本可触发; t 从 10 起避开 lock_time 冷启动窗)
+    _frame(sc, 1, 10.0, [_box("更换棉签", 0.8, 0.5)])
+    _frame(sc, 1, 10.1, [_box("更换棉签", 0.8, 0.5)])
+    assert sc.get_state()["swab_used"] == 5
+    # ROI 内 → 正常解锁清零
+    _frame(sc, 1, 10.2, [_box("更换棉签", 0.2, 0.5)])
+    _frame(sc, 1, 10.3, [_box("更换棉签", 0.2, 0.5)])
+    assert sc.get_state()["swab_used"] == 0
+
+
+def test_roi_empty_or_invalid_means_unrestricted(sc):
+    """ROI 空/不足3点 = 不限制 (老配置零差异 + 配错不拦停)."""
+    cfg = dict(_GATE_CFG)
+    cfg["count_require_label"] = ""
+    cfg["label_rois"] = {"count_anchor": [[0.1, 0.1]]}   # 只有 1 点, 非法
+    _setup(sc, cfg)
+    _frame(sc, 0, 0.0, [_box("正常产品", 0.7, 0.5)])
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.9, 0.5)])
+    assert sc.get_state()["total_products"] == 1
+
+
+def test_roi_config_roundtrip(sc):
+    """label_rois 经配置保存/回读闭环 (前端 ROI 编辑器依赖)."""
+    _setup(sc, {})
+    assert sc.get_config()["label_rois"] == {}
+    sc.save_config({"label_rois": {"count_anchor": _LEFT_ROI}})
+    assert sc.get_config()["label_rois"]["count_anchor"] == _LEFT_ROI
+    sc.reload_config()
+    assert sc.get_config()["label_rois"]["count_anchor"] == _LEFT_ROI
+
+
+# ============================================================
+# G. v1.4.1 时间制离场/强锁 (抗主程序实时丢帧)
+# ============================================================
+
+_TIME_CFG = {
+    "count_channels": [0], "count_anchor_label": "正常产品",
+    "count_require_label": "", "move_confirm_frames": 1,
+    "normal_count_event_id": 1, "swab_over_limit_event_id": 0,
+    "fake_wipe_event_id": 0, "max_uses_per_swab": 99,
+    "move_threshold": 0.0116, "lock_spatial": 0.0145, "lock_time": 0.0,
+    "force_lock_frames": 0, "lost_frame_thresh": 99,
+    "lost_gone_sec": 0.15, "force_lock_sec": 1.6,
+}
+
+
+def test_time_gone_overrides_frame_thresh(sc):
+    """时间制离场: 缺席 0.2s (仅 2 个处理帧) 即销毁跟踪, 不等 99 帧 —
+    主程序丢帧场景下帧数制存活过久正是小幅度视频多计的根因."""
+    cfg = dict(_TIME_CFG)
+    cfg["count_require_label"] = "脏污产品"
+    _setup(sc, cfg)
+    _frame(sc, 0, 0.0, [_box("脏污产品", 0.3, 0.3)])          # 许可解锁
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.5, 0.5)])          # 锚建跟踪
+    _frame(sc, 0, 0.2, [])                                     # 缺席开始
+    _frame(sc, 0, 0.3, [])                                     # 缺席 0.2s >= 0.15 → 销毁+许可重置
+    _frame(sc, 0, 0.4, [_box("正常产品", 0.4, 0.5)])          # 新跟踪 (first 重置), 无许可
+    _frame(sc, 0, 0.5, [_box("正常产品", 0.7, 0.5)])
+    assert sc.get_state()["total_products"] == 0
+
+
+def test_time_gone_tolerates_brief_flicker(sc):
+    """缺席 < 0.15s 的间歇漏检不销毁跟踪, 位移从原 first 继续累计."""
+    _setup(sc, dict(_TIME_CFG))
+    _frame(sc, 0, 0.00, [_box("正常产品", 0.5, 0.5)])
+    _frame(sc, 0, 0.05, [])                                    # 漏 0.05s < 0.15 → 存活
+    _frame(sc, 0, 0.10, [_box("正常产品", 0.7, 0.5)])         # 位移达标 → 计数
+    assert sc.get_state()["total_products"] == 1
+
+
+def test_time_force_lock_blocks_then_releases(sc):
+    """时间制强锁: 计数后 1.6s 内一切检测无效, 过期后可再计."""
+    _setup(sc, dict(_TIME_CFG))
+    _frame(sc, 0, 0.0, [_box("正常产品", 0.5, 0.5)])
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.7, 0.5)])          # 第 1 件
+    assert sc.get_state()["total_products"] == 1
+    _frame(sc, 0, 0.5, [_box("正常产品", 0.3, 0.5)])          # 锁内: 忽略
+    _frame(sc, 0, 1.0, [_box("正常产品", 0.6, 0.5)])          # 锁内: 忽略
+    assert sc.get_state()["total_products"] == 1
+    _frame(sc, 0, 1.8, [_box("正常产品", 0.3, 0.5)])          # 锁过期: 新跟踪
+    _frame(sc, 0, 1.9, [_box("正常产品", 0.6, 0.5)])          # 第 2 件
+    assert sc.get_state()["total_products"] == 2
+
+
+def test_min_confidence_floor_filters_low_conf(sc):
+    """插件置信度地板: 低于地板的锚/许可检出都不进判定 —
+    主程序滑条调低时低置信度误检曾把小幅度视频计到 15 件."""
+    cfg = dict(_TIME_CFG)
+    cfg.update({"count_require_label": "脏污产品", "min_confidence": 0.7})
+    _setup(sc, cfg)
+    # 低置信度许可 + 低置信度锚移动 → 全被地板挡掉, 不计
+    _frame(sc, 0, 0.0, [_box("脏污产品", 0.3, 0.3, conf=0.4)])
+    _frame(sc, 0, 0.1, [_box("正常产品", 0.5, 0.5, conf=0.5)])
+    _frame(sc, 0, 0.2, [_box("正常产品", 0.7, 0.5, conf=0.5)])
+    assert sc.get_state()["total_products"] == 0
+    # 高置信度同剧本 → 正常计 1 件
+    _frame(sc, 0, 1.0, [_box("脏污产品", 0.3, 0.3, conf=0.9)])
+    _frame(sc, 0, 1.1, [_box("正常产品", 0.5, 0.5, conf=0.9)])
+    _frame(sc, 0, 1.2, [_box("正常产品", 0.7, 0.5, conf=0.9)])
+    assert sc.get_state()["total_products"] == 1
+
+
+def test_time_zero_falls_back_to_frame_mode(sc):
+    """两个时间参数填 0 → 完全回退帧数制老行为."""
+    cfg = dict(_TIME_CFG)
+    cfg.update({"lost_gone_sec": 0, "force_lock_sec": 0, "lost_frame_thresh": 2})
+    _setup(sc, cfg)
+    _frame(sc, 0, 0.0, [_box("正常产品", 0.5, 0.5)])
+    _frame(sc, 0, 0.1, [])                                     # 丢 1 (真实时长再长也不算)
+    _frame(sc, 0, 9.0, [_box("正常产品", 0.7, 0.5)])          # 跟踪仍在 → 位移达标计数
+    assert sc.get_state()["total_products"] == 1
 
 
 def test_get_state_exposes_absent_enabled(sc):
