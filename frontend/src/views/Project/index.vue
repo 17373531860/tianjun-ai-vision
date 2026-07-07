@@ -1542,6 +1542,14 @@ const initProjectDefaults = (project) => {
   // 老 per_item 项目: 若专属字段未配, 后端会自动从项目级老字段回落, 这里前端只兜底 0
   if (piCfg.cycle_max_duration_sec === undefined) piCfg.cycle_max_duration_sec = 0;
   if (piCfg.idle_timeout_sec === undefined) piCfg.idle_timeout_sec = 0;
+  // v3.32+ 换板兜底结算 (工件整体消失确认, 防上一板覆盖泄漏到新板). 默认 15 帧.
+  if (piCfg.workpiece_absent_settle_frames === undefined) piCfg.workpiece_absent_settle_frames = 15;
+  // 重复打同一颗螺丝防护 (后端已实现, 补齐前端 round-trip 默认值, 防保存时丢失)
+  if (piCfg.duplicate_screw_alarm === undefined) piCfg.duplicate_screw_alarm = false;
+  if (piCfg.duplicate_sustain_frames === undefined) piCfg.duplicate_sustain_frames = 2;
+  if (piCfg.duplicate_release_frames === undefined) piCfg.duplicate_release_frames = 8;
+  if (piCfg.duplicate_alarm_interval_sec === undefined) piCfg.duplicate_alarm_interval_sec = 2.0;
+  if (piCfg.duplicate_warning_display_sec === undefined) piCfg.duplicate_warning_display_sec = 3.0;
   // v3.27+ 离场判定 / 漏打补做 / 框色高亮 (全部默认关 = 老项目零差异)
   if (piCfg.judge_on_workpiece_leave === undefined) piCfg.judge_on_workpiece_leave = false;
   if (piCfg.leave_confirm_frames === undefined) piCfg.leave_confirm_frames = 25;
@@ -2076,6 +2084,14 @@ const handleSaveProject = async () => {
             // v3.9+ per_item 专属超时 (与其他模式隔离)
             cycle_max_duration_sec: Math.max(0, Math.floor(Number(src.cycle_max_duration_sec) || 0)),
             idle_timeout_sec: Math.max(0, Math.floor(Number(src.idle_timeout_sec) || 0)),
+            // v3.32+ 换板兜底结算 (工件整体消失确认, 防上一板覆盖泄漏到新板)
+            workpiece_absent_settle_frames: Math.max(0, Math.floor(Number(src.workpiece_absent_settle_frames) || 0)),
+            // 重复打同一颗螺丝防护 (后端权威字段, 保存时保留, 防被 normalize 丢弃)
+            duplicate_screw_alarm: src.duplicate_screw_alarm === true,
+            duplicate_sustain_frames: Math.max(1, Math.floor(Number(src.duplicate_sustain_frames) || 2)),
+            duplicate_release_frames: Math.max(1, Math.floor(Number(src.duplicate_release_frames) || 8)),
+            duplicate_alarm_interval_sec: Math.max(0, Number(src.duplicate_alarm_interval_sec) || 0),
+            duplicate_warning_display_sec: Math.max(0, Number(src.duplicate_warning_display_sec) || 0),
             // v3.27+ 离场判定 / 漏打补做 / 框色高亮 (默认全关, 老项目零差异)
             judge_on_workpiece_leave: _judgeLeave,
             leave_confirm_frames: Math.max(1, Math.floor(Number(src.leave_confirm_frames) || 25)),

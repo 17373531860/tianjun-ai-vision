@@ -422,6 +422,7 @@ class _PerItemSession:
         # ── v3.x 工件离场快照判定 + 待补/待确认态 (打螺丝漏打场景) ──
         'awaiting_remediation',         # True = 离场判 NG 后挂起, 等补打/人工确认, 周期不结案
         'leave_consec_frames',          # 工件标签连续消失帧数 (离场确认计数)
+        'workpiece_absent_frames',      # 工件全标签连续消失帧数 (换板兜底结算计数)
         'await_since',                  # 进入待补态的时刻 (待补超时用)
         'leave_finish_seen',            # 本周期内是否出现过拿取结算动作 (双条件离场 latch)
         'last_remediation_alarm_at',    # 上次触发待补报警的时刻 (持续报警节流用)
@@ -445,6 +446,7 @@ class _PerItemSession:
         self.lock_lookahead_deadline: Optional[float] = None
         self.awaiting_remediation = False
         self.leave_consec_frames = 0
+        self.workpiece_absent_frames = 0
         self.await_since: Optional[float] = None
         self.leave_finish_seen = False
         self.last_remediation_alarm_at: Optional[float] = None
@@ -465,6 +467,7 @@ class _PerItemSession:
         self.lock_lookahead_deadline = None
         self.awaiting_remediation = False
         self.leave_consec_frames = 0
+        self.workpiece_absent_frames = 0
         self.await_since = None
         self.leave_finish_seen = False
         self.last_remediation_alarm_at = None
@@ -634,6 +637,15 @@ class PerItemMixin:
         # 重复打提示横幅在前端的存在时间 (秒). 0 = 不自动撤 (持续到周期结束/下次重复打刷新).
         duplicate_warning_display_sec = float(per_item_cfg.get('duplicate_warning_display_sec', 3.0) or 0.0)
 
+        # ── 换板兜底结算 (工件整体消失确认, 默认关 = 老项目零差异) ──
+        # 修 bug: finish_label 单一结算时, 若换板动作没被检到"拿取结算", 上一板周期永不结算,
+        #   其逐颗 covered 会经 update_item_positions 按位置泄漏到新板 (新板未打却变绿, 计数为 0).
+        # workpiece_absent_settle_frames > 0 时: 周期进行中, 所有 item 标签连续消失该帧数
+        #   → 视为工件被拿走/换板 → 自动按真实覆盖状态兜底结算 (OK/NG) 并 reset, 新板从零重锁.
+        #   只在"全部件都不见"才累计, 手拧单颗不会让整板全消失, 误触发风险极低.
+        #   离场判定模式 (judge_on_workpiece_leave) 自带离场结算, 不走此兜底.
+        workpiece_absent_settle_frames = int(per_item_cfg.get('workpiece_absent_settle_frames', 0) or 0)
+
         self._per_item_config = {
             'stability_window_frames': max(1, stability_window),
             'stability_iou_threshold': stability_iou,
@@ -672,6 +684,7 @@ class PerItemMixin:
             'duplicate_release_frames': max(1, duplicate_release_frames),
             'duplicate_alarm_interval_sec': max(0.0, duplicate_alarm_interval_sec),
             'duplicate_warning_display_sec': max(0.0, duplicate_warning_display_sec),
+            'workpiece_absent_settle_frames': max(0, workpiece_absent_settle_frames),
         }
 
         # ── 步骤级解析 ──
@@ -839,6 +852,27 @@ class PerItemMixin:
         if cfg.get('judge_on_workpiece_leave', False):
             self._per_item_leave_mode_tick(boxes_by_label, current_time)
             return
+
+        # ──── 3.95 换板兜底结算 (工件整体消失确认) ────
+        # 修覆盖泄漏 bug: finish_label 没被检到时上一板永不结算, 覆盖态经位置匹配泄漏到新板.
+        # 全部 item 标签连续消失 workpiece_absent_settle_frames 帧 → 工件已取走/换板 →
+        # 按真实覆盖兜底结算 (OK/NG) + reset, 新板下一帧重新锁定从零开始.
+        # 手拧单颗不会让整板全消失, 只在真正取走整板时才累计到阈值.
+        absent_settle = cfg.get('workpiece_absent_settle_frames', 0)
+        if not disable_auto_settle and absent_settle > 0:
+            if self._per_item_any_item_present(boxes_by_label):
+                sess.workpiece_absent_frames = 0
+            else:
+                sess.workpiece_absent_frames += 1
+                if sess.workpiece_absent_frames >= absent_settle:
+                    print(
+                        f"[per_item] 工件整体消失 {sess.workpiece_absent_frames} 帧 "
+                        f"(≥{absent_settle}), 判定已取走/换板, 兜底结算"
+                    )
+                    if debug_center.is_on("backend.per_item"):
+                        debug_center.dbg("backend.per_item", "结算触发: 换板兜底", f"channel={self.channel_id} 全部工件标签连续消失{sess.workpiece_absent_frames}帧, 按真实覆盖结算避免泄漏到新板")
+                    self._per_item_settle_cycle(current_time)
+                    return
 
         # ──── 4. 完成即结算 (OK 路径, 无需收尾标签) ────
         # 所有 per_item 步骤都 completed → 保持 settle_after_all_done_sec 秒 → 立即结算 OK
@@ -1739,6 +1773,8 @@ class PerItemMixin:
                 'duplicate_release_frames': cfg.get('duplicate_release_frames', 8),
                 'duplicate_alarm_interval_sec': cfg.get('duplicate_alarm_interval_sec', 2.0),
                 'duplicate_warning_display_sec': cfg.get('duplicate_warning_display_sec', 3.0),
+                # 换板兜底结算 (工件整体消失确认)
+                'workpiece_absent_settle_frames': cfg.get('workpiece_absent_settle_frames', 0),
             },
             'steps': steps_state,
             'last_ng_detail': getattr(self, '_per_item_last_ng_detail', None),
