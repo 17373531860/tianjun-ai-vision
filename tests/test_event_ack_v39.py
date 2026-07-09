@@ -154,3 +154,51 @@ class TestAckLifecycleHooks:
         assert vsm._pending_ack is False
         assert vsm._pending_ack_event_name is None
         assert vsm._pending_ack_timeout_sec == 0
+
+
+class TestAckKeepCycle:
+    """v3.34 确认后保留周期 (ack_keep_cycle, 断点补做)."""
+
+    def _enable_keep(self, vsm, event_id=2):
+        for e in vsm.project_config['events_config']:
+            if e['id'] == event_id:
+                e['ack_keep_cycle'] = True
+
+    def test_default_off_zero_diff(self, vsm):
+        """不配 ack_keep_cycle → 判定为 False (老语义零差异)."""
+        vsm._trigger_event(2, 'NG')
+        assert vsm._pending_ack_keeps_cycle() is False
+
+    def test_keep_cycle_flag_detected(self, vsm):
+        """事件配了 ack_keep_cycle=True → 挂起时能识别到."""
+        self._enable_keep(vsm)
+        vsm._trigger_event(2, '违序定格')
+        assert vsm._pending_ack is True
+        assert vsm._pending_ack_keeps_cycle() is True
+
+    def test_release_keep_cycle_preserves_runtime(self, vsm):
+        """保留周期释放: 阻塞态清掉, 但在制周期与步骤运行时全保留."""
+        self._enable_keep(vsm)
+        vsm._trigger_event(2, '违序定格')
+        vsm.current_cycle_steps = ['A', 'B']
+        now = time.time()
+        vsm.step_last_seen = {'B': now}
+        vsm.step_consecutive_frames = {'B': 5}
+        vsm.step_counts = {'A': 1, 'B': 1}
+        vsm._ack_release_keep_cycle()
+        assert vsm._pending_ack is False
+        assert vsm._pending_ack_event_id is None
+        assert vsm.current_cycle_steps == ['A', 'B'], '在制周期不应被清'
+        assert vsm.step_consecutive_frames == {'B': 5}, '步骤运行时不应被清'
+        assert vsm.step_counts == {'A': 1, 'B': 1}
+
+    def test_timeout_auto_ack_keeps_cycle(self, vsm):
+        """超时自动确认遵循同一语义: 配了保留周期 → 超时释放也不清周期."""
+        self._enable_keep(vsm, event_id=99)
+        vsm.is_detecting = True
+        vsm._trigger_event(99, '自定义定格')
+        vsm.current_cycle_steps = ['A']
+        vsm._pending_ack_started_at = time.time() - 5.0   # timeout=3, 假装已等 5s
+        vsm._update_step_stats([], np.zeros((100, 100, 3), dtype=np.uint8))
+        assert vsm._pending_ack is False, '超时未自动确认'
+        assert vsm.current_cycle_steps == ['A'], '保留周期语义下超时也不应清周期'

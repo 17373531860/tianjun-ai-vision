@@ -22,6 +22,8 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from backend.core import debug_center
+
 
 def _point_in_polygon(px: float, py: float, polygon) -> bool:
     """射线法: 归一化坐标点是否在多边形内（含边界近似）。polygon 已在解析期校验。"""
@@ -73,12 +75,14 @@ class SplitRule:
     __slots__ = ('rule_id', 'source_label', 'mode', 'anchor_label', 'anchor_ref',
                  'anchor_hold_seconds', 'unmatched', 'unmatched_label', 'regions',
                  'round_count', 'round_trigger_label', 'round_prefixes',
-                 'round_trigger_gap', 'round_regions')
+                 'round_trigger_gap', 'round_regions', 'round_trigger_min',
+                 'round_trigger_conf')
 
     def __init__(self, rule_id, source_label, mode, anchor_label, anchor_ref,
                  anchor_hold_seconds, unmatched, unmatched_label, regions,
                  round_count=0, round_trigger_label='', round_prefixes=None,
-                 round_trigger_gap=3.0, round_regions=None):
+                 round_trigger_gap=3.0, round_regions=None,
+                 round_trigger_min=0.0, round_trigger_conf=0.0):
         self.rule_id = rule_id
         self.source_label = source_label
         self.mode = mode                        # 'fixed' | 'anchor'
@@ -99,6 +103,14 @@ class SplitRule:
         # 每轮独立区域（翻面后位置不重叠时用）: {轮次序号1起: [(name, polygon), ...]}
         # 缺某轮 → 该轮沿用共享 regions。区域名仍与共享区域同一命名空间（前缀负责区分轮次）。
         self.round_regions = round_regions or {}
+        # 切换确认时长(秒): 切换标签需持续在场这么久才算一次"重新出现"。
+        # 0 = 见帧即切（老行为）。真实模型会有单帧误检闪现（实测 2 帧的假"盖罩"
+        # 把轮次多推了一拍），生产环境建议 0.5s 左右。
+        self.round_trigger_min = round_trigger_min
+        # 切换标签置信度下限: 低于它的检测视为"不在场"。真实模型在非切换阶段
+        # 会有零星低置信度误检 —— 它们不停刷新"最近在场时刻", 让真正的切换动作
+        # 永远凑不满"离场 gap 秒", 轮次卡死不切(真实模型 UAT 实测)。0 = 不过滤。
+        self.round_trigger_conf = round_trigger_conf
 
     @property
     def rounds_enabled(self) -> bool:
@@ -159,8 +171,8 @@ def parse_label_splits(pipeline_config: dict) -> list:
         if not regions:
             print(f"[LabelSplit] 规则#{idx} source_label={source_label} 无有效区域, 跳过")
             continue
-        round_count, round_trigger, round_prefixes, round_gap, round_regions = \
-            _parse_rounds(raw, idx)
+        (round_count, round_trigger, round_prefixes, round_gap,
+         round_regions, round_trigger_min, round_trigger_conf) = _parse_rounds(raw, idx)
         seen_sources.add(source_label)
         rules.append(SplitRule(
             rule_id=str(raw.get('id') or f'ls_{idx}'),
@@ -172,7 +184,8 @@ def parse_label_splits(pipeline_config: dict) -> list:
             regions=regions,
             round_count=round_count, round_trigger_label=round_trigger,
             round_prefixes=round_prefixes, round_trigger_gap=round_gap,
-            round_regions=round_regions,
+            round_regions=round_regions, round_trigger_min=round_trigger_min,
+            round_trigger_conf=round_trigger_conf,
         ))
     return rules
 
@@ -182,12 +195,17 @@ def _parse_rounds(raw: dict, idx: int):
 
     结构: {"enabled": true, "trigger_label": "盖罩", "count": 2,
            "prefixes": ["前罩", "后罩"], "trigger_gap_seconds": 3.0,
+           "trigger_min_seconds": 0.5, "trigger_conf": 0.7,
            "region_overrides": {"2": [{name, polygon, color}, ...]}}
     要求: trigger_label 非空, count>=2, prefixes 数量==count 且非空不重复。
     region_overrides 可选（翻面后位置不重叠时给某轮换一批区域, 缺省轮沿用共享区域）;
     某轮 override 全部非法 → 该轮回退共享区域（不整体禁用轮次）。
+    trigger_min_seconds 可选（默认 0=见帧即切, 零差异）: 切换标签需持续在场
+    这么久才算一次有效切换 — 真实模型的单帧误检闪现会把轮次多推一拍, 用它过滤。
+    trigger_conf 可选（默认 0=不过滤, 零差异）: 切换标签的置信度下限 — 非切换
+    阶段的零星低置信度误检会不停刷新在场时刻, 让轮次永远等不到"离场再出现"。
     """
-    disabled = (0, '', [], 3.0, {})
+    disabled = (0, '', [], 3.0, {}, 0.0, 0.0)
     rounds = raw.get('rounds')
     if not isinstance(rounds, dict) or not rounds.get('enabled'):
         return disabled
@@ -206,6 +224,17 @@ def _parse_rounds(raw: dict, idx: int):
     except (TypeError, ValueError):
         gap = 3.0
     gap = max(0.5, min(60.0, gap))
+    try:
+        trig_min = float(rounds.get('trigger_min_seconds', 0.0))
+    except (TypeError, ValueError):
+        trig_min = 0.0
+    # 上限压在 gap 以下: 确认时长若 ≥ 消失间隔, 同一次在场可能先被判"离场"再确认, 逻辑矛盾
+    trig_min = max(0.0, min(trig_min, gap - 0.1, 10.0))
+    try:
+        trig_conf = float(rounds.get('trigger_conf', 0.0))
+    except (TypeError, ValueError):
+        trig_conf = 0.0
+    trig_conf = max(0.0, min(1.0, trig_conf))
     overrides = {}
     raw_overrides = rounds.get('region_overrides')
     if isinstance(raw_overrides, dict):
@@ -233,7 +262,7 @@ def _parse_rounds(raw: dict, idx: int):
                 overrides[rnd] = parsed
             else:
                 print(f"[LabelSplit] 规则#{idx} 第{rnd}轮独立区域全部非法, 该轮回退共享区域")
-    return count, trigger, prefixes, gap, overrides
+    return count, trigger, prefixes, gap, overrides, trig_min, trig_conf
 
 
 class LabelSplitEngine:
@@ -246,10 +275,17 @@ class LabelSplitEngine:
         self._anchor_cache = {}
         # 虚拟步骤显示名（改写后重挂 display_name, 与 steps_config.displayLabel 对齐）
         self._display_names = display_names or {}
-        # 轮次状态: {source_label: {'idx': 0起步, 'last_seen': 切换标签最近在场时刻}}
+        # 轮次状态: {source_label: {'idx': 0起步, 'last_seen': 切换标签最近在场时刻,
+        #   'streak_start': 本次连续在场的起点, 'streak_counted': 本次在场是否已计切换}}
         # idx=0 表示尚未见过切换标签(改写时按第1轮兜底); 到达总轮数后再触发回绕到第1轮
+        # saw_cycle: 本轮次周期内是否见过"周期里有步骤"(cycle_len>0)。空闲归零
+        # 必须以它为前提 — 真实产线上切换标签是瞬时动作(盖上罩子就消失), 第一颗
+        # 螺丝进周期之前有几秒"标签已离场+周期还空"的窗口, 不加此守门会被误判
+        # 为工件下线, 轮次刚推到 1 就被打回 0(真实模型 UAT 实测踩过)。
         self._round_state = {
-            r.source_label: {'idx': 0, 'last_seen': 0.0}
+            r.source_label: {'idx': 0, 'last_seen': 0.0,
+                             'streak_start': 0.0, 'streak_counted': False,
+                             'saw_cycle': False}
             for r in rules if r.rounds_enabled
         }
         self._round_trigger_labels = {
@@ -315,23 +351,60 @@ class LabelSplitEngine:
     def _update_rounds(self, detections, now: float, cycle_len):
         """维护每条多轮规则的当前轮次。
 
-        - 切换标签"重新出现"（消失超过 trigger_gap 后再入画）→ 轮次 +1, 满轮回绕
-        - 周期已结算且切换标签离场超过 gap（工件已下线空闲）→ 归零, 下一工件从第1轮起
+        - 切换标签"重新出现"（消失超过 trigger_gap 后再入画）且持续在场满
+          trigger_min 秒（默认 0 = 见帧即切）→ 轮次 +1, 满轮回绕。
+          确认时长用于过滤真实模型的单帧误检闪现（闪现会把轮次多推一拍）。
+        - 周期已结算且切换标签离场超过 gap（工件已下线空闲）→ 归零, 下一工件从第1轮起。
+          归零以"本轮次内周期确实装载过步骤"(saw_cycle)为前提: 工件刚开工时切换
+          标签先离场、首个步骤还没进周期, 这段空窗不是"下线", 不能归零。
         """
-        present = {det.get('label') for det in detections} if detections else set()
+        present_conf = {}
+        for det in (detections or []):
+            lbl = det.get('label')
+            c = det.get('confidence', 0) or 0
+            if lbl is not None and c > present_conf.get(lbl, 0.0):
+                present_conf[lbl] = c
         for src, state in self._round_state.items():
             rule = self.rules.get(src)
             if rule is None:
                 continue
-            in_frame = rule.round_trigger_label in present
+            if cycle_len > 0:
+                state['saw_cycle'] = True
+            conf = present_conf.get(rule.round_trigger_label)
+            in_frame = conf is not None and conf >= rule.round_trigger_conf
+            # 现场诊断(5s 节流, 调试开关守门): 切换标签每次"在场"都留痕 ——
+            # 排查轮次不切时, 第一个要看的就是有没有幽灵检测把"离场间隔"刷没了
+            if (conf is not None and debug_center.is_on("backend.settlement")
+                    and now - state.get('_dbg_ts', 0.0) >= 5.0):
+                state['_dbg_ts'] = now
+                debug_center.dbg(
+                    "backend.settlement", "轮次切换标签在场",
+                    f"[{src}] 切换标签[{rule.round_trigger_label}]在场 conf={conf:.2f}"
+                    f"{'(低于下限按不在场处理)' if not in_frame else ''} "
+                    f"当前轮次={state['idx']}")
             if in_frame:
                 gone_long = (now - state['last_seen']) > rule.round_trigger_gap
                 if state['last_seen'] == 0.0 or gone_long:
-                    state['idx'] = (state['idx'] % rule.round_count) + 1
+                    state['streak_start'] = now
+                    state['streak_counted'] = False
                 state['last_seen'] = now
-            elif (cycle_len == 0 and state['idx'] > 0
+                if (not state['streak_counted']
+                        and (now - state['streak_start']) >= rule.round_trigger_min):
+                    prev_idx = state['idx']
+                    state['idx'] = (prev_idx % rule.round_count) + 1
+                    state['streak_counted'] = True
+                    state['saw_cycle'] = False
+                    print(f"[LabelSplit] [{src}] 轮次切换 {prev_idx} → {state['idx']} "
+                          f"({rule.round_prefixes[state['idx'] - 1]}), "
+                          f"切换标签[{rule.round_trigger_label}]确认在场 "
+                          f"{now - state['streak_start']:.2f}s")
+            elif (cycle_len == 0 and state['idx'] > 0 and state['saw_cycle']
                   and (now - state['last_seen']) > rule.round_trigger_gap):
+                print(f"[LabelSplit] [{src}] 工件下线(周期空+切换标签离场"
+                      f"{now - state['last_seen']:.1f}s), 轮次 {state['idx']} → 0")
                 state['idx'] = 0
+                state['streak_counted'] = False
+                state['saw_cycle'] = False
 
     def _round_prefix(self, rule: SplitRule) -> str:
         """当前生效的轮次前缀（未见切换标签时按第1轮兜底）。"""

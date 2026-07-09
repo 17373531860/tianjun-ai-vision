@@ -9,6 +9,7 @@ import time
 import traceback
 
 from backend.api.source_sdk_loader import debug_log
+from backend.core import debug_center
 
 
 class InferenceLoopMixin:
@@ -120,7 +121,24 @@ class InferenceLoopMixin:
         try:
             # cycle_len: 周期已结算且切换标签离场时轮次归零(下一工件从第1轮起)
             cycle_len = len(getattr(self, 'current_cycle_steps', None) or [])
-            return engine.apply(detections, now, cycle_len=cycle_len)
+            out = engine.apply(detections, now, cycle_len=cycle_len)
+            # 逐帧改写轨迹(仅结算调试开关打开时): 排查"虚拟步骤时断时续"时,
+            # 这里是拆分层出口的唯一真相 —— 上游看模型, 下游看状态机
+            if debug_center.is_on("backend.settlement"):
+                # 只在"标签集合发生变化"的帧打点: 既能还原步骤出现/消失的精确
+                # 时间线(排查"虚拟步骤时断时续"的唯一真相), 又不会以推理帧率
+                # 刷爆调试环形缓冲
+                sig = tuple(sorted(d.get('label', '') for d in (out or [])))
+                if sig != getattr(self, '_dbg_split_last_sig', None):
+                    self._dbg_split_last_sig = sig
+                    raw = [f"{d.get('label')}:{d.get('confidence', 0):.2f}"
+                           for d in (detections or [])]
+                    pairs = [f"{d.get('label')}:{d.get('confidence', 0):.2f}"
+                             for d in (out or [])]
+                    debug_center.dbg(
+                        "backend.settlement", "SplitOut",
+                        f"ch{self.channel_id} in[{' '.join(raw)}] out[{' '.join(pairs)}]")
+            return out
         except Exception as e:
             # 拆分层故障不允许拖垮检测主链路: 打日志后原样放行
             debug_log(f"!!! label_split 改写失败: {e}", "INFERENCE")

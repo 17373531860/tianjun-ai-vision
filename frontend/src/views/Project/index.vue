@@ -985,12 +985,14 @@ const _sanitizeRegionEvents = (re) => {
         out.gone_frames = Math.max(1, Math.floor(Number(r.gone_frames) || 8));
         out.match_iou = Math.max(0.05, Math.min(0.95, Number(r.match_iou) || 0.3));
       }
-      // 消失确认秒数 / 位移门槛 (overlap/enter 可选): >0 才落库
+      // 消失确认秒数 / 位移门槛 / 确认时长秒基 (overlap/enter 可选): >0 才落库
       if (type !== 'region_exit') {
         const gs = Number(r.gone_seconds);
         if (Number.isFinite(gs) && gs > 0) out.gone_seconds = Math.min(30, gs);
         const mm = Number(r.min_move);
         if (Number.isFinite(mm) && mm > 0) out.min_move = Math.min(1, mm);
+        const ms = Number(r.min_seconds);
+        if (Number.isFinite(ms) && ms > 0) out.min_seconds = Math.min(30, ms);
       }
       // 区域锚点跟随 (可选): 锚点类别 + 标定框齐全才落库, 半截配置直接丢弃
       const a = r.anchor || {};
@@ -1116,6 +1118,7 @@ const ensureRegionEventsDefaults = (project) => {
   re.rules.forEach(r => {
     if (r && typeof r === 'object' && r.type !== 'region_exit') {
       if (r.min_move === undefined) r.min_move = 0;
+      if (r.min_seconds === undefined) r.min_seconds = 0;
       if (r.gone_seconds === undefined) r.gone_seconds = null;
       if (r.type === 'overlap' && r.min_overlap_ratio === undefined) r.min_overlap_ratio = 0;
     }
@@ -1205,6 +1208,8 @@ const initProjectDefaults = (project) => {
     if (typeof ev.ack_timeout_sec !== 'number') ev.ack_timeout_sec = 0;
     // v3.9.x: 周期性强制动作触发该事件时, 确认是否同步清账规则计数 (默认 false)
     if (typeof ev.ack_resets_periodic !== 'boolean') ev.ack_resets_periodic = false;
+    // v3.34: 确认后保留周期 (断点补做, 默认 false = 老"确认重做"语义)
+    if (typeof ev.ack_keep_cycle !== 'boolean') ev.ack_keep_cycle = false;
   });
   if (!project.counters_config) {
     project.counters_config = [
@@ -2015,6 +2020,16 @@ const handleSaveProject = async () => {
               trigger_gap_seconds: (() => {
                 const v = Number(rd.trigger_gap_seconds);
                 return Number.isFinite(v) && v >= 0.5 ? Math.min(60, v) : 3.0;
+              })(),
+              // 切换确认时长(过滤单帧误检): 缺省 0 = 见帧即切(老行为)
+              trigger_min_seconds: (() => {
+                const v = Number(rd.trigger_min_seconds);
+                return Number.isFinite(v) && v > 0 ? Math.min(10, v) : 0;
+              })(),
+              // 切换标签专用置信度下限(挡低置信预备动作误触发): 缺省 0 = 不额外过滤
+              trigger_conf: (() => {
+                const v = Number(rd.trigger_conf);
+                return Number.isFinite(v) && v > 0 ? Math.min(1, v) : 0;
               })(),
               // 每轮独立区域(可选): 只收编轮次在界内、画完整的; 空轮不落库(该轮回退共享区域)
               region_overrides: (() => {

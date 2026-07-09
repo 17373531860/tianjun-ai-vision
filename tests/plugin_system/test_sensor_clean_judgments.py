@@ -230,6 +230,7 @@ def test_swab_hit_limit_alarms_via_hardware(sc):
     """棉签刚擦满 K (used==k): 立即硬件报警提示换棉签, 这件仍按合格计 (不进不良)."""
     host = _setup(sc, {
         "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
+        "count_require_label": "",  # 本用例只测联动, 关掉 v1.4.2 默认许可
         "max_uses_per_swab": 1, "move_confirm_frames": 1,
         "normal_count_event_id": 1, "swab_over_limit_event_id": 7,
         "fake_wipe_event_id": 0, "move_threshold": 0.0116, "force_lock_frames": 0,
@@ -247,6 +248,7 @@ def test_swab_over_limit_each_ng_fires_event(sc):
     """超限后继续擦, 每件都触发 NG 事件 (红灯+蜂鸣+不良计数)."""
     host = _setup(sc, {
         "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
+        "count_require_label": "",  # 本用例只测联动, 关掉 v1.4.2 默认许可
         "max_uses_per_swab": 1, "move_confirm_frames": 1,
         "normal_count_event_id": 1, "swab_over_limit_event_id": 2,
         "fake_wipe_event_id": 0, "move_threshold": 0.0116, "force_lock_frames": 0,
@@ -267,6 +269,7 @@ def test_swab_over_limit_backward_compat_alarm(sc):
     """老配置直配 alarm_event 时, 擦满/超限仍触发硬件报警 (向后兼容, 优先 legacy)."""
     host = _setup(sc, {
         "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
+        "count_require_label": "",  # 本用例只测联动, 关掉 v1.4.2 默认许可
         "max_uses_per_swab": 1, "move_confirm_frames": 1,
         "swab_over_limit_event_id": 2, "fake_wipe_event_id": 0,
         "alarm_event": "event2", "force_lock_frames": 0,
@@ -384,6 +387,7 @@ def test_normal_count_fires_configured_ok_event(sc):
     """正常计件默认连合格 OK (event_id=1)."""
     host = _setup(sc, {
         "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
+        "count_require_label": "",  # 本用例只测联动, 关掉 v1.4.2 默认许可
         "normal_count_event_id": 1, "move_confirm_frames": 1,
         "swab_over_limit_event_id": 0, "fake_wipe_event_id": 0,
         "max_uses_per_swab": 99, "move_threshold": 0.0116,
@@ -398,6 +402,7 @@ def test_normal_count_can_fire_ng_event(sc):
     """正常计件可配置连不良 NG."""
     host = _setup(sc, {
         "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
+        "count_require_label": "",  # 本用例只测联动, 关掉 v1.4.2 默认许可
         "normal_count_event_id": 2, "move_confirm_frames": 1,
         "swab_over_limit_event_id": 0, "fake_wipe_event_id": 0,
         "max_uses_per_swab": 99, "move_threshold": 0.0116,
@@ -411,6 +416,7 @@ def test_normal_count_disabled_when_event_id_zero(sc):
     """normal_count_event_id=0 → 计件不触发主程序事件."""
     host = _setup(sc, {
         "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
+        "count_require_label": "",  # 本用例只测联动, 关掉 v1.4.2 默认许可
         "normal_count_event_id": 0, "move_confirm_frames": 1,
         "swab_over_limit_event_id": 0, "fake_wipe_event_id": 0,
         "max_uses_per_swab": 99, "move_threshold": 0.0116,
@@ -556,13 +562,16 @@ def test_require_label_empty_keeps_v120_behavior(sc):
 
 
 def test_require_label_config_roundtrip(sc):
-    """许可标签经配置保存/回读闭环 (前端 Tab 字段依赖)."""
+    """许可标签经配置保存/回读闭环 (前端 Tab 字段依赖)。
+    v1.4.2 出厂默认开启(擦拭产品), 可改可清空(回 v1.2.0 行为)且往返一致."""
     _setup(sc, {})
-    assert sc.get_config()["count_require_label"] == ""
+    assert sc.get_config()["count_require_label"] == "擦拭产品"
     sc.save_config({"count_require_label": "脏污产品"})
     assert sc.get_config()["count_require_label"] == "脏污产品"
     sc.reload_config()
     assert sc.get_config()["count_require_label"] == "脏污产品"
+    sc.save_config({"count_require_label": ""})
+    assert sc.get_config()["count_require_label"] == ""
 
 
 # ============================================================

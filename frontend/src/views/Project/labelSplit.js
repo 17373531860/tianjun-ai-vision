@@ -24,6 +24,8 @@ export const createDefaultSplitRule = () => ({
     count: 2,
     prefixes: ['前罩', '后罩'],   // 每轮前缀, 数量 = count
     trigger_gap_seconds: 3.0,    // 切换标签消失多久后再出现才算"新一轮"
+    trigger_min_seconds: 0.5,    // 切换标签需持续在场多久才确认切换(过滤单帧误检; 0=见帧即切)
+    trigger_conf: 0,             // 切换标签专用置信度下限(挡低置信预备动作; 0=不额外过滤)
     region_overrides: {},        // 每轮独立区域(翻面后位置不重叠时用): {"2": [{name,polygon,color}]}
   },                             // 缺省轮沿用共享 regions
 });
@@ -89,9 +91,14 @@ export function validateSplitRules(project) {
     }
     const regions = (rule.regions || []).filter(r => r && String(r.name || '').trim() && _validPolygon(r.polygon));
     if (regions.length === 0) return `规则「${src}」没有任何画好的区域`;
-    for (const region of regions) {
-      const name = String(region.name).trim();
-      if (name === src) return `规则「${src}」的区域名不能与原始标签同名`;
+    // 区域名与原始标签同名 → 只在未开多轮次时才是真冲突（虚拟步骤名=区域名,
+    // 会和模型标签自我映射）; 开了多轮次后最终名带轮次前缀（如"前罩力矩"）,
+    // 区域名沿用原始标签反而是"力矩/标记只按轮次拆"场景的自然写法, 不拦
+    const roundsOn = !!(rule.rounds && rule.rounds.enabled);
+    if (!roundsOn) {
+      for (const region of regions) {
+        if (String(region.name).trim() === src) return `规则「${src}」的区域名不能与原始标签同名`;
+      }
     }
     // 多轮次配置校验
     const rounds = rule.rounds;

@@ -50,9 +50,11 @@ class StepStatsMixin:
         if last_map is None:
             last_map = {}
             self._dbg_step_reject_ts = last_map
-        if now - last_map.get(label, 0.0) < 2.0:
+        # 节流键带上原因前缀: 同一步骤的"时长门"与"离场清理"是两条独立线索, 互不遮蔽
+        key = f"{label}|{reason[:6]}"
+        if now - last_map.get(key, 0.0) < 2.0:
             return
-        last_map[label] = now
+        last_map[key] = now
         debug_center.dbg("backend.settlement", "步骤检出被拒",
                          f"channel={self.channel_id} 步骤[{label}] {reason} → 该步骤不计入周期")
     def _update_step_stats(self, detections: list, original_frame: np.ndarray):
@@ -70,10 +72,16 @@ class StepStatsMixin:
             started = getattr(self, '_pending_ack_started_at', 0) or 0
             if timeout > 0 and started > 0 and (time.time() - started) >= timeout:
                 ev_name = getattr(self, '_pending_ack_event_name', '?') or '?'
-                print(f"[ack] 阻塞超时自动确认: event={ev_name} 已阻塞 {time.time() - started:.1f}s "
-                      f">= {timeout}s, 自动解除并清运行时 (channel_id={self.channel_id})")
-                self._clear_step_runtime_state()
-                # _clear_step_runtime_state 已经把 _pending_ack 等字段重置, 下面正常往下走
+                # v3.34: 事件配了「确认后保留周期」→ 超时自动确认同样只解除定格
+                if self._pending_ack_keeps_cycle():
+                    print(f"[ack] 阻塞超时自动确认(保留周期): event={ev_name} 已阻塞 "
+                          f"{time.time() - started:.1f}s >= {timeout}s (channel_id={self.channel_id})")
+                    self._ack_release_keep_cycle()
+                else:
+                    print(f"[ack] 阻塞超时自动确认: event={ev_name} 已阻塞 {time.time() - started:.1f}s "
+                          f">= {timeout}s, 自动解除并清运行时 (channel_id={self.channel_id})")
+                    self._clear_step_runtime_state()
+                # 阻塞态字段已重置, 下面正常往下走
             else:
                 # 仍处于阻塞态: 直接 return, 不推进状态机
                 return
@@ -128,11 +136,23 @@ class StepStatsMixin:
         if not hasattr(self, '_step_raw_start'):
             self._step_raw_start = {}
         
+        if not hasattr(self, '_step_raw_last_seen'):
+            self._step_raw_last_seen = {}
+
+        if not hasattr(self, '_step_raw_start_frame_pos'):
+            self._step_raw_start_frame_pos = {}
+
         for label in frame_detected_labels:
             prev_count = self.step_consecutive_frames.get(label, 0)
             if prev_count == 0:
                 self._step_raw_start[label] = current_time
+                # 视频源耗时走帧号差: 帧位起点必须与 wall 起点同刻记录, 否则
+                # min_duration 时长门放行后才盖帧位起点章 → 耗时被扣掉整个
+                # 门槛时长, 结算时再对比 min_duration = 双重惩罚(实测 1.0s 的
+                # 真实步骤被量成 0.38s 直接判无效)。
+                self._step_raw_start_frame_pos[label] = self._video_frame_pos()
                 self.start_step_recording(label)
+            self._step_raw_last_seen[label] = current_time
             self.step_consecutive_frames[label] = prev_count + 1
             
             min_frames = self.step_min_frames.get(label, 1)
@@ -161,7 +181,29 @@ class StepStatsMixin:
                     was_tracking = self.step_consecutive_frames.get(label, 0) > 0
                     self.step_consecutive_frames[label] = 0
                     if was_tracking:
+                        self._dbg_step_rejected(
+                            label, f"未确认阶段闪断清零 (已累计"
+                                   f"{self.step_consecutive_frames.get(label, 0)}帧)")
                         self.stop_step_recording(label)
+                elif label not in self.step_last_seen:
+                    # v3.34: 已确认但从未进入周期逻辑就消失的"短暂滑过"
+                    # (step_last_seen 只在正式处理时写入; min_duration 时长门/
+                    # 严格顺序守门都会拦在写入之前)。不清的话确认态 + 原始起始
+                    # 时刻永久残留, 该标签下一次真实出现会带着陈旧起点直接越过
+                    # 时长门(真实模型 UAT 实测: 0.24s 的滑过误命中借尸还魂,
+                    # 被当成"已持续 135s"触发第一步重现结算)。
+                    # 清理必须等它离场超过本步骤的消失等待时间再做 —— 立即清会把
+                    # 时长门内的检测闪烁也一并清掉, 连续在场时长永远攒不满。
+                    _gone_for = current_time - self._step_raw_last_seen.get(label, current_time)
+                    _dd = (self.step_time_config.get(label, {}).get('disappear_delay') or 0)
+                    if _gone_for > _dd:
+                        self._dbg_step_rejected(
+                            label, f"时长门内离场清理 gone={_gone_for:.2f}s>{_dd}s")
+                        self.step_frame_confirmed[label] = False
+                        self.step_consecutive_frames[label] = 0
+                        self.stop_step_recording(label)
+                        self._step_raw_start.pop(label, None)
+                        self._step_raw_last_seen.pop(label, None)
                 # 重置静态步骤的触发状态（标签消失后可以再次触发）
                 if label in self.step_static_triggered:
                     self.step_static_triggered[label] = False
@@ -335,6 +377,10 @@ class StepStatsMixin:
             if _min_dur_cfg and _min_dur_cfg > 0:
                 _raw_st = self._step_raw_start.get(label)
                 if _raw_st and (current_time - _raw_st) < _min_dur_cfg:
+                    self._dbg_step_rejected(
+                        label, f"时长门内 {current_time - _raw_st:.2f}/{_min_dur_cfg}s"
+                               f" cons={self.step_consecutive_frames.get(label)}"
+                               f" confirmed={self.step_frame_confirmed.get(label)}")
                     continue
             self._process_single_step(label, current_time, enabled_labels, _is_seq_like,
                                       should_update_screenshot, original_frame,
@@ -349,6 +395,10 @@ class StepStatsMixin:
             if _min_dur_cfg2 and _min_dur_cfg2 > 0:
                 _raw_st2 = self._step_raw_start.get(label)
                 if _raw_st2 and (current_time - _raw_st2) < _min_dur_cfg2:
+                    self._dbg_step_rejected(
+                        label, f"时长门内 {current_time - _raw_st2:.2f}/{_min_dur_cfg2}s"
+                               f" cons={self.step_consecutive_frames.get(label)}"
+                               f" confirmed={self.step_frame_confirmed.get(label)}")
                     continue
             self._process_single_step(label, current_time, enabled_labels, _is_seq_like,
                                       should_update_screenshot, original_frame,

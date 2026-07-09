@@ -749,6 +749,7 @@ mixin 改动就是源码裸跑（IP 漏出去），但行为对得上。
 - `require_ack`（默认 false）：触发后冻结主推流 + 弹前端 overlay 等工人按确认
 - `ack_timeout_sec`（默认 0）：超时自动确认，0 不超时
 - `ack_resets_periodic`（默认 false）：确认后重置该规则的 N 轮计数器，防"未压墨提示框关不掉一直弹"
+- `ack_keep_cycle`（v3.34，默认 false）：确认后**保留在制周期与全部步骤运行时**，从断点继续补做（典型：违序警告定格 → 确认 → 接着打漏掉的那颗螺丝，整件照常判定）；不勾走老"确认重做"（`_clear_step_runtime_state` 丢弃在制周期）。超时自动确认同语义。收口：`source_event_trigger_mixin.py: _pending_ack_keeps_cycle / _ack_release_keep_cycle`，确认端点 `source_routes.py: _do_ack_pending`（返回 `kept_cycle: true`），超时分支 `source_step_stats_mixin.py`
 
 **架构**：
 - 内部状态 `_pending_ack`（dict，含 `event_id` / `event_name` / `triggered_at` / `timeout_sec` / `is_periodic` / `periodic_rule_id`）—— `source_state_init.py` 初始化
@@ -1014,8 +1015,11 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 - 代码位置：`backend/api/source_label_split.py` → `LabelSplitEngine.apply`；挂点 `source_inference_loop_mixin.py: _apply_label_splits`（帧循环出口）；配置解析 `source_project_config_apply.py: _apply_label_splits`。
 - 两种定位：`fixed` 区域钉死画面；`anchor` 区域随锚点框平移缩放（锚点丢失沿用最近位置）。
 - 多轮次：`rounds` 启用时虚拟步骤名 = 当轮前缀 + 区域名，轮次由「切换标签消失超 `trigger_gap_seconds` 后重新出现」推进，满轮回绕；**周期结算且切换标签离场后归零**。轮次卡住先查剧本/现场里切换标签的离场间隔够不够。`region_overrides` 可给某轮换独立区域，缺省轮沿用共享区域。
+- **多轮次真实模型三防护（v3.34，默认 0 = 零差异）**：① `trigger_min_seconds` 切换确认时长——切换标签需持续在场满该秒数才算一次切换，过滤单帧误检闪现（实测 2 帧假"盖罩"把轮次多推一拍）；② `trigger_conf` 切换标签专用置信度下限——低于它按"不在场"，否则非切换阶段的零星低置信度误检不停刷新在场时刻，真正切换永远凑不满离场 gap、轮次卡死；③ 归零加 `saw_cycle` 守门——只有本轮次内周期真装载过步骤才允许"周期空+切换标签离场"归零，否则工件刚开工、首颗螺丝还没进周期的空窗会被误判下线、轮次刚推到 1 就被打回 0（均为真实模型 UAT 实测）。排查轮次不切/多切：开 `backend.settlement` 调试开关看「轮次切换标签在场」与 `SplitOut`（拆分层出口逐帧改写轨迹，标签集合变化才打点）。
+- **多轮次时区域名允许与原始标签同名**（前端校验放行）：最终虚拟步骤名带轮次前缀（如"前罩力矩"），不会自我映射；未开多轮次仍拦。
 - 运行态透出：`/detection/results` 的 `label_split_rounds`（当前轮次）与 `placement_guide`（就位状态）。**Monitor 页每次加载会重新下发项目配置 → 引擎重建 → 轮次回到第 1 轮**，排查"轮次显示不对"先想这条。
-- 严格顺序违序即时事件：`pipeline_config.strict_order_violation_event_id`（null=关），收口在 `source_settlement_mixin.py: _fire_strict_order_violation`（同一标签+周期进度 5s 节流；照旧拦截不计入）。
+- 严格顺序违序即时事件：`pipeline_config.strict_order_violation_event_id`（null=关），收口在 `source_settlement_mixin.py: _fire_strict_order_violation`（同一标签+周期进度 5s 节流；照旧拦截不计入）。**v3.34 起严格+单次守门只对"提前出现"（该步骤本周期还没做过）报违序**；已完成步骤的余像重现（补拧/标记笔迹持续在画面/工件中途被调整）是现场常态，静默拦截不报警。
+- **步骤时长门与幽灵起点（v3.34 真实模型修复）**：`min_duration` 时长门放行前，"已确认但从未进入周期逻辑"的短暂滑过若不清理，确认态+原始起始时刻会永久残留，该标签下次真实出现带着陈旧起点直接越过时长门（实测 0.24s 滑过借尸还魂成"已持续 135s"触发第一步重现结算）——清理须等离场超过该步骤消失等待时间再做，立即清会把时长门内的检测闪烁一并清掉。视频源帧号差耗时的帧位起点与 wall 起点同刻记录（首次出现时），否则过完时长门才盖章会被双重扣掉门槛时长（实测 1.0s 真实步骤被量成 0.38s 判无效）。排查用 `backend.settlement` 开关看「步骤检出被拒」（节流键带原因前缀，时长门/离场清理两条线索互不遮蔽）。
 - 零差异保证：不配 `label_splits` / `rounds` / 违序事件 → 引擎为 None，行为与 v3.31 完全一致；回归见 `tests/test_label_split.py`（零差异组）+ `tests/features/label_split_matrix.feature`。
 - 配置结构与字段：`docs/dev/reference/config-dict.md`；设计取舍：`docs/rfc/同标签区域拆分_虚拟步骤_设计方案_RFC.md`（已归档）。
 
@@ -1026,6 +1030,7 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 - 代码位置：`backend/api/source_region_events.py`（`parse_region_events` 配置解析 + `RegionEventEngine` 纯逻辑引擎，episode 状态机可单测）；`source_region_events_mixin.py`（帧循环接线 + 结算触发）；配置进 `pipeline_config.region_events`（rules / gap_tolerance_frames / dedup_consecutive / class_conf / sequence_check / settlement_rules）。
 - **步骤面板"进行中"不看 detectingLabels**：区域事件的步骤名是动作规则名（测硬度），画面检测框是模型类别名（测硬度笔），永远对不上——前端 Monitor 用 `/detection/results` 透出的引擎 in-flight 快照（episode 命中累计中即点亮，确认前就亮，与顺序模式对齐）。前端也**不做**"重复/乱序=NG"推断（复检序列合法性由后端结算规则说了算）。
 - 误报压制四件套（都在规则字段里）：`min_iou` 重叠下限 / `min_overlap_ratio` 重叠深度（压静置工具贴边）/ `min_move` 位移门槛 / `require_label` 辅助约束（如必须同时与"手"相交）。
+- **确认时长秒基门槛 `min_seconds`（v3.34，overlap/enter 可选，0=老帧数语义）**：>0 时确认改按"episode 命中跨度 ≥ 该秒数"判定，`min_frames` 退化为 3 帧硬下限防杂散框——现场相机帧率（24/30fps）和推理帧率（随 GPU 负载 15~30fps）都会漂，帧数门槛在不同机器上松紧不一致，秒基与帧率解耦。
 - **内建两条防误判（常开非配置，2026-07 TP 实测教训）**：① 位移包络对检测框中心做 5 帧中位数平滑再进包络——手划过遮挡把框"切"小的单帧中心跳变（~0.06）不算位移；② 动作互斥打断——一个动作确认瞬间其他进行中 episode 立即收尾（已确认的闭合、半截命中作废），否则 `gone_seconds` 会把复检场景"测硬度→扫码→测硬度→扫码"两段扫码桥接成一次，序列少步误落兜底 NG。
 - 中途遮挡断裂 → 调大规则的 `gone_seconds`（消失确认秒数，0=用全局 gap_tolerance_frames）；区域可配 `anchor` 跟随锚点类别平移缩放（与 label_splits 的 anchor 同构）。
 - 频闪自动诊断：该模式与 custom_mix 共用 `_diag_flicker_sample` 采样体，翻转超阈值自动落 `backend/diag_flicker/*.json`（已 gitignore），排"检测框一闪一闪"先看转储。

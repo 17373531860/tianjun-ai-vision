@@ -69,7 +69,7 @@ sensor-clean/
 |---|---|---|
 | `count_channels` | `[0]` | 视角1 计数通道列表 |
 | `count_anchor_label` | `查看产品有无脏污` | 视角1 锚动作标签（detect6 cls0） |
-| `count_require_label` | `""` | v1.4.0 计数许可标签（detect9(1) 语义）：非空时该标签出现过即解锁计数（不必与锚框同帧，两类交替出现也能计）；计到一件/锚跟踪销毁重置许可，下一件需再见它；空=不启用、行为同 v1.2.0 |
+| `count_require_label` | `"擦拭产品"` | v1.4.0 计数许可标签（detect9(1) 语义）：非空时该标签出现过即解锁计数（不必与锚框同帧，两类交替出现也能计）；计到一件/锚跟踪销毁重置许可，下一件需再见它；空=不启用、行为同 v1.2.0。v1.4.2 起默认开启 |
 | `label_rois` | `{}` | v1.4.0 按标签 ROI（归一化多边形 `[[x,y],...]`，中心点在内才算数；空/少于3点=不限制）。key: `count_anchor` / `count_require` / `swap` / `fake_wipe`，配置 Tab 有画面快照绘制器 |
 | `swap_channel` | `1` | 视角2 换棉签通道 |
 | `swap_label` | `更换棉签` | 视角2 换棉签动作标签 |
@@ -81,7 +81,7 @@ sensor-clean/
 | `move_confirm_frames` | `3` | 连续 N 帧位移超阈值才确认移动（防抖动） |
 | `lost_frame_thresh` | `5` | 连续丢失 N 帧确认产品离开 |
 | `force_lock_frames` | `40` | 计数后强制锁定帧数（防漏检重建跟踪重复计数） |
-| `lost_gone_sec` | `0.15` | v1.4.0 时间制：锚缺席 ≥ N 秒确认离开（>0 时替代 `lost_frame_thresh`，抗实时丢帧） |
+| `lost_gone_sec` | `0.25` | v1.4.0 时间制：锚缺席 ≥ N 秒确认离开（>0 时替代 `lost_frame_thresh`，抗实时丢帧）。v1.4.2 定稿 0.25：18~21fps 处理速率下复刻 demo「缺席 4 帧存活 / 5 帧销毁」语义，双真值视频逐件对齐 |
 | `force_lock_sec` | `1.6` | v1.4.0 时间制：计数后强锁 N 秒（>0 时替代 `force_lock_frames`，抗实时丢帧） |
 | `min_confidence` | `0.7` | v1.4.1 插件内置信度地板（detect9(1) CONF_THRES）：低于此值的检出不进计数/许可/换棉签判定；0=跟随监控页滑条 |
 

@@ -1209,9 +1209,13 @@ class SettlementMixin:
                 _gate_throttle[_gate_key] = _now
                 print(f"[Gate/StrictOnce] '{label}' rejected: new appearance at wrong "
                       f"position (current={list(self.current_cycle_steps)})")
-            # v3.32: 严格+单次守门同样支持当场报违序 (见 _fire_strict_order_violation)
-            self._fire_strict_order_violation(
-                label, f'违反严格顺序: [{label}] 在错误位置出现')
+            # v3.32: 严格+单次守门支持当场报违序, 但只报"提前出现"(该步骤本周期
+            # 还没做过)。已完成步骤的余像重现(补拧一下/标记笔迹持续在画面/工件
+            # 横放中途被调整) 是现场常态 —— 静默拦截不入周期即可, 报违序是误伤
+            # (真实视频验证: 收尾标记与横放二段出现均属此类)。
+            if label not in self.current_cycle_steps:
+                self._fire_strict_order_violation(
+                    label, f'违反严格顺序: [{label}] 提前出现')
             return
 
         # ── accept_once 拦截 ──
@@ -1249,7 +1253,10 @@ class SettlementMixin:
                 if label not in self.step_start_time:
                     raw_start = getattr(self, '_step_raw_start', {}).get(label, current_time)
                     self.step_start_time[label] = raw_start
-                    self.step_start_frame_pos[label] = self._video_frame_pos()
+                    # 帧位起点与 wall 起点同刻取原始出现时刻(口径见 1335 行注释)
+                    self.step_start_frame_pos[label] = getattr(
+                        self, '_step_raw_start_frame_pos', {}
+                    ).get(label, self._video_frame_pos())
                 return
         
         # ── 第一步重现结算（仅 first_step 结算模式） ──
@@ -1332,7 +1339,12 @@ class SettlementMixin:
             
             raw_start = getattr(self, '_step_raw_start', {}).get(label, current_time)
             self.step_start_time[label] = raw_start
-            self.step_start_frame_pos[label] = self._video_frame_pos()
+            # 帧位起点与 wall 起点(raw_start)保持同刻: 都取首次出现的原始时刻,
+            # 不取"过完 min_duration 门才处理"的当前帧位, 否则视频源按帧号差
+            # 算耗时会整体少掉门槛时长(与 1334 行 wall 路径口径不一致)。
+            self.step_start_frame_pos[label] = getattr(
+                self, '_step_raw_start_frame_pos', {}
+            ).get(label, self._video_frame_pos())
             self.step_detection_times[label] = raw_start
             
             if len(self.current_cycle_steps) == 0:
