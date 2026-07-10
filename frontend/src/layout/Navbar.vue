@@ -638,11 +638,10 @@ onMounted(async () => {
 
   try {
     console.log('[⬛ Navbar] 加载 display_settings...');
-    const saved = localStorage.getItem('display_settings');
-    if (saved) {
-      store.display = JSON.parse(saved);
-      console.log('[⬛ Navbar] ✓ display_settings 已恢复');
-    }
+    // 必须走 loadSettings 深度合并, 禁止整表覆盖 — 旧版 localStorage 缺 monitor 子树时
+    // 直接赋值会让 Monitor 访问 display.monitor.* 渲染崩溃 (只剩背景).
+    store.loadSettings();
+    console.log('[⬛ Navbar] ✓ display_settings 已恢复');
   } catch (e) {
     console.error('[⬛ Navbar] ✗ display_settings 解析失败:', e);
   }

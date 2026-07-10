@@ -316,6 +316,36 @@ def list_rule_logs(rule_id: int,
             "limit": limit, "offset": offset}
 
 
+@router.get("/scanner-bypass/status")
+def scanner_bypass_status(
+    channel_id: Optional[int] = Query(None),
+) -> Dict[str, Any]:
+    """扫码器旁路当前 SN 状态 (只读后台监控线程内存, 不触发目录扫描).
+
+    - 不传 channel_id: 返回整体状态 (by_channel + default + entries).
+    - 传 channel_id: 额外返回 current = 该通道当前 entry (无专属规则回退 default).
+
+    出错隔离: 监控模块任何异常都返回 running=false + error, 不 500.
+    """
+    try:
+        from backend.services.scanner_bypass_monitor import (
+            get_status_snapshot, get_current_for_channel,
+        )
+        snap = get_status_snapshot()
+        if channel_id is not None:
+            snap["channel_id"] = channel_id
+            snap["current"] = get_current_for_channel(channel_id)
+        return snap
+    except Exception as e:
+        return {
+            "running": False,
+            "error": f"{type(e).__name__}: {e}",
+            "by_channel": {},
+            "default": None,
+            "entries": [],
+        }
+
+
 @router.get("/run-logs")
 def list_all_logs(limit: int = Query(100, ge=1, le=1000),
                   offset: int = Query(0, ge=0),

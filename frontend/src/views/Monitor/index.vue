@@ -825,7 +825,18 @@
       </div>
 
       <!-- MES 信息条 -->
-      <div v-if="displayWorkpiece || mesData?.order || mesData?.warn_no_barcode || workpieceOverride === null || isScanDisabledFor(selectedChannel)" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
+      <div v-if="displayWorkpiece || mesData?.order || mesData?.warn_no_barcode || workpieceOverride === null || isScanDisabledFor(selectedChannel) || systemStore.display.monitor.showBypassSn" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
+        <!-- 扫码器旁路当前 SN (系统设置 showBypassSn 打开后才显示; 无 SN 时 placeholder 等待扫码) -->
+        <div v-if="systemStore.display.monitor.showBypassSn" class="flex items-center gap-2">
+          <span class="text-cyan-400 font-bold">旁路SN:</span>
+          <input
+            class="font-mono text-white bg-slate-800 border border-cyan-800/50 rounded px-2 py-0.5 text-sm w-40 placeholder:text-gray-500"
+            :value="bypassSnFor(selectedChannel)"
+            placeholder="等待扫码"
+            readonly
+            title="扫码器旁路当前序列号 (只读, 来自固定目录最新 txt)"
+          />
+        </div>
         <div v-if="!isScanDisabledFor(selectedChannel) && displayWorkpiece" class="flex items-center gap-2">
           <span class="text-cyan-400 font-bold">工件:</span>
           <span class="font-mono text-white">{{ displayWorkpiece.serial_no }}</span>
@@ -834,7 +845,7 @@
           </el-tag>
           <span class="text-gray-400 text-xs">第{{ displayWorkpiece.inspection_count }}次</span>
         </div>
-        <div v-if="mesData.order" class="flex items-center gap-2">
+        <div v-if="mesData?.order" class="flex items-center gap-2">
           <span class="text-cyan-400 font-bold">工单:</span>
           <span class="text-white">{{ mesData.order.order_no }}</span>
           <span class="text-gray-400 text-xs">{{ mesData.order.completed_qty }}/{{ mesData.order.planned_qty }}</span>
@@ -847,11 +858,11 @@
           <span class="text-cyan-400 font-bold">{{ it.label }}:</span>
           <span class="text-white truncate max-w-[160px]" :title="it.value">{{ it.value }}</span>
         </div>
-        <div v-if="!isScanDisabledFor(selectedChannel) && hasScannerFor(selectedChannel) && mesData.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-2 bg-yellow-600/30 border border-yellow-500 rounded px-3 py-1">
+        <div v-if="!isScanDisabledFor(selectedChannel) && hasScannerFor(selectedChannel) && mesData?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-2 bg-yellow-600/30 border border-yellow-500 rounded px-3 py-1">
           <span class="text-yellow-300 font-bold text-base">⚠ 未绑码</span>
           <span class="text-yellow-200 text-sm">请扫描工件条码</span>
         </div>
-        <div v-else-if="!isScanDisabledFor(selectedChannel) && !displayWorkpiece && !mesData?.order" class="text-gray-500 text-xs">等待扫码...</div>
+        <div v-else-if="!isScanDisabledFor(selectedChannel) && !displayWorkpiece && !mesData?.order && !systemStore.display.monitor.showBypassSn" class="text-gray-500 text-xs">等待扫码...</div>
         <div v-if="isScanDisabledFor(selectedChannel)" class="flex items-center gap-2 text-gray-400 italic">
           <span class="text-base">⛔ 扫码已禁用</span>
           <span class="text-xs">所有联动工位走项目原生结算 (跟踪→全部消失，容器→箱子离开)</span>
@@ -1352,6 +1363,7 @@ import CustomMixItemPanel from './CustomMixItemPanel.vue';
 import ChannelVideoCard from './ChannelVideoCard.vue';
 import { createFramePump } from './framePump';
 import { listPackagingFlows, getPackagingFlowState } from '@/api/packaging_flow';
+import { getScannerBypassStatus } from '@/api/export';
 import TjSlot from '@/components/TjSlot.vue';
 import { dbg, dbgErr } from '@/utils/debug';
 
@@ -1614,6 +1626,44 @@ const pollPackagingState = async () => {
   }
 };
 
+// 扫码器旁路当前 SN (只读后台监控线程内存; 每 2s 轮询一次, 出错静默)
+const bypassByChannel = ref({});   // { [channel_id]: entry }
+const bypassDefault = ref(null);   // channel_filter 为空规则的兜底 entry
+let bypassTimer = null;
+
+const pollBypassStatus = async () => {
+  if (!systemStore.display.monitor.showBypassSn) return;
+  try {
+    const { data } = await getScannerBypassStatus();
+    bypassByChannel.value = data?.by_channel || {};
+    bypassDefault.value = data?.default || null;
+  } catch (_) {
+    // 静默: 旁路 SN 查询失败不影响主页面
+  }
+};
+
+const startBypassPolling = () => {
+  pollBypassStatus();
+  if (bypassTimer) clearInterval(bypassTimer);
+  bypassTimer = setInterval(pollBypassStatus, 2000);
+};
+
+const stopBypassPolling = () => {
+  if (bypassTimer) {
+    clearInterval(bypassTimer);
+    bypassTimer = null;
+  }
+  bypassByChannel.value = {};
+  bypassDefault.value = null;
+};
+
+// 返回指定通道当前旁路 SN (专属规则优先, 无则兜底), 无有效 SN 返回 ''
+const bypassSnFor = (ch) => {
+  const entry = bypassByChannel.value?.[String(ch)] || bypassDefault.value;
+  if (entry && entry.status === 'ok' && entry.serial_no) return entry.serial_no;
+  return '';
+};
+
 onMounted(async () => {
   loadTaskInfoDisplay();
   await loadPackagingConfigs();
@@ -1623,11 +1673,21 @@ onMounted(async () => {
   }
 });
 
+watch(
+  () => systemStore.display.monitor.showBypassSn,
+  (enabled) => {
+    if (enabled) startBypassPolling();
+    else stopBypassPolling();
+  },
+  { immediate: true },
+);
+
 onUnmounted(() => {
   if (packagingTimer) {
     clearInterval(packagingTimer);
     packagingTimer = null;
   }
+  stopBypassPolling();
 });
 // v3.19.x 自定义混合模式物品校验 (detection/results.custom_mix_state)
 // 展示侧三个 computed(按标签索引/容器累加器/总数模式)已随面板外置到 CustomMixItemPanel.vue（M-3）,

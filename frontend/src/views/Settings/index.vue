@@ -145,6 +145,13 @@
                 <el-switch v-model="store.display.monitor.showDetectionCount" @change="saveDisplaySettings" />
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">旁路 SN 码</span>
+                  <span class="text-[10px] text-gray-500">扫码器写 txt 到固定目录时显示当前序列号</span>
+                </div>
+                <el-switch v-model="store.display.monitor.showBypassSn" @change="saveDisplaySettings" />
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <span class="text-gray-300">CT包含NG周期</span>
                 <el-switch v-model="store.display.monitor.ctIncludeNg" @change="saveDisplaySettings" />
               </div>

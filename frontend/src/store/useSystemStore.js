@@ -114,6 +114,8 @@ export const useSystemStore = defineStore('system', {
         showFps: true,
         showLatency: true,
         showDetectionCount: true,
+        // 扫码器旁路 SN (固定目录最新 txt 文件名); 默认关, 系统设置打开后才在 Monitor MES 条显示
+        showBypassSn: false,
         ctIncludeNg: false,
         ptMode: 'current',  // 'avg' | 'last' | 'current' — 步骤耗时显示口径（v3.7.x: 默认改为 current, 周期结束 PT 列归零, 符合客户直觉）
         ptAggregate: 'sum',  // 'sum' | 'last' — PT 计算方式：同步骤同周期多次出现时合并求和 / 仅取最后一次（默认合并）
