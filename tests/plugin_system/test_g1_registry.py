@@ -52,7 +52,8 @@ def test_routes_registry_mounts_with_customer_prefix():
 
     reg.include_router(plugin_router, subpath="demo")
 
-    paths = [r.path for r in app.routes]
+    # 新版 FastAPI 会把 include_router 挂成无 path 属性的内部路由对象, 容错取值
+    paths = [getattr(r, "path", None) for r in app.routes]
     assert "/api/v1/plugins/internal-demo/demo/health" in paths
     mounted = reg.mounted()
     assert len(mounted) == 1
@@ -199,7 +200,8 @@ def test_manager_load_backend_module_uses_four_args(tmp_path, monkeypatch):
     assert registry is not None
     assert len(registry.routes.mounted()) == 1
     assert any(
-        r.path == "/api/v1/plugins/internal-demo/probe-sub/probe" for r in app.routes
+        getattr(r, "path", None) == "/api/v1/plugins/internal-demo/probe-sub/probe"
+        for r in app.routes
     )
 
 
