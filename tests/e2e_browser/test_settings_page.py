@@ -35,3 +35,42 @@ def test_settings_operator_table_present(page, base_url):
 def test_settings_save_button_present(page, base_url):
     sp = SettingsPage(page, base_url).goto()
     assert sp.wait_for_text("保存此工位设置", timeout_ms=4000)
+
+
+def test_settings_navbar_logo_upload_roundtrip(page, base_url, tmp_path):
+    """2026-07 导航栏 Logo 可上传: 上传→立即生效→刷新不丢→恢复默认。
+
+    纯前端链路 (data URL 存 display_settings localStorage), 每测试独立
+    context, 不污染用户浏览器数据。
+    """
+    import time
+
+    from PIL import Image
+
+    logo = tmp_path / "e2e_logo.png"
+    Image.new("RGB", (300, 300), "#7c3aed").save(logo)
+
+    def navbar_src():
+        return page.locator(
+            "header img.rounded-full[alt='logo']").first.get_attribute("src")
+
+    SettingsPage(page, base_url).goto()
+    page.wait_for_selector("text=导航栏 Logo", timeout=10000)
+    assert (navbar_src() or "").endswith("app-icon.png"), "初始应为内置图"
+
+    card = page.locator("div.bg-slate-900:has-text('导航栏 Logo')").first
+    card.scroll_into_view_if_needed()
+    card.locator("input[type='file']").set_input_files(str(logo))
+    time.sleep(1.0)
+    src = navbar_src() or ""
+    assert src.startswith("data:image/"), f"上传后应立即生效, 实际 {src[:30]}"
+
+    page.reload(wait_until="domcontentloaded")
+    page.wait_for_selector("text=导航栏 Logo", timeout=10000)
+    assert navbar_src() == src, "刷新后自定义 Logo 应保持"
+
+    card = page.locator("div.bg-slate-900:has-text('导航栏 Logo')").first
+    card.scroll_into_view_if_needed()
+    card.locator("button:has-text('恢复默认')").click()
+    time.sleep(0.6)
+    assert (navbar_src() or "").endswith("app-icon.png"), "恢复默认应回退内置图"

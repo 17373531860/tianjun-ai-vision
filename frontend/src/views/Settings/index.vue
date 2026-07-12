@@ -45,6 +45,19 @@
                 </div>
                 <el-input v-model="store.display.deviceNumber" placeholder="251011" @change="saveDisplaySettings" />
               </div>
+              <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-gray-300">导航栏 Logo</span>
+                  <el-button v-if="store.display.logoDataUrl" size="small" link type="danger" @click="resetNavbarLogo">恢复默认</el-button>
+                </div>
+                <div class="flex items-center gap-3">
+                  <img :src="store.display.logoDataUrl || '/app-icon.png'" alt="logo预览"
+                    class="w-10 h-10 rounded-full object-cover border border-slate-700 shrink-0" />
+                  <el-button size="small" @click="logoFileInput && logoFileInput.click()">上传图片</el-button>
+                  <input ref="logoFileInput" type="file" accept="image/*" class="hidden" @change="onNavbarLogoChange" />
+                </div>
+                <div class="text-xs text-gray-500 mt-2">建议正方形图片，自动裁剪压缩至 256×256，导航栏按圆形显示</div>
+              </div>
             </div>
           </el-card>
           
@@ -1997,6 +2010,47 @@ async function removeInstalledPlugin(row) {
 const saveDisplaySettings = () => {
   dbg('settings.ops', '保存显示设置', `brand=${store.display?.brandName ?? ''}`);
   localStorage.setItem('display_settings', JSON.stringify(store.display));
+};
+
+// 导航栏 Logo 上传: 前端居中裁方 + 压到 256×256 存 data URL (与 display 其余字段
+// 同走 localStorage 持久化)。压缩后 ~30-80KB, 远低于 localStorage 限额。
+const logoFileInput = ref(null);
+const onNavbarLogoChange = (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';   // 允许连续选同一文件重复触发
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    ElMessage.error('请选择图片文件');
+    return;
+  }
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    try {
+      const size = 256;
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      const s = Math.min(img.width, img.height);
+      ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+      store.display.logoDataUrl = canvas.toDataURL('image/png');
+      saveDisplaySettings();
+      ElMessage.success('Logo 已更新');
+    } catch (err) {
+      ElMessage.error('图片处理失败：' + (err?.message || ''));
+    }
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    ElMessage.error('图片加载失败');
+  };
+  img.src = url;
+};
+const resetNavbarLogo = () => {
+  store.display.logoDataUrl = '';
+  saveDisplaySettings();
+  ElMessage.info('已恢复默认 Logo');
 };
 
 const saveDetectionSettings = () => {

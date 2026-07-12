@@ -86,6 +86,8 @@ export const useSystemStore = defineStore('system', {
       appName: '视觉AI行为引导系统',  // 软件名称
       inspectorName: '张三',        // 检测员姓名
       deviceNumber: '251011',       // 设备编号
+      // 导航栏 logo (data URL, 上传时前端压到 256px): 空 = 用内置 /app-icon.png
+      logoDataUrl: '',
       // 导航栏显示开关
       navbar: {
         brandName: true,

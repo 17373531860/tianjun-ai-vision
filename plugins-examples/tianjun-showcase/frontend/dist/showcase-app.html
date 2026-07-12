@@ -1069,6 +1069,7 @@
   .pi-item{ width:30px; height:30px; display:flex; align-items:center; justify-content:center; font-size:12px; border-radius:4px; border:1px solid rgba(42,168,255,.25); color:var(--txt2); background:rgba(7,21,35,.5); }
   .pi-item.ok{ border-color:rgba(34,227,160,.5); color:#22e3a0; background:rgba(34,227,160,.1); box-shadow:0 0 8px rgba(34,227,160,.2); }
   .pi-item.cur{ border-color:rgba(69,230,255,.6); color:#45e6ff; box-shadow:0 0 10px rgba(69,230,255,.35); animation:blink 1.2s infinite; }
+  .pi-item.dup{ border-color:rgba(243,181,77,.8); box-shadow:0 0 10px rgba(243,181,77,.45); }  /* v3.33 重复打琥珀环 */
   /* 右栏 NG TOP3 → 逐件实时反馈 */
   .topng-panel .ph-pi{ display:none; }
   .main.per-item .topng-panel .ph-std{ display:none; }
@@ -1573,6 +1574,11 @@
             <span id="piRemedList"></span>
             <button class="proto-btn" id="piRemedForceBtn">人工确认落账</button>
           </div>
+          <!-- v3.33 重复打同一颗螺丝黄条（真值驱动: per_item_state.last_warning, 不落账不结周期） -->
+          <div class="pi-remed" id="piDupBar">
+            <span>⚠ <b id="piDupText">检测到重复打同一颗螺丝</b></span>
+            <span id="piDupItems"></span>
+          </div>
         </div>
 
         <!-- v1.3.0 称重投料看板（logic_mode=weighing 时替换 SOP，真值驱动: /weighing/state） -->
@@ -1866,10 +1872,10 @@
               <div class="rowline"><input class="proto-switch" type="checkbox" /><span>Monitor 不绘制步骤 ROI 外的框</span><button class="proto-btn">说明</button></div>
               <div class="table-scroll" data-steps-table="normal">
                 <table class="step-table">
-                  <thead><tr><th class="head">原始标签</th><th class="head">启用</th><th class="head">置信度阈值</th><th class="head">显示名称</th><th class="head">隐藏标注框</th><th class="head">检测框颜色</th><th class="head">Box尺寸上限</th><th class="head">步骤ROI</th><th class="head">最短持续(秒)</th><th class="head">最大持续(秒)</th><th class="head">超时NG</th><th class="head">消失等待时间(秒)</th><th class="head">最少帧数</th><th class="head">检测类型</th><th class="head">静态触发帧</th><th class="head">参与周期</th><th class="head">替补目标</th><th class="head">默认PT</th><th class="head">严格顺序</th><th class="head">单次接受</th></tr></thead>
+                  <thead><tr><th class="head">原始标签</th><th class="head">启用</th><th class="head">置信度阈值</th><th class="head">显示名称</th><th class="head">隐藏标注框</th><th class="head">检测框颜色</th><th class="head">Box尺寸上限</th><th class="head">步骤ROI</th><th class="head">最短持续(秒)</th><th class="head">最大持续(秒)</th><th class="head">超时NG</th><th class="head">消失等待时间(秒)</th><th class="head">最少帧数</th><th class="head">检测类型</th><th class="head">静态触发帧</th><th class="head">参与周期</th><th class="head">替补目标</th><th class="head">默认PT</th><th class="head">严格顺序</th><th class="head">单次接受</th><th class="head" title="v3.35: 消失等待期间即使出现别的有效步骤也照常走完（吹枪驻留类产线）">等待不被打断</th><th class="head" title="v3.35 融合模式: 视觉步骤确认后等秤条件（去皮/称重判定）放行才入周期">外设门控</th></tr></thead>
                   <tbody>
-                    <tr><td>battery</td><td><input class="proto-switch" type="checkbox" checked /></td><td><input type="range" value="94" /></td><td><input class="proto-input" value="装入电池" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input type="color" value="#22e3a0" /></td><td>W≤<input class="proto-input" type="number" value="0.85" /> H≤<input class="proto-input" type="number" value="0.80" /></td><td><button class="proto-btn" data-open-dialog="roiDialog">设置</button><button class="proto-btn ng">清除</button></td><td><input class="proto-input" type="number" placeholder="不限" /></td><td><input class="proto-input" type="number" placeholder="不限" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input class="proto-input" type="number" value="0" /></td><td><input class="proto-input" type="number" value="1" /></td><td><select class="proto-select"><option>动态</option><option>静态</option></select></td><td><input class="proto-input" type="number" value="30" /></td><td><input class="proto-switch" type="checkbox" /></td><td><select class="proto-select"><option>无</option><option>press</option></select></td><td><input class="proto-input" placeholder="--" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input class="proto-switch" type="checkbox" checked /></td></tr>
-                    <tr><td>press</td><td><input class="proto-switch" type="checkbox" checked /></td><td><input type="range" value="91" /></td><td><input class="proto-input" value="压合确认" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input type="color" value="#2aa8ff" /></td><td>W≤<input class="proto-input" type="number" value="0" /> H≤<input class="proto-input" type="number" value="0" /></td><td><button class="proto-btn" data-open-dialog="roiDialog">重绘</button></td><td><input class="proto-input" type="number" /></td><td><input class="proto-input" type="number" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input class="proto-input" type="number" /></td><td><input class="proto-input" type="number" value="1" /></td><td><select class="proto-select"><option>动态</option><option>静态</option></select></td><td><input class="proto-input" type="number" /></td><td><input class="proto-switch" type="checkbox" /></td><td><select class="proto-select"><option>无</option></select></td><td><input class="proto-input" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input class="proto-switch" type="checkbox" checked /></td></tr>
+                    <tr><td>battery</td><td><input class="proto-switch" type="checkbox" checked /></td><td><input type="range" value="94" /></td><td><input class="proto-input" value="装入电池" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input type="color" value="#22e3a0" /></td><td>W≤<input class="proto-input" type="number" value="0.85" /> H≤<input class="proto-input" type="number" value="0.80" /></td><td><button class="proto-btn" data-open-dialog="roiDialog">设置</button><button class="proto-btn ng">清除</button></td><td><input class="proto-input" type="number" placeholder="不限" /></td><td><input class="proto-input" type="number" placeholder="不限" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input class="proto-input" type="number" value="0" /></td><td><input class="proto-input" type="number" value="1" /></td><td><select class="proto-select"><option>动态</option><option>静态</option></select></td><td><input class="proto-input" type="number" value="30" /></td><td><input class="proto-switch" type="checkbox" /></td><td><select class="proto-select"><option>无</option><option>press</option></select></td><td><input class="proto-input" placeholder="--" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input class="proto-switch" type="checkbox" checked /></td><td><input class="proto-switch" type="checkbox" disabled /></td><td><span class="tiny-note">未启用</span></td></tr>
+                    <tr><td>press</td><td><input class="proto-switch" type="checkbox" checked /></td><td><input type="range" value="91" /></td><td><input class="proto-input" value="压合确认" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input type="color" value="#2aa8ff" /></td><td>W≤<input class="proto-input" type="number" value="0" /> H≤<input class="proto-input" type="number" value="0" /></td><td><button class="proto-btn" data-open-dialog="roiDialog">重绘</button></td><td><input class="proto-input" type="number" /></td><td><input class="proto-input" type="number" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input class="proto-input" type="number" /></td><td><input class="proto-input" type="number" value="1" /></td><td><select class="proto-select"><option>动态</option><option>静态</option></select></td><td><input class="proto-input" type="number" /></td><td><input class="proto-switch" type="checkbox" /></td><td><select class="proto-select"><option>无</option></select></td><td><input class="proto-input" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input class="proto-switch" type="checkbox" checked /></td><td><input class="proto-switch" type="checkbox" disabled /></td><td><span class="tiny-note">未启用</span></td></tr>
                   </tbody>
                 </table>
               </div>
@@ -1896,8 +1902,9 @@
             <div class="proto-block" data-logic-show="sequential custom" data-lg="ng"><h4>NG 周期保护</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="all" data-lg="dedup"><h4>防重复结算</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="sequential detection custom per_item" data-lg="sim"><h4>同时出现组</h4><div data-lg-body></div></div>
-            <div class="proto-block" data-logic-show="weighing" data-lg="weighing"><h4>称重投料 — 配置 (v3.31)</h4><div data-lg-body></div></div>
+            <div class="proto-block" data-logic-show="weighing" data-lg="weighing"><h4>称重投料 — 配置 (v3.31 / v3.35 融合)</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="region_events" data-lg="regionEvents"><h4>区域事件 — 动作规则 (v3.32)</h4><div data-lg-body></div></div>
+            <div class="proto-block" data-logic-show="sequential custom detection per_item" data-lg="labelSplit"><h4>同标签区域拆分 — 虚拟步骤 (v3.32/v3.34)</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="all" data-lg="filter"><h4>误判过滤（高级）</h4><div data-lg-body></div></div>
           </div>
           <div class="project-work" data-project-panel="events">
@@ -2559,7 +2566,7 @@
         <dialog id="defectCodeDialog"><h3>缺陷代码管理</h3><div class="mes-toolbar" style="margin-top:10px;"><input class="proto-input" placeholder="代码 (如 D-01)" style="width:120px;" id="dcCode" /><input class="proto-input" placeholder="名称" style="flex:1;" id="dcName" /><button class="proto-btn primary sm" id="dcAddBtn">＋ 新增代码</button></div><table class="data-table" style="margin-top:10px;"><thead><tr><th>代码</th><th>名称</th><th class="tcen">操作</th></tr></thead><tbody id="dcTbody"><tr><td colspan="3" style="padding:0"><div class="tj-loading"><span class="ring"></span>加载中</div></td></tr></tbody></table><div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;"><button class="proto-btn" data-close-dialog>关闭</button></div></dialog>
         <dialog id="gatewayLogsDialog" style="min-width:560px;"><h3>MES 通信日志</h3><div id="gwLogsBody" style="max-height:380px;overflow:auto;margin-top:10px;"></div><div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;"><button class="proto-btn" data-close-dialog>关闭</button></div></dialog>
         <dialog id="addScannerDialog"><h3>添加扫码器</h3><div class="form-grid" style="margin-top:10px;"><div class="filt"><label>名称</label><input class="proto-input" /></div><div class="filt"><label>IP 地址</label><input class="proto-input" placeholder="192.168.1.50" /></div><div class="filt"><label>解析模式</label><select class="proto-select"><option>LON-A</option><option>LON-B</option><option>LON-C</option><option>LON-D（容器跨线）</option><option>WMax</option></select></div><div class="filt"><label>通讯协议</label><select class="proto-select"><option>LON 文本</option><option>WMax 三端口</option></select></div><div class="filt"><label>绑定时机</label><select class="proto-select"><option>周期开始</option><option>周期结束</option></select></div><div class="filt"><label>离开判定帧数</label><input class="proto-input" type="number" value="15" /></div><div class="filt"><label class="proto-check"><input type="checkbox" checked />重复扫码去重</label></div><div class="filt"><label class="proto-check"><input type="checkbox" />误检重绑</label></div></div><div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;"><button class="proto-btn" data-close-dialog>取消</button><button class="proto-btn ok" data-close-dialog>保存到设备列表</button></div></dialog>
-        <dialog id="connDialog"><h3>MES 连接</h3><div class="form-grid" style="margin-top:10px;"><div class="filt"><label>连接名称</label><input class="proto-input" /></div><div class="filt"><label>适配器类型</label><select class="proto-select"><option>rest</option><option>form-data</option><option>form-urlencoded</option><option>query-string</option><option>modbus_rtu</option></select></div><div class="filt"><label>接口地址</label><input class="proto-input" placeholder="http://mes.local/api/push" /></div><div class="filt"><label>请求方法</label><select class="proto-select"><option>POST</option><option>PUT</option><option>GET</option></select></div><div class="filt"><label>鉴权类型</label><select class="proto-select"><option>none</option><option>basic</option><option>bearer</option><option>api_key</option><option>custom_header</option></select></div><div class="filt"><label>推送事件</label><select class="proto-select"><option>cycle_end</option><option>session_end</option><option>box_complete</option></select></div></div><div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;"><button class="proto-btn" data-close-dialog>取消</button><button class="proto-btn ok" data-close-dialog>保存</button></div></dialog>
+        <dialog id="connDialog"><h3>MES 连接</h3><div class="form-grid" style="margin-top:10px;"><div class="filt"><label>连接名称</label><input class="proto-input" /></div><div class="filt"><label>适配器类型</label><select class="proto-select" id="connAdapterSel"><option>rest</option><option>form-data</option><option>form-urlencoded</option><option>query-string</option><option>modbus_rtu</option><option value="database">database (数据库直写 v3.35)</option></select></div><div class="filt conn-http"><label>接口地址</label><input class="proto-input" placeholder="http://mes.local/api/push" /></div><div class="filt conn-http"><label>请求方法</label><select class="proto-select"><option>POST</option><option>PUT</option><option>GET</option></select></div><div class="filt conn-http"><label>鉴权类型</label><select class="proto-select"><option>none</option><option>basic</option><option>bearer</option><option>api_key</option><option>custom_header</option></select></div><div class="filt"><label>推送事件</label><select class="proto-select"><option>cycle_end</option><option>session_end</option><option>box_complete</option></select></div><div class="filt conn-db" style="display:none"><label>数据库类型</label><select class="proto-select" id="connDbType"><option value="mysql">MySQL</option><option value="postgresql">PostgreSQL</option><option value="sqlserver">SQL Server</option><option value="oracle">Oracle</option><option value="sqlite">SQLite</option></select></div><div class="filt conn-db" style="display:none"><label>主机</label><input class="proto-input" id="connDbHost" placeholder="192.168.1.100" /></div><div class="filt conn-db" style="display:none"><label>端口 (空=默认)</label><input class="proto-input" id="connDbPort" type="number" placeholder="3306" /></div><div class="filt conn-db" style="display:none"><label>用户名</label><input class="proto-input" id="connDbUser" /></div><div class="filt conn-db" style="display:none"><label>密码</label><input class="proto-input" id="connDbPwd" type="password" /></div><div class="filt conn-db" style="display:none"><label>数据库名 (SQLite 填文件路径)</label><input class="proto-input" id="connDbName" /></div><div class="filt conn-db" style="display:none"><label>目标表名</label><input class="proto-input" id="connDbTable" placeholder="mes_push_records" /></div></div><div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;"><button class="proto-btn" data-close-dialog>取消</button><button class="proto-btn ok" data-close-dialog>保存</button></div></dialog>
         <dialog id="extDevDialog"><h3>外部设备</h3><div class="form-grid" style="margin-top:10px;"><div class="filt"><label>名称</label><input class="proto-input" /></div><div class="filt"><label>设备类型</label><select class="proto-select"><option>称重器</option><option>读卡器</option><option>PLC</option><option>其他</option></select></div><div class="filt"><label>通信协议</label><select class="proto-select"><option>TCP</option><option>RTU（串口）</option></select></div><div class="filt"><label>IP 地址</label><input class="proto-input" placeholder="192.168.1.80" /></div><div class="filt"><label>端口</label><input class="proto-input" value="502" /></div><div class="filt"><label>串口号</label><input class="proto-input" placeholder="COM3" /></div><div class="filt"><label>波特率</label><select class="proto-select"><option>9600</option><option>19200</option><option>115200</option></select></div><div class="filt"><label>数据流向</label><select class="proto-select"><option>仅本机</option><option>下发集群</option></select></div><div class="filt"><label>工位标识</label><input class="proto-input" placeholder="ch0" /></div></div><div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;"><button class="proto-btn" data-close-dialog>取消</button><button class="proto-btn ok" data-close-dialog>保存</button></div></dialog>
       </div>
       <div class="alarm-prototype" id="alarmPrototype">
@@ -4159,13 +4166,40 @@
         scan_mode:'continuous', parse_mode:'direct' }).then(function(){ showProtoToast('扫码器已添加'); setTimeout(tjLoadMes,200); }).catch(function(e){ showProtoToast('添加扫码器失败: '+((e&&e.data&&e.data.detail)||e.message||e)); });
     });
     on('connDialog', function(dlg){
-      var ins=dlg.querySelectorAll('input.proto-input');
-      var sels=dlg.querySelectorAll('select.proto-select');
-      tjApi.post('/mes/gateway/connections',{ name:(ins[0]&&ins[0].value)||'MES连接',
-        adapter_type:sels[0]?sels[0].value:'rest',
-        config:{ url:(ins[1]&&ins[1].value)||'', method:sels[1]?sels[1].value:'POST', auth_type:sels[2]?sels[2].value:'none' },
-        push_events:[ sels[3]?sels[3].value:'cycle_end' ] }).then(function(){ showProtoToast('连接已创建'); setTimeout(tjLoadMes,200); }).catch(function(e){ showProtoToast('建连接失败: '+((e&&e.data&&e.data.detail)||e.message||e)); });
+      var adapter=(document.getElementById('connAdapterSel')||{}).value||'rest';
+      var nameIn=dlg.querySelector('.form-grid input.proto-input');
+      var pushEv=(function(){ var s=Array.prototype.filter.call(dlg.querySelectorAll('.filt:not(.conn-http):not(.conn-db) select.proto-select'), function(x){return x.id!=='connAdapterSel'&&x.id!=='connDbType';})[0]; return s?s.value:'cycle_end'; })();
+      var cfg;
+      if(adapter==='database'){
+        // v3.35 数据库直写: 周期结果直接 INSERT 到客户 MES 库表 (键名对齐 database_adapter)
+        var port=parseInt((document.getElementById('connDbPort')||{}).value,10);
+        cfg={ db_type:(document.getElementById('connDbType')||{}).value||'mysql',
+          host:(document.getElementById('connDbHost')||{}).value||'',
+          db_port:isFinite(port)?port:null,
+          user:(document.getElementById('connDbUser')||{}).value||'',
+          password:(document.getElementById('connDbPwd')||{}).value||'',
+          database:(document.getElementById('connDbName')||{}).value||'',
+          table:(document.getElementById('connDbTable')||{}).value||'',
+          timeout:10 };
+      } else {
+        var httpIns=dlg.querySelectorAll('.conn-http input.proto-input');
+        var httpSels=dlg.querySelectorAll('.conn-http select.proto-select');
+        cfg={ url:(httpIns[0]&&httpIns[0].value)||'', method:httpSels[0]?httpSels[0].value:'POST', auth_type:httpSels[1]?httpSels[1].value:'none' };
+      }
+      tjApi.post('/mes/gateway/connections',{ name:(nameIn&&nameIn.value)||'MES连接',
+        adapter_type:adapter, config:cfg,
+        push_events:[ pushEv ] }).then(function(){ showProtoToast('连接已创建'); setTimeout(tjLoadMes,200); }).catch(function(e){ showProtoToast('建连接失败: '+((e&&e.data&&e.data.detail)||e.message||e)); });
     });
+    // 适配器切 database → 隐 HTTP 字段、露数据库字段 (对齐主程序 GatewayPanel 条件渲染)
+    (function(){
+      var sel=document.getElementById('connAdapterSel');
+      if(sel&&!sel.__tjBound){ sel.__tjBound=true; sel.addEventListener('change', function(){
+        var isDb=(sel.value==='database');
+        var dlg=document.getElementById('connDialog'); if(!dlg) return;
+        dlg.querySelectorAll('.conn-http').forEach(function(x){ x.style.display=isDb?'none':''; });
+        dlg.querySelectorAll('.conn-db').forEach(function(x){ x.style.display=isDb?'':'none'; });
+      }); }
+    })();
     on('extDevDialog', function(dlg){
       var ins=dlg.querySelectorAll('input.proto-input');
       var sels=dlg.querySelectorAll('select.proto-select');
@@ -5321,9 +5355,13 @@
   function applyLogicVisibility(mode){
     const panel = document.querySelector('[data-project-panel="logic"]');
     if (!panel) return;
+    // v3.35 融合模式: 顺序类项目配了外设门控 (drive_mode=step_gate) 时, 称重块也要露出来
+    const pc = (window.__tjPE && window.__tjPE.pipeline_config) || {};
+    const fusion = !!(pc.weighing && pc.weighing.drive_mode === 'step_gate');
     panel.querySelectorAll('[data-logic-show]').forEach(block => {
       const modes = block.dataset.logicShow.split(/\s+/).filter(Boolean);
-      const show = modes.includes('all') || modes.includes(mode);
+      let show = modes.includes('all') || modes.includes(mode);
+      if (!show && fusion && block.dataset.lg === 'weighing') show = true;
       block.style.display = show ? '' : 'none';
     });
   }
@@ -5588,6 +5626,35 @@
     return '<input class="proto-switch" type="checkbox" data-k="'+k+'"'+
       ((v&&!locked)?' checked':'')+(locked?' disabled title="'+_esc(tip||'')+'"':'')+' />';
   }
+  // v3.35 外设门控单元格: 顺序类模式(sequential / custom基于sequential)专属;
+  // 选称重判定时露出料别与拦截两个子项 (collect 时装回 steps_config[].device_gate)
+  function _stGateCell(p,s){
+    var seqLike = p && (p.logic_mode==='sequential'
+      || (p.logic_mode==='custom' && (p.pipeline_config||{}).custom_based_on==='sequential'));
+    if(!seqLike) return '<td><span class="tiny-note" title="仅顺序类模式可用">—</span></td>';
+    var g=s.device_gate||{};
+    var kind=(g.enabled?(g.kind||'tare'):'');
+    var wj=(kind==='weight_judge');
+    return '<td style="min-width:120px">'
+      +'<select class="proto-select" data-k="__gate_kind" style="width:100%">'
+      +'<option value=""'+(kind===''?' selected':'')+'>未启用</option>'
+      +'<option value="tare"'+(kind==='tare'?' selected':'')+'>去皮门控</option>'
+      +'<option value="weight_judge"'+(kind==='weight_judge'?' selected':'')+'>称重判定</option>'
+      +'</select>'
+      +'<input class="proto-input" data-k="__gate_material" value="'+_esc(g.material||'')+'" placeholder="料别(空=按顺序)" title="判定料别, 对应称重配置的型号标准量表; 留空=按料别顺序自动取" style="width:100%;margin-top:2px'+(wj?'':';display:none')+'" />'
+      +'<label class="proto-check" title="不合格拦截等纠正" style="'+(wj?'':'display:none')+'"><input type="checkbox" data-k="__gate_block"'+(g.block!==false?' checked':'')+' />拦截</label>'
+      +'</td>';
+  }
+  // 门控类型切到"称重判定"才露出料别/拦截子项
+  document.addEventListener('change', function(ev){
+    var el=ev.target;
+    if(!el||!el.dataset||el.dataset.k!=='__gate_kind') return;
+    var td=el.closest('td'); if(!td) return;
+    var wj=(el.value==='weight_judge');
+    var mat=td.querySelector('[data-k="__gate_material"]'); if(mat) mat.style.display=wj?'':'none';
+    var blk=td.querySelector('[data-k="__gate_block"]');
+    if(blk&&blk.closest('label')) blk.closest('label').style.display=wj?'':'none';
+  });
   // ==================== 结算步判定 (对齐主程序 Project/index.vue isSettlementStep) ====================
   // 业务约束: 结算步骤必须始终能进入周期, 不能设严格顺序/单次接受, 否则结算永远触发不了。
   //  - 仅 sequential / (custom 且基于 sequential) 模式有"结算步"概念
@@ -5665,6 +5732,10 @@
           +'<td>'+num('default_pt', s.default_pt, '--')+'</td>'
           +'<td>'+(_tjIsSettleStep(p,s)?_stCkLock('strict_order',!!s.strict_order,true,'结算步骤不可设置严格顺序'):ck('strict_order', !!s.strict_order))+'</td>'
           +'<td>'+(_tjIsSettleStep(p,s)?_stCkLock('accept_once',!!s.accept_once,true,'结算步骤不可设置单次接受'):ck('accept_once', !!s.accept_once))+'</td>'
+          // v3.35 等待不被打断: 仅配了消失等待时间才可编辑 (对齐主程序表B disabled 语义)
+          +'<td>'+((s.disappear_delay!=null&&s.disappear_delay>0)?ck('disappear_uninterruptible',!!s.disappear_uninterruptible):_stCkLock('disappear_uninterruptible',!!s.disappear_uninterruptible,true,'先配置消失等待时间(秒)>0'))+'</td>'
+          // v3.35 外设门控 (isSeqLike 时可用): 三态选择 + 称重判定的料别/拦截
+          +_stGateCell(p,s)
           +'</tr>';
       }).join('');
     }
@@ -5718,6 +5789,7 @@
       });
     });
     if(!any) return null;
+    var anyGate=false;
     out.forEach(function(s){
       // 数值字段语义对齐: 消失等待/静态触发帧空值回默认
       if(s.disappear_delay==null) s.disappear_delay=0;
@@ -5726,7 +5798,31 @@
       if(s.tracking_max_lost_seconds==null) s.tracking_max_lost_seconds=5.0;
       if(s.event_required_count==null) s.event_required_count=1;
       if(s.event_gone_frames==null) s.event_gone_frames=8;
+      // v3.35 外设门控: 表格临时键 __gate_* → steps_config[].device_gate
+      if('__gate_kind' in s){
+        var gk=s.__gate_kind;
+        if(gk){ s.device_gate={enabled:true, kind:gk, material:String(s.__gate_material||''), block:s.__gate_block!==false}; anyGate=true; }
+        else if(s.device_gate) s.device_gate=Object.assign({}, s.device_gate, {enabled:false});
+        delete s.__gate_kind; delete s.__gate_material; delete s.__gate_block;
+      }
+      // 消失等待为 0 时该开关无意义, 落 false (对齐主程序 disabled 语义)
+      if(!(s.disappear_delay>0)) s.disappear_uninterruptible=false;
     });
+    // 启用任一门控 → 注入融合模式秤参数 (对齐主程序 onGateEnabledChange: 仅子树缺失时给默认)
+    if(anyGate && window.__tjPE){
+      var _pc=window.__tjPE.pipeline_config=window.__tjPE.pipeline_config||{};
+      if(!_pc.weighing){
+        _pc.weighing={ drive_mode:'step_gate', materials:[], models:{},
+          tare_mode:'auto_stable', tare_trigger_weight:0.05, tare_settle_samples:3,
+          stable_tol:0.003, stable_min_samples:3, measure_min_weight:0.005,
+          require_operator:false, require_model:true,
+          material_check:'off', auto_zero_after_done:false,
+          alarm_event_shortage:2, alarm_event_over:2,
+          alarm_event_wrong:2, alarm_event_precheck:2, alarm_event_guard:2,
+          context_expiry:{mode:'never', reset_time:'08:00', shifts:[], hours:8, expire_fields:['model']},
+          visual_guard:{enabled:false, source:'region_action', rules:[], wrong_block:true, cooldown_sec:5} };
+      } else _pc.weighing.drive_mode='step_gate';
+    }
     return out;
   }
   // ==================== 项目配置编辑模型 (键名对照主程序 Project/index.vue saveProject) ====================
@@ -5746,6 +5842,7 @@
       if(typeof ev.require_ack!=='boolean') ev.require_ack=false;
       if(typeof ev.ack_timeout_sec!=='number') ev.ack_timeout_sec=0;
       if(typeof ev.ack_resets_periodic!=='boolean') ev.ack_resets_periodic=false;
+      if(typeof ev.ack_keep_cycle!=='boolean') ev.ack_keep_cycle=false;
       if(!Array.isArray(ev.actions)) ev.actions=[];
     });
     if(!Array.isArray(pe.counters_config) || !pe.counters_config.length){
@@ -5994,7 +6091,7 @@
   };
   LG.pi=function(pe,pc){
     var s=pc.per_item, p='pc.per_item.';
-    return '<div class="proto-grid3">'
+    var h='<div class="proto-grid3">'
       +_lgNum('连续稳定帧数',p+'stability_window_frames',s.stability_window_frames,'int')
       +_lgNum('位置稳定阈值 IoU',p+'stability_iou_threshold',s.stability_iou_threshold)
       +_lgNum('单件离开几秒算消失',p+'item_timeout_seconds',s.item_timeout_seconds)
@@ -6010,7 +6107,20 @@
       +_lgNum('全部完成后等几秒自动 OK',p+'settle_after_all_done_sec',s.settle_after_all_done_sec)
       +_lgNum('无动作多少秒判 NG',p+'idle_timeout_sec',s.idle_timeout_sec,'int')
       +_lgNum('单周期最长几秒',p+'cycle_max_duration_sec',s.cycle_max_duration_sec,'int')
+      // v3.33 换板兜底: 周期进行中所有 item 标签连续消失 N 帧 → 按真实覆盖状态自动结算并复位
+      +_lgNum('换板兜底: 工件整体消失几帧'+((s.disable_auto_settle===true)?' (手动结算下不生效)':''),p+'workpiece_absent_settle_frames',s.workpiece_absent_settle_frames!=null?s.workpiece_absent_settle_frames:15,'int')
       +'</div>';
+    // v3.33 重复打同一颗螺丝防护 (黄条提示 + 报警灯, 不落账不结周期)
+    h+='<div class="rowline" style="margin-top:8px">'+_lgCkInline('防止重复打同一颗螺丝','pc.per_item.duplicate_screw_alarm',s.duplicate_screw_alarm===true,'pi')+'</div>';
+    if(s.duplicate_screw_alarm===true){
+      h+='<div class="proto-grid3">'
+        +_lgNum('移开确认帧数',p+'duplicate_release_frames',s.duplicate_release_frames!=null?s.duplicate_release_frames:8,'int')
+        +_lgNum('重压确认帧数',p+'duplicate_sustain_frames',s.duplicate_sustain_frames!=null?s.duplicate_sustain_frames:2,'int')
+        +_lgNum('报警节流(秒)',p+'duplicate_alarm_interval_sec',s.duplicate_alarm_interval_sec!=null?s.duplicate_alarm_interval_sec:2.0)
+        +_lgNum('提示存在时间(秒)',p+'duplicate_warning_display_sec',s.duplicate_warning_display_sec!=null?s.duplicate_warning_display_sec:3.0)
+        +'</div><div class="tiny-note">动作框连续离开够帧数算真正移开, 又压回并持续够帧 → 判重复打: 黄条提示+报警灯, 不落账不动覆盖状态</div>';
+    }
+    return h;
   };
   LG.piSteps=function(pe,pc){
     var steps=pe.steps_config||[];
@@ -6064,11 +6174,14 @@
       +'</div>';
   };
   // v1.3.0 称重投料配置 (pipeline_config.weighing, 对齐 weighing_engine DEFAULT_WEIGHING_CONFIG)
+  // v1.4.0: +融合模式提示 (drive_mode=step_gate) / 前置选择有效期 context_expiry / 视觉料源防错 visual_guard
   LG.weighing=function(pe,pc){
     var w=pc.weighing||{};
     var mats=Array.isArray(w.materials)?w.materials.join(', '):'';
     var models=w.models?JSON.stringify(w.models,null,2):'{\n  "型号A": {\n    "钢帽水泥": {"standard": 0.5, "low_tol": 0.02, "high_tol": 0.05}\n  }\n}';
-    return '<div class="tiny-note">电子秤读数驱动的投料防错: 选型号→扫码→放件去皮→逐料投料对比标准量→缺料/超量报警→逐件记录落库。单位统一 kg。</div>'
+    var fusion=(w.drive_mode==='step_gate');
+    var h=(fusion?'<div class="tiny-note" style="color:#f3c969">融合模式 (v3.35): 视觉 SOP 主导周期, 秤只做步骤门控——在「步骤设置」表给步骤配「外设门控」(去皮/称重判定)。以下秤参数仍生效。</div>':'')
+      +'<div class="tiny-note">电子秤读数驱动的投料防错: 选型号→扫码→放件去皮→逐料投料对比标准量→缺料/超量报警→逐件记录落库。单位统一 kg。</div>'
       +'<div class="proto-grid2" style="margin-top:8px">'
       +_lgSel('去皮方式','pc.weighing.tare_mode',[['auto_stable','放件后自动去皮'],['manual','界面按钮手动']],w.tare_mode||'auto_stable')
       +_lgNum('去皮触发重量 (kg)','pc.weighing.tare_trigger_weight',w.tare_trigger_weight!=null?w.tare_trigger_weight:0.05)
@@ -6082,38 +6195,223 @@
       +'<div class="proto-field"><label>料别顺序 (逗号分隔)</label><input class="proto-input" data-b="pc.weighing.materials" data-t="strlist" value="'+_esc(mats)+'" placeholder="钢帽水泥, 钢脚水泥" /></div>'
       +'<div class="proto-field"><label>型号标准量表 (JSON: 型号→料别→standard/low_tol/high_tol)</label>'
       +'<textarea class="proto-input" data-b="pc.weighing.models" data-t="json" rows="6" style="font-family:monospace;font-size:11px">'+_esc(models)+'</textarea></div>';
+    // v3.35 前置选择有效期: 人员/型号选择跨班次自动过期, 避免"上一班选的型号被下一班沿用"
+    var ce=w.context_expiry||{};
+    var ceMode=ce.mode||'never';
+    h+='<div class="proto-block" style="margin-top:8px"><div class="rowline"><b>前置选择有效期 (v3.35)</b></div>'
+      +'<div class="proto-grid3">'
+      +_lgSel('过期方式','pc.weighing.context_expiry.mode',[['never','永不过期'],['daily','每日定时'],['shift','按班次表'],['hours','滚动小时数']],ceMode,'','weighing')
+      +(ceMode==='daily'?('<div class="proto-field"><label>每日重置时刻 (HH:MM)</label><input class="proto-input" data-b="pc.weighing.context_expiry.reset_time" value="'+_esc(ce.reset_time||'08:00')+'" placeholder="08:00" /></div>'):'')
+      +(ceMode==='hours'?_lgNum('滚动有效小时数','pc.weighing.context_expiry.hours',ce.hours!=null?ce.hours:8):'')
+      +'<div class="proto-field"><label>过期清空项</label><select class="proto-select" multiple data-b="pc.weighing.context_expiry.expire_fields" data-t="multi">'
+      +[['model','型号'],['operator','人员']].map(function(o){ return '<option value="'+o[0]+'"'+((ce.expire_fields||['model']).indexOf(o[0])>=0?' selected':'')+'>'+o[1]+'</option>'; }).join('')
+      +'</select></div>'
+      +'</div>'
+      +(ceMode==='shift'?('<div class="proto-field"><label>班次表 JSON ([{"name":"早班","start":"08:00"},...])</label><textarea class="proto-input" data-b="pc.weighing.context_expiry.shifts" data-t="json" rows="2" style="font-family:monospace;font-size:11px">'+_esc(ce.shifts?JSON.stringify(ce.shifts):'')+'</textarea></div>'):'')
+      +'</div>';
+    // v3.35 视觉料源防错: 检测到抓错料桶/料源立即报警 (可拦截等纠正)
+    var vg=w.visual_guard||{};
+    h+='<div class="proto-block" style="margin-top:8px"><div class="rowline"><b>视觉料源防错 (v3.35)</b>'
+      +_lgCkInline('启用','pc.weighing.visual_guard.enabled',vg.enabled===true,'weighing')+'</div>';
+    if(vg.enabled===true){
+      h+='<div class="proto-grid3">'
+        +_lgSel('识别来源','pc.weighing.visual_guard.source',[['region_action','区域动作 (标签进区)'],['label_presence','标签在场']],vg.source||'region_action')
+        +_lgCk('抓错料拦截等纠正','pc.weighing.visual_guard.wrong_block',vg.wrong_block!==false)
+        +_lgNum('报警冷却(秒)','pc.weighing.visual_guard.cooldown_sec',vg.cooldown_sec!=null?vg.cooldown_sec:5)
+        +'</div>';
+      var vgr=Array.isArray(vg.rules)?vg.rules:[];
+      h+=vgr.map(function(r,i){
+        var p='pc.weighing.visual_guard.rules.'+i+'.';
+        return '<div class="rowline" style="flex-wrap:wrap"><b>规则 '+(i+1)+'</b>'
+          +'<label>料别<input class="proto-input" data-b="'+p+'material" value="'+_esc(r.material||'')+'" placeholder="钢帽水泥" style="min-width:96px" /></label>'
+          +'<label>识别标签(逗号分隔)<input class="proto-input" data-b="'+p+'labels" data-t="strlist" value="'+_esc(Array.isArray(r.labels)?r.labels.join(', '):'')+'" style="min-width:140px" /></label>'
+          +'<label>确认帧数<input class="proto-input" type="number" data-b="'+p+'min_frames" data-t="int" value="'+(r.min_frames!=null?r.min_frames:3)+'" style="width:60px" /></label>'
+          +'<label>判定区域 JSON<input class="proto-input" data-b="'+p+'region" data-t="json" value="'+_esc(r.region?JSON.stringify(r.region):'')+'" placeholder="留空=全画面" style="min-width:120px;font-family:monospace;font-size:11px" /></label>'
+          +'<button class="proto-btn ng" data-lga="vgDel" data-i="'+i+'">删除</button></div>';
+      }).join('');
+      h+='<div class="rowline"><button class="proto-btn" data-lga="vgAdd">+ 新增料源规则</button></div>';
+    }
+    h+='</div>';
+    return h;
   };
   // v1.3.0 区域事件规则 (pipeline_config.region_events, 对齐 source_region_events 解析器)
   LG.regionEvents=function(pe,pc){
     var re=pc.region_events||{};
     var rules=Array.isArray(re.rules)?re.rules:[];
-    var h='<div class="tiny-note">目标进出区域/重叠即步骤: overlap=两标签重叠 · region_enter=进区 · region_exit=出区(默认结算)。区域多边形用归一化顶点 JSON, 建议在主程序界面绘制后拷贝。</div>';
+    var ruleNames=rules.map(function(r){return String(r.name||'').trim();}).filter(Boolean);
+    var h='<div class="tiny-note">动作规则: overlap=工具作用(框重叠) · region_enter=进区/驻留 · region_exit=出区消失(下料, 默认结算)。区域多边形用归一化顶点 JSON, 建议在主程序界面绘制后拷贝。</div>';
     h+='<div class="rowline">'+_lgCkInline('启用','pc.region_events.enabled',re.enabled!==false)
-      +_lgCkInline('连续同名事件去重','pc.region_events.dedup_consecutive',re.dedup_consecutive!==false)
-      +'<span>中断容忍帧</span><input class="proto-input" type="number" data-b="pc.region_events.gap_tolerance_frames" data-t="int" value="'+(re.gap_tolerance_frames!=null?re.gap_tolerance_frames:3)+'" style="width:70px" /></div>';
+      +_lgCkInline('连续同动作去重','pc.region_events.dedup_consecutive',re.dedup_consecutive!==false)
+      +'<span>漏检容忍帧</span><input class="proto-input" type="number" data-b="pc.region_events.gap_tolerance_frames" data-t="int" value="'+(re.gap_tolerance_frames!=null?re.gap_tolerance_frames:3)+'" style="width:70px" /></div>';
     h+=rules.map(function(r,i){
       var p='pc.region_events.rules.'+i+'.';
+      var t=r.type||'overlap';
+      var isOverlap=(t==='overlap'), isExit=(t==='region_exit');
       var regionJson=r.region?JSON.stringify(r.region):'';
-      return '<div class="proto-block" style="margin-top:8px"><div class="rowline"><b>规则 '+(i+1)+'</b>'
+      var an=r.anchor||{};
+      var body='<div class="proto-block" style="margin-top:8px"><div class="rowline"><b>动作 '+(i+1)+'</b>'
         +'<button class="proto-btn ng" data-lga="reDel" data-i="'+i+'" style="margin-left:auto">删除</button></div>'
         +'<div class="proto-grid2">'
-        +'<div class="proto-field"><label>事件名</label><input class="proto-input" data-b="'+p+'name" value="'+_esc(r.name||'')+'" /></div>'
-        +_lgSel('类型',p+'type',[['overlap','重叠 overlap'],['region_enter','进区 region_enter'],['region_exit','出区 region_exit']],r.type||'overlap')
-        +_lgSelRaw('主体标签',p+'subject_label',_optLabel(r.subject_label,true,'选择标签'))
-        +_lgSelRaw('客体标签 (overlap 用)',p+'object_label',_optLabel(r.object_label,true,'无'))
-        +_lgNum('确认帧数',p+'min_frames',r.min_frames!=null?r.min_frames:'','int')
+        +'<div class="proto-field"><label>动作名</label><input class="proto-input" data-b="'+p+'name" value="'+_esc(r.name||'')+'" /></div>'
+        +_lgSel('类型',p+'type',[['overlap','工具作用 overlap'],['region_enter','进区/驻留 region_enter'],['region_exit','出区消失 region_exit']],t,'','regionEvents')
+        +_lgSelRaw(isExit?'跟踪对象类别':'主体类别',p+'subject_label',_optLabel(r.subject_label,true,'选择标签'))
+        +(isOverlap?_lgSelRaw('目标类别 (被作用)',p+'object_label',_optLabel(r.object_label,true,'无')):'')
+        +(!isExit?_lgSelRaw('辅助约束类别 (主体须与其相交, 可空)',p+'require_label',_optLabel(r.require_label,true,'无'),'strOrNull'):'')
+        +(isOverlap?_lgSel('区域组合方式',p+'region_mode',[['and','且 (重叠须在区域内)'],['or','或 (重叠或进区任一)']],r.region_mode||'and'):'')
+        +_lgNum(isExit?'区域内最少观察帧数':'连续满足帧数 N',p+'min_frames',r.min_frames!=null?r.min_frames:'','int')
+        +(!isExit?_lgNum('确认时长(秒, 0=按帧数; 帧率解耦)',p+'min_seconds',r.min_seconds!=null?r.min_seconds:0):'')
+        +(!isExit?_lgNum('位移门槛 (0=不要求移动; 过滤静置工具误触发)',p+'min_move',r.min_move!=null?r.min_move:0):'')
+        +(isOverlap?_lgNum('重叠 IoU 下限 (0=任意相交)',p+'min_iou',r.min_iou!=null?r.min_iou:0):'')
+        +(isOverlap?_lgNum('重叠深度下限 (0=贴边即算)',p+'min_overlap_ratio',r.min_overlap_ratio!=null?r.min_overlap_ratio:0):'')
+        +(!isExit?_lgNum('消失确认(秒, 0=用全局容忍)',p+'gone_seconds',r.gone_seconds!=null?r.gone_seconds:'','numOrNull'):'')
+        +(isExit?_lgNum('消失确认帧数',p+'gone_frames',r.gone_frames!=null?r.gone_frames:8,'int'):'')
+        +(isExit?_lgNum('帧间关联 IoU 下限',p+'match_iou',r.match_iou!=null?r.match_iou:0.3):'')
+        +_lgSelRaw('附加触发事件 (可空)',p+'event_id',_optEvent(r.event_id,true),'intOrNull')
         +_lgCk('触发即结算 settle',p+'settle',!!r.settle)
         +'</div>'
-        +'<div class="proto-field"><label>区域多边形 JSON (归一化 [[x,y],...]; overlap 可留空=全画面)</label>'
+        +'<div class="proto-field"><label>判定区域多边形 JSON (归一化 [[x,y],...]; overlap 可留空=全画面)</label>'
         +'<textarea class="proto-input" data-b="'+p+'region" data-t="json" rows="2" style="font-family:monospace;font-size:11px" placeholder="[[0.1,0.1],[0.9,0.1],[0.9,0.9],[0.1,0.9]]">'+_esc(regionJson)+'</textarea></div>'
+        // v3.32 区域跟随锚点: 判定区域随锚点标签移动 (工件不定位场景)
+        +'<div class="rowline" style="margin-top:4px">'+_lgCkInline('区域跟随锚点','pc.region_events.rules.'+i+'.anchor.enabled',!!an.enabled,'regionEvents')+'</div>'
+        +(an.enabled?('<div class="proto-grid3">'
+          +_lgSelRaw('锚点类别',p+'anchor.label',_optLabel(an.label,true,'选择标签'))
+          +_lgNum('锚点丢失沿用(秒)',p+'anchor.hold_seconds',an.hold_seconds!=null?an.hold_seconds:3.0)
+          +'<div class="proto-field"><label>标定锚点框 JSON {x,y,w,h}</label><textarea class="proto-input" data-b="'+p+'anchor.ref" data-t="json" rows="1" style="font-family:monospace;font-size:11px" placeholder=\'{"x":0.4,"y":0.4,"w":0.2,"h":0.2}\'>'+_esc(an.ref?JSON.stringify(an.ref):'')+'</textarea></div>'
+          +'</div>'):'')
         +'</div>';
+      return body;
     }).join('');
-    h+='<div class="rowline" style="margin-top:8px"><button class="proto-btn" data-lga="reAdd">+ 新增规则</button></div>';
+    h+='<div class="rowline" style="margin-top:8px"><button class="proto-btn" data-lga="reAdd">+ 新增动作</button></div>';
+    // 每类置信度阈值 (class_conf: 留空=不过滤)
+    var cc=re.class_conf||{};
+    var labs=_lgSteps().map(function(s){return s.label;}).filter(Boolean);
+    if(labs.length){
+      h+='<div class="tiny-note" style="margin-top:8px">每类置信度阈值 (0/空=不过滤)</div><div class="rowline" style="flex-wrap:wrap">'
+        +labs.map(function(lb){ return '<label>'+_esc(lb)+'<input class="proto-input" type="number" data-b="pc.region_events.class_conf.'+_esc(lb)+'" data-t="numOrNull" value="'+(cc[lb]!=null?cc[lb]:'')+'" style="width:64px" /></label>'; }).join('')
+        +'</div>';
+    }
     var seq=re.sequence_check||{};
-    h+='<div class="rowline" style="margin-top:8px">'+_lgCkInline('顺序校验','pc.region_events.sequence_check.enabled',!!seq.enabled)
-      +'<span>顺序 (事件名逗号分隔)</span><input class="proto-input" data-b="pc.region_events.sequence_check.order" data-t="strlist" value="'+_esc((seq.order||[]).join(', '))+'" style="flex:1" /></div>';
+    h+='<div class="rowline" style="margin-top:8px">'+_lgCkInline('流程顺序校验','pc.region_events.sequence_check.enabled',!!seq.enabled)
+      +'<span>顺序 (动作名逗号分隔)</span><input class="proto-input" data-b="pc.region_events.sequence_check.order" data-t="strlist" value="'+_esc((seq.order||[]).join(', '))+'" style="flex:1" /></div>';
+    // v3.32 结算判定 (settlement_rules): 结算时对确认序列先匹配先赢
+    var srs=Array.isArray(re.settlement_rules)?re.settlement_rules:[];
+    h+='<div class="tiny-note" style="margin-top:8px">结算判定 (对本周期确认动作序列, 先匹配先赢; 空=默认 OK/NG)</div>';
+    h+=srs.map(function(sr,i){
+      var p='pc.region_events.settlement_rules.'+i+'.';
+      var m=sr.match||'always';
+      var tgtOpts='<option value="">选择动作</option>'+ruleNames.map(function(n){ return '<option value="'+_esc(n)+'"'+(sr.target===n?' selected':'')+'>'+_esc(n)+'</option>'; }).join('');
+      return '<div class="rowline" style="flex-wrap:wrap"><b>判定 '+(i+1)+'</b>'
+        +'<select class="proto-select" data-b="'+p+'match" data-rr="regionEvents">'
+        +[['exact','序列完全匹配'],['missing','缺某动作'],['repeated','某动作重复≥N次'],['always','兜底(总是)']].map(function(o){ return '<option value="'+o[0]+'"'+(m===o[0]?' selected':'')+'>'+o[1]+'</option>'; }).join('')+'</select>'
+        +(m==='exact'?('<label>序列(动作名逗号分隔)<input class="proto-input" data-b="'+p+'sequence" data-t="strlist" value="'+_esc((sr.sequence||[]).join(', '))+'" style="min-width:180px" /></label>'):'')
+        +((m==='missing'||m==='repeated')?('<label>目标动作<select class="proto-select" data-b="'+p+'target">'+tgtOpts+'</select></label>'):'')
+        +(m==='repeated'?('<label>N≥<input class="proto-input" type="number" data-b="'+p+'min_count" data-t="int" value="'+(sr.min_count!=null?sr.min_count:2)+'" style="width:56px" /></label>'):'')
+        +'<label>触发事件<select class="proto-select" data-b="'+p+'event_id" data-t="intOrNull">'+_optEvent(sr.event_id,true)+'</select></label>'
+        +'<button class="proto-btn ng" data-lga="reSRDel" data-i="'+i+'">删除</button></div>';
+    }).join('');
+    h+='<div class="rowline"><button class="proto-btn" data-lga="reSRAdd">+ 新增判定</button></div>';
     return h;
   };
+  // v1.4.0 同标签区域拆分 (pipeline_config.label_splits, 对齐主程序 labelSplit.js):
+  // 一个物理标签按落点区域拆成多个虚拟步骤; 多轮次含 v3.34 两防护 (持续秒数 + 专用置信度)
+  LG.labelSplit=function(pe,pc){
+    var rules=Array.isArray(pc.label_splits)?pc.label_splits:[];
+    var h='<div class="tiny-note">同一模型标签按检测框落点区域改写成不同虚拟步骤（如四颗螺丝各算一步）。区域/锚点框用归一化 JSON, 建议在主程序绘制后拷贝。保存时自动同步虚拟步骤到步骤表。</div>';
+    h+=rules.map(function(r,i){
+      var p='pc.label_splits.'+i+'.';
+      var rd=r.rounds||{};
+      var body='<div class="proto-block" style="margin-top:8px"><div class="rowline"><b>规则 '+(i+1)+'</b>'
+        +_lgCkInline('启用',p+'enabled',r.enabled!==false)
+        +'<button class="proto-btn ng" data-lga="lsDel" data-i="'+i+'" style="margin-left:auto">删除</button></div>'
+        +'<div class="proto-grid3">'
+        +_lgSelRaw('原始标签',p+'source_label',_optLabel(r.source_label,true,'选择标签'))
+        +_lgSel('区域参照',p+'mode',[['fixed','固定画面'],['anchor','锚点跟随']],r.mode||'fixed','','labelSplit')
+        +_lgSel('区域外落点',p+'unmatched',[['drop','丢弃'],['keep','保留原标签'],['map','改写为指定标签']],r.unmatched||'drop','','labelSplit')
+        +(r.mode==='anchor'?_lgSelRaw('锚点标签',p+'anchor_label',_optLabel(r.anchor_label,true,'选择标签')):'')
+        +(r.mode==='anchor'?_lgNum('锚点丢失沿用(秒)',p+'anchor_hold_seconds',r.anchor_hold_seconds!=null?r.anchor_hold_seconds:3.0):'')
+        +(r.unmatched==='map'?('<div class="proto-field"><label>改写标签</label><input class="proto-input" data-b="'+p+'unmatched_label" value="'+_esc(r.unmatched_label||'')+'" /></div>'):'')
+        +'</div>'
+        +(r.mode==='anchor'?('<div class="proto-field"><label>标定锚点框 JSON {x,y,w,h}</label><textarea class="proto-input" data-b="'+p+'anchor_ref" data-t="json" rows="1" style="font-family:monospace;font-size:11px">'+_esc(r.anchor_ref?JSON.stringify(r.anchor_ref):'')+'</textarea></div>'):'')
+        +'<div class="proto-field"><label>区域列表 JSON ([{"name":"螺丝1","polygon":[[x,y],...],"color":"#f97316"},...])</label>'
+        +'<textarea class="proto-input" data-b="'+p+'regions" data-t="json" rows="3" style="font-family:monospace;font-size:11px">'+_esc(JSON.stringify(r.regions||[]))+'</textarea></div>'
+        // 多轮次: 同一批区域按工序轮次映射不同虚拟步骤 (前罩/后罩各打4颗)
+        +'<div class="rowline" style="margin-top:4px">'+_lgCkInline('多轮次拆分','pc.label_splits.'+i+'.rounds.enabled',rd.enabled===true,'labelSplit')+'</div>';
+      if(rd.enabled===true){
+        body+='<div class="proto-grid3">'
+          +_lgSelRaw('轮次切换标签',p+'rounds.trigger_label',_optLabel(rd.trigger_label,true,'选择标签'))
+          +_lgNum('轮数 (2~8)',p+'rounds.count',rd.count!=null?rd.count:2,'int')
+          +'<div class="proto-field"><label>每轮前缀 (逗号分隔, 数量=轮数)</label><input class="proto-input" data-b="'+p+'rounds.prefixes" data-t="strlist" value="'+_esc((rd.prefixes||[]).join(', '))+'" placeholder="前罩, 后罩" /></div>'
+          +_lgNum('切换标签消失多久算新一轮(秒)',p+'rounds.trigger_gap_seconds',rd.trigger_gap_seconds!=null?rd.trigger_gap_seconds:3.0)
+          // v3.34 两防护: 持续在场秒数 (过滤单帧误检闪现) + 专用置信度 (挡低置信预备动作)
+          +_lgNum('重现需持续 X 秒才确认切换 (0=见帧即切)',p+'rounds.trigger_min_seconds',rd.trigger_min_seconds!=null?rd.trigger_min_seconds:0.5)
+          +_lgNum('切换标签置信度 ≥ X 才算在场 (0=不过滤)',p+'rounds.trigger_conf',rd.trigger_conf!=null?rd.trigger_conf:0)
+          +'</div>'
+          +'<div class="proto-field"><label>每轮独立区域 JSON (可空; {"2":[{name,polygon,color},...]})</label>'
+          +'<textarea class="proto-input" data-b="'+p+'rounds.region_overrides" data-t="json" rows="2" style="font-family:monospace;font-size:11px">'+_esc(rd.region_overrides&&Object.keys(rd.region_overrides).length?JSON.stringify(rd.region_overrides):'')+'</textarea></div>';
+      }
+      body+='</div>';
+      return body;
+    }).join('');
+    h+='<div class="rowline" style="margin-top:8px"><button class="proto-btn" data-lga="lsAdd">+ 新增拆分规则</button></div>';
+    return h;
+  };
+  // 拆分规则 → 虚拟步骤同步 (保存前调用, 幂等; 主程序 syncSplitVirtualSteps 的插件版):
+  // 启用规则的区域名(含轮次前缀展开) → steps_config 保证有 split_origin 标记行; 孤儿行清理
+  function _tjSyncSplitSteps(pe){
+    var pc=pe.pipeline_config||{};
+    var rules=(Array.isArray(pc.label_splits)?pc.label_splits:[]).filter(function(r){return r&&r.enabled!==false;});
+    var validPoly=function(p){ return Array.isArray(p)&&p.length>=3; };
+    var drawn=function(list){ return (list||[]).filter(function(r){ return r&&String(r.name||'').trim()&&validPoly(r.polygon); }); };
+    var expected={};   // label -> {ruleId, autoDisabled}
+    rules.forEach(function(rule){
+      var names=[];
+      var rd=rule.rounds;
+      if(rd&&rd.enabled&&Array.isArray(rd.prefixes)&&rd.prefixes.length>=2){
+        rd.prefixes.forEach(function(prefix,ri){
+          var ov=(rd.region_overrides||{})[String(ri+1)];
+          var regs=drawn(ov); if(!regs.length) regs=drawn(rule.regions);
+          regs.forEach(function(rg){ names.push(String(prefix).trim()+String(rg.name).trim()); });
+        });
+      } else drawn(rule.regions).forEach(function(rg){ names.push(String(rg.name).trim()); });
+      names.forEach(function(n){ if(n&&!expected[n]) expected[n]={ruleId:rule.id,autoDisabled:false}; });
+      if(rule.unmatched==='map'&&String(rule.unmatched_label||'').trim()){
+        var ml=String(rule.unmatched_label).trim();
+        if(!expected[ml]) expected[ml]={ruleId:rule.id,autoDisabled:true};
+      }
+    });
+    // 孤儿清理: split_origin 行但已不在期望集合
+    pe.steps_config=(pe.steps_config||[]).filter(function(s){
+      if(!s||!s.split_origin) return true;
+      var m=expected[s.label];
+      if(m&&m.ruleId===s.split_origin) return true;
+      // 序列引用一并移除
+      ['sequence_order','custom_sequence_order'].forEach(function(k){
+        if(Array.isArray(pc[k])) pc[k]=pc[k].filter(function(it){ return it&&it.step_id!==s.id; });
+      });
+      ['detection_steps','custom_detection_steps'].forEach(function(k){
+        if(Array.isArray(pc[k])) pc[k]=pc[k].filter(function(id){ return id!==s.id; });
+      });
+      return false;
+    });
+    // 补建缺失虚拟步骤 (行结构对齐主程序 syncSplitVirtualSteps)
+    var existing={}; pe.steps_config.forEach(function(s){ existing[s.label]=s; });
+    var nextId=pe.steps_config.reduce(function(m,s){ return Math.max(m,Number(s.id)||0); },0)+1;
+    Object.keys(expected).forEach(function(label){
+      var meta=expected[label];
+      if(existing[label]){ if(existing[label].split_origin) existing[label].split_origin=meta.ruleId; return; }
+      var step={ id:nextId++, label:label, displayLabel:label, enabled:!meta.autoDisabled,
+        roi:null, threshold:50, triggerEvent:null, min_frames:null, detection_type:'dynamic',
+        static_trigger_frames:30, join_cycle:true, backup_for:null, default_pt:null,
+        strict_order:false, accept_once:false, tracking_gone_confirm_frames:null,
+        tracking_max_lost_seconds:5.0, tracking_position_lock:false, count_mode:'track',
+        event_required_count:1, event_gone_frames:8, box_color:'', from_model:'main',
+        box_max_width:0, box_max_height:0, split_origin:meta.ruleId };
+      pe.steps_config.push(step);
+      if(!meta.autoDisabled&&pe.logic_mode==='sequential'&&Array.isArray(pc.sequence_order)){
+        pc.sequence_order.push({step_id:step.id});
+      }
+    });
+  }
   var _TJ_DEFAULT_CTRS={'合格总数':1,'不良总数':1,'总产量':1};
   LG.counters=function(pe,pc){
     return (pe.counters_config||[]).map(function(c,i){
@@ -6162,7 +6460,9 @@
           return '<select class="proto-select" data-b="'+p+'toast_id">'+opts+'</select>';
         })()+'</div>'
         +'<div class="rowline"><label class="proto-check"><input type="checkbox" data-b="'+p+'require_ack" data-rr="events"'+(ev.require_ack?' checked':'')+' />需人工确认（重做本周期）</label>'
-        +(ev.require_ack?('<span>超时自动确认(秒,0=不超时)</span><input class="proto-input" type="number" data-b="'+p+'ack_timeout_sec" data-t="int" value="'+(ev.ack_timeout_sec||0)+'" style="width:70px" /><label class="proto-check"><input type="checkbox" data-b="'+p+'ack_resets_periodic"'+(ev.ack_resets_periodic?' checked':'')+' />确认时清账周期性强制动作</label>'):'')
+        +(ev.require_ack?('<span>超时自动确认(秒,0=不超时)</span><input class="proto-input" type="number" data-b="'+p+'ack_timeout_sec" data-t="int" value="'+(ev.ack_timeout_sec||0)+'" style="width:70px" /><label class="proto-check"><input type="checkbox" data-b="'+p+'ack_resets_periodic"'+(ev.ack_resets_periodic?' checked':'')+' />确认时清账周期性强制动作</label>'
+          // v3.34 断点补做: 确认只解除定格, 保留在制周期与已完成步骤 (默认关=确认即整件重做)
+          +'<label class="proto-check" title="勾上: 确认后保留在制周期与已完成步骤, 从打断处补做; 不勾(默认): 确认即丢弃在制周期, 整件从头重做"><input type="checkbox" data-b="'+p+'ack_keep_cycle"'+(ev.ack_keep_cycle?' checked':'')+' />确认后保留周期（断点补做）</label>'):'')
         +'</div></div>';
     }).join('')||'<div class="tiny-note">暂无事件</div>';
     return h+'<div class="rowline" style="margin-top:8px"><button class="proto-btn" data-lga="evAdd">+ 新增事件</button></div>';
@@ -6278,9 +6578,27 @@
       case 'paDel': pc.periodic_actions.splice(i,1); LGRender('periodic'); break;
       case 'reAdd': { if(!pc.region_events||typeof pc.region_events!=='object') pc.region_events={enabled:true,rules:[]};
         if(!Array.isArray(pc.region_events.rules)) pc.region_events.rules=[];
-        pc.region_events.rules.push({id:'re_'+Date.now(),name:'动作 '+(pc.region_events.rules.length+1),type:'overlap',subject_label:'',object_label:'',min_frames:10,settle:false,region:null});
+        pc.region_events.rules.push({id:'re_'+Date.now(),name:'动作 '+(pc.region_events.rules.length+1),type:'overlap',subject_label:'',object_label:'',require_label:null,region_mode:'and',min_frames:10,min_seconds:0,min_move:0,min_iou:0,min_overlap_ratio:0,gone_seconds:null,event_id:null,settle:false,region:null});
         LGRender('regionEvents'); break; }
       case 'reDel': { if(pc.region_events&&Array.isArray(pc.region_events.rules)){ pc.region_events.rules.splice(i,1); LGRender('regionEvents'); } break; }
+      case 'reSRAdd': { if(!pc.region_events||typeof pc.region_events!=='object') pc.region_events={enabled:true,rules:[]};
+        if(!Array.isArray(pc.region_events.settlement_rules)) pc.region_events.settlement_rules=[];
+        pc.region_events.settlement_rules.push({match:'exact',sequence:[],target:'',min_count:2,event_id:(pe.events_config[0]||{}).id||null});
+        LGRender('regionEvents'); break; }
+      case 'reSRDel': { if(pc.region_events&&Array.isArray(pc.region_events.settlement_rules)){ pc.region_events.settlement_rules.splice(i,1); LGRender('regionEvents'); } break; }
+      case 'vgAdd': { if(!pc.weighing) pc.weighing={};
+        if(!pc.weighing.visual_guard) pc.weighing.visual_guard={enabled:true,source:'region_action',rules:[],wrong_block:true,cooldown_sec:5};
+        if(!Array.isArray(pc.weighing.visual_guard.rules)) pc.weighing.visual_guard.rules=[];
+        pc.weighing.visual_guard.rules.push({material:'',labels:[],region:null,min_frames:3});
+        LGRender('weighing'); break; }
+      case 'vgDel': { var vgr=pc.weighing&&pc.weighing.visual_guard&&pc.weighing.visual_guard.rules; if(Array.isArray(vgr)){ vgr.splice(i,1); LGRender('weighing'); } break; }
+      case 'lsAdd': { if(!Array.isArray(pc.label_splits)) pc.label_splits=[];
+        pc.label_splits.push({ id:'ls_'+Date.now()+'_'+Math.floor(Math.random()*1000), enabled:true,
+          source_label:'', mode:'fixed', anchor_label:'', anchor_ref:null, anchor_hold_seconds:3.0,
+          unmatched:'drop', unmatched_label:'', regions:[],
+          rounds:{enabled:false,trigger_label:'',count:2,prefixes:['前罩','后罩'],trigger_gap_seconds:3.0,trigger_min_seconds:0.5,trigger_conf:0,region_overrides:{}} });
+        LGRender('labelSplit'); break; }
+      case 'lsDel': { if(Array.isArray(pc.label_splits)){ pc.label_splits.splice(i,1); try{ _tjSyncSplitSteps(pe); tjRenderSteps(pe); }catch(e){} LGRender('labelSplit'); } break; }
       case 'expAdd': pe.__expected.push({label:'',count:1}); LGRender('tracking'); break;
       case 'expDel': pe.__expected.splice(i,1); LGRender('tracking'); break;
       case 'trkRoiDraw': if(window.tjOpenRoiEditor){ window.tjOpenRoiEditor({get:function(){return (pc.tracking_roi||{}).polygon||null;},set:function(poly){ pc.tracking_roi={enabled:(poly||[]).length>=3,polygon:poly||[]}; LGRender('tracking'); }}); } else showProtoToast('ROI 编辑器加载中'); break;
@@ -6291,7 +6609,7 @@
       case 'simMDel': { var gd=pc.simultaneous_groups[i]; var lab=gd.priority_order[j]; gd.priority_order.splice(j,1); if(gd.period_roles&&lab) delete gd.period_roles[lab]; LGRender('sim'); break; }
       case 'simMUp': swap(pc.simultaneous_groups[i].priority_order, j, j-1); LGRender('sim'); break;
       case 'simMDown': swap(pc.simultaneous_groups[i].priority_order, j, j+1); LGRender('sim'); break;
-      case 'evAdd': pe.events_config.push({id:Date.now(),name:'新事件',color:'#3b82f6',actions:[],show_notification:false,notification_type:'normal',toast_id:'ok',require_ack:false,ack_timeout_sec:0,ack_resets_periodic:false}); LGRender('events'); LGRender('custom'); LGRender('periodic'); break;
+      case 'evAdd': pe.events_config.push({id:Date.now(),name:'新事件',color:'#3b82f6',actions:[],show_notification:false,notification_type:'normal',toast_id:'ok',require_ack:false,ack_timeout_sec:0,ack_resets_periodic:false,ack_keep_cycle:false}); LGRender('events'); LGRender('custom'); LGRender('periodic'); break;
       case 'evDel': pe.events_config.splice(i,1); LGRender('events'); LGRender('custom'); LGRender('periodic'); break;
       case 'evActAdd': { var eva=pe.events_config[i]; if(!eva.actions) eva.actions=[]; eva.actions.push({counter_name:(pe.counters_config[0]||{}).name||'合格总数',delta:1}); LGRender('events'); break; }
       case 'evActDel': pe.events_config[i].actions.splice(j,1); LGRender('events'); break;
@@ -6355,12 +6673,52 @@
     }
     return null;
   }
+  // v1.4.0 区域事件保存清洗 (对齐主程序 _sanitizeRegionEvents): 0 值调优字段不落库、
+  // 半截锚点丢弃、结算判定无效行剔除 —— 否则激活时后端解析器抛 ValueError
+  function _tjSanitizeRegionEvents(re){
+    if(!re||typeof re!=='object') return re;
+    var out=Object.assign({}, re);
+    out.rules=(Array.isArray(re.rules)?re.rules:[]).map(function(r){
+      var o=Object.assign({}, r);
+      if(o.type!=='region_exit'){
+        ['min_seconds','min_move'].forEach(function(k){ var v=Number(o[k]); if(!(isFinite(v)&&v>0)) delete o[k]; else o[k]=Math.min(k==='min_move'?1:30,v); });
+        var gs=Number(o.gone_seconds); if(!(isFinite(gs)&&gs>0)) delete o.gone_seconds; else o.gone_seconds=Math.min(30,gs);
+        if(!String(o.require_label||'').trim()) delete o.require_label;
+      } else { delete o.min_seconds; delete o.min_move; delete o.gone_seconds; delete o.require_label; delete o.min_iou; delete o.min_overlap_ratio; delete o.region_mode; }
+      var an=o.anchor;
+      if(!(an&&an.enabled&&String(an.label||'').trim())) delete o.anchor;
+      else o.anchor={enabled:true,label:String(an.label).trim(),ref:an.ref||null,hold_seconds:(isFinite(Number(an.hold_seconds))&&Number(an.hold_seconds)>=0)?Number(an.hold_seconds):3.0};
+      return o;
+    });
+    var cc=re.class_conf||{}; var ccOut={};
+    Object.keys(cc).forEach(function(k){ var v=Number(cc[k]); if(isFinite(v)&&v>0) ccOut[k]=v; });
+    out.class_conf=ccOut;
+    var sq=re.sequence_check||{};
+    out.sequence_check={enabled:!!sq.enabled&&Array.isArray(sq.order)&&sq.order.length>0, order:Array.isArray(sq.order)?sq.order:[], event_id:(sq.event_id!=null?sq.event_id:null)};
+    out.settlement_rules=(Array.isArray(re.settlement_rules)?re.settlement_rules:[]).filter(function(sr){
+      if(!sr||sr.event_id==null) return false;
+      if(sr.match==='exact') return Array.isArray(sr.sequence)&&sr.sequence.length>0;
+      if(sr.match==='missing'||sr.match==='repeated') return !!String(sr.target||'').trim();
+      return sr.match==='always';
+    }).map(function(sr){
+      var o={match:sr.match, event_id:sr.event_id};
+      if(sr.match==='exact') o.sequence=sr.sequence;
+      if(sr.match==='missing'||sr.match==='repeated') o.target=String(sr.target).trim();
+      if(sr.match==='repeated') o.min_count=Math.max(2, Math.floor(Number(sr.min_count)||2));
+      return o;
+    });
+    return out;
+  }
   function tjBuildProjPayload(nm){
     var pe=window.__tjPE; if(!pe) return {name:nm};
     var pc=pe.pipeline_config;
     var steps=tjCollectSteps()||pe.steps_config;
     // 结算步兜底: 无论 UI 是否禁用, 落库前强制清掉结算步的严格顺序/单次接受 (对齐主程序保存兜底)
     steps.forEach(function(s){ if(_tjIsSettleStep(pe,s)){ s.strict_order=false; s.accept_once=false; } });
+    // v3.32/34 拆分规则 → 虚拟步骤同步 (幂等; 对齐主程序保存流程 syncSplitVirtualSteps)
+    pe.steps_config=steps; window.__tjStepsBase=steps;
+    try{ _tjSyncSplitSteps(pe); }catch(e){}
+    steps=pe.steps_config;
     var expectedItems={}; (pe.__expected||[]).forEach(function(it){ if(it.label) expectedItems[it.label]=it.count||1; });
     var lostCands=steps.filter(function(s){return s.enabled!==false&&s.tracking_max_lost_seconds;}).map(function(s){return s.tracking_max_lost_seconds;});
     var maxLost=Math.max.apply(null,[5].concat(lostCands));
@@ -6451,8 +6809,16 @@
           require_exact_count:s.require_exact_count===true,
           disable_auto_settle:s.disable_auto_settle===true,
           cycle_max_duration_sec:Math.max(0,Math.floor(Number(s.cycle_max_duration_sec)||0)),
-          idle_timeout_sec:Math.max(0,Math.floor(Number(s.idle_timeout_sec)||0))
+          idle_timeout_sec:Math.max(0,Math.floor(Number(s.idle_timeout_sec)||0)),
+          // v3.33 换板兜底 + 重复打防护 (对齐主程序保存块)
+          workpiece_absent_settle_frames:(s.workpiece_absent_settle_frames==null)?15:Math.max(0,Math.floor(Number(s.workpiece_absent_settle_frames)||0)),
+          duplicate_screw_alarm:s.duplicate_screw_alarm===true,
+          duplicate_release_frames:Math.max(1,Math.floor(Number(s.duplicate_release_frames)||8)),
+          duplicate_sustain_frames:Math.max(1,Math.floor(Number(s.duplicate_sustain_frames)||2)),
+          duplicate_alarm_interval_sec:(s.duplicate_alarm_interval_sec==null)?2.0:Math.max(0,Number(s.duplicate_alarm_interval_sec)||0),
+          duplicate_warning_display_sec:(s.duplicate_warning_display_sec==null)?3.0:Math.max(0,Number(s.duplicate_warning_display_sec)||0)
         };})():{},
+      region_events:pc.region_events?_tjSanitizeRegionEvents(pc.region_events):undefined,
       periodic_actions:(pc.periodic_actions||[]).map(function(r){ return {
         id:r.id, name:r.name||'', enabled:r.enabled!==false,
         trigger_step_ids:Array.isArray(r.trigger_step_ids)?r.trigger_step_ids:[],
@@ -6800,13 +7166,48 @@
       var r=await tjApi.get('/packaging-flows');
       var items=(Array.isArray(r)?r:(r.items||[]));
       if(!items.length){ box.innerHTML=_tjEmptyHTML('暂无包装结算流','在主程序 MES 页或 API 创建后显示'); return; }
-      box.innerHTML='<table class="data-table"><thead><tr><th>名称</th><th class="tcen">箱容量</th><th class="tcen">扫码开箱</th><th class="tcen">启用</th><th class="tcen">操作</th></tr></thead><tbody>'
-        +items.map(function(f){ return '<tr><td>'+_esc(f.name||('流#'+f.id))+'</td><td class="tcen">'+_tnum(f.box_capacity||f.capacity,0)+'</td><td class="tcen">'+(f.scan_open?'是':'否')+'</td><td class="tcen">'+(f.enabled!==false?'<span class="badge-sm ok">启用</span>':'<span class="badge-sm">停用</span>')+'</td><td class="tcen"><button class="proto-btn sm" data-pk-view="'+f.id+'">查看状态</button></td></tr>'; }).join('')
-        +'</tbody></table>';
+      window.__tjPkItems=items;
+      box.innerHTML='<table class="data-table"><thead><tr><th>名称</th><th class="tcen">箱容量</th><th class="tcen">扫码开箱</th><th class="tcen">复合条码</th><th class="tcen">尾箱收尾</th><th class="tcen">启用</th><th class="tcen">操作</th></tr></thead><tbody>'
+        +items.map(function(f){ return '<tr><td>'+_esc(f.name||('流#'+f.id))+'</td><td class="tcen">'+_tnum(f.box_capacity||f.capacity,0)+'</td><td class="tcen">'+(f.scan_open?'是':'否')+'</td><td class="tcen">'+(f.composite_label_enabled?'取段':'—')+'</td><td class="tcen">'+(f.tail_paper_as_close_action?'放工单':'—')+'</td><td class="tcen">'+(f.enabled!==false?'<span class="badge-sm ok">启用</span>':'<span class="badge-sm">停用</span>')+'</td><td class="tcen"><button class="proto-btn sm" data-pk-view="'+f.id+'">查看状态</button> <button class="proto-btn sm" data-pk-edit="'+f.id+'">条码/收尾</button></td></tr>'; }).join('')
+        +'</tbody></table><div id="pkEditBox"></div>';
       box.querySelectorAll('[data-pk-view]').forEach(function(b){ b.addEventListener('click', function(){ window.__tjPkSel=Number(b.dataset.pkView); tjLoadPackState(); }); });
+      box.querySelectorAll('[data-pk-edit]').forEach(function(b){ b.addEventListener('click', function(){ tjPkEdit(Number(b.dataset.pkEdit)); }); });
       // 自动预选只挑启用中的流: 停用流不在协调器内存, 查状态必 404
       if(window.__tjPkSel==null){ var en=items.filter(function(f){return f.enabled!==false;}); if(en.length){ window.__tjPkSel=en[0].id; tjLoadPackState(); } }
     }catch(e){ box.innerHTML=_tjEmptyHTML('包装结算接口不可用','后端未开启 /packaging-flows 或版本过旧'); }
+  }
+  // v3.35 复合条码取段 + 工单号识别 + 放工单收尾 (PUT 部分更新, 只发这批字段)
+  function tjPkEdit(fid){
+    var eb=document.getElementById('pkEditBox'); if(!eb) return;
+    var f=(window.__tjPkItems||[]).filter(function(x){return x.id===fid;})[0]||{};
+    var pick=f.composite_pick_mode||'prefix';
+    eb.innerHTML='<div class="proto-block" style="margin-top:8px"><div class="rowline"><b>'+_esc(f.name||('流#'+fid))+' — 复合条码 / 工单识别 / 尾箱收尾 (v3.35)</b></div>'
+      +'<div class="rowline"><label class="proto-check"><input type="checkbox" id="pkeComposite"'+(f.composite_label_enabled?' checked':'')+' />复合条码取段（整码按分隔符拆段取工单号）</label></div>'
+      +'<div class="proto-grid3">'
+      +'<div class="proto-field"><label>分隔符</label><input class="proto-input" id="pkeDelim" value="'+_esc(f.composite_delimiter||'|')+'" maxlength="8" /></div>'
+      +'<div class="proto-field"><label>取段方式</label><select class="proto-select" id="pkePick"><option value="prefix"'+(pick==='prefix'?' selected':'')+'>按前缀找段</option><option value="index"'+(pick==='index'?' selected':'')+'>按第 N 段</option></select></div>'
+      +'<div class="proto-field"><label>工单段前缀 / 段序号(1起)</label><input class="proto-input" id="pkePrefix" value="'+_esc(f.composite_prefix||'')+'" placeholder="JOB" /><input class="proto-input" id="pkeIndex" type="number" value="'+(f.composite_index!=null?f.composite_index:1)+'" min="1" max="32" style="margin-top:2px" /></div>'
+      +'</div>'
+      +'<div class="proto-field"><label>工单号识别规则 (正则, 留空=不过滤; 非工单码不误开箱)</label><input class="proto-input" id="pkePattern" value="'+_esc(f.order_code_pattern||'')+'" placeholder="^JOB" /></div>'
+      +'<div class="rowline"><label class="proto-check"><input type="checkbox" id="pkeTailReq"'+(f.tail_paper_order_required?' checked':'')+' />尾箱需放工单</label>'
+      +'<label>放工单步骤标签<input class="proto-input" id="pkeTailLabel" value="'+_esc(f.tail_paper_step_label||'')+'" placeholder="放工单" style="min-width:110px" /></label>'
+      +'<label class="proto-check" title="放工单动作视为尾箱收尾: 现场放工单常晚于周期结束, 用挂起快照收尾"><input type="checkbox" id="pkeTailClose"'+(f.tail_paper_as_close_action?' checked':'')+' />放工单=收尾动作</label></div>'
+      +'<div class="rowline"><button class="proto-btn ok" id="pkeSave">保存</button><button class="proto-btn" id="pkeCancel">收起</button></div></div>';
+    document.getElementById('pkeCancel').addEventListener('click', function(){ eb.innerHTML=''; });
+    document.getElementById('pkeSave').addEventListener('click', async function(){
+      var body={
+        composite_label_enabled:document.getElementById('pkeComposite').checked,
+        composite_delimiter:document.getElementById('pkeDelim').value||'|',
+        composite_pick_mode:document.getElementById('pkePick').value,
+        composite_prefix:document.getElementById('pkePrefix').value||null,
+        composite_index:Math.max(1,parseInt(document.getElementById('pkeIndex').value,10)||1),
+        order_code_pattern:document.getElementById('pkePattern').value||null,
+        tail_paper_order_required:document.getElementById('pkeTailReq').checked,
+        tail_paper_step_label:document.getElementById('pkeTailLabel').value||null,
+        tail_paper_as_close_action:document.getElementById('pkeTailClose').checked };
+      try{ await tjApi.put('/packaging-flows/'+fid, body); showProtoToast('包装配置已保存'); tjLoadPackaging(); }
+      catch(e){ showProtoToast('保存失败: '+((e&&e.data&&e.data.detail)||e.message||e)); }
+    });
   }
   async function tjLoadPackState(){
     var sb=document.getElementById('pkStateBox'); if(!sb||window.__tjPkSel==null) return;
@@ -7775,7 +8176,8 @@
           var cls='pi-item';
           if(items[gi].covered) cls+=' ok';
           else if(firstUn<0){ firstUn=gi; cls+=' cur'; }
-          g+='<span class="'+cls+'">'+(gi+1)+'</span>';
+          if(items[gi].dup>0) cls+=' dup';   // v3.33 重复打次数>0 → 琥珀环
+          g+='<span class="'+cls+'"'+(items[gi].dup>0?' title="重复打 '+items[gi].dup+' 次"':'')+'>'+(gi+1)+'</span>';
         }
         grid.innerHTML=g||'<span style="opacity:.5;font-size:11px">周期未开始 · 等待个体锁定</span>';
       }
@@ -8660,6 +9062,7 @@
   function renderRemediation(det){
     var bar=$('piRemedBar'); if(!bar) return;
     var ps=det.per_item_state||{};
+    try{ renderDupWarning(ps); }catch(e){}
     if(!ps.enabled || !ps.awaiting_remediation){ bar.classList.remove('show'); return; }
     bar.classList.add('show');
     // 漏点 = 各步骤未覆盖个体序号
@@ -8671,6 +9074,19 @@
       });
       list.innerHTML = mh || '<span>待补个体见面板红格</span>';
     }
+  }
+  // v3.33 重复打黄条: last_warning.ts 起按配置秒数显示后自动收 (0=等后端清)
+  function renderDupWarning(ps){
+    var bar=$('piDupBar'); if(!bar) return;
+    var w=ps.last_warning;
+    if(!ps.enabled || !w || !w.ts){ bar.classList.remove('show'); return; }
+    var showSec=(ps.config&&ps.config.duplicate_warning_display_sec);
+    if(showSec==null) showSec=3.0;
+    if(showSec>0 && (Date.now()/1000 - Number(w.ts)) > showSec){ bar.classList.remove('show'); return; }
+    bar.classList.add('show');
+    var tx=$('piDupText'); if(tx) tx.textContent=w.reason_summary||'检测到重复打同一颗螺丝';
+    var it=$('piDupItems');
+    if(it) it.innerHTML=(w.item_ids||[]).slice(0,10).map(function(n){ return '<span class="mc">#'+esc(String(n))+'</span>'; }).join('');
   }
   var remedBtn=$('piRemedForceBtn');
   if(remedBtn) remedBtn.addEventListener('click', function(){
@@ -8689,7 +9105,8 @@
     if(ackBusy) return; ackBusy=true; ackPendingAction=action||null;
     var url='/source/detection/ack-event?channel=0'+(action?('&action='+action):'');
     tjApi.post(url, {})
-      .then(function(){ showProtoToast('已确认'); $('ackElev').classList.remove('show'); })
+      // v3.34 断点补做: 事件配置勾了保留周期时响应带 kept_cycle=true
+      .then(function(r){ showProtoToast((r&&r.kept_cycle)?'已确认 · 保留周期，从断点继续补做':'已确认'); $('ackElev').classList.remove('show'); })
       .catch(function(e){
         if(e.status===403){ $('ackElev').classList.add('show'); showProtoToast('当前账号无确认权限，请借管理员账号授权'); }
         else showProtoToast('确认失败: '+((e.data&&e.data.detail)||e.message));
