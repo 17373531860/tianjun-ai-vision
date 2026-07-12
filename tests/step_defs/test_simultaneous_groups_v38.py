@@ -94,6 +94,10 @@ def when_start_and_wait(client, ctx):
 @then("通道 0 的上一周期应该按期望序列 OK 结算")
 def then_prev_cycle_ok(client):
     mgr = _get_mgr(0)
+    # 剧本播完到结算落账有异步间隙, CI 负载高时固定 0.5s 不够 → 轮询到 5s
+    deadline = time.time() + 5.0
+    while time.time() < deadline and not mgr.cycle_times:
+        time.sleep(0.2)
     print(f"[BDD·OK 断言] cycle_times={mgr.cycle_times} ng_cycle_times={mgr.ng_cycle_times}")
     assert len(mgr.cycle_times) >= 1, (
         f"上周期应 OK 结算, 实际 cycle_times={mgr.cycle_times} ng_cycle_times={mgr.ng_cycle_times}"
