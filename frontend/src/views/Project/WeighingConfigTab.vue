@@ -3,6 +3,14 @@
   <div v-if="project.pipeline_config && project.pipeline_config.weighing"
        class="h-full overflow-y-auto p-4 pb-32 custom-scrollbar space-y-6">
 
+    <!-- v3.35 融合模式提示条 -->
+    <el-alert v-if="isStepGate" type="info" :closable="false" show-icon>
+      <template #title>
+        当前为「视觉 SOP + 秤门控」融合模式：周期由步骤设置里的<b>视觉顺序</b>驱动，电子秤只作为已配「外设门控」步骤的放行条件。
+        违序/缺步/超时报警由顺序模式自动生效；本页只需配秤参数、型号标准量表和防错策略。
+      </template>
+    </el-alert>
+
     <!-- 前置要求 -->
     <el-card shadow="never" class="bg-slate-800 border-slate-700">
       <template #header><span class="font-bold text-white">前置要求</span></template>
@@ -20,6 +28,136 @@
           <el-switch v-model="project.pipeline_config.weighing.auto_zero_after_done" />
         </div>
       </div>
+    </el-card>
+
+    <!-- v3.35 前置选择有效期 -->
+    <el-card shadow="never" class="bg-slate-800 border-slate-700">
+      <template #header>
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-white">前置选择有效期</span>
+          <span class="text-xs text-gray-400">过期后旧的人员/型号选择自动失效，需重选否则报警拦截（治"昨天选的型号今天忘了换"）</span>
+        </div>
+      </template>
+      <div class="grid grid-cols-2 gap-4 text-sm text-gray-200">
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">失效策略</label>
+          <el-select v-model="ctxExpiry.mode" size="small" style="width: 100%">
+            <el-option label="永不失效（默认，与旧版一致）" value="never" />
+            <el-option label="每天定时失效（如每天早 8 点）" value="daily" />
+            <el-option label="按班次失效（跨班次即失效）" value="shift" />
+            <el-option label="选择后 N 小时失效" value="hours" />
+          </el-select>
+        </div>
+        <div v-if="ctxExpiry.mode === 'daily'">
+          <label class="block text-gray-400 text-xs mb-1">每天失效时刻（HH:MM）</label>
+          <el-input v-model="ctxExpiry.reset_time" size="small" placeholder="08:00" />
+        </div>
+        <div v-if="ctxExpiry.mode === 'hours'">
+          <label class="block text-gray-400 text-xs mb-1">有效小时数</label>
+          <el-input-number v-model="ctxExpiry.hours" :min="0.5" :step="0.5" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div v-if="ctxExpiry.mode !== 'never'">
+          <label class="block text-gray-400 text-xs mb-1">失效时清哪些选择</label>
+          <el-checkbox-group v-model="ctxExpiry.expire_fields">
+            <el-checkbox value="model">产品型号</el-checkbox>
+            <el-checkbox value="operator">操作人员</el-checkbox>
+          </el-checkbox-group>
+        </div>
+      </div>
+      <div v-if="ctxExpiry.mode === 'shift'" class="mt-3">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-xs text-gray-400">班次表（跨午夜班次填 start &gt; end，如 22:00-06:00）</span>
+          <el-button size="small" @click="ctxExpiry.shifts.push({ name: '', start: '08:00', end: '16:00' })">+ 加班次</el-button>
+        </div>
+        <div v-for="(s, i) in ctxExpiry.shifts" :key="i" class="flex items-center gap-2 mb-1 text-sm">
+          <el-input v-model="s.name" size="small" placeholder="班次名" style="width: 120px" />
+          <el-input v-model="s.start" size="small" placeholder="08:00" style="width: 90px" />
+          <span class="text-gray-500">→</span>
+          <el-input v-model="s.end" size="small" placeholder="16:00" style="width: 90px" />
+          <el-button size="small" type="danger" plain @click="ctxExpiry.shifts.splice(i, 1)">删</el-button>
+        </div>
+      </div>
+    </el-card>
+
+    <!-- v3.35 视觉料源防错（动作 × 固定区域） -->
+    <el-card shadow="never" class="bg-slate-800 border-slate-700">
+      <template #header>
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-white">视觉料源防错</span>
+          <div class="flex items-center gap-3">
+            <span class="text-xs text-gray-400">用"动作发生在哪个料盆区域"识别料别/拦违规（料别本身视觉难分时的正解）</span>
+            <el-switch v-model="visualGuard.enabled" />
+          </div>
+        </div>
+      </template>
+      <div v-if="visualGuard.enabled" class="space-y-4 text-sm text-gray-200">
+        <div class="grid grid-cols-3 gap-4">
+          <div>
+            <label class="block text-gray-400 text-xs mb-1">识别方式</label>
+            <el-select v-model="visualGuard.source" size="small" style="width: 100%">
+              <el-option label="动作 × 固定区域（推荐：舀料动作命中哪个盆）" value="region_action" />
+              <el-option label="标签直接映射（料桶可视觉区分时）" value="direct_label" />
+            </el-select>
+          </div>
+          <div class="flex items-center justify-between pt-4">
+            <el-tooltip content="开 = 识别到投错料别时拦截该步骤等纠正；关 = 只报警不拦截" placement="top">
+              <span class="cursor-help border-b border-dashed border-gray-500 text-xs">投错拦截等纠正</span>
+            </el-tooltip>
+            <el-switch v-model="visualGuard.wrong_block" size="small" />
+          </div>
+          <div>
+            <label class="block text-gray-400 text-xs mb-1">同规则报警冷却(秒)</label>
+            <el-input-number v-model="visualGuard.cooldown_sec" :min="0" :step="1" size="small" style="width: 100%" controls-position="right" />
+          </div>
+        </div>
+        <div>
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-xs text-gray-400">规则列表：料别映射 = 动作命中区域时上报该料别；动作限区 = 动作只允许出现在区域内，区域外报警</span>
+            <el-button size="small" type="primary" plain @click="addGuardRule">+ 加规则</el-button>
+          </div>
+          <table v-if="visualGuard.rules.length" class="w-full text-xs text-gray-200">
+            <thead>
+              <tr class="text-gray-400">
+                <th class="text-left py-1">规则名</th>
+                <th class="py-1">动作标签(逗号分隔)</th>
+                <th class="py-1 w-28">类型</th>
+                <th class="py-1 w-32">映射料别</th>
+                <th class="py-1 w-24">连续帧</th>
+                <th class="py-1 w-32">判定区域</th>
+                <th class="py-1 w-16">删</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(r, i) in visualGuard.rules" :key="i" class="border-t border-slate-700">
+                <td class="py-1 px-1"><el-input v-model="r.name" size="small" placeholder="如 钢帽料盆" /></td>
+                <td class="py-1 px-1"><el-input :model-value="(r.labels || []).join(',')" size="small" placeholder="舀料" @update:model-value="v => r.labels = v.split(/[,，]/).map(x => x.trim()).filter(Boolean)" /></td>
+                <td class="py-1 px-1">
+                  <el-select v-model="r.mode" size="small">
+                    <el-option label="料别映射" value="map" />
+                    <el-option label="动作限区" value="restrict" />
+                  </el-select>
+                </td>
+                <td class="py-1 px-1">
+                  <el-select v-if="r.mode === 'map'" v-model="r.material" size="small" clearable placeholder="选料别">
+                    <el-option v-for="m in project.pipeline_config.weighing.materials" :key="m" :label="m" :value="m" />
+                  </el-select>
+                  <span v-else class="text-gray-500">—</span>
+                </td>
+                <td class="py-1 px-1"><el-input-number v-model="r.min_frames" :min="1" :step="1" size="small" controls-position="right" style="width: 80px" /></td>
+                <td class="py-1 px-1">
+                  <el-button size="small" plain :type="r.polygon && r.polygon.length >= 3 ? 'success' : 'primary'"
+                    @click="$emit('open-guard-roi-editor', i)">
+                    {{ r.polygon && r.polygon.length >= 3 ? `已画(${r.polygon.length}点)` : '画区域' }}
+                  </el-button>
+                </td>
+                <td class="py-1 px-1"><el-button size="small" type="danger" plain @click="visualGuard.rules.splice(i, 1)">删</el-button></td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="text-gray-500 text-xs py-2">还没有规则。百斯特场景示例：规则「钢帽料盆」= 动作标签 [舀料] × 大盆区域 → 映射料别 钢帽水泥；再加一条「钢脚料盆」映射 钢脚水泥。</div>
+        </div>
+      </div>
+      <div v-else class="text-gray-500 text-xs">未启用。启用后按"动作 × 区域"规则识别当前料源，配合「料别校验方式 = 视觉识别」使用。</div>
     </el-card>
 
     <!-- 料别顺序 -->
@@ -160,6 +298,15 @@
               <el-option v-for="ev in project.events_config" :key="ev.id" :label="ev.name" :value="ev.id" />
             </el-select>
           </div>
+          <div>
+            <label class="block text-gray-400 text-xs mb-1">动作限区违规 → 触发事件</label>
+            <el-select v-model="project.pipeline_config.weighing.alarm_event_guard" size="small" style="width: 100%">
+              <el-option v-for="ev in project.events_config" :key="ev.id" :label="ev.name" :value="ev.id" />
+            </el-select>
+          </div>
+        </div>
+        <div class="text-xs text-gray-500">
+          提示：以上事件在「事件设置」里勾选<b>需人工确认</b>后，报警会定格本工位直到确认（可配 USB 确认按钮，见 扫码器 → USB 扫码枪 → 用途「报警确认按钮」）。
         </div>
       </div>
     </el-card>
@@ -178,9 +325,24 @@ import { ElMessage } from 'element-plus';
 const props = defineProps({
   project: { type: Object, required: true },
 });
+defineEmits(['open-guard-roi-editor']);
 
 const newWeighingMaterial = ref('');
 const newWeighingModel = ref('');
+
+// v3.35 融合模式 (视觉 SOP + 秤门控) 判定: 顶部提示条用
+const isStepGate = computed(() =>
+  props.project?.pipeline_config?.weighing?.drive_mode === 'step_gate');
+
+// v3.35 前置选择有效期 / 视觉料源防错子树 (父级 ensureWeighingDefaults 已注入默认)
+const ctxExpiry = computed(() => props.project.pipeline_config.weighing.context_expiry);
+const visualGuard = computed(() => props.project.pipeline_config.weighing.visual_guard);
+
+const addGuardRule = () => {
+  visualGuard.value.rules.push({
+    name: '', labels: [], mode: 'map', material: '', min_frames: 3, polygon: null,
+  });
+};
 
 const weighingModelNames = computed(() => {
   const w = props.project?.pipeline_config?.weighing;

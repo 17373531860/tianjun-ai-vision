@@ -1453,6 +1453,14 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         if _re_engine is not None:
             _re_engine.reset()
 
+        # v3.35 步骤外设门控: 清空未消费门控 + 视觉守卫连击, 防跨启停/强制结算残留
+        if getattr(self, 'step_device_gates', None):
+            try:
+                from backend.services.weighing_engine import get_weighing_engine
+                get_weighing_engine().reset_gates(self.channel_id)
+            except Exception as _e:
+                print(f"[DeviceGate] reset_gates failed: {_e}")
+
         # v3.9.x 事件人工确认阻塞态:
         # 清理函数被 start_detection / stop_detection / apply_project_config /
         # 强制超时结算 / 确认 API 共用. 这里统一重置阻塞态字段:

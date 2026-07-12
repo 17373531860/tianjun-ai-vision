@@ -150,7 +150,7 @@ allowed-tools: "Read, Grep, Glob, Shell"
 
 注意区别：如果**多个客户**都开始要"推自家数据库"，那时再评估：
 - 仍然全走插件（每客户一个 adapter）
-- 升级到主程序的 mes_gateway adapter 框架（已有 5 种适配器机制）— 这才算"基础设施"
+- 升级到主程序的 mes_gateway adapter 框架（已有 6 种适配器机制）— 这才算"基础设施"
 
 ---
 

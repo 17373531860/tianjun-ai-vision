@@ -14,7 +14,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__se
 
 > 阅前先看 `AGENTS.md` 第六节 6.2（模块 6/7/8/9）+ 第七节扩展点表 + 第八节不变量 1/4/6。
 > 这份 skill 覆盖**内置 MES 业务**（工单/工件/缺陷）+ **扫码器**（LON/WMax/虚拟）
-> + **外部 MES Gateway**（5 个适配器） + **集群汇总**（standalone/host/slave）
+> + **外部 MES Gateway**（6 个适配器） + **集群汇总**（standalone/host/slave）
 > + **外部设备 pipeline**（称重器等）。
 
 ---
@@ -90,7 +90,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__se
 | `backend/services/mes_hooks.py` | **1505** | 项目最大 Hub；singleton；worker 线程；scan_pair；_disabled_channels |
 | `backend/services/scanner.py` | **1964** | 项目第二大文件；`ScannerService` + `ScannerConnection` + `_text_lon_listen_loop` + WMax 联动 |
 | `backend/services/mes_gateway.py` | 432 | `MESGateway` 单例；dispatch/重试/鉴权/`_apply_auth_to_headers`/`build_context_from_cycle` |
-| `backend/services/mes_adapters/__init__.py` | 31 | `_REGISTRY` 注册 5 种适配器 |
+| `backend/services/mes_adapters/__init__.py` | 31 | `_REGISTRY` 注册 6 种适配器 |
 | `backend/services/mes_adapters/base.py` | 79 | **自研 `{key.path}` 模板引擎**（不是 Jinja2） + `_array_source` 数组展开 |
 | `backend/services/mes_adapters/{rest,form_data,form_urlencoded,query_string,modbus}_adapter.py` | 各 ~100-300 | 5 种实际发送实现 |
 | `backend/services/cluster_collector.py` | 1122 | host 汇总；per-box 锁；心跳后台线程；超时检查器；commit 重试 |
@@ -263,9 +263,9 @@ def has_any_scanner_present():
 
 ---
 
-## 五、外部 MES Gateway（`mes_gateway.py` + 5 适配器）
+## 五、外部 MES Gateway（`mes_gateway.py` + 6 适配器）
 
-### 5.1 5 个适配器（注册名 → 类）
+### 5.1 6 个适配器（注册名 → 类）
 
 | `adapter_type` | 类 | 协议 | 典型场景 |
 |---|---|---|---|
@@ -274,8 +274,11 @@ def has_any_scanner_present():
 | `form-urlencoded` | `FormUrlencodedAdapter` | 顶层键值平铺到 form 字段 | 客户说"字段分开不要打包" |
 | `query-string` | `QueryStringAdapter` | URL query，body 空 | 客户说"参数放 URL 里" |
 | `modbus_rtu` | `ModbusRTUAdapter` | RTU/TCP 写 Holding（pymodbus 3.13+） | PLC/工控 |
+| `database` | `DatabaseAdapter` | 关系库直写 INSERT（达梦/MySQL/PG/SQLServer/SQLite，v3.35+） | 客户 IT 不开 HTTP，只给中间表（萍乡百斯特达梦） |
 
 注册表：`backend/services/mes_adapters/__init__.py:_REGISTRY`。新增协议直接 `register_adapter(name, cls)`。
+
+`database` 适配器要点（v3.35，`database_adapter.py`）：与 HTTP 适配器**共用同一套模板体系**——template 顶层键名 = 目标表列名，值照常 `{key.path}` 取值；带 `_array_source` 的模板按数组逐行 INSERT（同一事务）。表/列名白名单校验（仅字母数字下划线，可带 schema 点分）防注入；驱动按 `db_type` 懒加载，未装时报错直接写清要装哪个包（达梦=dmPython）；短连接不池化（网关自带重试 + 事件频率低）。前端 GatewayPanel 对它隐藏 URL/鉴权/健康探测等 HTTP 语义字段。回归：`tests/test_mes_database_adapter.py`。
 
 ### 5.2 自研模板引擎（不是 Jinja2！）
 
@@ -575,7 +578,7 @@ curl http://localhost:8001/api/v1/cluster/slaves
 3. **缺陷自动分类**依赖 `DefectCode.label_mapping` 正确配置，否则全部"未分类"
 4. **Modbus 与报警灯共用串口**：`_serial_lock` 互斥，长写入延迟报警响应
 5. **mes_hooks.py 历史曾用 `except Exception: pass` 静默吞错** —— v2.7.9 全改 `traceback.format_exc()`，**新写 except 默认带 traceback**
-6. **`MESConnection.adapter_type` 必须 ∈ 5 个注册名**（rest / form-data / form-urlencoded / query-string / modbus_rtu），否则 dispatch 进 `_REGISTRY` lookup 抛 ValueError 写 log 不抛错
+6. **`MESConnection.adapter_type` 必须 ∈ 6 个注册名**（rest / form-data / form-urlencoded / query-string / modbus_rtu / database），否则 dispatch 进 `_REGISTRY` lookup 抛 ValueError 写 log 不抛错
 7. **build_context 字段加新名**：必走 `getattr(x, 'new', None) or getattr(x, 'old', None)`；硬读会让 cycle_end 整段静默
 8. **import 路径**：`SessionLocal` 在 `backend.db.database`（**不是** `backend.database`）；`scanner` 在 `backend.services.scanner`
 9. **静默删除集群 BoxAggregation**：`/cluster/box/{barcode}` 删完同条码再扫被视为新条码，对应 `Workpiece` 不会被这两个 API 触及
@@ -606,7 +609,7 @@ curl http://localhost:8001/api/v1/cluster/slaves
 │   ├── external_device.py (~390)        三 mixin 拼装
 │   ├── external_device_pipeline.py (~430)  称重状态机 + 有重无码告警
 │   ├── mes_adapters/
-│   │   ├── __init__.py        _REGISTRY: rest/form-data/form-urlencoded/query-string/modbus_rtu
+│   │   ├── __init__.py        _REGISTRY: rest/form-data/form-urlencoded/query-string/modbus_rtu/database
 │   │   ├── base.py (79)       自研 {key.path} 模板引擎 (不是 Jinja2!)
 │   │   ├── rest_adapter.py / form_data_adapter.py / form_urlencoded_adapter.py
 │   │   ├── query_string_adapter.py / modbus_adapter.py
@@ -683,6 +686,17 @@ curl http://localhost:8001/api/v1/cluster/slaves
 | 强制结案 | `POST /packaging-flows/{id}/force-settle`，权限 `system.packaging_flow.force_settle`（admin/engineer，操作员 403）| `force_settle_manual` 强制走 settle 收尾（忽略配置 keep/abort），必填理由 | `forced_reason`/`forced_by` 落 `PackagingFlowRun` 审计 |
 | 待机不结算 | 配置 `forced_settle_on_standby`（默认开）| 关掉后 `on_forced_settle_by_channel(is_standby=True)` 直接 return，工单保留可恢复 | 停止（非待机）才收尾 |
 | 缺油嘴 gate | 配置 `oil_nozzle_required`+`oil_nozzle_step_label`+`event_missing_nozzle`| 每箱结算前 `_probe_oil_nozzle` 判放油嘴步骤是否 covered，未过暂不收尾+报警 | 未配置/无探测器退化放行（每箱 gate 误卡会卡死线）|
+
+### v3.34.1 尾箱塞工单 gate 升级：放工单 = 尾箱收尾动作（挂起快照闭环，子开关可选）
+
+- **与老行为并存**：子开关 `tail_paper_as_close_action`（默认**关**=老行为零差异，仅 `tail_paper_order_required` 开时生效；上银一键预设开）。关 = 老行为：拦下只报警等着，下个周期结算按那个周期自己的数据重走 gate；扫新单走漏箱处置。开 = 下述挂起快照闭环。
+- **旧行为痛点**：尾箱装满但放工单发生在周期结算**之后** → gate 拦下后无路可走，下个周期结算会用新周期的滑块数（≈0）判 NG。
+- **新行为（子开关开）**：gate 拦下时把被拦那次的滑块数/合格性存进 `run["pending_paper_box"]` 快照（内存态，不改 status），之后**四个出口**消化快照：
+  1. 后续周期结算探到放工单 → 用**快照原成绩**收尾（新周期滑块数忽略，同一物理箱）；
+  2. 扫码时探到放工单（探测钩子 `_real_paper_order_probe` 已补查 `current_cycle_steps` 实时步骤集，修掉"上一周期缓存遮蔽 live"的坑）→ 快照收尾，扫的是新单则接着开新单；
+  3. **没放就扫新工单** → 尾箱判 NG 收尾（`missing_paper` 报警 + `box_details[].remediated` 留痕）再开新单；
+  4. 管理员强制结案 → 豁免 gate，按快照原成绩落账。
+- 同号重扫且仍没放 → 只提醒继续等，不收尾。核心逻辑 `_close_pending_paper`；测试见 `test_packaging_flow_coordinator.py::test_sliders_pending_paper_*` + `packaging_flow_sliders.feature` 三个新场景。
 
 ### v3.23 NG 补做之「补滑块」（延迟落账）
 

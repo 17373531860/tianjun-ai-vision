@@ -543,6 +543,15 @@ mixin 改动就是源码裸跑（IP 漏出去），但行为对得上。
    - 客户只调一个参数：步骤消失等待几秒才认为真的消失
    - 残影只要消失等待时间够长就能被自然消化（不会触发新 cycle）
    - 规则 1：消失等待期间若出现其他有意义步骤，立即终止等待（语义上"客户已经推进到下一步"）
+   - **v3.34 步骤级豁免开关** `disappear_uninterruptible`（steps_config 布尔，默认 False 零差异）：
+     开启后该步骤的消失等待**不再被其他步骤打断**，等待时间照配置走完。
+     适用"工具驻留画面、多步骤并行可见"的产线（滤网清洁：吹枪插在工件上时进行敲击/检查，
+     规则 1 会把吹枪闪断误判成消失→重现→first_step 提前结算）。
+     配套守门：first_step 结算模式下，开了此开关的首步**持续可见期间**（step_last_seen 未被
+     消失结算清理）重现不触发首步结算——只有真正走完消失结算后的再次出现才算新工件边界
+     （`source_settlement_mixin._process_single_step` 内 `_held_visible` 判定）。
+     解析在 `source_project_config_apply.py` step_time_config；打断点在 `source_step_stats_mixin`
+     规则 B 分支；前端开关在 StepsConfigTab 表B「等待不被打断」列；回归 `tests/test_disappear_uninterruptible.py`。
 2. **第二层（同时出现组重构）**：见 §十二·六
    - 类一：周期内顺序无关的同时组（B-C 谁先谁后）
    - 类二：跨周期同时组（上一周期末步 E + 下一周期首步 A 互相等待）

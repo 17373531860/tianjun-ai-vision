@@ -1,7 +1,7 @@
 # 数据库表参考
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-07-07）
+> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-07-12）
 > **单一事实源**：SQLAlchemy ORM（Base.metadata）。字段含义看模型源文件行内注释；
 > 迁移历史看 backend/db/migrations/ 与 backend/main.py 的 migrate_database。
 
@@ -611,6 +611,12 @@ ORM 类 `PackagingFlowConfig`，定义于 `backend/models/mes_models.py`。
 | `label_len` | INTEGER |  | 0 |
 | `hyphen_template` | VARCHAR(32) |  |  |
 | `hyphen_pos` | INTEGER |  | 0 |
+| `composite_label_enabled` | BOOLEAN |  | False |
+| `composite_delimiter` | VARCHAR(8) |  | '|' |
+| `composite_pick_mode` | VARCHAR(8) |  | 'prefix' |
+| `composite_prefix` | VARCHAR(32) |  |  |
+| `composite_index` | INTEGER |  | 1 |
+| `order_code_pattern` | VARCHAR(128) |  |  |
 | `on_mes_fail` | VARCHAR(16) |  | 'block' |
 | `on_label_mismatch` | VARCHAR(16) |  | 'warn' |
 | `on_short_box` | VARCHAR(16) |  | 'redo' |
@@ -636,6 +642,7 @@ ORM 类 `PackagingFlowConfig`，定义于 `backend/models/mes_models.py`。
 | `name_match_strict_boundary` | BOOLEAN |  | False |
 | `tail_paper_order_required` | BOOLEAN |  | False |
 | `tail_paper_step_label` | VARCHAR(64) |  |  |
+| `tail_paper_as_close_action` | BOOLEAN |  | False |
 | `event_missing_paper` | INTEGER |  |  |
 | `oil_nozzle_required` | BOOLEAN |  | False |
 | `oil_nozzle_step_label` | VARCHAR(64) |  |  |

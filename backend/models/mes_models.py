@@ -791,6 +791,17 @@ class PackagingFlowConfig(Base):
     # 例: 扫到 JOB1507001141, 符号='-' 位置=12 → 还原成 JOB150700114-1 (序号位数不限).
     hyphen_template = Column(String(32), nullable=True)  # 要补回的特殊符号 (insert_char 模式)
     hyphen_pos = Column(Integer, default=0)              # 补在第几位字符之后 (0=不补)
+    # 复合条码取段 (v3.30.1): 正式产线箱标签常是多段拼接码 (如 订单|工单|数量|校验串),
+    # 先按分隔符拆段取出"工单段", 再走上面的 label_match 归一化. 默认关 = 存量零差异;
+    # 无分隔符的码 (工单纸) 原样通过, 两种码可混扫.
+    composite_label_enabled = Column(Boolean, default=False)
+    composite_delimiter = Column(String(8), default="|")    # 段分隔符
+    composite_pick_mode = Column(String(8), default="prefix")  # prefix=按前缀认段 / index=取第N段
+    composite_prefix = Column(String(32), nullable=True)     # 工单段前缀 (如 'JOB', prefix 模式)
+    composite_index = Column(Integer, default=1)             # 第几段, 1 起 (index 模式)
+    # 工单号识别规则 (v3.30.1): 仅在无在途工单、准备开第一单时校验; 空=不过滤.
+    # 用于挡掉开机后第一枪误扫的数量/物料等非工单条码 (如 '80.00' 开出垃圾工单).
+    order_code_pattern = Column(String(128), nullable=True)
 
     # --- 组④ 异常策略 ---
     on_mes_fail = Column(String(16), default="block")          # block=阻断重扫 / offline=允许离线
@@ -842,6 +853,10 @@ class PackagingFlowConfig(Base):
     # 尾箱塞工单视觉 gate (默认关): 尾箱结算前"放工单"步骤必须 covered, 否则不收尾 + 报警
     tail_paper_order_required = Column(Boolean, default=False)
     tail_paper_step_label = Column(String(64), nullable=True)
+    # v3.34.1 放工单=尾箱收尾动作 (默认关=老行为): 开后 gate 拦下时挂起本箱成绩快照,
+    # 之后探到放工单用快照原成绩收尾; 一直没放就扫新工单则尾箱判 NG 收尾.
+    # 仅 tail_paper_order_required 开时生效.
+    tail_paper_as_close_action = Column(Boolean, default=False)
     event_missing_paper = Column(Integer, nullable=True)   # 尾箱缺工单异常事件
 
     # 缺油嘴视觉 gate (默认关): 每箱封箱结算前"放油嘴"步骤必须 covered, 否则不收尾 + 报警.

@@ -93,6 +93,15 @@ class StepStatsMixin:
         if _pc.get('logic_mode') == 'per_item' and hasattr(self, '_update_step_stats_per_item'):
             return self._update_step_stats_per_item(detections, original_frame)
 
+        # v3.35 视觉料源防错: 每帧把检测结果喂给称重引擎的视觉守卫
+        # (动作×固定区域→料别映射/限区违规)。未启用时 flag=False 一次 getattr 早退零开销。
+        if getattr(self, '_weighing_visual_feed', False):
+            try:
+                from backend.services.weighing_engine import get_weighing_engine
+                get_weighing_engine().feed_detections(self.channel_id, detections)
+            except Exception as _wg_e:
+                print(f"[Weighing/Guard] feed_detections failed: {_wg_e}")
+
         import base64
         current_time = time.time()
         detected_labels = set()  # 用于统计的标签（通过阈值的）
@@ -430,8 +439,14 @@ class StepStatsMixin:
 
                 # 规则 B: 等待期间出现其他对周期有意义的步骤 → 立即按消失处理
                 # (排除自身: label not in detected_labels 已保证, 但保险起见显式排除)
+                # v3.34: 步骤级开关 disappear_uninterruptible=True 时豁免规则 B —
+                # 工具驻留画面的产线上其他步骤与本步骤并行可见, "别人出现"不代表
+                # 本步骤已结束。默认 False, 未配置的老项目行为零差异。
                 other_meaningful_present = bool(meaningful_in_frame - {label})
-                effective_delay = 0 if other_meaningful_present else disappear_delay
+                if time_config.get('disappear_uninterruptible'):
+                    effective_delay = disappear_delay
+                else:
+                    effective_delay = 0 if other_meaningful_present else disappear_delay
 
                 if current_time - last_time > effective_delay:
                     # 已确认过的 label 走完消失结算后, 清零帧确认状态

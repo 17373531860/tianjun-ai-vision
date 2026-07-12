@@ -153,6 +153,16 @@ def apply(engine):
         ("packaging_flow_configs", "event_missing_nozzle", "INTEGER"),
         # v3.22 insert_char 模式: 扫码枪丢符号时把 '-' 等补回固定位置
         ("packaging_flow_configs", "hyphen_pos", "INTEGER DEFAULT 0"),
+        # v3.30.1 复合条码取段: 多段拼接箱标签 (订单|工单|数量|校验) 先拆段取工单段再归一化
+        ("packaging_flow_configs", "composite_label_enabled", "BOOLEAN DEFAULT 0"),
+        ("packaging_flow_configs", "composite_delimiter", "VARCHAR(8) DEFAULT '|'"),
+        ("packaging_flow_configs", "composite_pick_mode", "VARCHAR(8) DEFAULT 'prefix'"),
+        ("packaging_flow_configs", "composite_prefix", "VARCHAR(32)"),
+        ("packaging_flow_configs", "composite_index", "INTEGER DEFAULT 1"),
+        # v3.30.1 工单号识别规则: 归一化后须匹配正则才当工单, 空=不过滤
+        ("packaging_flow_configs", "order_code_pattern", "VARCHAR(128)"),
+        # v3.34.1 放工单=尾箱收尾动作 (挂起快照闭环, 默认关=老行为)
+        ("packaging_flow_configs", "tail_paper_as_close_action", "BOOLEAN DEFAULT 0"),
         # v3.22 PackagingFlowRun 滑块口径 + 尾箱运行态
         ("packaging_flow_runs", "count_unit", "VARCHAR(8) DEFAULT 'trays'"),
         ("packaging_flow_runs", "slider_total", "INTEGER DEFAULT 0"),

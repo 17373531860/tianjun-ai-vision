@@ -1,0 +1,140 @@
+{
+  "version": "3.35.0",
+  "date": "2026-07-12",
+  "previous_version": "3.34.0",
+  "theme": "萍乡百斯特胶装水泥称重项目：视觉 SOP × 秤门控融合架构 + 前置选择有效期 + 视觉料源防错 + USB 报警确认按钮 + MES 数据库直写（达梦等5库）；包装线复合条码取段/工单号识别规则/放工单=尾箱收尾动作；步骤消失等待不被打断开关。全部默认关或零差异。",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "视觉 SOP × 秤门控融合架构 (drive_mode='step_gate')",
+      "symptom": "v3.31 纯秤驱动称重模式无法继承顺序模式的违序/缺步/超时报警，周期节奏又由人操作视觉步骤决定",
+      "root_cause": "秤驱动与视觉顺序是两条独立周期主线，客户场景需要视觉为主线、秤只做步骤放行条件",
+      "fix": "称重引擎新增 StepGate 门控状态机（去皮门控 tare / 称重判定 weigh），视觉步骤确认后先武装门控、秤条件满足才放行入周期；steps_config[].device_gate 配置，默认无配置零开销；引擎未登记通道直接放行不卡产线；启停/强制结算清残留门控；前端步骤表「外设门控」列 + 称重配置页签融合模式复用",
+      "files": ["backend/services/weighing_engine.py", "backend/api/source_settlement_mixin.py", "backend/api/source_project_config_apply.py", "backend/api/source_state_init.py", "backend/api/source.py", "frontend/src/views/Project/StepsConfigTab.vue", "frontend/src/views/Project/index.vue", "tests/test_weighing_fusion.py"],
+      "keywords": ["融合架构", "step_gate", "drive_mode", "外设门控", "device_gate", "StepGate", "去皮门控", "称重判定", "tare", "weigh", "百斯特", "萍乡", "电子秤", "步骤放行", "fusion"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "称重前置选择有效期 context_expiry",
+      "symptom": "操作员/型号选一次永久有效，换班后沿用昨天的型号投料不报警",
+      "root_cause": "v3.31 前置选择无有效期概念",
+      "fix": "纯函数 context_expired 四种策略：never(默认零差异)/daily(每天定时失效)/shift(跨班次失效，支持跨午夜)/hours(N小时失效)；expire_fields 可配失效清哪些字段；前端称重配置页有效期区块",
+      "files": ["backend/services/weighing_engine.py", "frontend/src/views/Project/WeighingConfigTab.vue", "tests/test_weighing_fusion.py"],
+      "keywords": ["context_expiry", "有效期", "班次", "shift", "daily", "换班", "型号失效", "上班没切型号", "reset_time", "expire_fields"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "视觉料源防错 visual_guard（动作×固定区域→料别/限区）",
+      "symptom": "料桶外观无差异，物料防错 visual 档拿不到料别标签；投错料无法拦截",
+      "root_cause": "6.3 物料防错缺少料别标签来源",
+      "fix": "VisualGuardMatcher 纯逻辑判定器：mode=map 动作命中区域上报料别走投错校验，mode=restrict 动作限区违规报警；射线法点在多边形（不依赖 cv2）；连续帧确认 + 报警冷却；direct_label 支持标签直接映射；推理热路径 flag 守门每帧喂检测；前端规则表 + 复用主 ROI 编辑器画区域",
+      "files": ["backend/services/weighing_engine.py", "backend/api/source_step_stats_mixin.py", "backend/api/source_project_config_apply.py", "frontend/src/views/Project/WeighingConfigTab.vue", "frontend/src/views/Project/index.vue", "tests/test_weighing_fusion.py"],
+      "keywords": ["visual_guard", "料源防错", "舀料", "投错", "限区", "region_action", "direct_label", "point_in_polygon", "VisualGuardMatcher", "料别映射", "动作区域"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "MES 数据库直写适配器（第 6 种推送协议 database）",
+      "symptom": "客户 IT 不开 HTTP 接口，只给一张关系库中间表（达梦），事件数据推不出去",
+      "root_cause": "既有 5 种适配器全是 HTTP/Modbus 协议，无数据库直写通路",
+      "fix": "DatabaseAdapter 支持达梦/MySQL/PostgreSQL/SQLServer/SQLite；共用 HTTP 模板体系（顶层键名=列名，_array_source 逐行 INSERT 同事务）；标识符白名单防注入；驱动懒加载缺失时报错写清装哪个包；前端网关面板新增适配器类型及连接表单",
+      "files": ["backend/services/mes_adapters/database_adapter.py", "backend/services/mes_adapters/__init__.py", "frontend/src/views/MES/GatewayPanel.vue", "tests/test_mes_database_adapter.py"],
+      "keywords": ["DatabaseAdapter", "数据库直写", "达梦", "dmPython", "DM", "MySQL", "PostgreSQL", "SQLServer", "中间表", "INSERT", "适配器", "database adapter"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "USB 报警确认按钮（扫码枪第 4 种用途 ack）",
+      "symptom": "称重缺料/超量/投错报警定格后，操作员戴手套不便碰屏解除",
+      "root_cause": "人工确认只有前端界面入口，无物理按钮通路",
+      "fix": "USB 扫码枪用途新增 ack（发固定码的 HID 按键），按一下走事件人工确认接口解除本工位定格；路由纯函数短路不进包装/拉单/绑定链路；无待确认事件温和提示；配套按钮选型采购文档",
+      "files": ["frontend/src/composables/useScanGun.js", "frontend/src/views/MES/UsbScanGunDialog.vue", "docs/百斯特萍乡_按钮及配件选型.md"],
+      "keywords": ["报警确认按钮", "ack", "USB按钮", "HID", "人工确认", "定格解除", "ack-event", "扫码枪用途", "物理按钮"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "步骤消失等待不被打断 disappear_uninterruptible",
+      "symptom": "工具驻留画面的产线（吹枪插在工件上并行敲击/检查），驻留步骤闪断被误判成消失→重现→首步提前结算",
+      "root_cause": "消失等待规则 B「其他有意义步骤出现即掐掉等待」不适用于多步骤并行可见场景",
+      "fix": "steps_config 步骤级开关：开启后该步骤消失等待按配置时长走完不被打断；配套首步结算守门——持续可见期间重现不触发首步结算；前端步骤表 B「等待不被打断」列",
+      "files": ["backend/api/source_step_stats_mixin.py", "backend/api/source_settlement_mixin.py", "backend/api/source_project_config_apply.py", "frontend/src/views/Project/StepsConfigTab.vue", "tests/test_disappear_uninterruptible.py", "tests/e2e_browser/test_steps_disappear_uninterruptible.py"],
+      "keywords": ["disappear_uninterruptible", "消失等待", "不被打断", "工具驻留", "吹枪", "滤网清洁", "首步重现", "规则B", "闪断"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-007",
+      "title": "包装线复合条码取段 + 工单号识别规则",
+      "symptom": "正式产线箱标签是多段拼接码整串比对必不符；开机第一枪误扫数量条码（如 '80.00'）开出垃圾工单",
+      "root_cause": "扫码归一化只处理单段码；开第一单无工单号格式校验",
+      "fix": "复合条码按分隔符拆段、按前缀（多命中取最长）或序号取工单段再归一化，无分隔符原样通过可混扫；工单号识别正则仅在开第一单时校验，不符报警忽略；7 个新列 + 面板表单 + 取段预览",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/api/packaging_flows.py", "backend/models/mes_models.py", "backend/db/migrations/m0000_legacy.py", "frontend/src/views/Settings/PackagingFlowPanel.vue", "tests/features/packaging_composite_label.feature", "tests/step_defs/test_packaging_composite_label.py"],
+      "keywords": ["composite_label", "复合条码", "取段", "分隔符", "order_code_pattern", "工单号识别", "误扫", "垃圾工单", "多段拼接", "混扫", "prefix", "index"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-008",
+      "title": "放工单=尾箱收尾动作 tail_paper_as_close_action（挂起快照闭环）",
+      "symptom": "尾箱装满但放工单发生在周期结算之后，gate 拦下后下个周期用新周期滑块数(≈0)判 NG",
+      "root_cause": "老 gate 拦下只报警等着，无成绩快照，重走 gate 时用错周期数据",
+      "fix": "gate 拦下时挂起本箱滑块数/合格性快照，四出口消化：后续周期/扫码探到放工单按快照原成绩收尾；没放就扫新单判 NG 留痕再开新单；强制结案豁免 gate 按快照落账；子开关默认关=老行为",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/api/packaging_flows.py", "backend/models/mes_models.py", "backend/db/migrations/m0000_legacy.py", "frontend/src/views/Settings/PackagingFlowPanel.vue", "tests/features/packaging_flow_sliders.feature", "tests/step_defs/test_packaging_flow_sliders.py", "tests/test_packaging_flow_coordinator.py"],
+      "keywords": ["tail_paper_as_close_action", "放工单", "尾箱", "挂起快照", "pending_paper_box", "收尾动作", "missing_paper", "塞工单", "gate"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "放工单探测被上一周期缓存遮蔽",
+      "symptom": "尾箱挂起等放工单期间操作员补放了工单，系统仍报未检测到",
+      "root_cause": "探测钩子优先读上一个已结算周期的步骤缓存，补放动作落在当前未结算周期里被遮蔽",
+      "fix": "探测钩子缓存未命中时补查当前周期实时步骤集",
+      "files": ["backend/services/packaging_flow_coordinator.py"],
+      "keywords": ["放工单探测", "步骤缓存", "current_cycle_steps", "遮蔽", "尾箱", "paper_order_probe"],
+      "breaking": false
+    },
+    {
+      "type": "doc",
+      "id": "DOC-001",
+      "title": "萍乡百斯特三份交付文档（MD+PDF）",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "系统配置指南 v1.0（融合架构从零配到可验收）+ 视觉模型标注规范 v1.0（含16张示例图）+ 报警确认按钮及配件选型 v1.0",
+      "files": ["docs/百斯特萍乡_系统配置指南.md", "docs/百斯特萍乡_视觉模型标注规范.md", "docs/百斯特萍乡_按钮及配件选型.md"],
+      "keywords": ["百斯特", "萍乡", "配置指南", "标注规范", "按钮选型", "交付文档"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes", "debug-source"],
+  "files_changed": [
+    "backend/services/weighing_engine.py",
+    "backend/services/mes_adapters/database_adapter.py",
+    "backend/services/mes_adapters/__init__.py",
+    "backend/services/packaging_flow_coordinator.py",
+    "backend/api/packaging_flows.py",
+    "backend/api/source.py",
+    "backend/api/source_settlement_mixin.py",
+    "backend/api/source_step_stats_mixin.py",
+    "backend/api/source_project_config_apply.py",
+    "backend/api/source_state_init.py",
+    "backend/models/mes_models.py",
+    "backend/db/migrations/m0000_legacy.py",
+    "frontend/src/composables/useScanGun.js",
+    "frontend/src/views/MES/GatewayPanel.vue",
+    "frontend/src/views/MES/UsbScanGunDialog.vue",
+    "frontend/src/views/Project/StepsConfigTab.vue",
+    "frontend/src/views/Project/WeighingConfigTab.vue",
+    "frontend/src/views/Project/index.vue",
+    "frontend/src/views/Settings/PackagingFlowPanel.vue"
+  ]
+}
