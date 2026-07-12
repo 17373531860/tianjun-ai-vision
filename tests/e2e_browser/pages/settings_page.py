@@ -6,7 +6,8 @@ from typing import Optional
 from .base_page import BasePage
 
 
-SETTINGS_TABS = ("显示设置", "检测框设置", "性能设置", "插件管理")
+SETTINGS_TABS = ("显示设置", "检测框设置", "性能设置", "插件管理",
+                 "账号鉴权", "流水线串行")
 
 
 class SettingsPage(BasePage):

@@ -287,8 +287,13 @@ def test_remediation_fires_configured_event_alarm(vclock, monkeypatch):
     assert ('event7', 0) in calls, f"待补态应触发 event7 报警, 实际 {calls}"
 
 
-def test_remediation_event_zero_no_alarm(vclock, monkeypatch):
-    """remediation_event_id=0 (默认) → 不主动触发任何报警."""
+def test_remediation_event_zero_falls_back_to_ng_alarm(vclock, monkeypatch):
+    """remediation_event_id=0 (默认) → 回退触发标准 NG 事件 event2 报警.
+
+    v3.33「NG 自动报警」定稿语义: 进待补态就点灯, 不等人工确认 NG 落账,
+    未配事件号时回退 event2 (见 _per_item_fire_remediation_alarm docstring)。
+    v3.28 的老语义 (0=完全不报警) 已废弃, 本测试随特性同步更新。
+    """
     calls = []
     import backend.api.alarm as alarm_mod
     monkeypatch.setattr(alarm_mod.alarm_router, 'trigger_alarm',
@@ -301,7 +306,7 @@ def test_remediation_event_zero_no_alarm(vclock, monkeypatch):
     _feed(vsm, [], repeat=5, vclock=vclock)
 
     assert vsm._per_item_session.awaiting_remediation
-    assert not calls, f"未配事件号不应触发报警, 实际 {calls}"
+    assert ('event2', 0) in calls, f"未配事件号应回退 NG event2 报警, 实际 {calls}"
 
 
 # ==================== T-G: 老项目 (离场模式关) 行为不变 ====================

@@ -27,9 +27,18 @@ def test_settings_three_tabs_present(page, base_url):
     assert not missing, f"Settings 页缺少原生 tab: {missing}, 实际 {tabs}"
 
 
-def test_settings_operator_table_present(page, base_url):
+def test_settings_auth_panel_present(page, base_url):
+    """v3.10 起操作员管理已废弃, 账号体系并入「账号鉴权」Tab.
+
+    老断言盯"操作员管理"字样, 该区块 v3.10 删除后一直红 — 随特性同步更新:
+    点开账号鉴权 Tab 应看到鉴权状态卡 (启用/未启用两态均可);
+    用户表仅鉴权启用后渲染, CI 环境默认关, 不强求表格。
+    """
     sp = SettingsPage(page, base_url).goto()
-    assert sp.has_operator_table(), "Settings 页应有操作员管理表"
+    sp.switch_tab("账号鉴权")
+    ok = (sp.wait_for_text("账号鉴权已启用", timeout_ms=8000)
+          or sp.wait_for_text("账号鉴权未启用", timeout_ms=2000))
+    assert ok, "账号鉴权 Tab 应显示鉴权状态卡"
 
 
 def test_settings_save_button_present(page, base_url):
