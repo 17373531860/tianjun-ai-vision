@@ -1271,6 +1271,22 @@ def _do_ack_pending(mgr, channel: int, action: Optional[str] = None,
         if reset_rules:
             print(f"[ack] 已重置周期性规则 (event_id={ev_id}): {reset_rules}")
 
+    # v3.34: 事件配了「确认后保留周期」→ 只解除定格不清运行时, 工人从断点继续补做
+    # (典型: 违序警告当场定格, 确认后接着打漏掉的那颗螺丝, 周期照常走完)。
+    # 默认不勾 → 走老"确认重做"路径 (丢弃在制周期), 零差异。
+    if mgr._pending_ack_keeps_cycle():
+        mgr._ack_release_keep_cycle()
+        print(f"[ack] 确认后保留周期 (断点补做): event={ev_name} "
+              f"当前周期={getattr(mgr, 'current_cycle_steps', [])} (channel_id={channel})")
+        return {
+            "status": "success",
+            "acked": True,
+            "event_name": ev_name,
+            "waited_sec": waited,
+            "reset_rules": reset_rules,
+            "kept_cycle": True,
+        }
+
     mgr._clear_step_runtime_state()
     return {
         "status": "success",

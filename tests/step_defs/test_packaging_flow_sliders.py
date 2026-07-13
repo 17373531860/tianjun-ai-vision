@@ -77,6 +77,14 @@ def _enable_paper_gate(client, ctx):
     # 默认探测放行, 待 "尾箱在未塞工单下完成滑块" 步骤里临时切成 False
 
 
+@given("开启放工单收尾动作模式")
+def _enable_paper_close_action(client, ctx):
+    # v3.34.1 子开关: 放工单=尾箱收尾动作 (挂起快照闭环), 默认关=老行为
+    client.put(f"/api/v1/packaging-flows/{ctx['config_id']}",
+               json={"tail_paper_as_close_action": True})
+    _coord().reload_configs(_new_session())
+
+
 @given(parsers.parse('MES 工单 "{order}" 滑块总数 {qty:d} 规格 "{spec}"'))
 def _set_order(ctx, order, qty, spec):
     ctx["orders"][order] = {"dispatch_qty": qty, "spec": spec, "job_no": order}
@@ -103,6 +111,28 @@ def _settle_tail_no_paper(ctx, n):
     _coord().set_paper_order_probe(lambda c, l: False)  # 没检测到放工单动作
     ctx["cycle_seq"] += 1
     _coord().on_cycle_settled(0, ctx["cycle_seq"], True, _new_session(), slider_count=n)
+
+
+@when("随后检测到放工单动作再来一个周期")
+def _settle_paper_cycle(ctx):
+    # 工人补放工单: 探测转为可见, 下一个检测周期结算时消化挂起快照收尾
+    _coord().set_paper_order_probe(lambda c, l: True)
+    ctx["cycle_seq"] += 1
+    _coord().on_cycle_settled(0, ctx["cycle_seq"], True, _new_session(), slider_count=0)
+
+
+@when("现场已放工单")
+def _paper_now_visible(ctx):
+    # 只放工单不等新周期结算 (扫码时刻由探测钩子看到实时步骤)
+    _coord().set_paper_order_probe(lambda c, l: True)
+
+
+@then(parsers.parse('在途工单应为 "{order}"'))
+def _assert_running_order(ctx, order):
+    state = _coord().get_state(ctx["config_id"])
+    norm = order.replace("-", "").upper()
+    assert state is not None, "无进行中工单"
+    assert state["order_no"] == norm, f"在途={state['order_no']} 期望 {norm}"
 
 
 @then(parsers.parse('工单 "{order}" 应做箱数 {boxes:d} 尾箱目标 {tail:d}'))

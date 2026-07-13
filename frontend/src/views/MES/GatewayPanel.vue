@@ -113,17 +113,19 @@
             <el-radio value="form-urlencoded">Form 平铺</el-radio>
             <el-radio value="query-string">URL 参数</el-radio>
             <el-radio value="modbus_rtu">Modbus RTU</el-radio>
+            <el-radio value="database">数据库直写</el-radio>
           </el-radio-group>
           <div class="text-xs text-gray-500 mt-1 ml-2">
             <div>• <b>REST/JSON</b>：body 发 JSON（<code>{"order_no":"..."}</code>）</div>
             <div>• <b>Form-Data</b>：表单里塞一个字段 <code>param={"order_no":"..."}</code>（整个 JSON 串）</div>
             <div>• <b>Form 平铺</b>：表单字段分开传 <code>order_no=xxx&amp;result=NG</code>（x-www-form-urlencoded）</div>
             <div>• <b>URL 参数</b>：字段全塞 URL 里 <code>?order_no=xxx&amp;result=NG</code>，body 为空</div>
+            <div>• <b>数据库直写</b>：直接 INSERT 进客户关系库中间表（达梦/MySQL/PostgreSQL/SQL Server/SQLite），模板顶层键名 = 目标表列名</div>
           </div>
         </el-form-item>
 
         <!-- REST / Form-Data 配置 -->
-        <template v-if="form.adapter_type !== 'modbus_rtu'">
+        <template v-if="isHttpAdapter">
           <el-form-item label="接口地址">
             <el-input v-model="configUrl" placeholder="http://192.168.50.12:11211/api/..." />
           </el-form-item>
@@ -320,6 +322,51 @@
           </div>
           <el-button size="small" @click="modbusRegisters.push({ address: 40001, source: 'result_code', data_type: 'uint16' })">+ 添加寄存器</el-button>
         </template>
+
+        <!-- v3.35 数据库直写配置 -->
+        <template v-if="form.adapter_type === 'database'">
+          <el-divider content-position="left">数据库连接</el-divider>
+          <div class="flex gap-4">
+            <el-form-item label="数据库类型" class="flex-1">
+              <el-select v-model="dbType" @change="onDbTypeChange">
+                <el-option label="达梦 DM" value="dm" />
+                <el-option label="MySQL" value="mysql" />
+                <el-option label="PostgreSQL" value="postgresql" />
+                <el-option label="SQL Server" value="sqlserver" />
+                <el-option label="SQLite (本地文件)" value="sqlite" />
+              </el-select>
+            </el-form-item>
+            <template v-if="dbType !== 'sqlite'">
+              <el-form-item label="主机" class="flex-1" required>
+                <el-input v-model="dbHost" placeholder="192.168.1.50" />
+              </el-form-item>
+              <el-form-item label="端口" class="w-36">
+                <el-input-number v-model="dbPort" :min="0" :precision="0" controls-position="right" />
+              </el-form-item>
+            </template>
+          </div>
+          <template v-if="dbType !== 'sqlite'">
+            <div class="flex gap-4">
+              <el-form-item label="用户名" class="flex-1">
+                <el-input v-model="dbUser" :placeholder="dbType === 'dm' ? 'SYSDBA' : 'root'" />
+              </el-form-item>
+              <el-form-item label="密码" class="flex-1">
+                <el-input v-model="dbPassword" type="password" show-password />
+              </el-form-item>
+            </div>
+          </template>
+          <el-form-item :label="dbType === 'sqlite' ? '数据库文件路径' : '数据库名'">
+            <el-input v-model="dbDatabase"
+              :placeholder="dbType === 'sqlite' ? 'D:/data/mes.db' : (dbType === 'dm' ? '留空 = 用户默认库/schema' : 'PROD')" />
+          </el-form-item>
+          <el-form-item label="目标表名" required>
+            <el-input v-model="dbTable" placeholder="T_WEIGH_RECORD（可带 schema 前缀，如 PROD.T_WEIGH_RECORD）" />
+            <div class="text-xs text-gray-500 mt-1">
+              下方「字段映射模板」的<b>顶层键名 = 该表的列名</b>，值照常用 <code>{'{'}字段路径{'}'}</code> 引用检测数据；
+              带 <code>_array_source</code> 的模板按数组逐行 INSERT（同一事务）。驱动未安装时测试推送会直接提示要装哪个包。
+            </div>
+          </el-form-item>
+        </template>
         <el-form-item label="绑定工位">
           <template v-if="channelCount > 1">
             <el-checkbox-group v-model="form.bound_channels">
@@ -401,7 +448,7 @@
           </el-radio-group>
           <span class="text-xs text-gray-500 ml-2">指数退避：间隔×2 递增（间隔设 1 即 1→2→4 秒，川南 §5.1）</span>
         </el-form-item>
-        <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="4xx 是否重试">
+        <el-form-item v-if="isHttpAdapter" label="4xx 是否重试">
           <el-switch v-model="form.retry_on_4xx" />
           <span class="text-xs text-gray-500 ml-2">关 = 仅对 5xx / 网络超时重试，4xx(客户端错误)不重试（川南 §5.1）</span>
         </el-form-item>
@@ -409,7 +456,7 @@
           <el-input-number v-model="requestTimeout" :min="1" :precision="1" class="w-32" />
           <span class="text-xs text-gray-500 ml-2">单值总超时；仅当下方连接/读取留空时生效（默认 30s）</span>
         </el-form-item>
-        <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="连接/读取超时(秒)">
+        <el-form-item v-if="isHttpAdapter" label="连接/读取超时(秒)">
           <el-input-number v-model="connectTimeout" :min="0" :precision="1" placeholder="连接" class="w-32" />
           <span class="mx-1 text-gray-400">/</span>
           <el-input-number v-model="readTimeout" :min="0" :precision="1" placeholder="读取" class="w-32" />
@@ -417,11 +464,11 @@
         </el-form-item>
 
         <!-- 主动健康探测 (A2) -->
-        <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="主动健康探测">
+        <el-form-item v-if="isHttpAdapter" label="主动健康探测">
           <el-switch v-model="healthProbeEnabled" />
           <span class="text-xs text-gray-500 ml-2">开 → 后台周期探活对端，列表显示在线/离线徽标（默认关，零开销）</span>
         </el-form-item>
-        <template v-if="form.adapter_type !== 'modbus_rtu' && healthProbeEnabled">
+        <template v-if="isHttpAdapter && healthProbeEnabled">
           <el-form-item label="探测间隔(秒)">
             <el-input-number v-model="healthProbeInterval" :min="5" :step="5" class="w-32" />
             <span class="text-xs text-gray-400 ml-2">最小 5 秒</span>
@@ -741,6 +788,21 @@ const labelMappingMode = ref('replace')
 const testEventType = ref('')
 const presetTemplateKey = ref('')
 
+// v3.35 数据库直写适配器 (达梦/MySQL/PG/SQLServer/SQLite)
+const DB_DEFAULT_PORTS = { dm: 5236, mysql: 3306, postgresql: 5432, sqlserver: 1433, sqlite: 0 }
+const dbType = ref('dm')
+const dbHost = ref('')
+const dbPort = ref(5236)
+const dbUser = ref('')
+const dbPassword = ref('')
+const dbDatabase = ref('')
+const dbTable = ref('')
+const onDbTypeChange = (t) => { dbPort.value = DB_DEFAULT_PORTS[t] ?? 0 }
+
+// HTTP 系适配器 (URL/鉴权/请求头/健康探测等仅对它们有意义)
+const isHttpAdapter = computed(() =>
+  form.adapter_type !== 'modbus_rtu' && form.adapter_type !== 'database')
+
 const PRESET_TEMPLATES = {
   box_complete_4field: {
     label: 'box_complete · 客户4字段 (form-data 主推荐)',
@@ -886,6 +948,7 @@ function adapterLabel(type) {
     'form-urlencoded': 'Form 平铺',
     'query-string': 'URL 参数',
     modbus_rtu: 'Modbus',
+    database: '数据库直写',
   }
   return map[type] || type
 }
@@ -896,6 +959,7 @@ function adapterTagType(type) {
     'form-urlencoded': 'warning',
     'query-string': 'info',
     modbus_rtu: 'success',
+    database: 'danger',
   }
   return map[type] ?? 'info'
 }
@@ -1023,6 +1087,13 @@ function openCreate() {
     { address: 40001, source: 'result_code', data_type: 'uint16' },
     { address: 40002, source: 'total_count', data_type: 'uint16' },
   ]
+  dbType.value = 'dm'
+  dbHost.value = ''
+  dbPort.value = DB_DEFAULT_PORTS.dm
+  dbUser.value = ''
+  dbPassword.value = ''
+  dbDatabase.value = ''
+  dbTable.value = ''
   showEditor.value = true
 }
 
@@ -1118,6 +1189,15 @@ function openEdit(row) {
     ]
   }
 
+  // v3.35 数据库直写
+  dbType.value = cfg.db_type || 'dm'
+  dbHost.value = cfg.host || ''
+  dbPort.value = cfg.db_port ?? (DB_DEFAULT_PORTS[dbType.value] || 0)
+  dbUser.value = cfg.user || ''
+  dbPassword.value = cfg.password || ''
+  dbDatabase.value = cfg.database || ''
+  dbTable.value = cfg.table || ''
+
   showEditor.value = true
 }
 
@@ -1200,6 +1280,38 @@ function buildConfig() {
   const label_mapping = {}
   for (const item of labelMappings.value) {
     if (item.key && item.key.trim()) label_mapping[item.key.trim()] = String(item.value ?? '')
+  }
+
+  // v3.35 数据库直写: 复用模板/静态字段/物料映射/按结果过滤, 不带 HTTP 语义字段
+  if (form.adapter_type === 'database') {
+    if (!dbTable.value.trim()) {
+      ElMessage.warning('请输入目标表名')
+      return null
+    }
+    if (dbType.value !== 'sqlite' && !dbHost.value.trim()) {
+      ElMessage.warning('请输入数据库主机地址')
+      return null
+    }
+    return {
+      db_type: dbType.value,
+      host: dbHost.value.trim(),
+      db_port: dbPort.value || undefined,
+      user: dbUser.value,
+      password: dbPassword.value,
+      database: dbDatabase.value.trim(),
+      table: dbTable.value.trim(),
+      timeout: requestTimeout.value || 10,
+      push_on_result: pushOnResult.value.length && pushOnResult.value.length < 2
+        ? [...pushOnResult.value]
+        : null,
+      attach_snapshot: attachSnapshot.value,
+      snapshot_max_bytes: attachSnapshot.value ? (snapshotMaxBytes.value || 0) : 0,
+      snapshot_data_uri: attachSnapshot.value ? snapshotDataUri.value : false,
+      label_mapping: Object.keys(label_mapping).length ? label_mapping : null,
+      label_mapping_mode: labelMappingMode.value,
+      static_fields: sf,
+      template,
+    }
   }
 
   return {

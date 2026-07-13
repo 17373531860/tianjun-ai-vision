@@ -1,7 +1,7 @@
 # Project 配置字段字典
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_config_dict.py`（2026-07-07）
+> **生成命令**：`python scripts/docgen/gen_config_dict.py`（2026-07-12）
 > **单一事实源**：`Project` ORM 七 JSON 字段 + `logic_mode` 列；语义详解见 `modify-project-config` skill。
 > **应用链**：前端 Project 页 → POST /projects → DB → activate → `source_project_config_apply.apply_project_config` → VSM
 

@@ -65,6 +65,10 @@ def when_delete_template(ctx, client):
 
 @when(parsers.parse('我尝试删除 builtin_id="{bid}" 对应的系统模板'))
 def when_delete_builtin(ctx, client, bid):
+    # 预设模板在 app 启动时种一次; 若先跑的测试用 clean_db 清过表,
+    # 这里会找不到 builtin — 重种一遍 (幂等), 消除测试顺序依赖
+    from backend.services.export_seed import seed_builtin_templates
+    seed_builtin_templates()
     list_resp = client.get("/api/v1/export/templates")
     items = list_resp.json().get("items", [])
     target = next((t for t in items if t.get("builtin_id") == bid), None)

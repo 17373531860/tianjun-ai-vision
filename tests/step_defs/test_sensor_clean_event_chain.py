@@ -135,6 +135,9 @@ def given_cfg_count(ctx, k):
         # v1.4.0 起计数器新增时间制强锁/离场 (默认 1.6s/0.15s), 同样要清零,
         # 否则第二件落在强锁期内不计数, 超限 NG 场景永远触发不了
         "force_lock_sec": 0.0, "lost_gone_sec": 0.0,
+        # v1.4.2 起许可标签出厂默认"擦拭产品"(见到许可标签才解锁计件),
+        # 本场景只喂锚标签, 必须显式清空回 v1.2.0 纯移动计数语义
+        "count_require_label": "",
         "normal_count_event_id": 1, "swab_over_limit_event_id": 2,
         "fake_wipe_event_id": 0, "operator_absent_enabled": False,
     })

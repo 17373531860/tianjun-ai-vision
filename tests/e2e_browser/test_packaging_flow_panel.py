@@ -56,8 +56,18 @@ def test_packaging_panel_create_with_hiwin_preset(page, base_url, api_url):
     found = [c for c in (r.json() or {}).get("items", []) if c.get("name") == name]
     assert found, f"配置 {name} 未落库 (axios 可能漏传/保存按钮没点动)"
     cfg = found[0]
-    assert cfg["label_match"] == "strip_hyphen", cfg["label_match"]
-    assert cfg["label_len"] == 15, cfg["label_len"]
+    # v3.22 起上银预设 = insert_char 补符号 (主单号12位后补 '-'), 长度校验关
+    assert cfg["label_match"] == "insert_char", cfg["label_match"]
+    assert cfg["hyphen_pos"] == 12, cfg["hyphen_pos"]
+    assert cfg["label_len"] == 0, cfg["label_len"]
+    # v3.30.1 复合条码取段: 正式产线四段拼接箱标签按前缀 JOB 取工单段
+    assert cfg["composite_label_enabled"] is True, cfg
+    assert cfg["composite_pick_mode"] == "prefix", cfg["composite_pick_mode"]
+    assert cfg["composite_prefix"] == "JOB", cfg["composite_prefix"]
+    assert cfg["order_code_pattern"] == "^JOB", cfg.get("order_code_pattern")
+    # v3.34.1 放工单=尾箱收尾动作: 预设开 (现场放工单常晚于周期结束), 全局默认关
+    assert cfg["tail_paper_order_required"] is True, cfg.get("tail_paper_order_required")
+    assert cfg["tail_paper_as_close_action"] is True, cfg.get("tail_paper_as_close_action")
     assert cfg["on_short_box"] == "redo", cfg["on_short_box"]
     assert cfg["on_mes_fail"] == "block", cfg["on_mes_fail"]
     assert cfg["enabled"] is False  # 新建默认不启用 → 零影响

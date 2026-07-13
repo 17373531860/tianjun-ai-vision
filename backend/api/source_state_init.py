@@ -171,6 +171,9 @@ def _init_step_state(h):
     # v3.32 严格顺序违序即时事件 (pipeline_config.strict_order_violation_event_id)
     h.strict_order_violation_event_id = None
     h._strict_violation_throttle = {}
+    # v3.35 步骤外设门控 (steps_config[].device_gate): {label: gate_cfg}
+    # 空 = 未配置 → _process_single_step 一次 get 早退, 零开销
+    h.step_device_gates = {}
 
 
 def _init_event_and_cycle_state(h):

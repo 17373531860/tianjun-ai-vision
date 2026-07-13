@@ -48,6 +48,14 @@ def isolated_db(tmp_path, monkeypatch):
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
+    # ⚠️ 先把主程序模块树全部落进 sys.modules 再打补丁:
+    # source_session_lifecycle_mixin 等模块在顶部 `from ... import SessionLocal`
+    # 按值绑定; 若它们的首次 import 发生在补丁窗口内, 会永久捕获本 fixture 的
+    # tmp sessionmaker → 后续所有 step_defs 的会话写进已删除的 tmp DB
+    # (CI 上 session_naming "在 DB 找不到" + "database disk image is malformed"
+    # 级联 110 失败的根因, 2026-07-13 定位)
+    import backend.main  # noqa: F401
+
     db_url = f"sqlite:///{tmp_path}/active_apis.db"
     engine = create_engine(db_url, connect_args={"check_same_thread": False})
 

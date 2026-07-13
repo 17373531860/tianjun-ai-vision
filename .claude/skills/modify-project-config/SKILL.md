@@ -146,6 +146,10 @@ class Project(Base):
         "count": 2,                           // 总轮数 2~8，满轮后回绕第1轮
         "prefixes": ["前罩", "后罩"],          // 每轮前缀，虚拟步骤名 = 前缀+区域名
         "trigger_gap_seconds": 3.0,           // 离场判定窗口（防短暂遮挡误切轮）
+        "trigger_min_seconds": 0.5,           // ★ v3.34 切换确认时长：重新出现后需持续在场
+        //   满该秒数才确认切换（过滤真实模型单帧误检闪现；0=见帧即切，老行为）
+        "trigger_conf": 0,                    // ★ v3.34 切换标签专用置信度下限：低于它按
+        //   "不在场"（挡零星低置信误检刷新在场时刻导致轮次卡死；0=不额外过滤）
         "region_overrides": {}                // 每轮独立区域(可选): {"2": [{name,polygon,color}]}
         //   翻面后位置不重叠时给某轮换一批区域，缺省轮沿用共享 regions；
         //   某轮 override 全部非法 → 该轮回退共享区域（不整体禁用轮次）
@@ -185,6 +189,8 @@ class Project(Base):
         "min_iou": 0.0,                         // overlap：重叠 IoU 下限（0=任意相交）
         "min_overlap_ratio": 0.0,               // overlap：重叠深度下限（压静置工具贴边）
         "min_move": 0.0,                        // 位移门槛（归一化，0=不要求；中心 5 帧中位数平滑后进包络）
+        "min_seconds": 0.0,                     // ★ v3.34 确认时长秒基（overlap/enter；>0 按
+        //   episode 命中跨度秒判定，min_frames 退化为 3 帧硬下限——与帧率解耦；0=帧数老语义）
         "gone_seconds": null,                   // 消失确认秒（null=用全局 gap_tolerance_frames）
         "event_id": null,                       // 动作确认附加触发事件（不结算）
         "settle": false,                        // true = 该动作确认即结算周期
@@ -346,6 +352,14 @@ class Project(Base):
     "actions": [], "show_notification": true, "toast_id": "ng" }
 ]
 ```
+
+事件级人工确认字段（都默认 false/0 = 零差异）：`require_ack`（触发后定格等确认）、
+`ack_timeout_sec`（超时自动确认）、`ack_resets_periodic`（确认同步清账周期性规则计数）、
+**`ack_keep_cycle`（v3.34 断点补做）——确认后保留在制周期与已完成步骤，从被打断处继续
+补做（典型：违序警告定格 → 确认 → 接着打漏掉的那颗螺丝，整件照常判定）；不勾走老
+"确认重做"语义（丢弃在制周期）。超时自动确认遵循同一语义。** 后端收口：
+`source_event_trigger_mixin.py: _pending_ack_keeps_cycle / _ack_release_keep_cycle`，
+确认端点在 `source_routes.py: _do_ack_pending`，超时分支在 `source_step_stats_mixin.py`。
 
 `_trigger_event` (`source_event_trigger_mixin.py`) 同时支持数字 id（`1`/`2`/`4`）
 和字符串 id（`'event_1'`），逐项匹配 `events_config[*].id`。

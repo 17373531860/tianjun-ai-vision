@@ -1331,6 +1331,13 @@
                 <label class="block text-gray-400 mb-1">{{ rule.type === 'region_exit' ? '区域内最少观察帧数' : '连续满足帧数 N' }}</label>
                 <el-input-number v-model="rule.min_frames" size="small" :min="1" :max="600" class="w-full" />
               </div>
+              <div v-if="rule.type !== 'region_exit'">
+                <label class="block text-gray-400 mb-1" title="动作持续满足该秒数才确认，替代帧数门槛（帧数退化为3帧防噪底线）。相机/推理帧率漂移（24/30fps、GPU负载波动）时帧数门槛松紧会变，按秒判定与帧率无关。0=不启用，按帧数门槛">
+                  确认时长（秒，0=按帧数）
+                </label>
+                <el-input-number :model-value="rule.min_seconds ?? 0" size="small" :min="0" :max="30" :step="0.1" :precision="1" class="w-full"
+                  @update:model-value="rule.min_seconds = ($event && $event > 0) ? $event : 0" />
+              </div>
               <div v-if="rule.type === 'region_exit'">
                 <label class="block text-gray-400 mb-1">消失确认帧数</label>
                 <el-input-number v-model="rule.gone_frames" size="small" :min="1" :max="600" class="w-full" />
@@ -1815,6 +1822,7 @@ const addRegionRule = () => {
     min_iou: 0,
     min_overlap_ratio: 0,
     min_move: 0,
+    min_seconds: 0,
     gone_seconds: null,
     require_label: null,
     gone_frames: 8,

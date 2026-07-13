@@ -131,6 +131,18 @@
                 size="small" class="!w-24" />
               <span>秒后再出现才算新一轮（防遮挡误切）</span>
             </div>
+            <div class="flex items-center gap-2 text-xs text-gray-400">
+              <span>重新出现后需持续</span>
+              <el-input-number v-model="rule.rounds.trigger_min_seconds" :min="0" :max="10" :step="0.1" :precision="1"
+                size="small" class="!w-24" />
+              <span>秒才确认切换（过滤单帧误检闪现, 0=见帧即切）</span>
+            </div>
+            <div class="flex items-center gap-2 text-xs text-gray-400">
+              <span>切换标签置信度需 ≥</span>
+              <el-input-number v-model="rule.rounds.trigger_conf" :min="0" :max="1" :step="0.05" :precision="2"
+                size="small" class="!w-24" />
+              <span>才算在场（挡低置信预备动作误触发, 0=不额外过滤）</span>
+            </div>
             <div class="text-[10px] text-gray-500">
               周期结算且切换标签离场后轮次自动归零, 下一个工件从第1轮重新开始。
               默认所有轮共用同一批区域; 若翻面后位置对不上, 在下方区域列表切到对应轮单独画一批。
@@ -268,6 +280,14 @@ const load = async (channel, ruleCopy) => {
   }
   if (!ruleCopy.rounds.region_overrides || typeof ruleCopy.rounds.region_overrides !== 'object') {
     ruleCopy.rounds.region_overrides = {};
+  }
+  // trigger_min_seconds / trigger_conf 是后加的字段(v3.34):
+  // 老规则缺省按 0(见帧即切 / 不额外过滤, 零差异)
+  if (!Number.isFinite(Number(ruleCopy.rounds.trigger_min_seconds))) {
+    ruleCopy.rounds.trigger_min_seconds = 0;
+  }
+  if (!Number.isFinite(Number(ruleCopy.rounds.trigger_conf))) {
+    ruleCopy.rounds.trigger_conf = 0;
   }
   rule.value = ruleCopy;
   regionScope.value = 0;

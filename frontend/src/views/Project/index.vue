@@ -508,11 +508,13 @@
 
           <!-- Tab 3: Logic Settings -->
           <!-- ==================== 称重投料模式专属配置（面板已外置 WeighingConfigTab.vue） ==================== -->
+          <!-- v3.35: 融合模式（顺序 SOP + 步骤外设门控 drive_mode='step_gate'）也需要秤参数/
+               型号标准量/视觉防错配置, 同一页签复用, 不加新页面 -->
           <el-tab-pane
-            v-if="activeProject.logic_mode === 'weighing'"
+            v-if="activeProject.logic_mode === 'weighing' || isStepGateFusion"
             label="称重配置"
             name="weighing">
-            <WeighingConfigTab :project="activeProject" />
+            <WeighingConfigTab :project="activeProject" @open-guard-roi-editor="openGuardRoiEditor" />
           </el-tab-pane>
 
           <el-tab-pane label="逻辑设置" name="logic">
@@ -793,12 +795,20 @@ const placementGuideEditing = ref(false);
 // v3.32+ 区域事件模式: 规则判定区域, 指向 pipeline_config.region_events.rules 下标 (同样互斥)
 const regionRuleEditingIdx = ref(-1);
 
+// v3.35 视觉料源防错: 守卫规则区域, 指向 pipeline_config.weighing.visual_guard.rules 下标 (互斥)
+const guardRuleEditingIdx = ref(-1);
+
 const resetRoiEditorTargets = () => {
   extraModelRoiEditingIdx.value = -1;
   stepRoiEditingStepId.value = null;
   placementGuideEditing.value = false;
   regionRuleEditingIdx.value = -1;
+  guardRuleEditingIdx.value = -1;
 };
+
+// v3.35 融合模式判定: 顺序 SOP + 步骤外设门控 (称重配置页签的第二种出现条件)
+const isStepGateFusion = computed(() =>
+  activeProject.value?.pipeline_config?.weighing?.drive_mode === 'step_gate');
 
 const roiEditorDialogTitle = computed(() => {
   const ap = activeProject.value;
@@ -817,8 +827,20 @@ const roiEditorDialogTitle = computed(() => {
     const rule = ap?.pipeline_config?.region_events?.rules?.[regionRuleEditingIdx.value];
     return `绘制区域事件规则 [${rule?.name || `规则 ${regionRuleEditingIdx.value + 1}`}] 的判定区域`;
   }
+  if (guardRuleEditingIdx.value >= 0) {
+    const rule = ap?.pipeline_config?.weighing?.visual_guard?.rules?.[guardRuleEditingIdx.value];
+    return `绘制料源防错规则 [${rule?.name || `规则 ${guardRuleEditingIdx.value + 1}`}] 的判定区域`;
+  }
   return '绘制 ROI 检测区域';
 });
+
+// v3.35 视觉料源防错规则区域: WeighingConfigTab 发起, 复用同一个 ROI 编辑器
+const openGuardRoiEditor = async (idx) => {
+  resetRoiEditorTargets();
+  guardRuleEditingIdx.value = idx;
+  const rule = activeProject.value?.pipeline_config?.weighing?.visual_guard?.rules?.[idx];
+  await _openRoiDialog(rule?.polygon || null);
+};
 
 // 统一打开入口: 设目标 → 开对话框 → 等 canvas 挂载 → 子组件取快照并预加载已有多边形
 const _openRoiDialog = async (existingPolygon = null) => {
@@ -894,6 +916,18 @@ const handleRoiSave = async (polygon) => {
     if (rule) {
       rule.region = polygon;
       ElMessage.success(`规则 [${rule.name || `规则 ${regionRuleEditingIdx.value + 1}`}] 判定区域已保存 (${polygon.length} 个顶点)，记得点右上角"保存配置"落库`);
+    }
+    resetRoiEditorTargets();
+    roiEditorVisible.value = false;
+    return;
+  }
+
+  // v3.35 视觉料源防错规则区域: 写入 pipeline_config.weighing.visual_guard.rules[idx].polygon
+  if (guardRuleEditingIdx.value >= 0) {
+    const rule = activeProject.value?.pipeline_config?.weighing?.visual_guard?.rules?.[guardRuleEditingIdx.value];
+    if (rule) {
+      rule.polygon = polygon;
+      ElMessage.success(`料源防错规则 [${rule.name || `规则 ${guardRuleEditingIdx.value + 1}`}] 判定区域已保存 (${polygon.length} 个顶点)，记得点右上角"保存配置"落库`);
     }
     resetRoiEditorTargets();
     roiEditorVisible.value = false;
@@ -985,12 +1019,14 @@ const _sanitizeRegionEvents = (re) => {
         out.gone_frames = Math.max(1, Math.floor(Number(r.gone_frames) || 8));
         out.match_iou = Math.max(0.05, Math.min(0.95, Number(r.match_iou) || 0.3));
       }
-      // 消失确认秒数 / 位移门槛 (overlap/enter 可选): >0 才落库
+      // 消失确认秒数 / 位移门槛 / 确认时长秒基 (overlap/enter 可选): >0 才落库
       if (type !== 'region_exit') {
         const gs = Number(r.gone_seconds);
         if (Number.isFinite(gs) && gs > 0) out.gone_seconds = Math.min(30, gs);
         const mm = Number(r.min_move);
         if (Number.isFinite(mm) && mm > 0) out.min_move = Math.min(1, mm);
+        const ms = Number(r.min_seconds);
+        if (Number.isFinite(ms) && ms > 0) out.min_seconds = Math.min(30, ms);
       }
       // 区域锚点跟随 (可选): 锚点类别 + 标定框齐全才落库, 半截配置直接丢弃
       const a = r.anchor || {};
@@ -1072,6 +1108,15 @@ const ensureWeighingDefaults = (project) => {
     alarm_event_over: w.alarm_event_over ?? 2,
     alarm_event_wrong: w.alarm_event_wrong ?? 2,
     alarm_event_precheck: w.alarm_event_precheck ?? 2,
+    // v3.35 新增: 驱动模式 / 视觉防错报警映射 / 前置选择有效期 / 视觉料源防错
+    drive_mode: w.drive_mode || 'scale',
+    alarm_event_guard: w.alarm_event_guard ?? 2,
+    context_expiry: (w.context_expiry && typeof w.context_expiry === 'object')
+      ? { mode: 'never', reset_time: '08:00', shifts: [], hours: 8, expire_fields: ['model'], ...w.context_expiry }
+      : { mode: 'never', reset_time: '08:00', shifts: [], hours: 8, expire_fields: ['model'] },
+    visual_guard: (w.visual_guard && typeof w.visual_guard === 'object')
+      ? { enabled: false, source: 'region_action', rules: [], wrong_block: true, cooldown_sec: 5, ...w.visual_guard }
+      : { enabled: false, source: 'region_action', rules: [], wrong_block: true, cooldown_sec: 5 },
   };
   const ww = project.pipeline_config.weighing;
   Object.keys(ww.models).forEach(mname => {
@@ -1116,6 +1161,7 @@ const ensureRegionEventsDefaults = (project) => {
   re.rules.forEach(r => {
     if (r && typeof r === 'object' && r.type !== 'region_exit') {
       if (r.min_move === undefined) r.min_move = 0;
+      if (r.min_seconds === undefined) r.min_seconds = 0;
       if (r.gone_seconds === undefined) r.gone_seconds = null;
       if (r.type === 'overlap' && r.min_overlap_ratio === undefined) r.min_overlap_ratio = 0;
     }
@@ -1205,6 +1251,8 @@ const initProjectDefaults = (project) => {
     if (typeof ev.ack_timeout_sec !== 'number') ev.ack_timeout_sec = 0;
     // v3.9.x: 周期性强制动作触发该事件时, 确认是否同步清账规则计数 (默认 false)
     if (typeof ev.ack_resets_periodic !== 'boolean') ev.ack_resets_periodic = false;
+    // v3.34: 确认后保留周期 (断点补做, 默认 false = 老"确认重做"语义)
+    if (typeof ev.ack_keep_cycle !== 'boolean') ev.ack_keep_cycle = false;
   });
   if (!project.counters_config) {
     project.counters_config = [
@@ -1236,7 +1284,9 @@ const initProjectDefaults = (project) => {
       : { enabled: false, anchor_label: '', polygon: null, mode: 'hint' };
   }
   // 原生称重投料模式: 仅 weighing 项目才注入默认配置, 非称重项目不碰 (零污染)
-  if (project.logic_mode === 'weighing') {
+  // v3.35: 融合模式 (顺序 SOP + 步骤门控) 也持有 weighing 子树, 同样补默认
+  if (project.logic_mode === 'weighing'
+      || project.pipeline_config?.weighing?.drive_mode === 'step_gate') {
     ensureWeighingDefaults(project);
   }
   // v3.32+ 区域事件模式: 同款零污染策略
@@ -1965,8 +2015,9 @@ const handleSaveProject = async () => {
         // v3.32 严格顺序违序即时事件 (null=关; last_first 模式严格顺序被强制清空, 一并置空)
         strict_order_violation_event_id: activeProject.value.settlement_mode === 'last_first'
           ? null : (activeProject.value.strict_order_violation_event_id || null),
-        // 原生称重投料模式配置 (仅 weighing 模式写入, 其他模式不污染)
-        weighing: activeProject.value.logic_mode === 'weighing'
+        // 原生称重投料模式配置 (weighing 模式 / v3.35 融合步骤门控模式写入, 其他不污染)
+        weighing: (activeProject.value.logic_mode === 'weighing'
+                   || activeProject.value.pipeline_config?.weighing?.drive_mode === 'step_gate')
           ? (activeProject.value.pipeline_config?.weighing || {})
           : undefined,
         // v3.32+ 区域事件模式配置 (仅 region_events 模式写入, 字段与后端 parse_region_events 对齐)
@@ -2015,6 +2066,16 @@ const handleSaveProject = async () => {
               trigger_gap_seconds: (() => {
                 const v = Number(rd.trigger_gap_seconds);
                 return Number.isFinite(v) && v >= 0.5 ? Math.min(60, v) : 3.0;
+              })(),
+              // 切换确认时长(过滤单帧误检): 缺省 0 = 见帧即切(老行为)
+              trigger_min_seconds: (() => {
+                const v = Number(rd.trigger_min_seconds);
+                return Number.isFinite(v) && v > 0 ? Math.min(10, v) : 0;
+              })(),
+              // 切换标签专用置信度下限(挡低置信预备动作误触发): 缺省 0 = 不额外过滤
+              trigger_conf: (() => {
+                const v = Number(rd.trigger_conf);
+                return Number.isFinite(v) && v > 0 ? Math.min(1, v) : 0;
               })(),
               // 每轮独立区域(可选): 只收编轮次在界内、画完整的; 空轮不落库(该轮回退共享区域)
               region_overrides: (() => {

@@ -104,6 +104,11 @@ def _apply_steps_config(h, steps_config):
             'max_duration': step.get('max_duration'),
             'disappear_delay': step.get('disappear_delay', 0),
             'timeout_ng': step.get('timeout_ng', False),
+            # v3.34: 消失等待不被其他步骤打断 (默认 False = 老行为零差异).
+            # 工具驻留画面的产线 (吹枪插在工件上、敲击/检查与之并行可见) 中,
+            # "别的步骤一出现就掐掉消失等待"会把驻留步骤的闪断误判成重新出现,
+            # 该开关让本步骤的消失等待时间始终按配置走完。
+            'disappear_uninterruptible': bool(step.get('disappear_uninterruptible', False)),
         }
 
         min_frames = step.get('min_frames')
@@ -611,16 +616,41 @@ def apply_project_config(h, config: dict):
     h._tracking_external_cycle = bool(
         h._custom_mix is not None and h._custom_mix.mix_type == 'tracking')
 
-    # 原生称重投料模式 (logic_mode='weighing'): 设备驱动, 登记/注销本通道到称重引擎。
-    # 非 weighing 项目时注销, 切回别的模式零残留。引擎按通道吃称重器读数推进状态机。
+    # 原生称重投料模式: 登记/注销本通道到称重引擎。两种登记来源:
+    # - logic_mode='weighing'                      : 秤驱动 (v3.31, drive_mode 默认 scale)
+    # - 其它模式 + weighing.drive_mode='step_gate' : v3.35 融合 — 视觉顺序 SOP 为周期主线,
+    #   秤读数只做"步骤完成门控" (钢帽放秤→去皮门控 / 称重→标准量判定门控)
+    # 都不是则注销, 切回别的模式零残留。
+    h._weighing_visual_feed = False
     try:
         from backend.services.weighing_engine import get_weighing_engine
         ch_id = getattr(h, 'channel_id', 0)
-        if config.get('logic_mode') == 'weighing':
-            get_weighing_engine().set_channel_config(ch_id, pipeline_config.get('weighing') or {})
+        _weighing_cfg = pipeline_config.get('weighing') or {}
+        _weighing_active = (config.get('logic_mode') == 'weighing'
+                            or _weighing_cfg.get('drive_mode') == 'step_gate')
+        if _weighing_active:
+            get_weighing_engine().set_channel_config(ch_id, _weighing_cfg)
+            # 视觉料源防错开启 → 推理热路径每帧喂检测结果给守卫 (flag 守门零差异)
+            h._weighing_visual_feed = bool(
+                (_weighing_cfg.get('visual_guard') or {}).get('enabled'))
         else:
             get_weighing_engine().set_channel_config(ch_id, None)
     except Exception as e:
         print(f"[Weighing] 登记通道配置失败: {e}")
+
+    # v3.35 步骤外设门控 (steps_config[].device_gate): {label: gate_cfg}
+    # 默认无任何步骤配置 → 空 dict → _process_single_step 一次 get 早退, 零差异。
+    h.step_device_gates = {}
+    try:
+        for _step in steps_config:
+            _dg = _step.get('device_gate')
+            if isinstance(_dg, dict) and _dg.get('enabled') and _step.get('label'):
+                h.step_device_gates[_step['label']] = _dg
+        if h.step_device_gates:
+            print(f"[Weighing] ch{getattr(h, 'channel_id', 0)} 步骤外设门控: "
+                  f"{ {k: v.get('kind', 'tare') for k, v in h.step_device_gates.items()} }")
+    except Exception as e:
+        print(f"[Weighing] 解析步骤门控配置失败: {e}")
+        h.step_device_gates = {}
 
     _print_summary(h, config, steps_config, pipeline_config)

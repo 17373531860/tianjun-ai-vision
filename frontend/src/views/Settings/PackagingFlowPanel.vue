@@ -150,6 +150,53 @@
 
           <!-- 组③ 标签校验 -->
           <el-collapse-item title="③ 标签校验 — 工单号与箱标签怎么比对" name="g3">
+            <el-form-item label="复合条码取段">
+              <el-switch v-model="form.composite_label_enabled" />
+              <span class="text-xs text-gray-400 ml-2">
+                箱标签是多段拼接码 (如 订单|工单|数量|校验串) 时开启: 先按分隔符拆段取出工单段,
+                再走下面的比对方式; 无分隔符的码 (工单纸) 原样通过, 两种码可混扫
+              </span>
+            </el-form-item>
+            <template v-if="form.composite_label_enabled">
+              <el-form-item label="段分隔符">
+                <el-input v-model="form.composite_delimiter" placeholder="|" style="width: 120px" maxlength="8" />
+                <span class="text-xs text-gray-400 ml-2">默认 "|" (竖线)</span>
+              </el-form-item>
+              <el-form-item label="取哪一段">
+                <el-radio-group v-model="form.composite_pick_mode">
+                  <el-radio value="prefix">按前缀认段 (推荐)</el-radio>
+                  <el-radio value="index">取第 N 段</el-radio>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item v-if="form.composite_pick_mode === 'prefix'" label="工单段前缀">
+                <el-input v-model="form.composite_prefix" placeholder="JOB" style="width: 160px" maxlength="32" />
+                <span class="text-xs text-gray-400 ml-2">
+                  取以此开头的段 (上银填 JOB); 段顺序变了也不受影响, 多段命中取最长
+                </span>
+              </el-form-item>
+              <el-form-item v-else label="第几段">
+                <el-input-number v-model="form.composite_index" :min="1" :max="32" />
+                <span class="text-xs text-gray-400 ml-2">从 1 数起 (上银工单在第 2 段)</span>
+              </el-form-item>
+              <el-form-item label="取段预览">
+                <div class="w-full">
+                  <el-input v-model="compositePreviewInput"
+                            placeholder="粘贴整串箱标签码, 如 ORD260300050-2|JOB260600268-13|54.00|55AEA…" clearable>
+                    <template #prepend>扫到</template>
+                  </el-input>
+                  <div class="text-sm mt-2 flex items-center gap-2">
+                    <span class="text-gray-400">取出工单段 →</span>
+                    <span class="font-mono px-2 py-0.5 rounded"
+                          :class="compositePreviewResult ? 'bg-green-700/40 text-green-300' : 'text-gray-500'">
+                      {{ compositePreviewResult || '(输入样例码看效果)' }}
+                    </span>
+                  </div>
+                  <div class="text-xs text-gray-400 mt-1">
+                    取出的段还会再走下面的比对方式 (如补符号) 才参与工单比对.
+                  </div>
+                </div>
+              </el-form-item>
+            </template>
             <el-form-item label="比对方式">
               <el-select v-model="form.label_match" class="w-full">
                 <el-option label="精确比对" value="exact" />
@@ -193,6 +240,14 @@
                 </div>
               </el-form-item>
             </template>
+            <el-form-item label="工单号识别规则">
+              <el-input v-model="form.order_code_pattern" placeholder="留空 = 不过滤" class="w-72" maxlength="128" clearable />
+              <div class="text-xs text-gray-400 mt-1">
+                仅在没有在途工单、准备<strong>开第一单</strong>时校验: 取段+归一化后的码须从头匹配此正则才允许开单,
+                否则拒扫并提示 (如挡掉第一枪误扫的数量码 80.00). 已有在途工单时仍走上面的复合取段 + 标签不符逻辑, 不受此项影响.
+                留空 = 不过滤. 上银填 <code>^JOB</code>
+              </div>
+            </el-form-item>
             <el-form-item label="标签固定长度">
               <el-input-number v-model="form.label_len" :min="0" :max="64" />
               <span class="text-xs text-gray-400 ml-2">
@@ -316,6 +371,15 @@
               <el-form-item label="放工单步骤标签" v-if="form.tail_paper_order_required">
                 <el-input v-model="form.tail_paper_step_label" placeholder="put_paper" />
                 <span class="text-xs text-gray-400 ml-2">项目里"放工单"那一步的检测标签</span>
+              </el-form-item>
+              <el-form-item label="放工单=收尾动作" v-if="form.tail_paper_order_required">
+                <el-switch v-model="form.tail_paper_as_close_action" />
+                <span class="text-xs text-gray-400 ml-2">
+                  开 = 放工单成为尾箱的收尾动作: 尾箱装满被拦时先记住这箱成绩,
+                  之后哪怕过了周期才放工单也按装满那次的成绩收箱完成工单;
+                  一直没放、直接扫下一张工单时, 尾箱判 NG 收尾再开新单.
+                  关 = 老行为: 只报警等着, 按下个检测周期自己的数据重新判
+                </span>
               </el-form-item>
               <el-form-item label="缺工单触发事件">
                 <el-select v-model="form.event_missing_paper" class="w-full" clearable
@@ -476,6 +540,13 @@ const _newForm = () => ({
   label_len: 0,
   hyphen_template: null,
   hyphen_pos: 0,
+  // 复合条码取段 (v3.30.1, 默认关)
+  composite_label_enabled: false,
+  composite_delimiter: '|',
+  composite_pick_mode: 'prefix',
+  composite_prefix: null,
+  composite_index: 1,
+  order_code_pattern: null,
   on_mes_fail: 'block',
   on_label_mismatch: 'warn',
   on_short_box: 'redo',
@@ -503,6 +574,7 @@ const _newForm = () => ({
   name_match_strict_boundary: false,
   tail_paper_order_required: false,
   tail_paper_step_label: null,
+  tail_paper_as_close_action: false,  // v3.34.1 放工单=尾箱收尾动作 (默认关=老行为)
   event_missing_paper: null,
   // 缺油嘴 gate (v3.23, 每箱查, 默认关)
   oil_nozzle_required: false,
@@ -529,6 +601,27 @@ const hyphenPreviewResult = computed(() => {
     return base.slice(0, pos) + ch + base.slice(pos);
   }
   return base;
+});
+
+// 复合条码取段预览: 前端镜像后端 _extract_composite (按前缀认段/取第N段, 失败原样)
+const compositePreviewInput = ref('');
+const compositePreviewResult = computed(() => {
+  const s = String(compositePreviewInput.value || '').trim();
+  if (!s) return '';
+  const delim = form.composite_delimiter || '|';
+  if (!s.includes(delim)) return s;
+  const parts = s.split(delim).map(p => p.trim()).filter(Boolean);
+  if (!parts.length) return s;
+  if (form.composite_pick_mode === 'index') {
+    const idx = Number(form.composite_index || 1);
+    return (idx >= 1 && idx <= parts.length) ? parts[idx - 1] : s;
+  }
+  const prefix = String(form.composite_prefix || '').trim();
+  if (prefix) {
+    const hits = parts.filter(p => p.startsWith(prefix));
+    if (hits.length) return hits.reduce((a, b) => (b.length > a.length ? b : a));
+  }
+  return s;
 });
 
 const loadList = async () => {
@@ -577,6 +670,14 @@ const applyHiwinPreset = () => {
     hyphen_template: '-',
     hyphen_pos: 12,
     label_len: 0,
+    // 上银正式产线箱标签是四段拼接码 (订单|工单|数量|校验串): 按前缀 JOB 取工单段
+    composite_label_enabled: true,
+    composite_delimiter: '|',
+    composite_pick_mode: 'prefix',
+    composite_prefix: 'JOB',
+    composite_index: 1,
+    // 挡掉标签上并排印的数量/物料等非工单条码 (如 80.00)
+    order_code_pattern: '^JOB',
     // 异常: 拉单失败 / 标签不符 → 阻断等管理员解除; 漏箱 → 重做补满
     on_mes_fail: 'block',
     on_label_mismatch: 'block',
@@ -590,6 +691,8 @@ const applyHiwinPreset = () => {
     oil_nozzle_step_label: '放油嘴包',
     tail_paper_order_required: true,
     tail_paper_step_label: '放工单',
+    tail_paper_as_close_action: true,  // 现场放工单常晚于周期结束, 用挂起快照收尾
+
     auto_switch_project: false,
     push_on_complete: false,
     push_event_type: 'packaging_complete',

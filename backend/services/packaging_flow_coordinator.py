@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import math
+import re
 import threading
 import time
 import uuid
@@ -183,6 +184,14 @@ class PackagingFlowCoordinator:
             "label_len": int(row.label_len or 0),
             "hyphen_template": row.hyphen_template,
             "hyphen_pos": int(getattr(row, "hyphen_pos", 0) or 0),
+            # v3.30.1 复合条码取段 (默认关零差异)
+            "composite_label_enabled": bool(getattr(row, "composite_label_enabled", False)),
+            "composite_delimiter": getattr(row, "composite_delimiter", None) or "|",
+            "composite_pick_mode": getattr(row, "composite_pick_mode", None) or "prefix",
+            "composite_prefix": getattr(row, "composite_prefix", None) or "",
+            "composite_index": int(getattr(row, "composite_index", 1) or 1),
+            # v3.30.1 工单号识别规则 (默认空=不过滤)
+            "order_code_pattern": getattr(row, "order_code_pattern", None) or "",
             "on_mes_fail": row.on_mes_fail or "block",
             "on_label_mismatch": row.on_label_mismatch or "warn",
             "on_short_box": row.on_short_box or "redo",
@@ -213,6 +222,8 @@ class PackagingFlowCoordinator:
             "name_match_strict_boundary": bool(getattr(row, "name_match_strict_boundary", False)),
             "tail_paper_order_required": bool(getattr(row, "tail_paper_order_required", False)),
             "tail_paper_step_label": getattr(row, "tail_paper_step_label", None),
+            # v3.34.1 放工单=尾箱收尾动作 (挂起快照闭环), 默认关=老行为
+            "tail_paper_as_close_action": bool(getattr(row, "tail_paper_as_close_action", False)),
             "event_missing_paper": getattr(row, "event_missing_paper", None),
             # v3.23 缺油嘴 gate (每箱查, 默认关零差异)
             "oil_nozzle_required": bool(getattr(row, "oil_nozzle_required", False)),
@@ -225,9 +236,61 @@ class PackagingFlowCoordinator:
     # =============================================================
 
     @staticmethod
+    def _order_code_ok(norm: str, cfg: Dict[str, Any]) -> bool:
+        """工单号识别规则 (v3.30.1, 默认关): 归一化后的码须从头匹配配置的正则才放行.
+        规则为空 = 不过滤 (存量零差异); 正则写错 = 视为不过滤并留调试痕迹, 不吞码."""
+        pattern = str(cfg.get("order_code_pattern") or "").strip()
+        if not pattern:
+            return True
+        try:
+            ok = re.match(pattern, norm) is not None
+        except re.error as e:
+            _pkg_dbg("工单号识别规则异常", f"正则 {pattern!r} 无效 ({e}), 本次不过滤")
+            return True
+        if not ok:
+            _pkg_dbg("工单号识别规则拒绝", f"norm={norm!r} 不匹配 {pattern!r}")
+        return ok
+
+    @staticmethod
+    def _extract_composite(s: str, cfg: Dict[str, Any]) -> str:
+        """复合条码取段 (v3.30.1, 默认关): 正式产线箱标签常是多段拼接码
+        (如 ORD260300050-2|JOB260600268-13|54.00|<校验串>), 整串比对必不符.
+        启用后按分隔符拆段, 按前缀/序号取出工单段, 再交给 _normalize 走原有归一化.
+        无分隔符的码 (工单纸直扫) 原样返回 → 两种码可混扫; 取段失败也原样返回不吞码.
+        """
+        if not cfg.get("composite_label_enabled"):
+            return s
+        delim = cfg.get("composite_delimiter") or "|"
+        if delim not in s:
+            return s
+        parts = [p.strip() for p in s.split(delim) if p.strip()]
+        if not parts:
+            return s
+        mode = cfg.get("composite_pick_mode") or "prefix"
+        if mode == "index":
+            idx = int(cfg.get("composite_index") or 1)
+            if 1 <= idx <= len(parts):
+                out = parts[idx - 1]
+                _pkg_dbg("复合条码取段 index", f"第{idx}段 → {out!r} (共{len(parts)}段)")
+                return out
+            _pkg_dbg("复合条码取段失败", f"index={idx} 超界(共{len(parts)}段), 原样返回")
+            return s
+        # prefix 模式: 取以指定前缀开头的段; 多段命中取最长 (最具体)
+        prefix = str(cfg.get("composite_prefix") or "").strip()
+        if prefix:
+            hits = [p for p in parts if p.startswith(prefix)]
+            if hits:
+                out = max(hits, key=len)
+                _pkg_dbg("复合条码取段 prefix", f"前缀={prefix!r} → {out!r} (共{len(parts)}段)")
+                return out
+        _pkg_dbg("复合条码取段失败", f"前缀={prefix!r} 无命中段, 原样返回")
+        return s
+
+    @staticmethod
     def _normalize(code: str, cfg: Dict[str, Any]) -> str:
-        """按配置把扫码原始串归一化, 用于工单/箱标签比对."""
+        """按配置把扫码原始串归一化, 用于工单/箱标签比对. 复合码先取段再归一."""
         s = str(code or "").strip()
+        s = PackagingFlowCoordinator._extract_composite(s, cfg)
         mode = cfg.get("label_match", "strip_hyphen")
         if mode == "insert_char":
             # 上银: 标签是 JOB150700114-1, 但扫码枪丢了 '-' 扫成 JOB1507001141 (序号仍在).
@@ -331,6 +394,13 @@ class PackagingFlowCoordinator:
                      f"unit={cfg.get('count_unit', 'trays')} has_run={run is not None}")
 
             if run is None:
+                # 工单号识别规则 (v3.30.1, 默认空=不过滤): 仅在没有在途工单、准备开第一单时生效.
+                # 挡掉误扫的数量/物料等非工单条码 (如 '80.00' 开出垃圾工单).
+                # 已有在途工单时走原有标签不符/复合取段逻辑, 不受此规则影响.
+                if not self._order_code_ok(norm, cfg):
+                    self._raise_alarm(cfg, "order_code_reject",
+                                      f"扫到非工单码 {norm} 已忽略 (不符合工单号识别规则, 可能误扫了数量/物料条码)")
+                    return
                 # 第 1 次扫 = 开工单
                 self._open_order(config_id, cfg, norm, code, db)
                 return
@@ -388,6 +458,23 @@ class PackagingFlowCoordinator:
     def _on_scan_sliders(self, config_id: int, cfg: Dict[str, Any], run: Dict[str, Any],
                          norm: str, code: str, db) -> None:
         """sliders 口径扫码: 箱由检测周期驱动, 扫码只在工单层动作 (开 / 换 / 漏箱)."""
+        # 尾箱挂起等放工单时的扫码出口 (v3.34.1):
+        #   探到放工单 → 快照原成绩收尾; 扫新单且仍没放 → 尾箱判 NG 收尾再开新单;
+        #   同号重扫且仍没放 → 提醒继续等.
+        if run.get("pending_paper_box"):
+            if self._probe_paper_order(cfg, run):
+                self._close_pending_paper(cfg, run, db, ok_paper=True)
+            elif norm != run["order_no"]:
+                self._close_pending_paper(cfg, run, db, ok_paper=False)
+            else:
+                self._raise_alarm(cfg, "missing_paper",
+                                  f"工单 {run['order_no']} 尾箱仍未检测到放工单动作 (等放工单)")
+                self._persist_run(run, db)
+                return
+            # 快照已消化 = 尾箱落账 + 工单已收尾 (在途已移除); 扫的是新单则直接开新单.
+            if norm != run["order_no"]:
+                self._open_order(config_id, cfg, norm, code, db)
+            return
         if norm == run["order_no"]:
             # 中途扫同号: 不开 / 不结箱 (上银扫码仅为开工单), 仅刷新落库
             _pkg_dbg("扫码同号刷新", f"order={norm} box_done={run.get('box_done')}/{run.get('box_total')}")
@@ -501,6 +588,11 @@ class PackagingFlowCoordinator:
                 return True
             # settle: 结算当前未结算的箱 + 完成工单.
             # sliders 口径箱已逐周期即时结算, 半箱 (开了没结算) 直接丢弃, 不走托盘口径结算.
+            if run.get("pending_paper_box"):
+                # 尾箱挂起等放工单: 管理员强制结案 = 豁免塞工单 gate, 按快照原成绩落账收尾
+                # (forced_reason/forced_by 已写入 run, 落库留痕).
+                self._close_pending_paper(cfg, run, db, ok_paper=True)
+                return True
             if (cfg.get("count_unit") != "sliders"
                     and run["current_box_index"] > run["box_done"]):
                 self._settle_current_box(run, cfg, db,
@@ -755,10 +847,49 @@ class PackagingFlowCoordinator:
             print(f"[PackagingFlow] 缺油嘴探测异常 (隔离): {e}")
             return True
 
+    def _close_pending_paper(self, cfg: Dict[str, Any], run: Dict[str, Any], db,
+                             ok_paper: bool) -> None:
+        """消化尾箱「等放工单」挂起快照 (v3.34.1).
+
+        ok_paper=True  = 放工单已到位 → 按快照原成绩收尾 (滑块数/合格性用被拦那次的);
+        ok_paper=False = 确认不放了 (没放就扫新工单/弃单) → 尾箱判 NG 收尾.
+        收尾即工单完成 (尾箱是最后一箱), 在途会被移除.
+        """
+        pend = run.pop("pending_paper_box", None)
+        if not pend:
+            return
+        sc = int(pend.get("sliders") or 0)
+        target = int(pend.get("target") or 0)
+        remediated = None
+        if ok_paper:
+            run["paper_order_done"] = True
+            ok = bool(pend.get("is_good")) and (target <= 0 or sc == target)
+            _pkg_dbg("放工单到位→尾箱补收尾",
+                     f"order={run.get('order_no')} sliders={sc}/{target} ok={ok}")
+        else:
+            ok = False
+            remediated = {"by": "system", "from": sc, "to": sc,
+                          "reason": "尾箱未放工单, 弃等判 NG", "ts": time.time()}
+            self._raise_alarm(cfg, "missing_paper",
+                              f"工单 {run['order_no']} 尾箱始终未放工单, 尾箱判 NG 收尾")
+            _pkg_dbg("未放工单→尾箱判NG收尾", f"order={run.get('order_no')}")
+        self._finalize_box_sliders(run, cfg, db, sc, ok, True,
+                                   pend.get("cycle"), target, remediated=remediated)
+
     def _on_cycle_settled_sliders(self, cfg: Dict[str, Any], run: Dict[str, Any],
                                   cycle_id: int, is_good: bool,
                                   slider_count: Optional[int], db,
                                   remediation: Optional[Dict[str, Any]] = None) -> None:
+        # 尾箱已挂起等放工单: 后续周期只用来探测放工单动作, 不当新箱结算
+        # (尾箱之后本单没有下一箱, 该周期里只该有放工单/封箱这类收尾动作).
+        if run.get("pending_paper_box"):
+            if self._probe_paper_order(cfg, run):
+                self._close_pending_paper(cfg, run, db, ok_paper=True)
+            else:
+                self._raise_alarm(cfg, "missing_paper",
+                                  f"工单 {run['order_no']} 尾箱仍未检测到放工单动作 (等放工单)")
+                self._persist_run(run, db)
+            return
         # 没开箱 → 自动开第 1 箱 (鲁棒: 扫工单后第一个检测周期来即开箱)
         if run["current_box_index"] == 0:
             self._open_box_sliders(run, cfg, db)
@@ -783,12 +914,24 @@ class PackagingFlowCoordinator:
                 return
             _pkg_dbg("缺油嘴 gate 通过",
                      f"order={run.get('order_no')} box={run.get('current_box_index')}")
-        # 尾箱塞工单视觉 gate (开关默认关): 没检测到放工单动作 → 暂不收尾, 报警, 等补做
+        # 尾箱塞工单视觉 gate (开关默认关): 没检测到放工单动作 → 暂不收尾, 报警.
+        # 两种等放模式并存 (tail_paper_as_close_action 子开关, 默认关):
+        #   关 = 老行为: 只报警等着, 下个周期结算时按那个周期自己的数据重走本 gate;
+        #   开 = v3.34.1 放工单=收尾动作: 挂起本箱成绩快照, 之后探到放工单用快照原成绩
+        #       收尾 (见 _close_pending_paper), 一直没放就扫新工单则尾箱判 NG 收尾.
         if is_tail and cfg.get("tail_paper_order_required"):
             if not self._probe_paper_order(cfg, run):
+                if cfg.get("tail_paper_as_close_action"):
+                    run["pending_paper_box"] = {
+                        "box": run["current_box_index"], "sliders": sc, "target": target,
+                        "cycle": cycle_id, "is_good": bool(is_good),
+                    }
+                    _pkg_dbg("尾箱塞工单 gate 未过→挂起快照",
+                             f"order={run.get('order_no')} sliders={sc}/{target}")
+                else:
+                    _pkg_dbg("尾箱塞工单 gate 未过", f"order={run.get('order_no')} 暂不收尾")
                 self._raise_alarm(cfg, "missing_paper",
                                   f"工单 {run['order_no']} 尾箱未检测到放工单动作, 暂不收尾 (等放工单)")
-                _pkg_dbg("尾箱塞工单 gate 未过", f"order={run.get('order_no')} 暂不收尾")
                 self._persist_run(run, db)
                 return
             run["paper_order_done"] = True
@@ -942,6 +1085,9 @@ class PackagingFlowCoordinator:
             "forced_by": None,      # 强制结案授权账号
             # v3.23 少装挂起等补做的箱快照 (None=无挂起); status=pending_remediation 时有值
             "pending_box": None,
+            # v3.34.1 尾箱「等放工单」挂起快照 (None=无挂起): gate 拦下时保存被拦那次的
+            # 滑块数/合格性, 放工单到位后按原成绩收尾; 没放就扫新单则判 NG 收尾.
+            "pending_paper_box": None,
         }
 
     def _persist_run(self, run: Dict[str, Any], db, create: bool = False) -> None:
@@ -1254,7 +1400,14 @@ def _real_paper_order_probe(channel_id: int, step_label: Optional[str]) -> bool:
         probe = getattr(mgr, "is_packaging_paper_order_covered", None)
         if probe is None:
             return False
-        return bool(probe(step_label))
+        if bool(probe(step_label)):
+            return True
+        # v3.34.1: 上面的探测优先读"上一个已结算周期"的步骤缓存, 会遮蔽当前还没结算的
+        # 周期 — 尾箱挂起等放工单期间, 补放动作恰恰落在当前周期里, 这里补查实时步骤集.
+        if step_label:
+            live = getattr(mgr, "current_cycle_steps", None) or []
+            return step_label in live
+        return False
     except Exception as e:
         print(f"[PackagingFlow] 塞工单探测钩子异常 (隔离): {e}")
         return False

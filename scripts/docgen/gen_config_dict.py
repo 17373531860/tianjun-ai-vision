@@ -124,7 +124,11 @@ def main() -> int:
     md = build_md()
     if "--check" in sys.argv:
         cur = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
-        if cur != md:
+        # 与 gen_db_schema 一致: 忽略生成日期行再比对, 否则隔天 check 必红
+        strip = lambda s: "\n".join(  # noqa: E731
+            l for l in s.splitlines() if not l.startswith("> **生成命令**")
+        )
+        if strip(cur) != strip(md):
             print(f"[gen_config_dict] ❌ {OUT.relative_to(REPO)} 已过期")
             return 1
         print("[gen_config_dict] ✅ 一致")

@@ -255,6 +255,50 @@ def test_min_move_gate():
     assert [e['action'] for _, e in events] == ['confirmed']
 
 
+def test_min_seconds_decouples_from_fps():
+    """秒基确认门槛: 同一个 0.6s 的真动作, 30fps 和 10fps 下都要确认。
+
+    帧数门槛 (min_frames=15) 在 10fps 下 0.6s 只有 6 帧, 会漏; 配了
+    min_seconds=0.3 后按命中跨度判定, 帧率无关。
+    """
+    # 30fps (dt≈0.033): 0.6s ≈ 18 帧
+    frames_30 = [PEN_ON_WORK] * 18 + [WORK_ONLY] * 10
+    events = feed(build([hardness_rule(min_seconds=0.3)]), frames_30, dt=1 / 30)
+    assert [e['action'] for _, e in events] == ['confirmed', 'closed']
+    # 10fps (dt=0.1): 0.6s = 6 帧 < min_frames=15, 帧数语义会漏, 秒基不漏
+    frames_10 = [PEN_ON_WORK] * 6 + [WORK_ONLY] * 10
+    events = feed(build([hardness_rule(min_seconds=0.3)]), frames_10, dt=0.1)
+    assert [e['action'] for _, e in events] == ['confirmed', 'closed']
+    # 对照: 不配秒基, 10fps 下 6 帧 < 15 帧 → 确认不了
+    events = feed(build([hardness_rule()]), frames_10, dt=0.1)
+    assert [e['action'] for _, e in events] == []
+
+
+def test_min_seconds_blocks_short_flash():
+    """短于门槛的瞬时满足 (手扫过停放工具 0.15s) 不确认, 不论帧率多高。"""
+    # 60fps 下 0.15s = 9 帧, 帧数够多但跨度不够 0.3s → 不确认
+    flash = [PEN_ON_WORK] * 9 + [WORK_ONLY] * 30
+    assert feed(build([hardness_rule(min_seconds=0.3)]), flash, dt=1 / 60) == []
+
+
+def test_min_seconds_floor_three_hits():
+    """秒基门槛下保留 3 帧硬下限: 零星 1~2 帧杂散框即使跨度够长也不确认。"""
+    # 2 帧命中相隔 0.5s (> min_seconds=0.3), 中间靠 gone_seconds 桥接不断开,
+    # 但命中帧数只有 2 < 3 → 不确认
+    frames = [PEN_ON_WORK] + [WORK_ONLY] * 5 + [PEN_ON_WORK] + [WORK_ONLY] * 10
+    events = feed(build([hardness_rule(min_seconds=0.3, gone_seconds=2.0)]),
+                  frames, dt=0.1)
+    assert [e['action'] for _, e in events] == []
+
+
+def test_min_seconds_invalid_raises():
+    with pytest.raises(ValueError, match='min_seconds'):
+        parse_region_events({'region_events': {
+            'enabled': True,
+            'rules': [hardness_rule(min_seconds='fast')],
+        }})
+
+
 def test_interrupt_on_other_action_splits_episodes():
     """动作互斥打断 (TP 复检场景 82~90s 实测复刻): 测硬度→扫码→测硬度→扫码,
     两次扫码断开间隔 < 消失确认秒数, 不打断会被桥接成一次 → 序列少一步 →

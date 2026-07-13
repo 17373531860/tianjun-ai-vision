@@ -9,6 +9,7 @@ from backend.services.mes_adapters.form_data_adapter import FormDataAdapter
 from backend.services.mes_adapters.form_urlencoded_adapter import FormUrlencodedAdapter
 from backend.services.mes_adapters.query_string_adapter import QueryStringAdapter
 from backend.services.mes_adapters.modbus_adapter import ModbusRTUAdapter
+from backend.services.mes_adapters.database_adapter import DatabaseAdapter
 
 _REGISTRY: dict[str, type[BaseAdapter]] = {
     "rest": RESTAdapter,
@@ -16,6 +17,7 @@ _REGISTRY: dict[str, type[BaseAdapter]] = {
     "form-urlencoded": FormUrlencodedAdapter,
     "query-string": QueryStringAdapter,
     "modbus_rtu": ModbusRTUAdapter,
+    "database": DatabaseAdapter,   # v3.35 数据库直写 (达梦/MySQL/PG/SQLServer/SQLite)
 }
 
 

@@ -8,6 +8,11 @@
                         ≥ min_frames 帧 → 事件确认; 条件消失超过消失确认时长
                         (规则级 gone_seconds, 未配回退全局中断容忍帧数) 后
                         episode 闭合 (闭合动作携带起止时间, 供步骤落库)。
+                        可选 min_seconds (确认时长秒, 2026-07 秒基门槛): 配了
+                        则确认改按"episode 命中跨度 ≥ 该秒数"判定, min_frames
+                        退化为防杂散噪声的 3 帧硬下限——现场相机帧率 (24/30fps)
+                        和推理帧率 (随 GPU 负载 15~30fps) 都会漂, 帧数门槛在
+                        不同机器上语义不一致, 秒基与帧率解耦。0/不配 = 老语义。
                         例: 测硬度 = 笔中心在 A 区 且 笔∩工件, N1 帧;
                             扫码   = 枪∩工件 或 枪中心在 B 区, N2 帧。
                         可选 min_overlap_ratio (重叠深度 = 交叠面积/主体面积):
@@ -101,13 +106,14 @@ class RegionEventRule:
                  'region', 'region_mode', 'min_frames', 'min_iou', 'require_label',
                  'gone_frames', 'match_iou', 'settle', 'event_id',
                  'anchor_label', 'anchor_ref', 'anchor_hold',
-                 'gone_seconds', 'min_overlap_ratio', 'min_move')
+                 'gone_seconds', 'min_overlap_ratio', 'min_move', 'min_seconds')
 
     def __init__(self, rule_id, name, rule_type, subject_label, object_label,
                  region, region_mode, min_frames, min_iou, require_label,
                  gone_frames, match_iou, settle, event_id,
                  anchor_label=None, anchor_ref=None, anchor_hold=3.0,
-                 gone_seconds=None, min_overlap_ratio=0.0, min_move=0.0):
+                 gone_seconds=None, min_overlap_ratio=0.0, min_move=0.0,
+                 min_seconds=0.0):
         self.rule_id = rule_id
         self.name = name                    # 事件名 = 步骤落库/流水显示名, 全局唯一
         self.rule_type = rule_type          # 'overlap' | 'region_enter' | 'region_exit'
@@ -131,6 +137,9 @@ class RegionEventRule:
         #                                     (交叠面积/主体面积, 0=贴边即算)
         self.min_move = min_move            # overlap/enter: 位移门槛
         #                                     (episode 内累计位移, 0=不要求移动)
+        self.min_seconds = min_seconds      # overlap/enter: 确认时长秒基门槛
+        #                                     (>0 按命中跨度秒判定, 帧数退化为
+        #                                      3 帧硬下限; 0=按 min_frames 帧数)
 
 
 class SettlementRule:
@@ -254,6 +263,11 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
     except (TypeError, ValueError):
         raise ValueError(f"region_events.rules[{i}] ({name}) min_move 非数值")
 
+    try:
+        min_seconds = max(0.0, float(raw.get('min_seconds') or 0.0))
+    except (TypeError, ValueError):
+        raise ValueError(f"region_events.rules[{i}] ({name}) min_seconds 非数值")
+
     settle = raw.get('settle')
     return RegionEventRule(
         rule_id=str(raw.get('id') or f'r{i + 1}'),
@@ -276,6 +290,7 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
         gone_seconds=gone_seconds,
         min_overlap_ratio=min_overlap_ratio,
         min_move=min_move,
+        min_seconds=min_seconds,
     )
 
 
@@ -324,6 +339,8 @@ def parse_region_events(pipeline_config: dict) -> Optional[RegionEventsConfig]:
                min_frames: 15, require_label: null, min_iou: 0,
                min_overlap_ratio: 0.2,   # 可选: 重叠深度 (交叠/主体面积)
                min_move: 0.04,           # 可选: 位移门槛 (episode 内轨迹跨度)
+               min_seconds: 0.3,         # 可选: 确认时长秒 (>0 时替代 min_frames,
+               #                           帧数退化为 3 帧硬下限, 与帧率解耦)
                gone_seconds: 1.5,        # 可选: 消失确认秒数 (缺省用全局帧容忍)
                settle: false, event_id: null}
             - {name: 下工件, type: region_exit, subject_label: 工件,
@@ -652,6 +669,21 @@ class RegionEventEngine:
             return ts - st.last_hit_ts > rule.gone_seconds
         return st.miss > self.cfg.gap_tolerance
 
+    @staticmethod
+    def _held_long_enough(rule: RegionEventRule, st: _OverlapState,
+                          ts: float) -> bool:
+        """确认时长判定: 秒基门槛优先, 未配回退帧数门槛。
+
+        为什么秒基 (2026-07): min_frames 的实际时长 = 帧数/推理帧率, 而现场
+        相机帧率 (24/30fps) 和推理帧率 (随 GPU 负载 15~30fps) 都会漂, 同一份
+        配置在不同机器上门槛松紧不一致。配了 min_seconds 后按"episode 命中
+        跨度 ≥ 秒数"判定, 与帧率解耦; min_frames 退化为 3 帧硬下限, 防止
+        零星 1~2 帧的杂散框靠时间跨度蒙混过关。
+        """
+        if rule.min_seconds > 0:
+            return st.hit >= 3 and (ts - st.start_ts) >= rule.min_seconds
+        return st.hit >= rule.min_frames
+
     def _step_overlap(self, rule, by_label, ts, events):
         st = self._overlap_states[rule.rule_id]
         subject = self._overlap_condition(rule, by_label, ts)
@@ -663,7 +695,7 @@ class RegionEventEngine:
             st.last_hit_ts = ts
             if rule.min_move > 0:
                 self._track_motion(st, subject)
-            if (not st.confirmed and st.hit >= rule.min_frames
+            if (not st.confirmed and self._held_long_enough(rule, st, ts)
                     and self._moved_enough(rule, st)):
                 st.confirmed = True
                 if self._dedup_hit(rule):

@@ -62,6 +62,14 @@ class PackagingFlowConfigBase(BaseModel):
     label_len: int = 0
     hyphen_template: Optional[str] = None
     hyphen_pos: int = 0
+    # 复合条码取段 (v3.30.1, 默认关)
+    composite_label_enabled: bool = False
+    composite_delimiter: str = "|"
+    composite_pick_mode: str = "prefix"
+    composite_prefix: Optional[str] = None
+    composite_index: int = 1
+    # 工单号识别规则 (v3.30.1, 默认空=不过滤)
+    order_code_pattern: Optional[str] = None
     # 组④ 异常策略
     on_mes_fail: str = "block"
     on_label_mismatch: str = "warn"
@@ -91,6 +99,8 @@ class PackagingFlowConfigBase(BaseModel):
     name_match_strict_boundary: bool = False
     tail_paper_order_required: bool = False
     tail_paper_step_label: Optional[str] = None
+    # v3.34.1 放工单=尾箱收尾动作 (挂起快照闭环), 默认关=老行为
+    tail_paper_as_close_action: bool = False
     event_missing_paper: Optional[int] = None
     # 缺油嘴 gate (v3.23, 每箱查, 默认关)
     oil_nozzle_required: bool = False
@@ -120,6 +130,12 @@ class PackagingFlowConfigUpdate(BaseModel):
     label_len: Optional[int] = None
     hyphen_template: Optional[str] = None
     hyphen_pos: Optional[int] = None
+    composite_label_enabled: Optional[bool] = None
+    composite_delimiter: Optional[str] = None
+    composite_pick_mode: Optional[str] = None
+    composite_prefix: Optional[str] = None
+    composite_index: Optional[int] = None
+    order_code_pattern: Optional[str] = None
     on_mes_fail: Optional[str] = None
     on_label_mismatch: Optional[str] = None
     on_short_box: Optional[str] = None
@@ -145,6 +161,7 @@ class PackagingFlowConfigUpdate(BaseModel):
     name_match_strict_boundary: Optional[bool] = None
     tail_paper_order_required: Optional[bool] = None
     tail_paper_step_label: Optional[str] = None
+    tail_paper_as_close_action: Optional[bool] = None
     event_missing_paper: Optional[int] = None
     oil_nozzle_required: Optional[bool] = None
     oil_nozzle_step_label: Optional[str] = None
@@ -237,6 +254,12 @@ def _serialize(row: PackagingFlowConfig) -> PackagingFlowConfigResponse:
         label_len=int(row.label_len or 0),
         hyphen_template=row.hyphen_template,
         hyphen_pos=int(getattr(row, "hyphen_pos", 0) or 0),
+        composite_label_enabled=bool(getattr(row, "composite_label_enabled", False)),
+        composite_delimiter=getattr(row, "composite_delimiter", None) or "|",
+        composite_pick_mode=getattr(row, "composite_pick_mode", None) or "prefix",
+        composite_prefix=getattr(row, "composite_prefix", None),
+        composite_index=int(getattr(row, "composite_index", 1) or 1),
+        order_code_pattern=getattr(row, "order_code_pattern", None),
         on_mes_fail=row.on_mes_fail or "block",
         on_label_mismatch=row.on_label_mismatch or "warn",
         on_short_box=row.on_short_box or "redo",
@@ -263,6 +286,7 @@ def _serialize(row: PackagingFlowConfig) -> PackagingFlowConfigResponse:
         name_match_strict_boundary=bool(getattr(row, "name_match_strict_boundary", False)),
         tail_paper_order_required=bool(getattr(row, "tail_paper_order_required", False)),
         tail_paper_step_label=getattr(row, "tail_paper_step_label", None),
+        tail_paper_as_close_action=bool(getattr(row, "tail_paper_as_close_action", False)),
         event_missing_paper=getattr(row, "event_missing_paper", None),
         oil_nozzle_required=bool(getattr(row, "oil_nozzle_required", False)),
         oil_nozzle_step_label=getattr(row, "oil_nozzle_step_label", None),

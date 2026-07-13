@@ -52,8 +52,11 @@ def test_routes_registry_mounts_with_customer_prefix():
 
     reg.include_router(plugin_router, subpath="demo")
 
-    paths = [r.path for r in app.routes]
-    assert "/api/v1/plugins/internal-demo/demo/health" in paths
+    # 新版 FastAPI 把 include_router 挂成嵌套路由对象, app.routes 不再扁平;
+    # 改用真实请求验证挂载 (行为断言, 跨版本稳定)
+    from fastapi.testclient import TestClient
+    resp = TestClient(app).get("/api/v1/plugins/internal-demo/demo/health")
+    assert resp.status_code == 200 and resp.json() == {"ok": True}
     mounted = reg.mounted()
     assert len(mounted) == 1
     assert mounted[0]["prefix"] == "/api/v1/plugins/internal-demo/demo"
@@ -198,9 +201,10 @@ def test_manager_load_backend_module_uses_four_args(tmp_path, monkeypatch):
     assert module is not None
     assert registry is not None
     assert len(registry.routes.mounted()) == 1
-    assert any(
-        r.path == "/api/v1/plugins/internal-demo/probe-sub/probe" for r in app.routes
-    )
+    # 新版 FastAPI app.routes 不再扁平, 用真实请求验证路由已挂通
+    from fastapi.testclient import TestClient
+    resp = TestClient(app).get("/api/v1/plugins/internal-demo/probe-sub/probe")
+    assert resp.status_code == 200 and resp.json() == {"plugin": "ok"}
 
 
 def test_manager_raises_when_app_missing(tmp_path):

@@ -150,7 +150,7 @@
           </template>
         </el-dropdown>
 
-        <img src="/app-icon.png" alt="logo" class="w-10 h-10 rounded-full object-cover" />
+        <img :src="store.display.logoDataUrl || '/app-icon.png'" alt="logo" class="w-10 h-10 rounded-full object-cover" />
       </div>
     </div>
   </header>

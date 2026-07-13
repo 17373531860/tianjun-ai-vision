@@ -9,17 +9,21 @@
  * 存在扫码器设备表 (parse_config.usb + channel_id), 由「扫码器→设备管理」里新建/编辑。
  * 本模块启动时拉一次设备列表缓存, 设备配置变更后由编辑框调 refreshScanGunConfig() 刷新。
  *
- * 一把枪两种用途 (扫到的码按规则路由):
+ * 一把枪多种用途 (扫到的码按规则路由):
  *   - pull: 扫工单标签条码 → 去外部 MES 拉对应工单 (复用工单拉取接口)
  *   - bind: 扫工件条码 → 注入扫码绑定链路 (复用 /scanner/simulate, 走 scan_pair)
  *   - both: 按"工单号识别规则"正则区分, 命中=拉工单, 否则=绑工件
+ *   - ack : v3.35 报警确认按钮 — 现场装一颗 USB 确认按钮 (本质是只发固定码的
+ *           HID 键盘), 按一下 = 解除本工位"需人工确认"报警定格 (ack-event)。
+ *           称重缺料/超量/投错等 require_ack 报警的物理确认入口。
  *
- * 后端零改动 (两条路都复用已有接口; usb_hid 设备后端不建网络连接)。
+ * 后端零改动 (路由都复用已有接口; usb_hid 设备后端不建网络连接)。
  */
 import { ElNotification } from 'element-plus'
 import { pullOrders } from '@/api/gateway'
 import { getScannerDevices, simulateScannerScan } from '@/api/scanner'
 import { packagingScan } from '@/api/packaging_flow'
+import { ackPendingEvent } from '@/api/detection'
 import { dbg } from '@/utils/debug'
 
 const DEFAULT_CFG = {
@@ -55,11 +59,12 @@ export async function refreshScanGunConfig() {
 }
 
 /**
- * 纯路由判断 (无副作用, 便于单测): 一条码该去拉工单还是绑工件。
- * 返回 'pull' | 'bind'。
+ * 纯路由判断 (无副作用, 便于单测): 一条码该去拉工单 / 绑工件 / 报警确认。
+ * 返回 'pull' | 'bind' | 'ack'。
  */
 export function routeCode(cfg, code) {
   const usage = cfg?.usage || 'pull'
+  if (usage === 'ack') return 'ack'
   if (usage === 'pull') return 'pull'
   if (usage === 'bind') return 'bind'
   try {
@@ -117,15 +122,36 @@ async function dispatch(cfg, code) {
   if (busy) return
   busy = true
   try {
+    const route = routeCode(cfg, code)
+    dbg('mes.scanner', 'USB 扫码枪扫到码', `code=${code} 用途=${cfg.usage} → 路由=${route}`)
+    // v3.35: 报警确认按钮 — 不进包装/拉单/绑定任何链路, 直接解除本工位人工确认定格
+    if (route === 'ack') { await doAck(cfg, code); return }
     // v3.22: 包装结算优先 — 当前工位归属某个启用的包装结算配置时, 扫码全走它 (工单/换单);
     // 没有任何启用配置或工位不匹配时后端返回 handled=false, 回退默认 pull/bind, 零差异。
     if (await tryPackaging(cfg, code)) return
-    const route = routeCode(cfg, code)
-    dbg('mes.scanner', 'USB 扫码枪扫到码', `code=${code} 用途=${cfg.usage} → 路由=${route}`)
     if (route === 'pull') await doPull(cfg, code)
     else await doBind(cfg, code)
   } finally {
     busy = false
+  }
+}
+
+async function doAck(cfg, code) {
+  try {
+    const resp = await ackPendingEvent(cfg.bindChannelId || 0)
+    const r = resp?.data ?? resp
+    dbg('mes.scanner', 'USB 确认按钮 → ack-event',
+        `code=${code} 工位=${(cfg.bindChannelId || 0) + 1} resp=${JSON.stringify(r || {})}`)
+    if (r && r.success !== false) {
+      ElNotification.success({ title: '报警已确认', message: `工位${(cfg.bindChannelId || 0) + 1}：定格已解除，可继续作业`, duration: 2500 })
+    } else {
+      ElNotification.info({ title: '当前无待确认报警', message: (r && (r.message || r.detail)) || '本工位没有等待人工确认的事件', duration: 2500 })
+    }
+  } catch (err) {
+    // 无阻塞事件时后端可能返回 4xx: 按"无待确认"温和提示, 不当成故障
+    const msg = err?.response?.data?.detail || err?.message || String(err)
+    dbg('mes.scanner', 'USB 确认按钮异常', `${code}: ${msg}`)
+    ElNotification.info({ title: '当前无待确认报警', message: msg, duration: 2500 })
   }
 }
 

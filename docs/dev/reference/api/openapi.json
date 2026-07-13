@@ -4773,6 +4773,37 @@
       "title": "Channel Id",
       "type": "integer"
      },
+     "composite_delimiter": {
+      "default": "|",
+      "title": "Composite Delimiter",
+      "type": "string"
+     },
+     "composite_index": {
+      "default": 1,
+      "title": "Composite Index",
+      "type": "integer"
+     },
+     "composite_label_enabled": {
+      "default": false,
+      "title": "Composite Label Enabled",
+      "type": "boolean"
+     },
+     "composite_pick_mode": {
+      "default": "prefix",
+      "title": "Composite Pick Mode",
+      "type": "string"
+     },
+     "composite_prefix": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Composite Prefix"
+     },
      "count_unit": {
       "default": "trays",
       "title": "Count Unit",
@@ -4978,6 +5009,17 @@
       "title": "On Short Box",
       "type": "string"
      },
+     "order_code_pattern": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Order Code Pattern"
+     },
      "pull_conn_id": {
       "anyOf": [
        {
@@ -5028,6 +5070,11 @@
        }
       ],
       "title": "Spec To Project"
+     },
+     "tail_paper_as_close_action": {
+      "default": false,
+      "title": "Tail Paper As Close Action",
+      "type": "boolean"
      },
      "tail_paper_order_required": {
       "default": false,
@@ -5121,6 +5168,37 @@
       "default": 0,
       "title": "Channel Id",
       "type": "integer"
+     },
+     "composite_delimiter": {
+      "default": "|",
+      "title": "Composite Delimiter",
+      "type": "string"
+     },
+     "composite_index": {
+      "default": 1,
+      "title": "Composite Index",
+      "type": "integer"
+     },
+     "composite_label_enabled": {
+      "default": false,
+      "title": "Composite Label Enabled",
+      "type": "boolean"
+     },
+     "composite_pick_mode": {
+      "default": "prefix",
+      "title": "Composite Pick Mode",
+      "type": "string"
+     },
+     "composite_prefix": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Composite Prefix"
      },
      "count_unit": {
       "default": "trays",
@@ -5331,6 +5409,17 @@
       "title": "On Short Box",
       "type": "string"
      },
+     "order_code_pattern": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Order Code Pattern"
+     },
      "pull_conn_id": {
       "anyOf": [
        {
@@ -5381,6 +5470,11 @@
        }
       ],
       "title": "Spec To Project"
+     },
+     "tail_paper_as_close_action": {
+      "default": false,
+      "title": "Tail Paper As Close Action",
+      "type": "boolean"
      },
      "tail_paper_order_required": {
       "default": false,
@@ -5499,6 +5593,61 @@
        }
       ],
       "title": "Channel Id"
+     },
+     "composite_delimiter": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Composite Delimiter"
+     },
+     "composite_index": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Composite Index"
+     },
+     "composite_label_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Composite Label Enabled"
+     },
+     "composite_pick_mode": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Composite Pick Mode"
+     },
+     "composite_prefix": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Composite Prefix"
      },
      "count_unit": {
       "anyOf": [
@@ -5808,6 +5957,17 @@
       ],
       "title": "On Short Box"
      },
+     "order_code_pattern": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Order Code Pattern"
+     },
      "pull_conn_id": {
       "anyOf": [
        {
@@ -5876,6 +6036,17 @@
        }
       ],
       "title": "Spec To Project"
+     },
+     "tail_paper_as_close_action": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tail Paper As Close Action"
      },
      "tail_paper_order_required": {
       "anyOf": [

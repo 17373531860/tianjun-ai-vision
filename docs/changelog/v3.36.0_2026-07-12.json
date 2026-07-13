@@ -1,0 +1,70 @@
+{
+  "version": "3.36.0",
+  "date": "2026-07-12",
+  "previous_version": "3.35.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "导航栏 Logo 客户自定义上传（显示设置）",
+      "symptom": "客户想换检测主页左上角 logo，此前只能改前端静态资源重新打包",
+      "root_cause": "导航栏 logo 硬编码 /app-icon.png，无运行时配置入口",
+      "fix": "设置页显示设置新增上传入口：前端居中裁方压缩 256×256 PNG data URL 存 localStorage（display_settings.logoDataUrl），Navbar 优先取自定义、空值回退内置图，支持一键恢复默认；桌面快捷方式图标为打包期资源不做运行时修改",
+      "files": [
+        "frontend/src/views/Settings/index.vue",
+        "frontend/src/layout/Navbar.vue",
+        "frontend/src/store/useSystemStore.js",
+        "tests/e2e_browser/test_settings_page.py",
+        "tests/uat/uat_20260712_navbar_logo_upload.py"
+      ],
+      "keywords": ["logo", "导航栏", "自定义图标", "logoDataUrl", "显示设置", "上传图片", "app-icon", "navbar", "品牌定制"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "展会全应用插件 v1.4.0 全量对齐主程序 v3.33~v3.35",
+      "symptom": "展会插件功能面停留在 v3.31/v3.32，逐件重复打防护、断点补做、称重融合、数据库直写、包装复合条码等三个版本的新能力在插件界面无入口",
+      "root_cause": "插件 v1.3.1 之后主程序连发 v3.33/v3.34/v3.35 三版，插件未跟进",
+      "fix": "showcase-app.html 单文件内补齐：区域事件规则全字段+结算判定编辑器+保存清洗、同标签区域拆分编辑器+虚拟步骤同步、逐件重复打/换板兜底、步骤表等待不被打断+外设门控(step_gate 融合注入)、称重前置有效期+视觉料源防错、事件 ack_keep_cycle、监控页重复打黄条+dup 琥珀环+kept_cycle 文案、MES 网关 database 适配器表单、包装条码/收尾编辑面板；plugin.json v1.4.0 main_version_min=3.35.0",
+      "files": [
+        "plugins-examples/tianjun-showcase/frontend/dist/showcase-app.html",
+        "plugins-examples/tianjun-showcase/plugin.json",
+        "plugins-examples/tianjun-showcase/README.md",
+        "plugins-examples/tianjun-showcase/UPGRADE_v1.4.0.md",
+        "tests/uat/uat_20260712_showcase_v140_full_align.py"
+      ],
+      "keywords": ["展会插件", "showcase", "v1.4.0", "全量对齐", "region_events", "min_seconds", "label_splits", "duplicate_screw_alarm", "ack_keep_cycle", "device_gate", "step_gate", "context_expiry", "visual_guard", "database adapter", "复合条码", "tail_paper_as_close_action", "kept_cycle"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "TOOL-001",
+      "title": "TP 项目区域事件回放工具入库",
+      "symptom": "TP 模型迭代（v5→v5.1）缺少可复跑的同轴对比工具",
+      "root_cause": "回放脚本此前散落 /tmp，未版本化",
+      "fix": "tests/uat/tp_replay/ 收录 build_cache.py（检测缓存）+ replay.py（逐周期结算 + 使用态框连续性/动作撕裂/使用态误标率指标）",
+      "files": ["tests/uat/tp_replay/build_cache.py", "tests/uat/tp_replay/replay.py"],
+      "keywords": ["tp_replay", "回放", "模型对比", "连续性指标", "动作撕裂", "v5.1"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": [],
+  "files_changed": [
+    "frontend/src/views/Settings/index.vue",
+    "frontend/src/layout/Navbar.vue",
+    "frontend/src/store/useSystemStore.js",
+    "plugins-examples/tianjun-showcase/frontend/dist/showcase-app.html",
+    "plugins-examples/tianjun-showcase/plugin.json",
+    "plugins-examples/tianjun-showcase/README.md",
+    "plugins-examples/tianjun-showcase/UPGRADE_v1.4.0.md",
+    "plugins/showcase/frontend/dist/showcase-app.html",
+    "plugins/showcase/plugin.json",
+    "plugins/showcase/README.md",
+    "tests/e2e_browser/test_settings_page.py",
+    "tests/uat/uat_20260712_navbar_logo_upload.py",
+    "tests/uat/uat_20260712_showcase_v140_full_align.py",
+    "tests/uat/tp_replay/build_cache.py",
+    "tests/uat/tp_replay/replay.py"
+  ]
+}

@@ -232,6 +232,125 @@ def test_label_insert_char_varlen_serial(client):
     assert state["order_no"] == "JOB150700114-111"
 
 
+def test_composite_prefix_same_order_sy_real_label(client):
+    """复合条码取段 (v3.30.1, SY 现场真实标签):
+    箱标签是四段拼接 '订单|工单|数量|校验串', 按前缀 JOB 取工单段再走 insert_char.
+    工单纸(丢符号) / 复合标签(带符号) / 复合标签(丢符号) 三种码归一化后同号 → 不报标签不符."""
+    coord, cid = _setup_flow(client, label_match="insert_char",
+                             hyphen_template="-", hyphen_pos=12,
+                             composite_label_enabled=True,
+                             composite_pick_mode="prefix", composite_prefix="JOB")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 3})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    db = SessionLocal()
+
+    # 工单纸直扫 (无分隔符, 枪丢 '-') → 原样通过取段, insert_char 补回 → 开工单
+    coord.on_scan("JOB26060026813", db, channel_id=0)
+    state = coord.get_state(cid)
+    assert state["order_no"] == "JOB260600268-13"
+    # 复合箱标签 (JOB 段带符号, 现场真实串) → 取段+归一化同号 → 开箱1
+    coord.on_scan("ORD260300050-2|JOB260600268-13|54.00|55AEA731126D6A9FE063D521BD0A9B02",
+                  db, channel_id=0)
+    state = coord.get_state(cid)
+    assert state["current_box_index"] == 1
+    # 复合箱标签 (JOB 段丢符号) → 仍同号 → 结算箱1+开箱2
+    coord.on_scan("ORD260300050-2|JOB26060026813|54.00|55AEA731126D6A9FE063D521BD0A9B02",
+                  db, channel_id=0)
+    state = coord.get_state(cid)
+    assert state["current_box_index"] == 2
+    assert "label_mismatch" not in alarms
+
+
+def test_composite_index_mode_picks_nth_segment(client):
+    """复合取段 index 模式: 取第 2 段; 段序号超界原样返回不吞码."""
+    coord, cid = _setup_flow(client, composite_label_enabled=True,
+                             composite_pick_mode="index", composite_index=2)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 2})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    db = SessionLocal()
+
+    coord.on_scan("AAA|ORD9|54.00", db, channel_id=0)   # 取第2段 ORD9 开工单
+    state = coord.get_state(cid)
+    assert state["order_no"] == "ORD9"
+    coord.on_scan("ORD9", db, channel_id=0)             # 单段码同号 → 开箱1
+    state = coord.get_state(cid)
+    assert state["current_box_index"] == 1
+
+
+def test_composite_disabled_keeps_old_mismatch_behavior(client):
+    """默认关 = 存量零差异: 不启用取段时复合串仍整串比对 → 标签不符报警 (原行为)."""
+    coord, cid = _setup_flow(client, label_match="insert_char",
+                             hyphen_template="-", hyphen_pos=12)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 3})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    db = SessionLocal()
+
+    coord.on_scan("JOB26060026813", db, channel_id=0)
+    coord.on_scan("ORD260300050-2|JOB26060026813|54.00|55AEA731126D6A9FE063D521BD0A9B02",
+                  db, channel_id=0)
+    assert "label_mismatch" in alarms
+
+
+def test_composite_extract_pure_edge_cases(client):
+    """取段纯函数边界: 前缀多段命中取最长 / 前缀无命中原样 / index 超界原样 / 未启用原样."""
+    from backend.services.packaging_flow_coordinator import PackagingFlowCoordinator as C
+    base = {"composite_label_enabled": True, "composite_delimiter": "|",
+            "composite_pick_mode": "prefix", "composite_prefix": "JOB"}
+    # 多段命中取最长 (最具体)
+    assert C._extract_composite("JOB1|JOB260600268-13|X", base) == "JOB260600268-13"
+    # 前缀无命中 → 原样返回 (不吞码, 让后续按不符报警可追查)
+    assert C._extract_composite("A|B|C", base) == "A|B|C"
+    # index 超界 → 原样
+    idx = dict(base, composite_pick_mode="index", composite_index=9)
+    assert C._extract_composite("A|B", idx) == "A|B"
+    # 未启用 → 原样
+    assert C._extract_composite("A|B", {"composite_label_enabled": False}) == "A|B"
+
+
+def test_order_code_pattern_with_run_uses_label_mismatch(client):
+    """有在途工单时: 识别规则不参与, 数量码仍走原有「标签不符」逻辑."""
+    coord, cid = _setup_flow(client, label_match="insert_char",
+                             hyphen_template="-", hyphen_pos=12,
+                             order_code_pattern="^JOB", count_unit="sliders",
+                             on_mes_fail="offline", on_label_mismatch="block")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 3})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append((k, m)))
+    db = SessionLocal()
+
+    coord.on_scan("JOB260600151202", db, channel_id=0)
+    coord.on_scan("80.00", db, channel_id=0)
+
+    assert any(k == "label_mismatch" for k, _ in alarms)
+    assert not any(k == "order_code_reject" for k, _ in alarms)
+    state = coord.get_state(cid)
+    assert state["order_no"] == "JOB260600151-202"
+
+
+def test_order_code_pattern_blocks_first_scan_garbage(client):
+    """工单号识别规则 ^JOB: 无在途工单时第一枪扫 80.00 → 拒扫, 不开出垃圾工单."""
+    coord, cid = _setup_flow(client, order_code_pattern="^JOB", on_mes_fail="offline")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 2})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append((k, m)))
+    db = SessionLocal()
+
+    coord.on_scan("80.00", db, channel_id=0)
+
+    assert any(k == "order_code_reject" for k, _ in alarms)
+    assert coord.get_state(cid) is None
+
+
+def test_order_code_pattern_disabled_zero_diff(client):
+    """默认空规则 = 不过滤 (零差异): 与未加此功能前行为一致."""
+    from backend.services.packaging_flow_coordinator import PackagingFlowCoordinator as C
+    cfg = {"order_code_pattern": ""}
+    assert C._order_code_ok("80.00", cfg) is True
+    assert C._order_code_ok("JOB260600151-202", cfg) is True
+
+
 def test_label_digits_only_same_order(client):
     """digits_only 模式: 'AB-12' 与 '12' 只留数字均=12 → 同号 → 第二次扫开箱."""
     coord, cid = _setup_flow(client, label_match="digits_only")
@@ -636,6 +755,145 @@ def test_sliders_tail_paper_order_gate(client):
     row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
     assert row.status == "completed" and row.box_done == 1
     assert row.paper_order_done is True
+
+
+def test_sliders_paper_gate_default_old_behavior_no_snapshot(client):
+    """收尾动作模式默认关 = 老行为零差异: 拦下时不挂快照, 扫新单走漏箱处置(redo 不切单)."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             on_short_box="redo")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})    # 2 箱
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    coord.set_paper_order_probe(lambda ch, lbl: False)
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 箱1 正常收
+    coord.on_cycle_settled(0, 2, True, db, slider_count=24)     # 尾箱拦下: 只报警, 不挂快照
+    state = coord.get_state(cid)
+    assert state is not None and state.get("pending_paper_box") is None
+    coord.on_scan("ORD2", db, channel_id=0)                     # 老行为: 漏箱处置
+
+    assert "short_box" in alarms
+    state = coord.get_state(cid)
+    assert state is not None and state["order_no"] == "ORD1"    # redo 不切单, 不判NG收尾
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status != "completed"
+
+
+def test_sliders_pending_paper_uses_snapshot_not_new_cycle(client):
+    """v3.34.1 挂起快照: 尾箱装满 24 被拦 → 放工单周期只有 0 个滑块 → 收尾用快照 24 判 OK."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    paper = {"covered": False}
+    coord.set_paper_order_probe(lambda ch, lbl: paper["covered"])
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 满箱但没放工单 → 挂起
+    paper["covered"] = True
+    coord.on_cycle_settled(0, 2, True, db, slider_count=0)      # 放工单周期本身 0 滑块
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "OK"
+    assert row.box_details[-1]["sliders"] == 24                 # 用快照成绩, 不用 0
+    assert row.paper_order_done is True
+
+
+def test_sliders_pending_paper_scan_new_order_judges_ng(client):
+    """v3.34.1 一直没放工单直接扫新工单 → 旧单尾箱判 NG 收尾 + 新单正常开."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    coord.set_paper_order_probe(lambda ch, lbl: False)          # 始终没放
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂起等放工单
+    coord.on_scan("ORD2", db, channel_id=0)                     # 没放就扫新单
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "NG"
+    assert row.box_done == 1 and row.box_ng == 1
+    assert alarms.count("missing_paper") >= 2                   # 挂起时 + 判NG时
+    state = coord.get_state(cid)
+    assert state is not None and state["order_no"] == "ORD2"    # 新单已开
+
+
+def test_sliders_pending_paper_scan_new_order_after_paper_ok(client):
+    """v3.34.1 挂起后现场放了工单(实时可见)再扫新单 → 旧单快照 OK 收尾 + 新单开."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    paper = {"covered": False}
+    coord.set_paper_order_probe(lambda ch, lbl: paper["covered"])
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂起
+    paper["covered"] = True                                     # 现场放了工单
+    coord.on_scan("ORD2", db, channel_id=0)
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "OK"
+    state = coord.get_state(cid)
+    assert state is not None and state["order_no"] == "ORD2"
+
+
+def test_sliders_pending_paper_same_order_rescan_waits(client):
+    """v3.34.1 挂起中同号重扫且仍没放 → 只提醒继续等, 工单保持在途不收尾."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    coord.set_paper_order_probe(lambda ch, lbl: False)
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂起
+    coord.on_scan("ORD1", db, channel_id=0)                     # 同号重扫
+
+    state = coord.get_state(cid)
+    assert state is not None and state["order_no"] == "ORD1"    # 仍在途
+    assert state["box_done"] == 0                               # 没收尾
+    assert alarms.count("missing_paper") >= 2
+
+
+def test_sliders_pending_paper_forced_settle_waives_gate(client):
+    """v3.34.1 挂起中管理员强制结案 → 豁免塞工单 gate, 按快照原成绩落账收尾."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    coord.set_paper_order_probe(lambda ch, lbl: False)
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂起
+    assert coord.force_settle_manual(cid, db, reason="现场确认已放工单", operator="主管A")
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "OK"
+    assert row.box_done == 1
+    assert coord.get_state(cid) is None
 
 
 def test_sliders_auto_switch_project_invoked(client):

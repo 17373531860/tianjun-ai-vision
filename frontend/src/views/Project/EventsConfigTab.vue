@@ -77,6 +77,17 @@
               触发本事件后：弹原提示框 + 弹"确认重做"对话框，<span class="text-amber-300">画面与状态机暂停</span>，工人确认后清当前周期但保留计数（OK / NG / 自定义计数器累计值不动），现场重做这一件。本机生效，不同步到集群副机。
             </div>
 
+            <!-- v3.34 确认后保留周期 (断点补做) -->
+            <div v-if="ev.require_ack" class="mt-2 flex items-center gap-3 flex-wrap">
+              <el-checkbox v-model="ev.ack_keep_cycle" size="small">
+                <span class="text-emerald-300">确认后保留周期（断点补做）</span>
+              </el-checkbox>
+            </div>
+            <div v-if="ev.require_ack" class="text-xs text-gray-500 mt-2 leading-relaxed bg-slate-950/60 rounded p-2 border-l-2 border-emerald-700/50">
+              勾上：工人确认后<span class="text-emerald-300">保留在制周期与已完成步骤</span>，从被打断处继续补做（典型：违序警告定格 → 确认 → 接着做漏掉的那一步，整件照常判定）。
+              不勾（默认）：确认即丢弃在制周期，整件从头重做。超时自动确认遵循同一语义。
+            </div>
+
             <!-- v3.9.x 周期性强制动作触发的事件: 确认时是否清账 -->
             <div v-if="ev.require_ack" class="mt-2 flex items-center gap-3 flex-wrap">
               <el-checkbox v-model="ev.ack_resets_periodic" size="small">
@@ -126,6 +137,7 @@ const addEvent = () => {
     require_ack: false,
     ack_timeout_sec: 0,
     ack_resets_periodic: false,
+    ack_keep_cycle: false,
   });
 };
 

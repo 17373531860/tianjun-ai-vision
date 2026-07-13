@@ -13,6 +13,11 @@ from pathlib import Path
 
 import pytest
 
+# ⚠️ 先材料化主程序模块树再让本文件的 fixture 打 SessionLocal 补丁:
+# 惰性首次 import 若落在补丁窗口内会按值捕获 tmp sessionmaker, 永久污染后续测试
+# (session_naming 'DB 找不到' + 'disk image is malformed' 级联根因, 2026-07-13)
+import backend.main  # noqa: F401  isort: skip
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 

@@ -62,3 +62,25 @@ def test_新增事件加动作_保存落库(page, base_url, api_url):
     mine = [e for e in (detail.get("events_config") or []) if e.get("name") == ev_name]
     assert mine, "新增事件应落库"
     assert len(mine[0].get("actions") or []) == 1, "计数器动作应落库"
+
+
+def test_确认后保留周期勾选_保存落库(page, base_url, api_url):
+    """v3.34 ack_keep_cycle: 勾需人工确认 → 出现『确认后保留周期』→ 勾上保存落库."""
+    proj = _first_e2e_project(api_url)
+    _open_events_tab(page, base_url, proj["name"])
+
+    ra = page.locator("label:visible", has_text="需人工确认").first
+    ra.scroll_into_view_if_needed()
+    ra.click()
+    time.sleep(0.6)
+    keep = page.locator("label:visible", has_text="确认后保留周期")
+    assert keep.count() >= 1, "勾选需人工确认后应出现『确认后保留周期』"
+    keep.first.click()
+    time.sleep(0.5)
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+
+    detail = requests.get(f"{api_url}/api/v1/projects/{proj['id']}", timeout=5).json()
+    ev1 = (detail.get("events_config") or [])[0]
+    assert ev1.get("require_ack") is True, "require_ack 应落库"
+    assert ev1.get("ack_keep_cycle") is True, "ack_keep_cycle 应落库"

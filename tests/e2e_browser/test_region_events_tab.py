@@ -101,7 +101,15 @@ def test_建两条规则_画区域_全结构落库(page, base_url, api_url):
     _open_logic_tab(page, base_url, name)
     card = _rules_card(page)
 
-    _add_overlap_rule(page, card, "测硬度", "测硬度笔", "工件")
+    rule1 = _add_overlap_rule(page, card, "测硬度", "测硬度笔", "工件")
+
+    # 确认时长秒基门槛 (2026-07 帧率解耦): UI 填 0.3s
+    ms_input = rule1.locator(
+        "div:has(> label:has-text('确认时长')) .el-input-number input").first
+    ms_input.scroll_into_view_if_needed()
+    ms_input.fill("0.3")
+    ms_input.press("Enter")
+    time.sleep(0.4)
 
     # 规则 2: 切 region_exit → 结算开关自动开 + 画判定区域
     card.locator("button:has-text('新增动作')").click()
@@ -160,7 +168,10 @@ def test_建两条规则_画区域_全结构落库(page, base_url, api_url):
     hard, exit_ = by_name["测硬度"], by_name["下工件"]
     assert hard["type"] == "overlap"
     assert hard["subject_label"] == "测硬度笔" and hard["object_label"] == "工件"
+    assert abs(hard.get("min_seconds", 0) - 0.3) < 1e-6, \
+        f"确认时长秒基应落库: {hard.get('min_seconds')}"
     assert exit_["type"] == "region_exit" and exit_["settle"] is True
+    assert "min_seconds" not in exit_, "region_exit 规则不应带确认时长键"
     assert len(exit_.get("region") or []) == 4, f"判定区域应落库: {exit_.get('region')}"
     assert abs((re_cfg.get("class_conf") or {}).get("测硬度笔", 0) - 0.2) < 1e-6
     seq = re_cfg.get("sequence_check") or {}

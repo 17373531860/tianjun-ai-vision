@@ -26,20 +26,21 @@
           <el-radio-button label="pull">拉工单</el-radio-button>
           <el-radio-button label="bind">绑工件</el-radio-button>
           <el-radio-button label="both">两者(按规则区分)</el-radio-button>
+          <el-radio-button label="ack">报警确认按钮</el-radio-button>
         </el-radio-group>
         <div class="text-xs text-gray-500 mt-1">
-          拉工单 = 扫工单标签条码去外部 MES 查回工单；绑工件 = 扫工件条码绑定到检测周期；两者 = 一把枪都干，按工单号规则自动分。
+          拉工单 = 扫工单标签条码去外部 MES 查回工单；绑工件 = 扫工件条码绑定到检测周期；两者 = 一把枪都干，按工单号规则自动分；报警确认按钮 = 现场装一颗 USB 确认按钮（发固定码的 HID 按键），按一下解除本工位「需人工确认」的报警定格（称重缺料/超量/投错等）。
         </div>
       </el-form-item>
 
-      <el-form-item v-if="form.usage !== 'bind'" label="拉工单用哪条连接">
+      <el-form-item v-if="form.usage !== 'bind' && form.usage !== 'ack'" label="拉工单用哪条连接">
         <el-select v-model="form.pullConnId" placeholder="选已配好的工单拉取连接" class="w-72">
           <el-option v-for="c in pullConns" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
         <span v-if="!pullConns.length" class="text-xs text-orange-400 ml-2">还没有拉取连接，先去「工单拉取」页建一条</span>
       </el-form-item>
 
-      <el-form-item v-if="form.usage !== 'pull'" label="绑工件到工位">
+      <el-form-item v-if="form.usage !== 'pull'" :label="form.usage === 'ack' ? '确认哪个工位的报警' : '绑工件到工位'">
         <el-select v-model="channelSelect" class="w-40">
           <el-option v-for="n in 4" :key="n - 1" :label="`工位 ${n}`" :value="n - 1" />
           <el-option label="自定义…" :value="CUSTOM_CH" />
@@ -63,8 +64,8 @@
       <el-divider content-position="left"><span class="text-cyan-300 text-xs">扫一下试试（不用真扫码枪）</span></el-divider>
       <el-form-item label="模拟扫一个码">
         <el-input v-model="testCode" placeholder="如 JOB260500444-136 或工件码" class="w-72" />
-        <el-tag v-if="testCode" size="small" :type="testRoute === 'pull' ? 'warning' : 'primary'" class="ml-2">
-          会去：{{ testRoute === 'pull' ? '拉工单' : '绑工件' }}
+        <el-tag v-if="testCode" size="small" :type="testRoute === 'pull' ? 'warning' : (testRoute === 'ack' ? 'success' : 'primary')" class="ml-2">
+          会去：{{ testRoute === 'pull' ? '拉工单' : (testRoute === 'ack' ? '报警确认' : '绑工件') }}
         </el-tag>
         <el-button size="small" type="primary" class="ml-2" :disabled="!testCode" :loading="testing" @click="runTest">
           真跑一次
@@ -84,6 +85,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElNotification } from 'element-plus'
 import { getConnections, pullOrders } from '@/api/gateway'
 import { createScannerDevice, updateScannerDevice, simulateScannerScan } from '@/api/scanner'
+import { ackPendingEvent } from '@/api/detection'
 import { routeCode, refreshScanGunConfig } from '@/composables/useScanGun'
 
 const props = defineProps({
@@ -176,7 +178,7 @@ function buildPayload() {
 
 async function save() {
   if (!form.value.name) { ElMessage.warning('请填名称'); return }
-  if (form.value.usage !== 'bind' && !form.value.pullConnId) {
+  if (form.value.usage !== 'bind' && form.value.usage !== 'ack' && !form.value.pullConnId) {
     ElMessage.warning('拉工单用途需选一条拉取连接'); return
   }
   saving.value = true
@@ -199,7 +201,13 @@ async function runTest() {
   testing.value = true
   try {
     const route = routeCode(form.value, testCode.value)
-    if (route === 'pull') {
+    if (route === 'ack') {
+      const resp = await ackPendingEvent(form.value.bindChannelId || 0)
+      const r = resp?.data ?? resp
+      r && r.success !== false
+        ? ElNotification.success({ title: '报警已确认', message: `工位${(form.value.bindChannelId || 0) + 1} 定格已解除` })
+        : ElNotification.info({ title: '当前无待确认报警', message: r?.message || r?.detail || '本工位没有等待人工确认的事件' })
+    } else if (route === 'pull') {
       if (!form.value.pullConnId) { ElNotification.warning({ title: '先选拉取连接' }); return }
       const resp = await pullOrders(form.value.pullConnId, { job_no: testCode.value, dry_run: false })
       const r = resp?.data ?? resp

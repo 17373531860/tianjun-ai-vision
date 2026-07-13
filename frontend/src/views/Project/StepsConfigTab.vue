@@ -75,6 +75,20 @@
                       <span class="cursor-help border-b border-dashed border-gray-500">步骤ROI</span>
                     </el-tooltip>
                   </th>
+                  <th v-if="isSeqLike" class="p-2 w-32">
+                    <el-tooltip placement="top">
+                      <template #content>
+                        <div style="max-width: 340px; line-height: 1.5">
+                          <b>外设门控</b>（默认关闭，零差异）<br/>
+                          视觉识别到该步骤后<b>不立即计入周期</b>，先等外设（电子秤）条件满足才放行：<br/>
+                          • <b>去皮门控</b>：秤上毛重超阈值且稳定 → 自动发去皮指令 → 放行（适合"工件放秤"步骤）<br/>
+                          • <b>称重判定</b>：净重稳定 → 按当前型号×料别对比标准量 → 合格放行，缺料/超量报警拦截<br/>
+                          启用任一门控后会出现「称重配置」页签，在那里配秤参数/型号标准量表。
+                        </div>
+                      </template>
+                      <span class="cursor-help border-b border-dashed border-gray-500">外设门控</span>
+                    </el-tooltip>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -158,6 +172,45 @@
                       </svg>
                       <span v-else class="text-[0.625rem] text-gray-500">未限制</span>
                     </div>
+                  </td>
+                  <td v-if="isSeqLike" class="p-2 align-top">
+                    <el-popover placement="left" :width="340" trigger="click">
+                      <template #reference>
+                        <el-button size="small" plain
+                          :type="step.device_gate && step.device_gate.enabled ? 'success' : 'info'">
+                          {{ gateLabel(step) }}
+                        </el-button>
+                      </template>
+                      <div class="space-y-2 text-xs">
+                        <div class="flex items-center justify-between">
+                          <span>启用外设门控（等秤条件才放行入周期）</span>
+                          <el-switch :model-value="!!(step.device_gate && step.device_gate.enabled)"
+                            size="small" @update:model-value="(v) => onGateEnabledChange(step, v)" />
+                        </div>
+                        <template v-if="step.device_gate && step.device_gate.enabled">
+                          <div>
+                            <label class="block text-gray-400 mb-1">门控类型</label>
+                            <el-select v-model="step.device_gate.kind" size="small" class="w-full">
+                              <el-option label="去皮门控（放件稳定 → 自动去皮 → 放行）" value="tare" />
+                              <el-option label="称重判定（净重稳定 → 对比标准量 → 判定）" value="weight_judge" />
+                            </el-select>
+                          </div>
+                          <div v-if="step.device_gate.kind === 'weight_judge'">
+                            <label class="block text-gray-400 mb-1">判定料别（对应称重配置的型号标准量表）</label>
+                            <el-select v-model="step.device_gate.material" size="small" class="w-full" clearable
+                              placeholder="留空 = 按料别顺序自动取">
+                              <el-option v-for="m in weighingMaterials" :key="m" :label="m" :value="m" />
+                            </el-select>
+                          </div>
+                          <div v-if="step.device_gate.kind === 'weight_judge'" class="flex items-center justify-between">
+                            <el-tooltip content="开 = 缺料/超量时步骤不放行，报警等工人纠正（重量变化后重新判定）；关 = 记录 NG 判定但放行继续流程" placement="top">
+                              <span class="cursor-help border-b border-dashed border-gray-500">不合格拦截等纠正</span>
+                            </el-tooltip>
+                            <el-switch v-model="step.device_gate.block" size="small" />
+                          </div>
+                        </template>
+                      </div>
+                    </el-popover>
                   </td>
                 </tr>
               </tbody>
@@ -404,6 +457,11 @@
                 </el-tooltip>
               </th>
               <th class="p-2 w-24">
+                <el-tooltip content="开启后，消失等待期间即使画面里出现了别的有效步骤，本步骤的等待时间也照常走完（默认关闭=别的步骤一出现立刻按消失处理）。适用于工具驻留画面、多个步骤并行可见的产线：如吹枪插在工件上时进行敲击，吹枪短暂被遮挡不应被判定为已消失。" placement="top">
+                  <span class="cursor-help border-b border-dashed border-gray-500">等待不被打断</span>
+                </el-tooltip>
+              </th>
+              <th class="p-2 w-24">
                 <el-tooltip content="连续检测到多少帧才算真正检测到该步骤（用于过滤误检，默认1帧即触发）" placement="top">
                   <span class="cursor-help border-b border-dashed border-gray-500">最少帧数</span>
                 </el-tooltip>
@@ -628,6 +686,13 @@
                     class="w-full"
                   />
                 </el-tooltip>
+              </td>
+              <td class="p-2 text-center">
+                <el-switch
+                  v-model="step.disappear_uninterruptible"
+                  size="small"
+                  :disabled="!step.disappear_delay"
+                />
               </td>
               <td class="p-2">
                 <el-input-number 
@@ -1083,6 +1148,51 @@ const isCustomMixed = computed(() => {
 const onDetectRoleChange = (step, val) => {
   step.detect_role = val;
   if (val === 'item') ensureMixItemDefaults(props.project, step);
+};
+
+// ==================== v3.35 步骤外设门控（融合模式：视觉 SOP + 秤门控） ====================
+// 顺序类模式专属；启用任一门控 → 注入 pipeline_config.weighing（drive_mode='step_gate'），
+// 「称重配置」页签随之出现（父级 index.vue 按此条件渲染）。全关时不删已配的秤参数。
+const isSeqLike = computed(() => {
+  const p = props.project;
+  return !!(p && (p.logic_mode === 'sequential'
+    || (p.logic_mode === 'custom' && p.custom_based_on === 'sequential')));
+});
+
+const weighingMaterials = computed(() =>
+  props.project?.pipeline_config?.weighing?.materials || []);
+
+const gateLabel = (step) => {
+  const g = step.device_gate;
+  if (!g || !g.enabled) return '未启用';
+  return g.kind === 'weight_judge' ? '称重判定' : '去皮门控';
+};
+
+const onGateEnabledChange = (step, enabled) => {
+  if (!step.device_gate) {
+    step.device_gate = { enabled: false, kind: 'tare', material: '', block: true };
+  }
+  step.device_gate.enabled = enabled;
+  if (enabled) {
+    const p = props.project;
+    if (!p.pipeline_config) p.pipeline_config = {};
+    if (!p.pipeline_config.weighing) {
+      p.pipeline_config.weighing = {
+        drive_mode: 'step_gate',
+        materials: [], models: {},
+        tare_mode: 'auto_stable', tare_trigger_weight: 0.05, tare_settle_samples: 3,
+        stable_tol: 0.003, stable_min_samples: 3, measure_min_weight: 0.005,
+        require_operator: false, require_model: true,
+        material_check: 'off', auto_zero_after_done: false,
+        alarm_event_shortage: 2, alarm_event_over: 2,
+        alarm_event_wrong: 2, alarm_event_precheck: 2, alarm_event_guard: 2,
+        context_expiry: { mode: 'never', reset_time: '08:00', shifts: [], hours: 8, expire_fields: ['model'] },
+        visual_guard: { enabled: false, source: 'region_action', rules: [], wrong_block: true, cooldown_sec: 5 },
+      };
+    } else {
+      p.pipeline_config.weighing.drive_mode = 'step_gate';
+    }
+  }
 };
 
 // ==================== 步骤设置页三表拆分（标签通用属性 / 模式行为 / 物品校验） ====================

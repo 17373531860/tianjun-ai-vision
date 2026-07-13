@@ -1117,6 +1117,27 @@ class SettlementMixin:
         except Exception as e:
             print(f"[StrictOrder] 违序即时事件触发失败: {e}")
 
+    def _device_gate_hold(self, label, gate_cfg) -> bool:
+        """v3.35 步骤外设门控查询: True = 门控未放行, 本步骤暂不入周期 (下帧重查)。
+
+        - 门控已放行 → 消费实例 (下周期重新武装) 并放行入周期
+        - 未武装 → 武装 (称重引擎开始拿秤读数推进) 并扣住
+        - 引擎未登记本通道 (weighing 配置缺失/异常) → 直接放行, 绝不卡产线
+        """
+        try:
+            from backend.services.weighing_engine import get_weighing_engine
+            eng = get_weighing_engine()
+            if eng.consume_gate_if_passed(self.channel_id, label):
+                print(f"[DeviceGate] ch{self.channel_id} [{label}] 门控放行 → 入周期")
+                return False
+            if not eng.arm_step_gate(self.channel_id, label, gate_cfg):
+                return False
+            self._dbg_step_rejected(label, "等待外设门控 (秤条件未满足)")
+            return True
+        except Exception as e:
+            print(f"[DeviceGate] ch{getattr(self, 'channel_id', '?')} [{label}] 检查失败(放行不卡产线): {e}")
+            return False
+
     def _process_single_step(self, label, current_time, enabled_labels, is_seq_like,
                              should_update_screenshot, original_frame, det_info,
                              just_confirmed_labels=None):
@@ -1209,9 +1230,13 @@ class SettlementMixin:
                 _gate_throttle[_gate_key] = _now
                 print(f"[Gate/StrictOnce] '{label}' rejected: new appearance at wrong "
                       f"position (current={list(self.current_cycle_steps)})")
-            # v3.32: 严格+单次守门同样支持当场报违序 (见 _fire_strict_order_violation)
-            self._fire_strict_order_violation(
-                label, f'违反严格顺序: [{label}] 在错误位置出现')
+            # v3.32: 严格+单次守门支持当场报违序, 但只报"提前出现"(该步骤本周期
+            # 还没做过)。已完成步骤的余像重现(补拧一下/标记笔迹持续在画面/工件
+            # 横放中途被调整) 是现场常态 —— 静默拦截不入周期即可, 报违序是误伤
+            # (真实视频验证: 收尾标记与横放二段出现均属此类)。
+            if label not in self.current_cycle_steps:
+                self._fire_strict_order_violation(
+                    label, f'违反严格顺序: [{label}] 提前出现')
             return
 
         # ── accept_once 拦截 ──
@@ -1249,7 +1274,10 @@ class SettlementMixin:
                 if label not in self.step_start_time:
                     raw_start = getattr(self, '_step_raw_start', {}).get(label, current_time)
                     self.step_start_time[label] = raw_start
-                    self.step_start_frame_pos[label] = self._video_frame_pos()
+                    # 帧位起点与 wall 起点同刻取原始出现时刻(口径见 1335 行注释)
+                    self.step_start_frame_pos[label] = getattr(
+                        self, '_step_raw_start_frame_pos', {}
+                    ).get(label, self._video_frame_pos())
                 return
         
         # ── 第一步重现结算（仅 first_step 结算模式） ──
@@ -1261,7 +1289,16 @@ class SettlementMixin:
                 and label in self.current_cycle_steps and len(self.current_cycle_steps) > 1 \
                 and not self._is_legitimate_next_in_sequence(label):
             first_step_label = self._get_first_sequence_step_label()
-            if first_step_label and label == first_step_label:
+            # v3.34: 首步开了"消失等待不被打断"(disappear_uninterruptible) 时,
+            # 持续可见 (step_last_seen 未被消失结算清理, old_last_seen 非 None)
+            # 不算"重现"——首步工具驻留画面贯穿多个后续步骤是该开关的目标场景,
+            # 只有真正走完消失结算后的再次出现才触发首步重现结算。
+            # 开关默认 False → _held_visible 恒 False, 老项目行为零差异。
+            _held_visible = (
+                old_last_seen is not None
+                and self.step_time_config.get(label, {}).get('disappear_uninterruptible')
+            )
+            if first_step_label and label == first_step_label and not _held_visible:
                 first_start = self.step_start_time.get(label) or getattr(self, '_step_raw_start', {}).get(label)
                 first_min_dur = (self.step_time_config.get(label, {}).get('min_duration')) or 0
                 first_duration = (current_time - first_start) if first_start else 0
@@ -1297,6 +1334,15 @@ class SettlementMixin:
                         else:
                             self._step_raw_start.pop(label, None)
         
+        # ── v3.35 步骤外设门控 (steps_config[].device_gate, 默认无配置零差异) ──
+        # 视觉确认的新出现先"武装"外设门控 (如称重去皮/标准量判定), 门控放行前
+        # 不写 step_last_seen / 不入周期 → 下一帧 is_new_appearance 仍为 True,
+        # 放行后本 append 路径自然执行。融合模式核心接线点。
+        if is_new_appearance and getattr(self, 'step_device_gates', None):
+            _gate_cfg = self.step_device_gates.get(label)
+            if _gate_cfg and self._device_gate_hold(label, _gate_cfg):
+                return
+
         # Always update step_last_seen so duration calculations reflect actual last detection time
         self.step_last_seen[label] = current_time
         self.step_last_frame_pos[label] = self._video_frame_pos()
@@ -1332,7 +1378,12 @@ class SettlementMixin:
             
             raw_start = getattr(self, '_step_raw_start', {}).get(label, current_time)
             self.step_start_time[label] = raw_start
-            self.step_start_frame_pos[label] = self._video_frame_pos()
+            # 帧位起点与 wall 起点(raw_start)保持同刻: 都取首次出现的原始时刻,
+            # 不取"过完 min_duration 门才处理"的当前帧位, 否则视频源按帧号差
+            # 算耗时会整体少掉门槛时长(与 1334 行 wall 路径口径不一致)。
+            self.step_start_frame_pos[label] = getattr(
+                self, '_step_raw_start_frame_pos', {}
+            ).get(label, self._video_frame_pos())
             self.step_detection_times[label] = raw_start
             
             if len(self.current_cycle_steps) == 0:

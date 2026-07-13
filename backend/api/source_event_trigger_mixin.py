@@ -515,6 +515,29 @@ class EventTriggerMixin:
     # v3.23 NG 补做 (缺步骤延迟落账) — 守门 / 解析 / 挂起 / 解析
     # ============================================================
 
+    def _pending_ack_keeps_cycle(self) -> bool:
+        """当前挂起的人工确认事件是否配了「确认后保留周期」(ack_keep_cycle).
+
+        用途: 违序警告这类"中途拦截"事件, 工人确认后应从断点继续补做,
+        而不是丢弃整个在制周期重来。默认 False = 老"确认重做"语义, 零差异。
+        """
+        ev_id = getattr(self, '_pending_ack_event_id', None)
+        if ev_id is None:
+            return False
+        cfg = self.project_config or {}
+        for e in (cfg.get('events_config') or []):
+            if str(e.get('id')) == str(ev_id):
+                return bool(e.get('ack_keep_cycle', False))
+        return False
+
+    def _ack_release_keep_cycle(self) -> None:
+        """仅解除人工确认定格, 保留在制周期与全部步骤运行时 (断点补做)。"""
+        self._pending_ack = False
+        self._pending_ack_started_at = None
+        self._pending_ack_event_id = None
+        self._pending_ack_event_name = None
+        self._pending_ack_timeout_sec = 0
+
     def _should_defer_for_remediation(self, reason: str) -> bool:
         """本次 NG 是否应走"缺步骤延迟落账"挂起 (而非立刻落 NG).
 

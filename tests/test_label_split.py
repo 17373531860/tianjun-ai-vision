@@ -354,17 +354,37 @@ def test_rounds_continuous_presence_no_advance():
 
 
 def test_rounds_idle_reset_after_cycle_settled():
-    """周期已结算(cycle_len=0)且盖罩离场超过 gap → 轮次归零, 下一工件从第1轮起。"""
+    """周期装载过步骤且已结算(cycle_len=0)、盖罩离场超过 gap → 轮次归零。"""
     eng = _rounds_engine()
     eng.apply([_cover_det()], now=100.0, cycle_len=0)
     eng.apply([_cover_det()], now=104.0, cycle_len=3)   # 离场后重现 → 第2轮
     assert eng.snapshot_rounds()["打螺丝"]["round"] == 2
+    eng.apply([_cover_det()], now=104.5, cycle_len=3)   # 第2轮内周期确实有步骤
     # 结算后空闲: 无盖罩 + cycle_len=0 + 超过 gap
     eng.apply([], now=110.0, cycle_len=0)
     assert eng.snapshot_rounds()["打螺丝"]["round"] == 0
     # 下一工件盖罩出现 → 从第1轮重新开始
     eng.apply([_cover_det()], now=111.0, cycle_len=0)
     assert eng.snapshot_rounds()["打螺丝"]["round"] == 1
+
+
+def test_rounds_no_reset_before_first_step_enters_cycle():
+    """开工空窗守门: 切轮后、首个步骤进周期前, 不因"标签离场+周期空"误归零。
+
+    真实产线上盖罩是瞬时动作(盖完标签就消失), 第一颗螺丝要几秒后才进周期,
+    这段"离场 > gap 且 cycle_len=0"的空窗不是工件下线(真实模型 UAT 踩过:
+    轮次刚推到 1 就被打回 0, 后续前后罩全部错位)。
+    """
+    eng = _rounds_engine()
+    eng.apply([_cover_det()], now=100.0, cycle_len=0)   # 盖罩 → 第1轮
+    assert eng.snapshot_rounds()["打螺丝"]["round"] == 1
+    # 盖罩离场 5s(> gap=3), 周期还空着 —— 不许归零
+    eng.apply([], now=105.0, cycle_len=0)
+    assert eng.snapshot_rounds()["打螺丝"]["round"] == 1
+    # 首颗螺丝进周期后再结算+离场 → 才允许归零
+    eng.apply([_det(cx=0.25, cy=0.25)], now=106.0, cycle_len=1)
+    eng.apply([], now=112.0, cycle_len=0)
+    assert eng.snapshot_rounds()["打螺丝"]["round"] == 0
 
 
 def test_rounds_no_reset_while_cycle_open():
@@ -383,6 +403,48 @@ def test_rounds_unmatched_map_label_not_prefixed():
     eng = LabelSplitEngine(rules)
     out = eng.apply([_det(cx=1.5, cy=1.5)], now=100.0, cycle_len=0)  # 画面外 → 未命中
     assert out[0]["label"] == "位置外打螺丝"
+
+
+def test_rounds_trigger_min_blocks_single_frame_blip():
+    """trigger_min_seconds: 切换标签单帧闪现不切轮, 持续在场满时长才确认切换。
+
+    真实模型实测: 视频里出现过 2 帧的假「盖罩」误检, 见帧即切会把轮次
+    多推一拍导致前后罩全部错位。
+    """
+    rules = parse_label_splits({"label_splits": [
+        _rule(rounds={**ROUNDS, "trigger_min_seconds": 0.5}),
+    ]})
+    assert rules[0].round_trigger_min == 0.5
+    eng = LabelSplitEngine(rules)
+    # 单帧闪现(下一帧即消失) → 不满 0.5s, 不切轮
+    eng.apply([_cover_det()], now=100.0, cycle_len=1)
+    eng.apply([], now=100.1, cycle_len=1)
+    assert eng.snapshot_rounds()["打螺丝"]["round"] == 0
+    # 4s 后(> gap)重新出现并持续 0.6s → 确认切换到第1轮, 且同一次在场只切一次
+    eng.apply([_cover_det()], now=104.5, cycle_len=1)
+    assert eng.snapshot_rounds()["打螺丝"]["round"] == 0   # 刚出现还没确认
+    eng.apply([_cover_det()], now=105.1, cycle_len=1)
+    assert eng.snapshot_rounds()["打螺丝"]["round"] == 1   # 满 0.5s 确认
+    eng.apply([_cover_det()], now=106.0, cycle_len=1)
+    assert eng.snapshot_rounds()["打螺丝"]["round"] == 1   # 不重复切
+
+
+def test_rounds_trigger_min_default_zero_is_legacy():
+    """缺省 trigger_min_seconds=0 → 见帧即切(零差异老行为)。"""
+    rules = parse_label_splits({"label_splits": [_rule(rounds=dict(ROUNDS))]})
+    assert rules[0].round_trigger_min == 0.0
+    eng = LabelSplitEngine(rules)
+    eng.apply([_cover_det()], now=100.0, cycle_len=1)
+    assert eng.snapshot_rounds()["打螺丝"]["round"] == 1
+
+
+def test_rounds_trigger_min_clamped_below_gap():
+    """确认时长必须压在消失间隔以下, 否则同一次在场会先被判离场。"""
+    rules = parse_label_splits({"label_splits": [
+        _rule(rounds={**ROUNDS, "trigger_gap_seconds": 1.0,
+                      "trigger_min_seconds": 5.0}),
+    ]})
+    assert rules[0].round_trigger_min <= 1.0 - 0.1 + 1e-9
 
 
 def test_rounds_snapshot_shape():
