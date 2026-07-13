@@ -2192,13 +2192,14 @@ const processChannelResult = (ch, d) => {
 
   const chTotalCycles = ctrs['总产量'] || ctrs['total'] || 0;
   const backendNgMap = d.ng_step_cycle_counts || {};
+  // 后端空 map 时保留现有 TOP3 (待机/重开 sync 配置不再清累计); 清零后后端 reset_stats 会归零
   if (Object.keys(backendNgMap).length > 0) {
     const ranking = Object.entries(backendNgMap)
       .filter(([, c]) => c > 0)
       .map(([step, ngCount]) => ({ step, count: ngCount, rate: chTotalCycles > 0 ? (ngCount / chTotalCycles * 100) : 0 }))
       .sort((a, b) => b.rate - a.rate);
     chData.ngStepRanking = ranking.slice(0, 3);
-  } else {
+  } else if (chTotalCycles === 0 && (ctrs['不良总数'] || 0) === 0) {
     chData.ngStepRanking = [];
   }
 
@@ -5411,13 +5412,18 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
   {
     const totalCycles = backendCounters?.['总产量'] || backendCounters?.['total'] || 0;
     const backendNgMap = backendCounters?._ngStepCycleCounts || {};
-    ngStepRanking.value = Object.entries(backendNgMap)
-      .filter(([, ngCount]) => ngCount > 0)
-      .map(([step, ngCount]) => {
-        const rate = totalCycles > 0 ? (ngCount / totalCycles * 100) : 0;
-        return { step, count: ngCount, total: totalCycles, rate };
-      })
-      .sort((a, b) => b.rate - a.rate);
+    // 后端空 map 时保留现有 TOP3 (待机/重开 sync 配置不再清累计); 清零后计数器归零才清展示
+    if (Object.keys(backendNgMap).length > 0) {
+      ngStepRanking.value = Object.entries(backendNgMap)
+        .filter(([, ngCount]) => ngCount > 0)
+        .map(([step, ngCount]) => {
+          const rate = totalCycles > 0 ? (ngCount / totalCycles * 100) : 0;
+          return { step, count: ngCount, total: totalCycles, rate };
+        })
+        .sort((a, b) => b.rate - a.rate);
+    } else if (totalCycles === 0 && (backendCounters?.['不良总数'] || 0) === 0) {
+      ngStepRanking.value = [];
+    }
   }
   
   if (backendCounters && currentProject.value?.counters_config) {
@@ -5582,6 +5588,7 @@ const resetCountersForChannel = async (ch) => {
       ok: 0,
       ng: 0,
       yieldRate: 0,
+      ngStepRanking: [],
       steps: (chData.steps || []).map(s => ({ ...s, status: 'pending', screenshot: null })),
       tableData: (chData.tableData || []).map(t => ({ ...t, count: 0, status: 'pending' })),
     };
