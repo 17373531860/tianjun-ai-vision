@@ -106,14 +106,15 @@ class RegionEventRule:
                  'region', 'region_mode', 'min_frames', 'min_iou', 'require_label',
                  'gone_frames', 'match_iou', 'settle', 'event_id',
                  'anchor_label', 'anchor_ref', 'anchor_hold',
-                 'gone_seconds', 'min_overlap_ratio', 'min_move', 'min_seconds')
+                 'gone_seconds', 'min_overlap_ratio', 'min_move', 'min_seconds',
+                 'object_margin')
 
     def __init__(self, rule_id, name, rule_type, subject_label, object_label,
                  region, region_mode, min_frames, min_iou, require_label,
                  gone_frames, match_iou, settle, event_id,
                  anchor_label=None, anchor_ref=None, anchor_hold=3.0,
                  gone_seconds=None, min_overlap_ratio=0.0, min_move=0.0,
-                 min_seconds=0.0):
+                 min_seconds=0.0, object_margin=0.0):
         self.rule_id = rule_id
         self.name = name                    # 事件名 = 步骤落库/流水显示名, 全局唯一
         self.rule_type = rule_type          # 'overlap' | 'region_enter' | 'region_exit'
@@ -140,6 +141,11 @@ class RegionEventRule:
         self.min_seconds = min_seconds      # overlap/enter: 确认时长秒基门槛
         #                                     (>0 按命中跨度秒判定, 帧数退化为
         #                                      3 帧硬下限; 0=按 min_frames 帧数)
+        self.object_margin = object_margin  # overlap: 目标框虚拟扩边 (归一化,
+        #                                     0=不扩)。真动作发生在目标框边缘
+        #                                     外侧几个百分点时 (如扫工件下沿
+        #                                     条码, 枪不压进工件框) 用它桥接;
+        #                                     纯空间几何量, 与帧率无关
 
 
 class SettlementRule:
@@ -268,6 +274,13 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
     except (TypeError, ValueError):
         raise ValueError(f"region_events.rules[{i}] ({name}) min_seconds 非数值")
 
+    try:
+        object_margin = float(raw.get('object_margin') or 0.0)
+    except (TypeError, ValueError):
+        raise ValueError(f"region_events.rules[{i}] ({name}) object_margin 非数值")
+    # 上限 0.2: 扩边是"桥接目标框边缘几个百分点"的微调, 更大就该重画区域了
+    object_margin = min(0.2, max(0.0, object_margin))
+
     settle = raw.get('settle')
     return RegionEventRule(
         rule_id=str(raw.get('id') or f'r{i + 1}'),
@@ -291,6 +304,7 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
         min_overlap_ratio=min_overlap_ratio,
         min_move=min_move,
         min_seconds=min_seconds,
+        object_margin=object_margin,
     )
 
 
@@ -341,6 +355,8 @@ def parse_region_events(pipeline_config: dict) -> Optional[RegionEventsConfig]:
                min_move: 0.04,           # 可选: 位移门槛 (episode 内轨迹跨度)
                min_seconds: 0.3,         # 可选: 确认时长秒 (>0 时替代 min_frames,
                #                           帧数退化为 3 帧硬下限, 与帧率解耦)
+               object_margin: 0.02,      # 可选: 目标框虚拟扩边 (归一化 0~0.2,
+               #                           动作发生在目标框边缘外侧时桥接)
                gone_seconds: 1.5,        # 可选: 消失确认秒数 (缺省用全局帧容忍)
                settle: false, event_id: null}
             - {name: 下工件, type: region_exit, subject_label: 工件,
@@ -610,7 +626,24 @@ class RegionEventEngine:
 
         深度 = 交叠面积/主体面积。静置工具贴边时深度接近 0, 真动作
         (工具压在工件上) 深度显著——用于滤掉"枪立在枪座上紧挨工件"的误判。
+
+        object_margin > 0 时目标框先四边虚拟外扩 (TP #35 实测: 扫工件下沿
+        条码, 枪框在工件框下缘外 ~3% 画面高, 物理接触但框不相交)。扩边只
+        参与"是否相交"判定; 深度门槛仍按原始目标框算, 避免扩边稀释深度。
         """
+        if rule.object_margin > 0:
+            m = rule.object_margin
+            o_inflated = {'x': o['x'] - m, 'y': o['y'] - m,
+                          'w': o['w'] + 2 * m, 'h': o['h'] + 2 * m}
+            if not _pair_overlaps(s, o_inflated, rule.min_iou):
+                return False
+            if rule.min_overlap_ratio <= 0:
+                return True
+            # 深度按原始框: 相交才有深度, 扩边命中但原框不交时深度记 0
+            area = s['w'] * s['h']
+            if area <= 0:
+                return False
+            return _intersect_area(s, o) / area >= rule.min_overlap_ratio
         if not _pair_overlaps(s, o, rule.min_iou):
             return False
         if rule.min_overlap_ratio <= 0:

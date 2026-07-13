@@ -1012,6 +1012,7 @@ const _sanitizeRegionEvents = (re) => {
         out.region_mode = r.region_mode === 'or' ? 'or' : 'and';
         out.min_iou = Math.max(0, Math.min(0.95, Number(r.min_iou) || 0));
         out.min_overlap_ratio = Math.max(0, Math.min(1, Number(r.min_overlap_ratio) || 0));
+        out.object_margin = Math.max(0, Math.min(0.2, Number(r.object_margin) || 0));
         out.require_label = (r.require_label || '').trim() || null;
       } else if (type === 'region_enter') {
         out.require_label = (r.require_label || '').trim() || null;

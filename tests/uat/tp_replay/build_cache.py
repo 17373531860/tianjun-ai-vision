@@ -5,15 +5,21 @@
 然后跑同目录 replay.py 出逐周期结算流水对账。
 """
 import json
+import sys
 import time
 
 import cv2
 from ultralytics import YOLO
 
-VIDEO = ('/home/qianqian/文档/xwechat_files/wxid_9j6tgdyqgpon22_030a/msg/file/'
-         '2026-07/现场视频0707/20260707_20260707164731_20260707165907_164759.mp4')
-MODEL = '/tmp/tp_v5/train_tp_v5/weights/best.pt'
-OUT = '/tmp/tp_v5_dets_cache.json'
+VIDEO = '/home/qianqian/视频/现场视频0707/20260707_20260707164731_20260707165907_164759.mp4'
+MODEL = ('/home/qianqian/文档/xwechat_files/wxid_9j6tgdyqgpon22_030a/msg/file/'
+         '2026-07/tp_v5_1_results/train_tp_v5_1/weights/best.pt')
+OUT = '/tmp/tp_v51_dets_cache.json'
+# 用法: build_cache.py [model.pt] [out.json] — 便于 v5/v5.1 同轴双跑
+if len(sys.argv) >= 3:
+    MODEL, OUT = sys.argv[1], sys.argv[2]
+
+assert cv2.VideoCapture(VIDEO).isOpened(), f'视频打不开: {VIDEO}'
 
 model = YOLO(MODEL)
 names = model.names

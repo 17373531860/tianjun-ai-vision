@@ -188,6 +188,9 @@ class Project(Base):
         "gone_frames": 10, "match_iou": 0.3,    // region_exit：消失确认帧数/帧间关联 IoU
         "min_iou": 0.0,                         // overlap：重叠 IoU 下限（0=任意相交）
         "min_overlap_ratio": 0.0,               // overlap：重叠深度下限（压静置工具贴边）
+        "object_margin": 0.0,                   // overlap：目标框虚拟扩边（归一化 0~0.2，动作
+        //   发生在目标框边缘外侧几个百分点时桥接，如扫工件下沿条码；纯空间量与帧率无关；
+        //   只参与"是否相交"，深度门槛仍按原始框算）
         "min_move": 0.0,                        // 位移门槛（归一化，0=不要求；中心 5 帧中位数平滑后进包络）
         "min_seconds": 0.0,                     // ★ v3.34 确认时长秒基（overlap/enter；>0 按
         //   episode 命中跨度秒判定，min_frames 退化为 3 帧硬下限——与帧率解耦；0=帧数老语义）

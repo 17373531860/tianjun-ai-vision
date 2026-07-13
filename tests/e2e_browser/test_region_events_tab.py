@@ -111,6 +111,14 @@ def test_建两条规则_画区域_全结构落库(page, base_url, api_url):
     ms_input.press("Enter")
     time.sleep(0.4)
 
+    # 目标框扩边 (2026-07-13 TP #35 边缘外扫码): UI 填 0.02
+    om_input = rule1.locator(
+        "div:has(> label:has-text('目标框扩边')) .el-input-number input").first
+    om_input.scroll_into_view_if_needed()
+    om_input.fill("0.02")
+    om_input.press("Enter")
+    time.sleep(0.4)
+
     # 规则 2: 切 region_exit → 结算开关自动开 + 画判定区域
     card.locator("button:has-text('新增动作')").click()
     time.sleep(0.6)
@@ -170,8 +178,11 @@ def test_建两条规则_画区域_全结构落库(page, base_url, api_url):
     assert hard["subject_label"] == "测硬度笔" and hard["object_label"] == "工件"
     assert abs(hard.get("min_seconds", 0) - 0.3) < 1e-6, \
         f"确认时长秒基应落库: {hard.get('min_seconds')}"
+    assert abs(hard.get("object_margin", 0) - 0.02) < 1e-6, \
+        f"目标框扩边应落库: {hard.get('object_margin')}"
     assert exit_["type"] == "region_exit" and exit_["settle"] is True
     assert "min_seconds" not in exit_, "region_exit 规则不应带确认时长键"
+    assert "object_margin" not in exit_, "region_exit 规则不应带扩边键"
     assert len(exit_.get("region") or []) == 4, f"判定区域应落库: {exit_.get('region')}"
     assert abs((re_cfg.get("class_conf") or {}).get("测硬度笔", 0) - 0.2) < 1e-6
     seq = re_cfg.get("sequence_check") or {}
