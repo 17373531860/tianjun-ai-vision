@@ -9,7 +9,7 @@
       <el-form-item label="任务类型">
         <el-select v-model="form.task_type" class="w-full">
           <el-option label="目标检测 (Object Detection)" value="detection" />
-          <el-option label="语义分割" value="segmentation" disabled />
+          <el-option label="图像分割 (Instance Segmentation)" value="segmentation" />
         </el-select>
       </el-form-item>
       <el-form-item label="逻辑模式">

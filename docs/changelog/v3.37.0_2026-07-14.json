@@ -1,0 +1,87 @@
+{
+  "version": "3.37.0",
+  "date": "2026-07-14",
+  "previous_version": "3.36.1",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "外部开工切项目后前端界面自动跟随",
+      "symptom": "外部中控发开工请求, 后端项目已切换成功, 但检测中心/导航栏界面不刷新一直显示旧项目, 现场误以为切换失败",
+      "root_cause": "前端项目选择状态只在手动切换时更新, 没有跟随后端激活态的机制",
+      "fix": "导航栏每 5s 轮询后端当前激活项目, 不一致时把项目装载进前端各 store 并弹提示; 跟随路径不回调激活接口避免无谓重载模型; 与手动切换共用 applyProjectToStores",
+      "files": ["frontend/src/layout/Navbar.vue", "frontend/src/api/project.js"],
+      "keywords": ["川南", "chuannan", "开工", "切项目", "界面不刷新", "跟随", "轮询", "active project", "syncActiveProjectFromBackend", "外部系统切换", "MES 入站"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "工单接收新增「开工后自动开始检测」开关",
+      "symptom": "客户希望开工指令直接进入推理状态, 而默认开工只切项目+建任务",
+      "root_cause": "设计默认检测启动权留在现场（产线检测常开）, 客户场景需要开工联动",
+      "fix": "入站配置新增 start_detection_on_task（默认关）; 开工处理成功后对'视频源在跑+未在检测'的工位自动拉起检测, 失败只记调试日志不影响开工响应; 拉检测前必须先 commit 本请求 DB 事务否则撞 SQLite busy_timeout 上游误判超时; 前端 MES 工单接收面板加开关",
+      "files": ["backend/services/mes_inbound.py", "frontend/src/views/MES/OrderInboundPanel.vue", "tests/features/chuannan_mes_integration.feature", "tests/step_defs/test_chuannan_mes_integration.py", "tests/test_mes_inbound_unit.py"],
+      "keywords": ["川南", "开工", "自动开始检测", "start_detection_on_task", "入站", "inbound", "SQLite 锁", "busy_timeout", "中控超时", "MES"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "推理链路连续异常导致画面框冻结的自愈防线",
+      "symptom": "识别某类别后检测框卡死在画面, 后续类别全不识别, 周期超时 NG, 现场误判为模型问题",
+      "root_cause": "推理循环每帧异常时发布点走不到, 上一次发布的检测结果被反复重发布, 前端框永久定格; 异常根因待客户取证后定位",
+      "fix": "推理线程连续 30 帧异常时主动发布空检测结果清空残留框 + 调试中心留证; 走通一轮计数归零, 偶发异常行为不变",
+      "files": ["backend/api/source_inference_loop_mixin.py"],
+      "keywords": ["框卡死", "框冻结", "检测框残留", "推理异常", "自愈", "清空", "_infer_consec_errors", "川南", "NG 误判", "inference loop"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "新建项目弹窗图像分割被误禁用且误标语义分割",
+      "symptom": "新建项目任务类型第二项显示'语义分割'且置灰不可选, 客户以为分割能力没了",
+      "root_cause": "下拉选项写死 disabled + 命名错误（实际是 YOLO-seg 实例分割）",
+      "fix": "恢复可选, 文案改为'图像分割 (Instance Segmentation)'",
+      "files": ["frontend/src/views/Project/CreateProjectDialog.vue"],
+      "keywords": ["图像分割", "语义分割", "实例分割", "segmentation", "新建项目", "disabled", "川南"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "导航栏右上角 Logo 内置回退在打包版失效（v3.36.0 回归）",
+      "symptom": "v3.36.0 加 Logo 自定义上传后, 未上传过自定义 Logo 的打包版右上角图标消失; 开发环境正常",
+      "root_cause": "回退地址从静态 src 改成运行时字符串 '/app-icon.png', Vite 构建期改写不到; 打包版 file:// + 相对 base 下以 / 开头的地址解析到系统盘根目录 404",
+      "fix": "回退地址改用 import.meta.env.BASE_URL + 'app-icon.png' 构建期注入（dev '/'、打包 './'）, Navbar 与设置页预览两处同修; 新增 CI E2E 锁回归",
+      "files": ["frontend/src/layout/Navbar.vue", "frontend/src/views/Settings/index.vue", "tests/e2e_browser/test_navbar_logo.py", "tests/uat/uat_20260714_navbar_logo_fallback.py"],
+      "keywords": ["logo", "app-icon", "导航栏图标", "消失", "空白", "file://", "BASE_URL", "相对 base", "打包回归", "public 资源", "运行时字符串"],
+      "breaking": false
+    },
+    {
+      "type": "docs",
+      "id": "DOCS-001",
+      "title": "川南火工问题答复 + 百斯特萍乡文档套件",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "川南 7 项逐条答复 MD+PDF+生成脚本; 百斯特萍乡项目实施总手册/配置指南/标注规范更新/旧数据集审计/配置演练截图 15 张",
+      "files": ["docs/川南火工问题答复_2026-07-13.md", "docs/百斯特萍乡_项目实施总手册.md", "scripts/docgen/gen_chuannan_reply_pdf.py"],
+      "keywords": ["川南火工", "百斯特萍乡", "客户答复", "实施手册", "数据集审计"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes", "debug-detection", "debug-frontend"],
+  "files_changed": [
+    "backend/api/source_inference_loop_mixin.py",
+    "backend/services/mes_inbound.py",
+    "frontend/src/layout/Navbar.vue",
+    "frontend/src/views/MES/OrderInboundPanel.vue",
+    "frontend/src/views/Project/CreateProjectDialog.vue",
+    "frontend/src/views/Settings/index.vue",
+    "tests/features/chuannan_mes_integration.feature",
+    "tests/step_defs/test_chuannan_mes_integration.py",
+    "tests/test_mes_inbound_unit.py",
+    "tests/test_inference_error_clear.py",
+    "tests/e2e_browser/test_navbar_logo.py"
+  ]
+}

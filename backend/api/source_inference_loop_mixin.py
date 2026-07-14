@@ -368,6 +368,8 @@ class InferenceLoopMixin:
 
                 # 发布 confirmed 结果
                 self._inference_publish_detections(detections, is_tracking)
+                # 本轮走通 → 连续异常计数归零 (见 except 分支的"框卡死"自愈)
+                self._infer_consec_errors = 0
 
                 # 帧级检测钩子 (observe-only): 把本帧检测框逐帧广播给插件,
                 # 让需要"逐帧生命周期计数"的插件 (如耗材约束按 demo ProductCounter
@@ -397,6 +399,21 @@ class InferenceLoopMixin:
                 print(f"[推理线程] 错误: {e}")
                 import traceback
                 traceback.print_exc()
+                # v3.37 "框卡死"防线 (川南反馈): 推理循环若每帧都异常, 发布点永远走不到,
+                # 上一次发布的检测框会一直留在画面上 — 前端表现为"框冻结 + 后续类别
+                # 全不识别 + 周期超时 NG", 现场极易误判为模型问题。这里连续异常达阈值时
+                # 主动清空已发布结果 (框消失, 一眼看出是检测链路故障) 并打调试中心留证。
+                # 单帧偶发异常 (阈值内) 行为与老版完全一致。
+                self._infer_consec_errors = getattr(self, '_infer_consec_errors', 0) + 1
+                if self._infer_consec_errors == 30:
+                    try:
+                        self._inference_publish_detections([], False)
+                        from backend.core import debug_center as _dc
+                        _dc.dbg("backend.detection", "推理连续异常已清空画面框",
+                                f"ch{getattr(self, 'channel_id', 0)} 连续{self._infer_consec_errors}帧推理异常, "
+                                f"已清空画面检测框防误读; 最后错误: {e}")
+                    except Exception:
+                        pass
                 time.sleep(0.01)
 
         debug_log("========== 推理线程结束 ==========", "INFERENCE")

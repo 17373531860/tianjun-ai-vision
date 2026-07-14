@@ -293,6 +293,7 @@ v3.7.3 起 IoU / 优先级 / FP16 收进"高级参数 ▾"折叠区（默认收�
 
 | 版本 | 修复 |
 |---|---|
+| v3.37.0 | Navbar 5s 轮询跟随后端激活项目（外部 MES 开工切项目界面自动跟上，`syncActiveProjectFromBackend`，跟随不回调 activate 防重载模型）; **Logo 打包版回退回归**——public 资源地址写进运行时字符串（`'/app-icon.png'`）构建期改写不到，file:// + 相对 base 下解析到盘根 404，必须用 `import.meta.env.BASE_URL + '文件名'` 拼（静态 src 没这个问题，Vite 会编译成 import.meta.url 相对定位） |
 | v3.7.3 | 副模型启动强制全启动 / syncProjectConfig 取 resp.data / MJPEG 后来者上位 / 孤儿步骤清理 |
 | v3.5.1 | PT/CT 三档显示（ptMode/ctMode）+ Data 导出联动 |
 | v3.5.0 | 周期性强制动作进度面板 + 自定义 Toast 事件 + 自定义导出对话框 |

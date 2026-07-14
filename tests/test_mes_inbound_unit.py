@@ -97,6 +97,50 @@ def test_action_exception_falls_to_internal_error(monkeypatch):
     assert res["response"]["code"] == 40006
 
 
+# ==================== 开工后自动开始检测 (v3.37 川南) ====================
+def test_start_detection_on_task_default_off(monkeypatch):
+    """默认关: 开工成功也不触碰检测启动。"""
+    svc = MESInbound()
+    called = []
+    monkeypatch.setattr(svc, "_auto_start_detection", lambda: called.append(1) or [])
+    res = svc.handle_task_start(None, {"TaskNo": "T1", "ProductCode": "P1"},
+                                _cfg(enabled=True, switch_project_on_task=False))
+    assert res["ok"] is True
+    assert called == []
+
+
+def test_start_detection_on_task_enabled_calls_helper(monkeypatch):
+    """开关开: 任务处理成功后调用自动开始检测, 拉起结果进 message。"""
+    svc = MESInbound()
+    monkeypatch.setattr(svc, "_auto_start_detection", lambda: ["ch0", "ch1"])
+    cfg = _cfg(enabled=True, switch_project_on_task=False,
+               start_detection_on_task=True)
+    res = svc.handle_task_start(None, {"TaskNo": "T1", "ProductCode": "P1"}, cfg)
+    assert res["ok"] is True
+
+
+def test_auto_start_detection_gates_and_isolation():
+    """门槛: 源没跑/模型没就绪/已在检测的通道都跳过; 单通道异常不拖垮整体。"""
+    from unittest.mock import MagicMock, patch
+
+    ok_mgr = MagicMock(is_running=True, is_detecting=False)
+    not_running = MagicMock(is_running=False, is_detecting=False)
+    already = MagicMock(is_running=True, is_detecting=True)
+    boom = MagicMock(is_running=True, is_detecting=False)
+    boom.start_detection.side_effect = RuntimeError("未加载模型")
+
+    fake_cm = MagicMock()
+    fake_cm.channels = {0: ok_mgr, 1: not_running, 2: already, 3: boom}
+    with patch("backend.api.channel_manager.channel_manager", fake_cm):
+        started = MESInbound()._auto_start_detection()
+
+    assert started == ["ch0"]
+    ok_mgr.start_detection.assert_called_once()
+    not_running.start_detection.assert_not_called()
+    already.start_detection.assert_not_called()
+    boom.start_detection.assert_called_once()  # 异常被隔离, 不进 started
+
+
 # ==================== 响应组装可配置 ====================
 def test_custom_response_envelope():
     svc = MESInbound()
