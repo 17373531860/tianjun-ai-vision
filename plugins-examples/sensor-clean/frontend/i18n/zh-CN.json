@@ -11,7 +11,7 @@
       "statusNormal": "状态：正常",
       "statusLocked": "棉签已用满，请更换棉签！（计数已锁定）",
       "resetSwab": "更换棉签（重置）",
-      "applyTemplate": "一键应用对齐 demo 的项目配置",
+      "applyTemplate": "一键应用客户标定配置",
       "waitingSwapView2": "等待视角2 检测到更换棉签动作以解锁…"
     }
   }

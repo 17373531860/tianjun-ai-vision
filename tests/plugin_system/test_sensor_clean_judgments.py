@@ -142,6 +142,13 @@ def test_swab_window_backward_compatible_default(sc):
     assert w.feed(True, 10.02) is True             # 第 2 帧稳定 → 解锁 (旧行为)
 
 
+def test_swab_window_first_action_not_blocked_by_cold_start_lock(sc):
+    """lock_time 只约束相邻两次命中，不能误伤视频开头的第一次真实动作。"""
+    w = sc.SwabChangeWindow(lock_time=2.0, min_sustain_sec=0.12, gap_sec=0.2)
+    assert w.feed(True, 0.00) is False
+    assert w.feed(True, 0.13) is True
+
+
 def test_swab_window_filters_transient_jitter(sc):
     """防抖: 仅 2~3 帧的瞬时误检 (持续 < min_sustain_sec) → 不解锁."""
     w = sc.SwabChangeWindow(lock_time=2.0, min_sustain_sec=0.12, gap_sec=0.2)
@@ -173,6 +180,33 @@ def test_swab_window_dedups_within_lock_time(sc):
     assert hits == 1
 
 
+def test_swab_window_continuous_action_emits_only_once_after_lock_time(sc):
+    """同一连续动作段即使持续超过 lock_time，也只能算一次有效更换。
+
+    旧逻辑只靠冷却时间去重，长动作在冷却到期后会再次触发；生产语义必须先看到
+    换棉签框真实消失超过 gap_sec，才允许下一次动作重新计数。
+    """
+    w = sc.SwabChangeWindow(lock_time=0.5, min_sustain_sec=0.12, gap_sec=0.2)
+    hits, t = 0, 10.0
+    while t <= 12.0:                               # 连续 2 秒，跨过多个 lock_time
+        if w.feed(True, t):
+            hits += 1
+        t += 1 / 60.0
+    assert hits == 1
+
+
+def test_swab_window_brief_dropout_does_not_rearm_same_action(sc):
+    """动作中短时丢框不切段；即使跨过 lock_time，也不能把同一动作计第二次。"""
+    w = sc.SwabChangeWindow(lock_time=0.5, min_sustain_sec=0.12, gap_sec=0.2)
+    hits = 0
+    for t in (10.00, 10.13):
+        hits += int(w.feed(True, t))
+    w.feed(False, 10.20)                            # 缺框 0.07s < gap_sec
+    for t in (10.25, 10.35, 10.45, 10.55, 10.65, 10.75, 10.85, 10.95):
+        hits += int(w.feed(True, t))
+    assert hits == 1
+
+
 def test_swab_window_new_segment_after_gap(sc):
     """防抖: 动作中断超 gap_sec 后算新段, 重新计 sustain, 过 lock_time 可再解锁."""
     w = sc.SwabChangeWindow(lock_time=0.5, min_sustain_sec=0.12, gap_sec=0.2)
@@ -188,6 +222,34 @@ def test_swab_window_new_segment_after_gap(sc):
             h2 = True
         t2 += 1 / 60.0
     assert h2 is True
+
+
+def test_swab_production_default_uses_truth_calibrated_sustain(sc):
+    """生产出厂值必须使用三段客户真值共同标定的时间门槛。"""
+    assert sc.DEFAULT_CONFIG["swab_min_sustain_sec"] == pytest.approx(0.12)
+    assert sc.DEFAULT_CONFIG["swab_lock_time"] == pytest.approx(0.25)
+    assert sc.DEFAULT_CONFIG["lost_gone_sec"] == pytest.approx(0.15)
+    assert sc.DEFAULT_CONFIG["force_lock_sec"] == pytest.approx(1.4)
+
+
+def test_swab_v142_saved_defaults_migrate_to_truth_calibrated_profile(sc):
+    """升级旧插件时，已落盘的 v1.4.2 出厂值必须整体迁到新真值配置。"""
+    _setup(sc, {
+        "swab_min_sustain_sec": 0.0, "swab_lock_time": 2.0,
+        "lost_gone_sec": 0.25, "force_lock_sec": 1.6,
+    })
+    cfg = sc.get_config()
+    assert cfg["_config_revision"] == 2
+    assert cfg["swab_min_sustain_sec"] == pytest.approx(0.12)
+    assert cfg["swab_lock_time"] == pytest.approx(0.25)
+    assert cfg["lost_gone_sec"] == pytest.approx(0.15)
+    assert cfg["force_lock_sec"] == pytest.approx(1.4)
+
+
+def test_swab_current_config_can_explicitly_disable_sustain_gate(sc):
+    """迁移完成后仍保留显式调参能力：revision=2 时允许人工设回 0。"""
+    _setup(sc, {"_config_revision": 2, "swab_min_sustain_sec": 0.0})
+    assert sc.get_config()["swab_min_sustain_sec"] == pytest.approx(0.0)
 
 
 # ============================================================
@@ -263,6 +325,27 @@ def test_swab_over_limit_each_ng_fires_event(sc):
     # 两件超限 NG 各触发一次 swab_over_limit_event(=2)
     ng_events = [e for e in host.events if e[1] == 2 and "不良" in e[2]]
     assert len(ng_events) == 2
+
+
+def test_swab_truth_rule_11th_ok_12th_ng(sc):
+    """客户真值规则：第 11 件仍合格，第 12 件起逐件判 NG。"""
+    host = _setup(sc, {
+        "count_channels": [0], "count_anchor_label": "查看产品有无脏污",
+        "count_require_label": "", "max_uses_per_swab": 11,
+        "move_confirm_frames": 1, "move_threshold": 0.0116,
+        "lock_time": 0.0, "lock_spatial": 0.0,
+        "force_lock_frames": 0, "force_lock_sec": 0,
+        "normal_count_event_id": 1, "swab_over_limit_event_id": 2,
+        "fake_wipe_event_id": 0,
+    })
+    for item_index in range(12):
+        _count_one(sc, host, 0, float(item_index))
+
+    state = sc.get_state()
+    assert state["swab_used"] == 12
+    assert state["ng_count"] == 1
+    assert len([event for event in host.events if event[1] == 1]) == 11
+    assert len([event for event in host.events if event[1] == 2 and "不良" in event[2]]) == 1
 
 
 def test_swab_over_limit_backward_compat_alarm(sc):
@@ -634,7 +717,7 @@ def test_roi_filters_swap_label(sc):
     assert sc.get_state()["swab_used"] == 5
     # ROI 内 → 正常解锁清零
     _frame(sc, 1, 10.2, [_box("更换棉签", 0.2, 0.5)])
-    _frame(sc, 1, 10.3, [_box("更换棉签", 0.2, 0.5)])
+    _frame(sc, 1, 10.35, [_box("更换棉签", 0.2, 0.5)])  # 持续 0.15s >= 默认 0.12s
     assert sc.get_state()["swab_used"] == 0
 
 
