@@ -213,6 +213,52 @@ def test_min_overlap_ratio_gate():
     assert [e['action'] for _, e in events] == ['confirmed']
 
 
+def test_object_margin_bridges_edge_gap():
+    """目标框扩边: 动作发生在目标框边缘外一点点 (TP #35 扫工件下沿条码,
+    枪框与工件框物理接触但几何不相交) → 扩边 0.02 桥接后正常确认。
+    纯空间几何量, 与帧率无关。"""
+    # 笔框 y:0.805~0.845, 工件框下缘 0.8 → 间隙 0.005 (框不相交)
+    gap_pen = [det('测硬度笔', 0.7, 0.825, w=0.04, h=0.04),
+               det('工件', 0.7, 0.7, w=0.2, h=0.2)]
+    # 不扩边的老语义: 框不相交 → 永不确认
+    assert feed(build([hardness_rule()]), [gap_pen] * 30) == []
+    # 扩边 0.02 ≥ 间隙 0.005: 桥接成功, 正常确认
+    events = feed(build([hardness_rule(object_margin=0.02)]), [gap_pen] * 15)
+    assert [e['action'] for _, e in events] == ['confirmed']
+    # 间隙 0.03 > 扩边 0.02: 桥不过去, 不误伤远处工具
+    far_pen = [det('测硬度笔', 0.7, 0.85, w=0.04, h=0.04),
+               det('工件', 0.7, 0.7, w=0.2, h=0.2)]
+    assert feed(build([hardness_rule(object_margin=0.02)]), [far_pen] * 30) == []
+
+
+def test_object_margin_depth_gate_uses_original_box():
+    """扩边只参与"是否相交"; 深度门槛仍按原始目标框算 (扩边命中但原框
+    不交 → 深度 0, 被深度门槛拦下), 避免扩边稀释"必须压进去"的语义。"""
+    gap_pen = [det('测硬度笔', 0.7, 0.825, w=0.04, h=0.04),
+               det('工件', 0.7, 0.7, w=0.2, h=0.2)]
+    eng = build([hardness_rule(object_margin=0.02, min_overlap_ratio=0.3)])
+    assert feed(eng, [gap_pen] * 30) == []
+    # 真压进去 (整支笔在工件内, 深度 1.0): 扩边+深度门槛同配也正常确认
+    eng = build([hardness_rule(object_margin=0.02, min_overlap_ratio=0.3)])
+    events = feed(eng, [PEN_ON_WORK] * 15)
+    assert [e['action'] for _, e in events] == ['confirmed']
+
+
+def test_object_margin_parse_validation():
+    with pytest.raises(ValueError, match='object_margin'):
+        parse_region_events({'region_events': {
+            'enabled': True,
+            'rules': [hardness_rule(object_margin='wide')],
+        }})
+    # 超上限收敛到 0.2, 负值收敛到 0
+    cfg = parse_region_events({'region_events': {
+        'enabled': True, 'rules': [hardness_rule(object_margin=0.5)]}})
+    assert cfg.rules[0].object_margin == pytest.approx(0.2)
+    cfg = parse_region_events({'region_events': {
+        'enabled': True, 'rules': [hardness_rule(object_margin=-1)]}})
+    assert cfg.rules[0].object_margin == 0.0
+
+
 def test_gone_seconds_merges_split_action():
     """消失确认秒数: 真动作中途被遮挡断开 (超全局帧容忍但 ≤ gone_seconds),
     episode 不断、只确认一次, 闭合携带完整起止时间。"""

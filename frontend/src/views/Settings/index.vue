@@ -51,7 +51,7 @@
                   <el-button v-if="store.display.logoDataUrl" size="small" link type="danger" @click="resetNavbarLogo">恢复默认</el-button>
                 </div>
                 <div class="flex items-center gap-3">
-                  <img :src="store.display.logoDataUrl || '/app-icon.png'" alt="logo预览"
+                  <img :src="store.display.logoDataUrl || defaultLogoUrl" alt="logo预览"
                     class="w-10 h-10 rounded-full object-cover border border-slate-700 shrink-0" />
                   <el-button size="small" @click="logoFileInput && logoFileInput.click()">上传图片</el-button>
                   <input ref="logoFileInput" type="file" accept="image/*" class="hidden" @change="onNavbarLogoChange" />
@@ -2021,6 +2021,8 @@ const saveDisplaySettings = () => {
 
 // 导航栏 Logo 上传: 前端居中裁方 + 压到 256×256 存 data URL (与 display 其余字段
 // 同走 localStorage 持久化)。压缩后 ~30-80KB, 远低于 localStorage 限额。
+// v3.37.0: 回退地址用 BASE_URL 拼接, 不能写死 '/app-icon.png'——打包后 file:// 下会解析到盘根 (同 Navbar.vue)。
+const defaultLogoUrl = import.meta.env.BASE_URL + 'app-icon.png';
 const logoFileInput = ref(null);
 const onNavbarLogoChange = (e) => {
   const file = e.target.files && e.target.files[0];

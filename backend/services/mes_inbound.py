@@ -103,6 +103,10 @@ DEFAULT_INBOUND_CONFIG = {
     # 自动同名匹配的"严格边界"档: 开 = 项目名命中处须贴串首/尾或分隔符 (防 HG 误吞 HGH20);
     # 关(默认) = 仅靠"取最长命中"压歧义, 但能覆盖无分隔符场景(HGH20001 命中 HGH20)。仅 match_project_by_name 开时生效。
     "name_match_strict_boundary": False,
+    # 开工后自动开始检测 (默认关): 任务处理成功后, 对"视频源在跑 + 模型就绪 + 未在检测"
+    # 的工位自动拉起检测 (门槛与开机自动恢复一致)。启动失败不影响开工响应, 只记调试日志。
+    # 关 = 检测启动权留在现场 (推荐产线检测常开, 开工只热切项目)。
+    "start_detection_on_task": False,
     # 开工即建/激活工单 (order_no = task_no), 让检测周期绑到该任务、出站报文自带工单号。默认关。
     "create_work_order_on_task": False,
     # 工单绑定方式: project (默认, 绑当前激活项目) / channel (按 channel_field 绑到指定工位)。
@@ -447,7 +451,51 @@ class MESInbound:
                 return (False, key, msg)
             msgs.append(msg)
 
+        if cfg.get("start_detection_on_task", False):
+            # 先提交本次事务再拉检测: start_detection 内部会另开 DB 会话写检测记录,
+            # 与本请求未提交的工单写事务互斥, 不先 commit 会撞满 SQLite busy_timeout
+            # (15s), 上游中控超时短于它就会误判"连接失败" (2026-07-13 UAT 逼出的真锁)
+            if db is not None:
+                try:
+                    db.commit()
+                except Exception:
+                    pass
+            started = self._auto_start_detection()
+            if started:
+                msgs.append(f"已自动开始检测: {', '.join(started)}")
+
         return (True, None, "; ".join(msgs) if msgs else "ok")
+
+    def _auto_start_detection(self) -> list:
+        """开工后自动拉起检测 (start_detection_on_task 开时)。
+
+        门槛与开机自动恢复检测完全一致: 视频源在跑 + 模型就绪 + 未在检测。
+        任何失败只记调试日志, 绝不影响开工响应 (任务本身已处理成功)。
+        返回本次拉起的工位列表 (如 ["ch0"]), 全部不满足门槛时为空。
+        """
+        started = []
+        try:
+            from backend.api.channel_manager import channel_manager
+            for ch_id, mgr in list(channel_manager.channels.items()):
+                try:
+                    if not mgr or not mgr.is_running:
+                        debug_center.dbg("backend.mes", "开工自动开始检测跳过",
+                                         f"ch{ch_id} 视频源未运行")
+                        continue
+                    if mgr.is_detecting:
+                        continue
+                    # 模型就绪与否交给 start_detection 自身校验 (synthetic 源无模型也合法),
+                    # 未就绪时抛异常走下面的日志分支, 与手动点"开始检测"行为一致。
+                    mgr.start_detection()
+                    started.append(f"ch{ch_id}")
+                    debug_center.dbg("backend.mes", "开工自动开始检测",
+                                     f"ch{ch_id} 已随开工任务拉起检测")
+                except Exception as e:
+                    debug_center.dbg("backend.mes", "开工自动开始检测失败",
+                                     f"ch{ch_id} err={e}")
+        except Exception as e:
+            debug_center.dbg("backend.mes", "开工自动开始检测失败", f"整体异常: {e}")
+        return started
 
     def _switch_project(self, db, mapped: dict, cfg: dict):
         """按产品代号切检测项目, 复用 projects.activate_project_core (与手动激活一致)。"""

@@ -123,8 +123,24 @@ def given_cfg(ctx, preset, monkeypatch):
                           create_work_order_on_task=True, store_mapped_extra=True,
                           task_info_display={"show_task_no": True, "show_product_code": True,
                                              "show_step_code": True, "show_operator": True})
+    elif preset == "开工自动开始检测":
+        ctx["cfg"] = _cfg(switch_project_on_task=True, match_project_by_name=True,
+                          create_work_order_on_task=True,
+                          start_detection_on_task=True)
     else:  # 默认
         ctx["cfg"] = _cfg()
+
+
+@given("工位0 视频源在跑且未在检测")
+def given_ch0_running_not_detecting(ctx, monkeypatch):
+    """伪造 channel_manager: ch0 源在跑、未在检测 (BDD 层不真起视频源)。"""
+    from unittest.mock import MagicMock
+
+    mgr = MagicMock(is_running=True, is_detecting=False)
+    fake_cm = MagicMock()
+    fake_cm.channels = {0: mgr}
+    monkeypatch.setattr("backend.api.channel_manager.channel_manager", fake_cm)
+    ctx["ch0_mgr"] = mgr
 
 
 @given(parsers.parse(
@@ -329,3 +345,13 @@ def then_taskinfo_on(ctx):
     assert all(tinfo.get(k) for k in
                ("show_task_no", "show_product_code", "show_step_code", "show_operator")), \
         f"四要素显示配置未全开: {tinfo}"
+
+
+@then("工位0 应已被拉起检测")
+def then_ch0_started(ctx):
+    ctx["ch0_mgr"].start_detection.assert_called_once()
+
+
+@then("工位0 不应被拉起检测")
+def then_ch0_not_started(ctx):
+    ctx["ch0_mgr"].start_detection.assert_not_called()

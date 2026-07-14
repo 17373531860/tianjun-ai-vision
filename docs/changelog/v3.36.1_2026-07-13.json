@@ -1,0 +1,74 @@
+{
+  "version": "3.36.1",
+  "date": "2026-07-13",
+  "previous_version": "3.36.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "区域事件 overlap 规则新增目标框扩边 object_margin",
+      "symptom": "TP 现场工人在工件下沿扫条码, 扫码枪与工件物理接触但检测框几何不相交, 重叠判定永不成立, 周期误判缺扫码 NG (0707 回放 #35)",
+      "root_cause": "overlap 判定严格按两框是否相交, 动作发生在目标框边缘外侧几个百分点时存在几何盲区; 时间/位移门槛均无法覆盖",
+      "fix": "规则级可选参数 object_margin (归一化 0~0.2, 默认 0 行为零差异): 判相交前目标框四边虚拟外扩; 扩边只参与是否相交, min_overlap_ratio 深度仍按原始框算; 前端逻辑设置规则卡加输入 (仅 overlap 渲染) + 保存守门钳位; 纯空间几何量与帧率解耦",
+      "files": [
+        "backend/api/source_region_events.py",
+        "frontend/src/views/Project/LogicConfigTab.vue",
+        "frontend/src/views/Project/index.vue",
+        "tests/test_region_events.py",
+        "tests/e2e_browser/test_region_events_tab.py",
+        "tests/uat/uat_20260713_region_object_margin.py"
+      ],
+      "keywords": ["object_margin", "目标框扩边", "region_events", "overlap", "扫码", "工件下沿", "边缘扫码", "几何盲区", "缺扫码", "误判NG", "帧率解耦", "min_overlap_ratio", "TP项目"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "展会全应用插件 v1.4.1 区域规则面板对齐目标框扩边",
+      "symptom": "主程序新增 object_margin 后插件项目页区域规则面板缺同款输入, 展会机无法配置",
+      "root_cause": "插件的项目配置面板是独立重做的一套 UI, 主程序新增字段不会自动透传",
+      "fix": "重叠类规则卡加目标框扩边输入 + 新建默认值 + 保存清洗同主程序口径; plugin_version 1.4.1 重新打包签名并离线验签",
+      "files": [
+        "plugins-examples/tianjun-showcase/frontend/dist/showcase-app.html",
+        "plugins-examples/tianjun-showcase/plugin.json",
+        "plugins-examples/tianjun-showcase/README.md",
+        "tests/uat/uat_20260713_showcase_object_margin.py"
+      ],
+      "keywords": ["showcase", "展会插件", "1.4.1", "object_margin", "目标框扩边", "区域事件", "插件对齐", "签名"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "TOOL-001",
+      "title": "TP 回放工具增强 + TP 项目实战参数落库",
+      "symptom": "v5/v5.1 模型对比需重复改脚本; TP 项目确认门槛为帧数口径, 现场相机帧率变化时松紧漂移",
+      "root_cause": "build_cache.py 路径硬编码; 6/5 帧门槛仅在 30fps 下等于 0.2/0.167 秒",
+      "fix": "build_cache.py 支持命令行传模型/输出路径; 新增 matrix_margin_seconds.py 参数矩阵+降帧率仿真; 项目 22 落库: 扫码 object_margin=0.02, 测硬度 min_seconds=0.2, 扫码 min_seconds=0.15",
+      "files": [
+        "tests/uat/tp_replay/build_cache.py",
+        "tests/uat/tp_replay/matrix_margin_seconds.py"
+      ],
+      "keywords": ["TP", "回放", "参数矩阵", "降帧率仿真", "min_seconds", "秒基门槛", "调参"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["modify-project-config"],
+  "files_changed": [
+    "backend/api/source_region_events.py",
+    "frontend/src/views/Project/LogicConfigTab.vue",
+    "frontend/src/views/Project/index.vue",
+    "plugins-examples/tianjun-showcase/frontend/dist/showcase-app.html",
+    "plugins-examples/tianjun-showcase/plugin.json",
+    "plugins-examples/tianjun-showcase/README.md",
+    "plugins/showcase/frontend/dist/showcase-app.html",
+    "plugins/showcase/plugin.json",
+    "plugins/showcase/README.md",
+    "tests/test_region_events.py",
+    "tests/e2e_browser/test_region_events_tab.py",
+    "tests/uat/tp_replay/build_cache.py",
+    "tests/uat/tp_replay/matrix_margin_seconds.py",
+    "tests/uat/uat_20260713_region_object_margin.py",
+    "tests/uat/uat_20260713_showcase_object_margin.py",
+    ".claude/skills/modify-project-config/SKILL.md"
+  ]
+}

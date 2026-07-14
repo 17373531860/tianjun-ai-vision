@@ -1356,6 +1356,13 @@
                 </label>
                 <el-input-number v-model="rule.min_overlap_ratio" size="small" :min="0" :max="1" :step="0.05" class="w-full" />
               </div>
+              <div v-if="rule.type === 'overlap'">
+                <label class="block text-gray-400 mb-1" title="把被作用目标的框向四周虚拟外扩该比例（画面归一化，如0.02≈画面2%）再判相交。动作发生在目标框边缘外一点点时（如在工件下沿扫条码，枪没压进工件框）用它桥接。纯空间几何量，与帧率/工人速度无关。0=不扩边">
+                  目标框扩边（0=不扩）
+                </label>
+                <el-input-number :model-value="rule.object_margin ?? 0" size="small" :min="0" :max="0.2" :step="0.01" :precision="2" class="w-full"
+                  @update:model-value="rule.object_margin = ($event && $event > 0) ? $event : 0" />
+              </div>
               <div v-if="rule.type !== 'region_exit'">
                 <label class="block text-gray-400 mb-1" title="动作确认前，主体(工具)在本段时间内必须移动过的最小距离（画面宽高归一化，如0.04≈画面4%）。工具搁在原地不动只有检测抖动(约0.01)，真动作要拿起来挪动——用来压掉静置工具的误触发。0=不要求移动">
                   位移门槛（0=不要求移动）
@@ -1823,6 +1830,7 @@ const addRegionRule = () => {
     min_overlap_ratio: 0,
     min_move: 0,
     min_seconds: 0,
+    object_margin: 0,
     gone_seconds: null,
     require_label: null,
     gone_frames: 8,

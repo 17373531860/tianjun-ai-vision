@@ -727,7 +727,8 @@ curl http://localhost:8001/api/v1/cluster/slaves
 针对"中控来推开工、我们把报警与完工推回去"的双向场景，主程序原生可配，**全部默认关 = 老项目零差异**。一进一出两块面板：入站对接（`backend/api/mes_inbound.py` + `backend/services/mes_inbound.py`）、出站网关（`backend/services/mes_gateway.py`）。
 
 **入站链路关键决策点**（`mes_inbound.py`，开 `backend.mes` 调试类别能看到全程人话日志）：
-- `handle_task_start` → `_apply_task_action`：完工信号优先 → 拒绝重复(可选) → `_switch_project`(按产品代号切检测项目：先查对照表 `product_project_map`，再兜底"项目名==产品代号") → `_ensure_work_order`(建工单 + 四要素留痕到 `extra_data.inbound`) → `_supersede_previous_tasks`(最新开工顶替 + 对被顶替单回推完工)
+- `handle_task_start` → `_apply_task_action`：完工信号优先 → 拒绝重复(可选) → `_switch_project`(按产品代号切检测项目：先查对照表 `product_project_map`，再兜底"项目名==产品代号") → `_ensure_work_order`(建工单 + 四要素留痕到 `extra_data.inbound`) → `_supersede_previous_tasks`(最新开工顶替 + 对被顶替单回推完工) → `_auto_start_detection`(v3.37.0 可选，见下)
+- **开工后自动开始检测**（v3.37.0，川南问题 1b）：配置键 `start_detection_on_task` 默认**关**。开时任务处理成功后对"视频源在跑 + 未在检测"的工位逐个拉起检测（模型就绪校验交给 start_detection 自身，与手动点按钮同款）；任何失败只记 `backend.mes` 调试日志、绝不影响开工响应。⚠️ **拉检测前必须先 `db.commit()` 本请求事务**——start_detection 内部另开 DB 会话写检测记录，与未提交的工单写事务互斥，会撞满 SQLite busy_timeout(15s)，上游中控超时短于它就误判"连接失败"（2026-07-13 UAT 逼出的真锁）。配套：前端界面 5s 轮询后端激活项目自动跟随（外部切项目后不刷新页面也能跟上，`Navbar.vue: syncActiveProjectFromBackend`）。回归：BDD 场景 15/16。
 - `handle_alarm_clear`：按 `alarm_clear_match_fields`（默认四要素）匹配在途报警消除，匹配不到回 `alarm_not_found`(40007)
 - 错误码：`disabled`/`missing_field`(40004)/`unknown_product`(40002)/`duplicate`(40001)/`alarm_not_found`(40007)，话术可配
 

@@ -6263,6 +6263,7 @@
         +(!isExit?_lgNum('位移门槛 (0=不要求移动; 过滤静置工具误触发)',p+'min_move',r.min_move!=null?r.min_move:0):'')
         +(isOverlap?_lgNum('重叠 IoU 下限 (0=任意相交)',p+'min_iou',r.min_iou!=null?r.min_iou:0):'')
         +(isOverlap?_lgNum('重叠深度下限 (0=贴边即算)',p+'min_overlap_ratio',r.min_overlap_ratio!=null?r.min_overlap_ratio:0):'')
+        +(isOverlap?_lgNum('目标框扩边 (0=不扩; 动作在目标框边缘外时桥接, 与帧率无关)',p+'object_margin',r.object_margin!=null?r.object_margin:0):'')
         +(!isExit?_lgNum('消失确认(秒, 0=用全局容忍)',p+'gone_seconds',r.gone_seconds!=null?r.gone_seconds:'','numOrNull'):'')
         +(isExit?_lgNum('消失确认帧数',p+'gone_frames',r.gone_frames!=null?r.gone_frames:8,'int'):'')
         +(isExit?_lgNum('帧间关联 IoU 下限',p+'match_iou',r.match_iou!=null?r.match_iou:0.3):'')
@@ -6578,7 +6579,7 @@
       case 'paDel': pc.periodic_actions.splice(i,1); LGRender('periodic'); break;
       case 'reAdd': { if(!pc.region_events||typeof pc.region_events!=='object') pc.region_events={enabled:true,rules:[]};
         if(!Array.isArray(pc.region_events.rules)) pc.region_events.rules=[];
-        pc.region_events.rules.push({id:'re_'+Date.now(),name:'动作 '+(pc.region_events.rules.length+1),type:'overlap',subject_label:'',object_label:'',require_label:null,region_mode:'and',min_frames:10,min_seconds:0,min_move:0,min_iou:0,min_overlap_ratio:0,gone_seconds:null,event_id:null,settle:false,region:null});
+        pc.region_events.rules.push({id:'re_'+Date.now(),name:'动作 '+(pc.region_events.rules.length+1),type:'overlap',subject_label:'',object_label:'',require_label:null,region_mode:'and',min_frames:10,min_seconds:0,min_move:0,min_iou:0,min_overlap_ratio:0,object_margin:0,gone_seconds:null,event_id:null,settle:false,region:null});
         LGRender('regionEvents'); break; }
       case 'reDel': { if(pc.region_events&&Array.isArray(pc.region_events.rules)){ pc.region_events.rules.splice(i,1); LGRender('regionEvents'); } break; }
       case 'reSRAdd': { if(!pc.region_events||typeof pc.region_events!=='object') pc.region_events={enabled:true,rules:[]};
@@ -6685,6 +6686,9 @@
         var gs=Number(o.gone_seconds); if(!(isFinite(gs)&&gs>0)) delete o.gone_seconds; else o.gone_seconds=Math.min(30,gs);
         if(!String(o.require_label||'').trim()) delete o.require_label;
       } else { delete o.min_seconds; delete o.min_move; delete o.gone_seconds; delete o.require_label; delete o.min_iou; delete o.min_overlap_ratio; delete o.region_mode; }
+      // 目标框扩边: 仅 overlap 有意义, 0~0.2 钳位 (与主程序 _sanitizeRegionEvents 同款)
+      if(o.type==='overlap'){ var om=Number(o.object_margin); if(!(isFinite(om)&&om>0)) delete o.object_margin; else o.object_margin=Math.min(0.2,om); }
+      else delete o.object_margin;
       var an=o.anchor;
       if(!(an&&an.enabled&&String(an.label||'').trim())) delete o.anchor;
       else o.anchor={enabled:true,label:String(an.label).trim(),ref:an.ref||null,hold_seconds:(isFinite(Number(an.hold_seconds))&&Number(an.hold_seconds)>=0)?Number(an.hold_seconds):3.0};

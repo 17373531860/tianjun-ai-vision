@@ -199,6 +199,13 @@ curl 'http://localhost:8001/api/v1/workstations/gpu-allocation'
 grep -E '\[模型加载\]|\[模型预热\]|\[ModelConvert\]|推理超时|步骤阈值' backend.log
 ```
 
+## 七.五、"框卡死"自愈防线（v3.37.0，川南反馈）
+
+**现象**：识别某类别后检测框冻结在画面、后续全不识别、周期照样超时 NG——现场极易误判为模型问题。
+**机制**：推理循环（`source_inference_loop_mixin.py` 推理线程 except 分支）每帧异常时发布点走不到，上一次发布的检测结果被反复重发布 → 前端框永久定格。
+**防线**：连续异常计数 `_infer_consec_errors` 达 **30 帧**时主动发布一次空检测结果（清空残留框，现场一眼看出是链路故障）+ 调试中心 `backend.detection` 类别留证（含最后一次异常详情）；每走通一轮发布即归零，阈值内偶发异常行为与老版完全一致。
+**排查**：客户报"框冻结"→ 先开调试日志中心"检测推理"类别找"推理连续异常已清空画面框"记录，里面带最后错误信息，能直接定位异常根源（模型/CUDA/格式）。回归：`tests/test_inference_error_clear.py`（synthetic 源真跑推理线程注入每帧必炸）。
+
 ## 八、已知陷阱
 
 - 修 source 主类前先看 `source.py` 的 `__getattr__/__setattr__` 兼容层——历史 `_inference_executor` 字段已搬到 has-a 组件，老路径透明转发

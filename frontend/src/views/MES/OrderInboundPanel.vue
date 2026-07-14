@@ -82,6 +82,11 @@
         </div>
       </el-form-item>
 
+      <el-form-item label="开工后自动开始检测">
+        <el-switch v-model="form.start_detection_on_task" />
+        <span class="text-xs text-gray-500 ml-2">任务处理成功后，对"视频源在跑+模型就绪+未在检测"的工位自动拉起检测；不满足门槛只记调试日志，不影响开工响应（默认关，推荐产线检测常开时无需打开）</span>
+      </el-form-item>
+
       <el-form-item label="开工即建工单">
         <el-switch v-model="form.create_work_order_on_task" />
         <span class="text-xs text-gray-500 ml-2">用任务号建/激活工单(in_progress)，让检测周期绑该任务、出站报文自带工单号</span>
@@ -450,6 +455,7 @@ function emptyForm() {
     switch_project_on_task: false,
     match_project_by_name: false,
     name_match_strict_boundary: false,
+    start_detection_on_task: false,
     mapRows: [],
     create_work_order_on_task: false,
     order_binding: 'project',
@@ -556,6 +562,7 @@ function applyConfig(cfg) {
   f.switch_project_on_task = !!cfg.switch_project_on_task
   f.match_project_by_name = cfg.match_project_by_name === true
   f.name_match_strict_boundary = cfg.name_match_strict_boundary === true
+  f.start_detection_on_task = !!cfg.start_detection_on_task
   f.mapRows = Object.entries(cfg.product_project_map || {}).map(([code, pid]) => ({
     code, project_id: typeof pid === 'number' ? pid : (parseInt(pid, 10) || null),
   }))
@@ -673,6 +680,7 @@ function buildConfig() {
     switch_project_on_task: form.switch_project_on_task,
     match_project_by_name: form.match_project_by_name,
     name_match_strict_boundary: form.name_match_strict_boundary,
+    start_detection_on_task: form.start_detection_on_task,
     product_project_map,
     create_work_order_on_task: form.create_work_order_on_task,
     order_binding: form.order_binding || 'project',

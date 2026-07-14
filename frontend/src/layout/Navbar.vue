@@ -150,7 +150,7 @@
           </template>
         </el-dropdown>
 
-        <img :src="store.display.logoDataUrl || '/app-icon.png'" alt="logo" class="w-10 h-10 rounded-full object-cover" />
+        <img :src="store.display.logoDataUrl || defaultLogoUrl" alt="logo" class="w-10 h-10 rounded-full object-cover" />
       </div>
     </div>
   </header>
@@ -166,7 +166,12 @@ import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
 import { Setting, UserFilled, Check, Minus } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { getProjects, getProjectDetail, activateProject } from '@/api/project';
+import { getProjects, getProjectDetail, activateProject, getActiveProject } from '@/api/project';
+
+// v3.37.0: 回退 logo 不能写死 '/app-icon.png' 字符串——打包后页面走 file:// + 相对 base,
+// 运行时字符串 Vite 改写不到, 会解析到系统盘根目录导致图标空白 (v3.36.0 回归)。
+// BASE_URL 开发时为 '/'、打包后为 './', 两边都正确。
+const defaultLogoUrl = import.meta.env.BASE_URL + 'app-icon.png';
 
 const store = useSystemStore();
 const projectStore = useProjectStore();
@@ -344,6 +349,19 @@ const handleProjectChange = async (projectId) => {
     // 同步后端激活状态
     await activateProject(projectId).catch(() => {});
     
+    await applyProjectToStores(projectId);
+    
+    ElMessage.success(`已切换到项目: ${projectStore.currentProject?.name || projectId}`);
+  } catch (err) {
+    console.error('加载项目详情失败:', err);
+    ElMessage.error('切换项目失败');
+  }
+};
+
+// 把指定项目加载进前端各 store (不触碰后端激活态)。
+// 手动切换 (handleProjectChange, 先 activate) 与外部切换跟随 (syncActiveProjectFromBackend,
+// 后端已激活、不能再 activate 一次否则无谓重载模型) 共用这段。
+const applyProjectToStores = async (projectId) => {
     const res = await getProjectDetail(projectId);
     const project = res.data;
     
@@ -406,11 +424,32 @@ const handleProjectChange = async (projectId) => {
     
     // 自动保存当前选择
     saveCurrentSelection();
-    
-    ElMessage.success(`已切换到项目: ${project.name}`);
-  } catch (err) {
-    console.error('加载项目详情失败:', err);
-    ElMessage.error('切换项目失败');
+};
+
+// v3.37: 跟随后端激活项目 (外部 MES 入站开工切项目后, 界面不刷新也能自动跟上)。
+// 只对齐前端显示/store, 不回调 activate (后端已经激活, 再调会无谓重载模型)。
+let _syncingActiveProject = false;
+const syncActiveProjectFromBackend = async () => {
+  if (_syncingActiveProject) return;
+  _syncingActiveProject = true;
+  try {
+    const res = await getActiveProject();
+    const backendActive = res.data;
+    if (backendActive && backendActive.id
+        && backendActive.id !== projectStore.currentProjectId) {
+      // 项目列表里没有它 (如外部刚建) 时顺带刷新下拉
+      if (!projectList.value.find(p => p.id === backendActive.id)) {
+        try { projectList.value = (await getProjects()).data.items || []; } catch { /* 忽略 */ }
+      }
+      await applyProjectToStores(backendActive.id);
+      selectedProjectId.value = backendActive.id;
+      ElMessage.info(`项目已由外部系统切换: ${backendActive.name}`);
+    }
+  } catch (e) {
+    // 轮询失败静默重试 (后端重启窗口等), 但留 console 痕迹方便排查
+    console.warn('[⬛ Navbar] 跟随后端激活项目失败:', e?.message || e);
+  } finally {
+    _syncingActiveProject = false;
   }
 };
 
@@ -633,6 +672,7 @@ const updateRealTime = () => {
 };
 
 let timerInterval;
+let activeSyncInterval;
 onMounted(async () => {
   console.log(`[⬛ Navbar] onMounted 开始 ${new Date().toLocaleTimeString()}`);
 
@@ -663,11 +703,15 @@ onMounted(async () => {
     updateRealTime();
   }, 1000);
 
+  // v3.37: 每 5s 轻量对齐一次后端激活项目 (外部 MES 开工切项目 → 界面自动跟随)
+  activeSyncInterval = setInterval(syncActiveProjectFromBackend, 5000);
+
   console.log(`[⬛ Navbar] onMounted 完成 ${new Date().toLocaleTimeString()}`);
 });
 
 onUnmounted(() => {
   if (timerInterval) clearInterval(timerInterval);
+  if (activeSyncInterval) clearInterval(activeSyncInterval);
 });
 </script>
 
