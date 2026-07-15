@@ -490,3 +490,12 @@ MES Hook 影响: [是否影响 5 个 Hook 调用点的签名/时序]
 5. **手动冒烟**：起后端 + 前端 → Source 页接 USB / 视频文件各一路 → 跑一个 cycle → 确认 detection/results 返回 + 数据页能看到 cycle/step → 关掉视频源不报错。
 6. 改了多通道相关字段：`channel_manager.set_channel_count(2)` → 跑两路 → 关一路 → 确认 `mes_hook.on_channel_removed` + `alarm_router.on_channel_removed` 都被调（AGENTS 第八节关键不变量 4）。
 7. 改了 has-a 组件接口：grep 一遍所有 mixin 是否还有该字段/方法的字符串引用，避免兼容层路由后才被发现的运行时 AttributeError。
+
+---
+
+## v3.38.0 补充：收尾持久化已出推理线程（PersistWorker）
+
+- `source_session_lifecycle_mixin.py` 的 cycle 开始/结束/废弃、step 记录**不再直接写 DB**，统一入队到 `source_persist_worker.py`（每通道一条 FIFO 落库线程，`_persist` 属性懒加载）。
+- **改收尾落库逻辑时**：新增的 DB 写必须走队列（enqueue），不要在推理线程里开 SessionLocal——那是 v3.38 治"框冻结"的核心。
+- 测试/排查可设 `TIANJUN_SYNC_PERSIST=1` 退回同步落库（老行为）；`tests/test_persist_worker.py` 是行为契约。
+- 判"周期进行中"改用 cycle 的 uuid（`current_cycle_uuid`）而非自增 id——异步落库下 id 未必已分配。

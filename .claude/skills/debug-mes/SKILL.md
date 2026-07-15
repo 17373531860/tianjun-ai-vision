@@ -753,8 +753,14 @@ curl http://localhost:8001/api/v1/cluster/slaves
 - ⚠️ `match_by_name` / `strict_boundary` 默认全 **关**（存量客户零差异，要的人显式开）。包装侧落 `packaging_flow_configs.name_match_strict_boundary` 列；入站存 SystemConfig JSON
 - 排查"规格切不对项目"：先确认开关是否打开 → 看日志"切项目命中/未命中"里的"经XX"（对照表/通配符对照表/项目名精确/项目名子串）判断走了哪级；回归看 `tests/test_project_match.py` + `tests/step_defs/test_spec_project_switch.py` + `tests/test_e2e_spec_project_switch.py`
 
-> 完整 14 场景 BDD：`tests/features/chuannan_mes_integration.feature`；可见浏览器全链路 UAT + 模拟中控：`tests/uat/uat_20260627_chuannan_full_loop.py` + `tests/uat/mock_chuannan_mcs.py`。
+> 完整 BDD（v3.38 起 17 场景，含运行中开工回填 17-19）：`tests/features/chuannan_mes_integration.feature`；可见浏览器全链路 UAT + 模拟中控：`tests/uat/uat_20260627_chuannan_full_loop.py` + `tests/uat/mock_chuannan_mcs.py`。
 
 ---
+
+## v3.38.0 补充：网关熔断 / 运行中开工回填 / 扫码器旁路 SN
+
+- **网关推送熔断器**（`services/mes_gateway.py`）：同一连接连续失败跳闸→冷却期跳过→半开试探恢复；"推送一直没到 MES"先查熔断状态（`get_circuit_state`），改连接配置或测试连接会自动复位。dispatch 已改每连接推完即 commit——别再把多连接推送包回一个大事务。
+- **运行中开工回填**（`mes_hooks.on_external_order_changed` + `mes_inbound._rebind_running_channels`）：检测运行中收到外部开工，新工单回绑运行工位（在途工件不打断）、四要素上屏。"开工了监控页工单没换"先查这条链。
+- **扫码器旁路 SN 监控**（`services/scanner_bypass_monitor.py`，dev-qing）：客户扫码器只往目录写 SN txt 时，后台线程定期扫描实时导出规则的输入目录缓存 SN；cycle_start 快照内存优先、glob 兜底；状态查询 `GET /api/v1/export/scanner-bypass/status`；监控页显示开关 showBypassSn 默认关。
 
 **改动 MES 子系统前必读**：本 skill 第 3/5/8/11 节 + AGENTS.md 第六节 6.2、第八节不变量 1/4/6。

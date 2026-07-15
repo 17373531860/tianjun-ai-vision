@@ -1,0 +1,131 @@
+{
+  "version": "3.38.0",
+  "date": "2026-07-15",
+  "previous_version": "3.37.0",
+  "theme": "川南框冻结治本三刀(收尾持久化出推理线程+网关熔断+清理事务卫生) + 运行中开工工单回填 + 萍乡自定义班次/皮重看板/称重数值条 + 扫码器旁路SN监控 + NG top3保持",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "收尾持久化出推理线程 PersistWorker 异步落库",
+      "symptom": "川南现场检测画面周期收尾时框卡死约0.5~1s",
+      "root_cause": "cycle收尾DB写(cycle/step落库/录像关联)在推理线程内同步执行, SQLite写锁竞争阻塞出帧",
+      "fix": "每通道FIFO落库工作线程, 推理线程只入队; cycle开始/结束/废弃/step记录全走队列; TIANJUN_SYNC_PERSIST=1退回同步; 错误隔离; 配套热路径索引迁移m0001(step_records.cycle_id+video_clips.related_id)",
+      "files": ["backend/api/source_persist_worker.py", "backend/api/source_session_lifecycle_mixin.py", "backend/api/source_recording_api_mixin.py", "backend/models/models.py", "backend/db/migrations/m0001_hot_path_indexes.py", "tests/test_persist_worker.py"],
+      "keywords": ["框冻结", "框卡死", "persist worker", "异步落库", "推理线程", "SQLite锁", "收尾卡顿", "freeze", "TIANJUN_SYNC_PERSIST", "热路径索引", "m0001"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "MES网关推送熔断器 + 分发锁窗口收敛",
+      "symptom": "MES端点失联时推送反复超时重试, 占用DB会话与锁拖累检测",
+      "root_cause": "推送无熔断, dispatch单事务跨全部连接持锁",
+      "fix": "同连接连续失败跳闸→冷却→半开试探; 更新/测试连接自动复位; dispatch每连接推完即commit缩短锁窗口",
+      "files": ["backend/services/mes_gateway.py", "backend/api/mes_gateway.py", "tests/test_mes_gateway_circuit_breaker.py", "tests/test_mes_gateway_dispatch_isolation.py", "tests/test_mes_gateway_lock_release.py"],
+      "keywords": ["熔断器", "circuit breaker", "MES网关", "推送超时", "锁窗口", "dispatch", "半开", "cooldown"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "数据清理事务卫生",
+      "symptom": "批量清理旧session时大事务长持写锁, 在检工位落库被顶住",
+      "root_cause": "清理单个大事务+文件删除夹在事务内",
+      "fix": "按cycle分批小事务提交; 文件删除移到commit之后",
+      "files": ["backend/api/sessions_maintenance.py", "tests/test_cleanup_txn_hygiene.py"],
+      "keywords": ["事务卫生", "清理", "cleanup", "分批删除", "写锁", "文件删除"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "检测运行中外部开工工单回填运行工位",
+      "symptom": "工位已在检测时收到外部开工, 新工单不接管运行中工位, 四要素不上屏",
+      "root_cause": "入站开工只更新激活工单, 未回绑正在检测的工位",
+      "fix": "入站开工成功触发工单变更钩子, 最新激活工单回绑运行中工位(在途工件不打断), 监控页四要素刷新; BDD场景17-19覆盖",
+      "files": ["backend/services/mes_hooks.py", "backend/services/mes_inbound.py", "tests/features/chuannan_mes_integration.feature", "tests/step_defs/test_chuannan_mes_integration.py", "tests/uat/uat_20260715_task_info_rebind.py"],
+      "keywords": ["川南", "外部开工", "工单回填", "rebind", "四要素", "运行中开工", "mes_inbound"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "自定义班次列表",
+      "symptom": "客户排班不止白/夜两班, 硬编码day/night不够用",
+      "root_cause": "班次标签硬编码",
+      "fix": "项目配置自定义班次列表(名称+起止时间, 跨零点支持); 后端按配置解析当前班次; 数据页筛选动态渲染; 导航栏可选显示当前班次",
+      "files": ["backend/api/source_session_lifecycle_mixin.py", "backend/api/sessions.py", "backend/services/weighing_engine.py", "frontend/src/views/Project/index.vue", "frontend/src/views/Data/index.vue", "frontend/src/layout/Navbar.vue", "frontend/src/views/Settings/index.vue", "tests/test_shift_resolution.py"],
+      "keywords": ["班次", "shift", "自定义班次", "排班", "resolve_shift_label", "萍乡", "百斯特"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "皮重记录与监控页称重数值条",
+      "symptom": "去皮值无留痕, 监控页看不到实时秤值",
+      "root_cause": "称重引擎不记录皮重, 监控页无实时称重展示",
+      "fix": "自动/手动去皮记录皮重并随逐件记录落库; 称重面板显示皮重; 新增监控页称重数值条(实时/皮重/净重/门控状态, 融合模式显示), 称重配置页加显示开关",
+      "files": ["backend/services/weighing_engine.py", "frontend/src/views/Monitor/WeighingLiveBar.vue", "frontend/src/views/Monitor/WeighingPanel.vue", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Project/WeighingConfigTab.vue", "tests/test_weighing_engine.py", "tests/test_weighing_fusion.py"],
+      "keywords": ["皮重", "tare", "tare_weight", "称重数值条", "WeighingLiveBar", "净重", "实时重量", "萍乡"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-007",
+      "title": "MES数据库直写驱动内置",
+      "symptom": "数据库直写适配器需客户机手工装驱动",
+      "root_cause": "驱动不在requirements",
+      "fix": "dmPython/pymysql/pymssql进requirements随包出厂",
+      "files": ["backend/requirements.txt"],
+      "keywords": ["达梦", "dmPython", "pymysql", "pymssql", "数据库直写", "驱动内置"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-008",
+      "title": "扫码器旁路SN实时监控",
+      "symptom": "扫码器不接软件只写目录SN txt时, 监控页看不到当前SN",
+      "root_cause": "无旁路目录监控机制, cycle_start现场glob阻塞风险",
+      "fix": "后台守护线程定期扫描实时导出规则输入目录缓存SN; 新增旁路状态只读端点(补齐文档四件套); cycle_start快照内存优先glob兜底; 监控页MES条可选显示(showBypassSn默认关)",
+      "files": ["backend/services/scanner_bypass_monitor.py", "backend/api/export_realtime.py", "backend/main.py", "backend/services/export_snapshot.py", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Settings/index.vue", "tests/test_scanner_bypass_monitor.py"],
+      "keywords": ["扫码器旁路", "bypass", "SN监控", "scanner_bypass_monitor", "showBypassSn", "目录扫描", "dev-qing"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-009",
+      "title": "传感器清洁插件v1.4.3",
+      "symptom": "真值标定漂移+换棉签动作段重复计数",
+      "root_cause": "现场真值变化+动作段边界重叠",
+      "fix": "真值重标定+换棉签动作段去重",
+      "files": ["plugins/sensor-clean"],
+      "keywords": ["sensor-clean", "传感器清洁", "真值重标定", "换棉签", "去重", "v1.4.3"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "NG步骤不再清除top3显示",
+      "symptom": "监控页NG时top3步骤内容被清空",
+      "root_cause": "NG事件处理误触发top3重置",
+      "fix": "仅计数清零时才清top3, NG保持显示",
+      "files": ["backend/api/source_project_config_apply.py", "frontend/src/views/Monitor/index.vue", "tests/test_ng_top3_persistence.py"],
+      "keywords": ["top3", "NG", "清除", "监控页", "dev-qing"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "导航栏显示设置深度合并修复",
+      "symptom": "旧localStorage缺monitor子树时监控页刷新空白",
+      "root_cause": "Navbar恢复display_settings整体赋值覆盖默认值",
+      "fix": "改走loadSettings深度合并",
+      "files": ["frontend/src/layout/Navbar.vue", "frontend/src/store/useSystemStore.js"],
+      "keywords": ["display_settings", "localStorage", "深度合并", "监控页空白", "Navbar"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["modify-source", "debug-source", "modify-model", "api-sync", "debug-mes", "debug-session"],
+  "files_changed": ["backend/api/source_persist_worker.py", "backend/api/source_session_lifecycle_mixin.py", "backend/api/source_recording_api_mixin.py", "backend/api/sessions_maintenance.py", "backend/api/sessions.py", "backend/api/mes_gateway.py", "backend/api/export_realtime.py", "backend/api/source_project_config_apply.py", "backend/services/mes_gateway.py", "backend/services/mes_hooks.py", "backend/services/mes_inbound.py", "backend/services/weighing_engine.py", "backend/services/scanner_bypass_monitor.py", "backend/services/export_snapshot.py", "backend/models/models.py", "backend/db/migrations/m0001_hot_path_indexes.py", "backend/main.py", "backend/requirements.txt", "frontend/src/layout/Navbar.vue", "frontend/src/store/useSystemStore.js", "frontend/src/views/Data/index.vue", "frontend/src/views/Monitor/WeighingLiveBar.vue", "frontend/src/views/Monitor/WeighingPanel.vue", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Project/WeighingConfigTab.vue", "frontend/src/views/Project/index.vue", "frontend/src/views/Settings/index.vue"]
+}

@@ -316,9 +316,26 @@ def list_rule_logs(rule_id: int,
             "limit": limit, "offset": offset}
 
 
-@router.get("/scanner-bypass/status")
+class ScannerBypassStatusOut(BaseModel):
+    """旁路 SN 监控状态快照 (内存态, 只读)。"""
+    running: bool = Field(..., description="监控线程是否在跑")
+    polled_at: Optional[str] = Field(None, description="最近一轮扫描时间 (ISO)")
+    poll_interval_sec: Optional[float] = Field(None, description="扫描间隔秒")
+    error: Optional[str] = Field(None, description="监控模块异常信息 (正常为空)")
+    by_channel: Dict[str, Any] = Field(default_factory=dict, description="通道号 → 当前 SN 条目")
+    default: Optional[Dict[str, Any]] = Field(None, description="未绑通道规则的默认 SN 条目")
+    entries: List[Dict[str, Any]] = Field(default_factory=list, description="全部监控规则的最新条目")
+    channel_id: Optional[int] = Field(None, description="回显请求的通道号 (传了才有)")
+    current: Optional[Dict[str, Any]] = Field(None, description="该通道当前 SN 条目 (传 channel_id 才有)")
+
+
+@router.get(
+    "/scanner-bypass/status",
+    summary="查旁路扫码 SN 状态",
+    response_model=ScannerBypassStatusOut,
+)
 def scanner_bypass_status(
-    channel_id: Optional[int] = Query(None),
+    channel_id: Optional[int] = Query(None, description="通道号；不传返回全部通道整体状态"),
 ) -> Dict[str, Any]:
     """扫码器旁路当前 SN 状态 (只读后台监控线程内存, 不触发目录扫描).
 

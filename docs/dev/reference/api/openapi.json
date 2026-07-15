@@ -8130,6 +8130,110 @@
     "title": "ScanPairStopRequest",
     "type": "object"
    },
+   "ScannerBypassStatusOut": {
+    "description": "旁路 SN 监控状态快照 (内存态, 只读)。",
+    "properties": {
+     "by_channel": {
+      "additionalProperties": true,
+      "description": "通道号 → 当前 SN 条目",
+      "title": "By Channel",
+      "type": "object"
+     },
+     "channel_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "回显请求的通道号 (传了才有)",
+      "title": "Channel Id"
+     },
+     "current": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "该通道当前 SN 条目 (传 channel_id 才有)",
+      "title": "Current"
+     },
+     "default": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "未绑通道规则的默认 SN 条目",
+      "title": "Default"
+     },
+     "entries": {
+      "description": "全部监控规则的最新条目",
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "title": "Entries",
+      "type": "array"
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "监控模块异常信息 (正常为空)",
+      "title": "Error"
+     },
+     "poll_interval_sec": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "扫描间隔秒",
+      "title": "Poll Interval Sec"
+     },
+     "polled_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "最近一轮扫描时间 (ISO)",
+      "title": "Polled At"
+     },
+     "running": {
+      "description": "监控线程是否在跑",
+      "title": "Running",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "running"
+    ],
+    "title": "ScannerBypassStatusOut",
+    "type": "object"
+   },
    "ScannerCreate": {
     "properties": {
      "auto_create_workpiece": {
@@ -15774,6 +15878,58 @@
      }
     },
     "summary": "List All Logs",
+    "tags": [
+     "export-realtime"
+    ]
+   }
+  },
+  "/api/v1/export/scanner-bypass/status": {
+   "get": {
+    "description": "扫码器旁路当前 SN 状态 (只读后台监控线程内存, 不触发目录扫描).\n\n- 不传 channel_id: 返回整体状态 (by_channel + default + entries).\n- 传 channel_id: 额外返回 current = 该通道当前 entry (无专属规则回退 default).\n\n出错隔离: 监控模块任何异常都返回 running=false + error, 不 500.",
+    "operationId": "scanner_bypass_status_api_v1_export_scanner_bypass_status_get",
+    "parameters": [
+     {
+      "description": "通道号；不传返回全部通道整体状态",
+      "in": "query",
+      "name": "channel_id",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "通道号；不传返回全部通道整体状态",
+       "title": "Channel Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ScannerBypassStatusOut"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "查旁路扫码 SN 状态",
     "tags": [
      "export-realtime"
     ]

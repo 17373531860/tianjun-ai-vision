@@ -1044,3 +1044,11 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 - 中途遮挡断裂 → 调大规则的 `gone_seconds`（消失确认秒数，0=用全局 gap_tolerance_frames）；区域可配 `anchor` 跟随锚点类别平移缩放（与 label_splits 的 anchor 同构）。
 - 频闪自动诊断：该模式与 custom_mix 共用 `_diag_flicker_sample` 采样体，翻转超阈值自动落 `backend/diag_flicker/*.json`（已 gitignore），排"检测框一闪一闪"先看转储。
 - 回归：`tests/test_region_events.py`（引擎单测）+ `tests/test_region_events_pipeline.py`（管线）+ `tests/e2e_browser/test_region_events_monitor.py`（UI）。
+
+---
+
+## v3.38.0 补充：收尾落库异步化后的排查要点
+
+- 周期收尾"框卡死/画面顿一下"已治本：落库出推理线程（`source_persist_worker.py`，每通道 FIFO 队列）。若复发，先确认是否有人把新 DB 写塞回了推理线程。
+- 数据页 cycle/step "晚到"零点几秒属正常（异步落库）；怀疑丢数据 → 设 `TIANJUN_SYNC_PERSIST=1` 复跑对照。
+- 落库线程错误隔离：单任务失败只记日志不倒线程——排"记录缺失"先 grep 后端日志 persist 关键字。

@@ -362,5 +362,6 @@ JSON 子键链: <set_project_config + 视图 + Navbar 默认值> （仅 JSON）
 | v3.29.0 | `mes_models.py` 加 `external_active_alarms`（入站在途报警台账）|
 | v3.30.0 | `packaging_flow_configs` 加 `name_match_strict_boundary BOOLEAN DEFAULT 0` |
 | v3.31.0 | 新文件 `weighing_models.py` + `weighing_records` 表（称重投料逐件台账，`main.py` 显式 import + create_all，无 ALTER）|
+| v3.38.0 | `step_records.cycle_id` + `video_clips.related_id` 加索引（热路径查询，迁移 `m0001_hot_path_indexes.py`——版本化迁移体系第一号，新迁移照它抄）|
 
 > 完整 changelog 在 `docs/changelog/` 下，每个 .md 都标了 BUG/FEAT/HOTFIX。

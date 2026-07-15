@@ -241,6 +241,7 @@ export function getBackendHost() {
 - `POST /export/preview` `/export/render` — 预览/下载（`fmt=txt|csv|docx|xlsx|pdf`，**前端 `export.js` 注释只列了 txt/csv，是过时的**）
 - `GET/POST/PUT/DELETE /export/realtime-rules` `/realtime-rules/{id}/toggle` `/test-run` `/logs`
 - `GET /export/run-logs` — 全部触发日志
+- `GET /export/scanner-bypass/status` — 扫码器旁路 SN 监控状态（v3.38，只读内存快照，可带 `channel_id`；前端 `export.js` 有封装）
 
 ---
 

@@ -350,6 +350,8 @@ frontend/src/
 - **`backup_database()` 路径**：`os.path.abspath(UPLOAD_DIR + "/../sql_app.db")` 拼接相对父目录，部署目录变化时容易拼错；如果客户改 `TIANJUN_DATA_DIR` 要确认 UPLOAD_DIR 同步迁移。
 - **班次过滤跨夜**：`start_hour > end_hour` 走第二天 + 当天联合查询，sessions 列表会展示两天的日期；不是 bug 是设计。
 - **操作员 NULL 含义有两种**：历史数据无此字段 vs 当时未选操作员；筛选时 `operator_id IS NULL` 把两类都吞了，看不出区别。
+- **v3.38 起 cycle/step 落库是异步的**（`source_persist_worker.py` 每通道 FIFO 线程）：数据页记录比事件晚到亚秒级属正常；怀疑丢记录设 `TIANJUN_SYNC_PERSIST=1` 复跑对照，并 grep 后端日志 persist 关键字（落库线程单任务失败只记日志不倒线程）。清理走分批小事务 + 文件删除在 commit 后（`sessions_maintenance.py`）。
+- **v3.38 起班次标签支持自定义**：不再只有 day/night，`sessions.py` 按项目配置班次列表过滤；班次解析入口 `resolve_shift_label`（跨零点支持），回归 `tests/test_shift_resolution.py`。
 
 ---
 
