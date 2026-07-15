@@ -74,7 +74,7 @@ def swab_reload_config():
 
 @router.get("/templates")
 def swab_templates():
-    """获取对齐 demo 的项目配置模板（视角1/视角2）+ 耗材默认配置。"""
+    """获取客户真值标定的项目配置模板（视角1/视角2）+ 耗材默认配置。"""
     return get_templates()
 
 

@@ -128,17 +128,39 @@ def snapshot_for_cycle_start(db: Session,
             d = g["input_dir"]
             key = _normalize_dir(d)
             try:
-                # 直接调底层入口, 显式传 wait_stable / max_age
-                filename = latest_input_filename(
-                    d,
-                    wait_stable_ms=g["wait_stable_ms"],
-                    max_age_sec=g["max_age_sec"],
-                )
-                text = latest_input_text(
-                    d,
-                    wait_stable_ms=g["wait_stable_ms"],
-                    max_age_sec=g["max_age_sec"],
-                )
+                filename = None
+                text = ""
+                mtime = None
+                read_via = None
+
+                # 内存优先: 先读旁路监控线程的缓存 (cycle_start 不扫目录、不等文件稳定).
+                # 监控无此目录 / 未预热 / 状态非 ok 时, 回退到直接 glob 兜底.
+                try:
+                    from backend.services.scanner_bypass_monitor import (
+                        get_current_for_dir,
+                    )
+                    mem = get_current_for_dir(key)
+                except Exception:
+                    mem = None
+                if mem and mem.get("status") == "ok" and mem.get("filename"):
+                    filename = mem.get("filename")
+                    text = mem.get("text") or ""
+                    mtime = mem.get("mtime")
+                    read_via = "monitor"
+                else:
+                    # 回退: 直接调底层入口, 显式传 wait_stable / max_age
+                    filename = latest_input_filename(
+                        d,
+                        wait_stable_ms=g["wait_stable_ms"],
+                        max_age_sec=g["max_age_sec"],
+                    )
+                    text = latest_input_text(
+                        d,
+                        wait_stable_ms=g["wait_stable_ms"],
+                        max_age_sec=g["max_age_sec"],
+                    ) if filename else ""
+                    read_via = "glob"
+
                 if not filename:
                     summary["skipped"] += 1
                     summary["details"].append({
@@ -149,24 +171,33 @@ def snapshot_for_cycle_start(db: Session,
                           f"目录 {d} 无可用文件 (规则 {g['rule_ids']})", flush=True)
                     continue
 
-                # mtime (best-effort)
-                mtime = None
-                try:
-                    mtime = os.path.getmtime(os.path.join(d, filename))
-                except Exception:
-                    pass
+                # mtime (best-effort) — 内存路径已带 mtime, glob 路径这里补
+                if mtime is None:
+                    try:
+                        mtime = os.path.getmtime(os.path.join(d, filename))
+                    except Exception:
+                        pass
 
+                now_iso = datetime.now().isoformat()
                 snapshots[key] = {
+                    # v3.7.2 起字段 (向后兼容, 勿删)
                     "filename": filename,
                     "text": text,
                     "mtime": mtime,
-                    "snapshot_at": datetime.now().isoformat(),
+                    "snapshot_at": now_iso,
                     "rule_ids": g["rule_ids"],
+                    # 旁路 SN 增补字段
+                    "serial_no": os.path.splitext(filename)[0],
+                    "input_dir": d,
+                    "locked_at": now_iso,
+                    "source": "scanner_bypass",
+                    "read_via": read_via,
                 }
                 summary["taken"] += 1
                 summary["details"].append({
                     "input_dir": d, "rule_ids": g["rule_ids"],
                     "filename": filename, "text_preview": (text or "")[:50],
+                    "read_via": read_via,
                 })
             except Exception as e:
                 summary["errors"] += 1

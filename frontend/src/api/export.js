@@ -131,6 +131,13 @@ export const listAllRunLogs = (params = {}) => {
   return api.get('/export/run-logs', { params });
 };
 
+// 扫码器旁路当前 SN 状态 (只读后台监控线程内存, 不触发目录扫描)
+// 传 channel_id 时额外返回 current = 该通道当前 entry
+export const getScannerBypassStatus = (channelId = null) => {
+  const params = channelId != null ? { channel_id: channelId } : {};
+  return api.get('/export/scanner-bypass/status', { params });
+};
+
 // ============ 定时导出规则 (v3.8.x) ============
 
 export const listScheduledRules = (params = {}) => {

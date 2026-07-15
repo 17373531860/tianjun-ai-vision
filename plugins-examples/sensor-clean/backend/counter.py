@@ -1,7 +1,7 @@
-"""逐帧产品计数器 —— 复刻 detect6.py 的自适应轨迹追踪算法（现场实测更准）。
+"""逐帧产品计数器 —— 实现 detect9.py 的自适应轨迹追踪业务语义。
 
 与早期 demo（detect（视角1用）.py 的"进入→稳定→离开, 离开才计数"）不同,
-detect6 的核心是「移动即计数 + 帧级硬锁」:
+detect9 的核心是「移动确认即计数 + 强制锁」:
 
 1. 锚动作框一出现就建跟踪, 记首次中心。
 2. 跟踪中只要「首尾直线位移 >= move_threshold」且「连续 move_confirm_frames 帧
@@ -14,10 +14,10 @@ detect6 的核心是「移动即计数 + 帧级硬锁」:
 为什么更准: 帧级硬锁对实时丢帧天然鲁棒 —— 计数后那段帧任何抖动/丢帧/重检都被
 忽略, 不像"离开才计数"在产品离开瞬间容易被丢帧带偏(并件 → 漏计)。
 
-坐标改造: detect6 用像素坐标 + 像素阈值 (MOVE=20px / LOCK_SPATIAL=25px @1728 宽),
-本模块拿到的是主程序归一化坐标 (0-1), 故移动/位置阈值改用归一化值
-(20/1728≈0.0116, 25/1728≈0.0145), 由配置覆盖。时间锁走真实时钟 (与 detect6 一致),
-帧数类参数 (move_confirm / lost / force_lock) 按帧计数不依赖分辨率。
+坐标改造: detect9 在 960px 显示宽度上使用 MOVE=20px / LOCK_SPATIAL=25px；
+本模块接收主程序归一化坐标 (0-1)，生产配置因此使用 20/960、25/960。
+类构造器保留旧版兼容回退值，插件 preset 会显式覆盖为客户真值标定参数；
+离场和强锁优先走视频时间轴，避免实时推理丢帧改变计数语义。
 """
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def det_in_roi(det, polygon):
 
 
 class ProductCounter:
-    """逐帧产品计数器 (复刻 detect6 移动即计数 + 帧硬锁算法)。
+    """逐帧产品计数器（detect9 移动确认计数 + 客户真值时间锁）。
 
     用法: 每帧调 update(anchor_det, now, paused) — anchor_det 为本帧锚动作框
     (无则 None)。返回本帧是否新计了一件产品。
@@ -212,17 +212,16 @@ class ProductCounter:
 
 
 class SwabChangeWindow:
-    """换棉签动作稳定性窗口 (照搬 demo SwabChangeProcessor + v1.1.0 防抖 gate)。
+    """把换棉签检测框聚合成一次性的有效动作段。
 
     用法: 每帧调 feed(has_change, now) — has_change 为本帧是否检出换棉签动作。
-    返回是否触发一次"有效更换"。判定 = 稳定窗口内累计 >= stable_frames 帧
-    + 本次连续动作段已持续 >= min_sustain_sec 秒 + 距上次触发超过 lock_time 去重。
+    返回是否触发一次"有效更换"。判定 = 当前帧仍检出 + 稳定窗口内累计
+    >= stable_frames 帧 + 本动作段持续 >= min_sustain_sec 秒。
 
-    防抖背景 (v1.1.0): 真值统计显示换棉签框偶发 1~3 帧的瞬时误检 (位移仅几像素),
-    旧"稳定2帧即解锁"会把这些当成换棉签多算。min_sustain_sec 要求动作段在物理
-    时间上持续够久才算 — 用秒而非帧数, 现场任意帧率 (i5+3060 大图实时常掉到
-    15~25fps) 都一致鲁棒。gap_sec 容忍动作中途短暂丢框 (否则一次动作被切成多段)。
-    默认 min_sustain_sec=0.0 = 退化为旧行为 (向后兼容); 生产配置层给非零值启用。
+    v1.4.3 动作段状态机保证一个连续动作最多命中一次；必须连续缺框超过 gap_sec
+    才重新武装。lock_time 只防相邻独立动作的边界抖动，不再承担整段去重。
+    min_sustain_sec 用真实秒数过滤瞬时误检，避免处理帧率变化改变物理语义。
+    类默认 min_sustain_sec=0 保留直接调用兼容性，生产配置使用真值标定值。
     """
 
     def __init__(self, window_sec=0.35, lock_time=2.0, stable_frames=2,
@@ -233,32 +232,49 @@ class SwabChangeWindow:
         self.min_sustain_sec = float(min_sustain_sec)
         self.gap_sec = float(gap_sec)
         self._win = []
-        self._last_emit = 0.0
+        self._last_emit = None
         self._seg_start = None   # 当前连续动作段起始时间戳
         self._last_seen = None   # 上一帧检出换棉签的时间戳
+        self._segment_emitted = False
 
     def feed(self, has_change, now):
+        """接收一帧检测状态，命中有效新动作时返回 True。
+
+        Context: 在 detection_frame 帧循环线程内调用；本对象按通道独占且不持锁；
+                 不阻塞、不做 I/O，异常由外层插件 hook 隔离。
+        """
         if has_change:
-            self._win.append(now)
-            # 段追踪: 距上次检出超 gap_sec 视为新动作段
-            if self._seg_start is None or \
-                    (self._last_seen is not None and now - self._last_seen > self.gap_sec):
+            is_new_segment = self._seg_start is None or self._last_seen is None \
+                or now - self._last_seen > self.gap_sec
+            if is_new_segment:
+                self._win = []
                 self._seg_start = now
+                self._segment_emitted = False
+            self._win.append(now)
             self._last_seen = now
+        elif self._last_seen is not None and now - self._last_seen > self.gap_sec:
+            # 已真实离场：清掉旧窗口并重新武装；短时丢框仍属于同一动作段。
+            self._win = []
+            self._seg_start = None
+            self._last_seen = None
+            self._segment_emitted = False
         self._win[:] = [t for t in self._win if now - t < self.window_sec]
         stable = len(self._win) >= self.stable_frames
         sustained = self._seg_start is not None and \
             (now - self._seg_start) >= self.min_sustain_sec
-        if stable and sustained and now - self._last_emit > self.lock_time:
+        cooled = self._last_emit is None or now - self._last_emit > self.lock_time
+        if has_change and not self._segment_emitted and stable and sustained and cooled:
             self._last_emit = now
+            self._segment_emitted = True
             return True
         return False
 
     def reset(self):
         self._win = []
-        self._last_emit = 0.0
+        self._last_emit = None
         self._seg_start = None
         self._last_seen = None
+        self._segment_emitted = False
 
 
 # ==================== v1.1.0 假动作 / 操作员离开判定 ====================

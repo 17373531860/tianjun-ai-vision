@@ -456,13 +456,17 @@ def _apply_counters(h, config):
 
 
 def _reset_cycle_state(h):
-    """重置当前周期状态 (新配置 → 新周期开始)"""
+    """重置当前周期状态 (新配置 → 新周期开始)
+
+    不清 ng_step_cycle_counts —— 与 step_counts / cycle_times 同属累计统计,
+    只在 reset_stats (Monitor「清零」) 或切换项目 (_reset_cumulative_step_stats) 时归零。
+    待机 → 再开始会 syncProjectConfig, 若在这里清 TOP3 会把当天 NG 步骤排名抹掉。
+    """
     h.current_cycle_steps = []
     h.last_added_step = None
     h.backup_steps_seen_in_cycle = set()
     h.cycle_complete = False
     h.events_log = []
-    h.ng_step_cycle_counts = {}
     h.step_start_time = {}
 
 
@@ -489,6 +493,7 @@ def _reset_cumulative_step_stats(h):
         h.step_visible_seconds = {}
     h.cycle_times = []
     h.ng_cycle_times = []
+    h.ng_step_cycle_counts = {}
     h.last_step_completed_time = None
 
 

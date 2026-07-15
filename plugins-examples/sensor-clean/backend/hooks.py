@@ -1,12 +1,12 @@
-"""耗材寿命约束 + 跨视角联动状态机（逐帧复刻 demo）。
+"""耗材寿命约束 + 跨视角联动状态机（按客户真值视频标定）。
 
 挂在主程序 detection_frame 钩子上（observe-only，不改主程序状态机）：
-- 视角1（计数通道）：按 demo ProductCounter 逐帧跑锚动作生命周期 → 离开计 1 件
-  → 棉签已用 +1；达 K → 锁定 + 报警提示（锁定后暂停计数，paused 同 demo）。
-- 视角2（换棉签通道）：按 demo 换棉签稳定窗口检出更换动作 → 清零解锁。
+- 视角1（计数通道）：ProductCounter 逐帧跑锚动作生命周期 → 移动确认计 1 件
+  → 棉签已用 +1；第 K 件仍合格并提示换棉签，第 K+1 件起逐件判 NG。
+- 视角2（换棉签通道）：动作段状态机检出一次有效更换 → 当前棉签清零。
 
-接管检测计数：与 A 重构式不同，计数完全由插件按 demo 算法逐帧自计算，
-不再依赖主程序周期事件，因此能逐件复刻 demo 的计数精度。
+接管检测计数：计数完全由插件按客户真值标定算法逐帧自计算，
+不再依赖主程序周期事件，因此能按视频真实时间轴稳定逐件计数。
 """
 from __future__ import annotations
 
@@ -34,8 +34,9 @@ CUSTOMER_CODE = "sensor-clean"
 # 命名空间合法 key（write_system_config 要求 plugin_<customer_code 下划线化>_ 前缀）
 CONFIG_KEY = "plugin_sensor_clean_config"
 
-# 默认配置（detect6 算法参数，阈值归一化 @1728 宽；与 preset.SWAB_CONFIG 保持一致）
+# 默认配置（detect9 业务语义 + 客户真值标定；与 preset.SWAB_CONFIG 保持一致）
 DEFAULT_CONFIG = {
+    "_config_revision": 2,                    # v1.4.3: 旧换棉签门槛一次性迁移版本
     "count_channels": [0],                    # 视角1 计数通道
     "count_anchor_label": "查看产品有无脏污",   # 视角1 锚动作标签 (detect9(1) cls0, 如"正常产品")
     # v1.4.0 双类别计数许可 (detect9(1) _both_seen 语义, 替换 v1.3.0 同帧门槛):
@@ -55,8 +56,8 @@ DEFAULT_CONFIG = {
     "max_uses_per_swab": 11,                  # 一根棉签最多擦几个产品 (K)
     # 视角2 换棉签解锁判定 (独立于视角1 计数; 不用 detect7 移动即计数 — 真值统计证明它
     # 对小幅换棉签动作严重漏检, 改用"出现稳定 + 持续时长"判定, 更贴真实换棉签次数)
-    "swab_lock_time": 2.0,                    # 两次解锁最小间隔(秒), 防一次动作重复解锁
-    "swab_min_sustain_sec": 0.0,             # 动作段最短持续(秒), 默认0=照搬 demo 不防抖; 现场要滤瞬时误检调大(如0.12), 用秒跨帧率鲁棒
+    "swab_lock_time": 0.25,                   # 相邻独立动作最小间隔(秒); 连续动作去重由动作段状态机保证
+    "swab_min_sustain_sec": 0.12,            # 动作段最短持续(秒), 客户视角2真值标定值
     "swab_gap_sec": 0.2,                      # 动作段内允许的丢框间隔(秒), 超过算新段
     "alarm_event": "",                        # (兼容老配置) 锁定时直接触发的报警事件类型 (空=不触发)
     # —— v1.1.0 三判定 → 主程序事件 (走 host.trigger_event, 报警/计数器/Toast 全由主程序联动) ——
@@ -85,17 +86,14 @@ DEFAULT_CONFIG = {
     # 纵向位移权重: demo 像素域欧氏距离折算归一化域时纵向要乘 (高/宽),
     # 1728x1080 与 16:9 现场取 0.625/0.5625; 1.0=等权 (v1.2.0 老行为)
     "dist_y_weight": 0.625,
-    # 计数后强制锁定帧数 (detect7(1) 原值 40)。源帧率 <= 推理速度(约56fps)时不丢帧、
-    # 实时时钟=视频时间, 40 即对齐基准; 高帧率源(如60fps test.mp4)丢帧需调大。
+    # 帧数制回退值；生产默认由 force_lock_sec 按真实时间控制，避免处理帧率改变语义。
     "force_lock_frames": 40,
     # v1.4.0 时间制阈值 (>0 启用并替代上面对应帧数制; 0=帧数制老行为)。
     # 主程序实时推理丢帧 (如 30fps 源 23fps 推理), 帧数制会让跟踪存活过久 →
     # 短暂离场没被确认、重建后位移累积 → 小幅度视频多计 (真值 2 实测 4~5)。
-    # 时间制按真实缺席时长判离场, 跨帧率语义一致。v1.4.2 定稿 0.25s:
-    # 18~21fps 处理速率下正好复刻 demo「缺席 4 帧存活 / 5 帧销毁」语义,
-    # 客户双真值视频主环境实测逐件对齐 (正常=38, 小幅度=2, 与 demo 一致)。
-    "lost_gone_sec": 0.25,                    # 锚缺席 >= N 秒确认离开 (0=用帧数制)
-    "force_lock_sec": 1.6,                    # 计数后强锁 N 秒 (0=用帧数制)
+    # v1.4.3 按视频真实时间轴重标，正常=38、小幅度=2；不再依赖特定播放速度。
+    "lost_gone_sec": 0.15,                    # 锚缺席 >= N 秒确认离开 (0=用帧数制)
+    "force_lock_sec": 1.4,                    # 计数后强锁 N 秒 (0=用帧数制)
     # v1.4.1 插件内置信度地板 (detect9(1) CONF_THRES=0.7)。主程序把监控页
     # 置信度滑条以下的框全喂给钩子, 滑条调低 (如 0.25) 时低置信度误检会解锁
     # 许可 + 抖动跟踪 → 小幅度视频实测多计到 15 件。计数语义不该受滑条摆布,
@@ -158,17 +156,57 @@ def _as_bool(val, default=False):
 
 
 def _load_config():
+    """读取并合并插件配置，按修订号迁移旧换棉签出厂值。"""
     global _config_cache
     if _config_cache is not None:
         return _config_cache
     cfg = dict(DEFAULT_CONFIG)
+    persisted = {}
     if _HOST is not None:
         try:
             raw = _HOST.read_system_config(CONFIG_KEY)
             if raw:
-                cfg.update(json.loads(raw) if isinstance(raw, str) else raw)
+                decoded = json.loads(raw) if isinstance(raw, str) else raw
+                if isinstance(decoded, dict):
+                    persisted = decoded
+                    cfg.update(persisted)
         except Exception as e:
             log.warning("[%s] 读配置失败, 用默认: %s", CUSTOMER_CODE, e)
+
+    # v1.4.3: v1.4.2 一键应用会把 0s/2s 旧出厂值落盘，单改 DEFAULT_CONFIG
+    # 无法覆盖已部署客户。revision<2 时只迁移仍等于旧出厂值的字段；升级后用户
+    # 若显式回调为 0，可随 revision=2 原样保留。
+    try:
+        revision = int(persisted.get("_config_revision", 1))
+    except (TypeError, ValueError):
+        revision = 1
+    if revision < 2:
+        try:
+            if float(persisted.get("swab_min_sustain_sec", 0.0) or 0.0) <= 0.0:
+                cfg["swab_min_sustain_sec"] = DEFAULT_CONFIG["swab_min_sustain_sec"]
+        except (TypeError, ValueError):
+            cfg["swab_min_sustain_sec"] = DEFAULT_CONFIG["swab_min_sustain_sec"]
+        try:
+            legacy_lock = float(persisted.get("swab_lock_time", 2.0))
+            if abs(legacy_lock - 2.0) < 1e-9:
+                cfg["swab_lock_time"] = DEFAULT_CONFIG["swab_lock_time"]
+        except (TypeError, ValueError):
+            cfg["swab_lock_time"] = DEFAULT_CONFIG["swab_lock_time"]
+        try:
+            legacy_lost = float(persisted.get("lost_gone_sec", 0.25))
+            if abs(legacy_lost - 0.25) < 1e-9:
+                cfg["lost_gone_sec"] = DEFAULT_CONFIG["lost_gone_sec"]
+        except (TypeError, ValueError):
+            cfg["lost_gone_sec"] = DEFAULT_CONFIG["lost_gone_sec"]
+        try:
+            legacy_force = float(persisted.get("force_lock_sec", 1.6))
+            if abs(legacy_force - 1.6) < 1e-9:
+                cfg["force_lock_sec"] = DEFAULT_CONFIG["force_lock_sec"]
+        except (TypeError, ValueError):
+            cfg["force_lock_sec"] = DEFAULT_CONFIG["force_lock_sec"]
+        cfg["_config_revision"] = 2
+        if persisted:
+            log.info("[%s] 配置迁移 v1→v2: 三段视频真值计数门槛已启用", CUSTOMER_CODE)
     cfg["operator_absent_enabled"] = _as_bool(
         cfg.get("operator_absent_enabled"), DEFAULT_CONFIG["operator_absent_enabled"]
     )
@@ -381,7 +419,7 @@ def apply_preset_config():
             _HOST.write_system_config(
                 CONFIG_KEY,
                 json.dumps(SWAB_CONFIG, ensure_ascii=False),
-                description="传感器清洁插件 计数/耗材参数（对齐 demo 默认，可改）",
+                description="传感器清洁插件计数/耗材参数（三段客户真值标定，可改）",
             )
             written = True
         except Exception as e:
@@ -560,8 +598,8 @@ def _get_swab_window(cfg, channel_id):
     w = _swab_windows.get(channel_id)
     if w is None:
         w = SwabChangeWindow(
-            lock_time=float(cfg.get("swab_lock_time", 2.0)),
-            min_sustain_sec=float(cfg.get("swab_min_sustain_sec", 0.0)),
+            lock_time=float(cfg.get("swab_lock_time", 0.25)),
+            min_sustain_sec=float(cfg.get("swab_min_sustain_sec", 0.12)),
             gap_sec=float(cfg.get("swab_gap_sec", 0.2)),
         )
         _swab_windows[channel_id] = w

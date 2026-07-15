@@ -903,6 +903,13 @@ def cleanup_on_exit():
         except Exception as _e:
             print(f"[Shutdown] 停止健康探测调度器异常（已忽略）: {_e}", flush=True)
 
+        # 停止扫码器旁路 SN 监控线程
+        try:
+            from backend.services.scanner_bypass_monitor import stop_monitor
+            stop_monitor()
+        except Exception as _e:
+            print(f"[Shutdown] 停止旁路 SN 监控异常（已忽略）: {_e}", flush=True)
+
         # v2.7.3: 兜底熄灭所有通道报警灯并断开串口，避免主进程被 KILL 时灯塔残留
         try:
             from backend.api.alarm import alarm_router
@@ -1079,6 +1086,21 @@ def _start_mes_health_probe():
 
 
 _start_mes_health_probe()
+
+
+# 扫码器旁路 SN 监控: 后台守护线程, 定期扫描 ExportRealtimeRule.input_dir 缓存当前 SN
+# (前端 Monitor 显示 + cycle_start 内存优先锁快照)。无相关规则时线程空转极轻量。
+def _start_scanner_bypass_monitor():
+    if os.environ.get("BACKEND_SKIP_INIT"):
+        return
+    try:
+        from backend.services.scanner_bypass_monitor import start_monitor
+        start_monitor()
+    except Exception as e:
+        print(f"[ScannerBypassMonitor] 启动失败 (已隔离, 主程序继续): {e}")
+
+
+_start_scanner_bypass_monitor()
 
 
 @app.get("/")
