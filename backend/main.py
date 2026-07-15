@@ -1141,8 +1141,8 @@ def shutdown_step(step: str):
             return {"status": "success", "step": step}
         
         elif step == "end_cycle":
-            # 如果有进行中的周期，结束它
-            if video_manager.current_cycle_id:
+            # 如果有进行中的周期，结束它 (v3.38: 看 uuid, id 由落库线程回填)
+            if getattr(video_manager, 'current_cycle_uuid', None) or video_manager.current_cycle_id:
                 try:
                     video_manager.end_cycle(is_good=False, reason="程序关闭")
                 except Exception as _e:

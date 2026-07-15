@@ -1,7 +1,7 @@
 # 数据库表参考
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-07-12）
+> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-07-15）
 > **单一事实源**：SQLAlchemy ORM（Base.metadata）。字段含义看模型源文件行内注释；
 > 迁移历史看 backend/db/migrations/ 与 backend/main.py 的 migrate_database。
 
@@ -864,7 +864,7 @@ ORM 类 `StepRecord`，定义于 `backend/models/models.py`。
 |---|---|---|---|
 | `id` | INTEGER | PK INDEX |  |
 | `record_uuid` | VARCHAR(50) | UNIQUE INDEX NOT NULL |  |
-| `cycle_id` | INTEGER | FK→detection_cycles.id |  |
+| `cycle_id` | INTEGER | FK→detection_cycles.id INDEX |  |
 | `step_id` | VARCHAR(50) |  |  |
 | `step_label` | VARCHAR(100) | NOT NULL |  |
 | `step_name` | VARCHAR(100) |  |  |
@@ -947,7 +947,7 @@ ORM 类 `VideoClip`，定义于 `backend/models/models.py`。
 | `id` | INTEGER | PK INDEX |  |
 | `video_uuid` | VARCHAR(50) | UNIQUE INDEX NOT NULL |  |
 | `clip_type` | VARCHAR(20) | NOT NULL |  |
-| `related_id` | INTEGER |  |  |
+| `related_id` | INTEGER | INDEX |  |
 | `result` | VARCHAR(8) |  |  |
 | `file_path` | VARCHAR(500) | NOT NULL |  |
 | `file_name` | VARCHAR(200) |  |  |

@@ -121,41 +121,59 @@ def _get_cleanup_settings_from_db():
         db.close()
 
 
+# v3.38 事务卫生: 每批删这么多个周期就提交一次, 把写锁窗口钉在毫秒级。
+# 批越大单事务越久 → 推理线程写步骤记录被堵的风险越大 (川南"框冻结"同型隐患)。
+_CLEANUP_BATCH_CYCLES = 200
+
+
 def _delete_cycles_by_filter(db, cycle_filter):
     """删除满足 cycle_filter 的周期：连同其步骤记录、周期/步骤录像文件与录像记录一起删。
 
     以"周期"为归属单位删，避免历史"录像按独立时间删 → 周期记录删了录像还在 / 录像记录指向
     已删周期"的孤儿问题。返回 (cycle_count, step_count, video_count, deleted_files)。
+
+    v3.38 事务卫生 (川南"框冻结"第二刀, 与网关逐连接提交同一军规):
+    - 分批删 + 逐批提交: 旧实现把全部过期周期攒在一个大事务里, 写锁被握住秒级,
+      推理线程此刻写步骤/周期记录会撞 busy_timeout → 前端检测框冻结。
+    - 文件删除移出事务: 磁盘 I/O (慢盘/杀毒扫描可达秒级) 绝不在持有写锁期间做。
+      提交后进程若崩溃留下的孤儿文件, 由清理流程步骤 2b 的孤儿扫描下一轮自愈
+      (这些文件 mtime 必然已过保留期, 一定命中)。
     """
-    cids = [row[0] for row in db.query(DetectionCycle.id).filter(cycle_filter).all()]
-    if not cids:
+    all_cids = [row[0] for row in db.query(DetectionCycle.id).filter(cycle_filter).all()]
+    if not all_cids:
         return 0, 0, 0, 0
 
-    deleted_files = 0
-    step_ids = [row[0] for row in db.query(StepRecord.id).filter(
-        StepRecord.cycle_id.in_(cids)
-    ).all()]
+    cycle_count = step_count = video_count = deleted_files = 0
+    for i in range(0, len(all_cids), _CLEANUP_BATCH_CYCLES):
+        cids = all_cids[i:i + _CLEANUP_BATCH_CYCLES]
+        step_ids = [row[0] for row in db.query(StepRecord.id).filter(
+            StepRecord.cycle_id.in_(cids)
+        ).all()]
 
-    # 周期录像 + 步骤录像的物理文件
-    vid_q = db.query(VideoClip).filter(or_(
-        and_(VideoClip.clip_type == 'cycle', VideoClip.related_id.in_(cids)),
-        and_(VideoClip.clip_type == 'step', VideoClip.related_id.in_(step_ids)) if step_ids else False,
-    ))
-    for v in vid_q.all():
-        if v.file_path and os.path.isfile(v.file_path):
-            try:
-                os.remove(v.file_path)
-                deleted_files += 1
-            except Exception as e:
-                print(f"[自动清理] 删除录像文件失败: {v.file_path}, {e}")
+        # 先收集本批录像文件路径 (只读), 行删除提交之后再动磁盘
+        vid_filters = [and_(VideoClip.clip_type == 'cycle', VideoClip.related_id.in_(cids))]
+        if step_ids:
+            vid_filters.append(and_(VideoClip.clip_type == 'step',
+                                    VideoClip.related_id.in_(step_ids)))
+        vid_q = db.query(VideoClip).filter(or_(*vid_filters))
+        file_paths = [v.file_path for v in vid_q.all() if v.file_path]
 
-    video_count = vid_q.delete(synchronize_session=False)
-    step_count = db.query(StepRecord).filter(
-        StepRecord.cycle_id.in_(cids)
-    ).delete(synchronize_session=False)
-    cycle_count = db.query(DetectionCycle).filter(
-        DetectionCycle.id.in_(cids)
-    ).delete(synchronize_session=False)
+        video_count += vid_q.delete(synchronize_session=False)
+        step_count += db.query(StepRecord).filter(
+            StepRecord.cycle_id.in_(cids)
+        ).delete(synchronize_session=False)
+        cycle_count += db.query(DetectionCycle).filter(
+            DetectionCycle.id.in_(cids)
+        ).delete(synchronize_session=False)
+        db.commit()
+
+        for fp in file_paths:
+            if os.path.isfile(fp):
+                try:
+                    os.remove(fp)
+                    deleted_files += 1
+                except Exception as e:
+                    print(f"[自动清理] 删除录像文件失败: {fp}, {e}")
     return cycle_count, step_count, video_count, deleted_files
 
 
@@ -309,13 +327,8 @@ def _perform_auto_cleanup():
                 if not rows:
                     continue
                 stale_cids = [v.related_id for v in rows if v.related_id]
-                for v in rows:
-                    if v.file_path and os.path.isfile(v.file_path):
-                        try:
-                            os.remove(v.file_path)
-                            deleted_files += 1
-                        except Exception as e:
-                            print(f"[自动清理] 删除过期{result}录像失败: {v.file_path}, {e}")
+                # v3.38 事务卫生: 先删行提交放锁, 文件删除 (慢 I/O) 移出事务
+                stale_paths = [v.file_path for v in rows if v.file_path]
                 video_count += vq.delete(synchronize_session=False)
                 if stale_cids:
                     db.query(DetectionCycle).filter(
@@ -324,12 +337,21 @@ def _perform_auto_cleanup():
                         {DetectionCycle.video_path: None, DetectionCycle.video_id: None},
                         synchronize_session=False,
                     )
-            db.commit()
+                db.commit()
+                for fp in stale_paths:
+                    if os.path.isfile(fp):
+                        try:
+                            os.remove(fp)
+                            deleted_files += 1
+                        except Exception as e:
+                            print(f"[自动清理] 删除过期{result}录像失败: {fp}, {e}")
 
         # 2. 会话级清理：过了全局保留期、且名下已无剩余周期的会话才删（连带会话录像）。
+        # v3.38 事务卫生: 行删除逐会话提交 (放锁), 录像文件删除攒到提交后统一做。
         old_sessions = db.query(DetectionSession).filter(
             DetectionSession.start_time < base_cutoff
         ).all()
+        session_video_paths = []
         for s in old_sessions:
             has_cycle = db.query(DetectionCycle.id).filter(
                 DetectionCycle.session_id == s.id
@@ -339,17 +361,19 @@ def _perform_auto_cleanup():
             svids = db.query(VideoClip).filter(
                 VideoClip.clip_type == 'session', VideoClip.related_id == s.id
             )
-            for v in svids.all():
-                if v.file_path and os.path.isfile(v.file_path):
-                    try:
-                        os.remove(v.file_path)
-                        deleted_files += 1
-                    except Exception as e:
-                        print(f"[自动清理] 删除会话录像失败: {v.file_path}, {e}")
+            session_video_paths.extend(
+                v.file_path for v in svids.all() if v.file_path)
             video_count += svids.delete(synchronize_session=False)
             db.delete(s)
             session_count += 1
         db.commit()
+        for fp in session_video_paths:
+            if os.path.isfile(fp):
+                try:
+                    os.remove(fp)
+                    deleted_files += 1
+                except Exception as e:
+                    print(f"[自动清理] 删除会话录像失败: {fp}, {e}")
 
         print(f"[自动清理] 数据库: {session_count}个会话, {cycle_count}个周期, {step_count}条步骤, {video_count}个视频记录, {deleted_files}个关联文件")
 
@@ -368,10 +392,18 @@ def _perform_auto_cleanup():
                 (MESCommLog, "MES通讯日志"),
                 (ExternalDeviceLog, "外设日志"),
             ):
-                log_deleted += db.query(LogModel).filter(
-                    LogModel.created_at < log_cutoff
-                ).delete(synchronize_session=False)
-            db.commit()
+                # v3.38 事务卫生: 流水表可积到几十万行, 整表条件删单事务会握锁数秒;
+                # 按主键分批删 + 逐批提交, 每批锁窗口毫秒级。
+                while True:
+                    ids = [r[0] for r in db.query(LogModel.id).filter(
+                        LogModel.created_at < log_cutoff
+                    ).limit(5000).all()]
+                    if not ids:
+                        break
+                    log_deleted += db.query(LogModel).filter(
+                        LogModel.id.in_(ids)
+                    ).delete(synchronize_session=False)
+                    db.commit()
         except Exception as e:
             db.rollback()
             print(f"[自动清理] 清理过程日志失败: {e}")

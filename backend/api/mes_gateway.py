@@ -107,7 +107,17 @@ def _serialize_conn(c):
         "last_sync_at": c.last_sync_at.isoformat() if c.last_sync_at else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        # v3.38 推送熔断器快照 (open=熔断中; 前端连接列表可提示"端点疑似离线")
+        "circuit": _circuit_state_safe(c.id),
     }
+
+
+def _circuit_state_safe(conn_id: int) -> dict:
+    try:
+        from backend.services.mes_gateway import get_mes_gateway
+        return get_mes_gateway().get_circuit_state(conn_id)
+    except Exception:
+        return {"open": False, "fails": 0, "episodes": 0}
 
 
 def _serialize_log(l):
@@ -206,6 +216,12 @@ def update_connection(conn_id: int, body: ConnectionUpdate):
             setattr(conn, field, val)
         db.commit()
         db.refresh(conn)
+        # 改过配置 (可能换了地址/修了鉴权) → 复位熔断器, 立即按新配置重试
+        try:
+            from backend.services.mes_gateway import get_mes_gateway
+            get_mes_gateway().reset_circuit(conn_id)
+        except Exception:
+            pass
         return _serialize_conn(conn)
     except Exception as e:
         db.rollback()
@@ -364,6 +380,14 @@ def test_connection(conn_id: int, body: TestPayload = None):
         payload = adapter.build_payload(test_context, effective_config)
         result = adapter.send(payload, effective_config)
         is_ok = adapter.check_response(result, effective_config)
+
+        # 测试成功 = 端点已恢复, 立即复位该连接的推送熔断器 (若在熔断中)
+        if is_ok:
+            try:
+                from backend.services.mes_gateway import get_mes_gateway
+                get_mes_gateway().reset_circuit(conn_id)
+            except Exception:
+                pass
 
         return {
             "success": is_ok,

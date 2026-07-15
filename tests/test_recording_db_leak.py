@@ -16,6 +16,14 @@ import pytest
 from backend.api.source_recording_api_mixin import RecordingApiMixin
 
 
+class _InlinePersist:
+    """v3.38 落库线程桩: 原地执行作业 (等价 TIANJUN_SYNC_PERSIST=1 同步回退路径),
+    让本测试继续钉"连接必 close"的防泄漏契约。异常隔离由 test_persist_worker 钉。"""
+
+    def submit(self, desc, fn):
+        fn()
+
+
 class _FakeHost(RecordingApiMixin):
     """只搭起 mixin 运行所需的最小宿主状态。"""
 
@@ -26,6 +34,8 @@ class _FakeHost(RecordingApiMixin):
         self.width = 1280
         self.height = 720
         self.current_cycle_id = 1
+        self.current_cycle_uuid = "cyc-uuid-1"
+        self._persist = _InlinePersist()
         self._db_sessions = []  # 记录所有发出去的连接, 用于核查是否都 close 了
 
     def _append_recording_failure(self, *a, **k):
@@ -62,12 +72,16 @@ def test_step_uuid_is_full_length(monkeypatch):
     assert host.step_video_writers["放置产品"]["video_uuid"] == video_uuid
 
 
-def test_stop_step_recording_closes_db_on_commit_failure():
-    """写库 commit 抛异常 (模拟撞号) 时, 连接必 close + rollback, 不泄漏。"""
+def test_stop_step_recording_closes_db_on_commit_failure(monkeypatch):
+    """写库 commit 抛异常 (模拟撞号) 时, 连接必 close, 不泄漏。
+
+    v3.38 起写库走落库作业 (作业内 SessionLocal + try/finally close);
+    Session.close() 自带隐式 rollback, 不再显式断言 rollback 调用。
+    """
     host = _FakeHost()
     db = _make_db()
     db.commit.side_effect = Exception("UNIQUE constraint failed: video_clips.video_uuid")
-    host._get_db_session = lambda: db
+    monkeypatch.setattr("backend.db.database.SessionLocal", lambda: db)
 
     # 预置一个待停止的工步录像
     host.step_video_writers["放置产品"] = {
@@ -84,16 +98,15 @@ def test_stop_step_recording_closes_db_on_commit_failure():
 
     assert result is None, "撞号时应返回 None"
     assert db.closed is True, "连接必须被 close (否则就是泄漏卡顿根因)"
-    db.rollback.assert_called_once()
     # writer 仍被正常移除, 不残留
     assert "放置产品" not in host.step_video_writers
 
 
-def test_stop_step_recording_closes_db_on_success():
+def test_stop_step_recording_closes_db_on_success(monkeypatch):
     """正常路径也必须 close 连接。"""
     host = _FakeHost()
     db = _make_db()
-    host._get_db_session = lambda: db
+    monkeypatch.setattr("backend.db.database.SessionLocal", lambda: db)
 
     host.step_video_writers["检查外观"] = {
         "writer": MagicMock(),

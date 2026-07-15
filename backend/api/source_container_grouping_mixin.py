@@ -290,7 +290,8 @@ class ContainerGroupingMixin:
                     else:
                         print(f"[Container] {box_did} confirmed gone ({bs['gone_frames']}/{gone_confirm_frames})")
                         _sd = self.project_config.get('pipeline_config', {}).get('settle_dedup', False) if self.project_config else False
-                        if _sd and not self.current_cycle_id:
+                        # v3.38: "周期进行中"看 uuid (id 由落库线程回填, 可能短暂为 None)
+                        if _sd and not self.current_cycle_uuid:
                             self.start_cycle()
                         self._settle_box(box_did, expected_items)
             else:

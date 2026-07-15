@@ -192,32 +192,37 @@ class RecordingApiMixin:
                 self.cycle_video_writer = writer
             print(f"[Recording] cycle video started: {filename}")
             
-            # 记录到数据库 (完整 uuid 防唯一约束撞号; try/finally 兜底关连接防泄漏)
+            # 记录到数据库 (完整 uuid 防唯一约束撞号)。
+            # v3.38 RFC: 元数据写库进本通道落库线程 — 周期行由 cycle_start 作业建,
+            # FIFO 保证本作业执行时行已存在; 行定位用 cycle_uuid (id 可能未回填)。
             video_uuid = uuid.uuid4().hex
-            db = self._get_db_session()
-            try:
-                video = VideoClip(
-                    video_uuid=video_uuid,
-                    clip_type='cycle',
-                    related_id=self.current_cycle_id,
-                    file_path=filepath,
-                    file_name=filename,
-                    start_time=datetime.now()
-                )
-                db.add(video)
-                db.commit()
+            _cycle_uuid = getattr(self, 'current_cycle_uuid', None)
+            _start_dt = datetime.now()
 
-                # 更新周期的视频ID
-                cycle = db.query(DetectionCycle).filter(DetectionCycle.id == self.current_cycle_id).first()
-                if cycle:
-                    cycle.video_id = video_uuid
-                    cycle.video_path = filepath
+            def _persist_cycle_video_meta():
+                from backend.db.database import SessionLocal
+                db = SessionLocal()
+                try:
+                    cycle = db.query(DetectionCycle).filter(
+                        DetectionCycle.cycle_uuid == _cycle_uuid).first() if _cycle_uuid else None
+                    video = VideoClip(
+                        video_uuid=video_uuid,
+                        clip_type='cycle',
+                        related_id=cycle.id if cycle else None,
+                        file_path=filepath,
+                        file_name=filename,
+                        start_time=_start_dt
+                    )
+                    db.add(video)
+                    # 更新周期的视频ID
+                    if cycle:
+                        cycle.video_id = video_uuid
+                        cycle.video_path = filepath
                     db.commit()
-            except Exception:
-                db.rollback()
-                raise
-            finally:
-                db.close()
+                finally:
+                    db.close()
+
+            self._persist.submit(f"cycle_video#{video_uuid[:8]}", _persist_cycle_video_meta)
         except Exception as e:
             print(f"[Recording] start cycle recording failed: {e}")
             self._append_recording_failure("cycle", "open_exception", error=str(e))
@@ -337,25 +342,34 @@ class RecordingApiMixin:
             if writer:
                 writer.release()
             
-            # 保存视频信息到数据库 (try/finally 兜底关连接防泄漏)
-            db = self._get_db_session()
-            try:
-                video = VideoClip(
-                    video_uuid=step_video['video_uuid'],
-                    clip_type='step',
-                    related_id=self.current_cycle_id,
-                    file_path=step_video['filepath'],
-                    file_name=step_video['filename'],
-                    start_time=step_video['start_time'],
-                    end_time=datetime.now()
-                )
-                db.add(video)
-                db.commit()
-            except Exception:
-                db.rollback()
-                raise
-            finally:
-                db.close()
+            # 保存视频信息到数据库。
+            # v3.38 RFC: 进本通道落库线程 (推理线程不再等写锁); 归属周期用
+            # cycle_uuid 在作业内解析 (id 可能未回填)。
+            _cycle_uuid = getattr(self, 'current_cycle_uuid', None)
+            _vinfo = dict(step_video)
+            _end_dt = datetime.now()
+
+            def _persist_step_video_meta():
+                from backend.db.database import SessionLocal
+                db = SessionLocal()
+                try:
+                    cycle_row = db.query(DetectionCycle.id).filter(
+                        DetectionCycle.cycle_uuid == _cycle_uuid).first() if _cycle_uuid else None
+                    video = VideoClip(
+                        video_uuid=_vinfo['video_uuid'],
+                        clip_type='step',
+                        related_id=cycle_row.id if cycle_row else None,
+                        file_path=_vinfo['filepath'],
+                        file_name=_vinfo['filename'],
+                        start_time=_vinfo['start_time'],
+                        end_time=_end_dt
+                    )
+                    db.add(video)
+                    db.commit()
+                finally:
+                    db.close()
+
+            self._persist.submit(f"step_video#{_vinfo['video_uuid'][:8]}", _persist_step_video_meta)
             
             print(f"[Recording] step video stopped: {step_label}")
             return {

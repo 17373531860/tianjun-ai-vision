@@ -32,6 +32,8 @@ def _make_vsm(rem_enabled=True, allow_step=True):
     }
     v._ng_remediation = {'enabled': rem_enabled, 'allow_step': allow_step, 'allow_count': True}
     v.current_cycle_id = 123
+    # v3.38: "周期进行中"守门看 uuid (defer 守门也改成了 uuid), 桩上必须给
+    v.current_cycle_uuid = 'rem-uuid1'
     v.current_cycle_number = 1
     v.cycle_start_time = None  # 跳过 CT 记录
     v.current_cycle_steps = ['A']  # 缺 B
@@ -42,8 +44,9 @@ def _make_vsm(rem_enabled=True, allow_step=True):
 
     def fake_end_cycle(is_good, event_id=None, event_name=None, reason=None):
         calls['end_cycle'].append({'is_good': is_good, 'reason': reason})
-        # 模拟真实 end_cycle: 周期结算后 current_cycle_id 清零
+        # 模拟真实 end_cycle: 周期结算后周期句柄清零
         v.current_cycle_id = None
+        v.current_cycle_uuid = None
 
     def fake_alarm(eid):
         calls['alarm'].append(eid)
@@ -51,6 +54,7 @@ def _make_vsm(rem_enabled=True, allow_step=True):
     def fake_discard():
         calls['discard'] += 1
         v.current_cycle_id = None
+        v.current_cycle_uuid = None
 
     def fake_clear():
         calls['clear'] += 1

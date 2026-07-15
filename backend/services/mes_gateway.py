@@ -123,6 +123,98 @@ class MESGateway:
     def __init__(self):
         self.enabled = True
         self._extra_fields: dict[int, dict] = {}
+        # v3.38 推送熔断器 (内存态, 按连接 id):
+        # {conn_id: {"fails": 连续失败数, "open_until": 熔断截止时间戳, "episodes": 累计熔断次数}}
+        # 端点不在线时旧行为是每个周期傻等完整超时 (默认 30s×重试), 白耗 MES 工作
+        # 线程、拖慢工件统计落库。熔断后冷却期内直接跳过, 到点放一次探测请求,
+        # 成功自动恢复。默认开 (阈值 5 / 冷却 30s), 连接配置可改/可关。
+        self._cb_state: dict[int, dict] = {}
+
+    # ==================== 推送熔断器 ====================
+    @staticmethod
+    def _cb_config(config: dict) -> tuple:
+        """返回 (enabled, fail_threshold, cooldown_sec)。"""
+        return (
+            bool(config.get("cb_enabled", True)),
+            max(int(config.get("cb_fail_threshold", 5) or 5), 1),
+            max(float(config.get("cb_cooldown_sec", 30) or 30), 1.0),
+        )
+
+    def _cb_should_skip(self, db, conn, config: dict, event_type: str) -> bool:
+        """熔断打开且未到探测时间 → True (跳过本次推送, 不发网络请求)。"""
+        enabled, _th, _cd = self._cb_config(config)
+        if not enabled:
+            return False
+        st = self._cb_state.get(conn.id)
+        if not st or st.get("open_until", 0) <= 0:
+            return False
+        if time.time() >= st["open_until"]:
+            # 冷却到期 → 半开: 放本次请求当探测, 成功恢复 / 失败重新熔断
+            if debug_center.is_on("backend.gateway"):
+                debug_center.dbg("backend.gateway", "熔断半开探测",
+                                 f"conn={getattr(conn, 'name', None) or conn.id} event={event_type}")
+            return False
+        if debug_center.is_on("backend.gateway"):
+            debug_center.dbg("backend.gateway", "熔断中跳过推送",
+                             f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} "
+                             f"剩余{st['open_until'] - time.time():.0f}s")
+        return True
+
+    def _cb_record(self, db, conn, config: dict, success: bool):
+        """按本次真实推送结果推进熔断状态机 (打开/关闭时各落一条通信日志留证)。"""
+        enabled, threshold, cooldown = self._cb_config(config)
+        if not enabled:
+            return
+        st = self._cb_state.setdefault(conn.id, {"fails": 0, "open_until": 0.0, "episodes": 0})
+        if success:
+            if st["open_until"] > 0:
+                print(f"[MES Gateway] 熔断恢复: {conn.name} (探测成功, 恢复正常推送)", flush=True)
+                debug_center.dbg("backend.gateway", "熔断恢复",
+                                 f"conn={getattr(conn, 'name', None) or conn.id}")
+                try:
+                    self._log(db, conn.id, "circuit_breaker", "push",
+                              error_msg="熔断恢复: 探测成功, 恢复正常推送", success=True)
+                except Exception:
+                    pass
+            st["fails"] = 0
+            st["open_until"] = 0.0
+            return
+        st["fails"] += 1
+        if st["fails"] >= threshold:
+            was_open = st["open_until"] > 0
+            st["open_until"] = time.time() + cooldown
+            if not was_open:
+                st["episodes"] += 1
+                print(f"[MES Gateway] 熔断开启: {conn.name} 连续 {st['fails']} 次失败, "
+                      f"{cooldown:.0f}s 内跳过推送后自动探测", flush=True)
+                debug_center.dbg("backend.gateway", "熔断开启",
+                                 f"conn={getattr(conn, 'name', None) or conn.id} "
+                                 f"fails={st['fails']} cooldown={cooldown:.0f}s")
+                try:
+                    self._log(db, conn.id, "circuit_breaker", "push",
+                              error_msg=f"熔断开启: 连续{st['fails']}次失败, "
+                                        f"冷却{cooldown:.0f}s后自动探测", success=False)
+                except Exception:
+                    pass
+
+    def reset_circuit(self, conn_id: int):
+        """人工干预复位 (测试连接成功 / 修改连接配置后调用), 立即恢复推送。"""
+        if conn_id in self._cb_state:
+            self._cb_state.pop(conn_id, None)
+            debug_center.dbg("backend.gateway", "熔断人工复位", f"conn_id={conn_id}")
+
+    def get_circuit_state(self, conn_id: int) -> dict:
+        """健康状态接口用: 返回该连接熔断器快照。"""
+        st = self._cb_state.get(conn_id)
+        if not st:
+            return {"open": False, "fails": 0, "episodes": 0}
+        now = time.time()
+        return {
+            "open": st["open_until"] > now,
+            "fails": st["fails"],
+            "episodes": st["episodes"],
+            "reopen_in_sec": max(round(st["open_until"] - now), 0) if st["open_until"] > now else 0,
+        }
 
     def set_extra_fields(self, channel_id: int, fields: dict):
         """Monitor 页实时输入的额外字段 (如 weight)"""
@@ -154,15 +246,31 @@ class MESGateway:
                 debug_center.dbg("backend.gateway", "dispatch 入口", f"event={event_type} channel={channel_id if channel_id is not None else '-'} enabled_conns={len(connections)}")
             sent_any = False
             for conn in connections:
-                events = conn.push_events or []
-                if event_type not in events:
-                    continue
-                bound = conn.bound_channels
-                if bound and channel_id is not None and channel_id not in bound:
-                    continue
-                # 只有真正投递成功 (非被 push_on_result 过滤 / 非失败) 才算"推出去过"
-                if self._send_to_connection(db, conn, event_type, context, channel_id):
-                    sent_any = True
+                # v3.38 逐连接错误隔离: 逐连接提交 (见下) 会使 ORM 对象过期,
+                # 若循环中途连接行被并发删除, 重查会抛错 — 一条连接的任何异常
+                # 都不允许拖垮其余连接的推送。
+                try:
+                    events = conn.push_events or []
+                    if event_type not in events:
+                        continue
+                    bound = conn.bound_channels
+                    if bound and channel_id is not None and channel_id not in bound:
+                        continue
+                    # 只有真正投递成功 (非被 push_on_result 过滤 / 非失败) 才算"推出去过"
+                    if self._send_to_connection(db, conn, event_type, context, channel_id):
+                        sent_any = True
+                    # v3.38 川南"框冻结"根因修复: 每推完一条连接立刻提交。
+                    # 原来统一在循环外提交 → 前一条连接失败落日志 (_log 内 flush) 时
+                    # SQLite 写锁已被本会话握住, 下一条连接的 HTTP 超时等待 (对不在线
+                    # 端点可达 30s) 期间锁一直不放; 推理线程此刻写步骤记录被堵到
+                    # busy_timeout 边缘 (实测 8~15s) → 前端检测框冻结、后续类别漏检
+                    # 误判 NG。逐连接提交把锁窗口收敛回毫秒级, 网络等待期间绝不持锁。
+                    db.commit()
+                except Exception as _ce:
+                    db.rollback()
+                    debug_center.dbg("backend.gateway", "单连接推送异常(已隔离,继续其余连接)",
+                                     f"event={event_type} err={_ce}")
+                    print(f"[MES Gateway] 单连接推送异常(已隔离): {_ce}", flush=True)
             # 在途报警台账: 报警类事件成功推给外部后登记一条, 供外部"报警消除"命令匹配 + 监控页横幅。
             # 惰性: 仅当入站配置指定了 alarm_event_name 且本次确实成功推送过才登记 (默认全关零开销)。
             if sent_any:
@@ -180,7 +288,7 @@ class MESGateway:
     def _resolve_alarm_event(db, event_type: str, context: dict):
         """判断本次事件是否为配置的"报警事件"。
 
-        是 → 返回 (fields<台账字段>, dedup_sec); 否 → (None, 0)。
+        是 → 返回 (fields<台账字段>, dedup_sec, match_fields); 否 → (None, 0, None)。
         默认惰性: 入站配置 alarm_event_name 为空 → 视为非报警, 零副作用。
         登记 (record) 与去重 (dedup) 两处共用本判定, 避免逻辑漂移。
         """
@@ -194,7 +302,7 @@ class MESGateway:
             else [s.strip() for s in str(names).split(",")]
         allowed = [n for n in allowed if n]
         if not allowed or event_type not in allowed:
-            return None, 0
+            return None, 0, None
 
         # 结果过滤: 默认只认报警类结果 (NG), 避免 OK 周期被当报警 (空列表 = 不过滤)
         record_on = cfg.get("alarm_record_on_results")
@@ -205,7 +313,7 @@ class MESGateway:
                       or context.get("overall_result")
                       or context.get("result") or "")
             if str(result).upper() not in [str(x).upper() for x in record_on]:
-                return None, 0
+                return None, 0, None
 
         field_map = cfg.get("alarm_ledger_field_map") or {}
         fields = {}
@@ -256,6 +364,12 @@ class MESGateway:
                             event_type: str, context: dict, channel_id: int = None) -> bool:
         """向单个连接发送数据, 含重试。返回 True=真正投递成功; False=被结果过滤/适配器缺失/重试耗尽失败。"""
         config = conn.config or {}
+
+        # v3.38 熔断守门: 端点连续失败已熔断且未到探测时间 → 不构建载荷不发网络,
+        # 直接跳过 (放在最前, 连截图/模板渲染的开销都省掉)
+        if self._cb_should_skip(db, conn, config, event_type):
+            return False
+
         static = config.get("static_fields", {})
         extra = self._extra_fields.get(channel_id or 0, {})
 
@@ -379,6 +493,7 @@ class MESGateway:
                 print(f"[MES Gateway] push success: {conn.name} ({event_type})", flush=True)
                 if debug_center.is_on("backend.gateway"):
                     debug_center.dbg("backend.gateway", "推送成功", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} status={result.get('status_code') or '-'} attempt={attempt} duration_ms={result.get('duration_ms') or '-'}")
+                self._cb_record(db, conn, config, success=True)
                 return True
 
         error_msg = last_result.get("error") if last_result else "未知错误"
@@ -398,6 +513,7 @@ class MESGateway:
         )
         print(f"[MES Gateway] push failed: {conn.name} ({event_type}) - {error_msg}", flush=True)
         debug_center.dbg("backend.gateway", "推送失败(重试耗尽)", f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} attempts={1 + retry_count} status={(last_result or {}).get('status_code') or '-'} err={error_msg or '-'}")
+        self._cb_record(db, conn, config, success=False)
         return False
 
     @staticmethod
@@ -701,6 +817,10 @@ class MESGateway:
             conn = db.query(MESConnection).filter(MESConnection.id == connection_id).first()
             if not conn:
                 return {"success": False, "error": "连接不存在"}
+            # 手动推送是操作员显式动作: 熔断中也放行 (充当探测, 成功即恢复)
+            st = self._cb_state.get(conn.id)
+            if st and st.get("open_until", 0) > time.time():
+                st["open_until"] = time.time()
             self._send_to_connection(db, conn, event_type, context, channel_id)
             db.commit()
             log = (

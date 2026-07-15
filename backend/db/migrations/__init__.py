@@ -24,6 +24,7 @@ from sqlalchemy import inspect, text
 # ==================== 显式注册表（按编号升序） ====================
 _MIGRATION_MODULES = [
     "m0000_legacy",
+    "m0001_hot_path_indexes",
 ]
 
 # m0000 不看记账、每次启动都幂等跑（老库任意版本起跳的安全网）

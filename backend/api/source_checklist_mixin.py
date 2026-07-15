@@ -105,7 +105,8 @@ class ChecklistMixin:
             box_list = list(self._box_objects.keys())
             _sd = self.project_config.get('pipeline_config', {}).get('settle_dedup', False) if self.project_config else False
             for i, box_did in enumerate(box_list):
-                if _sd and i > 0 and not self.current_cycle_id:
+                # v3.38: "周期进行中"看 uuid (id 由落库线程回填, 可能短暂为 None)
+                if _sd and i > 0 and not self.current_cycle_uuid:
                     self.start_cycle()
                 self._settle_box(box_did, expected_items)
             total_ok = sum(1 for r in self._box_settled_results if r['is_complete'])

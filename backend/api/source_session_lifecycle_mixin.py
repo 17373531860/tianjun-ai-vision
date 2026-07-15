@@ -30,12 +30,42 @@ from backend.models.models import DetectionSession, DetectionCycle, StepRecord, 
 from sqlalchemy import func
 
 from backend.core import debug_center
+from backend.api.source_persist_worker import PersistWorker
 
 
 # ============================================================
 # v3.13 M1.2b: 业务侧消费 returnable hook 返回值的纯函数辅助
 # 抽成纯函数让测试可独立验证 (不需要起完整 VideoSourceManager).
 # ============================================================
+
+
+def resolve_shift_label(shifts, now_hhmm: str) -> Optional[str]:
+    """按自定义班次列表判定 now_hhmm 属于哪个班次, 返回班次名 (纯函数可单测)。
+
+    v3.35.1: 每个班次只定义「名字 + 开始时刻」, 不定义结束——某时刻属于
+    「最近一个已开始的班次」, 天然无缝隙无重叠:
+      白班 08:00 / 午班 16:00 / 夜班 00:00 时, 20:01 属于 16:00 开的午班;
+      07:59 早于当天所有班开始 → 归开始时刻最晚的班 (跨天延续, 与两班制
+      "08:00 前属于昨晚的晚班" 边界语义完全一致)。
+
+    shifts: [{"name": str, "start": "HH:MM"}, ...]; 无效条目跳过;
+    有效班次不足 2 个返回 None (调用方回退两班制逻辑)。
+    """
+    valid = []
+    for s in shifts or []:
+        if not isinstance(s, dict):
+            continue
+        name = str(s.get("name") or "").strip()
+        start = str(s.get("start") or "").strip()
+        if name and len(start) == 5 and start[2] == ":":
+            valid.append((start, name))
+    if len(valid) < 2:
+        return None
+    valid.sort()  # "HH:MM" 字符串序 = 时间序
+    for start, name in reversed(valid):
+        if start <= now_hhmm:
+            return name
+    return valid[-1][1]  # 早于当天所有班开始 → 昨天最晚开始的班延续
 
 
 def _resolve_pre_cycle_end_overrides(
@@ -134,6 +164,18 @@ def _clean_session_name(raw):
 
 
 class SessionLifecycleMixin:
+    @property
+    def _persist(self):
+        """本通道落库线程 (v3.38 RFC: 决策留推理线程, 持久化进 FIFO 工作线程)。
+
+        懒创建; 直接操作 __dict__ 绕开 VSM 的 __setattr__ 组件路由拦截。
+        """
+        w = self.__dict__.get('_persist_worker_obj')
+        if w is None:
+            w = PersistWorker(getattr(self, 'channel_id', 0))
+            self.__dict__['_persist_worker_obj'] = w
+        return w
+
     def _get_db_session(self):
         """获取数据库会话"""
         return SessionLocal()
@@ -282,10 +324,14 @@ class SessionLifecycleMixin:
         debug_center.dbg("backend.session", "end_session 入口", f"channel={self.channel_id} session_id={session_id} uuid={session_uuid}")
         
         # Discard any open (unsettled) cycle before closing the session
-        if self.current_cycle_id:
-            print(f"end_session: discarding unsettled cycle #{self.current_cycle_number} (id={self.current_cycle_id})")
+        if self.current_cycle_uuid:
+            print(f"end_session: discarding unsettled cycle #{self.current_cycle_number} (uuid={self.current_cycle_uuid})")
             self._discard_empty_cycle()
-        
+
+        # v3.38 RFC: session 统计要读全部 cycle 行 — 先等本通道落库线程排空,
+        # 保证进行中的 step/cycle_end/discard 作业都已提交, 统计不缺账。
+        self._persist.flush(timeout=15)
+
         try:
             db = self._get_db_session()
             session = db.query(DetectionSession).filter(
@@ -392,16 +438,25 @@ class SessionLifecycleMixin:
     # 历史调用 self._persist_counters() 通过 VSM.__getattr__ 转发到 counters_mgr
 
     def _get_current_shift(self) -> Optional[str]:
-        """Return 'day' or 'night' based on current time and project data_config.
-        Returns None when shift splitting is disabled."""
+        """返回当前时刻所属班次标记; 未启用班次拆分时返回 None。
+
+        v3.35.1 泛化: data_config.shifts 配了自定义班次列表 (N 段, 每段只有
+        名字 + 开始时刻) 时按列表判定, 返回班次名; 未配列表时保持 v2.x 白/晚
+        两班行为原样返回 'day'/'night' —— 老项目零差异。
+        """
         if not self.project_config:
             return None
         data_cfg = self.project_config.get('data_config') or {}
         if not data_cfg.get('shift_split_enabled'):
             return None
+        now_str = datetime.now().strftime('%H:%M')
+        shifts = data_cfg.get('shifts')
+        if isinstance(shifts, list) and len(shifts) >= 2:
+            label = resolve_shift_label(shifts, now_str)
+            if label:
+                return label
         day_start = data_cfg.get('day_shift_start', '08:00')
         night_start = data_cfg.get('night_shift_start', '20:00')
-        now_str = datetime.now().strftime('%H:%M')
         if day_start <= night_start:
             return 'day' if day_start <= now_str < night_start else 'night'
         else:
@@ -452,41 +507,105 @@ class SessionLifecycleMixin:
                 return
         
         try:
-            db = self._get_db_session()
             now = datetime.now()
             self.current_cycle_number += 1
             cycle_uuid = str(uuid.uuid4())[:8]
-            
-            # 更新上一周期的间隔时间
-            if self.last_cycle_end_time is not None:
-                interval_from_last = (now - self.last_cycle_end_time).total_seconds()
-                # 查找上一周期并更新
-                last_cycle = db.query(DetectionCycle).filter(
-                    DetectionCycle.session_id == self.current_session_id,
-                    DetectionCycle.cycle_number == self.current_cycle_number - 1
-                ).first()
-                if last_cycle:
-                    last_cycle.interval_to_next = round(interval_from_last, 2)
-                    db.commit()
-                    print(f"[Cycle] interval from last: {interval_from_last:.2f}s")
-            
-            # v3.10+ 阶段 4: cycle.operator_id 改写当前登录 user_id (字段名保留)
-            from backend.core.auth import get_current_user_id
-            cycle = DetectionCycle(
-                cycle_uuid=cycle_uuid,
-                session_id=self.current_session_id,
-                cycle_number=self.current_cycle_number,
-                start_time=now,
-                operator_id=get_current_user_id(),
-            )
-            db.add(cycle)
-            db.commit()
-            db.refresh(cycle)
-            
-            self.current_cycle_id = cycle.id
+
+            # v3.38 RFC: 周期建行出帧循环 — 内存先行 (uuid 即"周期进行中"标记),
+            # 建行进落库线程, 提交后由作业回填 current_cycle_id。
+            # 同通道 FIFO 保证后续 step/reconcile/end 作业执行时行必已存在 (按 uuid 找)。
+            # current_cycle_id 在建行提交前短暂为 None — 所有"周期是否进行中"的守门
+            # 一律看 current_cycle_uuid, 不看 id (id 只做展示/关联)。
+            self.current_cycle_id = None
             self.current_cycle_uuid = cycle_uuid
             self.cycle_step_records = []
             self.step_order_counter = 0
+
+            # 快照给建行作业 (值拷贝)
+            _session_id = self.current_session_id
+            _cycle_number = self.current_cycle_number
+            _channel_id = self.channel_id
+            _project_id = self.project_config.get('id') if self.project_config else None
+            _last_end = self.last_cycle_end_time
+            _mes_hook = self._mes_hook
+            # v3.10+ 阶段 4: operator_id 在同步段取 (全局登录态, 取值瞬时)
+            from backend.core.auth import get_current_user_id
+            _operator_id = get_current_user_id()
+            vsm = self
+
+            def _persist_cycle_start():
+                db = SessionLocal()
+                try:
+                    # 更新上一周期的间隔时间
+                    if _last_end is not None:
+                        interval_from_last = (now - _last_end).total_seconds()
+                        last_cycle = db.query(DetectionCycle).filter(
+                            DetectionCycle.session_id == _session_id,
+                            DetectionCycle.cycle_number == _cycle_number - 1
+                        ).first()
+                        if last_cycle:
+                            last_cycle.interval_to_next = round(interval_from_last, 2)
+                            print(f"[Cycle] interval from last: {interval_from_last:.2f}s")
+
+                    cycle = DetectionCycle(
+                        cycle_uuid=cycle_uuid,
+                        session_id=_session_id,
+                        cycle_number=_cycle_number,
+                        start_time=now,
+                        operator_id=_operator_id,
+                    )
+                    db.add(cycle)
+                    db.commit()
+                    db.refresh(cycle)
+                    cycle_id = cycle.id
+
+                    # 回填 id: 仅当推理线程还停留在同一个周期 (uuid 没变) 才写,
+                    # 防止极端情况下作业滞后于下一周期开始造成 id 串号。
+                    if getattr(vsm, 'current_cycle_uuid', None) == cycle_uuid:
+                        vsm.current_cycle_id = cycle_id
+                    print(f"[Cycle] start: #{_cycle_number} ({cycle_uuid})")
+                    if debug_center.is_on("backend.session"):
+                        debug_center.dbg("backend.session", "cycle 开始写库", f"channel={_channel_id} cycle_id={cycle_id} number={_cycle_number}")
+
+                    # MES Hook: Cycle 开始 (行已提交, 契约不变)
+                    if _mes_hook and _project_id:
+                        try:
+                            _mes_hook.on_cycle_start(
+                                channel_id=_channel_id,
+                                cycle_id=cycle_id,
+                                session_id=_session_id,
+                                project_id=_project_id,
+                            )
+                        except Exception as e:
+                            print(f"[MES] cycle_start hook error: {e}")
+
+                    # v3.13 M1.1: cycle_start 插件 hook — cycle 已落库 + MES Hook 已通知
+                    from backend.plugin_system.hook_dispatch import fire_plugin_hook
+                    fire_plugin_hook("cycle_start", "post_cycle_start", "post", {
+                        "channel_id": _channel_id,
+                        "cycle_id": cycle_id,
+                        "cycle_uuid": cycle_uuid,
+                        "session_id": _session_id,
+                        "cycle_number": _cycle_number,
+                        "project_id": _project_id,
+                        "start_time": now.isoformat() if now else None,
+                    })
+
+                    # v3.14 RFC 11: 通知 WorkpieceFlowCoordinator 本通道 cycle_start.
+                    # 不属于任何 flow 时直接 return, 零差异. 任何异常隔离.
+                    try:
+                        from backend.services.workpiece_flow_coordinator import get_coordinator as _get_wfc_coord2
+                        _get_wfc_coord2().on_cycle_started(
+                            channel_id=_channel_id,
+                            cycle_id=cycle_id,
+                            db=db,
+                        )
+                    except Exception as _e_wfc:
+                        print(f"[WorkpieceFlow] on_cycle_started error (isolated, non-fatal): {_e_wfc}")
+                finally:
+                    db.close()
+
+            self._persist.submit(f"cycle_start#{cycle_uuid}", _persist_cycle_start)
 
             # v3.8.x: PT 累计字典在"新周期开始"清，而不是"周期结束"清。
             # 客户语义：上一周期 D 完成 OK 后，到下一周期 A 步骤到来之前，
@@ -518,11 +637,6 @@ class SessionLifecycleMixin:
                 except Exception:
                     pass
 
-            db.close()
-            print(f"[Cycle] start: #{self.current_cycle_number} ({cycle_uuid})")
-            if debug_center.is_on("backend.session"):
-                debug_center.dbg("backend.session", "cycle 开始写库", f"channel={self.channel_id} cycle_id={self.current_cycle_id} number={self.current_cycle_number}")
-
             # v2.7.17: once_per_cycle 死锁兜底 - 如果上一轮扫码发生在 cycle 间隙
             # (扫码器 LOFF 了但当时已经没有进行中的 cycle, end_cycle 的 resume 是 no-op),
             # 在新 cycle 起步时再 resume 一次, 解开 _wait_cycle_resume=True 的死锁.
@@ -533,51 +647,8 @@ class SessionLifecycleMixin:
                 print(f"[Scanner] cycle_start resume error (ch={self.channel_id}): {e}",
                       flush=True)
 
-            # MES Hook: Cycle 开始
-            if self._mes_hook:
-                try:
-                    project_id = self.project_config.get('id') if self.project_config else None
-                    if project_id:
-                        self._mes_hook.on_cycle_start(
-                            channel_id=self.channel_id,
-                            cycle_id=cycle.id,
-                            session_id=self.current_session_id,
-                            project_id=project_id,
-                        )
-                except Exception as e:
-                    print(f"[MES] cycle_start hook error: {e}")
-
-            # v3.13 M1.1: cycle_start 插件 hook — cycle 已落库 + MES Hook 已通知, 此时
-            # "新周期开始"事件已完整发生; 录像启动放在 hook 之后 (录像失败不影响 cycle 已开始).
-            from backend.plugin_system.hook_dispatch import fire_plugin_hook
-            fire_plugin_hook("cycle_start", "post_cycle_start", "post", {
-                "channel_id": self.channel_id,
-                "cycle_id": cycle.id,
-                "cycle_uuid": cycle_uuid,
-                "session_id": self.current_session_id,
-                "cycle_number": self.current_cycle_number,
-                "project_id": self.project_config.get("id") if self.project_config else None,
-                "start_time": now.isoformat() if now else None,
-            })
-
-            # v3.14 RFC 11: 通知 WorkpieceFlowCoordinator 本通道 cycle_start.
-            # 若本通道属于某串行流水线 → 把 cycle 绑到队列首个 in-flight run 对应工位.
-            # 不属于任何 flow 时直接 return, 零差异. 任何异常隔离.
-            try:
-                from backend.services.workpiece_flow_coordinator import get_coordinator as _get_wfc_coord2
-                _wfc_db = self._get_db_session()
-                try:
-                    _get_wfc_coord2().on_cycle_started(
-                        channel_id=self.channel_id,
-                        cycle_id=cycle.id,
-                        db=_wfc_db,
-                    )
-                finally:
-                    _wfc_db.close()
-            except Exception as _e_wfc:
-                print(f"[WorkpieceFlow] on_cycle_started error (isolated, non-fatal): {_e_wfc}")
-
-            # 开始周期视频录制
+            # 开始周期视频录制 (v3.38: 录像元数据挂周期改走 cycle_uuid, 见
+            # start_cycle_recording — 此刻 current_cycle_id 可能还没回填)
             self.start_cycle_recording()
         except Exception as e:
             print(f"[Cycle] create failed: {e}")
@@ -630,7 +701,8 @@ class SessionLifecycleMixin:
 
     def end_cycle(self, is_good: bool, event_id: int = None, event_name: str = None, reason: str = None):
         """结束当前检测周期"""
-        if not self.current_cycle_id or not self.recording_enabled:
+        # v3.38 RFC: "周期进行中"守门看 uuid (建行进了落库线程, id 可能尚未回填)
+        if not self.current_cycle_uuid or not self.recording_enabled:
             return
 
         # v3.13 RFC 10: 工位组联动 — pending override 强制改写本次结算结果.
@@ -719,183 +791,200 @@ class SessionLifecycleMixin:
 
         # 停止周期视频录制
         self.stop_cycle_recording()
-        
-        try:
-            db = self._get_db_session()
-            cycle = db.query(DetectionCycle).filter(
-                DetectionCycle.id == self.current_cycle_id
-            ).first()
-            
-            if cycle:
-                cycle.end_time = datetime.now()
-                cycle.duration = (cycle.end_time - cycle.start_time).total_seconds()
-                # M1.2b: 走 final_* (可能被 pre_cycle_end 插件 override). event_id /
-                # event_name 暂不在 returnable 白名单, 维持原值; 真要改"是哪个事件触发"
-                # 需要 M2 / M3 单独设计 (会牵连前端展示语义).
-                cycle.is_good = final_is_good
-                cycle.event_id = event_id
-                cycle.event_name = event_name
-                cycle.result_reason = final_reason
-                cycle.step_sequence = self.current_cycle_steps.copy()
 
-                # 把本周期 OK/NG 结果回写到关联录像记录, 供"OK/NG 分开存 + 分别保留期"
-                # 清理用。无条件回写 (一次 UPDATE, 开销极小, 让录像记录数据完整);
-                # 是否按结果分别保留由清理设置决定, 不开则该字段不被使用 (零差异)。
-                if cycle.video_id:
+        # ========== v3.38 RFC: 决策/持久化分离 ==========
+        # 到这里"本周期结果是什么"已完全定案 (final_*)。下面把值快照打包成作业,
+        # 写库 + 依赖已提交行的后置链 (MES → 周期性动作 → 插件 → 三协调器 → 扫码器
+        # 联动) 整体进本通道 FIFO 落库线程, **保持原有顺序逐条执行**。
+        # 推理线程从此不再在 commit 上等写锁 (川南"框冻结"的治本刀)。
+        try:
+            _now_end = datetime.now()
+            # 快照 (值拷贝), 作业执行时不读推理线程活状态。
+            # 行定位以 uuid 为准 (id 可能尚未由 cycle_start 作业回填)。
+            _cycle_id = self.current_cycle_id
+            _cycle_uuid = self.current_cycle_uuid
+            _cycle_number = self.current_cycle_number
+            _channel_id = self.channel_id
+            _step_seq = self.current_cycle_steps.copy()
+            _project_id = self.project_config.get('id') if self.project_config else None
+            _slider_count = getattr(self, '_last_container_item_total', None)
+            _remediation = getattr(self, '_ng_remediation', None)
+            _force_settling = bool(getattr(self, '_force_settling_in_progress', False))
+            _mes_hook = self._mes_hook
+            vsm = self
+
+            # 记录周期结束时间，用于计算下一周期的间隔 (内存态, 必须同步更新)
+            self.last_cycle_end_time = _now_end
+
+            def _persist_cycle_end():
+                db = SessionLocal()
+                try:
+                    cycle = db.query(DetectionCycle).filter(
+                        DetectionCycle.cycle_uuid == _cycle_uuid
+                    ).first()
+                    if not cycle:
+                        print(f"[Cycle] end persist: cycle {_cycle_uuid} 不存在 (可能已被作废)", flush=True)
+                        return
+                    _cid = cycle.id
+
+                    cycle.end_time = _now_end
+                    duration_s = (_now_end - cycle.start_time).total_seconds()
+                    cycle.duration = duration_s
+                    # M1.2b: 走 final_* (可能被 pre_cycle_end 插件 override). event_id /
+                    # event_name 暂不在 returnable 白名单, 维持原值.
+                    cycle.is_good = final_is_good
+                    cycle.event_id = event_id
+                    cycle.event_name = event_name
+                    cycle.result_reason = final_reason
+                    cycle.step_sequence = _step_seq
+                    _session_id = cycle.session_id
+
+                    # 把本周期 OK/NG 结果回写到关联录像记录, 供"OK/NG 分开存 +
+                    # 分别保留期"清理用。无条件回写, 不开该策略时字段不被使用 (零差异)。
+                    if cycle.video_id:
+                        try:
+                            db.query(VideoClip).filter(
+                                VideoClip.video_uuid == cycle.video_id,
+                                VideoClip.clip_type == 'cycle',
+                            ).update(
+                                {VideoClip.result: 'OK' if final_is_good else 'NG'},
+                                synchronize_session=False,
+                            )
+                        except Exception as _e:
+                            print(f"[Recording] write-back OK/NG mark failed (ignored): {_e}")
+
+                    db.commit()
+                    print(f"[Cycle] end: #{_cycle_number}, result: {'OK' if final_is_good else 'NG'}, duration: {duration_s:.2f}s")
+                    if debug_center.is_on("backend.session"):
+                        debug_center.dbg("backend.session", "cycle 结束写库", f"channel={_channel_id} cycle_id={_cid} is_good={final_is_good} event={event_name}")
+
+                    # MES Hook: Cycle 结束 — M1.2b: 走 final_*
+                    if _mes_hook:
+                        try:
+                            _mes_hook.on_cycle_end(
+                                channel_id=_channel_id,
+                                cycle_id=_cid,
+                                is_good=final_is_good,
+                                event_name=event_name,
+                                result_reason=final_reason,
+                                duration=duration_s,
+                                step_sequence=_step_seq,
+                                project_id=_project_id,
+                            )
+                        except Exception as e:
+                            print(f"[MES] cycle_end hook error: {e}")
+
+                    # v3.5.0: 周期性强制动作判定（每 N 轮做 E）— M1.2b: 走 final_is_good
+                    # 独立 try/except，不影响 MES Hook / Scanner resume / Container 清理
                     try:
-                        db.query(VideoClip).filter(
-                            VideoClip.video_uuid == cycle.video_id,
-                            VideoClip.clip_type == 'cycle',
-                        ).update(
-                            {VideoClip.result: 'OK' if final_is_good else 'NG'},
-                            synchronize_session=False,
+                        if hasattr(vsm, '_check_periodic_actions'):
+                            vsm._check_periodic_actions(_step_seq or [], bool(final_is_good))
+                    except Exception as e:
+                        print(f"[PeriodicActions] cycle_end check error: {e}")
+
+                    # v3.7 / G1.5: 触发 active 插件的 cycle_end/post_cycle/post hook.
+                    # 独立 try/except — 插件抛错绝不影响主程序后续步骤.
+                    # M1.2b: ctx 走 final_* (链式插件契约).
+                    try:
+                        from backend.plugin_system.manager import plugin_manager
+                        if plugin_manager.registry is not None:
+                            plugin_ctx = {
+                                "channel_id": _channel_id,
+                                "cycle_id": _cid,
+                                "cycle_uuid": _cycle_uuid,
+                                "session_id": _session_id,
+                                "is_good": bool(final_is_good),
+                                "result": "OK" if final_is_good else "NG",
+                                "judgement": "OK" if final_is_good else "NG",
+                                "event_id": event_id,
+                                "event_name": event_name,
+                                "reason": final_reason,
+                                "duration": duration_s,
+                                "step_sequence": _step_seq or [],
+                                "project_id": _project_id,
+                            }
+                            plugin_manager.registry.hooks.fire(
+                                "cycle_end", "post_cycle", "post", plugin_ctx
+                            )
+                    except Exception as e:
+                        print(f"[Plugin] cycle_end hook error (isolated, main flow continues): {e}")
+
+                    # v3.13 RFC 10: 通知 ChannelGroupCoordinator 本次结算.
+                    # 通道不在任何组时直接 return, 零差异; 任何异常都隔离.
+                    try:
+                        from backend.services.channel_group_coordinator import get_coordinator as _get_cg_coord
+                        _get_cg_coord().on_cycle_settled(
+                            channel_id=_channel_id,
+                            cycle_id=_cid,
+                            is_good=bool(final_is_good),
+                            db=db,
                         )
                     except Exception as _e:
-                        print(f"[Recording] write-back OK/NG mark failed (ignored): {_e}")
+                        print(f"[ChannelGroup] on_cycle_settled error (isolated, non-fatal): {_e}")
 
-                # 记录周期结束时间，用于计算下一周期的间隔
-                self.last_cycle_end_time = cycle.end_time
-                
-                db.commit()
-                print(f"[Cycle] end: #{self.current_cycle_number}, result: {'OK' if final_is_good else 'NG'}, duration: {cycle.duration:.2f}s")
-                if debug_center.is_on("backend.session"):
-                    debug_center.dbg("backend.session", "cycle 结束写库", f"channel={self.channel_id} cycle_id={self.current_cycle_id} is_good={final_is_good} event={event_name}")
-                
-                # MES Hook: Cycle 结束 — M1.2b: 走 final_*
-                if self._mes_hook:
+                    # v3.14 RFC 11: 通知 WorkpieceFlowCoordinator 本次结算.
+                    # 通道不在任何 flow 时直接 return, 零差异; 任何异常都隔离.
                     try:
-                        project_id = self.project_config.get('id') if self.project_config else None
-                        self._mes_hook.on_cycle_end(
-                            channel_id=self.channel_id,
-                            cycle_id=cycle.id,
-                            is_good=final_is_good,
-                            event_name=event_name,
-                            result_reason=final_reason,
-                            duration=cycle.duration,
-                            step_sequence=cycle.step_sequence,
-                            project_id=project_id,
+                        from backend.services.workpiece_flow_coordinator import get_coordinator as _get_wfc_coord
+                        _get_wfc_coord().on_cycle_settled(
+                            channel_id=_channel_id,
+                            cycle_id=_cid,
+                            is_good=bool(final_is_good),
+                            db=db,
                         )
-                    except Exception as e:
-                        print(f"[MES] cycle_end hook error: {e}")
+                    except Exception as _e:
+                        print(f"[WorkpieceFlow] on_cycle_settled error (isolated, non-fatal): {_e}")
 
-                # v3.5.0: 周期性强制动作判定（每 N 轮做 E）— M1.2b: 走 final_is_good
-                # 独立 try/except，不影响 MES Hook / Scanner resume / Container 清理
-                try:
-                    if hasattr(self, '_check_periodic_actions'):
-                        self._check_periodic_actions(
-                            cycle.step_sequence or [], bool(final_is_good)
+                    # v3.21: 通知 PackagingFlowCoordinator 本次托盘结算.
+                    # 通道不在任何启用配置时直接 return, 零差异; 任何异常都隔离.
+                    try:
+                        from backend.services.packaging_flow_coordinator import get_coordinator as _get_pkg_coord
+                        _get_pkg_coord().on_cycle_settled(
+                            channel_id=_channel_id,
+                            cycle_id=_cid,
+                            is_good=bool(final_is_good),
+                            db=db,
+                            # v3.22 sliders 口径: 结算时快照的本周期进箱滑块数
+                            slider_count=_slider_count,
+                            # v3.23 NG 补做策略 (项目级)
+                            remediation=_remediation,
                         )
-                except Exception as e:
-                    print(f"[PeriodicActions] cycle_end check error: {e}")
+                    except Exception as _e:
+                        print(f"[PackagingFlow] on_cycle_settled error (isolated, non-fatal): {_e}")
 
-                # v3.7 / G1.5: 触发 active 插件的 cycle_end/post_cycle/post hook.
-                # 独立 try/except — 插件抛错绝不影响主程序后续步骤 (Scanner resume / Container 清理 / 多工位联动).
-                # M1.2b: ctx.is_good / result / reason 走 final_* — 让 post_cycle 插件看到
-                # pre_cycle_end override 后的最终判定 (链式插件契约).
-                try:
-                    from backend.plugin_system.manager import plugin_manager
-                    if plugin_manager.registry is not None:
-                        plugin_ctx = {
-                            "channel_id": self.channel_id,
-                            "cycle_id": cycle.id,
-                            "cycle_uuid": cycle.cycle_uuid,
-                            "session_id": cycle.session_id,
-                            "is_good": bool(final_is_good),
-                            "result": "OK" if final_is_good else "NG",
-                            "judgement": "OK" if final_is_good else "NG",
-                            "event_id": event_id,
-                            "event_name": event_name,
-                            "reason": final_reason,
-                            "duration": cycle.duration,
-                            "step_sequence": cycle.step_sequence or [],
-                            "project_id": self.project_config.get("id") if self.project_config else None,
-                        }
-                        plugin_manager.registry.hooks.fire(
-                            "cycle_end", "post_cycle", "post", plugin_ctx
-                        )
-                except Exception as e:
-                    print(f"[Plugin] cycle_end hook error (isolated, main flow continues): {e}")
-
-                # v3.13 RFC 10: 通知 ChannelGroupCoordinator 本次结算.
-                # 触发同组联动 (synchronized_any_ng: NG → 其它成员设 pending override).
-                # 通道不在任何组时直接 return, 零差异; 任何异常都隔离, 不影响主流程.
-                try:
-                    from backend.services.channel_group_coordinator import get_coordinator as _get_cg_coord
-                    _get_cg_coord().on_cycle_settled(
-                        channel_id=self.channel_id,
-                        cycle_id=cycle.id,
-                        is_good=bool(final_is_good),
-                        db=db,
-                    )
-                except Exception as _e:
-                    print(f"[ChannelGroup] on_cycle_settled error (isolated, non-fatal): {_e}")
-
-                # v3.14 RFC 11: 通知 WorkpieceFlowCoordinator 本次结算.
-                # 推进串行流水线状态机 (最后一站 → COMPLETED; 任一 NG + short_circuit → SHORT_CIRCUITED).
-                # 通道不在任何 flow 时直接 return, 零差异; 任何异常都隔离, 不影响主流程.
-                try:
-                    from backend.services.workpiece_flow_coordinator import get_coordinator as _get_wfc_coord
-                    _get_wfc_coord().on_cycle_settled(
-                        channel_id=self.channel_id,
-                        cycle_id=cycle.id,
-                        is_good=bool(final_is_good),
-                        db=db,
-                    )
-                except Exception as _e:
-                    print(f"[WorkpieceFlow] on_cycle_settled error (isolated, non-fatal): {_e}")
-
-                # v3.21: 通知 PackagingFlowCoordinator 本次托盘结算 (包装箱"工单→箱→托盘"三层结算).
-                # 通道不在任何启用配置时直接 return, 零差异; 任何异常都隔离, 不影响主流程.
-                try:
-                    from backend.services.packaging_flow_coordinator import get_coordinator as _get_pkg_coord
-                    _get_pkg_coord().on_cycle_settled(
-                        channel_id=self.channel_id,
-                        cycle_id=cycle.id,
-                        is_good=bool(final_is_good),
-                        db=db,
-                        # v3.22 sliders 口径: 带本周期进箱滑块数 (容器混合在结算时缓存; 其它模式 None)
-                        slider_count=getattr(self, '_last_container_item_total', None),
-                        # v3.23 NG 补做策略 (项目级): 少装时据此决定是否挂起等补滑块
-                        remediation=getattr(self, '_ng_remediation', None),
-                    )
-                except Exception as _e:
-                    print(f"[PackagingFlow] on_cycle_settled error (isolated, non-fatal): {_e}")
-
-                # v2.7.16: once_per_cycle 模式下, 周期结束 (无论 OK/NG) 都让扫码器
-                # 恢复扫描, 等下一个工件的码. 模式不匹配时是 no-op, 不需要额外判断.
-                try:
-                    from backend.services.scanner import get_scanner_service
-                    get_scanner_service().resume_after_cycle(self.channel_id)
-                except Exception as e:
-                    print(f"[Scanner] resume_after_cycle error (ch={self.channel_id}): {e}",
-                          flush=True)
-
-                # v2.7.17: 容器模式杠"野生 settle" - cycle 已经结束, 任何残留在
-                # _box_objects 里没及时 confirmed_gone 的 box, 后面才超时 settle 时
-                # 因为 cycle 已不在跑, 走 _trigger_event 又会 end_cycle + 计数 +1,
-                # 形成"多算一个 NG". 这里强制清空, 让残留 box 被丢弃, 等真正进入下一
-                # 个 cycle 才能再 settle.
-                try:
-                    if getattr(self, '_container_mode', False) and self._box_objects:
-                        dropped = list(self._box_objects.keys())
-                        self._box_objects.clear()
-                        if dropped:
-                            print(f"[Container] cycle_end clearing leftover box: {dropped} "
-                                  f"(避免野生 settle 重复计数)", flush=True)
-                except Exception as e:
-                    print(f"[Container] cycle_end clear _box_objects error: {e}", flush=True)
-
-                # v3.1.2 多工位广播结算联动: 主工位结算时带动其他广播工位强制结算.
-                # 仅当本次 end_cycle 不是"被联动"触发的, 才向外通知 (防止循环).
-                if not getattr(self, '_force_settling_in_progress', False):
+                    # v2.7.16: once_per_cycle 模式下, 周期结束都让扫码器恢复扫描.
                     try:
                         from backend.services.scanner import get_scanner_service
-                        get_scanner_service().notify_cycle_settled(self.channel_id)
+                        get_scanner_service().resume_after_cycle(_channel_id)
                     except Exception as e:
-                        print(f"[Scanner] notify_cycle_settled error (ch={self.channel_id}): {e}",
+                        print(f"[Scanner] resume_after_cycle error (ch={_channel_id}): {e}",
                               flush=True)
 
-            db.close()
+                    # v3.1.2 多工位广播结算联动: 主工位结算时带动其他广播工位强制结算.
+                    # 仅当本次 end_cycle 不是"被联动"触发的, 才向外通知 (防止循环).
+                    if not _force_settling:
+                        try:
+                            from backend.services.scanner import get_scanner_service
+                            get_scanner_service().notify_cycle_settled(_channel_id)
+                        except Exception as e:
+                            print(f"[Scanner] notify_cycle_settled error (ch={_channel_id}): {e}",
+                                  flush=True)
+                finally:
+                    db.close()
+
+            self._persist.submit(f"cycle_end#{_cycle_uuid}", _persist_cycle_end)
+
+            # v2.7.17: 容器模式杠"野生 settle" — 清残留 box。动的是帧循环活状态
+            # (_box_objects 下一帧就读), 必须留在同步段, 不进落库作业。
+            try:
+                if getattr(self, '_container_mode', False) and self._box_objects:
+                    dropped = list(self._box_objects.keys())
+                    self._box_objects.clear()
+                    if dropped:
+                        print(f"[Container] cycle_end clearing leftover box: {dropped} "
+                              f"(避免野生 settle 重复计数)", flush=True)
+            except Exception as e:
+                print(f"[Container] cycle_end clear _box_objects error: {e}", flush=True)
         except Exception as e:
             print(f"[Cycle] end failed: {e}")
             if debug_center.is_on("backend.session"):
@@ -922,18 +1011,32 @@ class SessionLifecycleMixin:
     
     def _discard_empty_cycle(self):
         """Discard the current cycle when step_sequence is empty after filtering."""
-        if not self.current_cycle_id:
+        if not self.current_cycle_uuid:
             return
         self.stop_cycle_recording()
         try:
-            db = self._get_db_session()
-            db.query(StepRecord).filter(
-                StepRecord.cycle_id == self.current_cycle_id).delete()
-            db.query(DetectionCycle).filter(
-                DetectionCycle.id == self.current_cycle_id).delete()
-            db.commit()
-            db.close()
-            print(f"Discarded empty cycle #{self.current_cycle_number}")
+            # v3.38 RFC: 删除进落库线程 (FIFO 保证排在本周期建行/step 作业之后,
+            # 删得干净); 行定位用 uuid (id 可能尚未回填); 内存态复位留在同步段。
+            _cycle_uuid = self.current_cycle_uuid
+            _cycle_number = self.current_cycle_number
+
+            def _persist_discard():
+                db = SessionLocal()
+                try:
+                    row = db.query(DetectionCycle.id).filter(
+                        DetectionCycle.cycle_uuid == _cycle_uuid).first()
+                    if not row:
+                        return
+                    db.query(StepRecord).filter(
+                        StepRecord.cycle_id == row.id).delete()
+                    db.query(DetectionCycle).filter(
+                        DetectionCycle.id == row.id).delete()
+                    db.commit()
+                    print(f"Discarded empty cycle #{_cycle_number}")
+                finally:
+                    db.close()
+
+            self._persist.submit(f"discard#{_cycle_uuid}", _persist_discard)
         except Exception as e:
             print(f"Failed to discard empty cycle: {e}")
         finally:
@@ -959,101 +1062,121 @@ class SessionLifecycleMixin:
         excess ones, and create missing ones.  This avoids losing timing
         data from records already written by the disappearance handler.
         """
-        if not self.current_cycle_id or not self.recording_enabled:
+        if not self.current_cycle_uuid or not self.recording_enabled:
             return
         if not self.current_cycle_steps:
             return
 
         try:
-            db = self._get_db_session()
-            existing = db.query(StepRecord).filter(
-                StepRecord.cycle_id == self.current_cycle_id
-            ).order_by(StepRecord.step_order).all()
+            # v3.38 RFC: 对账进落库线程 — FIFO 保证它排在本周期所有 step 插入作业
+            # 之后执行 (同步查库会看不到未落的插入, 产生重复补写)。
+            # 全部输入做值快照, 作业不读推理线程活状态; 行定位用 uuid。
+            _cycle_uuid = self.current_cycle_uuid
+            _cycle_steps = list(self.current_cycle_steps)
+            _step_durations = dict(self.step_durations or {})
+            _step_start_time = dict(self.step_start_time or {})
+            _step_last_seen = dict(self.step_last_seen or {})
+            _display_names = dict(self.step_display_names or {})
+            _steps_config = list(self.project_config.get('steps_config', [])) if self.project_config else []
 
-            avail = {}
-            for rec in existing:
-                avail.setdefault(rec.step_label, []).append(rec)
+            def _persist_reconcile():
+                db = SessionLocal()
+                try:
+                    row = db.query(DetectionCycle.id).filter(
+                        DetectionCycle.cycle_uuid == _cycle_uuid).first()
+                    if not row:
+                        return
+                    _cycle_id = row.id
+                    existing = db.query(StepRecord).filter(
+                        StepRecord.cycle_id == _cycle_id
+                    ).order_by(StepRecord.step_order).all()
 
-            keep_ids = set()
-            missing_indices = []
-            dur_fixed = 0
+                    avail = {}
+                    for rec in existing:
+                        avail.setdefault(rec.step_label, []).append(rec)
 
-            for i, label in enumerate(self.current_cycle_steps):
-                candidates = avail.get(label, [])
-                # Prefer the candidate with the longest duration
-                candidates.sort(key=lambda r: (r.duration or 0), reverse=True)
-                matched = None
-                for rec in candidates:
-                    if rec.id not in keep_ids:
-                        matched = rec
-                        keep_ids.add(rec.id)
-                        break
-                if matched:
-                    matched.step_order = i + 1
-                    # Fix kept records that have very short / zero duration
-                    if (matched.duration or 0) < 0.1:
-                        better_dur = self.step_durations.get(label)
-                        if better_dur and better_dur >= 0.1:
-                            matched.duration = better_dur
-                            dur_fixed += 1
+                    keep_ids = set()
+                    missing_indices = []
+                    dur_fixed = 0
+
+                    for i, label in enumerate(_cycle_steps):
+                        candidates = avail.get(label, [])
+                        # Prefer the candidate with the longest duration
+                        candidates.sort(key=lambda r: (r.duration or 0), reverse=True)
+                        matched = None
+                        for rec in candidates:
+                            if rec.id not in keep_ids:
+                                matched = rec
+                                keep_ids.add(rec.id)
+                                break
+                        if matched:
+                            matched.step_order = i + 1
+                            # Fix kept records that have very short / zero duration
+                            if (matched.duration or 0) < 0.1:
+                                better_dur = _step_durations.get(label)
+                                if better_dur and better_dur >= 0.1:
+                                    matched.duration = better_dur
+                                    dur_fixed += 1
+                                else:
+                                    st = _step_start_time.get(label)
+                                    et = _step_last_seen.get(label)
+                                    if st and et and (et - st) >= 0.1:
+                                        matched.duration = round(et - st, 2)
+                                        dur_fixed += 1
                         else:
-                            st = self.step_start_time.get(label)
-                            et = self.step_last_seen.get(label)
-                            if st and et and (et - st) >= 0.1:
-                                matched.duration = round(et - st, 2)
-                                dur_fixed += 1
-                else:
-                    missing_indices.append(i)
+                            missing_indices.append(i)
 
-            for rec in existing:
-                if rec.id not in keep_ids:
-                    db.delete(rec)
+                    for rec in existing:
+                        if rec.id not in keep_ids:
+                            db.delete(rec)
 
-            now = time.time()
+                    now = time.time()
 
-            for idx in missing_indices:
-                label = self.current_cycle_steps[idx]
-                start_t = self.step_start_time.get(label)
-                end_t = self.step_last_seen.get(label)
-                if start_t and end_t:
-                    dur = max(0, round(end_t - start_t, 2))
-                else:
-                    start_t = start_t or now
-                    end_t = end_t or now
-                    dur = max(0, round(end_t - start_t, 2))
+                    for idx in missing_indices:
+                        label = _cycle_steps[idx]
+                        start_t = _step_start_time.get(label)
+                        end_t = _step_last_seen.get(label)
+                        if start_t and end_t:
+                            dur = max(0, round(end_t - start_t, 2))
+                        else:
+                            start_t = start_t or now
+                            end_t = end_t or now
+                            dur = max(0, round(end_t - start_t, 2))
 
-                # Use step_durations fallback when computed duration is too small
-                if dur < 0.1:
-                    better = self.step_durations.get(label)
-                    if better and better >= 0.1:
-                        dur = better
+                        # Use step_durations fallback when computed duration is too small
+                        if dur < 0.1:
+                            better = _step_durations.get(label)
+                            if better and better >= 0.1:
+                                dur = better
 
-                step_id = None
-                if self.project_config:
-                    for step in self.project_config.get('steps_config', []):
-                        if step.get('label') == label:
-                            step_id = step.get('id')
-                            break
+                        step_id = None
+                        for step in _steps_config:
+                            if step.get('label') == label:
+                                step_id = step.get('id')
+                                break
 
-                new_rec = StepRecord(
-                    record_uuid=str(uuid.uuid4())[:8],
-                    cycle_id=self.current_cycle_id,
-                    step_id=step_id,
-                    step_label=label,
-                    step_name=self.step_display_names.get(label, label),
-                    step_order=idx + 1,
-                    start_time=datetime.fromtimestamp(start_t),
-                    end_time=datetime.fromtimestamp(end_t),
-                    duration=dur,
-                    is_valid=True,
-                )
-                db.add(new_rec)
+                        new_rec = StepRecord(
+                            record_uuid=str(uuid.uuid4())[:8],
+                            cycle_id=_cycle_id,
+                            step_id=step_id,
+                            step_label=label,
+                            step_name=_display_names.get(label, label),
+                            step_order=idx + 1,
+                            start_time=datetime.fromtimestamp(start_t),
+                            end_time=datetime.fromtimestamp(end_t),
+                            duration=dur,
+                            is_valid=True,
+                        )
+                        db.add(new_rec)
 
-            db.commit()
-            db.close()
-            print(f"[reconcile] cycle {self.current_cycle_id}: kept {len(keep_ids)}, "
-                  f"deleted {len(existing) - len(keep_ids)}, created {len(missing_indices)}"
-                  f"{f', dur_fixed {dur_fixed}' if dur_fixed else ''}")
+                    db.commit()
+                    print(f"[reconcile] cycle {_cycle_id}: kept {len(keep_ids)}, "
+                          f"deleted {len(existing) - len(keep_ids)}, created {len(missing_indices)}"
+                          f"{f', dur_fixed {dur_fixed}' if dur_fixed else ''}")
+                finally:
+                    db.close()
+
+            self._persist.submit(f"reconcile#{_cycle_uuid}", _persist_reconcile)
         except Exception as e:
             print(f"Failed to reconcile StepRecords: {e}")
             import traceback
@@ -1068,34 +1191,32 @@ class SessionLifecycleMixin:
         video_info: 视频信息字典，包含 video_uuid 和 filepath
         step_order: 可选，指定步骤在本周期内的顺序号（用于结算时补写缺失步骤）
         """
-        if not self.current_cycle_id or not self.recording_enabled:
+        if not self.current_cycle_uuid or not self.recording_enabled:
             return
         
         if not self.export_settings or not self.export_settings.get('record_step_duration', True):
             return
-        
-        db = None
+
+        # ========== 同步段 (推理线程): 只做内存决策, 不碰数据库 ==========
+        # v3.38 RFC: 写库 + 依赖落库行的插件 hook 打包进本通道 FIFO 落库线程,
+        # 别处握写锁时卡的是落库线程, 检测帧循环不再冻结。
         try:
-            db = self._get_db_session()
             if step_order is not None:
                 self.step_order_counter = max(self.step_order_counter, step_order)
             else:
                 self.step_order_counter += 1
             order_to_use = step_order if step_order is not None else self.step_order_counter
-            
-            # 更新上一个步骤的"到下一步间隔"
+
+            # 上一步骤"到下一步间隔"用本地缓存算好 (值快照), DB 更新进作业
+            prev_uuid = None
+            prev_interval = None
             if self.cycle_step_records:
                 last_record = self.cycle_step_records[-1]
                 last_end_time = last_record.get('end_time')
                 last_uuid = last_record.get('record_uuid')
                 if last_end_time and last_uuid:
-                    interval_to_next = start_time - last_end_time
-                    last_step = db.query(StepRecord).filter(
-                        StepRecord.record_uuid == last_uuid
-                    ).first()
-                    if last_step:
-                        last_step.interval_to_next = round(interval_to_next, 2)
-                        db.commit()
+                    prev_uuid = last_uuid
+                    prev_interval = round(start_time - last_end_time, 2)
             record_uuid = str(uuid.uuid4())[:8]
             
             # 获取步骤ID（从项目配置）
@@ -1112,88 +1233,109 @@ class SessionLifecycleMixin:
             if video_info:
                 video_id = video_info.get('video_uuid')
                 video_path = video_info.get('filepath')
-            
-            record = StepRecord(
-                record_uuid=record_uuid,
-                cycle_id=self.current_cycle_id,
-                step_id=step_id,
-                step_label=step_label,
-                step_name=step_name or step_label,
-                step_order=order_to_use,
-                start_time=datetime.fromtimestamp(start_time),
-                end_time=datetime.fromtimestamp(end_time),
-                duration=duration,
-                interval_from_prev=interval,
-                confidence=confidence,
-                is_valid=is_valid,
-                video_id=video_id,
-                video_path=video_path
-            )
-            db.add(record)
-            db.commit()
-            if debug_center.is_on("backend.session"):
-                debug_center.dbg("backend.session", "step record 写库", f"channel={self.channel_id} cycle_id={self.current_cycle_id} label={step_label} dur={duration}")
-            
-            # 保存到本地记录用于间隔计算
+
+            # 保存到本地记录用于间隔计算 (必须在同步段做, 下一次 record_step 依赖它)
             self.cycle_step_records.append({
                 'step_label': step_label,
                 'end_time': end_time,
                 'record_uuid': record_uuid
             })
 
-            # v3.13 M1.1: step_change 插件 hook — step_record 已落库 + 本地缓存已更新.
-            # 客户需求 1 (步骤耗时三档颜色) 在这里判定 warn 阈值.
-            # ctx.duration 已经是秒, 与 step_records.duration 一致.
-            #
-            # M1.2b: 消费 returnable warn_threshold_violated / warn_label 字段, 缓存到
-            # VSM 实例字典 self._plugin_step_warn_cache. cycle 结束时清空.
-            # 落 DB 等 M3.3 (StepRecord.plugin_data JSON 字段) 解锁.
-            from backend.plugin_system.hook_dispatch import fire_plugin_hook
-            step_plugin_result = fire_plugin_hook("step_change", "post_step", "post", {
-                "channel_id": self.channel_id,
-                "cycle_id": self.current_cycle_id,
-                "step_record_id": record.id,
-                "record_uuid": record_uuid,
-                "step_id": step_id,
-                "step_label": step_label,
-                "step_name": step_name or step_label,
-                "step_order": order_to_use,
-                "duration": duration,
-                "interval_from_prev": interval,
-                "confidence": confidence,
-                "is_valid": is_valid,
-            })
+            # 作业闭包只捕获值快照, 不读推理线程活状态; FK 由 uuid 在作业内解析
+            _cycle_uuid = self.current_cycle_uuid
+            channel_id = self.channel_id
+            _step_name = step_name or step_label
+            vsm = self
 
-            # M1.2b: 解析 returnable warn 字段 (见本文件顶部 _resolve_step_change_warn).
-            warn_violated, warn_label = _resolve_step_change_warn(step_plugin_result)
-            if warn_violated:
-                # 兼容: VSM 老实例可能没这字段, 用 getattr + 兜底初始化.
-                cache = getattr(self, "_plugin_step_warn_cache", None)
-                if cache is None:
-                    cache = {}
-                    self._plugin_step_warn_cache = cache
-                cache[record.id] = {
-                    "warn_label": warn_label,
-                    "step_id": step_id,
-                    "step_label": step_label,
-                    "step_order": order_to_use,
-                    "duration": duration,
-                    "record_uuid": record_uuid,
-                }
-                print(
-                    f"[Plugin] step_change warn 生效: cycle_id={self.current_cycle_id} "
-                    f"step_record_id={record.id} label={warn_label!r} step={step_label!r}",
-                    flush=True,
-                )
+            def _persist_step_record():
+                db = SessionLocal()
+                try:
+                    row = db.query(DetectionCycle.id).filter(
+                        DetectionCycle.cycle_uuid == _cycle_uuid).first()
+                    if not row:
+                        print(f"[Step] record persist: cycle {_cycle_uuid} 不存在, 丢弃 step {step_label}", flush=True)
+                        return
+                    cycle_id = row.id
+
+                    if prev_uuid is not None:
+                        last_step = db.query(StepRecord).filter(
+                            StepRecord.record_uuid == prev_uuid
+                        ).first()
+                        if last_step:
+                            last_step.interval_to_next = prev_interval
+
+                    record = StepRecord(
+                        record_uuid=record_uuid,
+                        cycle_id=cycle_id,
+                        step_id=step_id,
+                        step_label=step_label,
+                        step_name=_step_name,
+                        step_order=order_to_use,
+                        start_time=datetime.fromtimestamp(start_time),
+                        end_time=datetime.fromtimestamp(end_time),
+                        duration=duration,
+                        interval_from_prev=interval,
+                        confidence=confidence,
+                        is_valid=is_valid,
+                        video_id=video_id,
+                        video_path=video_path
+                    )
+                    db.add(record)
+                    db.flush()
+                    record_id = record.id
+                    db.commit()
+                    if debug_center.is_on("backend.session"):
+                        debug_center.dbg("backend.session", "step record 写库", f"channel={channel_id} cycle_id={cycle_id} label={step_label} dur={duration}")
+
+                    # v3.13 M1.1: step_change 插件 hook — step_record 已落库 + 本地缓存已更新.
+                    # v3.38 起在落库线程 fire (紧跟 commit, 保持"hook 看到已提交行"契约).
+                    # M1.2b: 消费 returnable warn 字段, 缓存到 VSM 实例字典
+                    # _plugin_step_warn_cache (cycle 开始时清空; 落 DB 等 M3.3).
+                    from backend.plugin_system.hook_dispatch import fire_plugin_hook
+                    step_plugin_result = fire_plugin_hook("step_change", "post_step", "post", {
+                        "channel_id": channel_id,
+                        "cycle_id": cycle_id,
+                        "step_record_id": record_id,
+                        "record_uuid": record_uuid,
+                        "step_id": step_id,
+                        "step_label": step_label,
+                        "step_name": _step_name,
+                        "step_order": order_to_use,
+                        "duration": duration,
+                        "interval_from_prev": interval,
+                        "confidence": confidence,
+                        "is_valid": is_valid,
+                    })
+
+                    warn_violated, warn_label = _resolve_step_change_warn(step_plugin_result)
+                    if warn_violated:
+                        cache = getattr(vsm, "_plugin_step_warn_cache", None)
+                        if cache is None:
+                            cache = {}
+                            vsm._plugin_step_warn_cache = cache
+                        cache[record_id] = {
+                            "warn_label": warn_label,
+                            "step_id": step_id,
+                            "step_label": step_label,
+                            "step_order": order_to_use,
+                            "duration": duration,
+                            "record_uuid": record_uuid,
+                        }
+                        print(
+                            f"[Plugin] step_change warn 生效: cycle_id={cycle_id} "
+                            f"step_record_id={record_id} label={warn_label!r} step={step_label!r}",
+                            flush=True,
+                        )
+                finally:
+                    db.close()
+
+            self._persist.submit(f"step#{record_uuid}", _persist_step_record)
         except Exception as e:
             print(f"[Step] record failed: {e}")
             if debug_center.is_on("backend.session"):
                 debug_center.dbg("backend.session", "record_step 异常", f"channel={self.channel_id} label={step_label} err={e}")
             import traceback
             traceback.print_exc()
-        finally:
-            if db:
-                db.close()
 
     # ==================== v3.1.2: 多工位广播结算联动 ====================
 
@@ -1257,7 +1399,7 @@ class SessionLifecycleMixin:
                 return settled_count
 
             # ------- 非容器 -------
-            if not getattr(self, "current_cycle_id", None):
+            if not getattr(self, "current_cycle_uuid", None):
                 return 0
             if not getattr(self, "_tracking_cycle_active", False):
                 return 0
@@ -1312,7 +1454,8 @@ class SessionLifecycleMixin:
         cycle.start_time 取上一码 _scan_pair_active.scanned_at (即 ScanPair 真实
         起点), 让 cycle 表里时长跟 _trigger_event log 的 "周期时间(OK)" 一致.
         """
-        if getattr(self, "current_cycle_id", None):
+        # v3.38: 看 uuid (id 可能在落库线程尚未回填, 只看 id 会重复建行)
+        if getattr(self, "current_cycle_uuid", None):
             return True  # 已有 cycle (其他路径起的) 不重复建
         if not getattr(self, "current_session_id", None):
             return False  # 没 session 起不了 cycle

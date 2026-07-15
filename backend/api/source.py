@@ -748,17 +748,13 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         yet recorded via the normal disappearance handler.  Called from both
         _settle_sequential_cycle and _settle_custom_cycle so that the DB always
         has a complete set of step records matching current_cycle_steps."""
-        if not self.current_cycle_id or not self.recording_enabled:
+        if not self.current_cycle_uuid or not self.recording_enabled:
             return
         try:
-            db = self._get_db_session()
-            existing = db.query(StepRecord.step_label).filter(
-                StepRecord.cycle_id == self.current_cycle_id).all()
-            recorded_labels = {r.step_label for r in existing}
-            max_order = db.query(StepRecord.step_order).filter(
-                StepRecord.cycle_id == self.current_cycle_id).all()
-            next_order = (max(o[0] for o in max_order) + 1) if max_order else 1
-            db.close()
+            # v3.38 RFC: 已记录步骤改读本地缓存 cycle_step_records (同步段权威),
+            # 不再查库 — step 插入进了落库线程, 查库会看到滞后快照产生重复补写。
+            recorded_labels = {r.get('step_label') for r in (self.cycle_step_records or [])}
+            next_order = int(getattr(self, 'step_order_counter', 0) or 0) + 1
 
             cycle_end_time = time.time()
             if getattr(self, '_last_disappeared_step_times', None):

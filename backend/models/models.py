@@ -285,8 +285,10 @@ class StepRecord(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     record_uuid = Column(String(50), unique=True, index=True, nullable=False)  # 唯一标识
-    cycle_id = Column(Integer, ForeignKey("detection_cycles.id", ondelete="CASCADE"))
-    
+    # v3.38 index=True: 周期收尾/自动清理/数据页都按周期号查步骤, 老库由
+    # m0001_hot_path_indexes 迁移补建 (索引名 ix_step_records_cycle_id 两边一致)
+    cycle_id = Column(Integer, ForeignKey("detection_cycles.id", ondelete="CASCADE"), index=True)
+
     step_id = Column(String(50), nullable=True)  # 步骤ID（来自项目配置）
     step_label = Column(String(100), nullable=False)  # 步骤标签（检测类别名）
     step_name = Column(String(100), nullable=True)  # 步骤显示名称
@@ -326,7 +328,8 @@ class VideoClip(Base):
     video_uuid = Column(String(50), unique=True, index=True, nullable=False)  # 唯一标识（用于URL）
     
     clip_type = Column(String(20), nullable=False)  # session, cycle, step
-    related_id = Column(Integer, nullable=True)  # 关联的记录ID
+    # v3.38 index=True: 清理按归属周期/步骤批量找录像, 老库由 m0001 迁移补建
+    related_id = Column(Integer, nullable=True, index=True)  # 关联的记录ID
 
     # 周期录像的合格结果 (OK / NG / None)。周期结束写库时回写，供"OK/NG 分开存 +
     # 分别保留期"的清理策略使用。session/step 录像无此语义，保持 None。

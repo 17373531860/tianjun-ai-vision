@@ -324,16 +324,20 @@ def test_record_step_calls_resolve_step_change_warn():
 
 
 def test_record_step_writes_warn_to_cache():
-    """warn_violated → 必须写 self._plugin_step_warn_cache[record.id]."""
+    """warn_violated → 必须写 VSM 的 _plugin_step_warn_cache[<record id>].
+
+    v3.38 RFC 后写库在落库作业闭包里跑, self 以 vsm 快照进入闭包、record.id
+    以 record_id 快照进入 — 正则同时接受新旧两种等价写法。
+    """
     body = _record_step_body()
     assert re.search(
-        r'self\._plugin_step_warn_cache\b',
+        r'(self|vsm)\._plugin_step_warn_cache\b',
         body,
     ), "record_step 没写 _plugin_step_warn_cache"
     assert re.search(
-        r'cache\[record\.id\]\s*=',
+        r'cache\[record(\.id|_id)\]\s*=',
         body,
-    ), "record_step 没按 record.id 索引 warn cache"
+    ), "record_step 没按 record id 索引 warn cache"
 
 
 # ============================================================

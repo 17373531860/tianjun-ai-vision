@@ -146,7 +146,7 @@ class EventTriggerMixin:
         # 不推 MES, 改为挂起 (报警提示工人), 等人工补步骤(判OK) / 认NG(落账) / 重做(丢弃).
         # _remediation_bypass: confirm_ng 重发 NG 时一次性旁路, 防自锁.
         if (current_event_id == 2
-                and getattr(self, 'current_cycle_id', None)
+                and getattr(self, 'current_cycle_uuid', None)
                 and not getattr(self, '_remediation_bypass', False)
                 and self._should_defer_for_remediation(reason)):
             self._enter_step_remediation_hold(event, reason)

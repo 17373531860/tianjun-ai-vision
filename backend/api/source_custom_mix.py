@@ -909,7 +909,7 @@ class CustomMixMachine:
         state = self._engine.to_state(self._host)
         # 步骤侧周期是否进行中 (前端面板"周期中/等待"显示用; 周期主权在步骤侧)
         state['cycle_active'] = bool(
-            self._host is not None and getattr(self._host, 'current_cycle_id', None))
+            self._host is not None and getattr(self._host, 'current_cycle_uuid', None))
         return state
 
 
