@@ -15,9 +15,12 @@ VIDEO = '/home/qianqian/视频/现场视频0707/20260707_20260707164731_20260707
 MODEL = ('/home/qianqian/文档/xwechat_files/wxid_9j6tgdyqgpon22_030a/msg/file/'
          '2026-07/tp_v5_1_results/train_tp_v5_1/weights/best.pt')
 OUT = '/tmp/tp_v51_dets_cache.json'
-# 用法: build_cache.py [model.pt] [out.json] — 便于 v5/v5.1 同轴双跑
+# 用法: build_cache.py [model.pt] [out.json] [video.mp4]
+#   前两参便于 v5/v5.1 同轴双跑; 第三参换视频 (泛化验证: 不同人/不同时段)
 if len(sys.argv) >= 3:
     MODEL, OUT = sys.argv[1], sys.argv[2]
+if len(sys.argv) >= 4:
+    VIDEO = sys.argv[3]
 
 assert cv2.VideoCapture(VIDEO).isOpened(), f'视频打不开: {VIDEO}'
 
