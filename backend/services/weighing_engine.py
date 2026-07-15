@@ -259,6 +259,8 @@ class WeighingStation:
         self.material_idx = 0
         self.phase = "idle"
         self.results = []
+        # v3.35.1 皮重: 去皮指令发出那一刻的毛重 = 工件/容器自重 (看板显示用)
+        self.tare_weight = None
 
         # 视觉识别到的当前料别标签 (6.3, 由 set_material_label 喂入)
         self.visual_label = None
@@ -288,6 +290,7 @@ class WeighingStation:
         self.phase = "idle"
         self.results = []
         self.visual_label = None
+        self.tare_weight = None
         self._buf.clear()
 
     def start_product(self, sn, cfg):
@@ -350,6 +353,8 @@ class WeighingStation:
     def manual_tare_done(self):
         """界面按了去皮且主程序已发 T 后调用: 进入投料相位。"""
         if self.phase == "await_tare":
+            if self._buf:
+                self.tare_weight = round(float(self._buf[-1][1]), 4)
             self.phase = "filling"
             self._buf.clear()
             return True
@@ -379,6 +384,7 @@ class WeighingStation:
             need = int(cfg.get("tare_settle_samples", 3))
             # 放件后毛重超阈且稳定 → 自动去皮 (6.4)
             if weight >= trigger and len(self._buf) >= need and self._is_stable(cfg):
+                self.tare_weight = round(float(weight), 4)   # 去皮前毛重 = 工件/容器自重
                 events.append({"action": "send_tare", "device_id": self.weight_device_id,
                                "channel_id": self.channel_id, "material": material})
                 self.phase = "filling"
@@ -408,6 +414,7 @@ class WeighingStation:
                     "standard": standard,
                     "initial": 0.0,      # 去皮归零后投料, 初值=0 (6.1)
                     "net": net,          # 终值=净投料量 (6.1)
+                    "tare": self.tare_weight,   # 皮重 = 去皮那一刻的工件/容器自重 (v3.35.1 外推用)
                     "verdict": verdict,
                     "ts": ts,
                     "sn": self.product_sn,
@@ -457,6 +464,9 @@ class WeighingStation:
             "visual_label": self.visual_label,
             "results": list(self.results),
             "live_weight": (self._buf[-1][1] if self._buf else None),
+            # v3.35.1 看板数值: 皮重(去皮时的工件/容器自重); 去皮后秤已归零,
+            # live_weight 本身就是净重(已投料量)
+            "tare_weight": self.tare_weight,
         }
 
 
@@ -634,6 +644,7 @@ class StepGate:
                 return events
             trigger = float(wcfg.get("tare_trigger_weight", 0.05))
             if weight >= trigger and self._is_stable(wcfg):
+                station.tare_weight = round(float(weight), 4)  # 皮重 = 工件/容器自重
                 events.append({"action": "send_tare",
                                "device_id": self.weight_device_id,
                                "channel_id": self.channel_id,
@@ -681,6 +692,7 @@ class StepGate:
             result = {
                 "material": material, "standard": standard,
                 "initial": 0.0, "net": net, "verdict": verdict, "ts": ts,
+                "tare": station.tare_weight,   # 皮重 (v3.35.1 外推用)
                 "sn": station.product_sn, "model": station.model_name,
                 "operator": station.operator, "channel_id": self.channel_id,
                 "gate_label": self.label,
@@ -822,6 +834,11 @@ class WeighingEngine:
                              weight_device_id=(st.weight_device_id if st else None)
                              or (self._configs[channel_id] or {}).get("weight_device_id"))
                 gates[label] = g
+                # 新一轮去皮门控武装 = 新工件上秤, 清上一件皮重避免看板显示残值
+                if (gate_cfg or {}).get("kind", "tare") == "tare":
+                    st2 = self._stations.get(channel_id)
+                    if st2 is not None:
+                        st2.tare_weight = None
                 logger.info("[Weighing] ch%s 武装步骤门控 [%s] kind=%s",
                             channel_id, label, (gate_cfg or {}).get("kind", "tare"))
             return g.status != "passed"
@@ -1140,6 +1157,15 @@ class WeighingEngine:
         logger.info("[Weighing] 产品完成 ch%s: sn=%s 型号=%s 结果=%s",
                     ev.get("channel_id"), ev.get("sn"), ev.get("model"),
                     [(r.get("material"), r.get("verdict")) for r in ev.get("results", [])])
+        # 当前班次 (v3.35.1): 从该通道 VSM 取, 拿不到不阻断推送
+        shift = None
+        try:
+            from backend.api.channel_manager import get_channel_manager
+            vsm = get_channel_manager().get(ev.get("channel_id") or 0)
+            if vsm is not None:
+                shift = vsm._get_current_shift()
+        except Exception:
+            pass
         try:
             from backend.services.mes_gateway import get_mes_gateway
             gw = get_mes_gateway()
@@ -1148,6 +1174,7 @@ class WeighingEngine:
                 "model": ev.get("model"),
                 "operator": ev.get("operator"),
                 "channel_id": ev.get("channel_id"),
+                "shift": shift,
                 "results": ev.get("results", []),
             }, channel_id=ev.get("channel_id") or 0)
         except Exception as e:

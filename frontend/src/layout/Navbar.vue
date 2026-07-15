@@ -77,6 +77,14 @@
           </el-tag>
         </div>
 
+        <!-- v3.35.1: 当前班次 (显示设置开关默认关 + 项目启用班次拆分时才出现) -->
+        <div v-if="currentShiftName"
+             class="flex items-center gap-1.5 bg-slate-800/60 px-2.5 py-1 rounded border border-slate-700"
+             data-testid="navbar-shift">
+          <span class="text-gray-400 text-xs">班次</span>
+          <span class="text-amber-300 font-bold">{{ currentShiftName }}</span>
+        </div>
+
         <div v-if="store.display.navbar.deviceId !== false && store.display.deviceNumber"
              class="flex items-center gap-1.5 bg-slate-800/60 px-2.5 py-1 rounded border border-slate-700">
           <span class="text-gray-400 text-xs">设备</span>
@@ -600,6 +608,38 @@ const modeLabel = computed(() => {
 });
 
 // ============================================================
+// v3.35.1: 顶栏当前班次 (作业员旁)
+// 与后端 resolve_shift_label 同口径: 某时刻属于"最近一个已开始的班次";
+// 未配自定义列表时回退白/晚两班。每 30s 刷一次跨班次边界。
+// ============================================================
+const shiftClockTick = ref(Date.now());
+
+const currentShiftName = computed(() => {
+  if (store.display?.navbar?.shift !== true) return null;
+  const dc = projectStore.currentProject?.data_config || {};
+  if (!dc.shift_split_enabled) return null;
+  void shiftClockTick.value;
+  const now = new Date();
+  const nowStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const shifts = Array.isArray(dc.shifts)
+    ? dc.shifts.filter(s => s && (s.name || '').trim() && s.start)
+    : [];
+  if (shifts.length >= 2) {
+    const sorted = [...shifts].sort((a, b) => (a.start < b.start ? -1 : 1));
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      if (sorted[i].start <= nowStr) return sorted[i].name;
+    }
+    return sorted[sorted.length - 1].name; // 早于当天所有班开始 → 昨天末班延续
+  }
+  const dayStart = dc.day_shift_start || '08:00';
+  const nightStart = dc.night_shift_start || '20:00';
+  if (dayStart <= nightStart) {
+    return (dayStart <= nowStr && nowStr < nightStart) ? '白班' : '晚班';
+  }
+  return (nightStart <= nowStr && nowStr < dayStart) ? '晚班' : '白班';
+});
+
+// ============================================================
 // v3.10+ 阶段 6: 顶栏"作业员"标签内容随鉴权状态切换
 // ============================================================
 
@@ -702,6 +742,7 @@ onMounted(async () => {
   timerInterval = setInterval(() => {
     runTimeSeconds.value++;
     updateRealTime();
+    shiftClockTick.value = Date.now();  // v3.35.1 班次跨界刷新
   }, 1000);
 
   // v3.37: 每 5s 轻量对齐一次后端激活项目 (外部 MES 开工切项目 → 界面自动跟随)

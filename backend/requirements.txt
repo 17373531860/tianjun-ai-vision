@@ -34,6 +34,12 @@ onnxslim>=0.1.0
 # HTTP Client (MES adapters)
 requests>=2.28.0
 
+# v3.35 MES 网关"数据库直写"适配器 - 客户关系库驱动 (PG 驱动上面 Database 段已有)
+# dmPython 官方发 cp310 win_amd64 + manylinux wheel, 随安装包内置, 客户机零操作
+dmPython>=2.5.32         # 达梦 DM
+pymysql>=1.1.0           # MySQL (纯 Python)
+pymssql>=2.2.11          # SQL Server
+
 # Communication
 websockets>=11.0.0
 pyserial>=3.5

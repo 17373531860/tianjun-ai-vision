@@ -90,6 +90,12 @@
                 <span class="text-gray-300">实时时间</span>
                 <el-switch v-model="store.display.navbar.realtime" @change="saveDisplaySettings" />
               </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <el-tooltip content="当前项目在数据设置里启用了班次拆分时，顶栏作业员旁显示当前所属班次" placement="top">
+                  <span class="text-gray-300 cursor-help border-b border-dashed border-gray-600">当前班次</span>
+                </el-tooltip>
+                <el-switch v-model="store.display.navbar.shift" @change="saveDisplaySettings" />
+              </div>
             </div>
           </el-card>
 

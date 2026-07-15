@@ -93,6 +93,9 @@ def test_auto_tare_on_stable_load():
     events = _feed(st, 0.20, cfg, n=4)
     assert "send_tare" in _actions(events)
     assert st.phase == "filling"
+    # v3.35.1 皮重看板: 去皮那一刻的毛重被记录进快照 (工件/容器自重)
+    assert st.tare_weight == 0.20
+    assert st.snapshot()["tare_weight"] == 0.20
 
 
 # ---------- 6.2 缺料 / 超量 / 合格 ----------

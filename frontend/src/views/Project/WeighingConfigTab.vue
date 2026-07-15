@@ -311,6 +311,21 @@
       </div>
     </el-card>
 
+    <!-- v3.35.1 监控页显示 -->
+    <el-card shadow="never" class="bg-slate-800 border-slate-700">
+      <template #header><span class="font-bold text-white">监控页显示</span></template>
+      <div class="space-y-2 text-sm text-gray-200">
+        <div class="flex items-center gap-3">
+          <el-switch v-model="project.pipeline_config.weighing.show_monitor_weights" size="small" />
+          <span>检测中心显示实时称重数值条</span>
+        </div>
+        <div class="text-xs text-gray-500">
+          开启后，检测中心视频下方显示：<b>实时读数</b>、<b>皮重</b>（去皮那一刻的工件/容器自重）、
+          <b>净重</b>（去皮归零后的读数 = 已投料量）与各步骤门控状态。称重投料模式与融合模式（视觉步骤 × 秤门控）都生效。
+        </div>
+      </div>
+    </el-card>
+
   </div>
 </template>
 

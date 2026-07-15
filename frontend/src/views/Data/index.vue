@@ -126,8 +126,15 @@
               <div class="text-xs text-gray-500 mb-1.5">时间段</div>
               <el-select v-model="shiftType" size="small" class="w-full" @change="handleShiftChange">
                 <el-option label="全天" value="all" />
-                <el-option label="白班 (08:00-20:00)" value="day" />
-                <el-option label="晚班 (20:00-08:00)" value="night" />
+                <!-- v3.35.1: 项目配了自定义班次列表 → 按列表出选项; 否则保持旧白/晚两班 -->
+                <template v-if="customShifts">
+                  <el-option v-for="(s, i) in customShifts" :key="s.name + s.start"
+                    :label="`${s.name} (${s.start}-${customShiftEnd(i)})`" :value="s.name" />
+                </template>
+                <template v-else>
+                  <el-option label="白班 (08:00-20:00)" value="day" />
+                  <el-option label="晚班 (20:00-08:00)" value="night" />
+                </template>
                 <el-option label="自定义" value="custom" />
               </el-select>
               <div v-if="shiftType === 'custom'" class="flex items-center gap-2 mt-2">
@@ -951,14 +958,43 @@ const shiftType = ref('all');
 const customStartHour = ref('08:00');
 const customEndHour = ref('20:00');
 
+// v3.35.1 自定义班次列表 (项目数据设置里配的, 有效条目 ≥2 才生效; 按开始时刻排序)
+const customShifts = computed(() => {
+  const dc = projectStore.currentProject?.data_config || {};
+  const raw = Array.isArray(dc.shifts)
+    ? dc.shifts.filter(s => s && (s.name || '').trim() && s.start)
+    : [];
+  return raw.length >= 2
+    ? [...raw].sort((a, b) => (a.start < b.start ? -1 : 1))
+    : null;
+});
+// 本班结束时刻 = 排序后下一班的开始时刻 (末班跨天回到首班)
+const customShiftEnd = (idx) =>
+  customShifts.value[(idx + 1) % customShifts.value.length].start;
+
+// 切项目后班次列表变了 → 已选班次名失效时回落"全天", 防止拿旧名查空
+watch(customShifts, (list) => {
+  const t = shiftType.value;
+  if (t === 'all' || t === 'custom') return;
+  const okLegacy = !list && (t === 'day' || t === 'night');
+  const okCustom = !!list && list.some(s => s.name === t);
+  if (!okLegacy && !okCustom) shiftType.value = 'all';
+});
+
 const getShiftHours = () => {
   if (shiftType.value === 'all') return { start: null, end: null };
+  if (shiftType.value === 'custom') return { start: customStartHour.value, end: customEndHour.value };
+  // 自定义班次: shiftType 存的是班次名
+  if (customShifts.value) {
+    const idx = customShifts.value.findIndex(s => s.name === shiftType.value);
+    if (idx !== -1) return { start: customShifts.value[idx].start, end: customShiftEnd(idx) };
+  }
   const dc = projectStore.currentProject?.data_config || {};
   const dayStart = dc.day_shift_start || '08:00';
   const nightStart = dc.night_shift_start || '20:00';
   if (shiftType.value === 'day') return { start: dayStart, end: nightStart };
   if (shiftType.value === 'night') return { start: nightStart, end: dayStart };
-  return { start: customStartHour.value, end: customEndHour.value };
+  return { start: null, end: null };
 };
 
 // Multi-channel filter

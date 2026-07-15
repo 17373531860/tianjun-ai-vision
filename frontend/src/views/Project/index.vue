@@ -467,26 +467,24 @@
                       </div>
                       <div class="text-xs text-gray-500 mt-1">开启后，检测会话在班次切换时自动结束并创建新会话（类似跨日拆分）。</div>
                     </el-form-item>
-                    <div v-if="activeProject.shift_split_enabled" class="flex gap-6">
-                      <el-form-item label="白班开始时间" class="flex-1">
-                        <el-time-picker
-                          v-model="activeProject.day_shift_start"
-                          format="HH:mm"
-                          value-format="HH:mm"
-                          placeholder="08:00"
-                          class="w-full"
-                        />
-                      </el-form-item>
-                      <el-form-item label="晚班开始时间" class="flex-1">
-                        <el-time-picker
-                          v-model="activeProject.night_shift_start"
-                          format="HH:mm"
-                          value-format="HH:mm"
-                          placeholder="20:00"
-                          class="w-full"
-                        />
-                      </el-form-item>
-                    </div>
+                    <template v-if="activeProject.shift_split_enabled">
+                      <!-- v3.35.1 自定义班次列表: 每班只填开始时刻, 持续到下一班开始 (跨天自动衔接) -->
+                      <div v-for="(s, i) in (activeProject.shifts || [])" :key="i"
+                           class="flex items-center gap-2 mb-2">
+                        <el-input v-model="s.name" size="small" placeholder="班次名，如 白班" style="width: 140px" />
+                        <el-time-picker v-model="s.start" size="small" format="HH:mm" value-format="HH:mm"
+                          placeholder="开始时刻" style="width: 120px" />
+                        <span class="text-xs text-gray-500">{{ shiftRangeHint(i) }}</span>
+                        <el-button v-if="(activeProject.shifts || []).length > 2" size="small" type="danger" plain
+                          @click="activeProject.shifts.splice(i, 1)">删</el-button>
+                      </div>
+                      <el-button size="small" @click="(activeProject.shifts = activeProject.shifts || []).push({ name: '', start: '00:00' })">
+                        + 加班次
+                      </el-button>
+                      <div class="text-xs text-gray-500 mt-2">
+                        每班只填<b>开始时刻</b>，持续到下一班开始（按时刻排序、跨天自动衔接）；某时刻属于"最近一个已开始的班次"——如 白班08:00/晚班20:00 时，20:01 的周期归晚班。数据中心"时间段"下拉与检测中心班次显示都按这份列表走。
+                      </div>
+                    </template>
                   </el-form>
                 </el-card>
               </div>
@@ -1086,6 +1084,18 @@ const _sanitizeRegionEvents = (re) => {
 // 初始化项目默认配置
 // ==================== 称重投料模式配置 ====================
 // 编辑交互已外置到 WeighingConfigTab.vue（2026-07 拆分批次 P-1）；
+// v3.35.1 班次行提示: 本班覆盖 [本班开始, 按时刻排序的下一班开始)
+const shiftRangeHint = (idx) => {
+  const list = (activeProject.value?.shifts || []).filter(s => s.start);
+  const cur = activeProject.value?.shifts?.[idx];
+  if (!cur || !cur.start || list.length < 2) return '';
+  const sorted = [...list].sort((a, b) => (a.start < b.start ? -1 : 1));
+  const pos = sorted.findIndex(s => s === cur);
+  if (pos === -1) return '';
+  const next = sorted[(pos + 1) % sorted.length];
+  return `覆盖 ${cur.start} ~ ${next.start}${pos === sorted.length - 1 ? '（跨天）' : ''}`;
+};
+
 // 父级只保留默认值注入 ensureWeighingDefaults（加载/切模式链路用）。
 // 只在称重模式才往项目里注入 weighing 默认配置。非称重项目绝不碰其 pipeline_config，零污染。
 const ensureWeighingDefaults = (project) => {
@@ -1111,6 +1121,8 @@ const ensureWeighingDefaults = (project) => {
     alarm_event_precheck: w.alarm_event_precheck ?? 2,
     // v3.35 新增: 驱动模式 / 视觉防错报警映射 / 前置选择有效期 / 视觉料源防错
     drive_mode: w.drive_mode || 'scale',
+    // v3.35.1 监控页实时称重数值条 (皮重/净重), 可选关闭
+    show_monitor_weights: w.show_monitor_weights !== false,
     alarm_event_guard: w.alarm_event_guard ?? 2,
     context_expiry: (w.context_expiry && typeof w.context_expiry === 'object')
       ? { mode: 'never', reset_time: '08:00', shifts: [], hours: 8, expire_fields: ['model'], ...w.context_expiry }
@@ -1729,6 +1741,16 @@ const initProjectDefaults = (project) => {
   if (project.night_shift_start === undefined) {
     project.night_shift_start = dataConfig.night_shift_start || '20:00';
   }
+  // v3.35.1 自定义班次列表: 未配过则从两班字段生成初始两条 (白班/晚班)
+  if (project.shifts === undefined) {
+    const raw = Array.isArray(dataConfig.shifts) ? dataConfig.shifts : null;
+    project.shifts = (raw && raw.length >= 2)
+      ? raw.map(s => ({ name: s.name || '', start: s.start || '08:00' }))
+      : [
+          { name: '白班', start: project.day_shift_start || '08:00' },
+          { name: '晚班', start: project.night_shift_start || '20:00' },
+        ];
+  }
   
   // 同步到 pipeline_config，供UI使用
   project.pipeline_config.sequence_order = project.sequence_order;
@@ -2251,6 +2273,10 @@ const handleSaveProject = async () => {
       shift_split_enabled: activeProject.value.shift_split_enabled || false,
       day_shift_start: activeProject.value.day_shift_start || '08:00',
       night_shift_start: activeProject.value.night_shift_start || '20:00',
+      // v3.35.1 自定义班次列表 (名字+开始时刻, ≥2 条生效; 后端不足 2 条自动回退两班制)
+      shifts: (activeProject.value.shifts || [])
+        .filter(s => (s.name || '').trim() && s.start)
+        .map(s => ({ name: s.name.trim(), start: s.start })),
     };
     await updateProject(activeProject.value.id, data);
 

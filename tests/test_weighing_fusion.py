@@ -67,6 +67,17 @@ def test_gate_tare_pass_on_stable_load():
     assert gate.status == "passed"
 
 
+def test_gate_tare_records_tare_weight_for_display():
+    """v3.35.1 皮重看板: 去皮门控放行时把去皮前毛重记到工位快照 (检测中心显示工件自重)。"""
+    cfg = _wcfg()
+    gate = StepGate(0, "放钢帽", {"kind": "tare"}, weight_device_id=9)
+    st = _station()
+    assert st.snapshot()["tare_weight"] is None
+    _feed_gate(gate, st, 0.20, cfg)
+    assert st.tare_weight == 0.20
+    assert st.snapshot()["tare_weight"] == 0.20
+
+
 def test_gate_tare_not_pass_below_trigger():
     """毛重没超阈值 (没放件) → 不放行。"""
     cfg = _wcfg()

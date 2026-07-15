@@ -696,6 +696,12 @@
         </div>
       </div>
 
+      <!-- v3.35.1 融合模式实时称重数值条 (与上方 SOP 并存: 步骤看 SOP, 重量看这里; 可在称重配置关闭) -->
+      <WeighingLiveBar
+        v-if="isStepGateWeighing"
+        :channel="selectedChannel"
+      />
+
       <!-- v3.19.x 自定义混合模式物品校验面板 (与上方 SOP 并存: 步骤看 SOP, 物品看这里) -->
       <PerItemPanel
         v-if="customMixPerItemState"
@@ -1344,6 +1350,7 @@ import { getExtraFieldsSchema, setExtraFields, getInboundConfig } from '@/api/ga
 import PerItemPanel from './PerItemPanel.vue';
 import PackagingFlowCard from './PackagingFlowCard.vue';
 import WeighingPanel from './WeighingPanel.vue';
+import WeighingLiveBar from './WeighingLiveBar.vue';
 import VirtualScanGun from './VirtualScanGun.vue';
 import ExternalAlarmBanner from './ExternalAlarmBanner.vue';
 import RecordingFailureOverlay from './RecordingFailureOverlay.vue';
@@ -3072,6 +3079,11 @@ const isTrackingMode = computed(() => currentProject.value?.logic_mode === 'trac
 const isPerItemMode = computed(() => currentProject.value?.logic_mode === 'per_item');
 // 原生称重投料模式 — 视频下方专属看板 (人员/型号/各料投料进度/本件结论)
 const isWeighingMode = computed(() => currentProject.value?.logic_mode === 'weighing');
+// v3.35.1 融合模式 (视觉 SOP + 秤步骤门控) 实时称重数值条: 项目称重配置可选关闭
+const isStepGateWeighing = computed(() => {
+  const w = currentProject.value?.pipeline_config?.weighing;
+  return !!w && w.drive_mode === 'step_gate' && w.show_monitor_weights !== false;
+});
 
 // v3.19.x 自定义混合逐件: 把 custom_mix_state 适配成 PerItemPanel 的 state 形状
 // (steps 与独立模式 per_item_state.steps 同形; config=null 自动隐藏手动按钮/收尾卡片)

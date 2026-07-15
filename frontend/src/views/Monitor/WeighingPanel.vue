@@ -5,7 +5,12 @@
       <span class="text-cyan-400 text-lg font-bold">称重投料 · {{ state?.name || ('工位' + (channel + 1)) }}</span>
       <div class="flex items-center gap-4">
         <span class="px-2 py-0.5 rounded text-sm font-bold" :class="phaseClass">{{ phaseText }}</span>
-        <span class="text-gray-400 text-sm">实时重量</span>
+        <!-- v3.35.1 皮重: 去皮那一刻的工件/容器自重 -->
+        <span class="text-gray-400 text-sm">皮重(工件)</span>
+        <span class="text-xl font-mono font-bold" :class="tareWeight != null ? 'text-amber-300' : 'text-gray-600'">
+          {{ tareWeight != null ? tareWeight.toFixed(3) : '--.---' }} <span class="text-sm text-gray-400">kg</span>
+        </span>
+        <span class="text-gray-400 text-sm">{{ phase === 'filling' ? '净重(已投料)' : '实时重量' }}</span>
         <span class="text-2xl font-mono font-bold" :class="liveWeight != null ? 'text-white' : 'text-gray-600'">
           {{ liveWeight != null ? liveWeight.toFixed(3) : '--.---' }} <span class="text-sm text-gray-400">kg</span>
         </span>
@@ -110,6 +115,10 @@ let timer = null;
 const phase = computed(() => state.value?.phase || 'idle');
 const liveWeight = computed(() => {
   const w = state.value?.live_weight;
+  return (typeof w === 'number') ? w : null;
+});
+const tareWeight = computed(() => {
+  const w = state.value?.tare_weight;
   return (typeof w === 'number') ? w : null;
 });
 

@@ -440,7 +440,8 @@ def get_sessions_by_date(
         sess_query = sess_query.filter(DetectionSession.project_id == project_id)
     if channel_id is not None:
         sess_query = sess_query.filter(DetectionSession.channel_id == channel_id)
-    if shift and shift in ('day', 'night'):
+    # v3.35.1: 班次标记放开 day/night 硬编码, 支持自定义班次名 (白班/午班/夜班…)
+    if shift:
         sess_query = sess_query.filter(DetectionSession.shift_label == shift)
     if operator_id is not None:
         sess_query = sess_query.filter(DetectionSession.operator_id == operator_id)

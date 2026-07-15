@@ -98,7 +98,9 @@ export const useSystemStore = defineStore('system', {
         mode: true,
         status: true,
         runtime: true,
-        realtime: true
+        realtime: true,
+        // v3.35.1: 顶栏作业员旁显示当前班次 (项目启用班次拆分时生效; 默认关, 零差异)
+        shift: false
       },
       monitor: {
         stepStrip: true,
