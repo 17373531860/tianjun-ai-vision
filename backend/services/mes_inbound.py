@@ -464,7 +464,49 @@ class MESInbound:
             if started:
                 msgs.append(f"已自动开始检测: {', '.join(started)}")
 
+        # v3.38 川南反馈: 检测已在跑时收到开工, 新单挂不上运行中的工位
+        # (监控页四要素不显示、周期不计入新任务, 要停一次检测才生效)。
+        # 建单成功后把新单回填给有活跃会话的工位: 空位无条件补挂;
+        # 已挂旧单仅在"最新开工为准"开启时顶替 (复用已有语义, 不新增开关)。
+        if cfg.get("create_work_order_on_task", False):
+            if db is not None:
+                try:
+                    db.commit()  # 回填在 hook 工作线程另开会话查单, 必须先落盘
+                except Exception:
+                    pass
+            self._rebind_running_channels(cfg)
+
         return (True, None, "; ".join(msgs) if msgs else "ok")
+
+    def _rebind_running_channels(self, cfg: dict):
+        """把最新在产单回填到"检测会话正在跑"的工位 (v3.38)。
+
+        只投递内存绑定任务给 MES hook 工作线程, 不在入站请求里做任何 DB 写;
+        任何失败只记调试日志, 绝不影响开工响应。刚被自动拉起检测的工位会走
+        session_start 原生绑定, 这里的回填与之幂等 (同一单不重复动作)。
+        """
+        try:
+            from backend.api.channel_manager import channel_manager
+            from backend.services.mes_hooks import get_mes_hook
+            hook = get_mes_hook()
+            if not hook.enabled:
+                return
+            allow_replace = bool(cfg.get("supersede_previous_task", False))
+            for ch_id, mgr in list(channel_manager.channels.items()):
+                try:
+                    session_id = getattr(mgr, 'current_session_id', None)
+                    if not mgr or not getattr(mgr, 'is_detecting', False) or not session_id:
+                        continue
+                    project_id = (mgr.project_config or {}).get('id')
+                    if not project_id:
+                        continue
+                    hook.on_external_order_changed(
+                        ch_id, session_id, project_id, allow_replace=allow_replace)
+                except Exception as e:
+                    debug_center.dbg("backend.mes", "活跃工单回填投递失败",
+                                     f"ch{ch_id} err={e}")
+        except Exception as e:
+            debug_center.dbg("backend.mes", "活跃工单回填失败", f"整体异常: {e}")
 
     def _auto_start_detection(self) -> list:
         """开工后自动拉起检测 (start_detection_on_task 开时)。

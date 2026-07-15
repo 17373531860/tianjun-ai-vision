@@ -75,6 +75,11 @@ def _wipe_cn():
             db.commit()
         finally:
             db.close()
+        # v3.38 场景 17-19 会动 hook 单例的内存态, 前后都复位防串场
+        from backend.services.mes_hooks import get_mes_hook
+        hook = get_mes_hook()
+        hook._active_orders.clear()
+        hook.enabled = False
     _wipe()
     yield
     _wipe()
@@ -127,6 +132,12 @@ def given_cfg(ctx, preset, monkeypatch):
         ctx["cfg"] = _cfg(switch_project_on_task=True, match_project_by_name=True,
                           create_work_order_on_task=True,
                           start_detection_on_task=True)
+    elif preset == "顶替并回传完工且切项目":
+        # v3.38 场景 19 用: 最新开工为准 + 切项目建单 (不回传完工, 免 mock 网关)
+        ctx["cfg"] = _cfg(switch_project_on_task=True, match_project_by_name=True,
+                          create_work_order_on_task=True,
+                          supersede_previous_task=True,
+                          report_complete_on_supersede=False)
     else:  # 默认
         ctx["cfg"] = _cfg()
 
@@ -141,6 +152,77 @@ def given_ch0_running_not_detecting(ctx, monkeypatch):
     fake_cm.channels = {0: mgr}
     monkeypatch.setattr("backend.api.channel_manager.channel_manager", fake_cm)
     ctx["ch0_mgr"] = mgr
+
+
+def _setup_detecting_ch0(ctx, monkeypatch, preset_order_no=None):
+    """v3.38 场景 17-19 共用: 伪造 ch0 正在检测 (真会话行 + 真 hook 同步执行)。
+
+    - 建真实 DetectionSession 行 (回填要更新它的工单归属)
+    - hook 单例开 enabled, _enqueue 打成同步直跑 (不起工作线程)
+    - preset_order_no 非空时预挂一张在产旧单到 ch0
+    """
+    from datetime import datetime
+    from unittest.mock import MagicMock
+    from backend.models.models import DetectionSession
+    from backend.services.mes_hooks import get_mes_hook
+
+    db = SessionLocal()
+    try:
+        project = (db.query(Project).filter(Project.name.like("CN-%"))
+                   .order_by(Project.id.desc()).first())
+        project_id = project.id
+        session = DetectionSession(session_uuid=f"cnbdd{datetime.now():%H%M%S%f}"[:16],
+                                   project_id=project_id,
+                                   start_time=datetime.now())
+        db.add(session)
+        old_order_id = None
+        if preset_order_no:
+            old = WorkOrder(order_no=preset_order_no, product_name=preset_order_no,
+                            status="in_progress",
+                            source="external", binding_scope="project",
+                            project_id=project_id, planned_qty=10)
+            db.add(old)
+            db.flush()
+            old_order_id = old.id
+        db.commit()
+        ctx["session_id"] = session.id
+    finally:
+        db.close()
+
+    mgr = MagicMock(is_running=True, is_detecting=True,
+                    current_session_id=ctx["session_id"])
+    # MagicMock 属性访问返回新 mock, project_config 必须显式给真 dict
+    mgr.project_config = {"id": project_id}
+    fake_cm = MagicMock()
+    fake_cm.channels = {0: mgr}
+    monkeypatch.setattr("backend.api.channel_manager.channel_manager", fake_cm)
+
+    hook = get_mes_hook()
+    hook.enabled = True
+    hook._active_orders.clear()
+    if old_order_id is not None:
+        hook._active_orders[0] = old_order_id
+
+    def _sync_enqueue(func, *args, critical=True, **kwargs):
+        _db = SessionLocal()
+        try:
+            func(_db, *args, **kwargs)
+            _db.commit()
+        finally:
+            _db.close()
+
+    monkeypatch.setattr(hook, "_enqueue", _sync_enqueue)
+    ctx["hook"] = hook
+
+
+@given("工位0 正在检测且未挂工单")
+def given_ch0_detecting_no_order(ctx, monkeypatch):
+    _setup_detecting_ch0(ctx, monkeypatch)
+
+
+@given(parsers.parse('工位0 正在检测且已挂工单 "{order_no}"'))
+def given_ch0_detecting_with_order(ctx, monkeypatch, order_no):
+    _setup_detecting_ch0(ctx, monkeypatch, preset_order_no=order_no)
 
 
 @given(parsers.parse(
@@ -355,3 +437,26 @@ def then_ch0_started(ctx):
 @then("工位0 不应被拉起检测")
 def then_ch0_not_started(ctx):
     ctx["ch0_mgr"].start_detection.assert_not_called()
+
+
+@then(parsers.parse('工位0 活跃工单应为 "{order_no}"'))
+def then_ch0_active_order(ctx, order_no):
+    """v3.38: 校验运行中回填后, ch0 内存活跃工单 + 会话工单归属都指向预期单。"""
+    from backend.models.models import DetectionSession
+
+    active_id = ctx["hook"]._active_orders.get(0)
+    assert active_id, "工位0 没有挂任何活跃工单"
+    db = SessionLocal()
+    try:
+        order = db.query(WorkOrder).filter(WorkOrder.id == active_id).first()
+        assert order and order.order_no == order_no, \
+            f"活跃工单是 {order.order_no if order else None}, 预期 {order_no}"
+        # 只有真发生了回填/原生绑定才校验会话归属 (旧单保持场景里会话本来就没挂)
+        session = db.query(DetectionSession).filter(
+            DetectionSession.id == ctx["session_id"]).first()
+        expect_no = db.query(WorkOrder).filter(
+            WorkOrder.order_no == order_no).first()
+        if session is not None and session.order_id:
+            assert session.order_id == expect_no.id
+    finally:
+        db.close()

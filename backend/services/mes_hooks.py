@@ -565,6 +565,16 @@ class MESHookManager:
             self._handle_session_end, channel_id, session_id, critical=True
         )
 
+    def on_external_order_changed(self, channel_id: int, session_id: int,
+                                  project_id: int, allow_replace: bool = False):
+        """入站开工建单/顶替后, 给检测已在跑的工位回填活跃工单 (v3.38 川南反馈)。
+
+        没有它, 会话开始早于建单的工位永远挂不上新单:
+        监控页四要素不显示、周期也不计入该任务, 要停一次检测才生效。
+        """
+        self._enqueue(self._handle_rebind_active_order, channel_id, session_id,
+                      project_id, allow_replace, critical=True)
+
     def on_channel_removed(self, channel_id: int):
         """工位被移除（降工位）时调用，清理该通道在所有 dict 里的残留状态。
         避免降工位再升工位时，新通道的第一周期被残留数据命中（比如 had_workpiece 误判）。
@@ -1683,6 +1693,41 @@ class MESHookManager:
             # 真正"工单数量不+1"的排查靠工单列表"未绑定"红色 tag + cycle_end 那条
             # "Cycle#X 结束但未绑定工件" 的日志即可.
             pass
+
+    def _handle_rebind_active_order(self, db, channel_id: int, session_id: int,
+                                    project_id: int, allow_replace: bool):
+        """运行中工位的活跃工单回填 (工作线程执行, 与 session_start 绑定同一套匹配)。
+
+        规则 (对齐"最新开工为准"已有语义, 不引入新开关):
+          - 工位当前没挂单 → 无条件补挂 (纯正确性: 旧行为是空到重启检测为止)
+          - 已挂旧单且 allow_replace=False → 保守不动 (客户没开顶替就尊重在做的单)
+          - 已挂旧单且 allow_replace=True → 切到最新在产单 (顶替时旧单已被收尾)
+        """
+        order = self._work_order_svc.get_active_order(
+            db, project_id=project_id, channel_id=channel_id,
+        )
+        if not order:
+            return
+        cur = self._active_orders.get(channel_id)
+        if cur == order.id:
+            return
+        if cur is not None and not allow_replace:
+            debug_center.dbg("backend.mes", "活跃工单回填跳过",
+                             f"ch{channel_id} 已挂工单#{cur} 且未开'最新开工为准', 不顶替")
+            return
+        self._active_orders[channel_id] = order.id
+        from backend.models.models import DetectionSession
+        session = db.query(DetectionSession).filter(
+            DetectionSession.id == session_id
+        ).first()
+        if session and hasattr(session, 'order_id'):
+            session.order_id = order.id
+            db.flush()
+        print(f"[MES] ch{channel_id} 运行中回填活跃工单 {order.order_no} "
+              f"(session#{session_id}, 原工单#{cur or '-'})", flush=True)
+        debug_center.dbg("backend.mes", "活跃工单已回填",
+                         f"ch{channel_id} session#{session_id} "
+                         f"{'顶替#' + str(cur) if cur else '补挂'} → {order.order_no}")
 
     def _handle_session_end(self, db, channel_id: int, session_id: int):
         """Session 结束: 清理状态"""
