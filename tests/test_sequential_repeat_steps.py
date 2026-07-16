@@ -199,6 +199,41 @@ class TestConsecutiveRepeatAppend:
 
 
 # ============================================================
+# 5. v3.40 川南反馈: 周期跑偏后位置指针失效, 末步余像不得误判"合法重复"
+# ============================================================
+class TestDeviatedCycleNoFalseRepeat:
+    def test_missing_step_shifts_pointer_no_dup_join(self):
+        # 期望 [A,B,C,D], 实际漏做 B → 周期 [A,C,D] (长度3)。
+        # 老 bug: 位置指针指到 expected[3]='D', 滞留画面的成品 D 每次闪现都被
+        # 当"合法连续重复"重新入周期 → [A,C,D,D,...] → 前端末步 OK/NG 闪烁 +
+        # 结算多报"重复步骤 D"。修复后: 周期已偏离期望前缀, D 余像一律去重。
+        vsm = _make_vsm(['A', 'B', 'C', 'D'], settlement_mode='first_step')
+        t = time.time()
+        for i, lbl in enumerate(['A', 'C', 'D']):
+            _appear(vsm, lbl, t + i)
+            _settle_disappear(vsm, lbl)
+        assert vsm.current_cycle_steps == ['A', 'C', 'D']
+        # 成品滞留画面, D 反复闪现 (每次都走完消失结算再重现)
+        for k in range(3):
+            _appear(vsm, 'D', t + 10 + k)
+            _settle_disappear(vsm, 'D')
+        assert vsm.current_cycle_steps == ['A', 'C', 'D'], \
+            "跑偏周期中末步余像不得重复入周期"
+        assert vsm._test_settles == []
+
+    def test_legit_repeat_on_clean_prefix_still_works(self):
+        # 对照组: 周期是期望的严格前缀时, 期望内的重复照常放行 (v3.19.x 行为不回归)
+        vsm = _make_vsm(['A', 'B', 'B', 'C'], settlement_mode='first_step')
+        t = time.time()
+        _appear(vsm, 'A', t)
+        _settle_disappear(vsm, 'A')
+        _appear(vsm, 'B', t + 1)
+        _settle_disappear(vsm, 'B')
+        _appear(vsm, 'B', t + 2)  # 期望内第二个 B → 合法重复
+        assert vsm.current_cycle_steps == ['A', 'B', 'B']
+
+
+# ============================================================
 # 4. 连续重复步骤 disappear_delay 强制清 0
 # ============================================================
 class TestDisappearDelayEnforcement:

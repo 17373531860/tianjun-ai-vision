@@ -1,0 +1,61 @@
+{
+  "version": "3.40.0",
+  "date": "2026-07-17",
+  "previous_version": "3.39.0",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "顺序模式周期跑偏后末步余像被误判合法重复反复入周期",
+      "symptom": "期望 [A,B,C,D] 漏做 B 后，画面里滞留的成品 D 反复闪现被重新入周期：前端末步结果列 OK/NG 来回闪、结算多报'重复步骤 D'、NG 账挂末步；全 OK 周期无此现象",
+      "root_cause": "连续重复步骤的位置索引判定用 len(current_cycle_steps) 当位置指针查 expected_labels[pos]，隐含'当前周期是期望严格前缀'前提；周期跑偏后指针错位指到末步，余像每次闪现都被认成合法重复",
+      "fix": "SequenceLabels._is_expected_repeat_position 加严格前缀守门：current != expected[:len(current)] 时位置指针失效走常规去重；干净前缀下期望内合法重复行为不变",
+      "files": ["backend/api/source_sequence_labels.py", "tests/test_sequential_repeat_steps.py"],
+      "keywords": ["顺序模式", "重复步骤", "位置指针", "跑偏周期", "末步闪烁", "OK/NG闪", "余像", "deviated cycle", "false repeat", "prefix guard", "川南", "sequence labels"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "开工报文自动拉起检测时空闲监控页毫无感知（按钮不灰/FPS 0/信息条不出）",
+      "symptom": "检测中心停止状态下中控 POST 开工，后端自动开始检测，但前端开始按钮可点、FPS 0、四要素信息条不出，切页再切回才恢复",
+      "root_cause": "前端检测/运行态只靠按钮乐观更新和轮询循环维护，页面空闲时轮询未启动，后端自行拉起无人接收；轮询循环也不回读后端检测态",
+      "fix": "双保险：空闲看门狗每 2s 探源状态发现后端在跑即自动接管（同步状态+起轮询+重连画面）；轮询循环以后端为真相源同步 is_detecting/is_running（用户操作中不抢）",
+      "files": ["frontend/src/views/Monitor/index.vue", "tests/e2e_browser/test_idle_watchdog_adopt.py", "tests/uat/uat_20260716_cn_idle_autostart_adopt.py"],
+      "keywords": ["空闲看门狗", "idle watchdog", "开工报文", "自动开始检测", "按钮不灰", "FPS 0", "信息条", "状态同步", "轮询", "真相源", "川南"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "末步结果列随成品余像闪烁回退 '--'",
+      "symptom": "末步判定出 OK/NG 后成品滞留画面再次被识别，结果列打回 '--' 再变回，持续闪烁",
+      "root_cause": "末步完成判定只认'已离开画面'，余像重现时条件翻回 false 结果列回退",
+      "fix": "末步已有权威 PT 后结果锁定不随余像回退（_leftFrame || _posAuthoritative）",
+      "files": ["frontend/src/views/Monitor/index.vue", "tests/uat/uat_20260716_cn_last_step_flicker.py"],
+      "keywords": ["末步结果列", "闪烁", "权威PT", "结果锁定", "余像", "川南"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "DOC-001",
+      "title": "上银 SY 项目标签与流程交接文档",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "新增 docs/customers/上银/SY项目标签与流程交接_给模型重训会话.md，给模型重训会话交接用",
+      "files": ["docs/customers/上银/SY项目标签与流程交接_给模型重训会话.md"],
+      "keywords": ["上银", "SY", "标签交接", "模型重训"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-source", "debug-frontend"],
+  "files_changed": [
+    "backend/api/source_sequence_labels.py",
+    "frontend/src/views/Monitor/index.vue",
+    "tests/test_sequential_repeat_steps.py",
+    "tests/e2e_browser/test_idle_watchdog_adopt.py",
+    "tests/uat/uat_20260716_cn_idle_autostart_adopt.py",
+    "tests/uat/uat_20260716_cn_last_step_flicker.py",
+    "docs/customers/上银/SY项目标签与流程交接_给模型重训会话.md"
+  ]
+}

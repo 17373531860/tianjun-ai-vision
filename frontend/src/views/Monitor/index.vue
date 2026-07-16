@@ -4747,6 +4747,23 @@ const startPolling = () => {
       latency.value = data.latency || 0;
       detectionCount.value = (data.detections || []).length;
 
+      // v3.40 川南反馈: 检测由后端自行拉起/停下时 (开工报文自动开始检测等),
+      // 前端按钮灰度/状态章跟不上 → 轮询循环里以后端为真相源同步运行/检测态。
+      // isOperating 期间不抢 (用户点开始/停止的乐观更新优先, 完成后自然对齐)。
+      if (!isOperating.value && typeof data.is_detecting === 'boolean') {
+        if (isDetecting.value !== data.is_detecting) {
+          dbg('monitor.poll', '后端检测态变化, 前端同步',
+              `is_detecting ${isDetecting.value} -> ${data.is_detecting}`);
+          isDetecting.value = data.is_detecting;
+          if (channelCount.value <= 1) systemStore.setDetecting(data.is_detecting);
+        }
+        if (typeof data.is_running === 'boolean' && isRunning.value !== data.is_running) {
+          isRunning.value = data.is_running;
+          if (data.is_running) isPaused.value = false;
+          if (channelCount.value <= 1) projectStore.setRunningStatus(data.is_running);
+        }
+      }
+
       // v3.7.x 流卡死检测: 后端在推理 (fps > 0 且 is_running) 但前端
       // <img> 没收到过任何帧 (isStreaming=false), 持续 N ms -> 真黑屏。
       // multipart 后续帧不触发 onload, 没法用心跳 watchdog 检测中途卡死,
@@ -5297,9 +5314,11 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
 
       const _isLastStep = expectedLabels.length > 0 && idx === expectedLabels.length - 1;
       // 最后一步: 离开画面即可 OK+PT 同帧; 中间步: 要有可显示 PT, 且已离开画面或后续步骤已往前走
+      // v3.40 川南反馈: 末步已有权威 PT (= 已完成过一次完整出现) 后, 成品滞留画面
+      // 里再次被识别不把结果列打回 '--' — 结果一旦给出就锁定, 不随余像闪烁回退。
       const _posDone = thisPosCompleted && (
         _isLastStep
-          ? _leftFrame
+          ? (_leftFrame || _posAuthoritative)
           : (_hasTimedPT && (_leftFrame || _passedThisStep))
       );
 
@@ -5507,6 +5526,44 @@ const stopPolling = () => {
     clearInterval(pollingTimer);
     pollingTimer = null;
   }
+};
+
+// ==================== v3.40 空闲看门狗 (川南反馈) ====================
+// 场景: 监控页停在"已停止"状态 (无轮询无取流), 中控发开工报文 → 后端自动重连相机
+// 并开始检测。老行为: 前端毫无感知 (FPS 0 / 开始按钮不灰 / 信息条不出), 要切页
+// 再切回才正常。看门狗: 空闲时每 2s 探一次后端源状态, 发现"后端已在跑"就自动接管
+// (同步状态 + 起轮询 + 重连画面), 等价于一次页面重进。
+let idleWatchdogTimer = null;
+let _idleWatchdogBusy = false;
+const startIdleWatchdog = () => {
+  stopIdleWatchdog();
+  idleWatchdogTimer = setInterval(async () => {
+    if (_idleWatchdogBusy) return;
+    if (pollingTimer) return;             // 已在轮询 → 由轮询循环自身同步, 看门狗休眠
+    if (channelCount.value > 1) return;   // 多工位由 multiPolling 常轮询覆盖
+    if (isOperating.value) return;        // 用户操作进行中不抢
+    _idleWatchdogBusy = true;
+    try {
+      const res = await getSourceStatus();
+      if (!monitorMounted || pollingTimer) return;
+      if (res.data?.is_running) {
+        dbg('monitor.poll', '空闲看门狗: 后端已自行拉起视频/检测, 前端接管',
+            `detecting=${!!res.data.is_detecting} source=${res.data.source_type || '?'}`);
+        if (res.data.source_type) sourceStore.setSourceType(res.data.source_type);
+        isRunning.value = true;
+        isDetecting.value = !!res.data.is_detecting;
+        isPaused.value = false;
+        projectStore.setRunningStatus(true);
+        systemStore.setDetecting(!!res.data.is_detecting);
+        startPolling();
+        forceReconnectStream();
+      }
+    } catch { /* 后端瞬时不可达, 下个 tick 再试 */ }
+    finally { _idleWatchdogBusy = false; }
+  }, 2000);
+};
+const stopIdleWatchdog = () => {
+  if (idleWatchdogTimer) { clearInterval(idleWatchdogTimer); idleWatchdogTimer = null; }
 };
 
 const standbyHandler = async () => {
@@ -5974,7 +6031,10 @@ onMounted(async () => {
   _nowTickInterval = setInterval(() => {
     nowTimestamp.value = Math.floor(Date.now() / 1000);
   }, 500);
-  
+
+  // v3.40: 空闲看门狗 — 后端被开工报文自动拉起时, 前端不用切页也能接管 (川南反馈)
+  startIdleWatchdog();
+
   // Reset error count so reconnection works after page navigation
   streamErrorCount = 0;
   
@@ -6037,6 +6097,7 @@ onUnmounted(() => {
   monitorMounted = false;
   if (_nowTickInterval) { clearInterval(_nowTickInterval); _nowTickInterval = null; }
   window.removeEventListener('resize', handleResize);
+  stopIdleWatchdog();
   stopPolling();
   stopMultiPolling();
   stopMultiStreams();

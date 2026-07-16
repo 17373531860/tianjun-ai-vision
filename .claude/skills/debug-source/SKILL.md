@@ -1055,3 +1055,15 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 - 周期收尾"框卡死/画面顿一下"已治本：落库出推理线程（`source_persist_worker.py`，每通道 FIFO 队列）。若复发，先确认是否有人把新 DB 写塞回了推理线程。
 - 数据页 cycle/step "晚到"零点几秒属正常（异步落库）；怀疑丢数据 → 设 `TIANJUN_SYNC_PERSIST=1` 复跑对照。
 - 落库线程错误隔离：单任务失败只记日志不倒线程——排"记录缺失"先 grep 后端日志 persist 关键字。
+
+---
+
+## v3.40.0 补充：顺序模式"跑偏周期 + 末步余像"闪烁误判（川南反馈）
+
+**症状三联**：末步结果列 OK/NG 来回闪；结算时"缺少 X"之外多报"重复步骤 <末步>"；NG 账挂到末步头上。全 OK 周期不出现。
+
+**根因**：`source_sequence_labels.py: _is_expected_repeat_position` 用 `len(current_cycle_steps)` 当位置指针查 `expected_labels[pos]`，隐含"当前周期是期望严格前缀"前提。周期跑偏（漏做/乱序，如期望 [A,B,C,D] 实际 [A,C,D]）后指针错位指到末步，滞留画面的成品每次闪现→消失→重现都被判"合法重复"重新入周期。
+
+**修复**：位置判定前加严格前缀守门 `list(cur) != expected[:next_pos] → False`。干净前缀（期望内配置的重复步骤）不受影响。回归：`tests/test_sequential_repeat_steps.py::TestDeviatedCycleNoFalseRepeat`。
+
+**排查口诀**：客户报"结果列闪 + 重复步骤误报"且只在缺步周期出现 → 先查这里，不要去动前端。前端侧还有一层独立防抖（末步权威 PT 结果锁定，见 Monitor `_posDone`），两层是不同 bug 的两个修复，别混。

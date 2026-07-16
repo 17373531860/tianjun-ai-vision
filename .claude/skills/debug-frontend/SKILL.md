@@ -328,3 +328,16 @@ v3.7.3 起 IoU / 优先级 / FP16 收进"高级参数 ▾"折叠区（默认收�
 - 扫码 / 工件 / Toast 联动 → `debug-mes`
 - License / Splash / 关机 → `debug-electron`
 
+---
+
+## v3.40.0 补充：监控页"后端自行拉起检测"的前端接管机制（川南反馈）
+
+**场景**：检测中心处于停止态（无轮询无取流），中控开工报文让后端自动开始检测。老行为前端毫无感知（开始按钮不灰 / FPS 0 / 信息条不出），切页再切回才恢复。
+
+**v3.40 双保险**（都在 `Monitor/index.vue`）：
+1. **空闲看门狗** `startIdleWatchdog`：空闲时每 2s 探一次源状态，发现后端 `is_running` 就自动接管（同步运行/检测态 + 起轮询 + 重连画面）。轮询已在跑 / 多工位（multiPolling 覆盖）/ 用户操作中都休眠不抢。
+2. **轮询真相源同步**：`startPolling` 循环里以后端 `is_detecting`/`is_running` 为真相源回写前端状态，`isOperating` 期间不抢（按钮乐观更新优先）。
+
+**排查要点**：客户报"后端在跑前端没反应"先看这两处是否被绕过（如新加的启动路径没走 `getSourceStatus` 暴露 `is_running`）；回归护栏 `tests/e2e_browser/test_idle_watchdog_adopt.py` + UAT `tests/uat/uat_20260716_cn_idle_autostart_adopt.py`。
+**关联但独立**：末步结果列随余像闪烁回退是另一个修复（`_posDone` 权威 PT 锁定，UAT `uat_20260716_cn_last_step_flicker.py`），后端侧还有严格前缀守门（见 `debug-source` v3.40 节）。
+

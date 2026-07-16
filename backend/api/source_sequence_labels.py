@@ -158,6 +158,13 @@ class SequenceLabels:
           - 仅在顺序型模式有意义 (sequential / custom-based-on-sequential)。
           - 若 expected_labels[len(current)] == label 就合法。
           - 检测模式不调用本方法 (那种模式按 count 判 NG, 走 settle 里的 expected_counter)。
+
+        v3.40 (川南反馈修复): 位置索引判定必须以"当前周期就是期望的严格前缀"为前提。
+        周期一旦跑偏 (漏做/乱序, 如期望 [A,B,C,D] 实际 [A,C,D]), 实际长度 3 会把
+        位置指针错位指到 expected[3]='D' —— 滞留画面里反复闪现的末步 D 被一次次
+        误认成"合法重复"重新入周期, 造成: 前端末步结果列 OK/NG 来回闪、结算时
+        在"缺少 B"之外又多出"重复步骤 D"、NG 账挂到末步头上。
+        全 OK 周期 (实际=期望, 长度用尽) 天然不触发, 与客户"全 OK 无此现象"吻合。
         """
         cur = getattr(self._host, "current_cycle_steps", None)
         if cur is None:
@@ -167,6 +174,9 @@ class SequenceLabels:
             return False
         next_pos = len(cur)
         if next_pos >= len(expected):
+            return False
+        # 周期已偏离期望前缀 → 位置指针无意义, 不再按位置认"合法重复"
+        if list(cur) != expected[:next_pos]:
             return False
         return expected[next_pos] == label
 
