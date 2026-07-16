@@ -156,7 +156,7 @@
         <div v-if="isScanDisabledFor(ch - 1)" class="flex items-center gap-1 text-gray-400 italic">
           <span>⛔ 扫码已禁用 · 走项目原生结算</span>
         </div>
-        <div v-if="getMesDataFor(ch - 1)?.order" class="flex items-center gap-1 text-[0.625rem] ml-auto pl-2 border-l border-cyan-800/40">
+        <div v-if="getMesDataFor(ch - 1)?.order && taskInfoDisplay.show_order_chip" class="flex items-center gap-1 text-[0.625rem] ml-auto pl-2 border-l border-cyan-800/40">
           <span class="text-cyan-400">工单:</span>
           <span class="text-white truncate max-w-[80px]" :title="getMesDataFor(ch - 1).order.order_no">{{ getMesDataFor(ch - 1).order.order_no }}</span>
           <span class="text-gray-400">{{ getMesDataFor(ch - 1).order.completed_qty }}/{{ getMesDataFor(ch - 1).order.planned_qty }}</span>
@@ -169,7 +169,7 @@
           </template>
         </div>
         <el-tooltip
-          v-if="!isScanDisabledFor(ch - 1)"
+          v-if="systemStore.display.monitor.showScanButtons !== false && !isScanDisabledFor(ch - 1)"
           :content="getDisplayWorkpieceFor(ch - 1) && getDisplayWorkpieceFor(ch - 1).status === 'inspecting'
             ? '本次工件已开始检测，点击可作废本次检测、回到等待扫码状态'
             : '清除待检/扫码状态，让操作员重扫一次条码'"
@@ -187,6 +187,7 @@
         </el-tooltip>
         <!-- v3.4.2 按工位禁用扫码 -->
         <el-tooltip
+          v-if="systemStore.display.monitor.showScanButtons !== false"
           :content="isScanDisabledFor(ch - 1)
             ? '点击启用扫码：扫码器恢复工作，按扫码器配置的结算方式 (scan_pair / mid_cycle 等) 工作'
             : '点击禁用扫码：扫码器熄灯，所有联动工位回退到项目原生结算方式 (tracking → 全部消失，容器 → 箱子离开)'"
@@ -379,8 +380,9 @@
           <div v-if="isScanDisabledFor(selectedChannel)" class="flex items-center gap-1 text-gray-400 italic text-xs">
             <span>⛔ 扫码已禁用 · 走项目原生结算</span>
           </div>
-          <el-button v-if="!isScanDisabledFor(selectedChannel)" size="small" type="warning" plain @click="clearPendingScan(selectedChannel)">清除本次扫码</el-button>
+          <el-button v-if="systemStore.display.monitor.showScanButtons !== false && !isScanDisabledFor(selectedChannel)" size="small" type="warning" plain @click="clearPendingScan(selectedChannel)">清除本次扫码</el-button>
           <el-button
+            v-if="systemStore.display.monitor.showScanButtons !== false"
             size="small"
             :type="isScanDisabledFor(selectedChannel) ? 'success' : 'danger'"
             plain
@@ -851,7 +853,8 @@
           </el-tag>
           <span class="text-gray-400 text-xs">第{{ displayWorkpiece.inspection_count }}次</span>
         </div>
-        <div v-if="mesData?.order" class="flex items-center gap-2">
+        <!-- v3.39: 工单徽标可配置隐藏 (川南要求信息条只留任务要素) -->
+        <div v-if="mesData?.order && taskInfoDisplay.show_order_chip" class="flex items-center gap-2">
           <span class="text-cyan-400 font-bold">工单:</span>
           <span class="text-white">{{ mesData.order.order_no }}</span>
           <span class="text-gray-400 text-xs">{{ mesData.order.completed_qty }}/{{ mesData.order.planned_qty }}</span>
@@ -859,11 +862,26 @@
             良率 {{ mesData.order.yield_rate ?? '-' }}%
           </span>
         </div>
-        <!-- 开工任务要素 (按入站配置 task_info_display 逐项显示; 全关时无任何标签) -->
-        <div v-for="it in getTaskInfoItemsFor(selectedChannel)" :key="it.label" class="flex items-center gap-2">
-          <span class="text-cyan-400 font-bold">{{ it.label }}:</span>
-          <span class="text-white truncate max-w-[160px]" :title="it.value">{{ it.value }}</span>
-        </div>
+        <!-- 开工任务要素 (按入站配置 task_info_display 逐项显示; 全关时无任何标签)
+             v3.39: 默认单行标签; two_line_layout 开启 = 表头一行+信息一行 (川南要求, 防截断) -->
+        <template v-if="!taskInfoDisplay.two_line_layout">
+          <div v-for="it in getTaskInfoItemsFor(selectedChannel)" :key="it.label" class="flex items-center gap-2">
+            <span class="text-cyan-400 font-bold">{{ it.label }}:</span>
+            <span class="text-white truncate max-w-[160px]" :title="it.value">{{ it.value }}</span>
+          </div>
+        </template>
+        <table v-else-if="getTaskInfoItemsFor(selectedChannel).length" class="task-info-table">
+          <thead>
+            <tr>
+              <th v-for="it in getTaskInfoItemsFor(selectedChannel)" :key="it.label">{{ it.label }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td v-for="it in getTaskInfoItemsFor(selectedChannel)" :key="it.label" :title="it.value">{{ it.value }}</td>
+            </tr>
+          </tbody>
+        </table>
         <div v-if="!isScanDisabledFor(selectedChannel) && hasScannerFor(selectedChannel) && mesData?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-2 bg-yellow-600/30 border border-yellow-500 rounded px-3 py-1">
           <span class="text-yellow-300 font-bold text-base">⚠ 未绑码</span>
           <span class="text-yellow-200 text-sm">请扫描工件条码</span>
@@ -873,8 +891,8 @@
           <span class="text-base">⛔ 扫码已禁用</span>
           <span class="text-xs">所有联动工位走项目原生结算 (跟踪→全部消失，容器→箱子离开)</span>
         </div>
-        <!-- 清除本次扫码 + 禁用/启用扫码 -->
-        <div class="ml-auto flex items-center gap-2">
+        <!-- 清除本次扫码 + 禁用/启用扫码 (v3.39: 操作员不碰软件的部署可在系统设置隐藏) -->
+        <div v-if="systemStore.display.monitor.showScanButtons !== false" class="ml-auto flex items-center gap-2">
           <el-tooltip
             v-if="!isScanDisabledFor(selectedChannel)"
             :content="displayWorkpiece && displayWorkpiece.status === 'inspecting'
@@ -3237,6 +3255,8 @@ const taskInfoDisplay = ref({
   show_product_code: false,
   show_step_code: false,
   show_operator: false,
+  show_order_chip: true,   // 工单徽标 (单号+进度+良率), 默认显示 = 原界面
+  two_line_layout: false,  // 任务要素"表头一行+信息一行"布局, 默认关 = 原界面
 });
 // 任一要素打开才需要渲染追加标签
 const taskInfoAnyOn = computed(() =>
@@ -3254,6 +3274,8 @@ async function loadTaskInfoDisplay() {
       show_product_code: t.show_product_code === true,
       show_step_code: t.show_step_code === true,
       show_operator: t.show_operator === true,
+      show_order_chip: t.show_order_chip !== false,
+      two_line_layout: t.two_line_layout === true,
     };
   } catch (e) {
     // 取不到配置时维持默认全关, 不影响原界面
@@ -6060,6 +6082,29 @@ defineExpose({ triggerEvent, showToast });
 </script>
 
 <style scoped>
+/* v3.39 任务要素"表头一行+信息一行"布局 (task_info_display.two_line_layout) */
+.task-info-table {
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+.task-info-table th {
+  color: #22d3ee;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 0 12px 2px 12px;
+  text-align: center;
+  border-bottom: 1px solid rgba(8, 145, 178, 0.35);
+}
+.task-info-table td {
+  color: #fff;
+  font-size: 13px;
+  padding: 2px 12px 0 12px;
+  text-align: center;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .toast-enter-active,
 .toast-leave-active {
   transition: all 0.3s ease;

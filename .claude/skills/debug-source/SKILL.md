@@ -354,7 +354,10 @@ end_cycle commit 后
 `backend/services/weighing_engine.py`（进程级单例，每通道独立状态机，吃外设管线
 广播的稳定读数）。source 侧唯一交点是 `source_project_config_apply.py` 末尾——
 按 `logic_mode == 'weighing'` 把通道登记进引擎（携 `pipeline_config.weighing`），
-非 weighing 项目注销通道零残留。排查 weighing 周期不推进时：先查外设读数是否进来
+非 weighing 项目注销通道零残留。v3.39 起 `drive_mode='pipeline'`（萍乡两阶段流水线：
+离秤冻结结算 + 待收尾 FIFO 队列）用独立的流水线工位状态机（同文件 `PipelineStation`），
+且推理热路径会把"工件上秤/加钢脚水泥"标签逐帧喂给引擎（apply 段按 drive_mode 打开
+`_weighing_visual_feed`）——排查流水线不推进除了看外设读数，还要确认标签喂入开关生效。排查 weighing 周期不推进时：先查外设读数是否进来
 （`/api/v1/external-devices/*` 日志），再查引擎通道登记（切项目后是否 set_channel_config），
 最后才看引擎状态机本身；帧循环的 cycle/step 排查手段对它不适用。
 

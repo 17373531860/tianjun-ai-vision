@@ -475,7 +475,7 @@ curl -sI http://127.0.0.1:6001/ | head -1
 | `backend/api/sessions_export.py` 或任何 CSV 导出 | `tests/test_csv_export_pt_ct_modes.py` |
 | `backend/services/scanner.py` / `wmax.py` / `mes_hooks.py` | 暂无单元测试覆盖 — **必须**手测路径 C，或写新 BDD scenario 覆盖 |
 | `backend/models/*.py`（ORM 模型） | **全部 mock fixture 都要扫一遍**（grep `MagicMock` + 改的字段名）；`tests/test_*_exposure.py` 全跑 |
-| `backend/services/weighing_engine.py` / `backend/api/weighing.py` / `pipeline_config.weighing` 相关 | `tests/test_weighing_engine.py`（13 例：状态机/去皮/判定/落库）+ `tests/test_mock_weight_source.py`（无硬件模拟源） |
+| `backend/services/weighing_engine.py` / `backend/api/weighing.py` / `pipeline_config.weighing` 相关 | `tests/test_weighing_engine.py`（13 例：状态机/去皮/判定/落库）+ `tests/test_mock_weight_source.py`（无硬件模拟源）；碰 pipeline 驱动模式（v3.39 两阶段流水线）再加 `tests/test_weighing_pipeline.py`（20 例纯逻辑）+ `tests/step_defs/test_weighing_pipeline_baist.py`（BDD 全链路）+ `tests/e2e_browser/test_weighing_pipeline_tab.py`（配置 UI 落库） |
 | `backend/services/external_device*.py`（外设协议/管线/稳态机） | `tests/test_weight_stabilizing_throttle_b2.py` + `tests/test_mock_weight_source.py` + `tests/test_fire_external_event.py`；碰称重业务再加跑上一行 |
 | 前端 `Settings/index.vue` 或 `useSystemStore.js` | 暂无单元测试 — 跑 `tests/e2e_browser/test_monitor_page.py` 看用户配置变更是否被前端正确读取 |
 | 前端 `Monitor/index.vue` | `tests/e2e_browser/test_monitor_page.py` |

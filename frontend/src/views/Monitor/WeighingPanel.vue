@@ -31,13 +31,16 @@
                    :disabled="state.material_check === 'visual'">
           <el-option v-for="m in (state.available_models || [])" :key="m" :label="m" :value="m" />
         </el-select>
-        <el-button size="small" @click="applyContext" :disabled="phase === 'filling' || phase === 'await_tare'">确定人员/型号</el-button>
+        <el-button size="small" @click="applyContext" :disabled="!isPipeline && (phase === 'filling' || phase === 'await_tare')">确定人员/型号</el-button>
         <span class="text-gray-500 text-xs ml-1" v-if="state.material_check === 'visual'">(视觉识别料别，型号由模型自动判定)</span>
 
         <div class="flex-1"></div>
 
-        <el-input v-model="snInput" size="small" style="width: 140px" placeholder="产品序列号" @keyup.enter="doScan" />
-        <el-button size="small" type="primary" @click="doScan">扫码开始</el-button>
+        <!-- 流水线模式: 件号自动生成, 无需扫码开始 -->
+        <template v-if="!isPipeline">
+          <el-input v-model="snInput" size="small" style="width: 140px" placeholder="产品序列号" @keyup.enter="doScan" />
+          <el-button size="small" type="primary" @click="doScan">扫码开始</el-button>
+        </template>
         <el-button size="small" @click="doReset">复位</el-button>
       </div>
 
@@ -49,8 +52,45 @@
         <span v-if="state.visual_label">视觉料别: <b class="text-amber-400">{{ state.visual_label }}</b></span>
       </div>
 
-      <!-- 料别投料进度看板 -->
-      <div class="p-3 space-y-2 overflow-y-auto" style="max-height: 240px">
+      <!-- v3.39 流水线模式看板: 秤上件 + 待收尾队列 -->
+      <div v-if="isPipeline" class="p-3 space-y-3 overflow-y-auto" style="max-height: 280px">
+        <div class="rounded border border-slate-700 bg-slate-800/40 px-3 py-2 flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <span class="text-gray-400 text-xs">秤上</span>
+            <span class="font-bold text-white">{{ state.product_sn || '（空秤）' }}</span>
+            <span v-if="state.last_stable_net != null" class="text-xs text-gray-400">
+              最近稳定净重 <b class="text-white font-mono">{{ Number(state.last_stable_net).toFixed(3) }}</b> kg
+            </span>
+            <span v-if="state.offscale" class="text-xs text-amber-400">已拿下装料中…</span>
+          </div>
+          <span class="text-xs text-gray-500">累计结算 {{ state.settled_count || 0 }} 件</span>
+        </div>
+        <div>
+          <div class="text-xs text-gray-400 mb-1">待收尾队列（离秤已结算，等收尾动作正式结案）</div>
+          <div v-if="!(state.pending || []).length" class="text-gray-600 text-xs py-1">（空）</div>
+          <div v-for="(p, i) in (state.pending || [])" :key="p.sn || i"
+               class="rounded border px-3 py-1.5 mb-1 flex items-center justify-between text-sm"
+               :class="p.verdict === 'ok' ? 'border-green-700/50 bg-green-900/10' : 'border-red-700/50 bg-red-900/10'">
+            <div class="flex items-center gap-3">
+              <span class="font-mono text-white">{{ p.sn }}</span>
+              <span class="font-mono text-gray-300">净重 {{ p.net != null ? Number(p.net).toFixed(3) : '—' }}kg</span>
+            </div>
+            <span class="px-2 py-0.5 rounded text-xs font-bold" :class="verdictClass(p.verdict)">{{ verdictText(p.verdict) }}</span>
+          </div>
+        </div>
+        <div v-if="(state.results || []).length">
+          <div class="text-xs text-gray-400 mb-1">最近结算</div>
+          <div v-for="r in recentResults" :key="r.sn + '-' + r.ts"
+               class="flex items-center justify-between text-xs text-gray-300 py-0.5">
+            <span class="font-mono">{{ r.sn }}</span>
+            <span class="font-mono">皮重 {{ r.tare != null ? Number(r.tare).toFixed(3) : '—' }} / 净重 {{ r.net != null ? Number(r.net).toFixed(3) : '—' }} kg</span>
+            <span class="px-1.5 rounded font-bold" :class="verdictClass(r.verdict)">{{ verdictText(r.verdict) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 料别投料进度看板 (逐道投料模式) -->
+      <div v-else class="p-3 space-y-2 overflow-y-auto" style="max-height: 240px">
         <div v-if="!(state.materials || []).length" class="text-gray-500 text-sm text-center py-3">
           该型号未配料别，请到项目「称重配置」页设置。
         </div>
@@ -80,7 +120,10 @@
 
       <!-- 本件结论 + 操作 -->
       <div class="px-3 py-2 border-t border-slate-700 flex items-center justify-between flex-shrink-0">
-        <span v-if="phase === 'done'" class="text-sm font-bold"
+        <span v-if="isPipeline" class="text-sm text-gray-400">
+          {{ phaseText }} · 秤指令由重量自动驱动
+        </span>
+        <span v-else-if="phase === 'done'" class="text-sm font-bold"
               :class="itemAllOk ? 'text-green-400' : 'text-red-400'">
           本件{{ itemAllOk ? '合格' : '不合格' }}（{{ (state.results || []).length }} 道料完成）
         </span>
@@ -114,6 +157,9 @@ let timer = null;
 
 const phase = computed(() => state.value?.phase || 'idle');
 const liveWeight = computed(() => {
+  // 流水线模式优先显示"有效读数"(已扣离秤未清零期间的零点基线)
+  const eff = state.value?.effective_weight;
+  if (state.value?.drive_mode === 'pipeline' && typeof eff === 'number') return eff;
   const w = state.value?.live_weight;
   return (typeof w === 'number') ? w : null;
 });
@@ -122,14 +168,21 @@ const tareWeight = computed(() => {
   return (typeof w === 'number') ? w : null;
 });
 
+const isPipeline = computed(() => state.value?.drive_mode === 'pipeline');
+const recentResults = computed(() => (state.value?.results || []).slice(-3).reverse());
+
 const phaseText = computed(() => ({
   idle: '待开始', await_tare: '待去皮(放料盆)', filling: '投料中', done: '完成',
+  // v3.39 流水线模式相位
+  empty: '空秤·待上件', departing: '离秤确认中…',
 }[phase.value] || phase.value));
 const phaseClass = computed(() => ({
   idle: 'bg-slate-700 text-gray-300',
   await_tare: 'bg-amber-600/30 text-amber-300',
   filling: 'bg-cyan-600/30 text-cyan-300',
   done: 'bg-green-600/30 text-green-300',
+  empty: 'bg-slate-700 text-gray-300',
+  departing: 'bg-amber-600/30 text-amber-300',
 }[phase.value] || 'bg-slate-700 text-gray-300'));
 
 const itemAllOk = computed(() =>

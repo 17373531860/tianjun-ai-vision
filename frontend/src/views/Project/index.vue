@@ -512,7 +512,9 @@
             v-if="activeProject.logic_mode === 'weighing' || isStepGateFusion"
             label="称重配置"
             name="weighing">
-            <WeighingConfigTab :project="activeProject" @open-guard-roi-editor="openGuardRoiEditor" />
+            <WeighingConfigTab :project="activeProject"
+              @open-guard-roi-editor="openGuardRoiEditor"
+              @open-pipeline-roi-editor="openPipelineRoiEditor" />
           </el-tab-pane>
 
           <el-tab-pane label="逻辑设置" name="logic">
@@ -796,12 +798,16 @@ const regionRuleEditingIdx = ref(-1);
 // v3.35 视觉料源防错: 守卫规则区域, 指向 pipeline_config.weighing.visual_guard.rules 下标 (互斥)
 const guardRuleEditingIdx = ref(-1);
 
+// v3.39 流水线称重: 秤台区 (标签"工件上秤"有效域) 编辑标记 (互斥)
+const pipelineZoneEditing = ref(false);
+
 const resetRoiEditorTargets = () => {
   extraModelRoiEditingIdx.value = -1;
   stepRoiEditingStepId.value = null;
   placementGuideEditing.value = false;
   regionRuleEditingIdx.value = -1;
   guardRuleEditingIdx.value = -1;
+  pipelineZoneEditing.value = false;
 };
 
 // v3.35 融合模式判定: 顺序 SOP + 步骤外设门控 (称重配置页签的第二种出现条件)
@@ -829,6 +835,9 @@ const roiEditorDialogTitle = computed(() => {
     const rule = ap?.pipeline_config?.weighing?.visual_guard?.rules?.[guardRuleEditingIdx.value];
     return `绘制料源防错规则 [${rule?.name || `规则 ${guardRuleEditingIdx.value + 1}`}] 的判定区域`;
   }
+  if (pipelineZoneEditing.value) {
+    return '绘制秤台区（"工件上秤"标签只在此区域内有效）';
+  }
   return '绘制 ROI 检测区域';
 });
 
@@ -838,6 +847,14 @@ const openGuardRoiEditor = async (idx) => {
   guardRuleEditingIdx.value = idx;
   const rule = activeProject.value?.pipeline_config?.weighing?.visual_guard?.rules?.[idx];
   await _openRoiDialog(rule?.polygon || null);
+};
+
+// v3.39 流水线称重秤台区: WeighingConfigTab 发起, 复用同一个 ROI 编辑器
+const openPipelineRoiEditor = async () => {
+  resetRoiEditorTargets();
+  pipelineZoneEditing.value = true;
+  const poly = activeProject.value?.pipeline_config?.weighing?.pipeline?.onscale_polygon;
+  await _openRoiDialog(poly || null);
 };
 
 // 统一打开入口: 设目标 → 开对话框 → 等 canvas 挂载 → 子组件取快照并预加载已有多边形
@@ -926,6 +943,18 @@ const handleRoiSave = async (polygon) => {
     if (rule) {
       rule.polygon = polygon;
       ElMessage.success(`料源防错规则 [${rule.name || `规则 ${guardRuleEditingIdx.value + 1}`}] 判定区域已保存 (${polygon.length} 个顶点)，记得点右上角"保存配置"落库`);
+    }
+    resetRoiEditorTargets();
+    roiEditorVisible.value = false;
+    return;
+  }
+
+  // v3.39 流水线称重秤台区: 写入 pipeline_config.weighing.pipeline.onscale_polygon
+  if (pipelineZoneEditing.value) {
+    const pipe = activeProject.value?.pipeline_config?.weighing?.pipeline;
+    if (pipe) {
+      pipe.onscale_polygon = polygon;
+      ElMessage.success(`秤台区已保存 (${polygon.length} 个顶点)，记得点右上角"保存配置"落库`);
     }
     resetRoiEditorTargets();
     roiEditorVisible.value = false;
@@ -1130,6 +1159,29 @@ const ensureWeighingDefaults = (project) => {
     visual_guard: (w.visual_guard && typeof w.visual_guard === 'object')
       ? { enabled: false, source: 'region_action', rules: [], wrong_block: true, cooldown_sec: 5, ...w.visual_guard }
       : { enabled: false, source: 'region_action', rules: [], wrong_block: true, cooldown_sec: 5 },
+    // v3.39 两阶段流水线模式 (秤上称重 + 秤下待收尾) + 秤指令时序参数 (全部可调)
+    pipeline: {
+      material: '钢帽水泥', label_onscale: '工件上秤', label_fill: '加水泥',
+      label_finalize: '加钢脚水泥', onscale_polygon: null,
+      tare_min_kg: 0.2, tare_max_kg: 10.0, queue_depth: 2,
+      ...((w.pipeline && typeof w.pipeline === 'object') ? w.pipeline : {}),
+    },
+    timing: {
+      tare_trigger_source: 'weight_first', tare_delay_ms: 0,
+      tare_stable_ms: 1000, tare_stable_tol_kg: 0.005,
+      net_stable_ms: 1500, net_stable_tol_kg: 0.005,
+      shortage_alarm_sec: 3, depart_confirm_ms: 500,
+      zero_delay_ms: 0, zero_verify_ms: 2000, zero_retry: 1,
+      label1_min_frames: 3, label1_fresh_sec: 3,
+      label3_min_frames: 5, label3_cooldown_sec: 2,
+      fill_timeout_sec: 300, finalize_timeout_sec: 120,
+      ...((w.timing && typeof w.timing === 'object') ? w.timing : {}),
+    },
+    alarm_event_ok: w.alarm_event_ok ?? 1,
+    alarm_event_tare_range: w.alarm_event_tare_range ?? 2,
+    alarm_event_residue: w.alarm_event_residue ?? 2,
+    alarm_event_takt: w.alarm_event_takt ?? 2,
+    alarm_event_finalize_timeout: w.alarm_event_finalize_timeout ?? 2,
   };
   const ww = project.pipeline_config.weighing;
   Object.keys(ww.models).forEach(mname => {

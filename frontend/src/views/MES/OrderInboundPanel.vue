@@ -290,6 +290,15 @@
         <el-checkbox v-model="form.alarm_banner.show_operator">操作员</el-checkbox>
         <el-checkbox v-model="form.alarm_banner.show_time">报警时间</el-checkbox>
       </el-form-item>
+      <!-- v3.39: 在途报警的软件内消除出口 (默认全关, 保持"只能外部消除"的对接契约) -->
+      <el-form-item label="横幅手动消除">
+        <el-switch v-model="form.alarm_banner.allow_manual_clear" />
+        <span class="text-xs text-gray-500 ml-2">开 = 横幅上出现"手动消除"按钮，可在软件内直接消除全部在途报警（联调/测试用）</span>
+      </el-form-item>
+      <el-form-item label="清零联动消除">
+        <el-switch v-model="form.alarm_banner.clear_on_counter_reset" />
+        <span class="text-xs text-gray-500 ml-2">开 = 监控页点"清零"时，顺带消除全部在途报警</span>
+      </el-form-item>
 
       <!-- ========== 监控页任务信息条 ========== -->
       <el-divider content-position="left"><span class="text-cyan-300 text-xs">监控页任务信息条（开工后主界面持续显示的任务要素，逐项可选）</span></el-divider>
@@ -301,6 +310,15 @@
         <el-checkbox v-model="form.task_info_display.show_product_code">产品代号</el-checkbox>
         <el-checkbox v-model="form.task_info_display.show_step_code">工序工步</el-checkbox>
         <el-checkbox v-model="form.task_info_display.show_operator">操作员</el-checkbox>
+      </el-form-item>
+      <!-- v3.39 川南反馈: 信息条一行挤不下。两个显示层选项, 默认维持原样 -->
+      <el-form-item label="工单进度徽标">
+        <el-switch v-model="form.task_info_display.show_order_chip" />
+        <span class="text-xs text-gray-500 ml-2">关 = 信息条不显示"工单 单号 进度 良率"块，给任务要素腾位置</span>
+      </el-form-item>
+      <el-form-item label="两行表格布局">
+        <el-switch v-model="form.task_info_display.two_line_layout" />
+        <span class="text-xs text-gray-500 ml-2">开 = 任务要素改为"表头一行 + 信息一行"，字段多也不截断</span>
       </el-form-item>
 
       <!-- ========== 高级 ========== -->
@@ -487,6 +505,8 @@ function emptyForm() {
       show_step_code: true,
       show_operator: true,
       show_time: true,
+      allow_manual_clear: false,
+      clear_on_counter_reset: false,
     },
     // 监控页任务信息条逐要素显示 (前端 Monitor 读取); 默认全关 = 原界面
     task_info_display: {
@@ -494,6 +514,8 @@ function emptyForm() {
       show_product_code: false,
       show_step_code: false,
       show_operator: false,
+      show_order_chip: true,
+      two_line_layout: false,
     },
   }
 }
@@ -601,6 +623,8 @@ function applyConfig(cfg) {
     show_step_code: b.show_step_code !== false,
     show_operator: b.show_operator !== false,
     show_time: b.show_time !== false,
+    allow_manual_clear: b.allow_manual_clear === true,
+    clear_on_counter_reset: b.clear_on_counter_reset === true,
   }
   const ti = cfg.task_info_display || {}
   f.task_info_display = {
@@ -608,6 +632,8 @@ function applyConfig(cfg) {
     show_product_code: ti.show_product_code === true,
     show_step_code: ti.show_step_code === true,
     show_operator: ti.show_operator === true,
+    show_order_chip: ti.show_order_chip !== false,
+    two_line_layout: ti.two_line_layout === true,
   }
   Object.assign(form, f)
 }

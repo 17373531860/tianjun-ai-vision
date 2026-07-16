@@ -636,8 +636,10 @@ def apply_project_config(h, config: dict):
         if _weighing_active:
             get_weighing_engine().set_channel_config(ch_id, _weighing_cfg)
             # 视觉料源防错开启 → 推理热路径每帧喂检测结果给守卫 (flag 守门零差异)
+            # v3.39 pipeline 模式: 标签①/③驱动去皮加速与 FIFO 结案, 必须喂
             h._weighing_visual_feed = bool(
-                (_weighing_cfg.get('visual_guard') or {}).get('enabled'))
+                (_weighing_cfg.get('visual_guard') or {}).get('enabled')
+                or _weighing_cfg.get('drive_mode') == 'pipeline')
         else:
             get_weighing_engine().set_channel_config(ch_id, None)
     except Exception as e:

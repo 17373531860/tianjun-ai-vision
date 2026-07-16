@@ -54,7 +54,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/cluster/*` | `cluster.py` | `cluster.js` | 集群主从 + 心跳 + box 聚合 |
 | `/mes/*` | `mes.py` | `mes.js` | 工单/工件/缺陷/缺陷码 |
 | `/mes/gateway/*` | `mes_gateway.py` | `gateway.js` | 外部 MES 推送连接 + 工单拉取 |
-| `/mes/inbound/*` | `mes_inbound.py` | —（外部系统入站调用） | v3.26+ 外部生产管控系统入站 REST（开工/完工/报警） |
+| `/mes/inbound/*` | `mes_inbound.py` | —（外部系统入站调用）；例外：`gateway.js` 调 `active-alarms`（横幅轮询）+ `active-alarms/clear-manual`（v3.39 软件内手动消除，POST） | v3.26+ 外部生产管控系统入站 REST（开工/完工/报警） |
 | `/operators/*` | `operators.py` | `operators.js` | ⚠ **v3.10.0 已废弃**：全部 410 Gone，改用 `/users` |
 | `/auth/*` | `auth.py` | `auth.js` | v3.10.0 登录/登出/me/权限目录 |
 | `/users/*` | `users.py` | `auth.js`（同文件封装） | v3.10.0 用户 CRUD + 角色绑定 |

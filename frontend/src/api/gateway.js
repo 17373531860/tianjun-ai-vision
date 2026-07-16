@@ -36,3 +36,5 @@ export const getInboundLogs = (params) => api.get('/mes/inbound/logs', { params 
 
 // ---- 在途报警台账 (外部系统已收到的报警, 待其回推消除; 监控页持续横幅轮询用) ----
 export const getActiveAlarms = (params) => api.get('/mes/inbound/active-alarms', { params })
+// v3.39: 软件内手动消除全部在途报警 (需入站配置开启 allow_manual_clear, 默认关)
+export const clearActiveAlarmsManual = (params) => api.post('/mes/inbound/active-alarms/clear-manual', null, { params })

@@ -10,6 +10,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.core.auth_deps import require_perm
@@ -360,6 +361,33 @@ def get_active_alarms(channel_id: int = None, limit: int = 100,
     """取未消除的在途报警 (供监控页持续横幅轮询)。不鉴权: 与监控页其它轮询端点一致。"""
     from backend.services.external_alarm import list_active_alarms
     return list_active_alarms(db, channel_id=channel_id, limit=limit)
+
+
+class ClearManualResponse(BaseModel):
+    """手动消除在途报警的结果。"""
+    status: str
+    cleared: int
+
+
+@router.post("/active-alarms/clear-manual",
+             summary="软件内手动消除全部在途报警",
+             response_model=ClearManualResponse,
+             dependencies=[Depends(require_perm("monitor.detection.advanced"))])
+def clear_active_alarms_manual(channel_id: int = None, db: Session = Depends(get_db)):
+    """软件内手动消除全部在途报警 (v3.39 川南反馈)。
+
+    仅在入站配置 alarm_banner.allow_manual_clear 开启时可用 (默认关,
+    保持"只能由外部系统回推消除"的对接契约); 权限对齐监控页"清零"
+    (monitor.detection.advanced), 操作员级别不可误触。
+    """
+    svc = get_mes_inbound()
+    cfg = svc.get_config(db)
+    if not (cfg.get("alarm_banner") or {}).get("allow_manual_clear", False):
+        raise HTTPException(status_code=403, detail="未开启横幅手动消除 (入站配置 → 监控页报警横幅)")
+    from backend.services.external_alarm import clear_all_active_alarms
+    result = clear_all_active_alarms(db, channel_id=channel_id, clear_source="manual_ui")
+    db.commit()
+    return {"status": "success", **result}
 
 
 @router.get("/logs", dependencies=[Depends(require_perm("mes.gateway.edit"))])

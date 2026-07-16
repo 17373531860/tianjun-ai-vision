@@ -171,6 +171,13 @@
                 <el-switch v-model="store.display.monitor.showBypassSn" @change="saveDisplaySettings" />
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">扫码操作按钮</span>
+                  <span class="text-[10px] text-gray-500">关 = 隐藏"清除本次扫码 / 禁用扫码"（操作员不碰软件的部署）</span>
+                </div>
+                <el-switch v-model="store.display.monitor.showScanButtons" @change="saveDisplaySettings" />
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <span class="text-gray-300">CT包含NG周期</span>
                 <el-switch v-model="store.display.monitor.ctIncludeNg" @change="saveDisplaySettings" />
               </div>

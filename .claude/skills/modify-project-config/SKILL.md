@@ -120,7 +120,21 @@ class Project(Base):
     "alarm_event_shortage": null,           // 缺料/超量/错料/前置未选 → 事件 id
     "alarm_event_over": null,
     "alarm_event_wrong": null,
-    "alarm_event_precheck": null
+    "alarm_event_precheck": null,
+
+    // ★ v3.39 新增：两阶段流水线模式（萍乡百斯特；drive_mode='pipeline' 时消费）
+    // 秤上称重离秤冻结结算 + 秤下收尾动作 FIFO 结案，两件并行；秤指令严格重量驱动
+    "drive_mode": "scale|step_gate|pipeline", // scale=逐道投料(默认) / step_gate=融合门控 / pipeline=两阶段流水线
+    "pipeline": {                           // 标签绑定/皮重范围/队列（详见 weighing_engine.DEFAULT_WEIGHING_CONFIG 注释）
+      "material": "钢帽水泥", "label_onscale": "工件上秤",
+      "label_fill": "加水泥", "label_finalize": "加钢脚水泥",
+      "onscale_polygon": null,              // 标签①有效域（秤台区，归一化多边形；null=不过滤）
+      "tare_min_kg": 0.2, "tare_max_kg": 10.0, "queue_depth": 2
+    },
+    "timing": { /* 15 项秤指令时序参数：去皮触发源三档/稳定窗/离秤确认/清零延迟与重发/标签连续帧与冷却期等 */ },
+    "alarm_event_ok": 1,                    // 离秤结算合格 → OK 事件
+    "alarm_event_tare_range": 2,            // 上秤自重超皮重范围 / 清零残留 / 节拍异常 / 收尾超时
+    "alarm_event_residue": 2, "alarm_event_takt": 2, "alarm_event_finalize_timeout": 2
   },
 
   // ★ v3.32 新增：同标签区域拆分（虚拟步骤）+ 工件就位提示

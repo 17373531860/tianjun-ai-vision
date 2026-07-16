@@ -11,6 +11,162 @@
       </template>
     </el-alert>
 
+    <!-- v3.39 驱动模式 -->
+    <el-card v-if="!isStepGate" shadow="never" class="bg-slate-800 border-slate-700">
+      <template #header>
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-white">驱动模式</span>
+          <span class="text-xs text-gray-400">决定秤读数如何推进检测流程</span>
+        </div>
+      </template>
+      <el-select v-model="project.pipeline_config.weighing.drive_mode" size="small" style="width: 100%">
+        <el-option label="逐道投料（经典：放件→去皮→投料→判定，逐道推进）" value="scale" />
+        <el-option label="两阶段流水线（秤上称重结算 + 秤下收尾动作结案，两件并行）" value="pipeline" />
+      </el-select>
+      <div v-if="isPipeline" class="text-xs text-gray-500 mt-2">
+        流水线模式：工件坐秤装料，离秤瞬间冻结重量并判 OK/NG，随后进「待收尾队列」；
+        视觉识别到<b>收尾动作</b>（如 加钢脚水泥）时按先进先出正式结案上传。秤指令严格由重量驱动，模型漏检不影响称重。
+      </div>
+    </el-card>
+
+    <!-- v3.39 流水线参数 -->
+    <el-card v-if="isPipeline" shadow="never" class="bg-slate-800 border-slate-700">
+      <template #header>
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-white">流水线参数（标签绑定 / 皮重范围 / 队列）</span>
+          <span class="text-xs text-gray-400">标签名须与模型输出一致</span>
+        </div>
+      </template>
+      <div class="grid grid-cols-3 gap-4 text-sm text-gray-200">
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">标签①上秤动作（去皮加速/佐证）</label>
+          <el-input v-model="pipe.label_onscale" size="small" placeholder="工件上秤" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">标签②装料动作（错盆守卫用）</label>
+          <el-input v-model="pipe.label_fill" size="small" placeholder="加水泥" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">标签③收尾动作（结案上一件）</label>
+          <el-input v-model="pipe.label_finalize" size="small" placeholder="加钢脚水泥" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">判定料别（查型号标准量表）</label>
+          <el-select v-model="pipe.material" size="small" style="width: 100%">
+            <el-option v-for="m in project.pipeline_config.weighing.materials" :key="m" :label="m" :value="m" />
+          </el-select>
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">皮重下限(kg)：工件+容器最轻</label>
+          <el-input-number v-model="pipe.tare_min_kg" :min="0" :step="0.1" :precision="3" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">皮重上限(kg)：超出报"放错物品"</label>
+          <el-input-number v-model="pipe.tare_max_kg" :min="0" :step="0.1" :precision="3" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">待收尾队列深度（超出报节拍异常）</label>
+          <el-input-number v-model="pipe.queue_depth" :min="1" :max="10" :step="1" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div class="col-span-2">
+          <label class="block text-gray-400 text-xs mb-1">秤台区（标签①只在此区域内有效，防别处拿件误报；不画=不过滤）</label>
+          <el-button size="small" plain :type="pipe.onscale_polygon && pipe.onscale_polygon.length >= 3 ? 'success' : 'primary'"
+            @click="$emit('open-pipeline-roi-editor')">
+            {{ pipe.onscale_polygon && pipe.onscale_polygon.length >= 3 ? `已画秤台区(${pipe.onscale_polygon.length}点), 点击重画` : '画秤台区' }}
+          </el-button>
+          <el-button v-if="pipe.onscale_polygon" size="small" type="danger" plain @click="pipe.onscale_polygon = null">清除</el-button>
+        </div>
+      </div>
+      <div class="text-xs text-gray-500 mt-3">
+        提示：错盆拦截（装料动作出现在钢脚水泥盆）用下方「视觉料源防错」加一条<b>动作限区</b>规则：
+        标签＝{{ pipe.label_fill || '加水泥' }}，画<b>允许</b>装料的区域（秤台+钢帽盆），盆外动作即报警。
+      </div>
+    </el-card>
+
+    <!-- v3.39 秤指令时序（方案 3.1 节 15 项，全部可调） -->
+    <el-card v-if="isPipeline" shadow="never" class="bg-slate-800 border-slate-700">
+      <template #header>
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-white">秤指令时序</span>
+          <span class="text-xs text-gray-400">什么时候发、等多久、多稳算稳 —— 全部现场可调</span>
+        </div>
+      </template>
+      <div class="grid grid-cols-3 gap-4 text-sm text-gray-200">
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">去皮触发源</label>
+          <el-select v-model="timing.tare_trigger_source" size="small" style="width: 100%">
+            <el-option label="重量为主（标签①仅缩短稳定等待，推荐）" value="weight_first" />
+            <el-option label="严格双确认（标签①+重量都满足才发）" value="dual_confirm" />
+            <el-option label="仅重量（完全忽略视觉）" value="weight_only" />
+          </el-select>
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">去皮延迟(ms)：0=立即发</label>
+          <el-input-number v-model="timing.tare_delay_ms" :min="0" :max="10000" :step="100" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">皮重稳定窗口(ms)</label>
+          <el-input-number v-model="timing.tare_stable_ms" :min="200" :max="5000" :step="100" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">皮重稳定公差(kg)</label>
+          <el-input-number v-model="timing.tare_stable_tol_kg" :min="0.001" :max="0.05" :step="0.001" :precision="3" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">净重稳定窗口(ms)</label>
+          <el-input-number v-model="timing.net_stable_ms" :min="200" :max="5000" :step="100" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">净重稳定公差(kg)</label>
+          <el-input-number v-model="timing.net_stable_tol_kg" :min="0.001" :max="0.05" :step="0.001" :precision="3" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">缺料报警持续阈值(秒)：防瞬时误报</label>
+          <el-input-number v-model="timing.shortage_alarm_sec" :min="0" :max="30" :step="0.5" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">离秤确认时长(ms)：空秤稳定多久记账</label>
+          <el-input-number v-model="timing.depart_confirm_ms" :min="200" :max="3000" :step="100" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">清零延迟(ms)：确认离秤后多久发清零</label>
+          <el-input-number v-model="timing.zero_delay_ms" :min="0" :max="10000" :step="100" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">清零验证窗口(ms)：多久内应归零</label>
+          <el-input-number v-model="timing.zero_verify_ms" :min="500" :max="10000" :step="500" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">清零自动重发次数</label>
+          <el-input-number v-model="timing.zero_retry" :min="0" :max="3" :step="1" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">标签①确认帧数</label>
+          <el-input-number v-model="timing.label1_min_frames" :min="1" :max="30" :step="1" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">标签①新鲜期(秒)：出现后多久内算佐证</label>
+          <el-input-number v-model="timing.label1_fresh_sec" :min="0.5" :max="30" :step="0.5" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">标签③确认帧数</label>
+          <el-input-number v-model="timing.label3_min_frames" :min="1" :max="30" :step="1" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">标签③冷却期(秒)：刚离秤多久内不受理收尾</label>
+          <el-input-number v-model="timing.label3_cooldown_sec" :min="0" :max="10" :step="0.5" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">装料超时(秒)</label>
+          <el-input-number v-model="timing.fill_timeout_sec" :min="30" :max="3600" :step="30" size="small" style="width: 100%" controls-position="right" />
+        </div>
+        <div>
+          <label class="block text-gray-400 text-xs mb-1">收尾超时(秒)：超时按"收尾未确认"结案</label>
+          <el-input-number v-model="timing.finalize_timeout_sec" :min="10" :max="3600" :step="10" size="small" style="width: 100%" controls-position="right" />
+        </div>
+      </div>
+    </el-card>
+
     <!-- 前置要求 -->
     <el-card shadow="never" class="bg-slate-800 border-slate-700">
       <template #header><span class="font-bold text-white">前置要求</span></template>
@@ -340,7 +496,7 @@ import { ElMessage } from 'element-plus';
 const props = defineProps({
   project: { type: Object, required: true },
 });
-defineEmits(['open-guard-roi-editor']);
+defineEmits(['open-guard-roi-editor', 'open-pipeline-roi-editor']);
 
 const newWeighingMaterial = ref('');
 const newWeighingModel = ref('');
@@ -348,6 +504,12 @@ const newWeighingModel = ref('');
 // v3.35 融合模式 (视觉 SOP + 秤门控) 判定: 顶部提示条用
 const isStepGate = computed(() =>
   props.project?.pipeline_config?.weighing?.drive_mode === 'step_gate');
+
+// v3.39 两阶段流水线模式
+const isPipeline = computed(() =>
+  props.project?.pipeline_config?.weighing?.drive_mode === 'pipeline');
+const pipe = computed(() => props.project.pipeline_config.weighing.pipeline);
+const timing = computed(() => props.project.pipeline_config.weighing.timing);
 
 // v3.35 前置选择有效期 / 视觉料源防错子树 (父级 ensureWeighingDefaults 已注入默认)
 const ctxExpiry = computed(() => props.project.pipeline_config.weighing.context_expiry);

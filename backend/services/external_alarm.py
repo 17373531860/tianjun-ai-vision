@@ -149,6 +149,29 @@ def clear_alarms(db, match: dict, match_fields=None,
     return {"matched": True, "cleared": len(rows)}
 
 
+def clear_all_active_alarms(db, channel_id: Optional[int] = None,
+                            clear_source: str = "manual") -> dict:
+    """软件内手动消除全部在途报警 (v3.39 川南反馈: 上游不回推消除命令时没有出口)。
+
+    与 clear_alarms 的按键匹配语义刻意分开: 这是"人在界面上一键清空"的运维出口,
+    不做字段匹配; channel_id 给定则只清该工位。返回 {"cleared": n}。
+    """
+    q = db.query(ExternalActiveAlarm).filter(ExternalActiveAlarm.status == "active")
+    if channel_id is not None:
+        q = q.filter(ExternalActiveAlarm.channel_id == channel_id)
+    rows = q.all()
+    now = datetime.now()
+    for r in rows:
+        r.status = "cleared"
+        r.cleared_at = now
+        r.clear_source = clear_source
+    if rows:
+        db.flush()
+    debug_center.dbg("backend.mes", "在途报警手动消除",
+                     f"source={clear_source} channel={channel_id} cleared={len(rows)}")
+    return {"cleared": len(rows)}
+
+
 def list_active_alarms(db, channel_id: Optional[int] = None, limit: int = 100) -> list:
     """取未消除报警 (供监控页持续横幅)。channel_id 给定则只取该工位。"""
     q = db.query(ExternalActiveAlarm).filter(ExternalActiveAlarm.status == "active")

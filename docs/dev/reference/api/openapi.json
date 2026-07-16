@@ -1085,6 +1085,25 @@
     "title": "CleanupSettingsUpdate",
     "type": "object"
    },
+   "ClearManualResponse": {
+    "description": "手动消除在途报警的结果。",
+    "properties": {
+     "cleared": {
+      "title": "Cleared",
+      "type": "integer"
+     },
+     "status": {
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "cleared"
+    ],
+    "title": "ClearManualResponse",
+    "type": "object"
+   },
    "ClusterConfigUpdate": {
     "properties": {
      "box_scan_interval_sec": {
@@ -18593,6 +18612,50 @@
      }
     },
     "summary": "Get Active Alarms",
+    "tags": [
+     "MES-Inbound",
+     "MES-Inbound"
+    ]
+   }
+  },
+  "/api/v1/mes/inbound/active-alarms/clear-manual": {
+   "post": {
+    "description": "软件内手动消除全部在途报警 (v3.39 川南反馈)。\n\n仅在入站配置 alarm_banner.allow_manual_clear 开启时可用 (默认关,\n保持\"只能由外部系统回推消除\"的对接契约); 权限对齐监控页\"清零\"\n(monitor.detection.advanced), 操作员级别不可误触。",
+    "operationId": "clear_active_alarms_manual_api_v1_mes_inbound_active_alarms_clear_manual_post",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "channel_id",
+      "required": false,
+      "schema": {
+       "title": "Channel Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ClearManualResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "软件内手动消除全部在途报警",
     "tags": [
      "MES-Inbound",
      "MES-Inbound"

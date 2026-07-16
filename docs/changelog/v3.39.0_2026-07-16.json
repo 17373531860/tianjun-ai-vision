@@ -1,0 +1,64 @@
+{
+  "version": "3.39.0",
+  "date": "2026-07-16",
+  "previous_version": "3.38.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "两阶段流水线称重模式（萍乡百斯特，drive_mode='pipeline'）",
+      "symptom": "萍乡百斯特产线'工件坐秤装料 + 上一件压机侧加钢脚水泥收尾'两件并行，经典逐道投料状态机套不上；秤指令需全自动、模型漏检不能影响称重主链路",
+      "root_cause": "原称重引擎只有单件逐道推进的状态机，没有'离秤冻结结算 + 秤下待收尾队列'的两阶段生命周期",
+      "fix": "称重引擎新增流水线工位状态机：空秤→自动去皮→装料→离秤确认冻结结算 OK/NG→FIFO 待收尾队列→收尾标签/超时结案推 MES；15 项秤指令时序参数全可调；快手兜底/清零验证重发/残留报警/两种装料习惯兼容/秤台区多边形过滤；前端驱动模式选择+流水线参数+时序卡+监控页流水线看板",
+      "files": ["backend/services/weighing_engine.py", "backend/api/source_project_config_apply.py", "frontend/src/views/Project/WeighingConfigTab.vue", "frontend/src/views/Project/index.vue", "frontend/src/views/Monitor/WeighingPanel.vue", "tests/test_weighing_pipeline.py", "tests/features/weighing_pipeline_baist.feature", "tests/step_defs/test_weighing_pipeline_baist.py", "tests/e2e_browser/test_weighing_pipeline_tab.py", "tests/uat/uat_weighing_pipeline.py"],
+      "keywords": ["流水线称重", "pipeline", "drive_mode", "两阶段", "离秤结算", "待收尾队列", "FIFO", "加钢脚水泥", "去皮", "清零", "快手兜底", "秤台区", "萍乡", "百斯特", "weighing", "tare", "zero", "finalize", "PipelineStation"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "在途报警软件内消除出口（川南反馈）",
+      "symptom": "上游生产管控系统不回推消除命令时，监控页报警横幅一直挂着，软件内没有任何出口",
+      "root_cause": "对接契约设计为'只能由外部系统回推消除'，缺少联调/运维用的软件内出口",
+      "fix": "入站配置新增两个默认关的开关：allow_manual_clear 开时横幅出'手动消除'按钮（确认弹窗+后端403守门+权限对齐监控页清零）；clear_on_counter_reset 开时监控页清零顺带清全部在途报警；服务层新增一键清空入口并留消除来源审计",
+      "files": ["backend/services/external_alarm.py", "backend/api/mes_inbound.py", "backend/api/source_routes.py", "backend/services/mes_inbound.py", "frontend/src/api/gateway.js", "frontend/src/views/Monitor/ExternalAlarmBanner.vue", "frontend/src/views/MES/OrderInboundPanel.vue", "tests/test_alarm_manual_clear.py", "tests/uat/uat_20260715_alarm_manual_clear.py"],
+      "keywords": ["在途报警", "手动消除", "清零联动", "allow_manual_clear", "clear_on_counter_reset", "报警横幅", "川南", "active alarms", "clear-manual", "外部报警"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "FEAT-003",
+      "title": "开工自动开始检测：暂停源复活 + 未拉起原因回带响应（川南反馈）",
+      "symptom": "点过一次'停止'后每次外部开工都拉不起检测；没拉起时上游只看到 ok 无从排查",
+      "root_cause": "老逻辑把'源未运行'一律当门槛不满足跳过，没走 start_detection 自带的暂停续播/相机重连复活路径；未拉起原因只进调试日志不回传",
+      "fix": "配置过视频源即放行交 start_detection 复活（与手动一致）；模型未就绪给指路原因；全部未拉起原因附在开工成功响应文案后，业务码不变",
+      "files": ["backend/services/mes_inbound.py", "tests/test_mes_inbound_unit.py", "tests/test_alarm_manual_clear.py"],
+      "keywords": ["开工自动开始检测", "start_detection_on_task", "暂停复活", "原因回带", "川南", "auto start detection", "skipped", "视频源暂停"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "监控页任务信息条显示定制：工单徽标可隐 + 两行表格布局（川南反馈）",
+      "symptom": "开工四要素+工单徽标挤在信息条一行被截断，信息显示不全",
+      "root_cause": "任务信息条固定单行标签布局且工单徽标不可隐藏",
+      "fix": "入站配置任务信息条新增 show_order_chip（关=隐藏工单块）与 two_line_layout（开=表头一行+信息一行表格）两个显示层开关，默认值=原界面其他客户零感知",
+      "files": ["backend/services/mes_inbound.py", "frontend/src/views/Monitor/index.vue", "frontend/src/views/MES/OrderInboundPanel.vue", "tests/e2e_browser/test_task_info_layout.py", "tests/uat/uat_20260715_task_info_layout.py", "tests/uat/uat_20260715_cn_real_video_display.py"],
+      "keywords": ["任务信息条", "task_info_display", "show_order_chip", "two_line_layout", "两行布局", "截断", "工单徽标", "川南", "显示定制"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "监控页扫码操作按钮可隐藏（川南反馈）",
+      "symptom": "操作员不碰软件的部署，'清除本次扫码/禁用扫码'按钮容易误触",
+      "root_cause": "扫码操作按钮固定显示，无显示层开关",
+      "fix": "系统设置显示项新增'扫码操作按钮'开关（默认显示=原界面），关闭后监控页单/多工位视图扫码操作按钮全部隐藏",
+      "files": ["frontend/src/store/useSystemStore.js", "frontend/src/views/Settings/index.vue", "frontend/src/views/Monitor/index.vue", "tests/e2e_browser/test_task_info_layout.py"],
+      "keywords": ["扫码按钮", "showScanButtons", "清除本次扫码", "禁用扫码", "隐藏按钮", "显示设置", "川南"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["modify-project-config", "debug-mes", "debug-source", "api-sync", "run-tests"],
+  "files_changed": ["backend/services/weighing_engine.py", "backend/api/source_project_config_apply.py", "backend/api/source_routes.py", "backend/api/mes_inbound.py", "backend/services/external_alarm.py", "backend/services/mes_inbound.py", "frontend/src/api/gateway.js", "frontend/src/store/useSystemStore.js", "frontend/src/views/MES/OrderInboundPanel.vue", "frontend/src/views/Monitor/ExternalAlarmBanner.vue", "frontend/src/views/Monitor/WeighingPanel.vue", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Project/WeighingConfigTab.vue", "frontend/src/views/Project/index.vue", "frontend/src/views/Settings/index.vue", "docs/dev/reference/api/openapi.json", "docs/dev/reference/config-dict.md", "tests/test_mes_inbound_unit.py", "tests/test_weighing_pipeline.py", "tests/test_alarm_manual_clear.py", "tests/features/weighing_pipeline_baist.feature", "tests/step_defs/test_weighing_pipeline_baist.py", "tests/e2e_browser/test_weighing_pipeline_tab.py", "tests/e2e_browser/test_task_info_layout.py", "tests/uat/uat_weighing_pipeline.py", "tests/uat/uat_20260715_alarm_manual_clear.py", "tests/uat/uat_20260715_task_info_layout.py", "tests/uat/uat_20260715_cn_real_video_display.py"]
+}

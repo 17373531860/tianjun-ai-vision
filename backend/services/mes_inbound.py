@@ -182,6 +182,10 @@ DEFAULT_INBOUND_CONFIG = {
         "show_step_code": True,     # ... 工序工步
         "show_operator": True,      # ... 操作员
         "show_time": True,          # ... 报警时间
+        # v3.39 川南反馈: 上游没回推消除命令时报警会一直挂着, 软件内没有任何出口。
+        # 两个出口都默认关 (保持"只能外部消除"的对接契约), 客户按需打开:
+        "allow_manual_clear": False,      # 横幅上显示"手动消除"按钮 (调试/联调用)
+        "clear_on_counter_reset": False,  # 监控页"清零"时顺带消除全部在途报警
     },
     # 监控页"开工后主界面任务信息条"的逐要素显示开关 (前端 Monitor 读取)。
     # 默认全关 = 维持原界面, 信息条不追加任何标签; 客户按需逐项打开 (川南 v1 第 1 条:
@@ -191,6 +195,9 @@ DEFAULT_INBOUND_CONFIG = {
         "show_product_code": False,  # ... 产品代号
         "show_step_code": False,     # ... 工序工步
         "show_operator": False,      # ... 操作员
+        # v3.39 川南反馈: 信息条一行挤不下被截断。两个显示层开关, 默认维持原样:
+        "show_order_chip": True,     # 工单徽标 (单号+进度+良率); 关 = 信息条不显示工单块
+        "two_line_layout": False,    # 开 = 任务要素改为"表头一行+信息一行"的表格式布局
     },
 }
 
@@ -379,6 +386,11 @@ class MESInbound:
 
         debug_center.dbg("backend.mes", "入站开工完成", f"{msg} (task_no={mapped.get('task_no')})")
         success_msg = (cfg.get("response") or {}).get("success_message") or "OK"
+        # v3.39: 处理明细附在成功文案后 (业务码不变, 上游按 code 判成败不受影响)。
+        # 川南反馈逼出的可观测性: "开工自动开始检测"没拉起时, 原因直接可见,
+        # 不用开调试日志。与 handle_alarm_clear 的"OK (已消除 N 条)"同款先例。
+        if msg and msg != "ok":
+            success_msg = f"{success_msg} ({msg})"
         return self._result(cfg, "success", success_msg, mapped=mapped, success=True)
 
     def handle_alarm_clear(self, db, body: dict, cfg: dict) -> dict:
@@ -460,9 +472,13 @@ class MESInbound:
                     db.commit()
                 except Exception:
                     pass
-            started = self._auto_start_detection()
+            started, skipped = self._auto_start_detection()
             if started:
                 msgs.append(f"已自动开始检测: {', '.join(started)}")
+            # v3.39 川南反馈: 开关开了却没拉起时客户只看到 ok, 完全无从排查
+            # (原因只进调试日志)。把没拉起的原因直接带回开工响应, 一次请求即可自诊。
+            if skipped:
+                msgs.append(f"自动开始检测未执行({'; '.join(skipped)})")
 
         # v3.38 川南反馈: 检测已在跑时收到开工, 新单挂不上运行中的工位
         # (监控页四要素不显示、周期不计入新任务, 要停一次检测才生效)。
@@ -508,36 +524,56 @@ class MESInbound:
         except Exception as e:
             debug_center.dbg("backend.mes", "活跃工单回填失败", f"整体异常: {e}")
 
-    def _auto_start_detection(self) -> list:
+    def _auto_start_detection(self) -> tuple:
         """开工后自动拉起检测 (start_detection_on_task 开时)。
 
-        门槛与开机自动恢复检测完全一致: 视频源在跑 + 模型就绪 + 未在检测。
+        门槛: 配置过视频源 (暂停中则借 start_detection 的复活路径重新拉起,
+        与手动点"开始"行为完全一致) + 模型就绪 + 未在检测。
         任何失败只记调试日志, 绝不影响开工响应 (任务本身已处理成功)。
-        返回本次拉起的工位列表 (如 ["ch0"]), 全部不满足门槛时为空。
+        返回 (started, skipped): started 为本次拉起的工位列表 (如 ["ch0"]);
+        skipped 为没拉起的工位及原因 (已在检测中的不算, 那是正常态)——
+        v3.39 起原因随开工响应回给上游, 现场不开调试日志也能一眼看到卡在哪一关。
         """
         started = []
+        skipped = []
         try:
             from backend.api.channel_manager import channel_manager
             for ch_id, mgr in list(channel_manager.channels.items()):
                 try:
-                    if not mgr or not mgr.is_running:
+                    if not mgr:
+                        continue
+                    # 川南现场事故链 (2026-07-15 日志钉死): 点过"停止"后视频源暂停,
+                    # 老逻辑在这里因"源未运行"直接放弃, 之后每次开工都拉不起来。
+                    # 而 start_detection 本就有"暂停续播/相机重连"的复活路径 (手动点
+                    # "开始"走的就是它), 所以只要配置过视频源就放行交给它拉起;
+                    # 只有"本次启动从没配置过源"才真正无从下手。
+                    if not mgr.is_running and not getattr(mgr, 'source_type', None):
+                        skipped.append(f"ch{ch_id}: 未配置视频源")
                         debug_center.dbg("backend.mes", "开工自动开始检测跳过",
-                                         f"ch{ch_id} 视频源未运行")
+                                         f"ch{ch_id} 未配置视频源")
                         continue
                     if mgr.is_detecting:
                         continue
-                    # 模型就绪与否交给 start_detection 自身校验 (synthetic 源无模型也合法),
-                    # 未就绪时抛异常走下面的日志分支, 与手动点"开始检测"行为一致。
+                    # 川南现场高频卡点: 手动点"开始检测"时前端会把项目里的模型清单一起传来,
+                    # 自动拉起没有这个来源, 只能用通道上已加载的模型 (来自项目"默认模型")。
+                    # 项目没配默认模型 → 这里必然失败, 给出能直接指路的原因。
+                    if getattr(mgr, 'model', None) is None \
+                            and getattr(mgr, 'source_type', None) != 'synthetic':
+                        skipped.append(f"ch{ch_id}: 模型未就绪(请在项目管理为该项目配置默认模型)")
+                        debug_center.dbg("backend.mes", "开工自动开始检测跳过",
+                                         f"ch{ch_id} 模型未就绪 (项目未配默认模型?)")
+                        continue
                     mgr.start_detection()
                     started.append(f"ch{ch_id}")
                     debug_center.dbg("backend.mes", "开工自动开始检测",
                                      f"ch{ch_id} 已随开工任务拉起检测")
                 except Exception as e:
+                    skipped.append(f"ch{ch_id}: {e}")
                     debug_center.dbg("backend.mes", "开工自动开始检测失败",
                                      f"ch{ch_id} err={e}")
         except Exception as e:
             debug_center.dbg("backend.mes", "开工自动开始检测失败", f"整体异常: {e}")
-        return started
+        return started, skipped
 
     def _switch_project(self, db, mapped: dict, cfg: dict):
         """按产品代号切检测项目, 复用 projects.activate_project_core (与手动激活一致)。"""

@@ -1209,6 +1209,26 @@ def reset_detection_stats(channel: int = Query(0)):
     mgr = _get_mgr(channel)
     mgr.end_session()
     mgr.reset_stats()
+    # v3.39 川南反馈: 上游不回推消除命令时在途报警一直挂着。入站配置
+    # alarm_banner.clear_on_counter_reset 开启时 (默认关), 清零顺带清全部在途报警,
+    # 方便联调; 失败不影响清零本身。
+    try:
+        from backend.db.database import SessionLocal
+        from backend.services.mes_inbound import get_mes_inbound
+        db = SessionLocal()
+        try:
+            cfg = get_mes_inbound().get_config(db)
+            if (cfg.get("alarm_banner") or {}).get("clear_on_counter_reset", False):
+                from backend.services.external_alarm import clear_all_active_alarms
+                res = clear_all_active_alarms(db, clear_source="counter_reset")
+                db.commit()
+                if res.get("cleared"):
+                    return {"status": "success",
+                            "message": f"统计数据已重置; 在途报警已消除 {res['cleared']} 条"}
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[清零] 联动消除在途报警失败 (忽略): {e}")
     return {"status": "success", "message": "统计数据已重置"}
 
 

@@ -728,13 +728,14 @@ curl http://localhost:8001/api/v1/cluster/slaves
 
 **入站链路关键决策点**（`mes_inbound.py`，开 `backend.mes` 调试类别能看到全程人话日志）：
 - `handle_task_start` → `_apply_task_action`：完工信号优先 → 拒绝重复(可选) → `_switch_project`(按产品代号切检测项目：先查对照表 `product_project_map`，再兜底"项目名==产品代号") → `_ensure_work_order`(建工单 + 四要素留痕到 `extra_data.inbound`) → `_supersede_previous_tasks`(最新开工顶替 + 对被顶替单回推完工) → `_auto_start_detection`(v3.37.0 可选，见下)
-- **开工后自动开始检测**（v3.37.0，川南问题 1b）：配置键 `start_detection_on_task` 默认**关**。开时任务处理成功后对"视频源在跑 + 未在检测"的工位逐个拉起检测（模型就绪校验交给 start_detection 自身，与手动点按钮同款）；任何失败只记 `backend.mes` 调试日志、绝不影响开工响应。⚠️ **拉检测前必须先 `db.commit()` 本请求事务**——start_detection 内部另开 DB 会话写检测记录，与未提交的工单写事务互斥，会撞满 SQLite busy_timeout(15s)，上游中控超时短于它就误判"连接失败"（2026-07-13 UAT 逼出的真锁）。配套：前端界面 5s 轮询后端激活项目自动跟随（外部切项目后不刷新页面也能跟上，`Navbar.vue: syncActiveProjectFromBackend`）。回归：BDD 场景 15/16。
+- **开工后自动开始检测**（v3.37.0，川南问题 1b；v3.39 契约升级）：配置键 `start_detection_on_task` 默认**关**。开时任务处理成功后逐工位拉起检测；任何失败只记 `backend.mes` 调试日志、绝不影响开工响应。**v3.39 两处升级（川南现场事故链逼出）**：① 门槛从"视频源在跑"放宽为"配置过视频源"——点过"停止"后源暂停的工位交给 start_detection 自带的暂停续播/相机重连复活路径（与手动点"开始"完全一致），只有"本次启动从没配置过源"才跳过；② `_auto_start_detection` 改返回 `(started, skipped)`，全部未拉起原因（未配置源/模型未就绪指路到项目默认模型/异常）附在开工成功响应文案后回给上游（业务码不变），一次请求即可自诊，不用开调试日志。回归：`tests/test_mes_inbound_unit.py` + `tests/test_alarm_manual_clear.py`。⚠️ **拉检测前必须先 `db.commit()` 本请求事务**——start_detection 内部另开 DB 会话写检测记录，与未提交的工单写事务互斥，会撞满 SQLite busy_timeout(15s)，上游中控超时短于它就误判"连接失败"（2026-07-13 UAT 逼出的真锁）。配套：前端界面 5s 轮询后端激活项目自动跟随（外部切项目后不刷新页面也能跟上，`Navbar.vue: syncActiveProjectFromBackend`）。回归：BDD 场景 15/16。
 - `handle_alarm_clear`：按 `alarm_clear_match_fields`（默认四要素）匹配在途报警消除，匹配不到回 `alarm_not_found`(40007)
 - 错误码：`disabled`/`missing_field`(40004)/`unknown_product`(40002)/`duplicate`(40001)/`alarm_not_found`(40007)，话术可配
 
 **在途报警台账**（`backend/services/external_alarm.py` + 表 `external_active_alarms`）：
 - `record_active_alarm`：出站成功推送报警后登记（出站侧 `mes_gateway._record_active_alarm_if_alarm` 调用）；`dedup_sec` 去重窗口
 - `clear_alarms`：按唯一键匹配消除；`list_active_alarms`：监控页横幅轮询取未消除
+- **软件内消除出口**（v3.39，川南反馈"上游不回推消除就永远挂着"）：两个出口都**默认关**（保持"只能外部消除"的对接契约），入站配置 `alarm_banner` 下按需开：① `allow_manual_clear` 开 → 横幅出"手动消除"按钮，走 `POST /mes/inbound/active-alarms/clear-manual`（配置关时 403 + 权限对齐监控页清零 `monitor.detection.advanced`）；② `clear_on_counter_reset` 开 → 监控页"清零"（reset-stats）顺带清全部在途报警。服务层入口 `external_alarm.clear_all_active_alarms`（与按键匹配的 `clear_alarms` 语义刻意分开，`clear_source` 留审计：manual_ui / counter_reset）。回归：`tests/test_alarm_manual_clear.py`
 - 匹配维度：5 个原生列（task_no/product_code/step_code/operator/warning_text）+ 任意自定义维度（存 `extra_data.ext`，走 `json_extract`）——**去重口径与消除口径共用同一套 `match_fields`，必须一致**
 - 健康探测：`backend/services/mes_health_probe.py`（`backend.gateway` 类别，仅在线↔离线翻转打日志）
 

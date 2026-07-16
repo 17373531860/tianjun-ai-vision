@@ -15,6 +15,13 @@
           <span class="ext-alarm-dot"></span>
           <span class="ext-alarm-title">报警待消除 · {{ alarms.length }} 条</span>
           <span class="ext-alarm-sub">等待生产管控系统消除</span>
+          <!-- v3.39: 软件内手动消除出口 (入站配置 allow_manual_clear 开启时才显示, 默认关) -->
+          <button
+            v-if="banner.allow_manual_clear"
+            class="ext-alarm-clear-btn"
+            :disabled="clearing"
+            @click="manualClear"
+          >{{ clearing ? '消除中…' : '手动消除' }}</button>
         </div>
         <div class="ext-alarm-list">
           <div v-for="a in alarms" :key="a.id" class="ext-alarm-item">
@@ -35,7 +42,8 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
-import { getActiveAlarms, getInboundConfig } from '@/api/gateway';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { getActiveAlarms, getInboundConfig, clearActiveAlarmsManual } from '@/api/gateway';
 
 const props = defineProps({
   // 指定只看某工位的报警; 不传 = 全部工位 (单线场景推荐全部, 不漏报)。
@@ -54,7 +62,30 @@ const banner = reactive({
   show_step_code: true,
   show_operator: true,
   show_time: true,
+  allow_manual_clear: false,
 });
+
+// v3.39: 软件内手动消除 (带确认, 防误触; 后端还有配置开关+权限双闸)
+const clearing = ref(false);
+async function manualClear() {
+  try {
+    await ElMessageBox.confirm(
+      `确认消除全部 ${alarms.value.length} 条在途报警？此操作会绕过生产管控系统的消除命令。`,
+      '手动消除在途报警', { type: 'warning', confirmButtonText: '消除', cancelButtonText: '取消' },
+    );
+  } catch (e) { return; }
+  clearing.value = true;
+  try {
+    const params = props.channelId != null ? { channel_id: props.channelId } : {};
+    const data = unwrap(await clearActiveAlarmsManual(params));
+    ElMessage.success(`已消除 ${data?.cleared ?? 0} 条在途报警`);
+    await poll();
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '消除失败');
+  } finally {
+    clearing.value = false;
+  }
+}
 
 let timer = null;
 let configTimer = null;
@@ -98,6 +129,7 @@ async function loadBannerConfig() {
     banner.show_step_code = b.show_step_code !== false;
     banner.show_operator = b.show_operator !== false;
     banner.show_time = b.show_time !== false;
+    banner.allow_manual_clear = b.allow_manual_clear === true;
   } catch (e) {
     // 静默: 后端未就绪时用默认外观
   }
@@ -185,6 +217,24 @@ onUnmounted(() => {
   font-size: 12px;
   opacity: 0.85;
   margin-left: auto;
+}
+.ext-alarm-clear-btn {
+  margin-left: 10px;
+  padding: 2px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ext-alarm-clear-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+.ext-alarm-clear-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .ext-alarm-dot {
   width: 10px;
