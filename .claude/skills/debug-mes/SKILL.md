@@ -297,7 +297,10 @@ def has_any_scanner_present():
 
 1. 合并 `extra_fields[ch]`（Monitor 提交） + `static_fields`（连接配置）→ `full_context`
 2. **`push_on_result` 过滤**：配 `["NG"]` 只推 NG，`["OK","NG"]` 全推；
-   不匹配 → 写 skip 日志，**不调 adapter**。`/test` 故意绕过此过滤
+   不匹配 → 写 skip 日志，**不调 adapter**。`/test` 故意绕过此过滤。
+   ⚠️ **结果字段三级取值（v3.41 川南修复）**：`overall_result` → `result` → `cycle.result`（嵌套）。
+   老代码只读前两个顶层键，而 cycle_end 事件的结果在 `cycle.result` 里 → 取到空串被无条件放行，
+   "仅 NG"对周期推送**从未生效**（合格周期照样从报警连接推出去）。改过滤逻辑别把嵌套兜底删了
 3. **`label_mapping`**：把 `ng_items`（list[str]）按 dict 映射；
    `mode=replace` 直接替换，`keep_both` 新增 `ng_items_mapped`
 4. **`_apply_auth_to_headers(config)`**：5 种 auth 类型
@@ -763,5 +766,16 @@ curl http://localhost:8001/api/v1/cluster/slaves
 - **网关推送熔断器**（`services/mes_gateway.py`）：同一连接连续失败跳闸→冷却期跳过→半开试探恢复；"推送一直没到 MES"先查熔断状态（`get_circuit_state`），改连接配置或测试连接会自动复位。dispatch 已改每连接推完即 commit——别再把多连接推送包回一个大事务。
 - **运行中开工回填**（`mes_hooks.on_external_order_changed` + `mes_inbound._rebind_running_channels`）：检测运行中收到外部开工，新工单回绑运行工位（在途工件不打断）、四要素上屏。"开工了监控页工单没换"先查这条链。
 - **扫码器旁路 SN 监控**（`services/scanner_bypass_monitor.py`，dev-qing）：客户扫码器只往目录写 SN txt 时，后台线程定期扫描实时导出规则的输入目录缓存 SN；cycle_start 快照内存优先、glob 兜底；状态查询 `GET /api/v1/export/scanner-bypass/status`；监控页显示开关 showBypassSn 默认关。
+
+---
+
+## v3.41.0 补充：复用工单重绑 / 周期结果过滤 / 网关事件下拉 / 模拟秤墙钟
+
+川南现场用 Postman + 推送记录截图钉死的两个 bug（回归：`tests/test_cn_fixes_20260717.py` 8 例；可见浏览器 UAT：`tests/uat/uat_20260717_cn_order_reuse_null.py`）：
+
+- **同任务号重复开工必须刷新复用单的绑定**（`mes_inbound._refresh_reused_order`）：客户测试习惯是固定任务号反复开工——第二次起走"复用已有工单"分支，老代码只打日志不动工单，项目绑定停留在第一次创建时（甚至为空）→ 工位挂单按"工单绑定项目==工位当前项目"匹配永远落空 → 监控页四要素不显示 + 出站推送里工单字段全 null。修复按"最新开工为准"：复用时重绑当前激活项目（工位路由则重绑本次报文工位）+ 覆盖 `extra_data.inbound` 四要素留痕 + 产品码/操作员。终态单复活仍归 `_ensure_in_progress` 管；刷新失败只记日志不阻断开工。⚠️ JSON 列要**整体重赋值**（原地改 dict 不触发 SQLAlchemy 变更追踪）。"开工了但信息条不显示 / 推送字段 null"先想这条 + v3.38 的运行中回填链。
+- **`push_on_result` 周期事件结果在 `cycle.result`（嵌套）**：见第 5.3 节第 2 段——"报警连接勾了仅 NG 但合格周期也推出去（WarningText=顺序正确完成）"就是这条。
+- **GatewayPanel 事件下拉补 `weighing_product_done`（称重成品结案）**：后端事件 v3.39 就有（`weighing_engine.py`，两阶段流水线正式结案专用），前端下拉一直没露出，配萍乡达梦直写用。⚠️ 手册勘误同款坑：两阶段流水线结案**推的是这个专用事件不是 cycle_end**，达梦连接订阅错事件一条都收不到（百斯特手册 v2.1 勘误的正是这条）。
+- **模拟秤脚本按墙钟计时**（`external_device_protocols.py` mock 播放循环）：原按"睡眠次数×间隔"累计，不含 emit 处理耗时，长脚本越播越慢（实测 4 分钟漂约 20 秒），与视频时间轴对齐的仿真会整体错位。只影响模拟协议，真秤无关。全链路仿真剧本参考 `tests/uat/sim_bst_20260717.py`（真视频+真模型+秤脚本+达梦模拟）。
 
 **改动 MES 子系统前必读**：本 skill 第 3/5/8/11 节 + AGENTS.md 第六节 6.2、第八节不变量 1/4/6。

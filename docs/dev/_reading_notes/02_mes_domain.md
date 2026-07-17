@@ -135,7 +135,7 @@
 - L1505-1508（D 模式 ERROR 续 LON）："之前 v3.4.1 设计意图是'按 box 跨线脉冲触发', 但实际产线用户期望'开始检测扫码器立即并持续工作', 所以放弃精细脉冲式控制"。
 - L1963-1965（未匹配注入）："单工位：允许注入该唯一工位，避免单机场景漏码；多工位：不再广播，避免串工位"。
 
-### 3. backend/services/mes_gateway.py（734 行）
+### 3. backend/services/mes_gateway.py（860 行，v3.41 复核）
 
 **职责一句话**：MES 外部对接网关（出站推送侧）——把 cycle/session/box 等事件按连接配置（push_events 过滤 + bound_channels 过滤）分发到对应适配器，带重试/退避/4xx 策略、截图注入、物料名映射、鉴权头合成、报警去重与在途报警台账登记，每次通讯写 MESCommLog。注意：**5 种推送适配器本身不在本文件**，在 `backend/services/mes_adapters/` 子包，本文件通过 `get_adapter(conn.adapter_type)`（L322）取用。
 
@@ -146,7 +146,7 @@
 - `_resolve_alarm_event` L179：判本次事件是否为入站配置的"报警事件"（`alarm_event_name` 支持字符串/列表；结果过滤默认只认 NG L199-202；台账字段按 `alarm_ledger_field_map` 从 context 提取）。**注意 docstring 说返回二元组，实际返回三元组 (fields, dedup_sec, match_fields)（L220）**。
 - `_alarm_dedup_should_skip` L222：去重窗口内已报过→跳过整次推送；判断出错一律放行。
 - `_record_active_alarm_if_alarm` L236：报警事件成功推送后登记在途报警（external_alarm.record_active_alarm），全程错误隔离。
-- `_send_to_connection` L255：**单连接推送核心**——static_fields 点号路径注入 L267→push_on_result 结果过滤（被过滤记 success=True 的 skip 日志但返回 False，L286-290）→attach_snapshot 截图注入 L296→label_mapping 物料名映射（replace/keep_both 两模式）L310→鉴权合成 L319→`adapter.build_payload`→重试循环 L344（fixed/exponential 退避可配 L337；retry_on_4xx 默认 True，川南 §5.1 要求仅 5xx/超时重试时设 False L339）→成功/失败写 MESCommLog。
+- `_send_to_connection` L255：**单连接推送核心**——static_fields 点号路径注入 L267→push_on_result 结果过滤（被过滤记 success=True 的 skip 日志但返回 False，L286-290；**v3.41 川南修复**：结果三级取值 `overall_result`→`result`→`cycle.result` 嵌套兜底——cycle_end 事件结果在嵌套层，老代码只读顶层取到空串被无条件放行，"仅 NG"对周期推送从未生效）→attach_snapshot 截图注入 L296→label_mapping 物料名映射（replace/keep_both 两模式）L310→鉴权合成 L319→`adapter.build_payload`→重试循环 L344（fixed/exponential 退避可配 L337；retry_on_4xx 默认 True，川南 §5.1 要求仅 5xx/超时重试时设 False L339）→成功/失败写 MESCommLog。
 - `_capture_snapshot_base64` L403：抓工位当前帧→按 snapshot_quality 重编码→snapshot_max_bytes 超限自动压缩（压不下放弃，防客户 MES 413）→base64。
 - `_apply_auth_to_headers` L446：auth.type ∈ {none, basic(留给 adapter), bearer, api_key, custom_header} 统一合并进 headers；顶层 custom_headers 列表/字典也合并。
 - `_log` L501：写 MESCommLog（flush 不 commit，由调用方统一 commit）。
@@ -172,7 +172,7 @@
 - L410-411（snapshot_max_bytes）："客户 MES 常有 413 请求体上限, 超大截图直接放弃而不是发了被拒"。
 - L584-585（operator 字段）："operator_id 列保留字段名 (SQLite 无法 rename), 值改为 user.id…MES payload key 'operator' 字段名稳定 (向后兼容客户模板)"。
 
-### 4. backend/services/mes_inbound.py（797 行）
+### 4. backend/services/mes_inbound.py（968 行，v3.41 复核）
 
 **职责一句话**：外部生产管控系统「入站对接」接收器（v3.26+，川南范式）——外部主动 POST 开工/完工/报警消除报文，完全配置驱动（配置整体存 SystemConfig key=`mes_inbound_config`，无新表、零客户特异分支），字段映射→校验→切项目/建工单/顶替/收工单→按配置组装客户要求的业务响应码。
 
@@ -185,7 +185,8 @@
 - `handle_alarm_clear` L380：报警消除命令——按 alarm_clear_match_fields（默认四要素：任务号/产品号/工序工步/操作员）匹配在途报警并消除；匹配不到回 alarm_not_found(40007)。
 - `_apply_task_action` L414：编排——完工信号优先（complete_field 真值→`_complete_work_order`）→reject_duplicate_task 判重→`_switch_project`→`_ensure_work_order`。
 - `_switch_project` L452：复用 `project_match.resolve_project_id_by_spec`（对照表精确→通配符→自动同名子串，与上银包装线完全一致，L463-464 注释）→已激活项目跳过重载 L480-483→`activate_project_core`（404 回 unknown_product）。
-- `_ensure_work_order` L496：建/激活工单（order_no=task_no，source='external'，四要素存 extra_data["inbound"] 留痕）；order_binding=channel 时按 channel_field 绑工位；然后 `_ensure_in_progress` + 可选顶替。
+- `_ensure_work_order` L496：建/激活工单（order_no=task_no，source='external'，四要素存 extra_data["inbound"] 留痕）；order_binding=channel 时按 channel_field 绑工位；然后 `_ensure_in_progress` + 可选顶替。**复用分支（同任务号再开工）v3.41 起调 `_refresh_reused_order`**。
+- `_refresh_reused_order`（v3.41 川南修复）：复用工单按本次开工报文"最新开工为准"刷新——重绑当前激活项目（工位路由则重绑报文工位）+ 覆盖 extra_data.inbound 四要素 + 产品码/操作员。老代码复用分支只打日志不动工单 → 绑定过期的复用单挂不上工位 → 四要素不上屏、出站推送工单字段全 null。JSON 列整体重赋值（原地改 dict 不触发 SQLAlchemy 变更追踪）；失败只记日志不阻断开工；终态单复活仍归 `_ensure_in_progress`。回归 `tests/test_cn_fixes_20260717.py`。
 - `_supersede_previous_tasks` L554：按 supersede_scope（project/same_project/same_channel/external）查在产外部单收尾。**注意：same_channel 分支在代码里实现了（L575-582）但 DEFAULT 配置注释（L130）只列了 project/same_project/external 三档**。
 - `_finish_superseded` L589：逐单 change_status(completed)→**先 commit 释放 SQLite 写锁再网络回传**（L599 注释："与 mes_hooks cycle_end 同模式, 避免锁等待"）→report_complete_on_supersede 时逐单 `_report_order_complete`。
 - `_report_order_complete` L611：对被顶替工单回传"完工"出站事件（gateway.dispatch(complete_event_type)）。

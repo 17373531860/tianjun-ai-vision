@@ -391,10 +391,16 @@ class MESGateway:
 
         # 按结果过滤: push_on_result=["OK","NG"] 默认全推; ["NG"] 只推 NG.
         # 适用场景: 客户只关心 NG 情况, OK 无需上报.
+        # v3.40 川南修复: cycle_end 事件的结果在 cycle.result (嵌套), 原来只读顶层
+        # overall_result/result → 周期事件取到空串被无条件放行, "仅 NG"对周期推送
+        # 从未生效 (合格周期照样从报警连接推出去)。补上嵌套路径。
         push_on = config.get("push_on_result")
         if push_on:
+            cyc = full_context.get("cycle")
+            cycle_result = cyc.get("result") if isinstance(cyc, dict) else None
             r = str(full_context.get("overall_result")
-                    or full_context.get("result") or "").upper()
+                    or full_context.get("result")
+                    or cycle_result or "").upper()
             allowed = [str(x).upper() for x in push_on]
             if r and r not in allowed:
                 self._log(db, conn.id, event_type, "push",

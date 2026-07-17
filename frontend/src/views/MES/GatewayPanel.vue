@@ -704,6 +704,7 @@ const eventOptions = [
   { value: 'box_complete', label: 'box_complete (集群汇总完成)' },
   { value: 'box_timeout', label: 'box_timeout (集群超时推送)' },
   { value: 'weight_no_barcode', label: 'weight_no_barcode (称重有重无码)' },
+  { value: 'weighing_product_done', label: 'weighing_product_done (称重成品结案)' },
   { value: 'packaging_complete', label: 'packaging_complete (包装结算完成)' },
   { value: 'task_complete', label: 'task_complete (完工回传)' },
 ]

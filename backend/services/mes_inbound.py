@@ -662,7 +662,14 @@ class MESInbound:
                              f"step={mapped.get('step_code')} operator={mapped.get('operator')} "
                              f"绑定={data.get('binding_scope')}")
         else:
-            debug_center.dbg("backend.mes", "复用已有工单", f"task_no={task_no} status={order.status}")
+            # v3.40 川南现场钉死的 bug: 同任务号重复开工走复用分支, 但工单上的项目
+            # 绑定停留在"第一次创建时"的项目 (甚至为空)。工位挂单按"工单绑定项目 ==
+            # 工位当前项目"匹配 → 绑定过期的复用单永远挂不上 → 监控页四要素不显示、
+            # 出站推送里工单字段全 null。复用时以本次开工为准刷新绑定与四要素留痕。
+            self._refresh_reused_order(db, order, mapped, cfg)
+            debug_center.dbg("backend.mes", "复用已有工单",
+                             f"task_no={task_no} status={order.status} "
+                             f"scope={order.binding_scope} project={order.project_id}")
 
         self._ensure_in_progress(svc, db, order)
 
@@ -781,6 +788,44 @@ class MESInbound:
             except Exception as e:
                 return (False, "internal_error", f"工单收尾失败: {e}")
         return (True, None, f"工单 {order.order_no} 已完工")
+
+    def _refresh_reused_order(self, db, order, mapped: dict, cfg: dict):
+        """复用工单时按本次开工报文刷新绑定与四要素 (v3.40 川南修复)。
+
+        原则"最新开工为准":
+          - 项目路由 → 重绑当前激活项目 (工单第一次创建时的项目绑定可能已过期/为空,
+            不刷新则工位挂单匹配永远落空)
+          - 工位路由 → 重绑本次报文里的工位号
+          - 四要素留痕 (extra_data.inbound) 与产品码/操作员同步覆盖为本次报文值,
+            否则同任务号第二次开工换了操作员/工步, 界面与推送仍显示旧值
+        终态单 (completed/cancelled) 不在此处理 — 由 _ensure_in_progress 决定是否复活。
+        任何失败只记日志, 不阻断开工接收。
+        """
+        try:
+            from backend.models.models import Project
+            if (cfg.get("order_binding") or "project").lower() == "channel":
+                ch = self._parse_channel(mapped.get(cfg.get("channel_field") or "channel"))
+                if ch is not None:
+                    order.binding_scope = "channels"
+                    order.target_channels = [ch]
+            else:
+                active = db.query(Project).filter(Project.is_active == True).first()
+                if active is not None:
+                    order.binding_scope = "project"
+                    order.project_id = active.id
+            if cfg.get("store_mapped_extra", True):
+                # JSON 列整体重赋值 (原地改 dict 不触发 SQLAlchemy 变更追踪)
+                extra = dict(order.extra_data or {})
+                extra["inbound"] = dict(mapped)
+                order.extra_data = extra
+            if mapped.get("product_code"):
+                order.product_code = mapped.get("product_code")
+            if mapped.get("operator"):
+                order.created_by = mapped.get("operator")
+            db.flush()
+        except Exception as e:
+            debug_center.dbg("backend.mes", "复用工单刷新绑定失败",
+                             f"order={getattr(order, 'order_no', '?')} err={e}")
 
     @staticmethod
     def _ensure_in_progress(svc, db, order):

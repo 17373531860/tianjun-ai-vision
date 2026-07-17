@@ -1,0 +1,90 @@
+{
+  "version": "3.41.0",
+  "date": "2026-07-17",
+  "previous_version": "3.40.0",
+  "theme": "川南 MES 对接两处现场反馈修复（复用工单按最新开工重绑 + 网关仅NG周期过滤生效）+ 网关事件下拉露出称重成品结案 + 模拟秤墙钟计时 + 萍乡手册 v2.1 达梦推送时机勘误",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "同任务号重复开工时复用工单不刷新绑定，四要素不上屏、推送工单字段全 null",
+      "symptom": "客户固定任务号反复开工，第二次起走复用工单分支，工单绑定的项目停留在第一次创建时（甚至为空），工位挂单匹配永远落空：监控页信息条四要素不显示，完工/报警推送里 TaskNo/ProductCode/StepCode/Operator 全 null",
+      "root_cause": "mes_inbound._ensure_work_order 的复用分支只打日志不动工单，项目绑定/四要素留痕/产品码/操作员全部停留在建单时刻，后续开工报文内容被丢弃",
+      "fix": "新增 _refresh_reused_order：复用时按最新开工为准刷新——重绑当前激活项目（工位路由则重绑本次报文工位）+ 覆盖 extra_data.inbound 四要素 + 产品码/操作员；JSON 列整体重赋值触发 SQLAlchemy 变更追踪；失败只记日志不阻断开工；终态复活仍归 _ensure_in_progress",
+      "files": ["backend/services/mes_inbound.py", "tests/test_cn_fixes_20260717.py", "tests/uat/uat_20260717_cn_order_reuse_null.py"],
+      "keywords": ["复用工单", "重复开工", "同任务号", "四要素不显示", "推送字段null", "工单绑定过期", "order reuse", "rebind", "task_no", "川南", "mes_inbound", "_refresh_reused_order", "最新开工为准"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "网关仅推NG对周期结束事件从未生效，合格周期照样推报警接口",
+      "symptom": "报警连接结果过滤勾了仅NG，合格周期照样推给中控，中控收到 WarningText=顺序正确完成 的假报警",
+      "root_cause": "cycle_end 事件的结果在嵌套层 cycle.result，push_on_result 过滤只读顶层 overall_result/result，周期事件取到空串按无结果放行，过滤对周期推送从未生效",
+      "fix": "结果取值加第三级嵌套兜底 overall_result → result → cycle.result；空结果仍放行（兜底行为不变），取到值才按白名单过滤",
+      "files": ["backend/services/mes_gateway.py", "tests/test_cn_fixes_20260717.py", "tests/uat/uat_20260717_cn_order_reuse_null.py"],
+      "keywords": ["push_on_result", "仅NG", "结果过滤", "周期事件", "cycle.result", "嵌套结果", "合格周期误推", "报警连接", "川南", "mes_gateway"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "模拟秤脚本播放越播越慢，对齐视频时间轴的仿真整体错位",
+      "symptom": "全链路仿真里秤读数脚本长时间播放后段动作时刻越来越滞后（4 分钟漂约 20 秒），称重状态机与视觉步骤对不上",
+      "root_cause": "模拟协议播放循环按睡眠次数×轮询间隔累计段时长，不含每次读数分发处理耗时，误差随时长线性累积",
+      "fix": "段时长改按墙钟计时（time.time() 差值判段结束）；仅影响模拟协议，真秤硬件无此问题",
+      "files": ["backend/services/external_device_protocols.py", "tests/uat/sim_bst_20260717.py"],
+      "keywords": ["模拟秤", "mock scale", "墙钟", "计时漂移", "仿真错位", "时间轴", "external_device_protocols", "wall clock"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "网关事件下拉露出称重成品结案（weighing_product_done）",
+      "symptom": "两阶段流水线称重正式结案推专用事件 weighing_product_done（v3.39 后端就有），前端网关面板事件下拉没露出，达梦直写连接没法订阅，照手册配 cycle_end 一条都收不到",
+      "root_cause": "GatewayPanel 事件选项列表漏登记该事件",
+      "fix": "事件选项列表补一项，后端零改动",
+      "files": ["frontend/src/views/MES/GatewayPanel.vue"],
+      "keywords": ["weighing_product_done", "称重成品结案", "事件下拉", "达梦", "数据库直写", "两阶段流水线", "GatewayPanel", "萍乡", "百斯特"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "DOC-001",
+      "title": "萍乡百斯特项目实施总手册 v2.1（达梦推送时机勘误）",
+      "symptom": "v2.0 手册 2.14 写达梦推送时机为 cycle_end，照配一条都收不到",
+      "root_cause": "两阶段流水线正式结案推的是 weighing_product_done 专用事件",
+      "fix": "手册 v2.1 勘误 + 修订记录；v2.0 markdown 源稿丢失，按 PDF 反推重建为生成脚本入库",
+      "files": ["scripts/docgen/gen_bst_manual_v21.py", "docs/百斯特萍乡_总手册v2配图/", "百斯特萍乡_项目实施总手册_v2.1.pdf"],
+      "keywords": ["百斯特", "萍乡", "实施手册", "v2.1", "达梦", "推送时机", "勘误"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "DOC-002",
+      "title": "软件操作手册更新至 v3.41.0",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "4.8.5 推送时机补全 8 事件 + 结果过滤 v3.41 修复说明；4.8.9 补同任务号重复开工按最新开工刷新说明；重新出 PDF",
+      "files": ["docs/软件操作手册.md", "docs/软件操作手册.pdf", "scripts/docgen/gen_软件操作手册.py"],
+      "keywords": ["操作手册", "推送时机", "结果过滤", "入站对接"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes"],
+  "files_changed": [
+    "backend/services/mes_inbound.py",
+    "backend/services/mes_gateway.py",
+    "backend/services/external_device_protocols.py",
+    "frontend/src/views/MES/GatewayPanel.vue",
+    "scripts/docgen/gen_bst_manual_v21.py",
+    "scripts/docgen/gen_软件操作手册.py",
+    "docs/软件操作手册.md",
+    "docs/软件操作手册.pdf",
+    "docs/dev/_reading_notes/02_mes_domain.md",
+    ".claude/skills/debug-mes/SKILL.md",
+    "tests/test_cn_fixes_20260717.py",
+    "tests/uat/uat_20260717_cn_order_reuse_null.py",
+    "tests/uat/sim_bst_20260717.py"
+  ]
+}

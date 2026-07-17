@@ -636,11 +636,13 @@ class ExternalDeviceProtocolsMixin:
                     hold = float(seg.get("hold", 1.0))
                 except Exception:
                     gross, hold = 0.0, 1.0
-                elapsed = 0.0
-                while elapsed < hold and not conn._stop_event.is_set():
+                # 按墙钟计时: 之前按"睡眠次数×间隔"累计, 不含 emit 处理耗时,
+                # 长脚本会越播越慢 (实测 4 分钟漂 ~20s), 与外部时间轴(如视频源)
+                # 同步的仿真场景会整体错位 —— 真秤无此问题, 仅模拟协议受影响。
+                seg_start = time.time()
+                while time.time() - seg_start < hold and not conn._stop_event.is_set():
                     emit(gross)
                     conn._stop_event.wait(timeout=poll_interval)
-                    elapsed += poll_interval
             if not loop_play:
                 break
             tare_offset = 0.0  # 一件完成, 复位去皮基准, 准备下一件
