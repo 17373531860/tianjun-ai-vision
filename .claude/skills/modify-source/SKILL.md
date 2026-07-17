@@ -66,6 +66,7 @@ backend/api/source.py (~2050L)              -- VSM 类骨架 + __init__ + __geta
 │   7. source_check_modes_mixin.py         CheckModesMixin          判定模式聚合器 (内部多继承 4 个子 mixin, 见下)
 │   8. source_settlement_mixin.py          SettlementMixin          周期结算 8 种 _settle_* + _process_*_step
 │   9. source_detect_runners_mixin.py      DetectRunnersMixin       _detect_only / _detect_and_track / _detect_segment
+│                                                                   + infer_once_for_calibration (v3.42 标定用单帧推理, 刻意不过步骤过滤/ROI, 无状态机副作用)
 │  10. source_camera_start_mixin.py        CameraStartMixin         start_camera/rtsp/video/image/hikvision/hcnetsdk + reconnect
 │  11. source_session_lifecycle_mixin.py   SessionLifecycleMixin    start/end_session, start/end_cycle, record_step (1111L ⚠)
 │  12. source_recording_thread_mixin.py    RecordingThreadMixin     录制后台线程消费 _recording_queue

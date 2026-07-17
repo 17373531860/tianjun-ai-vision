@@ -1,0 +1,80 @@
+{
+  "version": "3.42.0",
+  "date": "2026-07-17",
+  "previous_version": "3.41.1",
+  "theme": "抓取锚点框单帧推理兜底（停止/待机可标定，打通打包版标定死环）+ 终态工单再开工策略（默认自动复活）与开工响应透明化（治川南静默挂不上单）",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "「抓取锚点框」支持停止/待机状态——标定用单帧推理兜底",
+      "symptom": "现场配拆分规则点「从当前画面抓取锚点框」弹红\"当前画面没有检测到工件\"：检测中锁菜单切不进项目页，停止/待机后实时结果又被清空，打包版里标定流程是死环",
+      "root_cause": "「检测中锁菜单」×「停止/待机清空实时检测结果」两条老约束叠加；抓取动作只读实时结果没有其他数据来源",
+      "fix": "新端点 POST /source/detection/infer-once → VSM infer_once_for_calibration：停止（定格帧）/待机状态下模型仍在显存，对当前显示帧现推一帧，不发布结果、无状态机副作用；刻意不过步骤过滤/ROI/box尺寸（锚点标签通常不是步骤）；无模型但在检测（synthetic）时透传实时结果。前端拆分规则编辑器+区域事件规则两处抓取实时结果为空时自动兜底",
+      "files": ["backend/api/source_detect_runners_mixin.py", "backend/api/source_routes.py", "frontend/src/api/detection.js", "frontend/src/views/Project/LabelSplitDialog.vue", "frontend/src/views/Project/LogicConfigTab.vue"],
+      "keywords": ["抓取锚点框", "单帧推理", "infer-once", "infer_once_for_calibration", "标定", "锚点跟随", "拆分规则", "区域事件", "停止", "待机", "standby", "检测中锁菜单", "打包版死环", "电机装配", "one shot inference", "calibration"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "终态工单再开工策略（terminal_order_policy，默认自动复活）+ 开工响应透明化",
+      "symptom": "同任务号工单被顶替/结案成已完工/已取消后再开工，响应回\"已就绪\"但工位永远挂不上单：四要素不上屏、推送里任务字段全 null，现场无从察觉",
+      "root_cause": "completed/cancelled 是工单状态机死路，老代码 _ensure_in_progress 终态不复活且响应不区分，静默失败",
+      "fix": "入站配置新键 terminal_order_policy：revive（默认）=外部开工报文是权威指令，绕过状态机直接复活为 in_progress（清 actual_end，UI 手工路径仍受状态机约束），响应追加\"已从完结状态重新开工\"；reject=回 duplicate 码拒收提示。配套响应透明化：没进 in_progress 一律回\"状态异常，检测数据将不会计入该任务\"。前端入站面板加「终态工单再开工」下拉",
+      "files": ["backend/services/mes_inbound.py", "frontend/src/views/MES/OrderInboundPanel.vue"],
+      "keywords": ["终态工单", "复活", "revive", "reject", "terminal_order_policy", "completed", "cancelled", "再开工", "已就绪谎报", "响应透明化", "挂不上单", "川南", "mes_inbound", "_ensure_in_progress"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "DOC-001",
+      "title": "电机装配线现场部署指南 v1.2",
+      "symptom": "v1.1 标定流程写\"检测运行中抓取\"，与检测中锁菜单矛盾，现场照做走不通",
+      "root_cause": "文档滞后于 FEAT-001 打通的新通路",
+      "fix": "4.2 节标定操作顺序更新为停止/待机后抓取（自动现推一帧）；FAQ 补抓锚点框报错条目；v1.1→v1.2 重出 PDF",
+      "files": ["docs/customers/电机装配线/部署指南_电机装配打螺丝.md", "docs/customers/电机装配线/部署指南_电机装配打螺丝.pdf"],
+      "keywords": ["部署指南", "电机装配", "标定流程", "v1.2", "抓取锚点框"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "DOC-002",
+      "title": "软件操作手册更新至 v3.42.0",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "4.2 锚点跟随标定流程改写；4.8.9 补终态工单再开工策略与开工响应透明化；配方 P 补兜底说明；封面与目录版本标注；重出 PDF",
+      "files": ["docs/软件操作手册.md", "docs/软件操作手册.pdf", "scripts/docgen/gen_软件操作手册.py"],
+      "keywords": ["操作手册", "锚点标定", "终态工单", "入站对接"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes", "modify-source"],
+  "files_changed": [
+    "backend/api/source_detect_runners_mixin.py",
+    "backend/api/source_routes.py",
+    "backend/services/mes_inbound.py",
+    "frontend/src/api/detection.js",
+    "frontend/src/views/MES/OrderInboundPanel.vue",
+    "frontend/src/views/Project/LabelSplitDialog.vue",
+    "frontend/src/views/Project/LogicConfigTab.vue",
+    "docs/customers/电机装配线/部署指南_电机装配打螺丝.md",
+    "docs/customers/电机装配线/部署指南_电机装配打螺丝.pdf",
+    "docs/软件操作手册.md",
+    "docs/软件操作手册.pdf",
+    "scripts/docgen/gen_软件操作手册.py",
+    "docs/dev/_reading_notes/01_backend_core.md",
+    "docs/dev/_reading_notes/02_mes_domain.md",
+    "docs/dev/_reading_notes/04_frontend_electron.md",
+    "docs/dev/reference/api/openapi.json",
+    ".claude/skills/debug-mes/SKILL.md",
+    ".claude/skills/modify-source/SKILL.md",
+    "tests/test_infer_once_calibration.py",
+    "tests/test_cn_fixes_20260717.py",
+    "tests/e2e_browser/test_label_split_tab.py",
+    "tests/e2e_browser/test_mes_inbound_panel.py",
+    "tests/uat/uat_20260717_anchor_grab_fallback.py",
+    "tests/uat/uat_20260717_anchor_grab_pdf_flow.py",
+    "tests/uat/uat_20260717_cn_order_reuse_null.py"
+  ]
+}

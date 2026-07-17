@@ -3885,6 +3885,36 @@
     "title": "IndicatorConfigRequest",
     "type": "object"
    },
+   "InferOnceResponse": {
+    "properties": {
+     "detections": {
+      "description": "检测框列表, 与 /detection/results 同构: 归一化坐标 x/y/w/h + label/confidence/class_id",
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "title": "Detections",
+      "type": "array"
+     },
+     "mode": {
+      "description": "固定 one_shot（区别于 /detection/results 的实时结果）",
+      "title": "Mode",
+      "type": "string"
+     },
+     "status": {
+      "description": "固定 success",
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "mode",
+     "detections"
+    ],
+    "title": "InferOnceResponse",
+    "type": "object"
+   },
    "KalmanConfigRequest": {
     "properties": {
      "enabled": {
@@ -25164,6 +25194,50 @@
      }
     },
     "summary": "Clear Pending Scan",
+    "tags": [
+     "source"
+    ]
+   }
+  },
+  "/api/v1/source/detection/infer-once": {
+   "post": {
+    "description": "标定用单帧推理 (v3.42.0): 对当前画面帧现推一帧, 返回原始检测列表。\n\n给项目页「从当前画面抓取锚点框」兜底: 检测中锁菜单 + 停止/待机清空实时\n结果, 导致打包版里抓取无路可走。本端点对当前显示帧现推一帧 (模型需在\n显存, 即本次运行启动过检测), 不过步骤过滤 —— 锚点标签通常不是步骤,\n实时结果里本来就看不到它。检测运行中同样可调 (推理池串行, 无竞争)。\n不发布结果、不触碰状态机, 无副作用。\n\n- 模型未加载 / 无画面帧 / 单帧推理超时 → 400, detail 为中文提示。\n- 通道对象不支持单帧推理 (异常热更场景) → 500。",
+    "operationId": "detection_infer_once_api_v1_source_detection_infer_once_post",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "channel",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "title": "Channel",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/InferOnceResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "标定用单帧推理",
     "tags": [
      "source"
     ]

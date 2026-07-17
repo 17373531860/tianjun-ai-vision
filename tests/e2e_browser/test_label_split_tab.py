@@ -269,6 +269,40 @@ def test_锚点跟随规则_抓取标定落库(page, base_url, api_url):
         requests.post(f"{api_url}/api/v1/test/synthetic/stop?channel=0", timeout=5)
 
 
+def test_锚点抓取_实时结果为空走单帧推理兜底(page, base_url, api_url):
+    """v3.42 回归线: 实时检测结果为空时,「从当前画面抓取锚点框」必须自动调
+    /detection/infer-once 单帧推理兜底 (打包版停止/待机后标定的唯一通路)。
+
+    CI 无真模型, 只守「前端确实发起了兜底请求」这条接线; 兜底推理本身的
+    成功路径由 tests/test_infer_once_calibration.py (单元+路由) 与
+    tests/uat/uat_20260717_anchor_grab_*.py (真模型 UAT) 覆盖。
+    锚点标签用独特名(不会出现在任何残留实时结果里), 与前面 synthetic
+    用例的执行顺序解耦 —— 否则残留「前罩」检测框会让兜底无需触发。
+    """
+    pid, name = _mk_project(api_url)
+    _open_steps_tab(page, base_url, name)
+
+    page.locator("button:has-text('新建拆分规则')").click()
+    time.sleep(1.0)
+    dlg = page.locator(".el-dialog:has-text('区域定位方式')")
+    _fill_creatable_select(page, dlg.locator(".el-select").first, "打螺丝")
+    dlg.locator(".el-radio-button:has-text('锚点跟随')").first.click()
+    time.sleep(0.5)
+    anchor_box = dlg.locator("div.border:has-text('锚点标签')").last
+    _fill_creatable_select(page, anchor_box.locator(".el-select").first, "__e2e_兜底锚点")
+
+    infer_calls = []
+    page.on("request",
+            lambda req: infer_calls.append(req.url) if "infer-once" in req.url else None)
+    dlg.locator("button:has-text('从当前画面抓取锚点框')").click()
+    # 全文件连跑时后端可能还在消化前面 synthetic 用例的收尾, /detection/results
+    # 响应变慢 → 兜底请求晚于固定短等待, 这里轮询等到 10s
+    deadline = time.time() + 10
+    while time.time() < deadline and not infer_calls:
+        time.sleep(0.5)
+    assert infer_calls, "实时结果为空时应发起 /detection/infer-once 兜底请求"
+
+
 def test_违序即时事件配置落库(page, base_url, api_url):
     """逻辑设置 → 结算方式卡片选违序事件 → strict_order_violation_event_id 落库。"""
     pid, name = _mk_project(api_url)

@@ -170,6 +170,105 @@ def test_reused_order_no_active_project_keeps_old_binding(cleanup):
         db.close()
 
 
+def test_completed_order_revived_on_task_start(cleanup):
+    """终态陷阱复现 (07-17 现场): 工单被结案后同任务号再开工 → 必须复活为在产。
+
+    老行为: completed 是状态机死路, 复用分支静默不动, 响应却回"已就绪",
+    工位从此永远挂不上单 (四要素不显示 + 推送字段全 null)。
+    """
+    svc = MESInbound()
+    task = f"{PREFIX}revive"
+    db = SessionLocal()
+    try:
+        _mk_project(db, "__cn717_A", active=True)
+        db.commit()
+        svc.handle_task_start(db, {"TaskNo": task, "ProductCode": "p"}, _cfg())
+        db.commit()
+
+        # 现场等价操作: 单子被结案 (被别的任务顶替 / 手工完工 / 完工报文)
+        order = db.query(WorkOrder).filter(WorkOrder.order_no == task).first()
+        order.status = "completed"
+        db.commit()
+
+        res = svc.handle_task_start(db, {"TaskNo": task, "ProductCode": "p"}, _cfg())
+        db.commit()
+        db.expire_all()
+        order = db.query(WorkOrder).filter(WorkOrder.order_no == task).first()
+        assert order.status == "in_progress", "开工报文是权威指令, 终态单必须复活"
+        msg = (res.get("response") or {}).get("message", "")
+        assert "重新开工" in msg, f"响应应说明复活动作, 实际: {msg}"
+    finally:
+        db.close()
+
+
+def test_cancelled_order_revived_on_task_start(cleanup):
+    """cancelled 同理复活。"""
+    svc = MESInbound()
+    task = f"{PREFIX}recan"
+    db = SessionLocal()
+    try:
+        _mk_project(db, "__cn717_A", active=True)
+        db.commit()
+        svc.handle_task_start(db, {"TaskNo": task, "ProductCode": "p"}, _cfg())
+        db.commit()
+        order = db.query(WorkOrder).filter(WorkOrder.order_no == task).first()
+        order.status = "cancelled"
+        db.commit()
+        svc.handle_task_start(db, {"TaskNo": task, "ProductCode": "p"}, _cfg())
+        db.commit()
+        db.expire_all()
+        order = db.query(WorkOrder).filter(WorkOrder.order_no == task).first()
+        assert order.status == "in_progress"
+    finally:
+        db.close()
+
+
+def test_terminal_policy_reject_refuses_task(cleanup):
+    """终态策略=reject: 已完结的同号单再开工 → 拒收(duplicate)且状态不复活。"""
+    svc = MESInbound()
+    task = f"{PREFIX}rej"
+    cfg = _cfg()
+    cfg["terminal_order_policy"] = "reject"
+    db = SessionLocal()
+    try:
+        _mk_project(db, "__cn717_A", active=True)
+        db.commit()
+        svc.handle_task_start(db, {"TaskNo": task, "ProductCode": "p"}, cfg)
+        db.commit()
+        order = db.query(WorkOrder).filter(WorkOrder.order_no == task).first()
+        order.status = "completed"
+        db.commit()
+
+        res = svc.handle_task_start(db, {"TaskNo": task, "ProductCode": "p"}, cfg)
+        db.commit()
+        db.expire_all()
+        order = db.query(WorkOrder).filter(WorkOrder.order_no == task).first()
+        assert order.status == "completed", "reject 策略下不得复活"
+        assert res.get("ok") is False and res.get("code_key") == "duplicate", res
+        msg = (res.get("response") or {}).get("message", "")
+        assert "已拒收" in msg, msg
+    finally:
+        db.close()
+
+
+def test_normal_reuse_message_unchanged(cleanup):
+    """在产单正常复用 → 响应保持"已就绪", 不带复活字样 (不打扰正常现场)。"""
+    svc = MESInbound()
+    task = f"{PREFIX}plain"
+    db = SessionLocal()
+    try:
+        _mk_project(db, "__cn717_A", active=True)
+        db.commit()
+        svc.handle_task_start(db, {"TaskNo": task, "ProductCode": "p"}, _cfg())
+        db.commit()
+        res = svc.handle_task_start(db, {"TaskNo": task, "ProductCode": "p"}, _cfg())
+        db.commit()
+        msg = (res.get("response") or {}).get("message", "")
+        assert "已就绪" in msg and "重新开工" not in msg, msg
+    finally:
+        db.close()
+
+
 # ==================== 修复 2: 周期事件按结果过滤 ====================
 class _RecordingAdapter:
     def __init__(self):

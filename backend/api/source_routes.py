@@ -1400,6 +1400,41 @@ def reset_periodic_action(
     return {"status": "success", "reset": result.get('reset', [])}
 
 
+class InferOnceResponse(BaseModel):
+    status: str = Field(..., description="固定 success")
+    mode: str = Field(..., description="固定 one_shot（区别于 /detection/results 的实时结果）")
+    detections: List[Dict[str, Any]] = Field(
+        ..., description="检测框列表, 与 /detection/results 同构: 归一化坐标 x/y/w/h + label/confidence/class_id")
+
+
+@router.post("/detection/infer-once", summary="标定用单帧推理",
+             response_model=InferOnceResponse)
+def detection_infer_once(channel: int = Query(0)):
+    """标定用单帧推理 (v3.42.0): 对当前画面帧现推一帧, 返回原始检测列表。
+
+    给项目页「从当前画面抓取锚点框」兜底: 检测中锁菜单 + 停止/待机清空实时
+    结果, 导致打包版里抓取无路可走。本端点对当前显示帧现推一帧 (模型需在
+    显存, 即本次运行启动过检测), 不过步骤过滤 —— 锚点标签通常不是步骤,
+    实时结果里本来就看不到它。检测运行中同样可调 (推理池串行, 无竞争)。
+    不发布结果、不触碰状态机, 无副作用。
+
+    - 模型未加载 / 无画面帧 / 单帧推理超时 → 400, detail 为中文提示。
+    - 通道对象不支持单帧推理 (异常热更场景) → 500。
+    """
+    mgr = _get_mgr(channel)
+    if not hasattr(mgr, 'infer_once_for_calibration'):
+        raise HTTPException(status_code=500, detail="该通道不支持单帧推理")
+    try:
+        dets = mgr.infer_once_for_calibration()
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "status": "success",
+        "mode": "one_shot",
+        "detections": dets,
+    }
+
+
 @router.get("/detection/results")
 def get_detection_results(
     channel: int = Query(0),

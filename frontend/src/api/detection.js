@@ -56,6 +56,10 @@ export const getDetectionResults = (channel = 0, knownShots = null) => {
   return api.get(url);
 };
 
+// v3.42.0 标定用单帧推理: 检测未运行(停止/待机)时对当前帧现推一帧, 给「抓取锚点框」兜底。
+// 检测运行中调用则等价返回实时结果。无副作用。
+export const inferOnce = (channel = 0) => api.post(`/source/detection/infer-once?channel=${channel}`);
+
 export const getSourceStatus = (channel = 0) => api.get(`/source/status?channel=${channel}`);
 
 export const setProjectConfig = (projectConfig, channel = 0) => {

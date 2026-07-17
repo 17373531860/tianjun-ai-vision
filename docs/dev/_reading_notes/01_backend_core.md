@@ -118,14 +118,14 @@
 | **v3.3x 变更** | v3.32.0 收尾（TP 频闪真因）：`_start_inference_thread` L1111 加启动锁 + 线程代数——无锁的"检查-启动"两步被并发调用（采集自启 + resume 恢复）会各起一条推理线程，双线程交替发布"有结果/空结果"就是前端标注框逐帧频闪的真因；代数写进线程循环条件，`_stop_inference_thread` L1134 先作废代数再放倒运行标志，僵尸线程下轮自行退出。v3.32.0：MediaPipe 关键点颜色与连线颜色分开配（`mediapipe_pose_point_color` / `mediapipe_hands_point_color`，空 = 跟随连线色，L365-369）。v3.35：`_clear_step_runtime_state` 末尾清称重步骤门控残留（配了 `step_device_gates` 时调引擎 reset_gates，L1452-1459，防跨启停/强制结算残留卡步骤）。v3.38：`_backfill_step_records` 已记录步骤改读本地缓存 `cycle_step_records` 不再查库——step 插入进了落库线程，同步查库只能看到滞后快照、会重复补写；"周期进行中"守门统一改看 `current_cycle_uuid`（id 由落库作业回填） |
 | **注释坑** | proxy 仅 ch0 默认（L1990 附近）；多通道必须 `channel_manager.get(ch)`；RenderMixin/StreamingMixin 已抽出但主类仍保留部分方法 |
 
-#### `backend/api/source_routes.py`（2310 行，v3.41 复核）
+#### `backend/api/source_routes.py`（2345 行，v3.42 复核）
 
 | 维度 | 内容 |
 |---|---|
 | **职责** | `/api/v1/source/*` 全部 HTTP 端点：摄像头/RTSP/海康/视频/图片/检测/项目配置/轮询结果/ack-event/per_item 控制 |
 | **核心端点** | 视频源启停（L961 `start_video` 等）；检测启停/暂停/standby/reset（L1207 `reset_detection_stats`）；L1235 `_do_ack_pending`（人工确认公共体，含 elevated）；L1404+ **`get_detection_results`** 前端轮询核心；L1881 `set_project_config` |
 | **线程锁** | 无（委托 VSM） |
-| **v3.3x 变更** | v3.32.0 收尾：`get_detection_results` 补区域事件模式 in-flight（该模式不走步骤状态机字典，"动作进行中"以引擎 episode 起点算时长）+ 返回引擎快照 `region_events` + 项目配置摘要带规则身份（多工位建步骤行用）；MediaPipe 关键点颜色字段进 stream-config 读写（`_sanitize_optional_hex_color` 允许空串 = 跟随连线色）。v3.33（"显示与使用必须一致"修复）：`set_project_config` 成功后把工位持久化绑定同步写成同一项目（merge 只动 project_id 键，L1892+）、`start_video` 成功后落盘实际播放的视频路径——此前只改运行时，重启后 auto_restore 按旧绑定恢复"另一个项目+另一个模型"。v3.34：`_do_ack_pending` 支持「确认后保留周期」（事件配了 ack_keep_cycle 时只解除定格不清运行时，返回 `kept_cycle: true`，断点补做）。v3.39：`reset_detection_stats` 清零联动消除在途报警（入站配置 alarm_banner.clear_on_counter_reset 开启时，默认关） |
+| **v3.3x 变更** | v3.32.0 收尾：`get_detection_results` 补区域事件模式 in-flight（该模式不走步骤状态机字典，"动作进行中"以引擎 episode 起点算时长）+ 返回引擎快照 `region_events` + 项目配置摘要带规则身份（多工位建步骤行用）；MediaPipe 关键点颜色字段进 stream-config 读写（`_sanitize_optional_hex_color` 允许空串 = 跟随连线色）。v3.33（"显示与使用必须一致"修复）：`set_project_config` 成功后把工位持久化绑定同步写成同一项目（merge 只动 project_id 键，L1892+）、`start_video` 成功后落盘实际播放的视频路径——此前只改运行时，重启后 auto_restore 按旧绑定恢复"另一个项目+另一个模型"。v3.34：`_do_ack_pending` 支持「确认后保留周期」（事件配了 ack_keep_cycle 时只解除定格不清运行时，返回 `kept_cycle: true`，断点补做）。v3.39：`reset_detection_stats` 清零联动消除在途报警（入站配置 alarm_banner.clear_on_counter_reset 开启时，默认关）。v3.42：新增 `POST /detection/infer-once`（L1410 `detection_infer_once`，响应模型 `InferOnceResponse`）——标定用单帧推理，给项目页「从当前画面抓取锚点框」兜底（检测中锁菜单 × 停止/待机清实时结果，打包版标定死环）；委托 VSM `infer_once_for_calibration()`，RuntimeError → 400 中文提示 |
 | **注释坑** | `_dev_mocks_enabled()` 需 `ENABLE_DEV_MOCKS=1`；检测路由已统一到 source_routes，旧 `/api/detection/*` 已删 |
 
 #### `backend/api/source_persist_worker.py`（136 行，v3.38 新增）
@@ -157,7 +157,7 @@
 | `source_events_check_mixin.py` | 157 | 事件 FSM（settlement×logic 交叉） | `_check_events` L41+ | — |
 | `source_sequential_mixin.py` | 424 | 顺序/自定义顺序结算 | `_settle_sequential_cycle` L27+ | — |
 | `source_settlement_mixin.py` | 1591 | 结算总控+跨周期/last_first | **`_settle_for_cross_cycle` L754** 分发；`_process_last_first_mode` L774 | — |
-| `source_detect_runners_mixin.py` | 518 | YOLO 三种 runner | `_detect_only/_detect_and_track/_detect_segment` L136+ | `_gpu_lock_ctx` |
+| `source_detect_runners_mixin.py` | 609 | YOLO 三种 runner；v3.42 增 `infer_once_for_calibration` L306（标定用单帧推理：对当前显示帧现推一帧，**刻意不过**步骤过滤/ROI/box尺寸——锚点标签通常不是步骤；不发布 current_detections、无状态机副作用；无模型但在检测=synthetic 时透传实时结果） | `_detect_only/_detect_and_track/_detect_segment` L136+ | `_gpu_lock_ctx` |
 | `source_camera_start_mixin.py` | 875 | 6 种视频源启动（v3.41.1 曝光设置按 backend 语义精准下发 + set/get 可观测日志，见表下注） | `start_camera/rtsp/hcnetsdk/...` L114+；`_apply_exposure_setting` L136 | 启 `_capture_loop` 线程 |
 | `source_session_lifecycle_mixin.py` | 1751 | Session/Cycle DB 生命周期 | **`end_cycle` L702**；`start_session` L229；`start_cycle` L488 | — |
 | `source_recording_thread_mixin.py` | 305 | FFmpeg 录制线程 | `_recording_loop` L76 线程 | `_writer_lock` |

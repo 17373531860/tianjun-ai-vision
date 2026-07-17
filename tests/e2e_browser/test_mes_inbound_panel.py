@@ -25,6 +25,32 @@ def test_inbound_panel_renders_all_controls(page, base_url):
     assert not missing, f"工单接收面板缺控件: {missing}"
 
 
+def test_inbound_terminal_policy_persists(page, base_url, api_url):
+    """v3.42「终态工单再开工」下拉: 渲染存在 → 切到'拒收' → 保存 → 后端落库。"""
+    page.goto(f"{base_url}/#/mes", wait_until="networkidle")
+    page.get_by_text("工单接收", exact=True).first.click()
+    page.wait_for_selector("text=终态工单再开工", timeout=8000)
+
+    lab = page.get_by_text("终态工单再开工", exact=True).first
+    fi = lab.locator("xpath=ancestor::div[contains(@class,'el-form-item')][1]")
+    fi.locator(".el-select").first.click()
+    page.locator(".el-select-dropdown__item:has-text('拒收并提示')").first.click()
+
+    page.get_by_role("button", name="保存配置").first.click()
+    page.wait_for_selector(".el-message--success", timeout=6000)
+
+    r = requests.get(f"{api_url}/api/v1/mes/inbound/config", timeout=10)
+    assert r.status_code == 200, f"读配置失败 http={r.status_code}"
+    assert r.json().get("terminal_order_policy") == "reject", "保存后后端未落库 terminal_order_policy"
+
+    # 还原默认 revive, 不给后续测试留状态
+    try:
+        requests.put(f"{api_url}/api/v1/mes/inbound/config",
+                     json={"enabled": False, "terminal_order_policy": "revive"}, timeout=10)
+    except Exception:
+        pass
+
+
 def test_inbound_supersede_toggle_persists(page, base_url, api_url):
     """开『最新开工为准』→ 保存 → 后端 GET 配置确实落库(UI→后端双向验证)。"""
     page.goto(f"{base_url}/#/mes", wait_until="networkidle")

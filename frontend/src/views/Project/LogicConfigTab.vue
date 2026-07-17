@@ -1750,7 +1750,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Delete } from '@element-plus/icons-vue';
 import { dbg } from '@/utils/debug';
-import { getDetectionResults } from '@/api/detection';
+import { getDetectionResults, inferOnce } from '@/api/detection';
 import { _pi_itemLabelToArray, _pi_itemLabelFromArray } from './perItemLabel';
 
 const props = defineProps({
@@ -1879,10 +1879,15 @@ const grabRegionAnchor = async (rule, rIdx) => {
   if (!lbl) { ElMessage.warning('先选择锚点类别'); return; }
   grabbingAnchorIdx.value = rIdx;
   try {
+    // 先读实时结果, 空则单帧推理兜底(停止/待机后实时结果被清, 见 LabelSplitDialog 同款)
     const res = await getDetectionResults(0);
-    const dets = (res.data?.detections || []).filter(d => d.label === lbl);
+    let dets = (res.data?.detections || []).filter(d => d.label === lbl);
     if (!dets.length) {
-      ElMessage.error(`当前画面没有检测到「${lbl}」— 请先在监控页启动检测并把对象放到标准位置`);
+      const once = await inferOnce(0);
+      dets = (once.data?.detections || []).filter(d => d.label === lbl);
+    }
+    if (!dets.length) {
+      ElMessage.error(`当前画面没有检测到「${lbl}」— 请把对象摆稳到标准位置后重试（画面定格时需回监控页重新停在对象清晰可见的画面）`);
       return;
     }
     const best = dets.reduce((a, b) => ((b.confidence || 0) > (a.confidence || 0) ? b : a));

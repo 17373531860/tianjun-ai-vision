@@ -107,6 +107,13 @@
         <el-switch v-model="form.reject_duplicate_task" />
         <span class="text-xs text-gray-500 ml-2">同任务号已在产时回"重复任务"码拒收（与"最新开工为准"相反，二选一）</span>
       </el-form-item>
+      <el-form-item label="终态工单再开工">
+        <el-select v-model="form.terminal_order_policy" class="w-72">
+          <el-option label="自动复活为在产（默认，同任务新一轮生产）" value="revive" />
+          <el-option label="拒收并提示（回'重复任务'码，需换任务号）" value="reject" />
+        </el-select>
+        <span class="text-xs text-gray-500 ml-2">同任务号的工单已完工/已取消时，再收到开工报文怎么处理</span>
+      </el-form-item>
 
       <el-form-item label="最新开工为准">
         <el-switch v-model="form.supersede_previous_task" />
@@ -479,6 +486,7 @@ function emptyForm() {
     order_binding: 'project',
     channel_field: 'channel',
     reject_duplicate_task: false,
+    terminal_order_policy: 'revive',
     complete_field: '',
     complete_true_words: [],
     complete_match_field: 'task_no',
@@ -592,6 +600,7 @@ function applyConfig(cfg) {
   f.order_binding = cfg.order_binding || 'project'
   f.channel_field = cfg.channel_field || 'channel'
   f.reject_duplicate_task = !!cfg.reject_duplicate_task
+  f.terminal_order_policy = cfg.terminal_order_policy || 'revive'
   f.complete_field = cfg.complete_field || ''
   f.complete_true_words = Array.isArray(cfg.complete_true_words) ? [...cfg.complete_true_words] : []
   f.complete_match_field = cfg.complete_match_field || 'task_no'
@@ -712,6 +721,7 @@ function buildConfig() {
     order_binding: form.order_binding || 'project',
     channel_field: form.channel_field || 'channel',
     reject_duplicate_task: form.reject_duplicate_task,
+    terminal_order_policy: form.terminal_order_policy || 'revive',
     complete_field: form.complete_field || '',
     complete_true_words: [...(form.complete_true_words || [])],
     complete_match_field: form.complete_match_field || 'task_no',

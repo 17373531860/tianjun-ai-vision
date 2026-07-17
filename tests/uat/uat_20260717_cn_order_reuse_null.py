@@ -174,7 +174,12 @@ def setup():
 
 
 def reproduce_stale_order(pa, pb):
-    """复刻客户历史: 单子建在项目 A 上, 然后现场切到项目 B。"""
+    """复刻客户历史: 单子建在项目 A 上且已被结案, 然后现场切到项目 B。
+
+    07-17 现场钉死的完整陷阱 = 绑定过期 + 状态终态两层叠加:
+    单子第一次建在别的项目上, 之后又被顶替/手工结案成 completed,
+    老代码复用时既不重绑项目、也不复活状态, 响应还回"已就绪"。
+    """
     ar = requests.post(f"{API}/api/v1/projects/{pa}/activate", timeout=30)
     run.step("激活项目 A", ar.status_code == 200, f"HTTP {ar.status_code}")
     r = requests.post(f"{API}/api/v1/mes/inbound/task", json={
@@ -182,6 +187,14 @@ def reproduce_stale_order(pa, pb):
         "StepCode": "0.9", "Operator": "old-op"}, timeout=10)
     ok = r.status_code in (200, 201) and r.json().get("code") == 0
     run.step("项目A时期建单(历史遗留态)", ok, f"body={r.text[:100]}")
+
+    # 现场等价操作: 这张单被结案 (被别的任务顶替 / 手工完工)
+    orders = requests.get(f"{API}/api/v1/mes/orders", timeout=10).json().get("items", [])
+    oid = next((o["id"] for o in orders if o.get("order_no") == TASK_NO), None)
+    cr = requests.post(f"{API}/api/v1/mes/orders/{oid}/status",
+                       json={"status": "completed"}, timeout=10)
+    run.step("工单被结案(复刻终态陷阱)", cr.status_code == 200,
+             f"order_id={oid} HTTP {cr.status_code}")
 
     ar = requests.post(f"{API}/api/v1/projects/{pb}/activate", timeout=30)
     run.step("切到项目 B(复刻现场换型)", ar.status_code == 200, f"HTTP {ar.status_code}")
@@ -215,18 +228,21 @@ def visible_post_and_verify():
             "TaskNo": TASK_NO, "ProductCode": "rocket",
             "StepCode": "1.1", "Operator": "wyf"}, timeout=10)
         ok = r.status_code in (200, 201) and r.json().get("code") == 0
-        run.step("同任务号再开工(复用工单)", ok, f"body={r.text[:120]}")
+        run.step("同任务号再开工(复用工单)", ok, f"body={r.text[:160]}")
+        run.step("响应说明终态单已复活", "重新开工" in r.text, f"body={r.text[:160]}")
 
-        deadline, appeared, txt = time.time() + 10, False, ""
+        # UI 会把长值截断显示 (如 "task-pr..."), 匹配用前缀而非全串
+        probe = TASK_NO[:7]
+        deadline, appeared, txt = time.time() + 15, False, ""
         while time.time() < deadline:
             txt = page.evaluate("document.body.innerText")
-            if TASK_NO in txt and "任务号" in txt:
+            if probe in txt and "任务号" in txt:
                 appeared = True
                 break
             time.sleep(0.5)
         run.shot(page, "02_开工后_四要素上屏")
         run.step("复用单重绑后四要素上屏(问题1修复)", appeared,
-                 f"任务号标签={'任务号' in txt} 值={TASK_NO in txt}")
+                 f"任务号标签={'任务号' in txt} 值前缀={probe in txt}")
         if appeared:
             run.step("工序工步为最新报文值 1.1", "1.1" in txt)
             run.step("操作员为最新报文值 wyf", "wyf" in txt)

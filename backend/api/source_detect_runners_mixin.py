@@ -303,6 +303,97 @@ class DetectRunnersMixin:
 
         return self._apply_rod_filters(detections)
 
+    def infer_once_for_calibration(self) -> list:
+        """标定用单帧推理 (v3.42.0): 检测未运行时, 对当前显示帧现推一帧。
+
+        背景: 「检测中锁菜单」× 「停止/待机清空实时检测结果」两条老约束叠加,
+        导致拆分规则/区域规则的「抓取锚点框」在打包版里无路可走 (监控页启动检测
+        后切不到项目页, 停了再切过去结果又是空的)。本方法给抓取动作兜底:
+        停止(pause 定格帧)/待机(standby 画面继续) 状态下模型仍在显存,
+        对 get_frame() 现推一帧即可, 毫秒级、无任何状态机副作用。
+
+        与 _detect_only 的刻意差异 (标定语义, 不是检测语义):
+          - 跑在**显示帧**上, 坐标天然就是编辑器画布坐标系, 不再过原图→显示映射;
+          - **不过**启用步骤过滤/步骤阈值/box尺寸/ROI —— 锚点标签(如「工件」)
+            通常不是步骤, 检测运行中也不会出现在发布的实时结果里; 新项目首次
+            标定时它甚至还没被任何已保存配置引用, 过滤了就永远抓不到。因此
+            检测运行中同样现推 (单线程推理池串行, 只多等一帧的功夫);
+          - 不发布到 current_detections、不触碰状态机/拆分引擎/就位提示。
+        返回: 与 /detection/results 同构的 detections list (归一化坐标)。
+        """
+        mi = _resolve_mi(self, None)
+        params = _resolve_inference_params(self, mi)
+        if params['model'] is None and getattr(self, 'model', None) is not None:
+            # router main 槽未同步(如仅 host 字段加载了模型)时回退宿主老字段
+            mi = None
+            params = _resolve_inference_params(self, None)
+        if params['model'] is None:
+            if self.is_detecting:
+                # 无模型但在"检测"(synthetic 剧本等): 退回已发布的实时结果
+                return self.get_detections()
+            raise RuntimeError("模型未加载, 请先在监控页启动一次检测(之后停止/待机均可)")
+        frame = self.get_frame()
+        if frame is None:
+            raise RuntimeError("当前没有画面帧, 请先启动视频源(停止/待机状态均可)")
+
+        from concurrent.futures import TimeoutError as FuturesTimeoutError
+        device = params['device']
+        _half = params['use_half'] and device.startswith('cuda') and params['is_native_pytorch']
+        _frame = frame if frame.flags['C_CONTIGUOUS'] else np.ascontiguousarray(frame)
+
+        def run_inference():
+            with _gpu_lock_ctx(self):
+                return list(params['model'].predict(
+                    _frame,
+                    conf=params['conf'],
+                    iou=params['iou'],
+                    imgsz=params['imgsz'],
+                    verbose=False,
+                    device=device,
+                    stream=True,
+                    half=_half,
+                ))
+
+        executor = self._get_inference_executor()
+        future = executor.submit(run_inference)
+        try:
+            results = future.result(timeout=self._inference_timeout)
+        except FuturesTimeoutError:
+            self._handle_inference_timeout(params['model_name'])
+            raise RuntimeError("单帧推理超时, 请重试")
+        finally:
+            del future
+
+        h, w = frame.shape[:2]
+        _n_raw = sum(len(r.boxes) for r in results if r.boxes is not None)
+        print(f"[InferOnce] ch{self.channel_id} frame={w}x{h} "
+              f"model={params['model_name']} conf={params['conf']} "
+              f"imgsz={params['imgsz']} device={params['device']} raw_boxes={_n_raw}")
+        detections = []
+        for result in results:
+            boxes = result.boxes
+            if boxes is None:
+                continue
+            for box in boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                confidence = float(box.conf[0].cpu().numpy())
+                class_id = int(box.cls[0].cpu().numpy())
+                model_obj = params['model']
+                if hasattr(model_obj, 'names') and class_id in model_obj.names:
+                    class_name = model_obj.names[class_id]
+                else:
+                    class_name = f"class_{class_id}"
+                nx, ny, nw, nh = clip_bbox_normalized(x1, y1, x2, y2, w, h)
+                det = {
+                    'x': nx, 'y': ny, 'w': nw, 'h': nh,
+                    'confidence': confidence,
+                    'class_id': class_id,
+                    'label': class_name,
+                }
+                _annotate_detection(det, params, mi)
+                detections.append(det)
+        return detections
+
     def _detect_and_track(self, frame: np.ndarray, mi: Optional["ModelInstance"] = None) -> list:
         """Track + (optional) Seg. mi 用法见 _detect_only docstring."""
         detections = []

@@ -85,7 +85,7 @@
 | 模块文件 | 行数 | 前缀/职责 |
 |----------|------|-----------|
 | `auth.js` | 157 | `/auth/*` `/users/*` `/roles/*` `/api-keys/*` |
-| `detection.js` | 107 | `/source/detection/*` `/workstations/*` `/scanner/scan-pair/*`；`getDetectionResults` 支持 `known_shots` 去重（行 52–57） |
+| `detection.js` | 111 | `/source/detection/*` `/workstations/*` `/scanner/scan-pair/*`；`getDetectionResults` 支持 `known_shots` 去重（行 52–57）；v3.42 增 `inferOnce`（行 61，标定用单帧推理，给「抓取锚点框」在停止/待机态兜底） |
 | `project.js` | 28 | `/projects/*` |
 | `model.js` | 52 | `/models/*` 含 convert/resolve-path |
 | `data.js` | 235 | `/data/sessions/*` 导出/备份/清理 |
@@ -145,7 +145,7 @@
 > - **`Data/index.vue`（v3.38 自定义班次筛选）**：时间段下拉在项目配了自定义班次列表（≥2 条有效）时按列表动态出选项（`customShifts` 行 962–973，本班结束时刻=下一班开始、末班跨天回到首班）；切项目后已选班次名失效自动回落"全天"（watch 行 976–982）；`getShiftHours`（行 984–996）班次名 → 起止时刻。未配列表保持旧白/晚两班零差异。
 > - **`Settings/index.vue`**：v3.36 「导航栏 Logo」上传块（模板行 48–60；`onNavbarLogoChange` 行 2040–2071 前端居中裁方压 256×256 PNG data URL 存 display，`resetNavbarLogo` 行 2072；回退地址同走 BASE_URL 拼接，行 2038）；v3.35.1 「当前班次」显示开关（行 97）；v3.38 「旁路 SN 码」开关（行 171）；v3.39 「扫码操作按钮」显隐开关（行 178）；v3.32+ MediaPipe 姿态/手部**关键点颜色**独立取色器（行 1109–1153，清空=跟随连线颜色）。
 > - **`MES/GatewayPanel.vue`**：v3.35 第 6 种适配器「数据库直写」——适配器单选加 `database`（行 116），连接表单（库型达梦/MySQL/PG/SQLServer/SQLite + 主机/端口/账号/库名/表名，模板行 326–369），HTTP 语义字段（URL/鉴权/健康探测/4xx 重试）统一由 `isHttpAdapter`（行 804）守门对其隐藏；`buildConfig` 对 database 分支单独出配置（行 1286–1316，模板顶层键名=目标表列名）。v3.41 事件下拉补 `weighing_product_done`（称重成品结案，行 707）——两阶段流水线称重的正式结案事件，此前没露出导致达梦直写连接照 v2.0 手册配 `cycle_end` 一条收不到。
-> - **`MES/OrderInboundPanel.vue`（805 行）**：v3.37 「开工后自动开始检测」开关 `start_detection_on_task`（行 86，默认关）；v3.39 在途报警软件内消除两开关（「横幅手动消除」`allow_manual_clear` 行 295 + 「清零联动消除」`clear_on_counter_reset` 行 299，默认全关保持"只能外部消除"契约）；v3.39 监控页任务信息条两显示开关（「工单进度徽标」`show_order_chip` 行 316 + 「两行表格布局」`two_line_layout` 行 320，默认=原界面）。
+> - **`MES/OrderInboundPanel.vue`（815 行）**：v3.37 「开工后自动开始检测」开关 `start_detection_on_task`（行 86，默认关）；v3.39 在途报警软件内消除两开关（「横幅手动消除」`allow_manual_clear` 行 295 + 「清零联动消除」`clear_on_counter_reset` 行 299，默认全关保持"只能外部消除"契约）；v3.39 监控页任务信息条两显示开关（「工单进度徽标」`show_order_chip` 行 316 + 「两行表格布局」`two_line_layout` 行 320，默认=原界面）；v3.42 「终态工单再开工」下拉 `terminal_order_policy`（行 111，revive 自动复活为在产（默认）/ reject 拒收提示，emptyForm/applyConfig/buildConfig 三处同步行 489/603/724）。
 > - **`MES/UsbScanGunDialog.vue`（238 行）+ `composables/useScanGun.js`（236 行）**：v3.35 USB 扫码枪第 4 种用途 `ack`（报警确认按钮）——本质是只发固定码的 HID 按键，按一下走事件人工确认接口解除本工位定格（称重缺料/超量/投错等 require_ack 报警的物理确认入口）；路由纯函数 `routeCode` 对 `ack` 短路（useScanGun 行 67），`doAck`（行 139–157）不进包装/拉单/绑定链路，无待确认事件温和提示不当故障；对话框补用途单选/工位选择文案/模拟测试路由标签。
 > - **`Settings/PackagingFlowPanel.vue`（821 行）**：v3.35 包装线扫码健壮性三件——复合条码取段（多段拼接码按分隔符拆段、按前缀认段或取第 N 段，模板行 150–197 + 取段预览 `compositePreviewResult` 行 608–627 前端镜像后端取段逻辑）；工单号识别正则 `order_code_pattern`（行 244，仅开第一单时校验，挡开机第一枪误扫数量码）；「放工单=收尾动作」`tail_paper_as_close_action`（行 376，尾箱装满被拦时按挂起快照收尾）。上银预设（`applyHiwinPreset` 行 670–695）同步带出三者出厂值。
 > - **`Project/CreateProjectDialog.vue`**：v3.37 修复"图像分割"被误禁用且误标"语义分割"——恢复可选、文案改"图像分割 (Instance Segmentation)"（行 12）。
@@ -155,10 +155,10 @@
 | 组件 | 行数 | 职责 / v3.3x 变更 |
 |------|------|------|
 | `StepsConfigTab.vue` | 1228 | 步骤表 A/B 双表编辑。v3.35 顺序类模式加「外设门控」列（`isSeqLike` 行 1156，弹层配 tare 去皮门控 / weight_judge 称重判定；`onGateEnabledChange` 行 1171–1198 启用任一门控即注入 `pipeline_config.weighing.drive_mode='step_gate'` 融合模式，「称重配置」页签随之出现）；v3.35 表 B 加「等待不被打断」列（`disappear_uninterruptible` 行 692，工具驻留画面产线防消失等待被其他步骤掐掉） |
-| `LogicConfigTab.vue` | 2153 | 逻辑模式/结算/逐件/区域事件规则编辑。v3.33 逐件加「重复打同一颗螺丝防护」块（`duplicate_screw_alarm` + 移开/重压确认帧数/报警节流/提示时长四参数，行 1043–1091）与「换板兜底结算」`workpiece_absent_settle_frames`（行 852–865）；v3.34 区域事件规则加秒基「确认时长」`min_seconds`（行 1331–1340，帧率解耦，0=按帧数）；v3.36.1 overlap 规则加「目标框扩边」`object_margin`（行 1356–1365，工件下沿扫码几何盲区补丁，纯空间量与帧率无关） |
+| `LogicConfigTab.vue` | 2158 | 逻辑模式/结算/逐件/区域事件规则编辑。v3.33 逐件加「重复打同一颗螺丝防护」块（`duplicate_screw_alarm` + 移开/重压确认帧数/报警节流/提示时长四参数，行 1043–1091）与「换板兜底结算」`workpiece_absent_settle_frames`（行 852–865）；v3.34 区域事件规则加秒基「确认时长」`min_seconds`（行 1331–1340，帧率解耦，0=按帧数）；v3.36.1 overlap 规则加「目标框扩边」`object_margin`（行 1356–1365，工件下沿扫码几何盲区补丁，纯空间量与帧率无关）；v3.42 区域规则「抓取锚点框」`grabRegionAnchor` 实时结果为空时走 `inferOnce` 单帧推理兜底（行 1886，与 LabelSplitDialog 同款） |
 | `WeighingConfigTab.vue` | 574 | 称重配置页签（`logic_mode='weighing'` 或融合模式出现）。v3.35 融合模式提示条（`isStepGate` 行 505）+ 前置选择有效期 `context_expiry`（行 515，never/daily/shift/hours 四策略）+ 视觉料源防错 `visual_guard` 规则表（行 516，复用主 ROI 编辑器画判定区域）；v3.38 「检测中心显示实时称重数值条」开关 `show_monitor_weights`（行 475）；v3.39 两阶段流水线三卡——「驱动模式」下拉（scale 逐道投料 / pipeline 两阶段流水线，行 14–27）、「流水线参数」卡（三标签绑定/判定料别/皮重范围/队列深度/秤台区 ROI，行 29–84）、「秤指令时序」卡（17 项现场可调，与后端 timing 17 键一一对应：去皮触发源三档/稳定窗/离秤确认/清零延迟与重发/标签帧数与新鲜期/装料与收尾超时等，行 86–168；`pipe`/`timing` computed 行 511–512） |
 | `EventsConfigTab.vue` | 156 | 事件卡片编辑。v3.34 require_ack 事件展开「确认后保留周期（断点补做）」`ack_keep_cycle` 勾选框（行 78–90，勾上=确认只解除定格保留在制周期，从断点补做；默认不勾=确认即整件重做） |
-| `LabelSplitDialog.vue` | 639 | 同标签区域拆分编辑器。v3.34 多轮次真实模型两防护输入框——切换确认时长 `trigger_min_seconds`（过滤单帧误检闪现）+ 切换标签置信度下限 `trigger_conf`（行 131–150）；老规则缺省回填 0 零差异（load 行 281–292） |
+| `LabelSplitDialog.vue` | 645 | 同标签区域拆分编辑器。v3.34 多轮次真实模型两防护输入框——切换确认时长 `trigger_min_seconds`（过滤单帧误检闪现）+ 切换标签置信度下限 `trigger_conf`（行 131–150）；老规则缺省回填 0 零差异（load 行 281–292）；v3.42 「抓取锚点框」`grabAnchorRef` 实时结果为空时走 `inferOnce` 单帧推理兜底（行 481）+ 标定流程文案改为"停止/待机后抓取"（打包版检测中锁菜单切不进项目页，这是唯一通路） |
 | `labelSplit.js` | 245 | 拆分规则纯逻辑（默认值/校验/虚拟步骤同步）。v3.34 默认规则带 `trigger_min_seconds: 0.5` / `trigger_conf: 0`（行 25–26）；校验放行"区域名与原始标签同名"——仅未开多轮次时才是真冲突（行 94–101，多轮次最终名带轮次前缀不会自我映射） |
 | `CreateProjectDialog.vue` | 43 | 新建项目弹窗（任务类型下拉，v3.37 恢复图像分割可选） |
 

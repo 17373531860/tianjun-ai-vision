@@ -79,7 +79,7 @@
             <span>秒</span>
           </div>
           <div class="text-[10px] text-gray-500">
-            标定流程: 先在监控页启动检测并把工件放到标准位置 → 回到这里点「抓取锚点框」→ 再对着快照画区域。
+            标定流程: 监控页启动过检测后, 把工件摆稳到标准位置 → 点「停止」或「待机」→ 切到本页点「抓取锚点框」（画面里没有实时结果时会自动对当前帧现推一帧）→ 再对着快照画区域。
             运行时区域会按锚点当前位置自动平移缩放（不支持旋转, 现场请用定位销/托盘约束朝向）。
           </div>
         </div>
@@ -223,7 +223,7 @@
 import { ref, reactive, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import { getBackendHost } from '@/api/index';
-import { getDetectionResults } from '@/api/detection';
+import { getDetectionResults, inferOnce } from '@/api/detection';
 import { QUADRANT_TEMPLATE } from './labelSplit';
 
 defineProps({
@@ -473,10 +473,16 @@ const grabAnchorRef = async () => {
   if (!lbl) { ElMessage.warning('先选择锚点标签'); return; }
   grabbingAnchor.value = true;
   try {
+    // 先读实时检测结果; 空(典型: 停止/待机后结果被清)则走单帧推理兜底 —
+    // 检测中锁菜单, 现场只能停止/待机后才切得进本页, 兜底是打包版唯一通路
     const res = await getDetectionResults(snapshotChannel);
-    const dets = (res.data?.detections || []).filter(d => d.label === lbl);
+    let dets = (res.data?.detections || []).filter(d => d.label === lbl);
     if (!dets.length) {
-      ElMessage.error(`当前画面没有检测到「${lbl}」— 请先在监控页启动检测并把工件放到标准位置`);
+      const once = await inferOnce(snapshotChannel);
+      dets = (once.data?.detections || []).filter(d => d.label === lbl);
+    }
+    if (!dets.length) {
+      ElMessage.error(`当前画面没有检测到「${lbl}」— 请把工件摆稳到标准位置、人手离开后重试（画面定格时需回监控页重新停在工件清晰可见的画面）`);
       return;
     }
     const best = dets.reduce((a, b) => ((b.confidence || 0) > (a.confidence || 0) ? b : a));

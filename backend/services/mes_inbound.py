@@ -118,6 +118,12 @@ DEFAULT_INBOUND_CONFIG = {
     # 拒绝重复任务: 同 task_no 已存在且在产 (pending/in_progress) 时回 duplicate 码拒收。
     # 默认关 (幂等复用)。与"最新开工为准/顶替"是相反取向, 二选一。
     "reject_duplicate_task": False,
+    # 同号工单已完结 (completed/cancelled) 时再收开工的处理 (v3.42 川南):
+    #   revive (默认) = 自动复活为在产, 视为同一任务新一轮生产, 响应注明"已从完结状态重新开工"
+    #   reject        = 拒收并提示, 上游需换任务号或改用 revive
+    # 背景: 终态是工单状态机死路, 老版本静默不复活还回"已就绪", 工位永远挂不上单
+    # (界面四要素不显示 + 推送字段全 null), 现场无从察觉。
+    "terminal_order_policy": "revive",
     # 完工信号字段 (已映射字段名, 如 is_complete): 该字段为真时按"完工"收工单, 不再当开工处理。
     # 空 = 不识别完工信号 (只处理开工)。
     "complete_field": "",
@@ -662,6 +668,14 @@ class MESInbound:
                              f"step={mapped.get('step_code')} operator={mapped.get('operator')} "
                              f"绑定={data.get('binding_scope')}")
         else:
+            # 终态单遇同号开工: 按策略处理 (revive=复活开新一轮 / reject=拒收提示上游)
+            policy = str(cfg.get("terminal_order_policy") or "revive").lower()
+            if order.status in ("completed", "cancelled") and policy == "reject":
+                debug_center.dbg("backend.mes", "终态工单拒收开工",
+                                 f"task_no={task_no} status={order.status} policy=reject")
+                return (False, "duplicate",
+                        f"工单 {task_no} 已完结({order.status}), 本次开工已拒收; "
+                        f"请更换任务号, 或将终态工单处理方式改为'自动复活'")
             # v3.40 川南现场钉死的 bug: 同任务号重复开工走复用分支, 但工单上的项目
             # 绑定停留在"第一次创建时"的项目 (甚至为空)。工位挂单按"工单绑定项目 ==
             # 工位当前项目"匹配 → 绑定过期的复用单永远挂不上 → 监控页四要素不显示、
@@ -671,7 +685,7 @@ class MESInbound:
                              f"task_no={task_no} status={order.status} "
                              f"scope={order.binding_scope} project={order.project_id}")
 
-        self._ensure_in_progress(svc, db, order)
+        revived = self._ensure_in_progress(svc, db, order)
 
         # 最新开工为准: 顶替当前在产的其它外部任务 (并对其回传完工)
         superseded = 0
@@ -681,7 +695,16 @@ class MESInbound:
                 debug_center.dbg("backend.mes", "最新开工顶替旧任务",
                                  f"new={order.order_no} 顶替并回推完工 {superseded} 个")
 
-        suffix = f", 顶替旧任务 {superseded} 个" if superseded else ""
+        # v3.40 响应透明化: 工单没真正进入"生产中"就不许说"已就绪"——
+        # 终态复活失败等异常必须让上游一眼看到, 否则现场只能靠猜 (07-17 教训:
+        # task-pro 被顶替/结案成终态后, 每次开工都回"已就绪"但工位永远挂不上单)。
+        if order.status != "in_progress":
+            return (True, None,
+                    f"工单 {task_no} 状态异常({order.status}), 未进入生产中, "
+                    f"检测数据将不会计入该任务")
+        suffix = ", 顶替旧任务 %d 个" % superseded if superseded else ""
+        if revived:
+            suffix += ", 已从完结状态重新开工"
         return (True, None, f"工单 {task_no} 已就绪{suffix}")
 
     def _supersede_previous_tasks(self, db, new_order, cfg) -> int:
@@ -828,12 +851,27 @@ class MESInbound:
                              f"order={getattr(order, 'order_no', '?')} err={e}")
 
     @staticmethod
-    def _ensure_in_progress(svc, db, order):
-        """把工单安全迁到 in_progress (状态机: draft→pending→in_progress; paused→in_progress)。
+    def _ensure_in_progress(svc, db, order) -> bool:
+        """把工单安全迁到 in_progress。返回是否发生了"终态复活"。
 
-        completed/cancelled 终态不强行复活; 任何迁移失败仅打日志, 不阻断接收。
+        常规路径走状态机 (draft→pending→in_progress; paused→in_progress)。
+        v3.40 川南现场钉死的陷阱: completed/cancelled 是状态机死路, 老代码
+        "终态不强行复活"+响应仍回"已就绪" → 同任务号的单一旦被顶替/结案,
+        之后每次开工都静默挂不上工位 (四要素不显示、推送字段全 null), 且无从察觉。
+        外部中控的开工报文是权威指令: 终态单收到开工 = 同一任务新一轮生产,
+        这里绕过状态机直接复活 (UI 手工路径仍受状态机约束, 不受影响)。
+        任何迁移失败仅打日志, 不阻断接收。
         """
+        revived = False
         try:
+            if order.status in ("completed", "cancelled"):
+                old = order.status
+                order.status = "in_progress"
+                order.actual_end = None
+                db.flush()
+                revived = True
+                debug_center.dbg("backend.mes", "终态工单按开工报文复活",
+                                 f"order={order.order_no} {old} → in_progress")
             if order.status == "draft":
                 svc.change_status(db, order.id, "pending")
             if order.status in ("pending", "paused"):
@@ -842,6 +880,7 @@ class MESInbound:
             debug_center.dbg("backend.mes", "工单激活状态迁移失败",
                              f"order={getattr(order, 'order_no', '?')} "
                              f"status={getattr(order, 'status', '?')} err={e}")
+        return revived
 
     @staticmethod
     def _parse_channel(v):
