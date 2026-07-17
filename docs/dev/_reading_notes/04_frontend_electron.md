@@ -1,7 +1,9 @@
 # 04 · 前端 + Electron 读码笔记
 
-> 覆盖范围：`frontend/src/` 全部 97 文件（含 `Monitor/index.vue` 5867 行分段通读）、`electron/` 核心壳文件（`main.js` / `backend-manager.js` / `license-manager.js` / `preload.js`；vendor/splash 第三方资源仅记用途）。
+> 覆盖范围：`frontend/src/` 全部约 100 文件（含 `Monitor/index.vue` 6245 行分段通读）、`electron/` 核心壳文件（`main.js` / `backend-manager.js` / `license-manager.js` / `preload.js`；vendor/splash 第三方资源仅记用途）。
 > 行号锚点均来自当前仓库快照，后续改动以代码为准。
+
+> v3.41 复核（2026-07-17）：基线 a23a8d2（v3.32/v3.33 之交）→ v3.41.0 的前端/Electron 增量已回写本文——各条目下的「v3.3x 起」引用块即补账内容，行号锚点已整体刷新为当前快照。逐版动机详见 `docs/changelog/`（v3.33.0 ~ v3.41.0 各版 md）。
 
 ---
 
@@ -42,17 +44,25 @@
 | `auth` | `useAuthStore.js` 282 行 | v3.10 用户系统 | `authEnabled` / `currentUser` / `token`；`ROUTE_PERM_MAP`（行 42–51）；`init`/`login`/`logout`/`canAccessRoute`/`requiresLogin` |
 | `project` | `useProjectStore.js` 26 行 | 当前项目轻量缓存 | `currentProjectId/Name/currentProject`；`setCurrentProject`/`setRunningStatus` |
 | `source` | `useSourceStore.js` 137 行 | 输入源 UI 配置 | 6 种源类型 settings；`saveConfig`/`loadConfig` → `localStorage['source_config']` |
-| `system` | `useSystemStore.js` 388 行 | 全局显示+检测框+性能 | `display`（navbar/monitor 开关）；`detection`（toast/语音）；`channelDetections`；`loadDetectionFromProject` 含 localStorage 兜底+回写 DB（行 250–299）；`saveDetectionSettings` 多工位写全部绑定项目（行 326–356） |
+| `system` | `useSystemStore.js` 398 行 | 全局显示+检测框+性能 | `display`（navbar/monitor 开关 + 自定义 Logo）；`detection`（toast/语音）；`channelDetections`；`loadSettings` 深度合并恢复（行 218）；`loadDetectionFromProject` 含 localStorage 兜底+回写 DB；`saveDetectionSettings` 多工位写全部绑定项目 |
 | `polling` | `usePollingStore.js` 83 行 | 管理面板轮询间隔 | 对齐后端 `POLLING_DEFAULTS` / `LOG_LIMIT_DEFAULTS`；`load`/`get`/`logLimit` |
 | `plugin` | `usePluginStore.js` 131 行 | 插件 CRUD 状态 | Settings 抽离；`licenseMismatch` getter |
 | `plugin-theme` | `usePluginThemeStore.js` 296 行 | 主题+插件 UI 注册表 | `apply()` 拉 manifest；`pluginSlots`/`pluginMenus`/`settingsTabs`/`projectTabs`；`addPluginSlot` 用静态 `markRaw`（行 159–168） |
 | `debug` | `useDebugStore.js` 98 行 | 调试中心后端半边 | 1s 轮询 `/debug/logs`；与 `utils/debug.js` 前端缓冲合并 |
 | `scannerDisable` | `useScannerDisableStore.js` 67 行 | 按工位禁用扫码 | `disabledChannels`；`applyServerHint` 同步轮询推送（行 55–65） |
 
+> v3.35.1~v3.39 起（`system` store 新增键，v3.41 复核）：
+> `display.logoDataUrl`（行 90，v3.36 导航栏自定义 Logo 的 256×256 PNG data URL，空=内置图标）；
+> `display.navbar.shift`（行 103，v3.35.1 顶栏当前班次显示，默认关）；
+> `display.monitor.showBypassSn`（行 122，v3.38 扫码器旁路 SN 显示，默认关）；
+> `display.monitor.showScanButtons`（行 124，v3.39 川南反馈——操作员不碰软件的部署可隐藏"清除本次扫码/禁用扫码"按钮，默认显示）；
+> `performance.mediapipePosePointColor` / `mediapipeHandsPointColor`（行 195/198，骨架关键点颜色与连线分开配，空=跟随连线）。
+> ⚠️ v3.38 修复：Navbar 恢复 `display_settings` 必须走 `loadSettings()` 深度合并（行 218），整表覆盖会在旧 localStorage 缺 `monitor` 子树时让监控页渲染崩溃（只剩背景）。
+
 **Store 间协作**：
 
 - Navbar（`layout/Navbar.vue`）同时读 `system` + `project` + `auth` + `plugin-theme`。
-- Monitor 读 `project`/`system`/`source`/`scannerDisable`/`plugin-theme`；写 `system.isDetecting`（Monitor 行 1561–1563, 2635–2638）。
+- Monitor 读 `project`/`system`/`source`/`scannerDisable`/`plugin-theme`；写 `system.isDetecting`（Monitor 行 1599, 2879）。
 - 插件 slot 组件存于 `plugin-theme.pluginSlots`，由 `TjSlot.vue` 消费。
 
 ---
@@ -79,9 +89,9 @@
 | `project.js` | 28 | `/projects/*` |
 | `model.js` | 52 | `/models/*` 含 convert/resolve-path |
 | `data.js` | 235 | `/data/sessions/*` 导出/备份/清理 |
-| `export.js` | 209 | `/export/custom/*` `/export/realtime/*` `/export/scheduled/*` |
+| `export.js` | 216 | `/export/custom/*` `/export/realtime/*` `/export/scheduled/*`；v3.38 加 `getScannerBypassStatus`（行 136–140，扫码器旁路 SN 只读查询） |
 | `mes.js` | 36 | `/mes/orders|workpieces|defects|defect-codes` |
-| `gateway.js` | 38 | `/mes/gateway/*` `/mes/inbound/*` |
+| `gateway.js` | 40 | `/mes/gateway/*` `/mes/inbound/*`；v3.39 加 `clearActiveAlarmsManual`（行 40，软件内手动消除在途报警，需入站配置开 `allow_manual_clear`） |
 | `scanner.js` | 25 | `/scanner/*` 含 disable/simulate |
 | `wmax.js` | 84 | `/scanner/wmax/*` 35+ 端点 |
 | `external_device.js` | 15 | `/external-devices/*` |
@@ -106,24 +116,53 @@
 | `App.vue` | 50 | 根组件；监听 Electron `onDeepGateDowngraded` / `onBackendRecovered`（行 15–37） |
 | `main.js` | 188 | Pinia/Router/ElementPlus/i18n；生产静默 log（行 17–22）；rem 自适应（行 26–41）；插件 bootstrap 等后端 90s（行 110–158）；全局注册 `TjSlot`（行 168–169） |
 | `layout/index.vue` | 147 | 侧栏+Navbar+router-view+BottomBar；`canShow`=插件隐藏∩权限（行 105–107）；`startScanGun()`（行 99–100） |
-| `layout/Navbar.vue` | ~714 | 项目选择器、身份块、设置下拉（语言/自动保存/开发者模式/最小化） |
+| `layout/Navbar.vue` | 797 | 项目选择器、身份块、设置下拉（语言/自动保存/开发者模式/最小化）、自定义 Logo、当前班次 |
 | `layout/BottomBar.vue` | 118 | 作业员/设备/模式/状态/运行时间 |
+
+> Navbar v3.35.1~v3.38 变更（v3.41 复核）：
+> - **v3.37 激活项目自动跟随**：外部 MES 开工切项目后界面不刷新也能跟上——每 5s 轻量轮询后端当前激活项目（`syncActiveProjectFromBackend` 行 440–462，定时器行 748），不一致时把项目装进前端各 store 并提示"项目已由外部系统切换"；**只对齐显示、不回调激活接口**（后端已激活，再调会无谓重载模型）。手动切换与跟随共用同一段装载逻辑 `applyProjectToStores`（行 372–435）。
+> - **v3.36 自定义 Logo + v3.37 回归修复**：右上角图标优先取 `display.logoDataUrl`（行 161）；⚠️ 回退地址必须 `import.meta.env.BASE_URL + 'app-icon.png'`（行 182）——写死 `'/app-icon.png'` 运行时字符串 Vite 改写不到，打包版 `file://` + 相对 base 下解析到盘根导致图标空白（v3.36.0 打包版回归，dev 不复现）。
+> - **v3.35.1 当前班次（发版归入 v3.38.0 自定义班次列表）**：顶栏作业员旁显示当前班次（`currentShiftName` 行 617–639，显示开关 + 项目启用班次拆分双守门）；与后端班次解析同口径——"最近一个已开始的班次"，未配自定义列表回退白/晚两班，每秒 tick 跨班次边界刷新。代码注释里的 v3.35.1 是开发期版本号，changelog 见 v3.38.0 FEAT-005。
+> - **v3.38 显示设置恢复改深度合并**：见第二节 `system` store 警示条。
 
 **业务视图（按路由）**
 
 | 视图 | 行数 | 一句话 |
 |------|------|--------|
-| `Monitor/index.vue` | **5867** | 检测主屏（见第五节） |
-| `Project/index.vue` | 2704 | 项目 CRUD + 7 配置 Tab + 插件注入 Tab |
-| `Settings/index.vue` | 2617 | 显示/检测框/性能/插件/工位组/串行流/包装流/鉴权/调试 |
-| `Data/index.vue` | 2258 | Session/Cycle 查询、导出、自定义导出/定时规则对话框 |
+| `Monitor/index.vue` | **6245** | 检测主屏（见第五节；v3.41 复核） |
+| `Project/index.vue` | 3218 | 项目 CRUD + 7 配置 Tab + 插件注入 Tab（v3.41 复核） |
+| `Settings/index.vue` | 2723 | 显示/检测框/性能/插件/工位组/串行流/包装流/鉴权/调试（v3.41 复核） |
+| `Data/index.vue` | 2294 | Session/Cycle 查询、导出、自定义导出/定时规则对话框（v3.41 复核） |
 | `Source/index.vue` | 1417 | 6 类输入源启停与参数 |
 | `MES/index.vue` | 92 | Tab 容器：工单/工件/缺陷/扫码/网关/集群/WMax/外设/入站/拉单 |
-| `MES/*Panel.vue` | 268–1492 | 各 MES 子面板（最大 ScannerPanel 1492 行） |
+| `MES/*Panel.vue` | 268–1508 | 各 MES 子面板（最大 GatewayPanel 1508 行；v3.41 复核） |
 | `Model/index.vue` | 356 | 模型上传/转换/激活 |
 | `Alarm/index.vue` | 939 | 报警设备与事件绑定 |
 | `Login/index.vue` | 156 | 登录表单 |
 | `Activation/index.vue` | 140 | License 激活 |
+
+> 业务视图 v3.33~v3.41 变更（v3.41 复核，动机详见对应 changelog）：
+> - **`Data/index.vue`（v3.38 自定义班次筛选）**：时间段下拉在项目配了自定义班次列表（≥2 条有效）时按列表动态出选项（`customShifts` 行 962–973，本班结束时刻=下一班开始、末班跨天回到首班）；切项目后已选班次名失效自动回落"全天"（watch 行 976–982）；`getShiftHours`（行 984–996）班次名 → 起止时刻。未配列表保持旧白/晚两班零差异。
+> - **`Settings/index.vue`**：v3.36 「导航栏 Logo」上传块（模板行 48–60；`onNavbarLogoChange` 行 2040–2071 前端居中裁方压 256×256 PNG data URL 存 display，`resetNavbarLogo` 行 2072；回退地址同走 BASE_URL 拼接，行 2038）；v3.35.1 「当前班次」显示开关（行 97）；v3.38 「旁路 SN 码」开关（行 171）；v3.39 「扫码操作按钮」显隐开关（行 178）；v3.32+ MediaPipe 姿态/手部**关键点颜色**独立取色器（行 1109–1153，清空=跟随连线颜色）。
+> - **`MES/GatewayPanel.vue`**：v3.35 第 6 种适配器「数据库直写」——适配器单选加 `database`（行 116），连接表单（库型达梦/MySQL/PG/SQLServer/SQLite + 主机/端口/账号/库名/表名，模板行 326–369），HTTP 语义字段（URL/鉴权/健康探测/4xx 重试）统一由 `isHttpAdapter`（行 804）守门对其隐藏；`buildConfig` 对 database 分支单独出配置（行 1286–1316，模板顶层键名=目标表列名）。v3.41 事件下拉补 `weighing_product_done`（称重成品结案，行 707）——两阶段流水线称重的正式结案事件，此前没露出导致达梦直写连接照 v2.0 手册配 `cycle_end` 一条收不到。
+> - **`MES/OrderInboundPanel.vue`（805 行）**：v3.37 「开工后自动开始检测」开关 `start_detection_on_task`（行 86，默认关）；v3.39 在途报警软件内消除两开关（「横幅手动消除」`allow_manual_clear` 行 295 + 「清零联动消除」`clear_on_counter_reset` 行 299，默认全关保持"只能外部消除"契约）；v3.39 监控页任务信息条两显示开关（「工单进度徽标」`show_order_chip` 行 316 + 「两行表格布局」`two_line_layout` 行 320，默认=原界面）。
+> - **`MES/UsbScanGunDialog.vue`（238 行）+ `composables/useScanGun.js`（236 行）**：v3.35 USB 扫码枪第 4 种用途 `ack`（报警确认按钮）——本质是只发固定码的 HID 按键，按一下走事件人工确认接口解除本工位定格（称重缺料/超量/投错等 require_ack 报警的物理确认入口）；路由纯函数 `routeCode` 对 `ack` 短路（useScanGun 行 67），`doAck`（行 139–157）不进包装/拉单/绑定链路，无待确认事件温和提示不当故障；对话框补用途单选/工位选择文案/模拟测试路由标签。
+> - **`Settings/PackagingFlowPanel.vue`（821 行）**：v3.35 包装线扫码健壮性三件——复合条码取段（多段拼接码按分隔符拆段、按前缀认段或取第 N 段，模板行 150–197 + 取段预览 `compositePreviewResult` 行 608–627 前端镜像后端取段逻辑）；工单号识别正则 `order_code_pattern`（行 244，仅开第一单时校验，挡开机第一枪误扫数量码）；「放工单=收尾动作」`tail_paper_as_close_action`（行 376，尾箱装满被拦时按挂起快照收尾）。上银预设（`applyHiwinPreset` 行 670–695）同步带出三者出厂值。
+> - **`Project/CreateProjectDialog.vue`**：v3.37 修复"图像分割"被误禁用且误标"语义分割"——恢复可选、文案改"图像分割 (Instance Segmentation)"（行 12）。
+
+**Project 子组件**（v3.32 视图拆分产物；v3.41 补账新建条目）
+
+| 组件 | 行数 | 职责 / v3.3x 变更 |
+|------|------|------|
+| `StepsConfigTab.vue` | 1228 | 步骤表 A/B 双表编辑。v3.35 顺序类模式加「外设门控」列（`isSeqLike` 行 1156，弹层配 tare 去皮门控 / weight_judge 称重判定；`onGateEnabledChange` 行 1171–1198 启用任一门控即注入 `pipeline_config.weighing.drive_mode='step_gate'` 融合模式，「称重配置」页签随之出现）；v3.35 表 B 加「等待不被打断」列（`disappear_uninterruptible` 行 692，工具驻留画面产线防消失等待被其他步骤掐掉） |
+| `LogicConfigTab.vue` | 2153 | 逻辑模式/结算/逐件/区域事件规则编辑。v3.33 逐件加「重复打同一颗螺丝防护」块（`duplicate_screw_alarm` + 移开/重压确认帧数/报警节流/提示时长四参数，行 1043–1091）与「换板兜底结算」`workpiece_absent_settle_frames`（行 852–865）；v3.34 区域事件规则加秒基「确认时长」`min_seconds`（行 1331–1340，帧率解耦，0=按帧数）；v3.36.1 overlap 规则加「目标框扩边」`object_margin`（行 1356–1365，工件下沿扫码几何盲区补丁，纯空间量与帧率无关） |
+| `WeighingConfigTab.vue` | 574 | 称重配置页签（`logic_mode='weighing'` 或融合模式出现）。v3.35 融合模式提示条（`isStepGate` 行 505）+ 前置选择有效期 `context_expiry`（行 515，never/daily/shift/hours 四策略）+ 视觉料源防错 `visual_guard` 规则表（行 516，复用主 ROI 编辑器画判定区域）；v3.38 「检测中心显示实时称重数值条」开关 `show_monitor_weights`（行 475）；v3.39 两阶段流水线三卡——「驱动模式」下拉（scale 逐道投料 / pipeline 两阶段流水线，行 14–27）、「流水线参数」卡（三标签绑定/判定料别/皮重范围/队列深度/秤台区 ROI，行 29–84）、「秤指令时序」卡（17 项现场可调，与后端 timing 17 键一一对应：去皮触发源三档/稳定窗/离秤确认/清零延迟与重发/标签帧数与新鲜期/装料与收尾超时等，行 86–168；`pipe`/`timing` computed 行 511–512） |
+| `EventsConfigTab.vue` | 156 | 事件卡片编辑。v3.34 require_ack 事件展开「确认后保留周期（断点补做）」`ack_keep_cycle` 勾选框（行 78–90，勾上=确认只解除定格保留在制周期，从断点补做；默认不勾=确认即整件重做） |
+| `LabelSplitDialog.vue` | 639 | 同标签区域拆分编辑器。v3.34 多轮次真实模型两防护输入框——切换确认时长 `trigger_min_seconds`（过滤单帧误检闪现）+ 切换标签置信度下限 `trigger_conf`（行 131–150）；老规则缺省回填 0 零差异（load 行 281–292） |
+| `labelSplit.js` | 245 | 拆分规则纯逻辑（默认值/校验/虚拟步骤同步）。v3.34 默认规则带 `trigger_min_seconds: 0.5` / `trigger_conf: 0`（行 25–26）；校验放行"区域名与原始标签同名"——仅未开多轮次时才是真冲突（行 94–101，多轮次最终名带轮次前缀不会自我映射） |
+| `CreateProjectDialog.vue` | 43 | 新建项目弹窗（任务类型下拉，v3.37 恢复图像分割可选） |
+
+> `Project/index.vue` 本体 v3.34~v3.39 变更：`initProjectDefaults` 补 `ack_keep_cycle` 默认 false（行 1320）；`ensureWeighingDefaults`（行 1130–1225）补 v3.35 `drive_mode`/`context_expiry`/`visual_guard`/防错报警映射 + v3.38 `show_monitor_weights` + v3.39 `pipeline`/`timing` 子树默认值，融合模式（顺序 SOP+步骤门控）也持有 weighing 子树同样补默认（行 1349–1354）；称重配置页签第二出现条件 `isStepGateFusion`（行 814，模板行 512）；主 ROI 编辑器复用扩两处——v3.35 视觉料源防错规则区域、v3.39 流水线秤台区 `onscale_polygon`（`pipelineZoneEditing` 行 802，`openPipelineRoiEditor` 行 853，互斥标记）；v3.38 数据设置加自定义班次列表编辑（行 471–498，每班只填开始时刻、按时刻排序跨天自动衔接，≥2 条生效）。
 
 **Monitor 子组件**
 
@@ -131,14 +170,21 @@
 |------|------|------|
 | `ChannelVideoCard.vue` | 90 | 多工位视频卡片+overlay canvas 注册 |
 | `SopStepPanel.vue` | 131 | SOP 步骤条+自动滚动 |
-| `PerItemPanel.vue` | 414 | 逐件/混合逐件面板 |
-| `WeighingPanel.vue` | 198 | 称重投料看板 |
+| `PerItemPanel.vue` | 465 | 逐件/混合逐件面板（v3.41 复核） |
+| `WeighingPanel.vue` | 260 | 称重投料看板（v3.41 复核） |
+| `WeighingLiveBar.vue` | 91 | v3.38 新增：融合模式实时称重数值条（见下） |
 | `PackagingFlowCard.vue` | 284 | 包装箱结算进度 |
 | `CustomMixItemPanel.vue` | 124 | 混合 tracking 物品校验 |
-| `ExternalAlarmBanner.vue` | 240 | 外部 MES 在途报警横幅 |
+| `ExternalAlarmBanner.vue` | 290 | 外部 MES 在途报警横幅（v3.41 复核） |
 | `RecordingFailureOverlay.vue` | 95 | 录像失败列表 |
 | `VirtualScanGun.vue` | 91 | 包装线虚拟扫码测试 |
 | `framePump.js` | 58 | 多通道 MJPEG 解码背压 |
+
+> Monitor 子组件 v3.33~v3.39 变更（v3.41 复核）：
+> - **`PerItemPanel.vue`（v3.33 重复打防护 UI）**：`last_warning` 有值时显示"⚠ 重复打"黄条（模板行 100–105）；前端自己按 `duplicate_warning_display_sec` 倒计时撤横幅、不依赖后端持续送帧清空（`shownWarning` + watch `last_warning.ts` 行 352–369——视频停/暂停时后端不再清，只靠后端会一直挂着；ts 不变不刷新计时）；被重打的个体色块叠琥珀色环（`item.dup > 0` 行 393–394，tooltip 行 418）；面板高度随横幅条数拉长而非压缩步骤卡片区（`panelHeight` 行 379–386）。
+> - **`WeighingPanel.vue`（v3.38 皮重 + v3.39 流水线看板）**：头部加皮重显示（去皮那一刻的工件/容器自重，`tareWeight` 行 166）、投料中标注"净重(已投料)"；`drive_mode='pipeline'` 时（`isPipeline` 行 171）切换为流水线看板——秤上件/最近稳定净重/待收尾队列（FIFO，离秤已结算等收尾动作正式结案）/最近结算 3 条（模板行 55–92），隐藏扫码开始入口（件号自动生成），实时重量优先显示"有效读数" `effective_weight`（已扣离秤未清零期间的零点基线，行 161–163），补 `empty`（空秤·待上件）/`departing`（离秤确认中）两相位文案（行 177）。
+> - **`ExternalAlarmBanner.vue`（v3.39 软件内手动消除出口）**：入站配置 `allow_manual_clear` 开启时横幅出现"手动消除"按钮（模板行 18–25，配置读取行 132），`manualClear`（行 68–88）带确认弹窗调 `clearActiveAlarmsManual`（后端还有配置开关+权限双闸）；默认关保持"只能外部消除"的对接契约。
+> - **`WeighingLiveBar.vue`（v3.38 新增，91 行；组件注释标 v3.35.1 为开发期版本号）**：融合模式（视觉 SOP 驱动 + 秤步骤门控）下 SOP 面板占核心位，称重数值以横条补充——实时读数/皮重/净重（已去皮时当前读数即净重，行 65）/步骤门控状态 chips（`gates` passed=绿 ✓、等秤=琥珀闪烁）/最近一次判定；自轮询 `/weighing/state` 800ms（行 89），通道未登记称重引擎静默；显隐由父级按项目称重配置 `show_monitor_weights` 守门（Monitor `isStepGateWeighing`）。
 
 **i18n**：5 语言包 `locales/zh-CN.js` 等；默认 `zh-CN`（`main.js` 行 46）。
 
@@ -146,91 +192,112 @@
 
 ## 五、Monitor 深读
 
-**文件**：`frontend/src/views/Monitor/index.vue`（5867 行：template 1–1327，script 1329–5788，style 5790–5867）
+**文件**：`frontend/src/views/Monitor/index.vue`（6245 行：template 1–1362，script 1364–6143，style 6145–6245；v3.41 复核）
 
 ### 5.1 布局分支（template）
 
 | 条件 | 行号 | 布局 |
 |------|------|------|
 | `layoutBodyOverride` 非空 | 9–124 | 插件整页覆盖；宿主仍渲染双工位 Toast/人工确认/录像异常 |
-| `channelCount === 2` | 127–309 | 双列：视频+MES 条+计数+SOP+控制 |
-| `channelCount > 2` | 312–475 | 2×2 视频格 + 选中工位详情底栏 |
-| 否则（单工位） | 478–1304 | 12 栅格：左 7 视频+模式面板，右 5 统计+图表+步骤表+控制 |
-| `layoutFooterOverride` | 1308–1313 | 插件底栏 slot |
-| `ExternalAlarmBanner` | 1326 | 全局在途报警 |
+| `channelCount === 2` | 127–311 | 双列：视频+MES 条+计数+SOP+控制 |
+| `channelCount > 2` | 313–478 | 2×2 视频格 + 选中工位详情底栏 |
+| 否则（单工位） | 480–1339 | 12 栅格：左 7 视频+模式面板，右 5 统计+图表+步骤表+控制 |
+| `layoutFooterOverride` | 1344–1348 | 插件底栏 slot |
+| `ExternalAlarmBanner` | 1361 | 全局在途报警 |
 
 ### 5.2 模式专属面板（单工位左列）
 
 | logic_mode | 组件/区块 | 行号 |
 |------------|-----------|------|
-| sequential/detection/custom | `SopStepPanel` | 606–611 |
-| tracking | 内联清点/容器卡片 | 614–676 |
-| weighing | `WeighingPanel` | 679–682 |
-| per_item | `PerItemPanel` | 685–689 |
-| custom+per_item 混合 | 第二个 `PerItemPanel` mix | 700–705 |
-| custom+tracking 混合 | `CustomMixItemPanel` | 707–711 |
-| 包装 | `PackagingFlowCard` + `VirtualScanGun` | 714–724 |
-| 周期性强制动作 | 内联进度条 | 727–788 |
+| sequential/detection/custom | `SopStepPanel` | 608–612 |
+| tracking | 内联清点/容器卡片 | 615–678 |
+| weighing | `WeighingPanel` | 681–685 |
+| per_item | `PerItemPanel` | 687–691 |
+| 融合模式称重数值条（v3.38） | `WeighingLiveBar` | 702–706 |
+| custom+per_item 混合 | 第二个 `PerItemPanel` mix | 708–712 |
+| custom+tracking 混合 | `CustomMixItemPanel` | 715–720 |
+| 包装 | `PackagingFlowCard` + `VirtualScanGun` | 722–732 |
+| 周期性强制动作 | 内联进度条 | 735–795 |
+
+> v3.38 起：`WeighingLiveBar` 显隐由 `isStepGateWeighing`（行 3162–3166）守门——`pipeline_config.weighing.drive_mode === 'step_gate'` 且 `show_monitor_weights !== false`；与 SOP 面板并存（步骤看 SOP、重量看横条）。
 
 ### 5.3 核心状态与数据流（script）
 
-**Store 引用**：行 1332–1362
+**Store 引用**：行 1366–1400
 
-**多工位**（行 1763–2770）：
+**多工位**（行 1782–2990）：
 
-- `channelCount` ← `GET /workstations/`（`fetchChannelCount` 行 2712–2746）
-- `multiChannelData[ch]`：每通道运行时快照（行 1853–1870 初始结构）
-- 轮询：`startMultiPolling` 150ms（行 2327–2367）→ `processChannelResult`（行 2030–2325）
-- 视频：单工位 `<img>` 双缓冲（行 1668–2909）；多工位 `fetch` 解析 multipart MJPEG → canvas（行 1881–2028）
-- `STREAM_HOST` 硬编码 `http://localhost:8001`（行 1877）— **桌面若改端口可能不一致**（单工位 `buildStreamUrl` 用 `getBackendHost()` 行 2772）
+- `channelCount` ← `GET /workstations/`（`fetchChannelCount` 行 2954–2990）
+- `multiChannelData[ch]`：每通道运行时快照（行 1852 起初始结构）
+- 轮询：`startMultiPolling` 150ms（行 2420–2459）→ `processChannelResult`（行 2115–2395）
+- 视频：单工位 `<img>` 双缓冲；多工位 `fetch` 解析 multipart MJPEG → canvas（行 1962–2110）
+- `STREAM_HOST` 硬编码 `http://localhost:8001`（行 1962）— **桌面若改端口可能不一致**（单工位 `buildStreamUrl` 用 `getBackendHost()` 行 3014）
 
-**单工位轮询**（行 4438–4722）：
+**单工位轮询**（行 4711–5014）：
 
-- 间隔 150ms；`STREAM_SWAP_INTERVAL=600` 次后 swap 释内存（行 4431, 4450–4454）
-- 截图去重：`performance.screenshotDedup` → `known_shots` 参数（行 4456–4467）
-- 周期边界：`current_cycle_id` + `resultHoldActive` 展示期（行 4544–4578, 1718–1759）
-- 流卡死：`fps>0 && !isStreaming` 超 4s 强制重连（行 4478–4493）
+- 间隔 150ms（行 5014）；`STREAM_SWAP_INTERVAL=600` 次后 swap 释内存（行 4703, 4723）
+- 截图去重：`performance.screenshotDedup` → `known_shots` 参数（行 4730）
+- 周期边界：`current_cycle_id` + `resultHoldActive` 展示期（行 4819–4887, 1799–1830）
+- 流卡死：`fps>0 && !isStreaming` 超时强制重连（行 4770–4790）
+
+> v3.40 起（川南反馈，轮询以后端为真相源）：轮询循环内用后端返回的检测/运行布尔同步前端 `isDetecting`/`isRunning`（行 4750–4765）——检测由后端自行拉起/停下（开工报文自动开始检测等）时按钮灰度/状态章跟得上；`isOperating` 期间不抢（用户点开始/停止的乐观更新优先，完成后自然对齐）。
+
+> v3.40 起（空闲看门狗，川南反馈）：监控页空闲（无轮询无取流）时后端被开工报文自动拉起，老行为前端毫无感知（FPS 0/开始按钮不灰/信息条不出），要切页再切回才恢复。`startIdleWatchdog`（行 5531–5567）空闲时每 2s 探一次源状态，发现后端已在跑就自动接管——同步运行/检测态 + `startPolling()` + `forceReconnectStream()`，等价一次页面重进；轮询已在跑/多工位/用户操作中三种情况休眠让位。`onMounted` 启动（行 6035）、`onUnmounted` 停止（行 6100）。
+
+> v3.38 起（扫码器旁路 SN）：`display.monitor.showBypassSn` 打开后 MES 信息条显示旁路 SN 只读框（模板行 838–848）；每 2s 轮询后台监控线程内存缓存（`pollBypassStatus`/`startBypassPolling` 行 1652–1690），watch 开关即起即停（行 1701–1708），专属规则优先、无则兜底（`bypassSnFor` 行 1684–1688）。
+
+> v3.39 起（任务信息条显示定制，川南"信息显示不全"）：`taskInfoDisplay` 加 `show_order_chip`（关=信息条与双工位 MES 条都不渲染"工单 单号 进度 良率"块，行 159/857）与 `two_line_layout`（开=任务要素改"表头一行+信息一行"表格布局防截断，模板行 866–888，样式 `.task-info-table` 行 6146–6166）；默认值=原界面（行 3258–3259），随入站配置加载（行 3277–3278）。同版 `display.monitor.showScanButtons` 守门"清除本次扫码/禁用扫码"按钮显隐（单/多工位共 5 处 v-if，行 172/190/383/385/895）。
+
+> v3.38 起（NG top3 保持）：后端 NG 步骤 map 为空时保留现有 top3 展示（待机/重开 sync 配置不再清累计），仅总产量与不良总数都归零（真清零）才清空——单工位行 5469–5480、多工位 `processChannelResult` 行 2219–2229；工位清零同时重置 `ngStepRanking`（行 5686）。
 
 **检测控制**：
 
-- 单工位：`startDetection`（行 4179–4354）含副模型强制完整启动（行 4198–4245）
-- 多工位：`startDetectionForChannel`（行 2551–2633）
-- 停止前 `confirmScanPairBeforeStop`（行 2646–2680）
-- 人工确认：`pendingAckDisplay` + `ackPendingForChannel` + 提权窗（行 5545–5666）
+- 单工位：`startDetection`（行 4451 起）含副模型强制完整启动
+- 多工位：`startDetectionForChannel`（行 2793 起）
+- 停止前 `confirmScanPairBeforeStop`（行 2888–2924）
+- 人工确认：`pendingAckDisplay`（行 5898–5942）+ `ackPendingForChannel` + 提权窗
 
-**步骤/PT 算法**（`updateStepsFromBackend` 行 4855–5209）：
+**步骤/PT 算法**（`updateStepsFromBackend` 行 5148 起）：
 
-- 期望序列按位置分配 `completedByPos`（行 4949–4965）
-- OK/NG：`cycleSumStepDurations` 权威 PT 守门（行 4984–5033）
-- 跟踪模式补丁：行 5115–5141
+- 期望序列按位置分配 `completedByPos`（行 5252–5261）
+- OK/NG：`cycleSumStepDurations` 权威 PT 守门（行 5280–5330）
+- 跟踪模式补丁：行 5390 附近
 
-**生命周期**（行 5669–5787）：
+> v3.40 起（末步结果权威锁定，川南反馈）：末步"完成"判定原来只认已离开画面（`_leftFrame`），成品滞留画面余像重现时结果列被打回 '--' 再变回、肉眼持续闪烁。修复：末步已有权威 PT（`_posAuthoritative`，行 5305 = 完成过一次完整出现）后结果锁定——`_isLastStep ? (_leftFrame || _posAuthoritative) : ...`（行 5318–5323），不随余像回退。
 
-- `onMounted`：先 `await fetchChannelCount()`（行 5675）再 `getSourceStatus`；避免单/多工位流竞态（注释 D2/D3）
-- `onUnmounted`：停轮询/流/图表/定时器（行 5742–5773）
+> v3.32.0 起（区域事件模式前端适配，基线后收尾提交）：步骤行是"动作规则名"、画面框是"模型类别名"，两者永远对不上——"进行中"判定改看后端 in-flight PT（`stepIsLive` 行 5150–5157）；结果列只标 OK 不做"重复/乱序/漏做=NG"的顺序推断（行 5325–5328，周期好坏由后端结算判定说了算，复检序列同动作出现两次合法）。
+
+**生命周期**（行 6020–6143）：
+
+- `onMounted`：先 `await fetchChannelCount()`（行 6026）再 `getSourceStatus`；避免单/多工位流竞态（注释 D2/D3）
+- `onUnmounted`（行 6096 起）：停轮询/流/图表/定时器 + 空闲看门狗 + 旁路 SN 轮询
 
 ### 5.4 插件 slot 契约（Monitor 内）
 
 | slot name | 行号 | 用途 |
 |-----------|------|------|
-| `monitor.layout.body` | 9–22, 1365 | 整页 layout 覆盖 |
-| `monitor.layout.footer` | 1308–1313, 1366 | 底栏覆盖 |
-| `monitor.step-cell.duration` | 1040–1049 | 步骤 PT 列 |
-| `monitor.step-cell.status` | 1053–1078 | 步骤结果列 |
-| `cycle-result.indicator` | 31–46, 282–297 | OK/NG Toast |
-| `monitor.workpiece-flow.indicator` | 1318–1322 | RFC11 串行流指示 |
+| `monitor.layout.body` | 9–22, 1402 | 整页 layout 覆盖 |
+| `monitor.layout.footer` | 1344–1348, 1403 | 底栏覆盖 |
+| `monitor.step-cell.duration` | 1076 | 步骤 PT 列 |
+| `monitor.step-cell.status` | 1089 | 步骤结果列 |
+| `cycle-result.indicator` | 34, 286 | OK/NG Toast |
+| `monitor.workpiece-flow.indicator` | 1354 | RFC11 串行流指示 |
 
-`layoutBodyActions`（行 1377–1483）向插件暴露开始/停止/画框/MES/步骤表渲染等完整能力。
+`layoutBodyActions`（行 1414 起）向插件暴露开始/停止/画框/MES/步骤表渲染等完整能力。
 
 ### 5.5 关键常量
 
 | 常量 | 值 | 行号 |
 |------|-----|------|
-| 轮询间隔 | 150ms | 2366, 4721 |
-| 包装 state 轮询 | 1500ms | 1622 |
-| STREAM_SWAP_INTERVAL | 600 tick ≈90s | 4431 |
-| WORKPIECE_RESULT_HOLD_MS | 3500ms | 2969 |
-| STREAM_FIRST_FRAME_TIMEOUT_MS | 5000ms | 1697 |
+| 轮询间隔 | 150ms | 2459, 5014 |
+| 包装 state 轮询 | 1500ms | 1697 |
+| 旁路 SN 轮询（v3.38） | 2000ms | 1673 |
+| 空闲看门狗探活（v3.40） | 2000ms | 5563 |
+| STREAM_SWAP_INTERVAL | 600 tick ≈90s | 4703 |
+| WORKPIECE_RESULT_HOLD_MS | 3500ms | 3216 |
+| STREAM_FIRST_FRAME_TIMEOUT_MS | 5000ms | 1782 |
+| WeighingLiveBar 自轮询 | 800ms | 组件内行 89 |
+| Navbar 激活项目跟随轮询（v3.37） | 5000ms | Navbar 行 748 |
 
 ---
 
@@ -267,6 +334,8 @@ main.js (110–158)
 ---
 
 ## 七、Electron 壳档案
+
+> v3.41 复核：自基线 a23a8d2 以来核心壳文件（`main.js` / `backend-manager.js` / `license-manager.js` / `preload.js`）**无变更**（仅 `package.json` 版本号 bump），7.1~7.4 小节维持原样。唯一实质变更在打包脚本 `electron/build/installer.iss`（284 行）——v3.33 安装目录可选 + 升级"搬家"：升级也永远显示"选择安装位置"页（`DisableDirPage=no` + `UsePreviousAppDir=yes`，默认仍是上次目录）；[Code] 段从卸载注册表读上次安装目录（`GetPreviousInstallDir`），本次选了不同目录时先抢救旧目录内可能残留的用户数据库到用户数据目录（`BackupUserDataFrom` 新旧两处都查），装完后**确认旧目录确实躺着我们的主程序 exe 才整目录清除**（`DetectInstallDirMove`，防注册表脏值误删无关目录），并把开机自启快捷方式重指到新位置。同目录覆盖安装行为不变。
 
 ### 7.1 进程与窗口
 
@@ -376,12 +445,12 @@ app.ready → setupFileLogger → readWorkstationConfig
 
 | ID | 严重度 | 位置 | 描述 |
 |----|--------|------|------|
-| F-01 | 中 | Monitor 1877 vs 2772 | 多工位 `STREAM_HOST` 硬编码 `localhost:8001`；单工位用 `getBackendHost()`。非默认端口或远程后端时多工位视频可能连错 |
+| F-01 | 中 | Monitor 1962 vs 3014 | 多工位 `STREAM_HOST` 硬编码 `localhost:8001`；单工位用 `getBackendHost()`。非默认端口或远程后端时多工位视频可能连错（v3.41 复核仍在） |
 | F-02 | 低 | `detection.js` 65 | `resetDetection` 仍调 `/detection/reset` 非 `/source/detection/reset`，需核对后端是否别名挂载 |
-| F-03 | 低 | Monitor 5867 行单文件 | 上帝组件：检测/UI/MES/插件/图表/轮询全耦合；后续拆分风险高 |
+| F-03 | 低 | Monitor 6245 行单文件 | 上帝组件：检测/UI/MES/插件/图表/轮询全耦合；后续拆分风险高（基线以来又 +378 行：旁路 SN/信息条定制/空闲看门狗/称重数值条等） |
 | F-04 | 中 | 插件 loader | 无沙箱；插件 ESM 与主程序同权限，恶意插件可调用 host.api |
 | F-05 | 低 | `plugin-theme` apply | 插件切换需重启才完整生效（设计如此，Settings 有提示） |
-| F-06 | 低 | Navbar 147 | 下拉「退出」与 v3.10「登出」并存，语义易混（一个 gracefulQuit 一个 auth logout） |
+| F-06 | 低 | Navbar 设置下拉 | 下拉「退出」与 v3.10「登出」并存，语义易混（一个 gracefulQuit 一个 auth logout）（v3.41 复核：行号已漂移，以代码为准） |
 | F-07 | 中 | 冷启动 | 前端 90s 等 manifest + axios 180s 重试 + Electron 深探 5min：多层等待策略重叠，排障时需分清哪层超时 |
 | F-08 | 低 | BottomBar 109–112 | 运行时间从 mount 起计时，非后端 session 真实时长 |
 | F-09 | 低 | `useScanGun` | USB 枪依赖键盘速度启发式；人手极快或枪配置错误可能误判 |
@@ -393,8 +462,9 @@ app.ready → setupFileLogger → readWorkstationConfig
 
 | 目录 | 文件数 | 说明 |
 |------|--------|------|
-| `frontend/src/` | 97 | 全部通读；Monitor 分 6 段（1–700, 701–1400, 1401–2100, 2101–2800, 2801–3500, 3501–4200, 4201–4900, 4901–5600, 5601–5867） |
-| `electron/` 核心 | 4 | main.js, backend-manager.js, license-manager.js, preload.js |
+| `frontend/src/` | 约 100（v3.41 复核，含 v3.38 新增 `WeighingLiveBar.vue`） | 基线全部通读；v3.33~v3.41 增量按 `git diff a23a8d2..HEAD` 26 个变更文件逐 diff 回写。Monitor 当前 6245 行 |
+| `electron/` 核心 | 4 | main.js, backend-manager.js, license-manager.js, preload.js（基线以来无变更）；`build/installer.iss` v3.33 变更见第七节 |
 | `electron/splash/` | — | 仅记为启动动画资源，未逐行读 vendor |
 
 **文档路径**：`docs/dev/_reading_notes/04_frontend_electron.md`
+**最后复核**：2026-07-17（v3.41.0，基线 a23a8d2 → HEAD 前端/Electron 增量补账）

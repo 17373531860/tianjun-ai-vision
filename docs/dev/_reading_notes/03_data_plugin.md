@@ -2,6 +2,7 @@
 
 > 阅读范围（2026-07-05）：`backend/models/` 全部 · `backend/api/sessions*.py` · `projects.py` · `export_*` 全套 · `auth/users/roles/api_keys` · `backend/plugin_system/` 全部 · `plugins.py` · `database.py`  
 > 行号锚定当前 `tianjun-main` 工作区源码，后续改动以代码为准。
+> 2026-07-17 v3.41 复核：补账 v3.33~v3.41 变更（数据/导出/项目域），受影响小节的行数与行号已刷新；插件系统（`backend/plugin_system/`）自基线零变更，第六、七节原样有效。
 
 ---
 
@@ -17,32 +18,44 @@
 
 | 文件 | 行数 | 表数 | 职责 |
 |---|---:|---:|---|
-| `models.py` | 384 | 13 | 项目/模型/任务/相机/统计/系统 KV/检测 Session-Cycle-Step/工位组/录像/导出设置 |
+| `models.py` | 386 | 13 | 项目/模型/任务/相机/统计/系统 KV/检测 Session-Cycle-Step/工位组/录像/导出设置 |
 | `auth_models.py` | 175 | 5 | 用户/角色/关联/登录 Token/M2M API Key |
 | `export_models.py` | 330 | 4 | 导出模板/实时规则/运行日志/定时规则 |
 | `plugin_models.py` | 69 | 4 | 插件安装元数据/运行状态/审计/配置版本 |
-| `mes_models.py` | 911 | 20 | MES 工单工件缺陷扫码/外部对接/集群/外设/串行流水线/包装箱 |
+| `mes_models.py` | 925 | 20 | MES 工单工件缺陷扫码/外部对接/集群/外设/串行流水线/包装箱（v3.41 复核） |
 | `weighing_models.py` | 33 | 1 | 称重投料逐件记录 |
+
+> v3.38 变更（v3.41 复核）：`models.py` 的 `step_records.cycle_id`（L290）与 `video_clips.related_id`（L332）两列补 `index=True`——周期收尾/自动清理/数据页按周期号查步骤、清理按归属周期/步骤找录像，此前均为全表扫描热点（川南"框冻结"第三批优化）。
+> 新库建表即带索引；老库由版本化迁移 `m0001_hot_path_indexes` 补建同名索引（`ix_step_records_cycle_id` / `ix_video_clips_related_id`，两边索引名一致，详见 05 号笔记第四节）。
 
 ### 1.3 数据 API（`/api/v1/data/*` 挂载）
 
 | 文件 | 行数 | 职责 |
 |---|---:|---|
-| `backend/api/sessions.py` | 1072 | 主路由：Session/Cycle/Step CRUD、视频、导出设置、CSV 导出入口；L1068–1071 挂载 stats/maintenance 子路由 |
-| `backend/api/sessions_export.py` | 585 | CSV/多格式导出 builder（session/cycle/range 三分支）；`build_csv_string` 供定时导出复用 |
-| `backend/api/sessions_maintenance.py` | 906 | 备份/清空/范围清理/自动清理/VACUUM/存储信息；`_perform_auto_cleanup` 被 `main.py` 启动调用 |
-| `backend/api/sessions_stats.py` | 199 | 步骤/周期平均耗时统计 API |
-| `backend/api/projects.py` | 741 | 项目 CRUD/激活/复制/插件数据 patch；激活时 `fire_plugin_hook("project_activated")`（L411 附近） |
+| `backend/api/sessions.py` | 1072 | 主路由：Session/Cycle/Step CRUD、视频、导出设置、CSV 导出入口；L1071–1072 挂载 stats/maintenance 子路由（v3.41 复核） |
+| `backend/api/sessions_export.py` | 584 | CSV/多格式导出 builder（session/cycle/range 三分支）；`build_csv_string` 供定时导出复用 |
+| `backend/api/sessions_maintenance.py` | 937 | 备份/清空/范围清理/自动清理/VACUUM/存储信息；`_perform_auto_cleanup` 被 `main.py` 启动调用（v3.41 复核） |
+| `backend/api/sessions_stats.py` | 198 | 步骤/周期平均耗时统计 API |
+| `backend/api/projects.py` | 759 | 项目 CRUD/激活/复制/插件数据 patch；激活时 `fire_plugin_hook("project_activated")`（L430 附近，v3.41 复核） |
+
+> v3.32.1 变更：`projects.py` 激活防错位——抽出 `_channels_bound_to_other()`（L249）：单工位部署（channels 只有 1 个）不豁免任何旧绑定，多工位保持"各工位自绑项目优先"原语义；配置同步成功后把该通道的持久化绑定改指本项目（L305–315，仅旧绑定指向别的项目时才写）。动机：残留旧绑定会让重启后 `auto_load_active_project` 悄悄恢复另一个项目+模型，出现"项目页显示启用 A、工位实际跑 B"的持久错位。
+> v3.35.1 变更：`sessions.py` 按日查询的班次过滤放开 day/night 硬编码（L443–445），支持自定义班次名（白班/午班/夜班…，配套萍乡自定义班次列表）。
+> v3.38 变更：`sessions_maintenance.py` 清理事务卫生（川南"框冻结"第二刀）——大事务握写锁秒级会堵推理线程写步骤/周期记录（撞 busy_timeout → 前端检测框冻结），三处整改：① `_delete_cycles_by_filter`（L129–178）按 `_CLEANUP_BATCH_CYCLES=200` 个周期/批分批删+逐批提交，录像文件删除（慢 I/O）移出事务、提交放锁后再动磁盘（进程崩溃留下的孤儿文件由孤儿扫描下一轮自愈）；② OK/NG 分开保留的录像清理逐结果提交、文件删除同样移出事务（L327–347）；③ 流水日志表（扫码/MES 通讯/外设日志）按主键 5000 行/批分批删（L392–406），整表条件删单事务会握锁数秒。
 
 ### 1.4 导出 API（`/api/v1/export/*`）
 
 | 文件 | 行数 | 职责 |
 |---|---:|---|
 | `backend/api/export_custom.py` | 548 | 字段树、模板 CRUD、预览/渲染、路线 B 模板文件上传 |
-| `backend/api/export_realtime.py` | 339 | 实时规则 CRUD/toggle/test-run/日志 |
+| `backend/api/export_realtime.py` | 385 | 实时规则 CRUD/toggle/test-run/日志；v3.38 起含旁路 SN 状态端点（v3.41 复核） |
 | `backend/api/export_scheduled.py` | 299 | 定时规则 CRUD/cron 预览/默认输出目录 |
 
-关联服务层（导出链路必读）：`services/export_context.py` · `export_field_registry.py` · `export_renderer*.py` · `export_realtime.py` · `export_scheduled.py` · `export_scheduled_writers.py` · `export_snapshot.py` · `export_seed.py`
+关联服务层（导出链路必读）：`services/export_context.py` · `export_field_registry.py` · `export_renderer*.py` · `export_realtime.py` · `export_scheduled.py` · `export_scheduled_writers.py` · `export_snapshot.py` · `export_seed.py` · `scanner_bypass_monitor.py`（v3.38 新增）
+
+> v3.38 变更·扫码器旁路 SN 监控：客户扫码器不接软件、只往固定目录写 `SN.txt` 时，补齐"实时当前 SN"能力。
+> - 新增 `services/scanner_bypass_monitor.py`（310 行）：后台守护线程默认 1s 轮询（`SystemConfig['export.scanner_bypass.poll_interval_sec']`，夹在 [0.2, 60]），配置源复用 `ExportRealtimeRule`（enabled + input_dir 非空，不新造表/字段），按 `channel_filter` 逐通道解析 input_dir、无通道过滤的规则作 default 兜底；每目录最新 txt 的 SN（文件名去扩展名）缓存在内存（`_STATE_LOCK` 保护整体替换 L40，`_poll_loop` L226，单目录异常只记状态、线程永不退出）。
+> - `export_realtime.py` 新增只读端点 `GET /export/scanner-bypass/status`（L319–364）：读监控线程内存不触发目录扫描，可带 channel_id 取该通道当前条目；监控模块任何异常都返回 running=false + error、不 500。
+> - `export_snapshot.snapshot_for_cycle_start` 改"内存优先"：先读监控缓存（`get_current_for_dir`，L136–149），监控无此目录/未预热/状态非 ok 再回退 glob 兜底（L150–162），满足"cycle_start 只读内存、不扫目录、不等文件稳定"的诉求；快照增补 serial_no/input_dir/locked_at/source/read_via 字段（L182–195），v3.7.2 起的 filename/text/mtime/snapshot_at/rule_ids 字段保持向后兼容（注释明示勿删）。
 
 ### 1.5 鉴权 API + 核心
 
@@ -151,7 +164,7 @@
 | `box_summaries` | `BoxSummary` | 箱子汇总结果 |
 | `workpiece_flow_configs` | `WorkpieceFlowConfig` | RFC11 串行流水线配置 |
 | `workpiece_flow_runs` | `WorkpieceFlowRun` | 单次工件流转 |
-| `packaging_flow_configs` | `PackagingFlowConfig` | 包装箱结算配置 |
+| `packaging_flow_configs` | `PackagingFlowConfig` | 包装箱结算配置；v3.35 增复合条码取段 5 字段（composite_*）+ 工单号识别 order_code_pattern + 尾箱"放工单=收尾动作" tail_paper_as_close_action，均默认关=存量零差异 |
 | `packaging_flow_runs` | `PackagingFlowRun` | 包装运行记录 |
 
 ### 2.6 称重（`weighing_models.py`）
@@ -256,7 +269,7 @@ Data 页 REST API（`sessions.py`）提供**只读/维护**能力；产线真实
 
 | 环节 | 位置 | 说明 |
 |---|---|---|
-| HTTP 入口 | `sessions.py` L1030–1065 | `export_type=session/cycle/all` + 日期/班次/项目/工位过滤 |
+| HTTP 入口 | `sessions.py` L1031–1066 | `export_type=session/cycle/all` + 日期/班次/项目/工位过滤 |
 | Builder | `sessions_export.py` L474–585 | `_load_export_opts` 读 `DataExportSetting`；三分支 writer |
 | 多格式 | L564–577 | CSV 字符串 → `export_scheduled_writers.csv_string_to_format_bytes` |
 
@@ -277,6 +290,7 @@ Data 页 REST API（`sessions.py`）提供**只读/维护**能力；产线真实
 | 调度 | `services/export_realtime.py` L66+ | `dispatch_cycle_end_export` 等 |
 | **触发点** | `mes_hooks._handle_cycle_end` 末尾 | cycle 结算后异步扫描 enabled 规则 |
 | 输入文件策略 | `latest_file_strategy` | `cycle_start_snapshot` 读 `DetectionCycle.external_meta` |
+| 旁路 SN 快照 | `services/export_snapshot.py` L136–162 | v3.38 起内存优先读旁路监控缓存，glob 兜底（快照 read_via 字段标记来源） |
 | 日志 | `ExportRunLog` | rule_id + cycle_id + output_file |
 
 ### 4.5 定时导出（cron）
@@ -290,8 +304,8 @@ Data 页 REST API（`sessions.py`）提供**只读/维护**能力；产线真实
 
 ### 4.6 导出设置与清理
 
-- 读写：`sessions.py` L994–1025 · ORM `DataExportSetting`（单行）
-- 自动清理导出台账：`sessions_maintenance.py` L381–426 · 按 `ExportRunLog` 精准删文件
+- 读写：`sessions.py` L994–1026 · ORM `DataExportSetting`（单行）
+- 自动清理导出台账：`sessions_maintenance.py` L413–456 · 按 `ExportRunLog` 精准删文件（v3.41 复核行号）
 
 ---
 
@@ -412,7 +426,7 @@ HTTP Request
 | 7 | `event_fire` | post_event / post | `source_event_trigger_mixin.py:344` | `suppress_alarm` |
 | 8 | `scan_received` | post_scan / post | `scanner.py:1835` | 无 |
 | 9 | `source_status_change` | post_status_change / post | `source_lifecycle_mixin.py:92` | 无 |
-| 10 | `project_activated` | post_activate / post | `projects.py:411` | 无 |
+| 10 | `project_activated` | post_activate / post | `projects.py:430`（v3.41 复核行号） | 无 |
 
 **统一入口**：除 #1 外均经 `fire_plugin_hook()`（`hook_dispatch.py:119`）；#1 历史原因直调 `plugin_manager.registry.hooks.fire`，语义等价。
 
@@ -487,7 +501,7 @@ registry.hooks.register(
 
 | 我要改… | 先读 |
 |---|---|
-| Session/Cycle/Step 表结构 | `models.py` L136–318 |
+| Session/Cycle/Step 表结构 | `models.py` L136–320 |
 | 产线写库时序 | `source_session_lifecycle_mixin.py` |
 | Data 页 API | `sessions.py` + `sessions_export.py` |
 | 导出模板/实时/定时 | `export_models.py` + `export_custom/realtime/scheduled.py` + `services/export_*` |
@@ -497,4 +511,4 @@ registry.hooks.register(
 
 ---
 
-*文档生成：读码笔记 03 · 数据+导出+鉴权+插件 · 2026-07-05*
+*文档生成：读码笔记 03 · 数据+导出+鉴权+插件 · 2026-07-05；2026-07-17 v3.41 复核补账（v3.32.1 项目激活防错位 / v3.35.1 自定义班次过滤 / v3.38 清理事务卫生 + 热路径索引 + 旁路 SN 监控）*

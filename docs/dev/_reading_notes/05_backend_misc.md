@@ -1,8 +1,9 @@
 # 后端杂项读码笔记（兜底册）
 
 > 读码时间：2026-07-05
-> 用途：函数级源码索引兜底册——不属于 01-04 主域的全部后端文件（MES 周边服务 / 导出渲染器 / 杂项 API 路由 / core / db / hcnetsdk / schemas / scripts / 版本文件），共 41 个文件。
+> 用途：函数级源码索引兜底册——不属于 01-04 主域的全部后端文件（MES 周边服务 / 导出渲染器 / 杂项 API 路由 / core / db / hcnetsdk / schemas / scripts / 版本文件），共 44 个文件。
 > 行号以当日代码为准，后续代码演进可能漂移。
+> 2026-07-17 v3.41 复核：补账 v3.33~v3.41 变更（db 迁移域）——新增迁移 runner / m0001 / requirements.txt 三个条目，m0000 条目行号刷新。
 
 ---
 
@@ -147,15 +148,15 @@
 | **线程/锁** | 无（自身完全无状态，序号生成无副作用） |
 | **注释坑** | L9-10 节拍抖动/跳工位时容易错绑——文档明示，强烈推荐升级硬件加扫码器；L14 fifo_max_in_flight 上限判断在 Coordinator.on_workpiece_enter 里做 |
 
-### `backend/services/external_alarm.py`（229 行）
+### `backend/services/external_alarm.py`（252 行，v3.41 复核）
 
 | 维度 | 内容 |
 |---|---|
-| **职责** | 在途报警台账（外部生产管控系统报警闭环通用能力）：出站推送时登记 active 报警、外部回推消除命令按唯一键匹配清除、监控页轮询未消除报警做持续横幅 |
-| **核心函数** | L23 `DEFAULT_MATCH_FIELDS` 四要素（task_no/product_code/step_code/operator）；L36-49 `_split_fields()` 归一化为 5 原生列 + extra_data.ext 扩展维度；L52-56 `_match_col()` 原生列走列等值、扩展维度走 json_extract（键名过 `_SAFE_DIM_KEY` 正则防注入）；L74-114 `record_active_alarm()` 支持 dedup_sec 去重窗口；L117-149 `clear_alarms()` 只对有值字段加条件，0 个匹配字段直接 matched=False 防空条件清全表；L152-158 `list_active_alarms()`（limit 钳制 1-500）；L179-189 `find_recent_active_alarm()` 供出站网关推送前"同任务同标签 N 秒去重"（川南 v4 第 4 条） |
+| **职责** | 在途报警台账（外部生产管控系统报警闭环通用能力）：出站推送时登记 active 报警、外部回推消除命令按唯一键匹配清除、软件内一键消除（v3.39）、监控页轮询未消除报警做持续横幅 |
+| **核心函数** | L23 `DEFAULT_MATCH_FIELDS` 四要素（task_no/product_code/step_code/operator）；L36-49 `_split_fields()` 归一化为 5 原生列 + extra_data.ext 扩展维度；L52-56 `_match_col()` 原生列走列等值、扩展维度走 json_extract（键名过 `_SAFE_DIM_KEY` 正则防注入）；L74-114 `record_active_alarm()` 支持 dedup_sec 去重窗口；L117-149 `clear_alarms()` 只对有值字段加条件，0 个匹配字段直接 matched=False 防空条件清全表；L152-172 `clear_all_active_alarms()`（**v3.39**：上游不回推消除命令时的软件内运维出口，不做字段匹配、可按 channel 限定、clear_source 留审计）；L175 `list_active_alarms()`（limit 钳制 1-500）；L202 `find_recent_active_alarm()` 供出站网关推送前"同任务同标签 N 秒去重"（川南 v4 第 4 条） |
 | **线程/锁** | 无（db 由调用方管理） |
-| **上下游** | 上游：mes_gateway 出站推送、mes_inbound 消除命令、监控页轮询 API；下游：ExternalActiveAlarm 表 |
-| **注释坑** | L9-10 唯一键参照客户约定=四要素，匹配字段与去重窗口都由调用方（入站配置）传入，**本模块不含任何客户分支**；L81-82 去重口径与消除口径共用同一套 match_fields 配置，避免客户改了匹配维度后两边口径不一致；L105-106 raised_at 显式落本地时间——不用 SQLite func.now()（UTC）以免与 datetime.now() 去重窗口错开 |
+| **上下游** | 上游：mes_gateway 出站推送、mes_inbound 消除命令 + v3.39 手动消除端点/监控页清零联动、监控页轮询 API；下游：ExternalActiveAlarm 表 |
+| **注释坑** | L9-10 唯一键参照客户约定=四要素，匹配字段与去重窗口都由调用方（入站配置）传入，**本模块不含任何客户分支**；L81-82 去重口径与消除口径共用同一套 match_fields 配置，避免客户改了匹配维度后两边口径不一致；L105-106 raised_at 显式落本地时间——不用 SQLite func.now()（UTC）以免与 datetime.now() 去重窗口错开；L155-156（v3.39）"与 clear_alarms 的按键匹配语义刻意分开: 这是'人在界面上一键清空'的运维出口" |
 
 ### `backend/services/project_config_normalize.py`（45 行）
 
@@ -312,7 +313,7 @@
 
 ---
 
-## 四、core / db / hcnetsdk（6 个文件）
+## 四、core / db / hcnetsdk（8 个文件，v3.41 复核 +2）
 
 ### `backend/core/debug_center.py`（161 行）
 
@@ -344,15 +345,37 @@
 | **上下游** | 上游：`api/reports.py` 时段过滤等；下游：`db/database.get_dialect()` |
 | **注释坑** | 无 |
 
-### `backend/db/migrations/m0000_legacy.py`（214 行）
+### `backend/db/migrations/__init__.py`（109 行，v3.41 复核新增条目）
 
 | 维度 | 内容 |
 |---|---|
-| **职责** | 存量迁移基线（原 `main.py:migrate_database` 原样平移，2026-07 冻结）：109 条补列清单逐列探查缺列才 ALTER + 方言归一 + v3.10 阶段 5 DROP operators 表；runner 的 `_ALWAYS_RUN` 成员，永远幂等执行 |
-| **核心函数** | L17-198 `apply(engine)`：L19-166 `migrations` 补列清单（从 v2.7.5 到 v3.23 全部历史补列，含 scanner/external_devices/packaging_flow_configs 大宗）；L173-181 `_normalize_type()` SQLite 风格 DDL 翻译成 PostgreSQL（BOOLEAN DEFAULT 1→TRUE、JSON→JSONB）；L200-214 阶段 5 清理 DROP TABLE operators |
+| **职责** | 版本化数据库迁移注册表 + runner（2026-07 治理批次落地，取代 `main.py` 只增不减的 `migrate_database()` 大列表——旧函数已改断言桩，别再往里塞 ALTER）。启动时 `apply_pending(engine)` 按编号升序应用缺失迁移，行为对外等价于旧函数 |
+| **核心函数** | L25-28 `_MIGRATION_MODULES` 显式注册表（**不做目录扫描**——兼容 Nuitka 编译形态）；L31 `_ALWAYS_RUN={"m0000_legacy"}`；L34-42 `_load_migrations()` 断言 MIGRATION_ID 与文件名一致；L45-58 `_ensure_ledger()` 建 `schema_migrations` 记账表；L61-68 `_applied_ids()`；L71-80 `_record()` 记账；L83-109 `apply_pending()`：m0000 不看记账每次幂等跑、其余"记账跳过"，某个新迁移失败即停止应用后续迁移（保留原库、不阻断启动） |
+| **线程/锁** | 无（启动时单线程跑） |
+| **上下游** | 上游：`main.py` 启动调用；下游：各 `mXXXX_*.py` 模块 + `schema_migrations` 表 |
+| **注释坑** | L10 记账表建不起来（磁盘满/只读）→ 降级为只跑 m0000 幂等路径，打显著日志不阻断启动；L13-16 **新增 schema 变更三步规约**（即 AGENTS.md 不变量 8）：①改 ORM 模型 ②本目录新建 `m<下一编号>_<语义名>.py::apply(engine)` 写 DDL/数据回填 ③模块名追加到 `_MIGRATION_MODULES` 显式注册；设计 RFC 见 `docs/rfc/DB迁移版本化治理_设计方案_RFC.md`；记账失败不致命（L79-80，下次启动幂等/重跑兜底） |
+
+### `backend/db/migrations/m0000_legacy.py`（224 行，v3.41 复核）
+
+| 维度 | 内容 |
+|---|---|
+| **职责** | 存量迁移基线（原 `main.py:migrate_database` 原样平移，2026-07 冻结）：约 109 条补列清单逐列探查缺列才 ALTER + 方言归一 + v3.10 阶段 5 DROP operators 表；runner 的 `_ALWAYS_RUN` 成员，永远幂等执行 |
+| **核心函数** | L17-224 `apply(engine)`：L19-176 `migrations` 补列清单（从 v2.7.5 起全部历史补列，含 scanner/external_devices/packaging_flow_configs 大宗）；L183-191 `_normalize_type()` SQLite 风格 DDL 翻译成 PostgreSQL（BOOLEAN DEFAULT 1→TRUE、JSON→JSONB）；L210-224 阶段 5 清理 DROP TABLE operators |
 | **线程/锁** | 无（启动时单线程跑） |
 | **上下游** | 上游：`db/migrations/__init__.py` runner；下游：inspector + 原生 ALTER TABLE |
-| **注释坑** | L7-8 **本文件已冻结**：不要再往 migrations 列表追加新条目，新 schema 变更新建 `m<编号>_<语义名>.py`；L18 逐字平移不做任何"顺手优化"；L65-66 pull_enabled/pull_interval_sec 两列 ORM 早有声明但历史迁移漏补；L202-204 detection_sessions/cycles 的 operator_id 列保留、语义已重定向到 users.id，历史指向不存在 user 时代码层已做 None 兜底 |
+| **注释坑** | L7-8 **本文件已冻结**：不要再往 migrations 列表追加新条目，新 schema 变更新建 `m<编号>_<语义名>.py`；L18 逐字平移不做任何"顺手优化"；L67-68 pull_enabled/pull_interval_sec 两列 ORM 早有声明但历史迁移漏补；L211-214 detection_sessions/cycles 的 operator_id 列保留、语义已重定向到 users.id，历史指向不存在 user 时代码层已做 None 兜底 |
+
+> v3.35.0 变更（v3.41 复核）：补列清单仍追加了 `packaging_flow_configs` 7 列（L156-165：v3.30.1 复合条码取段 5 列 composite_* + 工单号识别正则 order_code_pattern + v3.34.1 放工单=尾箱收尾 tail_paper_as_close_action）——发生在首个增量迁移 m0001 建立（v3.38）之前，与头部"已冻结"声明存在张力；此后新列应一律走新迁移模块。
+
+### `backend/db/migrations/m0001_hot_path_indexes.py`（33 行，v3.38 新增）
+
+| 维度 | 内容 |
+|---|---|
+| **职责** | 首个增量迁移（川南"框冻结"第三批优化）：补两个长期缺失的热路径查询索引——`step_records.cycle_id`（ix_step_records_cycle_id）与 `video_clips.related_id`（ix_video_clips_related_id）。周期收尾/自动清理/数据页按周期号查步骤、清理按归属周期/步骤找录像，无索引时均为全表扫描；v3.38 清理分批删除的每批锁窗口也被扫描时长放大 |
+| **核心函数** | L20-23 `_INDEXES` 清单；L26-33 `apply(engine)` 逐条 `CREATE INDEX IF NOT EXISTS` + 打印耗时留痕 |
+| **线程/锁** | 无（启动时单线程跑，记账后只跑一次） |
+| **上下游** | 上游：runner；下游：原生 SQL。ORM 侧 `models.py` 两列同步声明 `index=True`（新库建表即带索引，老库靠本迁移补建，索引名两边一致） |
+| **注释坑** | L9-10 CREATE INDEX 在大库上耗秒级（百万行 ≈ 数秒）属一次性成本，老客户升级首启动稍慢属预期 |
 
 ### `backend/hcnetsdk/types.py`（150 行）
 
@@ -388,7 +411,7 @@
 
 ---
 
-## 六、脚本与版本文件（3 个文件）
+## 六、脚本 / 版本 / 依赖文件（4 个文件，v3.41 复核 +1）
 
 ### `backend/scripts/generate_license.py`（89 行）
 
@@ -419,6 +442,17 @@
 | **线程/锁** | 无（lru_cache 线程安全） |
 | **注释坑** | L6-7 回退 "0.0.0" 是安全失败侧——让任何 main_version_min 检查都失败（插件不工作 > 误判兼容）；L32-34 **正式安装包必走环境变量**：打包后 package.json 进了 app.asar，Python fs 读不到，之前漏读此 env 导致客户机插件版本校验恒为 0.0.0 而误拒；L9-12 为什么不在 `backend/__init__.py` 写常量：后端再维护一份必然漂移 |
 
+### `backend/requirements.txt`（70 行，v3.41 复核新增条目）
+
+| 维度 | 内容 |
+|---|---|
+| **职责** | 后端 Python 依赖清单（CI 用 conda-pack 打环境时的安装依据；torch/mediapipe 等特殊依赖单独装，见文件内 Note 注释） |
+| **线程/锁** | 无 |
+| **上下游** | 上游：CI 打包流程 / 开发环境搭建；下游：pip |
+| **注释坑** | L38 dmPython 官方只发 cp310 win_amd64 + manylinux wheel——升级 Python 版本前先确认驱动 wheel 覆盖；L32 opencv-contrib-python<4.12 钉住是因为 4.13+ 要 numpy>=2 与 mediapipe 冲突 |
+
+> v3.35 变更（v3.41 复核）：L37-41 新增 MES 网关"数据库直写"适配器的客户关系库驱动——dmPython>=2.5.32（达梦）、pymysql>=1.1.0（MySQL 纯 Python）、pymssql>=2.2.11（SQL Server），PG 驱动 Database 段已有；随安装包内置、客户机零操作（v3.35.1"直写驱动内置"）。
+
 ---
 
 ## 七、疑点清单
@@ -435,9 +469,9 @@
 8. **`backend/api/test_compat_routes.py` L89 — `getattr(r, "code", None)` 永远返回 None**：WorkOrder 模型的字段是 `order_no`（见 `services/work_order.py` L77），没有 `code` 属性，测试兼容端点 `/mes/workorders` 返回的 items 里 code 恒为 null（stub 语义下无害，但形同虚设）。
 9. **`backend/api/rod_filter.py` — 纯函数库放在 api/ 目录**：全文件无 APIRouter/无路由，本质是检测后处理服务，按分层应归 `backend/services/`；放 api/ 下易被误认为有 HTTP 端点（router_manifest 中也无挂载）。
 10. **`backend/services/work_order.py` L170-173 — `get_active_order()` 的 station_id 参数声明后未使用**：函数体只处理 project/channels 两种域（cluster 显式跳过），station_id 从未参与匹配，疑似 cluster 域早期设计残留的接口位。
-11. **`backend/db/migrations/m0000_legacy.py` L183-198 — 补列循环整体包一个 try**：任一条 ALTER 抛异常（如列类型不兼容）会中断**其后全部**补列，仅 print 一行"数据库迁移检查"不抛出——老库升级若中途失败，后续缺列静默漏补，启动继续（后续 ORM 访问缺列时才炸）。冻结文件不宜改，但排查"升级后缺列"问题时应先查这里。
+11. **`backend/db/migrations/m0000_legacy.py` L193-208（v3.41 复核行号）— 补列循环整体包一个 try**：任一条 ALTER 抛异常（如列类型不兼容）会中断**其后全部**补列，仅 print 一行"数据库迁移检查"不抛出——老库升级若中途失败，后续缺列静默漏补，启动继续（后续 ORM 访问缺列时才炸）。冻结文件不宜改，但排查"升级后缺列"问题时应先查这里。
 12. **`backend/scripts/run_offline_video_test.py` L25-26 — 素材路径硬编码**：依赖仓库根的 `best(5).pt` 与 `01_2K17411_03.avi`（均不入库），无参数化入口；其他机器上必抛 FileNotFoundError，实用性受限（对比 tests/ 下 synthetic 剧本源已可无素材跑 pipeline）。
 
 ---
 
-**本文件最后更新**：2026-07-05（初版，覆盖 41 个文件）
+**本文件最后更新**：2026-07-17（v3.41 复核：新增迁移 runner `__init__.py` / `m0001_hot_path_indexes` / `requirements.txt` 三条目，m0000 条目按 v3.35 追加补列刷新行号；初版 2026-07-05 覆盖 41 个文件，现 44 个）

@@ -4,10 +4,12 @@
 > 用途：撰写开发者文档（MES 链路深潜篇 + 集群深潜篇 + 架构总览）的唯一原料。
 >
 > **完成度：全部完成（2026-07-05）**：services 层（mes_hooks / scanner / mes_gateway / mes_inbound / mes_puller / cluster_collector / packaging_flow_coordinator / workpiece_flow_coordinator / wmax 目录 7 文件 / external_device 族 5 文件 + external_alarm）与 api 层 10 个 MES 路由全部精读落盘，并附「二、MES 域综合」与「三、疑点清单」（15 条）。深潜正文 `internals/mes-hook-pipeline.md` 与 `internals/cluster-collector.md` 已从源码直接撰写，不依赖本笔记全文。
+>
+> **v3.41 补账（2026-07-17）**：按 `git diff a23a8d2..HEAD` 回写 v3.33~v3.41 变更——mes_hooks（v3.38 运行中开工回填）、mes_gateway（v3.38 推送熔断器 + 逐连接独立 commit）、mes_inbound（v3.37 开工自动开始检测 / v3.38 回填 / v3.39 报警软件内消除出口与响应明细 / v3.41 复用工单重绑）、packaging_flow_coordinator（v3.35 复合条码取段 + 工单号识别 + 放工单=尾箱收尾动作）、external_alarm（v3.39 一键消除）、mock 秤墙钟计时（v3.41），并新建 database_adapter（v3.35）与 scanner_bypass_monitor（v3.38）条目；api 层三节同步刷新（11.2 熔断器状态面 / 11.3 报警手动消除端点 / 11.10 复合条码配置面）。标注「v3.41 复核」的小节行号已按当日工作区刷新。weighing_engine 的 v3.35 融合 + v3.39 两阶段流水线全量扩写在 `01_backend_core.md`；mes_models（PackagingFlowConfig 复合条码字段）增量在 `03_data_plugin.md`。
 
 ## 一、逐文件档案
 
-### 1. backend/services/mes_hooks.py（1739 行）
+### 1. backend/services/mes_hooks.py（1784 行，v3.41 复核）
 
 **职责一句话**：MES 检测引擎回调管理器——检测状态机（source.py）与 MES 子系统（工件/工单/缺陷/外推/集群）之间的唯一异步桥，5 个 hook 全部经内存队列由单条后台线程消费，保证不阻塞检测帧率。
 
@@ -18,19 +20,21 @@
 - `_enqueue` L490：入队总闸（详细语义见二.3）。
 - `_spill_task` L404 / `_drain_spill_once` L425 / `_is_spillable_handler` L394：critical 任务落盘/回放；白名单 = `_handle_scan / _handle_cycle_start / _handle_cycle_end / _handle_session_start / _handle_session_end` 五个。
 - 5 个对外 hook：`on_scan_received` L519（ScannerService 调）、`on_cycle_start` L534、`on_cycle_end` L542、`on_session_start` L555、`on_session_end` L562（后四个都由 source.py 在 commit 成功后调）。全部 critical=True 入队。
-- `on_channel_removed` L568：降工位清理 7 个 dict + scan_pair 定时器（对应 AGENTS.md 不变量 4）。
-- `_handle_scan` L1171：扫码事件核心处理（WorkpieceFlow 优先路径 L1181→OK 冷却过滤 L1208→duplicate_scan_action reject/queue/overwrite→注册工件→ScanLog→scan_mode='D' LOFF L1279→scan_pair 分流 L1291→mid_cycle 即时绑定 L1296）。
-- `_handle_cycle_start` L1319：拍导出快照（v3.7.2 cycle_start_snapshot）→ pop pending 工件 → `mark_inspecting` + `link_to_cycle` → 写 `_inspecting_workpiece[ch]` → cycle 关联工单。
-- `_handle_cycle_end` L1369：**全文件最重的方法**——反查 wp_id（优先 WorkpieceInspection by cycle_id，v3.4.2 hotfix-2）→ 迟到扫码补绑兜底（v2.7.16 B）→ 无码周期仍推 MES（v3.7.0）→ set_result/缺陷 auto_record/工单 +1 → **预 commit 释放 SQLite 写锁（v2.7.9，L1512）** → `_cluster_dispatch` → gateway 推送（可 async）→ 实时导出 → rebind 策略。
-- `_cluster_dispatch` L1585：集群分发（master 本地存 / slave 上报主机；返回 True=wait_all 模式跳过本机直接推送）。channel→station 映射：优先 `channel_station_map`，否则多通道拼 `-{channel_id}` 后缀（L1612-1619）。
-- `_handle_session_start` L1659：查活跃工单绑 `_active_orders[ch]`（cluster scope 工单不在这里绑，box_complete 时直接 +1）。
-- `_handle_session_end` L1687：清 channel 状态 + session_end 外推 + session_end 实时导出。
-- scan_pair 家族（v3.3.0 码-码闭环）：`is_scan_pair_mode` L733、`_handle_scan_pair_event` L875、`_scan_pair_promote_pending` L957、`_dispatch_scan_pair_settle` L823（反向调 source 的 `settle_for_scan_pair`）、`_arm/_cancel_scan_pair_timer` L787/L778、`_on_scan_pair_timeout` L802（超时强制 NG 结算）、`settle_scan_pair_for_stop` L852（前端停止/待机弹窗收尾）。
-- 禁用扫码家族（v3.4.2 按工位开关）：`set_channel_disabled` L311、`_compute_linked_channels` L286（联动闭包=覆盖该工位的所有扫码器的全部 broadcast 工位并集）、`is_channel_scan_disabled` L276；状态持久化到 `scanner_runtime_state.json`（L120）。禁用后 4 个守门点全部短路：`on_scan_received` 丢码 L525、`has_pending_workpiece` 返 True L596、`is_scan_required` 返 False L607、`is_warn_no_barcode` 返 False L622、`get_current_workpiece` 返 None L664、`is_scan_pair_mode` 返 False L737。
+- `on_external_order_changed` L568（**v3.38 变更**，川南反馈）：入站开工建单/顶替后给"检测已在跑"的工位回填活跃工单——没有它，会话开始早于建单的工位永远挂不上新单（监控页四要素不显示、周期不计入该任务，要停一次检测才生效）。critical 入队 `_handle_rebind_active_order`。
+- `_handle_rebind_active_order` L1697（v3.38，工作线程执行）：运行中工位活跃工单回填，与 session_start 绑定同一套匹配。规则对齐"最新开工为准"已有语义、不引入新开关：工位没挂单→无条件补挂；已挂旧单且 allow_replace=False→保守不动；allow_replace=True（顶替开）→切最新在产单。顺带把 DetectionSession.order_id 一起改。上游调用点在 mes_inbound `_rebind_running_channels`（§4）。
+- `on_channel_removed` L578：降工位清理 7 个 dict + scan_pair 定时器（对应 AGENTS.md 不变量 4）。
+- `_handle_scan` L1181：扫码事件核心处理（WorkpieceFlow 优先路径 L1191→OK 冷却过滤 L1218→duplicate_scan_action reject/queue/overwrite→注册工件→ScanLog→scan_mode='D' LOFF L1289→scan_pair 分流 L1301→mid_cycle 即时绑定 L1306）。
+- `_handle_cycle_start` L1329：拍导出快照（v3.7.2 cycle_start_snapshot）→ pop pending 工件 → `mark_inspecting` + `link_to_cycle` → 写 `_inspecting_workpiece[ch]` → cycle 关联工单。
+- `_handle_cycle_end` L1379：**全文件最重的方法**——反查 wp_id（优先 WorkpieceInspection by cycle_id，v3.4.2 hotfix-2）→ 迟到扫码补绑兜底（v2.7.16 B）→ 无码周期仍推 MES（v3.7.0）→ set_result/缺陷 auto_record/工单 +1 → **预 commit 释放 SQLite 写锁（v2.7.9，L1522）** → `_cluster_dispatch` → gateway 推送（可 async）→ 实时导出 → rebind 策略。
+- `_cluster_dispatch` L1595：集群分发（master 本地存 / slave 上报主机；返回 True=wait_all 模式跳过本机直接推送）。channel→station 映射：优先 `channel_station_map`，否则多通道拼 `-{channel_id}` 后缀（L1622-1629）。
+- `_handle_session_start` L1669：查活跃工单绑 `_active_orders[ch]`（cluster scope 工单不在这里绑，box_complete 时直接 +1）。
+- `_handle_session_end` L1732：清 channel 状态 + session_end 外推 + session_end 实时导出。
+- scan_pair 家族（v3.3.0 码-码闭环）：`is_scan_pair_mode` L743、`_handle_scan_pair_event` L885、`_scan_pair_promote_pending` L967、`_dispatch_scan_pair_settle` L833（反向调 source 的 `settle_for_scan_pair`）、`_arm/_cancel_scan_pair_timer` L797/L788、`_on_scan_pair_timeout` L812（超时强制 NG 结算）、`settle_scan_pair_for_stop` L862（前端停止/待机弹窗收尾）。
+- 禁用扫码家族（v3.4.2 按工位开关）：`set_channel_disabled` L311、`_compute_linked_channels` L286（联动闭包=覆盖该工位的所有扫码器的全部 broadcast 工位并集）、`is_channel_scan_disabled` L276；状态持久化到 `scanner_runtime_state.json`（L120）。禁用后 4 个守门点全部短路：`on_scan_received` 丢码 L525、`has_pending_workpiece` 返 True L606、`is_scan_required` 返 False L617、`is_warn_no_barcode` 返 False L632、`get_current_workpiece` 返 None L674、`is_scan_pair_mode` 返 False L747。
 - B1② 异步外推家族（默认关）：`_load_async_dispatch_config` L156（SystemConfig key=`mes_async_dispatch`）、`set_async_dispatch` L177、`_submit_gateway_dispatch` L198（每工位 `ThreadPoolExecutor(1)`，同工位 FIFO 保序，积压上限 `_GATEWAY_MAX_PENDING=200` 超了丢最新+告警）。
-- 状态查询（供 detection results 轮询）：`get_current_workpiece` L660、`get_active_order` L690、`get_last_scan_event` L656、`get_rebind_prompt` L1055、`has_any_scanner_present` L638（v3.5.2：无任何扫码器则不弹"未绑码"）。
-- `clear_pending_scan` L1059（v2.7.16 五场景清码；force=True 作废 inspecting + 回退工件 queued + 删 WorkpieceInspection；原子 pop 防与 worker 竞争，输给了返回 `force_race_lost`）。
-- `resolve_rebind` L1151：manual rebind 弹窗的 continue/new 选择处理。
+- 状态查询（供 detection results 轮询）：`get_current_workpiece` L670、`get_active_order` L700、`get_last_scan_event` L666、`get_rebind_prompt` L1065、`has_any_scanner_present` L648（v3.5.2：无任何扫码器则不弹"未绑码"）。
+- `clear_pending_scan` L1069（v2.7.16 五场景清码；force=True 作废 inspecting + 回退工件 queued + 删 WorkpieceInspection；原子 pop 防与 worker 竞争，输给了返回 `force_race_lost`）。
+- `resolve_rebind` L1161：manual rebind 弹窗的 continue/new 选择处理。
 
 **线程·锁·队列**：
 - 单条 `mes-hook-worker` 守护线程（L130）消费 `_task_queue`（`queue.Queue(maxsize=500)`）。
@@ -40,7 +44,7 @@
 - **注意：`_pending_workpiece` / `_inspecting_workpiece` / `_pending_queue` 等核心 dict 无锁**——依赖"写基本都发生在单条 worker 线程"这一约定；HTTP 侧 `clear_pending_scan(force)` 用"原子 pop"对冲竞争（L1097 注释明说）。
 
 **上下游**：
-- 上游：ScannerService（扫码）、source.py VideoSourceManager（cycle/session hook）、前端 API（禁用扫码/清码/rebind/scan_pair 停机结算）。
+- 上游：ScannerService（扫码）、source.py VideoSourceManager（cycle/session hook）、前端 API（禁用扫码/清码/rebind/scan_pair 停机结算）、mes_inbound `_rebind_running_channels`（v3.38 运行中开工回填，调 `on_external_order_changed`）。
 - 下游：WorkOrderService / WorkpieceService / DefectService（DB 写）、mes_gateway（外推）、cluster_collector（集群）、export_realtime + export_snapshot（自定义导出）、workpiece_flow_coordinator（RFC11 优先路径）、channel_manager（反查 cycle/session id、scan_pair settle、scan_mode D 的 LOFF）。
 
 **关键状态变量（dict 键 = channel_id）**：
@@ -58,17 +62,18 @@
 | `_disabled_channels` | set[int]（非 dict） | 禁用扫码的工位联动闭包 |
 
 **_inspecting_workpiece 取放点清单（不变量 14 交叉标注）**：
-- 放入：`_handle_cycle_start` L1353、`_handle_scan` mid_cycle 分支 L1308、`_scan_pair_promote_pending` L975。
-- 取出：`_handle_cycle_end` L1399-1407（优先按 cycle 反查后条件清除，fallback pop）、`_handle_scan_pair_event` settle 后 L933、`_scan_pair_promote_pending` 防御性 pop L968、`clear_pending_scan(force)` L1101、`_handle_session_end` L1692、`set_channel_disabled` L348、`on_channel_removed` L577。
+- 放入：`_handle_cycle_start` L1363、`_handle_scan` mid_cycle 分支 L1318、`_scan_pair_promote_pending` L985。
+- 取出：`_handle_cycle_end` L1409-1417（优先按 cycle 反查后条件清除，fallback pop）、`_handle_scan_pair_event` settle 后 L943、`_scan_pair_promote_pending` 防御性 pop L978、`clear_pending_scan(force)` L1111、`_handle_session_end` L1737、`set_channel_disabled` L348、`on_channel_removed` L587。
 
 **注释里的坑（原样摘录）**：
 - L96-101（B1② 背景）："cycle_end 的外推 gw.dispatch() 自带阻塞式重试…跑在单条 mes-hook-worker 线程上; 客户 MES 慢/挂时这一下就把整个 hook 队列(扫码配对/绑工件/...)全堵住"。
 - L502-505（B1①）："队列满时绝不阻塞调用方(结算/检测热路径)。原来 critical 会 put(timeout=0.8) 阻塞最多 0.8s, 队列长期满时每个周期都卡 0.8s, 直接拖垮结算节拍。改为: 关键任务立刻落盘…非关键直接丢弃"——即 AGENTS.md 不变量 15 的出处。
-- L1376-1385（v3.4.2 hotfix-2）："ScanPair 模式下, settle_for_scan_pair 触发 end_cycle 是同步链, 但本方法被丢进 worker queue 异步跑. 等 worker 拿到 _inspecting 时, _handle_scan_pair_event 已经 promote 把 _inspecting 改成'新码 wp'了 → pop 出来的是新码 wp_id, 上一码的结算结果就被错写到新码头上"。
-- L1508-1511（v2.7.9）："在调集群分发之前，先 commit 释放 SQLite 写锁。否则…receive_station_report() 在新 session 里写 box_aggregations 会 locked 30s+ 重试失败"。
-- L1097-1100（clear_pending_scan force）："原子 pop：避免与 worker 线程的 _handle_cycle_end 抢同一个 wp_id…返回 'race_lost'，前端提示用户'操作来不及，本次工件已结算完成'"。
-- L1459-1464（v3.7.0）：无码周期原来直接 return 导致"MES 数据不是实时上传"，修复为无绑定也推 cycle_end、仅跳过工件写操作。
-- L1176-1179（RFC11）："若本通道属于某串行流水线 → 走 flow 路径…跳过本通道的 scan_pair / pending_workpiece 状态机 (互斥, 文档明示)"。
+- L1386-1395（v3.4.2 hotfix-2）："ScanPair 模式下, settle_for_scan_pair 触发 end_cycle 是同步链, 但本方法被丢进 worker queue 异步跑. 等 worker 拿到 _inspecting 时, _handle_scan_pair_event 已经 promote 把 _inspecting 改成'新码 wp'了 → pop 出来的是新码 wp_id, 上一码的结算结果就被错写到新码头上"。
+- L1518-1521（v2.7.9）："在调集群分发之前，先 commit 释放 SQLite 写锁。否则…receive_station_report() 在新 session 里写 box_aggregations 会 locked 30s+ 重试失败"。
+- L1107-1110（clear_pending_scan force）："原子 pop：避免与 worker 线程的 _handle_cycle_end 抢同一个 wp_id…返回 'race_lost'，前端提示用户'操作来不及，本次工件已结算完成'"。
+- L1469-1474（v3.7.0）：无码周期原来直接 return 导致"MES 数据不是实时上传"，修复为无绑定也推 cycle_end、仅跳过工件写操作。
+- L1186-1189（RFC11）："若本通道属于某串行流水线 → 走 flow 路径…跳过本通道的 scan_pair / pending_workpiece 状态机 (互斥, 文档明示)"。
+- L570-573（v3.38 on_external_order_changed docstring）："没有它, 会话开始早于建单的工位永远挂不上新单: 监控页四要素不显示、周期也不计入该任务, 要停一次检测才生效"。
 
 ### 2. backend/services/scanner.py（2003 行）
 
@@ -135,42 +140,93 @@
 - L1505-1508（D 模式 ERROR 续 LON）："之前 v3.4.1 设计意图是'按 box 跨线脉冲触发', 但实际产线用户期望'开始检测扫码器立即并持续工作', 所以放弃精细脉冲式控制"。
 - L1963-1965（未匹配注入）："单工位：允许注入该唯一工位，避免单机场景漏码；多工位：不再广播，避免串工位"。
 
-### 3. backend/services/mes_gateway.py（860 行，v3.41 复核）
+#### 2.1 backend/services/scanner_bypass_monitor.py（310 行，v3.38 新增）
 
-**职责一句话**：MES 外部对接网关（出站推送侧）——把 cycle/session/box 等事件按连接配置（push_events 过滤 + bound_channels 过滤）分发到对应适配器，带重试/退避/4xx 策略、截图注入、物料名映射、鉴权头合成、报警去重与在途报警台账登记，每次通讯写 MESCommLog。注意：**5 种推送适配器本身不在本文件**，在 `backend/services/mes_adapters/` 子包，本文件通过 `get_adapter(conn.adapter_type)`（L322）取用。
+**职责一句话**：扫码器旁路 SN 监控守护线程（v3.38，扫码器不接软件、只往固定目录丢 `SN123456.txt` 的客户）——定期扫描实时导出规则配置的输入目录，把每通道"当前最新 txt 的 SN"缓存在内存，供前端 Monitor 显示"当前 SN"与 cycle_start 锁快照时"内存优先"（满足"cycle_start 只读内存、不扫目录"的诉求）；是 v3.7.2 扫码器旁路能力（cycle_start 锁定最新 txt→external_meta→导出沿用）的实时侧补齐。**模块级函数式设计，无类无单例**；不依赖 ScannerService，条码也不进 MES hook 链（纯展示/导出侧）。
 
-**核心类·函数**（类 `MESGateway` L121；全局单例 `get_mes_gateway()` L730）：
-- 模块级截图压缩：`_SNAPSHOT_DEFAULTS` L24（降质阶梯 [60,45,30,20,12] + 缩边 0.75×4 轮）、`_snapshot_compress_params` L33（连接配置覆盖默认，非法值忽略）、`_recompress_jpeg_under` L59（先逐级降质再逐级缩边，压不下返回 None 放弃）、`_reencode_jpeg_quality` L102。
-- `set_extra_fields` L127 / `get_extra_fields` L131：Monitor 页实时输入的额外字段（如 weight），dict 键=channel_id。
-- `dispatch` L134：**分发总入口**（同步阻塞，调用方线程直接执行）——报警去重判断 L143→查全部 enabled MESConnection→按 push_events / bound_channels 过滤→逐连接 `_send_to_connection`→任一成功则登记在途报警 L168。
-- `_resolve_alarm_event` L179：判本次事件是否为入站配置的"报警事件"（`alarm_event_name` 支持字符串/列表；结果过滤默认只认 NG L199-202；台账字段按 `alarm_ledger_field_map` 从 context 提取）。**注意 docstring 说返回二元组，实际返回三元组 (fields, dedup_sec, match_fields)（L220）**。
-- `_alarm_dedup_should_skip` L222：去重窗口内已报过→跳过整次推送；判断出错一律放行。
-- `_record_active_alarm_if_alarm` L236：报警事件成功推送后登记在途报警（external_alarm.record_active_alarm），全程错误隔离。
-- `_send_to_connection` L255：**单连接推送核心**——static_fields 点号路径注入 L267→push_on_result 结果过滤（被过滤记 success=True 的 skip 日志但返回 False，L286-290；**v3.41 川南修复**：结果三级取值 `overall_result`→`result`→`cycle.result` 嵌套兜底——cycle_end 事件结果在嵌套层，老代码只读顶层取到空串被无条件放行，"仅 NG"对周期推送从未生效）→attach_snapshot 截图注入 L296→label_mapping 物料名映射（replace/keep_both 两模式）L310→鉴权合成 L319→`adapter.build_payload`→重试循环 L344（fixed/exponential 退避可配 L337；retry_on_4xx 默认 True，川南 §5.1 要求仅 5xx/超时重试时设 False L339）→成功/失败写 MESCommLog。
-- `_capture_snapshot_base64` L403：抓工位当前帧→按 snapshot_quality 重编码→snapshot_max_bytes 超限自动压缩（压不下放弃，防客户 MES 413）→base64。
-- `_apply_auth_to_headers` L446：auth.type ∈ {none, basic(留给 adapter), bearer, api_key, custom_header} 统一合并进 headers；顶层 custom_headers 列表/字典也合并。
-- `_log` L501：写 MESCommLog（flush 不 commit，由调用方统一 commit）。
-- `build_context_from_cycle` L518：从 cycle 构建标准化上下文（cycle/project/steps/defects/workpiece/order/operator/channel_group 子树 + ng_steps / missing_step_count 便利字段 L624-630）。v3.10+ operator_id 语义=user_id 查 User 表（L552-553、L584-585）；v3.13.1 工位组字段透传 L568-583。
-- `build_context_from_session` L663：session 汇总上下文（total/good/ng_cycles + order summary）。
-- `manual_push` L696：API 手动推送，靠回查最新一条 MESCommLog 拿结果。
+**核心函数**：
+- 配置来源复用 `ExportRealtimeRule`（enabled + input_dir 非空），**不新造表/字段**（模块头 L20）；轮询间隔存 SystemConfig key=`export.scanner_bypass.poll_interval_sec`（默认 1.0s，钳在 [0.2, 60]，每轮重读支持热改，`_read_poll_interval` L57）。
+- `_collect_rule_targets` L77：扫启用规则按规范化目录去重；同目录多规则时 wait_stable_ms/max_age_sec 取最严（"宁严勿松"，与 export_snapshot 口径一致，L103）；channel_filter 为空的规则作 default 兜底。
+- `_scan_dir` L140：单目录取最新 txt（复用 export_renderer 的 `latest_input_filename/latest_input_text`），SN=文件名去扩展名；任何异常归到 entry status=error **不外抛**。
+- `_build_state` L196：跑一轮组装完整状态 dict（by_dir/by_channel/default/entries），交 `_poll_loop` L226 **整体原子替换**（`_STATE_LOCK` 护），整轮级异常只记 error 字段线程绝不退出。
+- 生命周期：`start_monitor` L250（幂等）/ `stop_monitor` L263（`_STOP_EVENT` + join 2s）。
+- 只读查询：`get_status_snapshot` L280（API `GET /export/scanner-bypass/status` 用）、`get_current_for_channel` L294（无专属规则回退 default）、`get_current_for_dir` L304（export_snapshot 内存优先入口）。
 
-**线程·锁·队列**：本文件自身**无线程无锁无队列**——`dispatch` 在调用方线程同步执行（重试 sleep 也阻塞调用方），这正是 mes_hooks B1② 每工位外推执行器存在的原因（客户 MES 慢时 dispatch 会卡住 mes-hook-worker）。
+**线程·锁**：单条 daemon 线程 `scanner-bypass-monitor`；`_STATE_LOCK`（护状态整体替换与读取）+ `_THREAD_LOCK`（护启停）。目录扫描全在本线程做，API/cycle_start 只读内存（模块头 L14 设计约束）。
 
 **上下游**：
-- 上游：mes_hooks `_handle_cycle_end`/`_handle_session_end`（主推送路径）、cluster_collector（box_complete 聚齐后推送）、packaging/workpiece flow 协调器、API 层 mes_gateway.py（连接 CRUD/测试/手动推送）、Monitor 前端（set_extra_fields）。
-- 下游：`mes_adapters.get_adapter` 适配器注册表（build_payload/send/check_response 三段协议）、mes_inbound（读报警台账配置）、external_alarm（去重查询+台账登记）、channel_manager（抓帧）、WorkOrderService（工单 summary）、MESConnection/MESCommLog ORM。
+- 上游：main.py 启动 start_monitor；`backend/api/export_custom.py` 的 scanner-bypass 状态端点；export_snapshot 拍 cycle_start 快照时内存优先。
+- 下游：ExportRealtimeRule（配置）、SystemConfig（轮询间隔）、export_renderer（latest_input_* 复用）、文件系统目录。
+
+**关键状态变量**：模块级 `_STATE` dict（running/polled_at/by_dir/by_channel/default/entries/error）——进程内存态，重启即清、下一轮扫描重建。
+
+**注释里的坑（原样摘录）**：
+- L14-18（设计约束）："不阻塞检测热路径: 目录扫描全在本守护线程里做, API / cycle_start 只读内存…出错必须隔离: 目录不存在 / 权限 / 文件名非法 / 无 SN 都只记状态和日志, 线程本身永不因单目录异常而退出"。
+- L103（同目录多规则合并）："mtime 策略不加保险, 其余取最严 (宁严勿松), 与 export_snapshot 口径一致"。
+- L209（同通道命中多目录）："后者覆盖前者 (罕见配置, 取扫描顺序最后一个)"。
+
+### 3. backend/services/mes_gateway.py（860 行，v3.41 复核）
+
+**职责一句话**：MES 外部对接网关（出站推送侧）——把 cycle/session/box 等事件按连接配置（push_events 过滤 + bound_channels 过滤）分发到对应适配器，带重试/退避/4xx 策略、推送熔断器（v3.38）、截图注入、物料名映射、鉴权头合成、报警去重与在途报警台账登记，每次通讯写 MESCommLog。注意：**6 种推送适配器本身不在本文件**（v3.35 起含 database 直写，见 §3.1），在 `backend/services/mes_adapters/` 子包，本文件通过 `get_adapter(conn.adapter_type)`（L442）取用。
+
+**核心类·函数**（类 `MESGateway` L121；全局单例 `get_mes_gateway()` L856）：
+- 模块级截图压缩：`_SNAPSHOT_DEFAULTS` L24（降质阶梯 [60,45,30,20,12] + 缩边 0.75×4 轮）、`_snapshot_compress_params` L33（连接配置覆盖默认，非法值忽略）、`_recompress_jpeg_under` L59（先逐级降质再逐级缩边，压不下返回 None 放弃）、`_reencode_jpeg_quality` L102。
+- **推送熔断器家族（v3.38 变更**，川南"框冻结"整改配套）：端点不在线时旧行为是每个周期傻等完整超时（默认 30s×重试）白耗调用线程；现按连接 id 记内存态 `_cb_state`（连续失败数/熔断截止时间/累计熔断次数），连续失败达阈值→冷却期内直接跳过推送，到点放一次半开探测，成功自动恢复。默认开（阈值 5 / 冷却 30s），连接 config 的 cb_enabled/cb_fail_threshold/cb_cooldown_sec 可改可关。`_cb_config` L135、`_cb_should_skip` L143（熔断中跳过；冷却到期放行当探测）、`_cb_record` L163（按真实推送结果推进状态机，打开/恢复各落一条 MESCommLog `circuit_breaker` 留证）、`reset_circuit` L200（人工复位：测试连接成功/改连接配置后 API 层调）、`get_circuit_state` L206（健康状态快照，连接列表序列化带出）。
+- `set_extra_fields` L219 / `get_extra_fields` L223：Monitor 页实时输入的额外字段（如 weight），dict 键=channel_id。
+- `dispatch` L226：**分发总入口**（同步阻塞，调用方线程直接执行）——报警去重判断 L235→查全部 enabled MESConnection→按 push_events / bound_channels 过滤→逐连接 `_send_to_connection`→任一成功则登记在途报警 L279。**v3.38 变更（川南"框冻结"根因修复）**：①逐连接错误隔离（单连接任何异常 rollback 后继续其余连接 L249-273）；②**每推完一条连接立刻 `db.commit()`**（L268）——原来统一循环外提交，前一条连接失败落日志（`_log` 内 flush）时 SQLite 写锁已被握住，下一条连接的 HTTP 超时等待（不在线端点可达 30s）期间锁一直不放，推理线程写步骤记录被堵到 busy_timeout 边缘（实测 8~15s）→前端检测框冻结、后续类别漏检误判 NG；逐连接提交把锁窗口收敛回毫秒级，网络等待期间绝不持锁。
+- `_resolve_alarm_event` L288：判本次事件是否为入站配置的"报警事件"（`alarm_event_name` 支持字符串/列表；结果过滤默认只认 NG L307-313；台账字段按 `alarm_ledger_field_map` 从 context 提取）。返回三元组 (fields, dedup_sec, match_fields)（v3.38 起 docstring 已修正为三元组，旧"docstring 说二元组"的不一致已消）。
+- `_alarm_dedup_should_skip` L330：去重窗口内已报过→跳过整次推送；判断出错一律放行。
+- `_record_active_alarm_if_alarm` L344：报警事件成功推送后登记在途报警（external_alarm.record_active_alarm），全程错误隔离。
+- `_send_to_connection` L255：**单连接推送核心**——static_fields 点号路径注入 L267→push_on_result 结果过滤（被过滤记 success=True 的 skip 日志但返回 False，L286-290；**v3.41 川南修复**：结果三级取值 `overall_result`→`result`→`cycle.result` 嵌套兜底——cycle_end 事件结果在嵌套层，老代码只读顶层取到空串被无条件放行，"仅 NG"对周期推送从未生效）→attach_snapshot 截图注入 L296→label_mapping 物料名映射（replace/keep_both 两模式）L310→鉴权合成 L319→`adapter.build_payload`→重试循环 L344（fixed/exponential 退避可配 L337；retry_on_4xx 默认 True，川南 §5.1 要求仅 5xx/超时重试时设 False L339）→成功/失败写 MESCommLog。
+- `_capture_snapshot_base64` L526：抓工位当前帧→按 snapshot_quality 重编码→snapshot_max_bytes 超限自动压缩（压不下放弃，防客户 MES 413）→base64。
+- `_apply_auth_to_headers` L569：auth.type ∈ {none, basic(留给 adapter), bearer, api_key, custom_header} 统一合并进 headers；顶层 custom_headers 列表/字典也合并。
+- `_log` L623：写 MESCommLog（flush 不 commit，由调用方统一 commit）。
+- `build_context_from_cycle` L640：从 cycle 构建标准化上下文（cycle/project/steps/defects/workpiece/order/operator/channel_group 子树 + ng_steps / missing_step_count 便利字段 L746-752）。v3.10+ operator_id 语义=user_id 查 User 表（L674-675、L706-707）；v3.13.1 工位组字段透传 L690-705。
+- `build_context_from_session` L785：session 汇总上下文（total/good/ng_cycles + order summary）。
+- `manual_push` L818：API 手动推送，靠回查最新一条 MESCommLog 拿结果。**v3.38 变更**：手动推送是操作员显式动作，熔断中也放行（把 open_until 拉到当前时刻充当探测，成功即恢复，L826-829）。
+
+**线程·锁·队列**：本文件自身**无线程无锁无队列**——`dispatch` 在调用方线程同步执行（重试 sleep 也阻塞调用方），这正是 mes_hooks B1② 每工位外推执行器存在的原因（客户 MES 慢时 dispatch 会卡住 mes-hook-worker）。v3.38 的熔断状态 `_cb_state` 也是无锁 dict（写点集中在推送调用线程；进程内存态，重启即清）。
+
+**上下游**：
+- 上游：mes_hooks `_handle_cycle_end`/`_handle_session_end`（主推送路径）、cluster_collector（box_complete 聚齐后推送）、packaging/workpiece flow 协调器、weighing_engine（v3.35+ `weighing_product_done` 事件，见 01_backend_core 笔记）、mes_inbound（顶替完工回传）、API 层 mes_gateway.py（连接 CRUD/测试/手动推送/熔断复位）、Monitor 前端（set_extra_fields）。
+- 下游：`mes_adapters.get_adapter` 适配器注册表（build_payload/send/check_response 三段协议，v3.35 起 6 种含 database 直写）、mes_inbound（读报警台账配置）、external_alarm（去重查询+台账登记）、channel_manager（抓帧）、WorkOrderService（工单 summary）、MESConnection/MESCommLog ORM。
 
 **关键状态变量**：
 - `_extra_fields`：dict[channel_id → dict]，Monitor 实时输入字段，进 full_context["extra"]。
+- `_cb_state`：dict[conn_id → {fails, open_until, episodes}]，v3.38 推送熔断器内存态（重启即清=重启后所有连接立即重试）。
 - `enabled`：网关总开关（默认 True，代码里无人置 False，形同常开）。
 
 **注释里的坑（原样摘录）**：
-- L556-558（build_context_from_cycle）："DetectionCycle ORM 模型本身没有 completed_steps/total_steps 字段，直接属性访问会 AttributeError 把 cycle_end → MES → 集群分发整条链路冲崩。用 getattr 兜底"。
-- L598-601（StepRecord 字段名）："历史上这里写过 step_index / duration_seconds / is_good，会触发 AttributeError 并导致整个 cycle_end 构造 context 失败 → 进而 _cluster_dispatch 不被触发。用 getattr 防御式访问"。
-- L621-623（便利字段）："Gateway 模板是自研 {key.path} 占位符替换，不是 Jinja2"——与 AGENTS.md "MES Gateway 不用 Jinja2" 相互印证。
-- L292-295（截图注入）："放在 push_on 过滤之后, 被过滤掉的推送不浪费抓帧; 抓帧失败静默跳过, 绝不阻断推送. 默认关 → full_context 无 snapshot 字段, 与历史字节级一致"。
-- L410-411（snapshot_max_bytes）："客户 MES 常有 413 请求体上限, 超大截图直接放弃而不是发了被拒"。
-- L584-585（operator 字段）："operator_id 列保留字段名 (SQLite 无法 rename), 值改为 user.id…MES payload key 'operator' 字段名稳定 (向后兼容客户模板)"。
+- L678-680（build_context_from_cycle）："DetectionCycle ORM 模型本身没有 completed_steps/total_steps 字段，直接属性访问会 AttributeError 把 cycle_end → MES → 集群分发整条链路冲崩。用 getattr 兜底"。
+- L720-723（StepRecord 字段名）："历史上这里写过 step_index / duration_seconds / is_good，会触发 AttributeError 并导致整个 cycle_end 构造 context 失败 → 进而 _cluster_dispatch 不被触发。用 getattr 防御式访问"。
+- L743-745（便利字段）："Gateway 模板是自研 {key.path} 占位符替换，不是 Jinja2"——与 AGENTS.md "MES Gateway 不用 Jinja2" 相互印证。
+- L413-416（截图注入）："放在 push_on 过滤之后, 被过滤掉的推送不浪费抓帧; 抓帧失败静默跳过, 绝不阻断推送. 默认关 → full_context 无 snapshot 字段, 与历史字节级一致"。
+- L533-534（snapshot_max_bytes）："客户 MES 常有 413 请求体上限, 超大截图直接放弃而不是发了被拒"。
+- L706-707（operator 字段）："operator_id 列保留字段名 (SQLite 无法 rename), 值改为 user.id…MES payload key 'operator' 字段名稳定 (向后兼容客户模板)"。
+- L263-268（v3.38 每连接独立 commit）："原来统一在循环外提交 → 前一条连接失败落日志 (_log 内 flush) 时 SQLite 写锁已被本会话握住, 下一条连接的 HTTP 超时等待 (对不在线端点可达 30s) 期间锁一直不放; 推理线程此刻写步骤记录被堵到 busy_timeout 边缘 (实测 8~15s) → 前端检测框冻结、后续类别漏检误判 NG"。
+- L126-130（v3.38 熔断器动机）："端点不在线时旧行为是每个周期傻等完整超时 (默认 30s×重试), 白耗 MES 工作线程、拖慢工件统计落库。熔断后冷却期内直接跳过, 到点放一次探测请求, 成功自动恢复"。
+
+#### 3.1 backend/services/mes_adapters/database_adapter.py（157 行，v3.35 新增）
+
+**职责一句话**：数据库直写适配器（v3.35，达梦优先，兼容 MySQL/PostgreSQL/SQL Server/SQLite）——客户 IT 不开 HTTP 接口、直接给一张中间表的对接场景，把事件数据按模板渲染结果直接 INSERT 进客户库；与 HTTP 适配器共用同一套 {key.path} 模板体系，**模板顶层键名 = 目标表列名**。已在 `mes_adapters/__init__.py` 注册表登记 `"database"`（该文件 L12/L20，注册表从 5 种扩为 6 种）。
+
+**核心类·函数**（类 `DatabaseAdapter(BaseAdapter)` L54）：
+- 模块级 `_DRIVER_HINTS` L35：db_type→(驱动包, pip 安装名) 提示表（达梦 dmPython/mysql pymysql/pg psycopg2/sqlserver pymssql/sqlite 内置）；`_DEFAULT_PORTS` L43（dm 5236 等）。
+- `_safe_ident` L46：**表名/列名白名单校验**（仅字母数字下划线、可带 schema 点分），防 SQL 注入——列名来自模板键，值全部走参数绑定。
+- `_connect` L58：按 db_type 懒加载驱动建连（未安装时报错信息直接写清要装哪个包，"现场排障省一轮" L26）；返回 (conn, 占位符风格)——dm/sqlite 用 `?`，其余 `%s`。
+- `send` L110：payload 是 dict 插 1 行、list[dict] 逐行插入**同一事务**（行展开约定与 HTTP 模板 `_array_source` 语义一致，L22-24）；逐行拼 `INSERT INTO`（表/列名过 `_safe_ident`）→commit，异常 rollback；返回与 HTTP 适配器同构的 {status_code, body, success, duration_ms}（成功造 status_code=200 供上层统一判定）。
+- `check_response` L155："直写没有 HTTP 语义: 以 send 内部的 success 标志为准"。
+
+**线程·锁**：无——每次 send 短连接建/用/关。模块头 L27："连接不做池化: 网关本身有重试 + 事件频率低 (每周期/每件一次), 短连接最稳"。
+
+**上下游**：上游 `mes_gateway._send_to_connection`（经注册表取用，adapter_type='database'）；下游客户关系库（dmPython/pymysql/psycopg2/pymssql/sqlite3 驱动直连）。
+
+**关键状态变量**：无实例状态（config 每次随调用传入）。
+
+**注释里的坑（原样摘录）**：
+- L2-5（模块头）："对接场景: 客户 IT 不开 HTTP 接口, 直接给一张中间表 (达梦/MySQL/PostgreSQL/SQL Server/SQLite 皆可)。与 HTTP 适配器共用同一套模板体系 —— template 的顶层键名 = 目标表列名"。
+- L12（config 注释）："database: dm 可留空 (走默认库), sqlite 填文件路径"。
+- L45（_safe_ident）："表名/列名白名单校验: 只允许字母数字下划线 (可带 schema 点分), 防注入"。
 
 ### 4. backend/services/mes_inbound.py（968 行，v3.41 复核）
 
@@ -178,40 +234,44 @@
 
 **核心类·函数**（类 `MESInbound` L283"无状态, 单例复用"；全局单例 `get_mes_inbound()` L793）：
 - `DEFAULT_TRUE_WORDS` L39：完工信号默认真值词表。
-- `DEFAULT_INBOUND_CONFIG` L43-191：**全量默认配置即文档**——field_map/required_fields/response（含川南 40001-40007 业务码 + json/xml 格式 + messages 文案覆盖）/auth（密钥头+IP 白名单，默认关）/max_body_bytes(1MB)/input_format(auto→json→form→query)/switch_project_on_task（默认关，L95-97 注释："外部 HTTP 触发的自动切项目会重载模型/打断产线, 属敏感动作, 要的人显式开"）/match_project_by_name + name_match_strict_boundary（v3.30 统一匹配器档位）/create_work_order_on_task/order_binding(project|channel)/reject_duplicate_task（与"最新开工为准"相反取向二选一，L114-116）/complete_field 完工信号族/supersede_previous_task 顶替族/receive_paths 自定义接收路径别名（L136-139，path 不允许 /api/ 前缀防劫持）/http_status_map/报警台账族（alarm_event_name/alarm_record_on_results/alarm_ledger_field_map/alarm_dedup_sec/alarm_clear_match_fields）/alarm_banner 前端横幅配置/task_info_display 四要素上屏开关。
-- 模块级工具：`http_status_for` L194（业务码→HTTP 状态码，默认一律 200）、`to_xml` L205（响应 dict 序列化 XML，SOAP 用）、`check_inbound_auth` L230（密钥头+IP 白名单，返回 None=通过）、`_ip_allowed` L260（CIDR 支持；非标准 IP 如 TestClient 'testclient' 退化字符串精确匹配 L267）。
-- 配置读写：`get_config` L291 / `save_config` L301 / `_with_defaults` L313（浅合并 + response/codes/auth/alarm_banner/task_info_display 五处深合并）。
-- `handle_task_start` L343：开工处理主入口——enabled 守门→`_map_fields` 映射→required_fields 校验→`_apply_task_action`→`_result` 组装。
-- `handle_alarm_clear` L380：报警消除命令——按 alarm_clear_match_fields（默认四要素：任务号/产品号/工序工步/操作员）匹配在途报警并消除；匹配不到回 alarm_not_found(40007)。
-- `_apply_task_action` L414：编排——完工信号优先（complete_field 真值→`_complete_work_order`）→reject_duplicate_task 判重→`_switch_project`→`_ensure_work_order`。
-- `_switch_project` L452：复用 `project_match.resolve_project_id_by_spec`（对照表精确→通配符→自动同名子串，与上银包装线完全一致，L463-464 注释）→已激活项目跳过重载 L480-483→`activate_project_core`（404 回 unknown_product）。
-- `_ensure_work_order` L496：建/激活工单（order_no=task_no，source='external'，四要素存 extra_data["inbound"] 留痕）；order_binding=channel 时按 channel_field 绑工位；然后 `_ensure_in_progress` + 可选顶替。**复用分支（同任务号再开工）v3.41 起调 `_refresh_reused_order`**。
+- `DEFAULT_INBOUND_CONFIG` L43-202：**全量默认配置即文档**——field_map/required_fields/response（含川南 40001-40007 业务码 + json/xml 格式 + messages 文案覆盖）/auth（密钥头+IP 白名单，默认关）/max_body_bytes(1MB)/input_format(auto→json→form→query)/switch_project_on_task（默认关，L95-97 注释："外部 HTTP 触发的自动切项目会重载模型/打断产线, 属敏感动作, 要的人显式开"）/**start_detection_on_task（v3.37 变更，默认关，L105-109）**：开工后对"视频源在跑+模型就绪+未在检测"的工位自动拉起检测/match_project_by_name + name_match_strict_boundary（v3.30 统一匹配器档位）/create_work_order_on_task/order_binding(project|channel)/reject_duplicate_task（与"最新开工为准"相反取向二选一，L118-120）/complete_field 完工信号族/supersede_previous_task 顶替族/receive_paths 自定义接收路径别名（L141-144，path 不允许 /api/ 前缀防劫持）/http_status_map/报警台账族（alarm_event_name/alarm_record_on_results/alarm_ledger_field_map/alarm_dedup_sec/alarm_clear_match_fields）/alarm_banner 前端横幅配置（**v3.39 变更**：新增 allow_manual_clear 横幅"手动消除"按钮 + clear_on_counter_reset 监控页清零顺带消除，两出口都默认关——保持"只能外部消除"的对接契约，L185-188）/task_info_display 四要素上屏开关（**v3.39 变更**：新增 show_order_chip 工单徽标开关 + two_line_layout 表格式两行布局，治"信息条一行挤不下被截断"，L198-200）。
+- 模块级工具：`http_status_for` L205（业务码→HTTP 状态码，默认一律 200）、`to_xml` L216（响应 dict 序列化 XML，SOAP 用）、`check_inbound_auth` L241（密钥头+IP 白名单，返回 None=通过）、`_ip_allowed` L271（CIDR 支持；非标准 IP 如 TestClient 'testclient' 退化字符串精确匹配 L278）。
+- 配置读写：`get_config` L302 / `save_config` L312 / `_with_defaults` L325（浅合并 + response/codes/auth/alarm_banner/task_info_display 五处深合并）。
+- `handle_task_start` L354：开工处理主入口——enabled 守门→`_map_fields` 映射→required_fields 校验→`_apply_task_action`→`_result` 组装。**v3.39 变更**：处理明细附在成功文案后（业务码不变，上游按 code 判成败不受影响，L389-393）——"开工自动开始检测"没拉起时原因直接可见，不用开调试日志。
+- `handle_alarm_clear` L396：报警消除命令——按 alarm_clear_match_fields（默认四要素：任务号/产品号/工序工步/操作员）匹配在途报警并消除；匹配不到回 alarm_not_found(40007)。
+- `_apply_task_action` L430：编排——完工信号优先（complete_field 真值→`_complete_work_order`）→reject_duplicate_task 判重→`_switch_project`→**开工自动开始检测（v3.37 变更**，start_detection_on_task 开时；先 `db.commit()` 再拉检测——start_detection 内部另开 DB 会话写检测记录，不先提交会撞满 SQLite busy_timeout 15s，上游中控超时短于它就误判"连接失败"，2026-07-13 UAT 逼出的真锁 L466-476）→`_ensure_work_order`→**运行中开工回填（v3.38 变更**，create_work_order_on_task 开时先 commit 落盘再 `_rebind_running_channels` L485-495）。
+- `_auto_start_detection` L527（v3.37 变更；v3.39 契约升级）：开工后自动拉起检测。门槛：配置过视频源 + 模型就绪 + 未在检测。**v3.39 两处升级**：①暂停中的源不再因"源未运行"放弃——只要配置过视频源就交给 start_detection 的"暂停续播/相机重连"复活路径（川南现场事故链：点过"停止"后每次开工都拉不起来，2026-07-15 日志钉死）；②返回 (started, skipped) 二元组，没拉起的工位及原因（未配视频源/模型未就绪"请在项目管理配默认模型"）随开工响应回给上游，一次请求即可自诊。任何失败只记调试日志，绝不影响开工响应。
+- `_rebind_running_channels` L497（**v3.38 变更**，川南反馈"检测已在跑时收到开工，新单挂不上运行中的工位"）：遍历有活跃会话的工位，把最新在产单投递给 mes_hooks `on_external_order_changed` 回填（§1）；只投内存绑定任务给 hook 工作线程，不在入站请求里做任何 DB 写；allow_replace 复用 supersede_previous_task 已有语义不新增开关；刚被自动拉起检测的工位走 session_start 原生绑定，回填与之幂等。
+- `_switch_project` L578：复用 `project_match.resolve_project_id_by_spec`（对照表精确→通配符→自动同名子串，与上银包装线完全一致，L589-590 注释）→已激活项目跳过重载 L606-609→`activate_project_core`（404 回 unknown_product）。
+- `_ensure_work_order` L622：建/激活工单（order_no=task_no，source='external'，四要素存 extra_data["inbound"] 留痕）；order_binding=channel 时按 channel_field 绑工位；然后 `_ensure_in_progress` + 可选顶替。**复用分支（同任务号再开工）v3.41 起调 `_refresh_reused_order`**。
 - `_refresh_reused_order`（v3.41 川南修复）：复用工单按本次开工报文"最新开工为准"刷新——重绑当前激活项目（工位路由则重绑报文工位）+ 覆盖 extra_data.inbound 四要素 + 产品码/操作员。老代码复用分支只打日志不动工单 → 绑定过期的复用单挂不上工位 → 四要素不上屏、出站推送工单字段全 null。JSON 列整体重赋值（原地改 dict 不触发 SQLAlchemy 变更追踪）；失败只记日志不阻断开工；终态单复活仍归 `_ensure_in_progress`。回归 `tests/test_cn_fixes_20260717.py`。
-- `_supersede_previous_tasks` L554：按 supersede_scope（project/same_project/same_channel/external）查在产外部单收尾。**注意：same_channel 分支在代码里实现了（L575-582）但 DEFAULT 配置注释（L130）只列了 project/same_project/external 三档**。
-- `_finish_superseded` L589：逐单 change_status(completed)→**先 commit 释放 SQLite 写锁再网络回传**（L599 注释："与 mes_hooks cycle_end 同模式, 避免锁等待"）→report_complete_on_supersede 时逐单 `_report_order_complete`。
-- `_report_order_complete` L611：对被顶替工单回传"完工"出站事件（gateway.dispatch(complete_event_type)）。
-- `_complete_work_order` L626：完工信号收工单（complete_match_column=order_no 按工单号 / product_code 取该产品最新在产单）；找不到/已终态静默放行（返回 ok）。
-- `_ensure_in_progress` L659：状态机安全迁移 draft→pending→in_progress、paused→in_progress；终态不复活。
-- `_truthy` L685：布尔/非零数字恒真，字符串查词表（大小写不敏感）。
-- `_map_fields` L703：外部报文→我们字段（`_get_nested` 点路径，复用拉取器同款）。
-- `_result` L717 / `error_response` L726 / `_set_nested` L730 / `build_response` L743：响应组装——有 response.template 时走自研 {key.path} 模板（复用出站 render_template，支持 SOAP 嵌套信封）；无 template 时 code_field/message_field 支持点路径嵌套写入；echo_fields 回显。
+- `_supersede_previous_tasks` L687：按 supersede_scope（project/same_project/same_channel/external）查在产外部单收尾。**注意：same_channel 分支在代码里实现了（L708-715）但 DEFAULT 配置注释（L135）只列了 project/same_project/external 三档**。
+- `_finish_superseded` L722：逐单 change_status(completed)→**先 commit 释放 SQLite 写锁再网络回传**（L732 注释："与 mes_hooks cycle_end 同模式, 避免锁等待"）→report_complete_on_supersede 时逐单 `_report_order_complete`。
+- `_report_order_complete` L744：对被顶替工单回传"完工"出站事件（gateway.dispatch(complete_event_type)）。
+- `_complete_work_order` L759：完工信号收工单（complete_match_column=order_no 按工单号 / product_code 取该产品最新在产单）；找不到/已终态静默放行（返回 ok）。
+- `_ensure_in_progress` L831：状态机安全迁移 draft→pending→in_progress、paused→in_progress；终态不复活。
+- `_truthy` L857：布尔/非零数字恒真，字符串查词表（大小写不敏感）。
+- `_map_fields` L875：外部报文→我们字段（`_get_nested` 点路径，复用拉取器同款）。
+- `_result` L888 / `error_response` L897 / `_set_nested` L902 / `build_response` L915：响应组装——有 response.template 时走自研 {key.path} 模板（复用出站 render_template，支持 SOAP 嵌套信封）；无 template 时 code_field/message_field 支持点路径嵌套写入；echo_fields 回显。
 
-**线程·锁·队列**：无——纯同步无状态服务，调用方（API 路由）线程直接执行；唯一的"副作用时序"是 `_finish_superseded` 的先 commit 后网络。
+**线程·锁·队列**：无——纯同步无状态服务，调用方（API 路由）线程直接执行；"副作用时序"有三处：`_finish_superseded` 的先 commit 后网络、v3.37 拉检测前先 commit（防 busy_timeout 死锁）、v3.38 回填前先 commit（hook 工作线程另开会话查单必须先落盘）。
 
 **上下游**：
 - 上游：`backend/api/mes_inbound.py` 路由（内置 /api/v1/mes/inbound/* + receive_paths 动态注册的根路径别名）；mes_gateway `_resolve_alarm_event` 读它的配置（报警台账三键）。
-- 下游：SystemConfig KV、WorkOrderService（建单/改状态/summary）、project_match（统一规格匹配器）、projects.activate_project_core（切项目，与手动激活同一入口）、external_alarm（clear_alarms）、mes_gateway（顶替完工回传 dispatch）、mes_adapters.base（_get_nested/render_template 复用）。
+- 下游：SystemConfig KV、WorkOrderService（建单/改状态/summary）、project_match（统一规格匹配器）、projects.activate_project_core（切项目，与手动激活同一入口）、external_alarm（clear_alarms）、mes_gateway（顶替完工回传 dispatch）、mes_adapters.base（_get_nested/render_template 复用）、channel_manager（v3.37 自动拉检测 / v3.38 回填遍历活跃会话）、mes_hooks（v3.38 on_external_order_changed）。
 
 **关键状态变量**：无实例状态（配置每次从 DB 读）。配置字典本身即状态，键义见 DEFAULT_INBOUND_CONFIG 逐行注释。
 
 **注释里的坑（原样摘录）**：
 - L7（模块头）："完全配置驱动, 零客户特异分支 (川南 = 填一份字段映射 + 响应码; 下一家 = 填另一份)"。
 - L95-97（switch_project_on_task 默认关）："外部 HTTP 触发的自动切项目会重载模型/打断产线, 属敏感动作, 要的人显式开"。
-- L114-116（reject_duplicate_task）："默认关 (幂等复用)。与'最新开工为准/顶替'是相反取向, 二选一"。
-- L127-128（supersede_previous_task）："(川南: 无配对完工信号, 以最新开工为准, 必须开)"。
-- L138-139（receive_paths）："path 必须以 / 开头, 不允许 /api/ 前缀 (防劫持主程序 API)"。
-- L599（_finish_superseded）："先提交释放 SQLite 写锁, 再做网络回传 (与 mes_hooks cycle_end 同模式, 避免锁等待)"。
-- L480（_switch_project）："已经是激活项目 → 跳过重载, 避免无谓切模型打断正在跑的产线"。
+- L118-120（reject_duplicate_task）："默认关 (幂等复用)。与'最新开工为准/顶替'是相反取向, 二选一"。
+- L131-132（supersede_previous_task）："(川南: 无配对完工信号, 以最新开工为准, 必须开)"。
+- L142-143（receive_paths）："path 必须以 / 开头, 不允许 /api/ 前缀 (防劫持主程序 API)"。
+- L732（_finish_superseded）："先提交释放 SQLite 写锁, 再做网络回传 (与 mes_hooks cycle_end 同模式, 避免锁等待)"。
+- L606（_switch_project）："已经是激活项目 → 跳过重载, 避免无谓切模型打断正在跑的产线"。
+- L467-470（v3.37 拉检测前先 commit）："start_detection 内部会另开 DB 会话写检测记录, 与本请求未提交的工单写事务互斥, 不先 commit 会撞满 SQLite busy_timeout (15s), 上游中控超时短于它就会误判'连接失败' (2026-07-13 UAT 逼出的真锁)"。
+- L544-549（v3.39 暂停源复活）："点过'停止'后视频源暂停, 老逻辑在这里因'源未运行'直接放弃, 之后每次开工都拉不起来。而 start_detection 本就有'暂停续播/相机重连'的复活路径 (手动点'开始'走的就是它), 所以只要配置过视频源就放行交给它拉起"。
 
 ### 5. backend/services/mes_puller.py（570 行）
 
@@ -298,39 +358,42 @@
 - L776-778（计件）："一个 box_serial 完成一次算 1 件. 校正重推 (is_recovery=True) 不再 +1…超时未齐的 box 走 _push_timeout_result, 那条路径不计件"。
 - 另注意：`_check_and_dispatch` L655 的 `early_return = {}` 声明后在 L733 检查 `early_return.get("payload")`，但**全程无人写入** `early_return`——疑似历史重构残留死代码，记入疑点清单。
 
-### 7. backend/services/packaging_flow_coordinator.py（1271 行）
+### 7. backend/services/packaging_flow_coordinator.py（1424 行，v3.41 复核）
 
 **职责一句话**：包装箱结算协调器（v3.21+ 上银包装线）——扫码驱动的"工单→箱→托盘/滑块"三层结算状态机：扫工单标签拉 MES 得应做箱数，视觉周期数托盘（trays 口径）或一周期一箱（sliders 口径），封箱/漏箱/多箱/标签错/少装各有报警与处置策略；六个外部依赖全部走可注入钩子（拉单/报警/回推/箱目标/切项目/步骤探测），默认 None 只 print。
 
-**核心类·函数**（类 `PackagingFlowCoordinator` L94；单例 `get_coordinator()` L69 双检锁；测试重置 `reset_coordinator_for_testing()` L79）：
-- `compute_box_plan` L37：滑块总数+每箱数→(应做箱数, 尾箱目标)；非整除尾箱=余数，整除尾箱=每箱数；非法入参→(0,0) 走"箱数未知"兜底。
-- `_pkg_dbg` L59：debug_center 埋点（backend.packaging 类别，默认关零开销）。
-- `_TERMINAL_STATES` L91 = {completed, aborted, short}。
-- 六个依赖注入 setter：`set_mes_fetcher/set_alarm_sink/set_mes_pusher` L125-132 + v3.22 三钩子 `set_box_target_setter/set_project_activator/set_paper_order_probe` L134-141。
-- `reload_configs` L147：从 PackagingFlowConfig 表加载 enabled 行进内存（`_configs` + `_channel_to_config` 反向索引）。
-- `_row_to_dict` L165：**配置全字段快照**（含组⑥ 异常→项目事件映射 event_short_box 等 7 键 L198-204；组⑦ v3.22 sliders 口径 + auto_switch_project + spec_to_project + 尾箱塞工单 gate L205-216；v3.23 缺油嘴 gate L217-220）。
-- `_normalize` L227：条码归一化——insert_char（上银：扫码枪丢 '-'，按 hyphen_pos 补回固定位置，幂等 L233-237）/ strip_hyphen / digits_only / exact。
-- `_trays_per_box` L252 / `_tray_qty` L258（fixed 或 by_spec 查表）/ `_resolve_box_total` L264（field 直取 / formula=字段÷(每箱托盘×每托数量)）。
-- `_raise_alarm` L280 / `_pull_mes` L290（无 fetcher 视为拉单未接入走 on_mes_fail）/ `_push_mes` L299（push_on_complete 开关）。
-- `on_scan` L316：**扫码总入口**（锁内）——无配置零差异 return；`_resolve_config_for_scan` L419（scan_device_id 优先→channel→唯一配置兜底）；无 run→`_open_order`；sliders 口径分流 `_on_scan_sliders` L388；trays 口径：同号第 2 扫=开第 1 箱、以后同号扫=结箱+开新箱（满箱报 over_box）；不同号且未开箱→label_mismatch 判定（off/warn/block 三策略 L358-371）；不同号且做过箱→先结当前箱再判漏箱（short_box；redo=不切工单等补做 / 否则 abort），完整则 complete，最后开新工单。
-- `_on_scan_sliders` L388：sliders 口径扫码只管工单层——同号仅刷新落库；不同号未做完箱走 label_mismatch；已做过箱走漏箱/完成+换单。
-- `on_cycle_settled` L435：**周期结算入口**（锁内）——通道未参与零差异；`status=pending_remediation` 时忽略新周期 L446-449；sliders 分流；trays：is_good→current_box_trays+1，NG→报 tray_ng 不计入。
-- `on_forced_settle` L473：强制停止/待机/管理员强制结案——策略 settle（未满箱按 on_forced_stop_partial 判）/abort/keep；reason/operator 落库审计；`force_settle_manual` L511（强制走 settle 忽略配置）；`on_forced_settle_by_channel` L520（source 停止/待机触发，待机受 forced_settle_on_standby 控制）。
-- v3.23 补做族：`supplement_sliders` L541（挂起少装箱补滑块，clamp 到 [0,目标]，remediated 审计写进 box_details）/ `redo_pending` L581（丢弃本箱同箱号等重测）。
-- `_open_order` L603：label_len 校验→拉 MES（失败按 on_mes_fail block/offline）→sliders 分流 `_open_order_sliders` L635（可选按规格自动切项目→算 items_per_box→compute_box_plan→**立即开第 1 箱**不等第 2 次扫码 L665）。
-- `_resolve_items_per_box` L668 / `_read_active_project_item_target` L673（读激活项目 pipeline_config.custom_mix_container_item_target）。
-- `_current_box_target` L700（尾箱切余数）/ `_apply_box_target` L707（反向设回检测层容器累加器）。
-- `_open_box_sliders` L717 / `_probe_paper_order` L729（**无探测器→gate 退化为不阻断**）/ `_probe_oil_nozzle` L741（每箱重判不缓存；未配置放行，L745-746："每箱 gate 若误卡会卡死整条线"）。
-- `_on_cycle_settled_sliders` L758：没开箱自动开第 1 箱→缺油嘴 gate→尾箱塞工单 gate→合格判定（is_good 且滑块数==目标）→v3.23 少装挂起（仅"检测步骤齐+滑块少+项目开补数量策略"时 pending_remediation，L798-815）→`_finalize_box_sliders` L818（落账+推进下一箱或收尾工单）。
-- `_open_box` L848 / `_settle_current_box` L861（trays 结箱；force_partial 覆盖判定；防重复结算 L863）。
-- `_complete_order` L886（收尾前结算最后半箱；box_ng>0 或漏箱→final=NG；可选回推 MES；从 `_runs` 移除）/ `_abort_order` L908。
-- `_new_run_dict` L915：run 运行态全字段（含 v3.22 sliders 字段 + v3.23 pending_box + forced_reason/forced_by 审计）。
-- `_persist_run` L947：内存 run 同步到 PackagingFlowRun 行（断电恢复+历史；异常隔离不阻断状态机；终态写 completed_at）。
-- `abort_in_progress_on_startup` L1007：启动把 order_loaded/running 的历史 run 全标 aborted。
-- 查询：`get_config` L1029 / `get_state` L1034 / `resolve_config_id` L1039 / `list_loaded_config_ids` L1045；`cleanup_for_testing` L1053。
-- 模块级真实钩子（M3，`wire_real_hooks` L1263 启动注入）：`_real_mes_fetcher` L1071（借 puller.test_connection 拉单，取数组第一条原始字段，规格兜底归一到 'spec' 键；**在扫码线程持锁内含一次同步 HTTP**）、`_KIND_TO_EVENT_FIELD` L1118（9 种异常→配置事件字段映射）、`_real_alarm_sink` L1131（命中配置事件走 VSM `fire_external_event_response`，否则退回默认通用报警 event2 不静默）、`_real_mes_pusher` L1154（走网关 dispatch，事件默认 packaging_complete，模板可引用 {packaging.*}）、`_real_box_target_setter` L1179（设 `_custom_mix.set_container_item_target`）、`_real_project_activator` L1197（resolve_project_id_by_spec 统一匹配器+模型重载+配置同步）、`_real_paper_order_probe` L1244（调工位 `is_packaging_paper_order_covered`；拿不到工位→False gate 守住）。
+**核心类·函数**（类 `PackagingFlowCoordinator` L95；单例 `get_coordinator()` L70 双检锁；测试重置 `reset_coordinator_for_testing()` L80）：
+- `compute_box_plan` L38：滑块总数+每箱数→(应做箱数, 尾箱目标)；非整除尾箱=余数，整除尾箱=每箱数；非法入参→(0,0) 走"箱数未知"兜底。
+- `_pkg_dbg` L60：debug_center 埋点（backend.packaging 类别，默认关零开销）。
+- `_TERMINAL_STATES` L92 = {completed, aborted, short}。
+- 六个依赖注入 setter：`set_mes_fetcher/set_alarm_sink/set_mes_pusher` L126-133 + v3.22 三钩子 `set_box_target_setter/set_project_activator/set_paper_order_probe` L135-142。
+- `reload_configs` L148：从 PackagingFlowConfig 表加载 enabled 行进内存（`_configs` + `_channel_to_config` 反向索引）。
+- `_row_to_dict` L167：**配置全字段快照**（含 v3.35 复合条码取段 5 键 + 工单号识别规则 L187-195；组⑥ 异常→项目事件映射 event_short_box 等 7 键 L206-213；组⑦ v3.22 sliders 口径 + auto_switch_project + spec_to_project + 尾箱塞工单 gate + **v3.35 tail_paper_as_close_action** L214-227；v3.23 缺油嘴 gate L228-231）。
+- `_order_code_ok` L239（**v3.35 变更**，代码内注记 v3.30.1，工单号识别规则）：仅在"无在途工单、准备开第一单"时校验——归一化后的码须从头匹配配置正则才放行，挡掉开机后第一枪误扫的数量/物料条码（如 '80.00' 开出垃圾工单）；规则为空=不过滤（存量零差异），正则写错=视为不过滤并留调试痕迹不吞码。拒绝时报 order_code_reject 报警（on_scan L397-403）。
+- `_extract_composite` L255（**v3.35 变更**，代码内注记 v3.30.1，复合条码取段）：正式产线箱标签常是多段拼接码（如 订单|工单|数量|校验串），整串比对必不符——启用后按分隔符拆段，prefix 模式取指定前缀段（多段命中取最长=最具体）/ index 模式取第 N 段，再交 `_normalize` 走原有归一化；无分隔符的码（工单纸直扫）原样返回→**两种码可混扫**；取段失败原样返回不吞码。默认关零差异。
+- `_normalize` L290：条码归一化——**复合码先取段再归一**（v3.35）→insert_char（上银：扫码枪丢 '-'，按 hyphen_pos 补回固定位置，幂等 L296-300）/ strip_hyphen / digits_only / exact。
+- `_trays_per_box` L316 / `_tray_qty` L322（fixed 或 by_spec 查表）/ `_resolve_box_total` L327（field 直取 / formula=字段÷(每箱托盘×每托数量)）。
+- `_raise_alarm` L343 / `_pull_mes` L353（无 fetcher 视为拉单未接入走 on_mes_fail）/ `_push_mes` L362（push_on_complete 开关）。
+- `on_scan` L379：**扫码总入口**（锁内）——无配置零差异 return；`_resolve_config_for_scan` L506（scan_device_id 优先→channel→唯一配置兜底）；无 run→工单号识别规则守门（v3.35）→`_open_order`；sliders 口径分流 `_on_scan_sliders` L458；trays 口径：同号第 2 扫=开第 1 箱、以后同号扫=结箱+开新箱（满箱报 over_box）；不同号且未开箱→label_mismatch 判定（off/warn/block 三策略 L427-440）；不同号且做过箱→先结当前箱再判漏箱（short_box；redo=不切工单等补做 / 否则 abort），完整则 complete，最后开新工单。
+- `_on_scan_sliders` L458：sliders 口径扫码只管工单层——同号仅刷新落库；不同号未做完箱走 label_mismatch；已做过箱走漏箱/完成+换单。**v3.35 变更（尾箱挂起等放工单时的扫码出口，L461-475）**：探到放工单→快照原成绩收尾；扫新单且仍没放→尾箱判 NG 收尾再开新单；同号重扫且仍没放→提醒继续等。
+- `on_cycle_settled` L522：**周期结算入口**（锁内）——通道未参与零差异；`status=pending_remediation` 时忽略新周期 L533-536；sliders 分流；trays：is_good→current_box_trays+1，NG→报 tray_ng 不计入。
+- `on_forced_settle` L560：强制停止/待机/管理员强制结案——策略 settle（未满箱按 on_forced_stop_partial 判）/abort/keep；reason/operator 落库审计；**v3.35 变更**：settle 分支若有尾箱挂起快照=管理员豁免塞工单 gate，按快照原成绩落账收尾（L591-595）；`force_settle_manual` L603（强制走 settle 忽略配置）；`on_forced_settle_by_channel` L612（source 停止/待机触发，待机受 forced_settle_on_standby 控制）。
+- v3.23 补做族：`supplement_sliders` L633（挂起少装箱补滑块，clamp 到 [0,目标]，remediated 审计写进 box_details）/ `redo_pending` L673（丢弃本箱同箱号等重测）。
+- `_open_order` L695：label_len 校验→拉 MES（失败按 on_mes_fail block/offline）→sliders 分流 `_open_order_sliders` L727（可选按规格自动切项目→算 items_per_box→compute_box_plan→**立即开第 1 箱**不等第 2 次扫码 L757）。
+- `_resolve_items_per_box` L760 / `_read_active_project_item_target` L766（读激活项目 pipeline_config.custom_mix_container_item_target）。
+- `_current_box_target` L792（尾箱切余数）/ `_apply_box_target` L799（反向设回检测层容器累加器）。
+- `_open_box_sliders` L809 / `_probe_paper_order` L821（**无探测器→gate 退化为不阻断**）/ `_probe_oil_nozzle` L833（每箱重判不缓存；未配置放行，L837-838："每箱 gate 若误卡会卡死整条线"）。
+- `_close_pending_paper` L850（**v3.35 变更**，代码内注记 v3.34.1，"放工单=尾箱收尾动作"闭环核心）：消化尾箱「等放工单」挂起快照——ok_paper=True（放工单到位/管理员强制豁免）按快照原成绩收尾（滑块数/合格性用被 gate 拦下那次的）；ok_paper=False（没放就扫新工单/弃单）尾箱判 NG 收尾并写 remediated 审计；收尾即工单完成（尾箱是最后一箱），在途移除。仅 tail_paper_as_close_action 子开关开时进此路径（默认关=老行为"只报警等着"）。
+- `_on_cycle_settled_sliders` L879：**v3.35 变更**：尾箱已挂起等放工单时后续周期只用来探测放工单动作、不当新箱结算（L883-891）→没开箱自动开第 1 箱→缺油嘴 gate→尾箱塞工单 gate（**v3.35 分两种等放模式**：子开关关=老行为下周期重走 gate；开=挂起本箱成绩快照 pending_paper_box 等收尾，L917-937）→合格判定（is_good 且滑块数==目标）→v3.23 少装挂起（仅"检测步骤齐+滑块少+项目开补数量策略"时 pending_remediation）→`_finalize_box_sliders` L961（落账+推进下一箱或收尾工单）。
+- `_open_box` L991 / `_settle_current_box` L1004（trays 结箱；force_partial 覆盖判定；防重复结算 L1006）。
+- `_complete_order` L1029（收尾前结算最后半箱；box_ng>0 或漏箱→final=NG；可选回推 MES；从 `_runs` 移除）/ `_abort_order` L1051。
+- `_new_run_dict` L1058：run 运行态全字段（含 v3.22 sliders 字段 + v3.23 pending_box + forced_reason/forced_by 审计 + **v3.35 pending_paper_box** 尾箱等放工单挂起快照）。
+- `_persist_run` L1093：内存 run 同步到 PackagingFlowRun 行（断电恢复+历史；异常隔离不阻断状态机；终态写 completed_at）。
+- `abort_in_progress_on_startup` L1153：启动把 order_loaded/running 的历史 run 全标 aborted。
+- 查询：`get_config` L1175 / `get_state` L1180 / `resolve_config_id` L1185 / `list_loaded_config_ids` L1191；`cleanup_for_testing` L1199。
+- 模块级真实钩子（M3，`wire_real_hooks` L1416 启动注入）：`_real_mes_fetcher` L1217（借 puller.test_connection 拉单，取数组第一条原始字段，规格兜底归一到 'spec' 键；**在扫码线程持锁内含一次同步 HTTP**）、`_KIND_TO_EVENT_FIELD` L1264（异常→配置事件字段映射）、`_real_alarm_sink` L1277（命中配置事件走 VSM `fire_external_event_response`，否则退回默认通用报警 event2 不静默）、`_real_mes_pusher` L1300（走网关 dispatch，事件默认 packaging_complete，模板可引用 {packaging.*}）、`_real_box_target_setter` L1325（设 `_custom_mix.set_container_item_target`）、`_real_project_activator` L1343（resolve_project_id_by_spec 统一匹配器+模型重载+配置同步）、`_real_paper_order_probe` L1390（调工位 `is_packaging_paper_order_covered`；拿不到工位→False gate 守住；**v3.35 变更**：该探测优先读"上一个已结算周期"的步骤缓存会遮蔽当前未结算周期，而尾箱挂起期间补放动作恰恰落在当前周期——命不中时补查实时步骤集 current_cycle_steps L1403-1408）。
 
-**线程·锁·队列**：**不开后台线程**（模块头 L15："全部事件驱动"）；单把 `RLock`（`on_forced_settle_by_channel` 内再调 `on_forced_settle` 依赖可重入 L535）；单例双检锁。
+**线程·锁·队列**：**不开后台线程**（模块头 L15："全部事件驱动"）；单把 `RLock`（`on_forced_settle_by_channel` 内再调 `on_forced_settle` 依赖可重入 L627）；单例双检锁。
 
 **上下游**：
 - 上游：mes_hooks/扫码链（on_scan）、source 结算链（on_cycle_settled / on_forced_settle_by_channel）、API 层 packaging_flows.py（配置 CRUD/状态查询/手动扫码/强制结案/补做）、main.py 启动（reload_configs + wire_real_hooks + abort_in_progress_on_startup）。
@@ -343,15 +406,19 @@
 | `_channel_to_config` | channel_id → config_id 反向索引 |
 | `_runs` | config_id → 进行中运行态（一个配置同时只追一张工单）；run 内 status ∈ order_loaded/running/pending_remediation/completed/aborted |
 | run["pending_box"] | v3.23 少装挂起箱快照（box/sliders/target/is_tail/cycle/reason） |
+| run["pending_paper_box"] | v3.35 尾箱「等放工单」挂起快照（box/sliders/target/cycle/is_good；None=无挂起）——gate 拦下时保存被拦那次的滑块数/合格性，放工单到位按原成绩收尾，没放就扫新单判 NG 收尾 |
 
 **注释里的坑（原样摘录）**：
 - L23-26（零差异底线）："没有任何 packaging_flow_configs 启用时, on_scan / on_cycle_settled 入口直接 return, 与不配置时字节级一致"。
-- L233-237（insert_char）："上银: 标签是 JOB150700114-1, 但扫码枪丢了 '-' 扫成 JOB1507001141…先去掉已有同种符号再插, 保证扫到带符号的码也归一到同一结果(幂等)"。
-- L372-373（漏箱判定时序）："先把当前正在进行的箱封箱结算 (扫'下一个标签'=上一箱封箱时刻), 再判漏箱 — 否则最后一箱 (靠扫新工单收尾) 会被误判为漏箱"。
-- L1078-1079（_real_mes_fetcher）："此函数在扫码线程持锁内被调, 内含一次同步 HTTP. 包装节拍是秒级 (人工扫码), 短暂阻塞可接受; 若未来节拍变快需把 HTTP 移到锁外"。
-- L745-746（缺油嘴 gate）："每箱 gate 若误卡会卡死整条线, 故未配置时退化为放行"——对比塞工单 gate 的 `_real_paper_order_probe` 拿不到工位返回 False（gate 守住），两个 gate 的失败取向相反，是有意设计。
-- L446-449（pending_remediation）："已挂起等补做时, 检测层又来一个周期 → 忽略, 由人工补做/重做接口推进, 避免阻塞态被新周期覆盖"。
-- 注意：`_TERMINAL_STATES` L91 包含 "short" 状态，但全文件没有任何代码把 status 置为 "short"（`_persist_run` L992 引用该集合判终态）——疑似规划未用，记入疑点清单。
+- L296-300（insert_char）："上银: 标签是 JOB150700114-1, 但扫码枪丢了 '-' 扫成 JOB1507001141…先去掉已有同种符号再插, 保证扫到带符号的码也归一到同一结果(幂等)"。
+- L442-443（漏箱判定时序）："先把当前正在进行的箱封箱结算 (扫'下一个标签'=上一箱封箱时刻), 再判漏箱 — 否则最后一箱 (靠扫新工单收尾) 会被误判为漏箱"。
+- L1224-1225（_real_mes_fetcher）："此函数在扫码线程持锁内被调, 内含一次同步 HTTP. 包装节拍是秒级 (人工扫码), 短暂阻塞可接受; 若未来节拍变快需把 HTTP 移到锁外"。
+- L837-838（缺油嘴 gate）："每箱 gate 若误卡会卡死整条线, 故未配置时退化为放行"——对比塞工单 gate 的 `_real_paper_order_probe` 拿不到工位返回 False（gate 守住），两个 gate 的失败取向相反，是有意设计。
+- L533-536（pending_remediation）："已挂起等补做时, 检测层又来一个周期 → 忽略, 由人工补做/重做接口推进, 避免阻塞态被新周期覆盖"。
+- L257-260（v3.35 复合条码取段）："正式产线箱标签常是多段拼接码 (如 ORD260300050-2|JOB260600268-13|54.00|<校验串>), 整串比对必不符…无分隔符的码 (工单纸直扫) 原样返回 → 两种码可混扫; 取段失败也原样返回不吞码"。
+- L883-885（v3.35 尾箱挂起后的周期语义）："尾箱已挂起等放工单: 后续周期只用来探测放工单动作, 不当新箱结算 (尾箱之后本单没有下一箱, 该周期里只该有放工单/封箱这类收尾动作)"。
+- L1403-1405（v3.35 探测遮蔽）："上面的探测优先读'上一个已结算周期'的步骤缓存, 会遮蔽当前还没结算的周期 — 尾箱挂起等放工单期间, 补放动作恰恰落在当前周期里, 这里补查实时步骤集"。
+- 注意：`_TERMINAL_STATES` L92 包含 "short" 状态，但全文件没有任何代码把 status 置为 "short"（`_persist_run` L1138 引用该集合判终态）——疑似规划未用，记入疑点清单。
 
 ### 8. backend/services/workpiece_flow_coordinator.py（1085 行）
 
@@ -501,7 +568,7 @@
 - 单例 `get_external_device_service` L409（**无锁裸单例**，与其它服务的双检锁不同）。
 - 疑点：`self._lock = threading.Lock()` L48 全族 grep 无任何使用——死变量；`_connections`/`_barcode_buffer` 实际无锁并发读写。
 
-#### 10.3 external_device_protocols.py（801 行）
+#### 10.3 external_device_protocols.py（803 行，v3.41 复核）
 **职责**：协议接入循环 mixin——8 种协议每设备一线程，收到原始数据统一走 `_on_raw_data`。
 - `_device_loop` L30：按 protocol 分发（tcp/modbus_tcp/serial/serial_modbus_ascii/serial_continuous/serial_command/http_poll/mock_weight）；异常→断线→指数退避重连（2s 起、封顶 30s）L63-66。
 - `_tcp_loop` L68：TCP 文本流+分隔符拆行（delimiter 经 unicode_escape 还原 L83-84）。
@@ -511,9 +578,9 @@
 - Modbus ASCII 工具：`_modbus_ascii_lrc` L247 / `_build_modbus_ascii_read` L252（**L255-256 地址约定**："说明书地址 4xxxx → 实际寄存器地址 = 4xxxx-40001"；**L262-263 坑**："v2.7.17: 之前误用宿主 service 类名(本模块没 import 它), 触发 NameError"）/ `_parse_modbus_ascii_response` L269（容错多帧粘包：按":"拆片段取第一个 LRC 通过的）。
 - `_serial_modbus_ascii_loop` L320：主从轮询模式；**L340-344 大坑注释**："v2.7.17: 把 open+主循环包成'外层重连循环'. 之前 open 在 while 外, 内层 except 只 log 不重连, 导致 USB 拔插后句柄失效就 EIO 死刷, 重新拔插也救不回来(新设备号变 ttyUSB1 了)"；EIO/ENODEV/ENXIO/EBADF/EACCES 判定致命→关串口→5s backoff 重连 L433-443；字节序四档（H4H3L2L1/L2L1H4H3/H3H4L1L2）+ 有符号补码 L411-424。
 - `_serial_continuous_loop` L473：设备主动推送模式；data_format=modbus_ascii 时帧内解析、否则按分隔符拆 L516-542。
-- `_mock_weight_loop` L579：**模拟称重协议**（v3.31）——按 mock_script 时间轴（空盘→皮重→爬升→到量稳定）生成读数，复用 `_on_raw_data`，"下游解析与真秤完全一致"；响应 `_command_queue` 的 T/Z 指令模拟去皮（L614-628 emit 闭包）；播完可 loop 且复位去皮基准 L646。
-- `_serial_command_loop` L648：**指令应答模式**（安衡台秤等）——每轮先发队列里的控制指令（T/Z，应答丢弃不当重量 L716-721），再发查询指令 R 读一帧；重连结构沿用 modbus_ascii loop。
-- `_http_poll_loop` L768：HTTP GET/POST 轮询。
+- `_mock_weight_loop` L579：**模拟称重协议**（v3.31）——按 mock_script 时间轴（空盘→皮重→爬升→到量稳定）生成读数，复用 `_on_raw_data`，"下游解析与真秤完全一致"；响应 `_command_queue` 的 T/Z 指令模拟去皮（L614-628 emit 闭包）；播完可 loop 且复位去皮基准 L648。**v3.41 变更（段播放按墙钟计时，L639-644）**：之前按"睡眠次数×间隔"累计段时长、不含 emit 处理耗时，长脚本越播越慢（注释实测 4 分钟漂约 20s），与外部时间轴（如视频源）同步的仿真场景整体错位——改为 `time.time()` 墙钟判段结束；"真秤无此问题, 仅模拟协议受影响"。
+- `_serial_command_loop` L650：**指令应答模式**（安衡台秤等）——每轮先发队列里的控制指令（T/Z，应答丢弃不当重量 L718-723），再发查询指令 R 读一帧；重连结构沿用 modbus_ascii loop。
+- `_http_poll_loop` L770：HTTP GET/POST 轮询。
 
 #### 10.4 external_device_pipeline.py（517 行）
 **职责**：原始数据 pipeline mixin——解析/稳定判定/校验/派发/日志。
@@ -533,13 +600,14 @@
 - `_test_tcp` L18 / `_test_modbus` L28 / `_test_serial` L45 / `_test_serial_modbus` L56（serial_continuous 分支：开口静听 2 秒 L67-76）/ `_test_serial_command` L104（发一次查询指令看是否回帧）/ `_test_http` L143。
 - 特点：串口类"打开成功但无响应"也返回 success=True 带提示语（L75-76、L98-99、L133-135）——**success 语义是"链路可用"而非"设备确认在线"**。
 
-#### 10.6 external_alarm.py（229 行）〔外设族邻接：在途报警台账〕
-**职责**：外部生产管控系统报警闭环的通用台账——出站推送时登记（record_active_alarm）、外部回推消除命令按唯一键匹配消除（clear_alarms）、监控页轮询未消除报警（list_active_alarms）；"唯一区分键参照客户约定 = task_no+product_code+step_code+operator，匹配字段与去重窗口由调用方(入站配置)传入, 本模块不含任何客户分支"（L9-10）。
+#### 10.6 external_alarm.py（252 行，v3.41 复核）〔外设族邻接：在途报警台账〕
+**职责**：外部生产管控系统报警闭环的通用台账——出站推送时登记（record_active_alarm）、外部回推消除命令按唯一键匹配消除（clear_alarms）、软件内一键消除（clear_all_active_alarms，v3.39）、监控页轮询未消除报警（list_active_alarms）；"唯一区分键参照客户约定 = task_no+product_code+step_code+operator，匹配字段与去重窗口由调用方(入站配置)传入, 本模块不含任何客户分支"（L9-10）。
 - 5 原生列 + extra_data.ext 命名空间扩展维度（键名正则防注入 L33）；`_match_col` L52：原生列走列等值、扩展维度走 json_extract。
 - `record_active_alarm` L74：dedup_sec 窗口去重，"与消除 clear_alarms 用同一套 match_fields, 避免去重口径与消除口径不一致"（L81-82）；**L105 坑注释**："显式落本地时间: 去重窗口与 datetime.now() 同口径, 不被 SQLite func.now()(UTC) 错开"。
 - `clear_alarms` L117：只对有值字段加条件；**"一个匹配字段都没有 → 视为无效消除 (避免空条件误清全表)"** L135-137。
-- `find_recent_active_alarm` L179：供出站网关推送前做"同任务同标签 N 秒去重"（川南 v4 第 4 条）。
-- 上下游：mes_gateway（登记+推送前去重）、mes_inbound（消除命令）、监控页横幅 API。
+- `clear_all_active_alarms` L152（**v3.39 变更**，川南反馈"上游不回推消除命令时报警一直挂着，软件内没有任何出口"）：软件内手动消除全部在途报警的运维出口——与 clear_alarms 的按键匹配语义**刻意分开**，不做字段匹配（L155-156 注释："这是'人在界面上一键清空'的运维出口"）；channel_id 给定只清该工位；clear_source 落 "manual_ui" 等来源标记留审计。上游两个入口：入站 API `POST /mes/inbound/active-alarms/clear-manual`（守门 alarm_banner.allow_manual_clear，默认关）与监控页"清零"顺带消除（clear_on_counter_reset，默认关）。
+- `find_recent_active_alarm` L202：供出站网关推送前做"同任务同标签 N 秒去重"（川南 v4 第 4 条）。
+- 上下游：mes_gateway（登记+推送前去重）、mes_inbound（消除命令 + v3.39 手动消除端点）、监控页横幅 API。
 
 **线程·锁（族汇总）**：每设备 1 条 daemon 线程 `extdev-{id}`；指令下发经 `_command_queue`（deque，单消费者=设备线程）避免并发写串口；`ExternalDeviceService._lock` 声明但从未使用（疑点）；DB 写入以 locked 退避重试代偿。
 
@@ -559,25 +627,27 @@
 - 缺陷：GET/POST `/defects`、GET `/defects/pareto` L597、DELETE `/defects/{id}` L608；缺陷代码字典 CRUD `/defect-codes` L628-691。
 - 特点：每端点自管 SessionLocal + try/finally close；v3.1.0 工单绑定范围三字段（binding_scope=project/channels/cluster + target_channels/target_stations）贯穿 Create/Update/serialize L46-48。
 
-#### 11.2 api/mes_gateway.py（553 行）— 前缀 `/mes/gateway`
-**职责**：出站 MES 连接 CRUD + 测试 + 手动推送 + 健康探测 + 拉取入口 + extra_fields + 通讯日志。
+#### 11.2 api/mes_gateway.py（577 行，v3.41 复核）— 前缀 `/mes/gateway`
+**职责**：出站 MES 连接 CRUD + 测试 + 手动推送 + 健康探测 + 拉取入口 + extra_fields + 通讯日志 + 熔断器状态面（v3.38）。
 - **B1② 并发派发开关**：GET/PUT `/async-dispatch` L82/L88——"开 → cycle_end 外推甩到'每工位一条'的执行器, 慢/挂的客户 MES 不再堵住整个 hook 队列; 关(默认) → 原内联派发"（L79-81，存 SystemConfig 即时生效）。
-- 连接 CRUD：`/connections` L129-232 + GET `/connections/by-channel` L168（bound_channels 反查）。
-- POST `/connections/{id}/test` L311：**三种事件的逼真测试上下文**（`_build_test_context_cycle_end/box_complete/box_timeout` L239-308，box 结构"完全模拟 cluster_collector._check_and_dispatch 产出"）；docstring 坑 L314-320："走和实时推送完全一致的预处理管道: label_mapping → _apply_auth_to_headers, 确保测试通过 == 真实推送一定通过。push_on_result 在测试里**故意不应用**: 测试就是为了看请求能否发到对端"。
-- POST `/connections/{id}/push` L389：手动重推指定 cycle/session。
-- A2 健康探测：GET `/health-status` L418（不鉴权轮询）+ POST `/connections/{id}/probe-now` L425。
-- v3.20 拉取：POST `/pull-test` L437（未保存的编辑中配置也能测）+ POST `/connections/{id}/pull` L448（dry_run+max_items=1="试同步 1 条看看"）。
-- extra_fields：POST/GET `/extra-fields` L482/L491（Monitor 页实时输入）+ GET `/extra-fields-schema` L497（聚合所有启用连接的 schema 并按 key 去重）。
-- GET `/logs` L528：MESCommLog 分页查询。
+- 连接 CRUD：`/connections` L140-252 + GET `/connections/by-channel` L179（bound_channels 反查）。
+- **v3.38 变更（熔断器状态面）**：`_serialize_conn` 附带 `circuit` 快照（L111，`_circuit_state_safe` L115 兜底 `{open:False}`，前端连接列表可提示"端点疑似离线"）；两处**复位口**——PUT `/connections/{id}` 保存后 `reset_circuit`（L219-224，"改过配置(可能换了地址/修了鉴权) → 立即按新配置重试"）、POST `/connections/{id}/test` 成功后 `reset_circuit`（L384-390，"测试成功 = 端点已恢复"）。
+- POST `/connections/{id}/test` L329：**三种事件的逼真测试上下文**（`_build_test_context_cycle_end/box_complete/box_timeout` L255-327，box 结构"完全模拟 cluster_collector._check_and_dispatch 产出"）；docstring 坑 L330-337："走和实时推送完全一致的预处理管道: label_mapping → _apply_auth_to_headers, 确保测试通过 == 真实推送一定通过。push_on_result 在测试里**故意不应用**: 测试就是为了看请求能否发到对端"。
+- POST `/connections/{id}/push` L415：手动重推指定 cycle/session。
+- A2 健康探测：GET `/health-status` L442（不鉴权轮询）+ POST `/connections/{id}/probe-now` L451。
+- v3.20 拉取：POST `/pull-test` L463（未保存的编辑中配置也能测）+ POST `/connections/{id}/pull` L472（dry_run+max_items=1="试同步 1 条看看"）。
+- extra_fields：POST/GET `/extra-fields` L508/L516（Monitor 页实时输入）+ GET `/extra-fields-schema` L521（聚合所有启用连接的 schema 并按 key 去重）。
+- GET `/logs` L552：MESCommLog 分页查询。
 
-#### 11.3 api/mes_inbound.py（386 行）— 前缀 `/mes/inbound`
-**职责**：入站接收端点（无鉴权 M2M）+ 配置管理 + 动态路径别名注册 + 在途报警查询。
-- 接收：POST/GET `/task` L47/L52（"少数系统用 GET+URL 参数推任务" L54）、POST/GET `/alarm/clear` L58/L64；统一走 `_handle_inbound` L76（来源校验→body 限长 413 L90-93→解析→handler→按 code_key 映射 HTTP 状态→按 response.format 组 JSON/XML→落 MESCommLog）。
-- **`register_inbound_aliases` L148**：按配置 receive_paths 在**根路径**动态注册别名路由（客户可自定义接收 URL）；"先移除旧别名再重建(支持增删改)"；护栏：path 必须以 / 开头、**禁 /api/ 前缀**、与已有路由冲突跳过 L179-187；PUT `/config` 保存后即时重建 L334-338，无需重启。
-- `_parse_inbound_body` L206：json/form/query/xml + auto 兜底链（json→form→query）；merge_query_params 默认并入 URL 参数（body 同名优先）L259-263。
-- `_xml_to_dict` L269：stdlib 极简 XML→dict，剥命名空间、同名子标签聚 list（SOAP 按信封路径映射）。
-- GET/POST `/health` L342（川南协议探活，格式沿用入站配置）；GET `/active-alarms` L357（监控页横幅轮询，不鉴权）；GET `/logs` L365（direction='inbound'）。
-- 细节：`_log_inbound` L299 的 url 字段按 event_type 写死两个路径、method 恒写 "POST"（即使实际是 GET/别名路径）——日志口径与真实请求可能不符。
+#### 11.3 api/mes_inbound.py（414 行，v3.41 复核）— 前缀 `/mes/inbound`
+**职责**：入站接收端点（无鉴权 M2M）+ 配置管理 + 动态路径别名注册 + 在途报警查询/手动消除（v3.39）。
+- 接收：POST/GET `/task` L48/L53（"少数系统用 GET+URL 参数推任务" L55）、POST/GET `/alarm/clear` L59/L65；统一走 `_handle_inbound` L77（来源校验→body 限长 413 L93-94→解析→handler→按 code_key 映射 HTTP 状态→按 response.format 组 JSON/XML→落 MESCommLog）。
+- **`register_inbound_aliases` L149**：按配置 receive_paths 在**根路径**动态注册别名路由（客户可自定义接收 URL）；"先移除旧别名再重建(支持增删改)"；护栏：path 必须以 / 开头、**禁 /api/ 前缀**、与已有路由冲突跳过 L180-188；PUT `/config` 保存后即时重建 L332-339，无需重启。
+- `_parse_inbound_body` L207：json/form/query/xml + auto 兜底链（json→form→query）；merge_query_params 默认并入 URL 参数（body 同名优先）L260-264。
+- `_xml_to_dict` L270：stdlib 极简 XML→dict，剥命名空间、同名子标签聚 list（SOAP 按信封路径映射）。
+- GET/POST `/health` L343（川南协议探活，格式沿用入站配置）；GET `/active-alarms` L358（监控页横幅轮询，不鉴权）；GET `/logs` L393（direction='inbound'）。
+- **POST `/active-alarms/clear-manual` L372（v3.39 变更）**：软件内手动消除全部在途报警（川南反馈：上游不回推消除命令时报警一直挂着）——双守门：入站配置 `alarm_banner.allow_manual_clear` 未开直接 403（默认关，"保持'只能由外部系统回推消除'的对接契约"）+ 权限 `monitor.detection.advanced`（"对齐监控页'清零', 操作员级别不可误触"）；转 `clear_all_active_alarms(clear_source="manual_ui")` 留审计。
+- 细节：`_log_inbound` L300 的 url 字段按 event_type 写死两个路径、method 恒写 "POST"（即使实际是 GET/别名路径）——日志口径与真实请求可能不符。
 
 #### 11.4 api/scanner.py（546 行）— 前缀 `/scanner`
 **职责**：扫码器 CRUD + 发现 + 测试/触发/模拟 + 扫码日志 + scan_pair 收尾 + 按工位禁用开关。
@@ -635,14 +705,14 @@
 - **PUT L363 前置检查 in-flight**："流水线有 in-flight 工件, 请等所有工件走完再修改"（409，L378-382）——与服务层 reload_flows "不动 in-flight run" 的假设配套。
 - DELETE 仅 enabled=False（409）L439-443；GET `/{id}/state` L451（in-flight 快照）；GET `/{id}/runs` L471（分页历史）+ GET `/runs/{run_id}` L499。
 
-#### 11.10 api/packaging_flows.py（538 行）— 前缀 `/packaging-flows`（v3.21+ 上银包装线）
-**职责**：包装结算配置 CRUD（7 组 40+ 字段）+ 状态快照 + **扫码 HTTP 入口** + 强制结案/补滑块/重做三个现场操作端点。
-- Schema L44-98 即配置面全景：组①工单箱数来源 / 组②数量规格（fixed/by_spec 对照表）/ 组③标签校验（exact/strip_hyphen/digits_only/insert_char）/ 组④异常策略（on_mes_fail=block|offline、on_short_box=redo|void 等）/ 组⑤收尾回推 / 组⑥异常→项目事件映射 / 组⑦滑块口径+尾箱+自动切项目+塞工单 gate（v3.22）+ 缺油嘴 gate（v3.23）。枚举校验表 `_ENUMS` L165-177。
-- `_check_channel_exclusivity` L197：一工位只能属一个启用配置。
-- CRUD L278-377：与前两者同构（名字唯一、DELETE 仅 disabled、reload_configs 即时生效）；`_validate` L180 只校验出现的字段（支持部分更新）。
-- **POST `/scan` L401**：USB 扫码枪的 HTTP 扫码入口——"前端捕获原始码后 POST 进来驱动状态机。没有任何启用配置时返回 handled=False, 前端据此回退到默认的'扫码拉单/绑件'行为 — 与不配置时零差异"（L404-408）；注意先 `on_scan` 再 `resolve_config_id`，无匹配配置也已喂过 on_scan。
-- **POST `/{id}/force-settle` L441**：强制结案——必填理由+审计留痕（forced_by/forced_reason 落 run），**独立权限位 `system.packaging_flow.force_settle`**（"admin/engineer; 操作员无 → 403"）；"强制走 settle 收尾(忽略配置 keep/abort), 未满箱按 on_forced_stop_partial 判合格性"（L448-450）。
-- POST `/{id}/supplement-sliders` L492（少装箱补数量直接落账，不重置周期）+ POST `/{id}/remediation-redo` L524（丢弃本箱等下周期重结算）——两者权限用 `monitor.detection.ack`（操作员可点）。
+#### 11.10 api/packaging_flows.py（562 行，v3.41 复核）— 前缀 `/packaging-flows`（v3.21+ 上银包装线）
+**职责**：包装结算配置 CRUD（7 组 45+ 字段）+ 状态快照 + **扫码 HTTP 入口** + 强制结案/补滑块/重做三个现场操作端点。
+- Schema L44-112 即配置面全景：组①工单箱数来源 / 组②数量规格（fixed/by_spec 对照表）/ 组③标签校验（exact/strip_hyphen/digits_only/insert_char；**v3.35 变更**：新增复合条码取段 5 字段 `composite_label_enabled/delimiter/pick_mode/prefix/index` + 工单号识别规则 `order_code_pattern`，均默认关=存量零差异）/ 组④异常策略（on_mes_fail=block|offline、on_short_box=redo|void 等）/ 组⑤收尾回推 / 组⑥异常→项目事件映射 / 组⑦滑块口径+尾箱+自动切项目+塞工单 gate（v3.22）+ 缺油嘴 gate（v3.23）+ **v3.35 `tail_paper_as_close_action`（放工单=尾箱收尾动作，挂起快照闭环，默认关=老行为）**。枚举校验表 `_ENUMS` L182-194。
+- `_check_channel_exclusivity` L214：一工位只能属一个启用配置。
+- CRUD L304-423：与前两者同构（名字唯一、DELETE 仅 disabled、reload_configs 即时生效）；`_validate` L197 只校验出现的字段（支持部分更新）。
+- **POST `/scan` L425**：USB 扫码枪的 HTTP 扫码入口——"前端捕获原始码后 POST 进来驱动状态机。没有任何启用配置时返回 handled=False, 前端据此回退到默认的'扫码拉单/绑件'行为 — 与不配置时零差异"（L429-433）；注意先 `on_scan` 再 `resolve_config_id`，无匹配配置也已喂过 on_scan。
+- **POST `/{id}/force-settle` L465**：强制结案——必填理由+审计留痕（forced_by/forced_reason 落 run），**独立权限位 `system.packaging_flow.force_settle`**（"admin/engineer; 操作员无 → 403"）；"强制走 settle 收尾(忽略配置 keep/abort), 未满箱按 on_forced_stop_partial 判合格性"（L472-474）。
+- POST `/{id}/supplement-sliders` L516（少装箱补数量直接落账，不重置周期）+ POST `/{id}/remediation-redo` L548（丢弃本箱等下周期重结算）——两者权限用 `monitor.detection.ack`（操作员可点）。
 
 ## 二、MES 域综合
 
@@ -671,17 +741,17 @@ scanner.py（解析/去重/scan_mode 门控/配对派发）
                 ├─→ cluster_collector（standalone/master 本地聚齐; slave HTTP 上报）
                 │      └─ box 聚齐/超时 → gateway.dispatch("box_complete"/"box_timeout")
                 └─→ mes_gateway.dispatch("cycle_end")（B1② 开关决定内联或每工位线程）
-                       └─ mes_adapters 5 种协议 → 外部 MES（MESCommLog 留痕）
+                       └─ mes_adapters 6 种协议（v3.35 起含 database 直写）→ 外部 MES（MESCommLog 留痕）
 ```
 
-结算权的归属是互斥切分的：channel_groups（并行联动）/ workpiece_flows（串行流水线）/ packaging_flows（包装箱）三者在 API 层做跨表工位唯一性校验（`workpiece_flows.py::_check_station_exclusivity` L169 同时查 flow 间与 group 间互斥；`packaging_flows.py::_check_channel_exclusivity` L197 查自身），保证一个 channel 的 cycle_end 只被一个协调器消费或走默认独立结算。
+结算权的归属是互斥切分的：channel_groups（并行联动）/ workpiece_flows（串行流水线）/ packaging_flows（包装箱）三者在 API 层做跨表工位唯一性校验（`workpiece_flows.py::_check_station_exclusivity` L169 同时查 flow 间与 group 间互斥；`packaging_flows.py::_check_channel_exclusivity` L214 查自身），保证一个 channel 的 cycle_end 只被一个协调器消费或走默认独立结算。
 
 ### 2.2 集群三角色数据流
 
 - **standalone**：`_cluster_dispatch` 判定本机即聚合点，cycle_end 直接 `receive_station_report` 本地落 BoxAggregation；聚齐/超时逻辑与 master 完全一致（等价于"单机集群"）。
 - **master（host）**：本地工位走内存直调；远端工位经 `POST /cluster/report`（M2M API Key scope=cluster）进来；per-box `threading.Lock` 串行化同箱并发；聚齐 → `_check_and_dispatch` 组 aggregated → gateway 推 box_complete；后台超时线程按 box_scan_interval 扫描未齐箱 → box_timeout。副机在线状态由 `POST /cluster/heartbeat` 维护（内存 dict，slave_timeout_sec 判离线）。
 - **slave**：cycle_end 时 `mes_hooks::_cluster_dispatch` 把 cycle_context 序列化 HTTP POST 到 master_url；心跳线程周期上报 hostname/project/detecting；**slave 本机不推 MES**（返回 True 让 gateway 分支跳过），推送权集中在 master。
-- channel→station 映射：优先 `channel_station_map`（cluster 配置），否则多通道自动拼 `-{channel_id}` 后缀（mes_hooks L1612-1619）。
+- channel→station 映射：优先 `channel_station_map`（cluster 配置），否则多通道自动拼 `-{channel_id}` 后缀（mes_hooks L1622-1629）。
 
 ### 2.3 wmax 协议在域内的位置
 
@@ -702,20 +772,20 @@ wmax 目录是纯**设备接入层**：帧协议（protocol.py）→ 手写 prot
 
 ## 三、疑点清单
 
-读码中发现的可疑设计 / 疑似 bug / 文档与代码不一致（按文件序，行号为 2026-07-05 工作区实测）：
+读码中发现的可疑设计 / 疑似 bug / 文档与代码不一致（按文件序，行号为 2026-07-05 工作区实测；v3.41 补账时对涉改文件复核过仍成立，行号已刷新）：
 
 1. **services/scanner.py L1273 / L1321-1338**：`upgraded_from_text_lon` 恒为 False（v2.7.8 起协议选择交还用户），其后整段"text_lon 升级 wmax"分支成死代码，未删。
-2. **services/mes_inbound.py L130 vs L575-582**：`supersede_scope` 的 DEFAULT 配置注释只列 project/same_project/external 三档，但实现里还有 `same_channel` 分支——文档（配置注释）落后于代码。
+2. **services/mes_inbound.py L135 vs L699-715**：`supersede_scope` 的 DEFAULT 配置注释只列 project/same_project/external 三档，但实现里还有 `same_channel` 分支——文档（配置注释）落后于代码（v3.41 复核仍未补）。
 3. **services/mes_puller.py L34**：模块头注释写 `triggers` 支持 `"on_scan": false`，全文件无任何消费该键的代码（调度器只看 scheduled）——规划未实现的残留。
 4. **services/cluster_collector.py L655 / L733**：`_check_and_dispatch` 里 `early_return = {}` 声明后全程无人写入，L733 的 `early_return.get("payload") is not None` 永假——疑似历史重构残留死代码。
-5. **services/packaging_flow_coordinator.py L91**：`_TERMINAL_STATES` 含 "short"，但全文件没有任何代码把 run.status 置为 "short"——未用状态或规划残留。
+5. **services/packaging_flow_coordinator.py L92**：`_TERMINAL_STATES` 含 "short"，但全文件没有任何代码把 run.status 置为 "short"——未用状态或规划残留（v3.41 复核仍在）。
 6. **services/workpiece_flow_coordinator.py L275**：`abort_in_progress_on_startup` 定义 `now = time.time()` 后未使用（实际用 `datetime.now(timezone.utc)`）——无害残留。
 7. **services/external_device.py L48**：`self._lock = threading.Lock()` 全族（含三个 mixin）grep 无任何使用——死变量；`_connections` / `_barcode_buffer` 两个 dict 实际被设备线程 + API 线程 + 扫码回调线程无锁并发读写（CPython dict 原子性兜底，但非显式设计）。
 8. **services/external_device.py L409-413**：`get_external_device_service` 是无锁裸单例，与 wmax manager（双检锁 L30-37）、其它服务的单例风格不一致——并发首调可能创建两个实例（FastAPI 启动序基本单线程，实害低）。
 9. **services/wmax/manager.py L44**：`_devices` dict 无锁，而 `api/wmax.py` 的 connect/disconnect/auto-discover 可并发调用——竞态窗口小但存在。
-10. **api/mes_inbound.py L299-303**：`_log_inbound` 的 url 按 event_type 写死两个标准路径、method 恒写 "POST"——经 GET 或自定义别名路径进来的请求，日志里的 url/method 与真实请求不符，排障时可能误导。
+10. **api/mes_inbound.py L300-304**：`_log_inbound` 的 url 按 event_type 写死两个标准路径、method 恒写 "POST"——经 GET 或自定义别名路径进来的请求，日志里的 url/method 与真实请求不符，排障时可能误导。
 11. **api/wmax.py L117/L141/L557-561/L578/L641-644**：API 层直接读写 `svc._connections` / `mgr._devices` 私有 dict，并自造负数 device_id 约定（-999=虚拟设备、-9000 起=自动发现注入）——越过服务封装，约定散落在 API 文件里。
 12. **api/external_device.py L199-200**：`POST /barcode`（条码注入）权限位用 `mes.scanner.edit`，同文件其余写端点全用 `mes.external.edit`——若非有意（"注入条码语义归扫码器"），是权限口径不一致。
-13. **api/packaging_flows.py L417-421**：`POST /scan` 先无条件 `coord.on_scan(...)` 再 `resolve_config_id`，无匹配配置时返回 `handled=False`，但码其实已经喂进过协调器（on_scan 内部自行判归属，通常无害）——返回语义与实际执行顺序有错位。
-14. **api/channel_groups.py L107-111**：master_slave 策略拒绝文案写"v3.13.0 暂未实现, 计划 v3.14"，当前已 v3.31 仍未实现——过期承诺文案。
+13. **api/packaging_flows.py L441-445**：`POST /scan` 先无条件 `coord.on_scan(...)` 再 `resolve_config_id`，无匹配配置时返回 `handled=False`，但码其实已经喂进过协调器（on_scan 内部自行判归属，通常无害）——返回语义与实际执行顺序有错位。
+14. **api/channel_groups.py L107-111**：master_slave 策略拒绝文案写"v3.13.0 暂未实现, 计划 v3.14"，当前已 v3.41 仍未实现——过期承诺文案。
 15. **services/mes_hooks.py（§1 已注）**：`_pending_workpiece` / `_inspecting_workpiece` / `_pending_queue` 等核心 dict 无锁，依赖"写都在单条 worker 线程"的约定，HTTP 侧 `clear_pending_scan(force)` 以原子 pop 对冲——约定式线程安全，扩展新写点时极易踩雷（此为设计风险提示，非现行 bug）。

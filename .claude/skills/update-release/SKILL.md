@@ -166,6 +166,8 @@ python scripts/ci/check_version_alignment.py --expect vX.X.X
 | 改了状态机/MES 链路/集群/插件加载的**设计** | 同步更新 `docs/dev/internals/` 对应深潜篇 |
 | 架构级变更（分层/容器/依赖规则变了） | 同步更新 `docs/dev/architecture/` 对应篇 |
 | 插件 hook/PluginHost 能力面变更 | 更新 `docs/dev/reference/plugin-sdk.md` + `docs/plugin-system/` |
+| **改/增任何 backend/frontend 源文件（含新文件）** | **同步更新 `docs/dev/_reading_notes/` 对应域的函数级条目**（01 后端核心 / 02 MES 域 / 03 数据+插件 / 04 前端+Electron / 05 后端杂项）：新文件建完整条目，老文件在对应函数处补"vX.X 变更"一句话+机制；节标题行数刷新。⚠️ 2026-07-17 血泪教训：这层没有 CI 触发器兜底，v3.33~v3.41 连漏九版（weighing_engine +1181 行、PersistWorker 等 4 个新文件零条目），靠人工审计才发现——**发版时逐条过 changelog 的 files_changed，每个文件都要在笔记里找到落点** |
+| **任何面向用户的功能/UI/配置变更** | **同步更新 `docs/软件操作手册.md`**（对应 4.x 功能小节或 5.x 配方；标注版本号；默认关的功能写明"默认关闭零差异"）+ 封面版本号 + `scripts/docgen/gen_软件操作手册.py` 里的 VERSION 常量 + **重跑该脚本出 PDF**。⚠️ 同 2026-07-17 教训：操作手册从 v3.33 停更到 v3.41 才被发现（更早一次是 v3.12→v3.29），发版时过一遍 changelog 里的 feature 条目，每条都要回答"手册要不要写" |
 
 **完成标志（必须真跑，不许口头绿）：**
 
