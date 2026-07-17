@@ -1,6 +1,6 @@
 {
   "name": "tianjun-ai-vision",
-  "version": "3.41.0",
+  "version": "3.41.1",
   "description": "天军科技AI视觉检测系统 - AI-powered machine vision detection system",
   "main": "main.js",
   "author": {

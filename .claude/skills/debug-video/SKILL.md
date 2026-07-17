@@ -186,6 +186,8 @@ class FFmpegRecorder:
 - `electron/main.js` 开发模式连 localhost:5173，但 vite 实际在 6001（端口不匹配）
 - USB摄像头 DirectShow vs MSMF 后端选择对帧率影响极大（可差 3 倍），部署前用 `test_camera_backend.py` 验证
 - `_reopen_camera()`（捕获线程重连）和 `_reopen_camera()`（resume）也需设置 MJPG fourcc，否则重连后可能退回 YUY2
+- **相机重开必须回放曝光设置**（v3.41.1 技彩锁帧修复）：pause/resume、采集线程断线重连、前端 localStorage 恢复三条重开路径都要重放 `_apply_exposure_setting`，否则自动曝光复活压死帧率（现场表现"画面像卡死"）。曝光写入按 backend 语义精准下发（MSMF AE=0 / DSHOW AE=0.25，别学老代码两个都写），resume 沿用启动时存的 backend id 而非硬编码 DSHOW；每次 set 有 `[Camera/Exposure]` 三元日志（请求值/set 返回/回读值），排查"曝光设了没生效"先看这组日志判断是驱动拒绝还是量化
+- **Windows MSMF 硬件变换必须关**（v3.41.1，`main.py` bootstrap `OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0`，必须在 cv2 import 前）：技彩 UVC 相机开 HW transforms 时 VideoCapture open 和每次 set 分辨率/FPS 要重协商数秒，现场表现"切源/重连巨慢"
 - **MSMF 后端竞争**: 测试 MSMF 前必须先 `release()` DirectShow + `sleep(0.3)`，否则两个后端同时抢占摄像头，benchmark 可能侥幸通过但 `_capture_loop` 会 `can't grab frame`
 - **OpenCV 4.11 ABI**: 打包环境中 `opencv-contrib-python>=4.11` 与 `numpy<2.0` 不兼容，必须限制 `<4.11`
 - **conda numpy ABI**: conda-pack 后 numpy 是 conda 编译的，与 pip opencv 不兼容。CI 必须 `--force-reinstall` numpy。客户端修复必须物理删除再重装

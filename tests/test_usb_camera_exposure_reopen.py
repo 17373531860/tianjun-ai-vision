@@ -41,7 +41,10 @@ class _FakeCapture:
         return self.values.get(prop, 0.0)
 
 
-def test_msmf_manual_exposure_uses_backend_specific_ae_value(capsys):
+def test_msmf_manual_exposure_uses_backend_specific_ae_value(monkeypatch, capsys):
+    # 被测分支按宿主 OS 走 Windows/V4L2 两条路, 必须钉死 Windows 才测得到 MSMF 语义
+    # (Linux 开发机上不 mock 会走进 V4L2 分支, AE=1.0/EXPOSURE=312 导致断言失败)
+    monkeypatch.setattr('platform.system', lambda: 'Windows')
     cap = _FakeCapture(backend=cv2.CAP_MSMF, exposure_readback=-6.0)
 
     result = _apply_exposure_setting(cap, False, -5.0, context='unit_test')

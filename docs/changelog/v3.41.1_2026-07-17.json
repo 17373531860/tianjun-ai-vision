@@ -1,0 +1,31 @@
+{
+  "version": "3.41.1",
+  "date": "2026-07-17",
+  "previous_version": "3.41.0",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "USB 相机关自动曝光在暂停/重开后不保持，技彩现场锁帧",
+      "symptom": "USB 相机配置关自动曝光+手动曝光值后正常，一旦监控页停止再开始、相机瞬断重连、或刷新页面自动恢复源，帧率骤降近乎静止（锁帧），需重新手动设置曝光才恢复",
+      "root_cause": "三层叠加：停止 release 相机后三条重开路径（resume/采集线程断线重连/前端自动恢复源）只回放分辨率FPS漏回写曝光致自动曝光复活压死帧率；曝光写入不分后端语义 MSMF(AE关=0) 与 DSHOW(AE关=0.25) 两值都写后写覆盖先写；Windows MSMF 默认探测硬件颜色变换致技彩 UVC 相机每次 open/set 重协商数秒",
+      "fix": "曝光设置按实际后端语义精准写值并记 set/get 三元可观测日志（[Camera/Exposure]），启动后记住后端 id；三条重开路径全部回放曝光（resume 沿用原后端不再硬编码 DSHOW，前端自动恢复源补传曝光两参数）；bootstrap 在 cv2 import 前加 Windows 专属 OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0",
+      "files": ["backend/api/source_camera_start_mixin.py", "backend/api/source_capture_loop_mixin.py", "backend/api/source_lifecycle_mixin.py", "backend/main.py", "frontend/src/views/Monitor/index.vue", "tests/test_usb_camera_exposure_reopen.py", "tests/e2e_browser/test_usb_camera_exposure_restore.py", "tests/uat/uat_20260715_usb_camera_exposure_resume.py"],
+      "keywords": ["USB相机", "锁帧", "帧率骤降", "自动曝光", "曝光保持", "exposure", "CAP_PROP_AUTO_EXPOSURE", "CAP_PROP_EXPOSURE", "MSMF", "DSHOW", "V4L2", "HW_TRANSFORMS", "OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "暂停恢复", "断线重连", "自动恢复源", "autoRestoreSource", "技彩", "dev-qing", "camera reopen", "frame lock"],
+      "breaking": false
+    },
+    {
+      "type": "doc",
+      "id": "DOC-001",
+      "title": "开发文档九版补账（v3.33~v3.41）+ 软件操作手册补账（v3.34~v3.41）",
+      "symptom": "阅读笔记连续九版未更新（weighing_engine +1181 行、persist worker 等新文件零条目），操作手册自 v3.33 停更",
+      "root_cause": "发版流程缺文档对账硬规则，该层无 CI 触发器兜底",
+      "fix": "五份阅读笔记 + 两份深潜篇按 git diff 基线逐文件对账补齐；操作手册补 v3.34~v3.40 用户功能约 213 行并重出 PDF；update-release skill 加双硬规则",
+      "files": ["docs/dev/_reading_notes/01_backend_core.md", "docs/dev/_reading_notes/02_mes_domain.md", "docs/dev/_reading_notes/03_data_plugin.md", "docs/dev/_reading_notes/04_frontend_electron.md", "docs/dev/_reading_notes/05_backend_misc.md", "docs/dev/internals/source-state-machine.md", "docs/dev/internals/mes-hook-pipeline.md", "docs/软件操作手册.md", "scripts/docgen/gen_软件操作手册.py"],
+      "keywords": ["开发文档", "阅读笔记", "reading notes", "软件操作手册", "文档补账", "文档欠账", "九版", "深潜篇"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-video", "update-release"],
+  "files_changed": ["backend/api/source_camera_start_mixin.py", "backend/api/source_capture_loop_mixin.py", "backend/api/source_lifecycle_mixin.py", "backend/main.py", "frontend/src/views/Monitor/index.vue", "tests/test_usb_camera_exposure_reopen.py", "tests/e2e_browser/test_usb_camera_exposure_restore.py", "tests/uat/uat_20260715_usb_camera_exposure_resume.py", "docs/dev/_reading_notes/01_backend_core.md", "docs/dev/_reading_notes/04_frontend_electron.md", ".claude/skills/debug-video/SKILL.md", ".claude/skills/update-release/SKILL.md"]
+}
