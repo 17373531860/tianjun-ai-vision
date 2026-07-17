@@ -64,7 +64,71 @@ def _v4l2_safe_bufsize_1(cap):
         pass
 
 
-def _apply_exposure_setting(cap, auto_exposure: bool, exposure_value: float):
+def _camera_backend_info(cap):
+    """Return OpenCV backend id/name without letting diagnostics break capture."""
+    backend_id = None
+    backend_name = "unknown"
+    try:
+        if hasattr(cv2, 'CAP_PROP_BACKEND'):
+            backend_id = int(cap.get(cv2.CAP_PROP_BACKEND))
+    except Exception:
+        pass
+    try:
+        backend_name = cap.getBackendName()
+    except Exception:
+        if backend_id == getattr(cv2, 'CAP_DSHOW', None):
+            backend_name = 'DSHOW'
+        elif backend_id == getattr(cv2, 'CAP_MSMF', None):
+            backend_name = 'MSMF'
+        elif backend_id == getattr(cv2, 'CAP_V4L2', None):
+            backend_name = 'V4L2'
+    return backend_id, backend_name
+
+
+def _set_camera_property(cap, prop_name: str, prop: int, requested: float,
+                         backend_label: str, context: str):
+    """Set one camera property and always log the boolean result + readback."""
+    try:
+        set_return = bool(cap.set(prop, requested))
+    except Exception as exc:
+        print(
+            f"[Camera/Exposure] ERROR context={context} backend={backend_label} "
+            f"prop={prop_name} requested={requested} exception={exc}"
+        )
+        return {
+            'prop': prop_name,
+            'requested': requested,
+            'set_return': False,
+            'readback': None,
+            'exception': str(exc),
+        }
+
+    try:
+        readback = cap.get(prop)
+    except Exception as exc:
+        readback = None
+        print(
+            f"[Camera/Exposure] WARN context={context} backend={backend_label} "
+            f"prop={prop_name} requested={requested} set_return={set_return} "
+            f"readback=<error:{exc}>"
+        )
+    else:
+        level = 'INFO' if set_return else 'ERROR'
+        print(
+            f"[Camera/Exposure] {level} context={context} backend={backend_label} "
+            f"prop={prop_name} requested={requested} set_return={set_return} "
+            f"readback={readback}"
+        )
+    return {
+        'prop': prop_name,
+        'requested': requested,
+        'set_return': set_return,
+        'readback': readback,
+    }
+
+
+def _apply_exposure_setting(cap, auto_exposure: bool, exposure_value: float,
+                            context: str = 'start_camera'):
     """v3.1.2: 跨平台曝光控制.
 
     背景: UVC USB 摄像头默认开"自动曝光", 现场光线变暗时驱动会自动把曝光时间
@@ -85,30 +149,75 @@ def _apply_exposure_setting(cap, auto_exposure: bool, exposure_value: float):
             -4  ≈ 1/16s  ≈ 62ms  (亮但帧率会被压到 ~16fps)
         V4L2 上是绝对时间 (单位 100us), 这里按 1/(2^|v|) 秒做近似换算.
     """
+    backend_id, backend_name = _camera_backend_info(cap)
+    backend_label = f"{backend_name}({backend_id})"
     if auto_exposure:
-        return
+        print(
+            f"[Camera/Exposure] INFO context={context} backend={backend_label} "
+            "auto_exposure=True; keep driver defaults"
+        )
+        return {'applied': False, 'backend_id': backend_id, 'backend_name': backend_name}
     is_windows = platform.system() == "Windows"
     try:
         if is_windows:
             # DirectShow: 0.25=manual, 0.75=auto;  MSMF: 0=manual, 1=auto
-            # 同时下两个值, 哪个生效看当前 backend
-            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
-            cap.set(cv2.CAP_PROP_EXPOSURE, float(exposure_value))
-            print(f"[Camera] 已关自动曝光, exposure={exposure_value} (DirectShow/MSMF log2s)")
+            # 已知 backend 后只写对应语义，避免 DSHOW 的 0.25 手动值随后又被 0 覆盖。
+            manual_ae_value = 0.0 if backend_id == getattr(cv2, 'CAP_MSMF', None) else 0.25
+            ae_result = _set_camera_property(
+                cap, 'CAP_PROP_AUTO_EXPOSURE', cv2.CAP_PROP_AUTO_EXPOSURE,
+                manual_ae_value, backend_label, context,
+            )
+            exposure_result = _set_camera_property(
+                cap, 'CAP_PROP_EXPOSURE', cv2.CAP_PROP_EXPOSURE,
+                float(exposure_value), backend_label, context,
+            )
         else:
             # V4L2: 1=manual_exposure, 3=aperture_priority(自动)
-            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+            ae_result = _set_camera_property(
+                cap, 'CAP_PROP_AUTO_EXPOSURE', cv2.CAP_PROP_AUTO_EXPOSURE,
+                1.0, backend_label, context,
+            )
             ev = float(exposure_value)
             if ev < 0:
                 seconds = 1.0 / (2 ** abs(ev))
                 v4l2_value = max(1, int(seconds * 10000))
             else:
                 v4l2_value = max(1, int(ev))
-            cap.set(cv2.CAP_PROP_EXPOSURE, v4l2_value)
-            print(f"[Camera] 已关自动曝光, exposure={v4l2_value} (V4L2 单位 100us)")
+            exposure_result = _set_camera_property(
+                cap, 'CAP_PROP_EXPOSURE', cv2.CAP_PROP_EXPOSURE,
+                float(v4l2_value), backend_label, context,
+            )
+
+        if not ae_result['set_return'] or not exposure_result['set_return']:
+            print(
+                f"[Camera/Exposure] ERROR context={context} backend={backend_label} "
+                "manual exposure was not fully accepted by OpenCV/driver"
+            )
+        elif exposure_result['readback'] is not None and not abs(
+                float(exposure_result['readback']) - float(exposure_result['requested'])) < 0.01:
+            print(
+                f"[Camera/Exposure] WARN context={context} backend={backend_label} "
+                f"exposure requested={exposure_result['requested']} "
+                f"but driver readback={exposure_result['readback']} (driver quantization/unsupported value)"
+            )
+        return {
+            'applied': True,
+            'backend_id': backend_id,
+            'backend_name': backend_name,
+            'auto_exposure': ae_result,
+            'exposure': exposure_result,
+        }
     except Exception as e:
-        print(f"[Camera] 曝光设置失败 (相机可能不支持手动曝光): {e}")
+        print(
+            f"[Camera/Exposure] ERROR context={context} backend={backend_label} "
+            f"manual exposure failed: {e}"
+        )
+        return {
+            'applied': False,
+            'backend_id': backend_id,
+            'backend_name': backend_name,
+            'exception': str(e),
+        }
 
 
 class CameraStartMixin:
@@ -291,7 +400,9 @@ class CameraStartMixin:
 
         # v3.1.2: 曝光控制 — 必须在最终 backend 选定之后才能 set, 否则会被
         # 后续的 backend 切换 / capture.release() 抹掉
-        _apply_exposure_setting(self.capture, auto_exposure, exposure_value)
+        _apply_exposure_setting(
+            self.capture, auto_exposure, exposure_value, context='start_camera',
+        )
         self._auto_exposure = auto_exposure
         self._exposure_value = exposure_value
 

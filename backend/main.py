@@ -2,6 +2,12 @@ import os as _bootstrap_os
 # v3.1.3: 在 cv2 / ffmpeg 被(间接)导入之前就锁定单线程解码,
 # 防止视频文件回放偶发的 libavcodec pthread_frame.c:175 断言把 worker 整个 abort 掉
 _bootstrap_os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "threads;1")
+# OpenCV MSMF defaults to probing hardware color transforms.  On the Jicai
+# UVC camera this makes VideoCapture open and every width/height/FPS set()
+# renegotiate for several seconds.  Disable that probe before cv2 is imported;
+# frame delivery and UVC exposure controls remain handled by the MSMF backend.
+if _bootstrap_os.name == "nt":
+    _bootstrap_os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
 
 # Force UTF-8 terminal output so any launch path (Electron / manual cmd / redirect)
 # stays consistent and avoids Windows GBK-console garbling UTF-8 bytes.

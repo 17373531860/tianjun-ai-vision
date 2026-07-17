@@ -28,6 +28,11 @@ from ctypes import POINTER, byref, c_ubyte, cast, memset, sizeof
 
 import cv2
 
+from backend.api.source_camera_start_mixin import (
+    _apply_exposure_setting,
+    _camera_backend_info,
+)
+
 # v3.8.x: _reopen_hik_camera 用到的海康 SDK 名字 ── 历史遗漏 import 导致
 # "name 'HIK_SDK_AVAILABLE' is not defined" NameError, 海康相机用户每次 pause→resume
 # (前端"停止→开始"按钮) 都报"启动检测失败"。客户报障: 只能去"输入源"页面重启才能恢复。
@@ -176,8 +181,10 @@ class LifecycleMixin:
         """Re-open USB camera that was released during pause"""
         import platform
         try:
+            saved_backend = getattr(self, '_camera_backend', None)
             if platform.system() == "Windows":
-                self.capture = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+                backend = saved_backend if saved_backend is not None else cv2.CAP_DSHOW
+                self.capture = cv2.VideoCapture(self.camera_index, backend)
             else:
                 self.capture = cv2.VideoCapture(self.camera_index)
             if not self.capture.isOpened():
@@ -188,7 +195,20 @@ class LifecycleMixin:
             self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
             self.capture.set(cv2.CAP_PROP_FPS, self.fps)
-            print(f"[resume] camera reopened (MJPG): index={self.camera_index}")
+            _apply_exposure_setting(
+                self.capture,
+                getattr(self, '_auto_exposure', True),
+                getattr(self, '_exposure_value', -6.0),
+                context='resume_reopen',
+            )
+            actual_backend, backend_name = _camera_backend_info(self.capture)
+            self._camera_backend = actual_backend
+            print(
+                f"[resume] camera reopened: index={self.camera_index} "
+                f"backend={backend_name}({actual_backend}) "
+                f"auto_exposure={getattr(self, '_auto_exposure', True)} "
+                f"exposure={getattr(self, '_exposure_value', -6.0)}"
+            )
             return True
         except Exception as e:
             print(f"[resume] reopen camera failed: {e}")

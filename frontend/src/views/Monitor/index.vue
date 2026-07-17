@@ -5843,7 +5843,11 @@ const autoRestoreSource = async () => {
         device_index: cameraSettings.deviceIndex || 0,
         width: w,
         height: h,
-        fps: cameraSettings.fps || 60
+        fps: cameraSettings.fps || 60,
+        auto_exposure: cameraSettings.autoExposure !== false,
+        exposure_value: typeof cameraSettings.exposureValue === 'number'
+          ? cameraSettings.exposureValue
+          : -6
       });
       sourceStore.setSourceType('camera');
       restored = true;
