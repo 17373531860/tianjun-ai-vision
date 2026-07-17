@@ -18,6 +18,10 @@ import traceback
 
 import cv2
 
+from backend.api.source_camera_start_mixin import (
+    _apply_exposure_setting,
+    _camera_backend_info,
+)
 from backend.api.source_sdk_loader import debug_log
 from backend.core import debug_center
 
@@ -369,7 +373,20 @@ class CaptureLoopMixin:
                                     self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                                     self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                                     self.capture.set(cv2.CAP_PROP_FPS, self.fps)
-                                    print(f"[Capture] camera reopened ok (backend={backend})")
+                                    _apply_exposure_setting(
+                                        self.capture,
+                                        getattr(self, '_auto_exposure', True),
+                                        getattr(self, '_exposure_value', -6.0),
+                                        context='capture_reconnect',
+                                    )
+                                    actual_backend, backend_name = _camera_backend_info(self.capture)
+                                    self._camera_backend = actual_backend
+                                    print(
+                                        f"[Capture] camera reopened ok: "
+                                        f"backend={backend_name}({actual_backend}) "
+                                        f"auto_exposure={getattr(self, '_auto_exposure', True)} "
+                                        f"exposure={getattr(self, '_exposure_value', -6.0)}"
+                                    )
                                     consecutive_errors = 0
                                 else:
                                     print("[Capture] camera reopen failed")
