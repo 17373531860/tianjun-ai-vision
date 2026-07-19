@@ -171,6 +171,9 @@ def _init_step_state(h):
     # v3.32 严格顺序违序即时事件 (pipeline_config.strict_order_violation_event_id)
     h.strict_order_violation_event_id = None
     h._strict_violation_throttle = {}
+    # v3.43 实时NG (pipeline_config.instant_ng_on_violation): 违序/前置缺失被确认
+    # 的瞬间直接触发 NG 事件走完整结算, 不等周期收尾。False = 关 (零差异)。
+    h.instant_ng_on_violation = False
     # v3.35 步骤外设门控 (steps_config[].device_gate): {label: gate_cfg}
     # 空 = 未配置 → _process_single_step 一次 get 早退, 零开销
     h.step_device_gates = {}
@@ -218,11 +221,14 @@ def _init_event_and_cycle_state(h):
     #   _pending_ack_event_id    : 触发阻塞的事件编号 (前端可用于关联提示框)
     #   _pending_ack_event_name  : 触发阻塞的事件名 (前端展示)
     #   _pending_ack_timeout_sec : 超时阈值秒数 (0 = 永不超时, 必须人工确认)
+    #   _pending_ack_reason      : 触发原因全文 (v3.43.1 固化进阻塞态; 之前前端从
+    #                              recent_events 捞, 事件超 30s 滚出窗口后弹窗原因变 "—")
     h._pending_ack = False
     h._pending_ack_started_at = None
     h._pending_ack_event_id = None
     h._pending_ack_event_name = None
     h._pending_ack_timeout_sec = 0
+    h._pending_ack_reason = None
 
     # v3.23 NG 补做 (缺步骤延迟落账):
     #   缺步骤 NG 且项目开了 _ng_remediation.allow_step 时, 不立刻 end_cycle / 计数 /

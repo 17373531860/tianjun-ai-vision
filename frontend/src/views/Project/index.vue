@@ -1520,6 +1520,10 @@ const initProjectDefaults = (project) => {
   if (project.strict_order_violation_event_id === undefined) {
     project.strict_order_violation_event_id = pipelineConfig.strict_order_violation_event_id || null;
   }
+  // v3.43 实时NG (违规即时结算, false = 关)
+  if (project.instant_ng_on_violation === undefined) {
+    project.instant_ng_on_violation = !!pipelineConfig.instant_ng_on_violation;
+  }
   // 加载后同步结算步约束（与 watch(settlement_mode) 一致，避免开关仍可编辑/值为 true）
   const canSeqSettle = project.logic_mode === 'sequential'
     || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential');
@@ -1832,6 +1836,7 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.idle_timeout_seconds = project.idle_timeout_seconds || 0;
   project.pipeline_config.cycle_max_duration = project.cycle_max_duration || 0;
   project.pipeline_config.strict_order_violation_event_id = project.strict_order_violation_event_id || null;
+  project.pipeline_config.instant_ng_on_violation = !!project.instant_ng_on_violation;
   project.pipeline_config.periodic_actions = project.periodic_actions;
   
   return project;
@@ -2090,6 +2095,9 @@ const handleSaveProject = async () => {
         // v3.32 严格顺序违序即时事件 (null=关; last_first 模式严格顺序被强制清空, 一并置空)
         strict_order_violation_event_id: activeProject.value.settlement_mode === 'last_first'
           ? null : (activeProject.value.strict_order_violation_event_id || null),
+        // v3.43 实时NG (违规即时结算; 依赖严格顺序守门, last_first 下同样置关)
+        instant_ng_on_violation: activeProject.value.settlement_mode === 'last_first'
+          ? false : !!activeProject.value.instant_ng_on_violation,
         // 原生称重投料模式配置 (weighing 模式 / v3.35 融合步骤门控模式写入, 其他不污染)
         weighing: (activeProject.value.logic_mode === 'weighing'
                    || activeProject.value.pipeline_config?.weighing?.drive_mode === 'step_gate')

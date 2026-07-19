@@ -324,6 +324,25 @@ def test_违序即时事件配置落库(page, base_url, api_url):
         f"违序事件应落库: {pc.get('strict_order_violation_event_id')}"
 
 
+def test_实时NG开关落库(page, base_url, api_url):
+    """v3.43 逻辑设置 → 实时NG(违规即时结算)开关 → instant_ng_on_violation 落库。"""
+    pid, name = _mk_project(api_url)
+    _open_steps_tab(page, base_url, name)
+    page.locator(".el-tabs__item:has-text('逻辑设置')").first.click()
+    time.sleep(0.8)
+
+    row = page.locator("div:has(> span:has-text('实时NG（违规即时结算）'))").last
+    row.locator(".el-switch").first.click()
+    time.sleep(0.5)
+
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    detail = requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+    pc = detail.get("pipeline_config") or {}
+    assert pc.get("instant_ng_on_violation") is True, \
+        f"实时NG开关应落库: {pc.get('instant_ng_on_violation')}"
+
+
 def test_就位提示配置落库(page, base_url, api_url):
     pid, name = _mk_project(api_url)
     _open_steps_tab(page, base_url, name)

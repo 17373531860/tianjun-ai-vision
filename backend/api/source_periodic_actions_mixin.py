@@ -716,6 +716,7 @@ class PeriodicActionsMixin:
             self._pending_ack_event_id = str(event.get('id', event_id))
             self._pending_ack_event_name = event.get('name', '')
             self._pending_ack_timeout_sec = ack_timeout_sec
+            self._pending_ack_reason = reason
             print(f"[ack] (周期性) 进入人工确认阻塞态: event={self._pending_ack_event_name} "
                   f"(id={self._pending_ack_event_id}, timeout={ack_timeout_sec}s, "
                   f"channel_id={getattr(self, 'channel_id', 0)})")

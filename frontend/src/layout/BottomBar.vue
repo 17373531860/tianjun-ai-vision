@@ -58,6 +58,8 @@ const modeLabel = computed(() => {
     'custom': t('mode.custom'),
     'tracking': t('mode.tracking'),
     'per_item': t('mode.per_item'),
+    'weighing': t('mode.weighing'),
+    'region_events': t('mode.region_events'),
   };
   return map[mode] || t('mode.undefined');
 });

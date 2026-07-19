@@ -38,6 +38,8 @@ export default {
     custom: 'Custom',
     tracking: 'Tracking',
     per_item: 'Per-Item',
+    weighing: 'Weighing',
+    region_events: 'Region Events',
     undefined: 'Undefined'
   },
   monitor: {

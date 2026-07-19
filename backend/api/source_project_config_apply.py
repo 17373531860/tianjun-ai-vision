@@ -293,6 +293,14 @@ def _apply_pipeline_config(h, config, pipeline_config):
     if h.strict_order_violation_event_id:
         print(f"严格顺序违序即时事件: event_id={h.strict_order_violation_event_id}")
 
+    # v3.43 实时NG (违规即时结算): 违序/前置缺失动作一经确认, 立即按 NG 事件(2)
+    # 结算当前周期 (计数/报警/MES/人工确认定格全按事件2自身配置走)。
+    # 提示档=NG事件勾了需人工确认(弹框定格等人); 斩立决=没勾(当场结算开新周期)。
+    # 默认关 = 零差异。触发点与违序即时事件同在两处严格守门 (_fire_strict_order_violation)。
+    h.instant_ng_on_violation = bool(pipeline_config.get('instant_ng_on_violation', False))
+    if h.instant_ng_on_violation:
+        print("实时NG(违规即时结算): 已开启")
+
     # v3.23 NG 补做策略 (与 logic_mode 无关的全局可选项): 缺步 / 少装 NG 经人工确认后,
     # 允许"补做缺的那步 / 补齐少装的数量"修正成 OK 而不重置整个周期. 默认全关 = 零差异.
     _rem = pipeline_config.get('ng_remediation', {}) or {}

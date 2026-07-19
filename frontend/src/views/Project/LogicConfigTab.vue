@@ -80,6 +80,31 @@
         </div>
       </el-card>
 
+      <!-- v3.43 实时NG (违规即时结算): 顺序型 + 检测模式通用, 违规一经确认立即按NG结算 -->
+      <el-card v-if="(project.logic_mode === 'sequential' && project.settlement_mode !== 'last_first')
+                     || project.logic_mode === 'detection'
+                     || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential' && project.settlement_mode !== 'last_first')"
+               shadow="never" class="bg-slate-800 border-slate-700">
+        <template #header>
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-white">实时NG（违规即时结算）</span>
+            <el-switch :model-value="!!project.instant_ng_on_violation"
+              @update:model-value="project.instant_ng_on_violation = $event"
+              active-text="开启" inactive-text="关闭" />
+          </div>
+        </template>
+        <div class="space-y-2 text-xs text-gray-400">
+          <p>
+            开启后，违规动作一经确认立即触发 NG 事件结算当前周期（计数/报警/MES 全链路），不等周期收尾。
+            覆盖：违序 / 缺前置步骤（需给相关步骤勾「严格顺序」）、步骤回退重复（顺序型，无需严格顺序）、重复超次（检测模式）。
+          </p>
+          <p>
+            NG 事件勾了「需人工确认」= 弹框定格等操作员确认（提示档）；没勾 = 当场结算并开新周期（斩立决）。
+            周期未开始时不触发（顺序型此时走「违反严格顺序时立即触发」的提示事件）。默认关闭 = 行为零差异。
+          </p>
+        </div>
+      </el-card>
+
       <!-- Sequential Mode Config -->
       <el-card v-if="project.logic_mode === 'sequential'" shadow="never" class="bg-slate-800 border-slate-700">
         <template #header><span class="font-bold text-white">顺序模式 - 步骤排序</span></template>

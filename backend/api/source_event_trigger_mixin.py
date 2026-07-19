@@ -338,6 +338,7 @@ class EventTriggerMixin:
             self._pending_ack_event_id = str(event.get('id', event_id))
             self._pending_ack_event_name = event.get('name', '')
             self._pending_ack_timeout_sec = ack_timeout_sec
+            self._pending_ack_reason = reason
             print(f"[ack] entering manual-ack blocked state: event={self._pending_ack_event_name} "
                   f"(id={self._pending_ack_event_id}, timeout={ack_timeout_sec}s, "
                   f"channel_id={self.channel_id})")
@@ -487,6 +488,7 @@ class EventTriggerMixin:
             self._pending_ack_event_id = str(current_event_id)
             self._pending_ack_event_name = event.get('name', '')
             self._pending_ack_timeout_sec = ack_timeout_sec
+            self._pending_ack_reason = reason
             print(f"[ack] (external/{source}) entering manual-ack blocked state: "
                   f"event={event.get('name', '')} (id={current_event_id}, "
                   f"timeout={ack_timeout_sec}s, channel_id={self.channel_id})")
@@ -537,6 +539,7 @@ class EventTriggerMixin:
         self._pending_ack_event_id = None
         self._pending_ack_event_name = None
         self._pending_ack_timeout_sec = 0
+        self._pending_ack_reason = None
 
     def _should_defer_for_remediation(self, reason: str) -> bool:
         """本次 NG 是否应走"缺步骤延迟落账"挂起 (而非立刻落 NG).
@@ -602,6 +605,7 @@ class EventTriggerMixin:
         self._pending_ack_event_id = str(current_event_id)
         self._pending_ack_event_name = event.get('name', '')
         self._pending_ack_timeout_sec = ack_timeout_sec
+        self._pending_ack_reason = reason
 
         # 事件日志 (Toast / 语音提示工人来处理) — 标 remediation 让前端区分
         self._event_seq += 1
@@ -649,6 +653,7 @@ class EventTriggerMixin:
         self._pending_ack_event_id = None
         self._pending_ack_event_name = None
         self._pending_ack_timeout_sec = 0
+        self._pending_ack_reason = None
 
         if action == 'supplement_step':
             for lbl in missing:

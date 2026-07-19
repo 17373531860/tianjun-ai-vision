@@ -24,7 +24,7 @@ BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 MD = os.path.join(BASE, 'docs', '软件操作手册.md')
 PDF = os.path.join(BASE, 'docs', '软件操作手册.pdf')
 
-VERSION = 'v3.42.0'
+VERSION = 'v3.43.0'
 UPDATED = '2026 年 7 月'
 
 
@@ -175,7 +175,7 @@ HTML_TMPL = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>天军科技 AI 视觉检测系统 · 操作手册</title>
+<title>天军机器人（苏州）有限公司 · SOP-视觉AI行为分析智能体 操作手册</title>
 <style>{css}</style>
 </head>
 <body>
@@ -193,12 +193,12 @@ COVER = """
   <div class="inner">
     <div class="brand">
       <span class="dot"></span>
-      <div>苏州天军科技有限公司
-        <small>TIANJUN&nbsp;TECHNOLOGY&nbsp;·&nbsp;AI&nbsp;VISION</small>
+      <div>天军机器人（苏州）有限公司
+        <small>TYENJUN&nbsp;Robotics&nbsp;(Suzhou)&nbsp;Co.,&nbsp;Ltd.&nbsp;·&nbsp;www.tyenjunai.com</small>
       </div>
     </div>
     <div class="mid">
-      <div class="kicker">AI 视觉检测系统</div>
+      <div class="kicker">SOP-视觉AI行为分析智能体</div>
       <h1 class="title">操作<span class="accent">手册</span></h1>
       <div class="sub">User Operation Manual　|　从安装到上线的完整指引</div>
       <div class="rule"></div>

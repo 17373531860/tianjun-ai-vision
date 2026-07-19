@@ -79,9 +79,32 @@ def _enable_paper_gate(client, ctx):
 
 @given("开启放工单收尾动作模式")
 def _enable_paper_close_action(client, ctx):
-    # v3.34.1 子开关: 放工单=尾箱收尾动作 (挂起快照闭环), 默认关=老行为
+    # v3.43 子开关: 箱归周期结算 (尾箱当场落账), 放工单归工单收尾, 默认关=老行为
     client.put(f"/api/v1/packaging-flows/{ctx['config_id']}",
                json={"tail_paper_as_close_action": True})
+    _coord().reload_configs(_new_session())
+
+
+@given(parsers.parse("缺工单判定方式为时限 {n:d} 秒"))
+def _set_timeout_judge_mode(client, ctx, n):
+    # v3.43 判定方式二选一: 时限模式 = 扫新单报警关 + 时限秒数 > 0
+    client.put(f"/api/v1/packaging-flows/{ctx['config_id']}",
+               json={"tail_paper_scan_alarm": False, "tail_paper_timeout_s": n})
+    _coord().reload_configs(_new_session())
+    ctx["paper_timeout_s"] = n
+
+
+@when("等待时限到点")
+def _wait_timeout(ctx):
+    import time as _t
+    _t.sleep((ctx.get("paper_timeout_s") or 1) + 0.5)
+
+
+@given("开启完成工单重扫拦截")
+def _enable_rescan_block(client, ctx):
+    # v3.42.1: 完成且 OK 的工单再扫同号 → 报警提示且不重新录入 (默认关=老行为)
+    client.put(f"/api/v1/packaging-flows/{ctx['config_id']}",
+               json={"block_completed_order_rescan": True})
     _coord().reload_configs(_new_session())
 
 
@@ -115,7 +138,7 @@ def _settle_tail_no_paper(ctx, n):
 
 @when("随后检测到放工单动作再来一个周期")
 def _settle_paper_cycle(ctx):
-    # 工人补放工单: 探测转为可见, 下一个检测周期结算时消化挂起快照收尾
+    # 工人补放工单: 探测转为可见, 下一个检测周期结算时完成工单收尾
     _coord().set_paper_order_probe(lambda c, l: True)
     ctx["cycle_seq"] += 1
     _coord().on_cycle_settled(0, ctx["cycle_seq"], True, _new_session(), slider_count=0)
@@ -169,6 +192,27 @@ def _assert_alarm(ctx, kind):
     assert kind in ctx["alarms"], f"未触发 {kind}, 实际={ctx['alarms']}"
 
 
+@then(parsers.parse('不应触发 "{kind}" 报警'))
+def _assert_no_alarm(ctx, kind):
+    assert kind not in ctx["alarms"], f"不该触发 {kind}, 实际={ctx['alarms']}"
+
+
+@then("工单状态应为等放工单收尾")
+def _assert_awaiting_paper(ctx):
+    state = _coord().get_state(ctx["config_id"])
+    assert state is not None, "无进行中工单"
+    assert state.get("status") == "awaiting_paper", f"status={state.get('status')}"
+
+
 @then(parsers.parse('工单 "{order}" 不应有进行中记录'))
 def _assert_no_run(ctx, order):
     assert _coord().get_state(ctx["config_id"]) is None
+
+
+@then(parsers.parse('工单 "{order}" 落库运行记录应只有 {n:d} 条'))
+def _assert_run_count(order, n):
+    from backend.models.mes_models import PackagingFlowRun
+    db = _new_session()
+    norm = order.replace("-", "").upper()
+    cnt = db.query(PackagingFlowRun).filter_by(order_no=norm).count()
+    assert cnt == n, f"运行记录 {cnt} 条, 期望 {n} (重扫拦截应阻止新记录)"

@@ -6,6 +6,8 @@
 > **完成度：全部完成（2026-07-05）**：services 层（mes_hooks / scanner / mes_gateway / mes_inbound / mes_puller / cluster_collector / packaging_flow_coordinator / workpiece_flow_coordinator / wmax 目录 7 文件 / external_device 族 5 文件 + external_alarm）与 api 层 10 个 MES 路由全部精读落盘，并附「二、MES 域综合」与「三、疑点清单」（15 条）。深潜正文 `internals/mes-hook-pipeline.md` 与 `internals/cluster-collector.md` 已从源码直接撰写，不依赖本笔记全文。
 >
 > **v3.41 补账（2026-07-17）**：按 `git diff a23a8d2..HEAD` 回写 v3.33~v3.41 变更——mes_hooks（v3.38 运行中开工回填）、mes_gateway（v3.38 推送熔断器 + 逐连接独立 commit）、mes_inbound（v3.37 开工自动开始检测 / v3.38 回填 / v3.39 报警软件内消除出口与响应明细 / v3.41 复用工单重绑）、packaging_flow_coordinator（v3.35 复合条码取段 + 工单号识别 + 放工单=尾箱收尾动作）、external_alarm（v3.39 一键消除）、mock 秤墙钟计时（v3.41），并新建 database_adapter（v3.35）与 scanner_bypass_monitor（v3.38）条目；api 层三节同步刷新（11.2 熔断器状态面 / 11.3 报警手动消除端点 / 11.10 复合条码配置面）。标注「v3.41 复核」的小节行号已按当日工作区刷新。weighing_engine 的 v3.35 融合 + v3.39 两阶段流水线全量扩写在 `01_backend_core.md`；mes_models（PackagingFlowConfig 复合条码字段）增量在 `03_data_plugin.md`。
+>
+> **v3.43 补账（2026-07-20）**：packaging_flow_coordinator 大改（放工单=工单收尾语义重构 + 缺工单判定二选一 + 提前放工单报警 + 已完成工单重扫拦截 + 确认框闪退修复），见其条目「v3.43 大改」节；PackagingFlowConfig 新增 4 列见 `03_data_plugin.md`（迁移 m0002/m0003）。
 
 ## 一、逐文件档案
 
@@ -358,7 +360,7 @@
 - L776-778（计件）："一个 box_serial 完成一次算 1 件. 校正重推 (is_recovery=True) 不再 +1…超时未齐的 box 走 _push_timeout_result, 那条路径不计件"。
 - 另注意：`_check_and_dispatch` L655 的 `early_return = {}` 声明后在 L733 检查 `early_return.get("payload")`，但**全程无人写入** `early_return`——疑似历史重构残留死代码，记入疑点清单。
 
-### 7. backend/services/packaging_flow_coordinator.py（1424 行，v3.41 复核）
+### 7. backend/services/packaging_flow_coordinator.py（1670 行，v3.43 复核）
 
 **职责一句话**：包装箱结算协调器（v3.21+ 上银包装线）——扫码驱动的"工单→箱→托盘/滑块"三层结算状态机：扫工单标签拉 MES 得应做箱数，视觉周期数托盘（trays 口径）或一周期一箱（sliders 口径），封箱/漏箱/多箱/标签错/少装各有报警与处置策略；六个外部依赖全部走可注入钩子（拉单/报警/回推/箱目标/切项目/步骤探测），默认 None 只 print。
 
@@ -393,7 +395,17 @@
 - 查询：`get_config` L1175 / `get_state` L1180 / `resolve_config_id` L1185 / `list_loaded_config_ids` L1191；`cleanup_for_testing` L1199。
 - 模块级真实钩子（M3，`wire_real_hooks` L1416 启动注入）：`_real_mes_fetcher` L1217（借 puller.test_connection 拉单，取数组第一条原始字段，规格兜底归一到 'spec' 键；**在扫码线程持锁内含一次同步 HTTP**）、`_KIND_TO_EVENT_FIELD` L1264（异常→配置事件字段映射）、`_real_alarm_sink` L1277（命中配置事件走 VSM `fire_external_event_response`，否则退回默认通用报警 event2 不静默）、`_real_mes_pusher` L1300（走网关 dispatch，事件默认 packaging_complete，模板可引用 {packaging.*}）、`_real_box_target_setter` L1325（设 `_custom_mix.set_container_item_target`）、`_real_project_activator` L1343（resolve_project_id_by_spec 统一匹配器+模型重载+配置同步）、`_real_paper_order_probe` L1390（调工位 `is_packaging_paper_order_covered`；拿不到工位→False gate 守住；**v3.35 变更**：该探测优先读"上一个已结算周期"的步骤缓存会遮蔽当前未结算周期，而尾箱挂起期间补放动作恰恰落在当前周期——命不中时补查实时步骤集 current_cycle_steps L1403-1408）。
 
-**线程·锁·队列**：**不开后台线程**（模块头 L15："全部事件驱动"）；单把 `RLock`（`on_forced_settle_by_channel` 内再调 `on_forced_settle` 依赖可重入 L627）；单例双检锁。
+**v3.43 大改（放工单=工单收尾语义重构 + 三个新守门，本文件本轮最大改动，上述 v3.35 行号已漂移）**：
+
+- **语义重构（v3.43 核心）**：v3.34.1 的"挂起快照"闭环整体替换为"**箱归周期结算、放工单归工单收尾**"——尾箱在周期结算时照常按自身成绩当场落账（`_on_cycle_settled_sliders` 的 gate 分支只对老模式拦箱；as_close_action 开时不拦不报警），收口移到 `_finalize_box_sliders` 的工单完成点：各箱全落账但放工单没探到 → run 挂 `awaiting_paper = {"since", "alarmed"}`、status=awaiting_paper，不完成工单。`_close_pending_paper`/`run["pending_paper_box"]` 已删，替代者 `_close_awaiting_paper`——ok_paper=True 工单正常收尾；False 报警 + 工单层判 NG（`_complete_order` 增 `paper_missing` 参数，final=NG + forced_reason 留痕，**箱成绩不回改**）。
+- **缺工单判定二选一**（`_paper_judge_mode`，migration m0003 两列）：`tail_paper_scan_alarm=True`（默认）= 扫新单判定——下一单扫码进来发现没放 → 报警 + 旧单 NG 收尾再开新单，无时限；`scan_alarm=False 且 timeout_s>0` = 时限判定——挂等待态时 `_arm_paper_timer` 布防一次性 `threading.Timer`（非常驻线程，不违背"全事件驱动"），到点 `_on_paper_timeout` 终局判定（最后探一次，到位 OK / 没到位报警+NG）；时限内扫新单被拒收提示稍候。组合非法兜底按扫新单。Timer 在收尾/清理时 `_cancel_paper_timer` 撤防；重启后等待态作废（`abort_in_progress_on_startup` 的 or_ 条件补 awaiting_paper，内存 Timer 已丢防幽灵在途）。
+- **`on_step_detected`（v3.42.1 新入口，检测线程调入需错误隔离）**：结算 mixin `_record_out_of_seq_step` 探到序列外步骤即时通知——只认"放工单"标签，两个消费方：① 等放工单收尾态出现即完成工单（不必等下一次扫码/周期结算）；② **提前放工单报警（v3.43.1）**——非尾箱作业期间（或名义尾箱但实时进箱数=0，靠 `set_box_progress_getter` 注入的 `_real_box_progress_getter` 读 `_custom_mix.container_settled_item_total()` 区分"尾箱正做着/还没开始"，拿不到保守放行）出现放工单动作 → 每箱一次报警提醒纠正（`early_paper_alarm_box` 防轰炸），不改箱成绩不拦结算。
+- **已完成(OK)工单重扫拦截（v3.42.1，migration m0002 两列，默认关）**：`on_scan` 单点守门——`block_completed_order_rescan` 开 + 扫的号不是在途单 + `_latest_run_completed_ok`（查该配置该单号 id 最大一条 run，status=completed 且 final_result=OK；查库异常按不拦处理不卡产线）→ 报 completed_order_rescan 报警不重新录入；完成但 NG 的单不拦（允许重扫补做）。
+- **确认框闪退修复（v3.43.1，两处配套）**：① `_real_project_activator` 命中项目已是激活态 → 原地不动直接返回 True（重激活=重载模型几秒卡顿+重置检测运行时，会把同一次扫码链路里刚立起的人工确认定格抹掉）；② 扫新单判定路径的缺工单报警**延后**——`_close_awaiting_paper(defer_alarm=True)` 返回报警文案，调用方在 `_open_order`（含按规格切项目）之后再触发，定格立在切换之后。
+- `_KIND_TO_EVENT_FIELD` 增 `early_paper`（复用 event_missing_paper 档）与 `completed_order_rescan`（event_completed_order_rescan）；`cleanup_for_testing` 撤全部 Timer + 清 `_box_progress_getter`。
+- 回归：`tests/test_packaging_flow_coordinator.py` 扩到 91 例（含等待态/两种判定/提前放工单/重扫拦截/重启作废）+ BDD `packaging_flow_sliders.feature` 扩场景。
+
+**线程·锁·队列**：v3.43 前**不开后台线程**（模块头："全部事件驱动"）；v3.43 起时限判定模式有**一次性 `threading.Timer`**（`_paper_timers` config_id→Timer，挂等待态布防/收尾撤防，回调锁内跑并校验 run_uuid 防串单）；单把 `RLock`（`on_forced_settle_by_channel` 内再调 `on_forced_settle` 依赖可重入）；单例双检锁。
 
 **上下游**：
 - 上游：mes_hooks/扫码链（on_scan）、source 结算链（on_cycle_settled / on_forced_settle_by_channel）、API 层 packaging_flows.py（配置 CRUD/状态查询/手动扫码/强制结案/补做）、main.py 启动（reload_configs + wire_real_hooks + abort_in_progress_on_startup）。
@@ -406,7 +418,8 @@
 | `_channel_to_config` | channel_id → config_id 反向索引 |
 | `_runs` | config_id → 进行中运行态（一个配置同时只追一张工单）；run 内 status ∈ order_loaded/running/pending_remediation/completed/aborted |
 | run["pending_box"] | v3.23 少装挂起箱快照（box/sliders/target/is_tail/cycle/reason） |
-| run["pending_paper_box"] | v3.35 尾箱「等放工单」挂起快照（box/sliders/target/cycle/is_good；None=无挂起）——gate 拦下时保存被拦那次的滑块数/合格性，放工单到位按原成绩收尾，没放就扫新单判 NG 收尾 |
+| run["awaiting_paper"] | v3.43 工单「等放工单收尾」等待态（None=没在等；替代已删的 v3.35 pending_paper_box 快照）：各箱已全部落账只差放工单动作完成工单，{"since": 挂起时刻, "alarmed": 时限报警是否已报}；run.status 同步置 awaiting_paper |
+| `_paper_timers` | v3.43 config_id → 一次性 threading.Timer（时限判定模式布防；扫新单模式不布防） |
 
 **注释里的坑（原样摘录）**：
 - L23-26（零差异底线）："没有任何 packaging_flow_configs 启用时, on_scan / on_cycle_settled 入口直接 return, 与不配置时字节级一致"。

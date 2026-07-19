@@ -372,13 +372,32 @@
                 <el-input v-model="form.tail_paper_step_label" placeholder="put_paper" />
                 <span class="text-xs text-gray-400 ml-2">项目里"放工单"那一步的检测标签</span>
               </el-form-item>
-              <el-form-item label="放工单=收尾动作" v-if="form.tail_paper_order_required">
+              <el-form-item label="放工单=工单收尾" v-if="form.tail_paper_order_required">
                 <el-switch v-model="form.tail_paper_as_close_action" />
                 <span class="text-xs text-gray-400 ml-2">
-                  开 = 放工单成为尾箱的收尾动作: 尾箱装满被拦时先记住这箱成绩,
-                  之后哪怕过了周期才放工单也按装满那次的成绩收箱完成工单;
-                  一直没放、直接扫下一张工单时, 尾箱判 NG 收尾再开新单.
-                  关 = 老行为: 只报警等着, 按下个检测周期自己的数据重新判
+                  开 = 箱归周期结算、放工单归工单收尾: 尾箱照常按自身成绩当场落账（不报警不弹NG）,
+                  工单转入「等放工单收尾」, 检测到放工单动作即完成工单;
+                  一直没放、直接扫下一张工单时, 旧工单判 NG 收尾再开新单（是否报警见下方开关）.
+                  关 = 老行为: 尾箱暂不收尾, 每个周期结算都报警等着
+                </span>
+              </el-form-item>
+              <el-form-item label="缺工单判定方式"
+                            v-if="form.tail_paper_order_required && form.tail_paper_as_close_action">
+                <el-radio-group v-model="paperJudgeMode">
+                  <el-radio value="scan">扫新单时判定（默认）</el-radio>
+                  <el-radio value="timeout">按时限判定</el-radio>
+                </el-radio-group>
+                <div class="text-xs text-gray-400 mt-1 w-full">
+                  两种方式二选一。扫新单 = 下一张工单扫码进来时判定上一单放没放工单, 没放 → 报警 + 旧单判 NG 收尾, 无时间限制;
+                  按时限 = 只按时间判定, 到点没放 → 报警 + 工单判 NG 收尾, 扫新单不参与判定（时限内扫新单会被拒收提示稍候）
+                </div>
+              </el-form-item>
+              <el-form-item label="放工单时限(秒)"
+                            v-if="form.tail_paper_order_required && form.tail_paper_as_close_action
+                                  && paperJudgeMode === 'timeout'">
+                <el-input-number v-model="form.tail_paper_timeout_s" :min="1" :max="3600" :step="5" />
+                <span class="text-xs text-gray-400 ml-2">
+                  尾箱落账后 N 秒内等放工单动作: 等到 → 工单合格收尾; 到点没等到 → 报警 + 判 NG 收尾
                 </span>
               </el-form-item>
               <el-form-item label="缺工单触发事件">
@@ -398,6 +417,20 @@
               </el-form-item>
               <el-form-item label="缺油嘴触发事件" v-if="form.oil_nozzle_required">
                 <el-select v-model="form.event_missing_nozzle" class="w-full" clearable
+                           placeholder="默认通用报警" filterable>
+                  <el-option v-for="ev in eventOptions" :key="ev.value"
+                             :label="ev.label" :value="ev.value" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="完成工单重扫拦截">
+                <el-switch v-model="form.block_completed_order_rescan" />
+                <span class="text-xs text-gray-400 ml-2">
+                  开 = 工单完成且结果 OK 后, 再扫到同号时只提示、不再重新录入
+                  (完成但 NG 的单不拦, 允许重扫补做); 关 = 老行为, 重扫会重新开单
+                </span>
+              </el-form-item>
+              <el-form-item label="重扫拦截提示事件" v-if="form.block_completed_order_rescan">
+                <el-select v-model="form.event_completed_order_rescan" class="w-full" clearable
                            placeholder="默认通用报警" filterable>
                   <el-option v-for="ev in eventOptions" :key="ev.value"
                              :label="ev.label" :value="ev.value" />
@@ -574,12 +607,17 @@ const _newForm = () => ({
   name_match_strict_boundary: false,
   tail_paper_order_required: false,
   tail_paper_step_label: null,
-  tail_paper_as_close_action: false,  // v3.34.1 放工单=尾箱收尾动作 (默认关=老行为)
+  tail_paper_as_close_action: false,  // v3.43 箱归周期结算/放工单归工单收尾 (默认关=老行为)
+  tail_paper_scan_alarm: true,        // v3.43 扫新单发现没放工单时报警 (默认开)
+  tail_paper_timeout_s: 0,            // v3.43 尾箱落账→放工单时限报警 (0=不限)
   event_missing_paper: null,
   // 缺油嘴 gate (v3.23, 每箱查, 默认关)
   oil_nozzle_required: false,
   oil_nozzle_step_label: null,
   event_missing_nozzle: null,
+  // 已完成(OK)工单重扫拦截 (v3.42.1, 默认关)
+  block_completed_order_rescan: false,
+  event_completed_order_rescan: null,
 });
 
 const form = reactive(_newForm());
@@ -588,6 +626,24 @@ const pullConnIdStr = ref('');
 const trayQtyTableJson = ref('');
 const traysPerBoxTableJson = ref('');
 const specToProjectJson = ref('');
+
+// v3.43 缺工单判定方式 (二选一互斥): scan = 扫新单时判定(默认, 无时限);
+// timeout = 按时限判定(扫新单不参与). 由两个落库字段映射: scan_alarm 开 = scan 模式.
+const paperJudgeMode = computed({
+  get: () => (!form.tail_paper_scan_alarm && (form.tail_paper_timeout_s || 0) > 0
+    ? 'timeout' : 'scan'),
+  set: (v) => {
+    if (v === 'timeout') {
+      form.tail_paper_scan_alarm = false;
+      if (!form.tail_paper_timeout_s || form.tail_paper_timeout_s <= 0) {
+        form.tail_paper_timeout_s = 30;
+      }
+    } else {
+      form.tail_paper_scan_alarm = true;
+      form.tail_paper_timeout_s = 0;
+    }
+  },
+});
 
 // insert_char 效果预览: 前端镜像后端 _normalize 的 insert_char 逻辑 (先去符号再补回固定位置)
 const hyphenPreviewInput = ref('JOB1507001141');
@@ -657,9 +713,9 @@ const openEdit = (row) => {
 
 const applyHiwinPreset = () => {
   Object.assign(form, {
-    // 上银 SY: 滑块口径 — MES 排产量(滑块总数) ÷ 每箱96(从项目读) = 箱数 + 尾箱余数
+    // 上银 SY: 滑块口径 — MES 排产量(滑块总数) ÷ 每箱96(固定值) = 箱数 + 尾箱余数
     count_unit: 'sliders',
-    items_per_box_source: 'project',
+    items_per_box_source: 'config',
     items_per_box_fixed: 96,
     slider_total_field: 'dispatch_qty',
     box_count_source: 'field',
@@ -691,14 +747,31 @@ const applyHiwinPreset = () => {
     oil_nozzle_step_label: '放油嘴包',
     tail_paper_order_required: true,
     tail_paper_step_label: '放工单',
-    tail_paper_as_close_action: true,  // 现场放工单常晚于周期结束, 用挂起快照收尾
+    tail_paper_as_close_action: true,  // v3.43 箱归周期落账, 工单等放工单收尾 (现场放工单常晚于周期结束)
+    tail_paper_scan_alarm: true,       // 判定方式=扫新单(默认): 下一单扫码时判上一单放没放
+    tail_paper_timeout_s: 0,           // 0 = 不用时限判定 (与扫新单二选一)
+    // 完成(OK)工单重扫只提示不重开 (客户诉求: 做完的单不允许误扫再录入)
+    block_completed_order_rescan: true,
+    event_completed_order_rescan: 3,
 
-    auto_switch_project: false,
+    // 按规格自动切项目: 项目直接以规格命名(如 SYS1)即可零配置切换; 名不一致再填映射表
+    auto_switch_project: true,
+    match_project_by_name: true,
+    name_match_strict_boundary: false,
+    // 异常 → 项目事件映射 (要求项目事件表: 1=合格 2=不良 3=包装异常-需人工确认)
+    event_short_box: 3,
+    event_over_box: 3,
+    event_box_ng: 3,
+    event_label_mismatch: 3,
+    event_mes_fail: 3,
+    event_missing_paper: 2,   // 缺工单按不良报 (声光+计数)
+    event_missing_nozzle: 3,
+
     push_on_complete: false,
     push_event_type: 'packaging_complete',
   });
   _syncStrFields();
-  ElMessage.success('已套用上银 SY 滑块口径预设; 请核对工位/扫码器/拉单连接, 并到⑥把各异常指向"需人工确认"事件');
+  ElMessage.success('已套用上银 SY 滑块口径预设 (含事件映射/自动切项目/重扫拦截); 只需手动配: 工位、扫码器、拉单连接');
 };
 
 const _parseIntOrNull = (s) => {

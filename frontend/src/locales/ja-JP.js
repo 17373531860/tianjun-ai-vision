@@ -38,6 +38,8 @@ export default {
     custom: 'カスタム',
     tracking: 'トラッキング',
     per_item: '個別カバー',
+    weighing: '計量投入',
+    region_events: '領域イベント',
     undefined: '未定義'
   },
   monitor: {

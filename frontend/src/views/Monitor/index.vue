@@ -604,9 +604,12 @@
         </div>
       </div>
 
-      <!-- SOP流程 (Step Indicators) — non-tracking & non-per_item modes（M-2 外置 SopStepPanel） -->
+      <!-- SOP流程 (Step Indicators) — non-tracking & non-per_item & non-weighing modes（M-2 外置 SopStepPanel）
+           v3.42.x: 补排除称重投料模式 — 称重看板(WeighingPanel)与 SOP 同链互斥且 SOP 在前,
+           不排除的话称重项目永远被 SOP 卡片抢占、专属看板一次都轮不到(萍乡百斯特现场撞出)。
+           融合模式(step_gate)的 logic_mode 是 sequential, 不受影响、SOP 照旧显示。 -->
       <SopStepPanel
-        v-if="systemStore.display.monitor.stepStrip && steps.length > 0 && !isTrackingMode && !isPerItemMode"
+        v-if="systemStore.display.monitor.stepStrip && steps.length > 0 && !isTrackingMode && !isPerItemMode && !isWeighingMode"
         ref="sopPanelRef"
         :steps="steps"
         :step-intervals="stepIntervals"
@@ -1240,12 +1243,25 @@
               {{ (pendingAckDisplay.remediation.missing || []).join('、') || '（未解析出具体步骤）' }}
             </span>
           </div>
+          <!-- v3.43.1 确认后的处置方式明示: 工人点按钮前就知道是"重做"还是"断点续做" -->
+          <div v-if="!pendingAckDisplay.remediation" class="flex items-center gap-3">
+            <span class="text-gray-400 w-20 shrink-0">确认后</span>
+            <span v-if="pendingAckDisplay.keepsCycle" class="text-emerald-300 font-bold">
+              保留已完成步骤 — 从断点继续补做
+            </span>
+            <span v-else class="text-amber-300 font-bold">
+              清空本周期已识别步骤 — 整件从头重做
+            </span>
+          </div>
           <div class="text-xs text-gray-500 bg-slate-950/60 rounded p-2 border-l-2 border-amber-700/50 leading-relaxed">
             <template v-if="pendingAckDisplay.remediation">
               本件缺步骤被<span class="text-amber-300">延迟落账</span>（还没记 OK/NG）。工人补做后点「补步骤」直接判合格；确认确实漏做点「认 NG」落账；想整件重做点「重做」。
             </template>
+            <template v-else-if="pendingAckDisplay.keepsCycle">
+              本次事件已按配置落账（<span class="text-amber-300">计数已记，确认不回滚记录</span>）。该事件配置为「确认后保留周期」：点确认只解除定格，已做对的步骤保留，请工人从断点接着补做后面的步骤。
+            </template>
             <template v-else>
-              确认后清当前周期运行时（步骤序列、识别状态），<span class="text-amber-300">合格 / 不合格 / 自定义计数器累计值不变动</span>。如果有多个工位都在等确认，这里会按顺序依次显示。
+              本次事件已按配置落账（<span class="text-amber-300">计数已记，确认不回滚记录</span>）。点确认后清当前周期运行时（步骤序列、识别状态），请工人整件从头重做。如果有多个工位都在等确认，这里会按顺序依次显示。
             </template>
           </div>
         </div>
@@ -1263,12 +1279,14 @@
           </template>
           <el-button
             v-else
-            type="warning"
+            :type="pendingAckDisplay.keepsCycle ? 'success' : 'warning'"
             size="large"
             :loading="pendingAckDisplay.acking"
             @click="ackPendingForChannel(pendingAckDisplay.channel)"
           >
-            我已确认 — 重做工位 {{ pendingAckDisplay.channel + 1 }}
+            {{ pendingAckDisplay.keepsCycle
+              ? `我已确认 — 断点继续 工位 ${pendingAckDisplay.channel + 1}`
+              : `我已确认 — 整件重做 工位 ${pendingAckDisplay.channel + 1}` }}
           </el-button>
         </div>
       </div>
@@ -5916,9 +5934,13 @@ const pendingAckChannelStates = computed(() => {
         eventName: pa.event_name,
         startedAt: pa.started_at || nowTimestamp.value,
         timeoutSec: Number(pa.timeout_sec || 0),
-        reason: (multiChannelData.value[ch]?.recentEvents || [])
+        // v3.43.1 优先用阻塞态自带原因 (后端固化, 不随 30s 事件窗滚动丢失);
+        // 老后端无 reason 字段时兜底回 recentEvents 捞
+        reason: pa.reason || (multiChannelData.value[ch]?.recentEvents || [])
           .filter(e => e.require_ack)
           .slice(-1)[0]?.reason || '',
+        // v3.43.1 确认后的处置方式: true=保留周期断点续做 / false=清运行时整件重做
+        keepsCycle: !!pa.keeps_cycle,
         acking: !!multiChannelData.value[ch]?.pendingAckSubmitting,
         // v3.23 缺步骤延迟落账挂起 (有值 → ack 窗展示缺项 + "补步骤/认NG/重做"三按钮)
         remediation: multiChannelData.value[ch]?.pendingRemediation || null,
@@ -5959,6 +5981,7 @@ const ackPendingForChannel = async (ch, action = null) => {
     if (res?.data?.acked) {
       const msg = action === 'supplement_step' ? '已补步骤判合格'
         : action === 'confirm_ng' ? '已确认 NG'
+        : res?.data?.kept_cycle ? '已确认，保留周期从断点继续'
         : '已确认，重置当前周期';
       ElMessage.success(`工位 ${ch + 1} ${msg}`);
     } else {

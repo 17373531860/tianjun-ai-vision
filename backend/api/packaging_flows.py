@@ -99,13 +99,20 @@ class PackagingFlowConfigBase(BaseModel):
     name_match_strict_boundary: bool = False
     tail_paper_order_required: bool = False
     tail_paper_step_label: Optional[str] = None
-    # v3.34.1 放工单=尾箱收尾动作 (挂起快照闭环), 默认关=老行为
+    # v3.34.1 放工单=尾箱收尾动作, 默认关=老行为; v3.43 语义: 箱归周期结算, 放工单归工单收尾
     tail_paper_as_close_action: bool = False
     event_missing_paper: Optional[int] = None
+    # v3.43 缺工单判定方式二选一 (仅 as_close_action 模式生效):
+    # scan_alarm=True → 扫新单判定(默认); False 且 timeout_s>0 → 时限判定
+    tail_paper_scan_alarm: bool = True
+    tail_paper_timeout_s: int = 0
     # 缺油嘴 gate (v3.23, 每箱查, 默认关)
     oil_nozzle_required: bool = False
     oil_nozzle_step_label: Optional[str] = None
     event_missing_nozzle: Optional[int] = None
+    # 已完成(OK)工单重扫拦截 (v3.42.1, 默认关): 报警提示且不重新录入
+    block_completed_order_rescan: bool = False
+    event_completed_order_rescan: Optional[int] = None
 
 
 class PackagingFlowConfigCreate(PackagingFlowConfigBase):
@@ -163,9 +170,13 @@ class PackagingFlowConfigUpdate(BaseModel):
     tail_paper_step_label: Optional[str] = None
     tail_paper_as_close_action: Optional[bool] = None
     event_missing_paper: Optional[int] = None
+    tail_paper_scan_alarm: Optional[bool] = None
+    tail_paper_timeout_s: Optional[int] = None
     oil_nozzle_required: Optional[bool] = None
     oil_nozzle_step_label: Optional[str] = None
     event_missing_nozzle: Optional[int] = None
+    block_completed_order_rescan: Optional[bool] = None
+    event_completed_order_rescan: Optional[int] = None
 
 
 class PackagingFlowConfigResponse(PackagingFlowConfigBase):
@@ -288,9 +299,16 @@ def _serialize(row: PackagingFlowConfig) -> PackagingFlowConfigResponse:
         tail_paper_step_label=getattr(row, "tail_paper_step_label", None),
         tail_paper_as_close_action=bool(getattr(row, "tail_paper_as_close_action", False)),
         event_missing_paper=getattr(row, "event_missing_paper", None),
+        tail_paper_scan_alarm=(
+            bool(row.tail_paper_scan_alarm)
+            if getattr(row, "tail_paper_scan_alarm", None) is not None else True
+        ),
+        tail_paper_timeout_s=int(getattr(row, "tail_paper_timeout_s", 0) or 0),
         oil_nozzle_required=bool(getattr(row, "oil_nozzle_required", False)),
         oil_nozzle_step_label=getattr(row, "oil_nozzle_step_label", None),
         event_missing_nozzle=getattr(row, "event_missing_nozzle", None),
+        block_completed_order_rescan=bool(getattr(row, "block_completed_order_rescan", False)),
+        event_completed_order_rescan=getattr(row, "event_completed_order_rescan", None),
     )
 
 

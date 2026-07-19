@@ -25,6 +25,8 @@ from sqlalchemy import inspect, text
 _MIGRATION_MODULES = [
     "m0000_legacy",
     "m0001_hot_path_indexes",
+    "m0002_pkg_completed_order_rescan",
+    "m0003_pkg_tail_paper_order_settle",
 ]
 
 # m0000 不看记账、每次启动都幂等跑（老库任意版本起跳的安全网）

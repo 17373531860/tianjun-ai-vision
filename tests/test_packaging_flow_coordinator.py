@@ -6,6 +6,8 @@
 用真 DB (conftest 已隔离临时库 + 建表) 验证落库, 三个外部钩子 (拉单/报警/回推) 用 mock 注入.
 每个用例前清空包装表 + 复位协调器单例, 避免 module-level 单例串污染.
 """
+import time
+
 import pytest
 
 from backend.services.packaging_flow_coordinator import get_coordinator
@@ -349,6 +351,69 @@ def test_order_code_pattern_disabled_zero_diff(client):
     cfg = {"order_code_pattern": ""}
     assert C._order_code_ok("80.00", cfg) is True
     assert C._order_code_ok("JOB260600151-202", cfg) is True
+
+
+def test_completed_order_rescan_blocked(client):
+    """v3.42.1 完成工单重扫拦截 (开): 单箱做完 OK 后再扫同号 → 报警且不重新开单."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=2,
+                             block_completed_order_rescan=True,
+                             event_completed_order_rescan=3)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 2})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append((k, m)))
+    db = SessionLocal()
+
+    coord.on_scan("JOB1", db, channel_id=0)              # 开工单 (1 箱, 目标 2 件)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=2)  # 尾箱满 2 → 工单完成 OK
+    row = db.query(PackagingFlowRun).filter_by(order_no="JOB1").first()
+    assert row.status == "completed" and row.final_result == "OK"
+
+    coord.on_scan("JOB1", db, channel_id=0)              # 再扫已完成 OK 的同号
+    assert any(k == "completed_order_rescan" for k, _ in alarms)
+    assert coord.get_state(cid) is None                  # 未重新开单
+    runs = db.query(PackagingFlowRun).filter_by(order_no="JOB1").count()
+    assert runs == 1                                     # 没有第二条运行记录
+
+
+def test_completed_order_rescan_default_off_reopens(client):
+    """默认关 = 老行为零差异: 完成 OK 后再扫同号照样重新开单."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=2)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 2})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append((k, m)))
+    db = SessionLocal()
+
+    coord.on_scan("JOB1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=2)
+    coord.on_scan("JOB1", db, channel_id=0)              # 重扫 → 重新开单 (老行为)
+
+    assert not any(k == "completed_order_rescan" for k, _ in alarms)
+    state = coord.get_state(cid)
+    assert state is not None and state["order_no"] == "JOB1"
+
+
+def test_completed_order_rescan_ng_allowed(client):
+    """完成但 NG 的单不拦: 允许重扫补做 (拦截只针对最近一次已完成且 OK)."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=2,
+                             block_completed_order_rescan=True)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 2})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append((k, m)))
+    db = SessionLocal()
+
+    coord.on_scan("JOB1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, False, db, slider_count=1)  # 尾箱 NG → 工单完成 NG
+    row = (db.query(PackagingFlowRun).filter_by(order_no="JOB1")
+           .order_by(PackagingFlowRun.id.desc()).first())
+    assert row.status == "completed" and row.final_result == "NG"
+
+    coord.on_scan("JOB1", db, channel_id=0)              # NG 单重扫 → 放行重开
+    assert not any(k == "completed_order_rescan" for k, _ in alarms)
+    state = coord.get_state(cid)
+    assert state is not None and state["order_no"] == "JOB1"
 
 
 def test_label_digits_only_same_order(client):
@@ -771,9 +836,9 @@ def test_sliders_paper_gate_default_old_behavior_no_snapshot(client):
 
     coord.on_scan("ORD1", db, channel_id=0)
     coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 箱1 正常收
-    coord.on_cycle_settled(0, 2, True, db, slider_count=24)     # 尾箱拦下: 只报警, 不挂快照
+    coord.on_cycle_settled(0, 2, True, db, slider_count=24)     # 尾箱拦下: 只报警, 不挂等待态
     state = coord.get_state(cid)
-    assert state is not None and state.get("pending_paper_box") is None
+    assert state is not None and state.get("awaiting_paper") is None
     coord.on_scan("ORD2", db, channel_id=0)                     # 老行为: 漏箱处置
 
     assert "short_box" in alarms
@@ -783,31 +848,215 @@ def test_sliders_paper_gate_default_old_behavior_no_snapshot(client):
     assert row.status != "completed"
 
 
-def test_sliders_pending_paper_uses_snapshot_not_new_cycle(client):
-    """v3.34.1 挂起快照: 尾箱装满 24 被拦 → 放工单周期只有 0 个滑块 → 收尾用快照 24 判 OK."""
+def test_sliders_awaiting_paper_box_settles_immediately_no_alarm(client):
+    """v3.43 箱归周期/放工单归工单: 尾箱装满没放工单 → 箱当场落账 OK 且**不报警**,
+    工单挂「等放工单收尾」; 之后放工单周期 (0 滑块) 只触发工单收尾, 不改箱成绩."""
     coord, cid = _setup_flow(client, count_unit="sliders",
                              items_per_box_source="config", items_per_box_fixed=24,
                              tail_paper_order_required=True,
                              tail_paper_as_close_action=True)
     coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
-    coord.set_alarm_sink(lambda c, k, m: None)
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
     paper = {"covered": False}
     coord.set_paper_order_probe(lambda ch, lbl: paper["covered"])
     db = SessionLocal()
 
     coord.on_scan("ORD1", db, channel_id=0)
-    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 满箱但没放工单 → 挂起
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 满箱但没放工单
+    state = coord.get_state(cid)
+    assert state is not None and state["status"] == "awaiting_paper"
+    assert state["box_done"] == 1                               # 箱已当场落账
+    assert "missing_paper" not in alarms                        # 正常流程不误报 NG
+
     paper["covered"] = True
     coord.on_cycle_settled(0, 2, True, db, slider_count=0)      # 放工单周期本身 0 滑块
 
     row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
     assert row.status == "completed" and row.final_result == "OK"
-    assert row.box_details[-1]["sliders"] == 24                 # 用快照成绩, 不用 0
+    assert row.box_details[-1]["sliders"] == 24                 # 箱成绩用落账那次, 不用 0
     assert row.paper_order_done is True
+    assert "missing_paper" not in alarms                        # 全程零误报
 
 
-def test_sliders_pending_paper_scan_new_order_judges_ng(client):
-    """v3.34.1 一直没放工单直接扫新工单 → 旧单尾箱判 NG 收尾 + 新单正常开."""
+def test_sliders_awaiting_paper_step_detected_closes_order(client):
+    """v3.43 放工单动作出现即时通知 → 工单立即收尾, 不必等下一周期/扫码."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True,
+                             tail_paper_step_label="放工单")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    coord.set_paper_order_probe(lambda ch, lbl: False)
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂等放工单收尾
+    coord.on_step_detected(0, "放工单")                          # 动作出现
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "OK"
+    assert coord.get_state(cid) is None
+
+
+def test_sliders_early_paper_on_non_tail_box_alarms_once(client):
+    """v3.43.1 提前放工单: 3 箱工单在第 1 箱(非尾箱)就检测到放工单动作 → 当场报警
+    (每箱只报一次), 箱结算不受影响; 做到尾箱后同一动作不再算提前."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True,
+                             tail_paper_step_label="放工单")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 72})    # 3 箱
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    paper = {"covered": False}
+    coord.set_paper_order_probe(lambda ch, lbl: paper["covered"])
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 第 1 箱落账, 开第 2 箱
+    coord.on_step_detected(0, "放工单")                          # 第 2 箱期间提前放工单
+    assert alarms.count("early_paper") == 1
+    coord.on_step_detected(0, "放工单")                          # 同箱重复出现不轰炸
+    assert alarms.count("early_paper") == 1
+
+    state = coord.get_state(cid)
+    assert state["status"] == "running"                         # 不拦结算不改状态
+    assert state["box_done"] == 1
+
+    coord.on_cycle_settled(0, 2, True, db, slider_count=24)     # 第 2 箱落账, 进尾箱
+    coord.on_step_detected(0, "放工单")                          # 尾箱期间 = 正常动作
+    assert alarms.count("early_paper") == 1                     # 不再算提前
+
+    paper["covered"] = True
+    coord.on_cycle_settled(0, 3, True, db, slider_count=24)     # 尾箱落账+放工单到位
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "OK"
+    assert "missing_paper" not in alarms
+
+
+def test_sliders_early_paper_on_empty_tail_box_alarms(client):
+    """v3.43.1 提前放工单·空尾箱: 上一箱落账后"当前箱"立即翻到尾箱, 但尾箱一件没装
+    (实时进箱数=0) 时放工单 → 仍算提前, 报警; 尾箱装上件后 (进箱数>0) 同一动作不报;
+    拿不到进箱数 (钩子缺/返回 None) 时保守放行不误报."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True,
+                             tail_paper_step_label="放工单")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})    # 2 箱
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    coord.set_paper_order_probe(lambda ch, lbl: False)
+    progress = {"n": None}
+    coord.set_box_progress_getter(lambda ch: progress["n"])
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 第 1 箱落账 → 翻到尾箱
+
+    coord.on_step_detected(0, "放工单")                          # 进箱数未知 → 保守放行
+    assert alarms.count("early_paper") == 0
+
+    progress["n"] = 8                                           # 尾箱已在装 → 正常动作
+    coord.on_step_detected(0, "放工单")
+    assert alarms.count("early_paper") == 0
+
+    progress["n"] = 0
+    coord.on_step_detected(0, "放工单")                          # 尾箱空箱 → 提前, 报警
+    assert alarms.count("early_paper") == 1
+    coord.on_step_detected(0, "放工单")                          # 同箱去重
+    assert alarms.count("early_paper") == 1
+
+    state = coord.get_state(cid)
+    assert state["status"] == "running" and state["box_done"] == 1
+
+
+def test_sliders_awaiting_paper_timeout_mode_judges_ng(client):
+    """v3.43 时限判定 (与扫新单二选一): 到点没放工单 → 报警 + 工单终局判 NG 收尾."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True,
+                             tail_paper_scan_alarm=False,       # 时限模式
+                             tail_paper_timeout_s=1)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    coord.set_paper_order_probe(lambda ch, lbl: False)
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂等待, 布防 1s Timer
+    assert alarms.count("missing_paper") == 0
+    time.sleep(1.4)                                             # Timer 到点 = 终局判定
+    assert alarms.count("missing_paper") == 1
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "NG"
+    assert row.box_ng == 0                                      # 箱成绩不回改
+    assert coord.get_state(cid) is None                         # 在途已移除
+
+
+def test_sliders_awaiting_paper_timeout_mode_paper_within_limit_ok(client):
+    """v3.43 时限判定: 时限内等到放工单 → 工单 OK 收尾, Timer 撤防不再误报."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True,
+                             tail_paper_scan_alarm=False,
+                             tail_paper_timeout_s=2,
+                             tail_paper_step_label="放工单")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    coord.set_paper_order_probe(lambda ch, lbl: False)
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂等待
+    coord.on_step_detected(0, "放工单")                          # 时限内放了
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "OK"
+    time.sleep(2.4)                                             # 原时限过点
+    assert alarms.count("missing_paper") == 0                   # Timer 已撤防, 零误报
+
+
+def test_sliders_awaiting_paper_timeout_mode_scan_rejected(client):
+    """v3.43 时限判定下扫新单不参与判定: 时限内扫新单被拒收 (旧单继续等, 新单不开),
+    到点后时限终局判 NG, 再扫新单正常开."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True,
+                             tail_paper_scan_alarm=False,
+                             tail_paper_timeout_s=1)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    coord.set_paper_order_probe(lambda ch, lbl: False)
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂等待 (1s 时限)
+    coord.on_scan("ORD2", db, channel_id=0)                     # 时限内扫新单 → 拒收
+    state = coord.get_state(cid)
+    assert state is not None and state["order_no"] == "ORD1"    # 旧单仍在途
+    assert state["status"] == "awaiting_paper"
+    assert db.query(PackagingFlowRun).filter_by(order_no="ORD2").count() == 0  # 新单没开
+
+    time.sleep(1.4)                                             # 时限到点 → 终局 NG
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "NG"
+    coord.on_scan("ORD2", db, channel_id=0)                     # 判定完再扫 → 正常开
+    state = coord.get_state(cid)
+    assert state is not None and state["order_no"] == "ORD2"
+
+
+def test_sliders_awaiting_paper_scan_new_order_judges_ng(client):
+    """v3.43 一直没放工单直接扫新工单 → 报警 + 旧单**工单层**判 NG 收尾 (箱成绩不回改)
+    + 新单正常开. 报警只在扫新单这一个点 (挂等待时不报)."""
     coord, cid = _setup_flow(client, count_unit="sliders",
                              items_per_box_source="config", items_per_box_fixed=24,
                              tail_paper_order_required=True,
@@ -819,19 +1068,74 @@ def test_sliders_pending_paper_scan_new_order_judges_ng(client):
     db = SessionLocal()
 
     coord.on_scan("ORD1", db, channel_id=0)
-    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂起等放工单
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂等放工单收尾 (不报警)
+    assert alarms.count("missing_paper") == 0
     coord.on_scan("ORD2", db, channel_id=0)                     # 没放就扫新单
 
     row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
     assert row.status == "completed" and row.final_result == "NG"
-    assert row.box_done == 1 and row.box_ng == 1
-    assert alarms.count("missing_paper") >= 2                   # 挂起时 + 判NG时
+    assert row.box_done == 1 and row.box_ng == 0                # 箱本身 OK, NG 在工单层
+    assert row.box_details[-1]["result"] == "OK"
+    assert alarms.count("missing_paper") == 1                   # 只在扫新单时报
     state = coord.get_state(cid)
     assert state is not None and state["order_no"] == "ORD2"    # 新单已开
 
 
-def test_sliders_pending_paper_scan_new_order_after_paper_ok(client):
-    """v3.34.1 挂起后现场放了工单(实时可见)再扫新单 → 旧单快照 OK 收尾 + 新单开."""
+def test_sliders_awaiting_paper_scan_judge_alarm_fires_after_project_switch(client):
+    """v3.43.1 扫新单判定的缺工单报警必须在开新单/切项目**之后**触发: 换项目会重载模型
+    并重置检测运行时, 报警若先于切换触发, 立起的人工确认定格会被切换抹掉 (确认框闪退)."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True,
+                             auto_switch_project=True)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24, "spec": f"SPEC-{o}"})
+    events = []                                                  # 统一时序流水
+    coord.set_alarm_sink(lambda c, k, m: events.append(("alarm", k)))
+    coord.set_project_activator(lambda spec, cfg: events.append(("switch", spec)) or True)
+    coord.set_paper_order_probe(lambda ch, lbl: False)           # 始终没放
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)      # 挂等放工单收尾
+    coord.on_scan("ORD2", db, channel_id=0)                      # 没放就扫新单 (带切项目)
+
+    alarm_idx = events.index(("alarm", "missing_paper"))
+    switch_idx = events.index(("switch", "SPEC-ORD2"))
+    assert switch_idx < alarm_idx, f"缺工单报警必须在切项目之后: {events}"
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "NG"
+    state = coord.get_state(cid)
+    assert state is not None and state["order_no"] == "ORD2"     # 新单已开
+
+
+def test_sliders_awaiting_paper_invalid_combo_falls_back_to_scan_mode(client):
+    """v3.43 兜底归一: 两个字段组合非法 (扫新单关 + 时限 0) 时按默认扫新单模式判定."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True,
+                             tail_paper_scan_alarm=False,
+                             tail_paper_timeout_s=0)            # 非法组合
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    coord.set_paper_order_probe(lambda ch, lbl: False)
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)
+    coord.on_scan("ORD2", db, channel_id=0)                     # 兜底走扫新单判定
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "NG"
+    assert alarms.count("missing_paper") == 1
+    state = coord.get_state(cid)
+    assert state is not None and state["order_no"] == "ORD2"
+
+
+def test_sliders_awaiting_paper_scan_new_order_after_paper_ok(client):
+    """v3.43 等待中现场放了工单(实时可见)再扫新单 → 旧单 OK 收尾 + 新单开."""
     coord, cid = _setup_flow(client, count_unit="sliders",
                              items_per_box_source="config", items_per_box_fixed=24,
                              tail_paper_order_required=True,
@@ -843,7 +1147,7 @@ def test_sliders_pending_paper_scan_new_order_after_paper_ok(client):
     db = SessionLocal()
 
     coord.on_scan("ORD1", db, channel_id=0)
-    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂起
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂等放工单收尾
     paper["covered"] = True                                     # 现场放了工单
     coord.on_scan("ORD2", db, channel_id=0)
 
@@ -853,8 +1157,8 @@ def test_sliders_pending_paper_scan_new_order_after_paper_ok(client):
     assert state is not None and state["order_no"] == "ORD2"
 
 
-def test_sliders_pending_paper_same_order_rescan_waits(client):
-    """v3.34.1 挂起中同号重扫且仍没放 → 只提醒继续等, 工单保持在途不收尾."""
+def test_sliders_awaiting_paper_same_order_rescan_waits(client):
+    """v3.43 等待中同号重扫且仍没放 → 只提醒继续等, 工单保持在途 (箱已落账)."""
     coord, cid = _setup_flow(client, count_unit="sliders",
                              items_per_box_source="config", items_per_box_fixed=24,
                              tail_paper_order_required=True,
@@ -866,17 +1170,18 @@ def test_sliders_pending_paper_same_order_rescan_waits(client):
     db = SessionLocal()
 
     coord.on_scan("ORD1", db, channel_id=0)
-    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂起
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂等放工单收尾
     coord.on_scan("ORD1", db, channel_id=0)                     # 同号重扫
 
     state = coord.get_state(cid)
     assert state is not None and state["order_no"] == "ORD1"    # 仍在途
-    assert state["box_done"] == 0                               # 没收尾
-    assert alarms.count("missing_paper") >= 2
+    assert state["status"] == "awaiting_paper"                  # 工单没收尾
+    assert state["box_done"] == 1                               # 箱已当场落账
+    assert alarms.count("missing_paper") == 1                   # 重扫提醒这一次
 
 
-def test_sliders_pending_paper_forced_settle_waives_gate(client):
-    """v3.34.1 挂起中管理员强制结案 → 豁免塞工单 gate, 按快照原成绩落账收尾."""
+def test_sliders_awaiting_paper_forced_settle_waives_gate(client):
+    """v3.43 等待中管理员强制结案 → 豁免放工单, 工单按各箱成绩收尾."""
     coord, cid = _setup_flow(client, count_unit="sliders",
                              items_per_box_source="config", items_per_box_fixed=24,
                              tail_paper_order_required=True,
@@ -887,7 +1192,7 @@ def test_sliders_pending_paper_forced_settle_waives_gate(client):
     db = SessionLocal()
 
     coord.on_scan("ORD1", db, channel_id=0)
-    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂起
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)     # 挂等放工单收尾
     assert coord.force_settle_manual(cid, db, reason="现场确认已放工单", operator="主管A")
 
     row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()

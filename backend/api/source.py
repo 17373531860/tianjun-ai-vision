@@ -1204,19 +1204,27 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         return confirmed
     
     def is_packaging_paper_order_covered(self, step_label):
-        """尾箱塞工单 gate 探测 (v3.22): 指定"放工单"步骤本周期是否已检出 (covered).
+        """尾箱塞工单 gate 探测 (v3.22, v3.42.1 扩口径): "放工单"步骤是否已检出.
 
-        只读查询, 不改任何状态. 优先读结算时缓存的本周期步骤集 (end_cycle 后
-        current_cycle_steps 会清空); 缓存缺失时兜底查实时步骤集.
+        只读查询, 不改任何状态. 查四处 (任一命中即 covered):
+          1. _last_cycle_steps      结算时缓存的上周期序列步骤集
+          2. current_cycle_steps    当前开着的周期序列步骤集
+          3. _oos_steps_seen        序列外步骤旁路账本 (当前代) — 顺序/自定义-基于顺序
+             模式下"放工单"通常是序列外检测步骤, 永远进不了上面两处 (FIX-381),
+             只有这本账看得见它 (v3.42.1 修复: 之前 gate 因此永不放行)
+          4. _last_oos_steps_seen   旁路账本上一代 (随周期结算轮转)
         step_label 为空 → 无法判定, 返回 False (gate 守住, 等真正放了工单再放行).
         """
         if not step_label:
             return False
         try:
-            cached = getattr(self, '_last_cycle_steps', None)
-            if cached:
-                return step_label in cached
-            return step_label in (getattr(self, 'current_cycle_steps', None) or [])
+            if step_label in (getattr(self, '_last_cycle_steps', None) or []):
+                return True
+            if step_label in (getattr(self, 'current_cycle_steps', None) or []):
+                return True
+            if step_label in (getattr(self, '_oos_steps_seen', None) or set()):
+                return True
+            return step_label in (getattr(self, '_last_oos_steps_seen', None) or set())
         except Exception:
             return False
 
@@ -1425,6 +1433,10 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self._last_step_added_time = None
         self.last_step_completed_time = None
         self._cycle_regression = False
+        # v3.42.1 序列外步骤旁路账本 (放工单 gate 探测用): 停止/切项目/强制结算时
+        # 两代一起清, 防陈旧"放工单"残影跨启停放行尾箱 gate
+        self._oos_steps_seen = set()
+        self._last_oos_steps_seen = set()
 
         # 同时出现组缓冲
         self._sim_group_buffers = {}
@@ -1468,6 +1480,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             self._pending_ack_event_id = None
             self._pending_ack_event_name = None
             self._pending_ack_timeout_sec = 0
+            self._pending_ack_reason = None
 
     def start_detection(self, model_path: str = None):
         """开始检测"""

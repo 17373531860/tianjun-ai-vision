@@ -4807,6 +4807,11 @@
       "title": "Auto Switch Project",
       "type": "boolean"
      },
+     "block_completed_order_rescan": {
+      "default": false,
+      "title": "Block Completed Order Rescan",
+      "type": "boolean"
+     },
      "box_count_field": {
       "default": "dispatch_qty",
       "title": "Box Count Field",
@@ -4873,6 +4878,17 @@
        }
       ],
       "title": "Event Box Ng"
+     },
+     "event_completed_order_rescan": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Completed Order Rescan"
      },
      "event_label_len": {
       "anyOf": [
@@ -5130,6 +5146,11 @@
       "title": "Tail Paper Order Required",
       "type": "boolean"
      },
+     "tail_paper_scan_alarm": {
+      "default": true,
+      "title": "Tail Paper Scan Alarm",
+      "type": "boolean"
+     },
      "tail_paper_step_label": {
       "anyOf": [
        {
@@ -5140,6 +5161,11 @@
        }
       ],
       "title": "Tail Paper Step Label"
+     },
+     "tail_paper_timeout_s": {
+      "default": 0,
+      "title": "Tail Paper Timeout S",
+      "type": "integer"
      },
      "tray_qty_fixed": {
       "default": 0,
@@ -5201,6 +5227,11 @@
      "auto_switch_project": {
       "default": false,
       "title": "Auto Switch Project",
+      "type": "boolean"
+     },
+     "block_completed_order_rescan": {
+      "default": false,
+      "title": "Block Completed Order Rescan",
       "type": "boolean"
      },
      "box_count_field": {
@@ -5269,6 +5300,17 @@
        }
       ],
       "title": "Event Box Ng"
+     },
+     "event_completed_order_rescan": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Completed Order Rescan"
      },
      "event_label_len": {
       "anyOf": [
@@ -5530,6 +5572,11 @@
       "title": "Tail Paper Order Required",
       "type": "boolean"
      },
+     "tail_paper_scan_alarm": {
+      "default": true,
+      "title": "Tail Paper Scan Alarm",
+      "type": "boolean"
+     },
      "tail_paper_step_label": {
       "anyOf": [
        {
@@ -5540,6 +5587,11 @@
        }
       ],
       "title": "Tail Paper Step Label"
+     },
+     "tail_paper_timeout_s": {
+      "default": 0,
+      "title": "Tail Paper Timeout S",
+      "type": "integer"
      },
      "tray_qty_fixed": {
       "default": 0,
@@ -5609,6 +5661,17 @@
        }
       ],
       "title": "Auto Switch Project"
+     },
+     "block_completed_order_rescan": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Block Completed Order Rescan"
      },
      "box_count_field": {
       "anyOf": [
@@ -5730,6 +5793,17 @@
        }
       ],
       "title": "Event Box Ng"
+     },
+     "event_completed_order_rescan": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Completed Order Rescan"
      },
      "event_label_len": {
       "anyOf": [
@@ -6108,6 +6182,17 @@
       ],
       "title": "Tail Paper Order Required"
      },
+     "tail_paper_scan_alarm": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tail Paper Scan Alarm"
+     },
      "tail_paper_step_label": {
       "anyOf": [
        {
@@ -6118,6 +6203,17 @@
        }
       ],
       "title": "Tail Paper Step Label"
+     },
+     "tail_paper_timeout_s": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tail Paper Timeout S"
      },
      "tray_qty_fixed": {
       "anyOf": [

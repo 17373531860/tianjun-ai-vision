@@ -73,6 +73,17 @@
         />
       </div>
 
+      <!-- v3.43 等放工单收尾横幅: 各箱已落账, 只差放工单动作完成工单 -->
+      <div v-if="state.status === 'awaiting_paper'"
+           class="mb-3 rounded border border-cyan-600/60 bg-cyan-900/30 px-3 py-2">
+        <div class="text-cyan-300 text-sm font-bold mb-1">
+          ⏳ 各箱已落账，等「放工单」动作完成工单收尾…
+        </div>
+        <div class="text-xs text-cyan-200/80">
+          检测到放工单动作即合格收尾；一直没放，按配置的判定方式（扫新单时判定 / 到时限判定）报警并判 NG 收尾。
+        </div>
+      </div>
+
       <!-- v3.23 少装挂起等补做横幅 -->
       <div v-if="pendingBox" class="mb-3 rounded border border-amber-600/60 bg-amber-900/30 px-3 py-2">
         <div class="text-amber-300 text-sm font-bold mb-1">
@@ -195,7 +206,7 @@ async function onRedo() {
 // 强制结案按钮: 有进行中工单 + 当前账号有权限才出现 (鉴权关时人人=超管, 始终可见)
 const canForceSettle = computed(() =>
   !!props.state
-  && ['order_loaded', 'running'].includes(props.state.status)
+  && ['order_loaded', 'running', 'awaiting_paper'].includes(props.state.status)
   && authStore.hasPermission('system.packaging_flow.force_settle'));
 
 async function onForceSettle() {
@@ -265,6 +276,7 @@ const statusLabel = computed(() => ({
   order_loaded: '工单已开',
   running: '装箱中',
   pending_remediation: '少装·等补做',
+  awaiting_paper: '等放工单收尾',
   completed: '已完成',
   aborted: '已作废',
 }[props.state?.status] || (props.state ? props.state.status : '空闲')));
@@ -272,6 +284,7 @@ const statusLabel = computed(() => ({
 const statusColor = computed(() => ({
   running: 'text-green-400',
   pending_remediation: 'text-amber-400',
+  awaiting_paper: 'text-cyan-400',
   completed: 'text-cyan-400',
   aborted: 'text-red-400',
 }[props.state?.status] || 'text-gray-400'));

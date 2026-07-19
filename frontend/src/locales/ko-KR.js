@@ -38,6 +38,8 @@ export default {
     custom: '사용자 정의',
     tracking: '추적 모드',
     per_item: '개별 커버',
+    weighing: '계량 투입',
+    region_events: '영역 이벤트',
     undefined: '미정의'
   },
   monitor: {

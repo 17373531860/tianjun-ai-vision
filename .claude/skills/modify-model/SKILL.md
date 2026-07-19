@@ -143,6 +143,7 @@ class ScannerDevice(Base):
 - **新建库**走 ORM 定义；**老客户库**走迁移模块的 ALTER → 默认值在两处都要一致
 
 > 近期 schema 变更样例（v3.30.0）：`packaging_flow_configs` 新增 `name_match_strict_boundary BOOLEAN DEFAULT 0`（规格→项目自动同名匹配的"严格边界"开关；ORM 默认 `False` + 迁移 ALTER `DEFAULT 0` 两处对齐）。
+> 版本化迁移样例（v3.43，m0002/m0003）：`packaging_flow_configs` 分两个迁移模块加 4 列——m0002 重扫拦截两列（`block_completed_order_rescan BOOLEAN DEFAULT 0` + `event_completed_order_rescan INTEGER`）、m0003 缺工单判定两列（`tail_paper_scan_alarm BOOLEAN DEFAULT 1` + `tail_paper_timeout_s INTEGER DEFAULT 0`）；均在 `migrations/__init__.py` 的 `_MIGRATION_MODULES` 登记，PostgreSQL 布尔默认值走 `BOOLEAN DEFAULT FALSE/TRUE` 分道。
 
 ### 步骤 B：`backend/db/migrations/` 新建迁移文件
 

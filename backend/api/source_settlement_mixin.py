@@ -1087,17 +1087,10 @@ class SettlementMixin:
 
         return pending_labels, ready_ordered
     
-    def _fire_strict_order_violation(self, label, reason: str):
-        """v3.32 严格顺序违序即时事件: 违序动作被守门拦下的同时当场触发所配事件。
-
-        - 配置来源 pipeline_config.strict_order_violation_event_id (None=关, 零差异)
-        - 守门每帧都会打到这里 (被拦步骤不记 last_seen → 每帧都算新出现),
-          必须节流: 同一 (标签, 周期进度) 5 秒内只触发一次, 周期推进后可再报
-        - 建议配警告/自定义类事件; 配 NG 类事件会走完整 NG 计数/推送, 慎用
-        """
-        event_id = getattr(self, 'strict_order_violation_event_id', None)
-        if not event_id:
-            return
+    def _violation_throttle_pass(self, label) -> bool:
+        """违规响应节流 (实时NG 与违序提示事件共用一本账): 同一 (标签, 周期进度)
+        5 秒内只放行一次, 周期推进后可再报。守门/回退点每帧或每次新出现都会打到,
+        不节流会刷屏 + 重复触发事件。返回 True = 放行 (并记账)。"""
         throttle = getattr(self, '_strict_violation_throttle', None)
         if throttle is None:
             throttle = {}
@@ -1105,12 +1098,92 @@ class SettlementMixin:
         key = (label, tuple(self.current_cycle_steps))
         now_mono = time.monotonic()
         if now_mono - throttle.get(key, 0.0) < 5.0:
-            return
+            return False
         throttle[key] = now_mono
         # 防止 dict 无限膨胀 (周期状态组合有限但保险起见)
         if len(throttle) > 256:
             throttle.clear()
             throttle[key] = now_mono
+        return True
+
+    def _fire_instant_ng(self, reason: str) -> bool:
+        """v3.43 实时NG统一收口: 违规确认点当场触发 NG 事件(2) 走完整结算链路
+        (end_cycle/计数/报警/MES)。全模式挂点共用 (严格守门违序 / 回退重复 /
+        后续各模式超量等), 分流与档位只在这里存在一份。
+
+        调用方约定:
+          1. 先过 _violation_throttle_pass 节流再调本方法;
+          2. 返回 True = 实时NG路径已消费本次违规 (已触发, 或被事件层守门抑制
+             settle_dedup / ng_protect / 定格中 —— NG 语义下被抑制的违规不该
+             绕道再报), 调用方不应再叠加提示类事件;
+          3. 返回 False = 实时NG不适用 (开关关 / 周期未开 —— 空周期没有可结算
+             对象, 落 NG 计数只会刷屏), 调用方自行决定兜底。
+
+        提示档/斩立决由事件2自身配置分流:
+          - 带「需人工确认」→ _trigger_event 内设定格标志, 此时不清运行时
+            (_clear_step_runtime_state 会连定格一起抹掉; 清理交给确认端点:
+            确认重做→清 / 保留周期→留, 与既有 ack 语义一致)
+          - 不带 → 当场结算 + 清运行时开新周期 (同 _force_timeout_ng 语义)
+        """
+        if not getattr(self, 'instant_ng_on_violation', False):
+            return False
+        if not getattr(self, 'current_cycle_steps', None):
+            return False
+        fired = False
+        try:
+            fired = bool(self._trigger_event(2, f'实时NG: {reason}'))
+        except Exception as e:
+            print(f"[InstantNG] 实时NG触发失败: {e}")
+        if fired:
+            if not getattr(self, '_pending_ack', False) \
+                    and hasattr(self, '_clear_step_runtime_state'):
+                self._clear_step_runtime_state()
+            print(f"[InstantNG] 违规即时结算已触发: {reason}")
+        return True
+
+    def _maybe_instant_ng_detection_duplicate(self, label):
+        """v3.43 二期 实时NG · 检测模式重复超次: 标签入账后本周期出现次数一旦超过
+        期望次数, _settle_detection_cycle 必报「重复步骤」NG (可证明性准绳) → 当场结。
+
+        两个保守守门 (保证"提前结不改判定"严格成立):
+          1. 仅纯 detection 模式 —— 基于检测的自定义有"末步消失齐了就 OK"早退路径
+             (_check_custom_detection_mode 不数重复), 重复超次在那不必然 NG, 不做;
+          2. 配了时长门 (min/max_duration) 的步骤跳过 —— 结算前
+             _filter_cycle_by_duration 可能把时长不达标的出现滤出周期, 次数会回落,
+             中途判会误杀; 交结算兜底。
+        期望次数口径与 _settle_detection_cycle 完全同源 (expected_counter.get(s, 1))。
+        """
+        if not getattr(self, 'instant_ng_on_violation', False):
+            return
+        tc = self.step_time_config.get(label, {}) or {}
+        if tc.get('min_duration') is not None or tc.get('max_duration') is not None:
+            return
+        from collections import Counter
+        expected_counter = Counter(self._get_detection_step_labels() or [])
+        if self.current_cycle_steps.count(label) <= expected_counter.get(label, 1):
+            return
+        if self._violation_throttle_pass(label):
+            self._fire_instant_ng(f'重复步骤: [{label}] 超出期望次数')
+
+    def _fire_strict_order_violation(self, label, reason: str):
+        """v3.32 严格顺序违序即时事件 + v3.43 实时NG: 违序动作被守门拦下的当场响应。
+
+        - 实时NG: pipeline_config.instant_ng_on_violation (False=关, 零差异),
+          违规证据在这一刻已完整 (违序=提前出现; 漏步骤的最早可证明时刻=后继步骤
+          已确认而前置缺失, 同一份证据) → 经 _fire_instant_ng 统一收口结算
+        - 提示事件: pipeline_config.strict_order_violation_event_id (None=关, 零差异),
+          当场触发所配事件但不动周期; 建议配警告/自定义类事件。
+          实时NG不适用时 (开关关/空周期) 才走到这条
+        """
+        event_id = getattr(self, 'strict_order_violation_event_id', None)
+        if not getattr(self, 'instant_ng_on_violation', False) and not event_id:
+            return
+        if not self._violation_throttle_pass(label):
+            return
+        if self._fire_instant_ng(reason):
+            return
+        if not event_id:
+            return
         try:
             self._trigger_event(event_id, reason)
             print(f"[StrictOrder] 违序即时事件已触发: event_id={event_id} {reason}")
@@ -1368,6 +1441,10 @@ class SettlementMixin:
             ):
                 expected_seq = self._get_expected_sequence_labels()
                 if expected_seq and label not in expected_seq:
+                    # v3.42.1: 序列外步骤记入旁路账本 (不进 cycle, 不影响判定).
+                    # 尾箱塞工单 gate 的"放工单"正是序列外检测步骤 — 被本 return
+                    # 拦住导致 current_cycle_steps 永远看不见它, gate 永远不放行.
+                    self._record_out_of_seq_step(label)
                     return
 
             # 检测模式：只有第一步能开启新周期
@@ -1433,6 +1510,16 @@ class SettlementMixin:
                             self.last_added_step = label
                             self._last_step_added_time = current_time
                             print(f"[StepRegression] {label} already appeared in cycle and not an expected repeat, marking regression (current: {self.current_cycle_steps})")
+                            # v3.43 二期 实时NG: 回退/非法重复一经入账, 顺序型结算必判
+                            # NG (可证明性准绳) → 当场结。守门只放顺序型: 回退标记仅被
+                            # 顺序型结算分支消费; 基于检测的自定义按出现次数判且不看
+                            # 回退标记, 此处提前结会误杀合法多次出现的周期。
+                            _based_on = ((self.project_config.get('pipeline_config', {}) or {})
+                                         .get('custom_based_on') if self.project_config else None)
+                            if logic_mode == 'sequential' or _based_on == 'sequential':
+                                if self._violation_throttle_pass(label):
+                                    self._fire_instant_ng(
+                                        f'步骤回退: [{label}] 在错误位置重复出现')
                     else:
                         self.current_cycle_steps.append(label)
                         self.last_added_step = label
@@ -1442,7 +1529,36 @@ class SettlementMixin:
                         self.current_cycle_steps.append(label)
                         self.last_added_step = label
                         self._last_step_added_time = current_time
+                        # v3.43 二期 实时NG: 纯检测模式重复超次即时结 (口径与
+                        # _settle_detection_cycle 同源, 详见方法 docstring)
+                        if logic_mode == 'detection':
+                            self._maybe_instant_ng_detection_duplicate(label)
     
+    def _record_out_of_seq_step(self, label):
+        """v3.42.1 序列外步骤旁路账本 + 包装协调器即时通知.
+
+        顺序/自定义-基于顺序模式下, 序列外启用步骤被 FIX-381 拦在周期外 —
+        正确 (不该影响判定), 但「尾箱塞工单 gate」探测的"放工单"恰是序列外步骤,
+        它的出现必须有处可查、有人可知:
+          1. 记入 _oos_steps_seen (随周期结算轮转到 _last_oos_steps_seen,
+             is_packaging_paper_order_covered 两代都查);
+          2. 即时通知包装结算协调器 (尾箱挂起等放工单时, 出现即收尾,
+             不必等下一次扫码/下一个周期结算)。
+        无包装配置 / 通道不参与包装 → 协调器入口一层判断直接返回, 零差异。
+        """
+        try:
+            if not hasattr(self, '_oos_steps_seen') or self._oos_steps_seen is None:
+                self._oos_steps_seen = set()
+            self._oos_steps_seen.add(label)
+        except Exception:
+            pass
+        try:
+            from backend.services.packaging_flow_coordinator import get_coordinator
+            get_coordinator().on_step_detected(
+                int(getattr(self, 'channel_id', 0) or 0), label)
+        except Exception as e:
+            print(f"[PackagingFlow] on_step_detected error (isolated, non-fatal): {e}")
+
     def _inject_backup_steps(self, this_cycle: list, expected_labels: list) -> list:
         """Inject primary step labels into this_cycle when their backup was seen but
         the primary itself is missing. Returns a new list with injections applied."""

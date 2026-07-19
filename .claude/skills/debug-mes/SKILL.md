@@ -690,16 +690,18 @@ curl http://localhost:8001/api/v1/cluster/slaves
 | 待机不结算 | 配置 `forced_settle_on_standby`（默认开）| 关掉后 `on_forced_settle_by_channel(is_standby=True)` 直接 return，工单保留可恢复 | 停止（非待机）才收尾 |
 | 缺油嘴 gate | 配置 `oil_nozzle_required`+`oil_nozzle_step_label`+`event_missing_nozzle`| 每箱结算前 `_probe_oil_nozzle` 判放油嘴步骤是否 covered，未过暂不收尾+报警 | 未配置/无探测器退化放行（每箱 gate 误卡会卡死线）|
 
-### v3.34.1 尾箱塞工单 gate 升级：放工单 = 尾箱收尾动作（挂起快照闭环，子开关可选）
+### v3.43 尾箱塞工单 gate 语义重构：箱归周期结算、放工单归工单收尾（替代 v3.34.1 挂起快照）
 
-- **与老行为并存**：子开关 `tail_paper_as_close_action`（默认**关**=老行为零差异，仅 `tail_paper_order_required` 开时生效；上银一键预设开）。关 = 老行为：拦下只报警等着，下个周期结算按那个周期自己的数据重走 gate；扫新单走漏箱处置。开 = 下述挂起快照闭环。
-- **旧行为痛点**：尾箱装满但放工单发生在周期结算**之后** → gate 拦下后无路可走，下个周期结算会用新周期的滑块数（≈0）判 NG。
-- **新行为（子开关开）**：gate 拦下时把被拦那次的滑块数/合格性存进 `run["pending_paper_box"]` 快照（内存态，不改 status），之后**四个出口**消化快照：
-  1. 后续周期结算探到放工单 → 用**快照原成绩**收尾（新周期滑块数忽略，同一物理箱）；
-  2. 扫码时探到放工单（探测钩子 `_real_paper_order_probe` 已补查 `current_cycle_steps` 实时步骤集，修掉"上一周期缓存遮蔽 live"的坑）→ 快照收尾，扫的是新单则接着开新单；
-  3. **没放就扫新工单** → 尾箱判 NG 收尾（`missing_paper` 报警 + `box_details[].remediated` 留痕）再开新单；
-  4. 管理员强制结案 → 豁免 gate，按快照原成绩落账。
-- 同号重扫且仍没放 → 只提醒继续等，不收尾。核心逻辑 `_close_pending_paper`；测试见 `test_packaging_flow_coordinator.py::test_sliders_pending_paper_*` + `packaging_flow_sliders.feature` 三个新场景。
+- **与老行为并存**：子开关 `tail_paper_as_close_action`（默认**关**=老行为零差异，仅 `tail_paper_order_required` 开时生效；上银一键预设开）。关 = 老行为：拦下只报警等着，下个周期结算按那个周期自己的数据重走 gate。开 = 下述工单收尾语义（v3.43 起；v3.34.1 的 `pending_paper_box` 挂起快照与 `_close_pending_paper` 已删）。
+- **v3.43 语义（子开关开）**：尾箱在周期结算时**照常按自身成绩当场落账**（gate 不拦不报警）；各箱全落账但放工单没探到 → run 挂 `awaiting_paper`（status=awaiting_paper，监控卡横幅），**只差放工单动作完成工单**。出口：
+  1. 检测层探到序列外"放工单"步骤 → `on_step_detected` 即时完成工单（不必等扫码/周期结算）；
+  2. 后续周期结算/扫码时探到放工单 → 工单正常收尾；
+  3. **缺工单判定二选一**（`_paper_judge_mode`，m0003 两列）：`tail_paper_scan_alarm=True`（默认）= 扫新单判定——下一单扫码发现没放 → 报警 + 旧单**工单层**判 NG 收尾（箱成绩不回改）再开新单；`scan_alarm=False 且 timeout_s>0` = 时限判定——挂等待态时布防一次性 `threading.Timer`，到点终局判定（最后探一次），时限内扫新单被**拒收**提示稍候；
+  4. 管理员强制结案 → 豁免放工单，工单按各箱成绩收尾。
+- 同号重扫且仍没放 → 只提醒继续等。重启后 awaiting_paper 一并作废（内存 Timer 已丢，防幽灵在途）。核心逻辑 `_close_awaiting_paper`；测试见 `test_packaging_flow_coordinator.py`（91 例含等待态/两判定/Timer）+ `packaging_flow_sliders.feature`。
+- **v3.43.1 两个连带守门**（真实事故：确认框闪退）：扫新单判定路径的缺工单报警**延后**到开新单（含按规格切项目）之后触发（`defer_alarm`）；`_real_project_activator` 命中已激活项目原地不动不重载模型。
+- **配套（v3.42.1/v3.43.1）**：已完成(OK)工单重扫拦截 `block_completed_order_rescan`（on_scan 单点守门，NG 单不拦，m0002）；提前放工单报警 `early_paper`（非尾箱/空尾箱期间出现放工单动作每箱一次提醒，进箱数探测钩子 `set_box_progress_getter` 读容器已结算件数，拿不到保守放行）。
+- **gate 探测数据源（v3.42.1 修复）**：顺序型下"放工单"是序列外步骤进不了周期步骤集——`is_packaging_paper_order_covered` 扩查四处（周期两代 + `_oos_steps_seen` 旁路账本两代，账本随周期轮转、停止/切项目全清），否则 gate 永不放行。
 
 ### v3.23 NG 补做之「补滑块」（延迟落账）
 

@@ -853,17 +853,31 @@ class PackagingFlowConfig(Base):
     # 尾箱塞工单视觉 gate (默认关): 尾箱结算前"放工单"步骤必须 covered, 否则不收尾 + 报警
     tail_paper_order_required = Column(Boolean, default=False)
     tail_paper_step_label = Column(String(64), nullable=True)
-    # v3.34.1 放工单=尾箱收尾动作 (默认关=老行为): 开后 gate 拦下时挂起本箱成绩快照,
-    # 之后探到放工单用快照原成绩收尾; 一直没放就扫新工单则尾箱判 NG 收尾.
-    # 仅 tail_paper_order_required 开时生效.
+    # v3.34.1 放工单=尾箱收尾动作 (默认关=老行为); v3.43 起语义: 箱结算归周期
+    # (尾箱按自身成绩当场落账), 放工单归工单收尾 (工单挂"等放工单收尾", 探到放工单
+    # 才完成工单; 一直没放就扫新工单则工单判 NG 收尾). 仅 tail_paper_order_required 开时生效.
     tail_paper_as_close_action = Column(Boolean, default=False)
     event_missing_paper = Column(Integer, nullable=True)   # 尾箱缺工单异常事件
+    # v3.43 缺工单判定方式 (二选一互斥, 仅 as_close_action 模式生效):
+    #   扫新单判定 (默认) = scan_alarm=True: 下一单扫码进来发现上一单没放工单
+    #     → 报警 + 上一单 NG 收尾, 无时间限制;
+    #   时限判定 = scan_alarm=False 且 timeout_s>0: 到点没放 → 报警 + NG 收尾 (终局),
+    #     扫新单不参与判定 (时限内扫新单被拒收提示稍候).
+    # 组合非法时兜底按扫新单模式 (见协调器 _paper_judge_mode).
+    tail_paper_scan_alarm = Column(Boolean, default=True)
+    tail_paper_timeout_s = Column(Integer, default=0)
 
     # 缺油嘴视觉 gate (默认关): 每箱封箱结算前"放油嘴"步骤必须 covered, 否则不收尾 + 报警.
     # 与塞工单 gate 同机制 (复用 is_packaging_paper_order_covered 探测), 区别: 每箱都查 (非仅尾箱).
     oil_nozzle_required = Column(Boolean, default=False)
     oil_nozzle_step_label = Column(String(64), nullable=True)
     event_missing_nozzle = Column(Integer, nullable=True)  # 缺油嘴异常事件
+
+    # v3.42.1 已完成(OK)工单重扫拦截 (默认关=老行为可重开):
+    # 开 = 扫到"最近一次运行已完成且结果 OK"的工单号时报警提示且不重新录入
+    # (在途工单不受影响; 完成但 NG 的单仍允许重扫补做). 提示走下面可配事件.
+    block_completed_order_rescan = Column(Boolean, default=False)
+    event_completed_order_rescan = Column(Integer, nullable=True)  # 重扫拦截提示事件
 
     plugin_data = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

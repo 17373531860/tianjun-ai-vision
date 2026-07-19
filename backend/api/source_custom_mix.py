@@ -1050,6 +1050,10 @@ def compose_settle_event(host, event_id, reason):
             host._last_container_item_total = mix.container_settled_item_total()
             # 缓存本周期已检出步骤集 (尾箱塞工单 gate 探测用; end_cycle 后 current_cycle_steps 会清)
             host._last_cycle_steps = list(getattr(host, 'current_cycle_steps', []) or [])
+            # v3.42.1: 序列外步骤旁路账本随周期轮转 (放工单等序列外检测步骤
+            # 不进 current_cycle_steps, gate 探测靠这本账; 只留最近两代防陈旧误放行)
+            host._last_oos_steps_seen = set(getattr(host, '_oos_steps_seen', None) or set())
+            host._oos_steps_seen = set()
             try:
                 from backend.core import debug_center
                 if debug_center.is_on("backend.packaging"):

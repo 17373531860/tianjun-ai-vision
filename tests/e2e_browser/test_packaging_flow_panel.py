@@ -65,9 +65,22 @@ def test_packaging_panel_create_with_hiwin_preset(page, base_url, api_url):
     assert cfg["composite_pick_mode"] == "prefix", cfg["composite_pick_mode"]
     assert cfg["composite_prefix"] == "JOB", cfg["composite_prefix"]
     assert cfg["order_code_pattern"] == "^JOB", cfg.get("order_code_pattern")
-    # v3.34.1 放工单=尾箱收尾动作: 预设开 (现场放工单常晚于周期结束), 全局默认关
+    # v3.43 放工单=工单收尾: 预设开 (现场放工单常晚于周期结束), 全局默认关
     assert cfg["tail_paper_order_required"] is True, cfg.get("tail_paper_order_required")
     assert cfg["tail_paper_as_close_action"] is True, cfg.get("tail_paper_as_close_action")
+    # v3.43 缺工单判定方式二选一: 预设 = 默认扫新单判定 (时限 0 = 不用时限模式)
+    assert cfg["tail_paper_scan_alarm"] is True, cfg.get("tail_paper_scan_alarm")
+    assert cfg["tail_paper_timeout_s"] == 0, cfg.get("tail_paper_timeout_s")
+    assert cfg["block_completed_order_rescan"] is True, cfg.get("block_completed_order_rescan")
+    assert cfg["event_completed_order_rescan"] == 3, cfg.get("event_completed_order_rescan")
+    # v3.42.1 预设补齐: 自动切项目(同名兜底) + 异常→事件映射 + 每箱96固定值
+    assert cfg["auto_switch_project"] is True, cfg.get("auto_switch_project")
+    assert cfg["match_project_by_name"] is True, cfg.get("match_project_by_name")
+    assert cfg["items_per_box_source"] == "config", cfg.get("items_per_box_source")
+    assert cfg["items_per_box_fixed"] == 96, cfg.get("items_per_box_fixed")
+    assert cfg["event_missing_paper"] == 2, cfg.get("event_missing_paper")
+    assert cfg["event_missing_nozzle"] == 3, cfg.get("event_missing_nozzle")
+    assert cfg["event_mes_fail"] == 3, cfg.get("event_mes_fail")
     assert cfg["on_short_box"] == "redo", cfg["on_short_box"]
     assert cfg["on_mes_fail"] == "block", cfg["on_mes_fail"]
     assert cfg["enabled"] is False  # 新建默认不启用 → 零影响

@@ -38,6 +38,8 @@ export default {
     custom: '自定义',
     tracking: '跟踪模式',
     per_item: '逐件覆盖',
+    weighing: '称重投料',
+    region_events: '区域事件',
     undefined: '未定义'
   },
   monitor: {

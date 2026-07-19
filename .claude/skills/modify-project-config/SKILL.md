@@ -183,6 +183,11 @@ class Project(Base):
   // 完整 NG 计数+推送慎用）。同一(标签,周期进度) 5s 节流。触发点=source_settlement_mixin
   // 的两处严格守门(_fire_strict_order_violation)。last_first 模式下严格顺序被强制清空→无效。
   "strict_order_violation_event_id": null,
+  // ★ v3.43：实时NG（违规即时结算，false=关零差异）。违序/缺前置（需严格顺序）、
+  // 步骤回退（顺序型）、重复超次（检测模式）一经确认当场按 NG 事件(2) 结算当前周期；
+  // 提示档/斩立决由事件2自身「需人工确认」分流。收口 source_settlement_mixin._fire_instant_ng；
+  // 前端开关在 LogicConfigTab「实时NG」卡片。last_first 模式保存时被强制置 false。
+  "instant_ng_on_violation": false,
 
   // ★ v3.32 新增：区域事件模式（logic_mode='region_events' 专用，TP 工位流程监测）
   // apply 在 source_project_config_apply → source_region_events.parse_region_events；

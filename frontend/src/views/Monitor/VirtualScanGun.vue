@@ -46,6 +46,7 @@
 
 <script setup>
 import { ref } from 'vue';
+import { ElNotification } from 'element-plus';
 import { packagingScan } from '@/api/packaging_flow';
 
 const props = defineProps({
@@ -57,8 +58,9 @@ const rawCode = ref('');
 const busy = ref(false);
 const lastResult = ref(null);
 
-// 上银 SY 9 工单（原始扫码值，无连字符；软件补回第 12 位的 -）
+// 仿真联调工单 (111/222/333 对应 mock_hiwin_mes_server 工单库) + 上银 SY 真实格式 JOB 号
 const presets = [
+  '111', '222', '333',
   'JOB1503000213', 'JOB15030002131', 'JOB150300021313',
   'JOB2026051321', 'JOB20260513212', 'JOB202605132123',
   'JOB2024062212', 'JOB202406221213',
@@ -79,8 +81,16 @@ async function doScan() {
              (st.box_total ? `　应做 ${st.box_total} 箱` : '') +
              (st.slider_total ? `　滑块总数 ${st.slider_total}` : ''),
       };
+      // 与 USB 扫码枪通路同款右上角通知, 虚拟/真枪扫码体验一致
+      ElNotification.success({
+        title: '包装结算扫码',
+        message: `工单 ${st.order_no}` + (st.box_total ? ` · 共 ${st.box_total} 箱` : ''),
+        duration: 2500,
+      });
     } else {
-      lastResult.value = { ok: false, msg: data && data.message ? data.message : '未开工单（查无此单或被阻断）' };
+      const msg = data && data.message ? data.message : '未开工单（查无此单或被阻断）';
+      lastResult.value = { ok: false, msg };
+      ElNotification.warning({ title: '包装结算扫码', message: `${code}：${msg}`, duration: 4000 });
     }
   } catch (e) {
     lastResult.value = { ok: false, msg: '扫码失败：' + (e.response?.data?.detail || e.message || '未知错误') };

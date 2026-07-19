@@ -1665,6 +1665,13 @@ def get_detection_results(
             "event_name": getattr(mgr, '_pending_ack_event_name', None),
             "started_at": getattr(mgr, '_pending_ack_started_at', None),
             "timeout_sec": int(getattr(mgr, '_pending_ack_timeout_sec', 0) or 0),
+            # v3.43.1 触发原因固化进阻塞态 (recent_events 只留 30s, 超窗后前端捞不到原因)
+            "reason": getattr(mgr, '_pending_ack_reason', None),
+            # v3.43.1 确认后的处置方式 (事件级 ack_keep_cycle 配置), 前端弹窗据此
+            # 明示工人: True=保留周期断点续做 / False=清运行时整件重做
+            "keeps_cycle": bool(
+                mgr._pending_ack_keeps_cycle()
+                if hasattr(mgr, '_pending_ack_keeps_cycle') else False),
         },
         # v3.23 NG 补做策略 (前端确认弹窗据此决定是否展示"补步骤/补数量"按钮)
         "ng_remediation": getattr(mgr, '_ng_remediation', None)

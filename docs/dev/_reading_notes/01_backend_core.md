@@ -106,7 +106,7 @@
 
 ### 1.3 VideoSourceManager 主类
 
-#### `backend/api/source.py`（2111 行，v3.41 复核）
+#### `backend/api/source.py`（2124 行，v3.43 复核）
 
 | 维度 | 内容 |
 |---|---|
@@ -115,17 +115,17 @@
 | **兼容层** | L263 `_COMPONENT_ROUTES` 六组件路由表；其后 `__getattr__`/`__setattr__` 转发 drawer/mp_overlay/counters_mgr/video_transform/inference_exec/sequence_labels |
 | **保留在主类** | L549-745 PT 锚点/累加；L746 `_backfill_step_records()` 结算补落账；L910 `_reset_counting_cycle()`；L1111-1152 推理线程启停；L1395 `_clear_step_runtime_state()`；L1472/L1578 start/stop_detection；L1687 reset_stats；L1831+ generate_mjpeg（与 streaming_mixin 重复实现，主类版含 debug 埋点） |
 | **线程锁** | `frame_lock` / `capture_lock` / `_progress_lock` / `detection_lock`（`__init__` 内创建）；v3.32 起另有 `_inference_start_lock`（见下） |
-| **v3.3x 变更** | v3.32.0 收尾（TP 频闪真因）：`_start_inference_thread` L1111 加启动锁 + 线程代数——无锁的"检查-启动"两步被并发调用（采集自启 + resume 恢复）会各起一条推理线程，双线程交替发布"有结果/空结果"就是前端标注框逐帧频闪的真因；代数写进线程循环条件，`_stop_inference_thread` L1134 先作废代数再放倒运行标志，僵尸线程下轮自行退出。v3.32.0：MediaPipe 关键点颜色与连线颜色分开配（`mediapipe_pose_point_color` / `mediapipe_hands_point_color`，空 = 跟随连线色，L365-369）。v3.35：`_clear_step_runtime_state` 末尾清称重步骤门控残留（配了 `step_device_gates` 时调引擎 reset_gates，L1452-1459，防跨启停/强制结算残留卡步骤）。v3.38：`_backfill_step_records` 已记录步骤改读本地缓存 `cycle_step_records` 不再查库——step 插入进了落库线程，同步查库只能看到滞后快照、会重复补写；"周期进行中"守门统一改看 `current_cycle_uuid`（id 由落库作业回填） |
+| **v3.3x 变更** | v3.32.0 收尾（TP 频闪真因）：`_start_inference_thread` L1111 加启动锁 + 线程代数——无锁的"检查-启动"两步被并发调用（采集自启 + resume 恢复）会各起一条推理线程，双线程交替发布"有结果/空结果"就是前端标注框逐帧频闪的真因；代数写进线程循环条件，`_stop_inference_thread` L1134 先作废代数再放倒运行标志，僵尸线程下轮自行退出。v3.32.0：MediaPipe 关键点颜色与连线颜色分开配（`mediapipe_pose_point_color` / `mediapipe_hands_point_color`，空 = 跟随连线色，L365-369）。v3.35：`_clear_step_runtime_state` 末尾清称重步骤门控残留（配了 `step_device_gates` 时调引擎 reset_gates，L1452-1459，防跨启停/强制结算残留卡步骤）。v3.38：`_backfill_step_records` 已记录步骤改读本地缓存 `cycle_step_records` 不再查库——step 插入进了落库线程，同步查库只能看到滞后快照、会重复补写；"周期进行中"守门统一改看 `current_cycle_uuid`（id 由落库作业回填）。v3.43：`is_packaging_paper_order_covered`（L1206）扩成查四处——`_last_cycle_steps` / `current_cycle_steps` / **`_oos_steps_seen` 序列外步骤旁路账本（当前代）** / `_last_oos_steps_seen`（上一代）；顺序/自定义-基于顺序模式下"放工单"是序列外检测步骤，永远进不了前两处（FIX-381 拦截），只有旁路账本看得见它——之前 gate 因此永不放行。旁路账本在 `_clear_step_runtime_state` 两代一起清（防跨启停残影放行）；`_pending_ack` 清理点配套清 `_pending_ack_reason` |
 | **注释坑** | proxy 仅 ch0 默认（L1990 附近）；多通道必须 `channel_manager.get(ch)`；RenderMixin/StreamingMixin 已抽出但主类仍保留部分方法 |
 
-#### `backend/api/source_routes.py`（2345 行，v3.42 复核）
+#### `backend/api/source_routes.py`（2352 行，v3.43 复核）
 
 | 维度 | 内容 |
 |---|---|
 | **职责** | `/api/v1/source/*` 全部 HTTP 端点：摄像头/RTSP/海康/视频/图片/检测/项目配置/轮询结果/ack-event/per_item 控制 |
 | **核心端点** | 视频源启停（L961 `start_video` 等）；检测启停/暂停/standby/reset（L1207 `reset_detection_stats`）；L1235 `_do_ack_pending`（人工确认公共体，含 elevated）；L1404+ **`get_detection_results`** 前端轮询核心；L1881 `set_project_config` |
 | **线程锁** | 无（委托 VSM） |
-| **v3.3x 变更** | v3.32.0 收尾：`get_detection_results` 补区域事件模式 in-flight（该模式不走步骤状态机字典，"动作进行中"以引擎 episode 起点算时长）+ 返回引擎快照 `region_events` + 项目配置摘要带规则身份（多工位建步骤行用）；MediaPipe 关键点颜色字段进 stream-config 读写（`_sanitize_optional_hex_color` 允许空串 = 跟随连线色）。v3.33（"显示与使用必须一致"修复）：`set_project_config` 成功后把工位持久化绑定同步写成同一项目（merge 只动 project_id 键，L1892+）、`start_video` 成功后落盘实际播放的视频路径——此前只改运行时，重启后 auto_restore 按旧绑定恢复"另一个项目+另一个模型"。v3.34：`_do_ack_pending` 支持「确认后保留周期」（事件配了 ack_keep_cycle 时只解除定格不清运行时，返回 `kept_cycle: true`，断点补做）。v3.39：`reset_detection_stats` 清零联动消除在途报警（入站配置 alarm_banner.clear_on_counter_reset 开启时，默认关）。v3.42：新增 `POST /detection/infer-once`（L1410 `detection_infer_once`，响应模型 `InferOnceResponse`）——标定用单帧推理，给项目页「从当前画面抓取锚点框」兜底（检测中锁菜单 × 停止/待机清实时结果，打包版标定死环）；委托 VSM `infer_once_for_calibration()`，RuntimeError → 400 中文提示 |
+| **v3.3x 变更** | v3.32.0 收尾：`get_detection_results` 补区域事件模式 in-flight（该模式不走步骤状态机字典，"动作进行中"以引擎 episode 起点算时长）+ 返回引擎快照 `region_events` + 项目配置摘要带规则身份（多工位建步骤行用）；MediaPipe 关键点颜色字段进 stream-config 读写（`_sanitize_optional_hex_color` 允许空串 = 跟随连线色）。v3.33（"显示与使用必须一致"修复）：`set_project_config` 成功后把工位持久化绑定同步写成同一项目（merge 只动 project_id 键，L1892+）、`start_video` 成功后落盘实际播放的视频路径——此前只改运行时，重启后 auto_restore 按旧绑定恢复"另一个项目+另一个模型"。v3.34：`_do_ack_pending` 支持「确认后保留周期」（事件配了 ack_keep_cycle 时只解除定格不清运行时，返回 `kept_cycle: true`，断点补做）。v3.39：`reset_detection_stats` 清零联动消除在途报警（入站配置 alarm_banner.clear_on_counter_reset 开启时，默认关）。v3.42：新增 `POST /detection/infer-once`（L1410 `detection_infer_once`，响应模型 `InferOnceResponse`）——标定用单帧推理，给项目页「从当前画面抓取锚点框」兜底（检测中锁菜单 × 停止/待机清实时结果，打包版标定死环）；委托 VSM `infer_once_for_calibration()`，RuntimeError → 400 中文提示。v3.43.1：`get_detection_results` 的 pending_ack 块增 `reason`（触发原因固化进阻塞态——之前前端从 recent_events 捞，事件超 30s 滚出窗口后弹窗原因变"—"）与 `keeps_cycle`（事件级 ack_keep_cycle 配置透出，前端弹窗据此明示"断点继续/整件重做"） |
 | **注释坑** | `_dev_mocks_enabled()` 需 `ENABLE_DEV_MOCKS=1`；检测路由已统一到 source_routes，旧 `/api/detection/*` 已删 |
 
 #### `backend/api/source_persist_worker.py`（136 行，v3.38 新增）
@@ -149,14 +149,14 @@
 | `source_inference_loop_mixin.py` | 420 | 推理双线程主循环 | `_inference_loop` L245；`_inference_select_and_run_model` L41 | `_inference_frame_lock` |
 | `source_step_stats_mixin.py` | 761 | 每帧步骤状态机主入口 | **`_update_step_stats` L60** | 无 |
 | `source_capture_loop_mixin.py` | 423 | 采集线程循环（v3.41.1 相机重连后回放曝光设置，见表下注） | `_capture_loop` | capture_lock/frame_lock |
-| `source_event_trigger_mixin.py` | 681 | 事件中心 | **`_trigger_event` L64** → end_cycle | 无 |
+| `source_event_trigger_mixin.py` | 686 | 事件中心 | **`_trigger_event` L64** → end_cycle | 无 |
 | `source_model_load_mixin.py` | 652 | YOLO/TRT 加载 | `load_model` L56+ | router.gpu_lock/warmup_lock |
 | `source_check_modes_mixin.py` | 24 | 聚合 4 子 mixin | 空壳多继承 L17-23 | — |
 | `source_container_grouping_mixin.py` | 755 | 容器分组 per-box 结算 | `_settle_box` L476/483 `_trigger_event(1/2)` | — |
 | `source_checklist_mixin.py` | 309 | counting 模式 checklist | `_settle_counting_cycle` L60+ | `_settle_lock` RLock |
 | `source_events_check_mixin.py` | 157 | 事件 FSM（settlement×logic 交叉） | `_check_events` L41+ | — |
 | `source_sequential_mixin.py` | 424 | 顺序/自定义顺序结算 | `_settle_sequential_cycle` L27+ | — |
-| `source_settlement_mixin.py` | 1591 | 结算总控+跨周期/last_first | **`_settle_for_cross_cycle` L754** 分发；`_process_last_first_mode` L774 | — |
+| `source_settlement_mixin.py` | 1707 | 结算总控+跨周期/last_first；v3.43 实时NG（违规即时结算）收口 | **`_settle_for_cross_cycle` L754** 分发；`_process_last_first_mode` L774；`_fire_instant_ng` L1109 | — |
 | `source_detect_runners_mixin.py` | 609 | YOLO 三种 runner；v3.42 增 `infer_once_for_calibration` L306（标定用单帧推理：对当前显示帧现推一帧，**刻意不过**步骤过滤/ROI/box尺寸——锚点标签通常不是步骤；不发布 current_detections、无状态机副作用；无模型但在检测=synthetic 时透传实时结果） | `_detect_only/_detect_and_track/_detect_segment` L136+ | `_gpu_lock_ctx` |
 | `source_camera_start_mixin.py` | 875 | 6 种视频源启动（v3.41.1 曝光设置按 backend 语义精准下发 + set/get 可观测日志，见表下注） | `start_camera/rtsp/hcnetsdk/...` L114+；`_apply_exposure_setting` L136 | 启 `_capture_loop` 线程 |
 | `source_session_lifecycle_mixin.py` | 1751 | Session/Cycle DB 生命周期 | **`end_cycle` L702**；`start_session` L229；`start_cycle` L488 | — |
@@ -172,7 +172,7 @@
 > **v3.41.1 USB 相机曝光保持（dev-qing 合入，技彩现场"锁帧"修复）**：症状是 Monitor 停止会 release 相机，重开（resume / 采集线程断线重连 / 前端 localStorage 恢复）后漏回写曝光 → 自动曝光复活把帧率压死。三处配套：① `source_camera_start_mixin._apply_exposure_setting` 重构——先探 backend（`_camera_backend_info`），MSMF 写 AE=0、DSHOW 写 0.25（老代码两个值都写、后写覆盖先写），每次 set 都记"请求值/set 返回/回读值"三元日志（`[Camera/Exposure]` 前缀），并把结果 dict 返回；启动成功后把 backend id 存 `_camera_backend`；② `source_capture_loop_mixin` 断线重连分支、`source_lifecycle_mixin._reopen_camera`（resume）都回放 `_auto_exposure/_exposure_value`（getattr 带默认，老源对象无属性也安全），resume 还沿用 `_camera_backend` 而不是硬编码 DSHOW；③ `main.py` bootstrap 新增 Windows 专属 `OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0`（**必须在 cv2 import 前**，与 FFMPEG threads;1 同段——技彩 UVC 相机开 HW transforms 时每次 set 分辨率/FPS 要重协商数秒）。回归：`tests/test_usb_camera_exposure_reopen.py` 6 例（⚠️ MSMF 语义用例必须 mock platform.system=Windows，Linux 开发机裸跑会走进 V4L2 分支断言失败）+ `tests/e2e_browser/test_usb_camera_exposure_restore.py`；UAT `tests/uat/uat_20260715_usb_camera_exposure_resume.py`。
 | `source_streaming_mixin.py` | 165 | MJPEG（**未接入 VSM MRO**，主类 L1831 有完整版） | `generate_mjpeg` L48 | frame_lock |
 
-**v3.33~v3.41 增量变更（mixin 族）**：
+**v3.33~v3.43 增量变更（mixin 族）**：
 
 - `source_inference_loop_mixin.py`
   - v3.32.0 收尾：`_inference_loop` 带线程代数参数，代数与宿主对不上自行退出（推理线程唯一性，治 TP 频闪，见 source.py 条目）；区域事件分支改传原始帧给 `_update_region_events`（步骤截图用）。
@@ -188,11 +188,14 @@
   - v3.32.0 收尾：NG TOP3 兜底期望集在区域事件模式取引擎规则名而非 steps_config 标签（客户报障"TOP3 出现的不是步骤而是标签"——该模式 steps_config 里是模型类别，"步骤"是动作规则名）；补"缺事件 X / 事件 X 重复"文案解析。
   - v3.34：新增 `_pending_ack_keeps_cycle`（L518）/ `_ack_release_keep_cycle`（L533）——事件配 ack_keep_cycle 时人工确认只解除定格、保留在制周期与步骤运行时（断点补做），默认关走老"确认重做"路径零差异。
   - v3.38：NG 补做挂起守门改看 `current_cycle_uuid`。
+  - v3.43.1：四处进入人工确认定格的地方（`_trigger_event` 主路 / 外部事件 / NG 补做挂起 / 周期性动作）都把触发原因写进 `_pending_ack_reason`（弹窗原因不再依赖 30s 事件窗），解除定格三处配套清空。
 - `source_settlement_mixin.py`
   - v3.34（违序只报提前出现）：严格+单次守门只对"该步骤本周期还没做过"的提前出现报违序；已完成步骤的余像重现（补拧/笔迹残留/摆位调整是现场常态）维持静默拦截不入周期、不再报警（L1233-1240）。
   - v3.34：帧位起点两处取用点改走 `_step_raw_start_frame_pos`（与 step_stats 的口径修复配套）。
   - v3.35：新增 `_device_gate_hold`（L1120）步骤外设门控——融合模式核心接线点：视觉确认的新出现先"武装"秤门控（去皮/标准量判定），放行前不写 step_last_seen 不入周期、下帧重查；引擎未登记本通道直接放行绝不卡产线（`_process_single_step` 内 L1337-1344）。
   - v3.35：首步配 disappear_uninterruptible 且持续可见期间，重现不触发首步重现结算（只有真正走完消失结算后的再次出现才算新工件边界）。
+  - **v3.43（实时NG·违规即时结算）**：`_fire_instant_ng`（L1109）统一收口——`instant_ng_on_violation` 开且周期已开时，违规确认点当场触发 NG 事件(2) 走完整结算链路（end_cycle/计数/报警/MES）；提示档/斩立决由事件2自身 require_ack 分流（定格时不清运行时，清理交确认端点）；返回 True=实时NG路径已消费（含被事件层守门抑制），调用方不再叠加提示事件。三个挂点：① `_fire_strict_order_violation`（L1168，重构）——严格守门拦下违序/缺前置时先节流（`_violation_throttle_pass` L1090，与提示事件共用一本账）再走实时NG，不适用才退回 v3.32 提示事件；② 步骤回退/非法重复入账点（L1520）——仅顺序型（sequential / custom 基于 sequential）放行，基于检测的自定义按出现次数判且不看回退标记，提前结会误杀；③ `_maybe_instant_ng_detection_duplicate`（L1144）——纯 detection 模式重复超次即时结，期望次数口径与 `_settle_detection_cycle` 同源，配了时长门的步骤跳过（结算前时长过滤可能把次数拉回去，中途判会误杀）。
+  - v3.42.1：`_record_out_of_seq_step`（L1537）——FIX-381 把序列外启用步骤拦在周期外的同时记入 `_oos_steps_seen` 旁路账本 + 即时通知包装协调器 `on_step_detected`（错误隔离），"放工单"探测与"等放工单收尾即时完成工单"都靠它。
 - `source_session_lifecycle_mixin.py`
   - **v3.38 RFC（本文件本轮最大改动）**：决策/持久化分离——`_persist` property（L168）懒建每通道 PersistWorker；`start_cycle`（L488）内存先行（uuid 即"周期进行中"标记）、建行进落库线程、提交后回填 `current_cycle_id`（仅 uuid 未变才写防串号）；`end_cycle`（L702）同步段定案 final_* 后把写库 + 后置链（MES on_cycle_end → 周期性动作 → 插件 cycle_end → 三协调器 → 扫码器联动）打包值快照作业进 FIFO **保持原顺序执行**，容器残留 box 清理动的是帧循环活状态、留同步段；`_discard_empty_cycle`（L1012）/ `_reconcile_step_records`（L1059，FIFO 保证排在本周期全部 step 插入之后）/ `record_step`（L1185，间隔用本地缓存算好、插件 step_change hook 在作业内紧跟 commit 保住"看到已提交行"契约）同款改造；`end_session` 统计前先 `_persist.flush(15s)` 排空防缺账。全文件"周期进行中"守门统一看 `current_cycle_uuid`。
   - v3.38（自定义班次，萍乡）：新增纯函数 `resolve_shift_label`（L42）——班次只定义"名字+开始时刻"，某时刻属于最近一个已开始的班次（天然无缝隙无重叠，跨零点与两班制边界语义一致）；`_get_current_shift`（L440）配了 data_config.shifts 列表（≥2 段）按列表判定返回班次名，未配保持 'day'/'night' 零差异。
@@ -210,8 +213,8 @@
 
 | 文件 | 行数 | 职责 | 核心 API | 锁 |
 |---|---:|---|---|---|
-| `source_state_init.py` | 417 | VSM 状态字段初始化 13 组 helper | `init_state(h)` L396 | 多处 Lock/RLock 创建 |
-| `source_project_config_apply.py` | 663 | set_project_config 实现 | `apply_project_config` L555；L280 写 settlement_mode | — |
+| `source_state_init.py` | 423 | VSM 状态字段初始化 13 组 helper | `init_state(h)` L402 | 多处 Lock/RLock 创建 |
+| `source_project_config_apply.py` | 671 | set_project_config 实现 | `apply_project_config` L563；L280 写 settlement_mode | — |
 | `source_drawer.py` | 303 | Kalman + 画框 | `Drawer.draw_box` L68+ | — |
 | `source_mediapipe.py` | 720 | MediaPipe 二段 pipeline | `MediaPipeOverlay` L236；worker 线程 L425 | `_init_lock` `_pending_lock` |
 | `source_counters.py` | 74 | 计数器持久化 | `persist/save_snapshot_to_db` | — |
@@ -223,21 +226,22 @@
 | `source_roi.py` | 167 | 逐步骤 ROI mask | `ensure_roi_mask/apply_roi_mask` | — |
 | `source_recorder.py` | 255 | FFmpeg 录制器 + KalmanFilter2D | `FFmpegRecorder` L28 | `_lock` |
 | `source_sdk_loader.py` | 179 | HCNetSDK/海康工业相机/调试日志 | `debug_log/get_hikvision_device_list` | — |
-| `source_custom_mix.py` | 1076 | custom 混合子状态机 | `CustomMixMachine` L836；`compose_settle_event` L1032 | — |
+| `source_custom_mix.py` | 1080 | custom 混合子状态机 | `CustomMixMachine` L836；`compose_settle_event` L1032 | — |
 | `source_label_split.py` | 557 | v3.32 同标签区域拆分（虚拟步骤）+ 就位提示：检测出口标签改写层（fixed/anchor 两种定位 × 多轮次 × 每轮独立区域） | `parse_label_splits` L120；`LabelSplitEngine.apply` L435；`parse_placement_guide` L499；`PlacementGuideState` L515 | 无（每通道单实例仅推理线程访问） |
 | `source_region_events.py` | 908 | v3.32 区域事件模式纯逻辑引擎（时序+空间规则：overlap / region_enter / region_exit，episode 状态机 + 序列结算判定；不做任何主程序副作用，v3.41 补录） | `parse_region_events` L341；`RegionEventEngine.process_frame` L507；`snapshot` L561 | 无（推理线程单线程访问） |
 
-**v3.33~v3.41 增量变更（has-a 组件）**：
+**v3.33~v3.43 增量变更（has-a 组件）**：
 
-- `source_state_init.py`：v3.32.0 收尾 `_init_inference_threading`（L35）增 `_inference_start_lock` / `_inference_generation`（推理线程唯一性，见 source.py 条目）；v3.35 `_init_step_state`（L115）增 `step_device_gates`（空 dict = 未配置一次 get 早退零开销）。
+- `source_state_init.py`：v3.32.0 收尾 `_init_inference_threading`（L35）增 `_inference_start_lock` / `_inference_generation`（推理线程唯一性，见 source.py 条目）；v3.35 `_init_step_state`（L115）增 `step_device_gates`（空 dict = 未配置一次 get 早退零开销）；v3.43 增 `instant_ng_on_violation`（默认 False 零差异）、`_pending_ack_reason`（确认弹窗原因固化）。
 - `source_project_config_apply.py`
   - v3.35：steps_config 解析补 disappear_uninterruptible（代码注释标 v3.34，实际随 v3.35.0 发布）；称重引擎登记扩成两种来源——logic_mode='weighing'（秤驱动）或其它模式 + weighing.drive_mode='step_gate'（融合：视觉 SOP 主线 + 秤只做步骤门控），都不是则注销零残留（L629+）；解析 steps_config[].device_gate 到 `step_device_gates`（L650+）；visual_guard 开启时置 `_weighing_visual_feed`。
   - v3.38（NG top3 保持，dev-qing 合入）：`_reset_cycle_state`（L458）不再清 ng_step_cycle_counts——它与 step_counts 同属累计统计，待机→再开始会重放项目配置，在这里清会把当天 NG 步骤排名抹掉；归零点移到 `_reset_cumulative_step_stats`（L473，Monitor「清零」/切项目）。
   - v3.39：drive_mode='pipeline'（两阶段流水线称重）也要求视觉喂帧（标签驱动去皮加速与 FIFO 结案），`_weighing_visual_feed` 判定并入。
+  - v3.43：解析 `pipeline_config.instant_ng_on_violation`（实时NG开关，L300）。
 - `source_label_split.py`（v3.34 多轮次真实模型三防护，默认 0 零差异）：rounds 增 `trigger_min_seconds`（切换标签持续在场满该秒数才确认切换，滤单帧误检闪现把轮次多推一拍；解析钳位在 gap-0.1 以下防"同一次在场先判离场再确认"的逻辑矛盾）与 `trigger_conf`（切换标签专用置信度下限，低于按不在场——非切换阶段零星低置信度误检会不停刷新在场时刻，轮次永远等不到"离场再出现"卡死不切）；`_update_rounds`（L351）轮次归零加 saw_cycle 守门（"本轮次内周期确实装载过步骤"才允许空闲归零——工件刚开工、切换标签已离场而首个步骤还没进周期的空窗不是"下线"，不加守门轮次刚推到 1 就被打回 0）；切换标签每次在场留痕（conf + 是否低于下限，5s 节流，`backend.settlement` 开关守门）。
 - `source_mediapipe.py`：v3.32.0 收尾——关键点/连线颜色分开配（`_custom_draw_specs` 返回双 spec，关键点色缺省跟随连线色老配置视觉不变）；二段管线渲染改把 ROI 关键点转 NormalizedLandmarkList 后复用 mp draw_landmarks（与 baseline 两条路完全一致，老版蓝线黄点手工渲染及 HAND_CONNECTIONS_21 常量删除）。
 - `source_sequence_labels.py`：v3.40（川南反馈）`is_legitimate_next_in_sequence`（L152，changelog 里称 `_is_expected_repeat_position`，以代码实名为准）加严格前缀守门（L178-180）——位置索引判定隐含"当前周期是期望序列的严格前缀"前提，周期跑偏（漏做/乱序）后位置指针错位，滞留画面的末步余像被反复误认"合法重复"重新入周期（前端末步 OK/NG 闪烁 + 结算多报"重复步骤"）；偏离前缀时一律走常规去重，干净前缀的合法重复行为不变。
-- `source_custom_mix.py`：v3.38 面板"周期中/等待"判定改看 `current_cycle_uuid`。
+- `source_custom_mix.py`：v3.38 面板"周期中/等待"判定改看 `current_cycle_uuid`；v3.42.1 `compose_settle_event` 周期结算时旁路账本轮转——`_oos_steps_seen` 搬到 `_last_oos_steps_seen` 后清空（只留最近两代防陈旧"放工单"残影误放行尾箱 gate）。
 - `source_region_events.py`（补录 + 增量）
   - v3.32.0 收尾：动作互斥打断 `_interrupt_others`（L818，**常开非配置**）——一个动作确认瞬间其他进行中 episode 立即收尾（已确认的产出闭合动作、未确认的半截命中作废）；没有它，消失确认秒数会把"断开 < N 秒"的两段命中桥接成一次动作（TP 复检场景两次扫码被并成一次，序列少一步误落兜底 NG）。位移门槛轨迹改 5 帧中位数平滑 `_track_motion`（L657）——手划过静置工具时遮挡把框切小、中心单帧跳变 ~0.06 直接进包络就是假位移。`snapshot`（L561）补 in_progress / episode_start_ts / suppressed（Monitor 步骤面板"进行中"高亮与 in-flight PT）；`_emit_confirmed` 带确认瞬间主体框（执行层裁步骤截图用）。
   - v3.34：确认时长秒基门槛 `min_seconds`（`_held_long_enough` L706）——min_frames 的实际时长 = 帧数/推理帧率，相机与推理帧率都会漂，同一配置在不同机器松紧不一致；配了秒基后按 episode 命中跨度判定、min_frames 退化为 3 帧硬下限防杂散框蒙混。
