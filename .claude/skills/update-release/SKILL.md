@@ -243,6 +243,8 @@ gh run view "$RUN_ID" --log-failed
 - 上次构建耗时约 4 小时；6 小时超时兜底后仍强制切 private
 - **无论成功失败，都自动改回 private**（重试 3 次），日志落 `_ci_watch.log`（已 gitignore）
 
+**GitHub 侧兜底（v3.43.0 起，`.github/workflows/auto-private.yml`）**：任一 CI workflow 收工时在 GitHub 侧自动检查"没有其他构建在跑/排队"后把仓库切回 private——**不依赖发版机器存活**（血泪：v3.42.0 发版当晚关机，盯盘进程丢失，仓库公网裸奔两天）。与本机盯盘脚本幂等互不干扰。凭据用仓库 secret `REPO_ADMIN_TOKEN`（回退 `RELEASE_TOKEN`）；若 PAT 轮换过期，`gh secret set REPO_ADMIN_TOKEN --body "$(gh auth token)"` 重灌。**有它也别省本机盯盘**——双防线，谁先切都行。
+
 ## 第9步: 打包发版（如需本地构建）
 
 读取并执行 `.claude/skills/build-release/SKILL.md` 中的打包流程。

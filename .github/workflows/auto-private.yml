@@ -1,0 +1,57 @@
+# CI 收工自动切回 private 的兜底防线 (v3.43.0 起)。
+#
+# 为什么: 发版铁律是"构建期间临时 public, 结束必须切回 private"。第一道防线是
+# 本机的 scripts/ci/watch_and_private.sh, 但它依赖发版机器持续开机——v3.42.0 发版
+# 当晚机器关机, 盯盘进程随之丢失, 仓库在公网裸奔了两天 (2026-07-17→07-19) 才被发现。
+# 本 workflow 跑在 GitHub 侧, 与发版机器生死无关: 任一 CI workflow 收工时触发,
+# 确认没有其他构建还在跑/排队后, 把仓库切回 private。幂等, 与本机盯盘脚本互不干扰
+# (谁先切都行, 已 private 则直接退出)。
+#
+# 凭据: 默认 GITHUB_TOKEN 无权改仓库可见性, 必须用 secrets 里的 PAT
+# (REPO_ADMIN_TOKEN, 缺省回退 RELEASE_TOKEN)。若两个都失效, 日志会大声报错
+# ——那时仍有本机盯盘脚本兜底。
+
+name: Auto Private After CI
+
+on:
+  workflow_run:
+    workflows:
+      - "Build Windows Installer"
+      - "DB Matrix (SQLite + PostgreSQL)"
+      - "Virtual Functional Tests"
+      - "Upload to Gitee"
+    types: [completed]
+
+# 多个 workflow 几乎同时收工时逐个执行, 避免并发互踩
+concurrency:
+  group: auto-private
+  cancel-in-progress: false
+
+jobs:
+  flip-private:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 无在跑构建则切回 private
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN != '' && secrets.REPO_ADMIN_TOKEN || secrets.RELEASE_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          vis=$(gh api "repos/$REPO" --jq .visibility)
+          echo "当前可见性: $vis"
+          if [ "$vis" = "private" ]; then
+            echo "已是 private, 无事可做"
+            exit 0
+          fi
+          # 还有别的构建在跑/排队 → 本次不动, 等它收工时的完成事件再触发本 workflow
+          busy=$(gh api "repos/$REPO/actions/runs?status=in_progress&per_page=50" \
+                 --jq '[.workflow_runs[] | select(.name != "Auto Private After CI")] | length')
+          queued=$(gh api "repos/$REPO/actions/runs?status=queued&per_page=50" \
+                   --jq '[.workflow_runs[] | select(.name != "Auto Private After CI")] | length')
+          echo "其余构建: in_progress=$busy queued=$queued"
+          if [ "$busy" != "0" ] || [ "$queued" != "0" ]; then
+            echo "还有构建未收工, 本次不切, 交给后续完成事件"
+            exit 0
+          fi
+          gh api -X PATCH "repos/$REPO" -F private=true --jq .visibility
+          echo "✅ 已切回 private"
