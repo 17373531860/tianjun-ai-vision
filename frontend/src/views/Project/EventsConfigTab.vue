@@ -88,6 +88,22 @@
               不勾（默认）：确认即丢弃在制周期，整件从头重做。超时自动确认遵循同一语义。
             </div>
 
+            <!-- v3.44 反向联动明示: NG 事件的定格弹窗按钮由「NG 判定与处置」决定 -->
+            <div v-if="ev.require_ack && isNgEvent(ev)"
+                 class="text-xs mt-2 leading-relaxed rounded p-2 border-l-2"
+                 :class="ngRemediationOn
+                   ? 'text-gray-400 bg-slate-950/60 border-sky-700/50'
+                   : 'text-gray-500 bg-slate-950/60 border-slate-700'">
+              <template v-if="ngRemediationOn">
+                ⓘ 本项目在逻辑设置「NG 判定与处置」里选了<span class="text-sky-300">定格弹窗可补做</span>档 —
+                NG 定格弹窗将显示「补步骤/补数量 · 认NG · 重做」处置按钮，此时处置以按钮为准，
+                上面的「确认后保留周期」只对没有补做按钮的普通确认路径生效。
+              </template>
+              <template v-else>
+                ⓘ 想让 NG 定格弹窗里出现「补步骤/补数量—判合格」按钮？去逻辑设置「NG 判定与处置」把对应场景选为「定格弹窗」档。
+              </template>
+            </div>
+
             <!-- v3.9.x 周期性强制动作触发的事件: 确认时是否清账 -->
             <div v-if="ev.require_ack" class="mt-2 flex items-center gap-3 flex-wrap">
               <el-checkbox v-model="ev.ack_resets_periodic" size="small">
@@ -112,6 +128,7 @@
 // 保存仍由父级"保存配置"按钮统一走 updateProject。计数器候选（默认前 3 + 自定义）
 // 由父级传入——与基础设置 Tab 共用同一份 computed，避免 slice 规则双份维护。
 // 保养规则绑定事件的 addEventAndBindToRule 属于逻辑设置 Tab 链路，留在父级。
+import { computed } from 'vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { dbg } from '@/utils/debug';
 
@@ -122,6 +139,13 @@ const props = defineProps({
 });
 
 const systemStore = useSystemStore();
+
+// v3.44 反向联动明示: NG 事件(id=2)的定格弹窗按钮由逻辑设置「NG 判定与处置」决定
+const isNgEvent = (ev) => ev?.id === 2 || String(ev?.id) === '2';
+const ngRemediationOn = computed(() => {
+  const h = props.project?.pipeline_config?.ng_handling || {};
+  return h.missing_step === 'ack' || h.missing_step === 'hold' || h.short_count === 'ack';
+});
 
 const addEvent = () => {
   dbg('project.config', '点击「添加事件」', `当前数量=${props.project?.events_config?.length ?? 0}`);

@@ -18,6 +18,11 @@ import tempfile
 # ============================================================
 _TEST_DATA_DIR = tempfile.mkdtemp(prefix="tianjun_test_")
 os.environ["TIANJUN_DATA_DIR"] = _TEST_DATA_DIR
+# 预放空的 uploads/videos 占位目录: config._migrate_old_data 会把 BASE_DIR 下已存在
+# 的数据整体拷进 DATA_DIR (dst 已存在则跳过)。开发机 uploads/videos 里的调参视频
+# 好几个 GB, 每个测试 session 拷一遍既慢又把 /tmp 撑爆 (Errno 28 血泪)。测试不依赖
+# 这些大视频 — 用空目录占位让拷贝跳过, 其余 (models/images) 照常迁移。
+os.makedirs(os.path.join(_TEST_DATA_DIR, "uploads", "videos"), exist_ok=True)
 # 关掉打包/license 检查相关副作用
 os.environ.setdefault("TIANJUN_TEST_MODE", "1")
 # 挂载 synthetic 虚拟检测 API（backend/main.py）；不影响生产默认（未设则无路由）
@@ -136,6 +141,11 @@ if _BACKEND_AVAILABLE:
         _p = os.path.join(_TEST_DATA_DIR, _sub)
         if os.path.exists(_p):
             shutil.rmtree(_p, ignore_errors=True)
+    # 重建空的 uploads/videos 占位: backend.main 启动迁移 (migrate_data_to_external_dir)
+    # 会把 BASE_DIR/uploads 下 dst 不存在的条目整体拷进来, 开发机 videos 里的调参
+    # 视频好几个 GB — 每个 session 拷一遍既慢又把 /tmp 撑爆 (Errno 28 血泪)。
+    # 测试不依赖这些大视频, 空目录占位让该条目被跳过 (models/images 照常迁移)。
+    os.makedirs(os.path.join(_TEST_DATA_DIR, "uploads", "videos"), exist_ok=True)
     _pg_reset_schema()
     # 建表（在干净的临时 DB 上 / PG 测试 schema 上）
     Base.metadata.create_all(bind=engine)

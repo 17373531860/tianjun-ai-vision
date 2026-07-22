@@ -1016,6 +1016,90 @@ def test_build_tracking_without_container_is_zero_diff():
     assert m._engine._container is None
 
 
+# ---- 放托盘动作确认 + 不应期 (v3.43.1): 治"一次动作断检拆两半、同一盘记两次账" ----
+
+def _action_acc(cooldown=2.0):
+    """仅动作确认 (关消失满帧), 出现≥2帧成立 / 消失≥3帧结束, 便于短序列模拟."""
+    return _ContainerAccumulator(
+        "托盘", {"滑块": 24}, box_count=0, gone_frames=30,
+        count_mode="items_total", item_target=96,
+        confirm_by_frames=False, confirm_by_action=True, action_label="放托盘",
+        action_min_frames=2, action_gone_frames=3, action_cooldown_s=cooldown)
+
+
+def _feed_action_pulse(acc, tray, items, t0, dt=0.033):
+    """托盘全程在场, 放托盘标签出现 2 帧 → 消失 3 帧 = 一个完整动作脉冲. 返回结束时刻."""
+    t = t0
+    for _ in range(2):
+        acc.update([tray], items, t, action_present=True)
+        t += dt
+    for _ in range(3):
+        acc.update([tray], items, t, action_present=False)
+        t += dt
+    return t
+
+
+def test_container_action_split_pulse_absorbed_by_cooldown():
+    """一次动作被断检拆成两个脉冲 (间隔 < 不应期): 第二个脉冲吸收, 只记一次账.
+    复现客户机现场: TRT 推理下放托盘置信度贴阈值抖动, 断检超消失帧 → 动作拆两半,
+    托盘实体还在画面里被重新收养, 同一盘 24 支记成 48 支."""
+    acc = _action_acc(cooldown=2.0)
+    tray, items = _tray(0.0), _tray_items(24, 0.0, 0.45)
+    for _ in range(3):                            # 托盘上桌装满
+        acc.update([tray], items, 100.0)
+    t = _feed_action_pulse(acc, tray, items, 100.1)   # 脉冲1 → 进箱
+    assert acc._done == [{"滑块": 24}]
+    _feed_action_pulse(acc, tray, items, t + 0.2)     # 断检余波: 0.2s 后又一个脉冲
+    # 账本仍只有一笔 (settled_item_total 会把画面里在位托盘折进去凑数, 属展示口径,
+    # 不用它断言账本)
+    assert acc._done == [{"滑块": 24}], "不应期内的余波脉冲不允许再记账"
+
+
+def test_container_action_normal_cadence_not_absorbed():
+    """正常节奏连续放盘 (间隔 > 不应期): 每盘各记一次账, 不误伤."""
+    acc = _action_acc(cooldown=2.0)
+    tray, items = _tray(0.0), _tray_items(24, 0.0, 0.45)
+    for _ in range(3):
+        acc.update([tray], items, 100.0)
+    _feed_action_pulse(acc, tray, items, 100.1)       # 第 1 盘进箱
+    for _ in range(3):                                # 第 2 盘上桌 (4s 后, 现场实测节奏)
+        acc.update([tray], items, 104.0)
+    _feed_action_pulse(acc, tray, items, 104.1)       # 第 2 盘进箱
+    assert acc.settled_item_total() == 48
+    assert len(acc._done) == 2
+
+
+def test_container_action_cooldown_zero_keeps_old_behavior():
+    """不应期显式配 0 = 关闭: 拆分脉冲照旧各记一次账 (给需要极快节奏的现场留退路)."""
+    acc = _action_acc(cooldown=0)
+    tray, items = _tray(0.0), _tray_items(24, 0.0, 0.45)
+    for _ in range(3):
+        acc.update([tray], items, 100.0)
+    t = _feed_action_pulse(acc, tray, items, 100.1)
+    _feed_action_pulse(acc, tray, items, t + 0.2)
+    assert len(acc._done) == 2                        # 老行为: 两个脉冲两次账
+
+
+def test_build_container_action_thresholds_from_pipeline():
+    """动作门槛三参数可在进箱确认配置里直配, 优先于步骤字段; 不应期缺省 2s."""
+    cfg = _base_config(mixed_with="tracking")
+    cfg["pipeline_config"].update({
+        "custom_mix_container_label": "托盘",
+        "custom_mix_container_confirm_by_action": True,
+        "custom_mix_container_action_label": "放托盘",
+        "custom_mix_container_action_min_frames": 5,
+        "custom_mix_container_action_gone_frames": 20,
+    })
+    m = build_custom_mix(cfg)
+    c = m._engine._container
+    assert c.action_min_frames == 5
+    assert c.action_gone_frames == 20
+    assert c.action_cooldown_s == 2.0                 # 没配 → 缺省 2s
+    cfg["pipeline_config"]["custom_mix_container_action_cooldown_s"] = 0
+    m2 = build_custom_mix(cfg)
+    assert m2._engine._container.action_cooldown_s == 0.0   # 显式 0 = 关闭
+
+
 def _make_container_vsm(box_count=2, per_tray=3, gone_frames=2):
     vsm = VideoSourceManager(channel_id=0)
     vsm.set_project_config({

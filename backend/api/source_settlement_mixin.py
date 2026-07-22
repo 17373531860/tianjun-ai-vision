@@ -191,6 +191,9 @@ class SettlementMixin:
                 self._trigger_event(*compose_settle_event(self, 1, '顺序正确完成'))
             elif len(self.current_cycle_steps) < len(expected_labels):
                 missing = [l for l in expected_labels if l not in self.current_cycle_steps]
+                # v3.44 收尾防呆: 纯缺步可选挂起等视觉补做 (与末步消失结算同口径)
+                if self._maybe_enter_settle_hold(missing, expected_labels, None):
+                    return
                 print(f"  -> cycle incomplete, missing: {missing} -> NG")
                 self._trigger_event(*compose_settle_event(self, 2, f'周期不完整，缺少: {missing}'))
             else:
@@ -1190,6 +1193,165 @@ class SettlementMixin:
         except Exception as e:
             print(f"[StrictOrder] 违序即时事件触发失败: {e}")
 
+    def _fire_closing_guard_alarm(self, reason: str, event_id=None) -> None:
+        """v3.44 收尾防呆报警收口: 借所配事件的响应面 (灯/蜂鸣/Toast/语音),
+        不结周期不动计数; 未配事件时仅日志 — 防呆本体 (拒收/挂起) 不依赖报警.
+        v3.44: 数量门与缺步挂起各配各的事件 (话术不同), 由调用点传入."""
+        if event_id:
+            try:
+                self.fire_external_event_response(event_id, reason, source='closing_guard')
+                return
+            except Exception as e:
+                print(f"[ClosingGuard] 提示事件触发失败 (降级为日志): {e}")
+        print(f"[ClosingGuard] {reason}")
+
+    def _settle_hold_wants(self, label) -> bool:
+        """v3.44: 缺步挂起中且该标签仍在缺失清单里 (含期望重复次数口径) → True.
+        严格顺序守门/严格+单次守门/回退判定对这类步骤豁免放行 (断点补做语义)."""
+        hold = getattr(self, '_settle_hold', None)
+        if hold is None:
+            return False
+        from collections import Counter
+        need = Counter(hold.get('expected') or []) - Counter(self.current_cycle_steps)
+        return need.get(label, 0) > 0
+
+    def _closing_guard_blocks(self, label) -> bool:
+        """v3.44 收尾防呆入周期守门 (True = 本次新出现不计入周期).
+
+        两个职责 (调用点在 _process_single_step 的新出现判定后):
+          1. 缺步挂起吸收: 挂起中只接纳仍缺失的步骤, 其余新出现 (封箱余像 /
+             工人再次封箱等) 一律吸收 — 防止挂起期间周期被塞成"重复步骤"死局;
+          2. 数量门: 收尾步骤新出现时箱内已进数量未达目标 → 拒收 + 节流报警
+             (工人当场补数量, 周期不打断; 补满后该步骤再出现自然放行).
+        默认配置全关 → 前两个 getattr 即返回, 热路径零开销.
+        """
+        hold = getattr(self, '_settle_hold', None)
+        if hold is not None:
+            from collections import Counter
+            need = Counter(hold.get('expected') or []) - Counter(self.current_cycle_steps)
+            if need.get(label, 0) <= 0:
+                self._dbg_step_rejected(label, "缺步挂起中: 非缺失步骤, 吸收不计入")
+                return True
+            return False
+        if not getattr(self, '_closing_gate_enabled', False):
+            return False
+        if label not in (getattr(self, '_closing_gate_steps', None) or ()):
+            return False
+        # 周期还没开 (无任何步骤) → 不做数量门: 此时收尾步骤出现属违序问题,
+        # 归严格顺序守门管; 也顺带吞掉结算后残像在新空周期上的"数量未满"误报警
+        # (上银视频二实测: OK 结算瞬间封箱余像触发一次误报)。
+        if not self.current_cycle_steps:
+            return False
+        mix = getattr(self, '_custom_mix', None)
+        if mix is None:
+            return False
+        try:
+            # ⚠️ 数量门用"已进箱记账"口径 (booked), 不用 verdict 的凑数口径 (settled):
+            # 备盘区摆着整盘没进箱时 verdict 口径会凑成"已满", 数量门被骗过放行 —
+            # 上银视频二 (漏装第四盘就放油嘴包, 期望当场报警) 实测漏报。
+            total = mix.container_booked_item_total()
+            target = mix.container_item_target()
+        except Exception as e:
+            print(f"[ClosingGuard] 读箱内数量失败 (放行不卡产线): {e}")
+            return False
+        if total is None or not target or int(total) >= int(target):
+            return False
+        print(f"[ClosingGuard] 收尾数量门拦下 [{label}]: 箱内已进 {int(total)}/{int(target)}")
+        if self._violation_throttle_pass(f'@closing_gate:{label}'):
+            self._fire_closing_guard_alarm(
+                f'收尾防呆: [{label}] 出现但箱内数量 {int(total)}/{int(target)} 未满 — '
+                f'请先补足数量再收尾',
+                event_id=getattr(self, '_closing_gate_event_id', None))
+        self._dbg_step_rejected(label, f"收尾数量门拦下 (箱内 {int(total)}/{int(target)})")
+        return True
+
+    def _maybe_enter_settle_hold(self, missing, expected_labels, next_carry) -> bool:
+        """v3.44 缺步结算挂起入口 (True = 已挂起, 调用方不再触发 NG).
+
+        仅在结算判定为"纯缺步骤" (无多余/重复/顺序错) 时由结算函数调用.
+        挂起语义: 周期保持打开, 报警提示工人; 缺的步骤视觉补齐后自动按 OK
+        结算 (_maybe_resolve_settle_hold); 超时 (_check_settle_hold_timeout)
+        按原缺步 NG 落账. 有下周期残留时边界模糊, 不挂 (走原 NG).
+        """
+        if not getattr(self, '_settle_hold_enabled', False):
+            return False
+        if getattr(self, '_settle_hold', None) is not None:
+            return False
+        if next_carry:
+            return False
+        # 首步都缺 = 周期从没正经开始过 (典型: OK 结算后封箱余像自己开了个
+        # 幽灵周期, 上银视频尾实测) → 不挂, 走原 NG 路径. 挂起语义只救
+        # "开工了、缺了中间/收尾某步"的正经周期.
+        if expected_labels and expected_labels[0] in (missing or []):
+            return False
+        self._settle_hold = {
+            'missing': list(missing),
+            'expected': list(expected_labels),
+            'since': time.time(),
+        }
+        self._fire_closing_guard_alarm(
+            f'收尾防呆: 缺少步骤 {list(missing)} — 周期挂起等补做, 补齐自动判合格',
+            event_id=getattr(self, '_settle_hold_event_id', None))
+        print(f"[ClosingGuard] 缺步结算挂起: missing={list(missing)} "
+              f"expected={list(expected_labels)} timeout={getattr(self, '_settle_hold_timeout_s', 0)}s")
+        if debug_center.is_on("backend.settlement"):
+            debug_center.dbg("backend.settlement", "缺步结算挂起",
+                             f"channel={self.channel_id} missing={list(missing)}")
+        return True
+
+    def _maybe_resolve_settle_hold(self) -> None:
+        """v3.44 缺步挂起自动销结: 每次有步骤入周期后调用; multiset 补齐 →
+        按期望顺序重排 (断点补做语义) 走标准结算路径判 OK + 补计 + 清理."""
+        hold = getattr(self, '_settle_hold', None)
+        if hold is None:
+            return
+        from collections import Counter
+        expected = list(hold.get('expected') or [])
+        if Counter(self.current_cycle_steps) != Counter(expected):
+            return
+        print(f"[ClosingGuard] 缺步已补齐 {hold.get('missing')} → 按期望顺序重排结算")
+        self._settle_hold = None
+        # 补做步骤 append 在末步之后, 顺序必然"错" — 断点补做语义下重排是正当的:
+        # 工人确实把每一步都做了, 只是补做发生在收尾之后. 重排后走标准结算 → OK.
+        self.current_cycle_steps = list(expected)
+        if not self.project_config:
+            return
+        pipeline_config = self.project_config.get('pipeline_config', {}) or {}
+        steps_config = self.project_config.get('steps_config', []) or []
+        id_to_label = {s.get('id'): s.get('label', '') for s in steps_config
+                       if s.get('id') and s.get('label')}
+        try:
+            self._check_custom_sequential_mode(pipeline_config, id_to_label)
+        except Exception as e:
+            print(f"[ClosingGuard] 挂起销结结算失败: {e}")
+
+    def _check_settle_hold_timeout(self) -> None:
+        """v3.44 缺步挂起超时兜底: 超时未补齐 → 按原缺步 NG 落账 + 清运行时.
+        timeout=0 表示永等 (只手动处理). 由主循环每帧调用 (无挂起零开销)."""
+        hold = getattr(self, '_settle_hold', None)
+        if hold is None:
+            return
+        timeout = float(getattr(self, '_settle_hold_timeout_s', 0) or 0)
+        if timeout <= 0:
+            return
+        since = float(hold.get('since') or 0)
+        if since <= 0 or (time.time() - since) < timeout:
+            return
+        missing = list(hold.get('missing') or [])
+        print(f"[ClosingGuard] 缺步挂起超时 ({timeout}s) 未补齐 → NG 落账: missing={missing}")
+        self._settle_hold = None
+        from backend.api.source_custom_mix import compose_settle_event
+        # 挂起已是补做窗口, 超时落账不再进"补步骤延迟落账"二次挂起 (无人值守
+        # 会变无限等待链); 事件自身的人工确认定格语义不受影响.
+        self._skip_remediation_defer = True
+        try:
+            self._trigger_event(*compose_settle_event(
+                self, 2, f'周期不完整，缺少: {missing} (挂起补做超时)'))
+        finally:
+            self._skip_remediation_defer = False
+        if not getattr(self, '_pending_ack', False):
+            self._clear_step_runtime_state()
+
     def _device_gate_hold(self, label, gate_cfg) -> bool:
         """v3.35 步骤外设门控查询: True = 门控未放行, 本步骤暂不入周期 (下帧重查)。
 
@@ -1223,7 +1385,9 @@ class SettlementMixin:
         if label not in enabled_labels:
             return
 
-        if self.step_strict_order.get(label):
+        # v3.44 缺步挂起豁免: 挂起等补做时, 仍缺失的步骤是被明确期待的 —
+        # 严格顺序/严格+单次守门放行它入周期 (断点补做语义, 顺序已由挂起兜底)
+        if self.step_strict_order.get(label) and not self._settle_hold_wants(label):
             expected = self._get_expected_sequence_labels()
             if label in expected:
                 idx = expected.index(label)
@@ -1283,11 +1447,19 @@ class SettlementMixin:
         else:
             is_new_appearance = False
 
+        # ── v3.44 收尾防呆守门 (数量门拒收 + 缺步挂起吸收, 默认关零差异) ──
+        # 位置有讲究: 在严格+单次守门之前 — 数量不足时报"箱内数量未满"比报"违序"
+        # 对工人更可操作; 挂起中封箱余像等非缺失步骤也要在触发违序/实时NG前被吸收.
+        if is_new_appearance and self._closing_guard_blocks(label):
+            return
+
         # ── v3.8.x: 严格 + 单次接受 → 仅拦截"多余位置的新出现" ──
+        # (v3.44: 挂起等补做的缺失步骤豁免, 见 _settle_hold_wants)
         if (is_new_appearance
                 and is_seq_like
                 and self.step_strict_order.get(label)
                 and self.step_accept_once.get(label)
+                and not self._settle_hold_wants(label)
                 and not self._is_legitimate_next_in_sequence(label)):
             # Throttle: this gate fires every frame the surplus label is seen and
             # used to flood the log (thousands of identical lines/min, drowning real
@@ -1479,7 +1651,15 @@ class SettlementMixin:
                 if logic_mode == 'custom' or logic_mode == 'sequential':
                     if len(self.current_cycle_steps) == 0:
                         self._cycle_regression = False
-                    if self.last_added_step == label:
+                    if self._settle_hold_wants(label):
+                        # v3.44 缺步挂起补做: 缺失步骤入周期 (不标回退/不报实时NG,
+                        # 顺序由挂起销结时按期望重排兜底)
+                        self.current_cycle_steps.append(label)
+                        self.last_added_step = label
+                        self._last_step_added_time = current_time
+                        print(f"[ClosingGuard] 挂起补做步骤入周期: {label} "
+                              f"(current: {self.current_cycle_steps})")
+                    elif self.last_added_step == label:
                         # v3.19.x: 期望序列支持"连续相同步骤" (如 放托盘×4).
                         # 走到这里说明 is_new_appearance=True, 即上一次出现已经
                         # 走完消失结算 (step_last_seen 被删) 后重现 — 不是同一次
@@ -1533,7 +1713,7 @@ class SettlementMixin:
                         # _settle_detection_cycle 同源, 详见方法 docstring)
                         if logic_mode == 'detection':
                             self._maybe_instant_ng_detection_duplicate(label)
-    
+
     def _record_out_of_seq_step(self, label):
         """v3.42.1 序列外步骤旁路账本 + 包装协调器即时通知.
 

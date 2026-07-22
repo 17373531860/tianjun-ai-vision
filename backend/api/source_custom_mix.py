@@ -73,7 +73,8 @@ class _ContainerAccumulator:
                  count_mode: str = 'trays', item_target: int = 0,
                  confirm_by_frames: bool = True, confirm_by_action: bool = False,
                  action_label: str = '', confirm_combine: str = 'or',
-                 action_min_frames: int = 3, action_gone_frames: int = 8):
+                 action_min_frames: int = 3, action_gone_frames: int = 8,
+                 action_cooldown_s: float = 2.0):
         self.container_label = container_label
         self.item_expected = {k: int(v) for k, v in (item_expected or {}).items()}
         self.box_count = int(box_count or 0)
@@ -91,6 +92,11 @@ class _ContainerAccumulator:
         self.confirm_combine = 'and' if str(confirm_combine).lower() == 'and' else 'or'
         self.action_min_frames = max(1, int(action_min_frames or 1))   # 放托盘标签连续出现满此帧 = 动作成立(进行中)
         self.action_gone_frames = max(1, int(action_gone_frames or 1))  # 动作中标签消失满此帧 = 动作结束
+        # v3.43.1 动作不应期 (秒, 0=关闭): 距上一次进箱记账不足此间隔的动作脉冲一律吸收 —
+        # 治"放托盘标签中途断检超过消失帧, 一次动作被拆成两次、同一盘记两次账"
+        # (客户机 TRT 推理下放托盘类置信度贴阈值抖动, 断检 8 帧≈0.26s 极易踩中)。
+        # ⚠️ 纯时间窗: 现场若快节奏连放 (两盘间隔小于不应期) 需在 UI 把间隔调小。
+        self.action_cooldown_s = max(0.0, float(action_cooldown_s or 0.0))
         self.reset()
 
     def reset(self):
@@ -105,11 +111,15 @@ class _ContainerAccumulator:
         self._action_in_progress = False   # 动作进行中 = 屏蔽窗口(锁主托盘 + 不数下一盘滑块)
         self._action_done_pending = False  # 一次放托盘动作已完成、待与进箱判定配对
         self._primary_frames_ok = False    # 当前主托盘是否已"消失满帧"(AND 组合用标志位记忆)
+        self._last_action_settle_ts = None  # 上一次动作确认进箱的时刻 (不应期基准; None=还没结过)
 
-    def _update_action_fsm(self, action_present: bool):
+    def _update_action_fsm(self, action_present: bool, current_time: float = 0.0):
         """放托盘动作状态机: 标签连续在场满 action_min_frames 帧 → 动作成立(进行中,
         开启屏蔽窗口); 进行中标签消失满 action_gone_frames 帧 → 动作结束(置 pending)。
         仅 confirm_by_action 时驱动; 否则全程 no-op (屏蔽窗口永不开, 老行为零差异)。
+
+        不应期 (v3.43.1): 距上一次动作进箱不足 action_cooldown_s 的"动作结束"视为同一次
+        动作被断检拆出的余波, 吸收掉不置 pending (只留调试日志), 杜绝一次动作记两次账。
         """
         if not self.confirm_by_action:
             return
@@ -122,16 +132,28 @@ class _ContainerAccumulator:
             if self._action_in_progress:
                 self._action_gone += 1
                 if self._action_gone >= self.action_gone_frames:
-                    # 动作结束 → 待配对进箱; 复位帧计数等待下一次动作
+                    # 动作结束; 复位帧计数等待下一次动作
                     self._action_in_progress = False
-                    self._action_done_pending = True
                     self._action_seen = 0
                     self._action_gone = 0
+                    in_cooldown = (
+                        self.action_cooldown_s > 0
+                        and self._last_action_settle_ts is not None
+                        and (current_time - self._last_action_settle_ts)
+                        < self.action_cooldown_s)
+                    if not in_cooldown:
+                        self._action_done_pending = True   # 待配对进箱
                     try:
                         from backend.core import debug_center
                         if debug_center.is_on("backend.packaging"):
-                            debug_center.dbg("backend.packaging", "放托盘动作完成",
-                                             f"action_label={self.action_label}")
+                            if in_cooldown:
+                                debug_center.dbg(
+                                    "backend.packaging", "放托盘动作脉冲被不应期吸收",
+                                    f"距上次进箱 {current_time - self._last_action_settle_ts:.2f}s"
+                                    f" < 不应期 {self.action_cooldown_s:.2f}s, 判为同一次动作余波")
+                            else:
+                                debug_center.dbg("backend.packaging", "放托盘动作完成",
+                                                 f"action_label={self.action_label}")
                     except Exception:
                         pass
             else:
@@ -154,7 +176,7 @@ class _ContainerAccumulator:
         from backend.api.source_per_item_mixin import _bbox_iou
 
         # 0) 放托盘动作状态机 (仅 confirm_by_action 生效): 驱动屏蔽窗口 + 进箱脉冲
-        self._update_action_fsm(action_present)
+        self._update_action_fsm(action_present, current_time)
 
         # 1) 托盘检测框关联到已有托盘 (IoU 最高), 否则新建身份
         matched = set()
@@ -259,6 +281,10 @@ class _ContainerAccumulator:
                 self._primary = None
                 self._primary_frames_ok = False
                 self._action_done_pending = False
+                # 开启动作确认时, 任何一次进箱都刷新不应期基准 — OR 组合下"消失满帧"
+                # 先结的账, 紧随其后的动作余波同样不允许再记一笔
+                if self.confirm_by_action:
+                    self._last_action_settle_ts = current_time
 
         # 5b) 非主托盘幽灵清理: 消失满帧且从未累计滑块(peak 空)的杂框丢弃。
         #     真盘滑块只在"主托盘"位累计, 故非主盘 peak 必为空; 主盘进箱只走 5)。
@@ -353,6 +379,16 @@ class _ContainerAccumulator:
             total += sum(cur_peak.values())
         return total
 
+    def booked_item_total(self) -> int:
+        """仅"已确认进箱"各盘峰值之和 — 不含在位主托盘的凑数。
+
+        v3.44 收尾防呆数量门专用口径: 备盘区摆着一整盘没进箱时, verdict 口径
+        (settled_item_total) 会把它凑进总数, 数量门被"看起来已满"骗过 —
+        上银现场视频二 (漏装第四盘就放油嘴包) 实测放行漏报。收尾动作问的是
+        "箱里真装够了吗", 只能认已记账的。
+        """
+        return sum(sum(t.values()) for t in self._done)
+
     def to_state(self, display_map: dict):
         dm = display_map or {}
         cur = self._cur_counts or {}
@@ -439,6 +475,7 @@ class _TrackingMixEngine:
                 confirm_combine=container_cfg.get('confirm_combine', 'or'),
                 action_min_frames=container_cfg.get('action_min_frames', 3),
                 action_gone_frames=container_cfg.get('action_gone_frames', 8),
+                action_cooldown_s=container_cfg.get('action_cooldown_s', 2.0),
             )
         # 静态期望清单 (verdict 用, 不依赖喂帧): 与真 loader 的注入规则一致 —
         # event 行 → event_required_count; 堆叠行 → stack_required_count;
@@ -644,6 +681,19 @@ class _TrackingMixEngine:
         """本周期已进箱滑块总数 (无容器时 None)。"""
         if self._container is not None:
             return self._container.settled_item_total()
+        return None
+
+    def container_item_target(self):
+        """当前箱滑块目标 (无容器/未设目标时 None)。收尾防呆数量门用。"""
+        if self._container is not None:
+            t = getattr(self._container, 'item_target', None)
+            return int(t) if t else None
+        return None
+
+    def container_booked_item_total(self):
+        """仅已确认进箱的滑块总数 (不含在位托盘凑数; 无容器时 None)。数量门口径。"""
+        if self._container is not None:
+            return self._container.booked_item_total()
         return None
 
     @staticmethod
@@ -905,6 +955,16 @@ class CustomMixMachine:
         fn = getattr(self._engine, 'container_settled_item_total', None)
         return fn() if fn is not None else None
 
+    def container_item_target(self):
+        """当前箱滑块目标 (收尾防呆数量门用; 非容器混合返回 None)。"""
+        fn = getattr(self._engine, 'container_item_target', None)
+        return fn() if fn is not None else None
+
+    def container_booked_item_total(self):
+        """仅已确认进箱的滑块总数 (数量门口径; 非容器混合返回 None)。"""
+        fn = getattr(self._engine, 'container_booked_item_total', None)
+        return fn() if fn is not None else None
+
     def to_state(self):
         state = self._engine.to_state(self._host)
         # 步骤侧周期是否进行中 (前端面板"周期中/等待"显示用; 周期主权在步骤侧)
@@ -992,6 +1052,17 @@ def build_custom_mix(config: dict):
                             s.get('tracking_gone_confirm_frames')
                             or s.get('event_gone_frames') or 8)
                         break
+            # v3.43.1 动作门槛支持在"进箱确认方式"里直接配 (此前借用的步骤字段在
+            # 自定义混合模式下无 UI 入口, 用户想调调不到)。配了才覆盖, 否则回落步骤字段。
+            _pl_min = pipeline.get('custom_mix_container_action_min_frames')
+            if _pl_min is not None and int(_pl_min or 0) > 0:
+                action_min_frames = int(_pl_min)
+            _pl_gone = pipeline.get('custom_mix_container_action_gone_frames')
+            if _pl_gone is not None and int(_pl_gone or 0) > 0:
+                action_gone_frames = int(_pl_gone)
+            # 动作不应期 (秒): 缺省 2.0; 显式配 0 = 关闭
+            _pl_cd = pipeline.get('custom_mix_container_action_cooldown_s')
+            action_cooldown_s = 2.0 if _pl_cd is None else max(0.0, float(_pl_cd or 0.0))
             container_cfg = {
                 'label': clabel,
                 'item_expected': item_expected,
@@ -1006,12 +1077,15 @@ def build_custom_mix(config: dict):
                 'confirm_combine': confirm_combine,
                 'action_min_frames': action_min_frames,
                 'action_gone_frames': action_gone_frames,
+                'action_cooldown_s': action_cooldown_s,
             }
             confirm_desc = []
             if confirm_by_frames:
                 confirm_desc.append(f"消失满{container_cfg['gone_frames']}帧")
             if confirm_by_action and action_label:
-                confirm_desc.append(f"放托盘动作[{action_label}](出现≥{action_min_frames}帧/消失≥{action_gone_frames}帧)")
+                confirm_desc.append(
+                    f"放托盘动作[{action_label}](出现≥{action_min_frames}帧/"
+                    f"消失≥{action_gone_frames}帧/不应期{action_cooldown_s:g}s)")
             confirm_str = f" 进箱确认={('+' + confirm_combine.upper() + '+').join(confirm_desc) if len(confirm_desc) > 1 else (confirm_desc[0] if confirm_desc else '消失满帧')}"
             if count_mode == 'items_total':
                 print(f"[CustomMix] 托盘容器累加器[总数模式]: 容器={clabel} "
@@ -1042,6 +1116,9 @@ def compose_settle_event(host, event_id, reason):
     mix = getattr(host, '_custom_mix', None)
     if mix is None:
         return event_id, reason
+    # v3.44: 步骤侧单独判定缓存给包装结算 (合成后的整体 NG 分不清"缺步骤"还是
+    # "仅数量不足", 而少装挂起等补做只该在步骤齐、仅数量不足时触发).
+    host._last_settle_steps_ok = (event_id == 1)
     try:
         ok, mix_reasons = mix.verdict()
         # 在 reset 前抓本周期进箱滑块总数, 缓存给包装结算协调器 (reset 后就归零).

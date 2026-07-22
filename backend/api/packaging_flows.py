@@ -422,7 +422,11 @@ def delete_packaging_flow(config_id: int, db: Session = Depends(get_db)):
 @router.get("/{config_id}/state",
             dependencies=[Depends(require_perm("system.packaging_flow.view"))])
 def get_packaging_flow_state(config_id: int):
-    """查当前进行中的工单/箱进度快照 (供 Monitor 页 polling)."""
+    """查当前进行中的工单/箱进度快照 (供 Monitor 页 polling).
+
+    v3.44: 走展示态 — 工单收尾后仍返回收尾快照 (status=completed/aborted),
+    前端保留工单号/最终结果/箱明细直到下一张工单开工, 不再一片空白.
+    """
     from backend.services.packaging_flow_coordinator import get_coordinator
     coord = get_coordinator()
     cfg = coord.get_config(config_id)
@@ -431,7 +435,7 @@ def get_packaging_flow_state(config_id: int):
             status_code=404,
             detail="配置不在协调器内存 (可能 disabled 或未 reload)",
         )
-    return {"config": cfg, "state": coord.get_state(config_id)}
+    return {"config": cfg, "state": coord.get_display_state(config_id)}
 
 
 class ScanInput(BaseModel):

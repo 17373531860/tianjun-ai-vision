@@ -1,0 +1,7 @@
+{
+  "name": "tray_action_split_pulse",
+  "description": "客户回归护栏 (2026-07-20 上银客户机): 放托盘动作中途断检拆成两个脉冲 + 之后一次正常间隔的真动作。期望: 余波脉冲被 2s 不应期吸收 (已进箱 24 不虚增), 正常第二次动作照常记账 (48)。托盘+24滑块常驻, 动作三段: 300-311 首次 / 340-351 断检余波(<2s) / 540-551 正常第二次(>2s)。配套 UAT: tests/uat/uat_20260720_action_cooldown_synthetic_e2e.py",
+  "fps": 60,
+  "expected": { "trays_done_after_split": 1, "trays_done_final": 2 },
+  "timeline_note": "detections 由 UAT 脚本按 _tray_frame_dets 生成后注入 (24 个滑块框手写太长), 本文件记录时间轴设计与预期, 作为剧本档案"
+}

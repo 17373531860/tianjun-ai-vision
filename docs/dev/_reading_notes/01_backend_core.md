@@ -3,6 +3,16 @@
 > 阅读范围：2026-07-05 分段通读 `backend/main.py`、`backend/core/config.py`、`backend/api/source*.py` 全族（含 23 个 mixin + 14 个 has-a 组件）、`router_manifest.py`、`channel_manager.py`、`alarm.py`、`debug.py`、`system_display.py`、`services/weighing_engine.py`。**共 47 个文件**。
 >
 > **v3.41 增量复核（2026-07-17）**：source/检测核心域按 `git diff a23a8d2..HEAD` 补账 v3.33~v3.41 九个版本变更。各条目内新增「v3.3x 变更」行；1.4 / 1.5 表下补增量清单；新建 `source_persist_worker.py`（v3.38）完整条目并补录 `source_region_events.py` / `source_region_events_mixin.py`（v3.32 落地时漏收）。受影响文件的行数标注与漂移行号已按当前代码刷新。
+>
+> **v3.44 补账（2026-07-22）**：NG 处置整改批次，source 族 10 文件——
+> - `source_project_config_apply.py`：新增 `resolve_ng_handling()` 统一解析器，`pipeline_config.ng_handling` 块归一四场景（violation/missing_step/short_count/gate），legacy 键（ng_remediation/closing_guard/instant_ng_on_violation/strict_order_violation_event_id）自动合成零差异；展开到既有运行时属性，状态机零改动。
+> - `source_settlement_mixin.py`：新增收尾防呆五方法——`_closing_guard_blocks`（数量门：门步骤出现且已进箱数量未满→拒收+节流报警，空周期跳过）、`_maybe_enter_settle_hold`（纯缺步骤不判NG挂起等补做，首步缺=幽灵周期不挂）、`_maybe_resolve_settle_hold`（补齐重排判OK）、`_check_settle_hold_timeout`（超时按缺步NG落账，带 `_skip_remediation_defer` 防二次挂起）、`_fire_closing_guard_alarm`（借事件响应面，门/挂起事件分离）。
+> - `source_custom_mix.py`：容器动作确认不应期 `action_cooldown_s`（默认2s，治闪断双结算）；`booked_item_total`（数量门"已确认进箱"口径，防备盘凑数骗门）；`compose_settle_event` 缓存步骤侧结论 `_last_settle_steps_ok`（治补数量死分支）。
+> - `source_event_trigger_mixin.py`：NG+需确认 → 置 `_pkg_hold_for_ack` 传包装层挂账；`_remediation_bypass`/`_skip_remediation_defer` 防已处置重发再定格/二次挂起。
+> - `source_session_lifecycle_mixin.py`：`end_cycle` 快照捎带 steps_ok/hold_for_ack 给包装协调器；结周期清 `_settle_hold`。
+> - `source_step_stats_mixin.py`：每帧查挂起超时；挂起中空闲超时结算跳过；自动确认路径解包装挂账（按 redo）。
+> - `source_sequential_mixin.py` / `source_events_check_mixin.py`：缺步结算入口接挂起；步骤消失时机触发挂起销结。
+> - `source_state_init.py` / `source.py`：收尾防呆态初始化与运行时清理。
 
 ---
 

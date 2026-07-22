@@ -310,6 +310,10 @@ class SequentialMixin:
             print(f"  → {', '.join(reasons)} → NG")
             self._trigger_event(*compose_settle_event(self, 2, ', '.join(reasons)))
         elif missing:
+            # v3.44 收尾防呆: 纯缺步 → 可选挂起等视觉补做 (补齐自动判 OK), 不判 NG.
+            # 默认关 = 零差异; 有下周期残留时不挂 (边界模糊).
+            if self._maybe_enter_settle_hold(missing, expected_labels, next_carry):
+                return
             print(f"  → 周期不完整，缺少: {missing} → NG")
             self._trigger_event(*compose_settle_event(self, 2, f'周期不完整，缺少: {missing}'))
         else:

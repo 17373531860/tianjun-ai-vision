@@ -5,6 +5,13 @@
 
 > v3.41 复核（2026-07-17）：基线 a23a8d2（v3.32/v3.33 之交）→ v3.41.0 的前端/Electron 增量已回写本文——各条目下的「v3.3x 起」引用块即补账内容，行号锚点已整体刷新为当前快照。逐版动机详见 `docs/changelog/`（v3.33.0 ~ v3.41.0 各版 md）。
 
+> **v3.44 补账（2026-07-22）**：NG 处置整改批次四文件——
+> - `views/Project/LogicConfigTab.vue`：6 张 NG 相关卡收敛为两张——「NG 判定与处置」（一行一场景：违规当场/缺步骤/少数量/数量门，绑 `pipeline_config.ng_handling`，档位不选高级参数不渲染，跨 tab 联动提示 NG 事件是否勾了需人工确认）+「结算冷却」（防重复结算+NG 周期保护合并）；旧「NG 补做策略/实时NG/收尾防呆」卡与结算方式卡内违序行删除。跟踪配置新增动作确认三参数（出现/消失帧数/不应期秒）。
+> - `views/Project/index.vue`：加载时无 `ng_handling` 从 legacy 键合成（JS 版与后端 resolve_ng_handling 同构）；保存只落新块不回写老键；last_first 强制 violation=none。
+> - `views/Project/EventsConfigTab.vue`：NG 事件（id=2）「需人工确认」下反向联动明示——处置按钮来源于逻辑设置统一卡、「确认后保留周期」被处置按钮顶掉的关系。
+> - `views/Monitor/index.vue`：确认弹窗（大/小两处）新增包装挂账形态——在制箱明细（第几箱/已进箱/目标/挂起态）+「认NG落账进下一箱/重做本箱不记NG」二选一；成功提示按箱语义。`pendingAckChannelStates` 接后端 `pending_ack.pkg_hold`。
+> - `views/Monitor/PackagingFlowCard.vue`：工单收尾快照横幅（完成/作废+最终结果+箱明细，扫新单顶掉）+ NG 箱账挂起横幅（只引导去确认弹窗，不重复给按钮）；`pending_box` 按 reason 分流（ng_ack vs 少装）。
+
 ---
 
 ## 一、路由表

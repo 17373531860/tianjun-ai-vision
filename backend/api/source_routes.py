@@ -1291,6 +1291,11 @@ def _do_ack_pending(mgr, channel: int, action: Optional[str] = None,
         if reset_rules:
             print(f"[ack] 已重置周期性规则 (event_id={ev_id}): {reset_rules}")
 
+    # v3.44 NG 处置闭环: 本次 NG 若在包装层挂了账 (箱账等处置), 确认时一并解挂 —
+    # 单次确认闭环, 不再要求工人二次到包装卡操作.
+    #   action='confirm_ng' → 照实落 NG 箱并翻页; 其它 (缺省重做) → 丢弃箱账同箱重测.
+    pkg_resolution = _resolve_pkg_hold_on_ack(channel, action, operator)
+
     # v3.34: 事件配了「确认后保留周期」→ 只解除定格不清运行时, 工人从断点继续补做
     # (典型: 违序警告当场定格, 确认后接着打漏掉的那颗螺丝, 周期照常走完)。
     # 默认不勾 → 走老"确认重做"路径 (丢弃在制周期), 零差异。
@@ -1305,6 +1310,7 @@ def _do_ack_pending(mgr, channel: int, action: Optional[str] = None,
             "waited_sec": waited,
             "reset_rules": reset_rules,
             "kept_cycle": True,
+            "packaging": pkg_resolution,
         }
 
     mgr._clear_step_runtime_state()
@@ -1314,7 +1320,42 @@ def _do_ack_pending(mgr, channel: int, action: Optional[str] = None,
         "event_name": ev_name,
         "waited_sec": waited,
         "reset_rules": reset_rules,
+        "packaging": pkg_resolution,
     }
+
+
+def _get_pkg_hold_safe(channel: int) -> Optional[dict]:
+    """v3.44: 查通道包装层 NG 挂账 (状态面板用). 异常隔离返回 None."""
+    try:
+        from backend.services.packaging_flow_coordinator import get_coordinator as _pkg_coord
+        return _pkg_coord().get_channel_hold(channel)
+    except Exception:
+        return None
+
+
+def _resolve_pkg_hold_on_ack(channel: int, action: Optional[str],
+                             operator: Optional[str]) -> Optional[dict]:
+    """v3.44: 人工确认时联动解除包装层 NG 挂账 (无挂账 / 通道不参与包装 → None).
+
+    任何异常隔离 — 包装联动失败绝不能卡死人工确认解除阻塞的主链路.
+    """
+    try:
+        from backend.services.packaging_flow_coordinator import get_coordinator as _pkg_coord
+        coord = _pkg_coord()
+        if coord.get_channel_hold(channel) is None:
+            return None
+        from backend.db.database import SessionLocal as _SL
+        db = _SL()
+        try:
+            res = coord.resolve_channel_hold_on_ack(
+                channel, action or 'redo', db, operator=operator)
+        finally:
+            db.close()
+        print(f"[ack] 包装挂账联动解除: channel={channel} -> {res}")
+        return res
+    except Exception as e:
+        print(f"[ack] 包装挂账联动解除失败 (隔离, 不影响确认): {e}")
+        return None
 
 
 # v3.23: 人工确认 NG 拆出独立权限 monitor.detection.ack。
@@ -1672,6 +1713,9 @@ def get_detection_results(
             "keeps_cycle": bool(
                 mgr._pending_ack_keeps_cycle()
                 if hasattr(mgr, '_pending_ack_keeps_cycle') else False),
+            # v3.44: 本次 NG 在包装层挂账等处置 (箱账未落) → 前端弹窗加"认NG落账"
+            # 选项 + 明示"确认重做不记 NG 箱". None=通道不参与包装/无挂账.
+            "pkg_hold": _get_pkg_hold_safe(channel),
         },
         # v3.23 NG 补做策略 (前端确认弹窗据此决定是否展示"补步骤/补数量"按钮)
         "ng_remediation": getattr(mgr, '_ng_remediation', None)

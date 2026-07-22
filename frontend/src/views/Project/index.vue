@@ -1454,6 +1454,16 @@ const initProjectDefaults = (project) => {
   if (project.custom_mix_container_confirm_combine === undefined) {
     project.custom_mix_container_confirm_combine = pipelineConfig.custom_mix_container_confirm_combine || 'or';
   }
+  // v3.43.1 动作门槛直配三参数 (0 = 出现/消失帧跟随步骤配置; 不应期缺省 2s, 显式 0 = 关闭)
+  if (project.custom_mix_container_action_min_frames === undefined) {
+    project.custom_mix_container_action_min_frames = pipelineConfig.custom_mix_container_action_min_frames ?? 0;
+  }
+  if (project.custom_mix_container_action_gone_frames === undefined) {
+    project.custom_mix_container_action_gone_frames = pipelineConfig.custom_mix_container_action_gone_frames ?? 0;
+  }
+  if (project.custom_mix_container_action_cooldown_s === undefined) {
+    project.custom_mix_container_action_cooldown_s = pipelineConfig.custom_mix_container_action_cooldown_s ?? 2;
+  }
   // 物品行原生字段兜底：老数据/手改 JSON 可能缺字段，表C输入框依赖它们存在
   (project.steps_config || []).forEach(s => {
     if (s.detect_role !== 'item') return;
@@ -1516,14 +1526,7 @@ const initProjectDefaults = (project) => {
   if (project.cycle_max_duration === undefined) {
     project.cycle_max_duration = pipelineConfig.cycle_max_duration || 0;
   }
-  // v3.32 严格顺序违序即时事件 (null = 关)
-  if (project.strict_order_violation_event_id === undefined) {
-    project.strict_order_violation_event_id = pipelineConfig.strict_order_violation_event_id || null;
-  }
-  // v3.43 实时NG (违规即时结算, false = 关)
-  if (project.instant_ng_on_violation === undefined) {
-    project.instant_ng_on_violation = !!pipelineConfig.instant_ng_on_violation;
-  }
+  // (v3.44: 违序提示 / 实时NG 顶层字段已并入 pipeline_config.ng_handling, 见下方统一初始化)
   // 加载后同步结算步约束（与 watch(settlement_mode) 一致，避免开关仍可编辑/值为 true）
   const canSeqSettle = project.logic_mode === 'sequential'
     || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential');
@@ -1720,16 +1723,38 @@ const initProjectDefaults = (project) => {
     }
   }
 
-  // v3.23 NG 补做策略 (任意 logic_mode 通用): 缺步/少装 NG 人工确认后可补做不重置周期
-  // 默认全关 = 行为零差异; 嵌套在 pipeline_config.ng_remediation 不拍平到顶层
-  if (!project.pipeline_config.ng_remediation
-      || typeof project.pipeline_config.ng_remediation !== 'object') {
-    project.pipeline_config.ng_remediation = {};
+  // v3.44 NG 判定与处置统一模型: 新块优先, 老项目从 legacy 键合成 (行为零差异).
+  // legacy 键 (ng_remediation / closing_guard / instant_ng_on_violation /
+  // strict_order_violation_event_id) 读后不再回写, 保存只落 ng_handling.
+  if (!project.pipeline_config.ng_handling
+      || typeof project.pipeline_config.ng_handling !== 'object'
+      || !Object.keys(project.pipeline_config.ng_handling).length) {
+    const rem = pipelineConfig.ng_remediation || {};
+    const cg = pipelineConfig.closing_guard || {};
+    const remOn = rem.enabled === true;
+    project.pipeline_config.ng_handling = {
+      violation: pipelineConfig.instant_ng_on_violation ? 'instant_ng'
+        : (pipelineConfig.strict_order_violation_event_id ? 'hint' : 'none'),
+      violation_event_id: pipelineConfig.strict_order_violation_event_id || null,
+      missing_step: cg.hold_enabled ? 'hold'
+        : (remOn && rem.allow_step !== false ? 'ack' : 'ng'),
+      hold_timeout_s: Number.isFinite(Number(cg.hold_timeout_s)) ? Number(cg.hold_timeout_s) : 120,
+      hold_event_id: cg.event_id || null,
+      short_count: remOn && rem.allow_count !== false ? 'ack' : 'ng',
+      gate_enabled: cg.gate_enabled === true,
+      gate_steps: Array.isArray(cg.gate_steps) ? cg.gate_steps : [],
+      gate_event_id: cg.event_id || null,
+    };
   }
-  const remCfg = project.pipeline_config.ng_remediation;
-  if (remCfg.enabled === undefined) remCfg.enabled = false;
-  if (remCfg.allow_step === undefined) remCfg.allow_step = true;
-  if (remCfg.allow_count === undefined) remCfg.allow_count = true;
+  const nghCfg = project.pipeline_config.ng_handling;
+  if (!['none', 'hint', 'instant_ng'].includes(nghCfg.violation)) nghCfg.violation = 'none';
+  if (!['ng', 'ack', 'hold'].includes(nghCfg.missing_step)) nghCfg.missing_step = 'ng';
+  if (!['ng', 'ack'].includes(nghCfg.short_count)) nghCfg.short_count = 'ng';
+  if (nghCfg.violation_event_id === undefined) nghCfg.violation_event_id = null;
+  if (nghCfg.hold_event_id === undefined) nghCfg.hold_event_id = null;
+  if (nghCfg.gate_event_id === undefined) nghCfg.gate_event_id = null;
+  if (!Array.isArray(nghCfg.gate_steps)) nghCfg.gate_steps = [];
+  if (!Number.isFinite(Number(nghCfg.hold_timeout_s))) nghCfg.hold_timeout_s = 120;
 
   // Step 8 (feat/multi-model-roi-link): 反序列化附加模型 (副 slot, 主模型由
   // default_model_id/model_format 管理). 来源 pipeline_config.models[]
@@ -1826,6 +1851,9 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_mix_container_action_label = project.custom_mix_container_confirm_by_action
     ? (project.custom_mix_container_action_label || '') : '';
   project.pipeline_config.custom_mix_container_confirm_combine = project.custom_mix_container_confirm_combine || 'or';
+  project.pipeline_config.custom_mix_container_action_min_frames = project.custom_mix_container_action_min_frames || 0;
+  project.pipeline_config.custom_mix_container_action_gone_frames = project.custom_mix_container_action_gone_frames || 0;
+  project.pipeline_config.custom_mix_container_action_cooldown_s = project.custom_mix_container_action_cooldown_s ?? 2;
   project.pipeline_config.custom_sequence_order = project.custom_sequence_order;
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
@@ -1835,8 +1863,6 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.settlement_mode = project.settlement_mode || 'first_step';
   project.pipeline_config.idle_timeout_seconds = project.idle_timeout_seconds || 0;
   project.pipeline_config.cycle_max_duration = project.cycle_max_duration || 0;
-  project.pipeline_config.strict_order_violation_event_id = project.strict_order_violation_event_id || null;
-  project.pipeline_config.instant_ng_on_violation = !!project.instant_ng_on_violation;
   project.pipeline_config.periodic_actions = project.periodic_actions;
   
   return project;
@@ -2020,6 +2046,9 @@ const handleSaveProject = async () => {
         custom_mix_container_action_label: activeProject.value.custom_mix_container_confirm_by_action
           ? (activeProject.value.custom_mix_container_action_label || '') : '',
         custom_mix_container_confirm_combine: activeProject.value.custom_mix_container_confirm_combine || 'or',
+        custom_mix_container_action_min_frames: activeProject.value.custom_mix_container_action_min_frames || 0,
+        custom_mix_container_action_gone_frames: activeProject.value.custom_mix_container_action_gone_frames || 0,
+        custom_mix_container_action_cooldown_s: activeProject.value.custom_mix_container_action_cooldown_s ?? 2,
         custom_sequence_order: activeProject.value.custom_sequence_order,
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,
@@ -2092,12 +2121,28 @@ const handleSaveProject = async () => {
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,
-        // v3.32 严格顺序违序即时事件 (null=关; last_first 模式严格顺序被强制清空, 一并置空)
-        strict_order_violation_event_id: activeProject.value.settlement_mode === 'last_first'
-          ? null : (activeProject.value.strict_order_violation_event_id || null),
-        // v3.43 实时NG (违规即时结算; 依赖严格顺序守门, last_first 下同样置关)
-        instant_ng_on_violation: activeProject.value.settlement_mode === 'last_first'
-          ? false : !!activeProject.value.instant_ng_on_violation,
+        // v3.44 NG 判定与处置统一块 (取代 v3.23/v3.32/v3.43/v3.44 四组散装键;
+        // 后端读兼容旧键, 前端保存只落新块; last_first 严格顺序被强制清空 →
+        // 违规当场档位一并置关)
+        ng_handling: (() => {
+          const src = activeProject.value.pipeline_config?.ng_handling || {};
+          const lastFirst = activeProject.value.settlement_mode === 'last_first';
+          const t = Number(src.hold_timeout_s);
+          const violation = ['none', 'hint', 'instant_ng'].includes(src.violation)
+            ? src.violation : 'none';
+          return {
+            violation: lastFirst ? 'none' : violation,
+            violation_event_id: lastFirst ? null : (src.violation_event_id || null),
+            missing_step: ['ng', 'ack', 'hold'].includes(src.missing_step) ? src.missing_step : 'ng',
+            hold_timeout_s: Number.isFinite(t) && t >= 0 ? t : 120,
+            hold_event_id: src.hold_event_id || null,
+            short_count: src.short_count === 'ack' ? 'ack' : 'ng',
+            gate_enabled: src.gate_enabled === true,
+            gate_steps: (Array.isArray(src.gate_steps) ? src.gate_steps : [])
+              .map(s => String(s || '').trim()).filter(Boolean),
+            gate_event_id: src.gate_event_id || null,
+          };
+        })(),
         // 原生称重投料模式配置 (weighing 模式 / v3.35 融合步骤门控模式写入, 其他不污染)
         weighing: (activeProject.value.logic_mode === 'weighing'
                    || activeProject.value.pipeline_config?.weighing?.drive_mode === 'step_gate')
@@ -2107,15 +2152,6 @@ const handleSaveProject = async () => {
         region_events: activeProject.value.logic_mode === 'region_events'
           ? _sanitizeRegionEvents(activeProject.value.pipeline_config?.region_events)
           : undefined,
-        // v3.23 NG 补做策略 (任意模式通用, 嵌套对象直接序列化)
-        ng_remediation: (() => {
-          const src = activeProject.value.pipeline_config?.ng_remediation || {};
-          return {
-            enabled: src.enabled === true,
-            allow_step: src.allow_step !== false,
-            allow_count: src.allow_count !== false,
-          };
-        })(),
         rod_companion_filter: _sanitizeCompanionFilter(activeProject.value.rod_companion_filter),
         rod_session_gate: _sanitizeSessionGate(activeProject.value.rod_session_gate),
         hide_boxes_outside_step_roi: !!activeProject.value.pipeline_config?.hide_boxes_outside_step_roi,

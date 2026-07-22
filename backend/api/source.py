@@ -1433,6 +1433,8 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self._last_step_added_time = None
         self.last_step_completed_time = None
         self._cycle_regression = False
+        # v3.44 收尾防呆缺步挂起态: 周期没了挂起就没了 (停止/切项目/强制结算)
+        self._settle_hold = None
         # v3.42.1 序列外步骤旁路账本 (放工单 gate 探测用): 停止/切项目/强制结算时
         # 两代一起清, 防陈旧"放工单"残影跨启停放行尾箱 gate
         self._oos_steps_seen = set()

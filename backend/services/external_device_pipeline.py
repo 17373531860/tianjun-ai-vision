@@ -285,9 +285,13 @@ class ExternalDevicePipelineMixin:
     def _parse_direct(self, raw: str, device_role: str) -> dict:
         raw = raw.strip()
         if device_role == "weight":
-            num = re.search(r"[-+]?\d*\.?\d+", raw)
+            # 安衡等台秤报文的符号位与数字间有空格 (如 "ST,TR,- 4.692kg"),
+            # 符号必须收进来: 去皮后拿走工件秤面为负, 丢负号 = 流水线离秤识别失效
+            # (2026-07 萍乡百斯特现场缺陷, 结算把上一件皮重串进下一件)。
+            num = re.search(r"[-+]?\s*\d*\.?\d+", raw)
             if num:
-                return {"weight": float(num.group()), "raw": raw}
+                return {"weight": float(num.group().replace(" ", "")),
+                        "raw": raw}
         return {"value": raw, "raw": raw}
 
     def _parse_regex(self, raw: str, cfg: dict) -> Optional[dict]:

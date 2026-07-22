@@ -1068,3 +1068,15 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 **修复**：位置判定前加严格前缀守门 `list(cur) != expected[:next_pos] → False`。干净前缀（期望内配置的重复步骤）不受影响。回归：`tests/test_sequential_repeat_steps.py::TestDeviatedCycleNoFalseRepeat`。
 
 **排查口诀**：客户报"结果列闪 + 重复步骤误报"且只在缺步周期出现 → 先查这里，不要去动前端。前端侧还有一层独立防抖（末步权威 PT 结果锁定，见 Monitor `_posDone`），两层是不同 bug 的两个修复，别混。
+
+---
+
+## v3.44.0 补充：NG 处置统一模型 + 收尾防呆（数量门/缺步挂起）
+
+**配置入口收敛**：违序提示 / 实时NG / 补做策略 / 收尾防呆四组散装键 → `pipeline_config.ng_handling` 统一块（`source_project_config_apply.py: resolve_ng_handling`，读兼容 legacy 键自动合成零差异）。四行语义：`violation`(none/hint/instant_ng)、`missing_step`(ng/ack/hold)、`short_count`(ng/ack)、`gate_*`(数量门)。**运行时属性名没变**（`instant_ng_on_violation` / `_ng_remediation` / `_settle_hold_enabled` / `_closing_gate_*`），状态机侧零改动——排查时看后端启动日志一行 `NG 处置: 违规当场=... 缺步=... 少装=... 数量门=...`。
+
+**收尾防呆两能力**（`source_settlement_mixin.py`，均默认关）：
+- **数量门** `_closing_guard_blocks`：门步骤（放油嘴包/封箱）新出现时箱内数量未达目标 → 拒收+节流报警。⚠️ 口径必须是"已确认进箱"（`container_booked_item_total`），不能用 verdict 凑数口径（含在位备盘会被"看起来已满"骗过——上银视频二实测漏报）；空周期（无任何步骤）不做门判定（治 OK 结算瞬间封箱余像误报）。
+- **缺步挂起** `_maybe_enter_settle_hold`：末步结算"纯缺步骤"→ 不判 NG 报警挂起等视觉补做；补齐（`_maybe_resolve_settle_hold`，步骤消失时机触发）按期望顺序重排走标准结算判 OK；超时（`_check_settle_hold_timeout`，每帧查）按缺步 NG 落账，且带 `_skip_remediation_defer` 一次性旁路——不再二次进补做挂起（防无人值守无限等待链）。首步都缺 = 幽灵周期，不挂。挂起中非缺失步骤新出现一律吸收（防"重复步骤"死局）；挂起中空闲超时结算跳过。
+
+**排查口诀**：报警响了但没拦/没挂 → 先看数量门口径与 gate_steps 配没配；挂起不自动销 → 看缺的步骤有没有真的"消失"过（销结挂在步骤消失检查里）；防呆报警不响但拦截生效 → 正常，报警只借事件响应面（`fire_external_event_response`），防呆本体不依赖事件。门/挂起提示事件自 v3.44 分离（`gate_event_id` / `hold_event_id`）。

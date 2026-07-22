@@ -2,33 +2,6 @@
   <!-- ==================== 逻辑设置 Tab（2026-07 拆分批次 P-4 自 index.vue 外置） ==================== -->
     <div class="h-full overflow-y-auto p-4 pb-32 custom-scrollbar space-y-6">
 
-      <!-- v3.23 NG 补做策略 (任意检测模式通用) -->
-      <el-card v-if="project.pipeline_config && project.pipeline_config.ng_remediation" shadow="never" class="bg-slate-800 border-slate-700">
-        <template #header>
-          <div class="flex items-center justify-between">
-            <span class="font-bold text-white">NG 补做策略</span>
-            <el-switch v-model="project.pipeline_config.ng_remediation.enabled" active-text="开启" inactive-text="关闭" />
-          </div>
-        </template>
-        <div class="space-y-3 text-sm text-gray-300">
-          <p class="text-xs text-gray-400">
-            开启后：缺步骤 / 少装数量导致的 NG 经人工确认时，操作员可选择「补做缺的那步 / 补齐少装的数量」直接修正为合格，无需重置整个周期。结果延迟落账（补做成功直接记 OK，不先记 NG 再改）。默认关闭 = 行为零差异。
-          </p>
-          <div class="flex items-center gap-6 pt-2 border-t border-slate-700" :class="{ 'opacity-40 pointer-events-none': !project.pipeline_config.ng_remediation.enabled }">
-            <label class="flex items-center gap-2">
-              <el-switch v-model="project.pipeline_config.ng_remediation.allow_step" />
-              <span class="text-gray-300">允许补步骤</span>
-              <span class="text-xs text-gray-500">— 缺某一步时补做该步</span>
-            </label>
-            <label class="flex items-center gap-2">
-              <el-switch v-model="project.pipeline_config.ng_remediation.allow_count" />
-              <span class="text-gray-300">允许补数量</span>
-              <span class="text-xs text-gray-500">— 少装时补齐到目标数（如包装滑块）</span>
-            </label>
-          </div>
-        </div>
-      </el-card>
-
       <!-- Settlement Mode (sequential / custom-sequential) -->
       <el-card v-if="project.logic_mode === 'sequential' || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential')" shadow="never" class="bg-slate-800 border-slate-700">
         <template #header><span class="font-bold text-white">结算方式</span></template>
@@ -65,43 +38,116 @@
             <el-input-number v-model="project.cycle_max_duration" size="small" :min="0" :step="5" :precision="2" />
             <span class="text-xs text-gray-500">周期总时长超过此值直接判定NG（0=不启用）</span>
           </div>
-          <!-- v3.32 严格顺序违序即时事件: 严格步骤在错误时机出现 → 当场触发所配事件, 不必等结算 -->
-          <div v-if="project.settlement_mode !== 'last_first'" class="flex items-center gap-3 pt-2 border-t border-slate-700">
-            <span class="text-gray-400 text-xs whitespace-nowrap">违反严格顺序时立即触发</span>
-            <el-select :model-value="project.strict_order_violation_event_id ?? null" size="small" class="!w-48"
-              placeholder="不触发（默认）" clearable
-              @update:model-value="project.strict_order_violation_event_id = $event || null">
-              <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
-            </el-select>
-            <span class="text-xs text-gray-500">
-              勾了「严格顺序」的步骤在错误时机出现时当场报（建议配警告/自定义事件；照旧拦截不计入周期）
-            </span>
-          </div>
         </div>
       </el-card>
 
-      <!-- v3.43 实时NG (违规即时结算): 顺序型 + 检测模式通用, 违规一经确认立即按NG结算 -->
-      <el-card v-if="(project.logic_mode === 'sequential' && project.settlement_mode !== 'last_first')
-                     || project.logic_mode === 'detection'
-                     || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential' && project.settlement_mode !== 'last_first')"
+      <!-- ==================== v3.44 NG 判定与处置 (统一卡) ====================
+           收敛 v3.23 补做策略 / v3.32 违序提示 / v3.43 实时NG / v3.44 收尾防呆:
+           一行一场景, 句式固定 "场景 → 处置档位 → 内联参数"; 档位不选高级项不渲染 -->
+      <el-card v-if="ngh && ['sequential', 'detection', 'custom'].includes(project.logic_mode)"
                shadow="never" class="bg-slate-800 border-slate-700">
         <template #header>
           <div class="flex items-center justify-between">
-            <span class="font-bold text-white">实时NG（违规即时结算）</span>
-            <el-switch :model-value="!!project.instant_ng_on_violation"
-              @update:model-value="project.instant_ng_on_violation = $event"
-              active-text="开启" inactive-text="关闭" />
+            <span class="font-bold text-white">NG 判定与处置</span>
+            <span class="text-xs text-gray-500">默认全部「直接判NG」= 老行为零差异</span>
           </div>
         </template>
-        <div class="space-y-2 text-xs text-gray-400">
-          <p>
-            开启后，违规动作一经确认立即触发 NG 事件结算当前周期（计数/报警/MES 全链路），不等周期收尾。
-            覆盖：违序 / 缺前置步骤（需给相关步骤勾「严格顺序」）、步骤回退重复（顺序型，无需严格顺序）、重复超次（检测模式）。
-          </p>
-          <p>
-            NG 事件勾了「需人工确认」= 弹框定格等操作员确认（提示档）；没勾 = 当场结算并开新周期（斩立决）。
-            周期未开始时不触发（顺序型此时走「违反严格顺序时立即触发」的提示事件）。默认关闭 = 行为零差异。
-          </p>
+        <div class="space-y-3 text-sm text-gray-300">
+
+          <!-- 场景 1: 违规当场 (last_first 严格顺序被强制清空 → 本行隐藏) -->
+          <div v-if="project.settlement_mode !== 'last_first' || project.logic_mode === 'detection'"
+               class="flex items-center gap-3 flex-wrap">
+            <span class="text-gray-400 w-28 shrink-0">违规出现时</span>
+            <el-select v-model="ngh.violation" size="small" class="!w-56">
+              <el-option value="none" label="不处理 — 等周期结算再判" />
+              <el-option value="hint" label="当场提示 — 报警不结算" />
+              <el-option value="instant_ng" label="立即NG — 当场结算本周期" />
+            </el-select>
+            <template v-if="ngh.violation !== 'none'">
+              <span class="text-gray-400 text-xs">提示事件</span>
+              <el-select :model-value="ngh.violation_event_id ?? null" size="small" class="!w-44"
+                placeholder="不提示（仅日志）" clearable
+                @update:model-value="ngh.violation_event_id = $event || null">
+                <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
+              </el-select>
+            </template>
+            <el-tooltip placement="top" effect="dark"
+              content="违规=违序/缺前置（步骤需勾「严格顺序」）、回退重复（顺序型）、重复超次（检测模式）。「立即NG」在周期未开始时降级为提示。">
+              <span class="text-gray-500 cursor-help text-xs">ⓘ</span>
+            </el-tooltip>
+          </div>
+
+          <!-- 场景 2: 缺步骤 -->
+          <div class="flex items-center gap-3 flex-wrap pt-2 border-t border-slate-700/60">
+            <span class="text-gray-400 w-28 shrink-0">结算缺步骤时</span>
+            <el-select v-model="ngh.missing_step" size="small" class="!w-56">
+              <el-option value="ng" label="直接判NG" />
+              <el-option value="ack" label="定格弹窗 — 可补步骤判合格" />
+              <el-option v-if="isCustomSequential" value="hold" label="挂起等补做 — 补齐自动判合格" />
+            </el-select>
+            <template v-if="ngh.missing_step === 'hold'">
+              <span class="text-gray-400 text-xs">超时(秒)</span>
+              <el-input-number v-model="ngh.hold_timeout_s" size="small" :min="0" :step="10" :precision="0" />
+              <span class="text-gray-400 text-xs">提示事件</span>
+              <el-select :model-value="ngh.hold_event_id ?? null" size="small" class="!w-44"
+                placeholder="不提示（仅日志）" clearable
+                @update:model-value="ngh.hold_event_id = $event || null">
+                <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
+              </el-select>
+            </template>
+            <el-tooltip placement="top" effect="dark"
+              content="「定格弹窗」：NG 弹人工确认窗，给「补步骤—判合格」按钮，结果延迟落账。「挂起等补做」：不弹窗不定格，报警后周期保持打开，工人补齐缺的步骤自动判合格；超时未补按缺步 NG 落账（0=不限时）。">
+              <span class="text-gray-500 cursor-help text-xs">ⓘ</span>
+            </el-tooltip>
+          </div>
+
+          <!-- 场景 3: 少装数量 (仅混合跟踪包装场景有"数量"概念) -->
+          <div v-if="project.logic_mode === 'custom'"
+               class="flex items-center gap-3 flex-wrap pt-2 border-t border-slate-700/60">
+            <span class="text-gray-400 w-28 shrink-0">结算少数量时</span>
+            <el-select v-model="ngh.short_count" size="small" class="!w-56">
+              <el-option value="ng" label="直接判NG" />
+              <el-option value="ack" label="定格弹窗 — 可补数量判合格" />
+            </el-select>
+            <span class="text-xs text-gray-500">步骤都对但箱内数量不足目标（如少装滑块）</span>
+          </div>
+
+          <!-- 场景 4: 数量门 (事前拦截, 混合跟踪包装专用) -->
+          <div v-if="isCustomSequential"
+               class="flex items-center gap-3 flex-wrap pt-2 border-t border-slate-700/60">
+            <span class="text-gray-400 w-28 shrink-0">数量不足禁收尾</span>
+            <el-switch v-model="ngh.gate_enabled" />
+            <template v-if="ngh.gate_enabled">
+              <el-select v-model="ngh.gate_steps" multiple size="small" class="!w-64"
+                placeholder="选择收尾步骤（如放油嘴包/封箱）">
+                <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
+              </el-select>
+              <span class="text-gray-400 text-xs">提示事件</span>
+              <el-select :model-value="ngh.gate_event_id ?? null" size="small" class="!w-44"
+                placeholder="不提示（仅日志）" clearable
+                @update:model-value="ngh.gate_event_id = $event || null">
+                <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
+              </el-select>
+            </template>
+            <el-tooltip placement="top" effect="dark"
+              content="箱内数量没装够时，这些收尾步骤出现直接拒收 + 当场报警，杜绝少装就收尾；补够后再出现自然放行，周期不打断。">
+              <span class="text-gray-500 cursor-help text-xs">ⓘ</span>
+            </el-tooltip>
+          </div>
+
+          <!-- 跨 tab 联动明示: 定格弹窗由事件设置的 NG 事件「需人工确认」决定 -->
+          <div v-if="ngh.missing_step === 'ack' || ngh.short_count === 'ack' || ngh.violation === 'instant_ng'"
+               class="text-xs rounded p-2 border-l-2"
+               :class="ngEventRequiresAck
+                 ? 'text-gray-400 bg-slate-950/60 border-emerald-700/50'
+                 : 'text-amber-300 bg-amber-950/30 border-amber-600/60'">
+            <template v-if="ngEventRequiresAck">
+              ✓ NG 事件已勾「需人工确认」（事件设置）— 定格弹窗会正常弹出，补做按钮在弹窗里。
+            </template>
+            <template v-else>
+              ⚠ 上面选了「定格弹窗」档，但 NG 事件<b>没勾「需人工确认」</b>（事件设置 tab）— 弹窗不会出现，补做入口无效。请去事件设置勾上。
+            </template>
+          </div>
         </div>
       </el-card>
 
@@ -230,7 +276,19 @@
                         <el-select v-model="project.custom_mix_container_action_label" size="small" class="!w-40" placeholder="选择动作标签">
                           <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
                         </el-select>
-                        <span class="text-gray-500">动作门槛复用该步骤的「最短出现帧 / 消失确认帧」配置</span>
+                      </div>
+                      <!-- v3.43.1 动作门槛直配: 此前借用步骤字段, 本模式下无 UI 入口调不到 -->
+                      <div v-if="project.custom_mix_container_confirm_by_action" class="flex items-center gap-2 flex-wrap">
+                        <span class="text-gray-400 shrink-0">动作出现确认帧</span>
+                        <el-input-number v-model="project.custom_mix_container_action_min_frames" :min="0" :step="1" size="small" class="!w-24" />
+                        <span class="text-gray-400 shrink-0 ml-2">动作消失确认帧</span>
+                        <el-input-number v-model="project.custom_mix_container_action_gone_frames" :min="0" :step="1" size="small" class="!w-24" />
+                        <span class="text-gray-500">0 = 跟随该步骤的「最短出现帧 / 消失确认帧」（缺省 3 / 8 帧）</span>
+                      </div>
+                      <div v-if="project.custom_mix_container_confirm_by_action" class="flex items-center gap-2 flex-wrap">
+                        <span class="text-gray-400 shrink-0">进箱最小间隔(秒)</span>
+                        <el-input-number v-model="project.custom_mix_container_action_cooldown_s" :min="0" :max="60" :step="0.5" :precision="1" size="small" class="!w-24" />
+                        <span class="text-gray-500">不应期：距上次进箱不足此间隔的动作按同一次动作的余波吸收，防断检把一次动作拆成两次重复记账；快节奏连放请把间隔调小于两盘真实间隔；0 = 关闭</span>
                       </div>
                       <div v-if="project.custom_mix_container_confirm_by_frames && project.custom_mix_container_confirm_by_action"
                         class="flex items-center gap-2">
@@ -1253,41 +1311,31 @@
         </div>
       </el-card>
 
-      <!-- NG Cycle Protection -->
-      <el-card v-if="project.logic_mode === 'sequential' || project.logic_mode === 'custom'" shadow="never" class="bg-slate-800 border-slate-700">
-        <template #header><span class="font-bold text-white">NG 周期保护</span></template>
-        <div class="space-y-3 text-sm text-gray-300">
-          <p class="text-xs text-gray-400">当连续两次 NG 之间的间隔小于设定时间时，后续 NG 会被抑制，避免因短暂误检导致重复报错。设为 0 则不启用。</p>
-          <div class="flex items-center gap-3">
-            <span>保护间隔 (秒)</span>
-            <el-input-number v-model="project.ng_cycle_protect_seconds" size="small" :min="0" :step="1" :precision="2" />
-          </div>
-        </div>
-      </el-card>
-
-      <!-- 防重复结算 (v3.10.x: 时间窗口冷却模式) -->
+      <!-- ==================== 结算冷却 (v3.44 合并卡) ====================
+           防重复结算(全事件冷却窗) + NG 周期保护(仅 NG 加保) 本是同类抑制, 归一张卡 -->
       <el-card shadow="never" class="bg-slate-800 border-slate-700">
-        <template #header><span class="font-bold text-white">防重复结算</span></template>
-        <div class="space-y-3 text-sm text-gray-300">
-          <p class="text-xs text-gray-400">
-            开启后，任意事件（OK / NG / 自定义）触发后，在设定的冷却时长内，所有事件都会被抑制，
-            避免同一节拍因模型延迟、状态机切换等原因连续触发多次结算。
-          </p>
-          <div class="flex items-center gap-3">
-            <span>启用防重复结算</span>
-            <el-switch v-model="project.settle_dedup" data-testid="settle-dedup-switch" />
+        <template #header>
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-white">结算冷却</span>
+            <span class="text-xs text-gray-500">抑制同一节拍连触多次结算的误报</span>
           </div>
-          <div class="flex items-center gap-3" v-if="project.settle_dedup">
-            <span>冷却时长 (秒)</span>
-            <el-input-number
-              v-model="project.settle_dedup_window_seconds"
-              size="small"
-              :min="0"
-              :step="0.5"
-              :precision="2"
-              data-testid="settle-dedup-window"
-            />
-            <span class="text-xs text-gray-500">设为 0 等同于关闭；默认 2 秒</span>
+        </template>
+        <div class="space-y-3 text-sm text-gray-300">
+          <div class="flex items-center gap-3 flex-wrap">
+            <span class="text-gray-400 w-28 shrink-0">全事件冷却</span>
+            <el-switch v-model="project.settle_dedup" data-testid="settle-dedup-switch" />
+            <template v-if="project.settle_dedup">
+              <span class="text-gray-400 text-xs">冷却(秒)</span>
+              <el-input-number v-model="project.settle_dedup_window_seconds" size="small"
+                :min="0" :step="0.5" :precision="2" data-testid="settle-dedup-window" />
+            </template>
+            <span class="text-xs text-gray-500">任意事件触发后，窗口内所有事件被抑制（默认 2 秒）</span>
+          </div>
+          <div v-if="project.logic_mode === 'sequential' || project.logic_mode === 'custom'"
+               class="flex items-center gap-3 flex-wrap pt-2 border-t border-slate-700/60">
+            <span class="text-gray-400 w-28 shrink-0">NG 间隔加保</span>
+            <el-input-number v-model="project.ng_cycle_protect_seconds" size="small" :min="0" :step="1" :precision="2" />
+            <span class="text-xs text-gray-500">连续两次 NG 间隔小于此秒数时，后一次被抑制（0=不启用）</span>
           </div>
         </div>
       </el-card>
@@ -1819,6 +1867,16 @@ const availableLabels = computed(() => {
 const regionEventsCfg = computed(() => {
   if (props.project?.logic_mode !== 'region_events') return null;
   return props.project?.pipeline_config?.region_events || null;
+});
+
+// ==================== v3.44 NG 判定与处置 (统一卡) ====================
+const ngh = computed(() => props.project?.pipeline_config?.ng_handling || null);
+const isCustomSequential = computed(() =>
+  props.project?.logic_mode === 'custom' && props.project?.custom_based_on === 'sequential');
+// 跨 tab 联动明示: 定格弹窗由事件设置里 NG 事件(id=2)的「需人工确认」决定
+const ngEventRequiresAck = computed(() => {
+  const ev = (props.project?.events_config || []).find(e => e.id === 2 || String(e.id) === '2');
+  return !!ev?.require_ack;
 });
 
 // 类别候选 = 步骤表里的模型标签 ∪ 规则/置信度表里已引用的标签（防手输标签丢选项）

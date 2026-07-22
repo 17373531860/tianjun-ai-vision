@@ -782,3 +782,11 @@ curl http://localhost:8001/api/v1/cluster/slaves
 - **模拟秤脚本按墙钟计时**（`external_device_protocols.py` mock 播放循环）：原按"睡眠次数×间隔"累计，不含 emit 处理耗时，长脚本越播越慢（实测 4 分钟漂约 20 秒），与视频时间轴对齐的仿真会整体错位。只影响模拟协议，真秤无关。全链路仿真剧本参考 `tests/uat/sim_bst_20260717.py`（真视频+真模型+秤脚本+达梦模拟）。
 
 **改动 MES 子系统前必读**：本 skill 第 3/5/8/11 节 + AGENTS.md 第六节 6.2、第八节不变量 1/4/6。
+
+---
+
+## v3.44.0 补充：包装箱账挂起 + 收尾快照 + 秤串口延迟
+
+- **NG 箱账挂起**（`packaging_flow_coordinator.py`）：NG 事件带「需人工确认」→ 箱账进 `pending_remediation(reason=ng_ack)` 不落账不翻页；确认弹窗二选一（认NG落账进下一箱 / 重做本箱不记NG），`resolve_channel_hold_on_ack` 由 ack 接口统一收口，超时自动确认按"重做"。与 v3.23 少装挂起共用状态位，**按 reason 分流**（前端包装卡已分横幅）。排"箱号翻早了/重做重错箱"先查这里。
+- **工单收尾快照**：完成/作废的工单存 `_last_done`，`get_display_state` 供 UI 轮询返回快照直到新单顶掉；`get_state` 语义不变（在途才有值，扫码/结算判定用）。**别把内部判定改成 display 口径**——会把已收尾工单当在途。
+- **秤串口延迟治本**（`external_device_protocols.py`）：读串口"有多少收多少"（`in_waiting`）+ 帧读取见帧尾立即交货（无分隔符 ~60ms 静默兜底）。现场再报"数值条慢 2 秒"先确认没人把 `ser.read(固定大块)` 改回去。回归：`tests/test_extdev_serial_latency.py`。

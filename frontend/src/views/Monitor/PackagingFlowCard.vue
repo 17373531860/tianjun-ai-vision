@@ -84,6 +84,30 @@
         </div>
       </div>
 
+      <!-- v3.44 工单收尾快照横幅: 完成/作废后信息保留展示, 扫新单自然顶掉 -->
+      <div v-if="isDoneSnapshot" class="mb-3 rounded border px-3 py-2"
+           :class="state.final_result === 'OK'
+             ? 'border-green-600/60 bg-green-900/30' : 'border-red-600/60 bg-red-900/30'">
+        <div class="text-sm font-bold mb-1"
+             :class="state.final_result === 'OK' ? 'text-green-300' : 'text-red-300'">
+          {{ state.status === 'aborted' ? '✕ 工单已作废' : '✓ 工单已完成' }}
+          — 最终 {{ state.final_result || '-' }}
+        </div>
+        <div class="text-xs text-gray-300">
+          共 {{ state.box_done }} 箱落账<span v-if="state.box_ng > 0">，其中 NG {{ state.box_ng }} 箱</span>。信息保留展示，扫新工单开工后自动切换。
+        </div>
+      </div>
+
+      <!-- v3.44 NG 箱账挂起横幅: 处置入口在人工确认弹窗, 这里只提示不重复给按钮 -->
+      <div v-if="ngAckBox" class="mb-3 rounded border border-rose-600/60 bg-rose-900/30 px-3 py-2">
+        <div class="text-rose-300 text-sm font-bold mb-1">
+          ⚠ 第 {{ ngAckBox.box }} 箱 NG 箱账挂起（进箱 {{ ngAckBox.sliders }}<template v-if="ngAckBox.target > 0"> / {{ ngAckBox.target }}</template>）
+        </div>
+        <div class="text-xs text-rose-200/80">
+          未落 NG、未翻页 — 请在屏幕中央的人工确认弹窗选择「重做本箱」或「认 NG 落账」。
+        </div>
+      </div>
+
       <!-- v3.23 少装挂起等补做横幅 -->
       <div v-if="pendingBox" class="mb-3 rounded border border-amber-600/60 bg-amber-900/30 px-3 py-2">
         <div class="text-amber-300 text-sm font-bold mb-1">
@@ -144,8 +168,18 @@ const forcing = ref(false);
 const remediating = ref(false);
 
 // v3.23 少装挂起箱 + 补做权限 (鉴权关时人人=超管, 始终可补)
+// v3.44 起同一状态位还承载 NG 箱账挂起 (reason=ng_ack, 处置走确认弹窗) — 按 reason 分流
 const pendingBox = computed(() =>
-  props.state && props.state.status === 'pending_remediation' ? props.state.pending_box : null);
+  props.state && props.state.status === 'pending_remediation'
+    && props.state.pending_box?.reason !== 'ng_ack'
+    ? props.state.pending_box : null);
+const ngAckBox = computed(() =>
+  props.state && props.state.status === 'pending_remediation'
+    && props.state.pending_box?.reason === 'ng_ack'
+    ? props.state.pending_box : null);
+// v3.44 收尾快照 (completed/aborted 保留展示, 扫新单顶掉)
+const isDoneSnapshot = computed(() =>
+  !!props.state && ['completed', 'aborted'].includes(props.state.status));
 const canRemediate = computed(() => authStore.hasPermission('monitor.detection.ack'));
 
 async function onSupplement(auto) {

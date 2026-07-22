@@ -745,3 +745,23 @@ pipeline_config 内, 不拍平到顶层**, 因此不动 ORM / Pydantic schema / 
 3. **VSM 实际用了字段吗？** apply 后还要在 mixin 业务方法里读 — 漏一处就是死配置
 4. **守门 / 模式互斥规则改了吗？** v3.12.0 新加的字段都属于 per_item 模式独占，非 per_item 时**应静默忽略**（不是报错）
 5. **新加 per_item 字段时同步加测试**：参考 `tests/test_per_item_v310_features.py` 的 7 个用例模板
+
+---
+
+## v3.44.0：pipeline_config 新增 `ng_handling` 统一块（NG 判定与处置）
+
+**取代四组 legacy 键**：`ng_remediation` / `closing_guard` / `instant_ng_on_violation` / `strict_order_violation_event_id`。前端保存只落新块（老键不再回写）；后端 `resolve_ng_handling` 读兼容——无新块时从 legacy 合成等价档位，**老项目零迁移零差异**。
+
+结构（全默认 = 老行为）：
+```json
+"ng_handling": {
+  "violation": "none|hint|instant_ng", "violation_event_id": null,
+  "missing_step": "ng|ack|hold", "hold_timeout_s": 120, "hold_event_id": null,
+  "short_count": "ng|ack",
+  "gate_enabled": false, "gate_steps": [], "gate_event_id": null
+}
+```
+
+**改这块的全链路**：前端 `LogicConfigTab.vue`「NG 判定与处置」卡（一行一场景）→ `index.vue` 加载合成/保存序列化（last_first 强制 violation=none）→ 后端 `resolve_ng_handling` 归一 → 展开到既有运行时属性（状态机零改动）。事件页 `EventsConfigTab.vue` 有反向联动明示（NG 事件的定格弹窗按钮来源）。迁移矩阵回归：`tests/test_ng_handling_resolver.py`。
+
+⚠️ 加新处置场景时**别再起新顶层键**——往 `ng_handling` 里加行，前后端合成/序列化/e2e 三处同步。

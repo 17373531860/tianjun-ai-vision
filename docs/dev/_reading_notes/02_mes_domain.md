@@ -8,6 +8,11 @@
 > **v3.41 补账（2026-07-17）**：按 `git diff a23a8d2..HEAD` 回写 v3.33~v3.41 变更——mes_hooks（v3.38 运行中开工回填）、mes_gateway（v3.38 推送熔断器 + 逐连接独立 commit）、mes_inbound（v3.37 开工自动开始检测 / v3.38 回填 / v3.39 报警软件内消除出口与响应明细 / v3.41 复用工单重绑）、packaging_flow_coordinator（v3.35 复合条码取段 + 工单号识别 + 放工单=尾箱收尾动作）、external_alarm（v3.39 一键消除）、mock 秤墙钟计时（v3.41），并新建 database_adapter（v3.35）与 scanner_bypass_monitor（v3.38）条目；api 层三节同步刷新（11.2 熔断器状态面 / 11.3 报警手动消除端点 / 11.10 复合条码配置面）。标注「v3.41 复核」的小节行号已按当日工作区刷新。weighing_engine 的 v3.35 融合 + v3.39 两阶段流水线全量扩写在 `01_backend_core.md`；mes_models（PackagingFlowConfig 复合条码字段）增量在 `03_data_plugin.md`。
 >
 > **v3.43 补账（2026-07-20）**：packaging_flow_coordinator 大改（放工单=工单收尾语义重构 + 缺工单判定二选一 + 提前放工单报警 + 已完成工单重扫拦截 + 确认框闪退修复），见其条目「v3.43 大改」节；PackagingFlowConfig 新增 4 列见 `03_data_plugin.md`（迁移 m0002/m0003）。
+>
+> **v3.44 补账（2026-07-22）**：
+> - `packaging_flow_coordinator.py`：①NG 箱账挂起——`on_cycle_settled(_sliders)` 加 steps_ok/hold_for_ack 双参，NG+需人工确认时箱账进 `pending_remediation(reason=ng_ack)` 不落账不翻页，`resolve_channel_hold_on_ack`（认NG落账 `book_pending_ng`/重做本箱）由 ack 接口收口；②补数量死分支修复——少装挂起入口改判 steps_ok（步骤全对数量不足）而非整体 is_good；③工单收尾快照——完成/作废存 `_last_done`，新增 `get_display_state`（UI 轮询用，快照保留至新单顶掉），`get_state` 语义不变（在途判定用）。
+> - `api/packaging_flows.py`：state 端点改走 `get_display_state`。
+> - `external_device_protocols.py`：串口读"有多少收多少"（`in_waiting`）+ `_read_serial_frame` 见帧尾立即交货（无分隔符 ~60ms 静默兜底），治秤读数 2~3s 延迟（萍乡）；`external_device_pipeline.py` 负重量直读符号位解析。
 
 ## 一、逐文件档案
 

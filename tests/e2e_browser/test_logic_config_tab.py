@@ -17,10 +17,10 @@ import requests
 from .conftest import E2E_PREFIX
 
 MODE_CARDS = {
-    "sequential": ["结算方式", "顺序模式 - 步骤排序"],
-    "detection": ["检测模式 - 需检测的步骤"],
-    "custom": ["自定义模式 - 条件配置", "周期性强制动作"],
-    "tracking": ["跟踪模式 - 物品清点配置"],
+    "sequential": ["结算方式", "顺序模式 - 步骤排序", "NG 判定与处置", "结算冷却"],
+    "detection": ["检测模式 - 需检测的步骤", "NG 判定与处置"],
+    "custom": ["自定义模式 - 条件配置", "周期性强制动作", "NG 判定与处置"],
+    "tracking": ["跟踪模式 - 物品清点配置", "结算冷却"],
     "per_item": ["逐件覆盖 — 通用参数", "逐件覆盖 — 每个步骤的角色"],
 }
 
@@ -98,3 +98,129 @@ def test_custom周期规则快捷建事件_落库(page, base_url, api_url):
     assert len(pas) == 1, f"周期性规则应落库, 实际 {len(pas)}"
     bound = pas[0].get("due_warning_event_id")
     assert bound and any(e.get("id") == bound for e in evs), "快捷事件应创建并绑定"
+
+
+def _fill_row_number(page, row_text, nth, value):
+    """含 row_text 的行里第 nth 个数字输入框真实键入 value (不走 API 写侧)."""
+    row = page.locator(f"div.flex:has-text('{row_text}')").last
+    inp = row.locator(".el-input-number input").nth(nth)
+    inp.click()
+    inp.press("ControlOrMeta+a")
+    inp.type(str(value), delay=20)
+    inp.press("Tab")
+    time.sleep(0.3)
+
+
+def test_容器动作门槛三参数_可见可改_保存落库(page, base_url, api_url):
+    """v3.43.1 治"放托盘一次动作结算两次": 动作出现/消失确认帧 + 进箱最小间隔(不应期)
+    在进箱确认卡直配 (此前借用步骤字段, 该模式无 UI 入口调不到)。入口可见 → 真实键入 →
+    保存 → pipeline 三键落库 → 重进回显。"""
+    pid, name = _mk_project(api_url, "custom")
+    requests.put(f"{api_url}/api/v1/projects/{pid}", json={
+        "pipeline_config": {
+            "custom_based_on": "sequential",
+            "custom_mixed_with": "tracking",
+            "custom_mix_container_label": "托盘",
+            "custom_mix_container_confirm_by_action": True,
+            "custom_mix_container_action_label": "放托盘",
+        },
+        "steps_config": [
+            {"id": 1, "label": "放托盘", "enabled": True, "min_frames": 2},
+            {"id": 2, "label": "滑块", "enabled": True, "detect_role": "item",
+             "count_mode": "track", "expected_count": 24},
+        ],
+    }, timeout=5).raise_for_status()
+    body = _open_logic_tab(page, base_url, name)
+    for label in ("动作出现确认帧", "动作消失确认帧", "进箱最小间隔"):
+        assert label in body, f"入口断言失败: 找不到「{label}」"
+    _fill_row_number(page, "动作出现确认帧", 0, 4)
+    _fill_row_number(page, "动作出现确认帧", 1, 20)
+    _fill_row_number(page, "进箱最小间隔", 0, 3.5)
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    pc = (requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+          .get("pipeline_config") or {})
+    got = (pc.get("custom_mix_container_action_min_frames"),
+           pc.get("custom_mix_container_action_gone_frames"),
+           pc.get("custom_mix_container_action_cooldown_s"))
+    assert got == (4, 20, 3.5), f"三参数应落库, 实际 {got}"
+    # 重进回显 (水合断言): 不配则出现/消失帧显 0(跟随步骤), 不应期缺省 2
+    _open_logic_tab(page, base_url, name)
+    row = page.locator("div.flex:has-text('动作出现确认帧')").last
+    assert row.locator(".el-input-number input").nth(0).input_value() == "4"
+    assert row.locator(".el-input-number input").nth(1).input_value() == "20"
+    row2 = page.locator("div.flex:has-text('进箱最小间隔')").last
+    assert row2.locator(".el-input-number input").nth(0).input_value() == "3.5"
+
+
+def test_NG判定与处置卡_可见可配_保存落库(page, base_url, api_url):
+    """v3.44 NG 判定与处置统一卡: custom-sequential 露出全部四行场景。
+    缺步骤选「挂起等补做」+ 开数量门选收尾步骤 → 保存 →
+    pipeline_config.ng_handling 落库 → 重进回显档位。"""
+    pid, name = _mk_project(api_url, "custom")
+    requests.put(f"{api_url}/api/v1/projects/{pid}", json={
+        "pipeline_config": {"custom_based_on": "sequential"},
+        "steps_config": [
+            {"id": 1, "label": "放油嘴包", "enabled": True},
+            {"id": 2, "label": "封箱", "enabled": True},
+        ],
+    }, timeout=5).raise_for_status()
+    body = _open_logic_tab(page, base_url, name)
+    assert "NG 判定与处置" in body, "custom-sequential 应渲染「NG 判定与处置」卡"
+    assert "结算冷却" in body, "「结算冷却」合并卡应渲染"
+    card = page.locator(".el-card:has-text('NG 判定与处置')").first
+    # 缺步骤 → 挂起等补做
+    card.locator("div.flex:has-text('结算缺步骤时') .el-select").first.click()
+    time.sleep(0.5)
+    page.locator(".el-select-dropdown__item:visible", has_text="挂起等补做").first.click()
+    time.sleep(0.3)
+    # 数量门开关 + 选收尾步骤
+    card.locator("div.flex:has-text('数量不足禁收尾') .el-switch").first.click()
+    time.sleep(0.3)
+    card.locator("div.flex:has-text('数量不足禁收尾') .el-select").first.click()
+    time.sleep(0.5)
+    page.locator(".el-select-dropdown__item:visible", has_text="放油嘴包").first.click()
+    page.keyboard.press("Escape")
+    time.sleep(0.3)
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    pc = (requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+          .get("pipeline_config") or {})
+    ngh = pc.get("ng_handling") or {}
+    assert ngh.get("missing_step") == "hold", f"缺步骤档位应落库 hold, 实际 {ngh}"
+    assert ngh.get("gate_enabled") is True, f"数量门应落库开, 实际 {ngh}"
+    assert ngh.get("gate_steps") == ["放油嘴包"], f"门步骤应落库, 实际 {ngh}"
+    # 重进回显: 挂起档 + 数量门开
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('NG 判定与处置')").first
+    assert "挂起等补做" in card.inner_text(), "缺步骤档位应回显挂起"
+    assert card.locator(".el-switch.is-checked").count() >= 1, "数量门开关应回显开"
+
+
+def test_legacy收尾防呆键_迁移为ng_handling回显(page, base_url, api_url):
+    """v3.44 老键 (closing_guard/ng_remediation) 项目 → 前端加载合成 ng_handling,
+    统一卡回显等价档位; 保存后新块落库。"""
+    pid, name = _mk_project(api_url, "custom")
+    requests.put(f"{api_url}/api/v1/projects/{pid}", json={
+        "pipeline_config": {
+            "custom_based_on": "sequential",
+            "closing_guard": {"gate_enabled": True, "gate_steps": ["封箱"],
+                              "hold_enabled": True, "hold_timeout_s": 60, "event_id": 4},
+            "ng_remediation": {"enabled": True, "allow_step": True, "allow_count": True},
+        },
+        "steps_config": [{"id": 1, "label": "封箱", "enabled": True}],
+    }, timeout=5).raise_for_status()
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('NG 判定与处置')").first
+    txt = card.inner_text()
+    assert "挂起等补做" in txt, f"legacy hold 应迁为挂起档, 卡内容: {txt[:200]}"
+    assert card.locator(".el-switch.is-checked").count() >= 1, "legacy 数量门应迁移回显开"
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    pc = (requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+          .get("pipeline_config") or {})
+    ngh = pc.get("ng_handling") or {}
+    assert ngh.get("missing_step") == "hold" and ngh.get("hold_timeout_s") == 60, f"实际 {ngh}"
+    assert ngh.get("gate_enabled") is True and ngh.get("gate_steps") == ["封箱"], f"实际 {ngh}"
+    assert ngh.get("short_count") == "ack", f"legacy 补数量应迁为 ack, 实际 {ngh}"
+    assert ngh.get("gate_event_id") == 4 and ngh.get("hold_event_id") == 4, f"实际 {ngh}"

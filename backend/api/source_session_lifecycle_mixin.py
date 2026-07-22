@@ -809,6 +809,16 @@ class SessionLifecycleMixin:
             _project_id = self.project_config.get('id') if self.project_config else None
             _slider_count = getattr(self, '_last_container_item_total', None)
             _remediation = getattr(self, '_ng_remediation', None)
+            # v3.44 NG 处置闭环: 步骤侧单独判定 (compose_settle_event 缓存) +
+            # "NG 事件带人工确认 → 包装箱账挂起等处置"标志 (_trigger_event 置位,
+            # 一次性消费 — 只对本周期生效)
+            _steps_ok = getattr(self, '_last_settle_steps_ok', None)
+            _hold_for_ack = bool(getattr(self, '_pkg_hold_for_ack', False))
+            self._pkg_hold_for_ack = False
+            self._last_settle_steps_ok = None
+            # v3.44 收尾防呆: 周期真正结算 = 缺步挂起态必然作废 (防陈旧挂起
+            # 把下一周期的新步骤全吸收成死局)
+            self._settle_hold = None
             _force_settling = bool(getattr(self, '_force_settling_in_progress', False))
             _mes_hook = self._mes_hook
             vsm = self
@@ -948,6 +958,9 @@ class SessionLifecycleMixin:
                             slider_count=_slider_count,
                             # v3.23 NG 补做策略 (项目级)
                             remediation=_remediation,
+                            # v3.44 NG 处置闭环: 步骤侧单独判定 + 人工确认挂账标志
+                            steps_ok=_steps_ok,
+                            hold_for_ack=_hold_for_ack,
                         )
                     except Exception as _e:
                         print(f"[PackagingFlow] on_cycle_settled error (isolated, non-fatal): {_e}")

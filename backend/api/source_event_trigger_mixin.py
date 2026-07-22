@@ -145,9 +145,12 @@ class EventTriggerMixin:
         # 本周期判 NG 且原因是"缺步骤", 且项目开了补步骤策略 → 不 end_cycle / 不计数 /
         # 不推 MES, 改为挂起 (报警提示工人), 等人工补步骤(判OK) / 认NG(落账) / 重做(丢弃).
         # _remediation_bypass: confirm_ng 重发 NG 时一次性旁路, 防自锁.
+        # _skip_remediation_defer: 缺步挂起超时落账的窄旁路 (v3.44) — 挂起本身
+        # 已是补做窗口, 超时=放弃等待, 不再二次进补做挂账 (但人工确认定格照走).
         if (current_event_id == 2
                 and getattr(self, 'current_cycle_uuid', None)
                 and not getattr(self, '_remediation_bypass', False)
+                and not getattr(self, '_skip_remediation_defer', False)
                 and self._should_defer_for_remediation(reason)):
             self._enter_step_remediation_hold(event, reason)
             return False
@@ -192,6 +195,15 @@ class EventTriggerMixin:
         # v3.13 M1.1: event_fire 插件 hook 在 end_cycle 后 fire, 但 cycle_id 在 end_cycle
         # 内会被清成 None, 这里先把"被结算的那个 cycle_id"缓存到局部变量供 hook ctx 用.
         _event_cycle_id = self.current_cycle_id
+
+        # v3.44 NG 处置闭环: NG 事件带「需人工确认」→ 包装箱账挂起等处置
+        # (补齐/照实/重做), 不先落账翻页. 标志必须在 end_cycle 之前置位 —
+        # end_cycle 内同步快照后才异步入 FIFO 落库作业.
+        # _remediation_bypass = 工人已在确认弹窗做过处置 (认NG重发), 不再挂账.
+        _operator_resolved = bool(getattr(self, '_remediation_bypass', False))
+        if (current_event_id == 2 and bool(event.get('require_ack', False))
+                and not _operator_resolved):
+            self._pkg_hold_for_ack = True
 
         # 结束当前周期并记录到数据库
         self.end_cycle(
@@ -332,7 +344,9 @@ class EventTriggerMixin:
         })
 
         # v3.9.x 进入阻塞态 (事件正常落库 + 计数 + 报警 + MES Hook 都执行完之后)
-        if require_ack:
+        # v3.44: 认NG重发 (_remediation_bypass) 不再二次定格 — 工人刚在弹窗上
+        # 处置完, 再弹一次确认框是客户报障的"双重确认"体验 bug.
+        if require_ack and not _operator_resolved:
             self._pending_ack = True
             self._pending_ack_started_at = time.time()
             self._pending_ack_event_id = str(event.get('id', event_id))

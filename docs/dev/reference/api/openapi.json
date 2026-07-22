@@ -21121,7 +21121,7 @@
   },
   "/api/v1/packaging-flows/{config_id}/state": {
    "get": {
-    "description": "查当前进行中的工单/箱进度快照 (供 Monitor 页 polling).",
+    "description": "查当前进行中的工单/箱进度快照 (供 Monitor 页 polling).\n\nv3.44: 走展示态 — 工单收尾后仍返回收尾快照 (status=completed/aborted),\n前端保留工单号/最终结果/箱明细直到下一张工单开工, 不再一片空白.",
     "operationId": "get_packaging_flow_state_api_v1_packaging_flows__config_id__state_get",
     "parameters": [
      {

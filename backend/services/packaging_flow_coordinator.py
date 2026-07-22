@@ -125,6 +125,10 @@ class PackagingFlowCoordinator:
         # v3.43 等放工单时限报警的一次性 Timer (config_id → Timer). 挂"等放工单收尾"
         # 时布防、收尾时撤防; 不是常驻后台线程, 不违背"全事件驱动"的设计基调.
         self._paper_timers: Dict[int, threading.Timer] = {}
+        # v3.44 收尾快照 (config_id → 已完成/作废 run 的值拷贝): 工单收尾后 run 从
+        # _runs 移除, 旧版 get_state 直接返回 None → 前端工单号/箱进度/明细瞬间清空,
+        # 客户感知"信息全被删了". 保留最近一张收尾快照, 直到下一张工单开工覆盖.
+        self._last_done: Dict[int, Dict[str, Any]] = {}
 
     # =============================================================
     # 依赖注入 (M3 启动时 set 真实实现; 单测 set mock)
@@ -591,7 +595,19 @@ class PackagingFlowCoordinator:
 
     def on_cycle_settled(self, channel_id: int, cycle_id: int, is_good: bool, db,
                          slider_count: Optional[int] = None,
-                         remediation: Optional[Dict[str, Any]] = None) -> None:
+                         remediation: Optional[Dict[str, Any]] = None,
+                         steps_ok: Optional[bool] = None,
+                         hold_for_ack: bool = False) -> None:
+        """检测周期结算入账.
+
+        v3.44 NG 处置闭环新增两个口子 (默认值下与旧行为严格一致):
+          steps_ok     — 步骤侧单独判定 (容器混合把"数量不足"合成进整体 is_good,
+                         旧少装挂起条件靠整体 is_good 判"检测步骤齐"是死路);
+                         None = 调用方没给, 退回旧口径 bool(is_good).
+          hold_for_ack — 本周期 NG 且事件配了「需人工确认」: 箱账挂起等人工处置
+                         (补齐/照实/重做), 不先落账翻页 — 否则工人点"重做"重做的
+                         其实是下一箱 (客户报障 2026-07-21).
+        """
         with self._lock:
             config_id = self._channel_to_config.get(channel_id)
             if config_id is None:
@@ -607,7 +623,9 @@ class PackagingFlowCoordinator:
             if cfg.get("count_unit") == "sliders":
                 # sliders 口径: 一个检测周期 = 一个箱 (即便没开箱也会自动开第 1 箱)
                 self._on_cycle_settled_sliders(cfg, run, cycle_id, bool(is_good),
-                                               slider_count, db, remediation)
+                                               slider_count, db, remediation,
+                                               steps_ok=steps_ok,
+                                               hold_for_ack=hold_for_ack)
                 return
             _pkg_dbg("周期结算 trays",
                      f"order={run.get('order_no')} box={run.get('current_box_index')} "
@@ -804,6 +822,76 @@ class PackagingFlowCoordinator:
                      f"order={run.get('order_no')} box={run.get('current_box_index')} "
                      f"{orig}->{final_sc}/{target} by={operator}")
             self._finalize_box_sliders(run, cfg, db, final_sc, ok, is_tail,
+                                       cycle_id, target, remediated=remediated)
+            return True
+
+    def get_channel_hold(self, channel_id: int) -> Optional[Dict[str, Any]]:
+        """v3.44: 当前通道「NG 人工确认挂账」中的箱 (None=无).
+
+        只认 reason=ng_ack 的挂账 — 少装挂起 (short_sliders) 有自己的补做横幅
+        工作流, 不参与确认弹窗联动.
+        """
+        with self._lock:
+            config_id = self._channel_to_config.get(channel_id)
+            if config_id is None:
+                return None
+            run = self._runs.get(config_id)
+            if not run or run.get("status") != "pending_remediation":
+                return None
+            pend = run.get("pending_box") or {}
+            if pend.get("reason") != "ng_ack":
+                return None
+            return {"config_id": config_id, **pend}
+
+    def resolve_channel_hold_on_ack(self, channel_id: int, action: str, db,
+                                    operator: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """v3.44: 人工确认弹窗联动解挂 (单次确认闭环, 不再要求工人二次到包装卡操作).
+
+        action:
+          - 'confirm_ng': 照实落账 — 按挂账时的进箱数记 NG 箱并翻页
+          - 其它 (缺省 redo): 丢弃本箱账, 同一箱号等重做后的下一周期重新结算
+        返回 {action, resolved} 或 None (无挂账).
+        """
+        hold = self.get_channel_hold(channel_id)
+        if not hold:
+            return None
+        cid = hold["config_id"]
+        if action == "confirm_ng":
+            ok = self.book_pending_ng(cid, db, operator=operator, reason="人工确认认NG")
+            return {"action": "confirm_ng", "resolved": bool(ok)}
+        ok = self.redo_pending(cid, db, operator=operator)
+        return {"action": "redo", "resolved": bool(ok)}
+
+    def book_pending_ng(self, config_id: int, db,
+                        operator: Optional[str] = None,
+                        reason: Optional[str] = None) -> bool:
+        """v3.44: 把挂账中的箱按挂账时的进箱数「照实落 NG」并翻页 (人工认NG).
+
+        与补滑块的区别: 不夹取到目标数、强制 NG — 步骤缺失但数量恰好达标的箱
+        走补滑块会被误判 OK, 认 NG 必须无条件按 NG 落.
+        """
+        with self._lock:
+            cfg = self._configs.get(config_id)
+            run = self._runs.get(config_id)
+            if cfg is None or run is None:
+                return False
+            pend = run.get("pending_box")
+            if not pend or run.get("status") != "pending_remediation":
+                return False
+            sc = int(pend.get("sliders") or 0)
+            target = int(pend.get("target") or 0)
+            remediated = {
+                "by": operator or "未知", "from": sc, "to": sc,
+                "reason": (reason or "人工认NG"), "ts": time.time(),
+            }
+            is_tail = bool(pend.get("is_tail"))
+            cycle_id = pend.get("cycle")
+            run["pending_box"] = None
+            run["status"] = "running"
+            _pkg_dbg("认NG落账",
+                     f"order={run.get('order_no')} box={run.get('current_box_index')} "
+                     f"sliders={sc}/{target} by={operator}")
+            self._finalize_box_sliders(run, cfg, db, sc, False, is_tail,
                                        cycle_id, target, remediated=remediated)
             return True
 
@@ -1081,7 +1169,9 @@ class PackagingFlowCoordinator:
     def _on_cycle_settled_sliders(self, cfg: Dict[str, Any], run: Dict[str, Any],
                                   cycle_id: int, is_good: bool,
                                   slider_count: Optional[int], db,
-                                  remediation: Optional[Dict[str, Any]] = None) -> None:
+                                  remediation: Optional[Dict[str, Any]] = None,
+                                  steps_ok: Optional[bool] = None,
+                                  hold_for_ack: bool = False) -> None:
         # 工单已挂「等放工单收尾」: 各箱已全部落账, 后续周期只用来探测放工单动作,
         # 不当新箱结算. 探不到也不报警 (报警出口只有扫新单/时限两个可配点).
         if run.get("awaiting_paper"):
@@ -1132,10 +1222,15 @@ class PackagingFlowCoordinator:
                 return
         # 本箱合格: 进箱滑块数正好达目标 + 检测步骤齐 (is_good 由检测层按当前箱目标判过)
         ok = bool(is_good) and (target <= 0 or sc == target)
-        # v3.23 补滑块: 仅"少装"(检测步骤齐, 仅滑块数不足) 且项目开了"补数量"策略时, 挂起本箱
-        # 等人工补做 (延迟落账), 不立即记 NG. 多装 / 检测步骤不齐 / 没开策略 → 走原行为立即结算.
+        # v3.44: 步骤侧单独判定. 容器混合模式把"箱内数量不足"合成进整体 is_good,
+        # 旧口径 bool(is_good) 判"检测步骤齐"在该模式下恒 False → 少装挂起是死路.
+        # 调用方给了 steps_ok 就用它; 没给退回旧口径 (零差异).
+        _steps_ok = bool(is_good) if steps_ok is None else bool(steps_ok)
+        # v3.23 补滑块 (v3.44 修死路): 仅"少装"(检测步骤齐, 仅滑块数不足) 且项目开了
+        # "补数量"策略时, 挂起本箱等人工补做 (延迟落账), 不立即记 NG.
+        # 多装 / 检测步骤不齐 / 没开策略 → 继续往下.
         rem = remediation or {}
-        if (not ok and bool(is_good) and target > 0 and sc < target
+        if (not ok and _steps_ok and target > 0 and sc < target
                 and rem.get("enabled") and rem.get("allow_count")):
             run["pending_box"] = {
                 "box": run["current_box_index"], "sliders": sc, "target": target,
@@ -1148,6 +1243,20 @@ class PackagingFlowCoordinator:
             _pkg_dbg("少装挂起等补做",
                      f"order={run.get('order_no')} box={run.get('current_box_index')} "
                      f"sliders={sc}/{target}")
+            self._persist_run(run, db)
+            return
+        # v3.44 NG + 需人工确认: 检测线已定格弹确认框, 箱账同步挂起等处置 —
+        # 补齐(判OK) / 输实际数(照实落账) / 重做本箱(丢弃等重测), 三个既有端点推进.
+        # 不挂账直接落 NG 翻页的话, 工人点"重做"重做的其实是下一箱 (客户报障).
+        if not ok and hold_for_ack:
+            run["pending_box"] = {
+                "box": run["current_box_index"], "sliders": sc, "target": target,
+                "is_tail": is_tail, "cycle": cycle_id, "reason": "ng_ack",
+            }
+            run["status"] = "pending_remediation"
+            _pkg_dbg("NG人工确认挂账",
+                     f"order={run.get('order_no')} box={run.get('current_box_index')} "
+                     f"sliders={sc}/{target} 等处置: 补齐/照实/重做")
             self._persist_run(run, db)
             return
         self._finalize_box_sliders(run, cfg, db, sc, ok, is_tail, cycle_id, target)
@@ -1260,6 +1369,7 @@ class PackagingFlowCoordinator:
         if self._push_mes(cfg, run):
             run["mes_pushed"] = True
         self._persist_run(run, db)
+        self._last_done[run["config_id"]] = dict(run)  # v3.44 收尾快照供前端展示
         self._runs.pop(run["config_id"], None)
 
     def _abort_order(self, run: Dict[str, Any], db) -> None:
@@ -1267,6 +1377,7 @@ class PackagingFlowCoordinator:
         run["status"] = "aborted"
         run["final_result"] = "NG"
         self._persist_run(run, db)
+        self._last_done[run["config_id"]] = dict(run)  # v3.44 收尾快照供前端展示
         self._runs.pop(run["config_id"], None)
 
     def _new_run_dict(self, config_id: int, norm: str, raw: str,
@@ -1394,9 +1505,24 @@ class PackagingFlowCoordinator:
             return dict(cfg) if cfg else None
 
     def get_state(self, config_id: int) -> Optional[Dict[str, Any]]:
+        """在途工单状态 (None = 无在途). 语义保持不变, 供扫码/结算等内部判定用."""
         with self._lock:
             run = self._runs.get(config_id)
             return dict(run) if run else None
+
+    def get_display_state(self, config_id: int) -> Optional[Dict[str, Any]]:
+        """面板展示态: 在途工单, 或最近一张收尾快照 (completed/aborted).
+
+        v3.44: 工单收尾后 run 从内存移除, 旧版前端拿到 None 直接把工单号/箱进度/
+        明细全部清空, 客户感知"信息全被删了". API 层改走本方法 — 收尾后保留
+        快照直到下一张工单开工覆盖.
+        """
+        with self._lock:
+            run = self._runs.get(config_id)
+            if run:
+                return dict(run)
+            done = self._last_done.get(config_id)
+            return dict(done) if done else None
 
     def resolve_config_id(self, channel_id: Optional[int] = None,
                           scan_device_id: Optional[int] = None) -> Optional[int]:
@@ -1419,6 +1545,7 @@ class PackagingFlowCoordinator:
             self._configs.clear()
             self._channel_to_config.clear()
             self._runs.clear()
+            self._last_done.clear()
             self._mes_fetcher = None
             self._alarm_sink = None
             self._mes_pusher = None

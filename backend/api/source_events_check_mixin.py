@@ -103,18 +103,23 @@ class EventsCheckMixin:
             if self.settlement_mode in ('first_step', 'last_first'):
                 pass
             elif custom_based_on == 'sequential':
-                last_step_label = self._get_last_sequence_step_label()
-                if last_step_label and completed_step == last_step_label:
-                    if completed_step in self.current_cycle_steps:
-                        # v3.19.x: 末步在期望序列中可连续重复 (如 ...D,D) —
-                        # 周期内凑满期望次数才结算, 否则是中间的某次重复, 继续等
-                        if self._last_step_repeat_quota_reached(completed_step):
-                            self._check_custom_sequential_mode(pipeline_config, id_to_label)
+                # v3.44 收尾防呆缺步挂起中: 结算已发生过一次并被挂起, 每个步骤
+                # 完成 (消失) 时检查缺失是否补齐 → 补齐自动按 OK 销结.
+                if getattr(self, '_settle_hold', None) is not None:
+                    self._maybe_resolve_settle_hold()
+                else:
+                    last_step_label = self._get_last_sequence_step_label()
+                    if last_step_label and completed_step == last_step_label:
+                        if completed_step in self.current_cycle_steps:
+                            # v3.19.x: 末步在期望序列中可连续重复 (如 ...D,D) —
+                            # 周期内凑满期望次数才结算, 否则是中间的某次重复, 继续等
+                            if self._last_step_repeat_quota_reached(completed_step):
+                                self._check_custom_sequential_mode(pipeline_config, id_to_label)
+                            else:
+                                print(f"  → 末步 [{completed_step}] 期望重复次数未满，暂不结算 (当前周期={self.current_cycle_steps})")
                         else:
-                            print(f"  → 末步 [{completed_step}] 期望重复次数未满，暂不结算 (当前周期={self.current_cycle_steps})")
-                    else:
-                        print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
-                        _dbg_skip_stale()
+                            print(f"  → 步骤 [{completed_step}] 不在当前周期中，跳过判定（可能是上一周期的残留）")
+                            _dbg_skip_stale()
             elif custom_based_on == 'detection':
                 if completed_step in self.current_cycle_steps:
                     self._check_custom_detection_mode(pipeline_config, id_to_label, enabled_step_labels)

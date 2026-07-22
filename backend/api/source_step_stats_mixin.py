@@ -72,6 +72,21 @@ class StepStatsMixin:
             started = getattr(self, '_pending_ack_started_at', 0) or 0
             if timeout > 0 and started > 0 and (time.time() - started) >= timeout:
                 ev_name = getattr(self, '_pending_ack_event_name', '?') or '?'
+                # v3.44: 超时自动确认按"重做"语义联动解除包装层 NG 挂账 (同箱等重测),
+                # 不自动认 NG — 落账是人的决定, 超时只解除定格. 异常隔离不卡主循环.
+                try:
+                    from backend.services.packaging_flow_coordinator import get_coordinator as _pkg_coord
+                    _coord = _pkg_coord()
+                    if _coord.get_channel_hold(self.channel_id) is not None:
+                        from backend.db.database import SessionLocal as _SL
+                        _db = _SL()
+                        try:
+                            _coord.resolve_channel_hold_on_ack(
+                                self.channel_id, 'redo', _db, operator='超时自动确认')
+                        finally:
+                            _db.close()
+                except Exception as _pkg_e:
+                    print(f"[ack] 超时自动确认联动包装解挂失败 (隔离): {_pkg_e}")
                 # v3.34: 事件配了「确认后保留周期」→ 超时自动确认同样只解除定格
                 if self._pending_ack_keeps_cycle():
                     print(f"[ack] 阻塞超时自动确认(保留周期): event={ev_name} 已阻塞 "
@@ -85,6 +100,10 @@ class StepStatsMixin:
             else:
                 # 仍处于阻塞态: 直接 return, 不推进状态机
                 return
+
+        # v3.44 收尾防呆缺步挂起超时兜底 (无挂起时一次 getattr 零开销)
+        if getattr(self, '_settle_hold', None) is not None:
+            self._check_settle_hold_timeout()
 
         # ==================== per_item 模式分流 ====================
         # logic_mode='per_item' 走独立路径, 完全绕开 sequential/detection/custom
@@ -577,8 +596,10 @@ class StepStatsMixin:
                 return
 
         # ========== 空闲超时结算 ==========
+        # v3.44: 缺步挂起中不走空闲超时结算 (挂起有自己的超时兜底, 双路结算会打架)
         if (self.idle_timeout_seconds > 0
                 and self.current_cycle_steps
+                and getattr(self, '_settle_hold', None) is None
                 and self._last_step_added_time is not None):
             idle_elapsed = current_time - self._last_step_added_time
             if idle_elapsed > self.idle_timeout_seconds:

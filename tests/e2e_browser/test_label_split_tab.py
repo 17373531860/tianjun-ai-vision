@@ -303,44 +303,52 @@ def test_锚点抓取_实时结果为空走单帧推理兜底(page, base_url, ap
     assert infer_calls, "实时结果为空时应发起 /detection/infer-once 兜底请求"
 
 
-def test_违序即时事件配置落库(page, base_url, api_url):
-    """逻辑设置 → 结算方式卡片选违序事件 → strict_order_violation_event_id 落库。"""
+def test_违规当场档位_只提示_配事件落库(page, base_url, api_url):
+    """v3.44 NG判定与处置卡 → 违规出现时选「当场提示」+ 配事件 →
+    ng_handling.violation=hint + violation_event_id 落库。"""
     pid, name = _mk_project(api_url)
     _open_steps_tab(page, base_url, name)
     page.locator(".el-tabs__item:has-text('逻辑设置')").first.click()
     time.sleep(0.8)
 
-    row = page.locator("div:has(> span:has-text('违反严格顺序时立即触发'))").last
+    card = page.locator(".el-card:has-text('NG 判定与处置')").first
+    row = card.locator("div.flex:has-text('违规出现时')")
     row.locator(".el-select").first.click()
     time.sleep(0.5)
-    page.locator(".el-select-dropdown__item:has-text('不良(NG)')").last.click()
+    page.locator(".el-select-dropdown__item:visible", has_text="当场提示").first.click()
+    time.sleep(0.5)
+    # 档位非 none 后露出事件下拉 (渐进披露), 选 NG 事件
+    row.locator(".el-select").nth(1).click()
+    time.sleep(0.5)
+    page.locator(".el-select-dropdown__item:visible", has_text="不良(NG)").last.click()
     time.sleep(0.5)
 
     page.locator("button:has-text('保存配置')").click()
     time.sleep(2.0)
     detail = requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
-    pc = detail.get("pipeline_config") or {}
-    assert pc.get("strict_order_violation_event_id") == 2, \
-        f"违序事件应落库: {pc.get('strict_order_violation_event_id')}"
+    ngh = (detail.get("pipeline_config") or {}).get("ng_handling") or {}
+    assert ngh.get("violation") == "hint", f"违规档位应落库 hint: {ngh}"
+    assert ngh.get("violation_event_id") == 2, f"提示事件应落库: {ngh}"
 
 
-def test_实时NG开关落库(page, base_url, api_url):
-    """v3.43 逻辑设置 → 实时NG(违规即时结算)开关 → instant_ng_on_violation 落库。"""
+def test_违规当场档位_立即NG落库(page, base_url, api_url):
+    """v3.44 NG判定与处置卡 → 违规出现时选「立即NG」→ ng_handling.violation=instant_ng 落库。"""
     pid, name = _mk_project(api_url)
     _open_steps_tab(page, base_url, name)
     page.locator(".el-tabs__item:has-text('逻辑设置')").first.click()
     time.sleep(0.8)
 
-    row = page.locator("div:has(> span:has-text('实时NG（违规即时结算）'))").last
-    row.locator(".el-switch").first.click()
+    card = page.locator(".el-card:has-text('NG 判定与处置')").first
+    card.locator("div.flex:has-text('违规出现时') .el-select").first.click()
+    time.sleep(0.5)
+    page.locator(".el-select-dropdown__item:visible", has_text="立即NG").first.click()
     time.sleep(0.5)
 
     page.locator("button:has-text('保存配置')").click()
     time.sleep(2.0)
     detail = requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
-    pc = detail.get("pipeline_config") or {}
-    assert pc.get("instant_ng_on_violation") is True, \
-        f"实时NG开关应落库: {pc.get('instant_ng_on_violation')}"
+    ngh = (detail.get("pipeline_config") or {}).get("ng_handling") or {}
+    assert ngh.get("violation") == "instant_ng", f"违规档位应落库 instant_ng: {ngh}"
 
 
 def test_就位提示配置落库(page, base_url, api_url):

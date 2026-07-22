@@ -1,0 +1,130 @@
+{
+  "version": "3.44.0",
+  "date": "2026-07-22",
+  "previous_version": "3.43.0",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "包装 NG 箱当场落账翻页，人工确认形同虚设",
+      "symptom": "NG 配了需人工确认，弹窗未点包装卡已翻页落账，点重做实际重做下一箱",
+      "root_cause": "检测层结算与包装层记账同步完成，定格只冻结检测线不冻结包装账本",
+      "fix": "NG+需确认时箱账挂起(reason=ng_ack)不落账不翻页；确认弹窗二选一「认NG落账进下一箱/重做本箱不记NG」；ack接口直接解挂；超时自动确认按重做处置",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/api/source_event_trigger_mixin.py", "backend/api/source_session_lifecycle_mixin.py", "backend/api/source_routes.py", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Monitor/PackagingFlowCard.vue"],
+      "keywords": ["包装", "NG", "箱账挂起", "人工确认", "pending_remediation", "ng_ack", "翻页", "落账", "上银", "SY3", "packaging hold"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "工单收尾后信息全清空",
+      "symptom": "最后一箱落账(含NG)后包装卡瞬间清空，工单号/箱明细/进度全没",
+      "root_cause": "工单完成/作废即从在途表移除，前端轮询拿空态",
+      "fix": "收尾保留快照(_last_done)，展示态接口get_display_state返回快照直到新工单顶掉；包装卡收尾横幅",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/api/packaging_flows.py", "frontend/src/views/Monitor/PackagingFlowCard.vue"],
+      "keywords": ["工单", "收尾", "快照", "信息清空", "completed", "aborted", "get_display_state", "包装卡"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "允许补数量策略永不生效(死分支)",
+      "symptom": "开了补数量，少装滑块NG时从不给补做机会直接落NG箱",
+      "root_cause": "少装必然整体判NG，补数量入口却要求整体判OK才进，条件自相矛盾",
+      "fix": "结算时步骤侧结论(steps_ok)与数量侧结论分开传递，步骤全对数量不足按补数量挂起",
+      "files": ["backend/api/source_custom_mix.py", "backend/api/source_session_lifecycle_mixin.py", "backend/services/packaging_flow_coordinator.py"],
+      "keywords": ["补数量", "allow_count", "少装", "short_sliders", "steps_ok", "死分支", "补做策略"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "补做处置后二次弹确认框(双重确认)",
+      "symptom": "挂起弹窗点认NG后又弹一次确认框要点两遍",
+      "root_cause": "认NG重发NG事件再次命中需人工确认入口重新定格",
+      "fix": "已处置重发一次性旁路(_remediation_bypass)；挂起超时落账不再二次进补做挂起(_skip_remediation_defer)",
+      "files": ["backend/api/source_event_trigger_mixin.py", "backend/api/source_settlement_mixin.py"],
+      "keywords": ["双重确认", "二次弹窗", "remediation_bypass", "认NG", "定格", "require_ack"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-005",
+      "title": "放托盘动作检测闪断一次动作结算两次",
+      "symptom": "客户机(TensorRT FP32旧权重)放一次托盘偶发记两盘滑块计两遍",
+      "root_cause": "动作标签检测闪断把一个物理动作劈成两个脉冲，动作确认状态机按两次结算",
+      "fix": "容器动作确认加不应期(action_cooldown_s默认2秒可配0关)，窗口内重复脉冲吸收；出现/消失帧数与不应期三参数进跟踪配置UI",
+      "files": ["backend/api/source_custom_mix.py", "frontend/src/views/Project/LogicConfigTab.vue", "frontend/src/views/Project/index.vue"],
+      "keywords": ["放托盘", "双结算", "闪断", "不应期", "action_cooldown", "冷却", "动作确认", "热补丁", "tensorrt"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-006",
+      "title": "电子秤读数延迟2~3秒",
+      "symptom": "秤盘加减料软件数值条2~3秒才跟上，去皮/稳定判定慢(萍乡百斯特延迟高)",
+      "root_cause": "串口读取攒满固定字节或等满超时才返回，连续输出的秤每帧十几字节被攒成秒级一批；帧读取白等整个超时采样锁在1Hz",
+      "fix": "有多少收多少见帧尾立即交货(in_waiting)，无分隔符帧60ms静默兜底；负重量直读符号位解析",
+      "files": ["backend/services/external_device_protocols.py", "backend/services/external_device_pipeline.py"],
+      "keywords": ["电子秤", "串口", "延迟", "in_waiting", "采样率", "称重", "萍乡", "百斯特", "去皮"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-007",
+      "title": "数量门被备盘凑数骗过+结算余像误报",
+      "symptom": "漏装第四盘就放油嘴包数量门不拦；OK结算瞬间封箱余像误报警甚至自开幽灵周期进挂起",
+      "root_cause": "数量门误用verdict凑数口径(含在位托盘)；门/挂起入口未排除周期未正经开始场景",
+      "fix": "数量门改已确认进箱记账口径(booked_item_total)；空周期不做门判定；首步都缺的幽灵周期不进挂起",
+      "files": ["backend/api/source_custom_mix.py", "backend/api/source_settlement_mixin.py"],
+      "keywords": ["数量门", "凑数", "booked", "余像", "幽灵周期", "误报", "真视频"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "收尾防呆：数量门+缺步挂起",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "数量门：箱内数量未达目标时收尾步骤(放油嘴包/封箱)出现直接拒收+节流报警；缺步挂起：末步结算纯缺步骤不判NG报警挂起等视觉补做，补齐重排自动判OK，超时按缺步NG落账；挂起中吸收非缺失余像。默认全关零差异。两段上银现场录像真模型UAT验收",
+      "files": ["backend/api/source_settlement_mixin.py", "backend/api/source_sequential_mixin.py", "backend/api/source_events_check_mixin.py", "backend/api/source_step_stats_mixin.py", "backend/api/source_project_config_apply.py", "backend/api/source_state_init.py", "backend/api/source.py", "backend/api/source_custom_mix.py"],
+      "keywords": ["收尾防呆", "数量门", "缺步挂起", "closing_guard", "settle_hold", "gate", "补做", "断点补做", "上银", "SY3", "油嘴包", "封箱"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "NG判定与处置统一配置模型(五代散装开关收敛)",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "后端统一解析器resolve_ng_handling(pipeline_config.ng_handling块)：违规当场none/hint/instant_ng、缺步骤ng/ack/hold、少数量ng/ack、数量门；老项目legacy键自动合成零差异，状态机零改动；门/挂起提示事件分离。UI逻辑设置6卡收敛为「NG判定与处置」+「结算冷却」两卡，统一卡与事件页双向联动明示",
+      "files": ["backend/api/source_project_config_apply.py", "backend/api/source_state_init.py", "backend/api/source_settlement_mixin.py", "frontend/src/views/Project/LogicConfigTab.vue", "frontend/src/views/Project/index.vue", "frontend/src/views/Project/EventsConfigTab.vue"],
+      "keywords": ["ng_handling", "统一模型", "配置收敛", "resolve_ng_handling", "违规当场", "missing_step", "short_count", "legacy合成", "联动明示", "结算冷却", "实时NG", "补做策略"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "人工确认弹窗包装挂账形态+处置文案按箱语义",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "确认弹窗(大/小)显示在制箱明细与挂起态，按钮「认NG落账进下一箱/重做本箱不记NG」二选一；成功提示按箱语义；包装卡挂起横幅只引导不重复给按钮",
+      "files": ["frontend/src/views/Monitor/index.vue", "frontend/src/views/Monitor/PackagingFlowCard.vue", "backend/api/source_routes.py"],
+      "keywords": ["确认弹窗", "pkg_hold", "在制箱", "认NG落账", "重做本箱", "处置按钮"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "TEST-002",
+      "title": "conftest测试数据目录不再复制大视频文件",
+      "symptom": "全量回归频繁ENOSPC磁盘打满测试雪崩",
+      "root_cause": "每个测试会话把backend/uploads(4.9GB含视频)整目录复制进/tmp",
+      "fix": "测试数据目录预建空uploads/videos占位拦截迁移复制，每会话省约3.8GB",
+      "files": ["tests/conftest.py"],
+      "keywords": ["conftest", "磁盘", "ENOSPC", "uploads", "videos", "测试隔离"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["run-tests", "debug-source", "modify-project-config", "debug-mes"],
+  "files_changed": ["backend/api/source_custom_mix.py", "backend/api/source_settlement_mixin.py", "backend/api/source_event_trigger_mixin.py", "backend/api/source_events_check_mixin.py", "backend/api/source_sequential_mixin.py", "backend/api/source_session_lifecycle_mixin.py", "backend/api/source_step_stats_mixin.py", "backend/api/source_project_config_apply.py", "backend/api/source_state_init.py", "backend/api/source.py", "backend/api/source_routes.py", "backend/api/packaging_flows.py", "backend/services/packaging_flow_coordinator.py", "backend/services/external_device_protocols.py", "backend/services/external_device_pipeline.py", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Monitor/PackagingFlowCard.vue", "frontend/src/views/Project/LogicConfigTab.vue", "frontend/src/views/Project/index.vue", "frontend/src/views/Project/EventsConfigTab.vue", "tests/conftest.py"]
+}

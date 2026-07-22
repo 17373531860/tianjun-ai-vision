@@ -26,6 +26,72 @@ from backend.core.config import DATA_DIR
 from backend.api.rod_filter import RodSessionGate, read_rod_filter_config
 
 
+# ==================== NG 判定与处置: 统一模型解析 (v3.44) ====================
+
+def resolve_ng_handling(pipeline_config: dict) -> dict:
+    """把 NG 处置配置归一成单一模型 (读兼容: 新块优先, 老键合成).
+
+    v3.23 补做策略 / v3.32 违序提示事件 / v3.43 实时NG / v3.44 收尾防呆
+    五个版本各自累加的散装开关, 收敛为一个 ``ng_handling`` 块, 四行语义:
+      violation:    违规当场反应  none | hint | instant_ng (+ violation_event_id)
+      missing_step: 缺步骤时处置  ng | ack | hold (+ hold_timeout_s / hold_event_id)
+      short_count:  少装数量处置  ng | ack
+      gate:         数量门(事前拦截) gate_enabled / gate_steps / gate_event_id
+    老项目没有 ng_handling → 从 legacy 键合成等价档位, 行为零差异.
+    """
+    def _ev(v):
+        try:
+            return int(v) if v else None
+        except (TypeError, ValueError):
+            return None
+
+    raw = pipeline_config.get('ng_handling')
+    if isinstance(raw, dict) and raw:
+        src = raw
+    else:
+        rem = pipeline_config.get('ng_remediation', {}) or {}
+        cg = pipeline_config.get('closing_guard', {}) or {}
+        rem_on = bool(rem.get('enabled', False))
+        src = {
+            'violation': ('instant_ng' if pipeline_config.get('instant_ng_on_violation')
+                          else ('hint' if pipeline_config.get('strict_order_violation_event_id')
+                                else 'none')),
+            'violation_event_id': pipeline_config.get('strict_order_violation_event_id'),
+            'missing_step': ('hold' if cg.get('hold_enabled')
+                             else ('ack' if rem_on and rem.get('allow_step', True) else 'ng')),
+            'hold_timeout_s': cg.get('hold_timeout_s', 120),
+            'hold_event_id': cg.get('event_id'),
+            'short_count': 'ack' if rem_on and rem.get('allow_count', True) else 'ng',
+            'gate_enabled': cg.get('gate_enabled', False),
+            'gate_steps': cg.get('gate_steps') or [],
+            'gate_event_id': cg.get('event_id'),
+        }
+    violation = src.get('violation')
+    if violation not in ('none', 'hint', 'instant_ng'):
+        violation = 'none'
+    missing_step = src.get('missing_step')
+    if missing_step not in ('ng', 'ack', 'hold'):
+        missing_step = 'ng'
+    short_count = src.get('short_count')
+    if short_count not in ('ng', 'ack'):
+        short_count = 'ng'
+    try:
+        hold_timeout_s = max(0.0, float(src.get('hold_timeout_s', 120) or 0))
+    except (TypeError, ValueError):
+        hold_timeout_s = 120.0
+    return {
+        'violation': violation,
+        'violation_event_id': _ev(src.get('violation_event_id')),
+        'missing_step': missing_step,
+        'hold_timeout_s': hold_timeout_s,
+        'hold_event_id': _ev(src.get('hold_event_id')),
+        'short_count': short_count,
+        'gate_enabled': bool(src.get('gate_enabled', False)),
+        'gate_steps': [s for s in (src.get('gate_steps') or []) if s],
+        'gate_event_id': _ev(src.get('gate_event_id')),
+    }
+
+
 def _apply_rod_filter(h, config):
     """刷新传动杆过滤参数 + 重建 SessionGate"""
     try:
@@ -281,37 +347,40 @@ def _apply_pipeline_config(h, config, pipeline_config):
     h.idle_timeout_seconds = pipeline_config.get('idle_timeout_seconds', 0)
     h.cycle_max_duration = pipeline_config.get('cycle_max_duration', 0)
 
-    # v3.32 严格顺序违序即时事件: 严格步骤在错误时机出现时, 除了照旧拦截不计入,
-    # 还当场触发所配事件(报警/语音/弹窗走事件体系), 不必等周期结算才报"顺序错误"。
-    # None/0 = 关(零差异)。触发点在 source_settlement_mixin 的两处严格守门。
-    try:
-        _sve = pipeline_config.get('strict_order_violation_event_id')
-        h.strict_order_violation_event_id = int(_sve) if _sve else None
-    except (TypeError, ValueError):
-        h.strict_order_violation_event_id = None
+    # ==================== NG 判定与处置 (v3.44 统一模型) ====================
+    # 单一块 ng_handling (新配置) 或 legacy 键合成 (老项目零差异), 展开到既有
+    # runtime 属性 — 状态机侧 (settlement/event_trigger/packaging) 无需改动:
+    #   violation    → instant_ng_on_violation + strict_order_violation_event_id
+    #   missing_step → _settle_hold_enabled(hold 档) + _ng_remediation.allow_step(非 ng 档)
+    #   short_count  → _ng_remediation.allow_count
+    #   gate         → _closing_gate_enabled/_closing_gate_steps/_closing_gate_event_id
+    # 语义链提醒: ack 档的"定格弹窗"由 NG 事件自身的「需人工确认」决定 (事件设置),
+    # 这里只决定弹窗里给不给"补步骤/补数量"按钮; hold 档超时判 NG 后同样走该链.
+    _ngh = resolve_ng_handling(pipeline_config)
+    h.strict_order_violation_event_id = (
+        _ngh['violation_event_id'] if _ngh['violation'] in ('hint', 'instant_ng') else None)
     h._strict_violation_throttle = {}
-    if h.strict_order_violation_event_id:
-        print(f"严格顺序违序即时事件: event_id={h.strict_order_violation_event_id}")
-
-    # v3.43 实时NG (违规即时结算): 违序/前置缺失动作一经确认, 立即按 NG 事件(2)
-    # 结算当前周期 (计数/报警/MES/人工确认定格全按事件2自身配置走)。
-    # 提示档=NG事件勾了需人工确认(弹框定格等人); 斩立决=没勾(当场结算开新周期)。
-    # 默认关 = 零差异。触发点与违序即时事件同在两处严格守门 (_fire_strict_order_violation)。
-    h.instant_ng_on_violation = bool(pipeline_config.get('instant_ng_on_violation', False))
-    if h.instant_ng_on_violation:
-        print("实时NG(违规即时结算): 已开启")
-
-    # v3.23 NG 补做策略 (与 logic_mode 无关的全局可选项): 缺步 / 少装 NG 经人工确认后,
-    # 允许"补做缺的那步 / 补齐少装的数量"修正成 OK 而不重置整个周期. 默认全关 = 零差异.
-    _rem = pipeline_config.get('ng_remediation', {}) or {}
+    h.instant_ng_on_violation = _ngh['violation'] == 'instant_ng'
+    h._settle_hold_enabled = _ngh['missing_step'] == 'hold'
+    h._settle_hold_timeout_s = _ngh['hold_timeout_s']
+    h._settle_hold_event_id = _ngh['hold_event_id']
+    h._settle_hold = None
+    h._closing_gate_enabled = _ngh['gate_enabled']
+    h._closing_gate_steps = set(_ngh['gate_steps'])
+    h._closing_gate_event_id = _ngh['gate_event_id']
+    _allow_step = _ngh['missing_step'] != 'ng'
+    _allow_count = _ngh['short_count'] == 'ack'
     h._ng_remediation = {
-        'enabled': bool(_rem.get('enabled', False)),
-        'allow_step': bool(_rem.get('allow_step', True)),
-        'allow_count': bool(_rem.get('allow_count', True)),
+        'enabled': _allow_step or _allow_count,
+        'allow_step': _allow_step,
+        'allow_count': _allow_count,
     }
-    if h._ng_remediation['enabled']:
-        print(f"NG 补做策略: 开启 (补步骤={h._ng_remediation['allow_step']} "
-              f"补数量={h._ng_remediation['allow_count']})")
+    if (_ngh['violation'] != 'none' or _ngh['missing_step'] != 'ng'
+            or _allow_count or _ngh['gate_enabled']):
+        print(f"NG 处置: 违规当场={_ngh['violation']}(事件{_ngh['violation_event_id']}) "
+              f"缺步={_ngh['missing_step']}(超时{_ngh['hold_timeout_s']}s/事件{_ngh['hold_event_id']}) "
+              f"少装={_ngh['short_count']} 数量门={_ngh['gate_enabled']}"
+              f"{sorted(h._closing_gate_steps)}(事件{_ngh['gate_event_id']})")
     print(
         f"结算模式: {h.settlement_mode}, 空闲超时: {h.idle_timeout_seconds}s, "
         f"周期超时: {h.cycle_max_duration}s"

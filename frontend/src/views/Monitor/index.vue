@@ -86,8 +86,17 @@
               {{ (pendingAckDisplay.remediation.missing || []).join('、') || '（未解析出具体步骤）' }}
             </span>
           </div>
+          <!-- v3.44 包装层箱账挂起: 展示在制箱明细 -->
+          <div v-if="pendingAckDisplay.pkgHold" class="flex gap-2 items-start pt-2 border-t border-slate-700">
+            <span class="text-gray-400 flex-shrink-0">在制箱:</span>
+            <span class="text-rose-300 font-bold">
+              第 {{ pendingAckDisplay.pkgHold.box }} 箱 — 已进箱 {{ pendingAckDisplay.pkgHold.sliders }}
+              <template v-if="pendingAckDisplay.pkgHold.target > 0"> / {{ pendingAckDisplay.pkgHold.target }}</template>
+              （箱账挂起，未落 NG）
+            </span>
+          </div>
         </div>
-        <!-- v3.23 挂起态: 补步骤/认NG/重做 三选一; 普通确认: 单"重做"按钮 -->
+        <!-- v3.23 挂起态: 补步骤/认NG/重做 三选一; v3.44 包装挂账: 重做本箱/认NG落账 二选一; 普通确认: 单"重做"按钮 -->
         <template v-if="pendingAckDisplay.remediation">
           <div class="text-xs text-gray-400 text-center">
             工人补做缺的步骤后点「补步骤」直接判合格（不重置周期）；确认确实漏做点「认 NG」；想整件重做点「重做」。
@@ -99,6 +108,17 @@
               @click="ackPendingForChannel(pendingAckDisplay.channel, 'confirm_ng')">认 NG</el-button>
             <el-button size="large" :loading="pendingAckDisplay.acking"
               @click="ackPendingForChannel(pendingAckDisplay.channel, 'redo')">重做本件</el-button>
+          </div>
+        </template>
+        <template v-else-if="pendingAckDisplay.pkgHold">
+          <div class="text-xs text-gray-400 text-center">
+            本箱账挂起未落 NG：点「重做本箱」丢弃这次结果同箱重测（工单进度不动）；点「认 NG 落账」按实际进箱数记 NG 箱并进入下一箱。
+          </div>
+          <div class="flex items-center justify-center gap-2 flex-wrap">
+            <el-button type="warning" size="large" :loading="pendingAckDisplay.acking"
+              @click="ackPendingForChannel(pendingAckDisplay.channel, 'redo')">重做本箱 — 不记 NG</el-button>
+            <el-button type="danger" size="large" plain :loading="pendingAckDisplay.acking"
+              @click="ackPendingForChannel(pendingAckDisplay.channel, 'confirm_ng')">认 NG 落账 — 进下一箱</el-button>
           </div>
         </template>
         <div v-else class="flex items-center justify-center gap-3">
@@ -1243,8 +1263,17 @@
               {{ (pendingAckDisplay.remediation.missing || []).join('、') || '（未解析出具体步骤）' }}
             </span>
           </div>
+          <!-- v3.44 包装层箱账挂起明细: 挂起的是第几箱、当前进箱数/目标 -->
+          <div v-if="pendingAckDisplay.pkgHold" class="flex items-center gap-3">
+            <span class="text-gray-400 w-20 shrink-0">在制箱</span>
+            <span class="text-rose-300 font-bold">
+              第 {{ pendingAckDisplay.pkgHold.box }} 箱 — 已进箱 {{ pendingAckDisplay.pkgHold.sliders }}
+              <template v-if="pendingAckDisplay.pkgHold.target > 0"> / 目标 {{ pendingAckDisplay.pkgHold.target }}</template>
+              <span class="text-amber-300 ml-1">（箱账挂起，未落 NG）</span>
+            </span>
+          </div>
           <!-- v3.43.1 确认后的处置方式明示: 工人点按钮前就知道是"重做"还是"断点续做" -->
-          <div v-if="!pendingAckDisplay.remediation" class="flex items-center gap-3">
+          <div v-if="!pendingAckDisplay.remediation && !pendingAckDisplay.pkgHold" class="flex items-center gap-3">
             <span class="text-gray-400 w-20 shrink-0">确认后</span>
             <span v-if="pendingAckDisplay.keepsCycle" class="text-emerald-300 font-bold">
               保留已完成步骤 — 从断点继续补做
@@ -1257,6 +1286,9 @@
             <template v-if="pendingAckDisplay.remediation">
               本件缺步骤被<span class="text-amber-300">延迟落账</span>（还没记 OK/NG）。工人补做后点「补步骤」直接判合格；确认确实漏做点「认 NG」落账；想整件重做点「重做」。
             </template>
+            <template v-else-if="pendingAckDisplay.pkgHold">
+              本箱账已<span class="text-amber-300">挂起等处置</span>（还没记 NG 箱、没翻页）。点「重做本箱」丢弃这次结果、同一箱号重测（工单进度不动）；点「认 NG 落账」按实际进箱数记 NG 箱并进入下一箱。
+            </template>
             <template v-else-if="pendingAckDisplay.keepsCycle">
               本次事件已按配置落账（<span class="text-amber-300">计数已记，确认不回滚记录</span>）。该事件配置为「确认后保留周期」：点确认只解除定格，已做对的步骤保留，请工人从断点接着补做后面的步骤。
             </template>
@@ -1266,7 +1298,7 @@
           </div>
         </div>
 
-        <!-- v3.23 挂起态: 补步骤/认NG/重做 三选一; 普通确认: 单"重做"按钮 -->
+        <!-- v3.23 挂起态: 补步骤/认NG/重做 三选一; v3.44 包装挂账: 重做本箱/认NG落账 二选一; 普通确认: 单"重做"按钮 -->
         <div class="px-5 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-3 flex-wrap">
           <span v-if="pendingAckDisplay.acking" class="text-xs text-gray-400">提交中...</span>
           <template v-if="pendingAckDisplay.remediation">
@@ -1276,6 +1308,12 @@
               @click="ackPendingForChannel(pendingAckDisplay.channel, 'confirm_ng')">认 NG</el-button>
             <el-button type="success" size="large" :loading="pendingAckDisplay.acking"
               @click="ackPendingForChannel(pendingAckDisplay.channel, 'supplement_step')">补步骤 — 判合格</el-button>
+          </template>
+          <template v-else-if="pendingAckDisplay.pkgHold">
+            <el-button type="danger" size="large" plain :loading="pendingAckDisplay.acking"
+              @click="ackPendingForChannel(pendingAckDisplay.channel, 'confirm_ng')">认 NG 落账 — 进下一箱</el-button>
+            <el-button type="warning" size="large" :loading="pendingAckDisplay.acking"
+              @click="ackPendingForChannel(pendingAckDisplay.channel, 'redo')">重做本箱 — 不记 NG</el-button>
           </template>
           <el-button
             v-else
@@ -5944,6 +5982,9 @@ const pendingAckChannelStates = computed(() => {
         acking: !!multiChannelData.value[ch]?.pendingAckSubmitting,
         // v3.23 缺步骤延迟落账挂起 (有值 → ack 窗展示缺项 + "补步骤/认NG/重做"三按钮)
         remediation: multiChannelData.value[ch]?.pendingRemediation || null,
+        // v3.44 包装层 NG 箱账挂起等处置 (有值 → 弹窗露"认NG落账/重做本箱"双选,
+        // 明示"重做不记 NG 箱"; 结构 {box, sliders, target, is_tail, ...})
+        pkgHold: pa.pkg_hold || null,
       });
     }
   }
@@ -5979,7 +6020,11 @@ const ackPendingForChannel = async (ch, action = null) => {
   try {
     const res = await ackPendingEvent(ch, action);
     if (res?.data?.acked) {
-      const msg = action === 'supplement_step' ? '已补步骤判合格'
+      // v3.44: 后端带回包装挂账解挂结果 → 文案按箱语义说清落没落账
+      const pkg = res?.data?.packaging;
+      const msg = pkg && action === 'confirm_ng' ? '已认 NG 落账，进入下一箱'
+        : pkg ? '已确认，本箱不记 NG，同箱重做'
+        : action === 'supplement_step' ? '已补步骤判合格'
         : action === 'confirm_ng' ? '已确认 NG'
         : res?.data?.kept_cycle ? '已确认，保留周期从断点继续'
         : '已确认，重置当前周期';

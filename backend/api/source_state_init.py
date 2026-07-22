@@ -127,6 +127,15 @@ def _init_step_state(h):
     h.cycle_max_duration = 0
     # v3.23 NG 补做策略 (默认全关 = 零差异); 由 _apply_pipeline_config 按项目配置覆盖
     h._ng_remediation = {'enabled': False, 'allow_step': True, 'allow_count': True}
+    # v3.44 收尾防呆 (数量门 + 缺步结算挂起, 默认全关 = 零差异)
+    # v3.44 起归入统一模型 ng_handling, 门/挂起各配各的提示事件
+    h._closing_gate_enabled = False
+    h._closing_gate_steps = set()
+    h._closing_gate_event_id = None
+    h._settle_hold_enabled = False
+    h._settle_hold_timeout_s = 120.0
+    h._settle_hold_event_id = None
+    h._settle_hold = None  # 挂起态: {'missing':[], 'expected':[], 'since':ts}
     h.step_conf_thresholds = {}
     # v3.10+ 步骤级 box 尺寸过滤: {label: (max_w, max_h)} 归一化比例
     # 0 / 缺省 = 关闭过滤; 用途见 source_detect_runners_mixin._passes_box_size_limit

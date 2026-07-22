@@ -508,7 +508,15 @@ class ExternalDeviceProtocolsMixin:
         try:
             while not conn._stop_event.is_set():
                 try:
-                    data = ser.read(1024)
+                    # v3.41.1b: 有多少收多少 —— 旧写法 ser.read(1024) 要攒满
+                    # 1024 字节或等满 2s 超时才返回, 连续输出的秤 (~10 帧/s,
+                    # 每帧十几字节) 数据被攒成 2 秒一批, 界面/状态机全部滞后。
+                    # 空闲时仍按"等 1 字节到达或超时"阻塞, 不空转。
+                    try:
+                        n = ser.in_waiting
+                    except Exception:
+                        n = 0
+                    data = ser.read(max(1, n))
                     if not data:
                         continue
                     buffer += data
@@ -562,18 +570,35 @@ class ExternalDeviceProtocolsMixin:
 
     @staticmethod
     def _read_serial_frame(ser, delimiter: bytes, timeout: float):
-        """读一帧(到分隔符为止), 超时返回已读到的内容或 None。"""
+        """读一帧(到分隔符为止), 超时返回已读到的内容或 None。
+
+        v3.41.1b: 改"有多少收多少、见帧尾立即交货"。旧实现 ser.read(256)
+        要攒满 256 字节或等满串口超时(1s)才返回, 而秤一帧只有十几字节,
+        每次查询都白等整个超时 → 采样被硬锁在 ~1Hz, 去皮/稳定判定全被
+        拖慢 2~3s (2026-07 萍乡百斯特现场"延迟高"根因)。
+        无分隔符的帧以 ~60ms 静默作帧尾兜底。
+        """
         buf = b""
         deadline = time.time() + timeout
+        quiet = 0
         while time.time() < deadline:
-            chunk = ser.read(256)
+            try:
+                n = ser.in_waiting
+            except Exception:
+                n = 0
+            chunk = ser.read(n) if n else b""
             if chunk:
                 buf += chunk
+                quiet = 0
                 if delimiter in buf:
                     line, _ = buf.split(delimiter, 1)
                     return line
-            elif buf:
-                break
+            else:
+                if buf:
+                    quiet += 1
+                    if quiet >= 3:   # 已有数据且 ~60ms 无新字节 → 当帧尾
+                        break
+                time.sleep(0.02)
         return buf or None
 
     def _mock_weight_loop(self, conn: DeviceConnection):
@@ -719,7 +744,15 @@ class ExternalDeviceProtocolsMixin:
                         ctrl = conn._command_queue.popleft()
                         self._write_serial_command(ser, ctrl, cmd_suffix)
                         time.sleep(0.1)
-                        ser.read(256)  # 读掉 CR LF 应答, 不作为重量数据
+                        # 只清掉已到的应答回显, 不作为重量数据。
+                        # v3.41.1b: 旧写法 ser.read(256) 会为攒满 256 字节干等
+                        # 整个串口超时(1s), 每条控制指令白挂 1 秒。
+                        try:
+                            n = ser.in_waiting
+                        except Exception:
+                            n = 0
+                        if n:
+                            ser.read(n)
                         logger.info("[ExtDev] %s 已发送控制指令: %s", conn.name, ctrl)
 
                     self._write_serial_command(ser, query_cmd, cmd_suffix)
@@ -759,7 +792,15 @@ class ExternalDeviceProtocolsMixin:
                         return
                     continue
 
-                conn._stop_event.wait(timeout=poll_interval)
+                # v3.41.1b: 轮询间隔切成小片等待, 控制指令(去皮/置零)一入队
+                # 立即唤醒发出 —— 旧写法整段睡满 poll_interval, 按钮点下去
+                # 最长要等一个完整轮询周期才发, 是现场"点去皮 2~3 秒才见数"
+                # 的组成环节之一。
+                wait_deadline = time.time() + poll_interval
+                while (time.time() < wait_deadline
+                       and not conn._command_queue
+                       and not conn._stop_event.wait(timeout=0.05)):
+                    pass
         finally:
             if ser is not None:
                 try:
