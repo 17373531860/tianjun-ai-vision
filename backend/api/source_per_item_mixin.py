@@ -56,8 +56,10 @@ _update_step_stats 入口检查 logic_mode == 'per_item' → 进入本 mixin
 """
 from __future__ import annotations
 
+import math
 import time
 from collections import deque
+from statistics import median
 from typing import Optional
 
 from backend.core import debug_center
@@ -85,6 +87,39 @@ def _bbox_iou(a, b) -> float:
 def _bbox_center(b):
     x, y, w, h = b
     return (x + w / 2.0, y + h / 2.0)
+
+
+def _translate_bbox(bbox, dx: float, dy: float):
+    """平移归一化 bbox，并把左上角限制在画面内。"""
+    x, y, w, h = bbox
+    return (
+        min(max(0.0, x + dx), max(0.0, 1.0 - w)),
+        min(max(0.0, y + dy), max(0.0, 1.0 - h)),
+        w,
+        h,
+    )
+
+
+def _one_to_one_iou_matches(items: dict, boxes, threshold: float):
+    """按全局 IoU 降序做一对一匹配，避免检测数组顺序改变造成 ID 抢占。"""
+    candidates = []
+    for iid, state in items.items():
+        for box_index, bbox in enumerate(boxes):
+            iou = _bbox_iou(state.bbox, bbox)
+            if iou > threshold:
+                candidates.append((-iou, iid, box_index))
+    candidates.sort()
+
+    used_ids = set()
+    used_boxes = set()
+    matches = []
+    for neg_iou, iid, box_index in candidates:
+        if iid in used_ids or box_index in used_boxes:
+            continue
+        used_ids.add(iid)
+        used_boxes.add(box_index)
+        matches.append((iid, box_index, -neg_iou))
+    return matches
 
 
 def _spatial_sort_boxes(boxes):
@@ -115,11 +150,12 @@ class _PerItemItemState:
     __slots__ = (
         'item_id', 'bbox', 'last_seen_frame', 'last_seen_time',
         'covered', 'consecutive_overlap_frames', 'first_covered_at',
+        'associated', 'last_aligned_frame',
         # ── 重复打同一颗螺丝防护 (covered 之后才用到, 默认全零 = 老行为) ──
-        'released_after_cover',        # covered 后是否已"真正移开"过 (区分首次打 vs 回头重打)
-        'post_cover_away_frames',      # covered 后动作框"连续离开"的帧数 (够久才算真正移开, 滤拔枪卡顿/闪断)
-        'redup_overlap_frames',        # 真正移开后重新压回来的连续帧数
-        'redup_warned',                # 本次"压回来"回合是否已报过 (再移开再压 → 复位可再报)
+        'released_after_cover',        # covered 后是否已有“目标重现/明确打到其他 ID”的抬枪正证据
+        'post_cover_away_frames',      # covered 后抬枪正证据的连续帧数
+        'redup_overlap_frames',        # 明确转移后重新关联回来的连续帧数
+        'redup_warned',                # 本次“关联回来”是否已报过（再转移再返回可复位）
         'redup_count',                 # 本周期内被重复打的次数 (供前端标记/统计)
     )
 
@@ -131,6 +167,12 @@ class _PerItemItemState:
         self.covered = False
         self.consecutive_overlap_frames = 0
         self.first_covered_at: Optional[float] = None
+        # 当前帧是否有 item 检测框与该逻辑 ID 完成一对一关联。整板平移可继续
+        # 推进 bbox，但不能把“只有预测位置”伪装成已关联目标。
+        self.associated = True
+        # 最近一次确认逻辑位置仍可信的帧。直接关联，或由其余锚点算出可靠的
+        # 整板平移时都会刷新；它与“当前帧是否显示编号”是两个独立概念。
+        self.last_aligned_frame = frame_id
         self.released_after_cover = False
         self.post_cover_away_frames = 0
         self.redup_overlap_frames = 0
@@ -143,6 +185,7 @@ class _PerItemItemState:
             'bbox': list(self.bbox),
             'covered': self.covered,
             'covered_at': self.first_covered_at,
+            'associated': self.associated,
             'dup': self.redup_count,               # >0 表示本周期被重复打过 (前端可高亮)
         }
 
@@ -230,32 +273,85 @@ class _PerItemStep:
         self.locked_count = 0
         self.completed = False
 
+    def tracking_displacements(self, boxes):
+        """返回本步骤可靠 IoU 配对产生的中心位移候选。"""
+        displacements = []
+        for iid, box_index, _iou in _one_to_one_iou_matches(
+                self.items, boxes, self.item_tracking_iou):
+            old_cx, old_cy = _bbox_center(self.items[iid].bbox)
+            new_cx, new_cy = _bbox_center(boxes[box_index])
+            displacements.append((
+                new_cx - old_cx,
+                new_cy - old_cy,
+                max(self.items[iid].bbox[2], self.items[iid].bbox[3]),
+            ))
+        return displacements
+
     # ──── 更新个体位置(跨帧匹配) ────
-    def update_item_positions(self, boxes, frame_id: int, ts: float, lock_count_on_start: bool):
+    def update_item_positions(self, boxes, frame_id: int, ts: float,
+                              lock_count_on_start: bool,
+                              global_translation=None):
         """用本帧 item_label box 更新个体表里的位置.
 
-        匹配规则: 每个新 box 找已有个体里 IoU 最高的, 超过 item_tracking_iou
-        阈值则更新该个体位置. 锁定模式下不创建新个体; dynamic 模式下创建.
+        锁定模式先把整板共同位移同步到所有逻辑框，再对预测框与本帧检测框做
+        全局一对一最近邻关联；dynamic 模式保持原有 IoU 匹配/随见随建语义。
         """
+        for state in self.items.values():
+            state.associated = False
+
+        if lock_count_on_start and global_translation is not None:
+            dx, dy = global_translation
+            for state in self.items.values():
+                if dx or dy:
+                    state.bbox = _translate_bbox(state.bbox, dx, dy)
+                # (0, 0) 也是有效校准：其余至少两个锚点证明整板本帧未移动。
+                state.last_aligned_frame = frame_id
+
         if not boxes:
             return
+
+        if lock_count_on_start:
+            # predicted bbox 已随整板移动。按中心距离做全局候选排序，并以 bbox
+            # 尺寸作门限，既允许轻微残差，又不会跨到相邻螺丝。
+            candidates = []
+            for iid, state in self.items.items():
+                scx, scy = _bbox_center(state.bbox)
+                for box_index, bbox in enumerate(boxes):
+                    bcx, bcy = _bbox_center(bbox)
+                    x_tol = max(0.006, 1.5 * max(state.bbox[2], bbox[2]))
+                    y_tol = max(0.006, 1.5 * max(state.bbox[3], bbox[3]))
+                    dx_norm = abs(bcx - scx) / x_tol
+                    dy_norm = abs(bcy - scy) / y_tol
+                    distance = math.hypot(dx_norm, dy_norm)
+                    iou = _bbox_iou(state.bbox, bbox)
+                    if iou > self.item_tracking_iou or distance <= 1.0:
+                        candidates.append((distance, -iou, iid, box_index))
+            candidates.sort()
+        else:
+            candidates = [
+                (1.0 - iou, -iou, iid, box_index)
+                for iid, box_index, iou in _one_to_one_iou_matches(
+                    self.items, boxes, self.item_tracking_iou)
+            ]
+
         used_ids = set()
-        for bbox in boxes:
-            best_iid = None
-            best_iou = self.item_tracking_iou
-            for iid, st in self.items.items():
-                if iid in used_ids:
+        used_boxes = set()
+        for _distance, _neg_iou, iid, box_index in candidates:
+            if iid in used_ids or box_index in used_boxes:
+                continue
+            state = self.items[iid]
+            state.bbox = boxes[box_index]
+            state.last_seen_frame = frame_id
+            state.last_seen_time = ts
+            state.associated = True
+            state.last_aligned_frame = frame_id
+            used_ids.add(iid)
+            used_boxes.add(box_index)
+
+        if not lock_count_on_start:
+            for box_index, bbox in enumerate(boxes):
+                if box_index in used_boxes:
                     continue
-                iou = _bbox_iou(st.bbox, bbox)
-                if iou > best_iou:
-                    best_iou = iou
-                    best_iid = iid
-            if best_iid is not None:
-                self.items[best_iid].bbox = bbox
-                self.items[best_iid].last_seen_frame = frame_id
-                self.items[best_iid].last_seen_time = ts
-                used_ids.add(best_iid)
-            elif not lock_count_on_start:
                 # dynamic 模式: 没匹配上 → 创建新个体
                 iid = self.next_item_id
                 self.next_item_id += 1
@@ -278,19 +374,31 @@ class _PerItemStep:
         累积达到 sustain_frames 那一刻翻转 covered=true.
 
         重复打防护 (dup_detect=True):
-            个体已 covered 之后, 必须先观察到"动作框真正移开"(released), 再压回来并持续
-            dup_sustain 帧 → 判定这颗被"重复打", 加入返回列表.
-            "真正移开" = 动作框连续离开 dup_release 帧 (不是单帧). 这样拔枪卡顿 /
-            检测框单帧闪断 (离开一两帧又压回) 不会误开门, 避免把拔枪尾程当成回头重打.
-            release 门是区分 "首次打完的余帧" 与 "回头重打" 的唯一物理信号, 不可省.
-            每个"压回来"回合只报一次, 再真正移开可再报.
+            个体已 covered 之后, 必须先连续观察到以下任一抬枪正证据 (released):
+            1) 该螺丝本体重新完成一对一关联，且电枪不再覆盖它；
+            2) 电枪明确关联到另一颗逻辑 ID。
+            单纯动作框消失、目标仍被遮挡属于负证据，可能只是卡枪或模型漏检，不能开门。
+            released 后电枪再次覆盖本 ID 并持续 dup_sustain 帧，才判定重复打；返回时允许
+            使用由其余螺丝校准过的可信预测框，因为电枪通常会再次遮住目标本体。
+            每个“关联回来”回合只报一次，再明确打到其他 ID 后可重新报.
         返回: 本帧新判定为"重复打"的 item_id 列表 (dup_detect=False 时恒为空).
         """
         # 1. 标记本帧哪些个体被某个 action box 覆盖到
         # 注意: bbox 是 xywh 格式 (左上角 + 宽高), 看 _bbox_iou 注释和 _bbox_center 实现.
         overlapping_ids = set()
+        # 当前帧没有 item 检测框只影响 UI 编号，不等于逻辑位置失效。只要其余
+        # 螺丝仍能校准整板，last_aligned_frame 会逐帧刷新；单目标/短遮挡场景则
+        # 保留一个有上限的兼容窗口。长期失去全部锚点的陈旧位置仍不接受覆盖。
+        alignment_grace_frames = max(30, self.sustain_frames * 3)
+        eligible_ids = {
+            iid for iid, state in self.items.items()
+            if state.associated
+            or (frame_id - state.last_aligned_frame) <= alignment_grace_frames
+        }
         if self.coverage_use_center:
             for iid, st in self.items.items():
+                if iid not in eligible_ids:
+                    continue
                 cx, cy = _bbox_center(st.bbox)
                 for abox in action_boxes:
                     ax, ay, aw, ah = abox
@@ -302,12 +410,22 @@ class _PerItemStep:
                 best_iid = None
                 best_iou = self.coverage_iou
                 for iid, st in self.items.items():
+                    if iid not in eligible_ids:
+                        continue
                     iou = _bbox_iou(st.bbox, abox)
                     if iou > best_iou:
                         best_iou = iou
                         best_iid = iid
                 if best_iid is not None:
                     overlapping_ids.add(best_iid)
+
+        # direct 集合只用于取得“电枪确实去了另一颗”的抬枪正证据。返回原目标时，
+        # 电枪通常会遮住螺丝本体，因此在 released 已由正证据确认后，可使用由
+        # 其余锚点校准过、仍在 alignment_grace 内的预测逻辑框。
+        direct_overlapping_ids = {
+            iid for iid in overlapping_ids
+            if self.items[iid].associated
+        }
 
         # 2. 推进/归零各个体的连续重叠帧数
         reoccur_ids = []
@@ -318,25 +436,31 @@ class _PerItemStep:
                     st.covered = True
                     st.first_covered_at = ts
                 elif st.covered and dup_detect:
-                    # 已打过: 任何接触都清"连续离开"计数 (拔枪卡顿/单帧闪断不算移开)
+                    # 电枪回到本 ID 会终止任何尚未完成的抬枪确认。
                     st.post_cover_away_frames = 0
                     if st.released_after_cover:
-                        # 真正移开过 + 又压回来 → 重复打候选
                         st.redup_overlap_frames += 1
                         if st.redup_overlap_frames >= max(1, dup_sustain) and not st.redup_warned:
                             st.redup_warned = True
                             st.redup_count += 1
                             reoccur_ids.append(iid)
+                    else:
+                        st.redup_overlap_frames = 0
             else:
                 st.consecutive_overlap_frames = 0
                 if st.covered and dup_detect:
-                    st.post_cover_away_frames += 1
                     st.redup_overlap_frames = 0
-                    # 动作框"连续离开"够久才算真正移开 → 打开"下次压回来可再判"的门.
-                    # 单帧闪断/拔枪卡顿 (离开不足 dup_release 帧) 不开门, 从根上防误报.
-                    if st.post_cover_away_frames >= max(1, dup_release):
-                        st.released_after_cover = True
-                        st.redup_warned = False
+                    release_evidence = st.associated or bool(direct_overlapping_ids)
+                    if release_evidence:
+                        # 正证据 A：已打螺丝本体重新出现且不再被电枪覆盖；
+                        # 正证据 B：电枪明确落在另一颗逻辑 ID。
+                        st.post_cover_away_frames += 1
+                        if st.post_cover_away_frames >= max(1, dup_release):
+                            st.released_after_cover = True
+                            st.redup_warned = False
+                    else:
+                        # 目标仍被遮挡且动作框漏检：这正是卡枪形态，连续证据归零。
+                        st.post_cover_away_frames = 0
         return reoccur_ids
 
     # ──── 个体超时清理 ────
@@ -631,7 +755,8 @@ class PerItemMixin:
         #   重打已打的螺丝照样报, 而补打漏掉的 (covered=False) 螺丝是合法补打不报.
         duplicate_screw_alarm = bool(per_item_cfg.get('duplicate_screw_alarm', False))
         duplicate_sustain_frames = int(per_item_cfg.get('duplicate_sustain_frames', 2) or 2)
-        # 动作框要"连续离开"够久才算真正移开 (滤拔枪卡顿/单帧闪断, 防误报). 默认 8 帧.
+        # 目标螺丝重新出现，或动作框关联到其他逻辑 ID，连续足够久才确认抬枪；
+        # 目标仍被遮挡时的纯动作漏检不累计。默认 8 帧。
         duplicate_release_frames = int(per_item_cfg.get('duplicate_release_frames', 8) or 8)
         duplicate_alarm_interval_sec = float(per_item_cfg.get('duplicate_alarm_interval_sec', 2.0) or 0.0)
         # 重复打提示横幅在前端的存在时间 (秒). 0 = 不自动撤 (持续到周期结束/下次重复打刷新).
@@ -720,6 +845,31 @@ class PerItemMixin:
             )
         return True
 
+    @staticmethod
+    def _estimate_board_translation(displacements):
+        """用跨步骤可靠配对的中位数估算整块工件本帧平移量。
+
+        至少需要两个独立配对；再用 bbox 尺寸相关的中位数残差门剔除误配。
+        单帧超过画面 8% 的跳变不属于“轻微挪板”，直接拒绝。
+        """
+        if len(displacements) < 2:
+            return None
+        dx0 = median(item[0] for item in displacements)
+        dy0 = median(item[1] for item in displacements)
+        typical_size = median(item[2] for item in displacements)
+        residual_limit = max(0.003, typical_size * 0.75)
+        inliers = [
+            item for item in displacements
+            if math.hypot(item[0] - dx0, item[1] - dy0) <= residual_limit
+        ]
+        if len(inliers) < max(2, (len(displacements) + 1) // 2):
+            return None
+        dx = median(item[0] for item in inliers)
+        dy = median(item[1] for item in inliers)
+        if abs(dx) > 0.08 or abs(dy) > 0.08:
+            return None
+        return (dx, dy)
+
     # ──── 主入口: 替代 _update_step_stats ────
     def _update_step_stats_per_item(self, detections: list, original_frame):
         """per_item 模式每帧主循环. 由 step_stats_mixin 在 logic_mode='per_item'
@@ -779,14 +929,29 @@ class PerItemMixin:
             sess.lock_lookahead_deadline is not None
             and current_time <= sess.lock_lookahead_deadline
         )
-        for step in self._per_item_steps:
-            # 3a. 更新个体位置 (多标签 OR 合并)
-            item_boxes = self._collect_item_boxes(boxes_by_label, step.item_label)
+        # 先从所有步骤仍可靠关联的螺丝汇总本帧共同位移。这样 7N 被电枪完全
+        # 遮住时，也能借 5N 的位移同步推进 7N 锁定框。
+        step_boxes = [
+            (step, self._collect_item_boxes(boxes_by_label, step.item_label))
+            for step in self._per_item_steps
+        ]
+        board_translation = None
+        if cfg['lock_count_on_start']:
+            displacements = []
+            for step, item_boxes in step_boxes:
+                if item_boxes:
+                    displacements.extend(step.tracking_displacements(item_boxes))
+            board_translation = self._estimate_board_translation(displacements)
+
+        for step, item_boxes in step_boxes:
+            # 3a. 更新个体位置 (多标签 OR 合并)。即使本帧无 box 也必须调用，
+            # 以清除 associated；但仍会把可信整板位移同步给所有锁定框。
+            step.update_item_positions(
+                item_boxes, sess.frame_id, current_time,
+                cfg['lock_count_on_start'],
+                global_translation=board_translation,
+            )
             if item_boxes:
-                step.update_item_positions(
-                    item_boxes, sess.frame_id, current_time,
-                    cfg['lock_count_on_start'],
-                )
                 # 3a'. 补锁定窗口 (v3.9+): 配了 expected_count + 当前锁定数 < expected_count
                 # + 仍在 lookahead 窗口内 → 吸收"新位置"的 box
                 if (

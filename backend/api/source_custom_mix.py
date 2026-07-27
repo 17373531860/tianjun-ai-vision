@@ -805,12 +805,14 @@ class _PerItemMixEngine:
         for step in self.steps:
             item_boxes = PerItemMixin._collect_item_boxes(boxes_by_label, step.item_label)
             fixed_count = step.expected_count > 0
+            # 无 item box 也调用，以便逐帧清除 associated；方法签名保持兼容，
+            # custom_mix 暂不启用跨步骤整板位移估算。
+            step.update_item_positions(
+                item_boxes, self._frame_id, current_time,
+                lock_count_on_start=fixed_count)
             if item_boxes:
                 # 固定数量: 只更新已有个体位置, 新位置走补锁定吸收 (封顶 expected)
                 # auto: dynamic 随见随建
-                step.update_item_positions(
-                    item_boxes, self._frame_id, current_time,
-                    lock_count_on_start=fixed_count)
                 if fixed_count and len(step.items) < step.expected_count:
                     PerItemMixin._per_item_absorb_new_items(
                         step, item_boxes, self._frame_id, current_time)

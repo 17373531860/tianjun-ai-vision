@@ -1130,7 +1130,7 @@
                 <div class="flex-1">
                   <div class="text-[12px] font-bold text-amber-300">防止重复打同一颗螺丝</div>
                   <div class="text-[10px] text-gray-500 mt-0.5">
-                    开启后: 一颗螺丝已打过 (已覆盖), 若螺丝刀<b class="text-amber-400">移开后又压回来重打这颗</b> → 报警灯响 (复用 NG 报警) + 画面黄条提示。<b class="text-amber-400">待补态也生效</b> (回头重打已打的螺丝照样报, 补打漏掉的不报)<br/>
+                    开启后: 一颗螺丝已打过 (已覆盖), 系统先等待<b class="text-amber-400">该螺丝重新清晰出现，或电枪明确移到另一颗</b>作为抬枪正证据；随后电枪再回到已打 ID 才判重复 → 报警灯响 (复用 NG 报警) + 画面黄条提示。仅动作框漏检、目标仍被枪遮挡的卡枪不会报警。<b class="text-amber-400">待补态也生效</b> (回头重打已打的螺丝照样报, 补打漏掉的不报)<br/>
                     关闭 (默认): 打过的螺丝再打不做任何处理
                   </div>
                 </div>
@@ -1139,20 +1139,20 @@
               </div>
               <div class="grid grid-cols-2 gap-4 mt-2">
                 <div class="flex items-center gap-2">
-                  <span class="text-[11px] text-gray-400">移开确认帧数</span>
+                  <span class="text-[11px] text-gray-400">抬枪确认帧数</span>
                   <el-input-number
                     v-model="project.pipeline_config.per_item.duplicate_release_frames"
                     size="small" :min="1" :step="1" :precision="0" class="!w-32"
                     :disabled="!project.pipeline_config.per_item.duplicate_screw_alarm" />
-                  <span class="text-[10px] text-gray-500">螺丝刀要连续离开几帧才算真移开 (大=不易误报, 治拔枪卡顿, 推荐 8)</span>
+                  <span class="text-[10px] text-gray-500">已打螺丝重新出现或电枪移到另一颗，连续几帧才确认抬枪 (纯漏检不累计, 推荐 8)</span>
                 </div>
                 <div class="flex items-center gap-2">
-                  <span class="text-[11px] text-gray-400">重压确认帧数</span>
+                  <span class="text-[11px] text-gray-400">返回确认帧数</span>
                   <el-input-number
                     v-model="project.pipeline_config.per_item.duplicate_sustain_frames"
                     size="small" :min="1" :step="1" :precision="0" class="!w-32"
                     :disabled="!project.pipeline_config.per_item.duplicate_screw_alarm" />
-                  <span class="text-[10px] text-gray-500">真移开后压回连续几帧算重复 (小=灵敏, 推荐 2)</span>
+                  <span class="text-[10px] text-gray-500">确认抬枪后，电枪返回已打 ID 几帧算重复 (小=灵敏, 推荐 2)</span>
                 </div>
                 <div class="flex items-center gap-2">
                   <span class="text-[11px] text-gray-400">报警节流(秒)</span>

@@ -2762,7 +2762,9 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollPr
       let arr = coverByLabelMulti.get(st.item_label);
       if (!arr) { arr = []; coverByLabelMulti.set(st.item_label, arr); }
       for (const it of st.items) {
-        if (Array.isArray(it.bbox) && it.bbox.length === 4) arr.push(it);
+        // associated=false 表示只有整板平移后的预测位置，本帧没有检测目标
+        // 与该逻辑 ID 完成一对一关联；不得借预测框显示编号或绿色。
+        if (it.associated !== false && Array.isArray(it.bbox) && it.bbox.length === 4) arr.push(it);
       }
     }
     if (coverByLabelMulti.size === 0) coverByLabelMulti = null;
@@ -2794,8 +2796,9 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollPr
     const x = cb.x * dw + dx, y = cb.y * dh + dy;
     const w = cb.w * dw, h = cb.h * dh;
     const hitMulti = (colorByCovMulti || showNumMulti) ? piHitMulti(det, cb) : null;
-    const color = (colorByCovMulti && hitMulti)
-      ? (hitMulti.covered ? covOnMulti : covOffMulti)
+    const isPerItemTargetMulti = colorByCovMulti && !!coverByLabelMulti?.has(det.label);
+    const color = isPerItemTargetMulti
+      ? (hitMulti?.covered ? covOnMulti : covOffMulti)
       : pickDetColor(det, stepsConfMulti, okColorMulti, ngColorMulti);
     if (det.mask && Array.isArray(det.mask) && det.mask.length > 2) {
       ctx.beginPath();
@@ -4048,7 +4051,7 @@ const drawDetections = (detections) => {
       let arr = coverByLabel.get(st.item_label);
       if (!arr) { arr = []; coverByLabel.set(st.item_label, arr); }
       for (const it of st.items) {
-        if (Array.isArray(it.bbox) && it.bbox.length === 4) arr.push(it);
+        if (it.associated !== false && Array.isArray(it.bbox) && it.bbox.length === 4) arr.push(it);
       }
     }
     if (coverByLabel.size === 0) coverByLabel = null;
@@ -4093,8 +4096,11 @@ const drawDetections = (detections) => {
     // 与 tooltip 文案"任何模式都生效"矛盾, 现翻转优先级让用户配置说了算.)
     // v3.x per_item: color_by_coverage 开启时, item_label 框按覆盖态优先上色.
     const piHit = (colorByCoverage || showItemNumbers) ? perItemHitFor(det, cb) : null;
-    const color = (colorByCoverage && piHit)
-      ? (piHit.covered ? covColorOn : covColorOff)
+    const isPerItemTarget = colorByCoverage && !!coverByLabel?.has(det.label);
+    // per_item 目标只存在两种合法颜色：已关联且已覆盖=绿；其余=红。
+    // 特别是找不到逻辑 ID 的检测框，禁止回退模型/步骤默认绿色。
+    const color = isPerItemTarget
+      ? (piHit?.covered ? covColorOn : covColorOff)
       : pickDetColor(det, stepsConfig, boxColor, ngColor);
 
     // Render polygon mask if available (segmentation model)
