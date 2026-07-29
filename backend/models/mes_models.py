@@ -879,6 +879,31 @@ class PackagingFlowConfig(Base):
     block_completed_order_rescan = Column(Boolean, default=False)
     event_completed_order_rescan = Column(Integer, nullable=True)  # 重扫拦截提示事件
 
+    # v3.45 包装工单同步进工单管理 (默认开): 扫码开工/收尾/中止时把这张单镜像到
+    # work_orders 表 (来源=packaging), 工单管理页可见可管理; 关 = 老行为
+    # (包装单只存自己的运行记录, 工单管理页看不见)
+    sync_work_orders = Column(Boolean, default=True)
+
+    # --- 组⑧ 箱标签扫码授权 + 标签取本箱数量 (v3.45, 全可选默认关 = 存量零差异) ---
+    # 每箱开做前必须扫箱标签 (含首箱): 开 = 每箱进「等扫箱标签」态, 扫到本工单标签才放行开做;
+    # 未扫就检测到开做动作 → 报警 (event_box_not_scanned). 关 = 老行为 (扫工单即自动逐箱开).
+    box_label_scan_required = Column(Boolean, default=False)
+    # 从箱标签复合串取"本箱数量"当本箱滑块目标 (逐箱可变数量, 覆盖工单级每箱数/尾数计划).
+    # 开 = 等扫标签时必须取到数量才放行 (裸条形码/取不出数量 → 报警请重扫二维码);
+    # 关 = 标签只当放行凭证, 目标仍按工单级计划 (每箱数/尾数).
+    label_qty_enabled = Column(Boolean, default=False)
+    label_qty_segment = Column(Integer, default=3)          # 数量在复合串第几段 (1-based, 按 composite_delimiter 拆)
+    label_qty_pattern = Column(String(128), nullable=True)  # 可选: 数量段识别正则 (段序不固定的现场用, 优先于段号)
+    # 本箱已授权后又扫同号标签: ignore=忽略(原同号刷新) / update=用新扫数量更新本箱目标
+    label_rescan_action = Column(String(8), default="ignore")
+    # 未授权箱做完一个检测周期的处置: hold=箱账挂起等人工(补齐/认NG/重做) / book=报警后照常落账
+    unauthorized_cycle_action = Column(String(8), default="hold")
+    # 工单收尾对账: Σ各箱标签数量 vs 工单滑块总数, 不平报警 (只提醒留痕, 不改成绩)
+    label_total_check = Column(Boolean, default=False)
+    event_box_not_scanned = Column(Integer, nullable=True)      # 未扫箱标签就开做
+    event_label_qty_missing = Column(Integer, nullable=True)    # 标签取不出数量 (裸码/段缺/解析失败)
+    event_label_total_mismatch = Column(Integer, nullable=True)  # 收尾对账不平
+
     plugin_data = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

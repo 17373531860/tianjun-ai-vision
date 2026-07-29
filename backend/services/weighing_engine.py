@@ -65,6 +65,7 @@ DEFAULT_WEIGHING_CONFIG = {
 
     # 6.5 前置校验
     "require_operator": True,      # 未选人员 → 拦截 + 报警
+    "operator_from_users": False,  # v3.45 监控页人员改名单下拉 (用户系统启用账号); 默认自由填写
     "require_model": True,         # 未选型号 → 拦截 + 报警
 
     # v3.35 前置选择有效期 (通用策略, 默认 never = 现行为零差异):
@@ -612,13 +613,15 @@ class PipelineStation(WeighingStation):
             return False
         return (max(ws) - min(ws)) <= float(tol)
 
-    def _alarm(self, kind, reason, now, throttle=5.0):
+    def _alarm(self, kind, reason, now, throttle=5.0, remind=False):
+        """remind=True = "过程提醒"档: 借灯/语音/Toast 催工人, 不计数不定格
+        (NG 计数只在离秤结算记一次, 2026-07 萍乡 NG 刷屏整改)。"""
         if throttle > 0:
             last = self._alarm_at.get(kind, 0.0)
             if now - last < throttle:
                 return []
             self._alarm_at[kind] = now
-        return [{"action": "alarm", "kind": kind,
+        return [{"action": "alarm", "kind": kind, "remind": bool(remind),
                  "channel_id": self.channel_id, "reason": reason}]
 
     # ---------- 视觉标签喂入 (引擎 feed_detections 每帧调) ----------
@@ -706,7 +709,7 @@ class PipelineStation(WeighingStation):
             self._zero_due_at = None
 
         # 清零调度/验证先行: 归零确认会把零点基线归位, 必须在新件判定之前
-        events += self._zero_tick(w, ts, t)
+        events += self._zero_tick(w, ts, t, cfg)
         eff = w - self._baseline
 
         if lo <= eff <= hi:
@@ -765,15 +768,28 @@ class PipelineStation(WeighingStation):
         self._fill_timeout_alarmed = False
         self._buf.clear()
 
-    def _zero_tick(self, w, ts, t):
+    def _clear_command_event(self, w, t):
+        """结算后清秤指令的智能选择 (2026-07 萍乡百斯特现场缺陷修复)。
+
+        台秤的置零(Z)有硬件量程限制(通常仅零点附近 ±4% 量程有效): 离秤后秤面
+        显示 -皮重-净重 (如 -5kg), 此时发 Z 会被秤**静默拒绝**, 秤面卡在负值。
+        去皮(T)则任何读数下都有效(把当前毛重设为显示零点)。
+        故读数在零点附近才用 Z (顺带校正真零漂移), 偏离远直接用 T 保证必归零。
+        阈值可配 timing.zero_cmd_range_kg, 默认 0.5kg。
+        """
+        zero_range = float(t.get("zero_cmd_range_kg", 0.5))
+        action = "send_zero" if abs(w) <= zero_range else "send_tare"
+        return {"action": action, "device_id": self.weight_device_id,
+                "channel_id": self.channel_id}
+
+    def _zero_tick(self, w, ts, t, cfg=None):
         """清零调度 (延迟可配) + 归零验证 + 自动重发 + 残留报警。"""
         events = []
         if self._zero_due_at is not None and ts >= self._zero_due_at:
             self._zero_due_at = None
             self._zero_sent_at = ts
             self._zero_tries = 0
-            events.append({"action": "send_zero", "device_id": self.weight_device_id,
-                           "channel_id": self.channel_id})
+            events.append(self._clear_command_event(w, t))
         elif self._zero_sent_at is not None:
             eps = max(0.01, float(t.get("tare_stable_tol_kg", 0.005)) * 2)
             if abs(w) <= eps:
@@ -781,18 +797,42 @@ class PipelineStation(WeighingStation):
                 self._zero_tries = 0
                 self._baseline = 0.0   # 归零确认
             elif w > eps:
-                # 正读数 = 清零已执行且新件已上秤 (快手竞态): 绝不能重发 Z 把件重清掉,
-                # 直接确认零点让去皮判定接管
+                # 正读数的两种成因, 必须区分 (2026-07 萍乡百斯特现场缺陷):
+                #   A. 清零已执行且新件已上秤 (快手竞态) → 零点=0, 件自重=w
+                #   B. 清零被秤拒绝(读数原本为负)且新件已上秤 → 零点=baseline,
+                #      件自重 = w - baseline (如 -4kg 卡住 + 4.5kg 件 = +0.5)
+                # 旧实现盲判 A: B 场景下件自重被吞成 0.5, 低于皮重下限不去皮,
+                # 等水泥加到 ~1.2kg 落进皮重区间才误去皮把已加的水泥吞掉。
+                # 用皮重合法区间做合理性核对: 哪种解释算出的自重合法就信哪种。
                 self._zero_sent_at = None
                 self._zero_tries = 0
-                self._baseline = 0.0
+                if cfg is not None:
+                    lo, hi = self._tare_range(cfg)
+                    a_ok = lo <= w <= hi
+                    b_ok = lo <= (w - self._baseline) <= hi
+                    if b_ok and not a_ok:
+                        pass               # 信 B: 保留零点基线, 去皮判定按差值折算
+                    else:
+                        self._baseline = 0.0   # 信 A (含两可/两不可: 维持旧行为)
+                else:
+                    self._baseline = 0.0
             elif ts - self._zero_sent_at >= float(t.get("zero_verify_ms", 2000)) / 1000.0:
-                if self._zero_tries < int(t.get("zero_retry", 1)):
+                # 重发前守门: 新件疑似已上秤 (读数较零点基线明显抬升) 时绝不能再发
+                # 清秤指令 —— 此刻 T 会把件重吞进秤内皮重寄存器, 件从此"隐形"。
+                # 放弃清秤, 保留基线折算, 让去皮判定接管。
+                piece_maybe_on = False
+                if cfg is not None:
+                    lo, _hi = self._tare_range(cfg)
+                    piece_maybe_on = (w - self._baseline) >= lo * 0.5
+                if piece_maybe_on:
+                    self._zero_sent_at = None
+                    self._zero_tries = 0
+                elif self._zero_tries < int(t.get("zero_retry", 1)):
                     self._zero_tries += 1
                     self._zero_sent_at = ts
-                    events.append({"action": "send_zero",
-                                   "device_id": self.weight_device_id,
-                                   "channel_id": self.channel_id})
+                    # 重发升级: 首发若是 Z 且没归零, 大概率是量程外被拒 → 按当前
+                    # 读数重选指令 (偏离零点远则改发 T)
+                    events.append(self._clear_command_event(w, t))
                 else:
                     events += self._alarm(
                         "residue", f"清零后读数 {w:.3f}kg 未归零, 秤面疑有残留", ts)
@@ -833,20 +873,25 @@ class PipelineStation(WeighingStation):
             if spec is not None:
                 verdict = judge_amount(net, spec)
                 std = float(spec.get("standard", 0))
-                if verdict == "over" and self._over_alarmed_net != net:
+                # 投料中缺料/超量 = "过程提醒"档: 周期性催工人 (默认每 10s 一次,
+                # remind_repeat_sec 可配), 只借灯/语音/Toast, 不计 NG 不定格 ——
+                # NG 计数由该件离秤结算记一次。(2026-07 萍乡现场: 秤读数 ±3g 微抖
+                # 让旧"值变才重报"门形同虚设, 提醒借完整 NG 事件面计数,
+                # 30 秒把 NG 计数刷了 +16)
+                remind_sec = float(t.get("remind_repeat_sec", 10.0))
+                if verdict == "over":
                     self._over_alarmed_net = net
                     events += self._alarm(
-                        "over", _verdict_reason("over", material, net, std), ts, throttle=0)
+                        "over", _verdict_reason("over", material, net, std), ts,
+                        throttle=remind_sec, remind=True)
                 elif verdict == "shortage":
                     if self._shortage_since is None:
                         self._shortage_since = ts
-                    if (ts - self._shortage_since
-                            >= float(t.get("shortage_alarm_sec", 3.0))
-                            and self._shortage_alarmed_net != net):
+                    if ts - self._shortage_since >= float(t.get("shortage_alarm_sec", 3.0)):
                         self._shortage_alarmed_net = net
                         events += self._alarm(
                             "shortage", _verdict_reason("shortage", material, net, std),
-                            ts, throttle=0)
+                            ts, throttle=remind_sec, remind=True)
                 else:
                     self._shortage_since = None
         elif w < min_w:
@@ -1208,6 +1253,13 @@ class WeighingEngine:
         self._guards = {}
         # 前置选择失效报警节流: {channel_id: ts}
         self._ctx_expire_alarm_at = {}
+        # 网关推送后台线程 (2026-07 萍乡百斯特现行日志抓到: 达梦不可达时
+        # dispatch 同步重试 3×5s, 把推理线程卡死 15s → 画面冻结 + 收尾步骤
+        # 耗时被灌成 15s 误判 NG。检测/称重热路径绝不等网络 — 不变量 15,
+        # 推送一律出让到本线程)。队列有界, 满则挤掉最旧 (网关自有通讯日志兜底)
+        self._push_q = deque(maxlen=256)
+        self._push_evt = threading.Event()
+        self._push_worker = None
 
     # ---------- 通道登记 (set_project_config 时调) ----------
     def set_channel_config(self, channel_id: int, weighing_cfg: Optional[dict]):
@@ -1458,6 +1510,8 @@ class WeighingEngine:
         snap["model_specs"] = (models.get(mname) or {}) if mname else {}
         # v3.35 融合模式: 驱动方式 + 各步骤门控状态 (armed=等秤中 / passed=已放行)
         snap["drive_mode"] = cfg.get("drive_mode", "scale")
+        # v3.45 作业员从用户名单选择 (可选, 默认关=自由填写)
+        snap["operator_from_users"] = bool(cfg.get("operator_from_users"))
         snap["gates"] = {lbl: g.status
                          for lbl, g in (self._gates.get(channel_id) or {}).items()}
         return snap
@@ -1604,13 +1658,22 @@ class WeighingEngine:
         channel_id = ev.get("channel_id", 0) or 0
         event_id = self._alarm_event_for(cfg, kind)
         reason = ev.get("reason", "")
+        # v3.45 "过程提醒"档: 投料中缺料/超量的周期性催料只借灯/语音/Toast,
+        # 不计数不定格 (NG 计数由离秤结算记一次)
+        remind_only = bool(ev.get("remind"))
         fired = False
         try:
             from backend.api.channel_manager import get_channel_manager
             mgr = get_channel_manager().get(channel_id)
             if hasattr(mgr, "fire_external_event_response"):
-                fired = bool(mgr.fire_external_event_response(
-                    event_id, reason, source="weighing"))
+                try:
+                    fired = bool(mgr.fire_external_event_response(
+                        event_id, reason, source="weighing",
+                        remind_only=remind_only))
+                except TypeError:
+                    # 旧版主程序无 remind_only 形参 (热补丁混装场景) → 老签名兜底
+                    fired = bool(mgr.fire_external_event_response(
+                        event_id, reason, source="weighing"))
         except Exception as e:
             logger.debug("[Weighing] fire_external_event_response 失败, 兜底直接打灯: %s", e)
         if not fired:
@@ -1689,10 +1752,42 @@ class WeighingEngine:
         except Exception as e:
             logger.debug("[Weighing] 合格事件联动失败(隔离): %s", e)
 
+    # ---------- 网关推送后台线程 (热路径绝不等网络) ----------
+    def _gateway_push_async(self, event_type, payload, channel_id):
+        """把网关推送入队即返回, 由后台守护线程串行投递。
+
+        调用方是推理线程 (feed_detections→finalize) 或外设数据线程 (feed_weight),
+        网关 dispatch 内含 HTTP/数据库直连的超时与重试 (最坏 15s+), 绝不允许在
+        这两条热路径上同步等待 (2026-07 萍乡百斯特现场日志抓到 15s 画面冻结现行)。
+        """
+        with self._lock:
+            if self._push_worker is None or not self._push_worker.is_alive():
+                self._push_worker = threading.Thread(
+                    target=self._push_loop, name="weighing-gateway-push", daemon=True)
+                self._push_worker.start()
+        if len(self._push_q) == self._push_q.maxlen:
+            logger.warning("[Weighing] 网关推送队列已满, 挤掉最旧一条 (外部系统长时间不可达?)")
+        self._push_q.append((event_type, payload, channel_id))
+        self._push_evt.set()
+
+    def _push_loop(self):
+        while True:
+            self._push_evt.wait(timeout=5.0)
+            self._push_evt.clear()
+            while self._push_q:
+                event_type, payload, channel_id = self._push_q.popleft()
+                try:
+                    from backend.services.mes_gateway import get_mes_gateway
+                    get_mes_gateway().dispatch(event_type, payload,
+                                               channel_id=channel_id)
+                except Exception as e:
+                    logger.warning("[Weighing] 后台网关推送失败(隔离): %s", e)
+
     def _do_finalize(self, channel_id, entry, status):
         """正式结案 (方案 T3): 收尾标签到达 (status=label) 或超时 (status=timeout)。
 
-        此刻整件事实闭合 → 推 MES/达梦。记录本体在 T2 已落库, 这里补推送。
+        此刻整件事实闭合 → 推 MES/达梦 (经后台推送线程, 不阻塞调用方)。
+        记录本体在 T2 已落库, 这里补推送。
         """
         if not entry:
             return
@@ -1707,15 +1802,10 @@ class WeighingEngine:
                 shift = vsm._get_current_shift()
         except Exception:
             pass
-        try:
-            from backend.services.mes_gateway import get_mes_gateway
-            gw = get_mes_gateway()
-            payload = {k: v for k, v in entry.items() if k != "enqueued_at"}
-            payload["finalize_status"] = "confirmed" if status == "label" else "unconfirmed"
-            payload["shift"] = shift
-            gw.dispatch("weighing_product_done", payload, channel_id=channel_id or 0)
-        except Exception as e:
-            logger.debug("[Weighing] finalize 上传失败(隔离): %s", e)
+        payload = {k: v for k, v in entry.items() if k != "enqueued_at"}
+        payload["finalize_status"] = "confirmed" if status == "label" else "unconfirmed"
+        payload["shift"] = shift
+        self._gateway_push_async("weighing_product_done", payload, channel_id or 0)
 
     def _do_product_done(self, ev):
         """一件全部料别完成: 上传 (6.1)。后续阶段完善 MES payload/数据页。"""
@@ -1731,19 +1821,14 @@ class WeighingEngine:
                 shift = vsm._get_current_shift()
         except Exception:
             pass
-        try:
-            from backend.services.mes_gateway import get_mes_gateway
-            gw = get_mes_gateway()
-            gw.dispatch("weighing_product_done", {
-                "sn": ev.get("sn"),
-                "model": ev.get("model"),
-                "operator": ev.get("operator"),
-                "channel_id": ev.get("channel_id"),
-                "shift": shift,
-                "results": ev.get("results", []),
-            }, channel_id=ev.get("channel_id") or 0)
-        except Exception as e:
-            logger.debug("[Weighing] product_done 上传失败(隔离): %s", e)
+        self._gateway_push_async("weighing_product_done", {
+            "sn": ev.get("sn"),
+            "model": ev.get("model"),
+            "operator": ev.get("operator"),
+            "channel_id": ev.get("channel_id"),
+            "shift": shift,
+            "results": ev.get("results", []),
+        }, ev.get("channel_id") or 0)
 
 
 def _current_login_username():

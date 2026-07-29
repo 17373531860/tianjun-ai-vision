@@ -85,7 +85,7 @@
               <el-option value="ack" label="定格弹窗 — 可补步骤判合格" />
               <el-option v-if="isCustomSequential" value="hold" label="挂起等补做 — 补齐自动判合格" />
             </el-select>
-            <template v-if="ngh.missing_step === 'hold'">
+            <template v-if="ngh.missing_step === 'hold' || ngh.short_count === 'hold'">
               <span class="text-gray-400 text-xs">超时(秒)</span>
               <el-input-number v-model="ngh.hold_timeout_s" size="small" :min="0" :step="10" :precision="0" />
               <span class="text-gray-400 text-xs">提示事件</span>
@@ -108,8 +108,13 @@
             <el-select v-model="ngh.short_count" size="small" class="!w-56">
               <el-option value="ng" label="直接判NG" />
               <el-option value="ack" label="定格弹窗 — 可补数量判合格" />
+              <el-option value="hold" label="挂起等补数量 — 断点重做收尾步" />
             </el-select>
             <span class="text-xs text-gray-500">步骤都对但箱内数量不足目标（如少装滑块）</span>
+            <el-tooltip v-if="ngh.short_count === 'hold'" placement="top" effect="dark"
+              content="不判NG不清账：保留已完成步骤和已进箱数量，报警提示差多少；工人补足数量、重做收尾步骤（数量门步骤，如放油嘴包/封箱）后自动判合格。超时未补按缺数量NG落账（共用下方缺步挂起的超时与提示事件）。">
+              <span class="text-gray-500 cursor-help text-xs">ⓘ</span>
+            </el-tooltip>
           </div>
 
           <!-- 场景 4: 数量门 (事前拦截, 混合跟踪包装专用) -->
@@ -133,6 +138,21 @@
               content="箱内数量没装够时，这些收尾步骤出现直接拒收 + 当场报警，杜绝少装就收尾；补够后再出现自然放行，周期不打断。">
               <span class="text-gray-500 cursor-help text-xs">ⓘ</span>
             </el-tooltip>
+          </div>
+
+          <!-- 场景 4b: 数量门升级放行 (v3.44.4 短拦长放) -->
+          <div v-if="isCustomSequential && ngh.gate_enabled"
+               class="flex items-center gap-3 flex-wrap">
+            <span class="text-gray-400 w-28 shrink-0">拦下时升级放行</span>
+            <el-select v-model="ngh.gate_escalate_steps" multiple size="small" class="!w-64"
+              placeholder="不升级（全部静默拦下）" clearable>
+              <el-option v-for="lb in ngh.gate_steps" :key="lb" :label="lb" :value="lb" />
+            </el-select>
+            <el-tooltip placement="top" effect="dark"
+              content="这里选的收尾步骤被数量门拦下时不再静默吞掉：报警提示后放行进周期，结算后自动挂起（提示缺多少数量、重做哪些步骤），补齐自动判合格。适合识别门槛高、确认成立基本就是工人真动作的步骤（如封箱）；误检高发的步骤（如放油嘴包）不要选，保持静默拦。">
+              <span class="text-gray-500 cursor-help text-xs">ⓘ</span>
+            </el-tooltip>
+            <span class="text-xs text-gray-500">治「真漏一盘就封箱 → 静默拦死无提示」；只选真动作步骤</span>
           </div>
 
           <!-- 跨 tab 联动明示: 定格弹窗由事件设置的 NG 事件「需人工确认」决定 -->
@@ -263,6 +283,17 @@
                     <el-input-number v-model="project.custom_mix_container_item_target" :min="0" :step="1" size="small" class="!w-28" />
                     <span class="text-gray-500">进箱物品总数正好等于此值才合格（少了/多了均 NG）；不卡每盘数量与容器数</span>
                   </div>
+                  <div v-if="project.custom_mix_container_count_mode === 'items_total'" class="flex items-center gap-2 text-xs flex-wrap">
+                    <span class="text-gray-400 shrink-0">每盘数量校验</span>
+                    <el-switch v-model="project.custom_mix_container_per_tray_guard" size="small" />
+                    <span class="text-gray-500">错盘当场拦截：进箱那一刻核这盘数量是否等于每盘期望（步骤设置 → 物品的期望数量），不对则该盘不记账并报警（提示事件勾「需人工确认」即定格，工人取出错盘、确认后重装）；尾盘自动按整箱余数核，只算总数对得上</span>
+                  </div>
+                  <!-- v3.44.0e 每盘峰值封顶: 治模型偶发重复框把一盘 24 数成 25/26 且峰值降不回来 -->
+                  <div class="flex items-center gap-2 text-xs flex-wrap">
+                    <span class="text-gray-400 shrink-0">每盘峰值封顶</span>
+                    <el-input-number v-model="project.custom_mix_container_peak_cap" :min="0" :step="1" size="small" class="!w-28" />
+                    <span class="text-gray-500">0 = 关闭。防模型偶发重复框把一盘数成 25/26 后峰值卡住降不回来：设为每盘期望数（如 24）后单盘峰值最多记到该值；只封上限，少装照常判定</span>
+                  </div>
                   <!-- 进箱确认方式：消失满帧 / 标签动作，可二选一或组合(OR/AND) -->
                   <div class="flex items-start gap-2 text-xs pt-2 border-t border-slate-700">
                     <span class="text-gray-400 shrink-0 mt-1">进箱确认方式</span>
@@ -289,6 +320,12 @@
                         <span class="text-gray-400 shrink-0">进箱最小间隔(秒)</span>
                         <el-input-number v-model="project.custom_mix_container_action_cooldown_s" :min="0" :max="60" :step="0.5" :precision="1" size="small" class="!w-24" />
                         <span class="text-gray-500">不应期：距上次进箱不足此间隔的动作按同一次动作的余波吸收，防断检把一次动作拆成两次重复记账；快节奏连放请把间隔调小于两盘真实间隔；0 = 关闭</span>
+                      </div>
+                      <!-- v3.44.0e 动作前稳定计数快照: 连放场景堆顶检测框无缝接上下一盘、身份永不消失时的记账方式 -->
+                      <div v-if="project.custom_mix_container_confirm_by_action" class="flex items-center gap-2 flex-wrap">
+                        <span class="text-gray-400 shrink-0">动作前稳定计数(帧)</span>
+                        <el-input-number v-model="project.custom_mix_container_stable_min_frames" :min="0" :step="1" size="small" class="!w-24" />
+                        <span class="text-gray-500">0 = 关闭。开启后按「进箱动作成立瞬间、手接触托盘之前」连续稳定满此帧数的计数入账，与工人快慢解耦，专治连放时几盘合并成一盘/在途遮挡少记；建议 6 帧</span>
                       </div>
                       <div v-if="project.custom_mix_container_confirm_by_frames && project.custom_mix_container_confirm_by_action"
                         class="flex items-center gap-2">

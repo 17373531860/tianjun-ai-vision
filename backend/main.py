@@ -622,7 +622,8 @@ def auto_restore_video_sources():
                         pwd = ch_cfg.get("hcnet_password", "")
                         ch_no = ch_cfg.get("hcnet_channel", 1)
                         stream = ch_cfg.get("hcnet_stream_type", 1)
-                        mgr.start_hcnetsdk(ip, port, user, pwd, ch_no, stream, 25)
+                        hc_fps = ch_cfg.get("hcnet_fps", 25)
+                        mgr.start_hcnetsdk(ip, port, user, pwd, ch_no, stream, hc_fps)
                         print(f"[启动] ch{ch_id} 自动恢复海康SDK: {ip}")
                 elif src_type == "video":
                     vf = ch_cfg.get("video_file", "")

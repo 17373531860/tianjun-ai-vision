@@ -509,6 +509,20 @@
               <td class="p-2 font-mono text-cyan-400">
                 {{ step.displayLabel || step.label }}
                 <span v-if="step.displayLabel && step.displayLabel !== step.label" class="text-gray-500 ml-1">({{ step.label }})</span>
+                <el-tooltip v-if="containerRoleOf(step.label)" placement="top">
+                  <template #content>
+                    <div style="max-width: 340px; line-height: 1.5">
+                      该标签已被「托盘容器」机制接管（角色：{{ containerRoleOf(step.label) }}）。<br/>
+                      本表的最少帧数 / 最短·最大持续 / 消失等待 / 检测类型等参数<b>对它不生效</b>，
+                      对应门槛请到「逻辑设置 → 混合校验 · 托盘容器 / 进箱确认」配置
+                      （如动作最少帧数、消失确认帧、动作不应期）。<br/>
+                      「标签与检测属性」表里的置信度阈值与步骤ROI 照常生效。
+                    </div>
+                  </template>
+                  <el-tag size="small" type="warning" effect="plain" class="!h-5 !leading-5 ml-1">
+                    {{ containerRoleOf(step.label) }} · 参数在逻辑设置
+                  </el-tag>
+                </el-tooltip>
               </td>
               <td v-if="hasDurationsSlot" class="p-2">
                 <TjSlot name="project.step-cell.durations" :step="step" :project="project">
@@ -1201,6 +1215,17 @@ const stepBehaviorRows = computed(() => {
   const steps = props.project?.steps_config || [];
   return steps.filter(s => s.enabled && !(isCustomMixed.value && s.detect_role === 'item'));
 });
+
+// v3.44.4: 容器机制接管的标签 (容器本体/进箱动作) — 表B步骤级参数对它们不生效,
+// 行内挂警示标指路逻辑设置, 治"改了最少帧数没反应"的现场困惑 (上银 7-27)
+const containerRoleOf = (label) => {
+  const p = props.project;
+  if (!p || p.logic_mode !== 'custom' || p.custom_mixed_with !== 'tracking'
+      || !p.custom_mix_container_enabled || !label) return null;
+  if (label === p.custom_mix_container_label) return '容器';
+  if (label === p.custom_mix_container_action_label) return '进箱动作';
+  return null;
+};
 
 // 表C行：混合模式下角色为"物品"的已启用标签
 const mixItemRows = computed(() => {

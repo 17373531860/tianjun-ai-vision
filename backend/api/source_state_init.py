@@ -132,10 +132,12 @@ def _init_step_state(h):
     h._closing_gate_enabled = False
     h._closing_gate_steps = set()
     h._closing_gate_event_id = None
+    h._closing_gate_escalate_steps = set()  # v3.44.4 短拦长放: 被门拦时报警放行的步骤
     h._settle_hold_enabled = False
     h._settle_hold_timeout_s = 120.0
     h._settle_hold_event_id = None
-    h._settle_hold = None  # 挂起态: {'missing':[], 'expected':[], 'since':ts}
+    h._settle_hold = None  # 挂起态: {'missing':[], 'expected':[], 'since':ts[, 'need_total','ng_reason']}
+    h._short_count_hold = False  # v3.44.1 少装挂起 (数量不足不判NG, 断点重做收尾步骤)
     h.step_conf_thresholds = {}
     # v3.10+ 步骤级 box 尺寸过滤: {label: (max_w, max_h)} 归一化比例
     # 0 / 缺省 = 关闭过滤; 用途见 source_detect_runners_mixin._passes_box_size_limit
@@ -238,6 +240,9 @@ def _init_event_and_cycle_state(h):
     h._pending_ack_event_name = None
     h._pending_ack_timeout_sec = 0
     h._pending_ack_reason = None
+    # v3.44.4: 已结算落账的 NG 定格, 确认释放时强制清运行时 (即使配了保留周期) —
+    # 见 _finalize_settle_hold_ng / _ack_release_keep_cycle
+    h._ack_clear_runtime_after = False
 
     # v3.23 NG 补做 (缺步骤延迟落账):
     #   缺步骤 NG 且项目开了 _ng_remediation.allow_step 时, 不立刻 end_cycle / 计数 /

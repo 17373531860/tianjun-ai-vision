@@ -56,8 +56,8 @@
           <template v-else-if="key === 'product_name'">{{ row.product_name }}</template>
           <template v-else-if="key === 'product_code'">{{ row.product_code }}</template>
           <template v-else-if="key === 'source'">
-            <el-tag :type="row.source === 'external' ? 'warning' : 'info'" size="small">
-              {{ row.source === 'external' ? '外部' : '手动' }}
+            <el-tag :type="row.source === 'external' ? 'warning' : (row.source === 'packaging' ? 'success' : 'info')" size="small">
+              {{ row.source === 'external' ? '外部' : (row.source === 'packaging' ? '包装扫码' : '手动') }}
             </el-tag>
           </template>
           <template v-else-if="key === 'binding'">

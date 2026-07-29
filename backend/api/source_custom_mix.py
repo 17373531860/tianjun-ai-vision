@@ -74,9 +74,14 @@ class _ContainerAccumulator:
                  confirm_by_frames: bool = True, confirm_by_action: bool = False,
                  action_label: str = '', confirm_combine: str = 'or',
                  action_min_frames: int = 3, action_gone_frames: int = 8,
-                 action_cooldown_s: float = 2.0):
+                 action_cooldown_s: float = 2.0, per_tray_guard: bool = False,
+                 peak_cap: int = 0, stable_min_frames: int = 0):
         self.container_label = container_label
         self.item_expected = {k: int(v) for k, v in (item_expected or {}).items()}
+        # v3.44.4 每盘峰值封顶 (可配, 默认 0=关): 模型偶发重复框瞬时数出 25/26,
+        # 峰值取存续期最大值会咬死这一帧 → 整箱 97/96 被误判"超出"NG (7-23 视频
+        # 实测)。盘子物理槽位有上限, 配了就按此值封每盘每标签的峰值。
+        self.peak_cap = max(0, int(peak_cap or 0))
         self.box_count = int(box_count or 0)
         self.gone_frames = max(1, int(gone_frames or 30))
         self.iou_match = float(iou_match)
@@ -97,7 +102,27 @@ class _ContainerAccumulator:
         # (客户机 TRT 推理下放托盘类置信度贴阈值抖动, 断检 8 帧≈0.26s 极易踩中)。
         # ⚠️ 纯时间窗: 现场若快节奏连放 (两盘间隔小于不应期) 需在 UI 把间隔调小。
         self.action_cooldown_s = max(0.0, float(action_cooldown_s or 0.0))
+        # v3.44.1 每盘数量校验 (仅 items_total 模式): 进箱那一刻核这盘数量 ==
+        # 每盘期望 (尾盘 = 距整箱目标的余数, "只算总数对不对得上"), 不对 → 这盘
+        # 不记账 + 抛错盘警报 (宿主定格报警, 工人取出该盘确认后重装)。默认关。
+        self.per_tray_guard = bool(per_tray_guard)
+        # v3.44.5 "动作前稳定计数"快照记账 (可配, 默认 0=关 → 零差异):
+        # 训练端证据 (2026-07-28 交付): 盘从堆上拿走后检测框无缝接上露出的下一盘,
+        # 身份永不消失 → 靠"身份消失"驱动的记账在连放场景必然合并/漏账; 而
+        # 拿起前暂放区计数连续数秒纹丝不动 (16 盘验证 10 全对 4 差±1)。
+        # 打开后: 计数值连续同值满此帧数 = 该身份的"稳定计数"; 动作成立瞬间
+        # 快照所有在位身份的稳定计数; 动作脉冲结算时主位有本次动作的新鲜快照
+        # 即刻按快照记账 (不再等消失满帧), 记账后身份仍在场则原地清零重开新账
+        # (下一盘继续用同一身份攒稳定值)。与工人速度解耦: 快慢只影响稳定段长短,
+        # 不再依赖"两次动作之间标签必须断开/身份必须消失"。
+        self.stable_min_frames = max(0, int(stable_min_frames or 0))
         self.reset()
+
+    # 稳定值回看窗口 (秒): 稳定值取近 N 秒内有效窗口众数的最大值 — 免疫收尾
+    # 伸手"骤降尾巴", 同时让上一盘进箱余像 (内袋盖住前箱内短暂可见) 自动过期。
+    # 4s 由 7-27 视频取证定标: 盘的完整视角常只在账期早段 (紧凑连放时工人手
+    # 悬停变长, 后段永远缺 1 个), 2.5s 会把它剪掉; 余像距下次动作 ≥4.9s 仍过期
+    STABLE_LOOKBACK_S = 4.0
 
     def reset(self):
         self._trays = {}        # tid -> {bbox, first_seen, last_seen, gone, peak:{label:cnt}}
@@ -108,10 +133,13 @@ class _ContainerAccumulator:
         # ---- 放托盘动作状态机 + 进箱确认标志 ----
         self._action_seen = 0          # 放托盘标签连续在场帧
         self._action_gone = 0          # 动作中标签连续消失帧
-        self._action_in_progress = False   # 动作进行中 = 屏蔽窗口(锁主托盘 + 不数下一盘滑块)
+        self._action_in_progress = False   # 动作进行中 = 屏蔽窗口(锁主托盘, 旧主盘停止计数)
+        self._action_started_ts = None     # 本次动作成立时刻 (v3.44.2 识别"动作期新生盘"用)
         self._action_done_pending = False  # 一次放托盘动作已完成、待与进箱判定配对
         self._primary_frames_ok = False    # 当前主托盘是否已"消失满帧"(AND 组合用标志位记忆)
         self._last_action_settle_ts = None  # 上一次动作确认进箱的时刻 (不应期基准; None=还没结过)
+        self._settle_defer_frames = 0  # v3.44.3 动作结账"峰值就绪等待"已挂帧数
+        self.wrong_tray_alert = None   # 错盘警报 (宿主每帧消费): {'index','count','expected'}
 
     def _update_action_fsm(self, action_present: bool, current_time: float = 0.0):
         """放托盘动作状态机: 标签连续在场满 action_min_frames 帧 → 动作成立(进行中,
@@ -127,6 +155,40 @@ class _ContainerAccumulator:
             self._action_seen += 1
             self._action_gone = 0
             if self._action_seen >= self.action_min_frames:
+                if not self._action_in_progress:
+                    self._action_started_ts = current_time
+                    # v3.44.5 动作成立瞬间: 快照各身份的稳定计数 = 本次动作要
+                    # 放的这盘"手接触前"的真实数量 (训练端验证方案)。
+                    # 不要求身份仍在场 — 手先拿盘、动作标签滞后半秒是常态
+                    # (7-27 箱2取证: 持真值 23 的身份此刻 gone=9), 新鲜度由
+                    # 回看窗口重剪保证: 停更身份 (箱内余像) 的陈旧稳定值进不来
+                    if self.stable_min_frames > 0:
+                        for _t in self._trays.values():
+                            _b = _t['bbox']
+                            _ccx = _b['x'] + _b['w'] / 2.0
+                            _ccy = _b['y'] + _b['h'] / 2.0
+                            _snap = {}
+                            for _lbl, _ml in (_t.get('modes') or {}).items():
+                                _recent = [
+                                    e[1] for e in _ml
+                                    if e[0] >= current_time - self.STABLE_LOOKBACK_S
+                                    and abs(e[2] - _ccx) <= _b['w'] * 0.5
+                                    and abs(e[3] - _ccy) <= _b['h'] * 0.5]
+                                if _recent:
+                                    _snap[_lbl] = max(_recent)
+                            if _snap:
+                                _t['pre_action_stable'] = _snap
+                                _t['pre_action_ts'] = current_time
+                    try:
+                        from backend.core import debug_center
+                        if debug_center.is_on("backend.packaging"):
+                            _ss = {tid: dict(t.get('pre_action_stable') or {})
+                                   for tid, t in self._trays.items()
+                                   if t.get('pre_action_ts') == current_time}
+                            debug_center.dbg("backend.packaging", "放托盘动作成立",
+                                             f"t={current_time:.2f} 稳定快照={_ss}")
+                    except Exception:
+                        pass
                 self._action_in_progress = True
         else:
             if self._action_in_progress:
@@ -160,11 +222,44 @@ class _ContainerAccumulator:
                 # 还没成立就消失 = 误检闪现, 不算一次动作
                 self._action_seen = 0
 
+    def _fresh_snapshot(self, t: dict) -> dict:
+        """v3.44.5 返回该身份"本次动作"的稳定计数快照 (无/过期 → 空 dict)。"""
+        if self.stable_min_frames <= 0 or self._action_started_ts is None:
+            return {}
+        if t.get('pre_action_ts') != self._action_started_ts:
+            return {}
+        return dict(t.get('pre_action_stable') or {})
+
+    def _best_fresh_snapshot_tid(self):
+        """v3.44.5 全场找"持有本次动作新鲜快照"的身份 (None=没有)。
+
+        紧凑连放时主位常被在途幽灵 (手里的盘, 只看到 3-4 个) 抢走, 而动作成立
+        瞬间真正核准过数量的备盘堆身份躺在非主位 — 脉冲记账必须认快照不认主位。
+        多个持快照者取快照总数最大 (遮挡只会看少不会看多), 平手取最近在场。
+        """
+        best = None
+        for tid, t in self._trays.items():
+            snap = self._fresh_snapshot(t)
+            if not snap:
+                continue
+            if (best is None
+                    or sum(snap.values()) > sum(self._fresh_snapshot(self._trays[best]).values())
+                    or (sum(snap.values()) == sum(self._fresh_snapshot(self._trays[best]).values())
+                        and t['last_seen'] > self._trays[best]['last_seen'])):
+                best = tid
+        return best
+
     def _should_settle_primary(self) -> bool:
         """当前主托盘是否满足进箱条件 (按配置的确认方式组合)。"""
         fb, ab = self.confirm_by_frames, self.confirm_by_action
         if fb and ab:
             if self.confirm_combine == 'and':
+                # v3.44.5 场上任一身份有本次动作的稳定快照 = "手接触前数量已
+                # 核准", 动作本身就是离场证据, 不再苛求身份消失满帧 (连放场景
+                # 下堆顶检测框无缝接上下一盘, 身份永不消失, 死等=合并/漏账)
+                if self._action_done_pending \
+                        and self._best_fresh_snapshot_tid() is not None:
+                    return True
                 return self._primary_frames_ok and self._action_done_pending
             return self._primary_frames_ok or self._action_done_pending
         if ab:
@@ -174,6 +269,27 @@ class _ContainerAccumulator:
     def update(self, tray_dets: list, item_objs: list, current_time: float,
                action_present: bool = False):
         from backend.api.source_per_item_mixin import _bbox_iou
+
+        # -1) 同标签高重叠去重: 模型对密排滑块会输出持续 1s+ 的重复框
+        # (7-27 取证: 22 个滑块检出 25 个, 重复对 IoU 0.4-0.6, 窗口众数滤不掉
+        # 持续性重复) → 计数前按 IoU>0.45 去重, 置信度高者优先保留
+        if item_objs and len(item_objs) > 1:
+            _srt = sorted(item_objs,
+                          key=lambda o: -(o.get('confidence') or 0.0))
+            _kept = []
+            for _o in _srt:
+                _ob = _o.get('bbox') or {}
+                _obt = (_ob.get('x', 0), _ob.get('y', 0),
+                        _ob.get('w', 0), _ob.get('h', 0))
+                _dup = False
+                for _k, _kbt in _kept:
+                    if (_k.get('class_name') == _o.get('class_name')
+                            and _bbox_iou(_obt, _kbt) > 0.45):
+                        _dup = True
+                        break
+                if not _dup:
+                    _kept.append((_o, _obt))
+            item_objs = [o for o, _ in _kept]
 
         # 0) 放托盘动作状态机 (仅 confirm_by_action 生效): 驱动屏蔽窗口 + 进箱脉冲
         self._update_action_fsm(action_present, current_time)
@@ -185,6 +301,19 @@ class _ContainerAccumulator:
             best_tid, best_iou = None, self.iou_match
             for tid, t in self._trays.items():
                 if tid in matched:
+                    continue
+                # v3.44.1 换盘围栏 (仅动作确认模式): 已离场超过消失确认帧数的托盘
+                # 身份 = "被拿走、在途待记账"的旧盘, 不许再吸附新检测框 — 治取料位
+                # 上层盘被拿走后、下层盘在同一位置露出被 IoU 关联到旧身份, 峰值只增
+                # 不减把下层盘的 19 抹成上层盘的 24 (SY3 现场 2026-07-22)。
+                # 旧盘身份保持可记账(它才是动作放进箱的那盘), 新露出的盘另立新身份。
+                # v3.44.2 动作进行中围栏加速: 门槛降为动作消失帧 (与在途定格同门)。
+                # 放盘动作期手部遮挡使旧盘断检 <20 帧就露新盘 (7-16 数据集实测 ~0.6s),
+                # 围栏按 20 帧永远追不上 → 新盘被粘回旧身份、动作期计数修正落空。
+                # 动作期的同位新框几乎必是新盘, 8 帧足够排除纯闪断。
+                _fence_gate = (self.action_gone_frames if self._action_in_progress
+                               else self.gone_frames)
+                if self.confirm_by_action and t['gone'] >= _fence_gate:
                     continue
                 tb = t['bbox']
                 iou = _bbox_iou(box, (tb['x'], tb['y'], tb['w'], tb['h']))
@@ -202,6 +331,11 @@ class _ContainerAccumulator:
                 self._trays[self._seq] = {
                     'bbox': bbox, 'first_seen': current_time,
                     'last_seen': current_time, 'gone': 0, 'peak': {},
+                    # v3.44.5 稳定计数跟踪 (stable_min_frames>0 时维护):
+                    # hist = 滑窗计数史; stable = 账期内最大"稳定窗口众数";
+                    # pre_action_* = 动作成立瞬间的稳定计数快照 (记账值)
+                    'hist': {}, 'modes': {}, 'stable': {},
+                    'pre_action_stable': {}, 'pre_action_ts': None,
                 }
                 matched.add(self._seq)
 
@@ -217,24 +351,57 @@ class _ContainerAccumulator:
         # 动作进行中(屏蔽窗口)绝不重选主托盘 — 锁定当前盘, 杜绝放托盘期间被下一盘抢主。
         if (self._primary is None or self._primary not in self._trays) \
                 and not self._action_in_progress:
-            in_place = [(t['first_seen'], tid)
+            # v3.44.4 有峰值的真盘优先 (7-23 视频箱1取证): 箱内已放的盘会被持续
+            # 检出, 生成"空峰值、出生早"的幽灵身份; 纯 FIFO 会让幽灵抢主位, 真正
+            # 看满 24 个滑块的备盘观察者永远排不上, 配对链整个错位 (末盘丢账
+            # 72/96 误NG)。峰值非空 = 真装着货的盘, 优先; 同档内仍按 FIFO。
+            in_place = [(not t['peak'], t['first_seen'], tid)
                         for tid, t in self._trays.items() if t['gone'] == 0]
             if in_place:
-                self._primary = min(in_place)[1]
+                self._primary = min(in_place)[2]
             elif self._trays:
                 self._primary = min(self._trays.items(),
-                                    key=lambda kv: (kv[1]['gone'], kv[1]['first_seen']))[0]
+                                    key=lambda kv: (not kv[1]['peak'],
+                                                    kv[1]['gone'],
+                                                    kv[1]['first_seen']))[0]
             else:
                 self._primary = None
 
-        # 4) 主托盘内物品计数 (中心包含), 刷新 peak (峰值保持, 抗瞬时漏检)
-        #    动作进行中(屏蔽窗口): 不数任何滑块 — 当前主托盘 peak 已定格, 下一盘滑块
-        #    即便露出来也一律不计, 防放托盘期间交叉串算。
+        # 4) 托盘内物品计数 (中心包含), 刷新 peak (峰值保持, 抗瞬时漏检)
         cur = {}
-        if self._primary is not None and not self._action_in_progress:
-            pb = self._trays[self._primary]['bbox']
+        # v3.44.1 在途定格 (仅动作确认模式): 主托盘真离场(超过动作消失帧的容忍) =
+        # 已被拿走、在途待记账 — 峰值当即定格, 不再往它头上计数。否则下层盘在同一
+        # 位置露出后, 其滑块中心仍落在旧盘 bbox 内, 峰值只增不减会把在途盘的 19
+        # 顶成 24。短于容忍帧的检测闪断不触发定格 (峰值保持照旧)。
+        primary_fenced = (
+            self._primary is not None and self.confirm_by_action
+            and self._trays[self._primary]['gone'] >= self.action_gone_frames)
+        # v3.44.4 从"每帧只数一个目标"改为"所有在位身份各自按自框计数"(不分常态/动作态):
+        # 7-23 视频箱1取证 — 工人连续放盘时动作标签全程不断, 老逻辑动作态只数"动作期
+        # 新生的非主位", 备盘区真盘(主位)满24可见却全程没人计数, 拿起前峰值永远是空,
+        # 末盘只能靠在途视角救账 (手挡着少1-2个 → 94/96 误NG)。按中心归属计数天然
+        # 不串账 (各身份只数落在自己框内的滑块), 峰值各记各的; 唯一排除项是被在途
+        # 定格冻结的旧主盘 (其 bbox 已停更, 同位新盘的滑块不许算到它头上)。
+        count_tids = [tid for tid, t in self._trays.items()
+                      if t['gone'] == 0
+                      and not (tid == self._primary and primary_fenced)]
+        # 前端展示口径保持旧语义: 常态看主位; 动作态看"动作成立后新生的最早在位身份"
+        disp_tid = None
+        if self.confirm_by_action and (self._action_in_progress or primary_fenced):
+            born_after = self._action_started_ts if self._action_started_ts is not None else 0.0
+            cands = [(self._trays[tid]['first_seen'], tid) for tid in count_tids
+                     if tid != self._primary
+                     and self._trays[tid]['first_seen'] >= born_after]
+            if cands:
+                disp_tid = min(cands)[1]
+        elif self._primary in count_tids:
+            disp_tid = self._primary
+        primary_counts = {}
+        for count_tid in count_tids:
+            pb = self._trays[count_tid]['bbox']
             px1, py1 = pb['x'], pb['y']
             px2, py2 = px1 + pb['w'], py1 + pb['h']
+            cnt = {}
             for obj in item_objs:
                 lbl = obj.get('class_name', '')
                 if not lbl:
@@ -247,11 +414,74 @@ class _ContainerAccumulator:
                 cx = b.get('x', 0) + b.get('w', 0) / 2.0
                 cy = b.get('y', 0) + b.get('h', 0) / 2.0
                 if px1 <= cx <= px2 and py1 <= cy <= py2:
-                    cur[lbl] = cur.get(lbl, 0) + 1
-            peak = self._trays[self._primary]['peak']
-            for lbl, c in cur.items():
+                    cnt[lbl] = cnt.get(lbl, 0) + 1
+            peak = self._trays[count_tid]['peak']
+            for lbl, c in cnt.items():
+                # v3.44.4 每盘峰值封顶 (peak_cap, 默认关): 见 __init__ 注释
+                if self.peak_cap > 0 and c > self.peak_cap:
+                    c = self.peak_cap
                 if c > peak.get(lbl, 0):
+                    try:
+                        from backend.core import debug_center
+                        if debug_center.is_on("backend.packaging"):
+                            debug_center.dbg(
+                                "backend.packaging", "峰值抬升",
+                                f"tid={count_tid}"
+                                f"{'*P' if count_tid == self._primary else ''} "
+                                f"{lbl}: {peak.get(lbl, 0)}→{c} t={current_time:.1f}")
+                    except Exception:
+                        pass
                     peak[lbl] = c
+            # v3.44.5 稳定计数段跟踪 (开关见 __init__):
+            # - 稳定段 = 最近 stable_min_frames 帧计数波动 ≤±2 时取窗口众数
+            #   (7-27 帧级取证: 真实计数流天然 ±1 抖动 22,23,23,21,23…, "连续
+            #   同值"永远凑不齐; 而偶发重复框把单帧数成 24/25, 取最大值会把
+            #   23 的盘记成 24 — 众数两头都免疫);
+            # - 稳定值 = 近 STABLE_LOOKBACK_S 秒内有效窗口众数的最大值:
+            #   遮挡只会看少不会看多 (最大=最全视角, 免疫收尾伸手的"骤降尾巴"
+            #   22→20), 重复框已被窗口众数滤掉; 回看有限期让"上一盘刚进箱、
+            #   内袋盖住前箱内 24 短暂可见"这类早期余像自动过期, 不压真值 22;
+            # - 动作进行中冻结更新 (盘被拿起后堆顶接上的下一盘会提前曝光,
+            #   不许把下一盘的满值攒进本盘账期; 记账后账期重开再攒)。
+            # 冻结解除条件放宽: 动作标签一缺席就恢复计数 (7-27 取证: 末盘真值
+            # 视角常只有"标签消失后~脉冲结算前"的 0.5-1s, 紧凑连放下每帧都金贵,
+            # 多冻 1 帧就凑不满稳定窗口)。标签闪断偶漏进的半空视角由窗口波动
+            # 检查 (spread≤2) 拒绝; 脉冲判定 (action_gone_frames) 不受影响。
+            _count_frozen = (self._action_in_progress
+                             and self._action_gone < 1)
+            if self.stable_min_frames > 0 and not _count_frozen:
+                tr = self._trays[count_tid]
+                hist = tr.setdefault('hist', {})
+                modes = tr.setdefault('modes', {})
+                st = tr.setdefault('stable', {})
+                for lbl, c in cnt.items():
+                    if self.peak_cap > 0 and c > self.peak_cap:
+                        c = self.peak_cap
+                    h = hist.setdefault(lbl, [])
+                    h.append(c)
+                    if len(h) > self.stable_min_frames:
+                        h.pop(0)
+                    if len(h) >= self.stable_min_frames \
+                            and max(h) - min(h) <= 2:
+                        from collections import Counter
+                        mode = Counter(h).most_common(1)[0][0]
+                        ml = modes.setdefault(lbl, [])
+                        # 记录时带框中心: 身份 bbox 会漂移 (箱上→堆上), 快照时
+                        # 只认与当前位置一致的记录, 时间维度分不开的用位置分
+                        _b = tr['bbox']
+                        ml.append((current_time, mode,
+                                   _b['x'] + _b['w'] / 2.0,
+                                   _b['y'] + _b['h'] / 2.0))
+                        while ml and ml[0][0] < current_time - self.STABLE_LOOKBACK_S:
+                            ml.pop(0)
+                        st[lbl] = max(e[1] for e in ml)
+                # 本帧没出现的标签窗口中断 (盘空/全遮挡)
+                for lbl in list(hist.keys()):
+                    if lbl not in cnt:
+                        hist.pop(lbl, None)
+            if count_tid == disp_tid or (disp_tid is None and len(count_tids) == 1):
+                primary_counts = cnt
+        cur = primary_counts
         self._cur_counts = cur
 
         # 5) 进箱判定 — 主托盘按"确认方式"决定进箱; 非主托盘只做幽灵清理。
@@ -261,55 +491,331 @@ class _ContainerAccumulator:
             pt = self._trays[self._primary]
             if pt['gone'] >= self.gone_frames:
                 self._primary_frames_ok = True
-            if self._should_settle_primary():
-                if pt['peak']:
-                    self._done.append(dict(pt['peak']))
-                    print(f"[MixContainer] 托盘进箱: {dict(pt['peak'])}, "
+            if self._should_settle_primary() and not self._defer_settle_if_unready(pt):
+                # v3.44.5 快照持有者优先: 紧凑连放时主位常被在途幽灵抢走 (手里
+                # 的盘只看到 3-4 个, 7-27 实测被记成 4/1), 动作成立瞬间核准过
+                # 数量的备盘堆身份反而躺在非主位 — 记账认快照不认主位。
+                if (self.stable_min_frames > 0 and self.confirm_by_action
+                        and self._action_done_pending):
+                    _stid = self._best_fresh_snapshot_tid()
+                    if _stid is not None and _stid != self._primary:
+                        self._primary = _stid
+                        pt = self._trays[_stid]
+                        try:
+                            from backend.core import debug_center
+                            if debug_center.is_on("backend.packaging"):
+                                debug_center.dbg(
+                                    "backend.packaging", "主位改配快照持有者",
+                                    f"tid={_stid} snap={self._fresh_snapshot(pt)}")
+                        except Exception:
+                            pass
+                # v3.44.3 空峰值 + 动作脉冲触发 = 主位被幽灵身份占着 (动作期托盘
+                # 误检框 / 被拿走清空的旧盘): 只清身份让位, 脉冲保留给正在显形的
+                # 新盘 (5c 顶上后照常挂账等峰值结账), 不刷新不应期。修前这里会
+                # 静默烧掉脉冲 → 连放末盘永远没进账 (7-23 视频 72/96 连锁崩)。
+                # v3.44.4 末盘救账 (盘堆最后一盘, 7-23 视频箱1实测): 拿走盘堆最后
+                # 一盘后主位常被"空峰值幽灵"占住, 真正看满 24 个滑块的那盘身份刚
+                # 离场、躺在非主位等幽灵清理 — 老逻辑让位保留脉冲, 但后面再无新盘
+                # 显形, 这盘的账就永远丢了。脉冲在手且主位空峰值时, 先在账里找
+                # "已离场(≥动作消失帧)、有峰值、未记账"的真盘改配记账; 取最近
+                # 离场者 (训练端反馈: 多候选取最大会捡走盘堆假消失轨迹)。
+                if (not pt['peak'] and self.confirm_by_action
+                        and self._action_done_pending):
+                    try:
+                        from backend.core import debug_center
+                        if debug_center.is_on("backend.packaging"):
+                            _snap = [
+                                (f"tid={_tid}{'*P' if _tid == self._primary else ''} "
+                                 f"fs={_t['first_seen']:.1f} gone={_t['gone']} "
+                                 f"peak={dict(_t['peak'])} "
+                                 f"bbox=({_t['bbox']['x']:.0f},{_t['bbox']['y']:.0f},"
+                                 f"{_t['bbox']['w']:.0f}x{_t['bbox']['h']:.0f})")
+                                for _tid, _t in self._trays.items()]
+                            debug_center.dbg(
+                                "backend.packaging", "救账时身份池快照",
+                                f"act_ts={self._action_started_ts} | " + " ; ".join(_snap))
+                    except Exception:
+                        pass
+                    # v3.44.4 救账候选 = 与本次动作相关的有峰值身份: 动作窗口内
+                    # 新生 (围栏拆出的移动盘/进箱可见拍), 或动作开始时还在场
+                    # (刚被拿走的备盘)。时间窗天然排除盘堆陈旧假消失轨迹 (训练端
+                    # 警告的风险)。多候选取峰值最大 — 同一物理盘的多段身份 (在途
+                    # 视角手挡少 1-2 个 vs 进箱可见拍看全) 里遮挡只会少不会多,
+                    # 取最大即取最全视角; 封顶 peak_cap 兜上限。
+                    _best = None
+                    _th = ((self._action_started_ts - 1.0)
+                           if self._action_started_ts is not None else 0.0)
+                    for _tid, _t in self._trays.items():
+                        if _tid == self._primary or not _t['peak']:
+                            continue
+                        if _t['first_seen'] < _th and _t['last_seen'] < _th:
+                            continue  # 与本次动作无关的陈旧身份
+                        if (_best is None
+                                or sum(_t['peak'].values())
+                                > sum(self._trays[_best]['peak'].values())
+                                or (sum(_t['peak'].values())
+                                    == sum(self._trays[_best]['peak'].values())
+                                    and _t['last_seen'] > self._trays[_best]['last_seen'])):
+                            _best = _tid
+                    if _best is not None:
+                        del self._trays[self._primary]
+                        self._primary = _best
+                        pt = self._trays[_best]
+                        try:
+                            from backend.core import debug_center
+                            if debug_center.is_on("backend.packaging"):
+                                debug_center.dbg(
+                                    "backend.packaging", "末盘救账改配离场真盘",
+                                    f"peak={dict(pt['peak'])} gone={pt['gone']}")
+                        except Exception:
+                            pass
+                keep_pending = (not pt['peak'] and self.confirm_by_action
+                                and self._action_done_pending)
+                # v3.44.5 记账值: 本次动作的稳定快照 ("手接触前"核准数) 优先,
+                # 没有快照才退回峰值 (老口径)
+                _snap_val = self._fresh_snapshot(pt)
+                book_val = _snap_val or pt['peak']
+                if book_val and self._reject_wrong_tray(book_val):
+                    # v3.44.1 错盘拦截: 这盘数量不对 → 不记账, 身份照常清掉
+                    # (盘已物理进箱, 等工人取出重装); 警报由宿主消费后报警定格。
+                    pass
+                elif book_val:
+                    self._done.append(dict(book_val))
+                    print(f"[MixContainer] 托盘进箱: {dict(book_val)}, "
                           f"已装 {len(self._done)}/{self.box_count or '?'}")
                     try:
                         from backend.core import debug_center
                         if debug_center.is_on("backend.packaging"):
                             debug_center.dbg(
                                 "backend.packaging", "托盘进箱记账",
-                                f"peak={dict(pt['peak'])} done_trays={len(self._done)} "
+                                f"book={dict(book_val)} src={'快照' if _snap_val else '峰值'} "
+                                f"done_trays={len(self._done)} "
                                 f"item_target={self.item_target} "
                                 f"by_frames={self._primary_frames_ok} "
                                 f"by_action={self._action_done_pending}")
                     except Exception:
                         pass
-                del self._trays[self._primary]
-                self._primary = None
+                # v3.44.5 结账后身份处置: 快照模式下身份仍在场 (堆顶检测框已无缝
+                # 接上露出的下一盘) → 原地清零重开新账, 保持主位不churn; 其余
+                # (已离场/未开快照模式) 沿用删除让位。
+                if (self.stable_min_frames > 0 and pt['gone'] == 0
+                        and self._primary in self._trays):
+                    pt['peak'] = {}
+                    pt['hist'] = {}
+                    # 重开新账时保留"本次动作开始之后"的观察 (计数在动作进行中
+                    # 冻结, 动作开始后的众数全部来自动作结束后已露出的下一盘) —
+                    # 紧凑连放时下一次动作 1s 内就来, 这段观察丢了就凑不齐窗口
+                    _cut = pt.get('pre_action_ts') or current_time
+                    pt['modes'] = {
+                        lbl: [e for e in ml if e[0] > _cut]
+                        for lbl, ml in (pt.get('modes') or {}).items()}
+                    pt['modes'] = {k: v for k, v in pt['modes'].items() if v}
+                    pt['stable'] = {}
+                    pt['pre_action_stable'] = {}
+                    pt['pre_action_ts'] = None
+                    pt['first_seen'] = current_time
+                else:
+                    del self._trays[self._primary]
+                    self._primary = None
                 self._primary_frames_ok = False
-                self._action_done_pending = False
-                # 开启动作确认时, 任何一次进箱都刷新不应期基准 — OR 组合下"消失满帧"
-                # 先结的账, 紧随其后的动作余波同样不允许再记一笔
-                if self.confirm_by_action:
-                    self._last_action_settle_ts = current_time
+                self._settle_defer_frames = 0
+                if not keep_pending:
+                    self._action_done_pending = False
+                    # 开启动作确认时, 任何一次进箱都刷新不应期基准 — OR 组合下
+                    # "消失满帧"先结的账, 紧随其后的动作余波同样不允许再记一笔
+                    if self.confirm_by_action:
+                        self._last_action_settle_ts = current_time
+                else:
+                    try:
+                        from backend.core import debug_center
+                        if debug_center.is_on("backend.packaging"):
+                            _snap = {tid: {'gone': t0_['gone'],
+                                           'peak': dict(t0_['peak']),
+                                           'fs': round(t0_['first_seen'], 2),
+                                           'ls': round(t0_['last_seen'], 2)}
+                                     for tid, t0_ in self._trays.items()}
+                            debug_center.dbg("backend.packaging", "空峰值让位保留脉冲",
+                                             f"主位幽灵身份清除, 动作脉冲留给显形中的新盘; "
+                                             f"primary={self._primary} 全身份={_snap}")
+                    except Exception:
+                        pass
 
         # 5b) 非主托盘幽灵清理: 消失满帧且从未累计滑块(peak 空)的杂框丢弃。
-        #     真盘滑块只在"主托盘"位累计, 故非主盘 peak 必为空; 主盘进箱只走 5)。
+        #     v3.44.2 起动作期新生盘也可能带 peak (屏蔽窗口只冻旧主盘), 带峰值的
+        #     非主身份若长期离场 (3 倍消失帧) 同样清 — 防陈旧幽灵日后被选主污账。
         for tid in list(self._trays.keys()):
             if tid == self._primary:
                 continue
-            if self._trays[tid]['gone'] >= self.gone_frames and not self._trays[tid]['peak']:
+            gone = self._trays[tid]['gone']
+            if gone >= self.gone_frames and not self._trays[tid]['peak']:
+                del self._trays[tid]
+            elif gone >= self.gone_frames * 3:
                 del self._trays[tid]
 
         # 5c) 主托盘刚进箱被清空 → 把下一盘(FIFO 最早在场)顶上, 避免空窗一帧峰值闪 0。
         #     动作进行中(屏蔽窗口)绝不切主, 等动作结束本盘进箱后再让下一盘上位。
         if self._primary is None and not self._action_in_progress:
-            in_place = [(t['first_seen'], tid)
+            # v3.44.4 与 step3 同步: 有峰值的真盘优先, 空峰值幽灵 (箱内已放盘的
+            # 持续检出) 靠后, 防止幽灵抢主位错乱配对链
+            in_place = [(not t['peak'], t['first_seen'], tid)
                         for tid, t in self._trays.items() if t['gone'] == 0]
             if in_place:
-                self._primary = min(in_place)[1]
+                self._primary = min(in_place)[2]
 
-        # 5d) 动作脉冲无主托盘可配对(空动作 / 盘尚未上位) → 丢弃, 防残留误触下一盘秒进箱
+        # 5d) 动作脉冲无主托盘可配对(空动作 / 盘尚未上位) → 给一段宽限等新盘露出,
+        #     到期仍无盘才丢弃 (v3.44.3 前是当帧即丢 — 连放场景新盘常在脉冲结束后
+        #     零点几秒才被检出, 即丢会把最后一盘的账烧掉)。
         if self._primary is None and self._action_done_pending and not self._action_in_progress:
-            self._action_done_pending = False
+            self._settle_defer_frames += 1
+            if self._settle_defer_frames > self.gone_frames * 3:
+                self._action_done_pending = False
+                self._settle_defer_frames = 0
+                try:
+                    from backend.core import debug_center
+                    if debug_center.is_on("backend.packaging"):
+                        debug_center.dbg("backend.packaging", "空动作脉冲宽限到期丢弃",
+                                         f"t={current_time:.2f} 无托盘可配对")
+                except Exception:
+                    pass
+
+    def _defer_settle_if_unready(self, pt: dict) -> bool:
+        """v3.44.3 动作结账"峰值就绪等待" (True = 本帧不结账, 继续等).
+
+        连放场景 (工人 ~3s 一盘) 的最后一盘: 放盘动作脉冲结束那一刻, 新盘滑块常被
+        手/身体挡着尚未计入峰值 (7-23 视频实测峰值在脉冲结束后 ~1s 才爬完)。改前
+        逻辑用空峰值直接消费脉冲并删身份 → 这盘永远没进账, 数量门静默拦收尾步骤,
+        周期结不了, 下一箱的账全灌进来 (168/96 连锁崩)。
+
+        仅动作确认脉冲需要等 (消失满帧结账 = 盘已物理离场, 峰值必已定格):
+          - 峰值已到本盘期望 → 立即结 (常态连放, 零延迟);
+          - 下一个动作已开始 → 立即结 (保持脉冲-账一一配对);
+          - 峰值非空但没到期望 → 等满整窗再按现值结 (真少装盘交给错盘拦截/裁决,
+            只是晚 ~4.5s 报警; 不做"稳定即结"早退, 末几件检测常断续闪入);
+          - 挂满 3 倍消失确认帧仍空峰值 → 清幽灵身份让位 (脉冲保留, 真无盘由
+            5d 宽限最终丢弃);
+          - 其余 → 继续挂账 (不删身份, 不烧脉冲)。
+        """
+        if not (self.confirm_by_action and self._action_done_pending):
+            return False
+        if self._action_in_progress:
+            self._settle_defer_frames = 0
+            return False
+        # v3.44.5 场上任一身份有本次动作的稳定快照 → 账在动作前就核准了,
+        # 立即结不等 (结算块会把主位改配给快照持有者)
+        if self._best_fresh_snapshot_tid() is not None:
+            self._settle_defer_frames = 0
+            return False
+        if pt['gone'] >= self.gone_frames and pt['peak']:
+            return False  # 有峰值且盘已物理离场, 账已定格 → 不等
+        peak_total = sum(pt['peak'].values())
+        per_tray = sum(self.item_expected.values())
+        booked = sum(sum(t.values()) for t in self._done)
+        remaining = self.item_target - booked
+        expected_this = (min(per_tray, remaining)
+                         if per_tray > 0 and remaining > 0 else 0)
+        best_cand = 0
+        if peak_total > 0:
+            # 峰值非空: 只有"每盘校验开 + 期望已知 + 还没爬到期望"才值得等
+            # (给迟到峰值机会, 免得半爬的 21/24 触发错盘误报); 其余按老行为立即结。
+            # 注意不做"峰值稳定即结"早退 — 7-23 视频实测末几个滑块的检测断续闪入,
+            # 21 可以停稳 1 秒以上才跳 24, 等满整窗才结 (真少装只是晚 ~4.5s 报警)。
+            if not (self.per_tray_guard and expected_this > 0
+                    and peak_total < expected_this):
+                self._settle_defer_frames = 0
+                return False
+        else:
+            # v3.44.4 空峰值幽灵主位挂账等真账 (7-23 视频箱1取证): 末盘的真账
+            # (进箱可见拍) 常在脉冲结束后 0.5~1.5s 才显形, 立即结只能救到在途
+            # 视角 (手挡着少 1-2 个)。有救账候选爬满本盘期望 → 立即结 (结算分支
+            # 的救账改配它); 没爬满等满窗, 到期只要有峰值候选照样结给救账。
+            for _tid, _t in self._trays.items():
+                if _tid == self._primary or not _t['peak']:
+                    continue
+                best_cand = max(best_cand, sum(_t['peak'].values()))
+            if expected_this > 0 and best_cand >= expected_this:
+                self._settle_defer_frames = 0
+                return False
+        self._settle_defer_frames += 1
+        if self._settle_defer_frames > self.gone_frames * 3:
+            self._settle_defer_frames = 0
+            if not pt['peak']:
+                if best_cand > 0:
+                    return False  # 有峰值候选 → 按现值结账, 交给救账改配
+                # 到期主位仍空峰值且无候选 (幽灵占位/从未显形): 清身份让位、
+                # 脉冲保留, 显形中的新盘顶上后重新挂账; 真无盘由 5d 宽限最终丢弃
+                del self._trays[self._primary]
+                self._primary = None
+                self._primary_frames_ok = False
+                return True
+            return False  # 有峰值但没到期望 → 按现值结账 (少装由 guard/裁决处置)
+        try:
+            from backend.core import debug_center
+            if debug_center.is_on("backend.packaging") and self._settle_defer_frames == 1:
+                debug_center.dbg("backend.packaging", "动作结账挂起等峰值",
+                                 f"peak={dict(pt['peak'])} expected_this={expected_this}")
+        except Exception:
+            pass
+        return True
+
+    def _reject_wrong_tray(self, peak: dict) -> bool:
+        """v3.44.1 每盘数量校验 (True = 错盘, 这盘不记账并抛警报).
+
+        仅 items_total 模式 + per_tray_guard 开 + 配了每盘期望时生效:
+          本盘期望 = min(每盘期望总数, 整箱目标 - 已进箱总数) — 尾盘自动按
+          "补齐总数的余数"核 (用户敲定: 尾盘只算总数对不对得上, 不卡每盘 24)。
+          进箱已满 (余数<=0) 不核 — 那属"多装/下一箱"形态, 归结算裁决管。
+        """
+        if not (self.per_tray_guard and self.count_mode == 'items_total'):
+            return False
+        per_tray = sum(self.item_expected.values())
+        if per_tray <= 0 or self.item_target <= 0:
+            return False
+        booked = sum(sum(t.values()) for t in self._done)
+        remaining = self.item_target - booked
+        if remaining <= 0:
+            return False
+        expected_this = min(per_tray, remaining)
+        count_this = sum(peak.values())
+        if count_this == expected_this:
+            return False
+        self.wrong_tray_alert = {
+            'index': len(self._done) + 1,
+            'count': count_this,
+            'expected': expected_this,
+        }
+        print(f"[MixContainer] 错盘拦截: 第{len(self._done) + 1}盘数量不对 "
+              f"{count_this}/{expected_this}, 不记账 (已进箱 {booked}/{self.item_target})")
+        return True
+
+    def consume_wrong_tray_alert(self):
+        """宿主每帧消费错盘警报 (取走即清, 无警报返回 None)。"""
+        alert, self.wrong_tray_alert = self.wrong_tray_alert, None
+        return alert
+
+    def _primary_foldable(self) -> bool:
+        """结算折算守门: 在位主托盘可否折进本箱裁决。
+
+        v3.44.4: 动作确认模式下, 在位主盘只有"真在途" (动作脉冲待配对 / 已消失
+        满帧) 才允许折进本箱 — 否则它是"下一箱已备好未动的盘" (上银 7-27 视频:
+        封箱时点位上摆着下一箱首盘 peak=24, 折进来把 90/96 不足抹成 114/96
+        超出, NG 语义整个反了)。非动作确认模式保持老行为 (无脉冲概念, 零差异)。
+        """
+        if self._primary is None:
+            return False
+        if not self.confirm_by_action:
+            return True
+        # v3.44.5 快照模式下记账随脉冲即时落定, 封箱时末盘早已入账 — 在位
+        # 主盘只有"脉冲在途" (记账真在飞行中) 才许折算。放开 frames_ok 腿会
+        # 把桌角待用盘碎片 (peak=4, 永驻在位) 折进裁决, 94/96 不足被抹成
+        # 98/96 超出 (7-27 UAT 箱3)。
+        if self.stable_min_frames > 0:
+            return bool(self._action_done_pending)
+        return bool(self._action_done_pending or self._primary_frames_ok)
 
     def _trays_for_verdict(self):
         """封箱裁决用的托盘全集: 已装清单 + 当前主托盘 (最后一盘可能还没 gone-confirm)。"""
         trays = list(self._done)
-        if self._primary is not None:
+        if self._primary_foldable():
             peak = self._trays.get(self._primary, {}).get('peak')
             if peak:
                 trays.append(dict(peak))
@@ -329,7 +835,7 @@ class _ContainerAccumulator:
             target = self.item_target
             done_total = sum(sum(t.values()) for t in self._done)
             total = done_total
-            if target > 0 and done_total < target and self._primary is not None:
+            if target > 0 and done_total < target and self._primary_foldable():
                 cur_peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
                 total += sum(cur_peak.values())
             if target > 0 and total != target:
@@ -374,7 +880,7 @@ class _ContainerAccumulator:
         total = done_total
         if self.item_target <= 0 or done_total < self.item_target:
             cur_peak = {}
-            if self._primary is not None:
+            if self._primary_foldable():
                 cur_peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
             total += sum(cur_peak.values())
         return total
@@ -388,6 +894,21 @@ class _ContainerAccumulator:
         "箱里真装够了吗", 只能认已记账的。
         """
         return sum(sum(t.values()) for t in self._done)
+
+    def pending_booking_peak_total(self) -> int:
+        """在途主盘峰值 (动作已成立/帧数已达标、记账仍在延迟窗内的那盘)。
+
+        v3.44.3 数量门竞态补丁: 第4盘放入后记账走峰值就绪等待 (最多 ~4.5s),
+        紧跟着的放油嘴包脉冲只有 ~0.5s — 若门只认已记账数会把这一步误拦掉
+        (7-23 视频 UAT + 客户现场"检测到但不计数"同款)。该盘已物理进箱、
+        峰值真实可见, 数量门应把它计入"箱内已有"; 真少装 (19/24) 凑不满照拦。
+        """
+        if self._primary is None:
+            return 0
+        if not (self._action_done_pending or self._primary_frames_ok):
+            return 0
+        peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
+        return sum(peak.values())
 
     def to_state(self, display_map: dict):
         dm = display_map or {}
@@ -476,6 +997,9 @@ class _TrackingMixEngine:
                 action_min_frames=container_cfg.get('action_min_frames', 3),
                 action_gone_frames=container_cfg.get('action_gone_frames', 8),
                 action_cooldown_s=container_cfg.get('action_cooldown_s', 2.0),
+                per_tray_guard=container_cfg.get('per_tray_guard', False),
+                peak_cap=container_cfg.get('peak_cap', 0),
+                stable_min_frames=container_cfg.get('stable_min_frames', 0),
             )
         # 静态期望清单 (verdict 用, 不依赖喂帧): 与真 loader 的注入规则一致 —
         # event 行 → event_required_count; 堆叠行 → stack_required_count;
@@ -523,8 +1047,19 @@ class _TrackingMixEngine:
         host._tracking_external_cycle = True
 
         # 物品标签过滤 + 步骤置信度阈值守门 (与步骤侧同一套语义);
-        # 逐行 ROI 守门交给真机械内部的 _det_passes_roi_for_label
+        # 物品流的逐行 ROI 守门交给真机械内部的 _det_passes_roi_for_label
+        # (in_roi 标志), 容器/动作标签不进跟踪机械 → 在本入口过 ROI
+        # (v3.44.4: 此前记账链完全不吃 ROI, 备盘堆的托盘/滑块只能靠主盘
+        # 归属兜底 — 画了 ROI 也拦不住身份漂移, 上银 7-23 视频超计同源).
         conf_map = getattr(host, 'step_conf_thresholds', None) or {}
+        poly_map = getattr(host, 'step_roi_polygons', None) or {}
+
+        def _in_roi(det, label):
+            poly = poly_map.get(label)
+            if poly and len(poly) >= 3:
+                return is_normalized_bbox_center_in_polygon(det, poly)
+            return True
+
         dets = []
         tray_dets = []  # 容器累加器用: 托盘检测框 (与物品流隔离, 不进跟踪机械)
         container_label = self._container.container_label if self._container else None
@@ -536,6 +1071,8 @@ class _TrackingMixEngine:
                 threshold = conf_map.get(label)
                 if threshold is not None and det.get('confidence', 0) < threshold:
                     continue
+                if not _in_roi(det, label):
+                    continue
                 tray_dets.append({
                     'x': float(det.get('x', 0)), 'y': float(det.get('y', 0)),
                     'w': float(det.get('w', 0)), 'h': float(det.get('h', 0)),
@@ -544,7 +1081,8 @@ class _TrackingMixEngine:
             if action_label and label == action_label:
                 # 放托盘动作标签: 仅作"本帧在场"信号, 不进物品流/跟踪机械
                 threshold = conf_map.get(label)
-                if threshold is None or det.get('confidence', 0) >= threshold:
+                if ((threshold is None or det.get('confidence', 0) >= threshold)
+                        and _in_roi(det, label)):
                     action_present = True
                 continue
             if label not in self.item_labels:
@@ -618,15 +1156,31 @@ class _TrackingMixEngine:
         #     不用 _tracking_objects — 唯一ID跟踪在 24 个密集小目标上会塌缩成
         #     个位数 (ByteTrack 只保住几个稳定 ID), 与"同时最多那帧的数量"不是一回事。
         if self._container is not None:
+            # v3.44.4: 物品喂容器记账前过 ROI — 跟踪机械里 ROI 只影响 in_roi
+            # 计数口径, 记账链此前拿的是未过滤 dets, 备盘堆滑块会污染箱账.
+            # 只滤记账支流, 不动跟踪机械输入 (身份保持行为零差异).
             item_dets_for_container = [{
                 'class_name': d.get('label', ''),
                 'bbox': {
                     'x': float(d.get('x', 0)), 'y': float(d.get('y', 0)),
                     'w': float(d.get('w', 0)), 'h': float(d.get('h', 0)),
                 },
-            } for d in dets]
+            } for d in dets if _in_roi(d, d.get('label', ''))]
             self._container.update(tray_dets, item_dets_for_container, current_time,
                                    action_present=action_present)
+            # v3.44.1 错盘警报消费: 数量不对的盘刚被拒账 → 借收尾防呆提示事件
+            # 报警 (事件配了「需人工确认」则整线定格, 工人取出错盘、确认后重装;
+            # 配「确认后保留周期」可断点续做)。异常隔离, 绝不打断检测热路径。
+            alert = self._container.consume_wrong_tray_alert()
+            if alert is not None and host is not None:
+                try:
+                    host._fire_closing_guard_alarm(
+                        f"收尾防呆: 第{alert['index']}盘数量不对 "
+                        f"{alert['count']}/{alert['expected']} — 该盘未记账, "
+                        f"请取出该盘, 确认后重新装",
+                        event_id=getattr(host, '_settle_hold_event_id', None))
+                except Exception as _wt_e:
+                    print(f"[MixContainer] 错盘报警失败 (隔离): {_wt_e}")
 
     # ---- 合并计数: 与独立模式 _rebuild_checklist 同一公式 ----
     @staticmethod
@@ -694,6 +1248,12 @@ class _TrackingMixEngine:
         """仅已确认进箱的滑块总数 (不含在位托盘凑数; 无容器时 None)。数量门口径。"""
         if self._container is not None:
             return self._container.booked_item_total()
+        return None
+
+    def container_pending_peak_total(self):
+        """在途主盘峰值 (记账在延迟窗内的那盘; 无容器时 None)。数量门竞态补丁。"""
+        if self._container is not None:
+            return self._container.pending_booking_peak_total()
         return None
 
     @staticmethod
@@ -967,6 +1527,11 @@ class CustomMixMachine:
         fn = getattr(self._engine, 'container_booked_item_total', None)
         return fn() if fn is not None else None
 
+    def container_pending_peak_total(self):
+        """在途主盘峰值 (数量门竞态补丁; 非容器混合返回 None)。"""
+        fn = getattr(self._engine, 'container_pending_peak_total', None)
+        return fn() if fn is not None else None
+
     def to_state(self):
         state = self._engine.to_state(self._host)
         # 步骤侧周期是否进行中 (前端面板"周期中/等待"显示用; 周期主权在步骤侧)
@@ -1080,6 +1645,17 @@ def build_custom_mix(config: dict):
                 'action_min_frames': action_min_frames,
                 'action_gone_frames': action_gone_frames,
                 'action_cooldown_s': action_cooldown_s,
+                # v3.44.1 每盘数量校验 (错盘当场拦截, 默认关): 每盘期望取物品行
+                # 的期望数量 (item_expected), 尾盘按整箱余数核
+                'per_tray_guard': bool(pipeline.get(
+                    'custom_mix_container_per_tray_guard', False)),
+                # v3.44.4 每盘峰值封顶 (0=关): 治模型偶发重复框把峰值咬到 25/26
+                'peak_cap': int(pipeline.get(
+                    'custom_mix_container_peak_cap', 0) or 0),
+                # v3.44.5 "动作前稳定计数"快照记账 (0=关): 连放场景堆顶检测框
+                # 无缝接上下一盘身份永不消失, 改按动作成立瞬间的稳定计数入账
+                'stable_min_frames': int(pipeline.get(
+                    'custom_mix_container_stable_min_frames', 0) or 0),
             }
             confirm_desc = []
             if confirm_by_frames:

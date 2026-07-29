@@ -27,6 +27,20 @@ from backend.core import debug_center
 
 
 class CaptureLoopMixin:
+    def _video_playback_held(self) -> bool:
+        """v3.44.2 视频源播放是否应冻结 (True = 本轮不读帧, 位置保持不动)。
+
+        两个冻结来源 (仅 source_type='video'; 相机/合成源永不冻结):
+          1. 待机 (_video_hold): standby 置位, resume/start/stop 复位;
+          2. 人工确认定格 (_pending_ack + 检测中): 确认框弹出到工人点确认前,
+             回放的"时间"必须跟着检测线一起停, 否则剧情被静默消耗。
+        """
+        if self.source_type != 'video':
+            return False
+        if getattr(self, '_video_hold', False):
+            return True
+        return bool(self.is_detecting and getattr(self, '_pending_ack', False))
+
     def _capture_loop(self):
         """
         摄像头/视频捕获循环（主线程）
@@ -87,7 +101,17 @@ class CaptureLoopMixin:
 
                 # 更新捕获线程心跳
                 self._last_capture_heartbeat = time.time()
-                
+
+                # ── v3.44.2 视频源"时间定格" (上银 SY3 实测) ──
+                # 人工确认定格 / 待机期间, 视频文件不再读帧、播放位置冻结。
+                # 之前只冻结了 MJPEG 推流画面, 文件本身仍在后台被消耗 —
+                # 待机 1 分钟 = 视频剧情静默流失 1 分钟, 恢复后"第3/4盘已
+                # 装完"却没人看见。真实相机无此问题 (现实世界暂停不了),
+                # 仅视频回放需要"时间跟着检测线一起停"。
+                if self._video_playback_held():
+                    time.sleep(0.05)
+                    continue
+
                 speed = getattr(self, 'video_speed', 1.0)
                 
                 # 根据输入源类型读取帧

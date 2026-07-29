@@ -32,7 +32,9 @@ PROJECT_NAME = "__synth_closing_guard__"
 
 # ==================== 项目模板 ====================
 def _build_project(*, guard_on: bool, item_target: int,
-                   hold_timeout_s: float = 60.0) -> dict:
+                   hold_timeout_s: float = 60.0,
+                   short_count_hold: bool = False,
+                   gate_escalate: bool = False) -> dict:
     pipeline = {
         "custom_based_on": "sequential",
         "custom_mixed_with": "tracking",
@@ -54,6 +56,33 @@ def _build_project(*, guard_on: bool, item_target: int,
             "hold_enabled": True,
             "hold_timeout_s": hold_timeout_s,
             "event_id": 4,
+        }
+    if gate_escalate:
+        # v3.44.4 短拦长放: 数量门开 + 封箱升级放行; 缺步/少装都走挂起
+        # (升级放行的封箱结算后应带着数量欠账进缺步挂起, 一次挂起说全)
+        pipeline["ng_handling"] = {
+            "violation": "none",
+            "missing_step": "hold",
+            "hold_timeout_s": hold_timeout_s,
+            "hold_event_id": 4,
+            "short_count": "hold",
+            "gate_enabled": True,
+            "gate_steps": ["放油嘴包", "封箱"],
+            "gate_event_id": 4,
+            "gate_escalate_steps": ["封箱"],
+        }
+    if short_count_hold:
+        # v3.44.1 少装挂起: 数量门关 (少装放行到结算)、缺步 NG (证明少装挂起
+        # 不依赖缺步挂起档), 仅 short_count=hold; 收尾步骤集仍走 gate_steps
+        pipeline["ng_handling"] = {
+            "violation": "none",
+            "missing_step": "ng",
+            "hold_timeout_s": hold_timeout_s,
+            "hold_event_id": 4,
+            "short_count": "hold",
+            "gate_enabled": False,
+            "gate_steps": ["放油嘴包", "封箱"],
+            "gate_event_id": None,
         }
     return {
         "name": PROJECT_NAME,
@@ -162,6 +191,77 @@ def _video2_scenario(name: str) -> dict:
     ]}
 
 
+def _video3_scenario(name: str, *, remediate: bool) -> dict:
+    """少装挂起叙事 (两盘 48 支, item_target=48, 数量门关):
+    贴标 → 只进一盘(24/48) → 放油嘴包/封箱一路做完 → 末步结算: 步骤全对但
+    数量 24/48 → 少装挂起 (摘下放油嘴包/封箱, 报警) →
+      remediate=True:  补第二盘(48/48) → 重做放油嘴包 → 重做封箱 → 自动 OK
+      remediate=False: 挂着不补 → 超时按缺数量 NG 落账."""
+    timeline = [
+        {"from": 0, "to": 29, "detections": _dets("贴标")},
+        {"from": 30, "to": 59, "detections": []},
+        {"from": 60, "to": 299, "detections": _dets(sliders=True, slider_base=100)},
+        {"from": 300, "to": 311,
+         "detections": _dets("放托盘", sliders=True, slider_base=100)},
+        {"from": 312, "to": 359, "detections": []},                  # 第一盘进箱 24/48
+        {"from": 360, "to": 371, "detections": _dets("放油嘴包")},   # 数量门关, 放行
+        {"from": 372, "to": 381, "detections": []},
+        {"from": 382, "to": 393, "detections": _dets("封箱")},
+        {"from": 394, "to": 479, "detections": []},                  # 末步消失→少装挂起
+    ]
+    if remediate:
+        timeline += [
+            {"from": 480, "to": 719, "detections": _dets(sliders=True, slider_base=200)},
+            {"from": 720, "to": 731,
+             "detections": _dets("放托盘", sliders=True, slider_base=200)},
+            {"from": 732, "to": 779, "detections": []},              # 第二盘进箱 48/48
+            {"from": 780, "to": 791, "detections": _dets("放油嘴包")},  # 重做收尾
+            {"from": 792, "to": 801, "detections": []},
+            {"from": 802, "to": 813, "detections": _dets("封箱")},
+            {"from": 814, "to": 959, "detections": []},              # 销结→OK
+        ]
+    else:
+        timeline += [
+            {"from": 480, "to": 899, "detections": []},              # 挂着不补→超时NG
+        ]
+    return {"name": name, "fps": 60, "timeline": timeline}
+
+
+def _video4_scenario(name: str, *, remediate: bool) -> dict:
+    """数量门升级放行叙事 (两盘 48 支, item_target=48, 门开):
+    贴标 → 只进第一盘(24/48) → 真放油嘴包被门拦(静默/报警按配置) →
+    坚持封箱:
+      升级配置: 封箱报警放行进周期 → 结算挂起(缺放油嘴包+数量欠账) →
+        remediate=True: 补第二盘(48/48) → 重做放油嘴包 → 自动 OK
+      未配升级: 封箱被静默拦 → 周期永不结算 (零差异对照)"""
+    timeline = [
+        {"from": 0, "to": 29, "detections": _dets("贴标")},
+        {"from": 30, "to": 59, "detections": []},
+        {"from": 60, "to": 299, "detections": _dets(sliders=True, slider_base=100)},
+        {"from": 300, "to": 311,
+         "detections": _dets("放托盘", sliders=True, slider_base=100)},
+        {"from": 312, "to": 359, "detections": []},                  # 第一盘进箱 24/48
+        {"from": 360, "to": 371, "detections": _dets("放油嘴包")},   # 门拦 (24/48 未满)
+        {"from": 372, "to": 381, "detections": []},
+        {"from": 382, "to": 393, "detections": _dets("封箱")},       # 升级放行 / 静默拦
+        {"from": 394, "to": 479, "detections": []},                  # 末步消失→结算/或没结算
+    ]
+    if remediate:
+        timeline += [
+            {"from": 480, "to": 719, "detections": _dets(sliders=True, slider_base=200)},
+            {"from": 720, "to": 731,
+             "detections": _dets("放托盘", sliders=True, slider_base=200)},
+            {"from": 732, "to": 779, "detections": []},              # 第二盘进箱 48/48
+            {"from": 780, "to": 791, "detections": _dets("放油嘴包")},  # 补缺失步骤
+            {"from": 792, "to": 929, "detections": []},              # 销结→OK
+        ]
+    else:
+        timeline += [
+            {"from": 480, "to": 899, "detections": []},              # 挂着啥也不做
+        ]
+    return {"name": name, "fps": 60, "timeline": timeline}
+
+
 # ==================== 背景 ====================
 @given("后端处于测试模式 (RUNTIME_MODE=test)")
 def given_test_mode():
@@ -175,11 +275,15 @@ def given_clean_channel(client):
 
 # ==================== Given: 项目 ====================
 def _create_and_load(client, request, ctx, *, guard_on: bool,
-                     item_target: int, hold_timeout_s: float = 60.0):
+                     item_target: int, hold_timeout_s: float = 60.0,
+                     short_count_hold: bool = False,
+                     gate_escalate: bool = False):
     delete_project_by_name(client, PROJECT_NAME)
     r = client.post("/api/v1/projects",
                     json=_build_project(guard_on=guard_on, item_target=item_target,
-                                        hold_timeout_s=hold_timeout_s))
+                                        hold_timeout_s=hold_timeout_s,
+                                        short_count_hold=short_count_hold,
+                                        gate_escalate=gate_escalate))
     assert r.status_code in (200, 201), f"创建项目失败: {r.text[:300]}"
     pid = r.json()["id"]
     request.addfinalizer(lambda: client.delete(f"/api/v1/projects/{pid}"))
@@ -204,6 +308,27 @@ def given_guard_short_timeout_project(client, request, ctx):
 @given("一个未开启收尾防呆的托盘容器项目已载入通道 0")
 def given_no_guard_project(client, request, ctx):
     ctx["pending_project"] = dict(guard_on=False, hold_timeout_s=60.0)
+    ctx["client_request"] = request
+
+
+@given("一个开启数量门且封箱升级放行的托盘容器项目已载入通道 0")
+def given_gate_escalate_project(client, request, ctx):
+    ctx["pending_project"] = dict(guard_on=False, hold_timeout_s=60.0,
+                                  gate_escalate=True)
+    ctx["client_request"] = request
+
+
+@given("一个开启少装挂起的托盘容器项目已载入通道 0")
+def given_short_hold_project(client, request, ctx):
+    ctx["pending_project"] = dict(guard_on=False, hold_timeout_s=60.0,
+                                  short_count_hold=True)
+    ctx["client_request"] = request
+
+
+@given("一个开启少装挂起且挂起超时很短的托盘容器项目已载入通道 0")
+def given_short_hold_short_timeout_project(client, request, ctx):
+    ctx["pending_project"] = dict(guard_on=False, hold_timeout_s=2.0,
+                                  short_count_hold=True)
     ctx["client_request"] = request
 
 
@@ -234,6 +359,26 @@ def when_run_video1_no_remediate(client, ctx):
 @when("我跑一个少装一盘就放油嘴包被拦下补盘后再收尾的剧本")
 def when_run_video2(client, ctx):
     _run(client, ctx, _video2_scenario("bdd_cg_video2"), 48)
+
+
+@when("我跑一个少装一盘就完成收尾后补盘重做收尾的剧本")
+def when_run_video3_remediate(client, ctx):
+    _run(client, ctx, _video3_scenario("bdd_cg_video3_ok", remediate=True), 48)
+
+
+@when("我跑一个少装一盘就完成收尾后不再补盘的剧本")
+def when_run_video3_no_remediate(client, ctx):
+    _run(client, ctx, _video3_scenario("bdd_cg_video3_ng", remediate=False), 48)
+
+
+@when("我跑一个真漏一盘就封箱后补盘补步骤的剧本")
+def when_run_video4_remediate(client, ctx):
+    _run(client, ctx, _video4_scenario("bdd_cg_video4_ok", remediate=True), 48)
+
+
+@when("我跑一个真漏一盘就封箱不再补做的剧本")
+def when_run_video4_no_remediate(client, ctx):
+    _run(client, ctx, _video4_scenario("bdd_cg_video4_stall", remediate=False), 48)
 
 
 # ==================== Then ====================
@@ -274,3 +419,15 @@ def then_ng_plus_one(client, ctx):
         f"不良总数应恰 +1 (基线={baseline}, 现在={counters})"
     assert counters.get("合格总数", 0) - baseline.get("合格总数", 0) == 0, \
         f"合格总数不应变化 (基线={baseline}, 现在={counters})"
+
+
+@then("合格与不良计数都不变")
+def then_both_unchanged(client, ctx):
+    """零差异对照: 门静默拦死 → 周期永不结算 (跑完剧本后双计数原地不动)."""
+    import time as _t
+    _t.sleep(float(ctx["total_frames"]) / 60.0 + 5.0)
+    counters = read_counters(client, 0)
+    baseline = ctx["baseline"]
+    for name in ("合格总数", "不良总数"):
+        assert counters.get(name, 0) == baseline.get(name, 0), \
+            f"{name} 不应变化 (基线={baseline}, 现在={counters})"

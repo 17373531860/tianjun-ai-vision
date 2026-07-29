@@ -188,7 +188,10 @@ def test_full_cycle_ok_settles_on_departure():
     st = _st(cfg)
     evs, _ = _run_cycle(st, cfg, 100.0, tare=1.0, net=3.0)
     acts = _acts(evs)
-    assert "record" in acts and "product_settled" in acts and "send_zero" in acts
+    # 结算后必须发清秤指令; 离秤读数 -1.0 超出置零量程(±0.5) → 智选去皮(T)清秤
+    # (2026-07 修复: Z 在偏离零点时会被秤硬件拒绝, 秤面卡在负值)
+    assert "record" in acts and "product_settled" in acts
+    assert acts.count("send_tare") >= 2   # 上秤去皮 1 次 + 结算后清秤 1 次
     rec = next(e for e in evs if e.get("action") == "record")["result"]
     assert rec["verdict"] == "ok"
     assert rec["net"] == pytest.approx(3.0)
@@ -227,6 +230,50 @@ def test_over_alarm_immediate_on_stable():
     assert "over" in _kinds(evs)
 
 
+def test_shortage_remind_throttled_and_marked_remind():
+    """2026-07 萍乡现场回归: 秤读数 ±3g 微抖不断产生"新稳定净重值",
+    旧"值变才重报"门形同虚设 → 缺料提醒 1~2 秒一条、借完整 NG 事件面把
+    NG 计数 30 秒刷 +16。修后语义: 投料中缺料 = "过程提醒"档(remind=True,
+    只借灯/语音不计数), 默认每 10s 一条; NG 计数由离秤结算记一次。"""
+    cfg = _cfg(timing={"shortage_alarm_sec": 1.0, "remind_repeat_sec": 10.0})
+    st = _st(cfg)
+    _, t = _feed_until_tare(st, 1.0, cfg, 100.0)
+    all_evs = []
+    # 30 秒持续缺料, 读数在 2.500/2.503/2.497 间微抖 (每 2 秒换一个稳定值)
+    for i in range(15):
+        w = 2.5 + (0.003 if i % 3 == 1 else (-0.003 if i % 3 == 2 else 0.0))
+        evs, t = _feed_span(st, w, cfg, t + 0.1, dur=2.0)
+        all_evs += evs
+    reminds = [e for e in all_evs
+               if e.get("action") == "alarm" and e.get("kind") == "shortage"]
+    # 30s / 10s 节流 → 最多 3~4 条 (决不能再是十几条), 且全部标 remind
+    assert 1 <= len(reminds) <= 4, f"30s 缺料提醒应 1~4 条(10s 节流), 实际 {len(reminds)}"
+    assert all(e.get("remind") for e in reminds), "投料中缺料必须是提醒档(remind=True)"
+    # 该件离秤结算仍正常判 NG, 且结算报警是计数档 (remind=False)
+    evs, t = _feed_span(st, -1.0, cfg, t + 0.1, dur=1.0)
+    rec = next(e for e in evs if e.get("action") == "record")["result"]
+    assert rec["verdict"] == "shortage"
+    settle_alarms = [e for e in evs
+                     if e.get("action") == "alarm" and e.get("kind") == "shortage"]
+    assert settle_alarms and not any(e.get("remind") for e in settle_alarms), \
+        "离秤结算的缺料报警必须是计数档(remind=False)"
+
+
+def test_over_remind_throttled_and_marked_remind():
+    cfg = _cfg(timing={"remind_repeat_sec": 10.0})
+    st = _st(cfg)
+    _, t = _feed_until_tare(st, 1.0, cfg, 100.0)
+    all_evs = []
+    for i in range(10):   # 20 秒持续超量微抖
+        w = 3.5 + (0.003 if i % 2 else -0.003)
+        evs, t = _feed_span(st, w, cfg, t + 0.1, dur=2.0)
+        all_evs += evs
+    reminds = [e for e in all_evs
+               if e.get("action") == "alarm" and e.get("kind") == "over"]
+    assert 1 <= len(reminds) <= 3, f"20s 超量提醒应 1~3 条(10s 节流), 实际 {len(reminds)}"
+    assert all(e.get("remind") for e in reminds)
+
+
 def test_ng_departure_settles_ng():
     cfg = _cfg()
     st = _st(cfg)
@@ -241,19 +288,22 @@ def test_zero_delay_configurable():
     cfg = _cfg(timing={"zero_delay_ms": 2000})
     st = _st(cfg)
     evs, t = _run_cycle(st, cfg, 100.0)
-    assert "send_zero" not in _acts(evs)   # 延迟 2s 未到
+    # 延迟 2s 未到: 结算后不该有任何清秤指令 (去皮 T 只在上秤阶段发过 1 次)
+    assert "send_zero" not in _acts(evs) and _acts(evs).count("send_tare") == 1
     evs, _ = _feed_span(st, -1.0, cfg, t + 0.1, dur=2.5)
-    assert "send_zero" in _acts(evs)
+    # 延迟到点发清秤; 读数 -1.0 超出置零量程 → 智选 T
+    assert "send_tare" in _acts(evs)
 
 
 def test_zero_verify_retry_then_residue_alarm():
     cfg = _cfg(timing={"zero_verify_ms": 400, "zero_retry": 1})
     st = _st(cfg)
     all_evs, t = _run_cycle(st, cfg, 100.0)
-    # Z 已发 (delay=0), 但读数一直不归零 (残留 -1.0) → 验证超时重发 1 次 → 仍不归零报残留
+    # 清秤已发 (delay=0, 读数 -1.0 智选 T), 但读数一直不归零 → 验证超时重发 1 次 → 仍不归零报残留
     evs, t2 = _feed_span(st, -1.0, cfg, t + 0.1, dur=1.5)
     all_evs += evs
-    assert _acts(all_evs).count("send_zero") == 2   # 首发 + 重发 1 次
+    # 上秤去皮 1 次 + 清秤首发 + 重发 1 次 = 3 次 T
+    assert _acts(all_evs).count("send_tare") == 3
     assert "residue" in _kinds(all_evs)
     # 接受漂移为新零点后, 新件仍能正常去皮 (基线折算: -1 基线下读 0.0 = 自重 1.0)
     evs, _ = _feed_span(st, 0.0, cfg, t2 + 1.0, dur=1.5)
@@ -272,6 +322,55 @@ def test_fast_hand_skips_zero_delta_tare():
     assert "send_zero" not in acts          # Z 被取消
     assert "send_tare" in acts              # T 重新归零
     assert st.tare_weight == pytest.approx(1.2)   # 差值折算: 0.2 - (-1.0)
+
+
+def test_clear_command_smart_selects_Z_or_T():
+    """清秤指令智选: 零点附近用 Z (校正真零漂移), 偏离远用 T (Z 会被秤量程拒绝)。"""
+    cfg = _cfg()
+    st = _st(cfg)
+    t = cfg["timing"]
+    assert st._clear_command_event(-0.3, t)["action"] == "send_zero"
+    assert st._clear_command_event(0.4, t)["action"] == "send_zero"
+    assert st._clear_command_event(-4.0, t)["action"] == "send_tare"
+    # 阈值现场可配
+    t2 = dict(t, zero_cmd_range_kg=5.0)
+    assert st._clear_command_event(-4.0, t2)["action"] == "send_zero"
+
+
+def test_zero_rejected_stuck_negative_new_piece_still_tares():
+    """2026-07 萍乡百斯特现场缺陷复现: 清零被秤拒绝、秤面卡 -4kg 时新件上秤。
+
+    旧实现: 见正读数盲判'已归零'把零点基线清成 0 → 件自重被算成 0.5kg,
+    低于皮重下限不去皮; 等水泥加到 ~1.2kg 落进皮重区间才误去皮把水泥吞掉。
+    新实现: 用皮重区间做合理性核对, 保留基线按差值折算, 去皮正确。
+    """
+    cfg = _cfg(pipeline={"tare_min_kg": 1.0, "tare_max_kg": 6.0},
+               timing={"zero_verify_ms": 800, "zero_retry": 1})
+    st = _st(cfg)
+    _, t = _run_cycle(st, cfg, 100.0, tare=4.0, net=3.0)   # 离秤读数 -4.0
+    # 清秤指令被秤拒绝: 读数继续卡在 -4.0
+    _, t = _feed_span(st, -4.0, cfg, t + 0.1, dur=0.3)
+    # 新件 (自重 4.5) 上秤: 卡住的秤面显示 -4.0 + 4.5 = +0.5
+    evs, _ = _feed_span(st, 0.5, cfg, t + 0.1, dur=1.5)
+    assert "send_tare" in _acts(evs)
+    assert st.tare_weight == pytest.approx(4.5)   # 差值折算 0.5 - (-4.0), 不是 0.5
+    assert st.phase == "filling"
+
+
+def test_zero_retry_aborted_when_new_piece_on_scale():
+    """重发守门: 验证窗内新件疑似已上秤 → 禁止再发清秤 (T 会把件重吞进秤内寄存器)。"""
+    cfg = _cfg(pipeline={"tare_min_kg": 1.0, "tare_max_kg": 6.0},
+               timing={"zero_verify_ms": 400, "zero_retry": 3})
+    st = _st(cfg)
+    _, t = _run_cycle(st, cfg, 100.0, tare=4.0, net=3.0)   # 离秤读数 -4.0, 清秤被拒
+    # 新件 (自重 3.0) 上秤: 卡住的秤面显示 -4.0 + 3.0 = -1.0 (仍为负)
+    evs, _ = _feed_span(st, -1.0, cfg, t + 0.1, dur=2.0)
+    acts = _acts(evs)
+    assert "residue" not in _kinds(evs)
+    assert st.tare_weight == pytest.approx(3.0)   # 差值折算 -1.0 - (-4.0)
+    assert st.phase == "filling"
+    # 新件去皮的 T 之外, 不允许再有清秤重发
+    assert acts.count("send_tare") <= 2
 
 
 # ==================== 阶段二: 待收尾队列 ====================
@@ -352,3 +451,55 @@ def test_snapshot_exposes_pipeline_fields():
     assert snap["settled_count"] == 1
     assert len(snap["pending"]) == 1
     assert snap["pending"][0]["verdict"] == "ok"
+
+
+# ==================== v3.45 作业员从用户名单选择 (可选项) ====================
+
+def test_engine_snapshot_exposes_operator_from_users_flag():
+    """开关透传: weighing 配置根键 → merge_config → 引擎快照 (前端据此切下拉)。"""
+    from backend.services.weighing_engine import WeighingEngine
+    eng = WeighingEngine()
+    eng.set_channel_config(0, {**_cfg(), "operator_from_users": True})
+    assert eng.snapshot(0)["operator_from_users"] is True
+    # 默认关: 老项目无此键 → False (自由填写, 行为不变)
+    eng.set_channel_config(1, _cfg())
+    assert eng.snapshot(1)["operator_from_users"] is False
+
+
+def test_operators_endpoint_lists_active_users_only(monkeypatch):
+    """/weighing/operators 只返回启用账号的显示名 (无显示名回退用户名)。"""
+    from backend.api import weighing as weighing_api
+
+    class _U:
+        def __init__(self, username, display_name, active):
+            self.username, self.display_name, self.active = username, display_name, active
+
+    users = [_U("gong001", "张师傅", True),
+             _U("gong002", None, True),
+             _U("gong003", "已离职", False)]
+
+    class _Q:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *a, **k):
+            # 模拟 User.active == True 过滤
+            return _Q([u for u in self._rows if u.active])
+
+        def order_by(self, *a, **k):
+            return self
+
+        def all(self):
+            return self._rows
+
+    class _DB:
+        def query(self, *a, **k):
+            return _Q(users)
+
+        def close(self):
+            pass
+
+    import backend.db.database as dbmod
+    monkeypatch.setattr(dbmod, "SessionLocal", lambda: _DB())
+    out = weighing_api.weighing_operators()
+    assert out == {"operators": ["张师傅", "gong002"]}

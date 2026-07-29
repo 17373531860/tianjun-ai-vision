@@ -431,7 +431,11 @@ class StepStatsMixin:
             self._process_single_step(label, current_time, enabled_labels, _is_seq_like,
                                       should_update_screenshot, original_frame,
                                       det_by_label.get(label), just_confirmed_labels)
-        
+
+        # v3.45 周期开始即时通知包装协调器 (箱标签扫码授权: 未扫就开做当场报警).
+        # 每周期只发一次, 非包装通道零开销 — 见 settlement mixin 同名方法.
+        self._notify_packaging_cycle_started()
+
         if should_update_screenshot:
             self._last_screenshot_time = current_time
         

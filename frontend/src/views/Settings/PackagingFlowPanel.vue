@@ -311,6 +311,14 @@
                 在 MES 网关页某条连接的"推送事件"里加这个名 + 配地址/模板才会真正发出.
               </div>
             </el-form-item>
+            <el-form-item label="同步到工单管理">
+              <el-switch v-model="form.sync_work_orders" />
+              <span class="text-xs text-gray-400 ml-2">
+                开(默认) = 扫码开工的工单同步进「MES管理 → 工单」页(来源=包装扫码):
+                开工"生产中"、收尾"已完成"、中止"已取消", 可在工单页查看与管理;
+                关 = 老行为, 包装单只存运行记录, 工单页不可见
+              </span>
+            </el-form-item>
           </el-collapse-item>
 
           <!-- 组⑥ 异常事件映射 -->
@@ -436,6 +444,88 @@
                              :label="ev.label" :value="ev.value" />
                 </el-select>
               </el-form-item>
+          </el-collapse-item>
+
+          <!-- 组⑧ 箱标签扫码授权 + 标签取本箱数量 (v3.45, 仅滑块口径显示) -->
+          <el-collapse-item v-if="form.count_unit === 'sliders'"
+                            title="⑧ 箱标签扫码 — 每箱扫标签放行 / 从标签取本箱数量" name="g8">
+              <div class="text-xs text-gray-400 mb-2 leading-relaxed">
+                每箱开做前必须扫箱标签（含第一箱）: 扫工单只开工单, 每箱都要再扫一次箱标签才放行开做, 未扫就开始作业当场报警;
+                可再开「取本箱数量」: 从标签复合二维码里取出本箱应装数量当本箱目标（<b>逐箱可变</b>, 覆盖工单级每箱数/尾数计划）.
+              </div>
+              <el-form-item label="每箱必须扫箱标签">
+                <el-switch v-model="form.box_label_scan_required" />
+                <span class="text-xs text-gray-400 ml-2">
+                  开 = 每箱进「等扫箱标签」态, 扫到本工单的标签才放行开做; 关 = 老行为 (扫工单后自动逐箱开)
+                </span>
+              </el-form-item>
+              <template v-if="form.box_label_scan_required">
+                <el-form-item label="从标签取本箱数量">
+                  <el-switch v-model="form.label_qty_enabled" />
+                  <span class="text-xs text-gray-400 ml-2">
+                    开 = 必须扫到带数量的复合二维码才放行, 扫到裸条形码/取不出数量 → 报警"请扫二维码"继续等;
+                    关 = 标签只当放行凭证, 本箱目标仍按工单级计划
+                  </span>
+                </el-form-item>
+                <el-form-item label="数量在第几段" v-if="form.label_qty_enabled">
+                  <el-input-number v-model="form.label_qty_segment" :min="1" :max="20" />
+                  <span class="text-xs text-gray-400 ml-2">
+                    按组③的分隔符拆段后取第 N 段 (1 起); 如 订单|工单|数量|校验串 → 第 3 段, "24.00" 取整为 24
+                  </span>
+                </el-form-item>
+                <el-form-item label="数量段识别正则" v-if="form.label_qty_enabled">
+                  <el-input v-model="form.label_qty_pattern" placeholder="留空 = 按上面段号取; 如 \d+\.\d+" />
+                  <span class="text-xs text-gray-400 ml-2">
+                    可选兜底: 段序不固定的标签格式用正则在各段里找数量段, 配了就优先于段号 — 格式变了只改这里不改代码
+                  </span>
+                </el-form-item>
+                <el-form-item label="已放行后重扫标签">
+                  <el-radio-group v-model="form.label_rescan_action">
+                    <el-radio value="ignore">忽略（默认）</el-radio>
+                    <el-radio value="update">更新本箱目标</el-radio>
+                  </el-radio-group>
+                  <div class="text-xs text-gray-400 mt-1 w-full">
+                    本箱已放行后又扫到本工单标签的处置: 更新档用新扫到的数量覆盖本箱目标（贴错标签重贴重扫的场景）
+                  </div>
+                </el-form-item>
+                <el-form-item label="未扫标签做完整箱">
+                  <el-radio-group v-model="form.unauthorized_cycle_action">
+                    <el-radio value="hold">箱账挂起等人工（默认）</el-radio>
+                    <el-radio value="book">报警后照常落账</el-radio>
+                  </el-radio-group>
+                  <div class="text-xs text-gray-400 mt-1 w-full">
+                    工人无视报警把整箱做完时的处置: 挂起 = 等人工补齐/认NG/重做（重做后必须先扫标签再重测）;
+                    照常落账 = 只报警不拦产线, 按工单级计划目标落账
+                  </div>
+                </el-form-item>
+                <el-form-item label="收尾数量对账" v-if="form.label_qty_enabled">
+                  <el-switch v-model="form.label_total_check" />
+                  <span class="text-xs text-gray-400 ml-2">
+                    开 = 工单收尾时核对「各箱标签数量合计」与「排产量」, 不平报警（只提醒留痕, 不改箱成绩）
+                  </span>
+                </el-form-item>
+                <el-form-item label="未扫标签开做 事件">
+                  <el-select v-model="form.event_box_not_scanned" class="w-full" clearable
+                             placeholder="默认通用报警" filterable>
+                    <el-option v-for="ev in eventOptions" :key="ev.value"
+                               :label="ev.label" :value="ev.value" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="标签缺数量 事件" v-if="form.label_qty_enabled">
+                  <el-select v-model="form.event_label_qty_missing" class="w-full" clearable
+                             placeholder="默认通用报警" filterable>
+                    <el-option v-for="ev in eventOptions" :key="ev.value"
+                               :label="ev.label" :value="ev.value" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="对账不平 事件" v-if="form.label_total_check">
+                  <el-select v-model="form.event_label_total_mismatch" class="w-full" clearable
+                             placeholder="默认通用报警" filterable>
+                    <el-option v-for="ev in eventOptions" :key="ev.value"
+                               :label="ev.label" :value="ev.value" />
+                  </el-select>
+                </el-form-item>
+              </template>
           </el-collapse-item>
         </el-collapse>
       </el-form>
@@ -618,6 +708,19 @@ const _newForm = () => ({
   // 已完成(OK)工单重扫拦截 (v3.42.1, 默认关)
   block_completed_order_rescan: false,
   event_completed_order_rescan: null,
+  // 包装工单镜像进工单管理 (v3.45, 默认开)
+  sync_work_orders: true,
+  // 组⑧ 箱标签扫码授权 + 标签取本箱数量 (v3.45, 默认关)
+  box_label_scan_required: false,
+  label_qty_enabled: false,
+  label_qty_segment: 3,
+  label_qty_pattern: null,
+  label_rescan_action: 'ignore',
+  unauthorized_cycle_action: 'hold',
+  label_total_check: false,
+  event_box_not_scanned: null,
+  event_label_qty_missing: null,
+  event_label_total_mismatch: null,
 });
 
 const form = reactive(_newForm());
@@ -753,6 +856,17 @@ const applyHiwinPreset = () => {
     // 完成(OK)工单重扫只提示不重开 (客户诉求: 做完的单不允许误扫再录入)
     block_completed_order_rescan: true,
     event_completed_order_rescan: 3,
+    // 组⑧ 每箱扫标签放行 + 标签取本箱数量 (2026-07 现场诉求: 逐箱可变数量, 未扫开做报警)
+    box_label_scan_required: true,
+    label_qty_enabled: true,
+    label_qty_segment: 3,           // 订单|工单|数量|校验串 → 第 3 段
+    label_qty_pattern: null,
+    label_rescan_action: 'ignore',
+    unauthorized_cycle_action: 'hold',
+    label_total_check: true,
+    event_box_not_scanned: 3,
+    event_label_qty_missing: 3,
+    event_label_total_mismatch: 3,
 
     // 按规格自动切项目: 项目直接以规格命名(如 SYS1)即可零配置切换; 名不一致再填映射表
     auto_switch_project: true,

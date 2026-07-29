@@ -210,3 +210,64 @@ def test_get_model_spec_missing():
     assert get_model_spec(cfg, "型号A", "钢帽水泥") is not None
     assert get_model_spec(cfg, "不存在", "钢帽水泥") is None
     assert get_model_spec(cfg, "型号A", "不存在料别") is None
+
+
+# ---------- 网关推送后台线程 (2026-07 萍乡百斯特: 达梦重试卡死推理线程 15s) ----------
+def test_finalize_push_never_blocks_caller(monkeypatch):
+    """结案推送必须入队即返回: 网关慢 (模拟达梦不可达重试) 不允许拖住调用方。"""
+    import threading
+    from backend.services.weighing_engine import WeighingEngine
+
+    calls = []
+    done = threading.Event()
+
+    class SlowGateway:
+        def dispatch(self, event_type, payload, channel_id=None):
+            time.sleep(1.0)   # 模拟外部数据库超时重试
+            calls.append((event_type, payload, channel_id))
+            done.set()
+
+    import backend.services.mes_gateway as gwmod
+    monkeypatch.setattr(gwmod, "get_mes_gateway", lambda: SlowGateway())
+
+    eng = WeighingEngine()
+    entry = {"sn": "SN1", "model": "型号A", "net": 0.5, "verdict": "ok",
+             "enqueued_at": 123.0}
+    t0 = time.time()
+    eng._do_finalize(0, entry, "label")   # 调用方 = 推理线程视角
+    elapsed = time.time() - t0
+    assert elapsed < 0.5, f"结案调用被推送阻塞了 {elapsed:.2f}s (必须立即返回)"
+
+    assert done.wait(timeout=5.0), "后台线程未在期限内完成推送"
+    ev, payload, ch = calls[0]
+    assert ev == "weighing_product_done"
+    assert payload["sn"] == "SN1"
+    assert payload["finalize_status"] == "confirmed"
+    assert "enqueued_at" not in payload   # 内部字段不外泄
+    assert ch == 0
+
+
+def test_push_queue_survives_gateway_error(monkeypatch):
+    """网关抛异常只告警不炸线程: 后续推送照常投递。"""
+    import threading
+    from backend.services.weighing_engine import WeighingEngine
+
+    calls = []
+    done = threading.Event()
+
+    class FlakyGateway:
+        def dispatch(self, event_type, payload, channel_id=None):
+            if not calls:
+                calls.append("boom")
+                raise RuntimeError("连接被拒绝")
+            calls.append(payload["sn"])
+            done.set()
+
+    import backend.services.mes_gateway as gwmod
+    monkeypatch.setattr(gwmod, "get_mes_gateway", lambda: FlakyGateway())
+
+    eng = WeighingEngine()
+    eng._gateway_push_async("weighing_product_done", {"sn": "A"}, 0)
+    eng._gateway_push_async("weighing_product_done", {"sn": "B"}, 0)
+    assert done.wait(timeout=5.0), "异常后推送线程未继续工作"
+    assert calls == ["boom", "B"]   # 第一条失败被隔离, 第二条正常送达

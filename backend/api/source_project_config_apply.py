@@ -35,8 +35,12 @@ def resolve_ng_handling(pipeline_config: dict) -> dict:
     五个版本各自累加的散装开关, 收敛为一个 ``ng_handling`` 块, 四行语义:
       violation:    违规当场反应  none | hint | instant_ng (+ violation_event_id)
       missing_step: 缺步骤时处置  ng | ack | hold (+ hold_timeout_s / hold_event_id)
-      short_count:  少装数量处置  ng | ack
+      short_count:  少装数量处置  ng | ack | hold (hold=挂起补数量断点重做, v3.44.1)
       gate:         数量门(事前拦截) gate_enabled / gate_steps / gate_event_id
+                    + gate_escalate_steps (v3.44.4 短拦长放): 列表内的收尾步骤被门
+                    拦时不再静默吞掉 — 报警提示后放行进周期, 让结算走挂起补做链.
+                    适合 min_frames 较高、确认成立≈真人动作的步骤 (如封箱);
+                    噪声高发步骤 (如放油嘴包 min_frames=1) 不要放进来.
     老项目没有 ng_handling → 从 legacy 键合成等价档位, 行为零差异.
     """
     def _ev(v):
@@ -65,6 +69,7 @@ def resolve_ng_handling(pipeline_config: dict) -> dict:
             'gate_enabled': cg.get('gate_enabled', False),
             'gate_steps': cg.get('gate_steps') or [],
             'gate_event_id': cg.get('event_id'),
+            'gate_escalate_steps': [],
         }
     violation = src.get('violation')
     if violation not in ('none', 'hint', 'instant_ng'):
@@ -73,7 +78,7 @@ def resolve_ng_handling(pipeline_config: dict) -> dict:
     if missing_step not in ('ng', 'ack', 'hold'):
         missing_step = 'ng'
     short_count = src.get('short_count')
-    if short_count not in ('ng', 'ack'):
+    if short_count not in ('ng', 'ack', 'hold'):
         short_count = 'ng'
     try:
         hold_timeout_s = max(0.0, float(src.get('hold_timeout_s', 120) or 0))
@@ -89,6 +94,7 @@ def resolve_ng_handling(pipeline_config: dict) -> dict:
         'gate_enabled': bool(src.get('gate_enabled', False)),
         'gate_steps': [s for s in (src.get('gate_steps') or []) if s],
         'gate_event_id': _ev(src.get('gate_event_id')),
+        'gate_escalate_steps': [s for s in (src.get('gate_escalate_steps') or []) if s],
     }
 
 
@@ -368,8 +374,12 @@ def _apply_pipeline_config(h, config, pipeline_config):
     h._closing_gate_enabled = _ngh['gate_enabled']
     h._closing_gate_steps = set(_ngh['gate_steps'])
     h._closing_gate_event_id = _ngh['gate_event_id']
+    h._closing_gate_escalate_steps = set(_ngh['gate_escalate_steps'])
     _allow_step = _ngh['missing_step'] != 'ng'
     _allow_count = _ngh['short_count'] == 'ack'
+    # v3.44.1 少装挂起 (short_count=hold): 步骤全对仅数量不足 → 不判 NG, 摘下收尾
+    # 步骤挂起等补数量, 补足并重做收尾后自动 OK (断点重做, 保留已对的步骤与箱账)
+    h._short_count_hold = _ngh['short_count'] == 'hold'
     h._ng_remediation = {
         'enabled': _allow_step or _allow_count,
         'allow_step': _allow_step,
@@ -380,7 +390,8 @@ def _apply_pipeline_config(h, config, pipeline_config):
         print(f"NG 处置: 违规当场={_ngh['violation']}(事件{_ngh['violation_event_id']}) "
               f"缺步={_ngh['missing_step']}(超时{_ngh['hold_timeout_s']}s/事件{_ngh['hold_event_id']}) "
               f"少装={_ngh['short_count']} 数量门={_ngh['gate_enabled']}"
-              f"{sorted(h._closing_gate_steps)}(事件{_ngh['gate_event_id']})")
+              f"{sorted(h._closing_gate_steps)}(事件{_ngh['gate_event_id']}, "
+              f"升级放行{sorted(h._closing_gate_escalate_steps)})")
     print(
         f"结算模式: {h.settlement_mode}, 空闲超时: {h.idle_timeout_seconds}s, "
         f"周期超时: {h.cycle_max_duration}s"

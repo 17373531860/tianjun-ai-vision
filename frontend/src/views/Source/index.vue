@@ -78,7 +78,7 @@
                   <el-input v-model="wsConfigs[ch - 1].hcnetPassword" type="password" show-password size="small" />
                 </el-form-item>
               </div>
-              <div class="grid grid-cols-2 gap-2">
+              <div class="grid grid-cols-3 gap-2">
                 <el-form-item label="通道号">
                   <el-input-number v-model="wsConfigs[ch - 1].hcnetChannel" :min="0" :precision="0" size="small" class="w-full" />
                 </el-form-item>
@@ -86,6 +86,16 @@
                   <el-select v-model="wsConfigs[ch - 1].hcnetStreamType" class="w-full" size="small">
                     <el-option label="子码流" :value="1" />
                     <el-option label="主码流" :value="0" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="目标帧率">
+                  <el-select v-model="wsConfigs[ch - 1].hcnetFps" class="w-full" size="small">
+                    <el-option label="10" :value="10" />
+                    <el-option label="15" :value="15" />
+                    <el-option label="25" :value="25" />
+                    <el-option label="30" :value="30" />
+                    <el-option label="50" :value="50" />
+                    <el-option label="60" :value="60" />
                   </el-select>
                 </el-form-item>
               </div>
@@ -146,6 +156,7 @@
                   <el-option label="10" :value="10" />
                   <el-option label="15" :value="15" />
                   <el-option label="30" :value="30" />
+                  <el-option label="60" :value="60" />
                 </el-select>
               </el-form-item>
               <el-form-item label="GPU">
@@ -395,7 +406,12 @@
                   <el-option label="15 FPS" :value="15" />
                   <el-option label="25 FPS (推荐)" :value="25" />
                   <el-option label="30 FPS" :value="30" />
+                  <el-option label="50 FPS" :value="50" />
+                  <el-option label="60 FPS" :value="60" />
                 </el-select>
+                <div class="text-xs text-gray-400 mt-1">
+                  需设备端码流帧率同步调高才有效，超过码流实际帧率不会增加画面帧数
+                </div>
               </el-form-item>
             </div>
             <el-alert type="success" :closable="false" class="mt-2">
@@ -620,7 +636,7 @@ const systemStore = useSystemStore();
 
 // ===== Workstation Mode =====
 const workstationMode = ref(1);
-const makeDefaultWsConfig = () => ({ sourceType: 'camera', cameraId: '', projectId: null, resolution: '1280x720', fps: 60, gpuDevice: 'auto', autoExposure: true, exposureValue: -6, videoFile: null, imageFile: null, rtspUrl: '', rtspFps: 25, hcnetIp: '', hcnetPort: 8000, hcnetUsername: 'admin', hcnetPassword: '', hcnetChannel: 1, hcnetStreamType: 1 });
+const makeDefaultWsConfig = () => ({ sourceType: 'camera', cameraId: '', projectId: null, resolution: '1280x720', fps: 60, gpuDevice: 'auto', autoExposure: true, exposureValue: -6, videoFile: null, imageFile: null, rtspUrl: '', rtspFps: 25, hcnetIp: '', hcnetPort: 8000, hcnetUsername: 'admin', hcnetPassword: '', hcnetChannel: 1, hcnetStreamType: 1, hcnetFps: 25 });
 const wsConfigured = (idx) => {
   const c = wsConfigs[idx];
   if (!c) return false;
@@ -746,7 +762,7 @@ const saveAndStartMulti = async () => {
           password: cfg.hcnetPassword || '',
           channel: cfg.hcnetChannel || 1,
           stream_type: cfg.hcnetStreamType ?? 1,
-          fps: 25
+          fps: cfg.hcnetFps || 25
         });
       } else if (cfg.sourceType === 'rtsp' && cfg.rtspUrl) {
         await api.post(`/source/rtsp/start?channel=${ch}`, { url: cfg.rtspUrl, fps: cfg.rtspFps || 25 });
@@ -788,6 +804,7 @@ const saveAndStartMulti = async () => {
         persistCfg.hcnet_password = cfg.hcnetPassword;
         persistCfg.hcnet_channel = cfg.hcnetChannel;
         persistCfg.hcnet_stream_type = cfg.hcnetStreamType;
+        persistCfg.hcnet_fps = cfg.hcnetFps || 25;
       } else if (cfg.sourceType === 'video' && cfg._videoFilePath) {
         persistCfg.video_file = cfg._videoFilePath;
       }
@@ -869,6 +886,7 @@ const loadWorkstationMode = async () => {
         if (cfg.hcnet_password) wsConfigs[idx].hcnetPassword = cfg.hcnet_password;
         if (cfg.hcnet_channel) wsConfigs[idx].hcnetChannel = cfg.hcnet_channel;
         if (cfg.hcnet_stream_type != null) wsConfigs[idx].hcnetStreamType = cfg.hcnet_stream_type;
+        if (cfg.hcnet_fps) wsConfigs[idx].hcnetFps = cfg.hcnet_fps;
       }
     }
   } catch (e) { /* keep default */ }
@@ -1308,6 +1326,7 @@ const saveAndStart = async () => {
       singlePersist.hcnet_password = hcnetsdkSettings.value.password;
       singlePersist.hcnet_channel = hcnetsdkSettings.value.channel;
       singlePersist.hcnet_stream_type = hcnetsdkSettings.value.streamType;
+      singlePersist.hcnet_fps = hcnetsdkSettings.value.fps;
     } else if (sourceType.value === 'video' && sourceStore.videoPath) {
       singlePersist.video_file = sourceStore.videoPath;
     }

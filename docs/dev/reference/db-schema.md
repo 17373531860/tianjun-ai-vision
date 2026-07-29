@@ -1,7 +1,7 @@
 # 数据库表参考
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-07-20）
+> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-07-29）
 > **单一事实源**：SQLAlchemy ORM（Base.metadata）。字段含义看模型源文件行内注释；
 > 迁移历史看 backend/db/migrations/ 与 backend/main.py 的 migrate_database。
 
@@ -651,6 +651,17 @@ ORM 类 `PackagingFlowConfig`，定义于 `backend/models/mes_models.py`。
 | `event_missing_nozzle` | INTEGER |  |  |
 | `block_completed_order_rescan` | BOOLEAN |  | False |
 | `event_completed_order_rescan` | INTEGER |  |  |
+| `sync_work_orders` | BOOLEAN |  | True |
+| `box_label_scan_required` | BOOLEAN |  | False |
+| `label_qty_enabled` | BOOLEAN |  | False |
+| `label_qty_segment` | INTEGER |  | 3 |
+| `label_qty_pattern` | VARCHAR(128) |  |  |
+| `label_rescan_action` | VARCHAR(8) |  | 'ignore' |
+| `unauthorized_cycle_action` | VARCHAR(8) |  | 'hold' |
+| `label_total_check` | BOOLEAN |  | False |
+| `event_box_not_scanned` | INTEGER |  |  |
+| `event_label_qty_missing` | INTEGER |  |  |
+| `event_label_total_mismatch` | INTEGER |  |  |
 | `plugin_data` | JSON |  |  |
 | `created_at` | DATETIME |  | server |
 | `updated_at` | DATETIME |  | server |

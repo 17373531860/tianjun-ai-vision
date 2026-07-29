@@ -38,6 +38,18 @@ class InferenceLoopMixin:
             return (None, None, last_frame_id)
         return (frame, display_small, frame_id)
 
+    def _ack_freeze_active(self) -> bool:
+        """v3.44.2 人工确认定格是否要求跳过推理 (True = 本帧不跑模型不出框)。
+
+        仅步骤状态机路径生效: tracking / 区域事件模式没有 require_ack 定格语义
+        (它们的统计函数里没有阻塞门), 跳过推理反而会改变其既有行为。
+        """
+        if not getattr(self, '_pending_ack', False):
+            return False
+        if getattr(self, '_region_event_engine', None) is not None:
+            return False
+        return (self.project_config or {}).get('logic_mode') != 'tracking'
+
     def _inference_select_and_run_model(self, frame):
         """按 router 调度跑多模型 + 合并 detections + 坐标系映射.
 
@@ -330,6 +342,21 @@ class InferenceLoopMixin:
                     perf_frames = 0
                     perf_empty = 0
                     perf_grab_miss = 0
+
+                # ── v3.44.2 人工确认定格 = 检测线整体停摆 (上银现场诉求) ──
+                # 确认框弹出到工人点确认前, 工人要执行"取出错盘/放回"等整改动作,
+                # 这些动作绝不能被识别成放托盘/收尾步骤。老实现只冻结状态机
+                # (帧仍推理+出框), 整改动作的余波会在解除定格瞬间被状态机看到;
+                # 现在直接跳过模型推理并清空已发布检测框 (画面无框 = 一眼可见
+                # "线已定格")。超时自动确认仍由 _update_step_stats 的阻塞门驱动
+                # (喂空检测, 阻塞中它在门口即返回, 不推进任何状态)。
+                # ⚠️ 必须在取帧之前: 视频源定格期间播放位置冻结、无新帧,
+                # 放在取帧后会因 frame=None 短路, 超时自动确认永远轮不到。
+                if self._ack_freeze_active():
+                    self._update_step_stats([], None)
+                    self._inference_publish_detections([], False)
+                    time.sleep(0.02)
+                    continue
 
                 # 取最新帧 + 去重
                 frame, display_small, frame_id = self._inference_grab_latest_frame(last_frame_id)

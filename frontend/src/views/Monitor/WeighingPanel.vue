@@ -25,7 +25,13 @@
       <!-- 前置选择: 人员 / 型号 / 序列号 + 开始 -->
       <div class="px-3 py-2 border-b border-slate-700 flex flex-wrap items-center gap-2 text-sm">
         <span class="text-gray-400">人员</span>
-        <el-input v-model="opInput" size="small" style="width: 120px" placeholder="操作人员" />
+        <!-- v3.45 可选: 从用户名单选择 (称重配置·前置要求 开关), 默认自由填写 -->
+        <el-select v-if="state.operator_from_users" v-model="opInput" size="small" style="width: 120px"
+                   class="weighing-op-select" placeholder="选择人员" filterable>
+          <el-option v-for="op in operatorOptions" :key="op" :label="op" :value="op" />
+        </el-select>
+        <el-input v-else v-model="opInput" size="small" style="width: 120px"
+                  class="weighing-op-input" placeholder="操作人员" />
         <span class="text-gray-400 ml-2">型号</span>
         <el-select v-model="modelInput" size="small" style="width: 150px" placeholder="选择水泥型号"
                    :disabled="state.material_check === 'visual'">
@@ -142,7 +148,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   getWeighingState, setWeighingContext, weighingScan,
-  weighingTare, weighingZero, weighingReset
+  weighingTare, weighingZero, weighingReset, getWeighingOperators
 } from '@/api/weighing';
 
 const props = defineProps({
@@ -154,6 +160,20 @@ const opInput = ref('');
 const modelInput = ref('');
 const snInput = ref('');
 let timer = null;
+
+// v3.45 作业员名单下拉 (仅 operator_from_users 开启时拉取, 拉一次缓存)
+const operatorOptions = ref([]);
+let operatorsFetched = false;
+const fetchOperators = async () => {
+  if (operatorsFetched) return;
+  operatorsFetched = true;
+  try {
+    const { data } = await getWeighingOperators();
+    operatorOptions.value = data?.operators || [];
+  } catch (e) {
+    operatorsFetched = false; // 失败允许下次轮询重试
+  }
+};
 
 const phase = computed(() => state.value?.phase || 'idle');
 const liveWeight = computed(() => {
@@ -228,6 +248,7 @@ const refresh = async () => {
     if (state.value) {
       if (!opInput.value && state.value.operator) opInput.value = state.value.operator;
       if (!modelInput.value && state.value.model_name) modelInput.value = state.value.model_name;
+      if (state.value.operator_from_users) fetchOperators();
     }
   } catch (e) {
     // 通道未启用称重模式时静默 (面板自身只在 weighing 项目下渲染)

@@ -187,6 +187,9 @@ class SettlementMixin:
                 print(f"  → {reason_str} → NG")
                 self._trigger_event(*compose_settle_event(self, 2, reason_str))
             elif self.current_cycle_steps == expected_labels:
+                # v3.44.1 少装挂起: 步骤全对但箱内数量不足 → 摘收尾步骤挂起 (断点重做)
+                if self._maybe_enter_short_count_hold(expected_labels):
+                    return
                 print("  -> sequence fully matched -> OK")
                 self._trigger_event(*compose_settle_event(self, 1, '顺序正确完成'))
             elif len(self.current_cycle_steps) < len(expected_labels):
@@ -1228,10 +1231,39 @@ class SettlementMixin:
         hold = getattr(self, '_settle_hold', None)
         if hold is not None:
             from collections import Counter
-            need = Counter(hold.get('expected') or []) - Counter(self.current_cycle_steps)
+            expected = list(hold.get('expected') or [])
+            need = Counter(expected) - Counter(self.current_cycle_steps)
             if need.get(label, 0) <= 0:
+                # v3.44.1 下一箱开工止损: 挂起期间期望首步(如贴标)再次出现 =
+                # 工人没补做、直接开下一箱了 → 挂起中止按原因 NG 落账并清运行时,
+                # 放行本次出现去开新周期 — 否则下一箱的托盘/收尾会被吸进上一箱
+                # 的账 (SY3 真视频实测: 91/96 挂起后下箱两盘进账变 139/96 超出,
+                # 下箱周期被吞). 首步吸收窗口: 挂起头 2s 内的首步余像不算开工.
+                if (expected and label == expected[0]
+                        and (time.time() - float(hold.get('since') or 0)) > 2.0):
+                    self._finalize_settle_hold_ng('下一周期已开工, 补做窗口关闭')
+                    return False
                 self._dbg_step_rejected(label, "缺步挂起中: 非缺失步骤, 吸收不计入")
                 return True
+            # v3.44.1 少装挂起的补做次序守门: 必须"先补足数量、再重做收尾" —
+            # 数量没补足前, 重做的收尾步骤 (含结算后 0.5s 内的余像/误检) 一律
+            # 拒收, 否则收尾槽位被余像秒填、真补做反而进不来 (SY3 真视频实测).
+            need_total = hold.get('need_total')
+            if need_total:
+                mix = getattr(self, '_custom_mix', None)
+                try:
+                    booked = mix.container_booked_item_total() if mix else None
+                except Exception:
+                    booked = None
+                if booked is not None and int(booked) < int(need_total):
+                    if self._violation_throttle_pass(f'@short_hold:{label}'):
+                        self._fire_closing_guard_alarm(
+                            f'收尾防呆: 箱内数量 {int(booked)}/{int(need_total)} 未补足 — '
+                            f'请先补数量再重做 [{label}]',
+                            event_id=getattr(self, '_settle_hold_event_id', None))
+                    self._dbg_step_rejected(
+                        label, f"少装挂起中: 数量未补足 ({booked}/{need_total}), 收尾步骤暂拒收")
+                    return True
             return False
         if not getattr(self, '_closing_gate_enabled', False):
             return False
@@ -1251,10 +1283,42 @@ class SettlementMixin:
             # 上银视频二 (漏装第四盘就放油嘴包, 期望当场报警) 实测漏报。
             total = mix.container_booked_item_total()
             target = mix.container_item_target()
+            # v3.44.3 竞态补丁: 末盘刚放入、记账还在峰值就绪等待窗内时,
+            # 紧跟的收尾步骤 (脉冲仅 ~0.5s) 不该被"账面未满"误拦 — 把在途
+            # 主盘峰值计入。区别于 settled 凑数口径: 只认"动作已成立/帧数
+            # 已达标"的在途盘, 备盘区闲置盘不算; 真少装凑不满仍照拦。
+            pending = mix.container_pending_peak_total() or 0
         except Exception as e:
             print(f"[ClosingGuard] 读箱内数量失败 (放行不卡产线): {e}")
             return False
         if total is None or not target or int(total) >= int(target):
+            return False
+        if int(total) + int(pending) >= int(target):
+            print(f"[ClosingGuard] 数量门放行 [{label}]: 已记账 {int(total)} + "
+                  f"在途盘峰值 {int(pending)} >= 目标 {int(target)}")
+            if debug_center.is_on("backend.settlement"):
+                debug_center.dbg("backend.settlement", "数量门在途峰值放行",
+                                 f"channel={self.channel_id} [{label}] "
+                                 f"booked={int(total)} pending={int(pending)} target={int(target)}")
+            return False
+        # v3.44.4 短拦长放: 升级步骤 (min_frames 较高、确认成立≈真人动作, 如封箱)
+        # 被门拦不再静默吞掉 — 报警提示 + 放行进周期, 结算后走挂起补做链
+        # (缺步/少装挂起自带报警+断点重做+超时NG), 治"真漏一盘就封箱 → 门
+        # 静默拦死、周期永不结算"僵局. "已在周期里"即"本周期已升级过":
+        # 后续余像/重复出现落回下方拦截分支吸收, 不会重复放行搅乱序列.
+        if (label in (getattr(self, '_closing_gate_escalate_steps', None) or ())
+                and label not in self.current_cycle_steps):
+            print(f"[ClosingGuard] 数量门升级放行 [{label}]: 箱内 {int(total)}/{int(target)} "
+                  f"未满但确认为真动作 — 进周期走结算挂起补做")
+            if self._violation_throttle_pass(f'@gate_escalate:{label}'):
+                self._fire_closing_guard_alarm(
+                    f'收尾防呆: [{label}] 时箱内数量 {int(total)}/{int(target)} 未满 — '
+                    f'已放行结算, 请按挂起提示补足数量并重做收尾',
+                    event_id=getattr(self, '_closing_gate_event_id', None))
+            if debug_center.is_on("backend.settlement"):
+                debug_center.dbg("backend.settlement", "数量门升级放行",
+                                 f"channel={self.channel_id} [{label}] "
+                                 f"booked={int(total)}/{int(target)}")
             return False
         print(f"[ClosingGuard] 收尾数量门拦下 [{label}]: 箱内已进 {int(total)}/{int(target)}")
         if self._violation_throttle_pass(f'@closing_gate:{label}'):
@@ -1289,8 +1353,27 @@ class SettlementMixin:
             'expected': list(expected_labels),
             'since': time.time(),
         }
+        # v3.44.4: 缺步与少装同时发生 (典型: 封箱被数量门升级放行的真漏盘场景)
+        # → 数量欠账一并写进挂起, 一次提示说全"补步骤+补数量", 销结条件天然
+        # 要求两者都齐 (_maybe_resolve_settle_hold 已支持 need_total); 否则
+        # 工人补完步骤销结、标准结算又撞少装挂起, 被折腾两轮.
+        qty_hint = ''
+        if getattr(self, '_short_count_hold', False):
+            mix = getattr(self, '_custom_mix', None)
+            try:
+                booked = mix.container_booked_item_total() if mix else None
+                target = mix.container_item_target() if mix else None
+            except Exception:
+                booked = target = None
+            if booked is not None and target and int(booked) < int(target):
+                self._settle_hold['need_total'] = int(target)
+                self._settle_hold['ng_reason'] = (
+                    f'周期不完整，缺少: {list(missing)}, '
+                    f'且箱内数量不足 {int(booked)}/{int(target)}')
+                qty_hint = f', 并补足数量 {int(booked)}/{int(target)}'
         self._fire_closing_guard_alarm(
-            f'收尾防呆: 缺少步骤 {list(missing)} — 周期挂起等补做, 补齐自动判合格',
+            f'收尾防呆: 缺少步骤 {list(missing)} — 周期挂起等补做{qty_hint}, '
+            f'补齐自动判合格',
             event_id=getattr(self, '_settle_hold_event_id', None))
         print(f"[ClosingGuard] 缺步结算挂起: missing={list(missing)} "
               f"expected={list(expected_labels)} timeout={getattr(self, '_settle_hold_timeout_s', 0)}s")
@@ -1299,16 +1382,87 @@ class SettlementMixin:
                              f"channel={self.channel_id} missing={list(missing)}")
         return True
 
+    def _maybe_enter_short_count_hold(self, expected_labels) -> bool:
+        """v3.44.1 少装挂起 (short_count=hold, True=已挂起调用方不再结算):
+        步骤全对但箱内进箱数量不足 → 不判 NG 也不清账, 摘下收尾步骤 (数量门
+        步骤集, 没配则末步) 挂起 — 工人补足数量、重做收尾步骤后自动按 OK 结算.
+
+        来自上银 SY3 现场诉求"哪一步错了从那一步重做": 供方短装一盘 (19/24)
+        在封箱结算才暴露, 老行为整周期 NG 作废重来; 挂起语义保留贴标/套内袋
+        与已进箱台账, 只重做放油嘴包/封箱. 必须在 compose_settle_event 之前
+        调用 (它会 reset 物品账).
+        """
+        if not getattr(self, '_short_count_hold', False):
+            return False
+        if getattr(self, '_settle_hold', None) is not None:
+            return False
+        mix = getattr(self, '_custom_mix', None)
+        if mix is None:
+            return False
+        try:
+            booked = mix.container_booked_item_total()
+            target = mix.container_item_target()
+        except Exception:
+            return False
+        if booked is None or not target or int(booked) >= int(target):
+            return False
+        closing = [l for l in expected_labels
+                   if l in (getattr(self, '_closing_gate_steps', None) or ())]
+        if not closing:
+            closing = [expected_labels[-1]]
+        redo = [l for l in self.current_cycle_steps if l in set(closing)]
+        if not redo:
+            return False   # 收尾步骤本来就没做 → 属缺步形态, 归缺步挂起/NG 管
+        self.current_cycle_steps = [
+            l for l in self.current_cycle_steps if l not in set(closing)]
+        self._settle_hold = {
+            'missing': list(redo),
+            'expected': list(expected_labels),
+            'since': time.time(),
+            'need_total': int(target),
+            'ng_reason': f'箱内数量不足 {int(booked)}/{int(target)}',
+        }
+        self._fire_closing_guard_alarm(
+            f'收尾防呆: 箱内数量不足 {int(booked)}/{int(target)} — 周期挂起, '
+            f'请补足数量并重做 {list(redo)}, 补齐自动判合格',
+            event_id=getattr(self, '_settle_hold_event_id', None))
+        print(f"[ClosingGuard] 少装结算挂起: booked={int(booked)}/{int(target)} "
+              f"redo={list(redo)} timeout={getattr(self, '_settle_hold_timeout_s', 0)}s")
+        if debug_center.is_on("backend.settlement"):
+            debug_center.dbg("backend.settlement", "少装结算挂起",
+                             f"channel={self.channel_id} booked={booked}/{target} redo={redo}")
+        return True
+
     def _maybe_resolve_settle_hold(self) -> None:
         """v3.44 缺步挂起自动销结: 每次有步骤入周期后调用; multiset 补齐 →
-        按期望顺序重排 (断点补做语义) 走标准结算路径判 OK + 补计 + 清理."""
+        按期望顺序重排 (断点补做语义) 走标准结算路径判 OK + 补计 + 清理.
+        v3.44.1: 少装挂起额外卡数量 — 收尾步骤重做完但数量还没补足时继续等
+        (数量补足由进箱记账驱动, _check_settle_hold_timeout 每帧也会来试销)."""
         hold = getattr(self, '_settle_hold', None)
         if hold is None:
             return
         from collections import Counter
         expected = list(hold.get('expected') or [])
+        need_total = hold.get('need_total')
+        if need_total:
+            mix = getattr(self, '_custom_mix', None)
+            try:
+                booked = mix.container_booked_item_total() if mix else None
+            except Exception:
+                booked = None
+            if booked is not None and int(booked) > int(need_total):
+                # 补做期间进箱数量反而超出目标 = 进来的不是"补缺", 大概率是
+                # 下一箱的盘被吸进来了 (SY3 真视频实测 91→115/96) → 当即按原
+                # 缺数量 NG 止损清场, 让下一箱从干净周期开始, 不再等超时.
+                # 放在步骤齐备判定之前: 每帧都会来试销, 进账瞬间即止损.
+                self._finalize_settle_hold_ng(
+                    f'补做期间数量超出 {int(booked)}/{int(need_total)}, 疑似下一箱已开工')
+                return
         if Counter(self.current_cycle_steps) != Counter(expected):
             return
+        if need_total:
+            if booked is None or int(booked) < int(need_total):
+                return
         print(f"[ClosingGuard] 缺步已补齐 {hold.get('missing')} → 按期望顺序重排结算")
         self._settle_hold = None
         # 补做步骤 append 在末步之后, 顺序必然"错" — 断点补做语义下重排是正当的:
@@ -1327,30 +1481,50 @@ class SettlementMixin:
 
     def _check_settle_hold_timeout(self) -> None:
         """v3.44 缺步挂起超时兜底: 超时未补齐 → 按原缺步 NG 落账 + 清运行时.
-        timeout=0 表示永等 (只手动处理). 由主循环每帧调用 (无挂起零开销)."""
+        timeout=0 表示永等 (只手动处理). 由主循环每帧调用 (无挂起零开销).
+        v3.44.1: 少装挂起的销结由进箱记账驱动 (不是步骤入周期), 每帧先试销一次."""
         hold = getattr(self, '_settle_hold', None)
         if hold is None:
             return
+        if hold.get('need_total'):
+            self._maybe_resolve_settle_hold()
+            hold = getattr(self, '_settle_hold', None)
+            if hold is None:
+                return
         timeout = float(getattr(self, '_settle_hold_timeout_s', 0) or 0)
         if timeout <= 0:
             return
         since = float(hold.get('since') or 0)
         if since <= 0 or (time.time() - since) < timeout:
             return
+        self._finalize_settle_hold_ng('挂起补做超时')
+
+    def _finalize_settle_hold_ng(self, why: str) -> None:
+        """挂起中止 → 按原因 NG 落账 + 清运行时 (超时兜底 / 下一周期开工止损共用)."""
+        hold = getattr(self, '_settle_hold', None)
+        if hold is None:
+            return
         missing = list(hold.get('missing') or [])
-        print(f"[ClosingGuard] 缺步挂起超时 ({timeout}s) 未补齐 → NG 落账: missing={missing}")
+        ng_reason = hold.get('ng_reason') or f'周期不完整，缺少: {missing}'
+        print(f"[ClosingGuard] 挂起中止 ({why}) → NG 落账: {ng_reason}")
         self._settle_hold = None
         from backend.api.source_custom_mix import compose_settle_event
-        # 挂起已是补做窗口, 超时落账不再进"补步骤延迟落账"二次挂起 (无人值守
+        # 挂起已是补做窗口, 落账不再进"补步骤延迟落账"二次挂起 (无人值守
         # 会变无限等待链); 事件自身的人工确认定格语义不受影响.
         self._skip_remediation_defer = True
         try:
             self._trigger_event(*compose_settle_event(
-                self, 2, f'周期不完整，缺少: {missing} (挂起补做超时)'))
+                self, 2, f'{ng_reason} ({why})'))
         finally:
             self._skip_remediation_defer = False
         if not getattr(self, '_pending_ack', False):
             self._clear_step_runtime_state()
+        else:
+            # v3.44.4: 账已落的结算 NG, 确认释放时必须清运行时 — 即使 NG 事件配了
+            # 「确认后保留周期」。该开关语义是"周期中途定格后断点续做", 对已结算周期
+            # 再保留 = 旧步骤赖在周期里, 下一箱同名步骤被"单次接受"当重复吞掉,
+            # 多箱并成一锅账 (上银 7-27 视频: 箱1 挂起超时NG后箱2/3/4 全并账).
+            self._ack_clear_runtime_after = True
 
     def _device_gate_hold(self, label, gate_cfg) -> bool:
         """v3.35 步骤外设门控查询: True = 门控未放行, 本步骤暂不入周期 (下帧重查)。
@@ -1738,6 +1912,26 @@ class SettlementMixin:
                 int(getattr(self, 'channel_id', 0) or 0), label)
         except Exception as e:
             print(f"[PackagingFlow] on_step_detected error (isolated, non-fatal): {e}")
+
+    def _notify_packaging_cycle_started(self):
+        """周期开始即时通知包装结算协调器 (v3.45 箱标签扫码授权用).
+
+        「等扫箱标签」态下工人没扫标签就开始作业 (周期收进第一个步骤) → 协调器
+        当场报警提醒, 不必等整箱做完才发现. 每个周期只通知一次 (按周期起始时刻去重);
+        协调器侧非等扫态直接返回, 无包装配置 / 通道不参与包装 → 零差异.
+        调用方在检测线程, 必须错误隔离.
+        """
+        if not self.current_cycle_steps:
+            return
+        ident = getattr(self, 'cycle_start_time', None)
+        if ident is None or getattr(self, '_pkg_cycle_start_sent', None) == ident:
+            return
+        self._pkg_cycle_start_sent = ident
+        try:
+            from backend.services.packaging_flow_coordinator import get_coordinator
+            get_coordinator().on_cycle_started(int(getattr(self, 'channel_id', 0) or 0))
+        except Exception as e:
+            print(f"[PackagingFlow] on_cycle_started error (isolated, non-fatal): {e}")
 
     def _inject_backup_steps(self, this_cycle: list, expected_labels: list) -> list:
         """Inject primary step labels into this_cycle when their backup was seen but

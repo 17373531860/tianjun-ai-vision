@@ -176,6 +176,13 @@
           <el-switch v-model="project.pipeline_config.weighing.require_operator" />
         </div>
         <div class="flex items-center justify-between">
+          <div>
+            <span>作业员从用户名单选择</span>
+            <div class="text-xs text-gray-500">开 = 监控页"人员"改为下拉，只能选「设置 → 用户与权限」里启用的账号（禁用即从名单消失）；关 = 自由填写</div>
+          </div>
+          <el-switch v-model="project.pipeline_config.weighing.operator_from_users" />
+        </div>
+        <div class="flex items-center justify-between">
           <span>开始前必须先选水泥型号</span>
           <el-switch v-model="project.pipeline_config.weighing.require_model" />
         </div>

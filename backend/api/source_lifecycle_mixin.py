@@ -154,6 +154,7 @@ class LifecycleMixin:
             self._thread.join(timeout=1.0)
         with self.detection_lock:
             self.current_detections = []
+        self._video_hold = False   # v3.44.2: 暂停即收工路径, 不留待机播放冻结
         # 清理推理缓存
         self._clear_inference_caches()
 
@@ -361,8 +362,15 @@ class LifecycleMixin:
         self._close_all_writers()
         with self.detection_lock:
             self.current_detections = []
-        self._clear_inference_caches()
-        print("[standby] detection stopped, frame continues")
+        # v3.44.1: 待机=临时暂停, 保留在制周期/箱内台账/挂起态, 只清帧级缓存;
+        # 收工全清走「停止」(pause/stop_detection)。
+        self._clear_inference_caches(keep_cycle=True)
+        # v3.44.2: 视频源待机同时冻结播放位置 — 否则待机期间视频剧情被静默
+        # 消耗, 恢复后"装盘早就播完了"检测线却全程没看见 (SY3 实测 3/4 盘全丢)。
+        if self.source_type == 'video':
+            self._video_hold = True
+            print("[standby] video playback held at current position")
+        print("[standby] detection stopped, frame continues (cycle kept)")
         self._fire_source_status_change(_before_running, _before_detecting, "standby")
 
     def resume_inference(self):
@@ -377,6 +385,7 @@ class LifecycleMixin:
             print("[resume_inference] model not loaded, cannot resume inference")
             self._fire_source_status_change(_before_running, _before_detecting, "resume_inference_failed")
             return False
+        self._video_hold = False   # v3.44.2: 解除待机的视频播放冻结, 从停住的帧继续
         self.is_detecting = True
         self._start_inference_thread()
         

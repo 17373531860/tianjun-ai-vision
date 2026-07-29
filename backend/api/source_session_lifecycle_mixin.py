@@ -323,6 +323,15 @@ class SessionLifecycleMixin:
         print(f"end_session: ending session {session_uuid} (ID: {session_id})")
         debug_center.dbg("backend.session", "end_session 入口", f"channel={self.channel_id} session_id={session_id} uuid={session_uuid}")
         
+        # v3.44.5 收尾防呆挂起中的周期不许当空周期丢: 会话结束 = 补做窗口
+        # 关闭, 按挂起原因落 NG (7-27 UAT: 末箱挂起等补做时视频放完就停,
+        # 92/96 的账整个蒸发, 四箱只结了三箱)。
+        if getattr(self, '_settle_hold', None) is not None:
+            try:
+                self._finalize_settle_hold_ng('会话结束, 补做窗口关闭')
+            except Exception as e:
+                print(f"end_session: settle-hold finalize failed (non-fatal): {e}")
+
         # Discard any open (unsettled) cycle before closing the session
         if self.current_cycle_uuid:
             print(f"end_session: discarding unsettled cycle #{self.current_cycle_number} (uuid={self.current_cycle_uuid})")

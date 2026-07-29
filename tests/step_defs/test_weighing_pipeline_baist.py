@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 import uuid
 
 import pytest
@@ -421,11 +422,19 @@ def then_visual_label(ctx, label):
 
 @then(parsers.parse("虚拟达梦中间表新增 {n:d} 行"))
 def then_dm_rows(ctx, n):
-    conn = sqlite3.connect(ctx["dm_file"])
-    rows = conn.execute(
-        "SELECT SN, MODEL_NAME, MATERIAL, NET_WEIGHT, VERDICT, FINALIZE_STATUS "
-        "FROM T_BAIST_WEIGH").fetchall()
-    conn.close()
+    # v3.45 起网关推送走后台线程 (热路径绝不等网络), 结算返回时行可能尚未落库
+    # → 轮询等待最多 5s (契约: 异步但必达, 只要网关可用)
+    deadline = time.time() + 5.0
+    rows = []
+    while time.time() < deadline:
+        conn = sqlite3.connect(ctx["dm_file"])
+        rows = conn.execute(
+            "SELECT SN, MODEL_NAME, MATERIAL, NET_WEIGHT, VERDICT, FINALIZE_STATUS "
+            "FROM T_BAIST_WEIGH").fetchall()
+        conn.close()
+        if len(rows) >= n:
+            break
+        time.sleep(0.1)
     ctx["dm_rows"] = rows
     assert len(rows) == n, f"虚拟达梦行数={len(rows)}: {rows}"
 

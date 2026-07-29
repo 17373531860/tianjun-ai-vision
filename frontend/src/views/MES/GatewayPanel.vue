@@ -262,8 +262,9 @@
               <el-form-item label="主机地址" class="flex-1" required>
                 <el-input v-model="modbusHost" placeholder="192.168.1.100" />
               </el-form-item>
-              <el-form-item label="端口" class="w-32">
-                <el-input-number v-model="modbusTcpPort" :min="0" :precision="0" />
+              <el-form-item label="端口" label-width="45px" class="w-52 shrink-0">
+                <el-input-number v-model="modbusTcpPort" :min="1" :max="65535" :precision="0"
+                                 :controls="false" class="!w-full" placeholder="502" />
               </el-form-item>
             </div>
           </template>
@@ -340,8 +341,11 @@
               <el-form-item label="主机" class="flex-1" required>
                 <el-input v-model="dbHost" placeholder="192.168.1.50" />
               </el-form-item>
-              <el-form-item label="端口" class="w-36">
-                <el-input-number v-model="dbPort" :min="0" :precision="0" controls-position="right" />
+              <!-- v3.45: 独立窄 label + 禁压缩 + 去步进钮 + 限 1~65535,
+                   治"全局 label 120px 把端口框挤到 25px 宽, 粘贴出超长数字看不见还把连接搞炸" -->
+              <el-form-item label="端口" label-width="45px" class="w-52 shrink-0">
+                <el-input-number v-model="dbPort" :min="1" :max="65535" :precision="0"
+                                 :controls="false" class="!w-full" placeholder="5236" />
               </el-form-item>
             </template>
           </div>

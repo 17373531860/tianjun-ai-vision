@@ -283,12 +283,12 @@
 | **上下游** | 上游：离线推理链路/旧前端；下游：Task/Project 表 |
 | **注释坑** | 无警告注释；全部端点无鉴权依赖（对比 cameras.py 写操作有 require_perm） |
 
-### `backend/api/weighing.py`（117 行）
+### `backend/api/weighing.py`（147 行，v3.45 复核）
 
 | 维度 | 内容 |
 |---|---|
-| **职责** | v3.31 称重投料模式控制/查询 API（`/api/v1/weighing/*`）：前置选择人员/型号、扫码开始一件、手动去皮/置零、复位、视觉料别标签喂入、逐件记录查询、虚拟喂重 |
-| **核心端点** | L43-46 `GET /weighing/state` 工位实时快照；L49-56 `POST /context`（6.5 前置选择）；L59-65 `POST /scan` 扫码开始一件；L68-83 `POST /tare` / `POST /zero`（给称重器发 T/Z）；L86-92 `POST /reset` 放弃重来；L95-101 `POST /material-label`（6.3 视觉料别）；L104-107 `GET /records`（6.1 数据页）；L110-117 `POST /feed` 虚拟喂一帧重量 |
+| **职责** | v3.31 称重投料模式控制/查询 API（`/api/v1/weighing/*`）：前置选择人员/型号、扫码开始一件、手动去皮/置零、复位、视觉料别标签喂入、逐件记录查询、虚拟喂重；v3.45 增作业员候选名单 |
+| **核心端点** | L43-46 `GET /weighing/state` 工位实时快照；`POST /context`（6.5 前置选择）；`POST /scan` 扫码开始一件；`POST /tare` / `POST /zero`（给称重器发 T/Z）；`POST /reset` 放弃重来；`POST /material-label`（6.3 视觉料别）；`GET /records`（6.1 数据页）；`POST /feed` 虚拟喂一帧重量；**v3.45**：`GET /weighing/operators`（L57，响应模型 `OperatorsOut`）——称重配置开 `operator_from_users` 后监控页人员下拉的取数端点，返回用户系统「启用」状态账号的显示名列表（display_name 优先回退 username）；只暴露显示名无敏感字段故**不挂用户管理权限**（操作员工位也要能拉），查询失败返回空名单不抛错（前端下拉退化为空） |
 | **线程/锁** | 无（全部委托 weighing_engine 单例，锁在引擎层） |
 | **上下游** | 上游：前端称重页/Monitor；下游：`services/weighing_engine.get_weighing_engine()` |
 | **注释坑** | L112 虚拟喂重等价真秤一帧读数（无真秤验逻辑用）；非称重通道统一返回 `{"ok": False, "message": "该通道未启用称重模式"}` |
@@ -345,12 +345,12 @@
 | **上下游** | 上游：`api/reports.py` 时段过滤等；下游：`db/database.get_dialect()` |
 | **注释坑** | 无 |
 
-### `backend/db/migrations/__init__.py`（109 行，v3.41 复核新增条目）
+### `backend/db/migrations/__init__.py`（113 行，v3.45 复核）
 
 | 维度 | 内容 |
 |---|---|
 | **职责** | 版本化数据库迁移注册表 + runner（2026-07 治理批次落地，取代 `main.py` 只增不减的 `migrate_database()` 大列表——旧函数已改断言桩，别再往里塞 ALTER）。启动时 `apply_pending(engine)` 按编号升序应用缺失迁移，行为对外等价于旧函数 |
-| **核心函数** | L25-28 `_MIGRATION_MODULES` 显式注册表（**不做目录扫描**——兼容 Nuitka 编译形态）；L31 `_ALWAYS_RUN={"m0000_legacy"}`；L34-42 `_load_migrations()` 断言 MIGRATION_ID 与文件名一致；L45-58 `_ensure_ledger()` 建 `schema_migrations` 记账表；L61-68 `_applied_ids()`；L71-80 `_record()` 记账；L83-109 `apply_pending()`：m0000 不看记账每次幂等跑、其余"记账跳过"，某个新迁移失败即停止应用后续迁移（保留原库、不阻断启动） |
+| **核心函数** | L25-32 `_MIGRATION_MODULES` 显式注册表（**不做目录扫描**——兼容 Nuitka 编译形态；v3.43 注册 m0002/m0003，**v3.45 注册 m0004/m0005**）；L35 `_ALWAYS_RUN={"m0000_legacy"}`；L34-42 `_load_migrations()` 断言 MIGRATION_ID 与文件名一致；L45-58 `_ensure_ledger()` 建 `schema_migrations` 记账表；L61-68 `_applied_ids()`；L71-80 `_record()` 记账；L83-109 `apply_pending()`：m0000 不看记账每次幂等跑、其余"记账跳过"，某个新迁移失败即停止应用后续迁移（保留原库、不阻断启动） |
 | **线程/锁** | 无（启动时单线程跑） |
 | **上下游** | 上游：`main.py` 启动调用；下游：各 `mXXXX_*.py` 模块 + `schema_migrations` 表 |
 | **注释坑** | L10 记账表建不起来（磁盘满/只读）→ 降级为只跑 m0000 幂等路径，打显著日志不阻断启动；L13-16 **新增 schema 变更三步规约**（即 AGENTS.md 不变量 8）：①改 ORM 模型 ②本目录新建 `m<下一编号>_<语义名>.py::apply(engine)` 写 DDL/数据回填 ③模块名追加到 `_MIGRATION_MODULES` 显式注册；设计 RFC 见 `docs/rfc/DB迁移版本化治理_设计方案_RFC.md`；记账失败不致命（L79-80，下次启动幂等/重跑兜底） |
@@ -376,6 +376,22 @@
 | **线程/锁** | 无（启动时单线程跑，记账后只跑一次） |
 | **上下游** | 上游：runner；下游：原生 SQL。ORM 侧 `models.py` 两列同步声明 `index=True`（新库建表即带索引，老库靠本迁移补建，索引名两边一致） |
 | **注释坑** | L9-10 CREATE INDEX 在大库上耗秒级（百万行 ≈ 数秒）属一次性成本，老客户升级首启动稍慢属预期 |
+
+### `backend/db/migrations/m0004_pkg_box_label_scan.py`（46 行，v3.45 新增）
+
+| 维度 | 内容 |
+|---|---|
+| **职责** | v3.45 包装结算「箱标签扫码授权 + 标签取本箱数量」配置列（组⑧，全可选默认关零差异）：给 `packaging_flow_configs` 补 10 列——box_label_scan_required（每箱开做前必须扫箱标签）/ label_qty_enabled + label_qty_segment（默认3）+ label_qty_pattern（从标签复合串取"本箱数量"当本箱滑块目标，逐箱可变）/ label_rescan_action（默认'ignore'）/ unauthorized_cycle_action（默认'hold'，未授权箱做完周期的处置）/ label_total_check（工单收尾 Σ各箱标签数量 vs 排产量对账）+ 三个可配报警事件列 event_box_not_scanned / event_label_qty_missing / event_label_total_mismatch |
+| **核心函数** | L15-26 `_COLUMNS` 清单；L29-46 `apply(engine)` 逐列探查缺列才 ALTER（表不存在/列已存在跳过），PostgreSQL 方言 `BOOLEAN DEFAULT 0`→`FALSE` 归一 |
+| **上下游** | 上游：runner（`_MIGRATION_MODULES` 已注册）；下游：`PackagingFlowConfig` ORM 同步声明（见 03 册）+ 协调器 `_row_to_dict` 快照（见 02 册） |
+
+### `backend/db/migrations/m0005_pkg_sync_work_orders.py`（34 行，v3.45 新增）
+
+| 维度 | 内容 |
+|---|---|
+| **职责** | v3.45 包装结算「工单同步进工单管理」开关列：给 `packaging_flow_configs` 补 `sync_work_orders`（**BOOLEAN DEFAULT 1 默认开**——只补数据可见性不改判定行为，关=老行为包装单只存运行记录）；开时扫码开工/收尾/中止把包装工单镜像到 `work_orders` 表（source='packaging'），工单管理页可见可管理 |
+| **核心函数** | L12-14 `_COLUMNS` 单列清单；L17-34 `apply(engine)` 同 m0004 幂等补列模板（PostgreSQL `DEFAULT 1`→`TRUE`） |
+| **上下游** | 上游：runner；下游：协调器 `_sync_work_order`（老库 NULL 在 `_row_to_dict` 侧视为开，见 02 册） |
 
 ### `backend/hcnetsdk/types.py`（150 行）
 
@@ -474,4 +490,4 @@
 
 ---
 
-**本文件最后更新**：2026-07-17（v3.41 复核：新增迁移 runner `__init__.py` / `m0001_hot_path_indexes` / `requirements.txt` 三条目，m0000 条目按 v3.35 追加补列刷新行号；初版 2026-07-05 覆盖 41 个文件，现 44 个）
+**本文件最后更新**：2026-07-29（v3.45 补账：`api/weighing.py` 新端点 `GET /weighing/operators`（作业员候选名单）+ 新增 `m0004_pkg_box_label_scan` / `m0005_pkg_sync_work_orders` 两迁移条目 + runner 注册表刷新；上一轮 2026-07-17 v3.41 复核；现 46 个文件）

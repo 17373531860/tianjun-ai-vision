@@ -1423,3 +1423,227 @@ def test_pending_ignores_new_cycle(client):
     st = coord.get_state(cid)
     assert st["status"] == "pending_remediation"
     assert st["pending_box"]["sliders"] == 20                  # 仍是第一次的快照
+
+
+# ============================================================
+# v3.45 组⑧ 箱标签扫码授权 + 标签取本箱数量 (逐箱可变数量)
+# ============================================================
+
+_LABEL = "ORD260300050-2|JOB260600040-67|{qty}.00|A1B2C3"     # 现场箱标签二维码复合串
+_ORDER = "JOB260600040-67"                                    # 工单条形码 (裸码)
+
+
+def _setup_label_flow(client, **over):
+    """启用箱标签扫码授权 + 取量的 sliders 口径配置 (上银 SY 现场形态)."""
+    base = dict(count_unit="sliders",
+                items_per_box_source="config", items_per_box_fixed=24,
+                composite_label_enabled=True, composite_delimiter="|",
+                composite_pick_mode="prefix", composite_prefix="JOB",
+                box_label_scan_required=True, label_qty_enabled=True,
+                label_qty_segment=3)
+    base.update(over)
+    return _setup_flow(client, **base)
+
+
+def test_label_scan_gate_waits_then_qty_authorizes(client):
+    """扫工单开箱后进「等扫箱标签」态; 扫到带数量的标签二维码 → 授权开做,
+    本箱目标 = 标签数量 (覆盖工单级计划), 检测层反向钩子同步覆写."""
+    coord, cid = _setup_label_flow(client)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 91})   # 4 箱, 尾箱 19
+    coord.set_alarm_sink(lambda c, k, m: None)
+    targets = []
+    coord.set_box_target_setter(lambda ch, t: targets.append(t))
+    db = SessionLocal()
+
+    coord.on_scan(_ORDER, db, channel_id=0)                    # 开工单+开箱1
+    st = coord.get_state(cid)
+    assert st["status"] == "waiting_label"
+    assert st["current_box_index"] == 1
+    assert targets == [24]                                     # 等扫期间先按计划兜底下发
+
+    coord.on_scan(_LABEL.format(qty=19), db, channel_id=0)     # 本箱标签: 19 只
+    st = coord.get_state(cid)
+    assert st["status"] == "running"
+    assert st["current_box_scan_qty"] == 19
+    assert targets == [24, 19]                                 # 标签数量覆写目标
+
+    coord.on_cycle_settled(0, 1, True, db, slider_count=19)    # 按标签目标 19 判 OK
+    st = coord.get_state(cid)
+    assert st["box_done"] == 1 and st["box_ng"] == 0
+    assert st["box_details"][0]["result"] == "OK"
+    assert st["box_details"][0]["target"] == 19
+    assert st["box_details"][0]["scan_qty"] == 19              # 声明量留痕
+    assert st["status"] == "waiting_label"                     # 下一箱重新等扫
+    assert st["current_box_scan_qty"] == 0
+
+
+def test_label_scan_bare_code_alarms_rescan_qr(client):
+    """等扫标签时扫到裸条形码 (取不出数量) → 报警"请扫二维码", 继续等, 不放行."""
+    coord, cid = _setup_label_flow(client)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    db = SessionLocal()
+
+    coord.on_scan(_ORDER, db, channel_id=0)                    # 开工单+开箱1(等扫)
+    coord.on_scan(_ORDER, db, channel_id=0)                    # 又扫了裸工单条形码
+    assert "label_qty_missing" in alarms
+    assert coord.get_state(cid)["status"] == "waiting_label"   # 仍在等
+
+    # 数量段非法 (非数字) 同样拒绝
+    coord.on_scan("ORD1|JOB260600040-67|abc|X", db, channel_id=0)
+    assert alarms.count("label_qty_missing") == 2
+    assert coord.get_state(cid)["status"] == "waiting_label"
+
+
+def test_label_scan_work_start_alarm_once_per_box(client):
+    """未扫标签就开始作业 (周期开始通知) → 当场报警, 每箱只报一次."""
+    coord, cid = _setup_label_flow(client)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    db = SessionLocal()
+
+    coord.on_scan(_ORDER, db, channel_id=0)
+    coord.on_cycle_started(0)                                  # 没扫标签就开做
+    coord.on_cycle_started(0)                                  # 同箱再通知不重复报
+    assert alarms.count("box_not_scanned") == 1
+
+    coord.on_scan(_LABEL.format(qty=24), db, channel_id=0)     # 授权后
+    coord.on_cycle_started(0)                                  # 正常开做不报
+    assert alarms.count("box_not_scanned") == 1
+
+
+def test_unauthorized_box_settle_holds_then_redo_back_to_waiting(client):
+    """未扫标签把整箱做完 (hold 档默认): 箱账挂起等人工; 重做 → 回到等扫态,
+    扫标签授权后重测按标签目标正常落账."""
+    coord, cid = _setup_label_flow(client)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    db = SessionLocal()
+
+    coord.on_scan(_ORDER, db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)    # 未扫标签做完一整箱
+    st = coord.get_state(cid)
+    assert st["status"] == "pending_remediation"
+    assert st["pending_box"]["reason"] == "no_label"
+    assert "box_not_scanned" in alarms
+    assert st["box_done"] == 0                                 # 未落账
+
+    assert coord.redo_pending(cid, db, operator="测试员")
+    assert coord.get_state(cid)["status"] == "waiting_label"   # 重做后必须先扫标签
+
+    coord.on_scan(_LABEL.format(qty=24), db, channel_id=0)
+    coord.on_cycle_settled(0, 2, True, db, slider_count=24)
+    st = coord.get_state(cid)
+    assert st["box_done"] == 1 and st["box_ng"] == 0
+
+
+def test_unauthorized_box_settle_book_mode(client):
+    """book 档: 未扫标签做完的箱报警留痕后按计划目标照常落账 (不拦产线)."""
+    coord, cid = _setup_label_flow(client, unauthorized_cycle_action="book")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    db = SessionLocal()
+
+    coord.on_scan(_ORDER, db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)
+    st = coord.get_state(cid)
+    assert "box_not_scanned" in alarms
+    assert st["box_done"] == 1 and st["box_ng"] == 0           # 按计划目标 24 落账 OK
+    assert st["box_details"][0]["target"] == 24
+    assert st["status"] == "waiting_label"                     # 下一箱仍要求扫
+
+
+def test_label_qty_pattern_overrides_segment(client):
+    """数量段正则优先于固定段号: 段序不固定的现场只改配置不改代码."""
+    coord, cid = _setup_label_flow(client, label_qty_segment=2,   # 故意配错段号
+                                   label_qty_pattern=r"\d+\.\d+")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    db = SessionLocal()
+
+    coord.on_scan(_ORDER, db, channel_id=0)
+    coord.on_scan(_LABEL.format(qty=23), db, channel_id=0)     # 正则命中 "23.00" 段
+    st = coord.get_state(cid)
+    assert st["status"] == "running" and st["current_box_scan_qty"] == 23
+
+
+def test_label_voucher_mode_authorizes_without_qty(client):
+    """纯凭证模式 (不取量): 扫到本工单标签即放行, 目标仍按工单级计划."""
+    coord, cid = _setup_label_flow(client, label_qty_enabled=False)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    targets = []
+    coord.set_box_target_setter(lambda ch, t: targets.append(t))
+    db = SessionLocal()
+
+    coord.on_scan(_ORDER, db, channel_id=0)
+    assert coord.get_state(cid)["status"] == "waiting_label"
+    coord.on_scan(_ORDER, db, channel_id=0)                    # 裸码也算凭证
+    st = coord.get_state(cid)
+    assert st["status"] == "running"
+    assert st["current_box_scan_qty"] == 0                     # 目标按计划
+    assert targets == [24]                                     # 没有覆写
+
+
+def test_label_rescan_update_refreshes_target(client):
+    """已授权后重扫标签 (update 档): 用新扫数量更新本箱目标 (贴错标签重贴场景)."""
+    coord, cid = _setup_label_flow(client, label_rescan_action="update")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    targets = []
+    coord.set_box_target_setter(lambda ch, t: targets.append(t))
+    db = SessionLocal()
+
+    coord.on_scan(_ORDER, db, channel_id=0)
+    coord.on_scan(_LABEL.format(qty=24), db, channel_id=0)     # 授权 24
+    coord.on_scan(_LABEL.format(qty=19), db, channel_id=0)     # 重贴后重扫 19
+    st = coord.get_state(cid)
+    assert st["current_box_scan_qty"] == 19
+    assert targets == [24, 24, 19]
+
+    # 默认 ignore 档: 重扫不动目标 (回归对照)
+    coord2, cid2 = _setup_label_flow(client, name="__test_pkg2", channel_id=1)
+    coord2.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})
+    coord2.set_alarm_sink(lambda c, k, m: None)
+    coord2.on_scan(_ORDER, db, channel_id=1)
+    coord2.on_scan(_LABEL.format(qty=24), db, channel_id=1)
+    coord2.on_scan(_LABEL.format(qty=19), db, channel_id=1)
+    assert coord2.get_state(cid2)["current_box_scan_qty"] == 24
+
+
+def test_label_total_check_mismatch_alarm(client):
+    """收尾对账: Σ各箱标签数量 ≠ 工单排产量 → 报警留痕 (不改成绩)."""
+    coord, cid = _setup_label_flow(client, label_total_check=True)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})   # 2 箱
+    alarms = []
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    db = SessionLocal()
+
+    coord.on_scan(_ORDER, db, channel_id=0)
+    coord.on_scan(_LABEL.format(qty=24), db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)
+    coord.on_scan(_LABEL.format(qty=23), db, channel_id=0)     # 标签共 47 ≠ 排产 48
+    coord.on_cycle_settled(0, 2, True, db, slider_count=23)    # 按标签目标 23 本箱 OK
+
+    row = db.query(PackagingFlowRun).first()
+    assert row.status == "completed"
+    assert row.box_ng == 0                                     # 箱成绩不受对账影响
+    assert "label_total_mismatch" in alarms
+
+
+def test_label_gate_off_zero_diff(client):
+    """开关全关 (默认): 扫工单直接开箱 running, 无等扫态 — 存量行为零差异."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24)
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    st = coord.get_state(cid)
+    assert st["status"] == "running"
+    assert st["label_authorized"] is True

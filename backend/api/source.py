@@ -374,6 +374,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # 视频播放控制
         self.video_speed = 1.0  # 视频倍速
         self.video_ended = False  # 视频是否已结束
+        self._video_hold = False  # v3.44.2 视频播放冻结 (待机置位, 恢复/启动复位)
         self.video_total_frames = 0  # 视频总帧数
         self.video_current_frame = 0  # 当前帧位置
         self._progress_lock = threading.Lock()  # 防止进度设置并发调用
@@ -1435,6 +1436,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self._cycle_regression = False
         # v3.44 收尾防呆缺步挂起态: 周期没了挂起就没了 (停止/切项目/强制结算)
         self._settle_hold = None
+        # v3.44.4 结算NG确认后强制清运行时的单次标记: 运行时既已清, 标记一并消费,
+        # 防陈旧标记误伤下一次真"保留周期"确认
+        self._ack_clear_runtime_after = False
         # v3.42.1 序列外步骤旁路账本 (放工单 gate 探测用): 停止/切项目/强制结算时
         # 两代一起清, 防陈旧"放工单"残影跨启停放行尾箱 gate
         self._oos_steps_seen = set()
@@ -1483,6 +1487,13 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             self._pending_ack_event_name = None
             self._pending_ack_timeout_sec = 0
             self._pending_ack_reason = None
+        # v3.44.1 缺步补做挂起同生命周期清理: 只清定格不清挂起会留"幽灵挂起" —
+        # 启停/切项目后, 下一次无关的人工确认 (如错盘拦截) 被 ack 端点误路由到
+        # resolve_step_remediation('redo') 清掉在制周期 (SY3 实测: 错盘确认后
+        # 保留周期失效, 台账被重置)。
+        if hasattr(self, '_pending_remediation'):
+            self._pending_remediation = None
+            self._remediation_bypass = False
 
     def start_detection(self, model_path: str = None):
         """开始检测"""
@@ -1542,6 +1553,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # 防止 stop → start 路径上, 上次最后一帧的残影时间戳/帧确认状态被新一轮直接接续,
         # 进而引发场景甲 (残影开鬼周期) / 场景癸 (项目切换后同名标签接续).
         self._clear_step_runtime_state()
+        self._video_hold = False   # v3.44.2: 完整启动解除视频播放冻结
 
         self.is_detecting = True
 
@@ -1597,7 +1609,16 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         优雅关机 / atexit 清理路径在 stop 前已手动落盘 true, 须传 False 避免覆盖.
         """
         self.is_detecting = False
-        
+
+        # v3.44.5 停止检测 = 补做窗口关闭: 收尾防呆挂起中的箱账按挂起原因落
+        # NG, 不许静默蒸发 (7-27 UAT: 视频放完自动停检测, 挂起态被下面的运行
+        # 时清理抹掉, 末箱 92/96 的账整个丢失; 会话结束兜底来不及 — 清理在前)
+        if getattr(self, '_settle_hold', None) is not None:
+            try:
+                self._finalize_settle_hold_ng('停止检测, 补做窗口关闭')
+            except Exception as _e:
+                print(f"[ClosingGuard] 停止时挂起落账失败 (non-fatal): {_e}")
+
         # 停止检测 → 重置 RodSessionGate，避免下次开机复用残留记忆
         if getattr(self, "_rod_gate", None) is not None:
             try:
@@ -1661,14 +1682,19 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         
         print("[Detection] stopped")
     
-    def _clear_inference_caches(self):
-        """清理推理相关缓存 - 停止检测时调用"""
+    def _clear_inference_caches(self, keep_cycle: bool = False):
+        """清理推理相关缓存 - 停止检测时调用
+
+        keep_cycle=True (v3.44.1 待机专用): 只清帧级缓存 (卡尔曼/推理帧/已确认检测),
+        保留周期序列 / 箱内台账 / 挂起态 / 人工确认态 — 待机是"临时暂停"语义,
+        桌上半装的箱子物理上还在, 恢复推理后从断点继续。停止/切项目仍走全清。
+        """
         import gc
-        
+
         # 清理卡尔曼滤波器
         self._kalman_filters.clear()
         self._detection_missing_frames.clear()
-        
+
         # 清理推理帧缓存
         with self._inference_frame_lock:
             self._latest_frame_for_inference = None
@@ -1680,7 +1706,10 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # v3.8.x: 把步骤运行时残影 / 周期序列 / 同时出现组缓冲统一交给清空函数处理.
         # 旧实现只清了累计帧 / 已确认帧 / 同时组缓冲, 漏了"最后看见时间戳 / 当前周期序列"等关键字段,
         # 导致停止 → 开始时残影直接被当成上次周期的延续.
-        self._clear_step_runtime_state()
+        # v3.44.1: 待机 (keep_cycle=True) 不清 — 对"停止→开始"是残影, 对"待机→恢复"
+        # 恰恰是要接续的在制状态 (SY3 实测: 错盘确认保留周期后点待机, 台账/SOP 全被抹掉)。
+        if not keep_cycle:
+            self._clear_step_runtime_state()
 
         # 限制事件日志大小
         if len(self.events_log) > 500:

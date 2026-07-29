@@ -45,8 +45,9 @@
         </div>
       </div>
 
-      <!-- 当前箱进度 (滑块口径显示滑块数/目标 + 尾箱标记; 否则托盘数/每箱) -->
-      <div class="current-box bg-slate-800/60 rounded px-3 py-2 mb-3">
+      <!-- 当前箱进度 (滑块口径显示滑块数/目标 + 尾箱标记; 否则托盘数/每箱)
+           收尾快照期间隐藏: 工单已完成还挂着"正在装第N箱"是矛盾信息 (客户现场反馈) -->
+      <div v-if="!isDoneSnapshot" class="current-box bg-slate-800/60 rounded px-3 py-2 mb-3">
         <div class="flex items-center justify-between">
           <span class="text-gray-300 text-sm">
             正在装第 <span class="text-cyan-400 font-bold">{{ state.current_box_index || '-' }}</span> 箱
@@ -73,6 +74,17 @@
         />
       </div>
 
+      <!-- v3.45 等扫箱标签横幅: 本箱必须先扫标签放行 (取量模式还要取到本箱数量) -->
+      <div v-if="state.status === 'waiting_label'"
+           class="mb-3 rounded border border-amber-600/60 bg-amber-900/30 px-3 py-2">
+        <div class="text-amber-300 text-sm font-bold mb-1">
+          🏷 第 {{ state.current_box_index || '-' }} 箱等扫箱标签…
+        </div>
+        <div class="text-xs text-amber-200/80">
+          请扫本箱标签二维码放行开做；未扫标签就开始作业会报警。扫到后本箱目标按标签数量自动设定。
+        </div>
+      </div>
+
       <!-- v3.43 等放工单收尾横幅: 各箱已落账, 只差放工单动作完成工单 -->
       <div v-if="state.status === 'awaiting_paper'"
            class="mb-3 rounded border border-cyan-600/60 bg-cyan-900/30 px-3 py-2">
@@ -94,7 +106,7 @@
           — 最终 {{ state.final_result || '-' }}
         </div>
         <div class="text-xs text-gray-300">
-          共 {{ state.box_done }} 箱落账<span v-if="state.box_ng > 0">，其中 NG {{ state.box_ng }} 箱</span>。信息保留展示，扫新工单开工后自动切换。
+          共 {{ state.box_done }} 箱落账<span v-if="state.box_ng > 0">，其中 NG {{ state.box_ng }} 箱</span>。本单已结束，<b>扫码开始下一张工单</b>（信息保留展示，扫新单自动切换）。
         </div>
       </div>
 
@@ -240,7 +252,7 @@ async function onRedo() {
 // 强制结案按钮: 有进行中工单 + 当前账号有权限才出现 (鉴权关时人人=超管, 始终可见)
 const canForceSettle = computed(() =>
   !!props.state
-  && ['order_loaded', 'running', 'awaiting_paper'].includes(props.state.status)
+  && ['order_loaded', 'running', 'waiting_label', 'awaiting_paper'].includes(props.state.status)
   && authStore.hasPermission('system.packaging_flow.force_settle'));
 
 async function onForceSettle() {
@@ -290,6 +302,8 @@ const isTailBox = computed(() =>
 
 const currentBoxTarget = computed(() => {
   if (!props.state) return 0;
+  // v3.45 箱标签扫码取量: 标签声明的本箱数量优先 (逐箱可变), 与后端口径一致
+  if ((props.state.current_box_scan_qty || 0) > 0) return props.state.current_box_scan_qty;
   return isTailBox.value && props.state.tail_target > 0
     ? props.state.tail_target
     : (props.state.items_per_box || 0);
@@ -309,6 +323,7 @@ const boxPercent = computed(() => {
 const statusLabel = computed(() => ({
   order_loaded: '工单已开',
   running: '装箱中',
+  waiting_label: '等扫箱标签',
   pending_remediation: '少装·等补做',
   awaiting_paper: '等放工单收尾',
   completed: '已完成',
@@ -317,6 +332,7 @@ const statusLabel = computed(() => ({
 
 const statusColor = computed(() => ({
   running: 'text-green-400',
+  waiting_label: 'text-amber-400',
   pending_remediation: 'text-amber-400',
   awaiting_paper: 'text-cyan-400',
   completed: 'text-cyan-400',

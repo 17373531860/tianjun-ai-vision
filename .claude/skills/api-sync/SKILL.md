@@ -64,7 +64,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/channel-groups/*` | `channel_groups.py` | `channel_group.js` | v3.13.1 工位组（RFC 10 并行联动） |
 | `/workpiece-flows/*` | `workpiece_flows.py` | —（Project 视图直调） | v3.14 串行流水线结算（RFC 11） |
 | `/packaging-flows/*` | `packaging_flows.py` | `packaging_flow.js` | v3.21+ 包装箱结算（上银包装线） |
-| `/weighing/*` | `weighing.py` | `weighing.js` | ★ v3.31 称重投料模式（前置选择/扫码/去皮/记录查询/虚拟喂重） |
+| `/weighing/*` | `weighing.py` | `weighing.js` | ★ v3.31 称重投料模式（前置选择/扫码/去皮/记录查询/虚拟喂重）；v3.45 加 `/weighing/operators`（作业员名单下拉取数，只暴露启用账号显示名，不挂用户管理权限） |
 | `/plugins/*` | `plugins.py` | `plugins.js` | 插件安装/激活/清单/client-log |
 | `/debug/*` | `debug.py` | 无封装（手测用） | 通道诊断 + 调试日志中心 |
 | `/test/synthetic/*` | `test_runtime_routes.py` | —（测试专用） | 仅 `RUNTIME_MODE=test` 挂载：虚拟剧本源 |

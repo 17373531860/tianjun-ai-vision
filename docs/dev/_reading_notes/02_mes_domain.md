@@ -13,6 +13,12 @@
 > - `packaging_flow_coordinator.py`：①NG 箱账挂起——`on_cycle_settled(_sliders)` 加 steps_ok/hold_for_ack 双参，NG+需人工确认时箱账进 `pending_remediation(reason=ng_ack)` 不落账不翻页，`resolve_channel_hold_on_ack`（认NG落账 `book_pending_ng`/重做本箱）由 ack 接口收口；②补数量死分支修复——少装挂起入口改判 steps_ok（步骤全对数量不足）而非整体 is_good；③工单收尾快照——完成/作废存 `_last_done`，新增 `get_display_state`（UI 轮询用，快照保留至新单顶掉），`get_state` 语义不变（在途判定用）。
 > - `api/packaging_flows.py`：state 端点改走 `get_display_state`。
 > - `external_device_protocols.py`：串口读"有多少收多少"（`in_waiting`）+ `_read_serial_frame` 见帧尾立即交货（无分隔符 ~60ms 静默兜底），治秤读数 2~3s 延迟（萍乡）；`external_device_pipeline.py` 负重量直读符号位解析。
+>
+> **v3.45 补账（2026-07-29）**：
+> - `packaging_flow_coordinator.py`：①箱标签扫码授权（组⑧，FEAT-002）——「等扫箱标签」态 waiting_label / `_extract_label_qty` / `_authorize_box_by_label` / `on_cycle_started`（未扫开做报警）/ 收尾对账 label_total_check，见其条目「v3.45 变更」节；②包装工单镜像进工单管理（FEAT-003）——`_sync_work_order` upsert work_orders 表，默认开、异常隔离。
+> - `api/packaging_flows.py`：Pydantic 面加组⑧ 10 字段 + `sync_work_orders`。
+> - `database_adapter.py`：`_dm_bind_safe` 达梦 32 位整型溢出降级字符串绑定 + 连接端口守门（BUG-009）。
+> - PackagingFlowConfig 新 11 列与迁移 m0004/m0005 见 `03_data_plugin.md`。
 
 ## 一、逐文件档案
 
@@ -213,7 +219,7 @@
 - L263-268（v3.38 每连接独立 commit）："原来统一在循环外提交 → 前一条连接失败落日志 (_log 内 flush) 时 SQLite 写锁已被本会话握住, 下一条连接的 HTTP 超时等待 (对不在线端点可达 30s) 期间锁一直不放; 推理线程此刻写步骤记录被堵到 busy_timeout 边缘 (实测 8~15s) → 前端检测框冻结、后续类别漏检误判 NG"。
 - L126-130（v3.38 熔断器动机）："端点不在线时旧行为是每个周期傻等完整超时 (默认 30s×重试), 白耗 MES 工作线程、拖慢工件统计落库。熔断后冷却期内直接跳过, 到点放一次探测请求, 成功自动恢复"。
 
-#### 3.1 backend/services/mes_adapters/database_adapter.py（157 行，v3.35 新增）
+#### 3.1 backend/services/mes_adapters/database_adapter.py（175 行，v3.45 复核；v3.35 新增）
 
 **职责一句话**：数据库直写适配器（v3.35，达梦优先，兼容 MySQL/PostgreSQL/SQL Server/SQLite）——客户 IT 不开 HTTP 接口、直接给一张中间表的对接场景，把事件数据按模板渲染结果直接 INSERT 进客户库；与 HTTP 适配器共用同一套 {key.path} 模板体系，**模板顶层键名 = 目标表列名**。已在 `mes_adapters/__init__.py` 注册表登记 `"database"`（该文件 L12/L20，注册表从 5 种扩为 6 种）。
 
@@ -223,6 +229,7 @@
 - `_connect` L58：按 db_type 懒加载驱动建连（未安装时报错信息直接写清要装哪个包，"现场排障省一轮" L26）；返回 (conn, 占位符风格)——dm/sqlite 用 `?`，其余 `%s`。
 - `send` L110：payload 是 dict 插 1 行、list[dict] 逐行插入**同一事务**（行展开约定与 HTTP 模板 `_array_source` 语义一致，L22-24）；逐行拼 `INSERT INTO`（表/列名过 `_safe_ident`）→commit，异常 rollback；返回与 HTTP 适配器同构的 {status_code, body, success, duration_ms}（成功造 status_code=200 供上层统一判定）。
 - `check_response` L155："直写没有 HTTP 语义: 以 send 内部的 success 标志为准"。
+- **v3.45 变更（BUG-009，萍乡达梦现场）**：① 模块级 `_dm_bind_safe`（L47）——dmPython 在 Windows 上把 Python int 绑成 C 32 位 unsigned long，超范围直接抛 OverflowError，毫秒级时间戳（~1.7e12）必踩（weighing_product_done 推达梦失败）；**仅 db_type='dm'** 时超 32 位整数降级为字符串绑定，交达梦库端隐式转换（数值/日期列均可收），bool 豁免。② `_connect` 加端口守门——已知网络型数据库端口须在 1~65535（端口框误粘贴出超长数字时，报错直接指向端口配置而不是一句看不懂的 C 溢出）。
 
 **线程·锁**：无——每次 send 短连接建/用/关。模块头 L27："连接不做池化: 网关本身有重试 + 事件频率低 (每周期/每件一次), 短连接最稳"。
 
@@ -365,7 +372,7 @@
 - L776-778（计件）："一个 box_serial 完成一次算 1 件. 校正重推 (is_recovery=True) 不再 +1…超时未齐的 box 走 _push_timeout_result, 那条路径不计件"。
 - 另注意：`_check_and_dispatch` L655 的 `early_return = {}` 声明后在 L733 检查 `early_return.get("payload")`，但**全程无人写入** `early_return`——疑似历史重构残留死代码，记入疑点清单。
 
-### 7. backend/services/packaging_flow_coordinator.py（1670 行，v3.43 复核）
+### 7. backend/services/packaging_flow_coordinator.py（2086 行，v3.45 复核）
 
 **职责一句话**：包装箱结算协调器（v3.21+ 上银包装线）——扫码驱动的"工单→箱→托盘/滑块"三层结算状态机：扫工单标签拉 MES 得应做箱数，视觉周期数托盘（trays 口径）或一周期一箱（sliders 口径），封箱/漏箱/多箱/标签错/少装各有报警与处置策略；六个外部依赖全部走可注入钩子（拉单/报警/回推/箱目标/切项目/步骤探测），默认 None 只 print。
 
@@ -409,6 +416,15 @@
 - **确认框闪退修复（v3.43.1，两处配套）**：① `_real_project_activator` 命中项目已是激活态 → 原地不动直接返回 True（重激活=重载模型几秒卡顿+重置检测运行时，会把同一次扫码链路里刚立起的人工确认定格抹掉）；② 扫新单判定路径的缺工单报警**延后**——`_close_awaiting_paper(defer_alarm=True)` 返回报警文案，调用方在 `_open_order`（含按规格切项目）之后再触发，定格立在切换之后。
 - `_KIND_TO_EVENT_FIELD` 增 `early_paper`（复用 event_missing_paper 档）与 `completed_order_rescan`（event_completed_order_rescan）；`cleanup_for_testing` 撤全部 Timer + 清 `_box_progress_getter`。
 - 回归：`tests/test_packaging_flow_coordinator.py` 扩到 91 例（含等待态/两种判定/提前放工单/重扫拦截/重启作废）+ BDD `packaging_flow_sliders.feature` 扩场景。
+
+**v3.45 变更（箱标签扫码授权 + 包装工单同步，上述行号已漂移）**：
+
+- **箱标签扫码授权（组⑧，默认关零差异）**：`box_label_scan_required` 开时每箱开箱进「等扫箱标签」态（run.status=waiting_label，`label_authorized`=False），扫到本工单标签才授权开做——两种放行模式：**取量模式**（`label_qty_enabled`，`_authorize_box_by_label` L1137）必须从复合串取到"本箱数量"才放行（扫到裸条形码/数量段缺失 → 报 label_qty_missing"请扫二维码勿扫条形码"继续等），取到的数量写 `current_box_scan_qty` 并 `_apply_box_target` 反设检测层容器目标（**逐箱扫码定数量**，尾箱不再靠整除算）；**纯凭证模式**扫到即放行、箱目标仍按工单级计划。
+- `_extract_label_qty`（L326，staticmethod）：取段规则可配服务"段序不固定/格式变化不改代码"——配了 `label_qty_pattern` 正则在各段里找第一个**整段**命中的，否则按固定段号 `label_qty_segment`（1-based，按 composite_delimiter 拆）；float 解析取整（"54.00"→54），≤0 非法；无分隔符裸码天然取不出返回 None；正则无效退回按段号（不吞码留调试痕迹）。
+- `on_cycle_started`（L1162，**新对外入口**，检测线程经 step_stats mixin `_notify_packaging_cycle_started` 调入、调用点错误隔离）：等扫态下工人没扫标签就开做（周期收进第一个步骤）→ 报 box_not_scanned 提醒，`unscanned_alarm_box` 每箱只报一次防轰炸；非等扫态/通道不参与 → 零开销返回。
+- 未授权箱处置 `unauthorized_cycle_action`（默认 hold）：等扫态下来了周期结算按配置挂起/放行；重扫已授权标签按 `label_rescan_action`（默认 ignore）。收尾对账 `label_total_check`（需与取量模式同开）：`_complete_order` 收尾点核对"Σ各箱标签声明量（box_details.scan_qty） vs 工单排产量 slider_total"，不平报 label_total_mismatch **只提醒不改成绩**（两边都>0 才比，`_KIND_TO_EVENT_FIELD` 增 label_qty_missing / label_total_mismatch / box_not_scanned 三个事件映射键）。
+- **包装工单镜像进工单管理**（`_sync_work_order` L1659，**默认开**，老库 NULL 视为开）：扫码开工的工单此前只存包装运行记录、工单管理页看不见没处清理——开工 upsert work_orders 为"生产中"，收尾推"已完成"、中止推"已取消"；数量按**箱口径**回填（planned=应做箱数，completed=已结算箱数，good/ng=OK箱/NG箱），滑块口径细节进 extra_data.packaging；同号已存在（如外部 MES 先推送过）不重建只刷状态与数量（单号唯一约束天然防重、原 source 保留），新建行 source='packaging'（前端工单页显示"包装扫码"来源标签）；**异常隔离**：同步失败不阻断包装状态机。
+- `_row_to_dict` 快照扩组⑧ 11 键（含 3 个事件映射）+ `sync_work_orders`；run dict 增 `label_authorized` / `current_box_scan_qty` / `unscanned_alarm_box` 等字段。
 
 **线程·锁·队列**：v3.43 前**不开后台线程**（模块头："全部事件驱动"）；v3.43 起时限判定模式有**一次性 `threading.Timer`**（`_paper_timers` config_id→Timer，挂等待态布防/收尾撤防，回调锁内跑并校验 run_uuid 防串单）；单把 `RLock`（`on_forced_settle_by_channel` 内再调 `on_forced_settle` 依赖可重入）；单例双检锁。
 
@@ -723,8 +739,9 @@
 - **PUT L363 前置检查 in-flight**："流水线有 in-flight 工件, 请等所有工件走完再修改"（409，L378-382）——与服务层 reload_flows "不动 in-flight run" 的假设配套。
 - DELETE 仅 enabled=False（409）L439-443；GET `/{id}/state` L451（in-flight 快照）；GET `/{id}/runs` L471（分页历史）+ GET `/runs/{run_id}` L499。
 
-#### 11.10 api/packaging_flows.py（562 行，v3.41 复核）— 前缀 `/packaging-flows`（v3.21+ 上银包装线）
-**职责**：包装结算配置 CRUD（7 组 45+ 字段）+ 状态快照 + **扫码 HTTP 入口** + 强制结案/补滑块/重做三个现场操作端点。
+#### 11.10 api/packaging_flows.py（621 行，v3.45 复核）— 前缀 `/packaging-flows`（v3.21+ 上银包装线）
+**职责**：包装结算配置 CRUD（8 组 55+ 字段）+ 状态快照 + **扫码 HTTP 入口** + 强制结案/补滑块/重做三个现场操作端点。
+- **v3.45 变更**：Pydantic 面加**组⑧箱标签扫码授权 10 字段**（`box_label_scan_required` / `label_qty_enabled` / `label_qty_segment` / `label_qty_pattern` / `label_rescan_action` / `unauthorized_cycle_action` / `label_total_check` + 事件映射 `event_box_not_scanned` / `event_label_qty_missing` / `event_label_total_mismatch`，全默认关零差异）+ `sync_work_orders`（包装工单镜像进工单管理，**默认 True**），Create/Update 双 Schema 同步；语义全在协调器（见其条目 v3.45 节）。
 - Schema L44-112 即配置面全景：组①工单箱数来源 / 组②数量规格（fixed/by_spec 对照表）/ 组③标签校验（exact/strip_hyphen/digits_only/insert_char；**v3.35 变更**：新增复合条码取段 5 字段 `composite_label_enabled/delimiter/pick_mode/prefix/index` + 工单号识别规则 `order_code_pattern`，均默认关=存量零差异）/ 组④异常策略（on_mes_fail=block|offline、on_short_box=redo|void 等）/ 组⑤收尾回推 / 组⑥异常→项目事件映射 / 组⑦滑块口径+尾箱+自动切项目+塞工单 gate（v3.22）+ 缺油嘴 gate（v3.23）+ **v3.35 `tail_paper_as_close_action`（放工单=尾箱收尾动作，挂起快照闭环，默认关=老行为）**。枚举校验表 `_ENUMS` L182-194。
 - `_check_channel_exclusivity` L214：一工位只能属一个启用配置。
 - CRUD L304-423：与前两者同构（名字唯一、DELETE 仅 disabled、reload_configs 即时生效）；`_validate` L197 只校验出现的字段（支持部分更新）。

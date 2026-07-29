@@ -16,6 +16,7 @@ def test_空配置_全默认零差异():
         'missing_step': 'ng', 'hold_timeout_s': 120.0, 'hold_event_id': None,
         'short_count': 'ng',
         'gate_enabled': False, 'gate_steps': [], 'gate_event_id': None,
+        'gate_escalate_steps': [],
     }
 
 
@@ -92,6 +93,17 @@ def test_新块优先于legacy键():
     assert r['violation'] == 'hint' and r['violation_event_id'] == 5
     assert r['gate_event_id'] == 6 and r['hold_event_id'] == 7
     assert r['short_count'] == 'ng'  # 新块没写 = 默认, 不吃旧键
+
+
+def test_数量门升级放行步骤_v3444():
+    """gate_escalate_steps (短拦长放): 新块可配; legacy 合成恒为空 (零差异)."""
+    r = resolve_ng_handling({'ng_handling': {
+        'gate_enabled': True, 'gate_steps': ['放油嘴包', '封箱'],
+        'gate_escalate_steps': ['封箱', '']}})
+    assert r['gate_escalate_steps'] == ['封箱']  # 空串净化
+    legacy = resolve_ng_handling({'closing_guard': {
+        'gate_enabled': True, 'gate_steps': ['封箱']}})
+    assert legacy['gate_escalate_steps'] == []
 
 
 def test_枚举与类型净化():

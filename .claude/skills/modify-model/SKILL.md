@@ -144,6 +144,7 @@ class ScannerDevice(Base):
 
 > 近期 schema 变更样例（v3.30.0）：`packaging_flow_configs` 新增 `name_match_strict_boundary BOOLEAN DEFAULT 0`（规格→项目自动同名匹配的"严格边界"开关；ORM 默认 `False` + 迁移 ALTER `DEFAULT 0` 两处对齐）。
 > 版本化迁移样例（v3.43，m0002/m0003）：`packaging_flow_configs` 分两个迁移模块加 4 列——m0002 重扫拦截两列（`block_completed_order_rescan BOOLEAN DEFAULT 0` + `event_completed_order_rescan INTEGER`）、m0003 缺工单判定两列（`tail_paper_scan_alarm BOOLEAN DEFAULT 1` + `tail_paper_timeout_s INTEGER DEFAULT 0`）；均在 `migrations/__init__.py` 的 `_MIGRATION_MODULES` 登记，PostgreSQL 布尔默认值走 `BOOLEAN DEFAULT FALSE/TRUE` 分道。
+> 版本化迁移样例（v3.45，m0004/m0005）：仍是 `packaging_flow_configs`——m0004 箱标签扫码授权 9 列（`box_label_scan_required` / `label_qty_enabled` / `label_qty_segment` / `label_qty_pattern` / `label_rescan_action` / `unauthorized_cycle_action` / `label_total_check` + 三个事件列）、m0005 工单同步开关 1 列（`sync_work_orders BOOLEAN DEFAULT 1`，**默认开**——PG 分道 `DEFAULT TRUE`，读取端老库 NULL 视为开：`getattr(row, ..., None) not in (False, 0)`）。默认开的新列这个"NULL 视为开"读法是惯例，别写成 `bool(getattr(...))`（NULL 会被误判关）。
 
 ### 步骤 B：`backend/db/migrations/` 新建迁移文件
 
@@ -364,5 +365,7 @@ JSON 子键链: <set_project_config + 视图 + Navbar 默认值> （仅 JSON）
 | v3.30.0 | `packaging_flow_configs` 加 `name_match_strict_boundary BOOLEAN DEFAULT 0` |
 | v3.31.0 | 新文件 `weighing_models.py` + `weighing_records` 表（称重投料逐件台账，`main.py` 显式 import + create_all，无 ALTER）|
 | v3.38.0 | `step_records.cycle_id` + `video_clips.related_id` 加索引（热路径查询，迁移 `m0001_hot_path_indexes.py`——版本化迁移体系第一号，新迁移照它抄）|
+| v3.43.0 | `packaging_flow_configs` 加 4 列（重扫拦截 m0002 + 缺工单判定 m0003）|
+| v3.45.0 | `packaging_flow_configs` 加 10 列（箱标签扫码授权 9 列 m0004 + 工单同步开关 m0005，后者默认开 NULL 视为开）|
 
 > 完整 changelog 在 `docs/changelog/` 下，每个 .md 都标了 BUG/FEAT/HOTFIX。

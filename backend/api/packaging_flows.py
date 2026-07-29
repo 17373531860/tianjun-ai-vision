@@ -113,6 +113,19 @@ class PackagingFlowConfigBase(BaseModel):
     # 已完成(OK)工单重扫拦截 (v3.42.1, 默认关): 报警提示且不重新录入
     block_completed_order_rescan: bool = False
     event_completed_order_rescan: Optional[int] = None
+    # 包装工单镜像进工单管理 (v3.45, 默认开): 开工/收尾/中止同步 work_orders
+    sync_work_orders: bool = True
+    # 组⑧ 箱标签扫码授权 + 标签取本箱数量 (v3.45, 全可选默认关)
+    box_label_scan_required: bool = False
+    label_qty_enabled: bool = False
+    label_qty_segment: int = 3
+    label_qty_pattern: Optional[str] = None
+    label_rescan_action: str = "ignore"
+    unauthorized_cycle_action: str = "hold"
+    label_total_check: bool = False
+    event_box_not_scanned: Optional[int] = None
+    event_label_qty_missing: Optional[int] = None
+    event_label_total_mismatch: Optional[int] = None
 
 
 class PackagingFlowConfigCreate(PackagingFlowConfigBase):
@@ -177,6 +190,17 @@ class PackagingFlowConfigUpdate(BaseModel):
     event_missing_nozzle: Optional[int] = None
     block_completed_order_rescan: Optional[bool] = None
     event_completed_order_rescan: Optional[int] = None
+    sync_work_orders: Optional[bool] = None
+    box_label_scan_required: Optional[bool] = None
+    label_qty_enabled: Optional[bool] = None
+    label_qty_segment: Optional[int] = None
+    label_qty_pattern: Optional[str] = None
+    label_rescan_action: Optional[str] = None
+    unauthorized_cycle_action: Optional[str] = None
+    label_total_check: Optional[bool] = None
+    event_box_not_scanned: Optional[int] = None
+    event_label_qty_missing: Optional[int] = None
+    event_label_total_mismatch: Optional[int] = None
 
 
 class PackagingFlowConfigResponse(PackagingFlowConfigBase):
@@ -202,6 +226,8 @@ _ENUMS = {
     "on_forced_stop": {"settle", "abort", "keep"},
     "count_unit": {"trays", "sliders"},
     "items_per_box_source": {"project", "config"},
+    "label_rescan_action": {"ignore", "update"},
+    "unauthorized_cycle_action": {"hold", "book"},
 }
 
 
@@ -309,6 +335,17 @@ def _serialize(row: PackagingFlowConfig) -> PackagingFlowConfigResponse:
         event_missing_nozzle=getattr(row, "event_missing_nozzle", None),
         block_completed_order_rescan=bool(getattr(row, "block_completed_order_rescan", False)),
         event_completed_order_rescan=getattr(row, "event_completed_order_rescan", None),
+        sync_work_orders=getattr(row, "sync_work_orders", None) not in (False, 0),
+        box_label_scan_required=bool(getattr(row, "box_label_scan_required", False)),
+        label_qty_enabled=bool(getattr(row, "label_qty_enabled", False)),
+        label_qty_segment=int(getattr(row, "label_qty_segment", 3) or 3),
+        label_qty_pattern=getattr(row, "label_qty_pattern", None),
+        label_rescan_action=getattr(row, "label_rescan_action", None) or "ignore",
+        unauthorized_cycle_action=getattr(row, "unauthorized_cycle_action", None) or "hold",
+        label_total_check=bool(getattr(row, "label_total_check", False)),
+        event_box_not_scanned=getattr(row, "event_box_not_scanned", None),
+        event_label_qty_missing=getattr(row, "event_label_qty_missing", None),
+        event_label_total_mismatch=getattr(row, "event_label_total_mismatch", None),
     )
 
 

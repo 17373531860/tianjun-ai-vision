@@ -11,6 +11,12 @@
 > - `views/Project/EventsConfigTab.vue`：NG 事件（id=2）「需人工确认」下反向联动明示——处置按钮来源于逻辑设置统一卡、「确认后保留周期」被处置按钮顶掉的关系。
 > - `views/Monitor/index.vue`：确认弹窗（大/小两处）新增包装挂账形态——在制箱明细（第几箱/已进箱/目标/挂起态）+「认NG落账进下一箱/重做本箱不记NG」二选一；成功提示按箱语义。`pendingAckChannelStates` 接后端 `pending_ack.pkg_hold`。
 > - `views/Monitor/PackagingFlowCard.vue`：工单收尾快照横幅（完成/作废+最终结果+箱明细，扫新单顶掉）+ NG 箱账挂起横幅（只引导去确认弹窗，不重复给按钮）；`pending_box` 按 reason 分流（ng_ack vs 少装）。
+>
+> **v3.45 补账（2026-07-29）**：上银热补丁 0a~0e 收编 + 箱标签扫码授权 + 包装工单同步 + 萍乡称重整改 + 海康帧率可配 + dev-qing 逐件合入（9973d4c），共 13 个前端文件——细节见各条目「v3.45」行：
+> - 称重族：`api/weighing.js`（+`getWeighingOperators`）、`Monitor/WeighingPanel.vue`（人员下拉 operator_from_users）、`Project/WeighingConfigTab.vue`（作业员名单开关）。
+> - 包装族：`Settings/PackagingFlowPanel.vue`（组⑧箱标签扫码 + 工单同步开关 + 上银预设扩容）、`Monitor/PackagingFlowCard.vue`（等扫箱标签横幅/完成态文案/标签取量目标）、`MES/OrderPanel.vue`（来源标签"包装扫码"）。
+> - 容器/NG 处置族：`Project/LogicConfigTab.vue`（峰值封顶/稳定帧/每盘校验入口 + gate 升级放行 + short_count=hold 档）、`Project/StepsConfigTab.vue`（容器角色提示标签）、`Project/index.vue`（新键默认值与保存映射）。
+> - 其他：`Monitor/index.vue`（per_item associated 过滤+双色守门；待机快速恢复不重推配置+按源类型文案；画布 ResizeObserver）、`Source/index.vue`（海康目标帧率下拉+持久化）、`MES/GatewayPanel.vue`（端口框修复）。
 
 ---
 
@@ -102,7 +108,7 @@
 | `scanner.js` | 25 | `/scanner/*` 含 disable/simulate |
 | `wmax.js` | 84 | `/scanner/wmax/*` 35+ 端点 |
 | `external_device.js` | 15 | `/external-devices/*` |
-| `weighing.js` | 14 | `/weighing/*` |
+| `weighing.js` | 15 | `/weighing/*`；v3.45 加 `getWeighingOperators`（行 15，`GET /weighing/operators` 作业员候选名单，配 operator_from_users 下拉） |
 | `cluster.js` | 23 | `/cluster/*` |
 | `channel_group.js` | 10 | `/channel-groups/*` |
 | `workpiece_flow.js` | 13 | `/workpiece-flows/*` |
@@ -136,26 +142,28 @@
 
 | 视图 | 行数 | 一句话 |
 |------|------|--------|
-| `Monitor/index.vue` | **6272** | 检测主屏（见第五节；v3.43 复核） |
-| `Project/index.vue` | 3218 | 项目 CRUD + 7 配置 Tab + 插件注入 Tab（v3.41 复核） |
+| `Monitor/index.vue` | **6347** | 检测主屏（见第五节；v3.45 复核） |
+| `Project/index.vue` | 3286 | 项目 CRUD + 7 配置 Tab + 插件注入 Tab（v3.45 复核） |
 | `Settings/index.vue` | 2723 | 显示/检测框/性能/插件/工位组/串行流/包装流/鉴权/调试（v3.41 复核） |
 | `Data/index.vue` | 2294 | Session/Cycle 查询、导出、自定义导出/定时规则对话框（v3.41 复核） |
-| `Source/index.vue` | 1417 | 6 类输入源启停与参数 |
+| `Source/index.vue` | 1436 | 6 类输入源启停与参数；v3.45 海康 SDK 目标帧率下拉（见表下注） |
 | `MES/index.vue` | 92 | Tab 容器：工单/工件/缺陷/扫码/网关/集群/WMax/外设/入站/拉单 |
-| `MES/*Panel.vue` | 268–1508 | 各 MES 子面板（最大 GatewayPanel 1508 行；v3.41 复核） |
+| `MES/*Panel.vue` | 268–1512 | 各 MES 子面板（最大 GatewayPanel 1512 行；v3.45 复核） |
 | `Model/index.vue` | 356 | 模型上传/转换/激活 |
 | `Alarm/index.vue` | 939 | 报警设备与事件绑定 |
 | `Login/index.vue` | 156 | 登录表单 |
 | `Activation/index.vue` | 140 | License 激活 |
 
-> 业务视图 v3.33~v3.41 变更（v3.41 复核，动机详见对应 changelog）：
+> 业务视图 v3.33~v3.45 变更（动机详见对应 changelog）：
 > - **`Data/index.vue`（v3.38 自定义班次筛选）**：时间段下拉在项目配了自定义班次列表（≥2 条有效）时按列表动态出选项（`customShifts` 行 962–973，本班结束时刻=下一班开始、末班跨天回到首班）；切项目后已选班次名失效自动回落"全天"（watch 行 976–982）；`getShiftHours`（行 984–996）班次名 → 起止时刻。未配列表保持旧白/晚两班零差异。
 > - **`Settings/index.vue`**：v3.36 「导航栏 Logo」上传块（模板行 48–60；`onNavbarLogoChange` 行 2040–2071 前端居中裁方压 256×256 PNG data URL 存 display，`resetNavbarLogo` 行 2072；回退地址同走 BASE_URL 拼接，行 2038）；v3.35.1 「当前班次」显示开关（行 97）；v3.38 「旁路 SN 码」开关（行 171）；v3.39 「扫码操作按钮」显隐开关（行 178）；v3.32+ MediaPipe 姿态/手部**关键点颜色**独立取色器（行 1109–1153，清空=跟随连线颜色）。
-> - **`MES/GatewayPanel.vue`**：v3.35 第 6 种适配器「数据库直写」——适配器单选加 `database`（行 116），连接表单（库型达梦/MySQL/PG/SQLServer/SQLite + 主机/端口/账号/库名/表名，模板行 326–369），HTTP 语义字段（URL/鉴权/健康探测/4xx 重试）统一由 `isHttpAdapter`（行 804）守门对其隐藏；`buildConfig` 对 database 分支单独出配置（行 1286–1316，模板顶层键名=目标表列名）。v3.41 事件下拉补 `weighing_product_done`（称重成品结案，行 707）——两阶段流水线称重的正式结案事件，此前没露出导致达梦直写连接照 v2.0 手册配 `cycle_end` 一条收不到。
+> - **`MES/GatewayPanel.vue`**：v3.35 第 6 种适配器「数据库直写」——适配器单选加 `database`（行 116），连接表单（库型达梦/MySQL/PG/SQLServer/SQLite + 主机/端口/账号/库名/表名，模板行 326–369），HTTP 语义字段（URL/鉴权/健康探测/4xx 重试）统一由 `isHttpAdapter`（行 804）守门对其隐藏；`buildConfig` 对 database 分支单独出配置（行 1286–1316，模板顶层键名=目标表列名）。v3.41 事件下拉补 `weighing_product_done`（称重成品结案，行 707）——两阶段流水线称重的正式结案事件，此前没露出导致达梦直写连接照 v2.0 手册配 `cycle_end` 一条收不到。**v3.45 端口框修复（BUG-010）**：Modbus TCP 与数据库直写两处「端口」输入框——独立窄 label（label-width 45px）+ 容器禁压缩 + 去步进钮 + 限 1~65535——治"全局 label 120px 把端口框挤到 25px 宽，粘贴出超长数字看不见还把连接搞炸"（与后端 database_adapter 端口守门配套，见 02 册）。
+> - **`MES/OrderPanel.vue`（1220 行，v3.45 复核）**：来源标签三态——external=橙"外部"、**v3.45 新增 packaging=绿"包装扫码"**（包装工单同步 `_sync_work_order` 镜像进来的单，见 02 册协调器条目）、其余灰"手动"。
 > - **`MES/OrderInboundPanel.vue`（815 行）**：v3.37 「开工后自动开始检测」开关 `start_detection_on_task`（行 86，默认关）；v3.39 在途报警软件内消除两开关（「横幅手动消除」`allow_manual_clear` 行 295 + 「清零联动消除」`clear_on_counter_reset` 行 299，默认全关保持"只能外部消除"契约）；v3.39 监控页任务信息条两显示开关（「工单进度徽标」`show_order_chip` 行 316 + 「两行表格布局」`two_line_layout` 行 320，默认=原界面）；v3.42 「终态工单再开工」下拉 `terminal_order_policy`（行 111，revive 自动复活为在产（默认）/ reject 拒收提示，emptyForm/applyConfig/buildConfig 三处同步行 489/603/724）。
 > - **`MES/UsbScanGunDialog.vue`（238 行）+ `composables/useScanGun.js`（236 行）**：v3.35 USB 扫码枪第 4 种用途 `ack`（报警确认按钮）——本质是只发固定码的 HID 按键，按一下走事件人工确认接口解除本工位定格（称重缺料/超量/投错等 require_ack 报警的物理确认入口）；路由纯函数 `routeCode` 对 `ack` 短路（useScanGun 行 67），`doAck`（行 139–157）不进包装/拉单/绑定链路，无待确认事件温和提示不当故障；对话框补用途单选/工位选择文案/模拟测试路由标签。
-> - **`Settings/PackagingFlowPanel.vue`（894 行，v3.43 复核）**：v3.35 包装线扫码健壮性三件——复合条码取段（多段拼接码按分隔符拆段、按前缀认段或取第 N 段 + 取段预览 `compositePreviewResult` 前端镜像后端取段逻辑）；工单号识别正则 `order_code_pattern`（仅开第一单时校验，挡开机第一枪误扫数量码）；「放工单=工单收尾」`tail_paper_as_close_action`（行 375，v3.43 文案改语义：箱归周期结算、放工单归工单收尾）。v3.43 新增：缺工单判定方式单选（`paperJudgeMode` computed 行 632——scan/timeout 二选一映射 `tail_paper_scan_alarm` + `tail_paper_timeout_s` 两个落库字段，选 timeout 自动给 30s 缺省）+ 放工单时限秒数 + 「完成工单重扫拦截」开关与提示事件下拉（行 425–438）。上银预设（`applyHiwinPreset` 行 714–775）v3.43 一键化补齐：每箱 96 固定值（items_per_box_source='config'）、自动切项目（同名匹配）、异常→事件映射全套（缺工单=2 其余=3）、重扫拦截默认开——套完只需手配工位/扫码器/拉单连接。
+> - **`Settings/PackagingFlowPanel.vue`（1008 行，v3.45 复核）**：v3.35 包装线扫码健壮性三件——复合条码取段（多段拼接码按分隔符拆段、按前缀认段或取第 N 段 + 取段预览 `compositePreviewResult` 前端镜像后端取段逻辑）；工单号识别正则 `order_code_pattern`（仅开第一单时校验，挡开机第一枪误扫数量码）；「放工单=工单收尾」`tail_paper_as_close_action`（行 375，v3.43 文案改语义：箱归周期结算、放工单归工单收尾）。v3.43 新增：缺工单判定方式单选（`paperJudgeMode` computed 行 632——scan/timeout 二选一映射 `tail_paper_scan_alarm` + `tail_paper_timeout_s` 两个落库字段，选 timeout 自动给 30s 缺省）+ 放工单时限秒数 + 「完成工单重扫拦截」开关与提示事件下拉（行 425–438）。上银预设（`applyHiwinPreset` 行 714–775）v3.43 一键化补齐：每箱 96 固定值（items_per_box_source='config'）、自动切项目（同名匹配）、异常→事件映射全套（缺工单=2 其余=3）、重扫拦截默认开——套完只需手配工位/扫码器/拉单连接。**v3.45 两件**：① 组⑦加「同步到工单管理」开关 `sync_work_orders`（默认开——扫码开工的工单同步进工单页来源=包装扫码，开工"生产中"/收尾"已完成"/中止"已取消"；关=老行为只存运行记录）；② 新增**组⑧「箱标签扫码——每箱扫标签放行 / 从标签取本箱数量」**（仅滑块口径显示）——`box_label_scan_required` 总开关（每箱进「等扫箱标签」态含第一箱）+ 取量子开关 `label_qty_enabled`（必须扫到带数量的复合二维码才放行，**逐箱可变**覆盖工单级每箱数/尾数计划）+ 数量段号 `label_qty_segment`（按组③分隔符拆段取第 N 段）+ 识别正则 `label_qty_pattern`（段序不固定的兜底，配了优先于段号——"格式变了只改这里不改代码"）+ 重扫处置 `label_rescan_action`（ignore/update，update=贴错标签重贴重扫覆盖本箱目标）+ 未扫做完整箱处置 `unauthorized_cycle_action`（hold 挂起等人工（默认）/ book 报警照常落账）+ 收尾对账 `label_total_check` + 三个事件下拉；上银预设同步扩容（组⑧全开、事件=3、取第 3 段）。
 > - **`Project/CreateProjectDialog.vue`**：v3.37 修复"图像分割"被误禁用且误标"语义分割"——恢复可选、文案改"图像分割 (Instance Segmentation)"（行 12）。
+> - **`Source/index.vue`（1436 行，v3.45 复核）**：v3.45 海康 SDK 源加「目标帧率」下拉（10/15/25/30/50/60，单工位与多工位配置面各一处），带提示"需设备端码流帧率同步调高才有效，超过码流实际帧率不会增加画面帧数"；启动时 `fps: cfg.hcnetFps || 25` 传后端，`makeDefaultWsConfig` 加 `hcnetFps: 25` 缺省，持久化写 `hcnet_fps` 键（工位配置回读同款）——与后端 `main.py` 自动恢复读同一键闭环（此前重启自动恢复必跌回硬编码 25fps，见 01 册 main.py 条目）。
 
 **Project 子组件**（v3.32 视图拆分产物；v3.41 补账新建条目）
 

@@ -22,7 +22,7 @@
 | `auth_models.py` | 175 | 5 | 用户/角色/关联/登录 Token/M2M API Key |
 | `export_models.py` | 330 | 4 | 导出模板/实时规则/运行日志/定时规则 |
 | `plugin_models.py` | 69 | 4 | 插件安装元数据/运行状态/审计/配置版本 |
-| `mes_models.py` | 939 | 20 | MES 工单工件缺陷扫码/外部对接/集群/外设/串行流水线/包装箱（v3.43 复核） |
+| `mes_models.py` | 964 | 20 | MES 工单工件缺陷扫码/外部对接/集群/外设/串行流水线/包装箱（v3.45 复核） |
 | `weighing_models.py` | 33 | 1 | 称重投料逐件记录 |
 
 > v3.38 变更（v3.41 复核）：`models.py` 的 `step_records.cycle_id`（L290）与 `video_clips.related_id`（L332）两列补 `index=True`——周期收尾/自动清理/数据页按周期号查步骤、清理按归属周期/步骤找录像，此前均为全表扫描热点（川南"框冻结"第三批优化）。
@@ -164,7 +164,7 @@
 | `box_summaries` | `BoxSummary` | 箱子汇总结果 |
 | `workpiece_flow_configs` | `WorkpieceFlowConfig` | RFC11 串行流水线配置 |
 | `workpiece_flow_runs` | `WorkpieceFlowRun` | 单次工件流转 |
-| `packaging_flow_configs` | `PackagingFlowConfig` | 包装箱结算配置；v3.35 增复合条码取段 5 字段（composite_*）+ 工单号识别 order_code_pattern + 尾箱"放工单=收尾动作" tail_paper_as_close_action，均默认关=存量零差异；v3.43 增缺工单判定二选一两列 tail_paper_scan_alarm（默认开=扫新单判定）/ tail_paper_timeout_s（默认0，>0 且 scan_alarm 关=时限判定，迁移 m0003）+ 已完成(OK)工单重扫拦截两列 block_completed_order_rescan / event_completed_order_rescan（默认关，迁移 m0002） |
+| `packaging_flow_configs` | `PackagingFlowConfig` | 包装箱结算配置；v3.35 增复合条码取段 5 字段（composite_*）+ 工单号识别 order_code_pattern + 尾箱"放工单=收尾动作" tail_paper_as_close_action，均默认关=存量零差异；v3.43 增缺工单判定二选一两列 tail_paper_scan_alarm（默认开=扫新单判定）/ tail_paper_timeout_s（默认0，>0 且 scan_alarm 关=时限判定，迁移 m0003）+ 已完成(OK)工单重扫拦截两列 block_completed_order_rescan / event_completed_order_rescan（默认关，迁移 m0002）；**v3.45** 增组⑧箱标签扫码授权 10 列 box_label_scan_required / label_qty_enabled / label_qty_segment（默认3）/ label_qty_pattern / label_rescan_action（默认'ignore'）/ unauthorized_cycle_action（默认'hold'）/ label_total_check + 事件映射 event_box_not_scanned / event_label_qty_missing / event_label_total_mismatch（全默认关零差异，迁移 m0004）+ 工单同步开关 sync_work_orders（**BOOLEAN DEFAULT 1 默认开**，老库 NULL 协调器侧视为开，迁移 m0005；开工/收尾/中止把包装工单镜像到 work_orders 表 source='packaging'，见 02 册协调器条目） |
 | `packaging_flow_runs` | `PackagingFlowRun` | 包装运行记录 |
 
 ### 2.6 称重（`weighing_models.py`）

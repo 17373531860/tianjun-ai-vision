@@ -252,6 +252,19 @@ class PackagingFlowCoordinator:
             # v3.42.1 已完成(OK)工单重扫拦截 (默认关零差异)
             "block_completed_order_rescan": bool(getattr(row, "block_completed_order_rescan", False)),
             "event_completed_order_rescan": getattr(row, "event_completed_order_rescan", None),
+            # v3.45 包装工单镜像进工单管理 (默认开, 只补可见性不改判定; 老库 NULL 视为开)
+            "sync_work_orders": getattr(row, "sync_work_orders", None) not in (False, 0),
+            # 组⑧ v3.45 箱标签扫码授权 + 标签取本箱数量 (默认关零差异)
+            "box_label_scan_required": bool(getattr(row, "box_label_scan_required", False)),
+            "label_qty_enabled": bool(getattr(row, "label_qty_enabled", False)),
+            "label_qty_segment": int(getattr(row, "label_qty_segment", 3) or 3),
+            "label_qty_pattern": getattr(row, "label_qty_pattern", None) or "",
+            "label_rescan_action": getattr(row, "label_rescan_action", None) or "ignore",
+            "unauthorized_cycle_action": getattr(row, "unauthorized_cycle_action", None) or "hold",
+            "label_total_check": bool(getattr(row, "label_total_check", False)),
+            "event_box_not_scanned": getattr(row, "event_box_not_scanned", None),
+            "event_label_qty_missing": getattr(row, "event_label_qty_missing", None),
+            "event_label_total_mismatch": getattr(row, "event_label_total_mismatch", None),
         }
 
     # =============================================================
@@ -308,6 +321,46 @@ class PackagingFlowCoordinator:
                 return out
         _pkg_dbg("复合条码取段失败", f"前缀={prefix!r} 无命中段, 原样返回")
         return s
+
+    @staticmethod
+    def _extract_label_qty(code: str, cfg: Dict[str, Any]) -> Optional[int]:
+        """从箱标签复合串取"本箱数量" (v3.45). 取不出返回 None (调用方报警请重扫).
+
+        取段规则 (可配, 服务"段序不固定/格式变化不改代码"):
+          1. 配了数量段正则 (label_qty_pattern) → 各段里找第一个整段命中的;
+          2. 否则按固定段号 (label_qty_segment, 1-based, 按 composite_delimiter 拆).
+        数量段按 float 解析后取整 ("54.00" → 54), <=0 视为非法.
+        无分隔符的裸码 (工单条形码 / 标签上的一维码) 天然取不出 → None.
+        """
+        s = str(code or "").strip()
+        delim = cfg.get("composite_delimiter") or "|"
+        if delim not in s:
+            return None
+        parts = [p.strip() for p in s.split(delim) if p.strip()]
+        if not parts:
+            return None
+        seg = None
+        pattern = str(cfg.get("label_qty_pattern") or "").strip()
+        if pattern:
+            try:
+                for p in parts:
+                    if re.fullmatch(pattern, p):
+                        seg = p
+                        break
+            except re.error as e:
+                _pkg_dbg("数量段正则无效", f"{pattern!r} ({e}), 退回按段号取")
+        if seg is None:
+            idx = int(cfg.get("label_qty_segment") or 0)
+            if 1 <= idx <= len(parts):
+                seg = parts[idx - 1]
+        if seg is None:
+            return None
+        try:
+            qty = int(round(float(seg)))
+        except (ValueError, TypeError):
+            _pkg_dbg("数量段解析失败", f"seg={seg!r} 非数字")
+            return None
+        return qty if qty > 0 else None
 
     @staticmethod
     def _normalize(code: str, cfg: Dict[str, Any]) -> str:
@@ -550,6 +603,21 @@ class PackagingFlowCoordinator:
                 self._raise_alarm(cfg, "missing_paper", deferred_alarm)
             return
         if norm == run["order_no"]:
+            # v3.45 等扫箱标签态: 本工单标签扫进来 = 授权本箱开做 (取量模式还要取到数量)
+            if run.get("status") == "waiting_label":
+                self._authorize_box_by_label(cfg, run, code, db)
+                return
+            # v3.45 已授权后又扫同号标签: update 档用新扫数量更新本箱目标 (贴错标签重贴场景)
+            if (cfg.get("box_label_scan_required") and cfg.get("label_qty_enabled")
+                    and cfg.get("label_rescan_action") == "update"):
+                qty = self._extract_label_qty(code, cfg)
+                if qty:
+                    run["current_box_scan_qty"] = qty
+                    self._apply_box_target(cfg, qty)
+                    _pkg_dbg("重扫更新本箱目标",
+                             f"order={norm} box={run.get('current_box_index')} qty={qty}")
+                    self._persist_run(run, db)
+                    return
             # 中途扫同号: 不开 / 不结箱 (上银扫码仅为开工单), 仅刷新落库
             _pkg_dbg("扫码同号刷新", f"order={norm} box_done={run.get('box_done')}/{run.get('box_total')}")
             self._persist_run(run, db)
@@ -905,11 +973,18 @@ class PackagingFlowCoordinator:
             run = self._runs.get(config_id)
             if run is None or run.get("status") != "pending_remediation":
                 return False
+            cfg = self._configs.get(config_id) or {}
             run["pending_box"] = None
             run["current_box_sliders"] = 0
-            run["status"] = "running"
+            # v3.45 箱标签扫码授权: 本箱从未扫标签授权 → 重做后回到「等扫箱标签」态
+            # (工人必须先扫标签再重做), 而不是直接放行
+            if cfg.get("box_label_scan_required") and not run.get("label_authorized"):
+                run["status"] = "waiting_label"
+            else:
+                run["status"] = "running"
             _pkg_dbg("少装重做",
-                     f"order={run.get('order_no')} box={run.get('current_box_index')} by={operator}")
+                     f"order={run.get('order_no')} box={run.get('current_box_index')} "
+                     f"by={operator} status={run['status']}")
             self._persist_run(run, db)
             return True
 
@@ -1015,7 +1090,11 @@ class PackagingFlowCoordinator:
             return False
 
     def _current_box_target(self, run: Dict[str, Any]) -> int:
-        """当前箱滑块目标: 普通箱 = 每箱数, 尾箱 (最后一箱) = 尾数."""
+        """当前箱滑块目标: 标签扫码取到的本箱数量优先 (v3.45, 逐箱可变);
+        否则按工单级计划 — 普通箱 = 每箱数, 尾箱 (最后一箱) = 尾数."""
+        scan_qty = int(run.get("current_box_scan_qty", 0) or 0)
+        if scan_qty > 0:
+            return scan_qty
         is_tail = run["box_total"] > 0 and run["current_box_index"] >= run["box_total"]
         if is_tail and int(run.get("tail_target", 0) or 0) > 0:
             return int(run["tail_target"])
@@ -1039,9 +1118,74 @@ class PackagingFlowCoordinator:
             return
         run["current_box_index"] = run["box_done"] + 1
         run["current_box_sliders"] = 0
-        run["status"] = "running"
+        run["current_box_scan_qty"] = 0
+        # v3.45 箱标签扫码授权 (默认关零差异): 每箱开做前必须扫箱标签.
+        # 等扫期间目标先按工单级计划兜底下发 (检测层数量判定/防呆不真空),
+        # 取量模式扫到标签后再按标签数量覆写.
+        if cfg.get("box_label_scan_required"):
+            run["label_authorized"] = False
+            run["status"] = "waiting_label"
+            _pkg_dbg("开箱等扫标签",
+                     f"order={run.get('order_no')} box={run['current_box_index']} "
+                     f"取量={'开' if cfg.get('label_qty_enabled') else '关'}")
+        else:
+            run["label_authorized"] = True
+            run["status"] = "running"
         self._apply_box_target(cfg, self._current_box_target(run))
         self._persist_run(run, db)
+
+    def _authorize_box_by_label(self, cfg: Dict[str, Any], run: Dict[str, Any],
+                                raw_code: str, db) -> None:
+        """「等扫箱标签」态收到本工单的标签扫码 → 授权本箱开做 (v3.45).
+
+        取量模式 (label_qty_enabled): 必须从复合串取到"本箱数量"才放行 —
+        扫到裸条形码 / 数量段缺失或非法 → 报警"请扫二维码", 继续等;
+        纯凭证模式: 扫到本工单标签即放行, 本箱目标仍按工单级计划.
+        """
+        if cfg.get("label_qty_enabled"):
+            qty = self._extract_label_qty(raw_code, cfg)
+            if not qty:
+                self._raise_alarm(cfg, "label_qty_missing",
+                                  f"工单 {run['order_no']} 第 {run['current_box_index']} 箱"
+                                  f"未获取到本箱数量, 请扫箱标签二维码 (勿扫条形码)")
+                self._persist_run(run, db)
+                return
+            run["current_box_scan_qty"] = int(qty)
+            self._apply_box_target(cfg, int(qty))
+        run["label_authorized"] = True
+        run["status"] = "running"
+        _pkg_dbg("箱标签授权开做",
+                 f"order={run.get('order_no')} box={run.get('current_box_index')} "
+                 f"qty={run.get('current_box_scan_qty') or '按计划'}")
+        self._persist_run(run, db)
+
+    def on_cycle_started(self, channel_id: int) -> None:
+        """检测周期开始通知 (v3.45 箱标签扫码授权): 「等扫箱标签」态下工人没扫标签
+        就开始作业 (周期收进第一个步骤) → 报警提醒, 每箱只报一次.
+
+        调用方在检测线程 (调用点已错误隔离); 非等扫态 / 通道不参与包装 → 直接返回零开销.
+        """
+        if not self._configs:
+            return
+        with self._lock:
+            config_id = self._channel_to_config.get(channel_id)
+            if config_id is None:
+                return
+            cfg = self._configs.get(config_id)
+            run = self._runs.get(config_id)
+            if cfg is None or run is None:
+                return
+            if run.get("status") != "waiting_label":
+                return
+            box = int(run.get("current_box_index") or 0)
+            if run.get("unscanned_alarm_box") == box:
+                return  # 本箱已报过, 不重复轰炸
+            run["unscanned_alarm_box"] = box
+            self._raise_alarm(cfg, "box_not_scanned",
+                              f"工单 {run['order_no']} 第 {box} 箱未扫箱标签就开始作业, "
+                              f"请先扫标签二维码")
+            _pkg_dbg("未扫标签开做报警",
+                     f"order={run.get('order_no')} box={box} ch={channel_id}")
 
     def _probe_paper_order(self, cfg: Dict[str, Any], run: Dict[str, Any]) -> bool:
         if run.get("paper_order_done"):
@@ -1189,6 +1333,28 @@ class PackagingFlowCoordinator:
         run["current_box_sliders"] = sc
         is_tail = run["box_total"] > 0 and run["current_box_index"] >= run["box_total"]
         target = self._current_box_target(run)
+        # v3.45 未扫箱标签就做完了一整箱 (等扫标签态收到周期结算), 按配置处置:
+        #   hold (默认) = 箱账挂起等人工 (补齐/认NG/重做三个既有端点推进, 重做后回到等扫态);
+        #   book = 报警留痕后按工单级计划目标照常落账 (只提醒不拦).
+        if run.get("status") == "waiting_label":
+            if cfg.get("unauthorized_cycle_action", "hold") == "hold":
+                run["pending_box"] = {
+                    "box": run["current_box_index"], "sliders": sc, "target": target,
+                    "is_tail": is_tail, "cycle": cycle_id, "reason": "no_label",
+                }
+                run["status"] = "pending_remediation"
+                self._raise_alarm(cfg, "box_not_scanned",
+                                  f"工单 {run['order_no']} 第 {run['current_box_index']} 箱"
+                                  f"未扫箱标签已做完, 箱账挂起等人工处置")
+                _pkg_dbg("未扫标签箱挂起",
+                         f"order={run.get('order_no')} box={run.get('current_box_index')} "
+                         f"sliders={sc}/{target}")
+                self._persist_run(run, db)
+                return
+            self._raise_alarm(cfg, "box_not_scanned",
+                              f"工单 {run['order_no']} 第 {run['current_box_index']} 箱"
+                              f"未扫箱标签, 已按计划目标照实落账")
+            run["status"] = "running"
         _pkg_dbg("周期结算 sliders",
                  f"order={run.get('order_no')} box={run.get('current_box_index')}/"
                  f"{run.get('box_total')} cycle={cycle_id} sliders={sc}/{target} "
@@ -1278,6 +1444,8 @@ class PackagingFlowCoordinator:
             "box": run["current_box_index"], "sliders": sc, "target": target,
             "is_tail": is_tail, "result": result, "cycle": cycle_id,
         }
+        if int(run.get("current_box_scan_qty", 0) or 0) > 0:
+            detail["scan_qty"] = int(run["current_box_scan_qty"])  # 标签声明量留痕 (对账/追溯)
         if remediated:
             detail["remediated"] = remediated  # 补做留痕: 谁补的 / 从几补到几 / 理由
         run["box_details"].append(detail)
@@ -1360,6 +1528,15 @@ class PackagingFlowCoordinator:
         if paper_missing:
             final = "NG"  # v3.43 始终未放工单 (箱成绩不回改, 工单层判 NG)
             run["forced_reason"] = run.get("forced_reason") or "尾箱始终未放工单, 工单判 NG 收尾"
+        # v3.45 收尾对账 (可选): Σ各箱标签声明量 vs 工单排产量, 不平报警 (只提醒不改成绩)
+        if cfg.get("label_total_check") and cfg.get("label_qty_enabled"):
+            declared = sum(int(d.get("scan_qty", 0) or 0)
+                           for d in (run.get("box_details") or []))
+            slider_total = int(run.get("slider_total", 0) or 0)
+            if slider_total > 0 and declared > 0 and declared != slider_total:
+                self._raise_alarm(cfg, "label_total_mismatch",
+                                  f"工单 {run['order_no']} 各箱标签数量合计 {declared} "
+                                  f"与排产量 {slider_total} 不符, 请核对")
         run["final_result"] = final
         run["status"] = "completed"
         _pkg_dbg("工单完成",
@@ -1413,6 +1590,12 @@ class PackagingFlowCoordinator:
             # v3.43 工单「等放工单收尾」等待态 (None=没在等): 各箱已全部落账,
             # 只差放工单动作完成工单. {"since": 挂起时刻, "alarmed": 时限报警是否已报}
             "awaiting_paper": None,
+            # v3.45 箱标签扫码授权运行态 (开关关时恒 True/0, 零差异):
+            # label_authorized=本箱是否已扫标签放行; current_box_scan_qty=标签取到的本箱数量
+            # (0=未取, >0 时覆盖工单级每箱数/尾数计划当本箱目标)
+            "label_authorized": True,
+            "current_box_scan_qty": 0,
+            "unscanned_alarm_box": 0,  # "未扫就开做"报警节流 (每箱只报一次)
         }
 
     def _persist_run(self, run: Dict[str, Any], db, create: bool = False) -> None:
@@ -1436,6 +1619,7 @@ class PackagingFlowCoordinator:
                 db.commit()
                 db.refresh(row)
                 run["run_db_id"] = row.id
+                self._sync_work_order(run, db)
                 return
             row = db.query(PackagingFlowRun).filter(
                 PackagingFlowRun.id == run["run_db_id"]
@@ -1464,8 +1648,87 @@ class PackagingFlowCoordinator:
                 from sqlalchemy.sql import func as _func
                 row.completed_at = _func.now()
             db.commit()
+            self._sync_work_order(run, db)
         except Exception as e:
             print(f"[PackagingFlow] _persist_run 异常 (隔离, 不阻断状态机): {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    def _sync_work_order(self, run: Dict[str, Any], db) -> None:
+        """v3.45 包装工单镜像进工单管理 (work_orders 表).
+
+        动机 (2026-07 现场诉求): 扫码开工的工单只存包装运行记录, 工单管理页
+        看不见、没处清理。开工 upsert 为"生产中", 收尾推"已完成", 中止推
+        "已取消"; 数量按箱口径回填 (planned=应做箱数, completed=已结算箱数,
+        good/ng=OK箱/NG箱), 滑块口径细节进 extra_data.packaging。
+        同号已存在 (如外部 MES 先推送过) 不重建, 只更新状态与数量 — 单号唯一
+        约束天然防重, 原 source 保留。异常隔离: 同步失败不阻断包装状态机。
+        """
+        cfg = self._configs.get(run["config_id"]) or {}
+        if not cfg.get("sync_work_orders", True):
+            return
+        order_no = (run.get("order_no") or "").strip()
+        if not order_no:
+            return
+        try:
+            from backend.models.mes_models import WorkOrder
+            from sqlalchemy.sql import func as _func
+
+            status = run.get("status")
+            if status == "aborted":
+                wo_status = "cancelled"
+            elif status in _TERMINAL_STATES:
+                wo_status = "completed"
+            else:
+                wo_status = "in_progress"
+            box_done = int(run.get("box_done", 0) or 0)
+            box_ng = int(run.get("box_ng", 0) or 0)
+            spec = (run.get("spec") or "").strip() or None
+
+            row = db.query(WorkOrder).filter(
+                WorkOrder.order_no == order_no).first()
+            if row is None:
+                row = WorkOrder(
+                    order_no=order_no,
+                    product_name=spec or "包装工单",
+                    product_spec=spec,
+                    planned_qty=int(run.get("box_total", 0) or 0),
+                    status=wo_status,
+                    source="packaging",
+                    customer_name=run.get("cust_name"),
+                    actual_start=_func.now(),
+                )
+                db.add(row)
+            else:
+                # 已有同号单 (外部推送/手建/上一轮包装): 不动 source 与建单信息,
+                # 只把状态和数量刷成包装线的实时事实
+                row.status = wo_status
+                if spec and not row.product_spec:
+                    row.product_spec = spec
+                if int(run.get("box_total", 0) or 0) > 0:
+                    row.planned_qty = int(run.get("box_total", 0) or 0)
+                if row.actual_start is None:
+                    row.actual_start = _func.now()
+            row.completed_qty = box_done
+            row.good_qty = max(0, box_done - box_ng)
+            row.ng_qty = box_ng
+            if wo_status in ("completed", "cancelled"):
+                row.actual_end = _func.now()
+            extra = dict(row.extra_data or {})
+            extra["packaging"] = {
+                "run_uuid": run.get("run_uuid"),
+                "flow_config_id": run.get("config_id"),
+                "count_unit": run.get("count_unit", "trays"),
+                "slider_total": int(run.get("slider_total", 0) or 0),
+                "final_result": run.get("final_result"),
+                "qty_unit": "box",
+            }
+            row.extra_data = extra
+            db.commit()
+        except Exception as e:
+            print(f"[PackagingFlow] 工单镜像同步失败 (隔离, 不阻断状态机): {e}")
             try:
                 db.rollback()
             except Exception:
@@ -1485,14 +1748,36 @@ class PackagingFlowCoordinator:
                 PackagingFlowRun.status == "running",
                 # v3.43 等放工单收尾: 重启后等待态(内存Timer)已丢, 一并作废防幽灵在途
                 PackagingFlowRun.status == "awaiting_paper",
+                # v3.45 等扫箱标签: 同为内存态, 重启后一并作废
+                PackagingFlowRun.status == "waiting_label",
             )
         ).all()
         n = 0
+        aborted_orders = []
         for r in rows:
             r.status = "aborted"
+            if r.order_no:
+                aborted_orders.append(r.order_no)
             n += 1
         if n:
             db.commit()
+            # v3.45 工单镜像跟随: 重启作废的在途包装单, 镜像单同步推"已取消"
+            # (只动 packaging 来源且还在生产中的, 不碰外部/手建单)
+            try:
+                from backend.models.mes_models import WorkOrder
+                from sqlalchemy.sql import func as _func
+                wos = db.query(WorkOrder).filter(
+                    WorkOrder.order_no.in_(aborted_orders),
+                    WorkOrder.source == "packaging",
+                    WorkOrder.status.in_(["in_progress", "pending"]),
+                ).all()
+                for wo in wos:
+                    wo.status = "cancelled"
+                    wo.actual_end = _func.now()
+                if wos:
+                    db.commit()
+            except Exception as e:
+                print(f"[PackagingFlow] 启动作废的工单镜像同步失败 (忽略): {e}")
         return n
 
     # =============================================================
@@ -1620,6 +1905,10 @@ _KIND_TO_EVENT_FIELD = {
     "early_paper": "event_missing_paper",
     "missing_nozzle": "event_missing_nozzle",
     "completed_order_rescan": "event_completed_order_rescan",
+    # v3.45 箱标签扫码授权三类报警
+    "box_not_scanned": "event_box_not_scanned",
+    "label_qty_missing": "event_label_qty_missing",
+    "label_total_mismatch": "event_label_total_mismatch",
 }
 
 

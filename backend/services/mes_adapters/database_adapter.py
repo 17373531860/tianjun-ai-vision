@@ -42,6 +42,16 @@ _DRIVER_HINTS = {
 
 _DEFAULT_PORTS = {"dm": 5236, "mysql": 3306, "postgresql": 5432, "sqlserver": 1433}
 
+# dmPython 在 Windows 上把 Python int 绑成 C 32 位 unsigned long, 超范围直接抛
+# OverflowError("int too large to convert to C unsigned long") —— 毫秒级时间戳
+# (~1.7e12) 必踩 (2026-07 萍乡百斯特现场: weighing_product_done 推达梦失败)。
+# 超 32 位的整数降级为字符串, 交给达梦库端隐式转换 (数值/日期列均可收)。
+def _dm_bind_safe(v):
+    if isinstance(v, int) and not isinstance(v, bool) and abs(v) > 0x7FFFFFFF:
+        return str(v)
+    return v
+
+
 # 表名/列名白名单校验: 只允许字母数字下划线 (可带 schema 点分), 防注入
 def _safe_ident(name: str) -> str:
     s = str(name or "").strip()
@@ -59,6 +69,11 @@ class DatabaseAdapter(BaseAdapter):
         db_type = str(config.get("db_type") or "dm").lower()
         host = config.get("host") or "127.0.0.1"
         port = int(config.get("db_port") or _DEFAULT_PORTS.get(db_type, 0) or 0)
+        # 端口合法性守门 (2026-07 萍乡现场: 端口框误粘贴出超长数字 →
+        # dmPython 绑定 C unsigned long 溢出, 报错完全看不出是端口问题)。
+        # 只管已知网络型数据库; 未知类型留给下方"未知数据库类型"报错, 0 已被上行回退成默认端口
+        if db_type in _DEFAULT_PORTS and db_type != "sqlite" and not (0 < port <= 65535):
+            raise ValueError(f"数据库端口配置无效: {port} (应为 1~65535, 请检查连接配置的端口框)")
         user = config.get("user") or ""
         password = config.get("password") or ""
         database = config.get("database") or ""
@@ -118,6 +133,7 @@ class DatabaseAdapter(BaseAdapter):
                         "error": "模板渲染结果为空 (无可插入行), 请检查字段映射模板"}
 
             conn, ph = self._connect(config)
+            is_dm = str(config.get("db_type") or "dm").lower() == "dm"
             inserted = 0
             try:
                 cur = conn.cursor()
@@ -125,7 +141,9 @@ class DatabaseAdapter(BaseAdapter):
                     cols = [_safe_ident(c) for c in row.keys()]
                     sql = (f"INSERT INTO {table} ({', '.join(cols)}) "
                            f"VALUES ({', '.join([ph] * len(cols))})")
-                    cur.execute(sql, tuple(row.values()))
+                    vals = tuple(_dm_bind_safe(v) for v in row.values()) \
+                        if is_dm else tuple(row.values())
+                    cur.execute(sql, vals)
                     inserted += 1
                 conn.commit()
             except Exception:

@@ -4,6 +4,7 @@ import api from './index'
 const BASE = '/weighing'
 
 export const getWeighingState = (channel) => api.get(`${BASE}/state`, { params: channel != null ? { channel } : {} })
+export const getWeighingOperators = () => api.get(`${BASE}/operators`)
 export const setWeighingContext = (data) => api.post(`${BASE}/context`, data)
 export const weighingScan = (data) => api.post(`${BASE}/scan`, data)
 export const weighingTare = (channel_id) => api.post(`${BASE}/tare`, { channel_id })

@@ -124,3 +124,44 @@ def test_safe_ident():
     for bad in ("", "a b", "a;b", "a'b", 'a"b', "a-b"):
         with pytest.raises(ValueError):
             _safe_ident(bad)
+
+
+# ---------- 达梦大整数绑定降级 (2026-07 萍乡百斯特现场: 毫秒时间戳溢出) ----------
+def test_dm_bind_safe():
+    from backend.services.mes_adapters.database_adapter import _dm_bind_safe
+    assert _dm_bind_safe(1753247000123) == "1753247000123"   # 毫秒时间戳 → 字符串
+    assert _dm_bind_safe(-1753247000123) == "-1753247000123"
+    assert _dm_bind_safe(12345) == 12345                     # 32 位内整数原样
+    assert _dm_bind_safe(0.5) == 0.5                         # 浮点不动
+    assert _dm_bind_safe(True) is True                       # bool 不降级
+    assert _dm_bind_safe("x") == "x"
+
+
+# ---------- 端口合法性守门 (2026-07 萍乡现场: 端口框粘贴出超长数字) ----------
+def test_invalid_port_clear_error():
+    ad = DatabaseAdapter()
+    # 0/未填走"回退默认端口"旧语义, 不在守门范围
+    for bad_port in (152361523615236, -1, 70000):
+        resp = ad.send({"SN": "x"}, {"db_type": "dm", "host": "127.0.0.1",
+                                     "db_port": bad_port, "table": "T"})
+        assert resp["success"] is False
+        assert "端口配置无效" in resp["error"], \
+            f"port={bad_port} 应报端口配置无效, 实际: {resp['error']}"
+
+
+def test_dm_path_downgrades_big_int(db_path, monkeypatch):
+    """db_type=dm 时超 32 位整数应降级为字符串绑定 (用 SQLite 顶替达梦连接验证)。"""
+    ad = DatabaseAdapter()
+
+    def fake_connect(config):
+        return sqlite3.connect(db_path), "?"
+
+    monkeypatch.setattr(ad, "_connect", fake_connect)
+    cfg = {"db_type": "dm", "table": "T_WEIGH_RECORD"}
+    # 大整数放 TEXT 亲和列 (SN) 断言绑定值确为字符串; REAL 列会被 SQLite 亲和性转回数字
+    resp = ad.send({"SN": 1753247000123, "MODEL_NAME": "M", "OPERATOR": "op",
+                    "NET_WEIGHT": 0.5, "VERDICT": "ok"}, cfg)
+    assert resp["success"] is True
+    row = _rows(db_path)[0]
+    assert row[0] == "1753247000123"     # 大整数已降级为字符串绑定入库
+    assert row[3] == 0.5                 # 正常数值不受影响

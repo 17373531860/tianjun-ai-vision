@@ -428,7 +428,8 @@ class EventTriggerMixin:
         return True
 
     def fire_external_event_response(self, event_id, reason: str,
-                                     source: str = "external") -> bool:
+                                     source: str = "external",
+                                     remind_only: bool = False) -> bool:
         """外部子系统 (如包装箱结算) 借用一次"事件响应"——复用该事件配好的
         报警 (灯/蜂鸣) + 语音/Toast + 计数器联动, **不结束检测周期、不动 OK/NG
         周期统计、不走防重复结算守门**.
@@ -440,6 +441,11 @@ class EventTriggerMixin:
         则外部触发 (如包装漏箱 / 多装 / 缺油嘴 / 缺工单) 也会进入人工确认阻塞态 —— 整条
         检测线定格, 直到操作员 (或借管理员密码提权) 主动确认才解除. 默认 (require_ack=False)
         行为与改前严格一致 (只报警不定格).
+
+        v3.45 remind_only=True: "过程提醒"档 —— 只借 灯/蜂鸣 + Toast/语音, **跳过
+        计数器联动、跳过人工确认定格**。给称重投料中的缺料/超量持续提醒用: 提醒可以
+        每隔几秒催一次工人, 但 NG 计数只能等该件离秤结算时记一次 (2026-07 萍乡现场:
+        提醒借完整 NG 事件面, 30 秒把 NG 计数刷了 +16)。默认 False 零差异。
 
         返回 True = 找到事件并已联动; False = 无项目配置 / 事件未找到.
         """
@@ -460,19 +466,20 @@ class EventTriggerMixin:
         require_ack = bool(event.get('require_ack', False))
         ack_timeout_sec = max(0, int(event.get('ack_timeout_sec', 0) or 0))
 
-        # 计数器联动 (复用事件 actions)
-        counters_changed = False
-        for action in event.get('actions', []) or []:
-            counter_name = action.get('counter_name', '')
-            value = action.get('delta', action.get('value', 1))
-            if counter_name in self.counters:
-                self.counters[counter_name] += value
-                counters_changed = True
-        if counters_changed:
-            try:
-                self._persist_counters()
-            except Exception:
-                pass
+        # 计数器联动 (复用事件 actions); remind_only 提醒档不计数
+        if not remind_only:
+            counters_changed = False
+            for action in event.get('actions', []) or []:
+                counter_name = action.get('counter_name', '')
+                value = action.get('delta', action.get('value', 1))
+                if counter_name in self.counters:
+                    self.counters[counter_name] += value
+                    counters_changed = True
+            if counters_changed:
+                try:
+                    self._persist_counters()
+                except Exception:
+                    pass
 
         # 事件日志 (前端读 → 弹 Toast + 语音播报); 标 source 便于前端区分来源
         self._event_seq += 1
@@ -486,7 +493,7 @@ class EventTriggerMixin:
             'toast_id': event.get('toast_id', 'ng'),
             'had_workpiece': False,
             'should_warn_no_barcode': False,
-            'require_ack': require_ack,
+            'require_ack': require_ack and not remind_only,
             'ack_timeout_sec': ack_timeout_sec,
             'source': source,
         })
@@ -496,7 +503,8 @@ class EventTriggerMixin:
 
         # v3.22: 事件标了"需人工确认" → 外部触发也进入阻塞态 (整条检测线定格).
         # 已在阻塞态则不重置 (保留首个触发事件), 避免后续异常刷掉原始原因.
-        if require_ack and not getattr(self, '_pending_ack', False):
+        # remind_only 提醒档不定格 (提醒不能把线停了).
+        if require_ack and not remind_only and not getattr(self, '_pending_ack', False):
             self._pending_ack = True
             self._pending_ack_started_at = time.time()
             self._pending_ack_event_id = str(current_event_id)
@@ -547,13 +555,21 @@ class EventTriggerMixin:
         return False
 
     def _ack_release_keep_cycle(self) -> None:
-        """仅解除人工确认定格, 保留在制周期与全部步骤运行时 (断点补做)。"""
+        """仅解除人工确认定格, 保留在制周期与全部步骤运行时 (断点补做)。
+
+        例外: 本次定格来自"已结算落账的 NG" (挂起超时/止损 NG, 见
+        _finalize_settle_hold_ng) → 周期已终结, 没有"断点"可续, 保留只会让旧步骤
+        毒化下一箱 — 此时强制清运行时 (_ack_clear_runtime_after 单次标记)。
+        """
         self._pending_ack = False
         self._pending_ack_started_at = None
         self._pending_ack_event_id = None
         self._pending_ack_event_name = None
         self._pending_ack_timeout_sec = 0
         self._pending_ack_reason = None
+        if getattr(self, '_ack_clear_runtime_after', False):
+            self._ack_clear_runtime_after = False
+            self._clear_step_runtime_state()
 
     def _should_defer_for_remediation(self, reason: str) -> bool:
         """本次 NG 是否应走"缺步骤延迟落账"挂起 (而非立刻落 NG).

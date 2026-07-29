@@ -4521,8 +4521,6 @@ const startDetection = async () => {
   isOperating.value = true;
   
   try {
-    await syncProjectConfig();
-
     // v3.7.x (FIX): standby/paused 恢复路径走 resumeInference/resumeDetection,
     // 不会走 /detection/start, 也不读 pipeline_config.models, 副模型永远加载不了.
     // 后端重启 + auto_load_active_project 一定会让前端进入 paused (model_loaded=true
@@ -4532,13 +4530,16 @@ const startDetection = async () => {
     const _hasExtraSlots = (currentProject.value?.pipeline_config?.models || [])
       .some(m => m && m.name && m.name !== 'main' && m.model_id);
 
-    // From standby: video stream still running + model loaded → just resume inference
+    // From standby: video stream still running + model loaded → just resume inference.
+    // v3.44.2 (SY3 现场): 待机快速恢复不重推项目配置 — syncProjectConfig 会触发后端
+    // 重新应用配置 = 全量重置 (在制周期/箱内台账/定格态全被抹), 待机保留的状态白保了。
+    // 配置在最初 start 时已应用且待机期间未变, 纯恢复无需再推; 完整启动路径照旧同步。
     if (!_hasExtraSlots && isRunning.value && !isDetecting.value) {
       try {
         await resumeInference();
         isDetecting.value = true;
         projectStore.setRunningStatus(true);
-        dbg('monitor.control', '开始检测成功 (待机快速恢复)');
+        dbg('monitor.control', '开始检测成功 (待机快速恢复, 保留在制状态)');
         ElMessage.success('已从待机恢复检测');
         startPolling();
         return;
@@ -4547,6 +4548,8 @@ const startDetection = async () => {
         // Model not loaded or other issue — fall through to full start
       }
     }
+
+    await syncProjectConfig();
 
     // From paused: camera released, need full resume
     if (!_hasExtraSlots && isPaused.value) {
@@ -5637,10 +5640,8 @@ const standbyHandler = async () => {
     await standbyDetection();
     isDetecting.value = false;
     // isRunning stays true — video stream keeps playing
-    steps.value.forEach(s => {
-      s.status = 'pending';
-      s.result = null;
-    });
+    // v3.44.1: 待机保留在制周期 (后端不再清运行时), SOP 卡状态交给轮询按
+    // current_cycle_steps 重算, 不在这里强制打回 pending (否则绿光闪没)
     if (detectionCanvas.value) {
       const ctx = detectionCanvas.value.getContext('2d');
       ctx.clearRect(0, 0, detectionCanvas.value.width, detectionCanvas.value.height);
@@ -5648,8 +5649,15 @@ const standbyHandler = async () => {
     if (!pollingTimer) {
       startPolling();
     }
-    dbg('monitor.control', '待机成功: 检测停止, 画面继续');
-    ElMessage.info('已待机：检测停止，画面继续');
+    // v3.44.2: 视频源待机会连播放位置一起冻结 (时间跟检测线一起停,
+    // 否则待机期间剧情被静默消耗); 相机源画面照常直播。文案按源类型说实话。
+    if (isVideoSource.value) {
+      dbg('monitor.control', '待机成功: 检测停止, 视频暂停在当前位置');
+      ElMessage.info('已待机：检测停止，视频已暂停（恢复后从当前位置继续）');
+    } else {
+      dbg('monitor.control', '待机成功: 检测停止, 画面继续');
+      ElMessage.info('已待机：检测停止，画面继续');
+    }
   } catch (err) {
     console.error('待机失败:', err);
     dbgErr('monitor.control', '待机', err);
@@ -6122,7 +6130,20 @@ onMounted(async () => {
   });
   
   window.addEventListener('resize', handleResize);
-  
+
+  // v3.44.1: 检测框叠加画布的缓冲尺寸原来只在 window resize 时重算。
+  // 左栏卡片 (物品校验明细/包装横幅等) 动态增高会把 16:9 视频区挤矮 —— 画布 CSS
+  // 跟着缩了但缓冲还是旧尺寸, 检测框整体放大/偏移。用 ResizeObserver 盯视频区,
+  // 元素尺寸一变就重算缓冲。
+  if (typeof ResizeObserver !== 'undefined') {
+    canvasResizeObserver = new ResizeObserver(() => resizeCanvas());
+    nextTick(() => {
+      if (detectionCanvas.value?.parentElement) {
+        canvasResizeObserver.observe(detectionCanvas.value.parentElement);
+      }
+    });
+  }
+
   getSourceStatus().then(async res => {
     if (!monitorMounted) return;
     if (res.data.source_type) {
@@ -6161,6 +6182,8 @@ onMounted(async () => {
   });
 });
 
+let canvasResizeObserver = null;
+
 const handleResize = () => {
   resizeCanvas();
   if (pieChartInstance && !pieChartInstance.isDisposed()) {
@@ -6175,6 +6198,7 @@ onUnmounted(() => {
   monitorMounted = false;
   if (_nowTickInterval) { clearInterval(_nowTickInterval); _nowTickInterval = null; }
   window.removeEventListener('resize', handleResize);
+  if (canvasResizeObserver) { canvasResizeObserver.disconnect(); canvasResizeObserver = null; }
   stopIdleWatchdog();
   stopPolling();
   stopMultiPolling();

@@ -1080,6 +1080,358 @@ def test_container_action_cooldown_zero_keeps_old_behavior():
     assert len(acc._done) == 2                        # 老行为: 两个脉冲两次账
 
 
+def _pulse_no_tray(acc, t, dt=0.033):
+    """托盘不在场(已被拿走在途)时的放托盘动作脉冲: 出现2帧+消失3帧. 返回结束时刻."""
+    for _ in range(2):
+        acc.update([], [], t, action_present=True)
+        t += dt
+    for _ in range(3):
+        acc.update([], [], t, action_present=False)
+        t += dt
+    return t
+
+
+def test_container_action_revealed_tray_not_adopted_by_departed_ghost():
+    """v3.44.1 换盘围栏: 取料位布局 — 上层盘被拿走后, 下层盘在同一位置露出,
+    不得被旧盘身份收养/计数; 动作记账记的是"被拿走那盘"自己的峰值.
+
+    复现 SY3 现场 (2026-07-21 13-49-06.mkv 逐帧还原): 取料栈顶盘 A(24支) 被拿走
+    → 动作放入箱 → 下层盘 D(19支) 同位置露出 → D 被拿走 → 动作 → 再下层 F(24) 露出.
+    修前: D 露出被 A 的旧身份收养, 峰值只增不减, 19 被抹成 24, 账本 [24,24];
+    修后: 账本必须是 [24,19] — 每盘按自己的真实数记账."""
+    acc = _action_acc(cooldown=1.0)
+    tray = _tray(0.0)
+    items24, items19 = _tray_items(24, 0.0, 0.45), _tray_items(19, 0.0, 0.45)
+    # 栈顶盘 A (24支) 在位
+    t = 100.0
+    for _ in range(5):
+        acc.update([tray], items24, t); t += 0.033
+    # A 被拿走(短暂离场) → 放托盘动作 → 记账应记 A 的 24
+    for _ in range(5):
+        acc.update([], [], t); t += 0.033
+    t = _pulse_no_tray(acc, t)
+    assert acc._done == [{"滑块": 24}]
+    # 空窗后下层盘 D (19支) 同位置露出并停留
+    for _ in range(35):
+        acc.update([], [], t); t += 0.033
+    for _ in range(10):
+        acc.update([tray], items19, t); t += 0.033
+    # D 被拿走 → 离场超过消失确认帧(30) → 围栏生效; 再下层 F(24) 同位置露出
+    for _ in range(35):
+        acc.update([], [], t); t += 0.033
+    for _ in range(10):
+        acc.update([tray], items24, t); t += 0.033
+    # 放托盘动作 (放的是 D) → 必须按 D 自己的 19 记账, 不得被 F 的 24 顶掉
+    t = _pulse_no_tray(acc, t)
+    assert acc._done == [{"滑块": 24}, {"滑块": 19}], \
+        f"在途盘必须按自己的 19 记账, 不得被同位置露出的下一盘顶成 24: {acc._done}"
+    # F 上位成为新主托盘, 计数从自己的 24 开始
+    acc.update([tray], items24, t)
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 24
+
+
+def test_container_action_departed_primary_count_frozen():
+    """v3.44.1 在途定格: 主托盘真离场(超过动作消失帧容忍)后峰值当即定格 —
+    同一位置随后冒出的物品(下一盘逐渐露出)不得计到在途盘头上."""
+    acc = _action_acc(cooldown=1.0)
+    tray = _tray(0.0)
+    t = 100.0
+    for _ in range(5):
+        acc.update([tray], _tray_items(19, 0.0, 0.45), t); t += 0.033
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 19
+    # 盘被拿走: 离场 6 帧 (> action_gone_frames=3 容忍) 后, 同位置露出 24 个物品
+    for _ in range(6):
+        acc.update([], [], t); t += 0.033
+    for _ in range(5):
+        acc.update([], _tray_items(24, 0.0, 0.45), t); t += 0.033
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 19, "在途盘峰值必须定格在 19"
+    # 动作记账 → 按定格的 19 落账
+    _pulse_no_tray(acc, t)
+    assert acc._done == [{"滑块": 19}]
+
+
+def test_container_action_tray_stays_visible_both_pulses_booked():
+    """盘全程在场连续跟踪 (装箱位布局: 盘直接放进箱里不离场) — 两次动作各记一次账,
+    围栏不误杀连续在场的正常跟踪 (零差异保底)."""
+    acc = _action_acc(cooldown=1.0)
+    tray, items = _tray(0.0), _tray_items(24, 0.0, 0.45)
+    for _ in range(3):
+        acc.update([tray], items, 100.0)
+    t = _feed_action_pulse(acc, tray, items, 100.1)
+    assert acc._done == [{"滑块": 24}]
+    # 盘一直在场没断档, 4s 后直接来第二个动作脉冲 (间隔 > 不应期)
+    for i in range(10):
+        t += 0.033
+        acc.update([tray], items, t)
+    _feed_action_pulse(acc, tray, items, t + 4.0)
+    assert len(acc._done) == 2 and acc._done[1] == {"滑块": 24}
+
+
+def _guard_acc(item_target=96, cooldown=0.0):
+    """每盘数量校验开 (items_total): 每盘期望 24, 整箱目标可调."""
+    return _ContainerAccumulator(
+        "托盘", {"滑块": 24}, box_count=0, gone_frames=30,
+        count_mode="items_total", item_target=item_target,
+        confirm_by_frames=False, confirm_by_action=True, action_label="放托盘",
+        action_min_frames=2, action_gone_frames=3, action_cooldown_s=cooldown,
+        per_tray_guard=True)
+
+
+def _guard_place_tray(acc, n, t):
+    """放一盘 n 支: 盘+滑块在场 → 动作脉冲 (盘随动作离场) → 返回结束时刻."""
+    tray, items = _tray(0.0), _tray_items(n, 0.0, 0.45)
+    for _ in range(3):
+        acc.update([tray], items, t); t += 0.033
+    for _ in range(2):
+        acc.update([], [], t, action_present=True); t += 0.033
+    for _ in range(3):
+        acc.update([], [], t, action_present=False); t += 0.033
+    return t
+
+
+def test_container_per_tray_guard_rejects_wrong_tray():
+    """v3.44.1 错盘拦截: 第3盘 19/24 → 不记账 + 抛错盘警报;
+    重装正确的 24 后照常记账, 账本 [24,24,24,24] 总数 96 (哪盘不对从哪盘重做)."""
+    acc = _guard_acc()
+    t = 100.0
+    t = _guard_place_tray(acc, 24, t)
+    t = _guard_place_tray(acc, 24, t + 1.0)
+    assert acc._done == [{"滑块": 24}] * 2
+    # 第3盘只有 19 支: 脉冲结束时峰值不足 → 先挂账等满整窗 (v3.44.3 迟到峰值
+    # 等待, 防连放场景半爬峰值误报); 挂满 3 倍消失确认帧仍 19 → 拒账 + 警报
+    t = _guard_place_tray(acc, 19, t + 1.0)
+    tray19, items19 = _tray(0.0), _tray_items(19, 0.0, 0.45)
+    for _ in range(95):
+        acc.update([tray19], items19, t); t += 0.033
+    assert acc._done == [{"滑块": 24}] * 2, "错盘不得记账"
+    alert = acc.consume_wrong_tray_alert()
+    assert alert == {"index": 3, "count": 19, "expected": 24}
+    assert acc.consume_wrong_tray_alert() is None, "警报取走即清"
+    # 工人取出错盘重装 24 → 正常记账, 后面第4盘照常
+    t = _guard_place_tray(acc, 24, t + 1.0)
+    t = _guard_place_tray(acc, 24, t + 1.0)
+    assert acc._done == [{"滑块": 24}] * 4
+    assert acc.booked_item_total() == 96
+
+
+def test_container_per_tray_guard_tail_tray_remainder_ok():
+    """尾盘特殊处理: 整箱目标 91 → 第4盘期望 = 余数 19, 19 支不报错盘;
+    若尾盘也放 24 (总数会超) → 报错盘拦截."""
+    acc = _guard_acc(item_target=91)
+    t = 100.0
+    for _ in range(3):
+        t = _guard_place_tray(acc, 24, t) + 1.0
+    # 尾盘 19 = 91-72 的余数 → 放行
+    t = _guard_place_tray(acc, 19, t)
+    assert acc._done[-1] == {"滑块": 19}
+    assert acc.consume_wrong_tray_alert() is None
+    assert acc.booked_item_total() == 91
+    # 对照: 尾盘放 24 (期望 19) → 拦
+    acc2 = _guard_acc(item_target=91)
+    t = 100.0
+    for _ in range(3):
+        t = _guard_place_tray(acc2, 24, t) + 1.0
+    _guard_place_tray(acc2, 24, t)
+    assert acc2.booked_item_total() == 72, "错尾盘不得记账"
+    assert acc2.consume_wrong_tray_alert() == {"index": 4, "count": 24, "expected": 19}
+
+
+def test_container_per_tray_guard_off_zero_diff():
+    """默认关 (per_tray_guard=False) 零差异: 19 支的盘照旧记账, 无警报."""
+    acc = _action_acc(cooldown=0.0)
+    t = _guard_place_tray(acc, 19, 100.0)
+    assert acc._done == [{"滑块": 19}]
+    assert acc.consume_wrong_tray_alert() is None
+
+
+def test_container_action_reveal_during_pulse_counted():
+    """v3.44.2 动作尾窗口不再饥饿: 新盘的黄金可见窗口整个落在放托盘动作余像内
+    (7-16 数据集视频周期3实测: 新盘满24清晰可见的0.8s全在动作尾内, 动作一结束
+    就被下一次取盘遮挡) — 屏蔽窗口只冻结旧主盘, 动作期新生盘照常计数.
+
+    修前: 一刀切停数, 新盘峰值只攒到动作结束后的残帧 (22) → 错盘误报 22/24;
+    修后: 动作期攒满 24, 账本 [24,24], 全程无错盘警报."""
+    acc = _guard_acc(item_target=96)
+    tray = _tray(0.0)
+    items24 = _tray_items(24, 0.0, 0.45)
+    t = 100.0
+    # 盘 A 在位满 24 (主托盘)
+    for _ in range(5):
+        acc.update([tray], items24, t); t += 0.033
+    # 动作开始: A 被手遮挡离场 (gone 攒到动作期围栏门槛 action_gone_frames=3)
+    for _ in range(4):
+        acc.update([], [], t, action_present=True); t += 0.033
+    # 动作仍进行中: 新盘 B 同位置露出、满 24 清晰可见 — 黄金窗口全在动作余像内
+    for _ in range(5):
+        acc.update([tray], items24, t, action_present=True); t += 0.033
+    # 动作结束的瞬间 B 就被下一次取盘遮挡 (此后不再露面 = 窗口饥饿场景)
+    for _ in range(3):
+        acc.update([], [], t, action_present=False); t += 0.033
+    assert acc._done == [{"滑块": 24}], f"动作结束应记 A 的 24: {acc._done}"
+    assert acc.consume_wrong_tray_alert() is None
+    # 下一个动作脉冲 (放第3盘): 记 B 的账 — 必须是动作期攒到的 24
+    t += 1.5
+    for _ in range(2):
+        acc.update([], [], t, action_present=True); t += 0.033
+    for _ in range(3):
+        acc.update([], [], t, action_present=False); t += 0.033
+    assert acc._done == [{"滑块": 24}] * 2, \
+        f"动作期新生盘必须按黄金窗口攒到的 24 记账: {acc._done}"
+    assert acc.consume_wrong_tray_alert() is None, "不得错盘误报"
+
+
+def test_container_display_recovers_after_long_occlusion_no_action():
+    """v3.44.2 卡死显示恢复: 托盘被工人长时间遮挡 (超过容器消失确认帧) 后重新露出,
+    没有任何放托盘动作 — 换盘围栏拒绝旧身份吸附新框, 但旧身份仍占主盘位且被
+    在途定格, 计数永久停摆 → 现场表现: 24 个滑块检测框都画出来了, 物品校验一直 0,
+    且整箱滑块记 0 → 箱落不了账、工单 0/N 收尾 (2026-07-23 现场反馈).
+
+    修后: 主盘定格时计数落到新露出的在场身份, 显示当场恢复 24."""
+    acc = _guard_acc(item_target=96)
+    tray = _tray(0.0)
+    items24 = _tray_items(24, 0.0, 0.45)
+    t = 100.0
+    for _ in range(5):
+        acc.update([tray], items24, t); t += 0.033
+    assert acc._cur_counts == {"滑块": 24}
+    # 工人趴在箱上整理: 托盘+滑块整体被遮挡, 超过容器消失确认帧 (30)
+    for _ in range(32):
+        acc.update([], [], t); t += 0.033
+    # 遮挡结束, 托盘和 24 个滑块重新露出 (旧身份被围栏拒绝 → 新身份)
+    for _ in range(5):
+        acc.update([tray], items24, t); t += 0.033
+    assert acc._cur_counts == {"滑块": 24}, \
+        f"长遮挡后露出必须恢复计数显示, 不得永久卡 0: {acc._cur_counts}"
+    assert acc.consume_wrong_tray_alert() is None
+    # 随后正常放盘动作: 记账值必须仍是 24 (旧身份定格峰值本就是满盘)
+    for _ in range(2):
+        acc.update([], [], t, action_present=True); t += 0.033
+    for _ in range(3):
+        acc.update([], [], t, action_present=False); t += 0.033
+    assert acc._done == [{"滑块": 24}], f"记账应为满盘 24: {acc._done}"
+    assert acc.consume_wrong_tray_alert() is None
+
+
+def test_container_action_settle_waits_for_late_peak():
+    """v3.44.3 迟到峰值等待: 连放场景 (7-23 视频, 工人 ~3s 一盘) 最后一盘的放盘
+    脉冲结束时, 新盘滑块还被手挡着没计入峰值 — 修前空峰值直接烧掉脉冲并删身份,
+    这盘永远没进账 (72/96 → 数量门静默拦收尾 → 周期结不了 → 下一箱账全灌进来
+    168/96 连锁崩). 修后: 脉冲挂账等峰值, 爬到每盘期望立即补记."""
+    acc = _guard_acc(item_target=96)
+    t = 100.0
+    for _ in range(3):
+        t = _guard_place_tray(acc, 24, t) + 0.5
+    assert acc._done == [{"滑块": 24}] * 3
+    # 第4盘: 脉冲成立并结束, 但结束时盘还没露出 (手/身体挡着)
+    for _ in range(2):
+        acc.update([], [], t, action_present=True); t += 0.033
+    for _ in range(4):
+        acc.update([], [], t, action_present=False); t += 0.033
+    assert acc._done == [{"滑块": 24}] * 3, "峰值未就绪不得结空账"
+    # 几帧后盘露出, 滑块逐步显形 12 → 24 (半爬阶段不得提前结账/错盘误报)
+    tray = _tray(0.0)
+    for _ in range(3):
+        acc.update([tray], _tray_items(12, 0.0, 0.45), t); t += 0.033
+    assert acc._done == [{"滑块": 24}] * 3, "半爬峰值不得提前结账"
+    assert acc.consume_wrong_tray_alert() is None, "半爬峰值不得错盘误报"
+    for _ in range(3):
+        acc.update([tray], _tray_items(24, 0.0, 0.45), t); t += 0.033
+    assert acc._done == [{"滑块": 24}] * 4, f"迟到峰值到位必须补记: {acc._done}"
+    assert acc.consume_wrong_tray_alert() is None
+    assert acc.booked_item_total() == 96
+
+
+def test_container_ghost_primary_empty_settle_keeps_pulse():
+    """v3.44.3 幽灵占主位不得烧脉冲: 动作期一个托盘误检框闪现 (无滑块) 抢到主位,
+    脉冲结束时它以空峰值走结账分支 — 修前会把身份和脉冲一起消费掉 (7-23 视频
+    第4盘 52 秒后才被下一箱脉冲错位补记的直接根因); 修后只清幽灵让位, 脉冲保留,
+    真盘显形爬满 24 后照常补记."""
+    acc = _guard_acc(item_target=96)
+    t = 100.0
+    for _ in range(3):
+        t = _guard_place_tray(acc, 24, t) + 0.5
+    # 第4盘脉冲: 动作期一个误检托盘框闪现两帧 (无滑块) 后消失
+    ghost = _tray(0.6)
+    for _ in range(2):
+        acc.update([ghost], [], t, action_present=True); t += 0.033
+    for _ in range(2):
+        acc.update([], [], t, action_present=True); t += 0.033
+    for _ in range(4):
+        acc.update([], [], t, action_present=False); t += 0.033  # 脉冲结束, 幽灵占主位
+    # 幽灵消失满 gone_frames(30) → 空峰值结账让位 (脉冲必须保留)
+    for _ in range(32):
+        acc.update([], [], t); t += 0.033
+    assert acc._done == [{"滑块": 24}] * 3, "幽灵不得记账"
+    # 真盘显形, 滑块满 24 → 用保留的脉冲补记第4盘
+    tray = _tray(0.0)
+    for _ in range(3):
+        acc.update([tray], _tray_items(24, 0.0, 0.45), t); t += 0.033
+    assert acc._done == [{"滑块": 24}] * 4, f"幽灵占位不得烧掉脉冲: {acc._done}"
+    assert acc.consume_wrong_tray_alert() is None
+    assert acc.booked_item_total() == 96
+
+
+def test_container_pending_booking_peak_total():
+    """v3.44.3 数量门竞态补丁口径: 末盘动作已成立、记账还在峰值就绪等待窗内时,
+    pending_booking_peak_total() 应返回该盘峰值 (数量门把它计入"箱内已有");
+    记账落地后归零; 无脉冲的备盘区闲置盘不算 (与 settled 凑数口径区分)."""
+    acc = _guard_acc(item_target=96)
+    t = 100.0
+    for _ in range(3):
+        t = _guard_place_tray(acc, 24, t) + 0.5
+    assert acc.booked_item_total() == 72
+    # 备盘区闲置盘 (无动作脉冲) 在场 → 不算在途
+    idle_tray, idle_items = _tray(0.0), _tray_items(24, 0.0, 0.45)
+    acc.update([idle_tray], idle_items, t); t += 0.033
+    assert acc.pending_booking_peak_total() == 0, "无脉冲闲置盘不得计入在途"
+    # 第4盘: 动作脉冲成立, 盘+滑块在场, 峰值爬到 24 — 记账落地前应可见在途峰值
+    for _ in range(2):
+        acc.update([idle_tray], idle_items, t, action_present=True); t += 0.033
+    for _ in range(3):
+        acc.update([idle_tray], idle_items, t, action_present=False); t += 0.033
+    if acc.booked_item_total() == 72:
+        # 记账尚未落地 (峰值就绪等待窗内) → 在途峰值 = 24, 门口径 72+24=96 放行
+        assert acc.pending_booking_peak_total() == 24, \
+            f"在途峰值缺失: {acc.pending_booking_peak_total()}"
+    # 盘离场走完消失确认 → 记账落地, 在途归零
+    for _ in range(35):
+        acc.update([], [], t); t += 0.033
+    assert acc.booked_item_total() == 96
+    assert acc.pending_booking_peak_total() == 0, "记账落地后在途必须归零"
+
+
+def test_container_action_empty_pulse_dropped_after_grace():
+    """空动作脉冲 (误检/盘从未露出) 挂账到期 (3 倍消失确认帧) 后丢弃, 不偷记账;
+    之后盘正常露出但没有新脉冲 → 也不得结账 (脉冲-账一一配对)."""
+    acc = _guard_acc(item_target=96)
+    t = 100.0
+    for _ in range(2):
+        acc.update([], [], t, action_present=True); t += 0.033
+    for _ in range(95):  # 宽限 = gone_frames(30)*3 = 90 帧
+        acc.update([], [], t, action_present=False); t += 0.033
+    assert acc._action_done_pending is False, "到期空脉冲必须丢弃"
+    assert acc._done == []
+    tray = _tray(0.0)
+    for _ in range(5):
+        acc.update([tray], _tray_items(24, 0.0, 0.45), t); t += 0.033
+    assert acc._done == [], "无脉冲不得偷记账"
+
+
+def test_build_container_per_tray_guard_from_pipeline():
+    """配置键 custom_mix_container_per_tray_guard 直通累加器; 缺省 False."""
+    cfg = _base_config(mixed_with="tracking")
+    cfg["pipeline_config"].update({
+        "custom_mix_container_label": "托盘",
+        "custom_mix_container_count_mode": "items_total",
+        "custom_mix_container_item_target": 96,
+    })
+    m = build_custom_mix(cfg)
+    assert m._engine._container.per_tray_guard is False
+    cfg["pipeline_config"]["custom_mix_container_per_tray_guard"] = True
+    m2 = build_custom_mix(cfg)
+    assert m2._engine._container.per_tray_guard is True
+
+
 def test_build_container_action_thresholds_from_pipeline():
     """动作门槛三参数可在进箱确认配置里直配, 优先于步骤字段; 不应期缺省 2s."""
     cfg = _base_config(mixed_with="tracking")
@@ -1100,7 +1452,22 @@ def test_build_container_action_thresholds_from_pipeline():
     assert m2._engine._container.action_cooldown_s == 0.0   # 显式 0 = 关闭
 
 
-def _make_container_vsm(box_count=2, per_tray=3, gone_frames=2):
+def _make_container_vsm(box_count=2, per_tray=3, gone_frames=2,
+                        slider_roi=None, tray_roi=None):
+    slider_row = {"id": "s3", "label": "滑块", "enabled": True,
+                  "detect_role": "item", "count_mode": "track",
+                  "expected_count": per_tray}
+    if slider_roi:
+        slider_row["roi"] = slider_roi
+    steps = [
+        {"id": "s1", "label": "贴标", "enabled": True},
+        {"id": "s2", "label": "封箱", "enabled": True},
+        slider_row,
+    ]
+    if tray_roi:
+        # 托盘要画 ROI 就得有自己的步骤行 (前端同构); 不进序列, 不参与结算
+        steps.append({"id": "s4", "label": "托盘", "enabled": True,
+                      "roi": tray_roi})
     vsm = VideoSourceManager(channel_id=0)
     vsm.set_project_config({
         "id": 99421, "name": "混合容器单测",
@@ -1113,13 +1480,7 @@ def _make_container_vsm(box_count=2, per_tray=3, gone_frames=2):
             "custom_mix_container_box_count": box_count,
             "custom_mix_container_gone_frames": gone_frames,
         },
-        "steps_config": [
-            {"id": "s1", "label": "贴标", "enabled": True},
-            {"id": "s2", "label": "封箱", "enabled": True},
-            {"id": "s3", "label": "滑块", "enabled": True,
-             "detect_role": "item", "count_mode": "track",
-             "expected_count": per_tray},
-        ],
+        "steps_config": steps,
         "events_config": [], "counters_config": [], "data_config": {},
     })
     assert vsm._custom_mix is not None
@@ -1159,3 +1520,314 @@ def test_container_integration_verdict_routes_through_container():
             m.feed(vsm, [], float(box) + 0.5)
     ok, reasons = m.verdict()
     assert ok, reasons
+
+
+# ==================== v3.44.4 末盘救账 (盘堆最后一盘, 7-23 视频箱1) ====================
+# 现场轨迹: 拿走盘堆最后一盘后, 主位被"空峰值幽灵"占住 (gone 已满), 真盘身份
+# (峰值24, 刚离场) 躺在非主位 — 老逻辑"让位保留脉冲"等新盘显形, 但箱已装完再无
+# 新盘, 这盘的账永远丢了 (72/96 误NG)。修后: 脉冲在手 + 主位空峰值 → 改配
+# "已离场且有峰值"的真盘记账 (取最近离场者)。
+
+
+def test_container_action_last_tray_rescued_from_ghost_primary():
+    acc = _action_acc(cooldown=1.0)
+    # 白盒还原现场态: 真盘 A (峰值24, 离场 5 帧) + 幽灵主盘 G (空峰值, 离场满帧)
+    acc._trays = {
+        1: {'bbox': {'x': 0.0, 'y': 0.0, 'w': 0.45, 'h': 1.0},
+            'first_seen': 90.0, 'last_seen': 100.0, 'gone': 5,
+            'peak': {'滑块': 24}},
+        2: {'bbox': {'x': 0.55, 'y': 0.0, 'w': 0.4, 'h': 1.0},
+            'first_seen': 95.0, 'last_seen': 99.0, 'gone': 31,
+            'peak': {}},
+    }
+    acc._seq = 2
+    acc._primary = 2                    # 幽灵占主位
+    acc._action_done_pending = True     # 放托盘脉冲已成立待配对
+    acc.update([], [], 101.0)
+    assert acc._done == [{"滑块": 24}], f"真盘的24必须被救回记账: {acc._done}"
+    assert not acc._action_done_pending  # 脉冲已消费
+
+
+def test_container_action_ghost_primary_no_candidate_keeps_pulse():
+    """无可救的真盘时保持老行为: 让位保留脉冲, 等新盘显形."""
+    acc = _action_acc(cooldown=1.0)
+    acc._trays = {
+        2: {'bbox': {'x': 0.55, 'y': 0.0, 'w': 0.4, 'h': 1.0},
+            'first_seen': 95.0, 'last_seen': 99.0, 'gone': 31,
+            'peak': {}},
+    }
+    acc._seq = 2
+    acc._primary = 2
+    acc._action_done_pending = True
+    acc.update([], [], 101.0)
+    assert acc._done == []
+    assert acc._action_done_pending     # 脉冲保留给显形中的新盘
+
+
+def test_container_action_in_box_mover_rescued_by_action_birth():
+    """二档救账 (7-23 箱1取证还原): 被放进箱的盘还在箱里被检出 (gone=0),
+    身份是围栏在本次动作期拆分出的 — 脉冲遇空峰值主位时认领记账。
+    v3.44.4: 候选峰值(23)没爬满期望(24)时先挂账等真账显形, 满窗(3×消失满帧)
+    仍没爬满 → 按现值 23 结账 (取候选中峰值最大者, 备盘 12 不被捡走)."""
+    acc = _action_acc(cooldown=1.0)
+    acc._trays = {
+        # 幽灵主位: 空峰值, 离场满帧
+        1: {'bbox': {'x': 0.0, 'y': 0.0, 'w': 0.45, 'h': 1.0},
+            'first_seen': 90.0, 'last_seen': 99.0, 'gone': 31, 'peak': {}},
+        # 动作前就摆着的下一箱备盘 (峰值小, 不得认领)
+        2: {'bbox': {'x': 0.5, 'y': 0.0, 'w': 0.4, 'h': 1.0},
+            'first_seen': 92.0, 'last_seen': 101.0, 'gone': 0,
+            'peak': {'滑块': 12}},
+        # 本次动作期新生的"移动中托盘" (在箱里, gone=0, 峰值23) → 该记它的账
+        3: {'bbox': {'x': 0.3, 'y': 0.3, 'w': 0.4, 'h': 0.6},
+            'first_seen': 100.2, 'last_seen': 101.0, 'gone': 0,
+            'peak': {'滑块': 23}},
+    }
+    acc._seq = 3
+    acc._primary = 1
+    acc._action_started_ts = 100.0      # 动作成立于 100.0
+    acc._action_done_pending = True
+    # 挂账窗口 = 3×gone_frames(30) 帧; 喂帧保持两在位盘活着, 峰值不再增长
+    t = 101.0
+    keep = [dict(x=0.5, y=0.0, w=0.4, h=1.0), dict(x=0.3, y=0.3, w=0.4, h=0.6)]
+    for _ in range(30 * 3 + 2):
+        acc.update(keep, [], t)
+        if acc._done:
+            break
+        t += 0.033
+    assert acc._done == [{"滑块": 23}], f"该记动作期新生盘的23: {acc._done}"
+    assert 2 in acc._trays              # 备盘身份保留, 等它自己的脉冲
+
+
+# ==================== v3.44.4 每盘峰值封顶 (peak_cap, 可配默认关) ====================
+# 7-23 视频实测: 模型偶发重复框瞬时数出 25/26, 峰值取存续期最大值会咬死这一帧
+# → 整箱 97/96 被误判"超出"NG。开了封顶按配置值封每盘峰值; 默认关 = 零差异。
+
+
+def test_peak_capped_when_configured():
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=0, gone_frames=2,
+                                item_target=96, count_mode='items_total',
+                                peak_cap=24)
+    acc.update([_tray(0.5)], _tray_items(24, 0.5, 0.95), 1.0)
+    acc.update([_tray(0.5)], _tray_items(26, 0.5, 0.95), 1.1)   # 重复框瞬时 26
+    tid = acc._primary
+    assert acc._trays[tid]['peak'] == {"滑块": 24}, acc._trays[tid]['peak']
+
+
+def test_peak_uncapped_by_default():
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=0, gone_frames=2,
+                                item_target=96, count_mode='items_total')
+    acc.update([_tray(0.5)], _tray_items(26, 0.5, 0.95), 1.0)
+    tid = acc._primary
+    assert acc._trays[tid]['peak'] == {"滑块": 26}   # 默认关 = 老行为零差异
+
+
+# ==================== v3.44.4 结算折算守门 (_primary_foldable) ====================
+# 上银 7-27: 封箱结算时点位上摆着"下一箱已备好未动的首盘" (peak=24), 老折算
+# 无条件把在位主盘折进本箱 → 90/96 不足被抹成 114/96 超出, NG 语义反了。
+# 动作确认模式下只折"真在途"盘 (脉冲待配对/已消失满帧); 非动作模式零差异。
+
+
+def test_verdict_fold_skips_staged_next_tray_in_action_mode():
+    """动作确认模式: 在位未动的下一箱首盘不折进本箱 → 少装照报不足."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=0, gone_frames=2,
+                                item_target=96, count_mode='items_total',
+                                confirm_by_frames=True, confirm_by_action=True,
+                                action_label="放托盘", confirm_combine='and')
+    acc._done = [{"滑块": 24}, {"滑块": 22}, {"滑块": 24}, {"滑块": 20}]  # 90/96
+    # 下一箱首盘已上台面: 在场 (gone=0)、无动作脉冲
+    acc.update([_tray(0.5)], _tray_items(24, 0.5, 0.95), 1.0)
+    assert acc._primary is not None
+    ok, reasons = acc.verdict({})
+    assert not ok and any('不足 90/96' in r for r in reasons), reasons
+    assert acc.settled_item_total() == 90
+
+
+def test_verdict_fold_keeps_in_transit_tray_in_action_mode():
+    """动作确认模式: 脉冲待配对的在途末盘照折 (老语义保留)."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=0, gone_frames=2,
+                                item_target=96, count_mode='items_total',
+                                confirm_by_frames=True, confirm_by_action=True,
+                                action_label="放托盘", confirm_combine='and')
+    acc._done = [{"滑块": 24}, {"滑块": 24}, {"滑块": 24}]  # 72/96
+    acc.update([_tray(0.5)], _tray_items(24, 0.5, 0.95), 1.0)
+    acc._action_done_pending = True                          # 末盘动作已成立待配对
+    ok, reasons = acc.verdict({})
+    assert ok, reasons                                       # 72+24 = 96 折进来才合格
+    assert acc.settled_item_total() == 96
+
+
+# ==================== v3.44.4 记账链 ROI 守门 (feed 入口) ====================
+# 上银现场: 主操作区右侧是备盘堆, 备盘上的滑块/托盘会被模型照常检出。
+# 此前记账链 (托盘/滑块/放托盘 → _ContainerAccumulator) 完全不吃步骤 ROI,
+# 画了 ROI 也拦不住备盘污染箱账。本节锁定: 三类标签喂账前均过步骤 ROI,
+# 未画 ROI 时零差异 (上面全部旧测试即零差异对照组)。
+_LEFT_HALF_ROI = [[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]]
+
+
+def test_container_roi_filters_items_from_ledger():
+    """滑块画左半 ROI: 主托盘横跨全屏, 盘内 3 个在 ROI 内 + 2 个在 ROI 外
+    → 记账只数 3 (此前会数 5)."""
+    vsm = _make_container_vsm(per_tray=5, slider_roi=_LEFT_HALF_ROI)
+    assert vsm.step_roi_polygons.get("滑块"), "ROI 应从 steps_config 解析进 poly_map"
+    m = vsm._custom_mix
+    vsm.current_cycle_uuid = "c1"
+    tray = {"label": "托盘", "confidence": 0.95, "x": 0.0, "y": 0.0, "w": 0.95, "h": 1.0}
+    inside = [{"label": "滑块", "confidence": 0.95, "track_id": 11 + i,
+               "x": 0.05 + i * 0.12, "y": 0.5, "w": 0.05, "h": 0.05} for i in range(3)]
+    outside = [{"label": "滑块", "confidence": 0.95, "track_id": 21 + i,
+                "x": 0.60 + i * 0.12, "y": 0.5, "w": 0.05, "h": 0.05} for i in range(2)]
+    for _ in range(5):
+        m.feed(vsm, [tray] + inside + outside, 0.0)
+    cont = m._engine._container
+    assert cont._cur_counts.get("滑块") == 3, cont._cur_counts
+
+
+def test_container_roi_filters_tray_identity():
+    """托盘画左半 ROI: 右侧备盘堆的托盘框不进累加器, 不产生托盘身份."""
+    vsm = _make_container_vsm(tray_roi=_LEFT_HALF_ROI)
+    m = vsm._custom_mix
+    vsm.current_cycle_uuid = "c1"
+    backup_tray = {"label": "托盘", "confidence": 0.95,
+                   "x": 0.55, "y": 0.0, "w": 0.4, "h": 1.0}   # 中心 x=0.75, ROI 外
+    for _ in range(5):
+        m.feed(vsm, [backup_tray], 0.0)
+    cont = m._engine._container
+    assert cont._primary is None and not cont._trays
+    work_tray = {"label": "托盘", "confidence": 0.95,
+                 "x": 0.05, "y": 0.0, "w": 0.4, "h": 1.0}     # 中心 x=0.25, ROI 内
+    for _ in range(3):
+        m.feed(vsm, [work_tray], 0.1)
+    assert cont._primary is not None                          # 工作区托盘照常建账
+
+
+# ---- v3.44.5 "动作前稳定计数"快照记账 (stable_min_frames): 治连放合并/漏账 ----
+
+def _stable_acc(stable=3, cooldown=1.0):
+    """AND 组合 + 快照记账: 消失帧阈值故意设很大 (堆顶检测框永不消失场景),
+    没有快照机制时 AND 永远等不齐、脉冲只能挂账."""
+    return _ContainerAccumulator(
+        "托盘", {"滑块": 24}, box_count=0, gone_frames=30,
+        count_mode="items_total", item_target=96,
+        confirm_by_frames=True, confirm_by_action=True, action_label="放托盘",
+        confirm_combine="and", action_min_frames=2, action_gone_frames=3,
+        action_cooldown_s=cooldown, stable_min_frames=stable)
+
+
+def _feed_stable_then_pulse(acc, n_before, n_during, t0, frames=6, dt=0.1):
+    """喂稳定段 (n_before 支, 满 frames 帧) → 动作脉冲 (手遮挡计数塌到 n_during),
+    托盘检测框全程在场 (堆顶无缝接下一盘的现场形态). 返回结束时刻."""
+    tray = _tray(0.0)
+    t = t0
+    for _ in range(frames):
+        acc.update([tray], _tray_items(n_before, 0.0, 0.45), t)
+        t += dt
+    for _ in range(2):   # 动作成立 (快照在这一刻定格 n_before)
+        acc.update([tray], _tray_items(n_during, 0.0, 0.45), t,
+                   action_present=True)
+        t += dt
+    for _ in range(3):   # 动作结束 → 脉冲结算
+        acc.update([tray], _tray_items(n_during, 0.0, 0.45), t,
+                   action_present=False)
+        t += dt
+    return t
+
+
+def test_container_stable_snapshot_books_pre_touch_count():
+    """堆顶检测框永不消失 + 连放: 每次动作按"动作成立前的稳定计数"入账,
+    少装盘 (22) 不被下一盘的 24 污染 (训练端"拿起前稳定计数"方案)."""
+    acc = _stable_acc()
+    t = _feed_stable_then_pulse(acc, 24, 10, 100.0)
+    assert acc._done == [{"滑块": 24}], acc._done
+    # 身份原地重开新账: 主位还在、峰值清零 (下一盘在同一身份上攒稳定值)
+    assert acc._primary is not None
+    assert not acc._trays[acc._primary]["peak"]
+    # 第二盘是少装盘 22, 间隔 > 不应期
+    t = _feed_stable_then_pulse(acc, 22, 8, t + 1.2)
+    assert acc._done == [{"滑块": 24}, {"滑块": 22}], acc._done
+
+
+def test_container_stable_snapshot_occlusion_dip_not_booked():
+    """手遮挡骤降段 (连续同值但属动作期) 不污染稳定值: 动作前稳定 24,
+    动作中一直看到 10, 入账仍是 24."""
+    acc = _stable_acc()
+    tray = _tray(0.0)
+    t = 100.0
+    for _ in range(6):
+        acc.update([tray], _tray_items(24, 0.0, 0.45), t); t += 0.1
+    # 手伸进来 (动作还没成立) 计数塌到 10 且持续 — 稳定值会被 10 覆盖吗?
+    # 会 (连续同值满帧即稳定), 但动作成立时快照的是"最后一次稳定"= 10 之前
+    # 已被覆盖 → 该场景由动作及时性兜底; 这里验证的是动作期(屏蔽/骤降)不覆盖:
+    for _ in range(2):
+        acc.update([tray], _tray_items(10, 0.0, 0.45), t, action_present=True); t += 0.1
+    for _ in range(3):
+        acc.update([tray], _tray_items(10, 0.0, 0.45), t, action_present=False); t += 0.1
+    assert acc._done == [{"滑块": 24}], acc._done
+
+
+def test_container_stable_snapshot_off_zero_diff():
+    """stable_min_frames=0 (默认关): 同样的喂帧序列不走快照路径 —
+    AND 组合下消失满帧等不齐, 账本保持为空 (老行为零差异)."""
+    acc = _stable_acc(stable=0)
+    _feed_stable_then_pulse(acc, 24, 10, 100.0)
+    assert acc._done == [], acc._done
+
+
+def test_container_stable_snapshot_takes_max_ignores_hover_dip():
+    """7-27 实测坑: 结账后到下一动作之间手悬在堆顶只露 2 个, 也会攒出稳定段 →
+    曾把下一盘记成 2。稳定值取本账期最大稳定段: 手悬停(2)不覆盖看全帧(24)."""
+    acc = _stable_acc()
+    t = _feed_stable_then_pulse(acc, 24, 10, 100.0)
+    assert acc._done == [{"滑块": 24}]
+    tray = _tray(0.0)
+    t += 1.2                                     # 过不应期
+    for _ in range(6):                           # 手悬停: 稳定地只露 2 个
+        acc.update([tray], _tray_items(2, 0.0, 0.45), t); t += 0.1
+    for _ in range(6):                           # 手离开: 看全 24
+        acc.update([tray], _tray_items(24, 0.0, 0.45), t); t += 0.1
+    for _ in range(2):
+        acc.update([tray], _tray_items(8, 0.0, 0.45), t, action_present=True); t += 0.1
+    for _ in range(3):
+        acc.update([tray], _tray_items(8, 0.0, 0.45), t, action_present=False); t += 0.1
+    assert acc._done == [{"滑块": 24}, {"滑块": 24}], acc._done
+
+
+def test_container_stable_snapshot_frozen_during_action():
+    """动作进行中冻结稳定值: 盘被拿走后堆顶接上的下一盘 (满 24) 提前曝光,
+    不许污染当前少装盘 (22) 的账期 — 少装照记 22."""
+    acc = _stable_acc()
+    tray = _tray(0.0)
+    t = 100.0
+    for _ in range(6):                           # 当前盘 22 (少装)
+        acc.update([tray], _tray_items(22, 0.0, 0.45), t); t += 0.1
+    for _ in range(2):                           # 动作成立, 快照 22
+        acc.update([tray], _tray_items(24, 0.0, 0.45), t, action_present=True); t += 0.1
+    for _ in range(8):                           # 动作持续中下一盘满 24 曝光 → 冻结, 不覆盖
+        acc.update([tray], _tray_items(24, 0.0, 0.45), t, action_present=True); t += 0.1
+    for _ in range(3):
+        acc.update([tray], _tray_items(24, 0.0, 0.45), t, action_present=False); t += 0.1
+    assert acc._done == [{"滑块": 22}], acc._done
+
+
+def test_container_stable_snapshot_wins_over_ghost_primary():
+    """7-27 实测坑: 紧凑连放时主位被在途幽灵抢走 (手里的盘只看到 4 个),
+    动作成立瞬间核准过 24 的备盘堆身份躺在非主位 → 记账认快照不认主位."""
+    acc = _stable_acc()
+    stack = _tray(0.0)
+    t = 100.0
+    for _ in range(6):                           # 备盘堆稳定 24
+        acc.update([stack], _tray_items(24, 0.0, 0.45), t); t += 0.1
+    mover = {"x": 0.6, "y": 0.6, "w": 0.3, "h": 0.3}
+    for _ in range(2):                           # 动作成立 (快照 24 定格在堆身份上)
+        acc.update([stack, mover], _tray_items(4, 0.6, 0.9, y=0.75), t,
+                   action_present=True); t += 0.1
+    # 白盒模拟主位churn: 在途幽灵 (peak=4) 抢到主位
+    ghost_tid = [tid for tid, tr in acc._trays.items()
+                 if tr['bbox']['x'] > 0.5]
+    assert ghost_tid, list(acc._trays)
+    acc._primary = ghost_tid[0]
+    acc._primary_frames_ok = True                # 最坏情况: AND 条件也已凑齐
+    for _ in range(3):                           # 动作结束 → 脉冲结算
+        acc.update([stack, mover], _tray_items(4, 0.6, 0.9, y=0.75), t,
+                   action_present=False); t += 0.1
+    assert acc._done == [{"滑块": 24}], acc._done

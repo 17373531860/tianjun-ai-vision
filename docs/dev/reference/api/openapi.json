@@ -4425,6 +4425,20 @@
     "title": "ModelUpdate",
     "type": "object"
    },
+   "OperatorsOut": {
+    "properties": {
+     "operators": {
+      "description": "启用状态账号的显示名列表 (display_name 优先, 缺省回退 username)",
+      "items": {
+       "type": "string"
+      },
+      "title": "Operators",
+      "type": "array"
+     }
+    },
+    "title": "OperatorsOut",
+    "type": "object"
+   },
    "OrderCreate": {
     "properties": {
      "binding_scope": {
@@ -4822,6 +4836,11 @@
       "title": "Box Count Source",
       "type": "string"
      },
+     "box_label_scan_required": {
+      "default": false,
+      "title": "Box Label Scan Required",
+      "type": "boolean"
+     },
      "channel_id": {
       "default": 0,
       "title": "Channel Id",
@@ -4879,6 +4898,17 @@
       ],
       "title": "Event Box Ng"
      },
+     "event_box_not_scanned": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Box Not Scanned"
+     },
      "event_completed_order_rescan": {
       "anyOf": [
        {
@@ -4911,6 +4941,28 @@
        }
       ],
       "title": "Event Label Mismatch"
+     },
+     "event_label_qty_missing": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Label Qty Missing"
+     },
+     "event_label_total_mismatch": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Label Total Mismatch"
      },
      "event_mes_fail": {
       "anyOf": [
@@ -5018,6 +5070,37 @@
       "default": "strip_hyphen",
       "title": "Label Match",
       "type": "string"
+     },
+     "label_qty_enabled": {
+      "default": false,
+      "title": "Label Qty Enabled",
+      "type": "boolean"
+     },
+     "label_qty_pattern": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Label Qty Pattern"
+     },
+     "label_qty_segment": {
+      "default": 3,
+      "title": "Label Qty Segment",
+      "type": "integer"
+     },
+     "label_rescan_action": {
+      "default": "ignore",
+      "title": "Label Rescan Action",
+      "type": "string"
+     },
+     "label_total_check": {
+      "default": false,
+      "title": "Label Total Check",
+      "type": "boolean"
      },
      "match_project_by_name": {
       "default": false,
@@ -5136,6 +5219,11 @@
       ],
       "title": "Spec To Project"
      },
+     "sync_work_orders": {
+      "default": true,
+      "title": "Sync Work Orders",
+      "type": "boolean"
+     },
      "tail_paper_as_close_action": {
       "default": false,
       "title": "Tail Paper As Close Action",
@@ -5214,6 +5302,11 @@
        }
       ],
       "title": "Trays Per Box Table"
+     },
+     "unauthorized_cycle_action": {
+      "default": "hold",
+      "title": "Unauthorized Cycle Action",
+      "type": "string"
      }
     },
     "required": [
@@ -5243,6 +5336,11 @@
       "default": "field",
       "title": "Box Count Source",
       "type": "string"
+     },
+     "box_label_scan_required": {
+      "default": false,
+      "title": "Box Label Scan Required",
+      "type": "boolean"
      },
      "channel_id": {
       "default": 0,
@@ -5301,6 +5399,17 @@
       ],
       "title": "Event Box Ng"
      },
+     "event_box_not_scanned": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Box Not Scanned"
+     },
      "event_completed_order_rescan": {
       "anyOf": [
        {
@@ -5333,6 +5442,28 @@
        }
       ],
       "title": "Event Label Mismatch"
+     },
+     "event_label_qty_missing": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Label Qty Missing"
+     },
+     "event_label_total_mismatch": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Label Total Mismatch"
      },
      "event_mes_fail": {
       "anyOf": [
@@ -5445,6 +5576,37 @@
       "title": "Label Match",
       "type": "string"
      },
+     "label_qty_enabled": {
+      "default": false,
+      "title": "Label Qty Enabled",
+      "type": "boolean"
+     },
+     "label_qty_pattern": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Label Qty Pattern"
+     },
+     "label_qty_segment": {
+      "default": 3,
+      "title": "Label Qty Segment",
+      "type": "integer"
+     },
+     "label_rescan_action": {
+      "default": "ignore",
+      "title": "Label Rescan Action",
+      "type": "string"
+     },
+     "label_total_check": {
+      "default": false,
+      "title": "Label Total Check",
+      "type": "boolean"
+     },
      "match_project_by_name": {
       "default": false,
       "title": "Match Project By Name",
@@ -5562,6 +5724,11 @@
       ],
       "title": "Spec To Project"
      },
+     "sync_work_orders": {
+      "default": true,
+      "title": "Sync Work Orders",
+      "type": "boolean"
+     },
      "tail_paper_as_close_action": {
       "default": false,
       "title": "Tail Paper As Close Action",
@@ -5640,6 +5807,11 @@
        }
       ],
       "title": "Trays Per Box Table"
+     },
+     "unauthorized_cycle_action": {
+      "default": "hold",
+      "title": "Unauthorized Cycle Action",
+      "type": "string"
      }
     },
     "required": [
@@ -5694,6 +5866,17 @@
        }
       ],
       "title": "Box Count Source"
+     },
+     "box_label_scan_required": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Box Label Scan Required"
      },
      "channel_id": {
       "anyOf": [
@@ -5794,6 +5977,17 @@
       ],
       "title": "Event Box Ng"
      },
+     "event_box_not_scanned": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Box Not Scanned"
+     },
      "event_completed_order_rescan": {
       "anyOf": [
        {
@@ -5826,6 +6020,28 @@
        }
       ],
       "title": "Event Label Mismatch"
+     },
+     "event_label_qty_missing": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Label Qty Missing"
+     },
+     "event_label_total_mismatch": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Label Total Mismatch"
      },
      "event_mes_fail": {
       "anyOf": [
@@ -5969,6 +6185,61 @@
        }
       ],
       "title": "Label Match"
+     },
+     "label_qty_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Label Qty Enabled"
+     },
+     "label_qty_pattern": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Label Qty Pattern"
+     },
+     "label_qty_segment": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Label Qty Segment"
+     },
+     "label_rescan_action": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Label Rescan Action"
+     },
+     "label_total_check": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Label Total Check"
      },
      "match_project_by_name": {
       "anyOf": [
@@ -6160,6 +6431,17 @@
       ],
       "title": "Spec To Project"
      },
+     "sync_work_orders": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sync Work Orders"
+     },
      "tail_paper_as_close_action": {
       "anyOf": [
        {
@@ -6286,6 +6568,17 @@
        }
       ],
       "title": "Trays Per Box Table"
+     },
+     "unauthorized_cycle_action": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Unauthorized Cycle Action"
      }
     },
     "title": "PackagingFlowConfigUpdate",
@@ -28258,6 +28551,28 @@
      }
     },
     "summary": "Weighing Material Label",
+    "tags": [
+     "Weighing"
+    ]
+   }
+  },
+  "/api/v1/weighing/operators": {
+   "get": {
+    "description": "作业员候选名单: 用户系统中「启用」状态的账号显示名。\n\n称重配置开启「作业员从用户名单选择」后, 监控页人员下拉从这里取数。\n只暴露显示名 (无敏感字段), 故不挂用户管理权限——操作员工位也要能拉取。\n- 查询失败 (如用户表不可用) 时返回空名单, 不抛错 (前端下拉退化为空列表)。",
+    "operationId": "weighing_operators_api_v1_weighing_operators_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OperatorsOut"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "作业员候选名单",
     "tags": [
      "Weighing"
     ]

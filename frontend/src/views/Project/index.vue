@@ -1141,6 +1141,8 @@ const ensureWeighingDefaults = (project) => {
     stable_min_samples: w.stable_min_samples ?? 3,
     measure_min_weight: w.measure_min_weight ?? 0.005,
     require_operator: w.require_operator !== false,
+    // v3.45 作业员从用户名单选择 (默认关 = 自由填写, 兼容老项目)
+    operator_from_users: w.operator_from_users === true,
     require_model: w.require_model !== false,
     material_check: w.material_check || 'sequence',
     auto_zero_after_done: w.auto_zero_after_done !== false,
@@ -1464,6 +1466,16 @@ const initProjectDefaults = (project) => {
   if (project.custom_mix_container_action_cooldown_s === undefined) {
     project.custom_mix_container_action_cooldown_s = pipelineConfig.custom_mix_container_action_cooldown_s ?? 2;
   }
+  if (project.custom_mix_container_per_tray_guard === undefined) {
+    project.custom_mix_container_per_tray_guard = pipelineConfig.custom_mix_container_per_tray_guard === true;
+  }
+  // v3.44.0e 每盘峰值封顶 / 动作前稳定计数快照 (0 = 关, 老项目零差异)
+  if (project.custom_mix_container_peak_cap === undefined) {
+    project.custom_mix_container_peak_cap = pipelineConfig.custom_mix_container_peak_cap ?? 0;
+  }
+  if (project.custom_mix_container_stable_min_frames === undefined) {
+    project.custom_mix_container_stable_min_frames = pipelineConfig.custom_mix_container_stable_min_frames ?? 0;
+  }
   // 物品行原生字段兜底：老数据/手改 JSON 可能缺字段，表C输入框依赖它们存在
   (project.steps_config || []).forEach(s => {
     if (s.detect_role !== 'item') return;
@@ -1749,11 +1761,12 @@ const initProjectDefaults = (project) => {
   const nghCfg = project.pipeline_config.ng_handling;
   if (!['none', 'hint', 'instant_ng'].includes(nghCfg.violation)) nghCfg.violation = 'none';
   if (!['ng', 'ack', 'hold'].includes(nghCfg.missing_step)) nghCfg.missing_step = 'ng';
-  if (!['ng', 'ack'].includes(nghCfg.short_count)) nghCfg.short_count = 'ng';
+  if (!['ng', 'ack', 'hold'].includes(nghCfg.short_count)) nghCfg.short_count = 'ng';
   if (nghCfg.violation_event_id === undefined) nghCfg.violation_event_id = null;
   if (nghCfg.hold_event_id === undefined) nghCfg.hold_event_id = null;
   if (nghCfg.gate_event_id === undefined) nghCfg.gate_event_id = null;
   if (!Array.isArray(nghCfg.gate_steps)) nghCfg.gate_steps = [];
+  if (!Array.isArray(nghCfg.gate_escalate_steps)) nghCfg.gate_escalate_steps = [];
   if (!Number.isFinite(Number(nghCfg.hold_timeout_s))) nghCfg.hold_timeout_s = 120;
 
   // Step 8 (feat/multi-model-roi-link): 反序列化附加模型 (副 slot, 主模型由
@@ -1854,6 +1867,9 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_mix_container_action_min_frames = project.custom_mix_container_action_min_frames || 0;
   project.pipeline_config.custom_mix_container_action_gone_frames = project.custom_mix_container_action_gone_frames || 0;
   project.pipeline_config.custom_mix_container_action_cooldown_s = project.custom_mix_container_action_cooldown_s ?? 2;
+  project.pipeline_config.custom_mix_container_per_tray_guard = project.custom_mix_container_per_tray_guard === true;
+  project.pipeline_config.custom_mix_container_peak_cap = project.custom_mix_container_peak_cap || 0;
+  project.pipeline_config.custom_mix_container_stable_min_frames = project.custom_mix_container_stable_min_frames || 0;
   project.pipeline_config.custom_sequence_order = project.custom_sequence_order;
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
@@ -2049,6 +2065,9 @@ const handleSaveProject = async () => {
         custom_mix_container_action_min_frames: activeProject.value.custom_mix_container_action_min_frames || 0,
         custom_mix_container_action_gone_frames: activeProject.value.custom_mix_container_action_gone_frames || 0,
         custom_mix_container_action_cooldown_s: activeProject.value.custom_mix_container_action_cooldown_s ?? 2,
+        custom_mix_container_per_tray_guard: activeProject.value.custom_mix_container_per_tray_guard === true,
+        custom_mix_container_peak_cap: activeProject.value.custom_mix_container_peak_cap || 0,
+        custom_mix_container_stable_min_frames: activeProject.value.custom_mix_container_stable_min_frames || 0,
         custom_sequence_order: activeProject.value.custom_sequence_order,
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,
@@ -2136,11 +2155,16 @@ const handleSaveProject = async () => {
             missing_step: ['ng', 'ack', 'hold'].includes(src.missing_step) ? src.missing_step : 'ng',
             hold_timeout_s: Number.isFinite(t) && t >= 0 ? t : 120,
             hold_event_id: src.hold_event_id || null,
-            short_count: src.short_count === 'ack' ? 'ack' : 'ng',
+            short_count: ['ng', 'ack', 'hold'].includes(src.short_count) ? src.short_count : 'ng',
             gate_enabled: src.gate_enabled === true,
             gate_steps: (Array.isArray(src.gate_steps) ? src.gate_steps : [])
               .map(s => String(s || '').trim()).filter(Boolean),
             gate_event_id: src.gate_event_id || null,
+            // v3.44.4 短拦长放: 被门拦时报警放行进结算挂起的步骤 (如封箱);
+            // 只对被门管的步骤有意义 → 与 gate_steps 取交集, 防移除后残留
+            gate_escalate_steps: (Array.isArray(src.gate_escalate_steps) ? src.gate_escalate_steps : [])
+              .map(s => String(s || '').trim())
+              .filter(s => s && (Array.isArray(src.gate_steps) ? src.gate_steps : []).includes(s)),
           };
         })(),
         // 原生称重投料模式配置 (weighing 模式 / v3.35 融合步骤门控模式写入, 其他不污染)

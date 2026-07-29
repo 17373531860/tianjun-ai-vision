@@ -319,6 +319,10 @@ class SequentialMixin:
         else:
             # v3.7.x: 同上, 直接逐位比较, 修 sequence_order 含重复元素时的误判.
             if this_cycle == expected_labels:
+                # v3.44.1 少装挂起: 步骤全对但箱内数量不足 → 摘收尾步骤挂起等
+                # 补数量 (断点重做), 不判 NG 不清账. 默认关 = 零差异.
+                if not next_carry and self._maybe_enter_short_count_hold(expected_labels):
+                    return
                 print(f"  → 顺序正确 → OK")
                 self._trigger_event(*compose_settle_event(self, 1, '顺序正确完成'))
             else:

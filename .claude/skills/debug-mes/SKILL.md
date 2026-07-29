@@ -703,6 +703,11 @@ curl http://localhost:8001/api/v1/cluster/slaves
 - **配套（v3.42.1/v3.43.1）**：已完成(OK)工单重扫拦截 `block_completed_order_rescan`（on_scan 单点守门，NG 单不拦，m0002）；提前放工单报警 `early_paper`（非尾箱/空尾箱期间出现放工单动作每箱一次提醒，进箱数探测钩子 `set_box_progress_getter` 读容器已结算件数，拿不到保守放行）。
 - **gate 探测数据源（v3.42.1 修复）**：顺序型下"放工单"是序列外步骤进不了周期步骤集——`is_packaging_paper_order_covered` 扩查四处（周期两代 + `_oos_steps_seen` 旁路账本两代，账本随周期轮转、停止/切项目全清），否则 gate 永不放行。
 
+### v3.45 箱标签扫码授权（组⑧）+ 包装工单同步进工单管理
+
+- **箱标签扫码授权**（全可选默认关零差异，迁移 m0004 共 9 列）：开 `box_label_scan_required` 后每箱（含首箱）进「等扫箱标签」态，扫到本工单标签才放行开做；未扫就开做 → 报警（检测层周期开始通知钩子 `on_cycle_started`）。配套：`label_qty_enabled` 从复合串取"本箱数量"当本箱视觉目标（段号 `label_qty_segment` / 正则 `label_qty_pattern`，取不出 → 拒收报警请重扫二维码，裸一维条码同）；已授权重扫同号 `label_rescan_action`（ignore/update，update=贴错重贴场景用新数量更新目标）；未授权箱做完整周期 `unauthorized_cycle_action`（hold=挂账等人工/book=报警照记）；收尾对账 `label_total_check`（Σ标签数量 vs 排产量，不平只报警留痕不改成绩）。三类报警事件字段 `event_box_not_scanned` / `event_label_qty_missing` / `event_label_total_mismatch`，全走既有事件响应面。重做未授权箱回到「等扫箱标签」态；等扫态是内存态，重启一并作废。本箱目标取值优先级：标签取到的数量 > 工单级每箱数/尾数计划（`_current_box_target`）。
+- **包装工单同步进工单管理**（`sync_work_orders`，默认开，老库 NULL 视为开，迁移 m0005）：扫码开工/收尾/中止时 `_sync_work_order` 把包装单镜像到 `work_orders` 表（来源=packaging，工单管理页绿标签"包装扫码"）；重启作废的在途包装单镜像同步推"已取消"；**镜像失败隔离不阻断包装状态机**（只打日志）。排查"工单管理页看不到包装单" → 先看开关，再看后端日志镜像失败行。
+
 ### v3.23 NG 补做之「补滑块」（延迟落账）
 
 - **触发**：仅当「检测步骤齐（is_good=True）+ 仅滑块数不足（sc<target）」且项目开了

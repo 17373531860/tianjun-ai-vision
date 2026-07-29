@@ -517,6 +517,10 @@ mgr._per_item_last_ng_detail = {
 - 误报 → 调大 `duplicate_release_frames`（离开确认更严）或 `duplicate_sustain_frames`（压回确认更严）
 - 单测: `tests/test_per_item_duplicate_screw.py`
 
+**v3.45 语义升级（dev-qing 合入，改这块前必读）**:
+- "移开"判据从"动作框连续离开 N 帧"改为**抬枪正证据**：已打螺丝重新清晰出现、或电枪明确移到另一颗，连续 `duplicate_release_frames` 帧才确认抬枪；**纯漏检不累计**（目标仍被枪遮挡的卡枪不再误判抬枪 → 不再误报重复打）。`duplicate_sustain_frames` 语义相应变为"确认抬枪后电枪**返回已打 ID** 几帧算重复"。前端 LogicConfigTab 文案已同步（"抬枪确认帧数"/"返回确认帧数"）。
+- **整板微移保持逻辑 ID**：锁定数量下用跨步骤位移估计同步预测框，与检测框一对一关联并打 `associated` 标记；`associated=false` 表示只有整板平移后的预测位置、本帧无检测框关联——Monitor 不显示未关联预测编号、未关联检测框**禁止回退模型/步骤默认绿色**（per_item 目标只有"已关联且已覆盖=绿，其余=红"两种合法颜色）。排查"编号乱跳/该红不红" → 先看关联标记。
+
 ### 11.2 换板兜底结算（workpiece_absent_settle_frames，默认 0=关）
 
 **位置**: `pipeline_config.per_item.workpiece_absent_settle_frames`（项目级 int，>0 启用）

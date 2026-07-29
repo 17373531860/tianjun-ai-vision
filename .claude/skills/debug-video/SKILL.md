@@ -40,6 +40,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7, mcp__sentry"
 - **启动:** `VideoSourceManager.start_hcnetsdk(ip, port, user, password, channel)`
 - **SDK:** `backend/hcnetsdk/wrapper.py` → `HCNetSession`
 - **流程:** login → start_preview → 回调解码YUV→BGR
+- **目标帧率 (v3.45 起可配):** Source 页表单 10/15/25/30/50/60 下拉（此前硬编码 25），持久化键 `hcnet_fps`，开机自动恢复按持久化值回放（`backend/main.py: auto_restore_video_sources`）。排查"重启后帧率跌回 25" → 看持久化配置里有没有该键（老配置无键默认 25）。超过设备码流实际帧率不会增加画面帧数
 
 ### 5. 视频文件 (video)
 - **启动:** `VideoSourceManager.start_video(file_path, speed, sync_mode)`

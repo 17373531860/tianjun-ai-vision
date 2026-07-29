@@ -7,8 +7,8 @@
 - 虚拟喂重量 (无真秤时直接注入读数验逻辑)
 """
 from fastapi import APIRouter, Query
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import List, Optional
 
 from backend.services.weighing_engine import get_weighing_engine
 
@@ -44,6 +44,36 @@ class FeedBody(BaseModel):
 def weighing_state(channel: Optional[int] = Query(None)):
     """工位实时状态 (相位/型号/料别进度/本件结果)。不传 channel 返回所有。"""
     return get_weighing_engine().snapshot(channel)
+
+
+class OperatorsOut(BaseModel):
+    operators: List[str] = Field(
+        default_factory=list,
+        description="启用状态账号的显示名列表 (display_name 优先, 缺省回退 username)")
+
+
+@router.get("/weighing/operators",
+            summary="作业员候选名单",
+            response_model=OperatorsOut)
+def weighing_operators():
+    """作业员候选名单: 用户系统中「启用」状态的账号显示名。
+
+    称重配置开启「作业员从用户名单选择」后, 监控页人员下拉从这里取数。
+    只暴露显示名 (无敏感字段), 故不挂用户管理权限——操作员工位也要能拉取。
+    - 查询失败 (如用户表不可用) 时返回空名单, 不抛错 (前端下拉退化为空列表)。
+    """
+    try:
+        from backend.db.database import SessionLocal
+        from backend.models.auth_models import User
+        db = SessionLocal()
+        try:
+            rows = (db.query(User).filter(User.active == True)  # noqa: E712
+                    .order_by(User.id).all())
+            return {"operators": [u.display_name or u.username for u in rows]}
+        finally:
+            db.close()
+    except Exception:
+        return {"operators": []}
 
 
 @router.post("/weighing/context")

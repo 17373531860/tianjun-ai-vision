@@ -83,9 +83,82 @@ def test_packaging_panel_create_with_hiwin_preset(page, base_url, api_url):
     assert cfg["event_mes_fail"] == 3, cfg.get("event_mes_fail")
     assert cfg["on_short_box"] == "redo", cfg["on_short_box"]
     assert cfg["on_mes_fail"] == "block", cfg["on_mes_fail"]
+    # v3.45 组⑧ 预设: 每箱扫标签放行 + 从标签取本箱数量 (第3段) + 收尾对账
+    assert cfg["box_label_scan_required"] is True, cfg.get("box_label_scan_required")
+    assert cfg["label_qty_enabled"] is True, cfg.get("label_qty_enabled")
+    assert cfg["label_qty_segment"] == 3, cfg.get("label_qty_segment")
+    assert cfg["unauthorized_cycle_action"] == "hold", cfg.get("unauthorized_cycle_action")
+    assert cfg["label_total_check"] is True, cfg.get("label_total_check")
+    assert cfg["event_box_not_scanned"] == 3, cfg.get("event_box_not_scanned")
     assert cfg["enabled"] is False  # 新建默认不启用 → 零影响
 
     # 列表里能看到这一行
     assert page.get_by_text(name, exact=True).count() >= 1
+
+    _cleanup_pkg(api_url)
+
+
+def test_packaging_panel_group8_manual_toggle_roundtrip(page, base_url, api_url):
+    """组⑧「箱标签扫码」手动逐项配置 → 保存 → 后端契约核对 (v3.45).
+
+    覆盖: 总开关联动子项显隐 / 取量段号+正则 / 重扫 update 档 /
+    未扫做完整箱 book 档 / 收尾对账开关 — 全部真点击真落库.
+    """
+    _cleanup_pkg(api_url)
+    name = f"__e2e_pkg_{uuid.uuid4().hex[:6]}"
+
+    page.goto(f"{base_url}/#/settings", wait_until="domcontentloaded", timeout=15000)
+    page.wait_for_load_state("networkidle")
+    page.get_by_role("tab", name="包装箱结算").click()
+    page.wait_for_timeout(800)
+    page.get_by_role("button", name="新建配置").click()
+    page.wait_for_selector(".el-dialog", state="visible", timeout=5000)
+    dlg = page.locator(".el-dialog").last
+    page.locator('input[placeholder="上银包装线-1"]').fill(name)
+
+    # 切滑块口径 (组⑧ 仅 sliders 显示)
+    dlg.get_by_text("按滑块 (上银)").first.click()
+    page.wait_for_timeout(400)
+    # 展开组⑧
+    dlg.get_by_text("⑧ 箱标签扫码").click()
+    page.wait_for_timeout(400)
+
+    # 开总开关前子项不可见; 开后显现 (联动显隐)
+    _qty_item = dlg.locator(".el-form-item", has_text="从标签取本箱数量")
+    assert _qty_item.count() == 0
+    dlg.locator(".el-form-item", has_text="每箱必须扫箱标签").first \
+       .locator(".el-switch").click()
+    page.wait_for_timeout(300)
+    assert _qty_item.count() >= 1
+
+    dlg.locator(".el-form-item", has_text="从标签取本箱数量").first \
+       .locator(".el-switch").click()
+    page.wait_for_timeout(300)
+    dlg.locator(".el-form-item", has_text="数量在第几段").first \
+       .locator("input").first.fill("4")
+    dlg.locator(".el-form-item", has_text="数量段识别正则").first \
+       .locator("input").first.fill(r"\d+\.\d+")
+    dlg.locator(".el-form-item", has_text="已放行后重扫标签").first \
+       .get_by_text("更新本箱目标").click()
+    dlg.locator(".el-form-item", has_text="未扫标签做完整箱").first \
+       .get_by_text("报警后照常落账").click()
+    dlg.locator(".el-form-item", has_text="收尾数量对账").first \
+       .locator(".el-switch").click()
+    page.wait_for_timeout(300)
+
+    page.locator(".el-dialog__footer").get_by_role("button", name="保存").first.click()
+    page.wait_for_timeout(1200)
+
+    r = requests.get(f"{api_url}/api/v1/packaging-flows", timeout=10)
+    found = [c for c in (r.json() or {}).get("items", []) if c.get("name") == name]
+    assert found, f"配置 {name} 未落库"
+    cfg = found[0]
+    assert cfg["box_label_scan_required"] is True, cfg
+    assert cfg["label_qty_enabled"] is True, cfg
+    assert cfg["label_qty_segment"] == 4, cfg.get("label_qty_segment")
+    assert cfg["label_qty_pattern"] == r"\d+\.\d+", cfg.get("label_qty_pattern")
+    assert cfg["label_rescan_action"] == "update", cfg.get("label_rescan_action")
+    assert cfg["unauthorized_cycle_action"] == "book", cfg.get("unauthorized_cycle_action")
+    assert cfg["label_total_check"] is True, cfg.get("label_total_check")
 
     _cleanup_pkg(api_url)
