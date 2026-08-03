@@ -129,7 +129,8 @@ class _YOLOv5HandDetector:
             torch.load = _orig
             raise RuntimeError("yolov5 包未安装, 无法加载 yolov5 格式 .pt") from exc
         import yolov5
-        dev = device if (device and device != "auto") else ("cuda:0" if torch.cuda.is_available() else "cpu")
+        from backend.core.torch_device import resolve_auto_device
+        dev = device if (device and device != "auto") else resolve_auto_device()
         self.model = yolov5.load(model_path, device=dev)
         self.model.conf = max(0.05, min(0.95, conf))
         self.model.iou = max(0.1, min(0.9, iou))

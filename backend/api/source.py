@@ -1072,15 +1072,21 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             
             print("[GPUReset] starting emergency GPU reset...")
             
-            # 1. 同步 CUDA
+            # 1. 同步 GPU (CUDA / MPS)
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
+            else:
+                from backend.core.torch_device import synchronize_mps
+                synchronize_mps()
             
             # 2. 清理缓存
             gc.collect()
             
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            else:
+                from backend.core.torch_device import empty_mps_cache
+                empty_mps_cache()
                 
             # 3. 重置 CUDA 设备（谨慎使用）
             if torch.cuda.is_available():
@@ -1161,13 +1167,16 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                     pass
         self._inference_thread = None
         
-        # CUDA 同步确保所有 GPU 操作完成
+        # GPU 同步确保所有操作完成 (CUDA / MPS)
         try:
             import torch
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
+            else:
+                from backend.core.torch_device import synchronize_mps
+                synchronize_mps()
         except Exception as e:
-            print(f"[WARN] CUDA sync failed: {e}")
+            print(f"[WARN] GPU sync failed: {e}")
         
         print("[InferThread] stopped")
     
@@ -1718,11 +1727,14 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # 轻量级垃圾回收
         gc.collect(generation=0)
         
-        # 清理 CUDA 缓存
+        # 清理 GPU 缓存 (CUDA / MPS)
         try:
             import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            else:
+                from backend.core.torch_device import empty_mps_cache
+                empty_mps_cache()
         except:
             pass
         

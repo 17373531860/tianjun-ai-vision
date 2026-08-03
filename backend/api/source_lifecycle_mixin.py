@@ -539,7 +539,7 @@ class LifecycleMixin:
         # 7. 强制垃圾回收
         gc.collect()
         
-        # 8. 清理 CUDA 缓存
+        # 8. 清理 GPU 缓存 (CUDA / MPS)
         try:
             import torch
             if torch.cuda.is_available():
@@ -547,8 +547,11 @@ class LifecycleMixin:
                 allocated = torch.cuda.memory_allocated() / 1024**2
                 cached = torch.cuda.memory_reserved() / 1024**2
                 print(f"[CacheClean] GPU VRAM: allocated={allocated:.1f}MB, cached={cached:.1f}MB")
+            else:
+                from backend.core.torch_device import empty_mps_cache
+                empty_mps_cache()
         except Exception as e:
-            print(f"[CacheClean] error clearing CUDA cache: {e}")
+            print(f"[CacheClean] error clearing GPU cache: {e}")
         
         print(f"[CacheClean] done - cleared {screenshot_count} screenshot caches")
     
@@ -576,6 +579,8 @@ class LifecycleMixin:
                     print(f"[GPUClean] freed VRAM: {freed:.1f}MB (allocated: {after_alloc:.1f}MB, cached: {after_cached:.1f}MB)")
             else:
                 gc.collect()
+                from backend.core.torch_device import empty_mps_cache
+                empty_mps_cache()
         except Exception as e:
             print(f"[GPUClean] cleanup failed: {e}")
     

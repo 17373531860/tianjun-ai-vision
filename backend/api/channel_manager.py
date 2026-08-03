@@ -322,11 +322,8 @@ class ChannelManager:
     @staticmethod
     def _resolve_device(device: str) -> str:
         if device == "auto":
-            try:
-                import torch
-                return "cuda:0" if torch.cuda.is_available() else "cpu"
-            except ImportError:
-                return "cpu"
+            from backend.core.torch_device import resolve_auto_device
+            return resolve_auto_device()
         return device
 
     def get_gpu_allocation(self) -> dict:

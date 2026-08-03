@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 
 from backend.core import debug_center
+from backend.core.torch_device import resolve_auto_device, empty_mps_cache, synchronize_mps
 
 if TYPE_CHECKING:
     from backend.api.source_inference_router import ModelInstance
@@ -99,9 +100,9 @@ class ModelLoadMixin:
             is_native_pytorch = (model_path.endswith('.pt') or model_path.endswith('.pth'))
             self._is_native_pytorch = is_native_pytorch
 
-            # 设置推理设备
+            # 设置推理设备 (auto: cuda:0 > mps > cpu)
             if self.device == 'auto':
-                device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+                device = resolve_auto_device()
             else:
                 device = self.device
 
@@ -115,6 +116,9 @@ class ModelLoadMixin:
                 gpu_name = torch.cuda.get_device_name(gpu_idx)
                 self.current_device_info = {'type': 'GPU', 'name': gpu_name, 'device': device}
                 print(f"[ModelLoad] success: {model_path} -> GPU: {gpu_name}")
+            elif device == 'mps':
+                self.current_device_info = {'type': 'GPU', 'name': 'Apple MPS', 'device': 'mps'}
+                print(f"[ModelLoad] success: {model_path} -> GPU: Apple MPS")
             else:
                 self.current_device_info = {'type': 'CPU', 'name': 'CPU', 'device': 'cpu'}
                 print(f"[ModelLoad] success: {model_path} -> CPU")
@@ -127,9 +131,9 @@ class ModelLoadMixin:
             self._model_imgsz = self._detect_model_imgsz(self.model, model_path, is_native_pytorch)
             print(f"[ModelLoad] inference resolution imgsz={self._model_imgsz}")
 
-            # CUDA warm-up (Step 3: 走 router.warmup_lock 串行)
+            # GPU warm-up (Step 3: 走 router.warmup_lock 串行; MPS 首帧编译 Metal kernel 也需要预热)
             warmup_ok = True
-            if device.startswith('cuda'):
+            if device.startswith('cuda') or device == 'mps':
                 warmup_ok = self._warmup_model_cuda(self.model, device, self._model_imgsz,
                                                    self.use_half, is_native_pytorch,
                                                    log_tag='主模型',
@@ -156,7 +160,7 @@ class ModelLoadMixin:
                 self.model.to(device)
                 self._model_imgsz = self._detect_model_imgsz(self.model, model_path, True)
                 print(f"[ModelLoad] after fallback imgsz={self._model_imgsz}")
-                if device.startswith('cuda'):
+                if device.startswith('cuda') or device == 'mps':
                     self._warmup_model_cuda(self.model, device, self._model_imgsz,
                                             self.use_half, True,
                                             log_tag='主模型(fallback)',
@@ -198,9 +202,10 @@ class ModelLoadMixin:
             if self.model is not None:
                 print("[ModelRelease] releasing model resources...")
 
-                # 1. 等待 CUDA 操作完成
+                # 1. 等待 GPU 操作完成
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
+                synchronize_mps()
 
                 del self.model
                 self.model = None
@@ -209,12 +214,13 @@ class ModelLoadMixin:
                 # 2. Python 垃圾回收
                 gc.collect()
 
-                # 3. 清理 CUDA 缓存
+                # 3. 清理 GPU 缓存
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     allocated = torch.cuda.memory_allocated() / 1024**2
                     cached = torch.cuda.memory_reserved() / 1024**2
                     print(f"[ModelRelease] VRAM: allocated={allocated:.1f}MB, cached={cached:.1f}MB")
+                empty_mps_cache()
 
                 print("[ModelRelease] model resources released")
         except Exception as e:
@@ -307,6 +313,7 @@ class ModelLoadMixin:
 
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
+            synchronize_mps()
 
             del mi.model
             mi.model = None
@@ -320,6 +327,7 @@ class ModelLoadMixin:
                 allocated = torch.cuda.memory_allocated() / 1024**2
                 cached = torch.cuda.memory_reserved() / 1024**2
                 print(f"[ModelRelease] [{mi.name}] VRAM: allocated={allocated:.1f}MB cached={cached:.1f}MB")
+            empty_mps_cache()
 
             print(f"[ModelRelease] [{mi.name}] model resources released")
 
@@ -426,9 +434,9 @@ class ModelLoadMixin:
             mi.model_task = getattr(mi.model, 'task', 'detect')
             mi._is_native_pytorch = (model_path.endswith('.pt') or model_path.endswith('.pth'))
 
-            # 设备解析
+            # 设备解析 (auto: cuda:0 > mps > cpu)
             if device == 'auto':
-                resolved_device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+                resolved_device = resolve_auto_device()
             else:
                 resolved_device = device
 
@@ -440,6 +448,9 @@ class ModelLoadMixin:
                 gpu_name = torch.cuda.get_device_name(gpu_idx)
                 mi.current_device_info = {'type': 'GPU', 'name': gpu_name, 'device': resolved_device}
                 print(f"[ModelLoad] [{mi.name}] success: {model_path} -> GPU: {gpu_name}")
+            elif resolved_device == 'mps':
+                mi.current_device_info = {'type': 'GPU', 'name': 'Apple MPS', 'device': 'mps'}
+                print(f"[ModelLoad] [{mi.name}] success: {model_path} -> GPU: Apple MPS")
             else:
                 mi.current_device_info = {'type': 'CPU', 'name': 'CPU', 'device': 'cpu'}
                 print(f"[ModelLoad] [{mi.name}] success: {model_path} -> CPU")
@@ -451,7 +462,7 @@ class ModelLoadMixin:
             mi._model_imgsz = self._detect_model_imgsz(mi.model, model_path, mi._is_native_pytorch)
             print(f"[ModelLoad] [{mi.name}] inference resolution imgsz={mi._model_imgsz}")
 
-            if resolved_device.startswith('cuda'):
+            if resolved_device.startswith('cuda') or resolved_device == 'mps':
                 self._warmup_model_cuda(
                     mi.model, resolved_device, mi._model_imgsz, mi.use_half, mi._is_native_pytorch,
                     log_tag=f"[{mi.name}]",
@@ -580,8 +591,9 @@ class ModelLoadMixin:
         warmup_lock = getattr(getattr(self, '_router', None), 'warmup_lock', None)
 
         def _do_warmup(_imgsz: int):
-            _half = use_half if is_native_pytorch else False
-            print(f"[ModelWarmup] {log_tag} CUDA warm-up (half={_half}, imgsz={_imgsz})...")
+            # 半精度只在 CUDA 上启用, MPS 走 FP32 (与 detect runners 的守门口径一致)
+            _half = use_half if (is_native_pytorch and device.startswith('cuda')) else False
+            print(f"[ModelWarmup] {log_tag} {device} warm-up (half={_half}, imgsz={_imgsz})...")
             model.predict(
                 np.zeros((_imgsz, _imgsz, 3), dtype=np.uint8),
                 conf=0.5, imgsz=_imgsz, verbose=False, device=device, half=_half
