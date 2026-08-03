@@ -209,6 +209,10 @@ class ScannerService:
 
     def __init__(self):
         self._connections: dict[int, ScannerConnection] = {}
+        # USB 键盘扫码枪 (usb_hid) 不建网络连接, 但配置面要与网络枪对齐:
+        # 按落库配置构造完整 ScannerConnection 当纯配置载体 (不开 socket/线程),
+        # 供 simulate_scan 注入链路与 mes_hooks 按工位配置检索使用。
+        self._usb_devices: dict[int, ScannerConnection] = {}
         self._parser = BarcodeParser()
         self._mes_hook = None
         self._project_id_getter = None
@@ -404,12 +408,14 @@ class ScannerService:
         for conn in self._connections.values():
             self._stop_connection(conn)
         self._connections.clear()
+        self._usb_devices.clear()
         logger.info("[Scanner] 所有扫码器已断开")
 
     def add_device(self, device: ScannerDevice):
         self._start_device(device)
 
     def remove_device(self, device_id: int):
+        self._usb_devices.pop(device_id, None)
         conn = self._connections.pop(device_id, None)
         if conn:
             self._stop_connection(conn)
@@ -1259,7 +1265,46 @@ class ScannerService:
         # 连接、不起监听线程, 仅作为设备表记录存在 (用途/工位/连接配置在 parse_config.usb),
         # 供前端读取。放在最前面 return, 避免走下面的 socket 连接逻辑 (它没有 IP)。
         if raw_type == 'usb_hid':
-            logger.info("[Scanner] %s 为 USB 键盘扫码枪, 后端跳过网络连接", dev.name)
+            # v3.46: USB 键盘枪按落库真实配置构造完整连接对象(不开 socket, 纯配置载体),
+            # 注入扫码时走与网络枪同一条处理链(_on_data_received: 去重/解析/自动建
+            # 工件/进 MES), mes_hooks 的按工位配置检索也一并查它 —— 与网络扫码器
+            # 行为对齐(先扫后检/无码告警/重复扫码策略/OK冷却/迟到补绑等)。
+            # 仅"绑工件"类用途参与闸门 (拉工单/报警确认按钮的枪与周期绑定无关,
+            # 即使 DB 字段被误置 true 也不拦周期)。
+            usb_cfg = (dev.parse_config or {}).get('usb') or {}
+            usage = usb_cfg.get('usage') or 'pull'
+            gate_applicable = usage in ('bind', 'both')
+            self._usb_devices[dev.id] = ScannerConnection(
+                device_id=dev.id,
+                name=dev.name,
+                ip='',
+                port=0,
+                channel_id=dev.channel_id or 0,
+                enabled=bool(dev.enabled),
+                parse_config=dev.parse_config or {},
+                dedup_interval_sec=dev.dedup_interval_sec if dev.dedup_interval_sec is not None else 2,
+                auto_create_workpiece=dev.auto_create_workpiece,
+                auto_link_order=dev.auto_link_order,
+                scan_required=bool(getattr(dev, 'scan_required', False)) and gate_applicable,
+                duplicate_scan_action=getattr(dev, 'duplicate_scan_action', 'overwrite') or 'overwrite',
+                warn_no_barcode=bool(getattr(dev, 'warn_no_barcode', False)) and gate_applicable,
+                rebind_mode=getattr(dev, 'rebind_mode', 'rescan') or 'rescan',
+                bind_timing=getattr(dev, 'bind_timing', 'mid_cycle') or 'mid_cycle',
+                broadcast_channels=list(dev.broadcast_channels or []),
+                external_only=bool(getattr(dev, 'external_only', False)),
+                pairing_group=getattr(dev, 'pairing_group', None),
+                ok_rescan_cooldown_sec=int(getattr(dev, 'ok_rescan_cooldown_sec', 0) or 0),
+                late_scan_bind_window_sec=int(getattr(dev, 'late_scan_bind_window_sec', 3) or 0),
+                scan_pair_max_wait_sec=int(getattr(dev, 'scan_pair_max_wait_sec', 0) or 0),
+                status='usb',
+                device_type='usb_hid',
+            )
+            logger.info("[Scanner] %s 为 USB 键盘扫码枪, 后端跳过网络连接 "
+                        "(先扫后检=%s 无码告警=%s 重复扫码=%s 去重=%ss)", dev.name,
+                        self._usb_devices[dev.id].scan_required,
+                        self._usb_devices[dev.id].warn_no_barcode,
+                        self._usb_devices[dev.id].duplicate_scan_action,
+                        self._usb_devices[dev.id].dedup_interval_sec)
             return
         # v2.7.8: 协议选择交还给用户。前端"扫码器编辑"表单上有"协议"下拉,
         #   - text_lon: 走 55256 LON/LOFF 文本协议(默认,省电模式)
@@ -1879,8 +1924,26 @@ class ScannerService:
 
     def simulate_scan(self, barcode: str, device_id: int = None, channel_id: int = 0,
                       external_only: bool = False, pairing_group: str = None) -> dict:
-        """调试入口：不连真实硬件，按真实扫码处理链路注入一条条码。"""
+        """调试入口：不连真实硬件，按真实扫码处理链路注入一条条码。
+
+        v3.46: USB 键盘枪的码也从这里进来(前端全局键盘捕获→本端点)。解析顺序:
+          1) 显式 device_id → 网络连接表, 再查 USB 枪登记表
+          2) 无 device_id → 按工位匹配启用的 USB 枪 (让 USB 枪吃到自己的
+             真实落库配置: 去重/解析/重复策略/自动建工件等, 与网络枪同链路)
+          3) 都没有 → 临时虚拟连接 (QA/调试兜底, 行为与历史一致)
+        """
         conn = self._connections.get(device_id) if device_id is not None else None
+        if conn is None and device_id is not None:
+            conn = self._usb_devices.get(device_id)
+        if conn is None:
+            for rec in self._usb_devices.values():
+                usage = ((rec.parse_config or {}).get('usb') or {}).get('usage') or 'pull'
+                if usage not in ('bind', 'both'):
+                    continue  # 拉工单/确认按钮用途的枪不承担绑定链路配置
+                chs = rec.broadcast_channels if rec.broadcast_channels else [rec.channel_id]
+                if rec.enabled and channel_id in chs:
+                    conn = rec
+                    break
         if conn is None:
             conn = ScannerConnection(
                 device_id=device_id or -999001,

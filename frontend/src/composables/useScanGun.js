@@ -28,6 +28,7 @@ import { dbg } from '@/utils/debug'
 
 const DEFAULT_CFG = {
   enabled: false, usage: 'pull', pullConnId: null, bindChannelId: 0, orderPattern: '^(JOB|ORD)',
+  deviceId: null,
 }
 
 // 全局键盘监听用的当前生效配置 (从设备表刷新而来, 避免每次扫码都打 HTTP)
@@ -48,6 +49,9 @@ export async function refreshScanGunConfig() {
         pullConnId: u.pull_conn_id ?? null,
         bindChannelId: usb.channel_id || 0,
         orderPattern: u.order_pattern || '^(JOB|ORD)',
+        // v3.46: 注入时带上设备号, 后端按本枪的落库配置走完整处理链
+        // (去重/重复扫码策略/自动建工件等与网络扫码器对齐)
+        deviceId: usb.id ?? null,
       }
     } else {
       cached = { ...DEFAULT_CFG }
@@ -200,7 +204,11 @@ async function doPull(cfg, code) {
 
 async function doBind(cfg, code) {
   try {
-    const resp = await simulateScannerScan({ barcode: code, channel_id: cfg.bindChannelId || 0 })
+    const resp = await simulateScannerScan({
+      barcode: code, channel_id: cfg.bindChannelId || 0,
+      // v3.46: 带上设备号 → 后端按本枪落库配置走完整处理链 (与网络扫码器对齐)
+      ...(cfg.deviceId != null ? { device_id: cfg.deviceId } : {}),
+    })
     const r = resp?.data ?? resp
     if (r && r.success !== false) {
       ElNotification.success({ title: '扫码绑定工件成功', message: `工位${(cfg.bindChannelId || 0) + 1}：${code}`, duration: 2500 })

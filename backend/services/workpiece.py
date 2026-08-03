@@ -24,6 +24,10 @@ class WorkpieceService:
                 existing.status = "queued"
             return existing
 
+        # 显式写本地时间，不能依赖 DB server_default：
+        # SQLite 的 CURRENT_TIMESTAMP 恒为 UTC，会与本文件其余 datetime.now()
+        # 写入的 first/last_inspect_at 差 8 小时（现场"登记时间对不上"反馈）
+        now = datetime.now()
         wp = Workpiece(
             serial_no=serial_no,
             project_id=project_id,
@@ -35,6 +39,9 @@ class WorkpieceService:
             scan_source=kwargs.get("scan_source", "manual"),
             scan_device_id=kwargs.get("scan_device_id"),
             extra_data=kwargs.get("extra_data"),
+            registered_at=now,
+            created_at=now,
+            updated_at=now,
         )
         db.add(wp)
         db.flush()
@@ -129,6 +136,7 @@ class WorkpieceService:
             session_id=session_id,
             inspection_seq=seq,
             channel_id=channel_id,
+            created_at=datetime.now(),  # 同 register()：绕开 SQLite UTC 默认值
         )
         db.add(insp)
         db.flush()
