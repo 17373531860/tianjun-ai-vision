@@ -47,7 +47,10 @@ def build_markdown() -> str:
         if tname:
             mod = sys.modules.get(cls.__module__)
             src = getattr(mod, "__file__", "?")
-            rel = str(Path(src).relative_to(REPO)) if src and str(src).startswith(str(REPO)) else str(src)
+            if src and str(src).startswith(str(REPO)):
+                rel = Path(src).relative_to(REPO).as_posix()
+            else:
+                rel = str(src).replace("\\", "/")
             class_by_table[tname] = (cls.__name__, rel)
 
     lines = [

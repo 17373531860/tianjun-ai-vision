@@ -1,4 +1,4 @@
-# 后端核心读码笔记
+﻿# 后端核心读码笔记
 
 > 阅读范围：2026-07-05 分段通读 `backend/main.py`、`backend/core/config.py`、`backend/api/source*.py` 全族（含 23 个 mixin + 14 个 has-a 组件）、`router_manifest.py`、`channel_manager.py`、`alarm.py`、`debug.py`、`system_display.py`、`services/weighing_engine.py`。**共 47 个文件**。
 >
@@ -15,6 +15,8 @@
 > - `source_state_init.py` / `source.py`：收尾防呆态初始化与运行时清理。
 >
 > **v3.45 补账（2026-07-29）**：上银 SY 热补丁 0a~0e 收编（滑块记账体系重做 + 待机保留周期/确认定格停推理停画面 + 数量门升级放行/少装挂起完善）+ 萍乡称重整改（清秤指令智能选择 / 过程提醒档 remind_only / 网关推送异步化）+ 海康 SDK 帧率可配 + dev-qing 逐件修复合入（9973d4c）。逐文件增量见各条目「v3.45 变更」行与 1.4/1.5 表下增量清单；行数标注已按当前代码刷新。
+>
+> **短信补账（2026-08-03）**：主程序原生短信通知——`router_manifest` 挂载 `/sms`；`main.py` 启停 12h 汇总调度；SMS 服务族见本节 `sms.py` 条目与 `05_backend_misc.md`。**不**在 `_trigger_event` 热路径发短信。
 
 ---
 
@@ -22,16 +24,16 @@
 
 ### 1.1 启动与配置层
 
-#### `backend/main.py`（1309 行，v3.45 复核）
+#### `backend/main.py`（~1330 行，短信复核）
 
 | 维度 | 内容 |
 |---|---|
 | **职责** | FastAPI 应用入口：环境引导 → DB 建表/迁移/种子 → 多通道自动恢复 → MES/扫码/集群/外设初始化 → 定时清理 → 路由挂载 → 插件/入站别名/定时导出/健康探测 → 优雅关机 API + MJPEG 端点 |
 | **核心函数** | L1-4 `OPENCV_FFMPEG_CAPTURE_OPTIONS` 必须在 cv2 前 setdefault；L77 `migrate_database()` 断言桩（禁止回流 ALTER）；L380 `_run_startup_init()` 统一启动初始化；L419 `auto_load_active_project()` 按工位配置加载项目；L565 `auto_restore_video_sources()` 恢复视频源+自动开始检测；L667 `_init_mes_services()` 注入 MES Hook 到 VSM；L848 `cleanup_on_exit()` 退出钩子；L1123 `shutdown_step()`（Electron 8 步关机 API） |
 | **线程锁** | L845 `_cleanup_lock`（防重复清理）；L504 CUDA 预热 daemon 线程；L728/794/814/837 多个 `threading.Timer` 定时任务 |
-| **上下游** | 上游：环境变量、`router_manifest.mount_all_routers`；下游：所有 VSM 通道、MES Hook、alarm_router、各 Coordinator |
+| **上下游** | 上游：环境变量、`router_manifest.mount_all_routers`；下游：所有 VSM 通道、MES Hook、alarm_router、各 Coordinator、`SmsService` |
 | **状态变量** | `_cleanup_done`、`_cleanup_timer`、`_daily_cleanup_timer`、`_extdev_cleanup_timer`、`_token_purge_timer` |
-| **v3.3x 变更** | v3.38：扫码器旁路 SN 监控守护线程——客户扫码器不接软件、只往目录写 SN txt 时后台定期扫描实时导出规则输入目录缓存当前 SN（L1093-1103 `_start_scanner_bypass_monitor()` 启动，`cleanup_on_exit` L906-912 停止，异常隔离不拖主程序）；v3.38：`shutdown_step("end_cycle")` 的"周期进行中"守门改看周期 uuid（L1165，周期 id 由落库线程异步回填、可能短暂为 None，见 `source_persist_worker.py` 条目）；v3.45：`auto_restore_video_sources` 海康 SDK 分支按工位持久化配置读目标帧率（`hcnet_fps` 键，缺省 25）传给 `start_hcnetsdk`——此前硬编码 25，重启自动恢复必跌回 25fps（配套前端 Source 页目标帧率下拉） |
+| **v3.3x 变更** | v3.38：扫码器旁路 SN 监控守护线程——客户扫码器不接软件、只往目录写 SN txt 时后台定期扫描实时导出规则输入目录缓存当前 SN（L1093-1103 `_start_scanner_bypass_monitor()` 启动，`cleanup_on_exit` L906-912 停止，异常隔离不拖主程序）；v3.38：`shutdown_step("end_cycle")` 的"周期进行中"守门改看周期 uuid（L1165，周期 id 由落库线程异步回填、可能短暂为 None，见 `source_persist_worker.py` 条目）；v3.45：`auto_restore_video_sources` 海康 SDK 分支按工位持久化配置读目标帧率（`hcnet_fps` 键，缺省 25）传给 `start_hcnetsdk`——此前硬编码 25，重启自动恢复必跌回 25fps（配套前端 Source 页目标帧率下拉）；**短信**：`_start_sms_summary_scheduler()` 启动 12h 汇总线程；`_shutdown_sms_notifications()` 在 cleanup / Electron 关机路径调用 `SmsService.shutdown`（异常隔离） |
 | **注释坑** | L629-633 开机自动恢复检测**不再看** was_detecting，只要源在跑+模型就绪就自动开始；L397-399 插件加载必须在 app 创建**之后** |
 
 #### `backend/core/config.py`（201 行）
@@ -44,7 +46,7 @@
 | **上下游** | 被 main.py、database、所有需要 DATA_DIR 的模块引用 |
 | **注释坑** | L56-59 历史文档误称 ml_models；L154 `_migrate_old_data()` import 即跑，测试需设 `TIANJUN_DATA_DIR` 隔离 |
 
-#### `backend/api/router_manifest.py`（110 行）
+#### `backend/api/router_manifest.py`（~112 行）
 
 | 维度 | 内容 |
 |---|---|
@@ -53,6 +55,18 @@
 | **线程锁** | 无 |
 | **上下游** | 仅被 main.py L1011 调用；import 放函数体内防 cv2 提前加载 |
 | **注释坑** | L49-50 showcase_stats 与 sessions 共用 `/data` 前缀，**必须先注册 showcase_stats**；L73 Detection router 已删，走 source_routes |
+| **短信变更** | CRUD 段 `import sms` 并 `include_router(..., prefix=f"{v1}/sms", tags=["sms"])` |
+
+#### `backend/api/sms.py`（~136 行，新增）
+
+| 维度 | 内容 |
+|---|---|
+| **职责** | 短信配置/串口列表/测试发送 API；进程级 `SmsService` 单例与配置热替换 |
+| **端点** | `GET/PUT /config`、`GET /ports`、`POST /test`（保存需 `alarm.edit`） |
+| **核心函数** | `get_sms_service()`、`_replace_sms_service()`（shutdown 旧实例后按需重启汇总线程） |
+| **线程锁** | `_runtime_lock`（RLock） |
+| **上下游** | → `SmsConfigStore` / `SmsService`；被 main 启停钩子调用 |
+| **注释坑** | 坏配置回退默认关闭；测试发送不在检测热路径；诊断见 `debug-sms` skill |
 
 ---
 
@@ -205,6 +219,7 @@
   - v3.38：NG 补做挂起守门改看 `current_cycle_uuid`。
   - v3.43.1：四处进入人工确认定格的地方（`_trigger_event` 主路 / 外部事件 / NG 补做挂起 / 周期性动作）都把触发原因写进 `_pending_ack_reason`（弹窗原因不再依赖 30s 事件窗），解除定格三处配套清空。
   - **v3.45**：`fire_external_event_response` 加 `remind_only` 形参（L432）——"过程提醒"档只借灯/蜂鸣/Toast/语音，**跳过计数器联动与 require_ack 定格**（提醒不能把线停了；称重投料中缺料/超量周期性催料的接入点，见 weighing_engine 条目）；`_ack_release_keep_cycle` 消费 `_ack_clear_runtime_after` 单次标记（L570）——已结算落账的 NG 定格确认释放时**即使配了保留周期也强制清运行时**（陈账不清会毒化下一箱）。
+  - **短信**：明确短信**不**挂 `_trigger_event` 热路径（注释锚点）；12h 汇总只读已落库结算周期，见 `debug-sms` / `sms_service.py`。
 - `source_settlement_mixin.py`
   - v3.34（违序只报提前出现）：严格+单次守门只对"该步骤本周期还没做过"的提前出现报违序；已完成步骤的余像重现（补拧/笔迹残留/摆位调整是现场常态）维持静默拦截不入周期、不再报警（L1233-1240）。
   - v3.34：帧位起点两处取用点改走 `_step_raw_start_frame_pos`（与 step_stats 的口径修复配套）。

@@ -18,7 +18,6 @@ v3.13 M1.2c: 重排尾部顺序让 event_fire hook 的 suppress_alarm 来得及�
 from __future__ import annotations
 
 import time
-import traceback
 from typing import Any
 
 
@@ -121,7 +120,7 @@ class EventTriggerMixin:
                     if eid == num_id:
                         event = e
                         break
-                except:
+                except (ValueError, IndexError):
                     pass
         
         if not event:
@@ -425,6 +424,7 @@ class EventTriggerMixin:
         # M1.2c 不变: anchor 仍在 alarm + router 之后, 维持 v3.10.1 契约.
         self._last_event_time = time.time()
 
+        # 短信不在单次事件热路径触发；12 小时汇总只读已落库的结算周期。
         return True
 
     def fire_external_event_response(self, event_id, reason: str,

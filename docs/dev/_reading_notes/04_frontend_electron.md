@@ -1,4 +1,4 @@
-# 04 · 前端 + Electron 读码笔记
+﻿# 04 · 前端 + Electron 读码笔记
 
 > 覆盖范围：`frontend/src/` 全部约 100 文件（含 `Monitor/index.vue` 6245 行分段通读）、`electron/` 核心壳文件（`main.js` / `backend-manager.js` / `license-manager.js` / `preload.js`；vendor/splash 第三方资源仅记用途）。
 > 行号锚点均来自当前仓库快照，后续改动以代码为准。
@@ -109,6 +109,7 @@
 | `wmax.js` | 84 | `/scanner/wmax/*` 35+ 端点 |
 | `external_device.js` | 15 | `/external-devices/*` |
 | `weighing.js` | 15 | `/weighing/*`；v3.45 加 `getWeighingOperators`（行 15，`GET /weighing/operators` 作业员候选名单，配 operator_from_users 下拉） |
+| `sms.js` | 8 | ★ `/sms/config|ports|test`（Alarm 页 NG 短信推送） |
 | `cluster.js` | 23 | `/cluster/*` |
 | `channel_group.js` | 10 | `/channel-groups/*` |
 | `workpiece_flow.js` | 13 | `/workpiece-flows/*` |
@@ -150,7 +151,7 @@
 | `MES/index.vue` | 92 | Tab 容器：工单/工件/缺陷/扫码/网关/集群/WMax/外设/入站/拉单 |
 | `MES/*Panel.vue` | 268–1512 | 各 MES 子面板（最大 GatewayPanel 1512 行；v3.45 复核） |
 | `Model/index.vue` | 356 | 模型上传/转换/激活 |
-| `Alarm/index.vue` | 939 | 报警设备与事件绑定 |
+| `Alarm/index.vue` | ~1482 | 报警设备与事件绑定；**短信** 增加「NG 短信推送」卡（`sms.js`：总开关 / AT·HTTP 二选一 / 收件人 / 测试发送；与灯塔串口隔离） |
 | `Login/index.vue` | 156 | 登录表单 |
 | `Activation/index.vue` | 140 | License 激活 |
 
