@@ -15,6 +15,7 @@ from pathlib import Path
 SUMMARY_WINDOW_SECONDS = 12 * 60 * 60
 SMS_SUMMARY_STATE_FILENAME = "sms_summary_state.json"
 ALLOWED_SUMMARY_SCHEDULE_MODES = frozenset({"rolling_12h", "daily_shift"})
+ALLOWED_SUMMARY_COUNT_SOURCES = frozenset({"panel", "window"})
 
 
 def shift_window_end(
@@ -114,6 +115,15 @@ class SmsSummaryCounts:
 
 
 @dataclass(frozen=True)
+class SmsChannelSnapshot:
+    """单工位面板口径快照（当前最新会话已结算 OK/NG + 文案时间范围）。"""
+
+    counts: SmsSummaryCounts
+    range_start: datetime
+    range_end: datetime
+
+
+@dataclass(frozen=True)
 class SmsSummaryState:
     """当前滚动窗口及部分入队进度。"""
 
@@ -180,6 +190,81 @@ def load_completed_cycle_counts(
         elif is_good is False:
             counts[channel_id] = replace(current, ng_count=current.ng_count + amount)
     return counts
+
+
+def load_panel_session_snapshots(
+    as_of: datetime | None = None,
+) -> dict[int, SmsChannelSnapshot]:
+    """按工位读取「监控面板」同源计数：每通道最新检测会话的已结算 OK/NG。
+
+    与福建金龙插件 live-stats 口径一致：以 ``is_good`` 为准（含插件改写后的 NG），
+    只统计 ``end_time`` 非空周期；时间范围取该会话 ``start_time`` ～ ``as_of``。
+
+    Context: 仅由短信汇总线程或测试调用；短暂只读 DB，不进检测热路径。
+    """
+
+    from sqlalchemy import func
+
+    from backend.db.database import SessionLocal
+    from backend.models.models import DetectionCycle, DetectionSession
+
+    end = _normalize_datetime(as_of or datetime.now())
+    db = SessionLocal()
+    try:
+        # 每通道最新会话
+        latest_rows = (
+            db.query(
+                DetectionSession.channel_id,
+                func.max(DetectionSession.start_time),
+            )
+            .group_by(DetectionSession.channel_id)
+            .all()
+        )
+        latest_by_ch: dict[int, DetectionSession] = {}
+        for raw_channel, start_time in latest_rows:
+            if start_time is None:
+                continue
+            channel_id = int(raw_channel or 0)
+            session = (
+                db.query(DetectionSession)
+                .filter(
+                    DetectionSession.channel_id == channel_id,
+                    DetectionSession.start_time == start_time,
+                )
+                .order_by(DetectionSession.id.desc())
+                .first()
+            )
+            if session is not None:
+                latest_by_ch[channel_id] = session
+
+        snapshots: dict[int, SmsChannelSnapshot] = {}
+        for channel_id, session in latest_by_ch.items():
+            rows = (
+                db.query(DetectionCycle.is_good, func.count(DetectionCycle.id))
+                .filter(
+                    DetectionCycle.session_id == session.id,
+                    DetectionCycle.end_time.isnot(None),
+                )
+                .group_by(DetectionCycle.is_good)
+                .all()
+            )
+            ok_count = 0
+            ng_count = 0
+            for is_good, raw_count in rows:
+                amount = int(raw_count or 0)
+                if is_good is True:
+                    ok_count += amount
+                elif is_good is False:
+                    ng_count += amount
+            range_start = _normalize_datetime(session.start_time or end)
+            snapshots[channel_id] = SmsChannelSnapshot(
+                counts=SmsSummaryCounts(ok_count=ok_count, ng_count=ng_count),
+                range_start=range_start,
+                range_end=end,
+            )
+        return snapshots
+    finally:
+        db.close()
 
 
 class SmsSummaryStateStore:
@@ -284,11 +369,15 @@ def _normalize_datetime(value: datetime) -> datetime:
 
 
 __all__ = [
+    "ALLOWED_SUMMARY_COUNT_SOURCES",
+    "ALLOWED_SUMMARY_SCHEDULE_MODES",
     "SMS_SUMMARY_STATE_FILENAME",
     "SUMMARY_WINDOW_SECONDS",
+    "SmsChannelSnapshot",
     "SmsSummaryCounts",
     "SmsSummaryState",
     "SmsSummaryStateStore",
     "load_completed_cycle_counts",
+    "load_panel_session_snapshots",
     "summary_window_id",
 ]

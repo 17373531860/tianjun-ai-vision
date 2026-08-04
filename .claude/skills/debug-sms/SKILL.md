@@ -35,7 +35,8 @@ argument-hint: "[问题描述]"
 3. **AT COM 必须独立**——禁止与灯塔/蜂鸣器共用同一串口。
 4. **Provider 三选一**：`at_modem` | `generic_http` | `wxpusher`。
 5. **汇总调度二选一**：`summary_schedule_mode=rolling_12h`（默认：后端**冷启动**以启动时刻重新锚定，配置热替换不重锚）或 `daily_shift`（`shift_start_hour`/`shift_end_hour`，`send_night_window` 默认 false）。
-6. 启停接线在 `backend/main.py`：`_start_sms_summary_scheduler(reset_rolling_anchor=True)` / `_shutdown_sms_notifications()`。
+6. **汇总数字口径二选一**：`summary_count_source=panel`（默认，监控面板当前会话 OK/NG，与金龙 live-stats 同源）或 `window`（调度时间窗落库合计）。
+7. 启停接线在 `backend/main.py`：`_start_sms_summary_scheduler(reset_rolling_anchor=True)` / `_shutdown_sms_notifications()`。
 
 ---
 

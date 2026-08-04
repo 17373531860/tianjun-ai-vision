@@ -23,6 +23,7 @@ def _shift_config(**overrides: object) -> SmsServiceConfig:
         "port": "COM_TEST",
         "recipients": ("13800138000",),
         "summary_schedule_mode": "daily_shift",
+        "summary_count_source": "window",
         "shift_start_hour": 8,
         "shift_end_hour": 20,
         "send_night_window": False,

@@ -150,6 +150,10 @@ class SmsConfigPayload(BaseModel):
         False,
         description="班次模式下是否额外发送晚班窗（结束小时～次日开始小时）",
     )
+    summary_count_source: Literal["panel", "window"] = Field(
+        "panel",
+        description="panel=监控面板当前会话OK/NG（默认）；window=调度时间窗落库合计",
+    )
 
     # 一期兼容字段：A′期间旧 Alarm 页仍按这些字段 GET/PUT。
     port: str = Field("", max_length=128)
@@ -229,6 +233,7 @@ class SmsConfigPayload(BaseModel):
             "shift_start_hour": self.shift_start_hour,
             "shift_end_hour": self.shift_end_hour,
             "send_night_window": self.send_night_window,
+            "summary_count_source": self.summary_count_source,
         }
 
     def to_service_config(self) -> SmsServiceConfig:
@@ -283,6 +288,7 @@ class SmsConfigPayload(BaseModel):
             shift_start_hour=config.shift_start_hour,
             shift_end_hour=config.shift_end_hour,
             send_night_window=config.send_night_window,
+            summary_count_source=config.summary_count_source,
             port=config.port,
             baudrate=config.baudrate,
             recipients=list(config.recipients),
