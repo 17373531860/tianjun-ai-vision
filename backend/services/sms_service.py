@@ -26,13 +26,21 @@ from backend.services.sms_offline_queue import SmsOfflineQueue
 from backend.services.sms_providers.at_modem_provider import AtModemProvider
 from backend.services.sms_providers.base_provider import RecipientResult, SmsBatchResult
 from backend.services.sms_providers.generic_http_provider import GenericHttpProvider
+from backend.services.sms_providers.wxpusher_provider import (
+    WxpusherProvider,
+    wxpusher_target_labels,
+)
 from backend.services.sms_summary import (
     SMS_SUMMARY_STATE_FILENAME,
     SUMMARY_WINDOW_SECONDS,
     SmsSummaryCounts,
     SmsSummaryState,
     SmsSummaryStateStore,
+    is_aligned_shift_start,
     load_completed_cycle_counts,
+    next_shift_window_start,
+    open_daily_shift_window_start,
+    shift_window_end,
     summary_window_id,
 )
 from backend.services.sms_utils import (
@@ -75,10 +83,10 @@ def validate_alarm_template(template: str) -> None:
 
 @dataclass(frozen=True)
 class SmsServiceConfig:
-    """双通道不可变运行时配置；保留 AT 平铺字段兼容一期调用方。"""
+    """多通道不可变运行时配置；保留 AT 平铺字段兼容一期调用方。"""
 
     enabled: bool = False
-    provider: Literal["at_modem", "generic_http"] = "at_modem"
+    provider: Literal["at_modem", "generic_http", "wxpusher"] = "at_modem"
 
     # at_modem（一期兼容字段）
     port: str = ""
@@ -99,7 +107,19 @@ class SmsServiceConfig:
     verify_ssl: bool = True
     field_mapping: Mapping[str, str] = field(default_factory=dict)
 
-    # 两通道共用
+    # wxpusher（第三通道；字段独立，不复用云短信 token/url）
+    wxpusher_app_token: str = ""
+    wxpusher_uids: tuple[str, ...] = ()
+    wxpusher_topic_ids: tuple[int, ...] = ()
+    wxpusher_content_type: int = 1
+    wxpusher_summary_template: str = (
+        "【天军AI视觉】{time_range} OK={ok_count} NG={ng_count}"
+    )
+    wxpusher_api_url: str = "https://wxpusher.zjiecode.com/api/send/message"
+    wxpusher_timeout_seconds: float = 10.0
+    wxpusher_verify_ssl: bool = True
+
+    # 各通道共用
     retries: int = 3
     retry_delay_seconds: float = 2.0
     retry_backoff_seconds: tuple[float, ...] = (1.0, 3.0, 5.0)
@@ -109,6 +129,12 @@ class SmsServiceConfig:
     queue_size: int = 100
     offline_queue_max: int = 200
     offline_ttl_seconds: float = 86_400.0
+
+    # 汇总调度：默认滚动 12 小时；可选班次（如早八～晚八每天一条）
+    summary_schedule_mode: Literal["rolling_12h", "daily_shift"] = "rolling_12h"
+    shift_start_hour: int = 8
+    shift_end_hour: int = 20
+    send_night_window: bool = False
 
     def validated_recipients(
         self, override: Sequence[str] | str | None = None
@@ -169,7 +195,7 @@ class _AlarmJob:
 
 
 class SmsService:
-    """同一门面下按 ``provider`` 选择 AT 或 generic_http。"""
+    """同一门面下按 ``provider`` 选择 AT / generic_http / wxpusher。"""
 
     def __init__(
         self,
@@ -201,7 +227,9 @@ class SmsService:
             else (Path(DATA_DIR) / SMS_OFFLINE_QUEUE_FILENAME)
         )
         self._offline_queue: SmsOfflineQueue | None = None
-        self._provider: AtModemProvider | GenericHttpProvider | None = None
+        self._provider: AtModemProvider | GenericHttpProvider | WxpusherProvider | None = (
+            None
+        )
         self._provider_job_context: _AlarmJob | None = None
         self._queue: queue.Queue[_AlarmJob] = queue.Queue(
             maxsize=max(1, config.queue_size)
@@ -224,8 +252,8 @@ class SmsService:
         # 或主动调用汇总/测试快照时建立窗口，避免“仅导入”被误算为后端启动。
         self._summary_state: SmsSummaryState | None = None
 
-        # 默认关闭不建库、不起线程。只有已启用 HTTP 且有历史欠账时才自动补发。
-        if self.config.enabled and self.config.provider == "generic_http":
+        # 默认关闭不建库、不起线程。只有已启用 HTTP 类通道且有历史欠账时才自动补发。
+        if self.config.enabled and self._supports_offline_queue():
             offline = self._get_offline_queue()
             if offline.count() > 0:
                 with self._state_lock:
@@ -243,14 +271,16 @@ class SmsService:
             modem.client.close()
 
     def send_test_sms(
-        self, recipients: Sequence[str] | str, message: str
+        self, recipients: Sequence[str] | str | None, message: str
     ) -> SmsBatchResult:
         """同步发送测试短信，保留给离线工具/后端测试；API 使用后台队列。"""
 
-        normalized = self.config.validated_recipients(recipients)
         self._validate_provider_configuration()
+        normalized = self._resolve_delivery_targets(recipients)
         if self.config.provider == "at_modem":
             validate_message(message, choose_encoding(message, self.config.encoding))
+        elif len(message) > 10_000:
+            raise ValueError("推送内容过长")
         job = _AlarmJob(
             job_id=f"sms-test-{int(time.time())}",
             dedup_key="test",
@@ -362,15 +392,25 @@ class SmsService:
             bypass_cooldown=True,
         )
 
-    def start_summary_scheduler(self) -> None:
+    def start_summary_scheduler(self, *, reset_rolling_anchor: bool = False) -> None:
         """幂等启动滚动汇总线程；由主程序 API 生命周期显式调用。
+
+        ``reset_rolling_anchor=True`` 仅用于**后端进程冷启动**：滚动 12h 模式
+        把水位锚到本次服务启动时刻，与界面文案一致。配置热替换必须保持默认
+        ``False``，以免改通道/模板时把正在滚的窗掐断重开。
 
         Context: 在后端初始化或配置热替换线程调用；先加载/创建小型水位 JSON，
                  再启动 daemon thread；此方法本身不查询周期库、不发送短信。
         """
 
         with self._summary_lock:
-            self._ensure_summary_state_locked()
+            if (
+                reset_rolling_anchor
+                and self.config.summary_schedule_mode == "rolling_12h"
+            ):
+                self._reset_rolling_anchor_locked()
+            else:
+                self._ensure_summary_state_locked()
         with self._state_lock:
             if not self._accepting:
                 return
@@ -382,6 +422,18 @@ class SmsService:
                 daemon=True,
             )
             self._summary_thread.start()
+
+    def _reset_rolling_anchor_locked(self) -> None:
+        """滚动 12h：丢弃跨进程遗留水位，以当前墙钟为新窗起点。"""
+
+        now = self._normalize_datetime(self._wall_clock())
+        state = SmsSummaryState(window_start=now)
+        self._summary_store.save(state)
+        self._summary_state = state
+        self._logger(
+            "滚动12小时汇总已锚定到服务启动时刻 "
+            f"{now.isoformat(timespec='seconds')}"
+        )
 
     @property
     def summary_scheduler_running(self) -> bool:
@@ -399,41 +451,126 @@ class SmsService:
 
         current = self._normalize_datetime(now or self._wall_clock())
         with self._summary_lock:
-            state = self._ensure_summary_state_locked()
-            elapsed = (current - state.window_start).total_seconds()
-            due_count = int(elapsed // SUMMARY_WINDOW_SECONDS)
-            if due_count <= 0:
-                return 0
+            self._ensure_summary_state_locked()
+            self._maybe_realign_daily_shift_state_locked(current)
+            if self.config.summary_schedule_mode == "daily_shift":
+                return self._run_due_daily_shift_summaries_locked(current)
+            return self._run_due_rolling_summaries_locked(current)
 
-            if not self.config.enabled:
-                # 关闭期间不查周期、不发送，也不在重新开启后追发历史窗口。
-                new_start = state.window_start + timedelta(
-                    seconds=due_count * SUMMARY_WINDOW_SECONDS
+    def _run_due_rolling_summaries_locked(self, current: datetime) -> int:
+        state = self._ensure_summary_state_locked()
+        elapsed = (current - state.window_start).total_seconds()
+        due_count = int(elapsed // SUMMARY_WINDOW_SECONDS)
+        if due_count <= 0:
+            return 0
+
+        if not self.config.enabled:
+            # 关闭期间不查周期、不发送，也不在重新开启后追发历史窗口。
+            new_start = state.window_start + timedelta(
+                seconds=due_count * SUMMARY_WINDOW_SECONDS
+            )
+            last_start = new_start - timedelta(seconds=SUMMARY_WINDOW_SECONDS)
+            skipped_id = summary_window_id(last_start, new_start)
+            advanced = SmsSummaryState(
+                window_start=new_start,
+                last_finalized_window_id=skipped_id,
+            )
+            self._summary_store.save(advanced)
+            self._summary_state = advanced
+            self._logger(f"短信汇总已关闭，跳过并推进 {due_count} 个窗口")
+            return due_count
+
+        advanced_count = 0
+        # 防止长期停机后单次占满调度线程；余下窗口下一轮继续处理。
+        for _index in range(min(due_count, 100)):
+            state = self._ensure_summary_state_locked()
+            window_end = state.window_start + timedelta(
+                seconds=SUMMARY_WINDOW_SECONDS
+            )
+            if current < window_end:
+                break
+            if not self._process_summary_window(state.window_start, window_end):
+                break
+            advanced_count += 1
+        return advanced_count
+
+    def _run_due_daily_shift_summaries_locked(self, current: datetime) -> int:
+        advanced_count = 0
+        for _index in range(100):
+            state = self._ensure_summary_state_locked()
+            try:
+                window_end = shift_window_end(
+                    state.window_start,
+                    start_hour=self.config.shift_start_hour,
+                    end_hour=self.config.shift_end_hour,
                 )
-                last_start = new_start - timedelta(seconds=SUMMARY_WINDOW_SECONDS)
-                skipped_id = summary_window_id(last_start, new_start)
+            except ValueError:
+                self._maybe_realign_daily_shift_state_locked(current, force=True)
+                continue
+            if current < window_end:
+                break
+            next_start = next_shift_window_start(
+                window_end,
+                start_hour=self.config.shift_start_hour,
+                end_hour=self.config.shift_end_hour,
+                send_night_window=self.config.send_night_window,
+            )
+            if not self.config.enabled:
+                skipped_id = summary_window_id(state.window_start, window_end)
                 advanced = SmsSummaryState(
-                    window_start=new_start,
+                    window_start=next_start,
                     last_finalized_window_id=skipped_id,
                 )
                 self._summary_store.save(advanced)
                 self._summary_state = advanced
-                self._logger(f"短信汇总已关闭，跳过并推进 {due_count} 个窗口")
-                return due_count
-
-            advanced_count = 0
-            # 防止长期停机后单次占满调度线程；余下窗口下一轮继续处理。
-            for _index in range(min(due_count, 100)):
-                state = self._ensure_summary_state_locked()
-                window_end = state.window_start + timedelta(
-                    seconds=SUMMARY_WINDOW_SECONDS
-                )
-                if current < window_end:
-                    break
-                if not self._process_summary_window(state.window_start, window_end):
-                    break
+                self._logger("短信汇总已关闭，跳过并推进 1 个班次窗口")
                 advanced_count += 1
-            return advanced_count
+                continue
+            if not self._process_summary_window(
+                state.window_start,
+                window_end,
+                next_window_start=next_start,
+            ):
+                break
+            advanced_count += 1
+        return advanced_count
+
+    def _maybe_realign_daily_shift_state_locked(
+        self, now: datetime, *, force: bool = False
+    ) -> None:
+        if self.config.summary_schedule_mode != "daily_shift":
+            return
+        state = self._ensure_summary_state_locked()
+        aligned = is_aligned_shift_start(
+            state.window_start,
+            start_hour=self.config.shift_start_hour,
+            end_hour=self.config.shift_end_hour,
+        )
+        night_parked = (
+            not self.config.send_night_window
+            and state.window_start.hour == self.config.shift_end_hour
+        )
+        if aligned and not force and not night_parked:
+            return
+        snapped = open_daily_shift_window_start(
+            now,
+            start_hour=self.config.shift_start_hour,
+            end_hour=self.config.shift_end_hour,
+            send_night_window=self.config.send_night_window,
+        )
+        if snapped == state.window_start:
+            return
+        realigned = SmsSummaryState(
+            window_start=snapped,
+            last_finalized_window_id=state.last_finalized_window_id,
+            queued_window_id="",
+            queued_channels=(),
+        )
+        self._summary_store.save(realigned)
+        self._summary_state = realigned
+        self._logger(
+            f"班次汇总水位已对齐到 {snapped.isoformat(timespec='seconds')}"
+        )
 
     def shutdown(self, timeout: float = 5.0) -> None:
         """停止汇总调度与新任务接收，有限等待当前发送。
@@ -475,9 +612,23 @@ class SmsService:
                 self._logger(f"短信汇总调度异常（已隔离）：{type(exc).__name__}")
             with self._summary_lock:
                 state = self._ensure_summary_state_locked()
-                next_end = state.window_start + timedelta(
-                    seconds=SUMMARY_WINDOW_SECONDS
+                self._maybe_realign_daily_shift_state_locked(
+                    self._normalize_datetime(self._wall_clock())
                 )
+                state = self._ensure_summary_state_locked()
+                if self.config.summary_schedule_mode == "daily_shift":
+                    try:
+                        next_end = shift_window_end(
+                            state.window_start,
+                            start_hour=self.config.shift_start_hour,
+                            end_hour=self.config.shift_end_hour,
+                        )
+                    except ValueError:
+                        next_end = state.window_start + timedelta(hours=1)
+                else:
+                    next_end = state.window_start + timedelta(
+                        seconds=SUMMARY_WINDOW_SECONDS
+                    )
             seconds_to_due = max(
                 0.1,
                 (
@@ -490,6 +641,8 @@ class SmsService:
         self,
         window_start: datetime,
         window_end: datetime,
+        *,
+        next_window_start: datetime | None = None,
     ) -> bool:
         """读取、逐工位入队并落盘一个闭合窗口的进度。
 
@@ -542,7 +695,7 @@ class SmsService:
             state = partial
 
         finalized = SmsSummaryState(
-            window_start=window_end,
+            window_start=next_window_start or window_end,
             last_finalized_window_id=window_id,
         )
         self._summary_store.save(finalized)
@@ -558,12 +711,17 @@ class SmsService:
     def _current_window_snapshot(self) -> tuple[str, dict[str, object]]:
         now = self._normalize_datetime(self._wall_clock())
         with self._summary_lock:
+            self._ensure_summary_state_locked()
+            self._maybe_realign_daily_shift_state_locked(now)
             base_start = self._ensure_summary_state_locked().window_start
-        elapsed = max(0.0, (now - base_start).total_seconds())
-        elapsed_windows = int(elapsed // SUMMARY_WINDOW_SECONDS)
-        window_start = base_start + timedelta(
-            seconds=elapsed_windows * SUMMARY_WINDOW_SECONDS
-        )
+        if self.config.summary_schedule_mode == "daily_shift":
+            window_start = base_start
+        else:
+            elapsed = max(0.0, (now - base_start).total_seconds())
+            elapsed_windows = int(elapsed // SUMMARY_WINDOW_SECONDS)
+            window_start = base_start + timedelta(
+                seconds=elapsed_windows * SUMMARY_WINDOW_SECONDS
+            )
         counts_by_channel = self._summary_reader(window_start, now)
         non_empty = sorted(
             (
@@ -646,7 +804,7 @@ class SmsService:
                     400,
                 )
             self._validate_provider_configuration()
-            normalized = self.config.validated_recipients(recipients)
+            normalized = self._resolve_delivery_targets(recipients)
             rendered = self._render_alarm_message(
                 event_id=event_id,
                 event_name=event_name,
@@ -658,7 +816,7 @@ class SmsService:
                     rendered, choose_encoding(rendered, self.config.encoding)
                 )
             elif len(rendered) > 10_000:
-                raise ValueError("云短信内容过长")
+                raise ValueError("推送内容过长")
             safe_context = dict(context or {})
             dedup_key = self._dedup_key(event_name, message, safe_context)
 
@@ -732,21 +890,47 @@ class SmsService:
                 400,
             )
 
+    def _supports_offline_queue(self) -> bool:
+        return self.config.provider in {"generic_http", "wxpusher"}
+
+    def _resolve_delivery_targets(
+        self, recipients: Sequence[str] | str | None
+    ) -> tuple[str, ...]:
+        """按通道解析投递目标：短信用手机号，WxPusher 用 UID/Topic 标签。"""
+
+        if self.config.provider == "wxpusher":
+            labels = wxpusher_target_labels(
+                self.config.wxpusher_uids, self.config.wxpusher_topic_ids
+            )
+            if not labels:
+                raise ValueError("未配置 WxPusher UID 或 TopicId")
+            return labels
+        return self.config.validated_recipients(recipients)
+
     def _validate_provider_configuration(self) -> None:
         if self.config.provider == "at_modem":
             if not self.config.port.strip():
                 raise ValueError("未配置短信模块 COM 口")
             return
-        if self.config.provider != "generic_http":
-            raise ValueError(f"不支持的短信 Provider：{self.config.provider}")
-        if not self.config.api_url.strip():
-            raise ValueError("未配置云短信 API URL")
-        has_token = bool(self.config.token.strip())
-        has_key_pair = bool(
-            self.config.access_key.strip() and self.config.access_secret.strip()
-        )
-        if not (has_token or has_key_pair):
-            raise ValueError("云短信必须配置 token 或 access_key/access_secret")
+        if self.config.provider == "generic_http":
+            if not self.config.api_url.strip():
+                raise ValueError("未配置云短信 API URL")
+            has_token = bool(self.config.token.strip())
+            has_key_pair = bool(
+                self.config.access_key.strip() and self.config.access_secret.strip()
+            )
+            if not (has_token or has_key_pair):
+                raise ValueError("云短信必须配置 token 或 access_key/access_secret")
+            return
+        if self.config.provider == "wxpusher":
+            if not self.config.wxpusher_app_token.strip():
+                raise ValueError("未配置 WxPusher appToken")
+            if not self.config.wxpusher_uids and not self.config.wxpusher_topic_ids:
+                raise ValueError("未配置 WxPusher UID 或 TopicId")
+            if not self.config.wxpusher_api_url.strip():
+                raise ValueError("未配置 WxPusher API URL")
+            return
+        raise ValueError(f"不支持的短信 Provider：{self.config.provider}")
 
     def _new_modem(self) -> SmsModem:
         return SmsModem.from_config(
@@ -755,19 +939,30 @@ class SmsService:
             serial_factory=self._serial_factory,
         )
 
-    def _get_provider(self) -> AtModemProvider | GenericHttpProvider:
+    def _get_provider(
+        self,
+    ) -> AtModemProvider | GenericHttpProvider | WxpusherProvider:
         with self._state_lock:
             if self._provider is not None:
                 return self._provider
             if self.config.provider == "at_modem":
-                provider: AtModemProvider | GenericHttpProvider = AtModemProvider(
-                    self.config,
-                    modem_factory=self._new_modem,
-                    logger=self._logger,
-                    stop_event=self._stop_event,
+                provider: AtModemProvider | GenericHttpProvider | WxpusherProvider = (
+                    AtModemProvider(
+                        self.config,
+                        modem_factory=self._new_modem,
+                        logger=self._logger,
+                        stop_event=self._stop_event,
+                    )
                 )
             elif self.config.provider == "generic_http":
                 provider = GenericHttpProvider(
+                    self.config,
+                    request_func=self._http_request,
+                    logger=self._logger,
+                    stop_event=self._stop_event,
+                )
+            elif self.config.provider == "wxpusher":
+                provider = WxpusherProvider(
                     self.config,
                     request_func=self._http_request,
                     logger=self._logger,
@@ -812,7 +1007,7 @@ class SmsService:
             try:
                 self._provider_job_context = job
                 result = self._send_batch(job.recipients, job.message)
-                if self.config.provider == "generic_http" and result.retryable_failure:
+                if self._supports_offline_queue() and result.retryable_failure:
                     result = self._persist_offline(job, result)
                 self._logger(
                     f"告警短信 {job.job_id} 完成：{result.succeeded}/"
@@ -857,7 +1052,7 @@ class SmsService:
         return replace(result, offline_queued=True)
 
     def _process_one_offline_job(self) -> None:
-        if self.config.provider != "generic_http" or not self.config.enabled:
+        if not self._supports_offline_queue() or not self.config.enabled:
             return
         offline = self._offline_queue
         if offline is None:

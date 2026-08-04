@@ -8,12 +8,97 @@ import tempfile
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
 SUMMARY_WINDOW_SECONDS = 12 * 60 * 60
 SMS_SUMMARY_STATE_FILENAME = "sms_summary_state.json"
+ALLOWED_SUMMARY_SCHEDULE_MODES = frozenset({"rolling_12h", "daily_shift"})
+
+
+def shift_window_end(
+    window_start: datetime,
+    *,
+    start_hour: int,
+    end_hour: int,
+) -> datetime:
+    """由对齐后的窗起点计算窗终点（左闭右开）。"""
+
+    start = _normalize_datetime(window_start).replace(
+        minute=0, second=0, microsecond=0
+    )
+    if start.hour == start_hour:
+        return start.replace(hour=end_hour)
+    if start.hour == end_hour:
+        nxt = start + timedelta(days=1)
+        return nxt.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    raise ValueError(
+        f"班次窗起点未对齐到 {start_hour}:00 或 {end_hour}:00：{start.isoformat()}"
+    )
+
+
+def next_shift_window_start(
+    window_end: datetime,
+    *,
+    start_hour: int,
+    end_hour: int,
+    send_night_window: bool,
+) -> datetime:
+    """闭合一个班次窗后的下一窗起点。"""
+
+    end = _normalize_datetime(window_end).replace(minute=0, second=0, microsecond=0)
+    if end.hour == end_hour:
+        if send_night_window:
+            return end
+        nxt = end + timedelta(days=1)
+        return nxt.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    if end.hour == start_hour:
+        return end
+    raise ValueError(f"班次窗终点未对齐：{end.isoformat()}")
+
+
+def open_daily_shift_window_start(
+    now: datetime,
+    *,
+    start_hour: int,
+    end_hour: int,
+    send_night_window: bool,
+) -> datetime:
+    """推断当前应处理/等待的班次窗起点（用于模式切换对齐）。
+
+    晚于班次结束时仍返回「当天白班起点」，便于 ``run_due`` 补发刚到期的白班窗。
+    """
+
+    current = _normalize_datetime(now)
+    today_start = current.replace(
+        hour=start_hour, minute=0, second=0, microsecond=0
+    )
+    today_end = current.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+    if not send_night_window:
+        if current < today_start:
+            return today_start - timedelta(days=1)
+        return today_start
+    if current < today_start:
+        return (today_start - timedelta(days=1)).replace(hour=end_hour)
+    if current < today_end:
+        return today_start
+    tomorrow_start = today_start + timedelta(days=1)
+    if current < tomorrow_start:
+        return today_end
+    return tomorrow_start
+
+
+def is_aligned_shift_start(
+    value: datetime, *, start_hour: int, end_hour: int
+) -> bool:
+    ts = _normalize_datetime(value)
+    return (
+        ts.minute == 0
+        and ts.second == 0
+        and ts.microsecond == 0
+        and ts.hour in {start_hour, end_hour}
+    )
 
 
 @dataclass(frozen=True)

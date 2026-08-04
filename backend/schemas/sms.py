@@ -1,4 +1,4 @@
-"""短信通知双 Provider API Schema。"""
+"""短信通知多 Provider API Schema。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.services.sms_config import SmsConfigError, config_from_dict
+from backend.services.sms_providers.wxpusher_provider import (
+    DEFAULT_WXPUSHER_API_URL,
+    DEFAULT_WXPUSHER_SUMMARY_TEMPLATE,
+)
 from backend.services.sms_service import (
     DEFAULT_ALARM_TEMPLATE,
     AlarmQueueReceipt,
@@ -67,15 +71,60 @@ class SmsGenericHttpPayload(BaseModel):
         return value.strip()
 
 
+class SmsWxpusherPayload(BaseModel):
+    """WxPusher 微信推送通道配置。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    app_token: str = Field("", max_length=512)
+    uids: list[str] = Field(default_factory=list, max_length=50)
+    topic_ids: list[int] = Field(default_factory=list, max_length=20)
+    content_type: Literal[1, 2, 3] = 1
+    summary_template: str = Field(
+        DEFAULT_WXPUSHER_SUMMARY_TEMPLATE, min_length=1, max_length=500
+    )
+    api_url: str = Field(DEFAULT_WXPUSHER_API_URL, max_length=2_000)
+    timeout_seconds: float = Field(10.0, ge=0.5, le=120)
+    verify_ssl: bool = True
+
+    @field_validator("app_token", "api_url", "summary_template")
+    @classmethod
+    def strip_strings(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("uids", mode="before")
+    @classmethod
+    def normalize_uids(cls, value: object) -> list[str]:
+        if value in (None, "", []):
+            return []
+        if isinstance(value, str):
+            parts = [
+                part.strip()
+                for chunk in value.replace("；", ";").split(";")
+                for part in chunk.split(",")
+            ]
+            return [part for part in parts if part]
+        if isinstance(value, (list, tuple)):
+            return [str(item).strip() for item in value if str(item).strip()]
+        raise ValueError("WxPusher UID 必须是数组或分隔字符串")
+
+    @field_validator("summary_template")
+    @classmethod
+    def validate_summary_template(cls, value: str) -> str:
+        validate_alarm_template(value)
+        return value
+
+
 class SmsConfigPayload(BaseModel):
-    """Canonical 双通道配置，并兼容一期 Alarm 页平铺字段。"""
+    """Canonical 多通道配置，并兼容一期 Alarm 页平铺字段。"""
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(False, description="NG 短信推送总开关，默认关闭")
-    provider: Literal["at_modem", "generic_http"] = "at_modem"
+    provider: Literal["at_modem", "generic_http", "wxpusher"] = "at_modem"
     at_modem: SmsAtModemPayload = Field(default_factory=SmsAtModemPayload)
     generic_http: SmsGenericHttpPayload = Field(default_factory=SmsGenericHttpPayload)
+    wxpusher: SmsWxpusherPayload = Field(default_factory=SmsWxpusherPayload)
     phone_numbers: list[str] = Field(default_factory=list, max_length=20)
     retry_count: int = Field(3, ge=0, le=5)
     retry_backoff_seconds: list[float] = Field(
@@ -91,6 +140,16 @@ class SmsConfigPayload(BaseModel):
     queue_size: int = Field(100, ge=1, le=1_000)
     offline_queue_max: int = Field(200, ge=1, le=10_000)
     offline_ttl_seconds: float = Field(86_400, ge=60, le=30 * 86_400)
+    summary_schedule_mode: Literal["rolling_12h", "daily_shift"] = Field(
+        "rolling_12h",
+        description="rolling_12h=滚动12小时；daily_shift=班次（默认早八到晚八）",
+    )
+    shift_start_hour: int = Field(8, ge=0, le=23, description="班次开始小时")
+    shift_end_hour: int = Field(20, ge=0, le=23, description="班次结束小时（到点发送）")
+    send_night_window: bool = Field(
+        False,
+        description="班次模式下是否额外发送晚班窗（结束小时～次日开始小时）",
+    )
 
     # 一期兼容字段：A′期间旧 Alarm 页仍按这些字段 GET/PUT。
     port: str = Field("", max_length=128)
@@ -156,6 +215,7 @@ class SmsConfigPayload(BaseModel):
             "provider": self.provider,
             "at_modem": self.at_modem.model_dump(),
             "generic_http": self.generic_http.model_dump(),
+            "wxpusher": self.wxpusher.model_dump(),
             "phone_numbers": list(self.phone_numbers),
             "retry_count": self.retry_count,
             "retry_backoff_seconds": list(self.retry_backoff_seconds),
@@ -164,6 +224,10 @@ class SmsConfigPayload(BaseModel):
             "queue_size": self.queue_size,
             "offline_queue_max": self.offline_queue_max,
             "offline_ttl_seconds": self.offline_ttl_seconds,
+            "summary_schedule_mode": self.summary_schedule_mode,
+            "shift_start_hour": self.shift_start_hour,
+            "shift_end_hour": self.shift_end_hour,
+            "send_night_window": self.send_night_window,
         }
 
     def to_service_config(self) -> SmsServiceConfig:
@@ -196,6 +260,16 @@ class SmsConfigPayload(BaseModel):
                 verify_ssl=config.verify_ssl,
                 field_mapping=dict(config.field_mapping),
             ),
+            wxpusher=SmsWxpusherPayload(
+                app_token=config.wxpusher_app_token,
+                uids=list(config.wxpusher_uids),
+                topic_ids=list(config.wxpusher_topic_ids),
+                content_type=config.wxpusher_content_type,  # type: ignore[arg-type]
+                summary_template=config.wxpusher_summary_template,
+                api_url=config.wxpusher_api_url,
+                timeout_seconds=config.wxpusher_timeout_seconds,
+                verify_ssl=config.wxpusher_verify_ssl,
+            ),
             phone_numbers=list(config.recipients),
             retry_count=config.retries,
             retry_backoff_seconds=list(config.retry_backoff_seconds),
@@ -204,6 +278,10 @@ class SmsConfigPayload(BaseModel):
             queue_size=config.queue_size,
             offline_queue_max=config.offline_queue_max,
             offline_ttl_seconds=config.offline_ttl_seconds,
+            summary_schedule_mode=config.summary_schedule_mode,
+            shift_start_hour=config.shift_start_hour,
+            shift_end_hour=config.shift_end_hour,
+            send_night_window=config.send_night_window,
             port=config.port,
             baudrate=config.baudrate,
             recipients=list(config.recipients),

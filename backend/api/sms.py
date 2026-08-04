@@ -1,4 +1,4 @@
-"""滚动 12 小时生产汇总短信的双 Provider 独立配置 API。"""
+"""滚动 12 小时生产汇总短信的多 Provider 独立配置 API。"""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ _sms_service = _new_sms_service(_config_store.load())
 
 
 def get_sms_service() -> SmsService:
-    """返回当前短信汇总与双 Provider 发送门面。"""
+    """返回当前短信汇总与多 Provider 发送门面。"""
 
     with _runtime_lock:
         return _sms_service

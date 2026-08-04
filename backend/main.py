@@ -1038,13 +1038,14 @@ mount_all_routers(app)
 
 
 # 短信窗口必须锚定真实后端启动；路由/OpenAPI 仅导入时不应写水位或起线程。
+# 滚动 12h：冷启动重置锚点；班次模式不走此重置（仍按钟点对齐）。
 def _start_sms_summary_scheduler():
     if os.environ.get("BACKEND_SKIP_INIT"):
         return
     try:
         from backend.api.sms import get_sms_service
 
-        get_sms_service().start_summary_scheduler()
+        get_sms_service().start_summary_scheduler(reset_rolling_anchor=True)
     except Exception as e:
         print(f"[SMS] 12 小时汇总调度启动失败（已隔离, 主程序继续）: {e}")
 

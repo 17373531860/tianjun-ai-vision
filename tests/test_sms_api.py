@@ -250,3 +250,46 @@ def test_sms_test_endpoint_is_in_openapi(app) -> None:
 
     assert operation["summary"] == "后台测试短信通道"
     assert "requestBody" in operation
+
+
+def test_put_wxpusher_config_without_phone_numbers(client, isolated_sms_runtime) -> None:
+    store, _tmp_path = isolated_sms_runtime
+    payload = {
+        "enabled": True,
+        "provider": "wxpusher",
+        "phone_numbers": [],
+        "wxpusher": {
+            "app_token": "AT_api_token",
+            "uids": ["UID_worker_1"],
+            "topic_ids": [101],
+            "content_type": 1,
+        },
+    }
+
+    response = client.put("/api/v1/sms/config", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"] == "wxpusher"
+    assert body["wxpusher"]["app_token"] == "AT_api_token"
+    assert body["wxpusher"]["uids"] == ["UID_worker_1"]
+    assert body["wxpusher"]["topic_ids"] == [101]
+    assert body["phone_numbers"] == []
+    on_disk = json.loads(store.path.read_text(encoding="utf-8"))
+    assert on_disk["provider"] == "wxpusher"
+    assert on_disk["wxpusher"]["app_token"] == "AT_api_token"
+    assert sms_api.get_sms_service().config.provider == "wxpusher"
+
+
+def test_put_enabled_wxpusher_requires_token_and_target(
+    client, isolated_sms_runtime
+) -> None:
+    response = client.put(
+        "/api/v1/sms/config",
+        json={
+            "enabled": True,
+            "provider": "wxpusher",
+            "wxpusher": {"app_token": "AT_only"},
+        },
+    )
+    assert response.status_code == 422

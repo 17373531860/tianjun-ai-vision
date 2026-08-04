@@ -7,6 +7,7 @@ from backend.services.sms_providers.base_provider import (
     SmsProvider,
 )
 from backend.services.sms_providers.generic_http_provider import GenericHttpProvider
+from backend.services.sms_providers.wxpusher_provider import WxpusherProvider
 
 __all__ = [
     "AtModemProvider",
@@ -14,5 +15,6 @@ __all__ = [
     "RecipientResult",
     "SmsBatchResult",
     "SmsProvider",
+    "WxpusherProvider",
 ]
 

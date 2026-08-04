@@ -13,7 +13,7 @@
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- 12 小时汇总短信：AT 与云服务器二选一，且与灯塔/蜂鸣器完全隔离。 -->
+      <!-- 12 小时汇总推送：AT / 云短信 / WxPusher 三选一，与灯塔/蜂鸣器完全隔离。 -->
       <el-card
         data-testid="sms-config-card"
         shadow="never"
@@ -24,7 +24,7 @@
           <div class="flex items-center justify-between gap-4">
             <div class="flex items-center gap-2">
               <el-icon class="text-tech-blue"><Message /></el-icon>
-              <span class="font-bold text-white">NG 短信推送</span>
+              <span class="font-bold text-white">NG 短信/微信推送</span>
               <el-tag size="small" type="info">滚动 12 小时汇总</el-tag>
             </div>
             <el-switch
@@ -40,21 +40,74 @@
         <div class="space-y-5">
           <el-alert
             data-testid="sms-summary-notice"
-            title="仅发送滚动 12 小时生产汇总"
+            :title="smsSummaryNoticeTitle"
             type="info"
             :closable="false"
             show-icon
           >
             <div class="text-xs leading-5">
-              软件启动后以短信服务启动时间为起点，每滚动 12 小时按工位分别汇总已结算周期的合格/NG 次数并发送；
+              {{ smsSummaryNoticeBody }}
               不含进行中周期，窗口内合格与 NG 均为 0 时不发送。
               不再按单次 NG 或累计 N 次即时推送。
             </div>
           </el-alert>
 
+          <div>
+            <div class="text-gray-300 mb-2">汇总调度</div>
+            <el-radio-group
+              v-model="smsConfig.summary_schedule_mode"
+              data-testid="sms-schedule-mode-group"
+            >
+              <el-radio-button value="rolling_12h" data-testid="sms-schedule-rolling">
+                滚动 12 小时
+              </el-radio-button>
+              <el-radio-button value="daily_shift" data-testid="sms-schedule-shift">
+                班次（如早八～晚八）
+              </el-radio-button>
+            </el-radio-group>
+            <div
+              v-if="smsConfig.summary_schedule_mode === 'daily_shift'"
+              data-testid="sms-shift-fields"
+              class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3"
+            >
+              <div>
+                <div class="text-gray-300 mb-2">开始小时</div>
+                <el-input-number
+                  v-model="smsConfig.shift_start_hour"
+                  data-testid="sms-shift-start-hour"
+                  :min="0"
+                  :max="23"
+                  :step="1"
+                  :precision="0"
+                  class="w-full"
+                />
+              </div>
+              <div>
+                <div class="text-gray-300 mb-2">结束小时（到点发送）</div>
+                <el-input-number
+                  v-model="smsConfig.shift_end_hour"
+                  data-testid="sms-shift-end-hour"
+                  :min="0"
+                  :max="23"
+                  :step="1"
+                  :precision="0"
+                  class="w-full"
+                />
+              </div>
+              <div class="flex items-center justify-between rounded border border-slate-700 px-4 py-3">
+                <div>
+                  <div class="text-gray-300">发送夜班窗</div>
+                  <div class="text-xs text-gray-500">默认关：只发白天一条。</div>
+                </div>
+                <el-switch v-model="smsConfig.send_night_window" data-testid="sms-send-night-window" />
+              </div>
+            </div>
+          </div>
+
           <el-alert type="warning" :closable="false" show-icon>
             <div class="text-xs leading-5">
-              USB/AT 与云服务器短信二选一。云通道需要工控机可上网；AT 通道必须使用独立 COM，勿选灯塔/蜂鸣器串口。
+              USB/AT、云服务器短信、微信推送(WxPusher) 三选一。
+              云短信与微信推送需工控机可上网；AT 通道必须使用独立 COM，勿选灯塔/蜂鸣器串口。
             </div>
           </el-alert>
 
@@ -70,6 +123,9 @@
               </el-radio-button>
               <el-radio-button value="generic_http" data-testid="sms-provider-http">
                 云服务器短信
+              </el-radio-button>
+              <el-radio-button value="wxpusher" data-testid="sms-provider-wxpusher">
+                微信推送(WxPusher)
               </el-radio-button>
             </el-radio-group>
           </div>
@@ -142,7 +198,7 @@
           </div>
 
           <div
-            v-else
+            v-else-if="smsConfig.provider === 'generic_http'"
             data-testid="sms-http-fields"
             class="grid grid-cols-1 lg:grid-cols-2 gap-4"
           >
@@ -249,7 +305,106 @@
             </div>
           </div>
 
-          <div>
+          <div
+            v-else-if="smsConfig.provider === 'wxpusher'"
+            data-testid="sms-wx-fields"
+            class="grid grid-cols-1 lg:grid-cols-2 gap-4"
+          >
+            <div class="lg:col-span-2">
+              <div class="text-gray-300 mb-2">appToken</div>
+              <el-input
+                v-model="smsConfig.wxpusher.app_token"
+                data-testid="sms-wx-app-token"
+                type="password"
+                show-password
+                autocomplete="new-password"
+                placeholder="在 WxPusher 管理后台创建应用后获取"
+              />
+              <div data-testid="sms-wx-hint" class="text-xs text-amber-400 mt-1">
+                需工控机可访问 WxPusher；微信扫码关注应用后获得 UID。官方文档：wxpusher.zjiecode.com
+              </div>
+            </div>
+
+            <div>
+              <div class="text-gray-300 mb-2">UID 列表</div>
+              <el-input
+                v-model="smsWxUidsText"
+                data-testid="sms-wx-uids"
+                type="textarea"
+                :rows="3"
+                placeholder="UID_xxxx，多个用逗号、分号或换行分隔"
+              />
+            </div>
+
+            <div>
+              <div class="text-gray-300 mb-2">TopicId 列表（可选）</div>
+              <el-input
+                v-model="smsWxTopicIdsText"
+                data-testid="sms-wx-topic-ids"
+                type="textarea"
+                :rows="3"
+                placeholder="主题群发用，例如：101,102"
+              />
+              <div class="text-xs text-gray-500 mt-1">UID 与 TopicId 至少填写一类。</div>
+            </div>
+
+            <div>
+              <div class="text-gray-300 mb-2">内容类型</div>
+              <el-select v-model="smsConfig.wxpusher.content_type" data-testid="sms-wx-content-type" class="w-full">
+                <el-option :value="1" label="1 - 文本" />
+                <el-option :value="2" label="2 - HTML" />
+                <el-option :value="3" label="3 - Markdown" />
+              </el-select>
+            </div>
+
+            <div>
+              <div class="text-gray-300 mb-2">请求超时</div>
+              <div class="flex items-center gap-2">
+                <el-input-number
+                  v-model="smsConfig.wxpusher.timeout_seconds"
+                  data-testid="sms-wx-timeout"
+                  :min="0.5"
+                  :max="120"
+                  :step="0.5"
+                  class="w-full"
+                />
+                <span class="text-sm text-gray-400">秒</span>
+              </div>
+            </div>
+
+            <div class="lg:col-span-2">
+              <div class="text-gray-300 mb-2">消息摘要模板</div>
+              <el-input
+                v-model="smsConfig.wxpusher.summary_template"
+                data-testid="sms-wx-summary-template"
+                type="textarea"
+                :rows="2"
+                placeholder="微信会话列表显示的短摘要"
+              />
+              <div class="text-xs text-gray-500 mt-1">
+                可用字段：{device_name}、{time_range}、{ok_count}、{ng_count}；最长约 100 字。
+              </div>
+            </div>
+
+            <div class="lg:col-span-2">
+              <div class="text-gray-300 mb-2">API URL</div>
+              <el-input
+                v-model="smsConfig.wxpusher.api_url"
+                data-testid="sms-wx-api-url"
+                placeholder="https://wxpusher.zjiecode.com/api/send/message"
+              />
+            </div>
+
+            <div class="flex items-center justify-between rounded border border-slate-700 px-4 py-3">
+              <div>
+                <div class="text-gray-300">校验 HTTPS 证书</div>
+                <div class="text-xs text-gray-500">生产环境建议始终开启。</div>
+              </div>
+              <el-switch v-model="smsConfig.wxpusher.verify_ssl" data-testid="sms-wx-verify-ssl" />
+            </div>
+          </div>
+
+          <div v-if="smsConfig.provider !== 'wxpusher'">
             <div class="text-gray-300 mb-2">接收手机号（共用）</div>
             <el-input
               v-model="smsRecipientsText"
@@ -905,6 +1060,16 @@ const createSmsDefaultConfig = () => ({
     verify_ssl: true,
     field_mapping: {},
   },
+  wxpusher: {
+    app_token: '',
+    uids: [],
+    topic_ids: [],
+    content_type: 1,
+    summary_template: '【天军AI视觉】{time_range} OK={ok_count} NG={ng_count}',
+    api_url: 'https://wxpusher.zjiecode.com/api/send/message',
+    timeout_seconds: 10,
+    verify_ssl: true,
+  },
   phone_numbers: [],
   retry_count: 3,
   retry_backoff_seconds: [1, 3, 5],
@@ -913,9 +1078,15 @@ const createSmsDefaultConfig = () => ({
   queue_size: 100,
   offline_queue_max: 200,
   offline_ttl_seconds: 86400,
+  summary_schedule_mode: 'rolling_12h',
+  shift_start_hour: 8,
+  shift_end_hour: 20,
+  send_night_window: false,
 });
 const smsConfig = reactive(createSmsDefaultConfig());
 const smsRecipientsText = ref('');
+const smsWxUidsText = ref('');
+const smsWxTopicIdsText = ref('');
 const smsRetryBackoffText = ref('1, 3, 5');
 const smsFieldMappingText = ref('{}');
 const smsPorts = ref([]);
@@ -924,6 +1095,16 @@ const smsLoadingPorts = ref(false);
 const smsSaving = ref(false);
 const smsTesting = ref(false);
 const smsAdvancedSections = ref([]);
+const smsSummaryNoticeTitle = computed(() => (
+  smsConfig.summary_schedule_mode === 'daily_shift'
+    ? `班次汇总：每天 ${smsConfig.shift_start_hour}:00～${smsConfig.shift_end_hour}:00`
+    : '仅发送滚动 12 小时生产汇总'
+));
+const smsSummaryNoticeBody = computed(() => (
+  smsConfig.summary_schedule_mode === 'daily_shift'
+    ? `按配置班次汇总已结算周期；默认到 ${smsConfig.shift_end_hour}:00 发送白天窗${smsConfig.send_night_window ? '，并额外发送夜班窗' : '（夜班窗默认不发）'}。`
+    : '每次软件（后端）启动后以本次服务启动时间为起点重新开窗，每滚动 12 小时按工位分别汇总已结算周期的合格/NG 次数并发送；'
+));
 const smsPortOptions = computed(() => {
   const options = Array.isArray(smsPorts.value) ? [...smsPorts.value] : [];
   const current = smsConfig.at_modem.port?.trim();
@@ -969,6 +1150,14 @@ const applySmsConfig = (data = {}) => {
       ...(data.generic_http?.field_mapping || {}),
     },
   };
+  const wxpusher = {
+    ...defaults.wxpusher,
+    ...(data.wxpusher || {}),
+    uids: Array.isArray(data.wxpusher?.uids) ? [...data.wxpusher.uids] : [...defaults.wxpusher.uids],
+    topic_ids: Array.isArray(data.wxpusher?.topic_ids)
+      ? [...data.wxpusher.topic_ids]
+      : [...defaults.wxpusher.topic_ids],
+  };
   const phoneNumbers = Array.isArray(data.phone_numbers)
     ? data.phone_numbers
     : (Array.isArray(data.recipients) ? data.recipients : []);
@@ -980,6 +1169,7 @@ const applySmsConfig = (data = {}) => {
     provider: data.provider || defaults.provider,
     at_modem: atModem,
     generic_http: genericHttp,
+    wxpusher,
     phone_numbers: [...phoneNumbers],
     retry_count: data.retry_count ?? data.retries ?? defaults.retry_count,
     retry_backoff_seconds: [...retryBackoff],
@@ -988,8 +1178,16 @@ const applySmsConfig = (data = {}) => {
     queue_size: data.queue_size ?? defaults.queue_size,
     offline_queue_max: data.offline_queue_max ?? defaults.offline_queue_max,
     offline_ttl_seconds: data.offline_ttl_seconds ?? defaults.offline_ttl_seconds,
+    summary_schedule_mode: data.summary_schedule_mode === 'daily_shift'
+      ? 'daily_shift'
+      : 'rolling_12h',
+    shift_start_hour: data.shift_start_hour ?? defaults.shift_start_hour,
+    shift_end_hour: data.shift_end_hour ?? defaults.shift_end_hour,
+    send_night_window: data.send_night_window ?? defaults.send_night_window,
   });
   smsRecipientsText.value = phoneNumbers.join('\n');
+  smsWxUidsText.value = wxpusher.uids.join('\n');
+  smsWxTopicIdsText.value = wxpusher.topic_ids.join(', ');
   smsRetryBackoffText.value = retryBackoff.join(', ');
   smsFieldMappingText.value = JSON.stringify(genericHttp.field_mapping, null, 2);
 };
@@ -998,6 +1196,24 @@ const parseSmsRecipients = () => smsRecipientsText.value
   .split(/[,，;；\r\n]+/)
   .map((item) => item.trim())
   .filter(Boolean);
+
+const parseSmsWxUids = () => smsWxUidsText.value
+  .split(/[,，;；\r\n]+/)
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+const parseSmsWxTopicIds = () => {
+  const raw = smsWxTopicIdsText.value
+    .split(/[,，;；\r\n\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (raw.length === 0) return [];
+  const values = raw.map((item) => Number(item));
+  if (values.some((item) => !Number.isInteger(item) || item <= 0)) {
+    throw new Error('TopicId 必须是正整数，多个用逗号分隔');
+  }
+  return values;
+};
 
 const parseSmsRetryBackoff = () => {
   const values = smsRetryBackoffText.value
@@ -1061,6 +1277,12 @@ const onSmsEnabledChange = (enabled) => {
     ElMessage.warning('AT 通道开启前请先选择短信模块独立 COM');
   } else if (smsConfig.provider === 'generic_http' && !smsConfig.generic_http.api_url?.trim()) {
     ElMessage.warning('云短信开启前请先填写 API URL');
+  } else if (smsConfig.provider === 'wxpusher') {
+    if (!smsConfig.wxpusher.app_token?.trim()) {
+      ElMessage.warning('微信推送开启前请先填写 appToken');
+    } else if (parseSmsWxUids().length === 0 && !smsWxTopicIdsText.value.trim()) {
+      ElMessage.warning('微信推送开启前请至少填写 UID 或 TopicId');
+    }
   } else if (parseSmsRecipients().length === 0) {
     ElMessage.warning('开启前请至少填写一个接收手机号');
   }
@@ -1074,6 +1296,7 @@ const onSmsProviderChange = (provider) => {
 
 const validateSmsForm = () => {
   const httpConfig = smsConfig.generic_http;
+  const wxConfig = smsConfig.wxpusher;
   if (!smsConfig.at_modem.template?.trim()) {
     ElMessage.warning('短信模板不能为空');
     return false;
@@ -1082,7 +1305,11 @@ const validateSmsForm = () => {
     ElMessage.warning('Access Key 与 Access Secret 必须成对填写');
     return false;
   }
-  if (smsConfig.enabled && parseSmsRecipients().length === 0) {
+  if (
+    smsConfig.enabled
+    && smsConfig.provider !== 'wxpusher'
+    && parseSmsRecipients().length === 0
+  ) {
     ElMessage.warning('开启 12 小时汇总短信前必须填写接收手机号');
     return false;
   }
@@ -1100,9 +1327,57 @@ const validateSmsForm = () => {
       return false;
     }
   }
+  if (smsConfig.summary_schedule_mode === 'daily_shift') {
+    const startHour = Number(smsConfig.shift_start_hour);
+    const endHour = Number(smsConfig.shift_end_hour);
+    if (!Number.isInteger(startHour) || startHour < 0 || startHour > 23
+      || !Number.isInteger(endHour) || endHour < 0 || endHour > 23) {
+      ElMessage.warning('班次小时必须是 0~23 的整数');
+      return false;
+    }
+    if (startHour === endHour) {
+      ElMessage.warning('班次开始与结束小时不能相同');
+      return false;
+    }
+    if (!smsConfig.send_night_window && startHour >= endHour) {
+      ElMessage.warning('仅白天班次时，开始小时必须早于结束小时（如 8 到 20）');
+      return false;
+    }
+  }
+  if (smsConfig.enabled && smsConfig.provider === 'wxpusher') {
+    if (!wxConfig.app_token?.trim()) {
+      ElMessage.warning('开启微信推送前必须填写 appToken');
+      return false;
+    }
+    try {
+      const uids = parseSmsWxUids();
+      const topicIds = parseSmsWxTopicIds();
+      if (uids.length === 0 && topicIds.length === 0) {
+        ElMessage.warning('开启微信推送前必须填写 UID 或 TopicId');
+        return false;
+      }
+    } catch (err) {
+      ElMessage.warning(err.message || 'WxPusher 目标配置格式错误');
+      return false;
+    }
+    if (!wxConfig.summary_template?.trim()) {
+      ElMessage.warning('微信推送摘要模板不能为空');
+      return false;
+    }
+    if (!wxConfig.api_url?.trim()) {
+      ElMessage.warning('微信推送 API URL 不能为空');
+      return false;
+    }
+  }
   try {
     parseSmsRetryBackoff();
-    parseSmsFieldMapping();
+    if (smsConfig.provider === 'generic_http') {
+      parseSmsFieldMapping();
+    }
+    if (smsConfig.provider === 'wxpusher') {
+      parseSmsWxUids();
+      parseSmsWxTopicIds();
+    }
   } catch (err) {
     ElMessage.warning(err.message || '短信高级配置格式错误');
     return false;
@@ -1112,9 +1387,10 @@ const validateSmsForm = () => {
 
 const smsConfigsMatch = (saved, readback) => {
   const fields = [
-    'enabled', 'provider', 'at_modem', 'generic_http', 'phone_numbers',
+    'enabled', 'provider', 'at_modem', 'generic_http', 'wxpusher', 'phone_numbers',
     'retry_count', 'retry_backoff_seconds', 'ng_threshold', 'cooldown_seconds', 'queue_size',
     'offline_queue_max', 'offline_ttl_seconds',
+    'summary_schedule_mode', 'shift_start_hour', 'shift_end_hour', 'send_night_window',
   ];
   return fields.every((field) => JSON.stringify(saved?.[field]) === JSON.stringify(readback?.[field]));
 };
@@ -1138,9 +1414,23 @@ const buildSmsPayload = () => ({
     sign_name: smsConfig.generic_http.sign_name.trim(),
     template_id: smsConfig.generic_http.template_id.trim(),
     verify_ssl: smsConfig.generic_http.verify_ssl,
-    field_mapping: parseSmsFieldMapping(),
+    field_mapping: smsConfig.provider === 'generic_http' ? parseSmsFieldMapping() : (smsConfig.generic_http.field_mapping || {}),
   },
-  phone_numbers: parseSmsRecipients(),
+  wxpusher: {
+    app_token: smsConfig.wxpusher.app_token.trim(),
+    uids: smsConfig.provider === 'wxpusher'
+      ? parseSmsWxUids()
+      : [...(smsConfig.wxpusher.uids || [])],
+    topic_ids: smsConfig.provider === 'wxpusher'
+      ? parseSmsWxTopicIds()
+      : [...(smsConfig.wxpusher.topic_ids || [])],
+    content_type: smsConfig.wxpusher.content_type,
+    summary_template: smsConfig.wxpusher.summary_template.trim(),
+    api_url: smsConfig.wxpusher.api_url.trim(),
+    timeout_seconds: smsConfig.wxpusher.timeout_seconds,
+    verify_ssl: smsConfig.wxpusher.verify_ssl,
+  },
+  phone_numbers: smsConfig.provider === 'wxpusher' ? [] : parseSmsRecipients(),
   retry_count: smsConfig.retry_count,
   retry_backoff_seconds: parseSmsRetryBackoff(),
   ng_threshold: smsConfig.ng_threshold,
@@ -1148,6 +1438,10 @@ const buildSmsPayload = () => ({
   queue_size: smsConfig.queue_size,
   offline_queue_max: smsConfig.offline_queue_max,
   offline_ttl_seconds: smsConfig.offline_ttl_seconds,
+  summary_schedule_mode: smsConfig.summary_schedule_mode,
+  shift_start_hour: smsConfig.shift_start_hour,
+  shift_end_hour: smsConfig.shift_end_hour,
+  send_night_window: smsConfig.send_night_window,
 });
 
 const saveSmsConfig = async () => {

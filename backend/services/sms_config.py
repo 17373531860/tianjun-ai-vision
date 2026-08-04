@@ -17,7 +17,12 @@ from urllib.parse import urlsplit
 
 from backend.core.config import DATA_DIR
 from backend.services.sms_providers.generic_http_provider import DEFAULT_FIELD_MAPPING
+from backend.services.sms_providers.wxpusher_provider import (
+    DEFAULT_WXPUSHER_API_URL,
+    DEFAULT_WXPUSHER_SUMMARY_TEMPLATE,
+)
 from backend.services.sms_service import SmsServiceConfig, validate_alarm_template
+from backend.services.sms_summary import ALLOWED_SUMMARY_SCHEDULE_MODES
 from backend.services.sms_utils import choose_encoding, parse_recipients
 
 
@@ -25,7 +30,9 @@ logger = logging.getLogger(__name__)
 
 SMS_CONFIG_FILENAME = "sms_config.json"
 ALLOWED_HTTP_METHODS = {"POST", "PUT"}
+ALLOWED_PROVIDERS = {"at_modem", "generic_http", "wxpusher"}
 ALLOWED_MAPPING_SOURCES = set(DEFAULT_FIELD_MAPPING) | {"message", "message_id"}
+ALLOWED_WXPUSHER_CONTENT_TYPES = {1, 2, 3}
 
 
 class SmsConfigError(RuntimeError):
@@ -56,6 +63,16 @@ def config_to_dict(config: SmsServiceConfig) -> dict[str, Any]:
             "verify_ssl": config.verify_ssl,
             "field_mapping": dict(config.field_mapping),
         },
+        "wxpusher": {
+            "app_token": config.wxpusher_app_token,
+            "uids": list(config.wxpusher_uids),
+            "topic_ids": list(config.wxpusher_topic_ids),
+            "content_type": config.wxpusher_content_type,
+            "summary_template": config.wxpusher_summary_template,
+            "api_url": config.wxpusher_api_url,
+            "timeout_seconds": config.wxpusher_timeout_seconds,
+            "verify_ssl": config.wxpusher_verify_ssl,
+        },
         "phone_numbers": list(config.recipients),
         "retry_count": config.retries,
         "retry_backoff_seconds": list(config.retry_backoff_seconds),
@@ -64,6 +81,10 @@ def config_to_dict(config: SmsServiceConfig) -> dict[str, Any]:
         "queue_size": config.queue_size,
         "offline_queue_max": config.offline_queue_max,
         "offline_ttl_seconds": config.offline_ttl_seconds,
+        "summary_schedule_mode": config.summary_schedule_mode,
+        "shift_start_hour": config.shift_start_hour,
+        "shift_end_hour": config.shift_end_hour,
+        "send_night_window": config.send_night_window,
     }
 
 
@@ -76,15 +97,20 @@ def config_from_dict(data: dict[str, Any]) -> SmsServiceConfig:
     if not isinstance(enabled, bool):
         raise SmsConfigError("总开关必须是布尔值")
     provider = data.get("provider", "at_modem")
-    if provider not in {"at_modem", "generic_http"}:
-        raise SmsConfigError("短信 Provider 仅支持 at_modem 或 generic_http")
+    if provider not in ALLOWED_PROVIDERS:
+        raise SmsConfigError(
+            "短信 Provider 仅支持 at_modem、generic_http 或 wxpusher"
+        )
 
     at_modem = data.get("at_modem", {}) or {}
     generic_http = data.get("generic_http", {}) or {}
+    wxpusher = data.get("wxpusher", {}) or {}
     if not isinstance(at_modem, dict):
         raise SmsConfigError("at_modem 配置必须是对象")
     if not isinstance(generic_http, dict):
         raise SmsConfigError("generic_http 配置必须是对象")
+    if not isinstance(wxpusher, dict):
+        raise SmsConfigError("wxpusher 配置必须是对象")
 
     raw_recipients = data.get("phone_numbers", data.get("recipients", []))
     if not isinstance(raw_recipients, (str, list, tuple)):
@@ -129,6 +155,24 @@ def config_from_dict(data: dict[str, Any]) -> SmsServiceConfig:
     field_mapping = generic_http.get("field_mapping", data.get("field_mapping", {})) or {}
     field_mapping = _validate_field_mapping(field_mapping)
 
+    wx_app_token = _string(
+        wxpusher.get("app_token", ""), "WxPusher appToken"
+    ).strip()
+    wx_uids = _parse_wxpusher_uids(wxpusher.get("uids", []))
+    wx_topic_ids = _parse_wxpusher_topic_ids(wxpusher.get("topic_ids", []))
+    wx_content_type = wxpusher.get("content_type", 1)
+    wx_summary_template = _string(
+        wxpusher.get("summary_template", DEFAULT_WXPUSHER_SUMMARY_TEMPLATE),
+        "WxPusher 摘要模板",
+    )
+    wx_api_url = _string(
+        wxpusher.get("api_url", DEFAULT_WXPUSHER_API_URL), "WxPusher API URL"
+    ).strip() or DEFAULT_WXPUSHER_API_URL
+    wx_timeout = wxpusher.get("timeout_seconds", 10.0)
+    wx_verify_ssl = wxpusher.get("verify_ssl", True)
+    if not isinstance(wx_verify_ssl, bool):
+        raise SmsConfigError("wxpusher.verify_ssl 必须是布尔值")
+
     raw_backoff = data.get("retry_backoff_seconds")
     retry_count = data.get("retry_count", data.get("retries", 3))
     default_retry_delay = (
@@ -163,6 +207,14 @@ def config_from_dict(data: dict[str, Any]) -> SmsServiceConfig:
             template_id=template_id,
             verify_ssl=verify_ssl,
             field_mapping=field_mapping,
+            wxpusher_app_token=wx_app_token,
+            wxpusher_uids=wx_uids,
+            wxpusher_topic_ids=wx_topic_ids,
+            wxpusher_content_type=int(wx_content_type),
+            wxpusher_summary_template=wx_summary_template,
+            wxpusher_api_url=wx_api_url,
+            wxpusher_timeout_seconds=float(wx_timeout),
+            wxpusher_verify_ssl=wx_verify_ssl,
             retries=int(retry_count),
             retry_delay_seconds=float(retry_delay),
             retry_backoff_seconds=tuple(float(value) for value in raw_backoff),
@@ -171,6 +223,14 @@ def config_from_dict(data: dict[str, Any]) -> SmsServiceConfig:
             queue_size=int(data.get("queue_size", 100)),
             offline_queue_max=int(data.get("offline_queue_max", 200)),
             offline_ttl_seconds=float(data.get("offline_ttl_seconds", 86_400)),
+            summary_schedule_mode=str(
+                data.get("summary_schedule_mode", "rolling_12h")
+            ).strip(),
+            shift_start_hour=int(data.get("shift_start_hour", 8)),
+            shift_end_hour=int(data.get("shift_end_hour", 20)),
+            send_night_window=_bool(
+                data.get("send_night_window", False), "send_night_window"
+            ),
         )
     except (TypeError, ValueError) as exc:
         raise SmsConfigError("短信配置包含非法数值") from exc
@@ -225,7 +285,22 @@ def _validate_config(config: SmsServiceConfig) -> None:
         _validate_http_url(config.api_url)
     if bool(config.access_key) != bool(config.access_secret):
         raise SmsConfigError("access_key 与 access_secret 必须成对配置")
-    if config.enabled and not config.recipients:
+    if config.wxpusher_content_type not in ALLOWED_WXPUSHER_CONTENT_TYPES:
+        raise SmsConfigError("WxPusher content_type 仅支持 1/2/3")
+    if len(config.wxpusher_app_token) > 512:
+        raise SmsConfigError("WxPusher appToken 过长")
+    if len(config.wxpusher_uids) > 50:
+        raise SmsConfigError("WxPusher UID 最多 50 个")
+    if len(config.wxpusher_topic_ids) > 20:
+        raise SmsConfigError("WxPusher TopicId 最多 20 个")
+    if len(config.wxpusher_summary_template) > 500:
+        raise SmsConfigError("WxPusher 摘要模板过长")
+    if not 0.5 <= config.wxpusher_timeout_seconds <= 120:
+        raise SmsConfigError("WxPusher HTTP 超时必须在 0.5~120 秒之间")
+    if config.wxpusher_api_url:
+        _validate_http_url(config.wxpusher_api_url)
+    validate_alarm_template(config.wxpusher_summary_template)
+    if config.enabled and config.provider != "wxpusher" and not config.recipients:
         raise SmsConfigError("开启 NG 短信推送前必须配置接收手机号")
     if config.enabled and config.provider == "at_modem" and not config.port:
         raise SmsConfigError("开启 USB/AT 短信前必须配置短信 COM 口")
@@ -234,6 +309,29 @@ def _validate_config(config: SmsServiceConfig) -> None:
             raise SmsConfigError("开启云短信前必须配置 API URL")
         if not (config.token or (config.access_key and config.access_secret)):
             raise SmsConfigError("开启云短信前必须配置 token 或 access_key/access_secret")
+    if config.enabled and config.provider == "wxpusher":
+        if not config.wxpusher_app_token:
+            raise SmsConfigError("开启微信推送前必须配置 WxPusher appToken")
+        if not config.wxpusher_uids and not config.wxpusher_topic_ids:
+            raise SmsConfigError("开启微信推送前必须配置 UID 或 TopicId")
+    if config.summary_schedule_mode not in ALLOWED_SUMMARY_SCHEDULE_MODES:
+        raise SmsConfigError(
+            "汇总调度模式仅支持 rolling_12h 或 daily_shift"
+        )
+    if not 0 <= config.shift_start_hour <= 23:
+        raise SmsConfigError("班次开始小时必须在 0~23")
+    if not 0 <= config.shift_end_hour <= 23:
+        raise SmsConfigError("班次结束小时必须在 0~23")
+    if config.shift_start_hour == config.shift_end_hour:
+        raise SmsConfigError("班次开始与结束小时不能相同")
+    if (
+        config.summary_schedule_mode == "daily_shift"
+        and not config.send_night_window
+        and config.shift_start_hour >= config.shift_end_hour
+    ):
+        raise SmsConfigError(
+            "仅白天班次时，开始小时必须早于结束小时（如 8 点到 20 点）"
+        )
 
 
 def _validate_http_url(value: str) -> None:
@@ -271,6 +369,58 @@ def _string(value: object, label: str) -> str:
     if not isinstance(value, str):
         raise SmsConfigError(f"{label} 必须是字符串")
     return value
+
+
+def _bool(value: object, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise SmsConfigError(f"{label} 必须是布尔值")
+    return value
+
+
+def _parse_wxpusher_uids(value: object) -> tuple[str, ...]:
+    if value in (None, "", []):
+        return ()
+    if isinstance(value, str):
+        raw_items = [part.strip() for part in value.replace("；", ";").split(";")]
+        raw_items = [part for item in raw_items for part in item.split(",")]
+    elif isinstance(value, (list, tuple)):
+        raw_items = list(value)
+    else:
+        raise SmsConfigError("WxPusher UID 必须是数组或分隔字符串")
+    uids: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        text = str(item).strip()
+        if not text:
+            continue
+        if len(text) > 128:
+            raise SmsConfigError("WxPusher UID 过长")
+        if text not in seen:
+            uids.append(text)
+            seen.add(text)
+    return tuple(uids)
+
+
+def _parse_wxpusher_topic_ids(value: object) -> tuple[int, ...]:
+    if value in (None, "", []):
+        return ()
+    if isinstance(value, (list, tuple)):
+        raw_items = list(value)
+    else:
+        raise SmsConfigError("WxPusher TopicId 必须是数组")
+    topic_ids: list[int] = []
+    seen: set[int] = set()
+    for item in raw_items:
+        try:
+            topic_id = int(item)
+        except (TypeError, ValueError) as exc:
+            raise SmsConfigError("WxPusher TopicId 必须是整数") from exc
+        if topic_id <= 0:
+            raise SmsConfigError("WxPusher TopicId 必须为正整数")
+        if topic_id not in seen:
+            topic_ids.append(topic_id)
+            seen.add(topic_id)
+    return tuple(topic_ids)
 
 
 class SmsConfigStore:

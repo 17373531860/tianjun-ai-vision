@@ -25,10 +25,17 @@ class AlarmPage(BasePage):
         SMS_ENABLED_INPUT = "[data-testid='sms-enabled-switch'] input[role='switch']"
         SMS_PROVIDER_AT = "[data-testid='sms-provider-at']"
         SMS_PROVIDER_HTTP = "[data-testid='sms-provider-http']"
+        SMS_PROVIDER_WXPUSHER = "[data-testid='sms-provider-wxpusher']"
         SMS_PROVIDER_AT_INPUT = "[data-testid='sms-provider-at'] input"
         SMS_PROVIDER_HTTP_INPUT = "[data-testid='sms-provider-http'] input"
+        SMS_PROVIDER_WXPUSHER_INPUT = "[data-testid='sms-provider-wxpusher'] input"
         SMS_AT_FIELDS = "[data-testid='sms-at-fields']"
         SMS_HTTP_FIELDS = "[data-testid='sms-http-fields']"
+        SMS_WX_FIELDS = "[data-testid='sms-wx-fields']"
+        SMS_WX_APP_TOKEN = "input[data-testid='sms-wx-app-token']"
+        SMS_WX_UIDS = "textarea[data-testid='sms-wx-uids']"
+        SMS_WX_TOPIC_IDS = "textarea[data-testid='sms-wx-topic-ids']"
+        SMS_WX_HINT = "[data-testid='sms-wx-hint']"
         SMS_CLOUD_TEMPLATE_HINT = "[data-testid='sms-cloud-template-hint']"
         SMS_PORT = "[data-testid='sms-port-select']"
         SMS_REFRESH = "[data-testid='sms-refresh-ports']"
@@ -156,15 +163,19 @@ class AlarmPage(BasePage):
             return False
 
     def select_sms_provider(self, provider: str):
-        selector = (
-            self.Sel.SMS_PROVIDER_AT
-            if provider == "at_modem"
-            else self.Sel.SMS_PROVIDER_HTTP
-        )
+        selector = {
+            "at_modem": self.Sel.SMS_PROVIDER_AT,
+            "generic_http": self.Sel.SMS_PROVIDER_HTTP,
+            "wxpusher": self.Sel.SMS_PROVIDER_WXPUSHER,
+        }.get(provider)
+        if not selector:
+            raise ValueError(f"未知短信 Provider：{provider}")
         self.page.locator(selector).click()
         return self
 
     def sms_provider(self) -> str:
+        if self.page.locator(self.Sel.SMS_PROVIDER_WXPUSHER_INPUT).is_checked():
+            return "wxpusher"
         if self.page.locator(self.Sel.SMS_PROVIDER_HTTP_INPUT).is_checked():
             return "generic_http"
         return "at_modem"
@@ -174,6 +185,28 @@ class AlarmPage(BasePage):
 
     def sms_http_fields_visible(self) -> bool:
         return self.page.locator(self.Sel.SMS_HTTP_FIELDS).is_visible()
+
+    def sms_wx_fields_visible(self) -> bool:
+        return self.page.locator(self.Sel.SMS_WX_FIELDS).is_visible()
+
+    def has_sms_wx_hint(self) -> bool:
+        hint = self.page.locator(self.Sel.SMS_WX_HINT)
+        return hint.is_visible() and "WxPusher" in hint.inner_text()
+
+    def fill_sms_wx_app_token(self, value: str):
+        self.page.locator(self.Sel.SMS_WX_APP_TOKEN).fill(value)
+        return self
+
+    def fill_sms_wx_uids(self, value: str):
+        self.page.locator(self.Sel.SMS_WX_UIDS).fill(value)
+        return self
+
+    def fill_sms_wx_topic_ids(self, value: str):
+        self.page.locator(self.Sel.SMS_WX_TOPIC_IDS).fill(value)
+        return self
+
+    def sms_wx_uids_value(self) -> str:
+        return self.page.locator(self.Sel.SMS_WX_UIDS).input_value()
 
     def refresh_sms_ports(self):
         self.page.locator(self.Sel.SMS_REFRESH).click()

@@ -65,6 +65,16 @@ def _sms_default_config() -> dict:
             "verify_ssl": True,
             "field_mapping": {},
         },
+        "wxpusher": {
+            "app_token": "",
+            "uids": [],
+            "topic_ids": [],
+            "content_type": 1,
+            "summary_template": "【天军AI视觉】{time_range} OK={ok_count} NG={ng_count}",
+            "api_url": "https://wxpusher.zjiecode.com/api/send/message",
+            "timeout_seconds": 10,
+            "verify_ssl": True,
+        },
         "phone_numbers": [],
         "retry_count": 3,
         "retry_backoff_seconds": [1, 3, 5],
@@ -73,6 +83,10 @@ def _sms_default_config() -> dict:
         "queue_size": 100,
         "offline_queue_max": 200,
         "offline_ttl_seconds": 86400,
+        "summary_schedule_mode": "rolling_12h",
+        "shift_start_hour": 8,
+        "shift_end_hour": 20,
+        "send_night_window": False,
     }
 
 
@@ -167,14 +181,24 @@ def test_sms_default_off_provider_switch_and_required_validation(
         assert alarm_page.sms_provider() == "at_modem"
         assert alarm_page.sms_at_fields_visible()
         assert not alarm_page.sms_http_fields_visible()
+        assert not alarm_page.sms_wx_fields_visible()
 
         alarm_page.select_sms_provider("generic_http")
         assert alarm_page.sms_provider() == "generic_http"
         assert alarm_page.sms_http_fields_visible()
         assert not alarm_page.sms_at_fields_visible()
+        assert not alarm_page.sms_wx_fields_visible()
         alarm_page.fill_sms_recipients("13800138000")
         alarm_page.set_sms_enabled(True).save_sms_config()
         assert alarm_page.wait_message("开启云短信前必须填写 API URL")
+
+        alarm_page.select_sms_provider("wxpusher")
+        assert alarm_page.sms_provider() == "wxpusher"
+        assert alarm_page.sms_wx_fields_visible()
+        assert alarm_page.has_sms_wx_hint()
+        assert not alarm_page.sms_http_fields_visible()
+        alarm_page.set_sms_enabled(True).save_sms_config()
+        assert alarm_page.wait_message("开启微信推送前必须填写 appToken")
 
         alarm_page.select_sms_provider("at_modem").save_sms_config()
         assert alarm_page.wait_message("开启 AT 短信推送前必须选择短信模块独立 COM")
@@ -351,6 +375,52 @@ def test_sms_http_save_refresh_roundtrip_and_tower_isolation(
         assert after.get("config") == before.get("config")
         assert after.get("port") == before.get("port")
         assert after.get("is_connected") == before.get("is_connected")
+        assert _file_sha256(alarm_path) == alarm_sha_before
+    finally:
+        restore = api_helper.put("/api/v1/sms/config", json=original.json())
+        restore.raise_for_status()
+
+
+def test_sms_wxpusher_save_refresh_roundtrip_without_phone_numbers(
+    page, base_url, api_helper
+):
+    page.set_viewport_size({"width": 1600, "height": 1400})
+    original = api_helper.get("/api/v1/sms/config")
+    original.raise_for_status()
+    reset = api_helper.put("/api/v1/sms/config", json=_sms_default_config())
+    reset.raise_for_status()
+
+    try:
+        alarm_page = AlarmPage(page, base_url).goto()
+        assert alarm_page.wait_sms_panel()
+        alarm_path = _alarm_config_path()
+        alarm_sha_before = _file_sha256(alarm_path)
+
+        alarm_page.select_sms_provider("wxpusher")
+        assert alarm_page.sms_wx_fields_visible()
+        assert alarm_page.has_sms_wx_hint()
+        alarm_page.fill_sms_wx_app_token("AT_e2e_token")
+        alarm_page.fill_sms_wx_uids("UID_e2e_1\nUID_e2e_2")
+        alarm_page.fill_sms_wx_topic_ids("101")
+        alarm_page.set_sms_enabled(True).save_sms_config()
+        assert alarm_page.wait_message("短信配置已保存并回读确认", timeout_ms=8000)
+
+        persisted = api_helper.get("/api/v1/sms/config")
+        persisted.raise_for_status()
+        saved = persisted.json()
+        assert saved["enabled"] is True
+        assert saved["provider"] == "wxpusher"
+        assert saved["phone_numbers"] == []
+        assert saved["wxpusher"]["app_token"] == "AT_e2e_token"
+        assert saved["wxpusher"]["uids"] == ["UID_e2e_1", "UID_e2e_2"]
+        assert saved["wxpusher"]["topic_ids"] == [101]
+
+        page.reload(wait_until="domcontentloaded")
+        assert alarm_page.wait_sms_panel()
+        assert alarm_page.wait_sms_enabled(True)
+        assert alarm_page.sms_provider() == "wxpusher"
+        assert alarm_page.sms_wx_fields_visible()
+        assert alarm_page.sms_wx_uids_value() == "UID_e2e_1\nUID_e2e_2"
         assert _file_sha256(alarm_path) == alarm_sha_before
     finally:
         restore = api_helper.put("/api/v1/sms/config", json=original.json())
