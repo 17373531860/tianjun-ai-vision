@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-云端短信中转服务 — 配合主程序 http_relay 适配器 (v3.46 过渡通道)
+云端短信中转服务 — 配合主程序统一短信通道 generic_http 使用 (v3.46 过渡通道)
 
 链路:
   工厂主程序 --POST /send--> 本服务(云服务器) <--GET /pull 轮询-- 手机(SIM卡真实发送)

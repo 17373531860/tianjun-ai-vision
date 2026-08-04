@@ -215,7 +215,8 @@
 | `/cameras/*` | `cameras.py` | **旧式相机表**（与 `/source/*` 并存，**勿混淆为主路径**）|
 | `/system/*` | `system_display.py` | KV 配置 + license 缓存 |
 | `/alarm/*` | `alarm.py` ⚠️ | 灯塔/蜂鸣器/共享灯柱 |
-| `/sms/*` | `sms.py` | 短信通知（12h 汇总；AT / HTTP 二选一，默认关） |
+| `/sms/*` | `sms.py` | 系统级统一短信通道 + NG 汇总通知（通道五选一 at_modem/generic_http/wxpusher/aliyun/tencent，默认关） |
+| `/sms-report/*` | `sms_report.py` | v3.46 每日短信日报（规则/试发/预览/日志；通道配置共用 `/sms/config`） |
 | `/workstations/*` | `channel_manager.py` | 多工位 + GPU 分配 |
 | `/scanner/*` | `scanner.py` | 扫码器 CRUD + scan_pair + 禁用 |
 | `/scanner/wmax/*` | `wmax.py` ⚠️ | WMax 协议（35+ endpoint） |

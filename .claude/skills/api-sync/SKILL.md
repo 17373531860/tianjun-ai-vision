@@ -1,6 +1,6 @@
 ---
 name: api-sync
-description: "前后端 API 对齐检查（含短信 /sms）：31 组 /api/v1/* 路由前缀真相表（全仓唯一事实源）、前端 22 个 axios 客户端、字段命名、已知不一致与修复流程。怀疑前后端数据不通或新增 API 后必读。"
+description: "前后端 API 对齐检查（含短信 /sms 与日报 /sms-report）：32 组 /api/v1/* 路由前缀真相表（全仓唯一事实源）、前端 23 个 axios 客户端、字段命名、已知不一致与修复流程。怀疑前后端数据不通或新增 API 后必读。"
 argument-hint: "[具体的 API 对齐问题，或 'full-check' 做全量检查]"
 model: opus
 effort: high
@@ -24,11 +24,11 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 2. **前端 axios 实例在 `frontend/src/api/index.js`**：`baseURL = http://localhost:8001/api/v1`。
    所有 `api.get('/foo')` 实际打 `http://localhost:8001/api/v1/foo`，**前端写路径时不要再加 `/api/v1`**。
 3. **MJPEG / 备份下载走 `getBackendHost()`**（不带 `/api/v1`）：例如 `${getBackendHost()}/video_feed`、`${getBackendHost()}/api/v1/data/videos/{id}`。
-4. **新增端点必须挂到下面 31 组前缀之一**；如果没有合适的，先回到 `add-api-endpoint` skill 决定挂哪儿。
+4. **新增端点必须挂到下面 32 组前缀之一**；如果没有合适的，先回到 `add-api-endpoint` skill 决定挂哪儿。
 
 ---
 
-## 1. 路由前缀真相表（★ 全仓唯一事实源 · 31 组）
+## 1. 路由前缀真相表（★ 全仓唯一事实源 · 32 组）
 
 > **单点维护约定**：本表是路由前缀 ↔ 后端文件 ↔ 前端 client 对应关系的**唯一**明细表。
 > `modify-api` / `add-api-endpoint` / AGENTS.md 第五节只保留速查或指回这里，**不要再复制整表**。
@@ -47,7 +47,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/cameras/*` | `cameras.py` | 无（`camera.js` 已删） | **旧式相机表**，新代码不要往这写 |
 | `/system/*` | `system_display.py` | 无封装（`useSystemStore` 直调） | KV 配置 + license 缓存 |
 | `/alarm/*` | `alarm.py` | 无封装（Alarm 视图直调） | 灯塔 / 蜂鸣器 / 共享灯柱 |
-| `/sms/*` | `sms.py` | `sms.js` | 短信通知（config/ports/test；12h 汇总；AT / HTTP 二选一，默认关） |
+| `/sms/*` | `sms.py` | `sms.js` | 系统级统一短信通道 + NG 汇总通知（config/ports/test；通道五选一 at_modem/generic_http/wxpusher/aliyun/tencent，日报共用此配置，默认关） |
+| `/sms-report/*` | `sms_report.py` | `smsReport.js` | v3.46 每日短信日报（规则 CRUD/试发/预览/日志 + `/providers` 只读通道信息；通道配置走 `/sms/config`） |
 | `/workstations/*` | `channel_manager.py` | `detection.js`（混在其中） | 多工位 + GPU 分配 |
 | `/scanner/*` | `scanner.py` | `scanner.js` | 扫码器 CRUD + scan_pair + disable-toggle |
 | `/scanner/wmax/*` | `wmax.py` | `wmax.js` | WMax 三端口协议（35+ 端点） |
@@ -78,7 +79,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 ## 2. 前端 API 客户端清单（`frontend/src/api/`）
 
-22 个文件。前缀对应关系**看 §1 真相表第三列**，此处只记状态与坑。所有文件统一 `import api from './index'`，`api.get('/xxx')` 自动加 `/api/v1` 前缀。
+23 个文件。前缀对应关系**看 §1 真相表第三列**，此处只记状态与坑。所有文件统一 `import api from './index'`，`api.get('/xxx')` 自动加 `/api/v1` 前缀。
 
 | 前端文件 | 状态 / 坑 |
 |---|---|
@@ -88,7 +89,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `project.js` / `model.js` / `scanner.js` / `wmax.js` / `mes.js` / `gateway.js` / `cluster.js` | 在用 |
 | `external_device.js` | 在用（list/create 端点**要尾斜杠** `/external-devices/`） |
 | `weighing.js` | ★ v3.31 在用（WeighingPanel / Data 称重记录页） |
-| `sms.js` | 在用（Alarm 页「NG 短信推送」卡：`/sms/config|ports|test`） |
+| `sms.js` | 在用（Alarm 页「短信通知」卡：`/sms/config|ports|test`；v3.46 起该配置为系统级统一短信通道，日报共用） |
+| `smsReport.js` | ★ v3.46 在用（Data 页短信日报对话框：`/sms-report/*`） |
 | `auth.js` | 在用（一个文件封装 `/auth` `/users` `/roles` `/api-keys` 四组） |
 | `plugins.js` / `channel_group.js` / `packaging_flow.js` | 在用 |
 | `export.js` | 在用（v3.5.0 自定义导出 + 实时规则） |

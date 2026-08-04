@@ -3,7 +3,8 @@
 涵盖:
   1. 数据页 → 数据导出 tab → 短信日报入口按钮 → 对话框打开有"新建规则"
   2. API 创建一条 __e2e_ 前缀规则 → UI 重新打开 → 表格里能看到
-  3. 服务商设置 tab 有 AK/签名/模板 表单
+  3. 「发送通道」tab 只读展示统一通道 (编辑入口在报警页, 与 NG 通知共用)
+  4. 规则编辑器有「正文模板」字段 (内容式通道本端渲染)
 """
 from __future__ import annotations
 
@@ -53,23 +54,23 @@ def test_API_创建规则后_UI_重打开能看到(page, base_url, api_helper):
         api_helper.delete(f"/api/v1/sms-report/rules/{rule_id}")
 
 
-def test_服务商设置tab_有配置表单(page, base_url):
+def test_发送通道tab_只读展示统一通道(page, base_url):
+    """通道 tab 不再是编辑表单 — 只读展示当前通道 + 指路报警页"""
     dialog = _open_sms_report_dialog(page, base_url)
-    dialog.locator(".el-tabs__item:has-text('服务商设置')").first.click(timeout=5000)
+    dialog.locator(".el-tabs__item:has-text('发送通道')").first.click(timeout=5000)
     time.sleep(0.5)
     body = dialog.inner_text(timeout=3000)
-    for kw in ("阿里云", "腾讯云", "自建 HTTP 中转", "短信签名", "默认模板 Code"):
-        assert kw in body, f"服务商设置应有 {kw}; body={body[:300]}"
+    for kw in ("当前通道", "报警设置", "阿里云短信", "腾讯云短信"):
+        assert kw in body, f"发送通道 tab 应有 {kw}; body={body[:300]}"
+    assert "保存服务商配置" not in body, "通道 tab 应为只读, 不应再有保存按钮"
 
 
-def test_服务商_自建中转_表单切换(page, base_url):
-    """选中「自建 HTTP 中转」→ 出现中转地址/Token/正文模板, 云字段隐藏"""
+def test_规则编辑器_有正文模板字段(page, base_url):
     dialog = _open_sms_report_dialog(page, base_url)
-    dialog.locator(".el-tabs__item:has-text('服务商设置')").first.click(timeout=5000)
-    time.sleep(0.5)
-    dialog.locator(".el-radio-button:has-text('自建 HTTP 中转')").first.click(timeout=5000)
-    time.sleep(0.5)
-    body = dialog.inner_text(timeout=3000)
-    for kw in ("中转服务地址", "鉴权 Token", "短信正文模板"):
-        assert kw in body, f"自建中转应有 {kw}; body={body[:300]}"
-    assert "AccessKey ID" not in body, "选自建中转后云凭据字段应隐藏"
+    dialog.locator("button:has-text('新建规则')").first.click(timeout=5000)
+    time.sleep(0.7)
+    editor = page.locator(".el-dialog:visible", has_text="新建短信日报规则").last
+    editor.wait_for(state="visible", timeout=5000)
+    body = editor.inner_text(timeout=3000)
+    assert "正文模板" in body, f"规则编辑器应有正文模板字段; body={body[:300]}"
+    assert "模板 Code 覆盖" in body, "规则编辑器应保留云模板 Code 覆盖"

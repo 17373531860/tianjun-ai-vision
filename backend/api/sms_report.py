@@ -1,5 +1,5 @@
 """
-每日短信日报 — 规则 CRUD + 试发 + 预览 + 日志 + 服务商配置 API (v3.46)
+每日短信日报 — 规则 CRUD + 试发 + 预览 + 日志 API (v3.46)
 
 端点前缀 /api/v1/sms-report:
 
@@ -12,17 +12,17 @@
 - POST   /sms-report/rules/{id}/test-send  立即执行一次 (可 ?use_mock=true 不发真短信)
 - POST   /sms-report/rules/{id}/preview    渲染当前窗口的模板变量, 不发送
 - GET    /sms-report/rules/{id}/logs       发送记录
-- GET    /sms-report/provider-config       服务商配置 (SK 脱敏)
-- PUT    /sms-report/provider-config       写服务商配置 (SK 传脱敏占位则保留旧值)
-- GET    /sms-report/providers             可用服务商列表
+- GET    /sms-report/providers             可用通道清单 (含当前生效通道)
 
+通道选择与凭据在共享短信配置 GET/PUT /api/v1/sms/config (与 NG 短信通知同一份),
+本路由不再有自己的服务商配置端点。
 字段勾选清单复用 GET /api/v1/export/fields (前端按组过滤 stats/aggregations/counters_daily)。
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -30,8 +30,7 @@ from backend.core.auth_deps import require_perm
 from backend.db.database import get_db
 from backend.models.notify_models import SmsReportRule, SmsSendLog
 from backend.services.sms_report import (
-    build_preview, get_provider_config_masked, reload_rule, remove_rule_job,
-    set_provider_config, trigger_now,
+    build_preview, load_channel_config, reload_rule, remove_rule_job, trigger_now,
 )
 
 router = APIRouter()
@@ -60,6 +59,7 @@ class _RuleBase(BaseModel):
     extra_params: Optional[Dict[str, str]] = None
     phone_numbers: Optional[List[str]] = None
     template_code: Optional[str] = Field(None, max_length=64)
+    content_template: Optional[str] = Field(None, max_length=2000)
 
 
 class RuleCreate(_RuleBase):
@@ -80,11 +80,7 @@ class RuleUpdate(BaseModel):
     extra_params: Optional[Dict[str, str]] = None
     phone_numbers: Optional[List[str]] = None
     template_code: Optional[str] = Field(None, max_length=64)
-
-
-class ProviderConfigUpdate(BaseModel):
-    provider: str = Field(..., pattern="^(aliyun|tencent|http_relay|mock)$")
-    config: Dict[str, Any] = Field(default_factory=dict)
+    content_template: Optional[str] = Field(None, max_length=2000)
 
 
 def _serialize(rule: SmsReportRule) -> Dict[str, Any]:
@@ -103,6 +99,7 @@ def _serialize(rule: SmsReportRule) -> Dict[str, Any]:
         "extra_params": rule.extra_params or {},
         "phone_numbers": rule.phone_numbers or [],
         "template_code": rule.template_code,
+        "content_template": rule.content_template,
         "last_run_time": rule.last_run_time.isoformat() if rule.last_run_time else None,
         "last_run_status": rule.last_run_status,
         "last_run_error": rule.last_run_error,
@@ -131,25 +128,22 @@ def _get_rule_or_404(db: Session, rule_id: int) -> SmsReportRule:
 
 
 # ============================================================
-# 服务商配置 (放在 /rules/{id} 之前, 避免路径吞噬)
+# 通道信息 (只读; 配置编辑走共享 /api/v1/sms/config)
 # ============================================================
-
-@router.get("/provider-config")
-def read_provider_config(db: Session = Depends(get_db)):
-    return get_provider_config_masked(db)
-
-
-@router.put("/provider-config",
-            dependencies=[Depends(require_perm("data.export"))])
-def write_provider_config(body: ProviderConfigUpdate, db: Session = Depends(get_db)):
-    set_provider_config(db, body.provider, body.config)
-    return get_provider_config_masked(db)
-
 
 @router.get("/providers")
 def read_providers():
-    from backend.services.sms_adapters import list_providers
-    return {"providers": list_providers()}
+    """统一通道清单 + 当前生效通道 (来自共享 sms_config.json)。"""
+    from backend.services.sms_providers import PROVIDER_LABELS
+    channel_config = load_channel_config()
+    return {
+        "providers": [
+            {"name": name, "label": label}
+            for name, label in PROVIDER_LABELS.items()
+        ],
+        "active_provider": channel_config.provider,
+        "template_based": channel_config.provider in {"aliyun", "tencent"},
+    }
 
 
 # ============================================================

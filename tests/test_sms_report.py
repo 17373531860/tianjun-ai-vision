@@ -2,10 +2,13 @@
 
 覆盖:
   1. counter_daily 按日增量记账 (正向累计 / 非正忽略 / flush / 按工位过滤)
-  2. sms_adapters 阿里云/腾讯云签名与请求组装 (mock requests, 不出网)
-  3. /api/v1/sms-report 规则 CRUD + 服务商配置脱敏
-  4. test-send 走 mock 适配器全链路 (聚合 → 发送 → SmsSendLog 落库)
+  2. 统一通道层 sms_providers 的 aliyun/tencent 签名与请求组装 (注入 request_func, 不出网)
+  3. /api/v1/sms-report 规则 CRUD + 通道信息只读端点
+  4. test-send 走 mock 通道全链路 (聚合 → 发送 → SmsSendLog 落库)
   5. daily_report_before_send hook returnable 白名单契约
+  6. 中转服务脚本 + generic_http 通道对接中转的替代路径 (http_relay 适配器已退役)
+
+通道选择/凭据走共享 sms_config.json (与 NG 短信通知同一份), 本文件不再测 SystemConfig 服务商配置。
 """
 from __future__ import annotations
 
@@ -101,40 +104,57 @@ class TestCounterDaily:
 
 
 # ============================================================
-# 2. 适配器
+# 2. 统一通道层: aliyun / tencent / mock Provider (SmsProvider 契约)
 # ============================================================
 
-class TestSmsAdapters:
+def _cloud_config(**overrides):
+    """带云通道凭据的 SmsServiceConfig (统一配置对象, 不出网)。"""
+    from backend.services.sms_service import SmsServiceConfig
+    defaults = dict(
+        aliyun_access_key_id="AKID", aliyun_access_key_secret="AKSECRET",
+        aliyun_sign_name="天军视觉", aliyun_template_code="SMS_123",
+        tencent_secret_id="SID", tencent_secret_key="SKEY",
+        tencent_sdk_app_id="1400000000", tencent_sign_name="天军视觉",
+        tencent_template_id="1234567",
+        retries=0,
+    )
+    defaults.update(overrides)
+    return SmsServiceConfig(**defaults)
 
-    ALIYUN_CFG = {
-        "access_key_id": "AKID", "access_key_secret": "AKSECRET",
-        "sign_name": "天军视觉", "template_code": "SMS_123",
-    }
-    TENCENT_CFG = {
-        "access_key_id": "SID", "access_key_secret": "SKEY",
-        "sign_name": "天军视觉", "template_code": "1234567",
-        "sms_sdk_app_id": "1400000000",
-    }
 
-    def test_registry(self):
-        from backend.services.sms_adapters import get_sms_adapter, list_providers
-        assert set(list_providers()) >= {"aliyun", "tencent", "mock"}
-        assert get_sms_adapter("aliyun").provider == "aliyun"
+def _send_kwargs(params):
+    return dict(message_id="m1", event_name="每日数据日报",
+                raw_message="", context={"template_params": params})
+
+
+class TestSmsProviders:
+
+    def test_factory_registry(self):
+        from backend.services.sms_providers import create_provider, PROVIDER_LABELS
+        cfg = _cloud_config()
+        assert set(PROVIDER_LABELS) == {
+            "at_modem", "generic_http", "wxpusher", "aliyun", "tencent"}
+        assert create_provider(cfg, provider_name="aliyun").name == "aliyun"
+        assert create_provider(cfg, provider_name="mock").name == "mock"
         with pytest.raises(ValueError):
-            get_sms_adapter("nonexistent")
+            create_provider(cfg, provider_name="nonexistent")
+        with pytest.raises(ValueError):
+            # at_modem 必须注入 modem_factory
+            create_provider(cfg, provider_name="at_modem")
 
     def test_aliyun_request_shape(self):
-        from backend.services.sms_adapters import get_sms_adapter
-        adapter = get_sms_adapter("aliyun")
+        from backend.services.sms_providers import create_provider
+        request = MagicMock(return_value=MagicMock(
+            status_code=200, json=lambda: {"Code": "OK", "BizId": "1"}))
+        provider = create_provider(_cloud_config(), provider_name="aliyun",
+                                   request_func=request)
 
-        with patch("backend.services.sms_adapters.aliyun_adapter.requests.get") as mock_get:
-            mock_get.return_value = MagicMock(
-                status_code=200, json=lambda: {"Code": "OK", "BizId": "1"})
-            result = adapter.send(["13800000000", "13900000000"],
-                                  {"total": 120, "rate": "97.2"}, self.ALIYUN_CFG)
+        batch = provider.send(["13800000000", "13900000000"], "",
+                              **_send_kwargs({"total": 120, "rate": "97.2"}))
 
-        assert result["success"] is True
-        params = mock_get.call_args.kwargs["params"]
+        assert batch.success is True
+        assert [r.phone for r in batch.results] == ["13800000000", "13900000000"]
+        params = request.call_args.kwargs["params"]
         assert params["Action"] == "SendSms"
         assert params["PhoneNumbers"] == "13800000000,13900000000"
         assert params["SignName"] == "天军视觉"
@@ -142,117 +162,121 @@ class TestSmsAdapters:
         assert "total" in params["TemplateParam"]
         assert params["Signature"]  # HMAC-SHA1 base64 已生成
 
-    def test_aliyun_error_code_maps_to_failure(self):
-        from backend.services.sms_adapters import get_sms_adapter
-        adapter = get_sms_adapter("aliyun")
-        with patch("backend.services.sms_adapters.aliyun_adapter.requests.get") as mock_get:
-            mock_get.return_value = MagicMock(
-                status_code=200,
-                json=lambda: {"Code": "isv.BUSINESS_LIMIT_CONTROL", "Message": "限流"})
-            result = adapter.send(["13800000000"], {"a": 1}, self.ALIYUN_CFG)
-        assert result["success"] is False
-        assert "BUSINESS_LIMIT_CONTROL" in result["error"]
+    def test_aliyun_template_code_override_via_context(self):
+        from backend.services.sms_providers import create_provider
+        request = MagicMock(return_value=MagicMock(
+            status_code=200, json=lambda: {"Code": "OK"}))
+        provider = create_provider(_cloud_config(), provider_name="aliyun",
+                                   request_func=request)
+        provider.send(["13800000000"], "", message_id="m", event_name="e",
+                      raw_message="", context={"template_params": {"a": "1"},
+                                               "template_code": "SMS_999"})
+        assert request.call_args.kwargs["params"]["TemplateCode"] == "SMS_999"
 
-    def test_aliyun_missing_config(self):
-        from backend.services.sms_adapters import get_sms_adapter
-        adapter = get_sms_adapter("aliyun")
-        result = adapter.send(["13800000000"], {}, {"sign_name": "x", "template_code": "y"})
-        assert result["success"] is False
-        assert "AccessKey" in result["error"]
+    def test_aliyun_ng_summary_fallback_params(self):
+        """NG 汇总路径不传 template_params → 回退 time_range/ok_count/ng_count"""
+        import json as _json
+        from backend.services.sms_providers import create_provider
+        request = MagicMock(return_value=MagicMock(
+            status_code=200, json=lambda: {"Code": "OK"}))
+        provider = create_provider(_cloud_config(), provider_name="aliyun",
+                                   request_func=request)
+        provider.send(["13800000000"], "msg", message_id="m", event_name="NG 汇总",
+                      raw_message="msg",
+                      context={"time_range": "08-04 08:00~20:00",
+                               "ok_count": 90, "ng_count": 3})
+        tpl = _json.loads(request.call_args.kwargs["params"]["TemplateParam"])
+        assert tpl == {"time_range": "08-04 08:00~20:00",
+                       "ok_count": "90", "ng_count": "3"}
+
+    def test_aliyun_error_code_maps_to_failure(self):
+        from backend.services.sms_providers import create_provider
+        request = MagicMock(return_value=MagicMock(
+            status_code=200,
+            json=lambda: {"Code": "isv.SMS_SIGNATURE_ILLEGAL", "Message": "签名不合法"}))
+        provider = create_provider(_cloud_config(), provider_name="aliyun",
+                                   request_func=request)
+        batch = provider.send(["13800000000"], "", **_send_kwargs({"a": 1}))
+        assert batch.success is False
+        assert "SMS_SIGNATURE_ILLEGAL" in batch.results[0].error_code
+        assert request.call_count == 1  # 签名/参数错不重试
+
+    def test_aliyun_missing_template_fails_fast(self):
+        from backend.services.sms_providers import create_provider
+        provider = create_provider(_cloud_config(aliyun_template_code=""),
+                                   provider_name="aliyun",
+                                   request_func=MagicMock())
+        batch = provider.send(["13800000000"], "", **_send_kwargs({}))
+        assert batch.success is False
+        assert batch.results[0].error_code == "ALIYUN_NO_TEMPLATE"
 
     def test_tencent_request_shape(self):
         import json as _json
-        from backend.services.sms_adapters import get_sms_adapter
-        adapter = get_sms_adapter("tencent")
+        from backend.services.sms_providers import create_provider
+        request = MagicMock(return_value=MagicMock(
+            status_code=200,
+            json=lambda: {"Response": {"SendStatusSet": [
+                {"Code": "Ok", "PhoneNumber": "+8613800000000"}]}}))
+        provider = create_provider(_cloud_config(), provider_name="tencent",
+                                   request_func=request)
 
-        with patch("backend.services.sms_adapters.tencent_adapter.requests.post") as mock_post:
-            mock_post.return_value = MagicMock(
-                status_code=200,
-                json=lambda: {"Response": {"SendStatusSet": [
-                    {"Code": "Ok", "PhoneNumber": "+8613800000000"}]}})
-            result = adapter.send(["13800000000"], {"total": 120}, self.TENCENT_CFG)
+        batch = provider.send(["13800000000"], "", **_send_kwargs({"total": 120}))
 
-        assert result["success"] is True
-        payload = _json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+        assert batch.success is True
+        payload = _json.loads(request.call_args.kwargs["data"].decode("utf-8"))
         assert payload["PhoneNumberSet"] == ["+8613800000000"]  # 自动加 +86
         assert payload["TemplateParamSet"] == ["120"]           # dict 顺序转位置参数
-        headers = mock_post.call_args.kwargs["headers"]
+        headers = request.call_args.kwargs["headers"]
         assert headers["X-TC-Action"] == "SendSms"
         assert headers["Authorization"].startswith("TC3-HMAC-SHA256 Credential=SID/")
 
-    def test_tencent_partial_failure(self):
-        from backend.services.sms_adapters import get_sms_adapter
-        adapter = get_sms_adapter("tencent")
-        with patch("backend.services.sms_adapters.tencent_adapter.requests.post") as mock_post:
-            mock_post.return_value = MagicMock(
-                status_code=200,
-                json=lambda: {"Response": {"SendStatusSet": [
-                    {"Code": "Ok", "PhoneNumber": "+8613800000000"},
-                    {"Code": "LimitExceeded.PhoneNumberDailyLimit",
-                     "PhoneNumber": "+8613900000000", "Message": "超日限"}]}})
-            result = adapter.send(["13800000000", "13900000000"], {"a": 1}, self.TENCENT_CFG)
-        assert result["success"] is False
-        assert "13900000000" in result["error"]
+    def test_tencent_partial_failure_per_phone(self):
+        from backend.services.sms_providers import create_provider
+        request = MagicMock(return_value=MagicMock(
+            status_code=200,
+            json=lambda: {"Response": {"SendStatusSet": [
+                {"Code": "Ok", "PhoneNumber": "+8613800000000"},
+                {"Code": "LimitExceeded.PhoneNumberDailyLimit",
+                 "PhoneNumber": "+8613900000000", "Message": "超日限"}]}}))
+        provider = create_provider(_cloud_config(), provider_name="tencent",
+                                   request_func=request)
+        batch = provider.send(["13800000000", "13900000000"], "",
+                              **_send_kwargs({"a": 1}))
+        assert batch.success is False
+        by_phone = {r.phone: r for r in batch.results}
+        assert by_phone["13800000000"].success is True   # 逐号拆分成败
+        assert by_phone["13900000000"].success is False
+        assert "LimitExceeded" in by_phone["13900000000"].error_code
 
-    def test_mock_adapter(self):
-        from backend.services.sms_adapters import get_sms_adapter
-        from backend.services.sms_adapters.mock_adapter import MockSmsAdapter
-        adapter = get_sms_adapter("mock")
-        result = adapter.send(["13800000000"], {"total": "1"}, {"template_code": "T"})
-        assert result["success"] is True
-        assert MockSmsAdapter.last_call["phone_numbers"] == ["13800000000"]
+    def test_mock_provider_records_last_send(self):
+        from backend.services.sms_providers import create_provider
+        from backend.services.sms_providers.mock_provider import MockProvider
+        provider = create_provider(_cloud_config(), provider_name="mock")
+        batch = provider.send(["13800000000"], "正文",
+                              **_send_kwargs({"total": "1"}))
+        assert batch.success is True
+        assert MockProvider.last_send["recipients"] == ["13800000000"]
+        assert MockProvider.last_send["message"] == "正文"
 
 
 # ============================================================
-# 2b. 自建 HTTP 中转适配器 (云审核过渡通道)
+# 2b. 正文渲染 (内容式通道用)
 # ============================================================
 
-class TestHttpRelayAdapter:
-
-    CFG = {"relay_url": "https://relay.example.com/send", "relay_token": "TK",
-           "content_template": "【天军视觉】${date}日报: 总数${total} 良率${rate}%"}
-
-    def test_renders_content_and_posts(self):
-        from backend.services.sms_adapters import get_sms_adapter
-        adapter = get_sms_adapter("http_relay")
-        with patch("backend.services.sms_adapters.http_relay_adapter.requests.post") as mock_post:
-            mock_post.return_value = MagicMock(status_code=200,
-                                               json=lambda: {"success": True, "task_id": "t1"})
-            result = adapter.send(["13800000000"],
-                                  {"date": "08-03", "total": 120, "rate": "97.2"}, self.CFG)
-        assert result["success"] is True
-        payload = mock_post.call_args.kwargs["json"]
-        assert payload["phones"] == ["13800000000"]
-        assert payload["content"] == "【天军视觉】08-03日报: 总数120 良率97.2%"
-        headers = mock_post.call_args.kwargs["headers"]
-        assert headers["Authorization"] == "Bearer TK"
+class TestRenderContent:
 
     def test_chinese_var_names_supported(self):
-        from backend.services.sms_adapters.http_relay_adapter import HttpRelaySmsAdapter
-        content = HttpRelaySmsAdapter._render_content(
-            "今日${合格总数}件合格", {"合格总数": "88"})
-        assert content == "今日88件合格"
+        from backend.services.sms_report import render_content
+        assert render_content("今日${合格总数}件合格", {"合格总数": "88"}) == "今日88件合格"
 
     def test_no_template_falls_back_to_kv(self):
-        from backend.services.sms_adapters.http_relay_adapter import HttpRelaySmsAdapter
-        content = HttpRelaySmsAdapter._render_content("", {"total": "5", "ok": "4"})
-        assert content == "total:5 ok:4"
+        from backend.services.sms_report import render_content
+        assert render_content("", {"total": "5", "ok": "4"}) == "total:5 ok:4"
+        assert render_content(None, {"a": "1"}) == "a:1"
 
-    def test_missing_url_fails_fast(self):
-        from backend.services.sms_adapters import get_sms_adapter
-        result = get_sms_adapter("http_relay").send(["13800000000"], {"a": 1}, {})
-        assert result["success"] is False
-        assert "relay_url" in result["error"]
-
-    def test_non_200_maps_to_failure(self):
-        from backend.services.sms_adapters import get_sms_adapter
-        adapter = get_sms_adapter("http_relay")
-        with patch("backend.services.sms_adapters.http_relay_adapter.requests.post") as mock_post:
-            mock_post.return_value = MagicMock(status_code=401,
-                                               json=lambda: {"success": False, "error": "unauthorized"})
-            result = adapter.send(["13800000000"], {"a": 1}, self.CFG)
-        assert result["success"] is False
-        assert "401" in result["error"]
+    def test_unknown_var_renders_empty(self):
+        from backend.services.sms_report import render_content
+        assert render_content("值=${不存在}", {}) == "值="
 
 
 class TestRelayServerScript:
@@ -310,15 +334,29 @@ class TestRelayServerScript:
         listed = rq.get(f"{url}/tasks", headers=h, timeout=5).json()["tasks"]
         assert listed[-1]["status"] == "sent"
 
-    def test_adapter_to_relay_full_loop(self, relay):
-        """http_relay 适配器直接打到本地中转服务, 全链路无 mock"""
-        from backend.services.sms_adapters import get_sms_adapter
+    def test_generic_http_provider_to_relay_full_loop(self, relay):
+        """统一层 generic_http 通道直接打到本地中转服务, 全链路无 mock。
+
+        这是 http_relay 适配器退役后的替代路径: 共享配置选 generic_http,
+        api_url 指向中转 /send, field_mapping 把 message/phone_numbers
+        映射成中转服务的 content/phones。
+        """
+        from backend.services.sms_providers import create_provider
+        from backend.services.sms_service import SmsServiceConfig
         url, mod = relay
-        result = get_sms_adapter("http_relay").send(
-            ["13800000000"], {"total": "120"},
-            {"relay_url": f"{url}/send", "relay_token": "TESTTOKEN",
-             "content_template": "总数${total}"})
-        assert result["success"] is True
+
+        cfg = SmsServiceConfig(
+            provider="generic_http",
+            api_url=f"{url}/send",
+            token="TESTTOKEN",
+            field_mapping={"phone_numbers": "phones", "message": "content"},
+            retries=0,
+        )
+        provider = create_provider(cfg)
+        batch = provider.send(
+            ["13800000000"], "总数120", message_id="m1",
+            event_name="每日数据日报", raw_message="总数120", context={})
+        assert batch.success is True
         assert mod._tasks[-1]["content"] == "总数120"
         assert mod._tasks[-1]["phones"] == ["13800000000"]
 
@@ -371,31 +409,31 @@ class TestSmsReportAPI:
         })
         assert r.status_code == 400
 
-    def test_provider_config_masking(self, client):
-        r = client.put("/api/v1/sms-report/provider-config", json={
-            "provider": "aliyun",
-            "config": {"access_key_id": "AK1", "access_key_secret": "RAWSECRET",
-                       "sign_name": "签名", "template_code": "SMS_1"},
-        })
+    def test_providers_endpoint_readonly_channel_info(self, client):
+        """通道信息只读端点: 清单来自统一层, 生效通道来自共享 sms_config.json。"""
+        r = client.get("/api/v1/sms-report/providers")
         assert r.status_code == 200
-        assert r.json()["config"]["access_key_secret"] == "******"  # 脱敏回显
+        data = r.json()
+        names = {p["name"] for p in data["providers"]}
+        assert names == {"at_modem", "generic_http", "wxpusher", "aliyun", "tencent"}
+        assert data["active_provider"] in names
+        assert isinstance(data["template_based"], bool)
 
-        # 用脱敏占位再写 → 后端保留旧 SK 原文
-        r = client.put("/api/v1/sms-report/provider-config", json={
-            "provider": "aliyun",
-            "config": {"access_key_id": "AK2", "access_key_secret": "******",
-                       "sign_name": "签名", "template_code": "SMS_1"},
+    def test_rule_content_template_persists(self, client):
+        r = client.post("/api/v1/sms-report/rules", json={
+            "name": "正文模板规则", "cron_expression": "0 20 * * *",
+            "metrics": ["stats.total_cycles"],
+            "template_param_mapping": {"stats.total_cycles": "total"},
+            "phone_numbers": ["13800000000"],
+            "content_template": "【天军视觉】总数${total}",
         })
-        assert r.json()["config"]["access_key_id"] == "AK2"
-
-        from backend.db.database import SessionLocal
-        from backend.services.sms_report import get_provider_config
-        db = SessionLocal()
-        try:
-            raw = get_provider_config(db)
-            assert raw["config"]["access_key_secret"] == "RAWSECRET"
-        finally:
-            db.close()
+        assert r.status_code == 200, r.text
+        rid = r.json()["id"]
+        assert r.json()["content_template"] == "【天军视觉】总数${total}"
+        r = client.put(f"/api/v1/sms-report/rules/{rid}",
+                       json={"content_template": "总${total}"})
+        assert r.json()["content_template"] == "总${total}"
+        client.delete(f"/api/v1/sms-report/rules/{rid}")
 
 
 # ============================================================
@@ -416,6 +454,7 @@ class TestSendPipeline:
             "template_param_mapping": {"stats.total_cycles": "total",
                                        "counters_daily.合格总数": "ok"},
             "phone_numbers": ["13800000000"],
+            "content_template": "总数${total} 合格${ok}",
         })
         rid = r.json()["id"]
 
@@ -427,10 +466,13 @@ class TestSendPipeline:
         assert summary["sent"] == 1
 
         # 变量按映射命名; 计数器当日增量 >= 本测试挂的 8 (session 级共库, 其他用例可能也加过)
-        from backend.services.sms_adapters.mock_adapter import MockSmsAdapter
-        params = MockSmsAdapter.last_call["template_params"]
+        from backend.services.sms_providers.mock_provider import MockProvider
+        params = MockProvider.last_send["template_params"]
         assert "total" in params
         assert int(params["ok"]) >= 8
+        # 正文模板在本端渲染 (内容式通道语义)
+        assert MockProvider.last_send["message"].startswith("总数")
+        assert f"合格{params['ok']}" in MockProvider.last_send["message"]
 
         # 发送记录落库
         logs = client.get(f"/api/v1/sms-report/rules/{rid}/logs").json()["logs"]

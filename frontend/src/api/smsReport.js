@@ -44,15 +44,8 @@ export const listSmsRuleLogs = (id, params = {}) => {
   return api.get(`/sms-report/rules/${id}/logs`, { params });
 };
 
-// ============ 服务商配置 ============
-
-export const getSmsProviderConfig = () => {
-  return api.get('/sms-report/provider-config');
-};
-
-export const setSmsProviderConfig = (provider, config) => {
-  return api.put('/sms-report/provider-config', { provider, config });
-};
+// ============ 通道信息 (只读) ============
+// 通道选择与凭据的编辑走共享短信配置 (报警页「短信通知」卡, api/sms.js)
 
 export const listSmsProviders = () => {
   return api.get('/sms-report/providers');

@@ -8,10 +8,12 @@
 
 设计原则：
 1. 国内云短信是"签名 + 审核模板 + 变量"，不是自由文本 —— 规则存的是
-   "勾选字段路径 → 云模板变量名"的映射，发送时渲染变量 dict 交给适配器
+   "勾选字段路径 → 云模板变量名"的映射，发送时渲染变量 dict 交给通道;
+   内容式通道 (AT 短信猫等) 则用 content_template 在本端渲染正文
 2. 计数器按日增量只累计正向增加（清零/重置不扣减），热路径不逐次写 DB，
    由内存日桶节流落库（见 services/counter_daily.py）
-3. 发送通道适配器化（aliyun / tencent），服务商凭据存 SystemConfig，不进本表
+3. 发送通道统一走 services/sms_providers（与 NG 短信通知共用），
+   通道选择与凭据存共享 sms_config.json，不进本表
 """
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, Text, JSON,
@@ -73,8 +75,13 @@ class SmsReportRule(Base):
     # 收件手机号列表 ["13800000000", ...]
     phone_numbers = Column(JSON, nullable=True)
 
-    # 云模板 code 覆盖 (可空; 空则用 SystemConfig 里服务商配置的默认 template_code)
+    # 云模板 code/ID 覆盖 (可空; 空则用共享短信配置里对应云通道的默认模板)
     template_code = Column(String(64), nullable=True)
+
+    # 短信正文模板 (可空) — 内容式通道 (AT 短信猫/通用 HTTP/WxPusher) 用,
+    # ${变量名} 占位符取自变量映射; 空则退化为 "变量:值" 拼接。
+    # 云模板通道 (aliyun/tencent) 忽略此字段, 正文由云平台审核模板渲染。
+    content_template = Column(Text, nullable=True)
 
     # ---- 运行状态 ----
     last_run_time = Column(DateTime(timezone=True), nullable=True)

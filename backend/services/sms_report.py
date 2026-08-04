@@ -8,84 +8,47 @@
     → 汇总模式一个 scope / 分工位模式每工位一个 scope
     → 每 scope: build_range_context 按日聚合 + counters_daily 台账 → 模板变量 dict
     → fire_plugin_hook("daily_report_before_send") (returnable: 改写变量/手机号/跳过)
-    → sms_adapters 发送 (失败重试 MAX_RETRY 次) → SmsSendLog 落库
+    → 统一通道层 sms_providers 发送 (重试在 provider 内部) → SmsSendLog 落库
     → 更新 rule.last_run_*
+
+通道与凭据来自共享 sms_config.json (SmsConfigStore, 与 NG 短信通知同一份),
+本模块不再维护自己的服务商配置。云模板通道 (aliyun/tencent) 走
+context["template_params"] 命名/位置变量; 内容式通道 (at_modem/generic_http/
+wxpusher) 用规则的 content_template 在本端渲染正文。
 
 硬约束:
   - 任何异常不得抛回调度线程外, 更不得影响检测主流程
   - 国内云短信 = 审核模板 + 变量, metrics 勾选字段映射成模板变量
 """
-import json
+import re
 import threading
-import time
 from datetime import datetime, timedelta, date as _date
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 
 from backend.db.database import SessionLocal
 from backend.models.notify_models import SmsReportRule, SmsSendLog
-from backend.models.models import SystemConfig, DetectionSession
+from backend.models.models import DetectionSession
 
 _LOCK = threading.RLock()
 _SCHEDULER = None
 _JOB_PREFIX = "sms_report_"
 
-MAX_RETRY = 2          # 首发 + 2 次重试
-RETRY_INTERVAL_S = 5
-
-# ============================================================
-# 服务商配置 (SystemConfig KV)
-# ============================================================
-
-KEY_PROVIDER = "sms.provider"
-KEY_CONFIG = "sms.config"
-
-_SECRET_FIELDS = ("access_key_secret", "relay_token")
-SECRET_MASK = "******"
+# 云模板通道: 正文由云平台审核模板渲染, 忽略 content_template
+TEMPLATE_PROVIDERS = {"aliyun", "tencent"}
 
 
-def get_provider_config(db) -> dict:
-    """读服务商配置 (原文, 内部用)。"""
-    provider_row = db.query(SystemConfig).filter(SystemConfig.key == KEY_PROVIDER).first()
-    config_row = db.query(SystemConfig).filter(SystemConfig.key == KEY_CONFIG).first()
-    try:
-        config = json.loads(config_row.value) if (config_row and config_row.value) else {}
-    except Exception:
-        config = {}
-    return {
-        "provider": (provider_row.value if provider_row else "") or "",
-        "config": config,
-    }
+def load_channel_config():
+    """读共享短信通道配置 (sms_config.json, 与 NG 短信通知同一份)。"""
+    from backend.services.sms_config import SmsConfigStore
+    return SmsConfigStore().load()
 
 
-def get_provider_config_masked(db) -> dict:
-    """读服务商配置 (SK 脱敏, 给前端)。"""
-    data = get_provider_config(db)
-    config = dict(data["config"])
-    for f in _SECRET_FIELDS:
-        if config.get(f):
-            config[f] = SECRET_MASK
-    data["config"] = config
-    return data
-
-
-def set_provider_config(db, provider: str, config: dict) -> None:
-    """写服务商配置。config 里 SK 值为脱敏占位时保留旧值 (前端回显不改密钥场景)。"""
-    old = get_provider_config(db)["config"]
-    merged = dict(config or {})
-    for f in _SECRET_FIELDS:
-        if merged.get(f) == SECRET_MASK and old.get(f):
-            merged[f] = old[f]
-
-    for key, value, desc in (
-        (KEY_PROVIDER, (provider or "").strip(), "短信日报服务商 (aliyun|tencent)"),
-        (KEY_CONFIG, json.dumps(merged, ensure_ascii=False), "短信日报服务商配置 JSON"),
-    ):
-        row = db.query(SystemConfig).filter(SystemConfig.key == key).first()
-        if row:
-            row.value = value
-        else:
-            db.add(SystemConfig(key=key, value=value, description=desc))
-    db.commit()
+def render_content(template: Optional[str], params: Dict[str, str]) -> str:
+    """把 ${变量名} 替换为变量值 (支持中文变量名); 无模板则 "k:v" 拼接。"""
+    if not (template or "").strip():
+        return " ".join(f"{k}:{v}" for k, v in params.items())
+    return re.sub(r"\$\{([^}]+)\}",
+                  lambda m: params.get(m.group(1).strip(), ""), template)
 
 
 # ============================================================
@@ -219,18 +182,79 @@ def build_preview(db, rule: SmsReportRule) -> List[dict]:
 # 发送
 # ============================================================
 
-def _send_with_retry(adapter, phones, params, config, template_code) -> dict:
-    result = {"success": False, "error": "未执行", "response": None}
-    retry = 0
-    for attempt in range(1 + MAX_RETRY):
-        result = adapter.send(phones, params, config, template_code=template_code)
-        if result.get("success"):
-            break
-        retry = attempt
-        if attempt < MAX_RETRY:
-            time.sleep(RETRY_INTERVAL_S)
-    result["retry_count"] = retry
-    return result
+def _build_provider(channel_config, provider_name: str):
+    """从统一通道层构造 provider (at_modem 需注入串口 modem 工厂)。"""
+    from backend.services.sms_providers import create_provider
+
+    modem_factory = None
+    if provider_name == "at_modem":
+        from backend.services.sms_at_client import SerialConfig
+        from backend.services.sms_modem import SmsModem
+
+        def modem_factory():
+            return SmsModem.from_config(
+                SerialConfig(port=channel_config.port,
+                             baudrate=channel_config.baudrate),
+                logger=lambda m: print(f"[SmsReport][AT] {m}"),
+            )
+
+    return create_provider(
+        channel_config,
+        provider_name=provider_name,
+        logger=lambda m: print(f"[SmsReport] {m}"),
+        modem_factory=modem_factory,
+    )
+
+
+def _send_one(provider, channel_config, rule: SmsReportRule,
+              phones: List[str], params: Dict[str, str], message_id: str) -> dict:
+    """一个 scope 发送一次; 重试/退避由 provider 内部按共享配置执行。
+
+    返回与 SmsSendLog 字段对齐的摘要 dict。
+    """
+    message = render_content(rule.content_template, params)
+    if provider.name == "wxpusher":
+        # WxPusher 目标以共享配置的 UID/Topic 为准, 手机号列表仅占位
+        from backend.services.sms_providers.wxpusher_provider import (
+            wxpusher_target_labels,
+        )
+        targets = list(wxpusher_target_labels(
+            channel_config.wxpusher_uids, channel_config.wxpusher_topic_ids))
+    else:
+        targets = phones
+
+    try:
+        batch = provider.send(
+            targets,
+            message,
+            message_id=message_id,
+            event_name="每日数据日报",
+            raw_message=message,
+            context={
+                "template_params": dict(params),
+                "template_code": rule.template_code or "",
+                "device_name": rule.name,
+            },
+        )
+    except Exception as e:
+        return {"success": False, "retry_count": 0,
+                "error": f"通道调用异常: {e}", "response": None}
+
+    errors = "; ".join(
+        f"{r.phone}: {r.detail}" for r in batch.results if not r.success)
+    return {
+        "success": batch.success,
+        "retry_count": batch.retry_count,
+        "error": errors or None,
+        "response": {
+            "provider": provider.name,
+            "results": [
+                {"phone": r.phone, "success": r.success,
+                 "detail": r.detail, "reference": r.message_reference}
+                for r in batch.results
+            ],
+        },
+    }
 
 
 def _run_rule(rule_id: int, source_type: str = "cron",
@@ -245,18 +269,10 @@ def _run_rule(rule_id: int, source_type: str = "cron",
             summary["error"] = f"规则 #{rule_id} 不存在"
             return summary
 
-        provider_data = get_provider_config(db)
-        provider = force_provider or provider_data["provider"]
-        config = provider_data["config"]
-        if not provider:
-            _finish_rule(db, rule, "failed", "未配置短信服务商")
-            summary["status"] = "failed"
-            summary["error"] = "未配置短信服务商 (sms.provider)"
-            return summary
-
+        channel_config = load_channel_config()
+        provider_name = force_provider or channel_config.provider
         try:
-            from backend.services.sms_adapters import get_sms_adapter
-            adapter = get_sms_adapter(provider)
+            provider = _build_provider(channel_config, provider_name)
         except Exception as e:
             _finish_rule(db, rule, "failed", str(e))
             summary["status"] = "failed"
@@ -264,7 +280,7 @@ def _run_rule(rule_id: int, source_type: str = "cron",
             return summary
 
         phones_default = [str(p).strip() for p in (rule.phone_numbers or []) if str(p).strip()]
-        if not phones_default:
+        if not phones_default and provider_name != "wxpusher":
             _finish_rule(db, rule, "skipped", "未配置手机号")
             summary["status"] = "skipped"
             summary["skipped"] += 1
@@ -274,7 +290,7 @@ def _run_rule(rule_id: int, source_type: str = "cron",
         scopes = build_preview(db, rule)
         stat_date, _, _ = compute_window(rule.data_window_type)
 
-        for scope in scopes:
+        for scope_index, scope in enumerate(scopes):
             params = scope.get("params") or {}
             phones = list(phones_default)
             skip = False
@@ -287,7 +303,7 @@ def _run_rule(rule_id: int, source_type: str = "cron",
                     {
                         "rule_id": rule.id,
                         "rule_name": rule.name,
-                        "provider": provider,
+                        "provider": provider_name,
                         "stat_date": stat_date.isoformat(),
                         "channel_id": scope.get("channel_id"),
                         "group_by_channel": bool(rule.group_by_channel),
@@ -311,14 +327,20 @@ def _run_rule(rule_id: int, source_type: str = "cron",
                                            "skipped": True})
                 continue
 
-            result = _send_with_retry(adapter, phones, params, config, rule.template_code)
+            message_id = (
+                f"report-{rule.id}-{stat_date.isoformat()}-{scope_index}"
+                f"-{int(datetime.now().timestamp())}"
+            )
+            result = _send_one(provider, channel_config, rule,
+                               phones, params, message_id)
 
             log = SmsSendLog(
                 rule_id=rule.id, rule_name=rule.name,
-                source_type=source_type, provider=provider,
+                source_type=source_type, provider=provider_name,
                 channel_id=scope.get("channel_id"),
                 phone_numbers=phones,
-                template_code=(rule.template_code or config.get("template_code")),
+                template_code=_effective_template_code(rule, channel_config,
+                                                       provider_name),
                 template_params=params,
                 success=bool(result.get("success")),
                 retry_count=int(result.get("retry_count") or 0),
@@ -366,6 +388,18 @@ def _run_rule(rule_id: int, source_type: str = "cron",
         return summary
     finally:
         db.close()
+
+
+def _effective_template_code(rule: SmsReportRule, channel_config,
+                             provider_name: str) -> Optional[str]:
+    """落日志用的模板标识: 规则覆盖优先, 否则取云通道配置默认; 内容式通道为 None。"""
+    if rule.template_code:
+        return rule.template_code
+    if provider_name == "aliyun":
+        return channel_config.aliyun_template_code or None
+    if provider_name == "tencent":
+        return channel_config.tencent_template_id or None
+    return None
 
 
 def _finish_rule(db, rule: SmsReportRule, status: str, error: Optional[str],

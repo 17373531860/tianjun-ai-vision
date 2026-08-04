@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 SMS_CONFIG_FILENAME = "sms_config.json"
 ALLOWED_HTTP_METHODS = {"POST", "PUT"}
-ALLOWED_PROVIDERS = {"at_modem", "generic_http", "wxpusher"}
+ALLOWED_PROVIDERS = {"at_modem", "generic_http", "wxpusher", "aliyun", "tencent"}
 ALLOWED_MAPPING_SOURCES = set(DEFAULT_FIELD_MAPPING) | {"message", "message_id"}
 ALLOWED_WXPUSHER_CONTENT_TYPES = {1, 2, 3}
 
@@ -73,6 +73,21 @@ def config_to_dict(config: SmsServiceConfig) -> dict[str, Any]:
             "timeout_seconds": config.wxpusher_timeout_seconds,
             "verify_ssl": config.wxpusher_verify_ssl,
         },
+        "aliyun": {
+            "access_key_id": config.aliyun_access_key_id,
+            "access_key_secret": config.aliyun_access_key_secret,
+            "sign_name": config.aliyun_sign_name,
+            "template_code": config.aliyun_template_code,
+            "region": config.aliyun_region,
+        },
+        "tencent": {
+            "secret_id": config.tencent_secret_id,
+            "secret_key": config.tencent_secret_key,
+            "sdk_app_id": config.tencent_sdk_app_id,
+            "sign_name": config.tencent_sign_name,
+            "template_id": config.tencent_template_id,
+            "region": config.tencent_region,
+        },
         "phone_numbers": list(config.recipients),
         "retry_count": config.retries,
         "retry_backoff_seconds": list(config.retry_backoff_seconds),
@@ -99,18 +114,24 @@ def config_from_dict(data: dict[str, Any]) -> SmsServiceConfig:
     provider = data.get("provider", "at_modem")
     if provider not in ALLOWED_PROVIDERS:
         raise SmsConfigError(
-            "短信 Provider 仅支持 at_modem、generic_http 或 wxpusher"
+            "短信 Provider 仅支持 at_modem、generic_http、wxpusher、aliyun 或 tencent"
         )
 
     at_modem = data.get("at_modem", {}) or {}
     generic_http = data.get("generic_http", {}) or {}
     wxpusher = data.get("wxpusher", {}) or {}
+    aliyun = data.get("aliyun", {}) or {}
+    tencent = data.get("tencent", {}) or {}
     if not isinstance(at_modem, dict):
         raise SmsConfigError("at_modem 配置必须是对象")
     if not isinstance(generic_http, dict):
         raise SmsConfigError("generic_http 配置必须是对象")
     if not isinstance(wxpusher, dict):
         raise SmsConfigError("wxpusher 配置必须是对象")
+    if not isinstance(aliyun, dict):
+        raise SmsConfigError("aliyun 配置必须是对象")
+    if not isinstance(tencent, dict):
+        raise SmsConfigError("tencent 配置必须是对象")
 
     raw_recipients = data.get("phone_numbers", data.get("recipients", []))
     if not isinstance(raw_recipients, (str, list, tuple)):
@@ -173,6 +194,25 @@ def config_from_dict(data: dict[str, Any]) -> SmsServiceConfig:
     if not isinstance(wx_verify_ssl, bool):
         raise SmsConfigError("wxpusher.verify_ssl 必须是布尔值")
 
+    aliyun_access_key_id = _string(aliyun.get("access_key_id", ""), "阿里云 AccessKeyId").strip()
+    aliyun_access_key_secret = _string(
+        aliyun.get("access_key_secret", ""), "阿里云 AccessKeySecret"
+    ).strip()
+    aliyun_sign_name = _string(aliyun.get("sign_name", ""), "阿里云签名").strip()
+    aliyun_template_code = _string(aliyun.get("template_code", ""), "阿里云模板 code").strip()
+    aliyun_region = _string(
+        aliyun.get("region", "cn-hangzhou"), "阿里云 region"
+    ).strip() or "cn-hangzhou"
+
+    tencent_secret_id = _string(tencent.get("secret_id", ""), "腾讯云 SecretId").strip()
+    tencent_secret_key = _string(tencent.get("secret_key", ""), "腾讯云 SecretKey").strip()
+    tencent_sdk_app_id = str(tencent.get("sdk_app_id", "") or "").strip()
+    tencent_sign_name = _string(tencent.get("sign_name", ""), "腾讯云签名").strip()
+    tencent_template_id = str(tencent.get("template_id", "") or "").strip()
+    tencent_region = _string(
+        tencent.get("region", "ap-guangzhou"), "腾讯云 region"
+    ).strip() or "ap-guangzhou"
+
     raw_backoff = data.get("retry_backoff_seconds")
     retry_count = data.get("retry_count", data.get("retries", 3))
     default_retry_delay = (
@@ -215,6 +255,17 @@ def config_from_dict(data: dict[str, Any]) -> SmsServiceConfig:
             wxpusher_api_url=wx_api_url,
             wxpusher_timeout_seconds=float(wx_timeout),
             wxpusher_verify_ssl=wx_verify_ssl,
+            aliyun_access_key_id=aliyun_access_key_id,
+            aliyun_access_key_secret=aliyun_access_key_secret,
+            aliyun_sign_name=aliyun_sign_name,
+            aliyun_template_code=aliyun_template_code,
+            aliyun_region=aliyun_region,
+            tencent_secret_id=tencent_secret_id,
+            tencent_secret_key=tencent_secret_key,
+            tencent_sdk_app_id=tencent_sdk_app_id,
+            tencent_sign_name=tencent_sign_name,
+            tencent_template_id=tencent_template_id,
+            tencent_region=tencent_region,
             retries=int(retry_count),
             retry_delay_seconds=float(retry_delay),
             retry_backoff_seconds=tuple(float(value) for value in raw_backoff),
@@ -300,6 +351,21 @@ def _validate_config(config: SmsServiceConfig) -> None:
     if config.wxpusher_api_url:
         _validate_http_url(config.wxpusher_api_url)
     validate_alarm_template(config.wxpusher_summary_template)
+    for name, value, limit in (
+        ("阿里云 AccessKeyId", config.aliyun_access_key_id, 256),
+        ("阿里云 AccessKeySecret", config.aliyun_access_key_secret, 512),
+        ("阿里云签名", config.aliyun_sign_name, 200),
+        ("阿里云模板 code", config.aliyun_template_code, 100),
+        ("阿里云 region", config.aliyun_region, 64),
+        ("腾讯云 SecretId", config.tencent_secret_id, 256),
+        ("腾讯云 SecretKey", config.tencent_secret_key, 512),
+        ("腾讯云 SdkAppId", config.tencent_sdk_app_id, 64),
+        ("腾讯云签名", config.tencent_sign_name, 200),
+        ("腾讯云模板 ID", config.tencent_template_id, 100),
+        ("腾讯云 region", config.tencent_region, 64),
+    ):
+        if len(value) > limit:
+            raise SmsConfigError(f"{name} 过长")
     if config.enabled and config.provider != "wxpusher" and not config.recipients:
         raise SmsConfigError("开启 NG 短信推送前必须配置接收手机号")
     if config.enabled and config.provider == "at_modem" and not config.port:
@@ -314,6 +380,22 @@ def _validate_config(config: SmsServiceConfig) -> None:
             raise SmsConfigError("开启微信推送前必须配置 WxPusher appToken")
         if not config.wxpusher_uids and not config.wxpusher_topic_ids:
             raise SmsConfigError("开启微信推送前必须配置 UID 或 TopicId")
+    if config.enabled and config.provider == "aliyun":
+        if not (config.aliyun_access_key_id and config.aliyun_access_key_secret):
+            raise SmsConfigError("开启阿里云短信前必须配置 AccessKey")
+        if not config.aliyun_sign_name:
+            raise SmsConfigError("开启阿里云短信前必须配置审核过的签名")
+        if not config.aliyun_template_code:
+            raise SmsConfigError("开启阿里云短信前必须配置审核过的模板 code")
+    if config.enabled and config.provider == "tencent":
+        if not (config.tencent_secret_id and config.tencent_secret_key):
+            raise SmsConfigError("开启腾讯云短信前必须配置 SecretId/SecretKey")
+        if not config.tencent_sdk_app_id:
+            raise SmsConfigError("开启腾讯云短信前必须配置短信应用 SdkAppId")
+        if not config.tencent_sign_name:
+            raise SmsConfigError("开启腾讯云短信前必须配置审核过的签名")
+        if not config.tencent_template_id:
+            raise SmsConfigError("开启腾讯云短信前必须配置审核过的模板 ID")
     if config.summary_schedule_mode not in ALLOWED_SUMMARY_SCHEDULE_MODES:
         raise SmsConfigError(
             "汇总调度模式仅支持 rolling_12h 或 daily_shift"

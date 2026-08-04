@@ -2,10 +2,11 @@
   v3.46 每日短信日报管理对话框
 
   特点:
-  - 规则列表: 每天定点把当日/昨日 KPI 摘要发到客户手机 (云短信模板+变量)
+  - 规则列表: 每天定点把当日/昨日 KPI 摘要发到客户手机 (云短信模板+变量 或 正文模板)
   - 指标从字段中央仓库勾选 (stats/aggregations 标量字段) + 自定义计数器当日增量
   - 汇总模式一条短信 / 分工位模式每工位一条
-  - 服务商设置: 阿里云 / 腾讯云, AK/SK 走后端 SystemConfig (SK 脱敏回显)
+  - 发送通道: 与 NG 短信通知共用系统级短信通道 (报警页「短信通知」卡配置),
+    本对话框只读展示当前通道 — 不再有第二处通道编辑入口
   - 预览 (渲染当前窗口变量不发送) / 模拟试发 (mock 不发真短信) / 真实试发
 -->
 <template>
@@ -104,68 +105,32 @@
         </el-table>
       </el-tab-pane>
 
-      <!-- ========== Tab 2: 服务商设置 ========== -->
-      <el-tab-pane label="服务商设置" name="provider">
-        <div class="text-xs text-gray-400 mb-3">
-          凭据保存在服务器配置库（不落浏览器）。短信签名与模板需先在云平台申请并通过审核，模板里的变量名要与规则的"变量映射"一致。
-        </div>
-        <el-form label-width="140px" size="small" class="max-w-2xl">
-          <el-form-item label="服务商">
-            <el-radio-group v-model="providerForm.provider">
-              <el-radio-button label="aliyun">阿里云短信</el-radio-button>
-              <el-radio-button label="tencent">腾讯云短信</el-radio-button>
-              <el-radio-button label="http_relay">自建 HTTP 中转</el-radio-button>
-            </el-radio-group>
-          </el-form-item>
-
-          <!-- 自建中转: 云审核未过的过渡通道 / 客户自有短信网关 -->
-          <template v-if="providerForm.provider === 'http_relay'">
-            <el-form-item label="中转服务地址">
-              <el-input v-model="providerForm.config.relay_url"
-                        placeholder="https://your.domain/send" />
-            </el-form-item>
-            <el-form-item label="鉴权 Token">
-              <el-input v-model="providerForm.config.relay_token" type="password" show-password
-                        placeholder="与中转服务约定的 Bearer token, 回显为 ******" />
-            </el-form-item>
-            <el-form-item label="短信正文模板">
-              <el-input v-model="providerForm.config.content_template" type="textarea" :rows="3"
-                        placeholder="【天军视觉】${date}日报: 总数${total_cycles} 良率${yield_rate}%" />
-              <div class="text-[11px] text-gray-500 mt-1">
-                ${变量名} 引用规则"变量映射"里的云模板变量名; 留空则按 变量:值 拼接。
-                无平台审核, 正文本端直接渲染 — 适合云短信签名/模板审核期间先跑起来。
-              </div>
-            </el-form-item>
-          </template>
-
-          <template v-else>
-            <el-form-item :label="providerForm.provider === 'tencent' ? 'SecretId' : 'AccessKey ID'">
-              <el-input v-model="providerForm.config.access_key_id" placeholder="云账号访问密钥 ID" />
-            </el-form-item>
-            <el-form-item :label="providerForm.provider === 'tencent' ? 'SecretKey' : 'AccessKey Secret'">
-              <el-input v-model="providerForm.config.access_key_secret" type="password" show-password
-                        placeholder="密钥原文只写入, 回显为 ******" />
-            </el-form-item>
-            <el-form-item label="短信签名">
-              <el-input v-model="providerForm.config.sign_name" placeholder="如: 天军视觉 (须平台审核通过)" />
-            </el-form-item>
-            <el-form-item label="默认模板 Code">
-              <el-input v-model="providerForm.config.template_code"
-                        :placeholder="providerForm.provider === 'tencent' ? '模板 ID (纯数字)' : '如: SMS_123456789'" />
-            </el-form-item>
-            <el-form-item v-if="providerForm.provider === 'tencent'" label="SdkAppId">
-              <el-input v-model="providerForm.config.sms_sdk_app_id" placeholder="腾讯云短信应用 SdkAppId (必填)" />
-            </el-form-item>
-            <el-form-item label="Region">
-              <el-input v-model="providerForm.config.region"
-                        :placeholder="providerForm.provider === 'tencent' ? 'ap-guangzhou' : 'cn-hangzhou'" />
-            </el-form-item>
-          </template>
-
-          <el-form-item>
-            <el-button type="primary" :loading="providerSaving" @click="onSaveProvider">保存服务商配置</el-button>
-          </el-form-item>
-        </el-form>
+      <!-- ========== Tab 2: 发送通道 (只读; 与 NG 短信通知共用) ========== -->
+      <el-tab-pane label="发送通道" name="provider">
+        <el-alert type="info" :closable="false" class="mb-3">
+          <div class="text-xs leading-5">
+            短信日报与 NG 汇总通知共用同一条系统级短信通道。
+            通道类型与凭据请到 <b>报警设置 → 短信通知</b> 卡中配置（USB 短信猫 / 通用 HTTP / 微信推送 / 阿里云 / 腾讯云 五选一）。
+          </div>
+        </el-alert>
+        <el-descriptions :column="1" border size="small" class="max-w-2xl">
+          <el-descriptions-item label="当前通道">
+            <el-tag size="small" type="success">{{ channelInfo.activeLabel || channelInfo.active_provider || '-' }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="内容形态">
+            <span class="text-xs">
+              {{ channelInfo.template_based
+                ? '云审核模板 + 变量 — 日报变量名/顺序由规则「变量映射」决定，可用规则级模板 Code 覆盖默认模板'
+                : '自由正文 — 用规则里的「正文模板」在本端渲染，无需云平台审核' }}
+            </span>
+          </el-descriptions-item>
+          <el-descriptions-item label="可用通道">
+            <el-tag v-for="p in channelInfo.providers" :key="p.name" size="small"
+                    :type="p.name === channelInfo.active_provider ? 'success' : 'info'" class="mr-1">
+              {{ p.label }}
+            </el-tag>
+          </el-descriptions-item>
+        </el-descriptions>
       </el-tab-pane>
     </el-tabs>
 
@@ -293,7 +258,16 @@
           </div>
         </el-form-item>
         <el-form-item label="模板 Code 覆盖">
-          <el-input v-model="editForm.template_code" placeholder="留空 = 用服务商设置里的默认模板" />
+          <el-input v-model="editForm.template_code" placeholder="留空 = 用短信通道配置里的默认模板" />
+          <div class="text-[11px] text-gray-500 mt-1">仅云模板通道 (阿里云/腾讯云) 生效。</div>
+        </el-form-item>
+        <el-form-item label="正文模板">
+          <el-input v-model="editForm.content_template" type="textarea" :rows="3"
+                    placeholder="【天军视觉】${date}日报: 总数${total_cycles} 良率${yield_rate}%" />
+          <div class="text-[11px] text-gray-500 mt-1">
+            仅内容式通道 (USB 短信猫/通用 HTTP/微信推送) 生效，${变量名} 引用上方「变量映射」的变量名；
+            留空则按 变量:值 拼接。云模板通道正文由云平台审核模板渲染，忽略此项。
+          </div>
         </el-form-item>
       </el-form>
 
@@ -371,8 +345,7 @@ import { Plus } from '@element-plus/icons-vue';
 import { getExportFields } from '@/api/export';
 import {
   listSmsRules, createSmsRule, updateSmsRule, deleteSmsRule, toggleSmsRule,
-  testSendSmsRule, previewSmsRule, listSmsRuleLogs,
-  getSmsProviderConfig, setSmsProviderConfig,
+  testSendSmsRule, previewSmsRule, listSmsRuleLogs, listSmsProviders,
 } from '@/api/smsReport';
 
 const props = defineProps({ modelValue: Boolean });
@@ -387,8 +360,8 @@ const activeTab = ref('rules');
 const rules = ref([]);
 const allFields = ref([]);
 
-const providerForm = ref({ provider: 'aliyun', config: {} });
-const providerSaving = ref(false);
+// 只读通道信息 (编辑入口在报警页「短信通知」卡)
+const channelInfo = ref({ providers: [], active_provider: '', template_based: false, activeLabel: '' });
 
 const editVisible = ref(false);
 const editForm = ref(blankRule());
@@ -419,6 +392,7 @@ function blankRule() {
     template_param_mapping: {},
     phone_numbers: [],
     template_code: '',
+    content_template: '',
   };
 }
 
@@ -449,7 +423,7 @@ const suggestedTemplate = computed(() => {
 
 watch(visible, async (v) => {
   if (v) {
-    await Promise.all([refreshRules(), refreshFields(), refreshProvider()]);
+    await Promise.all([refreshRules(), refreshFields(), refreshChannel()]);
   }
 });
 
@@ -472,27 +446,19 @@ const refreshFields = async () => {
   }
 };
 
-const refreshProvider = async () => {
+const refreshChannel = async () => {
   try {
-    const res = await getSmsProviderConfig();
-    providerForm.value = {
-      provider: res.data?.provider || 'aliyun',
-      config: res.data?.config || {},
+    const res = await listSmsProviders();
+    const data = res.data || {};
+    const providers = data.providers || [];
+    const active = data.active_provider || '';
+    channelInfo.value = {
+      providers,
+      active_provider: active,
+      template_based: !!data.template_based,
+      activeLabel: providers.find(p => p.name === active)?.label || active,
     };
   } catch (e) { /* 保持默认 */ }
-};
-
-const onSaveProvider = async () => {
-  providerSaving.value = true;
-  try {
-    await setSmsProviderConfig(providerForm.value.provider, providerForm.value.config);
-    ElMessage.success('服务商配置已保存');
-    await refreshProvider();
-  } catch (e) {
-    ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message));
-  } finally {
-    providerSaving.value = false;
-  }
 };
 
 // ---- 规则编辑 ----

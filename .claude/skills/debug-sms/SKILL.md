@@ -1,12 +1,14 @@
 ﻿---
 name: debug-sms
-description: "诊断主程序短信/微信推送通知：12 小时汇总不发、AT 串口失败、云 HTTP 失败、WxPusher 失败、离线队列堆积、配置不生效、与灯塔串口冲突。当客户反馈收不到汇总短信/微信或短信配置异常时使用。"
+description: "诊断主程序短信/微信推送通知与每日短信日报：12 小时汇总不发、日报不发/变量不对、AT 串口失败、云 HTTP/阿里云/腾讯云失败、WxPusher 失败、离线队列堆积、配置不生效、与灯塔串口冲突。当客户反馈收不到汇总短信/微信/日报或短信配置异常时使用。"
 argument-hint: "[问题描述]"
 ---
 
 # debug-sms: 短信 / 微信推送通知诊断
 
-诊断天军主程序 **NG 短信/微信推送 / 12 小时滚动汇总**。与灯塔蜂鸣器（`debug-alarm`）**完全隔离**——独立配置文件、独立 COM、独立服务线程。
+诊断天军主程序 **NG 短信/微信推送 / 12 小时滚动汇总 / 每日短信日报（v3.46）**。与灯塔蜂鸣器（`debug-alarm`）**完全隔离**——独立配置文件、独立 COM、独立服务线程。
+
+> v3.46 统一短信通道：NG 汇总通知与每日短信日报**共用同一份 `sms_config.json` 通道配置**（报警页「短信通知」卡编辑）。日报差异见本文第六节。
 
 用户问题：$ARGUMENTS
 
@@ -23,6 +25,11 @@ argument-hint: "[问题描述]"
 | AT | `sms_at_client.py` + `sms_modem.py` + `sms_providers/at_modem_provider.py` | USB 虚拟串口 AT |
 | HTTP | `sms_providers/generic_http_provider.py` | 厂商无关 JSON HTTP/HTTPS |
 | WxPusher | `sms_providers/wxpusher_provider.py` | 微信推送（appToken + UID/Topic） |
+| 阿里云 | `sms_providers/aliyun_provider.py` | 官方云短信（审核签名+模板+命名变量，HMAC-SHA1） |
+| 腾讯云 | `sms_providers/tencent_provider.py` | 官方云短信（审核签名+模板+位置变量，TC3-HMAC-SHA256） |
+| 工厂 | `sms_providers/__init__.py` `create_provider` | 统一通道工厂，NG 通知与日报共用 |
+| 日报 | `backend/services/sms_report.py` + `api/sms_report.py` + `models/notify_models.py` | v3.46 每日短信日报（规则/调度/发送/日志三表） |
+| 日报前端 | `frontend/src/api/smsReport.js` + `views/Data/components/SmsReportDialog.vue` | 数据中心日报对话框（通道 tab 只读） |
 | 汇总 | `sms_summary.py` | 窗口水位 + 读已结算周期 OK/NG |
 | 离线 | `sms_offline_queue.py` | SQLite 离线重试队列（`generic_http` / `wxpusher`） |
 | 前端 | `frontend/src/api/sms.js` + `views/Alarm/index.vue` | 报警页配置卡 |
@@ -33,7 +40,7 @@ argument-hint: "[问题描述]"
 1. **默认关闭**（`enabled=false`）——存量客户零差异。
 2. **不在 `_trigger_event` 热路径发推送**——只读已落库结算周期做 12h 汇总。
 3. **AT COM 必须独立**——禁止与灯塔/蜂鸣器共用同一串口。
-4. **Provider 三选一**：`at_modem` | `generic_http` | `wxpusher`。
+4. **Provider 五选一**：`at_modem` | `generic_http` | `wxpusher` | `aliyun` | `tencent`（`mock` 仅试发，不可持久化）。**通道实现只能进 `sms_providers/`，禁止再造第二套适配器**（v3.46 曾有 `sms_adapters/` 平行实现，已删）。
 5. **汇总调度二选一**：`summary_schedule_mode=rolling_12h`（默认：后端**冷启动**以启动时刻重新锚定，配置热替换不重锚）或 `daily_shift`（`shift_start_hour`/`shift_end_hour`，`send_night_window` 默认 false）。
 6. 启停接线在 `backend/main.py`：`_start_sms_summary_scheduler(reset_rolling_anchor=True)` / `_shutdown_sms_notifications()`。
 
@@ -103,9 +110,10 @@ argument-hint: "[问题描述]"
 
 ```bash
 # conda env: tianjun
-python -m pytest tests/test_sms_*.py tests/test_sms_shutdown_wiring.py -q
-python -m pytest tests/e2e_browser/test_alarm_page.py -q
+python -m pytest tests/test_sms_*.py tests/test_sms_shutdown_wiring.py -q   # 含 test_sms_report.py 日报
+python -m pytest tests/e2e_browser/test_alarm_page.py tests/e2e_browser/test_sms_report_dialog.py -q
 # 硬件/真机：tools/sms_4g；云短信或 WxPusher 用报警页「测试发送」
+# 日报可见浏览器 UAT：python tests/uat/uat_sms_report_ui.py（前端 6003 / 后端 8003）
 ```
 
 ---
@@ -119,3 +127,20 @@ python -m pytest tests/e2e_browser/test_alarm_page.py -q
 | API | `/api/v1/alarm/*` | `/api/v1/sms/*` |
 | 触发 | `_trigger_event` → `alarm_router` | 12h 汇总调度线程 |
 | 串口 | 灯塔 COM | AT 通道时**必须另一路** COM；WxPusher 无串口 |
+
+---
+
+## 六、每日短信日报（v3.46）差异速查
+
+与 NG 汇总同通道不同链路：日报走 `services/sms_report.py` 自己的 APScheduler cron（`_start_sms_report`），规则/日志/计数器台账三表在 `models/notify_models.py`（`sms_report_rules` / `sms_send_logs` / `counter_daily_stats`）。
+
+排查顺序：
+
+1. **通道**：`GET /api/v1/sms-report/providers` → `active_provider` 是否预期（来自共享 `sms_config.json`；日报不看 `enabled` 总开关——那是 NG 通知的开关，日报看规则自己的 `enabled`）
+2. **规则**：`GET /api/v1/sms-report/rules` → `enabled` / `cron_expression` / `next_run_time` / `phone_numbers`
+3. **变量**：`POST /rules/{id}/preview` 渲染当前窗口变量不发送；计数器当日增量来自 `counter_daily`（内存日桶节流落库，`flush_now()` 后再查）
+4. **发送**：`POST /rules/{id}/test-send?use_mock=true` 全链路不发真短信；日志表 `sms_send_logs` 的 `error_msg` 有逐号失败明细
+5. **正文口径**：云模板通道（aliyun/tencent）用平台审核模板渲染，规则 `template_code` 可覆盖默认；内容式通道（at_modem/generic_http/wxpusher）用规则 `content_template`（`${变量名}` 占位）本端渲染
+6. **插件干预**：`daily_report_before_send` returnable hook 可改写变量/收件人/跳过（`skip_send is True`）
+
+**日报不变量**：发送在调度线程，不在检测热路径；`counter_daily.record_for_host` 只累计正向增量；异常必须被 `_run_rule` 吞掉不外抛。
