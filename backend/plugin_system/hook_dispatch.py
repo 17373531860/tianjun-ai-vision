@@ -66,6 +66,12 @@ RETURNABLE_HOOK_FIELDS: Dict[str, Set[str]] = {
     "workpiece_flow_timeout": {"override_timeout_action"},
     # 短路触发 — 仅观察, 客户可挂报警/导出.
     "workpiece_flow_short_circuit": set(),
+    # 每日短信日报发送前决策 (v3.46) — 客户插件可改写变量/收件人或跳过本次发送.
+    "daily_report_before_send": {
+        "override_params",         # dict — 整体替换模板变量
+        "override_phone_numbers",  # list[str] — 整体替换收件手机号
+        "skip_send",               # 严格 is True 才跳过 (与 suppress_alarm 同语义)
+    },
 }
 
 
@@ -160,6 +166,15 @@ def fire_plugin_hook(
                      返回值丢弃, 不改主程序检测/计数/录像/状态机. sensor-clean 插件靠
                      它逐帧自计数 (复刻 detect6 精度). ctx 字段契约见
                      tests/plugin_system/test_detection_frame_hook.py.
+
+                   v3.46 (每日短信日报):
+                   - ``"daily_report_before_send"``: 短信日报每个 scope (汇总一条 /
+                     分工位每工位一条) 发送前 fire. ctx 携带 rule_id / rule_name /
+                     provider / stat_date / channel_id / group_by_channel /
+                     template_params / phone_numbers / source_type.
+                     **Returnable**: ``override_params`` (dict, 整体替换模板变量) /
+                     ``override_phone_numbers`` (list) / ``skip_send`` (严格 is True
+                     才跳过). 客户"日报文案定制 / 按值班表换收件人"挂这里.
 
                    v3.31 (外部设备读数广播):
                    - ``"external_device_data"``: 称重器/传感器等外部设备每帧解析出读数后

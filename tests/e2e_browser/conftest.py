@@ -113,6 +113,18 @@ def _cleanup_resources(api_url: str):
         print(f"[cleanup] rules 清理失败: {e}")
 
     try:
+        r = requests.get(f"{api_url}/api/v1/sms-report/rules", timeout=5)
+        if r.status_code == 200:
+            for rule in (r.json() or {}).get("rules", []):
+                if (rule.get("name") or "").startswith(E2E_PREFIX):
+                    requests.delete(
+                        f"{api_url}/api/v1/sms-report/rules/{rule['id']}",
+                        timeout=5,
+                    )
+    except Exception as e:
+        print(f"[cleanup] sms 规则清理失败: {e}")
+
+    try:
         r = requests.get(f"{api_url}/api/v1/export/templates", timeout=5)
         if r.status_code == 200:
             for tpl in _list_field(r.json()):

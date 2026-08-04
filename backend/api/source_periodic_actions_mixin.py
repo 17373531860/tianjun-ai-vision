@@ -686,6 +686,8 @@ class PeriodicActionsMixin:
                 try:
                     self.counters[counter_name] += value
                     counters_changed = True
+                    from backend.services.counter_daily import record_for_host
+                    record_for_host(self, counter_name, value)
                 except Exception:
                     pass
         if counters_changed and hasattr(self, '_persist_counters'):

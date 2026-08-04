@@ -1,0 +1,180 @@
+"""可见浏览器 UAT: 每日短信日报 (v3.46)。
+
+覆盖 (T4 真浏览器 + T5 UI→后端双向验证):
+- 数据中心出现「短信日报（每天发到手机）」入口
+- 服务商设置 tab: 填阿里云 AK/SK/签名/模板 → 保存 → GET provider-config 验证落库 + SK 脱敏
+- 新建日报规则: 名称/手机号/勾选指标/计数器当日增量 → 保存 → GET /sms-report/rules 验证落库
+- 预览: 弹出变量表 (不发送)
+- 模拟试发: mock 通道 → GET logs 验证 SmsSendLog 落库 success=True
+
+前端 6003, 后端 8003 (本 worktree 端口)。headless=False 真开浏览器, 截图存本目录。
+"""
+import time
+import re
+import requests
+from playwright.sync_api import sync_playwright
+
+FE = "http://localhost:6003"
+API = "http://localhost:8003/api/v1"
+OUT = "tests/uat"
+RULE_NAME = f"UAT短信日报_{int(time.time())}"
+PHONE = "13800000000"
+results = []
+
+
+def step(name, ok, extra=""):
+    print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f" :: {extra}" if extra else ""))
+    results.append((name, ok))
+
+
+def shot(page, f):
+    page.screenshot(path=f"{OUT}/{f}", full_page=False)
+    print(f"  shot -> {OUT}/{f}")
+
+
+def maybe_login(page):
+    try:
+        pw = page.locator("input[type=password]")
+        if pw.count() > 0 and pw.first.is_visible():
+            page.locator("input:not([type=password])").first.fill("admin")
+            pw.first.fill("admin123")
+            page.get_by_role("button", name=re.compile("登录|登 录|login", re.I)).first.click()
+            time.sleep(2.5)
+            print("  已登录 admin")
+    except Exception as e:
+        print(f"  (登录跳过: {str(e)[:80]})")
+
+
+def select_project_if_needed(page):
+    """数据中心需要先选中一个项目才渲染主体, 用顶栏项目下拉选第一个。"""
+    try:
+        if page.get_by_text("请先选择一个项目").count() == 0:
+            return
+        page.locator(".el-select").first.click()
+        time.sleep(0.8)
+        page.get_by_role("option").first.click()
+        time.sleep(0.5)
+        page.get_by_role("button", name=re.compile("选\\s*择")).first.click()
+        time.sleep(2.5)
+        print("  已选择项目")
+    except Exception as e:
+        print(f"  (选项目失败: {str(e)[:100]})")
+
+
+def main():
+    errs = []
+    with sync_playwright() as p:
+        b = p.chromium.launch(headless=False)
+        page = b.new_page()
+        page.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
+
+        page.goto(f"{FE}/#/data")
+        time.sleep(2.5)
+        maybe_login(page)
+        page.goto(f"{FE}/#/data")
+        time.sleep(2.5)
+        select_project_if_needed(page)
+
+        # 1) 入口按钮存在并点开
+        btn = page.get_by_role("button", name=re.compile("短信日报"))
+        step("数据中心出现短信日报入口", btn.count() > 0)
+        btn.first.click()
+        time.sleep(1.5)
+        dialog_visible = page.get_by_text("每日短信日报").first.is_visible()
+        step("短信日报对话框打开", dialog_visible)
+        shot(page, "sms_01_dialog_open.png")
+
+        # 2) 服务商设置 tab → 填配置 → 保存 → 后端验证
+        page.get_by_role("tab", name=re.compile("服务商设置")).first.click()
+        time.sleep(1)
+        page.locator("input[placeholder*='访问密钥 ID']").fill("UAT_AK_ID")
+        page.locator("input[placeholder*='密钥原文']").fill("UAT_AK_SECRET")
+        page.locator("input[placeholder*='须平台审核通过']").fill("天军视觉")
+        page.locator("input[placeholder*='SMS_123456789']").fill("SMS_UAT_001")
+        shot(page, "sms_02_provider_form.png")
+        page.get_by_role("button", name=re.compile("保存服务商配置")).first.click()
+        time.sleep(1.5)
+
+        pc = requests.get(f"{API}/sms-report/provider-config", timeout=5).json()
+        ok = (pc.get("provider") == "aliyun"
+              and pc.get("config", {}).get("access_key_id") == "UAT_AK_ID"
+              and pc.get("config", {}).get("access_key_secret") == "******")
+        step("服务商配置落库 + SK 脱敏回显", ok, str(pc)[:120])
+
+        # 3) 规则 tab → 新建规则
+        page.get_by_role("tab", name=re.compile("日报规则")).first.click()
+        time.sleep(0.8)
+        page.get_by_role("button", name=re.compile("新建规则")).first.click()
+        time.sleep(1.2)
+
+        page.locator("input[placeholder*='每日 20 点产量日报']").fill(RULE_NAME)
+        # 加一个计数器当日增量指标
+        page.locator("input[placeholder*='输入项目里的计数器名']").fill("合格总数")
+        page.get_by_role("button", name=re.compile("^添加$")).first.click()
+        time.sleep(0.5)
+        # 加手机号
+        page.locator("input[placeholder*='11 位手机号']").fill(PHONE)
+        page.get_by_role("button", name=re.compile("^添加$")).nth(1).click()
+        time.sleep(0.5)
+        shot(page, "sms_03_rule_form.png")
+        page.get_by_role("button", name=re.compile("^保存$")).first.click()
+        time.sleep(1.5)
+
+        # T5: 后端验证规则落库
+        rules = requests.get(f"{API}/sms-report/rules", timeout=5).json()["rules"]
+        target = next((r for r in rules if r["name"] == RULE_NAME), None)
+        ok = (target is not None
+              and PHONE in target["phone_numbers"]
+              and "counters_daily.合格总数" in target["metrics"]
+              and "stats.total_cycles" in target["metrics"])
+        step("规则落库 (名称/手机号/指标含计数器当日增量)", ok,
+             str(target)[:160] if target else "未找到规则")
+        rid = target["id"] if target else None
+        shot(page, "sms_04_rule_list.png")
+
+        # 4) 预览
+        if rid:
+            page.get_by_role("button", name=re.compile("^预览$")).first.click()
+            time.sleep(1.5)
+            prev_ok = page.get_by_text("日报内容预览").first.is_visible()
+            step("预览弹窗打开 (渲染变量不发送)", prev_ok)
+            shot(page, "sms_05_preview.png")
+            page.keyboard.press("Escape")
+            time.sleep(0.8)
+
+            # 5) 模拟试发 → 后端验证发送记录
+            page.get_by_role("button", name=re.compile("模拟试发")).first.click()
+            time.sleep(2.5)
+            shot(page, "sms_06_after_mock_send.png")
+            logs = requests.get(f"{API}/sms-report/rules/{rid}/logs", timeout=5).json()["logs"]
+            ok = (len(logs) >= 1 and logs[0]["success"] is True
+                  and logs[0]["provider"] == "mock"
+                  and logs[0]["phone_numbers"] == [PHONE])
+            step("模拟试发 SmsSendLog 落库 success", ok, str(logs[:1])[:160])
+
+            # 发送记录 UI 可见
+            page.get_by_role("button", name=re.compile("^记录$")).first.click()
+            time.sleep(1.2)
+            step("发送记录弹窗打开", page.get_by_text("发送记录").first.is_visible())
+            shot(page, "sms_07_logs.png")
+            page.keyboard.press("Escape")
+            time.sleep(0.5)
+
+            # 清理 UAT 规则
+            requests.delete(f"{API}/sms-report/rules/{rid}", timeout=5)
+
+        b.close()
+
+    print("\n==== 汇总 ====")
+    for name, ok in results:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
+    fails = [n for n, ok in results if not ok]
+    if errs:
+        print(f"  console errors: {len(errs)} 条 (前3): {errs[:3]}")
+    if fails:
+        raise SystemExit(f"FAIL: {fails}")
+    print("ALL PASS")
+
+
+if __name__ == "__main__":
+    main()

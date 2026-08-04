@@ -249,7 +249,8 @@
                   "box_complete",
                   "scan_received",
                   "event_trigger",
-                  "alarm_trigger"
+                  "alarm_trigger",
+                  "daily_report_before_send"
                 ]
               },
               "module": { "type": "string" },

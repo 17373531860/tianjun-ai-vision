@@ -28,6 +28,7 @@ def mount_all_routers(app: FastAPI) -> None:
     # -------- 业务 CRUD（原 api_router 聚合段，v3.31 前挂在 backend/api/__init__.py） --------
     from backend.api import projects, models, cameras, tasks, reports, alarm
     from backend.api import system_display, export_custom, export_realtime, export_scheduled
+    from backend.api import sms_report      # v3.46 每日短信日报
     from backend.api import channel_groups    # v3.13 RFC 10 工位组
     from backend.api import workpiece_flows   # v3.14 RFC 11 串行流水线
     from backend.api import packaging_flows   # v3.21 包装箱结算 (上银包装线)
@@ -43,6 +44,7 @@ def mount_all_routers(app: FastAPI) -> None:
     app.include_router(export_custom.router, prefix=f"{v1}/export", tags=["export"])
     app.include_router(export_realtime.router, prefix=f"{v1}/export", tags=["export-realtime"])
     app.include_router(export_scheduled.router, prefix=f"{v1}/export", tags=["export-scheduled"])
+    app.include_router(sms_report.router, prefix=f"{v1}/sms-report", tags=["sms-report"])
     app.include_router(channel_groups.router, prefix=f"{v1}/channel-groups", tags=["channel-groups"])
     app.include_router(workpiece_flows.router, prefix=f"{v1}/workpiece-flows", tags=["workpiece-flows"])
     app.include_router(packaging_flows.router, prefix=f"{v1}/packaging-flows", tags=["packaging-flows"])

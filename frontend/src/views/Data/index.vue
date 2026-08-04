@@ -607,6 +607,10 @@
                     <el-button type="warning" plain class="w-full" @click="openScheduledRulesDialog">
                       <el-icon class="mr-1"><Clock /></el-icon> 定时导出（每天某时自动）
                     </el-button>
+                    <!-- v3.46: 短信日报 — 每天定点把当日 KPI 摘要发到客户手机 -->
+                    <el-button type="success" plain class="w-full" @click="openSmsReportDialog">
+                      <el-icon class="mr-1"><Message /></el-icon> 短信日报（每天发到手机）
+                    </el-button>
                     <div class="text-[11px] text-gray-500 leading-relaxed px-1">
                       支持 Jinja2 模板渲染、308 项数据字段、txt/csv 输出。<br>
                       <span class="text-cyan-400">实时规则</span>：cycle 结束后按规则自动渲染落盘到客户文件夹。<br>
@@ -837,6 +841,9 @@
 
     <!-- v3.8.x: 定时导出规则管理对话框 -->
     <ScheduledRulesDialog v-model="scheduledRulesVisible" />
+
+    <!-- v3.46: 每日短信日报管理对话框 -->
+    <SmsReportDialog v-model="smsReportVisible" />
   </div>
   </TjSlot>
 </template>
@@ -847,10 +854,11 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
-import { Calendar, Clock, DataLine, Setting, Download, Folder, TrendCharts, VideoPlay, Delete, Warning, Search, MagicStick, Connection, Edit, Histogram } from '@element-plus/icons-vue';
+import { Calendar, Clock, DataLine, Setting, Download, Folder, TrendCharts, VideoPlay, Delete, Warning, Search, MagicStick, Connection, Edit, Histogram, Message } from '@element-plus/icons-vue';
 import CustomExportDialog from './components/CustomExportDialog.vue';
 import RealtimeRulesDialog from './components/RealtimeRulesDialog.vue';
 import ScheduledRulesDialog from './components/ScheduledRulesDialog.vue';
+import SmsReportDialog from './components/SmsReportDialog.vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getDetectionResults, getWorkstations } from '@/api/detection';
 import { 
@@ -1140,6 +1148,12 @@ function openRealtimeRulesDialog() {
 const scheduledRulesVisible = ref(false);
 function openScheduledRulesDialog() {
   scheduledRulesVisible.value = true;
+}
+
+// v3.46: 短信日报对话框
+const smsReportVisible = ref(false);
+function openSmsReportDialog() {
+  smsReportVisible.value = true;
 }
 
 function openCustomExportDialog() {
