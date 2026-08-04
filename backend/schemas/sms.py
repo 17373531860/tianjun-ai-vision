@@ -167,9 +167,10 @@ class SmsConfigPayload(BaseModel):
             return value
         data = dict(value)
         at_modem = dict(data.get("at_modem") or {})
-        # 旧页面会同时回传 canonical 与平铺字段；平铺字段是当前实际编辑值。
+        # 旧客户端可能只平铺 port/template；新页面只传 at_modem。
+        # 两者都有时以嵌套为准，避免 GET 回显的平铺脏字段覆盖已修好的 at_modem。
         for legacy_name in ("port", "baudrate", "template", "encoding"):
-            if legacy_name in data:
+            if legacy_name in data and legacy_name not in at_modem:
                 at_modem[legacy_name] = data[legacy_name]
         data["at_modem"] = at_modem
         if "recipients" in data:
