@@ -1,4 +1,4 @@
----
+﻿---
 name: debug-alarm
 description: "诊断报警系统问题：串口连接失败、Modbus指令不响应、灯塔不亮、蜂鸣器不响、事件触发不生效、报警线程问题。当报警设备无反应或行为异常时使用。"
 argument-hint: "[问题描述]"
@@ -10,6 +10,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking"
 # debug-alarm: 报警系统诊断（v3.5.x 真相版）
 
 诊断天军 AI 视觉检测系统的 **USB 串口报警 + Modbus 灯塔 / 蜂鸣器**。事实源是 `backend/api/alarm.py`（1009 行，**所有报警逻辑都在这一个文件里，没有独立的 alarm_service.py**）。
+
+> **短信边界**：报警页上的「NG 短信推送」**不属于本 skill**。短信走 `/api/v1/sms/*` + `SmsService`，独立 COM / 独立配置，见 `debug-sms`。灯塔与短信 COM 禁止共用。
 
 用户问题：$ARGUMENTS
 

@@ -138,6 +138,8 @@ backend/counters/*.json
 backend/data/counters/*.json
 !backend/data/counters/.gitkeep
 backend/alarm_config.json
+backend/sms_config.json
+backend/sms_summary_state.json
 backend/current_operator.json
 backend/current_user.json
 backend/scanner_runtime_state.json

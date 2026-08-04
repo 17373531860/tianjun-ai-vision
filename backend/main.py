@@ -853,6 +853,17 @@ threading.Thread(target=_schedule_token_purge, daemon=True).start()
 _cleanup_done = False
 _cleanup_lock = threading.Lock()
 
+
+def _shutdown_sms_notifications():
+    """有限收尾短信 worker；关闭链路中重复调用也必须安全。"""
+
+    try:
+        from backend.api.sms import get_sms_service
+        get_sms_service().shutdown(timeout=3.0)
+    except Exception as _e:
+        print(f"[Shutdown] 停止短信服务异常（已忽略）: {_e}", flush=True)
+
+
 # 程序退出时保存数据
 def cleanup_on_exit():
     """程序退出时的清理和数据保存"""
@@ -865,6 +876,7 @@ def cleanup_on_exit():
         _cleanup_done = True
     
     print("[退出钩子] 正在保存数据...")
+    _shutdown_sms_notifications()
     try:
         from backend.api.channel_manager import channel_manager
         for ch_id, mgr in channel_manager.channels.items():
@@ -1037,6 +1049,22 @@ async def _debug_api_exception_middleware(request, call_next):
 # ==================== 路由挂载（唯一登记处: backend/api/router_manifest.py） ====================
 # 新增主程序路由去 router_manifest 登记, 不要在这里 include_router (OVERLAP-3 治理)
 mount_all_routers(app)
+
+
+# 短信窗口必须锚定真实后端启动；路由/OpenAPI 仅导入时不应写水位或起线程。
+# 滚动 12h：冷启动重置锚点；班次模式不走此重置（仍按钟点对齐）。
+def _start_sms_summary_scheduler():
+    if os.environ.get("BACKEND_SKIP_INIT"):
+        return
+    try:
+        from backend.api.sms import get_sms_service
+
+        get_sms_service().start_summary_scheduler(reset_rolling_anchor=True)
+    except Exception as e:
+        print(f"[SMS] 12 小时汇总调度启动失败（已隔离, 主程序继续）: {e}")
+
+
+_start_sms_summary_scheduler()
 
 # Mount static files for uploads (images, etc.)
 if os.path.exists(settings.UPLOAD_DIR):
@@ -1233,6 +1261,7 @@ def shutdown_step(step: str):
             return {"status": "success", "step": step}
         
         elif step == "cleanup":
+            _shutdown_sms_notifications()
             video_manager.is_running = False
             video_manager._clear_all_caches()
             # v2.7.3: 关软件最后一步统一断所有通道的报警串口，确保灯塔/蜂鸣器不残留

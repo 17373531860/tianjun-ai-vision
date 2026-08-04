@@ -26,7 +26,7 @@ def mount_all_routers(app: FastAPI) -> None:
     v1 = settings.API_V1_STR  # "/api/v1"
 
     # -------- 业务 CRUD（原 api_router 聚合段，v3.31 前挂在 backend/api/__init__.py） --------
-    from backend.api import projects, models, cameras, tasks, reports, alarm
+    from backend.api import projects, models, cameras, tasks, reports, alarm, sms
     from backend.api import system_display, export_custom, export_realtime, export_scheduled
     from backend.api import sms_report      # v3.46 每日短信日报
     from backend.api import channel_groups    # v3.13 RFC 10 工位组
@@ -40,6 +40,7 @@ def mount_all_routers(app: FastAPI) -> None:
     app.include_router(tasks.router, prefix=f"{v1}/tasks", tags=["tasks"])
     app.include_router(reports.router, prefix=f"{v1}/reports", tags=["reports"])
     app.include_router(alarm.router, prefix=f"{v1}/alarm", tags=["alarm"])
+    app.include_router(sms.router, prefix=f"{v1}/sms", tags=["sms"])
     app.include_router(system_display.router, prefix=f"{v1}/system", tags=["system"])
     app.include_router(export_custom.router, prefix=f"{v1}/export", tags=["export"])
     app.include_router(export_realtime.router, prefix=f"{v1}/export", tags=["export-realtime"])

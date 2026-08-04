@@ -144,6 +144,7 @@
 | 排查多通道异常（GPU、ChannelManager、串扰）| `debug-channel` |
 | 排查视频采集 / 推流 / 录像问题 | `debug-video` |
 | 排查报警不响应 | `debug-alarm` |
+| 排查短信通知（12h 汇总不发 / AT 失败 / 云 HTTP 失败 / 与灯塔串口冲突）| `debug-sms` |
 | 排查 MES 异常（工单 / 工件 / 缺陷 / 扫码器 / Hook / Gateway / 外设）| `debug-mes` |
 | 排查集群主从（box 不齐 / 副机心跳 / box_complete 不推 MES）| `debug-cluster` |
 | 排查 Session/Cycle/Step 数据问题 | `debug-session` |
@@ -214,6 +215,7 @@
 | `/cameras/*` | `cameras.py` | **旧式相机表**（与 `/source/*` 并存，**勿混淆为主路径**）|
 | `/system/*` | `system_display.py` | KV 配置 + license 缓存 |
 | `/alarm/*` | `alarm.py` ⚠️ | 灯塔/蜂鸣器/共享灯柱 |
+| `/sms/*` | `sms.py` | 短信通知（12h 汇总；AT / HTTP 二选一，默认关） |
 | `/workstations/*` | `channel_manager.py` | 多工位 + GPU 分配 |
 | `/scanner/*` | `scanner.py` | 扫码器 CRUD + scan_pair + 禁用 |
 | `/scanner/wmax/*` | `wmax.py` ⚠️ | WMax 协议（35+ endpoint） |

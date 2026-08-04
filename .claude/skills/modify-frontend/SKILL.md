@@ -1,4 +1,4 @@
----
+﻿---
 name: modify-frontend
 description: "安全修改前端代码：Store 依赖、API 调用链、组件间数据流、i18n、ElementPlus 组件约束。修改 Vue 组件或 Pinia Store 前先用本 skill 做影响分析。"
 argument-hint: "[要修改的组件或功能]"
@@ -46,7 +46,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__playwright, mcp__context7"
 | `MES/{Order,Workpiece,Defect,Scanner,Gateway,External,Cluster}Panel.vue` | — | 243~1381 | 7 个子面板 |
 | `MES/WMaxPanel.vue` | — | 888 | **不在 MES tab 中**，由 `ScannerPanel.vue` 内部 v-if 挂载 |
 | `Model/index.vue` | `Model` | 339 | 模型仓库（**单数 `Model`**，不是 `Models`） |
-| `Alarm/index.vue` | `Alarm` | 921 | 报警设置 |
+| `Alarm/index.vue` | `Alarm` | ~1480 | 报警设置（含「NG 短信推送」卡，调 `api/sms.js`） |
 | `Settings/index.vue` | `Settings` | 1441 ⚠️ | 系统设置（含画面变换、操作员管理） |
 | `Report/index.vue` | — | — | **已删**（2026-07 死代码清理，报表展示由 Data 页接管） |
 

@@ -1,9 +1,42 @@
-# 后端杂项读码笔记（兜底册）
+﻿# 后端杂项读码笔记（兜底册）
 
 > 读码时间：2026-07-05
 > 用途：函数级源码索引兜底册——不属于 01-04 主域的全部后端文件（MES 周边服务 / 导出渲染器 / 杂项 API 路由 / core / db / hcnetsdk / schemas / scripts / 版本文件），共 44 个文件。
 > 行号以当日代码为准，后续代码演进可能漂移。
 > 2026-07-17 v3.41 复核：补账 v3.33~v3.41 变更（db 迁移域）——新增迁移 runner / m0001 / requirements.txt 三个条目，m0000 条目行号刷新。
+>
+> **短信补账（2026-08-03）**：新增短信服务族（见下方「短信通知」节）；路由 API 条目在 `01_backend_core.md` 的 `sms.py`。
+
+---
+
+## 〇、短信通知（新增）
+
+### `backend/services/sms_service.py`（~935 行）
+
+| 维度 | 内容 |
+|---|---|
+| **职责** | 短信门面：按 `provider` 选 AT / HTTP、入队发送、12h 汇总调度、离线队列、关机 |
+| **核心类** | `SmsServiceConfig`、`SmsService`、`AlarmQueueReceipt` |
+| **核心方法** | `queue_summary_sms`、`start_summary_scheduler`、`shutdown`、测试发送路径 |
+| **线程** | daemon `sms-12h-summary`；发送工作线程；**不**持有检测/MES 锁 |
+| **上下游** | 上游 `api/sms.py` / `main.py` 启停；下游 providers + `sms_summary` + `sms_offline_queue` |
+| **注释坑** | 默认 `enabled=false`；汇总只读已结算周期；坏配置由 ConfigStore 回退 |
+
+### 同族其它文件
+
+| 文件 | 行数约 | 一句话 |
+|---|---|---|
+| `sms_config.py` | 287 | `sms_config.json` 读写与校验 |
+| `sms_summary.py` | 169 | 窗口水位 + 周期 OK/NG 汇总读取 |
+| `sms_offline_queue.py` | 202 | SQLite 离线重试 |
+| `sms_at_client.py` / `sms_modem.py` | 285 / 241 | AT 会话与调制解调器 |
+| `sms_utils.py` | 69 | 收件人解析等 |
+| `sms_providers/base_provider.py` | 53 | Provider 抽象 |
+| `sms_providers/at_modem_provider.py` | 123 | USB/AT 通道 |
+| `sms_providers/generic_http_provider.py` | 256 | 厂商无关 HTTP JSON |
+| `schemas/sms.py` | 237 | API Schema（含一期平铺兼容字段） |
+
+独立调试工具：`tools/sms_4g/`（不进主程序运行时）。诊断见 `debug-sms` skill。
 
 ---
 

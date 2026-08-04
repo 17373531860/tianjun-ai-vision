@@ -332,7 +332,7 @@
    "Body_install_plugin_api_v1_plugins_install_post": {
     "properties": {
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      }
@@ -371,7 +371,7 @@
      "image": {
       "anyOf": [
        {
-        "format": "binary",
+        "contentMediaType": "application/octet-stream",
         "type": "string"
        },
        {
@@ -432,7 +432,7 @@
    "Body_upload_image_api_v1_source_image_upload_post": {
     "properties": {
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      }
@@ -457,7 +457,7 @@
       "title": "Description"
      },
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      },
@@ -503,7 +503,7 @@
    "Body_upload_template_file_api_v1_export_templates__template_id__upload_template_file_post": {
     "properties": {
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      }
@@ -517,7 +517,7 @@
    "Body_upload_video_api_v1_source_video_upload_post": {
     "properties": {
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      }
@@ -9629,6 +9629,527 @@
     "title": "SlaveHeartbeat",
     "type": "object"
    },
+   "SmsAtModemPayload": {
+    "additionalProperties": false,
+    "description": "USB 虚拟串口 + AT 通道配置。",
+    "properties": {
+     "baudrate": {
+      "default": 115200,
+      "maximum": 4000000.0,
+      "minimum": 300.0,
+      "title": "Baudrate",
+      "type": "integer"
+     },
+     "encoding": {
+      "default": "auto",
+      "enum": [
+       "auto",
+       "gsm",
+       "ucs2"
+      ],
+      "title": "Encoding",
+      "type": "string"
+     },
+     "port": {
+      "default": "",
+      "description": "短信模块独立 COM 口",
+      "maxLength": 128,
+      "title": "Port",
+      "type": "string"
+     },
+     "template": {
+      "default": "【天军AI视觉】{device_name} {time_range} OK{ok_count} NG{ng_count}",
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Template",
+      "type": "string"
+     }
+    },
+    "title": "SmsAtModemPayload",
+    "type": "object"
+   },
+   "SmsConfigPayload": {
+    "additionalProperties": false,
+    "description": "Canonical 双通道配置，并兼容一期 Alarm 页平铺字段。",
+    "properties": {
+     "at_modem": {
+      "$ref": "#/components/schemas/SmsAtModemPayload"
+     },
+     "baudrate": {
+      "default": 115200,
+      "maximum": 4000000.0,
+      "minimum": 300.0,
+      "title": "Baudrate",
+      "type": "integer"
+     },
+     "cooldown_seconds": {
+      "default": 60.0,
+      "maximum": 86400.0,
+      "minimum": 0.0,
+      "title": "Cooldown Seconds",
+      "type": "number"
+     },
+     "enabled": {
+      "default": false,
+      "description": "NG 短信推送总开关，默认关闭",
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "encoding": {
+      "default": "auto",
+      "enum": [
+       "auto",
+       "gsm",
+       "ucs2"
+      ],
+      "title": "Encoding",
+      "type": "string"
+     },
+     "generic_http": {
+      "$ref": "#/components/schemas/SmsGenericHttpPayload"
+     },
+     "ng_threshold": {
+      "default": 5,
+      "description": "旧版即时 NG 阈值兼容字段；12 小时汇总模式不使用",
+      "maximum": 100.0,
+      "minimum": 1.0,
+      "title": "Ng Threshold",
+      "type": "integer"
+     },
+     "offline_queue_max": {
+      "default": 200,
+      "maximum": 10000.0,
+      "minimum": 1.0,
+      "title": "Offline Queue Max",
+      "type": "integer"
+     },
+     "offline_ttl_seconds": {
+      "default": 86400,
+      "maximum": 2592000.0,
+      "minimum": 60.0,
+      "title": "Offline Ttl Seconds",
+      "type": "number"
+     },
+     "phone_numbers": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Phone Numbers",
+      "type": "array"
+     },
+     "port": {
+      "default": "",
+      "maxLength": 128,
+      "title": "Port",
+      "type": "string"
+     },
+     "provider": {
+      "default": "at_modem",
+      "enum": [
+       "at_modem",
+       "generic_http"
+      ],
+      "title": "Provider",
+      "type": "string"
+     },
+     "queue_size": {
+      "default": 100,
+      "maximum": 1000.0,
+      "minimum": 1.0,
+      "title": "Queue Size",
+      "type": "integer"
+     },
+     "recipients": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Recipients",
+      "type": "array"
+     },
+     "retries": {
+      "default": 3,
+      "maximum": 5.0,
+      "minimum": 0.0,
+      "title": "Retries",
+      "type": "integer"
+     },
+     "retry_backoff_seconds": {
+      "items": {
+       "type": "number"
+      },
+      "maxItems": 10,
+      "minItems": 1,
+      "title": "Retry Backoff Seconds",
+      "type": "array"
+     },
+     "retry_count": {
+      "default": 3,
+      "maximum": 5.0,
+      "minimum": 0.0,
+      "title": "Retry Count",
+      "type": "integer"
+     },
+     "retry_delay_seconds": {
+      "default": 2.0,
+      "maximum": 300.0,
+      "minimum": 0.0,
+      "title": "Retry Delay Seconds",
+      "type": "number"
+     },
+     "template": {
+      "default": "【天军AI视觉】{device_name} {time_range} OK{ok_count} NG{ng_count}",
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Template",
+      "type": "string"
+     }
+    },
+    "title": "SmsConfigPayload",
+    "type": "object"
+   },
+   "SmsConfigResponse": {
+    "additionalProperties": false,
+    "description": "当前已生效的短信通知配置。",
+    "properties": {
+     "at_modem": {
+      "$ref": "#/components/schemas/SmsAtModemPayload"
+     },
+     "baudrate": {
+      "default": 115200,
+      "maximum": 4000000.0,
+      "minimum": 300.0,
+      "title": "Baudrate",
+      "type": "integer"
+     },
+     "cooldown_seconds": {
+      "default": 60.0,
+      "maximum": 86400.0,
+      "minimum": 0.0,
+      "title": "Cooldown Seconds",
+      "type": "number"
+     },
+     "enabled": {
+      "default": false,
+      "description": "NG 短信推送总开关，默认关闭",
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "encoding": {
+      "default": "auto",
+      "enum": [
+       "auto",
+       "gsm",
+       "ucs2"
+      ],
+      "title": "Encoding",
+      "type": "string"
+     },
+     "generic_http": {
+      "$ref": "#/components/schemas/SmsGenericHttpPayload"
+     },
+     "ng_threshold": {
+      "default": 5,
+      "description": "旧版即时 NG 阈值兼容字段；12 小时汇总模式不使用",
+      "maximum": 100.0,
+      "minimum": 1.0,
+      "title": "Ng Threshold",
+      "type": "integer"
+     },
+     "offline_queue_max": {
+      "default": 200,
+      "maximum": 10000.0,
+      "minimum": 1.0,
+      "title": "Offline Queue Max",
+      "type": "integer"
+     },
+     "offline_ttl_seconds": {
+      "default": 86400,
+      "maximum": 2592000.0,
+      "minimum": 60.0,
+      "title": "Offline Ttl Seconds",
+      "type": "number"
+     },
+     "phone_numbers": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Phone Numbers",
+      "type": "array"
+     },
+     "port": {
+      "default": "",
+      "maxLength": 128,
+      "title": "Port",
+      "type": "string"
+     },
+     "provider": {
+      "default": "at_modem",
+      "enum": [
+       "at_modem",
+       "generic_http"
+      ],
+      "title": "Provider",
+      "type": "string"
+     },
+     "queue_size": {
+      "default": 100,
+      "maximum": 1000.0,
+      "minimum": 1.0,
+      "title": "Queue Size",
+      "type": "integer"
+     },
+     "recipients": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Recipients",
+      "type": "array"
+     },
+     "retries": {
+      "default": 3,
+      "maximum": 5.0,
+      "minimum": 0.0,
+      "title": "Retries",
+      "type": "integer"
+     },
+     "retry_backoff_seconds": {
+      "items": {
+       "type": "number"
+      },
+      "maxItems": 10,
+      "minItems": 1,
+      "title": "Retry Backoff Seconds",
+      "type": "array"
+     },
+     "retry_count": {
+      "default": 3,
+      "maximum": 5.0,
+      "minimum": 0.0,
+      "title": "Retry Count",
+      "type": "integer"
+     },
+     "retry_delay_seconds": {
+      "default": 2.0,
+      "maximum": 300.0,
+      "minimum": 0.0,
+      "title": "Retry Delay Seconds",
+      "type": "number"
+     },
+     "template": {
+      "default": "【天军AI视觉】{device_name} {time_range} OK{ok_count} NG{ng_count}",
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Template",
+      "type": "string"
+     }
+    },
+    "title": "SmsConfigResponse",
+    "type": "object"
+   },
+   "SmsGenericHttpPayload": {
+    "additionalProperties": false,
+    "description": "厂商无关的 HTTP/HTTPS JSON 通道配置。",
+    "properties": {
+     "access_key": {
+      "default": "",
+      "maxLength": 2048,
+      "title": "Access Key",
+      "type": "string"
+     },
+     "access_secret": {
+      "default": "",
+      "maxLength": 8192,
+      "title": "Access Secret",
+      "type": "string"
+     },
+     "api_url": {
+      "default": "",
+      "maxLength": 2000,
+      "title": "Api Url",
+      "type": "string"
+     },
+     "field_mapping": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "maxProperties": 50,
+      "title": "Field Mapping",
+      "type": "object"
+     },
+     "request_method": {
+      "default": "POST",
+      "enum": [
+       "POST",
+       "PUT"
+      ],
+      "title": "Request Method",
+      "type": "string"
+     },
+     "sign_name": {
+      "default": "",
+      "maxLength": 200,
+      "title": "Sign Name",
+      "type": "string"
+     },
+     "template_id": {
+      "default": "",
+      "maxLength": 500,
+      "title": "Template Id",
+      "type": "string"
+     },
+     "timeout_seconds": {
+      "default": 10.0,
+      "maximum": 120.0,
+      "minimum": 0.5,
+      "title": "Timeout Seconds",
+      "type": "number"
+     },
+     "token": {
+      "default": "",
+      "maxLength": 8192,
+      "title": "Token",
+      "type": "string"
+     },
+     "verify_ssl": {
+      "default": true,
+      "title": "Verify Ssl",
+      "type": "boolean"
+     }
+    },
+    "title": "SmsGenericHttpPayload",
+    "type": "object"
+   },
+   "SmsPortInfo": {
+    "description": "一个可枚举串口的信息。",
+    "properties": {
+     "description": {
+      "title": "Description",
+      "type": "string"
+     },
+     "hwid": {
+      "title": "Hwid",
+      "type": "string"
+     },
+     "port": {
+      "title": "Port",
+      "type": "string"
+     }
+    },
+    "required": [
+     "port",
+     "description",
+     "hwid"
+    ],
+    "title": "SmsPortInfo",
+    "type": "object"
+   },
+   "SmsPortListResponse": {
+    "description": "短信模块可选串口列表。",
+    "properties": {
+     "ports": {
+      "items": {
+       "$ref": "#/components/schemas/SmsPortInfo"
+      },
+      "title": "Ports",
+      "type": "array"
+     }
+    },
+    "required": [
+     "ports"
+    ],
+    "title": "SmsPortListResponse",
+    "type": "object"
+   },
+   "SmsQueueReceiptResponse": {
+    "description": "测试发送的即时结构化回执。",
+    "properties": {
+     "error_code": {
+      "title": "Error Code",
+      "type": "string"
+     },
+     "message": {
+      "title": "Message",
+      "type": "string"
+     },
+     "message_id": {
+      "title": "Message Id",
+      "type": "string"
+     },
+     "queued": {
+      "title": "Queued",
+      "type": "boolean"
+     },
+     "retry_count": {
+      "title": "Retry Count",
+      "type": "integer"
+     },
+     "status": {
+      "title": "Status",
+      "type": "string"
+     },
+     "status_code": {
+      "title": "Status Code",
+      "type": "integer"
+     },
+     "success": {
+      "title": "Success",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "success",
+     "message",
+     "message_id",
+     "status_code",
+     "retry_count",
+     "queued",
+     "error_code",
+     "status"
+    ],
+    "title": "SmsQueueReceiptResponse",
+    "type": "object"
+   },
+   "SmsTestPayload": {
+    "additionalProperties": false,
+    "description": "后台测试发送请求。",
+    "properties": {
+     "message": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "旧调用方可自定义；缺省发送当前未闭合窗口快照",
+      "title": "Message"
+     },
+     "phone_numbers": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "maxItems": 20,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Phone Numbers"
+     }
+    },
+    "title": "SmsTestPayload",
+    "type": "object"
+   },
    "SplashCameraRequest": {
     "description": "启动动画手势相机 + 闲置超时 + 总开关 配置请求体。",
     "properties": {
@@ -10874,6 +11395,13 @@
    },
    "ValidationError": {
     "properties": {
+     "ctx": {
+      "title": "Context",
+      "type": "object"
+     },
+     "input": {
+      "title": "Input"
+     },
      "loc": {
       "items": {
        "anyOf": [
@@ -25286,6 +25814,132 @@
     "tags": [
      "WMax Scanner",
      "WMax Scanner"
+    ]
+   }
+  },
+  "/api/v1/sms/config": {
+   "get": {
+    "description": "读取当前运行时短信配置；缺失或损坏配置固定回退为默认关闭。",
+    "operationId": "get_sms_config_api_v1_sms_config_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SmsConfigResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "读取短信配置",
+    "tags": [
+     "sms"
+    ]
+   },
+   "put": {
+    "description": "原子保存独立短信配置并热替换服务；不连接 COM，也不发送短信。\n\n保存失败返回 500，旧配置继续生效；字段或启用条件非法由 Pydantic 返回 422。",
+    "operationId": "put_sms_config_api_v1_sms_config_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SmsConfigPayload"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SmsConfigResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "保存短信配置",
+    "tags": [
+     "sms"
+    ]
+   }
+  },
+  "/api/v1/sms/ports": {
+   "get": {
+    "description": "列出系统当前可枚举串口；只读设备信息，不打开任何串口。",
+    "operationId": "list_sms_ports_api_v1_sms_ports_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SmsPortListResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "列出短信串口",
+    "tags": [
+     "sms"
+    ]
+   }
+  },
+  "/api/v1/sms/test": {
+   "post": {
+    "description": "后台排队当前未闭合汇总窗口快照，不在请求线程做串口/HTTP I/O。",
+    "operationId": "test_sms_channel_api_v1_sms_test_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SmsTestPayload"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "202": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SmsQueueReceiptResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "后台测试短信通道",
+    "tags": [
+     "sms"
     ]
    }
   },
