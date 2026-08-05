@@ -113,7 +113,8 @@ argument-hint: "[问题描述]"
 python -m pytest tests/test_sms_*.py tests/test_sms_shutdown_wiring.py -q   # 含 test_sms_report.py 日报
 python -m pytest tests/e2e_browser/test_alarm_page.py tests/e2e_browser/test_sms_report_dialog.py -q
 # 硬件/真机：tools/sms_4g；云短信或 WxPusher 用报警页「测试发送」
-# 日报可见浏览器 UAT：python tests/uat/uat_sms_report_ui.py（前端 6003 / 后端 8003）
+# 日报可见浏览器 UAT：python tests/uat/uat_sms_report_ui.py
+#   默认 FE=6001 API=8001；覆盖：UAT_FE_URL=... UAT_API_URL=.../api/v1
 ```
 
 ---

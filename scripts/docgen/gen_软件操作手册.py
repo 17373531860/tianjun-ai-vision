@@ -24,8 +24,8 @@ BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 MD = os.path.join(BASE, 'docs', '软件操作手册.md')
 PDF = os.path.join(BASE, 'docs', '软件操作手册.pdf')
 
-VERSION = 'v3.45.0'
-UPDATED = '2026 年 7 月'
+VERSION = 'v3.46.0'
+UPDATED = '2026 年 8 月'
 
 
 # ── GitHub 风格锚点（让 md 里手写的目录内链在 PDF 中可跳转）──────────────────
@@ -279,7 +279,18 @@ def main():
         ['bash', '-lc', 'command -v google-chrome || command -v google-chrome-stable'],
         capture_output=True, text=True).stdout.strip()
     if not chrome:
-        print('未找到 google-chrome', file=sys.stderr)
+        # macOS Chrome / Playwright Chromium 兜底（开发机跨平台出 PDF）
+        import glob
+        candidates = [
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        ] + sorted(glob.glob(os.path.expanduser(
+            '~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/'
+            '*.app/Contents/MacOS/*'
+        )), reverse=True)
+        chrome = next((c for c in candidates if os.path.exists(c)), '')
+    if not chrome:
+        print('未找到 google-chrome / Chromium', file=sys.stderr)
         sys.exit(1)
 
     cmd = [
