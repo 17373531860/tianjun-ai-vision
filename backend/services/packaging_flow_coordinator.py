@@ -245,6 +245,9 @@ class PackagingFlowCoordinator:
                 if getattr(row, "tail_paper_scan_alarm", None) is not None else True
             ),
             "tail_paper_timeout_s": int(getattr(row, "tail_paper_timeout_s", 0) or 0),
+            # v3.46 放工单只认"等收尾之后"的出现 (默认关零差异)
+            "tail_paper_only_after_awaiting": bool(
+                getattr(row, "tail_paper_only_after_awaiting", False)),
             # v3.23 缺油嘴 gate (每箱查, 默认关零差异)
             "oil_nozzle_required": bool(getattr(row, "oil_nozzle_required", False)),
             "oil_nozzle_step_label": getattr(row, "oil_nozzle_step_label", None),
@@ -815,6 +818,17 @@ class PackagingFlowCoordinator:
                 finally:
                     db.close()
                 return
+            # v3.46「只认收尾后放的工单」: 非等收尾态的检出一律当没看见 — 既不作
+            # 收尾依据 (见 _probe_paper_order), 也不报"提前放工单"。上银现场工人
+            # 固定封箱后放纸, 过程中的检出全是误检; 而"提前放工单"与"未放工单"
+            # 共用同一事件档, 现场把该档设成 NG, 一次误检就刷一条 NG。
+            # 与 as_close_action 同时开才生效: 老模式没有等待态这个收口, 静默会
+            # 让工单永远收不了尾。
+            if (cfg.get("tail_paper_only_after_awaiting")
+                    and cfg.get("tail_paper_as_close_action")):
+                _pkg_dbg("放工单非等收尾态检出→按开关丢弃",
+                         f"order={run.get('order_no')} ch={channel_id}")
+                return
             # 提前放工单: 功能开着 + 放的时机不对 → 报警提醒. 两种"提前":
             #   a) 还没做到尾箱 (含扫单后未开箱) — 工单纸只该进尾箱;
             #   b) 名义上已翻到尾箱, 但尾箱实际一件没装 (上一箱一落账"当前箱"就
@@ -1190,6 +1204,15 @@ class PackagingFlowCoordinator:
     def _probe_paper_order(self, cfg: Dict[str, Any], run: Dict[str, Any]) -> bool:
         if run.get("paper_order_done"):
             return True
+        # v3.46 只认"等收尾之后"的出现 (默认关): 步骤账本是回查历史 (尾箱周期 +
+        # 上一周期), 分不清"工人封箱前真放了"和"那个窗口里误检了一次" —— 开了本
+        # 开关就一律不采信历史, 尾箱落账必挂等待, 只认挂起之后由检测层实时推来的
+        # 放工单动作 (on_step_detected) 收尾; 时限到点仍没推来 = 判没放。
+        # 必须与"放工单=尾箱收尾动作"同时开: 老模式没有等待态这个收口, 一律不采信
+        # 历史会让尾箱 gate 永远不放行 (每周期报警且永不收尾) —— 直接死锁产线。
+        if (cfg.get("tail_paper_only_after_awaiting")
+                and cfg.get("tail_paper_as_close_action")):
+            return False
         if self._paper_order_probe is None:
             return True  # 无探测器 → gate 退化为不阻断 (避免误卡)
         try:

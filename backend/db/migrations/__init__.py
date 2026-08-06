@@ -29,6 +29,7 @@ _MIGRATION_MODULES = [
     "m0003_pkg_tail_paper_order_settle",
     "m0004_pkg_box_label_scan",
     "m0005_pkg_sync_work_orders",
+    "m0006_pkg_tail_paper_only_after_awaiting",
 ]
 
 # m0000 不看记账、每次启动都幂等跑（老库任意版本起跳的安全网）

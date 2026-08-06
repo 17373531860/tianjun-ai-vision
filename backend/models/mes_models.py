@@ -866,6 +866,12 @@ class PackagingFlowConfig(Base):
     # 组合非法时兜底按扫新单模式 (见协调器 _paper_judge_mode).
     tail_paper_scan_alarm = Column(Boolean, default=True)
     tail_paper_timeout_s = Column(Integer, default=0)
+    # v3.46 放工单只认"等收尾之后"的出现 (默认关=老行为, 仅 as_close_action 模式生效).
+    # 关: 尾箱落账时回查步骤账本, 尾箱周期内(含上一周期)出现过放工单就算已放 —— 允许
+    #   工人封箱前先放纸, 但该周期里一次误检同样会让工单当场收尾, 没人提醒工人真放。
+    # 开: 尾箱落账一律先挂"等放工单收尾", 历史检出不算数, 只认挂起之后新出现的放工单
+    #   动作。代价: 工人必须在封箱之后再放工单, 封箱前放的会被判成没放。
+    tail_paper_only_after_awaiting = Column(Boolean, default=False)
 
     # 缺油嘴视觉 gate (默认关): 每箱封箱结算前"放油嘴"步骤必须 covered, 否则不收尾 + 报警.
     # 与塞工单 gate 同机制 (复用 is_packaging_paper_order_covered 探测), 区别: 每箱都查 (非仅尾箱).

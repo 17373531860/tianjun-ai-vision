@@ -900,6 +900,70 @@ def test_sliders_awaiting_paper_step_detected_closes_order(client):
     assert coord.get_state(cid) is None
 
 
+def test_paper_only_after_awaiting_ignores_history(client):
+    """v3.46 只认收尾后放的工单 (开): 尾箱落账时步骤账本里已有放工单 (封箱前放的 /
+    那个窗口里误检的) 一概不算 → 照样挂「等放工单收尾」, 等真做了动作才收尾."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True,
+                             tail_paper_only_after_awaiting=True,
+                             tail_paper_step_label="放工单")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    coord.set_paper_order_probe(lambda ch, lbl: True)   # 账本里"已经有"放工单
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)
+    state = coord.get_state(cid)
+    assert state is not None and state["status"] == "awaiting_paper"  # 历史不算数
+
+    coord.on_step_detected(0, "放工单")                  # 挂起之后真做了动作
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "OK"
+
+
+def test_paper_only_after_awaiting_default_off_keeps_old_behavior(client):
+    """v3.46 开关默认关 = 零差异: 账本里有放工单 → 尾箱落账即收尾, 不挂等待."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True,
+                             tail_paper_step_label="放工单")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    coord.set_paper_order_probe(lambda ch, lbl: True)
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed" and row.final_result == "OK"
+    assert coord.get_state(cid) is None
+
+
+def test_paper_only_after_awaiting_inert_in_old_gate_mode(client):
+    """v3.46 互斥守门: 没开「放工单=工单收尾」时本开关必须不生效 —— 否则尾箱 gate
+    永远不放行, 每周期报警且永不收尾 = 产线死锁."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_only_after_awaiting=True,
+                             tail_paper_step_label="放工单")
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 24})
+    coord.set_alarm_sink(lambda c, k, m: None)
+    coord.set_paper_order_probe(lambda ch, lbl: True)   # 老模式 gate 该放行
+    db = SessionLocal()
+
+    coord.on_scan("ORD1", db, channel_id=0)
+    coord.on_cycle_settled(0, 1, True, db, slider_count=24)
+
+    row = db.query(PackagingFlowRun).filter_by(order_no="ORD1").first()
+    assert row.status == "completed"                    # 照常收尾, 没被卡死
+
+
 def test_sliders_early_paper_on_non_tail_box_alarms_once(client):
     """v3.43.1 提前放工单: 3 箱工单在第 1 箱(非尾箱)就检测到放工单动作 → 当场报警
     (每箱只报一次), 箱结算不受影响; 做到尾箱后同一动作不再算提前."""
@@ -1647,3 +1711,49 @@ def test_label_gate_off_zero_diff(client):
     st = coord.get_state(cid)
     assert st["status"] == "running"
     assert st["label_authorized"] is True
+
+
+def _early_paper_alarms(coord, cid, *, box_total=2):
+    """跑到"非尾箱作业中"再喂一次放工单检出, 收集 early_paper 报警."""
+    alarms = []
+    coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})
+    coord.set_alarm_sink(lambda c, k, m: alarms.append(k))
+    coord.set_paper_order_probe(lambda ch, lbl: False)
+    db = SessionLocal()
+    coord.on_scan("ORD_EP", db, channel_id=0)
+    coord.on_step_detected(0, "放工单")   # 第1箱(非尾箱)作业中误检
+    db.close()
+    return alarms
+
+
+def test_paper_only_after_awaiting_suppresses_early_paper_alarm(client):
+    """v3.46 只认收尾后放的工单 (开): 非等收尾态的放工单检出整条丢弃 —
+    连"提前放工单"报警都不报。现场把该报警档设成 NG, 一次误检就刷一条 NG。"""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True,
+                             tail_paper_only_after_awaiting=True,
+                             tail_paper_step_label="放工单")
+    assert "early_paper" not in _early_paper_alarms(coord, cid)
+
+
+def test_early_paper_alarm_still_fires_when_switch_off(client):
+    """开关默认关 = 零差异: "提前放工单"报警照旧报, 老客户不受影响."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=True,
+                             tail_paper_step_label="放工单")
+    assert "early_paper" in _early_paper_alarms(coord, cid)
+
+
+def test_early_paper_alarm_still_fires_in_old_gate_mode(client):
+    """互斥守门: 老 gate 模式 (as_close_action 关) 下开关不生效, 报警照旧报."""
+    coord, cid = _setup_flow(client, count_unit="sliders",
+                             items_per_box_source="config", items_per_box_fixed=24,
+                             tail_paper_order_required=True,
+                             tail_paper_as_close_action=False,
+                             tail_paper_only_after_awaiting=True,
+                             tail_paper_step_label="放工单")
+    assert "early_paper" in _early_paper_alarms(coord, cid)

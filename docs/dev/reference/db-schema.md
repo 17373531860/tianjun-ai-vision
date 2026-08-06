@@ -1,7 +1,7 @@
 # 数据库表参考
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-07-29）
+> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-08-05）
 > **单一事实源**：SQLAlchemy ORM（Base.metadata）。字段含义看模型源文件行内注释；
 > 迁移历史看 backend/db/migrations/ 与 backend/main.py 的 migrate_database。
 
@@ -646,6 +646,7 @@ ORM 类 `PackagingFlowConfig`，定义于 `backend/models/mes_models.py`。
 | `event_missing_paper` | INTEGER |  |  |
 | `tail_paper_scan_alarm` | BOOLEAN |  | True |
 | `tail_paper_timeout_s` | INTEGER |  | 0 |
+| `tail_paper_only_after_awaiting` | BOOLEAN |  | False |
 | `oil_nozzle_required` | BOOLEAN |  | False |
 | `oil_nozzle_step_label` | VARCHAR(64) |  |  |
 | `event_missing_nozzle` | INTEGER |  |  |

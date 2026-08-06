@@ -332,7 +332,7 @@
    "Body_install_plugin_api_v1_plugins_install_post": {
     "properties": {
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      }
@@ -371,7 +371,7 @@
      "image": {
       "anyOf": [
        {
-        "format": "binary",
+        "contentMediaType": "application/octet-stream",
         "type": "string"
        },
        {
@@ -432,7 +432,7 @@
    "Body_upload_image_api_v1_source_image_upload_post": {
     "properties": {
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      }
@@ -457,7 +457,7 @@
       "title": "Description"
      },
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      },
@@ -503,7 +503,7 @@
    "Body_upload_template_file_api_v1_export_templates__template_id__upload_template_file_post": {
     "properties": {
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      }
@@ -517,7 +517,7 @@
    "Body_upload_video_api_v1_source_video_upload_post": {
     "properties": {
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      }
@@ -1120,7 +1120,6 @@
      "channel_station_map": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1278,7 +1277,6 @@
      "custom_commands": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1295,7 +1293,6 @@
      "event_priority_map": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1307,7 +1304,6 @@
      "idle_light": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1357,7 +1353,6 @@
      "triggers": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1430,7 +1425,6 @@
      "config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1448,7 +1442,6 @@
       "anyOf": [
        {
         "items": {
-         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -1534,7 +1527,6 @@
      "config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1558,7 +1550,6 @@
       "anyOf": [
        {
         "items": {
-         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -2430,7 +2421,6 @@
      "parse_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -2463,7 +2453,6 @@
      "protocol_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -2545,7 +2534,6 @@
      "validation_rules": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -2708,7 +2696,6 @@
      "parse_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -2753,7 +2740,6 @@
      "protocol_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -2831,7 +2817,6 @@
      "validation_rules": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3343,7 +3328,6 @@
      "extra_data": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3474,7 +3458,6 @@
       "type": "integer"
      },
      "fields": {
-      "additionalProperties": true,
       "title": "Fields",
       "type": "object"
      }
@@ -3630,7 +3613,6 @@
      "code_params": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3642,7 +3624,6 @@
      "common_params": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3654,7 +3635,6 @@
      "data_output_format_params": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3666,7 +3646,6 @@
      "indicator_params": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3678,7 +3657,6 @@
      "input_params": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3694,7 +3672,6 @@
      "light_params": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3706,7 +3683,6 @@
      "output_params": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3723,7 +3699,6 @@
      "reading_params": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3735,7 +3710,6 @@
      "sensor_params": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3890,7 +3864,6 @@
      "detections": {
       "description": "检测框列表, 与 /detection/results 同构: 归一化坐标 x/y/w/h + label/confidence/class_id",
       "items": {
-       "additionalProperties": true,
        "type": "object"
       },
       "title": "Detections",
@@ -4337,7 +4310,6 @@
      "schedule": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -4471,7 +4443,6 @@
      "extra_data": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -4639,7 +4610,6 @@
      "extra_data": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -5229,6 +5199,11 @@
       "title": "Tail Paper As Close Action",
       "type": "boolean"
      },
+     "tail_paper_only_after_awaiting": {
+      "default": false,
+      "title": "Tail Paper Only After Awaiting",
+      "type": "boolean"
+     },
      "tail_paper_order_required": {
       "default": false,
       "title": "Tail Paper Order Required",
@@ -5732,6 +5707,11 @@
      "tail_paper_as_close_action": {
       "default": false,
       "title": "Tail Paper As Close Action",
+      "type": "boolean"
+     },
+     "tail_paper_only_after_awaiting": {
+      "default": false,
+      "title": "Tail Paper Only After Awaiting",
       "type": "boolean"
      },
      "tail_paper_order_required": {
@@ -6453,6 +6433,17 @@
       ],
       "title": "Tail Paper As Close Action"
      },
+     "tail_paper_only_after_awaiting": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tail Paper Only After Awaiting"
+     },
      "tail_paper_order_required": {
       "anyOf": [
        {
@@ -6634,7 +6625,6 @@
      "display_payload": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -6684,7 +6674,6 @@
      "license_payload": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -6754,7 +6743,6 @@
       "type": "array"
      },
      "data_config": {
-      "additionalProperties": true,
       "title": "Data Config",
       "type": "object"
      },
@@ -6773,7 +6761,6 @@
       "type": "string"
      },
      "pipeline_config": {
-      "additionalProperties": true,
       "title": "Pipeline Config",
       "type": "object"
      },
@@ -6804,7 +6791,6 @@
      "alarm_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -6817,7 +6803,6 @@
       "anyOf": [
        {
         "items": {
-         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -6831,7 +6816,6 @@
      "data_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -6854,7 +6838,6 @@
      "detection_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -6867,7 +6850,6 @@
       "anyOf": [
        {
         "items": {
-         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -6895,7 +6877,6 @@
      "pipeline_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -6908,7 +6889,6 @@
       "anyOf": [
        {
         "items": {
-         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -6960,7 +6940,6 @@
       "type": "string"
      },
      "data": {
-      "additionalProperties": true,
       "title": "Data",
       "type": "object"
      },
@@ -6993,7 +6972,6 @@
      "alarm_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7006,7 +6984,6 @@
       "anyOf": [
        {
         "items": {
-         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7025,7 +7002,6 @@
      "data_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7048,7 +7024,6 @@
      "detection_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7061,7 +7036,6 @@
       "anyOf": [
        {
         "items": {
-         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7134,7 +7108,6 @@
      "pipeline_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7147,7 +7120,6 @@
       "anyOf": [
        {
         "items": {
-         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7183,7 +7155,6 @@
      "alarm_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7196,7 +7167,6 @@
       "anyOf": [
        {
         "items": {
-         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7210,7 +7180,6 @@
      "data_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7233,7 +7202,6 @@
      "detection_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7246,7 +7214,6 @@
       "anyOf": [
        {
         "items": {
-         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7304,7 +7271,6 @@
      "pipeline_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7317,7 +7283,6 @@
       "anyOf": [
        {
         "items": {
-         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7380,7 +7345,6 @@
       "type": "string"
      },
      "pull_config": {
-      "additionalProperties": true,
       "title": "Pull Config",
       "type": "object"
      }
@@ -7435,7 +7399,6 @@
      "display_payload": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7479,7 +7442,6 @@
      "license_payload": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7872,7 +7834,6 @@
      "data_window_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -8284,7 +8245,6 @@
      "data_window_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -8572,7 +8532,6 @@
     "description": "旁路 SN 监控状态快照 (内存态, 只读)。",
     "properties": {
      "by_channel": {
-      "additionalProperties": true,
       "description": "通道号 → 当前 SN 条目",
       "title": "By Channel",
       "type": "object"
@@ -8592,7 +8551,6 @@
      "current": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -8605,7 +8563,6 @@
      "default": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -8618,7 +8575,6 @@
      "entries": {
       "description": "全部监控规则的最新条目",
       "items": {
-       "additionalProperties": true,
        "type": "object"
       },
       "title": "Entries",
@@ -8774,7 +8730,6 @@
      "parse_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -8827,7 +8782,6 @@
      "scan_d_line": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -9126,7 +9080,6 @@
      "parse_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -9215,7 +9168,6 @@
      "scan_d_line": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -9327,7 +9279,6 @@
       "type": "number"
      },
      "counters_summary": {
-      "additionalProperties": true,
       "title": "Counters Summary",
       "type": "object"
      },
@@ -9404,7 +9355,6 @@
      "counters_snapshot": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -9685,7 +9635,6 @@
       "type": "string"
      },
      "cycle_context": {
-      "additionalProperties": true,
       "title": "Cycle Context",
       "type": "object"
      },
@@ -10271,7 +10220,6 @@
      "result_data": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -10326,7 +10274,6 @@
      "default_rule_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -10398,7 +10345,6 @@
      "default_rule_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -10475,7 +10421,6 @@
      "config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -10544,7 +10489,6 @@
      "protocol_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -10596,7 +10540,6 @@
      "display_payload": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -10608,7 +10551,6 @@
      "license_payload": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -10874,6 +10816,13 @@
    },
    "ValidationError": {
     "properties": {
+     "ctx": {
+      "title": "Context",
+      "type": "object"
+     },
+     "input": {
+      "title": "Input"
+     },
      "loc": {
       "items": {
        "anyOf": [
@@ -11021,7 +10970,6 @@
      "physical_trigger_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -11114,7 +11062,6 @@
      "physical_trigger_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -11229,7 +11176,6 @@
      "physical_trigger_config": {
       "anyOf": [
        {
-        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -12393,7 +12339,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Auth Config Api V1 Auth Config Get",
          "type": "object"
         }
@@ -12426,7 +12371,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Put Auth Config Api V1 Auth Config Put",
          "type": "object"
         }
@@ -12585,7 +12529,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Me Api V1 Auth Me Get",
          "type": "object"
         }
@@ -14909,7 +14852,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Behavior Score Api V1 Data Stats Behavior Score Get",
          "type": "object"
         }
@@ -15209,7 +15151,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Yield Trend Api V1 Data Stats Yield Trend Get",
          "type": "object"
         }
@@ -15423,7 +15364,6 @@
      "content": {
       "application/json": {
        "schema": {
-        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -15482,7 +15422,6 @@
      "content": {
       "application/json": {
        "schema": {
-        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -15677,7 +15616,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response List Export Fields Api V1 Export Fields Get",
          "type": "object"
         }
@@ -15721,7 +15659,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Preview Template Api V1 Export Preview Post",
          "type": "object"
         }
@@ -15788,7 +15725,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response List Rules Api V1 Export Realtime Rules Get",
          "type": "object"
         }
@@ -15829,7 +15765,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Create Rule Api V1 Export Realtime Rules Post",
          "type": "object"
         }
@@ -15873,7 +15808,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Delete Rule Api V1 Export Realtime Rules  Rule Id  Delete",
          "type": "object"
         }
@@ -15915,7 +15849,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Rule Api V1 Export Realtime Rules  Rule Id  Get",
          "type": "object"
         }
@@ -15967,7 +15900,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Update Rule Api V1 Export Realtime Rules  Rule Id  Put",
          "type": "object"
         }
@@ -16050,7 +15982,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response List Rule Logs Api V1 Export Realtime Rules  Rule Id  Logs Get",
          "type": "object"
         }
@@ -16105,7 +16036,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Test Run Api V1 Export Realtime Rules  Rule Id  Test Run Post",
          "type": "object"
         }
@@ -16149,7 +16079,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Toggle Rule Api V1 Export Realtime Rules  Rule Id  Toggle Post",
          "type": "object"
         }
@@ -16296,7 +16225,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response List All Logs Api V1 Export Run Logs Get",
          "type": "object"
         }
@@ -16465,7 +16393,6 @@
      "content": {
       "application/json": {
        "schema": {
-        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -16523,7 +16450,6 @@
      "content": {
       "application/json": {
        "schema": {
-        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -16881,7 +16807,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response List Templates Api V1 Export Templates Get",
          "type": "object"
         }
@@ -16922,7 +16847,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Create Template Api V1 Export Templates Post",
          "type": "object"
         }
@@ -16967,7 +16891,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Delete Template File Api V1 Export Templates  Template Id  Template File Delete",
          "type": "object"
         }
@@ -17061,7 +16984,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Upload Template File Api V1 Export Templates  Template Id  Upload Template File Post",
          "type": "object"
         }
@@ -17105,7 +17027,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Delete Template Api V1 Export Templates  Tpl Id  Delete",
          "type": "object"
         }
@@ -17147,7 +17068,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Template Api V1 Export Templates  Tpl Id  Get",
          "type": "object"
         }
@@ -17199,7 +17119,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Update Template Api V1 Export Templates  Tpl Id  Put",
          "type": "object"
         }
@@ -17260,7 +17179,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Clone Template Api V1 Export Templates  Tpl Id  Clone Post",
          "type": "object"
         }
@@ -19144,7 +19062,6 @@
      "content": {
       "application/json": {
        "schema": {
-        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -19751,7 +19668,6 @@
      "content": {
       "application/json": {
        "schema": {
-        "additionalProperties": true,
         "title": "Body",
         "type": "object"
        }
@@ -21512,7 +21428,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response List Plugins Api V1 Plugins Get",
          "type": "object"
         }
@@ -21577,7 +21492,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Active Manifest Api V1 Plugins Active Manifest Get",
          "type": "object"
         }
@@ -21601,7 +21515,6 @@
      "content": {
       "application/json": {
        "schema": {
-        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -21659,7 +21572,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Install Plugin Api V1 Plugins Install Post",
          "type": "object"
         }
@@ -21715,7 +21627,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Delete Plugin Api V1 Plugins  Customer Code  Delete",
          "type": "object"
         }
@@ -21760,7 +21671,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Activate Plugin Api V1 Plugins  Customer Code  Activate Post",
          "type": "object"
         }
@@ -21805,7 +21715,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Deactivate Plugin Api V1 Plugins  Customer Code  Deactivate Post",
          "type": "object"
         }
@@ -21850,7 +21759,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Plugin Status Api V1 Plugins  Customer Code  Status Get",
          "type": "object"
         }
@@ -22635,7 +22543,6 @@
        "application/json": {
         "schema": {
          "items": {
-          "additionalProperties": true,
           "type": "object"
          },
          "title": "Response Get Records Api V1 Reports Records Get",
@@ -27439,7 +27346,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Device Status Api V1 System Device Status Get",
          "type": "object"
         }
@@ -27463,7 +27369,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Display Api V1 System Display Get",
          "type": "object"
         }
@@ -27495,7 +27400,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Put Display Api V1 System Display Put",
          "type": "object"
         }
@@ -27529,7 +27433,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get License Cache Api V1 System License Cache Get",
          "type": "object"
         }
@@ -27561,7 +27464,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Put License Cache Api V1 System License Cache Put",
          "type": "object"
         }
@@ -27595,7 +27497,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Log Limits Api V1 System Log Limits Get",
          "type": "object"
         }
@@ -27616,7 +27517,6 @@
      "content": {
       "application/json": {
        "schema": {
-        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -27629,7 +27529,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Put Log Limits Api V1 System Log Limits Put",
          "type": "object"
         }
@@ -27663,7 +27562,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Polling Api V1 System Polling Get",
          "type": "object"
         }
@@ -27684,7 +27582,6 @@
      "content": {
       "application/json": {
        "schema": {
-        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -27697,7 +27594,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Put Polling Api V1 System Polling Put",
          "type": "object"
         }
@@ -27731,7 +27627,6 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "title": "Response Get Startup Ready Api V1 System Startup Ready Get",
          "type": "object"
         }
@@ -28181,7 +28076,6 @@
        "schema": {
         "anyOf": [
          {
-          "additionalProperties": true,
           "type": "object"
          },
          {
@@ -29273,7 +29167,6 @@
      "content": {
       "application/json": {
        "schema": {
-        "additionalProperties": true,
         "title": "Body",
         "type": "object"
        }

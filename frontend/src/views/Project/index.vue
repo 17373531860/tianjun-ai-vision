@@ -1476,6 +1476,20 @@ const initProjectDefaults = (project) => {
   if (project.custom_mix_container_stable_min_frames === undefined) {
     project.custom_mix_container_stable_min_frames = pipelineConfig.custom_mix_container_stable_min_frames ?? 0;
   }
+  // v3.46 槽位完整性门 (空槽标签 + 槽位总数都配齐才开门)
+  if (project.custom_mix_container_slot_check_label === undefined) {
+    project.custom_mix_container_slot_check_label = pipelineConfig.custom_mix_container_slot_check_label || '';
+  }
+  if (project.custom_mix_container_slot_total === undefined) {
+    project.custom_mix_container_slot_total = pipelineConfig.custom_mix_container_slot_total ?? 0;
+  }
+  // v3.46 重复框去重阈值: 物品框缺省 0.45 (保持 v3.45 既有行为), 托盘框缺省 0 关闭
+  if (project.custom_mix_container_item_dedup_iou === undefined) {
+    project.custom_mix_container_item_dedup_iou = pipelineConfig.custom_mix_container_item_dedup_iou ?? 0.45;
+  }
+  if (project.custom_mix_container_tray_dedup_iou === undefined) {
+    project.custom_mix_container_tray_dedup_iou = pipelineConfig.custom_mix_container_tray_dedup_iou ?? 0;
+  }
   // 物品行原生字段兜底：老数据/手改 JSON 可能缺字段，表C输入框依赖它们存在
   (project.steps_config || []).forEach(s => {
     if (s.detect_role !== 'item') return;
@@ -1870,6 +1884,10 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_mix_container_per_tray_guard = project.custom_mix_container_per_tray_guard === true;
   project.pipeline_config.custom_mix_container_peak_cap = project.custom_mix_container_peak_cap || 0;
   project.pipeline_config.custom_mix_container_stable_min_frames = project.custom_mix_container_stable_min_frames || 0;
+  project.pipeline_config.custom_mix_container_slot_check_label = project.custom_mix_container_slot_check_label || '';
+  project.pipeline_config.custom_mix_container_slot_total = project.custom_mix_container_slot_total || 0;
+  project.pipeline_config.custom_mix_container_item_dedup_iou = project.custom_mix_container_item_dedup_iou ?? 0.45;
+  project.pipeline_config.custom_mix_container_tray_dedup_iou = project.custom_mix_container_tray_dedup_iou || 0;
   project.pipeline_config.custom_sequence_order = project.custom_sequence_order;
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
@@ -2068,6 +2086,10 @@ const handleSaveProject = async () => {
         custom_mix_container_per_tray_guard: activeProject.value.custom_mix_container_per_tray_guard === true,
         custom_mix_container_peak_cap: activeProject.value.custom_mix_container_peak_cap || 0,
         custom_mix_container_stable_min_frames: activeProject.value.custom_mix_container_stable_min_frames || 0,
+        custom_mix_container_slot_check_label: activeProject.value.custom_mix_container_slot_check_label || '',
+        custom_mix_container_slot_total: activeProject.value.custom_mix_container_slot_total || 0,
+        custom_mix_container_item_dedup_iou: activeProject.value.custom_mix_container_item_dedup_iou ?? 0.45,
+        custom_mix_container_tray_dedup_iou: activeProject.value.custom_mix_container_tray_dedup_iou || 0,
         custom_sequence_order: activeProject.value.custom_sequence_order,
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,

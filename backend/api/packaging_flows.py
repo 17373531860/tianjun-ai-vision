@@ -106,6 +106,8 @@ class PackagingFlowConfigBase(BaseModel):
     # scan_alarm=True → 扫新单判定(默认); False 且 timeout_s>0 → 时限判定
     tail_paper_scan_alarm: bool = True
     tail_paper_timeout_s: int = 0
+    # v3.46 放工单只认"等收尾之后"的出现 (默认关, 需与 as_close_action 同时开)
+    tail_paper_only_after_awaiting: bool = False
     # 缺油嘴 gate (v3.23, 每箱查, 默认关)
     oil_nozzle_required: bool = False
     oil_nozzle_step_label: Optional[str] = None
@@ -185,6 +187,7 @@ class PackagingFlowConfigUpdate(BaseModel):
     event_missing_paper: Optional[int] = None
     tail_paper_scan_alarm: Optional[bool] = None
     tail_paper_timeout_s: Optional[int] = None
+    tail_paper_only_after_awaiting: Optional[bool] = None
     oil_nozzle_required: Optional[bool] = None
     oil_nozzle_step_label: Optional[str] = None
     event_missing_nozzle: Optional[int] = None
@@ -330,6 +333,8 @@ def _serialize(row: PackagingFlowConfig) -> PackagingFlowConfigResponse:
             if getattr(row, "tail_paper_scan_alarm", None) is not None else True
         ),
         tail_paper_timeout_s=int(getattr(row, "tail_paper_timeout_s", 0) or 0),
+        tail_paper_only_after_awaiting=bool(
+            getattr(row, "tail_paper_only_after_awaiting", False)),
         oil_nozzle_required=bool(getattr(row, "oil_nozzle_required", False)),
         oil_nozzle_step_label=getattr(row, "oil_nozzle_step_label", None),
         event_missing_nozzle=getattr(row, "event_missing_nozzle", None),
