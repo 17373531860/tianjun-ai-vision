@@ -332,7 +332,7 @@
    "Body_install_plugin_api_v1_plugins_install_post": {
     "properties": {
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      }
@@ -371,7 +371,7 @@
      "image": {
       "anyOf": [
        {
-        "format": "binary",
+        "contentMediaType": "application/octet-stream",
         "type": "string"
        },
        {
@@ -432,7 +432,7 @@
    "Body_upload_image_api_v1_source_image_upload_post": {
     "properties": {
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      }
@@ -457,7 +457,7 @@
       "title": "Description"
      },
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      },
@@ -503,7 +503,7 @@
    "Body_upload_template_file_api_v1_export_templates__template_id__upload_template_file_post": {
     "properties": {
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      }
@@ -517,7 +517,7 @@
    "Body_upload_video_api_v1_source_video_upload_post": {
     "properties": {
      "file": {
-      "format": "binary",
+      "contentMediaType": "application/octet-stream",
       "title": "File",
       "type": "string"
      }
@@ -10874,6 +10874,13 @@
    },
    "ValidationError": {
     "properties": {
+     "ctx": {
+      "title": "Context",
+      "type": "object"
+     },
+     "input": {
+      "title": "Input"
+     },
      "loc": {
       "items": {
        "anyOf": [

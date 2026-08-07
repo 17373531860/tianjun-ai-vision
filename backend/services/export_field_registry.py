@@ -63,6 +63,7 @@ GROUP_SCANNER = "scanner"
 GROUP_STATS = "stats"
 GROUP_AGGREGATIONS = "aggregations"
 GROUP_TIME = "time"
+GROUP_PLUGIN = "plugin"      # v3.46 F8: 插件注册的动态字段（path 前缀 plugin.<cc>.）
 
 
 GROUP_LABELS: Dict[str, str] = {
@@ -88,6 +89,7 @@ GROUP_LABELS: Dict[str, str] = {
     GROUP_STATS: "Session 聚合统计",
     GROUP_AGGREGATIONS: "跨 Session 聚合",
     GROUP_TIME: "时间/日期",
+    GROUP_PLUGIN: "插件字段",
 }
 
 # 分组在前端字段树中的顺序
@@ -99,6 +101,7 @@ GROUPS_DISPLAY_ORDER: List[str] = [
     GROUP_BOX, GROUP_SCANNER, GROUP_MES,
     GROUP_LIVE, GROUP_LIVE_TRACKING, GROUP_COUNTERS,
     GROUP_STATS, GROUP_AGGREGATIONS,
+    GROUP_PLUGIN,
 ]
 
 
@@ -768,8 +771,99 @@ ALL_FIELDS: List[FieldDef] = (
 )
 
 
-# 路径到 FieldDef 的快速索引
+# 路径到 FieldDef 的快速索引（静态字段）
 _FIELDS_BY_PATH: Dict[str, FieldDef] = {f.path: f for f in ALL_FIELDS}
+
+
+# ============================================================
+# v3.46 F8: 插件动态字段
+#
+# 插件通过 PluginRegistry.export_fields.register(...) 把自己的字段挂进来：
+#   - path 必须以 "plugin.<customer_code_snake>." 开头（命名空间隔离）
+#   - 每个插件配一个 context provider: provider(db, ctx) -> dict
+#     返回值挂到 Jinja 上下文 ctx["plugin"][<cc_snake>] 下
+#   - 单 active 插件 + 重启生命周期：同 customer_code 重复注册视为整体替换
+#   - 插件停用后字段不在（模板引用走 _SilentUndefined 渲染为空，不崩）
+# ============================================================
+
+import threading as _threading
+
+_PLUGIN_LOCK = _threading.Lock()
+# customer_code -> List[FieldDef]
+_PLUGIN_FIELDS: Dict[str, List[FieldDef]] = {}
+# customer_code -> provider(db, ctx) -> Dict[str, Any]
+_PLUGIN_PROVIDERS: Dict[str, Any] = {}
+
+
+def plugin_namespace(customer_code: str) -> str:
+    """customer_code 转字段命名空间段（连字符转下划线）"""
+    return customer_code.replace("-", "_")
+
+
+def register_plugin_fields(customer_code: str, fields: List[FieldDef],
+                           provider: Optional[Any] = None) -> None:
+    """注册（或整体替换）某插件的导出字段。
+
+    参数:
+        customer_code: 插件 customer_code
+        fields:        FieldDef 列表，path 必须以 plugin.<cc_snake>. 开头，
+                       group 必须是 GROUP_PLUGIN
+        provider:      可选 callable(db, ctx) -> dict，导出上下文构造时调用，
+                       返回值挂到 ctx["plugin"][<cc_snake>]；None = 只注册元数据
+    """
+    expect_prefix = f"plugin.{plugin_namespace(customer_code)}."
+    for f in fields:
+        if not f.path.startswith(expect_prefix):
+            raise ValueError(
+                f"插件字段 path={f.path!r} 必须以 {expect_prefix!r} 开头（命名空间隔离）"
+            )
+        if f.group != GROUP_PLUGIN:
+            raise ValueError(f"插件字段 group 必须是 {GROUP_PLUGIN!r}，实际 {f.group!r}")
+    with _PLUGIN_LOCK:
+        _PLUGIN_FIELDS[customer_code] = list(fields)
+        if provider is not None:
+            _PLUGIN_PROVIDERS[customer_code] = provider
+        else:
+            _PLUGIN_PROVIDERS.pop(customer_code, None)
+
+
+def unregister_plugin_fields(customer_code: str) -> None:
+    """移除某插件的全部导出字段与 provider（停用/测试清理用）"""
+    with _PLUGIN_LOCK:
+        _PLUGIN_FIELDS.pop(customer_code, None)
+        _PLUGIN_PROVIDERS.pop(customer_code, None)
+
+
+def _plugin_fields_flat() -> List[FieldDef]:
+    with _PLUGIN_LOCK:
+        return [f for fields in _PLUGIN_FIELDS.values() for f in fields]
+
+
+def plugin_field_paths(customer_code: str) -> List[str]:
+    """某插件已注册字段的 path 列表（诊断快照用）"""
+    with _PLUGIN_LOCK:
+        return [f.path for f in _PLUGIN_FIELDS.get(customer_code, [])]
+
+
+def collect_plugin_context(db, ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """执行所有插件 provider，返回 {cc_snake: {...}}。
+
+    错误隔离：单个 provider 异常只丢弃该插件的值，不影响导出主流程。
+    """
+    out: Dict[str, Any] = {}
+    with _PLUGIN_LOCK:
+        providers = dict(_PLUGIN_PROVIDERS)
+    for cc, provider in providers.items():
+        try:
+            values = provider(db, ctx)
+            if isinstance(values, dict):
+                out[plugin_namespace(cc)] = values
+        except Exception:
+            import logging
+            logging.getLogger("tianjun.plugin").warning(
+                "[Plugin][%s] 导出字段 provider 异常（已隔离）", cc, exc_info=True,
+            )
+    return out
 
 
 # ============================================================
@@ -777,15 +871,16 @@ _FIELDS_BY_PATH: Dict[str, FieldDef] = {f.path: f for f in ALL_FIELDS}
 # ============================================================
 
 def list_fields() -> List[Dict[str, Any]]:
-    """平铺字段列表 — 给 GET /api/v1/export/fields 用"""
-    return [asdict(f) for f in ALL_FIELDS]
+    """平铺字段列表 — 给 GET /api/v1/export/fields 用（含插件动态字段）"""
+    return [asdict(f) for f in ALL_FIELDS] + [asdict(f) for f in _plugin_fields_flat()]
 
 
 def list_groups() -> List[Dict[str, Any]]:
-    """按 group 分组返回 — 前端字段树第一层"""
+    """按 group 分组返回 — 前端字段树第一层（含插件动态字段）"""
+    all_fields = ALL_FIELDS + _plugin_fields_flat()
     out = []
     for g in GROUPS_DISPLAY_ORDER:
-        items = [asdict(f) for f in ALL_FIELDS if f.group == g]
+        items = [asdict(f) for f in all_fields if f.group == g]
         if not items:
             continue
         out.append({
@@ -798,18 +893,25 @@ def list_groups() -> List[Dict[str, Any]]:
 
 
 def lookup_field(path: str) -> Optional[FieldDef]:
-    """按 path 查询字段定义；未注册返回 None"""
-    return _FIELDS_BY_PATH.get(path)
+    """按 path 查询字段定义（含插件动态字段）；未注册返回 None"""
+    hit = _FIELDS_BY_PATH.get(path)
+    if hit is not None:
+        return hit
+    for f in _plugin_fields_flat():
+        if f.path == path:
+            return f
+    return None
 
 
 def field_paths() -> List[str]:
-    """所有 path 的有序列表（debug 用）"""
-    return [f.path for f in ALL_FIELDS]
+    """所有 path 的有序列表（debug 用，含插件动态字段）"""
+    return [f.path for f in ALL_FIELDS] + [f.path for f in _plugin_fields_flat()]
 
 
 def stats() -> Dict[str, int]:
-    """字段总数 / 各 group 计数"""
+    """字段总数 / 各 group 计数（含插件动态字段）"""
     by_group: Dict[str, int] = {}
-    for f in ALL_FIELDS:
+    all_fields = ALL_FIELDS + _plugin_fields_flat()
+    for f in all_fields:
         by_group[f.group] = by_group.get(f.group, 0) + 1
-    return {"total": len(ALL_FIELDS), "by_group": by_group}
+    return {"total": len(all_fields), "by_group": by_group}
