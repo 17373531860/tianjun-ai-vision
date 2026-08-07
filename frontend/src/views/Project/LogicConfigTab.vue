@@ -337,6 +337,37 @@
                       </div>
                     </div>
                   </div>
+                  <!-- v3.46 记账修正开关组: 全部可独立开关, 关 = 之前版本行为, 随时可回退 -->
+                  <div class="flex items-start gap-2 text-xs pt-2 border-t border-slate-700">
+                    <span class="text-gray-400 shrink-0 mt-1">记账修正</span>
+                    <div class="flex flex-col gap-2">
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <el-switch v-model="project.custom_mix_container_dedup_items" size="small" />
+                        <span class="text-gray-400 shrink-0">滑块重复框去重</span>
+                        <span class="text-gray-500">同一个滑块被模型画两个高重叠框时只算一个（置信度高者保留）。默认开；关闭回退到不去重的旧口径</span>
+                      </div>
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <el-switch v-model="project.custom_mix_container_dedup_trays" size="small" />
+                        <span class="text-gray-400 shrink-0">托盘重复框去重</span>
+                        <span class="text-gray-500">同一个托盘被画两个高重叠框时不再多立一个"影子托盘"（影子会带着旧数字抢占记账），与滑块去重同款判定</span>
+                      </div>
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <el-switch v-model="project.custom_mix_container_purge_empty_primary" size="small" />
+                        <span class="text-gray-400 shrink-0">空账托盘身份清理</span>
+                        <span class="text-gray-500">正在记账的托盘身份若已离场满消失确认帧且一个数都没记过，照样清掉让位。专治"大数字长期 0、实时却稳定 24"</span>
+                      </div>
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <el-switch v-model="project.custom_mix_container_yield_primary" size="small" />
+                        <span class="text-gray-400 shrink-0">记账托盘可让位</span>
+                        <span class="text-gray-500">正在记账的托盘已判定离场、而画面上有账面更实的在位托盘时，把记账位让给它（放托盘动作期间不让）。专治取出重装/搬动后大数字停在旧残数</span>
+                      </div>
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <el-switch v-model="project.custom_mix_container_unified_book_source" size="small" />
+                        <span class="text-gray-400 shrink-0">显示与记账同源</span>
+                        <span class="text-gray-500">卡片上实时/峰值/预计进箱三个数与封箱数量校验统一取"结账时真正会被选中的那盘"，杜绝两盘数字混排（如大数字 8、实时 23 并存）。建议与上两项一起开</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </el-form-item>

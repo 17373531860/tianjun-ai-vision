@@ -824,6 +824,186 @@ def test_container_peak_survives_transient_drop():
     assert st["current_tray_items"][0]["peak_count"] == 24
 
 
+def test_container_dup_tray_box_dedup_no_shadow_identity():
+    """v3.46 托盘重复框去重 (开关开): 同帧对同一盘输出两个高重叠框 (IoU≈0.9)
+    不再另立影子身份 — 影子长期在位带跨盘旧峰值, 主位一释放就顶上污账."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3,
+                                dedup_trays=True)
+    t_hi = {"x": 0.0, "y": 0.0, "w": 0.45, "h": 1.0, "confidence": 0.9}
+    t_lo = {"x": 0.02, "y": 0.0, "w": 0.45, "h": 1.0, "confidence": 0.4}
+    items = _tray_items(24, 0.0, 0.45)
+    for _ in range(3):
+        acc.update([t_hi, t_lo], items, 0.0)
+    assert len(acc._trays) == 1              # 只有一个身份, 无影子
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 24
+    # 保留的是置信度高的那个框 (bbox 取 t_hi 的坐标)
+    assert acc._trays[acc._primary]["bbox"]["x"] == 0.0
+
+
+def test_container_dup_tray_dedup_keeps_distinct_trays():
+    """真实相邻两盘 (IoU≈0) 不受托盘去重影响, 照常各立身份."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3,
+                                dedup_trays=True)
+    t1 = {"x": 0.0, "y": 0.0, "w": 0.45, "h": 1.0, "confidence": 0.9}
+    t2 = {"x": 0.5, "y": 0.0, "w": 0.45, "h": 1.0, "confidence": 0.9}
+    acc.update([t1, t2], [], 0.0)
+    assert len(acc._trays) == 2
+
+
+def test_container_dup_tray_dedup_without_confidence_backcompat():
+    """老调用路径 tray_dets 不带 confidence: 去重仍生效 (保序留先到者), 不炸."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3,
+                                dedup_trays=True)
+    acc.update([_tray(0.0), _tray(0.02)], _tray_items(24, 0.0, 0.45), 0.0)
+    assert len(acc._trays) == 1
+
+
+def test_container_dup_tray_dedup_off_by_default():
+    """托盘去重默认关 = v3.45 老行为零差异: 重复框照样另立影子身份."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3)
+    t_hi = {"x": 0.0, "y": 0.0, "w": 0.45, "h": 1.0, "confidence": 0.9}
+    t_lo = {"x": 0.02, "y": 0.0, "w": 0.45, "h": 1.0, "confidence": 0.4}
+    acc.update([t_hi, t_lo], [], 0.0)
+    assert len(acc._trays) == 2              # 老行为: 影子身份仍会产生
+
+
+def test_container_item_dedup_can_be_disabled():
+    """滑块去重可关 (dedup_items=False): 重复滑块框不再被滤, 回 v3.44 之前口径."""
+    dup_items = [
+        {"class_name": "滑块", "confidence": 0.9,
+         "bbox": {"x": 0.10, "y": 0.5, "w": 0.05, "h": 0.05}},
+        {"class_name": "滑块", "confidence": 0.5,       # 与上框 IoU≈0.8 的重复框
+         "bbox": {"x": 0.105, "y": 0.5, "w": 0.05, "h": 0.05}},
+    ]
+    acc_on = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3)
+    acc_on.update([_tray(0.0)], dup_items, 0.0)
+    assert acc_on._cur_counts.get("滑块") == 1           # 默认开: 去重后 1 个
+    acc_off = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4,
+                                    gone_frames=3, dedup_items=False)
+    acc_off.update([_tray(0.0)], dup_items, 0.0)
+    assert acc_off._cur_counts.get("滑块") == 2          # 关: 重复框照数
+
+
+def _pointer_stuck_setup(**kw):
+    """搭台: 仅动作确认模式, 旧身份带残数占指针后离场, 新身份 23 在位.
+
+    返回 (acc, 旧指针tid). 复现 2026-07-30 现场 '大数字8/实时23' 的内部状态."""
+    acc = _ContainerAccumulator(
+        "托盘", {"滑块": 24}, box_count=4, gone_frames=20,
+        confirm_by_frames=False, confirm_by_action=True, action_label="放托盘",
+        action_min_frames=3, action_gone_frames=8, **kw)
+    t_old = _tray(0.0)
+    acc.update([t_old], _tray_items(8, 0.0, 0.45), 0.0)   # 旧身份数到 8
+    old_tid = acc._primary
+    assert acc._trays[old_tid]["peak"]["滑块"] == 8
+    # 旧身份离场 (断检), 新身份在同帧区域外出现并数到 23
+    t_new = _tray(0.5)
+    for i in range(10):                                    # 超过动作消失帧 8
+        acc.update([t_new], _tray_items(23, 0.5, 0.95), 0.1 + i * 0.03)
+    return acc, old_tid
+
+
+def test_container_yield_primary_hands_pointer_to_fuller_tray():
+    """第二件·让位 (开): 指针身份离场超过动作消失帧且新身份账面更实 → 指针让位."""
+    acc, old_tid = _pointer_stuck_setup(yield_primary=True)
+    assert acc._primary != old_tid                        # 指针已让给 23 那盘
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 23
+
+
+def test_container_yield_primary_off_keeps_stuck_pointer():
+    """第二件·让位 (默认关): 指针停在残数旧身份上 = v3.45 老行为 (现场 8/23 怪相)."""
+    acc, old_tid = _pointer_stuck_setup()
+    assert acc._primary == old_tid                        # 老行为: 指针卡死
+    assert acc._trays[old_tid]["peak"]["滑块"] == 8
+
+
+def test_container_yield_primary_not_stolen_by_emptier_tray():
+    """第二件·严格大于守门: 在途满盘(24)不被下一盘的半账(12)抢走指针."""
+    acc = _ContainerAccumulator(
+        "托盘", {"滑块": 24}, box_count=4, gone_frames=20,
+        confirm_by_frames=False, confirm_by_action=True, action_label="放托盘",
+        action_min_frames=3, action_gone_frames=8, yield_primary=True)
+    t_full = _tray(0.0)
+    acc.update([t_full], _tray_items(24, 0.0, 0.45), 0.0)
+    full_tid = acc._primary
+    t_half = _tray(0.5)
+    for i in range(10):
+        acc.update([t_half], _tray_items(12, 0.5, 0.95), 0.1 + i * 0.03)
+    assert acc._primary == full_tid                       # 24 > 12, 不让
+
+
+def _ghost_pointer_setup(gone_frames=5, **kw):
+    """搭台: 仅动作确认模式 (现场配置) — 没有脉冲就永不结账, 空账幽灵占指针
+    后离场, 老行为下清理豁免让它赖死 (2026-07-30 '大数字 0/实时 24' 现场)."""
+    acc = _ContainerAccumulator(
+        "托盘", {"滑块": 24}, box_count=4, gone_frames=gone_frames,
+        confirm_by_frames=False, confirm_by_action=True, action_label="放托盘",
+        action_min_frames=3, action_gone_frames=8, **kw)
+    ghost = _tray(0.0)
+    acc.update([ghost], [], 0.0)                          # 幽灵: 从没数到滑块
+    ghost_tid = acc._primary
+    t_real = _tray(0.5)
+    for i in range(gone_frames * 4):                      # 幽灵离场远超确认帧
+        acc.update([t_real], _tray_items(24, 0.5, 0.95), 0.1 + i * 0.03)
+    return acc, ghost_tid
+
+
+def test_container_purge_empty_primary_frees_pointer():
+    """第一件·空账销掉 (开): 指针指着的空账身份离场满消失确认帧 → 清掉, 指针
+    交给在位真盘 (治 '大数字长期 0、实时稳定 24')."""
+    acc, ghost_tid = _ghost_pointer_setup(purge_empty_primary=True)
+    assert ghost_tid not in acc._trays                    # 幽灵被销
+    assert acc._primary is not None and acc._primary != ghost_tid
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 24
+
+
+def test_container_purge_empty_primary_off_ghost_stays():
+    """第一件 (默认关): 仅动作确认模式下空账幽灵占指针离场再久也不清 = 老行为."""
+    acc, ghost_tid = _ghost_pointer_setup()
+    assert acc._primary == ghost_tid                      # 老行为: 赖着不走
+    st = acc.to_state({"滑块": "滑块"})
+    assert st["current_tray_items"][0]["peak_count"] == 0  # 大数字 0/实时 24 怪相
+
+
+def test_container_unified_book_source_three_numbers_same_tray():
+    """第三件·三数同源 (开): 实时/峰值/预计进箱统一问结账候选, 不再两盘混排."""
+    acc, old_tid = _pointer_stuck_setup(unified_book_source=True)
+    # 老口径: 峰值问指针(8), 实时问在位盘(23) → 矛盾; 同源后指针还卡在旧身份
+    # (让位没开), 三个数就统一问指针那张 — 自洽 (一致地反映指针, 不再混排)
+    st = acc.to_state({"滑块": "滑块"})
+    row = st["current_tray_items"][0]
+    assert row["peak_count"] == 8
+    assert row["current_count"] == 0                      # 指针盘已离场, 当帧 0
+    assert row["book_preview"] == 8                       # 预计进箱=真会记的数
+
+
+def test_container_unified_off_numbers_can_split():
+    """第三件 (默认关): 峰值问指针(8)、实时退化问在位盘(23) = 现场混排怪相."""
+    acc, old_tid = _pointer_stuck_setup()
+    st = acc.to_state({"滑块": "滑块"})
+    row = st["current_tray_items"][0]
+    assert row["peak_count"] == 8
+    assert row["current_count"] == 23                     # 两盘数字并排 (老行为)
+
+
+def test_container_unified_verdict_folds_candidate_tray():
+    """第三件·封箱凑数同源: 开让位+同源后, 凑数取真盘的账, 不再被残数骗."""
+    acc = _ContainerAccumulator(
+        "托盘", {"滑块": 24}, box_count=4, gone_frames=20,
+        count_mode="items_total", item_target=96,
+        confirm_by_frames=False, confirm_by_action=True, action_label="放托盘",
+        action_min_frames=3, action_gone_frames=8,
+        yield_primary=True, unified_book_source=True)
+    acc._done = [{"滑块": 24}, {"滑块": 24}, {"滑块": 24}]  # 已进箱 72
+    t_last = _tray(0.0)
+    for _ in range(3):
+        acc.update([t_last], _tray_items(24, 0.0, 0.45), 0.0)
+    # 模拟脉冲在途 (末盘已放入箱, 待结账) → 凑数把在位/候选盘折进来
+    acc._action_done_pending = True
+    ok, reasons = acc.verdict({"滑块": "滑块"})
+    assert ok, f"96/96 应判 OK, reasons={reasons}"
+
+
 def test_container_fifo_switch_after_box():
     """主托盘进箱后, 画面里第二盘自动升级为新主托盘."""
     acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=2)
