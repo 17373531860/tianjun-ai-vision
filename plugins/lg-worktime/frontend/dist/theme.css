@@ -1,0 +1,1192 @@
+/* LG 工时看板 — 插件样式 (全部 lgwt- 前缀命名空间, 不污染主程序)
+   v1.4 视觉: 对齐展会插件 (cyan HUD / 深空蓝底板), KPI 数值结构不动只换配色;
+   布局原则: 检测画面占大头, 顶栏/KPI/底排压扁, 右栏收窄. */
+
+:root {
+  --lgwt-bg: #060a14;
+  --lgwt-bg2: #0a1020;
+  --lgwt-panel: #0c1424;
+  --lgwt-panel2: #0e1a30;
+  --lgwt-line: rgba(60, 130, 200, 0.18);
+  --lgwt-line-glow: rgba(34, 211, 238, 0.35);
+  --lgwt-cyan: #22d3ee;
+  --lgwt-cyan-soft: #4fc3f7;
+  --lgwt-txt: #e8f1ff;
+  --lgwt-txt2: #93a8c8;
+  --lgwt-txt3: #5d7196;
+  --lgwt-ok: #34d399;
+  --lgwt-ng: #ff5263;
+  --lgwt-warn: #f7b733;
+}
+
+/* ==================== 整体布局 ==================== */
+.lgwt-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  height: 100%;
+  min-height: 0;
+  /* 左右贴边吃满宿主内容区, 主画面更大 */
+  padding: 0.2rem 0.1rem 0.15rem;
+  background:
+    radial-gradient(ellipse at 20% 0%, rgba(34, 211, 238, 0.08), transparent 45%),
+    radial-gradient(ellipse at 80% 100%, rgba(59, 130, 246, 0.06), transparent 40%),
+    linear-gradient(180deg, var(--lgwt-bg2) 0%, var(--lgwt-bg) 70%);
+  color: var(--lgwt-txt);
+  overflow: hidden;
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+/* ==================== 顶栏 (压扁) ==================== */
+.lgwt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.1rem 0.6rem;
+  flex: none;
+}
+.lgwt-title { display: flex; align-items: baseline; gap: 0.6rem; }
+.lgwt-title-main {
+  font-size: clamp(1rem, 1.4vw, 1.3rem);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  background: linear-gradient(90deg, var(--lgwt-cyan), var(--lgwt-cyan-soft));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 0 24px rgba(34, 211, 238, 0.15);
+}
+.lgwt-title-sub { font-size: 0.68rem; color: var(--lgwt-txt3); letter-spacing: 0.12em; }
+.lgwt-header-mid { display: flex; align-items: center; gap: 0.5rem; }
+.lgwt-select-label { font-size: 0.75rem; color: var(--lgwt-txt2); }
+.lgwt-select {
+  background: rgba(10, 24, 42, 0.85);
+  border: 1px solid var(--lgwt-line);
+  border-radius: 6px;
+  color: var(--lgwt-txt);
+  font-size: 0.8rem;
+  padding: 0.15rem 0.5rem;
+}
+.lgwt-select:focus { border-color: var(--lgwt-line-glow); outline: none; }
+.lgwt-proj { font-size: 0.75rem; color: var(--lgwt-txt2); margin-left: 0.5rem; }
+.lgwt-clock {
+  font-size: clamp(0.8rem, 1vw, 1rem);
+  font-variant-numeric: tabular-nums;
+  color: var(--lgwt-cyan-soft);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  white-space: pre;
+}
+
+/* ==================== KPI 行 (再压矮, 把高度让给画面) ==================== */
+.lgwt-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.25rem;
+  flex: none;
+}
+.lgwt-kpi {
+  background: linear-gradient(180deg, rgba(14, 26, 48, 0.95), rgba(12, 20, 36, 0.9));
+  border: 1px solid var(--lgwt-line);
+  border-radius: 6px;
+  padding: 0.08rem 0.4rem;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.3rem;
+  min-width: 0;
+  min-height: 0;
+  box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.04);
+}
+.lgwt-kpi-value {
+  font-size: clamp(0.85rem, 1.15vw, 1.05rem);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  color: var(--lgwt-txt);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lgwt-kpi-label { font-size: 0.6rem; color: var(--lgwt-txt2); white-space: nowrap; }
+.lgwt-kpi-sub { display: none; } /* 副行不占高度, 画面优先 */
+.lgwt-dashboard.is-rich .lgwt-kpi { flex-direction: row; align-items: baseline; gap: 0.3rem; padding: 0.08rem 0.4rem; }
+.lgwt-dashboard.is-rich .lgwt-kpi-sub { display: none; }
+.lgwt-kpi.is-ok .lgwt-kpi-value { color: var(--lgwt-ok); }
+.lgwt-kpi.is-ng .lgwt-kpi-value { color: var(--lgwt-ng); }
+.lgwt-kpi.is-warn .lgwt-kpi-value { color: var(--lgwt-warn); }
+.lgwt-kpi.is-ct .lgwt-kpi-value { color: var(--lgwt-cyan-soft); }
+.lgwt-kpi.is-wait .lgwt-kpi-value { color: var(--lgwt-warn); }
+.lgwt-kpi.is-total .lgwt-kpi-value { color: var(--lgwt-cyan); }
+
+/* ==================== 卡片通用 (展会 panel 气质) ==================== */
+.lgwt-card {
+  position: relative;
+  background: linear-gradient(180deg, rgba(14, 26, 48, 0.96), rgba(12, 20, 36, 0.92));
+  border: 1px solid var(--lgwt-line);
+  border-radius: 10px;
+  padding: 0.4rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.04), 0 8px 28px rgba(0, 0, 0, 0.25);
+}
+.lgwt-card::before,
+.lgwt-card::after {
+  content: "";
+  position: absolute;
+  width: 8px; height: 8px;
+  border: 1px solid var(--lgwt-cyan);
+  opacity: 0.45;
+  pointer-events: none;
+}
+.lgwt-card::before { top: 4px; left: 4px; border-right: 0; border-bottom: 0; }
+.lgwt-card::after { top: 4px; right: 4px; border-left: 0; border-bottom: 0; }
+.lgwt-card-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--lgwt-txt2);
+  letter-spacing: 0.1em;
+  margin-bottom: 0.25rem;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.lgwt-card-title::before {
+  content: "";
+  width: 3px; height: 11px;
+  background: var(--lgwt-cyan);
+  border-radius: 2px;
+  box-shadow: 0 0 8px var(--lgwt-cyan);
+  flex: none;
+}
+.lgwt-chart-box { flex: 1; min-height: 0; width: 100%; }
+.lgwt-chart-fallback {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+/* ==================== 主区: 三种工位数三种布局 ==================== */
+.lgwt-main {
+  display: grid;
+  gap: 0.4rem;
+  flex: 1;
+  min-height: 0;
+}
+/* 单工位三列: 视频(16:9) | 当前周期独立列 | LEAN 图列 (数据全量)
+   比例分配让视频列贴合 16:9 反推宽度, 富余空间喂给周期列/LEAN 列 */
+.lgwt-main.mode-single {
+  /* 视频列收窄到贴合 16:9 宽度 (画面刚好铺满面板), 富余喂给日志列 + LEAN 栏 */
+  grid-template-columns: minmax(0, 1.55fr) minmax(200px, 0.62fr) minmax(250px, 0.88fr);
+}
+/* 单工位: 视频锁 16:9 靠左铺满 (宽度由可用高度反推, 列宽已按此收窄)
+   focus 模式的 16:9 锁定在 .lgwt-station-top 里实现 (空白喂给竖排流程带);
+   dual 两面板天然接近 16:9 不锁 */
+.lgwt-main.mode-single .lgwt-video-wrap {
+  aspect-ratio: 16 / 9;
+  width: auto;
+  max-width: 100%;
+  align-self: flex-start;
+}
+
+/* focus 模式画面区: [视频 16:9 | 竖排流程带] 并排, 无空白 */
+.lgwt-station-top {
+  display: flex;
+  gap: 0.4rem;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.lgwt-station-top .lgwt-video-wrap {
+  flex: none;
+  aspect-ratio: 16 / 9;
+  height: 100%;
+  width: auto;
+  /* 流程带保底 13rem, 视频吃剩余宽度但不挤掉它 */
+  max-width: calc(100% - 13.5rem);
+}
+.lgwt-flow-strip.is-vertical {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.lgwt-flow-strip.is-vertical .lgwt-flow-track {
+  flex: 1;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: #475569 transparent;
+}
+.lgwt-flow-strip.is-vertical .lgwt-flow-track::-webkit-scrollbar { width: 6px; height: auto; }
+.lgwt-flow-strip.is-vertical .lgwt-flow-card { width: auto; flex: none; }
+.lgwt-flow-strip.is-vertical .lgwt-flow-shot { height: 3.6rem; }
+.lgwt-flow-strip.is-vertical .lgwt-flow-gap {
+  flex-direction: row;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0;
+}
+
+/* 操作日志独立列 (single/focus 共用): 上 2/3 操作日志 + 下 1/3 设备状态, 整列铺满。
+   用 grid 定死行比例, 不再由日志条数/卡片自然高度决定 —— 否则日志少时两卡缩在顶部、
+   列底留一大片空白 (还要覆盖 .lgwt-card-oplog:not(.is-tall) 的 max-height 限高)。*/
+.lgwt-live-col {
+  display: grid;
+  grid-template-rows: 2fr 1fr;
+  gap: 0.4rem;
+  min-height: 0;
+  min-width: 0;
+}
+.lgwt-live-col > * { min-height: 0; }
+.lgwt-live-col .lgwt-card-oplog,
+.lgwt-live-col .lgwt-card-oplog:not(.is-tall) { flex: none; max-height: none; }
+.lgwt-live-col .lgwt-card-device { overflow: hidden; }
+/* 双工位: 两面板并排 + 右栏稍加宽 (LEAN 图更舒展) */
+.lgwt-main.mode-dual { grid-template-columns: minmax(0, 1fr) clamp(240px, 17.5vw, 320px); }
+/* 三工位焦点式: 缩略切换列 + 主画面 + 日志/设备列 + 加宽右栏 (对齐 LG 原版 SOURCE 列) */
+.lgwt-main.mode-focus {
+  grid-template-columns:
+    clamp(150px, 11.5vw, 200px) minmax(0, 1fr)
+    clamp(200px, 14.5vw, 260px) clamp(250px, 18vw, 320px);
+}
+
+/* 缩略切换列 */
+.lgwt-thumbs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-height: 0;
+  overflow-y: auto;
+}
+.lgwt-thumb {
+  flex: none;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.lgwt-thumb:hover { border-color: #475569; }
+.lgwt-thumb.is-focused {
+  border-color: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.35);
+}
+.lgwt-thumb-video {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: #020617;
+}
+.lgwt-thumb-video img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lgwt-thumb-none {
+  height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  color: #475569; font-size: 0.65rem;
+}
+.lgwt-thumb-curtag {
+  position: absolute; bottom: 4px; left: 4px;
+  font-size: 0.55rem; font-weight: 800;
+  color: #082f49; background: #38bdf8;
+  border-radius: 4px; padding: 0 0.3rem; line-height: 1.5;
+}
+.lgwt-thumb-bar {
+  display: flex; align-items: center; gap: 0.3rem;
+  padding: 0.22rem 0.4rem;
+  min-width: 0;
+}
+.lgwt-thumb-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.lgwt-thumb-dot.is-detecting { background: #34d399; box-shadow: 0 0 5px #34d399; }
+.lgwt-thumb-dot.is-standby { background: #fbbf24; }
+.lgwt-thumb-dot.is-stopped { background: #475569; }
+.lgwt-thumb-name { font-size: 0.68rem; font-weight: 700; color: #e2e8f0; flex: none; }
+.lgwt-thumb-info {
+  flex: 1; text-align: right;
+  font-size: 0.6rem; color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lgwt-stations {
+  display: grid;
+  gap: 0.4rem;
+  min-height: 0;
+  min-width: 0;
+}
+.lgwt-stations.cols-1 { grid-template-columns: minmax(0, 1fr); }
+.lgwt-stations.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.lgwt-stations.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* 工位面板: 大视频 (flex 大头) + 状态条 + 流程监控带 */
+.lgwt-station {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-height: 0;
+  min-width: 0;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 0.4rem;
+  cursor: default;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.lgwt-stations.cols-2 .lgwt-station { cursor: pointer; }
+.lgwt-stations.cols-2 .lgwt-station:hover { border-color: #475569; }
+.lgwt-station.is-focused {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.35);
+}
+.lgwt-video-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #020617;
+  border: 1px solid #1e293b;
+}
+.lgwt-video-img { width: 100%; height: 100%; object-fit: contain; display: block; }
+/* 检测框叠加层: 与主程序 fjjl-det-overlay 约定一致, letterbox 对齐画面 */
+.lgwt-det-overlay,
+.lgwt-video-wrap > canvas.fjjl-det-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+.lgwt-video-none {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #475569;
+  font-size: 0.8rem;
+}
+.lgwt-video-status {
+  position: absolute; top: 6px; right: 6px;
+  font-size: 0.65rem; font-weight: 700;
+  padding: 0.1rem 0.45rem; border-radius: 999px;
+}
+.lgwt-video-status.is-detecting { background: rgba(16,185,129,0.2); color: #34d399; border: 1px solid #34d399; }
+.lgwt-video-status.is-standby { background: rgba(251,191,36,0.15); color: #fbbf24; border: 1px solid #fbbf24; }
+.lgwt-video-status.is-stopped { background: rgba(100,116,139,0.2); color: #94a3b8; border: 1px solid #475569; }
+.lgwt-video-tag {
+  position: absolute; top: 6px; left: 6px;
+  font-size: 0.7rem; font-weight: 700; color: #e2e8f0;
+  background: rgba(2,6,23,0.72); padding: 0.12rem 0.5rem; border-radius: 6px;
+}
+
+/* 状态条: 轮号 / 本轮用时 / 当前步骤 / 控制按钮 */
+.lgwt-station-bar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.lgwt-sbar-cell {
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 0.15rem 0.55rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+}
+.lgwt-sbar-cell.is-step { flex: 1; }
+.lgwt-sbar-k { font-size: 0.6rem; color: #64748b; white-space: nowrap; }
+.lgwt-sbar-v {
+  font-size: 0.85rem; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #f1f5f9; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.lgwt-sbar-cell.is-hot .lgwt-sbar-v { color: #7dd3fc; }
+.lgwt-sbar-v.is-dim { color: #94a3b8; font-weight: 600; }
+.lgwt-sbar-step { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
+.lgwt-sbar-stepname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lgwt-sbar-stepsec { color: #7dd3fc; flex: none; }
+.lgwt-video-controls { display: flex; gap: 0.3rem; flex: none; align-items: center; }
+.lgwt-btn {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.3rem 0.65rem;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+.lgwt-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.lgwt-btn.is-start:not(:disabled) { border-color: #10b981; color: #34d399; }
+.lgwt-btn.is-stop:not(:disabled) { border-color: #ef4444; color: #f87171; }
+.lgwt-btn.is-standby:not(:disabled) { border-color: #f59e0b; color: #fbbf24; }
+.lgwt-btn.is-reset:not(:disabled) { border-color: #38bdf8; color: #7dd3fc; }
+
+/* ==================== 流程监控带 (LG 原版: 带图卡 + 单行拖动 + 当前步骤跟随) ==================== */
+.lgwt-flow-strip {
+  flex: none;
+  background: rgba(2, 6, 23, 0.5);
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 0.3rem 0.4rem;
+  min-width: 0;
+}
+.lgwt-flow-strip-title {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.1em;
+  margin-bottom: 0.25rem;
+}
+/* 横排: 单行不换行 + 横向滚动条 (步骤多可拖; 当前步骤 scrollIntoView 跟随) */
+.lgwt-flow-track {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 0.35rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  padding-bottom: 0.2rem;
+  /* 滚动条可见且不抢高度 */
+  scrollbar-width: thin;
+  scrollbar-color: #475569 transparent;
+}
+.lgwt-flow-track::-webkit-scrollbar { height: 6px; }
+.lgwt-flow-track::-webkit-scrollbar-thumb {
+  background: #475569; border-radius: 3px;
+}
+.lgwt-flow-track::-webkit-scrollbar-track { background: transparent; }
+.lgwt-flow-empty { font-size: 0.72rem; color: #475569; padding: 0.4rem 0.2rem; flex: none; }
+
+/* 步骤卡: 图区为主 (对齐 LG / SopStepPanel), 左竖条 = VA/BVA/NVA */
+.lgwt-flow-card {
+  position: relative;
+  flex: none;
+  width: 8.6rem;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-left: 3px solid var(--vt-color, #10b981);
+  border-radius: 6px;
+  padding: 0.22rem 0.35rem 0.28rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  min-width: 0;
+  transition: border-color 0.2s, box-shadow 0.2s, opacity 0.2s;
+}
+.lgwt-flow-card.is-compact { width: 7.4rem; }
+.lgwt-flow-card.is-active {
+  border-color: #34d399;
+  border-left-color: var(--vt-color, #10b981);
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.4);
+  animation: lgwt-flow-glow 1.6s ease-in-out infinite;
+}
+.lgwt-flow-card.is-done { border-color: #1e5f46; }
+.lgwt-flow-card.is-done .lgwt-flow-name { color: #86efac; }
+.lgwt-flow-card.is-pending { opacity: 0.6; }
+@keyframes lgwt-flow-glow {
+  0%, 100% { box-shadow: 0 0 4px rgba(52, 211, 153, 0.25); }
+  50% { box-shadow: 0 0 12px rgba(52, 211, 153, 0.55); }
+}
+.lgwt-flow-head { display: flex; align-items: center; gap: 0.25rem; min-width: 0; }
+.lgwt-flow-name {
+  flex: 1;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 图区必显: 有截图盖满, 无截图灰底占位 (停机也能看出是"带图流程") */
+.lgwt-flow-shot {
+  position: relative;
+  height: 4.2rem;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #020617;
+  border: 1px solid #1e293b;
+}
+.lgwt-flow-card.is-compact .lgwt-flow-shot { height: 3.2rem; }
+.lgwt-flow-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lgwt-flow-shot-ph {
+  height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  color: #334155; font-size: 1.1rem; user-select: none;
+}
+.lgwt-flow-pulse {
+  position: absolute; inset: 0;
+  border: 2px solid #34d399;
+  border-radius: 4px;
+  animation: lgwt-flow-pulse 1.2s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes lgwt-flow-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+.lgwt-flow-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+  font-size: 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+.lgwt-flow-live { color: #94a3b8; }
+.lgwt-flow-live.is-cur { color: #34d399; font-weight: 700; }
+.lgwt-flow-avg { color: #64748b; }
+.lgwt-flow-curtag {
+  position: absolute;
+  top: -0.45rem;
+  right: 0.25rem;
+  font-size: 0.52rem;
+  font-weight: 800;
+  color: #022c22;
+  background: #34d399;
+  border-radius: 4px;
+  padding: 0 0.28rem;
+  line-height: 1.5;
+  z-index: 1;
+}
+
+/* 步骤间隙: 箭头 + 平均等待 chip (对齐 LG "等待第N步" 卡) */
+.lgwt-flow-gap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  flex: none;
+  padding: 0 0.05rem;
+}
+.lgwt-flow-arrow { font-size: 0.8rem; color: #475569; line-height: 1; }
+.lgwt-flow-wait {
+  font-size: 0.56rem;
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px dashed rgba(251, 191, 36, 0.4);
+  border-radius: 4px;
+  padding: 0 0.25rem;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==================== 右栏: LEAN 占比 + 工时分解 (+single 模式当前周期卡) ==================== */
+.lgwt-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-height: 0;
+  min-width: 0;
+}
+.lgwt-rail .lgwt-card-donut { flex: 1.15; }
+.lgwt-rail .lgwt-card-stack { flex: 1; }
+.lgwt-rail .lgwt-card-live { flex: none; }
+
+/* 当前周期紧凑卡 (右栏, 与 LEAN 容器并列) */
+.lgwt-card-live.is-compact { flex: none; }
+.lgwt-card-live.is-compact .lgwt-card-title { display: flex; align-items: center; gap: 0.4rem; }
+.lgwt-livec-badge {
+  font-size: 0.68rem; font-weight: 800; color: #7dd3fc;
+  border: 1px solid rgba(125, 211, 252, 0.4); border-radius: 4px;
+  padding: 0 0.3rem; line-height: 1.35;
+}
+.lgwt-livec-row { display: flex; gap: 0.6rem; align-items: flex-start; min-width: 0; }
+.lgwt-livec-cell { min-width: 0; flex: 1; }
+.lgwt-livec-k { font-size: 0.62rem; color: #64748b; white-space: nowrap; }
+.lgwt-livec-v {
+  font-size: 0.82rem; font-weight: 700; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 0.25rem;
+}
+.lgwt-livec-v.is-hot { color: #7dd3fc; font-size: 0.95rem; }
+
+/* 操作日志面板 (LG 原版左下角样式) */
+.lgwt-card-oplog { display: flex; flex-direction: column; min-height: 0; }
+.lgwt-card-oplog:not(.is-tall) { flex: none; max-height: clamp(140px, 22vh, 230px); }
+.lgwt-oplog-head, .lgwt-oplog-row {
+  display: grid;
+  grid-template-columns: 3.6rem 2rem 1fr 1.4fr;
+  gap: 0.4rem;
+  align-items: center;
+}
+.lgwt-oplog-head {
+  flex: none; font-size: 0.62rem; color: #475569;
+  padding: 0.15rem 0.2rem; border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+}
+.lgwt-oplog-body { flex: 1; min-height: 0; overflow-y: auto; }
+.lgwt-oplog-row {
+  font-size: 0.7rem; color: #cbd5e1; padding: 0.18rem 0.2rem;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.08);
+}
+.lgwt-oplog-t { color: #64748b; font-variant-numeric: tabular-nums; }
+.lgwt-oplog-ch { color: #94a3b8; text-align: center; }
+.lgwt-oplog-act { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lgwt-oplog-detail { color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lgwt-oplog-row.is-ok .lgwt-oplog-act { color: #34d399; }
+.lgwt-oplog-row.is-ng .lgwt-oplog-act { color: #f87171; }
+.lgwt-oplog-row.is-warn .lgwt-oplog-act { color: #fbbf24; }
+.lgwt-oplog-empty {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 3rem; font-size: 0.72rem; color: #475569;
+}
+
+/* 视频进度条 (视频源专属, 覆盖在画面底部) */
+.lgwt-vbar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
+  display: flex; align-items: center; gap: 0.45rem;
+  padding: 0.3rem 0.6rem 0.35rem;
+  background: linear-gradient(transparent, rgba(2, 6, 23, 0.85));
+  font-size: 0.66rem; color: #cbd5e1; font-variant-numeric: tabular-nums;
+}
+.lgwt-vbar-time { flex: none; }
+.lgwt-vbar-track {
+  position: relative; flex: 1; height: 5px; border-radius: 3px;
+  background: rgba(148, 163, 184, 0.25); cursor: pointer;
+}
+.lgwt-vbar-track:hover { height: 7px; }
+.lgwt-vbar-fill {
+  position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px;
+  background: #38bdf8;
+}
+.lgwt-vbar-knob {
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  width: 11px; height: 11px; border-radius: 50%;
+  background: #7dd3fc; box-shadow: 0 0 4px rgba(56, 189, 248, 0.8);
+  pointer-events: none;
+}
+.lgwt-vbar-speed {
+  flex: none; font-size: 0.64rem; color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 4px;
+  padding: 0.05rem 0.2rem; cursor: pointer; outline: none;
+}
+.lgwt-vbar-speed option { background: #0f172a; }
+.lgwt-ratio-row { display: flex; justify-content: space-around; flex: none; margin-top: 0.2rem; }
+.lgwt-ratio { font-size: 0.7rem; font-weight: 700; }
+.lgwt-ratio.is-va { color: #34d399; }
+.lgwt-ratio.is-bva { color: #fbbf24; }
+.lgwt-ratio.is-nva { color: #f87171; }
+
+.lgwt-ok { color: #34d399; font-weight: 700; }
+.lgwt-ng { color: #f87171; font-weight: 700; }
+
+/* 价值徽章 */
+.lgwt-vt-badge {
+  font-size: 0.6rem;
+  font-weight: 800;
+  border: 1px solid;
+  border-radius: 4px;
+  padding: 0 0.3rem;
+  line-height: 1.3;
+  flex: none;
+}
+
+/* ==================== 底排 (再压矮) ==================== */
+.lgwt-bottom-row {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 0.25rem;
+  flex: none;
+  height: clamp(96px, 13vh, 128px);
+  min-height: 0;
+}
+.lgwt-table-wrap { flex: 1; overflow-y: auto; min-height: 0; }
+.lgwt-table { width: 100%; border-collapse: collapse; font-size: 0.72rem; }
+.lgwt-table th {
+  position: sticky; top: 0;
+  background: #0f172a;
+  color: #64748b;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-align: left;
+  padding: 0.2rem 0.4rem;
+  border-bottom: 1px solid #1e293b;
+  white-space: nowrap;
+}
+.lgwt-table td {
+  padding: 0.22rem 0.4rem;
+  border-bottom: 1px solid rgba(30, 41, 59, 0.6);
+  font-variant-numeric: tabular-nums;
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+.lgwt-td-label { font-weight: 700; color: #f1f5f9; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; }
+.lgwt-td-live { color: #7dd3fc; font-weight: 700; }
+.lgwt-td-wait { color: #fbbf24; }
+.lgwt-td-empty { text-align: center; color: #475569; padding: 1rem 0; }
+
+/* ==================== 步骤价值配置单元格 (项目设置页) ==================== */
+.lgwt-cell { display: flex; align-items: center; }
+.lgwt-cell-select {
+  font-size: 11px;
+  padding: 1px 4px;
+  height: 22px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  font-weight: 700;
+  max-width: 130px;
+}
+
+/* ==================== 小屏适配 ==================== */
+@media (max-width: 1280px) {
+  /* 纵向空间不够时看板内部滚动, 工位面板保底高度, 视频不塌缩 */
+  .lgwt-dashboard { overflow-y: auto; }
+  .lgwt-station { min-height: 21rem; }
+  .lgwt-kpi-row { grid-template-columns: repeat(4, 1fr); }
+  /* 堆叠后首行 (工位面板) 必须锁 1fr, 否则 auto 行高把视频压塌 */
+  .lgwt-main.mode-single,
+  .lgwt-main.mode-dual {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr);
+    grid-auto-rows: auto;
+  }
+  .lgwt-main.mode-focus {
+    grid-template-columns: clamp(130px, 14vw, 170px) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    grid-auto-rows: auto;
+  }
+  .lgwt-main.mode-focus .lgwt-rail { grid-column: 1 / -1; }
+  /* 小屏堆叠: 日志/设备由上下 2:1 改成左右并排 (竖排高度不够) */
+  .lgwt-main.mode-focus .lgwt-live-col,
+  .lgwt-main.mode-single .lgwt-live-col {
+    grid-column: 1 / -1;
+    grid-template-rows: auto;
+    grid-template-columns: 2fr 1fr;
+  }
+  .lgwt-live-col .lgwt-card { min-height: 9rem; }
+  /* 小屏 focus: 高度不够撑竖排流程带, 退回"画面在上 + 流程带横排可拖" */
+  .lgwt-station-top { flex-direction: column; }
+  .lgwt-station-top .lgwt-video-wrap {
+    flex: 1;
+    height: auto;
+    width: auto;
+    max-width: 100%;
+    align-self: center;
+  }
+  .lgwt-flow-strip.is-vertical { flex: none; }
+  .lgwt-flow-strip.is-vertical .lgwt-flow-track {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .lgwt-flow-strip.is-vertical .lgwt-flow-card { width: 7.4rem; }
+  .lgwt-flow-strip.is-vertical .lgwt-flow-gap { flex-direction: column; gap: 0.1rem; }
+  .lgwt-rail { flex-direction: row; }
+  .lgwt-rail .lgwt-card { min-height: 9rem; flex: 1; }
+  .lgwt-bottom-row { grid-template-columns: 1fr; height: auto; max-height: 40vh; }
+}
+
+/* ==================== v1.4.1 展会同款壳: 全屏容器 + 品牌顶栏 + 抽屉导航 ==================== */
+/* 检测中心整页覆盖容器全屏化: 盖掉宿主导航栏/底栏, 与其它 7 页展会 iframe 视觉连续.
+   仅当本插件激活 (body.lgwt-app) 且 monitor 覆盖容器存在时生效, 不影响宿主其它页面. */
+body.lgwt-app .tj-layout-body-override {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  margin: 0 !important;
+  z-index: 40;
+  background: #04070f;
+}
+
+.lgwt-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #04070f;
+  color: var(--lgwt-txt);
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+.lgwt-shell .lgwt-dashboard { flex: 1; min-height: 0; height: auto; }
+
+/* ---- 顶栏 (对齐展会 .header: 58px 深空蓝渐变 + 描边光饰) ---- */
+.lgwt-topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 54px;
+  padding: 0 16px;
+  position: relative;
+  background: linear-gradient(180deg, rgba(16, 32, 60, 0.9), rgba(8, 16, 32, 0.7));
+  border-bottom: 1px solid var(--lgwt-line);
+  box-shadow: 0 2px 20px rgba(0, 0, 0, 0.5);
+}
+.lgwt-topbar::before,
+.lgwt-topbar::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  /* 比展会原版 (300px/240px) 收窄外移: 1680 宽下不压居中大标题 */
+  width: 200px;
+  height: 28px;
+  opacity: 0.55;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.24), transparent),
+    repeating-linear-gradient(135deg, rgba(34, 211, 238, 0.1) 0 7px, transparent 7px 14px);
+  clip-path: polygon(0 50%, 12% 0, 88% 0, 100% 50%, 88% 100%, 12% 100%);
+}
+.lgwt-topbar::before { left: 250px; }
+.lgwt-topbar::after { right: 250px; transform: scaleX(-1); }
+
+.lgwt-nav-toggle {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid rgba(45, 155, 255, 0.3);
+  background: rgba(10, 24, 42, 0.7);
+  color: var(--lgwt-cyan-soft);
+  font-size: 16px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: 0.15s;
+  flex: 0 0 auto;
+}
+.lgwt-nav-toggle:hover {
+  border-color: rgba(69, 230, 255, 0.7);
+  color: #fff;
+  box-shadow: 0 0 12px rgba(45, 155, 255, 0.35);
+}
+
+.lgwt-brand { display: flex; align-items: center; gap: 10px; min-width: 150px; }
+.lgwt-brand-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  object-fit: contain;
+  box-shadow: 0 0 16px rgba(31, 168, 224, 0.6);
+}
+.lgwt-brand-name { font-size: 14px; font-weight: 700; letter-spacing: 0.5px; line-height: 1.2; }
+.lgwt-brand-name small {
+  display: block;
+  font-size: 9px;
+  font-weight: 400;
+  color: var(--lgwt-txt3);
+  letter-spacing: 1px;
+}
+
+.lgwt-page-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  padding-left: 14px;
+  border-left: 1px solid var(--lgwt-line);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-size: 13px;
+}
+.lgwt-page-kv { color: var(--lgwt-txt2); }
+.lgwt-page-kv b { color: var(--lgwt-txt); font-weight: 700; margin-left: 6px; }
+.lgwt-page-run {
+  color: var(--lgwt-ok);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.lgwt-page-run::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--lgwt-ok);
+  box-shadow: 0 0 8px var(--lgwt-ok);
+  animation: lgwt-blink 1.4s infinite;
+}
+.lgwt-page-run.idle { color: var(--lgwt-txt3); }
+.lgwt-page-run.idle::before { background: var(--lgwt-txt3); box-shadow: none; animation: none; }
+@keyframes lgwt-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.lgwt-apptitle { flex: 1; text-align: center; min-width: 0; }
+.lgwt-apptitle h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 6px;
+  background: linear-gradient(180deg, #ffffff, #7fd4ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 0 24px rgba(60, 180, 255, 0.4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lgwt-apptitle-sub {
+  font-size: 9px;
+  color: var(--lgwt-txt3);
+  letter-spacing: 2px;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lgwt-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 150px;
+  justify-content: flex-end;
+  color: var(--lgwt-txt2);
+  font-size: 12px;
+}
+.lgwt-topclock {
+  font-variant-numeric: tabular-nums;
+  color: var(--lgwt-cyan-soft);
+  letter-spacing: 1px;
+}
+.lgwt-topuser { display: flex; align-items: center; gap: 6px; color: var(--lgwt-txt); }
+.lgwt-topuser-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #2e6bff, #22d3ee);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+}
+
+/* ---- 抽屉导航 (对齐展会 .nav: 默认收起, ☰ 呼出, 点遮罩/菜单项收回) ---- */
+.lgwt-nav-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 89;
+  background: rgba(0, 0, 0, 0.45);
+}
+.lgwt-nav {
+  display: flex;
+  flex-direction: column;
+  padding: 14px 10px;
+  gap: 4px;
+  border-right: 1px solid var(--lgwt-line);
+  background: linear-gradient(180deg, rgba(10, 18, 34, 0.98), rgba(6, 10, 20, 0.98));
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 220px;
+  z-index: 90;
+  transform: translateX(-102%);
+  transition: transform 0.25s ease;
+  box-shadow: 8px 0 30px rgba(0, 0, 0, 0.55);
+}
+.lgwt-nav.open { transform: translateX(0); }
+.lgwt-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--lgwt-txt2);
+  font-size: 13px;
+  cursor: pointer;
+  position: relative;
+  transition: 0.15s;
+}
+.lgwt-nav-ic { width: 16px; text-align: center; opacity: 0.9; }
+.lgwt-nav-item:hover { background: rgba(34, 120, 200, 0.12); color: var(--lgwt-txt); }
+.lgwt-nav-item.active {
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.14), rgba(34, 211, 238, 0.02));
+  color: #fff;
+}
+.lgwt-nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--lgwt-cyan);
+  box-shadow: 0 0 10px var(--lgwt-cyan);
+}
+.lgwt-nav-slogan {
+  margin-top: auto;
+  font-size: 10px;
+  color: var(--lgwt-txt3);
+  line-height: 1.6;
+  padding: 10px 6px;
+}
+.lgwt-nav-slogan b { color: var(--lgwt-cyan-soft); display: block; font-size: 11px; margin-bottom: 4px; }
+
+/* ==================== 设备状态卡 (展会 .panel.mini.device 同款, 挂日志列下方) ==================== */
+.lgwt-card-device { padding-bottom: 0.3rem; }
+/* 高度跟随列底 1/3 格 (不写死), 内容按可用高压缩 */
+.lgwt-dev-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px 4px;
+  flex: 1;
+  min-height: 0;
+}
+.lgwt-dev-cam {
+  flex: 0 0 42%;
+  height: 100%;
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.lgwt-dev-cam img {
+  position: relative;
+  z-index: 2;
+  width: 122%;
+  max-width: none;
+  object-fit: contain;
+  filter: drop-shadow(0 12px 18px rgba(0, 0, 0, 0.48)) drop-shadow(0 0 14px rgba(34, 211, 238, 0.38));
+  transform: translateX(3px) translateY(-2px);
+}
+.lgwt-dev-cam::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  left: 49%;
+  top: 60%;
+  width: 92px;
+  height: 92px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(34, 211, 238, 0.2), rgba(34, 211, 238, 0.06) 42%, transparent 68%);
+  box-shadow: 0 0 22px rgba(34, 211, 238, 0.25);
+}
+.lgwt-dev-cam::after {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  left: 49%;
+  top: 60%;
+  width: 92px;
+  height: 92px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px solid rgba(34, 211, 238, 0.2);
+  background: conic-gradient(from 0deg, rgba(34, 211, 238, 0.62), transparent 72deg, transparent 260deg, rgba(34, 211, 238, 0.32));
+  -webkit-mask: radial-gradient(circle, transparent 52%, #000 54%);
+  mask: radial-gradient(circle, transparent 52%, #000 54%);
+  animation: lgwt-camspin 4.2s linear infinite;
+}
+.lgwt-lens-glow {
+  position: absolute;
+  z-index: 4;
+  left: 72%;
+  top: 39%;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(34, 211, 238, 0.28);
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.72);
+  animation: lgwt-lensbreath 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+.lgwt-scan-glint {
+  position: absolute;
+  z-index: 4;
+  top: 9%;
+  bottom: 12%;
+  width: 22px;
+  transform: skewX(-18deg);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.32), transparent);
+  animation: lgwt-glint 3.2s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes lgwt-camspin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+@keyframes lgwt-lensbreath { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+@keyframes lgwt-glint { 0% { left: -12%; } 55%, 100% { left: 108%; } }
+
+.lgwt-dev-list {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.lgwt-drow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 0;
+  font-size: 11px;
+  padding: 3px 1px;
+  border-bottom: 1px dashed rgba(60, 130, 200, 0.12);
+}
+.lgwt-drow:last-child { border-bottom: none; }
+/* 列窄 (三工位约 200px) 时"连接状态/温度"会拆成两行, 强制单行 */
+.lgwt-drow-k { color: var(--lgwt-txt2); white-space: nowrap; }
+.lgwt-drow-v {
+  margin-left: auto;
+  color: var(--lgwt-txt);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.lgwt-pill {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 1px 10px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.lgwt-pill.on {
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--lgwt-ok);
+  border: 1px solid rgba(52, 211, 153, 0.36);
+}
+.lgwt-pill.on::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--lgwt-ok);
+  box-shadow: 0 0 6px var(--lgwt-ok);
+  animation: lgwt-blink 1.6s infinite;
+}
+.lgwt-pill.off {
+  background: rgba(130, 150, 170, 0.12);
+  color: var(--lgwt-txt3);
+  border: 1px solid rgba(130, 150, 170, 0.28);
+}
+.lgwt-tempbar { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.lgwt-tempbar-bar {
+  width: 34px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(60, 130, 200, 0.18);
+  overflow: hidden;
+}
+.lgwt-tempbar-bar i {
+  display: block;
+  height: 100%;
+  width: 52%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #2aa8ff, #f7b733);
+}
+.lgwt-tempbar b { color: var(--lgwt-txt); font-variant-numeric: tabular-nums; font-size: 11px; }

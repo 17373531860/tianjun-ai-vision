@@ -1,0 +1,9 @@
+{
+  "lgWorktime": {
+    "title": "AI 工时测量看板",
+    "subtitle": "LEAN 价值分析 · VA/BVA/NVA",
+    "va": "VA 增值",
+    "bva": "BVA 必要非增值",
+    "nva": "NVA 非增值"
+  }
+}

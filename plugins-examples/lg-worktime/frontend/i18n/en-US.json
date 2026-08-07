@@ -1,0 +1,9 @@
+{
+  "lgWorktime": {
+    "title": "AI Worktime Dashboard",
+    "subtitle": "LEAN Value Analysis · VA/BVA/NVA",
+    "va": "VA Value-Added",
+    "bva": "BVA Business Value-Added",
+    "nva": "NVA Non Value-Added"
+  }
+}

@@ -58,6 +58,7 @@ D. 内部用前缀 internal-*
 | `internal-demo` | 内部 | 三档示例插件 | 2026-05-08 | tianjun-ai-master | plugins-examples/ 用，发版前替换为真实客户码 |
 | `showcase` | 内部 | 展会全应用定制界面 | 2026-06-03 | tianjun-ai-master | plugins-examples/tianjun-showcase，RFC12 全页面整页覆盖演示，不发真实客户 |
 | `sensor-clean` | 产品 | 传感器清洁工序插件 | 2026-06-25 | tianjun-ai-master | 擦拭工序专用，三判定（假擦拭/棉签寿命/操作员离开）经 host.trigger_event 接主程序事件体系，v1.1.0 起 main_version_min=3.27.0 |
+| `lg-worktime` | 产品 | LG 领导视角工时看板 | 2026-08-04 | tianjun-ai-master | LG「视觉AI工时测量系统」收编为 Tier 3 插件：LEAN VA/BVA/NVA 价值分析 + monitor.layout.body 整页领导看板 + F8 导出字段，main_version_min=3.45.0 |
 
 > ⚠️ `default` / `internal-*` 三个前缀**保留给主作者**，不分配给真实客户。
 
