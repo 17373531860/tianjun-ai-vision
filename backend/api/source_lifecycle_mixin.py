@@ -536,20 +536,21 @@ class LifecycleMixin:
             if len(self.step_cycle_durations_history[_lbl]) > 100:
                 self.step_cycle_durations_history[_lbl] = self.step_cycle_durations_history[_lbl][-100:]
         
-        # 7. 强制垃圾回收
-        gc.collect()
-        
-        # 8. 清理 GPU 缓存 (CUDA / MPS)
+        # 7+8. 强制垃圾回收 + 清理 GPU 缓存 (CUDA / MPS)
+        # mps_guard: gc 会顺带释放残留的 MPS 张量, 必须与其它通道的推理编码
+        # 串行 (2026-08-07 稳定性长跑: 双通道下 Metal 断言弑进程); CUDA 为 no-op
         try:
             import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                allocated = torch.cuda.memory_allocated() / 1024**2
-                cached = torch.cuda.memory_reserved() / 1024**2
-                print(f"[CacheClean] GPU VRAM: allocated={allocated:.1f}MB, cached={cached:.1f}MB")
-            else:
-                from backend.core.torch_device import empty_mps_cache
-                empty_mps_cache()
+            from backend.core.torch_device import empty_mps_cache, mps_guard
+            with mps_guard():
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    allocated = torch.cuda.memory_allocated() / 1024**2
+                    cached = torch.cuda.memory_reserved() / 1024**2
+                    print(f"[CacheClean] GPU VRAM: allocated={allocated:.1f}MB, cached={cached:.1f}MB")
+                else:
+                    empty_mps_cache()
         except Exception as e:
             print(f"[CacheClean] error clearing GPU cache: {e}")
         
@@ -578,9 +579,11 @@ class LifecycleMixin:
                 if freed > 1:
                     print(f"[GPUClean] freed VRAM: {freed:.1f}MB (allocated: {after_alloc:.1f}MB, cached: {after_cached:.1f}MB)")
             else:
-                gc.collect()
-                from backend.core.torch_device import empty_mps_cache
-                empty_mps_cache()
+                # mps_guard: 定期深清理的 gc 会释放 MPS 张量, 须与其它通道推理串行
+                from backend.core.torch_device import empty_mps_cache, mps_guard
+                with mps_guard():
+                    gc.collect()
+                    empty_mps_cache()
         except Exception as e:
             print(f"[GPUClean] cleanup failed: {e}")
     
