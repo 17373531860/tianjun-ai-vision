@@ -13,7 +13,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__playwright, mcp__context7, m
 
 用户问题: $ARGUMENTS
 
-> 事实校验基线：`frontend/src/views/Monitor/index.vue` (4051) / `views/Data/index.vue` (1985) / `store/useSystemStore.js` (277)。
+> 事实校验基线：`frontend/src/views/Monitor/index.vue` (6847，v3.47 多工位布局重构后) / `views/Data/index.vue` (1985) / `store/useSystemStore.js` (277)。
+> v3.47 多工位布局：模板顶层链 `layoutBodyOverride → channelCount===2 → ===3（三行横排）→ >3（网格总览+分页+放大详情）→ 单工位`；4+ 工位只拉**可见工位**的 MJPEG 流（`visibleStreamChannels/syncMultiStreams`），数据轮询仍覆盖全部工位——排查"翻页后某工位没画面"先看该工位是否在当前页/放大路。
 > 前端通过 `axios.create({ baseURL })`，dev 默认 `http://localhost:8001/api/v1`，Electron 走 `file://` 时取 `DEFAULT_BACKEND_HOST`，浏览器经 Vite proxy。
 
 ---

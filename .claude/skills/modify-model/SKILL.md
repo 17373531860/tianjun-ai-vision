@@ -27,7 +27,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | ORM 类 | 表名 | 一句话 |
 |---|---|---|
 | `Project` | `projects` | 项目主表，承载 7 个 JSON 配置字段 |
-| `Model` | `models` | 模型文件元信息（**类名是 `Model` 不是 `MLModel`，表名是 `models` 不是 `ml_models`**）|
+| `Model` | `models` | 模型文件元信息（**类名是 `Model` 不是 `MLModel`，表名是 `models` 不是 `ml_models`**）；v3.47 加 `source`（'local'/'yolovision'，NULL 视同 local）+ `meta` JSON（训练分析/包 provenance，迁移 m0008）|
 | `ModelConversion` | `model_conversions` | 模型格式转换（PyTorch→TRT 等），跨项目共享 |
 | `Task` | `tasks` | 离线推理任务（前端 `task.js` 已死代码）|
 | `Camera` | `cameras` | 旧式相机表，与 `/source/*` 并存 |
@@ -48,7 +48,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `Batch` | `batches` | 批次（与工单一对多）|
 | `Workpiece` | `workpieces` | 工件追溯主表（`serial_no` + `project_id` 唯一）|
 | `WorkpieceInspection` | `workpiece_inspections` | 工件 ↔ Cycle 中间表，支持多次返工 |
-| `DefectRecord` | `defect_records` | 缺陷记录（NG 自动分类）|
+| `DefectRecord` | `defect_records` | 缺陷记录（NG 自动分类）；v3.47 补 `cycle_id` 索引（迁移 m0007，治启动期大表扫描）|
 | `DefectCode` | `defect_codes` | 缺陷代码字典 + `detection_labels` 自动映射 |
 | `ScannerDevice` | `scanner_devices` | 扫码器配置（**字段最多的表**，含 v3.4.0 D 模式几何）|
 | `ScanLog` | `scan_logs` | 扫码记录 |
@@ -164,6 +164,8 @@ def apply(engine):
 ```
 
 再把 `"m0001_scanner_new_field"` 追加进 `migrations/__init__.py::_MIGRATION_MODULES`。
+
+> ⚠️ **多分支并行的迁移撞号坑（2026-08-07 实锤）**：两个并行分支各自新建了 `m0007_*` 迁移（defect 索引 vs models 互连列），合并时 `_MIGRATION_MODULES` 冲突 + 编号重复。**合并顺序在后的分支必须重编号**（改文件名 + 文件内 `MIGRATION_ID` + 注册表三处一致），因为 `schema_migrations` 按 ID 记账，改名后老库会当新迁移重跑——所以迁移必须幂等（inspector 探查缺列才 ALTER）。开新迁移前先 `ls backend/db/migrations/` 看所有分支已占用的最大号，并在 PR 描述里声明占号。
 老客户的 SQLite 库靠这一步才能加上列。**忘了这一步 = 升级即崩**。
 
 ### 步骤 C：序列化对齐

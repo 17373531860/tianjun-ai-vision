@@ -37,7 +37,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__sequential-thinking, mcp__se
 
 ```python
 class ChannelManager:
-    channel_count: int = 1                          # 1, 2, 或 4
+    channel_count: int = 1                          # 1..MAX_CHANNELS=64（v3.47 起不限于 1/2/4，防呆上界见 channel_manager.py:22）
     channels: Dict[int, VideoSourceManager]         # 默认 {0: VSM(channel_id=0)}
     _lock: threading.Lock                           # 通道增删锁
     _model_lock: threading.Lock                     # 模型加载锁
@@ -48,7 +48,7 @@ class ChannelManager:
     active_channels() -> List[int]                  # sorted
 
     # 生命周期
-    set_channel_count(count)                        # 1/2/4，含降级清理 + 升级新建
+    set_channel_count(count)                        # 1..64（v3.47），含降级清理 + 升级新建
     stop_all()
 
     # 模型加载（v3.5.x 关键改动）
