@@ -602,6 +602,8 @@ ORM 类 `Model`，定义于 `backend/models/models.py`。
 | `description` | TEXT |  |  |
 | `version` | VARCHAR(50) |  |  |
 | `status` | VARCHAR(20) |  | 'idle' |
+| `source` | VARCHAR(50) |  | 'local' |
+| `meta` | JSON |  |  |
 | `upload_time` | DATETIME |  | server |
 
 ## packaging_flow_configs
