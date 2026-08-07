@@ -1,11 +1,11 @@
 # 数据库表参考
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-08-03）
+> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-08-04）
 > **单一事实源**：SQLAlchemy ORM（Base.metadata）。字段含义看模型源文件行内注释；
 > 迁移历史看 backend/db/migrations/ 与 backend/main.py 的 migrate_database。
 
-共 **47** 张表。
+共 **50** 张表。
 
 ## 表索引
 
@@ -18,6 +18,7 @@
 | [`cameras`](#cameras) | `Camera` | `backend/models/models.py` |
 | [`channel_groups`](#channel_groups) | `ChannelGroup` | `backend/models/models.py` |
 | [`cluster_config`](#cluster_config) | `ClusterConfig` | `backend/models/mes_models.py` |
+| [`counter_daily_stats`](#counter_daily_stats) | `CounterDailyStat` | `backend/models/notify_models.py` |
 | [`daily_stats`](#daily_stats) | `DailyStat` | `backend/models/models.py` |
 | [`data_export_settings`](#data_export_settings) | `DataExportSetting` | `backend/models/models.py` |
 | [`defect_codes`](#defect_codes) | `DefectCode` | `backend/models/mes_models.py` |
@@ -46,6 +47,8 @@
 | [`scan_logs`](#scan_logs) | `ScanLog` | `backend/models/mes_models.py` |
 | [`scanner_devices`](#scanner_devices) | `ScannerDevice` | `backend/models/mes_models.py` |
 | [`session_tokens`](#session_tokens) | `SessionToken` | `backend/models/auth_models.py` |
+| [`sms_report_rules`](#sms_report_rules) | `SmsReportRule` | `backend/models/notify_models.py` |
+| [`sms_send_logs`](#sms_send_logs) | `SmsSendLog` | `backend/models/notify_models.py` |
 | [`step_records`](#step_records) | `StepRecord` | `backend/models/models.py` |
 | [`system_configs`](#system_configs) | `SystemConfig` | `backend/models/models.py` |
 | [`tasks`](#tasks) | `Task` | `backend/models/models.py` |
@@ -181,6 +184,20 @@ ORM 类 `ClusterConfig`，定义于 `backend/models/mes_models.py`。
 | `channel_station_map` | JSON |  |  |
 | `station_result_strategy` | VARCHAR(20) |  | 'latest' |
 | `updated_at` | DATETIME |  | server |
+
+## counter_daily_stats
+
+ORM 类 `CounterDailyStat`，定义于 `backend/models/notify_models.py`。
+
+| 字段 | 类型 | 约束 | 默认 |
+|---|---|---|---|
+| `id` | INTEGER | PK INDEX |  |
+| `stat_date` | DATE | INDEX NOT NULL |  |
+| `project_id` | INTEGER | NOT NULL | 0 |
+| `channel_id` | INTEGER | NOT NULL | 0 |
+| `counter_name` | VARCHAR(128) | NOT NULL |  |
+| `delta` | INTEGER | NOT NULL | 0 |
+| `updated_at` | DATETIME | NOT NULL | server |
 
 ## daily_stats
 
@@ -870,6 +887,57 @@ ORM 类 `SessionToken`，定义于 `backend/models/auth_models.py`。
 | `created_at` | DATETIME | NOT NULL | server |
 | `expires_at` | DATETIME | INDEX |  |
 | `last_used_at` | DATETIME | NOT NULL | server |
+
+## sms_report_rules
+
+ORM 类 `SmsReportRule`，定义于 `backend/models/notify_models.py`。
+
+| 字段 | 类型 | 约束 | 默认 |
+|---|---|---|---|
+| `id` | INTEGER | PK INDEX |  |
+| `name` | VARCHAR(128) | NOT NULL |  |
+| `enabled` | BOOLEAN | INDEX NOT NULL | True |
+| `description` | TEXT |  |  |
+| `cron_expression` | VARCHAR(64) | NOT NULL | '0 20 * * *' |
+| `data_window_type` | VARCHAR(16) | NOT NULL | 'today' |
+| `group_by_channel` | BOOLEAN | NOT NULL | False |
+| `channel_ids` | JSON |  |  |
+| `project_id` | INTEGER | INDEX |  |
+| `metrics` | JSON |  |  |
+| `template_param_mapping` | JSON |  |  |
+| `extra_params` | JSON |  |  |
+| `phone_numbers` | JSON |  |  |
+| `template_code` | VARCHAR(64) |  |  |
+| `content_template` | TEXT |  |  |
+| `last_run_time` | DATETIME |  |  |
+| `last_run_status` | VARCHAR(16) |  |  |
+| `last_run_error` | TEXT |  |  |
+| `next_run_time` | DATETIME | INDEX |  |
+| `success_count` | INTEGER | NOT NULL | 0 |
+| `failed_count` | INTEGER | NOT NULL | 0 |
+| `created_at` | DATETIME | NOT NULL | server |
+| `updated_at` | DATETIME | NOT NULL | server |
+
+## sms_send_logs
+
+ORM 类 `SmsSendLog`，定义于 `backend/models/notify_models.py`。
+
+| 字段 | 类型 | 约束 | 默认 |
+|---|---|---|---|
+| `id` | INTEGER | PK INDEX |  |
+| `rule_id` | INTEGER | INDEX |  |
+| `rule_name` | VARCHAR(128) |  |  |
+| `triggered_at` | DATETIME | NOT NULL | server |
+| `source_type` | VARCHAR(16) | NOT NULL | 'cron' |
+| `provider` | VARCHAR(32) |  |  |
+| `channel_id` | INTEGER |  |  |
+| `phone_numbers` | JSON |  |  |
+| `template_code` | VARCHAR(64) |  |  |
+| `template_params` | JSON |  |  |
+| `success` | BOOLEAN | NOT NULL | False |
+| `retry_count` | INTEGER | NOT NULL | 0 |
+| `error_msg` | TEXT |  |  |
+| `provider_response` | JSON |  |  |
 
 ## step_records
 

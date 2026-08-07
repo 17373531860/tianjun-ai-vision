@@ -1,0 +1,97 @@
+{
+  "version": "3.46.0",
+  "date": "2026-08-05",
+  "previous_version": "3.45.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "主程序原生 NG 短信/微信推送通知（12h 汇总，默认关）",
+      "symptom": "客户管理者不在产线收不到 OK/NG 产量情况；不同客户网络条件不同（USB 短信猫 / 公网云短信 / 微信）",
+      "root_cause": "主程序此前无任何主动通知出口，只能靠人守屏幕或第三方插件",
+      "fix": "SmsService 门面 + sms_providers 统一工厂五通道（at_modem/generic_http/wxpusher/aliyun/tencent）；滚动 12h（冷启动重锚）或班次调度二选一；不进 _trigger_event 热路径、只读已落库结算周期；HTTP 类离线队列重试；报警页配置卡与灯塔完全隔离（独立配置/COM/线程）；默认 enabled=false 存量零差异",
+      "files": ["backend/api/sms.py", "backend/schemas/sms.py", "backend/services/sms_service.py", "backend/services/sms_config.py", "backend/services/sms_summary.py", "backend/services/sms_at_client.py", "backend/services/sms_modem.py", "backend/services/sms_offline_queue.py", "backend/services/sms_providers/__init__.py", "backend/services/sms_providers/at_modem_provider.py", "backend/services/sms_providers/generic_http_provider.py", "backend/services/sms_providers/wxpusher_provider.py", "backend/services/sms_providers/aliyun_provider.py", "backend/services/sms_providers/tencent_provider.py", "backend/services/sms_providers/mock_provider.py", "backend/services/sms_providers/base_provider.py", "backend/services/sms_utils.py", "backend/main.py", "frontend/src/api/sms.js", "frontend/src/views/Alarm/index.vue"],
+      "keywords": ["短信", "SMS", "微信推送", "WxPusher", "NG汇总", "12小时汇总", "班次调度", "AT短信猫", "阿里云短信", "腾讯云短信", "离线队列", "sms_config", "notification", "summary"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "每日短信日报（数据中心配置，cron 定点发当日 KPI 到手机）",
+      "symptom": "客户想每天固定时间收到当日产量/合格率/计数器增量摘要，不登系统",
+      "root_cause": "无日报能力；计数器无当日增量口径（累计值跨天不清零无法出日报）",
+      "fix": "日报三表 sms_report_rules/sms_send_logs/counter_daily_stats + 独立 APScheduler cron（无规则零开销）；规则 CRUD/预览/mock 试发/逐号日志；counter_daily 内存日桶节流落库只累计正向增量；云模板通道用平台模板+变量映射、内容式通道用 ${变量} 正文模板（迁移 m0006）；数据中心日报对话框（通道 tab 只读）；插件 returnable hook daily_report_before_send",
+      "files": ["backend/api/sms_report.py", "backend/services/sms_report.py", "backend/services/counter_daily.py", "backend/models/notify_models.py", "backend/db/migrations/m0006_sms_report_content_template.py", "backend/plugin_system/hook_dispatch.py", "backend/api/source_event_trigger_mixin.py", "backend/api/source_periodic_actions_mixin.py", "backend/services/export_field_registry.py", "frontend/src/api/smsReport.js", "frontend/src/views/Data/components/SmsReportDialog.vue", "frontend/src/views/Data/index.vue"],
+      "keywords": ["短信日报", "日报", "daily report", "cron", "APScheduler", "counter_daily", "计数器当日增量", "content_template", "正文模板", "变量映射", "试发", "预览", "sms_report_rules", "m0006", "daily_report_before_send"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "统一短信通道层（消除 sms_adapters 技术债）",
+      "symptom": "NG 通知与日报各带一套通道实现，双份维护必漂移",
+      "root_cause": "日报先行开发时平行造了 sms_adapters/，与 NG 通知的 sms_providers/ 重复",
+      "fix": "日报改走 sms_providers 工厂 + 共享 sms_config.json；报警页扩阿里云/腾讯云；日报对话框通道只读；中转改 generic_http 字段映射（scripts/sms_relay 示例）；删平行适配器。不变量：通道实现只能进 sms_providers/",
+      "files": ["backend/services/sms_report.py", "backend/api/sms_report.py", "frontend/src/views/Alarm/index.vue", "frontend/src/views/Data/components/SmsReportDialog.vue", "scripts/sms_relay/relay_server.py", "scripts/sms_relay/README.md"],
+      "keywords": ["sms_adapters", "sms_providers", "统一通道", "技术债", "中转服务器", "sms_relay", "generic_http", "字段映射"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "推理设备 auto 档支持 Apple MPS（cuda > mps > cpu）",
+      "symptom": "Apple Silicon 开发机 auto 档静默落 CPU，帧率 26 FPS",
+      "root_cause": "auto 解析只探 CUDA，无 MPS 分支；缓存清理/同步点也是 CUDA-only",
+      "fix": "新增 backend/core/torch_device.py 统一出口（resolve_auto_device / empty_mps_cache / synchronize_mps）；模型加载(主+slot)/通道设备解析/MediaPipe 二段/GPU reset 全接入；MPS 强制 FP32（half 仍仅 CUDA）；预热扩到 MPS；实测 yolov8n@640 MPS 168 FPS（6.4x）",
+      "files": ["backend/core/torch_device.py", "backend/api/channel_manager.py", "backend/api/source.py", "backend/api/source_lifecycle_mixin.py", "backend/api/source_mediapipe.py", "backend/api/source_model_load_mixin.py"],
+      "keywords": ["MPS", "Apple Silicon", "torch_device", "auto device", "推理设备", "FP32", "cuda", "empty_cache", "synchronize"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "独立 AT 短信猫调试工具 tools/sms_4g",
+      "symptom": "现场排短信猫硬件问题要起整套系统",
+      "root_cause": "无脱离主程序的 AT 模块调试手段",
+      "fix": "tools/sms_4g 独立包（AT 指令客户端/modem/GUI/假串口测试）+ Windows 启动 bat（CRLF）",
+      "files": ["tools/sms_4g/main.py", "tools/sms_4g/sms_4g/at_client.py", "tools/sms_4g/sms_4g/modem.py", "tools/sms_4g/sms_4g/gui.py", "tools/sms_4g/sms_4g/sms_service.py"],
+      "keywords": ["sms_4g", "AT指令", "短信猫", "调试工具", "串口", "fake_serial"],
+      "breaking": false
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-001",
+      "title": "新建 debug-sms skill + api-sync/debug-alarm/modify-frontend/AGENTS 同步",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "debug-sms：短信/日报全链路诊断（架构表/五不变量/决策树/回归入口/边界/日报差异）；api-sync 真相表 30→32 组；debug-alarm 划清短信 COM 边界；AGENTS 触发表+路由速查",
+      "files": [".claude/skills/debug-sms/SKILL.md", ".claude/skills/api-sync/SKILL.md", ".claude/skills/debug-alarm/SKILL.md", ".claude/skills/modify-frontend/SKILL.md", "AGENTS.md"],
+      "keywords": ["debug-sms", "api-sync", "skill", "路由真相表"],
+      "breaking": false
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-002",
+      "title": "merge-branch v0.2：吸收完成定义 + 伪完成案例库",
+      "symptom": "吸收 feat/jinlong 时只做 FF merge + 单测绿就报'已吸收完毕'，未读对方 docs/skills、未做功能面验证，被用户追问才补",
+      "root_cause": "merge-branch skill 只定义了'怎么合不炸'，没定义'吸收算完成'的标准",
+      "fix": "第六节新增吸收完成定义 A1-A5（读清主题/读对方 docs/按对方 skill 回归入口跑/碰 .vue 走 T4-T6/汇报列缺口）+ 反模式 + 收尾话术模板；第十二节案例库收录 2026-08-04 案例",
+      "files": [".claude/skills/merge-branch/SKILL.md"],
+      "keywords": ["merge-branch", "吸收完成定义", "伪完成", "合并", "absorption", "definition of done"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "TEST-001",
+      "title": "短信栈回归护栏 + UAT 脚本升级",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "单元/集成 106 例 + 浏览器 E2E 14 例 + 可见浏览器 UAT 8/8（证据 tests/uat/sms_report_20260804_174036/）；UAT 脚本端口环境变量可配、空库自动建 __uat_ 项目、录视频、跑完恢复 sms_config 默认关",
+      "files": ["tests/uat/uat_sms_report_ui.py", "tests/e2e_browser/test_sms_report_dialog.py", "tests/e2e_browser/test_alarm_page.py", "tests/e2e_browser/pages/alarm_page.py"],
+      "keywords": ["UAT", "e2e", "playwright", "短信测试", "回归护栏", "headless=False"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-sms", "api-sync", "debug-alarm", "modify-frontend", "merge-branch"],
+  "files_changed": ["backend/api/sms.py", "backend/api/sms_report.py", "backend/schemas/sms.py", "backend/models/notify_models.py", "backend/services/sms_service.py", "backend/services/sms_report.py", "backend/services/sms_config.py", "backend/services/sms_summary.py", "backend/services/counter_daily.py", "backend/services/sms_at_client.py", "backend/services/sms_modem.py", "backend/services/sms_offline_queue.py", "backend/services/sms_providers/", "backend/db/migrations/m0006_sms_report_content_template.py", "backend/plugin_system/hook_dispatch.py", "backend/api/source_event_trigger_mixin.py", "backend/api/source_periodic_actions_mixin.py", "backend/core/torch_device.py", "backend/api/channel_manager.py", "backend/api/source.py", "backend/api/source_lifecycle_mixin.py", "backend/api/source_mediapipe.py", "backend/api/source_model_load_mixin.py", "backend/main.py", "frontend/src/api/sms.js", "frontend/src/api/smsReport.js", "frontend/src/views/Alarm/index.vue", "frontend/src/views/Data/components/SmsReportDialog.vue", "frontend/src/views/Data/index.vue", "tools/sms_4g/", "scripts/sms_relay/", "tests/uat/uat_sms_report_ui.py"]
+}

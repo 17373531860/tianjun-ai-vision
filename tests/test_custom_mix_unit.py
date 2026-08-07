@@ -1765,6 +1765,30 @@ def test_container_stable_snapshot_occlusion_dip_not_booked():
     assert acc._done == [{"滑块": 24}], acc._done
 
 
+def test_container_book_preview_follows_booking_rule():
+    """v3.44.6 预计进箱值 (book_preview) 与记账规则同源:
+    稳定计数开 → 显示稳定值 (瞬态 25 抬高峰值也不跟着跳);
+    稳定计数关 → 退回峰值 (老行为)。操作员按这个数预判进箱结果."""
+    acc = _stable_acc()
+    tray = _tray(0.0)
+    t = 100.0
+    for _ in range(6):                        # 稳定段 24
+        acc.update([tray], _tray_items(24, 0.0, 0.45), t); t += 0.1
+    acc.update([tray], _tray_items(25, 0.0, 0.45), t); t += 0.1   # 瞬态 25
+    st = acc.to_state({"滑块": "滑块"})
+    it = st["current_tray_items"][0]
+    assert it["peak_count"] == 25, it        # 峰值被瞬态抬高
+    assert it["book_preview"] == 24, it      # 预计进箱按稳定值, 不跟着跳
+
+    # 稳定计数关: 预计进箱 = 峰值 (零差异)
+    acc2 = _stable_acc(stable=0)
+    for i in range(3):
+        acc2.update([tray], _tray_items(23, 0.0, 0.45), 200.0 + i * 0.1)
+    st2 = acc2.to_state({"滑块": "滑块"})
+    it2 = st2["current_tray_items"][0]
+    assert it2["book_preview"] == it2["peak_count"] == 23, it2
+
+
 def test_container_stable_snapshot_off_zero_diff():
     """stable_min_frames=0 (默认关): 同样的喂帧序列不走快照路径 —
     AND 组合下消失满帧等不齐, 账本保持为空 (老行为零差异)."""

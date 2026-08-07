@@ -123,8 +123,9 @@
 
           <el-alert type="warning" :closable="false" show-icon>
             <div class="text-xs leading-5">
-              USB/AT、云服务器短信、微信推送(WxPusher) 三选一。
-              云短信与微信推送需工控机可上网；AT 通道必须使用独立 COM，勿选灯塔/蜂鸣器串口。
+              USB/AT、通用 HTTP、微信推送(WxPusher)、阿里云、腾讯云 五选一。
+              该通道为系统级短信通道，NG 汇总通知与短信日报共用；
+              云通道需工控机可上网；AT 通道必须使用独立 COM，勿选灯塔/蜂鸣器串口。
             </div>
           </el-alert>
 
@@ -143,6 +144,12 @@
               </el-radio-button>
               <el-radio-button value="wxpusher" data-testid="sms-provider-wxpusher">
                 微信推送(WxPusher)
+              </el-radio-button>
+              <el-radio-button value="aliyun" data-testid="sms-provider-aliyun">
+                阿里云短信
+              </el-radio-button>
+              <el-radio-button value="tencent" data-testid="sms-provider-tencent">
+                腾讯云短信
               </el-radio-button>
             </el-radio-group>
           </div>
@@ -418,6 +425,123 @@
                 <div class="text-xs text-gray-500">生产环境建议始终开启。</div>
               </div>
               <el-switch v-model="smsConfig.wxpusher.verify_ssl" data-testid="sms-wx-verify-ssl" />
+            </div>
+          </div>
+
+          <div
+            v-else-if="smsConfig.provider === 'aliyun'"
+            data-testid="sms-aliyun-fields"
+            class="grid grid-cols-1 lg:grid-cols-2 gap-4"
+          >
+            <div>
+              <div class="text-gray-300 mb-2">AccessKey ID</div>
+              <el-input
+                v-model="smsConfig.aliyun.access_key_id"
+                data-testid="sms-aliyun-ak"
+                placeholder="阿里云 RAM AccessKeyId"
+              />
+            </div>
+            <div>
+              <div class="text-gray-300 mb-2">AccessKey Secret</div>
+              <el-input
+                v-model="smsConfig.aliyun.access_key_secret"
+                data-testid="sms-aliyun-sk"
+                type="password"
+                show-password
+                autocomplete="new-password"
+                placeholder="阿里云 RAM AccessKeySecret"
+              />
+            </div>
+            <div>
+              <div class="text-gray-300 mb-2">短信签名</div>
+              <el-input
+                v-model="smsConfig.aliyun.sign_name"
+                data-testid="sms-aliyun-sign"
+                placeholder="审核通过的签名，如：天军视觉"
+              />
+            </div>
+            <div>
+              <div class="text-gray-300 mb-2">默认模板 Code</div>
+              <el-input
+                v-model="smsConfig.aliyun.template_code"
+                data-testid="sms-aliyun-template"
+                placeholder="如：SMS_123456789"
+              />
+            </div>
+            <div>
+              <div class="text-gray-300 mb-2">Region</div>
+              <el-input
+                v-model="smsConfig.aliyun.region"
+                data-testid="sms-aliyun-region"
+                placeholder="cn-hangzhou"
+              />
+            </div>
+            <div class="lg:col-span-2 text-xs text-amber-400" data-testid="sms-aliyun-hint">
+              官方云短信为「审核签名 + 审核模板 + 变量」模式：NG 汇总模板需含
+              ${time_range}、${ok_count}、${ng_count} 变量；
+              短信日报的变量名在日报规则的「变量映射」里定义，可用规则级模板 Code 覆盖此默认值。
+            </div>
+          </div>
+
+          <div
+            v-else-if="smsConfig.provider === 'tencent'"
+            data-testid="sms-tencent-fields"
+            class="grid grid-cols-1 lg:grid-cols-2 gap-4"
+          >
+            <div>
+              <div class="text-gray-300 mb-2">SecretId</div>
+              <el-input
+                v-model="smsConfig.tencent.secret_id"
+                data-testid="sms-tencent-id"
+                placeholder="腾讯云 API SecretId"
+              />
+            </div>
+            <div>
+              <div class="text-gray-300 mb-2">SecretKey</div>
+              <el-input
+                v-model="smsConfig.tencent.secret_key"
+                data-testid="sms-tencent-key"
+                type="password"
+                show-password
+                autocomplete="new-password"
+                placeholder="腾讯云 API SecretKey"
+              />
+            </div>
+            <div>
+              <div class="text-gray-300 mb-2">短信应用 SdkAppId</div>
+              <el-input
+                v-model="smsConfig.tencent.sdk_app_id"
+                data-testid="sms-tencent-appid"
+                placeholder="如：1400000000"
+              />
+            </div>
+            <div>
+              <div class="text-gray-300 mb-2">短信签名</div>
+              <el-input
+                v-model="smsConfig.tencent.sign_name"
+                data-testid="sms-tencent-sign"
+                placeholder="审核通过的签名"
+              />
+            </div>
+            <div>
+              <div class="text-gray-300 mb-2">默认模板 ID</div>
+              <el-input
+                v-model="smsConfig.tencent.template_id"
+                data-testid="sms-tencent-template"
+                placeholder="纯数字模板 ID"
+              />
+            </div>
+            <div>
+              <div class="text-gray-300 mb-2">Region</div>
+              <el-input
+                v-model="smsConfig.tencent.region"
+                data-testid="sms-tencent-region"
+                placeholder="ap-guangzhou"
+              />
+            </div>
+            <div class="lg:col-span-2 text-xs text-amber-400" data-testid="sms-tencent-hint">
+              腾讯云模板为位置变量 {1}{2}…：NG 汇总按 time_range、ok_count、ng_count 顺序对位；
+              短信日报按规则「变量映射」的勾选顺序对位。
             </div>
           </div>
 
@@ -1087,6 +1211,21 @@ const createSmsDefaultConfig = () => ({
     timeout_seconds: 10,
     verify_ssl: true,
   },
+  aliyun: {
+    access_key_id: '',
+    access_key_secret: '',
+    sign_name: '',
+    template_code: '',
+    region: 'cn-hangzhou',
+  },
+  tencent: {
+    secret_id: '',
+    secret_key: '',
+    sdk_app_id: '',
+    sign_name: '',
+    template_id: '',
+    region: 'ap-guangzhou',
+  },
   phone_numbers: [],
   retry_count: 3,
   retry_backoff_seconds: [1, 3, 5],
@@ -1178,6 +1317,8 @@ const applySmsConfig = (data = {}) => {
       ? [...data.wxpusher.topic_ids]
       : [...defaults.wxpusher.topic_ids],
   };
+  const aliyun = { ...defaults.aliyun, ...(data.aliyun || {}) };
+  const tencent = { ...defaults.tencent, ...(data.tencent || {}) };
   const phoneNumbers = Array.isArray(data.phone_numbers)
     ? data.phone_numbers
     : (Array.isArray(data.recipients) ? data.recipients : []);
@@ -1190,6 +1331,8 @@ const applySmsConfig = (data = {}) => {
     at_modem: atModem,
     generic_http: genericHttp,
     wxpusher,
+    aliyun,
+    tencent,
     phone_numbers: [...phoneNumbers],
     retry_count: data.retry_count ?? data.retries ?? defaults.retry_count,
     retry_backoff_seconds: [...retryBackoff],
@@ -1304,6 +1447,12 @@ const onSmsEnabledChange = (enabled) => {
     } else if (parseSmsWxUids().length === 0 && !smsWxTopicIdsText.value.trim()) {
       ElMessage.warning('微信推送开启前请至少填写 UID 或 TopicId');
     }
+  } else if (smsConfig.provider === 'aliyun'
+    && !(smsConfig.aliyun.access_key_id?.trim() && smsConfig.aliyun.access_key_secret?.trim())) {
+    ElMessage.warning('阿里云短信开启前请先填写 AccessKey');
+  } else if (smsConfig.provider === 'tencent'
+    && !(smsConfig.tencent.secret_id?.trim() && smsConfig.tencent.secret_key?.trim())) {
+    ElMessage.warning('腾讯云短信开启前请先填写 SecretId/SecretKey');
   } else if (parseSmsRecipients().length === 0) {
     ElMessage.warning('开启前请至少填写一个接收手机号');
   }
@@ -1345,6 +1494,40 @@ const validateSmsForm = () => {
     }
     if (!(httpConfig.token?.trim() || (httpConfig.access_key?.trim() && httpConfig.access_secret?.trim()))) {
       ElMessage.warning('开启云短信前必须填写 Token，或成对填写 Access Key/Secret');
+      return false;
+    }
+  }
+  if (smsConfig.enabled && smsConfig.provider === 'aliyun') {
+    const aliyun = smsConfig.aliyun;
+    if (!(aliyun.access_key_id?.trim() && aliyun.access_key_secret?.trim())) {
+      ElMessage.warning('开启阿里云短信前必须填写 AccessKey ID/Secret');
+      return false;
+    }
+    if (!aliyun.sign_name?.trim()) {
+      ElMessage.warning('开启阿里云短信前必须填写审核过的签名');
+      return false;
+    }
+    if (!aliyun.template_code?.trim()) {
+      ElMessage.warning('开启阿里云短信前必须填写审核过的模板 Code');
+      return false;
+    }
+  }
+  if (smsConfig.enabled && smsConfig.provider === 'tencent') {
+    const tencent = smsConfig.tencent;
+    if (!(tencent.secret_id?.trim() && tencent.secret_key?.trim())) {
+      ElMessage.warning('开启腾讯云短信前必须填写 SecretId/SecretKey');
+      return false;
+    }
+    if (!tencent.sdk_app_id?.trim()) {
+      ElMessage.warning('开启腾讯云短信前必须填写短信应用 SdkAppId');
+      return false;
+    }
+    if (!tencent.sign_name?.trim()) {
+      ElMessage.warning('开启腾讯云短信前必须填写审核过的签名');
+      return false;
+    }
+    if (!tencent.template_id?.trim()) {
+      ElMessage.warning('开启腾讯云短信前必须填写审核过的模板 ID');
       return false;
     }
   }
@@ -1408,7 +1591,7 @@ const validateSmsForm = () => {
 
 const smsConfigsMatch = (saved, readback) => {
   const fields = [
-    'enabled', 'provider', 'at_modem', 'generic_http', 'wxpusher', 'phone_numbers',
+    'enabled', 'provider', 'at_modem', 'generic_http', 'wxpusher', 'aliyun', 'tencent', 'phone_numbers',
     'retry_count', 'retry_backoff_seconds', 'ng_threshold', 'cooldown_seconds', 'queue_size',
     'offline_queue_max', 'offline_ttl_seconds',
     'summary_schedule_mode', 'shift_start_hour', 'shift_end_hour', 'send_night_window',
@@ -1451,6 +1634,21 @@ const buildSmsPayload = () => ({
     api_url: smsConfig.wxpusher.api_url.trim(),
     timeout_seconds: smsConfig.wxpusher.timeout_seconds,
     verify_ssl: smsConfig.wxpusher.verify_ssl,
+  },
+  aliyun: {
+    access_key_id: smsConfig.aliyun.access_key_id.trim(),
+    access_key_secret: smsConfig.aliyun.access_key_secret.trim(),
+    sign_name: smsConfig.aliyun.sign_name.trim(),
+    template_code: smsConfig.aliyun.template_code.trim(),
+    region: smsConfig.aliyun.region.trim() || 'cn-hangzhou',
+  },
+  tencent: {
+    secret_id: smsConfig.tencent.secret_id.trim(),
+    secret_key: smsConfig.tencent.secret_key.trim(),
+    sdk_app_id: smsConfig.tencent.sdk_app_id.trim(),
+    sign_name: smsConfig.tencent.sign_name.trim(),
+    template_id: smsConfig.tencent.template_id.trim(),
+    region: smsConfig.tencent.region.trim() || 'ap-guangzhou',
   },
   phone_numbers: smsConfig.provider === 'wxpusher' ? [] : parseSmsRecipients(),
   retry_count: smsConfig.retry_count,

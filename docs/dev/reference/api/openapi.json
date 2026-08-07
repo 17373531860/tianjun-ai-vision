@@ -7997,6 +7997,160 @@
     "title": "RuleCreate",
     "type": "object"
    },
+   "RuleCreate3": {
+    "properties": {
+     "channel_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Channel Ids"
+     },
+     "content_template": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Content Template"
+     },
+     "cron_expression": {
+      "default": "0 20 * * *",
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Cron Expression",
+      "type": "string"
+     },
+     "data_window_type": {
+      "default": "today",
+      "pattern": "^(today|yesterday)$",
+      "title": "Data Window Type",
+      "type": "string"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "extra_params": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Extra Params"
+     },
+     "group_by_channel": {
+      "default": false,
+      "title": "Group By Channel",
+      "type": "boolean"
+     },
+     "metrics": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Metrics"
+     },
+     "name": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+     },
+     "phone_numbers": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Phone Numbers"
+     },
+     "project_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Id"
+     },
+     "template_code": {
+      "anyOf": [
+       {
+        "maxLength": 64,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Template Code"
+     },
+     "template_param_mapping": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Template Param Mapping"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "title": "RuleCreate",
+    "type": "object"
+   },
    "RuleUpdate": {
     "properties": {
      "channel_filter": {
@@ -8456,6 +8610,188 @@
        }
       ],
       "title": "Use Standard Daily Report"
+     }
+    },
+    "title": "RuleUpdate",
+    "type": "object"
+   },
+   "RuleUpdate3": {
+    "properties": {
+     "channel_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Channel Ids"
+     },
+     "content_template": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Content Template"
+     },
+     "cron_expression": {
+      "anyOf": [
+       {
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cron Expression"
+     },
+     "data_window_type": {
+      "anyOf": [
+       {
+        "pattern": "^(today|yesterday)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Data Window Type"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Enabled"
+     },
+     "extra_params": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Extra Params"
+     },
+     "group_by_channel": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Group By Channel"
+     },
+     "metrics": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Metrics"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Name"
+     },
+     "phone_numbers": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Phone Numbers"
+     },
+     "project_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Id"
+     },
+     "template_code": {
+      "anyOf": [
+       {
+        "maxLength": 64,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Template Code"
+     },
+     "template_param_mapping": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Template Param Mapping"
      }
     },
     "title": "RuleUpdate",
@@ -9629,6 +9965,46 @@
     "title": "SlaveHeartbeat",
     "type": "object"
    },
+   "SmsAliyunPayload": {
+    "additionalProperties": false,
+    "description": "阿里云官方云短信通道配置。",
+    "properties": {
+     "access_key_id": {
+      "default": "",
+      "maxLength": 256,
+      "title": "Access Key Id",
+      "type": "string"
+     },
+     "access_key_secret": {
+      "default": "",
+      "maxLength": 512,
+      "title": "Access Key Secret",
+      "type": "string"
+     },
+     "region": {
+      "default": "cn-hangzhou",
+      "maxLength": 64,
+      "title": "Region",
+      "type": "string"
+     },
+     "sign_name": {
+      "default": "",
+      "description": "审核过的短信签名",
+      "maxLength": 200,
+      "title": "Sign Name",
+      "type": "string"
+     },
+     "template_code": {
+      "default": "",
+      "description": "审核过的模板 code",
+      "maxLength": 100,
+      "title": "Template Code",
+      "type": "string"
+     }
+    },
+    "title": "SmsAliyunPayload",
+    "type": "object"
+   },
    "SmsAtModemPayload": {
     "additionalProperties": false,
     "description": "USB 虚拟串口 + AT 通道配置。",
@@ -9670,8 +10046,11 @@
    },
    "SmsConfigPayload": {
     "additionalProperties": false,
-    "description": "Canonical 双通道配置，并兼容一期 Alarm 页平铺字段。",
+    "description": "Canonical 多通道配置，并兼容一期 Alarm 页平铺字段。",
     "properties": {
+     "aliyun": {
+      "$ref": "#/components/schemas/SmsAliyunPayload"
+     },
      "at_modem": {
       "$ref": "#/components/schemas/SmsAtModemPayload"
      },
@@ -9748,7 +10127,10 @@
       "default": "at_modem",
       "enum": [
        "at_modem",
-       "generic_http"
+       "generic_http",
+       "wxpusher",
+       "aliyun",
+       "tencent"
       ],
       "title": "Provider",
       "type": "string"
@@ -9798,12 +10180,50 @@
       "title": "Retry Delay Seconds",
       "type": "number"
      },
+     "send_night_window": {
+      "default": false,
+      "description": "班次模式下是否额外发送晚班窗（结束小时～次日开始小时）",
+      "title": "Send Night Window",
+      "type": "boolean"
+     },
+     "shift_end_hour": {
+      "default": 20,
+      "description": "班次结束小时（到点发送）",
+      "maximum": 23.0,
+      "minimum": 0.0,
+      "title": "Shift End Hour",
+      "type": "integer"
+     },
+     "shift_start_hour": {
+      "default": 8,
+      "description": "班次开始小时",
+      "maximum": 23.0,
+      "minimum": 0.0,
+      "title": "Shift Start Hour",
+      "type": "integer"
+     },
+     "summary_schedule_mode": {
+      "default": "rolling_12h",
+      "description": "rolling_12h=滚动12小时；daily_shift=班次（默认早八到晚八）",
+      "enum": [
+       "rolling_12h",
+       "daily_shift"
+      ],
+      "title": "Summary Schedule Mode",
+      "type": "string"
+     },
      "template": {
       "default": "【天军AI视觉】{device_name} {time_range} OK{ok_count} NG{ng_count}",
       "maxLength": 2000,
       "minLength": 1,
       "title": "Template",
       "type": "string"
+     },
+     "tencent": {
+      "$ref": "#/components/schemas/SmsTencentPayload"
+     },
+     "wxpusher": {
+      "$ref": "#/components/schemas/SmsWxpusherPayload"
      }
     },
     "title": "SmsConfigPayload",
@@ -9813,6 +10233,9 @@
     "additionalProperties": false,
     "description": "当前已生效的短信通知配置。",
     "properties": {
+     "aliyun": {
+      "$ref": "#/components/schemas/SmsAliyunPayload"
+     },
      "at_modem": {
       "$ref": "#/components/schemas/SmsAtModemPayload"
      },
@@ -9889,7 +10312,10 @@
       "default": "at_modem",
       "enum": [
        "at_modem",
-       "generic_http"
+       "generic_http",
+       "wxpusher",
+       "aliyun",
+       "tencent"
       ],
       "title": "Provider",
       "type": "string"
@@ -9939,12 +10365,50 @@
       "title": "Retry Delay Seconds",
       "type": "number"
      },
+     "send_night_window": {
+      "default": false,
+      "description": "班次模式下是否额外发送晚班窗（结束小时～次日开始小时）",
+      "title": "Send Night Window",
+      "type": "boolean"
+     },
+     "shift_end_hour": {
+      "default": 20,
+      "description": "班次结束小时（到点发送）",
+      "maximum": 23.0,
+      "minimum": 0.0,
+      "title": "Shift End Hour",
+      "type": "integer"
+     },
+     "shift_start_hour": {
+      "default": 8,
+      "description": "班次开始小时",
+      "maximum": 23.0,
+      "minimum": 0.0,
+      "title": "Shift Start Hour",
+      "type": "integer"
+     },
+     "summary_schedule_mode": {
+      "default": "rolling_12h",
+      "description": "rolling_12h=滚动12小时；daily_shift=班次（默认早八到晚八）",
+      "enum": [
+       "rolling_12h",
+       "daily_shift"
+      ],
+      "title": "Summary Schedule Mode",
+      "type": "string"
+     },
      "template": {
       "default": "【天军AI视觉】{device_name} {time_range} OK{ok_count} NG{ng_count}",
       "maxLength": 2000,
       "minLength": 1,
       "title": "Template",
       "type": "string"
+     },
+     "tencent": {
+      "$ref": "#/components/schemas/SmsTencentPayload"
+     },
+     "wxpusher": {
+      "$ref": "#/components/schemas/SmsWxpusherPayload"
      }
     },
     "title": "SmsConfigResponse",
@@ -10113,6 +10577,53 @@
     "title": "SmsQueueReceiptResponse",
     "type": "object"
    },
+   "SmsTencentPayload": {
+    "additionalProperties": false,
+    "description": "腾讯云官方云短信通道配置。",
+    "properties": {
+     "region": {
+      "default": "ap-guangzhou",
+      "maxLength": 64,
+      "title": "Region",
+      "type": "string"
+     },
+     "sdk_app_id": {
+      "default": "",
+      "description": "短信应用 SdkAppId",
+      "maxLength": 64,
+      "title": "Sdk App Id",
+      "type": "string"
+     },
+     "secret_id": {
+      "default": "",
+      "maxLength": 256,
+      "title": "Secret Id",
+      "type": "string"
+     },
+     "secret_key": {
+      "default": "",
+      "maxLength": 512,
+      "title": "Secret Key",
+      "type": "string"
+     },
+     "sign_name": {
+      "default": "",
+      "description": "审核过的短信签名",
+      "maxLength": 200,
+      "title": "Sign Name",
+      "type": "string"
+     },
+     "template_id": {
+      "default": "",
+      "description": "审核过的模板 ID",
+      "maxLength": 100,
+      "title": "Template Id",
+      "type": "string"
+     }
+    },
+    "title": "SmsTencentPayload",
+    "type": "object"
+   },
    "SmsTestPayload": {
     "additionalProperties": false,
     "description": "后台测试发送请求。",
@@ -10148,6 +10659,71 @@
      }
     },
     "title": "SmsTestPayload",
+    "type": "object"
+   },
+   "SmsWxpusherPayload": {
+    "additionalProperties": false,
+    "description": "WxPusher 微信推送通道配置。",
+    "properties": {
+     "api_url": {
+      "default": "https://wxpusher.zjiecode.com/api/send/message",
+      "maxLength": 2000,
+      "title": "Api Url",
+      "type": "string"
+     },
+     "app_token": {
+      "default": "",
+      "maxLength": 512,
+      "title": "App Token",
+      "type": "string"
+     },
+     "content_type": {
+      "default": 1,
+      "enum": [
+       1,
+       2,
+       3
+      ],
+      "title": "Content Type",
+      "type": "integer"
+     },
+     "summary_template": {
+      "default": "【天军AI视觉】{time_range} OK={ok_count} NG={ng_count}",
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Summary Template",
+      "type": "string"
+     },
+     "timeout_seconds": {
+      "default": 10.0,
+      "maximum": 120.0,
+      "minimum": 0.5,
+      "title": "Timeout Seconds",
+      "type": "number"
+     },
+     "topic_ids": {
+      "items": {
+       "type": "integer"
+      },
+      "maxItems": 20,
+      "title": "Topic Ids",
+      "type": "array"
+     },
+     "uids": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 50,
+      "title": "Uids",
+      "type": "array"
+     },
+     "verify_ssl": {
+      "default": true,
+      "title": "Verify Ssl",
+      "type": "boolean"
+     }
+    },
+    "title": "SmsWxpusherPayload",
     "type": "object"
    },
    "SplashCameraRequest": {
@@ -25814,6 +26390,420 @@
     "tags": [
      "WMax Scanner",
      "WMax Scanner"
+    ]
+   }
+  },
+  "/api/v1/sms-report/providers": {
+   "get": {
+    "description": "统一通道清单 + 当前生效通道 (来自共享 sms_config.json)。",
+    "operationId": "read_providers_api_v1_sms_report_providers_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Read Providers",
+    "tags": [
+     "sms-report"
+    ]
+   }
+  },
+  "/api/v1/sms-report/rules": {
+   "get": {
+    "operationId": "list_rules_api_v1_sms_report_rules_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "enabled",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Enabled"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "List Rules",
+    "tags": [
+     "sms-report"
+    ]
+   },
+   "post": {
+    "operationId": "create_rule_api_v1_sms_report_rules_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RuleCreate3"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Create Rule",
+    "tags": [
+     "sms-report"
+    ]
+   }
+  },
+  "/api/v1/sms-report/rules/{rule_id}": {
+   "delete": {
+    "operationId": "delete_rule_api_v1_sms_report_rules__rule_id__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Delete Rule",
+    "tags": [
+     "sms-report"
+    ]
+   },
+   "get": {
+    "operationId": "get_rule_api_v1_sms_report_rules__rule_id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Rule",
+    "tags": [
+     "sms-report"
+    ]
+   },
+   "put": {
+    "operationId": "update_rule_api_v1_sms_report_rules__rule_id__put",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RuleUpdate3"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Update Rule",
+    "tags": [
+     "sms-report"
+    ]
+   }
+  },
+  "/api/v1/sms-report/rules/{rule_id}/logs": {
+   "get": {
+    "operationId": "rule_logs_api_v1_sms_report_rules__rule_id__logs_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "maximum": 500,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Rule Logs",
+    "tags": [
+     "sms-report"
+    ]
+   }
+  },
+  "/api/v1/sms-report/rules/{rule_id}/preview": {
+   "post": {
+    "operationId": "preview_rule_api_v1_sms_report_rules__rule_id__preview_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Preview Rule",
+    "tags": [
+     "sms-report"
+    ]
+   }
+  },
+  "/api/v1/sms-report/rules/{rule_id}/test-send": {
+   "post": {
+    "operationId": "test_send_api_v1_sms_report_rules__rule_id__test_send_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     },
+     {
+      "description": "true = 走 mock 适配器不发真短信",
+      "in": "query",
+      "name": "use_mock",
+      "required": false,
+      "schema": {
+       "default": false,
+       "description": "true = 走 mock 适配器不发真短信",
+       "title": "Use Mock",
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Test Send",
+    "tags": [
+     "sms-report"
+    ]
+   }
+  },
+  "/api/v1/sms-report/rules/{rule_id}/toggle": {
+   "post": {
+    "operationId": "toggle_rule_api_v1_sms_report_rules__rule_id__toggle_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Toggle Rule",
+    "tags": [
+     "sms-report"
     ]
    }
   },

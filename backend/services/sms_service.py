@@ -23,13 +23,13 @@ from backend.core.config import DATA_DIR
 from backend.services.sms_at_client import SerialConfig
 from backend.services.sms_modem import DiagnosticReport, SmsModem
 from backend.services.sms_offline_queue import SmsOfflineQueue
-from backend.services.sms_providers.at_modem_provider import AtModemProvider
-from backend.services.sms_providers.base_provider import RecipientResult, SmsBatchResult
-from backend.services.sms_providers.generic_http_provider import GenericHttpProvider
-from backend.services.sms_providers.wxpusher_provider import (
-    WxpusherProvider,
-    wxpusher_target_labels,
+from backend.services.sms_providers import create_provider
+from backend.services.sms_providers.base_provider import (
+    RecipientResult,
+    SmsBatchResult,
+    SmsProvider,
 )
+from backend.services.sms_providers.wxpusher_provider import wxpusher_target_labels
 from backend.services.sms_summary import (
     SMS_SUMMARY_STATE_FILENAME,
     SUMMARY_WINDOW_SECONDS,
@@ -87,7 +87,9 @@ class SmsServiceConfig:
     """多通道不可变运行时配置；保留 AT 平铺字段兼容一期调用方。"""
 
     enabled: bool = False
-    provider: Literal["at_modem", "generic_http", "wxpusher"] = "at_modem"
+    provider: Literal[
+        "at_modem", "generic_http", "wxpusher", "aliyun", "tencent"
+    ] = "at_modem"
 
     # at_modem（一期兼容字段）
     port: str = ""
@@ -119,6 +121,21 @@ class SmsServiceConfig:
     wxpusher_api_url: str = "https://wxpusher.zjiecode.com/api/send/message"
     wxpusher_timeout_seconds: float = 10.0
     wxpusher_verify_ssl: bool = True
+
+    # aliyun（官方云短信；审核签名 + 审核模板 + 命名变量）
+    aliyun_access_key_id: str = ""
+    aliyun_access_key_secret: str = ""
+    aliyun_sign_name: str = ""
+    aliyun_template_code: str = ""
+    aliyun_region: str = "cn-hangzhou"
+
+    # tencent（官方云短信；审核签名 + 审核模板 + 位置变量）
+    tencent_secret_id: str = ""
+    tencent_secret_key: str = ""
+    tencent_sdk_app_id: str = ""
+    tencent_sign_name: str = ""
+    tencent_template_id: str = ""
+    tencent_region: str = "ap-guangzhou"
 
     # 各通道共用
     retries: int = 3
@@ -230,9 +247,7 @@ class SmsService:
             else (Path(DATA_DIR) / SMS_OFFLINE_QUEUE_FILENAME)
         )
         self._offline_queue: SmsOfflineQueue | None = None
-        self._provider: AtModemProvider | GenericHttpProvider | WxpusherProvider | None = (
-            None
-        )
+        self._provider: SmsProvider | None = None
         self._provider_job_context: _AlarmJob | None = None
         self._queue: queue.Queue[_AlarmJob] = queue.Queue(
             maxsize=max(1, config.queue_size)
@@ -930,7 +945,7 @@ class SmsService:
             )
 
     def _supports_offline_queue(self) -> bool:
-        return self.config.provider in {"generic_http", "wxpusher"}
+        return self.config.provider in {"generic_http", "wxpusher", "aliyun", "tencent"}
 
     def _resolve_delivery_targets(
         self, recipients: Sequence[str] | str | None
@@ -969,6 +984,30 @@ class SmsService:
             if not self.config.wxpusher_api_url.strip():
                 raise ValueError("未配置 WxPusher API URL")
             return
+        if self.config.provider == "aliyun":
+            if not (
+                self.config.aliyun_access_key_id.strip()
+                and self.config.aliyun_access_key_secret.strip()
+            ):
+                raise ValueError("未配置阿里云 AccessKey")
+            if not self.config.aliyun_sign_name.strip():
+                raise ValueError("未配置阿里云短信签名")
+            if not self.config.aliyun_template_code.strip():
+                raise ValueError("未配置阿里云模板 code")
+            return
+        if self.config.provider == "tencent":
+            if not (
+                self.config.tencent_secret_id.strip()
+                and self.config.tencent_secret_key.strip()
+            ):
+                raise ValueError("未配置腾讯云 SecretId/SecretKey")
+            if not self.config.tencent_sdk_app_id.strip():
+                raise ValueError("未配置腾讯云短信应用 SdkAppId")
+            if not self.config.tencent_sign_name.strip():
+                raise ValueError("未配置腾讯云短信签名")
+            if not self.config.tencent_template_id.strip():
+                raise ValueError("未配置腾讯云模板 ID")
+            return
         raise ValueError(f"不支持的短信 Provider：{self.config.provider}")
 
     def _new_modem(self) -> SmsModem:
@@ -978,37 +1017,17 @@ class SmsService:
             serial_factory=self._serial_factory,
         )
 
-    def _get_provider(
-        self,
-    ) -> AtModemProvider | GenericHttpProvider | WxpusherProvider:
+    def _get_provider(self) -> SmsProvider:
         with self._state_lock:
             if self._provider is not None:
                 return self._provider
-            if self.config.provider == "at_modem":
-                provider: AtModemProvider | GenericHttpProvider | WxpusherProvider = (
-                    AtModemProvider(
-                        self.config,
-                        modem_factory=self._new_modem,
-                        logger=self._logger,
-                        stop_event=self._stop_event,
-                    )
-                )
-            elif self.config.provider == "generic_http":
-                provider = GenericHttpProvider(
-                    self.config,
-                    request_func=self._http_request,
-                    logger=self._logger,
-                    stop_event=self._stop_event,
-                )
-            elif self.config.provider == "wxpusher":
-                provider = WxpusherProvider(
-                    self.config,
-                    request_func=self._http_request,
-                    logger=self._logger,
-                    stop_event=self._stop_event,
-                )
-            else:
-                raise ValueError(f"不支持的短信 Provider：{self.config.provider}")
+            provider = create_provider(
+                self.config,
+                request_func=self._http_request,
+                logger=self._logger,
+                stop_event=self._stop_event,
+                modem_factory=self._new_modem,
+            )
             self._provider = provider
             return provider
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.46.0 (2026-08-05)
+
+> 主题：**主程序原生短信/微信通知栈**（NG 12h 汇总 + 每日短信日报，统一系统级五通道 at_modem/generic_http/wxpusher/aliyun/tencent，默认全关 = 存量零差异）+ **推理设备 auto 档支持 Apple MPS**。短信栈自 `feat/jinlong` 吸收（含 dev-qing NG 通知栈合流），`sms_adapters` 平行实现已删。
+
+- [FEAT-001] 新增: NG 短信/微信推送通知（12h 汇总，默认关）——五通道工厂、滚动 12h（冷启动重锚）/班次调度二选一、不进检测热路径只读已落库结算周期、HTTP 类离线队列重试、报警页配置卡与灯塔完全隔离（独立配置/COM/线程）
+- [FEAT-002] 新增: 每日短信日报——规则 CRUD/cron 调度/预览/mock 试发/逐号日志三表 + 计数器当日增量台账（counter_daily）+ 云模板/内容式正文双轨（迁移 m0006）+ 数据中心对话框 + 插件 hook daily_report_before_send
+- [FEAT-003] 工程: 统一短信通道层——日报改走 sms_providers 工厂 + 共享 sms_config.json，删 sms_adapters 平行实现；中转方案改 generic_http 字段映射（scripts/sms_relay 示例）
+- [FEAT-004] 新增: 推理设备 auto 档支持 Apple MPS（cuda > mps > cpu）——backend/core/torch_device 统一出口，MPS 强制 FP32，实测 yolov8n@640 168 vs 26 FPS
+- [FEAT-005] 新增: 独立 AT 短信猫调试工具 tools/sms_4g（脱离主程序排硬件）
+- [SKILL-001] 新建 debug-sms skill + api-sync 真相表 30→32 组 + debug-alarm 短信边界 + merge-branch v0.2（吸收完成定义 A1-A5 + 伪完成案例库）
+- [TEST-001] 回归护栏: 短信栈单元/集成 106 例 + 浏览器 E2E 14 例 + 可见浏览器 UAT 8/8（证据 tests/uat/sms_report_20260804_174036/）
+
 ## v3.45.0 (2026-07-29)
 
 > 主题：**上银 SY 包装线热补丁收编（0a~0e）+ 箱标签扫码授权 + 包装工单同步进工单管理 + 萍乡百斯特称重整改批次 + 海康 SDK 帧率可配**——上银 7-23~7-28 五个热补丁批次（滑块记账体系重做，双真实视频回归：正常 4 箱全 96/96 合格、少装 4 箱全 NG 零误判）全部收编主线；箱标签扫码授权（组⑧，逐箱扫码定数量）；包装工单镜像进工单管理页；萍乡称重四修复（清秤指令智能选择/过程提醒档不刷 NG/网关推送异步化/达梦时间戳溢出）；dev-qing 逐件修复合入。

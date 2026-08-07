@@ -46,6 +46,16 @@
 | **上下游** | 被 main.py、database、所有需要 DATA_DIR 的模块引用 |
 | **注释坑** | L56-59 历史文档误称 ml_models；L154 `_migrate_old_data()` import 即跑，测试需设 `TIANJUN_DATA_DIR` 隔离 |
 
+#### `backend/core/torch_device.py`（55 行，v3.46 新增）
+
+| 维度 | 内容 |
+|---|---|
+| **职责** | 推理设备 auto 档统一出口：`resolve_auto_device()` 按 cuda > mps > cpu 解析；MPS 缓存清理/同步封装 |
+| **核心函数** | `resolve_auto_device()`；`empty_mps_cache()`；`synchronize_mps()`（均容错，torch 缺失/无 MPS 返回安全值） |
+| **线程锁** | 无 |
+| **上下游** | 被 `channel_manager._resolve_device`、`source.py` GPU reset/同步点、`source_lifecycle_mixin`、`source_model_load_mixin`（主+slot 加载）、`source_mediapipe`（二段检测）调用 |
+| **注释坑** | MPS 上强制 FP32——`half` 仍仅 CUDA；Apple Silicon 实测 yolov8n@640 MPS 168 FPS vs CPU 26 FPS |
+
 #### `backend/api/router_manifest.py`（~112 行）
 
 | 维度 | 内容 |
@@ -82,6 +92,7 @@
 | **上下游** | 持有 `Dict[int, VideoSourceManager]`；被 source_routes、main 启动恢复、alarm/MES 路由引用 |
 | **状态变量** | `channel_count`、`channels`、`workstation_config.json` 各段（sources/gpu/auto_resume 等） |
 | **注释坑** | L118-144 降工位必须调 4 个 on_channel_removed，缺一不可（AGENTS 不变量 4）；**禁止整写 workstation_config.json** |
+| **v3.46 变更** | `_resolve_device()` auto 档改走 `backend/core/torch_device.resolve_auto_device()`（cuda > mps > cpu，Apple Silicon 不再静默落 CPU） |
 
 #### `backend/api/alarm.py`（1067 行）
 
@@ -143,6 +154,7 @@
 | **保留在主类** | L549-745 PT 锚点/累加；L746 `_backfill_step_records()` 结算补落账；L910 `_reset_counting_cycle()`；L1111-1152 推理线程启停；L1395 `_clear_step_runtime_state()`；L1472/L1578 start/stop_detection；L1687 reset_stats；L1831+ generate_mjpeg（与 streaming_mixin 重复实现，主类版含 debug 埋点） |
 | **线程锁** | `frame_lock` / `capture_lock` / `_progress_lock` / `detection_lock`（`__init__` 内创建）；v3.32 起另有 `_inference_start_lock`（见下） |
 | **v3.3x 变更** | v3.32.0 收尾（TP 频闪真因）：`_start_inference_thread` L1111 加启动锁 + 线程代数——无锁的"检查-启动"两步被并发调用（采集自启 + resume 恢复）会各起一条推理线程，双线程交替发布"有结果/空结果"就是前端标注框逐帧频闪的真因；代数写进线程循环条件，`_stop_inference_thread` L1134 先作废代数再放倒运行标志，僵尸线程下轮自行退出。v3.32.0：MediaPipe 关键点颜色与连线颜色分开配（`mediapipe_pose_point_color` / `mediapipe_hands_point_color`，空 = 跟随连线色，L365-369）。v3.35：`_clear_step_runtime_state` 末尾清称重步骤门控残留（配了 `step_device_gates` 时调引擎 reset_gates，L1452-1459，防跨启停/强制结算残留卡步骤）。v3.38：`_backfill_step_records` 已记录步骤改读本地缓存 `cycle_step_records` 不再查库——step 插入进了落库线程，同步查库只能看到滞后快照、会重复补写；"周期进行中"守门统一改看 `current_cycle_uuid`（id 由落库作业回填）。v3.43：`is_packaging_paper_order_covered`（L1206）扩成查四处——`_last_cycle_steps` / `current_cycle_steps` / **`_oos_steps_seen` 序列外步骤旁路账本（当前代）** / `_last_oos_steps_seen`（上一代）；顺序/自定义-基于顺序模式下"放工单"是序列外检测步骤，永远进不了前两处（FIX-381 拦截），只有旁路账本看得见它——之前 gate 因此永不放行。旁路账本在 `_clear_step_runtime_state` 两代一起清（防跨启停残影放行）；`_pending_ack` 清理点配套清 `_pending_ack_reason`。v3.45（0a~0e 收编）：`__init__` 增 `_video_hold`（待机视频播放冻结标记，L377）；`_clear_step_runtime_state` 消费 `_ack_clear_runtime_after` 单次标记（L1441）并配套清缺步补做挂起 `_pending_remediation`（L1494，只清定格不清挂起会留"幽灵挂起"，下次无关确认被误路由到 redo 清掉在制周期）；`stop_detection` 先把收尾防呆挂起箱账按 NG 落账（`_finalize_settle_hold_ng('停止检测, 补做窗口关闭')`，L1618）再清运行态——治 7-27 视频 EOF 自动停检测时末箱 92/96 账目静默蒸发；`_clear_inference_caches` 加 `keep_cycle` 形参（L1685，待机专用：只清帧级缓存保留周期序列/箱内台账/挂起态/确认态，停止/切项目仍全清） |
+| **v3.46 变更** | GPU reset / 推理线程停机同步 / 缓存清理三处从 CUDA-only 扩到 MPS：非 CUDA 分支调 `torch_device.synchronize_mps()` / `empty_mps_cache()`（Apple Silicon 开发机同路径可跑） |
 | **注释坑** | proxy 仅 ch0 默认（L1990 附近）；多通道必须 `channel_manager.get(ch)`；RenderMixin/StreamingMixin 已抽出但主类仍保留部分方法 |
 
 #### `backend/api/source_routes.py`（2352 行，v3.43 复核）
@@ -177,7 +189,7 @@
 | `source_step_stats_mixin.py` | 786 | 每帧步骤状态机主入口 | **`_update_step_stats` L60** | 无 |
 | `source_capture_loop_mixin.py` | 447 | 采集线程循环（v3.41.1 相机重连后回放曝光设置，见表下注） | `_capture_loop` | capture_lock/frame_lock |
 | `source_event_trigger_mixin.py` | 716 | 事件中心 | **`_trigger_event` L64** → end_cycle | 无 |
-| `source_model_load_mixin.py` | 652 | YOLO/TRT 加载 | `load_model` L56+ | router.gpu_lock/warmup_lock |
+| `source_model_load_mixin.py` | 664 | YOLO/TRT 加载（v3.46 主+slot 加载 auto 档走 `torch_device`，MPS 强制 FP32、预热扩到 MPS） | `load_model` L56+ | router.gpu_lock/warmup_lock |
 | `source_check_modes_mixin.py` | 24 | 聚合 4 子 mixin | 空壳多继承 L17-23 | — |
 | `source_container_grouping_mixin.py` | 755 | 容器分组 per-box 结算 | `_settle_box` L476/483 `_trigger_event(1/2)` | — |
 | `source_checklist_mixin.py` | 309 | counting 模式 checklist | `_settle_counting_cycle` L60+ | `_settle_lock` RLock |

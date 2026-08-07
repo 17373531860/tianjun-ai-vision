@@ -115,16 +115,59 @@ class SmsWxpusherPayload(BaseModel):
         return value
 
 
+class SmsAliyunPayload(BaseModel):
+    """阿里云官方云短信通道配置。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    access_key_id: str = Field("", max_length=256)
+    access_key_secret: str = Field("", max_length=512)
+    sign_name: str = Field("", max_length=200, description="审核过的短信签名")
+    template_code: str = Field("", max_length=100, description="审核过的模板 code")
+    region: str = Field("cn-hangzhou", max_length=64)
+
+    @field_validator(
+        "access_key_id", "access_key_secret", "sign_name", "template_code", "region"
+    )
+    @classmethod
+    def strip_strings(cls, value: str) -> str:
+        return value.strip()
+
+
+class SmsTencentPayload(BaseModel):
+    """腾讯云官方云短信通道配置。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    secret_id: str = Field("", max_length=256)
+    secret_key: str = Field("", max_length=512)
+    sdk_app_id: str = Field("", max_length=64, description="短信应用 SdkAppId")
+    sign_name: str = Field("", max_length=200, description="审核过的短信签名")
+    template_id: str = Field("", max_length=100, description="审核过的模板 ID")
+    region: str = Field("ap-guangzhou", max_length=64)
+
+    @field_validator(
+        "secret_id", "secret_key", "sdk_app_id", "sign_name", "template_id", "region"
+    )
+    @classmethod
+    def strip_strings(cls, value: str) -> str:
+        return value.strip()
+
+
 class SmsConfigPayload(BaseModel):
     """Canonical 多通道配置，并兼容一期 Alarm 页平铺字段。"""
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(False, description="NG 短信推送总开关，默认关闭")
-    provider: Literal["at_modem", "generic_http", "wxpusher"] = "at_modem"
+    provider: Literal[
+        "at_modem", "generic_http", "wxpusher", "aliyun", "tencent"
+    ] = "at_modem"
     at_modem: SmsAtModemPayload = Field(default_factory=SmsAtModemPayload)
     generic_http: SmsGenericHttpPayload = Field(default_factory=SmsGenericHttpPayload)
     wxpusher: SmsWxpusherPayload = Field(default_factory=SmsWxpusherPayload)
+    aliyun: SmsAliyunPayload = Field(default_factory=SmsAliyunPayload)
+    tencent: SmsTencentPayload = Field(default_factory=SmsTencentPayload)
     phone_numbers: list[str] = Field(default_factory=list, max_length=20)
     retry_count: int = Field(3, ge=0, le=5)
     retry_backoff_seconds: list[float] = Field(
@@ -221,6 +264,8 @@ class SmsConfigPayload(BaseModel):
             "at_modem": self.at_modem.model_dump(),
             "generic_http": self.generic_http.model_dump(),
             "wxpusher": self.wxpusher.model_dump(),
+            "aliyun": self.aliyun.model_dump(),
+            "tencent": self.tencent.model_dump(),
             "phone_numbers": list(self.phone_numbers),
             "retry_count": self.retry_count,
             "retry_backoff_seconds": list(self.retry_backoff_seconds),
@@ -275,6 +320,21 @@ class SmsConfigPayload(BaseModel):
                 api_url=config.wxpusher_api_url,
                 timeout_seconds=config.wxpusher_timeout_seconds,
                 verify_ssl=config.wxpusher_verify_ssl,
+            ),
+            aliyun=SmsAliyunPayload(
+                access_key_id=config.aliyun_access_key_id,
+                access_key_secret=config.aliyun_access_key_secret,
+                sign_name=config.aliyun_sign_name,
+                template_code=config.aliyun_template_code,
+                region=config.aliyun_region,
+            ),
+            tencent=SmsTencentPayload(
+                secret_id=config.tencent_secret_id,
+                secret_key=config.tencent_secret_key,
+                sdk_app_id=config.tencent_sdk_app_id,
+                sign_name=config.tencent_sign_name,
+                template_id=config.tencent_template_id,
+                region=config.tencent_region,
             ),
             phone_numbers=list(config.recipients),
             retry_count=config.retries,

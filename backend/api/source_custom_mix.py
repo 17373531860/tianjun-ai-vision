@@ -929,11 +929,18 @@ class _ContainerAccumulator:
                 for lbl in t.keys():
                     if lbl and lbl not in disp_labels:
                         disp_labels.append(lbl)
+        # v3.44.6 预计进箱值: 与记账取值规则严格同源 (稳定快照优先, 无稳定值退
+        # 峰值, 见 update step5 的 book_val = 快照 or peak) — 开了"动作前稳定
+        # 计数"后记账不再等于峰值, 操作员在卡片上要能提前看到"这盘会记几个"。
+        stable = {}
+        if self.stable_min_frames > 0 and self._primary is not None:
+            stable = self._trays.get(self._primary, {}).get('stable', {}) or {}
         cur_items = [{
             'label': lbl,
             'display_name': dm.get(lbl, lbl),
             'current_count': cur.get(lbl, 0),     # 当帧实时数 (展示主数字)
-            'peak_count': peak.get(lbl, 0),       # 当前托盘在位峰值 (= 进箱将记的值, 参考)
+            'peak_count': peak.get(lbl, 0),       # 当前托盘在位峰值 (参考)
+            'book_preview': stable.get(lbl) or peak.get(lbl, 0),  # 预计进箱记的值
             'expected_per_tray': self.item_expected.get(lbl, 0),
         } for lbl in disp_labels]
         state = {

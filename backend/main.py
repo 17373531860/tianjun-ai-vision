@@ -44,6 +44,8 @@ from backend.models import auth_models  # noqa: F401
 from backend.models import mes_models as _mes_models  # noqa: F401
 # 原生称重投料模式逐件记录表 (6.1 台账持久化, 重启不丢)
 from backend.models import weighing_models as _weighing_models  # noqa: F401
+# 每日短信日报: SmsReportRule/SmsSendLog/CounterDailyStat 三张表
+from backend.models import notify_models as _notify_models  # noqa: F401
 # 路由挂载统一走 router_manifest（OVERLAP-3 治理）; 这里只保留非路由用途的 import
 from backend.api.router_manifest import mount_all_routers
 from backend.api.source import get_video_manager
@@ -915,6 +917,18 @@ def cleanup_on_exit():
         except Exception as _e:
             print(f"[Shutdown] 停止定时导出调度器异常（已忽略）: {_e}", flush=True)
 
+        # 短信日报: 停调度器 + 计数器日增量最后一次刷盘
+        try:
+            from backend.services.sms_report import stop_scheduler as _stop_sms_scheduler
+            _stop_sms_scheduler()
+        except Exception as _e:
+            print(f"[Shutdown] 停止短信日报调度器异常（已忽略）: {_e}", flush=True)
+        try:
+            from backend.services.counter_daily import stop as _stop_counter_daily
+            _stop_counter_daily()
+        except Exception as _e:
+            print(f"[Shutdown] 计数器日增量刷盘异常（已忽略）: {_e}", flush=True)
+
         # A2 停止出站健康探测调度器
         try:
             from backend.services.mes_health_probe import stop_health_probe
@@ -1107,6 +1121,20 @@ def _start_scheduled_export():
 
 
 _start_scheduled_export()
+
+
+# 每日短信日报 — 独立 APScheduler, 与定时导出同范式 (无 enabled 规则时零开销)。
+def _start_sms_report():
+    if os.environ.get("BACKEND_SKIP_INIT"):
+        return
+    try:
+        from backend.services.sms_report import start_scheduler as _start_sms_scheduler
+        _start_sms_scheduler()
+    except Exception as e:
+        print(f"[SmsReport] 短信日报调度启动失败 (已隔离, 主程序继续): {e}")
+
+
+_start_sms_report()
 
 
 # 出站 MES 连接主动健康探测调度器 (A2): 后台周期探活, 配置驱动 (默认全关零开销)。

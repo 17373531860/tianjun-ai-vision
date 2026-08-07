@@ -54,6 +54,66 @@
         <span v-else class="text-xs text-gray-500 ml-2">单工位选工位 1 即可</span>
       </el-form-item>
 
+      <el-form-item v-if="form.usage === 'bind' || form.usage === 'both'" label="绑定防呆">
+        <div class="flex items-center gap-6">
+          <div class="flex items-center gap-1.5">
+            <el-switch v-model="form.scanRequired" />
+            <span class="text-xs text-gray-300">先扫后检</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <el-switch v-model="form.warnNoBarcode" />
+            <span class="text-xs text-gray-300">无码告警</span>
+          </div>
+        </div>
+        <div class="text-xs text-gray-500 mt-1">
+          先扫后检 = 没扫工件码就不开始检测周期（追溯场景建议开）；无码告警 = 周期没绑到码时监控页弹提醒。只对"绑工件"的码生效。
+        </div>
+      </el-form-item>
+
+      <template v-if="form.usage === 'bind' || form.usage === 'both'">
+        <el-form-item label="重复扫码">
+          <el-select v-model="form.dupAction" class="w-72">
+            <el-option label="覆盖（默认）" value="overwrite" />
+            <el-option label="拒绝（已有待检码时忽略新码）" value="reject" />
+            <el-option label="排队（多件连扫依次检测）" value="queue" />
+          </el-select>
+          <div class="text-xs text-gray-500 mt-1">
+            已有待检工件时又扫了新码怎么办。与网络扫码器同一套策略。
+          </div>
+        </el-form-item>
+
+        <el-form-item label="去重间隔(秒)">
+          <el-input-number v-model="form.dedupSec" :min="0" :max="60" :precision="0" controls-position="right" class="w-32" />
+          <span class="text-xs text-gray-500 ml-3">同一条码在该秒数内重复扫到只算一次（防手抖连击）</span>
+        </el-form-item>
+
+        <el-form-item label="自动登记">
+          <div class="flex items-center gap-6">
+            <div class="flex items-center gap-1.5">
+              <el-switch v-model="form.autoCreate" />
+              <span class="text-xs text-gray-300">自动建工件</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <el-switch v-model="form.autoLink" />
+              <span class="text-xs text-gray-300">关联工单</span>
+            </div>
+          </div>
+          <div class="text-xs text-gray-500 mt-1">
+            自动建工件 = 扫到新码自动登记一枚工件并进检测链路（关掉则扫码不进 MES）；关联工单 = 登记时自动挂到当前进行中的工单。
+          </div>
+        </el-form-item>
+
+        <el-form-item label="OK 后同码冷却">
+          <el-input-number v-model="form.okCooldown" :min="0" :max="86400" :precision="0" controls-position="right" class="w-32" />
+          <span class="text-xs text-gray-500 ml-3">秒。刚检合格的工件在该时间内再次扫到同码时静默忽略（防搬运误扫），0 = 关闭</span>
+        </el-form-item>
+
+        <el-form-item label="迟到扫码补绑">
+          <el-input-number v-model="form.lateBind" :min="0" :max="60" :precision="0" controls-position="right" class="w-32" />
+          <span class="text-xs text-gray-500 ml-3">秒。周期刚结算完才扫到码时，自动补绑到刚结算的周期，0 = 关闭</span>
+        </el-form-item>
+      </template>
+
       <el-form-item v-if="form.usage === 'both'" label="工单号识别规则">
         <el-input v-model="form.orderPattern" placeholder="^(JOB|ORD)" class="w-72" />
         <div class="text-xs text-gray-500 mt-1">
@@ -128,7 +188,10 @@ watch(customStation, (v) => {
 })
 
 function emptyForm() {
-  return { name: '', enabled: true, usage: 'pull', pullConnId: null, bindChannelId: 0, orderPattern: '^(JOB|ORD)' }
+  return { name: '', enabled: true, usage: 'pull', pullConnId: null, bindChannelId: 0, orderPattern: '^(JOB|ORD)',
+           scanRequired: false, warnNoBarcode: false,
+           dupAction: 'overwrite', dedupSec: 2, autoCreate: true, autoLink: true,
+           okCooldown: 0, lateBind: 3 }
 }
 const form = ref(emptyForm())
 
@@ -148,6 +211,14 @@ function loadFromDev(dev) {
     pullConnId: u.pull_conn_id ?? null,
     bindChannelId: ch,
     orderPattern: u.order_pattern || '^(JOB|ORD)',
+    scanRequired: dev.scan_required === true,
+    warnNoBarcode: dev.warn_no_barcode === true,
+    dupAction: dev.duplicate_scan_action || 'overwrite',
+    dedupSec: dev.dedup_interval_sec ?? 2,
+    autoCreate: dev.auto_create_workpiece !== false,
+    autoLink: dev.auto_link_order !== false,
+    okCooldown: dev.ok_rescan_cooldown_sec ?? 0,
+    lateBind: dev.late_scan_bind_window_sec ?? 3,
   }
   // 落库工位号超内置 1-4 → 自动进自定义态回填
   customMode.value = ch > 3
@@ -165,6 +236,16 @@ function buildPayload() {
     port: 0,
     channel_id: form.value.bindChannelId || 0,
     enabled: form.value.enabled,
+    // 绑定防呆两开关只对"绑工件"类用途有意义, 其他用途落库一律置 false
+    scan_required: (form.value.usage === 'bind' || form.value.usage === 'both') && form.value.scanRequired,
+    warn_no_barcode: (form.value.usage === 'bind' || form.value.usage === 'both') && form.value.warnNoBarcode,
+    // v3.46 与网络扫码器对齐的绑定行为参数 (仅绑工件链路消费, 拉工单/确认按钮不受影响)
+    duplicate_scan_action: form.value.dupAction || 'overwrite',
+    dedup_interval_sec: Math.max(0, Number(form.value.dedupSec) || 0),
+    auto_create_workpiece: form.value.autoCreate !== false,
+    auto_link_order: form.value.autoLink !== false,
+    ok_rescan_cooldown_sec: Math.max(0, Number(form.value.okCooldown) || 0),
+    late_scan_bind_window_sec: Math.max(0, Number(form.value.lateBind) || 0),
     parse_mode: 'direct',
     parse_config: {
       usb: {

@@ -58,6 +58,7 @@ GROUP_BOX = "box"
 GROUP_LIVE = "live"
 GROUP_LIVE_TRACKING = "live_tracking"
 GROUP_COUNTERS = "counters"
+GROUP_COUNTERS_DAILY = "counters_daily"
 GROUP_MES = "mes"
 GROUP_SCANNER = "scanner"
 GROUP_STATS = "stats"
@@ -83,6 +84,7 @@ GROUP_LABELS: Dict[str, str] = {
     GROUP_LIVE: "实时检测",
     GROUP_LIVE_TRACKING: "实时追踪状态",
     GROUP_COUNTERS: "计数器",
+    GROUP_COUNTERS_DAILY: "计数器(当日增量)",
     GROUP_MES: "MES 上下文",
     GROUP_SCANNER: "扫码/外设",
     GROUP_STATS: "Session 聚合统计",
@@ -97,7 +99,7 @@ GROUPS_DISPLAY_ORDER: List[str] = [
     GROUP_SESSION, GROUP_CYCLE, GROUP_STEPS, GROUP_DEFECTS,
     GROUP_WORKPIECE, GROUP_WORK_ORDER, GROUP_OPERATOR,
     GROUP_BOX, GROUP_SCANNER, GROUP_MES,
-    GROUP_LIVE, GROUP_LIVE_TRACKING, GROUP_COUNTERS,
+    GROUP_LIVE, GROUP_LIVE_TRACKING, GROUP_COUNTERS, GROUP_COUNTERS_DAILY,
     GROUP_STATS, GROUP_AGGREGATIONS,
 ]
 
@@ -647,6 +649,21 @@ _GROUP_COUNTERS_FIELDS: List[FieldDef] = [
 
 
 # ============================================================
+# counters_daily.{name}  （计数器按日增量 — 短信日报/日维度报表用）
+# ============================================================
+_GROUP_COUNTERS_DAILY_FIELDS: List[FieldDef] = [
+    _f("counters_daily.{name}", "计数器当日增量(按名访问)", TYPE_DICT_KV, GROUP_COUNTERS_DAILY,
+       "{{ counters_daily['合格总数'] }}",
+       "来源 counter_daily_stats 台账; 只累计正向增量, 清零/重置不扣减",
+       sources=["range"]),
+    _f("counters_daily._all", "所有计数器当日增量(dict)", TYPE_DICT, GROUP_COUNTERS_DAILY,
+       "{合格总数: 120, NG步骤: 3}", sources=["range"]),
+    _f("counters_daily._keys", "当日有增量的计数器名列表", TYPE_LIST, GROUP_COUNTERS_DAILY,
+       "['合格总数', 'NG步骤']", sources=["range"]),
+]
+
+
+# ============================================================
 # mes.* （cycle_end 上下文里的 MES 子树）
 # ============================================================
 _GROUP_MES_FIELDS: List[FieldDef] = [
@@ -762,6 +779,7 @@ ALL_FIELDS: List[FieldDef] = (
     + _GROUP_LIVE_FIELDS
     + _GROUP_LIVE_TRACKING_FIELDS
     + _GROUP_COUNTERS_FIELDS
+    + _GROUP_COUNTERS_DAILY_FIELDS
     + _GROUP_MES_FIELDS
     + _GROUP_STATS_FIELDS
     + _GROUP_AGGREGATIONS_FIELDS

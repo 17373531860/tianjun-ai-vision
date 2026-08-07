@@ -79,6 +79,7 @@ def test_returnable_whitelist_hooks_match_contract():
     首批 3 个 (M1.2c): pre_cycle_end / step_change / event_fire.
     v3.14 RFC 11 串行流水线追加 5 个:
       workpiece_flow_{enter, station_done, completed, timeout, short_circuit}.
+    v3.46 每日短信日报追加 1 个: daily_report_before_send.
     """
     from backend.plugin_system.hook_dispatch import RETURNABLE_HOOK_FIELDS
 
@@ -91,6 +92,7 @@ def test_returnable_whitelist_hooks_match_contract():
         "workpiece_flow_completed",
         "workpiece_flow_timeout",
         "workpiece_flow_short_circuit",
+        "daily_report_before_send",
     }, "returnable 白名单 hook 集合变了, 同步更新 RFC 09 + 本测试"
 
 

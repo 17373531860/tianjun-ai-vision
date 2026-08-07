@@ -242,6 +242,8 @@ class EventTriggerMixin:
                     
                     self.counters['NG步骤'] += ng_step_count
                     print(f"  NG step count += {ng_step_count} => {self.counters['NG步骤']} (reason: {reason})")
+                    from backend.services.counter_daily import record_for_host
+                    record_for_host(self, 'NG步骤', ng_step_count)
                     self._persist_counters()
         
         # NG TOP3: count unique cycles per step (each step counted at most once per NG cycle)
@@ -312,6 +314,8 @@ class EventTriggerMixin:
                 self.counters[counter_name] += value
                 counters_changed = True
                 print(f"  counter {counter_name} += {value} => {self.counters[counter_name]}")
+                from backend.services.counter_daily import record_for_host
+                record_for_host(self, counter_name, value)
         if counters_changed:
             self._persist_counters()
         
@@ -475,6 +479,8 @@ class EventTriggerMixin:
                 if counter_name in self.counters:
                     self.counters[counter_name] += value
                     counters_changed = True
+                    from backend.services.counter_daily import record_for_host
+                    record_for_host(self, counter_name, value)
             if counters_changed:
                 try:
                     self._persist_counters()

@@ -20,6 +20,7 @@
 | `workpiece_flow_completed` | 流水线完成 | `override_final_result` |
 | `workpiece_flow_timeout` | 流水线超时 | `override_timeout_action` |
 | `workpiece_flow_short_circuit` | 短路 | — |
+| `daily_report_before_send` | 短信日报每 scope 发送前 (v3.46) | `override_params`, `override_phone_numbers`, `skip_send` |
 | `startup` / `shutdown` | 插件启停 | — |
 
 注册：`registry.hooks.register(hook_type, handler, phase=, when=pre|post, priority=)`  

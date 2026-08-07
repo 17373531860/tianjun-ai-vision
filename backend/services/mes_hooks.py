@@ -297,7 +297,7 @@ class MESHookManager:
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
-            for conn in svc._connections.values():
+            for conn in self._iter_scan_configs(svc):
                 chs = (list(conn.broadcast_channels)
                        if conn.broadcast_channels
                        else [conn.channel_id])
@@ -612,6 +612,18 @@ class MESHookManager:
         channels = conn.broadcast_channels if conn.broadcast_channels else [conn.channel_id]
         return channel_id in channels
 
+    @staticmethod
+    def _iter_scan_configs(svc):
+        """遍历"按工位取扫码配置"时的全部来源: 网络扫码器连接 + USB 键盘枪配置记录。
+
+        v3.46 配置面对齐: usb_hid 不建网络连接, 配置载体在 svc._usb_devices。
+        网络连接在前, 保持既有优先级 (同工位网络枪与 USB 枪并存时以网络枪为准)。
+        """
+        yield from svc._connections.values()
+        for rec in getattr(svc, '_usb_devices', {}).values():
+            if rec.enabled:
+                yield rec
+
     def is_scan_required(self, channel_id: int) -> bool:
         """查询该工位是否要求先扫码才能开始周期"""
         # v3.4.2 守门点: 工位禁用 → 假装不需要扫码, source 不阻塞 cycle 起新.
@@ -620,7 +632,7 @@ class MESHookManager:
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
-            for conn in svc._connections.values():
+            for conn in self._iter_scan_configs(svc):
                 if self._conn_serves_channel(conn, channel_id) and conn.scan_required:
                     return True
         except Exception as e:
@@ -638,7 +650,7 @@ class MESHookManager:
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
-            for conn in svc._connections.values():
+            for conn in self._iter_scan_configs(svc):
                 if self._conn_serves_channel(conn, channel_id) and conn.warn_no_barcode:
                     return True
         except Exception as e:
@@ -653,11 +665,18 @@ class MESHookManager:
 
         判定来源 = ScannerService._connections（含数据库 enabled 的扫码器
         + 用户在 WMax 面板启动的虚拟设备 device_id=-999）。
+
+        v3.46: USB 键盘扫码枪 (usb_hid, 不建连接) 仅当显式打开了
+        「先扫后检」或「无码告警」之一才计入 —— 保证存量 USB 枪用户
+        (两开关默认关) 的"未绑码"提示行为零变化, 新用户开了开关才激活提示。
         """
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
-            return bool(svc._connections)
+            if svc._connections:
+                return True
+            return any(rec.enabled and (rec.scan_required or rec.warn_no_barcode)
+                       for rec in svc._usb_devices.values())
         except Exception as e:
             print(f"[MES] has_any_scanner_present error: {e}", flush=True)
             # 出现异常时保守地认为"有扫码器"，维持原有提示行为，避免误屏蔽
@@ -719,7 +738,7 @@ class MESHookManager:
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
-            for conn in svc._connections.values():
+            for conn in self._iter_scan_configs(svc):
                 if self._conn_serves_channel(conn, channel_id):
                     return conn.duplicate_scan_action or "overwrite"
         except Exception:
@@ -731,7 +750,7 @@ class MESHookManager:
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
-            for conn in svc._connections.values():
+            for conn in self._iter_scan_configs(svc):
                 if self._conn_serves_channel(conn, channel_id):
                     return conn.bind_timing or "mid_cycle"
         except Exception:
@@ -753,7 +772,7 @@ class MESHookManager:
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
-            for conn in svc._connections.values():
+            for conn in self._iter_scan_configs(svc):
                 if self._conn_serves_channel(conn, channel_id):
                     return max(0, int(getattr(conn, 'scan_pair_max_wait_sec', 0) or 0))
         except Exception:
@@ -776,7 +795,7 @@ class MESHookManager:
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
-            for conn in svc._connections.values():
+            for conn in self._iter_scan_configs(svc):
                 if self._conn_serves_channel(conn, channel_id):
                     if conn.broadcast_channels:
                         return list(conn.broadcast_channels)
@@ -1028,7 +1047,7 @@ class MESHookManager:
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
-            for conn in svc._connections.values():
+            for conn in self._iter_scan_configs(svc):
                 if self._conn_serves_channel(conn, channel_id):
                     return conn.rebind_mode or "rescan"
         except Exception:
@@ -1040,7 +1059,7 @@ class MESHookManager:
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
-            for conn in svc._connections.values():
+            for conn in self._iter_scan_configs(svc):
                 if self._conn_serves_channel(conn, channel_id):
                     return int(getattr(conn, "ok_rescan_cooldown_sec", 0) or 0)
         except Exception:
@@ -1055,7 +1074,7 @@ class MESHookManager:
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
-            for conn in svc._connections.values():
+            for conn in self._iter_scan_configs(svc):
                 if self._conn_serves_channel(conn, channel_id):
                     return int(getattr(conn, "late_scan_bind_window_sec", 3) or 0)
         except Exception:

@@ -40,7 +40,8 @@
             <span v-if="!customMixItemTotal && it.expected_per_tray > 0" class="text-base text-gray-500"> / {{ it.expected_per_tray }}</span>
           </div>
           <div class="text-[0.625rem] text-gray-400 text-center">
-            实时 <span class="text-cyan-400 font-bold">{{ it.current_count }}</span> · 进箱记峰值
+            实时 <span class="text-cyan-400 font-bold">{{ it.current_count }}</span>
+            · 预计进箱 <span class="text-emerald-400 font-bold">{{ it.book_preview ?? it.peak_count ?? 0 }}</span>
           </div>
         </div>
         <!-- 已装托盘明细 (每盘装了多少) -->
