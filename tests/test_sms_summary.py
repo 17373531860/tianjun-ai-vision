@@ -26,6 +26,7 @@ def _enabled_config() -> SmsServiceConfig:
         port="COM_TEST",
         recipients=("13800138000",),
         cooldown_seconds=60,
+        summary_count_source="window",
     )
 
 
@@ -165,6 +166,7 @@ def test_test_send_uses_current_incomplete_window_and_bypasses_enabled(
             enabled=False,
             port="COM_TEST",
             recipients=("13800138000",),
+            summary_count_source="window",
         ),
         reader=lambda _start, _end: {1: SmsSummaryCounts(ok_count=6, ng_count=2)},
         wall_clock=lambda: now,

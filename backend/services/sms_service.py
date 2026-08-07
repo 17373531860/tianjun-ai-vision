@@ -38,6 +38,7 @@ from backend.services.sms_summary import (
     SmsSummaryStateStore,
     is_aligned_shift_start,
     load_completed_cycle_counts,
+    load_panel_session_snapshots,
     next_shift_window_start,
     open_daily_shift_window_start,
     shift_window_end,
@@ -152,6 +153,8 @@ class SmsServiceConfig:
     shift_start_hour: int = 8
     shift_end_hour: int = 20
     send_night_window: bool = False
+    # 到点发送的数字口径：panel=监控面板当前会话（默认）；window=调度时间窗落库合计
+    summary_count_source: Literal["panel", "window"] = "panel"
 
     def validated_recipients(
         self, override: Sequence[str] | str | None = None
@@ -667,7 +670,24 @@ class SmsService:
 
         window_id = summary_window_id(window_start, window_end)
         try:
-            counts_by_channel = self._summary_reader(window_start, window_end)
+            if self.config.summary_count_source == "panel":
+                snapshots = load_panel_session_snapshots(as_of=window_end)
+                channel_payloads = {
+                    int(channel_id): (
+                        snap.counts,
+                        snap.range_start,
+                        snap.range_end,
+                    )
+                    for channel_id, snap in snapshots.items()
+                    if snap.counts.total > 0
+                }
+            else:
+                counts_by_channel = self._summary_reader(window_start, window_end)
+                channel_payloads = {
+                    int(channel_id): (counts, window_start, window_end)
+                    for channel_id, counts in counts_by_channel.items()
+                    if counts.total > 0
+                }
         except Exception as exc:
             self._logger(
                 f"短信汇总窗口 {window_id} 查询失败（稍后重试）：{type(exc).__name__}"
@@ -678,18 +698,14 @@ class SmsService:
         queued = (
             set(state.queued_channels) if state.queued_window_id == window_id else set()
         )
-        non_empty = {
-            int(channel_id): counts
-            for channel_id, counts in counts_by_channel.items()
-            if counts.total > 0
-        }
-        for channel_id, counts in sorted(non_empty.items()):
+        for channel_id in sorted(channel_payloads):
             if channel_id in queued:
                 continue
+            counts, msg_start, msg_end = channel_payloads[channel_id]
             receipt = self.queue_summary_sms(
                 channel_id=channel_id,
-                window_start=window_start,
-                window_end=window_end,
+                window_start=msg_start,
+                window_end=msg_end,
                 ok_count=counts.ok_count,
                 ng_count=counts.ng_count,
             )
@@ -715,9 +731,13 @@ class SmsService:
         )
         self._summary_store.save(finalized)
         self._summary_state = finalized
-        if non_empty:
+        if channel_payloads:
+            source_label = (
+                "面板会话" if self.config.summary_count_source == "panel" else "时间窗"
+            )
             self._logger(
-                f"短信汇总窗口 {window_id} 已完成，{len(non_empty)} 个工位进入后台队列"
+                f"短信汇总窗口 {window_id} 已完成（{source_label}），"
+                f"{len(channel_payloads)} 个工位进入后台队列"
             )
         else:
             self._logger(f"短信汇总窗口 {window_id} 无已结算周期，不发送")
@@ -729,26 +749,45 @@ class SmsService:
             self._ensure_summary_state_locked()
             self._maybe_realign_daily_shift_state_locked(now)
             base_start = self._ensure_summary_state_locked().window_start
-        if self.config.summary_schedule_mode == "daily_shift":
-            window_start = base_start
-        else:
-            elapsed = max(0.0, (now - base_start).total_seconds())
-            elapsed_windows = int(elapsed // SUMMARY_WINDOW_SECONDS)
-            window_start = base_start + timedelta(
-                seconds=elapsed_windows * SUMMARY_WINDOW_SECONDS
+        if self.config.summary_count_source == "panel":
+            snapshots = load_panel_session_snapshots(as_of=now)
+            non_empty = sorted(
+                (
+                    (int(channel_id), snap)
+                    for channel_id, snap in snapshots.items()
+                    if snap.counts.total > 0
+                ),
+                key=lambda item: item[0],
             )
-        counts_by_channel = self._summary_reader(window_start, now)
-        non_empty = sorted(
-            (
-                (int(channel_id), counts)
-                for channel_id, counts in counts_by_channel.items()
-                if counts.total > 0
-            ),
-            key=lambda item: item[0],
-        )
-        channel_id, counts = non_empty[0] if non_empty else (0, SmsSummaryCounts())
+            if non_empty:
+                channel_id, snap = non_empty[0]
+                counts = snap.counts
+                range_start, range_end = snap.range_start, snap.range_end
+            else:
+                channel_id, counts = 0, SmsSummaryCounts()
+                range_start, range_end = now, now
+        else:
+            if self.config.summary_schedule_mode == "daily_shift":
+                window_start = base_start
+            else:
+                elapsed = max(0.0, (now - base_start).total_seconds())
+                elapsed_windows = int(elapsed // SUMMARY_WINDOW_SECONDS)
+                window_start = base_start + timedelta(
+                    seconds=elapsed_windows * SUMMARY_WINDOW_SECONDS
+                )
+            counts_by_channel = self._summary_reader(window_start, now)
+            non_empty = sorted(
+                (
+                    (int(channel_id), counts)
+                    for channel_id, counts in counts_by_channel.items()
+                    if counts.total > 0
+                ),
+                key=lambda item: item[0],
+            )
+            channel_id, counts = non_empty[0] if non_empty else (0, SmsSummaryCounts())
+            range_start, range_end = window_start, now
         device_name = f"工位{channel_id + 1}"
-        time_range = self._format_time_range(window_start, now)
+        time_range = self._format_time_range(range_start, range_end)
         message = (
             f"【非完整窗口】{device_name} {time_range} "
             f"OK{counts.ok_count} NG{counts.ng_count}"

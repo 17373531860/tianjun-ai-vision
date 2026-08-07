@@ -193,6 +193,10 @@ class SmsConfigPayload(BaseModel):
         False,
         description="班次模式下是否额外发送晚班窗（结束小时～次日开始小时）",
     )
+    summary_count_source: Literal["panel", "window"] = Field(
+        "panel",
+        description="panel=监控面板当前会话OK/NG（默认）；window=调度时间窗落库合计",
+    )
 
     # 一期兼容字段：A′期间旧 Alarm 页仍按这些字段 GET/PUT。
     port: str = Field("", max_length=128)
@@ -210,9 +214,10 @@ class SmsConfigPayload(BaseModel):
             return value
         data = dict(value)
         at_modem = dict(data.get("at_modem") or {})
-        # 旧页面会同时回传 canonical 与平铺字段；平铺字段是当前实际编辑值。
+        # 旧客户端可能只平铺 port/template；新页面只传 at_modem。
+        # 两者都有时以嵌套为准，避免 GET 回显的平铺脏字段覆盖已修好的 at_modem。
         for legacy_name in ("port", "baudrate", "template", "encoding"):
-            if legacy_name in data:
+            if legacy_name in data and legacy_name not in at_modem:
                 at_modem[legacy_name] = data[legacy_name]
         data["at_modem"] = at_modem
         if "recipients" in data:
@@ -273,6 +278,7 @@ class SmsConfigPayload(BaseModel):
             "shift_start_hour": self.shift_start_hour,
             "shift_end_hour": self.shift_end_hour,
             "send_night_window": self.send_night_window,
+            "summary_count_source": self.summary_count_source,
         }
 
     def to_service_config(self) -> SmsServiceConfig:
@@ -342,6 +348,7 @@ class SmsConfigPayload(BaseModel):
             shift_start_hour=config.shift_start_hour,
             shift_end_hour=config.shift_end_hour,
             send_night_window=config.send_night_window,
+            summary_count_source=config.summary_count_source,
             port=config.port,
             baudrate=config.baudrate,
             recipients=list(config.recipients),

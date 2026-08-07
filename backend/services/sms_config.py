@@ -22,7 +22,7 @@ from backend.services.sms_providers.wxpusher_provider import (
     DEFAULT_WXPUSHER_SUMMARY_TEMPLATE,
 )
 from backend.services.sms_service import SmsServiceConfig, validate_alarm_template
-from backend.services.sms_summary import ALLOWED_SUMMARY_SCHEDULE_MODES
+from backend.services.sms_summary import ALLOWED_SUMMARY_COUNT_SOURCES, ALLOWED_SUMMARY_SCHEDULE_MODES
 from backend.services.sms_utils import choose_encoding, parse_recipients
 
 
@@ -100,6 +100,7 @@ def config_to_dict(config: SmsServiceConfig) -> dict[str, Any]:
         "shift_start_hour": config.shift_start_hour,
         "shift_end_hour": config.shift_end_hour,
         "send_night_window": config.send_night_window,
+        "summary_count_source": config.summary_count_source,
     }
 
 
@@ -282,6 +283,9 @@ def config_from_dict(data: dict[str, Any]) -> SmsServiceConfig:
             send_night_window=_bool(
                 data.get("send_night_window", False), "send_night_window"
             ),
+            summary_count_source=str(
+                data.get("summary_count_source", "panel")
+            ).strip(),
         )
     except (TypeError, ValueError) as exc:
         raise SmsConfigError("短信配置包含非法数值") from exc
@@ -399,6 +403,10 @@ def _validate_config(config: SmsServiceConfig) -> None:
     if config.summary_schedule_mode not in ALLOWED_SUMMARY_SCHEDULE_MODES:
         raise SmsConfigError(
             "汇总调度模式仅支持 rolling_12h 或 daily_shift"
+        )
+    if config.summary_count_source not in ALLOWED_SUMMARY_COUNT_SOURCES:
+        raise SmsConfigError(
+            "汇总数字口径仅支持 panel（监控面板）或 window（时间窗落库）"
         )
     if not 0 <= config.shift_start_hour <= 23:
         raise SmsConfigError("班次开始小时必须在 0~23")

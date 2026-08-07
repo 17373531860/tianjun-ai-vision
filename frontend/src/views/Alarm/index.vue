@@ -65,6 +65,23 @@
                 班次（如早八～晚八）
               </el-radio-button>
             </el-radio-group>
+            <div class="mt-3">
+              <div class="text-gray-300 mb-2">推送数字口径</div>
+              <el-radio-group
+                v-model="smsConfig.summary_count_source"
+                data-testid="sms-count-source-group"
+              >
+                <el-radio-button value="panel" data-testid="sms-count-panel">
+                  监控面板（当前会话）
+                </el-radio-button>
+                <el-radio-button value="window" data-testid="sms-count-window">
+                  时间窗落库合计
+                </el-radio-button>
+              </el-radio-group>
+              <div class="text-xs text-gray-500 mt-1 leading-5">
+                默认推各工位监控面板上的 OK/NG（与金龙等插件面板同源）；可选改为调度时间窗内全部已结算周期合计。
+              </div>
+            </div>
             <div
               v-if="smsConfig.summary_schedule_mode === 'daily_shift'"
               data-testid="sms-shift-fields"
@@ -1221,6 +1238,7 @@ const createSmsDefaultConfig = () => ({
   shift_start_hour: 8,
   shift_end_hour: 20,
   send_night_window: false,
+  summary_count_source: 'panel',
 });
 const smsConfig = reactive(createSmsDefaultConfig());
 const smsRecipientsText = ref('');
@@ -1241,8 +1259,10 @@ const smsSummaryNoticeTitle = computed(() => (
 ));
 const smsSummaryNoticeBody = computed(() => (
   smsConfig.summary_schedule_mode === 'daily_shift'
-    ? `按配置班次汇总已结算周期；默认到 ${smsConfig.shift_end_hour}:00 发送白天窗${smsConfig.send_night_window ? '，并额外发送夜班窗' : '（夜班窗默认不发）'}。`
-    : '每次软件（后端）启动后以本次服务启动时间为起点重新开窗，每滚动 12 小时按工位分别汇总已结算周期的合格/NG 次数并发送；'
+    ? `按配置班次到点发送；数字口径：${smsConfig.summary_count_source === 'window' ? '时间窗落库合计' : '监控面板当前会话'}；默认到 ${smsConfig.shift_end_hour}:00 发送白天窗${smsConfig.send_night_window ? '，并额外发送夜班窗' : '（夜班窗默认不发）'}。`
+    : smsConfig.summary_count_source === 'window'
+      ? '每次软件（后端）启动后以本次服务启动时间为起点重新开窗，每滚动 12 小时按工位汇总时间窗内已结算周期并发送；'
+      : '每次软件（后端）启动后以本次服务启动时间为起点重新开窗，每滚动 12 小时按工位推送监控面板当前会话 OK/NG；'
 ));
 const smsPortOptions = computed(() => {
   const options = Array.isArray(smsPorts.value) ? [...smsPorts.value] : [];
@@ -1327,6 +1347,7 @@ const applySmsConfig = (data = {}) => {
     shift_start_hour: data.shift_start_hour ?? defaults.shift_start_hour,
     shift_end_hour: data.shift_end_hour ?? defaults.shift_end_hour,
     send_night_window: data.send_night_window ?? defaults.send_night_window,
+    summary_count_source: data.summary_count_source === 'window' ? 'window' : 'panel',
   });
   smsRecipientsText.value = phoneNumbers.join('\n');
   smsWxUidsText.value = wxpusher.uids.join('\n');
@@ -1574,6 +1595,7 @@ const smsConfigsMatch = (saved, readback) => {
     'retry_count', 'retry_backoff_seconds', 'ng_threshold', 'cooldown_seconds', 'queue_size',
     'offline_queue_max', 'offline_ttl_seconds',
     'summary_schedule_mode', 'shift_start_hour', 'shift_end_hour', 'send_night_window',
+    'summary_count_source',
   ];
   return fields.every((field) => JSON.stringify(saved?.[field]) === JSON.stringify(readback?.[field]));
 };
@@ -1640,6 +1662,7 @@ const buildSmsPayload = () => ({
   shift_start_hour: smsConfig.shift_start_hour,
   shift_end_hour: smsConfig.shift_end_hour,
   send_night_window: smsConfig.send_night_window,
+  summary_count_source: smsConfig.summary_count_source,
 });
 
 const saveSmsConfig = async () => {
